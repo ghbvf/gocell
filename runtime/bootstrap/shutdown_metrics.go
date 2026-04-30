@@ -2,6 +2,7 @@ package bootstrap
 
 import (
 	"fmt"
+	"slices"
 	"time"
 
 	kernelmetrics "github.com/ghbvf/gocell/kernel/observability/metrics"
@@ -112,8 +113,8 @@ func newShutdownMetrics(p kernelmetrics.Provider) (*shutdownMetrics, error) {
 	// Track registered collectors for rollback on partial failure.
 	var registered []kernelmetrics.Collector
 	rollback := func(origErr error) (*shutdownMetrics, error) {
-		for i := len(registered) - 1; i >= 0; i-- {
-			_ = p.Unregister(registered[i]) // best-effort; ignore unregister errors
+		for _, v := range slices.Backward(registered) {
+			_ = p.Unregister(v) // best-effort; ignore unregister errors
 		}
 		return nil, origErr
 	}

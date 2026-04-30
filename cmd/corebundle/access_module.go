@@ -163,8 +163,8 @@ func internalAddrToBaseURL(addr string) string {
 		return "http://127.0.0.1" + addr
 	}
 	// Normalise 0.0.0.0:port → 127.0.0.1:port (defense against misconfiguration).
-	if strings.HasPrefix(addr, "0.0.0.0:") {
-		return "http://127.0.0.1:" + strings.TrimPrefix(addr, "0.0.0.0:")
+	if after, ok := strings.CutPrefix(addr, "0.0.0.0:"); ok {
+		return "http://127.0.0.1:" + after
 	}
 	return "http://" + addr
 }

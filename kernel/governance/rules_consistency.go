@@ -20,6 +20,7 @@ import (
 	"go/parser"
 	"go/token"
 	"io/fs"
+	"maps"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -83,9 +84,7 @@ func buildConsistencyIndex(project *metadata.ProjectMeta) consistencyIndex {
 	if project == nil {
 		return idx
 	}
-	for id, c := range project.Contracts {
-		idx.contractByID[id] = c
-	}
+	maps.Copy(idx.contractByID, project.Contracts)
 	for key, s := range project.Slices {
 		if s == nil {
 			continue

@@ -3,7 +3,10 @@ package journey
 
 import (
 	"fmt"
+	"maps"
+	"slices"
 	"sort"
+	"strings"
 
 	"github.com/ghbvf/gocell/kernel/metadata"
 	"github.com/ghbvf/gocell/pkg/errcode"
@@ -26,9 +29,7 @@ func NewCatalog(project *metadata.ProjectMeta) *Catalog {
 		return c
 	}
 
-	for id, j := range project.Journeys {
-		c.journeys[id] = j
-	}
+	maps.Copy(c.journeys, project.Journeys)
 	for i := range project.StatusBoard {
 		entry := &project.StatusBoard[i]
 		c.statusBoard[entry.JourneyID] = entry
@@ -64,11 +65,12 @@ func (c *Catalog) Validate(cellIDs, contractIDs map[string]struct{}) error {
 	}
 	// Sort for deterministic output.
 	sort.Strings(msgs)
-	combined := msgs[0]
+	var combined strings.Builder
+	combined.WriteString(msgs[0])
 	for _, m := range msgs[1:] {
-		combined += "; " + m
+		combined.WriteString("; " + m)
 	}
-	return errcode.New(errcode.ErrReferenceBroken, combined)
+	return errcode.New(errcode.ErrReferenceBroken, combined.String())
 }
 
 // Get returns a deep copy of a journey by ID, or nil if not found.
@@ -97,11 +99,8 @@ func (c *Catalog) List() []*metadata.JourneyMeta {
 func (c *Catalog) CellJourneys(cellID string) []*metadata.JourneyMeta {
 	var result []*metadata.JourneyMeta
 	for _, j := range c.journeys {
-		for _, cell := range j.Cells {
-			if cell == cellID {
-				result = append(result, copyJourneyMeta(j))
-				break
-			}
+		if slices.Contains(j.Cells, cellID) {
+			result = append(result, copyJourneyMeta(j))
 		}
 	}
 	sort.Slice(result, func(i, k int) bool {
@@ -115,11 +114,8 @@ func (c *Catalog) CellJourneys(cellID string) []*metadata.JourneyMeta {
 func (c *Catalog) ContractJourneys(contractID string) []*metadata.JourneyMeta {
 	var result []*metadata.JourneyMeta
 	for _, j := range c.journeys {
-		for _, ctr := range j.Contracts {
-			if ctr == contractID {
-				result = append(result, copyJourneyMeta(j))
-				break
-			}
+		if slices.Contains(j.Contracts, contractID) {
+			result = append(result, copyJourneyMeta(j))
 		}
 	}
 	sort.Slice(result, func(i, k int) bool {

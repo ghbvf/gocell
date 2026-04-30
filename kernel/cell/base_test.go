@@ -230,13 +230,13 @@ func TestBaseCellConcurrentHealthReady(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		for i := 0; i < 100; i++ {
+		for range 100 {
 			_ = c.Health()
 			_ = c.Ready()
 		}
 	}()
 
-	for i := 0; i < 100; i++ {
+	for range 100 {
 		_ = c.Health()
 		_ = c.Ready()
 	}
@@ -254,7 +254,7 @@ func TestBaseCellConcurrentAddAndRead(t *testing.T) {
 	// Writer goroutine: adds slices, produced, and consumed contracts.
 	go func() {
 		defer close(done)
-		for i := 0; i < n; i++ {
+		for range n {
 			c.AddSlice(NewBaseSlice("s", "race-add", L0))
 			c.AddProducedContract(NewBaseContract("pc", ContractHTTP, "race-add", L1))
 			c.AddConsumedContract(NewBaseContract("cc", ContractEvent, "other", L2))
@@ -262,7 +262,7 @@ func TestBaseCellConcurrentAddAndRead(t *testing.T) {
 	}()
 
 	// Reader goroutine (main): reads all three lists concurrently.
-	for i := 0; i < n; i++ {
+	for range n {
 		_ = c.OwnedSlices()
 		_ = c.ProducedContracts()
 		_ = c.ConsumedContracts()

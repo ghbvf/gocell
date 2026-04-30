@@ -278,7 +278,6 @@ func TestInMemQueue_Ack_FailedAndRejected(t *testing.T) {
 		{command.AckRejected, command.StatusCanceled},
 	}
 	for _, tc := range cases {
-		tc := tc
 		t.Run(tc.reason.String(), func(t *testing.T) {
 			t.Parallel()
 			q := commandtest.NewInMemQueue()
@@ -321,7 +320,6 @@ func TestInMemQueue_Ack_Timeout_TerminalExpired_FromAnyNonTerminal(t *testing.T)
 		}},
 	}
 	for _, tc := range cases {
-		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			q := commandtest.NewInMemQueue()
@@ -427,7 +425,7 @@ func TestInMemQueue_ConcurrentDequeue_NoDup(t *testing.T) {
 	q.Now = func() time.Time { return now }
 	ctx := context.Background()
 
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		entry := command.NewEntry(
 			"cmd-"+string(rune('A'+i)),
 			"dev-1",
@@ -444,16 +442,14 @@ func TestInMemQueue_ConcurrentDequeue_NoDup(t *testing.T) {
 		mu  sync.Mutex
 		all []command.Entry
 	)
-	for i := 0; i < 2; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+	for range 2 {
+		wg.Go(func() {
 			entries, err := q.Dequeue(ctx, "dev-1", 5, 5*time.Minute)
 			assert.NoError(t, err)
 			mu.Lock()
 			all = append(all, entries...)
 			mu.Unlock()
-		}()
+		})
 	}
 	wg.Wait()
 
@@ -473,7 +469,7 @@ func TestInMemQueue_EnqueueIdempotent_Scalability(t *testing.T) {
 
 	start := time.Now()
 
-	for i := 0; i < 1000; i++ {
+	for i := range 1000 {
 		id := "cmd-" + string(rune(i+0x4E00))
 		key := "idem-" + id
 		entry := command.NewEntry(id, "dev-1", "reboot", []byte(`{}`), command.Timeouts{},
@@ -482,7 +478,7 @@ func TestInMemQueue_EnqueueIdempotent_Scalability(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	for i := 0; i < 500; i++ {
+	for i := range 500 {
 		id := "cmd-" + string(rune(i+0x4E00))
 		key := "idem-" + id
 		entry := command.NewEntry(id+"-dup", "dev-1", "reboot", []byte(`{}`), command.Timeouts{},
@@ -638,12 +634,10 @@ func TestInMemQueue_Ack_ConcurrentSameReason_Idempotent(t *testing.T) {
 	const workers = 16
 	var wg sync.WaitGroup
 	errs := make(chan error, workers)
-	for i := 0; i < workers; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+	for range workers {
+		wg.Go(func() {
 			errs <- q.Ack(ctx, "cmd-1", command.AckSuccess, now.Add(time.Second))
-		}()
+		})
 	}
 	wg.Wait()
 	close(errs)

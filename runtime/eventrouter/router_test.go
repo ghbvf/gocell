@@ -155,8 +155,7 @@ func TestRouter_Run_SubscribeError_ReturnsError(t *testing.T) {
 
 	_ = r.AddContractHandler(testEventSpec("topic.fail"), noopHandler, "test")
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	err := r.Run(ctx)
 	require.Error(t, err)
@@ -314,8 +313,7 @@ func TestRouter_Run_RuntimeError_AfterStartup(t *testing.T) {
 	r := New(sub)
 	_ = r.AddContractHandler(testEventSpec("topic.a"), noopHandler, "test")
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	err := r.Run(ctx)
 	require.Error(t, err)
@@ -333,8 +331,7 @@ func TestRouter_HealthLifecycle(t *testing.T) {
 
 	require.Error(t, r.Health(), "router must be unhealthy before Run")
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	done := make(chan error, 1)
 	go func() { done <- r.Run(ctx) }()
 
@@ -431,8 +428,7 @@ func TestRouter_Close_Timeout(t *testing.T) {
 	r := New(sub)
 	_ = r.AddContractHandler(testEventSpec("topic.stuck"), noopHandler, "test")
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	go func() { _ = r.Run(ctx) }()
 
 	<-r.Running()
@@ -462,8 +458,7 @@ func TestRouter_Run_PanicInSubscriber_CapturedAsError(t *testing.T) {
 	r := New(panickySub)
 	_ = r.AddContractHandler(testEventSpec("topic.panic"), noopHandler, "test")
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	err := r.Run(ctx)
 	require.Error(t, err)
@@ -866,8 +861,7 @@ func TestRouter_RunBlocksUntilReady_NoTimeout(t *testing.T) {
 	r := New(sub)
 	_ = r.AddContractHandler(testEventSpec("topic.a"), noopHandler, "test")
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	start := time.Now()
 	go func() { _ = r.Run(ctx) }()
@@ -895,8 +889,7 @@ func TestRouter_SetupErrorAborts(t *testing.T) {
 	r := New(sub)
 	_ = r.AddContractHandler(testEventSpec("topic.fail"), noopHandler, "test")
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	err := r.Run(ctx)
 	require.Error(t, err)
@@ -982,8 +975,7 @@ func TestRouter_ReadyError_PartialNotReady_NoLeak(t *testing.T) {
 	_ = r.AddContractHandler(testEventSpec(sub.subscribeErrTopic), noopHandler, "test")
 	_ = r.AddContractHandler(testEventSpec(sub.slowReadyTopic), noopHandler, "test")
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	runDone := make(chan error, 1)
 	start := time.Now()
@@ -1029,8 +1021,7 @@ func TestRouter_PartialReady_BlocksUntilAll(t *testing.T) {
 	_ = r.AddContractHandler(testEventSpec("topic.b"), noopHandler, "test")
 	_ = r.AddContractHandler(testEventSpec("topic.c"), noopHandler, "test")
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	start := time.Now()
 	go func() { _ = r.Run(ctx) }()

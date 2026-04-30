@@ -317,8 +317,7 @@ func TestService_CreateAdmin_Concurrent_OnlyOneSucceeds(t *testing.T) {
 	start.Add(1)
 	var done sync.WaitGroup
 	done.Add(workers)
-	for i := 0; i < workers; i++ {
-		i := i
+	for i := range workers {
 		go func() {
 			defer done.Done()
 			start.Wait()

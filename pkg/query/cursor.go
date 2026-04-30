@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"maps"
 
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
@@ -194,9 +195,7 @@ func cursorInvalid(reason string) error {
 // overwrite it.
 func cursorInvalidExtra(reason string, extra map[string]any) error {
 	details := make(map[string]any, len(extra)+1)
-	for k, v := range extra {
-		details[k] = v
-	}
+	maps.Copy(details, extra)
 	details["reason"] = reason // set last — cannot be overwritten by extra
 	detailed, err := errcode.WithDetails(
 		errcode.Safe(errcode.ErrCursorInvalid, cursorInvalidMsg, reason),

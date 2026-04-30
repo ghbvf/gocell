@@ -13,8 +13,10 @@ import (
 	"go/format"
 	"go/token"
 	"go/types"
+	"maps"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -1998,7 +2000,7 @@ func obs01WithLabelValuesArgs(info *types.Info, metric obs01MetricIdentity, call
 	}
 	valueCount := obs01ValueExprsCount(info, call.Args)
 	out := make([]obs01SinkArg, 0, valueCount)
-	for i := 0; i < valueCount; i++ {
+	for i := range valueCount {
 		if value, ok := obs01ValueExprForPosition(info, call.Args, i); ok {
 			out = append(out, obs01PositionalLabelArg(metric, value, i))
 		}
@@ -2361,10 +2363,8 @@ func recordOBS01SinkBinding(
 	if out[key] == nil {
 		out[key] = map[int][]obs01SinkBinding{}
 	}
-	for _, existing := range out[key][idx] {
-		if existing == binding {
-			return false
-		}
+	if slices.Contains(out[key][idx], binding) {
+		return false
 	}
 	out[key][idx] = append(out[key][idx], binding)
 	return true
@@ -3485,9 +3485,7 @@ func mergeOBS01ClosureMapInto(dst, src obs01Closures) {
 
 func cloneOBS01RangeTaints(in map[types.Object]obs01RangeTaint) map[types.Object]obs01RangeTaint {
 	out := map[types.Object]obs01RangeTaint{}
-	for obj, taint := range in {
-		out[obj] = taint
-	}
+	maps.Copy(out, in)
 	return out
 }
 
@@ -4123,7 +4121,7 @@ func rejectUnusedOBS01Acks(root string, acks map[string]obsAck, matched map[stri
 }
 
 func obs01Fingerprint(file string, line, column int, metric, label, expr string) string {
-	sum := sha256.Sum256([]byte(fmt.Sprintf("%s\x00%d\x00%d\x00%s\x00%s\x00%s",
-		file, line, column, metric, label, expr)))
+	sum := sha256.Sum256(fmt.Appendf(nil, "%s\x00%d\x00%d\x00%s\x00%s\x00%s",
+		file, line, column, metric, label, expr))
 	return hex.EncodeToString(sum[:])
 }

@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"maps"
 	"time"
 
 	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/domain"
@@ -104,9 +105,7 @@ type DeviceCell struct {
 func (c *DeviceCell) HealthCheckers() map[string]func(context.Context) error {
 	checkers := make(map[string]func(context.Context) error)
 	if hc, ok := c.emitter.(cell.HealthContributor); ok {
-		for k, v := range hc.HealthCheckers() {
-			checkers[k] = v
-		}
+		maps.Copy(checkers, hc.HealthCheckers())
 	}
 	return checkers
 }

@@ -1104,7 +1104,7 @@ func TestWriteDomainError_4xx_LogSampling(t *testing.T) {
 	t.Cleanup(func() { slog.SetDefault(orig) })
 
 	ctx := WithListErrorLogSampling(context.Background(), t.Name())
-	for i := 0; i < 200; i++ {
+	for range 200 {
 		rec := httptest.NewRecorder()
 		WriteDomainError(ctx, rec, errcode.New(errcode.ErrValidationFailed, "invalid cursor"))
 		assert.Equal(t, http.StatusBadRequest, rec.Code)

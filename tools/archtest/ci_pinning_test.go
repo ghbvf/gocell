@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 
@@ -326,10 +327,8 @@ func validateDependabotCoversCIAndGolangCILint(body []byte) error {
 
 func rootGitHubActionsUpdateCoversGolangCI(update dependabotUpdate) bool {
 	for _, group := range update.Groups {
-		for _, pattern := range group.Patterns {
-			if pattern == "golangci/golangci-lint-action" {
-				return true
-			}
+		if slices.Contains(group.Patterns, "golangci/golangci-lint-action") {
+			return true
 		}
 	}
 	return false

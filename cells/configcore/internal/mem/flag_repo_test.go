@@ -209,7 +209,7 @@ func TestFlagRepository_List_WithCursor(t *testing.T) {
 	repo := NewFlagRepository()
 	ctx := context.Background()
 
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		require.NoError(t, repo.Create(ctx, &domain.FeatureFlag{
 			ID: "f-" + string(rune('a'+i)), Key: "flag-" + string(rune('a'+i)),
 			Type: domain.FlagBoolean,
@@ -343,9 +343,7 @@ func TestFlagRepository_ConcurrentCRUDAndList(t *testing.T) {
 	}
 
 	for r := range readers {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			params := query.ListParams{
 				Limit: 10,
 				Sort: []query.SortColumn{
@@ -367,7 +365,7 @@ func TestFlagRepository_ConcurrentCRUDAndList(t *testing.T) {
 				}
 			}
 			_ = r
-		}()
+		})
 	}
 
 	wg.Wait()

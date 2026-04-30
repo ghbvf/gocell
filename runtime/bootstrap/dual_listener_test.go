@@ -541,7 +541,7 @@ func TestTripleListener_MidBindFailure_RollsBackEarlierBindings(t *testing.T) {
 func boundListenerAddrsFromLogs(t *testing.T, logs []byte) map[string]string {
 	t.Helper()
 	out := make(map[string]string)
-	for _, line := range bytes.Split(logs, []byte("\n")) {
+	for line := range bytes.SplitSeq(logs, []byte("\n")) {
 		if len(line) == 0 {
 			continue
 		}
@@ -844,14 +844,12 @@ func TestPhase7ServeAll_DualListener_NoCloseRace(t *testing.T) {
 	// function returns, preventing goroutine leaks that could pollute later tests.
 	var wg sync.WaitGroup
 	var inFlight atomic.Int32
-	for i := 0; i < 4; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+	for range 4 {
+		wg.Go(func() {
 			inFlight.Add(1)
 			defer inFlight.Add(-1)
 			_, _ = testHTTPClient.Get(fmt.Sprintf("http://%s/api/v1/test/ping", primaryAddr))
-		}()
+		})
 	}
 
 	cancel()

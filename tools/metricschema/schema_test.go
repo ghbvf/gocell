@@ -2129,8 +2129,8 @@ func productionGoTopLevels(t *testing.T, root string) map[string]bool {
 			return nil
 		}
 		top := "."
-		if index := strings.IndexByte(rel, '/'); index >= 0 {
-			top = rel[:index]
+		if before, _, ok := strings.Cut(rel, "/"); ok {
+			top = before
 		}
 		if !obs01CoverageExcludedTop(top) {
 			out[top] = true

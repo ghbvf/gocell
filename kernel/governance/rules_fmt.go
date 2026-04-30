@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 
@@ -930,12 +931,7 @@ func looksLikeListSchema(info responseSchemaInfo) bool {
 
 // hasMoreInRequired checks if "hasMore" is in the JSON schema required array.
 func hasMoreInRequired(info responseSchemaInfo) bool {
-	for _, r := range info.Required {
-		if r == "hasMore" {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(info.Required, "hasMore")
 }
 
 // hasNextCursorProperty checks if "nextCursor" is declared as a schema property.
@@ -948,10 +944,5 @@ func hasNextCursorProperty(info responseSchemaInfo) bool {
 
 // hasNextCursorInRequired checks if "nextCursor" is in the JSON schema required array.
 func hasNextCursorInRequired(info responseSchemaInfo) bool {
-	for _, r := range info.Required {
-		if r == "nextCursor" {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(info.Required, "nextCursor")
 }

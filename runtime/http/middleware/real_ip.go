@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"slices"
 	"strings"
 
 	"github.com/ghbvf/gocell/pkg/ctxkeys"
@@ -158,8 +159,8 @@ func extractIP(r *http.Request, checker *proxyChecker) string {
 // ref: labstack/echo — XFF tokens validated, invalid skipped
 func extractIPFromXFF(xff string, checker *proxyChecker) string {
 	parts := strings.Split(xff, ",")
-	for i := len(parts) - 1; i >= 0; i-- {
-		ip := normalizeIPToken(strings.TrimSpace(parts[i]))
+	for _, v := range slices.Backward(parts) {
+		ip := normalizeIPToken(strings.TrimSpace(v))
 		if ip == "" {
 			continue
 		}

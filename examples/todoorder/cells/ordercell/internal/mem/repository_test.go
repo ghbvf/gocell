@@ -174,7 +174,7 @@ func TestOrderRepository_List(t *testing.T) {
 func TestOrderRepository_ListPaged_FirstPage(t *testing.T) {
 	repo := NewOrderRepository()
 	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
-	for i := 0; i < 10; i++ {
+	for i := range 10 {
 		_ = repo.Create(context.Background(), &domain.Order{
 			ID:        fmt.Sprintf("ord-%02d", i),
 			Item:      fmt.Sprintf("item-%d", i),
@@ -199,7 +199,7 @@ func TestOrderRepository_ListPaged_FirstPage(t *testing.T) {
 func TestOrderRepository_ListPaged_WithCursor(t *testing.T) {
 	repo := NewOrderRepository()
 	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
-	for i := 0; i < 10; i++ {
+	for i := range 10 {
 		_ = repo.Create(context.Background(), &domain.Order{
 			ID:        fmt.Sprintf("ord-%02d", i),
 			Item:      fmt.Sprintf("item-%d", i),
@@ -226,7 +226,7 @@ func TestOrderRepository_ListPaged_WithCursor(t *testing.T) {
 func TestOrderRepository_ListPaged_LastPage(t *testing.T) {
 	repo := NewOrderRepository()
 	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		_ = repo.Create(context.Background(), &domain.Order{
 			ID:        fmt.Sprintf("ord-%02d", i),
 			Item:      fmt.Sprintf("item-%d", i),
@@ -463,9 +463,7 @@ func TestOrderRepository_ConcurrentCreateAndList(t *testing.T) {
 
 	var readErrors atomic.Int64
 	for r := range readers {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			params := query.ListParams{
 				Limit: 10,
 				Sort: []query.SortColumn{
@@ -489,7 +487,7 @@ func TestOrderRepository_ConcurrentCreateAndList(t *testing.T) {
 				}
 			}
 			_ = r
-		}()
+		})
 	}
 
 	wg.Wait()

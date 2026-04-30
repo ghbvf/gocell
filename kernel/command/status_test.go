@@ -30,7 +30,6 @@ func TestStatus_Valid(t *testing.T) {
 		{Status(99), false},
 	}
 	for _, tt := range tests {
-		tt := tt
 		t.Run(tt.s.String(), func(t *testing.T) {
 			t.Parallel()
 			assert.Equal(t, tt.want, tt.s.Valid())
@@ -55,7 +54,6 @@ func TestStatus_String(t *testing.T) {
 		{Status(99), "status(99)"},
 	}
 	for _, tt := range tests {
-		tt := tt
 		t.Run(tt.want, func(t *testing.T) {
 			t.Parallel()
 			assert.Equal(t, tt.want, tt.s.String())
@@ -78,7 +76,6 @@ func TestStatus_IsTerminal(t *testing.T) {
 		{StatusCanceled, true},
 	}
 	for _, tt := range tests {
-		tt := tt
 		t.Run(tt.s.String(), func(t *testing.T) {
 			t.Parallel()
 			assert.Equal(t, tt.terminal, tt.s.IsTerminal())
@@ -109,7 +106,6 @@ func TestCanTransitionTo_AllValid(t *testing.T) {
 		{StatusDelivered, StatusCanceled},
 	}
 	for _, tt := range validPairs {
-		tt := tt
 		name := tt.from.String() + "->" + tt.to.String()
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -126,9 +122,7 @@ func TestCanTransitionTo_InvalidFromTerminal(t *testing.T) {
 		StatusSucceeded, StatusFailed, StatusExpired, StatusCanceled,
 	}
 	for _, from := range terminals {
-		from := from
 		for _, to := range allStatuses {
-			to := to
 			name := from.String() + "->" + to.String()
 			t.Run(name, func(t *testing.T) {
 				t.Parallel()
@@ -146,7 +140,6 @@ func TestCanTransitionTo_InvalidSelfTransition(t *testing.T) {
 		StatusSucceeded, StatusFailed, StatusExpired, StatusCanceled,
 	}
 	for _, s := range allStatuses {
-		s := s
 		name := s.String() + "->" + s.String()
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -165,7 +158,6 @@ func TestCanTransitionTo_InvalidSkip(t *testing.T) {
 		{StatusPending, StatusDelivered},
 	}
 	for _, tt := range invalidSkips {
-		tt := tt
 		name := tt.from.String() + "->" + tt.to.String()
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -183,7 +175,6 @@ func TestCanTransitionTo_InvalidReverse(t *testing.T) {
 		{StatusDelivered, StatusSent},
 	}
 	for _, tt := range reverses {
-		tt := tt
 		name := tt.from.String() + "->" + tt.to.String()
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -229,7 +220,6 @@ func TestValidTransitions(t *testing.T) {
 		{StatusCanceled, nil},
 	}
 	for _, tt := range tests {
-		tt := tt
 		t.Run(tt.from.String(), func(t *testing.T) {
 			t.Parallel()
 			got := tt.from.ValidTransitions()
@@ -245,7 +235,6 @@ func TestCanTransitionTo_ZeroValueFrom(t *testing.T) {
 		StatusSucceeded, StatusFailed, StatusExpired, StatusCanceled,
 	}
 	for _, to := range allStatuses {
-		to := to
 		t.Run(to.String(), func(t *testing.T) {
 			t.Parallel()
 			assert.False(t, Status(0).CanTransitionTo(to),

@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"sync/atomic"
 	"time"
 
@@ -744,8 +745,8 @@ func (s *SubscriberWithMiddleware) Ready(sub Subscription) <-chan struct{} {
 // (no fields set ⇒ no-op).
 func (s *SubscriberWithMiddleware) Subscribe(ctx context.Context, sub Subscription, handler EntryHandler) error {
 	wrapped := handler
-	for i := len(s.Middleware) - 1; i >= 0; i-- {
-		wrapped = s.Middleware[i](sub, wrapped)
+	for _, v := range slices.Backward(s.Middleware) {
+		wrapped = v(sub, wrapped)
 	}
 	withRestore := func(reqCtx context.Context, entry Entry) HandleResult {
 		return wrapped(entry.Observability.RestoreToContext(reqCtx), entry)

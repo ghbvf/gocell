@@ -97,7 +97,7 @@ func TestFeatureFlag_Evaluate_Percentage(t *testing.T) {
 
 			hits := 0
 			total := 1000
-			for i := 0; i < total; i++ {
+			for i := range total {
 				if flag.Evaluate(fmt.Sprintf("user-%d", i)) {
 					hits++
 				}
@@ -123,7 +123,7 @@ func TestFeatureFlag_Evaluate_Percentage_Deterministic(t *testing.T) {
 	// Same subject must always get the same result (sticky assignment).
 	for _, subject := range []string{"alice", "bob", "charlie"} {
 		first := flag.Evaluate(subject)
-		for i := 0; i < 10; i++ {
+		for range 10 {
 			assert.Equal(t, first, flag.Evaluate(subject),
 				"evaluate must be deterministic for subject %q", subject)
 		}

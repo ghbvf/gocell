@@ -112,7 +112,7 @@ func TestHandleGet_ResponseBody(t *testing.T) {
 func TestHandleList_Default(t *testing.T) {
 	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	var seed []*domain.Order
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		seed = append(seed, &domain.Order{
 			ID:        "ord-" + string(rune('a'+i)),
 			Item:      "item",
@@ -135,7 +135,7 @@ func TestHandleList_Default(t *testing.T) {
 func TestHandleList_WithLimit(t *testing.T) {
 	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	var seed []*domain.Order
-	for i := 0; i < 10; i++ {
+	for i := range 10 {
 		seed = append(seed, &domain.Order{
 			ID:        "ord-" + string(rune('a'+i)),
 			Item:      "item",
@@ -232,7 +232,7 @@ func TestHandleList_Empty(t *testing.T) {
 func TestHandleList_Pagination_FullTraversal(t *testing.T) {
 	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	var seed []*domain.Order
-	for i := 0; i < 7; i++ {
+	for i := range 7 {
 		seed = append(seed, &domain.Order{
 			ID:        "ord-" + string(rune('a'+i)),
 			Item:      "item",
@@ -245,7 +245,7 @@ func TestHandleList_Pagination_FullTraversal(t *testing.T) {
 	var allIDs []string
 	cursor := ""
 
-	for page := 0; page < 10; page++ {
+	for range 10 {
 		url := "/api/v1/orders?limit=3"
 		if cursor != "" {
 			url += "&cursor=" + cursor

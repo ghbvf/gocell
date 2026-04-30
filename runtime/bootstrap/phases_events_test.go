@@ -16,6 +16,7 @@ package bootstrap
 
 import (
 	"context"
+	"slices"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -97,8 +98,8 @@ func TestPhase6_ConsumerMiddleware_AppliedInChain(t *testing.T) {
 		"WithConsumerMiddleware must be applied to the subscription chain exactly once for one subscription")
 
 	// Run all teardowns to release the eventrouter goroutine before the test exits.
-	for i := len(s.teardowns) - 1; i >= 0; i-- {
-		_ = s.teardowns[i].fn(context.Background())
+	for _, v := range slices.Backward(s.teardowns) {
+		_ = v.fn(context.Background())
 	}
 }
 

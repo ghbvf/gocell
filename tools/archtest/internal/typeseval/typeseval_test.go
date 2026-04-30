@@ -192,8 +192,7 @@ func TestSharedResolver_ConcurrentInit(t *testing.T) {
 	errs := make([]error, N)
 	var wg sync.WaitGroup
 	wg.Add(N)
-	for i := 0; i < N; i++ {
-		i := i
+	for i := range N {
 		go func() {
 			defer wg.Done()
 			results[i], errs[i] = SharedResolver(root, pattern)

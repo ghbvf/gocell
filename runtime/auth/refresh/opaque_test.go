@@ -51,7 +51,7 @@ func TestGeneratePair_ReturnsReadError(t *testing.T) {
 }
 
 func TestEncodeParse_RoundTrip(t *testing.T) {
-	for i := 0; i < 32; i++ {
+	for range 32 {
 		sel := make([]byte, SelectorLen)
 		ver := make([]byte, VerifierLen)
 		_, err := io.ReadFull(rand.Reader, sel)

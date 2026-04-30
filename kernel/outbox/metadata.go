@@ -1,5 +1,7 @@
 package outbox
 
+import "maps"
+
 // cloneMetadata returns an independent copy of metadata so callers can
 // mutate the result without affecting the source. Nil input returns a
 // freshly allocated empty map, which lets callers write unconditionally
@@ -16,8 +18,6 @@ func cloneMetadata(metadata map[string]string) map[string]string {
 		return make(map[string]string, 3)
 	}
 	cloned := make(map[string]string, len(metadata)+3)
-	for k, v := range metadata {
-		cloned[k] = v
-	}
+	maps.Copy(cloned, metadata)
 	return cloned
 }

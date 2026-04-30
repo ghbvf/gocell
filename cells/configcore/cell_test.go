@@ -397,7 +397,6 @@ func TestConfigCore_ProductionAuthGateLock(t *testing.T) {
 	}
 
 	for _, p := range paths {
-		p := p
 		t.Run(p.name, func(t *testing.T) {
 			// --- 401: no authenticated subject on context.
 			rec := exec(t, p, context.Background())

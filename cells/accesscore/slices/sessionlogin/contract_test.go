@@ -30,7 +30,6 @@ func TestHttpAuthLoginV1Serve(t *testing.T) {
 			[]byte(`{"data":{"accessToken":"x","refreshToken":"y","expiresAt":"2026-01-01T00:00:00Z","sessionId":"s","passwordResetRequired":false}}`),
 		},
 	} {
-		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			c.MustRejectResponse(t, tc.body)
 		})

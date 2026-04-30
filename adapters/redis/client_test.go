@@ -285,7 +285,6 @@ func TestConfigValidate_RejectNonTLSRemote(t *testing.T) {
 	}
 
 	for _, tc := range tests {
-		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			_, err := NewClient(context.Background(), tc.cfg)
@@ -364,7 +363,6 @@ func TestBuildStandaloneOptions(t *testing.T) {
 	}
 
 	for _, tc := range tests {
-		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			cfg := Config{Mode: ModeStandalone, Addr: tc.addr}

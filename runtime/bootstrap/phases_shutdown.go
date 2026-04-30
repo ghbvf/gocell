@@ -20,6 +20,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"slices"
 	"time"
 )
 
@@ -212,8 +213,8 @@ func (b *Bootstrap) phase10ReadinessFlip(shutCtx context.Context, s *phaseState)
 // ref: sigs.k8s.io/controller-runtime pkg/manager/internal.go engageStopProcedure — LIFO.
 func (b *Bootstrap) phase10LIFOTeardown(shutCtx context.Context, s *phaseState) []error {
 	var errs []error
-	for i := len(s.teardowns) - 1; i >= 0; i-- {
-		td := s.teardowns[i]
+	for _, v := range slices.Backward(s.teardowns) {
+		td := v
 		if err := td.fn(shutCtx); err != nil {
 			if td.name != "" {
 				err = &phaseError{Phase: "teardown_" + td.name, Err: err}

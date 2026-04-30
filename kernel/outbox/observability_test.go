@@ -40,7 +40,7 @@ func TestObservabilityMetadata_IsZero(t *testing.T) {
 // to extend IsZero when a new field is added — setting any single field
 // to a non-zero value MUST produce IsZero() == false.
 func TestObservabilityMetadata_IsZero_FieldCoverageInvariant(t *testing.T) {
-	typ := reflect.TypeOf(ObservabilityMetadata{})
+	typ := reflect.TypeFor[ObservabilityMetadata]()
 	require.Equal(t, reflect.Struct, typ.Kind())
 	for i := 0; i < typ.NumField(); i++ {
 		f := typ.Field(i)

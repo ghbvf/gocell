@@ -55,7 +55,6 @@ func shutdownAllServers(ctx context.Context, tasks []shutdownTask) error {
 	slog.Info("bootstrap: draining HTTP servers")
 	resultCh := make(chan error, len(tasks))
 	for _, task := range tasks {
-		task := task
 		go func() {
 			err := shutdownServerTask(ctx, task)
 			if err != nil {

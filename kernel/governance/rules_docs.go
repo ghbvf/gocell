@@ -303,8 +303,8 @@ func docNamingPatternMatch(rel, pattern string) bool {
 	if pattern == "" {
 		return false
 	}
-	if strings.HasSuffix(pattern, "/**") {
-		base := strings.TrimSuffix(pattern, "/**")
+	if before, ok := strings.CutSuffix(pattern, "/**"); ok {
+		base := before
 		return rel == base || strings.HasPrefix(rel, base+"/")
 	}
 	if ok, err := path.Match(pattern, rel); err == nil && ok {

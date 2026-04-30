@@ -68,8 +68,7 @@ func TestSubscriber_StopIntakeCancelsConsumerButDrainsInflight(t *testing.T) {
 		ch.consumeDeliveries <- amqp.Delivery{DeliveryTag: uint64(i + 1), Body: body}
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	subDone := make(chan error, 1)
 	go func() {
@@ -236,8 +235,7 @@ func TestSubscriber_IntakeStoppedThenCloseNoTimeout(t *testing.T) {
 	})
 	ch.consumeDeliveries <- amqp.Delivery{DeliveryTag: 1, Body: body}
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	subDone := make(chan error, 1)
 	go func() {

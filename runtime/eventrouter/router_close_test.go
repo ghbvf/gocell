@@ -418,8 +418,7 @@ func TestRouterClose_StopIntakeBlocksNeverCalled_CtxTimeoutContinues(t *testing.
 		return outbox.HandleResult{Disposition: outbox.DispositionAck}
 	}, "test-cg")
 
-	runCtx, runCancel := context.WithCancel(context.Background())
-	defer runCancel()
+	runCtx := t.Context()
 	done := make(chan error, 1)
 	go func() { done <- r.Run(runCtx) }()
 
@@ -485,8 +484,7 @@ func TestRouterClose_WrapsErrorsByPhase(t *testing.T) {
 			return outbox.HandleResult{Disposition: outbox.DispositionAck}
 		}, "test-cg")
 
-		runCtx, runCancel := context.WithCancel(context.Background())
-		defer runCancel()
+		runCtx := t.Context()
 		done := make(chan error, 1)
 		go func() { done <- r.Run(runCtx) }()
 
@@ -589,8 +587,7 @@ func TestRouterClose_StopIntakeErr_ProceedsToCancel(t *testing.T) {
 		return outbox.HandleResult{Disposition: outbox.DispositionAck}
 	}, "test-cg")
 
-	runCtx, runCancel := context.WithCancel(context.Background())
-	defer runCancel()
+	runCtx := t.Context()
 	done := make(chan error, 1)
 	go func() { done <- r.Run(runCtx) }()
 

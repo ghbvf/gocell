@@ -133,13 +133,11 @@ func TestFailureBudget_Concurrent(t *testing.T) {
 
 	var wg sync.WaitGroup
 	for range goroutines {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			for range iterations {
 				fb.Record(errors.New("err"))
 			}
-		}()
+		})
 	}
 	wg.Wait()
 

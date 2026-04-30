@@ -370,7 +370,7 @@ func TestConfigRepository_List_WithCursor(t *testing.T) {
 	ctx := context.Background()
 	now := time.Now()
 
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		require.NoError(t, repo.Create(ctx, &domain.ConfigEntry{
 			ID: "cfg-" + string(rune('a'+i)), Key: "k" + string(rune('a'+i)),
 			Value: "v", Version: 1,
@@ -436,7 +436,7 @@ func TestConfigRepository_List_CursorDESC(t *testing.T) {
 	ctx := context.Background()
 	now := time.Now()
 
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		require.NoError(t, repo.Create(ctx, &domain.ConfigEntry{
 			ID: "cfg-" + string(rune('a'+i)), Key: "k" + string(rune('a'+i)),
 			Value: "v", Version: 1,
@@ -609,9 +609,7 @@ func TestConfigRepository_ConcurrentCRUDAndList(t *testing.T) {
 	}
 
 	for r := range readers {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			params := query.ListParams{
 				Limit: 10,
 				Sort: []query.SortColumn{
@@ -633,7 +631,7 @@ func TestConfigRepository_ConcurrentCRUDAndList(t *testing.T) {
 				}
 			}
 			_ = r
-		}()
+		})
 	}
 
 	wg.Wait()
@@ -654,7 +652,7 @@ func TestConcurrentUpdate_NoLostWrite(t *testing.T) {
 	const goroutines = 10
 	var wg sync.WaitGroup
 	wg.Add(goroutines)
-	for i := 0; i < goroutines; i++ {
+	for i := range goroutines {
 		go func(i int) {
 			defer wg.Done()
 			_, _ = repo.Update(context.Background(), "k", fmt.Sprintf("v%d", i))

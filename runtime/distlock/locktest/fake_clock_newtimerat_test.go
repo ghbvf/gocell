@@ -122,11 +122,9 @@ func TestFakeClock_NewTimerAt_ConcurrentWithAdvance(t *testing.T) {
 			Stop() bool
 		}
 
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			timer = fc.NewTimerAt(deadline)
-		}()
+		})
 
 		// Advance enough to reach the deadline. Whether NewTimerAt happens
 		// before or after Advance, the timer must fire because fc.now ends at

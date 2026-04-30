@@ -40,7 +40,7 @@ func TestAdapter_OpensAfterFailures(t *testing.T) {
 	})
 
 	// Trip the breaker with 6 consecutive failures.
-	for i := 0; i < 6; i++ {
+	for range 6 {
 		allowed, done := a.Allow()
 		require.True(t, allowed, "breaker should still be closed during failure reporting")
 		done(errors.New("failure"))
@@ -59,7 +59,7 @@ func TestAdapter_HalfOpenAfterTimeout(t *testing.T) {
 	})
 
 	// Trip the breaker.
-	for i := 0; i < 6; i++ {
+	for range 6 {
 		_, done := a.Allow()
 		done(errors.New("failure"))
 	}
@@ -84,7 +84,7 @@ func TestAdapter_ClosesAfterHalfOpenSuccess(t *testing.T) {
 	})
 
 	// Trip the breaker.
-	for i := 0; i < 6; i++ {
+	for range 6 {
 		_, done := a.Allow()
 		done(errors.New("failure"))
 	}
@@ -100,7 +100,7 @@ func TestAdapter_ClosesAfterHalfOpenSuccess(t *testing.T) {
 	}, 2*time.Second, 25*time.Millisecond, "breaker must reach half-open")
 
 	// Should be back to closed — multiple requests allowed.
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		allowed, done := a.Allow()
 		assert.True(t, allowed, "breaker must be closed after half-open success (attempt %d)", i)
 		if done != nil {
@@ -120,7 +120,7 @@ func TestAdapter_OnStateChangeCallback(t *testing.T) {
 	})
 
 	// Trip: closed → open
-	for i := 0; i < 6; i++ {
+	for range 6 {
 		_, done := a.Allow()
 		done(errors.New("failure"))
 	}
@@ -160,7 +160,7 @@ func TestAdapter_CustomReadyToTrip(t *testing.T) {
 	})
 
 	// 3 failures should trip.
-	for i := 0; i < 3; i++ {
+	for range 3 {
 		_, done := a.Allow()
 		done(errors.New("failure"))
 	}
@@ -225,7 +225,7 @@ func TestAdapter_HalfOpen_MaxRequestsConcurrent(t *testing.T) {
 	})
 
 	// Trip the breaker: need > 5 consecutive failures (default ReadyToTrip).
-	for i := 0; i < 6; i++ {
+	for range 6 {
 		_, done := a.Allow()
 		done(errors.New("failure"))
 	}
@@ -268,17 +268,15 @@ func TestAdapter_HalfOpen_MaxRequestsConcurrent(t *testing.T) {
 	// Barrier so all goroutines start at the same time.
 	start := make(chan struct{})
 
-	for i := 0; i < concurrency; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+	for range concurrency {
+		wg.Go(func() {
 			<-start
 			ok, done := a.Allow()
 			if ok {
 				allowedCount.Add(1)
 				done(nil) // report success
 			}
-		}()
+		})
 	}
 
 	close(start) // release all goroutines simultaneously

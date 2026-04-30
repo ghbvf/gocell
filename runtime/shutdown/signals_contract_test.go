@@ -87,8 +87,8 @@ func findBuildDirective(groups []*ast.CommentGroup) string {
 	const prefix = "//go:build "
 	for _, cg := range groups {
 		for _, c := range cg.List {
-			if strings.HasPrefix(c.Text, prefix) {
-				return strings.TrimPrefix(c.Text, prefix)
+			if after, ok := strings.CutPrefix(c.Text, prefix); ok {
+				return after
 			}
 		}
 	}

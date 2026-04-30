@@ -94,7 +94,6 @@ func TestValidateAuthChainJWTSingleton(t *testing.T) {
 	}
 
 	for _, tc := range tests {
-		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			b := bootstrapWithListener(cell.PrimaryListener, tc.chain, nil)
@@ -237,7 +236,6 @@ func TestValidateAuthNoneExclusive(t *testing.T) {
 	}
 
 	for _, tc := range tests {
-		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			b := bootstrapWithListener(cell.PrimaryListener, tc.chain, nil)
@@ -304,7 +302,6 @@ func TestValidateAuthServiceTokenPlans(t *testing.T) {
 	}
 
 	for _, tc := range tests {
-		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			b := bootstrapWithListener(cell.InternalListener, tc.chain, nil)
@@ -356,7 +353,6 @@ func TestCheckJWTSingleton(t *testing.T) {
 	}
 
 	for _, tc := range tests {
-		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			err := checkJWTSingleton("test-listener", tc.chain)

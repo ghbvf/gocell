@@ -113,9 +113,9 @@ func (m *TestMux) composePatterns(pattern string) []string {
 	if m.prefix == "" {
 		return []string{pattern}
 	}
-	if idx := strings.IndexByte(pattern, ' '); idx >= 0 {
-		method := pattern[:idx]
-		p := pattern[idx+1:]
+	if before, after, ok := strings.Cut(pattern, " "); ok {
+		method := before
+		p := after
 		return prependMethod(method, composePaths(m.prefix, p))
 	}
 	return composePaths(m.prefix, pattern)

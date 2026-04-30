@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"slices"
 
 	configcore "github.com/ghbvf/gocell/cells/configcore"
 	"github.com/ghbvf/gocell/kernel/cell"
@@ -111,8 +112,8 @@ func (m ConfigCoreModule) Provide(ctx context.Context, shared *SharedDeps) (cell
 		provisional = append(provisional, pgRes)
 	}
 	rollback := func() {
-		for i := len(provisional) - 1; i >= 0; i-- {
-			if closeErr := provisional[i].Close(ctx); closeErr != nil {
+		for _, v := range slices.Backward(provisional) {
+			if closeErr := v.Close(ctx); closeErr != nil {
 				slog.Warn("configcore: provisional rollback close failed",
 					slog.Any("error", closeErr))
 			}

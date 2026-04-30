@@ -35,7 +35,7 @@ func newStubCell(id string) *stubCell {
 }
 
 func findAccessLogEntry(logs []byte, wantPath string) (map[string]any, bool) {
-	for _, line := range bytes.Split(logs, []byte("\n")) {
+	for line := range bytes.SplitSeq(logs, []byte("\n")) {
 		if len(line) == 0 {
 			continue
 		}

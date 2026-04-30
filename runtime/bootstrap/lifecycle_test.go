@@ -368,7 +368,7 @@ func TestLifecycle_LogsCellLabel_WhenCellIDSet(t *testing.T) {
 	// Every emitted log line (hook.start, hook.start_err) must carry cell=accesscore.
 	sawStart := false
 	sawErr := false
-	for _, line := range bytes.Split(bytes.TrimSpace(buf.Bytes()), []byte{'\n'}) {
+	for line := range bytes.SplitSeq(bytes.TrimSpace(buf.Bytes()), []byte{'\n'}) {
 		var rec map[string]any
 		require.NoError(t, json.Unmarshal(line, &rec), "bad log line %q", line)
 		msg, _ := rec["msg"].(string)
@@ -404,7 +404,7 @@ func TestLifecycle_OmitsCellLabel_WhenCellIDEmpty(t *testing.T) {
 	require.NoError(t, lc.Start(context.Background()))
 	require.NoError(t, lc.Stop(context.Background()))
 
-	for _, line := range bytes.Split(bytes.TrimSpace(buf.Bytes()), []byte{'\n'}) {
+	for line := range bytes.SplitSeq(bytes.TrimSpace(buf.Bytes()), []byte{'\n'}) {
 		if len(line) == 0 {
 			continue
 		}
@@ -491,7 +491,7 @@ func TestLifecycle_NegativeStartTimeoutSkipsSlowWarn(t *testing.T) {
 
 func findLifecycleLogRecord(t *testing.T, buf *bytes.Buffer, msg string) map[string]any {
 	t.Helper()
-	for _, line := range bytes.Split(bytes.TrimSpace(buf.Bytes()), []byte{'\n'}) {
+	for line := range bytes.SplitSeq(bytes.TrimSpace(buf.Bytes()), []byte{'\n'}) {
 		if len(line) == 0 {
 			continue
 		}

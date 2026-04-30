@@ -511,11 +511,9 @@ func TestSubscriber_Reconnect_ClosesChannelExactlyOnce(t *testing.T) {
 	// Call waitAndClose multiple times concurrently.
 	var wg sync.WaitGroup
 	for range 3 {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			_ = run.waitAndClose(ctx)
-		}()
+		})
 	}
 	wg.Wait()
 

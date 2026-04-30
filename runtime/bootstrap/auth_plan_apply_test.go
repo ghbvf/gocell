@@ -148,7 +148,6 @@ func TestApplyListenerAuthChain_EachKind(t *testing.T) {
 	}
 
 	for _, tc := range tests {
-		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			b := newMinimalBootstrap()
@@ -365,7 +364,6 @@ func TestExplicitAuthNone(t *testing.T) {
 		{"mtls_plan", []cell.ListenerAuth{cell.AuthMTLS{}}, false},
 	}
 	for _, tc := range tests {
-		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			assert.Equal(t, tc.want, explicitAuthNone(tc.chain))

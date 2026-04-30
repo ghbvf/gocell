@@ -905,8 +905,7 @@ func TestBootstrap_HealthContributor_DuplicateName_FailsFast(t *testing.T) {
 		WithShutdownTimeout(2*time.Second),
 	)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	err = b.Run(ctx)
 	require.Error(t, err, "duplicate probe names across cells should fail")
@@ -3061,8 +3060,7 @@ func TestBootstrap_AuthDiscovery_NoProvider_FailsClosed(t *testing.T) {
 		WithShutdownTimeout(2*time.Second),
 	)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	// Run should fail because no authProvider cell was discovered.
 	err = b.Run(ctx)
@@ -3093,8 +3091,7 @@ func TestBootstrap_AuthDiscovery_MultipleProviders_FailsFast(t *testing.T) {
 		WithShutdownTimeout(2*time.Second),
 	)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	err = b.Run(ctx)
 	require.Error(t, err, "bootstrap should reject multiple authProvider cells")

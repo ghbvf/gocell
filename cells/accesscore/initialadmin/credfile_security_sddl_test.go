@@ -88,7 +88,6 @@ func TestIsAllowACEType(t *testing.T) {
 		{"", false},
 	}
 	for _, c := range cases {
-		c := c
 		t.Run(c.t, func(t *testing.T) {
 			t.Parallel()
 			if got := isAllowACEType(c.t); got != c.want {

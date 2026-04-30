@@ -467,9 +467,7 @@ func TestConfig_ConcurrentGetAndReload(t *testing.T) {
 	}
 
 	// One goroutine reloading concurrently.
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		for range iterations {
 			// Alternate between two config versions to exercise the swap.
 			require.NoError(t, os.WriteFile(yamlFile, []byte("key: version_a\ncount: 2\n"), 0o644))
@@ -478,7 +476,7 @@ func TestConfig_ConcurrentGetAndReload(t *testing.T) {
 			require.NoError(t, os.WriteFile(yamlFile, []byte("key: version_b\ncount: 3\n"), 0o644))
 			_ = c.Reload(yamlFile, "")
 		}
-	}()
+	})
 
 	wg.Wait()
 

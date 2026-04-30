@@ -364,7 +364,7 @@ func TestClose_ConcurrentPublishDoesNotPanic(t *testing.T) {
 	var publishStarted atomic.Int32
 	panicCh := make(chan any, 1)
 	var publishers sync.WaitGroup
-	for i := 0; i < 4; i++ {
+	for i := range 4 {
 		publishers.Add(1)
 		go func(workerID int) {
 			defer publishers.Done()

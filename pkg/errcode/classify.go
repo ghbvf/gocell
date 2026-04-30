@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"database/sql/driver"
 	"errors"
+	"slices"
 )
 
 // Category classifies the origin of an error for log-level routing and
@@ -175,12 +176,7 @@ func IsDomainNotFound(err error, codes ...Code) bool {
 	if ec.Category != CategoryDomain {
 		return false
 	}
-	for _, c := range codes {
-		if ec.Code == c {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(codes, ec.Code)
 }
 
 // expected4xxCodes is the set of error codes that map to HTTP 400-499 responses.

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/ghbvf/gocell/kernel/cell"
@@ -138,21 +139,11 @@ func contractDirFromID(id string) string {
 // --- collection helpers ---
 
 func containsRole(roles []cell.ContractRole, target cell.ContractRole) bool {
-	for _, r := range roles {
-		if r == target {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(roles, target)
 }
 
 func containsString(ss []string, target string) bool {
-	for _, s := range ss {
-		if s == target {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(ss, target)
 }
 
 // --- consumer membership helpers ---

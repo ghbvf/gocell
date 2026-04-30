@@ -110,7 +110,7 @@ func TestLazyWorker_ConcurrentSet_FirstWins(t *testing.T) {
 	)
 
 	start := make(chan struct{})
-	for i := 0; i < goroutines; i++ {
+	for i := range goroutines {
 		wg.Add(1)
 		go func(w *fakeWorker) {
 			defer wg.Done()

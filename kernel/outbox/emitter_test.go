@@ -138,7 +138,6 @@ func TestWriterEmitter_Durable(t *testing.T) {
 		{name: "real_writer_durable", writer: &recordingEmitterWriter{}, want: true},
 	}
 	for _, tc := range tests {
-		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			e, err := NewWriterEmitter(tc.writer)
 			require.NoError(t, err)
@@ -190,7 +189,6 @@ func TestDirectEmitter_EntryFailurePolicyOverridesCtorDefault(t *testing.T) {
 		{"entry_failclosed_matches_ctor_failclosed", DirectPublishFailClosed, FailurePolicyFailClosed, true},
 	}
 	for _, tc := range tests {
-		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			publisher := &recordingEmitterPublisher{err: errors.New("broker down")}
 			emitter, err := NewDirectEmitter(publisher, tc.ctorMode, metrics.NopProvider{}, "testcell")
@@ -436,7 +434,7 @@ func TestDirectEmitter_HealthCheckers_DegradedOnHighDropRatio(t *testing.T) {
 
 	ctx := context.Background()
 	entry := validEntry("health-degrade")
-	for i := 0; i < 10; i++ {
+	for range 10 {
 		require.NoError(t, e.Emit(ctx, entry)) // fail-open does not return err
 	}
 
@@ -458,7 +456,7 @@ func TestDirectEmitter_HealthCheckers_HealthyOnLowDropRatio(t *testing.T) {
 
 	ctx := context.Background()
 	entry := validEntry("health-ok")
-	for i := 0; i < 10; i++ {
+	for range 10 {
 		require.NoError(t, e.Emit(ctx, entry))
 	}
 
@@ -495,7 +493,7 @@ func TestNewDirectEmitter_WithFailOpenRateThresholdZeroDisables(t *testing.T) {
 
 	ctx := context.Background()
 	entry := validEntry("thresh-zero")
-	for i := 0; i < 100; i++ {
+	for range 100 {
 		require.NoError(t, e.Emit(ctx, entry))
 	}
 

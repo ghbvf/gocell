@@ -64,8 +64,7 @@ func TestReadyz_Singleflight_DedupsConcurrentRequests(t *testing.T) {
 	release := make(chan struct{})
 
 	bodies := make([][]byte, concurrency)
-	for i := 0; i < concurrency; i++ {
-		i := i
+	for i := range concurrency {
 		go func() {
 			defer doneWG.Done()
 			readyWG.Done()

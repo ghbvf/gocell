@@ -531,7 +531,7 @@ func newTestLogger(buf *bytes.Buffer) *slog.Logger {
 func parseLogEntries(t *testing.T, buf *bytes.Buffer) []map[string]any {
 	t.Helper()
 	var entries []map[string]any
-	for _, line := range bytes.Split(bytes.TrimSpace(buf.Bytes()), []byte("\n")) {
+	for line := range bytes.SplitSeq(bytes.TrimSpace(buf.Bytes()), []byte("\n")) {
 		if len(line) == 0 {
 			continue
 		}

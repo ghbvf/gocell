@@ -329,10 +329,10 @@ func TestGenerateBoundary_FingerprintNonEmpty(t *testing.T) {
 	assert.Contains(t, content, "sourceFingerprint:")
 
 	// Extract fingerprint value; it should be a 64-char hex string.
-	lines := strings.Split(content, "\n")
-	for _, line := range lines {
-		if strings.HasPrefix(line, "sourceFingerprint:") {
-			fp := strings.TrimSpace(strings.TrimPrefix(line, "sourceFingerprint:"))
+	lines := strings.SplitSeq(content, "\n")
+	for line := range lines {
+		if after, ok := strings.CutPrefix(line, "sourceFingerprint:"); ok {
+			fp := strings.TrimSpace(after)
 			assert.Len(t, fp, 64, "SHA-256 hex digest should be 64 chars")
 			break
 		}

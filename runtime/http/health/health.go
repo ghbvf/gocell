@@ -27,6 +27,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"net/http"
 	"strings"
 	"sync"
@@ -343,9 +344,7 @@ func (h *Handler) computeReadyz(verbose bool) readyzResult {
 
 	h.mu.RLock()
 	checkersCopy := make(map[string]Checker, len(h.checkers))
-	for k, v := range h.checkers {
-		checkersCopy[k] = v
-	}
+	maps.Copy(checkersCopy, h.checkers)
 	var adapters map[string]string
 	if verbose {
 		adapters = cloneAdapterInfo(h.adapterInfo)
@@ -372,9 +371,7 @@ func cloneAdapterInfo(src map[string]string) map[string]string {
 		return nil
 	}
 	dst := make(map[string]string, len(src))
-	for k, v := range src {
-		dst[k] = v
-	}
+	maps.Copy(dst, src)
 	return dst
 }
 
@@ -510,7 +507,6 @@ func (h *Handler) runProbesParallel(checkers map[string]Checker) map[string]Prob
 	var wg sync.WaitGroup
 	wg.Add(len(checkers))
 	for name, fn := range checkers {
-		name, fn := name, fn
 		go func() {
 			defer wg.Done()
 			pr := runOneProbe(ctx, fn, h.deadline)

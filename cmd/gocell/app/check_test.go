@@ -615,8 +615,7 @@ func TestRunUnconditionalSkipAnalyzer_BuildTaggedFile(t *testing.T) {
 
 	// Minimal go.mod — the module path must resolve; no external deps needed.
 	// Use the actual toolchain version so this fixture tracks upgrades automatically.
-	require.NoError(t, os.WriteFile(filepath.Join(root, "go.mod"), []byte(
-		fmt.Sprintf("module example.com/skiptest\n\ngo %s\n", goModVersion())), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(root, "go.mod"), fmt.Appendf(nil, "module example.com/skiptest\n\ngo %s\n", goModVersion()), 0o644))
 
 	// A package directory.
 	pkgDir := filepath.Join(root, "mypkg")

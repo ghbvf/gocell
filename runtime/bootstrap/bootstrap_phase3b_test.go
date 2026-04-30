@@ -35,8 +35,8 @@ var runtimeOnlyHookFields = map[string]string{
 // fails until cell.LifecycleHook mirrors it (or a conscious divergence is
 // documented by adding the field to runtimeOnlyHookFields above).
 func TestLifecycleHookShapeMatchesBootstrapHook(t *testing.T) {
-	hookT := reflect.TypeOf(Hook{})
-	cellHookT := reflect.TypeOf(cell.LifecycleHook{})
+	hookT := reflect.TypeFor[Hook]()
+	cellHookT := reflect.TypeFor[cell.LifecycleHook]()
 
 	fieldSet := func(t reflect.Type) map[string]reflect.Type {
 		out := make(map[string]reflect.Type, t.NumField())

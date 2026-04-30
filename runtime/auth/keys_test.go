@@ -471,16 +471,16 @@ func TestKeySet_ConcurrentPublicKeyByKID(t *testing.T) {
 	// Run concurrent lookups — go test -race will detect data races.
 	const goroutines = 50
 	done := make(chan struct{})
-	for i := 0; i < goroutines; i++ {
+	for range goroutines {
 		go func() {
 			defer func() { done <- struct{}{} }()
-			for j := 0; j < 100; j++ {
+			for range 100 {
 				_, _ = ks.PublicKeyByKID(ks.SigningKeyID())
 				_, _ = ks.PublicKeyByKID(vk.KeyID)
 			}
 		}()
 	}
-	for i := 0; i < goroutines; i++ {
+	for range goroutines {
 		<-done
 	}
 }

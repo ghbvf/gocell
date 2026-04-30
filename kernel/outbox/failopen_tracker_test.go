@@ -8,10 +8,10 @@ import (
 
 func TestFailOpenTracker_TrippedOnHighRatio(t *testing.T) {
 	tr := newFailOpenTracker(0.5)
-	for i := 0; i < 5; i++ {
+	for range 5 {
 		tr.RecordSuccess()
 	}
-	for i := 0; i < 6; i++ {
+	for range 6 {
 		tr.RecordDrop()
 	}
 	// ratio = 6 / (5+6) = 0.545 > 0.5
@@ -20,10 +20,10 @@ func TestFailOpenTracker_TrippedOnHighRatio(t *testing.T) {
 
 func TestFailOpenTracker_HealthyOnLowRatio(t *testing.T) {
 	tr := newFailOpenTracker(0.05)
-	for i := 0; i < 100; i++ {
+	for range 100 {
 		tr.RecordSuccess()
 	}
-	for i := 0; i < 2; i++ {
+	for range 2 {
 		tr.RecordDrop()
 	}
 	// ratio = 2/102 ≈ 0.0196 < 0.05
@@ -41,7 +41,7 @@ func TestFailOpenTracker_NoEmitsBetweenChecks(t *testing.T) {
 
 func TestFailOpenTracker_ZeroThresholdDisabled(t *testing.T) {
 	tr := newFailOpenTracker(0)
-	for i := 0; i < 100; i++ {
+	for range 100 {
 		tr.RecordDrop()
 	}
 	assert.False(t, tr.Tripped(), "threshold=0 disables the tracker")
@@ -49,12 +49,12 @@ func TestFailOpenTracker_ZeroThresholdDisabled(t *testing.T) {
 
 func TestFailOpenTracker_RecoveryAfterDropStop(t *testing.T) {
 	tr := newFailOpenTracker(0.05)
-	for i := 0; i < 10; i++ {
+	for range 10 {
 		tr.RecordDrop()
 	}
 	assert.True(t, tr.Tripped()) // baseline + degraded
 	// recovery: no more drops, only success
-	for i := 0; i < 100; i++ {
+	for range 100 {
 		tr.RecordSuccess()
 	}
 	assert.False(t, tr.Tripped(), "after drops stop and successes flow, tracker recovers")
@@ -63,14 +63,14 @@ func TestFailOpenTracker_RecoveryAfterDropStop(t *testing.T) {
 func TestFailOpenTracker_NegativeOrInvalidThreshold(t *testing.T) {
 	// Negative ratio is treated like 0 (disabled) — defensive
 	tr := newFailOpenTracker(-0.1)
-	for i := 0; i < 100; i++ {
+	for range 100 {
 		tr.RecordDrop()
 	}
 	assert.False(t, tr.Tripped(), "negative threshold should disable")
 
 	// > 1.0 is allowed (effectively never trips since ratio ≤ 1.0)
 	tr2 := newFailOpenTracker(1.5)
-	for i := 0; i < 100; i++ {
+	for range 100 {
 		tr2.RecordDrop()
 	}
 	assert.False(t, tr2.Tripped(), "threshold > 1.0 effectively disables")

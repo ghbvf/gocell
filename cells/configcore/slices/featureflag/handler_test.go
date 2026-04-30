@@ -284,7 +284,7 @@ func TestHandler_HandleList_Pagination_FullTraversal(t *testing.T) {
 	var allIDs []string
 	cursor := ""
 
-	for page := 0; page < 10; page++ {
+	for range 10 {
 		url := flagsBasePath + "/?limit=3"
 		if cursor != "" {
 			url += "&cursor=" + cursor

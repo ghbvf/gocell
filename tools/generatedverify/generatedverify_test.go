@@ -331,7 +331,7 @@ func TestValidateArtifactPathsRejectsUnsafePaths(t *testing.T) {
 
 func TestAssemblyForOrphanPath(t *testing.T) {
 	cases := map[string]string{
-		"assemblies/fixture/generated/boundary.yaml":     "fixture",
+		"assemblies/fixture/generated/boundary.yaml":      "fixture",
 		"assemblies/legacy/generated/metrics-schema.yaml": "legacy",
 		"cmd/orphan/main.go":                              "",
 		"docs/notes.md":                                   "",

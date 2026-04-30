@@ -91,10 +91,7 @@ func (r *AuditRepository) GetRange(ctx context.Context, from, to int) ([]*domain
 		return []*domain.AuditEntry{}, nil
 	}
 
-	limit := to - from
-	if limit > getRangeLimit {
-		limit = getRangeLimit
-	}
+	limit := min(to-from, getRangeLimit)
 
 	const query = `SELECT id, event_id, event_type, actor_id, timestamp, payload, prev_hash, hash
 		FROM audit_entries

@@ -731,12 +731,10 @@ func TestWatcher_Close_ConcurrentImmediateCallbacksRace(t *testing.T) {
 	start := make(chan struct{})
 	var wg sync.WaitGroup
 	for range 32 {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			<-start
 			w.fireCallbacks(false)
-		}()
+		})
 	}
 
 	close(start)
@@ -771,14 +769,12 @@ func TestWatcher_RaceDetection_ConcurrentWriteAndClose(t *testing.T) {
 	var wg sync.WaitGroup
 
 	// Writer goroutine.
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		for i := range 20 {
 			touchFile(t, file, "key: race"+string(rune('0'+i%10)))
 			time.Sleep(5 * time.Millisecond)
 		}
-	}()
+	})
 
 	// Close after a short delay.
 	time.Sleep(50 * time.Millisecond)

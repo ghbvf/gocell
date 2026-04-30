@@ -141,9 +141,9 @@ func computeFingerprintWithRoot(t *testing.T, p *metadata.ProjectMeta, root stri
 
 func extractBoundaryFingerprint(t *testing.T, out []byte) string {
 	t.Helper()
-	for _, line := range strings.Split(string(out), "\n") {
-		if strings.HasPrefix(line, "sourceFingerprint: ") {
-			return strings.TrimPrefix(line, "sourceFingerprint: ")
+	for line := range strings.SplitSeq(string(out), "\n") {
+		if after, ok := strings.CutPrefix(line, "sourceFingerprint: "); ok {
+			return after
 		}
 	}
 	t.Fatalf("sourceFingerprint line missing from boundary:\n%s", string(out))
@@ -219,7 +219,6 @@ func TestSourceFingerprint_StructuralChangesDetected(t *testing.T) {
 
 	baseline := computeFingerprint(t, fingerprintProject())
 	for _, tc := range cases {
-		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			p := fingerprintProject()
 			tc.mutate(p)
@@ -551,7 +550,7 @@ func TestSourceFingerprint_AnyFieldChange(t *testing.T) {
 	t.Parallel()
 	baseline := computeFingerprint(t, fingerprintProject())
 
-	typ := reflect.TypeOf(metadata.ContractMeta{})
+	typ := reflect.TypeFor[metadata.ContractMeta]()
 	for i := range typ.NumField() {
 		f := typ.Field(i)
 		if !f.IsExported() || fingerprintExcludedFields[f.Name] {
@@ -623,7 +622,7 @@ func mutateContractSliceField(v reflect.Value) {
 }
 
 func mutateContractPointerField(v reflect.Value) {
-	if v.Type() != reflect.TypeOf((*bool)(nil)) {
+	if v.Type() != reflect.TypeFor[*bool]() {
 		return
 	}
 	b := true

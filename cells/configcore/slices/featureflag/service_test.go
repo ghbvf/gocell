@@ -87,7 +87,7 @@ func TestService_List(t *testing.T) {
 
 func TestService_List_FirstPage(t *testing.T) {
 	svc, repo := newTestService()
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		seedFlag(t, repo, "flag-"+string(rune('a'+i)), domain.FlagBoolean, true, 0)
 	}
 
@@ -100,7 +100,7 @@ func TestService_List_FirstPage(t *testing.T) {
 
 func TestService_List_WithCursor(t *testing.T) {
 	svc, repo := newTestService()
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		seedFlag(t, repo, "flag-"+string(rune('a'+i)), domain.FlagBoolean, true, 0)
 	}
 

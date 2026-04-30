@@ -72,7 +72,7 @@ func (p *verifyTextPrinter) printTestResults(results []verify.TestResult) error 
 			return err
 		}
 		if tr.Output != "" {
-			for _, line := range strings.Split(strings.TrimRight(tr.Output, "\n"), "\n") {
+			for line := range strings.SplitSeq(strings.TrimRight(tr.Output, "\n"), "\n") {
 				if _, err := fmt.Fprintf(p.w, "    %s\n", line); err != nil {
 					return err
 				}

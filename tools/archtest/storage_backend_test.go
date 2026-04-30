@@ -63,7 +63,6 @@ func TestStorageBackendPGWiring01(t *testing.T) {
 	}
 
 	for _, target := range targets {
-		target := target
 		rel, _ := filepath.Rel(root, target)
 		rel = filepath.ToSlash(rel)
 		t.Run(rel, func(t *testing.T) {
@@ -105,7 +104,6 @@ func TestStorageBackendMemoryNoPG01(t *testing.T) {
 	}
 
 	for _, target := range targets {
-		target := target
 		rel, _ := filepath.Rel(root, target)
 		rel = filepath.ToSlash(rel)
 		t.Run(rel, func(t *testing.T) {

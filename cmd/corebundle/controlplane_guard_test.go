@@ -186,7 +186,6 @@ func TestInternalGuardFromEnv_RequiresSecretInAllModes(t *testing.T) {
 	modes := []string{"", "memory", "postgres", "real"}
 
 	for _, mode := range modes {
-		mode := mode
 		t.Run("mode="+mode, func(t *testing.T) {
 			// No t.Parallel(): t.Setenv must run sequentially (Go testing constraint).
 			t.Setenv("GOCELL_SERVICE_SECRET", "")

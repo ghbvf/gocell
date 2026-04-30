@@ -297,11 +297,8 @@ func (r *Router) runSetup(ctx context.Context, cancel context.CancelFunc, handle
 // (Phase 2). Errors are sent to setupErr.
 func (r *Router) runSubscribe(ctx context.Context, handlers []handlerConfig, setupErr chan<- error) {
 	for _, h := range handlers {
-		h := h
 		sub := h.subscription()
-		r.wg.Add(1)
-		go func() {
-			defer r.wg.Done()
+		r.wg.Go(func() {
 			defer func() {
 				if rv := recover(); rv != nil {
 					setupErr <- fmt.Errorf("eventrouter: topic %s panicked: %v", sub.Topic, rv)
@@ -314,7 +311,7 @@ func (r *Router) runSubscribe(ctx context.Context, handlers []handlerConfig, set
 			if err != nil && ctx.Err() == nil {
 				setupErr <- fmt.Errorf("eventrouter: topic %s: %w", sub.Topic, err)
 			}
-		}()
+		})
 	}
 }
 
@@ -391,16 +388,13 @@ func (r *Router) awaitAllReady(ctx context.Context, handlers []handlerConfig) <-
 	doneCh := make(chan struct{})
 	var wg sync.WaitGroup
 	for _, h := range handlers {
-		h := h
 		sub := h.subscription()
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			select {
 			case <-r.subscriber.Ready(sub):
 			case <-ctx.Done():
 			}
-		}()
+		})
 	}
 	go func() {
 		wg.Wait()

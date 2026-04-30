@@ -160,7 +160,6 @@ func (b *Bootstrap) phase7ServeAll(servers []boundServer) chan error {
 	httpErrCh := make(chan error, n)
 	pending := int32(n)
 	for _, bs := range servers {
-		bs := bs
 		go func() {
 			defer func() {
 				closeServerStopped(bs.stopped)

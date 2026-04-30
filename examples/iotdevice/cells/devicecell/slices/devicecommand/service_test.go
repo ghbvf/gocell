@@ -287,12 +287,10 @@ func TestService_Ack_ConcurrentSameReason_Idempotent(t *testing.T) {
 	const workers = 16
 	var wg sync.WaitGroup
 	errs := make(chan error, workers)
-	for i := 0; i < workers; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+	for range workers {
+		wg.Go(func() {
 			errs <- svc.Ack(ctx, "dev-1", "cmd-1", command.AckSuccess)
-		}()
+		})
 	}
 	wg.Wait()
 	close(errs)
@@ -379,7 +377,7 @@ func TestService_ScanActive_CursorDeviceMismatch(t *testing.T) {
 	seedDevice(devRepo, "dev-B", "sensor-b")
 
 	// Enqueue enough commands for dev-A so a cursor is generated.
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		ts := now.Add(time.Duration(i) * time.Second)
 		_ = q.Enqueue(ctx, command.NewEntry(
 			"c"+string(rune('0'+i)), "dev-A", "reboot", []byte("x"),

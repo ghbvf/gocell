@@ -36,7 +36,7 @@ func captureSlogWarnLines(t *testing.T) (*bytes.Buffer, func()) {
 // countWarnLines counts JSON log lines whose "level" == "WARN" in buf.
 func countWarnLines(buf *bytes.Buffer) int {
 	count := 0
-	for _, line := range bytes.Split(buf.Bytes(), []byte("\n")) {
+	for line := range bytes.SplitSeq(buf.Bytes(), []byte("\n")) {
 		if len(line) == 0 {
 			continue
 		}

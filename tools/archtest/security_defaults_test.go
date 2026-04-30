@@ -26,6 +26,7 @@ import (
 	"go/token"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -384,12 +385,7 @@ func chainLiteralContainsAuthNone(expr ast.Expr) bool {
 	if !ok {
 		return false
 	}
-	for _, elt := range lit.Elts {
-		if isAuthNoneComposite(elt) {
-			return true
-		}
-	}
-	return false
+	return slices.ContainsFunc(lit.Elts, isAuthNoneComposite)
 }
 
 func isAuthNoneComposite(expr ast.Expr) bool {

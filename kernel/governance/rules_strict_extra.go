@@ -227,7 +227,7 @@ func resolveLocalSchemaRef(root map[string]any, ref string) (map[string]any, boo
 		return nil, false
 	}
 	var cur any = root
-	for _, part := range strings.Split(strings.TrimPrefix(ref, "#/"), "/") {
+	for part := range strings.SplitSeq(strings.TrimPrefix(ref, "#/"), "/") {
 		obj, ok := cur.(map[string]any)
 		if !ok {
 			return nil, false

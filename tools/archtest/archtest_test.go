@@ -311,20 +311,19 @@ func findDisallowedTypePath(modPrefix string, typ types.Type) string {
 		}
 		return findDisallowedTupleTypePath(modPrefix, t.Results())
 	case *types.Interface:
-		for i := 0; i < t.NumExplicitMethods(); i++ {
-			if p := findDisallowedTypePath(modPrefix, t.ExplicitMethod(i).Type()); p != "" {
+		for method := range t.ExplicitMethods() {
+			if p := findDisallowedTypePath(modPrefix, method.Type()); p != "" {
 				return p
 			}
 		}
-		for i := 0; i < t.NumEmbeddeds(); i++ {
-			if p := findDisallowedTypePath(modPrefix, t.EmbeddedType(i)); p != "" {
+		for etyp := range t.EmbeddedTypes() {
+			if p := findDisallowedTypePath(modPrefix, etyp); p != "" {
 				return p
 			}
 		}
 		return ""
 	case *types.Struct:
-		for i := 0; i < t.NumFields(); i++ {
-			f := t.Field(i)
+		for f := range t.Fields() {
 			if !f.Exported() && !f.Anonymous() {
 				continue
 			}
@@ -342,8 +341,8 @@ func findDisallowedTupleTypePath(modPrefix string, tuple *types.Tuple) string {
 	if tuple == nil {
 		return ""
 	}
-	for i := 0; i < tuple.Len(); i++ {
-		if p := findDisallowedTypePath(modPrefix, tuple.At(i).Type()); p != "" {
+	for v := range tuple.Variables() {
+		if p := findDisallowedTypePath(modPrefix, v.Type()); p != "" {
 			return p
 		}
 	}

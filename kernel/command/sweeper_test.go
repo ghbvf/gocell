@@ -37,7 +37,6 @@ func TestSweepOnce_TerminalIgnored(t *testing.T) {
 	created := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 
 	for _, s := range terminals {
-		s := s
 		t.Run(s.String(), func(t *testing.T) {
 			t.Parallel()
 			e := command.NewEntry("cmd-1", "dev-1", "reboot", []byte(`{}`), command.Timeouts{

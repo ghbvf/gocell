@@ -48,7 +48,6 @@ func TestAuthPlan_Describe(t *testing.T) {
 	}
 
 	for _, tc := range tests {
-		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			if got := tc.plan.Describe(); got != tc.want {
@@ -262,7 +261,6 @@ func TestTokenIntent_IsValid(t *testing.T) {
 		{cell.TokenIntent(""), false},
 	}
 	for _, tc := range tests {
-		tc := tc
 		t.Run(string(tc.intent), func(t *testing.T) {
 			t.Parallel()
 			if got := tc.intent.IsValid(); got != tc.valid {

@@ -156,7 +156,9 @@ func CollectN(
 	}
 
 	cancel()
-	<-subDone
+	if err := awaitWithBudget(fmt.Sprintf("CollectN-join(topic=%q)", topic), subDone, defaultTimeout); err != nil {
+		t.Errorf("%v", err)
+	}
 
 	mu.Lock()
 	defer mu.Unlock()
@@ -180,6 +182,7 @@ type collector struct {
 	cancel    context.CancelFunc
 	subDone   chan struct{}
 	n         int
+	topic     string
 }
 
 // startCollecting launches a subscriber goroutine that collects entries.
@@ -192,6 +195,7 @@ func startCollecting(t *testing.T, ctx context.Context, sub outbox.Subscriber, t
 		done:    make(chan struct{}),
 		subDone: make(chan struct{}),
 		n:       n,
+		topic:   topic,
 	}
 
 	subCtx, cancel := context.WithCancel(ctx)
@@ -236,7 +240,9 @@ func (c *collector) waitAndGet(timeout time.Duration) []outbox.Entry {
 		c.t.Fatalf("collector: timed out after %v, collected %d/%d", timeout, got, c.n)
 	}
 	c.cancel()
-	<-c.subDone
+	if err := awaitWithBudget(fmt.Sprintf("collector-join(topic=%q)", c.topic), c.subDone, defaultTimeout); err != nil {
+		c.t.Errorf("%v", err)
+	}
 
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -304,7 +310,7 @@ func newHarness(t *testing.T, constructor PubSubConstructor) *pubSubHarness {
 // Subscribe errors (other than context.Canceled) are surfaced via t.Errorf.
 func (h *pubSubHarness) subscribe(handler outbox.EntryHandler) {
 	h.T.Helper()
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(h.T.Context())
 	h.cancel = cancel
 	h.T.Cleanup(cancel)
 	wrapped := func(hctx context.Context, entry outbox.Entry) outbox.HandleResult {
@@ -334,7 +340,7 @@ func (h *pubSubHarness) subscribe(handler outbox.EntryHandler) {
 // delivering it to subscribers.
 func (h *pubSubHarness) publishAndWait(payload []byte) {
 	h.T.Helper()
-	assertNoError(h.T, h.Pub.Publish(context.Background(), h.Topic, wrapV1Envelope(h.T, h.Topic, payload)))
+	assertNoError(h.T, h.Pub.Publish(h.T.Context(), h.Topic, wrapV1Envelope(h.T, h.Topic, payload)))
 	select {
 	case <-h.done:
 	case <-time.After(defaultTimeout):
@@ -384,8 +390,11 @@ func (h *pubSubHarness) signalDone() {
 
 // teardown cancels the subscriber and waits for the goroutine to exit.
 func (h *pubSubHarness) teardown() {
+	h.T.Helper()
 	h.cancel()
-	<-h.subDone
+	if err := awaitWithBudget(fmt.Sprintf("harness-teardown(topic=%q)", h.Topic), h.subDone, defaultTimeout); err != nil {
+		h.T.Errorf("%v", err)
+	}
 }
 
 // assertNoMoreDeliveries drains priorCount expected deliveries, then verifies
@@ -513,4 +522,82 @@ func assertNotPanics(t *testing.T, f func()) {
 		}
 	}()
 	f()
+}
+
+// ---------------------------------------------------------------------------
+// caller-enforced budget helpers
+//
+// Conformance suites validate that subscriber implementations honour ctx.
+// The helpers below turn a violating implementation (Close that ignores ctx,
+// Subscribe that never returns after cancel) into a focused per-test failure
+// with topic identity, instead of letting it hang the whole `go test` run
+// until -timeout kills the process.
+//
+// We diverge from watermill (pubsub/tests/test_pubsub.go), which trusts the
+// implementation contract + go-test-timeout fallback. Caller-side budget is
+// chosen here because conformance suites exist precisely to catch contract
+// violations, and a labelled per-test error is more actionable than a
+// process-level timeout.
+//
+// ref: uber-go/fx app.go withTimeout (caller race + Goexit/panic defense)
+// ref: ThreeDotsLabs/watermill pubsub/sync/waitgroup.go WaitGroupTimeout
+// ref: kubernetes-sigs/controller-runtime pkg/manager/runnable_group.go
+//      StopAndWait (accepted goroutine leak after budget)
+// ---------------------------------------------------------------------------
+
+// awaitWithBudget waits for ch to close. Returns nil if it closes within
+// budget; a label-tagged timeout error otherwise. Used at goroutine join
+// sites where the caller already has a "done" channel and only needs the
+// caller-enforced budget on top.
+func awaitWithBudget(label string, ch <-chan struct{}, budget time.Duration) error {
+	select {
+	case <-ch:
+		return nil
+	case <-time.After(budget):
+		return fmt.Errorf("%s: did not complete within %s", label, budget)
+	}
+}
+
+// chanFromWaitGroup adapts sync.WaitGroup → chan so the join site can use
+// awaitWithBudget. The adapter goroutine itself is unbudgeted; if wg.Wait
+// never returns, awaitWithBudget surfaces the timeout — that is the exact
+// failure mode we want to catch.
+func chanFromWaitGroup(wg *sync.WaitGroup) <-chan struct{} {
+	done := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(done)
+	}()
+	return done
+}
+
+// closeWithBudget enforces a caller-side budget on Subscriber.Close. Close
+// runs in a goroutine; on budget exhaustion the leaked goroutine is an
+// accepted cost — the caller exits promptly so the test framework can move
+// on to teardown. The defer sentinel defends against runtime.Goexit() / panic
+// inside Close (e.g. a fake that calls t.FailNow): without it, the chan
+// receive would block forever because nothing ever sends on errCh.
+func closeWithBudget(t *testing.T, sub outbox.Subscriber, topic string, budget time.Duration) error {
+	t.Helper()
+	closeCtx, cancel := context.WithTimeout(t.Context(), budget)
+	defer cancel()
+
+	errCh := make(chan error, 1)
+	go func() {
+		callbackExited := false
+		defer func() {
+			if !callbackExited {
+				errCh <- fmt.Errorf("Close goroutine exited via Goexit/panic before returning")
+			}
+		}()
+		errCh <- sub.Close(closeCtx)
+		callbackExited = true
+	}()
+
+	select {
+	case err := <-errCh:
+		return err
+	case <-time.After(budget):
+		return fmt.Errorf("Close did not return within %s (topic=%q, goroutine leaked) — implementation may ignore ctx", budget, topic)
+	}
 }

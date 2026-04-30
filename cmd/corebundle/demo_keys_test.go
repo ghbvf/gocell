@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"slices"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -17,7 +18,6 @@ func TestRejectDemoKey_DevMode_AlwaysPasses(t *testing.T) {
 
 func TestRejectDemoKey_RealMode_RejectsEachDemoValue(t *testing.T) {
 	for _, demo := range wellKnownDemoKeys {
-		demo := demo
 		t.Run(demo, func(t *testing.T) {
 			err := rejectDemoKey("real", "X_TEST_ENV", []byte(demo))
 			require.Error(t, err, "real mode must reject demo key %q", demo)
@@ -56,12 +56,9 @@ func TestDevDefaults_AreAllInWellKnownDemoKeys(t *testing.T) {
 		"corebundle-cfg-cursor-key--32bb!", // buildCursorCodec(... LoadCursorKeys("CONFIGCORE") ...)
 	}
 	for _, dd := range devDefaults {
-		dd := dd
 		t.Run(dd, func(t *testing.T) {
-			for _, demo := range wellKnownDemoKeys {
-				if dd == demo {
-					return
-				}
+			if slices.Contains(wellKnownDemoKeys, dd) {
+				return
 			}
 			t.Errorf("dev default %q is not in wellKnownDemoKeys — real mode will silently accept it; add to demo_keys.go", dd)
 		})
@@ -73,10 +70,8 @@ func TestDevDefaults_AreAllInWellKnownDemoKeys(t *testing.T) {
 // so that rejectDemoKey blocks it in real adapter mode.
 func TestMasterKeyDemoHex_IsInWellKnownDemoKeys(t *testing.T) {
 	const demoHex = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
-	for _, k := range wellKnownDemoKeys {
-		if k == demoHex {
-			return
-		}
+	if slices.Contains(wellKnownDemoKeys, demoHex) {
+		return
 	}
 	t.Errorf("demo master key hex %q not found in wellKnownDemoKeys — real mode will accept it; add to demo_keys.go", demoHex)
 }
@@ -102,7 +97,6 @@ func TestCellDemoKeys_AreAllInWellKnownDemoKeys(t *testing.T) {
 		wellKnownSet[k] = true
 	}
 	for _, ck := range cellDemoKeys {
-		ck := ck
 		t.Run(ck, func(t *testing.T) {
 			if !wellKnownSet[ck] {
 				t.Errorf("cell demo key %q not in wellKnownDemoKeys — real mode will accept it; add to demo_keys.go", ck)

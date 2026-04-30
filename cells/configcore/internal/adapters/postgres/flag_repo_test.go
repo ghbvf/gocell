@@ -211,7 +211,7 @@ func TestFlagRepo_Toggle_Concurrent_NoLost(t *testing.T) {
 
 	var wg sync.WaitGroup
 	results := make([]*domain.FeatureFlag, 2)
-	for i := 0; i < 2; i++ {
+	for i := range 2 {
 		wg.Add(1)
 		go func(idx int) {
 			defer wg.Done()
