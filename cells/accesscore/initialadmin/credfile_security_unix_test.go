@@ -10,9 +10,9 @@ import (
 	"time"
 )
 
-func makePayload(username, password string) credentialPayload {
+func makePayload(password string) credentialPayload {
 	return credentialPayload{
-		Username:  username,
+		Username:  "admin",
 		Password:  password,
 		ExpiresAt: time.Now().Add(24 * time.Hour),
 	}
@@ -26,7 +26,7 @@ func TestWriteCredentialFile_DirMode0700(t *testing.T) {
 	dir := filepath.Join(base, "subdir", "nested")
 	path := filepath.Join(dir, "initial_admin_password")
 
-	if err := writeCredentialFile(path, makePayload("admin", "s3cr3t")); err != nil {
+	if err := writeCredentialFile(path, makePayload("s3cr3t")); err != nil {
 		t.Fatalf("writeCredentialFile: %v", err)
 	}
 
@@ -44,7 +44,7 @@ func TestWriteCredentialFile_FileMode0600(t *testing.T) {
 
 	path := filepath.Join(t.TempDir(), "initial_admin_password")
 
-	if err := writeCredentialFile(path, makePayload("admin", "s3cr3t")); err != nil {
+	if err := writeCredentialFile(path, makePayload("s3cr3t")); err != nil {
 		t.Fatalf("writeCredentialFile: %v", err)
 	}
 
@@ -63,7 +63,7 @@ func TestWriteCredentialFile_AtomicRename(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "initial_admin_password")
 
-	if err := writeCredentialFile(path, makePayload("admin", "s3cr3t")); err != nil {
+	if err := writeCredentialFile(path, makePayload("s3cr3t")); err != nil {
 		t.Fatalf("writeCredentialFile: %v", err)
 	}
 
@@ -115,7 +115,7 @@ func TestSecureNewFile_RefusesSymlinkPath(t *testing.T) {
 	}
 
 	// writeCredentialFile must refuse to write through the symlink.
-	err := writeCredentialFile(symlinkPath, makePayload("admin", "s3cr3t"))
+	err := writeCredentialFile(symlinkPath, makePayload("s3cr3t"))
 	if err == nil {
 		t.Fatal("expected error when writing through symlink, got nil")
 	}
@@ -140,7 +140,7 @@ func TestRemoveCredentialFile_DeletesEvenWhenModeTampered(t *testing.T) {
 
 	path := filepath.Join(t.TempDir(), "initial_admin_password")
 
-	if err := writeCredentialFile(path, makePayload("admin", "s3cr3t")); err != nil {
+	if err := writeCredentialFile(path, makePayload("s3cr3t")); err != nil {
 		t.Fatalf("writeCredentialFile: %v", err)
 	}
 

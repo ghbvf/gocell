@@ -44,13 +44,10 @@ linters:
         - diagnostic
         - performance
       disabled-checks:
-        - dupImport
-        - ifElseChain
-        - hugeParam
-        - rangeValCopy
-        - whyNoLint
-        - unnamedResult
-        - exitAfterDefer
+        - ifElseChain      # 风格争议（else if 可读性）
+        - hugeParam        # GoCell Context/Options 大结构体传参合理
+        - rangeValCopy     # Go 1.22+ range 语义已优化
+        - exitAfterDefer   # main / cmd 下 os.Exit 前 defer 是设计
 
     lll:
       line-length: 140

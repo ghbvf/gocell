@@ -35,7 +35,9 @@ func runValidate(args []string) error {
 	failFast := fs.Bool("fail-fast", false,
 		"stop at the first error and skip remaining rules; trims output to that error (CI-friendly)")
 	strict := fs.Bool("strict", false,
-		"enforce strict-only governance rules (VERIFY-06 executable journey auto checks, FMT-16 slice/cell/assembly dirs, FMT-17 allowedFiles, FMT-C1 cell id, FMT-A1 assembly id)")
+		"enforce strict-only governance rules"+
+			" (VERIFY-06 executable journey auto checks, FMT-16 slice/cell/assembly dirs,"+
+			" FMT-17 allowedFiles, FMT-C1 cell id, FMT-A1 assembly id)")
 	format := fs.String("format", string(printers.FormatText),
 		"output format: text (non-stable, default) | json | sarif")
 	if err := fs.Parse(args); err != nil {
@@ -117,9 +119,9 @@ func runValidateFailFast(
 
 	// No errors. Combine the validator and depcheck results so warnings from
 	// either accumulator are preserved.
-	allResults := append(valResults, depResults...)
+	valResults = append(valResults, depResults...)
 
-	if len(allResults) == 0 {
+	if len(valResults) == 0 {
 		// Truly clean run. Text mode keeps the legacy single-line "OK"
 		// ack so existing scripts and TestRunValidate_FailFast_NoErrors_
 		// PrintsOK stay green. Structured formats still emit an empty
@@ -137,7 +139,7 @@ func runValidateFailFast(
 	// Warnings only — emit them through the standard printer path so they
 	// reach CI / SARIF Explorer / jq just like in non-fail-fast runs. The
 	// short-circuit guarantee is "stop at first error", not "drop warnings".
-	if err := printer.Print(allResults); err != nil {
+	if err := printer.Print(valResults); err != nil {
 		return fmt.Errorf(errEmitFmt, err)
 	}
 	return nil
@@ -180,15 +182,15 @@ func runValidateFull(
 ) error {
 	valResults := runValidatorFull(validator, strict)
 	depResults := depChecker.Check()
-	allResults := append(valResults, depResults...)
+	valResults = append(valResults, depResults...)
 
-	if err := printer.Print(allResults); err != nil {
+	if err := printer.Print(valResults); err != nil {
 		return fmt.Errorf(errEmitFmt, err)
 	}
 
 	errCount := 0
-	for i := range allResults {
-		if allResults[i].Severity == governance.SeverityError {
+	for i := range valResults {
+		if valResults[i].Severity == governance.SeverityError {
 			errCount++
 		}
 	}

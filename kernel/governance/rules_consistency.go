@@ -277,7 +277,7 @@ func (v *Validator) checkTriggerContracts(
 			results = append(results, v.newResult(
 				codeContractConsistencyEmit01, SeverityError, IssueMismatch,
 				contractFile(c), "triggers",
-				fmt.Sprintf("contract %q declares trigger %q but referenced contract kind=%s; triggers must reference kind:event contracts", c.ID, t, eventContract.Kind),
+				fmt.Sprintf(advHintCCE01TriggerNotEvent, c.ID, t, eventContract.Kind),
 			))
 			continue
 		}
@@ -285,7 +285,7 @@ func (v *Validator) checkTriggerContracts(
 			results = append(results, v.newResult(
 				codeContractConsistencyEmit01, SeverityError, IssueMismatch,
 				contractFile(c), "triggers",
-				fmt.Sprintf("contract %q declares trigger %q but event contract owner/publisher must both be %s", c.ID, t, c.OwnerCell),
+				fmt.Sprintf(advHintCCE01OwnerMismatch, c.ID, t, c.OwnerCell),
 			))
 		}
 		for _, ref := range servingSlices {
@@ -293,7 +293,7 @@ func (v *Validator) checkTriggerContracts(
 				results = append(results, v.newResult(
 					codeContractConsistencyEmit01, SeverityError, IssueMismatch,
 					contractFile(c), "triggers",
-					fmt.Sprintf("contract %q declares trigger %q but serving slice %s/%s does not declare role: publish for that event contract", c.ID, t, ref.cellID, ref.sliceID),
+					fmt.Sprintf(advHintCCE01SliceNotPublish, c.ID, t, ref.cellID, ref.sliceID),
 				))
 			}
 		}
@@ -325,7 +325,7 @@ func (v *Validator) checkForwardTriggers(
 				results = append(results, v.newResult(
 					codeContractConsistencyEmit01, SeverityError, IssueRefNotFound,
 					contractFile(c), "triggers",
-					fmt.Sprintf("contract %q declares trigger %q but no non-test Go file under %s emits it via outbox.Emit or *.Emitter.Emit; serving slice %s/%s must emit the trigger topic as a string literal or named constant", c.ID, t, ref.dir, ref.cellID, ref.sliceID),
+					fmt.Sprintf(advHintCCE01TriggerNotEmitted, c.ID, t, ref.dir, ref.cellID, ref.sliceID),
 				))
 			}
 		}
@@ -346,7 +346,7 @@ func (v *Validator) checkReverseEmits(
 			results = append(results, v.newScopedResult(
 				codeContractConsistencyEmit01, SeverityError, IssueRefNotFound,
 				"project", "triggers",
-				fmt.Sprintf("service emits topic %q in serving slice %s/%s but no HTTP contract served by that slice declares it in triggers; fix: add %q to the slice's HTTP contract triggers or change the emit if dead code", t, ref.cellID, ref.sliceID, t),
+				fmt.Sprintf(advHintCCE01ReverseEmit, t, ref.cellID, ref.sliceID, t),
 			))
 		}
 	}
@@ -871,7 +871,7 @@ func scanFileForEmits(
 	fset *token.FileSet,
 	pkgConsts cellPkgConsts,
 	helperMap map[helperKey]helperEmitFunc,
-	fileForError string,
+	_ string,
 	root string,
 	topics map[string]struct{},
 ) []ValidationResult {

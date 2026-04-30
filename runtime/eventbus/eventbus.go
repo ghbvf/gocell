@@ -429,7 +429,9 @@ func (b *InMemoryEventBus) handleWithRetry(ctx context.Context, topic string, en
 // processResult handles a single handler result. Returns (done=true) when
 // no further retry is needed (Ack, Reject, or permanent error in Requeue).
 // Returns the error to propagate as lastErr when done=false.
-func (b *InMemoryEventBus) processResult(ctx context.Context, topic string, entry outbox.Entry, res outbox.HandleResult, attempt int) (done bool, lastErr error) {
+func (b *InMemoryEventBus) processResult(
+	ctx context.Context, topic string, entry outbox.Entry, res outbox.HandleResult, attempt int,
+) (done bool, lastErr error) {
 	switch res.Disposition {
 	case outbox.DispositionAck:
 		if res.Receipt != nil {
@@ -468,7 +470,9 @@ func (b *InMemoryEventBus) processResult(ctx context.Context, topic string, entr
 
 // handleRequeue processes DispositionRequeue: upgrades to dead letter on
 // PermanentError, otherwise schedules retry with backoff.
-func (b *InMemoryEventBus) handleRequeue(ctx context.Context, topic string, entry outbox.Entry, res outbox.HandleResult, attempt int) (done bool, lastErr error) {
+func (b *InMemoryEventBus) handleRequeue(
+	ctx context.Context, topic string, entry outbox.Entry, res outbox.HandleResult, attempt int,
+) (done bool, lastErr error) {
 	if res.Receipt != nil {
 		releaseReceipt(ctx, res.Receipt, topic, entry.ID)
 	}
@@ -496,7 +500,9 @@ func (b *InMemoryEventBus) handleRequeue(ctx context.Context, topic string, entr
 
 // handleInvalidDisposition treats zero-value or unknown Disposition as Requeue
 // with an Error-level log so the programming mistake is surfaced.
-func (b *InMemoryEventBus) handleInvalidDisposition(ctx context.Context, topic string, entry outbox.Entry, res outbox.HandleResult, attempt int) (done bool, lastErr error) {
+func (b *InMemoryEventBus) handleInvalidDisposition(
+	ctx context.Context, topic string, entry outbox.Entry, res outbox.HandleResult, attempt int,
+) (done bool, lastErr error) {
 	if res.Receipt != nil {
 		releaseReceipt(ctx, res.Receipt, topic, entry.ID)
 	}

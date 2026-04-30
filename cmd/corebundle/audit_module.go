@@ -27,7 +27,9 @@ func (AuditCoreModule) ID() string { return "auditcore" }
 //
 // Reads GOCELL_AUDITCORE_HMAC_KEY, GOCELL_AUDITCORE_CURSOR_KEY, and
 // GOCELL_AUDITCORE_CURSOR_PREVIOUS_KEY from the environment.
-func (AuditCoreModule) Provide(_ context.Context, shared *SharedDeps) (cell.Cell, []bootstrap.Option, []kernellifecycle.ManagedResource, error) {
+func (AuditCoreModule) Provide(
+	_ context.Context, shared *SharedDeps,
+) (cell.Cell, []bootstrap.Option, []kernellifecycle.ManagedResource, error) {
 	// Cursor codec for auditcore: read env via LoadCursorKeys then build.
 	auditPrimary, auditPrevious := LoadCursorKeys("AUDITCORE")
 	cursorCodec, err := buildCursorCodec(cursorCodecConfig{

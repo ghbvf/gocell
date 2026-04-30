@@ -193,7 +193,7 @@ func (m *mockCmdable) simulateScript(script string, keys []string, args []any) i
 		if len(args) < 2 {
 			return 0
 		}
-		ttlMs, _ := toInt64(args[1])
+		ttlMs := toInt64(args[1])
 		entry.expiry = time.Now().Add(time.Duration(ttlMs) * time.Millisecond)
 		m.store[key] = entry
 		return 1
@@ -216,16 +216,16 @@ func toString(v any) string {
 }
 
 // toInt64 converts various numeric types to int64.
-func toInt64(v any) (int64, bool) {
+func toInt64(v any) int64 {
 	switch val := v.(type) {
 	case int64:
-		return val, true
+		return val
 	case int:
-		return int64(val), true
+		return int64(val)
 	case float64:
-		return int64(val), true
+		return int64(val)
 	default:
-		return 0, false
+		return 0
 	}
 }
 
@@ -286,7 +286,7 @@ func (m *claimerMockCmdable) Eval(_ context.Context, _ string, keys []string, ar
 	case len(keys) == 1 && len(args) == 2:
 		leaseKey := keys[0]
 		token := toString(args[0])
-		ttlMs, _ := toInt64(args[1])
+		ttlMs := toInt64(args[1])
 		if entry, ok := m.store[leaseKey]; ok && entry.value == token {
 			entry.expiry = time.Now().Add(time.Duration(ttlMs) * time.Millisecond)
 			m.store[leaseKey] = entry
@@ -300,7 +300,7 @@ func (m *claimerMockCmdable) Eval(_ context.Context, _ string, keys []string, ar
 	case len(keys) == 2 && len(args) >= 2 && strings.HasPrefix(keys[0], "done:"):
 		doneKey, leaseKey := keys[0], keys[1]
 		token := toString(args[0])
-		leaseSec, _ := toInt64(args[1])
+		leaseSec := toInt64(args[1])
 
 		if entry, ok := m.store[doneKey]; ok {
 			// Treat expired done key as absent (same as Get with expiry check).
@@ -328,7 +328,7 @@ func (m *claimerMockCmdable) Eval(_ context.Context, _ string, keys []string, ar
 	case len(keys) == 2 && len(args) == 2 && strings.HasPrefix(keys[0], "lease:"):
 		leaseKey, doneKey := keys[0], keys[1]
 		token := toString(args[0])
-		doneSec, _ := toInt64(args[1])
+		doneSec := toInt64(args[1])
 
 		if entry, ok := m.store[leaseKey]; ok && entry.value == token {
 			delete(m.store, leaseKey)

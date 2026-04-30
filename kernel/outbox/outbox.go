@@ -546,7 +546,10 @@ type HandleResult struct {
 
 // NotifySettlement emits a settlement observation to every observer attached
 // to the result. It is a no-op when no observer is present.
-func NotifySettlement(ctx context.Context, result HandleResult, entry Entry, disposition Disposition, settlement SettlementResult, err error) {
+func NotifySettlement(
+	ctx context.Context, result HandleResult, entry Entry,
+	disposition Disposition, settlement SettlementResult, err error,
+) {
 	if len(result.SettlementObservers) == 0 {
 		return
 	}

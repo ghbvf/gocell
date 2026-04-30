@@ -115,8 +115,8 @@ func TestResolveContractSchemaRefRejectsInvalidInputs(t *testing.T) {
 func TestResolveContractSchemaRefScopes(t *testing.T) {
 	root := t.TempDir()
 	c := &ContractMeta{ID: "http.auth.login.v1", Dir: "contracts/http/auth/login/v1"}
-	contractSchema := filepath.Join(root, "contracts/http/auth/login/v1/request.schema.json")
-	sharedSchema := filepath.Join(root, "contracts/shared/error.schema.json")
+	contractSchema := filepath.Join(root, "contracts", "http", "auth", "login", "v1", "request.schema.json")
+	sharedSchema := filepath.Join(root, "contracts", "shared", "error.schema.json")
 	require.NoError(t, ensureTestFile(contractSchema))
 	require.NoError(t, ensureTestFile(sharedSchema))
 
@@ -166,7 +166,7 @@ func TestResolveContractSchemaRefRejectsSymlinkEscape(t *testing.T) {
 	root := t.TempDir()
 	outside := t.TempDir()
 	c := &ContractMeta{ID: "http.auth.login.v1", Dir: "contracts/http/auth/login/v1"}
-	link := filepath.Join(root, "contracts/http/auth/login/v1/linked.schema.json")
+	link := filepath.Join(root, "contracts", "http", "auth", "login", "v1", "linked.schema.json")
 	require.NoError(t, os.MkdirAll(filepath.Dir(link), 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(outside, "schema.json"), []byte(`{"type":"object"}`), 0o644))
 	if err := os.Symlink(filepath.Join(outside, "schema.json"), link); err != nil {
@@ -195,8 +195,8 @@ func TestResolveContractSchemaRefsSkipsEmptyAndStopsOnError(t *testing.T) {
 			},
 		},
 	}
-	require.NoError(t, ensureTestFile(filepath.Join(root, "contracts/http/auth/login/v1/request.schema.json")))
-	require.NoError(t, ensureTestFile(filepath.Join(root, "contracts/http/auth/login/v1/audit.schema.json")))
+	require.NoError(t, ensureTestFile(filepath.Join(root, "contracts", "http", "auth", "login", "v1", "request.schema.json")))
+	require.NoError(t, ensureTestFile(filepath.Join(root, "contracts", "http", "auth", "login", "v1", "audit.schema.json")))
 
 	refs, err := ResolveContractSchemaRefs(root, c)
 	require.NoError(t, err)

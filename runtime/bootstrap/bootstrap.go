@@ -184,10 +184,13 @@ func validateListenerConfig(ref cell.ListenerRef, cfg listenerConfig) error {
 				"(use []cell.ListenerAuth{cell.AuthNone{}} for no-auth listeners)", ref.String()))
 	}
 	if cfg.net == nil && cfg.addr == "" {
-		return fmt.Errorf("bootstrap: listener %q has no address or pre-bound net.Listener; use WithListener addr or WithListenerNet", ref.String())
+		return fmt.Errorf("bootstrap: listener %q has no address or pre-bound net.Listener;"+
+			" use WithListener addr or WithListenerNet", ref.String())
 	}
 	if cfg.shutGrace < 0 {
-		return fmt.Errorf("bootstrap: listener %q has negative shutdownGrace %v; use a non-negative duration or zero to inherit the global shutdownTimeout", ref.String(), cfg.shutGrace)
+		return fmt.Errorf("bootstrap: listener %q has negative shutdownGrace %v;"+
+			" use a non-negative duration or zero to inherit the global shutdownTimeout",
+			ref.String(), cfg.shutGrace)
 	}
 	if err := validateListenerTLSConfig(ref, cfg.tls); err != nil {
 		return err
@@ -212,7 +215,8 @@ func validateListenerTLSConfig(ref cell.ListenerRef, cfg *tls.Config) error {
 		return nil
 	}
 	if len(cfg.Certificates) == 0 && cfg.GetCertificate == nil && cfg.GetConfigForClient == nil {
-		return fmt.Errorf("bootstrap: listener %q TLS config has no Certificates / GetCertificate / GetConfigForClient; the server cannot perform a TLS handshake", ref.String())
+		return fmt.Errorf("bootstrap: listener %q TLS config has no Certificates / GetCertificate / GetConfigForClient;"+
+			" the server cannot perform a TLS handshake", ref.String())
 	}
 	// Static Certificates must each carry at least a chain or a key. Dynamic
 	// sources (GetCertificate / GetConfigForClient) are trusted as opaque
@@ -220,7 +224,10 @@ func validateListenerTLSConfig(ref cell.ListenerRef, cfg *tls.Config) error {
 	if len(cfg.Certificates) > 0 {
 		for i, c := range cfg.Certificates {
 			if len(c.Certificate) == 0 && c.PrivateKey == nil && c.Leaf == nil {
-				return fmt.Errorf("bootstrap: listener %q TLS Certificates[%d] is a zero-value tls.Certificate (no chain, no private key); load a real key pair via tls.LoadX509KeyPair or set GetCertificate", ref.String(), i)
+				return fmt.Errorf(
+					"bootstrap: listener %q TLS Certificates[%d] is a zero-value tls.Certificate"+
+						" (no chain, no private key); load a real key pair via tls.LoadX509KeyPair or set GetCertificate",
+					ref.String(), i)
 			}
 		}
 	}

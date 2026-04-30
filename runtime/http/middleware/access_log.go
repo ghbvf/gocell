@@ -41,7 +41,7 @@ func accessLogRecorder(w http.ResponseWriter, r *http.Request) (*RecorderState, 
 
 func logAccessRequest(start time.Time, r *http.Request, state *RecorderState) {
 	safeObserve(slog.Default(), func() {
-		slog.Info("http request", accessLogAttrs(start, r, state)...)
+		slog.Info("http request", accessLogAttrs(start, r, state)...) //nolint:gosec // G706: structured slog attrs, not string concatenation
 	})
 }
 

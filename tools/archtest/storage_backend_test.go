@@ -309,10 +309,10 @@ func conditionMentionsPostgres(cond ast.Expr, localVarValues map[string]string) 
 	case *ast.BinaryExpr:
 		if e.Op == token.EQL {
 			// Direct selector form: x.StorageBackend == "postgres" (or reversed).
-			if isSelectorEndingIn(e.X, "StorageBackend") && isStringLiteral(e.Y, pgStorageBackendCondValue) {
+			if isSelectorEndingIn(e.X, "StorageBackend") && isStringLiteral(e.Y) {
 				return true
 			}
-			if isSelectorEndingIn(e.Y, "StorageBackend") && isStringLiteral(e.X, pgStorageBackendCondValue) {
+			if isSelectorEndingIn(e.Y, "StorageBackend") && isStringLiteral(e.X) {
 				return true
 			}
 			// Variable form: backend == "postgres" where backend was assigned
@@ -355,11 +355,11 @@ func resolvedExprMatchesPostgres(ident ast.Expr, peer ast.Expr, localVarValues m
 	switch val {
 	case storageBackendSentinel:
 		// Variable holds StorageBackend; match only when peer is "postgres".
-		return isStringLiteral(peer, pgStorageBackendCondValue)
+		return isStringLiteral(peer)
 	case pgStorageBackendCondValue:
 		// Variable holds the literal "postgres"; match when peer is also "postgres"
 		// OR when peer is a StorageBackend selector (both sides resolve to postgres).
-		return isStringLiteral(peer, pgStorageBackendCondValue) || isSelectorEndingIn(peer, "StorageBackend")
+		return isStringLiteral(peer) || isSelectorEndingIn(peer, "StorageBackend")
 	}
 	return false
 }
@@ -375,14 +375,14 @@ func isSelectorEndingIn(expr ast.Expr, fieldName string) bool {
 	return sel.Sel.Name == fieldName
 }
 
-// isStringLiteral returns true when expr is a string basic literal equal to want.
-func isStringLiteral(expr ast.Expr, want string) bool {
+// isStringLiteral returns true when expr is a string basic literal equal to pgStorageBackendCondValue.
+func isStringLiteral(expr ast.Expr) bool {
 	bl, ok := expr.(*ast.BasicLit)
 	if !ok || bl.Kind != token.STRING {
 		return false
 	}
 	// Strip surrounding quotes.
-	return strings.Trim(bl.Value, `"`) == want
+	return strings.Trim(bl.Value, `"`) == pgStorageBackendCondValue
 }
 
 // hasUnconditionalPGCall returns true when the file contains a call to

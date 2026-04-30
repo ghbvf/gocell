@@ -340,7 +340,11 @@ func (v *Validator) validateTOPO08() []ValidationResult {
 					"TOPO-08", SeverityError, IssueForbidden,
 					sliceFile(s),
 					fmt.Sprintf("contractUsages[%d].contract", i),
-					fmt.Sprintf("slice %q references deprecated contract %q (ownerCell: %q); check the contract description or contact the ownerCell team for the replacement", s.ID, cu.Contract, ownerCell),
+					fmt.Sprintf(
+						"slice %q references deprecated contract %q (ownerCell: %q);"+
+							" check the contract description or contact the ownerCell team for the replacement",
+						s.ID, cu.Contract, ownerCell,
+					),
 				))
 			}
 		}

@@ -29,8 +29,7 @@ func TestEnvKeyProvider_RSAKeySet_ReturnsLoadedKeySet(t *testing.T) {
 }
 
 func TestEnvKeyProvider_RSAKeySet_WithVerificationKey(t *testing.T) {
-	priv, pub := setJWTEnvVars(t)
-	_ = priv
+	pub := setJWTEnvVars(t)
 
 	// Add a previous verification key.
 	prevPriv, err := rsa.GenerateKey(rand.Reader, 2048)
@@ -212,8 +211,8 @@ func TestMustNewTestKeyProvider_ReturnsValidProvider(t *testing.T) {
 // --- helpers ---
 
 // setJWTEnvVars generates a key pair and sets JWT env vars for testing.
-// Returns the generated private/public key pair.
-func setJWTEnvVars(t *testing.T) (*rsa.PrivateKey, *rsa.PublicKey) {
+// Returns the generated public key.
+func setJWTEnvVars(t *testing.T) *rsa.PublicKey {
 	t.Helper()
 	priv, err := rsa.GenerateKey(rand.Reader, 2048)
 	require.NoError(t, err)
@@ -229,5 +228,5 @@ func setJWTEnvVars(t *testing.T) (*rsa.PrivateKey, *rsa.PublicKey) {
 	t.Setenv(EnvJWTPrivateKey, string(privPEM))
 	t.Setenv(EnvJWTPublicKey, string(pubPEM))
 
-	return priv, pub
+	return pub
 }

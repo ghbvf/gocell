@@ -33,6 +33,8 @@ var gitExecutable = sync.OnceValue(func() string {
 // resolution lives in one place and the SAST suppression rationale stays
 // in one well-documented spot.
 func gitCmd(args ...string) *exec.Cmd {
+	//nolint:gosec // G204: gitExecutable() resolved via exec.LookPath to absolute path at first call;
+	// args are controlled governance queries.
 	return exec.Command(gitExecutable(), args...)
 }
 

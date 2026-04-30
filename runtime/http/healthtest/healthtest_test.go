@@ -7,18 +7,16 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/assert"
-
-	"github.com/ghbvf/gocell/runtime/http/health"
 )
 
 // TestCheckCtxRespected_PassesOnCooperativeProbe is a minimal smoke test
 // for the exported helper that probe authors will use in their own unit
 // tests. A cooperative probe must cause zero failures.
 func TestCheckCtxRespected_PassesOnCooperativeProbe(t *testing.T) {
-	cooperative := health.Checker(func(ctx context.Context) error {
+	cooperative := func(ctx context.Context) error {
 		<-ctx.Done()
 		return ctx.Err()
-	})
+	}
 	CheckCtxRespected(t, cooperative, 50*time.Millisecond)
 }
 
@@ -28,10 +26,10 @@ func TestCheckCtxRespected_PassesOnCooperativeProbe(t *testing.T) {
 func TestCheckCtxRespected_DetectsUncooperativeProbe(t *testing.T) {
 	unblock := make(chan struct{})
 	t.Cleanup(func() { close(unblock) })
-	stuck := health.Checker(func(_ context.Context) error {
+	stuck := func(_ context.Context) error {
 		<-unblock
 		return nil
-	})
+	}
 	spy := &tbSpy{TB: t}
 	CheckCtxRespected(spy, stuck, 30*time.Millisecond)
 	assert.True(t, spy.errored, "CheckCtxRespected must flag an uncooperative probe")

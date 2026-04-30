@@ -48,7 +48,7 @@ func TestProcessDelivery_LegacyEnvelopeFormat_RejectsToDLX(t *testing.T) {
 	})
 
 	handlerCalled := false
-	handler := func(_ context.Context, e outbox.Entry) outbox.HandleResult {
+	handler := func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
 		handlerCalled = true
 		return outbox.HandleResult{Disposition: outbox.DispositionAck}
 	}
@@ -105,7 +105,7 @@ func TestProcessDelivery_TooLongEntryID_RejectsToDLX(t *testing.T) {
 	})
 
 	handlerCalled := false
-	handler := func(_ context.Context, e outbox.Entry) outbox.HandleResult {
+	handler := func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
 		handlerCalled = true
 		return outbox.HandleResult{Disposition: outbox.DispositionAck}
 	}

@@ -117,7 +117,9 @@ func NewInMemoryNonceStore(maxAge time.Duration, opts ...InMemoryNonceOption) (*
 		return nil, fmt.Errorf("auth: nonce store maxAge must be positive, got %v", maxAge)
 	}
 	if maxAge < ServiceTokenNonceTTL {
-		return nil, fmt.Errorf("auth: nonce store maxAge %v is shorter than ServiceTokenNonceTTL %v; a shorter TTL reintroduces the replay window",
+		return nil, fmt.Errorf(
+			"auth: nonce store maxAge %v is shorter than ServiceTokenNonceTTL %v;"+
+				" a shorter TTL reintroduces the replay window",
 			maxAge, ServiceTokenNonceTTL)
 	}
 	s := &InMemoryNonceStore{

@@ -12,9 +12,9 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func generateKey(t *testing.T, n int) []byte {
+func generateKey(t *testing.T) []byte {
 	t.Helper()
-	key := make([]byte, n)
+	key := make([]byte, 32)
 	_, err := rand.Read(key)
 	require.NoError(t, err)
 	return key
@@ -22,14 +22,14 @@ func generateKey(t *testing.T, n int) []byte {
 
 func newTestSessionConfig(t *testing.T) CookieSessionConfig {
 	t.Helper()
-	secret := generateKey(t, 32)
+	secret := generateKey(t)
 	return DefaultCookieSessionConfig(secret)
 }
 
 func newTestSessionConfigEncrypted(t *testing.T) CookieSessionConfig {
 	t.Helper()
 	cfg := newTestSessionConfig(t)
-	cfg.EncryptKey = generateKey(t, 32)
+	cfg.EncryptKey = generateKey(t)
 	return cfg
 }
 
@@ -191,7 +191,7 @@ func TestSetSessionCookie_Attributes(t *testing.T) {
 func TestSetSessionCookie_ZeroValueConfig_IsSecure(t *testing.T) {
 	// Struct literal with only Secret set should produce Secure cookie.
 	cfg := CookieSessionConfig{
-		Secret: generateKey(t, 32),
+		Secret: generateKey(t),
 	}
 	rec := httptest.NewRecorder()
 	err := SetSessionCookie(rec, cfg, "jwt")
@@ -248,7 +248,7 @@ func TestCookieSession_EncryptedMode_RoundTrip(t *testing.T) {
 }
 
 func TestDefaultCookieSessionConfig(t *testing.T) {
-	secret := generateKey(t, 32)
+	secret := generateKey(t)
 	cfg := DefaultCookieSessionConfig(secret)
 
 	assert.Equal(t, secret, cfg.Secret)
@@ -331,7 +331,7 @@ func TestSessionCookieWriter_SetAndClear(t *testing.T) {
 
 func TestNormalizeCookieSessionConfig(t *testing.T) {
 	cfg := CookieSessionConfig{
-		Secret: generateKey(t, 32),
+		Secret: generateKey(t),
 	}
 	normalizeCookieSessionConfig(&cfg)
 

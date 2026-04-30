@@ -47,6 +47,8 @@ func runGoTest(ctx context.Context, dir string, args []string) goTestResult {
 
 func (r goTestRunner) run(ctx context.Context, dir string, args []string) goTestResult {
 	fullArgs := append([]string{"test"}, args...)
+	//nolint:gosec // G204: r.goTool resolved via exec.LookPath in newGoTestRunner;
+	// fullArgs are controlled test invocation args.
 	cmd := exec.CommandContext(ctx, r.goTool, fullArgs...)
 	cmd.Dir = filepath.Clean(dir)
 	cmd.Env = goTestEnv(r.goTool)

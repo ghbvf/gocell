@@ -82,7 +82,8 @@ func RegisterPoolMetrics(meter otelmetric.Meter, statters []poolstats.Statter) (
 	// total, so an ObservableCounter lines up 1:1 with semantics.
 	connTimeouts, err := meter.Int64ObservableCounter(
 		metricNameConnTimeouts,
-		otelmetric.WithDescription("Cumulative number of pool-acquire waits that timed out or short-circuited (adapter-specific: pgxpool EmptyAcquireCount, go-redis Timeouts)."),
+		otelmetric.WithDescription("Cumulative number of pool-acquire waits that timed out or short-circuited"+
+			" (adapter-specific: pgxpool EmptyAcquireCount, go-redis Timeouts)."),
 		otelmetric.WithUnit("{timeout}"),
 	)
 	if err != nil {

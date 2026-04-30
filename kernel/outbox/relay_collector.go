@@ -74,6 +74,17 @@ func NewProviderRelayCollector(p metrics.Provider, cellID string, opts ...Provid
 		cfg.BatchBuckets = DefaultRelayBatchBuckets
 	}
 
+	col, err := registerRelayMetrics(p, cellID, cfg)
+	if err != nil {
+		return nil, err
+	}
+	return col, nil
+}
+
+// registerRelayMetrics registers all outbox relay metrics on p and returns the
+// fully-built collector. On any partial failure the already-registered metrics
+// are unregistered in LIFO order so the Provider is left clean.
+func registerRelayMetrics(p metrics.Provider, cellID string, cfg ProviderRelayCollectorConfig) (*providerRelayCollector, error) {
 	// registered tracks successfully registered collectors in order. On any
 	// partial failure the rollback function unregisters them in LIFO order so
 	// the Provider is left in a clean state, allowing the caller to retry
@@ -141,7 +152,6 @@ func NewProviderRelayCollector(p metrics.Provider, cellID string, opts ...Provid
 	if err != nil {
 		return nil, rollback(fmt.Errorf("outbox: register outbox_cleaned_total: %w", err))
 	}
-	registered = append(registered, cleaned)
 
 	return &providerRelayCollector{
 		cellID:       cellID,

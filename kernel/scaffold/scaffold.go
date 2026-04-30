@@ -9,6 +9,7 @@ import (
 	"text/template"
 
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/scaffoldfs"
 )
 
 // Error codes specific to the scaffold package.
@@ -291,12 +292,12 @@ func (s *Scaffolder) renderToFile(tplPath, outPath string, data any) error {
 
 	// Create directories and write file.
 	dir := filepath.Dir(outPath)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := os.MkdirAll(dir, scaffoldfs.DirMode); err != nil {
 		return errcode.Wrap(ErrScaffoldIO,
 			fmt.Sprintf("scaffold: failed to create directory %s", dir), err)
 	}
 
-	if err := os.WriteFile(outPath, buf.Bytes(), 0o644); err != nil {
+	if err := os.WriteFile(outPath, buf.Bytes(), scaffoldfs.FileMode); err != nil {
 		return errcode.Wrap(ErrScaffoldIO,
 			fmt.Sprintf("scaffold: failed to write file %s", outPath), err)
 	}

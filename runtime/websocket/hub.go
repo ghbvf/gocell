@@ -315,6 +315,7 @@ func (h *Hub) Register(ctx context.Context, conn Conn) error {
 		evicted = old
 	}
 
+	//nolint:gosec // G118: cancel stored in entry.cancel; invoked by evict / unregisterEntry / readLoop exit paths.
 	connCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
 	entry := &connEntry{conn: conn, cancel: cancel}
 	h.conns[conn.ID()] = entry

@@ -96,7 +96,7 @@ type dispatcherConfig struct {
 }
 
 // newHookDispatcher constructs + eagerly starts a dispatcher.
-func newHookDispatcher(cfg dispatcherConfig) (*hookDispatcher, error) {
+func newHookDispatcher(cfg dispatcherConfig) *hookDispatcher {
 	if cfg.QueueSize <= 0 {
 		cfg.QueueSize = DefaultHookObserverQueueSize
 	}
@@ -131,7 +131,7 @@ func newHookDispatcher(cfg dispatcherConfig) (*hookDispatcher, error) {
 	}
 	d.wg.Add(1)
 	go d.run()
-	return d, nil
+	return d
 }
 
 // emit sends e to the worker. When the buffer is full or the dispatcher is

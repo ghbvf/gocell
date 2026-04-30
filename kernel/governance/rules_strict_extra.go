@@ -108,7 +108,7 @@ func strictSchemaRefField(field string) bool {
 // "additionalProperties" is set to false. It collects JSON-pointer-style paths
 // of violations (e.g. "$", "$.data", "$.data.items").
 func scanSchemaForStrictMissing(absPath string) ([]string, error) {
-	raw, err := os.ReadFile(absPath)
+	raw, err := os.ReadFile(absPath) //nolint:gosec // G304: absPath is a validated schema path within the project root
 	if err != nil {
 		return nil, err
 	}
@@ -145,7 +145,10 @@ func walkSchemaTreeDepth(node map[string]any, path string, depth int, visit func
 	walkSchemaTreeDepthRoot(node, node, path, depth, map[string]bool{}, visit)
 }
 
-func walkSchemaTreeDepthRoot(root, node map[string]any, path string, depth int, seenRefs map[string]bool, visit func(node map[string]any, path string)) {
+func walkSchemaTreeDepthRoot(
+	root, node map[string]any, path string, depth int,
+	seenRefs map[string]bool, visit func(node map[string]any, path string),
+) {
 	if depth > 32 {
 		return
 	}
@@ -162,7 +165,10 @@ func walkSchemaTreeDepthRoot(root, node map[string]any, path string, depth int, 
 	walkSchemaNamedArrayChildren(root, node, path, depth, seenRefs, visit)
 }
 
-func walkSchemaNamedMapChildren(root, node map[string]any, path string, depth int, seenRefs map[string]bool, visit func(node map[string]any, path string)) {
+func walkSchemaNamedMapChildren(
+	root, node map[string]any, path string, depth int,
+	seenRefs map[string]bool, visit func(node map[string]any, path string),
+) {
 	for _, keyword := range []string{"properties", "patternProperties", "dependentSchemas"} {
 		children, ok := node[keyword].(map[string]any)
 		if !ok {
@@ -180,7 +186,10 @@ func walkSchemaNamedMapChildren(root, node map[string]any, path string, depth in
 	}
 }
 
-func walkSchemaNamedObjectChildren(root, node map[string]any, path string, depth int, seenRefs map[string]bool, visit func(node map[string]any, path string)) {
+func walkSchemaNamedObjectChildren(
+	root, node map[string]any, path string, depth int,
+	seenRefs map[string]bool, visit func(node map[string]any, path string),
+) {
 	for _, keyword := range []string{
 		"items",
 		"additionalProperties",
@@ -199,7 +208,10 @@ func walkSchemaNamedObjectChildren(root, node map[string]any, path string, depth
 	}
 }
 
-func walkSchemaNamedArrayChildren(root, node map[string]any, path string, depth int, seenRefs map[string]bool, visit func(node map[string]any, path string)) {
+func walkSchemaNamedArrayChildren(
+	root, node map[string]any, path string, depth int,
+	seenRefs map[string]bool, visit func(node map[string]any, path string),
+) {
 	for _, keyword := range []string{"allOf", "anyOf", "oneOf", "prefixItems"} {
 		children, ok := node[keyword].([]any)
 		if !ok {
@@ -562,7 +574,7 @@ func pathParamsReadyForInputConstraints(h *metadata.HTTPTransportMeta) bool {
 // minimum/maximum on integer/number nodes. Paths use the same JSON-pointer style as
 // scanSchemaForStrictMissing (e.g. "$", "$.user.name", "$.tags.items").
 func scanSchemaForInputConstraints(absPath string) ([]inputConstraintViolation, error) {
-	raw, err := os.ReadFile(absPath)
+	raw, err := os.ReadFile(absPath) //nolint:gosec // G304: absPath is a validated schema path within the project root
 	if err != nil {
 		return nil, err
 	}
@@ -658,7 +670,10 @@ func walkSchemaTreeDepthInput(node map[string]any, path string, visit func(node 
 	return walkSchemaTreeDepthInputRoot(node, node, path, 0, map[string]bool{}, visit)
 }
 
-func walkSchemaTreeDepthInputRoot(root, node map[string]any, path string, depth int, seenRefs map[string]bool, visit func(node map[string]any, path string)) error {
+func walkSchemaTreeDepthInputRoot(
+	root, node map[string]any, path string, depth int,
+	seenRefs map[string]bool, visit func(node map[string]any, path string),
+) error {
 	if depth > 32 {
 		return &schemaWalkError{path: path, msg: "schema walk exceeded maximum depth 32"}
 	}
@@ -686,7 +701,10 @@ func walkSchemaTreeDepthInputRoot(root, node map[string]any, path string, depth 
 	return walkSchemaInputArrayChildren(root, node, path, depth, seenRefs, visit)
 }
 
-func walkSchemaInputMapChildren(root, node map[string]any, path string, depth int, seenRefs map[string]bool, visit func(node map[string]any, path string)) error {
+func walkSchemaInputMapChildren(
+	root, node map[string]any, path string, depth int,
+	seenRefs map[string]bool, visit func(node map[string]any, path string),
+) error {
 	for _, keyword := range []string{"properties", "patternProperties", "dependentSchemas"} {
 		if err := walkSchemaInputMapKeywordChildren(root, node, path, keyword, depth, seenRefs, visit); err != nil {
 			return err
@@ -695,7 +713,10 @@ func walkSchemaInputMapChildren(root, node map[string]any, path string, depth in
 	return nil
 }
 
-func walkSchemaInputMapKeywordChildren(root, node map[string]any, path, keyword string, depth int, seenRefs map[string]bool, visit func(node map[string]any, path string)) error {
+func walkSchemaInputMapKeywordChildren(
+	root, node map[string]any, path, keyword string, depth int,
+	seenRefs map[string]bool, visit func(node map[string]any, path string),
+) error {
 	children, ok := node[keyword].(map[string]any)
 	if !ok {
 		return nil
@@ -720,7 +741,10 @@ func schemaInputMapChildPath(path, keyword, key string) string {
 	return path + "." + keyword + "." + key
 }
 
-func walkSchemaInputObjectChildren(root, node map[string]any, path string, depth int, seenRefs map[string]bool, visit func(node map[string]any, path string)) error {
+func walkSchemaInputObjectChildren(
+	root, node map[string]any, path string, depth int,
+	seenRefs map[string]bool, visit func(node map[string]any, path string),
+) error {
 	for _, keyword := range []string{
 		"items",
 		"additionalProperties",
@@ -742,7 +766,10 @@ func walkSchemaInputObjectChildren(root, node map[string]any, path string, depth
 	return nil
 }
 
-func walkSchemaInputArrayChildren(root, node map[string]any, path string, depth int, seenRefs map[string]bool, visit func(node map[string]any, path string)) error {
+func walkSchemaInputArrayChildren(
+	root, node map[string]any, path string, depth int,
+	seenRefs map[string]bool, visit func(node map[string]any, path string),
+) error {
 	for _, keyword := range []string{"allOf", "anyOf", "oneOf", "prefixItems"} {
 		children, ok := node[keyword].([]any)
 		if !ok {
@@ -768,7 +795,9 @@ func walkSchemaInputArrayChildren(root, node map[string]any, path string, depth 
 // enforcement: RFC 4122 fixes UUIDs at 36 characters, so schema-level length
 // constraints are redundant. The exemption applies only to length checks;
 // integer constraints still apply unconditionally.
-func (v *Validator) checkParamSchemaConstraints(c *metadata.ContractMeta, params map[string]contracts.ParamSchema, paramKind string) []ValidationResult {
+func (v *Validator) checkParamSchemaConstraints(
+	c *metadata.ContractMeta, params map[string]contracts.ParamSchema, paramKind string,
+) []ValidationResult {
 	if len(params) == 0 {
 		return nil
 	}
@@ -819,7 +848,9 @@ type missingFacet struct {
 }
 
 // emitMissingFacets returns one ValidationResult per missing facet.
-func (v *Validator) emitMissingFacets(c *metadata.ContractMeta, fieldBase string, facets []missingFacet) []ValidationResult {
+func (v *Validator) emitMissingFacets(
+	c *metadata.ContractMeta, fieldBase string, facets []missingFacet,
+) []ValidationResult {
 	var results []ValidationResult
 	for _, f := range facets {
 		if !f.missing {
@@ -835,7 +866,9 @@ func (v *Validator) emitMissingFacets(c *metadata.ContractMeta, fieldBase string
 	return results
 }
 
-func (v *Validator) emitInvalidParamRelation(c *metadata.ContractMeta, fieldBase, minName string, min *int, maxName string, max *int) []ValidationResult {
+func (v *Validator) emitInvalidParamRelation(
+	c *metadata.ContractMeta, fieldBase, minName string, min *int, maxName string, max *int,
+) []ValidationResult {
 	if min == nil || max == nil || *min <= *max {
 		return nil
 	}

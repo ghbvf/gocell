@@ -120,7 +120,9 @@ func New(sub outbox.Subscriber, opts ...Option) *Router {
 // spec is malformed, or kernel/cell.EventRouter contract is otherwise
 // violated; callers (Cell.RegisterSubscriptions) should propagate the error
 // to the bootstrap phase5 walker.
-func (r *Router) AddContractHandler(spec wrapper.ContractSpec, handler outbox.EntryHandler, consumerGroup string, opts ...cell.SubscriptionOption) error {
+func (r *Router) AddContractHandler(
+	spec wrapper.ContractSpec, handler outbox.EntryHandler, consumerGroup string, opts ...cell.SubscriptionOption,
+) error {
 	if handler == nil {
 		return fmt.Errorf("eventrouter: AddContractHandler called with nil handler")
 	}

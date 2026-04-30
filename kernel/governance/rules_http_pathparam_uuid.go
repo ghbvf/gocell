@@ -36,7 +36,9 @@ func (v *Validator) CheckHTTPPathParamUUID(contracts []*metadata.ContractMeta, p
 	return results
 }
 
-func (v *Validator) checkPathParamUUIDForContract(c *metadata.ContractMeta, projectRoot string, cache map[string]*parsedHandlerFile) []ValidationResult {
+func (v *Validator) checkPathParamUUIDForContract(
+	c *metadata.ContractMeta, projectRoot string, cache map[string]*parsedHandlerFile,
+) []ValidationResult {
 	uuidParams := collectUUIDPathParams(c)
 	if len(uuidParams) == 0 {
 		return nil
@@ -57,7 +59,7 @@ func (v *Validator) checkPathParamUUIDForContract(c *metadata.ContractMeta, proj
 		return []ValidationResult{v.newResult(
 			CodeContractHealthPathParamUUID, SeverityError, IssueRequired,
 			c.File, "endpoints.http.path",
-			fmt.Sprintf("CH-05: contract %s with `pathParams.{name}.format: uuid` — auth.Mount correlation failed; cannot verify ParseUUIDPathParam call within handler function. Required: handler must use `auth.Mount(mux, auth.Route{Contract: spec, Handler: http.HandlerFunc(h.handleX)})` pattern.", c.ID),
+			fmt.Sprintf(advHintCH05CorrelationFailed, c.ID),
 		)}
 	}
 
@@ -66,7 +68,7 @@ func (v *Validator) checkPathParamUUIDForContract(c *metadata.ContractMeta, proj
 		return []ValidationResult{v.newResult(
 			CodeContractHealthPathParamUUID, SeverityError, IssueRequired,
 			c.File, "endpoints.http.path",
-			fmt.Sprintf("CH-05: contract %s with `pathParams.{name}.format: uuid` — auth.Mount correlation failed; cannot verify ParseUUIDPathParam call within handler function. Required: handler must use `auth.Mount(mux, auth.Route{Contract: spec, Handler: http.HandlerFunc(h.handleX)})` pattern.", c.ID),
+			fmt.Sprintf(advHintCH05CorrelationFailed, c.ID),
 		)}
 	}
 
@@ -75,14 +77,16 @@ func (v *Validator) checkPathParamUUIDForContract(c *metadata.ContractMeta, proj
 }
 
 // buildPathParamFindings compares required UUID params vs parsed call sites.
-func buildPathParamFindings(v *Validator, c *metadata.ContractMeta, uuidParams []string, parsed map[string]struct{}) []ValidationResult {
+func buildPathParamFindings(
+	v *Validator, c *metadata.ContractMeta, uuidParams []string, parsed map[string]struct{},
+) []ValidationResult {
 	var results []ValidationResult
 	for _, paramName := range uuidParams {
 		if _, ok := parsed[paramName]; !ok {
 			results = append(results, v.newResult(
 				CodeContractHealthPathParamUUID, SeverityError, IssueRequired,
 				c.File, fmt.Sprintf("endpoints.http.pathParams.%s", paramName),
-				fmt.Sprintf("%s: pathParam %q has format:uuid but handler does not call httputil.ParseUUIDPathParam(w, r, %q)", c.ID, paramName, paramName),
+				fmt.Sprintf(advHintCH05MissingParseCall, c.ID, paramName, paramName),
 			))
 		}
 	}

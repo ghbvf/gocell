@@ -47,7 +47,9 @@ var configStaleCipherOpts = prom.CounterOpts{
 // provisional resources that BuildApp must close if a subsequent module's
 // Provide fails. It reads configcore-specific environment variables directly
 // via the LoadPGConfig / LoadCursorKeys / LoadConfigCoreKeyProvider helpers.
-func (m ConfigCoreModule) Provide(ctx context.Context, shared *SharedDeps) (cell.Cell, []bootstrap.Option, []kernellifecycle.ManagedResource, error) {
+func (m ConfigCoreModule) Provide(
+	ctx context.Context, shared *SharedDeps,
+) (cell.Cell, []bootstrap.Option, []kernellifecycle.ManagedResource, error) {
 	// 1. Cursor codec: read configcore-namespaced env via LoadCursorKeys then build.
 	cfgPrimary, cfgPrevious := LoadCursorKeys("CONFIGCORE")
 	cursorCodec, err := buildCursorCodec(cursorCodecConfig{

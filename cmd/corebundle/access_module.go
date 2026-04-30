@@ -72,7 +72,9 @@ func (AccessCoreModule) ID() string { return "accesscore" }
 //
 // Reads GOCELL_ACCESSCORE_CURSOR_KEY and GOCELL_ACCESSCORE_CURSOR_PREVIOUS_KEY
 // from the environment.
-func (m AccessCoreModule) Provide(_ context.Context, shared *SharedDeps) (cell.Cell, []bootstrap.Option, []kernellifecycle.ManagedResource, error) {
+func (m AccessCoreModule) Provide(
+	_ context.Context, shared *SharedDeps,
+) (cell.Cell, []bootstrap.Option, []kernellifecycle.ManagedResource, error) {
 	mode, err := resolveAdminProvisionMode(os.Getenv(AdminProvisionModeEnv), m.ForceBootstrap)
 	if err != nil {
 		return nil, nil, nil, err

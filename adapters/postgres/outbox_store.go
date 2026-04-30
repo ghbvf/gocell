@@ -203,7 +203,9 @@ func (s *PGOutboxStore) MarkDead(ctx context.Context, id string, attempts int, l
 // ReclaimStale transitions claiming rows whose claimed_at is older than claimTTL
 // back to pending (with attempts+1 and next_retry_at = backoff) or to dead
 // (when attempts+1 >= maxAttempts). Returns count of rows recovered.
-func (s *PGOutboxStore) ReclaimStale(ctx context.Context, claimTTL time.Duration, maxAttempts int, baseDelay, maxDelay time.Duration) (int, error) {
+func (s *PGOutboxStore) ReclaimStale(
+	ctx context.Context, claimTTL time.Duration, maxAttempts int, baseDelay, maxDelay time.Duration,
+) (int, error) {
 	// pgx serializes time.Duration as int64 nanoseconds which PostgreSQL cannot
 	// cast to interval (SQLSTATE 42846). Pass claimTTL as "N microseconds" text;
 	// baseDelay and maxDelay as int64 microseconds multiplied by interval '1 microsecond'.

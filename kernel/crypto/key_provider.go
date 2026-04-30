@@ -41,7 +41,9 @@ type KeyProvider interface {
 //     silent data corruption from misrouted key versions.
 //
 // ref: hashicorp/vault sdk/helper/keysutil/policy.go@main:L127 (keyID version prefix)
-// ref: kubernetes/kubernetes staging/src/k8s.io/apiserver/pkg/storage/value/encrypt/envelope/kmsv2/envelope.go@master (EncryptResponse.KeyID)
+// ref: kubernetes/kubernetes staging/src/k8s.io/apiserver/pkg/storage/value/encrypt/
+//
+//	envelope/kmsv2/envelope.go@master (EncryptResponse.KeyID)
 type KeyHandle interface {
 	// ID returns the key version identifier (e.g. "local-aes-v1", "vault-transit:v3").
 	ID() string

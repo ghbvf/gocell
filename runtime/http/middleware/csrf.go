@@ -222,7 +222,7 @@ func rejectCSRF(w http.ResponseWriter, r *http.Request, reason string) {
 	if reqID, ok := ctxkeys.RequestIDFrom(r.Context()); ok {
 		attrs = append(attrs, slog.String("request_id", reqID))
 	}
-	slog.Warn("csrf: request rejected", attrs...)
+	slog.Warn("csrf: request rejected", attrs...) //nolint:gosec // G706: structured slog attrs, not string concatenation
 
 	httputil.WriteError(r.Context(), w, http.StatusForbidden,
 		"ERR_CSRF_ORIGIN_DENIED", "cross-origin request denied")

@@ -53,6 +53,7 @@ func applyNamespaceFromEnv(raw *vaultapi.Client) string {
 		return ""
 	}
 	raw.SetNamespace(ns)
+	//nolint:gosec // G706: structured slog field, not string concatenation
 	slog.Info("vault-transit: namespace configured", slog.String("namespace", ns))
 	return ns
 }
@@ -676,7 +677,9 @@ type TransitKeyProvider struct {
 // the background renewal + re-auth worker (not started — call Worker().Start).
 //
 // Returns an error if auth is nil, Login fails, or the key existence check fails.
-func NewTransitKeyProvider(ctx context.Context, client VaultClient, mountPath, keyName string, auth AuthMethod) (*TransitKeyProvider, error) {
+func NewTransitKeyProvider(
+	ctx context.Context, client VaultClient, mountPath, keyName string, auth AuthMethod,
+) (*TransitKeyProvider, error) {
 	if auth == nil {
 		return nil, errcode.New(errcode.ErrVaultAuthFailed,
 			"vault-transit: auth method is required (pass NewStaticTokenAuth in tests)")
@@ -711,7 +714,7 @@ func NewTransitKeyProvider(ctx context.Context, client VaultClient, mountPath, k
 	p.cachedLatestVersion.Store(int64(version))
 
 	// Initialize background token renewal if applicable.
-	if err = p.initTokenRenewal(ctx, result); err != nil {
+	if err := p.initTokenRenewal(ctx, result); err != nil {
 		return nil, err
 	}
 
@@ -807,7 +810,7 @@ func NewTransitKeyProviderFromEnv(realMode bool) (*TransitKeyProvider, error) {
 	// IMPORTANT: this MUST run before NewTransitKeyProvider so a rejected
 	// configuration fails fast without spending the Login + key metadata I/O.
 	if realMode {
-		if err = AssertForRealMode(auth); err != nil {
+		if err := AssertForRealMode(auth); err != nil {
 			return nil, err
 		}
 	}
@@ -829,7 +832,9 @@ func NewTransitKeyProviderFromEnv(realMode bool) (*TransitKeyProvider, error) {
 	if realMode && !p.Renewable() {
 		_ = p.Close(context.Background())
 		return nil, errcode.New(errcode.ErrVaultAuthFailed,
-			"vault-transit: non-renewable token rejected in real mode — configure the Vault role to issue renewable tokens (token_type=default or service with renewable=true)")
+			"vault-transit: non-renewable token rejected in real mode —"+
+				" configure the Vault role to issue renewable tokens"+
+				" (token_type=default or service with renewable=true)")
 	}
 
 	return p, nil

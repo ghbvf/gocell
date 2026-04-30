@@ -1899,8 +1899,10 @@ func obs01DiagnosticMessage(sink obs01SinkArg, fingerprint string) string {
 			"use metrics.Labels with a metric vector constructed from literal opts before adding an acknowledgement",
 			sink.Metric, sink.Label, fingerprint)
 	}
-	return fmt.Sprintf("metric label value depends on errcode.Category or errcode.IsInfraError (metric=%q label=%q fingerprint=%s); "+
-		"add a checked-in docs/observability/metrics-migration-acks.yaml entry with this fingerprint after documenting the dashboard/alert migration",
+	return fmt.Sprintf("metric label value depends on errcode.Category or errcode.IsInfraError"+
+		" (metric=%q label=%q fingerprint=%s);"+
+		" add a checked-in docs/observability/metrics-migration-acks.yaml entry"+
+		" with this fingerprint after documenting the dashboard/alert migration",
 		sink.Metric, sink.Label, fingerprint)
 }
 
@@ -2643,18 +2645,11 @@ func walkOBS01Stmt(
 	flow := obs01Flow{tainted: tainted, continues: true}
 	switch node := stmt.(type) {
 	case *ast.AssignStmt:
-		markOBS01AssignedClosure(info, node.Lhs, node.Rhs, node.Tok, handlers.closures)
-		markOBS01AssignedRangeTaint(info, node.Lhs, node.Rhs, node.Tok, tainted, returnTaints, handlers.rangeTaints)
-		markOBS01AssignedTaint(info, node.Lhs, node.Rhs, node.Tok, tainted, returnTaints)
-		inspectOBS01Calls(info, node, tainted, returnTaints, handlers)
+		walkOBS01AssignStmt(info, node, tainted, returnTaints, handlers)
 	case *ast.DeclStmt:
 		walkOBS01Decl(info, node.Decl, tainted, returnTaints, handlers)
 	case *ast.ReturnStmt:
-		if handlers.onReturn != nil {
-			handlers.onReturn(node, tainted)
-		}
-		inspectOBS01Calls(info, node, tainted, returnTaints, handlers)
-		flow.continues = false
+		flow = walkOBS01ReturnStmt(info, node, tainted, returnTaints, handlers)
 	case *ast.IfStmt:
 		flow = walkOBS01IfStmt(info, node, tainted, returnTaints, handlers)
 	case *ast.ForStmt:
@@ -2672,20 +2667,47 @@ func walkOBS01Stmt(
 	case *ast.LabeledStmt:
 		flow = walkOBS01Stmt(info, node.Stmt, tainted, returnTaints, handlers)
 	case *ast.BranchStmt:
-		switch node.Tok {
-		case token.FALLTHROUGH:
-			flow.continues = false
-		case token.BREAK:
-			flow.continues = false
-			flow.breaks = []map[types.Object]bool{cloneOBS01Taints(tainted)}
-		case token.CONTINUE:
-			flow.continues = false
-			flow.continuesLoop = []map[types.Object]bool{cloneOBS01Taints(tainted)}
-		default:
-			flow.continues = false
-		}
+		flow = walkOBS01BranchStmt(node, tainted)
 	default:
 		inspectOBS01Calls(info, node, tainted, returnTaints, handlers)
+	}
+	return flow
+}
+
+func walkOBS01AssignStmt(
+	info *types.Info,
+	node *ast.AssignStmt,
+	tainted map[types.Object]bool,
+	returnTaints obs01ReturnTaints,
+	handlers obs01StmtHandlers,
+) {
+	markOBS01AssignedClosure(info, node.Lhs, node.Rhs, node.Tok, handlers.closures)
+	markOBS01AssignedRangeTaint(info, node.Lhs, node.Rhs, node.Tok, tainted, returnTaints, handlers.rangeTaints)
+	markOBS01AssignedTaint(info, node.Lhs, node.Rhs, node.Tok, tainted, returnTaints)
+	inspectOBS01Calls(info, node, tainted, returnTaints, handlers)
+}
+
+func walkOBS01ReturnStmt(
+	info *types.Info,
+	node *ast.ReturnStmt,
+	tainted map[types.Object]bool,
+	returnTaints obs01ReturnTaints,
+	handlers obs01StmtHandlers,
+) obs01Flow {
+	if handlers.onReturn != nil {
+		handlers.onReturn(node, tainted)
+	}
+	inspectOBS01Calls(info, node, tainted, returnTaints, handlers)
+	return obs01Flow{tainted: tainted, continues: false}
+}
+
+func walkOBS01BranchStmt(node *ast.BranchStmt, tainted map[types.Object]bool) obs01Flow {
+	flow := obs01Flow{tainted: tainted, continues: false}
+	switch node.Tok {
+	case token.BREAK:
+		flow.breaks = []map[types.Object]bool{cloneOBS01Taints(tainted)}
+	case token.CONTINUE:
+		flow.continuesLoop = []map[types.Object]bool{cloneOBS01Taints(tainted)}
 	}
 	return flow
 }
@@ -2748,7 +2770,8 @@ func walkOBS01IfStmt(
 		elseState = walkOBS01Stmt(info, stmt.Else, elseState.tainted, returnTaints, elseHandlers)
 	}
 	replaceOBS01Closures(parentClosures, mergeOBS01BranchClosures(thenState, thenHandlers.closures, elseState, elseHandlers.closures))
-	replaceOBS01RangeTaints(parentRanges, mergeOBS01BranchRangeTaints(thenState, thenHandlers.rangeTaints, elseState, elseHandlers.rangeTaints))
+	replaceOBS01RangeTaints(parentRanges,
+		mergeOBS01BranchRangeTaints(thenState, thenHandlers.rangeTaints, elseState, elseHandlers.rangeTaints))
 	return mergeOBS01Flows(thenState, elseState)
 }
 
@@ -3034,7 +3057,8 @@ func mergeOBS01CaseTaints(
 		for _, expr := range clause.List {
 			inspectOBS01Calls(info, expr, tainted, returnTaints, handlers)
 		}
-		caseState, caseHandlers := obs01CaseEntry(tainted, baseClosures, baseRanges, fallthroughState, fallthroughClosures, fallthroughRanges, handlers)
+		caseState, caseHandlers := obs01CaseEntry(
+			tainted, baseClosures, baseRanges, fallthroughState, fallthroughClosures, fallthroughRanges, handlers)
 		flow, fallsThrough := walkOBS01CaseBody(info, clause, caseState, returnTaints, caseHandlers)
 		fallthroughState = nil
 		fallthroughClosures = nil
@@ -3979,7 +4003,7 @@ type obsAck struct {
 func loadOBS01Acks(root string) (map[string]obsAck, error) {
 	path := filepath.Join(root, "docs", "observability", "metrics-migration-acks.yaml")
 	out := map[string]obsAck{}
-	data, err := os.ReadFile(path)
+	data, err := os.ReadFile(path) //nolint:gosec // G304: path is constructed from a well-known docs subdirectory, not user-controlled input
 	if errors.Is(err, os.ErrNotExist) {
 		return out, nil
 	}
@@ -4041,7 +4065,8 @@ func (ack obsAck) validate(root, path string, idx int) error {
 			return fmt.Errorf("%s: OBS-01 acknowledgement %d dashboardOrAlertRefs[%d] git lookup failed: %w", path, idx, i, gitErr)
 		}
 		if !ok {
-			return fmt.Errorf("%s: OBS-01 acknowledgement %d dashboardOrAlertRefs[%d] must be an existing repo-relative regular file committed in HEAD", path, idx, i)
+			return fmt.Errorf("%s: OBS-01 acknowledgement %d dashboardOrAlertRefs[%d]"+
+				" must be an existing repo-relative regular file committed in HEAD", path, idx, i)
 		}
 	}
 	return nil

@@ -1137,7 +1137,7 @@ func TestPublisher_Publish_Success(t *testing.T) {
 	assert.Equal(t, "test.topic", ch.publishExchange)
 	assert.Len(t, ch.publishedMessages, 1)
 	assert.Equal(t, []byte(`{"hello":"world"}`), ch.publishedMessages[0].Body)
-	assert.Equal(t, uint8(amqp.Persistent), ch.publishedMessages[0].DeliveryMode)
+	assert.Equal(t, amqp.Persistent, ch.publishedMessages[0].DeliveryMode)
 	ch.mu.Unlock()
 }
 
@@ -1444,7 +1444,7 @@ func TestSubscriber_Subscribe_UnmarshalFailure_Nack(t *testing.T) {
 		DLXExchange: "test.dlx",
 	})
 
-	handler := func(_ context.Context, e outbox.Entry) outbox.HandleResult {
+	handler := func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
 		t.Fatal("handler should not be called for unmarshal failure")
 		return outbox.HandleResult{Disposition: outbox.DispositionAck}
 	}
@@ -2133,7 +2133,7 @@ func TestSubscriber_ProcessDelivery_CtxCancelled_NackWithRequeue(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	handler := func(_ context.Context, e outbox.Entry) outbox.HandleResult {
+	handler := func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
 		// Simulate ctx cancel happening before/during handler.
 		cancel()
 		return outbox.HandleResult{Disposition: outbox.DispositionRequeue, Err: errors.New("transient error during shutdown")}
@@ -3735,7 +3735,7 @@ func TestConsumerBase_WrapWithClaimer_WrappedPermanentError_Detected(t *testing.
 
 func TestSafeDelay_AttemptZero(t *testing.T) {
 	result := outbox.ExponentialDelay(time.Second, 30*time.Second, 0)
-	assert.Equal(t, time.Second, result) // base * 2^0 = base
+	assert.Equal(t, time.Second, result) //nolint:gocritic // commentedOutCode: "base * 2^0 = base" is a math annotation, not commented-out code
 }
 
 func TestSafeDelay_ExactMaxSafeShift(t *testing.T) {

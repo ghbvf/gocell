@@ -1122,7 +1122,7 @@ func TestPhase0_NoListenersDeclared(t *testing.T) {
 func TestPhase0_DuplicateListenerRefs(t *testing.T) {
 	b := New(
 		WithListener(cell.PrimaryListener, "127.0.0.1:0", []cell.ListenerAuth{cell.AuthNone{}}),
-		WithListener(cell.PrimaryListener, "127.0.0.1:0", []cell.ListenerAuth{cell.AuthNone{}}), // duplicate
+		WithListener(cell.PrimaryListener, "127.0.0.1:0", []cell.ListenerAuth{cell.AuthNone{}}), //nolint:gocritic // dupOption: intentionally duplicated to test phase0 duplicate-listener rejection
 	)
 	err := b.phase0ValidateOptions()
 	require.Error(t, err)

@@ -45,7 +45,8 @@ const (
 //	gocell check unconditional-skip [--format text|json|sarif]
 func runCheck(args []string) error {
 	if len(args) < 1 {
-		return fmt.Errorf("usage: gocell check <contract-health|slice-coverage|assembly-completeness|journey-readiness|l0-imports|unconditional-skip> [flags]")
+		return fmt.Errorf("usage: gocell check <contract-health|slice-coverage|assembly-completeness" +
+			"|journey-readiness|l0-imports|unconditional-skip> [flags]")
 	}
 	if isHelpFlag(args[0]) {
 		return printCheckHelp()
@@ -330,7 +331,10 @@ func sliceMetaCheck(project *metadata.ProjectMeta, cid string) []governance.Vali
 				Severity:  governance.SeverityError,
 				IssueType: governance.IssueMismatch,
 				File:      sl.File,
-				Message:   fmt.Sprintf("slice %q has belongsToCell=%q but lives under %q (expected under %q)", sl.ID, sl.BelongsToCell, actualParent, expectedSlicesParent),
+				Message: fmt.Sprintf(
+					"slice %q has belongsToCell=%q but lives under %q (expected under %q)",
+					sl.ID, sl.BelongsToCell, actualParent, expectedSlicesParent,
+				),
 			})
 		}
 		if sl.Dir != sl.ID {
@@ -462,7 +466,9 @@ func buildStatusCount(project *metadata.ProjectMeta) map[string]int {
 }
 
 // journeyReadinessFor checks a single journey's readiness.
-func journeyReadinessFor(jm *metadata.JourneyMeta, project *metadata.ProjectMeta, statusCount map[string]int) []governance.ValidationResult {
+func journeyReadinessFor(
+	jm *metadata.JourneyMeta, project *metadata.ProjectMeta, statusCount map[string]int,
+) []governance.ValidationResult {
 	var results []governance.ValidationResult
 
 	results = append(results, journeyStatusCheck(jm, statusCount)...)

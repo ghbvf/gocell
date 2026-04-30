@@ -10,15 +10,15 @@ import (
 	"github.com/ghbvf/gocell/runtime/distlock/locktest"
 )
 
-// waitPendingTimers spins until fc.PendingTimers() >= want or the deadline
+// waitPendingTimers spins until fc.PendingTimers() >= 1 or the deadline
 // passes. Called after a renew to ensure the manager has re-registered its
 // next timer before the test advances the clock again.
-func waitPendingTimers(t *testing.T, fc *locktest.FakeClock, want int) {
+func waitPendingTimers(t *testing.T, fc *locktest.FakeClock) {
 	t.Helper()
 	deadline := time.Now().Add(10 * time.Second)
-	for fc.PendingTimers() < want {
+	for fc.PendingTimers() < 1 {
 		if time.Now().After(deadline) {
-			t.Fatalf("waitPendingTimers: timed out waiting for %d pending timers (got %d)", want, fc.PendingTimers())
+			t.Fatalf("waitPendingTimers: timed out waiting for 1 pending timer (got %d)", fc.PendingTimers())
 		}
 		runtime.Gosched()
 	}
@@ -96,7 +96,7 @@ func TestManager_HeapOrder(t *testing.T) {
 	// later phases assume a heap layout that may not hold.
 	waitTrackedLocks(t, m, 2)
 	// Wait for the manager to register the first timer (h[0]=key1, deadline 2s).
-	waitPendingTimers(t, fc, 1)
+	waitPendingTimers(t, fc)
 
 	// --- Phase 1: advance to 2s+1ms. Only key1 fires (heap order verified). ---
 	fc.Advance(2*time.Second + time.Millisecond) // fake time: 2s+1ms
@@ -108,13 +108,13 @@ func TestManager_HeapOrder(t *testing.T) {
 
 	// --- Phase 2: step past key1 re-queue, stop before key2. ---
 	// key1 re-queued @4s+1ms, key2 @5s. Advance to 4s+2ms so d(key2)=998ms>0.
-	waitPendingTimers(t, fc, 1)                  // key1 re-queued timer registered
+	waitPendingTimers(t, fc)                     // key1 re-queued timer registered
 	fc.Advance(2*time.Second + time.Millisecond) // fake time: 4s+2ms
 	waitForRenewM(t, m, fd, 2)
 
 	// --- Phase 3: now key2's timer has positive d; advance past 5s. ---
-	waitPendingTimers(t, fc, 1) // key2's timer registered (d=998ms>0)
-	fc.Advance(time.Second)     // fake time: 5s+2ms; key2 fires
+	waitPendingTimers(t, fc) // key2's timer registered (d=998ms>0)
+	fc.Advance(time.Second)  // fake time: 5s+2ms; key2 fires
 	waitForRenewM(t, m, fd, 3)
 
 	if fd.Calls("Renew") < 3 {

@@ -363,10 +363,7 @@ func buildBootstrapFromShared(t *testing.T, shared *SharedDeps, primaryLn net.Li
 		return nil, err
 	}
 
-	metricsHandler, err := buildMetricsHandler(shared.MetricsToken, shared.PromStack.registry)
-	if err != nil {
-		return nil, err
-	}
+	metricsHandler := buildMetricsHandler(shared.MetricsToken, shared.PromStack.registry)
 
 	adapterInfo := adapterInfoForSharedDeps(shared)
 	opts := runtimeBaseOptions(shared, asm, consumerBase, metricsHandler, adapterInfo)

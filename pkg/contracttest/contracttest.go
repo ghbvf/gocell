@@ -20,13 +20,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http/httptest"
-	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
 
 	"github.com/ghbvf/gocell/pkg/contracts"
+	"github.com/ghbvf/gocell/pkg/contracttest/internal/fixtureload"
 	"github.com/santhosh-tekuri/jsonschema/v6"
 	"gopkg.in/yaml.v3"
 )
@@ -101,7 +101,7 @@ func Load(t testing.TB, contractDir string) *Contract {
 	t.Helper()
 
 	yamlPath := filepath.Join(contractDir, "contract.yaml")
-	data, err := os.ReadFile(yamlPath)
+	data, err := fixtureload.LoadFixture(yamlPath)
 	if err != nil {
 		t.Fatalf("contracttest.Load: read contract.yaml: %v", err)
 	}
@@ -263,7 +263,7 @@ func compileSchemaFile(t testing.TB, dir, filename string) *jsonschema.Schema {
 	if !strings.HasPrefix(filepath.Clean(fullPath), filepath.Clean(dir)) {
 		t.Fatalf("contracttest: schema path %q escapes contract directory", filename)
 	}
-	data, err := os.ReadFile(fullPath)
+	data, err := fixtureload.LoadFixture(fullPath)
 	if err != nil {
 		t.Fatalf("contracttest: read schema %q: %v", fullPath, err)
 	}
@@ -383,7 +383,7 @@ func compileSchemaFileAbsolute(t testing.TB, dir, filename string) *jsonschema.S
 	t.Helper()
 	fullPath := filepath.Join(dir, filename)
 
-	data, err := os.ReadFile(fullPath)
+	data, err := fixtureload.LoadFixture(fullPath)
 	if err != nil {
 		t.Fatalf("contracttest: read schema %q: %v", fullPath, err)
 	}

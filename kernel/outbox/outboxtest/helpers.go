@@ -441,12 +441,9 @@ func (h *pubSubHarness) checkNoMoreDeliveries(priorCount int, window time.Durati
 // Internal assertion helpers — stdlib only, no testify in kernel/ non-test files
 // ---------------------------------------------------------------------------
 
-func assertNoError(t *testing.T, err error, msgAndArgs ...any) {
+func assertNoError(t *testing.T, err error) {
 	t.Helper()
 	if err != nil {
-		if len(msgAndArgs) > 0 {
-			t.Fatalf("unexpected error: %v — %s", err, fmt.Sprint(msgAndArgs...))
-		}
 		t.Fatalf("unexpected error: %v", err)
 	}
 }

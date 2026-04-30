@@ -124,20 +124,12 @@ func New(cfg Config) *CoreAssembly {
 	// emit) so its lifetime is deterministic: callers that construct an
 	// assembly and never Start it can still call Stop to drain cleanly, and
 	// goleak-based tests cannot witness a racy lazy-start.
-	dispatcher, err := newHookDispatcher(dispatcherConfig{
+	dispatcher := newHookDispatcher(dispatcherConfig{
 		Observer:    cfg.HookObserver,
 		QueueSize:   cfg.HookObserverQueueSize,
 		SinkTimeout: cfg.HookObserverSinkTimeout,
 		Provider:    cfg.MetricsProvider,
 	})
-	if err != nil {
-		// newHookDispatcher only fails if metrics registration fails, and
-		// even then it falls back to Nop internally — so this branch is
-		// defensive. Logging + continuing with a fresh Nop dispatcher keeps
-		// New() infallible from callers' perspective.
-		slog.Warn("assembly: hook dispatcher construction failed; continuing without async fan-out",
-			slog.Any("error", err))
-	}
 	return &CoreAssembly{
 		id:         cfg.ID,
 		cfg:        cfg,

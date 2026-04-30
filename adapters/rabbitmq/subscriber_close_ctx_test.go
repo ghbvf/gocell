@@ -470,7 +470,7 @@ func TestSubscriber_Reconnect_WaitsForInflightBeforeClose(t *testing.T) {
 
 	// Simulate two processDelivery goroutines: each sleeps 80ms then calls markDeliveryDone.
 	for i := range numDeliveries {
-		go func(idx int) {
+		go func(_ int) {
 			time.Sleep(80 * time.Millisecond)
 			ackMu.Lock()
 			ackTimes = append(ackTimes, time.Now())

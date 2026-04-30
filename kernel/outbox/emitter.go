@@ -116,7 +116,9 @@ const defaultFailOpenRateThreshold = 0.05 // 5%
 // Use WithLogger to override the default slog.Default() logger.
 // Use WithFailOpenRateThreshold to set the drop-ratio threshold for the
 // HealthCheckers checker (default 5%; 0 disables).
-func NewDirectEmitter(p Publisher, mode DirectPublishFailureMode, mp metrics.Provider, cellID string, opts ...DirectEmitterOption) (*DirectEmitter, error) {
+func NewDirectEmitter(
+	p Publisher, mode DirectPublishFailureMode, mp metrics.Provider, cellID string, opts ...DirectEmitterOption,
+) (*DirectEmitter, error) {
 	if isNilEmitterDependency(p) {
 		return nil, errcode.New(errcode.ErrCellMissingOutbox,
 			"outbox: nil publisher for DirectEmitter")

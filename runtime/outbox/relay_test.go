@@ -128,13 +128,12 @@ func fastCfg() outbox.RelayConfig {
 	}
 }
 
-// startRelay starts relay in a goroutine and returns the errCh + a stop function.
-func startRelay(t *testing.T, relay *outbox.Relay) (errCh chan error, stop func()) {
+// startRelay starts relay in a goroutine and returns a stop function.
+func startRelay(t *testing.T, relay *outbox.Relay) (stop func()) {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
-	ch := make(chan error, 1)
-	go func() { ch <- relay.Start(ctx) }()
-	return ch, func() {
+	go func() { _ = relay.Start(ctx) }()
+	return func() {
 		stopCtx, stopCancel := context.WithTimeout(context.Background(), 2*time.Second)
 		defer stopCancel()
 		require.NoError(t, relay.Stop(stopCtx))
@@ -142,17 +141,17 @@ func startRelay(t *testing.T, relay *outbox.Relay) (errCh chan error, stop func(
 	}
 }
 
-// waitUntil polls cond until it returns true or timeout is exceeded.
-func waitUntil(t *testing.T, timeout time.Duration, cond func() bool) {
+// waitUntil polls cond until it returns true or 500ms is exceeded.
+func waitUntil(t *testing.T, cond func() bool) {
 	t.Helper()
-	deadline := time.Now().Add(timeout)
+	deadline := time.Now().Add(500 * time.Millisecond)
 	for time.Now().Before(deadline) {
 		if cond() {
 			return
 		}
 		time.Sleep(2 * time.Millisecond)
 	}
-	t.Fatalf("condition not met within %v", timeout)
+	t.Fatalf("condition not met within 500ms")
 }
 
 // ---------------------------------------------------------------------------
@@ -184,11 +183,11 @@ func TestRelay_HappyPath_ClaimPublishMarkPublished(t *testing.T) {
 	pub := newFakePublisher()
 	relay := outbox.NewRelay(store, pub, fastCfg())
 
-	_, stop := startRelay(t, relay)
+	stop := startRelay(t, relay)
 	defer stop()
 
 	// Wait until all 3 entries are published.
-	waitUntil(t, 500*time.Millisecond, func() bool {
+	waitUntil(t, func() bool {
 		return len(pub.Captured()) >= 3
 	})
 	stop()
@@ -218,11 +217,11 @@ func TestRelay_TransientFailure_MarkRetryWithBackoff(t *testing.T) {
 	pub := newFakePublisher().WithFailN(1) // first publish fails
 	relay := outbox.NewRelay(store, pub, fastCfg())
 
-	_, stop := startRelay(t, relay)
+	stop := startRelay(t, relay)
 	defer stop()
 
 	// Wait until the entry is retried (status=pending with attempts>0).
-	waitUntil(t, 500*time.Millisecond, func() bool {
+	waitUntil(t, func() bool {
 		snap := store.Snapshot()
 		if len(snap) == 0 {
 			return false
@@ -260,10 +259,10 @@ func TestRelay_PermanentFailure_ExceedsMaxAttempts_MarkDead(t *testing.T) {
 	pub.WithError(errors.New("permanent broker failure"))
 	relay := outbox.NewRelay(store, pub, fastCfg())
 
-	_, stop := startRelay(t, relay)
+	stop := startRelay(t, relay)
 	defer stop()
 
-	waitUntil(t, 500*time.Millisecond, func() bool {
+	waitUntil(t, func() bool {
 		snap := store.Snapshot()
 		return len(snap) > 0 && snap[0].Status == "dead"
 	})
@@ -435,11 +434,11 @@ func TestRelay_ReclaimStale_RecoveryLoop(t *testing.T) {
 	blockPub := &blockingPublisher{}
 	relay := outbox.NewRelay(store, blockPub, cfg)
 
-	_, stop := startRelay(t, relay)
+	stop := startRelay(t, relay)
 	defer stop()
 
 	// Wait until the entry is reclaimed (back to pending with attempts > 0).
-	waitUntil(t, 500*time.Millisecond, func() bool {
+	waitUntil(t, func() bool {
 		snap := store.Snapshot()
 		if len(snap) == 0 {
 			return false
@@ -512,10 +511,10 @@ func TestRelay_CleanupLoop_RunsImmediatelyAtStart(t *testing.T) {
 	cfg.DeadRetentionPeriod = 1 * time.Nanosecond
 	relay := outbox.NewRelay(store, newFakePublisher(), cfg)
 
-	_, stop := startRelay(t, relay)
+	stop := startRelay(t, relay)
 	defer stop()
 
-	waitUntil(t, 500*time.Millisecond, func() bool {
+	waitUntil(t, func() bool {
 		return len(store.Snapshot()) == 0
 	})
 
@@ -541,10 +540,10 @@ func TestRelay_EnvelopePayload_IsCorrect(t *testing.T) {
 	pub := newFakePublisher()
 	relay := outbox.NewRelay(store, pub, fastCfg())
 
-	_, stop := startRelay(t, relay)
+	stop := startRelay(t, relay)
 	defer stop()
 
-	waitUntil(t, 500*time.Millisecond, func() bool {
+	waitUntil(t, func() bool {
 		return len(pub.Captured()) >= 1
 	})
 	stop()
@@ -572,10 +571,10 @@ func TestRelay_Metrics_RecordedOnPollCycle(t *testing.T) {
 	cfg.Metrics = mc
 	relay := outbox.NewRelay(store, pub, cfg)
 
-	_, stop := startRelay(t, relay)
+	stop := startRelay(t, relay)
 	defer stop()
 
-	waitUntil(t, 500*time.Millisecond, func() bool {
+	waitUntil(t, func() bool {
 		return len(pub.Captured()) >= 2
 	})
 	stop()
@@ -610,10 +609,10 @@ func TestRelay_NilMetrics_DoesNotPanic(t *testing.T) {
 	cfg.Metrics = nil // explicit nil — must default to Noop
 	relay := outbox.NewRelay(store, pub, cfg)
 
-	_, stop := startRelay(t, relay)
+	stop := startRelay(t, relay)
 	defer stop()
 
-	waitUntil(t, 500*time.Millisecond, func() bool {
+	waitUntil(t, func() bool {
 		return len(pub.Captured()) >= 1
 	})
 	stop()
@@ -632,10 +631,10 @@ func TestRelay_SanitizesError_InLastError(t *testing.T) {
 	pub.WithError(errors.New("dial failed: password=secret123 host=db.internal"))
 	relay := outbox.NewRelay(store, pub, fastCfg())
 
-	_, stop := startRelay(t, relay)
+	stop := startRelay(t, relay)
 	defer stop()
 
-	waitUntil(t, 500*time.Millisecond, func() bool {
+	waitUntil(t, func() bool {
 		snap := store.Snapshot()
 		return len(snap) > 0 && (snap[0].Status == "pending" || snap[0].Status == "dead") && snap[0].LastError != ""
 	})
@@ -745,7 +744,7 @@ func TestRelay_PollFailureBudget_TripsAfterConsecutiveFailures(t *testing.T) {
 
 	relay := outbox.NewRelay(store, newFakePublisher(), budgetCfg())
 
-	_, stop := startRelay(t, relay)
+	stop := startRelay(t, relay)
 	defer stop()
 
 	// Wait for the poll budget checker to become non-nil (trip).
@@ -765,7 +764,7 @@ func TestRelay_PollFailureBudget_ResetsOnSuccess(t *testing.T) {
 
 	relay := outbox.NewRelay(store, newFakePublisher(), budgetCfg())
 
-	_, stop := startRelay(t, relay)
+	stop := startRelay(t, relay)
 	defer stop()
 
 	// Trip first.
@@ -793,7 +792,7 @@ func TestRelay_ReclaimFailureBudget_Independent(t *testing.T) {
 
 	relay := outbox.NewRelay(store, newFakePublisher(), budgetCfg())
 
-	_, stop := startRelay(t, relay)
+	stop := startRelay(t, relay)
 	defer stop()
 
 	require.Eventually(t, func() bool {
@@ -820,7 +819,7 @@ func TestRelay_CleanupFailureBudget_Independent(t *testing.T) {
 
 	relay := outbox.NewRelay(store, newFakePublisher(), budgetCfg())
 
-	_, stop := startRelay(t, relay)
+	stop := startRelay(t, relay)
 	defer stop()
 
 	require.Eventually(t, func() bool {
@@ -875,7 +874,7 @@ func TestRelay_CanRestartAfterTrip_ResetsBudget(t *testing.T) {
 	relay := outbox.NewRelay(store, newFakePublisher(), cfg)
 
 	// --- First run: trip the poll budget ---
-	_, stop := startRelay(t, relay)
+	stop := startRelay(t, relay)
 
 	require.Eventually(t, func() bool {
 		checkers := relay.Checkers()
@@ -900,7 +899,7 @@ func TestRelay_CanRestartAfterTrip_ResetsBudget(t *testing.T) {
 	store.setClaimErr(nil)
 
 	// --- Second run: budget must be reset before first poll ---
-	_, stop2 := startRelay(t, relay)
+	stop2 := startRelay(t, relay)
 	defer stop2()
 
 	// Wait for relay to be running.
@@ -920,7 +919,7 @@ func TestRelay_CanRestartAfterTrip_ResetsBudget(t *testing.T) {
 func TestRelay_Ready_ReturnsReadyChannel(t *testing.T) {
 	relay := outbox.NewRelay(outboxtest.NewFakeStore(), newFakePublisher(), fastCfg())
 
-	_, stop := startRelay(t, relay)
+	stop := startRelay(t, relay)
 	defer stop()
 
 	// Ready() never returns nil (B1: pre-allocated in NewRelay). Before Start()

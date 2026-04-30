@@ -16,7 +16,8 @@
 // # Distributed Locking
 //
 // Distributed locking is a runtime/adapter split:
-//   - [runtime/distlock] owns the lifecycle (acquire, renewal scheduling, release timeout, retry budget) via a single shared manager goroutine
+//   - [runtime/distlock] owns the lifecycle (acquire, renewal scheduling, release timeout, retry budget)
+//     via a single shared manager goroutine
 //   - [RedisDriver] implements three semantic primitives (SetNX / Renew / Release)
 //     using Redis SET NX EX + two Lua scripts (token-matched PEXPIRE / DEL)
 //

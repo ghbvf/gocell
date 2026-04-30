@@ -74,7 +74,9 @@ type PageResult[T any] struct {
 // extractCursor is called on the last item to extract the keyset values for
 // the next-page cursor. It must return values corresponding 1:1 to the sort
 // columns used in the query.
-func BuildPageResult[T any](items []T, limit int, codec *CursorCodec, sort []SortColumn, queryCtx string, extractCursor func(T) []any) (PageResult[T], error) {
+func BuildPageResult[T any](
+	items []T, limit int, codec *CursorCodec, sort []SortColumn, queryCtx string, extractCursor func(T) []any,
+) (PageResult[T], error) {
 	hasMore := len(items) > limit
 	if hasMore {
 		items = items[:limit]

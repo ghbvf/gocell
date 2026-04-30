@@ -37,11 +37,11 @@ func TestNewService_NilCodec_ReturnsError(t *testing.T) {
 	assert.Equal(t, errcode.ErrCellMissingCodec, ecErr.Code)
 }
 
-func seedFlag(t *testing.T, repo *mem.FlagRepository, key string, flagType domain.FlagType, enabled bool, pct int) {
+func seedFlag(t *testing.T, repo *mem.FlagRepository, key string, flagType domain.FlagType, pct int) {
 	t.Helper()
 	require.NoError(t, repo.Create(context.Background(), &domain.FeatureFlag{
 		ID: "flag-" + key, Key: key, Type: flagType,
-		Enabled: enabled, RolloutPercentage: pct,
+		Enabled: true, RolloutPercentage: pct,
 	}))
 }
 
@@ -60,7 +60,7 @@ func TestService_GetByKey(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			svc, repo := newTestService()
 			if tt.seed {
-				seedFlag(t, repo, tt.key, domain.FlagBoolean, true, 0)
+				seedFlag(t, repo, tt.key, domain.FlagBoolean, 0)
 			}
 
 			flag, err := svc.GetByKey(context.Background(), tt.key)
@@ -76,8 +76,8 @@ func TestService_GetByKey(t *testing.T) {
 
 func TestService_List(t *testing.T) {
 	svc, repo := newTestService()
-	seedFlag(t, repo, "f1", domain.FlagBoolean, true, 0)
-	seedFlag(t, repo, "f2", domain.FlagPercentage, true, 50)
+	seedFlag(t, repo, "f1", domain.FlagBoolean, 0)
+	seedFlag(t, repo, "f2", domain.FlagPercentage, 50)
 
 	result, err := svc.List(context.Background(), query.PageParams{Limit: 50})
 	require.NoError(t, err)
@@ -88,7 +88,7 @@ func TestService_List(t *testing.T) {
 func TestService_List_FirstPage(t *testing.T) {
 	svc, repo := newTestService()
 	for i := range 5 {
-		seedFlag(t, repo, "flag-"+string(rune('a'+i)), domain.FlagBoolean, true, 0)
+		seedFlag(t, repo, "flag-"+string(rune('a'+i)), domain.FlagBoolean, 0)
 	}
 
 	result, err := svc.List(context.Background(), query.PageParams{Limit: 3})
@@ -101,7 +101,7 @@ func TestService_List_FirstPage(t *testing.T) {
 func TestService_List_WithCursor(t *testing.T) {
 	svc, repo := newTestService()
 	for i := range 5 {
-		seedFlag(t, repo, "flag-"+string(rune('a'+i)), domain.FlagBoolean, true, 0)
+		seedFlag(t, repo, "flag-"+string(rune('a'+i)), domain.FlagBoolean, 0)
 	}
 
 	page1, err := svc.List(context.Background(), query.PageParams{Limit: 3})
@@ -174,8 +174,8 @@ func TestService_List_ContextMismatch(t *testing.T) {
 
 func TestService_List_LastPage(t *testing.T) {
 	svc, repo := newTestService()
-	seedFlag(t, repo, "flag-a", domain.FlagBoolean, true, 0)
-	seedFlag(t, repo, "flag-b", domain.FlagBoolean, true, 0)
+	seedFlag(t, repo, "flag-a", domain.FlagBoolean, 0)
+	seedFlag(t, repo, "flag-b", domain.FlagBoolean, 0)
 
 	result, err := svc.List(context.Background(), query.PageParams{Limit: 10})
 	require.NoError(t, err)

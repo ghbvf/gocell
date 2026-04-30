@@ -227,7 +227,10 @@ func RequireRole(authorizer Authorizer, roles ...string) func(http.Handler) http
 	}
 }
 
-func handleRequireRole(authorizer Authorizer, roles []string, roleSet map[string]bool, next http.Handler, w http.ResponseWriter, r *http.Request) {
+func handleRequireRole(
+	authorizer Authorizer, roles []string, roleSet map[string]bool,
+	next http.Handler, w http.ResponseWriter, r *http.Request,
+) {
 	p, ok := FromContext(r.Context())
 	if !ok {
 		httputil.WriteError(r.Context(), w, http.StatusUnauthorized, "ERR_AUTH_UNAUTHORIZED", "authentication required")

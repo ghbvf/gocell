@@ -31,7 +31,8 @@ func newContractService(t testing.TB) (*Service, *mem.ConfigRepository, *testuti
 	return svc, repo, writer
 }
 
-func seedContractEntry(repo *mem.ConfigRepository, key, value string) {
+func seedContractEntry(repo *mem.ConfigRepository, value string) {
+	const key = "app.name"
 	now := time.Now()
 	_ = repo.Create(context.Background(), &domain.ConfigEntry{
 		ID: "cfg-" + key, Key: key, Value: value, Version: 1,
@@ -59,7 +60,7 @@ func TestHttpConfigPublishV1Serve(t *testing.T) {
 	root := contracttest.ContractsRoot(t)
 	c := contracttest.LoadByID(t, root, "http.config.publish.v1")
 	svc, repo, _ := newContractService(t)
-	seedContractEntry(repo, "app.name", "value")
+	seedContractEntry(repo, "value")
 
 	mux := newContractMux(svc)
 
@@ -80,7 +81,7 @@ func TestHttpConfigRollbackV1Serve(t *testing.T) {
 	root := contracttest.ContractsRoot(t)
 	c := contracttest.LoadByID(t, root, "http.config.rollback.v1")
 	svc, repo, _ := newContractService(t)
-	seedContractEntry(repo, "app.name", "value")
+	seedContractEntry(repo, "value")
 
 	// Publish first to create version 1 so rollback target exists.
 	_, err := svc.Publish(auth.TestContext("contract-admin", []string{"admin"}), "app.name")
@@ -204,7 +205,7 @@ func TestEventConfigVersionPublishedV1Publish(t *testing.T) {
 	root := contracttest.ContractsRoot(t)
 	c := contracttest.LoadByID(t, root, "event.config.version-published.v1")
 	svc, repo, writer := newContractService(t)
-	seedContractEntry(repo, "app.name", "value")
+	seedContractEntry(repo, "value")
 
 	_, err := svc.Publish(auth.TestContext("contract-admin", []string{"admin"}), "app.name")
 	require.NoError(t, err)
@@ -224,7 +225,7 @@ func TestEventConfigRollbackV1Publish_RollbackEmitsStateThenAudit(t *testing.T) 
 	upserted := contracttest.LoadByID(t, root, "event.config.entry-upserted.v1")
 	rollback := contracttest.LoadByID(t, root, "event.config.rollback.v1")
 	svc, repo, writer := newContractService(t)
-	seedContractEntry(repo, "app.name", "v1")
+	seedContractEntry(repo, "v1")
 
 	// Publish first to create a version, then rollback
 	_, err := svc.Publish(auth.TestContext("contract-admin", []string{"admin"}), "app.name")

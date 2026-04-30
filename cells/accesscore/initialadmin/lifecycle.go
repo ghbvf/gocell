@@ -4,6 +4,7 @@ package initialadmin
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -16,6 +17,11 @@ import (
 )
 
 const hookName = "accesscore.initial-admin-bootstrap"
+
+// errNoCleanerRequired is a sentinel returned by provisionAdmin when admin
+// already exists and no orphan credential file needs cleanup, signaling the
+// caller that no background cleaner worker should be launched.
+var errNoCleanerRequired = errors.New("initialadmin: no cleaner required")
 
 // config mirrors the old initialAdminConfig from cells/accesscore/cell.go:118-130.
 // It is internal to the initialadmin package; exposed only through LifecycleOption.
@@ -140,6 +146,19 @@ func (l *Lifecycle) start(ctx context.Context) error {
 	logger := l.logger
 	l.mu.Unlock()
 
+	result, err := l.provisionAdmin(ctx, deps, cfg, logger)
+	if errors.Is(err, errNoCleanerRequired) {
+		return nil // admin exists + no orphan → no cleanup needed
+	}
+	if err != nil {
+		return err
+	}
+	return l.launchCleaner(ctx, result, logger)
+}
+
+// provisionAdmin runs the sweep + bootstrapper phase and returns the worker
+// that should manage credential cleanup, or nil if no cleanup is needed.
+func (l *Lifecycle) provisionAdmin(ctx context.Context, deps BootstrapDeps, cfg config, logger *slog.Logger) (worker.Worker, error) {
 	// sweep expired orphan credential files before ensureAdmin attempts to write
 	// a new one. This closes the P1-16 gap where adminExists==true caused
 	// ensureAdmin to return early without cleaning orphan cred files, and also
@@ -157,9 +176,8 @@ func (l *Lifecycle) start(ctx context.Context) error {
 		Logger:         logger,
 	})
 	if err != nil {
-		return fmt.Errorf("initialadmin: sweep: %w", err)
+		return nil, fmt.Errorf("initialadmin: sweep: %w", err)
 	}
-	sweepCleaner := sweepResult.Cleaner
 
 	bs, err := newBootstrapper(BootstrapDeps{
 		UserRepo: deps.UserRepo,
@@ -175,39 +193,37 @@ func (l *Lifecycle) start(ctx context.Context) error {
 		Hasher:         cfg.Hasher,
 	})
 	if err != nil {
-		return fmt.Errorf("initialadmin: construct: %w", err)
+		return nil, fmt.Errorf("initialadmin: construct: %w", err)
 	}
 	adminResult, err := bs.ensureAdmin(ctx)
 	if err != nil {
-		return fmt.Errorf("initialadmin: ensure: %w", err)
+		return nil, fmt.Errorf("initialadmin: ensure: %w", err)
 	}
-	adminWorker := adminResult.Cleaner
-	if adminWorker != nil {
+	if adminResult.Cleaner != nil {
 		logger.InfoContext(ctx, "initialadmin: initial admin credentials written",
 			slog.String("event", "initial_admin_credentials_written"),
 			slog.String("cred_path", bs.cfg.CredentialPath))
 	}
 
 	// Priority identical to old behavior: adminWorker > sweepCleaner.
-	var result worker.Worker
 	switch {
-	case adminWorker != nil:
-		result = adminWorker
-	case sweepCleaner != nil:
-		result = sweepCleaner
+	case adminResult.Cleaner != nil:
+		return adminResult.Cleaner, nil
+	case sweepResult.Cleaner != nil:
+		return sweepResult.Cleaner, nil
+	default:
+		return nil, errNoCleanerRequired
 	}
-	if result == nil {
-		return nil // admin exists + no orphan → no cleanup needed
-	}
+}
 
+// launchCleaner registers result as the active worker and starts it in a
+// background goroutine. A concurrent stop() racing with start() is handled by
+// the stopped flag: if stop ran first, we cancel runCtx immediately and do not
+// spawn the goroutine.
+func (l *Lifecycle) launchCleaner(ctx context.Context, result worker.Worker, logger *slog.Logger) error {
 	// Derive a long-lived runCtx that preserves caller values but is not killed
 	// by bootstrap.Hook.StartTimeout (30s). OnStop cancels runCtx to drain the
 	// goroutine.
-	//
-	// A concurrent stop() racing with start() is handled by stopped=true: if
-	// stop ran first, we cancel runCtx immediately and do not spawn the
-	// cleaner goroutine (calling cleaner.Start on a stopped cleaner is an error
-	// per the cleaner contract).
 	runCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
 	l.mu.Lock()
 	if l.stopped {

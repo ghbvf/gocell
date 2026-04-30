@@ -48,8 +48,10 @@ type HealthRouteGroupOption func(*healthRouteGroupCfg)
 
 type healthRouteGroupCfg struct {
 	metricsHandler  http.Handler
-	verboseDisabled bool   // PR-A35: when true, /readyz?verbose is answered with the plain aggregate body (no internal topology disclosed)
-	verboseToken    string // handler-level X-Readyz-Token strict gate (PR-A35 + PR269 round-3: now the single source of verbose-token configuration)
+	verboseDisabled bool // PR-A35: when true, /readyz?verbose is answered with the plain aggregate body (no internal topology disclosed)
+	// verboseToken: handler-level X-Readyz-Token strict gate
+	// (PR-A35 + PR269 round-3: now the single source of verbose-token configuration)
+	verboseToken string
 }
 
 // applyHealthRouteGroupOpts evaluates a slice of HealthRouteGroupOption against

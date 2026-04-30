@@ -394,7 +394,9 @@ func verifyConfigCorePGSchema(ctx context.Context, pool *adapterpg.Pool) error {
 	return nil
 }
 
-func buildConfigCorePGStorage(pool *adapterpg.Pool, cfg ConfigCoreModuleConfig) (kernellifecycle.ManagedResource, configcore.Option, error) {
+func buildConfigCorePGStorage(
+	pool *adapterpg.Pool, cfg ConfigCoreModuleConfig,
+) (kernellifecycle.ManagedResource, configcore.Option, error) {
 	pgRes, err := adapterpg.NewPGResource(pool)
 	if err != nil {
 		return nil, nil, fmt.Errorf("configcore PG resource: %w", err)

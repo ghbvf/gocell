@@ -684,7 +684,8 @@ func (r *Router) FinalizeAuth() error {
 // compiled but no AuthMiddleware is installed. Public:true warnings are emitted
 // separately to guide operators toward the correct setup.
 func (r *Router) warnNoAuthVerifier(p authMetaPartition) {
-	slog.Warn("router: FinalizeAuth compiled route auth declarations but AuthMiddleware is not installed; Public/PasswordResetExempt matchers will have no effect",
+	slog.Warn("router: FinalizeAuth compiled route auth declarations but AuthMiddleware is not installed;"+
+		" Public/PasswordResetExempt matchers will have no effect",
 		slog.String("listener", r.ref.String()),
 		slog.Int("declared", len(r.declaredAuthMetas)))
 	if len(p.publicEntries) > 0 {

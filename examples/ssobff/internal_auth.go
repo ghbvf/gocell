@@ -8,7 +8,7 @@ import (
 	"github.com/ghbvf/gocell/runtime/auth"
 )
 
-const ssobffServiceSecretEnv = "GOCELL_SSOBFF_SERVICE_SECRET"
+const ssobffServiceSecretEnv = "GOCELL_SSOBFF_SERVICE_SECRET" //nolint:gosec // G101 false positive: env var name constant, not a hardcoded secret
 
 func newInternalAuthChainFromEnv() ([]cell.ListenerAuth, error) {
 	secret := os.Getenv(ssobffServiceSecretEnv)

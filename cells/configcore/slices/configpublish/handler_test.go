@@ -113,8 +113,10 @@ func setupHandler() (http.Handler, *mem.ConfigRepository) {
 	return mux, repo
 }
 
-func seedForPublish(t *testing.T, repo *mem.ConfigRepository, key, value string) {
+func seedForPublish(t *testing.T, repo *mem.ConfigRepository) {
 	t.Helper()
+	const key = "app.name"
+	const value = "v1"
 	now := time.Now()
 	require.NoError(t, repo.Create(context.Background(), &domain.ConfigEntry{
 		ID: "cfg-" + key, Key: key, Value: value, Version: 1,
@@ -124,7 +126,7 @@ func seedForPublish(t *testing.T, repo *mem.ConfigRepository, key, value string)
 
 func TestHandler_HandlePublish_OK(t *testing.T) {
 	handler, repo := setupHandler()
-	seedForPublish(t, repo, "app.name", "v1")
+	seedForPublish(t, repo)
 
 	w := httptest.NewRecorder()
 	req := withAdmin(httptest.NewRequest(http.MethodPost, configPrefix+"/app.name/publish", nil))
@@ -152,7 +154,7 @@ func TestHandler_HandlePublish_NotFound(t *testing.T) {
 // identitymanage/handler.go and matches the K8s/Kratos/go-zero default-deny convention.
 func TestHandler_HandlePublish_RequiresAuth(t *testing.T) {
 	handler, repo := setupHandler()
-	seedForPublish(t, repo, "app.name", "v1")
+	seedForPublish(t, repo)
 
 	w := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, configPrefix+"/app.name/publish", nil) // no auth
@@ -163,7 +165,7 @@ func TestHandler_HandlePublish_RequiresAuth(t *testing.T) {
 
 func TestHandler_HandlePublish_RequiresAdminRole(t *testing.T) {
 	handler, repo := setupHandler()
-	seedForPublish(t, repo, "app.name", "v1")
+	seedForPublish(t, repo)
 
 	w := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, configPrefix+"/app.name/publish", nil).
@@ -187,7 +189,7 @@ func TestHandler_HandleRollback_RequiresAuth(t *testing.T) {
 
 func TestHandler_HandleRollback_RequiresAdminRole(t *testing.T) {
 	handler, repo := setupHandler()
-	seedForPublish(t, repo, "app.name", "v1")
+	seedForPublish(t, repo)
 
 	w := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, configPrefix+"/app.name/rollback",
@@ -252,7 +254,7 @@ func TestHandler_HandlePublish_NonSensitiveVisible(t *testing.T) {
 
 func TestHandler_HandleRollback_OK(t *testing.T) {
 	handler, repo := setupHandler()
-	seedForPublish(t, repo, "app.name", "v1")
+	seedForPublish(t, repo)
 	// Publish first to create a version.
 	svc := NewService(repo, slog.Default())
 	_, err := svc.Publish(adminCtx(), "app.name")
@@ -288,7 +290,7 @@ func TestHandler_HandleRollback_KeyNotFound(t *testing.T) {
 
 func TestHandler_HandleRollback_VersionNotFound(t *testing.T) {
 	handler, repo := setupHandler()
-	seedForPublish(t, repo, "app.name", "v1") // entry exists, but no version published yet
+	seedForPublish(t, repo) // entry exists, but no version published yet
 
 	w := httptest.NewRecorder()
 	req := withAdmin(httptest.NewRequest(http.MethodPost, configPrefix+"/app.name/rollback",
@@ -372,7 +374,7 @@ func TestHandler_HandleRollback_InvalidVersion(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			handler, repo := setupHandler()
-			seedForPublish(t, repo, "app.name", "v1")
+			seedForPublish(t, repo)
 
 			w := httptest.NewRecorder()
 			body := fmt.Sprintf(`{"version":%d}`, tt.version)

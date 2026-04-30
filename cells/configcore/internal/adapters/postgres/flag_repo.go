@@ -75,7 +75,7 @@ func (r *FlagRepository) resolveWriteDB(ctx context.Context) (DBTX, error) {
 //
 // op is the method name (e.g. "Update") used only in InternalMessage for
 // operator-side debugging; key is the lookup key surfaced the same way.
-func (r *FlagRepository) scanFlagOrMapError(ctx context.Context, row Row, op, key string) (*domain.FeatureFlag, error) {
+func (r *FlagRepository) scanFlagOrMapError(_ context.Context, row Row, op, key string) (*domain.FeatureFlag, error) {
 	flag, err := scanFlagRow(row)
 	if err == nil {
 		return flag, nil
@@ -167,7 +167,9 @@ func (r *FlagRepository) GetByKey(ctx context.Context, key string) (*domain.Feat
 // Update atomically sets enabled, rollout_percentage, description, and
 // increments version by 1 via UPDATE...SET version=version+1 RETURNING.
 // Returns the updated flag. Returns ErrFlagNotFound if key does not exist.
-func (r *FlagRepository) Update(ctx context.Context, key string, enabled bool, rolloutPercentage int, description string) (*domain.FeatureFlag, error) {
+func (r *FlagRepository) Update(
+	ctx context.Context, key string, enabled bool, rolloutPercentage int, description string,
+) (*domain.FeatureFlag, error) {
 	const sql = `UPDATE feature_flags
 		SET enabled=$1, rollout_percentage=$2, description=$3, version=version+1, updated_at=now()
 		WHERE key=$4

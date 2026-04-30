@@ -67,7 +67,8 @@ func rejectDemoKey(adapterMode, envName string, key []byte) error {
 	}
 	for _, demo := range wellKnownDemoKeys {
 		if len(key) == len(demo) && subtle.ConstantTimeCompare(key, []byte(demo)) == 1 {
-			return fmt.Errorf("%s is set to a well-known demo key; rotate to a fresh random 32-byte secret before running in real adapter mode", envName)
+			return fmt.Errorf("%s is set to a well-known demo key;"+
+				" rotate to a fresh random 32-byte secret before running in real adapter mode", envName)
 		}
 	}
 	return nil

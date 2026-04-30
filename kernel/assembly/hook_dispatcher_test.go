@@ -119,8 +119,7 @@ func TestHookDispatcher_SlowSinkDoesNotBlockEmit(t *testing.T) {
 	// The dispatcher must return immediately; only the observer goroutine
 	// is blocked.
 	bo := newBlockingObserver()
-	d, err := newHookDispatcher(dispatcherConfig{Observer: bo, QueueSize: 8, SinkTimeout: 10 * time.Millisecond})
-	require.NoError(t, err)
+	d := newHookDispatcher(dispatcherConfig{Observer: bo, QueueSize: 8, SinkTimeout: 10 * time.Millisecond})
 	t.Cleanup(func() {
 		bo.release()
 		d.stop(500 * time.Millisecond)
@@ -141,8 +140,7 @@ func TestHookDispatcher_OverflowDropsAndCounts(t *testing.T) {
 	// one DropReasonQueueFull is certain regardless of scheduler jitter.
 	bo := newBlockingObserver()
 	cv := newSpyCounterVec()
-	d, err := newHookDispatcher(dispatcherConfig{Observer: bo, QueueSize: 2, SinkTimeout: time.Second, Provider: &spyProvider{cv: cv}})
-	require.NoError(t, err)
+	d := newHookDispatcher(dispatcherConfig{Observer: bo, QueueSize: 2, SinkTimeout: time.Second, Provider: &spyProvider{cv: cv}})
 	t.Cleanup(func() {
 		bo.release()
 		d.stop(2 * time.Second)
@@ -168,8 +166,7 @@ func TestHookDispatcher_OverflowDropsAndCounts(t *testing.T) {
 func TestHookDispatcher_PerSinkTimeoutCountsAndContinues(t *testing.T) {
 	bo := newBlockingObserver()
 	cv := newSpyCounterVec()
-	d, err := newHookDispatcher(dispatcherConfig{Observer: bo, QueueSize: 8, SinkTimeout: 20 * time.Millisecond, Provider: &spyProvider{cv: cv}})
-	require.NoError(t, err)
+	d := newHookDispatcher(dispatcherConfig{Observer: bo, QueueSize: 8, SinkTimeout: 20 * time.Millisecond, Provider: &spyProvider{cv: cv}})
 	t.Cleanup(func() {
 		bo.release()
 		d.stop(500 * time.Millisecond)
@@ -188,8 +185,7 @@ func (panicObserver) OnHookEvent(cell.HookEvent) { panic("sink crashed") }
 
 func TestHookDispatcher_PanicIsCountedAndIsolated(t *testing.T) {
 	cv := newSpyCounterVec()
-	d, err := newHookDispatcher(dispatcherConfig{Observer: panicObserver{}, QueueSize: 8, SinkTimeout: time.Second, Provider: &spyProvider{cv: cv}})
-	require.NoError(t, err)
+	d := newHookDispatcher(dispatcherConfig{Observer: panicObserver{}, QueueSize: 8, SinkTimeout: time.Second, Provider: &spyProvider{cv: cv}})
 	t.Cleanup(func() { d.stop(500 * time.Millisecond) })
 
 	d.emit(cell.HookEvent{CellID: "crash", Hook: cell.HookBeforeStart})
@@ -226,8 +222,7 @@ func (c *collectObserver) len() int {
 
 func TestHookDispatcher_StopDrainsPending(t *testing.T) {
 	obs := &collectObserver{}
-	d, err := newHookDispatcher(dispatcherConfig{Observer: obs, QueueSize: 32, SinkTimeout: time.Second})
-	require.NoError(t, err)
+	d := newHookDispatcher(dispatcherConfig{Observer: obs, QueueSize: 32, SinkTimeout: time.Second})
 
 	for i := range 10 {
 		d.emit(cell.HookEvent{CellID: "drain", Hook: cell.HookBeforeStart, Duration: time.Duration(i)})
@@ -238,15 +233,13 @@ func TestHookDispatcher_StopDrainsPending(t *testing.T) {
 }
 
 func TestHookDispatcher_StopIsIdempotent(t *testing.T) {
-	d, err := newHookDispatcher(dispatcherConfig{Observer: cell.NopHookObserver{}, QueueSize: 4, SinkTimeout: time.Second})
-	require.NoError(t, err)
+	d := newHookDispatcher(dispatcherConfig{Observer: cell.NopHookObserver{}, QueueSize: 4, SinkTimeout: time.Second})
 	d.stop(200 * time.Millisecond)
 	d.stop(200 * time.Millisecond) // second call must be a no-op, no panic
 }
 
 func TestHookDispatcher_FlushOnIdleReturnsTrue(t *testing.T) {
-	d, err := newHookDispatcher(dispatcherConfig{Observer: cell.NopHookObserver{}, QueueSize: 8, SinkTimeout: time.Second})
-	require.NoError(t, err)
+	d := newHookDispatcher(dispatcherConfig{Observer: cell.NopHookObserver{}, QueueSize: 8, SinkTimeout: time.Second})
 	t.Cleanup(func() { d.stop(200 * time.Millisecond) })
 
 	require.True(t, d.flush(500*time.Millisecond), "flush on idle dispatcher must succeed")
@@ -259,8 +252,7 @@ func TestHookDispatcher_FlushOnIdleReturnsTrue(t *testing.T) {
 // a post-Stop caller never crashes the assembly.
 func TestHookDispatcher_EmitAfterStopCountsQueueFull(t *testing.T) {
 	cv := newSpyCounterVec()
-	d, err := newHookDispatcher(dispatcherConfig{Observer: cell.NopHookObserver{}, QueueSize: 4, SinkTimeout: time.Second, Provider: &spyProvider{cv: cv}})
-	require.NoError(t, err)
+	d := newHookDispatcher(dispatcherConfig{Observer: cell.NopHookObserver{}, QueueSize: 4, SinkTimeout: time.Second, Provider: &spyProvider{cv: cv}})
 
 	d.stop(200 * time.Millisecond)
 	// At least one emit after stop must still not panic; drop is counted.
@@ -277,8 +269,7 @@ func TestHookDispatcher_EmitAfterStopCountsQueueFull(t *testing.T) {
 // for). Returning false here would make clean-shutdown callers block or
 // retry for no gain.
 func TestHookDispatcher_FlushAfterStopReturnsTrue(t *testing.T) {
-	d, err := newHookDispatcher(dispatcherConfig{Observer: cell.NopHookObserver{}, QueueSize: 4, SinkTimeout: time.Second})
-	require.NoError(t, err)
+	d := newHookDispatcher(dispatcherConfig{Observer: cell.NopHookObserver{}, QueueSize: 4, SinkTimeout: time.Second})
 	d.stop(200 * time.Millisecond)
 
 	require.True(t, d.flush(200*time.Millisecond),
@@ -291,8 +282,7 @@ func TestHookDispatcher_FlushAfterStopReturnsTrue(t *testing.T) {
 // shared-timer behavior documented in flush().
 func TestHookDispatcher_FlushTimeoutThenSuccess(t *testing.T) {
 	bo := newBlockingObserver()
-	d, err := newHookDispatcher(dispatcherConfig{Observer: bo, QueueSize: 2, SinkTimeout: time.Second})
-	require.NoError(t, err)
+	d := newHookDispatcher(dispatcherConfig{Observer: bo, QueueSize: 2, SinkTimeout: time.Second})
 	t.Cleanup(func() {
 		bo.release()
 		d.stop(500 * time.Millisecond)

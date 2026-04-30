@@ -525,8 +525,7 @@ func findInsecureSkipVerifyAssign(path string) ([]int, error) {
 		}
 		// RHS: true — must be a pointer deref of AcceptOptions.InsecureSkipVerify via SelectorExpr
 		// or a direct BasicLit / Ident "true".
-		switch rhs := assign.Rhs[0].(type) {
-		case *ast.Ident:
+		if rhs, ok := assign.Rhs[0].(*ast.Ident); ok {
 			if rhs.Name == "true" {
 				lines = append(lines, fset.Position(assign.Pos()).Line)
 			}

@@ -113,6 +113,22 @@ func (e *Entry) DeadlineFor(phase TimeoutPhase) time.Time {
 // These constraints ensure that callers cannot bypass the state machine
 // by constructing an Entry with an arbitrary status or timestamps.
 func (e *Entry) ValidateNew() error {
+	if err := e.validateBaseFields(); err != nil {
+		return err
+	}
+	if err := e.validateStatus(); err != nil {
+		return err
+	}
+	if err := e.validateTimestamps(); err != nil {
+		return err
+	}
+	if err := e.validateTimeouts(); err != nil {
+		return err
+	}
+	return validateMetadata(e.Metadata)
+}
+
+func (e *Entry) validateBaseFields() error {
 	if e.ID == "" {
 		return errcode.New(errcode.ErrValidationFailed, "command: entry missing ID")
 	}
@@ -125,12 +141,20 @@ func (e *Entry) ValidateNew() error {
 	if len(e.Payload) == 0 {
 		return errcode.New(errcode.ErrValidationFailed, "command: entry missing Payload")
 	}
+	return nil
+}
+
+func (e *Entry) validateStatus() error {
 	if !e.Status.Valid() {
 		return errcode.New(errcode.ErrValidationFailed, "command: entry has invalid Status")
 	}
 	if e.Status != StatusPending {
 		return errcode.New(errcode.ErrValidationFailed, "command: new entry must have Pending status")
 	}
+	return nil
+}
+
+func (e *Entry) validateTimestamps() error {
 	if e.CreatedAt.IsZero() {
 		return errcode.New(errcode.ErrValidationFailed, "command: entry missing CreatedAt")
 	}
@@ -140,6 +164,10 @@ func (e *Entry) ValidateNew() error {
 	if e.Attempt != 0 {
 		return errcode.New(errcode.ErrValidationFailed, "command: new entry must have Attempt=0")
 	}
+	return nil
+}
+
+func (e *Entry) validateTimeouts() error {
 	if e.Timeouts.ScheduleToSend < 0 {
 		return errcode.New(errcode.ErrValidationFailed, "command: ScheduleToSend timeout must be non-negative")
 	}
@@ -148,9 +176,6 @@ func (e *Entry) ValidateNew() error {
 	}
 	if e.Timeouts.OverallDeadline < 0 {
 		return errcode.New(errcode.ErrValidationFailed, "command: OverallDeadline timeout must be non-negative")
-	}
-	if err := validateMetadata(e.Metadata); err != nil {
-		return err
 	}
 	return nil
 }

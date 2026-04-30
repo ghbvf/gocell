@@ -32,7 +32,7 @@ func TestToCommandResponse_ZeroEntry(t *testing.T) {
 }
 
 // setupCommandHandler creates a Handler and seeds a device so that command operations succeed.
-func setupCommandHandler() (*Handler, *mem.DeviceRepository, *commandtest.InMemQueue) {
+func setupCommandHandler() (*Handler, *commandtest.InMemQueue) {
 	devRepo := mem.NewDeviceRepository()
 	q := commandtest.NewInMemQueue()
 	codec, _ := query.NewCursorCodec(bytes.Repeat([]byte("k"), 32))
@@ -45,16 +45,16 @@ func setupCommandHandler() (*Handler, *mem.DeviceRepository, *commandtest.InMemQ
 		ID: "dev-1", Name: "sensor-a", Status: "online",
 	})
 
-	return NewHandler(svc), devRepo, q
+	return NewHandler(svc), q
 }
 
 // setupCommandMux creates a TestMux with policies registered via
 // Secured, used by trust boundary tests so that policy checks run as in production.
-func setupCommandMux() (http.Handler, *mem.DeviceRepository, *commandtest.InMemQueue) {
-	h, devRepo, q := setupCommandHandler()
+func setupCommandMux() (http.Handler, *commandtest.InMemQueue) {
+	h, q := setupCommandHandler()
 	mux := celltest.NewTestMux()
 	mux.Route("/api/v1/devices", func(sub cell.RouteMux) { h.RegisterRoutes(sub) })
-	return mux, devRepo, q
+	return mux, q
 }
 
 func TestHandleEnqueue(t *testing.T) {
@@ -126,7 +126,7 @@ func TestHandleEnqueue(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			h, _, _ := setupCommandHandler()
+			h, _ := setupCommandHandler()
 			w := httptest.NewRecorder()
 			req := httptest.NewRequest(http.MethodPost, "/api/v1/devices/"+tc.deviceID+"/commands", strings.NewReader(tc.body))
 			req.Header.Set("Content-Type", "application/json")
@@ -177,7 +177,7 @@ func TestHandleEnqueue_RoutePolicy(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			mux, _, _ := setupCommandMux()
+			mux, _ := setupCommandMux()
 			w := httptest.NewRecorder()
 			req := httptest.NewRequest(http.MethodPost, "/api/v1/devices/dev-1/commands", strings.NewReader(`{"payload":"reboot"}`))
 			req.Header.Set("Content-Type", "application/json")
@@ -190,7 +190,7 @@ func TestHandleEnqueue_RoutePolicy(t *testing.T) {
 }
 
 func TestHandleDequeue_InvalidLimit(t *testing.T) {
-	h, _, _ := setupCommandHandler()
+	h, _ := setupCommandHandler()
 	w := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/devices/dev-1/commands?limit=abc", nil)
 	req.SetPathValue("id", "dev-1")
@@ -202,7 +202,7 @@ func TestHandleDequeue_InvalidLimit(t *testing.T) {
 }
 
 func TestHandleDequeue_ExceedsMaxLimit(t *testing.T) {
-	h, _, _ := setupCommandHandler()
+	h, _ := setupCommandHandler()
 	w := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/devices/dev-1/commands?limit=501", nil)
 	req.SetPathValue("id", "dev-1")
@@ -245,7 +245,7 @@ func TestHandleDequeue(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			h, _, q := setupCommandHandler()
+			h, q := setupCommandHandler()
 			ctx := context.Background()
 			now := time.Now()
 			for i := range tc.seedCmds {
@@ -280,7 +280,7 @@ func TestHandleDequeue(t *testing.T) {
 }
 
 func TestHandleDequeue_ClaimBatches(t *testing.T) {
-	h, _, q := setupCommandHandler()
+	h, q := setupCommandHandler()
 	ctx := context.Background()
 	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	for i := range 7 {
@@ -345,7 +345,7 @@ func TestHandleScanActive_InvalidCursor(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			h, _, _ := setupCommandHandler()
+			h, _ := setupCommandHandler()
 			w := httptest.NewRecorder()
 			req := httptest.NewRequest(http.MethodGet, "/internal/v1/devicecommands?deviceId=dev-1&cursor="+tc.cursor, nil)
 			req = req.WithContext(auth.TestContext(auth.ServiceNameInternal, []string{auth.RoleInternalAdmin}))
@@ -383,7 +383,7 @@ func TestHandleAck(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			h, _, q := setupCommandHandler()
+			h, q := setupCommandHandler()
 			if tc.seedCmd {
 				ctx := context.Background()
 				_ = q.Enqueue(ctx, command.NewEntry(tc.cmdID, tc.deviceID, "reboot", []byte("x"), command.Timeouts{}, time.Now()), command.EnqueueOptions{})
@@ -414,7 +414,7 @@ func TestHandleAck(t *testing.T) {
 }
 
 func TestHandleAck_RejectsTimeoutReason(t *testing.T) {
-	h, _, q := setupCommandHandler()
+	h, q := setupCommandHandler()
 	ctx := context.Background()
 	require.NoError(t, q.Enqueue(ctx,
 		command.NewEntry("cmd-timeout", "dev-1", "reboot", []byte("x"), command.Timeouts{}, time.Now()),
@@ -438,7 +438,7 @@ func TestHandleAck_RejectsTimeoutReason(t *testing.T) {
 }
 
 func TestHandleAck_RejectsFailedAlias(t *testing.T) {
-	h, _, q := setupCommandHandler()
+	h, q := setupCommandHandler()
 	ctx := context.Background()
 	require.NoError(t, q.Enqueue(ctx,
 		command.NewEntry("cmd-failed-alias", "dev-1", "reboot", []byte("x"), command.Timeouts{}, time.Now()),
@@ -529,7 +529,7 @@ func TestHandleDequeue_RoutePolicy(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			mux, _, _ := setupCommandMux()
+			mux, _ := setupCommandMux()
 			w := httptest.NewRecorder()
 			req := httptest.NewRequest(http.MethodGet, "/api/v1/devices/"+tc.deviceID+"/commands", nil)
 			req = req.WithContext(auth.TestContext(tc.subject, tc.roles))
@@ -568,7 +568,7 @@ func TestHandleAck_RoutePolicy(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			mux, _, q := setupCommandMux()
+			mux, q := setupCommandMux()
 			ctx := context.Background()
 			_ = q.Enqueue(ctx, command.NewEntry("cmd-ack", "dev-1", "reboot", []byte("x"), command.Timeouts{}, time.Now()), command.EnqueueOptions{})
 			_, _ = q.Dequeue(ctx, "dev-1", 1, command.DefaultLeaseDuration)

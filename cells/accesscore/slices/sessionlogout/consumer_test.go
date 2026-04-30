@@ -38,8 +38,8 @@ func (r *errorSessionRepo) RevokeByUserID(_ context.Context, _ string) error {
 
 // --- helpers ---
 
-func validPayload(userID, roleID, action string) []byte {
-	return []byte(`{"userId":"` + userID + `","roleId":"` + roleID + `","action":"` + action + `"}`)
+func validPayload(userID string) []byte {
+	return []byte(`{"userId":"` + userID + `","roleId":"admin","action":"revoked"}`)
 }
 
 func makeEntry(id string, payload []byte) outbox.Entry {
@@ -56,7 +56,7 @@ func TestConsumer_HandleRoleChanged_HappyPath_ReturnsNil_CallsRevokeByUserID(t *
 	repo := &trackingSessionRepo{SessionRepository: mem.NewSessionRepository()}
 	c := NewConsumer(repo, slog.Default())
 
-	entry := makeEntry("evt-abc", validPayload("u1", "admin", "revoked"))
+	entry := makeEntry("evt-abc", validPayload("u1"))
 	err := c.HandleRoleChanged(context.Background(), entry)
 
 	require.NoError(t, err)
@@ -79,7 +79,7 @@ func TestConsumer_HandleRoleChanged_EmptyUserID_ReturnsPermanentError(t *testing
 	repo := &trackingSessionRepo{SessionRepository: mem.NewSessionRepository()}
 	c := NewConsumer(repo, slog.Default())
 
-	entry := makeEntry("evt-empty", validPayload("", "admin", "revoked"))
+	entry := makeEntry("evt-empty", validPayload(""))
 	err := c.HandleRoleChanged(context.Background(), entry)
 
 	require.Error(t, err)
@@ -92,7 +92,7 @@ func TestConsumer_HandleRoleChanged_TransientRepoError_ReturnsPlainError(t *test
 	repo := &errorSessionRepo{err: dbErr}
 	c := NewConsumer(repo, slog.Default())
 
-	entry := makeEntry("evt-transient", validPayload("u1", "admin", "revoked"))
+	entry := makeEntry("evt-transient", validPayload("u1"))
 	err := c.HandleRoleChanged(context.Background(), entry)
 
 	require.Error(t, err)
@@ -111,7 +111,7 @@ func TestConsumer_HandleRoleChanged_ReplayIdempotent_SecondCallSafe(t *testing.T
 	repo := &trackingSessionRepo{SessionRepository: mem.NewSessionRepository()}
 	c := NewConsumer(repo, slog.Default())
 
-	entry := makeEntry("evt-replay", validPayload("u1", "admin", "revoked"))
+	entry := makeEntry("evt-replay", validPayload("u1"))
 
 	// First call.
 	require.NoError(t, c.HandleRoleChanged(context.Background(), entry))
@@ -141,7 +141,7 @@ func TestConsumer_ViaWrapLegacyHandler_HappyPathMapsToAck(t *testing.T) {
 	c := NewConsumer(repo, slog.Default())
 	handler := outbox.WrapLegacyHandler(c.HandleRoleChanged)
 
-	entry := makeEntry("evt-ack", validPayload("u1", "admin", "revoked"))
+	entry := makeEntry("evt-ack", validPayload("u1"))
 	result := handler(context.Background(), entry)
 
 	assert.Equal(t, outbox.DispositionAck, result.Disposition)
@@ -154,7 +154,7 @@ func TestConsumer_ViaWrapLegacyHandler_TransientMapsToRequeue(t *testing.T) {
 	c := NewConsumer(repo, slog.Default())
 	handler := outbox.WrapLegacyHandler(c.HandleRoleChanged)
 
-	entry := makeEntry("evt-requeue", validPayload("u1", "admin", "revoked"))
+	entry := makeEntry("evt-requeue", validPayload("u1"))
 	result := handler(context.Background(), entry)
 
 	assert.Equal(t, outbox.DispositionRequeue, result.Disposition)

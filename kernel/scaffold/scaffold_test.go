@@ -760,16 +760,16 @@ func TestIntegration_CellSliceContractJourney(t *testing.T) {
 	}
 
 	// Spot-check content consistency.
-	cellContent := readGenerated(t, filepath.Join(root, "cells/order-core/cell.yaml"))
+	cellContent := readGenerated(t, filepath.Join(root, "cells", "order-core", "cell.yaml"))
 	assert.True(t, strings.Contains(cellContent, "id: order-core"))
 
-	sliceContent := readGenerated(t, filepath.Join(root, "cells/order-core/slices/ordercreate/slice.yaml"))
+	sliceContent := readGenerated(t, filepath.Join(root, "cells", "order-core", "slices", "ordercreate", "slice.yaml"))
 	assert.True(t, strings.Contains(sliceContent, "belongsToCell: order-core"))
 
-	contractContent := readGenerated(t, filepath.Join(root, "contracts/event/order/created/v1/contract.yaml"))
+	contractContent := readGenerated(t, filepath.Join(root, "contracts", "event", "order", "created", "v1", "contract.yaml"))
 	assert.True(t, strings.Contains(contractContent, "publisher: order-core"))
 
-	journeyContent := readGenerated(t, filepath.Join(root, "journeys/J-ordercheckout.yaml"))
+	journeyContent := readGenerated(t, filepath.Join(root, "journeys", "J-ordercheckout.yaml"))
 	assert.True(t, strings.Contains(journeyContent, "- order-core"))
 	assert.True(t, strings.Contains(journeyContent, "- billing-core"))
 }

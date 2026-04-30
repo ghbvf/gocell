@@ -348,7 +348,7 @@ func TestAuthPlan_CellsMustNotConstructAuthPlans(t *testing.T) {
 	}
 
 	// runtime/bootstrap/ is the authorized composition-wiring layer.
-	bootstrapPrefix := filepath.ToSlash(filepath.Join(root, "runtime/bootstrap")) + "/"
+	bootstrapPrefix := filepath.ToSlash(filepath.Join(root, "runtime", "bootstrap")) + "/"
 
 	type hit struct {
 		file string

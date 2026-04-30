@@ -17,7 +17,7 @@ import (
 // /metrics scrapers when a token is configured. Mirrors the X-Readyz-Token
 // convention for /readyz?verbose — keeping the same shape for all
 // control-plane endpoints lets operators standardize scraper config.
-const metricsTokenHeader = "X-Metrics-Token"
+const metricsTokenHeader = "X-Metrics-Token" //nolint:gosec // G101: metricsTokenHeader is the constant name (not a credential value)
 
 // withMetricsTokenGuard wraps h so requests without a matching
 // X-Metrics-Token header are rejected with 401 Unauthorized.
@@ -79,11 +79,11 @@ func buildPromStack() (promStack, error) {
 // this helper only concerns itself with handler construction.
 //
 // ref: Kubernetes metrics/rbac — control-plane endpoints must be guarded.
-func buildMetricsHandler(metricsToken string, registry *prom.Registry) (http.Handler, error) {
-	h := http.Handler(promhttp.HandlerFor(registry, promhttp.HandlerOpts{}))
+func buildMetricsHandler(metricsToken string, registry *prom.Registry) http.Handler {
+	h := promhttp.HandlerFor(registry, promhttp.HandlerOpts{})
 	if metricsToken != "" {
-		return withMetricsTokenGuard(metricsToken, h), nil
+		return withMetricsTokenGuard(metricsToken, h)
 	}
 	slog.Warn("GOCELL_METRICS_TOKEN not set; /metrics exposes cell lifecycle signals without authentication (dev mode only)")
-	return h, nil
+	return h
 }

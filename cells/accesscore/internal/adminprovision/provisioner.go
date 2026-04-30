@@ -90,7 +90,9 @@ type Provisioner struct {
 // NewProvisioner constructs a Provisioner. All dependencies are required;
 // passing nil returns an error so mis-wired assemblies fail at startup rather
 // than at the first Ensure call.
-func NewProvisioner(userRepo ports.UserRepository, roleRepo ports.RoleRepository, logger *slog.Logger, newID UUIDGenerator) (*Provisioner, error) {
+func NewProvisioner(
+	userRepo ports.UserRepository, roleRepo ports.RoleRepository, logger *slog.Logger, newID UUIDGenerator,
+) (*Provisioner, error) {
 	if userRepo == nil {
 		return nil, fmt.Errorf("adminprovision: UserRepository is required")
 	}

@@ -48,8 +48,16 @@ const negativeAssertionWindow = 200 * time.Millisecond
 // ref: ThreeDotsLabs/watermill pubsub/tests/test_pubsub.go
 func TestPubSub(t *testing.T, features Features, constructor PubSubConstructor) {
 	features.setDefaults()
+	runBatch1Subscribe(t, features, constructor)
+	runBatch2Disposition(t, features, constructor)
+	runBatch3PermanentError(t, features, constructor)
+	runBatch4Receipt(t, features, constructor)
+	runBatch5Lifecycle(t, features, constructor)
+	runBatch6Concurrency(t, features, constructor)
+}
 
-	// Batch 1: Core pub/sub
+// runBatch1Subscribe runs core pub/sub tests.
+func runBatch1Subscribe(t *testing.T, features Features, constructor PubSubConstructor) {
 	t.Run("PublishSubscribe", func(t *testing.T) {
 		testPublishSubscribe(t, features, constructor)
 	})
@@ -74,8 +82,10 @@ func TestPubSub(t *testing.T, features Features, constructor PubSubConstructor) 
 		}
 		testCompetingConsumers(t, features, constructor)
 	})
+}
 
-	// Batch 2: Disposition lifecycle
+// runBatch2Disposition runs disposition lifecycle tests.
+func runBatch2Disposition(t *testing.T, features Features, constructor PubSubConstructor) {
 	t.Run("DispositionAck", func(t *testing.T) {
 		testDispositionAck(t, features, constructor)
 	})
@@ -88,8 +98,10 @@ func TestPubSub(t *testing.T, features Features, constructor PubSubConstructor) 
 	t.Run("ZeroValueDisposition", func(t *testing.T) {
 		testZeroValueDisposition(t, features, constructor)
 	})
+}
 
-	// Batch 3: PermanentError + WrapLegacyHandler
+// runBatch3PermanentError runs PermanentError + WrapLegacyHandler tests.
+func runBatch3PermanentError(t *testing.T, features Features, constructor PubSubConstructor) {
 	t.Run("PermanentErrorCausesReject", func(t *testing.T) {
 		testPermanentErrorCausesReject(t, features, constructor)
 	})
@@ -102,8 +114,10 @@ func TestPubSub(t *testing.T, features Features, constructor PubSubConstructor) 
 	t.Run("WrapLegacyHandler_PermanentError", func(t *testing.T) {
 		testWrapLegacyHandlerPermanentError(t)
 	})
+}
 
-	// Batch 4: Receipt lifecycle
+// runBatch4Receipt runs receipt lifecycle tests.
+func runBatch4Receipt(t *testing.T, features Features, constructor PubSubConstructor) {
 	t.Run("ReceiptCommittedOnAck", func(t *testing.T) {
 		testReceiptCommittedOnAck(t, features, constructor)
 	})
@@ -116,8 +130,10 @@ func TestPubSub(t *testing.T, features Features, constructor PubSubConstructor) 
 	t.Run("ReceiptCommitFailureDoesNotAck", func(t *testing.T) {
 		testReceiptCommitFailureDoesNotAck(t, features, constructor)
 	})
+}
 
-	// Batch 5: Lifecycle
+// runBatch5Lifecycle runs subscriber lifecycle tests.
+func runBatch5Lifecycle(t *testing.T, features Features, constructor PubSubConstructor) {
 	t.Run("SubscribeBlocksUntilCancel", func(t *testing.T) {
 		testSubscribeBlocksUntilCancel(t, features, constructor)
 	})
@@ -130,8 +146,10 @@ func TestPubSub(t *testing.T, features Features, constructor PubSubConstructor) 
 	t.Run("PublishAfterClose", func(t *testing.T) {
 		testPublishAfterClose(t, constructor)
 	})
+}
 
-	// Batch 6: Concurrency + middleware
+// runBatch6Concurrency runs concurrency and middleware tests.
+func runBatch6Concurrency(t *testing.T, features Features, constructor PubSubConstructor) {
 	t.Run("ConcurrentPublish", func(t *testing.T) {
 		testConcurrentPublish(t, features, constructor)
 	})
