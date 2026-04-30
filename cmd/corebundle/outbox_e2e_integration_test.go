@@ -204,7 +204,7 @@ func TestOutboxE2E_PGMode_WriteToSubscribe(t *testing.T) {
 		accesscore.WithJWTIssuer(jwtIssuer),
 		accesscore.WithJWTVerifier(jwtVerifier),
 		accesscore.WithInitialAdminBootstrap(),
-		accesscore.WithRefreshMetricsProvider(kernelmetrics.NopProvider{}),
+		accesscore.WithMetricsProvider(kernelmetrics.NopProvider{}),
 	)
 	auditCell := auditcore.NewAuditCore(
 		auditcore.WithInMemoryDefaults(),
@@ -562,7 +562,7 @@ func TestOutboxE2E_RefetchLoop_AccessCoreCallsInternalGet(t *testing.T) {
 		accesscore.WithJWTIssuer(jwtIssuer),
 		accesscore.WithJWTVerifier(jwtVerifier),
 		accesscore.WithInitialAdminBootstrap(),
-		accesscore.WithRefreshMetricsProvider(kernelmetrics.NopProvider{}),
+		accesscore.WithMetricsProvider(kernelmetrics.NopProvider{}),
 		configgetter.WithHTTP(internalSrv.URL, testRing),
 	)
 	auditCell := auditcore.NewAuditCore(

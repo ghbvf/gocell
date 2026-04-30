@@ -154,7 +154,9 @@ func (c *ConfigCore) initPublishSlice() {
 }
 
 func (c *ConfigCore) initSubscribeSlice() {
-	c.subscribeSvc = configsubscribe.NewService(c.logger)
+	c.subscribeSvc = configsubscribe.NewService(c.logger,
+		configsubscribe.WithConfigEventCollector(c.configEventCollector),
+	)
 	c.AddSlice(cell.NewBaseSlice("configsubscribe", "configcore", cell.L3))
 }
 

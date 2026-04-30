@@ -19,6 +19,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/query"
+	obmetrics "github.com/ghbvf/gocell/runtime/observability/metrics"
 )
 
 // Compile-time interface checks.
@@ -93,6 +94,11 @@ func WithMetricsProvider(p metrics.Provider) Option {
 	return func(c *ConfigCore) { c.metricsProvider = p }
 }
 
+// WithConfigEventCollector injects config-event consumer process metrics.
+func WithConfigEventCollector(collector obmetrics.ConfigEventCollector) Option {
+	return func(c *ConfigCore) { c.configEventCollector = collector }
+}
+
 // WithCursorCodec sets the cursor codec for pagination.
 func WithCursorCodec(codec *query.CursorCodec) Option {
 	return func(c *ConfigCore) { c.cursorCodec = codec }
@@ -120,10 +126,11 @@ type ConfigCore struct {
 	pendingOutboxPub    outbox.Publisher
 	pendingOutboxWriter outbox.Writer
 
-	txRunner        persistence.TxRunner
-	cursorCodec     *query.CursorCodec
-	logger          *slog.Logger
-	metricsProvider metrics.Provider
+	txRunner             persistence.TxRunner
+	cursorCodec          *query.CursorCodec
+	logger               *slog.Logger
+	metricsProvider      metrics.Provider
+	configEventCollector obmetrics.ConfigEventCollector
 
 	// Slice services and handlers.
 	writeHandler     *configwrite.Handler

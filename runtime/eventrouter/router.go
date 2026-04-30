@@ -18,6 +18,7 @@ package eventrouter
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"sync"
@@ -63,6 +64,7 @@ type handlerConfig struct {
 	topic         string
 	handler       outbox.EntryHandler
 	consumerGroup string
+	sliceID       string
 	contract      wrapper.ContractSpec
 }
 
@@ -74,6 +76,7 @@ type handlerConfig struct {
 type Router struct {
 	subscriber   outbox.Subscriber
 	handlers     []handlerConfig
+	validators   []cell.SubscriptionValidator
 	mu           sync.Mutex
 	readyTimeout time.Duration
 	running      chan struct{}
@@ -87,8 +90,9 @@ type Router struct {
 	healthErr    error
 }
 
-// Compile-time interface check.
+// Compile-time interface checks.
 var _ cell.EventRouter = (*Router)(nil)
+var _ cell.SubscriptionValidatorAdder = (*Router)(nil)
 
 // New creates a Router that will use the given Subscriber for all subscriptions.
 func New(sub outbox.Subscriber, opts ...Option) *Router {
@@ -116,7 +120,7 @@ func New(sub outbox.Subscriber, opts ...Option) *Router {
 // spec is malformed, or kernel/cell.EventRouter contract is otherwise
 // violated; callers (Cell.RegisterSubscriptions) should propagate the error
 // to the bootstrap phase5 walker.
-func (r *Router) AddContractHandler(spec wrapper.ContractSpec, handler outbox.EntryHandler, consumerGroup string) error {
+func (r *Router) AddContractHandler(spec wrapper.ContractSpec, handler outbox.EntryHandler, consumerGroup string, opts ...cell.SubscriptionOption) error {
 	if handler == nil {
 		return fmt.Errorf("eventrouter: AddContractHandler called with nil handler")
 	}
@@ -129,15 +133,63 @@ func (r *Router) AddContractHandler(spec wrapper.ContractSpec, handler outbox.En
 	if err := spec.Validate(); err != nil {
 		return fmt.Errorf("eventrouter: AddContractHandler: %w", err)
 	}
+	var subOpts cell.SubscriptionOptions
+	for _, opt := range opts {
+		if opt != nil {
+			opt(&subOpts)
+		}
+	}
+
+	// Build a representative Subscription so validators can inspect all fields.
+	// Validators run outside the lock to avoid holding the subscription store
+	// during potentially slow or user-provided checks.
+	candidateSub := outbox.Subscription{
+		Topic:         spec.Topic,
+		ConsumerGroup: consumerGroup,
+		CellID:        consumerGroup, // eventrouter uses consumerGroup as CellID
+		SliceID:       subOpts.SliceID,
+	}
+	r.mu.Lock()
+	currentValidators := make([]cell.SubscriptionValidator, len(r.validators))
+	copy(currentValidators, r.validators)
+	r.mu.Unlock()
+
+	var validationErrs []error
+	for _, v := range currentValidators {
+		if v == nil {
+			continue
+		}
+		if err := v(candidateSub); err != nil {
+			validationErrs = append(validationErrs, err)
+		}
+	}
+	if joined := errors.Join(validationErrs...); joined != nil {
+		return fmt.Errorf("eventrouter: subscription validation failed for topic %q: %w", spec.Topic, joined)
+	}
+
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.handlers = append(r.handlers, handlerConfig{
 		topic:         spec.Topic,
 		handler:       handler,
 		consumerGroup: consumerGroup,
+		sliceID:       subOpts.SliceID,
 		contract:      spec,
 	})
 	return nil
+}
+
+// AddSubscriptionValidator registers a validator that is invoked for every
+// subsequent AddContractHandler call. Validators run outside the Router lock so
+// a slow or panicking validator does not hold the subscription store.
+// A nil validator is silently ignored.
+func (r *Router) AddSubscriptionValidator(v cell.SubscriptionValidator) {
+	if v == nil {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.validators = append(r.validators, v)
 }
 
 // errAlreadyRunning is returned if Run is called more than once.
@@ -362,6 +414,7 @@ func (h handlerConfig) subscription() outbox.Subscription {
 		Topic:         h.topic,
 		ConsumerGroup: h.consumerGroup,
 		CellID:        h.consumerGroup,
+		SliceID:       h.sliceID,
 	}
 	if h.contract.ID != "" {
 		sub.ContractID = h.contract.ID

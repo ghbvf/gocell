@@ -73,7 +73,7 @@ func TestSetupEndpoints_FirstRunFlow(t *testing.T) {
 		accesscore.WithJWTIssuer(jwtIssuer),
 		accesscore.WithJWTVerifier(jwtVerifier),
 		accesscore.WithTxManager(noopTxRunner{}),
-		accesscore.WithRefreshMetricsProvider(metrics.NopProvider{}),
+		accesscore.WithMetricsProvider(metrics.NopProvider{}),
 	)
 	cc := configcore.NewConfigCore(
 		configcore.WithInMemoryDefaults(),

@@ -47,6 +47,16 @@ func TestBuild_CorebundleCapturesReachableTypedMetrics(t *testing.T) {
 	assert.Equal(t, "gocell_outbox_relayed_total", outboxRelayed.FQName)
 	assert.Equal(t, "cmd/corebundle/bundle.go", outboxRelayed.File)
 
+	configEventProcess := requireMetric(t, schema, "config_event_process_total")
+	assert.Equal(t, []string{"cell", "slice", "reason"}, configEventProcess.Labels)
+	assert.Equal(t, "gocell_config_event_process_total", configEventProcess.FQName)
+	assert.Equal(t, "cmd/corebundle/shared_deps.go", configEventProcess.File)
+
+	configEventSettlement := requireMetric(t, schema, "config_event_settlement_total")
+	assert.Equal(t, []string{"cell", "slice", "disposition", "result"}, configEventSettlement.Labels)
+	assert.Equal(t, "gocell_config_event_settlement_total", configEventSettlement.FQName)
+	assert.Equal(t, "cmd/corebundle/shared_deps.go", configEventSettlement.File)
+
 	httpDuration := requireMetric(t, schema, "http_request_duration_seconds")
 	assert.Equal(t, []string{".005", ".01", ".025", ".05", ".1", ".25", ".5", "1", "2.5", "5", "10"}, httpDuration.Buckets)
 	assert.Empty(t, httpDuration.BucketSource)

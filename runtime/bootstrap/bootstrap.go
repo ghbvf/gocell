@@ -91,12 +91,13 @@ type Bootstrap struct {
 	readyzDeadline        time.Duration
 
 	// --- events: outbox pubsub + event router + workers ---
-	workers               []worker.Worker
-	publisher             outbox.Publisher
-	subscriber            outbox.Subscriber
-	consumerMiddleware    []outbox.SubscriptionMiddleware
-	routerReadyTimeout    time.Duration
-	routerReadyTimeoutSet bool
+	workers                []worker.Worker
+	publisher              outbox.Publisher
+	subscriber             outbox.Subscriber
+	consumerMiddleware     []outbox.SubscriptionMiddleware
+	routerReadyTimeout     time.Duration
+	routerReadyTimeoutSet  bool
+	subscriptionValidators []cell.SubscriptionValidator
 
 	// --- lifecycle: kernel/cell Lifecycle + ManagedResource + shutdown budgets ---
 	lifecycle                Lifecycle

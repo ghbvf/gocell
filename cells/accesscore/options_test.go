@@ -121,7 +121,7 @@ func TestHealthCheckers_WithDirectEmitter(t *testing.T) {
 		WithJWTIssuer(testIssuer),
 		WithJWTVerifier(testVerifier),
 		WithOutboxDeps(eventbus.New(), nil),
-		WithRefreshMetricsProvider(metrics.NopProvider{}),
+		WithMetricsProvider(metrics.NopProvider{}),
 	)
 	deps := cell.Dependencies{Config: make(map[string]any), DurabilityMode: cell.DurabilityDemo}
 	require.NoError(t, c.Init(context.Background(), deps))

@@ -13,6 +13,7 @@ package bootstrap
 import (
 	"time"
 
+	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/runtime/worker"
 )
@@ -73,5 +74,21 @@ func WithEventRouterReadyTimeout(d time.Duration) Option {
 	return func(b *Bootstrap) {
 		b.routerReadyTimeoutSet = true
 		b.routerReadyTimeout = d
+	}
+}
+
+// WithSubscriptionValidator registers a registration-time subscription
+// validator that is invoked by the EventRouter for every
+// Cell.RegisterSubscriptions call. A non-nil error from any validator
+// fails the subscription registration and surfaces during phase6 startup.
+//
+// Composition roots use this to enforce domain-specific invariants without
+// polluting Cell code with infrastructure concerns. Nil validators are silently
+// ignored.
+//
+// ref: Finding 2 (PR #334 L4) — fail at registration boundary, not delivery time.
+func WithSubscriptionValidator(v ...cell.SubscriptionValidator) Option {
+	return func(b *Bootstrap) {
+		b.subscriptionValidators = append(b.subscriptionValidators, v...)
 	}
 }

@@ -76,7 +76,7 @@ func TestAuthWiring_RealAssembly_ProtectedRoutes401(t *testing.T) {
 		accesscore.WithJWTIssuer(jwtIssuer),
 		accesscore.WithJWTVerifier(jwtVerifier),
 		accesscore.WithTxManager(noopTxRunner{}),
-		accesscore.WithRefreshMetricsProvider(metrics.NopProvider{}),
+		accesscore.WithMetricsProvider(metrics.NopProvider{}),
 	)
 	cc := configcore.NewConfigCore(
 		configcore.WithInMemoryDefaults(),
@@ -286,7 +286,7 @@ func TestAuthWiring_InternalGuard_RequiresServiceToken(t *testing.T) {
 		accesscore.WithJWTIssuer(jwtIssuer),
 		accesscore.WithJWTVerifier(jwtVerifier),
 		accesscore.WithTxManager(noopTxRunner{}),
-		accesscore.WithRefreshMetricsProvider(metrics.NopProvider{}),
+		accesscore.WithMetricsProvider(metrics.NopProvider{}),
 	)
 	cc := configcore.NewConfigCore(
 		configcore.WithInMemoryDefaults(),
@@ -504,7 +504,7 @@ func TestAuthWiring_HealthListener_PrimaryDoesNotServeHealthz(t *testing.T) {
 		accesscore.WithJWTIssuer(jwtIssuer),
 		accesscore.WithJWTVerifier(jwtVerifier),
 		accesscore.WithTxManager(noopTxRunner{}),
-		accesscore.WithRefreshMetricsProvider(metrics.NopProvider{}),
+		accesscore.WithMetricsProvider(metrics.NopProvider{}),
 	)
 	cc := configcore.NewConfigCore(
 		configcore.WithInMemoryDefaults(),

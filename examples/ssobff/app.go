@@ -156,7 +156,7 @@ func NewSSOBFFApp(opts ...SSOBFFAppOption) (*SSOBFFApp, error) {
 		accesscore.WithJWTVerifier(jwtVerifier),
 		accesscore.WithTxManager(persistence.NoopTxRunner{}),
 		accesscore.WithLogger(cfg.logger),
-		accesscore.WithRefreshMetricsProvider(metrics.NopProvider{}),
+		accesscore.WithMetricsProvider(metrics.NopProvider{}),
 	)
 
 	// Demo only: HMAC and cursor keys are public source constants. Production

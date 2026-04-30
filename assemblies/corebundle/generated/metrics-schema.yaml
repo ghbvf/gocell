@@ -167,6 +167,27 @@ metrics:
         - hook
         - outcome
       file: cmd/corebundle/metrics.go
+    - name: config_event_process_total
+      fqName: gocell_config_event_process_total
+      namespace: gocell
+      type: counter
+      help: Total number of config event handler process results, partitioned by reason.
+      labels:
+        - cell
+        - slice
+        - reason
+      file: cmd/corebundle/shared_deps.go
+    - name: config_event_settlement_total
+      fqName: gocell_config_event_settlement_total
+      namespace: gocell
+      type: counter
+      help: Total number of config event delivery settlements, partitioned by disposition and result.
+      labels:
+        - cell
+        - slice
+        - disposition
+        - result
+      file: cmd/corebundle/shared_deps.go
     - name: hook_observer_dropped_total
       fqName: gocell_hook_observer_dropped_total
       namespace: gocell

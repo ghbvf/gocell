@@ -37,7 +37,7 @@ func TestAccessCoreInit_InitialAdminUnsupportedPlatform_FailFast(t *testing.T) {
 		WithJWTIssuer(testIssuer),
 		WithJWTVerifier(testVerifier),
 		WithRefreshStore(newTestRefreshStore()),
-		WithRefreshMetricsProvider(metrics.NopProvider{}),
+		WithMetricsProvider(metrics.NopProvider{}),
 		WithInitialAdminBootstrap(),
 	)
 
@@ -64,7 +64,7 @@ func TestAccessCoreInit_InitialAdminNotConfigured_NoCheck(t *testing.T) {
 		WithJWTIssuer(testIssuer),
 		WithJWTVerifier(testVerifier),
 		WithRefreshStore(newTestRefreshStore()),
-		WithRefreshMetricsProvider(metrics.NopProvider{}),
+		WithMetricsProvider(metrics.NopProvider{}),
 	)
 
 	require.NoError(t, ac.Init(context.Background(), unsupportedDeps()),

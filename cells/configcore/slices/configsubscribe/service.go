@@ -15,6 +15,7 @@ import (
 
 	configevents "github.com/ghbvf/gocell/cells/configcore/internal/events"
 	"github.com/ghbvf/gocell/kernel/outbox"
+	obmetrics "github.com/ghbvf/gocell/runtime/observability/metrics"
 )
 
 // cacheEntry tracks the highest version seen for a config key plus a presence
@@ -74,21 +75,47 @@ func (c *Cache) Len() int {
 
 // Service consumes config change events and maintains a local version-tracking cache.
 type Service struct {
-	cache  *Cache
-	logger *slog.Logger
+	cache                *Cache
+	logger               *slog.Logger
+	configEventCollector obmetrics.ConfigEventCollector
+}
+
+// Option configures a configsubscribe Service.
+type Option func(*Service)
+
+// WithConfigEventCollector injects config event process metrics.
+func WithConfigEventCollector(c obmetrics.ConfigEventCollector) Option {
+	return func(s *Service) {
+		if c == nil {
+			c = obmetrics.NoopConfigEventCollector{}
+		}
+		s.configEventCollector = c
+	}
 }
 
 // NewService creates a config-subscribe Service.
-func NewService(logger *slog.Logger) *Service {
-	return &Service{
-		cache:  &Cache{entries: make(map[string]cacheEntry)},
-		logger: logger,
+func NewService(logger *slog.Logger, opts ...Option) *Service {
+	s := &Service{
+		cache:                &Cache{entries: make(map[string]cacheEntry)},
+		logger:               logger,
+		configEventCollector: obmetrics.NoopConfigEventCollector{},
 	}
+	for _, o := range opts {
+		o(s)
+	}
+	return s
 }
 
 // Cache returns the local config cache for reading.
 func (s *Service) Cache() *Cache {
 	return s.cache
+}
+
+func (s *Service) recordConfigEventProcess(ctx context.Context, reason obmetrics.ConfigEventProcessReason) {
+	if s.configEventCollector == nil {
+		return
+	}
+	obmetrics.RecordConfigEventProcess(ctx, s.configEventCollector, reason)
 }
 
 // HandleEntryUpserted processes an event.config.entry-upserted.v1 event.
@@ -102,11 +129,12 @@ func (s *Service) Cache() *Cache {
 // Idempotency: Claimer (two-phase Claim/Commit/Release), TTL 24h
 // Disposition: Ack on success / Requeue on transient / Reject on permanent
 // DLX: broker-native via DispositionReject → Nack(requeue=false)
-func (s *Service) HandleEntryUpserted(_ context.Context, entry outbox.Entry) error {
+func (s *Service) HandleEntryUpserted(ctx context.Context, entry outbox.Entry) error {
 	event, err := configevents.DecodeEntryUpserted(entry.Payload)
 	if err != nil {
 		s.logger.Error("config-subscribe: failed to unmarshal entry-upserted event, routing to dead letter",
 			slog.Any("error", err), slog.String("entry_id", entry.ID))
+		s.recordConfigEventProcess(ctx, obmetrics.ConfigEventProcessReasonPermanentError)
 		return outbox.NewPermanentError(fmt.Errorf("config-subscribe: unmarshal entry-upserted payload: %w", err))
 	}
 
@@ -118,6 +146,7 @@ func (s *Service) HandleEntryUpserted(_ context.Context, entry outbox.Entry) err
 			slog.String("key", event.Key),
 			slog.Int("incoming_version", event.Version),
 			slog.Int("known_version", known.version))
+		s.recordConfigEventProcess(ctx, obmetrics.ConfigEventProcessReasonStale)
 		return nil
 	}
 	s.cache.entries[event.Key] = cacheEntry{version: event.Version, present: true}
@@ -125,6 +154,7 @@ func (s *Service) HandleEntryUpserted(_ context.Context, entry outbox.Entry) err
 	s.logger.Debug("config-subscribe: cache updated",
 		slog.String("key", event.Key),
 		slog.Int("version", event.Version))
+	s.recordConfigEventProcess(ctx, obmetrics.ConfigEventProcessReasonAck)
 	return nil
 }
 
@@ -143,27 +173,28 @@ func (s *Service) HandleEntryUpserted(_ context.Context, entry outbox.Entry) err
 // Idempotency: Claimer (two-phase Claim/Commit/Release), TTL 24h
 // Disposition: Ack on success / Requeue on transient / Reject on permanent
 // DLX: broker-native via DispositionReject → Nack(requeue=false)
-func (s *Service) HandleEntryDeleted(_ context.Context, entry outbox.Entry) error {
+func (s *Service) HandleEntryDeleted(ctx context.Context, entry outbox.Entry) error {
 	event, err := configevents.DecodeEntryDeleted(entry.Payload)
 	if err != nil {
 		s.logger.Error("config-subscribe: failed to unmarshal entry-deleted event, routing to dead letter",
 			slog.Any("error", err), slog.String("entry_id", entry.ID))
+		s.recordConfigEventProcess(ctx, obmetrics.ConfigEventProcessReasonPermanentError)
 		return outbox.NewPermanentError(fmt.Errorf("config-subscribe: unmarshal entry-deleted payload: %w", err))
 	}
 
 	s.cache.mu.Lock()
-	known := s.cache.entries[event.Key]
-	// Stale-delete guard: drop if event.Version < known.version.
-	// A delete at version V must be accepted when V >= known.version:
-	//   - V == known.version: this is the delete of the currently known entry.
-	//   - V > known.version: a newer delete (e.g. key re-created and deleted again).
-	// Only V < known.version is truly stale (a delete that predates a newer upsert).
-	if event.Version < known.version {
+	known, exists := s.cache.entries[event.Key]
+	// Stale-delete guard: drop if the delete predates known state, or if it is
+	// replaying the same tombstone that was already accepted.
+	// A same-version delete is still accepted when the known entry is present:
+	// it is the delete of that currently known entry.
+	if event.Version < known.version || (exists && event.Version == known.version && !known.present) {
 		s.cache.mu.Unlock()
-		s.logger.Debug("config-subscribe: stale entry-deleted ignored (predates a newer upsert)",
+		s.logger.Debug("config-subscribe: stale entry-deleted ignored",
 			slog.String("key", event.Key),
 			slog.Int("incoming_version", event.Version),
 			slog.Int("known_version", known.version))
+		s.recordConfigEventProcess(ctx, obmetrics.ConfigEventProcessReasonStale)
 		return nil
 	}
 	s.cache.entries[event.Key] = cacheEntry{version: event.Version, present: false}
@@ -171,5 +202,6 @@ func (s *Service) HandleEntryDeleted(_ context.Context, entry outbox.Entry) erro
 	s.logger.Debug("config-subscribe: key tombstoned in cache",
 		slog.String("key", event.Key),
 		slog.Int("version", event.Version))
+	s.recordConfigEventProcess(ctx, obmetrics.ConfigEventProcessReasonAck)
 	return nil
 }

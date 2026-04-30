@@ -97,7 +97,7 @@ func newTestCell() *AccessCore {
 		WithRefreshStore(newTestRefreshStore()),
 		WithOutboxDeps(nil, outbox.NoopWriter{}),
 		WithTxManager(persistence.NoopTxRunner{}),
-		WithRefreshMetricsProvider(metrics.NopProvider{}),
+		WithMetricsProvider(metrics.NopProvider{}),
 	)
 }
 
@@ -125,7 +125,7 @@ func TestAccessCore_Init_RequiresJWTIssuer(t *testing.T) {
 		WithJWTVerifier(testVerifier), // issuer missing
 		WithOutboxDeps(nil, outbox.NoopWriter{}),
 		WithTxManager(persistence.NoopTxRunner{}),
-		WithRefreshMetricsProvider(metrics.NopProvider{}),
+		WithMetricsProvider(metrics.NopProvider{}),
 	)
 	err := c.Init(context.Background(), cell.Dependencies{Config: make(map[string]any), DurabilityMode: cell.DurabilityDemo})
 	require.Error(t, err)
@@ -141,7 +141,7 @@ func TestAccessCore_Init_RequiresJWTVerifier(t *testing.T) {
 		WithJWTIssuer(testIssuer), // verifier missing
 		WithOutboxDeps(nil, outbox.NoopWriter{}),
 		WithTxManager(persistence.NoopTxRunner{}),
-		WithRefreshMetricsProvider(metrics.NopProvider{}),
+		WithMetricsProvider(metrics.NopProvider{}),
 	)
 	err := c.Init(context.Background(), cell.Dependencies{Config: make(map[string]any), DurabilityMode: cell.DurabilityDemo})
 	require.Error(t, err)
@@ -154,7 +154,7 @@ func TestAccessCore_Init_RequiresRepositoriesBeforeSliceConstruction(t *testing.
 		WithJWTIssuer(testIssuer),
 		WithJWTVerifier(testVerifier),
 		WithRefreshStore(newTestRefreshStore()),
-		WithRefreshMetricsProvider(metrics.NopProvider{}),
+		WithMetricsProvider(metrics.NopProvider{}),
 	)
 
 	var err error
@@ -224,7 +224,7 @@ func TestInit_DemoMode_WithPublisher_Succeeds(t *testing.T) {
 		WithOutboxDeps(eventbus.New(), nil),
 		WithJWTIssuer(testIssuer),
 		WithJWTVerifier(testVerifier),
-		WithRefreshMetricsProvider(metrics.NopProvider{}),
+		WithMetricsProvider(metrics.NopProvider{}),
 	)
 	err := c.Init(context.Background(), cell.Dependencies{Config: make(map[string]any), DurabilityMode: cell.DurabilityDemo})
 	require.NoError(t, err)
@@ -743,7 +743,7 @@ func TestAccessCore_SessionRevocation_E2E(t *testing.T) {
 		WithRefreshStore(newTestRefreshStore()),
 		WithOutboxDeps(nil, outbox.NoopWriter{}),
 		WithTxManager(persistence.NoopTxRunner{}),
-		WithRefreshMetricsProvider(metrics.NopProvider{}),
+		WithMetricsProvider(metrics.NopProvider{}),
 	)
 	ctx := context.Background()
 	require.NoError(t, c.Init(ctx, cell.Dependencies{Config: make(map[string]any), DurabilityMode: cell.DurabilityDemo}))
@@ -825,7 +825,7 @@ func TestAccessCore_RefreshTokenRevocation_E2E(t *testing.T) {
 		WithRefreshStore(newTestRefreshStore()),
 		WithOutboxDeps(nil, outbox.NoopWriter{}),
 		WithTxManager(persistence.NoopTxRunner{}),
-		WithRefreshMetricsProvider(metrics.NopProvider{}),
+		WithMetricsProvider(metrics.NopProvider{}),
 	)
 	ctx := context.Background()
 	require.NoError(t, c.Init(ctx, cell.Dependencies{Config: make(map[string]any), DurabilityMode: cell.DurabilityDemo}))
@@ -950,7 +950,7 @@ func TestAccessCore_DirectPrefill_AdminRoleAndUser(t *testing.T) {
 		WithRefreshStore(newTestRefreshStore()),
 		WithOutboxDeps(nil, outbox.NoopWriter{}),
 		WithTxManager(persistence.NoopTxRunner{}),
-		WithRefreshMetricsProvider(metrics.NopProvider{}),
+		WithMetricsProvider(metrics.NopProvider{}),
 	)
 	require.NoError(t, c.Init(ctx, deps))
 
@@ -994,7 +994,7 @@ func TestAccessCore_PasswordResetExempt_PropagatesViaRouter(t *testing.T) {
 		WithJWTVerifier(testVerifier),
 		WithOutboxDeps(nil, outbox.NoopWriter{}),
 		WithTxManager(persistence.NoopTxRunner{}),
-		WithRefreshMetricsProvider(metrics.NopProvider{}),
+		WithMetricsProvider(metrics.NopProvider{}),
 	)
 	ctx := context.Background()
 	require.NoError(t, c.Init(ctx, cell.Dependencies{

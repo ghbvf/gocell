@@ -1066,6 +1066,58 @@ func TestSubscriberWithMiddleware_StopIntake_InnerNotStopper(t *testing.T) {
 	assert.NoError(t, err, "StopIntake must return nil when inner does not implement SubscriberIntakeStopper")
 }
 
+// TestNotifySettlement_ObserverPanic_DoesNotKillCaller verifies that a panicking
+// observer does not propagate the panic to the caller and that subsequent
+// observers in the chain are still notified.
+//
+// ref: Finding 3 — observer panic isolation (PR #334 L4 review)
+func TestNotifySettlement_ObserverPanic_DoesNotKillCaller(t *testing.T) {
+	// Do NOT call t.Parallel(): this test mutates the global slog default logger
+	// and must not race with other tests that also call slog.SetDefault.
+
+	// Save the original default logger and restore it after the test so that
+	// parallel or sequential sibling tests see the expected global state.
+	originalLogger := slog.Default()
+	t.Cleanup(func() { slog.SetDefault(originalLogger) })
+
+	// Capture slog output to verify the panic is logged.
+	var logBuf bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	slog.SetDefault(logger)
+
+	var spy1Called, spy3Called bool
+
+	spy1 := SettlementObserverFunc(func(_ context.Context, _ SettlementObservation) {
+		spy1Called = true
+	})
+	panicObserver := SettlementObserverFunc(func(_ context.Context, _ SettlementObservation) {
+		panic("observer panicked intentionally")
+	})
+	spy3 := SettlementObserverFunc(func(_ context.Context, _ SettlementObservation) {
+		spy3Called = true
+	})
+
+	result := HandleResult{
+		Disposition:         DispositionAck,
+		SettlementObservers: []SettlementObserver{spy1, panicObserver, spy3},
+	}
+	entry := Entry{ID: "test-panic-entry", Topic: "event.test.v1"}
+
+	// Verify NotifySettlement does not re-panic.
+	defer func() {
+		if r := recover(); r != nil {
+			t.Fatalf("NotifySettlement must not propagate observer panic, got: %v", r)
+		}
+	}()
+
+	NotifySettlement(context.Background(), result, entry, DispositionAck, SettlementResultSuccess, nil)
+
+	assert.True(t, spy1Called, "spy1 (before panic observer) must be called")
+	assert.True(t, spy3Called, "spy3 (after panic observer) must still be called after panic isolation")
+	assert.Contains(t, logBuf.String(), "settlement observer panicked",
+		"panic must be logged with structured message")
+}
+
 func TestDiscardPublisher_TypedNil_NoPanic(t *testing.T) {
 	// Typed nil: interface is non-nil but underlying pointer is nil.
 	// Must not panic — this is the key regression from value→pointer migration.

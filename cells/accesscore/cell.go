@@ -28,6 +28,7 @@ import (
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/auth/refresh"
 	refreshmem "github.com/ghbvf/gocell/runtime/auth/refresh/memstore"
+	obmetrics "github.com/ghbvf/gocell/runtime/observability/metrics"
 )
 
 const (
@@ -161,12 +162,15 @@ func WithRefreshGC(interval, retention time.Duration) Option {
 	}
 }
 
-// WithRefreshMetricsProvider sets the metrics provider used by the refresh-token
-// GC worker. This is distinct from WithMetricsProvider (on auditcore/configcore)
-// which wires a metrics.Provider into the outbox DirectEmitter: refresh GC uses
-// the provider for GC-specific counters only and does not affect event publishing.
-func WithRefreshMetricsProvider(p metrics.Provider) Option {
+// WithMetricsProvider sets the metrics provider used by the DirectEmitter and
+// refresh-token GC worker.
+func WithMetricsProvider(p metrics.Provider) Option {
 	return func(c *AccessCore) { c.metricsProvider = p }
+}
+
+// WithConfigEventCollector injects config-event consumer process metrics.
+func WithConfigEventCollector(collector obmetrics.ConfigEventCollector) Option {
+	return func(c *AccessCore) { c.configEventCollector = collector }
 }
 
 // WithInMemoryDefaults configures in-memory repositories for development
@@ -227,12 +231,13 @@ type AccessCore struct {
 	jwtVerifier *auth.JWTVerifier
 	cursorCodec *query.CursorCodec
 
-	metricsProvider    metrics.Provider
-	refreshGCEnabled   bool
-	refreshGCInterval  time.Duration
-	refreshGCRetention time.Duration
-	refreshGCCollector refresh.GCCollector
-	refreshGC          *refresh.GCWorker
+	metricsProvider      metrics.Provider
+	configEventCollector obmetrics.ConfigEventCollector
+	refreshGCEnabled     bool
+	refreshGCInterval    time.Duration
+	refreshGCRetention   time.Duration
+	refreshGCCollector   refresh.GCCollector
+	refreshGC            *refresh.GCWorker
 
 	// initialAdmin wires first-run admin bootstrap via LifecycleContributor;
 	// nil means the feature is disabled.

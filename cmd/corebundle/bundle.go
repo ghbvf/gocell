@@ -20,6 +20,7 @@ import (
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/runtime/bootstrap"
 	"github.com/ghbvf/gocell/runtime/crypto"
+	obmetrics "github.com/ghbvf/gocell/runtime/observability/metrics"
 	outboxruntime "github.com/ghbvf/gocell/runtime/outbox"
 )
 
@@ -80,7 +81,8 @@ func runtimeBaseOptions(
 		bootstrap.WithAssembly(asm),
 		bootstrap.WithPublisher(shared.EventBus),
 		bootstrap.WithSubscriber(shared.EventBus),
-		bootstrap.WithConsumerMiddleware(consumerBase.AsMiddleware()),
+		bootstrap.WithConsumerMiddleware(consumerMiddlewares(shared, consumerBase)...),
+		bootstrap.WithSubscriptionValidator(obmetrics.ConfigEventOwnerValidator),
 		bootstrap.WithAdapterInfo(adapterInfo),
 		bootstrap.WithHealthRoutes(healthRouteOpts...),
 		bootstrap.WithMetricsProvider(shared.PromStack.metricProvider),
@@ -92,6 +94,17 @@ func runtimeBaseOptions(
 		)
 	}
 	return opts
+}
+
+func consumerMiddlewares(shared *SharedDeps, consumerBase *outbox.ConsumerBase) []outbox.SubscriptionMiddleware {
+	return []outbox.SubscriptionMiddleware{
+		configEventConsumerMiddleware(shared.ConfigEventCollector),
+		consumerBase.AsMiddleware(),
+	}
+}
+
+func configEventConsumerMiddleware(collector obmetrics.ConfigEventCollector) outbox.SubscriptionMiddleware {
+	return obmetrics.ConfigEventMiddleware(collector)
 }
 
 // defaultRuntimeOptions constructs the ordered bootstrap.Option slice from the

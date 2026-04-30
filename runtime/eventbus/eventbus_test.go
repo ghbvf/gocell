@@ -1233,6 +1233,133 @@ func TestReleaseReceipt_FailedRelease_LogsError(t *testing.T) {
 	<-done
 }
 
+// ---------------------------------------------------------------------------
+// Settlement observer spy tests (Finding 3 — end-to-end observer assertions)
+// ---------------------------------------------------------------------------
+
+// spySettlementObserver records SettlementObservations for assertions.
+type spySettlementObserver struct {
+	mu  sync.Mutex
+	obs []outbox.SettlementObservation
+}
+
+func (s *spySettlementObserver) ObserveSettlement(_ context.Context, o outbox.SettlementObservation) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.obs = append(s.obs, o)
+}
+
+func (s *spySettlementObserver) len() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return len(s.obs)
+}
+
+func (s *spySettlementObserver) last() outbox.SettlementObservation {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(s.obs) == 0 {
+		return outbox.SettlementObservation{}
+	}
+	return s.obs[len(s.obs)-1]
+}
+
+// failingCommitReceipt is a Receipt whose Commit always returns an error.
+type failingCommitReceipt struct {
+	commitErr error
+}
+
+func (r *failingCommitReceipt) Commit(_ context.Context) error {
+	return r.commitErr
+}
+func (r *failingCommitReceipt) Release(_ context.Context) error                 { return nil }
+func (r *failingCommitReceipt) Extend(_ context.Context, _ time.Duration) error { return nil }
+
+// TestSubscribe_CommitFailure_NotifiesCommitFailed verifies that when
+// Receipt.Commit fails, the spy observer receives CommitFailed with
+// DispositionRequeue, and the handler is retried.
+func TestSubscribe_CommitFailure_NotifiesCommitFailed(t *testing.T) {
+	bus := New(WithBufferSize(16))
+	defer func() { _ = bus.Close(context.Background()) }()
+
+	spy := &spySettlementObserver{}
+	commitErr := errors.New("lease expired")
+
+	attempts := atomic.Int32{}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		done <- bus.Subscribe(ctx, outbox.Subscription{Topic: "spy.commitfail"}, func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+			attempts.Add(1)
+			return outbox.HandleResult{
+				Disposition:         outbox.DispositionAck,
+				Receipt:             &failingCommitReceipt{commitErr: commitErr},
+				SettlementObservers: []outbox.SettlementObserver{spy},
+			}
+		})
+	}()
+
+	<-bus.Ready(outbox.Subscription{Topic: "spy.commitfail"})
+	require.NoError(t, bus.Publish(context.Background(), "spy.commitfail", makeSimpleEnvelope(t, "spy.commitfail")))
+
+	// Wait for at least one CommitFailed notification and more than 1 attempt.
+	require.Eventually(t, func() bool {
+		return spy.len() > 0 && attempts.Load() > 1
+	}, 2*time.Second, 10*time.Millisecond, "spy must record CommitFailed and handler must be retried")
+
+	cancel()
+	<-done
+
+	last := spy.last()
+	assert.Equal(t, outbox.DispositionRequeue, last.Disposition)
+	assert.Equal(t, outbox.SettlementResultCommitFailed, last.Result)
+	assert.Equal(t, commitErr, last.Err)
+}
+
+// TestSubscribe_RetryExhausted_NotifiesRetryExhausted verifies that when a
+// handler persistently returns Requeue and maxRetries is reached, the spy
+// observer receives Reject + RetryExhausted and the entry is dead-lettered.
+func TestSubscribe_RetryExhausted_NotifiesRetryExhausted(t *testing.T) {
+	bus := New(WithBufferSize(16))
+	defer func() { _ = bus.Close(context.Background()) }()
+
+	spy := &spySettlementObserver{}
+	transientErr := errors.New("downstream unavailable")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		done <- bus.Subscribe(ctx, outbox.Subscription{Topic: "spy.retryexhausted"}, func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+			return outbox.HandleResult{
+				Disposition:         outbox.DispositionRequeue,
+				Err:                 transientErr,
+				SettlementObservers: []outbox.SettlementObserver{spy},
+			}
+		})
+	}()
+
+	<-bus.Ready(outbox.Subscription{Topic: "spy.retryexhausted"})
+	require.NoError(t, bus.Publish(context.Background(), "spy.retryexhausted", makeSimpleEnvelope(t, "spy.retryexhausted")))
+
+	// Wait until the spy receives a Reject/RetryExhausted notification (which
+	// only arrives after all maxRetries are exhausted).
+	require.Eventually(t, func() bool {
+		last := spy.last()
+		return last.Disposition == outbox.DispositionReject &&
+			last.Result == outbox.SettlementResultRetryExhausted
+	}, 10*time.Second, 10*time.Millisecond, "spy must receive Reject/RetryExhausted after retry exhaustion")
+
+	cancel()
+	<-done
+
+	last := spy.last()
+	assert.Equal(t, outbox.DispositionReject, last.Disposition)
+	assert.Equal(t, outbox.SettlementResultRetryExhausted, last.Result)
+	assert.ErrorIs(t, last.Err, transientErr, "retry-exhausted notification must propagate the last handler error")
+
+	assert.Equal(t, 1, bus.DeadLetterLen(), "one entry must be dead-lettered")
+}
+
 // failingReleaseReceipt is a Receipt whose Release always returns an error,
 // exercising the error-log branch in releaseReceipt.
 type failingReleaseReceipt struct {

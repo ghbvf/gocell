@@ -1065,3 +1065,211 @@ func TestReleaseReceipt_ReleaseFail(t *testing.T) {
 	ch.mu.Unlock()
 	assert.False(t, nackRequeue, "DispositionReject must Nack with requeue=false")
 }
+
+// ---------------------------------------------------------------------------
+// Settlement observer spy tests (Finding 3 — end-to-end observer assertions)
+// ---------------------------------------------------------------------------
+
+// spySettlementObserver records all SettlementObservations for assertion.
+type spySettlementObserver struct {
+	mu  sync.Mutex
+	obs []outbox.SettlementObservation
+}
+
+func (s *spySettlementObserver) ObserveSettlement(_ context.Context, o outbox.SettlementObservation) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.obs = append(s.obs, o)
+}
+
+func (s *spySettlementObserver) last() outbox.SettlementObservation {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(s.obs) == 0 {
+		return outbox.SettlementObservation{}
+	}
+	return s.obs[len(s.obs)-1]
+}
+
+func (s *spySettlementObserver) len() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return len(s.obs)
+}
+
+// TestDispatchAck_AckErr_NotifiesAckFailed verifies that when ch.Ack returns an
+// error, the spy settlement observer receives AckFailed with the broker error.
+func TestDispatchAck_AckErr_NotifiesAckFailed(t *testing.T) {
+	conn, mockConn := newTestConnection(t)
+
+	ch := newMockChannel()
+	ackErr := errors.New("broker channel closed for ack")
+	ch.ackErr = ackErr
+	mockConn.mu.Lock()
+	mockConn.nextCh = ch
+	mockConn.mu.Unlock()
+
+	spy := &spySettlementObserver{}
+
+	sub := NewSubscriber(conn, SubscriberConfig{
+		QueueName:   "test-queue",
+		DLXExchange: "test.dlx",
+	})
+
+	handler := func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+		return outbox.HandleResult{
+			Disposition:         outbox.DispositionAck,
+			SettlementObservers: []outbox.SettlementObserver{spy},
+		}
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	body := makeDeliveryBody(t, outbox.Entry{
+		ID:        "evt-ack-err-spy",
+		EventType: "test.event",
+		Payload:   []byte(`{}`),
+	})
+	ch.consumeDeliveries <- amqp.Delivery{DeliveryTag: 30, Body: body}
+
+	subDone := make(chan error, 1)
+	go func() { subDone <- sub.Subscribe(ctx, outbox.Subscription{Topic: "test.topic"}, handler) }()
+
+	require.Eventually(t, func() bool {
+		return spy.len() > 0
+	}, 2*time.Second, 5*time.Millisecond, "spy observer must be called")
+
+	cancel()
+	assert.NoError(t, <-subDone)
+
+	ch.mu.Lock()
+	ackCalled := ch.ackCalled
+	ch.mu.Unlock()
+	assert.True(t, ackCalled, "Ack must be attempted")
+
+	last := spy.last()
+	assert.Equal(t, outbox.DispositionAck, last.Disposition)
+	assert.Equal(t, outbox.SettlementResultAckFailed, last.Result)
+	assert.Equal(t, ackErr, last.Err)
+}
+
+// TestDispatchDisposition_RejectNackErr_NotifiesNackFailed verifies that when
+// ch.Nack returns an error on a Reject disposition, the spy observer receives
+// NackFailed.
+func TestDispatchDisposition_RejectNackErr_NotifiesNackFailed(t *testing.T) {
+	conn, mockConn := newTestConnection(t)
+
+	ch := newMockChannel()
+	nackErr := errors.New("broker channel closed for nack reject")
+	ch.nackErr = nackErr
+	mockConn.mu.Lock()
+	mockConn.nextCh = ch
+	mockConn.mu.Unlock()
+
+	spy := &spySettlementObserver{}
+
+	sub := NewSubscriber(conn, SubscriberConfig{
+		QueueName:   "test-queue",
+		DLXExchange: "test.dlx",
+	})
+
+	handler := func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+		return outbox.HandleResult{
+			Disposition:         outbox.DispositionReject,
+			SettlementObservers: []outbox.SettlementObserver{spy},
+		}
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	body := makeDeliveryBody(t, outbox.Entry{
+		ID:        "evt-reject-nack-err-spy",
+		EventType: "test.event",
+		Payload:   []byte(`{}`),
+	})
+	ch.consumeDeliveries <- amqp.Delivery{DeliveryTag: 31, Body: body}
+
+	subDone := make(chan error, 1)
+	go func() { subDone <- sub.Subscribe(ctx, outbox.Subscription{Topic: "test.topic"}, handler) }()
+
+	require.Eventually(t, func() bool {
+		return spy.len() > 0
+	}, 2*time.Second, 5*time.Millisecond, "spy observer must be called for reject nack failure")
+
+	cancel()
+	assert.NoError(t, <-subDone)
+
+	ch.mu.Lock()
+	nackCalled := ch.nackCalled
+	nackTag := ch.nackTag
+	ch.mu.Unlock()
+	assert.True(t, nackCalled, "Nack must be attempted")
+	assert.Equal(t, uint64(31), nackTag)
+
+	last := spy.last()
+	assert.Equal(t, outbox.DispositionReject, last.Disposition)
+	assert.Equal(t, outbox.SettlementResultNackFailed, last.Result)
+	assert.Equal(t, nackErr, last.Err)
+}
+
+// TestDispatchDisposition_RequeueNackErr_NotifiesNackFailed verifies that when
+// ch.Nack returns an error on a Requeue disposition, the spy observer receives
+// NackFailed.
+func TestDispatchDisposition_RequeueNackErr_NotifiesNackFailed(t *testing.T) {
+	conn, mockConn := newTestConnection(t)
+
+	ch := newMockChannel()
+	nackErr := errors.New("broker channel closed for nack requeue")
+	ch.nackErr = nackErr
+	mockConn.mu.Lock()
+	mockConn.nextCh = ch
+	mockConn.mu.Unlock()
+
+	spy := &spySettlementObserver{}
+
+	sub := NewSubscriber(conn, SubscriberConfig{
+		QueueName:   "test-queue",
+		DLXExchange: "test.dlx",
+	})
+
+	handler := func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+		return outbox.HandleResult{
+			Disposition:         outbox.DispositionRequeue,
+			SettlementObservers: []outbox.SettlementObserver{spy},
+		}
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	body := makeDeliveryBody(t, outbox.Entry{
+		ID:        "evt-requeue-nack-err-spy",
+		EventType: "test.event",
+		Payload:   []byte(`{}`),
+	})
+	ch.consumeDeliveries <- amqp.Delivery{DeliveryTag: 32, Body: body}
+
+	subDone := make(chan error, 1)
+	go func() { subDone <- sub.Subscribe(ctx, outbox.Subscription{Topic: "test.topic"}, handler) }()
+
+	require.Eventually(t, func() bool {
+		return spy.len() > 0
+	}, 2*time.Second, 5*time.Millisecond, "spy observer must be called for requeue nack failure")
+
+	cancel()
+	assert.NoError(t, <-subDone)
+
+	ch.mu.Lock()
+	nackCalled := ch.nackCalled
+	nackTag := ch.nackTag
+	ch.mu.Unlock()
+	assert.True(t, nackCalled, "Nack must be attempted")
+	assert.Equal(t, uint64(32), nackTag)
+
+	last := spy.last()
+	assert.Equal(t, outbox.DispositionRequeue, last.Disposition)
+	assert.Equal(t, outbox.SettlementResultNackFailed, last.Result)
+	assert.Equal(t, nackErr, last.Err)
+}

@@ -153,7 +153,7 @@ func loginAndGetPair(t *testing.T, opts ...loginOption) loginResult {
 		WithJWTIssuer(issuer),
 		WithJWTVerifier(verifier),
 		WithRefreshStore(intRefreshStore),
-		WithRefreshMetricsProvider(metrics.NopProvider{}),
+		WithMetricsProvider(metrics.NopProvider{}),
 		// Demo mode: no tx+outbox required.
 	)
 	require.NoError(t, c.Init(context.Background(), cell.Dependencies{

@@ -54,6 +54,91 @@ entry-level `FailurePolicyFailClosed` 覆盖，不依赖此告警。
 
 ---
 
+## Config Event Consumer 可观测性
+
+config event consumer 拆成两条生命周期边界不同的指标：
+
+- `gocell_config_event_process_total{cell,slice,reason}` 记录 handler 内已知的处理原因。
+- `gocell_config_event_settlement_total{cell,slice,disposition,result}` 记录 broker / subscriber 最终处置。
+
+当前仅覆盖 `accesscore/configreceive` 与 `configcore/configsubscribe`。
+
+| process reason | 含义 |
+|---|---|
+| `ack` | handler 接受事件并完成业务处理 |
+| `stale` | 事件已过期或 replay，安全跳过 |
+| `permanent_error` | payload / schema / 语义错误，不应重试 |
+
+| settlement disposition/result | 含义 |
+|---|---|
+| `ack/success` | delivery 最终 ack 成功 |
+| `reject/success` | handler 永久错误或显式 reject 后进入 DLX |
+| `reject/retry_exhausted` | 重试耗尽后 reject，进入 DLX |
+| `requeue/success` | delivery 最终 requeue，将被重投 |
+| `requeue/commit_failed` | handler 原本 ack，但 receipt commit 失败，已降级 requeue |
+| `ack/ack_failed` 或 `*/nack_failed` | broker settlement 调用失败，需要检查 broker/channel 状态 |
+
+### ConfigEventConsumerReject
+
+handler 永久错误（payload / schema / 语义问题）或显式 DispositionReject 后进入 DLX。
+`result="success"` 桶仅命中 PermanentError 或 handler 主动 Reject 路径，与重试耗尽桶互斥。
+
+```yaml
+- alert: GoCellConfigEventConsumerReject
+  expr: sum(increase(gocell_config_event_settlement_total{disposition="reject",result="success"}[10m])) by (cell, slice) > 0
+  for: 0m
+  labels:
+    severity: warning
+  annotations:
+    summary: "Config event consumer permanent reject ({{ $labels.cell }}/{{ $labels.slice }})"
+    description: |
+      Config event consumer {{ $labels.cell }}/{{ $labels.slice }} is routing
+      permanent payload/handler errors to DLX (result=success means PermanentError or
+      explicit DispositionReject, not retry exhaustion).
+      Check consumer logs for "permanent error, rejecting to DLX" and verify
+      producer/contract drift.
+```
+
+### ConfigEventConsumerRetryExhausted
+
+ConsumerBase 重试预算耗尽后进入 DLX。通常意味着下游依赖持续故障，重试已经无法在本次投递内恢复。
+
+```yaml
+- alert: GoCellConfigEventConsumerRetryExhausted
+  expr: sum(increase(gocell_config_event_settlement_total{disposition="reject",result="retry_exhausted"}[10m])) by (cell, slice) > 0
+  for: 0m
+  labels:
+    severity: warning
+  annotations:
+    summary: "Config event consumer retry budget exhausted ({{ $labels.cell }}/{{ $labels.slice }})"
+    description: |
+      Config event consumer {{ $labels.cell }}/{{ $labels.slice }} exhausted
+      ConsumerBase retry budget; downstream dependency likely failing.
+      Check consumer logs for "retry budget exhausted" and verify configcore
+      internal GET readiness plus the downstream dependency named by the handler error.
+```
+
+### ConfigEventConsumerPermanentError
+
+payload/schema 永久错误不应在正常生产流量中增长；任意持续增长通常表示 producer/contract
+漂移，或旧版本事件在重放。
+
+```yaml
+- alert: GoCellConfigEventConsumerPermanentError
+  expr: sum(increase(gocell_config_event_process_total{reason="permanent_error"}[10m])) by (cell, slice) > 0
+  for: 0m
+  labels:
+    severity: warning
+  annotations:
+    summary: "Config event permanent errors ({{ $labels.cell }}/{{ $labels.slice }})"
+    description: |
+      Config event consumer {{ $labels.cell }}/{{ $labels.slice }} is routing
+      permanent payload/schema errors to DLX. Compare event payloads with
+      contracts/event/config/* schemas and recent producer deploys.
+```
+
+---
+
 ## Bootstrap Shutdown 可观测性
 
 指标 `gocell_bootstrap_shutdown_total` 带 `outcome` 标签，取值见下表：
@@ -295,6 +380,18 @@ sum(rate(gocell_auth_service_token_verify_total[5m])) by (result, reason)
 
 把 result/reason 联合分组的趋势贴到 Grafana stack panel，可一眼看出 replay 突袭、
 nonce store 后端故障、token 失效（key 漂移）三类不同诱因的占比变化。
+
+### config event consumer process reason 分布
+
+```promql
+sum(rate(gocell_config_event_process_total[5m])) by (cell, slice, reason)
+```
+
+### config event consumer settlement 分布
+
+```promql
+sum(rate(gocell_config_event_settlement_total[5m])) by (cell, slice, disposition, result)
+```
 
 ---
 

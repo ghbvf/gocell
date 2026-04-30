@@ -211,7 +211,39 @@ type EventRouter interface {
 	// Returns a non-nil error when handler is nil, consumerGroup is empty,
 	// spec.Kind != "event", or spec.Validate() fails. Callers (typically
 	// Cell.RegisterSubscriptions) should propagate the error.
-	AddContractHandler(spec wrapper.ContractSpec, handler outbox.EntryHandler, consumerGroup string) error
+	AddContractHandler(spec wrapper.ContractSpec, handler outbox.EntryHandler, consumerGroup string, opts ...SubscriptionOption) error
+}
+
+// SubscriptionValidator validates a Subscription at registration time. Validators
+// are invoked by the EventRouter implementation after the Subscription has been
+// constructed but before the handler is registered. A non-nil error fails the
+// registration and bubbles up to RegisterSubscriptions.
+//
+// ref: opentelemetry-collector otelcol/config.go Validate() — declarative,
+// composable validation at config load time.
+type SubscriptionValidator func(outbox.Subscription) error
+
+// SubscriptionValidatorAdder lets composition roots inject registration-time
+// validators. Implementations of EventRouter MAY also implement this interface;
+// composition roots type-assert at wiring time.
+type SubscriptionValidatorAdder interface {
+	AddSubscriptionValidator(SubscriptionValidator)
+}
+
+// SubscriptionOptions carries optional event-subscription owner metadata.
+type SubscriptionOptions struct {
+	SliceID string
+}
+
+// SubscriptionOption configures optional event subscription metadata.
+type SubscriptionOption func(*SubscriptionOptions)
+
+// WithSubscriptionSliceID declares the owning slice for subscription
+// observability. The concrete router copies this into outbox.Subscription.
+func WithSubscriptionSliceID(sliceID string) SubscriptionOption {
+	return func(o *SubscriptionOptions) {
+		o.SliceID = sliceID
+	}
 }
 
 // EventRegistrar is optionally implemented by Cells that subscribe to events.
