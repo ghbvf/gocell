@@ -173,7 +173,7 @@ func validateListenerConfig(ref cell.ListenerRef, cfg listenerConfig) error {
 			"bootstrap: zero listener ref is invalid; use cell.PrimaryListener, cell.InternalListener, or cell.HealthListener")
 	}
 	// SEC-FAIL-CLOSED: nil OR empty authChain is rejected at phase0. Empty
-	// slices are behaviourally identical to nil — both produce an
+	// slices are behaviorally identical to nil — both produce an
 	// unauthenticated listener — so requiring `[]cell.ListenerAuth{cell.AuthNone{}}`
 	// for genuinely public listeners (HealthListener on a loopback probe path)
 	// keeps the explicit no-auth marker visible to grep, archtest SEC-02, and

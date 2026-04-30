@@ -117,7 +117,13 @@ jobs:
         if: matrix.static_checks
         uses: golangci/golangci-lint-action@1e7e51e771db61008b38414a730f564565cf7c20 # v9.2.0
         with:
-          version: v2.11.0
+          version: v2.11.4
+          # `verify: true` runs `golangci-lint config verify` before linting so a
+          # broken `.golangci.yml` (v2 schema typo, unknown linter, malformed
+          # exclusions) fails fast instead of silently degrading to v1 parsing
+          # where new linters are ignored. Pinned to v2.11.4 (matches local dev
+          # tool version) to keep CI and local lint behaviour identical.
+          verify: true
           # only-new-issues uses the GitHub pull-request diff API which
           # refuses diffs larger than 300 files; fall back to
           # --new-from-merge-base so mass-rename PRs (repo-wide renames,

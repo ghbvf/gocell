@@ -72,6 +72,9 @@ linters:
           truncate: "32"
 
     misspell:
+      # US locale: behaviour→behavior, cancelled→canceled, colour→color, etc.
+      # Project codebase + comments use US English; misspell flags British
+      # variants as errors (no auto-fix unless `golangci-lint run --fix` invoked).
       locale: US
 
     godot:
