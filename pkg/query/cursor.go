@@ -178,25 +178,33 @@ const cursorInvalidMsg = "invalid cursor; restart from first page (client should
 // cursorInvalid returns a standardized cursor error with a stable client-facing
 // message and diagnostic reason in the details field. The reason is also set as
 // InternalMessage so it appears in server-side logs via Error().
-func cursorInvalid(reason string) *errcode.Error {
-	return errcode.WithDetails(
+func cursorInvalid(reason string) error {
+	detailed, err := errcode.WithDetails(
 		errcode.Safe(errcode.ErrCursorInvalid, cursorInvalidMsg, reason),
 		map[string]any{"reason": reason})
+	if err != nil {
+		return err
+	}
+	return detailed
 }
 
 // cursorInvalidExtra returns a standardized cursor error with extra diagnostic
 // key-value pairs merged into the details alongside the reason.
 // The "reason" key is set after merging extra, so callers cannot accidentally
 // overwrite it.
-func cursorInvalidExtra(reason string, extra map[string]any) *errcode.Error {
+func cursorInvalidExtra(reason string, extra map[string]any) error {
 	details := make(map[string]any, len(extra)+1)
 	for k, v := range extra {
 		details[k] = v
 	}
 	details["reason"] = reason // set last — cannot be overwritten by extra
-	return errcode.WithDetails(
+	detailed, err := errcode.WithDetails(
 		errcode.Safe(errcode.ErrCursorInvalid, cursorInvalidMsg, reason),
 		details)
+	if err != nil {
+		return err
+	}
+	return detailed
 }
 
 // ValidateCursorScope checks that the decoded cursor carries the expected sort

@@ -47,7 +47,7 @@ func TestDecodeEntryUpserted(t *testing.T) {
 // JSON Schema at contracts/event/config/entry-upserted/v1/payload.schema.json.
 // This alignment test catches decoder/schema drift early.
 func TestDecodeEntryUpserted_AlignedWithContractSchema(t *testing.T) {
-	c := contracttest.LoadByID(t, contracttest.ContractsRoot(), "event.config.entry-upserted.v1")
+	c := contracttest.LoadByID(t, contracttest.ContractsRoot(t), "event.config.entry-upserted.v1")
 
 	validCases := []struct {
 		name    string
@@ -118,7 +118,7 @@ func TestDecodeEntryDeleted(t *testing.T) {
 // valid payload accepted by DecodeEntryDeleted also passes the canonical
 // JSON Schema at contracts/event/config/entry-deleted/v1/payload.schema.json.
 func TestDecodeEntryDeleted_AlignedWithContractSchema(t *testing.T) {
-	c := contracttest.LoadByID(t, contracttest.ContractsRoot(), "event.config.entry-deleted.v1")
+	c := contracttest.LoadByID(t, contracttest.ContractsRoot(t), "event.config.entry-deleted.v1")
 
 	validCases := []struct {
 		name    string

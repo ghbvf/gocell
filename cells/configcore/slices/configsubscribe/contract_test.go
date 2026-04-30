@@ -7,7 +7,7 @@ import (
 )
 
 func TestEventConfigEntryUpsertedV1Subscribe(t *testing.T) {
-	root := contracttest.ContractsRoot()
+	root := contracttest.ContractsRoot(t)
 	c := contracttest.LoadByID(t, root, "event.config.entry-upserted.v1")
 
 	// Metadata-only schema: key + version + actorId; no value field.
@@ -34,7 +34,7 @@ func TestEventConfigEntryUpsertedV1Subscribe(t *testing.T) {
 }
 
 func TestEventConfigEntryDeletedV1Subscribe(t *testing.T) {
-	root := contracttest.ContractsRoot()
+	root := contracttest.ContractsRoot(t)
 	c := contracttest.LoadByID(t, root, "event.config.entry-deleted.v1")
 
 	// Valid: key + version + actorId (metadata-only + tombstone protection).

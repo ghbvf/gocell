@@ -41,7 +41,7 @@ func newContractHandler() http.Handler {
 }
 
 func TestHttpAuthRoleAssignV1Serve(t *testing.T) {
-	root := contracttest.ContractsRoot()
+	root := contracttest.ContractsRoot(t)
 	c := contracttest.LoadByID(t, root, "http.auth.role.assign.v1")
 	handler := newContractHandler()
 
@@ -65,7 +65,7 @@ func TestHttpAuthRoleAssignV1Serve(t *testing.T) {
 }
 
 func TestHttpAuthRoleRevokeV1Serve(t *testing.T) {
-	root := contracttest.ContractsRoot()
+	root := contracttest.ContractsRoot(t)
 	c := contracttest.LoadByID(t, root, "http.auth.role.revoke.v1")
 	handler := newContractHandler()
 
@@ -92,7 +92,7 @@ func TestHttpAuthRoleRevokeV1Serve(t *testing.T) {
 // event.role.assigned.v1 payload JSON Schema.
 // Full contract coverage is tracked as S8-FOLLOWUP (VERIFY-01 waiver expiry 2026-07-01).
 func TestContract_EventRoleAssignedV1_Publish_PayloadValid(t *testing.T) {
-	root := contracttest.ContractsRoot()
+	root := contracttest.ContractsRoot(t)
 	c := contracttest.LoadByID(t, root, "event.role.assigned.v1")
 
 	evt := dto.RoleChangedEvent{UserID: "u1", RoleID: "admin", Action: dto.ActionAssigned}
@@ -111,7 +111,7 @@ func TestContract_EventRoleAssignedV1_Publish_PayloadValid(t *testing.T) {
 // event.role.revoked.v1 payload JSON Schema.
 // Full contract coverage is tracked as S8-FOLLOWUP (VERIFY-01 waiver expiry 2026-07-01).
 func TestContract_EventRoleRevokedV1_Publish_PayloadValid(t *testing.T) {
-	root := contracttest.ContractsRoot()
+	root := contracttest.ContractsRoot(t)
 	c := contracttest.LoadByID(t, root, "event.role.revoked.v1")
 
 	evt := dto.RoleChangedEvent{UserID: "u1", RoleID: "admin", Action: dto.ActionRevoked}

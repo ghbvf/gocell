@@ -43,7 +43,12 @@ func main() {
 	}
 	defer func() { _ = pool.Close(ctx) }()
 
-	migrator, err := adapterpg.NewMigrator(pool, adapterpg.MigrationsFS(), "schema_migrations")
+	migrationsFS, err := adapterpg.MigrationsFS()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "pg-migrate: migrations fs: %v\n", err)
+		os.Exit(1)
+	}
+	migrator, err := adapterpg.NewMigrator(pool, migrationsFS, "schema_migrations")
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "pg-migrate: build migrator: %v\n", err)
 		os.Exit(1)

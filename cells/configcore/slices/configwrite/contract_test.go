@@ -48,7 +48,7 @@ func newContractMux(svc *Service) http.Handler {
 // --- HTTP contract test ---
 
 func TestHttpConfigWriteV1Serve(t *testing.T) {
-	root := contracttest.ContractsRoot()
+	root := contracttest.ContractsRoot(t)
 	c := contracttest.LoadByID(t, root, "http.config.write.v1")
 	svc, _, _ := newContractService(t)
 
@@ -111,7 +111,7 @@ func TestHttpConfigWriteV1_AuthzNegative(t *testing.T) {
 // --- Event contract tests ---
 
 func TestEventConfigEntryUpsertedV1Publish_Create(t *testing.T) {
-	root := contracttest.ContractsRoot()
+	root := contracttest.ContractsRoot(t)
 	c := contracttest.LoadByID(t, root, "event.config.entry-upserted.v1")
 	svc, _, writer := newContractService(t)
 
@@ -135,7 +135,7 @@ func TestEventConfigEntryUpsertedV1Publish_Create(t *testing.T) {
 }
 
 func TestEventConfigEntryUpsertedV1Publish_Update(t *testing.T) {
-	root := contracttest.ContractsRoot()
+	root := contracttest.ContractsRoot(t)
 	c := contracttest.LoadByID(t, root, "event.config.entry-upserted.v1")
 	svc, _, writer := newContractService(t)
 
@@ -154,7 +154,7 @@ func TestEventConfigEntryUpsertedV1Publish_Update(t *testing.T) {
 }
 
 func TestEventConfigEntryDeletedV1Publish_Delete(t *testing.T) {
-	root := contracttest.ContractsRoot()
+	root := contracttest.ContractsRoot(t)
 	c := contracttest.LoadByID(t, root, "event.config.entry-deleted.v1")
 	svc, _, writer := newContractService(t)
 

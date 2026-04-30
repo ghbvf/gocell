@@ -7,7 +7,7 @@ import (
 )
 
 func TestEventAuditAppendedV1Publish(t *testing.T) {
-	root := contracttest.ContractsRoot()
+	root := contracttest.ContractsRoot(t)
 	c := contracttest.LoadByID(t, root, "event.audit.appended.v1")
 
 	c.ValidatePayload(t, []byte(`{"auditEntryId":"audit-001","eventType":"session.created"}`))
@@ -17,7 +17,7 @@ func TestEventAuditAppendedV1Publish(t *testing.T) {
 }
 
 func TestEventSessionCreatedV1Subscribe(t *testing.T) {
-	root := contracttest.ContractsRoot()
+	root := contracttest.ContractsRoot(t)
 	c := contracttest.LoadByID(t, root, "event.session.created.v1")
 
 	c.ValidatePayload(t, []byte(`{"sessionId":"s-1","userId":"u-1"}`))
@@ -25,7 +25,7 @@ func TestEventSessionCreatedV1Subscribe(t *testing.T) {
 }
 
 func TestEventSessionRevokedV1Subscribe(t *testing.T) {
-	root := contracttest.ContractsRoot()
+	root := contracttest.ContractsRoot(t)
 	c := contracttest.LoadByID(t, root, "event.session.revoked.v1")
 
 	c.ValidatePayload(t, []byte(`{"sessionId":"sess-1","userId":"usr-1"}`))
@@ -33,7 +33,7 @@ func TestEventSessionRevokedV1Subscribe(t *testing.T) {
 }
 
 func TestEventUserCreatedV1Subscribe(t *testing.T) {
-	root := contracttest.ContractsRoot()
+	root := contracttest.ContractsRoot(t)
 	c := contracttest.LoadByID(t, root, "event.user.created.v1")
 
 	c.ValidatePayload(t, []byte(`{"userId":"usr-1","username":"alice","actorId":"admin-1"}`))
@@ -44,7 +44,7 @@ func TestEventUserCreatedV1Subscribe(t *testing.T) {
 }
 
 func TestEventUserLockedV1Subscribe(t *testing.T) {
-	root := contracttest.ContractsRoot()
+	root := contracttest.ContractsRoot(t)
 	c := contracttest.LoadByID(t, root, "event.user.locked.v1")
 
 	// actorId required since G.1 + G.6 migration
@@ -54,7 +54,7 @@ func TestEventUserLockedV1Subscribe(t *testing.T) {
 }
 
 func TestEventConfigEntryUpsertedV1Subscribe(t *testing.T) {
-	root := contracttest.ContractsRoot()
+	root := contracttest.ContractsRoot(t)
 	c := contracttest.LoadByID(t, root, "event.config.entry-upserted.v1")
 
 	// actorId required since G.2 migration
@@ -67,7 +67,7 @@ func TestEventConfigEntryUpsertedV1Subscribe(t *testing.T) {
 }
 
 func TestEventConfigEntryDeletedV1Subscribe(t *testing.T) {
-	root := contracttest.ContractsRoot()
+	root := contracttest.ContractsRoot(t)
 	c := contracttest.LoadByID(t, root, "event.config.entry-deleted.v1")
 
 	// Valid: key + version + actorId required (G.2 migration).
@@ -87,7 +87,7 @@ func TestEventConfigEntryDeletedV1Subscribe(t *testing.T) {
 }
 
 func TestEventConfigVersionPublishedV1Subscribe(t *testing.T) {
-	root := contracttest.ContractsRoot()
+	root := contracttest.ContractsRoot(t)
 	c := contracttest.LoadByID(t, root, "event.config.version-published.v1")
 
 	// actorId required since G.2 migration
@@ -98,7 +98,7 @@ func TestEventConfigVersionPublishedV1Subscribe(t *testing.T) {
 }
 
 func TestEventConfigRollbackV1Subscribe(t *testing.T) {
-	root := contracttest.ContractsRoot()
+	root := contracttest.ContractsRoot(t)
 	c := contracttest.LoadByID(t, root, "event.config.rollback.v1")
 
 	// actorId required since G.2 migration

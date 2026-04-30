@@ -19,12 +19,12 @@ func TestVerifyExpectedVersion_Integration(t *testing.T) {
 	ctx := context.Background()
 
 	// Apply all migrations first.
-	migrator, err := NewMigrator(pool, MigrationsFS(), "schema_migrations")
+	migrator, err := NewMigrator(pool, testMigrationsFS(t), "schema_migrations")
 	require.NoError(t, err)
 	require.NoError(t, migrator.Up(ctx), "migrations must apply cleanly")
 
 	// VerifyExpectedVersion should pass: DB version == FS max version.
-	err = VerifyExpectedVersion(ctx, pool, MigrationsFS(), "schema_migrations")
+	err = VerifyExpectedVersion(ctx, pool, testMigrationsFS(t), "schema_migrations")
 	assert.NoError(t, err, "VerifyExpectedVersion should return nil after full Up()")
 }
 
@@ -39,7 +39,7 @@ func TestDetectInvalidIndexes_WithInjectedInvalid(t *testing.T) {
 	ctx := context.Background()
 
 	// Apply migrations to create tables/indexes.
-	migrator, err := NewMigrator(pool, MigrationsFS(), "schema_migrations_invalid_idx")
+	migrator, err := NewMigrator(pool, testMigrationsFS(t), "schema_migrations_invalid_idx")
 	require.NoError(t, err)
 	require.NoError(t, migrator.Up(ctx), "migrations must apply")
 
@@ -88,12 +88,12 @@ func TestVerifyExpectedVersion_DBAhead_Integration(t *testing.T) {
 	const tbl = "schema_migrations_ahead"
 
 	// Apply all migrations.
-	migrator, err := NewMigrator(pool, MigrationsFS(), tbl)
+	migrator, err := NewMigrator(pool, testMigrationsFS(t), tbl)
 	require.NoError(t, err)
 	require.NoError(t, migrator.Up(ctx), "initial Up() must succeed")
 
 	// Determine the expected (FS max) version.
-	expected, err := ExpectedVersion(MigrationsFS())
+	expected, err := ExpectedVersion(testMigrationsFS(t))
 	require.NoError(t, err)
 	require.Greater(t, expected, int64(0), "test requires at least 1 migration")
 
@@ -105,7 +105,7 @@ func TestVerifyExpectedVersion_DBAhead_Integration(t *testing.T) {
 	require.NoError(t, execErr, "inserting extra version record must succeed")
 
 	// VerifyExpectedVersion must now return a schema mismatch error (DB ahead).
-	err = VerifyExpectedVersion(ctx, pool, MigrationsFS(), tbl)
+	err = VerifyExpectedVersion(ctx, pool, testMigrationsFS(t), tbl)
 	require.Error(t, err, "should return error when DB version is ahead of binary")
 	assert.Contains(t, err.Error(), "schema version mismatch",
 		"error message should mention schema version mismatch")
@@ -121,12 +121,12 @@ func TestVerifyExpectedVersion_DBLagged_Integration(t *testing.T) {
 	ctx := context.Background()
 
 	// Apply all migrations.
-	migrator, err := NewMigrator(pool, MigrationsFS(), "schema_migrations_lagged")
+	migrator, err := NewMigrator(pool, testMigrationsFS(t), "schema_migrations_lagged")
 	require.NoError(t, err)
 	require.NoError(t, migrator.Up(ctx), "initial Up() must succeed")
 
 	// Determine the current max version so we can delete newer records.
-	expected, err := ExpectedVersion(MigrationsFS())
+	expected, err := ExpectedVersion(testMigrationsFS(t))
 	require.NoError(t, err)
 	require.Greater(t, expected, int64(3),
 		"test requires at least 4 migrations to simulate lag")
@@ -137,7 +137,7 @@ func TestVerifyExpectedVersion_DBLagged_Integration(t *testing.T) {
 	require.NoError(t, execErr, "deleting version records should succeed")
 
 	// VerifyExpectedVersion must now return a schema mismatch error.
-	err = VerifyExpectedVersion(ctx, pool, MigrationsFS(), "schema_migrations_lagged")
+	err = VerifyExpectedVersion(ctx, pool, testMigrationsFS(t), "schema_migrations_lagged")
 	require.Error(t, err, "should return error when DB is lagged")
 	assert.Contains(t, err.Error(), "schema version mismatch",
 		"error message should mention schema version mismatch")

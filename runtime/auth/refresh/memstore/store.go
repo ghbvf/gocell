@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/validation"
 	"github.com/ghbvf/gocell/runtime/auth/refresh"
 	"github.com/google/uuid"
 )
@@ -71,7 +72,7 @@ type store struct {
 // policy.ReuseInterval is negative. If randReader is nil, crypto/rand.Reader
 // is used.
 func New(policy refresh.Policy, clock refresh.Clock, randReader io.Reader) (refresh.Store, error) {
-	if clock == nil {
+	if validation.IsNilInterface(clock) {
 		return nil, errcode.New(errcode.ErrValidationFailed, "memstore.New: clock must not be nil")
 	}
 	if policy.MaxAge <= 0 {
@@ -80,7 +81,7 @@ func New(policy refresh.Policy, clock refresh.Clock, randReader io.Reader) (refr
 	if policy.ReuseInterval < 0 {
 		return nil, errcode.New(errcode.ErrValidationFailed, "memstore.New: policy.ReuseInterval must not be negative")
 	}
-	if randReader == nil {
+	if validation.IsNilInterface(randReader) {
 		randReader = rand.Reader
 	}
 	return &store{policy: policy, clock: clock, rand: randReader}, nil

@@ -29,7 +29,7 @@ func TestPGRefreshStore_ContractSuite(t *testing.T) {
 		t.Helper()
 
 		p := isolatedSchemaPool(t, ctx, base)
-		migrator, err := NewMigrator(p, MigrationsFS(), "schema_migrations")
+		migrator, err := NewMigrator(p, testMigrationsFS(t), "schema_migrations")
 		require.NoError(t, err)
 		require.NoError(t, migrator.Up(ctx))
 
@@ -79,7 +79,7 @@ func TestMigration012_StructuralAssertions(t *testing.T) {
 
 	ctx := context.Background()
 
-	migrator, err := NewMigrator(pool, MigrationsFS(), "schema_migrations_012_struct")
+	migrator, err := NewMigrator(pool, testMigrationsFS(t), "schema_migrations_012_struct")
 	require.NoError(t, err)
 	require.NoError(t, migrator.Up(ctx), "Up() must apply all migrations through 012")
 
@@ -181,7 +181,7 @@ func TestPGRefreshStore_DMLState(t *testing.T) {
 
 	ctx := context.Background()
 	p := isolatedSchemaPool(t, ctx, base)
-	migrator, err := NewMigrator(p, MigrationsFS(), "schema_migrations_dml_state")
+	migrator, err := NewMigrator(p, testMigrationsFS(t), "schema_migrations_dml_state")
 	require.NoError(t, err)
 	require.NoError(t, migrator.Up(ctx))
 
@@ -262,7 +262,7 @@ func TestPGRefreshStore_ReuseCascadeSurvivesAmbientRollback(t *testing.T) {
 
 	ctx := context.Background()
 	p := isolatedSchemaPool(t, ctx, base)
-	migrator, err := NewMigrator(p, MigrationsFS(), "schema_migrations_reuse_ambient")
+	migrator, err := NewMigrator(p, testMigrationsFS(t), "schema_migrations_reuse_ambient")
 	require.NoError(t, err)
 	require.NoError(t, migrator.Up(ctx))
 
@@ -293,7 +293,7 @@ func TestPGRefreshStore_SessionLockRejectsChildValidatedBeforeCascade(t *testing
 
 	ctx := context.Background()
 	p := isolatedSchemaPool(t, ctx, base)
-	migrator, err := NewMigrator(p, MigrationsFS(), "schema_migrations_reuse_lock")
+	migrator, err := NewMigrator(p, testMigrationsFS(t), "schema_migrations_reuse_lock")
 	require.NoError(t, err)
 	require.NoError(t, migrator.Up(ctx))
 

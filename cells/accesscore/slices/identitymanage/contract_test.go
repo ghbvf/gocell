@@ -127,7 +127,7 @@ func createUserForContractTest(t *testing.T, handler http.Handler, contract *con
 }
 
 func TestHttpAuthUserCreateV1Serve(t *testing.T) {
-	root := contracttest.ContractsRoot()
+	root := contracttest.ContractsRoot(t)
 	c := contracttest.LoadByID(t, root, "http.auth.user.create.v1")
 	handler := setupContractHandler(t)
 
@@ -143,7 +143,7 @@ func TestHttpAuthUserCreateV1Serve(t *testing.T) {
 }
 
 func TestHttpAuthUserGetV1Serve(t *testing.T) {
-	root := contracttest.ContractsRoot()
+	root := contracttest.ContractsRoot(t)
 	createContract := contracttest.LoadByID(t, root, "http.auth.user.create.v1")
 	c := contracttest.LoadByID(t, root, "http.auth.user.get.v1")
 	handler := setupContractHandler(t)
@@ -159,7 +159,7 @@ func TestHttpAuthUserGetV1Serve(t *testing.T) {
 }
 
 func TestHttpAuthUserUpdateV1Serve(t *testing.T) {
-	root := contracttest.ContractsRoot()
+	root := contracttest.ContractsRoot(t)
 	createContract := contracttest.LoadByID(t, root, "http.auth.user.create.v1")
 	c := contracttest.LoadByID(t, root, "http.auth.user.update.v1")
 	handler := setupContractHandler(t)
@@ -178,7 +178,7 @@ func TestHttpAuthUserUpdateV1Serve(t *testing.T) {
 }
 
 func TestHttpAuthUserPatchV1Serve(t *testing.T) {
-	root := contracttest.ContractsRoot()
+	root := contracttest.ContractsRoot(t)
 	createContract := contracttest.LoadByID(t, root, "http.auth.user.create.v1")
 	c := contracttest.LoadByID(t, root, "http.auth.user.patch.v1")
 	handler := setupContractHandler(t)
@@ -202,7 +202,7 @@ func TestHttpAuthUserPatchV1Serve(t *testing.T) {
 }
 
 func TestHttpAuthUserDeleteV1Serve(t *testing.T) {
-	root := contracttest.ContractsRoot()
+	root := contracttest.ContractsRoot(t)
 	createContract := contracttest.LoadByID(t, root, "http.auth.user.create.v1")
 	deleteContract := contracttest.LoadByID(t, root, "http.auth.user.delete.v1")
 	handler := setupContractHandler(t)
@@ -220,7 +220,7 @@ func TestHttpAuthUserDeleteV1Serve(t *testing.T) {
 }
 
 func TestHttpAuthUserLockV1Serve(t *testing.T) {
-	root := contracttest.ContractsRoot()
+	root := contracttest.ContractsRoot(t)
 	createContract := contracttest.LoadByID(t, root, "http.auth.user.create.v1")
 	c := contracttest.LoadByID(t, root, "http.auth.user.lock.v1")
 	handler := setupContractHandler(t)
@@ -236,7 +236,7 @@ func TestHttpAuthUserLockV1Serve(t *testing.T) {
 }
 
 func TestHttpAuthUserUnlockV1Serve(t *testing.T) {
-	root := contracttest.ContractsRoot()
+	root := contracttest.ContractsRoot(t)
 	createContract := contracttest.LoadByID(t, root, "http.auth.user.create.v1")
 	lockContract := contracttest.LoadByID(t, root, "http.auth.user.lock.v1")
 	c := contracttest.LoadByID(t, root, "http.auth.user.unlock.v1")
@@ -262,7 +262,7 @@ func TestHttpAuthUserUnlockV1Serve(t *testing.T) {
 // --- Event contract tests with real handler output ---
 
 func TestEventUserCreatedV1Publish(t *testing.T) {
-	root := contracttest.ContractsRoot()
+	root := contracttest.ContractsRoot(t)
 	createContract := contracttest.LoadByID(t, root, "http.auth.user.create.v1")
 	c := contracttest.LoadByID(t, root, "event.user.created.v1")
 	handler, writer := setupContractHandlerWithOutbox(t)
@@ -278,7 +278,7 @@ func TestEventUserCreatedV1Publish(t *testing.T) {
 }
 
 func TestEventUserLockedV1Publish(t *testing.T) {
-	root := contracttest.ContractsRoot()
+	root := contracttest.ContractsRoot(t)
 	createContract := contracttest.LoadByID(t, root, "http.auth.user.create.v1")
 	lockContract := contracttest.LoadByID(t, root, "http.auth.user.lock.v1")
 	c := contracttest.LoadByID(t, root, "event.user.locked.v1")
@@ -303,7 +303,7 @@ func TestEventUserLockedV1Publish(t *testing.T) {
 }
 
 func TestEventUserUpdatedV1Publish(t *testing.T) {
-	root := contracttest.ContractsRoot()
+	root := contracttest.ContractsRoot(t)
 	createContract := contracttest.LoadByID(t, root, "http.auth.user.create.v1")
 	updateContract := contracttest.LoadByID(t, root, "http.auth.user.update.v1")
 	c := contracttest.LoadByID(t, root, "event.user.updated.v1")
@@ -328,7 +328,7 @@ func TestEventUserUpdatedV1Publish(t *testing.T) {
 }
 
 func TestEventUserDeletedV1Publish(t *testing.T) {
-	root := contracttest.ContractsRoot()
+	root := contracttest.ContractsRoot(t)
 	createContract := contracttest.LoadByID(t, root, "http.auth.user.create.v1")
 	deleteContract := contracttest.LoadByID(t, root, "http.auth.user.delete.v1")
 	c := contracttest.LoadByID(t, root, "event.user.deleted.v1")
@@ -352,7 +352,7 @@ func TestEventUserDeletedV1Publish(t *testing.T) {
 }
 
 func TestEventUserUnlockedV1Publish(t *testing.T) {
-	root := contracttest.ContractsRoot()
+	root := contracttest.ContractsRoot(t)
 	createContract := contracttest.LoadByID(t, root, "http.auth.user.create.v1")
 	lockContract := contracttest.LoadByID(t, root, "http.auth.user.lock.v1")
 	unlockContract := contracttest.LoadByID(t, root, "http.auth.user.unlock.v1")
@@ -387,7 +387,7 @@ func TestEventUserUnlockedV1Publish(t *testing.T) {
 // --- #22 DELETE-NOCONTENT-01: 204 semantic negative test ---
 
 func TestHttpAuthUserDeleteV1Serve_RejectsBodyOn204(t *testing.T) {
-	root := contracttest.ContractsRoot()
+	root := contracttest.ContractsRoot(t)
 	c := contracttest.LoadByID(t, root, "http.auth.user.delete.v1")
 
 	// Fabricate a buggy 204 response with a body to prove the contract catches it.
@@ -424,7 +424,7 @@ func (c *capturingTB) Fatal(args ...any)                 { c.errored = true }
 // ---------------------------------------------------------------------------
 
 func TestHttpAuthUserChangePasswordV1Serve(t *testing.T) {
-	root := contracttest.ContractsRoot()
+	root := contracttest.ContractsRoot(t)
 	createContract := contracttest.LoadByID(t, root, "http.auth.user.create.v1")
 	c := contracttest.LoadByID(t, root, "http.auth.user.change-password.v1")
 
@@ -482,7 +482,7 @@ func TestHttpAuthUserChangePasswordV1Serve(t *testing.T) {
 }
 
 func TestHttpAuthUserCreateV1_RequirePasswordResetField(t *testing.T) {
-	root := contracttest.ContractsRoot()
+	root := contracttest.ContractsRoot(t)
 	c := contracttest.LoadByID(t, root, "http.auth.user.create.v1")
 
 	// requirePasswordReset is optional — should be accepted (password ≥ 8 chars per FMT-25).
@@ -492,7 +492,7 @@ func TestHttpAuthUserCreateV1_RequirePasswordResetField(t *testing.T) {
 }
 
 func TestHttpAuthUserPatchV1_RequirePasswordResetField(t *testing.T) {
-	root := contracttest.ContractsRoot()
+	root := contracttest.ContractsRoot(t)
 	c := contracttest.LoadByID(t, root, "http.auth.user.patch.v1")
 
 	// requirePasswordReset as a bool patch field — should be accepted.

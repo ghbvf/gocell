@@ -18,7 +18,7 @@ import (
 )
 
 func TestHttpConfigGetV1Serve(t *testing.T) {
-	root := contracttest.ContractsRoot()
+	root := contracttest.ContractsRoot(t)
 	c := contracttest.LoadByID(t, root, "http.config.get.v1")
 
 	// Lock the wire-level contract: drift in contract.yaml method/path would
@@ -46,7 +46,7 @@ func TestHttpConfigGetV1Serve(t *testing.T) {
 }
 
 func TestHttpConfigListV1Serve(t *testing.T) {
-	root := contracttest.ContractsRoot()
+	root := contracttest.ContractsRoot(t)
 	c := contracttest.LoadByID(t, root, "http.config.list.v1")
 
 	require.NotNil(t, c.HTTP, "http.config.list.v1 must declare endpoints.http")
@@ -165,7 +165,7 @@ func servicePrincipal(subject string, roles []string) *auth.Principal {
 // without the admin role are rejected with 403 ERR_AUTH_FORBIDDEN. The
 // happy-path response shape is locked by TestHttpConfigGetV1Serve.
 func TestHttpConfigGetV1_AuthzNegative(t *testing.T) {
-	root := contracttest.ContractsRoot()
+	root := contracttest.ContractsRoot(t)
 	c := contracttest.LoadByID(t, root, "http.config.get.v1")
 	h, _ := setupHandler()
 	runAuthzCases(t, h, c, http.MethodGet, configBasePath+"/some-key", []authzCase{
@@ -179,7 +179,7 @@ func TestHttpConfigGetV1_AuthzNegative(t *testing.T) {
 // single-entry GET semantics. The base path's trailing slash matches the
 // production registration in cell_routes.go (mux.Route("/config", ...)).
 func TestHttpConfigListV1_AuthzNegative(t *testing.T) {
-	root := contracttest.ContractsRoot()
+	root := contracttest.ContractsRoot(t)
 	c := contracttest.LoadByID(t, root, "http.config.list.v1")
 	h, _ := setupHandler()
 	runAuthzCases(t, h, c, http.MethodGet, configBasePath+"/", []authzCase{
@@ -207,7 +207,7 @@ func TestHttpConfigListV1_AuthzNegative(t *testing.T) {
 // right fit for token-chain coverage; this slice-local test does not
 // replace it.
 func TestHttpConfigInternalGetV1_PolicyDefenceInDepth(t *testing.T) {
-	root := contracttest.ContractsRoot()
+	root := contracttest.ContractsRoot(t)
 	c := contracttest.LoadByID(t, root, "http.config.internal.get.v1")
 	h := setupInternalHandler()
 	runAuthzCases(t, h, c, http.MethodGet, "/internal/v1/config/some-key", []authzCase{

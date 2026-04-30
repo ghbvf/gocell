@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"strings"
 
 	"nhooyr.io/websocket"
 
@@ -16,9 +17,9 @@ import (
 // UpgradeConfig configures the WebSocket upgrade handler.
 type UpgradeConfig struct {
 	// AllowedOrigins is a list of allowed origin patterns for the upgrade.
-	// Must be non-empty — the handler is fail-closed and panics at construction
-	// time if AllowedOrigins is nil or empty. Use []string{"*"} only in
-	// development environments where origin checking is intentionally disabled.
+	// It must be non-empty and must not contain the full wildcard "*". The
+	// error-returning UpgradeHandler rejects invalid configuration; the
+	// MustUpgradeHandler composition-root helper panics on the same error.
 	AllowedOrigins []string
 }
 
@@ -28,20 +29,30 @@ type UpgradeConfig struct {
 func (c UpgradeConfig) Validate() error {
 	if len(c.AllowedOrigins) == 0 {
 		return errcode.New(errcode.ErrWebsocketOriginsMissing,
-			"websocket: UpgradeConfig.AllowedOrigins must be non-empty; use [\"*\"] only in dev (fail-closed)")
+			"websocket: UpgradeConfig.AllowedOrigins must be non-empty (fail-closed)")
+	}
+	for _, origin := range c.AllowedOrigins {
+		if pattern := strings.TrimSpace(origin); pattern == "" || pattern == "*" {
+			return errcode.New(errcode.ErrWebsocketOriginsInvalid,
+				"websocket: UpgradeConfig.AllowedOrigins must use explicit host patterns; wildcard * is forbidden")
+		}
 	}
 	return nil
 }
 
 // UpgradeHandler returns an http.Handler that upgrades HTTP connections to
-// WebSocket and registers them with the Hub. Panics at construction time if
-// cfg.AllowedOrigins is empty — SEC-FAIL-CLOSED: the previous behaviour of
-// silently setting InsecureSkipVerify=true for empty origins is removed.
-// Callers at the composition root will observe the panic immediately at
-// startup rather than silently accepting connections from all origins.
-func UpgradeHandler(hub *rtws.Hub, cfg UpgradeConfig) http.Handler {
+// WebSocket and registers them with the Hub. It rejects a nil hub or an
+// invalid cfg at construction time — error-first fail-fast — so static-wiring
+// mistakes surface at composition root instead of the first HTTP request
+// (PR-MODE-6.1). SEC-FAIL-CLOSED: the previous behaviour of silently setting
+// InsecureSkipVerify=true for empty origins is removed.
+func UpgradeHandler(hub *rtws.Hub, cfg UpgradeConfig) (http.Handler, error) {
+	if hub == nil {
+		return nil, errcode.New(errcode.ErrWebsocketHubMissing,
+			"websocket: UpgradeHandler hub must not be nil (fail-fast at wire time)")
+	}
 	if err := cfg.Validate(); err != nil {
-		panic(err)
+		return nil, err
 	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !hub.IsRunning() {
@@ -85,7 +96,16 @@ func UpgradeHandler(hub *rtws.Hub, cfg UpgradeConfig) http.Handler {
 			slog.String("conn_id", connID),
 			slog.String("remote_addr", r.RemoteAddr),
 		)
-	})
+	}), nil
+}
+
+// MustUpgradeHandler is the static-wiring variant of UpgradeHandler.
+func MustUpgradeHandler(hub *rtws.Hub, cfg UpgradeConfig) http.Handler {
+	handler, err := UpgradeHandler(hub, cfg)
+	if err != nil {
+		panic(err)
+	}
+	return handler
 }
 
 func logUpgradeFailure(r *http.Request, err error) {

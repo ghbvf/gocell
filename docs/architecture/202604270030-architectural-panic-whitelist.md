@@ -62,16 +62,18 @@ cancellation. Modelled as `kworker.ErrWorkerExitedEarly` so callers can
 `errors.Is`-detect the abnormal signal — not strictly part of the panic
 refactor, but bundled for the same "fail loudly, propagate errors" theme.
 
-### 4. Hardcoded ADR-pinned whitelist (2 functions)
+### 4. Hardcoded ADR-pinned whitelist (4 functions)
 
-The archtest holds **two** function-level whitelist entries. Every other panic
-in the scoped files is either refactored, renamed, or in an `init()` function
-(auto-exempt).
+The archtest holds **four** function-level whitelist entries. Every other
+production panic is either refactored into an error-returning API or made
+explicit through a `Must*` wrapper.
 
 | # | Function | Justification |
 |---|---|---|
 | 1 | `kernel/wrapper/lifecycle.go::recoverAndFinishWithRedactor` | Middle of a `defer recover()` chain that re-panics so the outer `runtime/http/middleware.Recovery` middleware can record + serialize the panic. Refactoring it to return error would dismantle the entire recover propagation idiom and force every wrapped consumer to pre-route panics through a synthetic error path before Go's runtime gets the chance. |
 | 2 | `runtime/http/middleware/circuit_breaker.go::repanicAfterBreakerFailure` | Middle of a `defer recover()` chain that first reports the handler panic as a circuit-breaker failure, then re-panics so the outer `Recovery` middleware remains the single panic-to-HTTP and panic-to-tracing boundary. Swallowing the panic here would bypass `Recovery` and lose panic span recording in the normal router chain. |
+| 3 | `adapters/postgres/tx_manager.go::repanicAfterTopLevelTxRollback` | Top-level transaction panic path must rollback the open pgx transaction before preserving the caller's original panic semantics. Returning an error would swallow programmer/runtime panics from the callback and change `RunInTx`'s transaction-safety contract. |
+| 4 | `adapters/postgres/tx_manager.go::repanicAfterSavepointRollback` | Nested transaction panic path must rollback to the savepoint before preserving the caller's original panic semantics. Returning an error would swallow programmer/runtime panics from the callback and make nested and top-level transactions diverge. |
 
 ### 5. Auto-exempt categories
 
@@ -82,9 +84,6 @@ in the scoped files is either refactored, renamed, or in an `init()` function
   `MustMarshalDirectEnvelope` (renamed from non-Must form), plus
   pre-existing `MustValidateLabels`, `MustRegister`, `MustNewTestKeyProvider`,
   `MustCookieSession`, etc.
-- **`func init()`**: Init cannot return error; package-level invariant
-  violations are by definition fatal. Example: `adapters/postgres/embed.go`
-  embedded migrations subdir loading.
 
 ### 6. PR-MODE-6.1 scope expansion
 
@@ -152,14 +151,14 @@ that construct a single static `cell.NewAuthJWTFromAssembly(asm)` continue
 to write `cell.MustNewAuthJWTFromAssembly(asm)` with no error-handling
 boilerplate.
 
-### Why minimum (2) whitelist?
+### Why minimum (4) whitelist?
 
 Each whitelist entry is a future regression risk: a new contributor sees
 "there are some panics here, panicking must be OK" and adds another. The
 review loop catches new architectural panic claims via the ADR, not via
-the archtest list. By keeping the whitelist to **only** defer-recover-re-panic
-helpers (which are structurally not refactorable to error returns), we maximize
-the "panic in error-less function = bug" signal.
+the archtest list. By keeping the whitelist to **only** re-panic propagation
+helpers that preserve an already in-flight panic after mandatory cleanup or
+recording, we maximize the "panic outside Must* = bug" signal.
 
 The previous design (5 entries) was rejected: outbox crypto/rand failures
 and envelope marshal invariants were absorbable as either error
@@ -172,18 +171,23 @@ wiring.
 
 ### Whitelist mechanics
 
-Hardcoded in `tools/archtest/error_first_test.go`:
+Hardcoded in `tools/archtest/panic_registered_test.go`:
 
 ```go
-var errorFirstWhitelistedFunctions = map[string]string{
+var architecturalPanicWhitelist = map[string]string{
     "kernel/wrapper/lifecycle.go::recoverAndFinishWithRedactor": "re-panics from defer recover so outer Recovery middleware can serialize the panic",
     "runtime/http/middleware/circuit_breaker.go::repanicAfterBreakerFailure": "re-panics from defer recover after reporting circuit-breaker failure",
+    "adapters/postgres/tx_manager.go::repanicAfterTopLevelTxRollback": "re-panics after top-level transaction rollback so caller panic semantics are preserved",
+    "adapters/postgres/tx_manager.go::repanicAfterSavepointRollback": "re-panics after savepoint rollback so nested transaction panic semantics are preserved",
 }
 ```
 
 To add an entry: open a PR, update this ADR's §4 table with a new row,
-update the map. Reviewer must reject any whitelist addition that's
-absorbable as `Must*` rename or error propagation.
+update the map. `PANIC-REGISTERED-01` parses the ADR table and fails unless
+the table and map are exactly equal, every map entry is used by a real panic,
+and the whitelist contains exactly the four approved permanent entries.
+Reviewer must reject any whitelist addition that's absorbable as `Must*`
+rename or error propagation.
 
 ### Trade-offs
 

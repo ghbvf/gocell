@@ -51,7 +51,7 @@ func newContractService(t *testing.T) *Service {
 // --- Create contract test ---
 
 func TestHttpConfigFlagsCreateV1Serve(t *testing.T) {
-	root := contracttest.ContractsRoot()
+	root := contracttest.ContractsRoot(t)
 	c := contracttest.LoadByID(t, root, "http.config.flags.create.v1")
 	svc := newContractService(t)
 	mux := newContractMux(svc)
@@ -72,7 +72,7 @@ func TestHttpConfigFlagsCreateV1Serve(t *testing.T) {
 // --- Update contract test ---
 
 func TestHttpConfigFlagsUpdateV1Serve(t *testing.T) {
-	root := contracttest.ContractsRoot()
+	root := contracttest.ContractsRoot(t)
 	c := contracttest.LoadByID(t, root, "http.config.flags.update.v1")
 	svc := newContractService(t)
 
@@ -134,7 +134,7 @@ func TestHttpConfigFlagsUpdateV1Serve(t *testing.T) {
 // --- Toggle contract test ---
 
 func TestHttpConfigFlagsToggleV1Serve(t *testing.T) {
-	root := contracttest.ContractsRoot()
+	root := contracttest.ContractsRoot(t)
 	c := contracttest.LoadByID(t, root, "http.config.flags.toggle.v1")
 	svc := newContractService(t)
 
@@ -160,7 +160,7 @@ func TestHttpConfigFlagsToggleV1Serve(t *testing.T) {
 // --- Delete contract test ---
 
 func TestHttpConfigFlagsDeleteV1Serve(t *testing.T) {
-	root := contracttest.ContractsRoot()
+	root := contracttest.ContractsRoot(t)
 	c := contracttest.LoadByID(t, root, "http.config.flags.delete.v1")
 	svc := newContractService(t)
 

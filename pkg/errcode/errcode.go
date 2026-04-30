@@ -170,18 +170,34 @@ const (
 	ErrWSMaxConns       Code = "ERR_WS_MAX_CONNS"
 	// ErrWebsocketOriginsMissing signals that an UpgradeHandler was constructed
 	// with an empty AllowedOrigins list. The handler rejects construction
-	// fail-fast rather than silently enabling InsecureSkipVerify=true, which
-	// would accept connections from any origin. Operators must supply at least
-	// one origin pattern (use []string{"*"} only in development).
+	// fail-fast rather than silently accepting connections from any origin.
+	// Operators must supply at least one explicit origin host pattern.
 	//
 	// Example:
 	//
-	//	adapterws.UpgradeHandler(hub, adapterws.UpgradeConfig{
+	//	handler, err := adapterws.UpgradeHandler(hub, adapterws.UpgradeConfig{
 	//	    AllowedOrigins: []string{"https://example.com"},
 	//	})
 	//
 	// ref: docs/plans/202604270020-1-2-ci-3-claude-ship-reactive-bachman.md PR-MODE-1
 	ErrWebsocketOriginsMissing Code = "ERR_WEBSOCKET_ORIGINS_MISSING"
+	// ErrWebsocketOriginsInvalid signals that AllowedOrigins contains a pattern
+	// that would disable browser Origin protection, such as the full wildcard
+	// "*".
+	ErrWebsocketOriginsInvalid Code = "ERR_WEBSOCKET_ORIGINS_INVALID"
+	// ErrWebsocketHubMissing signals that UpgradeHandler was constructed with
+	// a nil *rtws.Hub. Composition-time fail-fast — letting nil through would
+	// defer the failure until the first HTTP request, violating the
+	// error-first construction contract (PR-MODE-6.1).
+	//
+	// Example:
+	//
+	//	handler, err := adapterws.UpgradeHandler(nil, adapterws.UpgradeConfig{
+	//	    AllowedOrigins: []string{"https://example.com"},
+	//	})
+	//	var ec *errcode.Error
+	//	if errors.As(err, &ec) && ec.Code == errcode.ErrWebsocketHubMissing { /* misconfig */ }
+	ErrWebsocketHubMissing Code = "ERR_WEBSOCKET_HUB_MISSING"
 
 	// Outbox envelope error codes.
 	// ErrEnvelopeSchema signals that an inbound wire message does not conform
@@ -535,10 +551,9 @@ func Wrap(code Code, message string, cause error) *Error {
 // WithDetails returns a shallow copy of err with the provided details merged in.
 // If err.Details is nil a new map is allocated; existing keys are preserved
 // unless overwritten by the supplied details.
-// It panics if err is nil — callers must not pass a nil *Error.
-func WithDetails(err *Error, details map[string]any) *Error {
+func WithDetails(err *Error, details map[string]any) (*Error, error) {
 	if err == nil {
-		panic("errcode: WithDetails called with nil *Error")
+		return nil, New(ErrInternal, "errcode: WithDetails called with nil *Error")
 	}
 	merged := make(map[string]any, len(err.Details)+len(details))
 	maps.Copy(merged, err.Details)
@@ -550,5 +565,5 @@ func WithDetails(err *Error, details map[string]any) *Error {
 		Details:         merged,
 		Cause:           err.Cause,
 		Category:        err.Category,
-	}
+	}, nil
 }

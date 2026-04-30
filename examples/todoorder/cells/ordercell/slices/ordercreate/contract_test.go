@@ -14,7 +14,7 @@ import (
 )
 
 func TestSpecOrderCreateMatchesContract(t *testing.T) {
-	root := contracttest.ExampleContractsRoot("todoorder")
+	root := contracttest.ExampleContractsRoot(t, "todoorder")
 	c := contracttest.LoadByID(t, root, "http.order.create.v1")
 	require.NotNil(t, c.HTTP)
 	require.Equal(t, c.ID, specOrderCreate.ID)
@@ -33,7 +33,7 @@ func newContractHandler(t testing.TB) (http.Handler, *recordingWriter) {
 }
 
 func TestHttpOrderCreateV1Serve(t *testing.T) {
-	root := contracttest.ExampleContractsRoot("todoorder")
+	root := contracttest.ExampleContractsRoot(t, "todoorder")
 	c := contracttest.LoadByID(t, root, "http.order.create.v1")
 	h, _ := newContractHandler(t)
 
@@ -48,7 +48,7 @@ func TestHttpOrderCreateV1Serve(t *testing.T) {
 }
 
 func TestEventOrderCreatedV1Publish(t *testing.T) {
-	root := contracttest.ExampleContractsRoot("todoorder")
+	root := contracttest.ExampleContractsRoot(t, "todoorder")
 	httpContract := contracttest.LoadByID(t, root, "http.order.create.v1")
 	c := contracttest.LoadByID(t, root, "event.order-created.v1")
 	h, writer := newContractHandler(t)

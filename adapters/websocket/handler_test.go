@@ -55,8 +55,8 @@ func setupTestHub(t *testing.T, handler rtws.MessageHandler) (*rtws.Hub, *httpte
 
 	mux := http.NewServeMux()
 	// Use explicit AllowedOrigins; empty origins will be rejected after SEC-FAIL-CLOSED-04.
-	mux.Handle("/ws", adapterws.UpgradeHandler(hub, adapterws.UpgradeConfig{
-		AllowedOrigins: []string{"*"},
+	mux.Handle("/ws", requireUpgradeHandler(t, hub, adapterws.UpgradeConfig{
+		AllowedOrigins: []string{"example.com"},
 	}))
 
 	server := httptest.NewServer(mux)
@@ -70,6 +70,13 @@ func setupTestHub(t *testing.T, handler rtws.MessageHandler) (*rtws.Hub, *httpte
 	})
 
 	return hub, server
+}
+
+func requireUpgradeHandler(t testing.TB, hub *rtws.Hub, cfg adapterws.UpgradeConfig) http.Handler {
+	t.Helper()
+	handler, err := adapterws.UpgradeHandler(hub, cfg)
+	require.NoError(t, err)
+	return handler
 }
 
 func dialWS(t *testing.T, serverURL string) *websocket.Conn {
@@ -122,8 +129,8 @@ func TestUpgradeHandler_NonHijackerFailsBeforeAccept(t *testing.T) {
 		<-startErr
 	})
 
-	handler := adapterws.UpgradeHandler(hub, adapterws.UpgradeConfig{
-		AllowedOrigins: []string{"*"},
+	handler := requireUpgradeHandler(t, hub, adapterws.UpgradeConfig{
+		AllowedOrigins: []string{"example.com"},
 	})
 	req := httptest.NewRequest(http.MethodGet, "/ws", nil)
 	req.Header.Set("Connection", "Upgrade")
@@ -327,7 +334,7 @@ func TestUpgradeHandler_AllowedOrigins(t *testing.T) {
 	cfg := rtws.DefaultHubConfig()
 	hub := rtws.NewHub(cfg, nil)
 
-	handler := adapterws.UpgradeHandler(hub, adapterws.UpgradeConfig{
+	handler := requireUpgradeHandler(t, hub, adapterws.UpgradeConfig{
 		AllowedOrigins: []string{"example.com"},
 	})
 
@@ -392,7 +399,7 @@ func TestUpgradeHandler_HubNotRunning_503(t *testing.T) {
 	// Hub intentionally NOT started.
 
 	// AllowedOrigins is required post-SEC-FAIL-CLOSED-04; use a valid value.
-	handler := adapterws.UpgradeHandler(hub, adapterws.UpgradeConfig{
+	handler := requireUpgradeHandler(t, hub, adapterws.UpgradeConfig{
 		AllowedOrigins: []string{"example.com"},
 	})
 
@@ -405,51 +412,109 @@ func TestUpgradeHandler_HubNotRunning_503(t *testing.T) {
 }
 
 // TestUpgradeHandler_RejectsEmptyOrigins verifies that constructing an
-// UpgradeConfig with nil AllowedOrigins panics at construction time with an
-// *errcode.Error (SEC-FAIL-CLOSED). The recover block asserts the panic value
-// carries errcode.ErrWebsocketOriginsMissing so that recover chains can
-// errors.As on the recovered value.
+// UpgradeConfig with nil AllowedOrigins returns an *errcode.Error
+// (SEC-FAIL-CLOSED).
 //
 // Positive case: AllowedOrigins: []string{"example.com"} must not panic.
 func TestUpgradeHandler_RejectsEmptyOrigins(t *testing.T) {
 	cfg := rtws.DefaultHubConfig()
 
-	t.Run("empty origins — expect construction panic with *errcode.Error", func(t *testing.T) {
+	t.Run("empty origins — expect construction error with *errcode.Error", func(t *testing.T) {
 		hub := rtws.NewHub(cfg, nil)
 
-		var panicVal any
-		panicked := func() (didPanic bool) {
-			defer func() {
-				if r := recover(); r != nil {
-					panicVal = r
-					didPanic = true
-				}
-			}()
-			_ = adapterws.UpgradeHandler(hub, adapterws.UpgradeConfig{AllowedOrigins: nil})
-			return false
-		}()
-
-		if !panicked {
-			t.Fatal("UpgradeHandler with nil AllowedOrigins must panic at construction time")
-		}
-		// The panic value must be an *errcode.Error so recover chains can errors.As on it.
-		ec, ok := panicVal.(*errcode.Error)
-		if !ok {
-			t.Errorf("panic value must be *errcode.Error; got %T: %v", panicVal, panicVal)
-			return
-		}
+		handler, err := adapterws.UpgradeHandler(hub, adapterws.UpgradeConfig{AllowedOrigins: nil})
+		require.Error(t, err)
+		assert.Nil(t, handler)
+		var ec *errcode.Error
+		require.ErrorAs(t, err, &ec)
 		if ec.Code != errcode.ErrWebsocketOriginsMissing {
-			t.Errorf("panic *errcode.Error must have code ErrWebsocketOriginsMissing; got %q", ec.Code)
+			t.Errorf("error code must be ErrWebsocketOriginsMissing; got %q", ec.Code)
 		}
 	})
 
 	t.Run("explicit allowed origins — ok", func(t *testing.T) {
 		hub := rtws.NewHub(cfg, nil)
 
-		// Must not panic; construction with valid origins must succeed.
-		handler := adapterws.UpgradeHandler(hub, adapterws.UpgradeConfig{
+		handler, err := adapterws.UpgradeHandler(hub, adapterws.UpgradeConfig{
 			AllowedOrigins: []string{"example.com"},
 		})
+		require.NoError(t, err)
 		require.NotNil(t, handler)
+	})
+}
+
+// TestUpgradeHandler_RejectsNilHub verifies that constructing UpgradeHandler
+// with a nil *rtws.Hub fails fast at composition time with
+// ErrWebsocketHubMissing rather than deferring the failure to the first
+// HTTP request — error-first construction contract (PR-MODE-6.1).
+func TestUpgradeHandler_RejectsNilHub(t *testing.T) {
+	handler, err := adapterws.UpgradeHandler(nil, adapterws.UpgradeConfig{
+		AllowedOrigins: []string{"example.com"},
+	})
+
+	require.Error(t, err)
+	assert.Nil(t, handler)
+	var ec *errcode.Error
+	require.ErrorAs(t, err, &ec)
+	assert.Equal(t, errcode.ErrWebsocketHubMissing, ec.Code)
+}
+
+// TestMustUpgradeHandler_PanicsOnNilHub locks the static-wiring twin: a nil
+// hub must surface as a panic at composition root, not at request time, and
+// the panic value must be a typed *errcode.Error carrying ErrWebsocketHubMissing
+// so a recovery-based composition root can report the precise misconfiguration.
+func TestMustUpgradeHandler_PanicsOnNilHub(t *testing.T) {
+	defer func() {
+		r := recover()
+		require.NotNil(t, r, "MustUpgradeHandler must panic on nil hub")
+		err, ok := r.(error)
+		require.True(t, ok, "panic value must be an error, got %T", r)
+		var ec *errcode.Error
+		require.ErrorAs(t, err, &ec)
+		assert.Equal(t, errcode.ErrWebsocketHubMissing, ec.Code)
+	}()
+	_ = adapterws.MustUpgradeHandler(nil, adapterws.UpgradeConfig{
+		AllowedOrigins: []string{"example.com"},
+	})
+	t.Fatal("expected MustUpgradeHandler to panic, got none")
+}
+
+// TestUpgradeHandler_NilHubTakesPriorityOverOrigins locks the diagnostic order:
+// when both hub and cfg are invalid, the caller sees ErrWebsocketHubMissing
+// first. Reordering the checks in UpgradeHandler would silently change which
+// errcode operators see for misconfigured wiring.
+func TestUpgradeHandler_NilHubTakesPriorityOverOrigins(t *testing.T) {
+	handler, err := adapterws.UpgradeHandler(nil, adapterws.UpgradeConfig{
+		AllowedOrigins: nil,
+	})
+
+	require.Error(t, err)
+	assert.Nil(t, handler)
+	var ec *errcode.Error
+	require.ErrorAs(t, err, &ec)
+	assert.Equal(t, errcode.ErrWebsocketHubMissing, ec.Code,
+		"nil hub must be diagnosed before invalid origins")
+}
+
+func TestUpgradeHandler_RejectsWildcardOrigin(t *testing.T) {
+	hub := rtws.NewHub(rtws.DefaultHubConfig(), nil)
+
+	handler, err := adapterws.UpgradeHandler(hub, adapterws.UpgradeConfig{
+		AllowedOrigins: []string{"*"},
+	})
+	require.Error(t, err)
+	assert.Nil(t, handler)
+	var ec *errcode.Error
+	require.ErrorAs(t, err, &ec)
+	assert.Equal(t, errcode.ErrWebsocketOriginsInvalid, ec.Code)
+}
+
+func TestMustUpgradeHandler_PanicsOnInvalidConfig(t *testing.T) {
+	hub := rtws.NewHub(rtws.DefaultHubConfig(), nil)
+
+	require.Panics(t, func() {
+		_ = adapterws.MustUpgradeHandler(hub, adapterws.UpgradeConfig{
+			AllowedOrigins: []string{"*"},
+		})
 	})
 }

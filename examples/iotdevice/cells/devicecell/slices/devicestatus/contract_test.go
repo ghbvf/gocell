@@ -28,7 +28,7 @@ func newContractHandler() http.Handler {
 }
 
 func TestSpecDeviceStatusMatchesContract(t *testing.T) {
-	root := contracttest.ExampleContractsRoot("iotdevice")
+	root := contracttest.ExampleContractsRoot(t, "iotdevice")
 	c := contracttest.LoadByID(t, root, "http.device.status.v1")
 	require.NotNil(t, c.HTTP)
 	require.Equal(t, c.ID, specDeviceStatus.ID)
@@ -37,7 +37,7 @@ func TestSpecDeviceStatusMatchesContract(t *testing.T) {
 }
 
 func TestHttpDeviceStatusV1Serve(t *testing.T) {
-	root := contracttest.ExampleContractsRoot("iotdevice")
+	root := contracttest.ExampleContractsRoot(t, "iotdevice")
 	c := contracttest.LoadByID(t, root, "http.device.status.v1")
 	h := newContractHandler()
 
@@ -51,7 +51,7 @@ func TestHttpDeviceStatusV1Serve(t *testing.T) {
 }
 
 func TestHttpDeviceStatusV1Serve_NotFound(t *testing.T) {
-	root := contracttest.ExampleContractsRoot("iotdevice")
+	root := contracttest.ExampleContractsRoot(t, "iotdevice")
 	c := contracttest.LoadByID(t, root, "http.device.status.v1")
 	h := newContractHandler()
 

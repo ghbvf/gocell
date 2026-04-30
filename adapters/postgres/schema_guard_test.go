@@ -38,7 +38,7 @@ func TestExpectedVersion_FromEmbedFS(t *testing.T) {
 	// Use the real embedded migrations FS to verify max version detection works.
 	// This is a contract test: if a new migration is added, this test
 	// automatically uses the new max.
-	fsys := MigrationsFS()
+	fsys := testMigrationsFS(t)
 	v, err := ExpectedVersion(fsys)
 	require.NoError(t, err)
 	// Currently 13 migrations (001-013).

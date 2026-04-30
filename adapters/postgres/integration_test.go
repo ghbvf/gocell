@@ -181,7 +181,7 @@ func TestIntegration_Migrator(t *testing.T) {
 
 	ctx := context.Background()
 
-	migrator, err := NewMigrator(pool, MigrationsFS(), "schema_migrations")
+	migrator, err := NewMigrator(pool, testMigrationsFS(t), "schema_migrations")
 	require.NoError(t, err, "NewMigrator should succeed")
 
 	t.Run("up", func(t *testing.T) {
@@ -259,7 +259,7 @@ func TestIntegration_OutboxWriter(t *testing.T) {
 	ctx := context.Background()
 
 	// Apply migrations so the outbox_entries table exists.
-	migrator, mErr := NewMigrator(pool, MigrationsFS(), "schema_migrations")
+	migrator, mErr := NewMigrator(pool, testMigrationsFS(t), "schema_migrations")
 	require.NoError(t, mErr, "NewMigrator should succeed")
 	require.NoError(t, migrator.Up(ctx), "migrations must succeed")
 
@@ -359,7 +359,7 @@ func TestMigrator_Applies004_WithConcurrentlyIndexes(t *testing.T) {
 
 	ctx := context.Background()
 
-	migrator, err := NewMigrator(pool, MigrationsFS(), "schema_migrations_004")
+	migrator, err := NewMigrator(pool, testMigrationsFS(t), "schema_migrations_004")
 	require.NoError(t, err)
 
 	// First Up: applies all 5 migrations including 004.
@@ -411,7 +411,7 @@ func TestMigration004_StructuralAssertions(t *testing.T) {
 
 	ctx := context.Background()
 
-	migrator, err := NewMigrator(pool, MigrationsFS(), "schema_migrations_struct")
+	migrator, err := NewMigrator(pool, testMigrationsFS(t), "schema_migrations_struct")
 	require.NoError(t, err)
 	require.NoError(t, migrator.Up(ctx), "Up() must apply all migrations")
 
@@ -471,7 +471,7 @@ func TestMigration006_ConfigVersionsConfigIDIndex(t *testing.T) {
 
 	ctx := context.Background()
 
-	migrator, err := NewMigrator(pool, MigrationsFS(), "schema_migrations_006")
+	migrator, err := NewMigrator(pool, testMigrationsFS(t), "schema_migrations_006")
 	require.NoError(t, err)
 	require.NoError(t, migrator.Up(ctx), "Up() must apply all migrations including 006")
 
@@ -524,7 +524,7 @@ func TestMigrator_Up_RefusesIfInvalidIndexExists(t *testing.T) {
 	ctx := context.Background()
 
 	// Apply all migrations so tables and indexes exist.
-	prep, err := NewMigrator(pool, MigrationsFS(), "schema_migrations_guard_prep")
+	prep, err := NewMigrator(pool, testMigrationsFS(t), "schema_migrations_guard_prep")
 	require.NoError(t, err)
 	require.NoError(t, prep.Up(ctx), "preparatory Up() must succeed")
 
@@ -544,7 +544,7 @@ func TestMigrator_Up_RefusesIfInvalidIndexExists(t *testing.T) {
 	// Construct a fresh migrator using the same pool (with invalid index present).
 	// Use a new tracking table so Up() attempts to run from scratch (pre-check
 	// fires before any migration runs).
-	migrator2, err := NewMigrator(pool, MigrationsFS(), "schema_migrations_guard_test")
+	migrator2, err := NewMigrator(pool, testMigrationsFS(t), "schema_migrations_guard_test")
 	require.NoError(t, err)
 
 	// Up() must return an error: refusing to migrate due to invalid indexes.

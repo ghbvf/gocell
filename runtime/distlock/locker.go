@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/validation"
 )
 
 // Locker acquires named distributed locks.
@@ -100,7 +101,7 @@ type lockerImpl struct {
 //
 // ref: plan "共享 manager goroutine" section
 func New(driver Driver, opts ...Option) (Locker, error) {
-	if driver == nil {
+	if validation.IsNilInterface(driver) {
 		return nil, errcode.New(errcode.ErrValidationFailed, "distlock.New: driver must not be nil")
 	}
 	cfg := defaultConfig()

@@ -1,6 +1,8 @@
 package memstore_test
 
 import (
+	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -12,6 +14,20 @@ import (
 
 // baseTime is the synthetic epoch for all FakeClocks in this test file.
 var baseTime = time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+
+var errTypedNilReaderUsed = errors.New("typed nil reader should have been defaulted")
+
+type typedNilClock struct{}
+
+func (*typedNilClock) Now() time.Time {
+	return baseTime
+}
+
+type typedNilReader struct{}
+
+func (*typedNilReader) Read([]byte) (int, error) {
+	return 0, errTypedNilReaderUsed
+}
 
 // TestMemStoreContract runs the full C1-C7 contract test suite (T1-T12) against
 // the in-memory store. In the TDD red phase the memstore stubs return nil/nil,
@@ -57,6 +73,33 @@ func TestNewRejectsInvalidConfig(t *testing.T) {
 			require.Nil(t, store)
 		})
 	}
+}
+
+func TestNewRejectsTypedNilClock(t *testing.T) {
+	var clock *typedNilClock
+	store, err := memstore.New(
+		refresh.Policy{ReuseInterval: time.Second, MaxAge: time.Hour},
+		clock,
+		nil,
+	)
+	require.Error(t, err)
+	require.Nil(t, store)
+}
+
+func TestNewDefaultsTypedNilRandReader(t *testing.T) {
+	clock := storetest.NewFakeClock(baseTime)
+	var reader *typedNilReader
+
+	store, err := memstore.New(
+		refresh.Policy{ReuseInterval: time.Second, MaxAge: time.Hour},
+		clock,
+		reader,
+	)
+	require.NoError(t, err)
+	require.NotNil(t, store)
+
+	_, _, err = store.Issue(context.Background(), "session-1", "subject-1")
+	require.NoError(t, err)
 }
 
 func TestMustNewPanicsOnInvalidConfig(t *testing.T) {

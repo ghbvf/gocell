@@ -62,42 +62,27 @@ func decodeJSON(r *http.Request, dst any, strict bool) error {
 		if isMaxBytesError(err) {
 			return errcode.New(errcode.ErrBodyTooLarge, "request body too large")
 		}
-		return errcode.WithDetails(
-			errcode.New(errcode.ErrValidationFailed, msgInvalidRequestBody),
-			map[string]any{"reason": "trailing content after JSON value"},
-		)
+		return validationFailedWithDetails(map[string]any{"reason": "trailing content after JSON value"})
 	}
 	return nil
 }
 
-func classifyDecodeError(err error) *errcode.Error {
+func classifyDecodeError(err error) error {
 	switch {
 	case errors.Is(err, io.EOF):
-		return errcode.WithDetails(
-			errcode.New(errcode.ErrValidationFailed, msgInvalidRequestBody),
-			map[string]any{"reason": "empty body"},
-		)
+		return validationFailedWithDetails(map[string]any{"reason": "empty body"})
 	case errors.Is(err, io.ErrUnexpectedEOF):
-		return errcode.WithDetails(
-			errcode.New(errcode.ErrValidationFailed, msgInvalidRequestBody),
-			map[string]any{"reason": "malformed JSON"},
-		)
+		return validationFailedWithDetails(map[string]any{"reason": "malformed JSON"})
 	case isMaxBytesError(err):
 		return errcode.New(errcode.ErrBodyTooLarge, "request body too large")
 	default:
 		var syntaxErr *json.SyntaxError
 		if errors.As(err, &syntaxErr) {
-			return errcode.WithDetails(
-				errcode.New(errcode.ErrValidationFailed, msgInvalidRequestBody),
-				map[string]any{"reason": "malformed JSON", "offset": syntaxErr.Offset},
-			)
+			return validationFailedWithDetails(map[string]any{"reason": "malformed JSON", "offset": syntaxErr.Offset})
 		}
 		var typeErr *json.UnmarshalTypeError
 		if errors.As(err, &typeErr) {
-			return errcode.WithDetails(
-				errcode.New(errcode.ErrValidationFailed, msgInvalidRequestBody),
-				map[string]any{"reason": "type mismatch", "field": typeErr.Field},
-			)
+			return validationFailedWithDetails(map[string]any{"reason": "type mismatch", "field": typeErr.Field})
 		}
 		// Go's json.Decoder.DisallowUnknownFields() produces:
 		//   fmt.Errorf("json: unknown field %q", key)
@@ -105,13 +90,21 @@ func classifyDecodeError(err error) *errcode.Error {
 		// Guard test: TestDecodeJSON_GoStdlibUnknownFieldFormat.
 		if after, ok := strings.CutPrefix(err.Error(), unknownFieldPrefix); ok {
 			field := strings.Trim(after, `"`)
-			return errcode.WithDetails(
-				errcode.New(errcode.ErrValidationFailed, msgInvalidRequestBody),
-				map[string]any{"reason": "unknown field", "field": field},
-			)
+			return validationFailedWithDetails(map[string]any{"reason": "unknown field", "field": field})
 		}
 		return errcode.Wrap(errcode.ErrInternal, "internal server error", err)
 	}
+}
+
+func validationFailedWithDetails(details map[string]any) error {
+	detailed, err := errcode.WithDetails(
+		errcode.New(errcode.ErrValidationFailed, msgInvalidRequestBody),
+		details,
+	)
+	if err != nil {
+		return err
+	}
+	return detailed
 }
 
 func isMaxBytesError(err error) bool {

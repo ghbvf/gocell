@@ -39,5 +39,6 @@ itself enforces.
 | `verify-generated.sh` | metadata-derived generated assembly entrypoints, `boundary.yaml`, and `metrics-schema.yaml` are up to date |
 | `verify-govalidate.sh` | `gocell validate --strict` (FMT, ADV, REF, LAYER, VERIFY, CONTRACT-CONSISTENCY) |
 | `verify-journey.sh` | `gocell verify journey --active` (active journeys carry executable auto checks) |
+| `verify-panic-registered.sh` | `PANIC-REGISTERED-01`: production `panic()` calls must be `Must*` or ADR-registered |
 | `verify-scaffold-reject.sh` | `gocell scaffold slice` rejects kebab-case names |
 | `verify-unconditional-skip.sh` | no `t.Skip` without a runtime predicate |

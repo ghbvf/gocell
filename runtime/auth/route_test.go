@@ -227,10 +227,11 @@ func TestMustMount_PanicsOnNilHandler(t *testing.T) {
 	MustMount(newCaptureMux(), Route{Contract: loginContractSpec()})
 }
 
-func TestRequirePolicy_NilPanics(t *testing.T) {
-	assert.PanicsWithValue(t, "auth.RequirePolicy: policy must not be nil", func() {
-		RequirePolicy(nil)
-	})
+func TestRequirePolicy_NilReturnsError(t *testing.T) {
+	middleware, err := RequirePolicy(nil)
+	require.Error(t, err)
+	assert.Nil(t, middleware)
+	assert.Contains(t, err.Error(), "policy must not be nil")
 }
 
 // prefixedCaptureMux is a test double that extends captureMux with a fixed

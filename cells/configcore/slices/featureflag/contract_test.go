@@ -8,7 +8,7 @@ import (
 )
 
 func TestHttpConfigFlagsListV1Serve(t *testing.T) {
-	root := contracttest.ContractsRoot()
+	root := contracttest.ContractsRoot(t)
 	c := contracttest.LoadByID(t, root, "http.config.flags.list.v1")
 
 	// PR-CFG-C contract-as-auth-truth: route is admin-gated.
@@ -24,7 +24,7 @@ func TestHttpConfigFlagsListV1Serve(t *testing.T) {
 }
 
 func TestHttpConfigFlagsGetV1Serve(t *testing.T) {
-	root := contracttest.ContractsRoot()
+	root := contracttest.ContractsRoot(t)
 	c := contracttest.LoadByID(t, root, "http.config.flags.get.v1")
 
 	_, has403 := c.HTTP.Responses[403]
@@ -39,7 +39,7 @@ func TestHttpConfigFlagsGetV1Serve(t *testing.T) {
 }
 
 func TestHttpConfigFlagsEvaluateV1Serve(t *testing.T) {
-	root := contracttest.ContractsRoot()
+	root := contracttest.ContractsRoot(t)
 	c := contracttest.LoadByID(t, root, "http.config.flags.evaluate.v1")
 
 	_, has403 := c.HTTP.Responses[403]
