@@ -1,6 +1,6 @@
 # GoCell Backlog
 
-> **v1.0 发布前 PR 待办清单**：[`docs/plans/202604301129-027-release-v1.0-readiness.md`](plans/202604301129-027-release-v1.0-readiness.md) — **32 PR / ~38-50 工作日**（P0 阻塞 25 PR + CI/工程基线 7 PR，含 PG 接入主线 8 PR + E1/E2 API 减重 2 PR）
+> **v1.0 发布前 PR 待办清单**：[`docs/plans/202604301129-027-release-v1.0-readiness.md`](plans/202604301129-027-release-v1.0-readiness.md) — **36 PR / ~43-56 工作日**（P0 阻塞 25 PR + CI/工程基线 7 PR + 架构杠杆 4 PR，含 PG 接入主线 8 PR + E1/E2 API 减重 2 PR + 5 维评分 ≥ 10 的架构项 4 PR）
 >
 > 基线: `origin/develop @ 0f8f737e`（2026-04-30，最新合入 PR #337）
 >
