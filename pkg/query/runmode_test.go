@@ -34,7 +34,6 @@ func TestRunMode_String(t *testing.T) {
 		{RunMode(99), "unknown"},
 	}
 	for _, tc := range tests {
-		tc := tc
 		t.Run(tc.want, func(t *testing.T) {
 			t.Parallel()
 			if got := tc.mode.String(); got != tc.want {

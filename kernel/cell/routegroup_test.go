@@ -117,7 +117,6 @@ func TestRouteGroup_FieldCombinations(t *testing.T) {
 	}
 
 	for _, tc := range cases {
-		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			assertRouteGroupFields(t, tc.rg, tc.wantRef, tc.wantPfx, tc.wantNilR)

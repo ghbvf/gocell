@@ -25,7 +25,6 @@ func TestAckReason_Valid(t *testing.T) {
 		{command.AckReason(99), false},
 	}
 	for _, tt := range tests {
-		tt := tt
 		t.Run(tt.r.String(), func(t *testing.T) {
 			t.Parallel()
 			assert.Equal(t, tt.want, tt.r.Valid())
@@ -47,7 +46,6 @@ func TestAckReason_String(t *testing.T) {
 		{command.AckReason(99), "ack_reason(99)"},
 	}
 	for _, tt := range tests {
-		tt := tt
 		t.Run(tt.want, func(t *testing.T) {
 			t.Parallel()
 			assert.Equal(t, tt.want, tt.r.String())

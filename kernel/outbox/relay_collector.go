@@ -3,6 +3,7 @@ package outbox
 import (
 	"fmt"
 	"log/slog"
+	"slices"
 
 	"github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/pkg/errcode"
@@ -79,8 +80,8 @@ func NewProviderRelayCollector(p metrics.Provider, cellID string, opts ...Provid
 	// construction without "duplicate collector" errors.
 	var registered []metrics.Collector
 	rollback := func(origErr error) error {
-		for i := len(registered) - 1; i >= 0; i-- {
-			if rbErr := p.Unregister(registered[i]); rbErr != nil {
+		for _, v := range slices.Backward(registered) {
+			if rbErr := p.Unregister(v); rbErr != nil {
 				slog.Error("outbox: unregister during rollback failed",
 					slog.Any("error", rbErr),
 					slog.String("cell", cellID),

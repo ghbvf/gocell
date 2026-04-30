@@ -833,7 +833,7 @@ func TestHandleResult_Fields(t *testing.T) {
 func TestEntry_Validate_MetadataKeyCount_Exceeds(t *testing.T) {
 	e := Entry{ID: "test", EventType: "test.event", Payload: []byte(`{}`)}
 	e.Metadata = make(map[string]string)
-	for i := 0; i < MaxMetadataKeys+1; i++ {
+	for i := range MaxMetadataKeys + 1 {
 		e.Metadata[fmt.Sprintf("key-%d", i)] = "v"
 	}
 	err := e.Validate()
@@ -864,7 +864,7 @@ func TestEntry_Validate_MetadataTotalSize_Exceeds(t *testing.T) {
 	e.Metadata = make(map[string]string)
 	// Fill with entries that individually fit but exceed total.
 	val := strings.Repeat("x", MaxMetadataValueLen)
-	for i := 0; i < (MaxMetadataTotalSize/MaxMetadataValueLen)+2; i++ {
+	for i := range (MaxMetadataTotalSize / MaxMetadataValueLen) + 2 {
 		e.Metadata[fmt.Sprintf("k%d", i)] = val
 	}
 	err := e.Validate()
@@ -930,7 +930,7 @@ func TestEntry_Validate_MetadataAtExactBoundary(t *testing.T) {
 	// Exactly MaxMetadataKeys keys should pass.
 	e := Entry{ID: "test", EventType: "test.event", Payload: []byte(`{}`)}
 	e.Metadata = make(map[string]string)
-	for i := 0; i < MaxMetadataKeys; i++ {
+	for i := range MaxMetadataKeys {
 		e.Metadata[fmt.Sprintf("k%02d", i)] = "v"
 	}
 	assert.NoError(t, e.Validate(), "exactly MaxMetadataKeys should be valid")

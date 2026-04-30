@@ -248,7 +248,6 @@ func TestResetForRetry_FromTerminal_Rejected(t *testing.T) {
 	// Succeeded, Expired, Canceled are NOT retryable (unlike Failed).
 	rejectedStatuses := []Status{StatusSucceeded, StatusExpired, StatusCanceled}
 	for _, status := range rejectedStatuses {
-		status := status
 		t.Run(status.String(), func(t *testing.T) {
 			t.Parallel()
 			created := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)

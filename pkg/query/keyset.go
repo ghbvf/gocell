@@ -116,7 +116,7 @@ func appendTupleComparison(b *Builder, cols []SortColumn, values []any) error {
 func appendCompoundOR(b *Builder, cols []SortColumn, values []any) error {
 	var parts []string
 
-	for level := 0; level < len(cols); level++ {
+	for level := range cols {
 		var conditions []string
 
 		for j := 0; j < level; j++ {

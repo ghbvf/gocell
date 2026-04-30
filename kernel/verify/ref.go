@@ -81,7 +81,7 @@ func resolveRef(ref string) (resolvedRef, error) {
 		// converted: "contract.http.auth.login.v1.serve" → "HttpAuthLoginV1Serve".
 		fullPath := parts[1] + "." + suffix // rejoin: "http" + "auth.login.v1.serve"
 		var b strings.Builder
-		for _, seg := range strings.Split(fullPath, ".") {
+		for seg := range strings.SplitSeq(fullPath, ".") {
 			b.WriteString(kebabToCamelCase(seg))
 		}
 		return resolvedRef{

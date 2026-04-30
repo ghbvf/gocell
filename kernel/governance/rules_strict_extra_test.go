@@ -660,7 +660,7 @@ func TestWalkSchemaObjectDepth_DepthGuard(t *testing.T) {
 			// No additionalProperties — would be a violation at every level.
 		}
 		current := inner
-		for i := 0; i < depth; i++ {
+		for range depth {
 			next := map[string]any{
 				"type": "object",
 				"properties": map[string]any{
@@ -915,14 +915,15 @@ func fmt25Project(contractID, contractDir string, queryParams, pathParams map[st
 		File: contractDir + "/contract.yaml",
 	}
 	if queryParams != nil || pathParams != nil {
-		path := "/x"
+		var path strings.Builder
+		path.WriteString("/x")
 		for _, name := range sortedParamKeys(pathParams) {
-			path += "/{" + name + "}"
+			path.WriteString("/{" + name + "}")
 		}
 		cm.Endpoints = metadata.EndpointsMeta{
 			HTTP: &metadata.HTTPTransportMeta{
 				Method:        "GET",
-				Path:          path,
+				Path:          path.String(),
 				PathParams:    pathParams,
 				QueryParams:   queryParams,
 				SuccessStatus: 200,
@@ -1155,7 +1156,7 @@ func TestFMT25_RequestDepthLimitFailsClosed(t *testing.T) {
 		"properties":           map[string]any{},
 	}
 	parent := schema["properties"].(map[string]any)
-	for i := 0; i < 34; i++ {
+	for range 34 {
 		child := map[string]any{
 			"type":                 "object",
 			"additionalProperties": false,
@@ -1463,7 +1464,6 @@ func TestFMT25_SkipsInvalidPathParams(t *testing.T) {
 		},
 	}
 	for _, tc := range tests {
-		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			pm := fmt25Project("http.test.v1", "contracts/http/test/v1", nil, tc.pathParams)
 			pm.Contracts["http.test.v1"].Endpoints.HTTP.Path = tc.path

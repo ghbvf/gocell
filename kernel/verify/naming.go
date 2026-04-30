@@ -22,7 +22,7 @@ func kebabToCamelCase(s string) string {
 	}
 	var b strings.Builder
 	b.Grow(len(s))
-	for _, seg := range strings.Split(s, "-") {
+	for seg := range strings.SplitSeq(s, "-") {
 		if seg == "" {
 			continue
 		}

@@ -113,7 +113,7 @@ func TestCancelReason_ConcurrentWrite(t *testing.T) {
 	ctx := WithCancelReasonSlot(context.Background())
 
 	var wg sync.WaitGroup
-	for i := 0; i < 16; i++ {
+	for range 16 {
 		wg.Add(2)
 		go func() { defer wg.Done(); setCancelReason(ctx, ctxcancel.ReasonCanceled) }()
 		go func() { defer wg.Done(); setCancelReason(ctx, ctxcancel.ReasonDeadlineExceeded) }()

@@ -219,7 +219,6 @@ func TestValidateNew_NegativeTimeouts_AllFields(t *testing.T) {
 		{"negative OverallDeadline", Timeouts{OverallDeadline: -1 * time.Second}},
 	}
 	for _, tt := range tests {
-		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			entry := base
@@ -285,7 +284,7 @@ func TestValidateNew_MetadataKeyCount_Exceeds(t *testing.T) {
 		Payload: []byte(`{}`), Status: StatusPending, CreatedAt: now,
 	}
 	entry.Metadata = make(map[string]string)
-	for i := 0; i < MaxMetadataKeys+1; i++ {
+	for i := range MaxMetadataKeys + 1 {
 		entry.Metadata[fmt.Sprintf("key-%d", i)] = "v"
 	}
 	err := entry.ValidateNew()

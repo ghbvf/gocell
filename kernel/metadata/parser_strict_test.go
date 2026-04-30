@@ -15,6 +15,7 @@ package metadata
 import (
 	"errors"
 	"fmt"
+	"maps"
 	"regexp"
 	"testing"
 	"testing/fstest"
@@ -161,9 +162,7 @@ var lineNumberRe = regexp.MustCompile(`line \d+`)
 // ErrMetadataInvalid error whose message names the field and includes a line number.
 func TestParser_StrictKnownFields_RejectsDynamicFields(t *testing.T) {
 	for _, kind := range metadataKinds {
-		kind := kind // capture
 		for _, field := range dynamicStateFields {
-			field := field // capture
 			name := kind.name + "_rejects_" + field
 			t.Run(name, func(t *testing.T) {
 				// Build the injected YAML. For map-based YAML kinds the dynamic
@@ -181,9 +180,7 @@ func TestParser_StrictKnownFields_RejectsDynamicFields(t *testing.T) {
 					kind.path: &fstest.MapFile{Data: []byte(injected)},
 				}
 				// Seed peer files from the kind definition, if any.
-				for k, v := range kind.peerFiles {
-					fsys[k] = v
-				}
+				maps.Copy(fsys, kind.peerFiles)
 
 				p := NewParser("")
 				_, err := p.ParseFS(fsys)
@@ -226,7 +223,6 @@ func TestParser_StrictKnownFields_StatusBoardAcceptsLegitimateFields(t *testing.
 	}
 
 	for _, tc := range legitimateFields {
-		tc := tc // capture
 		t.Run(tc.name, func(t *testing.T) {
 			fsys := fstest.MapFS{
 				"journeys/status-board.yaml": &fstest.MapFile{Data: []byte(tc.yaml)},
@@ -254,7 +250,6 @@ func TestParser_StrictKnownFields_StatusBoardRejectsNonStructFields(t *testing.T
 	}
 
 	for _, field := range rejectedInStatusBoard {
-		field := field // capture
 		name := "statusboard_rejects_" + field
 		t.Run(name, func(t *testing.T) {
 			// Inject the field alongside legitimate status-board fields.
@@ -363,7 +358,6 @@ verify:
 	}
 
 	for _, tt := range tests {
-		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			fsys := fstest.MapFS{
 				"cells/testcell/cell.yaml":                   &fstest.MapFile{Data: []byte(minimalCellYAML)},

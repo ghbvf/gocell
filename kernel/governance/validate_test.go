@@ -2962,10 +2962,7 @@ func assertADV06Findings(t *testing.T, got []ValidationResult, tt adv06Case) {
 		assert.Equal(t, SeverityError, r.Severity)
 		assert.Equal(t, IssueMismatch, r.IssueType)
 	}
-	limit := tt.wantCount
-	if len(got) < limit {
-		limit = len(got)
-	}
+	limit := min(len(got), tt.wantCount)
 	for i := 0; i < limit && i < len(tt.wantFields); i++ {
 		assert.Equal(t, tt.wantFields[i], got[i].Field)
 	}

@@ -68,7 +68,7 @@ func TestValidateMetadata_TotalSizeExceeds(t *testing.T) {
 	m := make(map[string]string)
 	// Each entry: key=16 chars, value=4096 chars => 4112 bytes
 	// 16 such entries = 65792 bytes > 65536
-	for i := 0; i < 16; i++ {
+	for i := range 16 {
 		key := strings.Repeat("k", 16) + string(rune('a'+i))
 		val := strings.Repeat("v", MaxMetadataValueLen)
 		m[key] = val

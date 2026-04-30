@@ -399,7 +399,6 @@ func TestExecutePagedQuery_NilDependencies(t *testing.T) {
 		},
 	}
 	for _, tc := range tests {
-		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			_, err := ExecutePagedQuery(context.Background(), tc.cfg)

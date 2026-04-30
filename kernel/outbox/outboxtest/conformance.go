@@ -304,25 +304,21 @@ func testMultipleSubscribers(t *testing.T, _ Features, constructor PubSubConstru
 	// (consumerGroup, topic) pair. With two broadcast subscribers we need each
 	// goroutine to confirm its own registration before the test publishes,
 	// otherwise the second sub may miss the event.
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		close(sub1Ready)
 		_ = sub.Subscribe(subCtx, outbox.Subscription{Topic: topic}, func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
 			sub1Received.Add(1)
 			return outbox.HandleResult{Disposition: outbox.DispositionAck}
 		})
-	}()
+	})
 
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		close(sub2Ready)
 		_ = sub.Subscribe(subCtx, outbox.Subscription{Topic: topic}, func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
 			sub2Received.Add(1)
 			return outbox.HandleResult{Disposition: outbox.DispositionAck}
 		})
-	}()
+	})
 
 	<-sub1Ready
 	<-sub2Ready
@@ -367,9 +363,7 @@ func testCompetingConsumers(t *testing.T, _ Features, constructor PubSubConstruc
 
 	// Start two competing subscribers on the same topic.
 	for range 2 {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			_ = sub.Subscribe(subCtx, outbox.Subscription{Topic: topic}, func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
 				select {
 				case delivery <- struct{}{}:
@@ -378,7 +372,7 @@ func testCompetingConsumers(t *testing.T, _ Features, constructor PubSubConstruc
 				totalReceived.Add(1)
 				return outbox.HandleResult{Disposition: outbox.DispositionAck}
 			})
-		}()
+		})
 	}
 
 	// One waitForSubscription is sufficient for shared-queue brokers: both

@@ -16,6 +16,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"sync"
 	"time"
 
@@ -201,8 +202,8 @@ func (a *CoreAssembly) Stop(ctx context.Context) error {
 	a.mu.Unlock()
 
 	var errs []error
-	for i := len(a.cells) - 1; i >= 0; i-- {
-		errs = append(errs, a.stopCellWithHooks(ctx, a.cells[i])...)
+	for _, v := range slices.Backward(a.cells) {
+		errs = append(errs, a.stopCellWithHooks(ctx, v)...)
 	}
 
 	a.mu.Lock()
