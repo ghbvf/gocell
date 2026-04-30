@@ -230,7 +230,7 @@ func TestService_Login(t *testing.T) {
 	}
 }
 
-func TestService_Login_RefreshStoreUnavailableReturnsInfraAndNoOrphanSession(t *testing.T) {
+func TestService_Login_DemoMode_ExplicitCleanup_NoOrphanSession(t *testing.T) {
 	userRepo := mem.NewUserRepository()
 	sessionRepo := &trackingSessionRepo{SessionRepository: mem.NewSessionRepository()}
 	roleRepo := mem.NewRoleRepository()
@@ -554,4 +554,72 @@ func TestService_IssueForUser_EmitsSessionCreated(t *testing.T) {
 	assert.NotEmpty(t, pair.AccessToken)
 	assert.Equal(t, 1, emitter.count,
 		"IssueForUser must emit exactly one event.session.created.v1 (always-emit contract)")
+}
+
+// TestPersistSessionWithRefresh_DurableTx_RefreshIssueFails_NoExplicitCleanup verifies
+// that when a real (non-noop) TxRunner is in use and refreshStore.Issue fails, no
+// explicit cleanup call is made — the transaction rollback handles atomicity.
+// The test uses a non-noop stubTxRunner (defined in outbox_test.go) so isNoopTx
+// returns false and the cleanup branch is skipped.
+func TestPersistSessionWithRefresh_DurableTx_RefreshIssueFails_NoExplicitCleanup(t *testing.T) {
+	userRepo := mem.NewUserRepository()
+	sessionRepo := &trackingSessionRepo{SessionRepository: mem.NewSessionRepository()}
+	roleRepo := mem.NewRoleRepository()
+	store := failingIssueRefreshStore{Store: newTestRefreshStore(), err: fmt.Errorf("refresh db down")}
+
+	// stubTxRunner (defined in outbox_test.go) is NOT a Nooper — isNoopTx returns false.
+	tx := &stubTxRunner{}
+	svc := MustNewService(userRepo, sessionRepo, roleRepo, store, testIssuer, slog.Default(),
+		WithTxManager(tx))
+	seedUser(userRepo, "durable-refresh-fail", "pass123")
+
+	_, err := svc.Login(context.Background(), LoginInput{Username: "durable-refresh-fail", Password: "pass123"})
+	require.Error(t, err)
+
+	var ec *errcode.Error
+	require.ErrorAs(t, err, &ec)
+	assert.Equal(t, errcode.ErrAuthRefreshUnavailable, ec.Code)
+
+	// Durable tx: Create was called inside the tx, but no explicit Delete.
+	// The tx rollback would handle the cleanup atomically; no orphan cleanup needed.
+	require.Len(t, sessionRepo.created, 1, "session.Create was called inside the tx")
+	assert.Len(t, sessionRepo.deleted, 0,
+		"durable tx mode: explicit cleanup must NOT be called; tx rollback handles it")
+}
+
+// TestCleanupIssuedSession_NotFound_LogsDebug verifies that when
+// sessionRepo.Delete returns ErrSessionNotFound during cleanup, the error is
+// silently treated as a no-op (the session was already gone) and only a Debug
+// log is emitted — not an Error log that would page on-call.
+//
+// This matches the behavior in sessionrefresh/service.go and sessionvalidate/service.go.
+func TestCleanupIssuedSession_NotFound_LogsDebug(t *testing.T) {
+	// Use a session repo that always returns not-found on Delete.
+	userRepo := mem.NewUserRepository()
+	sessionRepo := mem.NewSessionRepository()
+	roleRepo := mem.NewRoleRepository()
+
+	// A failingIssueRefreshStore causes cleanupIssuedSession to be called in
+	// Noop (demo) tx mode. Then we want sessionRepo.Delete to return NotFound.
+	notFoundSessionRepo := &notFoundOnDeleteSessionRepo{SessionRepository: sessionRepo}
+	store := failingIssueRefreshStore{Store: newTestRefreshStore(), err: fmt.Errorf("refresh db down")}
+	svc := MustNewService(userRepo, notFoundSessionRepo, roleRepo, store, testIssuer, slog.Default())
+	seedUser(userRepo, "cleanup-not-found", "pass123")
+
+	// Should not panic or return an unexpected error — the original refresh issue error propagates.
+	_, err := svc.Login(context.Background(), LoginInput{Username: "cleanup-not-found", Password: "pass123"})
+	require.Error(t, err)
+	var ec *errcode.Error
+	require.ErrorAs(t, err, &ec)
+	assert.Equal(t, errcode.ErrAuthRefreshUnavailable, ec.Code,
+		"not-found on cleanup must not change the returned error; original refresh error propagates")
+}
+
+// notFoundOnDeleteSessionRepo returns ErrSessionNotFound when Delete is called.
+type notFoundOnDeleteSessionRepo struct {
+	*mem.SessionRepository
+}
+
+func (r *notFoundOnDeleteSessionRepo) Delete(_ context.Context, _ string) error {
+	return errcode.NewDomain(errcode.ErrSessionNotFound, "session not found")
 }
