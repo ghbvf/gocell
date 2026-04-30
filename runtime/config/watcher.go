@@ -56,6 +56,7 @@ type watcherConfig struct {
 	keyFilters   []string
 	metrics      WatcherCollector
 	drainTimeout time.Duration
+	symPivotPoll time.Duration // polling interval for symlink pivot detection
 }
 
 const (
@@ -77,6 +78,7 @@ func defaultWatcherConfig() watcherConfig {
 		maxDebounce:  defaultWatcherMaxDebounce,
 		metrics:      NoopWatcherCollector{},
 		drainTimeout: defaultWatcherDrainTimeout,
+		symPivotPoll: defaultWatcherDebounce,
 	}
 }
 
@@ -124,6 +126,14 @@ func WithMetrics(m WatcherCollector) WatcherOption {
 // After this timeout, Close proceeds even if callbacks are still running.
 func WithDrainTimeout(d time.Duration) WatcherOption {
 	return func(c *watcherConfig) { c.drainTimeout = d }
+}
+
+// WithSymlinkPollInterval sets the polling interval used to detect symlink pivot
+// changes. kqueue on macOS (fsnotify ≥ v1.9.0) does not reliably deliver
+// Create/Remove events for symlinks inside a watched directory, so a periodic
+// EvalSymlinks poll is used as a fallback. Set to 0 to disable polling.
+func WithSymlinkPollInterval(d time.Duration) WatcherOption {
+	return func(c *watcherConfig) { c.symPivotPoll = d }
 }
 
 // Watcher monitors a file for changes by watching its parent directory.
@@ -262,6 +272,18 @@ func (w *Watcher) Health() error {
 
 func (w *Watcher) loop() {
 	w.readyOnce.Do(func() { close(w.ready) })
+
+	// kqueue on macOS (fsnotify ≥ v1.9.0) does not deliver Create/Remove events
+	// for symlinks inside a watched directory. Poll as a fallback so that
+	// Kubernetes ConfigMap ..data pivots are still detected. A nil channel
+	// (symPivotPoll == 0) blocks forever in select, disabling the poll path.
+	var pivotTick <-chan time.Time
+	if w.cfg.symPivotPoll > 0 {
+		t := time.NewTicker(w.cfg.symPivotPoll)
+		defer t.Stop()
+		pivotTick = t.C
+	}
+
 	for {
 		select {
 		case event, ok := <-w.watcher.Events:
@@ -275,6 +297,12 @@ func (w *Watcher) loop() {
 			w.cfg.metrics.RecordEvent(w.eventType(event, symPivot))
 			w.cfg.metrics.RecordLastEventTimestamp(time.Now())
 			w.scheduleCallback(symPivot)
+		case <-pivotTick:
+			if w.checkSymlinkPivot() {
+				w.cfg.metrics.RecordEvent(EventTypeSymlinkPivot)
+				w.cfg.metrics.RecordLastEventTimestamp(time.Now())
+				w.scheduleCallback(true)
+			}
 		case err, ok := <-w.watcher.Errors:
 			if !ok {
 				return
