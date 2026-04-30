@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/fsnotify/fsnotify"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -992,4 +993,68 @@ func TestWatcher_WithSymlinkPollInterval_CustomInterval(t *testing.T) {
 	assert.Eventually(t, func() bool {
 		return gotPivot.Load() >= 1
 	}, 2*time.Second, 20*time.Millisecond, "custom poll interval must detect symlink pivot")
+}
+
+// TestWatcher_isRelevantEvent_TableDriven locks the dispatch matrix used by
+// loop() so that future refactors of the select-case body cannot silently
+// change which fsnotify events trigger a callback. The symlink-pivot branch
+// requires real filesystem state and is covered by TestWatcher_SymlinkPivot_*
+// integration tests; this table focuses on the deterministic baseName +
+// op-flag combinations that loop() / processFSEvent depend on.
+func TestWatcher_isRelevantEvent_TableDriven(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "config.yaml")
+	touchFile(t, target, "key: val")
+
+	w, err := NewWatcher(target)
+	require.NoError(t, err)
+	defer func() { _ = w.Close(context.Background()) }()
+
+	otherInDir := filepath.Join(dir, "other.yaml")
+
+	cases := []struct {
+		name    string
+		event   fsnotify.Event
+		wantSym bool
+		wantRel bool
+	}{
+		{
+			name:    "target write fires",
+			event:   fsnotify.Event{Name: target, Op: fsnotify.Write},
+			wantSym: false,
+			wantRel: true,
+		},
+		{
+			name:    "target create fires",
+			event:   fsnotify.Event{Name: target, Op: fsnotify.Create},
+			wantSym: false,
+			wantRel: true,
+		},
+		{
+			name:    "unrelated baseName write ignored",
+			event:   fsnotify.Event{Name: otherInDir, Op: fsnotify.Write},
+			wantSym: false,
+			wantRel: false,
+		},
+		{
+			name:    "target chmod ignored (no Write/Create)",
+			event:   fsnotify.Event{Name: target, Op: fsnotify.Chmod},
+			wantSym: false,
+			wantRel: false,
+		},
+		{
+			name:    "unrelated rename without pivot ignored",
+			event:   fsnotify.Event{Name: otherInDir, Op: fsnotify.Rename},
+			wantSym: false,
+			wantRel: false,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			gotSym, gotRel := w.isRelevantEvent(tc.event)
+			assert.Equal(t, tc.wantSym, gotSym, "symPivot")
+			assert.Equal(t, tc.wantRel, gotRel, "relevant")
+		})
+	}
 }

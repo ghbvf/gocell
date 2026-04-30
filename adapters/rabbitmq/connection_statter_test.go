@@ -6,9 +6,9 @@ import (
 	"github.com/ghbvf/gocell/runtime/observability/poolstats"
 )
 
-func TestConnection_Statter_NilConn_ReturnsZeroSnapshot(t *testing.T) {
+func TestConnection_ChannelStatter_NilConn_ReturnsZeroSnapshot(t *testing.T) {
 	var c *Connection
-	// Statter is a method on *Connection; calling it on nil is not
+	// ChannelStatter is a method on *Connection; calling it on nil is not
 	// supported (method would panic), but tests that exercise the
 	// statter-returned object with a nil inner must not panic on
 	// Snapshot. Construct via the factory with a nil connection sentinel:
@@ -21,7 +21,7 @@ func TestConnection_Statter_NilConn_ReturnsZeroSnapshot(t *testing.T) {
 	}
 }
 
-func TestConnection_Statter_MapsChannelPoolStats(t *testing.T) {
+func TestConnection_ChannelStatter_MapsChannelPoolStats(t *testing.T) {
 	// Construct a Connection with a pre-sized channel pool to exercise
 	// Snapshot projection. We bypass the dial/handshake machinery —
 	// PoolStats reads cap()/len() of the channelPool buffered channel.
@@ -34,7 +34,7 @@ func TestConnection_Statter_MapsChannelPoolStats(t *testing.T) {
 	for range 3 {
 		c.channelPool <- nil
 	}
-	s := c.Statter("rmq-outbox")
+	s := c.ChannelStatter("rmq-outbox")
 	snap := s.Snapshot()
 	if snap.TotalConns != 8 {
 		t.Fatalf("TotalConns = %d, want 8", snap.TotalConns)

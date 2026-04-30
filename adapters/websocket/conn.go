@@ -6,7 +6,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"nhooyr.io/websocket"
+	"github.com/coder/websocket"
 
 	"github.com/ghbvf/gocell/pkg/errcode"
 	rtws "github.com/ghbvf/gocell/runtime/websocket"
@@ -17,7 +17,7 @@ const defaultWriteTimeout = 10 * time.Second
 // Compile-time check: Conn implements runtime/websocket.Conn.
 var _ rtws.Conn = (*Conn)(nil)
 
-// Conn wraps an nhooyr.io/websocket.Conn and implements runtime/websocket.Conn.
+// Conn wraps an github.com/coder/websocket.Conn and implements runtime/websocket.Conn.
 //
 // Close is lock-free (nhooyr.CloseNow is internally synchronized) so it can
 // interrupt an in-flight Write immediately by closing the underlying TCP
@@ -30,7 +30,7 @@ type Conn struct {
 	mu     sync.Mutex  // serializes Write calls only
 }
 
-// NewConn creates a Conn wrapping an nhooyr.io/websocket connection.
+// NewConn creates a Conn wrapping an github.com/coder/websocket connection.
 func NewConn(id string, conn *websocket.Conn) *Conn {
 	return &Conn{id: id, conn: conn}
 }

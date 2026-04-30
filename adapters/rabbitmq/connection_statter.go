@@ -31,14 +31,6 @@ func (c *Connection) ChannelStatter(name string) poolstats.Statter {
 	return &rabbitChannelStatter{conn: c, name: name}
 }
 
-// Deprecated: use ChannelStatter. The old name implied uniform database
-// pool semantics. A caller that routed the returned statter through
-// RegisterPoolMetrics was emitting semantically wrong
-// db.client.connection.* time series.
-func (c *Connection) Statter(name string) poolstats.Statter {
-	return c.ChannelStatter(name)
-}
-
 type rabbitChannelStatter struct {
 	conn *Connection
 	name string

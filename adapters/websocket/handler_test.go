@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"nhooyr.io/websocket"
+	"github.com/coder/websocket"
 
 	adapterws "github.com/ghbvf/gocell/adapters/websocket"
 	"github.com/ghbvf/gocell/pkg/errcode"

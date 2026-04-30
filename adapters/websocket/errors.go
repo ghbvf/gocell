@@ -2,7 +2,7 @@ package websocket
 
 import "github.com/ghbvf/gocell/pkg/errcode"
 
-// Adapter-level error codes for the nhooyr.io/websocket binding.
+// Adapter-level error codes for the github.com/coder/websocket binding.
 const (
 	// ErrAdapterWSUpgrade indicates a WebSocket upgrade failure.
 	ErrAdapterWSUpgrade errcode.Code = "ERR_ADAPTER_WS_UPGRADE"

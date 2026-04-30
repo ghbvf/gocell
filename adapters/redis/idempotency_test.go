@@ -335,7 +335,7 @@ func TestIdempotencyClaimer_Claim_Concurrent_OneAcquiredOneBusy(t *testing.T) {
 
 	type result struct {
 		state   idempotency.ClaimState
-		receipt interface{} // non-nil check only
+		receipt any // non-nil check only
 		err     error
 	}
 

@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"nhooyr.io/websocket"
+	"github.com/coder/websocket"
 
 	adapterws "github.com/ghbvf/gocell/adapters/websocket"
 	rtws "github.com/ghbvf/gocell/runtime/websocket"

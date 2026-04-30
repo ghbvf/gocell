@@ -1504,8 +1504,8 @@ type plainConfig struct {
 	data map[string]any
 }
 
-func (c *plainConfig) Get(key string) any       { return c.data[key] }
-func (c *plainConfig) Scan(_ interface{}) error { return nil }
+func (c *plainConfig) Get(key string) any { return c.data[key] }
+func (c *plainConfig) Scan(_ any) error   { return nil }
 func (c *plainConfig) Keys() []string {
 	keys := make([]string, 0, len(c.data))
 	for k := range c.data {

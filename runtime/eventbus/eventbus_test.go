@@ -1136,7 +1136,7 @@ func TestInMemoryEventBus_StopIntake_NoOp(t *testing.T) {
 	t.Cleanup(func() { _ = b.Close(context.Background()) })
 
 	// Type assertion must succeed.
-	stopper, ok := interface{}(b).(outbox.SubscriberIntakeStopper)
+	stopper, ok := any(b).(outbox.SubscriberIntakeStopper)
 	require.True(t, ok, "InMemoryEventBus must implement outbox.SubscriberIntakeStopper")
 
 	ctx := context.Background()

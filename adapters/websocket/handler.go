@@ -7,7 +7,7 @@ import (
 	"net/http"
 	"strings"
 
-	"nhooyr.io/websocket"
+	"github.com/coder/websocket"
 
 	"github.com/ghbvf/gocell/pkg/errcode"
 	rtws "github.com/ghbvf/gocell/runtime/websocket"

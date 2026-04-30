@@ -25,7 +25,7 @@ type Config interface {
 	// Get returns the value for the given dot-separated key, or nil if absent.
 	Get(key string) any
 	// Scan unmarshals the entire configuration into dest.
-	Scan(dest interface{}) error
+	Scan(dest any) error
 	// Keys returns all available configuration keys sorted alphabetically.
 	Keys() []string
 }
@@ -109,7 +109,7 @@ func (c *config) Get(key string) any {
 	return c.data[key]
 }
 
-func (c *config) Scan(dest interface{}) error {
+func (c *config) Scan(dest any) error {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 
