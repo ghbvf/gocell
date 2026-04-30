@@ -83,12 +83,11 @@ func WithServiceTokenClock(fn func() time.Time) ServiceTokenOption {
 //
 // When the supplied store's Kind is not NonceStoreKindNoop, the middleware
 // rejects tokens whose nonce has already been consumed within the store's
-// TTL window. The zero default is NoopNonceStore (replay check disabled);
-// production deployments must supply a replay-safe store and
-// cmd/corebundle.SharedDeps.Validate enforces this in adapter mode "real".
+// TTL window. Replay protection is mandatory — both ServiceTokenMiddleware and
+// NewServiceTokenAuthenticator reject nil/Noop NonceStore at construction time.
+// Use NewInMemoryNonceStore(ServiceTokenNonceTTL) for dev/test wiring.
 //
-// Passing nil is a no-op: the default NoopNonceStore is retained rather than
-// propagating a nil interface through the authenticator pipeline.
+// Passing nil is a no-op: cfg.nonceStore stays nil and construction will fail.
 func WithServiceTokenNonceStore(ns NonceStore) ServiceTokenOption {
 	return func(c *serviceTokenConfig) {
 		if validation.IsNilInterface(ns) {
@@ -200,24 +199,22 @@ func LoadHMACKeyRingFromEnv() (*HMACKeyRing, error) {
 //
 // ring accepts cell.HMACKeyring (the kernel interface); *HMACKeyRing satisfies
 // it structurally and remains the canonical production implementation.
+//
+// Misconfiguration paths (nil ring, sub-strength HMAC, missing/Noop NonceStore,
+// authenticator build failure) return an error middleware that serves 500 on every
+// request. All misconfiguration paths share the same errorMiddlewareInternal helper
+// so the 500 behaviour is consistent and observable via the "internal" metric label.
 func ServiceTokenMiddleware(ring cell.HMACKeyring, opts ...ServiceTokenOption) func(http.Handler) http.Handler {
 	cfg := serviceTokenConfig{
-		now:        time.Now,
-		logger:     slog.Default(),
-		nonceStore: NewNoopNonceStore(),
+		now:    time.Now,
+		logger: slog.Default(),
 	}
 	for _, o := range opts {
 		o(&cfg)
 	}
 
 	if validation.IsNilInterface(ring) {
-		return func(next http.Handler) http.Handler {
-			return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				cfg.metrics.recordServiceVerify("failure", "internal")
-				cfg.logger.Error("service token middleware called with nil key ring")
-				httputil.WriteError(r.Context(), w, http.StatusInternalServerError, "ERR_INTERNAL", msgInternalServerError)
-			})
-		}
+		return errorMiddlewareInternal(cfg, "service token middleware called with nil key ring")
 	}
 
 	// Defense-in-depth strength check (PR269 round-3 F5): cell.NewAuthServiceToken
@@ -226,26 +223,45 @@ func ServiceTokenMiddleware(ring cell.HMACKeyring, opts ...ServiceTokenOption) f
 	// the kernel constructor. Reject sub-strength rings here so no path leaks a
 	// short HMAC secret into hmac.New.
 	if got := len(ring.Current()); got < MinHMACKeyBytes {
-		shortLen := got
-		return func(next http.Handler) http.Handler {
-			return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				cfg.metrics.recordServiceVerify("failure", "internal")
-				cfg.logger.Error("service token middleware: HMAC ring secret shorter than minimum",
-					slog.Int("got_bytes", shortLen),
-					slog.Int("min_bytes", MinHMACKeyBytes))
-				httputil.WriteError(r.Context(), w, http.StatusInternalServerError, "ERR_INTERNAL", msgInternalServerError)
-			})
-		}
+		return errorMiddlewareInternal(cfg,
+			fmt.Sprintf("HMAC ring secret shorter than minimum (%d < %d bytes)", got, MinHMACKeyBytes))
+	}
+
+	if cfg.nonceStore == nil {
+		return errorMiddlewareInternal(cfg,
+			"nonce store not configured (use WithServiceTokenNonceStore)")
+	}
+	if cfg.nonceStore.Kind() == NonceStoreKindNoop {
+		return errorMiddlewareInternal(cfg,
+			"NonceStoreKindNoop not allowed; replay protection mandatory")
 	}
 
 	// Construct a single Authenticator instance for the lifetime of this
 	// middleware. All validation and Principal construction is delegated here,
 	// eliminating the previously duplicated logic in handleServiceToken.
-	auth := NewServiceTokenAuthenticator(ring, opts...)
+	authenticator, err := NewServiceTokenAuthenticator(ring, opts...)
+	if err != nil {
+		return errorMiddlewareInternal(cfg, "authenticator build failed: "+err.Error())
+	}
 
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			handleServiceToken(cfg, auth, next, w, r)
+			handleServiceToken(cfg, authenticator, next, w, r)
+		})
+	}
+}
+
+// errorMiddlewareInternal returns a middleware that fails every request with
+// 500 ERR_INTERNAL. Used for misconfiguration paths (nil ring, short HMAC,
+// missing/Noop NonceStore, authenticator build failure) so the listener
+// fails closed instead of silently falling through.
+func errorMiddlewareInternal(cfg serviceTokenConfig, reason string) func(http.Handler) http.Handler {
+	return func(_ http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			cfg.metrics.recordServiceVerify("failure", "internal")
+			cfg.logger.Error("service token middleware misconfigured",
+				slog.String("reason", reason))
+			httputil.WriteError(r.Context(), w, http.StatusInternalServerError, "ERR_INTERNAL", msgInternalServerError)
 		})
 	}
 }

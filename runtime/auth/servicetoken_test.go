@@ -40,9 +40,22 @@ func mustTestRing(t *testing.T, current, previous string) *HMACKeyRing {
 	return ring
 }
 
+// mustNewSvcNonceStore creates an InMemoryNonceStore for use in service-token
+// middleware helpers. Each call returns a fresh store so parallel tests do not
+// share nonce state.
+func mustNewSvcNonceStore(t *testing.T) NonceStore {
+	t.Helper()
+	store, err := NewInMemoryNonceStore(ServiceTokenNonceTTL)
+	require.NoError(t, err)
+	return store
+}
+
 func mustTestServiceHandler(t *testing.T, ring *HMACKeyRing, clockFn func() time.Time) http.Handler {
 	t.Helper()
-	return ServiceTokenMiddleware(ring, WithServiceTokenClock(clockFn))(
+	return ServiceTokenMiddleware(ring,
+		WithServiceTokenClock(clockFn),
+		WithServiceTokenNonceStore(mustNewSvcNonceStore(t)),
+	)(
 		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusOK)
 		}),
@@ -51,7 +64,10 @@ func mustTestServiceHandler(t *testing.T, ring *HMACKeyRing, clockFn func() time
 
 func mustTestServiceHandlerFatal(t *testing.T, ring *HMACKeyRing, clockFn func() time.Time) http.Handler {
 	t.Helper()
-	return ServiceTokenMiddleware(ring, WithServiceTokenClock(clockFn))(
+	return ServiceTokenMiddleware(ring,
+		WithServiceTokenClock(clockFn),
+		WithServiceTokenNonceStore(mustNewSvcNonceStore(t)),
+	)(
 		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			t.Fatal("should not be called")
 		}),
@@ -397,7 +413,9 @@ func TestServiceTokenMiddleware_FutureTimestamp_Rejected(t *testing.T) {
 
 func TestServiceTokenMiddleware_InvalidFormat_NoColon(t *testing.T) {
 	ring := mustTestRing(t, testSecret, "")
-	handler := ServiceTokenMiddleware(ring)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := ServiceTokenMiddleware(ring,
+		WithServiceTokenNonceStore(mustNewSvcNonceStore(t)),
+	)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		t.Fatal("should not be called")
 	}))
 
@@ -515,34 +533,71 @@ func TestServiceTokenMiddleware_WithNonceStore_UniqueTokensAccepted(t *testing.T
 	assert.Equal(t, http.StatusOK, rec2.Code, "second unique token must be accepted")
 }
 
-// TestServiceTokenMiddleware_WithNoopNonceStore_ReplayAllowed documents that
-// when no replay-safe store is injected the middleware falls back to the
-// default NoopNonceStore (Kind() == NonceStoreKindNoop). Replay is intentionally
-// allowed in that state — the production gate lives in
-// cmd/corebundle.SharedDeps.validateControlPlane, which rejects Noop in
-// adapter mode "real". This test pins the dev-mode behaviour so any future
-// change to the default store shows up as a test failure.
-func TestServiceTokenMiddleware_WithNoopNonceStore_ReplayAllowed(t *testing.T) {
+// TestServiceTokenMiddleware_DefaultNoNonceStore_ReturnsErrorMiddleware verifies
+// that ServiceTokenMiddleware without WithServiceTokenNonceStore returns an error
+// middleware that serves 500 on every request. This aligns with the fail-closed
+// construction guard in NewServiceTokenAuthenticator.
+func TestServiceTokenMiddleware_DefaultNoNonceStore_ReturnsErrorMiddleware(t *testing.T) {
 	ring := mustTestRing(t, testSecret, "")
 	now := time.Now()
-	// Default NoopNonceStore — replay detection disabled by null-object default.
-	handler := mustTestServiceHandler(t, ring, func() time.Time { return now })
+	// No WithServiceTokenNonceStore — must return an error middleware, not a valid handler.
+	handler := ServiceTokenMiddleware(ring,
+		WithServiceTokenClock(func() time.Time { return now }),
+	)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Fatal("handler must not be called when NonceStore is missing")
+	}))
 
-	token := GenerateServiceToken(ring, http.MethodGet, "/api/v1/resource", "", now)
+	token := GenerateServiceToken(ring, http.MethodGet, "/internal/v1/resource", "", now)
+	req := httptest.NewRequest(http.MethodGet, "/internal/v1/resource", nil)
+	req.Header.Set("Authorization", "ServiceToken "+token)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
 
-	req1 := httptest.NewRequest(http.MethodGet, "/api/v1/resource", nil)
-	req1.Header.Set("Authorization", "ServiceToken "+token)
-	rec1 := httptest.NewRecorder()
-	handler.ServeHTTP(rec1, req1)
-	assert.Equal(t, http.StatusOK, rec1.Code)
+	assert.Equal(t, http.StatusInternalServerError, rec.Code,
+		"missing NonceStore must produce 500 error middleware (fail-closed)")
+}
 
-	// Same token again — still accepted because the default NoopNonceStore
-	// permits every nonce.
-	req2 := httptest.NewRequest(http.MethodGet, "/api/v1/resource", nil)
-	req2.Header.Set("Authorization", "ServiceToken "+token)
-	rec2 := httptest.NewRecorder()
-	handler.ServeHTTP(rec2, req2)
-	assert.Equal(t, http.StatusOK, rec2.Code, "replay must be allowed without a NonceStore")
+// TestServiceTokenMiddleware_NoopNonceStoreSupplied_ReturnsErrorMiddleware verifies
+// that explicitly passing a NoopNonceStore via WithServiceTokenNonceStore also
+// produces an error middleware. NoopNonceStore is a marker type used by upper layers
+// to detect misconfig; it must never reach live requests.
+func TestServiceTokenMiddleware_NoopNonceStoreSupplied_ReturnsErrorMiddleware(t *testing.T) {
+	ring := mustTestRing(t, testSecret, "")
+	now := time.Now()
+	handler := ServiceTokenMiddleware(ring,
+		WithServiceTokenClock(func() time.Time { return now }),
+		WithServiceTokenNonceStore(NewNoopNonceStore()),
+	)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Fatal("handler must not be called when NonceStore is Noop")
+	}))
+
+	token := GenerateServiceToken(ring, http.MethodGet, "/internal/v1/resource", "", now)
+	req := httptest.NewRequest(http.MethodGet, "/internal/v1/resource", nil)
+	req.Header.Set("Authorization", "ServiceToken "+token)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusInternalServerError, rec.Code,
+		"NoopNonceStore must produce 500 error middleware (fail-closed)")
+}
+
+// TestServiceTokenMiddleware_NilRing_UsesSharedHelper verifies that the nil-ring
+// error path (pre-existing) and the new NonceStore-missing/Noop paths all return
+// the same HTTP 500 status, confirming they share the errorMiddlewareInternal helper.
+func TestServiceTokenMiddleware_NilRing_UsesSharedHelper(t *testing.T) {
+	// nil ring — pre-existing path, should still produce 500.
+	handler := ServiceTokenMiddleware(nil)(
+		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			t.Fatal("handler must not be called for nil ring")
+		}),
+	)
+
+	req := httptest.NewRequest(http.MethodGet, "/internal/v1/resource", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusInternalServerError, rec.Code,
+		"nil ring path must yield 500 via shared errorMiddlewareInternal helper")
 }
 
 // legacyTwoPartToken computes what a pre-PR#159 signer would have emitted:
@@ -578,6 +633,7 @@ func TestServiceTokenMiddleware_LegacyTwoPartFormat_RealSignature_Rejected(t *te
 
 	handler := ServiceTokenMiddleware(ring,
 		WithServiceTokenClock(func() time.Time { return now }),
+		WithServiceTokenNonceStore(mustNewSvcNonceStore(t)),
 	)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		t.Fatal("should not be called: semantically valid 2-part token must be rejected")
 	}))
@@ -606,6 +662,7 @@ func TestServiceTokenMiddleware_MalformedToken_TwoSegments_Rejected(t *testing.T
 
 	handler := ServiceTokenMiddleware(ring,
 		WithServiceTokenClock(func() time.Time { return now }),
+		WithServiceTokenNonceStore(mustNewSvcNonceStore(t)),
 	)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		t.Fatal("should not be called: 2-part token must be rejected")
 	}))
@@ -629,6 +686,7 @@ func TestServiceTokenMiddleware_WithMetrics_NoPanic(t *testing.T) {
 
 	handler := ServiceTokenMiddleware(ring,
 		WithServiceTokenClock(func() time.Time { return now }),
+		WithServiceTokenNonceStore(mustNewSvcNonceStore(t)),
 		WithServiceTokenMetrics(am),
 	)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -682,7 +740,10 @@ func TestServiceTokenMiddleware_InjectsServicePrincipal(t *testing.T) {
 	token := GenerateServiceToken(ring, http.MethodGet, "/internal/v1/resource", "", now)
 
 	var gotPrincipal *Principal
-	handler := ServiceTokenMiddleware(ring, WithServiceTokenClock(func() time.Time { return now }))(
+	handler := ServiceTokenMiddleware(ring,
+		WithServiceTokenClock(func() time.Time { return now }),
+		WithServiceTokenNonceStore(mustNewSvcNonceStore(t)),
+	)(
 		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			p, ok := FromContext(r.Context())
 			require.True(t, ok, "Principal must be present in context after valid service token")
@@ -789,6 +850,7 @@ func TestServiceToken_LegacyTwoPart_MetricLabel(t *testing.T) {
 
 	handler := ServiceTokenMiddleware(ring,
 		WithServiceTokenClock(func() time.Time { return now }),
+		WithServiceTokenNonceStore(mustNewSvcNonceStore(t)),
 		WithServiceTokenMetrics(am),
 	)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		t.Fatal("should not be called: 2-part token must be rejected")
