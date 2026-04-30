@@ -277,12 +277,8 @@ func (w *Watcher) loop() {
 	// for symlinks inside a watched directory. Poll as a fallback so that
 	// Kubernetes ConfigMap ..data pivots are still detected. A nil channel
 	// (symPivotPoll == 0) blocks forever in select, disabling the poll path.
-	var pivotTick <-chan time.Time
-	if w.cfg.symPivotPoll > 0 {
-		t := time.NewTicker(w.cfg.symPivotPoll)
-		defer t.Stop()
-		pivotTick = t.C
-	}
+	pivotTick, stopPivotTick := w.symlinkPivotTicker()
+	defer stopPivotTick()
 
 	for {
 		select {
@@ -290,19 +286,9 @@ func (w *Watcher) loop() {
 			if !ok {
 				return
 			}
-			symPivot, relevant := w.isRelevantEvent(event)
-			if !relevant {
-				continue
-			}
-			w.cfg.metrics.RecordEvent(w.eventType(event, symPivot))
-			w.cfg.metrics.RecordLastEventTimestamp(time.Now())
-			w.scheduleCallback(symPivot)
+			w.handleWatcherEvent(event)
 		case <-pivotTick:
-			if w.checkSymlinkPivot() {
-				w.cfg.metrics.RecordEvent(EventTypeSymlinkPivot)
-				w.cfg.metrics.RecordLastEventTimestamp(time.Now())
-				w.scheduleCallback(true)
-			}
+			w.handleSymlinkPivotTick()
 		case err, ok := <-w.watcher.Errors:
 			if !ok {
 				return
@@ -312,6 +298,33 @@ func (w *Watcher) loop() {
 			return
 		}
 	}
+}
+
+func (w *Watcher) symlinkPivotTicker() (<-chan time.Time, func()) {
+	if w.cfg.symPivotPoll <= 0 {
+		return nil, func() {}
+	}
+	t := time.NewTicker(w.cfg.symPivotPoll)
+	return t.C, t.Stop
+}
+
+func (w *Watcher) handleWatcherEvent(event fsnotify.Event) {
+	symPivot, relevant := w.isRelevantEvent(event)
+	if !relevant {
+		return
+	}
+	w.cfg.metrics.RecordEvent(w.eventType(event, symPivot))
+	w.cfg.metrics.RecordLastEventTimestamp(time.Now())
+	w.scheduleCallback(symPivot)
+}
+
+func (w *Watcher) handleSymlinkPivotTick() {
+	if !w.checkSymlinkPivot() {
+		return
+	}
+	w.cfg.metrics.RecordEvent(EventTypeSymlinkPivot)
+	w.cfg.metrics.RecordLastEventTimestamp(time.Now())
+	w.scheduleCallback(true)
 }
 
 // isRelevantEvent checks whether an fsnotify event should trigger a callback.
