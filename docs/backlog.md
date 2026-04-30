@@ -1,8 +1,10 @@
 # GoCell Backlog
 
-> 基线: `origin/develop @ ad986cad`（2026-04-29，同步至最近合入 PR #316）
+> 基线: `origin/develop @ 20ea61ff`（2026-04-30，同步至最近合入 PR #335）
 >
-> 最新合并 PR：#332 / #331 / #316 / #325 / #324 / #326 / #323 / #321 / #322 / #320（截至 2026-04-30）
+> 最新合并 PR：#335 / #336 / #333 / #332 / #331 / #316 / #325 / #324 / #326 / #323（截至 2026-04-30）
+>
+> 最近完成：#335 PR-CI-5 PANIC-REGISTERED-01（production panic 全处理，ADR 永久白名单 4 条）/ #336 PR-CI-6 PROD-DURATION-CONST-01（literal duration 全抽 const，universal walk 实现）/ #333 PR-A66 BOOTSTRAP-STRUCT-DECOMPOSE（Bootstrap 按关切分组 options_*/phases_* 文件，struct 保持扁平聚合）/ #331 PR-CFG-L configcore authz 负向覆盖 / #332 fix PR-CI-1 generated gate
 >
 > 当前 3 个 OPEN PR：#329 `chore(deps): bump golang.org/x/tools from 0.43.0 to 0.44.0 in the go-x-modules group` / #328 `chore(deps): bump the go-opentelemetry group with 2 updates` / #327 `chore(deps): bump the github-actions group with 4 updates`
 >
