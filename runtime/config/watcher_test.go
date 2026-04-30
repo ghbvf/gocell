@@ -872,6 +872,61 @@ func TestWatcher_Close_Idempotent(t *testing.T) {
 // WithSymlinkPollInterval
 // ---------------------------------------------------------------------------
 
+// TestWatcher_PivotTick_CoversPositiveBranch exercises the tick path's positive
+// branch (lines that record metrics and fire the callback when checkSymlinkPivot
+// returns true). On Linux, inotify events arrive before the ticker fires, so
+// the event path updates lastResolved first; we reset it after the initial
+// detection to force the next tick to see a stale value and re-enter the
+// positive branch.
+func TestWatcher_PivotTick_CoversPositiveBranch(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink requires SeCreateSymbolicLinkPrivilege on Windows")
+	}
+	dir := t.TempDir()
+	v1 := filepath.Join(dir, "config_v1.yaml")
+	v2 := filepath.Join(dir, "config_v2.yaml")
+	touchFile(t, v1, "version: 1")
+	touchFile(t, v2, "version: 2")
+	link := filepath.Join(dir, "config.yaml")
+	require.NoError(t, os.Symlink(v1, link))
+
+	w, err := NewWatcher(link,
+		WithDebounce(0),
+		WithSymlinkPollInterval(5*time.Millisecond),
+	)
+	require.NoError(t, err)
+	defer func() { _ = w.Close(context.Background()) }()
+
+	var pivotCount atomic.Int32
+	w.OnChange(func(evt WatchEvent) {
+		if evt.SymlinkPivot {
+			pivotCount.Add(1)
+		}
+	})
+	w.Start()
+	waitReady(t, w)
+
+	// Pivot the symlink; on Linux events detect it first, on macOS the tick does.
+	require.NoError(t, os.Remove(link))
+	require.NoError(t, os.Symlink(v2, link))
+
+	// Wait for the first pivot callback (event path on Linux, tick on macOS).
+	require.Eventually(t, func() bool {
+		return pivotCount.Load() >= 1
+	}, 2*time.Second, 5*time.Millisecond, "first pivot must be detected")
+
+	// Reset lastResolved to the stale value so the next tick sees v2 ≠ v1 and
+	// enters the positive branch — covering the metrics+callback lines.
+	w.mu.Lock()
+	w.lastResolved = v1
+	w.mu.Unlock()
+
+	// The next tick (≤5ms) will call checkSymlinkPivot → true → cover lines 302-304.
+	assert.Eventually(t, func() bool {
+		return pivotCount.Load() >= 2
+	}, 2*time.Second, 5*time.Millisecond, "tick path positive branch must fire second callback")
+}
+
 func TestWatcher_WithSymlinkPollInterval_DisablesPoll(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("symlink requires SeCreateSymbolicLinkPrivilege on Windows")
