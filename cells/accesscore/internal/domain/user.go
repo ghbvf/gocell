@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/validation"
 )
 
 // BcryptCost is the shared bcrypt work factor for password hashing across
@@ -90,14 +91,12 @@ type User struct {
 // NewUser creates a new active User with the current timestamp.
 // Returns an errcode.Error if any required field is empty.
 func NewUser(username, email, passwordHash string) (*User, error) {
-	if username == "" {
-		return nil, errcode.New(errcode.ErrAuthInvalidInput, "username is required")
-	}
-	if email == "" {
-		return nil, errcode.New(errcode.ErrAuthInvalidInput, "email is required")
-	}
-	if passwordHash == "" {
-		return nil, errcode.New(errcode.ErrAuthInvalidInput, "passwordHash is required")
+	if err := validation.RequireNotBlank(errcode.ErrAuthInvalidInput,
+		validation.F("username", username),
+		validation.F("email", email),
+		validation.F("passwordHash", passwordHash),
+	); err != nil {
+		return nil, err
 	}
 
 	now := time.Now()

@@ -1044,7 +1044,7 @@ func TestSubscriberWithMiddleware_ForwardsStopIntake(t *testing.T) {
 	inner := &intakeStopperSubscriber{}
 	sub := &SubscriberWithMiddleware{Inner: inner}
 
-	stopper, ok := interface{}(sub).(SubscriberIntakeStopper)
+	stopper, ok := any(sub).(SubscriberIntakeStopper)
 	assert.True(t, ok, "SubscriberWithMiddleware must implement SubscriberIntakeStopper when Inner does")
 
 	ctx := context.Background()

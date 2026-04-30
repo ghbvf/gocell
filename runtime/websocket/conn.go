@@ -3,7 +3,7 @@ package websocket
 import "context"
 
 // Conn abstracts a WebSocket connection. Implementations live in
-// adapters/ (e.g., adapters/websocket for nhooyr.io/websocket).
+// adapters/ (e.g., adapters/websocket for github.com/coder/websocket).
 //
 // Implementations must be safe for concurrent use:
 //   - Read is called from a single goroutine per connection.

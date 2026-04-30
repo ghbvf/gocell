@@ -6,12 +6,15 @@ import (
 	"github.com/ghbvf/gocell/runtime/observability/poolstats"
 )
 
-func TestConnection_Statter_NilConn_ReturnsZeroSnapshot(t *testing.T) {
+func TestConnection_ChannelStatter_NilConn_ReturnsZeroSnapshot(t *testing.T) {
 	var c *Connection
-	// Statter is a method on *Connection; calling it on nil is not
-	// supported (method would panic), but tests that exercise the
-	// statter-returned object with a nil inner must not panic on
-	// Snapshot. Construct via the factory with a nil connection sentinel:
+	// White-box safety net: construct rabbitChannelStatter directly with a
+	// nil *Connection so we can verify Snapshot() does not panic when its
+	// inner connection is nil. The public ChannelStatter() entry point is
+	// not exercised here because invoking it on a nil receiver would panic
+	// before reaching the statter; production callers always hold a live
+	// *Connection. This guard exists to catch regressions in the nil branch
+	// of (*rabbitChannelStatter).Snapshot.
 	s := (&rabbitChannelStatter{conn: c, name: "rmq-nil"})
 	if s.PoolName() != "rmq-nil" {
 		t.Fatalf("PoolName = %q, want rmq-nil", s.PoolName())
@@ -21,7 +24,7 @@ func TestConnection_Statter_NilConn_ReturnsZeroSnapshot(t *testing.T) {
 	}
 }
 
-func TestConnection_Statter_MapsChannelPoolStats(t *testing.T) {
+func TestConnection_ChannelStatter_MapsChannelPoolStats(t *testing.T) {
 	// Construct a Connection with a pre-sized channel pool to exercise
 	// Snapshot projection. We bypass the dial/handshake machinery —
 	// PoolStats reads cap()/len() of the channelPool buffered channel.
@@ -34,7 +37,7 @@ func TestConnection_Statter_MapsChannelPoolStats(t *testing.T) {
 	for range 3 {
 		c.channelPool <- nil
 	}
-	s := c.Statter("rmq-outbox")
+	s := c.ChannelStatter("rmq-outbox")
 	snap := s.Snapshot()
 	if snap.TotalConns != 8 {
 		t.Fatalf("TotalConns = %d, want 8", snap.TotalConns)

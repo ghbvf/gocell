@@ -4,6 +4,7 @@ import (
 	"time"
 
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/validation"
 )
 
 // Session represents an authenticated user session with its access token and
@@ -22,11 +23,11 @@ type Session struct {
 // NewSession creates a new session for the given user.
 // Returns an errcode.Error if any required field is empty.
 func NewSession(userID, accessToken string, expiresAt time.Time) (*Session, error) {
-	if userID == "" {
-		return nil, errcode.New(errcode.ErrAuthSessionInvalidInput, "userID is required")
-	}
-	if accessToken == "" {
-		return nil, errcode.New(errcode.ErrAuthSessionInvalidInput, "accessToken is required")
+	if err := validation.RequireNotBlank(errcode.ErrAuthSessionInvalidInput,
+		validation.F("userID", userID),
+		validation.F("accessToken", accessToken),
+	); err != nil {
+		return nil, err
 	}
 
 	return &Session{

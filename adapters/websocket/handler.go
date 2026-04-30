@@ -5,9 +5,10 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"strconv"
 	"strings"
 
-	"nhooyr.io/websocket"
+	"github.com/coder/websocket"
 
 	"github.com/ghbvf/gocell/pkg/errcode"
 	rtws "github.com/ghbvf/gocell/runtime/websocket"
@@ -16,27 +17,50 @@ import (
 
 // UpgradeConfig configures the WebSocket upgrade handler.
 type UpgradeConfig struct {
-	// AllowedOrigins is a list of allowed origin patterns for the upgrade.
-	// It must be non-empty and must not contain the full wildcard "*". The
-	// error-returning UpgradeHandler rejects invalid configuration; the
-	// MustUpgradeHandler composition-root helper panics on the same error.
+	// AllowedOrigins lists the origin patterns authorized for the upgrade.
+	// Each entry must be an origin pattern in the form scheme://host[:port],
+	// optionally with glob wildcards (e.g. "https://example.com",
+	// "https://*.example.com", "http://*", "http://localhost:*"). Bare host
+	// patterns (e.g. "example.com") are rejected because coder/websocket's
+	// OriginPatterns matches against the request's Origin header, which
+	// always carries a scheme — a bare host would never match a real
+	// browser handshake and would silently disable origin checking.
+	//
+	// AllowedOrigins must be non-empty and must not contain the full
+	// wildcard "*". The error-returning UpgradeHandler rejects invalid
+	// configuration; the MustUpgradeHandler composition-root helper panics
+	// on the same error. Validate normalizes whitespace in-place so that
+	// the slice handed to coder/websocket is the exact one that passed
+	// validation (no trim drift between check and runtime).
 	AllowedOrigins []string
 }
 
-// Validate checks that the UpgradeConfig is well-formed. Returns an errcode
-// error if AllowedOrigins is empty so callers can distinguish configuration
-// errors from runtime errors.
-func (c UpgradeConfig) Validate() error {
+// Validate checks that the UpgradeConfig is well-formed and rewrites
+// AllowedOrigins with the trimmed, validated patterns so the slice handed
+// to coder/websocket.AcceptOptions.OriginPatterns is identical to the one
+// that was checked. Pointer receiver is required so the rewrite is visible
+// to the caller's local cfg copy inside UpgradeHandler.
+func (c *UpgradeConfig) Validate() error {
 	if len(c.AllowedOrigins) == 0 {
 		return errcode.New(errcode.ErrWebsocketOriginsMissing,
 			"websocket: UpgradeConfig.AllowedOrigins must be non-empty (fail-closed)")
 	}
+	normalized := make([]string, 0, len(c.AllowedOrigins))
 	for _, origin := range c.AllowedOrigins {
-		if pattern := strings.TrimSpace(origin); pattern == "" || pattern == "*" {
+		pattern := strings.TrimSpace(origin)
+		if pattern == "" || pattern == "*" {
 			return errcode.New(errcode.ErrWebsocketOriginsInvalid,
-				"websocket: UpgradeConfig.AllowedOrigins must use explicit host patterns; wildcard * is forbidden")
+				"websocket: UpgradeConfig.AllowedOrigins must use explicit origin patterns (scheme://host); wildcard * is forbidden")
 		}
+		if !strings.Contains(pattern, "://") {
+			return errcode.New(errcode.ErrWebsocketOriginsInvalid,
+				"websocket: UpgradeConfig.AllowedOrigins entry "+strconv.Quote(pattern)+
+					" must be an origin pattern with scheme (e.g. https://example.com, https://*.example.com, http://*); "+
+					"bare host is rejected because coder/websocket OriginPatterns matches against the Origin header, which always carries a scheme")
+		}
+		normalized = append(normalized, pattern)
 	}
+	c.AllowedOrigins = normalized
 	return nil
 }
 

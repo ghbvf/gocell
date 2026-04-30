@@ -160,7 +160,7 @@ ref PR: PR-A20（AL-02 DISTLOCK-RUNTIME-ABSTRACT-01，refactor/531）；
 | runtime/auth/jwt | `golang-jwt/jwt/v5` | `golang-jwt/jwt` | SigningMethod、Claims、kid |
 | adapters/oidc | `coreos/go-oidc/v3` | `coreos/go-oidc` | Provider 缓存、JWKS 刷新 |
 | adapters/s3 | `aws/aws-sdk-go-v2` | `aws/aws-sdk-go-v2` | Retry、Context 超时 |
-| adapters/websocket | `nhooyr.io/websocket` | `nhooyr.io/websocket` | 并发写保护、Close handshake |
+| adapters/websocket | `github.com/coder/websocket` | `github.com/coder/websocket` | 并发写保护、Close handshake |
 | adapters/otel | `go.opentelemetry.io/otel` | `open-telemetry/opentelemetry-go` | TracerProvider 生命周期、Shutdown 顺序 |
 | adapters/prometheus | `prometheus/client_golang` | `prometheus/client_golang` | Registry 隔离、Collector 注册时机 |
 | DB migration | `pressly/goose/v3` | `pressly/goose` | 版本锁、并发 migration |

@@ -235,7 +235,7 @@ func TestPGRefreshStore_DMLState(t *testing.T) {
 		assert.NotNil(t, origRotatedAt, "original row rotated_at must be set after Rotate")
 
 		// Child row must point back to the original (parent_id = original.id).
-		var parentID interface{}
+		var parentID any
 		err = p.DB().QueryRow(ctx,
 			`SELECT parent_id FROM refresh_tokens WHERE id = $1`, newTok.ID).
 			Scan(&parentID)

@@ -1,4 +1,4 @@
-// Package websocket provides an nhooyr.io/websocket binding for the
+// Package websocket provides a github.com/coder/websocket binding for the
 // runtime/websocket.Conn interface. It also provides an HTTP upgrade
 // handler that registers new connections with a runtime/websocket.Hub.
 //

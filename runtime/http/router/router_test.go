@@ -12,8 +12,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/coder/websocket"
 	"github.com/go-chi/chi/v5"
-	"nhooyr.io/websocket" //nolint:staticcheck // pre-existing dep; coder fork not yet adopted
 
 	"github.com/ghbvf/gocell/kernel/assembly"
 	"github.com/ghbvf/gocell/kernel/cell"

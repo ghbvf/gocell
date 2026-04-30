@@ -4,5 +4,5 @@
 // Hub lifecycle: NewHub → Start (blocks) → Stop (terminal, single-use).
 //
 // This package is protocol-agnostic: it operates on the [Conn] interface.
-// Use adapters/websocket for the nhooyr.io/websocket binding.
+// Use adapters/websocket for the github.com/coder/websocket binding.
 package websocket

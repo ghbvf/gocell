@@ -4,6 +4,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -49,7 +50,15 @@ func TestNewSession(t *testing.T) {
 			session, err := NewSession(tt.userID, tt.accessToken, tt.expiresAt)
 			if tt.wantErr {
 				require.Error(t, err)
-				assert.Contains(t, err.Error(), tt.errMsg)
+				// Lock the errcode classification — survives helper message
+				// format changes (e.g. localization) without losing coverage.
+				var coded *errcode.Error
+				require.ErrorAs(t, err, &coded, "expected an errcode.Error")
+				assert.Equal(t, errcode.ErrAuthSessionInvalidInput, coded.Code,
+					"NewSession must surface ErrAuthSessionInvalidInput on blank fields")
+				assert.Contains(t, err.Error(), tt.errMsg,
+					"current message format is %q-style; helper rewrites must keep field name visible",
+					"<field> is required")
 				assert.Nil(t, session)
 				return
 			}

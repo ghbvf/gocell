@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"nhooyr.io/websocket"
+	"github.com/coder/websocket"
 
 	adapterws "github.com/ghbvf/gocell/adapters/websocket"
 	rtws "github.com/ghbvf/gocell/runtime/websocket"
@@ -35,9 +35,11 @@ func setupIntegrationHub(t *testing.T, handler rtws.MessageHandler) (*rtws.Hub, 
 
 	mux := http.NewServeMux()
 	mux.Handle("/ws", requireUpgradeHandler(t, hub, adapterws.UpgradeConfig{
-		// SEC-FAIL-CLOSED (PR-MODE-1): empty AllowedOrigins returns an error; the
-		// integration test does not set Origin, so a narrow host pattern is enough.
-		AllowedOrigins: []string{"example.com"},
+		// SEC-FAIL-CLOSED (PR-MODE-1): empty AllowedOrigins is rejected by
+		// Validate. Use an explicit scheme://host pattern so this integration
+		// suite exercises coder/websocket's OriginPatterns matcher; bare host
+		// would never match the Origin header that dialIntegrationWS sends.
+		AllowedOrigins: []string{"http://*"},
 	}))
 	server := httptest.NewServer(mux)
 
@@ -51,12 +53,19 @@ func setupIntegrationHub(t *testing.T, handler rtws.MessageHandler) (*rtws.Hub, 
 	return hub, server
 }
 
+// dialIntegrationWS opens a WebSocket connection with an explicit Origin
+// header so the integration suite exercises coder/websocket's
+// OriginPatterns matching path. Without an Origin header, coder/websocket
+// treats the request as same-host and skips OriginPatterns entirely —
+// silently bypassing the allow-list.
 func dialIntegrationWS(t *testing.T, serverURL string) *websocket.Conn {
 	t.Helper()
 	wsURL := "ws" + strings.TrimPrefix(serverURL, "http") + "/ws"
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	conn, _, err := websocket.Dial(ctx, wsURL, nil)
+	conn, _, err := websocket.Dial(ctx, wsURL, &websocket.DialOptions{
+		HTTPHeader: http.Header{"Origin": {"http://example.com"}},
+	})
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = conn.CloseNow() })
 	return conn

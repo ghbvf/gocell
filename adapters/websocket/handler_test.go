@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"nhooyr.io/websocket"
+	"github.com/coder/websocket"
 
 	adapterws "github.com/ghbvf/gocell/adapters/websocket"
 	"github.com/ghbvf/gocell/pkg/errcode"
@@ -56,7 +56,7 @@ func setupTestHub(t *testing.T, handler rtws.MessageHandler) (*rtws.Hub, *httpte
 	mux := http.NewServeMux()
 	// Use explicit AllowedOrigins; empty origins will be rejected after SEC-FAIL-CLOSED-04.
 	mux.Handle("/ws", requireUpgradeHandler(t, hub, adapterws.UpgradeConfig{
-		AllowedOrigins: []string{"example.com"},
+		AllowedOrigins: []string{"http://*"},
 	}))
 
 	server := httptest.NewServer(mux)
@@ -79,6 +79,14 @@ func requireUpgradeHandler(t testing.TB, hub *rtws.Hub, cfg adapterws.UpgradeCon
 	return handler
 }
 
+// dialWS opens a WebSocket connection with an explicit allowed Origin
+// header so handshake actually exercises coder/websocket's OriginPatterns
+// matching path. Without an Origin header, coder/websocket treats the
+// request as same-host and skips the OriginPatterns check entirely —
+// silently bypassing the security boundary the tests are meant to cover.
+// All setupTestHub-configured AllowedOrigins ("http://*") match the
+// header below, so handshake succeeds; tests that assert deny semantics
+// dial directly with a custom Origin header instead of using this helper.
 func dialWS(t *testing.T, serverURL string) *websocket.Conn {
 	t.Helper()
 
@@ -87,11 +95,13 @@ func dialWS(t *testing.T, serverURL string) *websocket.Conn {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	conn, _, err := websocket.Dial(ctx, wsURL, nil)
+	conn, _, err := websocket.Dial(ctx, wsURL, &websocket.DialOptions{
+		HTTPHeader: http.Header{"Origin": {"http://example.com"}},
+	})
 	require.NoError(t, err)
 
 	// Always CloseNow on cleanup. Graceful Close may fail if server
-	// already closed the connection, leaving nhooyr's timeoutLoop alive.
+	// already closed the connection, leaving coder/websocket's timeoutLoop alive.
 	// CloseNow tears down the transport unconditionally.
 	t.Cleanup(func() { _ = conn.CloseNow() })
 
@@ -130,7 +140,7 @@ func TestUpgradeHandler_NonHijackerFailsBeforeAccept(t *testing.T) {
 	})
 
 	handler := requireUpgradeHandler(t, hub, adapterws.UpgradeConfig{
-		AllowedOrigins: []string{"example.com"},
+		AllowedOrigins: []string{"http://*"},
 	})
 	req := httptest.NewRequest(http.MethodGet, "/ws", nil)
 	req.Header.Set("Connection", "Upgrade")
@@ -335,7 +345,7 @@ func TestUpgradeHandler_AllowedOrigins(t *testing.T) {
 	hub := rtws.NewHub(cfg, nil)
 
 	handler := requireUpgradeHandler(t, hub, adapterws.UpgradeConfig{
-		AllowedOrigins: []string{"example.com"},
+		AllowedOrigins: []string{"http://*"},
 	})
 
 	assert.NotNil(t, handler)
@@ -400,7 +410,7 @@ func TestUpgradeHandler_HubNotRunning_503(t *testing.T) {
 
 	// AllowedOrigins is required post-SEC-FAIL-CLOSED-04; use a valid value.
 	handler := requireUpgradeHandler(t, hub, adapterws.UpgradeConfig{
-		AllowedOrigins: []string{"example.com"},
+		AllowedOrigins: []string{"http://*"},
 	})
 
 	// Use ResponseRecorder — no TCP needed, no sandbox issue.
@@ -415,7 +425,7 @@ func TestUpgradeHandler_HubNotRunning_503(t *testing.T) {
 // UpgradeConfig with nil AllowedOrigins returns an *errcode.Error
 // (SEC-FAIL-CLOSED).
 //
-// Positive case: AllowedOrigins: []string{"example.com"} must not panic.
+// Positive case: AllowedOrigins: []string{"http://*"} must not panic.
 func TestUpgradeHandler_RejectsEmptyOrigins(t *testing.T) {
 	cfg := rtws.DefaultHubConfig()
 
@@ -436,7 +446,7 @@ func TestUpgradeHandler_RejectsEmptyOrigins(t *testing.T) {
 		hub := rtws.NewHub(cfg, nil)
 
 		handler, err := adapterws.UpgradeHandler(hub, adapterws.UpgradeConfig{
-			AllowedOrigins: []string{"example.com"},
+			AllowedOrigins: []string{"http://*"},
 		})
 		require.NoError(t, err)
 		require.NotNil(t, handler)
@@ -449,7 +459,7 @@ func TestUpgradeHandler_RejectsEmptyOrigins(t *testing.T) {
 // HTTP request — error-first construction contract (PR-MODE-6.1).
 func TestUpgradeHandler_RejectsNilHub(t *testing.T) {
 	handler, err := adapterws.UpgradeHandler(nil, adapterws.UpgradeConfig{
-		AllowedOrigins: []string{"example.com"},
+		AllowedOrigins: []string{"http://*"},
 	})
 
 	require.Error(t, err)
@@ -474,7 +484,7 @@ func TestMustUpgradeHandler_PanicsOnNilHub(t *testing.T) {
 		assert.Equal(t, errcode.ErrWebsocketHubMissing, ec.Code)
 	}()
 	_ = adapterws.MustUpgradeHandler(nil, adapterws.UpgradeConfig{
-		AllowedOrigins: []string{"example.com"},
+		AllowedOrigins: []string{"http://*"},
 	})
 	t.Fatal("expected MustUpgradeHandler to panic, got none")
 }
@@ -517,4 +527,104 @@ func TestMustUpgradeHandler_PanicsOnInvalidConfig(t *testing.T) {
 			AllowedOrigins: []string{"*"},
 		})
 	})
+}
+
+// TestUpgradeHandler_RejectsBareHostOrigin locks the construction-time
+// rejection of host-only patterns. coder/websocket's OriginPatterns
+// matches the request's Origin header (which always carries a scheme), so
+// a bare host like "example.com" would never match any real browser
+// handshake and would silently disable origin checking. Validate must
+// surface this as ErrWebsocketOriginsInvalid.
+func TestUpgradeHandler_RejectsBareHostOrigin(t *testing.T) {
+	hub := rtws.NewHub(rtws.DefaultHubConfig(), nil)
+
+	handler, err := adapterws.UpgradeHandler(hub, adapterws.UpgradeConfig{
+		AllowedOrigins: []string{"example.com"},
+	})
+	require.Error(t, err)
+	assert.Nil(t, handler)
+	var ec *errcode.Error
+	require.ErrorAs(t, err, &ec)
+	assert.Equal(t, errcode.ErrWebsocketOriginsInvalid, ec.Code)
+	assert.Contains(t, ec.Error(), "scheme",
+		"error message must steer operators to the required pattern shape (origin pattern with scheme)")
+	assert.Contains(t, ec.Error(), "example.com",
+		"error must echo the offending entry so operators can find it in their config")
+}
+
+// dialWithOrigin opens a WebSocket connection with the supplied Origin
+// header. Returns the transport-level handshake response (or error). Used
+// by the allow/deny black-box tests that assert handshake outcome based on
+// the OriginPatterns match — distinct from dialWS which always succeeds.
+func dialWithOrigin(t *testing.T, serverURL, origin string) (*websocket.Conn, *http.Response, error) {
+	t.Helper()
+	wsURL := "ws" + strings.TrimPrefix(serverURL, "http") + "/ws"
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	conn, resp, err := websocket.Dial(ctx, wsURL, &websocket.DialOptions{
+		HTTPHeader: http.Header{"Origin": {origin}},
+	})
+	if conn != nil {
+		t.Cleanup(func() { _ = conn.CloseNow() })
+	}
+	return conn, resp, err
+}
+
+// TestUpgradeHandler_AllowedOrigin_HandshakeSucceeds proves the positive
+// branch of the post-coder/websocket-migration origin contract: an Origin
+// header that matches the configured pattern completes the handshake and
+// registers a connection. Without this assertion, the migration could
+// silently weaken or invert allow-policy and the existing suite (which
+// dials with no Origin header) would not catch it.
+func TestUpgradeHandler_AllowedOrigin_HandshakeSucceeds(t *testing.T) {
+	hub, server := setupTestHub(t, nil)
+	defer server.Close()
+
+	conn, _, err := dialWithOrigin(t, server.URL, "http://allowed.example.com")
+	require.NoError(t, err, "handshake with allowed Origin must succeed")
+	require.NotNil(t, conn)
+
+	require.Eventually(t, func() bool {
+		return hub.ConnCount() == 1
+	}, 2*time.Second, 10*time.Millisecond,
+		"hub must register a client after a successful handshake")
+}
+
+// TestUpgradeHandler_DisallowedOrigin_HandshakeRejected proves the
+// negative branch: an Origin header that does not match the configured
+// pattern is rejected at handshake time and the hub does not register
+// the connection. Pairs with the allow test above to lock both directions
+// of the security boundary.
+func TestUpgradeHandler_DisallowedOrigin_HandshakeRejected(t *testing.T) {
+	cfg := rtws.DefaultHubConfig()
+	cfg.PingInterval = 100 * time.Millisecond
+	hub := rtws.NewHub(cfg, nil)
+
+	startErr := make(chan error, 1)
+	go func() { startErr <- hub.Start(context.Background()) }()
+	require.Eventually(t, hub.IsRunning, 2*time.Second, time.Millisecond)
+	t.Cleanup(func() {
+		stopCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = hub.Stop(stopCtx)
+		<-startErr
+	})
+
+	mux := http.NewServeMux()
+	// Narrow allow-list: only http://*.allowed.test is permitted.
+	mux.Handle("/ws", requireUpgradeHandler(t, hub, adapterws.UpgradeConfig{
+		AllowedOrigins: []string{"http://*.allowed.test"},
+	}))
+	server := httptest.NewServer(mux)
+	defer server.Close()
+
+	_, resp, err := dialWithOrigin(t, server.URL, "http://evil.example.com")
+	require.Error(t, err, "handshake with disallowed Origin must fail")
+	if resp != nil {
+		assert.NotEqual(t, http.StatusSwitchingProtocols, resp.StatusCode,
+			"disallowed Origin must not complete the WebSocket upgrade")
+		_ = resp.Body.Close()
+	}
+	assert.Equal(t, 0, hub.ConnCount(),
+		"hub must not register a connection rejected at handshake")
 }

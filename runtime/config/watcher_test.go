@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/fsnotify/fsnotify"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -992,4 +993,198 @@ func TestWatcher_WithSymlinkPollInterval_CustomInterval(t *testing.T) {
 	assert.Eventually(t, func() bool {
 		return gotPivot.Load() >= 1
 	}, 2*time.Second, 20*time.Millisecond, "custom poll interval must detect symlink pivot")
+}
+
+// TestWatcher_isRelevantEvent_TableDriven locks the dispatch matrix used by
+// loop() so that future refactors of the select-case body cannot silently
+// change which fsnotify events trigger a callback. The symlink-pivot branch
+// requires real filesystem state and is covered by TestWatcher_SymlinkPivot_*
+// integration tests; this table focuses on the deterministic baseName +
+// op-flag combinations that loop() / processFSEvent depend on.
+func TestWatcher_isRelevantEvent_TableDriven(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "config.yaml")
+	touchFile(t, target, "key: val")
+
+	w, err := NewWatcher(target)
+	require.NoError(t, err)
+	defer func() { _ = w.Close(context.Background()) }()
+
+	otherInDir := filepath.Join(dir, "other.yaml")
+
+	// NOTE: symlink-pivot positive branch (wantSym=true) is intentionally
+	// omitted here — it requires real filesystem state mutation and is
+	// covered by TestWatcher_SymlinkPivot_* integration tests.
+	cases := []struct {
+		name    string
+		event   fsnotify.Event
+		wantSym bool
+		wantRel bool
+	}{
+		{
+			name:    "target write fires",
+			event:   fsnotify.Event{Name: target, Op: fsnotify.Write},
+			wantSym: false,
+			wantRel: true,
+		},
+		{
+			name:    "target create fires",
+			event:   fsnotify.Event{Name: target, Op: fsnotify.Create},
+			wantSym: false,
+			wantRel: true,
+		},
+		{
+			name:    "unrelated baseName write ignored",
+			event:   fsnotify.Event{Name: otherInDir, Op: fsnotify.Write},
+			wantSym: false,
+			wantRel: false,
+		},
+		{
+			name:    "target chmod ignored (no Write/Create)",
+			event:   fsnotify.Event{Name: target, Op: fsnotify.Chmod},
+			wantSym: false,
+			wantRel: false,
+		},
+		{
+			name:    "unrelated rename without pivot ignored",
+			event:   fsnotify.Event{Name: otherInDir, Op: fsnotify.Rename},
+			wantSym: false,
+			wantRel: false,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			gotSym, gotRel := w.isRelevantEvent(tc.event)
+			assert.Equal(t, tc.wantSym, gotSym, "symPivot")
+			assert.Equal(t, tc.wantRel, gotRel, "relevant")
+		})
+	}
+}
+
+// TestWatcher_isRelevantEvent_DetectsSymlinkRemovePivot covers the positive
+// symlink-pivot branch directly: a Remove event on the watched directory
+// where checkSymlinkPivot detects a target swap must report
+// (symPivot=true, relevant=true) without depending on the integration
+// suite's timing-driven scaffolding. The setup uses a real symlink target
+// switch so that filepath.EvalSymlinks observes a concrete change.
+func TestWatcher_isRelevantEvent_DetectsSymlinkRemovePivot(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink semantics differ on Windows; covered by Linux/macOS")
+	}
+	dir := t.TempDir()
+	v1 := filepath.Join(dir, "v1.yaml")
+	v2 := filepath.Join(dir, "v2.yaml")
+	link := filepath.Join(dir, "config.yaml")
+	touchFile(t, v1, "key: v1")
+	touchFile(t, v2, "key: v2")
+	require.NoError(t, os.Symlink(v1, link))
+
+	w, err := NewWatcher(link)
+	require.NoError(t, err)
+	defer func() { _ = w.Close(context.Background()) }()
+
+	// Atomic-replace the symlink so EvalSymlinks resolves to a new target on
+	// the next isRelevantEvent call. This is the exact ConfigMap ..data
+	// pivot pattern.
+	require.NoError(t, os.Remove(link))
+	require.NoError(t, os.Symlink(v2, link))
+
+	gotSym, gotRel := w.isRelevantEvent(fsnotify.Event{Name: link, Op: fsnotify.Remove})
+	assert.True(t, gotSym, "symPivot must be true after target swap")
+	assert.True(t, gotRel, "relevant must be true on detected pivot")
+}
+
+// orderedSpyCollector records the exact sequence of metric method invocations
+// so that tests can lock the order in which processFSEvent / processPivotTick
+// fan out to RecordEvent / RecordLastEventTimestamp / scheduleCallback. The
+// dispatch order is dashboard-load-bearing: a "RecordEvent before
+// RecordLastEventTimestamp" invariant means the counter increment is visible
+// before the timestamp gauge advances, so an alert that joins them never sees
+// a stale counter.
+type orderedSpyCollector struct {
+	mu    sync.Mutex
+	calls []string
+}
+
+func (s *orderedSpyCollector) RecordEvent(eventType string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.calls = append(s.calls, "RecordEvent:"+eventType)
+}
+
+func (s *orderedSpyCollector) RecordLastEventTimestamp(time.Time) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.calls = append(s.calls, "RecordLastEventTimestamp")
+}
+
+func (s *orderedSpyCollector) RecordDebounceCoalesced() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.calls = append(s.calls, "RecordDebounceCoalesced")
+}
+
+func (s *orderedSpyCollector) snapshot() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]string, len(s.calls))
+	copy(out, s.calls)
+	return out
+}
+
+// TestWatcher_handleWatcherEvent_MetricOrdering directly exercises
+// handleWatcherEvent (introduced by #339 to keep loop() under the gocognit
+// ceiling) to lock the metric dispatch order. RecordEvent must precede
+// RecordLastEventTimestamp; both must precede the scheduleCallback fan-out.
+// Existing integration tests only assert "events>=1 && lastTime>0" eventually,
+// which would silently survive a swap.
+func TestWatcher_handleWatcherEvent_MetricOrdering(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "config.yaml")
+	touchFile(t, target, "key: val")
+
+	spy := &orderedSpyCollector{}
+	w, err := NewWatcher(target, WithMetrics(spy), WithDebounce(0))
+	require.NoError(t, err)
+	defer func() { _ = w.Close(context.Background()) }()
+
+	w.handleWatcherEvent(fsnotify.Event{Name: target, Op: fsnotify.Write})
+
+	calls := spy.snapshot()
+	require.GreaterOrEqual(t, len(calls), 2, "expected RecordEvent + RecordLastEventTimestamp")
+	assert.Equal(t, "RecordEvent:write", calls[0],
+		"RecordEvent must be first — dashboards depend on counter-before-timestamp ordering")
+	assert.Equal(t, "RecordLastEventTimestamp", calls[1],
+		"RecordLastEventTimestamp must immediately follow RecordEvent")
+}
+
+// TestWatcher_handleSymlinkPivotTick_MetricOrdering exercises the symlink-
+// pivot polling path. handleSymlinkPivotTick early-returns when
+// checkSymlinkPivot reports no pivot, so the test seeds w.lastResolved with a
+// sentinel that EvalSymlinks will never return, forcing the positive branch
+// through one tick.
+func TestWatcher_handleSymlinkPivotTick_MetricOrdering(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "config.yaml")
+	touchFile(t, target, "key: val")
+
+	spy := &orderedSpyCollector{}
+	w, err := NewWatcher(target, WithMetrics(spy), WithDebounce(0))
+	require.NoError(t, err)
+	defer func() { _ = w.Close(context.Background()) }()
+
+	// Force the next checkSymlinkPivot to detect a change.
+	w.mu.Lock()
+	w.lastResolved = "<sentinel-never-resolves>"
+	w.mu.Unlock()
+
+	w.handleSymlinkPivotTick()
+
+	calls := spy.snapshot()
+	require.GreaterOrEqual(t, len(calls), 2, "pivot tick must record event + timestamp")
+	assert.Equal(t, "RecordEvent:symlink_pivot", calls[0],
+		"pivot tick must record EventTypeSymlinkPivot first")
+	assert.Equal(t, "RecordLastEventTimestamp", calls[1],
+		"RecordLastEventTimestamp must immediately follow RecordEvent on pivot tick")
 }
