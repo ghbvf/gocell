@@ -179,7 +179,7 @@ func TestFlagWrite_Create_BlankKey(t *testing.T) {
 // future refactors add outbox.Emitter-typed fields to the struct.
 func TestFlagWrite_NoOutboxEmit_AfterDowngrade(t *testing.T) {
 	// Structural assertion: Service must not contain an "emitter" field.
-	svcType := reflect.TypeOf(Service{})
+	svcType := reflect.TypeFor[Service]()
 	for i := 0; i < svcType.NumField(); i++ {
 		field := svcType.Field(i)
 		assert.NotEqual(t, "emitter", field.Name,

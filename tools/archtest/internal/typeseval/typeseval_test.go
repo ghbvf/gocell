@@ -192,7 +192,7 @@ func TestSharedResolver_ConcurrentInit(t *testing.T) {
 	errs := make([]error, N)
 	var wg sync.WaitGroup
 	wg.Add(N)
-	for i := 0; i < N; i++ {
+	for i := range N {
 		i := i
 		go func() {
 			defer wg.Done()

@@ -164,8 +164,7 @@ func isBindError(err error) bool {
 
 func TestRun_InvalidAdapterMode_ReturnsError(t *testing.T) {
 	t.Setenv("GOCELL_ADAPTER_MODE", "production")
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	err := run(ctx)
 	require.Error(t, err)
@@ -179,8 +178,7 @@ func TestRun_MissingJWTIssuer_FailsFast(t *testing.T) {
 	t.Setenv("GOCELL_JWT_AUDIENCE", "gocell")
 	t.Setenv("GOCELL_AUDITCORE_HMAC_KEY", "dev-hmac-key-replace-in-prod!!!!")
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	err := run(ctx)
 	require.Error(t, err)
@@ -195,8 +193,7 @@ func TestRun_MissingJWTAudience_FailsFast(t *testing.T) {
 	t.Setenv("GOCELL_JWT_AUDIENCE", "")
 	t.Setenv("GOCELL_AUDITCORE_HMAC_KEY", "dev-hmac-key-replace-in-prod!!!!")
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	err := run(ctx)
 	require.Error(t, err)
@@ -223,8 +220,7 @@ func TestRun_RealMode_MissingAccessCursorKey_FailsFast(t *testing.T) {
 	t.Setenv("GOCELL_SINGLE_POD", "1") // F1: acknowledge in-memory nonce store in single-pod real mode
 	t.Setenv("GOCELL_ACCESSCORE_CURSOR_KEY", "")
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	err := run(ctx)
 	require.Error(t, err)
@@ -257,8 +253,7 @@ func TestRun_RealMode_MissingVerboseToken_FailsFast(t *testing.T) {
 	// The trip-wire: verbose token is empty.
 	t.Setenv("GOCELL_READYZ_VERBOSE_TOKEN", "")
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	err := run(ctx)
 	require.Error(t, err)
@@ -290,8 +285,7 @@ func TestRun_RealMode_MissingMetricsToken_FailsFast(t *testing.T) {
 	// The trip-wire: metrics token is empty.
 	t.Setenv("GOCELL_METRICS_TOKEN", "")
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	err := run(ctx)
 	require.Error(t, err)
@@ -322,8 +316,7 @@ func TestRun_RealMode_MissingServiceSecret_FailsFast(t *testing.T) {
 	// The trip-wire: service secret is empty.
 	t.Setenv("GOCELL_SERVICE_SECRET", "")
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	err := run(ctx)
 	require.Error(t, err)
@@ -443,8 +436,7 @@ func TestBootstrap_UnknownCellAdapterMode_FailsFast(t *testing.T) {
 	t.Setenv("GOCELL_JWT_ISSUER", "gocell-dev-test")
 	t.Setenv("GOCELL_JWT_AUDIENCE", "gocell")
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	err := run(ctx)
 	require.Error(t, err)
@@ -508,7 +500,6 @@ func TestRun_RealMode_DemoKey_FailsFast(t *testing.T) {
 		},
 	}
 	for _, tc := range tests {
-		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			privPEM, pubPEM := generateTestPEM(t)
 			t.Setenv("GOCELL_ADAPTER_MODE", "real")
@@ -531,8 +522,7 @@ func TestRun_RealMode_DemoKey_FailsFast(t *testing.T) {
 			// Trip-wire: replace just one env with a well-known demo value.
 			t.Setenv(tc.patch.name, tc.patch.value)
 
-			ctx, cancel := context.WithCancel(context.Background())
-			defer cancel()
+			ctx := t.Context()
 
 			err := run(ctx)
 			require.Error(t, err, "real mode must reject env=%s with demo value", tc.patch.name)

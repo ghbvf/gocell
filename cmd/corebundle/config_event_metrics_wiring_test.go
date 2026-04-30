@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"slices"
 	"testing"
 	"time"
 
@@ -126,8 +127,8 @@ func composeConsumerMiddleware(
 	handler outbox.EntryHandler,
 ) outbox.EntryHandler {
 	wrapped := handler
-	for i := len(mws) - 1; i >= 0; i-- {
-		wrapped = mws[i](sub, wrapped)
+	for _, v := range slices.Backward(mws) {
+		wrapped = v(sub, wrapped)
 	}
 	return wrapped
 }

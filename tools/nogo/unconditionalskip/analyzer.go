@@ -28,7 +28,7 @@ var Analyzer = &analysis.Analyzer{
 	URL:        "https://github.com/ghbvf/gocell/tools/nogo/unconditionalskip",
 	Requires:   []*analysis.Analyzer{inspect.Analyzer},
 	Run:        run,
-	ResultType: reflect.TypeOf(result{}),
+	ResultType: reflect.TypeFor[result](),
 }
 
 const diagMessage = "unconditional t.Skip — wrap in if-condition or remove the test"

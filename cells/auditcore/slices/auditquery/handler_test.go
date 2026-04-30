@@ -115,7 +115,7 @@ func TestHandleQuery_InvalidTimeFormat_UsesListErrorSampling(t *testing.T) {
 	require.NoError(t, err)
 	h := NewHandler(svc)
 
-	for i := 0; i < 200; i++ {
+	for range 200 {
 		w := httptest.NewRecorder()
 		req := httptest.NewRequest(http.MethodGet, "/api/v1/audit/entries?from=not-a-date", nil)
 		req = req.WithContext(auth.TestContext("usr-1", []string{"admin"}))
@@ -163,7 +163,7 @@ func TestHandleQuery_Pagination_FullTraversal(t *testing.T) {
 	h := NewHandler(svc)
 
 	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
-	for i := 0; i < 7; i++ {
+	for i := range 7 {
 		require.NoError(t, repo.Append(context.Background(), &domain.AuditEntry{
 			ID:        fmt.Sprintf("ae-%02d", i),
 			EventID:   fmt.Sprintf("evt-%02d", i),
@@ -177,7 +177,7 @@ func TestHandleQuery_Pagination_FullTraversal(t *testing.T) {
 	var allIDs []string
 	cursor := ""
 
-	for page := 0; page < 10; page++ {
+	for range 10 {
 		url := "/api/v1/audit/entries?limit=3"
 		if cursor != "" {
 			url += "&cursor=" + cursor

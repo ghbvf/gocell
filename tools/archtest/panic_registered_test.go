@@ -359,7 +359,7 @@ func readPanicWhitelistKeysFromADR(t *testing.T, root string) []string {
 
 	var keys []string
 	inSection := false
-	for _, line := range strings.Split(string(data), "\n") {
+	for line := range strings.SplitSeq(string(data), "\n") {
 		switch {
 		case strings.HasPrefix(line, "### 4. Hardcoded ADR-pinned whitelist"):
 			inSection = true

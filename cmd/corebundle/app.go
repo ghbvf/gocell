@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"slices"
 
 	"github.com/ghbvf/gocell/kernel/cell"
 	kernellifecycle "github.com/ghbvf/gocell/kernel/lifecycle"
@@ -56,8 +57,8 @@ func BuildApp(
 
 	rollback := func() {
 		// Stop in LIFO order so dependents are closed before dependencies.
-		for i := len(provisional) - 1; i >= 0; i-- {
-			if stopErr := provisional[i].Close(ctx); stopErr != nil {
+		for _, v := range slices.Backward(provisional) {
+			if stopErr := v.Close(ctx); stopErr != nil {
 				// Best-effort: log and continue; the process is aborting.
 				// Discarding the error here is intentional — we are already
 				// handling a primary error and cannot propagate rollback errors

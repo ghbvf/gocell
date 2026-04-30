@@ -43,15 +43,13 @@ func TestUserRepository_ConcurrentCreateAndGet(t *testing.T) {
 	}
 
 	for r := range readers {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			for range iterations {
 				_, _ = repo.GetByID(ctx, "uid-w0-i0")
 				_, _ = repo.GetByUsername(ctx, "user-w0-i0")
 			}
 			_ = r
-		}()
+		})
 	}
 
 	wg.Wait()
@@ -90,14 +88,12 @@ func TestSessionRepository_ConcurrentCreateAndGet(t *testing.T) {
 	}
 
 	for r := range readers {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			for range iterations {
 				_, _ = repo.GetByID(ctx, "sid-w0-i0")
 			}
 			_ = r
-		}()
+		})
 	}
 
 	wg.Wait()
@@ -135,15 +131,13 @@ func TestRoleRepository_ConcurrentAssignAndGet(t *testing.T) {
 	}
 
 	for r := range readers {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			for range iterations {
 				_, _ = repo.GetByID(ctx, "role-0")
 				_, _ = repo.GetByUserID(ctx, "uid-w0-i0")
 			}
 			_ = r
-		}()
+		})
 	}
 
 	wg.Wait()

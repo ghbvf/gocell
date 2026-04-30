@@ -49,7 +49,6 @@ func TestFlagRepo_CtxCanceled_ReturnsClientCanceled(t *testing.T) {
 			"must hit wrapCtxCancel path")
 	}
 	for _, tc := range tests {
-		tc := tc
 		t.Run("GetByKey/"+tc.name, func(t *testing.T) {
 			db := &mockDB{queryRowResult: &mockRow{scanErr: tc.scanErr}}
 			repo := newFlagRepositoryFromDBTX(db)

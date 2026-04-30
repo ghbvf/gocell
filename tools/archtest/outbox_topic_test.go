@@ -318,7 +318,6 @@ func TestSecurityTopicsDoNotOptInFailOpen_RegressionFixtures(t *testing.T) {
 	}
 
 	for _, c := range cases {
-		c := c
 		t.Run(c.pattern, func(t *testing.T) {
 			r, err := typeseval.NewResolver(fixturesRoot, c.pattern)
 			require.NoError(t, err, "load fixture package %s", c.pattern)

@@ -114,7 +114,7 @@ func TestService_Query(t *testing.T) {
 func TestService_Query_FirstPage(t *testing.T) {
 	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	svc, repo := newTestService()
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		seedEntry(repo, fmt.Sprintf("ae-%02d", i), "event.test.v1", "usr-1",
 			base.Add(time.Duration(i)*time.Hour))
 	}
@@ -131,7 +131,7 @@ func TestService_Query_FirstPage(t *testing.T) {
 func TestService_Query_WithCursor(t *testing.T) {
 	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	svc, repo := newTestService()
-	for i := 0; i < 10; i++ {
+	for i := range 10 {
 		seedEntry(repo, fmt.Sprintf("ae-%02d", i), "event.test.v1", "usr-1",
 			base.Add(time.Duration(i)*time.Hour))
 	}
@@ -187,7 +187,7 @@ func TestService_Query_CursorContextMismatch(t *testing.T) {
 	// The cursor should be rejected.
 	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	svc, repo := newTestService()
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		seedEntry(repo, fmt.Sprintf("ae-%02d", i), "event.login.v1", "usr-1",
 			base.Add(time.Duration(i)*time.Hour))
 	}
@@ -226,7 +226,7 @@ func newTestServiceWithLogBuf() (*Service, *mem.AuditRepository, *bytes.Buffer) 
 func parseLogLines(t *testing.T, buf *bytes.Buffer) []map[string]any {
 	t.Helper()
 	var out []map[string]any
-	for _, line := range strings.Split(buf.String(), "\n") {
+	for line := range strings.SplitSeq(buf.String(), "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" {
 			continue

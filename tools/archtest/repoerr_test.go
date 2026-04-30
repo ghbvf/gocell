@@ -496,7 +496,6 @@ func (e *DatabaseError) Error() string { return e.cause.Error() }
 	}
 
 	for name, tc := range fixtures {
-		tc := tc
 		t.Run(name, func(t *testing.T) {
 			fset := token.NewFileSet()
 			f, err := parser.ParseFile(fset, name+".go", tc.src, parser.SkipObjectResolution)
@@ -879,7 +878,6 @@ func use(u UI) {
 	}
 
 	for name, tc := range fixtures {
-		tc := tc
 		t.Run(name, func(t *testing.T) {
 			fset := token.NewFileSet()
 			f, err := parser.ParseFile(fset, name+".go", tc.src, parser.SkipObjectResolution)

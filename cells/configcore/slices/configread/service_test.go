@@ -108,7 +108,7 @@ func TestService_List(t *testing.T) {
 
 func TestService_List_FirstPage(t *testing.T) {
 	svc, repo := newTestService()
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		seedEntry(t, repo, "key-"+string(rune('a'+i)), "v")
 	}
 
@@ -121,7 +121,7 @@ func TestService_List_FirstPage(t *testing.T) {
 
 func TestService_List_WithCursor(t *testing.T) {
 	svc, repo := newTestService()
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		seedEntry(t, repo, "key-"+string(rune('a'+i)), "v")
 	}
 

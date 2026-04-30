@@ -66,7 +66,7 @@ func TestHashChain_Verify(t *testing.T) {
 
 	// Build a chain of 5 entries.
 	entries := make([]*AuditEntry, 0, 5)
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		e := hc.Append("evt-"+string(rune('A'+i)), "access.login", "actor-1", []byte(`{}`))
 		entries = append(entries, e)
 	}

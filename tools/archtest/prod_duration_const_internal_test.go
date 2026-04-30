@@ -60,7 +60,6 @@ func TestIsTimeUnit(t *testing.T) {
 		{"time.Now", false},
 	}
 	for _, c := range cases {
-		c := c
 		t.Run(c.src, func(t *testing.T) {
 			t.Parallel()
 			got := isTimeUnit(parseExpr(t, c.src))
@@ -89,7 +88,6 @@ func TestIsTimeDurationCast(t *testing.T) {
 		{"time.Sleep(30)", false},
 	}
 	for _, c := range cases {
-		c := c
 		t.Run(c.src, func(t *testing.T) {
 			t.Parallel()
 			got := isTimeDurationCast(callExpr(t, c.src))
@@ -125,7 +123,6 @@ func TestAllLiteralOrLitProduct(t *testing.T) {
 		{"(7*24)", true},
 	}
 	for _, c := range cases {
-		c := c
 		t.Run(c.src, func(t *testing.T) {
 			t.Parallel()
 			got := allLiteralOrLitProduct(parseExpr(t, c.src))
@@ -192,7 +189,6 @@ func TestIsLiteralDurationExpr(t *testing.T) {
 		{"cfg.Timeout", false},
 	}
 	for _, c := range cases {
-		c := c
 		t.Run(c.src, func(t *testing.T) {
 			t.Parallel()
 			got := isLiteralDurationExpr(parseExpr(t, c.src))
@@ -271,7 +267,6 @@ func TestExprIsTimeDuration(t *testing.T) {
 	}
 
 	for _, c := range cases {
-		c := c
 		t.Run(c.desc, func(t *testing.T) {
 			t.Parallel()
 			expr := parseExpr(t, c.src)
@@ -379,7 +374,6 @@ var bad = 30 * time.Second
 	}
 
 	for _, c := range cases {
-		c := c
 		t.Run(c.desc, func(t *testing.T) {
 			t.Parallel()
 			got := countDurationLiteralsInFile(t, c.src)
@@ -449,7 +443,6 @@ func f() { time.Sleep(d) }
 	}
 
 	for _, c := range cases {
-		c := c
 		t.Run(c.desc, func(t *testing.T) {
 			t.Parallel()
 			got := countDurationLiteralsInFile(t, c.src)

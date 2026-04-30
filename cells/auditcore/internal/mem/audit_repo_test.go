@@ -50,7 +50,7 @@ func TestAuditRepository_GetRange(t *testing.T) {
 	repo := NewAuditRepository()
 	ctx := context.Background()
 
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		require.NoError(t, repo.Append(ctx, &domain.AuditEntry{
 			ID: fmt.Sprintf("ae-%d", i), EventType: "evt",
 			Timestamp: time.Now(),
@@ -173,7 +173,7 @@ func TestAuditRepository_Query_Filter_TimeRange(t *testing.T) {
 	ctx := context.Background()
 
 	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		require.NoError(t, repo.Append(ctx, &domain.AuditEntry{
 			ID:        fmt.Sprintf("ae-%d", i),
 			EventType: "login",
@@ -211,7 +211,7 @@ func TestAuditRepository_Query_Sort_DESC(t *testing.T) {
 	ctx := context.Background()
 
 	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		require.NoError(t, repo.Append(ctx, &domain.AuditEntry{
 			ID:        fmt.Sprintf("ae-%02d", i),
 			EventType: "login",
@@ -241,7 +241,7 @@ func TestAuditRepository_Query_Cursor(t *testing.T) {
 	ctx := context.Background()
 
 	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		require.NoError(t, repo.Append(ctx, &domain.AuditEntry{
 			ID:        fmt.Sprintf("ae-%02d", i),
 			EventType: "login",
@@ -314,7 +314,7 @@ func TestAuditRepository_Query_Limit(t *testing.T) {
 	repo := NewAuditRepository()
 	ctx := context.Background()
 
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		require.NoError(t, repo.Append(ctx, &domain.AuditEntry{
 			ID: fmt.Sprintf("ae-%d", i), EventType: "login",
 			Timestamp: time.Now(),
@@ -450,9 +450,7 @@ func TestAuditRepository_ConcurrentAppendAndQuery(t *testing.T) {
 
 	var readErrors atomic.Int64
 	for r := range readers {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			params := query.ListParams{
 				Limit: 10,
 				Sort: []query.SortColumn{
@@ -476,7 +474,7 @@ func TestAuditRepository_ConcurrentAppendAndQuery(t *testing.T) {
 				_ = repo.Len()
 			}
 			_ = r
-		}()
+		})
 	}
 
 	wg.Wait()

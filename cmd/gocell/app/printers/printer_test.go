@@ -82,7 +82,7 @@ func TestSortResults_Stable(t *testing.T) {
 	for i, r := range got {
 		if r.Severity == governance.SeverityWarning {
 			// All preceding entries must be errors.
-			for j := 0; j < i; j++ {
+			for j := range i {
 				assert.Equal(t, governance.SeverityError, got[j].Severity,
 					"errors must precede warnings, but index %d is %v", j, got[j].Severity)
 			}

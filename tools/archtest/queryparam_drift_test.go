@@ -16,6 +16,7 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"maps"
 	"os"
 	"path/filepath"
 	"sort"
@@ -156,9 +157,7 @@ func collectRouteQueryBindings(root string) ([]routeQueryBinding, map[string]map
 			return nil, nil, err
 		}
 		bindings = append(bindings, fileBindings...)
-		for fn, params := range fileUsed {
-			usedByFunc[fn] = params
-		}
+		maps.Copy(usedByFunc, fileUsed)
 	}
 	return bindings, usedByFunc, nil
 }
