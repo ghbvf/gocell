@@ -8,10 +8,13 @@ import (
 
 func TestConnection_ChannelStatter_NilConn_ReturnsZeroSnapshot(t *testing.T) {
 	var c *Connection
-	// ChannelStatter is a method on *Connection; calling it on nil is not
-	// supported (method would panic), but tests that exercise the
-	// statter-returned object with a nil inner must not panic on
-	// Snapshot. Construct via the factory with a nil connection sentinel:
+	// White-box safety net: construct rabbitChannelStatter directly with a
+	// nil *Connection so we can verify Snapshot() does not panic when its
+	// inner connection is nil. The public ChannelStatter() entry point is
+	// not exercised here because invoking it on a nil receiver would panic
+	// before reaching the statter; production callers always hold a live
+	// *Connection. This guard exists to catch regressions in the nil branch
+	// of (*rabbitChannelStatter).Snapshot.
 	s := (&rabbitChannelStatter{conn: c, name: "rmq-nil"})
 	if s.PoolName() != "rmq-nil" {
 		t.Fatalf("PoolName = %q, want rmq-nil", s.PoolName())

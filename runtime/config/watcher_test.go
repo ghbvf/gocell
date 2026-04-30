@@ -1062,6 +1062,39 @@ func TestWatcher_isRelevantEvent_TableDriven(t *testing.T) {
 	}
 }
 
+// TestWatcher_isRelevantEvent_DetectsSymlinkRemovePivot covers the positive
+// symlink-pivot branch directly: a Remove event on the watched directory
+// where checkSymlinkPivot detects a target swap must report
+// (symPivot=true, relevant=true) without depending on the integration
+// suite's timing-driven scaffolding. The setup uses a real symlink target
+// switch so that filepath.EvalSymlinks observes a concrete change.
+func TestWatcher_isRelevantEvent_DetectsSymlinkRemovePivot(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink semantics differ on Windows; covered by Linux/macOS")
+	}
+	dir := t.TempDir()
+	v1 := filepath.Join(dir, "v1.yaml")
+	v2 := filepath.Join(dir, "v2.yaml")
+	link := filepath.Join(dir, "config.yaml")
+	touchFile(t, v1, "key: v1")
+	touchFile(t, v2, "key: v2")
+	require.NoError(t, os.Symlink(v1, link))
+
+	w, err := NewWatcher(link)
+	require.NoError(t, err)
+	defer func() { _ = w.Close(context.Background()) }()
+
+	// Atomic-replace the symlink so EvalSymlinks resolves to a new target on
+	// the next isRelevantEvent call. This is the exact ConfigMap ..data
+	// pivot pattern.
+	require.NoError(t, os.Remove(link))
+	require.NoError(t, os.Symlink(v2, link))
+
+	gotSym, gotRel := w.isRelevantEvent(fsnotify.Event{Name: link, Op: fsnotify.Remove})
+	assert.True(t, gotSym, "symPivot must be true after target swap")
+	assert.True(t, gotRel, "relevant must be true on detected pivot")
+}
+
 // orderedSpyCollector records the exact sequence of metric method invocations
 // so that tests can lock the order in which processFSEvent / processPivotTick
 // fan out to RecordEvent / RecordLastEventTimestamp / scheduleCallback. The

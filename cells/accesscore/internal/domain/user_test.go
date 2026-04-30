@@ -3,6 +3,7 @@ package domain
 import (
 	"testing"
 
+	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -54,6 +55,13 @@ func TestNewUser(t *testing.T) {
 			user, err := NewUser(tt.username, tt.email, tt.passwordHash)
 			if tt.wantErr {
 				require.Error(t, err)
+				// Lock errcode classification independently of the message
+				// format so future helper rewrites (e.g. localization) do
+				// not silently weaken the contract.
+				var coded *errcode.Error
+				require.ErrorAs(t, err, &coded, "expected an errcode.Error")
+				assert.Equal(t, errcode.ErrAuthInvalidInput, coded.Code,
+					"NewUser must surface ErrAuthInvalidInput on blank fields")
 				assert.Contains(t, err.Error(), tt.errMsg)
 				assert.Nil(t, user)
 				return

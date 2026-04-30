@@ -1516,16 +1516,45 @@ func TestLoadPackages_IntegrationTagPlumbing(t *testing.T) {
 // growth (extra fields, helpers, init functions) must trip this and force a
 // re-evaluation of V-A8 against its deferred-decision triggers
 // (corebundle subpackage extraction, internalGuard public exposure).
+// countLines reports the number of lines a Go source file would render as,
+// matching the convention that an empty file is 0 lines and a no-trailing-
+// newline file with content still counts its last line. Extracted so the
+// boundary cases (empty / no-final-newline / typical trailing-newline) can
+// be locked independently of cmd/corebundle/main.go's actual content.
+func countLines(data []byte) int {
+	n := bytes.Count(data, []byte("\n"))
+	if !bytes.HasSuffix(data, []byte("\n")) && len(data) > 0 {
+		n++
+	}
+	return n
+}
+
+func TestCountLines_Boundaries(t *testing.T) {
+	cases := []struct {
+		name string
+		in   []byte
+		want int
+	}{
+		{"empty file is zero lines", []byte{}, 0},
+		{"single line without trailing newline", []byte("package main"), 1},
+		{"single line with trailing newline", []byte("package main\n"), 1},
+		{"two lines with trailing newline", []byte("a\nb\n"), 2},
+		{"two lines no trailing newline", []byte("a\nb"), 2},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, countLines(tc.in))
+		})
+	}
+}
+
 func TestCorebundleMainLineLimit(t *testing.T) {
 	const maxLines = 30
 	root := findModuleRoot(t)
 	path := filepath.Join(root, "cmd", "corebundle", "main.go")
 	data, err := os.ReadFile(path)
 	require.NoError(t, err, "read %s", path)
-	lines := bytes.Count(data, []byte("\n"))
-	if !bytes.HasSuffix(data, []byte("\n")) && len(data) > 0 {
-		lines++
-	}
+	lines := countLines(data)
 	assert.LessOrEqualf(t, lines, maxLines,
 		"cmd/corebundle/main.go has %d lines, exceeds V-A8 ceiling of %d; "+
 			"re-evaluate V-A8-DEFERRED triggers in docs/backlog.md and "+
