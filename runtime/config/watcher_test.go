@@ -867,3 +867,74 @@ func TestWatcher_Close_Idempotent(t *testing.T) {
 	assert.NoError(t, w.Close(ctx), "first Close(ctx) must return nil")
 	assert.NoError(t, w.Close(ctx), "second Close(ctx) must be no-op and return nil")
 }
+
+// ---------------------------------------------------------------------------
+// WithSymlinkPollInterval
+// ---------------------------------------------------------------------------
+
+func TestWatcher_WithSymlinkPollInterval_DisablesPoll(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink requires SeCreateSymbolicLinkPrivilege on Windows")
+	}
+	dir := t.TempDir()
+	v1 := filepath.Join(dir, "config_v1.yaml")
+	v2 := filepath.Join(dir, "config_v2.yaml")
+	touchFile(t, v1, "version: 1")
+	touchFile(t, v2, "version: 2")
+	link := filepath.Join(dir, "config.yaml")
+	require.NoError(t, os.Symlink(v1, link))
+
+	// poll=0 disables the ticker; the watcher must still start and close cleanly.
+	w, err := NewWatcher(link, WithDebounce(0), WithSymlinkPollInterval(0))
+	require.NoError(t, err)
+	defer func() { _ = w.Close(context.Background()) }()
+
+	var called atomic.Int32
+	w.OnChange(func(_ WatchEvent) { called.Add(1) })
+	w.Start()
+	waitReady(t, w)
+
+	// Pivot while polling is disabled — no callback expected from the poll path.
+	require.NoError(t, os.Remove(link))
+	require.NoError(t, os.Symlink(v2, link))
+
+	// Give a brief window; the test asserts the loop does not crash, not callback count.
+	time.Sleep(150 * time.Millisecond)
+	// No assertion on called.Load() — fsnotify may or may not fire; we only
+	// verify the watcher stays alive with poll disabled.
+	_ = called.Load()
+}
+
+func TestWatcher_WithSymlinkPollInterval_CustomInterval(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink requires SeCreateSymbolicLinkPrivilege on Windows")
+	}
+	dir := t.TempDir()
+	v1 := filepath.Join(dir, "config_v1.yaml")
+	v2 := filepath.Join(dir, "config_v2.yaml")
+	touchFile(t, v1, "version: 1")
+	touchFile(t, v2, "version: 2")
+	link := filepath.Join(dir, "config.yaml")
+	require.NoError(t, os.Symlink(v1, link))
+
+	// Use a short custom poll interval so the pivot is detected via the ticker.
+	w, err := NewWatcher(link, WithDebounce(0), WithSymlinkPollInterval(20*time.Millisecond))
+	require.NoError(t, err)
+	defer func() { _ = w.Close(context.Background()) }()
+
+	var gotPivot atomic.Int32
+	w.OnChange(func(evt WatchEvent) {
+		if evt.SymlinkPivot {
+			gotPivot.Add(1)
+		}
+	})
+	w.Start()
+	waitReady(t, w)
+
+	require.NoError(t, os.Remove(link))
+	require.NoError(t, os.Symlink(v2, link))
+
+	assert.Eventually(t, func() bool {
+		return gotPivot.Load() >= 1
+	}, 2*time.Second, 20*time.Millisecond, "custom poll interval must detect symlink pivot")
+}
