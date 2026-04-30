@@ -37,7 +37,7 @@ permissions:
   contents: read
 
 jobs:
-  # build-test is a matrix of 4 package shards run in parallel. Previous
+  # build-test is a matrix of 5 package shards run in parallel. Previous
   # empirical data (PR246) showed `go test -race ./...` dominated at 4m34s of
   # a 5m28s job; sharding lets non-race shards run without the 2-10x race
   # detector overhead while isolating race coverage to the concurrency-sensitive
@@ -49,6 +49,12 @@ jobs:
   # and shard boundaries that mirror those layers produce stable coverage
   # profiles and make per-shard timing easy to interpret. Swap to dynamic
   # sharding if shard timings diverge > 2x.
+  #
+  # tools/ is a separate shard from kernel/ because go/packages static-analysis
+  # tests (archtest, metricschema, generatedverify) load the full module type
+  # graph and account for ~130s of the former combined kernel+tools shard. Running
+  # them in parallel with kernel/ cuts the critical-path wall time from ~340s to
+  # ~170s without touching test logic.
   build-test:
     runs-on: ubuntu-latest
     strategy:
@@ -56,15 +62,16 @@ jobs:
       matrix:
         include:
           - shard: kernel
-            # archtest lives under tools/ and is the only enforcement path for
-            # cross-layer guards (LAYER-*, AUTH-AUTHTEST-A/B/C, etc.). Folding
-            # ./tools/... into the kernel shard wires those tests into the same
-            # required check that runs build/vet/lint/validate, so a regression
-            # in those guards fails CI rather than only failing on a developer's
-            # local `go test ./tools/...` run.
-            pkgs: ./kernel/... ./tools/...
+            pkgs: ./kernel/...
             race: true
             static_checks: true
+          - shard: tools
+            # archtest / metricschema / generatedverify use go/packages to load
+            # the full module type graph; they are the slowest test suite (~130s)
+            # and are isolated here so they run in parallel with the kernel shard.
+            pkgs: ./tools/...
+            race: true
+            static_checks: false
           - shard: runtime
             pkgs: ./runtime/... ./pkg/...
             race: true
@@ -138,9 +145,10 @@ jobs:
       # ban) are owned by the dedicated Governance Strict workflow
       # (.github/workflows/governance.yml → `make verify`). Running them
       # here would duplicate work and create two paths to update whenever a
-      # gate is added. archtest layer/cell-internal guards remain covered by
-      # the kernel shard's Test step via ./tools/... in matrix.pkgs and are
-      # additionally re-run inside `make verify` (cheap, < 30s).
+      # gate is added. archtest layer/cell-internal guards are covered by
+      # the dedicated tools shard (./tools/...) which runs in parallel with
+      # this kernel shard, and are additionally re-run inside `make verify`
+      # (cheap, < 30s).
 
       # Compile-verify e2e package even when integration-test job is skipped.
       # The e2e build tag gates runtime behaviour; this step ensures type/import
@@ -469,7 +477,7 @@ jobs:
         run: |
           set -euo pipefail
           echo "mode: atomic" > coverage-merged.out
-          for f in coverage-shard-kernel.out coverage-shard-runtime.out coverage-shard-cells.out coverage-shard-others.out coverage-integration.out; do
+          for f in coverage-shard-kernel.out coverage-shard-tools.out coverage-shard-runtime.out coverage-shard-cells.out coverage-shard-others.out coverage-integration.out; do
             if [ ! -f "$f" ]; then
               echo "FAIL: expected profile $f is missing" >&2
               exit 1
