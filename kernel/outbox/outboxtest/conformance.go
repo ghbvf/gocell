@@ -275,7 +275,9 @@ func testTopicIsolation(t *testing.T, _ Features, constructor PubSubConstructor)
 	}
 
 	cancel()
-	<-subDone
+	if err := awaitWithBudget(fmt.Sprintf("topicIsolation-join(topic=%q)", topicA), subDone, defaultTimeout); err != nil {
+		t.Errorf("%v", err)
+	}
 
 	mu.Lock()
 	defer mu.Unlock()
@@ -338,7 +340,9 @@ func testMultipleSubscribers(t *testing.T, _ Features, constructor PubSubConstru
 	}, defaultTimeout, 10*time.Millisecond, "both subscribers should receive the message")
 
 	cancel()
-	wg.Wait()
+	if err := awaitWithBudget(fmt.Sprintf("multipleSubscribers-join(topic=%q)", topic), chanFromWaitGroup(&wg), defaultTimeout); err != nil {
+		t.Errorf("%v", err)
+	}
 }
 
 // testCompetingConsumers verifies that when BroadcastSubscribe=false (e.g.,
@@ -404,7 +408,9 @@ func testCompetingConsumers(t *testing.T, _ Features, constructor PubSubConstruc
 		fmt.Sprintf("competing consumers: message should be delivered to exactly 1 subscriber, got %d", got))
 
 	cancel()
-	wg.Wait()
+	if err := awaitWithBudget(fmt.Sprintf("competingConsumers-join(topic=%q)", topic), chanFromWaitGroup(&wg), defaultTimeout); err != nil {
+		t.Errorf("%v", err)
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -743,9 +749,7 @@ func testCloseTerminatesSubscribers(t *testing.T, _ Features, constructor PubSub
 	}()
 	waitForSubscription(t, ctx, sub, topic, "")
 
-	closeCtx, closeCancel := context.WithTimeout(t.Context(), defaultTimeout)
-	defer closeCancel()
-	assertNoError(t, sub.Close(closeCtx))
+	assertNoError(t, closeWithBudget(t, sub, topic, defaultTimeout))
 
 	select {
 	case <-subscribeReturned:
