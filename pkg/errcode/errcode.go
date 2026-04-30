@@ -281,7 +281,7 @@ const (
 	// Use IsTransient to check the full error chain.
 	//
 	// ref: aws/aws-encryption-sdk-python src/aws_encryption_sdk/exceptions.py
-	// (GenerateKeyError / DecryptKeyError transient vs permanent split)
+	// (GenerateKeyError / DecryptKeyError transient vs permanent split).
 	ErrKeyProviderTransient Code = "ERR_KEY_PROVIDER_TRANSIENT"
 	// ErrConfigDecryptFailed signals that a sensitive config value could not be
 	// decrypted at the repository boundary. Maps to HTTP 500 (internal error).
@@ -299,7 +299,7 @@ const (
 	// ErrVaultAuthFailed signals a Vault auth method failure: missing or malformed
 	// credentials, unknown VAULT_AUTH_METHOD, AppRole / Kubernetes Login returned
 	// error, static token rejected by real-mode guard, or re-authentication loop
-	// exhausted (ctx cancelled).
+	// exhausted (ctx canceled).
 	//
 	// Distinct from ErrKeyProviderAuthFailed, which signals runtime Vault 403 on
 	// transit encrypt/decrypt paths (an in-flight operation failure). This code
@@ -307,7 +307,7 @@ const (
 	//
 	// Permanent at boot: operators must fix configuration before restart.
 	// During re-auth loop: ctx cancellation is the only exit condition; this
-	// code is returned when ctx is cancelled while retrying.
+	// code is returned when ctx is canceled while retrying.
 	//
 	// Category: default CategoryInfra (consistent with ErrVault* / ErrKeyProvider* siblings).
 	ErrVaultAuthFailed Code = "ERR_VAULT_AUTH_FAILED"
@@ -368,7 +368,7 @@ const (
 	// token (or no token was configured while verbose is still being
 	// requested). Maps to HTTP 401 Unauthorized.
 	//
-	// Introduced by PR-A35: prior behaviour silently downgraded mismatched
+	// Introduced by PR-A35: prior behavior silently downgraded mismatched
 	// requests to a plain 200 (without the verbose body), masking
 	// misconfiguration. The strict 401 makes configuration errors observable
 	// to operators without affecting the bare /readyz endpoint used by

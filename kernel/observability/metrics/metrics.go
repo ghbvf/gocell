@@ -23,7 +23,7 @@ import (
 //
 // Callers obtain Collector values only via Provider.CounterVec and
 // Provider.HistogramVec; passing other values to Unregister is undefined
-// behaviour (implementations may silently no-op or return an error).
+// behavior (implementations may silently no-op or return an error).
 //
 // Both CounterVec and HistogramVec embed Collector so that the return values
 // of CounterVec/HistogramVec can be passed directly to Unregister without

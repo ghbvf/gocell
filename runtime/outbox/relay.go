@@ -156,7 +156,7 @@ func NewRelay(store Store, pub kout.Publisher, cfg RelayConfig) *Relay {
 // ---------------------------------------------------------------------------
 
 // Start begins the relay polling loop, cleanup goroutine, and reclaim loop.
-// It blocks until ctx is cancelled or Stop is called.
+// It blocks until ctx is canceled or Stop is called.
 func (r *Relay) Start(ctx context.Context) error {
 	if !r.state.CompareAndSwap(int32(relayStopped), int32(relayStarting)) {
 		return errcode.New(errRelayOp, "outbox relay already started")
@@ -698,7 +698,7 @@ func (r *Relay) Close(ctx context.Context) error {
 }
 
 // Ready returns the channel that is closed when Start() has transitioned the
-// relay to the running state. Callers can use this to synchronise without
+// relay to the running state. Callers can use this to synchronize without
 // polling:
 //
 //	select {

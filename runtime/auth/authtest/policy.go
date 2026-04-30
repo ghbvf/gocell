@@ -11,10 +11,10 @@ import (
 // is present in context. ONLY use in runtime/auth middleware behavior tests;
 // production cells must declare an explicit role policy via auth.AnyRole(...).
 //
-// The defence-in-depth check on PrincipalUser.Subject is preserved from the
+// The defense-in-depth check on PrincipalUser.Subject is preserved from the
 // legacy auth.Authenticated() implementation.
 //
-// see auth.TestContext for handler test fixture
+// see auth.TestContext for handler test fixture.
 func RequireAuthenticated() auth.Policy {
 	return func(r *http.Request) error {
 		p, ok := auth.FromContext(r.Context())

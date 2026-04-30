@@ -1,12 +1,12 @@
 package vault
 
-// reauth_test.go — unit tests for the re-authentication loop behaviour.
+// reauth_test.go — unit tests for the re-authentication loop behavior.
 //
 // Covers:
 //   F-3a: TestReauthenticate_BackoffInterruptedByCtxCancel — reauthenticate
-//         exits promptly when ctx is cancelled during the backoff sleep.
+//         exits promptly when ctx is canceled during the backoff sleep.
 //   F-3b: TestDoReauth_InfiniteRetry_UntilCtxCancel — doReauth keeps retrying
-//         buildWatcher failures indefinitely until ctx is cancelled.
+//         buildWatcher failures indefinitely until ctx is canceled.
 
 import (
 	"context"
@@ -86,7 +86,7 @@ func TestReauthenticate_BackoffInterruptedByCtxCancel(t *testing.T) {
 //   - fakeAuthMethod always succeeds (Login is fine).
 //   - fakeAlwaysFailRenewer returns an error on every NewLifetimeWatcher call.
 //   - doReauth must keep looping (reauthenticate → buildWatcher fails → retry).
-//   - After several iterations ctx is cancelled and doReauth returns (nil, false).
+//   - After several iterations ctx is canceled and doReauth returns (nil, false).
 func TestDoReauth_InfiniteRetry_UntilCtxCancel(t *testing.T) {
 	// fakeAuthMethod always returns success so Login never blocks the loop.
 	fakeAuth := &fakeAuthMethod{
@@ -140,10 +140,10 @@ func TestDoReauth_InfiniteRetry_UntilCtxCancel(t *testing.T) {
 	}
 
 	if gotOK {
-		t.Error("doReauth must return ok=false when ctx cancelled")
+		t.Error("doReauth must return ok=false when ctx canceled")
 	}
 	if gotWatcher != nil {
-		t.Error("doReauth must return nil watcher when ctx cancelled")
+		t.Error("doReauth must return nil watcher when ctx canceled")
 	}
 }
 

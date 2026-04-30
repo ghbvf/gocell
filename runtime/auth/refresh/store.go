@@ -6,13 +6,13 @@ import (
 )
 
 // Store persists refresh token chains with CAS-protected Rotate and
-// reuse detection. Implementations MUST honour the append-only lineage
+// reuse detection. Implementations MUST honor the append-only lineage
 // model: Issue and Rotate only INSERT rows; rotated_at and revoked_at are
 // one-way timestamp flips; verifier_hash is never updated in place.
 //
 // Every unhappy Peek/Rotate path returns ErrRejected. Internal diagnostic
 // reasons surface through the slog structured field "reason", not through
-// error shape (enumeration / timing side-channel defence).
+// error shape (enumeration / timing side-channel defense).
 //
 // ref: ory/fosite token/hmac/hmacsha.go (base64url nopad + hmac.Equal)
 // ref: ory/hydra persistence/sql/persister_oauth2.go (CAS + grace + chain revoke)

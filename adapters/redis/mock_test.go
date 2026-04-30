@@ -11,7 +11,7 @@ import (
 )
 
 // mockCmdable implements the cmdable interface for unit testing.
-// It stores values in an in-memory map and simulates Redis behaviour
+// It stores values in an in-memory map and simulates Redis behavior
 // including SET NX, TTL expiry, GET, DEL, Eval, Ping, and Close.
 type mockCmdable struct {
 	mu     sync.Mutex

@@ -17,7 +17,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/idempotency"
 )
 
-// ConsumerBase lives in kernel/outbox so tests covering its behaviour must
+// ConsumerBase lives in kernel/outbox so tests covering its behavior must
 // also live here (kernel layer requires >= 90% coverage). These tests
 // previously lived in adapters/rabbitmq and were left behind when
 // ConsumerBase was hoisted out of the adapter in PR #176.
@@ -71,7 +71,7 @@ func (c *fakeClaimer) Claim(_ context.Context, key string, _, _ time.Duration) (
 var _ idempotency.Claimer = (*fakeClaimer)(nil)
 
 // signalingClaimer wraps an inner Claimer and sends on the started channel
-// the first time Claim is invoked. Used to replace time.Sleep startup synchronisation
+// the first time Claim is invoked. Used to replace time.Sleep startup synchronization
 // in tests that need to cancel ctx after the claimer has been called.
 type signalingClaimer struct {
 	inner   idempotency.Claimer
@@ -671,7 +671,7 @@ func TestWrap_LeaseRenewal_ExtendsAtInterval(t *testing.T) {
 }
 
 // TestWrap_LeaseRenewal_ExtendFailure_CancelsHandler verifies that when
-// Extend returns ErrLeaseExpired the handler context is cancelled and the
+// Extend returns ErrLeaseExpired the handler context is canceled and the
 // result disposition is Requeue.
 func TestWrap_LeaseRenewal_ExtendFailure_CancelsHandler(t *testing.T) {
 	defer goleak.VerifyNone(t)
@@ -694,7 +694,7 @@ func TestWrap_LeaseRenewal_ExtendFailure_CancelsHandler(t *testing.T) {
 
 	ctxCancelSeen := make(chan struct{}, 1)
 	handler := cb.Wrap(Subscription{Topic: "topic", ConsumerGroup: "cg"}, func(ctx context.Context, _ Entry) HandleResult {
-		// Block until context is cancelled or timeout.
+		// Block until context is canceled or timeout.
 		select {
 		case <-ctx.Done():
 			ctxCancelSeen <- struct{}{}
@@ -719,7 +719,7 @@ func TestWrap_LeaseRenewal_ExtendFailure_CancelsHandler(t *testing.T) {
 	select {
 	case <-ctxCancelSeen:
 	case <-time.After(3 * time.Second):
-		t.Fatal("handler context was not cancelled after Extend failure")
+		t.Fatal("handler context was not canceled after Extend failure")
 	}
 
 	assert.Equal(t, DispositionRequeue, res.Disposition)
@@ -827,7 +827,7 @@ func TestWrap_LeaseRenewal_HandlerComplete_StopsGoroutine(t *testing.T) {
 // the slog.Any("error", err) branch inside leaseRenewalLoop (consumer_base.go:581-584).
 // The branch fires when Extend returns a non-ErrLeaseExpired (transient) error.
 // The renewal loop must log the warning and continue ticking rather than
-// cancelling the handler context.
+// canceling the handler context.
 func TestWrap_LeaseRenewalLoop_TransientExtendError_LogsWarnAndContinues(t *testing.T) {
 	defer goleak.VerifyNone(t)
 
@@ -849,16 +849,16 @@ func TestWrap_LeaseRenewalLoop_TransientExtendError_LogsWarnAndContinues(t *test
 	require.NoError(t, err)
 
 	// handlerDone is closed when the handler returns so the test can assert
-	// that the handler ran to completion (ctx was NOT cancelled).
+	// that the handler ran to completion (ctx was NOT canceled).
 	handlerDone := make(chan struct{})
 	handler := cb.Wrap(Subscription{Topic: "topic", ConsumerGroup: "cg"}, func(ctx context.Context, _ Entry) HandleResult {
 		// Block for 3 intervals so renewal fires at least twice with the
 		// transient error; verify ctx stays live throughout.
 		select {
 		case <-time.After(3 * interval):
-			// normal exit — ctx was NOT cancelled by transient extend error
+			// normal exit — ctx was NOT canceled by transient extend error
 		case <-ctx.Done():
-			t.Error("handler context was cancelled on transient extend error — must not happen")
+			t.Error("handler context was canceled on transient extend error — must not happen")
 		}
 		close(handlerDone)
 		return HandleResult{Disposition: DispositionAck}
@@ -1018,7 +1018,7 @@ func TestConsumerBase_LeaseLost_HandlerCancellation_StillRequeue(t *testing.T) {
 	select {
 	case <-ctxCancelSeen:
 	case <-time.After(3 * time.Second):
-		t.Fatal("handler context was not cancelled after ErrLeaseExpired")
+		t.Fatal("handler context was not canceled after ErrLeaseExpired")
 	}
 
 	assert.Equal(t, DispositionRequeue, res.Disposition,

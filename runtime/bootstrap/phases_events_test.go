@@ -1,6 +1,6 @@
 package bootstrap
 
-// phases_events_test.go — behaviour tests for phase6StartEventRouter wiring.
+// phases_events_test.go — behavior tests for phase6StartEventRouter wiring.
 //
 // finding 2 (PR-A66 round-2) gaps these tests close:
 //
@@ -105,7 +105,7 @@ func TestPhase6_ConsumerMiddleware_AppliedInChain(t *testing.T) {
 
 // neverReadySubscriber is a Subscriber that completes Setup but never closes
 // the Ready channel, simulating a broker subscription that hangs in the
-// "not ready" state. Subscribe blocks until ctx is cancelled.
+// "not ready" state. Subscribe blocks until ctx is canceled.
 type neverReadySubscriber struct{}
 
 func (neverReadySubscriber) Setup(_ context.Context, _ outbox.Subscription) error {

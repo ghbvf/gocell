@@ -131,7 +131,7 @@ func TestPrometheusExposition_RelayCollector_FamiliesAndBuckets(t *testing.T) {
 			t.Errorf("exposition missing %q; got:\n%s", want, body)
 		}
 	}
-	// Non-zero outcomes labelled correctly (skipped zero suppression is a
+	// Non-zero outcomes labeled correctly (skipped zero suppression is a
 	// collector rule inherited from the old adapter).
 	for _, want := range []string{
 		`gocell_outbox_relayed_total{cell="test-cell",outcome="published"} 2`,

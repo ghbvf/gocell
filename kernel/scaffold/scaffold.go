@@ -164,7 +164,7 @@ func (s *Scaffolder) CreateSlice(opts SliceOpts) error {
 
 // CreateContract creates contracts/{kind}/{domain...}/{version}/contract.yaml.
 // Contract ID format: "{kind}.{domain}.{operation}.{version}"
-// Directory: contracts/{kind}/{domain}/{operation}/{version}/
+// Directory: contracts/{kind}/{domain}/{operation}/{version}/.
 func (s *Scaffolder) CreateContract(opts ContractOpts) error {
 	if opts.ID == "" {
 		return errcode.New(ErrScaffoldInvalidOpts, "contract ID is required")

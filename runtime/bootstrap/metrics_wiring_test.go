@@ -18,8 +18,8 @@ import (
 
 // registrationSpy counts every CounterVec registration so tests can assert
 // that a Provider injected into bootstrap reaches assembly.Config without
-// constructing the full runtime. Fulfils kernelmetrics.Provider with
-// Nop-behaviour otherwise so nothing else breaks.
+// constructing the full runtime. Fulfills kernelmetrics.Provider with
+// Nop-behavior otherwise so nothing else breaks.
 type registrationSpy struct {
 	mu             sync.Mutex
 	counterNames   []string
@@ -202,7 +202,7 @@ func TestBootstrap_NoMetricsProvider_NoAutoWire(t *testing.T) {
 // http_requests_total was registered — a regression that hard-coded
 // cell="default" inside RecordRequest would still pass that weaker assertion.
 //
-// finding 2 (PR-A66 round-2): close the cell-label behaviour gap.
+// finding 2 (PR-A66 round-2): close the cell-label behavior gap.
 func TestAutoWire_CellLabel_FromExplicitAssemblyID(t *testing.T) {
 	t.Parallel()
 	p := newFakeMetricsProvider()

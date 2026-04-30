@@ -128,7 +128,7 @@ func (s *Service) recordConfigEventProcess(ctx context.Context, reason obmetrics
 // Consumer: cg-configcore-entry-upserted
 // Idempotency: Claimer (two-phase Claim/Commit/Release), TTL 24h
 // Disposition: Ack on success / Requeue on transient / Reject on permanent
-// DLX: broker-native via DispositionReject → Nack(requeue=false)
+// DLX: broker-native via DispositionReject → Nack(requeue=false).
 func (s *Service) HandleEntryUpserted(ctx context.Context, entry outbox.Entry) error {
 	event, err := configevents.DecodeEntryUpserted(entry.Payload)
 	if err != nil {
@@ -172,7 +172,7 @@ func (s *Service) HandleEntryUpserted(ctx context.Context, entry outbox.Entry) e
 // Consumer: cg-configcore-entry-deleted
 // Idempotency: Claimer (two-phase Claim/Commit/Release), TTL 24h
 // Disposition: Ack on success / Requeue on transient / Reject on permanent
-// DLX: broker-native via DispositionReject → Nack(requeue=false)
+// DLX: broker-native via DispositionReject → Nack(requeue=false).
 func (s *Service) HandleEntryDeleted(ctx context.Context, entry outbox.Entry) error {
 	event, err := configevents.DecodeEntryDeleted(entry.Payload)
 	if err != nil {

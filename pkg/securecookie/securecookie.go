@@ -91,7 +91,7 @@ func (sc *SecureCookie) WithMaxAge(seconds int) *SecureCookie {
 // Encode signs (and optionally encrypts) value, returning a base64url string.
 //
 // Format: base64url( timestamp(8) | [nonce(12) | ciphertext(N)] or payload(N) | hmac(32) )
-// HMAC input: len(name)(4) | name | timestamp | nonce | payload
+// HMAC input: len(name)(4) | name | timestamp | nonce | payload.
 func (sc *SecureCookie) Encode(name string, value []byte) (string, error) {
 	// 1. Timestamp
 	ts := make([]byte, timestampLen)

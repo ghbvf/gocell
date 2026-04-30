@@ -184,7 +184,7 @@ func exprIsTimeDuration(expr ast.Expr, info *types.Info) bool {
 }
 
 // isLiteralDurationExpr returns true for expressions whose subtree contains a
-// numeric BasicLit that contributes a non-zero literal value. It recognises:
+// numeric BasicLit that contributes a non-zero literal value. It recognizes:
 //   - *ast.BasicLit (INT/FLOAT) with Value != "0"  (e.g. var x time.Duration = 5)
 //   - <lit> * time.Unit / time.Unit * <lit>  (e.g. 5*time.Second)
 //   - chained <lit> * <lit> * time.Unit  (e.g. 7*24*time.Hour)

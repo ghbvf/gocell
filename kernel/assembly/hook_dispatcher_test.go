@@ -288,7 +288,7 @@ func TestHookDispatcher_FlushAfterStopReturnsTrue(t *testing.T) {
 // TestHookDispatcher_FlushTimeoutThenSuccess exercises the subtle case
 // where a flush call times out while the fence sits in the queue, then a
 // later flush sees the dispatcher catch up and returns true. Pins the
-// shared-timer behaviour documented in flush().
+// shared-timer behavior documented in flush().
 func TestHookDispatcher_FlushTimeoutThenSuccess(t *testing.T) {
 	bo := newBlockingObserver()
 	d, err := newHookDispatcher(dispatcherConfig{Observer: bo, QueueSize: 2, SinkTimeout: time.Second})

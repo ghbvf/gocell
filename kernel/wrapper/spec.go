@@ -64,7 +64,7 @@ func (s ContractSpec) Validate() error {
 		// command/projection transports.
 		return nil
 	default:
-		return fmt.Errorf("wrapper.ContractSpec: Kind %q not recognised (http|event|command|projection)", s.Kind)
+		return fmt.Errorf("wrapper.ContractSpec: Kind %q not recognized (http|event|command|projection)", s.Kind)
 	}
 }
 

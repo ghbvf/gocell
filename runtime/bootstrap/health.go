@@ -41,7 +41,7 @@ var (
 	}
 )
 
-// HealthRouteGroupOption customises the route groups returned by
+// HealthRouteGroupOption customizes the route groups returned by
 // HealthRouteGroups. Use WithMetricsHandler / WithReadyzVerboseToken /
 // WithReadyzVerboseDisabled.
 type HealthRouteGroupOption func(*healthRouteGroupCfg)

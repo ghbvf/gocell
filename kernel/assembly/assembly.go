@@ -174,7 +174,7 @@ func (a *CoreAssembly) Register(c cell.Cell) error {
 	return nil
 }
 
-// Start initialises and starts every registered Cell in registration order.
+// Start initializes and starts every registered Cell in registration order.
 // Dependencies are built from all registered Cells.
 //
 // ref: uber-go/fx app.go — Start 出错后自动 rollback 已启动的 Cell（LIFO Stop）。
@@ -295,7 +295,7 @@ func (a *CoreAssembly) Health() map[string]cell.HealthStatus {
 }
 
 // StartWithConfig is like Start but injects the given config map into
-// Dependencies.Config before initialising cells.
+// Dependencies.Config before initializing cells.
 func (a *CoreAssembly) StartWithConfig(ctx context.Context, cfgMap map[string]any) error {
 	return a.startInternal(ctx, cfgMap)
 }

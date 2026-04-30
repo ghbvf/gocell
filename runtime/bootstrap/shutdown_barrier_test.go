@@ -6,7 +6,7 @@ package bootstrap
 // These tests verify the behavioral contract described in the plan:
 //  1. HTTP continues accepting traffic during preShutdownDelay
 //  2. LIFO teardown fires in reverse registration order
-//  3. runCtx is NOT cancelled when external ctx is cancelled (they are independent)
+//  3. runCtx is NOT canceled when external ctx is canceled (they are independent)
 //  4. A worker error triggers orderly phase10 orchestration (not raw rollback)
 //  5. Total shutdown budget is respected
 //
@@ -129,7 +129,7 @@ func TestShutdown_LIFOTeardownOrder(t *testing.T) {
 
 // TestShutdown_RunCtxIndependentOfExternalCtx verifies the core invariant:
 // workers run on runCtx (derived from Background), not the external ctx.
-// After external ctx is cancelled, the worker must NOT exit until its
+// After external ctx is canceled, the worker must NOT exit until its
 // teardown (which calls workerCancel) is invoked.
 func TestShutdown_RunCtxIndependentOfExternalCtx(t *testing.T) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
@@ -175,13 +175,13 @@ func TestShutdown_RunCtxIndependentOfExternalCtx(t *testing.T) {
 	extCancelledAt := time.Now()
 	extCancel()
 
-	// After external ctx cancel, worker ctx must NOT be cancelled yet —
+	// After external ctx cancel, worker ctx must NOT be canceled yet —
 	// they are derived from different roots. The preShutdownDelay holds
 	// phase10 before LIFO teardown (which calls workerCancel), giving us a
 	// reliable assertion window of ~50ms (well within assertionDelay).
 	select {
 	case <-workerCtxDone:
-		t.Fatal("worker ctx was cancelled synchronously with external ctx cancel — they must be independent")
+		t.Fatal("worker ctx was canceled synchronously with external ctx cancel — they must be independent")
 	case <-time.After(50 * time.Millisecond):
 		// Good: worker ctx still running 50ms after external ctx cancel.
 	}
@@ -196,7 +196,7 @@ func TestShutdown_RunCtxIndependentOfExternalCtx(t *testing.T) {
 	require.NotZero(t, workerCancelNs, "worker ctx cancel must have been recorded")
 	workerCancelAt := time.Unix(0, workerCancelNs)
 
-	// Worker ctx must be cancelled AFTER external ctx — they are not the same ctx.
+	// Worker ctx must be canceled AFTER external ctx — they are not the same ctx.
 	assert.True(t, workerCancelAt.After(extCancelledAt) || workerCancelAt.Equal(extCancelledAt),
 		"worker ctx cancel (%v) must not precede external ctx cancel (%v)",
 		workerCancelAt, extCancelledAt)
@@ -274,7 +274,7 @@ func TestShutdown_TotalBudgetRespected(t *testing.T) {
 
 // --- Helpers ---
 
-// trackingWorker records when its ctx is cancelled so tests can verify
+// trackingWorker records when its ctx is canceled so tests can verify
 // that worker cancellation happens AFTER external ctx cancellation.
 type trackingWorker struct {
 	started  chan struct{}

@@ -144,7 +144,7 @@ func (s *store) Peek(_ context.Context, presented string) (*refresh.Token, error
 }
 
 // Rotate advances the chain one generation by appending a child record.
-// See Store.Rotate contract for branch behaviour.
+// See Store.Rotate contract for branch behavior.
 func (s *store) Rotate(_ context.Context, presented string) (string, *refresh.Token, error) {
 	sel, ver, ok := refresh.ParseOpaque(presented)
 	if !ok {

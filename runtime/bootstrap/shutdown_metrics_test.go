@@ -288,9 +288,9 @@ func TestShutdownMetrics_TimeoutOutcome_Success(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 // slowWorker is a background worker whose Stop method blocks until either its
-// context is cancelled (ctx.Done) or it is explicitly released. Unlike a cell
+// context is canceled (ctx.Done) or it is explicitly released. Unlike a cell
 // that ignores ctx (which would hang phase10LIFOTeardown indefinitely), this
-// worker honours the shutdown context so phase10 can return after the deadline
+// worker honors the shutdown context so phase10 can return after the deadline
 // and detect DeadlineExceeded.
 type slowWorker struct {
 	release chan struct{}
@@ -305,7 +305,7 @@ func (w *slowWorker) Start(ctx context.Context) error {
 	return nil
 }
 
-// Stop blocks until ctx is cancelled (timeout path) or release is closed
+// Stop blocks until ctx is canceled (timeout path) or release is closed
 // (test cleanup path). It returns ctx.Err() on cancellation so the caller
 // knows the context expired.
 func (w *slowWorker) Stop(ctx context.Context) error {

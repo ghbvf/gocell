@@ -21,7 +21,7 @@
 //
 //  1. Use IgnoreCtx to bridge an io.Closer into a ContextCloser without
 //     any implementation change. The ctx is discarded, so the budget is
-//     honoured only at the Bootstrap level, not within the resource.
+//     honored only at the Bootstrap level, not within the resource.
 //
 //  2. Implement Close(ctx context.Context) error natively on the resource
 //     so that ctx.Done() can abort long drain operations (e.g., waiting for
@@ -61,7 +61,7 @@
 //     usable. Prefer business-path probes over generic process health.
 //   - Worker returns nil when no bootstrap-managed goroutine is needed. A nil
 //     Worker is a contract statement, not a fallback path.
-//   - Close must be idempotent, must honour ctx for network/drain operations,
+//   - Close must be idempotent, must honor ctx for network/drain operations,
 //     and should log structured diagnostics before discarding state that helps
-//     explain shutdown or reconnect behaviour.
+//     explain shutdown or reconnect behavior.
 package lifecycle

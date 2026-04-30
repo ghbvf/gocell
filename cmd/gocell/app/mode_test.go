@@ -84,7 +84,7 @@ func TestRunValidate_FailFast_OnWarningsOnly_PrintsWarnings(t *testing.T) {
 // Output contract for --fail-fast on a clean project: prints exactly
 // "OK: no errors." and returns nil. Locking this in so that future refactors
 // (e.g. "make fail-fast silent for scripting") become an explicit decision
-// rather than an accidental behaviour drift.
+// rather than an accidental behavior drift.
 func TestRunValidate_FailFast_NoErrors_PrintsOK(t *testing.T) {
 	dir := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "go.mod"),
@@ -202,7 +202,7 @@ func TestRunValidate_StrictFailFast_BaseErrorWinsOverStrict(t *testing.T) {
 // FMT-16 and FMT-C1 — REF-04 already catches the dir/id-divergence
 // half-migrations the FMT-C1 doc-string mentions, so the natural fixture
 // shape that exercises FMT-C1 in isolation does not exist; layering
-// FMT-C1 on top of FMT-16 is defence-in-depth.
+// FMT-C1 on top of FMT-16 is defense-in-depth.
 func writeKebabCellID(t *testing.T) string {
 	t.Helper()
 	dir := setupProject(t, "cells/access-core") // kebab dir matching id
@@ -243,7 +243,7 @@ func writeKebabAssemblyID(t *testing.T) string {
 // fixture has a kebab directory (necessary because REF-04 enforces id ↔
 // dir match, so an id-only kebab is impossible to construct without a
 // base error pre-empting strict), so FMT-16 fires alongside FMT-C1 — that
-// is the defence-in-depth pair the rule was designed for, and the
+// is the defense-in-depth pair the rule was designed for, and the
 // assertion below verifies both rules light up.
 func TestRunValidate_Strict_DetectsKebabCellID(t *testing.T) {
 	dir := writeKebabCellID(t)
@@ -332,7 +332,7 @@ func TestRunValidate_Default_IgnoresStrictOnlyRules(t *testing.T) {
 //
 // These tests drive runScaffoldWithRoot directly, bypassing runScaffold's
 // findRoot() / cwd dependency. Previously each test did os.Chdir(tempDir),
-// which serialises the whole test binary (F-SEC-03). With an explicit root
+// which serializes the whole test binary (F-SEC-03). With an explicit root
 // parameter, t.TempDir() is isolated by design.
 
 // setupProject writes go.mod and any extra subdirs inside a fresh tempdir,

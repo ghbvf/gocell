@@ -306,7 +306,7 @@ func (c *AuditCore) resolveHMACKey(cfg map[string]any) error {
 }
 
 // initSlices constructs and registers the audit-append, audit-verify, and
-// audit-archive slices. audit-query is initialised separately in initQuerySlice
+// audit-archive slices. audit-query is initialized separately in initQuerySlice
 // because it requires the cursor codec to be resolved first.
 func (c *AuditCore) initSlices() {
 	// audit-append
@@ -339,7 +339,7 @@ func (c *AuditCore) initQuerySlice(mode cell.DurabilityMode) error {
 	return nil
 }
 
-// initCursorCodec initialises the cursor codec with a demo key if not
+// initCursorCodec initializes the cursor codec with a demo key if not
 // injected. In DurabilityDurable mode the demo fallback is refused — callers
 // must inject a production codec via WithCursorCodec.
 func (c *AuditCore) initCursorCodec(mode cell.DurabilityMode) error {

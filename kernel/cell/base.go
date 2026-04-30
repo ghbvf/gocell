@@ -22,7 +22,7 @@ var (
 type cellState int
 
 const (
-	cellStateNew         cellState = iota // zero-value: not yet initialised
+	cellStateNew         cellState = iota // zero-value: not yet initialized
 	cellStateInitialized                  // Init completed
 	cellStateStarted                      // Start completed
 	cellStateStopped                      // Stop completed
@@ -43,9 +43,9 @@ type BaseCell struct {
 	consumed []Contract
 	state    cellState
 
-	// shutdownCtx is created in Start and cancelled in Stop.
+	// shutdownCtx is created in Start and canceled in Stop.
 	// Goroutines spawned by the cell should use this context instead of
-	// context.Background() so they are properly cancelled on shutdown.
+	// context.Background() so they are properly canceled on shutdown.
 	shutdownCtx    context.Context
 	shutdownCancel context.CancelFunc
 }
@@ -105,7 +105,7 @@ func (b *BaseCell) Init(_ context.Context, _ Dependencies) error {
 }
 
 // Start transitions the cell to the running state. Only allowed from
-// the initialized state. A shutdownCtx is created that will be cancelled
+// the initialized state. A shutdownCtx is created that will be canceled
 // when Stop is called — goroutines should use ShutdownCtx() instead of
 // context.Background().
 func (b *BaseCell) Start(ctx context.Context) error {
@@ -159,7 +159,7 @@ func (b *BaseCell) Ready() bool {
 	return b.state == cellStateStarted
 }
 
-// ShutdownCtx returns a context that is cancelled when Stop is called.
+// ShutdownCtx returns a context that is canceled when Stop is called.
 // It should be used by goroutines spawned by the cell instead of
 // context.Background(). Returns context.Background() if the cell has
 // not been started.

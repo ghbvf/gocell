@@ -7,7 +7,7 @@ import "testing"
 // that builds an assembly automatically drains the hook dispatcher
 // goroutine at test teardown. goleak would otherwise flag the
 // dispatcher's run function as leaking; pairing construction with
-// cleanup is the contract we want every test to honour.
+// cleanup is the contract we want every test to honor.
 //
 // ref: go.uber.org/goleak best practice — prefer `t.Cleanup(teardown)`
 // over `defer teardown()` so leaks from sub-tests bubble up cleanly.

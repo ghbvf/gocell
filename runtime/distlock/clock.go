@@ -42,7 +42,7 @@ type Timer interface {
 }
 
 // RealClockForTest returns a Clock backed by the real wall clock. It is
-// exported for use in clock_test.go to test realClock behaviour through the
+// exported for use in clock_test.go to test realClock behavior through the
 // Clock interface without making realClock itself public.
 func RealClockForTest() Clock {
 	return realClock{}

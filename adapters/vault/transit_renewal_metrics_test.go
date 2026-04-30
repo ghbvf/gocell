@@ -104,7 +104,7 @@ func TestTokenRenewalWorker_HandleRenewal_IncrementsSuccessCounter(t *testing.T)
 		},
 	}
 
-	// Wait for the loop to consume the renewal before cancelling.
+	// Wait for the loop to consume the renewal before canceling.
 	require.Eventually(t, func() bool {
 		return testutil.ToFloat64(successCtr) >= 1
 	}, time.Second, time.Millisecond)
@@ -324,7 +324,7 @@ func TestTokenRenewalWorker_NilCounters_NoopOnRenewal(t *testing.T) {
 			Auth: &vaultapi.SecretAuth{LeaseDuration: 3600},
 		},
 	}
-	// Wait for the renewal to be consumed before cancelling.
+	// Wait for the renewal to be consumed before canceling.
 	require.Eventually(t, func() bool {
 		return len(fw.renewCh) == 0
 	}, time.Second, time.Millisecond)
@@ -520,7 +520,7 @@ func TestRenewalWorker_ReauthBackoff_RetriesUntilCancelled(t *testing.T) {
 }
 
 // TestRenewalWorker_CtxCancelDuringReauth_ReturnsCleanly verifies that
-// cancelling the context while reauthenticate is sleeping causes Start to
+// canceling the context while reauthenticate is sleeping causes Start to
 // return nil promptly (no hang).
 func TestRenewalWorker_CtxCancelDuringReauth_ReturnsCleanly(t *testing.T) {
 	fw := newFakeTokenWatcher()
@@ -569,7 +569,7 @@ func TestRenewalWorker_CtxCancelDuringReauth_ReturnsCleanly(t *testing.T) {
 
 // TestRenewalWorker_AuthHealthyGauge_TransitionsOnStates verifies the
 // authHealthy gauge: starts at 1, drops to 0 on DoneCh, and stays 0 (because
-// ctx is cancelled during re-auth before success).
+// ctx is canceled during re-auth before success).
 func TestRenewalWorker_AuthHealthyGauge_TransitionsOnStates(t *testing.T) {
 	fw := newFakeTokenWatcher()
 

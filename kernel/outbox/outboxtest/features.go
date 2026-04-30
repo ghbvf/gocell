@@ -24,7 +24,7 @@ type Features struct {
 	// SupportsReceipt means the implementation threads Receipt through HandleResult.
 	SupportsReceipt bool
 
-	// BlockingSubscribe means Subscribe blocks until ctx is cancelled.
+	// BlockingSubscribe means Subscribe blocks until ctx is canceled.
 	BlockingSubscribe bool
 
 	// BroadcastSubscribe indicates that multiple Subscribe calls on the same

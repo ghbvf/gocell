@@ -235,10 +235,10 @@ func TestWrapConsumer_PanicNonError(t *testing.T) {
 }
 
 // TestWrapConsumer_InvalidDispositionRecordsError verifies that a result
-// with an unrecognised Disposition (e.g. the zero value of
+// with an unrecognized Disposition (e.g. the zero value of
 // outbox.HandleResult) produces SetStatus(Error, "invalid disposition")
 // AND a RecordError event on the span — symmetric with the Requeue/Reject
-// branches so ops can recognise the misbehaving handler from the span
+// branches so ops can recognize the misbehaving handler from the span
 // alone instead of cross-referencing logs.
 func TestWrapConsumer_InvalidDispositionRecordsError(t *testing.T) {
 	tr := &spyTracer{}

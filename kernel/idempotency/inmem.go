@@ -23,7 +23,7 @@ import (
 // (two-phase Claim/Commit/Release)" declarations on every L2 consumer would be
 // false advertising.
 //
-// Lease TTL and done TTL are honoured via wall-clock expiry checked lazily on
+// Lease TTL and done TTL are honored via wall-clock expiry checked lazily on
 // each Claim; no background goroutines so shutdown is trivial.
 type InMemClaimer struct {
 	mu      sync.Mutex
@@ -74,7 +74,7 @@ func (c *InMemClaimer) Claim(_ context.Context, key string, leaseTTL, doneTTL ti
 
 	token, err := newToken(c.rand)
 	if err != nil {
-		// Honour the Claimer contract documented in idempotency.go (`(_, nil, err)`):
+		// Honor the Claimer contract documented in idempotency.go (`(_, nil, err)`):
 		// state must NOT be ClaimAcquired when receipt is nil, otherwise callers
 		// that branch on `state == ClaimAcquired` and use the receipt would
 		// dereference nil. ClaimBusy signals "another consumer is processing"

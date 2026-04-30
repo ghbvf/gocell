@@ -6,7 +6,7 @@ import "fmt"
 // WrapConsumer's panic path. It must be called from within a deferred
 // closure so that recover() captures the in-flight panic.
 //
-// Behaviour:
+// Behavior:
 //   - rec == nil  → no-op (normal path; caller is responsible for span.End).
 //   - rec != nil  → SetStatus(Error, "panic") + RecordError(redact(err))
 //   - span.End + re-panic.

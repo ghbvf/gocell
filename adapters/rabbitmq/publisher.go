@@ -38,7 +38,7 @@ func NewPublisher(conn *Connection) *Publisher {
 }
 
 // Close waits for all in-flight Publish calls to complete, bounded by ctx.
-// Returns ctx.Err() if ctx is already cancelled or if the budget expires while
+// Returns ctx.Err() if ctx is already canceled or if the budget expires while
 // waiting for in-flight publishes to complete.
 //
 // Close is idempotent: a second call returns nil immediately.
@@ -143,6 +143,6 @@ func (p *Publisher) Publish(ctx context.Context, topic string, payload []byte) e
 		return errcode.New(ErrAdapterAMQPConfirmTimeout, "rabbitmq: publish confirm timed out")
 
 	case <-ctx.Done():
-		return errcode.Wrap(ErrAdapterAMQPPublish, "rabbitmq: publish context cancelled", ctx.Err())
+		return errcode.Wrap(ErrAdapterAMQPPublish, "rabbitmq: publish context canceled", ctx.Err())
 	}
 }

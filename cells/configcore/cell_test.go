@@ -463,7 +463,6 @@ func TestConfigCore_CrossSliceCursorRejection(t *testing.T) {
 
 	assert.Equal(t, http.StatusBadRequest, rec.Code,
 		"config-read cursor must be rejected by feature-flag endpoint")
-
 }
 
 func TestConfigCore_CrossSliceCursorRejection_Reverse(t *testing.T) {
@@ -545,7 +544,7 @@ func TestConfigCore_InitDurable_RejectsMissingCursorCodec(t *testing.T) {
 
 // durableTxRunner is a TxRunner that does NOT advertise Noop(); configcore's
 // durable-mode init check rejects persistence.NoopTxRunner and accepts this.
-// Used by tests that exercise durable-mode behaviour without spinning up a
+// Used by tests that exercise durable-mode behavior without spinning up a
 // real database.
 type durableTxRunner struct{}
 

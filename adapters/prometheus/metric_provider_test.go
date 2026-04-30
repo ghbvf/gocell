@@ -136,7 +136,7 @@ func TestMetricProvider_NilRegistryRejected(t *testing.T) {
 // underlying Prometheus registry, allowing the same name to be registered
 // again without "duplicate collector" error.
 //
-// Without this behaviour, the NewProviderRelayCollector rollback loop would
+// Without this behavior, the NewProviderRelayCollector rollback loop would
 // leak orphan Prometheus collectors on partial failure and refuse retry.
 func TestMetricProvider_Unregister_RemovesAndAllowsReregister(t *testing.T) {
 	p, reg := newTestProvider(t)

@@ -1,4 +1,4 @@
-// ref: gopkg.in/yaml.v3 decode.go — Decoder.Decode initialises a fresh
+// ref: gopkg.in/yaml.v3 decode.go — Decoder.Decode initializes a fresh
 // unmarshaller per call. KnownFields is stored on *Decoder and therefore
 // does NOT propagate through Node.Decode (see yaml.go func (n *Node) Decode,
 // which allocates a new internal decoder with default settings). That is
@@ -379,7 +379,7 @@ const maxMetadataFileSize = 1 << 20 // 1 MiB
 //     bytes rather than calling root.Decode(out).
 //
 // Empty / whitespace-only files are treated as "no content" and return an
-// empty document node to preserve the original behaviour of empty actors.yaml
+// empty document node to preserve the original behavior of empty actors.yaml
 // or status-board.yaml without encoding success as nil data. Multi-document
 // files are rejected. Files larger than maxMetadataFileSize are rejected before
 // decoding (see that constant).
@@ -420,7 +420,7 @@ func unmarshalFile(fsys fs.FS, path string, out any) (*yaml.Node, error) {
 	if err := dec2.Decode(out); err != nil {
 		if err == io.EOF {
 			// Unreachable: phase 1 already saw a document, so phase 2 cannot
-			// be empty. Kept defensively to mirror the original behaviour.
+			// be empty. Kept defensively to mirror the original behavior.
 			return &root, nil
 		}
 		return nil, errcode.Wrap(errcode.ErrMetadataInvalid,

@@ -37,7 +37,7 @@ import (
 // Option configures a Bootstrap instance.
 type Option func(*Bootstrap)
 
-// readyz probe names; consumed by phases_assembly.go / bootstrap_phases.go
+// readyz probe names; consumed by phases_assembly.go / bootstrap_phases.go.
 const (
 	configWatcherCheckerName = "config-watcher"
 	configDriftCheckerName   = "config-drift"
@@ -47,7 +47,7 @@ const (
 // Bootstrap orchestrates the GoCell application lifecycle.
 //
 // Fields are flat: bootstrap is the composition root, and most options
-// influence behaviour across multiple phases (e.g. WithMetricsProvider feeds
+// influence behavior across multiple phases (e.g. WithMetricsProvider feeds
 // both default-assembly construction and HTTP metric auto-wiring;
 // WithRateLimiter writes both router options and the closer list). Forcing
 // a "concern group" sub-struct layout would make those cross-cutting
@@ -313,12 +313,12 @@ func (b *Bootstrap) MetricsProvider() kernelmetrics.Provider {
 	return b.metricsProvider
 }
 
-// Run executes the full startup sequence. It blocks until ctx is cancelled
+// Run executes the full startup sequence. It blocks until ctx is canceled
 // (or a signal is received), then performs orderly shutdown.
 //
 // Health-listener fallback: when no HealthListener is declared, /healthz,
 // /readyz, and /metrics are mounted on the PrimaryListener instead. This is
-// the expected behaviour for tests that inject only primary + internal
+// the expected behavior for tests that inject only primary + internal
 // listeners. Production deployments should declare a dedicated HealthListener
 // (typically "127.0.0.1:9091") to physically separate health traffic from
 // business traffic.

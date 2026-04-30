@@ -23,7 +23,7 @@ type cleanerState int
 const (
 	stateIdle    cleanerState = iota // not yet started
 	stateRunning                     // Start called, timer registered
-	stateStopped                     // Stop called or ctx cancelled
+	stateStopped                     // Stop called or ctx canceled
 )
 
 // cleanerConfig holds the configuration for creating a cleaner.
@@ -45,7 +45,7 @@ type cleanerConfig struct {
 // long-running deployments.
 //
 // Lifecycle:
-//   - Start(ctx): registers an AfterFunc timer; returns when ctx is cancelled
+//   - Start(ctx): registers an AfterFunc timer; returns when ctx is canceled
 //     (early stop) or immediately if already stopped.
 //   - Stop(ctx): cancels the pending timer; idempotent.
 //   - Start after Stop returns an error (no reuse).
@@ -94,7 +94,7 @@ func newCleaner(cfg cleanerConfig) (*cleaner, error) {
 }
 
 // Start recovers the remaining TTL from the credential file's expires_at field
-// and registers a timer for that duration, then blocks until ctx is cancelled
+// and registers a timer for that duration, then blocks until ctx is canceled
 // or the timer fires. If the credential file is missing, Start logs at Info and
 // returns immediately (operator-managed cleanup). If the TTL has already elapsed,
 // expire() is called synchronously before Start blocks.
@@ -145,10 +145,10 @@ func (c *cleaner) Start(ctx context.Context) error {
 	c.state = stateRunning
 	c.mu.Unlock()
 
-	// Block until context is cancelled (early stop path).
+	// Block until context is canceled (early stop path).
 	<-ctx.Done()
 
-	// Context cancelled — cancel the timer if it hasn't fired yet.
+	// Context canceled — cancel the timer if it hasn't fired yet.
 	c.mu.Lock()
 	if c.state == stateRunning && c.canceller != nil {
 		c.canceller.Stop()

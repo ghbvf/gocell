@@ -218,7 +218,7 @@ func (b *InMemoryEventBus) Ready(sub outbox.Subscription) <-chan struct{} {
 }
 
 // Subscribe registers an EntryHandler for the given subscription. It blocks
-// until ctx is cancelled or the bus is closed.
+// until ctx is canceled or the bus is closed.
 //
 // Consumer: cg-eventbus-{sub.ConsumerGroup}-{sub.Topic}
 // Idempotency key: N/A (in-memory, no persistence)
@@ -299,7 +299,7 @@ func (b *InMemoryEventBus) StopIntake(_ context.Context) error {
 // risk leaving subscriber goroutines permanently blocked on the channel read.
 //
 // ref: kernel/lifecycle doc.go — "resources that must complete teardown
-// unconditionally should ignore the ctx and document the reason"
+// unconditionally should ignore the ctx and document the reason".
 func (b *InMemoryEventBus) Close(_ context.Context) error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -521,7 +521,7 @@ func retryDelay(attempt int) time.Duration {
 }
 
 // awaitRetry sleeps for the retry delay then returns true, or returns false
-// if ctx is cancelled. For invalid disposition, uses the same delay logic.
+// if ctx is canceled. For invalid disposition, uses the same delay logic.
 func awaitRetry(ctx context.Context, _ outbox.Disposition, attempt int) bool {
 	delay := retryDelay(attempt)
 	select {

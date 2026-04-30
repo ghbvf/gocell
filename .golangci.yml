@@ -4,28 +4,150 @@ linters:
   # Default-enabled: govet, errcheck, staticcheck, unused, ineffassign.
   # gosimple is part of staticcheck in v2.
   enable:
+    # 复杂度（互补：gocognit=认知, cyclop=圈）
     - gocognit
+    - cyclop
+    # nil 安全
     - nilerr
     - nilnesserr
     - nilnil
+    # 代码质量
+    - gocritic
+    - unparam
+    - unconvert
+    - dupl
+    # 安全
+    - gosec
+    # 拼写 / 格式
+    - misspell
+    - godot
+    - whitespace
+    - lll
+    # 函数体量
+    - funlen
+    # 依赖管控
+    - gomodguard
 
   settings:
     gocognit:
-      min-complexity: 15 # project rule: ≤ 15, flag at 15+
+      min-complexity: 15
+
+    cyclop:
+      max-complexity: 15
+      package-average: 0
+
     nilnil:
       only-two: false
 
+    gocritic:
+      enabled-tags:
+        - diagnostic
+        - performance
+      disabled-checks:
+        - dupImport
+        - ifElseChain
+        - hugeParam
+        - rangeValCopy
+        - whyNoLint
+        - unnamedResult
+        - exitAfterDefer
+
+    lll:
+      line-length: 140
+
+    funlen:
+      lines: 80
+      statements: 50
+
+    dupl:
+      threshold: 150
+
+    gosec:
+      excludes:
+        - G115
+        - G404
+      config:
+        G101:
+          pattern: "(?i)passwd|pass|password|pwd|secret|token|apikey"
+          ignore_entropy: "false"
+          entropy_threshold: "80.0"
+          per_char_threshold: "3.0"
+          truncate: "32"
+
+    misspell:
+      locale: US
+
+    godot:
+      scope: declarations
+      exclude:
+        - "^\\s*\\[.*\\]"
+        - "^\\s*-"
+        - ":$"
+
+    whitespace:
+      multi-func: false  # multi-line signature 后空行检查过严，关闭（默认仅检查函数体首尾空行）
+
+    gomodguard:
+      blocked:
+        modules:
+          - github.com/sirupsen/logrus:
+              recommendations:
+                - log/slog
+              reason: "GoCell 统一使用 log/slog（CLAUDE.md 规范）"
+          - github.com/pkg/errors:
+              recommendations:
+                - errors
+              reason: "GoCell 使用 stdlib errors + pkg/errcode 包装"
+          - github.com/golang/protobuf:
+              recommendations:
+                - google.golang.org/protobuf
+              reason: "golang/protobuf 已 deprecated"
+          - nhooyr.io/websocket:
+              recommendations:
+                - github.com/coder/websocket
+              reason: "已迁移至 coder fork (PR-A64a #340)"
+          - github.com/dgrijalva/jwt-go:
+              recommendations:
+                - github.com/golang-jwt/jwt/v5
+              reason: "已迁移至 golang-jwt/jwt/v5 (archived 库防再入)"
+          - github.com/satori/go.uuid:
+              recommendations:
+                - github.com/google/uuid
+              reason: "satori/go.uuid 已 archived (防再入)"
+
   exclusions:
     rules:
-      # Test files: defer .Close() and similar are acceptable.
+      # Test files: defer .Close()，table-driven test 高噪声项
       - path: _test\.go
         linters:
           - errcheck
           - gocognit
-      # Examples are demo code — allow slightly relaxed checks.
+          - cyclop
+          - funlen
+          - dupl
+          - lll
+          - gosec
+          - godot
+      # examples/ 是示例代码，宽松
       - path: ^examples/
         linters:
           - errcheck
+          - lll
+          - funlen
+          - gocritic
+          - godot
+      # cmd/ CLI 入口允许长函数
+      - path: ^cmd/
+        linters:
+          - funlen
+      # tools/archtest/ AST 工具天然高圈复杂度（防御性配置）
+      - path: ^tools/archtest/
+        linters:
+          - cyclop
+      # governance advisory hints: 仅常量声明文件豁免 lll
+      - path: ^kernel/governance/advisory_hints\.go
+        linters:
+          - lll
     paths:
       - generated
       - vendor

@@ -16,9 +16,9 @@ type mockTx struct {
 	committed  bool
 	rolledBack bool
 	execCalls  []string
-	// rollbackCtxCancelled records whether the context passed to Rollback was already cancelled.
+	// rollbackCtxCancelled records whether the context passed to Rollback was already canceled.
 	rollbackCtxCancelled bool
-	// execCtxCancelled tracks per-call whether the context was cancelled (parallel to execCalls).
+	// execCtxCancelled tracks per-call whether the context was canceled (parallel to execCalls).
 	execCtxCancelled []bool
 }
 
@@ -186,7 +186,7 @@ func TestRunInTx_NestedSavepoints(t *testing.T) {
 
 func TestRunInTx_Savepoint_Rollback_WithCancelledCtx(t *testing.T) {
 	// Verify that savepoint rollback on error uses an uncancelled context
-	// even when the caller context is already cancelled.
+	// even when the caller context is already canceled.
 	mock := &mockTx{}
 	ctx, cancel := context.WithCancel(context.Background())
 	ctx = CtxWithTx(ctx, mock)
@@ -207,7 +207,7 @@ func TestRunInTx_Savepoint_Rollback_WithCancelledCtx(t *testing.T) {
 	assert.Equal(t, "SAVEPOINT sp_0", mock.execCalls[0])
 	assert.Equal(t, "ROLLBACK TO SAVEPOINT sp_0", mock.execCalls[1])
 
-	// The rollback Exec call must NOT have seen a cancelled context
+	// The rollback Exec call must NOT have seen a canceled context
 	// (context.WithoutCancel strips the cancellation signal).
 	require.Len(t, mock.execCtxCancelled, 2)
 	assert.False(t, mock.execCtxCancelled[1],
@@ -225,7 +225,7 @@ func TestRunInTx_Savepoint_Rollback_OnPanic_WithCancelledCtx(t *testing.T) {
 
 	assert.PanicsWithValue(t, "timeout panic", func() {
 		_ = tm.RunInTx(ctx, func(_ context.Context) error {
-			cancel() // context cancelled before panic
+			cancel() // context canceled before panic
 			panic("timeout panic")
 		})
 	})

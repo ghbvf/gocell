@@ -206,7 +206,7 @@ func availableCellsMsg(cells map[string]*metadata.CellMeta) string {
 // checkSliceCoverage checks that every slices/ subdirectory has a slice.yaml
 // and that each parsed SliceMeta correctly references its parent cell.
 //
-// Flags: --cell=<cellID> (empty = all cells), --format=<text|json|sarif>
+// Flags: --cell=<cellID> (empty = all cells), --format=<text|json|sarif>.
 func checkSliceCoverage(args []string) error {
 	fs := flag.NewFlagSet(flagSetCheckPrefix+cmdSliceCoverage, flag.ContinueOnError)
 	cellID := fs.String("cell", "", "restrict check to this cell ID (empty = all cells)")
@@ -349,7 +349,7 @@ func sliceMetaCheck(project *metadata.ProjectMeta, cid string) []governance.Vali
 // checkAssemblyCompleteness verifies that all cells declared in an assembly
 // exist in the parsed project metadata and that there are no duplicate entries.
 //
-// Flags: --id=<assemblyID> (required)
+// Flags: --id=<assemblyID> (required).
 func checkAssemblyCompleteness(args []string) error {
 	fs := flag.NewFlagSet("check assembly-completeness", flag.ContinueOnError)
 	id := fs.String("id", "", "assembly ID (required)")
@@ -410,7 +410,7 @@ func checkAssemblyCompleteness(args []string) error {
 // checkJourneyReadiness verifies that each journey has exactly one status-board
 // entry and that all referenced contracts and cells exist in the project.
 //
-// Flags: --journey=<journeyID> (empty = all journeys)
+// Flags: --journey=<journeyID> (empty = all journeys).
 func checkJourneyReadiness(args []string) error {
 	fs := flag.NewFlagSet(flagSetCheckPrefix+cmdJourneyReadiness, flag.ContinueOnError)
 	journeyID := fs.String("journey", "", "restrict check to this journey ID (empty = all)")
@@ -532,7 +532,7 @@ func journeyCellCheck(jm *metadata.JourneyMeta, project *metadata.ProjectMeta) [
 // checkL0Imports verifies that L0 cells only import the L0 cell dependencies
 // they declare in cell.yaml::l0Dependencies, and vice versa.
 //
-// Flags: --cell=<cellID> (empty = all L0 cells)
+// Flags: --cell=<cellID> (empty = all L0 cells).
 func checkL0Imports(args []string) error {
 	fs := flag.NewFlagSet(flagSetCheckPrefix+cmdL0Imports, flag.ContinueOnError)
 	cellID := fs.String("cell", "", "restrict check to this cell ID (empty = all L0 cells)")
@@ -771,7 +771,7 @@ func printAndCheck(format string, results []governance.ValidationResult, checkNa
 // unconditionalskip analyzer over them, and renders the diagnostics as
 // governance.ValidationResult entries using the configured output format.
 //
-// Exit behaviour mirrors checkContractHealth: a non-zero error is returned
+// Exit behavior mirrors checkContractHealth: a non-zero error is returned
 // when one or more SeverityError findings are emitted, so CI callers can
 // gate on the exit code without parsing the output format.
 func checkUnconditionalSkip(args []string) error {

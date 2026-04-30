@@ -265,7 +265,7 @@ func TestWorkerGroup_CancelsSiblingsOnError(t *testing.T) {
 	fail := newTestWorker()
 	fail.startErr = errors.New("boom")
 
-	// longWorker blocks until context is cancelled.
+	// longWorker blocks until context is canceled.
 	long := newTestWorker()
 
 	g.Add(long)
@@ -282,7 +282,7 @@ func TestWorkerGroup_CancelsSiblingsOnError(t *testing.T) {
 		assert.Error(t, err)
 		assert.Equal(t, "boom", err.Error())
 	case <-time.After(3 * time.Second):
-		t.Fatal("WorkerGroup.Start did not return after sibling failure — sibling was not cancelled")
+		t.Fatal("WorkerGroup.Start did not return after sibling failure — sibling was not canceled")
 	}
 }
 

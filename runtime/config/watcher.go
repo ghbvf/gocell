@@ -234,7 +234,7 @@ func (w *Watcher) Start() {
 }
 
 // StartWithContext begins watching using the provided context. When ctx is
-// cancelled, the watcher is closed automatically. This allows the watcher
+// canceled, the watcher is closed automatically. This allows the watcher
 // to be tied to a parent shutdown context.
 func (w *Watcher) StartWithContext(ctx context.Context) {
 	go func() {

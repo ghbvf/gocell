@@ -77,7 +77,7 @@ WHERE id IN (
 // PGRefreshStore implements refresh.Store over PostgreSQL using pgx.
 //
 // All time values come from the injected clock (never PG's now()), so the
-// FakeClock in storetest drives deterministic behaviour.
+// FakeClock in storetest drives deterministic behavior.
 //
 // Consistency: L1 LocalTx — Rotate is atomic within a single transaction;
 // Issue and revoke paths are single-statement writes.
@@ -226,7 +226,7 @@ func (s *PGRefreshStore) Peek(ctx context.Context, presented string) (*refresh.T
 	return row.toToken(), nil
 }
 
-// Rotate advances the chain. See Store.Rotate contract for branch behaviour.
+// Rotate advances the chain. See Store.Rotate contract for branch behavior.
 //
 // Non-happy paths funnel through rejectWithReason and return refresh.ErrRejected
 // so callers cannot enumerate cause via error shape or timing. The transaction

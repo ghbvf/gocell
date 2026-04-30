@@ -529,7 +529,7 @@ func TestLocker_TC10_LazyLifecycle(t *testing.T) {
 }
 
 // TestLocker_TC11_SmallTTLNoSpinLoop verifies that a small (but realistic) TTL
-// produces exactly one renew per FakeClock advance — no spin-loop behaviour.
+// produces exactly one renew per FakeClock advance — no spin-loop behavior.
 //
 // We use 500ms (not 1µs) because 1µs TTL is impractical under -race: the
 // FakeDriver's scheduler overhead alone exceeds 1µs, causing spurious expiries.

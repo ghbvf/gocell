@@ -110,7 +110,7 @@ type ConfigRepository struct {
 	onStaleCipher func(key, storedKeyID, currentKeyID string)
 }
 
-// ConfigRepoOption configures optional behaviour on ConfigRepository.
+// ConfigRepoOption configures optional behavior on ConfigRepository.
 type ConfigRepoOption func(*ConfigRepository)
 
 // WithOnStaleCipher sets a callback invoked when a stale-key value is detected
@@ -289,7 +289,7 @@ func (r *ConfigRepository) Create(ctx context.Context, entry *domain.ConfigEntry
 }
 
 // configEntryColumns is the canonical column list for config_entries used by
-// every SELECT/RETURNING projection in this file. Centralised so the column
+// every SELECT/RETURNING projection in this file. Centralized so the column
 // order stays in sync between GetByKey, Update RETURNING, and Delete RETURNING.
 const configEntryColumns = "id, key, value, sensitive, version, created_at, updated_at, value_cipher, value_key_id, value_edk, value_nonce"
 

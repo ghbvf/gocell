@@ -97,7 +97,7 @@ type shutdownMetrics struct {
 
 // newShutdownMetrics registers shutdown metrics on p and returns a
 // *shutdownMetrics. A nil Provider returns a disabled metrics object, which
-// leaves phase10 behaviour unchanged without encoding success as nil data.
+// leaves phase10 behavior unchanged without encoding success as nil data.
 //
 // An error is returned only when the Provider itself fails to register a
 // metric family (typically a duplicate name in the same registry). Callers

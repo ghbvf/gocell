@@ -640,7 +640,7 @@ func TestScanSchemaForStrictMissing_FileNotFound(t *testing.T) {
 func TestScanSchemaForStrictMissing_InvalidJSON(t *testing.T) {
 	f, err := os.CreateTemp(t.TempDir(), "bad-*.json")
 	require.NoError(t, err)
-	_, err = f.Write([]byte("not valid json {{{"))
+	_, err = f.WriteString("not valid json {{{")
 	require.NoError(t, err)
 	require.NoError(t, f.Close())
 

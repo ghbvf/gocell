@@ -157,7 +157,7 @@ func (h *Handler) HandleUpdate(w http.ResponseWriter, r *http.Request) {
 // request that bypasses the schema (e.g. a client sending a negative or
 // >100 value) would otherwise persist an invalid rollout_percentage with no
 // DB-level CHECK constraint protecting it. Runtime guard is the authoritative
-// gate; the schema is documentation-and-contract-test defence.
+// gate; the schema is documentation-and-contract-test defense.
 func validateRolloutPercentage(rolloutPercentage int) error {
 	if rolloutPercentage < 0 || rolloutPercentage > 100 {
 		return errcode.New(errcode.ErrFlagInvalidInput,

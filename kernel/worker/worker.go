@@ -19,8 +19,8 @@ import (
 // ErrWorkerExitedEarly is the sentinel error returned by WorkerGroup when a
 // member Worker.Start returns nil while the group context is still live.
 // Workers are long-running; an early successful exit is indistinguishable
-// from a silent cancellation, and the previous behaviour (record nil, leave
-// firstErr unset) masked the abnormal state from operators. Modelling it as
+// from a silent cancellation, and the previous behavior (record nil, leave
+// firstErr unset) masked the abnormal state from operators. Modeling it as
 // a typed error lets the group propagate the failure and lets callers
 // errors.Is-check for it during shutdown reasoning.
 var ErrWorkerExitedEarly = errors.New("worker: exited early without error before context cancellation")
@@ -28,7 +28,7 @@ var ErrWorkerExitedEarly = errors.New("worker: exited early without error before
 // Worker represents a long-running background task.
 //
 // Contract:
-//   - Start blocks until ctx is cancelled or the worker completes normally.
+//   - Start blocks until ctx is canceled or the worker completes normally.
 //     A non-nil error signals abnormal exit. A nil return from Start while
 //     ctx is still live is itself an abnormal signal — the runtime
 //     WorkerGroup converts that into ErrWorkerExitedEarly.

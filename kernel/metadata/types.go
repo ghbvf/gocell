@@ -40,7 +40,7 @@ type SchemaMeta struct {
 }
 
 // CellVerifyMeta holds structured verify refs for a Cell.
-// Smoke refs use the format: smoke.{cellID}.{suffix}
+// Smoke refs use the format: smoke.{cellID}.{suffix}.
 type CellVerifyMeta struct {
 	Smoke []string `yaml:"smoke"`
 }

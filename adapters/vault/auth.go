@@ -485,7 +485,7 @@ func unwrapSecretID(ctx context.Context, client *vaultapi.Client) (string, error
 	// is used only as a fallback when the header token is absent (root-token
 	// unwrap variant). We always use header-based auth here, so we pass "" as
 	// the body arg — passing wrapToken twice is redundant and creates ambiguity
-	// if the SDK's dual-path behaviour changes in a future version.
+	// if the SDK's dual-path behavior changes in a future version.
 	// ref: hashicorp/vault api/sys_wrapping.go#Unwrap
 	clone.SetToken(wrapToken)
 

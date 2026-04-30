@@ -1,4 +1,4 @@
-// Package sessionmint centralises access-JWT issuance so that login,
+// Package sessionmint centralizes access-JWT issuance so that login,
 // IssueForUser (change-password flow), and refresh share a single fail-closed
 // "fetch roles → sign access" pipeline. Opaque refresh tokens are issued by
 // runtime/auth/refresh.Store directly from the slice layer, so sessionmint

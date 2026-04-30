@@ -152,7 +152,7 @@ func TestPGResource_CheckerTimeout(t *testing.T) {
 
 // TestPGResource_CheckerUsesIndependentCtx verifies that the health checker
 // derives its context from context.Background(), not from a caller-provided
-// context. Even when the caller's context is already cancelled, the checker
+// context. Even when the caller's context is already canceled, the checker
 // must receive a live context with a ~5s deadline.
 func TestPGResource_CheckerUsesIndependentCtx(t *testing.T) {
 	var receivedCtx context.Context

@@ -33,7 +33,7 @@ func freshTestServiceSecret(t *testing.T) string {
 	b := make([]byte, 32)
 	_, err := rand.Read(b)
 	require.NoError(t, err, "crypto/rand must not fail in test setup")
-	return "ts-" + fmt.Sprintf("%x", b) // "ts-" prefix makes it recognisably a test secret
+	return "ts-" + fmt.Sprintf("%x", b) // "ts-" prefix makes it recognizably a test secret
 }
 
 func setPodReachableHealthAddr(t *testing.T) {
@@ -117,7 +117,7 @@ func TestLoadKeySet_UnknownMode_StillGeneratesEphemeral(t *testing.T) {
 }
 
 func TestRun_DevMode_StartsAndCancels(t *testing.T) {
-	// run() with an immediately-cancelled context exercises the full assembly
+	// run() with an immediately-canceled context exercises the full assembly
 	// path (cells, bootstrap) without needing a real HTTP listener.
 	// Default provision mode is "interactive" (no admin at startup). Opt into
 	// bootstrap mode to exercise the Lifecycle + credfile wiring that the
@@ -426,7 +426,7 @@ func TestBootstrap_DemoModeUsesInMemory(t *testing.T) {
 	}
 }
 
-// TestBootstrap_UnknownCellAdapterMode_FailsFast verifies that an unrecognised
+// TestBootstrap_UnknownCellAdapterMode_FailsFast verifies that an unrecognized
 // GOCELL_CELL_ADAPTER_MODE value causes run() to fail with an informative error
 // before attempting any DB connections.
 func TestBootstrap_UnknownCellAdapterMode_FailsFast(t *testing.T) {

@@ -33,7 +33,7 @@ import (
 //   - sessionRepo transient error    → DispositionRequeue → retry with backoff
 //   - success                        → DispositionAck
 //
-// DLX: broker-native via DispositionReject → Nack(requeue=false)
+// DLX: broker-native via DispositionReject → Nack(requeue=false).
 type Consumer struct {
 	sessionRepo ports.SessionRepository
 	logger      *slog.Logger
@@ -47,7 +47,7 @@ func NewConsumer(repo ports.SessionRepository, logger *slog.Logger) *Consumer {
 // HandleRoleChanged is a LegacyHandler (func(context.Context, outbox.Entry) error).
 // Compose with outbox.WrapLegacyHandler to obtain an EntryHandler for cell.EventRouter.
 //
-// Behaviour:
+// Behavior:
 //   - Unmarshal failure → PermanentError (message routed to DLX, no retry).
 //   - Empty userId in payload → PermanentError.
 //   - sessionRepo error → plain error (transient; WrapLegacyHandler maps to Requeue).

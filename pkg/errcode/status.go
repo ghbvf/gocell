@@ -165,7 +165,7 @@ var codeToStatus = map[Code]int{
 	// Lifecycle operation called in wrong state (e.g. bootstrap phase violation).
 	ErrBootstrapLifecycle: http.StatusInternalServerError,
 	// KeyProvider / encryption failures — infrastructure-level, never leak
-	// ciphertext or key IDs to the client; surface as 500 so the sanitised
+	// ciphertext or key IDs to the client; surface as 500 so the sanitized
 	// "internal server error" body is returned.
 	ErrKeyProviderKeyNotFound:   http.StatusInternalServerError,
 	ErrKeyProviderAuthFailed:    http.StatusInternalServerError,

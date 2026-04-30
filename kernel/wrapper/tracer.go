@@ -39,7 +39,7 @@ type Span interface {
 	// last SetStatus call wins. Description is free-form; adapters MAY
 	// truncate long values.
 	SetStatus(code StatusCode, description string)
-	// End finalises the span. Calls after End are no-ops; implementations
+	// End finalizes the span. Calls after End are no-ops; implementations
 	// SHOULD ignore post-End mutations silently.
 	End()
 }

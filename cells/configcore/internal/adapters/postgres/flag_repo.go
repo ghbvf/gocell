@@ -19,7 +19,7 @@ import (
 var _ ports.FlagRepository = (*FlagRepository)(nil)
 
 // flagColumns is the canonical column list for feature_flags used by every
-// SELECT/RETURNING projection in this file. Centralised so the column order
+// SELECT/RETURNING projection in this file. Centralized so the column order
 // stays in sync between the INSERT, SELECT, RETURNING, and scanFlagRow calls.
 const flagColumns = "id, key, enabled, rollout_percentage, description, version, created_at, updated_at"
 
@@ -181,7 +181,7 @@ func (r *FlagRepository) Update(ctx context.Context, key string, enabled bool, r
 }
 
 // List retrieves feature flags with keyset cursor pagination.
-// Requires composite index: CREATE INDEX idx_feature_flags_key_id ON feature_flags (key ASC, id ASC)
+// Requires composite index: CREATE INDEX idx_feature_flags_key_id ON feature_flags (key ASC, id ASC).
 func (r *FlagRepository) List(ctx context.Context, params query.ListParams) ([]*domain.FeatureFlag, error) {
 	b := query.NewBuilder()
 	b.Append("SELECT " + flagColumns + " FROM feature_flags WHERE 1=1")

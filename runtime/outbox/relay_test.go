@@ -457,7 +457,7 @@ func TestRelay_ReclaimStale_RecoveryLoop(t *testing.T) {
 // TestRelay_StoreCleanup_DirectCall verifies that Store.CleanupPublished deletes
 // a published entry when called directly. The relay cleanupLoop fires at
 // max(PollInterval*10, 10s) which exceeds the unit-test time budget; the loop
-// tick behaviour is covered by TestRelay_CleanupLoop_ActuallyRunsPeriodically.
+// tick behavior is covered by TestRelay_CleanupLoop_ActuallyRunsPeriodically.
 func TestRelay_StoreCleanup_DirectCall(t *testing.T) {
 	store := outboxtest.NewFakeStore()
 

@@ -79,7 +79,7 @@ func WithServiceTokenClock(fn func() time.Time) ServiceTokenOption {
 	}
 }
 
-// WithServiceTokenNonceStore configures the replay-defence store. The
+// WithServiceTokenNonceStore configures the replay-defense store. The
 // middleware rejects nonces already consumed within the store's TTL window.
 // Replay protection is mandatory — both ServiceTokenMiddleware and
 // NewServiceTokenAuthenticator reject nil/Noop NonceStore at construction
@@ -164,7 +164,7 @@ const (
 //
 // Both variables are read as raw UTF-8 strings and used directly as HMAC key
 // bytes (no base64 decoding is performed). The value must be at least 32 bytes
-// long. To generate a suitable value: openssl rand -base64 32
+// long. To generate a suitable value: openssl rand -base64 32.
 func LoadHMACKeyRingFromEnv() (*HMACKeyRing, error) {
 	current := os.Getenv(EnvServiceSecret)
 	if current == "" {
@@ -201,7 +201,7 @@ func LoadHMACKeyRingFromEnv() (*HMACKeyRing, error) {
 // Misconfiguration paths (nil ring, sub-strength HMAC, missing/Noop NonceStore,
 // authenticator build failure) return an error middleware that serves 500 on every
 // request. All misconfiguration paths share the same errorMiddlewareInternal helper
-// so the 500 behaviour is consistent and observable via the "internal" metric label.
+// so the 500 behavior is consistent and observable via the "internal" metric label.
 func ServiceTokenMiddleware(ring cell.HMACKeyring, opts ...ServiceTokenOption) func(http.Handler) http.Handler {
 	cfg := serviceTokenConfig{
 		now:    time.Now,

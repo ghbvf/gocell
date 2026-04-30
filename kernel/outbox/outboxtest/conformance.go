@@ -720,7 +720,7 @@ func testSubscribeBlocksUntilCancel(t *testing.T, features Features, constructor
 	// Subscribe should be blocking.
 	select {
 	case <-subscribeReturned:
-		t.Fatal("Subscribe returned before context was cancelled")
+		t.Fatal("Subscribe returned before context was canceled")
 	case <-time.After(100 * time.Millisecond):
 		// Good — still blocking.
 	}

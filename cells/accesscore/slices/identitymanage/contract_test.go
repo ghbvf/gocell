@@ -393,7 +393,7 @@ func TestHttpAuthUserDeleteV1Serve_RejectsBodyOn204(t *testing.T) {
 	// Fabricate a buggy 204 response with a body to prove the contract catches it.
 	rec := httptest.NewRecorder()
 	rec.WriteHeader(204)
-	_, _ = rec.Write([]byte(`{"error":"oops"}`))
+	_, _ = rec.WriteString(`{"error":"oops"}`)
 
 	mockT := &capturingTB{}
 	c.ValidateHTTPResponseRecorder(mockT, rec)

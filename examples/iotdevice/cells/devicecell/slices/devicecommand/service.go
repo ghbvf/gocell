@@ -252,7 +252,7 @@ func (s *Service) Report(ctx context.Context, deviceID, cmdID string) error {
 	return nil
 }
 
-// Ack finalises a command with the supplied terminal reason. Ack is a single
+// Ack finalizes a command with the supplied terminal reason. Ack is a single
 // Queue transition; it does not synthesize Sent/Delivered timestamps.
 func (s *Service) Ack(ctx context.Context, deviceID, cmdID string, reason command.AckReason) error {
 	if !reason.Valid() {

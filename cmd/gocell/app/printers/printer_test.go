@@ -65,7 +65,7 @@ func TestSupportedFormats(t *testing.T) {
 
 // TestSortResults_Stable verifies the comparator orders by (severity, code,
 // file presence, file, scope, line, column, field). The asserted ordering
-// is what the three printers serialise; if it drifts, every golden file
+// is what the three printers serialize; if it drifts, every golden file
 // breaks at once — this test catches that before that cascade happens.
 func TestSortResults_Stable(t *testing.T) {
 	in := []governance.ValidationResult{
@@ -600,7 +600,7 @@ func TestSARIF_DoesNotEscapeHTMLChars(t *testing.T) {
 	assert.NotContains(t, body, "\\u0026")
 }
 
-// TestJSON_EmptyIssues_NotNull: zero results must serialise as
+// TestJSON_EmptyIssues_NotNull: zero results must serialize as
 // "issues": [] (never null) so consumers can iterate without nil-guarding.
 func TestJSON_EmptyIssues_NotNull(t *testing.T) {
 	var buf bytes.Buffer
@@ -608,7 +608,7 @@ func TestJSON_EmptyIssues_NotNull(t *testing.T) {
 	body := buf.String()
 	assert.Contains(t, body, `"issues": []`)
 	assert.NotContains(t, body, `"issues": null`,
-		"empty issues must serialise as [] not null")
+		"empty issues must serialize as [] not null")
 }
 
 // TestSARIF_NormalizeArtifactURI verifies that normalizeArtifactURI produces

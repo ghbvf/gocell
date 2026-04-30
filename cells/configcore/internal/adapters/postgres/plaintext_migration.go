@@ -11,7 +11,7 @@ import (
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
-// PlaintextMigrationConfig controls the batch-encrypt migration behaviour.
+// PlaintextMigrationConfig controls the batch-encrypt migration behavior.
 type PlaintextMigrationConfig struct {
 	// BatchSize is the number of rows to encrypt per DB round-trip.
 	// Defaults to 50 when zero.
@@ -22,7 +22,7 @@ type PlaintextMigrationConfig struct {
 	RateLimitDelay time.Duration
 }
 
-// PlaintextMigrationResult summarises a completed migration run.
+// PlaintextMigrationResult summarizes a completed migration run.
 type PlaintextMigrationResult struct {
 	// Processed is the number of rows that were encrypted during this run.
 	Processed int

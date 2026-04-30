@@ -2,7 +2,7 @@ package initialadmin
 
 import "time"
 
-// Cancellable represents a scheduled task that can be cancelled before it fires.
+// Cancellable represents a scheduled task that can be canceled before it fires.
 type Cancellable interface {
 	// Stop prevents the scheduled function from firing. Returns true if the
 	// call stops the timer before it fires, false if it has already fired or

@@ -870,7 +870,7 @@ func TestSubscribe_InvalidDisposition_RespectsCtxCancel(t *testing.T) {
 		t.Fatal("Subscribe did not exit after ctx cancel during invalid disposition backoff")
 	}
 
-	// Should have been called only once — cancelled during backoff before retry.
+	// Should have been called only once — canceled during backoff before retry.
 	assert.Equal(t, int32(1), attempts.Load(),
 		"should exit during backoff, not retry after cancel")
 }

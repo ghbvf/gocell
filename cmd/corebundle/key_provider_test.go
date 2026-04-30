@@ -42,7 +42,7 @@ func TestBuildKeyProvider_PostgresMode_NoEnv_FailsFast(t *testing.T) {
 		"error message must name the env var so operators know what to set")
 }
 
-// TestBuildKeyProvider_UnknownProvider_Fails verifies that an unrecognised
+// TestBuildKeyProvider_UnknownProvider_Fails verifies that an unrecognized
 // providerName fails fast rather than silently degrading.
 func TestBuildKeyProvider_UnknownProvider_Fails(t *testing.T) {
 	kp, err := buildKeyProvider("postgres", "", "bogus", "", "")

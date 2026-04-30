@@ -25,7 +25,7 @@ const (
 // verify.contract entry or a valid waiver.
 //
 // verify.contract format: "contract.{contractID}.{role}"
-// waiver match: waiver.Contract == contractUsage.Contract
+// waiver match: waiver.Contract == contractUsage.Contract.
 func (v *Validator) validateVERIFY01() []ValidationResult {
 	var results []ValidationResult
 	for _, s := range v.project.Slices {

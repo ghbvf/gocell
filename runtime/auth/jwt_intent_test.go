@@ -142,7 +142,6 @@ func TestJWTVerifier_VerifyIntent_AcceptsMatchingIntent(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "user-1", claims.Subject)
 	assert.Equal(t, TokenIntentAccess, claims.TokenUse)
-
 }
 
 func TestJWTVerifier_VerifyIntent_RejectsLegacyRefreshJWTAtAccessPath(t *testing.T) {

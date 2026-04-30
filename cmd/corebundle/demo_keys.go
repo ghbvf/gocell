@@ -6,7 +6,7 @@ import (
 )
 
 // realAdapterMode is the canonical value of GOCELL_ADAPTER_MODE that activates
-// production fail-fast behaviour (rejects demo keys, requires service secrets,
+// production fail-fast behavior (rejects demo keys, requires service secrets,
 // rejects static Vault tokens, …). Defined as a constant so that future tokens
 // like "staging" would surface as an unknown-mode compile site rather than
 // silently being treated as "not real".

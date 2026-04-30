@@ -126,7 +126,7 @@ func (b *Bootstrap) phase1LoadConfig(s *phaseState) error {
 	return nil
 }
 
-// phase2InitPubSub initialises the publisher and subscriber.
+// phase2InitPubSub initializes the publisher and subscriber.
 // When neither is provided a default InMemoryEventBus serves both roles.
 func (b *Bootstrap) phase2InitPubSub(s *phaseState) {
 	pub := b.publisher

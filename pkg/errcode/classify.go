@@ -13,7 +13,7 @@ import (
 // is treated as infra (fail-closed) by all classifiers.
 //
 // ref: k8s apimachinery pkg/api/errors — IsNotFound dual-channel pattern
-// (infra errors must never map to domain not-found)
+// (infra errors must never map to domain not-found).
 type Category int
 
 const (
@@ -118,7 +118,7 @@ func WrapAuth(code Code, message string, cause error) *Error {
 //   - context.Canceled / context.DeadlineExceeded
 //   - driver.ErrBadConn / sql.ErrConnDone
 //   - *Error with Category == CategoryInfra or CategoryUnspecified
-//   - any unrecognised plain error (fail-closed)
+//   - any unrecognized plain error (fail-closed)
 //
 // Stdlib sentinel coverage is intentionally narrow (context.* / sql.Err* /
 // driver.ErrBadConn). Adapters that return wrapped plain errors are covered
@@ -151,7 +151,7 @@ func IsInfraError(err error) bool {
 		}
 	}
 
-	// Unrecognised plain error → fail-closed, treat as infra.
+	// Unrecognized plain error → fail-closed, treat as infra.
 	return true
 }
 

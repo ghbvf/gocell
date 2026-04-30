@@ -80,7 +80,7 @@ type SharedDeps struct {
 
 	// ConsumerClaimer coordinates outbox consumer idempotency. The separate
 	// kind field is corebundle-local metadata; kernel/idempotency.Claimer stays
-	// behaviour-only and does not grow a topology method.
+	// behavior-only and does not grow a topology method.
 	ConsumerClaimer     idempotency.Claimer
 	ConsumerClaimerKind consumerClaimerKind
 
@@ -101,7 +101,7 @@ type SharedDeps struct {
 	// InternalHTTPAddr is the bind address for the internal HTTP listener
 	// (/internal/v1/* control-plane). Env GOCELL_HTTP_INTERNAL_ADDR;
 	// default "127.0.0.1:9090". Must be bound to an internal network segment in
-	// production so service-token / mTLS enforcement is the primary defence.
+	// production so service-token / mTLS enforcement is the primary defense.
 	InternalHTTPAddr string
 
 	// HealthHTTPAddr is the bind address for the health+metrics listener

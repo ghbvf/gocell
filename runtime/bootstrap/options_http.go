@@ -133,7 +133,7 @@ func WithErrorRedactor(fn wrapper.ErrorRedactor) Option {
 // wire adapter health probes (e.g., conn.Health for RabbitMQ) without
 // bootstrap depending on adapter types.
 //
-// Accepts func(context.Context) error so callers can honour the /readyz probe
+// Accepts func(context.Context) error so callers can honor the /readyz probe
 // deadline. Validation (empty name, nil fn) is deferred to Run() where it fires
 // at Step 0 before any component starts, returning an error directly.
 func WithHealthChecker(name string, fn func(context.Context) error) Option {
@@ -164,7 +164,7 @@ func WithAdapterInfo(info map[string]string) Option {
 	}
 }
 
-// WithHealthRoutes accumulates HealthRouteGroupOption values that customise
+// WithHealthRoutes accumulates HealthRouteGroupOption values that customize
 // the framework-owned /healthz, /readyz, and /metrics route groups. The
 // canonical use cases are:
 //

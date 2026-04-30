@@ -1,6 +1,6 @@
 // Package storetest provides a reusable contract test suite for refresh.Store
 // implementations. Backends (memstore, postgres) each run RunContractSuite
-// to prove they honour the same append-only + single-sentinel semantics.
+// to prove they honor the same append-only + single-sentinel semantics.
 //
 // Test identifiers T1-T18 map to Store invariants: T1-T2 Issue, T3 Rotate
 // happy path, T4 grace window, T5 reuse-after-grace, T6-T8 fail-closed

@@ -28,7 +28,7 @@ func TestHttpConfigGetV1Serve(t *testing.T) {
 	assert.Equal(t, "/api/v1/config/{key}", c.HTTP.Path)
 
 	// PR-CFG-C contract-as-auth-truth: route is admin-gated, so 403 must be a
-	// first-class declared response, not just a runtime artefact.
+	// first-class declared response, not just a runtime artifact.
 	_, has403 := c.HTTP.Responses[403]
 	assert.True(t, has403, "http.config.get.v1 must declare 403 (route is RoleAdmin-gated)")
 	c.ValidateErrorResponse(t, 403, []byte(`{"error":{"code":"ERR_AUTH_FORBIDDEN","message":"access denied","details":{}}}`))
@@ -189,7 +189,7 @@ func TestHttpConfigListV1_AuthzNegative(t *testing.T) {
 }
 
 // TestHttpConfigInternalGetV1_PolicyDefenceInDepth locks the route-level
-// Policy guard on /internal/v1/config/{key} as a defence-in-depth layer
+// Policy guard on /internal/v1/config/{key} as a defense-in-depth layer
 // behind the listener's service-token authn chain, NOT the listener-level
 // "missing or invalid service token" path declared by the contract — that
 // path involves token parsing, nonce replay, and PrincipalService

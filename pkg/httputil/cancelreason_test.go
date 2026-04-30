@@ -48,7 +48,7 @@ func TestCancelReason_RoundTrip(t *testing.T) {
 }
 
 // TestCancelReason_RejectsUnknown locks the fail-closed enum guard at the
-// slot writer (PR275 P2-1 defence-in-depth): any value outside
+// slot writer (PR275 P2-1 defense-in-depth): any value outside
 // {ReasonCanceled, ReasonDeadlineExceeded} is silently dropped so neither
 // log4xx cancel_reason fields nor span client.cancel.reason attributes can
 // pollute their cardinality with arbitrary strings (user input
@@ -93,7 +93,7 @@ func TestCancelReason_RejectsUnknownPreservesPrior(t *testing.T) {
 // TestCancelReason_LastValidWriteWins documents the last-valid-write-wins
 // semantics for fan-out scenarios (rare today; cheap insurance). If a future
 // middleware also writes the slot with a valid value, the most-recent reason
-// becomes visible to tracing — which is the correct fan-in behaviour for
+// becomes visible to tracing — which is the correct fan-in behavior for
 // "what reason did the response writer ultimately commit to".
 func TestCancelReason_LastValidWriteWins(t *testing.T) {
 	ctx := WithCancelReasonSlot(context.Background())

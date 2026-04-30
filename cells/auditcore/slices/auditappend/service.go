@@ -89,7 +89,7 @@ func NewService(
 // Consumer: cg-auditcore-audit-append
 // Idempotency key: entry:{group}:{event-id}, TTL 24h
 // ACK timing: after hash chain append + repo persist
-// Retry: transient errors -> NACK+backoff / permanent errors -> dead letter
+// Retry: transient errors -> NACK+backoff / permanent errors -> dead letter.
 func (s *Service) HandleEvent(ctx context.Context, entry outbox.Entry) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()

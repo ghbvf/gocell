@@ -93,7 +93,7 @@ var _ ListenerAuth = AuthNone{}
 // AuthJWT is the JWT-authenticated listener plan. The verifier is supplied at
 // construction time via NewAuthJWT. Bootstrap extracts it during phase5 and
 // installs the router-aware AuthMiddleware so that Public/PasswordResetExempt
-// routes declared via auth.Mount are honoured.
+// routes declared via auth.Mount are honored.
 type AuthJWT struct {
 	// Verifier is the IntentTokenVerifier used to validate JWTs. Required; nil
 	// is rejected by NewAuthJWT with a panic.

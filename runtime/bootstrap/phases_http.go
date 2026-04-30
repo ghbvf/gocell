@@ -280,7 +280,7 @@ func declaredInternalRoutes(rtr *router.Router) []string {
 }
 
 // validateAuthVerifierForDeclaredRoutes ensures protected routes mounted on a
-// listener are actually gated by an auth-flavoured plan chain. The acceptable
+// listener are actually gated by an auth-flavored plan chain. The acceptable
 // plans are AuthJWT / AuthJWTFromAssembly, AuthMTLS, or AuthServiceToken (or
 // any combination). AuthNone chains with protected routes (non-Public,
 // non-Internal) cause Run() to fail-closed at phase5.

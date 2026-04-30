@@ -394,7 +394,7 @@ func (alwaysFailProvider) Unregister(_ metrics.Collector) error { return nil }
 
 // TestNewDirectEmitter_CounterVecRegistrationFailure verifies that a
 // CounterVec registration failure in the constructor is propagated as an error
-// (not swallowed) so the caller knows the emitter was not initialised.
+// (not swallowed) so the caller knows the emitter was not initialized.
 func TestNewDirectEmitter_CounterVecRegistrationFailure(t *testing.T) {
 	publisher := &recordingEmitterPublisher{}
 	_, err := NewDirectEmitter(publisher, DirectPublishFailClosed, alwaysFailProvider{}, "testcell")
@@ -504,7 +504,7 @@ func TestNewDirectEmitter_WithFailOpenRateThresholdZeroDisables(t *testing.T) {
 
 // TestDirectEmitter_InjectsObservabilityFromContext verifies that DirectEmitter.Emit
 // populates entry.Observability from the context before publishing, mirroring the
-// behaviour of Postgres OutboxWriter.Write (adapters/postgres/outbox_writer.go:60-61).
+// behavior of Postgres OutboxWriter.Write (adapters/postgres/outbox_writer.go:60-61).
 // Trace correlation across async boundaries is broken when DirectEmitter silently
 // drops request_id / trace_id — this test pins the fix.
 func TestDirectEmitter_InjectsObservabilityFromContext(t *testing.T) {

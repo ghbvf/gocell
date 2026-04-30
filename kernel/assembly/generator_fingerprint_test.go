@@ -560,7 +560,7 @@ func TestSourceFingerprint_AnyFieldChange(t *testing.T) {
 		t.Run(f.Name, func(t *testing.T) {
 			t.Parallel()
 			p := fingerprintProject()
-			// Pick the contract with the richest data to maximise coverage.
+			// Pick the contract with the richest data to maximize coverage.
 			c := *p.Contracts["http.auth.login.v1"]
 			mutateContractField(&c, f)
 			p.Contracts["http.auth.login.v1"] = &c

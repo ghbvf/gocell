@@ -28,7 +28,7 @@ func NewPeriodicWorker(interval time.Duration, fn func(ctx context.Context)) *Pe
 	}
 }
 
-// Start runs the periodic function until ctx is cancelled or Stop is called.
+// Start runs the periodic function until ctx is canceled or Stop is called.
 // Each call to Start creates a fresh done channel, so a PeriodicWorker can be
 // restarted after Stop.
 func (p *PeriodicWorker) Start(ctx context.Context) error {

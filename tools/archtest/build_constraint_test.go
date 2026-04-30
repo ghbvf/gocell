@@ -69,7 +69,7 @@ func findIntegrationTagViolations(rootDir string) ([]string, error) {
 
 // fileHasIntegrationTag returns true iff the file carries, in its header
 // section (before the package clause and following only blank lines and other
-// comments — the only zone the Go toolchain recognises for build constraints),
+// comments — the only zone the Go toolchain recognizes for build constraints),
 // a //go:build line whose constraint expression:
 //  1. evaluates to true when the "integration" tag is active, AND
 //  2. evaluates to false when no tags are active (i.e., the file is not built

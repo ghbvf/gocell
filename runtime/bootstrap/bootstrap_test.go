@@ -210,7 +210,7 @@ func TestNew_WithOptions(t *testing.T) {
 
 // TestNew_WithMetricsProvider verifies that WithMetricsProvider is observable
 // through MetricsProvider() — the public accessor downstream code reads. The
-// behaviour-level coverage that the provider actually flows into hook
+// behavior-level coverage that the provider actually flows into hook
 // dispatcher / HTTP collector lives in TestBootstrap_DefaultAssembly_WiresMetricsProvider
 // and TestAutoWire_CellLabel_* (metrics_wiring_test.go).
 func TestNew_WithMetricsProvider(t *testing.T) {
@@ -614,7 +614,7 @@ func TestBootstrap_EventSubscriptions_RestoreObservabilityContext(t *testing.T) 
 }
 
 func TestBootstrap_RunContextCancel(t *testing.T) {
-	// Test that Run returns when context is cancelled immediately,
+	// Test that Run returns when context is canceled immediately,
 	// even though it will fail at listen (sandbox restriction).
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // Cancel immediately.
@@ -625,7 +625,7 @@ func TestBootstrap_RunContextCancel(t *testing.T) {
 	)
 
 	// This should complete quickly, either with a listen error
-	// (sandbox) or context cancelled.
+	// (sandbox) or context canceled.
 	err := b.Run(ctx)
 	// Either outcome is acceptable in the sandbox.
 	_ = err
@@ -636,7 +636,7 @@ func TestBootstrap_DoubleRun_ReturnsError(t *testing.T) {
 	cancel() // cancel immediately so first Run exits quickly
 
 	b := New(WithListener(cell.PrimaryListener, "127.0.0.1:0", []cell.ListenerAuth{cell.AuthNone{}}))
-	_ = b.Run(ctx) // first call — may error due to cancelled ctx or sandbox
+	_ = b.Run(ctx) // first call — may error due to canceled ctx or sandbox
 
 	err := b.Run(ctx) // second call — must be rejected
 	require.Error(t, err)
@@ -2806,7 +2806,7 @@ func TestBootstrap_TracingE2E_InfraEndpoints(t *testing.T) {
 	// Round-4 F4: middleware.Tracing applies DefaultProbeFilter by default,
 	// so /healthz / /readyz / /livez / /metrics no longer produce a span
 	// (and therefore no trace_id in their access logs). This reverses the
-	// pre-round-4 behaviour where probe routes were traced by accident.
+	// pre-round-4 behavior where probe routes were traced by accident.
 	// High-frequency infra traffic no longer consumes span / metric budget.
 	var buf bytes.Buffer
 	logger := slog.New(slog.NewJSONHandler(&buf, nil))
@@ -3963,7 +3963,7 @@ func (c *duplicateInternalCell) RouteGroups() []cell.RouteGroup {
 
 // TestBootstrap_Phase5_FinalizeFailure_OnInternalListener verifies that a
 // FinalizeAuth failure on the InternalListener is propagated as a Bootstrap.Run
-// error and triggers assembly rollback, matching the same behaviour as a
+// error and triggers assembly rollback, matching the same behavior as a
 // PrimaryListener FinalizeAuth failure (TEST-10).
 func TestBootstrap_Phase5_FinalizeFailure_OnInternalListener(t *testing.T) {
 	asm := assembly.New(assembly.Config{ID: "test-dup-internal", DurabilityMode: cell.DurabilityDemo})

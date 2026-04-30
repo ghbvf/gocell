@@ -36,7 +36,7 @@ func captureDispatch(t *testing.T, args []string) (exit int, stdout, stderr stri
 	return exit, bufOut.String(), bufErr.String()
 }
 
-// TestDispatch_Contract pins the exit-code and stream-split behaviour of the
+// TestDispatch_Contract pins the exit-code and stream-split behavior of the
 // top-level entry point. Regressions here would otherwise only surface through
 // shell-level flake after merge; we want a fast CI guard. Kept table-driven
 // so new edge cases (e.g. `--help`) can be added without new test fns.
@@ -117,7 +117,7 @@ func TestDispatch_SuccessPath_ExitZero(t *testing.T) {
 // TestDispatch_ValidateFormats pins the contract for `gocell validate
 // --format=...` at the integration boundary. Plan Batch C #12: machine-
 // parseable formats must produce well-formed output and the unknown-format
-// path must surface a recognisable error. Three cases × empty project so
+// path must surface a recognizable error. Three cases × empty project so
 // the validator emits a clean pass; we then assert format-specific shape.
 func TestDispatch_ValidateFormats(t *testing.T) {
 	dir := t.TempDir()
@@ -171,7 +171,7 @@ func TestDispatch_ValidateFormats(t *testing.T) {
 		exit, _, stderr := captureDispatch(t,
 			[]string{"validate", "--root", dir, "--format=yaml"})
 		// Unknown format surfaces from runValidate -> printers.New, so the
-		// dispatcher categorises it as a sub-command runtime error
+		// dispatcher categorizes it as a sub-command runtime error
 		// (ExitRuntime), not an unknown-command usage error (ExitUsage).
 		// This is consistent with how scaffold/check report sub-flag
 		// errors today.

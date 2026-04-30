@@ -13,7 +13,7 @@ import (
 type cancelReasonKey struct{}
 
 // cancelReasonSlot is a request-scoped, mutable holder for the 499 reason
-// label. It is initialised by tracing middleware at request start, populated
+// label. It is initialized by tracing middleware at request start, populated
 // by writeErrcodeError when an ErrClientCanceled response is emitted, and
 // read by tracing middleware after the handler returns to stamp the span's
 // client.cancel.reason attribute.
@@ -52,7 +52,7 @@ func CancelReason(ctx context.Context) string {
 // when no slot is present). Called from writeErrcodeError when emitting an
 // ErrClientCanceled response.
 //
-// Defence-in-depth: this slot setter enforces the same low-cardinality enum
+// Defense-in-depth: this slot setter enforces the same low-cardinality enum
 // whitelist (ctxcancel.ReasonCanceled / ReasonDeadlineExceeded) as
 // ctxcancel.ReasonFromDetails. writeErrcodeError already filters at the
 // Details read site, so the inner guard is mostly belt-and-suspenders — but

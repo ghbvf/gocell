@@ -223,7 +223,7 @@ func (r Route) validateContractShape() error {
 	}
 	if !validRouteMethods[r.Contract.Method] {
 		return fmt.Errorf(
-			"auth.Mount: Contract.Method %q not recognised (GET/HEAD/POST/PUT/PATCH/DELETE/OPTIONS/CONNECT/TRACE)",
+			"auth.Mount: Contract.Method %q not recognized (GET/HEAD/POST/PUT/PATCH/DELETE/OPTIONS/CONNECT/TRACE)",
 			r.Contract.Method)
 	}
 	if r.Contract.Path == "" || r.Contract.Path[0] != '/' {

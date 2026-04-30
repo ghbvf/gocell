@@ -353,9 +353,9 @@ func TestSubscriber_HardCloseForcesTimeout(t *testing.T) {
 }
 
 // TestSubscriber_StopIntake_RespectsCtx verifies that StopIntake returns
-// promptly when its context is cancelled, even if the broker's basic.cancel
+// promptly when its context is canceled, even if the broker's basic.cancel
 // is hanging. This is the F1 fix: StopIntake must not hold the lock across
-// broker I/O, and must honour the ctx budget.
+// broker I/O, and must honor the ctx budget.
 //
 // Setup: one channel whose Cancel blocks on cancelHangUntil (never closed).
 // Expectation: StopIntake returns context.DeadlineExceeded within ~150ms of

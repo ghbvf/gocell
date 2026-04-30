@@ -210,7 +210,7 @@ func (w *OutboxWriter) writeBatchChunk(ctx context.Context, tx pgx.Tx, entries [
 	return nil
 }
 
-// marshalObservability serialises ObservabilityMetadata to JSON.
+// marshalObservability serializes ObservabilityMetadata to JSON.
 // Returns nil (SQL NULL) when the struct is zero to avoid storing empty
 // JSON objects in the observability column.
 func marshalObservability(o outbox.ObservabilityMetadata) ([]byte, error) {

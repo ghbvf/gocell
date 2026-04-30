@@ -63,7 +63,7 @@ func TestShutdownCtxFor_ShutGraceLargerThanParent_BoundedByParent(t *testing.T) 
 func TestShutdownCtxFor_ShutGraceSmallerThanParent_BoundedByGrace(t *testing.T) {
 	t.Parallel()
 	// shutGrace 200ms vs parent 5s → effective ~200ms (per-listener tighter
-	// budget honoured).
+	// budget honored).
 	parentDeadline := time.Now().Add(5 * time.Second)
 	parent, cancelParent := context.WithDeadline(context.Background(), parentDeadline)
 	defer cancelParent()

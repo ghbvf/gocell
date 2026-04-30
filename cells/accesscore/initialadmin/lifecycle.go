@@ -188,7 +188,7 @@ func (l *Lifecycle) start(ctx context.Context) error {
 			slog.String("cred_path", bs.cfg.CredentialPath))
 	}
 
-	// Priority identical to old behaviour: adminWorker > sweepCleaner.
+	// Priority identical to old behavior: adminWorker > sweepCleaner.
 	var result worker.Worker
 	switch {
 	case adminWorker != nil:

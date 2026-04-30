@@ -15,7 +15,7 @@ import (
 // TestWrapCtxSafe_ReturnsOnCtxDone_InnerIgnoresCtx is the contract test for
 // PR-A35's structural wrapper: even when the inner function completely
 // ignores ctx, the wrapped Checker must return ctx.Err() as soon as ctx is
-// cancelled. The inner goroutine is expected to continue running; the test
+// canceled. The inner goroutine is expected to continue running; the test
 // unblocks it on cleanup.
 func TestWrapCtxSafe_ReturnsOnCtxDone_InnerIgnoresCtx(t *testing.T) {
 	unblock := make(chan struct{})
@@ -59,7 +59,7 @@ func TestWrapCtxSafe_ReturnsOnCtxDone_InnerIgnoresCtx(t *testing.T) {
 }
 
 // TestWrapCtxSafe_PropagatesError_WhenInnerReturnsFirst covers the happy
-// path: if inner fn returns before ctx is cancelled, its error propagates
+// path: if inner fn returns before ctx is canceled, its error propagates
 // unchanged.
 func TestWrapCtxSafe_PropagatesError_WhenInnerReturnsFirst(t *testing.T) {
 	tests := []struct {

@@ -11,7 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// slowHookCell blocks in the specified hook until ctx is cancelled, allowing
+// slowHookCell blocks in the specified hook until ctx is canceled, allowing
 // tests to drive the hook-timeout path deterministically.
 type slowHookCell struct {
 	*cell.BaseCell

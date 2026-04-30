@@ -1,9 +1,9 @@
-// F06: table-driven tests for internalGuardFromEnv behaviour.
+// F06: table-driven tests for internalGuardFromEnv behavior.
 //
 // SEC-FAIL-CLOSED: the previous "dev mode silent bypass" (return nil, nil with
 // a slog.Warn when secret is empty in non-real modes) has been removed.
 // GOCELL_SERVICE_SECRET is now required in ALL adapter modes.
-// This file verifies the new uniform error behaviour.
+// This file verifies the new uniform error behavior.
 package main
 
 import (

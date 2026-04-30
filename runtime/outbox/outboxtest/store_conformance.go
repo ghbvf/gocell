@@ -10,7 +10,7 @@ import (
 	"github.com/ghbvf/gocell/runtime/outbox"
 )
 
-// deduplicated per SonarCloud S1192
+// deduplicated per SonarCloud S1192.
 const (
 	testEventType          = "test.v1"
 	msgClaimPending        = "ClaimPending: %v"

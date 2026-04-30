@@ -194,7 +194,7 @@ func (q *InMemQueue) Report(_ context.Context, commandID string, now time.Time) 
 	return nil
 }
 
-// Ack finalises a command atomically in a single transition step. The AckReason
+// Ack finalizes a command atomically in a single transition step. The AckReason
 // maps directly to a terminal status:
 //   - AckSuccess:  current → StatusSucceeded
 //   - AckFailed:   current → StatusFailed

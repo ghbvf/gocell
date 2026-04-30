@@ -1,6 +1,6 @@
 package postgres
 
-// config_repo_encrypt_test.go verifies the encryption behaviour added in
+// config_repo_encrypt_test.go verifies the encryption behavior added in
 // PR-CC-VALUE-ENCRYPT (task 3.9). Tests are in the `postgres` package so
 // they can use the unexported helpers (newConfigRepositoryFromDBTX, mockDB).
 //
@@ -80,7 +80,7 @@ func (f *fakeValueTransformer) Decrypt(_ context.Context, ciphertext []byte, key
 	}
 	// Verify AAD binding via edk-embedded AAD (stateless check).
 	expectedEDK := append([]byte("edk-"+keyID+":aad:"), aad...)
-	if string(edk) != string(expectedEDK) {
+	if !bytes.Equal(edk, expectedEDK) {
 		return nil, errcode.New(errcode.ErrConfigDecryptFailed,
 			"fake: AAD mismatch (edk does not match expected AAD binding)")
 	}

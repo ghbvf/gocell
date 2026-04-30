@@ -1,6 +1,7 @@
 package crypto_test
 
 import (
+	"bytes"
 	"context"
 	"testing"
 
@@ -54,7 +55,7 @@ func TestValueTransformer_InterfaceMethods(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Decrypt: unexpected error: %v", err)
 	}
-	if string(recovered) != string(plaintext) {
+	if !bytes.Equal(recovered, plaintext) {
 		t.Fatalf("round-trip mismatch: got %q, want %q", recovered, plaintext)
 	}
 }

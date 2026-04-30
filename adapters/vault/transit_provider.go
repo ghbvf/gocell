@@ -58,7 +58,7 @@ func applyNamespaceFromEnv(raw *vaultapi.Client) string {
 }
 
 // resolveStartupTimeout returns the startup deadline for Vault-facing I/O,
-// honouring GOCELL_VAULT_STARTUP_TIMEOUT when set. Accepts any time.ParseDuration
+// honoring GOCELL_VAULT_STARTUP_TIMEOUT when set. Accepts any time.ParseDuration
 // string (e.g. "45s", "2m"). Returns an error on malformed or non-positive values
 // rather than silently falling back to the default — misconfiguration should be
 // visible at startup.
@@ -199,7 +199,7 @@ type tokenRenewalWorker struct {
 	currentWatcher tokenWatcher
 }
 
-// Start blocks until ctx is cancelled. On each watcher termination it
+// Start blocks until ctx is canceled. On each watcher termination it
 // re-authenticates (with exponential backoff capped at 60 s), rebuilds a new
 // LifetimeWatcher, and resumes. authHealthy gauge transitions 1→0 on watcher
 // failure and 0→1 on successful re-auth.
@@ -240,7 +240,7 @@ func (w *tokenRenewalWorker) Start(ctx context.Context) error {
 // It sets authHealthy=0, then loops forever: reauthenticate (with exponential
 // backoff) → buildWatcher. Only ctx cancellation causes the loop to exit.
 //
-// Contract: reauthenticate returns a non-nil error only when ctx is cancelled.
+// Contract: reauthenticate returns a non-nil error only when ctx is canceled.
 // buildWatcher failures are logged and cause the loop to sleep (with exponential
 // backoff, capped at reauthBackoffCap) before retrying. This prevents a hot
 // loop when Vault is healthy (Login succeeds) but NewLifetimeWatcher consistently
@@ -248,7 +248,7 @@ func (w *tokenRenewalWorker) Start(ctx context.Context) error {
 // the backoff inside reauthenticate.
 //
 // Returns (newWatcher, true) once both reauthenticate and buildWatcher succeed,
-// or (nil, false) if ctx was cancelled.
+// or (nil, false) if ctx was canceled.
 func (w *tokenRenewalWorker) doReauth(ctx context.Context) (tokenWatcher, bool) {
 	if w.authHealthy != nil {
 		w.authHealthy.Set(0)
@@ -288,7 +288,7 @@ func (w *tokenRenewalWorker) doReauth(ctx context.Context) (tokenWatcher, bool) 
 }
 
 // runWatcher starts the given watcher in a goroutine and loops on its channels
-// until DoneCh fires or ctx is cancelled.
+// until DoneCh fires or ctx is canceled.
 // Returns true if the loop should terminate (ctx done / channel closed), false
 // if the watcher terminated with an error that should trigger re-auth.
 func (w *tokenRenewalWorker) runWatcher(ctx context.Context, watcher tokenWatcher) (ctxDone bool) {
@@ -353,7 +353,7 @@ func (w *tokenRenewalWorker) handleRenewCh(ctx context.Context, renewal *vaultap
 }
 
 // reauthenticate loops on authMethod.Login with exponential backoff until it
-// succeeds or ctx is cancelled. On each failure it increments loginOutcome
+// succeeds or ctx is canceled. On each failure it increments loginOutcome
 // counter and logs at Warn level.
 //
 // Backoff: 1s → 2s → 4s → … → 60s (cap). Sleep is interruptible by ctx.Done.
@@ -383,7 +383,7 @@ func (w *tokenRenewalWorker) reauthenticate(ctx context.Context) error {
 		select {
 		case <-ctx.Done():
 			return errcode.New(errcode.ErrVaultAuthFailed,
-				"vault-transit: re-authentication loop cancelled by context")
+				"vault-transit: re-authentication loop canceled by context")
 		case <-time.After(backoff):
 		}
 		backoff *= reauthBackoffMultiplier
@@ -664,7 +664,7 @@ type TransitKeyProvider struct {
 // in unit tests that do not need a real Vault connection.
 //
 // ctx governs the initial Login and key existence check. If Vault is unreachable,
-// the call blocks until ctx is cancelled (or the call times out). Callers that
+// the call blocks until ctx is canceled (or the call times out). Callers that
 // do not have a deadline should use context.WithTimeout to avoid blocking startup
 // indefinitely. NewTransitKeyProviderFromEnv uses a 30-second timeout by default.
 //
@@ -710,7 +710,7 @@ func NewTransitKeyProvider(ctx context.Context, client VaultClient, mountPath, k
 	}
 	p.cachedLatestVersion.Store(int64(version))
 
-	// Initialise background token renewal if applicable.
+	// Initialize background token renewal if applicable.
 	if err = p.initTokenRenewal(ctx, result); err != nil {
 		return nil, err
 	}

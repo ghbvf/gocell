@@ -112,7 +112,7 @@ func TestInMemQueue_DequeueCtxCanceled(t *testing.T) {
 	cancel()
 	// Should still work — InMemQueue is synchronous.
 	_, err := q.Dequeue(ctx, "dev-1", 10, 5*time.Minute)
-	assert.NoError(t, err, "in-mem dequeue is synchronous and ignores cancelled ctx")
+	assert.NoError(t, err, "in-mem dequeue is synchronous and ignores canceled ctx")
 }
 
 func TestInMemQueue_Dequeue_DefaultLeaseDuration(t *testing.T) {

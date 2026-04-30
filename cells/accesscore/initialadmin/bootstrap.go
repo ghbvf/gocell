@@ -38,7 +38,7 @@ type BootstrapDeps struct {
 	Clock    Clock
 }
 
-// bootstrapConfig controls the bootstrap behaviour.
+// bootstrapConfig controls the bootstrap behavior.
 type bootstrapConfig struct {
 	// Username is the admin username to create. Defaults to "admin".
 	Username string

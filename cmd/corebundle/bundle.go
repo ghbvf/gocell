@@ -377,7 +377,7 @@ func buildConfigCoreOpts(ctx context.Context, cfg ConfigCoreModuleConfig) (Confi
 
 	default:
 		// Unreachable: TopologyFromEnv validation already rejects unknown
-		// StorageBackend values. Keep as defence-in-depth only.
+		// StorageBackend values. Keep as defense-in-depth only.
 		return ConfigCoreModuleResult{}, errcode.New(errcode.ErrValidationFailed,
 			fmt.Sprintf("buildConfigCoreOpts: unexpected StorageBackend %q (topology validation bypass)", cfg.Topology.StorageBackend))
 	}

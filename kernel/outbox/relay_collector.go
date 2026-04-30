@@ -43,7 +43,7 @@ type providerRelayCollector struct {
 
 var _ RelayCollector = (*providerRelayCollector)(nil)
 
-// ProviderRelayCollectorConfig customises metric naming / bucketing.
+// ProviderRelayCollectorConfig customizes metric naming / bucketing.
 // Zero value is acceptable and produces defaults.
 type ProviderRelayCollectorConfig struct {
 	// PollBuckets overrides DefaultRelayPollBuckets; zero value uses defaults.

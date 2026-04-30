@@ -3,7 +3,7 @@
 //
 // FakeStore implements runtime/outbox.Store in memory and is intended for unit
 // tests in cells and runtime/outbox. The conformance suite (RunStoreConformanceSuite)
-// verifies that any Store implementation produces identical observable behaviour.
+// verifies that any Store implementation produces identical observable behavior.
 package outboxtest
 
 import (

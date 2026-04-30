@@ -159,7 +159,7 @@ func TestMintAccess_PasswordResetFlagPropagates(t *testing.T) {
 }
 
 // TestMintAccess_AccessTokenIssueFailure asserts that when the Issuer's access-token
-// Issue call fails, MintAccess wraps it with a recognisable prefix.
+// Issue call fails, MintAccess wraps it with a recognizable prefix.
 func TestMintAccess_AccessTokenIssueFailure(t *testing.T) {
 	accessErr := errors.New("access signing broken")
 	deps := Deps{

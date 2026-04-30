@@ -30,7 +30,7 @@ func (e *phaseError) Unwrap() error { return e.Err }
 type shutdownReason int
 
 const (
-	// reasonCtxCancel: external context was cancelled (normal Kubernetes pod termination).
+	// reasonCtxCancel: external context was canceled (normal Kubernetes pod termination).
 	reasonCtxCancel shutdownReason = iota
 	// reasonHTTPError: the HTTP server goroutine returned an unexpected error.
 	reasonHTTPError

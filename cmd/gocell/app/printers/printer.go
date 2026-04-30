@@ -32,7 +32,7 @@ const (
 )
 
 // Printer renders validation results to a writer. Each implementation chooses
-// its own serialisation; callers do not depend on which concrete type they
+// its own serialization; callers do not depend on which concrete type they
 // hold.
 type Printer interface {
 	Print(results []governance.ValidationResult) error

@@ -119,7 +119,7 @@ func (p *Pool) Health(ctx context.Context) error {
 // Close gracefully shuts down the connection pool, bounded by ctx.
 //
 // pgxpool.Pool.Close() performs a synchronous drain with no context parameter.
-// Close wraps it in a goroutine so the caller's shutdown budget is honoured;
+// Close wraps it in a goroutine so the caller's shutdown budget is honored;
 // if ctx expires, the pool's connection resources are abandoned (process-exit
 // cleanup semantics, acceptable under orchestrator-restart SLO).
 //

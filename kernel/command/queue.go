@@ -29,7 +29,7 @@ const (
 	AckRejected                      // device/system rejected the command → StatusCanceled
 )
 
-// Valid reports whether r is a recognised AckReason value.
+// Valid reports whether r is a recognized AckReason value.
 func (r AckReason) Valid() bool {
 	return r >= AckSuccess && r <= AckRejected
 }

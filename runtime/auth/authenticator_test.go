@@ -601,7 +601,7 @@ func TestServiceTokenAuthenticator_Success_PrincipalShape(t *testing.T) {
 }
 
 // TestJWTAuthenticator_EmptySubject_Error verifies that a JWT token with an
-// empty "sub" claim is rejected at the Authenticator layer (G1.A primary defence).
+// empty "sub" claim is rejected at the Authenticator layer (G1.A primary defense).
 // An empty subject indicates a malformed JWT — downstream code must never
 // receive a PrincipalUser with Subject="".
 func TestJWTAuthenticator_EmptySubject_Error(t *testing.T) {

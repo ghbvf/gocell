@@ -540,7 +540,7 @@ func TestReadyz_VerboseToken_CorrectHeader(t *testing.T) {
 }
 
 // TestReadyz_VerboseToken_StrictDeny covers PR-A35's strict-401 semantics.
-// The previous "silent downgrade to 200" behaviour is gone: any ?verbose
+// The previous "silent downgrade to 200" behavior is gone: any ?verbose
 // request that does not carry a matching token is answered with 401 and an
 // errcode-shaped body. A bare /readyz request (no ?verbose) is always
 // answered with the plain aggregate 200 regardless of token state — this
@@ -773,7 +773,7 @@ func TestReadyz_DeadlineExceeded(t *testing.T) {
 }
 
 // TestReadyz_IndependentOfRequestCtx verifies that /readyz probes are NOT
-// cancelled when the HTTP request context is cancelled (e.g. kubelet disconnect).
+// canceled when the HTTP request context is canceled (e.g. kubelet disconnect).
 // The probe ctx must derive from context.Background(), not r.Context().
 func TestReadyz_IndependentOfRequestCtx(t *testing.T) {
 	asm := assembly.New(assembly.Config{ID: "test-indep", DurabilityMode: cell.DurabilityDemo})
@@ -783,7 +783,7 @@ func TestReadyz_IndependentOfRequestCtx(t *testing.T) {
 	probeDone := make(chan struct{})
 	h := New(asm, WithDeadline(2*time.Second))
 	h.RegisterChecker("slow-probe", func(ctx context.Context) error {
-		// Probe takes 100 ms but the HTTP request ctx will be cancelled
+		// Probe takes 100 ms but the HTTP request ctx will be canceled
 		// almost immediately — probe must NOT be affected.
 		time.Sleep(100 * time.Millisecond)
 		close(probeDone)
@@ -803,12 +803,12 @@ func TestReadyz_IndependentOfRequestCtx(t *testing.T) {
 
 	h.ReadyzHandler().ServeHTTP(rec, req)
 
-	// Probe must still complete even though the request ctx was cancelled.
+	// Probe must still complete even though the request ctx was canceled.
 	select {
 	case <-probeDone:
 		// expected
 	case <-time.After(500 * time.Millisecond):
-		t.Fatal("probe was cancelled by request ctx; must use background ctx")
+		t.Fatal("probe was canceled by request ctx; must use background ctx")
 	}
 	// Aggregate result must be healthy (probe returned nil after sleeping).
 	assert.Equal(t, http.StatusOK, rec.Code)
@@ -1409,7 +1409,7 @@ func TestVerboseDecision_DefaultDenies(t *testing.T) {
 	h := New(asm)
 	// Deliberately do NOT call h.SetVerboseToken(...) and do NOT call
 	// h.SetVerboseDisabled(). This is the "default" state where operators have
-	// not configured verbose behaviour at all.
+	// not configured verbose behavior at all.
 
 	rec := httptest.NewRecorder()
 	// Request verbose output without a token header.

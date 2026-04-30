@@ -52,7 +52,7 @@ func (p *panicCollector) RecordRequest(_, _ string, _ int, _ float64) {
 	panic("collector panic in RecordRequest")
 }
 
-// --- new cases for broken logger behaviour ---
+// --- new cases for broken logger behavior ---
 
 // brokenHandler.Handle returns a non-nil error, which slog.Logger.Error discards
 // by design (slog docs). This handler verifies safeObserve does not propagate

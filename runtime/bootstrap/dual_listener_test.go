@@ -399,7 +399,7 @@ func TestDualListener_ShutdownClosesBothServersNoGoroutineLeak(t *testing.T) {
 	// Baseline is taken AFTER the server is confirmed stable (healthz 200 above).
 	// All bootstrap-internal goroutines (HTTP serve loops, etc.) are already running,
 	// so the baseline already includes them. Taking it here — before cancel() — provides
-	// a happens-before synchronisation point: no goroutine launches between this line
+	// a happens-before synchronization point: no goroutine launches between this line
 	// and cancel().
 	before := runtime.NumGoroutine()
 
@@ -465,7 +465,7 @@ func TestTripleListener_ShutdownNoGoroutineLeak(t *testing.T) {
 	// Baseline is taken AFTER the server is confirmed stable (healthz 200 above).
 	// All bootstrap-internal goroutines (HTTP serve loops, etc.) are already running,
 	// so the baseline already includes them. Taking it here — before cancel() — provides
-	// a happens-before synchronisation point: no goroutine launches between this line
+	// a happens-before synchronization point: no goroutine launches between this line
 	// and cancel().
 	before := runtime.NumGoroutine()
 
@@ -1082,7 +1082,7 @@ func TestShutdown_NumGoroutineBaseline_AfterServerStable(t *testing.T) {
 	// above). Taking it here ensures that all bootstrap-internal goroutines (HTTP
 	// serve loops, worker loops, etc.) are already running, so the baseline already
 	// includes them. Taking it before cancel() also provides a happens-before
-	// synchronisation point: there are no in-flight goroutine launches between this
+	// synchronization point: there are no in-flight goroutine launches between this
 	// line and cancel().
 	baseline := runtime.NumGoroutine()
 

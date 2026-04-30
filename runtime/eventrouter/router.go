@@ -195,7 +195,7 @@ func (r *Router) AddSubscriptionValidator(v cell.SubscriptionValidator) {
 // errAlreadyRunning is returned if Run is called more than once.
 var errAlreadyRunning = fmt.Errorf("eventrouter: Run called more than once")
 
-// Run starts all registered subscriptions and blocks until ctx is cancelled
+// Run starts all registered subscriptions and blocks until ctx is canceled
 // or an unrecoverable subscription error occurs.
 //
 // Run MUST be called at most once; a second call returns errAlreadyRunning.
@@ -258,7 +258,7 @@ func (r *Router) Run(ctx context.Context) error {
 		slog.Int("count", len(handlers)))
 	r.closeRunning()
 
-	// Phase 4: block until context cancelled or a runtime error surfaces.
+	// Phase 4: block until context canceled or a runtime error surfaces.
 	select {
 	case <-runCtx.Done():
 		r.markShutdown()
@@ -482,7 +482,7 @@ func (r *Router) markShutdown() {
 //     while in-flight handlers continue to run. Errors from StopIntake are
 //     logged as warnings and do not abort the shutdown sequence.
 //
-//  2. Cancel: the internal runCtx subtree is cancelled, unblocking
+//  2. Cancel: the internal runCtx subtree is canceled, unblocking
 //     Subscribe goroutines that are waiting on context cancellation.
 //
 //  3. Drain: wg.Wait() blocks until all goroutines exit. If ctx expires
@@ -501,7 +501,7 @@ func (r *Router) Close(ctx context.Context) error {
 	// F1b: StopIntake runs in a dedicated goroutine and the wait is gated by
 	// ctx. A misbehaving adapter that ignores its ctx cannot stall the whole
 	// Close chain — once ctx expires we log Warn and advance to Phase 2/3
-	// regardless, honouring the caller's shutdown budget.
+	// regardless, honoring the caller's shutdown budget.
 	if st, ok := r.subscriber.(outbox.SubscriberIntakeStopper); ok {
 		stopDone := make(chan error, 1)
 		go func() { stopDone <- st.StopIntake(ctx) }()

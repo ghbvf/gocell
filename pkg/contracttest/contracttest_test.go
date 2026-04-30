@@ -118,7 +118,7 @@ func TestValidateHTTPResponseRecorder_Valid(t *testing.T) {
 	c := LoadByID(t, testdataRoot(), "http.test.valid.v1")
 	recorder := httptest.NewRecorder()
 	recorder.WriteHeader(200)
-	_, _ = recorder.Write([]byte(`{"data":{"id":"1","username":"alice"}}`))
+	_, _ = recorder.WriteString(`{"data":{"id":"1","username":"alice"}}`)
 	c.ValidateHTTPResponseRecorder(t, recorder)
 }
 
@@ -126,7 +126,7 @@ func TestValidateHTTPResponseRecorder_InvalidStatus(t *testing.T) {
 	c := LoadByID(t, testdataRoot(), "http.test.valid.v1")
 	recorder := httptest.NewRecorder()
 	recorder.WriteHeader(201)
-	_, _ = recorder.Write([]byte(`{"data":{"id":"1","username":"alice"}}`))
+	_, _ = recorder.WriteString(`{"data":{"id":"1","username":"alice"}}`)
 
 	mockT := &mockTB{}
 	c.ValidateHTTPResponseRecorder(mockT, recorder)
@@ -166,7 +166,7 @@ func TestValidateHTTPResponseRecorder_NoContentRejectsBody(t *testing.T) {
 	}
 	recorder := httptest.NewRecorder()
 	recorder.WriteHeader(204)
-	_, _ = recorder.Write([]byte(`{"unexpected":true}`))
+	_, _ = recorder.WriteString(`{"unexpected":true}`)
 
 	mockT := &mockTB{}
 	c.ValidateHTTPResponseRecorder(mockT, recorder)
@@ -183,7 +183,7 @@ func TestValidateHTTPResponseRecorder_NoContentRejectsWhitespaceBody(t *testing.
 	}
 	recorder := httptest.NewRecorder()
 	recorder.WriteHeader(204)
-	_, _ = recorder.Write([]byte(" \n\t"))
+	_, _ = recorder.WriteString(" \n\t")
 
 	mockT := &mockTB{}
 	c.ValidateHTTPResponseRecorder(mockT, recorder)
@@ -197,7 +197,7 @@ func TestValidateHTTPResponseRecorder_RequiresTransportMetadata(t *testing.T) {
 	c.HTTP = nil
 	recorder := httptest.NewRecorder()
 	recorder.WriteHeader(200)
-	_, _ = recorder.Write([]byte(`{"data":{"id":"1","username":"alice"}}`))
+	_, _ = recorder.WriteString(`{"data":{"id":"1","username":"alice"}}`)
 
 	mockT := &mockTB{}
 	c.ValidateHTTPResponseRecorder(mockT, recorder)

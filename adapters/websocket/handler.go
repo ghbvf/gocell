@@ -68,7 +68,7 @@ func (c *UpgradeConfig) Validate() error {
 // WebSocket and registers them with the Hub. It rejects a nil hub or an
 // invalid cfg at construction time — error-first fail-fast — so static-wiring
 // mistakes surface at composition root instead of the first HTTP request
-// (PR-MODE-6.1). SEC-FAIL-CLOSED: the previous behaviour of silently setting
+// (PR-MODE-6.1). SEC-FAIL-CLOSED: the previous behavior of silently setting
 // InsecureSkipVerify=true for empty origins is removed.
 func UpgradeHandler(hub *rtws.Hub, cfg UpgradeConfig) (http.Handler, error) {
 	if hub == nil {

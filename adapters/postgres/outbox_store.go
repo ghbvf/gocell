@@ -172,7 +172,7 @@ func (s *PGOutboxStore) MarkRetry(ctx context.Context, id string, attempts int, 
 	// We use an absolute timestamp approach: compute delay from now, then
 	// express as "N microseconds" interval added to now() in SQL.
 	// This matches the writeBack approach: pass a duration interval string
-	// (pgx serialises time.Duration as int64 nanoseconds which PG cannot cast
+	// (pgx serializes time.Duration as int64 nanoseconds which PG cannot cast
 	// to interval directly — SQLSTATE 42846).
 	delay := max(time.Until(nextRetryAt), 0)
 	delayInterval := fmt.Sprintf("%d microseconds", delay.Microseconds())
@@ -204,7 +204,7 @@ func (s *PGOutboxStore) MarkDead(ctx context.Context, id string, attempts int, l
 // back to pending (with attempts+1 and next_retry_at = backoff) or to dead
 // (when attempts+1 >= maxAttempts). Returns count of rows recovered.
 func (s *PGOutboxStore) ReclaimStale(ctx context.Context, claimTTL time.Duration, maxAttempts int, baseDelay, maxDelay time.Duration) (int, error) {
-	// pgx serialises time.Duration as int64 nanoseconds which PostgreSQL cannot
+	// pgx serializes time.Duration as int64 nanoseconds which PostgreSQL cannot
 	// cast to interval (SQLSTATE 42846). Pass claimTTL as "N microseconds" text;
 	// baseDelay and maxDelay as int64 microseconds multiplied by interval '1 microsecond'.
 	claimTTLInterval := fmt.Sprintf("%d microseconds", claimTTL.Microseconds())

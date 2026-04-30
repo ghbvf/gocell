@@ -231,7 +231,7 @@ func FromEnv(opts ...EnvOption) (*Registry, error) {
 // NewJWTIssuerFromRegistry constructs a *auth.JWTIssuer whose issuer string,
 // default audiences, signing key, and clock are all sourced from reg.
 //
-// This is the single authorised entry point for creating a JWTIssuer in
+// This is the single authorized entry point for creating a JWTIssuer in
 // production code; the raw NewJWTIssuer constructor is retained only for
 // test helpers that build issuers independently of Registry.
 //
@@ -245,7 +245,7 @@ func NewJWTIssuerFromRegistry(reg *Registry, ttl time.Duration, opts ...auth.JWT
 	}
 
 	// Merge registry-derived settings first, then apply caller opts so tests
-	// can override issuer-clock or default-audience behaviour.
+	// can override issuer-clock or default-audience behavior.
 	baseOpts := []auth.JWTIssuerOption{
 		auth.WithIssuerAudiencesFromSlice(reg.Audiences()),
 		auth.WithIssuerClock(reg.Clock()),

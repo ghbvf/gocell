@@ -54,7 +54,7 @@ type Entry struct {
 	Timeouts Timeouts
 
 	// Attempt tracks the current delivery attempt (0 = first attempt).
-	// Design note: there is no explicit "Retrying" status. Retry is modelled
+	// Design note: there is no explicit "Retrying" status. Retry is modeled
 	// as the same Pending→Sent arc with an incremented Attempt counter. This
 	// avoids a combinatorial explosion of states (Retrying×{Sent,Delivered})
 	// and keeps the transition table compact. Adapters inspect Attempt to

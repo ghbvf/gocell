@@ -95,7 +95,7 @@ func TestCommands(t *testing.T) {
 // TestSubcommandHelpFlagsRenderHelp guards against a regression where
 // dispatch.go advertises `gocell <command> -h` but the sub-command parses
 // args[0] eagerly and reports "unknown … type" instead. Each runner must
-// recognise -h / --help / help and render its own help surface.
+// recognize -h / --help / help and render its own help surface.
 func TestSubcommandHelpFlagsRenderHelp(t *testing.T) {
 	cases := []struct {
 		name string

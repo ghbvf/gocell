@@ -29,27 +29,27 @@ func TestPublisher_Close_Idempotent(t *testing.T) {
 }
 
 // TestPublisher_Close_CancelledCtxReturnsImmediately verifies that Close with a
-// pre-cancelled ctx returns the ctx error promptly (< 50ms) without hanging.
+// pre-canceled ctx returns the ctx error promptly (< 50ms) without hanging.
 func TestPublisher_Close_CancelledCtxReturnsImmediately(t *testing.T) {
 	conn, _ := newTestConnection(t)
 	pub := NewPublisher(conn)
 
 	cancelledCtx, cancel := context.WithCancel(context.Background())
-	cancel() // already cancelled
+	cancel() // already canceled
 
 	start := time.Now()
 	err := pub.Close(cancelledCtx)
 	elapsed := time.Since(start)
 
-	require.Error(t, err, "Close with pre-cancelled ctx must return error")
+	require.Error(t, err, "Close with pre-canceled ctx must return error")
 	assert.ErrorIs(t, err, context.Canceled,
-		"Close with pre-cancelled ctx must return context.Canceled, got: %v", err)
+		"Close with pre-canceled ctx must return context.Canceled, got: %v", err)
 	assert.Less(t, elapsed, 50*time.Millisecond,
-		"Close must return promptly with pre-cancelled ctx; got %s", elapsed)
+		"Close must return promptly with pre-canceled ctx; got %s", elapsed)
 }
 
 // TestPublisher_Close_CtxExceeded_ReturnsTimeoutErr verifies that Close
-// honours the caller's ctx deadline when an in-flight Publish is blocked.
+// honors the caller's ctx deadline when an in-flight Publish is blocked.
 //
 // Strategy (F19): inject a blockingPublishChannel whose PublishWithContext
 // blocks on a gate channel. The test:
@@ -188,7 +188,7 @@ func newAutoConfirmChannel() *mockChannel {
 
 // blockingPublishChannel wraps a mockChannel and blocks PublishWithContext
 // on publishBlocker until it is closed or a 2-second safety net fires.
-// This provides a deterministic synchronisation point for close tests,
+// This provides a deterministic synchronization point for close tests,
 // replacing time.Sleep-based polling.
 //
 // ref: F19 — deterministic blocking point for Publisher.Close(ctx) tests
@@ -198,7 +198,7 @@ type blockingPublishChannel struct {
 }
 
 func (b *blockingPublishChannel) PublishWithContext(ctx context.Context, exchange, key string, mandatory, immediate bool, msg amqp.Publishing) error {
-	// Block until the test releases the gate, ctx is cancelled, or safety net fires.
+	// Block until the test releases the gate, ctx is canceled, or safety net fires.
 	select {
 	case <-b.publishBlocker:
 		// Gate released — proceed with underlying publish.

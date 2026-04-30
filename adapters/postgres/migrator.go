@@ -161,7 +161,7 @@ func (m *Migrator) Status(ctx context.Context) ([]MigrationStatus, error) {
 }
 
 // migrationName extracts the descriptive name from a goose migration path.
-// "001_create_outbox_entries.sql" → "create_outbox_entries"
+// "001_create_outbox_entries.sql" → "create_outbox_entries".
 func migrationName(path string, version int64) string {
 	base := path
 	if i := strings.LastIndex(path, "/"); i >= 0 {

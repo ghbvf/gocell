@@ -393,7 +393,7 @@ func isStringLiteral(expr ast.Expr, want string) bool {
 // Variable propagation: per-function localVarValues (built by buildLocalVarValues)
 // is used when evaluating if-conditions so that variable-form guards
 // (backend := shared.Topology.StorageBackend; if backend == "postgres")
-// are correctly recognised as conditional sites.
+// are correctly recognized as conditional sites.
 func hasUnconditionalPGCall(file *ast.File, pgAliases map[string]bool, funcName string) bool {
 	found := false
 	// Walk the entire file; when we encounter a CallExpr matching <pgAlias>.<funcName>,
@@ -500,7 +500,7 @@ func hasUnconditionalPGCall(file *ast.File, pgAliases map[string]bool, funcName 
 // function body.
 func TestStorageBackendPGWiring01_VariablePropagation(t *testing.T) {
 	// Positive fixture: variable assigned from StorageBackend selector, then
-	// compared to "postgres" — detector must recognise the if-block as a PG branch.
+	// compared to "postgres" — detector must recognize the if-block as a PG branch.
 	const fixtureVarFormPositive = `package fake
 import adapterpg "github.com/ghbvf/gocell/adapters/postgres"
 func Provide(shared *struct{ Topology struct{ StorageBackend string } }) {
@@ -590,7 +590,7 @@ func Provide() {
 
 // TestStorageBackendPGWiring01_VariablePropagation_LiteralPostgresVar verifies
 // that a variable explicitly assigned the literal "postgres" is also tracked,
-// so `backend := "postgres"; if backend == "postgres"` is recognised.
+// so `backend := "postgres"; if backend == "postgres"` is recognized.
 // This is an edge case — production code should use the StorageBackend selector
 // form — but the tracker supports it for robustness.
 func TestStorageBackendPGWiring01_VariablePropagation_LiteralPostgresVar(t *testing.T) {

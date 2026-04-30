@@ -19,7 +19,7 @@ import (
 )
 
 // mockVerifier implements IntentTokenVerifier for testing. Intent-specific
-// behaviour is tested in middleware_intent_test.go.
+// behavior is tested in middleware_intent_test.go.
 type mockVerifier struct {
 	claims Claims
 	err    error

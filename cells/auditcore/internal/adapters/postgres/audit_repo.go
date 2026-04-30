@@ -109,7 +109,7 @@ func (r *AuditRepository) GetRange(ctx context.Context, from, to int) ([]*domain
 }
 
 // Query retrieves audit entries matching the given filters with keyset pagination.
-// Requires composite index: CREATE INDEX idx_audit_entries_ts_id ON audit_entries (timestamp DESC, id ASC)
+// Requires composite index: CREATE INDEX idx_audit_entries_ts_id ON audit_entries (timestamp DESC, id ASC).
 func (r *AuditRepository) Query(ctx context.Context, filters ports.AuditFilters, params query.ListParams) ([]*domain.AuditEntry, error) {
 	b := query.NewBuilder()
 	b.Append("SELECT id, event_id, event_type, actor_id, timestamp, payload, prev_hash, hash FROM audit_entries WHERE 1=1")

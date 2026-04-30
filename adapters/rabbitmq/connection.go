@@ -743,7 +743,7 @@ var _ lifecycle.ManagedResource = (*Connection)(nil)
 
 // Checkers returns the rabbitmq_ready probe for /readyz integration.
 //
-// The probe wraps Health(ctx) which honours ctx (early cancel) and reads the
+// The probe wraps Health(ctx) which honors ctx (early cancel) and reads the
 // in-memory state machine fed by NotifyClose. No broker round-trip per probe —
 // that would amplify load on every /readyz hit. Liveness vs readiness signals
 // come from the reconnect loop's NotifyClose feedback.
@@ -774,11 +774,11 @@ func (c *Connection) Worker() worker.Worker {
 //
 // It signals closeCh (stopping the reconnect loop), drains the channel pool,
 // then closes the underlying AMQP connection in a goroutine so that ctx
-// expiry is honoured even if the broker handshake takes longer than the
+// expiry is honored even if the broker handshake takes longer than the
 // caller's budget allows.
 //
 // closeCh signaling and channel-pool drain run unconditionally, even when
-// ctx is already cancelled — these are local state-machine transitions that
+// ctx is already canceled — these are local state-machine transitions that
 // must happen on every Close to prevent the reconnect loop from leaking
 // past process-shutdown. Only the AMQP network handshake is gated by ctx
 // via adapterutil.CloseWithDeadline.
@@ -821,7 +821,7 @@ func (c *Connection) Close(ctx context.Context) error {
 
 	// conn.Close() performs a network handshake (AMQP connection.close
 	// frame exchange) and may block. The helper runs it in a goroutine so
-	// the caller's context budget is honoured. A pre-cancelled ctx makes
+	// the caller's context budget is honored. A pre-canceled ctx makes
 	// the helper return ctx.Err() without dialing the broker — closeCh and
 	// the channel pool above have already been cleaned up.
 	return adapterutil.CloseWithDeadline(ctx, "rabbitmq", func() error {
@@ -836,7 +836,7 @@ func (c *Connection) Close(ctx context.Context) error {
 }
 
 // WaitConnected blocks until the connection is established, a permanent error
-// occurs, or ctx is cancelled.
+// occurs, or ctx is canceled.
 //
 // The re-validation loop detects stale channel references caused by concurrent
 // reconnectLoop activity (RMQ-RACE-01 fix).
@@ -881,7 +881,7 @@ func (c *Connection) WaitConnected(ctx context.Context) error {
 			c.mu.RUnlock()
 			return err
 		case <-ctx.Done():
-			return errcode.Wrap(ErrAdapterAMQPConnect, "rabbitmq: wait for connection cancelled", ctx.Err())
+			return errcode.Wrap(ErrAdapterAMQPConnect, "rabbitmq: wait for connection canceled", ctx.Err())
 		}
 	}
 }

@@ -29,7 +29,7 @@ const (
 	defaultRelayDeadRetentionPeriod = 30 * 24 * time.Hour
 )
 
-// RelayConfig configures the outbox relay behaviour.
+// RelayConfig configures the outbox relay behavior.
 // Extracted from adapters/postgres/outbox_relay.go to live at the runtime layer
 // so future relay implementations (non-PG) can share the same config surface.
 type RelayConfig struct {
@@ -83,7 +83,7 @@ type RelayConfig struct {
 
 // DefaultRelayConfig returns a RelayConfig with sensible defaults.
 // Field values are identical to adapters/postgres DefaultRelayConfig to ensure
-// zero behaviour change during Phase C migration.
+// zero behavior change during Phase C migration.
 func DefaultRelayConfig() RelayConfig {
 	return RelayConfig{
 		PollInterval:         defaultRelayPollInterval,

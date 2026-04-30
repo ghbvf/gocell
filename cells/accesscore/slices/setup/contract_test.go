@@ -32,7 +32,7 @@ func TestHttpAuthSetupStatusV1Serve(t *testing.T) {
 	c.MustRejectResponse(t, []byte(`{"data":{}}`))
 
 	// Also exercise the real handler and feed its recorded output through the
-	// contract validator so serialisation bugs would surface.
+	// contract validator so serialization bugs would surface.
 	svc := newService(t, mem.NewUserRepository(), mem.NewRoleRepository(), nil)
 	h := setup.NewHandler(svc)
 	req := httptest.NewRequest(http.MethodGet, c.HTTP.Path, nil)

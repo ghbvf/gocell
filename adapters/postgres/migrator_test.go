@@ -12,7 +12,7 @@ import (
 )
 
 // stubMigrationFS returns a minimal valid goose-annotated migration FS
-// suitable for unit tests that only validate constructor behaviour.
+// suitable for unit tests that only validate constructor behavior.
 func stubMigrationFS() fstest.MapFS {
 	return fstest.MapFS{
 		"001_stub.sql": &fstest.MapFile{

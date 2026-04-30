@@ -442,7 +442,7 @@ func (c *Client) Health(ctx context.Context) error {
 // Close releases the underlying Redis connection, bounded by ctx.
 //
 // go-redis Client.Close() is synchronous and may block on in-flight commands.
-// Close wraps it in a goroutine so the caller's shutdown budget is honoured;
+// Close wraps it in a goroutine so the caller's shutdown budget is honored;
 // if ctx expires, in-flight commands may be abandoned (process-exit semantics).
 //
 // ref: uber-go/fx app.go StopTimeout — ctx as shared shutdown budget.

@@ -16,7 +16,7 @@ import (
 const DefaultTimeout = 30 * time.Second
 
 // Hook is a function that runs during graceful shutdown. It receives a context
-// that will be cancelled after the shutdown timeout expires.
+// that will be canceled after the shutdown timeout expires.
 type Hook func(ctx context.Context) error
 
 // Manager coordinates graceful shutdown.
@@ -55,7 +55,7 @@ func (m *Manager) Register(h Hook) {
 // a joined error if any hook returned a non-nil error.
 //
 // Note: if the shutdown timeout expires mid-hook, the per-hook context is
-// cancelled. A hook that respects ctx.Done() and returns ctx.Err() will cause
+// canceled. A hook that respects ctx.Done() and returns ctx.Err() will cause
 // Wait to return that error via the hook's error. If all hooks return nil (they
 // completed before the deadline), Wait returns nil — it does not return
 // context.DeadlineExceeded on its own.
@@ -73,7 +73,7 @@ func (m *Manager) Wait() error {
 	return m.runHooks(ctx)
 }
 
-// NotifyContext returns a context that is cancelled when an OS shutdown signal
+// NotifyContext returns a context that is canceled when an OS shutdown signal
 // is received (per-OS set: SIGINT+SIGTERM on Unix, os.Interrupt elsewhere).
 // Callers must call the returned cancel func to release resources.
 //

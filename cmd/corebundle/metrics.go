@@ -16,7 +16,7 @@ import (
 // metricsTokenHeader names the request header used to authenticate
 // /metrics scrapers when a token is configured. Mirrors the X-Readyz-Token
 // convention for /readyz?verbose — keeping the same shape for all
-// control-plane endpoints lets operators standardise scraper config.
+// control-plane endpoints lets operators standardize scraper config.
 const metricsTokenHeader = "X-Metrics-Token"
 
 // withMetricsTokenGuard wraps h so requests without a matching

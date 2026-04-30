@@ -12,7 +12,7 @@ import (
 // middleware.validMethods is intentional — divergence would let Mount accept
 // a method that the public-endpoint or password-reset compilers later reject
 // at FinalizeAuth time. Mount validation is the first gate; later compilers
-// act as defence in depth.
+// act as defense in depth.
 var validRouteMethods = map[string]bool{
 	http.MethodGet:     true,
 	http.MethodHead:    true,

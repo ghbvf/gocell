@@ -34,7 +34,7 @@ import (
 //   - mws:        non-JWT middleware functions to install on the listener mux.
 //   - routerOpts: router.Options for JWT (WithAuthMiddleware).
 //   - describe:   human-readable summary for startup logs.
-//   - err:        non-nil when a plan is not recognised (defensive; sealed interface
+//   - err:        non-nil when a plan is not recognized (defensive; sealed interface
 //     means this branch is theoretically unreachable).
 func (b *Bootstrap) applyListenerAuthChain(
 	ref cell.ListenerRef,

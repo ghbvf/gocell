@@ -20,7 +20,7 @@ const defaultSweeperHookName = "command.sweeper"
 // waits for the goroutine to exit within the bootstrap stop budget.
 //
 // ref: uber-go/fx lifecycle Hook — start returns promptly; long-running work
-// is owned by the hook and cancelled from OnStop.
+// is owned by the hook and canceled from OnStop.
 type SweeperLifecycle struct {
 	Name         string
 	Sweeper      *kcommand.Sweeper

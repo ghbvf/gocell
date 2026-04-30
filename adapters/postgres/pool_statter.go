@@ -22,7 +22,7 @@ func (s *pgPoolStatter) PoolName() string { return s.name }
 
 // Snapshot reads a fresh stat sample from pgxpool and projects it onto the
 // neutral Snapshot fields. Returns a zero-value snapshot if the pool has
-// not been initialised (defensive guard consistent with Pool.PoolStats).
+// not been initialized (defensive guard consistent with Pool.PoolStats).
 func (s *pgPoolStatter) Snapshot() poolstats.Snapshot {
 	if s.pool == nil || s.pool.inner == nil {
 		return poolstats.Snapshot{}

@@ -23,7 +23,7 @@ type ConfigCoreModule struct {
 	// KeyProviderOverride bypasses env-based KeyProvider construction when
 	// non-nil. Production code leaves this unset; tests use it to inject a
 	// fake KeyProvider (e.g. one that also implements
-	// kernel/lifecycle.ManagedResource) and assert wiring behaviour without
+	// kernel/lifecycle.ManagedResource) and assert wiring behavior without
 	// touching GOCELL_CONFIGCORE_KEY_PROVIDER / GOCELL_CONFIGCORE_MASTER_KEY / Vault.
 	KeyProviderOverride kcrypto.KeyProvider
 }

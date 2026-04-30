@@ -314,7 +314,7 @@ func (ts *TargetSelector) matchFromAssemblyPath(f string, cellSet map[string]str
 // contractIDFromPath extracts a contract ID from a file path under contracts/.
 // It takes everything between "contracts/" and the filename, strips the trailing
 // slash, and joins with dots.
-// Example: "contracts/http/auth/login/v1/contract.yaml" -> "http.auth.login.v1"
+// Example: "contracts/http/auth/login/v1/contract.yaml" -> "http.auth.login.v1".
 func (ts *TargetSelector) contractIDFromPath(f string) string {
 	// Remove the "contracts/" prefix.
 	rest := strings.TrimPrefix(f, "contracts/")
