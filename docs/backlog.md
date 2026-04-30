@@ -2,6 +2,8 @@
 
 > **v1.0 发布前 PR 待办清单**：[`docs/plans/202604301129-027-release-v1.0-readiness.md`](plans/202604301129-027-release-v1.0-readiness.md) — **36 PR / ~43-56 工作日**（P0 阻塞 25 PR + CI/工程基线 7 PR + 架构杠杆 4 PR，含 PG 接入主线 8 PR + E1/E2 API 减重 2 PR + 5 维评分 ≥ 10 的架构项 4 PR）
 >
+> **v1.0 GA 后 / v1.1 路线图**：[`docs/plans/202604301204-028-post-v1.0-leverage-and-v1.1-roadmap.md`](plans/202604301204-028-post-v1.0-leverage-and-v1.1-roadmap.md) — 13 PR / 10-14 周（Batch 1 Codegen 全栈 + archtest 升级 / Batch 2 应用层 + 错误库 / Batch 3 装备期；E8/E12 永久 won't-do）
+>
 > 基线: `origin/develop @ 0f8f737e`（2026-04-30，最新合入 PR #337）
 >
 > 最新合并 PR：#337 / #334 / #335 / #336 / #333 / #332 / #331 / #316 / #325 / #324 / #326 / #323 / #322 / #321 / #320（截至 2026-04-30）
