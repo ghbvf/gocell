@@ -223,10 +223,10 @@ type EventRouter interface {
 // composable validation at config load time.
 type SubscriptionValidator func(outbox.Subscription) error
 
-// SubscriptionValidatorRegistrar lets composition roots inject registration-time
+// SubscriptionValidatorAdder lets composition roots inject registration-time
 // validators. Implementations of EventRouter MAY also implement this interface;
 // composition roots type-assert at wiring time.
-type SubscriptionValidatorRegistrar interface {
+type SubscriptionValidatorAdder interface {
 	AddSubscriptionValidator(SubscriptionValidator)
 }
 

@@ -92,7 +92,7 @@ type Router struct {
 
 // Compile-time interface checks.
 var _ cell.EventRouter = (*Router)(nil)
-var _ cell.SubscriptionValidatorRegistrar = (*Router)(nil)
+var _ cell.SubscriptionValidatorAdder = (*Router)(nil)
 
 // New creates a Router that will use the given Subscriber for all subscriptions.
 func New(sub outbox.Subscriber, opts ...Option) *Router {
