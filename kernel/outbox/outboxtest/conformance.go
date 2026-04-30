@@ -701,6 +701,7 @@ func testSubscribeBlocksUntilCancel(t *testing.T, features Features, constructor
 
 	_, sub := constructor(t)
 	ctx, cancel := context.WithCancel(t.Context())
+	t.Cleanup(cancel)
 
 	subscribeReturned := make(chan error, 1)
 	go func() {
@@ -742,7 +743,9 @@ func testCloseTerminatesSubscribers(t *testing.T, _ Features, constructor PubSub
 	}()
 	waitForSubscription(t, ctx, sub, topic, "")
 
-	assertNoError(t, sub.Close(t.Context()))
+	closeCtx, closeCancel := context.WithTimeout(t.Context(), defaultTimeout)
+	defer closeCancel()
+	assertNoError(t, sub.Close(closeCtx))
 
 	select {
 	case <-subscribeReturned:
