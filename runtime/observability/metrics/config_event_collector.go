@@ -35,6 +35,8 @@ func (NoopConfigEventCollector) RecordEventProcess(string, string, ConfigEventPr
 }
 
 func (NoopConfigEventCollector) RecordEventSettlement(string, string, string, outbox.SettlementResult) {
+	// Intentionally empty: callers can inject this collector when config-event
+	// metrics are disabled while keeping service code free of nil checks.
 }
 
 type providerConfigEventCollector struct {
