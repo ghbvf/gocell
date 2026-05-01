@@ -231,6 +231,48 @@ linters:
             - github.com/google/uuid
             - github.com/jackc/pgx
             - golang.org/x/crypto
+        # Per-example cells-isolation rules. Examples are public-facing demos
+        # of the framework's architecture; they must follow the SAME cell
+        # discipline as platform cells/ (no cross-layer shortcuts) — otherwise
+        # the demos undermine the framework's credibility. Each rule mirrors
+        # cells-isolation in shape and adds the own-example subtree to the
+        # allow list. Cross-example imports are denied by construction (each
+        # rule allows only its OWN example path).
+        example-cells-isolation-demo:
+          list-mode: strict
+          files:
+            - "**/examples/demo/cells/**"
+            - "!**/examples/demo/cells/**/*_test.go"
+          allow:
+            - $gostd
+            - github.com/ghbvf/gocell/kernel
+            - github.com/ghbvf/gocell/pkg
+            - github.com/ghbvf/gocell/runtime
+            - github.com/ghbvf/gocell/examples/demo
+        example-cells-isolation-iotdevice:
+          list-mode: strict
+          files:
+            - "**/examples/iotdevice/cells/**"
+            - "!**/examples/iotdevice/cells/**/*_test.go"
+          allow:
+            - $gostd
+            - github.com/ghbvf/gocell/kernel
+            - github.com/ghbvf/gocell/pkg
+            - github.com/ghbvf/gocell/runtime
+            - github.com/ghbvf/gocell/examples/iotdevice
+            - github.com/google/uuid
+        example-cells-isolation-todoorder:
+          list-mode: strict
+          files:
+            - "**/examples/todoorder/cells/**"
+            - "!**/examples/todoorder/cells/**/*_test.go"
+          allow:
+            - $gostd
+            - github.com/ghbvf/gocell/kernel
+            - github.com/ghbvf/gocell/pkg
+            - github.com/ghbvf/gocell/runtime
+            - github.com/ghbvf/gocell/examples/todoorder
+            - github.com/google/uuid
 
     forbidigo:
       forbid:

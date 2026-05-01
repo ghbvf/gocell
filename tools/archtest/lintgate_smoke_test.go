@@ -204,6 +204,48 @@ func buildLintGateCases() []lintGateCase {
 			},
 			expectFindings: []lintGateFinding{{linter: "revive", file: "runtime/r.go"}},
 		},
+		{
+			// Examples are public-facing demos and must follow the SAME cell
+			// discipline as platform cells/ — they must not short-circuit to
+			// adapters. Per-example strict allow-list catches this even though
+			// CLAUDE.md says examples can depend on all layers (that latitude
+			// is for assembly/main glue, NOT for example cells that demo the
+			// architectural pattern).
+			name: "depguard_example_cell_imports_adapters_denied",
+			files: map[string]string{
+				"examples/iotdevice/cells/foo/c.go": "package foo\n\nimport _ \"github.com/ghbvf/gocell/adapters\"\n",
+				"adapters/stub.go":                  stub("adapters"),
+			},
+			expectFindings: []lintGateFinding{{linter: "depguard", file: "examples/iotdevice/cells/foo/c.go"}},
+		},
+		{
+			// Cross-example imports are denied: each example is a self-contained
+			// demo. iotdevice cell importing todoorder/cells/* would mean
+			// example boundaries are porous — defeating the demo value.
+			// (Use a public — non-internal/ — sibling package so Go's own
+			// internal-package typecheck does not preempt depguard.)
+			name: "depguard_cross_example_import_denied",
+			files: map[string]string{
+				"examples/iotdevice/cells/foo/c.go":    "package foo\n\nimport _ \"github.com/ghbvf/gocell/examples/todoorder/cells/bar\"\n",
+				"examples/todoorder/cells/bar/stub.go": "package bar\n",
+			},
+			expectFindings: []lintGateFinding{{linter: "depguard", file: "examples/iotdevice/cells/foo/c.go"}},
+		},
+		{
+			// Positive: example cell legitimately importing kernel + own
+			// subtree must NOT fire. Negative case for the per-example rule —
+			// if the per-example allow-list is misconfigured (own subtree not
+			// allowed), this case fails.
+			name: "depguard_example_cell_own_subtree_allowed",
+			files: map[string]string{
+				"examples/iotdevice/cells/foo/c.go": "package foo\n\nimport (\n" +
+					"\t_ \"github.com/ghbvf/gocell/kernel\"\n" +
+					"\t_ \"github.com/ghbvf/gocell/examples/iotdevice/cells/foo/internal\"\n)\n",
+				"examples/iotdevice/cells/foo/internal/stub.go": stub("internal"),
+				"kernel/stub.go": stub("kernel"),
+			},
+			expectNoFindings: []lintGateFinding{{linter: "depguard", file: "examples/iotdevice/cells/foo/c.go"}},
+		},
 	}
 }
 
