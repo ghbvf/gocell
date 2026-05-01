@@ -1126,9 +1126,11 @@ func TestDiscardPublisher_TypedNil_NoPanic(t *testing.T) {
 	var pub Publisher = p // interface non-nil at Go level
 
 	// Go interface nil semantics: pub != nil because it carries type info,
-	// but the underlying pointer IS nil — document both with reflect.
+	// but the underlying pointer IS nil — document both with reflect (testify
+	// NotNil treats typed-nil as nil, so we check the interface type header
+	// directly to express the runtime invariant unambiguously).
 	assert.True(t, reflect.ValueOf(pub).IsNil(), "underlying *DiscardPublisher pointer must be nil")
-	assert.NotNil(t, pub, "typed nil wrapped in interface must not be interface-nil")
+	assert.NotNil(t, reflect.TypeOf(pub), "interface header must carry type info even when underlying pointer is nil")
 	assert.NotPanics(t, func() {
 		_ = pub.Publish(context.Background(), "test.topic", []byte(`{}`))
 	}, "Publish on typed nil must not panic")

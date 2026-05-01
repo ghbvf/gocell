@@ -27,6 +27,8 @@ linters:
     - funlen
     # 依赖管控
     - gomodguard
+    # nolint 治理：所有 //nolint:... 必须带 // <reason>，且必须指明 linter 名
+    - nolintlint
 
   settings:
     gocognit:
@@ -95,6 +97,18 @@ linters:
 
     whitespace:
       multi-func: false  # multi-line signature 后空行检查过严，关闭（默认仅检查函数体首尾空行）
+
+    nolintlint:
+      # //nolint not actually suppressing anything must be removed (catches
+      # stale nolints after the underlying issue is fixed).
+      allow-unused: false
+      # Empty array means: every linter requires an explanation. No carve-outs.
+      allow-no-explanation: []
+      # //nolint:<linter> // <reason> — both the linter name and reason are
+      # mandatory. R2-approved nolints must use the prefix "R2-approved: ..."
+      # so future readers can see the historical decision.
+      require-explanation: true
+      require-specific: true
 
     gomodguard:
       blocked:
