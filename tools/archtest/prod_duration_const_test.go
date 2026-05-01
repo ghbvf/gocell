@@ -19,12 +19,12 @@ import (
 	"go/ast"
 	"go/token"
 	"go/types"
-	"path/filepath"
 	"sort"
 	"strings"
 	"testing"
 
 	"github.com/ghbvf/gocell/tools/archtest/internal/typeseval"
+	"github.com/ghbvf/gocell/tools/internal/fileroles"
 	"github.com/ghbvf/gocell/tools/internal/prodscan"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -65,11 +65,10 @@ func TestProdDurationConst(t *testing.T) {
 			}
 			visited[abs] = true
 
-			if prodDurationExcludeAbs(root, abs) {
+			rel, ok := fileroles.Rel(root, abs)
+			if !ok || !fileroles.IsProductionCode(rel) {
 				continue
 			}
-			rel, _ := filepath.Rel(root, abs)
-			rel = filepath.ToSlash(rel)
 
 			violations = append(violations, scanProdDurationAST(p.Fset, file, rel, p.TypesInfo)...)
 		}
@@ -84,45 +83,8 @@ func TestProdDurationConst(t *testing.T) {
 			"ref: docs/plans/202604272358-2-2-ci-batch2-k8s-verify.md PR-CI-6")
 }
 
-// prodDurationExcludeAbs reports whether the absolute path should be skipped.
-func prodDurationExcludeAbs(root, abs string) bool {
-	rel, err := filepath.Rel(root, abs)
-	if err != nil {
-		return true
-	}
-	rel = filepath.ToSlash(rel)
-	// Reject paths outside the module root (dependency packages).
-	if strings.HasPrefix(rel, "../") || filepath.IsAbs(rel) {
-		return true
-	}
-	switch {
-	case strings.HasSuffix(rel, "_test.go"):
-		return true
-	case strings.HasPrefix(rel, "tools/archtest/"):
-		return true
-	case strings.HasPrefix(rel, "examples/"):
-		return true
-	case strings.HasPrefix(rel, "vendor/"):
-		return true
-	case strings.HasPrefix(rel, "generated/"):
-		return true
-	case strings.HasPrefix(rel, "testdata/"):
-		return true
-	case strings.Contains(rel, "/locktest/"):
-		return true
-	case strings.Contains(rel, "/outboxtest/"):
-		return true
-	case strings.Contains(rel, "/storetest/"):
-		return true
-	case strings.Contains(rel, "/healthtest/"):
-		return true
-	case strings.HasSuffix(rel, "/conformance.go"):
-		return true
-	case strings.Contains(rel, "test") && strings.HasSuffix(rel, "/conformance.go"):
-		return true
-	}
-	return false
-}
+// File-role classification is delegated to tools/internal/fileroles; see that
+// package for the canonical predicate IsProductionCode.
 
 // scanProdDurationAST walks a single parsed file's AST using a universal walk:
 // for each top-level declaration that is not a package-level const block, it

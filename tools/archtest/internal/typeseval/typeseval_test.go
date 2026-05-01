@@ -225,6 +225,15 @@ func TestSharedResolver_Singleton(t *testing.T) {
 // TestSharedResolver_ConcurrentInit verifies that concurrent callers with a
 // cache-miss key all receive the same *Resolver and the race detector stays
 // clean. Each goroutine uses the same unique pattern so only one Load occurs.
+//
+// This is also the regression guard for singleflight deduplication: if the
+// loader were called once per goroutine (no singleflight) each call would
+// build its own *Resolver and the assert.Same would fail — N distinct
+// pointers would race-write to sharedCache, and the goroutines that
+// already returned would never see the "winning" Resolver. The current
+// SharedResolver releases sharedMu during LoadPackages and lets
+// singleflight collapse the in-flight calls; this test panics-out under
+// `-race` if either property regresses.
 func TestSharedResolver_ConcurrentInit(t *testing.T) {
 	root := findArchTestModuleRoot(t)
 	pattern := "./tools/archtest/internal/typeseval/..."

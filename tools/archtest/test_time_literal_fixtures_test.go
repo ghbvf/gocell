@@ -18,6 +18,7 @@ import (
 	"testing"
 
 	"github.com/ghbvf/gocell/tools/archtest/internal/typeseval"
+	"github.com/ghbvf/gocell/tools/internal/fileroles"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/tools/go/packages"
@@ -47,17 +48,11 @@ func runTestTimeFixtureScan(t *testing.T, fixtureDir string) []string {
 			}
 			visited[abs] = true
 
-			rel, err := filepath.Rel(fixtureDir, abs)
-			if err != nil || rel == "" {
-				rel = filepath.Base(abs)
-			}
-			rel = filepath.ToSlash(rel)
-
-			// Fixtures live under tools/archtest/testdata, which the production
-			// filter excludes; pass the fixture as its own root so the include
-			// predicate sees a clean relative path and can apply the *_test.go
-			// suffix rule.
-			if !testTimeLiteralIncludeAbs(fixtureDir, abs) {
+			// Fixtures live in their own ad-hoc module rooted at fixtureDir;
+			// passing fixtureDir as modRoot to fileroles.Rel produces clean
+			// relative paths that exercise the *_test.go include rule.
+			rel, ok := fileroles.Rel(fixtureDir, abs)
+			if !ok || !fileroles.IsTestCode(rel) {
 				continue
 			}
 
