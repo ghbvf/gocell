@@ -60,6 +60,18 @@ linters:
       threshold: 150
 
     gosec:
+      excludes:
+        # G404 weak random: jitter/sample/log-dedup paths in this repo have no
+        # cryptographic requirement; math/rand/v2 is the correct choice. Keep
+        # the rule globally off so we don't regress to crypto/rand workarounds.
+        - G404
+        # G706 log injection (taint analysis): gosec taints r.RemoteAddr /
+        # r.Method / r.URL.Path inside net/http handlers and refuses to clear
+        # the taint via strings.Map sanitize helpers. Audit logs need these
+        # fields. Project-level decision: turn G706 off; rely on slog's
+        # structured-attr encoding (no format-string interpolation) to avoid
+        # actual injection.
+        - G706
       config:
         G101:
           pattern: "(?i)passwd|pass|password|pwd|secret|token|apikey"
@@ -113,6 +125,32 @@ linters:
               reason: "satori/go.uuid 已 archived (防再入)"
 
   exclusions:
+    rules:
+      # Test fixtures are written under t.TempDir() and never shipped to
+      # production; permissions of 0o644/0o755 there are convenience for
+      # debug, not a security boundary. gosec G306/G301 in production paths
+      # is fixed at the call site (chmod to 0o600/0o750).
+      - path: _test\.go
+        linters:
+          - gosec
+        text: "G30(0|1|2|6)"
+      - path: ^testdata/
+        linters:
+          - gosec
+        text: "G30(0|1|2|6)"
+      # tools/archtest and tools/metricschema scan the repo working tree to
+      # produce the static governance verdict; they walk filepath/Walk and
+      # ReadFile under a developer-owned tree. G122 (TOCTOU via walk
+      # callback) and G703 (path traversal taint after filepath.Clean) are
+      # not relevant in this trusted scanner context.
+      - path: ^tools/archtest/
+        linters:
+          - gosec
+        text: "G122"
+      - path: ^tools/metricschema/
+        linters:
+          - gosec
+        text: "G70(2|3)"
     paths:
       - generated
       - vendor

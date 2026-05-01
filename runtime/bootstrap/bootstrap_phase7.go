@@ -14,6 +14,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math"
 	"net"
 	"net/http"
 	"sort"
@@ -158,6 +159,11 @@ func closeOwnedSockets(servers []boundServer) {
 func (b *Bootstrap) phase7ServeAll(servers []boundServer) chan error {
 	n := len(servers)
 	httpErrCh := make(chan error, n)
+	if n > math.MaxInt32 {
+		// In practice we ever have ≤5 listeners; cap defensively so the
+		// int32 pending counter stays consistent.
+		n = math.MaxInt32
+	}
 	pending := int32(n)
 	for _, bs := range servers {
 		go func() {

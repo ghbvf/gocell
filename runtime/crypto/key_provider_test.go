@@ -32,12 +32,12 @@ func (h *fakeKeyHandle) Encrypt(_ context.Context, plaintext, aad []byte) (ciphe
 	h.counter++
 	// nonce = 12-byte counter value
 	nonce = make([]byte, 12)
-	nonce[11] = byte(h.counter)
+	nonce[11] = byte(h.counter & 0xff)
 	// edk = key id bytes (stand-in for wrapped DEK)
 	edk = []byte(h.id)
 
 	ct := make([]byte, 1+len(aad)+len(plaintext))
-	ct[0] = byte(len(aad))
+	ct[0] = byte(len(aad) & 0xff)
 	copy(ct[1:], aad)
 	for i, b := range plaintext {
 		ct[1+len(aad)+i] = b ^ 0x42

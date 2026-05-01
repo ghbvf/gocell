@@ -139,7 +139,7 @@ func (f *fakeVaultClient) Write(ctx context.Context, path string, data map[strin
 		}
 		dek := make([]byte, bits)
 		for i := range dek {
-			dek[i] = byte(0x77 ^ i)
+			dek[i] = byte((0x77 ^ i) & 0xff)
 		}
 		wrapped := xorBytes(dek, f.masterKey[:len(dek)])
 		vaultCipher := fmt.Sprintf("vault:v%d:%s",
@@ -636,7 +636,7 @@ func TestVaultTransitHandle_KeyIDFromEdkPrefix(t *testing.T) {
 		override.datakeyCalls.Add(1)
 		dek := make([]byte, 32)
 		for i := range dek {
-			dek[i] = byte(0x77 ^ i)
+			dek[i] = byte((0x77 ^ i) & 0xff)
 		}
 		wrapped := xorBytes(dek, override.masterKey[:len(dek)])
 		return map[string]any{

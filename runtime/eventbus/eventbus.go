@@ -9,10 +9,9 @@ package eventbus
 
 import (
 	"context"
-	crand "crypto/rand"
-	"encoding/binary"
 	"errors"
 	"log/slog"
+	"math/rand/v2"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -523,21 +522,8 @@ func (b *InMemoryEventBus) handleInvalidDisposition(
 // Delegates to outbox.ExponentialDelay for overflow-safe computation, capped at maxRetryDelay.
 func retryDelay(attempt int) time.Duration {
 	base := outbox.ExponentialDelay(baseRetryDelay, maxRetryDelay, attempt)
-	jitter := time.Duration(cryptoRandInt64N(int64(baseRetryDelay)))
+	jitter := time.Duration(rand.Int64N(int64(baseRetryDelay)))
 	return base + jitter
-}
-
-// cryptoRandInt64N returns a non-negative random int64 in [0, n) using
-// crypto/rand. Falls back to 0 on read failure (safe: worst case is no jitter).
-func cryptoRandInt64N(n int64) int64 {
-	if n <= 0 {
-		return 0
-	}
-	var b [8]byte
-	if _, err := crand.Read(b[:]); err != nil {
-		return 0
-	}
-	return int64(binary.LittleEndian.Uint64(b[:])>>1) % n
 }
 
 // awaitRetry sleeps for the retry delay then returns true, or returns false

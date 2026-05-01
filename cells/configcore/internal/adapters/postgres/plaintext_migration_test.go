@@ -345,7 +345,7 @@ type aadAwareTransformer struct {
 
 func (t *aadAwareTransformer) Encrypt(_ context.Context, pt, aad []byte) ([]byte, string, []byte, []byte, error) {
 	var lenBuf [4]byte
-	binary.BigEndian.PutUint32(lenBuf[:], uint32(len(aad)))
+	binary.BigEndian.PutUint32(lenBuf[:], uint32(len(aad)&0xffffffff))
 	ct := make([]byte, 0, 4+len(aad)+len(pt))
 	ct = append(ct, lenBuf[:]...)
 	ct = append(ct, aad...)

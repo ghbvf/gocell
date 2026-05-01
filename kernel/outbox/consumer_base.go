@@ -184,11 +184,14 @@ func ExponentialDelay(base, maxDelay time.Duration, attempt int) time.Duration {
 	if base <= 0 {
 		return 0
 	}
+	if attempt < 0 {
+		return 0
+	}
 	maxSafeShift := 63 - bits.Len64(uint64(base))
 	if attempt > maxSafeShift {
 		return maxDelay
 	}
-	delay := base * (exponentialDelayBase << uint(attempt))
+	delay := base * (exponentialDelayBase << attempt)
 	if delay <= 0 || delay > maxDelay {
 		return maxDelay
 	}
