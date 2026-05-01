@@ -207,13 +207,38 @@ func buildSharedReplayDeps(ctx context.Context, topo bootstrap.Topology) (shared
 	}, nil
 }
 
-func (d sharedReplayDeps) closeRedisAfterFailedLoad(ctx context.Context, loaded bool) {
-	if loaded {
-		return
+// resolveListenerAddrs returns primary / internal / health bind addresses,
+// applying default ports when the matching env var is unset:
+//
+//   - primary  → `:8080`
+//   - internal → `127.0.0.1:9090` (loopback by default; service-token gated
+//     in every mode; operators binding to a VPC interface must set
+//     GOCELL_HTTP_INTERNAL_ADDR explicitly)
+//   - health   → `127.0.0.1:9091` (separate loopback port; real-mode
+//     PodIP/Service probes must set a Pod-reachable bind such as `:9091`,
+//     or explicitly opt into same-netns access with GOCELL_HTTP_HEALTH_LOCAL_ONLY=1)
+func resolveListenerAddrs() (primary, internal, health string) {
+	primary = os.Getenv("GOCELL_HTTP_PRIMARY_ADDR")
+	if primary == "" {
+		primary = ":8080"
 	}
-	closeRedisClientAfterFailedLoad(ctx, d.RedisClient)
+	internal = os.Getenv("GOCELL_HTTP_INTERNAL_ADDR")
+	if internal == "" {
+		internal = "127.0.0.1:9090"
+	}
+	health = os.Getenv("GOCELL_HTTP_HEALTH_ADDR")
+	if health == "" {
+		health = "127.0.0.1:9091"
+	}
+	return
 }
 
+// closeRedisClientAfterFailedLoad is the single source of truth for "close
+// Redis with nil-safe + slog warn". Two callers, both following the same
+// `if !loaded { close }` defer pattern (one inside buildSharedReplayDeps for
+// inner-construction failure, one in buildSharedDeps for outer-composition
+// failure after replay deps are already attached). The structure is mirrored
+// at both sites so the two scopes can be visually compared in one read.
 func closeRedisClientAfterFailedLoad(ctx context.Context, client *adapterredis.Client) {
 	if client == nil {
 		return
@@ -468,31 +493,14 @@ func LoadSharedDepsFromEnv(ctx context.Context) (*SharedDeps, error) {
 	}
 	loaded := false
 	defer func() {
-		replay.closeRedisAfterFailedLoad(ctx, loaded)
+		if !loaded {
+			closeRedisClientAfterFailedLoad(ctx, replay.RedisClient)
+		}
 	}()
 
 	eb := eventbus.New()
 
-	primaryAddr := os.Getenv("GOCELL_HTTP_PRIMARY_ADDR")
-	if primaryAddr == "" {
-		primaryAddr = ":8080"
-	}
-	internalAddr := os.Getenv("GOCELL_HTTP_INTERNAL_ADDR")
-	if internalAddr == "" {
-		// Default to loopback for local development; startup still requires
-		// GOCELL_SERVICE_SECRET so the listener is service-token guarded in
-		// every mode. Operators binding to an internal VPC interface must set
-		// GOCELL_HTTP_INTERNAL_ADDR explicitly.
-		internalAddr = "127.0.0.1:9090"
-	}
-	healthAddr := os.Getenv("GOCELL_HTTP_HEALTH_ADDR")
-	if healthAddr == "" {
-		// Separate loopback port for local /healthz /readyz /metrics access.
-		// Real-mode PodIP/Service probes must set a Pod-reachable bind such as
-		// :9091, or explicitly opt into same-netns access with
-		// GOCELL_HTTP_HEALTH_LOCAL_ONLY=1.
-		healthAddr = "127.0.0.1:9091"
-	}
+	primaryAddr, internalAddr, healthAddr := resolveListenerAddrs()
 
 	internalGuard, err := internalGuardFromEnv(adapterMode, replay.NonceStore)
 	if err != nil {
