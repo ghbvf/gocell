@@ -17,6 +17,7 @@ import (
 	"github.com/ghbvf/gocell/cells/accesscore/slices/sessionvalidate"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/testutil/sloghelper"
+	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/auth/refresh"
 	refreshmem "github.com/ghbvf/gocell/runtime/auth/refresh/memstore"
@@ -43,7 +44,7 @@ func init() {
 
 func newTestRefreshStore() refresh.Store {
 	clock := storetest.NewFakeClock(time.Now())
-	return refreshmem.MustNew(refresh.Policy{ReuseInterval: 2 * time.Second, MaxAge: time.Hour}, clock, nil)
+	return refreshmem.MustNew(refresh.Policy{ReuseInterval: testtime.D2s, MaxAge: time.Hour}, clock, nil)
 }
 
 type typedNilRefreshStore struct {
@@ -103,7 +104,7 @@ func newTestServiceWithClock(seedUsers ...string) (*Service, *mem.SessionReposit
 		_ = userRepo.Create(context.Background(), u)
 	}
 	clock := storetest.NewFakeClock(time.Now())
-	refreshStore := refreshmem.MustNew(refresh.Policy{ReuseInterval: 2 * time.Second, MaxAge: time.Hour}, clock, nil)
+	refreshStore := refreshmem.MustNew(refresh.Policy{ReuseInterval: testtime.D2s, MaxAge: time.Hour}, clock, nil)
 	svc := MustNewService(sessionRepo, roleRepo, userRepo, refreshStore, testIssuer, slog.Default())
 	return svc, sessionRepo, refreshStore, clock
 }
@@ -326,7 +327,7 @@ func TestService_Refresh_TokenRotation(t *testing.T) {
 
 	// Advance the clock past the ReuseInterval (2s) so the old token is no longer
 	// in the grace window and will be rejected as a reuse attack.
-	clock.Advance(3 * time.Second)
+	clock.Advance(testtime.D3s)
 
 	// Presenting the old wire token again should be rejected (reuse after grace).
 	_, err = svc.Refresh(context.Background(), wire1)

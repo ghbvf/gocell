@@ -36,6 +36,7 @@ import (
 	"github.com/ghbvf/gocell/cells/accesscore/slices/sessionlogin"
 	"github.com/ghbvf/gocell/kernel/cell/celltest"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/auth/refresh"
 	refreshmem "github.com/ghbvf/gocell/runtime/auth/refresh/memstore"
@@ -55,7 +56,7 @@ var e2eTestKeySet, _, _ = auth.MustNewTestKeySet()
 // WithIssuerAudiencesFromSlice(["gocell"]) must match the e2eVerifier's
 // WithExpectedAudiences("gocell") so that VerifyIntent passes audience validation.
 var e2eIssuer = func() *auth.JWTIssuer {
-	i, err := auth.NewJWTIssuer(e2eTestKeySet, "gocell-accesscore", 15*time.Minute,
+	i, err := auth.NewJWTIssuer(e2eTestKeySet, "gocell-accesscore", testtime.D15min,
 		auth.WithIssuerAudiencesFromSlice([]string{"gocell"}))
 	if err != nil {
 		panic("e2e test setup: " + err.Error())
@@ -99,7 +100,7 @@ func newE2EFixture() *e2eFixture {
 	sessionRepo := mem.NewSessionRepository()
 	roleRepo := mem.NewRoleRepository()
 	refreshStore := refreshmem.MustNew(
-		refresh.Policy{ReuseInterval: 2 * time.Second, MaxAge: time.Hour},
+		refresh.Policy{ReuseInterval: testtime.D2s, MaxAge: time.Hour},
 		realClock{}, nil,
 	)
 

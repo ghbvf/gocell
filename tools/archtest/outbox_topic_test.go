@@ -96,7 +96,7 @@ func TestSecurityTopicsDoNotOptInFailOpen(t *testing.T) {
 // checkOutboxTopicFailOpenRule loads module packages with full type info and
 // scans production Go files for OUTBOX-TOPIC-FAILOPEN-01 violations.
 func checkOutboxTopicFailOpenRule(root string) ([]outboxTopicViolation, error) {
-	r, err := typeseval.SharedResolver(root, prodscan.Patterns(root)...)
+	r, err := typeseval.SharedResolver(root, false, nil, prodscan.Patterns(root)...)
 	if err != nil {
 		return nil, err
 	}
@@ -325,7 +325,7 @@ func TestSecurityTopicsDoNotOptInFailOpen_RegressionFixtures(t *testing.T) {
 
 	for _, c := range cases {
 		t.Run(c.pattern, func(t *testing.T) {
-			r, err := typeseval.NewResolver(fixturesRoot, c.pattern)
+			r, err := typeseval.SharedResolver(fixturesRoot, false, nil, c.pattern)
 			require.NoError(t, err, "load fixture package %s", c.pattern)
 
 			var violations []outboxTopicViolation

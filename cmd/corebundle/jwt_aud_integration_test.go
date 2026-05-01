@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -90,5 +91,5 @@ func TestBuildJWTDeps_VerifierAudience_MatchesIssuerDefault(t *testing.T) {
 	)
 	require.NoError(t, err)
 	assert.Equal(t, "user-1", claims.Subject)
-	assert.WithinDuration(t, time.Now().Add(auth.DefaultAccessTokenTTL), claims.ExpiresAt, 5*time.Second)
+	assert.WithinDuration(t, time.Now().Add(auth.DefaultAccessTokenTTL), claims.ExpiresAt, testtime.EventuallyLong)
 }

@@ -12,9 +12,22 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// busEventually2x is testtime.EventuallyShort × 2 for standard eventually timeouts.
+const busEventually2x = 2 * testtime.EventuallyShort
+
+// busEventually3x is testtime.EventuallyShort × 3.
+const busEventually3x = 3 * testtime.EventuallyShort
+
+// busEventually5x is testtime.EventuallyShort × 5 for longer eventually timeouts.
+const busEventually5x = 5 * testtime.EventuallyShort
+
+// busEventually10x is testtime.EventuallyShort × 10 for retry-exhaustion tests.
+const busEventually10x = 10 * testtime.EventuallyShort
 
 // makeTestEnvelope wraps payload bytes in a valid v1 wire envelope for topic.
 // All test Publish calls must use this helper to satisfy the fail-closed
@@ -89,7 +102,7 @@ func TestPublish_EnvelopePayload_UnwrappedBeforeDelivery(t *testing.T) {
 		mu.Lock()
 		defer mu.Unlock()
 		return got.ID != ""
-	}, time.Second, 10*time.Millisecond)
+	}, testtime.EventuallyShort, testtime.D10ms)
 
 	cancel()
 	<-done
@@ -144,7 +157,7 @@ func TestPublish_InvalidEnvelope_Rejected(t *testing.T) {
 	// Dead letter should also record the dropped message for diagnostics.
 	require.Eventually(t, func() bool {
 		return bus.DeadLetterLen() > 0
-	}, time.Second, 5*time.Millisecond, "invalid envelope must be routed to dead letter")
+	}, testtime.EventuallyShort, testtime.FastPoll, "invalid envelope must be routed to dead letter")
 
 	assert.False(t, handlerCalled.Load(), "subscriber handler must not be called for invalid envelope")
 
@@ -190,7 +203,7 @@ func TestPublishSubscribe(t *testing.T) {
 		mu.Lock()
 		defer mu.Unlock()
 		return len(received) == 2
-	}, time.Second, 10*time.Millisecond)
+	}, testtime.EventuallyShort, testtime.D10ms)
 
 	cancel()
 	<-done
@@ -234,12 +247,12 @@ func TestSubscribe_RetryAndDeadLetter(t *testing.T) {
 	// Wait for all retries to complete (3 attempts with delays: 100+200+400 = 700ms).
 	assert.Eventually(t, func() bool {
 		return attempts.Load() >= 3
-	}, 3*time.Second, 50*time.Millisecond)
+	}, testtime.EventuallyDefault, testtime.MediumPoll)
 
 	// Message should be in dead letter.
 	assert.Eventually(t, func() bool {
 		return bus.DeadLetterLen() == 1
-	}, time.Second, 50*time.Millisecond)
+	}, testtime.EventuallyShort, testtime.MediumPoll)
 
 	dl := bus.DrainDeadLetters()
 	require.Len(t, dl, 1)
@@ -277,7 +290,7 @@ func TestSubscribe_RejectGoesDirectlyToDeadLetter(t *testing.T) {
 	// Should go directly to dead letter on first attempt (no retries).
 	assert.Eventually(t, func() bool {
 		return bus.DeadLetterLen() == 1
-	}, time.Second, 50*time.Millisecond)
+	}, testtime.EventuallyShort, testtime.MediumPoll)
 
 	assert.Equal(t, int32(1), attempts.Load(), "reject should not trigger retries")
 
@@ -317,7 +330,7 @@ func TestSubscribe_PermanentErrorInRequeue_RoutesToDeadLetter(t *testing.T) {
 	// Should go directly to dead letter on first attempt (no retries).
 	assert.Eventually(t, func() bool {
 		return bus.DeadLetterLen() == 1
-	}, time.Second, 50*time.Millisecond)
+	}, testtime.EventuallyShort, testtime.MediumPoll)
 
 	assert.Equal(t, int32(1), attempts.Load(),
 		"PermanentError in Requeue must not trigger retries")
@@ -389,7 +402,7 @@ func TestClose_ConcurrentPublishDoesNotPanic(t *testing.T) {
 
 	require.Eventually(t, func() bool {
 		return publishStarted.Load() == 1
-	}, time.Second, 10*time.Millisecond)
+	}, testtime.EventuallyShort, testtime.D10ms)
 	require.NoError(t, bus.Close(context.Background()))
 	stop.Store(true)
 	publishers.Wait()
@@ -446,14 +459,14 @@ func TestMultipleSubscribers(t *testing.T) {
 		defer bus.mu.RUnlock()
 		gs := bus.groupSubs["multi.topic"][""]
 		return gs != nil && len(gs.subs) == 2
-	}, time.Second, 5*time.Millisecond)
+	}, testtime.EventuallyShort, testtime.FastPoll)
 
 	err := bus.Publish(context.Background(), "multi.topic", makeSimpleEnvelope(t, "multi.topic"))
 	require.NoError(t, err)
 
 	assert.Eventually(t, func() bool {
 		return count1.Load() == 1 && count2.Load() == 1
-	}, time.Second, 10*time.Millisecond)
+	}, testtime.EventuallyShort, testtime.D10ms)
 
 	cancel()
 	wg.Wait()
@@ -484,7 +497,7 @@ func TestSubscribe_SuccessAfterRetry(t *testing.T) {
 
 	assert.Eventually(t, func() bool {
 		return attempts.Load() >= 3
-	}, 3*time.Second, 50*time.Millisecond)
+	}, testtime.EventuallyDefault, testtime.MediumPoll)
 
 	// Should NOT be in dead letter (succeeded on 3rd attempt).
 	assert.Equal(t, 0, bus.DeadLetterLen(), "message must not land in dead letter after successful retry")
@@ -584,7 +597,7 @@ func TestSubscribe_ReceiptCommittedOnAck(t *testing.T) {
 
 	assert.Eventually(t, func() bool {
 		return receipt.committed.Load()
-	}, time.Second, 10*time.Millisecond, "receipt should be committed on Ack")
+	}, testtime.EventuallyShort, testtime.D10ms, "receipt should be committed on Ack")
 
 	assert.False(t, receipt.released.Load(), "receipt should not be released on Ack")
 
@@ -617,7 +630,7 @@ func TestSubscribe_ReceiptReleasedOnReject(t *testing.T) {
 
 	assert.Eventually(t, func() bool {
 		return receipt.released.Load()
-	}, time.Second, 10*time.Millisecond, "receipt should be released on Reject")
+	}, testtime.EventuallyShort, testtime.D10ms, "receipt should be released on Reject")
 
 	assert.False(t, receipt.committed.Load(), "receipt should not be committed on Reject")
 
@@ -656,7 +669,7 @@ func TestSubscribe_ReceiptReleasedOnRequeue(t *testing.T) {
 	// Wait for all retries to exhaust.
 	assert.Eventually(t, func() bool {
 		return bus.DeadLetterLen() == 1
-	}, 5*time.Second, 50*time.Millisecond)
+	}, busEventually5x, testtime.MediumPoll)
 
 	receiptsMu.Lock()
 	defer receiptsMu.Unlock()
@@ -707,7 +720,7 @@ func TestSubscribe_ReceiptReleasedOnRetryExhaustion(t *testing.T) {
 	// Wait for retries to exhaust and message to land in dead letter.
 	assert.Eventually(t, func() bool {
 		return bus.DeadLetterLen() == 1
-	}, 5*time.Second, 50*time.Millisecond)
+	}, busEventually5x, testtime.MediumPoll)
 
 	receiptsMu.Lock()
 	defer receiptsMu.Unlock()
@@ -763,7 +776,7 @@ func TestSubscribe_ZeroValueDisposition_TreatedAsRequeue(t *testing.T) {
 	// Should exhaust retries and land in dead letter.
 	assert.Eventually(t, func() bool {
 		return bus.DeadLetterLen() == 1
-	}, 5*time.Second, 50*time.Millisecond)
+	}, busEventually5x, testtime.MediumPoll)
 
 	elapsed := time.Since(start)
 
@@ -820,7 +833,7 @@ func TestSubscribe_UnknownDisposition_TreatedAsRequeue(t *testing.T) {
 
 	assert.Eventually(t, func() bool {
 		return bus.DeadLetterLen() == 1
-	}, 5*time.Second, 50*time.Millisecond)
+	}, busEventually5x, testtime.MediumPoll)
 
 	elapsed := time.Since(start)
 
@@ -852,7 +865,7 @@ func TestSubscribe_InvalidDisposition_RespectsCtxCancel(t *testing.T) {
 				// After first attempt with invalid disposition, cancel ctx
 				// during backoff to verify early exit.
 				go func() {
-					time.Sleep(10 * time.Millisecond)
+					time.Sleep(testtime.D10ms)
 					cancel()
 				}()
 			}
@@ -868,7 +881,7 @@ func TestSubscribe_InvalidDisposition_RespectsCtxCancel(t *testing.T) {
 	// Subscribe should return promptly after cancel.
 	select {
 	case <-done:
-	case <-time.After(2 * time.Second):
+	case <-time.After(testtime.D2s):
 		t.Fatal("Subscribe did not exit after ctx cancel during invalid disposition backoff")
 	}
 
@@ -921,7 +934,7 @@ func TestConsumerGroup_SameGroup_CompetingConsumption(t *testing.T) {
 		defer bus.mu.RUnlock()
 		gs := bus.groupSubs["session.created"]["auditcore"]
 		return gs != nil && len(gs.subs) == 2
-	}, time.Second, 10*time.Millisecond, "both auditcore subscribers must register")
+	}, testtime.EventuallyShort, testtime.D10ms, "both auditcore subscribers must register")
 
 	// Publish 10 messages.
 	n := 10
@@ -933,7 +946,7 @@ func TestConsumerGroup_SameGroup_CompetingConsumption(t *testing.T) {
 	// Wait for all messages to be handled.
 	require.Eventually(t, func() bool {
 		return int(sub1Count.Load()+sub2Count.Load()) >= n
-	}, 2*time.Second, 10*time.Millisecond, "all messages should be consumed")
+	}, busEventually2x, testtime.D10ms, "all messages should be consumed")
 
 	cancel()
 	wg.Wait()
@@ -987,7 +1000,7 @@ func TestConsumerGroup_DifferentGroups_Fanout(t *testing.T) {
 		gsConfig := bus.groupSubs["session.created"]["configcore"]
 		return gsAudit != nil && len(gsAudit.subs) == 1 &&
 			gsConfig != nil && len(gsConfig.subs) == 1
-	}, time.Second, 10*time.Millisecond, "both group subscribers must register")
+	}, testtime.EventuallyShort, testtime.D10ms, "both group subscribers must register")
 
 	n := 5
 	for i := range n {
@@ -997,7 +1010,7 @@ func TestConsumerGroup_DifferentGroups_Fanout(t *testing.T) {
 
 	require.Eventually(t, func() bool {
 		return int(auditCount.Load()) >= n && int(configCount.Load()) >= n
-	}, 2*time.Second, 10*time.Millisecond, "both groups should receive all messages")
+	}, busEventually2x, testtime.D10ms, "both groups should receive all messages")
 
 	cancel()
 	wg.Wait()
@@ -1044,7 +1057,7 @@ func TestConsumerGroup_EmptyGroup_BackwardCompatible(t *testing.T) {
 		defer bus.mu.RUnlock()
 		gs := bus.groupSubs["events.v1"][""]
 		return gs != nil && len(gs.subs) == 2
-	}, time.Second, 10*time.Millisecond, "both empty-group subscribers must register")
+	}, testtime.EventuallyShort, testtime.D10ms, "both empty-group subscribers must register")
 
 	n := 5
 	for i := range n {
@@ -1054,7 +1067,7 @@ func TestConsumerGroup_EmptyGroup_BackwardCompatible(t *testing.T) {
 
 	require.Eventually(t, func() bool {
 		return int(sub1Count.Load()) >= n && int(sub2Count.Load()) >= n
-	}, 2*time.Second, 10*time.Millisecond, "both empty-group subs should get all messages")
+	}, busEventually2x, testtime.D10ms, "both empty-group subs should get all messages")
 
 	cancel()
 	wg.Wait()
@@ -1098,7 +1111,7 @@ func TestConsumerGroup_ConcurrentPublish_NoRace(t *testing.T) {
 		defer bus.mu.RUnlock()
 		gs := bus.groupSubs["race.topic"]["race-group"]
 		return gs != nil && len(gs.subs) == numSubs
-	}, time.Second, 10*time.Millisecond, "all race-group subscribers must register")
+	}, testtime.EventuallyShort, testtime.D10ms, "all race-group subscribers must register")
 
 	// Concurrent publishers hammering the same topic+group.
 	// Use shared counter for unique envelope IDs across goroutines.
@@ -1124,7 +1137,7 @@ func TestConsumerGroup_ConcurrentPublish_NoRace(t *testing.T) {
 	totalExpected := numPublishers * msgsPerPublisher
 	require.Eventually(t, func() bool {
 		return totalReceived.Load() >= int64(totalExpected)
-	}, 3*time.Second, 10*time.Millisecond,
+	}, busEventually3x, testtime.D10ms,
 		"all messages should be consumed: got %d, want %d", totalReceived.Load(), totalExpected)
 
 	cancel()
@@ -1180,7 +1193,7 @@ func TestInMemoryEventBus_StopIntake_NoOp(t *testing.T) {
 	// Wait for subscription to register.
 	select {
 	case <-subscribed:
-	case <-time.After(time.Second):
+	case <-time.After(testtime.EventuallyShort):
 		t.Fatal("subscribe goroutine did not register in time")
 	}
 
@@ -1190,7 +1203,7 @@ func TestInMemoryEventBus_StopIntake_NoOp(t *testing.T) {
 	select {
 	case e := <-received:
 		assert.Equal(t, topic, e.Topic, "received entry topic must match published topic")
-	case <-time.After(2 * time.Second):
+	case <-time.After(testtime.D2s):
 		t.Fatal("message not received after StopIntake — bus must remain functional")
 	}
 }
@@ -1227,7 +1240,7 @@ func TestReleaseReceipt_FailedRelease_LogsError(t *testing.T) {
 	// The message must land in dead letter despite the Release failure.
 	assert.Eventually(t, func() bool {
 		return bus.DeadLetterLen() == 1
-	}, time.Second, 10*time.Millisecond, "rejected message must reach dead letter even when Release fails")
+	}, testtime.EventuallyShort, testtime.D10ms, "rejected message must reach dead letter even when Release fails")
 
 	// Release was called (confirming the branch was reached).
 	assert.True(t, receipt.releaseCalled.Load(), "Release must be called on DispositionReject")
@@ -1312,7 +1325,7 @@ func TestSubscribe_CommitFailure_NotifiesCommitFailed(t *testing.T) {
 	// Wait for at least one CommitFailed notification and more than 1 attempt.
 	require.Eventually(t, func() bool {
 		return spy.len() > 0 && attempts.Load() > 1
-	}, 2*time.Second, 10*time.Millisecond, "spy must record CommitFailed and handler must be retried")
+	}, busEventually2x, testtime.D10ms, "spy must record CommitFailed and handler must be retried")
 
 	cancel()
 	<-done
@@ -1354,7 +1367,7 @@ func TestSubscribe_RetryExhausted_NotifiesRetryExhausted(t *testing.T) {
 		last := spy.last()
 		return last.Disposition == outbox.DispositionReject &&
 			last.Result == outbox.SettlementResultRetryExhausted
-	}, 10*time.Second, 10*time.Millisecond, "spy must receive Reject/RetryExhausted after retry exhaustion")
+	}, busEventually10x, testtime.D10ms, "spy must receive Reject/RetryExhausted after retry exhaustion")
 
 	cancel()
 	<-done

@@ -9,12 +9,16 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ghbvf/gocell/runtime/auth/refresh"
-	"github.com/ghbvf/gocell/runtime/auth/refresh/storetest"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/ghbvf/gocell/pkg/testutil/testtime"
+	"github.com/ghbvf/gocell/runtime/auth/refresh"
+	"github.com/ghbvf/gocell/runtime/auth/refresh/storetest"
 )
+
+const refreshTestOneWeek = 7 * 24 * time.Hour
 
 func TestPGRefreshStore_ContractSuite(t *testing.T) {
 	base, cleanup := setupPostgres(t)
@@ -186,7 +190,7 @@ func TestPGRefreshStore_DMLState(t *testing.T) {
 	require.NoError(t, migrator.Up(ctx))
 
 	clock := storetest.NewFakeClock(time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC))
-	policy := refresh.Policy{ReuseInterval: 2 * time.Second, MaxAge: 7 * 24 * time.Hour}
+	policy := refresh.Policy{ReuseInterval: testtime.D2s, MaxAge: refreshTestOneWeek}
 	store := MustNewRefreshStore(p.DB(), policy, clock, nil)
 
 	const sessionID = "sess-dml-state"
@@ -267,14 +271,14 @@ func TestPGRefreshStore_ReuseCascadeSurvivesAmbientRollback(t *testing.T) {
 	require.NoError(t, migrator.Up(ctx))
 
 	clock := storetest.NewFakeClock(time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC))
-	store := MustNewRefreshStore(p.DB(), refresh.Policy{ReuseInterval: 2 * time.Second, MaxAge: time.Hour}, clock, nil)
+	store := MustNewRefreshStore(p.DB(), refresh.Policy{ReuseInterval: testtime.D2s, MaxAge: time.Hour}, clock, nil)
 	txm := NewTxManager(p)
 
 	parentWire, _, err := store.Issue(ctx, "sess-reuse-ambient", "usr-reuse-ambient")
 	require.NoError(t, err)
 	childWire, _, err := store.Rotate(ctx, parentWire)
 	require.NoError(t, err)
-	clock.Advance(3 * time.Second)
+	clock.Advance(testtime.D3s)
 
 	err = txm.RunInTx(ctx, func(txCtx context.Context) error {
 		_, peekErr := store.Peek(txCtx, parentWire)
@@ -298,7 +302,7 @@ func TestPGRefreshStore_SessionLockRejectsChildValidatedBeforeCascade(t *testing
 	require.NoError(t, migrator.Up(ctx))
 
 	clock := storetest.NewFakeClock(time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC))
-	store := MustNewRefreshStore(p.DB(), refresh.Policy{ReuseInterval: 2 * time.Second, MaxAge: time.Hour}, clock, nil)
+	store := MustNewRefreshStore(p.DB(), refresh.Policy{ReuseInterval: testtime.D2s, MaxAge: time.Hour}, clock, nil)
 
 	parentWire, _, err := store.Issue(ctx, "sess-reuse-lock", "usr-reuse-lock")
 	require.NoError(t, err)
@@ -316,7 +320,7 @@ func TestPGRefreshStore_SessionLockRejectsChildValidatedBeforeCascade(t *testing
 		done <- rotateErr
 	}()
 
-	time.Sleep(100 * time.Millisecond)
+	time.Sleep(testtime.SlowPoll)
 	_, err = tx.Exec(ctx, revokeSessionSQL, clock.Now(), "sess-reuse-lock")
 	require.NoError(t, err)
 	require.NoError(t, tx.Commit(ctx))
@@ -324,7 +328,7 @@ func TestPGRefreshStore_SessionLockRejectsChildValidatedBeforeCascade(t *testing
 	select {
 	case err := <-done:
 		require.ErrorIs(t, err, refresh.ErrRejected)
-	case <-time.After(2 * time.Second):
+	case <-time.After(testtime.D2s):
 		t.Fatal("Rotate(child) did not unblock after reuse cascade committed")
 	}
 }

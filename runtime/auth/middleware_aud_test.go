@@ -13,10 +13,11 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 )
 
 // buildAudTestPair returns an issuer and verifier pair for audience tests.
@@ -24,7 +25,7 @@ import (
 func buildAudTestPair(t *testing.T) (*JWTIssuer, *JWTVerifier) {
 	t.Helper()
 	ks := mustTestKeySet(t)
-	issuer, err := NewJWTIssuer(ks, "test", 15*time.Minute)
+	issuer, err := NewJWTIssuer(ks, "test", testtime.D15min)
 	require.NoError(t, err)
 	verifier, err := NewJWTVerifier(ks, WithExpectedAudiences("gocell"))
 	require.NoError(t, err)

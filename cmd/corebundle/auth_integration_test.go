@@ -22,6 +22,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/query"
+	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/bootstrap"
 	"github.com/ghbvf/gocell/runtime/eventbus"
@@ -38,7 +39,7 @@ func (noopTxRunner) RunInTx(_ context.Context, fn func(context.Context) error) e
 
 var _ persistence.TxRunner = noopTxRunner{}
 
-var testHTTPClient = &http.Client{Timeout: 2 * time.Second}
+var testHTTPClient = &http.Client{Timeout: testtime.D2s}
 
 // TestAuthWiring_RealAssembly_ProtectedRoutes401 boots a real assembly
 // (accesscore + configcore + auditcore) with auth middleware and asserts
@@ -56,7 +57,7 @@ func TestAuthWiring_RealAssembly_ProtectedRoutes401(t *testing.T) {
 	privKey, pubKey := auth.MustGenerateTestKeyPair()
 	keySet, err := auth.NewKeySet(privKey, pubKey)
 	require.NoError(t, err)
-	jwtIssuer, err := auth.NewJWTIssuer(keySet, "test", 15*time.Minute,
+	jwtIssuer, err := auth.NewJWTIssuer(keySet, "test", testtime.D15min,
 		auth.WithIssuerAudiencesFromSlice([]string{"gocell"}))
 	require.NoError(t, err)
 	jwtVerifier, err := auth.NewJWTVerifier(keySet, auth.WithExpectedAudiences("gocell"))
@@ -108,7 +109,7 @@ func TestAuthWiring_RealAssembly_ProtectedRoutes401(t *testing.T) {
 		bootstrap.WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{cell.MustNewAuthJWTFromAssembly(asm)}, bootstrap.WithListenerNet(ln)),
 		withCorebundleTestInternalListener(t, newCorebundleLocalListener(t)),
 		bootstrap.WithPublisher(eb), bootstrap.WithSubscriber(eb),
-		bootstrap.WithShutdownTimeout(2*time.Second),
+		bootstrap.WithShutdownTimeout(testtime.D2s),
 	)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -123,7 +124,7 @@ func TestAuthWiring_RealAssembly_ProtectedRoutes401(t *testing.T) {
 		}
 		resp.Body.Close()
 		return resp.StatusCode == http.StatusOK
-	}, 3*time.Second, 50*time.Millisecond, "HTTP server did not become ready")
+	}, testtime.EventuallyDefault, testtime.MediumPoll, "HTTP server did not become ready")
 
 	// --- Protected routes: must return 401 without token ---
 	protectedRoutes := []struct {
@@ -228,7 +229,7 @@ func TestAuthWiring_RealAssembly_ProtectedRoutes401(t *testing.T) {
 	select {
 	case runErr := <-done:
 		assert.NoError(t, runErr)
-	case <-time.After(5 * time.Second):
+	case <-time.After(testtime.SelectShutdown):
 		t.Fatal("bootstrap did not shut down in time")
 	}
 }
@@ -252,7 +253,7 @@ func TestAuthWiring_InternalGuard_RequiresServiceToken(t *testing.T) {
 	privKey, pubKey := auth.MustGenerateTestKeyPair()
 	keySet, err := auth.NewKeySet(privKey, pubKey)
 	require.NoError(t, err)
-	jwtIssuer, err := auth.NewJWTIssuer(keySet, "guard-test", 15*time.Minute,
+	jwtIssuer, err := auth.NewJWTIssuer(keySet, "guard-test", testtime.D15min,
 		auth.WithIssuerAudiencesFromSlice([]string{"gocell"}))
 	require.NoError(t, err)
 	jwtVerifier, err := auth.NewJWTVerifier(keySet, auth.WithExpectedAudiences("gocell"))
@@ -324,7 +325,7 @@ func TestAuthWiring_InternalGuard_RequiresServiceToken(t *testing.T) {
 		bootstrap.WithListener(cell.InternalListener, internalLn.Addr().String(), internalAuthChain,
 			bootstrap.WithListenerNet(internalLn)),
 		bootstrap.WithPublisher(eb), bootstrap.WithSubscriber(eb),
-		bootstrap.WithShutdownTimeout(2*time.Second),
+		bootstrap.WithShutdownTimeout(testtime.D2s),
 	)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -340,7 +341,7 @@ func TestAuthWiring_InternalGuard_RequiresServiceToken(t *testing.T) {
 		}
 		resp.Body.Close()
 		return resp.StatusCode == http.StatusOK
-	}, 3*time.Second, 50*time.Millisecond, "HTTP server did not become ready")
+	}, testtime.EventuallyDefault, testtime.MediumPoll, "HTTP server did not become ready")
 
 	// PR-A14a primary isolation: primary listener must 404 any /internal/v1/*
 	// request — those routes never reach the public mux.
@@ -464,7 +465,7 @@ func TestAuthWiring_InternalGuard_RequiresServiceToken(t *testing.T) {
 	select {
 	case runErr := <-done:
 		assert.NoError(t, runErr)
-	case <-time.After(5 * time.Second):
+	case <-time.After(testtime.SelectShutdown):
 		t.Fatal("bootstrap did not shut down in time")
 	}
 }
@@ -484,7 +485,7 @@ func TestAuthWiring_HealthListener_PrimaryDoesNotServeHealthz(t *testing.T) {
 	privKey, pubKey := auth.MustGenerateTestKeyPair()
 	keySet, err := auth.NewKeySet(privKey, pubKey)
 	require.NoError(t, err)
-	jwtIssuer, err := auth.NewJWTIssuer(keySet, "health-test", 15*time.Minute,
+	jwtIssuer, err := auth.NewJWTIssuer(keySet, "health-test", testtime.D15min,
 		auth.WithIssuerAudiencesFromSlice([]string{"gocell"}))
 	require.NoError(t, err)
 	jwtVerifier, err := auth.NewJWTVerifier(keySet, auth.WithExpectedAudiences("gocell"))
@@ -536,7 +537,7 @@ func TestAuthWiring_HealthListener_PrimaryDoesNotServeHealthz(t *testing.T) {
 		bootstrap.WithListener(cell.HealthListener, healthLn.Addr().String(), []cell.ListenerAuth{cell.AuthNone{}},
 			bootstrap.WithListenerNet(healthLn)),
 		bootstrap.WithPublisher(eb), bootstrap.WithSubscriber(eb),
-		bootstrap.WithShutdownTimeout(2*time.Second),
+		bootstrap.WithShutdownTimeout(testtime.D2s),
 	)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -554,7 +555,7 @@ func TestAuthWiring_HealthListener_PrimaryDoesNotServeHealthz(t *testing.T) {
 		}
 		resp.Body.Close()
 		return resp.StatusCode == http.StatusOK
-	}, 3*time.Second, 50*time.Millisecond, "health listener did not become ready")
+	}, testtime.EventuallyDefault, testtime.MediumPoll, "health listener did not become ready")
 
 	// Health listener: /healthz and /readyz must return 200.
 	t.Run("health_listener_serves_healthz_200", func(t *testing.T) {
@@ -597,7 +598,7 @@ func TestAuthWiring_HealthListener_PrimaryDoesNotServeHealthz(t *testing.T) {
 	select {
 	case runErr := <-done:
 		assert.NoError(t, runErr)
-	case <-time.After(5 * time.Second):
+	case <-time.After(testtime.SelectShutdown):
 		t.Fatal("bootstrap did not shut down in time")
 	}
 }

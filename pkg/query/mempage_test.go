@@ -6,8 +6,15 @@ import (
 
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/query"
+	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+)
+
+const (
+	// mempageNs100/200 are sub-second precision offsets; not in testtime table.
+	mempageNs100 = 100 * time.Nanosecond
+	mempageNs200 = 200 * time.Nanosecond
 )
 
 // --- test helpers ---
@@ -250,8 +257,8 @@ func TestApplyCursor_TimeVsString_CrossType(t *testing.T) {
 	base := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
 	items := []testItem{
 		{ID: "1", CreatedAt: base},
-		{ID: "2", CreatedAt: base.Add(100 * time.Nanosecond)},
-		{ID: "3", CreatedAt: base.Add(200 * time.Nanosecond)},
+		{ID: "2", CreatedAt: base.Add(mempageNs100)},
+		{ID: "3", CreatedAt: base.Add(mempageNs200)},
 	}
 
 	// Cursor value is a string (as it would be after JSON decode from cursor token).
@@ -287,17 +294,17 @@ func TestApplyCursor_EmptyItems_WithCursor(t *testing.T) {
 func TestApplyCursor_MultiColumn_MixedDirection(t *testing.T) {
 	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	items := []testItem{
-		{ID: "1", CreatedAt: base.Add(2 * time.Second)},
-		{ID: "2", CreatedAt: base.Add(2 * time.Second)},
-		{ID: "3", CreatedAt: base.Add(time.Second)},
-		{ID: "4", CreatedAt: base.Add(time.Second)},
+		{ID: "1", CreatedAt: base.Add(testtime.D2s)},
+		{ID: "2", CreatedAt: base.Add(testtime.D2s)},
+		{ID: "3", CreatedAt: base.Add(testtime.D1s)},
+		{ID: "4", CreatedAt: base.Add(testtime.D1s)},
 		{ID: "5", CreatedAt: base},
 	}
 	// Sort: created_at DESC, id ASC. Cursor at (base+2s, "1").
 	// After cursor: items with same timestamp and id > "1", or earlier timestamps.
 	params := query.ListParams{
 		Limit:        10,
-		CursorValues: []any{base.Add(2 * time.Second), "1"},
+		CursorValues: []any{base.Add(testtime.D2s), "1"},
 		Sort: []query.SortColumn{
 			{Name: "created_at", Direction: query.SortDESC},
 			{Name: "id", Direction: query.SortASC},

@@ -8,6 +8,10 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+// testHookDuration is a unique sentinel used in TestHookEventFields to verify
+// that the Duration field is stored exactly as provided.
+const testHookDuration = 42 * time.Millisecond
+
 func TestHookPhaseConstants(t *testing.T) {
 	tests := []struct {
 		name  string
@@ -50,13 +54,13 @@ func TestHookEventFields(t *testing.T) {
 		CellID:   "accesscore",
 		Hook:     HookBeforeStart,
 		Outcome:  OutcomeFailure,
-		Duration: 42 * time.Millisecond,
+		Duration: testHookDuration,
 		Err:      err,
 	}
 	assert.Equal(t, "accesscore", evt.CellID)
 	assert.Equal(t, HookBeforeStart, evt.Hook)
 	assert.Equal(t, OutcomeFailure, evt.Outcome)
-	assert.Equal(t, 42*time.Millisecond, evt.Duration)
+	assert.Equal(t, testHookDuration, evt.Duration)
 	assert.Same(t, err, evt.Err)
 }
 

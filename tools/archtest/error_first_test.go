@@ -465,7 +465,7 @@ func scanFileForErrorFirstViolations(t *testing.T, abs, rel string) []errorFirst
 
 func scanErrorFirstConstructorsForTypedNilGuards(t *testing.T, root string) []errorFirstViolation {
 	t.Helper()
-	pkgs, errs, err := typeseval.LoadPackages(root, errorFirstPackagePatterns()...)
+	pkgs, errs, err := typeseval.LoadPackages(root, false, nil, errorFirstPackagePatterns()...)
 	require.NoError(t, err, "packages.Load")
 	require.Empty(t, errs, "packages.Load type errors")
 

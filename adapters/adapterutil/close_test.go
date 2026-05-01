@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/ghbvf/gocell/adapters/adapterutil"
+	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 )
 
 func TestCloseWithDeadline_PreCancelledContextStillInvokesCloseFn(t *testing.T) {
@@ -34,7 +35,7 @@ func TestCloseWithDeadline_PreCancelledContextStillInvokesCloseFn(t *testing.T) 
 	// Give it a short grace period since the goroutine may not have run yet.
 	select {
 	case <-done:
-	case <-time.After(100 * time.Millisecond):
+	case <-time.After(testtime.D100ms):
 		t.Fatal("closeFn was not invoked within 100ms — pre-canceled ctx must still run closeFn")
 	}
 	if !called.Load() {
@@ -68,12 +69,12 @@ func TestCloseWithDeadline_CloseReturnsErrorVerbatim(t *testing.T) {
 func TestCloseWithDeadline_DeadlineFiresBeforeClose(t *testing.T) {
 	t.Parallel()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	ctx, cancel := context.WithTimeout(context.Background(), testtime.D50ms)
 	defer cancel()
 
 	start := time.Now()
 	err := adapterutil.CloseWithDeadline(ctx, "test", func() error {
-		time.Sleep(500 * time.Millisecond)
+		time.Sleep(testtime.D500ms)
 		return nil
 	})
 	elapsed := time.Since(start)
@@ -81,7 +82,7 @@ func TestCloseWithDeadline_DeadlineFiresBeforeClose(t *testing.T) {
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("want context.DeadlineExceeded, got %v", err)
 	}
-	if elapsed > 200*time.Millisecond {
+	if elapsed > testtime.D200ms {
 		t.Errorf("deadline enforcement too slow: %v", elapsed)
 	}
 }
@@ -89,11 +90,11 @@ func TestCloseWithDeadline_DeadlineFiresBeforeClose(t *testing.T) {
 func TestCloseWithDeadline_CloseCompletesBeforeDeadline(t *testing.T) {
 	t.Parallel()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	ctx, cancel := context.WithTimeout(context.Background(), testtime.D500ms)
 	defer cancel()
 
 	err := adapterutil.CloseWithDeadline(ctx, "test", func() error {
-		time.Sleep(10 * time.Millisecond)
+		time.Sleep(testtime.D10ms)
 		return nil
 	})
 	if err != nil {
@@ -104,7 +105,7 @@ func TestCloseWithDeadline_CloseCompletesBeforeDeadline(t *testing.T) {
 func TestCloseWithDeadline_CloseErrorTakesPrecedenceOverDeadline(t *testing.T) {
 	t.Parallel()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	ctx, cancel := context.WithTimeout(context.Background(), testtime.D500ms)
 	defer cancel()
 
 	sentinel := errors.New("close failed")

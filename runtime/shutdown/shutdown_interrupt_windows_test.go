@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -39,7 +40,7 @@ func TestNotifyContext_Windows_RegistersInterrupt(t *testing.T) {
 	select {
 	case <-ctx.Done():
 		t.Fatal("context should not be done immediately after NotifyContext")
-	case <-time.After(50 * time.Millisecond):
+	case <-time.After(testtime.MediumPoll):
 	}
 
 	// Cancel via parent — the only portable way to drive the Windows path

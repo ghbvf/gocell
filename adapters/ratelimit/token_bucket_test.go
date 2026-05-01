@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/runtime/http/middleware"
 )
 
@@ -73,8 +74,8 @@ func TestLimiter_StaleEntryCleanup(t *testing.T) {
 	l := New(Config{
 		Rate:            10,
 		Burst:           10,
-		CleanupInterval: 50 * time.Millisecond,
-		StaleAfter:      100 * time.Millisecond,
+		CleanupInterval: testtime.MediumPoll,
+		StaleAfter:      testtime.SlowPoll,
 	})
 	t.Cleanup(func() {
 		if err := l.Close(context.Background()); err != nil {
@@ -91,7 +92,7 @@ func TestLimiter_StaleEntryCleanup(t *testing.T) {
 	// up, with a generous total timeout (2s) to avoid flakiness.
 	require.Eventually(t, func() bool {
 		return l.Len() == 0
-	}, 2*time.Second, 25*time.Millisecond, "stale entries should be cleaned up")
+	}, testtime.D2s, testtime.D25ms, "stale entries should be cleaned up")
 }
 
 func TestLimiter_ConcurrentAccess(t *testing.T) {
@@ -140,7 +141,7 @@ func TestLimiter_DefaultConfig(t *testing.T) {
 func TestLimiter_Close_AcceptsCtx(t *testing.T) {
 	l := New(Config{CleanupInterval: time.Minute})
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), testtime.CtxDefault)
 	defer cancel()
 
 	err := l.Close(ctx)
@@ -160,7 +161,7 @@ func TestLimiter_Close_Idempotent(t *testing.T) {
 // TestLimiter_Close_StopsCleanupGoroutine verifies that after Close(ctx),
 // the background cleanup goroutine no longer runs.
 func TestLimiter_Close_StopsCleanupGoroutine(t *testing.T) {
-	l := New(Config{CleanupInterval: 10 * time.Millisecond, StaleAfter: time.Millisecond})
+	l := New(Config{CleanupInterval: testtime.D10ms, StaleAfter: time.Millisecond})
 	_ = l.Allow("10.0.0.1") // create an entry
 
 	ctx := context.Background()

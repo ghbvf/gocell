@@ -37,7 +37,10 @@ import (
 	vaultapi "github.com/hashicorp/vault/api"
 
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 )
+
+const transitProviderD45s = 45 * time.Second
 
 // testReauthCredential is a fixture client credential value used in fakeAuthMethod test doubles.
 const testReauthCredential = "re-auth-fixture"
@@ -1030,7 +1033,7 @@ func TestTokenRenewalWorker_Start_StopsOnContextCancel(t *testing.T) {
 	// canceling — ensures the assertion below is race-free.
 	select {
 	case <-fw.startedCh:
-	case <-time.After(2 * time.Second):
+	case <-time.After(testtime.D2s):
 		t.Fatal("watcher.Start() was not called within 2s")
 	}
 
@@ -1041,7 +1044,7 @@ func TestTokenRenewalWorker_Start_StopsOnContextCancel(t *testing.T) {
 		if err != nil {
 			t.Errorf("Start() returned error on ctx cancel, want nil: %v", err)
 		}
-	case <-time.After(2 * time.Second):
+	case <-time.After(testtime.D2s):
 		t.Fatal("Start() did not return after context cancel")
 	}
 }
@@ -1071,7 +1074,7 @@ func TestTokenRenewalWorker_Start_HandlesRenewalNotification(t *testing.T) {
 
 		select {
 		case <-fw.startedCh:
-		case <-time.After(2 * time.Second):
+		case <-time.After(testtime.D2s):
 			t.Fatal("watcher.Start() was not called within 2s")
 		}
 
@@ -1090,7 +1093,7 @@ func TestTokenRenewalWorker_Start_HandlesRenewalNotification(t *testing.T) {
 			if err != nil {
 				t.Errorf("Start() returned error on renewal+cancel, want nil: %v", err)
 			}
-		case <-time.After(2 * time.Second):
+		case <-time.After(testtime.D2s):
 			t.Fatal("Start() did not return after context cancel")
 		}
 	})
@@ -1116,7 +1119,7 @@ func TestTokenRenewalWorker_Start_HandlesRenewalNotification(t *testing.T) {
 
 		select {
 		case <-fw.startedCh:
-		case <-time.After(2 * time.Second):
+		case <-time.After(testtime.D2s):
 			t.Fatal("watcher.Start() was not called within 2s")
 		}
 
@@ -1130,7 +1133,7 @@ func TestTokenRenewalWorker_Start_HandlesRenewalNotification(t *testing.T) {
 			if err != nil {
 				t.Errorf("Start() returned error after nil renewal+cancel, want nil: %v", err)
 			}
-		case <-time.After(2 * time.Second):
+		case <-time.After(testtime.D2s):
 			t.Fatal("Start() did not return after context cancel")
 		}
 	})
@@ -1164,7 +1167,7 @@ func TestTokenRenewalWorker_Start_ChannelClosed(t *testing.T) {
 		if err != nil {
 			t.Errorf("Start() on closed DoneCh must return nil, got: %v", err)
 		}
-	case <-time.After(2 * time.Second):
+	case <-time.After(testtime.D2s):
 		t.Fatal("Start() did not return after DoneCh closed")
 	}
 }
@@ -1200,7 +1203,7 @@ func TestTokenRenewalWorker_Start_HandlesDone(t *testing.T) {
 	fw.doneCh <- nil
 
 	// Give re-auth a moment to start, then cancel ctx to exit.
-	time.Sleep(50 * time.Millisecond)
+	time.Sleep(testtime.MediumPoll)
 	cancel()
 
 	select {
@@ -1209,7 +1212,7 @@ func TestTokenRenewalWorker_Start_HandlesDone(t *testing.T) {
 		if err != nil {
 			t.Errorf("Start() after ctx cancel must return nil, got: %v", err)
 		}
-	case <-time.After(2 * time.Second):
+	case <-time.After(testtime.D2s):
 		t.Fatal("Start() did not return after ctx cancel")
 	}
 }
@@ -1238,7 +1241,7 @@ func TestTokenRenewalWorker_Start_HandlesDoneWithError(t *testing.T) {
 	injectedErr := errcode.New(errcode.ErrKeyProviderTransient, "vault: token renewal failed")
 	fw.doneCh <- injectedErr
 
-	time.Sleep(50 * time.Millisecond)
+	time.Sleep(testtime.MediumPoll)
 	cancel()
 
 	select {
@@ -1246,7 +1249,7 @@ func TestTokenRenewalWorker_Start_HandlesDoneWithError(t *testing.T) {
 		if err != nil {
 			t.Errorf("Start() after ctx cancel must return nil, got: %v", err)
 		}
-	case <-time.After(2 * time.Second):
+	case <-time.After(testtime.D2s):
 		t.Fatal("Start() did not return after DoneCh fired with error")
 	}
 }
@@ -1654,8 +1657,8 @@ func TestResolveStartupTimeout_EnvOverride(t *testing.T) {
 		wantErr bool
 	}{
 		{name: "unset → default", env: "", want: defaultStartupTimeout},
-		{name: "45s override", env: "45s", want: 45 * time.Second},
-		{name: "2m override", env: "2m", want: 2 * time.Minute},
+		{name: "45s override", env: "45s", want: transitProviderD45s},
+		{name: "2m override", env: "2m", want: testtime.D2min},
 		{name: "malformed", env: "not-a-duration", wantErr: true},
 		{name: "zero rejected", env: "0s", wantErr: true},
 		{name: "negative rejected", env: "-1s", wantErr: true},

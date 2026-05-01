@@ -11,6 +11,8 @@ import (
 	kworker "github.com/ghbvf/gocell/kernel/worker"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 )
 
 // testWorker is a simple Worker implementation for testing.
@@ -66,7 +68,7 @@ func TestWorkerGroup_StartStop(t *testing.T) {
 	// Wait for workers to start.
 	assert.Eventually(t, func() bool {
 		return w1.started.Load() && w2.started.Load()
-	}, time.Second, 10*time.Millisecond)
+	}, testtime.EventuallyShort, testtime.D10ms)
 
 	// Stop workers.
 	cancel()
@@ -157,7 +159,7 @@ func (w *orderWorker) Stop(ctx context.Context) error {
 
 func TestPeriodicWorker_ExecutesFunction(t *testing.T) {
 	var count atomic.Int32
-	pw := NewPeriodicWorker(10*time.Millisecond, func(ctx context.Context) {
+	pw := NewPeriodicWorker(testtime.D10ms, func(ctx context.Context) {
 		count.Add(1)
 	})
 
@@ -170,7 +172,7 @@ func TestPeriodicWorker_ExecutesFunction(t *testing.T) {
 	// Wait for at least 3 executions.
 	assert.Eventually(t, func() bool {
 		return count.Load() >= 3
-	}, time.Second, 5*time.Millisecond)
+	}, testtime.EventuallyShort, testtime.FastPoll)
 
 	cancel()
 	<-done
@@ -178,7 +180,7 @@ func TestPeriodicWorker_ExecutesFunction(t *testing.T) {
 
 func TestPeriodicWorker_PanicIsolation(t *testing.T) {
 	var count atomic.Int32
-	pw := NewPeriodicWorker(10*time.Millisecond, func(ctx context.Context) {
+	pw := NewPeriodicWorker(testtime.D10ms, func(ctx context.Context) {
 		n := count.Add(1)
 		if n == 1 {
 			panic("test panic")
@@ -194,7 +196,7 @@ func TestPeriodicWorker_PanicIsolation(t *testing.T) {
 	// After panic on first call, subsequent calls should still work.
 	assert.Eventually(t, func() bool {
 		return count.Load() >= 3
-	}, time.Second, 5*time.Millisecond)
+	}, testtime.EventuallyShort, testtime.FastPoll)
 
 	cancel()
 	<-done
@@ -208,21 +210,21 @@ func TestPeriodicWorker_Stop(t *testing.T) {
 		done <- pw.Start(context.Background())
 	}()
 
-	time.Sleep(20 * time.Millisecond)
+	time.Sleep(testtime.D20ms)
 	err := pw.Stop(context.Background())
 	assert.NoError(t, err)
 
 	select {
 	case err := <-done:
 		assert.NoError(t, err)
-	case <-time.After(time.Second):
+	case <-time.After(testtime.EventuallyShort):
 		t.Fatal("periodic worker did not stop in time")
 	}
 }
 
 func TestPeriodicWorker_RestartAfterStop(t *testing.T) {
 	var count atomic.Int32
-	pw := NewPeriodicWorker(10*time.Millisecond, func(ctx context.Context) {
+	pw := NewPeriodicWorker(testtime.D10ms, func(ctx context.Context) {
 		count.Add(1)
 	})
 
@@ -234,7 +236,7 @@ func TestPeriodicWorker_RestartAfterStop(t *testing.T) {
 
 	assert.Eventually(t, func() bool {
 		return count.Load() >= 2
-	}, time.Second, 5*time.Millisecond)
+	}, testtime.EventuallyShort, testtime.FastPoll)
 
 	err := pw.Stop(context.Background())
 	require.NoError(t, err)
@@ -251,7 +253,7 @@ func TestPeriodicWorker_RestartAfterStop(t *testing.T) {
 
 	assert.Eventually(t, func() bool {
 		return count.Load() >= countAfterFirstStop+2
-	}, time.Second, 5*time.Millisecond)
+	}, testtime.EventuallyShort, testtime.FastPoll)
 
 	err = pw.Stop(context.Background())
 	require.NoError(t, err)
@@ -281,7 +283,7 @@ func TestWorkerGroup_CancelsSiblingsOnError(t *testing.T) {
 		// The group should have returned with the fail worker's error.
 		assert.Error(t, err)
 		assert.Equal(t, "boom", err.Error())
-	case <-time.After(3 * time.Second):
+	case <-time.After(testtime.EventuallyDefault):
 		t.Fatal("WorkerGroup.Start did not return after sibling failure — sibling was not canceled")
 	}
 }

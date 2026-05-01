@@ -15,6 +15,7 @@ import (
 
 	adapterpg "github.com/ghbvf/gocell/adapters/postgres"
 	kernelmetrics "github.com/ghbvf/gocell/kernel/observability/metrics"
+	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/runtime/bootstrap"
 	"github.com/ghbvf/gocell/runtime/crypto"
 	"github.com/ghbvf/gocell/tests/testutil"
@@ -207,7 +208,7 @@ func TestIntegration_AdminExists_OrphanSwept(t *testing.T) {
 	// Use a short-lived context: long enough for assembly init + lifecycle start
 	// (Steps 3-4.6), but we accept context.Canceled, sandbox-bind, or
 	// isBindError as acceptable outcomes — Sweep runs before TCP listen (Step 7).
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), testtime.CtxDefault)
 	defer cancel()
 
 	runErr := run(ctx)

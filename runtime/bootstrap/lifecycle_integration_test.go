@@ -21,12 +21,13 @@ import (
 	"time"
 
 	"github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 // integrationHTTPClient is used to prevent test hangs on stalled connections.
-var integrationHTTPClient = &http.Client{Timeout: 2 * time.Second}
+var integrationHTTPClient = &http.Client{Timeout: testtime.D2s}
 
 // newIntegrationListener creates a TCP listener on a random port.
 func newIntegrationListener(t *testing.T) net.Listener {
@@ -46,7 +47,7 @@ func waitForIntegrationHealthy(t *testing.T, addr string) {
 		}
 		resp.Body.Close()
 		return resp.StatusCode == http.StatusOK
-	}, 5*time.Second, 50*time.Millisecond, "HTTP server did not become ready")
+	}, testtime.EventuallyDefault, testtime.MediumPoll, "HTTP server did not become ready")
 }
 
 // TestLifecycleIntegration_HookStartStop_Ordering verifies that a registered
@@ -64,7 +65,7 @@ func TestLifecycleIntegration_HookStartStop_Ordering(t *testing.T) {
 	b := New(
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(ln)),
 		WithListener(cell.InternalListener, "127.0.0.1:0", []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(newIntegrationListener(t))),
-		WithShutdownTimeout(3*time.Second),
+		WithShutdownTimeout(testtime.D3s),
 		WithLifecycle(func(lc Lifecycle) {
 			_ = lc.Append(Hook{
 				Name: "timing-probe",
@@ -107,7 +108,7 @@ func TestLifecycleIntegration_HookStartStop_Ordering(t *testing.T) {
 	select {
 	case err := <-done:
 		require.NoError(t, err)
-	case <-time.After(5 * time.Second):
+	case <-time.After(testtime.D5s):
 		t.Fatal("b.Run did not return after cancel")
 	}
 
@@ -143,7 +144,7 @@ func TestLifecycleIntegration_HookPartialFailure_PreciseRollback(t *testing.T) {
 	integLn := newIntegrationListener(t)
 	b := New(
 		WithListener(cell.PrimaryListener, integLn.Addr().String(), []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(integLn)),
-		WithShutdownTimeout(3*time.Second),
+		WithShutdownTimeout(testtime.D3s),
 		WithLifecycle(func(lc Lifecycle) {
 			// Hook A: succeeds; its OnStop must run during rollback.
 			_ = lc.Append(Hook{

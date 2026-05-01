@@ -8,10 +8,15 @@ import (
 	"time"
 
 	"github.com/ghbvf/gocell/kernel/command"
+	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/goleak"
 )
+
+// testNoTimeoutHours is used to verify that NoTimeouts entries are not
+// expired even when now is far in the future (10 hours past creation).
+const testNoTimeoutHours = 10 * time.Hour
 
 // ---------------------------------------------------------------------------
 // SweepOnce tests
@@ -40,13 +45,13 @@ func TestSweepOnce_TerminalIgnored(t *testing.T) {
 		t.Run(s.String(), func(t *testing.T) {
 			t.Parallel()
 			e := command.NewEntry("cmd-1", "dev-1", "reboot", []byte(`{}`), command.Timeouts{
-				OverallDeadline: 1 * time.Second,
+				OverallDeadline: testtime.D1s,
 			}, created)
 			// Force terminal status
 			e.Status = s
 
 			// now is well past any deadline
-			now := created.Add(10 * time.Minute)
+			now := created.Add(testtime.D10min)
 			result := command.SweepOnce([]command.Entry{e}, now)
 			assert.Nil(t, result, "terminal entry %s must be ignored", s)
 		})
@@ -58,7 +63,7 @@ func TestSweepOnce_NoTimeoutsConfigured_NoTransitions(t *testing.T) {
 	created := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	e := command.NewEntry("cmd-1", "dev-1", "reboot", []byte(`{}`), command.Timeouts{}, created)
 	// No timeouts configured — no transitions expected regardless of time.
-	now := created.Add(10 * time.Hour)
+	now := created.Add(testNoTimeoutHours)
 	result := command.SweepOnce([]command.Entry{e}, now)
 	assert.Nil(t, result)
 }
@@ -67,10 +72,10 @@ func TestSweepOnce_ScheduleToSendExpired(t *testing.T) {
 	t.Parallel()
 	created := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	e := command.NewEntry("cmd-1", "dev-1", "reboot", []byte(`{}`), command.Timeouts{
-		ScheduleToSend: 30 * time.Second,
+		ScheduleToSend: testtime.D30s,
 	}, created)
 	// now is past ScheduleToSend deadline
-	now := created.Add(60 * time.Second)
+	now := created.Add(testtime.D60s)
 	result := command.SweepOnce([]command.Entry{e}, now)
 	require.Len(t, result, 1)
 	assert.Equal(t, "cmd-1", result[0].CommandID)
@@ -83,14 +88,14 @@ func TestSweepOnce_SendToCompleteExpired(t *testing.T) {
 	t.Parallel()
 	created := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	e := command.NewEntry("cmd-1", "dev-1", "reboot", []byte(`{}`), command.Timeouts{
-		SendToComplete: 5 * time.Minute,
+		SendToComplete: testtime.D5min,
 	}, created)
 	// Advance to Sent
-	sentAt := created.Add(10 * time.Second)
+	sentAt := created.Add(testtime.D10s)
 	require.NoError(t, command.AdvanceCommand(&e, command.StatusSent, sentAt))
 
 	// now is past SendToComplete deadline (sentAt + 5 min)
-	now := sentAt.Add(10 * time.Minute)
+	now := sentAt.Add(testtime.D10min)
 	result := command.SweepOnce([]command.Entry{e}, now)
 	require.Len(t, result, 1)
 	assert.Equal(t, "cmd-1", result[0].CommandID)
@@ -103,10 +108,10 @@ func TestSweepOnce_OverallExpired(t *testing.T) {
 	t.Parallel()
 	created := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	e := command.NewEntry("cmd-1", "dev-1", "reboot", []byte(`{}`), command.Timeouts{
-		OverallDeadline: 1 * time.Hour,
+		OverallDeadline: testtime.D1h,
 	}, created)
 	// now is past OverallDeadline
-	now := created.Add(2 * time.Hour)
+	now := created.Add(testtime.D2h)
 	result := command.SweepOnce([]command.Entry{e}, now)
 	require.Len(t, result, 1)
 	assert.Equal(t, "phase_overall_deadline", result[0].Reason)
@@ -119,11 +124,11 @@ func TestSweepOnce_PriorityOverallWinsAgainstPhase(t *testing.T) {
 	// Both ScheduleToSend AND OverallDeadline are exceeded.
 	// PhaseOverall has higher priority and should win.
 	e := command.NewEntry("cmd-1", "dev-1", "reboot", []byte(`{}`), command.Timeouts{
-		ScheduleToSend:  30 * time.Second,
-		OverallDeadline: 1 * time.Minute,
+		ScheduleToSend:  testtime.D30s,
+		OverallDeadline: testtime.D1min,
 	}, created)
 	// now exceeds both
-	now := created.Add(5 * time.Minute)
+	now := created.Add(testtime.D5min)
 	result := command.SweepOnce([]command.Entry{e}, now)
 	require.Len(t, result, 1)
 	// Overall wins
@@ -134,10 +139,10 @@ func TestSweepOnce_NotYetExpired(t *testing.T) {
 	t.Parallel()
 	created := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	e := command.NewEntry("cmd-1", "dev-1", "reboot", []byte(`{}`), command.Timeouts{
-		OverallDeadline: 1 * time.Hour,
+		OverallDeadline: testtime.D1h,
 	}, created)
 	// now is before deadline
-	now := created.Add(30 * time.Minute)
+	now := created.Add(testtime.D30min)
 	result := command.SweepOnce([]command.Entry{e}, now)
 	assert.Nil(t, result)
 }
@@ -147,10 +152,10 @@ func TestSweepOnce_SendToCompleteIgnoredForPending(t *testing.T) {
 	// Pending entry cannot trigger SendToComplete because SentAt is nil.
 	created := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	e := command.NewEntry("cmd-1", "dev-1", "reboot", []byte(`{}`), command.Timeouts{
-		SendToComplete: 5 * time.Minute,
+		SendToComplete: testtime.D5min,
 	}, created)
 	// e.Status == Pending, SentAt == nil
-	now := created.Add(10 * time.Minute)
+	now := created.Add(testtime.D10min)
 	result := command.SweepOnce([]command.Entry{e}, now)
 	assert.Nil(t, result, "SendToComplete cannot trigger for Pending entry (SentAt is nil)")
 }
@@ -160,18 +165,18 @@ func TestSweepOnce_CoversSentAndDelivered(t *testing.T) {
 	created := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	// Build a Sent entry and a Delivered entry, both past OverallDeadline.
 	sentEntry := command.NewEntry("cmd-sent", "dev-1", "reboot", []byte(`{}`), command.Timeouts{
-		OverallDeadline: 1 * time.Minute,
+		OverallDeadline: testtime.D1min,
 	}, created)
-	sentAt := created.Add(10 * time.Second)
+	sentAt := created.Add(testtime.D10s)
 	require.NoError(t, command.AdvanceCommand(&sentEntry, command.StatusSent, sentAt))
 
 	delivEntry := command.NewEntry("cmd-deliv", "dev-1", "reboot", []byte(`{}`), command.Timeouts{
-		OverallDeadline: 1 * time.Minute,
+		OverallDeadline: testtime.D1min,
 	}, created)
 	require.NoError(t, command.AdvanceCommand(&delivEntry, command.StatusSent, sentAt))
 	require.NoError(t, command.AdvanceCommand(&delivEntry, command.StatusDelivered, sentAt.Add(time.Second)))
 
-	now := created.Add(5 * time.Minute) // past OverallDeadline for both
+	now := created.Add(testtime.D5min) // past OverallDeadline for both
 	result := command.SweepOnce([]command.Entry{sentEntry, delivEntry}, now)
 	require.Len(t, result, 2, "Sweeper must expire both Sent and Delivered entries past deadline")
 	byID := map[string]command.ExpiryTransition{
@@ -267,7 +272,7 @@ func TestSweeper_Start_CtxCancelExits(t *testing.T) {
 	s := &command.Sweeper{
 		Scanner:  scanner,
 		Queue:    q,
-		Interval: 10 * time.Millisecond,
+		Interval: testtime.D10ms,
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
@@ -276,7 +281,7 @@ func TestSweeper_Start_CtxCancelExits(t *testing.T) {
 	select {
 	case err := <-done:
 		assert.NoError(t, err)
-	case <-time.After(2 * time.Second):
+	case <-time.After(testtime.D2s):
 		t.Fatal("Start did not exit after ctx cancel")
 	}
 }
@@ -297,11 +302,11 @@ func TestSweeper_Start_InvokesQueueAckOnExpired(t *testing.T) {
 
 	created := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	expiredEntry := command.NewEntry("cmd-expired", "dev-1", "reboot", []byte(`{}`), command.Timeouts{
-		OverallDeadline: 1 * time.Minute,
+		OverallDeadline: testtime.D1min,
 	}, created)
 
 	// Fix the clock so the entry appears expired immediately.
-	fixedNow := created.Add(2 * time.Hour)
+	fixedNow := created.Add(testtime.D2h)
 
 	scanner := &mockScanner{entries: []command.Entry{expiredEntry}}
 	q := &mockAckQueue{}
@@ -310,7 +315,7 @@ func TestSweeper_Start_InvokesQueueAckOnExpired(t *testing.T) {
 		Scanner:  scanner,
 		Queue:    q,
 		Filter:   command.ScanFilter{DeviceID: "dev-1"},
-		Interval: 10 * time.Millisecond,
+		Interval: testtime.D10ms,
 		Now:      func() time.Time { return fixedNow },
 	}
 
@@ -319,12 +324,12 @@ func TestSweeper_Start_InvokesQueueAckOnExpired(t *testing.T) {
 	go func() { done <- s.Start(ctx) }()
 
 	// Wait for at least one tick to be processed.
-	deadline := time.Now().Add(2 * time.Second)
+	deadline := time.Now().Add(testtime.D2s)
 	for time.Now().Before(deadline) {
 		if q.CallCount() >= 1 {
 			break
 		}
-		time.Sleep(10 * time.Millisecond)
+		time.Sleep(testtime.D10ms)
 	}
 	cancel()
 	<-done
@@ -345,14 +350,14 @@ func TestSweeper_Start_PropagatesScanFilter(t *testing.T) {
 		Scanner:  scanner,
 		Queue:    q,
 		Filter:   filter,
-		Interval: 10 * time.Millisecond,
+		Interval: testtime.D10ms,
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() { done <- s.Start(ctx) }()
 
-	deadline := time.Now().Add(2 * time.Second)
+	deadline := time.Now().Add(testtime.D2s)
 	for time.Now().Before(deadline) {
 		scanner.mu.Lock()
 		n := scanner.calls
@@ -360,7 +365,7 @@ func TestSweeper_Start_PropagatesScanFilter(t *testing.T) {
 		if n >= 1 {
 			break
 		}
-		time.Sleep(10 * time.Millisecond)
+		time.Sleep(testtime.D10ms)
 	}
 	cancel()
 	<-done
@@ -384,7 +389,7 @@ func TestSweeper_Start_OnError_Callback(t *testing.T) {
 	s := &command.Sweeper{
 		Scanner:  scanner,
 		Queue:    q,
-		Interval: 10 * time.Millisecond,
+		Interval: testtime.D10ms,
 		OnError: func(err error) {
 			errMu.Lock()
 			defer errMu.Unlock()
@@ -397,7 +402,7 @@ func TestSweeper_Start_OnError_Callback(t *testing.T) {
 	go func() { done <- s.Start(ctx) }()
 
 	// Wait for at least one error callback.
-	deadline := time.Now().Add(2 * time.Second)
+	deadline := time.Now().Add(testtime.D2s)
 	for time.Now().Before(deadline) {
 		errMu.Lock()
 		n := errCalled
@@ -405,7 +410,7 @@ func TestSweeper_Start_OnError_Callback(t *testing.T) {
 		if n >= 1 {
 			break
 		}
-		time.Sleep(10 * time.Millisecond)
+		time.Sleep(testtime.D10ms)
 	}
 	cancel()
 	<-done
@@ -421,10 +426,10 @@ func TestSweeper_Start_AckErrorForwardedToOnError(t *testing.T) {
 
 	created := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	expiredEntry := command.NewEntry("cmd-expired", "dev-1", "reboot", []byte(`{}`), command.Timeouts{
-		OverallDeadline: 1 * time.Minute,
+		OverallDeadline: testtime.D1min,
 	}, created)
 
-	fixedNow := created.Add(2 * time.Hour)
+	fixedNow := created.Add(testtime.D2h)
 
 	scanner := &mockScanner{entries: []command.Entry{expiredEntry}}
 	q := &mockAckQueue{err: errors.New("ack rejected")}
@@ -436,7 +441,7 @@ func TestSweeper_Start_AckErrorForwardedToOnError(t *testing.T) {
 	s := &command.Sweeper{
 		Scanner:  scanner,
 		Queue:    q,
-		Interval: 10 * time.Millisecond,
+		Interval: testtime.D10ms,
 		Now:      func() time.Time { return fixedNow },
 		OnError: func(err error) {
 			errMu.Lock()
@@ -449,7 +454,7 @@ func TestSweeper_Start_AckErrorForwardedToOnError(t *testing.T) {
 	done := make(chan error, 1)
 	go func() { done <- s.Start(ctx) }()
 
-	deadline := time.Now().Add(2 * time.Second)
+	deadline := time.Now().Add(testtime.D2s)
 	for time.Now().Before(deadline) {
 		errMu.Lock()
 		n := errCalled
@@ -457,7 +462,7 @@ func TestSweeper_Start_AckErrorForwardedToOnError(t *testing.T) {
 		if n >= 1 {
 			break
 		}
-		time.Sleep(10 * time.Millisecond)
+		time.Sleep(testtime.D10ms)
 	}
 	cancel()
 	<-done

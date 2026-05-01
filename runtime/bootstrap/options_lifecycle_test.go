@@ -5,7 +5,11 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/assert"
+
+	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 )
+
+const lcOptDNeg1 = time.Duration(-1)
 
 func TestWithLifecycleDefaultStartTimeout_PopulatesField(t *testing.T) {
 	cases := []struct {
@@ -14,8 +18,8 @@ func TestWithLifecycleDefaultStartTimeout_PopulatesField(t *testing.T) {
 		want time.Duration
 	}{
 		{"zero retains default sentinel", 0, 0},
-		{"positive sets explicit", 7 * time.Second, 7 * time.Second},
-		{"negative disables", -1, -1},
+		{"positive sets explicit", testtime.D7s, testtime.D7s},
+		{"negative disables", lcOptDNeg1, lcOptDNeg1},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -32,8 +36,8 @@ func TestWithLifecycleDefaultStopTimeout_PopulatesField(t *testing.T) {
 		want time.Duration
 	}{
 		{"zero retains default sentinel", 0, 0},
-		{"positive sets explicit", 3 * time.Second, 3 * time.Second},
-		{"negative disables", -1, -1},
+		{"positive sets explicit", testtime.EventuallyDefault, testtime.EventuallyDefault},
+		{"negative disables", lcOptDNeg1, lcOptDNeg1},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

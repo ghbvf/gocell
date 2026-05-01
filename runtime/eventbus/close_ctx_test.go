@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/ghbvf/gocell/kernel/outbox"
+	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -56,7 +57,7 @@ func TestInMemoryEventBus_Close_CancelledCtxStillClosesChannels(t *testing.T) {
 	readyCh := bus.Ready(outbox.Subscription{Topic: topic, ConsumerGroup: "cg-test"})
 	select {
 	case <-readyCh:
-	case <-time.After(2 * time.Second):
+	case <-time.After(testtime.D2s):
 		t.Fatal("subscription did not become ready in time")
 	}
 
@@ -69,7 +70,7 @@ func TestInMemoryEventBus_Close_CancelledCtxStillClosesChannels(t *testing.T) {
 	// Subscriber goroutine must exit (no goroutine leak).
 	select {
 	case <-subDone:
-	case <-time.After(2 * time.Second):
+	case <-time.After(testtime.D2s):
 		t.Fatal("subscriber goroutine did not exit after Close")
 	}
 }

@@ -9,7 +9,11 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 )
+
+const subscriptionRunD40ms = 40 * time.Millisecond
 
 // recordingChannel wraps mockChannel and records ordering information for A19
 // happens-before assertions.
@@ -76,13 +80,13 @@ func TestSubscriptionRun_RegisterDeliveryAndWait(t *testing.T) {
 
 	// Release all in-flight goroutines after a short delay so waitAndClose can return.
 	go func() {
-		time.Sleep(50 * time.Millisecond)
+		time.Sleep(testtime.MediumPoll)
 		for range n {
 			run.markDeliveryDone()
 		}
 	}()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), testtime.D2s)
 	defer cancel()
 
 	start := time.Now()
@@ -90,7 +94,7 @@ func TestSubscriptionRun_RegisterDeliveryAndWait(t *testing.T) {
 	elapsed := time.Since(start)
 
 	require.NoError(t, err, "waitAndClose must return nil when all deliveries complete")
-	assert.GreaterOrEqual(t, elapsed, 40*time.Millisecond,
+	assert.GreaterOrEqual(t, elapsed, subscriptionRunD40ms,
 		"waitAndClose must have actually waited for deliveries to finish")
 	assert.True(t, ch.closeCalled, "ch.Close must be called after wg.Wait")
 }
@@ -111,7 +115,7 @@ func TestSubscriptionRun_CloseWaitsLocalWg(t *testing.T) {
 
 	done := make(chan struct{})
 	go func() {
-		time.Sleep(80 * time.Millisecond)
+		time.Sleep(testtime.D80ms)
 		// Set the flag atomically BEFORE calling markDeliveryDone. Because
 		// wgDoneCh is closed (and ch.Close called) only after localWg.Wait()
 		// returns, Close() can only execute after this store — establishing the
@@ -121,7 +125,7 @@ func TestSubscriptionRun_CloseWaitsLocalWg(t *testing.T) {
 		close(done)
 	}()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), testtime.D2s)
 	defer cancel()
 
 	err := run.waitAndClose(ctx)
@@ -156,7 +160,7 @@ func TestSubscriptionRun_CtxTimeout(t *testing.T) {
 	// Add a delivery that will never complete within the ctx budget.
 	run.registerDelivery()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 80*time.Millisecond)
+	ctx, cancel := context.WithTimeout(context.Background(), testtime.D80ms)
 	defer cancel()
 
 	start := time.Now()
@@ -166,7 +170,7 @@ func TestSubscriptionRun_CtxTimeout(t *testing.T) {
 	require.Error(t, err, "waitAndClose must return an error when ctx expires")
 	assert.True(t, errors.Is(err, context.DeadlineExceeded),
 		"error must be context.DeadlineExceeded, got: %v", err)
-	assert.Less(t, elapsed, 500*time.Millisecond,
+	assert.Less(t, elapsed, testtime.D500ms,
 		"waitAndClose must return promptly after ctx expiry")
 
 	// The inflight delivery is never completed — release it to avoid goroutine leak.
@@ -192,7 +196,7 @@ func TestSubscriptionRun_WaitAndClose_CtxTimeout_AbandonedGoroutineEventuallyExi
 	// block on localWg.Wait() until we call markDeliveryDone below.
 	run.registerDelivery()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 80*time.Millisecond)
+	ctx, cancel := context.WithTimeout(context.Background(), testtime.D80ms)
 	defer cancel()
 
 	err := run.waitAndClose(ctx)
@@ -217,7 +221,7 @@ func TestSubscriptionRun_WaitAndClose_CtxTimeout_AbandonedGoroutineEventuallyExi
 	select {
 	case <-wgDone:
 		// goroutine exited as expected
-	case <-time.After(1 * time.Second):
+	case <-time.After(testtime.D1s):
 		t.Fatal("wg-waiter goroutine did not exit within 1 s after markDeliveryDone")
 	}
 }

@@ -8,6 +8,7 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/lifecycle"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 )
 
 // stubPool creates a minimal *Pool for unit tests without a real DB.
@@ -145,7 +146,7 @@ func TestPGResource_CheckerTimeout(t *testing.T) {
 
 	// Deadline should be ~5s from now (allow ±2s tolerance for slow CI).
 	diff := time.Until(receivedDeadline)
-	if diff < 3*time.Second || diff > 7*time.Second {
+	if diff < testtime.D3s || diff > testtime.D7s {
 		t.Errorf("expected checker deadline ~5s from now, got %v", diff)
 	}
 }
@@ -184,7 +185,7 @@ func TestPGResource_CheckerUsesIndependentCtx(t *testing.T) {
 		t.Fatal("checker context must have a deadline (context.WithTimeout)")
 	}
 	diff := time.Until(dl)
-	if diff < 3*time.Second || diff > 7*time.Second {
+	if diff < testtime.D3s || diff > testtime.D7s {
 		t.Errorf("expected checker deadline ~5s from now, got %v", diff)
 	}
 }

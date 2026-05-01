@@ -19,6 +19,7 @@ import (
 	kernellifecycle "github.com/ghbvf/gocell/kernel/lifecycle"
 	koutbox "github.com/ghbvf/gocell/kernel/outbox"
 	kworker "github.com/ghbvf/gocell/kernel/worker"
+	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/runtime/http/health"
 	runtimeoutbox "github.com/ghbvf/gocell/runtime/outbox"
 	"github.com/ghbvf/gocell/runtime/outbox/outboxtest"
@@ -146,7 +147,7 @@ func TestManagedResource_RegistersWorker(t *testing.T) {
 		if err != nil {
 			t.Errorf("unexpected error: %v", err)
 		}
-	case <-time.After(5 * time.Second):
+	case <-time.After(testtime.SelectShutdown):
 		t.Fatal("bootstrap did not shut down in time")
 	}
 
@@ -199,7 +200,7 @@ func TestManagedResource_LIFOClose(t *testing.T) {
 		if err != nil {
 			t.Errorf("unexpected shutdown error: %v", err)
 		}
-	case <-time.After(5 * time.Second):
+	case <-time.After(testtime.SelectShutdown):
 		t.Fatal("bootstrap did not shut down in time")
 	}
 
@@ -256,7 +257,7 @@ func TestManagedResource_NilWorkerNoOp(t *testing.T) {
 		if err != nil {
 			t.Errorf("expected nil error with nil worker resource, got %v", err)
 		}
-	case <-time.After(5 * time.Second):
+	case <-time.After(testtime.SelectShutdown):
 		t.Fatal("bootstrap did not shut down in time")
 	}
 }
@@ -295,7 +296,7 @@ func TestManagedResource_CloseErrorPropagates(t *testing.T) {
 		if len(*res2.closeOrder) == 0 {
 			t.Error("res2 Close() must be called even when res2 (registered after res1) triggers LIFO first")
 		}
-	case <-time.After(5 * time.Second):
+	case <-time.After(testtime.SelectShutdown):
 		t.Fatal("bootstrap did not shut down in time")
 	}
 }
@@ -379,7 +380,7 @@ func TestManagedResource_CloseErrorPropagatesToPhase10(t *testing.T) {
 		if !strings.Contains(runErr.Error(), "*bootstrap.fakeResource") {
 			t.Errorf("Run error %q must contain managed resource type", runErr.Error())
 		}
-	case <-time.After(5 * time.Second):
+	case <-time.After(testtime.SelectShutdown):
 		t.Fatal("bootstrap did not shut down in time")
 	}
 }
@@ -394,16 +395,16 @@ func TestManagedResource_CloseErrorPropagatesToPhase10(t *testing.T) {
 // suitable for ManagedResource integration tests.
 func newManagedResourceTestRelay() *runtimeoutbox.Relay {
 	cfg := runtimeoutbox.RelayConfig{
-		PollInterval:         5 * time.Millisecond,
-		ReclaimInterval:      10 * time.Millisecond,
+		PollInterval:         testtime.FastPoll,
+		ReclaimInterval:      testtime.D10ms,
 		BatchSize:            10,
 		MaxAttempts:          3,
-		BaseRetryDelay:       1 * time.Millisecond,
-		MaxRetryDelay:        10 * time.Millisecond,
-		ClaimTTL:             100 * time.Millisecond,
-		RetentionPeriod:      1 * time.Hour,
-		DeadRetentionPeriod:  24 * time.Hour,
-		CleanupWaitFloor:     5 * time.Millisecond,
+		BaseRetryDelay:       testtime.D1ms,
+		MaxRetryDelay:        testtime.D10ms,
+		ClaimTTL:             testtime.D100ms,
+		RetentionPeriod:      testtime.D1h,
+		DeadRetentionPeriod:  testtime.D24h,
+		CleanupWaitFloor:     testtime.FastPoll,
 		PollFailureBudget:    3,
 		ReclaimFailureBudget: 3,
 		CleanupFailureBudget: 3,
@@ -449,7 +450,7 @@ func TestRelay_AsManagedResource_RegistersCheckers(t *testing.T) {
 		WithAssembly(asm),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(ln)),
 		WithListener(cell.InternalListener, "127.0.0.1:0", []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(newLocalListener(t))),
-		WithShutdownTimeout(2*time.Second),
+		WithShutdownTimeout(testtime.D2s),
 		WithManagedResource(relay),
 		WithHealthRoutes(WithReadyzVerboseToken(testVerboseToken)),
 	)
@@ -480,7 +481,7 @@ func TestRelay_AsManagedResource_RegistersCheckers(t *testing.T) {
 	select {
 	case runErr := <-done:
 		assert.NoError(t, runErr)
-	case <-time.After(5 * time.Second):
+	case <-time.After(testtime.SelectShutdown):
 		t.Fatal("bootstrap did not shut down in time")
 	}
 }
@@ -497,16 +498,16 @@ func TestRelay_AsManagedResource_TrippedBudget_Returns503(t *testing.T) {
 	store.setClaimErr(errors.New("db down"))
 
 	cfg := runtimeoutbox.RelayConfig{
-		PollInterval:         5 * time.Millisecond,
-		ReclaimInterval:      10 * time.Millisecond,
+		PollInterval:         testtime.FastPoll,
+		ReclaimInterval:      testtime.D10ms,
 		BatchSize:            10,
 		MaxAttempts:          3,
-		BaseRetryDelay:       1 * time.Millisecond,
-		MaxRetryDelay:        10 * time.Millisecond,
-		ClaimTTL:             100 * time.Millisecond,
-		RetentionPeriod:      1 * time.Hour,
-		DeadRetentionPeriod:  24 * time.Hour,
-		CleanupWaitFloor:     5 * time.Millisecond,
+		BaseRetryDelay:       testtime.D1ms,
+		MaxRetryDelay:        testtime.D10ms,
+		ClaimTTL:             testtime.D100ms,
+		RetentionPeriod:      testtime.D1h,
+		DeadRetentionPeriod:  testtime.D24h,
+		CleanupWaitFloor:     testtime.FastPoll,
 		PollFailureBudget:    3,
 		ReclaimFailureBudget: 3,
 		CleanupFailureBudget: 3,
@@ -517,7 +518,7 @@ func TestRelay_AsManagedResource_TrippedBudget_Returns503(t *testing.T) {
 		WithAssembly(asm),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(ln)),
 		WithListener(cell.InternalListener, "127.0.0.1:0", []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(newLocalListener(t))),
-		WithShutdownTimeout(2*time.Second),
+		WithShutdownTimeout(testtime.D2s),
 		WithManagedResource(relay),
 		WithHealthRoutes(WithReadyzVerboseToken(testVerboseToken)),
 	)
@@ -529,7 +530,7 @@ func TestRelay_AsManagedResource_TrippedBudget_Returns503(t *testing.T) {
 		cancel()
 		select {
 		case <-done:
-		case <-time.After(5 * time.Second):
+		case <-time.After(testtime.SelectShutdown):
 			t.Error("bootstrap did not shut down in time")
 		}
 	}()
@@ -541,7 +542,7 @@ func TestRelay_AsManagedResource_TrippedBudget_Returns503(t *testing.T) {
 	// Wait for the relay to reach the running state before asserting poll-budget behavior.
 	select {
 	case <-relay.Ready():
-	case <-time.After(3 * time.Second):
+	case <-time.After(testtime.EventuallyDefault):
 		t.Fatal("timed out waiting for relay to become ready via bootstrap WorkerGroup")
 	}
 
@@ -553,7 +554,7 @@ func TestRelay_AsManagedResource_TrippedBudget_Returns503(t *testing.T) {
 		}
 		closeBody(t, resp)
 		return resp.StatusCode == http.StatusServiceUnavailable
-	}, 3*time.Second, 20*time.Millisecond, "/readyz must return 503 after poll budget trips")
+	}, testtime.EventuallyDefault, testtime.D20ms, "/readyz must return 503 after poll budget trips")
 
 	// Verify verbose output contains the unhealthy checker name.
 	verboseResp, err := verboseGet(ctx, fmt.Sprintf("http://%s", addr))
@@ -579,7 +580,7 @@ func TestRelay_AsManagedResource_TrippedBudget_Returns503(t *testing.T) {
 		}
 		closeBody(t, resp)
 		return resp.StatusCode == http.StatusOK
-	}, 3*time.Second, 20*time.Millisecond, "/readyz must return 200 after store recovers")
+	}, testtime.EventuallyDefault, testtime.D20ms, "/readyz must return 200 after store recovers")
 }
 
 // TM4: TestRelay_AsManagedResource_DisabledBudget_SkipsChecker verifies that a relay with
@@ -592,16 +593,16 @@ func TestRelay_AsManagedResource_DisabledBudget_SkipsChecker(t *testing.T) {
 
 	// Poll budget disabled (=0), others enabled.
 	cfg := runtimeoutbox.RelayConfig{
-		PollInterval:         5 * time.Millisecond,
-		ReclaimInterval:      10 * time.Millisecond,
+		PollInterval:         testtime.FastPoll,
+		ReclaimInterval:      testtime.D10ms,
 		BatchSize:            10,
 		MaxAttempts:          3,
-		BaseRetryDelay:       1 * time.Millisecond,
-		MaxRetryDelay:        10 * time.Millisecond,
-		ClaimTTL:             100 * time.Millisecond,
-		RetentionPeriod:      1 * time.Hour,
-		DeadRetentionPeriod:  24 * time.Hour,
-		CleanupWaitFloor:     5 * time.Millisecond,
+		BaseRetryDelay:       testtime.D1ms,
+		MaxRetryDelay:        testtime.D10ms,
+		ClaimTTL:             testtime.D100ms,
+		RetentionPeriod:      testtime.D1h,
+		DeadRetentionPeriod:  testtime.D24h,
+		CleanupWaitFloor:     testtime.FastPoll,
 		PollFailureBudget:    0, // disabled
 		ReclaimFailureBudget: 3,
 		CleanupFailureBudget: 3,
@@ -612,7 +613,7 @@ func TestRelay_AsManagedResource_DisabledBudget_SkipsChecker(t *testing.T) {
 		WithAssembly(asm),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(ln)),
 		WithListener(cell.InternalListener, "127.0.0.1:0", []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(newLocalListener(t))),
-		WithShutdownTimeout(2*time.Second),
+		WithShutdownTimeout(testtime.D2s),
 		WithManagedResource(relay),
 		WithHealthRoutes(WithReadyzVerboseToken(testVerboseToken)),
 	)
@@ -641,7 +642,7 @@ func TestRelay_AsManagedResource_DisabledBudget_SkipsChecker(t *testing.T) {
 	select {
 	case runErr := <-done:
 		assert.NoError(t, runErr)
-	case <-time.After(5 * time.Second):
+	case <-time.After(testtime.SelectShutdown):
 		t.Fatal("bootstrap did not shut down in time")
 	}
 }
@@ -869,7 +870,7 @@ func TestManagedResource_LIFOCloseBySequence(t *testing.T) {
 		if err != nil {
 			t.Errorf("unexpected Run error: %v", err)
 		}
-	case <-time.After(5 * time.Second):
+	case <-time.After(testtime.SelectShutdown):
 		t.Fatal("bootstrap.Run did not exit within 5s after cancel")
 	}
 

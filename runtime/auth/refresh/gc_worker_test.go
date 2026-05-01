@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -131,7 +132,7 @@ func TestNewGCWorker_ValidatesConfigAndDefaults(t *testing.T) {
 
 func TestGCWorker_StartStopRunsImmediateGC(t *testing.T) {
 	now := time.Date(2026, 4, 25, 8, 30, 0, 0, time.UTC)
-	retention := 30 * time.Minute
+	retention := testtime.D30min
 	store := newGCStoreSpy(3, nil)
 	collector := &gcCollectorSpy{}
 	worker, err := NewGCWorker(GCWorkerConfig{

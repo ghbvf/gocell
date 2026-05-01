@@ -13,9 +13,12 @@ import (
 
 	vaultadapter "github.com/ghbvf/gocell/adapters/vault"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+const vaultReadinessCtxTimeout = 600 * time.Millisecond
 
 // isErrCode reports whether err, anywhere in its chain, carries the given errcode.Code.
 func isErrCode(err error, code errcode.Code) bool {
@@ -124,7 +127,7 @@ func TestTransitReadiness_ContextTimeout(t *testing.T) {
 	cfg := vaultapi.DefaultConfig()
 	cfg.Address = unreachableAddr
 	// Short HTTP client timeout so the probe fails fast without waiting 3s.
-	cfg.HttpClient = &http.Client{Timeout: 500 * time.Millisecond}
+	cfg.HttpClient = &http.Client{Timeout: testtime.D500ms}
 	rawClient, err := vaultapi.NewClient(cfg)
 	require.NoError(t, err)
 	rawClient.SetToken("any-token")
@@ -132,7 +135,7 @@ func TestTransitReadiness_ContextTimeout(t *testing.T) {
 	// Construct using a 500ms context so the constructor itself does not block
 	// on the unreachable vault (readLatestVersion will fail fast).
 	// We accept that this constructor call may fail; we only need Checkers().
-	ctx, cancel := context.WithTimeout(context.Background(), 600*time.Millisecond)
+	ctx, cancel := context.WithTimeout(context.Background(), vaultReadinessCtxTimeout)
 	defer cancel()
 	unreachableClient := vaultadapter.NewVaultAPIClient(rawClient)
 	pUnreachable, constructErr := vaultadapter.NewTransitKeyProvider(

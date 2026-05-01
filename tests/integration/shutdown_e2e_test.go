@@ -33,11 +33,20 @@ import (
 
 	"github.com/ghbvf/gocell/adapters/rabbitmq"
 	"github.com/ghbvf/gocell/kernel/outbox"
+	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/tests/testutil"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	tcrabbitmq "github.com/testcontainers/testcontainers-go/modules/rabbitmq"
+)
+
+const (
+	// shutdownD8s is a buffer beyond a 5s shutdownTimeout for broker hard-close
+	// tests; not in the testtime table.
+	shutdownD8s = 8 * time.Second
+	// shutdownD3s is the RabbitMQ ReconnectMaxBackoff; not in testtime table.
+	shutdownD3s = 3 * time.Second
 )
 
 // ---------------------------------------------------------------------------
@@ -65,7 +74,7 @@ func startShutdownTestBroker(t *testing.T) (amqpURL, mgmtURL string, container *
 		var httpErr error
 		mgmt, httpErr = c.HttpURL(ctx)
 		require.NoError(collect, httpErr, "get management http url")
-	}, 10*time.Second, 100*time.Millisecond, "management http url should be mapped")
+	}, testtime.SelectAsyncSettle, testtime.SlowPoll, "management http url should be mapped")
 
 	cleanup = func() {
 		if termErr := c.Terminate(ctx); termErr != nil {
@@ -82,9 +91,9 @@ func newShutdownTestConn(t *testing.T, amqpURL string) *rabbitmq.Connection {
 	conn, err := rabbitmq.NewConnection(rabbitmq.Config{
 		URL:                 amqpURL,
 		ChannelPoolSize:     5,
-		ConfirmTimeout:      10 * time.Second,
-		ReconnectMaxBackoff: 5 * time.Second,
-		ReconnectBaseDelay:  500 * time.Millisecond,
+		ConfirmTimeout:      testtime.SelectAsyncSettle,
+		ReconnectMaxBackoff: testtime.SelectShutdown,
+		ReconnectBaseDelay:  testtime.D500ms,
 	})
 	require.NoError(t, err, "create rabbitmq connection for shutdown e2e")
 	t.Cleanup(func() { _ = conn.Close(context.Background()) })
@@ -181,8 +190,8 @@ func TestE2E_ShutdownBarrier_NoMessageLoss(t *testing.T) {
 		topic           = "shutdown.e2e.noloss"
 		queueName       = "shutdown.e2e.noloss.queue"
 		dlxExchange     = "shutdown.e2e.noloss.dlx"
-		processingDelay = 50 * time.Millisecond
-		shutdownTimeout = 15 * time.Second
+		processingDelay = testtime.MediumPoll
+		shutdownTimeout = testtime.D15s
 	)
 
 	amqpURL, mgmtURL, _, cleanup := startShutdownTestBroker(t)
@@ -218,7 +227,7 @@ func TestE2E_ShutdownBarrier_NoMessageLoss(t *testing.T) {
 		}, handler)
 	}()
 
-	waitForSubscriberReady(t, subConn, queueName, subErrCh, 10*time.Second)
+	waitForSubscriberReady(t, subConn, queueName, subErrCh, testtime.SelectAsyncSettle)
 
 	// Publish 100 messages. Use a separate context so publish is not affected
 	// by subCtx cancellation below.
@@ -228,7 +237,7 @@ func TestE2E_ShutdownBarrier_NoMessageLoss(t *testing.T) {
 	// Wait until at least 1 message is processed (subscriber is actively consuming).
 	require.Eventually(t, func() bool {
 		return processed.Load() > 0
-	}, 10*time.Second, 50*time.Millisecond, "at least one message must be processed before shutdown")
+	}, testtime.SelectAsyncSettle, testtime.MediumPoll, "at least one message must be processed before shutdown")
 
 	// Phase 1: StopIntake — stop accepting new broker deliveries, drain
 	// already-prefetched messages in the consumeLoop's deliveries buffer.
@@ -254,7 +263,7 @@ func TestE2E_ShutdownBarrier_NoMessageLoss(t *testing.T) {
 			require.NoError(t, subErr,
 				"Subscribe goroutine must exit with nil or context.Canceled; got %v", subErr)
 		}
-	case <-time.After(5 * time.Second):
+	case <-time.After(testtime.SelectShutdown):
 		t.Fatal("Subscribe goroutine did not exit after Close + subCancel within 5s")
 	}
 
@@ -269,7 +278,7 @@ func TestE2E_ShutdownBarrier_NoMessageLoss(t *testing.T) {
 		t.Logf("shutdown e2e no-loss poll: processed=%d queue=%d sum=%d",
 			processedFinal, queueDepth, processedFinal+int64(queueDepth))
 		return int(processedFinal)+queueDepth >= total
-	}, 20*time.Second, 500*time.Millisecond,
+	}, fullchainD20s, testtime.D500ms,
 		"broker queue + processed must eventually total 100 messages")
 
 	t.Logf("shutdown e2e no-loss: processed=%d queue=%d total=%d", processedFinal, queueDepth, total)
@@ -301,11 +310,11 @@ func TestE2E_ShutdownBarrier_BrokerHardClose(t *testing.T) {
 		topic           = "shutdown.e2e.hardclose"
 		queueName       = "shutdown.e2e.hardclose.queue"
 		dlxExchange     = "shutdown.e2e.hardclose.dlx"
-		shutdownTimeout = 5 * time.Second
+		shutdownTimeout = testtime.SelectShutdown
 		// Buffer beyond shutdownTimeout before declaring the test failed.
 		// Accounts for OS-level socket timeout detection (~1-2s) on top of the
 		// ShutdownTimeout budget.
-		totalBudget = shutdownTimeout + 8*time.Second
+		totalBudget = shutdownTimeout + shutdownD8s
 	)
 
 	amqpURL, _, container, cleanup := startShutdownTestBroker(t)
@@ -323,9 +332,9 @@ func TestE2E_ShutdownBarrier_BrokerHardClose(t *testing.T) {
 	subConn, err := rabbitmq.NewConnection(rabbitmq.Config{
 		URL:                 amqpURL,
 		ChannelPoolSize:     5,
-		ConfirmTimeout:      10 * time.Second,
-		ReconnectMaxBackoff: 3 * time.Second,
-		ReconnectBaseDelay:  200 * time.Millisecond,
+		ConfirmTimeout:      testtime.SelectAsyncSettle,
+		ReconnectMaxBackoff: shutdownD3s,
+		ReconnectBaseDelay:  testtime.D200ms,
 	})
 	require.NoError(t, err, "create subscriber connection")
 	// Do NOT defer subConn.Close here — the broker will be killed; the
@@ -356,7 +365,7 @@ func TestE2E_ShutdownBarrier_BrokerHardClose(t *testing.T) {
 		}, handler)
 	}()
 
-	waitForSubscriberReady(t, subConn, queueName, subErrCh, 10*time.Second)
+	waitForSubscriberReady(t, subConn, queueName, subErrCh, testtime.SelectAsyncSettle)
 
 	// Publish a handful of messages.
 	require.NoError(t, publishMessages(context.Background(), pub, topic, 5), "publish messages before hard close")
@@ -365,7 +374,7 @@ func TestE2E_ShutdownBarrier_BrokerHardClose(t *testing.T) {
 	// the broker, to ensure we have in-flight state to exercise.
 	require.Eventually(t, func() bool {
 		return consumed.Load() > 0
-	}, 5*time.Second, 50*time.Millisecond,
+	}, testtime.SelectShutdown, testtime.MediumPoll,
 		"at least one message should be consumed before broker stop")
 
 	// Hard-stop the broker container. This forcibly severs all AMQP connections
@@ -373,7 +382,7 @@ func TestE2E_ShutdownBarrier_BrokerHardClose(t *testing.T) {
 	// kill. The subscriber's delivery channel will close (errSubscriptionLost),
 	// and the reconnect goroutine will begin retrying but find the broker gone.
 	t.Log("stopping rabbitmq container (hard kill)...")
-	stopCtx, stopCancel := context.WithTimeout(context.Background(), 15*time.Second)
+	stopCtx, stopCancel := context.WithTimeout(context.Background(), testtime.D15s)
 	defer stopCancel()
 	require.NoError(t, container.Stop(stopCtx, nil), "stop rabbitmq container")
 	containerTerminated = true

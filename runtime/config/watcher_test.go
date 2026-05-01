@@ -11,9 +11,12 @@ import (
 	"time"
 
 	"github.com/fsnotify/fsnotify"
+	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+const watcherMaxDebounceCeiling = 400 * time.Millisecond
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -24,7 +27,7 @@ func waitReady(t *testing.T, w *Watcher) {
 	t.Helper()
 	select {
 	case <-w.Ready():
-	case <-time.After(2 * time.Second):
+	case <-time.After(testtime.D2s):
 		t.Fatal("watcher did not become ready in time")
 	}
 }
@@ -73,7 +76,7 @@ func TestWatcher_OnChange(t *testing.T) {
 
 	assert.Eventually(t, func() bool {
 		return called.Load() >= 1
-	}, 3*time.Second, 50*time.Millisecond, "expected OnChange callback to fire")
+	}, testtime.EventuallyDefault, testtime.MediumPoll, "expected OnChange callback to fire")
 
 	assert.Equal(t, file, lastEvent.Path, "WatchEvent.Path should be the watched file")
 }
@@ -122,7 +125,7 @@ func TestWatcher_AtomicReplace_RenameCreate(t *testing.T) {
 
 	assert.Eventually(t, func() bool {
 		return called.Load() >= 1
-	}, 3*time.Second, 50*time.Millisecond, "expected callback after atomic rename+create")
+	}, testtime.EventuallyDefault, testtime.MediumPoll, "expected callback after atomic rename+create")
 }
 
 func TestWatcher_AtomicReplace_RemoveRecreate(t *testing.T) {
@@ -144,7 +147,7 @@ func TestWatcher_AtomicReplace_RemoveRecreate(t *testing.T) {
 
 	assert.Eventually(t, func() bool {
 		return called.Load() >= 1
-	}, 3*time.Second, 50*time.Millisecond, "expected callback after remove+recreate")
+	}, testtime.EventuallyDefault, testtime.MediumPoll, "expected callback after remove+recreate")
 }
 
 func TestWatcher_IgnoresUnrelatedFiles(t *testing.T) {
@@ -164,7 +167,7 @@ func TestWatcher_IgnoresUnrelatedFiles(t *testing.T) {
 
 	touchFile(t, other, "unrelated: true")
 
-	time.Sleep(500 * time.Millisecond)
+	time.Sleep(testtime.D500ms)
 	assert.Equal(t, int32(0), called.Load(), "unrelated file change must not fire callback")
 }
 
@@ -184,7 +187,7 @@ func TestWatcher_StartWithContext(t *testing.T) {
 	assert.Eventually(t, func() bool {
 		_ = w.Close(context.Background())
 		return true
-	}, 2*time.Second, 50*time.Millisecond)
+	}, testtime.D2s, testtime.MediumPoll)
 }
 
 func TestWatcher_HealthLifecycle(t *testing.T) {
@@ -234,7 +237,7 @@ func TestWatcher_Debounce_CoalescesRapidWrites(t *testing.T) {
 	file := filepath.Join(dir, "config.yaml")
 	touchFile(t, file, "key: v0")
 
-	w, err := NewWatcher(file, WithDebounce(200*time.Millisecond), WithMaxDebounce(2*time.Second))
+	w, err := NewWatcher(file, WithDebounce(testtime.D200ms), WithMaxDebounce(testtime.D2s))
 	require.NoError(t, err)
 	defer func() { _ = w.Close(context.Background()) }()
 
@@ -245,14 +248,14 @@ func TestWatcher_Debounce_CoalescesRapidWrites(t *testing.T) {
 	// state machine instead of relying on noisy fsnotify delivery timing.
 	for range 5 {
 		w.scheduleCallback(false)
-		time.Sleep(10 * time.Millisecond)
+		time.Sleep(testtime.D10ms)
 	}
 
 	assert.Eventually(t, func() bool {
 		return called.Load() == 1
-	}, 2*time.Second, 20*time.Millisecond, "debounce should coalesce rapid schedules into one callback")
+	}, testtime.D2s, testtime.D20ms, "debounce should coalesce rapid schedules into one callback")
 
-	time.Sleep(250 * time.Millisecond)
+	time.Sleep(testtime.D250ms)
 	assert.Equal(t, int32(1), called.Load(), "debounce should not emit an extra callback after the window closes")
 }
 
@@ -262,8 +265,8 @@ func TestWatcher_Debounce_MaxCeiling(t *testing.T) {
 	touchFile(t, file, "key: v0")
 
 	w, err := NewWatcher(file,
-		WithDebounce(200*time.Millisecond),
-		WithMaxDebounce(400*time.Millisecond),
+		WithDebounce(testtime.D200ms),
+		WithMaxDebounce(watcherMaxDebounceCeiling),
 	)
 	require.NoError(t, err)
 	defer func() { _ = w.Close(context.Background()) }()
@@ -282,7 +285,7 @@ func TestWatcher_Debounce_MaxCeiling(t *testing.T) {
 				return
 			default:
 				touchFile(t, file, "key: continuous"+string(rune('0'+i%10)))
-				time.Sleep(100 * time.Millisecond)
+				time.Sleep(testtime.D100ms)
 			}
 		}
 	}()
@@ -290,11 +293,11 @@ func TestWatcher_Debounce_MaxCeiling(t *testing.T) {
 	// Wait for at least 2 ceiling-forced callbacks (tolerant of slow CI).
 	assert.Eventually(t, func() bool {
 		return called.Load() >= 2
-	}, 5*time.Second, 50*time.Millisecond, "max ceiling should force at least 2 callbacks")
+	}, testtime.EventuallyLong, testtime.MediumPoll, "max ceiling should force at least 2 callbacks")
 
 	close(stop)
 	// Let any pending timers fire.
-	time.Sleep(500 * time.Millisecond)
+	time.Sleep(testtime.D500ms)
 
 	count := called.Load()
 	assert.Less(t, count, int32(15), "debounce should coalesce many events")
@@ -318,7 +321,7 @@ func TestWatcher_Debounce_ZeroMeansImmediate(t *testing.T) {
 
 	assert.Eventually(t, func() bool {
 		return called.Load() >= 1
-	}, 2*time.Second, 50*time.Millisecond, "zero debounce should fire immediately")
+	}, testtime.D2s, testtime.MediumPoll, "zero debounce should fire immediately")
 }
 
 // ---------------------------------------------------------------------------
@@ -341,7 +344,7 @@ func TestWatcher_SymlinkPivot_DetectsTargetChange(t *testing.T) {
 	link := filepath.Join(dir, "config.yaml")
 	require.NoError(t, os.Symlink(v1, link))
 
-	w, err := NewWatcher(link, WithDebounce(50*time.Millisecond))
+	w, err := NewWatcher(link, WithDebounce(testtime.MediumPoll))
 	require.NoError(t, err)
 	defer func() { _ = w.Close(context.Background()) }()
 
@@ -370,7 +373,7 @@ func TestWatcher_SymlinkPivot_DetectsTargetChange(t *testing.T) {
 	// matching the property the test is meant to lock down.
 	assert.Eventually(t, func() bool {
 		return gotPivot.Load() >= 1
-	}, 3*time.Second, 50*time.Millisecond, "WatchEvent.SymlinkPivot should be true")
+	}, testtime.EventuallyDefault, testtime.MediumPoll, "WatchEvent.SymlinkPivot should be true")
 
 	// Sanity: at least one callback total was observed (the SymlinkPivot
 	// path is a strict subset, but assert it explicitly so a future watcher
@@ -399,7 +402,7 @@ func TestWatcher_SymlinkPivot_KubernetesDataPattern(t *testing.T) {
 	configLink := filepath.Join(dir, "config.yaml")
 	require.NoError(t, os.Symlink(filepath.Join("..data", "config.yaml"), configLink))
 
-	w, err := NewWatcher(configLink, WithDebounce(50*time.Millisecond))
+	w, err := NewWatcher(configLink, WithDebounce(testtime.MediumPoll))
 	require.NoError(t, err)
 	defer func() { _ = w.Close(context.Background()) }()
 
@@ -418,7 +421,7 @@ func TestWatcher_SymlinkPivot_KubernetesDataPattern(t *testing.T) {
 
 	assert.Eventually(t, func() bool {
 		return called.Load() >= 1
-	}, 3*time.Second, 50*time.Millisecond, "K8s-style symlink pivot should fire callback")
+	}, testtime.EventuallyDefault, testtime.MediumPoll, "K8s-style symlink pivot should fire callback")
 }
 
 func TestWatcher_SymlinkPivot_RegularFileUnaffected(t *testing.T) {
@@ -429,7 +432,7 @@ func TestWatcher_SymlinkPivot_RegularFileUnaffected(t *testing.T) {
 	file := filepath.Join(dir, "config.yaml")
 	touchFile(t, file, "key: v1")
 
-	w, err := NewWatcher(file, WithDebounce(50*time.Millisecond))
+	w, err := NewWatcher(file, WithDebounce(testtime.MediumPoll))
 	require.NoError(t, err)
 	defer func() { _ = w.Close(context.Background()) }()
 
@@ -448,7 +451,7 @@ func TestWatcher_SymlinkPivot_RegularFileUnaffected(t *testing.T) {
 
 	assert.Eventually(t, func() bool {
 		return called.Load() >= 1
-	}, 3*time.Second, 50*time.Millisecond)
+	}, testtime.EventuallyDefault, testtime.MediumPoll)
 
 	assert.Equal(t, int32(0), gotPivot.Load(), "regular file write should not set SymlinkPivot")
 }
@@ -511,7 +514,7 @@ func TestWatcher_WithMetrics_RecordsEvents(t *testing.T) {
 
 	assert.Eventually(t, func() bool {
 		return spy.events.Load() >= 1 && spy.lastTime.Load() > 0
-	}, 3*time.Second, 50*time.Millisecond, "metrics should record events and timestamp")
+	}, testtime.EventuallyDefault, testtime.MediumPoll, "metrics should record events and timestamp")
 }
 
 func TestWatcher_Metrics_DebounceCoalesced(t *testing.T) {
@@ -521,8 +524,8 @@ func TestWatcher_Metrics_DebounceCoalesced(t *testing.T) {
 
 	spy := &spyCollector{}
 	w, err := NewWatcher(file,
-		WithDebounce(200*time.Millisecond),
-		WithMaxDebounce(2*time.Second),
+		WithDebounce(testtime.D200ms),
+		WithMaxDebounce(testtime.D2s),
 		WithMetrics(spy),
 	)
 	require.NoError(t, err)
@@ -536,14 +539,14 @@ func TestWatcher_Metrics_DebounceCoalesced(t *testing.T) {
 	// 5 rapid writes → first creates the timer, subsequent 4 reset it.
 	for i := range 5 {
 		touchFile(t, file, "key: v"+string(rune('1'+i)))
-		time.Sleep(10 * time.Millisecond)
+		time.Sleep(testtime.D10ms)
 	}
 
 	assert.Eventually(t, func() bool {
 		return called.Load() >= 1
-	}, 3*time.Second, 20*time.Millisecond, "rapid writes should still dispatch a debounced callback")
+	}, testtime.EventuallyDefault, testtime.D20ms, "rapid writes should still dispatch a debounced callback")
 
-	time.Sleep(250 * time.Millisecond)
+	time.Sleep(testtime.D250ms)
 
 	// Each fsnotify event beyond the first resets the timer → coalesced count.
 	// We can't predict exact fsnotify event count (OS-dependent), but should
@@ -562,13 +565,13 @@ func TestWatcher_Close_WaitsForInFlightCallbacks(t *testing.T) {
 	file := filepath.Join(dir, "config.yaml")
 	touchFile(t, file, "key: v0")
 
-	w, err := NewWatcher(file, WithDebounce(0), WithDrainTimeout(2*time.Second))
+	w, err := NewWatcher(file, WithDebounce(0), WithDrainTimeout(testtime.D2s))
 	require.NoError(t, err)
 
 	started := make(chan struct{})
 	w.OnChange(func(_ WatchEvent) {
 		close(started)
-		time.Sleep(500 * time.Millisecond) // Simulate slow callback.
+		time.Sleep(testtime.D500ms) // Simulate slow callback.
 	})
 	w.Start()
 	waitReady(t, w)
@@ -578,7 +581,7 @@ func TestWatcher_Close_WaitsForInFlightCallbacks(t *testing.T) {
 	// Wait for callback to start.
 	select {
 	case <-started:
-	case <-time.After(3 * time.Second):
+	case <-time.After(testtime.EventuallyDefault):
 		t.Fatal("callback did not start")
 	}
 
@@ -587,8 +590,8 @@ func TestWatcher_Close_WaitsForInFlightCallbacks(t *testing.T) {
 	require.NoError(t, w.Close(context.Background()))
 	elapsed := time.Since(begin)
 
-	assert.GreaterOrEqual(t, elapsed, 300*time.Millisecond, "Close should wait for in-flight callback")
-	assert.Less(t, elapsed, 2*time.Second, "Close should not hang")
+	assert.GreaterOrEqual(t, elapsed, testtime.D300ms, "Close should wait for in-flight callback")
+	assert.Less(t, elapsed, testtime.D2s, "Close should not hang")
 }
 
 func TestWatcher_Close_DrainTimeoutPreventsHang(t *testing.T) {
@@ -606,7 +609,7 @@ func TestWatcher_Close_DrainTimeoutPreventsHang(t *testing.T) {
 	started := make(chan struct{})
 	w.OnChange(func(_ WatchEvent) {
 		close(started)
-		time.Sleep(10 * time.Second) // Simulates a stuck callback.
+		time.Sleep(testtime.D10s) // Simulates a stuck callback.
 	})
 	w.Start()
 	waitReady(t, w)
@@ -615,19 +618,19 @@ func TestWatcher_Close_DrainTimeoutPreventsHang(t *testing.T) {
 
 	select {
 	case <-started:
-	case <-time.After(3 * time.Second):
+	case <-time.After(testtime.EventuallyDefault):
 		t.Fatal("callback did not start")
 	}
 
 	// Caller supplies 200ms budget — Close must return before the 10s callback finishes.
-	drainCtx, drainCancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	drainCtx, drainCancel := context.WithTimeout(context.Background(), testtime.D200ms)
 	defer drainCancel()
 
 	begin := time.Now()
 	_ = w.Close(drainCtx)
 	elapsed := time.Since(begin)
 
-	assert.Less(t, elapsed, 1*time.Second, "caller-supplied budget should prevent hanging")
+	assert.Less(t, elapsed, testtime.D1s, "caller-supplied budget should prevent hanging")
 }
 
 func TestWatcher_Close_NoInFlight_Immediate(t *testing.T) {
@@ -644,7 +647,7 @@ func TestWatcher_Close_NoInFlight_Immediate(t *testing.T) {
 	require.NoError(t, w.Close(context.Background()))
 	elapsed := time.Since(begin)
 
-	assert.Less(t, elapsed, 500*time.Millisecond, "close without in-flight should be immediate")
+	assert.Less(t, elapsed, testtime.D500ms, "close without in-flight should be immediate")
 }
 
 // ---------------------------------------------------------------------------
@@ -658,10 +661,10 @@ func TestWatcher_FullLifecycle_AllOptions(t *testing.T) {
 
 	spy := &spyCollector{}
 	w, err := NewWatcher(file,
-		WithDebounce(100*time.Millisecond),
-		WithMaxDebounce(500*time.Millisecond),
+		WithDebounce(testtime.D100ms),
+		WithMaxDebounce(testtime.D500ms),
 		WithMetrics(spy),
-		WithDrainTimeout(1*time.Second),
+		WithDrainTimeout(testtime.D1s),
 		WithKeyFilter("server."),
 	)
 	require.NoError(t, err)
@@ -678,7 +681,7 @@ func TestWatcher_FullLifecycle_AllOptions(t *testing.T) {
 	touchFile(t, file, "key: v1")
 	assert.Eventually(t, func() bool {
 		return called.Load() >= 1
-	}, 3*time.Second, 50*time.Millisecond)
+	}, testtime.EventuallyDefault, testtime.MediumPoll)
 
 	// Verify metrics recorded.
 	assert.Greater(t, spy.events.Load(), int32(0))
@@ -695,7 +698,7 @@ func TestWatcher_Close_DuringDebounceTimer(t *testing.T) {
 	file := filepath.Join(dir, "config.yaml")
 	touchFile(t, file, "key: v0")
 
-	w, err := NewWatcher(file, WithDebounce(500*time.Millisecond))
+	w, err := NewWatcher(file, WithDebounce(testtime.D500ms))
 	require.NoError(t, err)
 
 	w.OnChange(func(_ WatchEvent) {})
@@ -708,7 +711,7 @@ func TestWatcher_Close_DuringDebounceTimer(t *testing.T) {
 	// Close immediately while debounce timer is still pending.
 	// This exercises the race window between close(done), timer.Stop(),
 	// and the timer goroutine potentially firing.
-	time.Sleep(10 * time.Millisecond) // tiny delay to let event reach the loop
+	time.Sleep(testtime.D10ms) // tiny delay to let event reach the loop
 	require.NoError(t, w.Close(context.Background()), "Close(ctx) during active debounce timer must not error")
 }
 
@@ -740,13 +743,13 @@ func TestWatcher_Close_ConcurrentImmediateCallbacksRace(t *testing.T) {
 	close(start)
 	select {
 	case <-callbackStarted:
-	case <-time.After(2 * time.Second):
+	case <-time.After(testtime.D2s):
 		close(releaseCallbacks)
 		wg.Wait()
 		t.Fatal("callback did not start")
 	}
 
-	closeCtx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	closeCtx, cancel := context.WithTimeout(context.Background(), testtime.MediumPoll)
 	defer cancel()
 	_ = w.Close(closeCtx)
 
@@ -759,7 +762,7 @@ func TestWatcher_RaceDetection_ConcurrentWriteAndClose(t *testing.T) {
 	file := filepath.Join(dir, "config.yaml")
 	touchFile(t, file, "key: v0")
 
-	w, err := NewWatcher(file, WithDebounce(50*time.Millisecond))
+	w, err := NewWatcher(file, WithDebounce(testtime.MediumPoll))
 	require.NoError(t, err)
 
 	w.OnChange(func(_ WatchEvent) {})
@@ -772,12 +775,12 @@ func TestWatcher_RaceDetection_ConcurrentWriteAndClose(t *testing.T) {
 	wg.Go(func() {
 		for i := range 20 {
 			touchFile(t, file, "key: race"+string(rune('0'+i%10)))
-			time.Sleep(5 * time.Millisecond)
+			time.Sleep(testtime.FastPoll)
 		}
 	})
 
 	// Close after a short delay.
-	time.Sleep(50 * time.Millisecond)
+	time.Sleep(testtime.ShortSleep)
 	_ = w.Close(context.Background())
 
 	wg.Wait()
@@ -798,7 +801,7 @@ func TestWatcher_Close_AcceptsCtx(t *testing.T) {
 	w, err := NewWatcher(file, WithDebounce(0))
 	require.NoError(t, err)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), testtime.CtxDefault)
 	defer cancel()
 
 	err = w.Close(ctx)
@@ -813,7 +816,7 @@ func TestWatcher_Close_RespectsCtxDeadline(t *testing.T) {
 	touchFile(t, file, "key: v0")
 
 	// Create a watcher with a long drain timeout (irrelevant — ctx wins).
-	w, err := NewWatcher(file, WithDebounce(0), WithDrainTimeout(10*time.Second))
+	w, err := NewWatcher(file, WithDebounce(0), WithDrainTimeout(testtime.D10s))
 	require.NoError(t, err)
 	w.Start()
 	waitReady(t, w)
@@ -831,12 +834,12 @@ func TestWatcher_Close_RespectsCtxDeadline(t *testing.T) {
 	touchFile(t, file, "key: v1")
 	select {
 	case <-callbackBlocked:
-	case <-time.After(2 * time.Second):
+	case <-time.After(testtime.D2s):
 		t.Fatal("callback did not start in time")
 	}
 
 	// Close with a short budget — should return promptly with ctx error.
-	shortCtx, shortCancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	shortCtx, shortCancel := context.WithTimeout(context.Background(), testtime.MediumPoll)
 	defer shortCancel()
 
 	start := time.Now()
@@ -844,7 +847,7 @@ func TestWatcher_Close_RespectsCtxDeadline(t *testing.T) {
 	elapsed := time.Since(start)
 
 	assert.Error(t, err, "Close(ctx) must return error when ctx budget exceeded")
-	assert.Less(t, elapsed, 200*time.Millisecond,
+	assert.Less(t, elapsed, testtime.D200ms,
 		"Close(ctx) must return within budget; got %s", elapsed)
 
 	close(callbackRelease) // unblock the callback goroutine
@@ -889,7 +892,7 @@ func TestWatcher_PivotTick_CoversPositiveBranch(t *testing.T) {
 
 	w, err := NewWatcher(link,
 		WithDebounce(0),
-		WithSymlinkPollInterval(5*time.Millisecond),
+		WithSymlinkPollInterval(testtime.FastPoll),
 	)
 	require.NoError(t, err)
 	defer func() { _ = w.Close(context.Background()) }()
@@ -910,7 +913,7 @@ func TestWatcher_PivotTick_CoversPositiveBranch(t *testing.T) {
 	// Wait for the first pivot callback (event path on Linux, tick on macOS).
 	require.Eventually(t, func() bool {
 		return pivotCount.Load() >= 1
-	}, 2*time.Second, 5*time.Millisecond, "first pivot must be detected")
+	}, testtime.D2s, testtime.FastPoll, "first pivot must be detected")
 
 	// Reset lastResolved to the stale value so the next tick sees v2 ≠ v1 and
 	// enters the positive branch — covering the metrics+callback lines.
@@ -921,7 +924,7 @@ func TestWatcher_PivotTick_CoversPositiveBranch(t *testing.T) {
 	// The next tick (≤5ms) will call checkSymlinkPivot → true → cover lines 302-304.
 	assert.Eventually(t, func() bool {
 		return pivotCount.Load() >= 2
-	}, 2*time.Second, 5*time.Millisecond, "tick path positive branch must fire second callback")
+	}, testtime.D2s, testtime.FastPoll, "tick path positive branch must fire second callback")
 }
 
 func TestWatcher_WithSymlinkPollInterval_DisablesPoll(t *testing.T) {
@@ -951,7 +954,7 @@ func TestWatcher_WithSymlinkPollInterval_DisablesPoll(t *testing.T) {
 	require.NoError(t, os.Symlink(v2, link))
 
 	// Give a brief window; the test asserts the loop does not crash, not callback count.
-	time.Sleep(150 * time.Millisecond)
+	time.Sleep(testtime.D150ms)
 	// No assertion on called.Load() — fsnotify may or may not fire; we only
 	// verify the watcher stays alive with poll disabled.
 	_ = called.Load()
@@ -970,7 +973,7 @@ func TestWatcher_WithSymlinkPollInterval_CustomInterval(t *testing.T) {
 	require.NoError(t, os.Symlink(v1, link))
 
 	// Use a short custom poll interval so the pivot is detected via the ticker.
-	w, err := NewWatcher(link, WithDebounce(0), WithSymlinkPollInterval(20*time.Millisecond))
+	w, err := NewWatcher(link, WithDebounce(0), WithSymlinkPollInterval(testtime.D20ms))
 	require.NoError(t, err)
 	defer func() { _ = w.Close(context.Background()) }()
 
@@ -988,7 +991,7 @@ func TestWatcher_WithSymlinkPollInterval_CustomInterval(t *testing.T) {
 
 	assert.Eventually(t, func() bool {
 		return gotPivot.Load() >= 1
-	}, 2*time.Second, 20*time.Millisecond, "custom poll interval must detect symlink pivot")
+	}, testtime.D2s, testtime.D20ms, "custom poll interval must detect symlink pivot")
 }
 
 // TestWatcher_isRelevantEvent_TableDriven locks the dispatch matrix used by

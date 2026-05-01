@@ -11,9 +11,16 @@ import (
 	"time"
 
 	kout "github.com/ghbvf/gocell/kernel/outbox"
+	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// relayStaleAge is the age used to seed "old enough to delete" entries.
+const relayStaleAge = -testtime.D24h - testtime.D24h // -48h
+
+// relayMinRetentionInternal is the retention period that allows 48h-old entries to pass the cutoff.
+const relayMinRetentionInternal = testtime.D1ms
 
 // ---------------------------------------------------------------------------
 // minimalStore — tiny in-package Store for white-box tests
@@ -41,7 +48,7 @@ func newMinimalStore() *minimalStore { return &minimalStore{rows: make(map[strin
 func (s *minimalStore) seedPending(id string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	past := time.Now().Add(-48 * time.Hour)
+	past := time.Now().Add(relayStaleAge)
 	s.rows[id] = &minimalRow{
 		entry:  kout.Entry{ID: id, EventType: "ev", Payload: []byte(`{}`), CreatedAt: past},
 		status: "pending",
@@ -55,7 +62,7 @@ func (s *minimalStore) forcePublished(id string) {
 	if !ok {
 		return
 	}
-	past := time.Now().Add(-48 * time.Hour)
+	past := time.Now().Add(relayStaleAge)
 	r.status = "published"
 	r.publishedAt = &past
 	r.claimedAt = nil
@@ -68,7 +75,7 @@ func (s *minimalStore) forceDead(id string) {
 	if !ok {
 		return
 	}
-	past := time.Now().Add(-48 * time.Hour)
+	past := time.Now().Add(relayStaleAge)
 	r.status = "dead"
 	r.deadAt = &past
 	r.claimedAt = nil
@@ -257,11 +264,11 @@ func TestRelay_Cleanup_DeletesPublishedAndDead(t *testing.T) {
 
 	// Use retention period of 1ms so all 48h-old entries are within cutoff.
 	cfg := RelayConfig{
-		RetentionPeriod:     1 * time.Millisecond,
-		DeadRetentionPeriod: 1 * time.Millisecond,
+		RetentionPeriod:     relayMinRetentionInternal,
+		DeadRetentionPeriod: relayMinRetentionInternal,
 	}.WithDefaults()
-	cfg.RetentionPeriod = 1 * time.Millisecond
-	cfg.DeadRetentionPeriod = 1 * time.Millisecond
+	cfg.RetentionPeriod = relayMinRetentionInternal
+	cfg.DeadRetentionPeriod = relayMinRetentionInternal
 
 	relay := &Relay{
 		store:   store,
@@ -277,7 +284,7 @@ func TestRelay_Cleanup_DeletesPublishedAndDead(t *testing.T) {
 			return false
 		}
 		return store.count() == 0
-	}, time.Second, 2*time.Millisecond, "both published and dead entries must be deleted")
+	}, testtime.D1s, testtime.D2ms, "both published and dead entries must be deleted")
 }
 
 func TestRelay_Cleanup_NoEntries_NoError(t *testing.T) {
@@ -294,15 +301,15 @@ func TestRelay_Cleanup_NoEntries_NoError(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestCappedDelay_ZeroAndNegative(t *testing.T) {
-	r := &Relay{cfg: RelayConfig{MaxRetryDelay: 5 * time.Minute}.WithDefaults()}
+	r := &Relay{cfg: RelayConfig{MaxRetryDelay: testtime.D5min}.WithDefaults()}
 	assert.Equal(t, time.Duration(0), r.cappedDelay(0))
-	assert.Equal(t, time.Duration(0), r.cappedDelay(-1*time.Second))
+	assert.Equal(t, time.Duration(0), r.cappedDelay(testtime.DNeg1s))
 }
 
 func TestCappedDelay_CapsAtMax(t *testing.T) {
-	r := &Relay{cfg: RelayConfig{MaxRetryDelay: 10 * time.Second}.WithDefaults()}
-	assert.Equal(t, 10*time.Second, r.cappedDelay(20*time.Second))
-	assert.Equal(t, 5*time.Second, r.cappedDelay(5*time.Second))
+	r := &Relay{cfg: RelayConfig{MaxRetryDelay: testtime.D10s}.WithDefaults()}
+	assert.Equal(t, testtime.D10s, r.cappedDelay(testtime.D20s))
+	assert.Equal(t, testtime.D5s, r.cappedDelay(testtime.D5s))
 }
 
 // ---------------------------------------------------------------------------

@@ -12,6 +12,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/assembly"
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/outbox"
+	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/runtime/config"
 	"github.com/ghbvf/gocell/runtime/http/health"
 	"github.com/ghbvf/gocell/runtime/http/router"
@@ -440,7 +441,7 @@ func TestPhase8_StartWorkers_WorkersRegistered_WorkerErrChCreated(t *testing.T) 
 	s.runCancel()
 	select {
 	case <-s.workerErrCh:
-	case <-time.After(2 * time.Second):
+	case <-time.After(testtime.D2s):
 		t.Fatal("worker did not exit after runCtx cancel")
 	}
 }
@@ -589,7 +590,7 @@ func TestPhaseState_AddCloser_PrefersContextCloser(t *testing.T) {
 	s.addCloser(cc)
 	require.Len(t, s.teardowns, 1)
 
-	shutCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	shutCtx, cancel := context.WithTimeout(context.Background(), testtime.CtxDefault)
 	defer cancel()
 	require.NoError(t, s.teardowns[0].fn(shutCtx))
 
@@ -654,7 +655,7 @@ func TestPhase1_WatcherTeardown_ContextCloserPreferredOverIoCloser(t *testing.T)
 
 	require.Len(t, s.teardowns, 1)
 
-	shutCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	shutCtx, cancel := context.WithTimeout(context.Background(), testtime.D2s)
 	defer cancel()
 	require.NoError(t, s.teardowns[0].fn(shutCtx))
 
@@ -683,7 +684,7 @@ func TestPhase2InitPubSub_SubscriberCloseReceivesShutCtx(t *testing.T) {
 	_, s := newPhaseState()
 	b.phase2InitPubSub(s)
 
-	shutCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	shutCtx, cancel := context.WithTimeout(context.Background(), testtime.CtxDefault)
 	defer cancel()
 
 	require.Len(t, s.teardowns, 1)
@@ -712,7 +713,7 @@ func TestPhase2InitPubSub_PublisherCloseReceivesShutCtx(t *testing.T) {
 	_, s := newPhaseState()
 	b.phase2InitPubSub(s)
 
-	shutCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	shutCtx, cancel := context.WithTimeout(context.Background(), testtime.CtxDefault)
 	defer cancel()
 
 	// Two teardowns: one for sub, one for pub (different instances).
@@ -744,7 +745,7 @@ func TestPhase2InitPubSub_SharedBus_ClosedExactlyOnce(t *testing.T) {
 	_, s := newPhaseState()
 	b.phase2InitPubSub(s)
 
-	shutCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	shutCtx, cancel := context.WithTimeout(context.Background(), testtime.CtxDefault)
 	defer cancel()
 
 	for _, td := range s.teardowns {
@@ -772,7 +773,7 @@ func TestPhase10_TeardownPropagatesShutCtx_ToAllContextClosers(t *testing.T) {
 		s.addCloser(cc)
 	}
 
-	shutCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	shutCtx, cancel := context.WithTimeout(context.Background(), testtime.CtxDefault)
 	defer cancel()
 
 	errs := b.phase10LIFOTeardown(shutCtx, s)

@@ -37,6 +37,7 @@ import (
 	"time"
 
 	"github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -44,7 +45,7 @@ import (
 
 const walkthroughServiceSecret = "walkthrough-service-token-secret-32b"
 
-var walkthroughHTTPClient = &http.Client{Timeout: time.Second}
+var walkthroughHTTPClient = &http.Client{Timeout: testtime.D1s}
 
 type capturedLogRecords struct {
 	mu      sync.Mutex
@@ -164,7 +165,7 @@ func (s *walkthroughServer) Cleanup(t *testing.T) {
 	select {
 	case err := <-s.done:
 		require.NoError(t, err)
-	case <-time.After(5 * time.Second):
+	case <-time.After(testtime.SelectShutdown):
 		t.Fatal("ssobff did not shut down within 5s")
 	}
 }
@@ -219,9 +220,9 @@ func newWalkthroughListener(t *testing.T) net.Listener {
 
 func waitForWalkthroughReady(t *testing.T, readyzURL string, done <-chan error) {
 	t.Helper()
-	deadline := time.NewTimer(5 * time.Second)
+	deadline := time.NewTimer(testtime.EventuallyLong)
 	defer deadline.Stop()
-	tick := time.NewTicker(50 * time.Millisecond)
+	tick := time.NewTicker(testtime.MediumPoll)
 	defer tick.Stop()
 	for {
 		select {
@@ -286,7 +287,7 @@ func TestWalkthrough(t *testing.T) {
 	require.Eventually(t, func() bool {
 		_, statErr := os.Stat(credPath)
 		return statErr == nil
-	}, 5*time.Second, 50*time.Millisecond, "credential file must exist after Init")
+	}, testtime.EventuallyLong, testtime.MediumPoll, "credential file must exist after Init")
 
 	bootstrapUsername, bootstrapPassword, err := credentialFromFile(credPath)
 	require.NoError(t, err, "must read credentials from credential file")
@@ -614,7 +615,7 @@ func TestWalkthrough(t *testing.T) {
 				entries = data
 			}
 			return ok
-		}, 2*time.Second, 50*time.Millisecond, "expected at least one audit entry")
+		}, testtime.D2s, testtime.MediumPoll, "expected at least one audit entry")
 
 		for _, raw := range entries {
 			var entry map[string]json.RawMessage

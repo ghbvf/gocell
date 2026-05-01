@@ -4,10 +4,16 @@ import (
 	"context"
 	"fmt"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
+
+	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 )
+
+// healthtestD30ms is the budget passed to CheckCtxRespected for the
+// uncooperative-probe test. 30ms is too small for testtime.MediumPoll (50ms)
+// but intentionally short so the spy sees a fast failure.
+const healthtestD30ms = 30 * testtime.D1ms
 
 // TestCheckCtxRespected_PassesOnCooperativeProbe is a minimal smoke test
 // for the exported helper that probe authors will use in their own unit
@@ -17,7 +23,7 @@ func TestCheckCtxRespected_PassesOnCooperativeProbe(t *testing.T) {
 		<-ctx.Done()
 		return ctx.Err()
 	}
-	CheckCtxRespected(t, cooperative, 50*time.Millisecond)
+	CheckCtxRespected(t, cooperative, testtime.MediumPoll)
 }
 
 // TestCheckCtxRespected_DetectsUncooperativeProbe exercises the failure
@@ -31,7 +37,7 @@ func TestCheckCtxRespected_DetectsUncooperativeProbe(t *testing.T) {
 		return nil
 	}
 	spy := &tbSpy{TB: t}
-	CheckCtxRespected(spy, stuck, 30*time.Millisecond)
+	CheckCtxRespected(spy, stuck, healthtestD30ms)
 	assert.True(t, spy.errored, "CheckCtxRespected must flag an uncooperative probe")
 	assert.Contains(t, spy.lastMsg, "did not return within")
 }

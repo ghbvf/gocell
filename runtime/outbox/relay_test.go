@@ -10,11 +10,17 @@ import (
 
 	kernellifecycle "github.com/ghbvf/gocell/kernel/lifecycle"
 	kout "github.com/ghbvf/gocell/kernel/outbox"
+	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/runtime/outbox"
 	"github.com/ghbvf/gocell/runtime/outbox/outboxtest"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// relayMinRetention is the smallest positive RetentionPeriod that bypasses the
+// RelayConfig.WithDefaults "zero means missing" guard, ensuring the cleanup loop
+// deletes entries on its very first pass.
+const relayMinRetention = 1 * time.Nanosecond
 
 // Compile-time assertion: Relay must implement ManagedResource.
 var _ kernellifecycle.ManagedResource = (*outbox.Relay)(nil)
@@ -115,16 +121,16 @@ func makeEntry(id, eventType string) outbox.ClaimedEntry {
 
 func fastCfg() outbox.RelayConfig {
 	return outbox.RelayConfig{
-		PollInterval:        5 * time.Millisecond,
-		ReclaimInterval:     10 * time.Millisecond,
+		PollInterval:        testtime.FastPoll,
+		ReclaimInterval:     testtime.D10ms,
 		BatchSize:           10,
 		MaxAttempts:         3,
-		BaseRetryDelay:      1 * time.Millisecond,
-		MaxRetryDelay:       10 * time.Millisecond,
-		ClaimTTL:            100 * time.Millisecond,
-		RetentionPeriod:     1 * time.Hour,
-		DeadRetentionPeriod: 24 * time.Hour,
-		CleanupWaitFloor:    5 * time.Millisecond,
+		BaseRetryDelay:      testtime.D1ms,
+		MaxRetryDelay:       testtime.D10ms,
+		ClaimTTL:            testtime.D100ms,
+		RetentionPeriod:     testtime.D1h,
+		DeadRetentionPeriod: testtime.D24h,
+		CleanupWaitFloor:    testtime.FastPoll,
 	}
 }
 
@@ -134,7 +140,7 @@ func startRelay(t *testing.T, relay *outbox.Relay) (stop func()) {
 	ctx, cancel := context.WithCancel(context.Background())
 	go func() { _ = relay.Start(ctx) }()
 	return func() {
-		stopCtx, stopCancel := context.WithTimeout(context.Background(), 2*time.Second)
+		stopCtx, stopCancel := context.WithTimeout(context.Background(), testtime.D2s)
 		defer stopCancel()
 		require.NoError(t, relay.Stop(stopCtx))
 		cancel()
@@ -144,12 +150,12 @@ func startRelay(t *testing.T, relay *outbox.Relay) (stop func()) {
 // waitUntil polls cond until it returns true or 500ms is exceeded.
 func waitUntil(t *testing.T, cond func() bool) {
 	t.Helper()
-	deadline := time.Now().Add(500 * time.Millisecond)
+	deadline := time.Now().Add(testtime.D500ms)
 	for time.Now().Before(deadline) {
 		if cond() {
 			return
 		}
-		time.Sleep(2 * time.Millisecond)
+		time.Sleep(testtime.D2ms)
 	}
 	t.Fatalf("condition not met within 500ms")
 }
@@ -297,9 +303,9 @@ func TestRelay_Shutdown_CleanStop(t *testing.T) {
 		default:
 			return false
 		}
-	}, time.Second, time.Millisecond, "relay not ready")
+	}, testtime.EventuallyShort, testtime.D1ms, "relay not ready")
 
-	stopCtx, stopCancel := context.WithTimeout(context.Background(), 2*time.Second)
+	stopCtx, stopCancel := context.WithTimeout(context.Background(), testtime.D2s)
 	defer stopCancel()
 
 	err := relay.Stop(stopCtx)
@@ -314,7 +320,7 @@ func TestRelay_StopBeforeStart_IsNoop(t *testing.T) {
 	store := outboxtest.NewFakeStore()
 	relay := outbox.NewRelay(store, newFakePublisher(), fastCfg())
 
-	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	ctx, cancel := context.WithTimeout(context.Background(), testtime.D100ms)
 	defer cancel()
 
 	err := relay.Stop(ctx)
@@ -335,11 +341,11 @@ func TestRelay_Stop_Idempotent(t *testing.T) {
 	// Wait for relay to reach running state.
 	select {
 	case <-relay.Ready():
-	case <-time.After(2 * time.Second):
+	case <-time.After(testtime.D2s):
 		t.Fatal("relay did not become ready in time")
 	}
 
-	stopCtx, stopCancel := context.WithTimeout(context.Background(), 2*time.Second)
+	stopCtx, stopCancel := context.WithTimeout(context.Background(), testtime.D2s)
 	defer stopCancel()
 
 	// First Stop — should succeed.
@@ -354,7 +360,7 @@ func TestRelay_Stop_Idempotent(t *testing.T) {
 	select {
 	case runErr := <-errCh:
 		assert.NoError(t, runErr)
-	case <-time.After(2 * time.Second):
+	case <-time.After(testtime.D2s):
 		t.Fatal("relay did not shut down in time")
 	}
 }
@@ -376,7 +382,7 @@ func TestRelay_DoubleStart_Error(t *testing.T) {
 		default:
 			return false
 		}
-	}, time.Second, time.Millisecond, "relay not ready for DoubleStart test")
+	}, testtime.EventuallyShort, testtime.D1ms, "relay not ready for DoubleStart test")
 
 	err := relay.Start(context.Background())
 	require.Error(t, err)
@@ -404,9 +410,9 @@ func TestRelay_CanRestartAfterStop(t *testing.T) {
 			default:
 				return false
 			}
-		}, time.Second, time.Millisecond, "relay not ready in iteration %d", i)
+		}, testtime.EventuallyShort, testtime.D1ms, "relay not ready in iteration %d", i)
 
-		stopCtx, stopCancel := context.WithTimeout(context.Background(), 2*time.Second)
+		stopCtx, stopCancel := context.WithTimeout(context.Background(), testtime.D2s)
 		err := relay.Stop(stopCtx)
 		stopCancel()
 		cancel()
@@ -427,8 +433,8 @@ func TestRelay_ReclaimStale_RecoveryLoop(t *testing.T) {
 
 	// Use a very short ClaimTTL so ReclaimStale fires quickly in tests.
 	cfg := fastCfg()
-	cfg.ClaimTTL = 5 * time.Millisecond
-	cfg.ReclaimInterval = 5 * time.Millisecond
+	cfg.ClaimTTL = testtime.FastPoll
+	cfg.ReclaimInterval = testtime.FastPoll
 
 	// Publisher that blocks indefinitely (simulates crash during publish).
 	blockPub := &blockingPublisher{}
@@ -477,7 +483,7 @@ func TestRelay_StoreCleanup_DirectCall(t *testing.T) {
 	assert.Equal(t, "published", snap[0].Status)
 
 	// Manually invoke CleanupPublished with a future cutoff.
-	deleted, err := store.CleanupPublished(ctx, time.Now().Add(time.Hour), 1000)
+	deleted, err := store.CleanupPublished(ctx, time.Now().Add(testtime.D1h), 1000)
 	require.NoError(t, err)
 	assert.Equal(t, 1, deleted)
 
@@ -507,8 +513,8 @@ func TestRelay_CleanupLoop_RunsImmediatelyAtStart(t *testing.T) {
 	// 72h default; use a tiny positive value to keep the override).
 	// The relay must delete the entry on the very first cleanupLoop pass.
 	cfg := fastCfg()
-	cfg.RetentionPeriod = 1 * time.Nanosecond
-	cfg.DeadRetentionPeriod = 1 * time.Nanosecond
+	cfg.RetentionPeriod = relayMinRetention
+	cfg.DeadRetentionPeriod = relayMinRetention
 	relay := outbox.NewRelay(store, newFakePublisher(), cfg)
 
 	stop := startRelay(t, relay)
@@ -723,7 +729,7 @@ func (s *failingStore) OldestEligibleAt(ctx context.Context, status string) (tim
 	if cpErr != nil && status == "published" {
 		// Return a time just barely in the past so nextCleanupWait computes
 		// near-zero and falls to cleanupWaitFloor (set to 5ms in tests).
-		return time.Now().Add(-time.Millisecond), true, nil
+		return time.Now().Add(-testtime.D1ms), true, nil
 	}
 	return s.FakeStore.OldestEligibleAt(ctx, status)
 }
@@ -735,8 +741,8 @@ func budgetCfg() outbox.RelayConfig {
 	cfg.CleanupFailureBudget = 3
 	// Use a tiny RetentionPeriod so nextCleanupWait returns floor (5ms) when
 	// OldestEligibleAt reports a row was published ~1ms ago.
-	cfg.RetentionPeriod = time.Millisecond
-	cfg.DeadRetentionPeriod = time.Millisecond
+	cfg.RetentionPeriod = testtime.D1ms
+	cfg.DeadRetentionPeriod = testtime.D1ms
 	return cfg
 }
 
@@ -757,7 +763,7 @@ func TestRelay_PollFailureBudget_TripsAfterConsecutiveFailures(t *testing.T) {
 			return false
 		}
 		return fn(context.Background()) != nil
-	}, 2*time.Second, 5*time.Millisecond, "poll budget must trip after consecutive failures")
+	}, testtime.D2s, testtime.FastPoll, "poll budget must trip after consecutive failures")
 }
 
 func TestRelay_PollFailureBudget_ResetsOnSuccess(t *testing.T) {
@@ -774,7 +780,7 @@ func TestRelay_PollFailureBudget_ResetsOnSuccess(t *testing.T) {
 		checkers := relay.Checkers()
 		fn, ok := checkers["outbox-relay-poll"]
 		return ok && fn(context.Background()) != nil
-	}, 2*time.Second, 5*time.Millisecond, "budget must trip")
+	}, testtime.D2s, testtime.FastPoll, "budget must trip")
 
 	// Clear the error so poll succeeds.
 	store.setClaimErr(nil)
@@ -784,7 +790,7 @@ func TestRelay_PollFailureBudget_ResetsOnSuccess(t *testing.T) {
 		checkers := relay.Checkers()
 		fn, ok := checkers["outbox-relay-poll"]
 		return ok && fn(context.Background()) == nil
-	}, 2*time.Second, 5*time.Millisecond, "poll budget must reset after success")
+	}, testtime.D2s, testtime.FastPoll, "poll budget must reset after success")
 }
 
 func TestRelay_ReclaimFailureBudget_Independent(t *testing.T) {
@@ -801,7 +807,7 @@ func TestRelay_ReclaimFailureBudget_Independent(t *testing.T) {
 		checkers := relay.Checkers()
 		fn, ok := checkers["outbox-relay-reclaim"]
 		return ok && fn(context.Background()) != nil
-	}, 2*time.Second, 5*time.Millisecond, "reclaim budget must trip")
+	}, testtime.D2s, testtime.FastPoll, "reclaim budget must trip")
 
 	// Verify poll checker exists upfront (fail-fast if absent, catching silent skips).
 	checkers := relay.Checkers()
@@ -811,7 +817,7 @@ func TestRelay_ReclaimFailureBudget_Independent(t *testing.T) {
 	// Poll checker must never become unhealthy while only reclaim fails.
 	assert.Never(t, func() bool {
 		return pollChecker(context.Background()) != nil
-	}, 100*time.Millisecond, 5*time.Millisecond, "poll budget should not trip while only reclaim fails")
+	}, testtime.D100ms, testtime.FastPoll, "poll budget should not trip while only reclaim fails")
 }
 
 func TestRelay_CleanupFailureBudget_Independent(t *testing.T) {
@@ -828,7 +834,7 @@ func TestRelay_CleanupFailureBudget_Independent(t *testing.T) {
 		checkers := relay.Checkers()
 		fn, ok := checkers["outbox-relay-cleanup"]
 		return ok && fn(context.Background()) != nil
-	}, 2*time.Second, 5*time.Millisecond, "cleanup budget must trip")
+	}, testtime.D2s, testtime.FastPoll, "cleanup budget must trip")
 
 	// Verify poll checker exists upfront (fail-fast if absent, catching silent skips).
 	checkers2 := relay.Checkers()
@@ -838,7 +844,7 @@ func TestRelay_CleanupFailureBudget_Independent(t *testing.T) {
 	// Poll checker must never become unhealthy while only cleanup fails.
 	assert.Never(t, func() bool {
 		return pollChecker2(context.Background()) != nil
-	}, 100*time.Millisecond, 5*time.Millisecond, "poll budget should not trip while only cleanup fails")
+	}, testtime.D100ms, testtime.FastPoll, "poll budget should not trip while only cleanup fails")
 }
 
 func TestRelay_HealthCheckers_RegistersThree(t *testing.T) {
@@ -882,7 +888,7 @@ func TestRelay_CanRestartAfterTrip_ResetsBudget(t *testing.T) {
 		checkers := relay.Checkers()
 		fn, ok := checkers["outbox-relay-poll"]
 		return ok && fn(context.Background()) != nil
-	}, 2*time.Second, 5*time.Millisecond, "poll budget must trip during first run")
+	}, testtime.D2s, testtime.FastPoll, "poll budget must trip during first run")
 
 	stop() // gracefully stop; defer in Start resets readyCh for next Start
 
@@ -895,7 +901,7 @@ func TestRelay_CanRestartAfterTrip_ResetsBudget(t *testing.T) {
 		_ = fn
 		_ = ok
 		return true // we'll use Ready() channel approach below
-	}, 100*time.Millisecond, 2*time.Millisecond)
+	}, testtime.D100ms, testtime.D2ms)
 
 	// Clear the error so the second run succeeds.
 	store.setClaimErr(nil)
@@ -907,7 +913,7 @@ func TestRelay_CanRestartAfterTrip_ResetsBudget(t *testing.T) {
 	// Wait for relay to be running.
 	select {
 	case <-relay.Ready():
-	case <-time.After(2 * time.Second):
+	case <-time.After(testtime.D2s):
 		t.Fatal("relay did not become ready for second run")
 	}
 
@@ -935,7 +941,7 @@ func TestRelay_Ready_ReturnsReadyChannel(t *testing.T) {
 		default:
 			return false
 		}
-	}, 2*time.Second, 2*time.Millisecond, "relay.Ready() must close after Start")
+	}, testtime.D2s, testtime.D2ms, "relay.Ready() must close after Start")
 }
 
 // ---------------------------------------------------------------------------

@@ -26,6 +26,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/ctxkeys"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/auth/authtest"
 	"github.com/ghbvf/gocell/runtime/config"
@@ -43,7 +44,9 @@ import (
 // this delay lets the watcher's event loop drain before the next write,
 // preventing event coalescing or generation count inflation.
 // Value: 2× the fsnotify eventSeparator pattern (50ms) + CI margin.
-const fsnotifySettleDelay = 200 * time.Millisecond
+const fsnotifySettleDelay = testtime.D200ms
+
+const slowReloaderDelay = 300 * time.Millisecond
 
 // testVerboseToken is the shared verbose-mode token used in tests that exercise
 // /readyz?verbose. Since PR-MODE-1 (SEC-FAIL-CLOSED), verboseDecision denies
@@ -54,7 +57,7 @@ const testVerboseToken = "test-verbose-token"
 
 // testHTTPClient is used in place of http.DefaultClient to prevent test
 // hangs on stalled connections (e.g., during shutdown races).
-var testHTTPClient = &http.Client{Timeout: 2 * time.Second}
+var testHTTPClient = &http.Client{Timeout: testtime.D2s}
 
 // verboseGet issues an authenticated GET /readyz?verbose=true request, setting
 // the X-Readyz-Token header to testVerboseToken. Use this in place of
@@ -111,7 +114,7 @@ func waitForHealthy(t *testing.T, addr string) {
 		}
 		closeBody(t, resp)
 		return resp.StatusCode == http.StatusOK
-	}, 3*time.Second, 50*time.Millisecond, "HTTP server did not become ready")
+	}, testtime.EventuallyDefault, testtime.MediumPoll, "HTTP server did not become ready")
 }
 
 // readyzPayload extracts the readyz inner payload regardless of envelope.
@@ -193,7 +196,7 @@ func TestNew_WithOptions(t *testing.T) {
 		WithAssembly(asm),
 		WithPublisher(eb), WithSubscriber(eb),
 		WithListener(cell.PrimaryListener, ":7070", []cell.ListenerAuth{cell.AuthNone{}}),
-		WithShutdownTimeout(5*time.Second),
+		WithShutdownTimeout(testtime.D5s),
 	)
 
 	// PR-A14b: listener addr is recorded by WithListener into b.listenerConfigs.
@@ -205,7 +208,7 @@ func TestNew_WithOptions(t *testing.T) {
 	assert.Equal(t, asm, b.assemblyCore)
 	assert.Equal(t, eb, b.publisher)
 	assert.Equal(t, eb, b.subscriber)
-	assert.Equal(t, 5*time.Second, b.shutdownTimeout)
+	assert.Equal(t, testtime.D5s, b.shutdownTimeout)
 }
 
 // TestNew_WithMetricsProvider verifies that WithMetricsProvider is observable
@@ -282,7 +285,7 @@ func TestBootstrap_InvalidTrustedProxies_ReturnsError(t *testing.T) {
 		WithRouterOptions(router.WithTrustedProxies([]string{"not-valid"})),
 	)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), testtime.D2s)
 	defer cancel()
 
 	err := b.Run(ctx)
@@ -313,7 +316,7 @@ func TestBootstrap_RunWithInvalidConfig(t *testing.T) {
 		WithConfig("/nonexistent/config.yaml", "APP"),
 		WithListener(cell.PrimaryListener, "127.0.0.1:0", []cell.ListenerAuth{cell.AuthNone{}}),
 	)
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), testtime.CtxShort)
 	defer cancel()
 
 	err := b.Run(ctx)
@@ -494,7 +497,7 @@ func TestBootstrap_SubscriptionFailure_TriggersRollback(t *testing.T) {
 		WithAssembly(asm),
 		WithPublisher(eb), WithSubscriber(eb),
 		WithListener(cell.PrimaryListener, "127.0.0.1:0", []cell.ListenerAuth{cell.AuthNone{}}),
-		WithShutdownTimeout(time.Second),
+		WithShutdownTimeout(testtime.D1s),
 	)
 
 	ctx := context.Background()
@@ -523,7 +526,7 @@ func TestBootstrap_EventRouter_HappyPath(t *testing.T) {
 		WithPublisher(eb),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(ln)),
 		WithListener(cell.InternalListener, "127.0.0.1:0", []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(newLocalListener(t))),
-		WithShutdownTimeout(2*time.Second),
+		WithShutdownTimeout(testtime.D2s),
 	)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -538,14 +541,14 @@ func TestBootstrap_EventRouter_HappyPath(t *testing.T) {
 		}
 		closeBody(t, resp)
 		return resp.StatusCode == http.StatusOK
-	}, 3*time.Second, 50*time.Millisecond, "HTTP server did not become ready")
+	}, testtime.EventuallyDefault, testtime.MediumPoll, "HTTP server did not become ready")
 
 	cancel()
 
 	select {
 	case err := <-done:
 		assert.NoError(t, err, "clean shutdown should not produce an error")
-	case <-time.After(5 * time.Second):
+	case <-time.After(testtime.SelectShutdown):
 		t.Fatal("bootstrap did not shut down in time")
 	}
 }
@@ -576,7 +579,7 @@ func TestBootstrap_EventSubscriptions_RestoreObservabilityContext(t *testing.T) 
 		WithSubscriber(sub),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(ln)),
 		WithListener(cell.InternalListener, "127.0.0.1:0", []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(newLocalListener(t))),
-		WithShutdownTimeout(2*time.Second),
+		WithShutdownTimeout(testtime.D2s),
 	)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -588,7 +591,7 @@ func TestBootstrap_EventSubscriptions_RestoreObservabilityContext(t *testing.T) 
 		assert.Equal(t, "req-ctx-1", observed["request_id"])
 		assert.Equal(t, "corr-ctx-1", observed["correlation_id"])
 		assert.Equal(t, "trace-ctx-1", observed["trace_id"])
-	case <-time.After(3 * time.Second):
+	case <-time.After(testtime.EventuallyDefault):
 		t.Fatal("timed out waiting for restored consumer context")
 	}
 
@@ -600,13 +603,13 @@ func TestBootstrap_EventSubscriptions_RestoreObservabilityContext(t *testing.T) 
 		}
 		closeBody(t, resp)
 		return resp.StatusCode == http.StatusOK
-	}, 3*time.Second, 50*time.Millisecond, "HTTP server did not become ready")
+	}, testtime.EventuallyDefault, testtime.MediumPoll, "HTTP server did not become ready")
 
 	cancel()
 	select {
 	case err := <-done:
 		assert.NoError(t, err)
-	case <-time.After(5 * time.Second):
+	case <-time.After(testtime.SelectShutdown):
 		t.Fatal("bootstrap did not shut down in time")
 	}
 }
@@ -619,7 +622,7 @@ func TestBootstrap_RunContextCancel(t *testing.T) {
 
 	b := New(
 		WithListener(cell.PrimaryListener, "127.0.0.1:0", []cell.ListenerAuth{cell.AuthNone{}}),
-		WithShutdownTimeout(time.Second),
+		WithShutdownTimeout(testtime.D1s),
 	)
 
 	// This should complete quickly, either with a listen error
@@ -652,7 +655,7 @@ func TestBootstrap_WithHealthChecker_Healthy(t *testing.T) {
 		WithAssembly(asm),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(ln)),
 		WithListener(cell.InternalListener, "127.0.0.1:0", []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(newLocalListener(t))),
-		WithShutdownTimeout(2*time.Second),
+		WithShutdownTimeout(testtime.D2s),
 		WithHealthChecker("rabbitmq", func(_ context.Context) error { return nil }),
 		WithHealthRoutes(WithReadyzVerboseToken(testVerboseToken)),
 	)
@@ -670,7 +673,7 @@ func TestBootstrap_WithHealthChecker_Healthy(t *testing.T) {
 		}
 		closeBody(t, resp)
 		return resp.StatusCode == http.StatusOK
-	}, 3*time.Second, 50*time.Millisecond, "HTTP server did not become ready")
+	}, testtime.EventuallyDefault, testtime.MediumPoll, "HTTP server did not become ready")
 
 	// GET /readyz?verbose and verify the checker appears as healthy.
 	resp, err := verboseGet(ctx, fmt.Sprintf("http://%s", addr))
@@ -691,7 +694,7 @@ func TestBootstrap_WithHealthChecker_Healthy(t *testing.T) {
 	select {
 	case runErr := <-done:
 		assert.NoError(t, runErr)
-	case <-time.After(5 * time.Second):
+	case <-time.After(testtime.SelectShutdown):
 		t.Fatal("bootstrap did not shut down in time")
 	}
 }
@@ -707,7 +710,7 @@ func TestBootstrap_WithHealthChecker_Unhealthy(t *testing.T) {
 		WithAssembly(asm),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(ln)),
 		WithListener(cell.InternalListener, "127.0.0.1:0", []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(newLocalListener(t))),
-		WithShutdownTimeout(2*time.Second),
+		WithShutdownTimeout(testtime.D2s),
 		WithHealthChecker("rabbitmq", func(_ context.Context) error {
 			return fmt.Errorf("connection closed")
 		}),
@@ -727,7 +730,7 @@ func TestBootstrap_WithHealthChecker_Unhealthy(t *testing.T) {
 		}
 		closeBody(t, resp)
 		return true
-	}, 3*time.Second, 50*time.Millisecond, "HTTP server did not become ready")
+	}, testtime.EventuallyDefault, testtime.MediumPoll, "HTTP server did not become ready")
 
 	// GET /readyz?verbose and verify the checker appears as unhealthy.
 	resp, err := verboseGet(ctx, fmt.Sprintf("http://%s", addr))
@@ -748,7 +751,7 @@ func TestBootstrap_WithHealthChecker_Unhealthy(t *testing.T) {
 	select {
 	case runErr := <-done:
 		assert.NoError(t, runErr)
-	case <-time.After(5 * time.Second):
+	case <-time.After(testtime.SelectShutdown):
 		t.Fatal("bootstrap did not shut down in time")
 	}
 }
@@ -764,7 +767,7 @@ func TestBootstrap_WithAdapterInfo_AppearsInReadyz(t *testing.T) {
 		WithAssembly(asm),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(ln)),
 		WithListener(cell.InternalListener, "127.0.0.1:0", []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(newLocalListener(t))),
-		WithShutdownTimeout(2*time.Second),
+		WithShutdownTimeout(testtime.D2s),
 		WithAdapterInfo(map[string]string{
 			"mode":    "in-memory",
 			"storage": "in-memory",
@@ -784,7 +787,7 @@ func TestBootstrap_WithAdapterInfo_AppearsInReadyz(t *testing.T) {
 		}
 		closeBody(t, resp)
 		return resp.StatusCode == http.StatusOK
-	}, 3*time.Second, 50*time.Millisecond, "HTTP server did not become ready")
+	}, testtime.EventuallyDefault, testtime.MediumPoll, "HTTP server did not become ready")
 
 	resp, err := verboseGet(ctx, fmt.Sprintf("http://%s", addr))
 	require.NoError(t, err)
@@ -801,7 +804,7 @@ func TestBootstrap_WithAdapterInfo_AppearsInReadyz(t *testing.T) {
 	select {
 	case runErr := <-done:
 		assert.NoError(t, runErr)
-	case <-time.After(5 * time.Second):
+	case <-time.After(testtime.SelectShutdown):
 		t.Fatal("bootstrap did not shut down in time")
 	}
 }
@@ -841,7 +844,7 @@ func TestBootstrap_HealthContributor_Discovery_AppearsInReadyz(t *testing.T) {
 		WithAssembly(asm),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(ln)),
 		WithListener(cell.InternalListener, "127.0.0.1:0", []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(newLocalListener(t))),
-		WithShutdownTimeout(2*time.Second),
+		WithShutdownTimeout(testtime.D2s),
 		WithHealthRoutes(WithReadyzVerboseToken(testVerboseToken)),
 	)
 
@@ -857,7 +860,7 @@ func TestBootstrap_HealthContributor_Discovery_AppearsInReadyz(t *testing.T) {
 		}
 		closeBody(t, resp)
 		return resp.StatusCode == http.StatusOK
-	}, 3*time.Second, 50*time.Millisecond, "HTTP server did not become ready")
+	}, testtime.EventuallyDefault, testtime.MediumPoll, "HTTP server did not become ready")
 
 	resp, err := verboseGet(ctx, fmt.Sprintf("http://%s", addr))
 	require.NoError(t, err)
@@ -878,7 +881,7 @@ func TestBootstrap_HealthContributor_Discovery_AppearsInReadyz(t *testing.T) {
 	select {
 	case runErr := <-done:
 		assert.NoError(t, runErr)
-	case <-time.After(5 * time.Second):
+	case <-time.After(testtime.SelectShutdown):
 		t.Fatal("bootstrap did not shut down in time")
 	}
 }
@@ -900,7 +903,7 @@ func TestBootstrap_HealthContributor_DuplicateName_FailsFast(t *testing.T) {
 		WithAssembly(asm),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(ln)),
 		WithListener(cell.InternalListener, "127.0.0.1:0", []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(newLocalListener(t))),
-		WithShutdownTimeout(2*time.Second),
+		WithShutdownTimeout(testtime.D2s),
 	)
 
 	ctx := t.Context()
@@ -988,7 +991,7 @@ func TestBootstrap_WithMultipleHealthCheckers_OneUnhealthy(t *testing.T) {
 		WithAssembly(asm),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(ln)),
 		WithListener(cell.InternalListener, "127.0.0.1:0", []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(newLocalListener(t))),
-		WithShutdownTimeout(2*time.Second),
+		WithShutdownTimeout(testtime.D2s),
 		WithHealthChecker("rabbitmq", func(_ context.Context) error { return nil }),
 		WithHealthChecker("postgres", func(_ context.Context) error { return fmt.Errorf("connection refused") }),
 		WithHealthRoutes(WithReadyzVerboseToken(testVerboseToken)),
@@ -1006,7 +1009,7 @@ func TestBootstrap_WithMultipleHealthCheckers_OneUnhealthy(t *testing.T) {
 		}
 		closeBody(t, resp)
 		return resp.StatusCode == http.StatusOK
-	}, 3*time.Second, 50*time.Millisecond, "HTTP server did not become ready")
+	}, testtime.EventuallyDefault, testtime.MediumPoll, "HTTP server did not become ready")
 
 	// GET /readyz?verbose — one unhealthy checker should make the whole response 503.
 	resp, err := verboseGet(ctx, fmt.Sprintf("http://%s", addr))
@@ -1032,7 +1035,7 @@ func TestBootstrap_WithMultipleHealthCheckers_OneUnhealthy(t *testing.T) {
 	select {
 	case runErr := <-done:
 		assert.NoError(t, runErr)
-	case <-time.After(5 * time.Second):
+	case <-time.After(testtime.SelectShutdown):
 		t.Fatal("bootstrap did not shut down in time")
 	}
 }
@@ -1051,7 +1054,7 @@ func TestBootstrap_WithHealthChecker_DynamicStateTransition(t *testing.T) {
 		WithAssembly(asm),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(ln)),
 		WithListener(cell.InternalListener, "127.0.0.1:0", []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(newLocalListener(t))),
-		WithShutdownTimeout(2*time.Second),
+		WithShutdownTimeout(testtime.D2s),
 		WithHealthChecker("rabbitmq", func(_ context.Context) error {
 			if unhealthy.Load() {
 				return fmt.Errorf("connection lost")
@@ -1072,7 +1075,7 @@ func TestBootstrap_WithHealthChecker_DynamicStateTransition(t *testing.T) {
 		}
 		closeBody(t, resp)
 		return resp.StatusCode == http.StatusOK
-	}, 3*time.Second, 50*time.Millisecond, "HTTP server did not become ready")
+	}, testtime.EventuallyDefault, testtime.MediumPoll, "HTTP server did not become ready")
 
 	// Phase 1: healthy state → 200.
 	resp, err := testHTTPClient.Get(fmt.Sprintf("http://%s/readyz", addr))
@@ -1101,7 +1104,7 @@ func TestBootstrap_WithHealthChecker_DynamicStateTransition(t *testing.T) {
 	select {
 	case runErr := <-done:
 		assert.NoError(t, runErr)
-	case <-time.After(5 * time.Second):
+	case <-time.After(testtime.SelectShutdown):
 		t.Fatal("bootstrap did not shut down in time")
 	}
 }
@@ -1122,7 +1125,7 @@ func TestBootstrap_ConfigWatcher_ReadyzVerboseIncludesWatcher(t *testing.T) {
 		WithConfig(cfgFile, ""),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(ln)),
 		WithListener(cell.InternalListener, "127.0.0.1:0", []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(newLocalListener(t))),
-		WithShutdownTimeout(2*time.Second),
+		WithShutdownTimeout(testtime.D2s),
 		WithHealthRoutes(WithReadyzVerboseToken(testVerboseToken)),
 	)
 
@@ -1138,7 +1141,7 @@ func TestBootstrap_ConfigWatcher_ReadyzVerboseIncludesWatcher(t *testing.T) {
 		}
 		closeBody(t, resp)
 		return resp.StatusCode == http.StatusOK
-	}, 3*time.Second, 50*time.Millisecond, "HTTP server did not become ready")
+	}, testtime.EventuallyDefault, testtime.MediumPoll, "HTTP server did not become ready")
 
 	require.Eventually(t, func() bool {
 		resp, err := verboseGet(ctx, fmt.Sprintf("http://%s", addr))
@@ -1162,13 +1165,13 @@ func TestBootstrap_ConfigWatcher_ReadyzVerboseIncludesWatcher(t *testing.T) {
 			return false
 		}
 		return probe["status"] == "healthy"
-	}, 3*time.Second, 50*time.Millisecond, "config watcher did not become ready in time")
+	}, testtime.EventuallyDefault, testtime.MediumPoll, "config watcher did not become ready in time")
 
 	cancel()
 	select {
 	case runErr := <-done:
 		assert.NoError(t, runErr)
-	case <-time.After(5 * time.Second):
+	case <-time.After(testtime.SelectShutdown):
 		t.Fatal("bootstrap did not shut down in time")
 	}
 }
@@ -1189,7 +1192,7 @@ func TestBootstrap_ConfigDriftReadyz_NoDrift(t *testing.T) {
 		WithConfig(cfgFile, ""),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(ln)),
 		WithListener(cell.InternalListener, "127.0.0.1:0", []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(newLocalListener(t))),
-		WithShutdownTimeout(2*time.Second),
+		WithShutdownTimeout(testtime.D2s),
 		WithHealthRoutes(WithReadyzVerboseToken(testVerboseToken)),
 	)
 
@@ -1221,13 +1224,13 @@ func TestBootstrap_ConfigDriftReadyz_NoDrift(t *testing.T) {
 			return false
 		}
 		return probe["status"] == "healthy"
-	}, 3*time.Second, 50*time.Millisecond, "config-drift checker not found or not healthy")
+	}, testtime.EventuallyDefault, testtime.MediumPoll, "config-drift checker not found or not healthy")
 
 	cancel()
 	select {
 	case runErr := <-done:
 		assert.NoError(t, runErr)
-	case <-time.After(5 * time.Second):
+	case <-time.After(testtime.SelectShutdown):
 		t.Fatal("bootstrap did not shut down in time")
 	}
 }
@@ -1321,7 +1324,7 @@ func TestBootstrap_ConfigDriftReadyz_HTTP503OnDrift(t *testing.T) {
 		WithConfig(cfgFile, ""),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(ln)),
 		WithListener(cell.InternalListener, "127.0.0.1:0", []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(newLocalListener(t))),
-		WithShutdownTimeout(2*time.Second),
+		WithShutdownTimeout(testtime.D2s),
 		WithHealthRoutes(WithReadyzVerboseToken(testVerboseToken)),
 	)
 
@@ -1338,7 +1341,7 @@ func TestBootstrap_ConfigDriftReadyz_HTTP503OnDrift(t *testing.T) {
 		}
 		closeBody(t, resp)
 		return resp.StatusCode == http.StatusOK
-	}, 3*time.Second, 50*time.Millisecond, "server did not become ready")
+	}, testtime.EventuallyDefault, testtime.MediumPoll, "server did not become ready")
 
 	// Trigger a config change → watcher fires OnChange → Reload → generation++
 	// → failCell.OnConfigReload returns error → observedGeneration stays → drift!
@@ -1367,13 +1370,13 @@ func TestBootstrap_ConfigDriftReadyz_HTTP503OnDrift(t *testing.T) {
 			return false
 		}
 		return probe["status"] == "unhealthy"
-	}, 5*time.Second, 100*time.Millisecond, "readyz should return 503 with config-drift unhealthy")
+	}, testtime.EventuallyLong, testtime.SlowPoll, "readyz should return 503 with config-drift unhealthy")
 
 	cancel()
 	select {
 	case runErr := <-done:
 		assert.NoError(t, runErr)
-	case <-time.After(5 * time.Second):
+	case <-time.After(testtime.SelectShutdown):
 		t.Fatal("bootstrap did not shut down in time")
 	}
 }
@@ -1390,7 +1393,7 @@ func TestBootstrap_ConfigWatcherInitFailure_FailsFast(t *testing.T) {
 		WithAssembly(asm),
 		WithConfig(cfgFile, ""),
 		WithListener(cell.PrimaryListener, "127.0.0.1:0", []cell.ListenerAuth{cell.AuthNone{}}),
-		WithShutdownTimeout(time.Second),
+		WithShutdownTimeout(testtime.D1s),
 	)
 	// Override instance-level factory to simulate init failure (safe for parallel tests).
 	b.configWatcherFactory = func(string, ...config.WatcherOption) (*config.Watcher, error) {
@@ -1416,7 +1419,7 @@ func TestBootstrap_WithHealthChecker_ReservedNameConflict_ReturnsError(t *testin
 		WithConfig(cfgFile, ""),
 		WithListener(cell.PrimaryListener, "127.0.0.1:0", []cell.ListenerAuth{cell.AuthNone{}}),
 		WithHealthChecker("config-watcher", func(_ context.Context) error { return nil }),
-		WithShutdownTimeout(time.Second),
+		WithShutdownTimeout(testtime.D1s),
 	)
 
 	require.NotPanics(t, func() {
@@ -1441,7 +1444,7 @@ func TestBootstrap_EventRouter_ReadyzVerboseIncludesEventRouter(t *testing.T) {
 		WithSubscriber(eb),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(ln)),
 		WithListener(cell.InternalListener, "127.0.0.1:0", []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(newLocalListener(t))),
-		WithShutdownTimeout(2*time.Second),
+		WithShutdownTimeout(testtime.D2s),
 		WithHealthRoutes(WithReadyzVerboseToken(testVerboseToken)),
 	)
 
@@ -1457,7 +1460,7 @@ func TestBootstrap_EventRouter_ReadyzVerboseIncludesEventRouter(t *testing.T) {
 		}
 		closeBody(t, resp)
 		return resp.StatusCode == http.StatusOK
-	}, 3*time.Second, 50*time.Millisecond, "HTTP server did not become ready")
+	}, testtime.EventuallyDefault, testtime.MediumPoll, "HTTP server did not become ready")
 
 	resp, err := verboseGet(ctx, fmt.Sprintf("http://%s", addr))
 	require.NoError(t, err)
@@ -1477,7 +1480,7 @@ func TestBootstrap_EventRouter_ReadyzVerboseIncludesEventRouter(t *testing.T) {
 	select {
 	case runErr := <-done:
 		assert.NoError(t, runErr)
-	case <-time.After(5 * time.Second):
+	case <-time.After(testtime.SelectShutdown):
 		t.Fatal("bootstrap did not shut down in time")
 	}
 }
@@ -1644,7 +1647,7 @@ func TestBootstrap_ShutdownDrainsInflightReload(t *testing.T) {
 	require.NoError(t, err)
 
 	asm := assembly.New(assembly.Config{ID: "test-drain", DurabilityMode: cell.DurabilityDemo})
-	slow := newSlowReloaderCell("slow-cell", 300*time.Millisecond)
+	slow := newSlowReloaderCell("slow-cell", slowReloaderDelay)
 	require.NoError(t, asm.Register(slow))
 
 	b := New(
@@ -1652,7 +1655,7 @@ func TestBootstrap_ShutdownDrainsInflightReload(t *testing.T) {
 		WithConfig(cfgFile, ""),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(ln)),
 		WithListener(cell.InternalListener, "127.0.0.1:0", []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(newLocalListener(t))),
-		WithShutdownTimeout(5*time.Second),
+		WithShutdownTimeout(testtime.D5s),
 	)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -1668,7 +1671,7 @@ func TestBootstrap_ShutdownDrainsInflightReload(t *testing.T) {
 		}
 		closeBody(t, resp)
 		return resp.StatusCode == http.StatusOK
-	}, 3*time.Second, 50*time.Millisecond)
+	}, testtime.EventuallyDefault, testtime.MediumPoll)
 
 	// Trigger a config change that will take 300ms to process.
 	require.NoError(t, os.WriteFile(cfgFile, []byte("key: val2\n"), 0o644))
@@ -1676,7 +1679,7 @@ func TestBootstrap_ShutdownDrainsInflightReload(t *testing.T) {
 	// Wait just long enough for the callback to start but not finish.
 	require.Eventually(t, func() bool {
 		return slow.called.Load() >= 1
-	}, 3*time.Second, 10*time.Millisecond, "slow handler should have started")
+	}, testtime.EventuallyDefault, testtime.D10ms, "slow handler should have started")
 
 	// Trigger shutdown while the slow callback is still in flight.
 	cancel()
@@ -1684,7 +1687,7 @@ func TestBootstrap_ShutdownDrainsInflightReload(t *testing.T) {
 	select {
 	case runErr := <-done:
 		assert.NoError(t, runErr)
-	case <-time.After(10 * time.Second):
+	case <-time.After(testtime.SelectAsyncSettle):
 		t.Fatal("shutdown timeout")
 	}
 
@@ -1710,7 +1713,7 @@ func TestBootstrap_ConfigReload_NotifiesCells(t *testing.T) {
 		WithConfig(cfgFile, ""),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(ln)),
 		WithListener(cell.InternalListener, "127.0.0.1:0", []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(newLocalListener(t))),
-		WithShutdownTimeout(2*time.Second),
+		WithShutdownTimeout(testtime.D2s),
 	)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -1727,7 +1730,7 @@ func TestBootstrap_ConfigReload_NotifiesCells(t *testing.T) {
 		}
 		closeBody(t, resp)
 		return resp.StatusCode == http.StatusOK
-	}, 3*time.Second, 50*time.Millisecond)
+	}, testtime.EventuallyDefault, testtime.MediumPoll)
 
 	// Modify config file — add a new key.
 	require.NoError(t, os.WriteFile(cfgFile, []byte("server:\n  port: 9090\nnew_key: added\n"), 0o644))
@@ -1735,7 +1738,7 @@ func TestBootstrap_ConfigReload_NotifiesCells(t *testing.T) {
 	// Wait for callback.
 	require.Eventually(t, func() bool {
 		return rc.eventCount() >= 1
-	}, 3*time.Second, 50*time.Millisecond, "expected OnConfigReload to fire")
+	}, testtime.EventuallyDefault, testtime.MediumPoll, "expected OnConfigReload to fire")
 
 	evt := rc.lastEvent()
 	require.NotNil(t, evt)
@@ -1747,7 +1750,7 @@ func TestBootstrap_ConfigReload_NotifiesCells(t *testing.T) {
 	select {
 	case runErr := <-done:
 		assert.NoError(t, runErr)
-	case <-time.After(5 * time.Second):
+	case <-time.After(testtime.SelectShutdown):
 		t.Fatal("shutdown timeout")
 	}
 }
@@ -1770,7 +1773,7 @@ func TestBootstrap_ConfigReload_ErrorDoesNotCrash(t *testing.T) {
 		WithConfig(cfgFile, ""),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(ln)),
 		WithListener(cell.InternalListener, "127.0.0.1:0", []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(newLocalListener(t))),
-		WithShutdownTimeout(2*time.Second),
+		WithShutdownTimeout(testtime.D2s),
 	)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -1786,7 +1789,7 @@ func TestBootstrap_ConfigReload_ErrorDoesNotCrash(t *testing.T) {
 		}
 		closeBody(t, resp)
 		return resp.StatusCode == http.StatusOK
-	}, 3*time.Second, 50*time.Millisecond)
+	}, testtime.EventuallyDefault, testtime.MediumPoll)
 
 	// Modify config — cell will return error.
 	require.NoError(t, os.WriteFile(cfgFile, []byte("key: val2\n"), 0o644))
@@ -1794,14 +1797,14 @@ func TestBootstrap_ConfigReload_ErrorDoesNotCrash(t *testing.T) {
 	// Wait for callback to be called (even though it returns error).
 	require.Eventually(t, func() bool {
 		return rc.eventCount() >= 1
-	}, 3*time.Second, 50*time.Millisecond)
+	}, testtime.EventuallyDefault, testtime.MediumPoll)
 
 	// Bootstrap should still be running (error does not crash).
 	cancel()
 	select {
 	case runErr := <-done:
 		assert.NoError(t, runErr, "bootstrap should shut down cleanly despite cell reload error")
-	case <-time.After(5 * time.Second):
+	case <-time.After(testtime.SelectShutdown):
 		t.Fatal("shutdown timeout")
 	}
 }
@@ -1824,7 +1827,7 @@ func TestBootstrap_ConfigReload_PanicDoesNotCrash(t *testing.T) {
 		WithConfig(cfgFile, ""),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(ln)),
 		WithListener(cell.InternalListener, "127.0.0.1:0", []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(newLocalListener(t))),
-		WithShutdownTimeout(2*time.Second),
+		WithShutdownTimeout(testtime.D2s),
 	)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -1840,7 +1843,7 @@ func TestBootstrap_ConfigReload_PanicDoesNotCrash(t *testing.T) {
 		}
 		closeBody(t, resp)
 		return resp.StatusCode == http.StatusOK
-	}, 3*time.Second, 50*time.Millisecond)
+	}, testtime.EventuallyDefault, testtime.MediumPoll)
 
 	// Modify config — cell will panic.
 	require.NoError(t, os.WriteFile(cfgFile, []byte("key: val2\n"), 0o644))
@@ -1848,14 +1851,14 @@ func TestBootstrap_ConfigReload_PanicDoesNotCrash(t *testing.T) {
 	// Wait for panic to fire and be recovered.
 	require.Eventually(t, func() bool {
 		return rc.panicCount.Load() >= 1
-	}, 3*time.Second, 50*time.Millisecond, "expected OnConfigReload panic to fire")
+	}, testtime.EventuallyDefault, testtime.MediumPoll, "expected OnConfigReload panic to fire")
 
 	// Bootstrap should still be running after the panic.
 	cancel()
 	select {
 	case runErr := <-done:
 		assert.NoError(t, runErr, "bootstrap should shut down cleanly despite cell panic")
-	case <-time.After(5 * time.Second):
+	case <-time.After(testtime.SelectShutdown):
 		t.Fatal("shutdown timeout")
 	}
 }
@@ -1882,7 +1885,7 @@ func TestBootstrap_ConfigReload_FIFO(t *testing.T) {
 		WithConfig(cfgFile, ""),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(ln)),
 		WithListener(cell.InternalListener, "127.0.0.1:0", []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(newLocalListener(t))),
-		WithShutdownTimeout(2*time.Second),
+		WithShutdownTimeout(testtime.D2s),
 	)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -1898,7 +1901,7 @@ func TestBootstrap_ConfigReload_FIFO(t *testing.T) {
 		}
 		closeBody(t, resp)
 		return resp.StatusCode == http.StatusOK
-	}, 3*time.Second, 50*time.Millisecond)
+	}, testtime.EventuallyDefault, testtime.MediumPoll)
 
 	// Modify config.
 	require.NoError(t, os.WriteFile(cfgFile, []byte("key: val2\n"), 0o644))
@@ -1906,7 +1909,7 @@ func TestBootstrap_ConfigReload_FIFO(t *testing.T) {
 	// Wait for all cells to be called.
 	require.Eventually(t, func() bool {
 		return cells[2].eventCount() >= 1
-	}, 3*time.Second, 50*time.Millisecond)
+	}, testtime.EventuallyDefault, testtime.MediumPoll)
 
 	// Verify FIFO order.
 	assert.Equal(t, []string{"first", "second", "third"}, callOrder)
@@ -1915,7 +1918,7 @@ func TestBootstrap_ConfigReload_FIFO(t *testing.T) {
 	select {
 	case runErr := <-done:
 		assert.NoError(t, runErr)
-	case <-time.After(5 * time.Second):
+	case <-time.After(testtime.SelectShutdown):
 		t.Fatal("shutdown timeout")
 	}
 }
@@ -1939,7 +1942,7 @@ func TestBootstrap_ConfigReload_NonReloaderSkipped(t *testing.T) {
 		WithConfig(cfgFile, ""),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(ln)),
 		WithListener(cell.InternalListener, "127.0.0.1:0", []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(newLocalListener(t))),
-		WithShutdownTimeout(2*time.Second),
+		WithShutdownTimeout(testtime.D2s),
 	)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -1955,7 +1958,7 @@ func TestBootstrap_ConfigReload_NonReloaderSkipped(t *testing.T) {
 		}
 		closeBody(t, resp)
 		return resp.StatusCode == http.StatusOK
-	}, 3*time.Second, 50*time.Millisecond)
+	}, testtime.EventuallyDefault, testtime.MediumPoll)
 
 	// Modify config.
 	require.NoError(t, os.WriteFile(cfgFile, []byte("key: val2\n"), 0o644))
@@ -1963,7 +1966,7 @@ func TestBootstrap_ConfigReload_NonReloaderSkipped(t *testing.T) {
 	// Wait for reloader cell to be called.
 	require.Eventually(t, func() bool {
 		return rc.eventCount() >= 1
-	}, 3*time.Second, 50*time.Millisecond)
+	}, testtime.EventuallyDefault, testtime.MediumPoll)
 
 	// Plain cell should not have been called (it doesn't implement ConfigReloader).
 	// The test verifies by checking that only the reloader cell receives events.
@@ -1973,7 +1976,7 @@ func TestBootstrap_ConfigReload_NonReloaderSkipped(t *testing.T) {
 	select {
 	case runErr := <-done:
 		assert.NoError(t, runErr)
-	case <-time.After(5 * time.Second):
+	case <-time.After(testtime.SelectShutdown):
 		t.Fatal("shutdown timeout")
 	}
 }
@@ -1995,7 +1998,7 @@ func TestBootstrap_ConfigReload_NoChangeNoCallback(t *testing.T) {
 		WithConfig(cfgFile, ""),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(ln)),
 		WithListener(cell.InternalListener, "127.0.0.1:0", []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(newLocalListener(t))),
-		WithShutdownTimeout(2*time.Second),
+		WithShutdownTimeout(testtime.D2s),
 	)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -2011,13 +2014,13 @@ func TestBootstrap_ConfigReload_NoChangeNoCallback(t *testing.T) {
 		}
 		closeBody(t, resp)
 		return resp.StatusCode == http.StatusOK
-	}, 3*time.Second, 50*time.Millisecond)
+	}, testtime.EventuallyDefault, testtime.MediumPoll)
 
 	// First: write different content to confirm the callback pipeline works.
 	require.NoError(t, os.WriteFile(cfgFile, []byte("key: val2\n"), 0o644))
 	require.Eventually(t, func() bool {
 		return rc.eventCount() >= 1
-	}, 3*time.Second, 50*time.Millisecond, "expected first config change to fire callback")
+	}, testtime.EventuallyDefault, testtime.MediumPoll, "expected first config change to fire callback")
 
 	// Second: re-write the SAME content that config currently has (val2).
 	// This triggers the watcher but Diff(val2, val2) = empty, so no callback.
@@ -2034,7 +2037,7 @@ func TestBootstrap_ConfigReload_NoChangeNoCallback(t *testing.T) {
 	require.NoError(t, os.WriteFile(cfgFile, []byte("key: val3\n"), 0o644))
 	require.Eventually(t, func() bool {
 		return rc.eventCount() >= 2
-	}, 3*time.Second, 50*time.Millisecond, "expected third config change to fire callback")
+	}, testtime.EventuallyDefault, testtime.MediumPoll, "expected third config change to fire callback")
 
 	// Exactly 2 callbacks: the no-diff reload in the middle was correctly skipped.
 	assert.Equal(t, 2, rc.eventCount(), "no-diff reload should not trigger callback")
@@ -2043,7 +2046,7 @@ func TestBootstrap_ConfigReload_NoChangeNoCallback(t *testing.T) {
 	select {
 	case runErr := <-done:
 		assert.NoError(t, runErr)
-	case <-time.After(5 * time.Second):
+	case <-time.After(testtime.SelectShutdown):
 		t.Fatal("shutdown timeout")
 	}
 }
@@ -2091,7 +2094,7 @@ func TestBootstrap_ConfigReload_EventIsolation(t *testing.T) {
 		WithConfig(cfgFile, ""),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(ln)),
 		WithListener(cell.InternalListener, "127.0.0.1:0", []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(newLocalListener(t))),
-		WithShutdownTimeout(2*time.Second),
+		WithShutdownTimeout(testtime.D2s),
 	)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -2107,7 +2110,7 @@ func TestBootstrap_ConfigReload_EventIsolation(t *testing.T) {
 		}
 		closeBody(t, resp)
 		return resp.StatusCode == http.StatusOK
-	}, 3*time.Second, 50*time.Millisecond)
+	}, testtime.EventuallyDefault, testtime.MediumPoll)
 
 	// Trigger config change that adds a new key.
 	require.NoError(t, os.WriteFile(cfgFile, []byte("key: val2\nnew_key: added\n"), 0o644))
@@ -2115,7 +2118,7 @@ func TestBootstrap_ConfigReload_EventIsolation(t *testing.T) {
 	// Wait for both cells to be called.
 	require.Eventually(t, func() bool {
 		return observer.eventCount() >= 1
-	}, 3*time.Second, 50*time.Millisecond)
+	}, testtime.EventuallyDefault, testtime.MediumPoll)
 
 	// Observer should see clean data despite mutator's corruption attempt.
 	evt := observer.lastEvent()
@@ -2128,7 +2131,7 @@ func TestBootstrap_ConfigReload_EventIsolation(t *testing.T) {
 	select {
 	case runErr := <-done:
 		assert.NoError(t, runErr)
-	case <-time.After(5 * time.Second):
+	case <-time.After(testtime.SelectShutdown):
 		t.Fatal("shutdown timeout")
 	}
 }
@@ -2152,7 +2155,7 @@ func TestBootstrap_ShutdownNoPostStopReload(t *testing.T) {
 		WithConfig(cfgFile, ""),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(ln)),
 		WithListener(cell.InternalListener, "127.0.0.1:0", []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(newLocalListener(t))),
-		WithShutdownTimeout(2*time.Second),
+		WithShutdownTimeout(testtime.D2s),
 	)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -2168,7 +2171,7 @@ func TestBootstrap_ShutdownNoPostStopReload(t *testing.T) {
 		}
 		closeBody(t, resp)
 		return resp.StatusCode == http.StatusOK
-	}, 3*time.Second, 50*time.Millisecond)
+	}, testtime.EventuallyDefault, testtime.MediumPoll)
 
 	// Trigger shutdown.
 	cancel()
@@ -2177,7 +2180,7 @@ func TestBootstrap_ShutdownNoPostStopReload(t *testing.T) {
 	select {
 	case runErr := <-done:
 		assert.NoError(t, runErr)
-	case <-time.After(5 * time.Second):
+	case <-time.After(testtime.SelectShutdown):
 		t.Fatal("shutdown timeout")
 	}
 
@@ -2187,7 +2190,7 @@ func TestBootstrap_ShutdownNoPostStopReload(t *testing.T) {
 	require.NoError(t, os.WriteFile(cfgFile, []byte("key: val_post_stop\n"), 0o644))
 
 	// Brief wait to give any spurious callback time to fire.
-	time.Sleep(300 * time.Millisecond)
+	time.Sleep(testtime.D300ms)
 	assert.Equal(t, countBefore, rc.eventCount(),
 		"no config reload callback should fire after shutdown")
 }
@@ -2213,7 +2216,7 @@ func TestBootstrap_ShutdownRejectsReloadDuringDrain(t *testing.T) {
 		WithConfig(cfgFile, ""),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(ln)),
 		WithListener(cell.InternalListener, "127.0.0.1:0", []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(newLocalListener(t))),
-		WithShutdownTimeout(2*time.Second),
+		WithShutdownTimeout(testtime.D2s),
 		WithWorkers(blocker),
 	)
 
@@ -2230,13 +2233,13 @@ func TestBootstrap_ShutdownRejectsReloadDuringDrain(t *testing.T) {
 		}
 		closeBody(t, resp)
 		return resp.StatusCode == http.StatusOK
-	}, 3*time.Second, 50*time.Millisecond)
+	}, testtime.EventuallyDefault, testtime.MediumPoll)
 
 	cancel()
 
 	select {
 	case <-blocker.stopStarted:
-	case <-time.After(3 * time.Second):
+	case <-time.After(testtime.EventuallyDefault):
 		t.Fatal("shutdown did not reach worker stop")
 	}
 
@@ -2245,7 +2248,7 @@ func TestBootstrap_ShutdownRejectsReloadDuringDrain(t *testing.T) {
 
 	assert.Never(t, func() bool {
 		return rc.eventCount() > countBefore
-	}, 500*time.Millisecond, 20*time.Millisecond,
+	}, testtime.D500ms, testtime.D20ms,
 		"shutdown must reject config reloads once graceful shutdown begins")
 
 	close(blocker.releaseStop)
@@ -2253,7 +2256,7 @@ func TestBootstrap_ShutdownRejectsReloadDuringDrain(t *testing.T) {
 	select {
 	case runErr := <-done:
 		assert.NoError(t, runErr)
-	case <-time.After(5 * time.Second):
+	case <-time.After(testtime.SelectShutdown):
 		t.Fatal("shutdown timeout")
 	}
 }
@@ -2277,7 +2280,7 @@ func TestBootstrap_ConfigReload_GenerationTracking(t *testing.T) {
 		WithConfig(cfgFile, ""),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(ln)),
 		WithListener(cell.InternalListener, "127.0.0.1:0", []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(newLocalListener(t))),
-		WithShutdownTimeout(2*time.Second),
+		WithShutdownTimeout(testtime.D2s),
 	)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -2293,7 +2296,7 @@ func TestBootstrap_ConfigReload_GenerationTracking(t *testing.T) {
 		}
 		closeBody(t, resp)
 		return resp.StatusCode == http.StatusOK
-	}, 3*time.Second, 50*time.Millisecond)
+	}, testtime.EventuallyDefault, testtime.MediumPoll)
 
 	// First change.
 	time.Sleep(fsnotifySettleDelay)
@@ -2301,7 +2304,7 @@ func TestBootstrap_ConfigReload_GenerationTracking(t *testing.T) {
 	require.NoError(t, os.WriteFile(cfgFile, []byte("key: val2\n"), 0o644))
 	require.Eventually(t, func() bool {
 		return rc.eventCount() > prevCount
-	}, 3*time.Second, 50*time.Millisecond)
+	}, testtime.EventuallyDefault, testtime.MediumPoll)
 
 	evt := rc.lastEvent()
 	require.NotNil(t, evt)
@@ -2314,7 +2317,7 @@ func TestBootstrap_ConfigReload_GenerationTracking(t *testing.T) {
 	require.NoError(t, os.WriteFile(cfgFile, []byte("key: val3\n"), 0o644))
 	require.Eventually(t, func() bool {
 		return rc.eventCount() > prevCount
-	}, 3*time.Second, 50*time.Millisecond)
+	}, testtime.EventuallyDefault, testtime.MediumPoll)
 
 	evt = rc.lastEvent()
 	require.NotNil(t, evt)
@@ -2324,7 +2327,7 @@ func TestBootstrap_ConfigReload_GenerationTracking(t *testing.T) {
 	select {
 	case runErr := <-done:
 		assert.NoError(t, runErr)
-	case <-time.After(5 * time.Second):
+	case <-time.After(testtime.SelectShutdown):
 		t.Fatal("shutdown timeout")
 	}
 }
@@ -2433,7 +2436,7 @@ func TestBootstrap_WithAuthMiddleware_ProtectedRoute_Returns401(t *testing.T) {
 		WithAssembly(asm),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{cell.MustNewAuthJWT(verifier)}, WithListenerNet(ln)),
 		WithListener(cell.InternalListener, "127.0.0.1:0", []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(newLocalListener(t))),
-		WithShutdownTimeout(2*time.Second),
+		WithShutdownTimeout(testtime.D2s),
 	)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -2448,7 +2451,7 @@ func TestBootstrap_WithAuthMiddleware_ProtectedRoute_Returns401(t *testing.T) {
 		}
 		closeBody(t, resp)
 		return resp.StatusCode == http.StatusOK
-	}, 3*time.Second, 50*time.Millisecond, "HTTP server did not become ready")
+	}, testtime.EventuallyDefault, testtime.MediumPoll, "HTTP server did not become ready")
 
 	// Protected route without token → 401.
 	resp, err := testHTTPClient.Get(fmt.Sprintf("http://%s/api/v1/data", addr))
@@ -2467,7 +2470,7 @@ func TestBootstrap_WithAuthMiddleware_ProtectedRoute_Returns401(t *testing.T) {
 	select {
 	case runErr := <-done:
 		assert.NoError(t, runErr)
-	case <-time.After(5 * time.Second):
+	case <-time.After(testtime.SelectShutdown):
 		t.Fatal("bootstrap did not shut down in time")
 	}
 }
@@ -2527,7 +2530,7 @@ func TestBootstrap_WithAuthMiddleware_PublicRoute_Passes(t *testing.T) {
 		WithAssembly(asm),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{cell.MustNewAuthJWT(verifier)}, WithListenerNet(ln)),
 		WithListener(cell.InternalListener, "127.0.0.1:0", []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(newLocalListener(t))),
-		WithShutdownTimeout(2*time.Second),
+		WithShutdownTimeout(testtime.D2s),
 	)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -2542,7 +2545,7 @@ func TestBootstrap_WithAuthMiddleware_PublicRoute_Passes(t *testing.T) {
 		}
 		closeBody(t, resp)
 		return resp.StatusCode == http.StatusOK
-	}, 3*time.Second, 50*time.Millisecond, "HTTP server did not become ready")
+	}, testtime.EventuallyDefault, testtime.MediumPoll, "HTTP server did not become ready")
 
 	// Public login route without token → should pass auth.
 	resp, err := testHTTPClient.Post(
@@ -2561,7 +2564,7 @@ func TestBootstrap_WithAuthMiddleware_PublicRoute_Passes(t *testing.T) {
 	select {
 	case runErr := <-done:
 		assert.NoError(t, runErr)
-	case <-time.After(5 * time.Second):
+	case <-time.After(testtime.SelectShutdown):
 		t.Fatal("bootstrap did not shut down in time")
 	}
 }
@@ -2584,7 +2587,7 @@ func TestBootstrap_UserRouterOpts_CannotOverrideFrameworkHealth(t *testing.T) {
 		WithAssembly(asm),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(ln)),
 		WithListener(cell.InternalListener, "127.0.0.1:0", []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(newLocalListener(t))),
-		WithShutdownTimeout(2*time.Second),
+		WithShutdownTimeout(testtime.D2s),
 	)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -2605,7 +2608,7 @@ func TestBootstrap_UserRouterOpts_CannotOverrideFrameworkHealth(t *testing.T) {
 	select {
 	case runErr := <-done:
 		assert.NoError(t, runErr)
-	case <-time.After(5 * time.Second):
+	case <-time.After(testtime.SelectShutdown):
 		t.Fatal("bootstrap did not shut down in time")
 	}
 }
@@ -2628,7 +2631,7 @@ func TestGracefulShutdown_ReadyzUnhealthyBeforeHTTPStop(t *testing.T) {
 	cancel()
 
 	// Poll /readyz — it should become 503.
-	deadline := time.After(5 * time.Second)
+	deadline := time.After(testtime.SelectShutdown)
 	for {
 		resp, err := testHTTPClient.Get("http://" + addr + "/readyz")
 		if err != nil {
@@ -2642,14 +2645,14 @@ func TestGracefulShutdown_ReadyzUnhealthyBeforeHTTPStop(t *testing.T) {
 		select {
 		case <-deadline:
 			t.Fatal("timed out waiting for /readyz to return 503 during shutdown")
-		case <-time.After(10 * time.Millisecond):
+		case <-time.After(testtime.D10ms):
 		}
 	}
 
 	select {
 	case err := <-errCh:
 		assert.NoError(t, err)
-	case <-time.After(10 * time.Second):
+	case <-time.After(testtime.SelectAsyncSettle):
 		t.Fatal("timed out waiting for bootstrap shutdown")
 	}
 }
@@ -2921,7 +2924,7 @@ func TestBootstrap_AuthDiscovery_ProtectedRoute_Returns401(t *testing.T) {
 		WithAssembly(asm),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{cell.MustNewAuthJWTFromAssembly(asm)}, WithListenerNet(ln)),
 		WithListener(cell.InternalListener, "127.0.0.1:0", []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(newLocalListener(t))),
-		WithShutdownTimeout(2*time.Second),
+		WithShutdownTimeout(testtime.D2s),
 	)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -2948,7 +2951,7 @@ func TestBootstrap_AuthDiscovery_ProtectedRoute_Returns401(t *testing.T) {
 	select {
 	case runErr := <-done:
 		assert.NoError(t, runErr)
-	case <-time.After(5 * time.Second):
+	case <-time.After(testtime.SelectShutdown):
 		t.Fatal("bootstrap did not shut down in time")
 	}
 }
@@ -2968,7 +2971,7 @@ func TestBootstrap_AuthDiscovery_PublicRoute_Passes(t *testing.T) {
 		WithAssembly(asm),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{cell.MustNewAuthJWTFromAssembly(asm)}, WithListenerNet(ln)),
 		WithListener(cell.InternalListener, "127.0.0.1:0", []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(newLocalListener(t))),
-		WithShutdownTimeout(2*time.Second),
+		WithShutdownTimeout(testtime.D2s),
 		// F3: public routes are declared via auth.MustMount(Public:true) in the cell.
 	)
 
@@ -3006,7 +3009,7 @@ func TestBootstrap_AuthDiscovery_PublicRoute_Passes(t *testing.T) {
 	select {
 	case runErr := <-done:
 		assert.NoError(t, runErr)
-	case <-time.After(5 * time.Second):
+	case <-time.After(testtime.SelectShutdown):
 		t.Fatal("bootstrap did not shut down in time")
 	}
 }
@@ -3031,7 +3034,7 @@ func TestBootstrap_WithAuthMiddleware_Precedence(t *testing.T) {
 		WithAssembly(asm),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{cell.MustNewAuthJWT(explicitVerifier)}, WithListenerNet(ln)),
 		WithListener(cell.InternalListener, "127.0.0.1:0", []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(newLocalListener(t))),
-		WithShutdownTimeout(2*time.Second),
+		WithShutdownTimeout(testtime.D2s),
 	)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -3061,7 +3064,7 @@ func TestBootstrap_WithAuthMiddleware_Precedence(t *testing.T) {
 	select {
 	case runErr := <-done:
 		assert.NoError(t, runErr)
-	case <-time.After(5 * time.Second):
+	case <-time.After(testtime.SelectShutdown):
 		t.Fatal("bootstrap did not shut down in time")
 	}
 }
@@ -3079,7 +3082,7 @@ func TestBootstrap_AuthDiscovery_NoProvider_FailsClosed(t *testing.T) {
 		WithAssembly(asm),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{cell.MustNewAuthJWTFromAssembly(asm)}, WithListenerNet(ln)),
 		WithListener(cell.InternalListener, "127.0.0.1:0", []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(newLocalListener(t))),
-		WithShutdownTimeout(2*time.Second),
+		WithShutdownTimeout(testtime.D2s),
 	)
 
 	ctx := t.Context()
@@ -3110,7 +3113,7 @@ func TestBootstrap_AuthDiscovery_MultipleProviders_FailsFast(t *testing.T) {
 		WithAssembly(asm),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{cell.MustNewAuthJWTFromAssembly(asm)}, WithListenerNet(ln)),
 		WithListener(cell.InternalListener, "127.0.0.1:0", []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(newLocalListener(t))),
-		WithShutdownTimeout(2*time.Second),
+		WithShutdownTimeout(testtime.D2s),
 	)
 
 	ctx := t.Context()
@@ -3142,7 +3145,7 @@ func TestBootstrap_TrustBoundary_PublicEndpoint_IgnoresClientIDs(t *testing.T) {
 		WithAssembly(asm),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{cell.MustNewAuthJWTFromAssembly(asm)}, WithListenerNet(ln)),
 		WithListener(cell.InternalListener, "127.0.0.1:0", []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(newLocalListener(t))),
-		WithShutdownTimeout(2*time.Second),
+		WithShutdownTimeout(testtime.D2s),
 		// F3: public routes declared via auth.MustMount(Public:true) in authProviderCell.
 	)
 
@@ -3192,7 +3195,7 @@ func TestBootstrap_TrustBoundary_PublicEndpoint_IgnoresClientIDs(t *testing.T) {
 	select {
 	case runErr := <-done:
 		assert.NoError(t, runErr)
-	case <-time.After(5 * time.Second):
+	case <-time.After(testtime.SelectShutdown):
 		t.Fatal("bootstrap did not shut down in time")
 	}
 }
@@ -3209,7 +3212,7 @@ func TestBootstrap_WithSecurityHeadersOptions_CustomHSTS(t *testing.T) {
 		WithAssembly(asm),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(ln)),
 		WithListener(cell.InternalListener, "127.0.0.1:0", []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(newLocalListener(t))),
-		WithShutdownTimeout(2*time.Second),
+		WithShutdownTimeout(testtime.D2s),
 		WithSecurityHeadersOptions(
 			middleware.WithHSTSIncludeSubDomains(),
 			middleware.WithHSTSPreload(),
@@ -3237,7 +3240,7 @@ func TestBootstrap_WithSecurityHeadersOptions_CustomHSTS(t *testing.T) {
 	select {
 	case runErr := <-done:
 		assert.NoError(t, runErr)
-	case <-time.After(5 * time.Second):
+	case <-time.After(testtime.SelectShutdown):
 		t.Fatal("bootstrap did not shut down in time")
 	}
 }
@@ -3291,7 +3294,7 @@ func TestBootstrap_ConfigReload_KeyFilter_SkipsUnmatched(t *testing.T) {
 		WithConfig(cfgFile, ""),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(ln)),
 		WithListener(cell.InternalListener, "127.0.0.1:0", []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(newLocalListener(t))),
-		WithShutdownTimeout(2*time.Second),
+		WithShutdownTimeout(testtime.D2s),
 	)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -3309,7 +3312,7 @@ func TestBootstrap_ConfigReload_KeyFilter_SkipsUnmatched(t *testing.T) {
 	select {
 	case evt := <-kfc.reloaded:
 		t.Fatalf("cell must NOT be notified when keys don't match prefix: got event %+v", evt)
-	case <-time.After(500 * time.Millisecond):
+	case <-time.After(testtime.D500ms):
 		// expected: no notification
 	}
 
@@ -3317,7 +3320,7 @@ func TestBootstrap_ConfigReload_KeyFilter_SkipsUnmatched(t *testing.T) {
 	select {
 	case runErr := <-done:
 		assert.NoError(t, runErr)
-	case <-time.After(5 * time.Second):
+	case <-time.After(testtime.SelectShutdown):
 		t.Fatal("bootstrap did not shut down in time")
 	}
 }
@@ -3340,7 +3343,7 @@ func TestBootstrap_ConfigReload_KeyFilter_NotifiesMatched(t *testing.T) {
 		WithConfig(cfgFile, ""),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(ln)),
 		WithListener(cell.InternalListener, "127.0.0.1:0", []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(newLocalListener(t))),
-		WithShutdownTimeout(2*time.Second),
+		WithShutdownTimeout(testtime.D2s),
 	)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -3364,7 +3367,7 @@ func TestBootstrap_ConfigReload_KeyFilter_NotifiesMatched(t *testing.T) {
 		_, hasDB := evt.Config["db.host"]
 		assert.True(t, hasServer, "Config must contain matched prefix keys")
 		assert.False(t, hasDB, "Config must NOT contain keys outside registered prefixes (minimal exposure)")
-	case <-time.After(3 * time.Second):
+	case <-time.After(testtime.EventuallyDefault):
 		t.Fatal("cell was not notified after matching key change")
 	}
 
@@ -3372,7 +3375,7 @@ func TestBootstrap_ConfigReload_KeyFilter_NotifiesMatched(t *testing.T) {
 	select {
 	case runErr := <-done:
 		assert.NoError(t, runErr)
-	case <-time.After(5 * time.Second):
+	case <-time.After(testtime.SelectShutdown):
 		t.Fatal("bootstrap did not shut down in time")
 	}
 }
@@ -3396,7 +3399,7 @@ func TestBootstrap_ConfigReload_NoKeyFilter_ReceivesAll(t *testing.T) {
 		WithConfig(cfgFile, ""),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(ln)),
 		WithListener(cell.InternalListener, "127.0.0.1:0", []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(newLocalListener(t))),
-		WithShutdownTimeout(2*time.Second),
+		WithShutdownTimeout(testtime.D2s),
 	)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -3412,13 +3415,13 @@ func TestBootstrap_ConfigReload_NoKeyFilter_ReceivesAll(t *testing.T) {
 
 	require.Eventually(t, func() bool {
 		return rc.eventCount() >= 1
-	}, 3*time.Second, 50*time.Millisecond, "plain ConfigReloader must receive all notifications")
+	}, testtime.EventuallyDefault, testtime.MediumPoll, "plain ConfigReloader must receive all notifications")
 
 	cancel()
 	select {
 	case runErr := <-done:
 		assert.NoError(t, runErr)
-	case <-time.After(5 * time.Second):
+	case <-time.After(testtime.SelectShutdown):
 		t.Fatal("bootstrap did not shut down in time")
 	}
 }
@@ -3499,7 +3502,7 @@ func TestBootstrap_TrustBoundary_PublicEndpoint_TraceparentIgnored(t *testing.T)
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{cell.MustNewAuthJWTFromAssembly(asm)}, WithListenerNet(ln)),
 		WithListener(cell.InternalListener, "127.0.0.1:0", []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(newLocalListener(t))),
 		WithTracer(tracer),
-		WithShutdownTimeout(2*time.Second),
+		WithShutdownTimeout(testtime.D2s),
 		// F3: /api/v1/public/ping is declared public by traceCapturingCell.
 	)
 
@@ -3528,7 +3531,7 @@ func TestBootstrap_TrustBoundary_PublicEndpoint_TraceparentIgnored(t *testing.T)
 		var gotTraceID string
 		select {
 		case gotTraceID = <-tc.gotPublic:
-		case <-time.After(2 * time.Second):
+		case <-time.After(testtime.D2s):
 			t.Fatal("handler did not capture trace_id")
 		}
 		assert.NotEmpty(t, gotTraceID, "trace_id must be set in handler context")
@@ -3551,7 +3554,7 @@ func TestBootstrap_TrustBoundary_PublicEndpoint_TraceparentIgnored(t *testing.T)
 		var gotTraceID string
 		select {
 		case gotTraceID = <-tc.gotProtected:
-		case <-time.After(2 * time.Second):
+		case <-time.After(testtime.D2s):
 			t.Fatal("handler did not capture trace_id")
 		}
 		assert.Equal(t, upstreamTraceID, gotTraceID,
@@ -3562,7 +3565,7 @@ func TestBootstrap_TrustBoundary_PublicEndpoint_TraceparentIgnored(t *testing.T)
 	select {
 	case runErr := <-done:
 		assert.NoError(t, runErr)
-	case <-time.After(5 * time.Second):
+	case <-time.After(testtime.SelectShutdown):
 		t.Fatal("bootstrap did not shut down in time")
 	}
 }
@@ -3640,7 +3643,7 @@ func TestBootstrap_HEADAlias_BypassesAuth(t *testing.T) {
 		WithAssembly(asm),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{cell.MustNewAuthJWTFromAssembly(asm)}, WithListenerNet(ln)),
 		WithListener(cell.InternalListener, "127.0.0.1:0", []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(newLocalListener(t))),
-		WithShutdownTimeout(2*time.Second),
+		WithShutdownTimeout(testtime.D2s),
 	)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -3668,7 +3671,7 @@ func TestBootstrap_HEADAlias_BypassesAuth(t *testing.T) {
 	select {
 	case runErr := <-done:
 		assert.NoError(t, runErr)
-	case <-time.After(5 * time.Second):
+	case <-time.After(testtime.SelectShutdown):
 		t.Fatal("bootstrap did not shut down in time")
 	}
 }
@@ -3686,7 +3689,7 @@ func TestBootstrap_WithLifecycleHook_RunsDuringStart(t *testing.T) {
 		WithAssembly(asm),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(ln)),
 		WithListener(cell.InternalListener, "127.0.0.1:0", []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(newLocalListener(t))),
-		WithShutdownTimeout(2*time.Second),
+		WithShutdownTimeout(testtime.D2s),
 		WithLifecycle(func(lc Lifecycle) {
 			_ = lc.Append(Hook{
 				Name: "test-hook",
@@ -3727,7 +3730,7 @@ func TestBootstrap_WithLifecycleHook_StartFailureHaltsRun(t *testing.T) {
 		WithAssembly(asm),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(ln)),
 		WithListener(cell.InternalListener, "127.0.0.1:0", []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(newLocalListener(t))),
-		WithShutdownTimeout(2*time.Second),
+		WithShutdownTimeout(testtime.D2s),
 		WithLifecycle(func(lc Lifecycle) {
 			_ = lc.Append(Hook{
 				Name:    "failing",
@@ -3776,7 +3779,7 @@ func TestBootstrap_WithManagedCloser_RegistersAsTeardown(t *testing.T) {
 		WithAssembly(asm),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(ln)),
 		WithListener(cell.InternalListener, "127.0.0.1:0", []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(newLocalListener(t))),
-		WithShutdownTimeout(2*time.Second),
+		WithShutdownTimeout(testtime.D2s),
 		WithManagedCloser(resource),
 	)
 	go func() { errCh <- b.Run(ctx) }()
@@ -3869,10 +3872,10 @@ func TestBootstrap_Phase5_ProtectedRoutesWithoutVerifierFailFast(t *testing.T) {
 	b := New(
 		WithAssembly(asm),
 		WithListener(cell.PrimaryListener, "127.0.0.1:0", []cell.ListenerAuth{cell.AuthNone{}}),
-		WithShutdownTimeout(time.Second),
+		WithShutdownTimeout(testtime.D1s),
 	)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), testtime.CtxDefault)
 	defer cancel()
 
 	err := b.Run(ctx)
@@ -3894,10 +3897,10 @@ func TestBootstrap_Phase5_FinalizeAuthError_PropagatesRollback(t *testing.T) {
 		// PR-A14b: phase0 now requires at least one listener. Phase5 errors
 		// before the listener is actually bound, so no connection is ever served.
 		WithListener(cell.PrimaryListener, "127.0.0.1:0", []cell.ListenerAuth{cell.AuthNone{}}),
-		WithShutdownTimeout(time.Second),
+		WithShutdownTimeout(testtime.D1s),
 	)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), testtime.CtxDefault)
 	defer cancel()
 
 	err := b.Run(ctx)
@@ -3922,10 +3925,10 @@ func TestBootstrap_DuplicateListenerRef_FailsFast(t *testing.T) {
 		// Two declarations for PrimaryListener — second one is the duplicate.
 		WithListener(cell.PrimaryListener, "127.0.0.1:0", []cell.ListenerAuth{cell.AuthNone{}}),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(ln)),
-		WithShutdownTimeout(time.Second),
+		WithShutdownTimeout(testtime.D1s),
 	)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), testtime.CtxDefault)
 	defer cancel()
 
 	err := b.Run(ctx)
@@ -3947,10 +3950,10 @@ func TestBootstrap_DuplicateRouteGroup_FailsFast(t *testing.T) {
 	b := New(
 		WithAssembly(asm),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(ln)),
-		WithShutdownTimeout(time.Second),
+		WithShutdownTimeout(testtime.D1s),
 	)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), testtime.CtxDefault)
 	defer cancel()
 
 	err := b.Run(ctx)
@@ -4012,10 +4015,10 @@ func TestBootstrap_Phase5_FinalizeFailure_OnInternalListener(t *testing.T) {
 		WithListener(cell.PrimaryListener, "127.0.0.1:0", []cell.ListenerAuth{cell.AuthNone{}}),
 		WithListener(cell.InternalListener, "127.0.0.1:0",
 			[]cell.ListenerAuth{cell.MustNewAuthServiceToken(&stubNonceStore{}, &stubHMACKeyring{})}),
-		WithShutdownTimeout(time.Second),
+		WithShutdownTimeout(testtime.D1s),
 	)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), testtime.CtxDefault)
 	defer cancel()
 
 	err := b.Run(ctx)
@@ -4083,10 +4086,10 @@ func TestBootstrap_Phase5_FinalizeFailure_OnHealthListener(t *testing.T) {
 		WithAssembly(asm),
 		WithListener(cell.PrimaryListener, "127.0.0.1:0", []cell.ListenerAuth{cell.AuthNone{}}),
 		WithListener(cell.HealthListener, "127.0.0.1:0", []cell.ListenerAuth{cell.AuthNone{}}),
-		WithShutdownTimeout(time.Second),
+		WithShutdownTimeout(testtime.D1s),
 	)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), testtime.CtxDefault)
 	defer cancel()
 
 	err := b.Run(ctx)
@@ -4146,10 +4149,10 @@ func TestBootstrap_UnknownListenerRef_FailsFast(t *testing.T) {
 		WithAssembly(asm),
 		// Only PrimaryListener declared; cell uses zero-value ref.
 		WithListener(cell.PrimaryListener, "127.0.0.1:0", []cell.ListenerAuth{cell.AuthNone{}}),
-		WithShutdownTimeout(time.Second),
+		WithShutdownTimeout(testtime.D1s),
 	)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), testtime.CtxDefault)
 	defer cancel()
 
 	err := b.Run(ctx)

@@ -3,10 +3,11 @@ package redis
 import (
 	"context"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 )
 
 func TestCache_SetAndGet(t *testing.T) {
@@ -14,7 +15,7 @@ func TestCache_SetAndGet(t *testing.T) {
 	cache := newCacheFromCmdable(mock)
 	ctx := context.Background()
 
-	err := cache.Set(ctx, "cache:key:1", "hello", 5*time.Minute)
+	err := cache.Set(ctx, "cache:key:1", "hello", testtime.D5min)
 	require.NoError(t, err)
 
 	val, err := cache.Get(ctx, "cache:key:1")
@@ -119,7 +120,7 @@ func TestSetJSON_And_GetJSON(t *testing.T) {
 	ctx := context.Background()
 
 	item := testItem{Name: "widget", Count: 42}
-	err := SetJSON(ctx, cache, "json:item:1", item, 10*time.Minute)
+	err := SetJSON(ctx, cache, "json:item:1", item, testtime.D10min)
 	require.NoError(t, err)
 
 	got, err := GetJSON[testItem](ctx, cache, "json:item:1")

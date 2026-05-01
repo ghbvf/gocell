@@ -6,8 +6,15 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+)
+
+const (
+	// d1100ms is just over 1s, used to let a max-age=1 cookie expire;
+	// not in the testtime table.
+	d1100ms = 1100 * time.Millisecond
 )
 
 func generateKey(t *testing.T, n int) []byte {
@@ -73,7 +80,7 @@ func TestSecureCookie_Expired(t *testing.T) {
 	encoded, err := sc.Encode("test", []byte("data"))
 	require.NoError(t, err)
 
-	time.Sleep(1100 * time.Millisecond)
+	time.Sleep(d1100ms)
 
 	_, err = sc.Decode("test", encoded)
 	assert.ErrorIs(t, err, ErrExpired)
@@ -127,7 +134,7 @@ func TestSecureCookie_MaxAgeZero_NeverExpires(t *testing.T) {
 	encoded, err := sc.Encode("test", []byte("data"))
 	require.NoError(t, err)
 
-	time.Sleep(50 * time.Millisecond)
+	time.Sleep(testtime.MediumPoll)
 	decoded, err := sc.Decode("test", encoded)
 	require.NoError(t, err)
 	assert.Equal(t, []byte("data"), decoded)

@@ -23,7 +23,7 @@ import (
 // are excluded via the same prodDurationExcludeAbs logic.
 func runFixtureScan(t *testing.T, fixtureDir string) []string {
 	t.Helper()
-	pkgs, errs, err := typeseval.LoadPackagesWithTags(fixtureDir, []string{"e2e", "integration", "pg"}, "./...")
+	pkgs, errs, err := typeseval.LoadPackages(fixtureDir, false, []string{"e2e", "integration", "pg"}, "./...")
 	require.NoError(t, err, "packages.Load failed for fixture %s", fixtureDir)
 	require.Empty(t, errs, "package load errors must fail-closed for %s: %v", fixtureDir, errs)
 
@@ -147,7 +147,7 @@ func TestProdDurationConstFailsClosedOnLoadError(t *testing.T) {
 	root := findModuleRoot(t)
 	fixtureDir := filepath.Join(root, "tools", "archtest", "testdata", "prod_duration_fixtures", "package_load_error")
 
-	_, errs, err := typeseval.LoadPackagesWithTags(fixtureDir, []string{"e2e", "integration", "pg"}, "./...")
+	_, errs, err := typeseval.LoadPackages(fixtureDir, false, []string{"e2e", "integration", "pg"}, "./...")
 	// The load itself should not return a hard error (packages.Load returns
 	// partial results with per-package errors for syntax failures), but there
 	// must be at least one package error.

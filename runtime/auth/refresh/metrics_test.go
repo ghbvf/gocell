@@ -11,6 +11,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+const gcMetricsD1500ms = 1500 * time.Millisecond
+
 type gcMetricProvider struct {
 	failName   string
 	registered map[string]metrics.Collector
@@ -92,7 +94,7 @@ func TestNewProviderGCCollector_RegistersAndObserves(t *testing.T) {
 	assert.Contains(t, p.registered, "auth_refresh_gc_duration_seconds")
 
 	require.NotPanics(t, func() {
-		collector.ObserveRefreshGC(context.Background(), "success", 7, 1500*time.Millisecond)
+		collector.ObserveRefreshGC(context.Background(), "success", 7, gcMetricsD1500ms)
 	})
 }
 

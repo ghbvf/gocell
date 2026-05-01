@@ -24,8 +24,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/runtime/distlock"
 )
+
+const conformDNeg1h = -1 * time.Hour
 
 // Literal constants for repeated token/key strings used in conformance tests.
 // Per CLAUDE.md: strings repeated ≥3 times must be extracted as constants.
@@ -199,7 +202,7 @@ func conformC5(t *testing.T, factory DriverFactory) {
 	}
 
 	// Wait past TTL — real sleep because we are testing real-clock TTL expiry.
-	time.Sleep(5 * time.Millisecond)
+	time.Sleep(testtime.FastPoll)
 
 	ok2, err2 := drv.SetNX(ctx, "c5-key", tokenB, ttl)
 	if err2 != nil {
@@ -224,7 +227,7 @@ func conformC6(t *testing.T, factory DriverFactory) {
 	}
 
 	// Wait past TTL — real sleep.
-	time.Sleep(5 * time.Millisecond)
+	time.Sleep(testtime.FastPoll)
 
 	held, err := drv.Renew(ctx, "c6-key", tokenA, ttl)
 	if err != nil {
@@ -260,7 +263,7 @@ func conformC7(t *testing.T, factory DriverFactory) {
 	} else {
 		// For real drivers: use an already-past-deadline context to force an error.
 		// This validates that the driver faithfully propagates ctx errors.
-		alreadyExpiredCtx, cancel := context.WithDeadline(ctx, time.Now().Add(-1*time.Hour))
+		alreadyExpiredCtx, cancel := context.WithDeadline(ctx, time.Now().Add(conformDNeg1h))
 		defer cancel()
 		_, err := drv.SetNX(alreadyExpiredCtx, "c7-key", tokenA, time.Minute)
 		if err == nil {

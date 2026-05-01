@@ -21,7 +21,12 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 )
+
+// reauthTwoBackoffInitial is 2× the initial reauth backoff interval, used to
+// set a safety-net deadline for ctx-cancel interrupt tests.
+const reauthTwoBackoffInitial = 2 * reauthBackoffInitial
 
 // TestReauthenticate_BackoffInterruptedByCtxCancel verifies that reauthenticate
 // responds to ctx cancellation during its exponential backoff sleep.
@@ -59,7 +64,7 @@ func TestReauthenticate_BackoffInterruptedByCtxCancel(t *testing.T) {
 		fakeAuth.mu.Lock()
 		defer fakeAuth.mu.Unlock()
 		return fakeAuth.calls >= 1
-	}, 2*time.Second, time.Millisecond, "expected at least 1 Login call before cancel")
+	}, testtime.D2s, time.Millisecond, "expected at least 1 Login call before cancel")
 
 	// Cancel ctx during the backoff sleep.
 	cancelAt := time.Now()
@@ -74,8 +79,8 @@ func TestReauthenticate_BackoffInterruptedByCtxCancel(t *testing.T) {
 		require.Less(t, elapsed, reauthBackoffInitial,
 			"reauthenticate returned after %v; expected < %v (the full backoff) — ctx cancel did not interrupt the sleep",
 			elapsed, reauthBackoffInitial)
-	case <-time.After(2 * reauthBackoffInitial):
-		t.Fatalf("reauthenticate did not return within 2×backoff (%v) after ctx cancel", 2*reauthBackoffInitial)
+	case <-time.After(reauthTwoBackoffInitial):
+		t.Fatalf("reauthenticate did not return within 2×backoff (%v) after ctx cancel", reauthTwoBackoffInitial)
 	}
 }
 
@@ -127,7 +132,7 @@ func TestDoReauth_InfiniteRetry_UntilCtxCancel(t *testing.T) {
 		watcherCallsMu.Lock()
 		defer watcherCallsMu.Unlock()
 		return watcherCalls >= 3
-	}, 10*time.Second, 5*time.Millisecond,
+	}, testtime.SelectAsyncSettle, testtime.FastPoll,
 		"expected at least 3 buildWatcher attempts; infinite loop is not retrying")
 
 	// Cancel ctx to exit the loop.
@@ -135,7 +140,7 @@ func TestDoReauth_InfiniteRetry_UntilCtxCancel(t *testing.T) {
 
 	select {
 	case <-done:
-	case <-time.After(3 * time.Second):
+	case <-time.After(testtime.EventuallyDefault):
 		t.Fatal("doReauth did not return after ctx cancel")
 	}
 
@@ -180,7 +185,7 @@ func TestDoReauth_SucceedsAfterNFailures(t *testing.T) {
 		authHealthy: authHealthy,
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), testtime.SelectAsyncSettle)
 	defer cancel()
 
 	newWatcher, ok := w.doReauth(ctx)
@@ -301,7 +306,7 @@ func TestDoReauth_BuildWatcherFailureBackoff(t *testing.T) {
 		logger:     slog.Default(),
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	ctx, cancel := context.WithTimeout(context.Background(), testtime.D200ms)
 	defer cancel()
 
 	// doReauth will fail the first failCount times, then succeed (or ctx expires).

@@ -11,6 +11,7 @@ import (
 	"github.com/coder/websocket"
 
 	adapterws "github.com/ghbvf/gocell/adapters/websocket"
+	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	rtws "github.com/ghbvf/gocell/runtime/websocket"
 
 	"github.com/stretchr/testify/assert"
@@ -25,13 +26,13 @@ import (
 func setupIntegrationHub(t *testing.T, handler rtws.MessageHandler) (*rtws.Hub, *httptest.Server) {
 	t.Helper()
 	cfg := rtws.DefaultHubConfig()
-	cfg.PingInterval = 200 * time.Millisecond
+	cfg.PingInterval = testtime.D200ms
 	hub := rtws.NewHub(cfg, handler)
 
 	startErr := make(chan error, 1)
 	go func() { startErr <- hub.Start(context.Background()) }()
 
-	require.Eventually(t, func() bool { return hub.IsRunning() }, 2*time.Second, time.Millisecond)
+	require.Eventually(t, func() bool { return hub.IsRunning() }, testtime.D2s, time.Millisecond)
 
 	mux := http.NewServeMux()
 	mux.Handle("/ws", requireUpgradeHandler(t, hub, adapterws.UpgradeConfig{
@@ -45,7 +46,7 @@ func setupIntegrationHub(t *testing.T, handler rtws.MessageHandler) (*rtws.Hub, 
 
 	t.Cleanup(func() {
 		server.Close()
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), testtime.CtxDefault)
 		defer cancel()
 		_ = hub.Stop(ctx)
 		<-startErr
@@ -61,7 +62,7 @@ func setupIntegrationHub(t *testing.T, handler rtws.MessageHandler) (*rtws.Hub, 
 func dialIntegrationWS(t *testing.T, serverURL string) *websocket.Conn {
 	t.Helper()
 	wsURL := "ws" + strings.TrimPrefix(serverURL, "http") + "/ws"
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), testtime.CtxDefault)
 	defer cancel()
 	conn, _, err := websocket.Dial(ctx, wsURL, &websocket.DialOptions{
 		HTTPHeader: http.Header{"Origin": {"http://example.com"}},
@@ -91,10 +92,10 @@ func TestIntegration_ConnectAndEcho(t *testing.T) {
 	conn := dialIntegrationWS(t, server.URL)
 	// cleanup via dialIntegrationWS t.Cleanup
 
-	require.Eventually(t, func() bool { return hub.ConnCount() == 1 }, 2*time.Second, 10*time.Millisecond)
+	require.Eventually(t, func() bool { return hub.ConnCount() == 1 }, testtime.D2s, testtime.D10ms)
 
 	// Client sends a message.
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), testtime.D2s)
 	defer cancel()
 	require.NoError(t, conn.Write(ctx, websocket.MessageText, []byte("echo hello")))
 
@@ -103,7 +104,7 @@ func TestIntegration_ConnectAndEcho(t *testing.T) {
 		mu.Lock()
 		defer mu.Unlock()
 		return gotMsg != ""
-	}, 2*time.Second, 10*time.Millisecond)
+	}, testtime.D2s, testtime.D10ms)
 
 	mu.Lock()
 	assert.Equal(t, "echo hello", gotMsg)
@@ -116,7 +117,7 @@ func TestIntegration_ConnectAndEcho(t *testing.T) {
 	mu.Unlock()
 	require.NoError(t, hub.Send(context.Background(), id, []byte("echo reply")))
 
-	readCtx, readCancel := context.WithTimeout(context.Background(), 2*time.Second)
+	readCtx, readCancel := context.WithTimeout(context.Background(), testtime.D2s)
 	defer readCancel()
 	_, data, err := conn.Read(readCtx)
 	require.NoError(t, err)
@@ -137,7 +138,7 @@ func TestIntegration_BroadcastMultipleClients(t *testing.T) {
 
 	require.Eventually(t, func() bool {
 		return hub.ConnCount() == numClients
-	}, 2*time.Second, 10*time.Millisecond)
+	}, testtime.D2s, testtime.D10ms)
 
 	hub.Broadcast(context.Background(), []byte("broadcast msg"))
 
@@ -149,7 +150,7 @@ func TestIntegration_BroadcastMultipleClients(t *testing.T) {
 		wg.Add(1)
 		go func(c *websocket.Conn) {
 			defer wg.Done()
-			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			ctx, cancel := context.WithTimeout(context.Background(), testtime.D2s)
 			defer cancel()
 			_, data, err := c.Read(ctx)
 			if err != nil {
@@ -183,10 +184,10 @@ func TestIntegration_GracefulShutdown(t *testing.T) {
 
 	require.Eventually(t, func() bool {
 		return hub.ConnCount() == numClients
-	}, 2*time.Second, 10*time.Millisecond)
+	}, testtime.D2s, testtime.D10ms)
 
 	// Stop hub — should close all connections within deadline.
-	stopCtx, stopCancel := context.WithTimeout(context.Background(), 2*time.Second)
+	stopCtx, stopCancel := context.WithTimeout(context.Background(), testtime.D2s)
 	defer stopCancel()
 	require.NoError(t, hub.Stop(stopCtx))
 

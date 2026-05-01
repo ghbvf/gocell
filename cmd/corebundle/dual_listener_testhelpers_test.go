@@ -4,8 +4,8 @@ import (
 	"net"
 	"net/http"
 	"testing"
-	"time"
 
+	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/stretchr/testify/require"
 )
 
@@ -45,5 +45,5 @@ func waitForHealthy(t *testing.T, addr string) {
 		}
 		_ = resp.Body.Close()
 		return resp.StatusCode == http.StatusOK
-	}, 5*time.Second, 50*time.Millisecond, "HTTP /healthz did not become ready on %s", addr)
+	}, testtime.EventuallyLong, testtime.MediumPoll, "HTTP /healthz did not become ready on %s", addr)
 }

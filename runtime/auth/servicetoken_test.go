@@ -29,6 +29,12 @@ const (
 	testHMACKeySam = "same-hmackey-padding-to-32bytes!!" // len=33
 )
 
+const (
+	svcTokenDNeg6min    = -6 * time.Minute
+	svcTokenD6min       = 6 * time.Minute
+	svcTokenDNeg4min59s = -4*time.Minute - 59*time.Second
+)
+
 func mustTestRing(t *testing.T, current, previous string) *HMACKeyRing {
 	t.Helper()
 	var prev []byte
@@ -346,7 +352,7 @@ func TestServiceTokenMiddleware_ExpiredTimestamp(t *testing.T) {
 	now := time.Now()
 	handler := mustTestServiceHandlerFatal(t, ring, func() time.Time { return now })
 
-	oldTime := now.Add(-6 * time.Minute)
+	oldTime := now.Add(svcTokenDNeg6min)
 	token := GenerateServiceToken(ring, http.MethodGet, "/internal/v1/health", "", oldTime)
 	req := httptest.NewRequest(http.MethodGet, "/internal/v1/health", nil)
 	req.Header.Set("Authorization", "ServiceToken "+token)
@@ -376,7 +382,7 @@ func TestServiceTokenMiddleware_JustWithinWindow(t *testing.T) {
 	now := time.Now()
 	handler := mustTestServiceHandler(t, ring, func() time.Time { return now })
 
-	recentTime := now.Add(-4*time.Minute - 59*time.Second)
+	recentTime := now.Add(svcTokenDNeg4min59s)
 	token := GenerateServiceToken(ring, http.MethodGet, "/internal/v1/health", "", recentTime)
 	req := httptest.NewRequest(http.MethodGet, "/internal/v1/health", nil)
 	req.Header.Set("Authorization", "ServiceToken "+token)
@@ -391,7 +397,7 @@ func TestServiceTokenMiddleware_FutureTimestamp_Rejected(t *testing.T) {
 	now := time.Now()
 	handler := mustTestServiceHandlerFatal(t, ring, func() time.Time { return now })
 
-	futureTime := now.Add(6 * time.Minute)
+	futureTime := now.Add(svcTokenD6min)
 	token := GenerateServiceToken(ring, http.MethodGet, "/internal/v1/health", "", futureTime)
 	req := httptest.NewRequest(http.MethodGet, "/internal/v1/health", nil)
 	req.Header.Set("Authorization", "ServiceToken "+token)

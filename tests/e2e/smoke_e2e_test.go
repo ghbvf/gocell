@@ -14,11 +14,11 @@ package e2e
 import (
 	"net/http"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/tests/e2e/internal/clients"
 	e2erequire "github.com/ghbvf/gocell/tests/e2e/internal/require"
 )
@@ -30,7 +30,7 @@ import (
 // are gated out by the build tag.
 func TestE2E_HealthListener_ReadyzReturns200(t *testing.T) {
 	e2erequire.Docker(t)
-	clients.WaitForReady(t, 30*time.Second)
+	clients.WaitForReady(t, testtime.CtxLong)
 
 	resp, err := http.Get(clients.HealthURL() + "/readyz")
 	require.NoError(t, err)
@@ -43,7 +43,7 @@ func TestE2E_HealthListener_ReadyzReturns200(t *testing.T) {
 // listener (PR-A14b). Like the readyz smoke, this runs without PG/RMQ.
 func TestE2E_PrimaryListener_RejectsInternalPath(t *testing.T) {
 	e2erequire.Docker(t)
-	clients.WaitForReady(t, 30*time.Second)
+	clients.WaitForReady(t, testtime.CtxLong)
 
 	resp, err := http.Get(clients.BaseURL() + "/internal/v1/anything")
 	require.NoError(t, err)

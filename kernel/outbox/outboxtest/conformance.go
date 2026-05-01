@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/ghbvf/gocell/kernel/outbox"
+	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 )
 
 // defaultTimeout is the base timeout for subscribe/collect operations.
@@ -365,7 +366,7 @@ func testMultipleSubscribers(t *testing.T, _ Features, constructor PubSubConstru
 	// Wait for both subscribers to receive.
 	assertEventually(t, func() bool {
 		return sub1Received.Load() >= 1 && sub2Received.Load() >= 1
-	}, defaultTimeout, 10*time.Millisecond, "both subscribers should receive the message")
+	}, defaultTimeout, testtime.D10ms, "both subscribers should receive the message")
 
 	cancel()
 	if err := awaitWithBudget(fmt.Sprintf("multipleSubscribers-join(topic=%q)", topic), chanFromWaitGroup(&wg), defaultTimeout); err != nil {
@@ -619,7 +620,7 @@ func testReceiptCommittedOnAck(t *testing.T, features Features, constructor PubS
 
 	h.publishAndWait([]byte(`{"test":"receipt-ack"}`))
 	assertEventually(t, func() bool { return receipt.Committed() },
-		5*time.Second, 10*time.Millisecond, "Receipt.Commit should be called on Ack")
+		testtime.D5s, testtime.D10ms, "Receipt.Commit should be called on Ack")
 	assertFalse(t, receipt.Released(), "Receipt.Release should NOT be called on Ack")
 	h.teardown()
 }
@@ -646,7 +647,7 @@ func testReceiptReleasedOnReject(t *testing.T, features Features, constructor Pu
 
 	h.publishAndWait([]byte(`{"test":"receipt-reject"}`))
 	assertEventually(t, func() bool { return receipt.Released() },
-		5*time.Second, 10*time.Millisecond, "Receipt.Release should be called on Reject")
+		testtime.D5s, testtime.D10ms, "Receipt.Release should be called on Reject")
 	assertFalse(t, receipt.Committed(), "Receipt.Commit should NOT be called on Reject")
 	h.teardown()
 }
@@ -678,7 +679,7 @@ func testReceiptReleasedOnRequeue(t *testing.T, features Features, constructor P
 
 	h.publishAndWait([]byte(`{"test":"receipt-requeue"}`))
 	assertEventually(t, func() bool { return receipt.Released() },
-		5*time.Second, 10*time.Millisecond, "Receipt.Release should be called on Requeue")
+		testtime.D5s, testtime.D10ms, "Receipt.Release should be called on Requeue")
 	h.teardown()
 }
 
@@ -719,7 +720,7 @@ func testReceiptCommitFailureDoesNotAck(t *testing.T, features Features, constru
 	// loop) satisfy "Commit was tried more than once" within retry budget.
 	assertEventually(t, func() bool {
 		return receipt.CommitCount() >= 2 || deliveries.Load() >= 2
-	}, 5*time.Second, 20*time.Millisecond,
+	}, testtime.D5s, testtime.D20ms,
 		"adapter must NOT promote Commit failure to success — expected retry/redelivery")
 	h.teardown()
 }
@@ -749,7 +750,7 @@ func testSubscribeBlocksUntilCancel(t *testing.T, features Features, constructor
 	select {
 	case <-subscribeReturned:
 		t.Fatal("Subscribe returned before context was canceled")
-	case <-time.After(100 * time.Millisecond):
+	case <-time.After(testtime.D100ms):
 		// Good — still blocking.
 	}
 

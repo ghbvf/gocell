@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/runtime/distlock"
 	"github.com/ghbvf/gocell/runtime/distlock/locktest"
 )
@@ -17,7 +18,27 @@ import (
 // testTimeout is the default guard timeout used in select statements across
 // locker tests. It applies only as a hard deadline to prevent test hangs —
 // it does not assert anything about real execution time.
-const testTimeout = 10 * time.Second
+const testTimeout = testtime.D10s
+
+// lockerSmallTTL is a TTL small enough to exercise renew-timeout with race-detector
+// overhead (renew timeout = 495ms = TTL*0.99).
+const lockerSmallTTL = testtime.D500ms
+
+// lockerExpiredTTLFrac is the fractional nanosecond below 1ms used to verify
+// boundary conditions in expiry tests.
+const lockerExpiredTTL500us = 500 * time.Microsecond
+const lockerExpiredTTL999us = 999_999 * time.Nanosecond
+
+// lockerTTLHalf is exactly half of the default 10s test TTL, used when
+// computing the renewal trigger point (ttl * 0.5 = 5s) without introducing
+// numeric literals in arithmetic expressions.
+const lockerTTLHalf = testtime.D10s / 2
+
+// lockerRenewTolerance is the tolerance window for Renew ctx deadline assertions.
+const lockerRenewTolerance = testtime.D10ms
+
+// lockerWaitRenewTimeout is the hard deadline used in waitForRenewOnMgr.
+const lockerWaitRenewTimeout = testtime.D30s
 
 // mgr returns the internal Manager via type assertion.
 // lockerImpl exposes Manager() returning *Manager.
@@ -60,7 +81,7 @@ func TestLocker_TC1_HappyPath(t *testing.T) {
 	fd := locktest.NewFakeDriver()
 	l := newTestLocker(fc, fd)
 
-	ttl := 10 * time.Second
+	ttl := testtime.D10s
 	lockCtx, release, err := l.Acquire(context.Background(), "key1", ttl)
 	if err != nil {
 		t.Fatalf("TC-1 Acquire: %v", err)
@@ -71,7 +92,7 @@ func TestLocker_TC1_HappyPath(t *testing.T) {
 	waitPendingTimers(t, fc)
 
 	// Advance to trigger renew (ttl * 0.5 = 5s).
-	fc.Advance(ttl / 2)
+	fc.Advance(lockerTTLHalf)
 
 	// Give renew goroutine a moment to process.
 	waitForRenewL(t, l, fd, 1)
@@ -102,7 +123,7 @@ func TestLocker_TC2_RenewIntervalPrecision(t *testing.T) {
 	fd := locktest.NewFakeDriver()
 	l := newTestLocker(fc, fd)
 
-	ttl := 10 * time.Second
+	ttl := testtime.D10s
 	renewAt := time.Duration(float64(ttl) * 0.5)
 
 	_, release, err := l.Acquire(context.Background(), "key2", ttl)
@@ -150,7 +171,7 @@ func TestLocker_TC3_RenewError_LockLost(t *testing.T) {
 		distlock.WithMaxRenewAttempts(1),
 	)
 
-	ttl := 10 * time.Second
+	ttl := testtime.D10s
 
 	lockCtx1, release1, err := l.Acquire(context.Background(), "key3a", ttl)
 	if err != nil {
@@ -234,7 +255,7 @@ func TestLocker_TC4_RenewNotHeld_LockLost(t *testing.T) {
 	fd := locktest.NewFakeDriver()
 	l := newTestLocker(fc, fd)
 
-	ttl := 10 * time.Second
+	ttl := testtime.D10s
 
 	lockCtx, release, err := l.Acquire(context.Background(), "key4", ttl)
 	if err != nil {
@@ -281,7 +302,7 @@ func TestLocker_TC5_ParentCancel(t *testing.T) {
 		fd := locktest.NewFakeDriver()
 		l := newTestLocker(fc, fd)
 
-		ttl := 10 * time.Second
+		ttl := testtime.D10s
 
 		parentCtx, parentCancel := context.WithCancel(context.Background())
 
@@ -316,7 +337,7 @@ func TestLocker_TC5_ParentCancel(t *testing.T) {
 		fd := locktest.NewFakeDriver()
 		l := newTestLocker(fc, fd)
 
-		ttl := 10 * time.Second
+		ttl := testtime.D10s
 
 		customErr := errors.New("custom-parent-cause")
 		parentCtx, parentCancelCause := context.WithCancelCause(context.Background())
@@ -358,7 +379,7 @@ func TestLocker_TC6_DoubleRelease(t *testing.T) {
 	fd := locktest.NewFakeDriver()
 	l := newTestLocker(fc, fd)
 
-	ttl := 10 * time.Second
+	ttl := testtime.D10s
 
 	_, release, err := l.Acquire(context.Background(), "key6", ttl)
 	if err != nil {
@@ -394,7 +415,7 @@ func TestLocker_TC7_AcquireBusy(t *testing.T) {
 
 	l := newTestLocker(fc, fd)
 
-	ttl := 10 * time.Second
+	ttl := testtime.D10s
 
 	lockCtx, _, err := l.Acquire(context.Background(), "key7", ttl)
 	if err == nil {
@@ -420,7 +441,7 @@ func TestLocker_TC8_PreCanceledCtx(t *testing.T) {
 	canceledCtx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	_, _, err := l.Acquire(canceledCtx, "key8", 10*time.Second)
+	_, _, err := l.Acquire(canceledCtx, "key8", testtime.D10s)
 	if err == nil {
 		t.Fatal("TC-8: expected error for pre-canceled ctx")
 	}
@@ -441,7 +462,7 @@ func TestLocker_TC9_GoroutineCount(t *testing.T) {
 	l := newTestLocker(fc, fd)
 
 	const n = 100
-	ttl := time.Minute
+	ttl := testtime.D1min
 
 	baseline := runtime.NumGoroutine()
 
@@ -494,12 +515,12 @@ func TestLocker_TC9_GoroutineCount(t *testing.T) {
 	// Wait for drain.
 	select {
 	case <-mgr(l).Drained():
-	case <-time.After(30 * time.Second):
+	case <-time.After(testtime.D30s):
 		t.Fatal("TC-9: manager should drain after all releases")
 	}
 
 	// Bounded goroutine-count check after drain — must return to baseline.
-	drainDeadline := time.Now().Add(5 * time.Second)
+	drainDeadline := time.Now().Add(testtime.EventuallyLong)
 	for {
 		current := runtime.NumGoroutine()
 		if current <= baseline+2 { // 2 slack for any test-framework goroutines
@@ -520,7 +541,7 @@ func TestLocker_TC10_LazyLifecycle(t *testing.T) {
 	fd := locktest.NewFakeDriver()
 	l := newTestLocker(fc, fd)
 
-	ttl := 10 * time.Second
+	ttl := testtime.D10s
 
 	// First acquisition.
 	_, release, err := l.Acquire(context.Background(), "key10", ttl)
@@ -572,7 +593,7 @@ func TestLocker_TC11_SmallTTLNoSpinLoop(t *testing.T) {
 	fd := locktest.NewFakeDriverWithClock(fc.Now)
 	l := newTestLocker(fc, fd)
 
-	ttl := 500 * time.Millisecond // small TTL; large enough for race-detector scheduling overhead (renew timeout = 495ms)
+	ttl := lockerSmallTTL // small TTL; large enough for race-detector scheduling overhead (renew timeout = 495ms)
 
 	_, release, err := l.Acquire(context.Background(), "key11", ttl)
 	if err != nil {
@@ -627,7 +648,7 @@ func TestLocker_TC12_DriftFactor(t *testing.T) {
 
 	// Use a large TTL so the renew context timeout (ttl-drift = 9.9s) is safely
 	// larger than race-detector goroutine scheduling overhead.
-	ttl := 10 * time.Second
+	ttl := testtime.D10s
 
 	_, release, err := l.Acquire(context.Background(), "key12", ttl)
 	if err != nil {
@@ -644,7 +665,7 @@ func TestLocker_TC12_DriftFactor(t *testing.T) {
 
 	// Verify the drift math: drift = ttl * driftFactor = 10s * 0.01 = 100ms.
 	drift := time.Duration(float64(ttl) * driftFactor)
-	if drift != 100*time.Millisecond {
+	if drift != testtime.D100ms {
 		t.Errorf("TC-12: drift = %v, want 100ms (ttl=10s, driftFactor=0.01)", drift)
 	}
 
@@ -670,7 +691,7 @@ func TestLocker_TC12_DriftFactor(t *testing.T) {
 	}
 
 	// Allow 10ms tolerance for scheduling jitter between clock.Now() reads.
-	const tolerance = 10 * time.Millisecond
+	const tolerance = lockerRenewTolerance
 	diff := recorded.Sub(expectedDeadline)
 	if diff < -tolerance || diff > tolerance {
 		t.Errorf("TC-12: Renew ctx deadline = %v, expected ≈ %v (diff %v, tolerance ±%v); "+
@@ -703,7 +724,7 @@ func TestLocker_LockCtxValuePropagation(t *testing.T) {
 
 	parentCtx := context.WithValue(context.Background(), key, val)
 
-	lockCtx, release, err := l.Acquire(parentCtx, "key-val-prop", 10*time.Second)
+	lockCtx, release, err := l.Acquire(parentCtx, "key-val-prop", testtime.D10s)
 	if err != nil {
 		t.Fatalf("ValuePropagation Acquire: %v", err)
 	}
@@ -726,11 +747,11 @@ func TestLocker_LockCtxDeadlinePropagation(t *testing.T) {
 	fd := locktest.NewFakeDriver()
 	l := newTestLocker(fc, fd)
 
-	deadline := time.Now().Add(10 * time.Minute)
+	deadline := time.Now().Add(testtime.D10min)
 	parentCtx, cancel := context.WithDeadline(context.Background(), deadline)
 	defer cancel()
 
-	lockCtx, release, err := l.Acquire(parentCtx, "key-deadline-prop", 10*time.Second)
+	lockCtx, release, err := l.Acquire(parentCtx, "key-deadline-prop", testtime.D10s)
 	if err != nil {
 		t.Fatalf("DeadlinePropagation Acquire: %v", err)
 	}
@@ -825,7 +846,7 @@ func TestLocker_New_PanicsOnNonPositiveReleaseTimeout(t *testing.T) {
 		timeout time.Duration
 	}{
 		{"zero", 0},
-		{"negative", -1 * time.Second},
+		{"negative", testtime.DNeg1s},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -852,9 +873,9 @@ func TestLocker_Acquire_RejectsZeroTTL(t *testing.T) {
 		ttl  time.Duration
 	}{
 		{"zero", 0},
-		{"negative", -1 * time.Second},
-		{"sub-millisecond/microsecond", 500 * time.Microsecond},
-		{"sub-millisecond/nanosecond", 999_999 * time.Nanosecond},
+		{"negative", testtime.DNeg1s},
+		{"sub-millisecond/microsecond", lockerExpiredTTL500us},
+		{"sub-millisecond/nanosecond", lockerExpiredTTL999us},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -896,7 +917,7 @@ func TestLocker_ConcurrentRelease(t *testing.T) {
 	l := newTestLocker(fc, fd)
 
 	const n = 100
-	ttl := time.Minute
+	ttl := testtime.D1min
 
 	releases := make([]func() error, n)
 	for i := range n {
@@ -926,7 +947,7 @@ func TestLocker_ConcurrentRelease(t *testing.T) {
 
 	select {
 	case <-mgr(l).Drained():
-	case <-time.After(30 * time.Second):
+	case <-time.After(testtime.D30s):
 		t.Fatal("ConcurrentRelease: manager should drain after all concurrent releases")
 	}
 
@@ -1017,7 +1038,7 @@ func TestLocker_TC13_TransientRenewError_ThenSuccess(t *testing.T) {
 	fd := locktest.NewFakeDriver()
 	l := newTestLocker(fc, fd) // default maxRenewAttempts=3
 
-	ttl := 10 * time.Second
+	ttl := testtime.D10s
 
 	lockCtx, release, err := l.Acquire(context.Background(), "key13", ttl)
 	if err != nil {
@@ -1067,7 +1088,7 @@ func TestLocker_TC14_BudgetExhausted_LockLost(t *testing.T) {
 	fd := locktest.NewFakeDriver()
 	l := newTestLocker(fc, fd) // default maxRenewAttempts=3
 
-	ttl := 10 * time.Second
+	ttl := testtime.D10s
 
 	lockCtx, release, err := l.Acquire(context.Background(), "key14", ttl)
 	if err != nil {
@@ -1114,7 +1135,7 @@ func TestLocker_TC15_PermanentOwnershipLost_NoRetry(t *testing.T) {
 	fd := locktest.NewFakeDriver()
 	l := newTestLocker(fc, fd) // default maxRenewAttempts=3
 
-	ttl := 10 * time.Second
+	ttl := testtime.D10s
 
 	lockCtx, release, err := l.Acquire(context.Background(), "key15", ttl)
 	if err != nil {
@@ -1181,7 +1202,7 @@ func TestLocker_Release_ReturnsError(t *testing.T) {
 	fd := locktest.NewFakeDriver()
 	l := newTestLocker(fc, fd)
 
-	_, release, err := l.Acquire(context.Background(), "key-release-err", 10*time.Second)
+	_, release, err := l.Acquire(context.Background(), "key-release-err", testtime.D10s)
 	if err != nil {
 		t.Fatalf("Acquire: %v", err)
 	}
@@ -1218,9 +1239,9 @@ func TestLocker_Stats_AfterAcquire(t *testing.T) {
 	fd := locktest.NewFakeDriver()
 	l := newTestLocker(fc, fd)
 
-	_, r1, _ := l.Acquire(context.Background(), "stats-key1", time.Minute)
-	_, r2, _ := l.Acquire(context.Background(), "stats-key2", time.Minute)
-	_, r3, _ := l.Acquire(context.Background(), "stats-key3", time.Minute)
+	_, r1, _ := l.Acquire(context.Background(), "stats-key1", testtime.D1min)
+	_, r2, _ := l.Acquire(context.Background(), "stats-key2", testtime.D1min)
+	_, r3, _ := l.Acquire(context.Background(), "stats-key3", testtime.D1min)
 
 	<-mgr(l).Started()
 
@@ -1258,9 +1279,9 @@ func TestLocker_Stats_AfterRelease(t *testing.T) {
 	fd := locktest.NewFakeDriver()
 	l := newTestLocker(fc, fd)
 
-	_, r1, _ := l.Acquire(context.Background(), "stats-rel-key1", time.Minute)
-	_, r2, _ := l.Acquire(context.Background(), "stats-rel-key2", time.Minute)
-	_, r3, _ := l.Acquire(context.Background(), "stats-rel-key3", time.Minute)
+	_, r1, _ := l.Acquire(context.Background(), "stats-rel-key1", testtime.D1min)
+	_, r2, _ := l.Acquire(context.Background(), "stats-rel-key2", testtime.D1min)
+	_, r3, _ := l.Acquire(context.Background(), "stats-rel-key3", testtime.D1min)
 	defer func() {
 		if err := r2(); err != nil {
 			t.Logf("r2: %v", err)
@@ -1310,7 +1331,7 @@ func waitForRenewOnMgr(t *testing.T, m *distlock.Manager, fd *locktest.FakeDrive
 	if m == nil {
 		t.Fatal("waitForRenewOnMgr: manager is nil")
 	}
-	const totalTimeout = 30 * time.Second
+	const totalTimeout = lockerWaitRenewTimeout
 	deadline := time.Now().Add(totalTimeout)
 	for fd.Calls("Renew") < want {
 		if time.Now().After(deadline) {

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	gcotel "github.com/ghbvf/gocell/adapters/otel"
+	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/tests/testutil"
 	dockercontainer "github.com/moby/moby/api/types/container"
 	"github.com/moby/moby/api/types/network"
@@ -40,7 +41,7 @@ service:
 func TestNewTracer_ExportsSpanToOTLPCollector(t *testing.T) {
 	testutil.RequireDocker(t)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), testtime.D2min)
 	defer cancel()
 
 	container, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
@@ -66,7 +67,7 @@ func TestNewTracer_ExportsSpanToOTLPCollector(t *testing.T) {
 				},
 			},
 			WaitingFor: wait.ForListeningPort("4317/tcp").
-				WithStartupTimeout(time.Minute),
+				WithStartupTimeout(testtime.D1min),
 		},
 		Started: true,
 	})
@@ -88,7 +89,7 @@ func TestNewTracer_ExportsSpanToOTLPCollector(t *testing.T) {
 	_, span := tracer.Start(context.Background(), "otelcollector-round-trip")
 	span.End()
 
-	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), testtime.SelectAsyncSettle)
 	defer shutdownCancel()
 	require.NoError(t, shutdown(shutdownCtx), "flush span to collector")
 
@@ -97,7 +98,7 @@ func TestNewTracer_ExportsSpanToOTLPCollector(t *testing.T) {
 
 func waitForCollectorLog(t *testing.T, container testcontainers.Container, want string) {
 	t.Helper()
-	deadline := time.Now().Add(10 * time.Second)
+	deadline := time.Now().Add(testtime.SelectAsyncSettle)
 	var lastLogs string
 	for time.Now().Before(deadline) {
 		logs, err := container.Logs(context.Background())
@@ -109,7 +110,7 @@ func waitForCollectorLog(t *testing.T, container testcontainers.Container, want 
 		if strings.Contains(lastLogs, want) {
 			return
 		}
-		time.Sleep(200 * time.Millisecond)
+		time.Sleep(testtime.D200ms)
 	}
 	t.Fatalf("collector logs did not contain %q; logs:\n%s", want, lastLogs)
 }

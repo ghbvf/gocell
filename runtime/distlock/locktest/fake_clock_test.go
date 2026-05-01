@@ -4,6 +4,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/runtime/distlock/locktest"
 )
 
@@ -23,11 +24,11 @@ func TestFakeClock_Advance_FiresDueTimers(t *testing.T) {
 	fc := locktest.NewFakeClock(epoch)
 
 	// Timer at +1s and +2s.
-	t1 := fc.NewTimerAt(epoch.Add(1 * time.Second))
-	t2 := fc.NewTimerAt(epoch.Add(2 * time.Second))
+	t1 := fc.NewTimerAt(epoch.Add(testtime.D1s))
+	t2 := fc.NewTimerAt(epoch.Add(testtime.D2s))
 
 	// Advance 1.5s — only t1 should fire.
-	fc.Advance(1500 * time.Millisecond)
+	fc.Advance(testtime.D1s + testtime.D500ms)
 
 	select {
 	case <-t1.C():
@@ -41,7 +42,7 @@ func TestFakeClock_Advance_FiresDueTimers(t *testing.T) {
 	}
 
 	// Advance another 1s — t2 should now fire.
-	fc.Advance(1 * time.Second)
+	fc.Advance(testtime.D1s)
 	select {
 	case <-t2.C():
 	default:
@@ -53,10 +54,10 @@ func TestFakeClock_Advance_FiresDueTimers(t *testing.T) {
 // future deadlines do not fire prematurely.
 func TestFakeClock_Advance_DoesNotFireFutureTimers(t *testing.T) {
 	fc := locktest.NewFakeClock(epoch)
-	timer := fc.NewTimerAt(epoch.Add(10 * time.Second))
+	timer := fc.NewTimerAt(epoch.Add(testtime.D10s))
 
 	// Advance less than the timer deadline.
-	fc.Advance(5 * time.Second)
+	fc.Advance(testtime.D5s)
 
 	select {
 	case <-timer.C():
@@ -76,13 +77,13 @@ func TestFakeClock_Advance_FiresAllDueTimersFromOneAdvance(t *testing.T) {
 	fc := locktest.NewFakeClock(epoch)
 
 	// Create timers in reverse order of deadlines.
-	t3 := fc.NewTimerAt(epoch.Add(3 * time.Second))
-	t1 := fc.NewTimerAt(epoch.Add(1 * time.Second))
-	t2 := fc.NewTimerAt(epoch.Add(2 * time.Second))
+	t3 := fc.NewTimerAt(epoch.Add(testtime.D3s))
+	t1 := fc.NewTimerAt(epoch.Add(testtime.D1s))
+	t2 := fc.NewTimerAt(epoch.Add(testtime.D2s))
 
 	// Advance past all deadlines in one step.
 	fired := make([]int, 0, 3)
-	fc.Advance(4 * time.Second)
+	fc.Advance(testtime.D5s)
 
 	// All three should have fired. Drain by timer identity; this intentionally
 	// does not assert cross-channel delivery order.
@@ -116,14 +117,14 @@ type distlockTimer interface {
 // prevents the timer from firing.
 func TestFakeClock_Timer_Stop_BeforeFire(t *testing.T) {
 	fc := locktest.NewFakeClock(epoch)
-	timer := fc.NewTimerAt(epoch.Add(5 * time.Second))
+	timer := fc.NewTimerAt(epoch.Add(testtime.D5s))
 
 	if !timer.Stop() {
 		t.Error("Stop() before fire should return true")
 	}
 
 	// Advance past deadline — timer should not fire (was stopped).
-	fc.Advance(10 * time.Second)
+	fc.Advance(testtime.D10s)
 
 	select {
 	case <-timer.C():
@@ -141,10 +142,10 @@ func TestFakeClock_Timer_Stop_BeforeFire(t *testing.T) {
 // the timer has already fired.
 func TestFakeClock_Timer_Stop_AfterFire(t *testing.T) {
 	fc := locktest.NewFakeClock(epoch)
-	timer := fc.NewTimerAt(epoch.Add(1 * time.Second))
+	timer := fc.NewTimerAt(epoch.Add(testtime.D1s))
 
 	// Fire the timer by advancing.
-	fc.Advance(2 * time.Second)
+	fc.Advance(testtime.D2s)
 
 	// Drain the channel.
 	select {
@@ -163,7 +164,7 @@ func TestFakeClock_Timer_Stop_AfterFire(t *testing.T) {
 // is safe (second call returns false).
 func TestFakeClock_Timer_Stop_TwiceIdempotent(t *testing.T) {
 	fc := locktest.NewFakeClock(epoch)
-	timer := fc.NewTimerAt(epoch.Add(5 * time.Second))
+	timer := fc.NewTimerAt(epoch.Add(testtime.D5s))
 
 	if !timer.Stop() {
 		t.Error("first Stop() should return true")
@@ -177,14 +178,14 @@ func TestFakeClock_Timer_Stop_TwiceIdempotent(t *testing.T) {
 // timer to a future deadline.
 func TestFakeClock_Timer_Reset_ToFutureDeadline(t *testing.T) {
 	fc := locktest.NewFakeClock(epoch)
-	timer := fc.NewTimerAt(epoch.Add(1 * time.Second))
+	timer := fc.NewTimerAt(epoch.Add(testtime.D1s))
 
 	// Stop and reset to 5s.
 	timer.Stop()
-	timer.Reset(5 * time.Second)
+	timer.Reset(testtime.D5s)
 
 	// Advance 3s — timer should not fire yet.
-	fc.Advance(3 * time.Second)
+	fc.Advance(testtime.D3s)
 	select {
 	case <-timer.C():
 		t.Error("timer should not fire at 3s after Reset(5s)")
@@ -192,7 +193,7 @@ func TestFakeClock_Timer_Reset_ToFutureDeadline(t *testing.T) {
 	}
 
 	// Advance 3 more seconds — now total is 6s, past deadline.
-	fc.Advance(3 * time.Second)
+	fc.Advance(testtime.D3s)
 	select {
 	case <-timer.C():
 		// Good — fired.
@@ -205,7 +206,7 @@ func TestFakeClock_Timer_Reset_ToFutureDeadline(t *testing.T) {
 // Reset(<=0) marks the timer as fired and sends on the channel.
 func TestFakeClock_Timer_Reset_ToPastDeadline_FiresOnNextAdvance(t *testing.T) {
 	fc := locktest.NewFakeClock(epoch)
-	timer := fc.NewTimerAt(epoch.Add(10 * time.Second))
+	timer := fc.NewTimerAt(epoch.Add(testtime.D10s))
 
 	// Reset to 0 — should fire immediately.
 	timer.Reset(0)
@@ -223,11 +224,11 @@ func TestFakeClock_Since(t *testing.T) {
 	fc := locktest.NewFakeClock(epoch)
 
 	// Advance to T+5s.
-	fc.Advance(5 * time.Second)
+	fc.Advance(testtime.D5s)
 
 	// Since(epoch) should be 5s.
 	d := fc.Since(epoch)
-	if d != 5*time.Second {
+	if d != testtime.D5s {
 		t.Errorf("Since(epoch) = %v, want 5s", d)
 	}
 }
@@ -241,9 +242,9 @@ func TestFakeClock_PendingTimers_CountsOnlyArmed(t *testing.T) {
 		t.Errorf("initial PendingTimers = %d, want 0", fc.PendingTimers())
 	}
 
-	t1 := fc.NewTimerAt(epoch.Add(1 * time.Second))
-	t2 := fc.NewTimerAt(epoch.Add(2 * time.Second))
-	t3 := fc.NewTimerAt(epoch.Add(3 * time.Second))
+	t1 := fc.NewTimerAt(epoch.Add(testtime.D1s))
+	t2 := fc.NewTimerAt(epoch.Add(testtime.D2s))
+	t3 := fc.NewTimerAt(epoch.Add(testtime.D3s))
 
 	if fc.PendingTimers() != 3 {
 		t.Errorf("PendingTimers = %d, want 3 after creating 3 timers", fc.PendingTimers())
@@ -256,7 +257,7 @@ func TestFakeClock_PendingTimers_CountsOnlyArmed(t *testing.T) {
 	}
 
 	// Advance past t1.
-	fc.Advance(1500 * time.Millisecond)
+	fc.Advance(testtime.D1s + testtime.D500ms)
 	<-t1.C()
 	if fc.PendingTimers() != 1 {
 		t.Errorf("PendingTimers = %d, want 1 after t1 fired", fc.PendingTimers())

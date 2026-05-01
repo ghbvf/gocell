@@ -7,7 +7,25 @@ import (
 	"time"
 
 	kout "github.com/ghbvf/gocell/kernel/outbox"
+	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/runtime/outbox"
+)
+
+const (
+	// conformDNeg3s is used to seed entries 3 seconds in the past.
+	conformDNeg3s = -testtime.D3s
+	// conformDNeg2s is used to seed entries 2 seconds in the past.
+	conformDNeg2s = -testtime.D2s
+	// conformDNeg1s is used to seed entries 1 second in the past.
+	conformDNeg1s = testtime.DNeg1s
+	// conformReclaimBaseDelay is the baseDelay passed to ReclaimStale.
+	conformReclaimBaseDelay = testtime.D5s
+	// conformReclaimMaxDelay is the maxDelay passed to ReclaimStale.
+	conformReclaimMaxDelay = testtime.D5min
+	// conformMarkRetryDelay is the nextRetry offset used in conformMarkRetry.
+	conformMarkRetryDelay = testtime.D10s
+	// conformMarkRetryFieldsDelay is the nextRetry offset used in conformMarkRetryFields.
+	conformMarkRetryFieldsDelay = testtime.D5s
 )
 
 // deduplicated per SonarCloud S1192.
@@ -120,9 +138,9 @@ func conformClaimPendingSecondCall(t *testing.T, factory StoreFactory) {
 	ctx := t.Context()
 	now := time.Now()
 	seed := []outbox.ClaimedEntry{
-		newEntryAt("e1", now.Add(-3*time.Second)),
-		newEntryAt("e2", now.Add(-2*time.Second)),
-		newEntryAt("e3", now.Add(-1*time.Second)),
+		newEntryAt("e1", now.Add(conformDNeg3s)),
+		newEntryAt("e2", now.Add(conformDNeg2s)),
+		newEntryAt("e3", now.Add(conformDNeg1s)),
 	}
 	store := factory(t, seed)
 
@@ -233,7 +251,7 @@ func conformMarkRetry(t *testing.T, factory StoreFactory) {
 
 	_, _ = store.ClaimPending(ctx, 10)
 
-	nextRetry := time.Now().Add(10 * time.Second)
+	nextRetry := time.Now().Add(conformMarkRetryDelay)
 	updated, err := store.MarkRetry(ctx, "e1", 1, nextRetry, "transient")
 	if err != nil {
 		t.Fatalf("MarkRetry: %v", err)
@@ -261,7 +279,7 @@ func conformMarkRetryFields(t *testing.T) {
 
 	_, _ = fs.ClaimPending(ctx, 10)
 
-	nextRetry := time.Now().Add(5 * time.Second)
+	nextRetry := time.Now().Add(conformMarkRetryFieldsDelay)
 	_, _ = fs.MarkRetry(ctx, "e1", 2, nextRetry, errSome)
 
 	snap := fs.Snapshot()
@@ -390,7 +408,7 @@ func conformReclaimStaleFresh(t *testing.T, factory StoreFactory) {
 	}
 
 	// 1-hour TTL: claimed_at (set just above) is well within TTL.
-	count, err := store.ReclaimStale(ctx, time.Hour, 99, 5*time.Second, 5*time.Minute)
+	count, err := store.ReclaimStale(ctx, time.Hour, 99, conformReclaimBaseDelay, conformReclaimMaxDelay)
 	if err != nil {
 		t.Fatalf(msgReclaimStale, err)
 	}
@@ -416,7 +434,7 @@ func conformReclaimStaleEscalates(t *testing.T, factory StoreFactory) {
 		t.Fatalf(msgClaimPendingWithLen, err, len(claimed))
 	}
 
-	count, err := store.ReclaimStale(ctx, -time.Hour, 5, 5*time.Second, 5*time.Minute)
+	count, err := store.ReclaimStale(ctx, -time.Hour, 5, conformReclaimBaseDelay, conformReclaimMaxDelay)
 	if err != nil {
 		t.Fatalf(msgReclaimStale, err)
 	}
@@ -557,9 +575,9 @@ func conformOldestEligibleAtPublished(t *testing.T, factory StoreFactory) {
 	ctx := t.Context()
 	now := time.Now()
 	seed := []outbox.ClaimedEntry{
-		newEntryAt("e1", now.Add(-3*time.Second)),
-		newEntryAt("e2", now.Add(-2*time.Second)),
-		newEntryAt("e3", now.Add(-1*time.Second)),
+		newEntryAt("e1", now.Add(conformDNeg3s)),
+		newEntryAt("e2", now.Add(conformDNeg2s)),
+		newEntryAt("e3", now.Add(conformDNeg1s)),
 	}
 	store := factory(t, seed)
 

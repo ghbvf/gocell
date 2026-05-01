@@ -25,6 +25,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/query"
+	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/bootstrap"
 	"github.com/ghbvf/gocell/runtime/eventbus"
@@ -33,7 +34,7 @@ import (
 // setupHTTPClient uses a longer timeout than the shared testHTTPClient because
 // bcrypt at domain.BcryptCost=12 takes ~1-2s per password hash, which exceeds
 // the 2s client-default when the CPU is contended by parallel test packages.
-var setupHTTPClient = &http.Client{Timeout: 10 * time.Second}
+var setupHTTPClient = &http.Client{Timeout: testtime.SelectAsyncSettle}
 
 // TestSetupEndpoints_FirstRunFlow boots a real assembly (accesscore+configcore+auditcore)
 // and walks the interactive first-run admin flow end-to-end:
@@ -53,7 +54,7 @@ func TestSetupEndpoints_FirstRunFlow(t *testing.T) {
 	privKey, pubKey := auth.MustGenerateTestKeyPair()
 	keySet, err := auth.NewKeySet(privKey, pubKey)
 	require.NoError(t, err)
-	jwtIssuer, err := auth.NewJWTIssuer(keySet, "test", 15*time.Minute,
+	jwtIssuer, err := auth.NewJWTIssuer(keySet, "test", testtime.D15min,
 		auth.WithIssuerAudiencesFromSlice([]string{"gocell"}))
 	require.NoError(t, err)
 	jwtVerifier, err := auth.NewJWTVerifier(keySet, auth.WithExpectedAudiences("gocell"))
@@ -101,7 +102,7 @@ func TestSetupEndpoints_FirstRunFlow(t *testing.T) {
 		bootstrap.WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{cell.MustNewAuthJWTFromAssembly(asm)}, bootstrap.WithListenerNet(ln)),
 		withCorebundleTestInternalListener(t, newCorebundleLocalListener(t)),
 		bootstrap.WithPublisher(eb), bootstrap.WithSubscriber(eb),
-		bootstrap.WithShutdownTimeout(2*time.Second),
+		bootstrap.WithShutdownTimeout(testtime.D2s),
 	)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -112,7 +113,7 @@ func TestSetupEndpoints_FirstRunFlow(t *testing.T) {
 		select {
 		case runErr := <-done:
 			assert.NoError(t, runErr)
-		case <-time.After(5 * time.Second):
+		case <-time.After(testtime.SelectShutdown):
 			t.Fatal("bootstrap did not shut down in time")
 		}
 	}()
@@ -125,7 +126,7 @@ func TestSetupEndpoints_FirstRunFlow(t *testing.T) {
 		}
 		resp.Body.Close()
 		return resp.StatusCode == http.StatusOK
-	}, 3*time.Second, 50*time.Millisecond, "HTTP server did not become ready")
+	}, testtime.EventuallyDefault, testtime.MediumPoll, "HTTP server did not become ready")
 
 	base := "http://" + addr
 

@@ -5,9 +5,9 @@ import (
 	"errors"
 	"sync"
 	"testing"
-	"time"
 
 	"github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -98,7 +98,7 @@ func TestObserver_FailureOutcome(t *testing.T) {
 
 			// Async dispatcher may still hold Start-failure events in its
 			// queue; flush deterministically before reading observer state.
-			require.True(t, a.FlushHookEvents(500*time.Millisecond))
+			require.True(t, a.FlushHookEvents(testtime.D500ms))
 
 			events := obs.snapshot()
 			// Find the failure event for the targeted phase.
@@ -134,7 +134,7 @@ func TestObserver_PanicOutcome(t *testing.T) {
 			err := a.Start(context.Background())
 			require.Error(t, err)
 
-			require.True(t, a.FlushHookEvents(500*time.Millisecond))
+			require.True(t, a.FlushHookEvents(testtime.D500ms))
 
 			var panicked bool
 			for _, e := range obs.snapshot() {

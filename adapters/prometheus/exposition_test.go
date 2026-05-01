@@ -10,6 +10,7 @@ import (
 
 	gcprom "github.com/ghbvf/gocell/adapters/prometheus"
 	"github.com/ghbvf/gocell/kernel/outbox"
+	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	runtimemetrics "github.com/ghbvf/gocell/runtime/observability/metrics"
 	prom "github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/common/expfmt"
@@ -112,7 +113,7 @@ func TestPrometheusExposition_RelayCollector_FamiliesAndBuckets(t *testing.T) {
 
 	c.RecordPollCycle(outbox.PollCycleResult{
 		Published: 2, Retried: 0, Dead: 1, Skipped: 3,
-		ClaimDur: 10 * time.Millisecond, PublishDur: 50 * time.Millisecond, WriteBackDur: 5 * time.Millisecond,
+		ClaimDur: testtime.D10ms, PublishDur: testtime.MediumPoll, WriteBackDur: testtime.FastPoll,
 	})
 	c.RecordBatchSize(6)
 	c.RecordReclaim(4)

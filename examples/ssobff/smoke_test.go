@@ -28,6 +28,8 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 )
 
 // smokeEnvAllowlist is the set of host environment variables we forward to
@@ -136,7 +138,7 @@ func TestSSOBFFStartupSmoke(t *testing.T) {
 		<-done // wait for cmd.Wait to release stdout/stderr pipes before TempDir teardown
 	})
 
-	readyCtx, cancelReady := context.WithTimeout(context.Background(), 5*time.Second)
+	readyCtx, cancelReady := context.WithTimeout(context.Background(), testtime.EventuallyLong)
 	defer cancelReady()
 	if !pollReadyz(readyCtx, "http://"+smokeHealthAddr+"/readyz") {
 		t.Fatalf("ssobff /readyz did not return 200 within 5s\nlogs:\n%s", logs.String())
@@ -151,7 +153,7 @@ func TestSSOBFFStartupSmoke(t *testing.T) {
 		if waitErr != nil {
 			t.Fatalf("ssobff exited non-zero on SIGTERM: %v\nlogs:\n%s", waitErr, logs.String())
 		}
-	case <-time.After(5 * time.Second):
+	case <-time.After(testtime.SelectShutdown):
 		t.Fatalf("ssobff did not exit within 5s of SIGTERM\nlogs:\n%s", logs.String())
 	}
 }
@@ -185,9 +187,9 @@ func sigtermProcess(cmd *exec.Cmd) error {
 
 // pollReadyz hits url every 100 ms until a 200 is observed or ctx expires.
 func pollReadyz(ctx context.Context, url string) bool {
-	tick := time.NewTicker(100 * time.Millisecond)
+	tick := time.NewTicker(testtime.SlowPoll)
 	defer tick.Stop()
-	client := &http.Client{Timeout: 500 * time.Millisecond}
+	client := &http.Client{Timeout: testtime.D500ms}
 	for {
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 		if err != nil {

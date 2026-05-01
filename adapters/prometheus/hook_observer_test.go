@@ -5,13 +5,16 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ghbvf/gocell/kernel/cell"
-	"github.com/ghbvf/gocell/pkg/errcode"
 	prom "github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/pkg/errcode"
 )
+
+const hookObserverD15ms = 15 * time.Millisecond
 
 func TestHookObserver_InterfaceConformance(t *testing.T) {
 	var _ cell.LifecycleHookObserver = (*HookObserver)(nil)
@@ -96,7 +99,7 @@ func TestHookObserver_HistogramRecordsDuration(t *testing.T) {
 			CellID:   "c",
 			Hook:     cell.HookBeforeStart,
 			Outcome:  cell.OutcomeSuccess,
-			Duration: 15 * time.Millisecond,
+			Duration: hookObserverD15ms,
 		})
 	}
 

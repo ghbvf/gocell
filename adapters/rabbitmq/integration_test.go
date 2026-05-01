@@ -15,6 +15,7 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/idempotency"
 	"github.com/ghbvf/gocell/kernel/outbox"
+	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/tests/testutil"
 )
 
@@ -42,7 +43,7 @@ func startRabbitMQDedicatedContainer(t *testing.T, config Config) (*Connection, 
 		config.ChannelPoolSize = 5
 	}
 	if config.ConfirmTimeout == 0 {
-		config.ConfirmTimeout = 10 * time.Second
+		config.ConfirmTimeout = testtime.SelectAsyncSettle
 	}
 
 	conn, err := NewConnection(config)
@@ -74,9 +75,9 @@ func startRabbitMQ(t *testing.T) (*Connection, func()) {
 	conn, err := NewConnection(Config{
 		URL:                 url,
 		ChannelPoolSize:     5,
-		ConfirmTimeout:      10 * time.Second,
-		ReconnectMaxBackoff: 5 * time.Second,
-		ReconnectBaseDelay:  500 * time.Millisecond,
+		ConfirmTimeout:      testtime.SelectAsyncSettle,
+		ReconnectMaxBackoff: testtime.EventuallyLong,
+		ReconnectBaseDelay:  testtime.D500ms,
 	})
 	require.NoError(t, err, "create connection against shared rabbitmq broker")
 	return conn, func() { _ = conn.Close(context.Background()) }
@@ -104,9 +105,9 @@ func newIntegrationConnection(t *testing.T, amqpURL string) *Connection {
 	conn, err := NewConnection(Config{
 		URL:                 amqpURL,
 		ChannelPoolSize:     5,
-		ConfirmTimeout:      10 * time.Second,
-		ReconnectMaxBackoff: 5 * time.Second,
-		ReconnectBaseDelay:  500 * time.Millisecond,
+		ConfirmTimeout:      testtime.SelectAsyncSettle,
+		ReconnectMaxBackoff: testtime.EventuallyLong,
+		ReconnectBaseDelay:  testtime.D500ms,
 	})
 	require.NoError(t, err, "create per-subtest rabbitmq connection")
 	t.Cleanup(func() { _ = conn.Close(context.Background()) })
@@ -141,7 +142,7 @@ func waitForSubscriberReady(t *testing.T, conn *Connection, queueName string, su
 			return
 		}
 
-		time.Sleep(50 * time.Millisecond)
+		time.Sleep(testtime.MediumPoll)
 	}
 
 	t.Fatalf("timed out waiting for subscriber queue %q to become ready", queueName)
@@ -177,7 +178,7 @@ func TestIntegration_PublishConsume(t *testing.T) {
 
 	ctx := context.Background()
 	received := make(chan outbox.Entry, 1)
-	subCtx, subCancel := context.WithTimeout(ctx, 15*time.Second)
+	subCtx, subCancel := context.WithTimeout(ctx, testtime.D15s)
 	defer subCancel()
 
 	// Run subscriber in a goroutine since Subscribe blocks.
@@ -190,7 +191,7 @@ func TestIntegration_PublishConsume(t *testing.T) {
 	}()
 
 	// Wait until Subscribe has declared, bound, and started consuming from the queue.
-	waitForSubscriberReady(t, conn, queueName, subErrCh, 5*time.Second)
+	waitForSubscriberReady(t, conn, queueName, subErrCh, testtime.EventuallyLong)
 
 	// Prepare an outbox.Entry as the message payload, wrapped in a v1 wire
 	// envelope so the subscriber's unmarshalDelivery (fail-closed since P1-14)
@@ -247,7 +248,7 @@ func TestIntegration_PublishOnly(t *testing.T) {
 	payload, err := outbox.MarshalEnvelope(entry)
 	require.NoError(t, err)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), testtime.SelectAsyncSettle)
 	defer cancel()
 
 	err = pub.Publish(ctx, topic, payload)
@@ -296,7 +297,7 @@ func TestIntegration_ConsumerBaseRetry(t *testing.T) {
 		&noopClaimer{},
 		outbox.ConsumerBaseConfig{
 			RetryCount:     2,
-			RetryBaseDelay: 50 * time.Millisecond,
+			RetryBaseDelay: testtime.MediumPoll,
 			IdempotencyTTL: time.Hour,
 		},
 	)
@@ -310,7 +311,7 @@ func TestIntegration_ConsumerBaseRetry(t *testing.T) {
 	})
 
 	var callCount atomic.Int32
-	subCtx, subCancel := context.WithTimeout(ctx, 30*time.Second)
+	subCtx, subCancel := context.WithTimeout(ctx, testtime.CtxLong)
 	defer subCancel()
 
 	wrappedHandler := cb.Wrap(outbox.Subscription{Topic: topic, ConsumerGroup: "test-retry-e2e"}, func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
@@ -323,7 +324,7 @@ func TestIntegration_ConsumerBaseRetry(t *testing.T) {
 		subErrCh <- sub.Subscribe(subCtx, outbox.Subscription{Topic: topic, ConsumerGroup: "test-retry-e2e"}, wrappedHandler)
 	}()
 
-	waitForSubscriberReady(t, conn, mainQueue, subErrCh, 5*time.Second)
+	waitForSubscriberReady(t, conn, mainQueue, subErrCh, testtime.EventuallyLong)
 
 	// --- Publish a message ---
 	entry := outbox.Entry{
@@ -362,7 +363,7 @@ func TestIntegration_ConsumerBaseRetry(t *testing.T) {
 		default:
 			return false
 		}
-	}, 15*time.Second, 200*time.Millisecond,
+	}, testtime.D15s, testtime.D200ms,
 		"message should appear in DLQ after retry exhaustion — handler called %d times", callCount.Load())
 
 	assert.Equal(t, "evt-retry-e2e-001", dlEntry.ID, "dead-lettered entry ID should match")
@@ -385,8 +386,8 @@ func TestIntegration_ConsumerBaseRetry(t *testing.T) {
 // port remapping issues — the broker stays on the same address.
 func TestIntegration_ConnectionRecovery(t *testing.T) {
 	conn, container, cleanup := startRabbitMQDedicatedContainer(t, Config{
-		ReconnectBaseDelay:  200 * time.Millisecond,
-		ReconnectMaxBackoff: 2 * time.Second,
+		ReconnectBaseDelay:  testtime.D200ms,
+		ReconnectMaxBackoff: testtime.D2s,
 	})
 	defer cleanup()
 
@@ -406,7 +407,7 @@ func TestIntegration_ConnectionRecovery(t *testing.T) {
 	// 3. Health() should return error during reconnect.
 	require.Eventually(t, func() bool {
 		return conn.Health(context.Background()) != nil
-	}, 5*time.Second, 50*time.Millisecond,
+	}, testtime.EventuallyLong, testtime.MediumPoll,
 		"Health() should report error after broker-forced disconnect")
 
 	// Verify the state is Disconnected (not Terminal).
@@ -417,7 +418,7 @@ func TestIntegration_ConnectionRecovery(t *testing.T) {
 	// 4. Health() should recover after reconnect succeeds.
 	require.Eventually(t, func() bool {
 		return conn.Health(context.Background()) == nil
-	}, 10*time.Second, 100*time.Millisecond,
+	}, testtime.SelectAsyncSettle, testtime.SlowPoll,
 		"Health() should recover after successful reconnect")
 
 	assert.Equal(t, StateConnected, conn.ConnectionStatus().State,
@@ -481,7 +482,7 @@ func TestIntegration_DLXBrokerNative(t *testing.T) {
 		DLXExchange:   dlxExchange,
 	})
 
-	subCtx, subCancel := context.WithTimeout(ctx, 20*time.Second)
+	subCtx, subCancel := context.WithTimeout(ctx, testtime.D20s)
 	defer subCancel()
 
 	handlerCalled := make(chan struct{}, 1)
@@ -497,7 +498,7 @@ func TestIntegration_DLXBrokerNative(t *testing.T) {
 		})
 	}()
 
-	waitForSubscriberReady(t, conn, mainQueue, subErrCh, 5*time.Second)
+	waitForSubscriberReady(t, conn, mainQueue, subErrCh, testtime.EventuallyLong)
 
 	// --- Publish a message ---
 	entry := outbox.Entry{
@@ -516,7 +517,7 @@ func TestIntegration_DLXBrokerNative(t *testing.T) {
 	select {
 	case <-handlerCalled:
 		// Handler was called and returned DispositionReject.
-	case <-time.After(10 * time.Second):
+	case <-time.After(testtime.SelectAsyncSettle):
 		t.Fatal("timed out waiting for handler to be called")
 	}
 
@@ -542,7 +543,7 @@ func TestIntegration_DLXBrokerNative(t *testing.T) {
 		default:
 			return false
 		}
-	}, 10*time.Second, 100*time.Millisecond,
+	}, testtime.SelectAsyncSettle, testtime.SlowPoll,
 		"message should appear in dead-letter queue — DLX routing failed")
 
 	assert.Equal(t, "evt-dlx-e2e-001", dlEntry.ID, "dead-lettered entry ID should match")

@@ -8,13 +8,15 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 )
 
 func makePayload(password string) credentialPayload {
 	return credentialPayload{
 		Username:  "admin",
 		Password:  password,
-		ExpiresAt: time.Now().Add(24 * time.Hour),
+		ExpiresAt: time.Now().Add(testtime.D24h),
 	}
 }
 

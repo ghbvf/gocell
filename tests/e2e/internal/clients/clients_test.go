@@ -7,11 +7,11 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/tests/e2e/internal/clients"
 )
 
@@ -108,7 +108,7 @@ func TestWaitForReady_ReturnsWhenReadyzReturns200(t *testing.T) {
 	t.Setenv("E2E_HEALTH_URL", srv.URL)
 
 	// Should return promptly (well under timeout) since the server replies 200.
-	clients.WaitForReady(t, 5*time.Second)
+	clients.WaitForReady(t, testtime.EventuallyLong)
 }
 
 func TestWaitForReady_RetriesUntilReady(t *testing.T) {
@@ -125,6 +125,6 @@ func TestWaitForReady_RetriesUntilReady(t *testing.T) {
 	t.Cleanup(srv.Close)
 	t.Setenv("E2E_HEALTH_URL", srv.URL)
 
-	clients.WaitForReady(t, 5*time.Second)
+	clients.WaitForReady(t, testtime.EventuallyLong)
 	assert.GreaterOrEqual(t, calls, 2, "WaitForReady must poll past a transient non-200 response")
 }

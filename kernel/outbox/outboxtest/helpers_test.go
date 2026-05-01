@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/ghbvf/gocell/kernel/outbox"
+	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 )
 
 func TestTestTopic_UniquePerTest(t *testing.T) {
@@ -327,7 +328,7 @@ func TestCollector_CollectsAllEntries(t *testing.T) {
 		}
 	}
 
-	collected := c.waitAndGet(5 * time.Second)
+	collected := c.waitAndGet(testtime.D5s)
 	if len(collected) != 3 {
 		t.Fatalf("want 3 entries, got %d", len(collected))
 	}
@@ -351,7 +352,7 @@ func TestCollector_ConcurrentPublish(t *testing.T) {
 	}
 	wg.Wait()
 
-	collected := c.waitAndGet(5 * time.Second)
+	collected := c.waitAndGet(testtime.D5s)
 	if len(collected) != n {
 		t.Fatalf("want %d entries, got %d", n, len(collected))
 	}
@@ -388,7 +389,7 @@ func TestHarness_CheckNoMoreDeliveries_NoLeakReturnsNil(t *testing.T) {
 	})
 	h.publishAndWait([]byte(`{"ok":1}`))
 
-	if err := h.checkNoMoreDeliveries(1, 50*time.Millisecond); err != nil {
+	if err := h.checkNoMoreDeliveries(1, testtime.MediumPoll); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	h.teardown()
@@ -414,7 +415,7 @@ func TestHarness_CheckNoMoreDeliveries_DetectsRedelivery(t *testing.T) {
 	waitForCount(t, func() int { return len(h.deliveryEvents) }, 2, time.Second)
 
 	start := time.Now()
-	err := h.checkNoMoreDeliveries(1, 500*time.Millisecond)
+	err := h.checkNoMoreDeliveries(1, testtime.D500ms)
 	elapsed := time.Since(start)
 
 	if err == nil {
@@ -427,7 +428,7 @@ func TestHarness_CheckNoMoreDeliveries_DetectsRedelivery(t *testing.T) {
 	// 300ms accommodates CI goroutine-scheduling jitter while remaining far
 	// below the full 500ms window (which would indicate the select-fast path
 	// didn't trigger).
-	if elapsed > 300*time.Millisecond {
+	if elapsed > testtime.D300ms {
 		t.Fatalf("expected fail-fast (<300ms), got %v", elapsed)
 	}
 	h.teardown()
@@ -443,9 +444,9 @@ func TestHarness_CheckNoMoreDeliveries_DrainTimeout(t *testing.T) {
 		return outbox.HandleResult{Disposition: outbox.DispositionAck}
 	})
 	// Shorten drain timeout — no publish, drain should fail quickly.
-	h.drainTimeout = 50 * time.Millisecond
+	h.drainTimeout = testtime.MediumPoll
 
-	err := h.checkNoMoreDeliveries(1, 10*time.Millisecond)
+	err := h.checkNoMoreDeliveries(1, testtime.D10ms)
 	if err == nil {
 		t.Fatal("expected drain timeout error")
 	}
@@ -473,7 +474,7 @@ func TestHarness_CheckNoMoreDeliveries_DrainsThenWaits(t *testing.T) {
 	}
 	waitForCount(t, func() int { return len(h.deliveryEvents) }, 3, time.Second)
 
-	if err := h.checkNoMoreDeliveries(3, 50*time.Millisecond); err != nil {
+	if err := h.checkNoMoreDeliveries(3, testtime.MediumPoll); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	h.teardown()
@@ -486,7 +487,7 @@ func waitForCount(t *testing.T, get func() int, want int, timeout time.Duration)
 		if get() >= want {
 			return
 		}
-		time.Sleep(5 * time.Millisecond)
+		time.Sleep(testtime.FastPoll)
 	}
 	t.Fatalf("waitForCount: want %d, got %d after %v", want, get(), timeout)
 }

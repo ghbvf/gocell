@@ -16,6 +16,7 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/assembly"
 	"github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 )
 
 // TestReadyz_Singleflight_DedupsConcurrentRequests verifies that a burst of
@@ -44,7 +45,7 @@ func TestReadyz_Singleflight_DedupsConcurrentRequests(t *testing.T) {
 	// probes drain in parallel. Without this, the probe's own timer could
 	// race the barrier release and the dedup window would close early.
 	probeRelease := make(chan struct{})
-	h := New(asm, WithVerboseDisabled(), WithDeadline(2*time.Second))
+	h := New(asm, WithVerboseDisabled(), WithDeadline(testtime.D2s))
 	require.NoError(t, h.RegisterChecker("slow", func(ctx context.Context) error {
 		callCount.Add(1)
 		select {
@@ -83,7 +84,7 @@ func TestReadyz_Singleflight_DedupsConcurrentRequests(t *testing.T) {
 	// is parked on probeRelease, every subsequent caller into singleflight
 	// joins the in-flight slot deterministically. Bound the spin so a stuck
 	// scheduler still fails the test instead of hanging.
-	deadline := time.Now().Add(2 * time.Second)
+	deadline := time.Now().Add(testtime.D2s)
 	for callCount.Load() == 0 {
 		if time.Now().After(deadline) {
 			t.Fatalf("leader probe never started (callCount=%d)", callCount.Load())

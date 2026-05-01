@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/runtime/distlock/locktest"
 )
 
@@ -56,7 +57,7 @@ func TestFakeDriver_LastRenewDeadline(t *testing.T) {
 	}
 
 	// Renew with a ctx carrying a deadline.
-	deadline := time.Now().Add(5 * time.Second)
+	deadline := time.Now().Add(testtime.D5s)
 	dctx, cancel := context.WithDeadline(ctx, deadline)
 	defer cancel()
 
@@ -89,7 +90,7 @@ func TestFakeDriver_WithClock_Method(t *testing.T) {
 	fd.WithClock(fc.Now)
 	ctx := context.Background()
 
-	ttl := 5 * time.Second
+	ttl := testtime.D5s
 	ok, _ := fd.SetNX(ctx, "wc-key", "tok", ttl)
 	if !ok {
 		t.Fatal("SetNX should succeed")
@@ -111,7 +112,7 @@ func TestFakeDriver_WithClock(t *testing.T) {
 	fd := locktest.NewFakeDriverWithClock(fc.Now)
 	ctx := context.Background()
 
-	ttl := 10 * time.Second
+	ttl := testtime.D10s
 
 	// Acquire.
 	ok, _ := fd.SetNX(ctx, "key1", "tok1", ttl)
@@ -261,7 +262,7 @@ func TestFakeDriver_TTLExpiry_WithClock(t *testing.T) {
 	fd := locktest.NewFakeDriverWithClock(fc.Now)
 	ctx := context.Background()
 
-	ttl := 5 * time.Second
+	ttl := testtime.D5s
 
 	// Acquire key1 with tok1.
 	ok, _ := fd.SetNX(ctx, "expiry-key", "tok1", ttl)

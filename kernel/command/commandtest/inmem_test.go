@@ -10,9 +10,14 @@ import (
 	"github.com/ghbvf/gocell/kernel/command"
 	"github.com/ghbvf/gocell/kernel/command/commandtest"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// testLeaseExpiredWindow is used in ExtendLease tests to advance time past
+// a 5-minute lease so the test can verify the lease is considered expired.
+const testLeaseExpiredWindow = 20 * time.Minute
 
 func TestInMemQueue_ImplementsInterfaces(t *testing.T) {
 	t.Parallel()
@@ -23,7 +28,7 @@ func TestInMemQueue_ImplementsInterfaces(t *testing.T) {
 
 func makeEntry(id, deviceID string, now time.Time) command.Entry {
 	return command.NewEntry(id, deviceID, "reboot", []byte(`{"force":true}`), command.Timeouts{
-		OverallDeadline: 1 * time.Hour,
+		OverallDeadline: testtime.D1h,
 	}, now)
 }
 
@@ -97,7 +102,7 @@ func TestInMemQueue_DequeueSetsLease(t *testing.T) {
 	entry := makeEntry("cmd-1", "dev-1", now)
 	require.NoError(t, q.Enqueue(ctx, entry, command.EnqueueOptions{}))
 
-	entries, err := q.Dequeue(ctx, "dev-1", 10, 5*time.Minute)
+	entries, err := q.Dequeue(ctx, "dev-1", 10, testtime.D5min)
 	require.NoError(t, err)
 	require.Len(t, entries, 1)
 	assert.Equal(t, command.StatusSent, entries[0].Status)
@@ -111,7 +116,7 @@ func TestInMemQueue_DequeueCtxCanceled(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	// Should still work — InMemQueue is synchronous.
-	_, err := q.Dequeue(ctx, "dev-1", 10, 5*time.Minute)
+	_, err := q.Dequeue(ctx, "dev-1", 10, testtime.D5min)
 	assert.NoError(t, err, "in-mem dequeue is synchronous and ignores canceled ctx")
 }
 
@@ -144,7 +149,7 @@ func TestInMemQueue_Report_AdvancesToDelivered(t *testing.T) {
 	entry := makeEntry("cmd-1", "dev-1", now)
 	require.NoError(t, q.Enqueue(ctx, entry, command.EnqueueOptions{}))
 
-	entries, err := q.Dequeue(ctx, "dev-1", 1, 5*time.Minute)
+	entries, err := q.Dequeue(ctx, "dev-1", 1, testtime.D5min)
 	require.NoError(t, err)
 	require.Len(t, entries, 1)
 	cmdID := entries[0].ID
@@ -168,13 +173,13 @@ func TestInMemQueue_Report_Idempotent(t *testing.T) {
 	entry := makeEntry("cmd-1", "dev-1", now)
 	require.NoError(t, q.Enqueue(ctx, entry, command.EnqueueOptions{}))
 
-	entries, err := q.Dequeue(ctx, "dev-1", 1, 5*time.Minute)
+	entries, err := q.Dequeue(ctx, "dev-1", 1, testtime.D5min)
 	require.NoError(t, err)
 	cmdID := entries[0].ID
 
 	require.NoError(t, q.Report(ctx, cmdID, now.Add(time.Second)))
 	// Second Report on already-Delivered is a no-op.
-	require.NoError(t, q.Report(ctx, cmdID, now.Add(2*time.Second)))
+	require.NoError(t, q.Report(ctx, cmdID, now.Add(testtime.D2s)))
 }
 
 func TestInMemQueue_Report_FromPending_Fails(t *testing.T) {
@@ -225,7 +230,7 @@ func TestInMemQueue_Ack_SingleStep_SentToSucceeded(t *testing.T) {
 	entry := makeEntry("cmd-1", "dev-1", now)
 	require.NoError(t, q.Enqueue(ctx, entry, command.EnqueueOptions{}))
 
-	entries, err := q.Dequeue(ctx, "dev-1", 1, 5*time.Minute)
+	entries, err := q.Dequeue(ctx, "dev-1", 1, testtime.D5min)
 	require.NoError(t, err)
 	cmdID := entries[0].ID
 
@@ -252,12 +257,12 @@ func TestInMemQueue_Ack_DeliveredToSucceeded(t *testing.T) {
 	entry := makeEntry("cmd-1", "dev-1", now)
 	require.NoError(t, q.Enqueue(ctx, entry, command.EnqueueOptions{}))
 
-	entries, err := q.Dequeue(ctx, "dev-1", 1, 5*time.Minute)
+	entries, err := q.Dequeue(ctx, "dev-1", 1, testtime.D5min)
 	require.NoError(t, err)
 	cmdID := entries[0].ID
 
 	require.NoError(t, q.Report(ctx, cmdID, now.Add(time.Second)))
-	require.NoError(t, q.Ack(ctx, cmdID, command.AckSuccess, now.Add(2*time.Second)))
+	require.NoError(t, q.Ack(ctx, cmdID, command.AckSuccess, now.Add(testtime.D2s)))
 
 	got, err := q.GetCommand(ctx, cmdID)
 	require.NoError(t, err)
@@ -286,7 +291,7 @@ func TestInMemQueue_Ack_FailedAndRejected(t *testing.T) {
 
 			entry := makeEntry("cmd-1", "dev-1", now)
 			require.NoError(t, q.Enqueue(ctx, entry, command.EnqueueOptions{}))
-			entries, err := q.Dequeue(ctx, "dev-1", 1, 5*time.Minute)
+			entries, err := q.Dequeue(ctx, "dev-1", 1, testtime.D5min)
 			require.NoError(t, err)
 
 			require.NoError(t, q.Ack(ctx, entries[0].ID, tc.reason, now.Add(time.Second)))
@@ -308,12 +313,12 @@ func TestInMemQueue_Ack_Timeout_TerminalExpired_FromAnyNonTerminal(t *testing.T)
 	}{
 		{"FromPending", func(_ *commandtest.InMemQueue, _ context.Context, _ string) error { return nil }},
 		{"FromSent", func(q *commandtest.InMemQueue, ctx context.Context, cmdID string) error {
-			_, err := q.Dequeue(ctx, "dev-1", 1, 5*time.Minute)
+			_, err := q.Dequeue(ctx, "dev-1", 1, testtime.D5min)
 			_ = cmdID
 			return err
 		}},
 		{"FromDelivered", func(q *commandtest.InMemQueue, ctx context.Context, cmdID string) error {
-			if _, err := q.Dequeue(ctx, "dev-1", 1, 5*time.Minute); err != nil {
+			if _, err := q.Dequeue(ctx, "dev-1", 1, testtime.D5min); err != nil {
 				return err
 			}
 			return q.Report(ctx, cmdID, now.Add(time.Second))
@@ -330,7 +335,7 @@ func TestInMemQueue_Ack_Timeout_TerminalExpired_FromAnyNonTerminal(t *testing.T)
 			require.NoError(t, q.Enqueue(ctx, entry, command.EnqueueOptions{}))
 			require.NoError(t, tc.prepare(q, ctx, "cmd-1"))
 
-			require.NoError(t, q.Ack(ctx, "cmd-1", command.AckTimeout, now.Add(2*time.Second)))
+			require.NoError(t, q.Ack(ctx, "cmd-1", command.AckTimeout, now.Add(testtime.D2s)))
 			got, err := q.GetCommand(ctx, "cmd-1")
 			require.NoError(t, err)
 			assert.Equal(t, command.StatusExpired, got.Status,
@@ -349,16 +354,16 @@ func TestInMemQueue_ExtendLease_SuccessAndExpired(t *testing.T) {
 	entry := makeEntry("cmd-1", "dev-1", now)
 	require.NoError(t, q.Enqueue(ctx, entry, command.EnqueueOptions{}))
 
-	entries, err := q.Dequeue(ctx, "dev-1", 10, 5*time.Minute)
+	entries, err := q.Dequeue(ctx, "dev-1", 10, testtime.D5min)
 	require.NoError(t, err)
 	require.Len(t, entries, 1)
 	cmdID := entries[0].ID
 
 	// Extend while lease is still valid
-	require.NoError(t, q.ExtendLease(ctx, cmdID, 10*time.Minute, now.Add(1*time.Minute)))
+	require.NoError(t, q.ExtendLease(ctx, cmdID, testtime.D10min, now.Add(testtime.D1min)))
 
 	// Extend after lease expired — should fail
-	err = q.ExtendLease(ctx, cmdID, 10*time.Minute, now.Add(20*time.Minute))
+	err = q.ExtendLease(ctx, cmdID, testtime.D10min, now.Add(testLeaseExpiredWindow))
 	assert.Error(t, err, "extending expired lease must fail")
 }
 
@@ -368,7 +373,7 @@ func TestInMemQueue_ExtendLease_CommandNotFound(t *testing.T) {
 	q := commandtest.NewInMemQueue()
 	ctx := context.Background()
 
-	err := q.ExtendLease(ctx, "cmd-nonexistent", 5*time.Minute, now)
+	err := q.ExtendLease(ctx, "cmd-nonexistent", testtime.D5min, now)
 	require.Error(t, err)
 	var ecErr *errcode.Error
 	require.ErrorAs(t, err, &ecErr)
@@ -385,11 +390,11 @@ func TestInMemQueue_ExtendLease_LeaseExpiredVsCommandNotFound(t *testing.T) {
 	entry := makeEntry("cmd-1", "dev-1", now)
 	require.NoError(t, q.Enqueue(ctx, entry, command.EnqueueOptions{}))
 
-	entries, err := q.Dequeue(ctx, "dev-1", 1, 5*time.Minute)
+	entries, err := q.Dequeue(ctx, "dev-1", 1, testtime.D5min)
 	require.NoError(t, err)
 	cmdID := entries[0].ID
 
-	err = q.ExtendLease(ctx, cmdID, 5*time.Minute, now.Add(10*time.Minute))
+	err = q.ExtendLease(ctx, cmdID, testtime.D5min, now.Add(testtime.D10min))
 	require.Error(t, err)
 	var ecErr *errcode.Error
 	require.ErrorAs(t, err, &ecErr)
@@ -406,7 +411,7 @@ func TestInMemQueue_Cancel_Terminal(t *testing.T) {
 	entry := makeEntry("cmd-1", "dev-1", now)
 	require.NoError(t, q.Enqueue(ctx, entry, command.EnqueueOptions{}))
 
-	require.NoError(t, q.Cancel(ctx, "cmd-1", now.Add(1*time.Second)))
+	require.NoError(t, q.Cancel(ctx, "cmd-1", now.Add(testtime.D1s)))
 
 	got, err := q.GetCommand(ctx, "cmd-1")
 	require.NoError(t, err)
@@ -414,7 +419,7 @@ func TestInMemQueue_Cancel_Terminal(t *testing.T) {
 	assert.Equal(t, command.StatusCanceled, got.Status)
 
 	// Canceling an already-terminal command should fail.
-	err = q.Cancel(ctx, "cmd-1", now.Add(2*time.Second))
+	err = q.Cancel(ctx, "cmd-1", now.Add(testtime.D2s))
 	assert.Error(t, err, "canceling terminal command must fail")
 }
 
@@ -444,7 +449,7 @@ func TestInMemQueue_ConcurrentDequeue_NoDup(t *testing.T) {
 	)
 	for range 2 {
 		wg.Go(func() {
-			entries, err := q.Dequeue(ctx, "dev-1", 5, 5*time.Minute)
+			entries, err := q.Dequeue(ctx, "dev-1", 5, testtime.D5min)
 			assert.NoError(t, err)
 			mu.Lock()
 			all = append(all, entries...)
@@ -504,7 +509,7 @@ func TestInMemQueue_DefaultClock(t *testing.T) {
 	entry := makeEntry("cmd-1", "dev-1", time.Now())
 	require.NoError(t, q.Enqueue(ctx, entry, command.EnqueueOptions{}))
 
-	entries, err := q.Dequeue(ctx, "dev-1", 1, 5*time.Minute)
+	entries, err := q.Dequeue(ctx, "dev-1", 1, testtime.D5min)
 	require.NoError(t, err)
 	require.Len(t, entries, 1)
 	require.NotNil(t, entries[0].SentAt)
@@ -567,7 +572,7 @@ func TestInMemQueue_ScanActive_Filtering(t *testing.T) {
 	require.NoError(t, q.Enqueue(ctx, makeEntry("cmd-c", "dev-2", now), command.EnqueueOptions{}))
 
 	// Dequeue one of dev-1's commands → cmd-a moves to Sent.
-	entries, err := q.Dequeue(ctx, "dev-1", 1, 5*time.Minute)
+	entries, err := q.Dequeue(ctx, "dev-1", 1, testtime.D5min)
 	require.NoError(t, err)
 	require.Len(t, entries, 1)
 
@@ -608,14 +613,14 @@ func TestInMemQueue_Ack_AfterTerminal_Fails(t *testing.T) {
 	entry := makeEntry("cmd-1", "dev-1", now)
 	require.NoError(t, q.Enqueue(ctx, entry, command.EnqueueOptions{}))
 
-	entries, err := q.Dequeue(ctx, "dev-1", 1, 5*time.Minute)
+	entries, err := q.Dequeue(ctx, "dev-1", 1, testtime.D5min)
 	require.NoError(t, err)
 	cmdID := entries[0].ID
 
 	require.NoError(t, q.Ack(ctx, cmdID, command.AckSuccess, now.Add(time.Second)))
 
 	// Second Ack on terminal → transition error wrapped.
-	err = q.Ack(ctx, cmdID, command.AckFailed, now.Add(2*time.Second))
+	err = q.Ack(ctx, cmdID, command.AckFailed, now.Add(testtime.D2s))
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "already terminal")
 }
@@ -628,7 +633,7 @@ func TestInMemQueue_Ack_ConcurrentSameReason_Idempotent(t *testing.T) {
 	ctx := context.Background()
 
 	require.NoError(t, q.Enqueue(ctx, makeEntry("cmd-1", "dev-1", now), command.EnqueueOptions{}))
-	_, err := q.Dequeue(ctx, "dev-1", 1, 5*time.Minute)
+	_, err := q.Dequeue(ctx, "dev-1", 1, testtime.D5min)
 	require.NoError(t, err)
 
 	const workers = 16
@@ -659,7 +664,7 @@ func TestInMemQueue_Ack_ConcurrentDifferentReason_RejectsLoser(t *testing.T) {
 	ctx := context.Background()
 
 	require.NoError(t, q.Enqueue(ctx, makeEntry("cmd-1", "dev-1", now), command.EnqueueOptions{}))
-	_, err := q.Dequeue(ctx, "dev-1", 1, 5*time.Minute)
+	_, err := q.Dequeue(ctx, "dev-1", 1, testtime.D5min)
 	require.NoError(t, err)
 
 	var wg sync.WaitGroup
@@ -698,8 +703,8 @@ func TestInMemQueue_ClockInjection(t *testing.T) {
 	entry := makeEntry("cmd-1", "dev-1", base)
 	require.NoError(t, q.Enqueue(ctx, entry, command.EnqueueOptions{}))
 
-	current = base.Add(10 * time.Second)
-	entries, err := q.Dequeue(ctx, "dev-1", 1, 5*time.Minute)
+	current = base.Add(testtime.D10s)
+	entries, err := q.Dequeue(ctx, "dev-1", 1, testtime.D5min)
 	require.NoError(t, err)
 	require.Len(t, entries, 1)
 	assert.Equal(t, current, *entries[0].SentAt,

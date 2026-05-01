@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -286,7 +287,7 @@ func TestKeySet_PruneExpired_AfterTimeAdvance(t *testing.T) {
 	assert.Equal(t, pub2, got)
 
 	// Advance clock past expiry using injectable now func.
-	WithKeySetClock(func() time.Time { return baseTime.Add(2 * time.Hour) })(ks)
+	WithKeySetClock(func() time.Time { return baseTime.Add(testtime.D2h) })(ks)
 
 	// Key should be pruned now.
 	_, err = ks.PublicKeyByKID(vk.KeyID)
@@ -482,7 +483,7 @@ func TestKeySet_LifecycleLog_Pruning(t *testing.T) {
 	require.NoError(t, err)
 
 	// Advance clock past expiry.
-	WithKeySetClock(func() time.Time { return baseTime.Add(2 * time.Hour) })(ks)
+	WithKeySetClock(func() time.Time { return baseTime.Add(testtime.D2h) })(ks)
 
 	// Reset buffer so only PruneExpired log is captured.
 	buf.Reset()

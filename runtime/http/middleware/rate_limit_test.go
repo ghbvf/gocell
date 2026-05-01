@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/ghbvf/gocell/pkg/ctxkeys"
+	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -104,7 +105,7 @@ func TestRateLimit_Rejected_DynamicRetryAfter(t *testing.T) {
 func TestRateLimit_Rejected_DynamicRetryAfter_CeilRounding(t *testing.T) {
 	limiter := &windowedMockLimiter{
 		allowAll: false,
-		window:   10 * time.Second,
+		window:   testtime.D10s,
 		limit:    3,
 	}
 	handler := RateLimit(limiter)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -169,9 +170,9 @@ func TestComputeRetryAfter_WindowedLimiter(t *testing.T) {
 		want   int
 	}{
 		{"60s/10", time.Minute, 10, 6},
-		{"10s/3 (ceil)", 10 * time.Second, 3, 4},
+		{"10s/3 (ceil)", testtime.D10s, 3, 4},
 		{"1s/1", time.Second, 1, 1},
-		{"30s/100", 30 * time.Second, 100, 1},
+		{"30s/100", testtime.D30s, 100, 1},
 		{"zero limit fallback", time.Minute, 0, 1},
 		{"zero window fallback", 0, 10, 1},
 	}

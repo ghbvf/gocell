@@ -14,6 +14,7 @@ import (
 	kernellifecycle "github.com/ghbvf/gocell/kernel/lifecycle"
 	kworker "github.com/ghbvf/gocell/kernel/worker"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/runtime/bootstrap"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -214,7 +215,7 @@ func TestA19_ConfigCoreModule_RegistersKeyProviderReadiness(t *testing.T) {
 	select {
 	case err := <-errCh:
 		assert.NoError(t, err)
-	case <-time.After(10 * time.Second):
+	case <-time.After(testtime.SelectAsyncSettle):
 		t.Fatal("bootstrap did not shut down in time")
 	}
 }
@@ -253,14 +254,14 @@ func TestA19_ConfigCoreModule_KeyProviderReady(t *testing.T) {
 			t.Logf("close resp body: %v", err)
 		}
 		return resp.StatusCode == http.StatusOK
-	}, 5*time.Second, 50*time.Millisecond,
+	}, testtime.EventuallyLong, testtime.MediumPoll,
 		"/readyz must be 200 when the KeyProvider probe is healthy")
 
 	cancel()
 	select {
 	case err := <-errCh:
 		assert.NoError(t, err)
-	case <-time.After(10 * time.Second):
+	case <-time.After(testtime.SelectAsyncSettle):
 		t.Fatal("bootstrap did not shut down in time")
 	}
 }

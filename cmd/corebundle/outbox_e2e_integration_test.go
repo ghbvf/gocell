@@ -52,6 +52,7 @@ import (
 	kernelmetrics "github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/query"
+	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/bootstrap"
 	"github.com/ghbvf/gocell/runtime/crypto"
@@ -60,6 +61,11 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	tcpostgres "github.com/testcontainers/testcontainers-go/modules/postgres"
+)
+
+const (
+	// d90s is used as the outer e2e test timeout; not in the testtime table.
+	d90s = 90 * time.Second
 )
 
 // configEntryUpsertedBusinessPayload is the business event shape that
@@ -87,7 +93,7 @@ type configEntryUpsertedBusinessPayload struct {
 func TestOutboxE2E_PGMode_WriteToSubscribe(t *testing.T) {
 	testutil.RequireDocker(t)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), d90s)
 	defer cancel()
 
 	// --- Step 1: Start PG testcontainer (RMQ is NOT used by corebundle today) ---
@@ -166,7 +172,7 @@ func TestOutboxE2E_PGMode_WriteToSubscribe(t *testing.T) {
 		})
 	}()
 	// Give subscriber goroutine a moment to register before first publish.
-	time.Sleep(50 * time.Millisecond)
+	time.Sleep(testtime.MediumPoll)
 
 	// --- Step 5: Assemble cells ---
 	hmacKey := []byte("test-hmac-key-32-bytes-long!!!!!")
@@ -174,7 +180,7 @@ func TestOutboxE2E_PGMode_WriteToSubscribe(t *testing.T) {
 	privKey, pubKey := auth.MustGenerateTestKeyPair()
 	keySet, err := auth.NewKeySet(privKey, pubKey)
 	require.NoError(t, err)
-	jwtIssuer, err := auth.NewJWTIssuer(keySet, "test", 15*time.Minute,
+	jwtIssuer, err := auth.NewJWTIssuer(keySet, "test", testtime.D15min,
 		auth.WithIssuerAudiencesFromSlice([]string{"gocell"}))
 	require.NoError(t, err)
 	jwtVerifier, err := auth.NewJWTVerifier(keySet, auth.WithExpectedAudiences("gocell"))
@@ -228,7 +234,7 @@ func TestOutboxE2E_PGMode_WriteToSubscribe(t *testing.T) {
 		bootstrap.WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{cell.MustNewAuthJWTFromAssembly(asm)}, bootstrap.WithListenerNet(ln)),
 		withCorebundleTestInternalListener(t, newCorebundleLocalListener(t)),
 		bootstrap.WithPublisher(eb), bootstrap.WithSubscriber(eb),
-		bootstrap.WithShutdownTimeout(3 * time.Second),
+		bootstrap.WithShutdownTimeout(testtime.EventuallyDefault),
 		// F3: public routes (login, refresh) and PasswordResetExempt routes
 		// (change-password, logout) are declared via auth.Mount inside accesscore's
 		// RegisterRoutes. PolicyJWTFromAssembly discovers the verifier lazily.
@@ -254,7 +260,7 @@ func TestOutboxE2E_PGMode_WriteToSubscribe(t *testing.T) {
 	require.Eventually(t, func() bool {
 		_, statErr := os.Stat(e2eCredPath)
 		return statErr == nil
-	}, 5*time.Second, 50*time.Millisecond, "e2e credential file must exist")
+	}, testtime.EventuallyLong, testtime.MediumPoll, "e2e credential file must exist")
 
 	e2eUsername, e2eBootstrapPass, err := readE2ECredentials(e2eCredPath)
 	require.NoError(t, err, "must read e2e credentials from file")
@@ -284,7 +290,7 @@ func TestOutboxE2E_PGMode_WriteToSubscribe(t *testing.T) {
 			}
 		}
 		return false
-	}, 30*time.Second, 200*time.Millisecond,
+	}, testtime.CtxLong, testtime.D200ms,
 		"A11+F1 regression guard: entry-upserted business payload with key/version must reach subscriber (PR-CFG-B metadata-only model); "+
 			"missing fields indicate relay→eventbus envelope was not unwrapped")
 
@@ -301,7 +307,7 @@ func TestOutboxE2E_PGMode_WriteToSubscribe(t *testing.T) {
 	select {
 	case err := <-appErrCh:
 		assert.NoError(t, err, "bundle must shut down without error")
-	case <-time.After(10 * time.Second):
+	case <-time.After(testtime.SelectAsyncSettle):
 		t.Error("bootstrap did not shut down in time")
 	}
 }
@@ -445,7 +451,7 @@ func publishConfig(t *testing.T, baseURL, token, key string) {
 func TestOutboxE2E_RefetchLoop_AccessCoreCallsInternalGet(t *testing.T) {
 	testutil.RequireDocker(t)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), d90s)
 	defer cancel()
 
 	// --- Step 1: Start PG testcontainer ---
@@ -534,7 +540,7 @@ func TestOutboxE2E_RefetchLoop_AccessCoreCallsInternalGet(t *testing.T) {
 	privKey, pubKey := auth.MustGenerateTestKeyPair()
 	keySet, err := auth.NewKeySet(privKey, pubKey)
 	require.NoError(t, err)
-	jwtIssuer, err := auth.NewJWTIssuer(keySet, "test", 15*time.Minute,
+	jwtIssuer, err := auth.NewJWTIssuer(keySet, "test", testtime.D15min,
 		auth.WithIssuerAudiencesFromSlice([]string{"gocell"}))
 	require.NoError(t, err)
 	jwtVerifier, err := auth.NewJWTVerifier(keySet, auth.WithExpectedAudiences("gocell"))
@@ -587,7 +593,7 @@ func TestOutboxE2E_RefetchLoop_AccessCoreCallsInternalGet(t *testing.T) {
 		bootstrap.WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{cell.MustNewAuthJWTFromAssembly(asm)}, bootstrap.WithListenerNet(ln)),
 		withCorebundleTestInternalListener(t, newCorebundleLocalListener(t)),
 		bootstrap.WithPublisher(eb), bootstrap.WithSubscriber(eb),
-		bootstrap.WithShutdownTimeout(3 * time.Second),
+		bootstrap.WithShutdownTimeout(testtime.EventuallyDefault),
 	}
 	app := bootstrap.New(append(baseOpts, relayBootstrapOpts...)...)
 
@@ -604,7 +610,7 @@ func TestOutboxE2E_RefetchLoop_AccessCoreCallsInternalGet(t *testing.T) {
 	require.Eventually(t, func() bool {
 		_, statErr := os.Stat(e2eCredPath)
 		return statErr == nil
-	}, 5*time.Second, 50*time.Millisecond, "e2e credential file must exist")
+	}, testtime.EventuallyLong, testtime.MediumPoll, "e2e credential file must exist")
 
 	e2eUsername, e2eBootstrapPass, err := readE2ECredentials(e2eCredPath)
 	require.NoError(t, err)
@@ -637,7 +643,7 @@ func TestOutboxE2E_RefetchLoop_AccessCoreCallsInternalGet(t *testing.T) {
 		default:
 		}
 		return false
-	}, 15*time.Second, 100*time.Millisecond,
+	}, testtime.D15s, testtime.SlowPoll,
 		"refetch closed loop: accesscore.configreceive must call GET /internal/v1/config/%s "+
 			"within 15s of publish; missing call indicates relay→eventbus→configreceive→ConfigGetter "+
 			"pipeline is broken (PR-CFG-G1 refetch loop guard)",
@@ -659,7 +665,7 @@ func TestOutboxE2E_RefetchLoop_AccessCoreCallsInternalGet(t *testing.T) {
 	select {
 	case err := <-appErrCh:
 		assert.NoError(t, err, "bundle must shut down without error")
-	case <-time.After(10 * time.Second):
+	case <-time.After(testtime.SelectAsyncSettle):
 		t.Error("bootstrap did not shut down in time")
 	}
 }

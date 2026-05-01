@@ -7,7 +7,12 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/kernel/outbox"
+	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 )
+
+// testWriteBackDur500us is the write-back duration used in poll cycle recording tests.
+// 500µs is not in the testtime table so it is declared as a file-level const.
+const testWriteBackDur500us = 500 * time.Microsecond
 
 func TestProviderRelayCollector_RejectsEmptyCellID(t *testing.T) {
 	if _, err := outbox.NewProviderRelayCollector(metrics.NopProvider{}, ""); err == nil {
@@ -26,9 +31,9 @@ func TestProviderRelayCollector_NopProviderNoPanic(t *testing.T) {
 		Retried:      1,
 		Dead:         0,
 		Skipped:      2,
-		ClaimDur:     10 * time.Millisecond,
-		PublishDur:   50 * time.Millisecond,
-		WriteBackDur: 5 * time.Millisecond,
+		ClaimDur:     testtime.D10ms,
+		PublishDur:   testtime.MediumPoll,
+		WriteBackDur: testtime.FastPoll,
 	})
 	c.RecordBatchSize(6)
 	c.RecordReclaim(4)
@@ -122,7 +127,7 @@ func TestProviderRelayCollector_PollCycleEmitsPerOutcome(t *testing.T) {
 
 	c.RecordPollCycle(outbox.PollCycleResult{
 		Published: 4, Retried: 1, Dead: 0, Skipped: 2,
-		ClaimDur: time.Millisecond, PublishDur: 2 * time.Millisecond, WriteBackDur: 500 * time.Microsecond,
+		ClaimDur: time.Millisecond, PublishDur: testtime.D2ms, WriteBackDur: testWriteBackDur500us,
 	})
 
 	relayed := p.counterOps["outbox_relayed_total"]

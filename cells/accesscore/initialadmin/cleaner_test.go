@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/stretchr/testify/require"
 )
 
@@ -79,7 +80,7 @@ func (s *fakeScheduler) waitForTimer(t *testing.T) {
 	t.Helper()
 	select {
 	case <-s.timerCh:
-	case <-time.After(500 * time.Millisecond):
+	case <-time.After(testtime.D500ms):
 		t.Fatal("timed out waiting for fakeScheduler timer registration")
 	}
 }
@@ -175,7 +176,7 @@ func writeTestCredFile(t *testing.T, path string) {
 	payload := credentialPayload{
 		Username:  "admin",
 		Password:  "test-pass",
-		ExpiresAt: time.Now().Add(24 * time.Hour),
+		ExpiresAt: time.Now().Add(testtime.D24h),
 	}
 	if err := writeCredentialFile(path, payload); err != nil {
 		t.Fatalf("write cred file: %v", err)
@@ -187,7 +188,7 @@ func newTestCleaner(t *testing.T, path string, sched *fakeScheduler, handler *ca
 	logger := slog.New(handler)
 	c, err := newCleaner(cleanerConfig{
 		Path:      path,
-		TTL:       24 * time.Hour,
+		TTL:       testtime.D24h,
 		Logger:    logger,
 		Scheduler: sched,
 	})
@@ -229,7 +230,7 @@ func TestCleaner_DeletesAfterTTL(t *testing.T) {
 	sched.waitForTimer(t)
 
 	// Advance past 24h TTL — triggers expire() synchronously.
-	sched.Advance(24 * time.Hour)
+	sched.Advance(testtime.D24h)
 
 	// Await file removal (expire runs synchronously in Advance, but the OS
 	// unlink may race with stat on some filesystems — require.Eventually is
@@ -237,7 +238,7 @@ func TestCleaner_DeletesAfterTTL(t *testing.T) {
 	require.Eventually(t, func() bool {
 		_, err := os.Stat(path)
 		return os.IsNotExist(err)
-	}, 500*time.Millisecond, 5*time.Millisecond,
+	}, testtime.D500ms, testtime.FastPoll,
 		"expected credential file to be removed after TTL")
 
 	cancel()
@@ -289,7 +290,7 @@ func TestCleaner_FileGoneByOperator(t *testing.T) {
 		if err != nil {
 			t.Errorf("Start returned unexpected error: %v", err)
 		}
-	case <-time.After(500 * time.Millisecond):
+	case <-time.After(testtime.D500ms):
 		t.Fatal("Start should have returned quickly when file is absent")
 	}
 
@@ -301,7 +302,7 @@ func TestCleaner_FileGoneByOperator(t *testing.T) {
 			rec = r
 		}
 		return found
-	}, 500*time.Millisecond, 5*time.Millisecond,
+	}, testtime.D500ms, testtime.FastPoll,
 		"expected log record with event=initial_admin_credential_expired")
 	if rec.level != slog.LevelInfo {
 		t.Errorf("expected Info log for missing file, got %s", rec.level)
@@ -321,7 +322,7 @@ func TestCleaner_LogsWarnOnExpiry(t *testing.T) {
 	defer cancel()
 
 	sched.waitForTimer(t)
-	sched.Advance(24 * time.Hour)
+	sched.Advance(testtime.D24h)
 
 	var rec logRecord
 	require.Eventually(t, func() bool {
@@ -330,7 +331,7 @@ func TestCleaner_LogsWarnOnExpiry(t *testing.T) {
 			rec = r
 		}
 		return found
-	}, 500*time.Millisecond, 5*time.Millisecond,
+	}, testtime.D500ms, testtime.FastPoll,
 		"expected log record with event=initial_admin_credential_expired")
 	if rec.level != slog.LevelWarn {
 		t.Errorf("expected Warn log on successful expiry, got %s", rec.level)
@@ -408,7 +409,7 @@ func TestCleaner_LogsWarnOnTamperedFile(t *testing.T) {
 	defer cancel()
 
 	sched.waitForTimer(t)
-	sched.Advance(24 * time.Hour)
+	sched.Advance(testtime.D24h)
 
 	var rec logRecord
 	require.Eventually(t, func() bool {
@@ -417,7 +418,7 @@ func TestCleaner_LogsWarnOnTamperedFile(t *testing.T) {
 			rec = r
 		}
 		return found
-	}, 500*time.Millisecond, 5*time.Millisecond,
+	}, testtime.D500ms, testtime.FastPoll,
 		"expected log record with event=initial_admin_credential_expired")
 	if rec.level != slog.LevelWarn {
 		t.Errorf("expected Warn log for tampered-but-deleted file, got %s", rec.level)
@@ -449,12 +450,12 @@ func TestCleaner_TamperedFileStillDeleted(t *testing.T) {
 	defer cancel()
 
 	sched.waitForTimer(t)
-	sched.Advance(24 * time.Hour)
+	sched.Advance(testtime.D24h)
 
 	require.Eventually(t, func() bool {
 		_, err := os.Stat(path)
 		return os.IsNotExist(err)
-	}, 500*time.Millisecond, 5*time.Millisecond,
+	}, testtime.D500ms, testtime.FastPoll,
 		"tampered credential file must be removed by expire(), not retained")
 
 	cancel()
@@ -464,7 +465,7 @@ func TestCleaner_TamperedFileStillDeleted(t *testing.T) {
 func TestRealScheduler_AfterFunc(t *testing.T) {
 	s := realScheduler{}
 	called := make(chan struct{})
-	c := s.AfterFunc(1*time.Millisecond, func() { close(called) })
+	c := s.AfterFunc(testtime.D1ms, func() { close(called) })
 	// Must return a Cancellable.
 	if c == nil {
 		t.Fatal("expected non-nil Cancellable")
@@ -472,7 +473,7 @@ func TestRealScheduler_AfterFunc(t *testing.T) {
 	select {
 	case <-called:
 		// fired as expected
-	case <-time.After(500 * time.Millisecond):
+	case <-time.After(testtime.D500ms):
 		t.Error("realScheduler timer did not fire")
 	}
 }
@@ -507,14 +508,14 @@ func TestCleaner_RecoversTTLFromFileExpiresAt(t *testing.T) {
 
 	// Write a credential file expiring in 2h (simulates a "surviving" file
 	// after a restart 22h into the original 24h TTL).
-	expiresAt := time.Now().Add(2 * time.Hour)
+	expiresAt := time.Now().Add(testtime.D2h)
 	writeTestCredFileWithExpiry(t, path, expiresAt)
 
 	sched := newFakeScheduler()
 	handler := &capturingHandler{}
 	c, err := newCleaner(cleanerConfig{
 		Path:      path,
-		TTL:       24 * time.Hour, // original TTL — Start must ignore this for restart path
+		TTL:       testtime.D24h, // original TTL — Start must ignore this for restart path
 		Logger:    slog.New(handler),
 		Scheduler: sched,
 	})
@@ -527,12 +528,12 @@ func TestCleaner_RecoversTTLFromFileExpiresAt(t *testing.T) {
 	sched.waitForTimer(t)
 
 	// Advancing by 2h should fire the timer and delete the file.
-	sched.Advance(2 * time.Hour)
+	sched.Advance(testtime.D2h)
 
 	require.Eventually(t, func() bool {
 		_, err := os.Stat(path)
 		return os.IsNotExist(err)
-	}, 500*time.Millisecond, 5*time.Millisecond,
+	}, testtime.D500ms, testtime.FastPoll,
 		"credential file must be removed after recovered TTL elapses")
 
 	cancel()
@@ -547,14 +548,14 @@ func TestCleaner_AlreadyExpired_ImmediateDelete(t *testing.T) {
 	path := filepath.Join(dir, "initial_admin_password")
 
 	// Write a credential file with an expiry in the past.
-	expiresAt := time.Now().Add(-1 * time.Hour)
+	expiresAt := time.Now().Add(testtime.DNeg1h)
 	writeTestCredFileWithExpiry(t, path, expiresAt)
 
 	sched := newFakeScheduler()
 	handler := &capturingHandler{}
 	c, err := newCleaner(cleanerConfig{
 		Path:      path,
-		TTL:       24 * time.Hour,
+		TTL:       testtime.D24h,
 		Logger:    slog.New(handler),
 		Scheduler: sched,
 	})
@@ -567,7 +568,7 @@ func TestCleaner_AlreadyExpired_ImmediateDelete(t *testing.T) {
 	select {
 	case err := <-done:
 		require.NoError(t, err, "Start must not error on already-expired file")
-	case <-time.After(500 * time.Millisecond):
+	case <-time.After(testtime.D500ms):
 		t.Fatal("Start should have returned quickly for already-expired file")
 	}
 
@@ -588,7 +589,7 @@ func TestCleaner_NoFile_NoOp(t *testing.T) {
 	handler := &capturingHandler{}
 	c, err := newCleaner(cleanerConfig{
 		Path:      path,
-		TTL:       24 * time.Hour,
+		TTL:       testtime.D24h,
 		Logger:    slog.New(handler),
 		Scheduler: sched,
 	})
@@ -600,7 +601,7 @@ func TestCleaner_NoFile_NoOp(t *testing.T) {
 	select {
 	case err := <-done:
 		require.NoError(t, err, "Start must not error when credential file is absent")
-	case <-time.After(500 * time.Millisecond):
+	case <-time.After(testtime.D500ms):
 		t.Fatal("Start should have returned quickly when no credential file exists")
 	}
 
@@ -608,7 +609,7 @@ func TestCleaner_NoFile_NoOp(t *testing.T) {
 	require.Eventually(t, func() bool {
 		_, found := handler.findByEvent("initial_admin_credential_expired")
 		return found
-	}, 500*time.Millisecond, 5*time.Millisecond,
+	}, testtime.D500ms, testtime.FastPoll,
 		"expected Info log when credential file not found")
 
 	rec, found := handler.findByEvent("initial_admin_credential_expired")
@@ -624,7 +625,7 @@ func TestCleaner_NoFile_NoOp(t *testing.T) {
 func TestNewCleaner_MissingPath(t *testing.T) {
 	_, err := newCleaner(cleanerConfig{
 		Path:   "",
-		TTL:    24 * time.Hour,
+		TTL:    testtime.D24h,
 		Logger: slog.Default(),
 	})
 	if err == nil {
@@ -646,7 +647,7 @@ func TestNewCleaner_ZeroTTL(t *testing.T) {
 func TestNewCleaner_NilLogger(t *testing.T) {
 	_, err := newCleaner(cleanerConfig{
 		Path:   "/tmp/x",
-		TTL:    24 * time.Hour,
+		TTL:    testtime.D24h,
 		Logger: nil,
 	})
 	if err == nil {
@@ -657,7 +658,7 @@ func TestNewCleaner_NilLogger(t *testing.T) {
 func TestNewCleaner_DefaultsApplied(t *testing.T) {
 	c, err := newCleaner(cleanerConfig{
 		Path:   "/tmp/x",
-		TTL:    24 * time.Hour,
+		TTL:    testtime.D24h,
 		Logger: slog.Default(),
 		// Clock and Scheduler omitted → should default to realClock/realScheduler
 	})

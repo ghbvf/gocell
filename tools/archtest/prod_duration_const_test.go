@@ -47,7 +47,7 @@ func TestProdDurationConst(t *testing.T) {
 	root := findModuleRoot(t)
 	patterns := prodscan.PatternsExtended(root)
 
-	pkgs, errs, err := typeseval.LoadPackagesWithTags(root, []string{"e2e", "integration", "pg"}, patterns...)
+	pkgs, errs, err := typeseval.LoadPackages(root, false, []string{"e2e", "integration", "pg"}, patterns...)
 	require.NoError(t, err, "packages.Load failed")
 	require.Empty(t, errs, "package load errors must fail-closed: %v", errs)
 

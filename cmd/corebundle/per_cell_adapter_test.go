@@ -9,6 +9,13 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+const (
+	// pgConfigD2min and pgConfigD30min are PG pool durations parsed from env;
+	// not in the testtime table.
+	pgConfigD2min  = 2 * time.Minute
+	pgConfigD30min = 30 * time.Minute
+)
+
 // ---------------------------------------------------------------------------
 // TestLoadPGConfig
 // ---------------------------------------------------------------------------
@@ -49,8 +56,8 @@ func TestLoadPGConfig_AllFields_ParsedCorrectly(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "postgres://cfg:x@host/db", cfg.DSN)
 	assert.EqualValues(t, 20, cfg.MaxConns)
-	assert.Equal(t, 2*time.Minute, cfg.IdleTimeout)
-	assert.Equal(t, 30*time.Minute, cfg.MaxLifetime)
+	assert.Equal(t, pgConfigD2min, cfg.IdleTimeout)
+	assert.Equal(t, pgConfigD30min, cfg.MaxLifetime)
 }
 
 // TestLoadPGConfig_InvalidDuration_FailsFast verifies that an invalid duration

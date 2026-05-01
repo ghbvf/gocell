@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -64,18 +65,18 @@ func TestNonAcquiredReceipt_ReturnsLeaseError(t *testing.T) {
 // --- DefaultLeaseTTL Test ---
 
 func TestDefaultLeaseTTL(t *testing.T) {
-	assert.Equal(t, 5*time.Minute, DefaultLeaseTTL)
+	assert.Equal(t, testtime.D5min, DefaultLeaseTTL)
 }
 
 func TestDefaultTTL(t *testing.T) {
-	assert.Equal(t, 24*time.Hour, DefaultTTL)
+	assert.Equal(t, testtime.D24h, DefaultTTL)
 }
 
 // --- InMemClaimer / inMemReceipt Tests ---
 
 func TestInMemClaimer_Claim_Acquired(t *testing.T) {
 	c := NewInMemClaimer()
-	state, receipt, err := c.Claim(context.Background(), "key1", 5*time.Minute, 24*time.Hour)
+	state, receipt, err := c.Claim(context.Background(), "key1", testtime.D5min, testtime.D24h)
 	assert.NoError(t, err)
 	assert.Equal(t, ClaimAcquired, state)
 	assert.NotNil(t, receipt)
@@ -86,12 +87,12 @@ func TestInMemClaimer_Claim_Done(t *testing.T) {
 	ctx := context.Background()
 
 	// Acquire and commit.
-	_, receipt, err := c.Claim(ctx, "key-done", 5*time.Minute, 24*time.Hour)
+	_, receipt, err := c.Claim(ctx, "key-done", testtime.D5min, testtime.D24h)
 	require.NoError(t, err)
 	require.NoError(t, receipt.Commit(ctx))
 
 	// Second claim returns ClaimDone.
-	state, r2, err := c.Claim(ctx, "key-done", 5*time.Minute, 24*time.Hour)
+	state, r2, err := c.Claim(ctx, "key-done", testtime.D5min, testtime.D24h)
 	assert.NoError(t, err)
 	assert.Equal(t, ClaimDone, state)
 	assert.NotNil(t, r2)
@@ -102,12 +103,12 @@ func TestInMemClaimer_Claim_Busy(t *testing.T) {
 	ctx := context.Background()
 
 	// Acquire lease (do not commit/release).
-	state, _, err := c.Claim(ctx, "key-busy", 5*time.Minute, 24*time.Hour)
+	state, _, err := c.Claim(ctx, "key-busy", testtime.D5min, testtime.D24h)
 	require.NoError(t, err)
 	require.Equal(t, ClaimAcquired, state)
 
 	// Second claim returns ClaimBusy.
-	state2, r2, err2 := c.Claim(ctx, "key-busy", 5*time.Minute, 24*time.Hour)
+	state2, r2, err2 := c.Claim(ctx, "key-busy", testtime.D5min, testtime.D24h)
 	assert.NoError(t, err2)
 	assert.Equal(t, ClaimBusy, state2)
 	assert.NotNil(t, r2)
@@ -122,7 +123,7 @@ func TestInMemClaimer_Claim_ExpiredLease_ReacquiredBySecond(t *testing.T) {
 	ctx := context.Background()
 
 	// Acquire with very short TTL (already expired at time=1001).
-	state, _, err := c.Claim(ctx, "key-exp", 1*time.Millisecond, 24*time.Hour)
+	state, _, err := c.Claim(ctx, "key-exp", testtime.D1ms, testtime.D24h)
 	require.NoError(t, err)
 	require.Equal(t, ClaimAcquired, state)
 
@@ -130,7 +131,7 @@ func TestInMemClaimer_Claim_ExpiredLease_ReacquiredBySecond(t *testing.T) {
 	c.now = func() time.Time { return time.Unix(1001, 0) }
 
 	// Second consumer should get ClaimAcquired (expired lease dropped).
-	state2, r2, err2 := c.Claim(ctx, "key-exp", 5*time.Minute, 24*time.Hour)
+	state2, r2, err2 := c.Claim(ctx, "key-exp", testtime.D5min, testtime.D24h)
 	assert.NoError(t, err2)
 	assert.Equal(t, ClaimAcquired, state2)
 	assert.NotNil(t, r2)
@@ -140,12 +141,12 @@ func TestInMemClaimer_Release(t *testing.T) {
 	c := NewInMemClaimer()
 	ctx := context.Background()
 
-	_, receipt, err := c.Claim(ctx, "key-rel", 5*time.Minute, 24*time.Hour)
+	_, receipt, err := c.Claim(ctx, "key-rel", testtime.D5min, testtime.D24h)
 	require.NoError(t, err)
 	require.NoError(t, receipt.Release(ctx))
 
 	// After release, a new claim should succeed.
-	state, _, err := c.Claim(ctx, "key-rel", 5*time.Minute, 24*time.Hour)
+	state, _, err := c.Claim(ctx, "key-rel", testtime.D5min, testtime.D24h)
 	assert.NoError(t, err)
 	assert.Equal(t, ClaimAcquired, state)
 }
@@ -154,7 +155,7 @@ func TestInMemReceipt_DoubleCommit_SecondIsNoop(t *testing.T) {
 	c := NewInMemClaimer()
 	ctx := context.Background()
 
-	_, receipt, err := c.Claim(ctx, "key-dbl", 5*time.Minute, 24*time.Hour)
+	_, receipt, err := c.Claim(ctx, "key-dbl", testtime.D5min, testtime.D24h)
 	require.NoError(t, err)
 	require.NoError(t, receipt.Commit(ctx))
 	// Second Commit is idempotent via sync.Once — returns same nil error.
@@ -165,12 +166,12 @@ func TestInMemReceipt_StaleCommit_AfterRelease_ReturnsError(t *testing.T) {
 	c := NewInMemClaimer()
 	ctx := context.Background()
 
-	_, receipt1, err := c.Claim(ctx, "key-stale", 5*time.Minute, 24*time.Hour)
+	_, receipt1, err := c.Claim(ctx, "key-stale", testtime.D5min, testtime.D24h)
 	require.NoError(t, err)
 	require.NoError(t, receipt1.Release(ctx))
 
 	// Another consumer reclaims the key.
-	_, _, err = c.Claim(ctx, "key-stale", 5*time.Minute, 24*time.Hour)
+	_, _, err = c.Claim(ctx, "key-stale", testtime.D5min, testtime.D24h)
 	require.NoError(t, err)
 
 	// receipt1.Commit is stale — token mismatch.
@@ -189,13 +190,13 @@ func TestInMemReceipt_Extend_Success(t *testing.T) {
 	}
 	ctx := context.Background()
 
-	_, receipt, err := c.Claim(ctx, "key-ext", 5*time.Minute, 24*time.Hour)
+	_, receipt, err := c.Claim(ctx, "key-ext", testtime.D5min, testtime.D24h)
 	require.NoError(t, err)
 	require.NotNil(t, receipt)
 
 	// Advance clock and extend with a new TTL.
 	c.now = func() time.Time { return time.Unix(1100, 0) }
-	newTTL := 10 * time.Minute
+	newTTL := testtime.D10min
 	extErr := receipt.Extend(ctx, newTTL)
 	assert.NoError(t, extErr)
 
@@ -212,14 +213,14 @@ func TestInMemReceipt_Extend_AfterRelease_ReturnsErrLeaseExpired(t *testing.T) {
 	c := NewInMemClaimer()
 	ctx := context.Background()
 
-	_, receipt, err := c.Claim(ctx, "key-ext-rel", 5*time.Minute, 24*time.Hour)
+	_, receipt, err := c.Claim(ctx, "key-ext-rel", testtime.D5min, testtime.D24h)
 	require.NoError(t, err)
 
 	// Release drops the entry.
 	require.NoError(t, receipt.Release(ctx))
 
 	// Extend after release should return ErrLeaseExpired (entry gone).
-	extErr := receipt.Extend(ctx, 5*time.Minute)
+	extErr := receipt.Extend(ctx, testtime.D5min)
 	assert.ErrorIs(t, extErr, ErrLeaseExpired)
 }
 
@@ -231,7 +232,7 @@ func TestInMemReceipt_Extend_TokenMismatch_ReturnsErrLeaseExpired(t *testing.T) 
 	}
 	ctx := context.Background()
 
-	_, receipt, err := c.Claim(ctx, "key-ext-mismatch", 5*time.Minute, 24*time.Hour)
+	_, receipt, err := c.Claim(ctx, "key-ext-mismatch", testtime.D5min, testtime.D24h)
 	require.NoError(t, err)
 
 	// Tamper with the entry's token to simulate a re-claim by another consumer.
@@ -239,7 +240,7 @@ func TestInMemReceipt_Extend_TokenMismatch_ReturnsErrLeaseExpired(t *testing.T) 
 	c.entries["key-ext-mismatch"].token = "different-token"
 	c.mu.Unlock()
 
-	extErr := receipt.Extend(ctx, 5*time.Minute)
+	extErr := receipt.Extend(ctx, testtime.D5min)
 	assert.ErrorIs(t, extErr, ErrLeaseExpired)
 }
 
@@ -252,14 +253,14 @@ func TestInMemReceipt_Extend_AfterExpiredLease_ReturnsErrLeaseExpired(t *testing
 	}
 	ctx := context.Background()
 
-	_, receipt, err := c.Claim(ctx, "key-ext-exp", 1*time.Millisecond, 24*time.Hour)
+	_, receipt, err := c.Claim(ctx, "key-ext-exp", testtime.D1ms, testtime.D24h)
 	require.NoError(t, err)
 
 	// Advance clock so another Claim call drops the expired entry.
 	now = time.Unix(1002, 0)
 	// Trigger eviction by claiming again (which drops the expired entry).
-	_, _, _ = c.Claim(ctx, "key-ext-exp", 5*time.Minute, 24*time.Hour)
+	_, _, _ = c.Claim(ctx, "key-ext-exp", testtime.D5min, testtime.D24h)
 	// Now the entry for old receipt is replaced — token mismatch.
-	extErr := receipt.Extend(ctx, 5*time.Minute)
+	extErr := receipt.Extend(ctx, testtime.D5min)
 	assert.ErrorIs(t, extErr, ErrLeaseExpired)
 }

@@ -12,6 +12,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/assembly"
 	"github.com/ghbvf/gocell/kernel/cell"
 	kernelmetrics "github.com/ghbvf/gocell/kernel/observability/metrics"
+	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -169,14 +170,14 @@ func runWithCancelAndListener(t *testing.T, b *Bootstrap, ln net.Listener) error
 		}
 		closeBody(t, resp)
 		return resp.StatusCode == 200
-	}, 3*time.Second, 20*time.Millisecond, "HTTP server did not become healthy")
+	}, testtime.EventuallyDefault, testtime.D20ms, "HTTP server did not become healthy")
 
 	cancel()
 
 	select {
 	case err := <-errCh:
 		return err
-	case <-time.After(5 * time.Second):
+	case <-time.After(testtime.D5s):
 		t.Fatal("bootstrap.Run did not return within timeout after cancel")
 		return nil
 	}
@@ -197,7 +198,7 @@ func TestShutdownMetrics_PhaseCounterTransitions(t *testing.T) {
 		WithAssembly(asm),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(ln)),
 		WithListener(cell.InternalListener, "127.0.0.1:0", []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(newLocalListener(t))),
-		WithShutdownTimeout(3*time.Second),
+		WithShutdownTimeout(testtime.D3s),
 		WithMetricsProvider(p),
 	)
 
@@ -233,7 +234,7 @@ func TestShutdownMetrics_DurationRecorded(t *testing.T) {
 		WithAssembly(asm),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(ln)),
 		WithListener(cell.InternalListener, "127.0.0.1:0", []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(newLocalListener(t))),
-		WithShutdownTimeout(3*time.Second),
+		WithShutdownTimeout(testtime.D3s),
 		WithMetricsProvider(p),
 	)
 
@@ -269,7 +270,7 @@ func TestShutdownMetrics_TimeoutOutcome_Success(t *testing.T) {
 		WithAssembly(asm),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(ln)),
 		WithListener(cell.InternalListener, "127.0.0.1:0", []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(newLocalListener(t))),
-		WithShutdownTimeout(3*time.Second),
+		WithShutdownTimeout(testtime.D3s),
 		WithMetricsProvider(p),
 	)
 
@@ -331,7 +332,7 @@ func TestShutdownMetrics_TimeoutOutcome_Timeout(t *testing.T) {
 
 	// Short timeout so the test completes fast; the slowWorker's Stop will
 	// block just long enough for shutCtx to expire.
-	const shutdownTimeout = 100 * time.Millisecond
+	const shutdownTimeout = testtime.D100ms
 	b := New(
 		WithAssembly(asm),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(ln)),
@@ -356,7 +357,7 @@ func TestShutdownMetrics_TimeoutOutcome_Timeout(t *testing.T) {
 		}
 		closeBody(t, resp)
 		return resp.StatusCode == 200
-	}, 3*time.Second, 20*time.Millisecond, "HTTP server did not become healthy")
+	}, testtime.EventuallyDefault, testtime.D20ms, "HTTP server did not become healthy")
 
 	cancel()
 
@@ -364,7 +365,7 @@ func TestShutdownMetrics_TimeoutOutcome_Timeout(t *testing.T) {
 	// The slowWorker.Stop returns after shutdownTimeout (100ms) via ctx.Done.
 	select {
 	case <-errCh:
-	case <-time.After(2 * time.Second):
+	case <-time.After(testtime.D2s):
 		t.Fatal("bootstrap.Run did not return after shutdown timeout")
 	}
 
@@ -409,7 +410,7 @@ func TestShutdownMetrics_Outcome_TeardownError(t *testing.T) {
 		WithAssembly(asm),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(ln)),
 		WithListener(cell.InternalListener, "127.0.0.1:0", []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(newLocalListener(t))),
-		WithShutdownTimeout(3*time.Second),
+		WithShutdownTimeout(testtime.D3s),
 		WithMetricsProvider(p),
 		WithWorkers(failWorker),
 	)
@@ -445,7 +446,7 @@ func TestShutdownMetrics_Outcome_SignalError(t *testing.T) {
 		WithAssembly(asm),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(ln)),
 		WithListener(cell.InternalListener, "127.0.0.1:0", []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(newLocalListener(t))),
-		WithShutdownTimeout(3*time.Second),
+		WithShutdownTimeout(testtime.D3s),
 		WithMetricsProvider(p),
 		WithWorkers(errWorker),
 	)
@@ -456,7 +457,7 @@ func TestShutdownMetrics_Outcome_SignalError(t *testing.T) {
 	select {
 	case err := <-errCh:
 		require.Error(t, err, "Run must surface worker error")
-	case <-time.After(5 * time.Second):
+	case <-time.After(testtime.D5s):
 		t.Fatal("Run did not return after worker error")
 	}
 
@@ -477,7 +478,7 @@ type erroringWorker struct {
 
 func (w *erroringWorker) Start(_ context.Context) error {
 	// Small delay so Run reaches phase9 select; then error triggers shutdown.
-	time.Sleep(50 * time.Millisecond)
+	time.Sleep(testtime.MediumPoll)
 	return w.err
 }
 
@@ -496,7 +497,7 @@ func TestShutdownMetrics_DisabledWithoutProvider(t *testing.T) {
 		WithAssembly(asm),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(ln)),
 		WithListener(cell.InternalListener, "127.0.0.1:0", []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(newLocalListener(t))),
-		WithShutdownTimeout(3*time.Second),
+		WithShutdownTimeout(testtime.D3s),
 		// No WithMetricsProvider — defaults to NopProvider.
 	)
 	require.NoError(t, runWithCancelAndListener(t, b, ln))
@@ -512,7 +513,7 @@ func TestShutdownMetrics_NilSafe(t *testing.T) {
 	var m *shutdownMetrics
 	require.NotPanics(t, func() {
 		m.recordPhaseEntry(shutdownPhaseReadinessFlip)
-		m.observePhaseDuration("readiness_flip", 1*time.Millisecond)
+		m.observePhaseDuration("readiness_flip", testtime.D1ms)
 		m.countOutcome("success")
 	})
 }

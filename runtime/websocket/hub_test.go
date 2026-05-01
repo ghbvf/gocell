@@ -8,10 +8,13 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/goleak"
 )
+
+const hubBroadcastConcurrentDeadline = 400 * time.Millisecond
 
 func TestMain(m *testing.M) {
 	goleak.VerifyTestMain(m)
@@ -126,7 +129,7 @@ func startHub(t *testing.T, cfg HubConfig, handler MessageHandler) *Hub {
 	startErr := make(chan error, 1)
 	go func() { startErr <- hub.Start(context.Background()) }()
 	t.Cleanup(func() {
-		stopCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		stopCtx, cancel := context.WithTimeout(context.Background(), testtime.CtxDefault)
 		defer cancel()
 		_ = hub.Stop(stopCtx)
 		<-startErr
@@ -134,7 +137,7 @@ func startHub(t *testing.T, cfg HubConfig, handler MessageHandler) *Hub {
 	// Wait until hub is running.
 	require.Eventually(t, func() bool {
 		return hub.state.Load() == stateRunning
-	}, time.Second, time.Millisecond)
+	}, testtime.EventuallyShort, testtime.D1ms)
 	return hub
 }
 
@@ -150,16 +153,16 @@ func TestHub_StopUnblocksStart(t *testing.T) {
 
 	require.Eventually(t, func() bool {
 		return hub.state.Load() == stateRunning
-	}, time.Second, time.Millisecond)
+	}, testtime.EventuallyShort, testtime.D1ms)
 
-	stopCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	stopCtx, cancel := context.WithTimeout(context.Background(), testtime.D2s)
 	defer cancel()
 	require.NoError(t, hub.Stop(stopCtx))
 
 	select {
 	case err := <-startErr:
 		assert.NoError(t, err)
-	case <-time.After(2 * time.Second):
+	case <-time.After(testtime.D2s):
 		t.Fatal("Start did not return after Stop")
 	}
 }
@@ -178,9 +181,9 @@ func TestHub_DoubleStop(t *testing.T) {
 	go func() { startErr <- hub.Start(context.Background()) }()
 	require.Eventually(t, func() bool {
 		return hub.state.Load() == stateRunning
-	}, time.Second, time.Millisecond)
+	}, testtime.EventuallyShort, testtime.D1ms)
 
-	stopCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	stopCtx, cancel := context.WithTimeout(context.Background(), testtime.D2s)
 	defer cancel()
 	require.NoError(t, hub.Stop(stopCtx))
 	<-startErr
@@ -211,14 +214,14 @@ func TestHub_StopTimeout(t *testing.T) {
 	go func() { startErr <- hub.Start(context.Background()) }()
 	require.Eventually(t, func() bool {
 		return hub.state.Load() == stateRunning
-	}, time.Second, time.Millisecond)
+	}, testtime.EventuallyShort, testtime.D1ms)
 
 	// Register a conn whose Close is a no-op (readLoop never exits).
 	stuck := &stuckConn{id: "stuck", closeCh: make(chan struct{})}
 	require.NoError(t, hub.Register(context.Background(), stuck))
 
 	// Stop with very short timeout.
-	stopCtx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	stopCtx, cancel := context.WithTimeout(context.Background(), testtime.MediumPoll)
 	defer cancel()
 	err := hub.Stop(stopCtx)
 	assert.ErrorIs(t, err, context.DeadlineExceeded)
@@ -238,7 +241,7 @@ func TestHub_ExternalContextCancel(t *testing.T) {
 
 	require.Eventually(t, func() bool {
 		return hub.state.Load() == stateRunning
-	}, time.Second, time.Millisecond)
+	}, testtime.EventuallyShort, testtime.D1ms)
 
 	// Register a conn before cancel.
 	conn := newFakeConn("pre-cancel")
@@ -250,7 +253,7 @@ func TestHub_ExternalContextCancel(t *testing.T) {
 	select {
 	case err := <-startErr:
 		assert.ErrorIs(t, err, context.Canceled)
-	case <-time.After(5 * time.Second):
+	case <-time.After(testtime.SelectShutdown):
 		t.Fatal("Start did not return after context cancel")
 	}
 
@@ -298,7 +301,7 @@ func TestHub_RegisterAndReadLoop(t *testing.T) {
 		mu.Lock()
 		defer mu.Unlock()
 		return gotMsg != ""
-	}, time.Second, 10*time.Millisecond)
+	}, testtime.EventuallyShort, testtime.D10ms)
 
 	mu.Lock()
 	assert.Equal(t, "sender", gotID)
@@ -319,7 +322,7 @@ func TestHub_RegisterUsesContextValues(t *testing.T) {
 	startErr := make(chan error, 1)
 	go func() { startErr <- hub.Start(context.Background()) }()
 	t.Cleanup(func() {
-		stopCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		stopCtx, cancel := context.WithTimeout(context.Background(), testtime.D2s)
 		defer cancel()
 		_ = hub.Stop(stopCtx)
 		<-startErr
@@ -327,7 +330,7 @@ func TestHub_RegisterUsesContextValues(t *testing.T) {
 
 	require.Eventually(t, func() bool {
 		return hub.state.Load() == stateRunning
-	}, time.Second, time.Millisecond)
+	}, testtime.EventuallyShort, testtime.D1ms)
 
 	conn := newFakeConn("context-values")
 	require.NoError(t, hub.Register(registerCtx, conn))
@@ -337,7 +340,7 @@ func TestHub_RegisterUsesContextValues(t *testing.T) {
 	select {
 	case value := <-got:
 		assert.Equal(t, want, value)
-	case <-time.After(time.Second):
+	case <-time.After(testtime.EventuallyShort):
 		t.Fatal("handler did not receive message")
 	}
 }
@@ -348,7 +351,7 @@ func TestHub_RegisterDuringStop(t *testing.T) {
 	go func() { startErr <- hub.Start(context.Background()) }()
 	require.Eventually(t, func() bool {
 		return hub.state.Load() == stateRunning
-	}, time.Second, time.Millisecond)
+	}, testtime.EventuallyShort, testtime.D1ms)
 
 	// Force state to stopping to simulate mid-Stop window.
 	hub.state.Store(stateStopping)
@@ -361,7 +364,7 @@ func TestHub_RegisterDuringStop(t *testing.T) {
 
 	// Reset for cleanup.
 	hub.state.Store(stateRunning)
-	stopCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	stopCtx, cancel := context.WithTimeout(context.Background(), testtime.D2s)
 	defer cancel()
 	_ = hub.Stop(stopCtx)
 	<-startErr
@@ -390,7 +393,7 @@ func TestHub_Unregister(t *testing.T) {
 
 	require.Eventually(t, func() bool {
 		return hub.ConnCount() == 0
-	}, time.Second, 10*time.Millisecond)
+	}, testtime.EventuallyShort, testtime.D10ms)
 	assert.True(t, conn.isClosed())
 }
 
@@ -406,7 +409,7 @@ func TestHub_UnregisterIdempotent(t *testing.T) {
 
 	require.Eventually(t, func() bool {
 		return hub.ConnCount() == 0
-	}, time.Second, 10*time.Millisecond)
+	}, testtime.EventuallyShort, testtime.D10ms)
 }
 
 func TestHub_RegisterDuplicateID(t *testing.T) {
@@ -464,7 +467,7 @@ func TestHub_RegisterStopRace(t *testing.T) {
 	go func() { startErr <- hub.Start(context.Background()) }()
 	require.Eventually(t, func() bool {
 		return hub.state.Load() == stateRunning
-	}, time.Second, time.Millisecond)
+	}, testtime.EventuallyShort, testtime.D1ms)
 
 	const n = 100
 	var registerWg sync.WaitGroup
@@ -478,7 +481,7 @@ func TestHub_RegisterStopRace(t *testing.T) {
 	}
 
 	// Stop concurrently with registrations.
-	stopCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	stopCtx, cancel := context.WithTimeout(context.Background(), testtime.CtxDefault)
 	defer cancel()
 	_ = hub.Stop(stopCtx)
 
@@ -536,7 +539,7 @@ func TestHub_BroadcastSlowConn(t *testing.T) {
 
 	fast := newFakeConn("fast")
 	slow := newFakeConn("slow")
-	slow.writeDelay = 200 * time.Millisecond
+	slow.writeDelay = testtime.D200ms
 
 	require.NoError(t, hub.Register(context.Background(), fast))
 	require.NoError(t, hub.Register(context.Background(), slow))
@@ -549,7 +552,7 @@ func TestHub_BroadcastSlowConn(t *testing.T) {
 
 	assert.Equal(t, [][]byte{[]byte("data")}, fast.getWrites())
 	assert.Equal(t, [][]byte{[]byte("data")}, slow.getWrites())
-	assert.Less(t, elapsed, 400*time.Millisecond, "broadcast should be concurrent")
+	assert.Less(t, elapsed, hubBroadcastConcurrentDeadline, "broadcast should be concurrent")
 }
 
 func TestHub_Send(t *testing.T) {
@@ -598,7 +601,7 @@ func TestHub_MessageHandler(t *testing.T) {
 		mu.Lock()
 		defer mu.Unlock()
 		return gotMsg != ""
-	}, time.Second, 10*time.Millisecond)
+	}, testtime.EventuallyShort, testtime.D10ms)
 
 	mu.Lock()
 	assert.Equal(t, "h1", gotID)
@@ -613,8 +616,8 @@ func TestHub_MessageHandler(t *testing.T) {
 
 func TestHub_PingMissThreshold(t *testing.T) {
 	cfg := DefaultHubConfig()
-	cfg.PingInterval = 10 * time.Millisecond
-	cfg.PingTimeout = 5 * time.Millisecond
+	cfg.PingInterval = testtime.D10ms
+	cfg.PingTimeout = testtime.FastPoll
 	cfg.PingMissMax = 3
 
 	hub := startHub(t, cfg, nil)
@@ -626,13 +629,13 @@ func TestHub_PingMissThreshold(t *testing.T) {
 
 	require.Eventually(t, func() bool {
 		return hub.ConnCount() == 0 && conn.isClosed()
-	}, 2*time.Second, 10*time.Millisecond)
+	}, testtime.D2s, testtime.D10ms)
 }
 
 func TestHub_PingMissReset(t *testing.T) {
 	cfg := DefaultHubConfig()
-	cfg.PingInterval = 10 * time.Millisecond
-	cfg.PingTimeout = 5 * time.Millisecond
+	cfg.PingInterval = testtime.D10ms
+	cfg.PingTimeout = testtime.FastPoll
 	cfg.PingMissMax = 3
 
 	hub := startHub(t, cfg, nil)
@@ -652,7 +655,7 @@ func TestHub_PingMissReset(t *testing.T) {
 		}
 		hub.connMu.Unlock()
 		return misses >= 2
-	}, 2*time.Second, 5*time.Millisecond)
+	}, testtime.D2s, testtime.FastPoll)
 
 	// Heal the connection.
 	conn.mu.Lock()
@@ -669,15 +672,15 @@ func TestHub_PingMissReset(t *testing.T) {
 		}
 		hub.connMu.Unlock()
 		return ok && misses == 0
-	}, 2*time.Second, 5*time.Millisecond)
+	}, testtime.D2s, testtime.FastPoll)
 
 	assert.Equal(t, 1, hub.ConnCount(), "connection should survive after healing")
 }
 
 func TestHub_PingLoopRunsOnInterval(t *testing.T) {
 	cfg := DefaultHubConfig()
-	cfg.PingInterval = 10 * time.Millisecond
-	cfg.PingTimeout = 5 * time.Millisecond
+	cfg.PingInterval = testtime.D10ms
+	cfg.PingTimeout = testtime.FastPoll
 
 	hub := startHub(t, cfg, nil)
 
@@ -686,7 +689,7 @@ func TestHub_PingLoopRunsOnInterval(t *testing.T) {
 	<-conn.readyCh
 
 	// Wait long enough for multiple pings, verify conn is still alive.
-	time.Sleep(100 * time.Millisecond)
+	time.Sleep(testtime.D100ms)
 	assert.Equal(t, 1, hub.ConnCount(), "connection should survive multiple pings")
 }
 
@@ -696,16 +699,16 @@ func TestHub_PingLoopRunsOnInterval(t *testing.T) {
 
 func TestDefaultHubConfig(t *testing.T) {
 	cfg := DefaultHubConfig()
-	assert.Equal(t, 30*time.Second, cfg.PingInterval)
-	assert.Equal(t, 5*time.Second, cfg.PingTimeout)
+	assert.Equal(t, testtime.D30s, cfg.PingInterval)
+	assert.Equal(t, testtime.D5s, cfg.PingTimeout)
 	assert.Equal(t, int64(64*1024), cfg.ReadLimit)
 	assert.Equal(t, 2, cfg.PingMissMax)
 }
 
 func TestNewHub_PreservesExplicitConfig(t *testing.T) {
 	cfg := HubConfig{
-		PingInterval:   time.Second,
-		PingTimeout:    250 * time.Millisecond,
+		PingInterval:   testtime.D1s,
+		PingTimeout:    testtime.D250ms,
 		ReadLimit:      1024,
 		PingMissMax:    5,
 		MaxConnections: 9,
@@ -724,9 +727,9 @@ func TestHub_IsRunning(t *testing.T) {
 
 	startErr := make(chan error, 1)
 	go func() { startErr <- hub.Start(context.Background()) }()
-	require.Eventually(t, func() bool { return hub.IsRunning() }, time.Second, time.Millisecond)
+	require.Eventually(t, func() bool { return hub.IsRunning() }, testtime.EventuallyShort, testtime.D1ms)
 
-	stopCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	stopCtx, cancel := context.WithTimeout(context.Background(), testtime.D2s)
 	defer cancel()
 	_ = hub.Stop(stopCtx)
 	<-startErr
@@ -739,7 +742,7 @@ func TestHub_StopDeadlineHonored(t *testing.T) {
 	go func() { startErr <- hub.Start(context.Background()) }()
 	require.Eventually(t, func() bool {
 		return hub.state.Load() == stateRunning
-	}, time.Second, time.Millisecond)
+	}, testtime.EventuallyShort, testtime.D1ms)
 
 	// Register a stuck conn that blocks Close.
 	stuck := &stuckConn{id: "blocker", closeCh: make(chan struct{})}
@@ -748,13 +751,13 @@ func TestHub_StopDeadlineHonored(t *testing.T) {
 	// Stop with 100ms deadline — must return within ~200ms regardless of
 	// stuck conn.
 	start := time.Now()
-	stopCtx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	stopCtx, cancel := context.WithTimeout(context.Background(), testtime.D100ms)
 	defer cancel()
 	err := hub.Stop(stopCtx)
 	elapsed := time.Since(start)
 
 	assert.ErrorIs(t, err, context.DeadlineExceeded)
-	assert.Less(t, elapsed, 500*time.Millisecond, "Stop should honor deadline")
+	assert.Less(t, elapsed, testtime.D500ms, "Stop should honor deadline")
 	assert.Equal(t, stateStopped, hub.state.Load())
 
 	// Cleanup for goleak.
@@ -906,9 +909,9 @@ func startHubBackground(t *testing.T) *Hub {
 	go func() { startErr <- hub.Start(context.Background()) }()
 	require.Eventually(t, func() bool {
 		return hub.state.Load() == stateRunning
-	}, time.Second, time.Millisecond)
+	}, testtime.EventuallyShort, testtime.D1ms)
 	t.Cleanup(func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), testtime.D2s)
 		defer cancel()
 		_ = hub.Stop(ctx)
 		<-startErr
@@ -934,7 +937,7 @@ func TestConnConformance_CloseInterruptsRead(t *testing.T) {
 	select {
 	case err := <-readDone:
 		assert.Error(t, err, "Close must cause Read to return an error")
-	case <-time.After(time.Second):
+	case <-time.After(testtime.EventuallyShort):
 		t.Fatal("Read did not return after Close")
 	}
 }
@@ -948,7 +951,7 @@ func TestConnConformance_CloseIdempotent(t *testing.T) {
 
 func TestConnConformance_ConcurrentWriteClose(t *testing.T) {
 	conn := newFakeConn("cwc")
-	conn.writeDelay = 100 * time.Millisecond
+	conn.writeDelay = testtime.D100ms
 
 	var wg sync.WaitGroup
 	wg.Add(2)
@@ -962,7 +965,7 @@ func TestConnConformance_ConcurrentWriteClose(t *testing.T) {
 	// Close goroutine — fires while Write is in progress.
 	go func() {
 		defer wg.Done()
-		time.Sleep(10 * time.Millisecond) // let Write start
+		time.Sleep(testtime.D10ms) // let Write start
 		_ = conn.Close()
 	}()
 
@@ -984,10 +987,10 @@ func TestHub_IsRunning_Contract(t *testing.T) {
 	// running
 	startErr := make(chan error, 1)
 	go func() { startErr <- hub.Start(context.Background()) }()
-	require.Eventually(t, func() bool { return hub.IsRunning() }, time.Second, time.Millisecond)
+	require.Eventually(t, func() bool { return hub.IsRunning() }, testtime.EventuallyShort, testtime.D1ms)
 
 	// stop → not running
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), testtime.D2s)
 	defer cancel()
 	_ = hub.Stop(ctx)
 	<-startErr

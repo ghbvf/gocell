@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/ghbvf/gocell/kernel/idempotency"
+	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/runtime/distlock"
 	"github.com/ghbvf/gocell/runtime/distlock/locktest"
 	"github.com/ghbvf/gocell/tests/testutil"
@@ -54,8 +55,8 @@ func startRedis(t *testing.T) (*Client, func()) {
 	client, err := NewClient(ctx, Config{
 		Addr:        addr,
 		Mode:        ModeStandalone,
-		DialTimeout: 10 * time.Second,
-		DistLockTTL: 5 * time.Second,
+		DialTimeout: testtime.SelectAsyncSettle,
+		DistLockTTL: testtime.EventuallyLong,
 	})
 	require.NoError(t, err, "create redis client")
 
@@ -88,7 +89,7 @@ func TestIntegration_CacheSetGetDelete(t *testing.T) {
 	rdb := client.cmdable()
 
 	// SET
-	err := rdb.Set(ctx, "test:key", "hello", 30*time.Second).Err()
+	err := rdb.Set(ctx, "test:key", "hello", testtime.CtxLong).Err()
 	require.NoError(t, err, "SET should succeed")
 
 	// GET
@@ -117,7 +118,7 @@ func TestIntegration_IdempotencyClaimer(t *testing.T) {
 	key := "idem:integration:test:001"
 
 	// First claim should acquire.
-	state, receipt, err := claimer.Claim(ctx, key, 5*time.Minute, 10*time.Second)
+	state, receipt, err := claimer.Claim(ctx, key, testtime.D5min, testtime.SelectAsyncSettle)
 	require.NoError(t, err)
 	assert.Equal(t, idempotency.ClaimAcquired, state)
 	require.NotNil(t, receipt)
@@ -127,7 +128,7 @@ func TestIntegration_IdempotencyClaimer(t *testing.T) {
 	require.NoError(t, err, "Commit should succeed")
 
 	// Second claim should return ClaimDone.
-	state, receipt2, err := claimer.Claim(ctx, key, 5*time.Minute, 10*time.Second)
+	state, receipt2, err := claimer.Claim(ctx, key, testtime.D5min, testtime.SelectAsyncSettle)
 	require.NoError(t, err)
 	assert.Equal(t, idempotency.ClaimDone, state)
 	assert.NotNil(t, receipt2)
@@ -145,12 +146,12 @@ func TestIntegration_RedisDriver_SetNX_Contention(t *testing.T) {
 	key := "integ:drv:contention:" + t.Name()
 
 	// First SetNX succeeds.
-	ok, err := drv.SetNX(ctx, key, "token-A", 30*time.Second)
+	ok, err := drv.SetNX(ctx, key, "token-A", testtime.CtxLong)
 	require.NoError(t, err)
 	require.True(t, ok, "first SetNX should succeed")
 
 	// Second SetNX fails while first holder is alive.
-	ok2, err2 := drv.SetNX(ctx, key, "token-B", 30*time.Second)
+	ok2, err2 := drv.SetNX(ctx, key, "token-B", testtime.CtxLong)
 	require.NoError(t, err2)
 	assert.False(t, ok2, "second SetNX should fail while key is held")
 
@@ -159,7 +160,7 @@ func TestIntegration_RedisDriver_SetNX_Contention(t *testing.T) {
 	require.NoError(t, err)
 
 	// Third SetNX succeeds after Release.
-	ok3, err3 := drv.SetNX(ctx, key, "token-C", 30*time.Second)
+	ok3, err3 := drv.SetNX(ctx, key, "token-C", testtime.CtxLong)
 	require.NoError(t, err3)
 	assert.True(t, ok3, "SetNX after Release should succeed")
 
@@ -176,7 +177,7 @@ func TestIntegration_RedisDriver_Release_CancelledCtx(t *testing.T) {
 	key := "integ:drv:cancel-ctx:" + t.Name()
 	ctx := context.Background()
 
-	ok, err := drv.SetNX(ctx, key, "token-A", 30*time.Second)
+	ok, err := drv.SetNX(ctx, key, "token-A", testtime.CtxLong)
 	require.NoError(t, err)
 	require.True(t, ok)
 

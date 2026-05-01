@@ -20,6 +20,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/query"
+	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/auth/refresh"
 	refreshmem "github.com/ghbvf/gocell/runtime/auth/refresh/memstore"
@@ -57,7 +58,7 @@ var (
 )
 
 func mustIssuer(ks *auth.KeySet) *auth.JWTIssuer {
-	i, err := auth.NewJWTIssuer(ks, "gocell-accesscore", 15*time.Minute,
+	i, err := auth.NewJWTIssuer(ks, "gocell-accesscore", testtime.D15min,
 		auth.WithIssuerAudiencesFromSlice([]string{"gocell"}))
 	if err != nil {
 		panic("test setup: " + err.Error())
@@ -83,7 +84,7 @@ func mustCursorCodec() *query.CursorCodec {
 
 func newTestRefreshStore() refresh.Store {
 	clock := storetest.NewFakeClock(time.Now())
-	return refreshmem.MustNew(refresh.Policy{ReuseInterval: 2 * time.Second, MaxAge: time.Hour}, clock, nil)
+	return refreshmem.MustNew(refresh.Policy{ReuseInterval: testtime.D2s, MaxAge: time.Hour}, clock, nil)
 }
 
 func newTestCell() *AccessCore {

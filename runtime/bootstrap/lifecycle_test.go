@@ -11,9 +11,40 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// lifecycleBlockHook is the duration the blocking hook waits (100ms), longer than its timeout.
+const lifecycleBlockHook = testtime.D100ms
+
+// lifecycleHookTimeout is the per-hook StartTimeout in PerHookStartTimeout (50ms).
+const lifecycleHookTimeout = testtime.MediumPoll
+
+// lifecycleSlowBlock is the duration a slow OnStop blocks (200ms).
+const lifecycleSlowBlock = testtime.D200ms
+
+// lifecycleStopTimeout is the StopTimeout for the slow-stopper hook (50ms).
+const lifecycleStopTimeout = testtime.MediumPoll
+
+// lifecycleStartTimeout1s is the StartTimeout for slow-stopper OnStart.
+const lifecycleStartTimeout1s = testtime.D1s
+
+// lifecycleStopElapsedMax is the generous elapsed ceiling in StopTimeoutIndependent.
+const lifecycleStopElapsedMax = testtime.D150ms
+
+// lifecycleDefaultTimeout20ms is the DefaultStartTimeout used in warn tests.
+const lifecycleDefaultTimeout20ms = 20 * time.Millisecond
+
+// lifecycleSleep18ms is the sleep duration for the near-timeout hook.
+const lifecycleSleep18ms = 18 * time.Millisecond
+
+// lifecycleDefaultTimeout1ns is the tiny DefaultStartTimeout to prevent slow-warn on -1 timeout.
+const lifecycleDefaultTimeout1ns = 1 * time.Nanosecond
+
+// lifecycleNoTimeout is the sentinel value (−1) that disables per-hook timeouts.
+const lifecycleNoTimeout time.Duration = -1
 
 // TestLifecycle_EmptyStartStop_NoError — zero hooks, Start+Stop return nil.
 func TestLifecycle_EmptyStartStop_NoError(t *testing.T) {
@@ -206,7 +237,7 @@ func TestLifecycle_PerHookStartTimeout(t *testing.T) {
 			select {
 			case <-ctx.Done():
 				return ctx.Err()
-			case <-time.After(100 * time.Millisecond):
+			case <-time.After(lifecycleBlockHook):
 				return nil
 			}
 		},
@@ -214,7 +245,7 @@ func TestLifecycle_PerHookStartTimeout(t *testing.T) {
 			stopCalled.Store(true)
 			return nil
 		},
-		StartTimeout: 50 * time.Millisecond,
+		StartTimeout: lifecycleHookTimeout,
 	})
 
 	ctx := context.Background()
@@ -238,12 +269,12 @@ func TestLifecycle_PerHookStopTimeoutIndependent(t *testing.T) {
 			select {
 			case <-ctx.Done():
 				return ctx.Err()
-			case <-time.After(200 * time.Millisecond):
+			case <-time.After(lifecycleSlowBlock):
 				return nil
 			}
 		},
-		StartTimeout: 1 * time.Second,
-		StopTimeout:  50 * time.Millisecond,
+		StartTimeout: lifecycleStartTimeout1s,
+		StopTimeout:  lifecycleStopTimeout,
 	})
 
 	ctx := context.Background()
@@ -256,7 +287,7 @@ func TestLifecycle_PerHookStopTimeoutIndependent(t *testing.T) {
 	require.Error(t, err, "Stop should return error on hook stop timeout")
 	require.ErrorIs(t, err, context.DeadlineExceeded)
 	// Should complete well before the full 200ms block; allow generous 150ms.
-	assert.Less(t, elapsed, 150*time.Millisecond, "Stop took too long: %v (expected < 150ms)", elapsed)
+	assert.Less(t, elapsed, lifecycleStopElapsedMax, "Stop took too long: %v (expected < 150ms)", elapsed)
 }
 
 // TestLifecycle_AppendAfterStart_ReturnsError — Append after Start returns
@@ -324,8 +355,8 @@ func TestLifecycle_NegativeTimeout_NoDeadline(t *testing.T) {
 			return nil
 		},
 		OnStop:       func(_ context.Context) error { return nil },
-		StartTimeout: -1, // negative = no timeout
-		StopTimeout:  -1,
+		StartTimeout: lifecycleNoTimeout, // negative = no timeout
+		StopTimeout:  lifecycleNoTimeout,
 	})
 
 	ctx := context.Background()
@@ -420,14 +451,14 @@ func TestLifecycle_OnStartNearTimeoutWarns(t *testing.T) {
 	logger := slog.New(slog.NewJSONHandler(&buf, nil))
 
 	lc := NewLifecycle(LifecycleConfig{
-		DefaultStartTimeout: 20 * time.Millisecond,
+		DefaultStartTimeout: lifecycleDefaultTimeout20ms,
 		Logger:              logger,
 	})
 	require.NoError(t, lc.Append(Hook{
 		CellID: "accesscore",
 		Name:   "accesscore.initial-admin-bootstrap",
 		OnStart: func(_ context.Context) error {
-			time.Sleep(18 * time.Millisecond)
+			time.Sleep(lifecycleSleep18ms)
 			return nil
 		},
 	}))
@@ -449,13 +480,13 @@ func TestLifecycle_OnStartNearTimeoutWarnsWithoutCellID(t *testing.T) {
 	logger := slog.New(slog.NewJSONHandler(&buf, nil))
 
 	lc := NewLifecycle(LifecycleConfig{
-		DefaultStartTimeout: 20 * time.Millisecond,
+		DefaultStartTimeout: lifecycleDefaultTimeout20ms,
 		Logger:              logger,
 	})
 	require.NoError(t, lc.Append(Hook{
 		Name: "composition-root.hook",
 		OnStart: func(_ context.Context) error {
-			time.Sleep(18 * time.Millisecond)
+			time.Sleep(lifecycleSleep18ms)
 			return nil
 		},
 	}))
@@ -473,16 +504,16 @@ func TestLifecycle_NegativeStartTimeoutSkipsSlowWarn(t *testing.T) {
 	logger := slog.New(slog.NewJSONHandler(&buf, nil))
 
 	lc := NewLifecycle(LifecycleConfig{
-		DefaultStartTimeout: 1 * time.Nanosecond,
+		DefaultStartTimeout: lifecycleDefaultTimeout1ns,
 		Logger:              logger,
 	})
 	require.NoError(t, lc.Append(Hook{
 		Name: "no-deadline",
 		OnStart: func(_ context.Context) error {
-			time.Sleep(time.Millisecond)
+			time.Sleep(testtime.D1ms)
 			return nil
 		},
-		StartTimeout: -1,
+		StartTimeout: lifecycleNoTimeout,
 	}))
 	require.NoError(t, lc.Start(context.Background()))
 	rec := findLifecycleLogRecord(t, &buf, "hook.start_slow")

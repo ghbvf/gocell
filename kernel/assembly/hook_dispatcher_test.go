@@ -9,6 +9,7 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/observability/metrics"
+	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/goleak"
@@ -119,17 +120,17 @@ func TestHookDispatcher_SlowSinkDoesNotBlockEmit(t *testing.T) {
 	// The dispatcher must return immediately; only the observer goroutine
 	// is blocked.
 	bo := newBlockingObserver()
-	d := newHookDispatcher(dispatcherConfig{Observer: bo, QueueSize: 8, SinkTimeout: 10 * time.Millisecond})
+	d := newHookDispatcher(dispatcherConfig{Observer: bo, QueueSize: 8, SinkTimeout: testtime.D10ms})
 	t.Cleanup(func() {
 		bo.release()
-		d.stop(500 * time.Millisecond)
+		d.stop(testtime.D500ms)
 	})
 
 	start := time.Now()
 	for range 5 {
 		d.emit(cell.HookEvent{CellID: "slow", Hook: cell.HookBeforeStart})
 	}
-	assert.Less(t, time.Since(start), 100*time.Millisecond,
+	assert.Less(t, time.Since(start), testtime.D100ms,
 		"emit must be non-blocking even when the sink is hung")
 }
 
@@ -140,10 +141,10 @@ func TestHookDispatcher_OverflowDropsAndCounts(t *testing.T) {
 	// one DropReasonQueueFull is certain regardless of scheduler jitter.
 	bo := newBlockingObserver()
 	cv := newSpyCounterVec()
-	d := newHookDispatcher(dispatcherConfig{Observer: bo, QueueSize: 2, SinkTimeout: time.Second, Provider: &spyProvider{cv: cv}})
+	d := newHookDispatcher(dispatcherConfig{Observer: bo, QueueSize: 2, SinkTimeout: testtime.D1s, Provider: &spyProvider{cv: cv}})
 	t.Cleanup(func() {
 		bo.release()
-		d.stop(2 * time.Second)
+		d.stop(testtime.D2s)
 	})
 
 	// Prime the pipeline: emit one event and wait until the worker has
@@ -151,7 +152,7 @@ func TestHookDispatcher_OverflowDropsAndCounts(t *testing.T) {
 	// drive overflow.
 	d.emit(cell.HookEvent{CellID: "prime", Hook: cell.HookBeforeStart})
 	require.Eventually(t, func() bool { return bo.received.Load() >= 1 },
-		2*time.Second, 5*time.Millisecond, "primer event should reach observer")
+		testtime.EventuallyDefault, testtime.FastPoll, "primer event should reach observer")
 
 	for range 100 {
 		d.emit(cell.HookEvent{CellID: "overflow", Hook: cell.HookBeforeStart})
@@ -166,16 +167,16 @@ func TestHookDispatcher_OverflowDropsAndCounts(t *testing.T) {
 func TestHookDispatcher_PerSinkTimeoutCountsAndContinues(t *testing.T) {
 	bo := newBlockingObserver()
 	cv := newSpyCounterVec()
-	d := newHookDispatcher(dispatcherConfig{Observer: bo, QueueSize: 8, SinkTimeout: 20 * time.Millisecond, Provider: &spyProvider{cv: cv}})
+	d := newHookDispatcher(dispatcherConfig{Observer: bo, QueueSize: 8, SinkTimeout: testtime.D20ms, Provider: &spyProvider{cv: cv}})
 	t.Cleanup(func() {
 		bo.release()
-		d.stop(500 * time.Millisecond)
+		d.stop(testtime.D500ms)
 	})
 
 	d.emit(cell.HookEvent{CellID: "slow-sink", Hook: cell.HookBeforeStart})
 
 	require.Eventually(t, func() bool { return cv.count(DropReasonSinkTimeout) >= 1 },
-		200*time.Millisecond, 5*time.Millisecond, "sink timeout must be counted")
+		testtime.D200ms, testtime.FastPoll, "sink timeout must be counted")
 }
 
 // panicObserver panics on every OnHookEvent — simulates a buggy observer.
@@ -185,11 +186,16 @@ func (panicObserver) OnHookEvent(cell.HookEvent) { panic("sink crashed") }
 
 func TestHookDispatcher_PanicIsCountedAndIsolated(t *testing.T) {
 	cv := newSpyCounterVec()
-	d := newHookDispatcher(dispatcherConfig{Observer: panicObserver{}, QueueSize: 8, SinkTimeout: time.Second, Provider: &spyProvider{cv: cv}})
-	t.Cleanup(func() { d.stop(500 * time.Millisecond) })
+	d := newHookDispatcher(dispatcherConfig{
+		Observer:    panicObserver{},
+		QueueSize:   8,
+		SinkTimeout: testtime.D1s,
+		Provider:    &spyProvider{cv: cv},
+	})
+	t.Cleanup(func() { d.stop(testtime.D500ms) })
 
 	d.emit(cell.HookEvent{CellID: "crash", Hook: cell.HookBeforeStart})
-	require.True(t, d.flush(500*time.Millisecond), "flush should succeed even after sink panic")
+	require.True(t, d.flush(testtime.D500ms), "flush should succeed even after sink panic")
 
 	assert.Equal(t, 1, cv.count(DropReasonObserverPanic),
 		"observer panic should be counted")
@@ -197,7 +203,7 @@ func TestHookDispatcher_PanicIsCountedAndIsolated(t *testing.T) {
 	// Subsequent events must still be delivered via dispatchOne (the panic
 	// is contained in the per-event goroutine).
 	d.emit(cell.HookEvent{CellID: "after-crash", Hook: cell.HookBeforeStart})
-	require.True(t, d.flush(500*time.Millisecond))
+	require.True(t, d.flush(testtime.D500ms))
 	assert.Equal(t, 2, cv.count(DropReasonObserverPanic),
 		"subsequent events continue to be dispatched (and continue to panic)")
 }
@@ -222,27 +228,27 @@ func (c *collectObserver) len() int {
 
 func TestHookDispatcher_StopDrainsPending(t *testing.T) {
 	obs := &collectObserver{}
-	d := newHookDispatcher(dispatcherConfig{Observer: obs, QueueSize: 32, SinkTimeout: time.Second})
+	d := newHookDispatcher(dispatcherConfig{Observer: obs, QueueSize: 32, SinkTimeout: testtime.D1s})
 
 	for i := range 10 {
 		d.emit(cell.HookEvent{CellID: "drain", Hook: cell.HookBeforeStart, Duration: time.Duration(i)})
 	}
-	d.stop(2 * time.Second)
+	d.stop(testtime.D2s)
 
 	assert.Equal(t, 10, obs.len(), "stop(drainTimeout) must drain all in-flight events")
 }
 
 func TestHookDispatcher_StopIsIdempotent(t *testing.T) {
-	d := newHookDispatcher(dispatcherConfig{Observer: cell.NopHookObserver{}, QueueSize: 4, SinkTimeout: time.Second})
-	d.stop(200 * time.Millisecond)
-	d.stop(200 * time.Millisecond) // second call must be a no-op, no panic
+	d := newHookDispatcher(dispatcherConfig{Observer: cell.NopHookObserver{}, QueueSize: 4, SinkTimeout: testtime.D1s})
+	d.stop(testtime.D200ms)
+	d.stop(testtime.D200ms) // second call must be a no-op, no panic
 }
 
 func TestHookDispatcher_FlushOnIdleReturnsTrue(t *testing.T) {
-	d := newHookDispatcher(dispatcherConfig{Observer: cell.NopHookObserver{}, QueueSize: 8, SinkTimeout: time.Second})
-	t.Cleanup(func() { d.stop(200 * time.Millisecond) })
+	d := newHookDispatcher(dispatcherConfig{Observer: cell.NopHookObserver{}, QueueSize: 8, SinkTimeout: testtime.D1s})
+	t.Cleanup(func() { d.stop(testtime.D200ms) })
 
-	require.True(t, d.flush(500*time.Millisecond), "flush on idle dispatcher must succeed")
+	require.True(t, d.flush(testtime.D500ms), "flush on idle dispatcher must succeed")
 }
 
 // TestHookDispatcher_EmitAfterStopCountsQueueFull pins the recovery
@@ -254,10 +260,10 @@ func TestHookDispatcher_EmitAfterStopCountsQueueFull(t *testing.T) {
 	cv := newSpyCounterVec()
 	d := newHookDispatcher(dispatcherConfig{
 		Observer: cell.NopHookObserver{}, QueueSize: 4,
-		SinkTimeout: time.Second, Provider: &spyProvider{cv: cv},
+		SinkTimeout: testtime.D1s, Provider: &spyProvider{cv: cv},
 	})
 
-	d.stop(200 * time.Millisecond)
+	d.stop(testtime.D200ms)
 	// At least one emit after stop must still not panic; drop is counted.
 	d.emit(cell.HookEvent{CellID: "after-stop", Hook: cell.HookBeforeStart})
 
@@ -272,10 +278,10 @@ func TestHookDispatcher_EmitAfterStopCountsQueueFull(t *testing.T) {
 // for). Returning false here would make clean-shutdown callers block or
 // retry for no gain.
 func TestHookDispatcher_FlushAfterStopReturnsTrue(t *testing.T) {
-	d := newHookDispatcher(dispatcherConfig{Observer: cell.NopHookObserver{}, QueueSize: 4, SinkTimeout: time.Second})
-	d.stop(200 * time.Millisecond)
+	d := newHookDispatcher(dispatcherConfig{Observer: cell.NopHookObserver{}, QueueSize: 4, SinkTimeout: testtime.D1s})
+	d.stop(testtime.D200ms)
 
-	require.True(t, d.flush(200*time.Millisecond),
+	require.True(t, d.flush(testtime.D200ms),
 		"flush after stop must return true (channel drained, fence is trivially satisfied)")
 }
 
@@ -285,25 +291,25 @@ func TestHookDispatcher_FlushAfterStopReturnsTrue(t *testing.T) {
 // shared-timer behavior documented in flush().
 func TestHookDispatcher_FlushTimeoutThenSuccess(t *testing.T) {
 	bo := newBlockingObserver()
-	d := newHookDispatcher(dispatcherConfig{Observer: bo, QueueSize: 2, SinkTimeout: time.Second})
+	d := newHookDispatcher(dispatcherConfig{Observer: bo, QueueSize: 2, SinkTimeout: testtime.D1s})
 	t.Cleanup(func() {
 		bo.release()
-		d.stop(500 * time.Millisecond)
+		d.stop(testtime.D500ms)
 	})
 
 	d.emit(cell.HookEvent{CellID: "slow", Hook: cell.HookBeforeStart})
 	require.Eventually(t, func() bool { return bo.received.Load() >= 1 },
-		time.Second, 5*time.Millisecond, "worker should pick up the primed event")
+		testtime.EventuallyShort, testtime.FastPoll, "worker should pick up the primed event")
 
 	// Worker is blocked on the sink; flush with a 10ms budget cannot
 	// reach the fence in time.
-	if d.flush(10 * time.Millisecond) {
+	if d.flush(testtime.D10ms) {
 		t.Fatal("flush with insufficient budget should return false")
 	}
 
 	bo.release()
 	// Now the worker unblocks; a generous flush must succeed.
-	require.True(t, d.flush(2*time.Second),
+	require.True(t, d.flush(testtime.D2s),
 		"flush after sink release should succeed")
 }
 

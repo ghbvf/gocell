@@ -10,6 +10,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 )
 
 // TestWrapCtxSafe_ReturnsOnCtxDone_InnerIgnoresCtx is the contract test for
@@ -51,9 +53,9 @@ func TestWrapCtxSafe_ReturnsOnCtxDone_InnerIgnoresCtx(t *testing.T) {
 	case r := <-resCh:
 		assert.ErrorIs(t, r.err, context.Canceled,
 			"wrapped Checker must return ctx.Err on cancel; got %v", r.err)
-		assert.Less(t, r.elapsed, 100*time.Millisecond,
+		assert.Less(t, r.elapsed, testtime.SlowPoll,
 			"wrapped Checker must return promptly after cancel; got %v", r.elapsed)
-	case <-time.After(500 * time.Millisecond):
+	case <-time.After(testtime.D500ms):
 		t.Fatalf("wrapped Checker did not return within 500ms of ctx cancel")
 	}
 }
@@ -75,7 +77,7 @@ func TestWrapCtxSafe_PropagatesError_WhenInnerReturnsFirst(t *testing.T) {
 				select {
 				case <-ctx.Done():
 					return ctx.Err()
-				case <-time.After(5 * time.Millisecond):
+				case <-time.After(testtime.FastPoll):
 					return nil
 				}
 			},

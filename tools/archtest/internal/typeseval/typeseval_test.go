@@ -124,9 +124,27 @@ func init() { fmt.Println(Topic) }
 	assert.False(t, ok, "nil TypesInfo should not panic")
 }
 
+// cacheKey rebuilds the SharedResolver cache key for test cleanup. Tests in
+// this file all pass nil tags, so the cache key collapses to the simpler
+// shape (root + tests-flag + empty + patterns).
+func cacheKey(root string, tests bool, patterns ...string) string {
+	testsFlag := "0"
+	if tests {
+		testsFlag = "1"
+	}
+	out := root + "\x00" + testsFlag + "\x00" + "\x00"
+	for i, p := range patterns {
+		if i > 0 {
+			out += "\x00"
+		}
+		out += p
+	}
+	return out
+}
+
 func TestLoadPackages_HappyPath(t *testing.T) {
 	root := findArchTestModuleRoot(t)
-	pkgs, errs, err := LoadPackages(root, "./tools/archtest/internal/typeseval/...")
+	pkgs, errs, err := LoadPackages(root, false, nil, "./tools/archtest/internal/typeseval/...")
 	require.NoError(t, err)
 	require.Empty(t, errs, "load errors: %v", errs)
 	require.NotEmpty(t, pkgs)
@@ -143,7 +161,7 @@ func TestLoadPackages_HappyPath(t *testing.T) {
 
 func TestLoadPackages_PropagatesErrors(t *testing.T) {
 	root := findArchTestModuleRoot(t)
-	_, errs, err := LoadPackages(root, "./tools/archtest/testdata/nonexistent/...")
+	_, errs, err := LoadPackages(root, false, nil, "./tools/archtest/testdata/nonexistent/...")
 	require.NoError(t, err, "loader itself should not error on missing pattern")
 	assert.NotEmpty(t, errs, "missing pattern surfaces packages.Error entries via Visit")
 	// Each error message must be prefixed with the modRoot for easy diagnosis.
@@ -152,18 +170,54 @@ func TestLoadPackages_PropagatesErrors(t *testing.T) {
 	}
 }
 
+func TestLoadPackages_TestsFlagIncludesTestFiles(t *testing.T) {
+	root := findArchTestModuleRoot(t)
+
+	// With tests=false, *_test.go files of typeseval are not loaded.
+	pkgsNoTests, errs, err := LoadPackages(root, false, nil, "./tools/archtest/internal/typeseval/...")
+	require.NoError(t, err)
+	require.Empty(t, errs)
+	hasTestVariantWhenOff := false
+	for _, p := range pkgsNoTests {
+		// Test variant package IDs typically look like "<id> [<id>.test]" or
+		// end with "_test" / ".test"; production-only load should not include them.
+		if p.Name == "typeseval" {
+			for _, f := range p.GoFiles {
+				if filepath.Base(f) == "typeseval_test.go" {
+					hasTestVariantWhenOff = true
+				}
+			}
+		}
+	}
+	assert.False(t, hasTestVariantWhenOff, "tests=false must not include _test.go files in GoFiles")
+
+	// With tests=true, the test variant of typeseval is loaded and includes the test file.
+	pkgsTests, errs, err := LoadPackages(root, true, nil, "./tools/archtest/internal/typeseval/...")
+	require.NoError(t, err)
+	require.Empty(t, errs)
+	hasTestFile := false
+	for _, p := range pkgsTests {
+		for _, f := range p.GoFiles {
+			if filepath.Base(f) == "typeseval_test.go" {
+				hasTestFile = true
+			}
+		}
+	}
+	assert.True(t, hasTestFile, "tests=true must load typeseval_test.go via test variant")
+}
+
 func TestSharedResolver_Singleton(t *testing.T) {
 	root := findArchTestModuleRoot(t)
+	pattern := "./tools/archtest/internal/typeseval/..."
 	t.Cleanup(func() {
 		sharedMu.Lock()
-		key := root + "\x00" + "./tools/archtest/internal/typeseval/..."
-		delete(sharedCache, key)
+		delete(sharedCache, cacheKey(root, false, pattern))
 		sharedMu.Unlock()
 	})
 
-	r1, err := SharedResolver(root, "./tools/archtest/internal/typeseval/...")
+	r1, err := SharedResolver(root, false, nil, pattern)
 	require.NoError(t, err)
-	r2, err := SharedResolver(root, "./tools/archtest/internal/typeseval/...")
+	r2, err := SharedResolver(root, false, nil, pattern)
 	require.NoError(t, err)
 	assert.Same(t, r1, r2, "SharedResolver should return cached singleton for same key")
 }
@@ -174,7 +228,7 @@ func TestSharedResolver_Singleton(t *testing.T) {
 func TestSharedResolver_ConcurrentInit(t *testing.T) {
 	root := findArchTestModuleRoot(t)
 	pattern := "./tools/archtest/internal/typeseval/..."
-	key := root + "\x00" + pattern
+	key := cacheKey(root, false, pattern)
 
 	// Pre-clean so this test always exercises the miss path.
 	sharedMu.Lock()
@@ -195,7 +249,7 @@ func TestSharedResolver_ConcurrentInit(t *testing.T) {
 	for i := range N {
 		go func() {
 			defer wg.Done()
-			results[i], errs[i] = SharedResolver(root, pattern)
+			results[i], errs[i] = SharedResolver(root, false, nil, pattern)
 		}()
 	}
 	wg.Wait()
@@ -215,8 +269,8 @@ func TestSharedResolver_DifferentKeysIsolated(t *testing.T) {
 	root := findArchTestModuleRoot(t)
 	patternA := "./tools/archtest/internal/typeseval/..."
 	patternB := "./pkg/..."
-	keyA := root + "\x00" + patternA
-	keyB := root + "\x00" + patternB
+	keyA := cacheKey(root, false, patternA)
+	keyB := cacheKey(root, false, patternB)
 
 	// Pre-clean to avoid cross-test pollution from the Singleton test.
 	sharedMu.Lock()
@@ -230,9 +284,9 @@ func TestSharedResolver_DifferentKeysIsolated(t *testing.T) {
 		sharedMu.Unlock()
 	})
 
-	rA, err := SharedResolver(root, patternA)
+	rA, err := SharedResolver(root, false, nil, patternA)
 	require.NoError(t, err)
-	rB, err := SharedResolver(root, patternB)
+	rB, err := SharedResolver(root, false, nil, patternB)
 	require.NoError(t, err)
 
 	assert.NotSame(t, rA, rB, "different patterns must return distinct *Resolver instances")
@@ -243,6 +297,33 @@ func TestSharedResolver_DifferentKeysIsolated(t *testing.T) {
 	assert.NotEqual(t, namesA, namesB, "resolvers with different patterns should have different package sets")
 }
 
+// TestSharedResolver_TestsFlagDistinctCacheKey verifies that toggling the
+// tests flag yields a distinct cache entry, so a tests=false load does not
+// inadvertently serve a tests=true caller (or vice versa).
+func TestSharedResolver_TestsFlagDistinctCacheKey(t *testing.T) {
+	root := findArchTestModuleRoot(t)
+	pattern := "./tools/archtest/internal/typeseval/..."
+	keyOff := cacheKey(root, false, pattern)
+	keyOn := cacheKey(root, true, pattern)
+
+	sharedMu.Lock()
+	delete(sharedCache, keyOff)
+	delete(sharedCache, keyOn)
+	sharedMu.Unlock()
+	t.Cleanup(func() {
+		sharedMu.Lock()
+		delete(sharedCache, keyOff)
+		delete(sharedCache, keyOn)
+		sharedMu.Unlock()
+	})
+
+	rOff, err := SharedResolver(root, false, nil, pattern)
+	require.NoError(t, err)
+	rOn, err := SharedResolver(root, true, nil, pattern)
+	require.NoError(t, err)
+	assert.NotSame(t, rOff, rOn, "tests=false and tests=true must produce distinct cache entries")
+}
+
 // TestSharedResolver_FailureNotCached verifies that a failed SharedResolver
 // call does not poison the cache: a subsequent call with the same key must
 // also attempt to load (and fail again), not return a nil *Resolver silently.
@@ -250,7 +331,7 @@ func TestSharedResolver_FailureNotCached(t *testing.T) {
 	root := findArchTestModuleRoot(t)
 	// A pattern that will never match any package in the module.
 	badPattern := "./tools/archtest/testdata/nonexistent/..."
-	key := root + "\x00" + badPattern
+	key := cacheKey(root, false, badPattern)
 
 	// Pre-clean so this test always exercises the miss path.
 	sharedMu.Lock()
@@ -263,7 +344,7 @@ func TestSharedResolver_FailureNotCached(t *testing.T) {
 	})
 
 	// First call: must fail.
-	r1, err1 := SharedResolver(root, badPattern)
+	r1, err1 := SharedResolver(root, false, nil, badPattern)
 	assert.Nil(t, r1, "first call with bad pattern should return nil resolver")
 	assert.Error(t, err1, "first call with bad pattern should return an error")
 
@@ -274,7 +355,7 @@ func TestSharedResolver_FailureNotCached(t *testing.T) {
 	assert.False(t, cached, "failed SharedResolver must not write to sharedCache")
 
 	// Second call with same key: must also fail (not return a silent nil).
-	r2, err2 := SharedResolver(root, badPattern)
+	r2, err2 := SharedResolver(root, false, nil, badPattern)
 	assert.Nil(t, r2, "second call with bad pattern should still return nil resolver")
 	assert.Error(t, err2, "failure result must not be cached — second call must also return an error")
 }

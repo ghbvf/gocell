@@ -16,6 +16,13 @@ import (
 	"github.com/ghbvf/gocell/pkg/query"
 )
 
+const (
+	// configD2h is used for seeding time-sorted config entries 2 hours apart.
+	configD2h = 2 * time.Hour
+	// configNs100 is used in sub-second cursor precision tests.
+	configNs100 = 100 * time.Nanosecond
+)
+
 func TestConfigRepository_Create(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -273,7 +280,7 @@ func TestConfigRepository_List_SortByCreatedAt(t *testing.T) {
 
 	require.NoError(t, repo.Create(ctx, &domain.ConfigEntry{
 		ID: "cfg-1", Key: "k1", Value: "v1", Version: 1,
-		CreatedAt: base.Add(2 * time.Hour), UpdatedAt: base,
+		CreatedAt: base.Add(configD2h), UpdatedAt: base,
 	}))
 	require.NoError(t, repo.Create(ctx, &domain.ConfigEntry{
 		ID: "cfg-2", Key: "k2", Value: "v2", Version: 1,
@@ -301,7 +308,7 @@ func TestConfigRepository_List_SortByUpdatedAt(t *testing.T) {
 
 	require.NoError(t, repo.Create(ctx, &domain.ConfigEntry{
 		ID: "cfg-1", Key: "k1", Value: "v1", Version: 1,
-		CreatedAt: base, UpdatedAt: base.Add(2 * time.Hour),
+		CreatedAt: base, UpdatedAt: base.Add(configD2h),
 	}))
 	require.NoError(t, repo.Create(ctx, &domain.ConfigEntry{
 		ID: "cfg-2", Key: "k2", Value: "v2", Version: 1,
@@ -531,7 +538,7 @@ func TestConfigRepository_List_SubsecondPrecision_CreatedAt(t *testing.T) {
 		}))
 	}
 
-	cursorTS := base.Add(100 * time.Nanosecond).Format(time.RFC3339Nano)
+	cursorTS := base.Add(configNs100).Format(time.RFC3339Nano)
 	params := query.ListParams{
 		Limit:        10,
 		CursorValues: []any{cursorTS, "id-1"},
@@ -560,7 +567,7 @@ func TestConfigRepository_List_SubsecondPrecision_UpdatedAt(t *testing.T) {
 	}
 
 	// DESC sort by updated_at, cursor at entry 1 (100ns).
-	cursorTS := base.Add(100 * time.Nanosecond).Format(time.RFC3339Nano)
+	cursorTS := base.Add(configNs100).Format(time.RFC3339Nano)
 	params := query.ListParams{
 		Limit:        10,
 		CursorValues: []any{cursorTS, "id-1"},
