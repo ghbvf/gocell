@@ -19,10 +19,10 @@ import (
 // ---------------------------------------------------------------------------
 
 type fakeTimer struct {
-	mu        sync.Mutex
-	fn        func()
-	cancelled bool
-	fired     bool
+	mu       sync.Mutex
+	fn       func()
+	canceled bool
+	fired    bool
 }
 
 // Stop implements Cancellable. Returns true if the timer was stopped before
@@ -30,17 +30,17 @@ type fakeTimer struct {
 func (t *fakeTimer) Stop() bool {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	if t.fired || t.cancelled {
+	if t.fired || t.canceled {
 		return false
 	}
-	t.cancelled = true
+	t.canceled = true
 	return true
 }
 
 // fire triggers the scheduled function synchronously (called by Advance).
 func (t *fakeTimer) fire() {
 	t.mu.Lock()
-	if t.cancelled || t.fired {
+	if t.canceled || t.fired {
 		t.mu.Unlock()
 		return
 	}
@@ -65,7 +65,7 @@ type fakeScheduler struct {
 	timerOne sync.Once
 }
 
-// newFakeScheduler constructs a fakeScheduler with an initialised timerCh.
+// newFakeScheduler constructs a fakeScheduler with an initialized timerCh.
 // Always use this constructor so timerCh is available before any goroutine
 // calls AfterFunc or waitForTimer.
 func newFakeScheduler() *fakeScheduler {
@@ -255,7 +255,7 @@ func TestCleaner_StopBeforeTTL_FilePersists(t *testing.T) {
 
 	cancel, done := startBackground(c)
 
-	// Wait deterministically for Start to register the timer before cancelling.
+	// Wait deterministically for Start to register the timer before canceling.
 	sched.waitForTimer(t)
 
 	// Stop before advancing time (timer never fires).

@@ -260,7 +260,7 @@ func TestRequireSelfOrRole_RoleMatch_Ok(t *testing.T) {
 
 // TestRequireAnyRole_EmptyUserSubject_Unauthorized verifies that a PrincipalUser
 // with an empty Subject is rejected with ErrAuthUnauthorized by RequireAnyRole
-// (G1.B authz-entry defence). This guards against JWTs with missing "sub" claims
+// (G1.B authz-entry defense). This guards against JWTs with missing "sub" claims
 // bypassing the primary authenticator check and reaching authz with empty subject.
 func TestRequireAnyRole_EmptyUserSubject_Unauthorized(t *testing.T) {
 	ctx := WithPrincipal(context.Background(), &Principal{
@@ -277,7 +277,7 @@ func TestRequireAnyRole_EmptyUserSubject_Unauthorized(t *testing.T) {
 
 // TestRequireSelfOrRole_EmptyUserSubject_Unauthorized verifies that a PrincipalUser
 // with an empty Subject is rejected with ErrAuthUnauthorized by RequireSelfOrRole
-// (G1.B authz-entry defence).
+// (G1.B authz-entry defense).
 func TestRequireSelfOrRole_EmptyUserSubject_Unauthorized(t *testing.T) {
 	ctx := WithPrincipal(context.Background(), &Principal{
 		Kind:    PrincipalUser,

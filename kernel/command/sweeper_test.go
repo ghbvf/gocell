@@ -471,7 +471,7 @@ func TestSweeper_Start_AckErrorForwardedToOnError(t *testing.T) {
 func TestSweeper_DefaultIntervalAndNow(t *testing.T) {
 	t.Parallel()
 	// Verify that zero Interval and nil Now don't panic during Start
-	// by cancelling immediately before any tick fires.
+	// by canceling immediately before any tick fires.
 	scanner := &mockScanner{}
 	q := &mockAckQueue{}
 
@@ -485,7 +485,7 @@ func TestSweeper_DefaultIntervalAndNow(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // cancel immediately — no ticks will fire
 
-	// Should return immediately without error (ctx already cancelled).
+	// Should return immediately without error (ctx already canceled).
 	err := s.Start(ctx)
 	assert.NoError(t, err)
 }

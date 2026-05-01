@@ -57,14 +57,14 @@ func (g *WorkerGroup) Add(w Worker) {
 
 // Start launches all workers concurrently. It blocks until all workers
 // return. If any worker returns a non-context error, all sibling workers are
-// cancelled via a shared context. The first error encountered is returned.
+// canceled via a shared context. The first error encountered is returned.
 //
 // Early-exit handling: a worker that returns nil while the group context is
-// still live has terminated its long-running loop without signalling failure
+// still live has terminated its long-running loop without signaling failure
 // — historically that produced a silent firstErr=nil. The group now records
 // kworker.ErrWorkerExitedEarly so callers can errors.Is-detect the abnormal
 // signal. Returns from a Stop or context cancellation propagate untouched
-// (errors.Is(err, context.Canceled) is honoured).
+// (errors.Is(err, context.Canceled) is honored).
 func (g *WorkerGroup) Start(ctx context.Context) error {
 	g.mu.Lock()
 	workers := make([]Worker, len(g.workers))

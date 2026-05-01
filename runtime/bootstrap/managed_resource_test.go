@@ -61,7 +61,7 @@ func newFakeWorker() *fakeWorker {
 
 func (w *fakeWorker) Start(ctx context.Context) error {
 	w.started = true
-	// Block until stopped or context cancelled.
+	// Block until stopped or context canceled.
 	select {
 	case <-ctx.Done():
 	case <-w.stopCh:
@@ -538,7 +538,7 @@ func TestRelay_AsManagedResource_TrippedBudget_Returns503(t *testing.T) {
 	waitForHealthy(t, addr)
 
 	// TM3: bootstrap WorkerGroup is the single startup path for the relay.
-	// Wait for the relay to reach the running state before asserting poll-budget behaviour.
+	// Wait for the relay to reach the running state before asserting poll-budget behavior.
 	select {
 	case <-relay.Ready():
 	case <-time.After(3 * time.Second):

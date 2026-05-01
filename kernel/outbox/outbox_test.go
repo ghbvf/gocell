@@ -63,7 +63,7 @@ func TestSubscriberWithMiddleware_Close_ForwardsCtx(t *testing.T) {
 }
 
 // TestSubscriberWithMiddleware_Close_PropagatesCtxErr verifies that when ctx
-// is already cancelled, the inner Close receives the cancelled ctx and can
+// is already canceled, the inner Close receives the canceled ctx and can
 // return early.
 func TestSubscriberWithMiddleware_Close_PropagatesCtxErr(t *testing.T) {
 	t.Parallel()

@@ -39,7 +39,7 @@ func (l Level) String() string {
 }
 
 // ParseLevel parses a string like "L0" or "L3" into a Level.
-// Returns errcode.ErrValidationFailed for unrecognised input.
+// Returns errcode.ErrValidationFailed for unrecognized input.
 func ParseLevel(s string) (Level, error) {
 	switch s {
 	case "L0":
@@ -98,7 +98,7 @@ const (
 )
 
 // ParseCellType parses a string into a CellType.
-// Returns errcode.ErrValidationFailed for unrecognised input.
+// Returns errcode.ErrValidationFailed for unrecognized input.
 func ParseCellType(s string) (CellType, error) {
 	switch s {
 	case "core":
@@ -114,7 +114,7 @@ func ParseCellType(s string) (CellType, error) {
 }
 
 // ParseContractKind parses a string into a ContractKind.
-// Returns errcode.ErrValidationFailed for unrecognised input.
+// Returns errcode.ErrValidationFailed for unrecognized input.
 func ParseContractKind(s string) (ContractKind, error) {
 	switch s {
 	case "http":
@@ -132,7 +132,7 @@ func ParseContractKind(s string) (ContractKind, error) {
 }
 
 // ParseContractRole parses a string into a ContractRole.
-// Returns errcode.ErrValidationFailed for unrecognised input.
+// Returns errcode.ErrValidationFailed for unrecognized input.
 func ParseContractRole(s string) (ContractRole, error) {
 	switch s {
 	case "serve":
@@ -158,7 +158,7 @@ func ParseContractRole(s string) (ContractRole, error) {
 }
 
 // ParseLifecycle parses a string into a Lifecycle.
-// Returns errcode.ErrValidationFailed for unrecognised input.
+// Returns errcode.ErrValidationFailed for unrecognized input.
 func ParseLifecycle(s string) (Lifecycle, error) {
 	switch s {
 	case "draft":

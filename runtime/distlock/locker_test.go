@@ -68,7 +68,7 @@ func TestLocker_TC1_HappyPath(t *testing.T) {
 
 	// Wait for manager to start and register the timer.
 	<-mgr(l).Started()
-	waitPendingTimers(t, fc, 1)
+	waitPendingTimers(t, fc)
 
 	// Advance to trigger renew (ttl * 0.5 = 5s).
 	fc.Advance(ttl / 2)
@@ -112,7 +112,7 @@ func TestLocker_TC2_RenewIntervalPrecision(t *testing.T) {
 	defer release()
 
 	<-mgr(l).Started()
-	waitPendingTimers(t, fc, 1)
+	waitPendingTimers(t, fc)
 
 	// Advance just short of the renew deadline.
 	fc.Advance(renewAt - time.Nanosecond)
@@ -164,7 +164,7 @@ func TestLocker_TC3_RenewError_LockLost(t *testing.T) {
 	<-mgr(l).Started()
 
 	// Wait until the manager has registered at least one timer (earliest heap entry).
-	waitPendingTimers(t, fc, 1)
+	waitPendingTimers(t, fc)
 
 	// Wait for both locks to appear in the snapshot before injecting the error.
 	snapshotDeadline := time.Now().Add(testTimeout)
@@ -201,7 +201,7 @@ func TestLocker_TC3_RenewError_LockLost(t *testing.T) {
 
 	// Sibling isolation: advance past key3b's next renewal window and verify
 	// that the manager still renews key3b (no error was injected for it).
-	waitPendingTimers(t, fc, 1) // key3b's timer should be registered
+	waitPendingTimers(t, fc) // key3b's timer should be registered
 	fc.Advance(time.Duration(float64(ttl) * 0.5))
 
 	// Wait for at least one more Renew call (key3b's renewal).
@@ -231,7 +231,7 @@ func TestLocker_TC4_RenewNotHeld_LockLost(t *testing.T) {
 	defer release()
 
 	<-mgr(l).Started()
-	waitPendingTimers(t, fc, 1)
+	waitPendingTimers(t, fc)
 
 	fd.SetNextRenewHeld(false)
 	fc.Advance(time.Duration(float64(ttl) * 0.5))
@@ -529,7 +529,7 @@ func TestLocker_TC10_LazyLifecycle(t *testing.T) {
 }
 
 // TestLocker_TC11_SmallTTLNoSpinLoop verifies that a small (but realistic) TTL
-// produces exactly one renew per FakeClock advance — no spin-loop behaviour.
+// produces exactly one renew per FakeClock advance — no spin-loop behavior.
 //
 // We use 500ms (not 1µs) because 1µs TTL is impractical under -race: the
 // FakeDriver's scheduler overhead alone exceeds 1µs, causing spurious expiries.
@@ -560,7 +560,7 @@ func TestLocker_TC11_SmallTTLNoSpinLoop(t *testing.T) {
 	// re-queues. We verify incrementally over 3 cycles.
 	for i := range 3 {
 		// Wait for the manager to register the timer before advancing the clock.
-		waitPendingTimers(t, fc, 1)
+		waitPendingTimers(t, fc)
 		prev := fd.Calls("Renew")
 		fc.Advance(renewAt)
 		waitForRenewL(t, l, fd, prev+1)
@@ -604,7 +604,7 @@ func TestLocker_TC12_DriftFactor(t *testing.T) {
 	defer release()
 
 	<-mgr(l).Started()
-	waitPendingTimers(t, fc, 1)
+	waitPendingTimers(t, fc)
 
 	// Verify the drift math: drift = ttl * driftFactor = 10s * 0.01 = 100ms.
 	drift := time.Duration(float64(ttl) * driftFactor)
@@ -643,7 +643,7 @@ func TestLocker_TC12_DriftFactor(t *testing.T) {
 	}
 
 	// Wait for manager to re-register the timer after the first renew.
-	waitPendingTimers(t, fc, 1)
+	waitPendingTimers(t, fc)
 
 	// Advancing again should trigger the second renew.
 	fc.Advance(time.Duration(float64(ttl) * renewFraction))
@@ -899,7 +899,7 @@ func TestLocker_ExtremeTTL_LongDuration(t *testing.T) {
 	defer release()
 
 	<-mgr(l).Started()
-	waitPendingTimers(t, fc, 1)
+	waitPendingTimers(t, fc)
 
 	// Advance just past the renew point.
 	fc.Advance(renewAt)
@@ -933,7 +933,7 @@ func TestLocker_ExtremeTTL_ShortDuration(t *testing.T) {
 
 	// Verify exactly one renew per Advance over 3 cycles.
 	for i := range 3 {
-		waitPendingTimers(t, fc, 1)
+		waitPendingTimers(t, fc)
 		prev := fd.Calls("Renew")
 		fc.Advance(renewAt)
 		waitForRenewL(t, l, fd, prev+1)
@@ -962,7 +962,7 @@ func TestLocker_TC13_TransientRenewError_ThenSuccess(t *testing.T) {
 	defer release()
 
 	<-mgr(l).Started()
-	waitPendingTimers(t, fc, 1)
+	waitPendingTimers(t, fc)
 
 	// Inject single-shot error — first attempt fails, second succeeds.
 	fd.SetNextRenewError(locktest.ErrDriverIO)
@@ -1008,7 +1008,7 @@ func TestLocker_TC14_BudgetExhausted_LockLost(t *testing.T) {
 	defer release()
 
 	<-mgr(l).Started()
-	waitPendingTimers(t, fc, 1)
+	waitPendingTimers(t, fc)
 
 	// Inject persistent error — all attempts fail.
 	fd.SetRenewErrorPersistent(locktest.ErrDriverIO)
@@ -1051,7 +1051,7 @@ func TestLocker_TC15_PermanentOwnershipLost_NoRetry(t *testing.T) {
 	defer release()
 
 	<-mgr(l).Started()
-	waitPendingTimers(t, fc, 1)
+	waitPendingTimers(t, fc)
 
 	// Simulate ownership lost (held=false, no I/O error) — permanent; no retry.
 	fd.SetNextRenewHeld(false)
@@ -1163,7 +1163,7 @@ func TestLocker_Stats_AfterAcquire(t *testing.T) {
 
 	defer r1()
 	defer r2()
-	defer r3()
+	r3()
 }
 
 // TestLocker_Stats_AfterRelease verifies Stats().ActiveLocks decrements on release.

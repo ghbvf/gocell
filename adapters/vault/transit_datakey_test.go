@@ -9,6 +9,7 @@ package vault
 // encryptCalls counters give the regression guard.
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"strings"
@@ -68,7 +69,7 @@ func TestEncryptDecrypt_DataKeyRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Decrypt: %v", err)
 	}
-	if string(got) != string(plaintext) {
+	if !bytes.Equal(got, plaintext) {
 		t.Errorf("round-trip mismatch: got %q, want %q", string(got), string(plaintext))
 	}
 }

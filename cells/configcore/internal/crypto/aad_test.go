@@ -1,6 +1,7 @@
 package crypto_test
 
 import (
+	"bytes"
 	"testing"
 
 	configcrypto "github.com/ghbvf/gocell/cells/configcore/internal/crypto"
@@ -84,7 +85,7 @@ func TestAADForConfig_vs_AADForVersion_NoCollision(t *testing.T) {
 	configAAD := configcrypto.AADForConfig(cellID, configID)
 	versionAAD := configcrypto.AADForVersion(cellID, configID)
 
-	if string(configAAD) == string(versionAAD) {
+	if bytes.Equal(configAAD, versionAAD) {
 		t.Fatalf("AADForConfig and AADForVersion must not be equal for the same inputs: both returned %q", configAAD)
 	}
 }

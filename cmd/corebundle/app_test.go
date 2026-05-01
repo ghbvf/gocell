@@ -42,7 +42,7 @@ func (m errCellModule) Provide(_ context.Context, _ *SharedDeps) (cell.Cell, []b
 var _ CellModule = errCellModule{}
 
 // resourceCellModule is a CellModule that returns a tracked ManagedResource.
-// Used to verify BuildApp rollback behaviour.
+// Used to verify BuildApp rollback behavior.
 type resourceCellModule struct {
 	name string
 	res  kernellifecycle.ManagedResource

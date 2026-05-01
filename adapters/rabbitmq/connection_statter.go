@@ -13,7 +13,7 @@ import "github.com/ghbvf/gocell/runtime/observability/poolstats"
 // NOT RegisterPoolMetrics (db.client.connection.* semantics). Feeding a
 // channel-pool snapshot into the DB collector emits misleading
 // db.client.connection.count{state=…} time series and corrupts dashboard
-// capacity signalling — the kind of silent semantic drift that only
+// capacity signaling — the kind of silent semantic drift that only
 // surfaces during an incident.
 //
 // Scope — publisher channels are ephemeral (open/confirm/publish/close

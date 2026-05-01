@@ -40,7 +40,7 @@ type SchemaMeta struct {
 }
 
 // CellVerifyMeta holds structured verify refs for a Cell.
-// Smoke refs use the format: smoke.{cellID}.{suffix}
+// Smoke refs use the format: smoke.{cellID}.{suffix}.
 type CellVerifyMeta struct {
 	Smoke []string `yaml:"smoke"`
 }
@@ -59,9 +59,10 @@ type L0DepMeta struct {
 // map key prevents a path-vs-id split from fooling the validator (e.g. a
 // kebab directory paired with a no-dash id in slice.yaml).
 type SliceMeta struct {
-	ID               string          `yaml:"id"`
-	BelongsToCell    string          `yaml:"belongsToCell"`
-	ConsistencyLevel string          `yaml:"consistencyLevel,omitempty"` // "L0"-"L4"; if empty, inherits cell.ConsistencyLevel; if set, MUST be ≤ cell.ConsistencyLevel
+	ID            string `yaml:"id"`
+	BelongsToCell string `yaml:"belongsToCell"`
+	// ConsistencyLevel: "L0"-"L4"; if empty, inherits cell.ConsistencyLevel; if set, MUST be ≤ cell.ConsistencyLevel
+	ConsistencyLevel string          `yaml:"consistencyLevel,omitempty"`
 	ContractUsages   []ContractUsage `yaml:"contractUsages"`
 	Verify           SliceVerifyMeta `yaml:"verify"`
 	AllowedFiles     []string        `yaml:"allowedFiles,omitempty"`
@@ -110,10 +111,14 @@ type ContractMeta struct {
 	Replayable        *bool          `yaml:"replayable,omitempty"`
 	IdempotencyKey    string         `yaml:"idempotencyKey,omitempty"`
 	DeliverySemantics string         `yaml:"deliverySemantics,omitempty"`
-	Description       string         `yaml:"description,omitempty"  fingerprint:"-"` // documentation only — excluded from structural fingerprint
-	DeprecatedAt      string         `yaml:"deprecatedAt,omitempty" fingerprint:"-"` // documentation only — excluded from structural fingerprint
-	Dir               string         `yaml:"-"                      fingerprint:"-"` // parsed contract version directory relative to project root
-	File              string         `yaml:"-"                      fingerprint:"-"` // parsed contract.yaml path relative to project root
+	// Description / DeprecatedAt are documentation only — excluded from
+	// structural fingerprint via fingerprint:"-".
+	Description  string `yaml:"description,omitempty" fingerprint:"-"`
+	DeprecatedAt string `yaml:"deprecatedAt,omitempty" fingerprint:"-"`
+	// Dir / File are parsed-time fields tracking contract.yaml location relative
+	// to the project root; never persisted, hence yaml:"-".
+	Dir  string `yaml:"-" fingerprint:"-"`
+	File string `yaml:"-" fingerprint:"-"`
 }
 
 // ProviderEndpoint returns the provider cell/actor ID for this contract

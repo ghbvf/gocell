@@ -16,25 +16,25 @@ import (
 // ---------------------------------------------------------------------------
 
 type fakeTimerCross struct {
-	mu        sync.Mutex
-	fn        func()
-	cancelled bool
-	fired     bool
+	mu       sync.Mutex
+	fn       func()
+	canceled bool
+	fired    bool
 }
 
 func (t *fakeTimerCross) Stop() bool {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	if t.fired || t.cancelled {
+	if t.fired || t.canceled {
 		return false
 	}
-	t.cancelled = true
+	t.canceled = true
 	return true
 }
 
 func (t *fakeTimerCross) fire() {
 	t.mu.Lock()
-	if t.cancelled || t.fired {
+	if t.canceled || t.fired {
 		t.mu.Unlock()
 		return
 	}

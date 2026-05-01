@@ -53,7 +53,7 @@ const (
 // ref: go.uber.org/fx app.go@master — withTimeout goroutine pattern for
 // bounded callback execution.
 // hookItem wraps a HookEvent with an optional sync fence so the worker
-// can process events and explicit synchronisation markers through the
+// can process events and explicit synchronization markers through the
 // same FIFO channel (ordered delivery guaranteed by Go channel semantics).
 type hookItem struct {
 	evt  *cell.HookEvent // nil for sync fences
@@ -96,7 +96,7 @@ type dispatcherConfig struct {
 }
 
 // newHookDispatcher constructs + eagerly starts a dispatcher.
-func newHookDispatcher(cfg dispatcherConfig) (*hookDispatcher, error) {
+func newHookDispatcher(cfg dispatcherConfig) *hookDispatcher {
 	if cfg.QueueSize <= 0 {
 		cfg.QueueSize = DefaultHookObserverQueueSize
 	}
@@ -131,7 +131,7 @@ func newHookDispatcher(cfg dispatcherConfig) (*hookDispatcher, error) {
 	}
 	d.wg.Add(1)
 	go d.run()
-	return d, nil
+	return d
 }
 
 // emit sends e to the worker. When the buffer is full or the dispatcher is
@@ -162,7 +162,7 @@ func (d *hookDispatcher) emit(e cell.HookEvent) {
 	}
 }
 
-// flush enqueues a synchronisation fence and waits for the worker to
+// flush enqueues a synchronization fence and waits for the worker to
 // reach it. Returns true if all events previously emitted have been
 // delivered; false if the fence itself could not be enqueued within
 // timeout or the worker did not reach it in time. Never blocks the

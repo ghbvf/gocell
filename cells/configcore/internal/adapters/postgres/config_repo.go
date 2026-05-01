@@ -110,7 +110,7 @@ type ConfigRepository struct {
 	onStaleCipher func(key, storedKeyID, currentKeyID string)
 }
 
-// ConfigRepoOption configures optional behaviour on ConfigRepository.
+// ConfigRepoOption configures optional behavior on ConfigRepository.
 type ConfigRepoOption func(*ConfigRepository)
 
 // WithOnStaleCipher sets a callback invoked when a stale-key value is detected
@@ -202,7 +202,9 @@ func (r *ConfigRepository) decryptValue(ctx context.Context, key string, ct []by
 // Uses AADForVersion (not AADForConfig) so the AAD domain is distinct from
 // config entries — prevents cross-field ciphertext replay between the two tables.
 // configID is the UUID primary key from config_entries.
-func (r *ConfigRepository) encryptVersionValue(ctx context.Context, configID, value string) (ct []byte, keyID string, nonce, edk []byte, err error) {
+func (r *ConfigRepository) encryptVersionValue(
+	ctx context.Context, configID, value string,
+) (ct []byte, keyID string, nonce, edk []byte, err error) {
 	if r.transformer == nil {
 		return nil, "", nil, nil, errcode.New(errcode.ErrConfigKeyMissing,
 			"config repo: no ValueTransformer configured for sensitive version")
@@ -218,7 +220,9 @@ func (r *ConfigRepository) encryptVersionValue(ctx context.Context, configID, va
 // decryptVersionValue decrypts a cipher-column tuple for a sensitive config version.
 // Uses AADForVersion so the AAD matches the write path in encryptVersionValue.
 // Fail-closed: returns ErrConfigDecryptFailed on any error.
-func (r *ConfigRepository) decryptVersionValue(ctx context.Context, configID string, ct []byte, keyID string, nonce, edk []byte) (string, error) {
+func (r *ConfigRepository) decryptVersionValue(
+	ctx context.Context, configID string, ct []byte, keyID string, nonce, edk []byte,
+) (string, error) {
 	if r.transformer == nil {
 		return "", errcode.New(errcode.ErrConfigDecryptFailed,
 			"config repo: no ValueTransformer configured, cannot decrypt sensitive version")
@@ -289,7 +293,7 @@ func (r *ConfigRepository) Create(ctx context.Context, entry *domain.ConfigEntry
 }
 
 // configEntryColumns is the canonical column list for config_entries used by
-// every SELECT/RETURNING projection in this file. Centralised so the column
+// every SELECT/RETURNING projection in this file. Centralized so the column
 // order stays in sync between GetByKey, Update RETURNING, and Delete RETURNING.
 const configEntryColumns = "id, key, value, sensitive, version, created_at, updated_at, value_cipher, value_key_id, value_edk, value_nonce"
 
@@ -331,7 +335,9 @@ func scanConfigRow(row Row) (e *domain.ConfigEntry, valueCipher []byte, valueKey
 // debugging; key is the lookup key surfaced the same way. Uses
 // pkg/ctxcancel.Wrap for the ctx-cancel branch — the canonical helper
 // already handles 499 vs 504 split and slog routing.
-func (r *ConfigRepository) scanConfigOrMapError(ctx context.Context, row Row, op, key string) (*domain.ConfigEntry, []byte, *string, []byte, []byte, error) {
+func (r *ConfigRepository) scanConfigOrMapError(
+	_ context.Context, row Row, op, key string,
+) (*domain.ConfigEntry, []byte, *string, []byte, []byte, error) {
 	e, ct, keyID, edk, nonce, err := scanConfigRow(row)
 	if err == nil {
 		return e, ct, keyID, edk, nonce, nil
@@ -361,7 +367,9 @@ func (r *ConfigRepository) scanConfigOrMapError(ctx context.Context, row Row, op
 // detection to an already-scanned ConfigEntry. For non-sensitive entries it is a
 // no-op. The cipher tuple fields (ct, keyID, edk, nonce) are the raw values
 // returned by scanConfigRow.
-func (r *ConfigRepository) decryptScannedEntry(ctx context.Context, e *domain.ConfigEntry, ct []byte, keyID *string, nonce, edk []byte) error {
+func (r *ConfigRepository) decryptScannedEntry(
+	ctx context.Context, e *domain.ConfigEntry, ct []byte, keyID *string, nonce, edk []byte,
+) error {
 	if !e.Sensitive {
 		return nil
 	}
@@ -488,7 +496,9 @@ func (r *ConfigRepository) UpdateForRollback(ctx context.Context, key string, va
 // UpdateForRollback. op identifies the calling method for InternalMessage context.
 // sensitive is the resolved flag (read by caller or provided directly).
 // For sensitive=true: re-encrypts value and writes cipher columns.
-func (r *ConfigRepository) doUpdate(ctx context.Context, db DBTX, op, key string, value string, sensitive bool) (*domain.ConfigEntry, error) {
+func (r *ConfigRepository) doUpdate(
+	ctx context.Context, db DBTX, op, key string, value string, sensitive bool,
+) (*domain.ConfigEntry, error) {
 	var row Row
 	if sensitive {
 		ct, keyID, nonce, edk, encErr := r.encryptValue(ctx, key, value)
@@ -556,7 +566,10 @@ const sensitiveListSentinel = "***"
 // call to prevent log flooding when many entries share the same stale keyID.
 // The onStaleCipher callback always fires for every stale entry (metric accuracy);
 // only the slog.Warn is deduplicated per distinct keyID per List call.
-func (r *ConfigRepository) applySensitiveListSentinel(ctx context.Context, e *domain.ConfigEntry, valueKeyID *string, currentID string, staleLogged map[string]bool) {
+func (r *ConfigRepository) applySensitiveListSentinel(
+	ctx context.Context, e *domain.ConfigEntry, valueKeyID *string,
+	currentID string, staleLogged map[string]bool,
+) {
 	e.Value = sensitiveListSentinel
 	if valueKeyID == nil {
 		return

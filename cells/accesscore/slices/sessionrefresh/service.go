@@ -111,7 +111,7 @@ func MustNewService(
 //
 // Presenting an access JWT (or any string that does not parse as the opaque
 // selector.verifier wire format) fails ParseOpaque inside refresh.Store and
-// returns refresh.ErrRejected — the same fail-closed behaviour as
+// returns refresh.ErrRejected — the same fail-closed behavior as
 // before (TestAuthIntent_AccessTokenBlockedAtRefreshPath).
 func (s *Service) Refresh(ctx context.Context, refreshToken string) (dto.TokenPair, error) {
 	if err := validation.RequireNotBlank(errcode.ErrAuthRefreshInvalidInput,

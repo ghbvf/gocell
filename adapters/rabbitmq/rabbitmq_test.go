@@ -239,7 +239,7 @@ type mockConnection struct {
 	closeErr      error
 
 	// closeCount tracks how many times Close() has been called on this mock.
-	// Used to assert best-effort close behaviour in pre-cancelled ctx tests.
+	// Used to assert best-effort close behavior in pre-canceled ctx tests.
 	closeCount atomic.Int32
 }
 
@@ -1137,7 +1137,7 @@ func TestPublisher_Publish_Success(t *testing.T) {
 	assert.Equal(t, "test.topic", ch.publishExchange)
 	assert.Len(t, ch.publishedMessages, 1)
 	assert.Equal(t, []byte(`{"hello":"world"}`), ch.publishedMessages[0].Body)
-	assert.Equal(t, uint8(amqp.Persistent), ch.publishedMessages[0].DeliveryMode)
+	assert.Equal(t, amqp.Persistent, ch.publishedMessages[0].DeliveryMode)
 	ch.mu.Unlock()
 }
 
@@ -1444,7 +1444,7 @@ func TestSubscriber_Subscribe_UnmarshalFailure_Nack(t *testing.T) {
 		DLXExchange: "test.dlx",
 	})
 
-	handler := func(_ context.Context, e outbox.Entry) outbox.HandleResult {
+	handler := func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
 		t.Fatal("handler should not be called for unmarshal failure")
 		return outbox.HandleResult{Disposition: outbox.DispositionAck}
 	}
@@ -1692,7 +1692,7 @@ func TestSubscriber_DeliveryChannelClosed_TriggersReconnect(t *testing.T) {
 }
 
 func TestSubscriber_ReconnectLoop_CtxCancelledDuringWait(t *testing.T) {
-	// Test that cancelling ctx during reconnect wait exits cleanly.
+	// Test that canceling ctx during reconnect wait exits cleanly.
 	mockConn := newMockConnection()
 	dialFunc := func(url string) (AMQPConnection, error) {
 		return mockConn, nil
@@ -2133,7 +2133,7 @@ func TestSubscriber_ProcessDelivery_CtxCancelled_NackWithRequeue(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	handler := func(_ context.Context, e outbox.Entry) outbox.HandleResult {
+	handler := func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
 		// Simulate ctx cancel happening before/during handler.
 		cancel()
 		return outbox.HandleResult{Disposition: outbox.DispositionRequeue, Err: errors.New("transient error during shutdown")}
@@ -3158,7 +3158,7 @@ func TestProcessDelivery_Receipt_UsesDetachedCtx(t *testing.T) {
 		return outbox.HandleResult{Disposition: outbox.DispositionAck, Receipt: receipt}
 	}
 
-	// Use a cancelled context to simulate shutdown.
+	// Use a canceled context to simulate shutdown.
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
@@ -3170,9 +3170,9 @@ func TestProcessDelivery_Receipt_UsesDetachedCtx(t *testing.T) {
 
 	// Receipt should still be committed because processDelivery uses
 	// context.WithoutCancel for Receipt operations. The parent ctx is
-	// cancelled but the receipt ctx is detached, so Commit succeeds.
+	// canceled but the receipt ctx is detached, so Commit succeeds.
 	receipt.mu.Lock()
-	assert.True(t, receipt.commitCalled, "Receipt should be committed even with cancelled parent ctx")
+	assert.True(t, receipt.commitCalled, "Receipt should be committed even with canceled parent ctx")
 	assert.False(t, receipt.releaseCalled, "Should Commit, not Release")
 	receipt.mu.Unlock()
 }
@@ -3389,7 +3389,7 @@ func TestNewConsumerBase_ExplicitFailClosed_Preserved(t *testing.T) {
 // =============================================================================
 
 func TestConsumerBase_RetryLoop_CtxCancelledAfterFinalAttempt_Requeues(t *testing.T) {
-	// S3-02: When ctx is cancelled by the time the final retry completes,
+	// S3-02: When ctx is canceled by the time the final retry completes,
 	// retryLoop must return Requeue (not Reject to DLX).
 	receipt := &mockReceipt{}
 	claimer := &mockClaimer{state: idempotency.ClaimAcquired, receipt: receipt}
@@ -3410,7 +3410,7 @@ func TestConsumerBase_RetryLoop_CtxCancelledAfterFinalAttempt_Requeues(t *testin
 
 	res := handler(ctx, outbox.Entry{ID: "evt-ctx-final"})
 	assert.Equal(t, outbox.DispositionRequeue, res.Disposition,
-		"must Requeue (not Reject to DLX) when ctx is cancelled after final attempt")
+		"must Requeue (not Reject to DLX) when ctx is canceled after final attempt")
 	assert.ErrorIs(t, res.Err, context.Canceled)
 }
 
@@ -3735,7 +3735,7 @@ func TestConsumerBase_WrapWithClaimer_WrappedPermanentError_Detected(t *testing.
 
 func TestSafeDelay_AttemptZero(t *testing.T) {
 	result := outbox.ExponentialDelay(time.Second, 30*time.Second, 0)
-	assert.Equal(t, time.Second, result) // base * 2^0 = base
+	assert.Equal(t, time.Second, result) //nolint:gocritic // commentedOutCode: "base * 2^0 = base" is a math annotation, not commented-out code
 }
 
 func TestSafeDelay_ExactMaxSafeShift(t *testing.T) {
@@ -3966,7 +3966,7 @@ func TestConnection_WaitConnected_StaleChannelRetry(t *testing.T) {
 	case err := <-done:
 		// Should only return after ctx timeout, not prematurely.
 		assert.Error(t, err, "WaitConnected should timeout, not return from stale channel")
-		assert.Contains(t, err.Error(), "cancelled")
+		assert.Contains(t, err.Error(), "canceled")
 	case <-time.After(200 * time.Millisecond):
 		t.Fatal("WaitConnected hung beyond test deadline")
 	}

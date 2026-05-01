@@ -640,7 +640,7 @@ func TestScanSchemaForStrictMissing_FileNotFound(t *testing.T) {
 func TestScanSchemaForStrictMissing_InvalidJSON(t *testing.T) {
 	f, err := os.CreateTemp(t.TempDir(), "bad-*.json")
 	require.NoError(t, err)
-	_, err = f.Write([]byte("not valid json {{{"))
+	_, err = f.WriteString("not valid json {{{")
 	require.NoError(t, err)
 	require.NoError(t, f.Close())
 
@@ -887,22 +887,24 @@ func TestScanSchemaForStrictMissing_Basic(t *testing.T) {
 
 // --- FMT-25 (HTTP input constraint: minLength/maxLength on strings, minimum/maximum on numeric values) ---
 
-// fmt25WriteSchema is a test helper that writes a JSON schema string to a
-// contract directory and returns the absolute schema path. Encapsulates the
+// fmt25WriteSchema is a test helper that writes a JSON schema string to the
+// standard "contracts/http/test/v1" contract directory. Encapsulates the
 // repeated TempDir + MkdirAll + WriteFile dance used across FMT-25 tests.
-func fmt25WriteSchema(t *testing.T, dir, contractRel, body string) string {
+func fmt25WriteSchema(t *testing.T, dir, body string) {
 	t.Helper()
+	const contractRel = "contracts/http/test/v1"
 	full := filepath.Join(dir, contractRel)
 	require.NoError(t, os.MkdirAll(full, 0o755))
 	p := filepath.Join(full, "request.schema.json")
 	require.NoError(t, os.WriteFile(p, []byte(body), 0o644))
-	return p
 }
 
 // fmt25Project builds a ProjectMeta containing one HTTP contract with the
 // given request schema reference. queryParams / pathParams are optional —
 // pass nil to omit. Used by every FMT-25 schema-driven test below.
-func fmt25Project(contractID, contractDir string, queryParams, pathParams map[string]contracts.ParamSchema) *metadata.ProjectMeta {
+func fmt25Project(queryParams, pathParams map[string]contracts.ParamSchema) *metadata.ProjectMeta {
+	const contractDir = "contracts/http/test/v1"
+	const contractID = "http.test.v1"
 	cm := &metadata.ContractMeta{
 		ID:        contractID,
 		Kind:      "http",
@@ -942,9 +944,9 @@ func fmt25Project(contractID, contractDir string, queryParams, pathParams map[st
 
 func TestFMT25_RequestSchemaPathEscapeFailsClosed(t *testing.T) {
 	dir := t.TempDir()
-	require.NoError(t, os.MkdirAll(filepath.Join(dir, "contracts/http/test"), 0o755))
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "contracts/http/test/outside.schema.json"), []byte(`{"type":"object","additionalProperties":false}`), 0o644))
-	pm := fmt25Project("http.test.v1", "contracts/http/test/v1", nil, nil)
+	require.NoError(t, os.MkdirAll(filepath.Join(dir, "contracts", "http", "test"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "contracts", "http", "test", "outside.schema.json"), []byte(`{"type":"object","additionalProperties":false}`), 0o644))
+	pm := fmt25Project(nil, nil)
 	pm.Contracts["http.test.v1"].SchemaRefs.Request = "../outside.schema.json"
 
 	results := NewValidator(pm, dir).Validate()
@@ -957,7 +959,7 @@ func TestFMT25_RequestSchemaPathEscapeFailsClosed(t *testing.T) {
 
 func TestFMT25_RequestSchemaMissingFailsClosed(t *testing.T) {
 	dir := t.TempDir()
-	pm := fmt25Project("http.test.v1", "contracts/http/test/v1", nil, nil)
+	pm := fmt25Project(nil, nil)
 
 	results := NewValidator(pm, dir).Validate()
 	matches := findByCode(results, "FMT-25")
@@ -978,8 +980,8 @@ func TestFMT25_RequestStringMissingMinLength(t *testing.T) {
 			"username": {"type": "string", "maxLength": 128}
 		}
 	}`
-	fmt25WriteSchema(t, dir, "contracts/http/test/v1", body)
-	pm := fmt25Project("http.test.v1", "contracts/http/test/v1", nil, nil)
+	fmt25WriteSchema(t, dir, body)
+	pm := fmt25Project(nil, nil)
 
 	v := NewValidator(pm, dir)
 	results := v.Validate()
@@ -1001,8 +1003,8 @@ func TestFMT25_RequestStringMissingMaxLength(t *testing.T) {
 			"username": {"type": "string", "minLength": 1}
 		}
 	}`
-	fmt25WriteSchema(t, dir, "contracts/http/test/v1", body)
-	pm := fmt25Project("http.test.v1", "contracts/http/test/v1", nil, nil)
+	fmt25WriteSchema(t, dir, body)
+	pm := fmt25Project(nil, nil)
 
 	results := NewValidator(pm, dir).Validate()
 	matches := findByCode(results, "FMT-25")
@@ -1022,8 +1024,8 @@ func TestFMT25_RequestIntegerMissingMinimumMaximum(t *testing.T) {
 			"page":    {"type": "integer"}
 		}
 	}`
-	fmt25WriteSchema(t, dir, "contracts/http/test/v1", body)
-	pm := fmt25Project("http.test.v1", "contracts/http/test/v1", nil, nil)
+	fmt25WriteSchema(t, dir, body)
+	pm := fmt25Project(nil, nil)
 
 	results := NewValidator(pm, dir).Validate()
 	matches := findByCode(results, "FMT-25")
@@ -1043,8 +1045,8 @@ func TestFMT25_RequestNumberMissingMinimumMaximum(t *testing.T) {
 			"ratio": {"type": "number"}
 		}
 	}`
-	fmt25WriteSchema(t, dir, "contracts/http/test/v1", body)
-	pm := fmt25Project("http.test.v1", "contracts/http/test/v1", nil, nil)
+	fmt25WriteSchema(t, dir, body)
+	pm := fmt25Project(nil, nil)
 
 	results := NewValidator(pm, dir).Validate()
 	matches := findByCode(results, "FMT-25")
@@ -1072,8 +1074,8 @@ func TestFMT25_RequestUnionTypeStringMissingConstraints(t *testing.T) {
 			"displayName": {"type": ["string", "null"]}
 		}
 	}`
-	fmt25WriteSchema(t, dir, "contracts/http/test/v1", body)
-	pm := fmt25Project("http.test.v1", "contracts/http/test/v1", nil, nil)
+	fmt25WriteSchema(t, dir, body)
+	pm := fmt25Project(nil, nil)
 
 	results := NewValidator(pm, dir).Validate()
 	matches := findByCode(results, "FMT-25")
@@ -1092,8 +1094,8 @@ func TestFMT25_RequestExternalRefFailsClosed(t *testing.T) {
 			"remote": {"$ref": "https://example.invalid/common.schema.json#/Name"}
 		}
 	}`
-	fmt25WriteSchema(t, dir, "contracts/http/test/v1", body)
-	pm := fmt25Project("http.test.v1", "contracts/http/test/v1", nil, nil)
+	fmt25WriteSchema(t, dir, body)
+	pm := fmt25Project(nil, nil)
 
 	results := NewValidator(pm, dir).Validate()
 	matches := findByCode(results, "FMT-25")
@@ -1113,8 +1115,8 @@ func TestFMT25_RequestUnresolvedLocalRefFailsClosed(t *testing.T) {
 		},
 		"$defs": {}
 	}`
-	fmt25WriteSchema(t, dir, "contracts/http/test/v1", body)
-	pm := fmt25Project("http.test.v1", "contracts/http/test/v1", nil, nil)
+	fmt25WriteSchema(t, dir, body)
+	pm := fmt25Project(nil, nil)
 
 	results := NewValidator(pm, dir).Validate()
 	matches := findByCode(results, "FMT-25")
@@ -1134,8 +1136,8 @@ func TestFMT25_RequestMinGreaterThanMaxInvalid(t *testing.T) {
 			"ratio": {"type": "number", "minimum": 10, "maximum": 1}
 		}
 	}`
-	fmt25WriteSchema(t, dir, "contracts/http/test/v1", body)
-	pm := fmt25Project("http.test.v1", "contracts/http/test/v1", nil, nil)
+	fmt25WriteSchema(t, dir, body)
+	pm := fmt25Project(nil, nil)
 
 	results := NewValidator(pm, dir).Validate()
 	matches := findByCode(results, "FMT-25")
@@ -1168,8 +1170,8 @@ func TestFMT25_RequestDepthLimitFailsClosed(t *testing.T) {
 	parent["leaf"] = map[string]any{"type": "string"}
 	raw, err := json.Marshal(schema)
 	require.NoError(t, err)
-	fmt25WriteSchema(t, dir, "contracts/http/test/v1", string(raw))
-	pm := fmt25Project("http.test.v1", "contracts/http/test/v1", nil, nil)
+	fmt25WriteSchema(t, dir, string(raw))
+	pm := fmt25Project(nil, nil)
 
 	results := NewValidator(pm, dir).Validate()
 	matches := findByCode(results, "FMT-25")
@@ -1195,8 +1197,8 @@ func TestFMT25_RequestNestedObjectStringConstraints(t *testing.T) {
 			}
 		}
 	}`
-	fmt25WriteSchema(t, dir, "contracts/http/test/v1", body)
-	pm := fmt25Project("http.test.v1", "contracts/http/test/v1", nil, nil)
+	fmt25WriteSchema(t, dir, body)
+	pm := fmt25Project(nil, nil)
 
 	results := NewValidator(pm, dir).Validate()
 	matches := findByCode(results, "FMT-25")
@@ -1221,8 +1223,8 @@ func TestFMT25_RequestArrayItemsStringConstraints(t *testing.T) {
 			}
 		}
 	}`
-	fmt25WriteSchema(t, dir, "contracts/http/test/v1", body)
-	pm := fmt25Project("http.test.v1", "contracts/http/test/v1", nil, nil)
+	fmt25WriteSchema(t, dir, body)
+	pm := fmt25Project(nil, nil)
 
 	results := NewValidator(pm, dir).Validate()
 	matches := findByCode(results, "FMT-25")
@@ -1247,8 +1249,8 @@ func TestFMT25_RequestLocalRefStringConstraints(t *testing.T) {
 			"name": {"type": "string"}
 		}
 	}`
-	fmt25WriteSchema(t, dir, "contracts/http/test/v1", body)
-	pm := fmt25Project("http.test.v1", "contracts/http/test/v1", nil, nil)
+	fmt25WriteSchema(t, dir, body)
+	pm := fmt25Project(nil, nil)
 
 	results := NewValidator(pm, dir).Validate()
 	matches := findByCode(results, "FMT-25")
@@ -1273,8 +1275,8 @@ func TestFMT25_RequestCombinatorStringConstraints(t *testing.T) {
 			}
 		}
 	}`
-	fmt25WriteSchema(t, dir, "contracts/http/test/v1", body)
-	pm := fmt25Project("http.test.v1", "contracts/http/test/v1", nil, nil)
+	fmt25WriteSchema(t, dir, body)
+	pm := fmt25Project(nil, nil)
 
 	results := NewValidator(pm, dir).Validate()
 	matches := findByCode(results, "FMT-25")
@@ -1290,8 +1292,8 @@ func TestFMT25_RequestUnevaluatedItemsStringConstraints(t *testing.T) {
 		"items": {"type": "string", "minLength": 1, "maxLength": 64},
 		"unevaluatedItems": {"type": "string", "minLength": 1}
 	}`
-	fmt25WriteSchema(t, dir, "contracts/http/test/v1", body)
-	pm := fmt25Project("http.test.v1", "contracts/http/test/v1", nil, nil)
+	fmt25WriteSchema(t, dir, body)
+	pm := fmt25Project(nil, nil)
 
 	results := NewValidator(pm, dir).Validate()
 	matches := findByCode(results, "FMT-25")
@@ -1305,9 +1307,9 @@ func TestFMT25_RequestUnevaluatedItemsStringConstraints(t *testing.T) {
 func TestFMT25_QueryParamsStringMissingConstraints(t *testing.T) {
 	dir := t.TempDir()
 	// Provide a clean request schema so only the queryParams violation fires.
-	fmt25WriteSchema(t, dir, "contracts/http/test/v1",
+	fmt25WriteSchema(t, dir,
 		`{"type": "object", "additionalProperties": false}`)
-	pm := fmt25Project("http.test.v1", "contracts/http/test/v1",
+	pm := fmt25Project(
 		map[string]contracts.ParamSchema{
 			"cursor": {Type: "string"}, // missing minLength + maxLength
 		}, nil)
@@ -1323,9 +1325,9 @@ func TestFMT25_QueryParamsStringMissingConstraints(t *testing.T) {
 // queryParams (e.g. limit) without minimum/maximum trigger violations.
 func TestFMT25_QueryParamsIntegerMissingConstraints(t *testing.T) {
 	dir := t.TempDir()
-	fmt25WriteSchema(t, dir, "contracts/http/test/v1",
+	fmt25WriteSchema(t, dir,
 		`{"type": "object", "additionalProperties": false}`)
-	pm := fmt25Project("http.test.v1", "contracts/http/test/v1",
+	pm := fmt25Project(
 		map[string]contracts.ParamSchema{
 			"limit": {Type: "integer"}, // missing minimum + maximum
 		}, nil)
@@ -1341,9 +1343,9 @@ func TestFMT25_QueryParamsIntegerMissingConstraints(t *testing.T) {
 // type=number is covered by numeric minimum/maximum governance.
 func TestFMT25_QueryParamsNumberMissingConstraints(t *testing.T) {
 	dir := t.TempDir()
-	fmt25WriteSchema(t, dir, "contracts/http/test/v1",
+	fmt25WriteSchema(t, dir,
 		`{"type": "object", "additionalProperties": false}`)
-	pm := fmt25Project("http.test.v1", "contracts/http/test/v1",
+	pm := fmt25Project(
 		map[string]contracts.ParamSchema{
 			"ratio": {Type: "number"},
 		}, nil)
@@ -1357,11 +1359,11 @@ func TestFMT25_QueryParamsNumberMissingConstraints(t *testing.T) {
 
 func TestFMT25_QueryParamsInvalidBounds(t *testing.T) {
 	dir := t.TempDir()
-	fmt25WriteSchema(t, dir, "contracts/http/test/v1",
+	fmt25WriteSchema(t, dir,
 		`{"type": "object", "additionalProperties": false}`)
 	one := 1
 	ten := 10
-	pm := fmt25Project("http.test.v1", "contracts/http/test/v1",
+	pm := fmt25Project(
 		map[string]contracts.ParamSchema{
 			"page": {Type: "integer", Minimum: &ten, Maximum: &one},
 		}, nil)
@@ -1378,9 +1380,9 @@ func TestFMT25_QueryParamsInvalidBounds(t *testing.T) {
 // strings are checked.
 func TestFMT25_PathParamsStringMissingConstraints(t *testing.T) {
 	dir := t.TempDir()
-	fmt25WriteSchema(t, dir, "contracts/http/test/v1",
+	fmt25WriteSchema(t, dir,
 		`{"type": "object", "additionalProperties": false}`)
-	pm := fmt25Project("http.test.v1", "contracts/http/test/v1", nil,
+	pm := fmt25Project(nil,
 		map[string]contracts.ParamSchema{
 			"key": {Type: "string"}, // plain string, no format → must be checked
 		})
@@ -1396,8 +1398,8 @@ func TestFMT25_PathParamsStringMissingConstraints(t *testing.T) {
 // findings use full YAML paths so CLI output can include line/column anchors.
 func TestFMT25_ParamFindingsUseLocatableMetadataPaths(t *testing.T) {
 	dir := t.TempDir()
-	contractRel := "contracts/http/test/v1"
-	fmt25WriteSchema(t, dir, contractRel, `{"type": "object", "additionalProperties": false}`)
+	const contractRel = "contracts/http/test/v1"
+	fmt25WriteSchema(t, dir, `{"type": "object", "additionalProperties": false}`)
 	require.NoError(t, os.WriteFile(filepath.Join(dir, contractRel, "contract.yaml"), []byte(`id: http.test.v1
 kind: http
 ownerCell: testcell
@@ -1441,7 +1443,7 @@ schemaRefs:
 // facet noise for pathParams that FMT-13 already rejected.
 func TestFMT25_SkipsInvalidPathParams(t *testing.T) {
 	dir := t.TempDir()
-	fmt25WriteSchema(t, dir, "contracts/http/test/v1",
+	fmt25WriteSchema(t, dir,
 		`{"type": "object", "additionalProperties": false}`)
 	tests := []struct {
 		name       string
@@ -1465,7 +1467,7 @@ func TestFMT25_SkipsInvalidPathParams(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			pm := fmt25Project("http.test.v1", "contracts/http/test/v1", nil, tc.pathParams)
+			pm := fmt25Project(nil, tc.pathParams)
 			pm.Contracts["http.test.v1"].Endpoints.HTTP.Path = tc.path
 
 			results := NewValidator(pm, dir).Validate()
@@ -1480,9 +1482,9 @@ func TestFMT25_SkipsInvalidPathParams(t *testing.T) {
 // fixes UUIDs at 36 characters; schema-level constraints would be redundant).
 func TestFMT25_PathParamsUUIDFormatExempt(t *testing.T) {
 	dir := t.TempDir()
-	fmt25WriteSchema(t, dir, "contracts/http/test/v1",
+	fmt25WriteSchema(t, dir,
 		`{"type": "object", "additionalProperties": false}`)
-	pm := fmt25Project("http.test.v1", "contracts/http/test/v1", nil,
+	pm := fmt25Project(nil,
 		map[string]contracts.ParamSchema{
 			"id": {Type: "string", Format: "uuid"}, // exempt
 		})
@@ -1504,11 +1506,11 @@ func TestFMT25_CleanSchemaProducesNoViolations(t *testing.T) {
 			"limit": {"type": "integer", "minimum": 1, "maximum": 500}
 		}
 	}`
-	fmt25WriteSchema(t, dir, "contracts/http/test/v1", body)
+	fmt25WriteSchema(t, dir, body)
 	one := 1
 	twoFiftySix := 256
 	fiveHundred := 500
-	pm := fmt25Project("http.test.v1", "contracts/http/test/v1",
+	pm := fmt25Project(
 		map[string]contracts.ParamSchema{
 			"cursor": {Type: "string", MinLength: &one, MaxLength: &twoFiftySix},
 			"limit":  {Type: "integer", Minimum: &one, Maximum: &fiveHundred},

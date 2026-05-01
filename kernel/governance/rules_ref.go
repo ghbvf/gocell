@@ -360,7 +360,11 @@ func (v *Validator) validateREF16() []ValidationResult {
 				"REF-16", SeverityWarning, IssueRefNotFound,
 				assemblyFile(a),
 				"id",
-				fmt.Sprintf("assembly %q has no generated boundary.yaml at assemblies/%s/generated/boundary.yaml; run 'gocell generate' to create it", a.ID, a.ID),
+				fmt.Sprintf(
+					"assembly %q has no generated boundary.yaml at assemblies/%s/generated/boundary.yaml;"+
+						" run 'gocell generate' to create it",
+					a.ID, a.ID,
+				),
 			))
 		}
 	}
@@ -402,13 +406,21 @@ func (v *Validator) validateREF17() []ValidationResult {
 				results = append(results, v.newResult(
 					"REF-17", SeverityError, IssueForbidden,
 					contractFile(c), field,
-					fmt.Sprintf("contract %q is internal (path %q) but clients contains wildcard %q; wildcards admit external actors, list explicit internal cell IDs instead", c.ID, path, client),
+					fmt.Sprintf(
+						"contract %q is internal (path %q) but clients contains wildcard %q;"+
+							" wildcards admit external actors, list explicit internal cell IDs instead",
+						c.ID, path, client,
+					),
 				))
 			case v.isExternalActor(client):
 				results = append(results, v.newResult(
 					"REF-17", SeverityError, IssueForbidden,
 					contractFile(c), field,
-					fmt.Sprintf("contract %q is internal (path %q) but client %q is registered in actors.yaml (external); remove it or move the endpoint to a public path", c.ID, path, client),
+					fmt.Sprintf(
+						"contract %q is internal (path %q) but client %q is registered in actors.yaml (external);"+
+							" remove it or move the endpoint to a public path",
+						c.ID, path, client,
+					),
 				))
 			}
 		}

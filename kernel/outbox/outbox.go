@@ -164,7 +164,7 @@ type Entry struct {
 	// for this specific entry. Zero value (FailurePolicyDefault) falls
 	// through to the Emitter's construction-time default.
 	//
-	// In-process control plane only — not marshalled to the wire envelope
+	// In-process control plane only — not marshaled to the wire envelope
 	// (see MarshalEnvelope). Callers that need per-topic/per-event semantics
 	// (e.g., security topics that must surface publisher errors; observability
 	// topics that may drop on failure) set this at entry-construction time.
@@ -220,7 +220,7 @@ func (e Entry) RoutingTopic() string {
 // are present, that Metadata is within size limits and free of reserved
 // keys, and that Observability fields are well-formed. Writers MUST call
 // Validate before persisting (every Writer.Write impl threads through this).
-// (F-OB-03, META-SIZE-01, PR246-FU1 reserved-key invariant)
+// (F-OB-03, META-SIZE-01, PR246-FU1 reserved-key invariant).
 func (e Entry) Validate() error {
 	if e.ID == "" {
 		return errcode.New(errcode.ErrValidationFailed, "outbox: entry missing ID")
@@ -458,7 +458,7 @@ const (
 	DispositionReject                         // NACK+no-requeue -- permanent failure -> DLX
 )
 
-// Valid reports whether d is a recognised Disposition value.
+// Valid reports whether d is a recognized Disposition value.
 // The zero value is deliberately invalid to catch forgotten/uninitialised fields.
 func (d Disposition) Valid() bool {
 	return d >= DispositionAck && d <= DispositionReject
@@ -546,7 +546,10 @@ type HandleResult struct {
 
 // NotifySettlement emits a settlement observation to every observer attached
 // to the result. It is a no-op when no observer is present.
-func NotifySettlement(ctx context.Context, result HandleResult, entry Entry, disposition Disposition, settlement SettlementResult, err error) {
+func NotifySettlement(
+	ctx context.Context, result HandleResult, entry Entry,
+	disposition Disposition, settlement SettlementResult, err error,
+) {
 	if len(result.SettlementObservers) == 0 {
 		return
 	}
@@ -668,7 +671,7 @@ type Subscriber interface {
 	Ready(sub Subscription) <-chan struct{}
 
 	// Subscribe registers a handler for the given subscription and blocks until
-	// ctx is cancelled or an unrecoverable error occurs.
+	// ctx is canceled or an unrecoverable error occurs.
 	//
 	// Subscription.ConsumerGroup identifies the logical consumer group.
 	// Subscribers sharing the same group compete for messages (load-balanced);
@@ -687,7 +690,7 @@ type Subscriber interface {
 // Subscribers that implement it can stop accepting new deliveries while still
 // processing in-flight ones, enabling a two-phase drain during shutdown
 // (stop intake → wait in-flight handlers). Router.Close calls StopIntake on
-// subscribers implementing this interface before cancelling the run context.
+// subscribers implementing this interface before canceling the run context.
 //
 // Subscribers that do not implement this interface will fall back to the
 // legacy single-phase close behavior (cancel context only).
@@ -755,7 +758,7 @@ func (s *SubscriberWithMiddleware) Subscribe(ctx context.Context, sub Subscripti
 }
 
 // Close delegates to the inner subscriber, forwarding the ctx unchanged so
-// the inner implementation can honour the shutdown budget.
+// the inner implementation can honor the shutdown budget.
 func (s *SubscriberWithMiddleware) Close(ctx context.Context) error {
 	return s.Inner.Close(ctx)
 }

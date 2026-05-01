@@ -83,8 +83,8 @@ func (tm *TxManager) RunInTx(ctx context.Context, fn func(ctx context.Context) e
 	txCtx = withSavepointDepth(txCtx, 0)
 
 	// Panic recovery — rollback and re-panic.
-	// Use context.WithoutCancel so rollback succeeds even if ctx is already cancelled
-	// (e.g. HTTP timeout). Without this, a cancelled ctx causes rollback to fail,
+	// Use context.WithoutCancel so rollback succeeds even if ctx is already canceled
+	// (e.g. HTTP timeout). Without this, a canceled ctx causes rollback to fail,
 	// leaving the transaction open until connection pool idle timeout.
 	defer func() {
 		if r := recover(); r != nil {
@@ -128,7 +128,7 @@ func (tm *TxManager) runInSavepoint(ctx context.Context, tx pgx.Tx, fn func(ctx 
 	nestedCtx := withSavepointDepth(ctx, depth+1)
 
 	// Panic recovery — rollback savepoint and re-panic.
-	// Use context.WithoutCancel so savepoint rollback succeeds even if ctx is cancelled.
+	// Use context.WithoutCancel so savepoint rollback succeeds even if ctx is canceled.
 	defer func() {
 		if r := recover(); r != nil {
 			_, rbErr := tx.Exec(context.WithoutCancel(ctx), fmt.Sprintf("ROLLBACK TO SAVEPOINT %s", spName))

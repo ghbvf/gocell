@@ -4,11 +4,11 @@
 //
 // PR-A35 made two structural guarantees:
 //   - RegisterChecker wraps every checker with wrapCtxSafe so that the outer
-//     Checker always returns as soon as ctx is cancelled, regardless of whether
+//     Checker always returns as soon as ctx is canceled, regardless of whether
 //     the inner function cooperates. This removes the "uncooperative probe
 //     leaks a goroutine past ReadyzHandler's return" trade-off that previously
 //     sat at the aggregator level — the aggregator itself is now insulated
-//     from inner-fn behaviour.
+//     from inner-fn behavior.
 //   - /readyz requests are deduplicated via singleflight so that a burst of
 //     concurrent probes shares one probe execution. This replaces the prior
 //     plan of a fixed "max concurrent probes" semaphore (which required
@@ -74,7 +74,7 @@ const (
 // (default 5 s, matching Kubernetes readiness probe convention).
 //
 // RegisterChecker wraps supplied functions with wrapCtxSafe, so the effective
-// Checker stored inside Handler honours ctx.Done regardless of the inner
+// Checker stored inside Handler honors ctx.Done regardless of the inner
 // implementation's cooperativeness. See wrapCtxSafe for the full contract.
 //
 // ref: k8s.io/apiserver/pkg/server/healthz — HealthChecker interface with ctx.
@@ -125,7 +125,7 @@ func WithVerboseDisabled() Option {
 // requests. Verbose access always requires both a matching header and a
 // pre-configured token (see SetVerboseToken); PR-A35 removed the prior
 // "unconfigured = unrestricted" fallback.
-const VerboseTokenHeader = "X-Readyz-Token"
+const VerboseTokenHeader = "X-Readyz-Token" //nolint:gosec // G101: VerboseTokenHeader is the constant name (not a credential value)
 
 // Handler exposes /healthz and /readyz endpoints.
 type Handler struct {
@@ -169,7 +169,7 @@ func New(asm *assembly.CoreAssembly, opts ...Option) *Handler {
 // checker with the same name is already registered or when fn is nil.
 //
 // The supplied function is wrapped with wrapCtxSafe before being stored, so
-// the effective Checker honours ctx.Done regardless of the inner
+// the effective Checker honors ctx.Done regardless of the inner
 // implementation's cooperativeness. See wrapCtxSafe for the full contract.
 func (h *Handler) RegisterChecker(name string, fn Checker) error {
 	if fn == nil {
@@ -262,7 +262,7 @@ type readyzResult struct {
 // By default it returns only aggregate readiness status. Detailed cell and
 // dependency breakdown is returned only when the request enables verbose mode
 // AND carries a matching X-Readyz-Token. Verbose requests without a valid
-// token receive 401 — prior behaviour was a silent downgrade to 200.
+// token receive 401 — prior behavior was a silent downgrade to 200.
 //
 // Concurrent /readyz calls share one probe execution via singleflight; there
 // is no fixed concurrency ceiling.
@@ -337,7 +337,7 @@ func (h *Handler) computeReadyzSafe(verbose bool) (result readyzResult) {
 // that panics do not escape the singleflight boundary.
 //
 // adapter info is captured under Handler.mu alongside the checkers map so
-// the result is fully self-contained — writeTo can serialise it without
+// the result is fully self-contained — writeTo can serialize it without
 // touching Handler state.
 func (h *Handler) computeReadyz(verbose bool) readyzResult {
 	cellOverall, cells := h.aggregateCellHealth(verbose)
@@ -424,7 +424,7 @@ func (h *Handler) aggregateProbeResults(results map[string]ProbeResult, verbose 
 	return statusFromRank(worst), dependencies
 }
 
-// writeTo serialises the readyz result through the project-standard envelope:
+// writeTo serializes the readyz result through the project-standard envelope:
 //
 //	200 → {"data":  {"status":"healthy"|"degraded", ...verbose fields}}
 //	503 → {"error": {"code":"ERR_SERVICE_UNAVAILABLE", "message":"service unavailable",
@@ -582,6 +582,7 @@ func (h *Handler) verboseDecision(r *http.Request) (verbose, denied bool) {
 	token := h.verboseToken
 	h.mu.RUnlock()
 	if disabled {
+		//nolint:gosec // G706: slog field-based attributes (slog.String/slog.Any), not string concatenation.
 		slog.Debug("readyz: verbose requested but endpoint is disabled; serving plain aggregate",
 			slog.String("remote_addr", r.RemoteAddr))
 		return false, false
@@ -590,6 +591,7 @@ func (h *Handler) verboseDecision(r *http.Request) (verbose, denied bool) {
 	// configure a token or disable the verbose endpoint. Silently rendering
 	// verbose output when token="" leaks internal health details.
 	if token == "" {
+		//nolint:gosec // G706: slog field-based attributes (slog.String/slog.Any), not string concatenation.
 		slog.Warn("readyz: verbose requested but no token configured; denying",
 			slog.String("reason", "token_unconfigured"),
 			slog.String("hint", "set GOCELL_READYZ_VERBOSE_TOKEN or GOCELL_READYZ_VERBOSE_DISABLED=1"),
@@ -599,6 +601,7 @@ func (h *Handler) verboseDecision(r *http.Request) (verbose, denied bool) {
 	submitted := sha256.Sum256([]byte(r.Header.Get(VerboseTokenHeader)))
 	configured := sha256.Sum256([]byte(token))
 	if subtle.ConstantTimeCompare(submitted[:], configured[:]) != 1 {
+		//nolint:gosec // G706: slog field-based attributes (slog.String/slog.Any), not string concatenation.
 		slog.Warn("readyz: verbose token mismatch at handler layer; denying",
 			slog.String("reason", "token_mismatch"),
 			slog.String("remote_addr", r.RemoteAddr))

@@ -11,7 +11,7 @@ import (
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
-// PlaintextMigrationConfig controls the batch-encrypt migration behaviour.
+// PlaintextMigrationConfig controls the batch-encrypt migration behavior.
 type PlaintextMigrationConfig struct {
 	// BatchSize is the number of rows to encrypt per DB round-trip.
 	// Defaults to 50 when zero.
@@ -22,7 +22,7 @@ type PlaintextMigrationConfig struct {
 	RateLimitDelay time.Duration
 }
 
-// PlaintextMigrationResult summarises a completed migration run.
+// PlaintextMigrationResult summarizes a completed migration run.
 type PlaintextMigrationResult struct {
 	// Processed is the number of rows that were encrypted during this run.
 	Processed int
@@ -48,8 +48,10 @@ func tableQueries(table string) (migTableQueries, error) {
 		// SELECT returns (id, aadIdentity=configKey, value).
 		// AAD = AADForConfig(cellID, configKey).
 		return migTableQueries{
-			selectQ: `SELECT id, key, value FROM config_entries WHERE sensitive = true AND value_cipher IS NULL ORDER BY id LIMIT $1`,
-			updateQ: `UPDATE config_entries SET value = '', value_cipher = $1, value_key_id = $2, value_edk = $3, value_nonce = $4 WHERE id = $5 AND value_cipher IS NULL`,
+			selectQ: `SELECT id, key, value FROM config_entries` +
+				` WHERE sensitive = true AND value_cipher IS NULL ORDER BY id LIMIT $1`,
+			updateQ: `UPDATE config_entries SET value = '', value_cipher = $1, value_key_id = $2,` +
+				` value_edk = $3, value_nonce = $4 WHERE id = $5 AND value_cipher IS NULL`,
 		}, nil
 	case "config_versions":
 		// config_versions uses config_id (UUID) as the AAD identity, matching the
@@ -59,8 +61,10 @@ func tableQueries(table string) (migTableQueries, error) {
 		// SELECT returns (id, aadIdentity=config_id, value).
 		// AAD = AADForVersion(cellID, config_id).
 		return migTableQueries{
-			selectQ: `SELECT id, config_id, value FROM config_versions WHERE sensitive = true AND value_cipher IS NULL ORDER BY id LIMIT $1`,
-			updateQ: `UPDATE config_versions SET value = '', value_cipher = $1, value_key_id = $2, value_edk = $3, value_nonce = $4 WHERE id = $5 AND value_cipher IS NULL`,
+			selectQ: `SELECT id, config_id, value FROM config_versions` +
+				` WHERE sensitive = true AND value_cipher IS NULL ORDER BY id LIMIT $1`,
+			updateQ: `UPDATE config_versions SET value = '', value_cipher = $1, value_key_id = $2,` +
+				` value_edk = $3, value_nonce = $4 WHERE id = $5 AND value_cipher IS NULL`,
 		}, nil
 	default:
 		return migTableQueries{}, fmt.Errorf("plaintext-migrator: unknown table %q", table)
@@ -189,7 +193,9 @@ func computeAAD(table, aadIdentity string) []byte {
 }
 
 // encryptBatch encrypts each row in the batch and writes it back.
-func (m *plaintextMigrator) encryptBatch(ctx context.Context, updateQ, table string, batch []pendingRow, result *PlaintextMigrationResult) error {
+func (m *plaintextMigrator) encryptBatch(
+	ctx context.Context, updateQ, table string, batch []pendingRow, result *PlaintextMigrationResult,
+) error {
 	for _, row := range batch {
 		aad := computeAAD(table, row.aadIdentity)
 		ct, keyID, nonce, edk, encErr := m.transformer.Encrypt(ctx, []byte(row.value), aad)
@@ -236,7 +242,9 @@ func (m *plaintextMigrator) waitRateLimit(ctx context.Context) error {
 // Returns (skipped=true, nil) when the CAS predicate (value_cipher IS NULL) finds
 // the row was already encrypted by a concurrent writer — this is not an error.
 // Returns an error only for genuine DB failures or unexpected row counts (n > 1).
-func (m *plaintextMigrator) updateRow(ctx context.Context, q, id string, ct []byte, keyID string, nonce, edk []byte) (skipped bool, err error) {
+func (m *plaintextMigrator) updateRow(
+	ctx context.Context, q, id string, ct []byte, keyID string, nonce, edk []byte,
+) (skipped bool, err error) {
 	n, err := m.db.Exec(ctx, q, ct, keyID, edk, nonce, id)
 	if err != nil {
 		return false, err

@@ -149,7 +149,7 @@ func Tracing(tracer tracing.Tracer, opts ...TracingOption) func(http.Handler) ht
 }
 
 // serveSpanned starts the outer request span, delegates to next, then
-// finalises the span. Extracted to keep Tracing's cognitive complexity ≤ 15.
+// finalizes the span. Extracted to keep Tracing's cognitive complexity ≤ 15.
 func serveSpanned(tracer tracing.Tracer, cfg tracingConfig, next http.Handler, w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	isPublic := cfg.publicEndpointFn != nil && cfg.publicEndpointFn(r)

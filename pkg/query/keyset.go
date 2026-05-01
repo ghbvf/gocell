@@ -93,7 +93,7 @@ func appendKeysetWhere(b *Builder, cols []SortColumn, values []any) error {
 	return appendCompoundOR(b, cols, values)
 }
 
-// appendTupleComparison generates: AND (col1, col2) > ($1, $2)
+// appendTupleComparison generates: AND (col1, col2) > ($1, $2).
 func appendTupleComparison(b *Builder, cols []SortColumn, values []any) error {
 	op := directionOp(cols[0].Direction)
 
@@ -139,7 +139,7 @@ func appendCompoundOR(b *Builder, cols []SortColumn, values []any) error {
 	return nil
 }
 
-// appendOrderBy generates: ORDER BY col1 DIR1, col2 DIR2
+// appendOrderBy generates: ORDER BY col1 DIR1, col2 DIR2.
 func appendOrderBy(b *Builder, cols []SortColumn) {
 	parts := make([]string, len(cols))
 	for i, c := range cols {

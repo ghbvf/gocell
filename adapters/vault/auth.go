@@ -430,7 +430,7 @@ func secretIDFromEnv(ctx context.Context, client *vaultapi.Client) (SecretIDProv
 		// Re-read on every Login call so orchestrator-rotated projected volumes
 		// are picked up without a process restart (F-3c).
 		return func(_ context.Context) (string, error) {
-			data, err := os.ReadFile(filePath)
+			data, err := os.ReadFile(filePath) //nolint:gosec // G304: filePath is operator-configured Vault secret_id projected volume path
 			if err != nil {
 				return "", errcode.Wrap(errcode.ErrVaultAuthFailed,
 					fmt.Sprintf("vault-auth: read secret_id from file %s", filePath), err)
@@ -485,7 +485,7 @@ func unwrapSecretID(ctx context.Context, client *vaultapi.Client) (string, error
 	// is used only as a fallback when the header token is absent (root-token
 	// unwrap variant). We always use header-based auth here, so we pass "" as
 	// the body arg — passing wrapToken twice is redundant and creates ambiguity
-	// if the SDK's dual-path behaviour changes in a future version.
+	// if the SDK's dual-path behavior changes in a future version.
 	// ref: hashicorp/vault api/sys_wrapping.go#Unwrap
 	clone.SetToken(wrapToken)
 

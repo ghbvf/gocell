@@ -17,9 +17,9 @@ type hookCell struct {
 	calls []string
 }
 
-func newHookCell(id string) *hookCell {
+func newHookCell() *hookCell {
 	return &hookCell{
-		BaseCell: *NewBaseCell(CellMetadata{ID: id, Type: CellTypeCore}),
+		BaseCell: *NewBaseCell(CellMetadata{ID: "hook-cell", Type: CellTypeCore}),
 	}
 }
 
@@ -84,7 +84,7 @@ var (
 // ---------------------------------------------------------------------------
 
 func TestBeforeStarter_TypeAssertion(t *testing.T) {
-	hc := newHookCell("hook-cell")
+	hc := newHookCell()
 	var c Cell = hc
 	bs, ok := c.(BeforeStarter)
 	assert.True(t, ok, "hookCell should satisfy BeforeStarter")
@@ -93,7 +93,7 @@ func TestBeforeStarter_TypeAssertion(t *testing.T) {
 }
 
 func TestAfterStarter_TypeAssertion(t *testing.T) {
-	hc := newHookCell("hook-cell")
+	hc := newHookCell()
 	var c Cell = hc
 	as, ok := c.(AfterStarter)
 	assert.True(t, ok, "hookCell should satisfy AfterStarter")
@@ -102,7 +102,7 @@ func TestAfterStarter_TypeAssertion(t *testing.T) {
 }
 
 func TestBeforeStopper_TypeAssertion(t *testing.T) {
-	hc := newHookCell("hook-cell")
+	hc := newHookCell()
 	var c Cell = hc
 	bs, ok := c.(BeforeStopper)
 	assert.True(t, ok, "hookCell should satisfy BeforeStopper")
@@ -111,7 +111,7 @@ func TestBeforeStopper_TypeAssertion(t *testing.T) {
 }
 
 func TestAfterStopper_TypeAssertion(t *testing.T) {
-	hc := newHookCell("hook-cell")
+	hc := newHookCell()
 	var c Cell = hc
 	as, ok := c.(AfterStopper)
 	assert.True(t, ok, "hookCell should satisfy AfterStopper")

@@ -422,9 +422,9 @@ func TestAssemblyHooks_ContextCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // cancel immediately
 
-	// Assembly start should still proceed (hooks receive cancelled ctx,
+	// Assembly start should still proceed (hooks receive canceled ctx,
 	// but our test hooks don't check ctx — they succeed).
-	// This verifies the assembly doesn't crash on cancelled context.
+	// This verifies the assembly doesn't crash on canceled context.
 	require.NoError(t, a.Start(ctx))
 	assert.Equal(t, []string{
 		"A.BeforeStart", "A.Start", "A.AfterStart",

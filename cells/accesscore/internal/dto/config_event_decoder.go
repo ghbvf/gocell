@@ -37,7 +37,7 @@ type EntryDeleted struct {
 	ActorID string
 }
 
-// internal wire structs; not exported
+// internal wire structs; not exported.
 type entryUpsertedWire struct {
 	Key     string `json:"key"`
 	Version int    `json:"version"`

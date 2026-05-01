@@ -21,18 +21,18 @@ import (
 // addition to the access-session revocation. Without this, a stolen refresh
 // token would survive a password rotation or account lock.
 
-func newCascadeStore(t *testing.T) (refresh.Store, *storetest.FakeClock) {
+func newCascadeStore(t *testing.T) refresh.Store {
 	t.Helper()
 	clock := storetest.NewFakeClock(time.Now())
 	policy := refresh.Policy{ReuseInterval: 100 * time.Millisecond, MaxAge: time.Hour}
-	return refreshmem.MustNew(policy, clock, nil), clock
+	return refreshmem.MustNew(policy, clock, nil)
 }
 
 func TestService_Lock_RevokesRefreshChain(t *testing.T) {
 	ctx := auth.TestContext("test-admin", []string{"admin"})
 	userRepo := mem.NewUserRepository()
 	sessionRepo := mem.NewSessionRepository()
-	refreshStore, _ := newCascadeStore(t)
+	refreshStore := newCascadeStore(t)
 
 	svc, err := NewService(userRepo, sessionRepo, refreshStore, slog.Default(),
 		WithTokenIssuer(minimalStubIssuer))
@@ -64,7 +64,7 @@ func TestService_ChangePassword_RevokesRefreshChain(t *testing.T) {
 	ctx := context.Background()
 	sessionRepo := mem.NewSessionRepository()
 	userRepo := mem.NewUserRepository()
-	refreshStore, _ := newCascadeStore(t)
+	refreshStore := newCascadeStore(t)
 
 	svc, err := NewService(userRepo, sessionRepo, refreshStore, slog.Default(),
 		WithTokenIssuer(minimalStubIssuer))
@@ -102,7 +102,7 @@ func TestService_Delete_RevokesRefreshChain(t *testing.T) {
 	ctx := auth.TestContext("test-admin", []string{"admin"})
 	userRepo := mem.NewUserRepository()
 	sessionRepo := mem.NewSessionRepository()
-	refreshStore, _ := newCascadeStore(t)
+	refreshStore := newCascadeStore(t)
 
 	svc, err := NewService(userRepo, sessionRepo, refreshStore, slog.Default(),
 		WithTokenIssuer(minimalStubIssuer))

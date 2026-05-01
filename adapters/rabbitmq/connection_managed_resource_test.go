@@ -35,21 +35,21 @@ func TestConnection_Checkers_HonorsCtxDeadline(t *testing.T) {
 	conn, _ := newTestConnection(t)
 	t.Cleanup(func() { _ = conn.Close(context.Background()) })
 
-	cancelled, cancel := context.WithCancel(context.Background())
+	canceled, cancel := context.WithCancel(context.Background())
 	cancel()
 
 	probe := conn.Checkers()["rabbitmq_ready"]
 	start := time.Now()
-	err := probe(cancelled)
+	err := probe(canceled)
 	elapsed := time.Since(start)
 	if err == nil {
-		t.Error("expected ctx.Err() from probe with pre-cancelled ctx, got nil")
+		t.Error("expected ctx.Err() from probe with pre-canceled ctx, got nil")
 	}
 	if !errors.Is(err, context.Canceled) {
 		t.Errorf("probe error = %v, want context.Canceled", err)
 	}
 	if elapsed > 50*time.Millisecond {
-		t.Errorf("probe took %s — should return immediately on cancelled ctx", elapsed)
+		t.Errorf("probe took %s — should return immediately on canceled ctx", elapsed)
 	}
 }
 

@@ -46,7 +46,7 @@ func TestIgnoreCtx_AdaptsIoCloser(t *testing.T) {
 
 	// cc is already lifecycle.ContextCloser by virtue of IgnoreCtx's return type.
 
-	// Call with a cancelled context — the underlying close MUST still run.
+	// Call with a canceled context — the underlying close MUST still run.
 	cancelledCtx, cancel := context.WithCancel(context.Background())
 	cancel()
 	if err := cc.Close(cancelledCtx); err != nil {

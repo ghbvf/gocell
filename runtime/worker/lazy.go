@@ -11,7 +11,7 @@ import (
 //
 // ref: docs/plans/202604191515-auth-federated-whistle.md — S37 WORKER-LAZY-HOIST
 //
-// Thread safety: Set (writer) and Start/Stop (readers) synchronise via atomic.Pointer.
+// Thread safety: Set (writer) and Start/Stop (readers) synchronize via atomic.Pointer.
 // Semantics: nil delegate → Start/Stop are no-op success (preserves lazyBootstrapWorker
 // contract where adminExists==true yields no cleaner).
 type LazyWorker struct {

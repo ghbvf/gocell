@@ -118,7 +118,8 @@ func (m *Migrator) Up(ctx context.Context) error {
 			names[i] = idx.Index
 		}
 		return errcode.New(ErrAdapterPGMigrate,
-			fmt.Sprintf("postgres: refusing to migrate: %d invalid index(es) detected: %v; manual cleanup required before proceeding", len(invalid), names))
+			fmt.Sprintf("postgres: refusing to migrate: %d invalid index(es) detected: %v;"+
+				" manual cleanup required before proceeding", len(invalid), names))
 	}
 	if _, err := m.provider.Up(ctx); err != nil {
 		return errcode.Wrap(ErrAdapterPGMigrate, "postgres: apply migrations", err)
@@ -161,7 +162,7 @@ func (m *Migrator) Status(ctx context.Context) ([]MigrationStatus, error) {
 }
 
 // migrationName extracts the descriptive name from a goose migration path.
-// "001_create_outbox_entries.sql" → "create_outbox_entries"
+// "001_create_outbox_entries.sql" → "create_outbox_entries".
 func migrationName(path string, version int64) string {
 	base := path
 	if i := strings.LastIndex(path, "/"); i >= 0 {

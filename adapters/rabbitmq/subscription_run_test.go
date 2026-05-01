@@ -203,7 +203,7 @@ func TestSubscriptionRun_WaitAndClose_CtxTimeout_AbandonedGoroutineEventuallyExi
 	assert.False(t, ch.closeCalled,
 		"ch.Close must not be called when waitAndClose returns early due to ctx expiry")
 
-	// Capture wgDone channel; it is initialised by newSubscriptionRun and
+	// Capture wgDone channel; it is initialized by newSubscriptionRun and
 	// will be closed when the wg-waiter goroutine (spawned inside waitAndClose)
 	// finishes localWg.Wait().
 	wgDone := run.wgDone()

@@ -239,7 +239,7 @@ func entryFieldValue(e command.Entry, field string) any {
 // Report records that the device has received the command and started work.
 func (s *Service) Report(ctx context.Context, deviceID, cmdID string) error {
 	now := time.Now()
-	if _, err := s.getOwnedCommand(ctx, deviceID, cmdID); err != nil {
+	if err := s.getOwnedCommand(ctx, deviceID, cmdID); err != nil {
 		return err
 	}
 	if err := s.queue.Report(ctx, cmdID, now); err != nil {
@@ -252,14 +252,14 @@ func (s *Service) Report(ctx context.Context, deviceID, cmdID string) error {
 	return nil
 }
 
-// Ack finalises a command with the supplied terminal reason. Ack is a single
+// Ack finalizes a command with the supplied terminal reason. Ack is a single
 // Queue transition; it does not synthesize Sent/Delivered timestamps.
 func (s *Service) Ack(ctx context.Context, deviceID, cmdID string, reason command.AckReason) error {
 	if !reason.Valid() {
 		return errcode.New(errcode.ErrValidationFailed, "device-command: invalid ack reason")
 	}
 	now := time.Now()
-	if _, err := s.getOwnedCommand(ctx, deviceID, cmdID); err != nil {
+	if err := s.getOwnedCommand(ctx, deviceID, cmdID); err != nil {
 		return err
 	}
 
@@ -284,7 +284,7 @@ func (s *Service) ExtendLease(ctx context.Context, deviceID, cmdID string, exten
 	if extension > MaxLeaseExtension {
 		return errcode.New(errcode.ErrValidationFailed, "device-command: extension exceeds maximum")
 	}
-	if _, err := s.getOwnedCommand(ctx, deviceID, cmdID); err != nil {
+	if err := s.getOwnedCommand(ctx, deviceID, cmdID); err != nil {
 		return err
 	}
 	if err := s.queue.ExtendLease(ctx, cmdID, extension, time.Now()); err != nil {
@@ -293,15 +293,15 @@ func (s *Service) ExtendLease(ctx context.Context, deviceID, cmdID string, exten
 	return nil
 }
 
-func (s *Service) getOwnedCommand(ctx context.Context, deviceID, cmdID string) (*command.Entry, error) {
+func (s *Service) getOwnedCommand(ctx context.Context, deviceID, cmdID string) error {
 	e, err := s.queue.GetCommand(ctx, cmdID)
 	if err != nil {
-		return nil, fmt.Errorf("device-command: get command: %w", err)
+		return fmt.Errorf("device-command: get command: %w", err)
 	}
 
 	if e.DeviceID != deviceID {
-		return nil, errcode.New(errcode.ErrAuthForbidden,
+		return errcode.New(errcode.ErrAuthForbidden,
 			fmt.Sprintf("device-command: command %q does not belong to device %q", cmdID, deviceID))
 	}
-	return e, nil
+	return nil
 }

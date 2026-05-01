@@ -3,7 +3,7 @@
 //
 // FakeStore implements runtime/outbox.Store in memory and is intended for unit
 // tests in cells and runtime/outbox. The conformance suite (RunStoreConformanceSuite)
-// verifies that any Store implementation produces identical observable behaviour.
+// verifies that any Store implementation produces identical observable behavior.
 package outboxtest
 
 import (
@@ -217,7 +217,9 @@ func (s *FakeStore) MarkPublished(_ context.Context, id string) (updated bool, e
 
 // MarkRetry transitions a failing entry back to pending.
 // updated=false when the row is no longer in claiming status.
-func (s *FakeStore) MarkRetry(_ context.Context, id string, attempts int, nextRetryAt time.Time, lastError string) (updated bool, err error) {
+func (s *FakeStore) MarkRetry(
+	_ context.Context, id string, attempts int, nextRetryAt time.Time, lastError string,
+) (updated bool, err error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -255,7 +257,9 @@ func (s *FakeStore) MarkDead(_ context.Context, id string, attempts int, lastErr
 // ReclaimStale transitions claiming rows whose claimed_at is older than claimTTL
 // back to pending or to dead (when attempts+1 >= maxAttempts).
 // Returns count of rows recovered across both destinations.
-func (s *FakeStore) ReclaimStale(_ context.Context, claimTTL time.Duration, maxAttempts int, baseDelay, maxDelay time.Duration) (count int, err error) {
+func (s *FakeStore) ReclaimStale(
+	_ context.Context, claimTTL time.Duration, maxAttempts int, baseDelay, maxDelay time.Duration,
+) (count int, err error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 

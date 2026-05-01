@@ -137,7 +137,7 @@ func TestDecryptGCM_WrongNonceLength(t *testing.T) {
 	}
 
 	// Use a nonce of wrong length (8 instead of 12).
-	wrongNonce := bytes.Repeat([]byte{0x00}, 8)
+	wrongNonce := make([]byte, 8)
 	_, err = aeadutil.DecryptGCM(validKey32, ct, wrongNonce, nil)
 	if err == nil {
 		t.Fatal("expected error with wrong nonce length, got nil")

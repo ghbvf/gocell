@@ -472,10 +472,10 @@ func TestHandlePatch_TypeValidation(t *testing.T) {
 // handleChangePassword tests
 // ---------------------------------------------------------------------------
 
-// seedUserInRepo creates a user with a bcrypt-hashed password directly in the repo.
-func seedUserInRepo(t *testing.T, repo *mem.UserRepository, id, username, password string) {
+// seedUserInRepo creates a user with a bcrypt-hashed "oldpass" password directly in the repo.
+func seedUserInRepo(t *testing.T, repo *mem.UserRepository, id, username string) {
 	t.Helper()
-	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.MinCost)
+	hash, err := bcrypt.GenerateFromPassword([]byte("oldpass"), bcrypt.MinCost)
 	require.NoError(t, err)
 	user, err := domain.NewUser(username, username+"@test.com", string(hash))
 	require.NoError(t, err)
@@ -490,7 +490,7 @@ func TestHandler_ChangePassword_SelfAllowed(t *testing.T) {
 		PasswordResetRequired: false,
 	}}
 	r, repo := setupWithIssuer(stubIssuer)
-	seedUserInRepo(t, repo, testutil.TestID("usr-self"), "self-user", "oldpass")
+	seedUserInRepo(t, repo, testutil.TestID("usr-self"), "self-user")
 
 	body := `{"oldPassword":"oldpass","newPassword":"newpass"}`
 	req := httptest.NewRequest(http.MethodPost, identityPrefix+"/"+testutil.TestID("usr-self")+"/password", strings.NewReader(body))
@@ -510,7 +510,7 @@ func TestHandler_ChangePassword_AdminOnAnotherUser_Allowed(t *testing.T) {
 		RefreshToken: "admin-issued-rt",
 	}}
 	r, repo := setupWithIssuer(stubIssuer)
-	seedUserInRepo(t, repo, testutil.TestID("usr-target"), "target-user", "oldpass")
+	seedUserInRepo(t, repo, testutil.TestID("usr-target"), "target-user")
 
 	body := `{"oldPassword":"oldpass","newPassword":"newpass2"}`
 	req := httptest.NewRequest(http.MethodPost, identityPrefix+"/"+testutil.TestID("usr-target")+"/password", strings.NewReader(body))
@@ -525,7 +525,7 @@ func TestHandler_ChangePassword_AdminOnAnotherUser_Allowed(t *testing.T) {
 
 func TestHandler_ChangePassword_StrangerForbidden(t *testing.T) {
 	r, repo := setupWithIssuer(nil)
-	seedUserInRepo(t, repo, testutil.TestID("usr-victim"), "victim-user", "oldpass")
+	seedUserInRepo(t, repo, testutil.TestID("usr-victim"), "victim-user")
 
 	body := `{"oldPassword":"oldpass","newPassword":"newpass"}`
 	req := httptest.NewRequest(http.MethodPost, identityPrefix+"/"+testutil.TestID("usr-victim")+"/password", strings.NewReader(body))
@@ -539,7 +539,7 @@ func TestHandler_ChangePassword_StrangerForbidden(t *testing.T) {
 
 func TestHandler_ChangePassword_BadJSON(t *testing.T) {
 	r, repo := setupWithIssuer(nil)
-	seedUserInRepo(t, repo, testutil.TestID("usr-badjson"), "badjson-user", "oldpass")
+	seedUserInRepo(t, repo, testutil.TestID("usr-badjson"), "badjson-user")
 
 	req := httptest.NewRequest(http.MethodPost, identityPrefix+"/"+testutil.TestID("usr-badjson")+"/password", strings.NewReader(`{bad json`))
 	req.Header.Set("Content-Type", "application/json")

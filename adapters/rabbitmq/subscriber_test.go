@@ -48,7 +48,7 @@ func TestProcessDelivery_LegacyEnvelopeFormat_RejectsToDLX(t *testing.T) {
 	})
 
 	handlerCalled := false
-	handler := func(_ context.Context, e outbox.Entry) outbox.HandleResult {
+	handler := func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
 		handlerCalled = true
 		return outbox.HandleResult{Disposition: outbox.DispositionAck}
 	}
@@ -105,7 +105,7 @@ func TestProcessDelivery_TooLongEntryID_RejectsToDLX(t *testing.T) {
 	})
 
 	handlerCalled := false
-	handler := func(_ context.Context, e outbox.Entry) outbox.HandleResult {
+	handler := func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
 		handlerCalled = true
 		return outbox.HandleResult{Disposition: outbox.DispositionAck}
 	}
@@ -507,7 +507,7 @@ func TestSubscriber_GoroutineLeakOnClose(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 // TestSubscribeOnce_ReconnectWaitCtx_InheritsParentCancel verifies the F3 fix:
-// when the parent ctx is cancelled while subscribeOnce is waiting for in-flight
+// when the parent ctx is canceled while subscribeOnce is waiting for in-flight
 // deliveries on reconnect, the 30 s ceiling does NOT extend the wait — the
 // waitCtx is derived from ctx (not Background / WithoutCancel), so the parent
 // cancel propagates immediately.
@@ -544,7 +544,7 @@ func TestSubscribeOnce_ReconnectWaitCtx_InheritsParentCancel(t *testing.T) {
 	})
 	ch.consumeDeliveries <- amqp.Delivery{DeliveryTag: 1, Body: body}
 
-	// Use a ctx that will be cancelled shortly — much less than the 30 s ceiling.
+	// Use a ctx that will be canceled shortly — much less than the 30 s ceiling.
 	ctx, cancel := context.WithCancel(context.Background())
 
 	sub := NewSubscriber(conn, SubscriberConfig{
@@ -595,7 +595,7 @@ func TestSubscribeOnce_ReconnectWaitCtx_InheritsParentCancel(t *testing.T) {
 func TestSubscribeOnce_ReconnectWaitCtx_NoDeadlineFallsBackTo30s(t *testing.T) {
 	// Temporarily inject a short wait budget so the test doesn't run for 30 s.
 	// The 30 s ceiling in subscribeOnce is context.WithTimeout(ctx, defaultRMQReconnectWaitTimeout);
-	// we cannot inject that directly, so we verify the behaviour by ensuring the
+	// we cannot inject that directly, so we verify the behavior by ensuring the
 	// closed deliveries path causes subscribeOnce to hit the local-wg wait and
 	// eventually return (with the real 30 s this would just be slow; here we
 	// only check the control flow exits cleanly after handler finishes).
@@ -647,7 +647,7 @@ func TestSubscribeOnce_ReconnectWaitCtx_NoDeadlineFallsBackTo30s(t *testing.T) {
 	}, 3*time.Second, 5*time.Millisecond, "delivery must be acked")
 
 	// Close deliveries to trigger errSubscriptionLost in subscribeOnce.
-	// Cancel immediately after — the reconnect loop will exit after ctx is cancelled
+	// Cancel immediately after — the reconnect loop will exit after ctx is canceled
 	// without spinning hundreds of iterations.
 	close(ch.consumeDeliveries)
 	cancel()

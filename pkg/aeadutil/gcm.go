@@ -47,7 +47,7 @@ func EncryptGCM(key, plaintext, aad []byte) (ciphertext, nonce []byte, err error
 
 // DecryptGCM decrypts rawCiphertext (not nonce-prefixed) using key, nonce, and aad.
 // The aad must match exactly what was used in EncryptGCM; any mismatch causes
-// AES-GCM authentication failure. Errors are sanitised — the message never
+// AES-GCM authentication failure. Errors are sanitized — the message never
 // contains key material or plaintext.
 //
 // ref: google/tink-go aead/subtle/aes_gcm.go

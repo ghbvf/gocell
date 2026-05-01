@@ -166,9 +166,9 @@ func TestVerifyJSONPrinter_NilSlicesEmitEmptyArrays(t *testing.T) {
 	require.NoError(t, p.Print(result))
 
 	body := buf.String()
-	assert.Contains(t, body, `"results": []`, "nil Results must serialise as []")
-	assert.Contains(t, body, `"errors": []`, "nil Errors must serialise as []")
-	assert.Contains(t, body, `"manualPending": []`, "nil ManualPending must serialise as []")
+	assert.Contains(t, body, `"results": []`, "nil Results must serialize as []")
+	assert.Contains(t, body, `"errors": []`, "nil Errors must serialize as []")
+	assert.Contains(t, body, `"manualPending": []`, "nil ManualPending must serialize as []")
 	assert.NotContains(t, body, "null", "no field should be null")
 }
 

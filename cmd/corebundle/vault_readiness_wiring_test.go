@@ -101,10 +101,7 @@ func buildBootstrapWithFakeKeyProvider(t *testing.T, shared *SharedDeps, kp kcry
 		return nil, err
 	}
 
-	metricsHandler, err := buildMetricsHandler(shared.MetricsToken, shared.PromStack.registry)
-	if err != nil {
-		return nil, err
-	}
+	metricsHandler := buildMetricsHandler(shared.MetricsToken, shared.PromStack.registry)
 
 	adapterInfo := adapterInfoForSharedDeps(shared)
 	opts := runtimeBaseOptions(shared, asm, consumerBase, metricsHandler, adapterInfo)

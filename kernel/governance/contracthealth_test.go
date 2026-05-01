@@ -395,7 +395,7 @@ schemaRefs:
 	assert.Greater(t, schemaFinding.Column, 0)
 }
 
-// assertContractHealthIssues centralises the per-case assertion logic.
+// assertContractHealthIssues centralizes the per-case assertion logic.
 // Two-arm shape:
 //   - wantErr=false: issues must be empty.
 //   - wantErr=true:  at least one issue must mention wantMsg in its

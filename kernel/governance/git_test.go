@@ -2,7 +2,6 @@ package governance
 
 import (
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -11,24 +10,17 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestGitExecutable_ResolvesAbsolutePath(t *testing.T) {
-	// gitExecutable should resolve to a path containing "git" — either an
-	// absolute LookPath result on systems with git installed, or the
-	// fallback "git" string when git is not on PATH. Either way it must
-	// not be empty so callers always have something to invoke.
-	got := gitExecutable()
-	require.NotEmpty(t, got)
-	assert.Contains(t, got, "git",
-		"gitExecutable should at minimum contain 'git'; got %q", got)
-}
-
-func TestGitCmd_UsesCachedExecutable(t *testing.T) {
-	cmd := gitCmd("--version")
-	require.NotNil(t, cmd)
-	require.NotEmpty(t, cmd.Args)
-	assert.Equal(t, gitExecutable(), cmd.Args[0],
-		"gitCmd must use the cached executable as argv[0]")
-	assert.Equal(t, []string{gitExecutable(), "--version"}, cmd.Args)
+func TestGitTool_ResolvesAbsolutePath(t *testing.T) {
+	// gitTool wraps cmdrun.NewTool("git"); it returns an error only when git
+	// is not on PATH. CI environments always have git, so the happy path is
+	// the normal expectation; the error path is covered by NewTool's own
+	// tests in pkg/cmdrun.
+	tool, err := gitTool()
+	require.NoError(t, err)
+	out, err := runGit("--version")
+	require.NoError(t, err)
+	assert.Contains(t, string(out), "git version")
+	_ = tool // resolution is the assertion; the wrapped path is unexported.
 }
 
 func TestHasGitMetadata_TrueWhenDotGitExists(t *testing.T) {
@@ -153,7 +145,6 @@ func writeRepoFile(t *testing.T, root, rel, body string) {
 
 func gitRun(t *testing.T, root string, args ...string) {
 	t.Helper()
-	cmd := exec.Command(gitExecutable(), append([]string{"-C", root}, args...)...)
-	out, err := cmd.CombinedOutput()
+	out, err := runGit(append([]string{"-C", root}, args...)...)
 	require.NoError(t, err, "git %s failed:\n%s", strings.Join(args, " "), string(out))
 }

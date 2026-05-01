@@ -59,9 +59,7 @@ func makeFetcher(items []testItem) func(context.Context, ListParams) ([]testItem
 		sorted := make([]testItem, len(items))
 		copy(sorted, items)
 		Sort(sorted, params.Sort, testCompareField)
-		result, err := ApplyCursor(sorted, params, func(item testItem, field string) any {
-			return testFieldValue(item, field)
-		})
+		result, err := ApplyCursor(sorted, params, testFieldValue)
 		if err != nil {
 			return nil, err
 		}

@@ -1,7 +1,6 @@
 package verify
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"os"
@@ -10,6 +9,7 @@ import (
 	"runtime"
 	"strings"
 
+	"github.com/ghbvf/gocell/pkg/cmdrun"
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
@@ -23,15 +23,15 @@ type goTestResult struct {
 }
 
 type goTestRunner struct {
-	goTool string
+	goTool cmdrun.ValidatedTool
 }
 
 func newGoTestRunner() (goTestRunner, error) {
-	path, err := goToolPath()
+	tool, err := cmdrun.NewTool(goToolName())
 	if err != nil {
 		return goTestRunner{}, errcode.Wrap(errcode.ErrTestExecution, "resolve go tool", err)
 	}
-	return goTestRunner{goTool: path}, nil
+	return goTestRunner{goTool: tool}, nil
 }
 
 // runGoTest executes `go test` with the given arguments in dir.
@@ -47,42 +47,23 @@ func runGoTest(ctx context.Context, dir string, args []string) goTestResult {
 
 func (r goTestRunner) run(ctx context.Context, dir string, args []string) goTestResult {
 	fullArgs := append([]string{"test"}, args...)
-	cmd := exec.CommandContext(ctx, r.goTool, fullArgs...)
-	cmd.Dir = filepath.Clean(dir)
-	cmd.Env = goTestEnv(r.goTool)
-
-	var buf bytes.Buffer
-	cmd.Stdout = &buf
-	cmd.Stderr = &buf
-
-	runErr := cmd.Run()
-	output := buf.String()
+	output, runErr := cmdrun.RunIn(ctx, r.goTool, filepath.Clean(dir), goTestEnv(r.goTool.Dir()), fullArgs...)
+	out := string(output)
 
 	if runErr == nil {
-		zm := isZeroMatch(output)
-		return goTestResult{Output: output, Passed: true, ZeroMatch: zm, SkippedOnly: !zm && isSkipOnly(output)}
+		zm := isZeroMatch(out)
+		return goTestResult{Output: out, Passed: true, ZeroMatch: zm, SkippedOnly: !zm && isSkipOnly(out)}
 	}
 
 	var exitErr *exec.ExitError
 	if errors.As(runErr, &exitErr) {
-		return goTestResult{Output: output, Passed: false}
+		return goTestResult{Output: out, Passed: false}
 	}
 
 	return goTestResult{
-		Output: output,
+		Output: out,
 		Err:    errcode.Wrap(errcode.ErrTestExecution, "go test execution failed", runErr),
 	}
-}
-
-func goToolPath() (string, error) {
-	path, err := exec.LookPath(goToolName())
-	if err != nil {
-		return "", err
-	}
-	if filepath.IsAbs(path) {
-		return filepath.Clean(path), nil
-	}
-	return filepath.Abs(path)
 }
 
 func goToolName() string {
@@ -92,11 +73,15 @@ func goToolName() string {
 	return "go"
 }
 
-func goTestEnv(goTool string) []string {
+// goTestEnv returns os.Environ with PATH rewritten to put goToolDir first,
+// so go-toolchain-internal helpers (compile, link, vet) resolve to the
+// toolchain that owns the go binary rather than any other version that
+// might happen to be earlier on PATH.
+func goTestEnv(goToolDir string) []string {
 	env := os.Environ()
 	pathKey, pathValue := pathEnv(env)
 	env = withoutPathEnv(env)
-	return append(env, pathKey+"="+prependPath(filepath.Dir(goTool), pathValue))
+	return append(env, pathKey+"="+prependPath(goToolDir, pathValue))
 }
 
 func withoutPathEnv(env []string) []string {

@@ -44,9 +44,9 @@ func describeAuthChain(chain []cell.ListenerAuth) string {
 	return strings.Join(parts, "+")
 }
 
-// chainProtectsRoutes reports whether the chain is "auth-flavoured" — i.e.
+// chainProtectsRoutes reports whether the chain is "auth-flavored" — i.e.
 // installs middleware that prevents unauthenticated access. AuthNone and an
-// empty chain are NOT auth-flavoured. Returns true for JWT, mTLS, service-token
+// empty chain are NOT auth-flavored. Returns true for JWT, mTLS, service-token
 // (and combinations thereof).
 //
 // This replaces the old isAuthFlavoredPolicy string-match helper.

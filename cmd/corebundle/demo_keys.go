@@ -6,7 +6,7 @@ import (
 )
 
 // realAdapterMode is the canonical value of GOCELL_ADAPTER_MODE that activates
-// production fail-fast behaviour (rejects demo keys, requires service secrets,
+// production fail-fast behavior (rejects demo keys, requires service secrets,
 // rejects static Vault tokens, …). Defined as a constant so that future tokens
 // like "staging" would surface as an unknown-mode compile site rather than
 // silently being treated as "not real".
@@ -67,7 +67,8 @@ func rejectDemoKey(adapterMode, envName string, key []byte) error {
 	}
 	for _, demo := range wellKnownDemoKeys {
 		if len(key) == len(demo) && subtle.ConstantTimeCompare(key, []byte(demo)) == 1 {
-			return fmt.Errorf("%s is set to a well-known demo key; rotate to a fresh random 32-byte secret before running in real adapter mode", envName)
+			return fmt.Errorf("%s is set to a well-known demo key;"+
+				" rotate to a fresh random 32-byte secret before running in real adapter mode", envName)
 		}
 	}
 	return nil

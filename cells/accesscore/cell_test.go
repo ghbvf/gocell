@@ -930,7 +930,7 @@ func seedAdminUser(t *testing.T, ctx context.Context, userRepo *mem.UserReposito
 }
 
 // TestAccessCore_DirectPrefill_AdminRoleAndUser verifies that a cell can be
-// initialised when the admin role and user are pre-filled directly into repos
+// initialized when the admin role and user are pre-filled directly into repos
 // (equivalent to the old WithSeedAdmin fixture pattern for integration tests).
 func TestAccessCore_DirectPrefill_AdminRoleAndUser(t *testing.T) {
 	userRepo := mem.NewUserRepository()

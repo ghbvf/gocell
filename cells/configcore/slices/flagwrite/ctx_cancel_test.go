@@ -15,7 +15,7 @@ import (
 )
 
 // cancellingTxRunner simulates a tx runner that cancels the context and does
-// NOT invoke fn — modelling a real PG transaction where the tx is rolled back
+// NOT invoke fn — modeling a real PG transaction where the tx is rolled back
 // before fn executes (e.g. context deadline already expired at tx start).
 //
 // This correctly tests rollback semantics: because fn is never called, the
@@ -26,7 +26,7 @@ type cancellingTxRunner struct {
 
 func (r *cancellingTxRunner) RunInTx(ctx context.Context, fn func(context.Context) error) error {
 	r.calls++
-	// Pre-cancel the context before fn runs, modelling a tx that detects
+	// Pre-cancel the context before fn runs, modeling a tx that detects
 	// context cancellation at start and rolls back immediately.
 	cancelCtx, cancel := context.WithCancel(ctx)
 	cancel()
@@ -53,7 +53,7 @@ func TestFlagWrite_CtxCancel_RollsBackTx(t *testing.T) {
 		Description: "ctx cancel test",
 	})
 
-	require.Error(t, err, "Create must return error when ctx is cancelled inside RunInTx")
+	require.Error(t, err, "Create must return error when ctx is canceled inside RunInTx")
 	assert.ErrorIs(t, err, context.Canceled, "error must wrap context.Canceled")
 	assert.Equal(t, 1, txRunner.calls, "RunInTx must be called exactly once")
 
@@ -76,7 +76,7 @@ func TestFlagWrite_Toggle_CtxCancel_ReturnsError(t *testing.T) {
 	_, err = seedSvc.Create(context.Background(), CreateInput{Key: "toggle-cancel"})
 	require.NoError(t, err)
 
-	// Now create a service with the cancelling tx runner.
+	// Now create a service with the canceling tx runner.
 	cancelTx := &cancellingTxRunner{}
 	svc, err := NewService(repo, slog.Default(), WithTxManager(cancelTx))
 	require.NoError(t, err)

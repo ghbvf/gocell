@@ -20,7 +20,7 @@ type ManagedResource interface {
 	// Checkers returns named health probe functions that contribute to /readyz.
 	// Each key is a unique checker name; each value is a context-aware probe
 	// (nil return = healthy, non-nil = unhealthy). The context carries the
-	// /readyz deadline so probes can honour cancellation. An empty map is valid.
+	// /readyz deadline so probes can honor cancellation. An empty map is valid.
 	Checkers() map[string]func(context.Context) error
 
 	// Worker returns the optional background worker for this resource.
@@ -30,7 +30,7 @@ type ManagedResource interface {
 
 	// Close releases the resource, bounded by ctx. Called in LIFO order relative
 	// to registration during shutdown. ctx carries the shared phase10 shutdown
-	// budget; implementations SHOULD honour ctx.Done for drain operations.
+	// budget; implementations SHOULD honor ctx.Done for drain operations.
 	// Errors are logged as slog.Warn but do not abort the shutdown of other
 	// resources (best-effort).
 	//

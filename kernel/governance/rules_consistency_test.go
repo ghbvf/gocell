@@ -151,11 +151,11 @@ func writeServiceFile(t *testing.T, dir, content string) {
 	}
 }
 
-// findResultByCode returns all ValidationResults matching the given code.
-func findResultByCode(results []ValidationResult, code string) []ValidationResult {
+// findResultByCode returns all ValidationResults matching CONTRACT-CONSISTENCY-EMIT-01.
+func findResultByCode(results []ValidationResult) []ValidationResult {
 	var out []ValidationResult
 	for _, r := range results {
-		if r.Code == code {
+		if r.Code == codeContractConsistencyEmit01 {
 			out = append(out, r)
 		}
 	}
@@ -209,7 +209,7 @@ func doEmit(ctx context.Context, e outbox.Emitter) error {
 
 	v := NewValidator(project, root)
 	results := v.validateCONTRACTCONSISTENCYEMIT01()
-	if got := findResultByCode(results, codeContractConsistencyEmit01); len(got) != 0 {
+	if got := findResultByCode(results); len(got) != 0 {
 		t.Errorf("case A: expected 0 findings, got %d: %v", len(got), got)
 	}
 }
@@ -226,7 +226,7 @@ func TestCONTRACTCONSISTENCYEMIT01_CaseB(t *testing.T) {
 
 	v := NewValidator(project, root)
 	results := v.validateCONTRACTCONSISTENCYEMIT01()
-	got := findResultByCode(results, codeContractConsistencyEmit01)
+	got := findResultByCode(results)
 	if len(got) != 1 {
 		t.Fatalf("case B: expected 1 finding, got %d: %v", len(got), got)
 	}
@@ -249,7 +249,7 @@ func TestCONTRACTCONSISTENCYEMIT01_CaseC(t *testing.T) {
 
 	v := NewValidator(project, root)
 	results := v.validateCONTRACTCONSISTENCYEMIT01()
-	got := findResultByCode(results, codeContractConsistencyEmit01)
+	got := findResultByCode(results)
 	if len(got) != 1 {
 		t.Fatalf("case C: expected 1 finding, got %d: %v", len(got), got)
 	}
@@ -290,7 +290,7 @@ func doEmit(ctx context.Context, e outbox.Emitter) error {
 
 	v := NewValidator(project, root)
 	results := v.validateCONTRACTCONSISTENCYEMIT01()
-	got := findResultByCode(results, codeContractConsistencyEmit01)
+	got := findResultByCode(results)
 
 	// Expect: forward check fail (declared not emitted) + reverse check fail (emitted not declared).
 	forwardFail := false
@@ -356,7 +356,7 @@ func doEmit(ctx context.Context, e outbox.Emitter) error {
 
 	v := NewValidator(project, root)
 	results := v.validateCONTRACTCONSISTENCYEMIT01()
-	got := findResultByCode(results, codeContractConsistencyEmit01)
+	got := findResultByCode(results)
 
 	reverseFail := false
 	for _, r := range got {
@@ -400,7 +400,7 @@ func doEmit(ctx context.Context, e outbox.Emitter, v string) error {
 
 	v := NewValidator(project, root)
 	results := v.validateCONTRACTCONSISTENCYEMIT01()
-	got := findResultByCode(results, codeContractConsistencyEmit01)
+	got := findResultByCode(results)
 
 	dynamicFail := false
 	relPathOK := false
@@ -456,7 +456,7 @@ func doEmit(ctx context.Context, e emitter) error {
 
 	v := NewValidator(project, root)
 	results := v.validateCONTRACTCONSISTENCYEMIT01()
-	if got := findResultByCode(results, codeContractConsistencyEmit01); len(got) != 0 {
+	if got := findResultByCode(results); len(got) != 0 {
 		t.Errorf("receiver-emit-inline: expected 0 findings, got %d: %v", len(got), got)
 	}
 }
@@ -498,7 +498,7 @@ func doEmit(ctx context.Context, e emitter) error {
 
 	v := NewValidator(project, root)
 	results := v.validateCONTRACTCONSISTENCYEMIT01()
-	if got := findResultByCode(results, codeContractConsistencyEmit01); len(got) != 0 {
+	if got := findResultByCode(results); len(got) != 0 {
 		t.Errorf("receiver-emit-prebuilt: expected 0 findings, got %d: %v", len(got), got)
 	}
 }
@@ -545,7 +545,7 @@ func doWork(ctx context.Context, e outbox.Emitter) error {
 	// But collectAllTopicSelectors picks up dto.TopicTestCreated from doWork.
 	// Forward check should pass; no dynamic-topic error (the ident is not a call expr).
 	dynamicErrors := 0
-	for _, r := range findResultByCode(results, codeContractConsistencyEmit01) {
+	for _, r := range findResultByCode(results) {
 		if strings.Contains(r.Message, "dynamic topic") {
 			dynamicErrors++
 		}
@@ -556,14 +556,14 @@ func doWork(ctx context.Context, e outbox.Emitter) error {
 
 	// The forward check should pass because collectAllTopicSelectors found the topic.
 	forwardErrors := 0
-	for _, r := range findResultByCode(results, codeContractConsistencyEmit01) {
+	for _, r := range findResultByCode(results) {
 		if strings.Contains(r.Message, "no non-test Go file") {
 			forwardErrors++
 		}
 	}
 	if forwardErrors > 0 {
 		t.Errorf("indirect-helper: forward check should pass via selector scan, got %d errors: %v",
-			forwardErrors, findResultByCode(results, codeContractConsistencyEmit01))
+			forwardErrors, findResultByCode(results))
 	}
 }
 
@@ -614,7 +614,7 @@ func TestCONTRACTCONSISTENCYEMIT01_ExamplesSkipped(t *testing.T) {
 
 	v := NewValidator(project, root)
 	results := v.validateCONTRACTCONSISTENCYEMIT01()
-	if got := findResultByCode(results, codeContractConsistencyEmit01); len(got) != 0 {
+	if got := findResultByCode(results); len(got) != 0 {
 		t.Errorf("examples-skipped: expected 0 findings, got %d: %v", len(got), got)
 	}
 }
@@ -690,7 +690,7 @@ func register(sub handler) {
 
 	v := NewValidator(project, root)
 	results := v.validateCONTRACTCONSISTENCYEMIT01()
-	got := findResultByCode(results, codeContractConsistencyEmit01)
+	got := findResultByCode(results)
 
 	// TopicB must NOT appear in emit topics — no reverse finding for it.
 	for _, r := range got {
@@ -721,7 +721,7 @@ func TestCONTRACTCONSISTENCYEMIT01_CaseE_NoOpPassthrough(t *testing.T) {
 
 	v := NewValidator(project, root)
 	results := v.validateCONTRACTCONSISTENCYEMIT01()
-	got := findResultByCode(results, codeContractConsistencyEmit01)
+	got := findResultByCode(results)
 	if len(got) != 0 {
 		t.Errorf("CaseE_NoOpPassthrough: expected 0 findings for L0 no-triggers, got %d: %v", len(got), got)
 	}
@@ -768,7 +768,7 @@ func doEmit(ctx context.Context, e emitter) error {
 
 	v := NewValidator(project, root)
 	results := v.validateCONTRACTCONSISTENCYEMIT01()
-	got := findResultByCode(results, codeContractConsistencyEmit01)
+	got := findResultByCode(results)
 
 	forwardFail := false
 	reverseFail := false
@@ -830,7 +830,7 @@ func doEmit(ctx context.Context, e outbox.Emitter) error {
 
 	v := NewValidator(project, root)
 	results := v.validateCONTRACTCONSISTENCYEMIT01()
-	got := findResultByCode(results, codeContractConsistencyEmit01)
+	got := findResultByCode(results)
 
 	extraCount := 0
 	for _, r := range got {
@@ -907,7 +907,7 @@ func check(topic string) bool {
 
 	v := NewValidator(project, root)
 	results := v.validateCONTRACTCONSISTENCYEMIT01()
-	got := findResultByCode(results, codeContractConsistencyEmit01)
+	got := findResultByCode(results)
 
 	// Forward check must fail: no file actually emits event.foo.y.v1.
 	forwardFail := false
@@ -973,7 +973,7 @@ func doEmit(ctx context.Context, e outbox.Emitter) error {
 	)
 
 	v := NewValidator(project, root)
-	got := findResultByCode(v.validateCONTRACTCONSISTENCYEMIT01(), codeContractConsistencyEmit01)
+	got := findResultByCode(v.validateCONTRACTCONSISTENCYEMIT01())
 	if !hasFindingContaining(got, "httpslice", "no non-test Go file", topic) {
 		t.Fatalf("expected serving-slice forward failure for %q, findings: %v", topic, got)
 	}
@@ -1007,7 +1007,7 @@ func doEmit(ctx context.Context, e outbox.Emitter) error {
 	delete(project.Contracts, topic)
 
 	v := NewValidator(project, root)
-	got := findResultByCode(v.validateCONTRACTCONSISTENCYEMIT01(), codeContractConsistencyEmit01)
+	got := findResultByCode(v.validateCONTRACTCONSISTENCYEMIT01())
 	if !hasFindingContaining(got, "trigger", topic, "existing event contract") {
 		t.Fatalf("expected missing event-contract trigger finding, findings: %v", got)
 	}
@@ -1052,7 +1052,7 @@ func doEmit(ctx context.Context, e outbox.Emitter) error {
 	})
 
 	v := NewValidator(project, root)
-	got := findResultByCode(v.validateCONTRACTCONSISTENCYEMIT01(), codeContractConsistencyEmit01)
+	got := findResultByCode(v.validateCONTRACTCONSISTENCYEMIT01())
 	if !hasFindingContaining(got, "trigger", topic, "kind:event") {
 		t.Fatalf("expected non-event trigger finding, findings: %v", got)
 	}
@@ -1086,7 +1086,7 @@ func doEmit(ctx context.Context, e emitter, suffix string) error {
 	})
 
 	v := NewValidator(project, root)
-	got := findResultByCode(v.validateCONTRACTCONSISTENCYEMIT01(), codeContractConsistencyEmit01)
+	got := findResultByCode(v.validateCONTRACTCONSISTENCYEMIT01())
 	dynamicFound := false
 	for _, r := range got {
 		if strings.Contains(r.Message, "dynamic topic") && r.File != "" && r.Line > 0 && r.Column > 0 {
@@ -1126,7 +1126,7 @@ func doEmit(ctx context.Context, e outbox.Emitter, suffix string) error {
 	})
 
 	v := NewValidator(project, root)
-	got := findResultByCode(v.validateCONTRACTCONSISTENCYEMIT01(), codeContractConsistencyEmit01)
+	got := findResultByCode(v.validateCONTRACTCONSISTENCYEMIT01())
 	dynamicFound := false
 	for _, r := range got {
 		if strings.Contains(r.Message, "dynamic topic") && r.File != "" && r.Line > 0 && r.Column > 0 {
@@ -1182,7 +1182,7 @@ func publish(ctx context.Context, e outbox.Emitter, topic string) error {
 		})
 
 		v := NewValidator(project, root)
-		got := findResultByCode(v.validateCONTRACTCONSISTENCYEMIT01(), codeContractConsistencyEmit01)
+		got := findResultByCode(v.validateCONTRACTCONSISTENCYEMIT01())
 		if !hasFindingContaining(got, "no non-test Go file", topic) {
 			t.Fatalf("expected same-name helper in another package not to satisfy trigger, findings: %v", got)
 		}
@@ -1224,7 +1224,7 @@ func doEmit(ctx context.Context, e emitter) error {
 		})
 
 		v := NewValidator(project, root)
-		got := findResultByCode(v.validateCONTRACTCONSISTENCYEMIT01(), codeContractConsistencyEmit01)
+		got := findResultByCode(v.validateCONTRACTCONSISTENCYEMIT01())
 		if !hasFindingContaining(got, "no non-test Go file", topic) {
 			t.Fatalf("expected same-name entry in another function not to satisfy trigger, findings: %v", got)
 		}
@@ -1322,7 +1322,7 @@ func doEmit(ctx context.Context, receiver emitter, out outbox.Emitter, ch <-chan
 	})
 
 	v := NewValidator(project, root)
-	if got := findResultByCode(v.validateCONTRACTCONSISTENCYEMIT01(), codeContractConsistencyEmit01); len(got) != 0 {
+	if got := findResultByCode(v.validateCONTRACTCONSISTENCYEMIT01()); len(got) != 0 {
 		t.Fatalf("control-flow/local-const evidence should satisfy all triggers, got %d findings: %v", len(got), got)
 	}
 }

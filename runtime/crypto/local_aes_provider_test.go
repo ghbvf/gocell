@@ -455,7 +455,7 @@ func TestLocalAESHandle_Encrypt_ByIDReturnedKeyIDMatches(t *testing.T) {
 // buffers are never shared or reused across calls.
 //
 // Note: this test does NOT directly verify that defer clear(dek) is called —
-// that is a defence-in-depth implementation detail that cannot be observed
+// that is a defense-in-depth implementation detail that cannot be observed
 // without unsafe pointer inspection. What IS verifiable is that:
 //
 //  1. Each call produces a unique nonce (already covered by TC-NonceUnique).
@@ -466,7 +466,7 @@ func TestLocalAESHandle_Encrypt_ByIDReturnedKeyIDMatches(t *testing.T) {
 // Reasoning: if the implementation reused a DEK or nonce across calls (i.e.
 // failed to zero and regenerate), the edk blobs would be identical for the
 // same plaintext+aad. Independence here is a necessary (though not sufficient)
-// condition for correct zeroize behaviour.
+// condition for correct zeroize behavior.
 func TestLocalAESHandle_Encrypt_DoesNotReuseBuffers(t *testing.T) {
 	ctx := context.Background()
 	p := newTestLocalAES(t)

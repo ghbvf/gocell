@@ -56,7 +56,9 @@ func (r *FlagRepository) GetByKey(_ context.Context, key string) (*domain.Featur
 // Update atomically sets enabled, rollout_percentage, description, and
 // increments version by 1. Returns the updated flag.
 // Returns ErrFlagNotFound if the key does not exist.
-func (r *FlagRepository) Update(_ context.Context, key string, enabled bool, rolloutPercentage int, description string) (*domain.FeatureFlag, error) {
+func (r *FlagRepository) Update(
+	_ context.Context, key string, enabled bool, rolloutPercentage int, description string,
+) (*domain.FeatureFlag, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 

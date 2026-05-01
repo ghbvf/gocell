@@ -14,7 +14,7 @@ import (
 // deadline/cancellation fires. The name is used for structured logging.
 //
 // closeFn is always invoked, even when ctx is already done at entry —
-// admitted close must best-effort run. A pre-cancelled ctx still returns
+// admitted close must best-effort run. A pre-canceled ctx still returns
 // ctx.Err() promptly via the select once both branches are ready (Go
 // selects uniformly, so the ctx.Done branch may win, but closeFn has
 // already been launched). This replaces the duplicated "goroutine +
@@ -55,7 +55,7 @@ func CloseWithDeadline(ctx context.Context, name string, closeFn func() error) e
 			}
 		}
 	}()
-	// Fast path: if ctx is already cancelled/expired we must return
+	// Fast path: if ctx is already canceled/expired we must return
 	// ctx.Err() — not whichever branch Go's select happens to pick. The
 	// goroutine still runs closeFn best-effort per the godoc.
 	if err := ctx.Err(); err != nil {

@@ -23,7 +23,7 @@ func TestWriteCredentialFile_MkdirAllError(t *testing.T) {
 
 	// Path inside a file (not a directory) — MkdirAll must fail.
 	path := filepath.Join(blocker, "subdir", "initial_admin_password")
-	err := writeCredentialFile(path, makePayload("admin", "pass"))
+	err := writeCredentialFile(path, makePayload("pass"))
 	if err == nil {
 		t.Fatal("expected error from MkdirAll, got nil")
 	}
@@ -46,7 +46,7 @@ func TestWriteCredentialFile_OpenFileError(t *testing.T) {
 	t.Cleanup(func() { _ = os.Chmod(dir, 0o700) })
 
 	path := filepath.Join(dir, "initial_admin_password")
-	err := writeCredentialFile(path, makePayload("admin", "pass"))
+	err := writeCredentialFile(path, makePayload("pass"))
 	if err == nil {
 		t.Fatal("expected error from OpenFile on read-only dir, got nil")
 	}
@@ -60,7 +60,7 @@ func TestRemoveCredentialFile_RemoveError(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "initial_admin_password")
 
-	if err := writeCredentialFile(path, makePayload("admin", "pass")); err != nil {
+	if err := writeCredentialFile(path, makePayload("pass")); err != nil {
 		t.Fatalf("setup: writeCredentialFile: %v", err)
 	}
 

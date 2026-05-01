@@ -116,7 +116,9 @@ return 0
 `
 
 // Claim attempts to acquire a processing lease for the given key.
-func (c *IdempotencyClaimer) Claim(ctx context.Context, key string, leaseTTL, doneTTL time.Duration) (idempotency.ClaimState, idempotency.Receipt, error) {
+func (c *IdempotencyClaimer) Claim(
+	ctx context.Context, key string, leaseTTL, doneTTL time.Duration,
+) (idempotency.ClaimState, idempotency.Receipt, error) {
 	if leaseTTL <= 0 {
 		leaseTTL = idempotency.DefaultLeaseTTL
 	}

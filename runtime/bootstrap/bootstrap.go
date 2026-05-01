@@ -37,7 +37,7 @@ import (
 // Option configures a Bootstrap instance.
 type Option func(*Bootstrap)
 
-// readyz probe names; consumed by phases_assembly.go / bootstrap_phases.go
+// readyz probe names; consumed by phases_assembly.go / bootstrap_phases.go.
 const (
 	configWatcherCheckerName = "config-watcher"
 	configDriftCheckerName   = "config-drift"
@@ -47,7 +47,7 @@ const (
 // Bootstrap orchestrates the GoCell application lifecycle.
 //
 // Fields are flat: bootstrap is the composition root, and most options
-// influence behaviour across multiple phases (e.g. WithMetricsProvider feeds
+// influence behavior across multiple phases (e.g. WithMetricsProvider feeds
 // both default-assembly construction and HTTP metric auto-wiring;
 // WithRateLimiter writes both router options and the closer list). Forcing
 // a "concern group" sub-struct layout would make those cross-cutting
@@ -173,7 +173,7 @@ func validateListenerConfig(ref cell.ListenerRef, cfg listenerConfig) error {
 			"bootstrap: zero listener ref is invalid; use cell.PrimaryListener, cell.InternalListener, or cell.HealthListener")
 	}
 	// SEC-FAIL-CLOSED: nil OR empty authChain is rejected at phase0. Empty
-	// slices are behaviourally identical to nil — both produce an
+	// slices are behaviorally identical to nil — both produce an
 	// unauthenticated listener — so requiring `[]cell.ListenerAuth{cell.AuthNone{}}`
 	// for genuinely public listeners (HealthListener on a loopback probe path)
 	// keeps the explicit no-auth marker visible to grep, archtest SEC-02, and
@@ -184,10 +184,13 @@ func validateListenerConfig(ref cell.ListenerRef, cfg listenerConfig) error {
 				"(use []cell.ListenerAuth{cell.AuthNone{}} for no-auth listeners)", ref.String()))
 	}
 	if cfg.net == nil && cfg.addr == "" {
-		return fmt.Errorf("bootstrap: listener %q has no address or pre-bound net.Listener; use WithListener addr or WithListenerNet", ref.String())
+		return fmt.Errorf("bootstrap: listener %q has no address or pre-bound net.Listener;"+
+			" use WithListener addr or WithListenerNet", ref.String())
 	}
 	if cfg.shutGrace < 0 {
-		return fmt.Errorf("bootstrap: listener %q has negative shutdownGrace %v; use a non-negative duration or zero to inherit the global shutdownTimeout", ref.String(), cfg.shutGrace)
+		return fmt.Errorf("bootstrap: listener %q has negative shutdownGrace %v;"+
+			" use a non-negative duration or zero to inherit the global shutdownTimeout",
+			ref.String(), cfg.shutGrace)
 	}
 	if err := validateListenerTLSConfig(ref, cfg.tls); err != nil {
 		return err
@@ -212,7 +215,8 @@ func validateListenerTLSConfig(ref cell.ListenerRef, cfg *tls.Config) error {
 		return nil
 	}
 	if len(cfg.Certificates) == 0 && cfg.GetCertificate == nil && cfg.GetConfigForClient == nil {
-		return fmt.Errorf("bootstrap: listener %q TLS config has no Certificates / GetCertificate / GetConfigForClient; the server cannot perform a TLS handshake", ref.String())
+		return fmt.Errorf("bootstrap: listener %q TLS config has no Certificates / GetCertificate / GetConfigForClient;"+
+			" the server cannot perform a TLS handshake", ref.String())
 	}
 	// Static Certificates must each carry at least a chain or a key. Dynamic
 	// sources (GetCertificate / GetConfigForClient) are trusted as opaque
@@ -220,7 +224,10 @@ func validateListenerTLSConfig(ref cell.ListenerRef, cfg *tls.Config) error {
 	if len(cfg.Certificates) > 0 {
 		for i, c := range cfg.Certificates {
 			if len(c.Certificate) == 0 && c.PrivateKey == nil && c.Leaf == nil {
-				return fmt.Errorf("bootstrap: listener %q TLS Certificates[%d] is a zero-value tls.Certificate (no chain, no private key); load a real key pair via tls.LoadX509KeyPair or set GetCertificate", ref.String(), i)
+				return fmt.Errorf(
+					"bootstrap: listener %q TLS Certificates[%d] is a zero-value tls.Certificate"+
+						" (no chain, no private key); load a real key pair via tls.LoadX509KeyPair or set GetCertificate",
+					ref.String(), i)
 			}
 		}
 	}
@@ -313,12 +320,12 @@ func (b *Bootstrap) MetricsProvider() kernelmetrics.Provider {
 	return b.metricsProvider
 }
 
-// Run executes the full startup sequence. It blocks until ctx is cancelled
+// Run executes the full startup sequence. It blocks until ctx is canceled
 // (or a signal is received), then performs orderly shutdown.
 //
 // Health-listener fallback: when no HealthListener is declared, /healthz,
 // /readyz, and /metrics are mounted on the PrimaryListener instead. This is
-// the expected behaviour for tests that inject only primary + internal
+// the expected behavior for tests that inject only primary + internal
 // listeners. Production deployments should declare a dedicated HealthListener
 // (typically "127.0.0.1:9091") to physically separate health traffic from
 // business traffic.

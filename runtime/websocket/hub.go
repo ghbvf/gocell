@@ -133,9 +133,9 @@ func NewHub(cfg HubConfig, handler MessageHandler) *Hub {
 }
 
 // Start begins the Hub's ping loop. It blocks until Stop is called or ctx
-// is cancelled.
+// is canceled.
 //
-// If the caller's context is cancelled, Start runs a full shutdown
+// If the caller's context is canceled, Start runs a full shutdown
 // (drain + close) automatically. Stop may still be called afterwards but
 // will return immediately since the Hub is already stopped.
 func (h *Hub) Start(ctx context.Context) error {
@@ -283,7 +283,7 @@ func (h *Hub) shutdown(ctx context.Context) error {
 // as the parent for per-connection values; cancellation is controlled by the
 // Hub so request-scope cancellation does not immediately tear down accepted
 // WebSocket connections after the HTTP handler returns.
-// The read loop uses a per-connection context that is cancelled when the
+// The read loop uses a per-connection context that is canceled when the
 // connection is unregistered or the Hub shuts down.
 //
 // The Hub must be in the running state (Start called). Register on an
@@ -315,6 +315,7 @@ func (h *Hub) Register(ctx context.Context, conn Conn) error {
 		evicted = old
 	}
 
+	//nolint:gosec // G118: cancel stored in entry.cancel; invoked by evict / unregisterEntry / readLoop exit paths.
 	connCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
 	entry := &connEntry{conn: conn, cancel: cancel}
 	h.conns[conn.ID()] = entry
@@ -452,7 +453,7 @@ func (h *Hub) ConnCount() int {
 	return len(h.conns)
 }
 
-// readLoop reads messages until the per-conn context is cancelled or
+// readLoop reads messages until the per-conn context is canceled or
 // conn.Close() breaks the Read call.
 func (h *Hub) readLoop(ctx context.Context, conn Conn) {
 	for {

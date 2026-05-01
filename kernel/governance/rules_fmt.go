@@ -474,7 +474,7 @@ func (v *Validator) validateFMT13() []ValidationResult {
 				codeFMT13, SeverityError, IssueRequired,
 				contractFile(c),
 				"endpoints.http",
-				fmt.Sprintf("HTTP contract %q must declare endpoints.http; add to contract.yaml:\n  http:\n    method: GET                # GET|POST|PUT|PATCH|DELETE\n    path: /api/v1/...\n    successStatus: 200\n    noContent: false", c.ID),
+				fmt.Sprintf(advHintFMT13MissingHTTP, c.ID),
 			))
 			continue
 		}
@@ -574,7 +574,7 @@ func (v *Validator) validateFMT13PathParams(c *metadata.ContractMeta, h *metadat
 				codeFMT13, SeverityError, IssueRequired,
 				file,
 				"endpoints.http.pathParams",
-				fmt.Sprintf("http contract %q path placeholder %q has no pathParams declaration; add to contract.yaml:\n  pathParams:\n    %s:\n      type: string", c.ID, name, name),
+				fmt.Sprintf(advHintFMT13MissingPathParam, c.ID, name, name),
 			))
 		}
 	}
@@ -623,7 +623,10 @@ func (v *Validator) validateFMT13QueryParams(c *metadata.ContractMeta, h *metada
 // of a single ParamSchema. `isPath` toggles path-specific rules: `required: false`
 // on a path parameter is a contradiction (path placeholders are required by
 // definition) and is rejected.
-func (v *Validator) validateFMT13ParamSchema(c *metadata.ContractMeta, file, kind, name string, p contracts.ParamSchema, isPath bool) []ValidationResult {
+func (v *Validator) validateFMT13ParamSchema(
+	c *metadata.ContractMeta, file, kind, name string,
+	p contracts.ParamSchema, isPath bool,
+) []ValidationResult {
 	var results []ValidationResult
 	fieldBase := fmt.Sprintf("endpoints.http.%s.%s", kind, name)
 
@@ -850,7 +853,8 @@ func (v *Validator) checkFMT15Contract(c *metadata.ContractMeta) []ValidationRes
 		return []ValidationResult{v.newResult(
 			codeFMT15, SeverityWarning, IssueInvalid,
 			contractFile(c), fieldSchemaRefsResponse,
-			fmt.Sprintf("response schema for contract %q uses oneOf/anyOf/allOf: FMT-15 cannot verify list constraints; split into single-shape contracts", c.ID),
+			fmt.Sprintf("response schema for contract %q uses oneOf/anyOf/allOf:"+
+				" FMT-15 cannot verify list constraints; split into single-shape contracts", c.ID),
 		)}
 	}
 	if !isListSchema(info) {

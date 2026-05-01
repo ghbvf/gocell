@@ -61,7 +61,8 @@ func NewHandler(svc *Service) *Handler {
 //
 // SelfOr cannot be used here because "self" is determined by the actorId query
 // parameter, not a path parameter.
-// Deferred (S43, tracked by PERMISSION-BASED-AUTHZ-01): role-name literal is migrated to permission-based authz when that backlog item lands.
+// Deferred (S43, tracked by PERMISSION-BASED-AUTHZ-01): role-name literal is migrated to
+// permission-based authz when that backlog item lands.
 func auditQueryPolicy(r *http.Request) error {
 	ctx := r.Context()
 	p, ok := auth.FromContext(ctx)
@@ -101,6 +102,7 @@ func (h *Handler) HandleQuery(w http.ResponseWriter, r *http.Request) {
 	// fail closed rather than panic on nil dereference.
 	p, ok := auth.FromContext(r.Context())
 	if !ok {
+		//nolint:gosec // G706: structured slog fields, not string concatenation
 		slog.Error("audit: handler reached without principal — policy chain may be misconfigured",
 			slog.String("path", r.URL.Path),
 			slog.String("method", r.Method),
@@ -116,7 +118,7 @@ func (h *Handler) HandleQuery(w http.ResponseWriter, r *http.Request) {
 		actorID = subject
 	}
 	if actorID != subject {
-		slog.Info("audit: admin querying other user",
+		slog.Info("audit: admin querying other user", //nolint:gosec // G706: structured slog fields, not string concatenation
 			slog.String("admin", subject),
 			slog.String("target_actor", actorID),
 		)

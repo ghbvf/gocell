@@ -215,7 +215,7 @@ func TestWaitForSubscription_WaitsForReadyChannel(t *testing.T) {
 	elapsed := time.Since(start)
 
 	// Should return quickly since Ready() is already closed (pre-closed channel).
-	if elapsed >= subscribeInitDelay {
+	if elapsed >= subscribeReadyTimeout {
 		t.Fatalf("expected fast return (pre-closed Ready channel), but took %v", elapsed)
 	}
 }
@@ -236,7 +236,7 @@ func TestWaitForSubscription_MiddlewareWrappedSubscriber_UsesSetup(t *testing.T)
 
 	// Must NOT fall back to sleep -- Setup returns nil immediately and
 	// Inner.Ready returns a pre-closed channel.
-	if elapsed >= subscribeInitDelay {
+	if elapsed >= subscribeReadyTimeout {
 		t.Fatalf("middleware-wrapped subscriber must not sleep (Setup+Ready fast path), but took %v", elapsed)
 	}
 }

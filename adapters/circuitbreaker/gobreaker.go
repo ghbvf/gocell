@@ -76,7 +76,7 @@ type Config struct {
 
 	// IsSuccessful classifies the error returned by the done callback as
 	// success (return true) or failure (return false). When nil, the default
-	// behaviour is err == nil → success, err != nil → failure, which matches
+	// behavior is err == nil → success, err != nil → failure, which matches
 	// gobreaker's built-in default.
 	//
 	// Provide this field when the caller uses domain-specific sentinel errors

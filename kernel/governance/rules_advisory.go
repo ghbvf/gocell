@@ -94,7 +94,7 @@ func (v *Validator) validateADV05() []ValidationResult {
 				"ADV-05", SeverityError, IssueForbidden,
 				contractFile(c),
 				"endpoints.subscribers",
-				fmt.Sprintf("event contract %q is active but has no subscribers; mark lifecycle: deprecated or add at least one cell or actor to endpoints.subscribers in the contract.yaml", c.ID),
+				fmt.Sprintf(advHintADV05EmptySubscribers, c.ID),
 			))
 		}
 	}
@@ -196,7 +196,7 @@ func (v *Validator) adv06ContractToSlice(cellSubscribes map[string]map[string]bo
 				"ADV-06", SeverityError, IssueMismatch,
 				contractFile(c),
 				fmt.Sprintf("endpoints.subscribers[%d]", i),
-				fmt.Sprintf("event contract %q lists cell %q as subscriber, but no slice in %q declares contractUsage{contract: %q, role: subscribe}; add this contractUsage to a slice in %q (e.g. cells/%s/slices/<slice>/slice.yaml) or remove %q from endpoints.subscribers", c.ID, subscriber, subscriber, c.ID, subscriber, subscriber, subscriber),
+				fmt.Sprintf(advHintADV06ContractToSlice, c.ID, subscriber, subscriber, c.ID, subscriber, subscriber, subscriber),
 			))
 		}
 	}
@@ -223,7 +223,7 @@ func (v *Validator) adv06SliceToContract() []ValidationResult {
 				"ADV-06", SeverityError, IssueMismatch,
 				sliceFile(s),
 				fmt.Sprintf("contractUsages[%d].contract", i),
-				fmt.Sprintf("slice %q declares contractUsage{contract: %q, role: subscribe}, but the contract's endpoints.subscribers does not list cell %q; add %q to the contract's endpoints.subscribers or remove the subscribe contractUsage from this slice", s.ID, cu.Contract, s.BelongsToCell, s.BelongsToCell),
+				fmt.Sprintf(advHintADV06SliceToContract, s.ID, cu.Contract, s.BelongsToCell, s.BelongsToCell),
 			))
 		}
 	}

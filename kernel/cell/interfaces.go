@@ -63,7 +63,7 @@ type SchemaConfig struct {
 }
 
 // CellVerify holds structured verify refs for a Cell.
-// Smoke refs use the format: smoke.{cellID}.{suffix}
+// Smoke refs use the format: smoke.{cellID}.{suffix}.
 type CellVerify struct {
 	Smoke []string
 }
@@ -80,7 +80,7 @@ type L0Dep struct {
 // integrated unit of capability that owns its data, slices, and contracts.
 // Cells are registered in an Assembly which drives the Init → Start → Stop
 // lifecycle. Implementations should embed BaseCell for the common metadata
-// fields and add the behavioural methods (Init/Start/Stop) themselves.
+// fields and add the behavioral methods (Init/Start/Stop) themselves.
 type Cell interface {
 	// ID returns the cell's stable identifier (matches cell.yaml id).
 	ID() string
@@ -96,13 +96,13 @@ type Cell interface {
 	// state, and register slices.
 	Init(ctx context.Context, deps Dependencies) error
 	// Start brings the cell to a running state. Returns nil only when the cell
-	// is fully ready to serve traffic. Cancelling ctx must abort startup.
+	// is fully ready to serve traffic. Canceling ctx must abort startup.
 	// Resources acquired here must be released by the matching Stop call.
 	Start(ctx context.Context) error
 	// Stop performs graceful shutdown. The assembly invokes Stop with the
 	// caller-supplied ctx; no per-cell stop timeout is enforced by the kernel,
-	// so implementations are solely responsible for honouring ctx deadlines
-	// and returning promptly when ctx is cancelled. Stop must release every
+	// so implementations are solely responsible for honoring ctx deadlines
+	// and returning promptly when ctx is canceled. Stop must release every
 	// resource Start acquired (connections drained, goroutines joined, leases
 	// surrendered) and must be idempotent against repeated invocation.
 	Stop(ctx context.Context) error
@@ -163,7 +163,7 @@ type Assembly interface {
 	// Register adds a Cell to the assembly. Subsequent Register calls before
 	// Start are accumulated; calls after Start return an error.
 	Register(cell Cell) error
-	// Start initialises and starts every registered cell in dependency order.
+	// Start initializes and starts every registered cell in dependency order.
 	// On any cell's failure, previously-started cells are Stopped in reverse.
 	Start(ctx context.Context) error
 	// Stop drives graceful shutdown of every started cell in reverse order.

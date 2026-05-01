@@ -431,7 +431,7 @@ func TestTracing_499_ReasonViaWriteDecodeError(t *testing.T) {
 
 // TestTracing_4xxNoErrorSpanStatus_NoCancelAttr ensures plain 4xx (e.g.
 // validation 400) leaves span.Status Unset (already covered by current
-// behaviour) AND does NOT spuriously add the client.cancel.reason
+// behavior) AND does NOT spuriously add the client.cancel.reason
 // attribute introduced for 499. Guards against accidentally widening the
 // attribute to all 4xx responses.
 func TestTracing_4xxNoErrorSpanStatus_NoCancelAttr(t *testing.T) {

@@ -125,7 +125,8 @@ func (s *Service) persistChange(
 		return false, nil
 	}
 	if err := s.sessionRepo.RevokeByUserID(ctx, evt.UserID); err != nil {
-		s.logger.Error("rbac-assign: partial commit — role change persisted but session revoke failed; client JWTs retain stale roles until re-login",
+		s.logger.Error("rbac-assign: partial commit — role change persisted but session revoke failed;"+
+			" client JWTs retain stale roles until re-login",
 			slog.String("user_id", evt.UserID),
 			slog.String("role_id", evt.RoleID),
 			slog.String("action", evt.Action),
@@ -137,6 +138,12 @@ func (s *Service) persistChange(
 
 // Assign assigns a role to a user. Idempotent: re-assignment is a no-op —
 // no outbox entry is written and no session is revoked.
+//
+// Note: mirror-image of Revoke is intentional — independent public API + repo
+// method + topic; extracting a helper would parameterize 4 call sites and
+// obscure the per-action audit trail.
+//
+//nolint:dupl // mirror of Revoke — see godoc above for why a helper is rejected.
 func (s *Service) Assign(ctx context.Context, userID, roleID string) error {
 	if err := validation.RequireNotBlank(errcode.ErrAuthRBACInvalidInput,
 		validation.F("userId", userID),
@@ -174,6 +181,8 @@ func (s *Service) Assign(ctx context.Context, userID, roleID string) error {
 // Revoke removes a role from a user. Idempotent: revoking a non-assigned role
 // is a no-op — no outbox entry is written and no session is revoked. Last-admin
 // guard is enforced atomically by RemoveFromUserIfNotLast (no TOCTOU gap).
+//
+//nolint:dupl // mirror of Assign — see Assign godoc for why a helper is rejected.
 func (s *Service) Revoke(ctx context.Context, userID, roleID string) error {
 	if err := validation.RequireNotBlank(errcode.ErrAuthRBACInvalidInput,
 		validation.F("userId", userID),

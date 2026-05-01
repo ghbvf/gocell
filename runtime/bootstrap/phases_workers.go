@@ -8,7 +8,7 @@ package bootstrap
 //
 // ref: uber-go/fx app.go — background goroutine coordination with lifecycle:
 // workers use runCtx (independent of external ctx) so lifecycle is owned by
-// phase10 teardown, not by the caller cancelling the external context.
+// phase10 teardown, not by the caller canceling the external context.
 
 import (
 	"context"

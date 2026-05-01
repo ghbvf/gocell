@@ -722,7 +722,7 @@ func TestStrictValidator_FMTC1_FMTA1_NoDashClean(t *testing.T) {
 }
 
 // FMT-17 must compare allowedFiles against the real disk directory, not
-// against a directory synthesised from slice.id. Before the Dir field was
+// against a directory synthesized from slice.id. Before the Dir field was
 // introduced, an allowedFiles entry that echoed the (faked) id path would
 // silently match and let the real kebab-case directory slip through.
 func TestStrictValidator_FMT17_AllowedFilesAgainstRealDir(t *testing.T) {

@@ -21,6 +21,7 @@ package vault
 //      envelope/kmsv2/envelope_test.go@master
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"errors"
@@ -220,7 +221,7 @@ func xorBytes(src, key []byte) []byte {
 }
 
 // fakeWriteFunc allows per-test Write override without subclassing.
-// Tests that need fully custom Write behaviour embed this.
+// Tests that need fully custom Write behavior embed this.
 type fakeVaultClientWithWriteOverride struct {
 	fakeVaultClient
 	writeFn func(ctx context.Context, path string, data map[string]any) (map[string]any, error)
@@ -404,7 +405,7 @@ func TestVaultTransitHandle_DecryptRoundTrip(t *testing.T) {
 	}
 
 	// Round-trip result must match original plaintext.
-	if string(got) != string(plaintext) {
+	if !bytes.Equal(got, plaintext) {
 		t.Errorf("Decrypt returned %q, want %q", got, plaintext)
 	}
 
@@ -1000,7 +1001,7 @@ func TestTransitKeyProvider_RenewalMetrics_ReturnsTwoCollectors(t *testing.T) {
 }
 
 // TestTokenRenewalWorker_Start_StopsOnContextCancel verifies that Start()
-// returns nil when its context is cancelled (graceful shutdown path).
+// returns nil when its context is canceled (graceful shutdown path).
 func TestTokenRenewalWorker_Start_StopsOnContextCancel(t *testing.T) {
 	fw := newFakeTokenWatcher()
 	// fakeAuthMethod that always succeeds — needed if reauthenticate is triggered.
@@ -1021,7 +1022,7 @@ func TestTokenRenewalWorker_Start_StopsOnContextCancel(t *testing.T) {
 	}()
 
 	// Wait until the watcher's Start goroutine has been scheduled before
-	// cancelling — ensures the assertion below is race-free.
+	// canceling — ensures the assertion below is race-free.
 	select {
 	case <-fw.startedCh:
 	case <-time.After(2 * time.Second):
@@ -1164,7 +1165,7 @@ func TestTokenRenewalWorker_Start_ChannelClosed(t *testing.T) {
 }
 
 // TestTokenRenewalWorker_Start_HandlesDone verifies that when DoneCh fires with
-// nil error, the worker attempts re-auth. With a ctx that is cancelled immediately
+// nil error, the worker attempts re-auth. With a ctx that is canceled immediately
 // after DoneCh, Start must return nil (ctx cancel exits cleanly).
 //
 // NOTE: In the new re-auth design, DoneCh does NOT cause Start to return an error
@@ -1199,7 +1200,7 @@ func TestTokenRenewalWorker_Start_HandlesDone(t *testing.T) {
 
 	select {
 	case err := <-done:
-		// ctx cancelled during re-auth → Start returns nil.
+		// ctx canceled during re-auth → Start returns nil.
 		if err != nil {
 			t.Errorf("Start() after ctx cancel must return nil, got: %v", err)
 		}

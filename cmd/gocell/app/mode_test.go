@@ -1,8 +1,10 @@
 package app
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -18,11 +20,11 @@ import (
 // TestText_PrintFailFast_NoErrors. The integration tests below still
 // exercise the wiring end-to-end through runValidate.
 
-// TestRunValidate_FailFast_OnError_TrimsToFirstError fixes the output
-// shape when fail-fast hits an error: only the offending issue is shown,
-// no banner, no summary. Drives a deterministic FMT-02 fixture so the
-// assertion does not depend on live repo state.
-func TestRunValidate_FailFast_OnError_TrimsToFirstError(t *testing.T) {
+// fixtureFailFastError writes a temp project containing a cell.yaml with
+// `type: INVALID` so the FMT-02 governance rule fires a SeverityError. Used
+// as the deterministic error fixture across all (format × outcome) cases.
+func fixtureFailFastError(t *testing.T) string {
+	t.Helper()
 	dir := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "go.mod"),
 		[]byte("module example.com/test\n"), 0o644))
@@ -30,95 +32,250 @@ func TestRunValidate_FailFast_OnError_TrimsToFirstError(t *testing.T) {
 	require.NoError(t, os.MkdirAll(cellDir, 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(cellDir, "cell.yaml"),
 		[]byte("id: bad\ntype: INVALID\nconsistencyLevel: L1\nowner:\n  team: squad\n  role: cell-owner\nschema:\n  primary: cell_bad\nverify:\n  smoke:\n    - smoke.bad.startup\n"), 0o644))
-
-	var gotErr error
-	out := captureStdout(t, func() {
-		gotErr = runValidate([]string{"--root", dir, "--fail-fast"})
-	})
-	require.Error(t, gotErr, "fail-fast must surface the validation error")
-	assert.Contains(t, out, "FMT-02", "first error code must be printed")
-	assert.NotContains(t, out, "Validation complete:",
-		"fail-fast on error must not emit summary line")
-	assert.NotContains(t, out, "WARNINGS (",
-		"fail-fast on error must not emit warnings banner")
-	assert.NotContains(t, out, "ERRORS (",
-		"fail-fast on error must not emit the multi-error banner")
+	return dir
 }
 
-// TestRunValidate_FailFast_OnWarningsOnly_PrintsWarnings locks in the F1
-// fix: when fail-fast finds no errors but the validator / depcheck
-// returned warnings, those warnings must reach the output. ValidateFailFast
-// and CheckFailFast both preserve warnings on the no-error path
-// (kernel/governance/{validate,depcheck}.go); previously the command layer
-// silently dropped them.
-//
-// Fixture: a project whose only metadata issue is REF-16 (assembly missing
-// generated/boundary.yaml) — that rule emits SeverityWarning, no errors.
-func TestRunValidate_FailFast_OnWarningsOnly_PrintsWarnings(t *testing.T) {
+// fixtureFailFastWarnings writes a temp project whose only metadata issue is
+// REF-16 (assembly missing generated/boundary.yaml — SeverityWarning). REF-11
+// is satisfied via a stub cmd dir so REF-16 stays the lone diagnostic.
+func fixtureFailFastWarnings(t *testing.T) string {
+	t.Helper()
 	dir := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "go.mod"),
 		[]byte("module example.com/test\n"), 0o644))
 	asmDir := filepath.Join(dir, "assemblies", "warnasm")
 	require.NoError(t, os.MkdirAll(asmDir, 0o755))
-	// REF-11 verifies build.entrypoint exists on disk; satisfy it with a
-	// stub directory so only REF-16 (missing generated/boundary.yaml)
-	// fires — and REF-16 is SeverityWarning.
 	require.NoError(t, os.MkdirAll(filepath.Join(dir, "cmd", "warnasm"), 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(asmDir, "assembly.yaml"),
 		[]byte("id: warnasm\ncells: []\nbuild:\n  entrypoint: cmd/warnasm\n  binary: warnasm\n  deployTemplate: deploy.yaml\n"), 0o644))
-
-	var gotErr error
-	out := captureStdout(t, func() {
-		gotErr = runValidate([]string{"--root", dir, "--fail-fast"})
-	})
-	require.NoError(t, gotErr,
-		"warnings alone must not fail fail-fast — exit 0")
-	assert.Contains(t, out, "WARNINGS (",
-		"fail-fast must surface the warning banner when warnings exist")
-	assert.Contains(t, out, "Validation complete:",
-		"fail-fast must include the summary line so the warning count is visible")
-	assert.NotContains(t, out, "OK: no errors.",
-		"OK line is for truly clean runs only — warnings present must replace it")
+	return dir
 }
 
-// Output contract for --fail-fast on a clean project: prints exactly
-// "OK: no errors." and returns nil. Locking this in so that future refactors
-// (e.g. "make fail-fast silent for scripting") become an explicit decision
-// rather than an accidental behaviour drift.
-func TestRunValidate_FailFast_NoErrors_PrintsOK(t *testing.T) {
+// fixtureFailFastClean writes a temp project with only go.mod — no cells, no
+// assemblies, no journeys — the "truly clean" baseline.
+func fixtureFailFastClean(t *testing.T) string {
+	t.Helper()
 	dir := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "go.mod"),
 		[]byte("module example.com/empty\n"), 0o644))
-
-	var gotErr error
-	out := captureStdout(t, func() {
-		gotErr = runValidate([]string{"--root", dir, "--fail-fast"})
-	})
-	require.NoError(t, gotErr, "empty project must validate cleanly in fail-fast")
-	assert.Equal(t, "OK: no errors.\n", out,
-		"fail-fast success output is the single-line ack")
+	return dir
 }
 
-// TestRunValidate_FailFast_ReturnsError checks that runValidate with --fail-fast
-// returns a non-nil error whose message contains "validation failed:" when there
-// are governance-rule violations. We build a minimal temp project with a cell.yaml
-// that parses successfully but triggers an FMT-02 error (invalid cell type).
-func TestRunValidate_FailFast_ReturnsError(t *testing.T) {
-	dir := t.TempDir()
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "go.mod"),
-		[]byte("module example.com/test\n"), 0o644))
-	cellDir := filepath.Join(dir, "cells", "bad-cell")
-	require.NoError(t, os.MkdirAll(cellDir, 0o755))
-	require.NoError(t, os.WriteFile(filepath.Join(cellDir, "cell.yaml"),
-		[]byte("id: bad-cell\ntype: INVALID\nconsistencyLevel: L2\nowner:\n  team: squad\n  role: cell-owner\n"), 0o644))
+// TestRunValidate_FailFast collapses 4 historical fragmented fail-fast tests
+// (TrimsToFirstError / OnWarningsOnly / NoErrors / ReturnsError) into a
+// single 9-case matrix covering every (format × outcome) cell that the
+// machine-consumer contract exposes.
+//
+// Why matrix:
+//   - 3 formats (text / json / sarif) — every CI consumer uses one
+//   - 3 outcomes (error / warnings-only / clean) — fail-fast renders all 3
+//   - error+JSON and error+SARIF were entirely uncovered before this commit;
+//     a regression that produced malformed JSON or empty SARIF results on
+//     fail-fast error path would have shipped silently
+//
+// Format-specific assertions are intentionally structural (top-level keys +
+// payload array shape), not full schema validation. The full SARIF 2.1.0
+// schema and the gocell JSON shape are pinned by clean-path tests in
+// dispatch_test.go::TestDispatch_ValidateFormats — this matrix layers
+// fail-fast/outcome coverage on top, not duplicate schema coverage.
+func TestRunValidate_FailFast(t *testing.T) {
+	cases := []struct {
+		name    string
+		format  string // empty = no --format flag (text default)
+		fixture func(*testing.T) string
+		wantErr bool
+		// asserter receives stdout + non-nil runErr (when wantErr=true) and
+		// performs format-specific structural checks.
+		asserter func(t *testing.T, stdout string, runErr error)
+	}{
+		// --- text ---
+		{
+			name:    "text-error",
+			fixture: fixtureFailFastError,
+			wantErr: true,
+			asserter: func(t *testing.T, stdout string, runErr error) {
+				assert.Contains(t, stdout, "FMT-02", "first error code must be printed")
+				assert.NotContains(t, stdout, "Validation complete:", "fail-fast on error must not emit summary")
+				assert.NotContains(t, stdout, "WARNINGS (", "fail-fast on error must not emit warnings banner")
+				assert.NotContains(t, stdout, "ERRORS (", "fail-fast on error must not emit multi-error banner")
+				assert.Contains(t, runErr.Error(), "validation failed:", "runValidate err must carry 'validation failed:' prefix")
+			},
+		},
+		{
+			name:    "text-warnings",
+			fixture: fixtureFailFastWarnings,
+			wantErr: false,
+			asserter: func(t *testing.T, stdout string, _ error) {
+				assert.Contains(t, stdout, "WARNINGS (", "warnings banner must surface even under fail-fast")
+				assert.Contains(t, stdout, "Validation complete:", "summary line carries the warning count")
+				assert.NotContains(t, stdout, "OK: no errors.", "OK line is reserved for truly clean runs")
+			},
+		},
+		{
+			name:    "text-clean",
+			fixture: fixtureFailFastClean,
+			wantErr: false,
+			asserter: func(t *testing.T, stdout string, _ error) {
+				assert.Equal(t, "OK: no errors.\n", stdout, "fail-fast clean output is the single-line ack")
+			},
+		},
 
-	var gotErr error
-	_ = captureStdout(t, func() {
-		gotErr = runValidate([]string{"--root", dir, "--fail-fast"})
-	})
-	require.Error(t, gotErr, "runValidate with --fail-fast must return error when validation errors exist")
-	assert.Contains(t, gotErr.Error(), "validation failed:",
-		"error message must contain 'validation failed:'")
+		// --- json ---
+		{
+			name:    "json-error",
+			format:  "json",
+			fixture: fixtureFailFastError,
+			wantErr: true,
+			asserter: func(t *testing.T, stdout string, runErr error) {
+				doc := unmarshalJSONDoc(t, stdout)
+				require.Len(t, doc.Issues, 1, "fail-fast on error must emit exactly one issue (the first error)")
+				assert.Equal(t, "FMT-02", doc.Issues[0].Code, "issue code must match the triggered rule")
+				assert.Equal(t, "error", doc.Issues[0].Severity, "issue severity must be 'error'")
+				assert.Contains(t, runErr.Error(), "validation failed:", "runValidate err propagates regardless of format")
+			},
+		},
+		{
+			name:    "json-warnings",
+			format:  "json",
+			fixture: fixtureFailFastWarnings,
+			wantErr: false,
+			asserter: func(t *testing.T, stdout string, _ error) {
+				doc := unmarshalJSONDoc(t, stdout)
+				assert.NotNil(t, doc.Issues, "issues array must be present (never null)")
+				assert.NotEmpty(t, doc.Issues, "warnings outcome must surface ≥1 issue")
+				for _, iss := range doc.Issues {
+					assert.NotEqual(t, "error", iss.Severity, "warnings-only outcome must not contain error-severity issues")
+				}
+			},
+		},
+		{
+			name:    "json-clean",
+			format:  "json",
+			fixture: fixtureFailFastClean,
+			wantErr: false,
+			asserter: func(t *testing.T, stdout string, _ error) {
+				doc := unmarshalJSONDoc(t, stdout)
+				assert.NotNil(t, doc.Issues, "issues key must be present (never null) on clean fail-fast")
+				assert.Empty(t, doc.Issues, "clean fail-fast must emit an empty issues array")
+			},
+		},
+
+		// --- sarif ---
+		{
+			name:    "sarif-error",
+			format:  "sarif",
+			fixture: fixtureFailFastError,
+			wantErr: true,
+			asserter: func(t *testing.T, stdout string, runErr error) {
+				log := unmarshalSARIFLog(t, stdout)
+				assert.Equal(t, "2.1.0", log.Version)
+				require.Len(t, log.Runs, 1)
+				assert.Equal(t, "gocell", log.Runs[0].Tool.Driver.Name)
+				require.Len(t, log.Runs[0].Results, 1, "fail-fast on error must emit exactly one SARIF result")
+				assert.Equal(t, "FMT-02", log.Runs[0].Results[0].RuleID, "SARIF ruleId must match the triggered rule")
+				assert.Contains(t, runErr.Error(), "validation failed:")
+			},
+		},
+		{
+			name:    "sarif-warnings",
+			format:  "sarif",
+			fixture: fixtureFailFastWarnings,
+			wantErr: false,
+			asserter: func(t *testing.T, stdout string, _ error) {
+				log := unmarshalSARIFLog(t, stdout)
+				require.Len(t, log.Runs, 1)
+				assert.NotEmpty(t, log.Runs[0].Results, "warnings outcome must surface ≥1 SARIF result")
+			},
+		},
+		{
+			name:    "sarif-clean",
+			format:  "sarif",
+			fixture: fixtureFailFastClean,
+			wantErr: false,
+			asserter: func(t *testing.T, stdout string, _ error) {
+				log := unmarshalSARIFLog(t, stdout)
+				assert.Equal(t, "2.1.0", log.Version)
+				require.Len(t, log.Runs, 1)
+				assert.Equal(t, "gocell", log.Runs[0].Tool.Driver.Name)
+				assert.NotNil(t, log.Runs[0].Results, "results array must be present even when empty")
+				assert.Empty(t, log.Runs[0].Results, "clean fail-fast must emit empty results")
+			},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := tc.fixture(t)
+			args := []string{"--root", dir, "--fail-fast"}
+			if tc.format != "" {
+				args = append(args, "--format="+tc.format)
+			}
+
+			var gotErr error
+			stdout := captureStdout(t, func() {
+				gotErr = runValidate(args)
+			})
+
+			if tc.wantErr {
+				require.Error(t, gotErr, "fail-fast must return non-nil error for this outcome")
+			} else {
+				require.NoError(t, gotErr, "non-error outcome must return nil; stdout=%q", stdout)
+			}
+			tc.asserter(t, stdout, gotErr)
+		})
+	}
+}
+
+// jsonValidateDoc mirrors the gocell printer's JSON output shape. Lives next
+// to the test that consumes it so a printer change forces an explicit edit
+// here rather than silently shifting consumer expectations.
+type jsonValidateDoc struct {
+	Issues  []jsonValidateIssue `json:"issues"`
+	Summary struct {
+		Errors   int `json:"errors"`
+		Warnings int `json:"warnings"`
+	} `json:"summary"`
+}
+
+type jsonValidateIssue struct {
+	Code     string `json:"code"`
+	Severity string `json:"severity"`
+}
+
+func unmarshalJSONDoc(t *testing.T, stdout string) jsonValidateDoc {
+	t.Helper()
+	var doc jsonValidateDoc
+	require.NoError(t, json.Unmarshal([]byte(strings.TrimSpace(stdout)), &doc),
+		"stdout must be valid JSON: %q", stdout)
+	return doc
+}
+
+// sarifLog mirrors the SARIF 2.1.0 fields the gocell printer emits — a tight
+// subset of the spec sufficient to assert tool identity + result shape.
+type sarifLog struct {
+	Schema  string     `json:"$schema"`
+	Version string     `json:"version"`
+	Runs    []sarifRun `json:"runs"`
+}
+
+type sarifRun struct {
+	Tool struct {
+		Driver struct {
+			Name string `json:"name"`
+		} `json:"driver"`
+	} `json:"tool"`
+	Results []sarifResult `json:"results"`
+}
+
+type sarifResult struct {
+	RuleID string `json:"ruleId"`
+}
+
+func unmarshalSARIFLog(t *testing.T, stdout string) sarifLog {
+	t.Helper()
+	var log sarifLog
+	require.NoError(t, json.Unmarshal([]byte(strings.TrimSpace(stdout)), &log),
+		"stdout must be valid SARIF JSON: %q", stdout)
+	return log
 }
 
 // --- validate --strict ---
@@ -202,7 +359,7 @@ func TestRunValidate_StrictFailFast_BaseErrorWinsOverStrict(t *testing.T) {
 // FMT-16 and FMT-C1 — REF-04 already catches the dir/id-divergence
 // half-migrations the FMT-C1 doc-string mentions, so the natural fixture
 // shape that exercises FMT-C1 in isolation does not exist; layering
-// FMT-C1 on top of FMT-16 is defence-in-depth.
+// FMT-C1 on top of FMT-16 is defense-in-depth.
 func writeKebabCellID(t *testing.T) string {
 	t.Helper()
 	dir := setupProject(t, "cells/access-core") // kebab dir matching id
@@ -243,7 +400,7 @@ func writeKebabAssemblyID(t *testing.T) string {
 // fixture has a kebab directory (necessary because REF-04 enforces id ↔
 // dir match, so an id-only kebab is impossible to construct without a
 // base error pre-empting strict), so FMT-16 fires alongside FMT-C1 — that
-// is the defence-in-depth pair the rule was designed for, and the
+// is the defense-in-depth pair the rule was designed for, and the
 // assertion below verifies both rules light up.
 func TestRunValidate_Strict_DetectsKebabCellID(t *testing.T) {
 	dir := writeKebabCellID(t)
@@ -332,7 +489,7 @@ func TestRunValidate_Default_IgnoresStrictOnlyRules(t *testing.T) {
 //
 // These tests drive runScaffoldWithRoot directly, bypassing runScaffold's
 // findRoot() / cwd dependency. Previously each test did os.Chdir(tempDir),
-// which serialises the whole test binary (F-SEC-03). With an explicit root
+// which serializes the whole test binary (F-SEC-03). With an explicit root
 // parameter, t.TempDir() is isolated by design.
 
 // setupProject writes go.mod and any extra subdirs inside a fresh tempdir,

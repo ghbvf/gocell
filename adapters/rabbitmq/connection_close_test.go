@@ -21,24 +21,24 @@ import (
 )
 
 // TestConnection_Close_RespectsCtx verifies that Close returns the
-// ctx error promptly when ctx is pre-cancelled.
+// ctx error promptly when ctx is pre-canceled.
 func TestConnection_Close_RespectsCtx(t *testing.T) {
 	conn, _ := newTestConnection(t)
 
 	cancelledCtx, cancel := context.WithCancel(context.Background())
-	cancel() // already cancelled
+	cancel() // already canceled
 
 	start := time.Now()
 	err := conn.Close(cancelledCtx)
 	elapsed := time.Since(start)
 
-	require.Error(t, err, "Close with pre-cancelled ctx must return error")
+	require.Error(t, err, "Close with pre-canceled ctx must return error")
 	assert.Less(t, elapsed, 50*time.Millisecond,
-		"Close must return promptly with pre-cancelled ctx; got %s", elapsed)
+		"Close must return promptly with pre-canceled ctx; got %s", elapsed)
 }
 
 // TestConnection_Close_PreCancelledCtxStillStopsReconnectLoop locks down the
-// F1 fix: even when ctx is already cancelled at entry, Close MUST signal
+// F1 fix: even when ctx is already canceled at entry, Close MUST signal
 // closeCh and mark the connection closed so reconnectLoop exits — otherwise
 // the goroutine leaks past process-shutdown.
 //
@@ -48,7 +48,7 @@ func TestConnection_Close_RespectsCtx(t *testing.T) {
 // handshake is gated by ctx.
 //
 // After the adapterutil.CloseWithDeadline fix (Finding 1): closeFn is always
-// invoked even on pre-cancelled ctx, so the underlying conn.Close() must be
+// invoked even on pre-canceled ctx, so the underlying conn.Close() must be
 // called at least once (best-effort admitted close).
 func TestConnection_Close_PreCancelledCtxStillStopsReconnectLoop(t *testing.T) {
 	conn, mockConn := newTestConnection(t)
@@ -57,13 +57,13 @@ func TestConnection_Close_PreCancelledCtxStillStopsReconnectLoop(t *testing.T) {
 	cancel()
 
 	require.Error(t, conn.Close(cancelledCtx),
-		"pre-cancelled Close must surface ctx error from the network handshake step")
+		"pre-canceled Close must surface ctx error from the network handshake step")
 
 	conn.mu.RLock()
 	closed := conn.closed
 	conn.mu.RUnlock()
 	assert.True(t, closed,
-		"pre-cancelled Close must still mark the connection closed so reconnectLoop exits")
+		"pre-canceled Close must still mark the connection closed so reconnectLoop exits")
 
 	// closeCh must be closed — a receive from a closed channel returns
 	// immediately with the zero value, so this select fires the closed-case
@@ -73,16 +73,16 @@ func TestConnection_Close_PreCancelledCtxStillStopsReconnectLoop(t *testing.T) {
 		assert.False(t, ok,
 			"closeCh must be closed by Close so reconnectLoop's select unblocks")
 	case <-time.After(50 * time.Millisecond):
-		t.Fatal("closeCh was not signalled after pre-cancelled Close — reconnectLoop would leak")
+		t.Fatal("closeCh was not signaled after pre-canceled Close — reconnectLoop would leak")
 	}
 
 	// Finding 1 regression guard: the underlying conn.Close() must be invoked
-	// at least once even when ctx is pre-cancelled (best-effort admitted close).
+	// at least once even when ctx is pre-canceled (best-effort admitted close).
 	// Give the goroutine a short grace period to complete.
 	assert.Eventually(t, func() bool {
 		return mockConn.closeCount.Load() >= 1
 	}, 200*time.Millisecond, 5*time.Millisecond,
-		"underlying conn.Close() must be called at least once even with pre-cancelled ctx — broker must receive close frame")
+		"underlying conn.Close() must be called at least once even with pre-canceled ctx — broker must receive close frame")
 }
 
 // TestConnection_Close_Idempotent verifies that a second Close call
@@ -113,7 +113,7 @@ func TestConnection_Close_ClosesConnection(t *testing.T) {
 	assert.True(t, closed, "connection must be marked closed after Close")
 }
 
-// TestConnection_Close_RespectsCtxDeadline verifies that Close honours the
+// TestConnection_Close_RespectsCtxDeadline verifies that Close honors the
 // caller's deadline when the underlying connection.Close is blocked.
 //
 // Strategy: inject a blocking mockConnection whose Close() blocks on a

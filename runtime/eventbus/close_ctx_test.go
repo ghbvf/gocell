@@ -20,22 +20,22 @@ import (
 )
 
 // TestInMemoryEventBus_Close_AcceptsCtx verifies that Close accepts a ctx
-// parameter and returns nil (including with a cancelled ctx, since the
+// parameter and returns nil (including with a canceled ctx, since the
 // in-memory teardown is unconditional O(1)).
 func TestInMemoryEventBus_Close_AcceptsCtx(t *testing.T) {
 	bus := New()
 
 	cancelledCtx, cancel := context.WithCancel(context.Background())
-	cancel() // already cancelled
+	cancel() // already canceled
 
-	// Close must succeed even with a pre-cancelled ctx — teardown is O(1)
+	// Close must succeed even with a pre-canceled ctx — teardown is O(1)
 	// and unconditional for in-memory channels.
 	err := bus.Close(cancelledCtx)
-	assert.NoError(t, err, "Close with cancelled ctx must return nil for in-memory bus")
+	assert.NoError(t, err, "Close with canceled ctx must return nil for in-memory bus")
 }
 
 // TestInMemoryEventBus_Close_CancelledCtxStillClosesChannels verifies that
-// even when called with a cancelled ctx, Close still terminates subscriber
+// even when called with a canceled ctx, Close still terminates subscriber
 // goroutines (no goroutine leak).
 func TestInMemoryEventBus_Close_CancelledCtxStillClosesChannels(t *testing.T) {
 	bus := New(WithBufferSize(4))

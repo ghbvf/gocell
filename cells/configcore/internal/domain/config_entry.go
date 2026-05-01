@@ -19,7 +19,7 @@ type ConfigEntry struct {
 	KeyID string
 
 	// Stale is true when KeyID differs from the current active key version,
-	// signalling that this entry should be lazily re-encrypted.
+	// signaling that this entry should be lazily re-encrypted.
 	// Storage metadata only — never included in HTTP DTOs or event payloads.
 	Stale bool
 }

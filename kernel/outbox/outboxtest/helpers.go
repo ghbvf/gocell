@@ -1,6 +1,7 @@
 package outboxtest
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
@@ -31,8 +32,8 @@ func waitForSubscription(t *testing.T, ctx context.Context, sub outbox.Subscribe
 	select {
 	case <-sub.Ready(subSpec):
 	case <-ctx.Done():
-		t.Fatalf("waitForSubscription: context cancelled before subscriber ready: %v", ctx.Err())
-	case <-time.After(subscribeInitDelay):
+		t.Fatalf("waitForSubscription: context canceled before subscriber ready: %v", ctx.Err())
+	case <-time.After(subscribeReadyTimeout):
 		// Fallback: subscriber did not signal Ready within init delay. This is
 		// acceptable for implementations that return a never-closing Ready channel
 		// (e.g., persistent brokers where setup is fire-and-forget). The caller
@@ -103,7 +104,7 @@ func PublishN(t *testing.T, ctx context.Context, pub outbox.Publisher, topic str
 // IMPORTANT: CollectN only subscribes — the caller must publish messages
 // AFTER calling CollectN (or before, if the implementation is persistent).
 // For at-most-once implementations (e.g., InMemoryEventBus), publish after
-// CollectN returns control, since it includes a subscribeInitDelay wait.
+// CollectN returns control, since it includes a subscribeReadyTimeout wait.
 func CollectN(
 	t *testing.T,
 	ctx context.Context,
@@ -440,12 +441,9 @@ func (h *pubSubHarness) checkNoMoreDeliveries(priorCount int, window time.Durati
 // Internal assertion helpers — stdlib only, no testify in kernel/ non-test files
 // ---------------------------------------------------------------------------
 
-func assertNoError(t *testing.T, err error, msgAndArgs ...any) {
+func assertNoError(t *testing.T, err error) {
 	t.Helper()
 	if err != nil {
-		if len(msgAndArgs) > 0 {
-			t.Fatalf("unexpected error: %v — %s", err, fmt.Sprint(msgAndArgs...))
-		}
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
@@ -463,7 +461,7 @@ func assertEqual(t *testing.T, want, got any, msgAndArgs ...any) {
 
 func assertBytesEqual(t *testing.T, want, got []byte, msgAndArgs ...any) {
 	t.Helper()
-	if string(want) != string(got) {
+	if !bytes.Equal(want, got) {
 		suffix := ""
 		if len(msgAndArgs) > 0 {
 			suffix = " — " + fmt.Sprint(msgAndArgs...)
@@ -527,7 +525,7 @@ func assertNotPanics(t *testing.T, f func()) {
 // ---------------------------------------------------------------------------
 // caller-enforced budget helpers
 //
-// Conformance suites validate that subscriber implementations honour ctx.
+// Conformance suites validate that subscriber implementations honor ctx.
 // The helpers below turn a violating implementation (Close that ignores ctx,
 // Subscribe that never returns after cancel) into a focused per-test failure
 // with topic identity, instead of letting it hang the whole `go test` run
@@ -536,7 +534,7 @@ func assertNotPanics(t *testing.T, f func()) {
 // We diverge from watermill (pubsub/tests/test_pubsub.go), which trusts the
 // implementation contract + go-test-timeout fallback. Caller-side budget is
 // chosen here because conformance suites exist precisely to catch contract
-// violations, and a labelled per-test error is more actionable than a
+// violations, and a labeled per-test error is more actionable than a
 // process-level timeout.
 //
 // ref: uber-go/fx app.go withTimeout (caller race + Goexit/panic defense)

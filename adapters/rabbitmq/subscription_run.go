@@ -19,7 +19,7 @@ import (
 //	(b) makes the reconnect path's A19 barrier trivial — localWg.Wait()
 //	    before ch.Close, so no processDelivery goroutine races against
 //	    a closed channel,
-//	(c) localises cleanup so Close can iterate runs without juggling three tables.
+//	(c) localizes cleanup so Close can iterate runs without juggling three tables.
 //
 // ref: nats-io/nats.go Subscription per-subscription state encapsulation
 // ref: uber-go/fx per-component Lifecycle (each component owns its teardown)
@@ -31,7 +31,7 @@ type subscriptionRun struct {
 	closed      sync.Once
 	// wgDoneCh is closed exactly once when all in-flight deliveries have
 	// completed (localWg.Wait() returns in any wg-waiter goroutine).
-	// Initialised by newSubscriptionRun; closeWgDone ensures only one of the
+	// Initialized by newSubscriptionRun; closeWgDone ensures only one of the
 	// potentially concurrent wg-waiters closes it.
 	wgDoneCh    chan struct{}
 	closeWgDone sync.Once
@@ -77,7 +77,7 @@ func (r *subscriptionRun) waitAndClose(ctx context.Context) error {
 	// Phase 1: wait for in-flight deliveries bounded by ctx.
 	// The wg-waiter goroutine closes r.wgDoneCh when localWg.Wait() returns,
 	// providing a happens-before signal for goroutine-exit assertions in tests.
-	// wgDoneCh is initialised by newSubscriptionRun so this goroutine captures
+	// wgDoneCh is initialized by newSubscriptionRun so this goroutine captures
 	// a stable reference with no data race even when waitAndClose is called
 	// concurrently from subscribeOnce and Subscriber.Close.
 	// closeWgDone ensures only one of the concurrent wg-waiters closes the channel.

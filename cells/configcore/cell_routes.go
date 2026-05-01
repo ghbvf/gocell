@@ -89,12 +89,16 @@ func (c *ConfigCore) RouteGroups() []cell.RouteGroup {
 // The Router manages goroutine lifecycle and setup-error detection.
 func (c *ConfigCore) RegisterSubscriptions(r cell.EventRouter) error {
 	upsertedHandler := outbox.WrapLegacyHandler(c.subscribeSvc.HandleEntryUpserted)
-	if err := r.AddContractHandler(specEventConfigEntryUpserted, upsertedHandler, "configcore", cell.WithSubscriptionSliceID("configsubscribe")); err != nil {
+	if err := r.AddContractHandler(
+		specEventConfigEntryUpserted, upsertedHandler, "configcore",
+		cell.WithSubscriptionSliceID("configsubscribe")); err != nil {
 		return fmt.Errorf("configcore: subscribe %s: %w", specEventConfigEntryUpserted.Topic, err)
 	}
 
 	deletedHandler := outbox.WrapLegacyHandler(c.subscribeSvc.HandleEntryDeleted)
-	if err := r.AddContractHandler(specEventConfigEntryDeleted, deletedHandler, "configcore", cell.WithSubscriptionSliceID("configsubscribe")); err != nil {
+	if err := r.AddContractHandler(
+		specEventConfigEntryDeleted, deletedHandler, "configcore",
+		cell.WithSubscriptionSliceID("configsubscribe")); err != nil {
 		return fmt.Errorf("configcore: subscribe %s: %w", specEventConfigEntryDeleted.Topic, err)
 	}
 	return nil

@@ -42,7 +42,7 @@ func newTestService(t *testing.T) (*Service, *mem.FlagRepository) {
 	return svc, repo
 }
 
-func seedFlag(t *testing.T, repo *mem.FlagRepository, key string) *domain.FeatureFlag {
+func seedFlag(t *testing.T, repo *mem.FlagRepository, key string) {
 	t.Helper()
 	flag := &domain.FeatureFlag{
 		ID:                "flg-" + key,
@@ -55,7 +55,6 @@ func seedFlag(t *testing.T, repo *mem.FlagRepository, key string) *domain.Featur
 		UpdatedAt:         time.Now(),
 	}
 	require.NoError(t, repo.Create(context.Background(), flag))
-	return flag
 }
 
 // --- Test: constructor ---
@@ -186,7 +185,7 @@ func TestFlagWrite_NoOutboxEmit_AfterDowngrade(t *testing.T) {
 			"Service must not have an emitter field after L2→L1 downgrade (event.flag.changed.v1 retired)")
 	}
 
-	// Behavioural assertion: Create/Update/Toggle/Delete must succeed without
+	// Behavioral assertion: Create/Update/Toggle/Delete must succeed without
 	// any outbox writer being injected, confirming no emit attempt is made.
 	repo := mem.NewFlagRepository()
 	svc, err := NewService(repo, slog.Default(), WithTxManager(&testutil.NoopTxRunner{}))

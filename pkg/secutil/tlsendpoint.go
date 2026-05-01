@@ -131,7 +131,8 @@ func validateURLForm(raw string) error {
 
 	// Unknown scheme — fail closed.
 	return errcode.New(errcode.ErrAdapterEndpointNotTLS,
-		fmt.Sprintf("adapter endpoint: %s has unrecognised scheme %q; expected one of: https, rediss, tls, vault+https, wss, unix (empty host only)",
+		fmt.Sprintf("adapter endpoint: %s has unrecognized scheme %q;"+
+			" expected one of: https, rediss, tls, vault+https, wss, unix (empty host only)",
 			u.Redacted(), scheme))
 }
 

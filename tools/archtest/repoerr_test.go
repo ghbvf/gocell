@@ -44,7 +44,7 @@ var bannedLogAttrLiterals = map[string]struct{}{
 	"current_key_id": {},
 }
 
-// slogMethodKeyStart maps every recognised slog level method name to the
+// slogMethodKeyStart maps every recognized slog level method name to the
 // argument index at which keyed attribute pairs begin. Exact-match (not
 // prefix) avoids false positives on names like `ErrorList` / `WarnCounter` /
 // `InfoBox` that start with a level keyword but are not log emitters.
@@ -612,7 +612,7 @@ func scanLogAttrKeys(fset *token.FileSet, path string, call *ast.CallExpr, keySt
 }
 
 // logCallKeyStart returns the index at which keyed attributes begin for a
-// recognised slog level call, or 0 / false when call is not a log emitter.
+// recognized slog level call, or 0 / false when call is not a log emitter.
 func logCallKeyStart(call *ast.CallExpr) (int, bool) {
 	sel, ok := call.Fun.(*ast.SelectorExpr)
 	if !ok {

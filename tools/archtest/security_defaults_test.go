@@ -75,7 +75,7 @@ func TestSecurityDefaults(t *testing.T) {
 //
 // Rationale: the addr-driven gate pattern
 // (if shared.PrimaryHTTPAddr != "" { bootstrap.WithListener(...) }) does NOT
-// produce fail-open authentication behaviour — it merely skips listener
+// produce fail-open authentication behavior — it merely skips listener
 // registration when the addr is absent. The actual auth-chain nil risk is
 // already prevented by SEC-FAIL-CLOSED-02 (explicit authChain enforcement at
 // call sites) and by runtime phase0ValidateOptions (which rejects nil
@@ -525,8 +525,7 @@ func findInsecureSkipVerifyAssign(path string) ([]int, error) {
 		}
 		// RHS: true — must be a pointer deref of AcceptOptions.InsecureSkipVerify via SelectorExpr
 		// or a direct BasicLit / Ident "true".
-		switch rhs := assign.Rhs[0].(type) {
-		case *ast.Ident:
+		if rhs, ok := assign.Rhs[0].(*ast.Ident); ok {
 			if rhs.Name == "true" {
 				lines = append(lines, fset.Position(assign.Pos()).Line)
 			}

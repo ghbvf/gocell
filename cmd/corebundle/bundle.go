@@ -377,7 +377,7 @@ func buildConfigCoreOpts(ctx context.Context, cfg ConfigCoreModuleConfig) (Confi
 
 	default:
 		// Unreachable: TopologyFromEnv validation already rejects unknown
-		// StorageBackend values. Keep as defence-in-depth only.
+		// StorageBackend values. Keep as defense-in-depth only.
 		return ConfigCoreModuleResult{}, errcode.New(errcode.ErrValidationFailed,
 			fmt.Sprintf("buildConfigCoreOpts: unexpected StorageBackend %q (topology validation bypass)", cfg.Topology.StorageBackend))
 	}
@@ -394,7 +394,9 @@ func verifyConfigCorePGSchema(ctx context.Context, pool *adapterpg.Pool) error {
 	return nil
 }
 
-func buildConfigCorePGStorage(pool *adapterpg.Pool, cfg ConfigCoreModuleConfig) (kernellifecycle.ManagedResource, configcore.Option, error) {
+func buildConfigCorePGStorage(
+	pool *adapterpg.Pool, cfg ConfigCoreModuleConfig,
+) (kernellifecycle.ManagedResource, configcore.Option, error) {
 	pgRes, err := adapterpg.NewPGResource(pool)
 	if err != nil {
 		return nil, nil, fmt.Errorf("configcore PG resource: %w", err)

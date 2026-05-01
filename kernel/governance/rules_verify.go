@@ -13,7 +13,7 @@ import (
 
 const (
 	codeVERIFY06                  = "VERIFY-06"
-	fieldPassCriteriaCheckRefTmpl = "passCriteria[%d].checkRef"
+	fieldPassCriteriaCheckRefTmpl = "passCriteria[%d].checkRef" //nolint:gosec // G101 false positive: field path template, not a credential
 
 	// defaultWaiverExpiryTruncation is the granularity used when comparing a
 	// waiver's expiresAt date against the current time. Day-level truncation
@@ -25,7 +25,7 @@ const (
 // verify.contract entry or a valid waiver.
 //
 // verify.contract format: "contract.{contractID}.{role}"
-// waiver match: waiver.Contract == contractUsage.Contract
+// waiver match: waiver.Contract == contractUsage.Contract.
 func (v *Validator) validateVERIFY01() []ValidationResult {
 	var results []ValidationResult
 	for _, s := range v.project.Slices {

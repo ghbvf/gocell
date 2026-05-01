@@ -14,7 +14,7 @@ type Conn interface {
 	ID() string
 	// Ping checks liveness. Returns an error if the peer is unresponsive.
 	Ping(ctx context.Context) error
-	// Read blocks until a message arrives or the context is cancelled.
+	// Read blocks until a message arrives or the context is canceled.
 	Read(ctx context.Context) ([]byte, error)
 	// Write sends a text message.
 	Write(ctx context.Context, data []byte) error

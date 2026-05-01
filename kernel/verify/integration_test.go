@@ -156,7 +156,7 @@ func TestGoTestEnvPreservesCallerEnvAndPrependsGoDir(t *testing.T) {
 	t.Setenv("PATH", callerBin)
 	t.Setenv("GOROOT", callerGoRoot)
 
-	env := goTestEnv(filepath.Join(selectedDir, goToolName()))
+	env := goTestEnv(selectedDir)
 	pathValue := envValue(env, "PATH")
 	pathParts := strings.Split(pathValue, string(os.PathListSeparator))
 	require.NotEmpty(t, pathParts)

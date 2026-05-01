@@ -849,7 +849,7 @@ func TestMapCodeToStatus_EncryptionCodes(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			assert.Equal(t, tc.expected, MapCodeToStatus(tc.code),
-				"encryption errcode %q must map to 500 — crypto failures must be sanitised to generic 5xx, never leak to 4xx", tc.code)
+				"encryption errcode %q must map to 500 — crypto failures must be sanitized to generic 5xx, never leak to 4xx", tc.code)
 			assert.False(t, IsClientError(tc.code),
 				"encryption errcode %q must NOT classify as client (4xx) error", tc.code)
 		})

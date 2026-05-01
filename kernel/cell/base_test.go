@@ -206,7 +206,7 @@ func TestBaseCellShutdownCtx(t *testing.T) {
 	// Before Start, ShutdownCtx should return context.Background().
 	ctx := c.ShutdownCtx()
 	require.NotNil(t, ctx)
-	assert.Nil(t, ctx.Err(), "context should not be cancelled before Start")
+	assert.Nil(t, ctx.Err(), "context should not be canceled before Start")
 
 	// Start: shutdownCtx is created.
 	require.NoError(t, c.Init(context.Background(), Dependencies{}))
@@ -214,11 +214,11 @@ func TestBaseCellShutdownCtx(t *testing.T) {
 
 	ctx = c.ShutdownCtx()
 	require.NotNil(t, ctx)
-	assert.Nil(t, ctx.Err(), "context should not be cancelled while running")
+	assert.Nil(t, ctx.Err(), "context should not be canceled while running")
 
-	// Stop: shutdownCtx is cancelled.
+	// Stop: shutdownCtx is canceled.
 	require.NoError(t, c.Stop(context.Background()))
-	assert.Error(t, ctx.Err(), "context should be cancelled after Stop")
+	assert.Error(t, ctx.Err(), "context should be canceled after Stop")
 }
 
 func TestBaseCellConcurrentHealthReady(t *testing.T) {

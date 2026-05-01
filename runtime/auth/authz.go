@@ -26,7 +26,7 @@ func RequireSelfOrRole(ctx context.Context, targetID string, bypassRoles ...stri
 	if !ok {
 		return errcode.New(errcode.ErrAuthUnauthorized, "authentication required")
 	}
-	// G1.B: Defence-in-depth. PrincipalUser must always carry a non-empty Subject;
+	// G1.B: Defense-in-depth. PrincipalUser must always carry a non-empty Subject;
 	// an empty Subject indicates the primary authenticator allowed a malformed token
 	// through. PrincipalService Subject is always ServiceNameInternal (non-empty);
 	// PrincipalAnonymous Subject is intentionally empty by design.
@@ -96,7 +96,7 @@ func RequireAnyRole(ctx context.Context, roles ...string) error {
 	if !ok {
 		return errcode.New(errcode.ErrAuthUnauthorized, "authentication required")
 	}
-	// G1.B: Defence-in-depth. PrincipalUser must always carry a non-empty Subject;
+	// G1.B: Defense-in-depth. PrincipalUser must always carry a non-empty Subject;
 	// an empty Subject indicates the primary authenticator allowed a malformed token
 	// through. PrincipalService Subject is always ServiceNameInternal (non-empty);
 	// PrincipalAnonymous Subject is intentionally empty by design.

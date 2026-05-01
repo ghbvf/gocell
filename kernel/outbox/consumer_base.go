@@ -269,7 +269,7 @@ func (cb *ConsumerBase) AsMiddleware() SubscriptionMiddleware {
 //   - handler returns error with non-Ack disposition -> retry with backoff
 //   - PermanentError -> Reject (broker routes to DLX)
 //   - retry budget exhausted -> Reject
-//   - ctx cancelled / shutdown -> Requeue
+//   - ctx canceled / shutdown -> Requeue
 func (cb *ConsumerBase) Wrap(sub Subscription, handler EntryHandler) EntryHandler {
 	topic := sub.Topic
 	consumerGroup := sub.ConsumerGroup
@@ -423,7 +423,7 @@ func isPermanentRejection(result HandleResult) bool {
 }
 
 // waitBackoff sleeps for exponential backoff before the next retry, returning
-// true if it should abort (ctx cancelled) instead of retrying.
+// true if it should abort (ctx canceled) instead of retrying.
 func (cb *ConsumerBase) waitBackoff(ctx context.Context, topic string, entry Entry, attempt int, lastErr error) (abort bool) {
 	if ctx.Err() != nil {
 		return true
@@ -488,7 +488,7 @@ func (cb *ConsumerBase) retryLoop(
 		}
 	}
 
-	// Context cancelled during or after final attempt — requeue for redelivery
+	// Context canceled during or after final attempt — requeue for redelivery
 	// rather than routing to DLX. This ensures graceful shutdown does not
 	// permanently discard in-flight messages.
 	if ctx.Err() != nil {
@@ -511,7 +511,7 @@ func (cb *ConsumerBase) retryLoop(
 
 // runWithRenewal starts a background lease-renewal goroutine and then invokes
 // retryLoop with a cancellable context. If Extend returns ErrLeaseExpired the
-// context is cancelled so the handler can detect it via ctx.Done().
+// context is canceled so the handler can detect it via ctx.Done().
 //
 // Hard fence (Layer 1): an atomic.Bool latch tracks whether the lease was lost
 // during processing. After retryLoop returns, if leaseLost is set AND the
@@ -578,7 +578,7 @@ func (cb *ConsumerBase) runWithRenewal(
 // leaseRenewalLoop ticks every interval and extends the processing lease.
 // It calls onLeaseLost (which sets the leaseLost latch and cancels the handler
 // context) if Extend returns ErrLeaseExpired (fencing failure).
-// Exits when ctx is cancelled (handler finished or lease lost).
+// Exits when ctx is canceled (handler finished or lease lost).
 func (cb *ConsumerBase) leaseRenewalLoop(
 	ctx context.Context,
 	topic string,
@@ -598,7 +598,7 @@ func (cb *ConsumerBase) leaseRenewalLoop(
 			extendCtx := context.WithoutCancel(ctx)
 			if err := receipt.Extend(extendCtx, cb.config.LeaseTTL); err != nil {
 				if errors.Is(err, idempotency.ErrLeaseExpired) {
-					logWithContext(ctx, slog.LevelError, "outbox: lease lost during processing, cancelling handler",
+					logWithContext(ctx, slog.LevelError, "outbox: lease lost during processing, canceling handler",
 						slog.String(logKeyEventID, entry.ID),
 						slog.String(logKeyTopic, topic))
 					onLeaseLost()

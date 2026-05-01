@@ -25,7 +25,7 @@ var testHMACKey = []byte("test-hmac-key-32bytes-long!!!!!!!")
 
 // durableTxRunner is a TxRunner that does NOT advertise Noop(); auditcore's
 // durable-mode init check rejects persistence.NoopTxRunner and accepts this.
-// Used by tests that exercise durable-mode behaviour without spinning up a
+// Used by tests that exercise durable-mode behavior without spinning up a
 // real database.
 type durableTxRunner struct{}
 

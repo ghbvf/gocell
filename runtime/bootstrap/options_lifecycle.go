@@ -50,7 +50,7 @@ func WithLifecycleDefaultStopTimeout(d time.Duration) Option {
 // Use this instead of a bare defer c.Close() so that:
 //
 //   - The resource is closed in LIFO order after HTTP and worker shutdown.
-//   - The shared shutdownTimeout ctx is honoured (not an arbitrary timeout).
+//   - The shared shutdownTimeout ctx is honored (not an arbitrary timeout).
 //   - Startup rollback also triggers the teardown on phase failures.
 //
 // A nil c is silently ignored (consistent with addCloser semantics).

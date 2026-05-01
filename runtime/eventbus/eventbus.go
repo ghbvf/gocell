@@ -218,7 +218,7 @@ func (b *InMemoryEventBus) Ready(sub outbox.Subscription) <-chan struct{} {
 }
 
 // Subscribe registers an EntryHandler for the given subscription. It blocks
-// until ctx is cancelled or the bus is closed.
+// until ctx is canceled or the bus is closed.
 //
 // Consumer: cg-eventbus-{sub.ConsumerGroup}-{sub.Topic}
 // Idempotency key: N/A (in-memory, no persistence)
@@ -299,7 +299,7 @@ func (b *InMemoryEventBus) StopIntake(_ context.Context) error {
 // risk leaving subscriber goroutines permanently blocked on the channel read.
 //
 // ref: kernel/lifecycle doc.go — "resources that must complete teardown
-// unconditionally should ignore the ctx and document the reason"
+// unconditionally should ignore the ctx and document the reason".
 func (b *InMemoryEventBus) Close(_ context.Context) error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -429,7 +429,9 @@ func (b *InMemoryEventBus) handleWithRetry(ctx context.Context, topic string, en
 // processResult handles a single handler result. Returns (done=true) when
 // no further retry is needed (Ack, Reject, or permanent error in Requeue).
 // Returns the error to propagate as lastErr when done=false.
-func (b *InMemoryEventBus) processResult(ctx context.Context, topic string, entry outbox.Entry, res outbox.HandleResult, attempt int) (done bool, lastErr error) {
+func (b *InMemoryEventBus) processResult(
+	ctx context.Context, topic string, entry outbox.Entry, res outbox.HandleResult, attempt int,
+) (done bool, lastErr error) {
 	switch res.Disposition {
 	case outbox.DispositionAck:
 		if res.Receipt != nil {
@@ -468,7 +470,9 @@ func (b *InMemoryEventBus) processResult(ctx context.Context, topic string, entr
 
 // handleRequeue processes DispositionRequeue: upgrades to dead letter on
 // PermanentError, otherwise schedules retry with backoff.
-func (b *InMemoryEventBus) handleRequeue(ctx context.Context, topic string, entry outbox.Entry, res outbox.HandleResult, attempt int) (done bool, lastErr error) {
+func (b *InMemoryEventBus) handleRequeue(
+	ctx context.Context, topic string, entry outbox.Entry, res outbox.HandleResult, attempt int,
+) (done bool, lastErr error) {
 	if res.Receipt != nil {
 		releaseReceipt(ctx, res.Receipt, topic, entry.ID)
 	}
@@ -496,7 +500,9 @@ func (b *InMemoryEventBus) handleRequeue(ctx context.Context, topic string, entr
 
 // handleInvalidDisposition treats zero-value or unknown Disposition as Requeue
 // with an Error-level log so the programming mistake is surfaced.
-func (b *InMemoryEventBus) handleInvalidDisposition(ctx context.Context, topic string, entry outbox.Entry, res outbox.HandleResult, attempt int) (done bool, lastErr error) {
+func (b *InMemoryEventBus) handleInvalidDisposition(
+	ctx context.Context, topic string, entry outbox.Entry, res outbox.HandleResult, attempt int,
+) (done bool, lastErr error) {
 	if res.Receipt != nil {
 		releaseReceipt(ctx, res.Receipt, topic, entry.ID)
 	}
@@ -521,7 +527,7 @@ func retryDelay(attempt int) time.Duration {
 }
 
 // awaitRetry sleeps for the retry delay then returns true, or returns false
-// if ctx is cancelled. For invalid disposition, uses the same delay logic.
+// if ctx is canceled. For invalid disposition, uses the same delay logic.
 func awaitRetry(ctx context.Context, _ outbox.Disposition, attempt int) bool {
 	delay := retryDelay(attempt)
 	select {

@@ -64,7 +64,7 @@ func NewCursorCodec(current []byte, previous ...[]byte) (*CursorCodec, error) {
 }
 
 // Encode serializes a Cursor into an opaque, HMAC-signed token.
-// Wire format: base64url(json_bytes + "." + hex(hmac-sha256(json_bytes)))
+// Wire format: base64url(json_bytes + "." + hex(hmac-sha256(json_bytes))).
 func (c *CursorCodec) Encode(cur Cursor) (string, error) {
 	payload, err := json.Marshal(cur)
 	if err != nil {

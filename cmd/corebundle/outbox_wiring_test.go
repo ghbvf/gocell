@@ -49,10 +49,10 @@ func TestBuildConfigCoreOpts_InMemoryMode_NoRelay(t *testing.T) {
 	assert.Empty(t, result.BootstrapOpts, "in-memory mode must not return bootstrap opts (no relay)")
 }
 
-// TestBuildConfigCoreOpts_UnknownMode_Error asserts that an unrecognised
+// TestBuildConfigCoreOpts_UnknownMode_Error asserts that an unrecognized
 // StorageBackend (bypassing Topology validation) returns an error and a nil
 // ManagedResource. In production, TopologyFromEnv already rejects such
-// values; this test locks the defence-in-depth behaviour.
+// values; this test locks the defense-in-depth behavior.
 func TestBuildConfigCoreOpts_UnknownMode_Error(t *testing.T) {
 	ctx := context.Background()
 	topo := bootstrap.Topology{StorageBackend: "cassandra"}

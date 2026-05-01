@@ -46,7 +46,7 @@ func TestOrderResponse_Fields(t *testing.T) {
 	assert.Contains(t, s, `"createdAt"`)
 }
 
-func newTestHandler(orders ...*domain.Order) (*Handler, *mem.OrderRepository) {
+func newTestHandler(orders ...*domain.Order) *Handler {
 	repo := mem.NewOrderRepository()
 	for _, o := range orders {
 		_ = repo.Create(context.Background(), o)
@@ -56,7 +56,7 @@ func newTestHandler(orders ...*domain.Order) (*Handler, *mem.OrderRepository) {
 	if err != nil {
 		panic(err)
 	}
-	return NewHandler(svc), repo
+	return NewHandler(svc)
 }
 
 func TestHandleGet(t *testing.T) {
@@ -82,7 +82,7 @@ func TestHandleGet(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			h, _ := newTestHandler(tt.seed...)
+			h := newTestHandler(tt.seed...)
 			rec := httptest.NewRecorder()
 			req := httptest.NewRequest(http.MethodGet, "/api/v1/orders/"+tt.id, nil)
 			req.SetPathValue("id", tt.id)
@@ -96,7 +96,7 @@ func TestHandleGet(t *testing.T) {
 }
 
 func TestHandleGet_ResponseBody(t *testing.T) {
-	h, _ := newTestHandler(&domain.Order{ID: "ord-detail", Item: "laptop", Status: "confirmed"})
+	h := newTestHandler(&domain.Order{ID: "ord-detail", Item: "laptop", Status: "confirmed"})
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/orders/ord-detail", nil)
 	req.SetPathValue("id", "ord-detail")
@@ -120,7 +120,7 @@ func TestHandleList_Default(t *testing.T) {
 			CreatedAt: base.Add(time.Duration(i) * time.Hour),
 		})
 	}
-	h, _ := newTestHandler(seed...)
+	h := newTestHandler(seed...)
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/orders", nil)
 
@@ -143,7 +143,7 @@ func TestHandleList_WithLimit(t *testing.T) {
 			CreatedAt: base.Add(time.Duration(i) * time.Hour),
 		})
 	}
-	h, _ := newTestHandler(seed...)
+	h := newTestHandler(seed...)
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/orders?limit=2", nil)
 
@@ -159,7 +159,7 @@ func TestHandleList_WithLimit(t *testing.T) {
 }
 
 func TestHandleList_InvalidLimit(t *testing.T) {
-	h, _ := newTestHandler()
+	h := newTestHandler()
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/orders?limit=abc", nil)
 
@@ -170,7 +170,7 @@ func TestHandleList_InvalidLimit(t *testing.T) {
 }
 
 func TestHandleList_ExceedsMaxLimit(t *testing.T) {
-	h, _ := newTestHandler()
+	h := newTestHandler()
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/orders?limit=501", nil)
 
@@ -202,7 +202,7 @@ func TestHandleList_InvalidCursor(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			h, _ := newTestHandler(&domain.Order{ID: "ord-1", Item: "x", Status: "pending"})
+			h := newTestHandler(&domain.Order{ID: "ord-1", Item: "x", Status: "pending"})
 			rec := httptest.NewRecorder()
 			req := httptest.NewRequest(http.MethodGet, "/api/v1/orders?cursor="+tc.cursor, nil)
 
@@ -215,7 +215,7 @@ func TestHandleList_InvalidCursor(t *testing.T) {
 }
 
 func TestHandleList_Empty(t *testing.T) {
-	h, _ := newTestHandler()
+	h := newTestHandler()
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/orders", nil)
 
@@ -240,7 +240,7 @@ func TestHandleList_Pagination_FullTraversal(t *testing.T) {
 			CreatedAt: base.Add(time.Duration(i) * time.Hour),
 		})
 	}
-	h, _ := newTestHandler(seed...)
+	h := newTestHandler(seed...)
 
 	var allIDs []string
 	cursor := ""

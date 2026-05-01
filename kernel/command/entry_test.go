@@ -175,7 +175,7 @@ func TestValidateNew_InvalidStatus(t *testing.T) {
 		DeviceID:    "dev-1",
 		CommandType: "reboot",
 		Payload:     []byte(`{}`),
-		Status:      Status(0), // zero = invalid
+		Status:      Status(0), //nolint:gocritic // commentedOutCode: "zero = invalid" is a documentation annotation, not commented-out code
 		CreatedAt:   time.Now(),
 	}
 	err := entry.ValidateNew()

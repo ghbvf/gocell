@@ -38,7 +38,8 @@ type TokenPairResponse struct {
 // suppressed on the return line because the value-cast is exactly what we want
 // to avoid.
 func ToTokenPairResponse(p TokenPair) TokenPairResponse {
-	return TokenPairResponse{ //nolint:staticcheck // S1016: explicit field mapping is intentional — prevents accidental wire/model field coupling
+	//nolint:staticcheck // S1016: explicit field mapping is intentional — prevents accidental wire/model field coupling
+	return TokenPairResponse{
 		AccessToken:           p.AccessToken,
 		RefreshToken:          p.RefreshToken,
 		ExpiresAt:             p.ExpiresAt,

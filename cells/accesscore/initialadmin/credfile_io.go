@@ -24,7 +24,7 @@ type platformCredfile interface {
 
 // platformImpl is the compile-time-selected implementation: unixCredfile{}
 // on unix builds, windowsCredfile{} on windows builds.
-// Initialised by init() in credfile_security_unix.go or credfile_security_windows.go.
+// Initialized by init() in credfile_security_unix.go or credfile_security_windows.go.
 var platformImpl platformCredfile
 
 // writeCredentialFile atomically writes a credential file at path:
@@ -117,7 +117,7 @@ func removeCredentialFile(path string) error {
 // Returns an error when the file cannot be read, the expires_at line is
 // missing, or the value cannot be parsed.
 func readCredentialExpiresAt(path string) (time.Time, error) {
-	data, err := os.ReadFile(path)
+	data, err := os.ReadFile(path) //nolint:gosec // G304: path is the configured credential file path, validated by the caller
 	if err != nil {
 		return time.Time{}, fmt.Errorf("initialadmin: read credential file: %w", err)
 	}
@@ -156,7 +156,7 @@ func splitLines(s string) []string {
 	return lines
 }
 
-// formatPayload serialises payload into w using the canonical file format:
+// formatPayload serializes payload into w using the canonical file format:
 //
 //	# GoCell initial admin credential
 //	# Generated at: <ISO8601>

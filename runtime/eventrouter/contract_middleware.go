@@ -16,7 +16,7 @@ import (
 // Router.AddContractHandler is the only registration entry point, and it
 // validates the ContractSpec at registration time — no subscription reaches
 // this middleware without a populated ContractID. wrapper.MustWrapConsumer's
-// spec.Validate() is the second line of defence: if any caller ever bypasses
+// spec.Validate() is the second line of defense: if any caller ever bypasses
 // AddContractHandler and still threads an empty-ID subscription through,
 // WrapConsumer panics at construction time. The outbox.SubscriptionMiddleware
 // closure has no error-return path; MustWrapConsumer matches the contract

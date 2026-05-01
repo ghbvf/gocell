@@ -51,11 +51,11 @@ func Recovery(next http.Handler) http.Handler {
 
 				if state.Committed() {
 					attrs = append(attrs, slog.Bool("response_committed", true))
-					slog.Error("panic after response committed", attrs...)
+					slog.Error("panic after response committed", attrs...) //nolint:gosec // G706: structured slog attrs, not string concatenation
 					return
 				}
 
-				slog.Error("panic recovered", attrs...)
+				slog.Error("panic recovered", attrs...) //nolint:gosec // G706: structured slog attrs, not string concatenation
 				httputil.WriteError(r.Context(), w, http.StatusInternalServerError, "ERR_INTERNAL", "internal server error")
 			}
 		}()

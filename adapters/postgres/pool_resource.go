@@ -68,7 +68,7 @@ func NewPGResource(pool *Pool) (*PGResource, error) {
 // kubelet/LB client-ctx cancellation; this probe further bounds at 5s.
 //
 // ref: cmd/corebundle/main.go:230-241 (pgHealthCheckerOpts) — same rationale,
-// same 5s timeout, now centralised here.
+// same 5s timeout, now centralized here.
 // ref: Kubernetes readyz — external dependencies contribute named checks.
 func (r *PGResource) Checkers() map[string]func(context.Context) error {
 	healthFn := r.healthFunc

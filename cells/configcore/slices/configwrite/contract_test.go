@@ -21,13 +21,13 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func newContractService(t testing.TB) (*Service, *mem.ConfigRepository, *testutil.RecordingWriter) {
+func newContractService(t testing.TB) (*Service, *testutil.RecordingWriter) {
 	t.Helper()
 	repo := mem.NewConfigRepository()
 	writer := &testutil.RecordingWriter{}
 	svc := NewService(repo, slog.Default(),
 		WithEmitter(testoutbox.MustEmitter(t, writer)), WithTxManager(&testutil.NoopTxRunner{}))
-	return svc, repo, writer
+	return svc, writer
 }
 
 // newContractMux registers configwrite routes under the canonical API
@@ -50,7 +50,7 @@ func newContractMux(svc *Service) http.Handler {
 func TestHttpConfigWriteV1Serve(t *testing.T) {
 	root := contracttest.ContractsRoot(t)
 	c := contracttest.LoadByID(t, root, "http.config.write.v1")
-	svc, _, _ := newContractService(t)
+	svc, _ := newContractService(t)
 
 	mux := newContractMux(svc)
 
@@ -72,7 +72,7 @@ func TestHttpConfigWriteV1Serve(t *testing.T) {
 // are tested here alongside the happy-path contract test so that auth-guard
 // regressions are caught at the contract boundary, not just in unit tests.
 func TestHttpConfigWriteV1_AuthzNegative(t *testing.T) {
-	svc, _, _ := newContractService(t)
+	svc, _ := newContractService(t)
 	mux := newContractMux(svc)
 	body := `{"key":"app.name","value":"myapp"}`
 
@@ -113,7 +113,7 @@ func TestHttpConfigWriteV1_AuthzNegative(t *testing.T) {
 func TestEventConfigEntryUpsertedV1Publish_Create(t *testing.T) {
 	root := contracttest.ContractsRoot(t)
 	c := contracttest.LoadByID(t, root, "event.config.entry-upserted.v1")
-	svc, _, writer := newContractService(t)
+	svc, writer := newContractService(t)
 
 	_, err := svc.Create(auth.TestContext("contract-admin", []string{"admin"}), CreateInput{Key: "app.name", Value: "myapp"})
 	require.NoError(t, err)
@@ -137,7 +137,7 @@ func TestEventConfigEntryUpsertedV1Publish_Create(t *testing.T) {
 func TestEventConfigEntryUpsertedV1Publish_Update(t *testing.T) {
 	root := contracttest.ContractsRoot(t)
 	c := contracttest.LoadByID(t, root, "event.config.entry-upserted.v1")
-	svc, _, writer := newContractService(t)
+	svc, writer := newContractService(t)
 
 	_, err := svc.Create(auth.TestContext("contract-admin", []string{"admin"}), CreateInput{Key: "k", Value: "v1"})
 	require.NoError(t, err)
@@ -156,7 +156,7 @@ func TestEventConfigEntryUpsertedV1Publish_Update(t *testing.T) {
 func TestEventConfigEntryDeletedV1Publish_Delete(t *testing.T) {
 	root := contracttest.ContractsRoot(t)
 	c := contracttest.LoadByID(t, root, "event.config.entry-deleted.v1")
-	svc, _, writer := newContractService(t)
+	svc, writer := newContractService(t)
 
 	_, err := svc.Create(auth.TestContext("contract-admin", []string{"admin"}), CreateInput{Key: "k", Value: "v"})
 	require.NoError(t, err)

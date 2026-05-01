@@ -45,7 +45,7 @@ func runScaffold(args []string) error {
 
 // runScaffoldWithRoot dispatches a scaffold sub-command against an explicit
 // project root — decoupling the dispatch from process cwd so tests can drive
-// a temp directory without os.Chdir (which serialises the whole test binary).
+// a temp directory without os.Chdir (which serializes the whole test binary).
 func runScaffoldWithRoot(root string, args []string) error {
 	if len(args) < 1 {
 		return fmt.Errorf("usage: gocell scaffold <cell|slice|contract|journey> [flags]")

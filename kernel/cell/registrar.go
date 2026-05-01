@@ -300,7 +300,7 @@ type ConfigChangeEvent struct {
 //
 // Thread safety: the returned func(context.Context) error values are called
 // on every /readyz HTTP request and MUST be safe for concurrent invocation.
-// The context carries the /readyz deadline so probes can honour cancellation.
+// The context carries the /readyz deadline so probes can honor cancellation.
 //
 // ref: Kubernetes PodSpec — explicit readinessProbe/livenessProbe per container
 // Adopted: explicit named probes. Deviated: returned as map, not declarative YAML.

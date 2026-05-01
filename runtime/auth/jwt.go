@@ -116,7 +116,7 @@ func WithExpectedAudiences(first string, rest ...string) JWTVerifierOption {
 // claim exactly matches the given issuer string. The check is applied after
 // audience validation so audience errors remain distinguishable in structured
 // logs. An empty iss argument is silently ignored (no-op), preserving the
-// previous behaviour of accepting any issuer.
+// previous behavior of accepting any issuer.
 //
 // ref: coreos/go-oidc v3 IDTokenVerifier — issuer validation with equality check
 // ref: golang-jwt/jwt v5 WithIssuer ParserOption — functional option pattern
@@ -392,7 +392,7 @@ type IssueOptions struct {
 //
 // When opts.PasswordResetRequired is true, the claim "password_reset_required"
 // is written into the token payload. When false (the zero value) the claim is
-// omitted entirely for backward compatibility and to minimise token size.
+// omitted entirely for backward compatibility and to minimize token size.
 func (i *JWTIssuer) Issue(intent TokenIntent, subject string, opts IssueOptions) (string, error) {
 	if !intent.IsValid() {
 		return "", errcode.Safe(errcode.ErrAuthInvalidTokenIntent,

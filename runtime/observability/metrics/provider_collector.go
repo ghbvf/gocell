@@ -78,7 +78,7 @@ func NewProviderCollector(p kernelmetrics.Provider, cfg ProviderCollectorConfig)
 }
 
 // RecordRequest emits an increment on http_requests_total and a sample on
-// http_request_duration_seconds, labelled identically. Status is stringified
+// http_request_duration_seconds, labeled identically. Status is stringified
 // once per call because Provider.CounterVec/HistogramVec expect string
 // labels uniformly (avoids adapter-specific type conversions).
 func (c *providerCollector) RecordRequest(method, route string, status int, durationSeconds float64) {

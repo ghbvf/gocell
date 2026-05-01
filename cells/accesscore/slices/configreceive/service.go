@@ -32,7 +32,7 @@ const (
 // Consumer: cg-accesscore-config-events
 // Idempotency: log-only (no side effects), inherently idempotent
 // Disposition: Ack on success / Reject on permanent unmarshal or semantic error
-// DLX: broker-native via DispositionReject → Nack(requeue=false)
+// DLX: broker-native via DispositionReject → Nack(requeue=false).
 type Service struct {
 	logger               *slog.Logger
 	configGetter         ports.ConfigGetter // optional; nil disables GetEntry fetch

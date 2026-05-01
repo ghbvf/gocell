@@ -20,7 +20,7 @@ var _ cell.EventRouter = (*Router)(nil)
 
 // --- Mock Subscriber ---
 
-// blockingSubscriber blocks until ctx is cancelled, simulating a healthy broker.
+// blockingSubscriber blocks until ctx is canceled, simulating a healthy broker.
 type blockingSubscriber struct {
 	mu     sync.Mutex
 	topics []string

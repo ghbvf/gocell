@@ -131,7 +131,7 @@ func TestPrometheusExposition_RelayCollector_FamiliesAndBuckets(t *testing.T) {
 			t.Errorf("exposition missing %q; got:\n%s", want, body)
 		}
 	}
-	// Non-zero outcomes labelled correctly (skipped zero suppression is a
+	// Non-zero outcomes labeled correctly (skipped zero suppression is a
 	// collector rule inherited from the old adapter).
 	for _, want := range []string{
 		`gocell_outbox_relayed_total{cell="test-cell",outcome="published"} 2`,
@@ -181,7 +181,7 @@ func (s *stubPublisher) Close(_ context.Context) error                       { r
 //	runtime/observability/metrics/provider_collector.go (Name="http_requests_total")
 //	as canonical same-repo examples of the Namespace-in-wrapper pattern.
 func TestPrometheusExposition_OutboxEmitter_FailOpenDropped_Family(t *testing.T) {
-	p, reg := newProvider(t) // Namespace="gocell"
+	p, reg := newProvider(t) //nolint:gocritic // commentedOutCode: Namespace="gocell" is a documentation annotation, not commented-out code
 
 	// Fail-open emitter: any Publish error is swallowed, counter incremented.
 	pub := &stubPublisher{err: errors.New("broker unavailable")}

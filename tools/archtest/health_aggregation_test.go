@@ -10,7 +10,7 @@ package archtest
 // Implementation: golang.org/x/tools/go/packages + go/types — types.NewMethodSet
 // surfaces promoted methods from embedded fields, so a type that satisfies the
 // contract via embedding (e.g. struct embedding *PGResource) is correctly
-// recognised as implementing ManagedResource.
+// recognized as implementing ManagedResource.
 //
 // Enforcement scope: runtime/, adapters/ packages only.
 // Excluded: cells/, kernel/cell/ — HealthCheckersContributor is a different

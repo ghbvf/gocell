@@ -21,7 +21,7 @@ import (
 // SubscriberIntakeStopper. It records the wall-clock times at which
 // StopIntake is called so tests can verify ordering relative to runCtx cancel.
 type stopIntakeRecorder struct {
-	blockingSubscriber // embed ready/blocking behaviour
+	blockingSubscriber // embed ready/blocking behavior
 
 	mu              sync.Mutex
 	stopIntakeCalls int
@@ -50,7 +50,7 @@ func (s *stopIntakeRecorder) StopIntakeCalls() int {
 }
 
 // cancelTimeRecorder wraps a subscriber and records when Subscribe's ctx is
-// cancelled (i.e. when runCtx cancel is called by Close Phase 2).
+// canceled (i.e. when runCtx cancel is called by Close Phase 2).
 type cancelTimeRecorder struct {
 	inner        outbox.Subscriber
 	cancelledAt  atomic.Int64  // UnixNano
@@ -77,7 +77,7 @@ func (r *cancelTimeRecorder) Subscribe(ctx context.Context, sub outbox.Subscript
 	default:
 		close(r.subscribedCh)
 	}
-	// Block until ctx cancelled, recording the time.
+	// Block until ctx canceled, recording the time.
 	<-ctx.Done()
 	r.cancelledAt.Store(time.Now().UnixNano())
 	return ctx.Err()
@@ -135,7 +135,7 @@ func (c *compositeStopIntakeSubscriber) StopIntake(ctx context.Context) error {
 }
 
 // TestRouterClose_CallsStopIntakeBeforeCancel verifies that when the subscriber
-// implements SubscriberIntakeStopper, Close calls StopIntake before cancelling
+// implements SubscriberIntakeStopper, Close calls StopIntake before canceling
 // the runCtx (Phase 1 before Phase 2 in the three-phase drain).
 func TestRouterClose_CallsStopIntakeBeforeCancel(t *testing.T) {
 	composite := newCompositeStopIntakeSubscriber()
@@ -167,7 +167,7 @@ func TestRouterClose_CallsStopIntakeBeforeCancel(t *testing.T) {
 	cancelAt := composite.cancelRec.CancelledAt()
 
 	require.False(t, stopAt.IsZero(), "StopIntake must have been called")
-	require.False(t, cancelAt.IsZero(), "runCtx must have been cancelled")
+	require.False(t, cancelAt.IsZero(), "runCtx must have been canceled")
 
 	assert.True(t, stopAt.Before(cancelAt) || stopAt.Equal(cancelAt),
 		"StopIntake (%v) must happen before or at the same time as runCtx cancel (%v)",
@@ -232,7 +232,7 @@ func TestRouterClose_NoStopIntakeFallback_WithHandlers(t *testing.T) {
 
 // inflightSubscriber simulates a subscriber whose handler sleeps 200ms to
 // model in-flight processing during drain. Subscribe blocks until the handler
-// goroutine completes OR ctx is cancelled — whichever comes first — and
+// goroutine completes OR ctx is canceled — whichever comes first — and
 // additionally signals via handlerDone when the simulated work finishes.
 type inflightSubscriber struct {
 	handlerDuration time.Duration
@@ -275,7 +275,7 @@ func (s *inflightSubscriber) Subscribe(ctx context.Context, _ outbox.Subscriptio
 		close(s.handlerDone)
 	}()
 
-	// Subscribe blocks until handler finishes (drain completed) or ctx cancelled.
+	// Subscribe blocks until handler finishes (drain completed) or ctx canceled.
 	select {
 	case <-handlerFinished:
 		return nil

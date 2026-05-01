@@ -134,7 +134,7 @@ func TestGetByKey_NotFound_HasDomainCategory(t *testing.T) {
 //   - context.DeadlineExceeded → ErrServerTimeout  (HTTP 504 + slog.Error)
 //
 // IsInfraError is preserved (true) for both branches so health.Checker
-// timeout-bucket behaviour is unchanged; the HTTP layer routes 499/504 via
+// timeout-bucket behavior is unchanged; the HTTP layer routes 499/504 via
 // codeToStatus, not via IsInfraError.
 func TestConfigRepo_CtxCanceled_ReturnsClientCanceled(t *testing.T) {
 	tests := []struct {
@@ -148,7 +148,7 @@ func TestConfigRepo_CtxCanceled_ReturnsClientCanceled(t *testing.T) {
 		t.Helper()
 		require.Error(t, err)
 		require.True(t, errcode.IsInfraError(err),
-			"IsInfraError preserved (preserves health/timeout bucket behaviour)")
+			"IsInfraError preserved (preserves health/timeout bucket behavior)")
 		require.False(t, errcode.IsDomainNotFound(err, errcode.ErrConfigRepoNotFound),
 			"ctx cancel must not leak into domain not-found branch")
 		var ec *errcode.Error

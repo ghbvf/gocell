@@ -12,7 +12,7 @@ import (
 )
 
 // TestIsInfraError covers the fail-closed dual-channel classifier.
-// Unrecognised plain errors are treated as infra (fail-closed) to prevent
+// Unrecognized plain errors are treated as infra (fail-closed) to prevent
 // leaking infra faults into domain-not-found branches.
 func TestIsInfraError(t *testing.T) {
 	tests := []struct {
@@ -338,7 +338,7 @@ func TestNewDomain_CategoryField(t *testing.T) {
 }
 
 // TestNew_BackwardCompatibility verifies that the existing New() constructor
-// produces CategoryUnspecified (zero value), preserving all prior behaviour.
+// produces CategoryUnspecified (zero value), preserving all prior behavior.
 func TestNew_BackwardCompatibility(t *testing.T) {
 	err := New(ErrCellNotFound, "not found")
 	assert.Equal(t, CategoryUnspecified, err.Category,

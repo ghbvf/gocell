@@ -156,7 +156,7 @@ func TestNewPool_UnreachableHost(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 // TestPool_Close_PreCancelledCtxReturnsError verifies that Close
-// with a pre-cancelled context returns ctx.Err() promptly without attempting
+// with a pre-canceled context returns ctx.Err() promptly without attempting
 // the underlying pool drain.
 func TestPool_Close_PreCancelledCtxReturnsError(t *testing.T) {
 	// Use a zero Pool (inner=nil) — Close must short-circuit on ctx.Err()
@@ -167,7 +167,7 @@ func TestPool_Close_PreCancelledCtxReturnsError(t *testing.T) {
 	cancel()
 
 	err := p.Close(cancelledCtx)
-	require.Error(t, err, "Close with pre-cancelled ctx must return error")
+	require.Error(t, err, "Close with pre-canceled ctx must return error")
 	assert.Equal(t, context.Canceled, err)
 }
 

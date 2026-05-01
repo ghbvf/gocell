@@ -8,14 +8,14 @@ import (
 )
 
 // wrapCtxSafe turns an arbitrary Checker into a race-pattern Checker whose
-// outer call returns as soon as the caller's ctx is cancelled, regardless of
+// outer call returns as soon as the caller's ctx is canceled, regardless of
 // whether the inner function cooperates with ctx.Done. This is the structural
 // replacement for the pre-PR-A35 "uncooperative probe leaks past the
 // aggregator" trade-off.
 //
 // Semantics:
 //   - If inner fn returns before ctx.Done, its return value is propagated.
-//   - If ctx is cancelled first, the outer Checker returns ctx.Err() immediately.
+//   - If ctx is canceled first, the outer Checker returns ctx.Err() immediately.
 //     The inner goroutine continues running to completion; its eventual return
 //     value (or panic) is consumed by a background watcher that logs anything
 //     surprising (late panic, multi-second cancel lag) so the runaway is at
@@ -70,14 +70,14 @@ func wrapCtxSafe(fn Checker) Checker {
 		case <-ctx.Done():
 			// Background watcher: observes the eventual inner-fn outcome so
 			// panic values are not silently dropped and operators can grep
-			// slog for probes that take a long time to honour cancellation.
+			// slog for probes that take a long time to honor cancellation.
 			// The watcher exits as soon as `done` receives, so it never
 			// leaks independently of the inner goroutine.
 			//
 			// `cancelAt` is captured *here* (not at probe start) so the
 			// cancel_lag the watcher logs is the real time between ctx
 			// cancellation and the inner fn returning, not the total wall
-			// time spent in the probe — a cooperative probe that honours
+			// time spent in the probe — a cooperative probe that honors
 			// ctx.Done in the very next instruction must produce a near-zero
 			// cancel_lag even when ctx fires 5s after probe start.
 			cancelAt := time.Now()
@@ -111,7 +111,7 @@ func probePanicError(panicV any) error {
 //
 //   - cancel_lag = time.Since(cancelAt) — captured at the moment the outer
 //     Checker observed ctx.Done. This is the operative signal for "did the
-//     probe honour cancellation"; a cooperative probe must yield ~0 here
+//     probe honor cancellation"; a cooperative probe must yield ~0 here
 //     regardless of how late ctx fired.
 //   - probe_total = time.Since(start) — total wall time spent in the inner
 //     fn from invocation to return, useful only for cross-checking against
@@ -139,13 +139,13 @@ func watchLateProbeOutcome(ctxErr error, start, cancelAt time.Time, done <-chan 
 			slog.Duration("probe_total", probeTotal),
 		)
 	case cancelLag > time.Second:
-		slog.Warn("health: probe did not honour ctx cancellation promptly",
+		slog.Warn("health: probe did not honor ctx cancellation promptly",
 			slog.Any("ctx_err", ctxErr),
 			slog.Duration("cancel_lag", cancelLag),
 			slog.Duration("probe_total", probeTotal),
 		)
 	default:
-		slog.Debug("health: probe cancelled, inner fn returned shortly after",
+		slog.Debug("health: probe canceled, inner fn returned shortly after",
 			slog.Any("ctx_err", ctxErr),
 			slog.Duration("cancel_lag", cancelLag),
 			slog.Duration("probe_total", probeTotal),

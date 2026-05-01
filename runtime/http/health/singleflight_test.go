@@ -76,7 +76,7 @@ func TestReadyz_Singleflight_DedupsConcurrentRequests(t *testing.T) {
 		}()
 	}
 	readyWG.Wait() // every goroutine parked at the barrier
-	close(release) // fire them all at once — maximises the dedup window
+	close(release) // fire them all at once — maximizes the dedup window
 
 	// Wait for the leader to enter the probe (callCount == 1) using a
 	// happens-before signal rather than a fixed-time sleep. Once the leader

@@ -11,7 +11,7 @@ import (
 const EnvelopeSchemaV1 = "v1"
 
 // ErrUnknownEnvelopeVersion is returned when a wire message carries an
-// unrecognised or absent schemaVersion field.
+// unrecognized or absent schemaVersion field.
 var ErrUnknownEnvelopeVersion = errcode.New(errcode.ErrEnvelopeSchema,
 	"outbox: unknown envelope schema version")
 

@@ -84,7 +84,7 @@ func TestBuild_CorebundleGeneratedSchemaIsCurrent(t *testing.T) {
 	require.NoError(t, err)
 	got, err := Marshal(schema)
 	require.NoError(t, err)
-	want, err := os.ReadFile(filepath.Join(root, "assemblies/corebundle/generated/metrics-schema.yaml"))
+	want, err := os.ReadFile(filepath.Join(root, "assemblies", "corebundle", "generated", "metrics-schema.yaml"))
 	require.NoError(t, err)
 	assert.Equal(t, string(want), string(got))
 }
@@ -115,7 +115,7 @@ func TestMarshalOmitsLineNumbers(t *testing.T) {
 
 func TestBuild_FixtureLocksReachabilityIdentityAndLabels(t *testing.T) {
 	root := writeMetricsFixture(t)
-	project := fixtureProject("fixture", "cmd/app/main.go")
+	project := fixtureProject()
 
 	schema, err := Build(root, project, "fixture")
 	require.NoError(t, err)
@@ -154,7 +154,7 @@ var _ = metrics.CounterOpts{
 	Name: os.Getenv("METRIC_NAME"),
 }
 `)
-	project := fixtureProject("fixture", "cmd/app/main.go")
+	project := fixtureProject()
 
 	_, err := Build(root, project, "fixture")
 	require.ErrorIs(t, err, ErrUnresolvedMetricSchema)
@@ -173,7 +173,7 @@ func buildCounterOpts() prom.CounterOpts {
 
 var _ = prom.NewCounterVec(buildCounterOpts(), []string{"status"})
 `)
-	project := fixtureProject("fixture", "cmd/app/main.go")
+	project := fixtureProject()
 
 	_, err := Build(root, project, "fixture")
 	require.ErrorIs(t, err, ErrUnresolvedMetricSchema)
@@ -195,7 +195,7 @@ var _ = prom.NewCounter(prom.CounterOpts{
 	Name: "dynamic_namespace_total",
 })
 `)
-	project := fixtureProject("fixture", "cmd/app/main.go")
+	project := fixtureProject()
 
 	_, err := Build(root, project, "fixture")
 	require.ErrorIs(t, err, ErrUnresolvedMetricSchema)
@@ -218,7 +218,7 @@ func registerCounter(opts prom.CounterOpts) prom.Counter {
 
 var _ = registerCounter(buildCounterOpts())
 `)
-	project := fixtureProject("fixture", "cmd/app/main.go")
+	project := fixtureProject()
 
 	_, err := Build(root, project, "fixture")
 	require.ErrorIs(t, err, ErrUnresolvedMetricSchema)
@@ -248,7 +248,7 @@ func buildCounterOpts() prom.CounterOpts {
 
 var _ = helper.RegisterCounter(buildCounterOpts())
 `)
-	project := fixtureProject("fixture", "cmd/app/main.go")
+	project := fixtureProject()
 
 	_, err := Build(root, project, "fixture")
 	require.ErrorIs(t, err, ErrUnresolvedMetricSchema)
@@ -271,7 +271,7 @@ func buildLabels() []string {
 
 var _ = registerCounterVec(prom.CounterOpts{Name: "helper_vec_total"}, buildLabels())
 `)
-	project := fixtureProject("fixture", "cmd/app/main.go")
+	project := fixtureProject()
 
 	_, err := Build(root, project, "fixture")
 	require.ErrorIs(t, err, ErrUnresolvedMetricSchema)
@@ -2017,7 +2017,11 @@ func repoRoot(t *testing.T) string {
 	return filepath.Clean(filepath.Join(filepath.Dir(file), "..", ".."))
 }
 
-func fixtureProject(id, entrypoint string) *metadata.ProjectMeta {
+func fixtureProject() *metadata.ProjectMeta {
+	const (
+		id         = "fixture"
+		entrypoint = "cmd/app/main.go"
+	)
 	return &metadata.ProjectMeta{
 		Assemblies: map[string]*metadata.AssemblyMeta{
 			id: {

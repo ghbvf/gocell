@@ -328,7 +328,7 @@ func TestCircuitBreaker_3xx_ReportsSuccess(t *testing.T) {
 }
 
 // statefulMockBreaker is a test double that transitions to open after a
-// failure is reported via the done callback, modelling the full
+// failure is reported via the done callback, modeling the full
 // Allow → done(err) → Allow state-machine path.
 type statefulMockBreaker struct {
 	open        bool

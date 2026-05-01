@@ -23,7 +23,7 @@ type ConfigCoreModule struct {
 	// KeyProviderOverride bypasses env-based KeyProvider construction when
 	// non-nil. Production code leaves this unset; tests use it to inject a
 	// fake KeyProvider (e.g. one that also implements
-	// kernel/lifecycle.ManagedResource) and assert wiring behaviour without
+	// kernel/lifecycle.ManagedResource) and assert wiring behavior without
 	// touching GOCELL_CONFIGCORE_KEY_PROVIDER / GOCELL_CONFIGCORE_MASTER_KEY / Vault.
 	KeyProviderOverride kcrypto.KeyProvider
 }
@@ -47,7 +47,9 @@ var configStaleCipherOpts = prom.CounterOpts{
 // provisional resources that BuildApp must close if a subsequent module's
 // Provide fails. It reads configcore-specific environment variables directly
 // via the LoadPGConfig / LoadCursorKeys / LoadConfigCoreKeyProvider helpers.
-func (m ConfigCoreModule) Provide(ctx context.Context, shared *SharedDeps) (cell.Cell, []bootstrap.Option, []kernellifecycle.ManagedResource, error) {
+func (m ConfigCoreModule) Provide(
+	ctx context.Context, shared *SharedDeps,
+) (cell.Cell, []bootstrap.Option, []kernellifecycle.ManagedResource, error) {
 	// 1. Cursor codec: read configcore-namespaced env via LoadCursorKeys then build.
 	cfgPrimary, cfgPrevious := LoadCursorKeys("CONFIGCORE")
 	cursorCodec, err := buildCursorCodec(cursorCodecConfig{

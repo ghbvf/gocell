@@ -35,10 +35,10 @@ func TestCloseWithDeadline_PreCancelledContextStillInvokesCloseFn(t *testing.T) 
 	select {
 	case <-done:
 	case <-time.After(100 * time.Millisecond):
-		t.Fatal("closeFn was not invoked within 100ms — pre-cancelled ctx must still run closeFn")
+		t.Fatal("closeFn was not invoked within 100ms — pre-canceled ctx must still run closeFn")
 	}
 	if !called.Load() {
-		t.Fatal("closeFn atomic flag not set — best-effort close must run even with pre-cancelled ctx")
+		t.Fatal("closeFn atomic flag not set — best-effort close must run even with pre-canceled ctx")
 	}
 }
 

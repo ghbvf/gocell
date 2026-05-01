@@ -13,30 +13,31 @@ type Code string
 
 // Sentinel error codes used throughout the GoCell framework.
 const (
-	ErrMetadataInvalid        Code = "ERR_METADATA_INVALID"
-	ErrMetadataNotFound       Code = "ERR_METADATA_NOT_FOUND"
-	ErrCellNotFound           Code = "ERR_CELL_NOT_FOUND"
-	ErrSliceNotFound          Code = "ERR_SLICE_NOT_FOUND"
-	ErrContractNotFound       Code = "ERR_CONTRACT_NOT_FOUND"
-	ErrAssemblyNotFound       Code = "ERR_ASSEMBLY_NOT_FOUND"
-	ErrLifecycleInvalid       Code = "ERR_LIFECYCLE_INVALID"
-	ErrDependencyCycle        Code = "ERR_DEPENDENCY_CYCLE"
-	ErrValidationFailed       Code = "ERR_VALIDATION_FAILED"
-	ErrReferenceBroken        Code = "ERR_REFERENCE_BROKEN"
-	ErrInternal               Code = "ERR_INTERNAL"
-	ErrServiceUnavailable     Code = "ERR_SERVICE_UNAVAILABLE"
-	ErrAuthUnauthorized       Code = "ERR_AUTH_UNAUTHORIZED"
-	ErrAuthForbidden          Code = "ERR_AUTH_FORBIDDEN"
-	ErrRateLimited            Code = "ERR_RATE_LIMITED"
-	ErrCSRFOriginDenied       Code = "ERR_CSRF_ORIGIN_DENIED"
-	ErrBodyTooLarge           Code = "ERR_BODY_TOO_LARGE"
-	ErrJourneyNotFound        Code = "ERR_JOURNEY_NOT_FOUND"
-	ErrTestExecution          Code = "ERR_TEST_EXECUTION"
-	ErrCheckRefInvalid        Code = "ERR_CHECKREF_INVALID"
-	ErrZeroTestMatch          Code = "ERR_ZERO_TEST_MATCH"
-	ErrBusClosed              Code = "ERR_BUS_CLOSED"
-	ErrCellMissingOutbox      Code = "ERR_CELL_MISSING_OUTBOX"
-	ErrCellMissingCodec       Code = "ERR_CELL_MISSING_CODEC"
+	ErrMetadataInvalid    Code = "ERR_METADATA_INVALID"
+	ErrMetadataNotFound   Code = "ERR_METADATA_NOT_FOUND"
+	ErrCellNotFound       Code = "ERR_CELL_NOT_FOUND"
+	ErrSliceNotFound      Code = "ERR_SLICE_NOT_FOUND"
+	ErrContractNotFound   Code = "ERR_CONTRACT_NOT_FOUND"
+	ErrAssemblyNotFound   Code = "ERR_ASSEMBLY_NOT_FOUND"
+	ErrLifecycleInvalid   Code = "ERR_LIFECYCLE_INVALID"
+	ErrDependencyCycle    Code = "ERR_DEPENDENCY_CYCLE"
+	ErrValidationFailed   Code = "ERR_VALIDATION_FAILED"
+	ErrReferenceBroken    Code = "ERR_REFERENCE_BROKEN"
+	ErrInternal           Code = "ERR_INTERNAL"
+	ErrServiceUnavailable Code = "ERR_SERVICE_UNAVAILABLE"
+	ErrAuthUnauthorized   Code = "ERR_AUTH_UNAUTHORIZED"
+	ErrAuthForbidden      Code = "ERR_AUTH_FORBIDDEN"
+	ErrRateLimited        Code = "ERR_RATE_LIMITED"
+	ErrCSRFOriginDenied   Code = "ERR_CSRF_ORIGIN_DENIED"
+	ErrBodyTooLarge       Code = "ERR_BODY_TOO_LARGE"
+	ErrJourneyNotFound    Code = "ERR_JOURNEY_NOT_FOUND"
+	ErrTestExecution      Code = "ERR_TEST_EXECUTION"
+	ErrCheckRefInvalid    Code = "ERR_CHECKREF_INVALID"
+	ErrZeroTestMatch      Code = "ERR_ZERO_TEST_MATCH"
+	ErrBusClosed          Code = "ERR_BUS_CLOSED"
+	ErrCellMissingOutbox  Code = "ERR_CELL_MISSING_OUTBOX"
+	ErrCellMissingCodec   Code = "ERR_CELL_MISSING_CODEC"
+	//nolint:gosec // G101 false positive: error code constant, not a credential
 	ErrCellMissingTokenIssuer Code = "ERR_CELL_MISSING_TOKEN_ISSUER"
 	ErrCellInvalidConfig      Code = "ERR_CELL_INVALID_CONFIG"
 	// ErrCellPlatformUnsupported signals that a Cell option requested capability
@@ -59,8 +60,8 @@ const (
 	// Distinct from ErrAuthKeyInvalid (key material) so operators can route
 	// verifier misconfiguration separately from cryptographic key failures.
 	ErrAuthVerifierConfig Code = "ERR_AUTH_VERIFIER_CONFIG"
-	ErrAuthTokenInvalid   Code = "ERR_AUTH_TOKEN_INVALID"
-	ErrAuthTokenExpired   Code = "ERR_AUTH_TOKEN_EXPIRED"
+	ErrAuthTokenInvalid   Code = "ERR_AUTH_TOKEN_INVALID" //nolint:gosec // G101 false positive: error code constant, not a credential
+	ErrAuthTokenExpired   Code = "ERR_AUTH_TOKEN_EXPIRED" //nolint:gosec // G101 false positive: error code constant, not a credential
 	// ErrAuthInvalidTokenIntent signals that a JWT's token_use claim (and/or
 	// its JOSE typ header) does not match the expected intent for the current
 	// request scope — e.g., a refresh token presented at a business endpoint,
@@ -71,6 +72,7 @@ const (
 	//
 	// ref: RFC 8725 §2.8 / §3.11 (JWT token confusion threat model)
 	// ref: AWS Cognito token_use claim, Keycloak typ header constants
+	//nolint:gosec // G101 false positive: error code constant, not a credential
 	ErrAuthInvalidTokenIntent Code = "ERR_AUTH_INVALID_TOKEN_INTENT"
 
 	// Access-core cell error codes.
@@ -88,7 +90,7 @@ const (
 	ErrAuthRefreshInvalidInput  Code = "ERR_AUTH_REFRESH_INVALID_INPUT"
 	ErrAuthRefreshFailed        Code = "ERR_AUTH_REFRESH_FAILED"
 	ErrAuthRefreshUnavailable   Code = "ERR_AUTH_REFRESH_UNAVAILABLE"
-	ErrAuthInvalidToken         Code = "ERR_AUTH_INVALID_TOKEN"
+	ErrAuthInvalidToken         Code = "ERR_AUTH_INVALID_TOKEN" //nolint:gosec // G101 false positive: error code constant, not a credential
 	ErrAuthRBACInvalidInput     Code = "ERR_AUTH_RBAC_INVALID_INPUT"
 	ErrAuthKeyMissing           Code = "ERR_AUTH_KEY_MISSING"
 	ErrAuthSelfDelete           Code = "ERR_AUTH_SELF_DELETE"
@@ -104,6 +106,7 @@ const (
 	// enforces this when the JWT claim password_reset_required is true.
 	// Only the exempt endpoints (POST /api/v1/access/users/{id}/password and
 	// DELETE /api/v1/access/sessions/{id}) bypass this check.
+	//nolint:gosec // G101 false positive: error code constant, not a credential
 	ErrAuthPasswordResetRequired Code = "ERR_AUTH_PASSWORD_RESET_REQUIRED"
 	// ErrSetupAlreadyInitialized signals that the interactive first-run admin
 	// endpoint (POST /api/v1/access/setup/admin) was invoked after the system
@@ -281,7 +284,7 @@ const (
 	// Use IsTransient to check the full error chain.
 	//
 	// ref: aws/aws-encryption-sdk-python src/aws_encryption_sdk/exceptions.py
-	// (GenerateKeyError / DecryptKeyError transient vs permanent split)
+	// (GenerateKeyError / DecryptKeyError transient vs permanent split).
 	ErrKeyProviderTransient Code = "ERR_KEY_PROVIDER_TRANSIENT"
 	// ErrConfigDecryptFailed signals that a sensitive config value could not be
 	// decrypted at the repository boundary. Maps to HTTP 500 (internal error).
@@ -299,7 +302,7 @@ const (
 	// ErrVaultAuthFailed signals a Vault auth method failure: missing or malformed
 	// credentials, unknown VAULT_AUTH_METHOD, AppRole / Kubernetes Login returned
 	// error, static token rejected by real-mode guard, or re-authentication loop
-	// exhausted (ctx cancelled).
+	// exhausted (ctx canceled).
 	//
 	// Distinct from ErrKeyProviderAuthFailed, which signals runtime Vault 403 on
 	// transit encrypt/decrypt paths (an in-flight operation failure). This code
@@ -307,7 +310,7 @@ const (
 	//
 	// Permanent at boot: operators must fix configuration before restart.
 	// During re-auth loop: ctx cancellation is the only exit condition; this
-	// code is returned when ctx is cancelled while retrying.
+	// code is returned when ctx is canceled while retrying.
 	//
 	// Category: default CategoryInfra (consistent with ErrVault* / ErrKeyProvider* siblings).
 	ErrVaultAuthFailed Code = "ERR_VAULT_AUTH_FAILED"
@@ -368,7 +371,7 @@ const (
 	// token (or no token was configured while verbose is still being
 	// requested). Maps to HTTP 401 Unauthorized.
 	//
-	// Introduced by PR-A35: prior behaviour silently downgraded mismatched
+	// Introduced by PR-A35: prior behavior silently downgraded mismatched
 	// requests to a plain 200 (without the verbose body), masking
 	// misconfiguration. The strict 401 makes configuration errors observable
 	// to operators without affecting the bare /readyz endpoint used by
@@ -382,6 +385,7 @@ const (
 	// who genuinely do not want the verbose endpoint exposed at all should
 	// explicitly acknowledge that via the WithReadyzVerboseDisabled option
 	// instead of relying on an absent token to silently disable gating.
+	//nolint:gosec // G101 false positive: error code constant, not a credential
 	ErrControlplaneVerboseTokenMissing Code = "ERR_CONTROLPLANE_VERBOSE_TOKEN_MISSING"
 
 	// ErrControlplaneVerboseTokenSample signals that
@@ -392,6 +396,7 @@ const (
 	// operators to mint a real high-entropy secret. Distinct from
 	// ErrControlplaneVerboseTokenMissing so dashboards and runbooks can
 	// distinguish "forgot to configure" from "configured with the sample".
+	//nolint:gosec // G101 false positive: error code constant, not a credential
 	ErrControlplaneVerboseTokenSample Code = "ERR_CONTROLPLANE_VERBOSE_TOKEN_SAMPLE"
 
 	// ErrAdapterEndpointNotTLS signals that a remote adapter endpoint (Redis,

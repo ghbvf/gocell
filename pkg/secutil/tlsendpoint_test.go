@@ -84,13 +84,13 @@ func TestValidateTLSEndpoint(t *testing.T) {
 			input:   "ftp://files.example.com/data",
 			wantErr: true,
 		},
-		// unix:// with empty host is a local socket — ok.
+		// unix scheme with empty host is a local socket — ok.
 		{
 			name:    "unix socket — ok",
 			input:   "unix:///var/run/redis.sock",
 			wantErr: false,
 		},
-		// unix:// with a non-empty host must be rejected (F2).
+		// unix scheme with a non-empty host must be rejected (F2).
 		{
 			name:    "unix with non-empty host — reject",
 			input:   "unix://evil.host/x",

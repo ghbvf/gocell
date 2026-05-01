@@ -54,7 +54,7 @@ func (b *Bootstrap) phase9AwaitShutdownSignal(ctx context.Context, s *phaseState
 	slog.Info("bootstrap: application started successfully")
 	select {
 	case <-ctx.Done():
-		slog.Info("bootstrap: context cancelled, shutting down")
+		slog.Info("bootstrap: context canceled, shutting down")
 		return shutdownSignal{reason: reasonCtxCancel}
 	case firstErr := <-s.httpErrCh:
 		return shutdownSignal{reason: reasonHTTPError, err: drainHTTPErrors(s.httpErrCh, firstErr)}
@@ -89,7 +89,7 @@ func (b *Bootstrap) phase9AwaitShutdownSignal(ctx context.Context, s *phaseState
 //
 // HTTP drain is intentionally NOT registered into the LIFO teardown chain
 // (phase7 sets s.httpDrain instead of calling s.addTeardown). Encoding the
-// HTTP/worker stop ordering as an explicit stage rather than as an artefact
+// HTTP/worker stop ordering as an explicit stage rather than as an artifact
 // of teardown registration order makes the contract grep-able and resistant
 // to future phase reordering.
 //

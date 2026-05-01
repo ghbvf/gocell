@@ -358,7 +358,7 @@ func TestCSRF_DefaultConfig(t *testing.T) {
 
 func TestCSRF_CookieSessionIntegration(t *testing.T) {
 	// Test the CSRF → CookieSession middleware chain.
-	secret := generateKey(t, 32)
+	secret := generateKey(t)
 	sessCfg := DefaultCookieSessionConfig(secret)
 
 	csrfCfg := CSRFConfig{

@@ -268,7 +268,7 @@ func (s *Subscriber) Ready(_ outbox.Subscription) <-chan struct{} {
 }
 
 // Subscribe registers a handler for the given subscription and blocks until ctx
-// is cancelled or the subscriber is closed.
+// is canceled or the subscriber is closed.
 //
 // Subscribe automatically reconnects when the underlying AMQP channel is lost
 // (e.g., due to a broker restart or network partition). It waits for the
@@ -281,7 +281,7 @@ func (s *Subscriber) Ready(_ outbox.Subscription) <-chan struct{} {
 // Consumer: cg-{QueueName}-{sub.Topic}
 // Idempotency key: handled by ConsumerBase middleware (not in Subscriber)
 // ACK timing: after handler returns DispositionAck
-// Retry: DispositionRequeue -> NACK+requeue / DispositionReject -> NACK(no-requeue) -> DLX
+// Retry: DispositionRequeue -> NACK+requeue / DispositionReject -> NACK(no-requeue) -> DLX.
 func (s *Subscriber) Subscribe(ctx context.Context, sub outbox.Subscription, handler outbox.EntryHandler) error {
 	topic := sub.Topic
 	consumerGroup := sub.ConsumerGroup
@@ -295,7 +295,7 @@ func (s *Subscriber) Subscribe(ctx context.Context, sub outbox.Subscription, han
 				"Set SubscriberConfig.DLXExchange to a valid DLX name")
 	}
 
-	// Derive a context that is cancelled when either the parent ctx is done or
+	// Derive a context that is canceled when either the parent ctx is done or
 	// the subscriber is closed. This ensures WaitConnected unblocks promptly on
 	// subscriber shutdown even if the parent ctx has no deadline.
 	subCtx, subCancel := context.WithCancelCause(ctx)
@@ -313,7 +313,7 @@ func (s *Subscriber) Subscribe(ctx context.Context, sub outbox.Subscription, han
 	for {
 		err := s.subscribeOnce(subCtx, topic, queueName, handler)
 		if err == nil {
-			return nil // Clean exit: ctx cancelled or subscriber closed.
+			return nil // Clean exit: ctx canceled or subscriber closed.
 		}
 		// Only reconnect on delivery channel lost. Topology/permission errors
 		// are permanent — return immediately.
@@ -324,7 +324,7 @@ func (s *Subscriber) Subscribe(ctx context.Context, sub outbox.Subscription, han
 			return reconnErr
 		}
 		// awaitReconnect returns nil both on successful reconnect AND on clean
-		// exit (ctx cancelled / subscriber closed). Re-check before looping back
+		// exit (ctx canceled / subscriber closed). Re-check before looping back
 		// into subscribeOnce to avoid spinning when ctx is already done.
 		select {
 		case <-subCtx.Done():
@@ -362,7 +362,7 @@ func (s *Subscriber) awaitReconnect(ctx context.Context, topic, queueName string
 		if isTerminalConnectionError(waitErr) {
 			return waitErr
 		}
-		return nil // ctx cancelled or subscriber closed during wait.
+		return nil // ctx canceled or subscriber closed during wait.
 	}
 
 	slog.Info("rabbitmq: resubscribing after reconnect",
@@ -374,7 +374,7 @@ func (s *Subscriber) awaitReconnect(ctx context.Context, topic, queueName string
 // subscribeOnce performs a single subscription lifecycle: acquire channel,
 // declare topology, consume, and run the consume loop.
 //
-// Returns nil for a clean exit (ctx cancelled or subscriber closed).
+// Returns nil for a clean exit (ctx canceled or subscriber closed).
 // Returns a non-nil error when the delivery channel is lost (triggers reconnect
 // in the outer Subscribe loop).
 //
@@ -527,7 +527,7 @@ func (s *Subscriber) snapshotActiveRuns() []*subscriptionRun {
 }
 
 // consumeLoop drains the deliveries channel and dispatches each delivery in a
-// dedicated goroutine, honouring PrefetchCount as real concurrency.
+// dedicated goroutine, honoring PrefetchCount as real concurrency.
 //
 // Concurrent safety audit:
 //   - ch.Ack/Nack: guarded by amqp091-go's internal channel mutex; safe to call
@@ -570,7 +570,7 @@ func (s *Subscriber) consumeLoop(
 			return s.drainRemaining(ctx, run, deliveries, topic, handler)
 
 		case <-ctx.Done():
-			slog.Info("rabbitmq: subscriber context cancelled",
+			slog.Info("rabbitmq: subscriber context canceled",
 				slog.String(logKeyTopic, topic))
 			return nil
 
@@ -614,7 +614,7 @@ func currentDrainDeadline() time.Duration {
 // drainRemaining processes deliveries already prefetched after StopIntake
 // issued basic.cancel. It exits when:
 //   - the deliveries channel is closed (broker acknowledged basic.cancel), or
-//   - ctx is cancelled (hard stop from parent), or
+//   - ctx is canceled (hard stop from parent), or
 //   - closeCh fires (Close() was called as the hard-shutdown boundary).
 //
 // New deliveries should not arrive after basic.cancel; any that do (race
@@ -624,11 +624,11 @@ func currentDrainDeadline() time.Duration {
 
 // drainRemaining reads prefetched deliveries until the deliveries channel is
 // closed by the broker (the cancel ack path), the outer Subscribe ctx is
-// cancelled (hard abort), or currentDrainDeadline() elapses (broker never ack'd the
+// canceled (hard abort), or currentDrainDeadline() elapses (broker never ack'd the
 // cancel).
 //
 // Invariant: closeCh is intentionally NOT in the select. Once StopIntake has
-// entered the drain path, honouring closeCh here would race with buffered
+// entered the drain path, honoring closeCh here would race with buffered
 // deliveries — the broker typically keeps pushing a handful of messages
 // between the cancel and its ack, and the handler-processing gap makes the
 // client-side buffer momentarily empty. We MUST let the broker drive the
@@ -903,7 +903,7 @@ func releaseReceipt(ctx context.Context, receipt outbox.Receipt, topic, eventID,
 // Close terminates all active subscriptions and waits for in-flight messages.
 //
 // Two-phase shutdown:
-//  1. Signal all goroutines to stop via closeCh (and check pre-cancelled ctx).
+//  1. Signal all goroutines to stop via closeCh (and check pre-canceled ctx).
 //  2. Wait for all processDelivery goroutines (global s.wg) bounded by ctx.
 //     If ctx expires, log a warning and return ErrAdapterAMQPCloseTimeout.
 //  3. For any runs still in the runs map (subscribeOnce deferred removal is async),
@@ -921,7 +921,7 @@ func (s *Subscriber) Close(ctx context.Context) error {
 	}
 	close(s.closeCh)
 
-	// Pre-cancelled ctx returns raw context.Canceled — no in-flight wait
+	// Pre-canceled ctx returns raw context.Canceled — no in-flight wait
 	// happened, so callers and tests see the canonical context error rather
 	// than the timeout-with-context sentinel reserved for wg.Wait expiry.
 	if err := ctx.Err(); err != nil {
@@ -1000,7 +1000,7 @@ func cancelConsumerWithBudget(ctx context.Context, c consumerRef, perCallTimeout
 				slog.Any("error", err))
 		}
 	case <-callCtx.Done():
-		slog.Warn("rabbitmq: basic.cancel during StopIntake exceeded per-call budget or outer ctx cancelled",
+		slog.Warn("rabbitmq: basic.cancel during StopIntake exceeded per-call budget or outer ctx canceled",
 			slog.String("consumer_tag", c.tag),
 			slog.Any("error", callCtx.Err()))
 	}
@@ -1019,7 +1019,7 @@ func cancelConsumerWithBudget(ctx context.Context, c consumerRef, perCallTimeout
 //   - On outer ctx cancel, returns promptly; leaked Cancel goroutines are bounded
 //     by the per-call timeout and broker channel liveness.
 //
-// ref: Uber fx app.go StopTimeout (budget must be honoured);
+// ref: Uber fx app.go StopTimeout (budget must be honored);
 // ref: Watermill router.go (stop intake → bounded drain pattern).
 func (s *Subscriber) StopIntake(ctx context.Context) error {
 	s.stopIntakeOnce.Do(func() { close(s.stopIntakeCh) })

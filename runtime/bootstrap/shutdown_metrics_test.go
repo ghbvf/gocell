@@ -153,7 +153,8 @@ func (p *fakeMetricsProvider) histogram(name string) *fakeHistogramVec {
 
 // runWithCancelAndListener starts Bootstrap.Run in a goroutine, waits for the
 // HTTP server to become healthy, cancels ctx, then waits for Run to return.
-func runWithCancelAndListener(t *testing.T, b *Bootstrap, ln net.Listener, runTimeout time.Duration) error {
+// The wait budget is fixed at 5 s.
+func runWithCancelAndListener(t *testing.T, b *Bootstrap, ln net.Listener) error {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
@@ -175,7 +176,7 @@ func runWithCancelAndListener(t *testing.T, b *Bootstrap, ln net.Listener, runTi
 	select {
 	case err := <-errCh:
 		return err
-	case <-time.After(runTimeout):
+	case <-time.After(5 * time.Second):
 		t.Fatal("bootstrap.Run did not return within timeout after cancel")
 		return nil
 	}
@@ -200,7 +201,7 @@ func TestShutdownMetrics_PhaseCounterTransitions(t *testing.T) {
 		WithMetricsProvider(p),
 	)
 
-	require.NoError(t, runWithCancelAndListener(t, b, ln, 5*time.Second))
+	require.NoError(t, runWithCancelAndListener(t, b, ln))
 
 	phaseVec := p.counter(shutdownPhaseCounterName)
 	require.NotNil(t, phaseVec, "phase counter %q must be registered", shutdownPhaseCounterName)
@@ -236,7 +237,7 @@ func TestShutdownMetrics_DurationRecorded(t *testing.T) {
 		WithMetricsProvider(p),
 	)
 
-	require.NoError(t, runWithCancelAndListener(t, b, ln, 5*time.Second))
+	require.NoError(t, runWithCancelAndListener(t, b, ln))
 
 	durVec := p.histogram(shutdownPhaseDurationName)
 	require.NotNil(t, durVec, "duration histogram %q must be registered", shutdownPhaseDurationName)
@@ -272,7 +273,7 @@ func TestShutdownMetrics_TimeoutOutcome_Success(t *testing.T) {
 		WithMetricsProvider(p),
 	)
 
-	require.NoError(t, runWithCancelAndListener(t, b, ln, 5*time.Second))
+	require.NoError(t, runWithCancelAndListener(t, b, ln))
 
 	outcomeVec := p.counter(shutdownTotalCounterName)
 	require.NotNil(t, outcomeVec, "outcome counter %q must be registered", shutdownTotalCounterName)
@@ -288,9 +289,9 @@ func TestShutdownMetrics_TimeoutOutcome_Success(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 // slowWorker is a background worker whose Stop method blocks until either its
-// context is cancelled (ctx.Done) or it is explicitly released. Unlike a cell
+// context is canceled (ctx.Done) or it is explicitly released. Unlike a cell
 // that ignores ctx (which would hang phase10LIFOTeardown indefinitely), this
-// worker honours the shutdown context so phase10 can return after the deadline
+// worker honors the shutdown context so phase10 can return after the deadline
 // and detect DeadlineExceeded.
 type slowWorker struct {
 	release chan struct{}
@@ -305,7 +306,7 @@ func (w *slowWorker) Start(ctx context.Context) error {
 	return nil
 }
 
-// Stop blocks until ctx is cancelled (timeout path) or release is closed
+// Stop blocks until ctx is canceled (timeout path) or release is closed
 // (test cleanup path). It returns ctx.Err() on cancellation so the caller
 // knows the context expired.
 func (w *slowWorker) Stop(ctx context.Context) error {
@@ -413,7 +414,7 @@ func TestShutdownMetrics_Outcome_TeardownError(t *testing.T) {
 		WithWorkers(failWorker),
 	)
 
-	err := runWithCancelAndListener(t, b, ln, 5*time.Second)
+	err := runWithCancelAndListener(t, b, ln)
 	require.Error(t, err, "Run must surface the teardown error")
 
 	outcomeVec := p.counter(shutdownTotalCounterName)
@@ -498,7 +499,7 @@ func TestShutdownMetrics_DisabledWithoutProvider(t *testing.T) {
 		WithShutdownTimeout(3*time.Second),
 		// No WithMetricsProvider — defaults to NopProvider.
 	)
-	require.NoError(t, runWithCancelAndListener(t, b, ln, 5*time.Second))
+	require.NoError(t, runWithCancelAndListener(t, b, ln))
 }
 
 // ---------------------------------------------------------------------------

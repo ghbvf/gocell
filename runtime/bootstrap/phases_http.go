@@ -280,7 +280,7 @@ func declaredInternalRoutes(rtr *router.Router) []string {
 }
 
 // validateAuthVerifierForDeclaredRoutes ensures protected routes mounted on a
-// listener are actually gated by an auth-flavoured plan chain. The acceptable
+// listener are actually gated by an auth-flavored plan chain. The acceptable
 // plans are AuthJWT / AuthJWTFromAssembly, AuthMTLS, or AuthServiceToken (or
 // any combination). AuthNone chains with protected routes (non-Public,
 // non-Internal) cause Run() to fail-closed at phase5.
@@ -316,7 +316,7 @@ func (b *Bootstrap) validateAuthVerifierForDeclaredRoutes(ref cell.ListenerRef, 
 // applyListenerAuthChain extracts verifier options and non-JWT middleware;
 // the JWT verifier is installed via router.WithAuthMiddleware so the router
 // can build matcher-aware AuthMiddleware after FinalizeAuth.
-func (b *Bootstrap) buildListenerRouterOpts(s *phaseState, ref cell.ListenerRef, cfg listenerConfig) ([]router.Option, error) {
+func (b *Bootstrap) buildListenerRouterOpts(_ *phaseState, ref cell.ListenerRef, cfg listenerConfig) ([]router.Option, error) {
 	opts := make([]router.Option, 0, len(b.routerOpts)+6)
 	opts = append(opts, b.routerOpts...)
 

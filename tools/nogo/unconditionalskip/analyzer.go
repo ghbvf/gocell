@@ -45,7 +45,7 @@ func run(pass *analysis.Pass) (any, error) {
 			return
 		}
 
-		// Only analyse Test* and Benchmark* functions whose first parameter is
+		// Only analyze Test* and Benchmark* functions whose first parameter is
 		// *testing.T or *testing.B.
 		if !isTestOrBenchmark(fn, pass) {
 			return

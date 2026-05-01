@@ -9,7 +9,7 @@
 // inspect [TestMux.DeclaredAuthMetas] directly.
 //
 // TestMux does NOT enforce Public/Policy semantics — it only records metadata.
-// Tests that must assert 401/403 behaviour should use the production Router
+// Tests that must assert 401/403 behavior should use the production Router
 // wired with a fake verifier (runtime/http/router.WithAuthMiddleware) rather
 // than TestMux.
 package celltest
@@ -98,7 +98,7 @@ func (m *TestMux) DeclaredAuthMetas() []cell.AuthRouteMeta {
 // both `prefix` and `prefix+"/"` so the root mux matches the resource
 // regardless of whether the Contract author spelled the path with or
 // without a trailing slash (/api/v1/config vs /api/v1/config/). This
-// mirrors chi's redirect-free behaviour.
+// mirrors chi's redirect-free behavior.
 func (m *TestMux) Handle(pattern string, handler http.Handler) {
 	for _, p := range m.composePatterns(pattern) {
 		m.root.ServeMux.Handle(p, handler)

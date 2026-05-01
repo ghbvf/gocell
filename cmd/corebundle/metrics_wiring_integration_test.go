@@ -103,3 +103,88 @@ func truncateMetrics(s string, n int) string {
 	}
 	return s[:n] + "..."
 }
+
+// TestR2_MetricsTokenGuard_ListenerWiring locks the cross-route security
+// contract for /metrics under a configured GOCELL_METRICS_TOKEN. The unit-
+// level helper test (cmd/corebundle/metrics_test.go::TestWithMetricsTokenGuard)
+// proves the guard logic itself; this integration test proves the *wiring* —
+// that buildMetricsHandler actually wraps /metrics with the guard, that the
+// guard scope is /metrics only (not the whole listener mux), and that the
+// guard rejects every wrong/missing-token shape.
+//
+// Cases (all on the same bootstrap to amortize startup cost):
+//  1. token configured, no header on /metrics            → 401
+//  2. token configured, wrong header value on /metrics   → 401
+//  3. token configured, correct header on /metrics       → 200
+//  4. token configured, no header on /healthz (cross-route guard scope) → 200
+//
+// Case 4 is the critical "guard didn't accidentally promote to listener-level
+// middleware" check — kubelet probes hit /healthz without the metrics token
+// and must keep working. A regression that wrapped the listener mux instead
+// of the /metrics handler alone would break liveness probes; this test
+// surfaces that immediately.
+//
+// Baseline (token unset, anonymous /metrics → 200) is covered by
+// TestR2_MetricsCollector_RecordsHTTPRequests above.
+func TestR2_MetricsTokenGuard_ListenerWiring(t *testing.T) {
+	const token = "test-metrics-token-r2"
+
+	shared := buildTestSharedDeps(t)
+	shared.MetricsToken = token // inject token so buildMetricsHandler wraps with guard
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	healthLn := newCorebundleLocalListener(t)
+
+	app, err := buildBootstrapFromShared(t, shared, ln,
+		withCorebundleTestInternalListener(t, newCorebundleLocalListener(t)),
+		bootstrap.WithListener(cell.HealthListener, healthLn.Addr().String(), []cell.ListenerAuth{cell.AuthNone{}}, bootstrap.WithListenerNet(healthLn)))
+	require.NoError(t, err)
+	require.NotNil(t, app)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	errCh := make(chan error, 1)
+	go func() { errCh <- app.Run(ctx) }()
+	t.Cleanup(func() {
+		cancel()
+		select {
+		case <-errCh:
+		case <-time.After(10 * time.Second):
+			t.Error("bootstrap did not shut down in time")
+		}
+	})
+
+	healthAddr := healthLn.Addr().String()
+	waitForHealthy(t, healthAddr)
+
+	cases := []struct {
+		name       string
+		path       string
+		header     string // empty = don't set X-Metrics-Token
+		wantStatus int
+	}{
+		{"metrics_no_header_401", "/metrics", "", http.StatusUnauthorized},
+		{"metrics_wrong_header_401", "/metrics", "wrong-token-value", http.StatusUnauthorized},
+		{"metrics_correct_header_200", "/metrics", token, http.StatusOK},
+		// Guard scope check: /healthz must remain reachable without the
+		// metrics token, otherwise kubelet probes break.
+		{"healthz_no_header_still_200", "/healthz", "", http.StatusOK},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://"+healthAddr+tc.path, http.NoBody)
+			require.NoError(t, err)
+			if tc.header != "" {
+				req.Header.Set("X-Metrics-Token", tc.header)
+			}
+
+			resp, err := http.DefaultClient.Do(req)
+			require.NoError(t, err)
+			defer resp.Body.Close()
+
+			body, _ := io.ReadAll(resp.Body)
+			assert.Equal(t, tc.wantStatus, resp.StatusCode,
+				"path=%s header=%q body=%s", tc.path, tc.header, truncateMetrics(string(body), 200))
+		})
+	}
+}

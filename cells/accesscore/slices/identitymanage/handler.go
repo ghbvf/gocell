@@ -21,10 +21,11 @@ import (
 // source. FMT-18 resolves const string references at scan time so the YAML
 // cross-check still sees the effective path literal.
 const (
-	pathUsers        = "/api/v1/access/users"
-	pathUserByID     = "/api/v1/access/users/{id}"
-	pathUserLock     = "/api/v1/access/users/{id}/lock"
-	pathUserUnlock   = "/api/v1/access/users/{id}/unlock"
+	pathUsers      = "/api/v1/access/users"
+	pathUserByID   = "/api/v1/access/users/{id}"
+	pathUserLock   = "/api/v1/access/users/{id}/lock"
+	pathUserUnlock = "/api/v1/access/users/{id}/unlock"
+	//nolint:gosec // G101: pathUserPassword is the constant name (not a credential value)
 	pathUserPassword = "/api/v1/access/users/{id}/password"
 )
 

@@ -29,7 +29,7 @@ const (
 	StatusCanceled                    // explicitly canceled by operator/system
 )
 
-// Valid reports whether s is a recognised Status value.
+// Valid reports whether s is a recognized Status value.
 func (s Status) Valid() bool {
 	return s >= StatusPending && s <= StatusCanceled
 }
@@ -80,7 +80,7 @@ func (s Status) IsTerminal() bool {
 // devices that execute synchronously within the Dequeue lease can ack directly,
 // leaving DeliveredAt nil as a signal that no intermediate Report was observed.
 // This intentionally loosens strict Temporal-style staging (where
-// ScheduledTime/StartedTime/CompletedTime are always distinct events) in favour
+// ScheduledTime/StartedTime/CompletedTime are always distinct events) in favor
 // of simpler device integration where Report is optional.
 //
 // ref: Temporal activity lifecycle — StartedTime is optional when using

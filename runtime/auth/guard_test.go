@@ -52,7 +52,7 @@ func assertErrorBody(t *testing.T, w *httptest.ResponseRecorder) map[string]any 
 // --- TestRequirePolicy (replacing the legacy auth.Secured helper removed in F3) ---
 
 // TestRequirePolicy_LegacySecuredBehavior verifies that RequirePolicy preserves
-// the short-circuit and error-mapping behaviour that callers previously relied on
+// the short-circuit and error-mapping behavior that callers previously relied on
 // from the legacy auth.Secured helper (removed in F3).
 func TestRequirePolicy_LegacySecuredBehavior(t *testing.T) {
 	inner := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {

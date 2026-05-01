@@ -70,7 +70,7 @@ func TestWrap_DeadlineReturnsServerTimeout(t *testing.T) {
 
 // TestWrap_IsInfraError_Preserved guards the category invariant for both
 // branches: ErrClientCanceled and ErrServerTimeout remain CategoryInfra so
-// health.Checker timeout-bucket behaviour is unchanged. HTTP status mapping
+// health.Checker timeout-bucket behavior is unchanged. HTTP status mapping
 // (499 vs 504) is driven by codeToStatus, not by IsInfraError.
 func TestWrap_IsInfraError_Preserved(t *testing.T) {
 	canceled := Wrap(context.Canceled, "Insert", "key=k")

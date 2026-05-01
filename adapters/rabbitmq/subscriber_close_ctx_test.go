@@ -133,7 +133,7 @@ func TestSubscriber_Reconnect_E2E_ChannelCloseAfterAllAcks(t *testing.T) {
 	time.Sleep(10 * time.Millisecond)
 
 	// Cancel ctx → consumeLoop exits via ctx.Done() with loopErr == nil.
-	// subscribeOnce calls waitAndClose(ctx). Since ctx is cancelled but
+	// subscribeOnce calls waitAndClose(ctx). Since ctx is canceled but
 	// localWg counter is 0 (all goroutines done), the `done` channel and
 	// `ctx.Done()` are both ready; one is picked. Either way, eventually
 	// ch.Close() is called (either by subscribeOnce or by Close() sweep).
@@ -242,7 +242,7 @@ func TestSubscriber_Close_RespectsCtxDeadline(t *testing.T) {
 		"Close must return promptly after ctx deadline; got %s", elapsed)
 }
 
-// TestSubscriber_Close_CancelledCtxReturnsImmediately: ctx already cancelled →
+// TestSubscriber_Close_CancelledCtxReturnsImmediately: ctx already canceled →
 // Close returns < 50ms without waiting.
 func TestSubscriber_Close_CancelledCtxReturnsImmediately(t *testing.T) {
 	conn, _ := newTestConnection(t)
@@ -251,21 +251,21 @@ func TestSubscriber_Close_CancelledCtxReturnsImmediately(t *testing.T) {
 
 	// Close a subscriber that was never subscribed to — should be instant.
 	cancelledCtx, cancel := context.WithCancel(context.Background())
-	cancel() // already cancelled
+	cancel() // already canceled
 
 	start := time.Now()
 	err := sub.Close(cancelledCtx)
 	elapsed := time.Since(start)
 
-	// Pre-cancelled ctx: Close sees ctx.Err() immediately and returns.
-	require.Error(t, err, "Close with pre-cancelled ctx must return error")
+	// Pre-canceled ctx: Close sees ctx.Err() immediately and returns.
+	require.Error(t, err, "Close with pre-canceled ctx must return error")
 	assert.True(t, errors.Is(err, context.Canceled),
 		"error must be context.Canceled, got: %v", err)
 	assert.Less(t, elapsed, 50*time.Millisecond,
-		"Close with pre-cancelled ctx must return < 50ms; got %s", elapsed)
+		"Close with pre-canceled ctx must return < 50ms; got %s", elapsed)
 }
 
-// TestSubscriber_Close_PreCancelledCtx verifies the pre-cancelled ctx path
+// TestSubscriber_Close_PreCancelledCtx verifies the pre-canceled ctx path
 // (subscriber.go ctx.Err() early-return) returns the raw context.Canceled
 // sentinel and does NOT collapse into ErrAdapterAMQPCloseTimeout, which is
 // reserved for the wg.Wait deadline-exceeded path.
@@ -276,19 +276,19 @@ func TestSubscriber_Close_PreCancelledCtx(t *testing.T) {
 	sub := newSubNoShutdown(conn, "pre-cancel-path-queue", "pre-cancel-path.dlx")
 
 	cancelledCtx, cancel := context.WithCancel(context.Background())
-	cancel() // already cancelled before Close is invoked
+	cancel() // already canceled before Close is invoked
 
 	start := time.Now()
 	err := sub.Close(cancelledCtx)
 	elapsed := time.Since(start)
 
-	require.Error(t, err, "Close with pre-cancelled ctx must return error")
+	require.Error(t, err, "Close with pre-canceled ctx must return error")
 	assert.ErrorIs(t, err, context.Canceled,
-		"pre-cancelled path must return context.Canceled, got: %v", err)
+		"pre-canceled path must return context.Canceled, got: %v", err)
 	assert.NotContains(t, err.Error(), string(ErrAdapterAMQPCloseTimeout),
-		"pre-cancelled path must NOT produce the wg.Wait timeout sentinel")
+		"pre-canceled path must NOT produce the wg.Wait timeout sentinel")
 	assert.Less(t, elapsed, 50*time.Millisecond,
-		"Close with pre-cancelled ctx must return < 50ms; got %s", elapsed)
+		"Close with pre-canceled ctx must return < 50ms; got %s", elapsed)
 }
 
 // TestSubscriber_Close_GracefulWithAmpleBudget: ctx 5s + handler 50ms → nil + clean.
@@ -470,7 +470,7 @@ func TestSubscriber_Reconnect_WaitsForInflightBeforeClose(t *testing.T) {
 
 	// Simulate two processDelivery goroutines: each sleeps 80ms then calls markDeliveryDone.
 	for i := range numDeliveries {
-		go func(idx int) {
+		go func(_ int) {
 			time.Sleep(80 * time.Millisecond)
 			ackMu.Lock()
 			ackTimes = append(ackTimes, time.Now())

@@ -128,7 +128,7 @@ func WrapOrInfra(err error, op, identifier string, fallbackCode errcode.Code, fa
 
 // classify resolves all per-variant attributes (errcode, public message,
 // observation reason) in a single errors.Is traversal of the cause chain.
-// Centralising the dispatch here avoids walking the chain twice (once per
+// Centralizing the dispatch here avoids walking the chain twice (once per
 // attribute) and ensures the variant boundary is consistent: code, message,
 // and reason can never disagree about which branch err belongs to.
 //
@@ -144,7 +144,7 @@ func classify(err error) (errcode.Code, string, string) {
 }
 
 // ReasonFromDetails extracts and canonicalizes the reason value from an
-// *errcode.Error.Details map, returning the empty string when no recognised
+// *errcode.Error.Details map, returning the empty string when no recognized
 // reason is present. Callers (HTTP boundary, log4xx, tracing middleware)
 // MUST go through this helper instead of doing a raw type-assert on
 // d[DetailsKeyReason].(string), so the low-cardinality enum contract holds

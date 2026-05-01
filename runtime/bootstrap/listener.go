@@ -19,7 +19,7 @@ import (
 type listenerConfig struct {
 	ref       cell.ListenerRef
 	addr      string
-	authChain []cell.ListenerAuth // authentication plan chain; nil means no auth (AuthNone behaviour)
+	authChain []cell.ListenerAuth // authentication plan chain; nil means no auth (AuthNone behavior)
 	net       net.Listener        // optional: pre-bound listener for tests
 	tls       *tls.Config         // optional: TLS termination config
 	shutGrace time.Duration       // optional: overrides global shutdownTimeout

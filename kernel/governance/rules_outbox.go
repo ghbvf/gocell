@@ -5,7 +5,7 @@ import "fmt"
 // validateOUTGUARD01 checks that cells with L2+ consistency level declare
 // a durabilityMode in their cell.yaml. L2+ cells use the transactional outbox
 // pattern and should explicitly declare "demo" or "durable" mode so that
-// runtime CheckNotNoop can enforce the correct behaviour.
+// runtime CheckNotNoop can enforce the correct behavior.
 //
 // Missing durabilityMode on L2+ cells is SeverityError because the runtime
 // CheckNotNoop is a hard gate — if the author didn't declare intent, CI should

@@ -38,7 +38,7 @@ import "context"
 // Start, which is responsible for its own internal cleanup on failure.
 //
 // ref: uber-go/fx lifecycle.go — failing OnStart does not trigger OnStop
-// for the same hook; only previously-registered hooks are rolled back
+// for the same hook; only previously-registered hooks are rolled back.
 type BeforeStarter interface {
 	BeforeStart(ctx context.Context) error
 }
@@ -65,7 +65,7 @@ type BeforeStopper interface {
 // Errors are accumulated but do not prevent other cells from being stopped.
 //
 // Note: by the time AfterStop runs, the cell's ShutdownCtx() is already
-// cancelled (Stop cancels it). Use the ctx parameter passed by the
+// canceled (Stop cancels it). Use the ctx parameter passed by the
 // assembly, which carries the shutdown timeout, not ShutdownCtx().
 type AfterStopper interface {
 	AfterStop(ctx context.Context) error

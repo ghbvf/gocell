@@ -211,7 +211,7 @@ func scanContractSpecFile(fset *token.FileSet, path string) ([]contractSpecLiter
 
 // wrapperImportAlias resolves the local name a file uses to reference
 // github.com/ghbvf/gocell/kernel/wrapper. Returns ok=false when the file
-// does not import the package. Honours explicit aliases
+// does not import the package. Honors explicit aliases
 // (`import kw "..../kernel/wrapper"` → "kw"), the default short name
 // ("wrapper"), and dot-imports (".").
 func wrapperImportAlias(file *ast.File) (string, bool) {
@@ -334,7 +334,7 @@ func parseContractSpecCompositeLit(
 }
 
 // parseEventSpecCallExpr extracts a contractSpecLiteral from a
-// `wrapper.EventSpec(id, transport)` call. Kind is synthesised as "event"
+// `wrapper.EventSpec(id, transport)` call. Kind is synthesized as "event"
 // and Topic == id by construction (the helper enforces id==topic).
 //
 // When the ID argument is not a string literal or resolvable local const

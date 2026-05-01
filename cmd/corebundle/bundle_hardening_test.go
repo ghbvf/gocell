@@ -59,10 +59,10 @@ func TestBundle_NoBusinessPathLiterals(t *testing.T) {
 			rel = filePath
 		}
 		t.Run(rel, func(t *testing.T) {
-			offences := findOffendingLines(t, filePath, methodLit, rawLit)
-			assert.Empty(t, offences,
+			offenses := findOffendingLines(t, filePath, methodLit, rawLit)
+			assert.Empty(t, offenses,
 				"%s contains path literals that must be owned by Cells via auth.Mount:\n%s",
-				rel, strings.Join(offences, "\n"))
+				rel, strings.Join(offenses, "\n"))
 		})
 	}
 }

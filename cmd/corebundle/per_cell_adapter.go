@@ -44,7 +44,9 @@ func LoadPGConfig(cellEnvPrefix string) (adapterpg.Config, error) {
 			return adapterpg.Config{}, fmt.Errorf("LoadPGConfig(%s): invalid %sMAX_CONNS %q: %w", cellEnvPrefix, prefix, v, err)
 		}
 		if n <= 0 {
-			return adapterpg.Config{}, fmt.Errorf("LoadPGConfig(%s): %sMAX_CONNS must be > 0, got %d (pgx treats 0 as unlimited)", cellEnvPrefix, prefix, n)
+			return adapterpg.Config{}, fmt.Errorf(
+				"LoadPGConfig(%s): %sMAX_CONNS must be > 0, got %d (pgx treats 0 as unlimited)",
+				cellEnvPrefix, prefix, n)
 		}
 		cfg.MaxConns = int32(n)
 	}

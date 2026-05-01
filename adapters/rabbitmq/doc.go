@@ -37,7 +37,7 @@
 //
 // Connection.Close(ctx context.Context) error signals the reconnect loop
 // (via closeCh), drains the channel pool, then closes the underlying AMQP
-// connection in a goroutine so that the caller's ctx budget is honoured even
+// connection in a goroutine so that the caller's ctx budget is honored even
 // if the broker connection.close frame exchange blocks.
 //
 // Connection implements both lifecycle.ContextCloser and lifecycle.ManagedResource:

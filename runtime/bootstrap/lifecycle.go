@@ -28,7 +28,7 @@ var ErrLifecycleAlreadyStarted = errcode.New(errcode.ErrBootstrapLifecycle, "lif
 // already been registered. The single source of truth for duplicate-name
 // detection lives here so that phase3b (LifecycleContributor auto-discovery)
 // and WithLifecycle (explicit composition-root Append) share the same guard
-// without having to re-synchronise per-path "seen" maps.
+// without having to re-synchronize per-path "seen" maps.
 //
 // Empty Name bypasses the check — callers that deliberately register nameless
 // hooks accept the risk of duplicates (diagnostic cost, not correctness).
@@ -72,7 +72,7 @@ type Hook struct {
 
 // Lifecycle manages an ordered Hook sequence.
 //
-// Five-state machine: stopped → starting → (incompleteStart | started) → stopping → stopped
+// Five-state machine: stopped → starting → (incompleteStart | started) → stopping → stopped.
 type Lifecycle interface {
 	Append(h Hook) error
 	Start(ctx context.Context) error

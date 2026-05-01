@@ -59,7 +59,8 @@ func dockerProviderHealth(ctx context.Context) error {
 
 func requireDockerFailureMessage(err error) string {
 	return fmt.Sprintf(
-		"docker provider required by GOCELL_TEST_DOCKER_REQUIRED=1 but unhealthy or unavailable (DOCKER_HOST=%q): %v; start Docker or unset GOCELL_TEST_DOCKER_REQUIRED for local self-skip",
+		"docker provider required by GOCELL_TEST_DOCKER_REQUIRED=1 but unhealthy or unavailable"+
+			" (DOCKER_HOST=%q): %v; start Docker or unset GOCELL_TEST_DOCKER_REQUIRED for local self-skip",
 		os.Getenv("DOCKER_HOST"),
 		err,
 	)

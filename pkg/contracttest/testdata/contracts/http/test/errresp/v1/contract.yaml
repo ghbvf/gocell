@@ -14,10 +14,10 @@ endpoints:
     responses:
       401:
         description: "Unauthorized"
-        schemaRef: "../../../../../../../../contracts/shared/errors/error-response-v1.schema.json"
+        schemaRef: "../../../../shared/errors/error-response-v1.schema.json"
       403:
         description: "Forbidden"
-        schemaRef: "../../../../../../../../contracts/shared/errors/error-response-v1.schema.json"
+        schemaRef: "../../../../shared/errors/error-response-v1.schema.json"
       429:
         description: "Too Many Requests"
         schemaRef: ""

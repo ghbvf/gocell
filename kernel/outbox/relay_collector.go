@@ -43,7 +43,7 @@ type providerRelayCollector struct {
 
 var _ RelayCollector = (*providerRelayCollector)(nil)
 
-// ProviderRelayCollectorConfig customises metric naming / bucketing.
+// ProviderRelayCollectorConfig customizes metric naming / bucketing.
 // Zero value is acceptable and produces defaults.
 type ProviderRelayCollectorConfig struct {
 	// PollBuckets overrides DefaultRelayPollBuckets; zero value uses defaults.
@@ -74,6 +74,17 @@ func NewProviderRelayCollector(p metrics.Provider, cellID string, opts ...Provid
 		cfg.BatchBuckets = DefaultRelayBatchBuckets
 	}
 
+	col, err := registerRelayMetrics(p, cellID, cfg)
+	if err != nil {
+		return nil, err
+	}
+	return col, nil
+}
+
+// registerRelayMetrics registers all outbox relay metrics on p and returns the
+// fully-built collector. On any partial failure the already-registered metrics
+// are unregistered in LIFO order so the Provider is left clean.
+func registerRelayMetrics(p metrics.Provider, cellID string, cfg ProviderRelayCollectorConfig) (*providerRelayCollector, error) {
 	// registered tracks successfully registered collectors in order. On any
 	// partial failure the rollback function unregisters them in LIFO order so
 	// the Provider is left in a clean state, allowing the caller to retry
@@ -91,15 +102,27 @@ func NewProviderRelayCollector(p metrics.Provider, cellID string, opts ...Provid
 		return origErr
 	}
 
+	// register is the single mechanism through which collectors enter the
+	// `registered` slice. Each metric registration funnels through it so the
+	// "register + check err + append" pattern cannot drift out of sync —
+	// missing the append step is structurally impossible (previously a latent
+	// rollback gap when a future metric was added after `cleaned`).
+	register := func(c metrics.Collector, err error, name string) error {
+		if err != nil {
+			return rollback(fmt.Errorf("outbox: register %s: %w", name, err))
+		}
+		registered = append(registered, c)
+		return nil
+	}
+
 	relayed, err := p.CounterVec(metrics.CounterOpts{
 		Name:       "outbox_relayed_total",
 		Help:       "Total number of outbox entries processed by the relay, by outcome.",
 		LabelNames: []string{"cell", "outcome"},
 	})
-	if err != nil {
-		return nil, rollback(fmt.Errorf("outbox: register outbox_relayed_total: %w", err))
+	if err := register(relayed, err, "outbox_relayed_total"); err != nil {
+		return nil, err
 	}
-	registered = append(registered, relayed)
 
 	pollDuration, err := p.HistogramVec(metrics.HistogramOpts{
 		Name:       "outbox_poll_duration_seconds",
@@ -107,10 +130,9 @@ func NewProviderRelayCollector(p metrics.Provider, cellID string, opts ...Provid
 		LabelNames: []string{"cell", "phase"},
 		Buckets:    cfg.PollBuckets,
 	})
-	if err != nil {
-		return nil, rollback(fmt.Errorf("outbox: register outbox_poll_duration_seconds: %w", err))
+	if err := register(pollDuration, err, "outbox_poll_duration_seconds"); err != nil {
+		return nil, err
 	}
-	registered = append(registered, pollDuration)
 
 	batchSize, err := p.HistogramVec(metrics.HistogramOpts{
 		Name:       "outbox_batch_size",
@@ -118,30 +140,27 @@ func NewProviderRelayCollector(p metrics.Provider, cellID string, opts ...Provid
 		LabelNames: []string{"cell"},
 		Buckets:    cfg.BatchBuckets,
 	})
-	if err != nil {
-		return nil, rollback(fmt.Errorf("outbox: register outbox_batch_size: %w", err))
+	if err := register(batchSize, err, "outbox_batch_size"); err != nil {
+		return nil, err
 	}
-	registered = append(registered, batchSize)
 
 	reclaimed, err := p.CounterVec(metrics.CounterOpts{
 		Name:       "outbox_reclaimed_total",
 		Help:       "Total number of stale entries reclaimed by the relay.",
 		LabelNames: []string{"cell"},
 	})
-	if err != nil {
-		return nil, rollback(fmt.Errorf("outbox: register outbox_reclaimed_total: %w", err))
+	if err := register(reclaimed, err, "outbox_reclaimed_total"); err != nil {
+		return nil, err
 	}
-	registered = append(registered, reclaimed)
 
 	cleaned, err := p.CounterVec(metrics.CounterOpts{
 		Name:       "outbox_cleaned_total",
 		Help:       "Total number of entries cleaned up (deleted) by the relay.",
 		LabelNames: []string{"cell", "status"},
 	})
-	if err != nil {
-		return nil, rollback(fmt.Errorf("outbox: register outbox_cleaned_total: %w", err))
+	if err := register(cleaned, err, "outbox_cleaned_total"); err != nil {
+		return nil, err
 	}
-	registered = append(registered, cleaned)
 
 	return &providerRelayCollector{
 		cellID:       cellID,

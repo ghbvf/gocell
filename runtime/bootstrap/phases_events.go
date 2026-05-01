@@ -8,7 +8,7 @@ package bootstrap
 //
 // ref: uber-go/fx app.go — Run vs stop ctx separation: event router uses runCtx
 // (independent of external ctx) so lifecycle is owned by phase10 teardown, not
-// by the caller cancelling the external context.
+// by the caller canceling the external context.
 
 import (
 	"context"

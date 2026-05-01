@@ -9,6 +9,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/assembly"
 	"github.com/ghbvf/gocell/kernel/governance"
 	"github.com/ghbvf/gocell/kernel/metadata"
+	"github.com/ghbvf/gocell/pkg/scaffoldfs"
 	"github.com/ghbvf/gocell/tools/metricschema"
 )
 
@@ -156,6 +157,7 @@ func writeGeneratedFile(root, outPath string, content []byte, label string) erro
 	if !governance.IsWithinRoot(root, outPath) {
 		return fmt.Errorf("%s: path escapes project root", label)
 	}
+	//nolint:gosec // G304: outPath is validated against project root by IsWithinRoot above
 	if existing, err := os.ReadFile(outPath); err == nil && !isGocellGeneratedFile(existing) {
 		return fmt.Errorf("%s: refusing to overwrite non-generated file %s "+
 			"(generated files must start with the gocell header; remove the file or move "+
@@ -164,10 +166,10 @@ func writeGeneratedFile(root, outPath string, content []byte, label string) erro
 	} else if err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("%s: read existing file: %w", label, err)
 	}
-	if err := os.MkdirAll(filepath.Dir(outPath), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(outPath), scaffoldfs.DirMode); err != nil {
 		return fmt.Errorf("%s: create dir: %w", label, err)
 	}
-	if err := os.WriteFile(outPath, content, 0o644); err != nil {
+	if err := os.WriteFile(outPath, content, scaffoldfs.FileMode); err != nil {
 		return fmt.Errorf("%s: write file: %w", label, err)
 	}
 	fmt.Printf("Generated: %s\n", outPath)

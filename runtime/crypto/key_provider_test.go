@@ -35,7 +35,7 @@ func (h *fakeKeyHandle) Encrypt(_ context.Context, plaintext, aad []byte) (ciphe
 	nonce[11] = byte(h.counter)
 	// edk = key id bytes (stand-in for wrapped DEK)
 	edk = []byte(h.id)
-	// ciphertext = len(aad) || aad || XOR(plaintext)
+	//nolint:gocritic // commentedOutCode: "ciphertext = len(aad) || aad || XOR(plaintext)" is algorithm documentation, not commented-out code
 	ct := make([]byte, 1+len(aad)+len(plaintext))
 	ct[0] = byte(len(aad))
 	copy(ct[1:], aad)
@@ -76,7 +76,8 @@ type fakeKeyProvider struct {
 	current string
 }
 
-func newFakeKeyProvider(initialID string) *fakeKeyProvider {
+func newFakeKeyProvider() *fakeKeyProvider {
+	const initialID = "key-v1"
 	p := &fakeKeyProvider{
 		keys:    make(map[string]*fakeKeyHandle),
 		current: initialID,
@@ -114,7 +115,7 @@ func (p *fakeKeyProvider) Rotate(_ context.Context) (string, error) {
 
 func TestKeyProvider_Current_ReturnsLatest(t *testing.T) {
 	ctx := context.Background()
-	p := newFakeKeyProvider("key-v1")
+	p := newFakeKeyProvider()
 
 	h, err := p.Current(ctx)
 	require.NoError(t, err)
@@ -127,7 +128,7 @@ func TestKeyProvider_Current_ReturnsLatest(t *testing.T) {
 
 func TestKeyProvider_ByID_ResolvesHistorical(t *testing.T) {
 	ctx := context.Background()
-	p := newFakeKeyProvider("key-v1")
+	p := newFakeKeyProvider()
 
 	// Rotate to v2 — v1 should still resolve.
 	_, err := p.Rotate(ctx)
@@ -144,7 +145,7 @@ func TestKeyProvider_ByID_ResolvesHistorical(t *testing.T) {
 
 func TestKeyProvider_ByID_NotFound(t *testing.T) {
 	ctx := context.Background()
-	p := newFakeKeyProvider("key-v1")
+	p := newFakeKeyProvider()
 
 	_, err := p.ByID(ctx, "nonexistent")
 	require.Error(t, err)
@@ -160,7 +161,7 @@ func TestKeyProvider_ByID_NotFound(t *testing.T) {
 
 func TestKeyProvider_Rotate_AdvancesKeyID(t *testing.T) {
 	ctx := context.Background()
-	p := newFakeKeyProvider("key-v1")
+	p := newFakeKeyProvider()
 
 	newID, err := p.Rotate(ctx)
 	require.NoError(t, err)

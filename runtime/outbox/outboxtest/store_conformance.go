@@ -10,7 +10,7 @@ import (
 	"github.com/ghbvf/gocell/runtime/outbox"
 )
 
-// deduplicated per SonarCloud S1192
+// deduplicated per SonarCloud S1192.
 const (
 	testEventType          = "test.v1"
 	msgClaimPending        = "ClaimPending: %v"
@@ -24,12 +24,12 @@ const (
 type StoreFactory func(t *testing.T, seed []outbox.ClaimedEntry) outbox.Store
 
 // newEntry creates a ClaimedEntry with sensible defaults for seeding.
-func newEntry(id, eventType string, attempts int) outbox.ClaimedEntry {
+func newEntry(id string, attempts int) outbox.ClaimedEntry {
 	return outbox.ClaimedEntry{
 		Entry: kout.Entry{
 			ID:        id,
-			EventType: eventType,
-			Topic:     eventType,
+			EventType: testEventType,
+			Topic:     testEventType,
 			Payload:   []byte(`{"data":"test"}`),
 			CreatedAt: time.Now(),
 		},
@@ -38,16 +38,16 @@ func newEntry(id, eventType string, attempts int) outbox.ClaimedEntry {
 }
 
 // newEntryAt creates a ClaimedEntry with explicit CreatedAt for ordering tests.
-func newEntryAt(id, eventType string, attempts int, createdAt time.Time) outbox.ClaimedEntry {
+func newEntryAt(id string, createdAt time.Time) outbox.ClaimedEntry {
 	return outbox.ClaimedEntry{
 		Entry: kout.Entry{
 			ID:        id,
-			EventType: eventType,
-			Topic:     eventType,
+			EventType: testEventType,
+			Topic:     testEventType,
 			Payload:   []byte(`{"data":"test"}`),
 			CreatedAt: createdAt,
 		},
-		Attempts: attempts,
+		Attempts: 0,
 	}
 }
 
@@ -101,9 +101,9 @@ func conformClaimPendingBatchCap(t *testing.T, factory StoreFactory) {
 	t.Helper()
 	ctx := t.Context()
 	seed := []outbox.ClaimedEntry{
-		newEntry("e1", testEventType, 0),
-		newEntry("e2", testEventType, 0),
-		newEntry("e3", testEventType, 0),
+		newEntry("e1", 0),
+		newEntry("e2", 0),
+		newEntry("e3", 0),
 	}
 	store := factory(t, seed)
 	got, err := store.ClaimPending(ctx, 2)
@@ -120,9 +120,9 @@ func conformClaimPendingSecondCall(t *testing.T, factory StoreFactory) {
 	ctx := t.Context()
 	now := time.Now()
 	seed := []outbox.ClaimedEntry{
-		newEntryAt("e1", testEventType, 0, now.Add(-3*time.Second)),
-		newEntryAt("e2", testEventType, 0, now.Add(-2*time.Second)),
-		newEntryAt("e3", testEventType, 0, now.Add(-1*time.Second)),
+		newEntryAt("e1", now.Add(-3*time.Second)),
+		newEntryAt("e2", now.Add(-2*time.Second)),
+		newEntryAt("e3", now.Add(-1*time.Second)),
 	}
 	store := factory(t, seed)
 
@@ -152,7 +152,7 @@ func conformClaimPendingConcurrent(t *testing.T, factory StoreFactory) {
 	const total = 20
 	seed := make([]outbox.ClaimedEntry, total)
 	for i := range total {
-		seed[i] = newEntry(fmt.Sprintf("e%02d", i), testEventType, 0)
+		seed[i] = newEntry(fmt.Sprintf("e%02d", i), 0)
 	}
 	store := factory(t, seed)
 
@@ -187,7 +187,7 @@ func conformClaimPendingConcurrent(t *testing.T, factory StoreFactory) {
 func conformMarkPublished(t *testing.T, factory StoreFactory) {
 	t.Helper()
 	ctx := t.Context()
-	seed := []outbox.ClaimedEntry{newEntry("e1", testEventType, 0)}
+	seed := []outbox.ClaimedEntry{newEntry("e1", 0)}
 	store := factory(t, seed)
 
 	claimed, err := store.ClaimPending(ctx, 10)
@@ -210,7 +210,7 @@ func conformMarkPublished(t *testing.T, factory StoreFactory) {
 func conformMarkPublishedReclaimed(t *testing.T, factory StoreFactory) {
 	t.Helper()
 	ctx := t.Context()
-	seed := []outbox.ClaimedEntry{newEntry("e1", testEventType, 0)}
+	seed := []outbox.ClaimedEntry{newEntry("e1", 0)}
 	store := factory(t, seed)
 
 	_, _ = store.ClaimPending(ctx, 10)
@@ -228,7 +228,7 @@ func conformMarkPublishedReclaimed(t *testing.T, factory StoreFactory) {
 func conformMarkRetry(t *testing.T, factory StoreFactory) {
 	t.Helper()
 	ctx := t.Context()
-	seed := []outbox.ClaimedEntry{newEntry("e1", testEventType, 0)}
+	seed := []outbox.ClaimedEntry{newEntry("e1", 0)}
 	store := factory(t, seed)
 
 	_, _ = store.ClaimPending(ctx, 10)
@@ -255,7 +255,7 @@ func conformMarkRetry(t *testing.T, factory StoreFactory) {
 func conformMarkRetryFields(t *testing.T) {
 	t.Helper()
 	ctx := t.Context()
-	seed := []outbox.ClaimedEntry{newEntry("e1", testEventType, 0)}
+	seed := []outbox.ClaimedEntry{newEntry("e1", 0)}
 	fs := NewFakeStore()
 	fs.Seed(seed...)
 
@@ -302,7 +302,7 @@ func conformMarkRetryNotExist(t *testing.T, factory StoreFactory) {
 func conformMarkDead(t *testing.T, factory StoreFactory) {
 	t.Helper()
 	ctx := t.Context()
-	seed := []outbox.ClaimedEntry{newEntry("e1", testEventType, 4)}
+	seed := []outbox.ClaimedEntry{newEntry("e1", 4)}
 	store := factory(t, seed)
 
 	_, _ = store.ClaimPending(ctx, 10)
@@ -346,7 +346,7 @@ func conformMarkDeadNotExist(t *testing.T, factory StoreFactory) {
 func conformReclaimStaleRecovers(t *testing.T, factory StoreFactory) {
 	t.Helper()
 	ctx := t.Context()
-	store := factory(t, []outbox.ClaimedEntry{newEntry("e1", testEventType, 0)})
+	store := factory(t, []outbox.ClaimedEntry{newEntry("e1", 0)})
 
 	claimed, err := store.ClaimPending(ctx, 10)
 	if err != nil || len(claimed) != 1 {
@@ -382,7 +382,7 @@ func conformReclaimStaleRecovers(t *testing.T, factory StoreFactory) {
 func conformReclaimStaleFresh(t *testing.T, factory StoreFactory) {
 	t.Helper()
 	ctx := t.Context()
-	store := factory(t, []outbox.ClaimedEntry{newEntry("e1", testEventType, 0)})
+	store := factory(t, []outbox.ClaimedEntry{newEntry("e1", 0)})
 
 	claimed, err := store.ClaimPending(ctx, 10)
 	if err != nil || len(claimed) != 1 {
@@ -409,7 +409,7 @@ func conformReclaimStaleEscalates(t *testing.T, factory StoreFactory) {
 	t.Helper()
 	ctx := t.Context()
 	// attempts=4, maxAttempts=5 → attempts+1=5 >= maxAttempts → dead.
-	store := factory(t, []outbox.ClaimedEntry{newEntry("e1", testEventType, 4)})
+	store := factory(t, []outbox.ClaimedEntry{newEntry("e1", 4)})
 
 	claimed, err := store.ClaimPending(ctx, 10)
 	if err != nil || len(claimed) != 1 {
@@ -456,7 +456,7 @@ func conformReclaimStaleEscalates(t *testing.T, factory StoreFactory) {
 func conformCleanupPublished(t *testing.T, factory StoreFactory) {
 	t.Helper()
 	ctx := t.Context()
-	store := factory(t, []outbox.ClaimedEntry{newEntry("e1", testEventType, 0)})
+	store := factory(t, []outbox.ClaimedEntry{newEntry("e1", 0)})
 
 	_, _ = store.ClaimPending(ctx, 10)
 	_, _ = store.MarkPublished(ctx, "e1")
@@ -484,9 +484,9 @@ func conformCleanupPublishedBatch(t *testing.T, factory StoreFactory) {
 	t.Helper()
 	ctx := t.Context()
 	seed := []outbox.ClaimedEntry{
-		newEntry("e1", testEventType, 0),
-		newEntry("e2", testEventType, 0),
-		newEntry("e3", testEventType, 0),
+		newEntry("e1", 0),
+		newEntry("e2", 0),
+		newEntry("e3", 0),
 	}
 	store := factory(t, seed)
 
@@ -510,7 +510,7 @@ func conformCleanupPublishedBatch(t *testing.T, factory StoreFactory) {
 func conformCleanupDead(t *testing.T, factory StoreFactory) {
 	t.Helper()
 	ctx := t.Context()
-	store := factory(t, []outbox.ClaimedEntry{newEntry("e1", testEventType, 4)})
+	store := factory(t, []outbox.ClaimedEntry{newEntry("e1", 4)})
 
 	_, _ = store.ClaimPending(ctx, 10)
 	_, _ = store.MarkDead(ctx, "e1", 5, "perm error")
@@ -557,9 +557,9 @@ func conformOldestEligibleAtPublished(t *testing.T, factory StoreFactory) {
 	ctx := t.Context()
 	now := time.Now()
 	seed := []outbox.ClaimedEntry{
-		newEntryAt("e1", testEventType, 0, now.Add(-3*time.Second)),
-		newEntryAt("e2", testEventType, 0, now.Add(-2*time.Second)),
-		newEntryAt("e3", testEventType, 0, now.Add(-1*time.Second)),
+		newEntryAt("e1", now.Add(-3*time.Second)),
+		newEntryAt("e2", now.Add(-2*time.Second)),
+		newEntryAt("e3", now.Add(-1*time.Second)),
 	}
 	store := factory(t, seed)
 
@@ -592,7 +592,7 @@ func conformOldestEligibleAtPublished(t *testing.T, factory StoreFactory) {
 func conformOldestEligibleAtDead(t *testing.T, factory StoreFactory) {
 	t.Helper()
 	ctx := t.Context()
-	store := factory(t, []outbox.ClaimedEntry{newEntry("e1", testEventType, 4)})
+	store := factory(t, []outbox.ClaimedEntry{newEntry("e1", 4)})
 
 	if _, err := store.ClaimPending(ctx, 10); err != nil {
 		t.Fatalf("ClaimPending: %v", err)

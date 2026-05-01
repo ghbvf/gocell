@@ -462,7 +462,7 @@ func (r *Router) buildRealIPMiddleware() (func(http.Handler) http.Handler, error
 //	→ Recovery → SecurityHeaders → [earlyResponders] → [defaultMiddleware]
 //	→ [RateLimit] → [CircuitBreaker] → [Auth] → BodyLimit → handlers
 func (r *Router) buildMux(realIPMW func(http.Handler) http.Handler) error {
-	// Lazy public predicate so Tracing/RequestID honour public routes declared
+	// Lazy public predicate so Tracing/RequestID honor public routes declared
 	// later via auth.Mount / FinalizeAuth.
 	lazyPublic := func(req *http.Request) bool {
 		if r.authPublicMatcher == nil {
@@ -684,7 +684,8 @@ func (r *Router) FinalizeAuth() error {
 // compiled but no AuthMiddleware is installed. Public:true warnings are emitted
 // separately to guide operators toward the correct setup.
 func (r *Router) warnNoAuthVerifier(p authMetaPartition) {
-	slog.Warn("router: FinalizeAuth compiled route auth declarations but AuthMiddleware is not installed; Public/PasswordResetExempt matchers will have no effect",
+	slog.Warn("router: FinalizeAuth compiled route auth declarations but AuthMiddleware is not installed;"+
+		" Public/PasswordResetExempt matchers will have no effect",
 		slog.String("listener", r.ref.String()),
 		slog.Int("declared", len(r.declaredAuthMetas)))
 	if len(p.publicEntries) > 0 {
@@ -736,7 +737,7 @@ func (r *Router) enumerateRoutes() []routeKey {
 	return routes
 }
 
-// authMetaPartition holds the categorised results of partitionAuthMetas.
+// authMetaPartition holds the categorized results of partitionAuthMetas.
 type authMetaPartition struct {
 	publicEntries []string
 	exemptEntries []string

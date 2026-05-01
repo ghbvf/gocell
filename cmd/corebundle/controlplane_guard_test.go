@@ -17,7 +17,7 @@ import (
 
 // TestInternalGuardFromEnv_DevMode_MissingSecret_ReturnsError verifies that
 // dev mode (empty adapterMode) now requires GOCELL_SERVICE_SECRET — the
-// previous behaviour of returning (nil, nil) to silently disable the guard in
+// previous behavior of returning (nil, nil) to silently disable the guard in
 // non-real modes has been removed by the SEC-FAIL-CLOSED change.
 func TestInternalGuardFromEnv_DevMode_MissingSecret_ReturnsError(t *testing.T) {
 	t.Setenv("GOCELL_SERVICE_SECRET", "")

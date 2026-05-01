@@ -5,7 +5,7 @@ import "errors"
 // Sentinel errors for credential file operations.
 //
 // These sentinels intentionally use errors.New rather than the project-wide
-// errcode package: they are package-internal signalling values used only within
+// errcode package: they are package-internal signaling values used only within
 // this package (writeCredentialFile, removeCredentialFile) and tested via
 // errors.Is in callers that live in the same package. They are never returned
 // through the HTTP boundary or exposed as API error codes, so the errcode

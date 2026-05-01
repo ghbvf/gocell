@@ -215,7 +215,9 @@ func (v *Validator) CheckHTTPResponseAlignment(contracts []*metadata.ContractMet
 	return results
 }
 
-func (v *Validator) checkResponseAlignmentForContract(c *metadata.ContractMeta, projectRoot string, cache map[string]*parsedHandlerFile) []ValidationResult {
+func (v *Validator) checkResponseAlignmentForContract(
+	c *metadata.ContractMeta, projectRoot string, cache map[string]*parsedHandlerFile,
+) []ValidationResult {
 	handlerFile := findHandlerFile(v.project, c.ID, projectRoot)
 	if handlerFile == "" {
 		slog.Debug("CH-04: no handler file found for contract, skipping",
@@ -229,7 +231,7 @@ func (v *Validator) checkResponseAlignmentForContract(c *metadata.ContractMeta, 
 			return []ValidationResult{v.newResult(
 				CodeContractHealthResponseAlignment, SeverityError, IssueRequired,
 				c.File, "endpoints.http.path",
-				fmt.Sprintf("CH-04: contract %s served by handler file %s — auth.Mount correlation failed; cannot reliably extract handler status codes. Required: handler file must register routes via `auth.Mount(mux, auth.Route{Contract: spec, Handler: http.HandlerFunc(h.handleX)})` pattern with a resolvable spec var or inline ContractSpec literal.", c.ID, handlerFile),
+				fmt.Sprintf(advHintCH04CorrelationFailed, c.ID, handlerFile),
 			)}
 		}
 		slog.Debug("CH-04: failed to parse handler AST",

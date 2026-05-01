@@ -5,7 +5,7 @@ import (
 	"time"
 )
 
-// credentialPayload holds the fields serialised into the credential file.
+// credentialPayload holds the fields serialized into the credential file.
 type credentialPayload struct {
 	Username  string
 	Password  string
@@ -23,7 +23,7 @@ type writeCredentialFileOption func(*writeCredentialFileConfig)
 
 // writeCredentialFileConfig holds the resolved options for writeCredentialFile.
 type writeCredentialFileConfig struct {
-	// writer is called to serialise the payload into the temp file.
+	// writer is called to serialize the payload into the temp file.
 	// Defaults to formatPayload (the production serialiser).
 	writer func(io.Writer, credentialPayload) error
 }

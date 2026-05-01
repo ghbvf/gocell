@@ -209,10 +209,10 @@ func TestClientClose_PreCancelledCtxReturnsError(t *testing.T) {
 	client := newClientFromCmdable(mock, Config{})
 
 	cancelledCtx, cancel := context.WithCancel(context.Background())
-	cancel() // already cancelled
+	cancel() // already canceled
 
 	err := client.Close(cancelledCtx)
-	require.Error(t, err, "Close with pre-cancelled ctx must return error")
+	require.Error(t, err, "Close with pre-canceled ctx must return error")
 }
 
 func TestClientClose_ContextFailure(t *testing.T) {

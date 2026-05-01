@@ -24,10 +24,10 @@ func adminSvcCtx() context.Context {
 	return auth.TestContext("test-admin", []string{"admin"})
 }
 
-func newTestService() (*Service, *mem.ConfigRepository) {
+func newTestService() *Service {
 	repo := mem.NewConfigRepository()
 	logger := slog.Default()
-	return NewService(repo, logger), repo
+	return NewService(repo, logger)
 }
 
 func newDurableTestService(t testing.TB) (*Service, *mem.ConfigRepository, *testutil.RecordingWriter) {
@@ -64,7 +64,7 @@ func TestService_Create(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			svc, _ := newTestService()
+			svc := newTestService()
 			entry, err := svc.Create(adminSvcCtx(), tt.input)
 			if tt.wantErr {
 				assert.Error(t, err)
@@ -80,7 +80,7 @@ func TestService_Create(t *testing.T) {
 }
 
 func TestService_CreateDuplicate(t *testing.T) {
-	svc, _ := newTestService()
+	svc := newTestService()
 	_, err := svc.Create(adminSvcCtx(), CreateInput{Key: "k", Value: "v1"})
 	require.NoError(t, err)
 
@@ -121,7 +121,7 @@ func TestService_Update(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			svc, _ := newTestService()
+			svc := newTestService()
 			tt.setup(svc)
 			entry, err := svc.Update(adminSvcCtx(), tt.input)
 			if tt.wantErr {
@@ -166,7 +166,7 @@ func TestService_Delete(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			svc, _ := newTestService()
+			svc := newTestService()
 			tt.setup(svc)
 			err := svc.Delete(adminSvcCtx(), tt.key)
 			if tt.wantErr {

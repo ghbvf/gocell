@@ -18,15 +18,17 @@ package contracttest
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io/fs"
 	"net/http/httptest"
-	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
 
 	"github.com/ghbvf/gocell/pkg/contracts"
+	"github.com/ghbvf/gocell/pkg/contracttest/internal/fixtureload"
 	"github.com/santhosh-tekuri/jsonschema/v6"
 	"gopkg.in/yaml.v3"
 )
@@ -101,7 +103,7 @@ func Load(t testing.TB, contractDir string) *Contract {
 	t.Helper()
 
 	yamlPath := filepath.Join(contractDir, "contract.yaml")
-	data, err := os.ReadFile(yamlPath)
+	data, err := fixtureload.LoadFixture(yamlPath)
 	if err != nil {
 		t.Fatalf("contracttest.Load: read contract.yaml: %v", err)
 	}
@@ -251,19 +253,38 @@ func (c *Contract) MustRejectHeaders(t testing.TB, jsonData []byte) {
 	mustRejectJSON(t, c.headersSchema, jsonData, "headers")
 }
 
-// compileSchemaFile reads and compiles a JSON Schema file.
-// Returns nil if filename is empty. Calls t.Fatal on errors.
+// compileSchemaFile reads and compiles a JSON Schema file referenced relative
+// to dir. Returns nil if filename is empty. Calls t.Fatal on errors.
+//
+// Path traversal allow-list (security boundary — schemaRef values come from
+// contract.yaml, which is externally editable):
+//   - filename must be a relative path (absolute paths rejected)
+//   - resolved fullPath must either:
+//     (a) stay within dir (typical: same-directory schema files), OR
+//     (b) resolve under <contractsRoot>/shared/... where contractsRoot is the
+//     nearest ancestor of dir whose basename is "contracts" (canonical
+//     pattern: /<X>/contracts/<kind>/<domain>/<v>/ refs ../shared/ for
+//     cross-contract shared schemas like the error response shape)
+//
+// All other escapes (../../../../etc, /etc/passwd, paths outside any
+// contracts/ tree, etc.) fail closed at t.Fatal.
 func compileSchemaFile(t testing.TB, dir, filename string) *jsonschema.Schema {
 	t.Helper()
 	if filename == "" {
 		return nil
 	}
-
-	fullPath := filepath.Join(dir, filename)
-	if !strings.HasPrefix(filepath.Clean(fullPath), filepath.Clean(dir)) {
-		t.Fatalf("contracttest: schema path %q escapes contract directory", filename)
+	if filepath.IsAbs(filename) {
+		t.Fatalf("contracttest: schema path %q must be relative; absolute paths rejected", filename)
 	}
-	data, err := os.ReadFile(fullPath)
+
+	cleanDir := filepath.Clean(dir)
+	fullPath := filepath.Clean(filepath.Join(cleanDir, filename))
+
+	if !pathWithinAllowList(t, cleanDir, fullPath) {
+		t.Fatalf("contracttest: schema path %q escapes allow-list (must stay in dir or under contracts/shared/)", filename)
+	}
+
+	data, err := fixtureload.LoadFixture(fullPath)
 	if err != nil {
 		t.Fatalf("contracttest: read schema %q: %v", fullPath, err)
 	}
@@ -285,6 +306,87 @@ func compileSchemaFile(t testing.TB, dir, filename string) *jsonschema.Schema {
 	}
 
 	return schema
+}
+
+// pathWithinAllowList reports whether fullPath either stays inside cleanDir
+// or resolves under <contractsRoot>/shared/ where contractsRoot is the
+// nearest ancestor of cleanDir whose basename is "contracts". Symlinks in
+// fullPath are resolved via filepath.EvalSymlinks before the prefix check
+// so a symlink under contracts/shared/ pointing outside the allow-list
+// fails closed (purely lexical HasPrefix would accept the symlink itself).
+func pathWithinAllowList(_ testing.TB, cleanDir, fullPath string) bool {
+	resolved, err := evalSymlinkOrSelf(fullPath)
+	if err != nil {
+		return false
+	}
+	if resolved == cleanDir || strings.HasPrefix(resolved, cleanDir+string(filepath.Separator)) {
+		return true
+	}
+	contractsRoot, ok := findContractsRoot(cleanDir)
+	if !ok {
+		return false
+	}
+	sharedRoot, err := evalSymlinkOrSelf(filepath.Join(contractsRoot, "shared"))
+	if err != nil {
+		return false
+	}
+	if resolved == sharedRoot {
+		return true
+	}
+	return strings.HasPrefix(resolved, sharedRoot+string(filepath.Separator))
+}
+
+// evalSymlinkOrSelf returns filepath.EvalSymlinks(p) when p exists, or
+// resolves the deepest existing ancestor and re-attaches the missing
+// trailing segments when p does not (a non-existent leaf must not be a
+// symlink-bypass loophole — an attacker can plant a symlink at any
+// existing parent dir even if the target file hasn't been created yet).
+// Returns error for a broken symlink chain on an existing path; we treat
+// that as fail-closed.
+func evalSymlinkOrSelf(p string) (string, error) {
+	if resolved, err := filepath.EvalSymlinks(p); err == nil {
+		return resolved, nil
+	} else if !errors.Is(err, fs.ErrNotExist) {
+		return "", err
+	}
+	// Path doesn't exist; walk up to deepest existing ancestor and
+	// EvalSymlinks that, then append the unresolved tail.
+	ancestor := p
+	var tail []string
+	for {
+		parent, leaf := filepath.Split(strings.TrimSuffix(ancestor, string(filepath.Separator)))
+		if parent == "" || parent == ancestor {
+			return p, nil // walked to root without finding existing ancestor
+		}
+		ancestor = strings.TrimSuffix(parent, string(filepath.Separator))
+		if ancestor == "" {
+			ancestor = string(filepath.Separator)
+		}
+		tail = append([]string{leaf}, tail...)
+		resolvedAncestor, err := filepath.EvalSymlinks(ancestor)
+		if err == nil {
+			return filepath.Join(append([]string{resolvedAncestor}, tail...)...), nil
+		}
+		if !errors.Is(err, fs.ErrNotExist) {
+			return "", err
+		}
+	}
+}
+
+// findContractsRoot walks up from cleanDir until a directory whose basename
+// is "contracts" is found. Returns its path and true on success.
+func findContractsRoot(cleanDir string) (string, bool) {
+	cur := cleanDir
+	for {
+		if filepath.Base(cur) == "contracts" {
+			return cur, true
+		}
+		parent := filepath.Dir(cur)
+		if parent == cur {
+			return "", false
+		}
+		cur = parent
+	}
 }
 
 // validateJSON validates data against a compiled schema.
@@ -372,37 +474,6 @@ func (c *Contract) ValidateErrorResponse(t testing.TB, status int, body []byte) 
 		t.Errorf("contracttest: response entry for status %d in contract %q has empty schemaRef", status, c.ID)
 		return
 	}
-	schema := compileSchemaFileAbsolute(t, c.Dir, entry.SchemaRef)
+	schema := compileSchemaFile(t, c.Dir, entry.SchemaRef)
 	validateJSON(t, schema, body, fmt.Sprintf("error response %d", status))
-}
-
-// compileSchemaFileAbsolute reads and compiles a JSON Schema relative to dir,
-// allowing traversal outside dir (needed for shared schemas via relative paths
-// like "../../../../shared/errors/...").
-func compileSchemaFileAbsolute(t testing.TB, dir, filename string) *jsonschema.Schema {
-	t.Helper()
-	fullPath := filepath.Join(dir, filename)
-
-	data, err := os.ReadFile(fullPath)
-	if err != nil {
-		t.Fatalf("contracttest: read schema %q: %v", fullPath, err)
-	}
-
-	var doc any
-	if err := json.Unmarshal(data, &doc); err != nil {
-		t.Fatalf("contracttest: parse schema JSON %q: %v", fullPath, err)
-	}
-
-	compiler := jsonschema.NewCompiler()
-	url := "file:///" + filepath.Clean(fullPath)
-	if err := compiler.AddResource(url, doc); err != nil {
-		t.Fatalf("contracttest: add schema resource %q: %v", fullPath, err)
-	}
-
-	schema, err := compiler.Compile(url)
-	if err != nil {
-		t.Fatalf("contracttest: compile schema %q: %v", fullPath, err)
-	}
-
-	return schema
 }

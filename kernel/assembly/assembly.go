@@ -124,20 +124,12 @@ func New(cfg Config) *CoreAssembly {
 	// emit) so its lifetime is deterministic: callers that construct an
 	// assembly and never Start it can still call Stop to drain cleanly, and
 	// goleak-based tests cannot witness a racy lazy-start.
-	dispatcher, err := newHookDispatcher(dispatcherConfig{
+	dispatcher := newHookDispatcher(dispatcherConfig{
 		Observer:    cfg.HookObserver,
 		QueueSize:   cfg.HookObserverQueueSize,
 		SinkTimeout: cfg.HookObserverSinkTimeout,
 		Provider:    cfg.MetricsProvider,
 	})
-	if err != nil {
-		// newHookDispatcher only fails if metrics registration fails, and
-		// even then it falls back to Nop internally — so this branch is
-		// defensive. Logging + continuing with a fresh Nop dispatcher keeps
-		// New() infallible from callers' perspective.
-		slog.Warn("assembly: hook dispatcher construction failed; continuing without async fan-out",
-			slog.Any("error", err))
-	}
 	return &CoreAssembly{
 		id:         cfg.ID,
 		cfg:        cfg,
@@ -174,7 +166,7 @@ func (a *CoreAssembly) Register(c cell.Cell) error {
 	return nil
 }
 
-// Start initialises and starts every registered Cell in registration order.
+// Start initializes and starts every registered Cell in registration order.
 // Dependencies are built from all registered Cells.
 //
 // ref: uber-go/fx app.go — Start 出错后自动 rollback 已启动的 Cell（LIFO Stop）。
@@ -295,7 +287,7 @@ func (a *CoreAssembly) Health() map[string]cell.HealthStatus {
 }
 
 // StartWithConfig is like Start but injects the given config map into
-// Dependencies.Config before initialising cells.
+// Dependencies.Config before initializing cells.
 func (a *CoreAssembly) StartWithConfig(ctx context.Context, cfgMap map[string]any) error {
 	return a.startInternal(ctx, cfgMap)
 }

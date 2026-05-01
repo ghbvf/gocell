@@ -467,7 +467,7 @@ func TestRunState_Rollback_CancelsRunCtx(t *testing.T) {
 	case <-runCtx.Done():
 		// expected
 	default:
-		t.Fatal("runCtx must be cancelled after rollback")
+		t.Fatal("runCtx must be canceled after rollback")
 	}
 }
 
@@ -548,7 +548,7 @@ func TestPhase10LIFOTeardown_CollectsErrors(t *testing.T) {
 // --- runCtx independence tests ---
 
 func TestRunCtx_IndependentOfExternalCtx(t *testing.T) {
-	// runCtx derived from Background; cancelling the "external" ctx
+	// runCtx derived from Background; canceling the "external" ctx
 	// must NOT cancel runCtx.
 	_, extCancel := context.WithCancel(context.Background())
 	defer extCancel()
@@ -566,7 +566,7 @@ func TestRunCtx_IndependentOfExternalCtx(t *testing.T) {
 	// runCtx must still be alive after external cancel.
 	select {
 	case <-runCtx.Done():
-		t.Fatal("runCtx must NOT be cancelled when external ctx is cancelled")
+		t.Fatal("runCtx must NOT be canceled when external ctx is canceled")
 	default:
 		// expected: runCtx is independent
 	}
@@ -933,7 +933,7 @@ func (b nonComparablePubSub) Close(_ context.Context) error { return nil }
 // wraps non-nil teardown errors in phaseError so that the component name is
 // carried with the error for post-mortem diagnosis.
 //
-// ref: sigs.k8s.io/controller-runtime engageStopProcedure — per-step error labelling.
+// ref: sigs.k8s.io/controller-runtime engageStopProcedure — per-step error labeling.
 func TestBootstrapTeardown_ErrorsContainPhaseLabel(t *testing.T) {
 	b := New()
 	_, s := newPhaseState()
@@ -1161,7 +1161,7 @@ func TestPhase0_TLSConfigEmpty_Rejected(t *testing.T) {
 func TestPhase0_TLSConfigWithCertificates_Accepted(t *testing.T) {
 	// We do not need a real key pair — we only need at least one of
 	// Certificate / PrivateKey / Leaf to be non-zero so the sanity check
-	// recognises this as a populated entry. Actual TLS handshake is not
+	// recognizes this as a populated entry. Actual TLS handshake is not
 	// exercised in this unit test.
 	b := New(
 		WithListener(cell.PrimaryListener, "127.0.0.1:0", []cell.ListenerAuth{cell.AuthNone{}},

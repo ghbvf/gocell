@@ -19,7 +19,7 @@ import (
 // recommended test fixture for span-shape assertions. We use a
 // SimpleSpanProcessor (synchronous) rather than Batcher so flushes are
 // immediate and tests do not have to sleep.
-func newInMemoryTracer(t *testing.T) (*gcotel.Tracer, *tracetest.InMemoryExporter, *sdktrace.TracerProvider) {
+func newInMemoryTracer(t *testing.T) (*gcotel.Tracer, *tracetest.InMemoryExporter) {
 	t.Helper()
 	exp := tracetest.NewInMemoryExporter()
 	tp := sdktrace.NewTracerProvider(
@@ -32,11 +32,11 @@ func newInMemoryTracer(t *testing.T) (*gcotel.Tracer, *tracetest.InMemoryExporte
 	t.Cleanup(func() {
 		_ = tp.Shutdown(context.Background())
 	})
-	return tracer, exp, tp
+	return tracer, exp
 }
 
 func TestTracer_SpanNameAndAttributes(t *testing.T) {
-	tr, exp, _ := newInMemoryTracer(t)
+	tr, exp := newInMemoryTracer(t)
 
 	ctx, span := tr.Start(context.Background(), "outer-op")
 	span.SetAttributes(
@@ -74,7 +74,7 @@ func TestTracer_SpanNameAndAttributes(t *testing.T) {
 }
 
 func TestTracer_ParentChildRelationship(t *testing.T) {
-	tr, exp, _ := newInMemoryTracer(t)
+	tr, exp := newInMemoryTracer(t)
 
 	ctx, parent := tr.Start(context.Background(), "parent")
 	_, child := tr.Start(ctx, "child")
@@ -101,7 +101,7 @@ func TestTracer_ParentChildRelationship(t *testing.T) {
 }
 
 func TestTracer_ErrorStatusRecordsSpan(t *testing.T) {
-	tr, exp, _ := newInMemoryTracer(t)
+	tr, exp := newInMemoryTracer(t)
 
 	_, span := tr.Start(context.Background(), "err-op")
 	tracing.SpanRecordError(span, errTracerBoom)

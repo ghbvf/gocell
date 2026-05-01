@@ -77,11 +77,11 @@ func checkExpiry(e *Entry, now time.Time) (ExpiryTransition, bool) {
 // non-terminal commands (via ActiveScanner) and terminates expired entries
 // (via Queue.Ack(AckTimeout)).
 //
-// Implements kernel/worker.Worker (Start blocks until ctx cancelled; Stop idempotent).
+// Implements kernel/worker.Worker (Start blocks until ctx canceled; Stop idempotent).
 //
 // By default Sweeper scans all devices (Filter.DeviceID=""). Scoping to a
 // single device is a filter option, not a structural field — adapters decide
-// whether the ScanFilter is honoured efficiently (e.g., indexed by device_id)
+// whether the ScanFilter is honored efficiently (e.g., indexed by device_id)
 // or scanned in memory.
 //
 // ref: Temporal HistoryService timer scan loop — role-based periodic scan
@@ -89,7 +89,7 @@ func checkExpiry(e *Entry, now time.Time) (ExpiryTransition, bool) {
 type Sweeper struct {
 	// Scanner is required. ScanActive is called on each tick with Filter.
 	Scanner ActiveScanner
-	// Queue is required. Ack(AckTimeout) finalises expired entries to StatusExpired.
+	// Queue is required. Ack(AckTimeout) finalizes expired entries to StatusExpired.
 	Queue Queue
 	// Filter narrows the scan; zero value means "all devices, all non-terminal statuses".
 	Filter ScanFilter
@@ -101,7 +101,7 @@ type Sweeper struct {
 	OnError func(error)
 }
 
-// Start begins the sweep loop, blocking until ctx is cancelled.
+// Start begins the sweep loop, blocking until ctx is canceled.
 func (s *Sweeper) Start(ctx context.Context) error {
 	if s.Scanner == nil {
 		return errcode.New(errcode.ErrValidationFailed, "command: Sweeper.Scanner must be non-nil")

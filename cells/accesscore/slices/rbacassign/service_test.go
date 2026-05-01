@@ -242,7 +242,7 @@ func TestService_Assign_SessionRevokeFail_ReturnsError(t *testing.T) {
 
 // TestService_DemoMode_* proves that in demo mode (no WithEmitter / WithTxManager),
 // sessionRepo.RevokeByUserID is still called exactly once per Assign and Revoke, preserving
-// backward-compatible dual-write behaviour.
+// backward-compatible dual-write behavior.
 func TestService_DemoMode_Assign_CallsSessionRevoke(t *testing.T) {
 	tests := []struct {
 		name   string

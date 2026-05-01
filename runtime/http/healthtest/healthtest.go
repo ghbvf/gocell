@@ -23,7 +23,7 @@ import (
 // /readyz invocation, which — while harmless to the aggregator — is still
 // a correctness issue worth catching at development time.
 //
-// The helper calls fn with an already-cancelled ctx and asserts that fn
+// The helper calls fn with an already-canceled ctx and asserts that fn
 // returns within the supplied budget. budget is the only argument so that
 // individual tests can pick a value appropriate to their CI environment;
 // the runtime path in health.Handler does not depend on this value at all.

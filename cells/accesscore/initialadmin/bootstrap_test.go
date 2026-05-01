@@ -53,14 +53,14 @@ func newBootstrapCapturingLogger() (*slog.Logger, *capturingHandler) {
 }
 
 // makeDeps returns a BootstrapDeps with mem repos and a capturing logger.
-func makeDeps(t *testing.T) (BootstrapDeps, *capturingHandler) {
+func makeDeps(t *testing.T) BootstrapDeps {
 	t.Helper()
-	logger, handler := newBootstrapCapturingLogger()
+	logger, _ := newBootstrapCapturingLogger()
 	return BootstrapDeps{
 		UserRepo: mem.NewUserRepository(),
 		RoleRepo: mem.NewRoleRepository(),
 		Logger:   logger,
-	}, handler
+	}
 }
 
 // makeCfg returns a bootstrapConfig pointing to a temp dir credential file.
@@ -148,7 +148,7 @@ var _ ports.RoleRepository = (*countingRoleRepo)(nil)
 // ---- tests ------------------------------------------------------------------
 
 func TestBootstrap_FirstRun_CreatesUserAndWritesFile(t *testing.T) {
-	deps, _ := makeDeps(t)
+	deps := makeDeps(t)
 	cfg := makeCfg(t)
 	userRepo := deps.UserRepo.(*mem.UserRepository)
 	roleRepo := deps.RoleRepo.(*mem.RoleRepository)
@@ -186,7 +186,7 @@ func TestBootstrap_FirstRun_CreatesUserAndWritesFile(t *testing.T) {
 }
 
 func TestBootstrap_FirstRun_UserHasPasswordResetRequired(t *testing.T) {
-	deps, _ := makeDeps(t)
+	deps := makeDeps(t)
 	cfg := makeCfg(t)
 	userRepo := deps.UserRepo.(*mem.UserRepository)
 
@@ -202,7 +202,7 @@ func TestBootstrap_FirstRun_UserHasPasswordResetRequired(t *testing.T) {
 }
 
 func TestBootstrap_SkipsWhenAdminExists(t *testing.T) {
-	deps, _ := makeDeps(t)
+	deps := makeDeps(t)
 	cfg := makeCfg(t)
 
 	// Seed an admin user directly to simulate an already-bootstrapped state.
@@ -261,7 +261,7 @@ func TestBootstrap_PgRaceDuplicateUserSilentSkip(t *testing.T) {
 }
 
 func TestBootstrap_FileWriteFailureFailsFast(t *testing.T) {
-	deps, _ := makeDeps(t)
+	deps := makeDeps(t)
 	cfg := bootstrapConfig{
 		// Point at an impossible path (directory that cannot be created).
 		CredentialPath: "/dev/null/cant-write/initial_admin_password",
@@ -281,7 +281,7 @@ func TestBootstrap_FileWriteFailureFailsFast(t *testing.T) {
 // persisted, Run best-effort removes both so the next startup sees a clean
 // slate (no more "user exists but nobody knows the password" dead-end).
 func TestBootstrap_CredFileFailureCompensatesUserAndRole(t *testing.T) {
-	deps, _ := makeDeps(t)
+	deps := makeDeps(t)
 	userRepo := deps.UserRepo.(*mem.UserRepository)
 	roleRepo := deps.RoleRepo.(*mem.RoleRepository)
 
@@ -336,7 +336,7 @@ func TestBootstrap_CredFileFailureCompensatesUserAndRole(t *testing.T) {
 // because restart wipes state, but exercising the path here keeps the
 // contract honest for Phase X.
 func TestBootstrap_OrphanUserRecoveryResumesAssign(t *testing.T) {
-	deps, _ := makeDeps(t)
+	deps := makeDeps(t)
 	cfg := makeCfg(t)
 	userRepo := deps.UserRepo.(*mem.UserRepository)
 	roleRepo := deps.RoleRepo.(*mem.RoleRepository)
@@ -430,7 +430,7 @@ func TestBootstrap_NoPlaintextInAnyLog(t *testing.T) {
 }
 
 func TestBootstrap_RespectsCustomUsername(t *testing.T) {
-	deps, _ := makeDeps(t)
+	deps := makeDeps(t)
 	userRepo := deps.UserRepo.(*mem.UserRepository)
 	cfg := bootstrapConfig{
 		Username:       "root",
@@ -511,7 +511,7 @@ func TestBootstrap_NewBootstrapperValidatesInput(t *testing.T) {
 }
 
 func TestBootstrap_FileContainsCredentialFields(t *testing.T) {
-	deps, _ := makeDeps(t)
+	deps := makeDeps(t)
 	knownPW := knownPassword(t)
 	cfg := bootstrapConfig{
 		Username:       "admin",
@@ -544,7 +544,7 @@ func TestBootstrap_DefaultCredentialPathFromEnv(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("GOCELL_STATE_DIR", dir)
 
-	deps, _ := makeDeps(t)
+	deps := makeDeps(t)
 	cfg := bootstrapConfig{
 		TTL:            time.Hour,
 		PasswordSource: newFixedPasswordSource(),
@@ -565,7 +565,7 @@ func TestBootstrap_DefaultCredentialPathFromEnv(t *testing.T) {
 // TestBootstrap_NoPlaintextPasswordInCfgStruct verifies that the bootstrapper
 // struct does not hold the plaintext password after Run returns.
 func TestBootstrap_NoPlaintextPasswordInCfgStruct(t *testing.T) {
-	deps, _ := makeDeps(t)
+	deps := makeDeps(t)
 	cfg := makeCfg(t)
 	knownPW := knownPassword(t)
 

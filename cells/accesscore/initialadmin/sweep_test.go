@@ -334,7 +334,7 @@ func TestSweep_MalformedExpiresAt_LogErrorContinue(t *testing.T) {
 // The runtime os.ReadFile("sweep.go") check was removed because it was
 // brittle (path-relative, parallel-test unsafe). The constraint is enforced
 // structurally: sweep.go is in the same package as bootstrap.go which imports
-// UserRepository; if sweep.go imported it too, the behaviour would simply be
+// UserRepository; if sweep.go imported it too, the behavior would simply be
 // redundant — the compile-time guard is the absence of any dependency path,
 // which is verified by the separation of concerns in sweep.go's import block
 // (see the intentional comment there: "intentionally does not depend on UserRepository").

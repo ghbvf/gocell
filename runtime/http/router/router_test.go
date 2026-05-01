@@ -30,8 +30,8 @@ import (
 
 type stubCell struct{ *cell.BaseCell }
 
-func newStubCell(id string) *stubCell {
-	return &stubCell{BaseCell: cell.NewBaseCell(cell.CellMetadata{ID: id, Type: cell.CellTypeCore})}
+func newStubCell() *stubCell {
+	return &stubCell{BaseCell: cell.NewBaseCell(cell.CellMetadata{ID: "cell-1", Type: cell.CellTypeCore})}
 }
 
 func findAccessLogEntry(logs []byte, wantPath string) (map[string]any, bool) {
@@ -60,7 +60,7 @@ func TestHealthEndpoints(t *testing.T) {
 	// PR-A14b: health endpoints live on a dedicated HealthListener router.
 	// They are registered directly on the router, not via WithHealthHandler.
 	asm := assembly.New(assembly.Config{ID: "test", DurabilityMode: cell.DurabilityDemo})
-	c := newStubCell("cell-1")
+	c := newStubCell()
 	require.NoError(t, asm.Register(c))
 	require.NoError(t, asm.Start(context.Background()))
 	defer func() { _ = asm.Stop(context.Background()) }()
@@ -723,7 +723,7 @@ func TestInfraEndpoints_BypassRateLimiter(t *testing.T) {
 	// no rate limiter configured. Physical isolation guarantees bypass — the primary
 	// router (with the rejecting rate limiter) never even sees /healthz requests.
 	asm := assembly.New(assembly.Config{ID: "test", DurabilityMode: cell.DurabilityDemo})
-	c := newStubCell("cell-1")
+	c := newStubCell()
 	require.NoError(t, asm.Register(c))
 	require.NoError(t, asm.Start(context.Background()))
 	defer func() { _ = asm.Stop(context.Background()) }()
@@ -759,7 +759,7 @@ func TestInfraEndpoints_BypassCircuitBreaker(t *testing.T) {
 	// no circuit breaker configured. Physical isolation guarantees bypass — the
 	// primary router (with the open circuit breaker) never sees /readyz requests.
 	asm := assembly.New(assembly.Config{ID: "test", DurabilityMode: cell.DurabilityDemo})
-	c := newStubCell("cell-1")
+	c := newStubCell()
 	require.NoError(t, asm.Register(c))
 	require.NoError(t, asm.Start(context.Background()))
 	defer func() { _ = asm.Stop(context.Background()) }()
@@ -916,7 +916,7 @@ func TestWithAuthMiddleware_InfraEndpoints_BypassAuth(t *testing.T) {
 	// no auth middleware. Physical isolation guarantees bypass — the primary router
 	// (with auth middleware that would reject all requests) never sees /healthz.
 	asm := assembly.New(assembly.Config{ID: "test", DurabilityMode: cell.DurabilityDemo})
-	c := newStubCell("cell-1")
+	c := newStubCell()
 	require.NoError(t, asm.Register(c))
 	require.NoError(t, asm.Start(context.Background()))
 	defer func() { _ = asm.Stop(context.Background()) }()

@@ -334,7 +334,7 @@ func TestService_CreateAdmin_Concurrent_OnlyOneSucceeds(t *testing.T) {
 	close(results)
 
 	successes := 0
-	retireds := 0
+	retires := 0
 	for r := range results {
 		switch {
 		case r.err == nil && r.out != nil:
@@ -342,14 +342,14 @@ func TestService_CreateAdmin_Concurrent_OnlyOneSucceeds(t *testing.T) {
 		case r.err != nil:
 			var ec *errcode.Error
 			if errors.As(r.err, &ec) && ec.Code == errcode.ErrSetupAlreadyInitialized {
-				retireds++
+				retires++
 			} else {
 				t.Fatalf("unexpected error: %v", r.err)
 			}
 		}
 	}
 	assert.Equal(t, 1, successes, "exactly one caller must create the admin")
-	assert.Equal(t, workers-1, retireds, "all other callers must see retired")
+	assert.Equal(t, workers-1, retires, "all other callers must see retired")
 
 	// Final authoritative count is 1.
 	cnt, err := roleRepo.CountByRole(context.Background(), domain.RoleAdmin)

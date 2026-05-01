@@ -36,7 +36,7 @@ type ConsumerFunc = outbox.EntryHandler
 
 // ErrorRedactor transforms an error before it is recorded on a span. Return
 // the original err unchanged to disable redaction for a given error; return
-// a replacement error (with sanitised message) to strip sensitive payload
+// a replacement error (with sanitized message) to strip sensitive payload
 // fragments (SQL snippets, token carriers, raw PII, ...) from observability
 // backends.
 //
@@ -141,7 +141,7 @@ func WrapConsumer(tr Tracer, spec ContractSpec, fn ConsumerFunc, opts ...Consume
 		default:
 			// Invalid disposition — tested in kernel/outbox; we mark the
 			// span as error AND record an error event so ops see both the
-			// status and a recognisable cause in the span, matching the
+			// status and a recognizable cause in the span, matching the
 			// Requeue/Reject branches. Result is left untouched for
 			// downstream downgrade logic.
 			span.SetStatus(StatusError, "invalid disposition")
@@ -170,7 +170,7 @@ func identityRedactor(err error) error { return err }
 
 // recordErrRedacted calls span.RecordError on the redacted form of err,
 // falling back to a synthetic "missing error" message (itself redacted) so
-// ops still get a recognisable event in the span even when a handler
+// ops still get a recognizable event in the span even when a handler
 // misbehaves by returning a non-Ack disposition with a nil error.
 func recordErrRedacted(span Span, redact ErrorRedactor, err error, fallbackMsg string) {
 	if err == nil {
