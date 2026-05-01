@@ -10,7 +10,7 @@ import (
 func closeListener(t *testing.T, ln net.Listener) {
 	t.Helper()
 	if err := ln.Close(); err != nil {
-		t.Logf("close listener: %v", err)
+		t.Errorf("close listener: %v", err)
 	}
 }
 
@@ -19,7 +19,7 @@ func closeListener(t *testing.T, ln net.Listener) {
 func closeBody(t *testing.T, resp *http.Response) {
 	t.Helper()
 	if err := resp.Body.Close(); err != nil {
-		t.Logf("close body: %v", err)
+		t.Errorf("close body: %v", err)
 	}
 }
 
@@ -27,6 +27,6 @@ func closeBody(t *testing.T, resp *http.Response) {
 func closeConn(t *testing.T, conn net.Conn) {
 	t.Helper()
 	if err := conn.Close(); err != nil {
-		t.Logf("close conn: %v", err)
+		t.Errorf("close conn: %v", err)
 	}
 }

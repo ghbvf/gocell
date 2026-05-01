@@ -21,6 +21,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/worker"
 	"github.com/ghbvf/gocell/pkg/aeadutil"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/logutil"
 	"github.com/ghbvf/gocell/pkg/secutil"
 )
 
@@ -54,17 +55,8 @@ func applyNamespaceFromEnv(raw *vaultapi.Client) string {
 	}
 	raw.SetNamespace(ns)
 
-	slog.Info("vault-transit: namespace configured", slog.String("namespace", sanitizeLogValue(ns)))
+	slog.Info("vault-transit: namespace configured", slog.String("namespace", logutil.Sanitize(ns)))
 	return ns
-}
-
-// sanitizeLogValue removes newlines and carriage returns from a string before
-// it is passed to a structured logger, preventing log-injection via taint values
-// (e.g. env vars that could contain ANSI escape codes or embedded newlines).
-func sanitizeLogValue(s string) string {
-	s = strings.ReplaceAll(s, "\n", "\\n")
-	s = strings.ReplaceAll(s, "\r", "\\r")
-	return s
 }
 
 // resolveStartupTimeout returns the startup deadline for Vault-facing I/O,

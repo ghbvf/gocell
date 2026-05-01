@@ -156,13 +156,18 @@ func closeOwnedSockets(servers []boundServer) {
 
 // phase7ServeAll starts all servers in background goroutines and returns a
 // channel that receives errors and is closed when all servers have stopped.
+// maxListeners caps phase7's pending-server counter at a defensive bound.
+// In practice GoCell wires at most ~5 listeners (Primary/Internal/Health +
+// future Webhook); MaxInt32 would never be reached, but pinning the cap
+// makes the int→int32 narrowing total and keeps gosec G115 happy without
+// a free-form //nolint directive.
+const maxListeners = math.MaxInt32
+
 func (b *Bootstrap) phase7ServeAll(servers []boundServer) chan error {
 	n := len(servers)
 	httpErrCh := make(chan error, n)
-	if n > math.MaxInt32 {
-		// In practice we ever have ≤5 listeners; cap defensively so the
-		// int32 pending counter stays consistent.
-		n = math.MaxInt32
+	if n > maxListeners {
+		n = maxListeners
 	}
 	pending := int32(n)
 	for _, bs := range servers {

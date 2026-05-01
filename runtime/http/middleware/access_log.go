@@ -4,10 +4,10 @@ import (
 	"context"
 	"log/slog"
 	"net/http"
-	"strings"
 	"time"
 
 	"github.com/ghbvf/gocell/pkg/ctxkeys"
+	"github.com/ghbvf/gocell/pkg/logutil"
 )
 
 // AccessLog logs structured request/response information via slog.Info.
@@ -43,8 +43,8 @@ func accessLogRecorder(w http.ResponseWriter, r *http.Request) (*RecorderState, 
 func logAccessRequest(start time.Time, r *http.Request, state *RecorderState) {
 	// Extract and sanitize request fields before logging to avoid taint flow
 	// from user-controlled request data into structured log calls.
-	method := sanitizeLogField(r.Method)
-	path := sanitizeLogField(r.URL.Path)
+	method := logutil.Sanitize(r.Method)
+	path := logutil.Sanitize(r.URL.Path)
 	route := RoutePatternFromCtx(r.Context())
 	ctx := r.Context()
 	safeObserve(slog.Default(), func() {
@@ -62,17 +62,6 @@ func accessLogAttrs(start time.Time, method, path, route string, state *Recorder
 		slog.Int64("duration_ms", duration.Milliseconds()),
 	}
 	return appendAccessLogContextAttrs(attrs, ctx)
-}
-
-// sanitizeLogField removes ASCII control characters from s to prevent log
-// injection when user-supplied HTTP fields are written to structured logs.
-func sanitizeLogField(s string) string {
-	return strings.Map(func(r rune) rune {
-		if r < 0x20 || r == 0x7f {
-			return -1
-		}
-		return r
-	}, s)
 }
 
 func appendAccessLogContextAttrs(attrs []any, ctx context.Context) []any {

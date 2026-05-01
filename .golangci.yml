@@ -196,20 +196,11 @@ linters:
         linters:
           - gosec
         text: "G204"
-      # G404 weak random — retry/jitter sites only (no cryptographic
-      # requirement). math/rand/v2 is the correct choice for backoff jitter.
-      - path: ^adapters/rabbitmq/connection\.go
-        linters:
-          - gosec
-        text: "G404"
-      - path: ^runtime/eventbus/eventbus\.go
-        linters:
-          - gosec
-        text: "G404"
-      - path: ^runtime/outbox/relay\.go
-        linters:
-          - gosec
-        text: "G404"
+      # G404 weak random is suppressed at the call site with line-level
+      # //nolint:gosec // G404 R2-approved: ... — see adapters/rabbitmq/
+      # connection.go, runtime/eventbus/eventbus.go, runtime/outbox/relay.go.
+      # File-level path exemptions would also silence future misuses (e.g.
+      # token / nonce / key generation introduced in the same file).
       # G706 log injection (taint analysis) — net/http handler false positive
       # on r.RemoteAddr / r.Method / r.URL.Path: gosec taints these fields
       # and refuses to clear the taint through sanitize helpers. Audit logs

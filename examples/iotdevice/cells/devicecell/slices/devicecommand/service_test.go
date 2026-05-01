@@ -25,7 +25,10 @@ func testCodec() *query.CursorCodec {
 }
 
 // enqueueTestCmd enqueues a single test command entry with standard fixture
-// values (cmdID="cmd-1", deviceID="dev-1"). q must be non-nil, ctx must be valid.
+// values (cmdID="cmd-1", deviceID="dev-1"). Use this only when the test does
+// not care about the specific identifiers — concurrent or pagination tests
+// that need distinct cmdIDs/deviceIDs should construct command.NewEntry
+// inline so each entry stays grep-able from the assertion.
 func enqueueTestCmd(ctx context.Context, q *commandtest.InMemQueue) error {
 	entry := command.NewEntry("cmd-1", "dev-1", "reboot", []byte("x"), command.Timeouts{}, time.Now())
 	return q.Enqueue(ctx, entry, command.EnqueueOptions{})

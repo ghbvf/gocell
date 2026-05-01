@@ -197,11 +197,9 @@ func (sc *SecureCookie) computeMAC(name string, ts, nonce, payload []byte) []byt
 	nameLen := make([]byte, 4)
 	// 4 GiB cookie name is unreachable in practice; encode the length one
 	// big-endian byte at a time so we never need an int→uint32 cast that
-	// gosec G115 would flag.
+	// gosec G115 would flag. len() never returns a negative int by the Go
+	// spec, so only the upper bound needs a guard.
 	n := len(name)
-	if n < 0 {
-		n = 0
-	}
 	if n > math.MaxUint32 {
 		n = math.MaxUint32
 	}

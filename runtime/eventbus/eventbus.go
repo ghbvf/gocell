@@ -522,7 +522,8 @@ func (b *InMemoryEventBus) handleInvalidDisposition(
 // Delegates to outbox.ExponentialDelay for overflow-safe computation, capped at maxRetryDelay.
 func retryDelay(attempt int) time.Duration {
 	base := outbox.ExponentialDelay(baseRetryDelay, maxRetryDelay, attempt)
-	jitter := time.Duration(rand.Int64N(int64(baseRetryDelay)))
+	// G404 R2-approved: retry jitter has no cryptographic requirement.
+	jitter := time.Duration(rand.Int64N(int64(baseRetryDelay))) //nolint:gosec // G404
 	return base + jitter
 }
 

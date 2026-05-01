@@ -17,8 +17,12 @@ import (
 )
 
 // weak1024KeyPEM is a pre-generated 1024-bit RSA private key (PKCS#8 DER,
-// PEM-encoded). Used only in tests that verify weak-key rejection; avoids
-// calling rsa.GenerateKey with a substandard bit size at test runtime.
+// PEM-encoded). Used only in tests that verify weak-key rejection — the
+// test intent is to exercise validateRSAKeySize's bit-size guard
+// (n.BitLen() < MinRSAKeyBits), not RSA key generation. Generating a
+// 1024-bit key at every test run was both slow and noisy in coverage
+// reports; the static fixture is regenerated only when the
+// PKCS#8 DER format itself changes.
 const weak1024KeyPEM = `-----BEGIN PRIVATE KEY-----
 MIICdwIBADANBgkqhkiG9w0BAQEFAASCAmEwggJdAgEAAoGBAN3/s6cdoda0Yn9a
 wCHSWfWu9L75nMJvJsLQ8gI+vuPWdYoOF3VSp+HV+ojNBO5YTstQJVnSJc6Jjn8K
