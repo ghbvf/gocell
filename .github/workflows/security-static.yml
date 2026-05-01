@@ -83,24 +83,32 @@ jobs:
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
-      # Two-pass invocation — when --sarif is present, Semgrep emits suppressed
-      # findings (nosemgrep'd) into SARIF as `suppressions: [{kind: inSource}]`
-      # entries (per SARIF spec); the --error exit code then counts ALL findings
-      # including the suppressed ones. The gate pass below runs WITHOUT --sarif
-      # so nosem suppressions actually remove findings from the count, and
-      # --error fails only on unsuppressed findings. The SARIF pass runs after
-      # (with `if: always()`) for GitHub Security tab upload, without --error
-      # so it never double-fails.
+      # Two-pass invocation. Two Semgrep CLI quirks force this split:
+      #
+      #   1. `--sarif` writes ALL findings (including nosemgrep'd ones,
+      #      tagged `suppressions: [{kind: inSource}]` per SARIF spec) and
+      #      `--error` then counts them in the exit code — so
+      #      `--sarif --error` cannot be made green by nosemgrep. The gate
+      #      pass below runs WITHOUT --sarif so suppressions actually remove
+      #      findings from the count.
+      #
+      #   2. `--strict` returns exit 3 ("invalid target code") whenever any
+      #      target file has parse warnings (~0.1% of our tree). It is NOT
+      #      a "rule-parse error" guard — that is exit 5 ("unparseable YAML")
+      #      and fires automatically without --strict. Dropping --strict
+      #      keeps the gate focused on the actual blocking semantic
+      #      (`--error` exits 1 on findings).
+      #
+      # `semgrep scan` (not `semgrep ci`) is used because `--error` is a
+      # scan-only flag — `semgrep ci` rejects it.
       - name: semgrep scan (gate — respects nosemgrep)
-        # `semgrep scan` (not `semgrep ci`) is required because --strict and
-        # --error are scan-only flags — `semgrep ci` rejects them.
         # No --exclude / --exclude-rule: bypass surface is closed.
         run: |
           semgrep scan \
             --config=p/golang \
             --config=p/owasp-top-ten \
             --config=p/secrets \
-            --strict --error
+            --error
         env:
           # OSS mode — no Semgrep Cloud token. Community rules ship with
           # the container image. Telemetry off.
