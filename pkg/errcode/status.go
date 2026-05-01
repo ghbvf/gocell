@@ -210,6 +210,45 @@ var codeToStatus = map[Code]int{
 
 	// --- 501 Not Implemented ---
 	ErrNotImplemented: http.StatusNotImplemented,
+
+	// --- Idempotency state conflicts (409) ---
+	// Lease expired or not acquired: idempotency state conflict, not infrastructure.
+	ErrIdempotencyLeaseExpired: http.StatusConflict,
+	ErrIdempotencyNoClaimLease: http.StatusConflict,
+
+	// --- Metrics / schema programmer errors (400 / 500) ---
+	ErrMetricsLabelMismatch:     http.StatusBadRequest,
+	ErrMetricsLabelValueIllegal: http.StatusBadRequest,
+	// Unresolved schema identity is an internal tool/generation bug.
+	ErrMetricsSchemaUnresolved: http.StatusInternalServerError,
+
+	// --- Outbox degraded (503) ---
+	// Fail-open drop ratio exceeded threshold: soft failure, not fatal.
+	ErrOutboxDegraded: http.StatusServiceUnavailable,
+
+	// --- Worker early exit (500) ---
+	// Silent exit from a long-running Worker is an internal process fault.
+	ErrWorkerExitedEarly: http.StatusInternalServerError,
+
+	// --- SecureCookie input / verification errors ---
+	// Key config errors are caller bugs at construction time (400).
+	ErrSecureCookieHashKeyTooShort: http.StatusBadRequest,
+	ErrSecureCookieInvalidBlockKey: http.StatusBadRequest,
+	// Decode-time structural / crypto errors are also 400 (bad cookie from client).
+	ErrSecureCookieEncodingTooShort: http.StatusBadRequest,
+	ErrSecureCookieHMACInvalid:      http.StatusBadRequest,
+	ErrSecureCookieExpired:          http.StatusBadRequest,
+	ErrSecureCookieDecryptFailed:    http.StatusBadRequest,
+
+	// --- Auth nonce reuse (401) ---
+	// Nonce already consumed: replay or duplicate — client must not retry same nonce.
+	ErrAuthNonceReused: http.StatusUnauthorized,
+
+	// --- Distlock context-cause sentinels (409) ---
+	// Lock lost or released: resource contention or normal end-of-section (409 vs 503:
+	// the conflict is coordination-level, not infra outage).
+	ErrDistlockLockLost:     http.StatusConflict,
+	ErrDistlockLockReleased: http.StatusConflict,
 }
 
 // MapCodeToStatus maps an errcode.Code to the appropriate HTTP status code.

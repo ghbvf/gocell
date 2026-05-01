@@ -14,11 +14,12 @@ import (
 	"crypto/subtle"
 	"encoding/base64"
 	"encoding/binary"
-	"errors"
 	"fmt"
 	"io"
 	"math"
 	"time"
+
+	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
 // SecureCookie encodes and decodes cookie values with HMAC-SHA256 signing
@@ -37,12 +38,12 @@ const (
 )
 
 var (
-	ErrHashKeyTooShort  = errors.New("securecookie: hashKey must be at least 32 bytes")
-	ErrInvalidBlockKey  = errors.New("securecookie: blockKey must be 16, 24, or 32 bytes (or nil)")
-	ErrEncodingTooShort = errors.New("securecookie: encoded value too short")
-	ErrHMACInvalid      = errors.New("securecookie: HMAC verification failed")
-	ErrExpired          = errors.New("securecookie: cookie has expired")
-	ErrDecryptFailed    = errors.New("securecookie: decryption failed")
+	ErrHashKeyTooShort  = errcode.New(errcode.ErrSecureCookieHashKeyTooShort, "securecookie: hashKey must be at least 32 bytes")
+	ErrInvalidBlockKey  = errcode.New(errcode.ErrSecureCookieInvalidBlockKey, "securecookie: blockKey must be 16, 24, or 32 bytes (or nil)")
+	ErrEncodingTooShort = errcode.New(errcode.ErrSecureCookieEncodingTooShort, "securecookie: encoded value too short")
+	ErrHMACInvalid      = errcode.New(errcode.ErrSecureCookieHMACInvalid, "securecookie: HMAC verification failed")
+	ErrExpired          = errcode.New(errcode.ErrSecureCookieExpired, "securecookie: cookie has expired")
+	ErrDecryptFailed    = errcode.New(errcode.ErrSecureCookieDecryptFailed, "securecookie: decryption failed")
 )
 
 // New creates a SecureCookie with the given hash key and optional block key.

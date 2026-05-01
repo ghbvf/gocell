@@ -483,6 +483,85 @@ const (
 	//
 	// ref: docs/plans/202604270020-1-2-ci-3-claude-ship-reactive-bachman.md PR-MODE-1
 	ErrReadyzVerboseUnconfigured Code = "ERR_READYZ_VERBOSE_UNCONFIGURED"
+
+	// Idempotency error codes (kernel/idempotency).
+	//
+	// ErrIdempotencyLeaseExpired signals that the processing lease is no longer
+	// held — either it expired naturally or another consumer claimed it.
+	// Callers MUST stop business logic and proceed to Release. Maps to HTTP 409.
+	ErrIdempotencyLeaseExpired Code = "ERR_IDEMPOTENCY_LEASE_EXPIRED"
+	// ErrIdempotencyNoClaimLease signals that Receipt methods were called for a
+	// Claim result that did not acquire a processing lease. Maps to HTTP 409.
+	ErrIdempotencyNoClaimLease Code = "ERR_IDEMPOTENCY_NO_CLAIM_LEASE"
+
+	// Metrics error codes (kernel/observability/metrics).
+	//
+	// ErrMetricsLabelMismatch signals that the supplied Labels do not exactly
+	// cover the registered LabelNames. Maps to HTTP 400 (caller/programmer error).
+	ErrMetricsLabelMismatch Code = "ERR_METRICS_LABEL_MISMATCH"
+	// ErrMetricsLabelValueIllegal signals that a label value contains a separator
+	// reserved by the OTel-provider cache key. Maps to HTTP 400.
+	ErrMetricsLabelValueIllegal Code = "ERR_METRICS_LABEL_VALUE_ILLEGAL"
+
+	// Outbox error codes (kernel/outbox).
+	//
+	// ErrOutboxDegraded signals that the fail-open drop ratio has exceeded the
+	// configured threshold. The /readyz aggregator maps this to HTTP 200 +
+	// status="degraded" rather than 503, but the code itself maps to 503 for
+	// direct HTTP boundary use. Maps to HTTP 503 Service Unavailable.
+	ErrOutboxDegraded Code = "ERR_OUTBOX_DEGRADED"
+
+	// Worker error codes (kernel/worker).
+	//
+	// ErrWorkerExitedEarly signals that a Worker.Start returned nil while the
+	// group context was still live — an abnormal silent exit modeled as an error
+	// so WorkerGroup can propagate the failure. Maps to HTTP 500.
+	ErrWorkerExitedEarly Code = "ERR_WORKER_EXITED_EARLY"
+
+	// SecureCookie error codes (pkg/securecookie).
+	//
+	// ErrSecureCookieHashKeyTooShort signals that hashKey is shorter than the
+	// minimum required length (32 bytes). Maps to HTTP 400.
+	ErrSecureCookieHashKeyTooShort Code = "ERR_SECURECOOKIE_HASH_KEY_TOO_SHORT"
+	// ErrSecureCookieInvalidBlockKey signals that blockKey is not nil and not
+	// one of the valid AES key sizes (16, 24, or 32 bytes). Maps to HTTP 400.
+	ErrSecureCookieInvalidBlockKey Code = "ERR_SECURECOOKIE_INVALID_BLOCK_KEY"
+	// ErrSecureCookieEncodingTooShort signals that the encoded cookie value is
+	// shorter than the minimum required length. Maps to HTTP 400.
+	ErrSecureCookieEncodingTooShort Code = "ERR_SECURECOOKIE_ENCODING_TOO_SHORT"
+	// ErrSecureCookieHMACInvalid signals that HMAC verification failed —
+	// the cookie has been tampered with or forged. Maps to HTTP 400.
+	ErrSecureCookieHMACInvalid Code = "ERR_SECURECOOKIE_HMAC_INVALID"
+	// ErrSecureCookieExpired signals that the cookie has exceeded its configured
+	// max-age. Maps to HTTP 400.
+	ErrSecureCookieExpired Code = "ERR_SECURECOOKIE_EXPIRED"
+	// ErrSecureCookieDecryptFailed signals that AES-GCM decryption failed —
+	// wrong key or corrupt ciphertext. Maps to HTTP 400.
+	ErrSecureCookieDecryptFailed Code = "ERR_SECURECOOKIE_DECRYPT_FAILED"
+
+	// Auth nonce error codes (runtime/auth).
+	//
+	// ErrAuthNonceReused signals that a nonce has already been consumed within
+	// its TTL window — a replay attack or duplicate request. Maps to HTTP 401.
+	ErrAuthNonceReused Code = "ERR_AUTH_NONCE_REUSED"
+
+	// Distlock context-cause sentinels (runtime/distlock).
+	//
+	// ErrDistlockLockLost signals that the manager failed to renew the lock or
+	// the backend reports ownership has been taken by another holder. Set as the
+	// context cancellation cause on the lock-derived context. Maps to HTTP 409.
+	ErrDistlockLockLost Code = "ERR_DISTLOCK_LOCK_LOST"
+	// ErrDistlockLockReleased signals that release() was called (normal
+	// end-of-critical-section). Set as the context cancellation cause on the
+	// lock-derived context. Maps to HTTP 409.
+	ErrDistlockLockReleased Code = "ERR_DISTLOCK_LOCK_RELEASED"
+
+	// MetricsSchema error codes (tools/metricschema).
+	//
+	// ErrMetricsSchemaUnresolved signals that a concrete metric registration
+	// has an unresolved identity field (name, label, namespace, bucket).
+	// Maps to HTTP 500.
+	ErrMetricsSchemaUnresolved Code = "ERR_METRICS_SCHEMA_UNRESOLVED"
 )
 
 // Error is a structured error that carries a machine-readable Code, a

@@ -13,7 +13,8 @@ package worker
 
 import (
 	"context"
-	"errors"
+
+	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
 // ErrWorkerExitedEarly is the sentinel error returned by WorkerGroup when a
@@ -23,7 +24,7 @@ import (
 // firstErr unset) masked the abnormal state from operators. Modeling it as
 // a typed error lets the group propagate the failure and lets callers
 // errors.Is-check for it during shutdown reasoning.
-var ErrWorkerExitedEarly = errors.New("worker: exited early without error before context cancellation")
+var ErrWorkerExitedEarly = errcode.New(errcode.ErrWorkerExitedEarly, "worker: exited early without error before context cancellation")
 
 // Worker represents a long-running background task.
 //
