@@ -88,9 +88,10 @@ type User struct {
 	UpdatedAt             time.Time
 }
 
-// NewUser creates a new active User with the current timestamp.
+// NewUser creates a new active User with the given timestamp.
+// now is the wall-clock instant provided by the caller's clock.Clock.
 // Returns an errcode.Error if any required field is empty.
-func NewUser(username, email, passwordHash string) (*User, error) {
+func NewUser(username, email, passwordHash string, now time.Time) (*User, error) {
 	if err := validation.RequireNotBlank(errcode.ErrAuthInvalidInput,
 		validation.F("username", username),
 		validation.F("email", email),
@@ -99,7 +100,6 @@ func NewUser(username, email, passwordHash string) (*User, error) {
 		return nil, err
 	}
 
-	now := time.Now()
 	return &User{
 		Username:       username,
 		Email:          email,
@@ -114,17 +114,19 @@ func NewUser(username, email, passwordHash string) (*User, error) {
 
 // MarkProvisionPending marks a setup/bootstrap-owned row as recoverable until
 // the first-admin provisioning sequence completes.
-func (u *User) MarkProvisionPending(source UserSource) {
+// now is the wall-clock instant provided by the caller's clock.Clock.
+func (u *User) MarkProvisionPending(source UserSource, now time.Time) {
 	u.CreationSource = source
 	u.ProvisionState = ProvisionStatePending
-	u.UpdatedAt = time.Now()
+	u.UpdatedAt = now
 }
 
 // MarkProvisionComplete marks a setup/bootstrap-owned row as no longer
 // recoverable by duplicate-username recovery.
-func (u *User) MarkProvisionComplete() {
+// now is the wall-clock instant provided by the caller's clock.Clock.
+func (u *User) MarkProvisionComplete(now time.Time) {
 	u.ProvisionState = ProvisionStateComplete
-	u.UpdatedAt = time.Now()
+	u.UpdatedAt = now
 }
 
 // IsRecoverableProvisionOrphan verifies that a duplicate username belongs to
@@ -138,29 +140,33 @@ func (u *User) IsRecoverableProvisionOrphan(source UserSource) bool {
 // MarkPasswordResetRequired sets the PasswordResetRequired flag to true and
 // advances UpdatedAt. Call this when creating an admin-bootstrap user that
 // must change its password on first login.
-func (u *User) MarkPasswordResetRequired() {
+// now is the wall-clock instant provided by the caller's clock.Clock.
+func (u *User) MarkPasswordResetRequired(now time.Time) {
 	u.PasswordResetRequired = true
-	u.UpdatedAt = time.Now()
+	u.UpdatedAt = now
 }
 
 // ClearPasswordResetRequired unsets the PasswordResetRequired flag and
 // advances UpdatedAt. Call this after the user has successfully changed their
 // password.
-func (u *User) ClearPasswordResetRequired() {
+// now is the wall-clock instant provided by the caller's clock.Clock.
+func (u *User) ClearPasswordResetRequired(now time.Time) {
 	u.PasswordResetRequired = false
-	u.UpdatedAt = time.Now()
+	u.UpdatedAt = now
 }
 
 // LockAccount sets the user status to locked.
-func (u *User) LockAccount() {
+// now is the wall-clock instant provided by the caller's clock.Clock.
+func (u *User) LockAccount(now time.Time) {
 	u.Status = StatusLocked
-	u.UpdatedAt = time.Now()
+	u.UpdatedAt = now
 }
 
 // UnlockAccount sets the user status to active.
-func (u *User) UnlockAccount() {
+// now is the wall-clock instant provided by the caller's clock.Clock.
+func (u *User) UnlockAccount(now time.Time) {
 	u.Status = StatusActive
-	u.UpdatedAt = time.Now()
+	u.UpdatedAt = now
 }
 
 // IsLocked returns true if the user account is locked.

@@ -141,10 +141,10 @@ func TestService_CreateAdmin_OrphanRecovered_ReturnsUser_EmitsEvent(t *testing.T
 	// the password hash, assign the admin role, and emit event.user.created.v1
 	// because setup emits only after adminprovision.Ensure returns.
 	userRepo := mem.NewUserRepository()
-	orphan, err := domain.NewUser("root", "root@local", "$2a$10$oldhash00000000000000000000000000000000000000000000000")
+	orphan, err := domain.NewUser("root", "root@local", "$2a$10$oldhash00000000000000000000000000000000000000000000000", time.Now())
 	require.NoError(t, err)
 	orphan.ID = "usr-orphan-prior"
-	orphan.MarkProvisionPending(domain.UserSourceSetup)
+	orphan.MarkProvisionPending(domain.UserSourceSetup, time.Now())
 	require.NoError(t, userRepo.Create(context.Background(), orphan))
 
 	roleRepo := mem.NewRoleRepository()
@@ -390,11 +390,11 @@ func TestService_CreateAdmin_AlreadyExists_DoesNotHashPassword(t *testing.T) {
 // bootstrap row with the same username.
 func TestService_CreateAdmin_BootstrapPendingDuplicate_Returns409WithoutTakeover(t *testing.T) {
 	userRepo := mem.NewUserRepository()
-	orphan, err := domain.NewUser("root", "root@local", "$2a$10$oldhash00000000000000000000000000000000000000000000000")
+	orphan, err := domain.NewUser("root", "root@local", "$2a$10$oldhash00000000000000000000000000000000000000000000000", time.Now())
 	require.NoError(t, err)
 	orphan.ID = "usr-bootstrap-prior"
-	orphan.MarkProvisionPending(domain.UserSourceBootstrap)
-	orphan.MarkPasswordResetRequired()
+	orphan.MarkProvisionPending(domain.UserSourceBootstrap, time.Now())
+	orphan.MarkPasswordResetRequired(time.Now())
 	require.NoError(t, userRepo.Create(context.Background(), orphan))
 
 	roleRepo := mem.NewRoleRepository()
@@ -481,7 +481,7 @@ func TestService_CreateAdmin_AlreadyExists_DetailsContainOnlyNextAction(t *testi
 
 func seedAdmin(t *testing.T, userRepo ports.UserRepository, roleRepo ports.RoleRepository) {
 	t.Helper()
-	u, err := domain.NewUser("existing", "existing@local", "$2a$10$stubhashXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX")
+	u, err := domain.NewUser("existing", "existing@local", "$2a$10$stubhashXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX", time.Now())
 	require.NoError(t, err)
 	u.ID = "usr-seed"
 	require.NoError(t, userRepo.Create(context.Background(), u))

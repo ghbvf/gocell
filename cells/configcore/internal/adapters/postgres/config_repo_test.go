@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/ghbvf/gocell/cells/configcore/internal/domain"
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/query"
 	"github.com/ghbvf/gocell/runtime/crypto"
@@ -21,7 +22,7 @@ import (
 // Session layer, allowing unit tests to inject a mockDB directly.
 // Production code always goes through NewConfigRepository(*Session).
 func newConfigRepositoryFromDBTX(db DBTX) *ConfigRepository {
-	return &ConfigRepository{db: db, logger: slog.Default()}
+	return &ConfigRepository{db: db, logger: slog.Default(), clock: clock.Real()}
 }
 
 func TestConfigRepository_Create(t *testing.T) {

@@ -16,6 +16,7 @@ import (
 	"github.com/ghbvf/gocell/cells/accesscore/internal/domain"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/dto"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/ports"
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/errcode"
@@ -73,6 +74,16 @@ func WithTxManager(tx persistence.TxRunner) Option {
 	return func(s *Service) { s.txRunner = persistence.RunnerOrNoop(tx) }
 }
 
+// WithClock sets the clock used for timestamping operations. Defaults to
+// clock.Real() when not provided.
+func WithClock(clk clock.Clock) Option {
+	return func(s *Service) {
+		if clk != nil {
+			s.clock = clk
+		}
+	}
+}
+
 // WithTokenIssuer injects the token issuer used by ChangePassword to issue a
 // fresh TokenPair after a successful password change. tokenIssuer must not be
 // nil; NewService returns an error if it is not provided or is nil.
@@ -89,6 +100,7 @@ type Service struct {
 	emitter      outbox.Emitter
 	logger       *slog.Logger
 	tokenIssuer  TokenIssuer
+	clock        clock.Clock
 }
 
 // NewService creates an identity-manage Service. tokenIssuer is required;
@@ -121,6 +133,7 @@ func NewService(
 		txRunner:     persistence.NoopTxRunner{},
 		emitter:      outbox.NewNoopEmitter(),
 		logger:       logger,
+		clock:        clock.Real(),
 	}
 	for _, o := range opts {
 		o(s)
@@ -160,7 +173,7 @@ func (s *Service) Create(ctx context.Context, input CreateInput) (*domain.User, 
 		return nil, fmt.Errorf("identity-manage: hash password: %w", err)
 	}
 
-	user, err := domain.NewUser(input.Username, input.Email, string(hash))
+	user, err := domain.NewUser(input.Username, input.Email, string(hash), s.clock.Now())
 	if err != nil {
 		return nil, err
 	}
@@ -172,7 +185,7 @@ func (s *Service) Create(ctx context.Context, input CreateInput) (*domain.User, 
 
 	user.ID = uuid.NewString()
 	if input.RequirePasswordReset {
-		user.MarkPasswordResetRequired()
+		user.MarkPasswordResetRequired(s.clock.Now())
 	}
 
 	eventPayload := dto.UserCreatedEvent{
@@ -249,7 +262,7 @@ func (s *Service) Update(ctx context.Context, input UpdateInput) (*domain.User, 
 		if err != nil {
 			return fmt.Errorf("identity-manage: update: %w", err)
 		}
-		applyUpdateFields(u, input)
+		applyUpdateFields(u, input, s.clock.Now())
 		if err := s.repo.Update(txCtx, u); err != nil {
 			return fmt.Errorf("identity-manage: update: %w", err)
 		}
@@ -270,7 +283,7 @@ func (s *Service) Update(ctx context.Context, input UpdateInput) (*domain.User, 
 // non-nil field in input overwrites the corresponding field on u. Pure
 // function — extracted from Update to keep that method's cognitive complexity
 // inside the 15-line CLAUDE.md budget once the RunInTx closure was added.
-func applyUpdateFields(u *domain.User, input UpdateInput) {
+func applyUpdateFields(u *domain.User, input UpdateInput, now time.Time) {
 	if input.Name != nil {
 		u.Username = *input.Name
 	}
@@ -282,12 +295,12 @@ func applyUpdateFields(u *domain.User, input UpdateInput) {
 	}
 	if input.RequirePasswordReset != nil {
 		if *input.RequirePasswordReset {
-			u.MarkPasswordResetRequired()
+			u.MarkPasswordResetRequired(now)
 		} else {
-			u.ClearPasswordResetRequired()
+			u.ClearPasswordResetRequired(now)
 		}
 	}
-	u.UpdatedAt = time.Now()
+	u.UpdatedAt = now
 }
 
 // Delete removes a user. Before the user row is deleted, all sessions and
@@ -361,7 +374,7 @@ func (s *Service) lockUserAndRevokeSessions(ctx context.Context, id, actor strin
 		if err != nil {
 			return fmt.Errorf("identity-manage: lock: %w", err)
 		}
-		user.LockAccount()
+		user.LockAccount(s.clock.Now())
 		if err := s.repo.Update(txCtx, user); err != nil {
 			return fmt.Errorf("identity-manage: lock: %w", err)
 		}
@@ -405,7 +418,7 @@ func (s *Service) Unlock(ctx context.Context, id string) error {
 		if err != nil {
 			return fmt.Errorf("identity-manage: unlock: %w", err)
 		}
-		user.UnlockAccount()
+		user.UnlockAccount(s.clock.Now())
 		if err := s.repo.Update(txCtx, user); err != nil {
 			return fmt.Errorf("identity-manage: unlock: %w", err)
 		}
@@ -485,7 +498,7 @@ func (s *Service) ChangePassword(ctx context.Context, input ChangePasswordInput)
 	}
 
 	user.PasswordHash = string(newHash)
-	user.ClearPasswordResetRequired()
+	user.ClearPasswordResetRequired(s.clock.Now())
 
 	// F2 session convergence + F10 atomic boundary: wrap the password write and
 	// the session revoke in a single transaction so a RevokeByUserID failure

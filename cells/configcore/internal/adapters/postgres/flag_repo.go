@@ -5,12 +5,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"time"
 
 	"github.com/jackc/pgx/v5"
 
 	"github.com/ghbvf/gocell/cells/configcore/internal/domain"
 	"github.com/ghbvf/gocell/cells/configcore/internal/ports"
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/ctxcancel"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/query"
@@ -36,6 +36,7 @@ const flagColumns = "id, key, enabled, rollout_percentage, description, version,
 type FlagRepository struct {
 	db      DBTX     // test-only: set by newFlagRepositoryFromDBTX
 	session *Session // production path: resolves ambient tx via persistence.TxCtxKey
+	clock   clock.Clock
 }
 
 // NewFlagRepository creates a FlagRepository that resolves the ambient
@@ -45,8 +46,12 @@ type FlagRepository struct {
 // The adapterpg schema guard (VerifyExpectedVersion) enforces the actual
 // current expected version at startup; this comment is documentation-only
 // and deliberately does not duplicate that check.
-func NewFlagRepository(s *Session) *FlagRepository {
-	return &FlagRepository{session: s}
+func NewFlagRepository(s *Session, clk ...clock.Clock) *FlagRepository {
+	c := clock.Real()
+	if len(clk) > 0 && clk[0] != nil {
+		c = clk[0]
+	}
+	return &FlagRepository{session: s, clock: c}
 }
 
 func (r *FlagRepository) resolveDB(ctx context.Context) DBTX {
@@ -124,7 +129,7 @@ func (r *FlagRepository) Create(ctx context.Context, flag *domain.FeatureFlag) e
 		(` + flagColumns + `)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`
 
-	now := time.Now()
+	now := r.clock.Now()
 	if flag.CreatedAt.IsZero() {
 		flag.CreatedAt = now
 	}

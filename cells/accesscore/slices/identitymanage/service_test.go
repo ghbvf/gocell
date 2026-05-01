@@ -182,11 +182,11 @@ func seedUserWithHash(t *testing.T, repo *mem.UserRepository, username, password
 	t.Helper()
 	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.MinCost)
 	require.NoError(t, err)
-	user, err := domain.NewUser(username, username+"@test.com", string(hash))
+	user, err := domain.NewUser(username, username+"@test.com", string(hash), time.Now())
 	require.NoError(t, err)
 	user.ID = "usr-" + username
 	if markReset {
-		user.MarkPasswordResetRequired()
+		user.MarkPasswordResetRequired(time.Now())
 	}
 	require.NoError(t, repo.Create(context.Background(), user))
 	return user
@@ -359,7 +359,7 @@ func TestService_ChangePassword_RevokesPriorSessions(t *testing.T) {
 
 	// Seed two active sessions for this user.
 	for _, sid := range []string{"sess-old-1", "sess-old-2"} {
-		sess, sessErr := domain.NewSession("usr-cp-revoke", "at", time.Now().Add(time.Hour))
+		sess, sessErr := domain.NewSession("usr-cp-revoke", "at", time.Now().Add(time.Hour), time.Now())
 		require.NoError(t, sessErr)
 		sess.ID = sid
 		require.NoError(t, sessionRepo.Create(context.Background(), sess))
@@ -739,10 +739,10 @@ func TestService_Unlock_GetByIDAndUpdateInsideTx(t *testing.T) {
 // unlock:" so the call site is identifiable.
 func TestService_Unlock_UpdateErrorPropagatesAndAbortsBeforeLog(t *testing.T) {
 	innerRepo := mem.NewUserRepository()
-	user, err := domain.NewUser("rb", "rb@e.t", "hash")
+	user, err := domain.NewUser("rb", "rb@e.t", "hash", time.Now())
 	require.NoError(t, err)
 	user.ID = "usr-rb"
-	user.LockAccount()
+	user.LockAccount(time.Now())
 	require.NoError(t, innerRepo.Create(context.Background(), user))
 
 	failRepo := &failingUpdateRepo{UserRepository: innerRepo, updateErr: errors.New("disk full")}
@@ -897,7 +897,7 @@ func (s *failingRefreshStore) RevokeUser(_ context.Context, _ string) error {
 // log line does not fire (would mislead operators).
 func TestService_Lock_RefreshRevokeFailureAbortsBeforePublishAndLog(t *testing.T) {
 	userRepo := mem.NewUserRepository()
-	domainUser, err := domain.NewUser("rf-fail", "rf@e.t", "hash")
+	domainUser, err := domain.NewUser("rf-fail", "rf@e.t", "hash", time.Now())
 	require.NoError(t, err)
 	domainUser.ID = "usr-rf-fail"
 	require.NoError(t, userRepo.Create(context.Background(), domainUser))
@@ -1066,7 +1066,7 @@ func TestService_Lock_NoActor_ReturnsUnauthorized(t *testing.T) {
 // signal that the lock was not durably announced.
 func TestService_Lock_PublishFailureAbortsBeforeLog(t *testing.T) {
 	userRepo := mem.NewUserRepository()
-	domainUser, err := domain.NewUser("pub-fail", "pub@e.t", "hash")
+	domainUser, err := domain.NewUser("pub-fail", "pub@e.t", "hash", time.Now())
 	require.NoError(t, err)
 	domainUser.ID = "usr-pub-fail"
 	require.NoError(t, userRepo.Create(context.Background(), domainUser))

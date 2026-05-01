@@ -207,7 +207,7 @@ func TestBootstrap_SkipsWhenAdminExists(t *testing.T) {
 	cfg := makeCfg(t)
 
 	// Seed an admin user directly to simulate an already-bootstrapped state.
-	adminUser, err := domain.NewUser("admin", "admin@gocell.local", "$2a$12$existinghash")
+	adminUser, err := domain.NewUser("admin", "admin@gocell.local", "$2a$12$existinghash", time.Now())
 	require.NoError(t, err)
 	adminUser.ID = "usr-existing-admin"
 	require.NoError(t, deps.RoleRepo.Create(context.Background(), &domain.Role{
@@ -345,11 +345,11 @@ func TestBootstrap_OrphanUserRecoveryResumesAssign(t *testing.T) {
 	const crashedRunID = "44444444-4444-4444-8444-444444444477"
 	// Simulate the "previous run crashed between Create and AssignToUser"
 	// state: admin username row exists, but no admin role assignment.
-	orphan, err := domain.NewUser("admin", "admin@gocell.local", "$2a$12$orphanedhashFromPrevRun")
+	orphan, err := domain.NewUser("admin", "admin@gocell.local", "$2a$12$orphanedhashFromPrevRun", time.Now())
 	require.NoError(t, err)
 	orphan.ID = crashedRunID
-	orphan.MarkProvisionPending(domain.UserSourceBootstrap)
-	orphan.MarkPasswordResetRequired()
+	orphan.MarkProvisionPending(domain.UserSourceBootstrap, time.Now())
+	orphan.MarkPasswordResetRequired(time.Now())
 	require.NoError(t, userRepo.Create(context.Background(), orphan))
 	count, err := roleRepo.CountByRole(context.Background(), domain.RoleAdmin)
 	require.NoError(t, err)

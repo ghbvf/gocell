@@ -754,7 +754,7 @@ func TestAccessCore_SessionRevocation_E2E(t *testing.T) {
 
 	// Seed a user.
 	hash, _ := bcrypt.GenerateFromPassword([]byte(testPassword), bcrypt.DefaultCost)
-	user, err := domain.NewUser("e2e-user", "e2e@test.com", string(hash))
+	user, err := domain.NewUser("e2e-user", "e2e@test.com", string(hash), time.Now())
 	require.NoError(t, err)
 	user.ID = "usr-e2e"
 	require.NoError(t, userRepo.Create(ctx, user))
@@ -804,7 +804,7 @@ func TestAccessCore_SessionRevocation_E2E(t *testing.T) {
 	// Revoke the session.
 	sess, err := sessionRepo.GetByID(ctx, sid)
 	require.NoError(t, err)
-	sess.Revoke()
+	sess.Revoke(time.Now())
 	require.NoError(t, sessionRepo.Update(ctx, sess))
 
 	// Verify same token again — should be rejected.
@@ -837,7 +837,7 @@ func TestAccessCore_RefreshTokenRevocation_E2E(t *testing.T) {
 
 	// Seed a user.
 	hash, _ := bcrypt.GenerateFromPassword([]byte(testPassword), bcrypt.DefaultCost)
-	user, err := domain.NewUser("refresh-user", "refresh@test.com", string(hash))
+	user, err := domain.NewUser("refresh-user", "refresh@test.com", string(hash), time.Now())
 	require.NoError(t, err)
 	user.ID = "usr-refresh"
 	require.NoError(t, userRepo.Create(ctx, user))
@@ -899,7 +899,7 @@ func TestAccessCore_RefreshTokenRevocation_E2E(t *testing.T) {
 	// Revoke the session.
 	sess, err := sessionRepo.GetByID(ctx, sid)
 	require.NoError(t, err)
-	sess.Revoke()
+	sess.Revoke(time.Now())
 	require.NoError(t, sessionRepo.Update(ctx, sess))
 
 	// Refreshed token should now be rejected.
@@ -922,7 +922,7 @@ func seedAdminUser(
 	hash, err := bcrypt.GenerateFromPassword([]byte(password), domain.BcryptCost)
 	require.NoError(t, err)
 
-	user, err := domain.NewUser(username, username+"@gocell.local", string(hash))
+	user, err := domain.NewUser(username, username+"@gocell.local", string(hash), time.Now())
 	require.NoError(t, err)
 	user.ID = "usr-admin-prefill"
 

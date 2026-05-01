@@ -7,6 +7,7 @@ import (
 
 	"github.com/ghbvf/gocell/cells/accesscore/internal/domain"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/ports"
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
@@ -14,14 +15,21 @@ var _ ports.SessionRepository = (*SessionRepository)(nil)
 
 // SessionRepository is an in-memory implementation of ports.SessionRepository.
 type SessionRepository struct {
-	mu   sync.RWMutex
-	byID map[string]*domain.Session
+	mu    sync.RWMutex
+	byID  map[string]*domain.Session
+	clock clock.Clock
 }
 
 // NewSessionRepository creates an empty in-memory SessionRepository.
-func NewSessionRepository() *SessionRepository {
+// clk is the clock used for timestamping revocations; defaults to clock.Real().
+func NewSessionRepository(clk ...clock.Clock) *SessionRepository {
+	c := clock.Real()
+	if len(clk) > 0 && clk[0] != nil {
+		c = clk[0]
+	}
 	return &SessionRepository{
-		byID: make(map[string]*domain.Session),
+		byID:  make(map[string]*domain.Session),
+		clock: c,
 	}
 }
 
@@ -84,7 +92,7 @@ func (r *SessionRepository) RevokeByIDAndOwner(_ context.Context, id, ownerUserI
 	if !ok || s.UserID != ownerUserID {
 		return errcode.NewDomain(errcode.ErrSessionNotFound, "session not found: "+id)
 	}
-	s.Revoke()
+	s.Revoke(r.clock.Now())
 	return nil
 }
 
@@ -92,9 +100,10 @@ func (r *SessionRepository) RevokeByUserID(_ context.Context, userID string) err
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
+	now := r.clock.Now()
 	for _, s := range r.byID {
 		if s.UserID == userID {
-			s.Revoke()
+			s.Revoke(now)
 		}
 	}
 	return nil

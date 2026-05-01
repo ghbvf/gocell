@@ -56,7 +56,7 @@ func (noopTxRunner) RunInTx(ctx context.Context, fn func(context.Context) error)
 var _ persistence.TxRunner = noopTxRunner{}
 
 func seedContractSession(repo *mem.SessionRepository) string {
-	sess, _ := domain.NewSession(testutil.TestID("usr-1"), "at-1", time.Now().Add(time.Hour))
+	sess, _ := domain.NewSession(testutil.TestID("usr-1"), "at-1", time.Now().Add(time.Hour), time.Now())
 	sess.ID = testutil.TestID("sess-1")
 	_ = repo.Create(context.Background(), sess)
 	return sess.ID

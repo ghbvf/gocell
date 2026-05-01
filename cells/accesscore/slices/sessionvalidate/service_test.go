@@ -55,7 +55,7 @@ func TestService_VerifyIntent(t *testing.T) {
 		ExpiresAt:   time.Now().Add(time.Hour),
 		CreatedAt:   time.Now(),
 	}
-	revokedSession.Revoke()
+	revokedSession.Revoke(time.Now())
 	require.NoError(t, sessionRepo.Create(context.Background(), revokedSession))
 
 	// Seed an expired session.

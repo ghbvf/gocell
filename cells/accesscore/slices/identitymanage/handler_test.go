@@ -481,7 +481,7 @@ func seedUserInRepo(t *testing.T, repo *mem.UserRepository, id, username string)
 	t.Helper()
 	hash, err := bcrypt.GenerateFromPassword([]byte("oldpass"), bcrypt.MinCost)
 	require.NoError(t, err)
-	user, err := domain.NewUser(username, username+"@test.com", string(hash))
+	user, err := domain.NewUser(username, username+"@test.com", string(hash), time.Now())
 	require.NoError(t, err)
 	user.ID = id
 	require.NoError(t, repo.Create(context.Background(), user))

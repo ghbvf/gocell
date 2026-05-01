@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/ghbvf/gocell/cells/configcore/internal/domain"
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/query"
 )
@@ -19,7 +20,7 @@ import (
 // newFlagRepositoryFromDBTX is a test-only constructor that bypasses the
 // Session layer, allowing unit tests to inject a mockDB directly.
 func newFlagRepositoryFromDBTX(db DBTX) *FlagRepository {
-	return &FlagRepository{db: db}
+	return &FlagRepository{db: db, clock: clock.Real()}
 }
 
 // TestFlagRepo_Create_GetByKey_Update_Delete exercises the CRUD round-trip
@@ -73,7 +74,7 @@ func TestFlagRepo_Create_GetByKey_Update_Delete(t *testing.T) {
 				values: []any{"flg-1", "dark-mode", true, 50, "updated desc", 2, now, now},
 			},
 		}
-		repo := &FlagRepository{db: db}
+		repo := &FlagRepository{db: db, clock: clock.Real()}
 
 		got, err := repo.Update(context.Background(), "dark-mode", true, 50, "updated desc")
 		require.NoError(t, err)
@@ -93,7 +94,7 @@ func TestFlagRepo_Create_GetByKey_Update_Delete(t *testing.T) {
 				values: []any{"flg-1", "dark-mode", false, 0, "desc", 1, now, now},
 			},
 		}
-		repo := &FlagRepository{db: db}
+		repo := &FlagRepository{db: db, clock: clock.Real()}
 
 		got, err := repo.Delete(context.Background(), "dark-mode")
 		require.NoError(t, err)
@@ -116,7 +117,7 @@ func TestFlagRepo_Toggle_OnlyAffectsEnabledColumn(t *testing.T) {
 			values: []any{"flg-1", "dark-mode", true, 25, "desc", 2, now, now},
 		},
 	}
-	repo := &FlagRepository{db: capDB}
+	repo := &FlagRepository{db: capDB, clock: clock.Real()}
 
 	flag, err := repo.Toggle(context.Background(), "dark-mode", true)
 	require.NoError(t, err)
@@ -208,7 +209,7 @@ func TestFlagRepo_Toggle_Concurrent_NoLost(t *testing.T) {
 		mu:      &mu,
 	}
 
-	repo := &FlagRepository{db: db}
+	repo := &FlagRepository{db: db, clock: clock.Real()}
 
 	var wg sync.WaitGroup
 	results := make([]*domain.FeatureFlag, 2)

@@ -6,6 +6,7 @@ import (
 	"io"
 	"log/slog"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
@@ -160,10 +161,10 @@ func TestProvisioner_Ensure_OrphanRecovered_ResumesAssignment(t *testing.T) {
 	userRepo := mem.NewUserRepository()
 	// Pre-seed an orphan user (previous crash between Create + Assign): row
 	// exists but no admin role assigned.
-	orphan, err := domain.NewUser("admin", "admin@local", "$2a$10$oldhash000000000000000000000000000000000000000000000")
+	orphan, err := domain.NewUser("admin", "admin@local", "$2a$10$oldhash000000000000000000000000000000000000000000000", time.Now())
 	require.NoError(t, err)
 	orphan.ID = orphanPriorID
-	orphan.MarkProvisionPending(domain.UserSourceBootstrap)
+	orphan.MarkProvisionPending(domain.UserSourceBootstrap, time.Now())
 	require.NoError(t, userRepo.Create(context.Background(), orphan))
 
 	roleRepo := mem.NewRoleRepository()
@@ -188,7 +189,7 @@ func TestProvisioner_Ensure_OrphanRecovered_ResumesAssignment(t *testing.T) {
 
 func TestProvisioner_Ensure_DuplicateIdentityUser_ReturnsConflictWithoutTakeover(t *testing.T) {
 	userRepo := mem.NewUserRepository()
-	existing, err := domain.NewUser("admin", "admin@local", "$2a$10$existinghash000000000000000000000000000000000000000")
+	existing, err := domain.NewUser("admin", "admin@local", "$2a$10$existinghash000000000000000000000000000000000000000", time.Now())
 	require.NoError(t, err)
 	existing.ID = "usr-existing-identity"
 	require.NoError(t, userRepo.Create(context.Background(), existing))
@@ -218,11 +219,11 @@ func TestProvisioner_Ensure_DuplicateIdentityUser_ReturnsConflictWithoutTakeover
 func TestProvisioner_Ensure_DuplicateDifferentSource_ReturnsConflictWithoutTakeover(t *testing.T) {
 	const bootstrapPendingID = "33333333-3333-4333-8333-333333333377"
 	userRepo := mem.NewUserRepository()
-	existing, err := domain.NewUser("admin", "admin@local", "$2a$10$bootstraphash00000000000000000000000000000000000000")
+	existing, err := domain.NewUser("admin", "admin@local", "$2a$10$bootstraphash00000000000000000000000000000000000000", time.Now())
 	require.NoError(t, err)
 	existing.ID = bootstrapPendingID
-	existing.MarkProvisionPending(domain.UserSourceBootstrap)
-	existing.MarkPasswordResetRequired()
+	existing.MarkProvisionPending(domain.UserSourceBootstrap, time.Now())
+	existing.MarkPasswordResetRequired(time.Now())
 	require.NoError(t, userRepo.Create(context.Background(), existing))
 
 	roleRepo := mem.NewRoleRepository()
@@ -253,9 +254,9 @@ func TestProvisioner_Ensure_DuplicateDifferentSource_ReturnsConflictWithoutTakeo
 func TestProvisioner_Ensure_OrphanUpdateFails_Surfaced(t *testing.T) {
 	// Orphan path reached, but UserRepo.Update fails when rewriting the hash.
 	inner := mem.NewUserRepository()
-	orphan, _ := domain.NewUser("admin", "admin@local", "$2a$10$orphanold")
+	orphan, _ := domain.NewUser("admin", "admin@local", "$2a$10$orphanold", time.Now())
 	orphan.ID = "22222222-2222-4222-8222-222222222277"
-	orphan.MarkProvisionPending(domain.UserSourceBootstrap)
+	orphan.MarkProvisionPending(domain.UserSourceBootstrap, time.Now())
 	require.NoError(t, inner.Create(context.Background(), orphan))
 	userRepo := &updateFailUserRepo{inner: inner, updateErr: errors.New("update failed")}
 
@@ -398,7 +399,7 @@ func newProvisioner(
 
 func seedAdmin(t *testing.T, userRepo ports.UserRepository, roleRepo ports.RoleRepository, id string) {
 	t.Helper()
-	u, err := domain.NewUser("seedadmin", "seed@local", "$2a$10$hash000000000000000000000000000000000000000000000000")
+	u, err := domain.NewUser("seedadmin", "seed@local", "$2a$10$hash000000000000000000000000000000000000000000000000", time.Now())
 	require.NoError(t, err)
 	u.ID = id
 	require.NoError(t, userRepo.Create(context.Background(), u))
@@ -429,7 +430,7 @@ func (r *duplicateUserRepo) GetByID(ctx context.Context, id string) (*domain.Use
 	return nil, errors.New("not expected on race path")
 }
 func (r *duplicateUserRepo) GetByUsername(ctx context.Context, username string) (*domain.User, error) {
-	u, _ := domain.NewUser(username, username+"@x", "$2a$10$hashold")
+	u, _ := domain.NewUser(username, username+"@x", "$2a$10$hashold", time.Now())
 	u.ID = "usr-orphan"
 	return u, nil
 }

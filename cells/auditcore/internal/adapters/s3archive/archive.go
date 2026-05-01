@@ -7,10 +7,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"time"
 
 	"github.com/ghbvf/gocell/cells/auditcore/internal/domain"
 	"github.com/ghbvf/gocell/cells/auditcore/internal/ports"
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
@@ -27,14 +27,21 @@ var _ ports.ArchiveStore = (*ArchiveStore)(nil)
 type ArchiveStore struct {
 	uploader  ObjectUploader
 	keyPrefix string
+	clock     clock.Clock
 }
 
 // NewArchiveStore creates an ArchiveStore that uses the given ObjectUploader.
 // keyPrefix is prepended to all object keys (e.g., "audit/archive/").
-func NewArchiveStore(uploader ObjectUploader, keyPrefix string) *ArchiveStore {
+// clk is used to generate timestamped object keys; defaults to clock.Real().
+func NewArchiveStore(uploader ObjectUploader, keyPrefix string, clk ...clock.Clock) *ArchiveStore {
+	c := clock.Real()
+	if len(clk) > 0 && clk[0] != nil {
+		c = clk[0]
+	}
 	return &ArchiveStore{
 		uploader:  uploader,
 		keyPrefix: keyPrefix,
+		clock:     c,
 	}
 }
 
@@ -52,7 +59,7 @@ func (s *ArchiveStore) Archive(ctx context.Context, entries []*domain.AuditEntry
 
 	key := fmt.Sprintf("%s%s-%d.json",
 		s.keyPrefix,
-		time.Now().UTC().Format("2006/01/02/150405"),
+		s.clock.Now().UTC().Format("2006/01/02/150405"),
 		len(entries),
 	)
 

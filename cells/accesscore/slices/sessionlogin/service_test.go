@@ -160,7 +160,7 @@ func TestNewService_RejectsTypedNilDependencies(t *testing.T) {
 // seedUser creates a user with a bcrypt-hashed password.
 func seedUser(repo *mem.UserRepository, username, password string) {
 	hash, _ := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
-	user, _ := domain.NewUser(username, username+"@test.com", string(hash))
+	user, _ := domain.NewUser(username, username+"@test.com", string(hash), time.Now())
 	user.ID = "usr-" + username
 	_ = repo.Create(context.Background(), user)
 }
@@ -201,7 +201,7 @@ func TestService_Login(t *testing.T) {
 			setup: func(r *mem.UserRepository) {
 				seedUser(r, "locked", "pass")
 				u, _ := r.GetByUsername(context.Background(), "locked")
-				u.LockAccount()
+				u.LockAccount(time.Now())
 				_ = r.Update(context.Background(), u)
 			},
 			input:   LoginInput{Username: "locked", Password: "pass"},
@@ -288,9 +288,9 @@ func TestLogin_PasswordResetRequiredFlagPropagated(t *testing.T) {
 
 	// Seed user with PasswordResetRequired=true.
 	hash, _ := bcrypt.GenerateFromPassword([]byte("pass123"), bcrypt.MinCost)
-	user, _ := domain.NewUser("reset-user", "reset@test.com", string(hash))
+	user, _ := domain.NewUser("reset-user", "reset@test.com", string(hash), time.Now())
 	user.ID = "usr-reset"
-	user.MarkPasswordResetRequired()
+	user.MarkPasswordResetRequired(time.Now())
 	_ = userRepo.Create(context.Background(), user)
 
 	pair, err := svc.Login(context.Background(), LoginInput{Username: "reset-user", Password: "pass123"})
@@ -363,7 +363,7 @@ func TestService_IssueForUser_SessionPersisted(t *testing.T) {
 	assert.Equal(t, pair.SessionID, session.ID)
 	assert.Equal(t, u.ID, session.UserID)
 	assert.False(t, session.IsRevoked(), "newly issued session must not be revoked")
-	assert.False(t, session.IsExpired(), "newly issued session must not be expired")
+	assert.False(t, session.IsExpired(time.Now()), "newly issued session must not be expired")
 }
 
 func TestService_IssueForUser_RefreshStoreUnavailableReturnsInfraAndNoOrphanSession(t *testing.T) {

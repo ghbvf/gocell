@@ -137,13 +137,13 @@ func bootstrapAdminUser(t *testing.T, f *e2eFixture, username, plainPassword str
 	hash, err := bcrypt.GenerateFromPassword([]byte(plainPassword), domain.BcryptCost)
 	require.NoError(t, err)
 
-	user, err := domain.NewUser(username, username+"@gocell.local", string(hash))
+	user, err := domain.NewUser(username, username+"@gocell.local", string(hash), time.Now())
 	require.NoError(t, err)
 	// PR-A45: handler edge ParseUUIDPathParam requires canonical UUIDs in
 	// path positions; testID derives a deterministic UUID from the username
 	// so seed and request paths agree.
 	user.ID = testutil.TestID("e2e-" + username)
-	user.MarkPasswordResetRequired()
+	user.MarkPasswordResetRequired(time.Now())
 	require.NoError(t, f.userRepo.Create(context.Background(), user))
 
 	// Assign admin role.

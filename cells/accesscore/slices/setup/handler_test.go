@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
@@ -217,7 +218,7 @@ func TestHandler_CreateAdmin_DuplicateIdentityUser_Returns409(t *testing.T) {
 
 func seedIdentityUser(t *testing.T, userRepo *mem.UserRepository, username, email string) {
 	t.Helper()
-	u, err := domain.NewUser(username, email, "$2a$10$stubhashXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX")
+	u, err := domain.NewUser(username, email, "$2a$10$stubhashXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX", time.Now())
 	require.NoError(t, err)
 	u.ID = "usr-existing"
 	require.NoError(t, userRepo.Create(context.Background(), u))

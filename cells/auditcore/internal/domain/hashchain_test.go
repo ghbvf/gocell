@@ -2,6 +2,7 @@ package domain
 
 import (
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -34,7 +35,7 @@ func TestHashChain_Append(t *testing.T) {
 			entries := make([]*AuditEntry, 0, tt.appendN)
 
 			for i := 0; i < tt.appendN; i++ {
-				e := hc.Append("evt-id", "login", "actor-1", []byte(`{"ip":"10.0.0.1"}`))
+				e := hc.Append("evt-id", "login", "actor-1", []byte(`{"ip":"10.0.0.1"}`), time.Now())
 				entries = append(entries, e)
 			}
 
@@ -67,7 +68,7 @@ func TestHashChain_Verify(t *testing.T) {
 	// Build a chain of 5 entries.
 	entries := make([]*AuditEntry, 0, 5)
 	for i := range 5 {
-		e := hc.Append("evt-"+string(rune('A'+i)), "access.login", "actor-1", []byte(`{}`))
+		e := hc.Append("evt-"+string(rune('A'+i)), "access.login", "actor-1", []byte(`{}`), time.Now())
 		entries = append(entries, e)
 	}
 
@@ -137,8 +138,9 @@ func TestHashChain_DifferentKeys_DifferentHashes(t *testing.T) {
 	hc1 := NewHashChain([]byte("key-alpha"))
 	hc2 := NewHashChain([]byte("key-beta"))
 
-	e1 := hc1.Append("evt-1", "login", "actor", []byte(`{}`))
-	e2 := hc2.Append("evt-1", "login", "actor", []byte(`{}`))
+	now := time.Now()
+	e1 := hc1.Append("evt-1", "login", "actor", []byte(`{}`), now)
+	e2 := hc2.Append("evt-1", "login", "actor", []byte(`{}`), now)
 
 	// Same input but different HMAC keys must produce different hashes.
 	// Timestamps will differ so hashes will differ anyway, but this confirms

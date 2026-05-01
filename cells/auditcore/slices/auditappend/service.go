@@ -14,6 +14,7 @@ import (
 	"github.com/ghbvf/gocell/cells/auditcore/internal/domain"
 	"github.com/ghbvf/gocell/cells/auditcore/internal/dto"
 	"github.com/ghbvf/gocell/cells/auditcore/internal/ports"
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/persistence"
 )
@@ -55,6 +56,16 @@ func WithTxManager(tx persistence.TxRunner) Option {
 	return func(s *Service) { s.txRunner = persistence.RunnerOrNoop(tx) }
 }
 
+// WithClock sets the clock used for audit entry timestamps. Defaults to
+// clock.Real() when not provided.
+func WithClock(clk clock.Clock) Option {
+	return func(s *Service) {
+		if clk != nil {
+			s.clock = clk
+		}
+	}
+}
+
 // Service appends events to the hash chain and persists them.
 type Service struct {
 	mu       sync.Mutex
@@ -63,6 +74,7 @@ type Service struct {
 	txRunner persistence.TxRunner
 	emitter  outbox.Emitter
 	logger   *slog.Logger
+	clock    clock.Clock
 }
 
 // NewService creates an audit-append Service.
@@ -78,6 +90,7 @@ func NewService(
 		txRunner: persistence.NoopTxRunner{},
 		emitter:  outbox.NewNoopEmitter(),
 		logger:   logger,
+		clock:    clock.Real(),
 	}
 	for _, o := range opts {
 		o(s)
@@ -139,7 +152,7 @@ func (s *Service) HandleEvent(ctx context.Context, entry outbox.Entry) error {
 	}
 
 	// Append to hash chain.
-	auditEntry := s.chain.Append(entry.ID, entry.EventType, actorID, entry.Payload)
+	auditEntry := s.chain.Append(entry.ID, entry.EventType, actorID, entry.Payload, s.clock.Now())
 	auditEntry.ID = "audit" + "-" + uuid.NewString()
 
 	appendedEvent := dto.AuditAppendedEvent{

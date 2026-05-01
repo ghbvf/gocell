@@ -13,12 +13,12 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"time"
 
 	"github.com/google/uuid"
 
 	"github.com/ghbvf/gocell/cells/configcore/internal/domain"
 	"github.com/ghbvf/gocell/cells/configcore/internal/ports"
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/validation"
@@ -32,11 +32,22 @@ func WithTxManager(tx persistence.TxRunner) Option {
 	return func(s *Service) { s.txRunner = persistence.RunnerOrNoop(tx) }
 }
 
+// WithClock sets the clock used for feature flag timestamps. Defaults to
+// clock.Real() when not provided.
+func WithClock(clk clock.Clock) Option {
+	return func(s *Service) {
+		if clk != nil {
+			s.clock = clk
+		}
+	}
+}
+
 // Service implements flag write business logic (L1 LocalTx).
 type Service struct {
 	repo     ports.FlagRepository
 	txRunner persistence.TxRunner
 	logger   *slog.Logger
+	clock    clock.Clock
 }
 
 // NewService creates a flag-write Service.
@@ -45,6 +56,7 @@ func NewService(repo ports.FlagRepository, logger *slog.Logger, opts ...Option) 
 		repo:     repo,
 		txRunner: persistence.NoopTxRunner{},
 		logger:   logger,
+		clock:    clock.Real(),
 	}
 	for _, o := range opts {
 		o(s)
@@ -76,7 +88,7 @@ func (s *Service) Create(ctx context.Context, input CreateInput) (*domain.Featur
 		return nil, err
 	}
 
-	now := time.Now()
+	now := s.clock.Now()
 	flag := &domain.FeatureFlag{
 		ID:                "flg-" + uuid.NewString(),
 		Key:               input.Key,

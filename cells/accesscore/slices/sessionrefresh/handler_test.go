@@ -31,7 +31,7 @@ func setup() (http.Handler, string) {
 	sessionRepo := mem.NewSessionRepository()
 	refreshStore := newTestRefreshStore()
 
-	sess, _ := domain.NewSession("usr-1", "access-tok", time.Now().Add(time.Hour))
+	sess, _ := domain.NewSession("usr-1", "access-tok", time.Now().Add(time.Hour), time.Now())
 	sess.ID = "sess-1"
 	_ = sessionRepo.Create(context.Background(), sess)
 
@@ -44,7 +44,7 @@ func setup() (http.Handler, string) {
 	// F1 fail-closed requires the session's user to be resolvable; seed a user
 	// so rotateAndIssue does not abort.
 	userRepo := mem.NewUserRepository()
-	u, _ := domain.NewUser("usr-1", "usr-1@test.local", "hash")
+	u, _ := domain.NewUser("usr-1", "usr-1@test.local", "hash", time.Now())
 	u.ID = "usr-1"
 	_ = userRepo.Create(context.Background(), u)
 

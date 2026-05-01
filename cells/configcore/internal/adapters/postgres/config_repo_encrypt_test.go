@@ -28,6 +28,7 @@ import (
 
 	configcrypto "github.com/ghbvf/gocell/cells/configcore/internal/crypto"
 	"github.com/ghbvf/gocell/cells/configcore/internal/domain"
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/query"
 	"github.com/ghbvf/gocell/runtime/crypto"
@@ -98,7 +99,7 @@ func (f *fakeValueTransformer) Decrypt(_ context.Context, ciphertext []byte, key
 // ---------------------------------------------------------------------------
 
 func newEncryptedRepoFromDBTX(db DBTX, tr crypto.ValueTransformer) *ConfigRepository {
-	return &ConfigRepository{db: db, transformer: tr, logger: slog.Default()}
+	return &ConfigRepository{db: db, transformer: tr, logger: slog.Default(), clock: clock.Real()}
 }
 
 // ---------------------------------------------------------------------------

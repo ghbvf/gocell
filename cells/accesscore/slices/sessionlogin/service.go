@@ -16,6 +16,7 @@ import (
 	"github.com/ghbvf/gocell/cells/accesscore/internal/ports"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/sessionmint"
 	"github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/errcode"
@@ -41,6 +42,16 @@ func WithTxManager(tx persistence.TxRunner) Option {
 	return func(s *Service) { s.txRunner = persistence.RunnerOrNoop(tx) }
 }
 
+// WithClock sets the clock used for session creation timestamps. Defaults to
+// clock.Real() when not provided.
+func WithClock(clk clock.Clock) Option {
+	return func(s *Service) {
+		if clk != nil {
+			s.clock = clk
+		}
+	}
+}
+
 // Service implements password login with JWT issuance.
 type Service struct {
 	userRepo     ports.UserRepository
@@ -51,6 +62,7 @@ type Service struct {
 	emitter      outbox.Emitter
 	issuer       *auth.JWTIssuer
 	logger       *slog.Logger
+	clock        clock.Clock
 }
 
 // NewService creates a session-login Service. refreshStore issues the opaque
@@ -92,6 +104,7 @@ func NewService(
 		emitter:      outbox.NewNoopEmitter(),
 		issuer:       issuer,
 		logger:       logger,
+		clock:        clock.Real(),
 	}
 	for _, o := range opts {
 		o(s)
@@ -159,7 +172,7 @@ func (s *Service) Login(ctx context.Context, input LoginInput) (dto.TokenPair, e
 		return dto.TokenPair{}, err
 	}
 
-	session, err := domain.NewSession(user.ID, minted.AccessToken, minted.ExpiresAt)
+	session, err := domain.NewSession(user.ID, minted.AccessToken, minted.ExpiresAt, s.clock.Now())
 	if err != nil {
 		return dto.TokenPair{}, fmt.Errorf("session-login: create session: %w", err)
 	}
@@ -299,7 +312,7 @@ func (s *Service) IssueForUser(ctx context.Context, userID string) (dto.TokenPai
 	}
 
 	// Persist the session so sessionvalidate can look it up by sid claim.
-	session, err := domain.NewSession(userID, minted.AccessToken, minted.ExpiresAt)
+	session, err := domain.NewSession(userID, minted.AccessToken, minted.ExpiresAt, s.clock.Now())
 	if err != nil {
 		return dto.TokenPair{}, fmt.Errorf("session-login: IssueForUser create session: %w", err)
 	}

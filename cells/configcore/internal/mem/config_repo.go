@@ -7,10 +7,10 @@ import (
 	"context"
 	"fmt"
 	"sync"
-	"time"
 
 	"github.com/ghbvf/gocell/cells/configcore/internal/domain"
 	"github.com/ghbvf/gocell/cells/configcore/internal/ports"
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/query"
 )
@@ -23,13 +23,20 @@ type ConfigRepository struct {
 	mu       sync.RWMutex
 	entries  map[string]*domain.ConfigEntry     // key -> entry
 	versions map[string][]*domain.ConfigVersion // configID -> versions
+	clock    clock.Clock
 }
 
 // NewConfigRepository creates an empty in-memory ConfigRepository.
-func NewConfigRepository() *ConfigRepository {
+// clk is used for UpdatedAt timestamps; defaults to clock.Real().
+func NewConfigRepository(clk ...clock.Clock) *ConfigRepository {
+	c := clock.Real()
+	if len(clk) > 0 && clk[0] != nil {
+		c = clk[0]
+	}
 	return &ConfigRepository{
 		entries:  make(map[string]*domain.ConfigEntry),
 		versions: make(map[string][]*domain.ConfigVersion),
+		clock:    c,
 	}
 }
 
@@ -68,7 +75,7 @@ func (r *ConfigRepository) Update(_ context.Context, key string, value string) (
 	existing.Value = value
 	// Preserve existing Sensitive — do NOT change it.
 	existing.Version++
-	existing.UpdatedAt = time.Now()
+	existing.UpdatedAt = r.clock.Now()
 	clone := *existing
 	return &clone, nil
 }
@@ -84,7 +91,7 @@ func (r *ConfigRepository) UpdateForRollback(_ context.Context, key string, valu
 	existing.Value = value
 	existing.Sensitive = sensitive
 	existing.Version++
-	existing.UpdatedAt = time.Now()
+	existing.UpdatedAt = r.clock.Now()
 	clone := *existing
 	return &clone, nil
 }

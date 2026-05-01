@@ -200,7 +200,7 @@ func TestInit_BootstrapAlreadyHasAdmin_NilCleaner(t *testing.T) {
 	require.NoError(t, roleRepo.Create(context.Background(), &domain.Role{
 		ID: domain.RoleAdmin, Name: domain.RoleAdmin,
 	}))
-	adminUser, err := domain.NewUser("admin", "admin@gocell.local", "$2a$12$testhash")
+	adminUser, err := domain.NewUser("admin", "admin@gocell.local", "$2a$12$testhash", time.Now())
 	require.NoError(t, err)
 	adminUser.ID = "usr-preexisting-admin"
 	require.NoError(t, userRepo.Create(context.Background(), adminUser))
@@ -252,7 +252,7 @@ func TestInit_BootstrapAdminExists_FreshOrphanFile_SweepCleanerRegistered(t *tes
 	require.NoError(t, roleRepo.Create(context.Background(), &domain.Role{
 		ID: domain.RoleAdmin, Name: domain.RoleAdmin,
 	}))
-	adminUser, err := domain.NewUser("admin", "admin@gocell.local", "$2a$12$testhash")
+	adminUser, err := domain.NewUser("admin", "admin@gocell.local", "$2a$12$testhash", time.Now())
 	require.NoError(t, err)
 	adminUser.ID = "usr-preexisting-admin"
 	require.NoError(t, userRepo.Create(context.Background(), adminUser))

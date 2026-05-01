@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/ghbvf/gocell/cells/accesscore/internal/ports"
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/runtime/auth"
 )
@@ -43,6 +44,7 @@ type HTTPConfigGetter struct {
 	baseURL string
 	ring    *auth.HMACKeyRing
 	client  *http.Client
+	clock   clock.Clock
 }
 
 // NewHTTPConfigGetter creates a new HTTPConfigGetter.
@@ -53,6 +55,7 @@ func NewHTTPConfigGetter(baseURL string, ring *auth.HMACKeyRing) *HTTPConfigGett
 		baseURL: baseURL,
 		ring:    ring,
 		client:  &http.Client{Timeout: defaultConfigClientHTTPTimeout},
+		clock:   clock.Real(),
 	}
 }
 
@@ -63,6 +66,7 @@ func NewHTTPConfigGetterWithHTTPClient(baseURL string, ring *auth.HMACKeyRing, h
 		baseURL: baseURL,
 		ring:    ring,
 		client:  httpClient,
+		clock:   clock.Real(),
 	}
 }
 
@@ -79,7 +83,7 @@ func (c *HTTPConfigGetter) GetEntry(ctx context.Context, key string) (ports.Conf
 	}
 
 	// Sign the request with a service token so the InternalListener middleware accepts it.
-	token := auth.GenerateServiceToken(c.ring, http.MethodGet, path, "", time.Now())
+	token := auth.GenerateServiceToken(c.ring, http.MethodGet, path, "", c.clock.Now())
 	req.Header.Set("Authorization", "ServiceToken "+token)
 
 	resp, err := c.client.Do(req)

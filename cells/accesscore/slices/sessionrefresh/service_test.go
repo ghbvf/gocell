@@ -61,7 +61,7 @@ func TestNewService_IssuerDefaultAudienceWrittenOnRefresh(t *testing.T) {
 	wireToken, _, err := refreshStore.Issue(context.Background(), "sess-aud-refresh", "usr-aud-refresh")
 	require.NoError(t, err)
 
-	sess, err := domain.NewSession("usr-aud-refresh", "at", time.Now().Add(time.Hour))
+	sess, err := domain.NewSession("usr-aud-refresh", "at", time.Now().Add(time.Hour), time.Now())
 	require.NoError(t, err)
 	sess.ID = "sess-aud-refresh"
 	require.NoError(t, sessionRepo.Create(context.Background(), sess))
@@ -100,7 +100,7 @@ func newTestServiceWithClock(seedUsers ...string) (*Service, *mem.SessionReposit
 	roleRepo := mem.NewRoleRepository()
 	userRepo := mem.NewUserRepository()
 	for _, uid := range seedUsers {
-		u, _ := domain.NewUser(uid, uid+"@test.local", "hash")
+		u, _ := domain.NewUser(uid, uid+"@test.local", "hash", time.Now())
 		u.ID = uid
 		_ = userRepo.Create(context.Background(), u)
 	}
@@ -178,7 +178,7 @@ func issueTestWireToken(t *testing.T, userID, sessionID string) (*Service, *mem.
 	t.Helper()
 	svc, sessionRepo, refreshStore := newTestServiceWithRefreshStore(userID)
 
-	sess, err := domain.NewSession(userID, "at", time.Now().Add(time.Hour))
+	sess, err := domain.NewSession(userID, "at", time.Now().Add(time.Hour), time.Now())
 	require.NoError(t, err)
 	sess.ID = sessionID
 	require.NoError(t, sessionRepo.Create(context.Background(), sess))
@@ -219,14 +219,14 @@ func TestService_Refresh_RoleFetchFailure_AbortsRefresh(t *testing.T) {
 	sessionRepo := &countingSessionRepo{SessionRepository: mem.NewSessionRepository()}
 	roleRepo := &brokenRoleRepo{err: fmt.Errorf("roleRepo outage")}
 	userRepo := mem.NewUserRepository()
-	u, _ := domain.NewUser("usr-rolefail", "rolefail@test.local", "hash")
+	u, _ := domain.NewUser("usr-rolefail", "rolefail@test.local", "hash", time.Now())
 	u.ID = "usr-rolefail"
 	require.NoError(t, userRepo.Create(context.Background(), u))
 
 	refreshStore := newTestRefreshStore()
 	svc := MustNewService(sessionRepo, roleRepo, userRepo, refreshStore, testIssuer, slog.Default())
 
-	sess, err := domain.NewSession("usr-rolefail", "at", time.Now().Add(time.Hour))
+	sess, err := domain.NewSession("usr-rolefail", "at", time.Now().Add(time.Hour), time.Now())
 	require.NoError(t, err)
 	sess.ID = "sess-rolefail"
 	require.NoError(t, sessionRepo.Create(context.Background(), sess))
@@ -257,7 +257,7 @@ func TestService_Refresh(t *testing.T) {
 		{
 			name: "valid refresh",
 			setup: func(repo *mem.SessionRepository, rs refresh.Store) string {
-				sess, _ := domain.NewSession("usr-1", "at", time.Now().Add(time.Hour))
+				sess, _ := domain.NewSession("usr-1", "at", time.Now().Add(time.Hour), time.Now())
 				sess.ID = "sess-1"
 				_ = repo.Create(context.Background(), sess)
 				wire, _, _ := rs.Issue(context.Background(), "sess-1", "usr-1")
@@ -268,9 +268,9 @@ func TestService_Refresh(t *testing.T) {
 		{
 			name: "revoked session",
 			setup: func(repo *mem.SessionRepository, rs refresh.Store) string {
-				sess, _ := domain.NewSession("usr-2", "at", time.Now().Add(time.Hour))
+				sess, _ := domain.NewSession("usr-2", "at", time.Now().Add(time.Hour), time.Now())
 				sess.ID = "sess-2"
-				sess.Revoke()
+				sess.Revoke(time.Now())
 				_ = repo.Create(context.Background(), sess)
 				wire, _, _ := rs.Issue(context.Background(), "sess-2", "usr-2")
 				return wire
@@ -313,7 +313,7 @@ func TestService_Refresh_TokenRotation(t *testing.T) {
 	svc, repo, refreshStore, clock := newTestServiceWithClock("usr-rot")
 
 	// Create a session and issue a wire token.
-	sess, err := domain.NewSession("usr-rot", "at", time.Now().Add(time.Hour))
+	sess, err := domain.NewSession("usr-rot", "at", time.Now().Add(time.Hour), time.Now())
 	require.NoError(t, err)
 	sess.ID = "sess-rot"
 	require.NoError(t, repo.Create(context.Background(), sess))
@@ -339,7 +339,7 @@ func TestService_Refresh_TokenRotation(t *testing.T) {
 func TestService_Refresh_ConcurrentRefresh(t *testing.T) {
 	svc, repo, refreshStore := newTestServiceWithRefreshStore("usr-conc")
 
-	sess, err := domain.NewSession("usr-conc", "at", time.Now().Add(time.Hour))
+	sess, err := domain.NewSession("usr-conc", "at", time.Now().Add(time.Hour), time.Now())
 	require.NoError(t, err)
 	sess.ID = "sess-conc"
 	require.NoError(t, repo.Create(context.Background(), sess))
@@ -387,7 +387,7 @@ func TestService_Refresh_ConcurrentRefresh(t *testing.T) {
 func TestService_Refresh_NewTokensContainSessionID(t *testing.T) {
 	svc, repo, refreshStore := newTestServiceWithRefreshStore("usr-sid")
 
-	sess, err := domain.NewSession("usr-sid", "at", time.Now().Add(time.Hour))
+	sess, err := domain.NewSession("usr-sid", "at", time.Now().Add(time.Hour), time.Now())
 	require.NoError(t, err)
 	sess.ID = "sess-r1"
 	require.NoError(t, repo.Create(context.Background(), sess))
@@ -410,7 +410,7 @@ func TestService_Refresh_NewTokensContainSessionID(t *testing.T) {
 func TestService_Refresh_UpdatesSessionExpiryForRefreshedAccessToken(t *testing.T) {
 	svc, repo, refreshStore := newTestServiceWithRefreshStore("usr-exp")
 
-	expiredSession, err := domain.NewSession("usr-exp", "old-at", time.Now().Add(-time.Minute))
+	expiredSession, err := domain.NewSession("usr-exp", "old-at", time.Now().Add(-time.Minute), time.Now())
 	require.NoError(t, err)
 	expiredSession.ID = "sess-exp"
 	require.NoError(t, repo.Create(context.Background(), expiredSession))
@@ -441,14 +441,14 @@ func TestService_Refresh_SessionAwareVerifier(t *testing.T) {
 	sessionRepo := mem.NewSessionRepository()
 	roleRepo := mem.NewRoleRepository()
 	userRepo := mem.NewUserRepository()
-	seedUser, _ := domain.NewUser("usr-sa", "usr-sa@test.local", "hash")
+	seedUser, _ := domain.NewUser("usr-sa", "usr-sa@test.local", "hash", time.Now())
 	seedUser.ID = "usr-sa"
 	require.NoError(t, userRepo.Create(context.Background(), seedUser))
 
 	refreshStore := newTestRefreshStore()
 	svc := MustNewService(sessionRepo, roleRepo, userRepo, refreshStore, testIssuer, slog.Default())
 
-	sess, err := domain.NewSession("usr-sa", "at", time.Now().Add(time.Hour))
+	sess, err := domain.NewSession("usr-sa", "at", time.Now().Add(time.Hour), time.Now())
 	require.NoError(t, err)
 	sess.ID = "sess-sa"
 	require.NoError(t, sessionRepo.Create(context.Background(), sess))
@@ -464,7 +464,7 @@ func TestService_Refresh_SessionAwareVerifier(t *testing.T) {
 	// Revoke the session externally.
 	sess, err = sessionRepo.GetByID(context.Background(), "sess-sa")
 	require.NoError(t, err)
-	sess.Revoke()
+	sess.Revoke(time.Now())
 	require.NoError(t, sessionRepo.Update(context.Background(), sess))
 
 	// Attempt refresh with the new (rotated) wire token — should be rejected
@@ -483,7 +483,7 @@ func TestRefresh_FailClosedWhenUserUnavailable(t *testing.T) {
 	refreshStore := newTestRefreshStore()
 	svc := MustNewService(sessionRepo, roleRepo, userRepo, refreshStore, testIssuer, slog.Default())
 
-	sess, err := domain.NewSession("usr-missing", "at", time.Now().Add(time.Hour))
+	sess, err := domain.NewSession("usr-missing", "at", time.Now().Add(time.Hour), time.Now())
 	require.NoError(t, err)
 	sess.ID = "sess-missing"
 	require.NoError(t, sessionRepo.Create(context.Background(), sess))
@@ -504,7 +504,7 @@ func TestRefresh_FlagPropagatesFromCurrentUser_AfterClear(t *testing.T) {
 
 	// Seed a user with reset flag = false (already cleared).
 	hash, _ := bcrypt.GenerateFromPassword([]byte("pass"), bcrypt.MinCost)
-	user, _ := domain.NewUser("ref-user-clear", "ref-clear@test.com", string(hash))
+	user, _ := domain.NewUser("ref-user-clear", "ref-clear@test.com", string(hash), time.Now())
 	user.ID = "usr-ref-clear"
 	// PasswordResetRequired is false by default.
 	require.NoError(t, userRepo.Create(context.Background(), user))
@@ -513,7 +513,7 @@ func TestRefresh_FlagPropagatesFromCurrentUser_AfterClear(t *testing.T) {
 	refreshStore := newTestRefreshStore()
 	svc2 := MustNewService(sessionRepo, mem.NewRoleRepository(), userRepo, refreshStore, testIssuer, slog.Default())
 
-	sess, _ := domain.NewSession("usr-ref-clear", "at", time.Now().Add(time.Hour))
+	sess, _ := domain.NewSession("usr-ref-clear", "at", time.Now().Add(time.Hour), time.Now())
 	sess.ID = "sess-ref-clear"
 	require.NoError(t, sessionRepo.Create(context.Background(), sess))
 
@@ -540,15 +540,15 @@ func TestRefresh_FlagStillSetWhenUserNotChanged(t *testing.T) {
 
 	// Seed a user with reset flag = true.
 	hash, _ := bcrypt.GenerateFromPassword([]byte("pass"), bcrypt.MinCost)
-	user, _ := domain.NewUser("ref-user-reset", "ref-reset@test.com", string(hash))
+	user, _ := domain.NewUser("ref-user-reset", "ref-reset@test.com", string(hash), time.Now())
 	user.ID = "usr-ref-reset"
-	user.MarkPasswordResetRequired()
+	user.MarkPasswordResetRequired(time.Now())
 	require.NoError(t, userRepo.Create(context.Background(), user))
 
 	refreshStore := newTestRefreshStore()
 	svc := MustNewService(sessionRepo, mem.NewRoleRepository(), userRepo, refreshStore, testIssuer, slog.Default())
 
-	sess, _ := domain.NewSession("usr-ref-reset", "at", time.Now().Add(time.Hour))
+	sess, _ := domain.NewSession("usr-ref-reset", "at", time.Now().Add(time.Hour), time.Now())
 	sess.ID = "sess-ref-reset"
 	require.NoError(t, sessionRepo.Create(context.Background(), sess))
 
@@ -695,14 +695,14 @@ func TestService_Refresh_SessionUpdateInfraFailure_DoesNotRotate(t *testing.T) {
 	}
 	roleRepo := mem.NewRoleRepository()
 	userRepo := mem.NewUserRepository()
-	user, err := domain.NewUser("usr-update-infra", "usr-update-infra@test.local", "hash")
+	user, err := domain.NewUser("usr-update-infra", "usr-update-infra@test.local", "hash", time.Now())
 	require.NoError(t, err)
 	user.ID = "usr-update-infra"
 	require.NoError(t, userRepo.Create(context.Background(), user))
 
 	refreshStore := newTestRefreshStore()
 	svc := MustNewService(sessionRepo, roleRepo, userRepo, refreshStore, testIssuer, slog.Default())
-	sess, err := domain.NewSession("usr-update-infra", "at", time.Now().Add(time.Hour))
+	sess, err := domain.NewSession("usr-update-infra", "at", time.Now().Add(time.Hour), time.Now())
 	require.NoError(t, err)
 	sess.ID = "sess-update-infra"
 	require.NoError(t, sessionRepo.Create(context.Background(), sess))
@@ -727,7 +727,7 @@ func TestService_Refresh_SessionUpdateNotFound_CascadeRevokesAndRejects(t *testi
 	}
 	roleRepo := mem.NewRoleRepository()
 	userRepo := mem.NewUserRepository()
-	user, err := domain.NewUser("usr-update-missing", "usr-update-missing@test.local", "hash")
+	user, err := domain.NewUser("usr-update-missing", "usr-update-missing@test.local", "hash", time.Now())
 	require.NoError(t, err)
 	user.ID = "usr-update-missing"
 	require.NoError(t, userRepo.Create(context.Background(), user))
@@ -735,7 +735,7 @@ func TestService_Refresh_SessionUpdateNotFound_CascadeRevokesAndRejects(t *testi
 	innerStore := newTestRefreshStore()
 	spy := &spyRefreshStore{Store: innerStore}
 	svc := MustNewService(sessionRepo, roleRepo, userRepo, spy, testIssuer, slog.Default())
-	sess, err := domain.NewSession("usr-update-missing", "at", time.Now().Add(time.Hour))
+	sess, err := domain.NewSession("usr-update-missing", "at", time.Now().Add(time.Hour), time.Now())
 	require.NoError(t, err)
 	sess.ID = "sess-update-missing"
 	require.NoError(t, sessionRepo.Create(context.Background(), sess))
@@ -782,10 +782,10 @@ func TestService_Refresh_RejectionMessagesAreUniform(t *testing.T) {
 			build: func(t *testing.T) (*Service, string) {
 				t.Helper()
 				svc, repo, refreshStore := newTestServiceWithRefreshStore("usr-uniform-revoked")
-				sess, err := domain.NewSession("usr-uniform-revoked", "at", time.Now().Add(time.Hour))
+				sess, err := domain.NewSession("usr-uniform-revoked", "at", time.Now().Add(time.Hour), time.Now())
 				require.NoError(t, err)
 				sess.ID = "sess-uniform-revoked"
-				sess.Revoke()
+				sess.Revoke(time.Now())
 				require.NoError(t, repo.Create(context.Background(), sess))
 				wireToken, _, err := refreshStore.Issue(context.Background(), "sess-uniform-revoked", "usr-uniform-revoked")
 				require.NoError(t, err)
@@ -799,7 +799,7 @@ func TestService_Refresh_RejectionMessagesAreUniform(t *testing.T) {
 				sessionRepo := mem.NewSessionRepository()
 				refreshStore := newTestRefreshStore()
 				svc := MustNewService(sessionRepo, mem.NewRoleRepository(), mem.NewUserRepository(), refreshStore, testIssuer, slog.Default())
-				sess, err := domain.NewSession("usr-uniform-missing", "at", time.Now().Add(time.Hour))
+				sess, err := domain.NewSession("usr-uniform-missing", "at", time.Now().Add(time.Hour), time.Now())
 				require.NoError(t, err)
 				sess.ID = "sess-uniform-missing"
 				require.NoError(t, sessionRepo.Create(context.Background(), sess))
@@ -854,10 +854,10 @@ func TestService_Refresh_CascadeRejectionReasonIsLogged(t *testing.T) {
 				t.Helper()
 				svc, repo, refreshStore := newTestServiceWithRefreshStore("usr-log-revoked")
 				svc.logger = logger
-				sess, err := domain.NewSession("usr-log-revoked", "at", time.Now().Add(time.Hour))
+				sess, err := domain.NewSession("usr-log-revoked", "at", time.Now().Add(time.Hour), time.Now())
 				require.NoError(t, err)
 				sess.ID = "sess-log-revoked"
-				sess.Revoke()
+				sess.Revoke(time.Now())
 				require.NoError(t, repo.Create(context.Background(), sess))
 				wireToken, _, err := refreshStore.Issue(context.Background(), "sess-log-revoked", "usr-log-revoked")
 				require.NoError(t, err)
@@ -925,7 +925,7 @@ func (s rotateMismatchRefreshStore) Rotate(_ context.Context, _ string) (string,
 func TestRefresh_RotateFailure_ReturnsRefreshUnavailable(t *testing.T) {
 	_, sessionRepo, innerStore := newTestServiceWithRefreshStore("usr-rotate-fail")
 
-	sess, err := domain.NewSession("usr-rotate-fail", "at", time.Now().Add(time.Hour))
+	sess, err := domain.NewSession("usr-rotate-fail", "at", time.Now().Add(time.Hour), time.Now())
 	require.NoError(t, err)
 	sess.ID = "sess-rotate-fail"
 	require.NoError(t, sessionRepo.Create(context.Background(), sess))
@@ -936,7 +936,7 @@ func TestRefresh_RotateFailure_ReturnsRefreshUnavailable(t *testing.T) {
 	// Replace refreshStore with one that fails on Rotate.
 	roleRepo := mem.NewRoleRepository()
 	userRepo := mem.NewUserRepository()
-	u, _ := domain.NewUser("usr-rotate-fail", "rotate-fail@test.local", "hash")
+	u, _ := domain.NewUser("usr-rotate-fail", "rotate-fail@test.local", "hash", time.Now())
 	u.ID = "usr-rotate-fail"
 	require.NoError(t, userRepo.Create(context.Background(), u))
 
@@ -960,7 +960,7 @@ func TestRefresh_RotateFailure_ReturnsRefreshUnavailable(t *testing.T) {
 func TestRefresh_RotateMismatch_CascadeRevoke_ReturnsRejected(t *testing.T) {
 	_, sessionRepo, innerStore := newTestServiceWithRefreshStore("usr-mismatch")
 
-	sess, err := domain.NewSession("usr-mismatch", "at", time.Now().Add(time.Hour))
+	sess, err := domain.NewSession("usr-mismatch", "at", time.Now().Add(time.Hour), time.Now())
 	require.NoError(t, err)
 	sess.ID = "sess-mismatch"
 	require.NoError(t, sessionRepo.Create(context.Background(), sess))
@@ -970,7 +970,7 @@ func TestRefresh_RotateMismatch_CascadeRevoke_ReturnsRejected(t *testing.T) {
 
 	roleRepo := mem.NewRoleRepository()
 	userRepo := mem.NewUserRepository()
-	u, _ := domain.NewUser("usr-mismatch", "mismatch@test.local", "hash")
+	u, _ := domain.NewUser("usr-mismatch", "mismatch@test.local", "hash", time.Now())
 	u.ID = "usr-mismatch"
 	require.NoError(t, userRepo.Create(context.Background(), u))
 
@@ -994,7 +994,7 @@ func TestRefresh_RotateMismatch_CascadeRevoke_ReturnsRejected(t *testing.T) {
 func TestRefresh_RotateMismatch_CascadeRevokeFails_PropagatesErr(t *testing.T) {
 	_, sessionRepo, innerStore := newTestServiceWithRefreshStore("usr-mismatch-revoke-fail")
 
-	sess, err := domain.NewSession("usr-mismatch-revoke-fail", "at", time.Now().Add(time.Hour))
+	sess, err := domain.NewSession("usr-mismatch-revoke-fail", "at", time.Now().Add(time.Hour), time.Now())
 	require.NoError(t, err)
 	sess.ID = "sess-mismatch-revoke-fail"
 	require.NoError(t, sessionRepo.Create(context.Background(), sess))
@@ -1004,7 +1004,7 @@ func TestRefresh_RotateMismatch_CascadeRevokeFails_PropagatesErr(t *testing.T) {
 
 	roleRepo := mem.NewRoleRepository()
 	userRepo := mem.NewUserRepository()
-	u, _ := domain.NewUser("usr-mismatch-revoke-fail", "mmrf@test.local", "hash")
+	u, _ := domain.NewUser("usr-mismatch-revoke-fail", "mmrf@test.local", "hash", time.Now())
 	u.ID = "usr-mismatch-revoke-fail"
 	require.NoError(t, userRepo.Create(context.Background(), u))
 

@@ -6,13 +6,13 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"time"
 
 	"github.com/google/uuid"
 
 	"github.com/ghbvf/gocell/cells/configcore/internal/domain"
 	configevents "github.com/ghbvf/gocell/cells/configcore/internal/events"
 	"github.com/ghbvf/gocell/cells/configcore/internal/ports"
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/errcode"
@@ -37,12 +37,23 @@ func WithTxManager(tx persistence.TxRunner) Option {
 	return func(s *Service) { s.txRunner = persistence.RunnerOrNoop(tx) }
 }
 
+// WithClock sets the clock used for config entry timestamps. Defaults to
+// clock.Real() when not provided.
+func WithClock(clk clock.Clock) Option {
+	return func(s *Service) {
+		if clk != nil {
+			s.clock = clk
+		}
+	}
+}
+
 // Service implements config write business logic.
 type Service struct {
 	repo     ports.ConfigRepository
 	txRunner persistence.TxRunner
 	emitter  outbox.Emitter
 	logger   *slog.Logger
+	clock    clock.Clock
 }
 
 // NewService creates a config-write Service.
@@ -52,6 +63,7 @@ func NewService(repo ports.ConfigRepository, logger *slog.Logger, opts ...Option
 		txRunner: persistence.NoopTxRunner{},
 		emitter:  outbox.NewNoopEmitter(),
 		logger:   logger,
+		clock:    clock.Real(),
 	}
 	for _, o := range opts {
 		o(s)
@@ -79,7 +91,7 @@ func (s *Service) Create(ctx context.Context, input CreateInput) (*domain.Config
 		return nil, err
 	}
 
-	now := time.Now()
+	now := s.clock.Now()
 	entry := &domain.ConfigEntry{
 		ID:        "cfg" + "-" + uuid.NewString(),
 		Key:       input.Key,

@@ -72,7 +72,7 @@ func TestNewService_RejectsTypedNilDependencies(t *testing.T) {
 }
 
 func seedSession(repo *mem.SessionRepository, id, userID string) {
-	sess, _ := domain.NewSession(userID, "at-"+id, time.Now().Add(time.Hour))
+	sess, _ := domain.NewSession(userID, "at-"+id, time.Now().Add(time.Hour), time.Now())
 	sess.ID = id
 	_ = repo.Create(context.Background(), sess)
 }
@@ -137,7 +137,7 @@ func TestService_Logout(t *testing.T) {
 			setup: func(r *mem.SessionRepository) {
 				seedSession(r, "sess-rev", "usr-1")
 				s, _ := r.GetByID(context.Background(), "sess-rev")
-				s.Revoke()
+				s.Revoke(time.Now())
 			},
 			sessionID:    "sess-rev",
 			callerUserID: "usr-1",

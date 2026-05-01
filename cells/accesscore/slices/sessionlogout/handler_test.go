@@ -38,11 +38,11 @@ func newHandlerLogoutRefreshStore() refresh.Store {
 // same code path cell_routes.go takes in production.
 func setup() http.Handler {
 	sessionRepo := mem.NewSessionRepository()
-	sess, _ := domain.NewSession(testutil.TestID("usr-1"), "access-tok", time.Now().Add(time.Hour))
+	sess, _ := domain.NewSession(testutil.TestID("usr-1"), "access-tok", time.Now().Add(time.Hour), time.Now())
 	sess.ID = testutil.TestID("sess-1")
 	_ = sessionRepo.Create(context.Background(), sess)
 	// Victim session owned by a different user — used to prove IDOR guard.
-	other, _ := domain.NewSession(testutil.TestID("usr-victim"), "at-v", time.Now().Add(time.Hour))
+	other, _ := domain.NewSession(testutil.TestID("usr-victim"), "at-v", time.Now().Add(time.Hour), time.Now())
 	other.ID = testutil.TestID("sess-victim")
 	_ = sessionRepo.Create(context.Background(), other)
 

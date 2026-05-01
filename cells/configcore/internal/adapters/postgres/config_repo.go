@@ -8,13 +8,13 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"time"
 
 	"github.com/jackc/pgx/v5"
 
 	configcrypto "github.com/ghbvf/gocell/cells/configcore/internal/crypto"
 	"github.com/ghbvf/gocell/cells/configcore/internal/domain"
 	"github.com/ghbvf/gocell/cells/configcore/internal/ports"
+	"github.com/ghbvf/gocell/kernel/clock"
 	kcrypto "github.com/ghbvf/gocell/kernel/crypto"
 	"github.com/ghbvf/gocell/pkg/ctxcancel"
 	"github.com/ghbvf/gocell/pkg/errcode"
@@ -103,6 +103,7 @@ type ConfigRepository struct {
 	session     *Session // production path: resolves ambient tx via persistence.TxCtxKey
 	transformer kcrypto.ValueTransformer
 	logger      *slog.Logger
+	clock       clock.Clock
 	// onStaleCipher is an optional callback invoked when a stale-key value is
 	// detected during a read. Callers may wire this to a prometheus counter:
 	//   repo.onStaleCipher = func(_, _, _ string) { staleCipherTotal.Inc() }
@@ -129,6 +130,16 @@ func WithOnStaleCipher(fn func(key, storedKeyID, currentKeyID string)) ConfigRep
 	}
 }
 
+// WithConfigRepoClock sets the clock used for default CreatedAt/UpdatedAt
+// timestamps. Defaults to clock.Real() when not provided.
+func WithConfigRepoClock(clk clock.Clock) ConfigRepoOption {
+	return func(r *ConfigRepository) {
+		if clk != nil {
+			r.clock = clk
+		}
+	}
+}
+
 // NewConfigRepository creates a ConfigRepository that resolves the ambient
 // pgx.Tx from the context on each call, enabling transactional participation
 // via persistence.TxCtxKey. Session is the sole production entry point;
@@ -141,7 +152,7 @@ func NewConfigRepository(s *Session, tr kcrypto.ValueTransformer, logger *slog.L
 	if logger == nil {
 		logger = slog.Default()
 	}
-	r := &ConfigRepository{session: s, transformer: tr, logger: logger}
+	r := &ConfigRepository{session: s, transformer: tr, logger: logger, clock: clock.Real()}
 	for _, opt := range opts {
 		opt(r)
 	}
@@ -240,7 +251,7 @@ func (r *ConfigRepository) decryptVersionValue(
 // For sensitive=true: encrypts value and writes cipher columns; value column is set to "".
 // For sensitive=false: writes plaintext value; cipher columns are NULL.
 func (r *ConfigRepository) Create(ctx context.Context, entry *domain.ConfigEntry) error {
-	now := time.Now()
+	now := r.clock.Now()
 	if entry.CreatedAt.IsZero() {
 		entry.CreatedAt = now
 	}

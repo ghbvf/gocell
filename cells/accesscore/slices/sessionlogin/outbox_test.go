@@ -51,7 +51,7 @@ var testCredential = []byte("test-fixture-password")
 // --- tests ---
 
 func seedUserDirect(repo *mem.UserRepository, username, passwordHash string) {
-	user, _ := domain.NewUser(username, username+"@test.com", passwordHash)
+	user, _ := domain.NewUser(username, username+"@test.com", passwordHash, time.Now())
 	user.ID = "usr-" + username
 	_ = repo.Create(context.Background(), user)
 }

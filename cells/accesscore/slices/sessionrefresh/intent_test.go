@@ -41,7 +41,7 @@ func TestService_Refresh_RejectsAccessIntentToken(t *testing.T) {
 func TestService_Refresh_NewTokensCarryCorrectIntents(t *testing.T) {
 	svc, repo, refreshStore := newTestServiceWithRefreshStore("usr-r1")
 
-	sess, err := domain.NewSession("usr-r1", "access-tok", time.Now().Add(time.Hour))
+	sess, err := domain.NewSession("usr-r1", "access-tok", time.Now().Add(time.Hour), time.Now())
 	require.NoError(t, err)
 	sess.ID = "sess-r1"
 	require.NoError(t, repo.Create(context.Background(), sess))
