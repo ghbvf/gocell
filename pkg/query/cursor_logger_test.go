@@ -9,9 +9,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ghbvf/gocell/pkg/ctxkeys"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/ghbvf/gocell/pkg/ctxkeys"
 )
 
 func parseJSONLogLines(t *testing.T, buf *bytes.Buffer) []map[string]any {

@@ -4,9 +4,10 @@ import (
 	"encoding/json"
 	"testing"
 
-	"github.com/ghbvf/gocell/pkg/contracttest"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/ghbvf/gocell/pkg/contracttest"
 )
 
 func TestDecodeEntryUpserted(t *testing.T) {

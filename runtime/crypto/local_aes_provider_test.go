@@ -5,10 +5,11 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/ghbvf/gocell/pkg/errcode"
-	"github.com/ghbvf/gocell/runtime/crypto"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/runtime/crypto"
 )
 
 // validMasterKey is a 32-byte hex-encoded master key suitable for tests.

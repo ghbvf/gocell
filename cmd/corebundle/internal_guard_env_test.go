@@ -12,10 +12,11 @@ import (
 	"log/slog"
 	"testing"
 
-	"github.com/ghbvf/gocell/pkg/errcode"
-	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/runtime/auth"
 )
 
 // captureSlogWarnLines installs a JSON slog handler capturing Warn-and-above

@@ -7,12 +7,13 @@ import (
 	"testing"
 	"time"
 
-	ordercell "github.com/ghbvf/gocell/examples/todoorder/cells/ordercell"
-	"github.com/ghbvf/gocell/kernel/cell"
-	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	ordercell "github.com/ghbvf/gocell/examples/todoorder/cells/ordercell"
+	"github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/runtime/auth"
 )
 
 const testServiceKey = "test-service-secret-at-least-32-bytes!!"

@@ -9,9 +9,10 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/jackc/pgx/v5/stdlib"
 	"github.com/pressly/goose/v3"
+
+	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
 // migrationVersionRe matches migration file names like "006_add_something.sql"

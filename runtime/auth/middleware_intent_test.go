@@ -14,8 +14,9 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/stretchr/testify/assert"
+
+	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
 // intentMockVerifier returns distinct results per expected intent so the

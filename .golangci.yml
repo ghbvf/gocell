@@ -27,6 +27,11 @@ linters:
     - funlen
     # 依赖管控
     - gomodguard
+    - depguard
+    # 禁止使用特定函数/包（observability 规范）
+    - forbidigo
+    # 代码风格（dot-imports 等）
+    - revive
     # nolint 治理：所有 //nolint:... 必须带 // <reason>，且必须指明 linter 名
     - nolintlint
 
@@ -109,6 +114,180 @@ linters:
       # the prefix during PR review.
       require-explanation: true
       require-specific: true
+
+    depguard:
+      # Architecturally equivalent to archtest's former LAYER-01..04 allow-list
+      # semantics: each layer has list-mode: strict + an explicit allow list.
+      # Anything not allowed (including unmodeled future top-level dirs) is
+      # rejected. New external dependencies require a one-line YAML update —
+      # this is intentional friction so dependency growth is a conscious
+      # architectural decision.
+      # File globs use `**/<layer>/**` form because depguard matches against
+      # absolute paths via gobwas/glob (no root anchor). The leading `**`
+      # consumes whatever module-root prefix golangci-lint is invoked from
+      # (CI checkout dir, $TMPDIR for fixture tests, etc.). Cell-internal
+      # adapter packages live at `**/cells/**/adapters/**` and must be
+      # excluded from `adapters-isolation` — they are governed by
+      # `cells-isolation` instead.
+      rules:
+        kernel-isolation:
+          # LAYER-01: kernel/ depends only on stdlib + pkg/ + gopkg.in/yaml.v3.
+          list-mode: strict
+          files:
+            - "**/kernel/**"
+            - "!**/kernel/**/*_test.go"
+            - "!**/examples/**"  # examples are unrestricted (CLAUDE.md)
+          allow:
+            - $gostd
+            - github.com/ghbvf/gocell/kernel
+            - github.com/ghbvf/gocell/pkg
+            - gopkg.in/yaml.v3
+        pkg-isolation:
+          # pkg/ is foundational: stdlib + a minimal external surface. Must not
+          # depend on kernel/runtime/cells/adapters/cmd/examples/tests/tools to
+          # avoid import cycles (kernel and runtime depend on pkg).
+          list-mode: strict
+          files:
+            - "**/pkg/**"
+            - "!**/pkg/**/*_test.go"
+            - "!**/examples/**"
+          allow:
+            - $gostd
+            - github.com/ghbvf/gocell/pkg
+            - github.com/google/uuid
+            - github.com/santhosh-tekuri/jsonschema
+            - gopkg.in/yaml.v3
+        runtime-isolation:
+          # LAYER-03: runtime/ depends on kernel/ + pkg/ + curated externals.
+          # storetest/ test-helper packages (non-_test.go) use testify by design.
+          list-mode: strict
+          files:
+            - "**/runtime/**"
+            - "!**/runtime/**/*_test.go"
+            - "!**/examples/**"
+          allow:
+            - $gostd
+            - github.com/ghbvf/gocell/kernel
+            - github.com/ghbvf/gocell/pkg
+            - github.com/ghbvf/gocell/runtime
+            - github.com/felixge/httpsnoop
+            - github.com/fsnotify/fsnotify
+            - github.com/go-chi/chi
+            - github.com/golang-jwt/jwt
+            - github.com/google/uuid
+            - github.com/stretchr/testify  # storetest/ test-helper packages
+            - go.opentelemetry.io/contrib
+            - go.opentelemetry.io/otel
+            - golang.org/x/sync
+            - gopkg.in/yaml.v3
+        adapters-isolation:
+          # LAYER-04: adapters/ depend on kernel/ + runtime/ + pkg/ + SDKs.
+          # Cell-internal `cells/*/internal/adapters/**` is owned by the cell
+          # and governed by the cells-isolation rule, not this one. The
+          # `!**/cells/**/adapters/**` exclusion is the boundary.
+          list-mode: strict
+          files:
+            - "**/adapters/**"
+            - "!**/adapters/**/*_test.go"
+            - "!**/cells/**/adapters/**"
+            - "!**/examples/**"
+          allow:
+            - $gostd
+            - github.com/ghbvf/gocell/kernel
+            - github.com/ghbvf/gocell/pkg
+            - github.com/ghbvf/gocell/runtime
+            - github.com/ghbvf/gocell/adapters
+            - github.com/aws/aws-sdk-go-v2
+            - github.com/coder/websocket
+            - github.com/coreos/go-oidc
+            - github.com/google/uuid
+            - github.com/hashicorp/vault
+            - github.com/jackc/pgx
+            - github.com/pressly/goose
+            - github.com/prometheus/client_golang
+            - github.com/rabbitmq/amqp091-go
+            - github.com/redis/go-redis
+            - github.com/sony/gobreaker
+            - go.opentelemetry.io/otel
+            - golang.org/x/oauth2
+            - golang.org/x/time
+        cells-isolation:
+          # LAYER-02: cells/ depend on kernel/ + runtime/ + pkg/. Cell-internal
+          # adapters legitimately import SDKs (pgx etc.) — those externals are
+          # listed here, not in adapters-isolation, because the file path is
+          # `cells/<name>/internal/adapters/**`. Cross-cell internal access and
+          # cell-owned subpackage isolation are enforced by archtest LAYER-05/06.
+          list-mode: strict
+          files:
+            - "**/cells/**"
+            - "!**/cells/**/*_test.go"
+            - "!**/examples/**"
+          allow:
+            - $gostd
+            - github.com/ghbvf/gocell/kernel
+            - github.com/ghbvf/gocell/pkg
+            - github.com/ghbvf/gocell/runtime
+            - github.com/ghbvf/gocell/cells
+            - github.com/google/uuid
+            - github.com/jackc/pgx
+            - golang.org/x/crypto
+        # Per-example cells-isolation rules. Examples are public-facing demos
+        # of the framework's architecture; they must follow the SAME cell
+        # discipline as platform cells/ (no cross-layer shortcuts) — otherwise
+        # the demos undermine the framework's credibility. Each rule mirrors
+        # cells-isolation in shape and adds the own-example subtree to the
+        # allow list. Cross-example imports are denied by construction (each
+        # rule allows only its OWN example path).
+        example-cells-isolation-demo:
+          list-mode: strict
+          files:
+            - "**/examples/demo/cells/**"
+            - "!**/examples/demo/cells/**/*_test.go"
+          allow:
+            - $gostd
+            - github.com/ghbvf/gocell/kernel
+            - github.com/ghbvf/gocell/pkg
+            - github.com/ghbvf/gocell/runtime
+            - github.com/ghbvf/gocell/examples/demo
+        example-cells-isolation-iotdevice:
+          list-mode: strict
+          files:
+            - "**/examples/iotdevice/cells/**"
+            - "!**/examples/iotdevice/cells/**/*_test.go"
+          allow:
+            - $gostd
+            - github.com/ghbvf/gocell/kernel
+            - github.com/ghbvf/gocell/pkg
+            - github.com/ghbvf/gocell/runtime
+            - github.com/ghbvf/gocell/examples/iotdevice
+            - github.com/google/uuid
+        example-cells-isolation-todoorder:
+          list-mode: strict
+          files:
+            - "**/examples/todoorder/cells/**"
+            - "!**/examples/todoorder/cells/**/*_test.go"
+          allow:
+            - $gostd
+            - github.com/ghbvf/gocell/kernel
+            - github.com/ghbvf/gocell/pkg
+            - github.com/ghbvf/gocell/runtime
+            - github.com/ghbvf/gocell/examples/todoorder
+            - github.com/google/uuid
+
+    forbidigo:
+      forbid:
+        - pattern: '^log\.(Printf|Println|Print|Fatal|Fatalf|Fatalln|Panic|Panicf|Panicln)$'
+          msg: "use log/slog (CLAUDE.md observability rule)"
+        - pattern: '^fmt\.(Print|Println|Printf)$'
+          msg: "use slog (production); cmd/ + examples/ are CLI exempt via files filter"
+      analyze-types: true
+      exclude-godoc-examples: true
+
+    revive:
+      # Minimal opt-in: only the rules whose semantics are CLAUDE.md-anchored.
+      # dot-imports replaces tools/archtest/dot_import_test.go's path-grep walk.
+      rules:
+        - name: dot-imports
 
     gomodguard:
       blocked:
@@ -261,6 +440,21 @@ linters:
       - path: ^examples/
         linters:
           - funlen
+      # cmd/ + examples/ are CLI / demo entrypoints; fmt.Print* is legitimate stdout.
+      # Note: this exclusion matches forbidigo's lint message text. If forbidigo
+      # changes its message format upstream, the exclusion would silently fail-open.
+      # Per-pattern `files` exclusion (forbidigo.forbid[].files with negation) was
+      # evaluated against golangci-lint v2.11.4 and does NOT suppress violations —
+      # the files field is include-only; negation globs are not applied as exclusions.
+      # The text-match approach below is the correct mechanism for this version.
+      - path: ^cmd/
+        linters:
+          - forbidigo
+        text: 'fmt\.(Print|Println|Printf)'
+      - path: ^examples/
+        linters:
+          - forbidigo
+        text: 'fmt\.(Print|Println|Printf)'
     paths:
       - generated
       - vendor
@@ -268,3 +462,8 @@ linters:
 formatters:
   enable:
     - gofmt
+    - goimports
+  settings:
+    goimports:
+      local-prefixes:
+        - github.com/ghbvf/gocell

@@ -8,9 +8,10 @@ import (
 	"strings"
 	"time"
 
+	"github.com/jackc/pgx/v5"
+
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/errcode"
-	"github.com/jackc/pgx/v5"
 )
 
 // allZeroUUID is the sentinel UUID that must be rejected — it would cause

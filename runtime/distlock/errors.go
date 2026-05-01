@@ -1,25 +1,31 @@
 package distlock
 
 import (
-	"errors"
-
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
 // Sentinel errors used as context.Cause values on the lock-derived context.
-// Callers distinguish them via errors.Is(context.Cause(lockCtx), ErrLockLost).
+// Callers distinguish them via errors.Is(context.Cause(lockCtx), ErrLockLost)
+// or direct == comparison (context.Cause returns the exact pointer stored by
+// state.cancel). *errcode.Error satisfies both: interface equality is pointer-
+// based, so the package-level var pointer serves as a stable identity just like
+// errors.New did.
 //
-// These are plain sentinel errors (not errcode.Error) because they are used
-// as context cancellation causes, not as API boundary error codes. At the API
-// boundary (Acquire returning an error) errcode is used instead.
+// Note on errors.Is: *errcode.Error has no custom Is(target error) bool method;
+// errors.Is matches by package-level pointer identity. Callers that wrap with
+// fmt.Errorf("%w", ErrLockLost) still work via Unwrap chain traversal.
+// To match by Code regardless of pointer identity, use:
+//
+//	var ec *errcode.Error
+//	if errors.As(err, &ec) && ec.Code == errcode.ErrDistlockLockLost { ... }
 var (
 	// ErrLockLost is set as the context cause when the manager fails to renew
 	// the lock or the backend reports ownership has been taken by another holder.
-	ErrLockLost = errors.New("distlock: lock lost")
+	ErrLockLost = errcode.New(errcode.ErrDistlockLockLost, "distlock: lock lost")
 
 	// ErrLockReleased is set as the context cause when release() is called
 	// by the application (normal end-of-critical-section).
-	ErrLockReleased = errors.New("distlock: lock released")
+	ErrLockReleased = errcode.New(errcode.ErrDistlockLockReleased, "distlock: lock released")
 )
 
 // ErrLockTimeout is a package-level alias for errcode.ErrDistlockTimeout.

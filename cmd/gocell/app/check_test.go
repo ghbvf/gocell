@@ -9,11 +9,12 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ghbvf/gocell/kernel/governance"
-	"github.com/ghbvf/gocell/kernel/metadata"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/tools/go/packages"
+
+	"github.com/ghbvf/gocell/kernel/governance"
+	"github.com/ghbvf/gocell/kernel/metadata"
 )
 
 // goModVersion returns the major.minor version string of the running Go toolchain

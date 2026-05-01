@@ -24,10 +24,11 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ghbvf/gocell/pkg/query"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gopkg.in/yaml.v3"
+
+	"github.com/ghbvf/gocell/pkg/query"
 )
 
 const queryParamDriftRule = "META-QUERYPARAM-DRIFT-01"

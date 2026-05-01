@@ -21,7 +21,7 @@
 
 ## 编码规则
 
-1. 禁止 `errors.New` 对外暴露，使用 `errcode` 包
+1. 禁止 `errors.New` 对外暴露（exported package-scope `var Err* = errors.New(...)` 必须走 `errcode.New(code, message)`），由 archtest `EXPORTED-ERROR-NEW-01` 静态拦截。函数体内 `errors.New` 局部错误允许。
 2. 错误必须包装上下文：`fmt.Errorf("enrollment: %w", err)`
 3. 禁止 `_ = someFunc()` 忽略错误，必须显式处理或记录
 4. handler 层统一转换领域错误为 HTTP 状态码，domain 层禁止返回 HTTP 状态码

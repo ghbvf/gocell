@@ -5,11 +5,12 @@ import (
 	"encoding/hex"
 	"fmt"
 
-	"github.com/ghbvf/gocell/kernel/wrapper"
-	"github.com/ghbvf/gocell/runtime/observability/tracing"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
 	oteltrace "go.opentelemetry.io/otel/trace"
+
+	"github.com/ghbvf/gocell/kernel/wrapper"
+	"github.com/ghbvf/gocell/runtime/observability/tracing"
 )
 
 // Compile-time checks: otelSpan implements tracing.Span (aliased to

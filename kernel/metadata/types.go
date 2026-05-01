@@ -5,8 +5,9 @@ package metadata
 import (
 	"fmt"
 
-	"github.com/ghbvf/gocell/pkg/contracts"
 	"gopkg.in/yaml.v3"
+
+	"github.com/ghbvf/gocell/pkg/contracts"
 )
 
 // CellMeta maps to cells/{id}/cell.yaml.

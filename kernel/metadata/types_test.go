@@ -4,11 +4,12 @@ import (
 	"encoding/json"
 	"testing"
 
-	"github.com/ghbvf/gocell/kernel/metadata/schemas"
 	"github.com/santhosh-tekuri/jsonschema/v6"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gopkg.in/yaml.v3"
+
+	"github.com/ghbvf/gocell/kernel/metadata/schemas"
 )
 
 // roundTrip marshals v to YAML, unmarshals into a new T, and returns both the

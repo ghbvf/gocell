@@ -27,10 +27,11 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ghbvf/gocell/pkg/contracts"
-	"github.com/ghbvf/gocell/pkg/contracttest/internal/fixtureload"
 	"github.com/santhosh-tekuri/jsonschema/v6"
 	"gopkg.in/yaml.v3"
+
+	"github.com/ghbvf/gocell/pkg/contracts"
+	"github.com/ghbvf/gocell/pkg/contracttest/internal/fixtureload"
 )
 
 // Contract holds a loaded contract with compiled JSON schemas.

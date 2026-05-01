@@ -4,9 +4,10 @@ import (
 	"context"
 	"testing"
 
+	"github.com/stretchr/testify/require"
+
 	gocell "github.com/ghbvf/gocell"
 	"github.com/ghbvf/gocell/kernel/cell"
-	"github.com/stretchr/testify/require"
 )
 
 func TestPhase0Gate(t *testing.T) {

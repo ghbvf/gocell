@@ -2,7 +2,6 @@ package outbox
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"log/slog"
 	"reflect"
@@ -225,7 +224,7 @@ var _ Emitter = (*DirectEmitter)(nil)
 // ref: envoyproxy/envoy admin /ready — DEGRADED returns 200, distinguishing
 // "soft failure, do not evict" from "hard failure, drain traffic".
 // ref: kernel/cell/health.go — cell-layer alias to this sentinel.
-var ErrDegraded = errors.New("degraded")
+var ErrDegraded = errcode.New(errcode.ErrOutboxDegraded, "degraded")
 
 // HealthCheckers implements cell.HealthContributor. The checker name is
 // scoped by cellID to avoid collisions when multiple cells own a

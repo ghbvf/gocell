@@ -6,11 +6,12 @@ import (
 	"strings"
 	"testing"
 
-	kcrypto "github.com/ghbvf/gocell/kernel/crypto"
-	"github.com/ghbvf/gocell/runtime/bootstrap"
 	prom "github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/require"
+
+	kcrypto "github.com/ghbvf/gocell/kernel/crypto"
+	"github.com/ghbvf/gocell/runtime/bootstrap"
 )
 
 type cachedVersionMetricsProvider struct {

@@ -7,10 +7,11 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/stretchr/testify/require"
+
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/runtime/eventbus"
-	"github.com/stretchr/testify/require"
 )
 
 // captureHandler is a test-only slog.Handler that records every Record for

@@ -3,9 +3,10 @@ package command_test
 import (
 	"testing"
 
+	"github.com/stretchr/testify/assert"
+
 	"github.com/ghbvf/gocell/kernel/command"
 	"github.com/ghbvf/gocell/kernel/command/commandtest"
-	"github.com/stretchr/testify/assert"
 )
 
 // Compile-time check that InMemQueue satisfies the Queue interface.

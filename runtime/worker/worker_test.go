@@ -8,9 +8,10 @@ import (
 	"testing"
 	"time"
 
-	kworker "github.com/ghbvf/gocell/kernel/worker"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	kworker "github.com/ghbvf/gocell/kernel/worker"
 
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 )

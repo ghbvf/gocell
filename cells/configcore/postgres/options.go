@@ -8,11 +8,12 @@ package postgres
 import (
 	"log/slog"
 
+	"github.com/jackc/pgx/v5/pgxpool"
+
 	configcore "github.com/ghbvf/gocell/cells/configcore"
 	cellpg "github.com/ghbvf/gocell/cells/configcore/internal/adapters/postgres"
 	kcrypto "github.com/ghbvf/gocell/kernel/crypto"
 	"github.com/ghbvf/gocell/pkg/errcode"
-	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 type settings struct {

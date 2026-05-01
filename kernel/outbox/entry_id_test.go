@@ -4,8 +4,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ghbvf/gocell/pkg/idutil"
 	"github.com/stretchr/testify/assert"
+
+	"github.com/ghbvf/gocell/pkg/idutil"
 )
 
 func TestNewEntryID_HasPrefix(t *testing.T) {

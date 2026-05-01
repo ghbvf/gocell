@@ -2,26 +2,24 @@ package auth
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"sync"
 	"time"
 
 	"github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
 // ErrNonceReused is returned by NonceStore.CheckAndMark when a nonce has
 // already been consumed within its TTL window.
 //
-// Approved exception to the CLAUDE.md "no bare errors.New across package
-// boundaries" rule: cross-package errors.Is matching requires a stable
-// pointer identity, and wrapping in *errcode.Error would force every
-// caller to Unwrap before running errors.Is. Callers distinguish replay
+// *errcode.Error implements errors.Is via pointer equality — callers use
+// errors.Is(err, ErrNonceReused) unchanged. Callers distinguish replay
 // (ErrNonceReused in the chain → 401) from store infrastructure failure
 // (any other Cause → 500) via errors.Is on this exact sentinel; see
 // writeServiceTokenError in servicetoken.go. The HTTP error envelope is
 // constructed at the middleware layer.
-var ErrNonceReused = errors.New("auth: nonce already used")
+var ErrNonceReused = errcode.New(errcode.ErrAuthNonceReused, "auth: nonce already used")
 
 // defaultMaxNonceEntries is the maximum number of live nonce entries before a
 // forced prune is triggered in InMemoryNonceStore.CheckAndMark.
@@ -146,7 +144,7 @@ func (s *InMemoryNonceStore) MaxAge() time.Duration { return s.maxAge }
 // nonce map has reached maxEntries and a forced prune found no expired entries
 // to reclaim. Callers should treat this as a transient infrastructure failure
 // (503 / Requeue) rather than a replay signal.
-var ErrNonceStoreFull = errors.New("auth: nonce store is full; no expired entries to reclaim")
+var ErrNonceStoreFull = errcode.New(errcode.ErrNonceStoreFull, "auth: nonce store is full; no expired entries to reclaim")
 
 // CheckAndMark checks whether nonce has been seen within its TTL window. If
 // not, it records the nonce and returns nil. If the nonce is still live,

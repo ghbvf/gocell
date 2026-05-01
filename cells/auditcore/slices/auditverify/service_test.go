@@ -5,10 +5,11 @@ import (
 	"log/slog"
 	"testing"
 
-	"github.com/ghbvf/gocell/cells/auditcore/internal/domain"
-	"github.com/ghbvf/gocell/cells/auditcore/internal/mem"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/ghbvf/gocell/cells/auditcore/internal/domain"
+	"github.com/ghbvf/gocell/cells/auditcore/internal/mem"
 )
 
 var testHMACKey = []byte("test-hmac-key-32bytes-long!!!!!!!")

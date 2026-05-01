@@ -8,9 +8,13 @@
 // Rules enforced (from CLAUDE.md):
 //
 //	LAYER-01: kernel/ may only import stdlib, pkg/, and kernel/ (allow-list)
+//	          [moved to depguard (.golangci.yml linters.settings.depguard.rules)]
 //	LAYER-02: cells/ must not import adapters/
+//	          [moved to depguard (.golangci.yml linters.settings.depguard.rules)]
 //	LAYER-03: runtime/ must not import cells/ or adapters/
+//	          [moved to depguard (.golangci.yml linters.settings.depguard.rules)]
 //	LAYER-04: adapters/ must not import cells/, cmd/, or examples/
+//	          [moved to depguard (.golangci.yml linters.settings.depguard.rules)]
 //	LAYER-05: cells/A must not import cells/B/internal/ (cross-cell isolation)
 //	LAYER-06: cell-owned public subpackages (see cellOwnedSubpackages) may
 //	          only be imported by their owning cell, cmd/, or examples/

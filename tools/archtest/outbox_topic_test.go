@@ -11,12 +11,13 @@ import (
 	"strings"
 	"testing"
 
-	kerneloutbox "github.com/ghbvf/gocell/kernel/outbox"
-	"github.com/ghbvf/gocell/tools/archtest/internal/typeseval"
-	"github.com/ghbvf/gocell/tools/internal/prodscan"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/tools/go/packages"
+
+	kerneloutbox "github.com/ghbvf/gocell/kernel/outbox"
+	"github.com/ghbvf/gocell/tools/archtest/internal/typeseval"
+	"github.com/ghbvf/gocell/tools/internal/prodscan"
 )
 
 const (

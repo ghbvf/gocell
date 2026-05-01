@@ -7,8 +7,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/stretchr/testify/require"
+
+	"github.com/ghbvf/gocell/kernel/cell"
 )
 
 func TestNewSSOBFFAppFailsFastWithoutServiceSecret(t *testing.T) {

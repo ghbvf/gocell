@@ -8,9 +8,10 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/stretchr/testify/require"
+
 	"github.com/ghbvf/gocell/examples/todoorder/cells/ordercell/internal/mem"
 	"github.com/ghbvf/gocell/pkg/contracttest"
-	"github.com/stretchr/testify/require"
 )
 
 func TestSpecOrderCreateMatchesContract(t *testing.T) {

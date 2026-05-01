@@ -4,8 +4,9 @@ import (
 	"testing"
 	"time"
 
-	kout "github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/stretchr/testify/assert"
+
+	kout "github.com/ghbvf/gocell/kernel/outbox"
 )
 
 // panicRelayCollector is a test collector that panics on every call.

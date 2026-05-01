@@ -19,8 +19,9 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/ghbvf/gocell/pkg/errcode"
 	"gopkg.in/yaml.v3"
+
+	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
 // Parser loads and parses all YAML metadata from a project root.

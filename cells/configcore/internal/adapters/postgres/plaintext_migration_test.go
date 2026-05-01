@@ -8,10 +8,11 @@ import (
 	"fmt"
 	"testing"
 
-	configcrypto "github.com/ghbvf/gocell/cells/configcore/internal/crypto"
-	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	configcrypto "github.com/ghbvf/gocell/cells/configcore/internal/crypto"
+	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
 // ---------------------------------------------------------------------------

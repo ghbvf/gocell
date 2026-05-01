@@ -5,8 +5,9 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/ghbvf/gocell/kernel/verify"
 	"github.com/stretchr/testify/require"
+
+	"github.com/ghbvf/gocell/kernel/verify"
 )
 
 var verifyGoldenCases = []struct {

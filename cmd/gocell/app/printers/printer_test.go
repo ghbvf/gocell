@@ -10,9 +10,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ghbvf/gocell/kernel/governance"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/ghbvf/gocell/kernel/governance"
 )
 
 // updateGolden, when set, rewrites the testdata/golden/<format>/<case>.<ext>

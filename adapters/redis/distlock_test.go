@@ -5,9 +5,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ghbvf/gocell/runtime/distlock"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/ghbvf/gocell/runtime/distlock"
 )
 
 // Compile-time assertion: *RedisDriver implements distlock.Driver.

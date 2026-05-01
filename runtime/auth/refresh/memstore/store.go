@@ -20,10 +20,11 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/validation"
 	"github.com/ghbvf/gocell/runtime/auth/refresh"
-	"github.com/google/uuid"
 )
 
 // tokenRecord is one append-only row. Fields are never mutated after insert

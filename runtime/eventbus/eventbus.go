@@ -11,6 +11,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+
 	// nosemgrep: go.lang.security.audit.crypto.math_random.math-random-used // non-crypto retry jitter; gosec G404 already silenced at usage sites
 	"math/rand/v2"
 	"sync"

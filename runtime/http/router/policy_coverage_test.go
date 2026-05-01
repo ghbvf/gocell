@@ -3,9 +3,10 @@ package router
 import (
 	"testing"
 
-	kcell "github.com/ghbvf/gocell/kernel/cell"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	kcell "github.com/ghbvf/gocell/kernel/cell"
 )
 
 func TestVerifyPolicyCoverage(t *testing.T) {

@@ -13,10 +13,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ghbvf/gocell/kernel/observability/metrics"
-	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/ghbvf/gocell/kernel/observability/metrics"
+	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
 // test HMAC keys — each exactly 33 bytes (>= MinHMACKeyBytes=32).

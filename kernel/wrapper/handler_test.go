@@ -6,10 +6,11 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/ghbvf/gocell/kernel/ctxkeys"
-	"github.com/ghbvf/gocell/kernel/wrapper"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/ghbvf/gocell/kernel/ctxkeys"
+	"github.com/ghbvf/gocell/kernel/wrapper"
 )
 
 func loginSpec() wrapper.ContractSpec {

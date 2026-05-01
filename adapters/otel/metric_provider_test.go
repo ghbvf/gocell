@@ -5,10 +5,11 @@ import (
 	"errors"
 	"testing"
 
-	gcotel "github.com/ghbvf/gocell/adapters/otel"
-	"github.com/ghbvf/gocell/kernel/observability/metrics"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
+
+	gcotel "github.com/ghbvf/gocell/adapters/otel"
+	"github.com/ghbvf/gocell/kernel/observability/metrics"
 )
 
 // newTestProvider wires the SUT's NewMetricProvider to a fresh ManualReader.

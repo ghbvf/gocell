@@ -4,10 +4,11 @@ import (
 	"context"
 	"testing"
 
-	gcotel "github.com/ghbvf/gocell/adapters/otel"
-	"github.com/ghbvf/gocell/runtime/observability/poolstats"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
+
+	gcotel "github.com/ghbvf/gocell/adapters/otel"
+	"github.com/ghbvf/gocell/runtime/observability/poolstats"
 )
 
 // staticStatter is a test double: returns the supplied fixed snapshot on

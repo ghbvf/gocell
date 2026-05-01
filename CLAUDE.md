@@ -40,6 +40,10 @@ actors.yaml   — 外部 Actor 注册（参与 contract 但不属于 Cell 模型
 - adapters/ 实现 kernel/ 或 runtime/ 定义的接口
 - examples/ 可以依赖所有层
 
+> 路径级 LAYER-01..04 由 `.golangci.yml` 的 depguard 规则在 lint 阶段静态拦截；
+> LAYER-05/06/09/10（跨 cell internal、cell-owned 子包、cross-cell events、root cell → adapters）
+> 需 cell metadata / 类型信息，由 `tools/archtest/` 守护。
+
 ### Cell 开发规则
 
 - 每个 Cell 必须有 cell.yaml（必填：id / type / consistencyLevel / owner / schema.primary / verify.smoke）

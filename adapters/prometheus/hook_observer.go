@@ -1,9 +1,10 @@
 package prometheus
 
 import (
+	prom "github.com/prometheus/client_golang/prometheus"
+
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/pkg/errcode"
-	prom "github.com/prometheus/client_golang/prometheus"
 )
 
 // DefaultHookDurationBuckets covers the range expected for cell lifecycle

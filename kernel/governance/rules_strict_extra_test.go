@@ -8,10 +8,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ghbvf/gocell/kernel/metadata"
-	"github.com/ghbvf/gocell/pkg/contracts"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/ghbvf/gocell/kernel/metadata"
+	"github.com/ghbvf/gocell/pkg/contracts"
 )
 
 // --- FMT-20 (HTTP schema strict additionalProperties) ---

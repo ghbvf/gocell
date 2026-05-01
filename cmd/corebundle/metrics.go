@@ -8,9 +8,10 @@ import (
 	"log/slog"
 	"net/http"
 
-	adapterprom "github.com/ghbvf/gocell/adapters/prometheus"
 	prom "github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+
+	adapterprom "github.com/ghbvf/gocell/adapters/prometheus"
 )
 
 // metricsAuthHeader names the request header used to authenticate

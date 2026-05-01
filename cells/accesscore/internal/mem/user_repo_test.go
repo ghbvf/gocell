@@ -4,9 +4,10 @@ import (
 	"context"
 	"testing"
 
-	"github.com/ghbvf/gocell/cells/accesscore/internal/domain"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/ghbvf/gocell/cells/accesscore/internal/domain"
 )
 
 func TestUserRepo_PreservesPasswordResetRequired(t *testing.T) {

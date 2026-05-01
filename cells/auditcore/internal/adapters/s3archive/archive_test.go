@@ -6,10 +6,11 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/ghbvf/gocell/cells/auditcore/internal/domain"
-	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/ghbvf/gocell/cells/auditcore/internal/domain"
+	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
 func TestArchiveStore_Archive(t *testing.T) {

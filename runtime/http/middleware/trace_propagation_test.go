@@ -4,9 +4,10 @@ import (
 	"net/http"
 	"testing"
 
-	"github.com/ghbvf/gocell/pkg/ctxkeys"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/ghbvf/gocell/pkg/ctxkeys"
 )
 
 func TestExtractTraceContext(t *testing.T) {

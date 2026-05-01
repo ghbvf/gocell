@@ -22,11 +22,13 @@ import (
 	"strings"
 	"time"
 
-	"github.com/ghbvf/gocell/kernel/governance"
-	"github.com/ghbvf/gocell/kernel/metadata"
-	"github.com/ghbvf/gocell/tools/internal/prodscan"
 	"golang.org/x/tools/go/packages"
 	"gopkg.in/yaml.v3"
+
+	"github.com/ghbvf/gocell/kernel/governance"
+	"github.com/ghbvf/gocell/kernel/metadata"
+	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/tools/internal/prodscan"
 )
 
 const (
@@ -79,10 +81,10 @@ type Diagnostic struct {
 // has an unresolved identity field. Names, labels, namespaces, const-label keys,
 // and buckets are part of the generated schema contract, so the generator fails
 // instead of emitting an empty or placeholder value.
-var ErrUnresolvedMetricSchema = errors.New("metrics schema: unresolved metric schema")
+var ErrUnresolvedMetricSchema = errcode.New(errcode.ErrMetricsSchemaUnresolved, "metrics schema: unresolved metric schema")
 
-// ErrUnresolvedLabel is kept as the historical sentinel for existing callers
-// that only checked unresolved labels.
+// Deprecated: use ErrUnresolvedMetricSchema; this alias exists for historical
+// callers and may be removed once all references migrate.
 var ErrUnresolvedLabel = ErrUnresolvedMetricSchema
 
 const header = governance.YAMLGeneratedPrefix + "metrics-schema. DO NOT EDIT.\n"

@@ -3,8 +3,9 @@ package featureflag
 import (
 	"testing"
 
-	"github.com/ghbvf/gocell/pkg/contracttest"
 	"github.com/stretchr/testify/assert"
+
+	"github.com/ghbvf/gocell/pkg/contracttest"
 )
 
 func TestHttpConfigFlagsListV1Serve(t *testing.T) {

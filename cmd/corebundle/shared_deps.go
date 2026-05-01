@@ -10,6 +10,8 @@ import (
 	"os"
 	"strings"
 
+	prom "github.com/prometheus/client_golang/prometheus"
+
 	adapterpg "github.com/ghbvf/gocell/adapters/postgres"
 	adapterredis "github.com/ghbvf/gocell/adapters/redis"
 	"github.com/ghbvf/gocell/kernel/idempotency"
@@ -18,7 +20,6 @@ import (
 	"github.com/ghbvf/gocell/runtime/bootstrap"
 	"github.com/ghbvf/gocell/runtime/eventbus"
 	obmetrics "github.com/ghbvf/gocell/runtime/observability/metrics"
-	prom "github.com/prometheus/client_golang/prometheus"
 )
 
 // SharedDeps holds cross-cutting dependencies required by every Cell module.

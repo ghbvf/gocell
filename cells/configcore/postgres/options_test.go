@@ -5,12 +5,13 @@ import (
 	"reflect"
 	"testing"
 
-	configcore "github.com/ghbvf/gocell/cells/configcore"
-	"github.com/ghbvf/gocell/pkg/errcode"
-	"github.com/ghbvf/gocell/runtime/crypto"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	configcore "github.com/ghbvf/gocell/cells/configcore"
+	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/runtime/crypto"
 )
 
 func TestOptionsApplySettings(t *testing.T) {

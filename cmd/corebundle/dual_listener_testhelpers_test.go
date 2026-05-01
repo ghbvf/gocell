@@ -5,8 +5,9 @@ import (
 	"net/http"
 	"testing"
 
-	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/stretchr/testify/require"
+
+	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 )
 
 // newCorebundleLocalListener returns an ephemeral TCP listener bound to

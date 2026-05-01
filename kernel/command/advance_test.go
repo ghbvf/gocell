@@ -4,8 +4,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/stretchr/testify/assert"
+
+	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 )
 
 func TestAdvanceCommand_NilEntry(t *testing.T) {

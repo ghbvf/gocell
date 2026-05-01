@@ -12,10 +12,11 @@ import (
 	"sync/atomic"
 	"testing"
 
-	kcell "github.com/ghbvf/gocell/kernel/cell"
-	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	kcell "github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/runtime/auth"
 )
 
 // dualMuxMockVerifier implements auth.IntentTokenVerifier for per-listener tests.

@@ -6,9 +6,10 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
+
 	"github.com/ghbvf/gocell/kernel/wrapper"
 	"github.com/ghbvf/gocell/pkg/ctxkeys"
-	"github.com/stretchr/testify/assert"
 )
 
 func TestNewTracer_Start(t *testing.T) {

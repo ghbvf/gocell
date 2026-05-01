@@ -10,10 +10,11 @@ import (
 
 	"github.com/coder/websocket"
 
+	"github.com/google/uuid"
+
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/logutil"
 	rtws "github.com/ghbvf/gocell/runtime/websocket"
-	"github.com/google/uuid"
 )
 
 // UpgradeConfig configures the WebSocket upgrade handler.
