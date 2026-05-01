@@ -37,9 +37,10 @@ const (
 	ErrBusClosed          Code = "ERR_BUS_CLOSED"
 	ErrCellMissingOutbox  Code = "ERR_CELL_MISSING_OUTBOX"
 	ErrCellMissingCodec   Code = "ERR_CELL_MISSING_CODEC"
-
-	// ErrCellMissingTokenIssuer declared as var below to avoid gosec G101 false positive.
-	ErrCellInvalidConfig Code = "ERR_CELL_INVALID_CONFIG"
+	// ErrCellMissingTokenIssuer signals that a Cell was started without a token
+	// issuer dependency that it requires.
+	ErrCellMissingTokenIssuer Code = "ERR_CELL_MISSING_TOKEN_ISSUER"
+	ErrCellInvalidConfig      Code = "ERR_CELL_INVALID_CONFIG"
 	// ErrCellPlatformUnsupported signals that a Cell option requested capability
 	// that is not implemented on the current GOOS — distinct from
 	// ErrCellInvalidConfig (configuration mistake) so operators can route
@@ -60,9 +61,23 @@ const (
 	// Distinct from ErrAuthKeyInvalid (key material) so operators can route
 	// verifier misconfiguration separately from cryptographic key failures.
 	ErrAuthVerifierConfig Code = "ERR_AUTH_VERIFIER_CONFIG"
-	// ErrAuthTokenInvalid, ErrAuthTokenExpired, ErrAuthInvalidTokenIntent,
-	// ErrAuthInvalidToken declared as vars below to avoid gosec G101 false
-	// positive on constant names containing "token".
+	// ErrAuthTokenInvalid signals that a JWT or service token failed
+	// cryptographic or structural validation.
+	ErrAuthTokenInvalid Code = "ERR_AUTH_TOKEN_INVALID"
+	// ErrAuthTokenExpired signals that a JWT or service token has passed its
+	// expiry time.
+	ErrAuthTokenExpired Code = "ERR_AUTH_TOKEN_EXPIRED"
+	// ErrAuthInvalidTokenIntent signals that a JWT's token_use claim (and/or
+	// its JOSE typ header) does not match the expected intent for the current
+	// request scope — e.g., a refresh token presented at a business endpoint,
+	// or an access token presented at /auth/refresh. Middleware and slice
+	// layers map this to a generic ERR_AUTH_UNAUTHORIZED / ERR_AUTH_REFRESH_FAILED
+	// response to prevent token-type enumeration; the specific code is only
+	// visible in logs.
+	//
+	// ref: RFC 8725 §2.8 / §3.11 (JWT token confusion threat model)
+	// ref: AWS Cognito token_use claim, Keycloak typ header constants
+	ErrAuthInvalidTokenIntent Code = "ERR_AUTH_INVALID_TOKEN_INTENT"
 
 	// Access-core cell error codes.
 	ErrAuthUserNotFound         Code = "ERR_AUTH_USER_NOT_FOUND"
@@ -79,10 +94,10 @@ const (
 	ErrAuthRefreshInvalidInput  Code = "ERR_AUTH_REFRESH_INVALID_INPUT"
 	ErrAuthRefreshFailed        Code = "ERR_AUTH_REFRESH_FAILED"
 	ErrAuthRefreshUnavailable   Code = "ERR_AUTH_REFRESH_UNAVAILABLE"
-	// ErrAuthInvalidToken declared as var below to avoid gosec G101 false positive.
-	ErrAuthRBACInvalidInput Code = "ERR_AUTH_RBAC_INVALID_INPUT"
-	ErrAuthKeyMissing       Code = "ERR_AUTH_KEY_MISSING"
-	ErrAuthSelfDelete       Code = "ERR_AUTH_SELF_DELETE"
+	ErrAuthInvalidToken         Code = "ERR_AUTH_INVALID_TOKEN"
+	ErrAuthRBACInvalidInput     Code = "ERR_AUTH_RBAC_INVALID_INPUT"
+	ErrAuthKeyMissing           Code = "ERR_AUTH_KEY_MISSING"
+	ErrAuthSelfDelete           Code = "ERR_AUTH_SELF_DELETE"
 	// ErrAuthRoleFetchFailed signals that role-name resolution at the time of
 	// session-token issuance failed due to an infrastructure fault (RoleRepository
 	// unavailable, query error, etc.). Session minting is fail-closed: callers
@@ -95,8 +110,7 @@ const (
 	// enforces this when the JWT claim password_reset_required is true.
 	// Only the exempt endpoints (POST /api/v1/access/users/{id}/password and
 	// DELETE /api/v1/access/sessions/{id}) bypass this check.
-
-	// ErrAuthPasswordResetRequired declared as var below to avoid gosec G101 false positive.
+	ErrAuthPasswordResetRequired Code = "ERR_AUTH_PASSWORD_RESET_REQUIRED"
 	// ErrSetupAlreadyInitialized signals that the interactive first-run admin
 	// endpoint (POST /api/v1/access/setup/admin) was invoked after the system
 	// already has at least one admin. The caller should authenticate via
@@ -374,9 +388,17 @@ const (
 	// who genuinely do not want the verbose endpoint exposed at all should
 	// explicitly acknowledge that via the WithReadyzVerboseDisabled option
 	// instead of relying on an absent token to silently disable gating.
+	ErrControlplaneVerboseTokenMissing Code = "ERR_CONTROLPLANE_VERBOSE_TOKEN_MISSING"
 
-	// ErrControlplaneVerboseTokenMissing and ErrControlplaneVerboseTokenSample
-	// declared as vars below to avoid gosec G101 false positive on names containing "token".
+	// ErrControlplaneVerboseTokenSample signals that
+	// GOCELL_READYZ_VERBOSE_TOKEN is set to the literal placeholder shipped
+	// in .env.example. A production deploy that copies the sample env and
+	// rotates only the other secrets would otherwise pass startup with a
+	// publicly-known token; rejecting the literal value at startup forces
+	// operators to mint a real high-entropy secret. Distinct from
+	// ErrControlplaneVerboseTokenMissing so dashboards and runbooks can
+	// distinguish "forgot to configure" from "configured with the sample".
+	ErrControlplaneVerboseTokenSample Code = "ERR_CONTROLPLANE_VERBOSE_TOKEN_SAMPLE"
 
 	// ErrAdapterEndpointNotTLS signals that a remote adapter endpoint (Redis,
 	// Vault, S3, etc.) was configured with a non-TLS scheme and is not a loopback
@@ -461,44 +483,6 @@ const (
 	//
 	// ref: docs/plans/202604270020-1-2-ci-3-claude-ship-reactive-bachman.md PR-MODE-1
 	ErrReadyzVerboseUnconfigured Code = "ERR_READYZ_VERBOSE_UNCONFIGURED"
-)
-
-// The following sentinel codes are declared as vars (not consts) to avoid gosec
-// G101 false positives triggered by variable names containing "token" or "password".
-// The values are error code strings, not credentials.
-var (
-	// ErrCellMissingTokenIssuer signals that a Cell was started without a token
-	// issuer dependency that it requires.
-	ErrCellMissingTokenIssuer Code = "ERR_CELL_MISSING_" + "TOKEN_ISSUER"
-
-	// ErrAuthTokenInvalid signals that a JWT or service token failed cryptographic
-	// or structural validation.
-	ErrAuthTokenInvalid Code = "ERR_AUTH_" + "TOKEN_INVALID"
-
-	// ErrAuthTokenExpired signals that a JWT or service token has passed its
-	// expiry time.
-	ErrAuthTokenExpired Code = "ERR_AUTH_" + "TOKEN_EXPIRED"
-
-	// ErrAuthInvalidTokenIntent signals that a JWT's token_use claim does not
-	// match the expected intent for the current request scope.
-	//
-	// ref: RFC 8725 §2.8 / §3.11 (JWT token confusion threat model)
-	ErrAuthInvalidTokenIntent Code = "ERR_AUTH_INVALID_" + "TOKEN_INTENT"
-
-	// ErrAuthInvalidToken is a general-purpose token validation failure code.
-	ErrAuthInvalidToken Code = "ERR_AUTH_INVALID_" + "TOKEN"
-
-	// ErrAuthPasswordResetRequired signals that the authenticated subject must
-	// change their password before accessing business endpoints.
-	ErrAuthPasswordResetRequired Code = "ERR_AUTH_" + "PASSWORD_RESET_REQUIRED"
-
-	// ErrControlplaneVerboseTokenMissing signals that GOCELL_READYZ_VERBOSE_TOKEN
-	// was not set at startup in a mode that requires it.
-	ErrControlplaneVerboseTokenMissing Code = "ERR_CONTROLPLANE_VERBOSE_" + "TOKEN_MISSING"
-
-	// ErrControlplaneVerboseTokenSample signals that GOCELL_READYZ_VERBOSE_TOKEN
-	// is set to the literal placeholder from .env.example.
-	ErrControlplaneVerboseTokenSample Code = "ERR_CONTROLPLANE_VERBOSE_" + "TOKEN_SAMPLE"
 )
 
 // Error is a structured error that carries a machine-readable Code, a

@@ -101,9 +101,12 @@ linters:
       allow-unused: false
       # Empty array means: every linter requires an explanation. No carve-outs.
       allow-no-explanation: []
-      # //nolint:<linter> // <reason> — both the linter name and reason are
-      # mandatory. R2-approved nolints must use the prefix "R2-approved: ..."
-      # so future readers can see the historical decision.
+      # //nolint:<linter> // <reason> — nolintlint enforces the linter name
+      # and the presence of an explanation. It cannot enforce a particular
+      # prefix in that explanation. Convention (reviewer-enforced, not
+      # tool-enforced): write "R2-approved: <reason>" so future grep can
+      # find the historical decision; reviewers reject nolints without
+      # the prefix during PR review.
       require-explanation: true
       require-specific: true
 
@@ -187,11 +190,15 @@ linters:
         linters:
           - staticcheck
         text: "S1016"
-      # cmdrun.go: ValidatedTool.path is the single repo-wide audit point for
-      # subprocess invocation (NewTool calls exec.LookPath + filepath.Abs +
-      # filepath.Clean). gosec G204 on the variable binary path is a false
-      # positive — caller paths are whitelisted governance/verify helpers,
-      # never user input.
+      # cmdrun.go is the audit point for governance / verify subprocess
+      # invocation (gocell validate / gocell check / golangci-lint runner /
+      # ...) — ValidatedTool.path is exec.LookPath-resolved + Abs-normalized
+      # at NewTool. gosec G204 on the variable binary path is a false
+      # positive in this context. Direct exec.Command callers still exist
+      # in tests (tools/generatedverify/generatedverify_test.go,
+      # examples/ssobff/smoke_test.go) where the binary path is also
+      # constant or test-controlled; those test sites are intentionally
+      # not routed through cmdrun.
       - path: ^pkg/cmdrun/cmdrun\.go
         linters:
           - gosec
@@ -233,6 +240,17 @@ linters:
         linters:
           - gosec
         text: "G30(1|6)"
+      # pkg/errcode/errcode.go is the project-wide error-code dictionary.
+      # Every const value is a wire-protocol identifier, never a credential;
+      # gosec G101 matches names containing "token" / "password" — 100%
+      # false-positive in this file. Keeping the codes as immutable consts
+      # (not the var-block-with-string-concat trick that hides the literal
+      # from static scanners) matters because importers must not be able
+      # to mutate canonical wire identifiers.
+      - path: ^pkg/errcode/errcode\.go
+        linters:
+          - gosec
+        text: "G101"
       # cmd/ wiring functions are sequential composition-root assemblies
       # (Provide / LoadSharedDepsFromEnv / NewSSOBFFApp). funlen flags them
       # at 80 lines but breaking apart obscures the reading order — caller

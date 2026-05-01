@@ -1,7 +1,18 @@
-// Package cmdrun centralizes whitelisted subprocess invocation. All callers
-// funnel through Run/RunIn so the gosec G204 nolint annotation lives at a
-// single audit point and tool-path validation is enforced via the
-// ValidatedTool newtype's unexported field.
+// Package cmdrun centralizes whitelisted subprocess invocation for
+// governance and verify helpers (gocell validate / gocell check /
+// golangci-lint runner / archtest tooling). Callers funnel through
+// Run / RunIn so the gosec G204 path-scoped exemption lives at a single
+// audit point and tool-path validation is enforced via the ValidatedTool
+// newtype's unexported field (NewTool runs exec.LookPath + filepath.Abs +
+// filepath.Clean).
+//
+// cmdrun is not the only subprocess entry point in the repo — tests in
+// tools/generatedverify and examples/ssobff invoke exec.Command directly
+// for `git`, `go build`, and the produced binary. Those sites are kept
+// outside cmdrun because they exercise binary names that are constant
+// strings under test control, not the LookPath-mediated whitelist that
+// cmdrun guards. Production callers (anything outside *_test.go and
+// outside examples/) must funnel through cmdrun.
 package cmdrun
 
 import (
@@ -68,12 +79,12 @@ func Run(ctx context.Context, t ValidatedTool, args ...string) ([]byte, error) {
 // working directory (empty dir = inherit) and environment (nil env =
 // inherit os.Environ). Combined stdout+stderr is returned.
 //
-// ValidatedTool.path is exec.LookPath-resolved at NewTool construction (the
-// single audit point for subprocess invocation in this repo); args are
-// caller-controlled whitelisted invocations from governance/verify helpers,
-// never user input. gosec G204 on the variable binary path is a false
-// positive in this exact context — addressed by .golangci.yml gosec.excludes
-// or a path-scoped exemption rather than reshaping the invocation.
+// ValidatedTool.path is exec.LookPath-resolved at NewTool construction;
+// args are caller-controlled whitelisted invocations from governance /
+// verify helpers, never user input. gosec G204 on the variable binary
+// path is a false positive in this context — addressed by the
+// .golangci.yml path-scoped exemption rather than reshaping the
+// invocation. See package doc for callers that bypass cmdrun (tests).
 func RunIn(ctx context.Context, t ValidatedTool, dir string, env []string, args ...string) ([]byte, error) {
 	cmd := exec.CommandContext(ctx, t.path, args...)
 	if dir != "" {
