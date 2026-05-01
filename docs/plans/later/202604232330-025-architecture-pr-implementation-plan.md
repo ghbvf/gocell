@@ -20,7 +20,7 @@
 | Wave | 剩余 OPEN |
 |---|---|
 | **Wave 3** | PR-A15 / A16 / A17 / A36 / A37 / A38 |
-| **Wave 4** | PR-A21 / A22 / A24 / A33 |
+| **Wave 4** | PR-A22 / A24 / A33 |
 
 > Wave 1 / Wave 2 / **Wave 2.5 全部清零** / Wave 3 已完工（A14b/A18/A35）/ Wave 4 已完工（A19/A20/A23）/ won't-do（PR-CFG-5）—— 全部从本 plan 删除。
 >
@@ -85,14 +85,9 @@
 
 ---
 
-### Wave 4 残余（4 PR）
+### Wave 4 残余（3 PR）
 
-#### PR-A21 AL-04 Auth JWT 依赖评估（~0.5-1d）
-
-**主线**：`runtime/auth` 直接依赖 `golang-jwt/jwt/v5`，评估抽象必要性。
-**决策点**：JWT 是事实标准；可能结论为 "won't do"（维持现状，补文档说明）。
-**搭车**：**T5 AUTH-SIGNER-01**（trigger）若 golang-jwt v6 发布则一并处理。
-**文件面**：`runtime/auth/`。
+> **PR-A21 AL-04 Auth JWT 依赖评估** — 已移除（2026-05-01）。结论 won't-do：JWT 是事实标准、无第二个 provider；搭车的 T5 AUTH-SIGNER-01 解除 "golang-jwt v6 发布" 这条不可控的 gating（`crypto.Signer` 是 stdlib，jwt/v5 已 type-assert 支持），改为按 caller 需 HSM/KMS/EC 时独立 ship，详见 backlog T5 + 029 §四。
 
 #### PR-A22 Cell ISP 拆分（~1.5d）
 
@@ -168,7 +163,7 @@
 
 | Lane | 任务链 | 主要文件域 | 备注 |
 |---|---|---|---|
-| **L1 Auth / Refresh** | PR-A21 → PR-A33 | `runtime/auth/` + `adapters/postgres/refresh_store.go` + migrations 010/011/012 | A21 可能 won't-do（评估）；A33 X12+X13+X14 一批 |
+| **L1 Auth / Refresh** | PR-A33 | `adapters/postgres/refresh_store.go` + migrations 010/011/012 | A33 X12+X13+X14 一批（PR-A21 已移除，见 Wave 4 残余说明） |
 | **L2 Kernel 新模块** | PR-A15 ‖ PR-A16 ‖ PR-A17 → PR-A24 | `kernel/webhook/` / `kernel/reconcile/` / `runtime/scheduler/` / `kernel/replay/` / `kernel/rollback/` | A15/A16/A17 文件域不重叠可三路并行；A24 v1.1 长期债打包 |
 | **L3 DevTools / Tooling** | PR-A37 → PR-A38 → PR-A36 | `cmd/gocell/app/export.go` + `kernel/metadata/export.go` + `tools/depgraph/` + `runtime/observability/metrics/provider_collector.go` + `runtime/http/middleware/metrics.go` | 串行：A38 是 A37 `--include-deps` 提供方；A36 HTTP metrics label realign（多 cell assembly 部署前触发，🟠） |
 | **L4 Architecture (破坏性)** | PR-A22 Cell ISP | `kernel/cell/` + 所有 `cells/*/cell.go` + examples | 🔴 高风险；独占审，禁止与 L1/L2 同 batch（cells/* 大面积冲突） |
@@ -177,14 +172,13 @@
 
 > 默认双人 worktree 并行；单人按 sprint 拉成 1.6×。每 sprint ~5 个净工作日窗口，含 review 往返。
 
-#### Sprint 1（~2d 净）— DX 短链路 + auth 评估
+#### Sprint 1（~1d 净）— DX 短链路
 
 | worktree | PR | 工时 | 文件域 | 冲突检查 |
 |---|---|---|---|---|
-| A | **PR-A37** DEVTOOLS-METADATA-EXPORT | 1d | `cmd/gocell/` + `kernel/metadata/export.go` | 与 B 无重叠 |
-| B | **PR-A21** AUTH-JWT-ABSTRACT-EVAL | 0.5-1d | `runtime/auth/`（评估，可能 won't-do） | 与 A 无重叠 |
+| A | **PR-A37** DEVTOOLS-METADATA-EXPORT | 1d | `cmd/gocell/` + `kernel/metadata/export.go` | 单 lane |
 
-**原则**：A37 是 gocell-web 自包含构建解锁；A21 评估线，结论可能 won't-do（结果写入 backlog 决定继续或关闭）。
+**原则**：A37 是 gocell-web 自包含构建解锁。（原 worktree B PR-A21 已移除，见 Wave 4 残余说明）
 
 #### Sprint 2（~2-2.5d 净）— Tooling 收口
 
@@ -221,7 +215,6 @@
 |---|---|---|---|
 | PR-A22 | PR-A15/A16/A17 | A22 改 `cells/*/cell.go`，A16 写 example cell，A17 可能加 cell-side scheduler hook | A22 必须独占 sprint，禁止与任何写 cells/* 的 PR 同窗口 |
 | PR-A37 | PR-A38 | A38 是 A37 `--include-deps` 提供方 | 严格串行（Sprint 1 → Sprint 2） |
-| PR-A33 | PR-A21 | 都触 `runtime/auth/` 但 A21 仅评估、A33 改 refresh | 不同 sprint（A21 in Sprint 1 评估；A33 in Sprint 3 实施） |
 | PR-A38 | PR-A36 | 都触 runtime tooling | 同 lane 串行（Sprint 2 worktree A） |
 
 ### 时间线（双人并行估算）
