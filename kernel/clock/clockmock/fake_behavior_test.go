@@ -1,18 +1,18 @@
-package locktest_test
+package clockmock_test
 
 import (
 	"testing"
 	"time"
 
+	"github.com/ghbvf/gocell/kernel/clock/clockmock"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
-	"github.com/ghbvf/gocell/runtime/distlock/locktest"
 )
 
 var epoch = time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
 
 // TestFakeClock_Now_ReturnsConfiguredTime verifies initial Now() value.
 func TestFakeClock_Now_ReturnsConfiguredTime(t *testing.T) {
-	fc := locktest.NewFakeClock(epoch)
+	fc := clockmock.New(epoch)
 	if got := fc.Now(); !got.Equal(epoch) {
 		t.Errorf("Now() = %v, want %v", got, epoch)
 	}
@@ -21,7 +21,7 @@ func TestFakeClock_Now_ReturnsConfiguredTime(t *testing.T) {
 // TestFakeClock_Advance_FiresDueTimers verifies that multiple timers at
 // different deadlines fire when Advance moves past their deadline.
 func TestFakeClock_Advance_FiresDueTimers(t *testing.T) {
-	fc := locktest.NewFakeClock(epoch)
+	fc := clockmock.New(epoch)
 
 	// Timer at +1s and +2s.
 	t1 := fc.NewTimerAt(epoch.Add(testtime.D1s))
@@ -53,7 +53,7 @@ func TestFakeClock_Advance_FiresDueTimers(t *testing.T) {
 // TestFakeClock_Advance_DoesNotFireFutureTimers verifies that timers with
 // future deadlines do not fire prematurely.
 func TestFakeClock_Advance_DoesNotFireFutureTimers(t *testing.T) {
-	fc := locktest.NewFakeClock(epoch)
+	fc := clockmock.New(epoch)
 	timer := fc.NewTimerAt(epoch.Add(testtime.D10s))
 
 	// Advance less than the timer deadline.
@@ -74,7 +74,7 @@ func TestFakeClock_Advance_DoesNotFireFutureTimers(t *testing.T) {
 // registered out of deadline order. Cross-timer delivery order is not part of
 // FakeClock's observable contract because each timer has its own channel.
 func TestFakeClock_Advance_FiresAllDueTimersFromOneAdvance(t *testing.T) {
-	fc := locktest.NewFakeClock(epoch)
+	fc := clockmock.New(epoch)
 
 	// Create timers in reverse order of deadlines.
 	t3 := fc.NewTimerAt(epoch.Add(testtime.D3s))
@@ -116,7 +116,7 @@ type distlockTimer interface {
 // TestFakeClock_Timer_Stop_BeforeFire verifies that Stop() returns true and
 // prevents the timer from firing.
 func TestFakeClock_Timer_Stop_BeforeFire(t *testing.T) {
-	fc := locktest.NewFakeClock(epoch)
+	fc := clockmock.New(epoch)
 	timer := fc.NewTimerAt(epoch.Add(testtime.D5s))
 
 	if !timer.Stop() {
@@ -141,7 +141,7 @@ func TestFakeClock_Timer_Stop_BeforeFire(t *testing.T) {
 // TestFakeClock_Timer_Stop_AfterFire verifies that Stop() returns false after
 // the timer has already fired.
 func TestFakeClock_Timer_Stop_AfterFire(t *testing.T) {
-	fc := locktest.NewFakeClock(epoch)
+	fc := clockmock.New(epoch)
 	timer := fc.NewTimerAt(epoch.Add(testtime.D1s))
 
 	// Fire the timer by advancing.
@@ -163,7 +163,7 @@ func TestFakeClock_Timer_Stop_AfterFire(t *testing.T) {
 // TestFakeClock_Timer_Stop_TwiceIdempotent verifies that calling Stop() twice
 // is safe (second call returns false).
 func TestFakeClock_Timer_Stop_TwiceIdempotent(t *testing.T) {
-	fc := locktest.NewFakeClock(epoch)
+	fc := clockmock.New(epoch)
 	timer := fc.NewTimerAt(epoch.Add(testtime.D5s))
 
 	if !timer.Stop() {
@@ -177,7 +177,7 @@ func TestFakeClock_Timer_Stop_TwiceIdempotent(t *testing.T) {
 // TestFakeClock_Timer_Reset_ToFutureDeadline verifies Reset() re-arms the
 // timer to a future deadline.
 func TestFakeClock_Timer_Reset_ToFutureDeadline(t *testing.T) {
-	fc := locktest.NewFakeClock(epoch)
+	fc := clockmock.New(epoch)
 	timer := fc.NewTimerAt(epoch.Add(testtime.D1s))
 
 	// Stop and reset to 5s.
@@ -205,7 +205,7 @@ func TestFakeClock_Timer_Reset_ToFutureDeadline(t *testing.T) {
 // TestFakeClock_Timer_Reset_ToPastDeadline_FiresOnNextAdvance verifies that
 // Reset(<=0) marks the timer as fired and sends on the channel.
 func TestFakeClock_Timer_Reset_ToPastDeadline_FiresOnNextAdvance(t *testing.T) {
-	fc := locktest.NewFakeClock(epoch)
+	fc := clockmock.New(epoch)
 	timer := fc.NewTimerAt(epoch.Add(testtime.D10s))
 
 	// Reset to 0 — should fire immediately.
@@ -221,7 +221,7 @@ func TestFakeClock_Timer_Reset_ToPastDeadline_FiresOnNextAdvance(t *testing.T) {
 
 // TestFakeClock_Since verifies that Since uses the configured Now.
 func TestFakeClock_Since(t *testing.T) {
-	fc := locktest.NewFakeClock(epoch)
+	fc := clockmock.New(epoch)
 
 	// Advance to T+5s.
 	fc.Advance(testtime.D5s)
@@ -236,7 +236,7 @@ func TestFakeClock_Since(t *testing.T) {
 // TestFakeClock_PendingTimers_CountsOnlyArmed verifies that PendingTimers()
 // counts only non-stopped, non-fired timers.
 func TestFakeClock_PendingTimers_CountsOnlyArmed(t *testing.T) {
-	fc := locktest.NewFakeClock(epoch)
+	fc := clockmock.New(epoch)
 
 	if fc.PendingTimers() != 0 {
 		t.Errorf("initial PendingTimers = %d, want 0", fc.PendingTimers())

@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ghbvf/gocell/kernel/clock/clockmock"
 	"github.com/ghbvf/gocell/runtime/distlock"
 	"github.com/ghbvf/gocell/runtime/distlock/locktest"
 )
@@ -19,7 +20,7 @@ import (
 func TestFakeDriver_Conformance(t *testing.T) {
 	// Each sub-test gets a fresh FakeDriver wired to a shared FakeClock so
 	// TTL expiry is deterministic (no real-time dependency).
-	fc := locktest.NewFakeClock(time.Time{})
+	fc := clockmock.New(time.Time{})
 	locktest.RunDriverConformance(t, func(t *testing.T) distlock.Driver {
 		return locktest.NewFakeDriverWithClock(fc.Now)
 	})

@@ -6,12 +6,13 @@ import (
 	"sync"
 	"time"
 
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
 type GCWorkerConfig struct {
 	Store     Store
-	Clock     Clock
+	Clock     clock.Clock
 	Interval  time.Duration
 	Retention time.Duration
 	Logger    *slog.Logger
@@ -20,7 +21,7 @@ type GCWorkerConfig struct {
 
 type GCWorker struct {
 	store     Store
-	clock     Clock
+	clock     clock.Clock
 	interval  time.Duration
 	retention time.Duration
 	logger    *slog.Logger

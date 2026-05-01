@@ -50,8 +50,8 @@ func mgr(l distlock.Locker) *distlock.Manager {
 	return l.(mgrGetter).Manager()
 }
 
-// newTestLocker constructs a Locker backed by FakeDriver + FakeClock.
-func newTestLocker(fc *locktest.FakeClock, fd *locktest.FakeDriver) distlock.Locker {
+// newTestLocker constructs a Locker backed by FakeDriver + clockmock.FakeClock.
+func newTestLocker(fc *clockmock.FakeClock, fd *locktest.FakeDriver) distlock.Locker {
 	return distlock.MustNew(fd, distlock.WithClock(fc))
 }
 

@@ -35,6 +35,7 @@ import (
 	"github.com/ghbvf/gocell/cells/accesscore/internal/testutil"
 	"github.com/ghbvf/gocell/cells/accesscore/slices/sessionlogin"
 	"github.com/ghbvf/gocell/kernel/cell/celltest"
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/runtime/auth"
@@ -44,10 +45,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// realClock is a time.Now-backed refresh.Clock for e2e tests.
-type realClock struct{}
-
-func (realClock) Now() time.Time { return time.Now() }
 
 // e2eTestKeySet holds a key pair shared across the e2e test.
 var e2eTestKeySet, _, _ = auth.MustNewTestKeySet()
@@ -101,7 +98,7 @@ func newE2EFixture() *e2eFixture {
 	roleRepo := mem.NewRoleRepository()
 	refreshStore := refreshmem.MustNew(
 		refresh.Policy{ReuseInterval: testtime.D2s, MaxAge: time.Hour},
-		realClock{}, nil,
+		clock.Real(), nil,
 	)
 
 	loginSvc := sessionlogin.MustNewService(

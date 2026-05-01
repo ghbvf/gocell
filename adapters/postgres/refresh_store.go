@@ -16,6 +16,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/validation"
 	"github.com/ghbvf/gocell/runtime/auth/refresh"
@@ -88,7 +89,7 @@ WHERE id IN (
 type PGRefreshStore struct {
 	pool   *pgxpool.Pool
 	policy refresh.Policy
-	clock  refresh.Clock
+	clock  clock.Clock
 	rand   io.Reader
 }
 
@@ -116,7 +117,7 @@ func (r refreshRow) toToken() *refresh.Token {
 // NewRefreshStore constructs a PGRefreshStore. Returns a non-nil error if
 // pool/clock are nil or policy values are out of range; callers that prefer
 // fail-fast at composition time can use MustNewRefreshStore.
-func NewRefreshStore(pool *pgxpool.Pool, policy refresh.Policy, clock refresh.Clock, randReader io.Reader) (*PGRefreshStore, error) {
+func NewRefreshStore(pool *pgxpool.Pool, policy refresh.Policy, clock clock.Clock, randReader io.Reader) (*PGRefreshStore, error) {
 	if pool == nil {
 		return nil, fmt.Errorf("postgres.NewRefreshStore: pool must not be nil")
 	}
@@ -142,7 +143,7 @@ func NewRefreshStore(pool *pgxpool.Pool, policy refresh.Policy, clock refresh.Cl
 
 // MustNewRefreshStore is the composition-root fail-fast variant of
 // NewRefreshStore. It panics when NewRefreshStore returns an error.
-func MustNewRefreshStore(pool *pgxpool.Pool, policy refresh.Policy, clock refresh.Clock, randReader io.Reader) *PGRefreshStore {
+func MustNewRefreshStore(pool *pgxpool.Pool, policy refresh.Policy, clock clock.Clock, randReader io.Reader) *PGRefreshStore {
 	store, err := NewRefreshStore(pool, policy, clock, randReader)
 	if err != nil {
 		panic(err.Error())

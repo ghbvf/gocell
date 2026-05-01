@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ghbvf/gocell/kernel/clock/clockmock"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/runtime/distlock/locktest"
 )
@@ -84,7 +85,7 @@ func TestFakeDriver_LastRenewDeadline(t *testing.T) {
 // TestFakeDriver_WithClock_Method verifies that the WithClock() method
 // (as opposed to NewFakeDriverWithClock constructor) correctly overrides the clock.
 func TestFakeDriver_WithClock_Method(t *testing.T) {
-	fc := locktest.NewFakeClock(time.Time{})
+	fc := clockmock.New(time.Time{})
 	// Start with real time clock, then override via method.
 	fd := locktest.NewFakeDriver()
 	fd.WithClock(fc.Now)
@@ -108,7 +109,7 @@ func TestFakeDriver_WithClock_Method(t *testing.T) {
 
 // TestFakeDriver_WithClock verifies that WithClock overrides the TTL clock.
 func TestFakeDriver_WithClock(t *testing.T) {
-	fc := locktest.NewFakeClock(time.Time{})
+	fc := clockmock.New(time.Time{})
 	fd := locktest.NewFakeDriverWithClock(fc.Now)
 	ctx := context.Background()
 
@@ -258,7 +259,7 @@ func TestFakeDriver_Concurrent_Safety(t *testing.T) {
 // TestFakeDriver_TTLExpiry_WithClock verifies that TTL expiry is enforced
 // according to the injected clock.
 func TestFakeDriver_TTLExpiry_WithClock(t *testing.T) {
-	fc := locktest.NewFakeClock(time.Time{})
+	fc := clockmock.New(time.Time{})
 	fd := locktest.NewFakeDriverWithClock(fc.Now)
 	ctx := context.Background()
 

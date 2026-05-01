@@ -17,8 +17,6 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-
-	"github.com/ghbvf/gocell/kernel/clock"
 )
 
 // Token is the persisted refresh token metadata returned by Issue and Rotate.
@@ -51,7 +49,3 @@ type Policy struct {
 	ReuseInterval time.Duration
 	MaxAge        time.Duration
 }
-
-// Clock is the canonical time source interface for this package.
-// It is an alias for [clock.Clock] so callers can use either name.
-type Clock = clock.Clock

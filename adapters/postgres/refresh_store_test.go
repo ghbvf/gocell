@@ -10,16 +10,23 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/runtime/auth/refresh"
 	"github.com/ghbvf/gocell/runtime/auth/refresh/storetest"
 )
 
 var errTypedNilRefreshReaderUsed = errors.New("typed nil refresh reader should have been defaulted")
 
+// typedNilRefreshClock implements clock.Clock for typed-nil rejection tests.
+// All methods are unreachable (the value is always typed-nil at the call
+// site); they exist only to satisfy the clock.Clock interface.
 type typedNilRefreshClock struct{}
 
-func (*typedNilRefreshClock) Now() time.Time {
-	return time.Now()
+func (*typedNilRefreshClock) Now() time.Time                  { return time.Now() }
+func (*typedNilRefreshClock) Since(t time.Time) time.Duration { return time.Since(t) }
+func (*typedNilRefreshClock) Until(t time.Time) time.Duration { return time.Until(t) }
+func (*typedNilRefreshClock) NewTimerAt(t time.Time) clock.Timer {
+	return clock.Real().NewTimerAt(t)
 }
 
 type typedNilRefreshReader struct{}

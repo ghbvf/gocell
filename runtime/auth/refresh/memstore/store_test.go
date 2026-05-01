@@ -47,12 +47,12 @@ func TestMemStoreContract(t *testing.T) {
 }
 
 func TestNewRejectsInvalidConfig(t *testing.T) {
-	clock := storetest.NewFakeClock(baseTime)
+	clk := storetest.NewFakeClock(baseTime)
 
 	tests := []struct {
 		name   string
 		policy refresh.Policy
-		clock  refresh.Clock
+		clock  clock.Clock
 	}{
 		{
 			name:   "nil clock",
@@ -62,12 +62,12 @@ func TestNewRejectsInvalidConfig(t *testing.T) {
 		{
 			name:   "non-positive max age",
 			policy: refresh.Policy{ReuseInterval: time.Second},
-			clock:  clock,
+			clock:  clk,
 		},
 		{
 			name:   "negative reuse interval",
 			policy: refresh.Policy{ReuseInterval: -time.Second, MaxAge: time.Hour},
-			clock:  clock,
+			clock:  clk,
 		},
 	}
 

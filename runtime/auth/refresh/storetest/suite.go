@@ -22,50 +22,22 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/ghbvf/gocell/kernel/clock"
+	"github.com/ghbvf/gocell/kernel/clock/clockmock"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/runtime/auth/refresh"
 )
 
-// FakeClock is a step-driven clock for deterministic testing.
-type FakeClock struct {
-	mu  sync.Mutex
-	now time.Time
-}
+// FakeClock is a type alias for [clockmock.FakeClock]; storetest historically
+// owned its own implementation but the canonical one is now in
+// kernel/clock/clockmock. The alias is retained so existing test wiring keeps
+// using `storetest.FakeClock` through this package's Factory return type.
+type FakeClock = clockmock.FakeClock
 
-// NewFakeClock constructs a FakeClock anchored at the supplied time.
+// NewFakeClock constructs a FakeClock anchored at the supplied time. Delegates
+// to [clockmock.New].
 func NewFakeClock(t time.Time) *FakeClock {
-	return &FakeClock{now: t}
-}
-
-// Now returns the current synthetic time.
-func (c *FakeClock) Now() time.Time {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return c.now
-}
-
-// Since returns the duration elapsed since t.
-func (c *FakeClock) Since(t time.Time) time.Duration {
-	return c.Now().Sub(t)
-}
-
-// Until returns the duration until t.
-func (c *FakeClock) Until(t time.Time) time.Duration {
-	return t.Sub(c.Now())
-}
-
-// NewTimerAt is not used by store contract tests; panics if called.
-func (c *FakeClock) NewTimerAt(_ time.Time) clock.Timer {
-	panic("storetest.FakeClock.NewTimerAt not implemented")
-}
-
-// Advance moves the clock forward by d.
-func (c *FakeClock) Advance(d time.Duration) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.now = c.now.Add(d)
+	return clockmock.New(t)
 }
 
 // Factory constructs a fresh Store and its deterministic clock. Backends with

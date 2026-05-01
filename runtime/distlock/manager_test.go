@@ -30,7 +30,7 @@ const mgrAdvance2s1ms = testtime.D2s + testtime.D1ms
 // waitPendingTimers spins until fc.PendingTimers() >= 1 or the deadline
 // passes. Called after a renew to ensure the manager has re-registered its
 // next timer before the test advances the clock again.
-func waitPendingTimers(t *testing.T, fc *locktest.FakeClock) {
+func waitPendingTimers(t *testing.T, fc *clockmock.FakeClock) {
 	t.Helper()
 	deadline := time.Now().Add(mgrWaitTimeout)
 	for fc.PendingTimers() < 1 {
