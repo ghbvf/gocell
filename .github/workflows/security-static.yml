@@ -20,12 +20,15 @@ on:
   pull_request:
     branches: [develop, main, 'release/**']
   schedule:
+    # Weekly Mon 18:17 UTC — intentionally collides with otel-collector-nightly
+    # on Mondays (independent workflows, no shared lock needed).
     - cron: '17 18 * * 1'
   workflow_dispatch:
 
+# Workflow-level permissions are read-only (least privilege). Each job that
+# needs security-events: write declares it at job level.
 permissions:
   contents: read
-  security-events: write
 
 jobs:
   codeql:
@@ -34,8 +37,8 @@ jobs:
     timeout-minutes: 20
     permissions:
       contents: read
-      security-events: write
-      actions: read
+      security-events: write   # required by codeql-action/analyze (SARIF upload)
+      actions: read            # required by codeql-action/init to read workflow metadata
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
@@ -64,11 +67,11 @@ jobs:
     timeout-minutes: 10
     permissions:
       contents: read
-      security-events: write
+      security-events: write   # required by upload-sarif
     container:
-      # Pinned by digest (multi-arch OCI index). Bump together with rule pack
-      # version to track upstream rule fixes; do not float on :latest.
-      image: semgrep/semgrep:latest@sha256:7810f1d7884974ab6dda7bef8f4a2c8e165ea2142fd8260515d380e4f1407263
+      # Pinned by version tag + digest (multi-arch OCI index). Bump both
+      # together when tracking upstream rule pack fixes.
+      image: semgrep/semgrep:1.160.0@sha256:7810f1d7884974ab6dda7bef8f4a2c8e165ea2142fd8260515d380e4f1407263
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 

@@ -17,19 +17,24 @@ on:
   pull_request:
     branches: [develop, main, 'release/**']
   schedule:
-    # Weekly Mon 18:17 UTC; offset from otel-collector-nightly (18 UTC daily).
+    # Weekly Mon 18:17 UTC — intentionally collides with otel-collector-nightly
+    # on Mondays (independent workflows, no shared lock needed).
     - cron: '17 18 * * 1'
   workflow_dispatch:
 
+# Workflow-level permissions are read-only (least privilege). Each job that
+# needs security-events: write declares it at job level.
 permissions:
   contents: read
-  security-events: write
 
 jobs:
   govulncheck:
     name: govulncheck
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    permissions:
+      contents: read
+      security-events: write   # required by upload-sarif
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 

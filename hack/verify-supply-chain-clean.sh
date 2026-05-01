@@ -30,7 +30,8 @@ workflows=(
 )
 # Patterns intentionally narrow: govulncheck uses -skip; Semgrep uses
 # --exclude / --exclude-rule; CodeQL would surface ignores via a config file
-# (covered in step [3]).
+# (covered in step [3]). Note: ' -skip' also matches `go test -skip=<pattern>`
+# — `go test -skip` is intentionally forbidden in security workflow files.
 bypass_patterns=(
   '\-\-exclude(=| )'
   '\-\-exclude-rule'
@@ -60,12 +61,17 @@ done
 echo "[3/4] CodeQL paths-ignore (only generated/ or vendor/ allowed)"
 codeql_cfg=.github/codeql/codeql-config.yml
 if [[ -f "$codeql_cfg" ]]; then
-  # Extract paths-ignore entries; reject any line that is not generated/* or
-  # vendor/*. yq is not assumed; rely on grep + line discipline.
-  if grep -nE '^\s*-\s*' "$codeql_cfg" \
-       | grep -A0 -B0 'paths-ignore' >/dev/null 2>&1 \
-       || grep -nE 'paths-ignore' "$codeql_cfg" >/dev/null 2>&1; then
-    # Lines under paths-ignore: "  - <pattern>"
+  # Reject flow-style paths-ignore (`paths-ignore: [a, b]`) outright — the
+  # block-style awk parser below cannot inspect entries inside `[...]`.
+  if grep -E 'paths-ignore:.*\[' "$codeql_cfg" >/dev/null 2>&1; then
+    printf 'FAIL: %s uses flow-style paths-ignore — only block style supported by verify gate\n' \
+      "$codeql_cfg" >&2
+    fail=1
+  fi
+
+  # Block-style: lines under `paths-ignore:` of the form `  - <pattern>`.
+  # Reject any entry that is not generated/* or vendor/*.
+  if grep -nE 'paths-ignore' "$codeql_cfg" >/dev/null 2>&1; then
     bad=$(awk '
       /paths-ignore:/ { in_block=1; next }
       in_block && /^[^[:space:]-]/ { in_block=0 }
@@ -98,11 +104,11 @@ if find_out=$(grep -rnE 'nosemgrep:' \
   combined=""
   [[ -n "$bad" ]] && combined+="$bad"$'\n'
   [[ -n "$bare" ]] && combined+="$bare"$'\n'
-  # Only fail if there's a real Go/sh/yaml hit. The verify script itself uses
-  # the literal `nosemgrep:` in regex strings — those are in this file only
-  # and matched by the `--exclude-dir` path won't exclude us, so allow our
-  # own grep-pattern lines through.
-  combined=$(printf '%s' "$combined" | grep -vF 'verify-supply-chain-clean.sh' || true)
+  # The verify script itself contains the literal `nosemgrep:` in regex
+  # strings; suppress matches against this script's own path. Use
+  # BASH_SOURCE so the filter survives a future rename of this file.
+  self_name="$(basename "${BASH_SOURCE[0]}")"
+  combined=$(printf '%s' "$combined" | grep -vF "$self_name" || true)
   if [[ -n "$combined" ]]; then
     printf 'FAIL: nosemgrep must be `// nosemgrep: <rule-id> // <reason>`; offending lines:\n%s\n' \
       "$combined" >&2

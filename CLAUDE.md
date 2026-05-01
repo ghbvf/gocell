@@ -85,10 +85,10 @@ actors.yaml   — 外部 Actor 注册（参与 contract 但不属于 Cell 模型
 
 四层静态门覆盖依赖与代码安全，PR 与 develop push 上必执行：
 
-- **gosec**（`.golangci.yml`）— Go 编码层 lint
-- **govulncheck**（`.github/workflows/security-vuln.yml`）— 官方漏洞库扫描 `go.mod`
-- **Semgrep**（`.github/workflows/security-static.yml`）— 模式 SAST（`p/golang` + `p/owasp-top-ten` + `p/secrets`）
-- **CodeQL**（`.github/workflows/security-static.yml`）— 数据流分析（`security-extended`）
+- **gosec**（`.golangci.yml`）— Go 编码层 lint（PR 模式仅扫 diff，push 模式全量）
+- **govulncheck**（`.github/workflows/security-vuln.yml`）— 官方漏洞库扫描 `go.mod`（全量）
+- **Semgrep**（`.github/workflows/security-static.yml`）— 模式 SAST（`p/golang` + `p/owasp-top-ten` + `p/secrets`，全量）
+- **CodeQL**（`.github/workflows/security-static.yml`）— 数据流分析（`security-extended`，全量）
 
 报告进 GitHub Security tab（workflows 自带 SARIF 上传）。处置规则由 CI 直接执行：扫描器以 `--strict` / `--error` 运行命中即 fail，全局忽略文件由 `hack/verify-supply-chain-clean.sh` 静态拦截，行级豁免由 nolintlint / verify gate 强制含理由。
 
