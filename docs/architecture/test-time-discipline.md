@@ -103,7 +103,7 @@ exposes no synchronization point:
 
 | File | Const | Reason |
 |---|---|---|
-| `adapters/redis/integration_test.go` | `redisConformanceTTLBuffer = 5 * time.Millisecond` | Redis Cluster TTL=1ms conformance: the test sets a 1 ms TTL and waits past it to verify physical expiry. Replacing with a fake clock would defeat the assertion. |
+| `runtime/distlock/locktest/conformance.go` | `ttlConformanceWait = 5 * time.Millisecond` | Driver TTL conformance C-5/C-6: tests set a 1 ms TTL and wait past it to verify physical expiry on the backend (Redis, future drivers). Bound to the TTL value, **not** to `testtime.FastPoll` — future tuning of the global poll cadence must not silently flake these assertions. |
 | `runtime/shutdown/shutdown_wait_signal_unix_test.go` | `signalHandlerSetupGrace = 50 * time.Millisecond` | Signal-handler installation race: `Wait()` registers `signal.Notify` from a goroutine; the test must let the goroutine reach the registration before sending the signal. |
 | `cells/accesscore/initialadmin/cleaner_test.go` | (named local consts) | Mostly migrated to fake clock; remaining literals are bridge-period synchronizers. |
 

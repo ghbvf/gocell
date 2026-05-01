@@ -24,9 +24,17 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/runtime/distlock"
 )
+
+// ttlConformanceWait is the real-clock buffer C-5 / C-6 use to step past a
+// 1 ms TTL before re-acquiring the key. The value is bound to the TTL the
+// tests set (`time.Millisecond`) plus a safety margin — it is intentionally
+// NOT shared with `testtime.FastPoll` (the Eventually poll cadence) because
+// future tuning of FastPoll must not silently flake real-clock TTL expiry
+// assertions. See docs/architecture/test-time-discipline.md
+// "Intentional real-clock sleeps".
+const ttlConformanceWait = 5 * time.Millisecond
 
 const conformDNeg1h = -1 * time.Hour
 
@@ -202,7 +210,7 @@ func conformC5(t *testing.T, factory DriverFactory) {
 	}
 
 	// Wait past TTL — real sleep because we are testing real-clock TTL expiry.
-	time.Sleep(testtime.FastPoll)
+	time.Sleep(ttlConformanceWait)
 
 	ok2, err2 := drv.SetNX(ctx, "c5-key", tokenB, ttl)
 	if err2 != nil {
@@ -227,7 +235,7 @@ func conformC6(t *testing.T, factory DriverFactory) {
 	}
 
 	// Wait past TTL — real sleep.
-	time.Sleep(testtime.FastPoll)
+	time.Sleep(ttlConformanceWait)
 
 	held, err := drv.Renew(ctx, "c6-key", tokenA, ttl)
 	if err != nil {
