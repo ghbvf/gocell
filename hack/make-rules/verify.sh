@@ -24,10 +24,45 @@ if [[ ${#scripts[@]} -eq 0 ]]; then
     exit 1
 fi
 
+# VERIFY_SKIP is a comma-separated list of gate basenames (the part between
+# `verify-` and `.sh`) to skip. CI uses it to drop gates already covered by
+# the build-test matrix — running `go test -race ./tools/archtest/...` twice
+# on every PR (once in build-test (tools), once here) is pure duplicate
+# work. Local `make verify` leaves VERIFY_SKIP empty for full coverage.
+#
+# Stored as a delimited string instead of an associative array so the script
+# stays portable to macOS bash 3.2 (no `declare -A`).
+skip_list="|"
+if [[ -n "${VERIFY_SKIP:-}" ]]; then
+    IFS=',' read -ra entries <<< "${VERIFY_SKIP}"
+    for entry in "${entries[@]}"; do
+        entry="${entry//[[:space:]]/}"
+        if [[ -z "${entry}" ]]; then
+            continue
+        fi
+        # Reject entries that contain anything outside [a-zA-Z0-9_-]. Without
+        # this guard a value like `archtest|verify-other` would inject a
+        # second pipe-delimited token into skip_list and silently skip an
+        # unrelated gate.
+        if ! [[ "${entry}" =~ ^[a-zA-Z0-9_-]+$ ]]; then
+            gocell::log::error "VERIFY_SKIP entry '${entry}' contains invalid characters (allowed: [a-zA-Z0-9_-])"
+            exit 1
+        fi
+        skip_list+="verify-${entry}.sh|"
+    done
+fi
+
 declare -a results=()
 fails=()
+ran=0
 for script in "${scripts[@]}"; do
     name="$(basename "${script}")"
+    if [[ "${skip_list}" == *"|${name}|"* ]]; then
+        results+=("${name}|SKIP")
+        gocell::log::status "SKIP: ${name} (VERIFY_SKIP)"
+        continue
+    fi
+    ran=$((ran + 1))
     gocell::log::status "Running ${name}"
     if ! bash "${script}"; then
         fails+=("${name}")
@@ -51,11 +86,11 @@ if [[ -n "${GITHUB_STEP_SUMMARY:-}" ]]; then
         for entry in "${results[@]}"; do
             gate="${entry%|*}"
             status="${entry##*|}"
-            if [[ "${status}" == "PASS" ]]; then
-                echo "| \`${gate}\` | ✅ PASS |"
-            else
-                echo "| \`${gate}\` | ❌ FAIL |"
-            fi
+            case "${status}" in
+                PASS) echo "| \`${gate}\` | ✅ PASS |" ;;
+                SKIP) echo "| \`${gate}\` | ⏭️ SKIP |" ;;
+                *)    echo "| \`${gate}\` | ❌ FAIL |" ;;
+            esac
         done
     } >> "${GITHUB_STEP_SUMMARY}"
 fi
@@ -66,4 +101,13 @@ if [[ ${#fails[@]} -gt 0 ]]; then
     exit 1
 fi
 
-gocell::log::status "All ${#scripts[@]} verify gates passed."
+skipped=$(( ${#scripts[@]} - ran ))
+if [[ ${ran} -eq 0 ]]; then
+    gocell::log::error "all ${#scripts[@]} verify gates were skipped — VERIFY_SKIP is too broad"
+    exit 1
+fi
+if [[ ${skipped} -gt 0 ]]; then
+    gocell::log::status "All ${ran} verify gates passed (${skipped} skipped via VERIFY_SKIP)."
+else
+    gocell::log::status "All ${ran} verify gates passed."
+fi

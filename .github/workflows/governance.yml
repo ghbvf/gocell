@@ -25,4 +25,12 @@ jobs:
           cache-dependency-path: go.sum
 
       - name: make verify
+        # VERIFY_SKIP=archtest: archtest is executed by _build-lint.yml's
+        # build-test (tools) shard on the same PR/push (`go test ./tools/...`
+        # without -race; archtest itself runs without -race in both entry
+        # points — see hack/verify-archtest.sh). Running it here as well is
+        # pure duplicate work. Local `make verify` (no env) keeps the full
+        # gate set so developers still get one-command coverage.
+        env:
+          VERIFY_SKIP: archtest
         run: make verify

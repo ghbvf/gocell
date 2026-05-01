@@ -69,8 +69,16 @@ jobs:
             # archtest / metricschema / generatedverify use go/packages to load
             # the full module type graph; they are the slowest test suite (~130s)
             # and are isolated here so they run in parallel with the kernel shard.
+            #
+            # race: false — these are pure read-only static analyses
+            # (packages.Load + AST/types walk + string compare). No goroutines,
+            # no shared mutable state across t.Parallel() subtests; -race adds
+            # 2.5–3.3x runtime for zero signal. Empirically: archtest 30s→9s,
+            # metricschema 25s→9s, generatedverify 20s→6s on Apple Silicon;
+            # ~243s→~95s on linux runner. Race coverage of the project's
+            # concurrency-sensitive paths stays in the kernel/runtime shards.
             pkgs: ./tools/...
-            race: true
+            race: false
             static_checks: false
           - shard: runtime
             pkgs: ./runtime/... ./pkg/...
@@ -134,9 +142,10 @@ jobs:
           # or release/* lint against their actual merge-base, not develop.
           args: ${{ inputs.lint-mode == 'pr' && format('--new-from-merge-base=origin/{0}', inputs.base-ref) || '' }}
 
-      # Test step: per-shard coverage profile with covermode=atomic (required by
-      # -race on race shards; harmless and consistent with non-race shards, which
-      # avoids mode-header conflicts when cat-merging profiles in sonarcloud).
+      # Test step: per-shard coverage profile with covermode=atomic. Atomic is
+      # mandatory on -race shards and harmless on non-race shards; using one
+      # mode across all shards avoids mode-header conflicts when sonarcloud
+      # cat-merges profiles.
       # -coverpkg=./... was previously used here but dropped: every major Go OSS
       # project (grpc-go, prometheus, consul, etcd, tidb, cockroachdb) tests
       # without it, and with per-shard package lists it would actively harm Sonar
@@ -145,6 +154,17 @@ jobs:
       # would dilute the merged view). Each shard now reports only what it tested.
       - name: Test
         run: go test ${{ matrix.race && '-race' || '' }} -covermode=atomic -coverprofile=coverage-shard-${{ matrix.shard }}.out ${{ matrix.pkgs }} -count=1 -timeout 5m
+
+      # Targeted race gate: tools/archtest/internal/typeseval has a
+      # process-wide SharedResolver cache (sync.Mutex + map[string]*Resolver
+      # at typeseval.go:125-126). TestSharedResolver_ConcurrentInit spawns
+      # 8 goroutines to exercise the locking and is the only goroutine-
+      # spawning concurrency test in the tools tree. The broader tools
+      # shard above runs without -race for speed; this narrow gate keeps
+      # race signal on the actual concurrency surface (~3-9s).
+      - name: Targeted race gate (typeseval cache)
+        if: matrix.shard == 'tools'
+        run: go test -race -count=1 -timeout 1m ./tools/archtest/internal/typeseval/...
 
       # Static governance gates (validate --strict, verify journey, check
       # contract-health, check unconditional-skip, examples internal-import
