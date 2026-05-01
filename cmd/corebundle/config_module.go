@@ -6,12 +6,13 @@ import (
 	"log/slog"
 	"slices"
 
+	prom "github.com/prometheus/client_golang/prometheus"
+
 	configcore "github.com/ghbvf/gocell/cells/configcore"
 	"github.com/ghbvf/gocell/kernel/cell"
 	kcrypto "github.com/ghbvf/gocell/kernel/crypto"
 	kernellifecycle "github.com/ghbvf/gocell/kernel/lifecycle"
 	"github.com/ghbvf/gocell/runtime/bootstrap"
-	prom "github.com/prometheus/client_golang/prometheus"
 )
 
 // ConfigCoreModule wires configcore: KeyProvider → ValueTransformer →

@@ -7,10 +7,11 @@ import (
 	"sync"
 	"time"
 
-	kout "github.com/ghbvf/gocell/kernel/outbox"
-	outboxrt "github.com/ghbvf/gocell/runtime/outbox"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
+
+	kout "github.com/ghbvf/gocell/kernel/outbox"
+	outboxrt "github.com/ghbvf/gocell/runtime/outbox"
 )
 
 // ---------------------------------------------------------------------------

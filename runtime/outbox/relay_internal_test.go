@@ -10,10 +10,11 @@ import (
 	"testing"
 	"time"
 
-	kout "github.com/ghbvf/gocell/kernel/outbox"
-	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	kout "github.com/ghbvf/gocell/kernel/outbox"
+	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 )
 
 // relayStaleAge is the age used to seed "old enough to delete" entries.

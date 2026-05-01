@@ -8,12 +8,13 @@ import (
 	"testing"
 	"time"
 
+	prom "github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/common/expfmt"
+
 	gcprom "github.com/ghbvf/gocell/adapters/prometheus"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	runtimemetrics "github.com/ghbvf/gocell/runtime/observability/metrics"
-	prom "github.com/prometheus/client_golang/prometheus"
-	"github.com/prometheus/common/expfmt"
 )
 
 // Integration-style tests that drive runtime / kernel collectors through

@@ -4,10 +4,11 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/ghbvf/gocell/kernel/metadata"
-	ecErr "github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/ghbvf/gocell/kernel/metadata"
+	ecErr "github.com/ghbvf/gocell/pkg/errcode"
 )
 
 // buildTestProject returns a ProjectMeta with 3 journeys:

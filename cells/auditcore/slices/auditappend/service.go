@@ -9,12 +9,13 @@ import (
 	"log/slog"
 	"sync"
 
+	"github.com/google/uuid"
+
 	"github.com/ghbvf/gocell/cells/auditcore/internal/domain"
 	"github.com/ghbvf/gocell/cells/auditcore/internal/dto"
 	"github.com/ghbvf/gocell/cells/auditcore/internal/ports"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/persistence"
-	"github.com/google/uuid"
 )
 
 // Topics lists the event topics consumed by audit-append. The handler is

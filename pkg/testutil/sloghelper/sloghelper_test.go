@@ -3,9 +3,10 @@ package sloghelper_test
 import (
 	"testing"
 
-	"github.com/ghbvf/gocell/pkg/testutil/sloghelper"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/ghbvf/gocell/pkg/testutil/sloghelper"
 )
 
 func TestFindLogEntry(t *testing.T) {

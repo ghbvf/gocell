@@ -5,9 +5,10 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
 // validMasterKeyHex is a non-demo 32-byte master key in hex for tests.

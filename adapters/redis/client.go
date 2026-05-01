@@ -9,11 +9,12 @@ import (
 	"strings"
 	"time"
 
+	goredis "github.com/redis/go-redis/v9"
+
 	"github.com/ghbvf/gocell/adapters/adapterutil"
 	"github.com/ghbvf/gocell/kernel/lifecycle"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/secutil"
-	goredis "github.com/redis/go-redis/v9"
 )
 
 // Compile-time assertion: Client implements lifecycle.ContextCloser.

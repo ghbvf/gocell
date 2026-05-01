@@ -6,11 +6,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ghbvf/gocell/runtime/auth/refresh"
-	"github.com/ghbvf/gocell/runtime/auth/refresh/storetest"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/ghbvf/gocell/runtime/auth/refresh"
+	"github.com/ghbvf/gocell/runtime/auth/refresh/storetest"
 )
 
 var errTypedNilRefreshReaderUsed = errors.New("typed nil refresh reader should have been defaulted")

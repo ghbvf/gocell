@@ -3,8 +3,9 @@ package main
 import (
 	"testing"
 
-	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/stretchr/testify/require"
+
+	"github.com/ghbvf/gocell/kernel/cell"
 )
 
 const testServiceKey = "test-service-secret-at-least-32-bytes!!"

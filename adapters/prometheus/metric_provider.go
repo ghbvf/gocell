@@ -7,9 +7,10 @@ import (
 	"strings"
 	"sync"
 
+	prom "github.com/prometheus/client_golang/prometheus"
+
 	"github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/pkg/errcode"
-	prom "github.com/prometheus/client_golang/prometheus"
 )
 
 // MetricProviderConfig configures a Prometheus-backed metrics.Provider.

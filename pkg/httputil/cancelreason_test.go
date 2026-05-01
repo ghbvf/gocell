@@ -5,8 +5,9 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/ghbvf/gocell/pkg/ctxcancel"
 	"github.com/stretchr/testify/assert"
+
+	"github.com/ghbvf/gocell/pkg/ctxcancel"
 )
 
 // TestCancelReason_NoSlot verifies the no-op contract when no slot was

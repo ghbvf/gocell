@@ -3,8 +3,9 @@ package governance
 import (
 	"testing"
 
-	"github.com/ghbvf/gocell/kernel/metadata"
 	"github.com/stretchr/testify/assert"
+
+	"github.com/ghbvf/gocell/kernel/metadata"
 )
 
 // targetsProject returns a ProjectMeta for impact-analysis tests.

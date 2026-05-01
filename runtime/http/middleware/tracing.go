@@ -6,10 +6,11 @@ import (
 	"fmt"
 	"net/http"
 
+	oteltrace "go.opentelemetry.io/otel/trace"
+
 	"github.com/ghbvf/gocell/kernel/wrapper"
 	"github.com/ghbvf/gocell/pkg/httputil"
 	"github.com/ghbvf/gocell/runtime/observability/tracing"
-	oteltrace "go.opentelemetry.io/otel/trace"
 )
 
 // TracingOption configures the Tracing middleware.

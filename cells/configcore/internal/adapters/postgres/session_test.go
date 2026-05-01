@@ -4,11 +4,12 @@ import (
 	"context"
 	"testing"
 
-	"github.com/ghbvf/gocell/kernel/persistence"
-	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/jackc/pgx/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/ghbvf/gocell/kernel/persistence"
+	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
 // fakeTx is a minimal pgx.Tx implementation that satisfies the interface for

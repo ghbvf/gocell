@@ -9,9 +9,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/ghbvf/gocell/runtime/auth"
 )
 
 func TestService_VerifyIntent_RejectsRefreshIntentToken(t *testing.T) {

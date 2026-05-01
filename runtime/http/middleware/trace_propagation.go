@@ -4,10 +4,11 @@ import (
 	"context"
 	"net/http"
 
-	"github.com/ghbvf/gocell/pkg/ctxkeys"
 	"go.opentelemetry.io/contrib/propagators/b3"
 	"go.opentelemetry.io/otel/propagation"
 	oteltrace "go.opentelemetry.io/otel/trace"
+
+	"github.com/ghbvf/gocell/pkg/ctxkeys"
 )
 
 var (

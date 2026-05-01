@@ -3,10 +3,11 @@ package otel
 import (
 	"context"
 
-	"github.com/ghbvf/gocell/pkg/errcode"
-	"github.com/ghbvf/gocell/runtime/observability/poolstats"
 	"go.opentelemetry.io/otel/attribute"
 	otelmetric "go.opentelemetry.io/otel/metric"
+
+	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/runtime/observability/poolstats"
 )
 
 // Metric names follow the OTel database semantic conventions:

@@ -7,9 +7,10 @@ import (
 	"log/slog"
 	"testing"
 
-	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
 // canonicalUUID is a known canonical lowercase UUID used across B4 tests.

@@ -5,10 +5,11 @@ import (
 	"strings"
 	"testing"
 
-	gcprom "github.com/ghbvf/gocell/adapters/prometheus"
-	"github.com/ghbvf/gocell/kernel/observability/metrics"
 	prom "github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
+
+	gcprom "github.com/ghbvf/gocell/adapters/prometheus"
+	"github.com/ghbvf/gocell/kernel/observability/metrics"
 )
 
 func newTestProvider(t *testing.T) (metrics.Provider, *prom.Registry) {

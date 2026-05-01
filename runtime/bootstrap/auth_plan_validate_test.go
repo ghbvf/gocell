@@ -9,10 +9,11 @@ import (
 	"crypto/x509"
 	"testing"
 
-	"github.com/ghbvf/gocell/kernel/assembly"
-	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/ghbvf/gocell/kernel/assembly"
+	"github.com/ghbvf/gocell/kernel/cell"
 )
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────

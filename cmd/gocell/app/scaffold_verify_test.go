@@ -7,10 +7,11 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/ghbvf/gocell/cmd/gocell/app/printers"
-	"github.com/ghbvf/gocell/kernel/verify"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/ghbvf/gocell/cmd/gocell/app/printers"
+	"github.com/ghbvf/gocell/kernel/verify"
 )
 
 // These happy-path tests now go through runScaffoldWithRoot so they can run

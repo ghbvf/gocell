@@ -8,14 +8,15 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/ghbvf/gocell/kernel/wrapper"
-	"github.com/ghbvf/gocell/pkg/ctxkeys"
-	"github.com/ghbvf/gocell/runtime/http/middleware"
-	"github.com/ghbvf/gocell/runtime/observability/tracing"
 	otelcodes "go.opentelemetry.io/otel/codes"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 	oteltrace "go.opentelemetry.io/otel/trace"
+
+	"github.com/ghbvf/gocell/kernel/wrapper"
+	"github.com/ghbvf/gocell/pkg/ctxkeys"
+	"github.com/ghbvf/gocell/runtime/http/middleware"
+	"github.com/ghbvf/gocell/runtime/observability/tracing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"

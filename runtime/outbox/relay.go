@@ -3,6 +3,7 @@ package outbox
 import (
 	"context"
 	"log/slog"
+
 	// nosemgrep: go.lang.security.audit.crypto.math_random.math-random-used // non-crypto outbox relay jitter; gosec G404 already silenced at usage sites
 	"math/rand/v2"
 	"sync"

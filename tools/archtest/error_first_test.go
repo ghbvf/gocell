@@ -64,10 +64,11 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ghbvf/gocell/tools/archtest/internal/typeseval"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/tools/go/packages"
+
+	"github.com/ghbvf/gocell/tools/archtest/internal/typeseval"
 )
 
 const ruleErrorFirstAPI01 = "ERROR-FIRST-API-01"

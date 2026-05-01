@@ -3,8 +3,9 @@ package postgres
 import (
 	"testing"
 
-	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/stretchr/testify/assert"
+
+	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
 func TestErrorCodes_Prefix(t *testing.T) {

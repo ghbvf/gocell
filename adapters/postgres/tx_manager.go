@@ -5,10 +5,11 @@ import (
 	"fmt"
 	"log/slog"
 
-	"github.com/ghbvf/gocell/kernel/persistence"
-	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/ghbvf/gocell/kernel/persistence"
+	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
 // Compile-time check: TxManager implements persistence.TxRunner.

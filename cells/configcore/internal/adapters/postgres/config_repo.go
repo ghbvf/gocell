@@ -10,6 +10,8 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/jackc/pgx/v5"
+
 	configcrypto "github.com/ghbvf/gocell/cells/configcore/internal/crypto"
 	"github.com/ghbvf/gocell/cells/configcore/internal/domain"
 	"github.com/ghbvf/gocell/cells/configcore/internal/ports"
@@ -17,7 +19,6 @@ import (
 	"github.com/ghbvf/gocell/pkg/ctxcancel"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/query"
-	"github.com/jackc/pgx/v5"
 )
 
 // cryptoOpError constructs a uniform *errcode.Error for encrypt/decrypt

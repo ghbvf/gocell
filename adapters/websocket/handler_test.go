@@ -14,13 +14,14 @@ import (
 
 	"github.com/coder/websocket"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	"go.uber.org/goleak"
+
 	adapterws "github.com/ghbvf/gocell/adapters/websocket"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	rtws "github.com/ghbvf/gocell/runtime/websocket"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
-	"go.uber.org/goleak"
 )
 
 func TestMain(m *testing.M) {

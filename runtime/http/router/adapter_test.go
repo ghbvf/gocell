@@ -5,9 +5,10 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
+
 	kcell "github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/pkg/ctxkeys"
-	"github.com/stretchr/testify/assert"
 )
 
 func TestWithBodyLimit(t *testing.T) {

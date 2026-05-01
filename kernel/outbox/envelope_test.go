@@ -6,9 +6,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
 func TestMarshalEnvelope_StampsSchemaVersionV1(t *testing.T) {

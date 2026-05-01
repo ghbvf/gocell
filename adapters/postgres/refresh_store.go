@@ -11,13 +11,14 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/ghbvf/gocell/pkg/errcode"
-	"github.com/ghbvf/gocell/pkg/validation"
-	"github.com/ghbvf/gocell/runtime/auth/refresh"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/validation"
+	"github.com/ghbvf/gocell/runtime/auth/refresh"
 )
 
 // Compile-time assertion: PGRefreshStore implements refresh.Store.

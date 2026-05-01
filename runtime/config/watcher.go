@@ -27,6 +27,7 @@ import (
 	"time"
 
 	"github.com/fsnotify/fsnotify"
+
 	"github.com/ghbvf/gocell/kernel/lifecycle"
 )
 

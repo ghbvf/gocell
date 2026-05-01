@@ -6,9 +6,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ghbvf/gocell/kernel/metadata"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/ghbvf/gocell/kernel/metadata"
 )
 
 func TestScanContractSpecLiterals(t *testing.T) {

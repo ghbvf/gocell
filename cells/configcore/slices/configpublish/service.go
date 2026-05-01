@@ -13,6 +13,8 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/ghbvf/gocell/cells/configcore/internal/domain"
 	configevents "github.com/ghbvf/gocell/cells/configcore/internal/events"
 	"github.com/ghbvf/gocell/cells/configcore/internal/ports"
@@ -21,7 +23,6 @@ import (
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/validation"
 	"github.com/ghbvf/gocell/runtime/auth"
-	"github.com/google/uuid"
 )
 
 // Option configures a config-publish Service.

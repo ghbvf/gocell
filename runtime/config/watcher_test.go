@@ -11,9 +11,10 @@ import (
 	"time"
 
 	"github.com/fsnotify/fsnotify"
-	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 )
 
 const watcherMaxDebounceCeiling = 400 * time.Millisecond

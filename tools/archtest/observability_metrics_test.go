@@ -3,9 +3,10 @@ package archtest
 import (
 	"testing"
 
-	"github.com/ghbvf/gocell/tools/metricschema"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/ghbvf/gocell/tools/metricschema"
 )
 
 // TestMetricLabelErrcodeClassifiersRequireAck enforces OBS-01 in the typed

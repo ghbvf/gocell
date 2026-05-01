@@ -6,10 +6,11 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ghbvf/gocell/pkg/ctxkeys"
-	"github.com/ghbvf/gocell/pkg/idutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/ghbvf/gocell/pkg/ctxkeys"
+	"github.com/ghbvf/gocell/pkg/idutil"
 )
 
 // ---------------------------------------------------------------------------

@@ -3,17 +3,19 @@ package auditverify
 import (
 	"context"
 	"fmt"
-	"github.com/ghbvf/gocell/cells/internal/testoutbox"
 	"log/slog"
 	"testing"
+
+	"github.com/ghbvf/gocell/cells/internal/testoutbox"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/ghbvf/gocell/cells/auditcore/internal/domain"
 	"github.com/ghbvf/gocell/cells/auditcore/internal/dto"
 	"github.com/ghbvf/gocell/cells/auditcore/internal/mem"
 	"github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/kernel/outbox"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
 // --- stubs ---

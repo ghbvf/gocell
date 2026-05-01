@@ -5,10 +5,11 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/ghbvf/gocell/kernel/metadata"
-	"github.com/ghbvf/gocell/pkg/contracts"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/ghbvf/gocell/kernel/metadata"
+	"github.com/ghbvf/gocell/pkg/contracts"
 )
 
 // writeHandlerFile writes Go source as handler.go inside dir and returns the

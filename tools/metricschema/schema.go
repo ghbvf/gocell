@@ -22,12 +22,13 @@ import (
 	"strings"
 	"time"
 
+	"golang.org/x/tools/go/packages"
+	"gopkg.in/yaml.v3"
+
 	"github.com/ghbvf/gocell/kernel/governance"
 	"github.com/ghbvf/gocell/kernel/metadata"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/tools/internal/prodscan"
-	"golang.org/x/tools/go/packages"
-	"gopkg.in/yaml.v3"
 )
 
 const (

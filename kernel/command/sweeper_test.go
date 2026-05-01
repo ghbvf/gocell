@@ -7,11 +7,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ghbvf/gocell/kernel/command"
-	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/goleak"
+
+	"github.com/ghbvf/gocell/kernel/command"
+	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 )
 
 // testNoTimeoutHours is used to verify that NoTimeouts entries are not

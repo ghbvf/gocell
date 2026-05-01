@@ -5,9 +5,10 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/ghbvf/gocell/runtime/observability/metrics"
 	"github.com/go-chi/chi/v5"
 	"github.com/stretchr/testify/assert"
+
+	"github.com/ghbvf/gocell/runtime/observability/metrics"
 )
 
 // --- Standalone tests (no chi router → route = "unmatched") ---

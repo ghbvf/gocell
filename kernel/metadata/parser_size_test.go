@@ -6,9 +6,10 @@ import (
 	"testing"
 	"testing/fstest"
 
-	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
 // TestParseFS_RejectsOversizeFile guards the 1 MiB ceiling on metadata YAML

@@ -7,8 +7,9 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/ghbvf/gocell/pkg/errcode"
 	goredis "github.com/redis/go-redis/v9"
+
+	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
 // Cache provides a typed key-value cache backed by Redis.

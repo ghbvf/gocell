@@ -5,10 +5,11 @@ import (
 	"log/slog"
 	"testing"
 
-	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/domain"
-	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/mem"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/domain"
+	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/mem"
 )
 
 func newTestService() (*Service, *mem.DeviceRepository) {

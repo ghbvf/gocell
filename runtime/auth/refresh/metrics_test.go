@@ -6,9 +6,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/ghbvf/gocell/kernel/observability/metrics"
 )
 
 const gcMetricsD1500ms = 1500 * time.Millisecond

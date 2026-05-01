@@ -11,10 +11,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ghbvf/gocell/pkg/errcode"
-	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 )
 
 // weak1024KeyPEM is a pre-generated 1024-bit RSA private key (PKCS#8 DER,

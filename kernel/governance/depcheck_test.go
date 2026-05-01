@@ -3,9 +3,10 @@ package governance
 import (
 	"testing"
 
-	"github.com/ghbvf/gocell/kernel/metadata"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/ghbvf/gocell/kernel/metadata"
 )
 
 // --- DEP-01: One-slice-one-cell ---

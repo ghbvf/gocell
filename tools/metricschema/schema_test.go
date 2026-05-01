@@ -15,10 +15,11 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ghbvf/gocell/kernel/metadata"
-	"github.com/ghbvf/gocell/tools/internal/prodscan"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/ghbvf/gocell/kernel/metadata"
+	"github.com/ghbvf/gocell/tools/internal/prodscan"
 )
 
 func TestBuild_CorebundleCapturesReachableTypedMetrics(t *testing.T) {

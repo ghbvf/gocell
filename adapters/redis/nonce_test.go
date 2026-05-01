@@ -6,10 +6,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ghbvf/gocell/pkg/errcode"
-	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/runtime/auth"
 )
 
 func TestNonceStore_FirstUseSucceeds(t *testing.T) {

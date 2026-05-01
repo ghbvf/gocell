@@ -4,11 +4,12 @@ import (
 	"context"
 	"testing"
 
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/sdk/trace/tracetest"
+
 	gcotel "github.com/ghbvf/gocell/adapters/otel"
 	"github.com/ghbvf/gocell/kernel/wrapper"
 	"github.com/ghbvf/gocell/runtime/observability/tracing"
-	sdktrace "go.opentelemetry.io/otel/sdk/trace"
-	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 )
 
 // newInMemoryTracer returns a Tracer wired to a TracerProvider that batches

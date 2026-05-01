@@ -4,8 +4,9 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/ghbvf/gocell/pkg/errcode"
 	vaultapi "github.com/hashicorp/vault/api"
+
+	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
 // vaultAPIClient wraps *vaultapi.Client to satisfy the vaultClient interface.

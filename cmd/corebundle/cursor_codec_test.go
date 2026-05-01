@@ -5,10 +5,11 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ghbvf/gocell/pkg/errcode"
-	"github.com/ghbvf/gocell/pkg/query"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/query"
 )
 
 // TestBuildCursorCodec_DevDefault_Succeeds confirms that in dev mode (empty
