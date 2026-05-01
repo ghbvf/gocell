@@ -478,7 +478,7 @@ type erroringWorker struct {
 
 func (w *erroringWorker) Start(_ context.Context) error {
 	// Small delay so Run reaches phase9 select; then error triggers shutdown.
-	time.Sleep(testtime.MediumPoll)
+	time.Sleep(testtime.MediumPoll) //archtest:allow:test-sleep goroutine timing fixture: controls cancel order
 	return w.err
 }
 

@@ -164,7 +164,7 @@ func waitForSubscriberReady(t *testing.T, conn *rabbitmq.Connection, queueName s
 			return
 		}
 
-		time.Sleep(testtime.MediumPoll)
+		time.Sleep(testtime.MediumPoll) //archtest:allow:test-sleep poll loop waiting for RabbitMQ queue consumer to register; no sync hook
 	}
 
 	t.Fatalf("timed out waiting for subscriber queue %q to become ready", queueName)

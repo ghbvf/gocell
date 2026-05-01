@@ -507,7 +507,7 @@ func assertEventually(t *testing.T, condition func() bool, timeout, poll time.Du
 		if condition() {
 			return
 		}
-		time.Sleep(poll)
+		time.Sleep(poll) //archtest:allow:test-sleep poll loop in assertEventually helper; no notification API
 	}
 	t.Fatalf("condition not met within %v: %s", timeout, msg)
 }

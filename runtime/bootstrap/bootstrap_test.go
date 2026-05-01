@@ -1628,7 +1628,7 @@ func newSlowReloaderCell(id string, delay time.Duration) *slowReloaderCell {
 
 func (c *slowReloaderCell) OnConfigReload(_ cell.ConfigChangeEvent) error {
 	c.called.Add(1)
-	time.Sleep(c.delay)
+	time.Sleep(c.delay) //archtest:allow:test-sleep slow handler fixture; sleep IS the test parameter
 	c.completed.Add(1)
 	return nil
 }
@@ -2030,7 +2030,7 @@ func TestBootstrap_ConfigReload_NoChangeNoCallback(t *testing.T) {
 	// before writing different content. Without this, on macOS kqueue the two
 	// writes can be coalesced into a single event, or the second event can be
 	// lost entirely — causing the test to flake.
-	time.Sleep(fsnotifySettleDelay)
+	time.Sleep(fsnotifySettleDelay) //archtest:allow:test-sleep fsnotify event delivery has no synchronous hook
 
 	// Third: write different content — proves the watcher is still alive
 	// after the no-diff reload.
@@ -2190,7 +2190,7 @@ func TestBootstrap_ShutdownNoPostStopReload(t *testing.T) {
 	require.NoError(t, os.WriteFile(cfgFile, []byte("key: val_post_stop\n"), 0o644))
 
 	// Brief wait to give any spurious callback time to fire.
-	time.Sleep(testtime.D300ms)
+	time.Sleep(testtime.D300ms) //archtest:allow:test-sleep negative test: must elapse without state change
 	assert.Equal(t, countBefore, rc.eventCount(),
 		"no config reload callback should fire after shutdown")
 }
@@ -2299,7 +2299,7 @@ func TestBootstrap_ConfigReload_GenerationTracking(t *testing.T) {
 	}, testtime.EventuallyDefault, testtime.MediumPoll)
 
 	// First change.
-	time.Sleep(fsnotifySettleDelay)
+	time.Sleep(fsnotifySettleDelay) //archtest:allow:test-sleep fsnotify event delivery has no synchronous hook
 	prevCount := rc.eventCount()
 	require.NoError(t, os.WriteFile(cfgFile, []byte("key: val2\n"), 0o644))
 	require.Eventually(t, func() bool {
@@ -2312,7 +2312,7 @@ func TestBootstrap_ConfigReload_GenerationTracking(t *testing.T) {
 	assert.Greater(t, gen1, int64(0), "first reload generation must be positive")
 
 	// Second change.
-	time.Sleep(fsnotifySettleDelay)
+	time.Sleep(fsnotifySettleDelay) //archtest:allow:test-sleep fsnotify event delivery has no synchronous hook
 	prevCount = rc.eventCount()
 	require.NoError(t, os.WriteFile(cfgFile, []byte("key: val3\n"), 0o644))
 	require.Eventually(t, func() bool {

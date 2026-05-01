@@ -172,7 +172,7 @@ func TestOutboxE2E_PGMode_WriteToSubscribe(t *testing.T) {
 		})
 	}()
 	// Give subscriber goroutine a moment to register before first publish.
-	time.Sleep(testtime.MediumPoll)
+	time.Sleep(testtime.MediumPoll) //archtest:allow:test-sleep wait for goroutine to enter blocking Subscribe; no started observable
 
 	// --- Step 5: Assemble cells ---
 	hmacKey := []byte("test-hmac-key-32-bytes-long!!!!!")

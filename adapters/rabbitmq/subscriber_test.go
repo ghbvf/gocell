@@ -21,7 +21,7 @@ import (
 
 const (
 	subscriberBarrierTimeout = testtime.D500ms
-	subscriberD40ms          = 40 * time.Millisecond
+	subscriberD40ms          = testtime.D40ms
 )
 
 // makeDeliveryBodyWithID constructs a WireMessage-envelope body where the
@@ -561,14 +561,14 @@ func TestSubscribeOnce_ReconnectWaitCtx_InheritsParentCancel(t *testing.T) {
 	go func() { subDone <- sub.Subscribe(ctx, outbox.Subscription{Topic: "f3.cancel.topic"}, handler) }()
 
 	// Wait until the handler is in-flight (it will block on neverClose).
-	time.Sleep(subscriberD40ms)
+	time.Sleep(subscriberD40ms) //archtest:allow:test-sleep wait for goroutine to enter blocking handler; no started observable
 
 	// Close the deliveries chan to trigger errSubscriptionLost (reconnect path).
 	// This makes consumeLoop return with loopErr != nil, entering waitCtx logic.
 	close(ch.consumeDeliveries)
 
 	// Allow subscribeOnce to enter the waitAndClose phase.
-	time.Sleep(testtime.D20ms)
+	time.Sleep(testtime.D20ms) //archtest:allow:test-sleep wait for goroutine to enter blocking waitAndClose; no started observable
 
 	// Cancel the parent ctx — F3 fix ensures waitCtx inherits this cancel.
 	start := time.Now()
@@ -615,7 +615,7 @@ func TestSubscribeOnce_ReconnectWaitCtx_NoDeadlineFallsBackTo30s(t *testing.T) {
 
 	// Handler finishes quickly (50 ms) so the 30 s ceiling is never hit.
 	handler := func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
-		time.Sleep(testtime.MediumPoll)
+		time.Sleep(testtime.MediumPoll) //archtest:allow:test-sleep slow handler fixture; sleep IS the test parameter
 		return outbox.HandleResult{Disposition: outbox.DispositionAck}
 	}
 

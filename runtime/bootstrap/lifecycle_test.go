@@ -458,7 +458,7 @@ func TestLifecycle_OnStartNearTimeoutWarns(t *testing.T) {
 		CellID: "accesscore",
 		Name:   "accesscore.initial-admin-bootstrap",
 		OnStart: func(_ context.Context) error {
-			time.Sleep(lifecycleSleep18ms)
+			time.Sleep(lifecycleSleep18ms) //archtest:allow:test-sleep slow startup hook fixture
 			return nil
 		},
 	}))
@@ -486,7 +486,7 @@ func TestLifecycle_OnStartNearTimeoutWarnsWithoutCellID(t *testing.T) {
 	require.NoError(t, lc.Append(Hook{
 		Name: "composition-root.hook",
 		OnStart: func(_ context.Context) error {
-			time.Sleep(lifecycleSleep18ms)
+			time.Sleep(lifecycleSleep18ms) //archtest:allow:test-sleep slow startup hook fixture
 			return nil
 		},
 	}))
@@ -510,7 +510,7 @@ func TestLifecycle_NegativeStartTimeoutSkipsSlowWarn(t *testing.T) {
 	require.NoError(t, lc.Append(Hook{
 		Name: "no-deadline",
 		OnStart: func(_ context.Context) error {
-			time.Sleep(testtime.D1ms)
+			time.Sleep(testtime.D1ms) //archtest:allow:test-sleep slow startup hook fixture
 			return nil
 		},
 		StartTimeout: lifecycleNoTimeout,

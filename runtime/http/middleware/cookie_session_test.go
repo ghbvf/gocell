@@ -93,7 +93,7 @@ func TestCookieSession_ExpiredCookie_NoInjection(t *testing.T) {
 	encoded, err := sc.Encode("session", []byte("jwt-token"))
 	require.NoError(t, err)
 
-	time.Sleep(cookieExpirySleep)
+	time.Sleep(cookieExpirySleep) //archtest:allow:test-sleep TTL physical expiry; backend has no notification API
 
 	capture := &authCapture{}
 	handler := MustCookieSession(cfg)(capture.handler())
@@ -389,7 +389,7 @@ func TestCookieSession_ExpiredCookie_Returns401(t *testing.T) {
 	encoded, err := sc.Encode("session", []byte("jwt-token"))
 	require.NoError(t, err)
 
-	time.Sleep(cookieExpirySleep)
+	time.Sleep(cookieExpirySleep) //archtest:allow:test-sleep TTL physical expiry; backend has no notification API
 
 	// Mock AuthMiddleware: returns 401 if no Authorization header.
 	mockAuth := func(next http.Handler) http.Handler {

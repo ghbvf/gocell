@@ -994,7 +994,7 @@ func TestConsumerBase_LeaseLost_ForceRequeue_EvenWhenHandlerReturnsAck(t *testin
 		// Block to allow renewal goroutine to fire and set leaseLost.
 		// The handler deliberately does NOT check ctx.Done() to simulate a
 		// stale handler that ignores cancellation.
-		time.Sleep(renewalIntervalMultiplier5 * interval)
+		time.Sleep(renewalIntervalMultiplier5 * interval) //archtest:allow:test-sleep Renew extends TTL — polling defeats test
 		return HandleResult{Disposition: DispositionAck}
 	})
 

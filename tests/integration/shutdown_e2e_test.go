@@ -210,7 +210,7 @@ func TestE2E_ShutdownBarrier_NoMessageLoss(t *testing.T) {
 	// Handler counts processed messages. Simulate work with a delay.
 	var processed atomic.Int64
 	handler := func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
-		time.Sleep(processingDelay)
+		time.Sleep(processingDelay) //archtest:allow:test-sleep slow handler fixture; sleep IS the test parameter
 		processed.Add(1)
 		return outbox.HandleResult{Disposition: outbox.DispositionAck}
 	}

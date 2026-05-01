@@ -13,7 +13,7 @@ import (
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 )
 
-const subscriptionRunD40ms = 40 * time.Millisecond
+const subscriptionRunD40ms = testtime.D40ms
 
 // recordingChannel wraps mockChannel and records ordering information for A19
 // happens-before assertions.
@@ -80,7 +80,7 @@ func TestSubscriptionRun_RegisterDeliveryAndWait(t *testing.T) {
 
 	// Release all in-flight goroutines after a short delay so waitAndClose can return.
 	go func() {
-		time.Sleep(testtime.MediumPoll)
+		time.Sleep(testtime.MediumPoll) //archtest:allow:test-sleep goroutine timing fixture: controls cancel order
 		for range n {
 			run.markDeliveryDone()
 		}
@@ -115,7 +115,7 @@ func TestSubscriptionRun_CloseWaitsLocalWg(t *testing.T) {
 
 	done := make(chan struct{})
 	go func() {
-		time.Sleep(testtime.D80ms)
+		time.Sleep(testtime.D80ms) //archtest:allow:test-sleep sleep IS the fixture input under test
 		// Set the flag atomically BEFORE calling markDeliveryDone. Because
 		// wgDoneCh is closed (and ch.Close called) only after localWg.Wait()
 		// returns, Close() can only execute after this store — establishing the

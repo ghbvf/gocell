@@ -86,7 +86,7 @@ func (f *fakeConn) Write(_ context.Context, data []byte) error {
 	f.mu.Unlock()
 
 	if delay > 0 {
-		time.Sleep(delay)
+		time.Sleep(delay) //archtest:allow:test-sleep sleep IS the test parameter
 	}
 
 	f.mu.Lock()
@@ -689,7 +689,7 @@ func TestHub_PingLoopRunsOnInterval(t *testing.T) {
 	<-conn.readyCh
 
 	// Wait long enough for multiple pings, verify conn is still alive.
-	time.Sleep(testtime.D100ms)
+	time.Sleep(testtime.D100ms) //archtest:allow:test-sleep negative test: must elapse without state change
 	assert.Equal(t, 1, hub.ConnCount(), "connection should survive multiple pings")
 }
 
@@ -965,7 +965,7 @@ func TestConnConformance_ConcurrentWriteClose(t *testing.T) {
 	// Close goroutine — fires while Write is in progress.
 	go func() {
 		defer wg.Done()
-		time.Sleep(testtime.D10ms) // let Write start
+		time.Sleep(testtime.D10ms) //archtest:allow:test-sleep goroutine timing fixture: controls cancel order
 		_ = conn.Close()
 	}()
 

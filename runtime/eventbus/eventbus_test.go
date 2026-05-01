@@ -865,7 +865,7 @@ func TestSubscribe_InvalidDisposition_RespectsCtxCancel(t *testing.T) {
 				// After first attempt with invalid disposition, cancel ctx
 				// during backoff to verify early exit.
 				go func() {
-					time.Sleep(testtime.D10ms)
+					time.Sleep(testtime.D10ms) //archtest:allow:test-sleep goroutine timing fixture: controls cancel order
 					cancel()
 				}()
 			}

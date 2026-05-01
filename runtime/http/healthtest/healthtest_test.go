@@ -13,7 +13,7 @@ import (
 // healthtestD30ms is the budget passed to CheckCtxRespected for the
 // uncooperative-probe test. 30ms is too small for testtime.MediumPoll (50ms)
 // but intentionally short so the spy sees a fast failure.
-const healthtestD30ms = 30 * testtime.D1ms
+const healthtestD30ms = testtime.D30ms
 
 // TestCheckCtxRespected_PassesOnCooperativeProbe is a minimal smoke test
 // for the exported helper that probe authors will use in their own unit

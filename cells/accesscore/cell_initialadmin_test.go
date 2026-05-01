@@ -156,7 +156,7 @@ func TestInit_WithInitialAdminBootstrap_LifecycleHookRegistered(t *testing.T) {
 	}()
 
 	// Give start time to reach cleaner.Start then cancel to unblock.
-	time.Sleep(testtime.ShortSleep)
+	time.Sleep(testtime.ShortSleep) //archtest:allow:test-sleep wait for goroutine to enter blocking cleaner.Start; no started observable
 	cancel()
 	<-stopCh
 	require.NoError(t, startErr)
@@ -296,7 +296,7 @@ func TestInit_BootstrapAdminExists_FreshOrphanFile_SweepCleanerRegistered(t *tes
 	}()
 
 	// Wait for cleaner.Start to be reached (cleaner assigned inside start()).
-	time.Sleep(testtime.ShortSleep)
+	time.Sleep(testtime.ShortSleep) //archtest:allow:test-sleep wait for goroutine to enter blocking cleaner.Start; no started observable
 	cancel()
 
 	startErr := <-stopCh
@@ -350,7 +350,7 @@ func TestInit_BootstrapUser_HasPasswordResetRequired(t *testing.T) {
 	}()
 
 	// Give cleaner time to start, then cancel.
-	time.Sleep(testtime.ShortSleep)
+	time.Sleep(testtime.ShortSleep) //archtest:allow:test-sleep wait for goroutine to enter blocking cleaner.Start; no started observable
 	cancel()
 	<-stopCh
 	require.NoError(t, startErr)

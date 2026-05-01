@@ -74,7 +74,7 @@ func TestCloseWithDeadline_DeadlineFiresBeforeClose(t *testing.T) {
 
 	start := time.Now()
 	err := adapterutil.CloseWithDeadline(ctx, "test", func() error {
-		time.Sleep(testtime.D500ms)
+		time.Sleep(testtime.D500ms) //archtest:allow:test-sleep slow handler fixture; sleep IS the test parameter
 		return nil
 	})
 	elapsed := time.Since(start)
@@ -94,7 +94,7 @@ func TestCloseWithDeadline_CloseCompletesBeforeDeadline(t *testing.T) {
 	defer cancel()
 
 	err := adapterutil.CloseWithDeadline(ctx, "test", func() error {
-		time.Sleep(testtime.D10ms)
+		time.Sleep(testtime.D10ms) //archtest:allow:test-sleep slow handler fixture; sleep IS the test parameter
 		return nil
 	})
 	if err != nil {

@@ -110,7 +110,7 @@ func waitForCollectorLog(t *testing.T, container testcontainers.Container, want 
 		if strings.Contains(lastLogs, want) {
 			return
 		}
-		time.Sleep(testtime.D200ms)
+		time.Sleep(testtime.D200ms) //archtest:allow:test-sleep poll loop waiting for otel collector to receive spans; no push notification API
 	}
 	t.Fatalf("collector logs did not contain %q; logs:\n%s", want, lastLogs)
 }

@@ -624,7 +624,7 @@ func (b *testBus) Ready(sub outbox.Subscription) <-chan struct{} {
 				close(ch)
 				return
 			}
-			time.Sleep(testtime.D1ms)
+			time.Sleep(testtime.D1ms) //archtest:allow:test-sleep poll loop waiting for subscription to register; no notification API
 		}
 	}()
 	return ch
@@ -797,7 +797,7 @@ func (s *delayedReadySubscriber) Ready(sub outbox.Subscription) <-chan struct{} 
 	s.mu.Unlock()
 
 	go func() {
-		time.Sleep(s.delay)
+		time.Sleep(s.delay) //archtest:allow:test-sleep sleep IS the test parameter
 		// Safe to close multiple times? No — we create one per topic so it's fine.
 		select {
 		case <-ch:
@@ -846,7 +846,7 @@ func (s *partialReadySubscriber) Ready(sub outbox.Subscription) <-chan struct{} 
 	ch := make(chan struct{})
 	if sub.Topic == s.slowTopic {
 		go func() {
-			time.Sleep(s.slowDelay)
+			time.Sleep(s.slowDelay) //archtest:allow:test-sleep sleep IS the test parameter
 			close(ch)
 		}()
 	} else {
@@ -941,7 +941,7 @@ func (s *mixedReadySubscriber) Ready(sub outbox.Subscription) <-chan struct{} {
 	}
 	if sub.Topic == s.slowReadyTopic {
 		go func() {
-			time.Sleep(s.slowReadyDelay)
+			time.Sleep(s.slowReadyDelay) //archtest:allow:test-sleep sleep IS the test parameter
 			close(ch)
 		}()
 		return ch

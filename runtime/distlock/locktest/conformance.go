@@ -229,7 +229,7 @@ func conformC5(t *testing.T, factory DriverFactory) {
 		if time.Now().After(deadline) {
 			t.Fatal("C5: SetNX did not succeed within deadline after TTL expiry")
 		}
-		time.Sleep(testtime.FastPoll)
+		time.Sleep(testtime.FastPoll) //archtest:allow:test-sleep TTL physical expiry; backend has no notification API
 	}
 }
 
@@ -249,7 +249,7 @@ func conformC6(t *testing.T, factory DriverFactory) {
 	}
 
 	// Wait ttl × ttlExpiryMargin past the deadline — Renew cannot be polled.
-	time.Sleep(ttl * ttlExpiryMargin)
+	time.Sleep(ttl * ttlExpiryMargin) //archtest:allow:test-sleep TTL physical expiry; backend has no notification API
 
 	held, err := drv.Renew(ctx, "c6-key", tokenA, ttl)
 	if err != nil {

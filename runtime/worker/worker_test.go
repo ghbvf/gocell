@@ -210,7 +210,7 @@ func TestPeriodicWorker_Stop(t *testing.T) {
 		done <- pw.Start(context.Background())
 	}()
 
-	time.Sleep(testtime.D20ms)
+	time.Sleep(testtime.D20ms) //archtest:allow:test-sleep wait for goroutine to enter blocking Start; no started observable
 	err := pw.Stop(context.Background())
 	assert.NoError(t, err)
 

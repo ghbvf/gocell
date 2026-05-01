@@ -29,7 +29,7 @@ func TestManager_Wait_Signal(t *testing.T) {
 	}()
 
 	// Give Wait time to set up the signal handler.
-	time.Sleep(testtime.MediumPoll)
+	time.Sleep(testtime.MediumPoll) //archtest:allow:test-sleep signal.Notify install has no sync hook
 
 	// Send SIGINT to self.
 	_ = syscall.Kill(syscall.Getpid(), syscall.SIGINT)

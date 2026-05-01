@@ -96,7 +96,7 @@ func TestSubscriber_Reconnect_E2E_ChannelCloseAfterAllAcks(t *testing.T) {
 	var handlerCount atomic.Int64
 
 	handler := func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
-		time.Sleep(testtime.MediumPoll)
+		time.Sleep(testtime.MediumPoll) //archtest:allow:test-sleep slow handler fixture; sleep IS the test parameter
 		handlerCount.Add(1)
 		return outbox.HandleResult{Disposition: outbox.DispositionAck}
 	}
@@ -225,8 +225,8 @@ func TestSubscriber_Close_RespectsCtxDeadline(t *testing.T) {
 	}()
 
 	// Wait until handler is in-flight.
-	time.Sleep(subscriberD40ms)
-	cancel() // exit consume loop
+	time.Sleep(subscriberD40ms) //archtest:allow:test-sleep wait for goroutine to enter blocking handler; no started observable
+	cancel()                    // exit consume loop
 
 	select {
 	case <-subDone:
@@ -307,7 +307,7 @@ func TestSubscriber_Close_GracefulWithAmpleBudget(t *testing.T) {
 	mockConn.mu.Unlock()
 
 	handler := func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
-		time.Sleep(drainD30ms)
+		time.Sleep(drainD30ms) //archtest:allow:test-sleep slow handler fixture; sleep IS the test parameter
 		return outbox.HandleResult{Disposition: outbox.DispositionAck}
 	}
 
@@ -369,7 +369,7 @@ func TestSubscriber_Close_InFlightHandlerCompletesBeforeDeadline(t *testing.T) {
 	mockConn.mu.Unlock()
 
 	handler := func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
-		time.Sleep(testtime.D80ms)
+		time.Sleep(testtime.D80ms) //archtest:allow:test-sleep slow handler fixture; sleep IS the test parameter
 		return outbox.HandleResult{Disposition: outbox.DispositionAck}
 	}
 
@@ -390,7 +390,7 @@ func TestSubscriber_Close_InFlightHandlerCompletesBeforeDeadline(t *testing.T) {
 	}()
 
 	// Wait until handler is in-flight.
-	time.Sleep(testtime.D20ms)
+	time.Sleep(testtime.D20ms) //archtest:allow:test-sleep wait for goroutine to enter blocking handler; no started observable
 	cancel()
 
 	select {
@@ -417,7 +417,7 @@ func TestSubscriber_Close_NoDeadlineCtx_WaitsUntilWg(t *testing.T) {
 	mockConn.mu.Unlock()
 
 	handler := func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
-		time.Sleep(testtime.D150ms)
+		time.Sleep(testtime.D150ms) //archtest:allow:test-sleep slow handler fixture; sleep IS the test parameter
 		return outbox.HandleResult{Disposition: outbox.DispositionAck}
 	}
 
@@ -437,7 +437,7 @@ func TestSubscriber_Close_NoDeadlineCtx_WaitsUntilWg(t *testing.T) {
 		subDone <- sub.Subscribe(ctx, outbox.Subscription{Topic: "nodeadline.topic"}, handler)
 	}()
 
-	time.Sleep(testtime.D20ms)
+	time.Sleep(testtime.D20ms) //archtest:allow:test-sleep wait for goroutine to enter blocking handler; no started observable
 	cancel()
 
 	select {
@@ -476,7 +476,7 @@ func TestSubscriber_Reconnect_WaitsForInflightBeforeClose(t *testing.T) {
 	// Simulate two processDelivery goroutines: each sleeps 80ms then calls markDeliveryDone.
 	for i := range numDeliveries {
 		go func(_ int) {
-			time.Sleep(testtime.D80ms)
+			time.Sleep(testtime.D80ms) //archtest:allow:test-sleep sleep IS the fixture input under test
 			ackMu.Lock()
 			ackTimes = append(ackTimes, time.Now())
 			ackMu.Unlock()

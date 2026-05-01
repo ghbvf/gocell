@@ -376,7 +376,7 @@ func TestTokenRenewalWorker_NilCounters_NoopOnDone(t *testing.T) {
 	// Trigger re-auth by firing DoneCh with nil (token no longer renewable).
 	fw.doneCh <- nil
 	// Give re-auth a moment to attempt, then cancel.
-	time.Sleep(testtime.MediumPoll)
+	time.Sleep(testtime.MediumPoll) //archtest:allow:test-sleep wait for goroutine to enter blocking re-auth; no started observable
 	cancel()
 
 	select {

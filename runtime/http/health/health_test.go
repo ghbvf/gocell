@@ -718,7 +718,7 @@ func TestReadyz_ParallelFasterThanSerial(t *testing.T) {
 	h := New(asm, WithDeadline(testtime.D2s))
 	for _, name := range []string{"probe-a", "probe-b", "probe-c"} {
 		require.NoError(t, h.RegisterChecker(name, func(_ context.Context) error {
-			time.Sleep(testtime.D100ms)
+			time.Sleep(testtime.D100ms) //archtest:allow:test-sleep slow handler fixture; sleep IS the test parameter
 			return nil
 		}))
 	}
@@ -798,7 +798,7 @@ func TestReadyz_IndependentOfRequestCtx(t *testing.T) {
 	require.NoError(t, h.RegisterChecker("slow-probe", func(ctx context.Context) error {
 		// Probe takes 100 ms but the HTTP request ctx will be canceled
 		// almost immediately — probe must NOT be affected.
-		time.Sleep(testtime.D100ms)
+		time.Sleep(testtime.D100ms) //archtest:allow:test-sleep slow handler fixture; sleep IS the test parameter
 		close(probeDone)
 		return nil
 	}))
@@ -810,7 +810,7 @@ func TestReadyz_IndependentOfRequestCtx(t *testing.T) {
 
 	// Cancel request ctx after a very short time (before probe finishes).
 	go func() {
-		time.Sleep(testtime.D10ms)
+		time.Sleep(testtime.D10ms) //archtest:allow:test-sleep goroutine timing fixture: controls cancel order
 		reqCancel()
 	}()
 

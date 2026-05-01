@@ -52,7 +52,7 @@ func TestNotifyContext_InterruptCancelsContext(t *testing.T) {
 	require.NoError(t, err)
 
 	// Give the signal handler a moment to register.
-	time.Sleep(testtime.D10ms)
+	time.Sleep(testtime.D10ms) //archtest:allow:test-sleep signal.Notify install has no sync hook
 
 	// Send SIGINT to self.
 	require.NoError(t, proc.Signal(syscall.SIGINT))

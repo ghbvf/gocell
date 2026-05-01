@@ -1203,7 +1203,7 @@ func TestTokenRenewalWorker_Start_HandlesDone(t *testing.T) {
 	fw.doneCh <- nil
 
 	// Give re-auth a moment to start, then cancel ctx to exit.
-	time.Sleep(testtime.MediumPoll)
+	time.Sleep(testtime.MediumPoll) //archtest:allow:test-sleep wait for goroutine to enter blocking re-auth; no started observable
 	cancel()
 
 	select {
@@ -1241,7 +1241,7 @@ func TestTokenRenewalWorker_Start_HandlesDoneWithError(t *testing.T) {
 	injectedErr := errcode.New(errcode.ErrKeyProviderTransient, "vault: token renewal failed")
 	fw.doneCh <- injectedErr
 
-	time.Sleep(testtime.MediumPoll)
+	time.Sleep(testtime.MediumPoll) //archtest:allow:test-sleep wait for goroutine to enter blocking re-auth; no started observable
 	cancel()
 
 	select {

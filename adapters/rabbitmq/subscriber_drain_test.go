@@ -22,7 +22,7 @@ const (
 	drainCloseCtxBudgetHalf = drainCloseCtxBudget / 2
 	drainShortTimeout       = 150 * time.Millisecond
 	drainShortTimeoutHalf   = drainShortTimeout / 2
-	drainD30ms              = 30 * time.Millisecond
+	drainD30ms              = testtime.D30ms
 )
 
 // TestSubscriber_StopIntakeCancelsConsumerButDrainsInflight verifies that
@@ -326,7 +326,7 @@ func TestSubscriber_HardCloseForcesTimeout(t *testing.T) {
 
 	// Wait briefly to let the delivery reach the handler goroutine
 	// (consumeLoop dispatches it via wg.Add(1) + go processDelivery).
-	time.Sleep(drainD30ms)
+	time.Sleep(drainD30ms) //archtest:allow:test-sleep wait for goroutine to enter blocking processDelivery; no started observable
 
 	// Cancel context so consumeLoop exits via ctx.Done(). The processDelivery
 	// goroutine keeps running because it is blocked on neverClose.

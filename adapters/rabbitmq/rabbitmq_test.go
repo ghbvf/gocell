@@ -1085,7 +1085,7 @@ func TestConnection_ReconnectWithBackoff_CloseCh(t *testing.T) {
 		done <- conn.reconnectWithBackoff()
 	}()
 
-	time.Sleep(testtime.MediumPoll)
+	time.Sleep(testtime.MediumPoll) //archtest:allow:test-sleep wait for goroutine to enter blocking reconnectWithBackoff
 	close(closeCh)
 
 	select {
@@ -1767,7 +1767,7 @@ func TestSubscriber_ReconnectLoop_CtxCancelledDuringWait(t *testing.T) {
 
 	go func() {
 		// Cancel ctx after a short delay to unblock WaitConnected.
-		time.Sleep(testtime.MediumPoll)
+		time.Sleep(testtime.MediumPoll) //archtest:allow:test-sleep goroutine timing fixture: controls cancel order
 		cancel()
 	}()
 
@@ -1956,7 +1956,7 @@ func TestSubscriber_Subscribe_ClosedDuringReconnect(t *testing.T) {
 
 	// Let the subscriber enter the reconnect hot-loop. The loop iterates in
 	// microseconds, so 20ms is many iterations regardless of scheduling.
-	time.Sleep(testtime.D20ms)
+	time.Sleep(testtime.D20ms) //archtest:allow:test-sleep wait for goroutine to enter blocking Subscribe reconnect loop; no started observable
 
 	// Simulate disconnection: replace c.connected with an unclosed channel
 	// so that the next WaitConnected call would block.
@@ -2850,7 +2850,7 @@ func TestConsumerBase_WrapWithClaimer_ClaimError_DefaultFailClosed_CtxCancel(t *
 
 	ctx, cancel := context.WithCancel(context.Background())
 	go func() {
-		time.Sleep(testtime.MediumPoll)
+		time.Sleep(testtime.MediumPoll) //archtest:allow:test-sleep goroutine timing fixture: controls cancel order
 		cancel()
 	}()
 
@@ -4079,13 +4079,13 @@ func TestConnection_WaitConnected_RaceRevalidation(t *testing.T) {
 
 	// Goroutine simulates reconnectLoop: replace connected, then close new one.
 	go func() {
-		time.Sleep(testtime.D10ms)
+		time.Sleep(testtime.D10ms) //archtest:allow:test-sleep goroutine timing fixture: controls disconnect/reconnect sequence
 		c.mu.Lock()
 		c.connected = newConnected
 		c.state = StateDisconnected
 		c.mu.Unlock()
 
-		time.Sleep(drainD30ms)
+		time.Sleep(drainD30ms) //archtest:allow:test-sleep goroutine timing fixture: controls disconnect/reconnect sequence
 		c.mu.Lock()
 		close(newConnected)
 		c.state = StateConnected
@@ -4147,7 +4147,7 @@ func TestConnection_WaitConnected_ConcurrentDisconnectReconnect(t *testing.T) {
 	}
 
 	// Give waiters time to enter select on the unclosed channel.
-	time.Sleep(testtime.D10ms)
+	time.Sleep(testtime.D10ms) //archtest:allow:test-sleep wait for goroutines to enter blocking WaitConnected select; no started observable
 
 	// Cycle disconnect/reconnect. The pattern mirrors reconnectLoop:
 	//  1. Replace c.connected with a new unclosed channel (= disconnect)
@@ -4167,7 +4167,7 @@ func TestConnection_WaitConnected_ConcurrentDisconnectReconnect(t *testing.T) {
 	close(initialConnected) // wake initial waiters
 
 	for i := range numCycles {
-		time.Sleep(testtime.D2ms)
+		time.Sleep(testtime.D2ms) //archtest:allow:test-sleep interval between fixture writes drives coalescing test
 
 		if i > 0 {
 			// Disconnect: replace with new unclosed channel.
@@ -4179,7 +4179,7 @@ func TestConnection_WaitConnected_ConcurrentDisconnectReconnect(t *testing.T) {
 			firstCh = newCh
 		}
 
-		time.Sleep(testtime.D2ms)
+		time.Sleep(testtime.D2ms) //archtest:allow:test-sleep interval between fixture writes drives coalescing test
 
 		// Reconnect: close the current channel = connected.
 		c.mu.Lock()

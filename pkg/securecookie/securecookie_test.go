@@ -80,7 +80,7 @@ func TestSecureCookie_Expired(t *testing.T) {
 	encoded, err := sc.Encode("test", []byte("data"))
 	require.NoError(t, err)
 
-	time.Sleep(d1100ms)
+	time.Sleep(d1100ms) //archtest:allow:test-sleep TTL physical expiry; backend has no notification API
 
 	_, err = sc.Decode("test", encoded)
 	assert.ErrorIs(t, err, ErrExpired)
@@ -134,7 +134,7 @@ func TestSecureCookie_MaxAgeZero_NeverExpires(t *testing.T) {
 	encoded, err := sc.Encode("test", []byte("data"))
 	require.NoError(t, err)
 
-	time.Sleep(testtime.MediumPoll)
+	time.Sleep(testtime.MediumPoll) //archtest:allow:test-sleep negative test: must elapse without state change
 	decoded, err := sc.Decode("test", encoded)
 	require.NoError(t, err)
 	assert.Equal(t, []byte("data"), decoded)

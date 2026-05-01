@@ -277,7 +277,7 @@ func (s *inflightSubscriber) Subscribe(ctx context.Context, _ outbox.Subscriptio
 		defer close(handlerFinished)
 		// The in-flight handler ignores ctx — it runs to completion even after
 		// intake is stopped, which is the whole point of the drain barrier.
-		time.Sleep(s.handlerDuration)
+		time.Sleep(s.handlerDuration) //archtest:allow:test-sleep sleep IS the fixture input under test
 		close(s.handlerDone)
 	}()
 

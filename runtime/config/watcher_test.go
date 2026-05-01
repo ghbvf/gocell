@@ -167,7 +167,7 @@ func TestWatcher_IgnoresUnrelatedFiles(t *testing.T) {
 
 	touchFile(t, other, "unrelated: true")
 
-	time.Sleep(testtime.D500ms)
+	time.Sleep(testtime.D500ms) //archtest:allow:test-sleep negative test: must elapse without state change
 	assert.Equal(t, int32(0), called.Load(), "unrelated file change must not fire callback")
 }
 
@@ -248,14 +248,14 @@ func TestWatcher_Debounce_CoalescesRapidWrites(t *testing.T) {
 	// state machine instead of relying on noisy fsnotify delivery timing.
 	for range 5 {
 		w.scheduleCallback(false)
-		time.Sleep(testtime.D10ms)
+		time.Sleep(testtime.D10ms) //archtest:allow:test-sleep interval between fixture writes drives coalescing test
 	}
 
 	assert.Eventually(t, func() bool {
 		return called.Load() == 1
 	}, testtime.D2s, testtime.D20ms, "debounce should coalesce rapid schedules into one callback")
 
-	time.Sleep(testtime.D250ms)
+	time.Sleep(testtime.D250ms) //archtest:allow:test-sleep negative test: must elapse without state change
 	assert.Equal(t, int32(1), called.Load(), "debounce should not emit an extra callback after the window closes")
 }
 
@@ -285,7 +285,7 @@ func TestWatcher_Debounce_MaxCeiling(t *testing.T) {
 				return
 			default:
 				touchFile(t, file, "key: continuous"+string(rune('0'+i%10)))
-				time.Sleep(testtime.D100ms)
+				time.Sleep(testtime.D100ms) //archtest:allow:test-sleep interval between fixture writes drives coalescing test
 			}
 		}
 	}()
@@ -297,7 +297,7 @@ func TestWatcher_Debounce_MaxCeiling(t *testing.T) {
 
 	close(stop)
 	// Let any pending timers fire.
-	time.Sleep(testtime.D500ms)
+	time.Sleep(testtime.D500ms) //archtest:allow:test-sleep negative test: must elapse without state change
 
 	count := called.Load()
 	assert.Less(t, count, int32(15), "debounce should coalesce many events")
@@ -539,14 +539,14 @@ func TestWatcher_Metrics_DebounceCoalesced(t *testing.T) {
 	// 5 rapid writes → first creates the timer, subsequent 4 reset it.
 	for i := range 5 {
 		touchFile(t, file, "key: v"+string(rune('1'+i)))
-		time.Sleep(testtime.D10ms)
+		time.Sleep(testtime.D10ms) //archtest:allow:test-sleep interval between fixture writes drives coalescing test
 	}
 
 	assert.Eventually(t, func() bool {
 		return called.Load() >= 1
 	}, testtime.EventuallyDefault, testtime.D20ms, "rapid writes should still dispatch a debounced callback")
 
-	time.Sleep(testtime.D250ms)
+	time.Sleep(testtime.D250ms) //archtest:allow:test-sleep negative test: must elapse without state change
 
 	// Each fsnotify event beyond the first resets the timer → coalesced count.
 	// We can't predict exact fsnotify event count (OS-dependent), but should
@@ -571,7 +571,7 @@ func TestWatcher_Close_WaitsForInFlightCallbacks(t *testing.T) {
 	started := make(chan struct{})
 	w.OnChange(func(_ WatchEvent) {
 		close(started)
-		time.Sleep(testtime.D500ms) // Simulate slow callback.
+		time.Sleep(testtime.D500ms) //archtest:allow:test-sleep slow callback fixture; sleep IS the test parameter
 	})
 	w.Start()
 	waitReady(t, w)
@@ -609,7 +609,7 @@ func TestWatcher_Close_DrainTimeoutPreventsHang(t *testing.T) {
 	started := make(chan struct{})
 	w.OnChange(func(_ WatchEvent) {
 		close(started)
-		time.Sleep(testtime.D10s) // Simulates a stuck callback.
+		time.Sleep(testtime.D10s) //archtest:allow:test-sleep slow callback fixture; sleep IS the test parameter
 	})
 	w.Start()
 	waitReady(t, w)
@@ -711,7 +711,7 @@ func TestWatcher_Close_DuringDebounceTimer(t *testing.T) {
 	// Close immediately while debounce timer is still pending.
 	// This exercises the race window between close(done), timer.Stop(),
 	// and the timer goroutine potentially firing.
-	time.Sleep(testtime.D10ms) // tiny delay to let event reach the loop
+	time.Sleep(testtime.D10ms) //archtest:allow:test-sleep fsnotify event delivery has no synchronous hook
 	require.NoError(t, w.Close(context.Background()), "Close(ctx) during active debounce timer must not error")
 }
 
@@ -775,12 +775,12 @@ func TestWatcher_RaceDetection_ConcurrentWriteAndClose(t *testing.T) {
 	wg.Go(func() {
 		for i := range 20 {
 			touchFile(t, file, "key: race"+string(rune('0'+i%10)))
-			time.Sleep(testtime.FastPoll)
+			time.Sleep(testtime.FastPoll) //archtest:allow:test-sleep interval between fixture writes drives coalescing test
 		}
 	})
 
 	// Close after a short delay.
-	time.Sleep(testtime.ShortSleep)
+	time.Sleep(testtime.ShortSleep) //archtest:allow:test-sleep goroutine timing fixture: controls cancel order
 	_ = w.Close(context.Background())
 
 	wg.Wait()
@@ -954,7 +954,7 @@ func TestWatcher_WithSymlinkPollInterval_DisablesPoll(t *testing.T) {
 	require.NoError(t, os.Symlink(v2, link))
 
 	// Give a brief window; the test asserts the loop does not crash, not callback count.
-	time.Sleep(testtime.D150ms)
+	time.Sleep(testtime.D150ms) //archtest:allow:test-sleep fsnotify event delivery has no synchronous hook
 	// No assertion on called.Load() — fsnotify may or may not fire; we only
 	// verify the watcher stays alive with poll disabled.
 	_ = called.Load()

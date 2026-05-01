@@ -320,7 +320,7 @@ func TestPGRefreshStore_SessionLockRejectsChildValidatedBeforeCascade(t *testing
 		done <- rotateErr
 	}()
 
-	time.Sleep(testtime.SlowPoll)
+	time.Sleep(testtime.SlowPoll) //archtest:allow:test-sleep wait for goroutine to enter blocking Rotate; no started observable
 	_, err = tx.Exec(ctx, revokeSessionSQL, clock.Now(), "sess-reuse-lock")
 	require.NoError(t, err)
 	require.NoError(t, tx.Commit(ctx))

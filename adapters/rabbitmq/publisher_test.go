@@ -91,7 +91,7 @@ func TestPublisher_Close_CtxExceeded_ReturnsTimeoutErr(t *testing.T) {
 	// Give the goroutine a moment to enter the blocking Publish call.
 	// We use a tiny sleep here only to advance past the goroutine schedule
 	// point — this is not a timing assertion.
-	time.Sleep(testtime.FastPoll)
+	time.Sleep(testtime.FastPoll) //archtest:allow:test-sleep wait for goroutine to enter blocking Publish; no started observable
 
 	// Budget: 100ms — Close must return within this window even though
 	// Publish is still blocked on the gate.
@@ -151,7 +151,7 @@ func TestPublisher_Close_WaitsForInFlightPublishes(t *testing.T) {
 
 	<-publishStarted
 	// Give the goroutine a moment to enter the blocking Publish call.
-	time.Sleep(testtime.FastPoll)
+	time.Sleep(testtime.FastPoll) //archtest:allow:test-sleep wait for goroutine to enter blocking Publish; no started observable
 
 	// Ample budget: 3 seconds.
 	closeCtx, closeCancel := context.WithTimeout(context.Background(), testtime.EventuallyDefault)
