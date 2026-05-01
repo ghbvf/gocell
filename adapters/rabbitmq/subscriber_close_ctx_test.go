@@ -130,8 +130,12 @@ func TestSubscriber_Reconnect_E2E_ChannelCloseAfterAllAcks(t *testing.T) {
 		return handlerCount.Load() == int64(numDeliveries)
 	}, testtime.EventuallyLong, testtime.FastPoll, "all %d handlers must have returned", numDeliveries)
 
-	// Small sleep to ensure ackTimestampChannel records all ack timestamps.
-	time.Sleep(testtime.D10ms)
+	// Poll until ackTimestampChannel has recorded all ack timestamps.
+	require.Eventually(t, func() bool {
+		atCh.mu.Lock()
+		defer atCh.mu.Unlock()
+		return len(atCh.ackCallTimes) >= numDeliveries
+	}, testtime.EventuallyShort, testtime.FastPoll, "all %d ack timestamps must be recorded", numDeliveries)
 
 	// Cancel ctx → consumeLoop exits via ctx.Done() with loopErr == nil.
 	// subscribeOnce calls waitAndClose(ctx). Since ctx is canceled but

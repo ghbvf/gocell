@@ -1132,16 +1132,11 @@ func TestConnection_ReconnectWithBackoff_TransientError_ContinuesIndefinitely(t 
 	}()
 
 	// Wait until at least a few attempts have been made to prove the loop keeps trying.
-	deadline := time.Now().Add(testtime.D500ms)
-	for time.Now().Before(deadline) {
+	require.Eventually(t, func() bool {
 		mu.Lock()
-		n := dialCount
-		mu.Unlock()
-		if n >= 5 {
-			break
-		}
-		time.Sleep(testtime.D10ms)
-	}
+		defer mu.Unlock()
+		return dialCount >= 5
+	}, testtime.D500ms, testtime.D10ms, "expected at least 5 dial attempts within 500ms")
 
 	close(closeCh)
 

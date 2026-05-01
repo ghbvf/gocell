@@ -150,14 +150,7 @@ func startRelay(t *testing.T, relay *outbox.Relay) (stop func()) {
 // waitUntil polls cond until it returns true or 500ms is exceeded.
 func waitUntil(t *testing.T, cond func() bool) {
 	t.Helper()
-	deadline := time.Now().Add(testtime.D500ms)
-	for time.Now().Before(deadline) {
-		if cond() {
-			return
-		}
-		time.Sleep(testtime.D2ms)
-	}
-	t.Fatalf("condition not met within 500ms")
+	require.Eventually(t, cond, testtime.D500ms, testtime.D2ms, "condition not met within 500ms")
 }
 
 // ---------------------------------------------------------------------------

@@ -9,6 +9,7 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
+	"github.com/stretchr/testify/require"
 )
 
 func TestTestTopic_UniquePerTest(t *testing.T) {
@@ -482,14 +483,9 @@ func TestHarness_CheckNoMoreDeliveries_DrainsThenWaits(t *testing.T) {
 
 func waitForCount(t *testing.T, get func() int, want int, timeout time.Duration) {
 	t.Helper()
-	deadline := time.Now().Add(timeout)
-	for time.Now().Before(deadline) {
-		if get() >= want {
-			return
-		}
-		time.Sleep(testtime.FastPoll)
-	}
-	t.Fatalf("waitForCount: want %d, got %d after %v", want, get(), timeout)
+	require.Eventually(t, func() bool {
+		return get() >= want
+	}, timeout, testtime.FastPoll, "waitForCount: want %d, got %d after %v", want, get(), timeout)
 }
 
 // ---------------------------------------------------------------------------

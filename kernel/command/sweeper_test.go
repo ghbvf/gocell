@@ -323,14 +323,9 @@ func TestSweeper_Start_InvokesQueueAckOnExpired(t *testing.T) {
 	done := make(chan error, 1)
 	go func() { done <- s.Start(ctx) }()
 
-	// Wait for at least one tick to be processed.
-	deadline := time.Now().Add(testtime.D2s)
-	for time.Now().Before(deadline) {
-		if q.CallCount() >= 1 {
-			break
-		}
-		time.Sleep(testtime.D10ms)
-	}
+	require.Eventually(t, func() bool {
+		return q.CallCount() >= 1
+	}, testtime.D2s, testtime.D10ms, "Queue.Ack must have been called at least once")
 	cancel()
 	<-done
 
@@ -357,16 +352,11 @@ func TestSweeper_Start_PropagatesScanFilter(t *testing.T) {
 	done := make(chan error, 1)
 	go func() { done <- s.Start(ctx) }()
 
-	deadline := time.Now().Add(testtime.D2s)
-	for time.Now().Before(deadline) {
+	require.Eventually(t, func() bool {
 		scanner.mu.Lock()
-		n := scanner.calls
-		scanner.mu.Unlock()
-		if n >= 1 {
-			break
-		}
-		time.Sleep(testtime.D10ms)
-	}
+		defer scanner.mu.Unlock()
+		return scanner.calls >= 1
+	}, testtime.D2s, testtime.D10ms, "Sweeper must call Scanner.ScanActive at least once")
 	cancel()
 	<-done
 
@@ -401,17 +391,11 @@ func TestSweeper_Start_OnError_Callback(t *testing.T) {
 	done := make(chan error, 1)
 	go func() { done <- s.Start(ctx) }()
 
-	// Wait for at least one error callback.
-	deadline := time.Now().Add(testtime.D2s)
-	for time.Now().Before(deadline) {
+	require.Eventually(t, func() bool {
 		errMu.Lock()
-		n := errCalled
-		errMu.Unlock()
-		if n >= 1 {
-			break
-		}
-		time.Sleep(testtime.D10ms)
-	}
+		defer errMu.Unlock()
+		return errCalled >= 1
+	}, testtime.D2s, testtime.D10ms, "OnError must be called when Scanner returns error")
 	cancel()
 	<-done
 
@@ -454,16 +438,11 @@ func TestSweeper_Start_AckErrorForwardedToOnError(t *testing.T) {
 	done := make(chan error, 1)
 	go func() { done <- s.Start(ctx) }()
 
-	deadline := time.Now().Add(testtime.D2s)
-	for time.Now().Before(deadline) {
+	require.Eventually(t, func() bool {
 		errMu.Lock()
-		n := errCalled
-		errMu.Unlock()
-		if n >= 1 {
-			break
-		}
-		time.Sleep(testtime.D10ms)
-	}
+		defer errMu.Unlock()
+		return errCalled >= 1
+	}, testtime.D2s, testtime.D10ms, "OnError must be called when Queue.Ack returns error")
 	cancel()
 	<-done
 
