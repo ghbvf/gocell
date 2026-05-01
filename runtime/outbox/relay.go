@@ -10,6 +10,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/ghbvf/gocell/kernel/clock"
 	kernellifecycle "github.com/ghbvf/gocell/kernel/lifecycle"
 	kout "github.com/ghbvf/gocell/kernel/outbox"
 	kworker "github.com/ghbvf/gocell/kernel/worker"
@@ -110,6 +111,17 @@ type Relay struct {
 	pollBudget    *FailureBudget
 	reclaimBudget *FailureBudget
 	cleanupBudget *FailureBudget
+
+	clock clock.Clock
+}
+
+// clk returns the relay's clock, falling back to clock.Real() if nil.
+// This guards tests that construct Relay directly without going through NewRelay.
+func (r *Relay) clk() clock.Clock {
+	if r.clock == nil {
+		return clock.Real()
+	}
+	return r.clock
 }
 
 // NewRelay creates a Relay that polls from store and publishes via pub.
@@ -139,6 +151,7 @@ func NewRelay(store Store, pub kout.Publisher, cfg RelayConfig) *Relay {
 		cfg:     cfg,
 		metrics: metrics,
 		readyCh: make(chan struct{}),
+		clock:   clock.Real(),
 	}
 	// Instantiate failure budgets. threshold=0 → nil (disabled).
 	if cfg.PollFailureBudget > 0 {
@@ -372,7 +385,7 @@ const claimTTLPollMultiplier time.Duration = 2
 // candidates for either status (idle table) or any error (defensive: keep
 // the loop alive but back off).
 func (r *Relay) nextCleanupWait(ctx context.Context) time.Duration {
-	now := time.Now()
+	now := r.clk().Now()
 	wait := cleanupWaitCeiling
 
 	if pubAt, ok := r.oldestOrZero(ctx, "published"); ok {
@@ -423,7 +436,7 @@ func (r *Relay) oldestOrZero(ctx context.Context, status string) (time.Time, boo
 
 // pollOnce executes the three-phase relay cycle: claim → publish → writeBack.
 func (r *Relay) pollOnce(ctx context.Context) error {
-	start := time.Now()
+	start := r.clk().Now()
 
 	// Phase 1: Claim
 	entries, err := r.store.ClaimPending(ctx, r.cfg.BatchSize)
@@ -437,17 +450,17 @@ func (r *Relay) pollOnce(ctx context.Context) error {
 	if len(entries) == 0 {
 		return nil
 	}
-	claimDur := time.Since(start)
+	claimDur := r.clk().Since(start)
 
 	// Phase 2: Publish (outside tx)
-	pubStart := time.Now()
+	pubStart := r.clk().Now()
 	results := r.publishBatch(ctx, entries)
-	pubDur := time.Since(pubStart)
+	pubDur := r.clk().Since(pubStart)
 
 	// Phase 3: WriteBack
-	wbStart := time.Now()
+	wbStart := r.clk().Now()
 	stats, wbErr := r.writeBackResults(ctx, results)
-	wbDur := time.Since(wbStart)
+	wbDur := r.clk().Since(wbStart)
 
 	// Log and record metrics only after writeBack completes — if commit
 	// fails, stats are rolled back and recording them would be misleading.
@@ -554,7 +567,7 @@ func (r *Relay) handleFailedEntry(ctx context.Context, res publishResult, stats 
 		// Retry: back to pending with exponential backoff + jitter,
 		// preventing thundering herd in multi-relay-instance deployments.
 		delay := r.retryDelay(newAttempts)
-		nextRetryAt := time.Now().Add(delay)
+		nextRetryAt := r.clk().Now().Add(delay)
 		_, err := r.store.MarkRetry(ctx, res.entry.ID, newAttempts, nextRetryAt, errMsg)
 		if err != nil {
 			return err
@@ -593,7 +606,7 @@ func (r *Relay) reclaimStale(ctx context.Context) error {
 func (r *Relay) cleanup(ctx context.Context) error {
 	const batchLimit = 1000
 
-	publishedCutoff := time.Now().Add(-r.cfg.RetentionPeriod)
+	publishedCutoff := r.clk().Now().Add(-r.cfg.RetentionPeriod)
 	var totalPublished int64
 	for {
 		deleted, err := r.store.CleanupPublished(ctx, publishedCutoff, batchLimit)
@@ -611,7 +624,7 @@ func (r *Relay) cleanup(ctx context.Context) error {
 		)
 	}
 
-	deadCutoff := time.Now().Add(-r.cfg.DeadRetentionPeriod)
+	deadCutoff := r.clk().Now().Add(-r.cfg.DeadRetentionPeriod)
 	var totalDead int64
 	for {
 		deleted, err := r.store.CleanupDead(ctx, deadCutoff, batchLimit)

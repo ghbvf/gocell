@@ -3,8 +3,8 @@ package middleware
 import (
 	"log/slog"
 	"net/http"
-	"time"
 
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/runtime/observability/metrics"
 )
 
@@ -15,9 +15,14 @@ import (
 // middleware), Metrics reuses it. Otherwise it creates its own to
 // remain usable as a standalone middleware.
 func Metrics(collector metrics.Collector) func(http.Handler) http.Handler {
+	return metricsWithClock(collector, clock.Real())
+}
+
+// metricsWithClock is the clock-injectable variant used by Metrics and tests.
+func metricsWithClock(collector metrics.Collector, clk clock.Clock) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			start := time.Now()
+			start := clk.Now()
 
 			state := RecorderStateFrom(r.Context())
 			if state == nil {
@@ -30,7 +35,7 @@ func Metrics(collector metrics.Collector) func(http.Handler) http.Handler {
 
 			safeObserve(slog.Default(), func() {
 				route := RoutePatternFromCtx(r.Context())
-				collector.RecordRequest(r.Method, route, state.Status(), time.Since(start).Seconds())
+				collector.RecordRequest(r.Method, route, state.Status(), clk.Since(start).Seconds())
 			})
 		})
 	}

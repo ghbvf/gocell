@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/ctxkeys"
 	"github.com/ghbvf/gocell/pkg/logutil"
 )
@@ -21,14 +22,21 @@ import (
 // middleware), AccessLog reuses it. Otherwise it creates its own to
 // remain usable as a standalone middleware.
 func AccessLog(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		start := time.Now()
+	return accessLogWithClock(clock.Real())(next)
+}
 
-		state, rw := accessLogRecorder(w, r)
+// accessLogWithClock is the clock-injectable variant used by AccessLog and tests.
+func accessLogWithClock(clk clock.Clock) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			start := clk.Now()
 
-		next.ServeHTTP(rw, r)
-		logAccessRequest(start, r, state)
-	})
+			state, rw := accessLogRecorder(w, r)
+
+			next.ServeHTTP(rw, r)
+			logAccessRequest(start, r, state, clk)
+		})
+	}
 }
 
 func accessLogRecorder(w http.ResponseWriter, r *http.Request) (*RecorderState, http.ResponseWriter) {
@@ -40,7 +48,7 @@ func accessLogRecorder(w http.ResponseWriter, r *http.Request) (*RecorderState, 
 	return state, wrapped
 }
 
-func logAccessRequest(start time.Time, r *http.Request, state *RecorderState) {
+func logAccessRequest(start time.Time, r *http.Request, state *RecorderState, clk clock.Clock) {
 	// Extract and sanitize request fields before logging to avoid taint flow
 	// from user-controlled request data into structured log calls.
 	method := logutil.Sanitize(r.Method)
@@ -48,12 +56,12 @@ func logAccessRequest(start time.Time, r *http.Request, state *RecorderState) {
 	route := RoutePatternFromCtx(r.Context())
 	ctx := r.Context()
 	safeObserve(slog.Default(), func() {
-		slog.Info("http request", accessLogAttrs(start, method, path, route, state, ctx)...)
+		slog.Info("http request", accessLogAttrs(start, method, path, route, state, ctx, clk)...)
 	})
 }
 
-func accessLogAttrs(start time.Time, method, path, route string, state *RecorderState, ctx context.Context) []any {
-	duration := time.Since(start)
+func accessLogAttrs(start time.Time, method, path, route string, state *RecorderState, ctx context.Context, clk clock.Clock) []any {
+	duration := clk.Since(start)
 	attrs := []any{
 		slog.String("method", method),
 		slog.String("path", path),

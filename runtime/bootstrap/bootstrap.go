@@ -21,6 +21,7 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/assembly"
 	"github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/kernel/clock"
 	kernellifecycle "github.com/ghbvf/gocell/kernel/lifecycle"
 	kernelmetrics "github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/kernel/outbox"
@@ -119,6 +120,9 @@ type Bootstrap struct {
 
 	// --- runtime guard ---
 	runOnce sync.Once // Run() single-execution guard
+
+	// --- time source ---
+	clock clock.Clock // nil → clock.Real() applied in New()
 }
 
 // namedChecker pairs a readiness probe name with its check function.
@@ -274,6 +278,9 @@ func New(opts ...Option) *Bootstrap {
 	for _, o := range opts {
 		o(b)
 	}
+	if b.clock == nil {
+		b.clock = clock.Real()
+	}
 	// Create the Lifecycle after all options are applied so that
 	// defaultStartTimeout / defaultStopTimeout are set.
 	// Zero values are forwarded as-is; NewLifecycle falls back to the
@@ -283,6 +290,7 @@ func New(opts ...Option) *Bootstrap {
 		DefaultStartTimeout: b.defaultStartTimeout,
 		DefaultStopTimeout:  b.defaultStopTimeout,
 		Logger:              logger,
+		Clock:               b.clock,
 	})
 	for _, reg := range b.lifecycleRegistrars {
 		reg(b.lifecycle)

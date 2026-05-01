@@ -28,6 +28,7 @@ import (
 
 	"github.com/fsnotify/fsnotify"
 
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/lifecycle"
 )
 
@@ -58,6 +59,7 @@ type watcherConfig struct {
 	metrics      WatcherCollector
 	drainTimeout time.Duration
 	symPivotPoll time.Duration // polling interval for symlink pivot detection
+	clock        clock.Clock   // nil → clock.Real() applied in NewWatcher
 }
 
 const (
@@ -197,6 +199,9 @@ func NewWatcher(path string, opts ...WatcherOption) (*Watcher, error) {
 	for _, o := range opts {
 		o(&cfg)
 	}
+	if cfg.clock == nil {
+		cfg.clock = clock.Real()
+	}
 
 	// Resolve initial symlink target for pivot detection.
 	resolved, _ := filepath.EvalSymlinks(absPath)
@@ -317,7 +322,7 @@ func (w *Watcher) handleWatcherEvent(event fsnotify.Event) {
 		return
 	}
 	w.cfg.metrics.RecordEvent(w.eventType(event, symPivot))
-	w.cfg.metrics.RecordLastEventTimestamp(time.Now())
+	w.cfg.metrics.RecordLastEventTimestamp(w.cfg.clock.Now())
 	w.scheduleCallback(symPivot)
 }
 
@@ -326,7 +331,7 @@ func (w *Watcher) handleSymlinkPivotTick() {
 		return
 	}
 	w.cfg.metrics.RecordEvent(EventTypeSymlinkPivot)
-	w.cfg.metrics.RecordLastEventTimestamp(time.Now())
+	w.cfg.metrics.RecordLastEventTimestamp(w.cfg.clock.Now())
 	w.scheduleCallback(true)
 }
 

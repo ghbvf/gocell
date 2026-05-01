@@ -111,10 +111,10 @@ func (w *GCWorker) loop(ctx context.Context, done chan<- struct{}) {
 }
 
 func (w *GCWorker) runOnce(ctx context.Context) {
-	start := time.Now()
-	olderThan := w.clock.Now().Add(-w.retention)
+	start := w.clock.Now()
+	olderThan := start.Add(-w.retention)
 	removed, err := w.store.GC(ctx, olderThan)
-	duration := time.Since(start)
+	duration := w.clock.Since(start)
 	if err != nil {
 		w.logger.Error("refresh gc failed", slog.Any("error", err))
 		w.metrics.ObserveRefreshGC(ctx, "failure", 0, duration)

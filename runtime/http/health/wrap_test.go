@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 )
 
@@ -28,7 +29,7 @@ func TestWrapCtxSafe_ReturnsOnCtxDone_InnerIgnoresCtx(t *testing.T) {
 		close(innerReady) // happens-before signal: inner fn is parked
 		<-unblock
 		return nil
-	})
+	}, clock.Real())
 
 	ctx, cancel := context.WithCancel(context.Background())
 
@@ -86,7 +87,7 @@ func TestWrapCtxSafe_PropagatesError_WhenInnerReturnsFirst(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			wrapped := wrapCtxSafe(tt.innerFn)
+			wrapped := wrapCtxSafe(tt.innerFn, clock.Real())
 			err := wrapped(context.Background())
 			if tt.wantErr == "" {
 				assert.NoError(t, err)
@@ -109,7 +110,7 @@ func TestWrapCtxSafe_PanicBecomesErrorAndLogs(t *testing.T) {
 
 	wrapped := wrapCtxSafe(func(_ context.Context) error {
 		panic("boom")
-	})
+	}, clock.Real())
 	err := wrapped(context.Background())
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "panic: boom")
@@ -120,7 +121,7 @@ func TestWrapCtxSafe_PanicBecomesErrorAndLogs(t *testing.T) {
 // TestWrapCtxSafe_NilInput ensures defensive wrapping of nil returns a
 // Checker that fails closed rather than causing a nil-deref at call time.
 func TestWrapCtxSafe_NilInput(t *testing.T) {
-	wrapped := wrapCtxSafe(nil)
+	wrapped := wrapCtxSafe(nil, clock.Real())
 	require.NotNil(t, wrapped)
 	err := wrapped(context.Background())
 	require.Error(t, err)

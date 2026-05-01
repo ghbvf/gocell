@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
@@ -84,6 +85,7 @@ type LifecycleConfig struct {
 	DefaultStartTimeout time.Duration // 0 → DefaultStartTimeout constant
 	DefaultStopTimeout  time.Duration // 0 → DefaultStopTimeout constant
 	Logger              *slog.Logger  // nil → slog.Default()
+	Clock               clock.Clock   // nil → clock.Real()
 }
 
 // lifecycleState represents the current state of the lifecycle state machine.
@@ -107,6 +109,7 @@ type lifecycle struct {
 	defaultStart time.Duration
 	defaultStop  time.Duration
 	logger       *slog.Logger
+	clock        clock.Clock
 }
 
 // NewLifecycle creates a new Lifecycle with the given config.
@@ -123,12 +126,17 @@ func NewLifecycle(cfg LifecycleConfig) Lifecycle {
 	if logger == nil {
 		logger = slog.Default()
 	}
+	clk := cfg.Clock
+	if clk == nil {
+		clk = clock.Real()
+	}
 	return &lifecycle{
 		state:        stateStopped,
 		names:        make(map[string]struct{}),
 		defaultStart: defaultStart,
 		defaultStop:  defaultStop,
 		logger:       logger,
+		clock:        clk,
 	}
 }
 
@@ -272,9 +280,9 @@ func (lc *lifecycle) runHook(ctx context.Context, h Hook, isStart bool) error {
 	hookCtx, cancel := lc.applyTimeout(ctx, hookTimeout)
 	defer cancel()
 
-	t0 := time.Now()
+	t0 := lc.clock.Now()
 	err := fn(hookCtx)
-	elapsed := time.Since(t0)
+	elapsed := lc.clock.Since(t0)
 
 	if err != nil {
 		if errors.Is(err, context.DeadlineExceeded) {

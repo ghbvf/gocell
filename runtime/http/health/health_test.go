@@ -1367,7 +1367,7 @@ func TestRunOneProbe_DegradedSentinelMappedToDegraded(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), testtime.D5s)
 	defer cancel()
 
-	pr := runOneProbe(ctx, checker, testtime.D5s)
+	pr := runOneProbe(ctx, checker, testtime.D5s, clock.Real())
 
 	assert.Equal(t, "degraded", pr.Status,
 		"checker returning wrapped cell.ErrDegraded must produce ProbeResult.Status=degraded")
