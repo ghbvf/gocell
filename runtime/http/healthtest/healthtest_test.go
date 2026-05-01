@@ -42,6 +42,30 @@ func TestCheckCtxRespected_DetectsUncooperativeProbe(t *testing.T) {
 	assert.Contains(t, spy.lastMsg, "did not return within")
 }
 
+// TestCheckCtxRespected_NilChecker covers the defensive nil guard so a
+// caller who hands the helper a nil health.Checker gets a clear test
+// failure instead of a nil-deref panic from the goroutine launch path.
+func TestCheckCtxRespected_NilChecker(t *testing.T) {
+	spy := &tbSpy{TB: t}
+	CheckCtxRespected(spy, nil, testtime.MediumPoll)
+	assert.True(t, spy.errored, "CheckCtxRespected must flag a nil checker")
+	assert.Contains(t, spy.lastMsg, "nil checker")
+}
+
+// TestCheckCtxRespected_DefaultsBudget covers the `budget <= 0` fallback
+// branch (substitutes testtime.SlowPoll). A cooperative checker exits on
+// ctx.Done() before the default budget elapses, so the helper returns
+// without flagging an error.
+func TestCheckCtxRespected_DefaultsBudget(t *testing.T) {
+	cooperative := func(ctx context.Context) error {
+		<-ctx.Done()
+		return ctx.Err()
+	}
+	spy := &tbSpy{TB: t}
+	CheckCtxRespected(spy, cooperative, 0)
+	assert.False(t, spy.errored, "default budget should accommodate a cooperative checker")
+}
+
 // tbSpy captures t.Errorf calls without failing the enclosing test.
 type tbSpy struct {
 	testing.TB
