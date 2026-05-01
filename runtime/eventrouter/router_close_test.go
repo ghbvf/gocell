@@ -414,9 +414,9 @@ func TestRouterClose_StopIntakeBlocksNeverCalled_CtxTimeoutContinues(t *testing.
 	}
 
 	r := New(h)
-	r.AddContractHandler(testEventSpec("t"), func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+	require.NoError(t, r.AddContractHandler(testEventSpec("t"), func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
 		return outbox.HandleResult{Disposition: outbox.DispositionAck}
-	}, "test-cg")
+	}, "test-cg"))
 
 	runCtx := t.Context()
 	done := make(chan error, 1)
@@ -480,9 +480,9 @@ func TestRouterClose_WrapsErrorsByPhase(t *testing.T) {
 		}
 
 		r := New(h)
-		r.AddContractHandler(testEventSpec("t"), func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+		require.NoError(t, r.AddContractHandler(testEventSpec("t"), func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
 			return outbox.HandleResult{Disposition: outbox.DispositionAck}
-		}, "test-cg")
+		}, "test-cg"))
 
 		runCtx := t.Context()
 		done := make(chan error, 1)
@@ -526,9 +526,9 @@ func TestRouterClose_WrapsErrorsByPhase(t *testing.T) {
 		sub := newInflightSubscriber(veryLongDrain)
 
 		r := New(sub)
-		r.AddContractHandler(testEventSpec("t"), func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+		require.NoError(t, r.AddContractHandler(testEventSpec("t"), func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
 			return outbox.HandleResult{Disposition: outbox.DispositionAck}
-		}, "test-cg")
+		}, "test-cg"))
 
 		runCtx, runCancel := context.WithCancel(context.Background())
 		defer runCancel()
@@ -583,9 +583,9 @@ func TestRouterClose_StopIntakeErr_ProceedsToCancel(t *testing.T) {
 	close(h.release) // allow StopIntake to return immediately
 
 	r := New(h)
-	r.AddContractHandler(testEventSpec("t"), func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+	require.NoError(t, r.AddContractHandler(testEventSpec("t"), func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
 		return outbox.HandleResult{Disposition: outbox.DispositionAck}
-	}, "test-cg")
+	}, "test-cg"))
 
 	runCtx := t.Context()
 	done := make(chan error, 1)

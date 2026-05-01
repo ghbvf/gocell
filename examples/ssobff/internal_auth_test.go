@@ -7,19 +7,19 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-const testServiceSecret = "test-service-secret-at-least-32-bytes!!"
+const testServiceKey = "test-service-secret-at-least-32-bytes!!"
 
 func TestInternalAuthChainMissingServiceSecretFailsFast(t *testing.T) {
-	t.Setenv(ssobffServiceSecretEnv, "")
+	t.Setenv(ssobffServiceKeyEnv, "")
 
 	_, err := newInternalAuthChainFromEnv()
 
 	require.Error(t, err)
-	require.Contains(t, err.Error(), ssobffServiceSecretEnv)
+	require.Contains(t, err.Error(), ssobffServiceKeyEnv)
 }
 
 func TestInternalAuthChainContainsServiceToken(t *testing.T) {
-	t.Setenv(ssobffServiceSecretEnv, testServiceSecret)
+	t.Setenv(ssobffServiceKeyEnv, testServiceKey)
 
 	chain, err := newInternalAuthChainFromEnv()
 

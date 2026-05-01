@@ -340,7 +340,9 @@ func TestDurabilityModeForTopology_UsesStorageBackend(t *testing.T) {
 // options (typically WithListener for InternalListener/HealthListener,
 // WithManagedResource, etc.). Uses memory topology and AccessCoreModule with
 // a fast-bcrypt option.
-func buildBootstrapFromShared(t *testing.T, shared *SharedDeps, primaryLn net.Listener, extra ...bootstrap.Option) (*bootstrap.Bootstrap, error) {
+func buildBootstrapFromShared(
+	t *testing.T, shared *SharedDeps, primaryLn net.Listener, extra ...bootstrap.Option,
+) (*bootstrap.Bootstrap, error) {
 	t.Helper()
 	ctx := context.Background()
 
@@ -432,15 +434,47 @@ func TestSharedDeps_Validate(t *testing.T) {
 		{name: "prod baseline is valid", topo: prodTopo, mutate: func(*SharedDeps) {}, wantErr: false},
 		{name: "dev baseline is valid", topo: devTopo, mutate: func(*SharedDeps) {}, wantErr: false},
 
-		{name: "missing JWT issuer", topo: devTopo, mutate: func(d *SharedDeps) { d.JWTDeps.issuer = nil }, wantErr: true, wantSubstr: "JWTDeps.issuer"},
-		{name: "missing JWT verifier", topo: devTopo, mutate: func(d *SharedDeps) { d.JWTDeps.verifier = nil }, wantErr: true, wantSubstr: "JWTDeps.verifier"},
-		{name: "missing prom registry", topo: devTopo, mutate: func(d *SharedDeps) { d.PromStack.registry = nil }, wantErr: true, wantSubstr: "PromStack.registry"},
-		{name: "missing prom hook observer", topo: devTopo, mutate: func(d *SharedDeps) { d.PromStack.hookObserver = nil }, wantErr: true, wantSubstr: "PromStack.hookObserver"},
-		{name: "missing prom metric provider", topo: devTopo, mutate: func(d *SharedDeps) { d.PromStack.metricProvider = nil }, wantErr: true, wantSubstr: "PromStack.metricProvider"},
-		{name: "missing event bus", topo: devTopo, mutate: func(d *SharedDeps) { d.EventBus = nil }, wantErr: true, wantSubstr: "EventBus"},
+		{
+			name: "missing JWT issuer", topo: devTopo,
+			mutate:  func(d *SharedDeps) { d.JWTDeps.issuer = nil },
+			wantErr: true, wantSubstr: "JWTDeps.issuer",
+		},
+		{
+			name: "missing JWT verifier", topo: devTopo,
+			mutate:  func(d *SharedDeps) { d.JWTDeps.verifier = nil },
+			wantErr: true, wantSubstr: "JWTDeps.verifier",
+		},
+		{
+			name: "missing prom registry", topo: devTopo,
+			mutate:  func(d *SharedDeps) { d.PromStack.registry = nil },
+			wantErr: true, wantSubstr: "PromStack.registry",
+		},
+		{
+			name: "missing prom hook observer", topo: devTopo,
+			mutate:  func(d *SharedDeps) { d.PromStack.hookObserver = nil },
+			wantErr: true, wantSubstr: "PromStack.hookObserver",
+		},
+		{
+			name: "missing prom metric provider", topo: devTopo,
+			mutate:  func(d *SharedDeps) { d.PromStack.metricProvider = nil },
+			wantErr: true, wantSubstr: "PromStack.metricProvider",
+		},
+		{
+			name: "missing event bus", topo: devTopo,
+			mutate:  func(d *SharedDeps) { d.EventBus = nil },
+			wantErr: true, wantSubstr: "EventBus",
+		},
 
-		{name: "prod missing verbose token", topo: prodTopo, mutate: func(d *SharedDeps) { d.VerboseToken = "" }, wantErr: true, wantSubstr: "GOCELL_READYZ_VERBOSE_TOKEN"},
-		{name: "dev missing verbose token", topo: devTopo, mutate: func(d *SharedDeps) { d.VerboseToken = "" }, wantErr: true, wantSubstr: "GOCELL_READYZ_VERBOSE_TOKEN"},
+		{
+			name: "prod missing verbose token", topo: prodTopo,
+			mutate:  func(d *SharedDeps) { d.VerboseToken = "" },
+			wantErr: true, wantSubstr: "GOCELL_READYZ_VERBOSE_TOKEN",
+		},
+		{
+			name: "dev missing verbose token", topo: devTopo,
+			mutate:  func(d *SharedDeps) { d.VerboseToken = "" },
+			wantErr: true, wantSubstr: "GOCELL_READYZ_VERBOSE_TOKEN",
+		},
 		{
 			name:    "dev with verbose disabled flag is valid",
 			topo:    devTopo,
@@ -454,8 +488,16 @@ func TestSharedDeps_Validate(t *testing.T) {
 			wantErr:    true,
 			wantSubstr: "GOCELL_READYZ_VERBOSE_DISABLED=1 is not allowed",
 		},
-		{name: "prod missing metrics token", topo: prodTopo, mutate: func(d *SharedDeps) { d.MetricsToken = "" }, wantErr: true, wantSubstr: "GOCELL_METRICS_TOKEN"},
-		{name: "prod missing internal guard", topo: prodTopo, mutate: func(d *SharedDeps) { d.InternalGuard = nil }, wantErr: true, wantSubstr: "GOCELL_SERVICE_SECRET"},
+		{
+			name: "prod missing metrics token", topo: prodTopo,
+			mutate:  func(d *SharedDeps) { d.MetricsToken = "" },
+			wantErr: true, wantSubstr: "GOCELL_METRICS_TOKEN",
+		},
+		{
+			name: "prod missing internal guard", topo: prodTopo,
+			mutate:  func(d *SharedDeps) { d.InternalGuard = nil },
+			wantErr: true, wantSubstr: "GOCELL_SERVICE_SECRET",
+		},
 		{
 			name: "real multi-pod with in-memory claimer rejected",
 			topo: bootstrap.Topology{StorageBackend: "postgres", AdapterMode: "real", SinglePodReplayProtection: false},
@@ -583,9 +625,12 @@ func TestBuildBootstrap_MemoryTopology(t *testing.T) {
 	require.NoError(t, err)
 	healthLn := newCorebundleLocalListener(t)
 
+	healthOpt := bootstrap.WithListener(
+		cell.HealthListener, healthLn.Addr().String(),
+		[]cell.ListenerAuth{cell.AuthNone{}}, bootstrap.WithListenerNet(healthLn))
 	app, err := buildBootstrapFromShared(t, shared, ln,
 		withCorebundleTestInternalListener(t, newCorebundleLocalListener(t)),
-		bootstrap.WithListener(cell.HealthListener, healthLn.Addr().String(), []cell.ListenerAuth{cell.AuthNone{}}, bootstrap.WithListenerNet(healthLn)))
+		healthOpt)
 	require.NoError(t, err)
 	require.NotNil(t, app)
 
@@ -597,9 +642,13 @@ func TestBuildBootstrap_MemoryTopology(t *testing.T) {
 	waitForHealthy(t, healthAddr)
 
 	// /readyz must be healthy (no PG checker to fail).
-	resp, err := http.Get("http://" + healthAddr + "/readyz") //nolint:noctx
+	resp, err := http.Get("http://" + healthAddr + "/readyz")
 	require.NoError(t, err)
-	defer resp.Body.Close()
+	t.Cleanup(func() {
+		if err := resp.Body.Close(); err != nil {
+			t.Logf("close resp body: %v", err)
+		}
+	})
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
 
 	cancel()
@@ -635,9 +684,12 @@ func TestBuildBootstrap_PostgresTopology_FakePGResource(t *testing.T) {
 	require.NoError(t, err)
 	healthLn := newCorebundleLocalListener(t)
 
+	healthOpt2 := bootstrap.WithListener(
+		cell.HealthListener, healthLn.Addr().String(),
+		[]cell.ListenerAuth{cell.AuthNone{}}, bootstrap.WithListenerNet(healthLn))
 	app, err := buildBootstrapFromShared(t, shared, ln,
 		withCorebundleTestInternalListener(t, newCorebundleLocalListener(t)),
-		bootstrap.WithListener(cell.HealthListener, healthLn.Addr().String(), []cell.ListenerAuth{cell.AuthNone{}}, bootstrap.WithListenerNet(healthLn)),
+		healthOpt2,
 		bootstrap.WithManagedResource(fakePG),
 	)
 	require.NoError(t, err)
@@ -671,9 +723,12 @@ func TestBuildBootstrap_AssemblyHasAllCells(t *testing.T) {
 	require.NoError(t, err)
 	healthLn := newCorebundleLocalListener(t)
 
+	healthOpt3 := bootstrap.WithListener(
+		cell.HealthListener, healthLn.Addr().String(),
+		[]cell.ListenerAuth{cell.AuthNone{}}, bootstrap.WithListenerNet(healthLn))
 	app, err := buildBootstrapFromShared(t, shared, ln,
 		withCorebundleTestInternalListener(t, newCorebundleLocalListener(t)),
-		bootstrap.WithListener(cell.HealthListener, healthLn.Addr().String(), []cell.ListenerAuth{cell.AuthNone{}}, bootstrap.WithListenerNet(healthLn)))
+		healthOpt3)
 	require.NoError(t, err)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -684,9 +739,13 @@ func TestBuildBootstrap_AssemblyHasAllCells(t *testing.T) {
 	waitForHealthy(t, healthAddr)
 
 	// /readyz confirms all three cells started and registered their probes.
-	resp, err := http.Get("http://" + healthAddr + "/readyz") //nolint:noctx
+	resp, err := http.Get("http://" + healthAddr + "/readyz")
 	require.NoError(t, err)
-	defer resp.Body.Close()
+	t.Cleanup(func() {
+		if err := resp.Body.Close(); err != nil {
+			t.Logf("close resp body: %v", err)
+		}
+	})
 	assert.Equal(t, http.StatusOK, resp.StatusCode,
 		"all three cells (configcore, accesscore, auditcore) must be healthy")
 

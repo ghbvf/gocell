@@ -135,7 +135,10 @@ func TestWrap_ReasonInDetails(t *testing.T) {
 		{name: "context.Canceled → reason=canceled", err: context.Canceled, wantReason: "canceled"},
 		{name: "context.DeadlineExceeded → reason=deadline_exceeded", err: context.DeadlineExceeded, wantReason: "deadline_exceeded"},
 		{name: "wrapped Canceled → reason=canceled", err: fmt.Errorf("scan: %w", context.Canceled), wantReason: "canceled"},
-		{name: "wrapped DeadlineExceeded → reason=deadline_exceeded", err: fmt.Errorf("query: %w", context.DeadlineExceeded), wantReason: "deadline_exceeded"},
+		{
+			name: "wrapped DeadlineExceeded → reason=deadline_exceeded",
+			err:  fmt.Errorf("query: %w", context.DeadlineExceeded), wantReason: "deadline_exceeded",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

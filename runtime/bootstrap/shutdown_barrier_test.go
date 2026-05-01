@@ -67,7 +67,7 @@ func TestShutdown_HTTPAcceptsDuringPreShutdownDelay(t *testing.T) {
 		if err != nil {
 			return false
 		}
-		defer resp.Body.Close()
+		defer closeBody(t, resp)
 		return resp.StatusCode == http.StatusServiceUnavailable
 	}, 500*time.Millisecond, 10*time.Millisecond,
 		"/readyz must flip to 503 at the start of preShutdownDelay")
@@ -77,7 +77,7 @@ func TestShutdown_HTTPAcceptsDuringPreShutdownDelay(t *testing.T) {
 	// (before this fix, err was silently swallowed and the assertion skipped).
 	resp, err2 := testHTTPClient.Get(fmt.Sprintf("http://%s/", addr))
 	require.NoError(t, err2, "HTTP must still accept connections during preShutdownDelay")
-	resp.Body.Close()
+	closeBody(t, resp)
 	assert.NotEqual(t, 0, resp.StatusCode, "HTTP server must serve a response")
 
 	// Confirm /readyz continues to return 503 throughout the window.
@@ -87,7 +87,7 @@ func TestShutdown_HTTPAcceptsDuringPreShutdownDelay(t *testing.T) {
 		"/readyz must return 503 during preShutdownDelay")
 	var body map[string]any
 	require.NoError(t, json.NewDecoder(respZ.Body).Decode(&body))
-	respZ.Body.Close()
+	closeBody(t, respZ)
 	assertReadyzServiceUnavailable(t, body, "shutting_down", "graceful_shutdown")
 
 	select {

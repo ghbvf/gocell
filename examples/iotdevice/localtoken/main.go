@@ -22,7 +22,10 @@ func main() {
 		fmt.Fprintf(os.Stderr, "localtoken: %v\n", err)
 		os.Exit(1)
 	}
-	fmt.Fprintln(os.Stdout, token)
+	if _, err := fmt.Fprintln(os.Stdout, token); err != nil {
+		fmt.Fprintf(os.Stderr, "localtoken: write output: %v\n", err)
+		os.Exit(1)
+	}
 }
 
 func defaultRoles() []string {

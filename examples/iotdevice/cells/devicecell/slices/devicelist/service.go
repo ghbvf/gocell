@@ -28,7 +28,10 @@ type Service struct {
 
 // NewService creates a device-list Service.
 // codec must be non-nil — cursor pagination cannot be served without it.
-func NewService(deviceRepo domain.DeviceRepository, codec *query.CursorCodec, logger *slog.Logger, runMode query.RunMode) (*Service, error) {
+func NewService(
+	deviceRepo domain.DeviceRepository, codec *query.CursorCodec,
+	logger *slog.Logger, runMode query.RunMode,
+) (*Service, error) {
 	if codec == nil {
 		return nil, errcode.New(errcode.ErrCellMissingCodec,
 			"device-list: cursor codec is required")

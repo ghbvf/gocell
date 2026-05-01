@@ -111,7 +111,9 @@ func setupHandlerWithCodec() (http.Handler, *mem.FlagRepository, *query.CursorCo
 	}
 	mux := celltest.NewTestMux()
 	mux.Route(flagsBasePath, func(sub kcell.RouteMux) {
-		NewHandler(svc).RegisterRoutes(sub)
+		if err := NewHandler(svc).RegisterRoutes(sub); err != nil {
+			panic("RegisterRoutes: " + err.Error())
+		}
 	})
 	return mux, repo, codec
 }

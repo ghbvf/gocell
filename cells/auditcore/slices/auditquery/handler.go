@@ -102,7 +102,6 @@ func (h *Handler) HandleQuery(w http.ResponseWriter, r *http.Request) {
 	// fail closed rather than panic on nil dereference.
 	p, ok := auth.FromContext(r.Context())
 	if !ok {
-		//nolint:gosec // G706: structured slog fields, not string concatenation
 		slog.Error("audit: handler reached without principal — policy chain may be misconfigured",
 			slog.String("path", r.URL.Path),
 			slog.String("method", r.Method),
@@ -118,7 +117,7 @@ func (h *Handler) HandleQuery(w http.ResponseWriter, r *http.Request) {
 		actorID = subject
 	}
 	if actorID != subject {
-		slog.Info("audit: admin querying other user", //nolint:gosec // G706: structured slog fields, not string concatenation
+		slog.Info("audit: admin querying other user",
 			slog.String("admin", subject),
 			slog.String("target_actor", actorID),
 		)

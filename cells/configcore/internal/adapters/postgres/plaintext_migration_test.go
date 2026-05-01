@@ -338,14 +338,14 @@ func TestPlaintextMigrator_MigrateConfigVersions_SingleRow(t *testing.T) {
 // the caller supplied the identical AAD that was used during Encrypt, proving
 // that the migration wires the correct AAD (cellID + configKey).
 //
-// Ciphertext layout: [4-byte big-endian AAD length][AAD bytes][plaintext bytes]
+// Ciphertext layout: [4-byte big-endian AAD length][AAD bytes][plaintext bytes].
 type aadAwareTransformer struct {
 	keyID string
 }
 
 func (t *aadAwareTransformer) Encrypt(_ context.Context, pt, aad []byte) ([]byte, string, []byte, []byte, error) {
 	var lenBuf [4]byte
-	binary.BigEndian.PutUint32(lenBuf[:], uint32(len(aad)))
+	binary.BigEndian.PutUint32(lenBuf[:], uint32(len(aad)&0xffffffff))
 	ct := make([]byte, 0, 4+len(aad)+len(pt))
 	ct = append(ct, lenBuf[:]...)
 	ct = append(ct, aad...)

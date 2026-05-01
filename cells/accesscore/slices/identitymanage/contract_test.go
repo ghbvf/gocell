@@ -32,7 +32,7 @@ func newIdentityRefreshStore() refresh.Store {
 
 // testPassword is a deterministic credential used only in contract tests.
 // Extracted as a constant to satisfy S6437 (no hardcoded credentials).
-const testPassword = "contract-test-P@ssw0rd" //nolint:gosec
+const testPassword = "contract-test-P@ssw0rd"
 
 // --- contract test doubles ---
 
@@ -86,7 +86,9 @@ func buildMux(svc *Service) *celltest.TestMux {
 	h := NewHandler(svc)
 	mux := celltest.NewTestMux()
 	mux.Route("/api/v1/access/users", func(sub kcell.RouteMux) {
-		h.RegisterRoutes(sub)
+		if err := h.RegisterRoutes(sub); err != nil {
+			panic("RegisterRoutes: " + err.Error())
+		}
 	})
 	return mux
 }
@@ -134,7 +136,8 @@ func TestHttpAuthUserCreateV1Serve(t *testing.T) {
 	c.ValidateRequest(t, []byte(`{"username":"alice","email":"a@b.com","password":"`+testPassword+`"}`))
 	c.MustRejectRequest(t, []byte(`{"username":"alice","email":"a@b.com","password":"s","extra":"bad"}`))
 
-	req := httptest.NewRequest(c.HTTP.Method, c.HTTP.Path, strings.NewReader(`{"username":"alice","email":"a@b.com","password":"`+testPassword+`"}`))
+	body := strings.NewReader(`{"username":"alice","email":"a@b.com","password":"` + testPassword + `"}`)
+	req := httptest.NewRequest(c.HTTP.Method, c.HTTP.Path, body)
 	req.Header.Set("Content-Type", "application/json")
 	req = req.WithContext(auth.TestContext("admin-user", []string{"admin"}))
 	recorder := httptest.NewRecorder()
@@ -467,11 +470,13 @@ func TestHttpAuthUserChangePasswordV1Serve(t *testing.T) {
 	}{
 		{
 			"missing sessionId",
-			[]byte(`{"data":{"accessToken":"x","refreshToken":"y","expiresAt":"2026-01-01T00:00:00Z","userId":"u","passwordResetRequired":false}}`),
+			[]byte(`{"data":{"accessToken":"x","refreshToken":"y",` +
+				`"expiresAt":"2026-01-01T00:00:00Z","userId":"u","passwordResetRequired":false}}`),
 		},
 		{
 			"missing userId",
-			[]byte(`{"data":{"accessToken":"x","refreshToken":"y","expiresAt":"2026-01-01T00:00:00Z","sessionId":"s","passwordResetRequired":false}}`),
+			[]byte(`{"data":{"accessToken":"x","refreshToken":"y",` +
+				`"expiresAt":"2026-01-01T00:00:00Z","sessionId":"s","passwordResetRequired":false}}`),
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

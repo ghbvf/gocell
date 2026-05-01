@@ -172,7 +172,9 @@ func TestService_Logout_PublishError_DoesNotFailLogout(t *testing.T) {
 	seedSession(repo, "sess-pub", "usr-1")
 
 	fp := failingPublisher{err: fmt.Errorf("broker unavailable")}
-	emitter, err := outbox.NewDirectEmitter(fp, outbox.DirectPublishFailOpen, metrics.NopProvider{}, "accesscore", outbox.WithLogger(slog.Default()))
+	emitter, err := outbox.NewDirectEmitter(
+		fp, outbox.DirectPublishFailOpen, metrics.NopProvider{}, "accesscore",
+		outbox.WithLogger(slog.Default()))
 	require.NoError(t, err)
 	svc := MustNewService(repo, newLogoutRefreshStore(), slog.Default(), WithEmitter(emitter))
 

@@ -634,7 +634,8 @@ func TestCONTRACTCONSISTENCYEMIT01_SubscriberTopicNotCollected(t *testing.T) {
 	if err := os.MkdirAll(dtoDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(dtoDir, "topics.go"), []byte("package dto\n\nconst (\n\tTopicA = \""+topicA+"\"\n\tTopicB = \""+topicB+"\"\n)\n"), 0o600); err != nil {
+	topicsGoA := "package dto\n\nconst (\n\tTopicA = \"" + topicA + "\"\n\tTopicB = \"" + topicB + "\"\n)\n"
+	if err := os.WriteFile(filepath.Join(dtoDir, "topics.go"), []byte(topicsGoA), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -740,7 +741,8 @@ func TestCONTRACTCONSISTENCYEMIT01_CaseD_ReceiverStyle(t *testing.T) {
 	if err := os.MkdirAll(dtoDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(dtoDir, "topics.go"), []byte("package dto\n\nconst (\n\tTopicX = \""+emittedTopic+"\"\n\tTopicY = \""+declaredTopic+"\"\n)\n"), 0o600); err != nil {
+	topicsGoX := "package dto\n\nconst (\n\tTopicX = \"" + emittedTopic + "\"\n\tTopicY = \"" + declaredTopic + "\"\n)\n"
+	if err := os.WriteFile(filepath.Join(dtoDir, "topics.go"), []byte(topicsGoX), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -802,7 +804,9 @@ func TestCONTRACTCONSISTENCYEMIT01_MultiContractNoDuplicateFindings(t *testing.T
 	if err := os.MkdirAll(dtoDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(dtoDir, "topics.go"), []byte("package dto\n\nconst (\n\tTopicOne   = \""+topic1+"\"\n\tTopicTwo   = \""+topic2+"\"\n\tTopicExtra = \""+extraTopic+"\"\n)\n"), 0o600); err != nil {
+	topicsGoMulti := "package dto\n\nconst (\n\tTopicOne   = \"" + topic1 +
+		"\"\n\tTopicTwo   = \"" + topic2 + "\"\n\tTopicExtra = \"" + extraTopic + "\"\n)\n"
+	if err := os.WriteFile(filepath.Join(dtoDir, "topics.go"), []byte(topicsGoMulti), 0o600); err != nil {
 		t.Fatal(err)
 	}
 

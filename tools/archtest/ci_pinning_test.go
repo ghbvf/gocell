@@ -17,7 +17,7 @@ import (
 
 func TestGolangCILintVersionPinnedToPatch(t *testing.T) {
 	root := findModuleRoot(t)
-	body, err := os.ReadFile(filepath.Join(root, ".github", "workflows", "_build-lint.yml"))
+	body, err := os.ReadFile(filepath.Clean(filepath.Join(root, ".github", "workflows", "_build-lint.yml")))
 	require.NoError(t, err)
 
 	re := regexp.MustCompile(`(?m)^\s*version:\s*(v[0-9]+\.[0-9]+(?:\.[0-9]+)?)\s*$`)
@@ -34,7 +34,7 @@ func TestWorkflowExternalUsesPinnedToSHA(t *testing.T) {
 	require.NotEmpty(t, pinPaths)
 
 	for _, path := range pinPaths {
-		body, readErr := os.ReadFile(path)
+		body, readErr := os.ReadFile(filepath.Clean(path))
 		require.NoError(t, readErr)
 		require.NoError(t, validateWorkflowUsesPinned(path, body))
 		require.NoError(t, validateLocalUsesResolve(root, path, body))
@@ -136,7 +136,7 @@ func TestValidateLocalUsesResolveAcceptsExistingTarget(t *testing.T) {
 
 func TestGeneratedArtifactGatesAreStructured(t *testing.T) {
 	root := findModuleRoot(t)
-	body, err := os.ReadFile(filepath.Join(root, ".github", "workflows", "_build-lint.yml"))
+	body, err := os.ReadFile(filepath.Clean(filepath.Join(root, ".github", "workflows", "_build-lint.yml")))
 	require.NoError(t, err)
 
 	require.NoError(t, validateGeneratedArtifactGates(body))
@@ -185,7 +185,7 @@ func TestGeneratedArtifactGateRejectsLegacyEntrypointGlob(t *testing.T) {
 
 func TestDependabotCoversCIAndGolangCILint(t *testing.T) {
 	root := findModuleRoot(t)
-	body, err := os.ReadFile(filepath.Join(root, ".github", "dependabot.yml"))
+	body, err := os.ReadFile(filepath.Clean(filepath.Join(root, ".github", "dependabot.yml")))
 	require.NoError(t, err, ".github/dependabot.yml must exist")
 
 	require.NoError(t, validateDependabotCoversCIAndGolangCILint(body))

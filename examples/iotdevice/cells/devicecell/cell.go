@@ -206,7 +206,9 @@ func (c *DeviceCell) Init(ctx context.Context, deps cell.Dependencies) error {
 	if c.cursorCodec == nil {
 		if deps.DurabilityMode == cell.DurabilityDurable {
 			return errcode.New(errcode.ErrCellMissingCodec,
-				"devicecell durable mode requires a cursor codec; use WithCursorCodec(query.NewCursorCodec(secret)) — the built-in demo key is public in the source tree")
+				"devicecell durable mode requires a cursor codec; "+
+					"use WithCursorCodec(query.NewCursorCodec(secret)) — "+
+					"the built-in demo key is public in the source tree")
 		}
 		// Each cell uses a distinct demo key to prevent cross-cell cursor reuse in demo mode.
 		codec, err := query.NewCursorCodec([]byte("gocell-demo-DEVICE-CELL-key-32!!"))
@@ -221,7 +223,8 @@ func (c *DeviceCell) Init(ctx context.Context, deps cell.Dependencies) error {
 	// demo/example mode. For a production deployment, inject a durable adapter
 	// implementing command.Queue + command.ActiveScanner via RegisterCommandQueue.
 	if c.commandQueue == nil && deps.DurabilityMode == cell.DurabilityDurable {
-		return fmt.Errorf("devicecell: commandtest.InMemQueue is not suitable for durable deployments; wire a durable command.Queue adapter instead")
+		return fmt.Errorf("devicecell: commandtest.InMemQueue is not suitable for durable " +
+			"deployments; wire a durable command.Queue adapter instead")
 	}
 	if c.commandQueue == nil {
 		c.commandQueue = commandtest.NewInMemQueue()

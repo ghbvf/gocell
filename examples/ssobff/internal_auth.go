@@ -8,21 +8,21 @@ import (
 	"github.com/ghbvf/gocell/runtime/auth"
 )
 
-const ssobffServiceSecretEnv = "GOCELL_SSOBFF_SERVICE_SECRET" //nolint:gosec // G101 false positive: env var name constant, not a hardcoded secret
+const ssobffServiceKeyEnv = "GOCELL_SSOBFF_SERVICE_SECRET"
 
 func newInternalAuthChainFromEnv() ([]cell.ListenerAuth, error) {
-	secret := os.Getenv(ssobffServiceSecretEnv)
+	secret := os.Getenv(ssobffServiceKeyEnv)
 	return newInternalAuthChain(secret)
 }
 
 func newInternalAuthChain(secret string) ([]cell.ListenerAuth, error) {
 	if secret == "" {
-		return nil, fmt.Errorf("%s must be set for the internal listener", ssobffServiceSecretEnv)
+		return nil, fmt.Errorf("%s must be set for the internal listener", ssobffServiceKeyEnv)
 	}
 
 	ring, err := auth.NewHMACKeyRing([]byte(secret), nil)
 	if err != nil {
-		return nil, fmt.Errorf("load %s: %w", ssobffServiceSecretEnv, err)
+		return nil, fmt.Errorf("load %s: %w", ssobffServiceKeyEnv, err)
 	}
 	store, err := auth.NewInMemoryNonceStore(auth.ServiceTokenNonceTTL)
 	if err != nil {

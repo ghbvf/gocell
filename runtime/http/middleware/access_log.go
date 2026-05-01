@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/ghbvf/gocell/pkg/ctxkeys"
+	"github.com/ghbvf/gocell/pkg/logutil"
 )
 
 // AccessLog logs structured request/response information via slog.Info.
@@ -40,21 +41,27 @@ func accessLogRecorder(w http.ResponseWriter, r *http.Request) (*RecorderState, 
 }
 
 func logAccessRequest(start time.Time, r *http.Request, state *RecorderState) {
+	// Extract and sanitize request fields before logging to avoid taint flow
+	// from user-controlled request data into structured log calls.
+	method := logutil.Sanitize(r.Method)
+	path := logutil.Sanitize(r.URL.Path)
+	route := RoutePatternFromCtx(r.Context())
+	ctx := r.Context()
 	safeObserve(slog.Default(), func() {
-		slog.Info("http request", accessLogAttrs(start, r, state)...) //nolint:gosec // G706: structured slog attrs, not string concatenation
+		slog.Info("http request", accessLogAttrs(start, method, path, route, state, ctx)...)
 	})
 }
 
-func accessLogAttrs(start time.Time, r *http.Request, state *RecorderState) []any {
+func accessLogAttrs(start time.Time, method, path, route string, state *RecorderState, ctx context.Context) []any {
 	duration := time.Since(start)
 	attrs := []any{
-		slog.String("method", r.Method),
-		slog.String("path", r.URL.Path),
-		slog.String("route", RoutePatternFromCtx(r.Context())),
+		slog.String("method", method),
+		slog.String("path", path),
+		slog.String("route", route),
 		slog.Int("status", state.Status()),
 		slog.Int64("duration_ms", duration.Milliseconds()),
 	}
-	return appendAccessLogContextAttrs(attrs, r.Context())
+	return appendAccessLogContextAttrs(attrs, ctx)
 }
 
 func appendAccessLogContextAttrs(attrs []any, ctx context.Context) []any {

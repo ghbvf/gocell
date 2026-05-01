@@ -59,13 +59,17 @@ func TestTestMux_RouteAndMountStripPrefix(t *testing.T) {
 
 	mux.Route("/api", func(sub cell.RouteMux) {
 		sub.Handle("GET /items/{id}", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			_, _ = w.Write([]byte(r.PathValue("id")))
+			// Echo path value via header for routing verification (test only).
+			w.Header().Set("X-Test-ID", r.PathValue("id"))
+			w.WriteHeader(http.StatusOK)
 		}))
 	})
 
 	mounted := http.NewServeMux()
 	mounted.Handle("GET /status", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, _ = w.Write([]byte(r.URL.Path))
+		// Echo URL path via header for routing verification (test only).
+		w.Header().Set("X-Test-Path", r.URL.Path)
+		w.WriteHeader(http.StatusOK)
 	}))
 	mux.Mount("/internal", mounted)
 
@@ -76,7 +80,7 @@ func TestTestMux_RouteAndMountStripPrefix(t *testing.T) {
 		mux.ServeHTTP(rec, req)
 
 		assert.Equal(t, http.StatusOK, rec.Code)
-		assert.Equal(t, "42", rec.Body.String())
+		assert.Equal(t, "42", rec.Result().Header.Get("X-Test-ID"))
 	})
 
 	t.Run("mount strips prefix before handing off to the mounted handler", func(t *testing.T) {
@@ -86,7 +90,7 @@ func TestTestMux_RouteAndMountStripPrefix(t *testing.T) {
 		mux.ServeHTTP(rec, req)
 
 		assert.Equal(t, http.StatusOK, rec.Code)
-		assert.Equal(t, "/status", rec.Body.String())
+		assert.Equal(t, "/status", rec.Result().Header.Get("X-Test-Path"))
 	})
 }
 
@@ -100,8 +104,12 @@ var okHandler = http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 func TestTestMux_DeclareAuthMeta_RecordsOnRoot(t *testing.T) {
 	m := NewTestMux()
 
-	auth.Mount(m, auth.Route{Contract: testHTTPContract("POST", "/api/v1/foo"), Handler: okHandler, Policy: auth.AnyRole("admin")})
-	auth.Mount(m, auth.Route{Contract: testHTTPContract("GET", "/api/v1/bar"), Handler: okHandler, Public: true})
+	require.NoError(t, auth.Mount(m, auth.Route{
+		Contract: testHTTPContract("POST", "/api/v1/foo"), Handler: okHandler, Policy: auth.AnyRole("admin"),
+	}))
+	require.NoError(t, auth.Mount(m, auth.Route{
+		Contract: testHTTPContract("GET", "/api/v1/bar"), Handler: okHandler, Public: true,
+	}))
 
 	metas := m.DeclaredAuthMetas()
 	require.Len(t, metas, 2)
@@ -124,8 +132,8 @@ func TestTestMux_Route_CollectionRootDualRegistration(t *testing.T) {
 	root.Route("/api/v1/config", func(sub cell.RouteMux) {
 		// Both routes map to the collection-root relative path "/", hit by
 		// auth.Mount as "POST /" and "GET /" after stripMountPrefix.
-		auth.Mount(sub, auth.Route{Contract: testHTTPContract("POST", "/api/v1/config"), Handler: okHandler, Public: true})
-		auth.Mount(sub, auth.Route{Contract: testHTTPContract("GET", "/api/v1/config"), Handler: okHandler, Public: true})
+		require.NoError(t, auth.Mount(sub, auth.Route{Contract: testHTTPContract("POST", "/api/v1/config"), Handler: okHandler, Public: true}))
+		require.NoError(t, auth.Mount(sub, auth.Route{Contract: testHTTPContract("GET", "/api/v1/config"), Handler: okHandler, Public: true}))
 	})
 
 	for _, tc := range []struct {
@@ -151,13 +159,13 @@ func TestTestMux_Route_CollectionRootDualRegistration(t *testing.T) {
 func TestTestMux_Route_DuplicateMethodPatternPanics(t *testing.T) {
 	root := NewTestMux()
 	root.Route("/api/v1/config", func(sub cell.RouteMux) {
-		auth.Mount(sub, auth.Route{Contract: testHTTPContract("POST", "/api/v1/config"), Handler: okHandler, Public: true})
+		require.NoError(t, auth.Mount(sub, auth.Route{Contract: testHTTPContract("POST", "/api/v1/config"), Handler: okHandler, Public: true}))
 		defer func() {
 			if recover() == nil {
 				t.Fatal("expected panic on duplicate POST /api/v1/config registration")
 			}
 		}()
-		auth.Mount(sub, auth.Route{Contract: testHTTPContract("POST", "/api/v1/config"), Handler: okHandler, Public: true})
+		_ = auth.Mount(sub, auth.Route{Contract: testHTTPContract("POST", "/api/v1/config"), Handler: okHandler, Public: true})
 	})
 }
 
@@ -191,13 +199,16 @@ func TestTestMux_Route_ComposesPrefix(t *testing.T) {
 				// Contract.Path is fully qualified per production convention;
 				// auth.Mount strips the nested mux prefix to derive the
 				// chi-relative registration path.
-				auth.Mount(sess, auth.Route{Contract: testHTTPContract("POST", "/api/v1/access/sessions/login"), Handler: okHandler, Public: true})
-				auth.Mount(sess, auth.Route{
+				require.NoError(t, auth.Mount(sess, auth.Route{
+					Contract: testHTTPContract("POST", "/api/v1/access/sessions/login"),
+					Handler:  okHandler, Public: true,
+				}))
+				require.NoError(t, auth.Mount(sess, auth.Route{
 					Contract:            testHTTPContract("DELETE", "/api/v1/access/sessions/{id}"),
 					Handler:             okHandler,
 					Policy:              kernelLocalRequireAuthenticated,
 					PasswordResetExempt: true,
-				})
+				}))
 			})
 		})
 	})

@@ -1108,13 +1108,17 @@ func TestParseFS_RejectsMultipleDocuments(t *testing.T) {
 		{
 			name: "multi-doc cell.yaml",
 			fs: fstest.MapFS{
-				"cells/x/cell.yaml": &fstest.MapFile{Data: []byte("id: x\ntype: core\nconsistencyLevel: L1\nowner: {team: t, role: r}\nschema: {primary: tbl}\nverify: {smoke: []}\n---\nid: y\ntype: edge\n")},
+				"cells/x/cell.yaml": &fstest.MapFile{Data: []byte(
+					"id: x\ntype: core\nconsistencyLevel: L1\nowner: {team: t, role: r}\n" +
+						"schema: {primary: tbl}\nverify: {smoke: []}\n---\nid: y\ntype: edge\n")},
 			},
 		},
 		{
 			name: "multi-doc contract.yaml",
 			fs: fstest.MapFS{
-				"contracts/http/test/v1/contract.yaml": &fstest.MapFile{Data: []byte("id: http.test.v1\nkind: http\nlifecycle: active\nendpoints: {server: x}\n---\nid: injected\n")},
+				"contracts/http/test/v1/contract.yaml": &fstest.MapFile{Data: []byte(
+					"id: http.test.v1\nkind: http\nlifecycle: active\n" +
+						"endpoints: {server: x}\n---\nid: injected\n")},
 			},
 		},
 		{

@@ -115,7 +115,8 @@ func TestConfigEventMiddleware_SkipsSubscriptionsWithoutOwnerOrConfigTopic(t *te
 			return outbox.HandleResult{Disposition: outbox.DispositionAck}
 		})
 		result := wrapped(context.Background(), outbox.Entry{ID: "evt-1"})
-		outbox.NotifySettlement(context.Background(), result, outbox.Entry{ID: "evt-1"}, outbox.DispositionAck, outbox.SettlementResultSuccess, nil)
+		outbox.NotifySettlement(context.Background(), result,
+			outbox.Entry{ID: "evt-1"}, outbox.DispositionAck, outbox.SettlementResultSuccess, nil)
 	}
 
 	assert.Empty(t, collector.processRecords)
@@ -145,7 +146,8 @@ func (c *recordingConfigEventCollector) RecordEventProcess(cellID, sliceID strin
 }
 
 func (c *recordingConfigEventCollector) RecordEventSettlement(cellID, sliceID, disposition string, result outbox.SettlementResult) {
-	c.settlementRecords = append(c.settlementRecords, configEventSettlementRecord{cell: cellID, slice: sliceID, disposition: disposition, result: result})
+	c.settlementRecords = append(c.settlementRecords,
+		configEventSettlementRecord{cell: cellID, slice: sliceID, disposition: disposition, result: result})
 }
 
 // ---------------------------------------------------------------------------
@@ -166,8 +168,11 @@ func TestConfigEventOwnerValidator(t *testing.T) {
 			wantErr: false,
 		},
 		{
-			name:    "config topic with owner passes",
-			sub:     outbox.Subscription{Topic: "event.config.entry-upserted.v1", ConsumerGroup: "accesscore", CellID: "accesscore", SliceID: "configreceive"},
+			name: "config topic with owner passes",
+			sub: outbox.Subscription{
+				Topic: "event.config.entry-upserted.v1", ConsumerGroup: "accesscore",
+				CellID: "accesscore", SliceID: "configreceive",
+			},
 			wantErr: false,
 		},
 		{

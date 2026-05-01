@@ -132,7 +132,7 @@ func loadHTTPQueryParamContracts(root string) (map[string]queryParamContract, er
 }
 
 func parseQueryParamContract(path string) (queryParamContract, error) {
-	data, err := os.ReadFile(path)
+	data, err := os.ReadFile(filepath.Clean(path))
 	if err != nil {
 		return queryParamContract{}, err
 	}

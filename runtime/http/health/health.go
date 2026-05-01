@@ -40,6 +40,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/httputil"
+	"github.com/ghbvf/gocell/pkg/logutil"
 )
 
 // maxVerboseErrLen is the maximum length of a probe error string included in
@@ -121,11 +122,11 @@ func WithVerboseDisabled() Option {
 	}
 }
 
-// VerboseTokenHeader is the HTTP header used to authenticate /readyz?verbose
+// VerboseAuthHeader is the HTTP header used to authenticate /readyz?verbose
 // requests. Verbose access always requires both a matching header and a
 // pre-configured token (see SetVerboseToken); PR-A35 removed the prior
 // "unconfigured = unrestricted" fallback.
-const VerboseTokenHeader = "X-Readyz-Token" //nolint:gosec // G101: VerboseTokenHeader is the constant name (not a credential value)
+const VerboseAuthHeader = "X-Readyz-Token"
 
 // Handler exposes /healthz and /readyz endpoints.
 type Handler struct {
@@ -581,30 +582,28 @@ func (h *Handler) verboseDecision(r *http.Request) (verbose, denied bool) {
 	disabled := h.verboseDisabled
 	token := h.verboseToken
 	h.mu.RUnlock()
+	remoteAddr := logutil.SafeAddr(r.RemoteAddr)
 	if disabled {
-		//nolint:gosec // G706: slog field-based attributes (slog.String/slog.Any), not string concatenation.
 		slog.Debug("readyz: verbose requested but endpoint is disabled; serving plain aggregate",
-			slog.String("remote_addr", r.RemoteAddr))
+			slog.String("remote_addr", remoteAddr))
 		return false, false
 	}
 	// SEC-FAIL-CLOSED: no token configured → deny. Operators must explicitly
 	// configure a token or disable the verbose endpoint. Silently rendering
 	// verbose output when token="" leaks internal health details.
 	if token == "" {
-		//nolint:gosec // G706: slog field-based attributes (slog.String/slog.Any), not string concatenation.
 		slog.Warn("readyz: verbose requested but no token configured; denying",
 			slog.String("reason", "token_unconfigured"),
 			slog.String("hint", "set GOCELL_READYZ_VERBOSE_TOKEN or GOCELL_READYZ_VERBOSE_DISABLED=1"),
-			slog.String("remote_addr", r.RemoteAddr))
+			slog.String("remote_addr", remoteAddr))
 		return false, true
 	}
-	submitted := sha256.Sum256([]byte(r.Header.Get(VerboseTokenHeader)))
+	submitted := sha256.Sum256([]byte(r.Header.Get(VerboseAuthHeader)))
 	configured := sha256.Sum256([]byte(token))
 	if subtle.ConstantTimeCompare(submitted[:], configured[:]) != 1 {
-		//nolint:gosec // G706: slog field-based attributes (slog.String/slog.Any), not string concatenation.
 		slog.Warn("readyz: verbose token mismatch at handler layer; denying",
 			slog.String("reason", "token_mismatch"),
-			slog.String("remote_addr", r.RemoteAddr))
+			slog.String("remote_addr", remoteAddr))
 		return false, true
 	}
 	return true, false

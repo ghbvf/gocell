@@ -41,7 +41,7 @@ const testVerboseToken = "unit-test-token"
 // output should also call h.SetVerboseToken(testVerboseToken).
 func newVerboseRequest(url string) *http.Request {
 	req := httptest.NewRequest(http.MethodGet, url, nil)
-	req.Header.Set(VerboseTokenHeader, testVerboseToken)
+	req.Header.Set(VerboseAuthHeader, testVerboseToken)
 	return req
 }
 
@@ -170,7 +170,7 @@ func TestReadyzHandler(t *testing.T) {
 
 			h := New(asm)
 			h.SetVerboseToken(testVerboseToken)
-			h.RegisterChecker("db", func(_ context.Context) error { return tt.checkerErr })
+			require.NoError(t, h.RegisterChecker("db", func(_ context.Context) error { return tt.checkerErr }))
 
 			rec := httptest.NewRecorder()
 			req := newVerboseRequest("/readyz?verbose=true")
@@ -212,8 +212,8 @@ func TestReadyzHandler_MultipleCheckers(t *testing.T) {
 
 	h := New(asm)
 	h.SetVerboseToken(testVerboseToken)
-	h.RegisterChecker("rabbitmq", func(_ context.Context) error { return nil })
-	h.RegisterChecker("postgres", func(_ context.Context) error { return fmt.Errorf("connection refused") })
+	require.NoError(t, h.RegisterChecker("rabbitmq", func(_ context.Context) error { return nil }))
+	require.NoError(t, h.RegisterChecker("postgres", func(_ context.Context) error { return fmt.Errorf("connection refused") }))
 
 	rec := httptest.NewRecorder()
 	req := newVerboseRequest("/readyz?verbose")
@@ -266,7 +266,7 @@ func TestReadyzHandler_DefaultOutputIsAggregateOnly(t *testing.T) {
 	defer func() { _ = asm.Stop(context.Background()) }()
 
 	h := New(asm)
-	h.RegisterChecker("db", func(_ context.Context) error { return nil })
+	require.NoError(t, h.RegisterChecker("db", func(_ context.Context) error { return nil }))
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/readyz", nil)
@@ -291,7 +291,7 @@ func TestReadyzHandler_VerboseOutputIncludesDetails(t *testing.T) {
 
 	h := New(asm)
 	h.SetVerboseToken(testVerboseToken)
-	h.RegisterChecker("db", func(_ context.Context) error { return nil })
+	require.NoError(t, h.RegisterChecker("db", func(_ context.Context) error { return nil }))
 
 	rec := httptest.NewRecorder()
 	req := newVerboseRequest("/readyz?verbose=true")
@@ -394,7 +394,7 @@ func TestReadyzHandler_DefaultOutput_UnhealthyAggregate(t *testing.T) {
 	defer func() { _ = asm.Stop(context.Background()) }()
 
 	h := New(asm)
-	h.RegisterChecker("db", func(_ context.Context) error { return fmt.Errorf("connection refused") })
+	require.NoError(t, h.RegisterChecker("db", func(_ context.Context) error { return fmt.Errorf("connection refused") }))
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/readyz", nil)
@@ -517,20 +517,20 @@ func newStartedHandler(t *testing.T) *Handler {
 	require.NoError(t, asm.Start(context.Background()))
 	t.Cleanup(func() { _ = asm.Stop(context.Background()) })
 	h := New(asm)
-	h.RegisterChecker("db", func(_ context.Context) error { return nil })
+	require.NoError(t, h.RegisterChecker("db", func(_ context.Context) error { return nil }))
 	return h
 }
 
 // TestReadyz_VerboseToken_CorrectHeader is kept as a minimal sanity check
 // distinct from the table-driven TestReadyz_VerboseToken_StrictDeny — it
-// double-confirms the happy path uses the same VerboseTokenHeader constant.
+// double-confirms the happy path uses the same VerboseAuthHeader constant.
 func TestReadyz_VerboseToken_CorrectHeader(t *testing.T) {
 	h := newStartedHandler(t)
 	h.SetVerboseToken("secret-token")
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/readyz?verbose=true", nil)
-	req.Header.Set(VerboseTokenHeader, "secret-token")
+	req.Header.Set(VerboseAuthHeader, "secret-token")
 	h.ReadyzHandler().ServeHTTP(rec, req)
 
 	assert.Equal(t, http.StatusOK, rec.Code)
@@ -626,7 +626,7 @@ func TestReadyz_VerboseToken_StrictDeny(t *testing.T) {
 				opts = append(opts, WithVerboseDisabled())
 			}
 			h := New(asm, opts...)
-			h.RegisterChecker("db", func(_ context.Context) error { return nil })
+			require.NoError(t, h.RegisterChecker("db", func(_ context.Context) error { return nil }))
 			if tt.tokenConfigured != "" {
 				h.SetVerboseToken(tt.tokenConfigured)
 			}
@@ -637,7 +637,7 @@ func TestReadyz_VerboseToken_StrictDeny(t *testing.T) {
 			}
 			req := httptest.NewRequest(http.MethodGet, url, nil)
 			if tt.sendHeader != "" {
-				req.Header.Set(VerboseTokenHeader, tt.sendHeader)
+				req.Header.Set(VerboseAuthHeader, tt.sendHeader)
 			}
 			rec := httptest.NewRecorder()
 			h.ReadyzHandler().ServeHTTP(rec, req)
@@ -704,10 +704,10 @@ func TestReadyz_ParallelFasterThanSerial(t *testing.T) {
 	// Use a generous deadline so these tests do not time out.
 	h := New(asm, WithDeadline(2*time.Second))
 	for _, name := range []string{"probe-a", "probe-b", "probe-c"} {
-		h.RegisterChecker(name, func(_ context.Context) error {
+		require.NoError(t, h.RegisterChecker(name, func(_ context.Context) error {
 			time.Sleep(100 * time.Millisecond)
 			return nil
-		})
+		}))
 	}
 
 	start := time.Now()
@@ -743,14 +743,14 @@ func TestReadyz_DeadlineExceeded(t *testing.T) {
 
 	h := New(asm, WithDeadline(50*time.Millisecond))
 	h.SetVerboseToken(testVerboseToken)
-	h.RegisterChecker("slow", func(ctx context.Context) error {
+	require.NoError(t, h.RegisterChecker("slow", func(ctx context.Context) error {
 		select {
 		case <-time.After(500 * time.Millisecond):
 			return nil
 		case <-ctx.Done():
 			return ctx.Err()
 		}
-	})
+	}))
 
 	rec := httptest.NewRecorder()
 	req := newVerboseRequest("/readyz?verbose=true")
@@ -782,13 +782,13 @@ func TestReadyz_IndependentOfRequestCtx(t *testing.T) {
 
 	probeDone := make(chan struct{})
 	h := New(asm, WithDeadline(2*time.Second))
-	h.RegisterChecker("slow-probe", func(ctx context.Context) error {
+	require.NoError(t, h.RegisterChecker("slow-probe", func(ctx context.Context) error {
 		// Probe takes 100 ms but the HTTP request ctx will be canceled
 		// almost immediately — probe must NOT be affected.
 		time.Sleep(100 * time.Millisecond)
 		close(probeDone)
 		return nil
-	})
+	}))
 
 	// Use a cancellable request ctx and cancel it before the probe finishes.
 	reqCtx, reqCancel := context.WithCancel(context.Background())
@@ -824,9 +824,9 @@ func TestReadyz_ProbePanic_Caught(t *testing.T) {
 
 	h := New(asm, WithDeadline(2*time.Second))
 	h.SetVerboseToken(testVerboseToken)
-	h.RegisterChecker("panicking", func(_ context.Context) error {
+	require.NoError(t, h.RegisterChecker("panicking", func(_ context.Context) error {
 		panic("something went very wrong")
-	})
+	}))
 
 	rec := httptest.NewRecorder()
 	req := newVerboseRequest("/readyz?verbose=true")
@@ -962,9 +962,9 @@ func TestReadyz_VerboseError_LongErrTruncated(t *testing.T) {
 
 	h := New(asm)
 	h.SetVerboseToken(testVerboseToken)
-	h.RegisterChecker("noisy", func(_ context.Context) error {
+	require.NoError(t, h.RegisterChecker("noisy", func(_ context.Context) error {
 		return fmt.Errorf("%s", longMsg)
-	})
+	}))
 
 	rec := httptest.NewRecorder()
 	req := newVerboseRequest("/readyz?verbose=true")
@@ -1008,10 +1008,10 @@ func TestReadyz_UncooperativeChecker_WrapperReturnsOnDeadline(t *testing.T) {
 	// ctx.Done while the inner fn keeps running until the test ends.
 	unblock := make(chan struct{})
 	t.Cleanup(func() { close(unblock) })
-	h.RegisterChecker("stuck", func(_ context.Context) error {
+	require.NoError(t, h.RegisterChecker("stuck", func(_ context.Context) error {
 		<-unblock
 		return nil
-	})
+	}))
 
 	rr := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/readyz?verbose", nil)
@@ -1047,10 +1047,10 @@ func TestReadyz_UncooperativeChecker_VerboseReportsTimeout(t *testing.T) {
 
 	unblock := make(chan struct{})
 	t.Cleanup(func() { close(unblock) })
-	h.RegisterChecker("stuck", func(_ context.Context) error {
+	require.NoError(t, h.RegisterChecker("stuck", func(_ context.Context) error {
 		<-unblock
 		return nil
-	})
+	}))
 
 	rr := httptest.NewRecorder()
 	req := newVerboseRequest("/readyz?verbose=true")
@@ -1119,8 +1119,8 @@ func TestReadyz_VerboseDependencies_StructuredOutput(t *testing.T) {
 
 	h := New(asm)
 	h.SetVerboseToken(testVerboseToken)
-	h.RegisterChecker("ok-probe", func(_ context.Context) error { return nil })
-	h.RegisterChecker("fail-probe", func(_ context.Context) error { return fmt.Errorf("disk full") })
+	require.NoError(t, h.RegisterChecker("ok-probe", func(_ context.Context) error { return nil }))
+	require.NoError(t, h.RegisterChecker("fail-probe", func(_ context.Context) error { return fmt.Errorf("disk full") }))
 
 	rec := httptest.NewRecorder()
 	req := newVerboseRequest("/readyz?verbose=true")
@@ -1163,9 +1163,9 @@ func TestReadyz_DegradedReturns200WithStatusField(t *testing.T) {
 
 	h := New(asm)
 	h.SetVerboseToken(testVerboseToken)
-	h.RegisterChecker("outbox-failopen-rate.configcore", func(_ context.Context) error {
+	require.NoError(t, h.RegisterChecker("outbox-failopen-rate.configcore", func(_ context.Context) error {
 		return fmt.Errorf("drop ratio exceeded: %w", cell.ErrDegraded)
-	})
+	}))
 
 	rec := httptest.NewRecorder()
 	req := newVerboseRequest("/readyz?verbose=true")
@@ -1189,12 +1189,12 @@ func TestReadyz_UnhealthyTrumpsDegraded(t *testing.T) {
 
 	h := New(asm)
 	h.SetVerboseToken(testVerboseToken)
-	h.RegisterChecker("degraded-probe", func(_ context.Context) error {
+	require.NoError(t, h.RegisterChecker("degraded-probe", func(_ context.Context) error {
 		return fmt.Errorf("soft degradation: %w", cell.ErrDegraded)
-	})
-	h.RegisterChecker("unhealthy-probe", func(_ context.Context) error {
+	}))
+	require.NoError(t, h.RegisterChecker("unhealthy-probe", func(_ context.Context) error {
 		return fmt.Errorf("db unreachable")
-	})
+	}))
 
 	rec := httptest.NewRecorder()
 	req := newVerboseRequest("/readyz?verbose=true")
@@ -1299,9 +1299,9 @@ func TestReadyz_VerboseExposesDegradedDependency(t *testing.T) {
 
 	h := New(asm)
 	h.SetVerboseToken(testVerboseToken)
-	h.RegisterChecker("outbox-failopen-rate.configcore", func(_ context.Context) error {
+	require.NoError(t, h.RegisterChecker("outbox-failopen-rate.configcore", func(_ context.Context) error {
 		return fmt.Errorf("drop ratio exceeded: %w", cell.ErrDegraded)
-	})
+	}))
 
 	rec := httptest.NewRecorder()
 	req := newVerboseRequest("/readyz?verbose=true")
@@ -1330,8 +1330,8 @@ func TestReadyz_HealthyAllAcrossBoard(t *testing.T) {
 	t.Cleanup(func() { _ = asm.Stop(context.Background()) })
 
 	h := New(asm)
-	h.RegisterChecker("db", func(_ context.Context) error { return nil })
-	h.RegisterChecker("cache", func(_ context.Context) error { return nil })
+	require.NoError(t, h.RegisterChecker("db", func(_ context.Context) error { return nil }))
+	require.NoError(t, h.RegisterChecker("cache", func(_ context.Context) error { return nil }))
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/readyz", nil)

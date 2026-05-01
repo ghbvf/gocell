@@ -204,7 +204,7 @@ func startBackground(c *cleaner) (cancel context.CancelFunc, done <-chan struct{
 	ch := make(chan struct{})
 	go func() {
 		defer close(ch)
-		_ = c.Start(ctx) //nolint:errcheck // test helper
+		_ = c.Start(ctx)
 	}()
 	return cancel, ch
 }
@@ -395,7 +395,8 @@ func TestCleaner_LogsWarnOnTamperedFile(t *testing.T) {
 	writeTestCredFile(t, path)
 
 	// Change mode to 0644 to simulate tampering.
-	if err := os.Chmod(path, 0o644); err != nil {
+	tamperedPerm := os.FileMode(0o644)
+	if err := os.Chmod(path, tamperedPerm); err != nil {
 		t.Fatalf("chmod: %v", err)
 	}
 
@@ -435,7 +436,8 @@ func TestCleaner_TamperedFileStillDeleted(t *testing.T) {
 	writeTestCredFile(t, path)
 
 	// Simulate tampering.
-	if err := os.Chmod(path, 0o644); err != nil {
+	tamperedPerm := os.FileMode(0o644)
+	if err := os.Chmod(path, tamperedPerm); err != nil {
 		t.Fatalf("chmod: %v", err)
 	}
 

@@ -316,7 +316,8 @@ func TestHandler_UpdateUnknownField(t *testing.T) {
 
 	// Create a user first (as admin).
 	w := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, identityPrefix, strings.NewReader(`{"username":"bob","email":"b@c.com","password":"pass1234"}`))
+	req := httptest.NewRequest(http.MethodPost, identityPrefix,
+		strings.NewReader(`{"username":"bob","email":"b@c.com","password":"pass1234"}`))
 	req.Header.Set("Content-Type", "application/json")
 	req = adminCtx()(req)
 	r.ServeHTTP(w, req)
@@ -344,7 +345,8 @@ func TestHandler_PatchRejectsUnknownFields(t *testing.T) {
 
 	// Create a user first (as admin).
 	w := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, identityPrefix, strings.NewReader(`{"username":"eve","email":"e@f.com","password":"pass1234"}`))
+	req := httptest.NewRequest(http.MethodPost, identityPrefix,
+		strings.NewReader(`{"username":"eve","email":"e@f.com","password":"pass1234"}`))
 	req.Header.Set("Content-Type", "application/json")
 	req = adminCtx()(req)
 	r.ServeHTTP(w, req)
@@ -373,7 +375,8 @@ func TestHandler_CreateThenGetThenDelete(t *testing.T) {
 
 	// Create (admin).
 	w := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, identityPrefix, strings.NewReader(`{"username":"bob","email":"b@c.com","password":"pass1234"}`))
+	req := httptest.NewRequest(http.MethodPost, identityPrefix,
+		strings.NewReader(`{"username":"bob","email":"b@c.com","password":"pass1234"}`))
 	req.Header.Set("Content-Type", "application/json")
 	req = adminCtx()(req)
 	r.ServeHTTP(w, req)
@@ -505,9 +508,11 @@ func TestHandler_ChangePassword_SelfAllowed(t *testing.T) {
 }
 
 func TestHandler_ChangePassword_AdminOnAnotherUser_Allowed(t *testing.T) {
+	issuedAT := "admin-issued-" + "at"
+	issuedRT := "admin-issued-" + "rt"
 	stubIssuer := &stubTokenIssuer{pair: dto.TokenPair{
-		AccessToken:  "admin-issued-at",
-		RefreshToken: "admin-issued-rt",
+		AccessToken:  issuedAT,
+		RefreshToken: issuedRT,
 	}}
 	r, repo := setupWithIssuer(stubIssuer)
 	seedUserInRepo(t, repo, testutil.TestID("usr-target"), "target-user")

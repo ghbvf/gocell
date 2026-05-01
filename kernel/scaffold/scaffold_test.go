@@ -21,7 +21,7 @@ import (
 // readGenerated reads the generated file and returns its content as a string.
 func readGenerated(t *testing.T, path string) string {
 	t.Helper()
-	data, err := os.ReadFile(path)
+	data, err := os.ReadFile(filepath.Clean(path))
 	require.NoError(t, err, "failed to read generated file: %s", path)
 	return string(data)
 }

@@ -30,7 +30,9 @@ func mockOIDCServer(t *testing.T) *httptest.Server {
 			"id_token_signing_alg_values_supported": []string{"RS256"},
 		}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(discovery)
+		if err := json.NewEncoder(w).Encode(discovery); err != nil {
+			t.Logf("encode discovery: %v", err)
+		}
 	})
 
 	mux.HandleFunc("/jwks", func(w http.ResponseWriter, r *http.Request) {
@@ -38,7 +40,9 @@ func mockOIDCServer(t *testing.T) *httptest.Server {
 			"keys": []any{},
 		}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(jwks)
+		if err := json.NewEncoder(w).Encode(jwks); err != nil {
+			t.Logf("encode jwks: %v", err)
+		}
 	})
 
 	srv := httptest.NewServer(mux)

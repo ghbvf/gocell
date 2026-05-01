@@ -16,13 +16,22 @@ package governance
 
 const (
 	// ADV-05: active event contract with no subscribers.
-	advHintADV05EmptySubscribers = "event contract %q is active but has no subscribers; mark lifecycle: deprecated or add at least one cell or actor to endpoints.subscribers in the contract.yaml"
+	advHintADV05EmptySubscribers = "event contract %q is active but has no subscribers;" +
+		" mark lifecycle: deprecated or add at least one cell or actor" +
+		" to endpoints.subscribers in the contract.yaml"
 
 	// ADV-06: contract lists a cell as subscriber but no matching contractUsage found.
-	advHintADV06ContractToSlice = "event contract %q lists cell %q as subscriber, but no slice in %q declares contractUsage{contract: %q, role: subscribe}; add this contractUsage to a slice in %q (e.g. cells/%s/slices/<slice>/slice.yaml) or remove %q from endpoints.subscribers"
+	advHintADV06ContractToSlice = "event contract %q lists cell %q as subscriber," +
+		" but no slice in %q declares contractUsage{contract: %q, role: subscribe};" +
+		" add this contractUsage to a slice in %q" +
+		" (e.g. cells/%s/slices/<slice>/slice.yaml)" +
+		" or remove %q from endpoints.subscribers"
 
 	// ADV-06: slice declares subscribe usage but contract does not list the cell.
-	advHintADV06SliceToContract = "slice %q declares contractUsage{contract: %q, role: subscribe}, but the contract's endpoints.subscribers does not list cell %q; add %q to the contract's endpoints.subscribers or remove the subscribe contractUsage from this slice"
+	advHintADV06SliceToContract = "slice %q declares contractUsage{contract: %q, role: subscribe}," +
+		" but the contract's endpoints.subscribers does not list cell %q;" +
+		" add %q to the contract's endpoints.subscribers" +
+		" or remove the subscribe contractUsage from this slice"
 
 	// CH-04: auth.Mount correlation failed; cannot extract handler status codes.
 	advHintCH04CorrelationFailed = "CH-04: contract %s served by handler file %s" +
@@ -53,18 +62,36 @@ const (
 		"    %s:\n" +
 		"      type: string"
 
+	// advHintCCE01TriggerPrefix is the shared lead-in for CCE-01 messages
+	// reporting trigger declaration mismatches on an HTTP contract. The four
+	// CCE-01 hints below all begin with this prefix; the first %q is the
+	// contract id and the second %q is the trigger topic.
+	advHintCCE01TriggerPrefix = "contract %q declares trigger %q"
+
 	// CCE-01: trigger references a contract that is not kind:event.
-	advHintCCE01TriggerNotEvent = "contract %q declares trigger %q but referenced contract kind=%s; triggers must reference kind:event contracts"
+	advHintCCE01TriggerNotEvent = advHintCCE01TriggerPrefix +
+		" but referenced contract kind=%s;" +
+		" triggers must reference kind:event contracts"
 
 	// CCE-01: trigger event contract owner/publisher mismatch.
-	advHintCCE01OwnerMismatch = "contract %q declares trigger %q but event contract owner/publisher must both be %s"
+	advHintCCE01OwnerMismatch = advHintCCE01TriggerPrefix +
+		" but event contract owner/publisher must both be %s"
 
 	// CCE-01: serving slice does not declare role:publish for the trigger event contract.
-	advHintCCE01SliceNotPublish = "contract %q declares trigger %q but serving slice %s/%s does not declare role: publish for that event contract"
+	advHintCCE01SliceNotPublish = advHintCCE01TriggerPrefix +
+		" but serving slice %s/%s does not declare role: publish" +
+		" for that event contract"
 
 	// CCE-01: trigger topic not found in slice emit set.
-	advHintCCE01TriggerNotEmitted = "contract %q declares trigger %q but no non-test Go file under %s emits it via outbox.Emit or *.Emitter.Emit; serving slice %s/%s must emit the trigger topic as a string literal or named constant"
+	advHintCCE01TriggerNotEmitted = advHintCCE01TriggerPrefix +
+		" but no non-test Go file under %s emits it" +
+		" via outbox.Emit or *.Emitter.Emit;" +
+		" serving slice %s/%s must emit the trigger topic" +
+		" as a string literal or named constant"
 
 	// CCE-01: reverse — slice emits a topic not covered by any HTTP contract trigger.
-	advHintCCE01ReverseEmit = "service emits topic %q in serving slice %s/%s but no HTTP contract served by that slice declares it in triggers; fix: add %q to the slice's HTTP contract triggers or change the emit if dead code"
+	advHintCCE01ReverseEmit = "service emits topic %q in serving slice %s/%s" +
+		" but no HTTP contract served by that slice declares it in triggers;" +
+		" fix: add %q to the slice's HTTP contract triggers" +
+		" or change the emit if dead code"
 )

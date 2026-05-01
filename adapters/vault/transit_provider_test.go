@@ -39,6 +39,9 @@ import (
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
+// testReauthCredential is a fixture client credential value used in fakeAuthMethod test doubles.
+const testReauthCredential = "re-auth-fixture"
+
 // ---------------------------------------------------------------------------
 // fakeVaultClient — injectable double for vaultClient
 // ---------------------------------------------------------------------------
@@ -136,7 +139,7 @@ func (f *fakeVaultClient) Write(ctx context.Context, path string, data map[strin
 		}
 		dek := make([]byte, bits)
 		for i := range dek {
-			dek[i] = byte(0x77 ^ i)
+			dek[i] = byte((0x77 ^ i) & 0xff)
 		}
 		wrapped := xorBytes(dek, f.masterKey[:len(dek)])
 		vaultCipher := fmt.Sprintf("vault:v%d:%s",
@@ -265,7 +268,9 @@ func mustCurrent(t *testing.T, p *TransitKeyProvider) *vaultTransitHandle {
 
 // callEncrypt is a typed facade over h.Encrypt that returns the five-tuple
 // directly — keeps the assertion surface in tests concise.
-func callEncrypt(t *testing.T, h *vaultTransitHandle, ctx context.Context, plaintext, aad []byte) (ct, nonce, edk []byte, keyID string, err error) {
+func callEncrypt(
+	t *testing.T, h *vaultTransitHandle, ctx context.Context, plaintext, aad []byte,
+) (ct, nonce, edk []byte, keyID string, err error) {
 	t.Helper()
 	return h.Encrypt(ctx, plaintext, aad)
 }
@@ -631,7 +636,7 @@ func TestVaultTransitHandle_KeyIDFromEdkPrefix(t *testing.T) {
 		override.datakeyCalls.Add(1)
 		dek := make([]byte, 32)
 		for i := range dek {
-			dek[i] = byte(0x77 ^ i)
+			dek[i] = byte((0x77 ^ i) & 0xff)
 		}
 		wrapped := xorBytes(dek, override.masterKey[:len(dek)])
 		return map[string]any{
@@ -1006,7 +1011,7 @@ func TestTokenRenewalWorker_Start_StopsOnContextCancel(t *testing.T) {
 	fw := newFakeTokenWatcher()
 	// fakeAuthMethod that always succeeds — needed if reauthenticate is triggered.
 	fakeAuth := &fakeAuthMethod{method: MethodAppRole, results: []AuthResult{
-		{ClientToken: "re-auth-token", Renewable: true},
+		{ClientToken: testReauthCredential, Renewable: true},
 	}}
 	w := &tokenRenewalWorker{
 		currentWatcher: fw,
@@ -1048,7 +1053,7 @@ func TestTokenRenewalWorker_Start_HandlesRenewalNotification(t *testing.T) {
 	t.Run("valid renewal consumed without error", func(t *testing.T) {
 		fw := newFakeTokenWatcher()
 		fakeAuth := &fakeAuthMethod{method: MethodAppRole, results: []AuthResult{
-			{ClientToken: "re-auth-token", Renewable: true},
+			{ClientToken: testReauthCredential, Renewable: true},
 		}}
 		w := &tokenRenewalWorker{
 			currentWatcher: fw,
@@ -1093,7 +1098,7 @@ func TestTokenRenewalWorker_Start_HandlesRenewalNotification(t *testing.T) {
 	t.Run("nil renewal handled gracefully (F7)", func(t *testing.T) {
 		fw := newFakeTokenWatcher()
 		fakeAuth := &fakeAuthMethod{method: MethodAppRole, results: []AuthResult{
-			{ClientToken: "re-auth-token", Renewable: true},
+			{ClientToken: testReauthCredential, Renewable: true},
 		}}
 		w := &tokenRenewalWorker{
 			currentWatcher: fw,
@@ -1136,7 +1141,7 @@ func TestTokenRenewalWorker_Start_HandlesRenewalNotification(t *testing.T) {
 func TestTokenRenewalWorker_Start_ChannelClosed(t *testing.T) {
 	fw := newFakeTokenWatcher()
 	fakeAuth := &fakeAuthMethod{method: MethodAppRole, results: []AuthResult{
-		{ClientToken: "re-auth-token", Renewable: true},
+		{ClientToken: testReauthCredential, Renewable: true},
 	}}
 	w := &tokenRenewalWorker{
 		currentWatcher: fw,
@@ -1328,31 +1333,45 @@ func TestTransitKeyProvider_ConcurrentEncryptRotate(t *testing.T) {
 
 	// 8 goroutines concurrently encrypting.
 	for range encryptWorkers {
-		wg.Go(func() {
-			for range 20 {
-				h, err := p.Current(ctx)
-				if err != nil {
-					return
-				}
-				vh, ok := h.(*vaultTransitHandle)
-				if !ok {
-					return
-				}
-				// Encrypt may fail transiently during rotation — that is fine.
-				vh.Encrypt(ctx, []byte("payload"), []byte("aad")) //nolint:errcheck
-			}
-		})
+		wg.Go(func() { runConcurrentEncryptLoop(ctx, p, 20) })
 	}
 
 	// 1 goroutine doing periodic rotations.
-	wg.Go(func() {
-		for range rotations {
-			p.Rotate(ctx) //nolint:errcheck
-		}
-	})
+	wg.Go(func() { runConcurrentRotateLoop(ctx, p, rotations) })
 
 	wg.Wait()
 	// No race detector report = pass. The test itself needs -race to be meaningful.
+}
+
+// runConcurrentEncryptLoop is the per-worker body of
+// TestTransitKeyProvider_ConcurrentEncryptRotate. Pulled out so the test
+// itself stays under the cognitive-complexity threshold; transient errors
+// from a parallel Rotate are expected and silently terminate the loop.
+func runConcurrentEncryptLoop(ctx context.Context, p *TransitKeyProvider, iterations int) {
+	for range iterations {
+		h, err := p.Current(ctx)
+		if err != nil {
+			return
+		}
+		vh, ok := h.(*vaultTransitHandle)
+		if !ok {
+			return
+		}
+		if _, _, _, _, err := vh.Encrypt(ctx, []byte("payload"), []byte("aad")); err != nil {
+			return // transient error during concurrent rotation is expected
+		}
+	}
+}
+
+// runConcurrentRotateLoop is the rotator body of
+// TestTransitKeyProvider_ConcurrentEncryptRotate. Transient rotate errors
+// are acceptable in this race test and silently terminate the loop.
+func runConcurrentRotateLoop(ctx context.Context, p *TransitKeyProvider, iterations int) {
+	for range iterations {
+		if _, err := p.Rotate(ctx); err != nil {
+			return
+		}
+	}
 }
 
 // ---------------------------------------------------------------------------

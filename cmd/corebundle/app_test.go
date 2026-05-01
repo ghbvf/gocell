@@ -50,7 +50,9 @@ type resourceCellModule struct {
 
 func (m resourceCellModule) ID() string { return m.name }
 
-func (m resourceCellModule) Provide(_ context.Context, _ *SharedDeps) (cell.Cell, []bootstrap.Option, []kernellifecycle.ManagedResource, error) {
+func (m resourceCellModule) Provide(
+	_ context.Context, _ *SharedDeps,
+) (cell.Cell, []bootstrap.Option, []kernellifecycle.ManagedResource, error) {
 	c := cell.NewBaseCell(cell.CellMetadata{ID: m.name})
 	var res []kernellifecycle.ManagedResource
 	if m.res != nil {

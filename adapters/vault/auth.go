@@ -24,6 +24,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 
 	vaultapi "github.com/hashicorp/vault/api"
@@ -429,16 +430,17 @@ func secretIDFromEnv(ctx context.Context, client *vaultapi.Client) (SecretIDProv
 		}
 		// Re-read on every Login call so orchestrator-rotated projected volumes
 		// are picked up without a process restart (F-3c).
+		cleanPath := filepath.Clean(filePath)
 		return func(_ context.Context) (string, error) {
-			data, err := os.ReadFile(filePath) //nolint:gosec // G304: filePath is operator-configured Vault secret_id projected volume path
+			data, err := os.ReadFile(cleanPath)
 			if err != nil {
 				return "", errcode.Wrap(errcode.ErrVaultAuthFailed,
-					fmt.Sprintf("vault-auth: read secret_id from file %s", filePath), err)
+					fmt.Sprintf("vault-auth: read secret_id from file %s", cleanPath), err)
 			}
 			s := strings.TrimSpace(string(data))
 			if s == "" {
 				return "", errcode.New(errcode.ErrVaultAuthFailed,
-					"vault-auth: secret_id file is empty: "+filePath)
+					"vault-auth: secret_id file is empty: "+cleanPath)
 			}
 			return s, nil
 		}, nil

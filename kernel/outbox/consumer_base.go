@@ -2,11 +2,12 @@ package outbox
 
 import (
 	"context"
+	cryptorand "crypto/rand"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"log/slog"
 	"math/bits"
-	"math/rand/v2"
 	"sync/atomic"
 	"time"
 
@@ -159,6 +160,20 @@ func (c *ConsumerBaseConfig) SetDefaults() {
 	}
 }
 
+// cryptoRandInt64N returns a cryptographically random int64 in [0, n).
+// Falls back to 0 on read error (safe degradation for jitter).
+func cryptoRandInt64N(n int64) int64 {
+	if n <= 0 {
+		return 0
+	}
+	var b [8]byte
+	if _, err := cryptorand.Read(b[:]); err != nil {
+		return 0
+	}
+	v := int64(binary.LittleEndian.Uint64(b[:]) & 0x7fffffffffffffff)
+	return v % n
+}
+
 // ExponentialDelay computes base * 2^attempt with overflow protection,
 // capped at maxDelay. Used by both claimWithRetry and retryLoop.
 //
@@ -169,11 +184,14 @@ func ExponentialDelay(base, maxDelay time.Duration, attempt int) time.Duration {
 	if base <= 0 {
 		return 0
 	}
+	if attempt < 0 {
+		return 0
+	}
 	maxSafeShift := 63 - bits.Len64(uint64(base))
 	if attempt > maxSafeShift {
 		return maxDelay
 	}
-	delay := base * (exponentialDelayBase << uint(attempt))
+	delay := base * (exponentialDelayBase << attempt)
 	if delay <= 0 || delay > maxDelay {
 		return maxDelay
 	}
@@ -343,7 +361,7 @@ func (cb *ConsumerBase) claimWithRetry(
 			base := ExponentialDelay(cb.config.ClaimRetryBaseDelay, cb.config.MaxRetryDelay, attempt)
 			var jitter time.Duration
 			if base > 0 {
-				jitter = time.Duration(rand.Int64N(int64(base/backoffJitterDivisor) + 1))
+				jitter = time.Duration(cryptoRandInt64N(int64(base/backoffJitterDivisor) + 1))
 			}
 			delay := min(base+jitter, cb.config.MaxRetryDelay)
 			logWithContext(ctx, slog.LevelWarn, "outbox: idempotency claim failed, retrying locally",

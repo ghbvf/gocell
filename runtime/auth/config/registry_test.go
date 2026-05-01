@@ -180,8 +180,12 @@ func TestRegistry_KeyProviders_PassThrough(t *testing.T) {
 
 // TestFromEnv_IgnoresUnsetVars verifies FromEnv returns empty values for unset env (non-real mode).
 func TestFromEnv_IgnoresUnsetVars(t *testing.T) {
-	os.Unsetenv("GOCELL_JWT_ISSUER")   //nolint:errcheck
-	os.Unsetenv("GOCELL_JWT_AUDIENCE") //nolint:errcheck
+	if err := os.Unsetenv("GOCELL_JWT_ISSUER"); err != nil {
+		t.Logf("Unsetenv GOCELL_JWT_ISSUER: %v", err)
+	}
+	if err := os.Unsetenv("GOCELL_JWT_AUDIENCE"); err != nil {
+		t.Logf("Unsetenv GOCELL_JWT_AUDIENCE: %v", err)
+	}
 
 	reg, err := config.FromEnv()
 	require.NoError(t, err)

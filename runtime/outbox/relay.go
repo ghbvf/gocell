@@ -735,7 +735,8 @@ func (r *Relay) retryDelay(attempts int) time.Duration {
 	shift := min(attempts, 30)
 	delay := r.cappedDelay(r.cfg.BaseRetryDelay * (retryDelayBase << shift))
 	if delay > 0 {
-		jitter := time.Duration(rand.Int64N(int64(delay/retryJitterDivisor) + 1))
+		// G404 R2-approved: backoff jitter has no cryptographic requirement.
+		jitter := time.Duration(rand.Int64N(int64(delay/retryJitterDivisor) + 1)) //nolint:gosec // G404
 		delay += jitter
 	}
 	return delay

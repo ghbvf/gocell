@@ -151,14 +151,14 @@ func (u *User) ClearPasswordResetRequired() {
 	u.UpdatedAt = time.Now()
 }
 
-// Lock sets the user status to locked.
-func (u *User) Lock() {
+// LockAccount sets the user status to locked.
+func (u *User) LockAccount() {
 	u.Status = StatusLocked
 	u.UpdatedAt = time.Now()
 }
 
-// Unlock sets the user status to active.
-func (u *User) Unlock() {
+// UnlockAccount sets the user status to active.
+func (u *User) UnlockAccount() {
 	u.Status = StatusActive
 	u.UpdatedAt = time.Now()
 }

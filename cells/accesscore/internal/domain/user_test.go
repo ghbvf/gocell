@@ -92,22 +92,22 @@ func TestUser_LockUnlock(t *testing.T) {
 		},
 		{
 			name:       "lock sets locked",
-			action:     func(u *User) { u.Lock() },
+			action:     func(u *User) { u.LockAccount() },
 			wantLocked: true,
 		},
 		{
 			name: "unlock after lock",
 			action: func(u *User) {
-				u.Lock()
-				u.Unlock() //nolint:staticcheck,gocritic // Lock/Unlock are domain status methods, not sync.Mutex; defer is intentionally absent (testing sequential lock→unlock)
+				u.LockAccount()
+				u.UnlockAccount()
 			},
 			wantLocked: false,
 		},
 		{
 			name: "double lock remains locked",
 			action: func(u *User) {
-				u.Lock()
-				u.Lock()
+				u.LockAccount()
+				u.LockAccount()
 			},
 			wantLocked: true,
 		},
@@ -130,7 +130,7 @@ func TestUser_Lock_UpdatesTimestamp(t *testing.T) {
 	require.NoError(t, err)
 
 	before := user.UpdatedAt
-	user.Lock()
+	user.LockAccount()
 	assert.True(t, !user.UpdatedAt.Before(before), "UpdatedAt should advance after Lock")
 }
 

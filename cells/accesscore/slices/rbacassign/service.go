@@ -143,7 +143,7 @@ func (s *Service) persistChange(
 // method + topic; extracting a helper would parameterize 4 call sites and
 // obscure the per-action audit trail.
 //
-//nolint:dupl // mirror of Revoke — see godoc above for why a helper is rejected.
+
 func (s *Service) Assign(ctx context.Context, userID, roleID string) error {
 	if err := validation.RequireNotBlank(errcode.ErrAuthRBACInvalidInput,
 		validation.F("userId", userID),
@@ -182,7 +182,7 @@ func (s *Service) Assign(ctx context.Context, userID, roleID string) error {
 // is a no-op — no outbox entry is written and no session is revoked. Last-admin
 // guard is enforced atomically by RemoveFromUserIfNotLast (no TOCTOU gap).
 //
-//nolint:dupl // mirror of Assign — see Assign godoc for why a helper is rejected.
+
 func (s *Service) Revoke(ctx context.Context, userID, roleID string) error {
 	if err := validation.RequireNotBlank(errcode.ErrAuthRBACInvalidInput,
 		validation.F("userId", userID),

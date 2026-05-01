@@ -328,7 +328,7 @@ func (s *Service) Delete(ctx context.Context, id string) error {
 
 // Lock locks a user account and publishes an event.
 //
-// Read-modify-write atomicity: GetByID, user.Lock(), Update, session/refresh
+// Read-modify-write atomicity: GetByID, user.LockAccount(), Update, session/refresh
 // revoke and the outbox publish all run inside the same RunInTx closure. A
 // concurrent transaction that mutates the user between the read and the write
 // would otherwise be silently lost (audit S-3).
@@ -360,7 +360,7 @@ func (s *Service) lockUserAndRevokeSessions(ctx context.Context, id, actor strin
 		if err != nil {
 			return fmt.Errorf("identity-manage: lock: %w", err)
 		}
-		user.Lock()
+		user.LockAccount()
 		if err := s.repo.Update(txCtx, user); err != nil {
 			return fmt.Errorf("identity-manage: lock: %w", err)
 		}
@@ -384,7 +384,7 @@ func (s *Service) lockUserAndRevokeSessions(ctx context.Context, id, actor strin
 
 // Unlock unlocks a user account.
 //
-// Read-modify-write atomicity: GetByID + user.Unlock() + Update share one
+// Read-modify-write atomicity: GetByID + user.UnlockAccount() + Update share one
 // RunInTx closure so a concurrent mutation between the read and the write
 // cannot be silently lost (audit S-3, mirrors Lock).
 func (s *Service) Unlock(ctx context.Context, id string) error {
@@ -404,7 +404,7 @@ func (s *Service) Unlock(ctx context.Context, id string) error {
 		if err != nil {
 			return fmt.Errorf("identity-manage: unlock: %w", err)
 		}
-		user.Unlock()
+		user.UnlockAccount()
 		if err := s.repo.Update(txCtx, user); err != nil {
 			return fmt.Errorf("identity-manage: unlock: %w", err)
 		}

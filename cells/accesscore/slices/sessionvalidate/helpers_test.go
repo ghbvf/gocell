@@ -23,7 +23,10 @@ func IssueTestToken(signingKey *rsa.PrivateKey, subject string, roles []string, 
 // can exercise intent-mismatch paths.
 // The resulting token carries both the token_use payload claim and the
 // matching JOSE typ header expected by JWTVerifier.VerifyIntent.
-func IssueTestTokenWithIntent(signingKey *rsa.PrivateKey, intent auth.TokenIntent, subject string, roles []string, ttl time.Duration, sessionID ...string) (string, error) {
+func IssueTestTokenWithIntent(
+	signingKey *rsa.PrivateKey, intent auth.TokenIntent,
+	subject string, roles []string, ttl time.Duration, sessionID ...string,
+) (string, error) {
 	now := time.Now()
 	claims := jwt.MapClaims{
 		"sub":       subject,

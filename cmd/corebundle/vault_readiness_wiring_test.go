@@ -78,7 +78,10 @@ var (
 // buildBootstrapWithFakeKeyProvider is the test harness for A19. It mirrors
 // buildBootstrapFromShared but injects ConfigCoreModule{KeyProviderOverride}
 // so the readiness wiring can be exercised without GOCELL_CONFIGCORE_KEY_PROVIDER / Vault.
-func buildBootstrapWithFakeKeyProvider(t *testing.T, shared *SharedDeps, kp kcrypto.KeyProvider, primaryLn net.Listener, extra ...bootstrap.Option) (*bootstrap.Bootstrap, error) {
+func buildBootstrapWithFakeKeyProvider(
+	t *testing.T, shared *SharedDeps, kp kcrypto.KeyProvider,
+	primaryLn net.Listener, extra ...bootstrap.Option,
+) (*bootstrap.Bootstrap, error) {
 	t.Helper()
 	ctx := context.Background()
 
@@ -140,9 +143,12 @@ func TestA19_ConfigCoreModule_RegistersKeyProviderReadiness(t *testing.T) {
 	require.NoError(t, err)
 
 	healthLn := newCorebundleLocalListener(t)
+	healthOpt := bootstrap.WithListener(
+		cell.HealthListener, healthLn.Addr().String(),
+		[]cell.ListenerAuth{cell.AuthNone{}}, bootstrap.WithListenerNet(healthLn))
 	app, err := buildBootstrapWithFakeKeyProvider(t, shared, kp, ln,
 		withCorebundleTestInternalListener(t, newCorebundleLocalListener(t)),
-		bootstrap.WithListener(cell.HealthListener, healthLn.Addr().String(), []cell.ListenerAuth{cell.AuthNone{}}, bootstrap.WithListenerNet(healthLn)))
+		healthOpt)
 	require.NoError(t, err)
 	require.NotNil(t, app)
 
@@ -154,9 +160,13 @@ func TestA19_ConfigCoreModule_RegistersKeyProviderReadiness(t *testing.T) {
 	waitForHealthy(t, healthAddr)
 
 	// /readyz must reflect the failing fake probe → 503.
-	resp, err := http.Get("http://" + healthAddr + "/readyz") //nolint:noctx
+	resp, err := http.Get("http://" + healthAddr + "/readyz")
 	require.NoError(t, err)
-	defer resp.Body.Close()
+	t.Cleanup(func() {
+		if err := resp.Body.Close(); err != nil {
+			t.Logf("close resp body: %v", err)
+		}
+	})
 	assert.Equal(t, http.StatusServiceUnavailable, resp.StatusCode,
 		"/readyz must be 503 when the KeyProvider readiness probe fails "+
 			"(proves ConfigCoreModule wires kp.Checkers() into bootstrap)")
@@ -171,7 +181,11 @@ func TestA19_ConfigCoreModule_RegistersKeyProviderReadiness(t *testing.T) {
 	verboseReq.Header.Set("X-Readyz-Token", shared.VerboseToken)
 	verboseResp, err := http.DefaultClient.Do(verboseReq)
 	require.NoError(t, err)
-	defer verboseResp.Body.Close()
+	t.Cleanup(func() {
+		if err := verboseResp.Body.Close(); err != nil {
+			t.Logf("close verboseResp body: %v", err)
+		}
+	})
 
 	// PR-A35 envelope: 503 /readyz responses carry the dependency breakdown
 	// inside {"error": {"code":"ERR_SERVICE_UNAVAILABLE", "details": {...}}}.
@@ -217,9 +231,12 @@ func TestA19_ConfigCoreModule_KeyProviderReady(t *testing.T) {
 	require.NoError(t, err)
 
 	healthLn2 := newCorebundleLocalListener(t)
+	healthOpt2 := bootstrap.WithListener(
+		cell.HealthListener, healthLn2.Addr().String(),
+		[]cell.ListenerAuth{cell.AuthNone{}}, bootstrap.WithListenerNet(healthLn2))
 	app, err := buildBootstrapWithFakeKeyProvider(t, shared, kp, ln,
 		withCorebundleTestInternalListener(t, newCorebundleLocalListener(t)),
-		bootstrap.WithListener(cell.HealthListener, healthLn2.Addr().String(), []cell.ListenerAuth{cell.AuthNone{}}, bootstrap.WithListenerNet(healthLn2)))
+		healthOpt2)
 	require.NoError(t, err)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -228,11 +245,13 @@ func TestA19_ConfigCoreModule_KeyProviderReady(t *testing.T) {
 
 	healthAddr2 := healthLn2.Addr().String()
 	require.Eventually(t, func() bool {
-		resp, err := http.Get("http://" + healthAddr2 + "/readyz") //nolint:noctx
+		resp, err := http.Get("http://" + healthAddr2 + "/readyz")
 		if err != nil {
 			return false
 		}
-		resp.Body.Close()
+		if err := resp.Body.Close(); err != nil {
+			t.Logf("close resp body: %v", err)
+		}
 		return resp.StatusCode == http.StatusOK
 	}, 5*time.Second, 50*time.Millisecond,
 		"/readyz must be 200 when the KeyProvider probe is healthy")

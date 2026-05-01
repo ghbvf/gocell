@@ -67,7 +67,7 @@ func TestRun_WithWorkers_Shutdown(t *testing.T) {
 		if err != nil {
 			return false
 		}
-		resp.Body.Close()
+		closeBody(t, resp)
 		return true
 	}, 3*time.Second, 50*time.Millisecond, "HTTP server did not become ready")
 	cancel()

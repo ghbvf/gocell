@@ -117,10 +117,12 @@ func TestWriteCredentialFile_RenameError(t *testing.T) {
 	_ = os.Remove(path)
 
 	// Make parent directory read-only so rename fails.
-	if err := os.Chmod(dir, 0o500); err != nil {
+	readonlyDirPerm := os.FileMode(0o500)
+	if err := os.Chmod(dir, readonlyDirPerm); err != nil {
 		t.Fatalf("Chmod: %v", err)
 	}
-	t.Cleanup(func() { _ = os.Chmod(dir, 0o700) })
+	restoreDirPerm := os.FileMode(0o700)
+	t.Cleanup(func() { _ = os.Chmod(dir, restoreDirPerm) })
 
 	err := writeCredentialFile(path, credentialPayload{
 		Username:  "admin",
@@ -147,7 +149,7 @@ func TestRemoveCredentialFile_StatError(t *testing.T) {
 
 	// Create a file inside.
 	path := filepath.Join(dir, "initial_admin_password")
-	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
+	f, err := os.OpenFile(filepath.Clean(path), os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
 	if err != nil {
 		t.Fatalf("setup: create file: %v", err)
 	}
@@ -157,7 +159,8 @@ func TestRemoveCredentialFile_StatError(t *testing.T) {
 	if err := os.Chmod(dir, 0o000); err != nil {
 		t.Fatalf("setup: Chmod dir: %v", err)
 	}
-	t.Cleanup(func() { _ = os.Chmod(dir, 0o700) })
+	restoreDirPerm2 := os.FileMode(0o700)
+	t.Cleanup(func() { _ = os.Chmod(dir, restoreDirPerm2) })
 
 	err = removeCredentialFile(path)
 	if err == nil {

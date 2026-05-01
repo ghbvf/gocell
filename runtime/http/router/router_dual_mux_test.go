@@ -187,9 +187,9 @@ func TestDualMux_FinalizeAuth_InternalPathOnZeroRefAccepted(t *testing.T) {
 	require.NoError(t, err)
 
 	// Zero-ref router: listener-identity check is skipped.
-	rtr.DeclareAuthMeta(kcell.AuthRouteMeta{
+	require.NoError(t, rtr.DeclareAuthMeta(kcell.AuthRouteMeta{
 		Method: http.MethodPost, Path: "/internal/v1/roles",
-	})
+	}))
 
 	err = rtr.FinalizeAuth()
 	// Zero-ref router should not fail on internal-path routes.
@@ -205,12 +205,12 @@ func TestDualMux_FinalizeAuth_AcceptsConsistentDeclarations(t *testing.T) {
 	}))
 	require.NoError(t, err)
 
-	rtr.DeclareAuthMeta(kcell.AuthRouteMeta{
+	require.NoError(t, rtr.DeclareAuthMeta(kcell.AuthRouteMeta{
 		Method: http.MethodGet, Path: "/internal/v1/access/roles",
-	})
-	rtr.DeclareAuthMeta(kcell.AuthRouteMeta{
+	}))
+	require.NoError(t, rtr.DeclareAuthMeta(kcell.AuthRouteMeta{
 		Method: http.MethodGet, Path: "/api/v1/foo", Public: true,
-	})
+	}))
 
 	err = rtr.FinalizeAuth()
 	assert.NoError(t, err)

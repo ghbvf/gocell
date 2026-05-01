@@ -17,6 +17,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"time"
 )
 
@@ -95,7 +96,12 @@ func (sc *SecureCookie) WithMaxAge(seconds int) *SecureCookie {
 func (sc *SecureCookie) Encode(name string, value []byte) (string, error) {
 	// 1. Timestamp
 	ts := make([]byte, timestampLen)
-	binary.BigEndian.PutUint64(ts, uint64(time.Now().Unix()))
+	now := time.Now().Unix()
+	if now < 0 {
+		// Pre-1970 clock — treat as zero so the encoded value remains parseable.
+		now = 0
+	}
+	binary.BigEndian.PutUint64(ts, uint64(now))
 
 	// 2. Payload (optionally encrypted)
 	var nonce []byte
@@ -161,7 +167,11 @@ func (sc *SecureCookie) Decode(name string, encoded string) ([]byte, error) {
 
 	// 2. Check freshness
 	if sc.maxAge > 0 {
-		created := int64(binary.BigEndian.Uint64(ts))
+		raw := binary.BigEndian.Uint64(ts)
+		if raw > uint64(math.MaxInt64) {
+			return nil, ErrExpired
+		}
+		created := int64(raw)
 		if time.Now().Unix()-created >= int64(sc.maxAge) {
 			return nil, ErrExpired
 		}
@@ -185,7 +195,18 @@ func (sc *SecureCookie) Decode(name string, encoded string) ([]byte, error) {
 func (sc *SecureCookie) computeMAC(name string, ts, nonce, payload []byte) []byte {
 	h := hmac.New(sha256.New, sc.hashKey)
 	nameLen := make([]byte, 4)
-	binary.BigEndian.PutUint32(nameLen, uint32(len(name)))
+	// 4 GiB cookie name is unreachable in practice; encode the length one
+	// big-endian byte at a time so we never need an int→uint32 cast that
+	// gosec G115 would flag. len() never returns a negative int by the Go
+	// spec, so only the upper bound needs a guard.
+	n := len(name)
+	if n > math.MaxUint32 {
+		n = math.MaxUint32
+	}
+	nameLen[0] = byte(n >> 24 & 0xff)
+	nameLen[1] = byte(n >> 16 & 0xff)
+	nameLen[2] = byte(n >> 8 & 0xff)
+	nameLen[3] = byte(n & 0xff)
 	h.Write(nameLen)
 	h.Write([]byte(name))
 	h.Write(ts)

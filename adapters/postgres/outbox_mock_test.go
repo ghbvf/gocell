@@ -35,7 +35,7 @@ func makeRelayEntry(id, eventType string, attempts int) outboxrt.ClaimedEntry {
 
 // makeMockRowData converts a ClaimedEntry into a mockRowData row for mockRows.
 // Column order matches claimPendingQuery RETURNING clause:
-// id, aggregate_id, aggregate_type, event_type, topic, payload, metadata, created_at, attempts, observability
+// id, aggregate_id, aggregate_type, event_type, topic, payload, metadata, created_at, attempts, observability.
 func makeMockRowData(e outboxrt.ClaimedEntry) mockRowData {
 	metaJSON, _ := json.Marshal(e.Metadata)
 	if e.Metadata == nil {

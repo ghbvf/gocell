@@ -251,16 +251,22 @@ func (s outboxFailurePolicyStatus) safe() bool {
 
 func outboxPolicyViolationMessage(policy outboxFailurePolicyStatus, topic string) string {
 	if policy == outboxPolicyUnknown {
-		return fmt.Sprintf("outbox.Entry for topic %q uses non-constant FailurePolicy; security/audit events must statically remain FailClosed", topic)
+		return fmt.Sprintf(
+			"outbox.Entry for topic %q uses non-constant FailurePolicy;"+
+				" security/audit events must statically remain FailClosed", topic)
 	}
-	return fmt.Sprintf("outbox.Entry for topic %q opts into FailurePolicyFailOpen; security/audit events must remain FailClosed (leave FailurePolicy unset)", topic)
+	return fmt.Sprintf(
+		"outbox.Entry for topic %q opts into FailurePolicyFailOpen;"+
+			" security/audit events must remain FailClosed (leave FailurePolicy unset)", topic)
 }
 
 func outboxUnknownRouteViolationMessage(policy outboxFailurePolicyStatus) string {
 	if policy == outboxPolicyUnknown {
-		return "outbox.Entry uses non-constant FailurePolicy and Topic/EventType is not statically known; security/audit fail-open policy must be statically ruled out"
+		return "outbox.Entry uses non-constant FailurePolicy and Topic/EventType is not statically known;" +
+			" security/audit fail-open policy must be statically ruled out"
 	}
-	return "outbox.Entry opts into FailurePolicyFailOpen but Topic/EventType is not statically known; fail-open requires a statically non-security topic"
+	return "outbox.Entry opts into FailurePolicyFailOpen but Topic/EventType is not statically known;" +
+		" fail-open requires a statically non-security topic"
 }
 
 // TestSecurityTopicsDoNotOptInFailOpen_RegressionFixtures asserts that the

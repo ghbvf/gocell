@@ -32,7 +32,7 @@ func TestE2E_HealthListener_ReadyzReturns200(t *testing.T) {
 	e2erequire.Docker(t)
 	clients.WaitForReady(t, 30*time.Second)
 
-	resp, err := http.Get(clients.HealthURL() + "/readyz") //nolint:noctx
+	resp, err := http.Get(clients.HealthURL() + "/readyz")
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = resp.Body.Close() })
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
@@ -45,7 +45,7 @@ func TestE2E_PrimaryListener_RejectsInternalPath(t *testing.T) {
 	e2erequire.Docker(t)
 	clients.WaitForReady(t, 30*time.Second)
 
-	resp, err := http.Get(clients.BaseURL() + "/internal/v1/anything") //nolint:noctx
+	resp, err := http.Get(clients.BaseURL() + "/internal/v1/anything")
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = resp.Body.Close() })
 	assert.Equal(t, http.StatusNotFound, resp.StatusCode,

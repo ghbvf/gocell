@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"time"
@@ -85,7 +86,11 @@ func (c *HTTPConfigGetter) GetEntry(ctx context.Context, key string) (ports.Conf
 	if err != nil {
 		return ports.ConfigEntry{}, fmt.Errorf("configclient: do request: %w", err)
 	}
-	defer resp.Body.Close() //nolint:errcheck
+	defer func() {
+		if err := resp.Body.Close(); err != nil {
+			slog.Warn("configclient: response body close error", slog.Any("error", err))
+		}
+	}()
 
 	switch resp.StatusCode {
 	case http.StatusOK:

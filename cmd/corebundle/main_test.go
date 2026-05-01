@@ -390,7 +390,7 @@ func TestMetricsTokenGuard_RejectsWrongToken(t *testing.T) {
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/metrics", nil)
-	req.Header.Set(metricsTokenHeader, "wrong")
+	req.Header.Set(metricsAuthHeader, "wrong")
 	guarded.ServeHTTP(rec, req)
 
 	assert.Equal(t, http.StatusUnauthorized, rec.Code)
@@ -405,7 +405,7 @@ func TestMetricsTokenGuard_AcceptsCorrectToken(t *testing.T) {
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/metrics", nil)
-	req.Header.Set(metricsTokenHeader, "secret")
+	req.Header.Set(metricsAuthHeader, "secret")
 	guarded.ServeHTTP(rec, req)
 
 	assert.Equal(t, http.StatusOK, rec.Code)

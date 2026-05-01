@@ -11,6 +11,7 @@ package config
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"reflect"
 	"sort"
 	"strings"
@@ -216,7 +217,7 @@ func (c *config) loadYAML(path string) error {
 }
 
 func readYAML(path string) (map[string]any, error) {
-	f, err := os.ReadFile(path) //nolint:gosec // G304: path is the operator-configured YAML config file path, not user-controlled input
+	f, err := os.ReadFile(filepath.Clean(path))
 	if err != nil {
 		return nil, err
 	}

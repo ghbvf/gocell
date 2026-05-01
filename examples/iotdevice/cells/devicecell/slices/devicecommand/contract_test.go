@@ -36,8 +36,14 @@ func newContractCommandHandler() (http.Handler, *mem.DeviceRepository, *commandt
 	}
 	h := NewHandler(svc)
 	mux := celltest.NewTestMux()
-	mux.Route("/api/v1/devices", func(sub cell.RouteMux) { h.RegisterRoutes(sub) })
-	h.RegisterInternalRoutes(mux)
+	mux.Route("/api/v1/devices", func(sub cell.RouteMux) {
+		if err := h.RegisterRoutes(sub); err != nil {
+			panic(err)
+		}
+	})
+	if err := h.RegisterInternalRoutes(mux); err != nil {
+		panic(err)
+	}
 	return mux, devRepo, q
 }
 
@@ -191,7 +197,9 @@ func TestCommandDeviceCommandEnqueueV1Handle(t *testing.T) {
 	// payload required; commandType optional
 	c.ValidateRequest(t, []byte(`{"payload":"reboot"}`))
 	c.ValidateRequest(t, []byte(`{"payload":"reboot","commandType":"firmware-update"}`))
-	c.ValidateResponse(t, []byte(`{"data":{"id":"cmd-1","deviceId":"d-1","commandType":"reboot","payload":"reboot","status":"pending","attempt":0,"createdAt":"2026-01-01T00:00:00Z"}}`))
+	enqueueResp := `{"data":{"id":"cmd-1","deviceId":"d-1","commandType":"reboot",` +
+		`"payload":"reboot","status":"pending","attempt":0,"createdAt":"2026-01-01T00:00:00Z"}}`
+	c.ValidateResponse(t, []byte(enqueueResp))
 	c.MustRejectRequest(t, []byte(`{"payload":"x","extra":"bad"}`))
 }
 
@@ -199,7 +207,10 @@ func TestCommandDeviceCommandDequeueV1Handle(t *testing.T) {
 	root := contracttest.ExampleContractsRoot(t, "iotdevice")
 	c := contracttest.LoadByID(t, root, "command.device-command.dequeue.v1")
 
-	c.ValidateResponse(t, []byte(`{"data":[{"id":"cmd-1","deviceId":"d-1","commandType":"reboot","payload":"reboot","status":"sent","attempt":1,"createdAt":"2026-01-01T00:00:00Z","sentAt":"2026-01-01T00:00:01Z"}]}`))
+	dequeueResp := `{"data":[{"id":"cmd-1","deviceId":"d-1","commandType":"reboot",` +
+		`"payload":"reboot","status":"sent","attempt":1,` +
+		`"createdAt":"2026-01-01T00:00:00Z","sentAt":"2026-01-01T00:00:01Z"}]}`
+	c.ValidateResponse(t, []byte(dequeueResp))
 	c.MustRejectResponse(t, []byte(`{"data":"not-array"}`))
 }
 
@@ -212,7 +223,10 @@ func TestCommandDeviceCommandAckV1Handle(t *testing.T) {
 	c.MustRejectRequest(t, []byte(`{"reason":"timeout"}`))
 	c.MustRejectRequest(t, []byte(`{"reason":"failed"}`))
 	c.MustRejectRequest(t, []byte(`{"reason":"retry"}`))
-	c.ValidateResponse(t, []byte(`{"data":{"id":"cmd-1","deviceId":"d-1","commandType":"reboot","payload":"reboot","status":"succeeded","attempt":0,"createdAt":"2026-01-01T00:00:00Z","completedAt":"2026-01-01T00:01:00Z"}}`))
+	ackResp := `{"data":{"id":"cmd-1","deviceId":"d-1","commandType":"reboot",` +
+		`"payload":"reboot","status":"succeeded","attempt":0,` +
+		`"createdAt":"2026-01-01T00:00:00Z","completedAt":"2026-01-01T00:01:00Z"}}`
+	c.ValidateResponse(t, []byte(ackResp))
 	c.MustRejectResponse(t, []byte(`{"wrong":"shape"}`))
 }
 
@@ -222,7 +236,11 @@ func TestCommandDeviceCommandReportV1Handle(t *testing.T) {
 
 	c.ValidateRequest(t, []byte(`{}`))
 	c.MustRejectRequest(t, []byte(`{"extra":"bad"}`))
-	c.ValidateResponse(t, []byte(`{"data":{"id":"cmd-1","deviceId":"d-1","commandType":"reboot","payload":"reboot","status":"delivered","attempt":1,"createdAt":"2026-01-01T00:00:00Z","sentAt":"2026-01-01T00:00:01Z","deliveredAt":"2026-01-01T00:00:02Z"}}`))
+	reportResp := `{"data":{"id":"cmd-1","deviceId":"d-1","commandType":"reboot",` +
+		`"payload":"reboot","status":"delivered","attempt":1,` +
+		`"createdAt":"2026-01-01T00:00:00Z","sentAt":"2026-01-01T00:00:01Z",` +
+		`"deliveredAt":"2026-01-01T00:00:02Z"}}`
+	c.ValidateResponse(t, []byte(reportResp))
 	c.MustRejectResponse(t, []byte(`{"wrong":"shape"}`))
 }
 
@@ -234,6 +252,9 @@ func TestCommandDeviceCommandExtendLeaseV1Handle(t *testing.T) {
 	c.MustRejectRequest(t, []byte(`{"extensionSeconds":0}`))
 	c.MustRejectRequest(t, []byte(`{"extensionSeconds":3601}`))
 	c.MustRejectRequest(t, []byte(`{"extensionSeconds":60,"extra":"bad"}`))
-	c.ValidateResponse(t, []byte(`{"data":{"id":"cmd-1","deviceId":"d-1","commandType":"reboot","payload":"reboot","status":"sent","attempt":1,"createdAt":"2026-01-01T00:00:00Z","sentAt":"2026-01-01T00:00:01Z"}}`))
+	leaseResp := `{"data":{"id":"cmd-1","deviceId":"d-1","commandType":"reboot",` +
+		`"payload":"reboot","status":"sent","attempt":1,` +
+		`"createdAt":"2026-01-01T00:00:00Z","sentAt":"2026-01-01T00:00:01Z"}}`
+	c.ValidateResponse(t, []byte(leaseResp))
 	c.MustRejectResponse(t, []byte(`{"wrong":"shape"}`))
 }

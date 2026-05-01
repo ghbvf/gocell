@@ -79,13 +79,21 @@ func TestManager_HeapOrder(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Acquire key1: %v", err)
 	}
-	defer release1()
+	defer func() {
+		if err := release1(); err != nil {
+			t.Logf("release1: %v", err)
+		}
+	}()
 
 	_, release2, err := l.Acquire(context.Background(), "heap-key2", ttl2)
 	if err != nil {
 		t.Fatalf("Acquire key2: %v", err)
 	}
-	defer release2()
+	defer func() {
+		if err := release2(); err != nil {
+			t.Logf("release2: %v", err)
+		}
+	}()
 
 	m := mgr(l)
 	<-m.Started()
@@ -141,7 +149,9 @@ func TestManager_Lifecycle_LazyStart(t *testing.T) {
 		t.Fatal("Lifecycle: manager Started channel should close after Acquire")
 	}
 
-	release()
+	if err := release(); err != nil {
+		t.Logf("release: %v", err)
+	}
 
 	select {
 	case <-mgr(l).Drained():
@@ -174,7 +184,9 @@ func TestManager_SnapshotLocks(t *testing.T) {
 		runtime.Gosched()
 	}
 
-	r1()
+	if err := r1(); err != nil {
+		t.Logf("r1: %v", err)
+	}
 
 	deadline = time.Now().Add(10 * time.Second)
 	for mgr(l).Snapshot().Locks != 1 {
@@ -184,7 +196,9 @@ func TestManager_SnapshotLocks(t *testing.T) {
 		runtime.Gosched()
 	}
 
-	r2()
+	if err := r2(); err != nil {
+		t.Logf("r2: %v", err)
+	}
 
 	select {
 	case <-mgr(l).Drained():

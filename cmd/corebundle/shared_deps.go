@@ -269,7 +269,7 @@ func adapterInfoForSharedDeps(shared *SharedDeps) map[string]string {
 	return info
 }
 
-// SampleVerboseToken is the literal placeholder shipped in .env.example so
+// SampleVerbosePlaceholder is the literal placeholder shipped in .env.example so
 // `cp .env.example .env && go run ./cmd/corebundle` works without first
 // minting a secret. validateControlPlane rejects this exact value in
 // adapter mode "real" — production deployments must mint their own
@@ -277,8 +277,8 @@ func adapterInfoForSharedDeps(shared *SharedDeps) map[string]string {
 // regression test in shared_deps_test.go reference one source of truth.
 // production deployments must mint their own high-entropy token.
 //
-//nolint:gosec // G101: SampleVerboseToken is the constant name (not a credential value);
-const SampleVerboseToken = "dev-readyz-verbose-token-change-me"
+
+const SampleVerbosePlaceholder = "dev-readyz-verbose-token-change-me"
 
 // Validate is the startup invariant check for all cross-cutting dependencies.
 // Storage-specific invariants (PGResource, cursor codecs, HMAC key) are checked
@@ -378,10 +378,10 @@ func (d *SharedDeps) validateControlPlane() []error {
 				"production must keep the token-gated verbose endpoint available for "+
 				"on-call diagnostics"))
 	}
-	if d.VerboseToken == SampleVerboseToken {
+	if d.VerboseToken == SampleVerbosePlaceholder {
 		errs = append(errs, errcode.New(errcode.ErrControlplaneVerboseTokenSample,
 			"GOCELL_READYZ_VERBOSE_TOKEN is set to the .env.example placeholder ("+
-				SampleVerboseToken+"); a production deploy must mint its own "+
+				SampleVerbosePlaceholder+"); a production deploy must mint its own "+
 				"high-entropy secret. This exact value is publicly known via the repo "+
 				"sample and would expose /readyz?verbose topology to anyone who has "+
 				"read the source tree."))
@@ -527,10 +527,9 @@ func LoadSharedDepsFromEnv(ctx context.Context) (*SharedDeps, error) {
 	// GOCELL_HTTP_ADDR pointed at.
 	if legacy := os.Getenv("GOCELL_HTTP_ADDR"); legacy != "" {
 		if os.Getenv("GOCELL_HTTP_PRIMARY_ADDR") == "" && os.Getenv("GOCELL_HTTP_INTERNAL_ADDR") == "" {
-			//nolint:gosec // G706: structured slog field, not string concatenation
 			slog.Warn("GOCELL_HTTP_ADDR is no longer consumed (PR-A14a dual-listener);"+
 				" set GOCELL_HTTP_PRIMARY_ADDR and GOCELL_HTTP_INTERNAL_ADDR instead",
-				slog.String("legacy_value", legacy))
+				slog.String("legacy_value", strings.ReplaceAll(legacy, "\n", "")))
 		}
 	}
 

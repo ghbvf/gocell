@@ -554,7 +554,7 @@ func addDownJitter(d time.Duration) time.Duration {
 		return 0
 	}
 	// Remove up to 25% of d.
-	reduction := rand.Int64N(int64(d)/4 + 1)
+	reduction := rand.Int64N(int64(d)/4 + 1) //nolint:gosec // G404 R2-approved: reconnect down-jitter has no cryptographic requirement
 	return d - time.Duration(reduction)
 }
 
@@ -567,7 +567,7 @@ func addJitter(d time.Duration) time.Duration {
 	// jitter range: 50% of d (from -25% to +25%)
 	jitterRange := int64(d) / 2
 	// offset: random value in [0, jitterRange]
-	offset := rand.Int64N(jitterRange + 1)
+	offset := rand.Int64N(jitterRange + 1) //nolint:gosec // G404 R2-approved: reconnect jitter has no cryptographic requirement
 	// shift to [-25%, +25%]: subtract 25% of d
 	return time.Duration(int64(d) - jitterRange/2 + offset)
 }

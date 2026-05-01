@@ -11,6 +11,7 @@ import (
 	"github.com/coder/websocket"
 
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/logutil"
 	rtws "github.com/ghbvf/gocell/runtime/websocket"
 	"github.com/google/uuid"
 )
@@ -108,17 +109,18 @@ func UpgradeHandler(hub *rtws.Hub, cfg UpgradeConfig) (http.Handler, error) {
 		connID := "ws-" + uuid.NewString()
 		conn := NewConn(connID, wsConn)
 
+		remoteAddr := logutil.SafeAddr(r.RemoteAddr)
 		if regErr := hub.Register(r.Context(), conn); regErr != nil {
 			_ = wsConn.Close(websocket.StatusNormalClosure, "registration rejected")
-			slog.Warn("websocket: register rejected", //nolint:gosec // G706: structured slog fields, not string concatenation
+			slog.Warn("websocket: register rejected",
 				slog.Any("error", regErr),
-				slog.String("remote_addr", r.RemoteAddr),
+				slog.String("remote_addr", remoteAddr),
 			)
 			return
 		}
-		slog.Info("websocket: client connected", //nolint:gosec // G706: structured slog fields, not string concatenation
+		slog.Info("websocket: client connected",
 			slog.String("conn_id", connID),
-			slog.String("remote_addr", r.RemoteAddr),
+			slog.String("remote_addr", remoteAddr),
 		)
 	}), nil
 }
@@ -133,9 +135,10 @@ func MustUpgradeHandler(hub *rtws.Hub, cfg UpgradeConfig) http.Handler {
 }
 
 func logUpgradeFailure(r *http.Request, err error) {
-	slog.Error("websocket: upgrade failed", //nolint:gosec // G706: structured slog fields, not string concatenation
+	addr := logutil.SafeAddr(r.RemoteAddr)
+	slog.Error("websocket: upgrade failed",
 		slog.Any("error", err),
-		slog.String("remote_addr", r.RemoteAddr),
+		slog.String("remote_addr", addr),
 	)
 }
 

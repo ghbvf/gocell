@@ -49,7 +49,9 @@ func newContractMux(svc *Service) http.Handler {
 	h := NewHandler(svc)
 	mux := celltest.NewTestMux()
 	mux.Route("/api/v1/config", func(sub cell.RouteMux) {
-		h.RegisterRoutes(sub)
+		if err := h.RegisterRoutes(sub); err != nil {
+			panic("RegisterRoutes: " + err.Error())
+		}
 	})
 	return mux
 }

@@ -63,46 +63,21 @@ func NewMetricProvider(cfg MetricProviderConfig) (*MetricProvider, error) {
 // multiple cells share a single MetricProvider), the existing collector is
 // returned — matching the standard prometheus AlreadyRegisteredError pattern.
 // Any other registration error surfaces as ErrAdapterPromRegister.
-//
-// Note: structurally mirrors HistogramVec but operates on a different prom type
-// (*prom.CounterVec vs *prom.HistogramVec); type assertion + label-lookup paths
-// cannot share a helper without unsafe generic conversion or full reflection.
-//
-//nolint:dupl // mirrors HistogramVec — see godoc above for why the helper is unsafe.
 func (p *MetricProvider) CounterVec(opts metrics.CounterOpts) (metrics.CounterVec, error) {
 	cv := prom.NewCounterVec(prom.CounterOpts{
 		Namespace: p.cfg.Namespace,
 		Name:      opts.Name,
 		Help:      opts.Help,
 	}, opts.LabelNames)
-	if err := p.cfg.Registry.Register(cv); err != nil {
-		var are prom.AlreadyRegisteredError
-		if ok := errors.As(err, &are); ok {
-			// Return the previously registered collector so callers sharing a
-			// provider (e.g. accesscore + auditcore in the same assembly) get
-			// back a valid CounterVec without failing init.
-			existing, castOK := are.ExistingCollector.(*prom.CounterVec)
-			if !castOK {
-				return nil, errcode.Wrap(ErrAdapterPromRegister,
-					"prometheus metric provider: existing collector type mismatch for counter "+opts.Name, err)
-			}
-			// Validate that the re-used collector's label set matches the requested one.
-			// A label-set mismatch causes a panic at With() call time — reject it here.
-			// We find the previously-registered wrapper in our vecs map to retrieve
-			// the original label names.
-			if existingLabels := p.lookupCounterVecLabels(existing); existingLabels != nil {
-				if !slices.Equal(existingLabels, opts.LabelNames) {
-					return nil, errcode.New(ErrAdapterPromRegister,
-						"prometheus metric provider: label name mismatch for counter "+opts.Name+
-							": existing="+join(existingLabels)+" requested="+join(opts.LabelNames))
-				}
-			}
-			slog.Warn("prometheus metric provider: reusing already-registered collector",
-				slog.String("name", opts.Name))
-			return &promCounterVec{inner: existing, labels: append([]string(nil), opts.LabelNames...)}, nil
-		}
-		return nil, errcode.Wrap(ErrAdapterPromRegister,
-			"prometheus metric provider: register counter "+opts.Name, err)
+	existing, err := registerOrReuse[*prom.CounterVec](
+		p.cfg.Registry, cv, opts.Name, "counter", opts.LabelNames,
+		p.lookupCounterVecLabels,
+	)
+	if err != nil {
+		return nil, err
+	}
+	if existing != nil {
+		return &promCounterVec{inner: existing, labels: append([]string(nil), opts.LabelNames...)}, nil
 	}
 	vec := &promCounterVec{inner: cv, labels: append([]string(nil), opts.LabelNames...)}
 	p.mu.Lock()
@@ -111,12 +86,54 @@ func (p *MetricProvider) CounterVec(opts metrics.CounterOpts) (metrics.CounterVe
 	return vec, nil
 }
 
+// registerOrReuse calls registry.Register(c) and translates the result into:
+//   - (nil, nil) on a fresh registration (caller stores the wrapper)
+//   - (existing, nil) when AlreadyRegisteredError says the same metric name
+//     was registered earlier (caller wraps the existing collector)
+//   - (nil, ErrAdapterPromRegister) on any other failure or label-set mismatch
+//
+// The lookupLabels callback finds the previously-registered wrapper's labels
+// for label-set consistency validation; returning nil from the lookup means
+// "labels unknown — skip the strict equality check" (used when the registered
+// collector predates this provider).
+func registerOrReuse[T prom.Collector](
+	reg *prom.Registry, c T, name, kindLabel string,
+	requestedLabels []string,
+	lookupLabels func(T) []string,
+) (T, error) {
+	var zero T
+	if err := reg.Register(c); err == nil {
+		return zero, nil
+	} else {
+		var are prom.AlreadyRegisteredError
+		if !errors.As(err, &are) {
+			return zero, errcode.Wrap(ErrAdapterPromRegister,
+				"prometheus metric provider: register "+kindLabel+" "+name, err)
+		}
+		existing, castOK := are.ExistingCollector.(T)
+		if !castOK {
+			return zero, errcode.Wrap(ErrAdapterPromRegister,
+				"prometheus metric provider: existing collector type mismatch for "+kindLabel+" "+name, err)
+		}
+		if existingLabels := lookupLabels(existing); existingLabels != nil {
+			if !slices.Equal(existingLabels, requestedLabels) {
+				return zero, errcode.New(ErrAdapterPromRegister,
+					"prometheus metric provider: label name mismatch for "+kindLabel+" "+name+
+						": existing="+join(existingLabels)+" requested="+join(requestedLabels))
+			}
+		}
+		slog.Warn("prometheus metric provider: reusing already-registered collector",
+			slog.String("name", name))
+		return existing, nil
+	}
+}
+
 // HistogramVec registers and returns a HistogramVec bound to the provider's
 // registry. Empty Buckets uses Prometheus default (DefBuckets). If the same
 // metric name has already been registered, the existing collector is returned
 // (same AlreadyRegisteredError pattern as CounterVec).
 //
-//nolint:dupl // structurally mirrors CounterVec; see CounterVec nolint reason.
+
 func (p *MetricProvider) HistogramVec(opts metrics.HistogramOpts) (metrics.HistogramVec, error) {
 	hv := prom.NewHistogramVec(prom.HistogramOpts{
 		Namespace: p.cfg.Namespace,
@@ -124,28 +141,15 @@ func (p *MetricProvider) HistogramVec(opts metrics.HistogramOpts) (metrics.Histo
 		Help:      opts.Help,
 		Buckets:   opts.Buckets,
 	}, opts.LabelNames)
-	if err := p.cfg.Registry.Register(hv); err != nil {
-		var are prom.AlreadyRegisteredError
-		if ok := errors.As(err, &are); ok {
-			existing, castOK := are.ExistingCollector.(*prom.HistogramVec)
-			if !castOK {
-				return nil, errcode.Wrap(ErrAdapterPromRegister,
-					"prometheus metric provider: existing collector type mismatch for histogram "+opts.Name, err)
-			}
-			// Validate label set consistency to prevent delayed With() panics.
-			if existingLabels := p.lookupHistogramVecLabels(existing); existingLabels != nil {
-				if !slices.Equal(existingLabels, opts.LabelNames) {
-					return nil, errcode.New(ErrAdapterPromRegister,
-						"prometheus metric provider: label name mismatch for histogram "+opts.Name+
-							": existing="+join(existingLabels)+" requested="+join(opts.LabelNames))
-				}
-			}
-			slog.Warn("prometheus metric provider: reusing already-registered collector",
-				slog.String("name", opts.Name))
-			return &promHistogramVec{inner: existing, labels: append([]string(nil), opts.LabelNames...)}, nil
-		}
-		return nil, errcode.Wrap(ErrAdapterPromRegister,
-			"prometheus metric provider: register histogram "+opts.Name, err)
+	existing, err := registerOrReuse[*prom.HistogramVec](
+		p.cfg.Registry, hv, opts.Name, "histogram", opts.LabelNames,
+		p.lookupHistogramVecLabels,
+	)
+	if err != nil {
+		return nil, err
+	}
+	if existing != nil {
+		return &promHistogramVec{inner: existing, labels: append([]string(nil), opts.LabelNames...)}, nil
 	}
 	vec := &promHistogramVec{inner: hv, labels: append([]string(nil), opts.LabelNames...)}
 	p.mu.Lock()

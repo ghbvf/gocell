@@ -59,7 +59,7 @@ func TestBootstrapper_FullFlow_OnCurrentOS(t *testing.T) {
 	require.NoError(t, statErr, "credential file must be created")
 
 	// File must contain the expected fields.
-	contents, readErr := os.ReadFile(credPath)
+	contents, readErr := os.ReadFile(filepath.Clean(credPath))
 	require.NoError(t, readErr)
 	content := string(contents)
 	assert.True(t, strings.Contains(content, "username=admin"), "credfile must contain username")

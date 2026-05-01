@@ -122,7 +122,7 @@ func TestSecureNewFile_RefusesSymlinkPath(t *testing.T) {
 	// The error must originate from either the Lstat (errCredFileExists, because
 	// Lstat sees the symlink as an existing entry) or from O_NOFOLLOW rejection.
 	// In both cases an error must be returned and the benign target must be intact.
-	targetData, readErr := os.ReadFile(target)
+	targetData, readErr := os.ReadFile(filepath.Clean(target))
 	if readErr != nil {
 		t.Fatalf("read target after refused write: %v", readErr)
 	}
@@ -145,7 +145,8 @@ func TestRemoveCredentialFile_DeletesEvenWhenModeTampered(t *testing.T) {
 	}
 
 	// Tamper: change mode to 0644.
-	if err := os.Chmod(path, 0o644); err != nil {
+	tamperedPerm := os.FileMode(0o644)
+	if err := os.Chmod(path, tamperedPerm); err != nil {
 		t.Fatalf("Chmod: %v", err)
 	}
 

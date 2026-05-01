@@ -244,14 +244,14 @@ func TestRouter_Run_MultipleHandlersSameSubscriber(t *testing.T) {
 	var countA, countB atomic.Int32
 
 	r := New(bus)
-	r.AddContractHandler(testEventSpec("topic.a"), func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+	require.NoError(t, r.AddContractHandler(testEventSpec("topic.a"), func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
 		countA.Add(1)
 		return outbox.HandleResult{Disposition: outbox.DispositionAck}
-	}, "test")
-	r.AddContractHandler(testEventSpec("topic.b"), func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+	}, "test"))
+	require.NoError(t, r.AddContractHandler(testEventSpec("topic.b"), func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
 		countB.Add(1)
 		return outbox.HandleResult{Disposition: outbox.DispositionAck}
-	}, "test")
+	}, "test"))
 
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
@@ -711,7 +711,8 @@ func TestRouter_ConsumerGroup_PropagatesToSubscriber(t *testing.T) {
 	r := New(sub)
 
 	_ = r.AddContractHandler(testEventSpec("session.created"), noopHandler, "auditcore")
-	_ = r.AddContractHandler(testEventSpec("config.entry-upserted"), noopHandler, "configcore", cell.WithSubscriptionSliceID("configsubscribe"))
+	_ = r.AddContractHandler(testEventSpec("config.entry-upserted"), noopHandler,
+		"configcore", cell.WithSubscriptionSliceID("configsubscribe"))
 	_ = r.AddContractHandler(testEventSpec("legacy.event"), noopHandler, "legacy-cell")
 
 	ctx, cancel := context.WithCancel(context.Background())

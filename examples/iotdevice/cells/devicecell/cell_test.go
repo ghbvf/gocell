@@ -129,9 +129,9 @@ func TestDeviceCell_RouteGroups(t *testing.T) {
 	for _, rg := range c.RouteGroups() {
 		if rg.Listener == cell.PrimaryListener {
 			if rg.Prefix != "" {
-				mux.Route(rg.Prefix, func(sub cell.RouteMux) { rg.Register(sub) })
+				mux.Route(rg.Prefix, func(sub cell.RouteMux) { require.NoError(t, rg.Register(sub)) })
 			} else {
-				rg.Register(mux)
+				require.NoError(t, rg.Register(mux))
 			}
 		}
 	}
@@ -169,9 +169,9 @@ func initCellWithRouter(t *testing.T) *router.Router {
 	for _, rg := range c.RouteGroups() {
 		if rg.Listener == cell.PrimaryListener {
 			if rg.Prefix != "" {
-				r.Route(rg.Prefix, func(sub cell.RouteMux) { rg.Register(sub) })
+				r.Route(rg.Prefix, func(sub cell.RouteMux) { require.NoError(t, rg.Register(sub)) })
 			} else {
-				rg.Register(r)
+				require.NoError(t, rg.Register(r))
 			}
 		}
 	}
@@ -339,7 +339,8 @@ func TestDeviceCell_RouteAckCommand(t *testing.T) {
 
 	// Ack. Inject auth context: device authenticates as itself.
 	rec = httptest.NewRecorder()
-	req = httptest.NewRequest(http.MethodPost, "/api/v1/devices/"+deviceID+"/commands/"+cmdID+"/ack", strings.NewReader(`{"reason":"success"}`))
+	ackPath := "/api/v1/devices/" + deviceID + "/commands/" + cmdID + "/ack"
+	req = httptest.NewRequest(http.MethodPost, ackPath, strings.NewReader(`{"reason":"success"}`))
 	req.Header.Set("Content-Type", "application/json")
 	req = req.WithContext(auth.TestContext(deviceID, nil))
 	r.ServeHTTP(rec, req)

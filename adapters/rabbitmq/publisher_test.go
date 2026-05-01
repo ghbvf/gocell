@@ -197,7 +197,9 @@ type blockingPublishChannel struct {
 	publishBlocker chan struct{}
 }
 
-func (b *blockingPublishChannel) PublishWithContext(ctx context.Context, exchange, key string, mandatory, immediate bool, msg amqp.Publishing) error {
+func (b *blockingPublishChannel) PublishWithContext(
+	ctx context.Context, exchange, key string, mandatory, immediate bool, msg amqp.Publishing,
+) error {
 	// Block until the test releases the gate, ctx is canceled, or safety net fires.
 	select {
 	case <-b.publishBlocker:

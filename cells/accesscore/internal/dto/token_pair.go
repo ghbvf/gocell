@@ -34,11 +34,9 @@ type TokenPairResponse struct {
 //
 // The explicit struct literal is intentional: it creates a visible wire/model
 // boundary that prevents accidental field auto-propagation when either struct
-// evolves independently. Staticcheck S1016 (prefer type conversion) is
-// suppressed on the return line because the value-cast is exactly what we want
-// to avoid.
+// evolves independently. A bare TokenPairResponse(p) cast would defeat this
+// guarantee — staticcheck S1016's suggestion is rejected by design here.
 func ToTokenPairResponse(p TokenPair) TokenPairResponse {
-	//nolint:staticcheck // S1016: explicit field mapping is intentional — prevents accidental wire/model field coupling
 	return TokenPairResponse{
 		AccessToken:           p.AccessToken,
 		RefreshToken:          p.RefreshToken,

@@ -16,6 +16,49 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// weak1024KeyPEM is a pre-generated 1024-bit RSA private key (PKCS#8 DER,
+// PEM-encoded). Used only in tests that verify weak-key rejection — the
+// test intent is to exercise validateRSAKeySize's bit-size guard
+// (n.BitLen() < MinRSAKeyBits), not RSA key generation. Generating a
+// 1024-bit key at every test run was both slow and noisy in coverage
+// reports; the static fixture is regenerated only when the
+// PKCS#8 DER format itself changes.
+const weak1024KeyPEM = `-----BEGIN PRIVATE KEY-----
+MIICdwIBADANBgkqhkiG9w0BAQEFAASCAmEwggJdAgEAAoGBAN3/s6cdoda0Yn9a
+wCHSWfWu9L75nMJvJsLQ8gI+vuPWdYoOF3VSp+HV+ojNBO5YTstQJVnSJc6Jjn8K
+mufo4l2ar1mEBZkUFFMnC20wOlmX9zhQc34XWF9Kow5naZ8rB3OeJQn2z211sFmw
+BK6DqaNWS54sEK8fA9bRp4i0eFLvAgMBAAECgYEA1gnaWc7dIdgre2SxCCr6p0D3
+IkYiGOj38y9nljiO7bbw/plVjr2RtdEMS+d30KF93tK4IGDYKMlBhUVhUyWbUR6H
+Bcret/WG8ElINe/k3CpjbM/hji5lZPCQ1CxC8qNP4MnR7n5jh7nSYb1gCNHZItdO
+yvfSuKjGEj3fntBbfEECQQD2Y3GW7zWJ7MlNtUFuqXSLqzTg1KO7261WI+n4E4+4
+yzHzrZKOg7UWiW3zpxMm8tEmAVrx8RQhGtRptLmhXq+hAkEA5qiw/BBLziBV8dqk
+DUS6Ft5ttXM5/QZawGAfDd+k/SVaaM9K+DlZsxwxwAuYqACyXdq3bb+du5CBS00V
+vYk4jwJBAL+U/Yr+P6QagUCyMsmoa936Zyh3T0VQgEydqlziYPuwzAuNKIs2MEXw
+4JT3kbXUUvp5TU0ZRqyjHw1+oGSwqmECQDV6qUZYFOteze58bgrxg1/oBHHMnIZQ
+4du2rZyO3PcgoPyqC0zQJz8C63oGdkeFmdVu75aPlee2EnQ+FCtU1HsCQFR7HUue
+Ki25u0uMIoworRTfNUh1kyDKnI8CYIQNcCLDldTf8cZexPhMLb43qCM3lz3L+OMB
+qZvnvePyPUu8ytI=
+-----END PRIVATE KEY-----`
+
+// loadWeak1024Key decodes weak1024KeyPEM into an *rsa.PrivateKey.
+// It must only be used in tests that verify weak-key rejection logic.
+func loadWeak1024Key(t *testing.T) *rsa.PrivateKey {
+	t.Helper()
+	block, _ := pem.Decode([]byte(weak1024KeyPEM))
+	if block == nil {
+		t.Fatal("loadWeak1024Key: pem.Decode returned nil")
+	}
+	key, err := x509.ParsePKCS8PrivateKey(block.Bytes)
+	if err != nil {
+		t.Fatalf("loadWeak1024Key: ParsePKCS8PrivateKey: %v", err)
+	}
+	rsaKey, ok := key.(*rsa.PrivateKey)
+	if !ok {
+		t.Fatalf("loadWeak1024Key: expected *rsa.PrivateKey, got %T", key)
+	}
+	return rsaKey
+}
+
 // --- Phase 1: Foundational (T001-T004) ---
 
 func TestThumbprint_Deterministic(t *testing.T) {
@@ -108,18 +151,16 @@ func TestNewKeySet_MismatchedKeyPairReturnsError(t *testing.T) {
 }
 
 func TestNewKeySet_WeakKeyReturnsError(t *testing.T) {
-	weakKey, err := rsa.GenerateKey(rand.Reader, 1024) // NOSONAR — intentional weak key to test rejection
-	require.NoError(t, err)
+	weakKey := loadWeak1024Key(t)
 
-	_, err = NewKeySet(weakKey, &weakKey.PublicKey)
+	_, err := NewKeySet(weakKey, &weakKey.PublicKey)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "1024")
 }
 
 func TestNewKeySetWithVerificationKeys_RejectsWeakKey(t *testing.T) {
 	priv, pub := generateTestKeyPair(t)
-	weakKey, err := rsa.GenerateKey(rand.Reader, 1024) // NOSONAR — intentional weak key
-	require.NoError(t, err)
+	weakKey := loadWeak1024Key(t)
 
 	vk := VerificationKey{
 		PublicKey: &weakKey.PublicKey,
@@ -127,7 +168,7 @@ func TestNewKeySetWithVerificationKeys_RejectsWeakKey(t *testing.T) {
 		ExpiresAt: time.Now().Add(time.Hour),
 	}
 
-	_, err = NewKeySetWithVerificationKeys(priv, pub, []VerificationKey{vk})
+	_, err := NewKeySetWithVerificationKeys(priv, pub, []VerificationKey{vk})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "1024")
 	assert.Contains(t, err.Error(), "verification")
@@ -583,9 +624,8 @@ func TestLoadKeysFromEnv_ValidKeys(t *testing.T) {
 }
 
 func TestLoadRSAKeyPairFromPEM_RejectsWeakKey(t *testing.T) {
-	// Generate a 1024-bit RSA key (below MinRSAKeyBits).
-	weakKey, err := rsa.GenerateKey(rand.Reader, 1024) // NOSONAR — intentional weak key to test rejection
-	require.NoError(t, err)
+	// Use a pre-generated 1024-bit RSA key (below MinRSAKeyBits).
+	weakKey := loadWeak1024Key(t)
 
 	privPEM := pem.EncodeToMemory(&pem.Block{
 		Type:  "RSA PRIVATE KEY",

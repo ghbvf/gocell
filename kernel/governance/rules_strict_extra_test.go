@@ -945,7 +945,9 @@ func fmt25Project(queryParams, pathParams map[string]contracts.ParamSchema) *met
 func TestFMT25_RequestSchemaPathEscapeFailsClosed(t *testing.T) {
 	dir := t.TempDir()
 	require.NoError(t, os.MkdirAll(filepath.Join(dir, "contracts", "http", "test"), 0o755))
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "contracts", "http", "test", "outside.schema.json"), []byte(`{"type":"object","additionalProperties":false}`), 0o644))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(dir, "contracts", "http", "test", "outside.schema.json"),
+		[]byte(`{"type":"object","additionalProperties":false}`), 0o644))
 	pm := fmt25Project(nil, nil)
 	pm.Contracts["http.test.v1"].SchemaRefs.Request = "../outside.schema.json"
 

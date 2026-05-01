@@ -53,7 +53,7 @@ func newContractDeviceListHandler(t *testing.T) http.Handler {
 	}
 
 	mux := celltest.NewTestMux()
-	mux.Route("/api/v1/devices", func(sub cell.RouteMux) { NewHandler(svc).RegisterRoutes(sub) })
+	mux.Route("/api/v1/devices", func(sub cell.RouteMux) { require.NoError(t, NewHandler(svc).RegisterRoutes(sub)) })
 	return mux
 }
 

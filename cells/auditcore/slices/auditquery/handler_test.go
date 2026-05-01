@@ -298,7 +298,7 @@ func TestHandler_RegisterRoutes_AuthzNegative(t *testing.T) {
 	}))
 
 	mux := http.NewServeMux()
-	h.RegisterRoutes(mux)
+	require.NoError(t, h.RegisterRoutes(mux))
 
 	tests := []struct {
 		name       string
@@ -354,7 +354,7 @@ func TestHandler_RegisterRoutes_AuthzNegative(t *testing.T) {
 	}
 }
 
-// Trust boundary tests (#27q)
+// Trust boundary tests (#27q).
 func TestHandleQuery_ActorBinding(t *testing.T) {
 	repo := mem.NewAuditRepository()
 	svc, err := NewService(repo, testCodec(), slog.Default(), query.RunModeProd)
@@ -364,7 +364,7 @@ func TestHandleQuery_ActorBinding(t *testing.T) {
 	// securedMux registers HandleQuery via RegisterRoutes, mirroring production
 	// wiring so trust boundary tests exercise the same auth.Mount guard.
 	securedMux := http.NewServeMux()
-	h.RegisterRoutes(securedMux)
+	require.NoError(t, h.RegisterRoutes(securedMux))
 
 	// Seed entries for two actors
 	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)

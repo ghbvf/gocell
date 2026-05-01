@@ -198,7 +198,7 @@ func TestService_Login(t *testing.T) {
 			setup: func(r *mem.UserRepository) {
 				seedUser(r, "locked", "pass")
 				u, _ := r.GetByUsername(context.Background(), "locked")
-				u.Lock()
+				u.LockAccount()
 				_ = r.Update(context.Background(), u)
 			},
 			input:   LoginInput{Username: "locked", Password: "pass"},
@@ -526,9 +526,12 @@ func TestService_Login_PublishError_DoesNotFailLogin(t *testing.T) {
 	seedUser(userRepo, "pub-err", "pass123")
 
 	fp := failingPublisher{err: fmt.Errorf("broker unavailable")}
-	emitter, err := outbox.NewDirectEmitter(fp, outbox.DirectPublishFailOpen, metrics.NopProvider{}, "accesscore", outbox.WithLogger(slog.Default()))
+	emitter, err := outbox.NewDirectEmitter(
+		fp, outbox.DirectPublishFailOpen, metrics.NopProvider{}, "accesscore",
+		outbox.WithLogger(slog.Default()))
 	require.NoError(t, err)
-	svc := MustNewService(userRepo, sessionRepo, roleRepo, newTestRefreshStore(), testIssuer, slog.Default(), WithEmitter(emitter))
+	svc := MustNewService(userRepo, sessionRepo, roleRepo, newTestRefreshStore(), testIssuer,
+		slog.Default(), WithEmitter(emitter))
 
 	pair, err := svc.Login(context.Background(), LoginInput{Username: "pub-err", Password: "pass123"})
 	require.NoError(t, err, "publish failure in demo mode should not fail login")

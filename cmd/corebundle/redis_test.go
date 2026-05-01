@@ -273,6 +273,8 @@ func (fakeDistributedNonceStore) Kind() auth.NonceStoreKind {
 
 type fakeDistributedClaimer struct{}
 
-func (fakeDistributedClaimer) Claim(context.Context, string, time.Duration, time.Duration) (idempotency.ClaimState, idempotency.Receipt, error) {
+func (fakeDistributedClaimer) Claim(
+	context.Context, string, time.Duration, time.Duration,
+) (idempotency.ClaimState, idempotency.Receipt, error) {
 	return idempotency.ClaimDone, idempotency.NonAcquiredReceipt(), nil
 }

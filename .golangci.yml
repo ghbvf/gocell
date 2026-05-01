@@ -27,6 +27,8 @@ linters:
     - funlen
     # 依赖管控
     - gomodguard
+    # nolint 治理：所有 //nolint:... 必须带 // <reason>，且必须指明 linter 名
+    - nolintlint
 
   settings:
     gocognit:
@@ -59,10 +61,16 @@ linters:
     dupl:
       threshold: 150
 
+    errcheck:
+      exclude-functions:
+        # hash.Hash.Write per the io.Writer contract (and the stdlib package
+        # doc) always returns (len(b), nil). Calling it as `h.Write(b)`
+        # without binding the return is the stdlib-documented hmac idiom
+        # (see crypto/hmac godoc Example). The error in the signature is
+        # there only because hash.Hash satisfies io.Writer.
+        - "(hash.Hash).Write"
+
     gosec:
-      excludes:
-        - G115
-        - G404
       config:
         G101:
           pattern: "(?i)passwd|pass|password|pwd|secret|token|apikey"
@@ -86,6 +94,21 @@ linters:
 
     whitespace:
       multi-func: false  # multi-line signature 后空行检查过严，关闭（默认仅检查函数体首尾空行）
+
+    nolintlint:
+      # //nolint not actually suppressing anything must be removed (catches
+      # stale nolints after the underlying issue is fixed).
+      allow-unused: false
+      # Empty array means: every linter requires an explanation. No carve-outs.
+      allow-no-explanation: []
+      # //nolint:<linter> // <reason> — nolintlint enforces the linter name
+      # and the presence of an explanation. It cannot enforce a particular
+      # prefix in that explanation. Convention (reviewer-enforced, not
+      # tool-enforced): write "R2-approved: <reason>" so future grep can
+      # find the historical decision; reviewers reject nolints without
+      # the prefix during PR review.
+      require-explanation: true
+      require-specific: true
 
     gomodguard:
       blocked:
@@ -117,37 +140,127 @@ linters:
 
   exclusions:
     rules:
-      # Test files: defer .Close()，table-driven test 高噪声项
+      # Test fixtures are written under t.TempDir() and never shipped to
+      # production; permissions of 0o644/0o755 there are convenience for
+      # debug, not a security boundary. gosec G306/G301 in production paths
+      # is fixed at the call site (chmod to 0o600/0o750).
       - path: _test\.go
         linters:
-          - errcheck
+          - gosec
+        text: "G30(0|1|2|6)"
+      # Test setup/table-driven assertions are inherently long and structurally
+      # repeat across cases. Production thresholds (funlen 80 / gocognit 15 /
+      # cyclop 15 / dupl 150) hurt test readability without a real signal —
+      # waive these four linters in *_test.go.
+      - path: _test\.go
+        linters:
+          - funlen
           - gocognit
           - cyclop
-          - funlen
           - dupl
-          - lll
-          - gosec
-          - godot
-      # examples/ 是示例代码，宽松
-      - path: ^examples/
+      - path: ^testdata/
         linters:
-          - errcheck
-          - lll
-          - funlen
-          - gocritic
-          - godot
-      # cmd/ CLI 入口允许长函数
+          - gosec
+        text: "G30(0|1|2|6)"
+      # tools/archtest and tools/metricschema scan the repo working tree to
+      # produce the static governance verdict; they walk filepath/Walk and
+      # ReadFile under a developer-owned tree. G122 (TOCTOU via walk
+      # callback) and G703 (path traversal taint after filepath.Clean) are
+      # not relevant in this trusted scanner context.
+      - path: ^tools/archtest/
+        linters:
+          - gosec
+        text: "G122"
+      - path: ^tools/metricschema/
+        linters:
+          - gosec
+        text: "G70(2|3)"
+      # rbacassign/service.go: Assign/Revoke are intentionally mirror-image
+      # public APIs (per-action audit trail). Source comment documents the
+      # decision; dupl flags the duplication structurally.
+      - path: ^cells/accesscore/slices/rbacassign/service\.go
+        linters:
+          - dupl
+      # token_pair.go: ToTokenPairResponse uses an explicit struct literal to
+      # create a wire/model boundary that prevents accidental field
+      # auto-leakage when either struct evolves. Source comment documents the
+      # decision; staticcheck S1016 (prefer type conversion) is the wrong
+      # advice in this specific spot.
+      - path: ^cells/accesscore/internal/dto/token_pair\.go
+        linters:
+          - staticcheck
+        text: "S1016"
+      # cmdrun.go is the audit point for governance / verify subprocess
+      # invocation (gocell validate / gocell check / golangci-lint runner /
+      # ...) — ValidatedTool.path is exec.LookPath-resolved + Abs-normalized
+      # at NewTool. gosec G204 on the variable binary path is a false
+      # positive in this context. Direct exec.Command callers still exist
+      # in tests (tools/generatedverify/generatedverify_test.go,
+      # examples/ssobff/smoke_test.go) where the binary path is also
+      # constant or test-controlled; those test sites are intentionally
+      # not routed through cmdrun.
+      - path: ^pkg/cmdrun/cmdrun\.go
+        linters:
+          - gosec
+        text: "G204"
+      # G404 weak random is suppressed at the call site with line-level
+      # //nolint:gosec // G404 R2-approved: ... — see adapters/rabbitmq/
+      # connection.go, runtime/eventbus/eventbus.go, runtime/outbox/relay.go.
+      # File-level path exemptions would also silence future misuses (e.g.
+      # token / nonce / key generation introduced in the same file).
+      # G706 log injection (taint analysis) — net/http handler false positive
+      # on r.RemoteAddr / r.Method / r.URL.Path: gosec taints these fields
+      # and refuses to clear the taint through sanitize helpers. Audit logs
+      # need these fields; slog's structured-attr encoding (no format-string
+      # interpolation) is not an injection surface in practice.
+      - path: ^runtime/http/health/health\.go
+        linters:
+          - gosec
+        text: "G706"
+      - path: ^runtime/http/middleware/(recovery|csrf)\.go
+        linters:
+          - gosec
+        text: "G706"
+      - path: ^cells/auditcore/slices/auditquery/handler\.go
+        linters:
+          - gosec
+        text: "G706"
+      - path: ^adapters/websocket/handler\.go
+        linters:
+          - gosec
+        text: "G706"
+      - path: ^adapters/vault/transit_provider\.go
+        linters:
+          - gosec
+        text: "G706"
+      # scaffoldfs.FileMode / DirMode are 0o644 / 0o755 by design (scaffold
+      # output is committed to git and read by multi-user CI bots). Source
+      # comment documents the decision.
+      - path: ^pkg/scaffoldfs/perms\.go
+        linters:
+          - gosec
+        text: "G30(1|6)"
+      # pkg/errcode/errcode.go is the project-wide error-code dictionary.
+      # Every const value is a wire-protocol identifier, never a credential;
+      # gosec G101 matches names containing "token" / "password" — 100%
+      # false-positive in this file. Keeping the codes as immutable consts
+      # (not the var-block-with-string-concat trick that hides the literal
+      # from static scanners) matters because importers must not be able
+      # to mutate canonical wire identifiers.
+      - path: ^pkg/errcode/errcode\.go
+        linters:
+          - gosec
+        text: "G101"
+      # cmd/ wiring functions are sequential composition-root assemblies
+      # (Provide / LoadSharedDepsFromEnv / NewSSOBFFApp). funlen flags them
+      # at 80 lines but breaking apart obscures the reading order — caller
+      # must scan the assembly top-to-bottom to understand startup sequence.
       - path: ^cmd/
         linters:
           - funlen
-      # tools/archtest/ AST 工具天然高圈复杂度（防御性配置）
-      - path: ^tools/archtest/
+      - path: ^examples/
         linters:
-          - cyclop
-      # governance advisory hints: 仅常量声明文件豁免 lll
-      - path: ^kernel/governance/advisory_hints\.go
-        linters:
-          - lll
+          - funlen
     paths:
       - generated
       - vendor

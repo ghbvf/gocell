@@ -181,7 +181,7 @@ func (s *stubPublisher) Close(_ context.Context) error                       { r
 //	runtime/observability/metrics/provider_collector.go (Name="http_requests_total")
 //	as canonical same-repo examples of the Namespace-in-wrapper pattern.
 func TestPrometheusExposition_OutboxEmitter_FailOpenDropped_Family(t *testing.T) {
-	p, reg := newProvider(t) //nolint:gocritic // commentedOutCode: Namespace="gocell" is a documentation annotation, not commented-out code
+	p, reg := newProvider(t)
 
 	// Fail-open emitter: any Publish error is swallowed, counter incremented.
 	pub := &stubPublisher{err: errors.New("broker unavailable")}

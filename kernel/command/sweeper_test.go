@@ -231,7 +231,7 @@ func (a *mockAckQueue) Ack(_ context.Context, id string, reason command.AckReaso
 	return a.err
 }
 
-// unused methods
+// unused methods.
 func (a *mockAckQueue) Enqueue(context.Context, command.Entry, command.EnqueueOptions) error {
 	return errors.New("unused")
 }

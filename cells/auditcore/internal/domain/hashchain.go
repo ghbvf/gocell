@@ -77,7 +77,7 @@ func (hc *HashChain) Len() int {
 // The message is: prevHash + eventID + eventType + actorID + timestamp + payload.
 func (hc *HashChain) computeHash(entry *AuditEntry) string {
 	mac := hmac.New(sha256.New, hc.hmacKey)
-	fmt.Fprintf(mac, "%s|%s|%s|%s|%d|%s", //nolint:errcheck // hash.Hash.Write never returns error
+	msg := fmt.Sprintf("%s|%s|%s|%s|%d|%s",
 		entry.PrevHash,
 		entry.EventID,
 		entry.EventType,
@@ -85,5 +85,10 @@ func (hc *HashChain) computeHash(entry *AuditEntry) string {
 		entry.Timestamp.UnixNano(),
 		string(entry.Payload),
 	)
+	// hash.Hash.Write per the io.Writer contract (and the package doc) always
+	// returns (len(b), nil); the discarded return matches the stdlib-documented
+	// hmac idiom (see crypto/hmac godoc Example). errcheck is configured to
+	// skip this method globally — see .golangci.yml errcheck.exclude-functions.
+	mac.Write([]byte(msg))
 	return hex.EncodeToString(mac.Sum(nil))
 }

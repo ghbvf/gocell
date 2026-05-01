@@ -23,7 +23,7 @@ type assemblyOrderFixture struct {
 
 func TestModuleOrderConfigCoreFirst01(t *testing.T) {
 	root := findModuleRoot(t)
-	body, err := os.ReadFile(filepath.Join(root, "assemblies", "corebundle", "assembly.yaml"))
+	body, err := os.ReadFile(filepath.Clean(filepath.Join(root, "assemblies", "corebundle", "assembly.yaml")))
 	require.NoError(t, err)
 
 	var asm assemblyOrderFixture
@@ -37,7 +37,7 @@ func TestModuleOrderConfigCoreFirst01(t *testing.T) {
 func TestCorebundleGeneratedMainDoesNotInlineModules(t *testing.T) {
 	root := findModuleRoot(t)
 	mainPath := filepath.Join(root, "cmd", "corebundle", "main.go")
-	body, err := os.ReadFile(filepath.Join(root, "assemblies", "corebundle", "assembly.yaml"))
+	body, err := os.ReadFile(filepath.Clean(filepath.Join(root, "assemblies", "corebundle", "assembly.yaml")))
 	require.NoError(t, err)
 
 	var asm assemblyOrderFixture

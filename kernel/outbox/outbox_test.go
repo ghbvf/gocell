@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -1121,15 +1122,15 @@ func TestNotifySettlement_ObserverPanic_DoesNotKillCaller(t *testing.T) {
 func TestDiscardPublisher_TypedNil_NoPanic(t *testing.T) {
 	// Typed nil: interface is non-nil but underlying pointer is nil.
 	// Must not panic — this is the key regression from value→pointer migration.
-	var p *DiscardPublisher //nolint:staticcheck // SA4023: typed nil used to verify interface-nil semantics below
-	var pub Publisher = p   // interface non-nil at Go level
+	var p *DiscardPublisher
+	var pub Publisher = p // interface non-nil at Go level
 
-	// Go interface nil semantics: pub != nil because it carries type info.
-	// The comparison is tautologically false at compile time; staticcheck
-	// (SA4023) flags it but it documents the invariant the test guards.
-	if pub == nil { //nolint:staticcheck // SA4023: intentional — asserts typed-nil wrapped in interface is not == nil
-		t.Fatal("typed nil wrapped in interface should not be == nil")
-	}
+	// Go interface nil semantics: pub != nil because it carries type info,
+	// but the underlying pointer IS nil — document both with reflect (testify
+	// NotNil treats typed-nil as nil, so we check the interface type header
+	// directly to express the runtime invariant unambiguously).
+	assert.True(t, reflect.ValueOf(pub).IsNil(), "underlying *DiscardPublisher pointer must be nil")
+	assert.NotNil(t, reflect.TypeOf(pub), "interface header must carry type info even when underlying pointer is nil")
 	assert.NotPanics(t, func() {
 		_ = pub.Publish(context.Background(), "test.topic", []byte(`{}`))
 	}, "Publish on typed nil must not panic")

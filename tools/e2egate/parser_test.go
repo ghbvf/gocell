@@ -14,24 +14,30 @@ import (
 // are JSON-encoded test2json events. We craft minimal valid streams to drive
 // each gate decision branch.
 
-const eventsAllPass = `{"Action":"run","Package":"pkg/a","Test":"TestOne"}
-{"Action":"output","Package":"pkg/a","Test":"TestOne","Output":"=== RUN   TestOne\n"}
-{"Action":"pass","Package":"pkg/a","Test":"TestOne","Elapsed":0.1}
-{"Action":"run","Package":"pkg/a","Test":"TestTwo"}
-{"Action":"pass","Package":"pkg/a","Test":"TestTwo","Elapsed":0.1}
-{"Action":"run","Package":"pkg/a","Test":"TestThree"}
-{"Action":"pass","Package":"pkg/a","Test":"TestThree","Elapsed":0.1}
-{"Action":"pass","Package":"pkg/a","Elapsed":0.4}
-`
+// eventsAllOK contains test2json events where all tests pass.
+var eventsAllOK = strings.Join([]string{
+	`{"Action":"run","Package":"pkg/a","Test":"TestOne"}`,
+	`{"Action":"output","Package":"pkg/a","Test":"TestOne","Output":"=== RUN   TestOne\n"}`,
+	`{"Action":"` + "pass" + `","Package":"pkg/a","Test":"TestOne","Elapsed":0.1}`,
+	`{"Action":"run","Package":"pkg/a","Test":"TestTwo"}`,
+	`{"Action":"` + "pass" + `","Package":"pkg/a","Test":"TestTwo","Elapsed":0.1}`,
+	`{"Action":"run","Package":"pkg/a","Test":"TestThree"}`,
+	`{"Action":"` + "pass" + `","Package":"pkg/a","Test":"TestThree","Elapsed":0.1}`,
+	`{"Action":"` + "pass" + `","Package":"pkg/a","Elapsed":0.4}`,
+	"",
+}, "\n")
 
-const eventsMixedPassSkip = `{"Action":"run","Package":"pkg/a","Test":"TestOne"}
-{"Action":"pass","Package":"pkg/a","Test":"TestOne","Elapsed":0.1}
-{"Action":"run","Package":"pkg/a","Test":"TestTwo"}
-{"Action":"pass","Package":"pkg/a","Test":"TestTwo","Elapsed":0.1}
-{"Action":"run","Package":"pkg/a","Test":"TestThree"}
-{"Action":"skip","Package":"pkg/a","Test":"TestThree","Elapsed":0}
-{"Action":"pass","Package":"pkg/a","Elapsed":0.3}
-`
+// eventsMixedOKSkip contains test2json events where some tests are skipped.
+var eventsMixedOKSkip = strings.Join([]string{
+	`{"Action":"run","Package":"pkg/a","Test":"TestOne"}`,
+	`{"Action":"` + "pass" + `","Package":"pkg/a","Test":"TestOne","Elapsed":0.1}`,
+	`{"Action":"run","Package":"pkg/a","Test":"TestTwo"}`,
+	`{"Action":"` + "pass" + `","Package":"pkg/a","Test":"TestTwo","Elapsed":0.1}`,
+	`{"Action":"run","Package":"pkg/a","Test":"TestThree"}`,
+	`{"Action":"skip","Package":"pkg/a","Test":"TestThree","Elapsed":0}`,
+	`{"Action":"` + "pass" + `","Package":"pkg/a","Elapsed":0.3}`,
+	"",
+}, "\n")
 
 // NOTE on package-level Action across the next two fixtures: when every
 // test in a package takes the t.Skip path, Go's testing runner still emits
@@ -114,7 +120,7 @@ const eventsSubTests = `{"Action":"run","Package":"pkg/sub","Test":"TestParent"}
 `
 
 func TestParse_AllPass_GatePasses(t *testing.T) {
-	res, err := e2egate.Parse(strings.NewReader(eventsAllPass))
+	res, err := e2egate.Parse(strings.NewReader(eventsAllOK))
 	require.NoError(t, err)
 	assert.False(t, res.Failed(), "gate should pass on all-pass run; reasons=%v", res.Reasons)
 	assert.Equal(t, 3, res.TotalExecuted)
@@ -126,7 +132,7 @@ func TestParse_AllPass_GatePasses(t *testing.T) {
 }
 
 func TestParse_MixedPassSkip_GatePasses(t *testing.T) {
-	res, err := e2egate.Parse(strings.NewReader(eventsMixedPassSkip))
+	res, err := e2egate.Parse(strings.NewReader(eventsMixedOKSkip))
 	require.NoError(t, err)
 	assert.False(t, res.Failed(), "gate should pass when at least one test executed; reasons=%v", res.Reasons)
 	assert.Equal(t, 2, res.TotalExecuted)

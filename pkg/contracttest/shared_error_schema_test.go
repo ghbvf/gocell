@@ -26,7 +26,7 @@ func sharedErrorSchemaPath(t *testing.T) string {
 func loadSharedErrorSchema(t *testing.T) *jsonschema.Schema {
 	t.Helper()
 	schemaPath := sharedErrorSchemaPath(t)
-	data, err := os.ReadFile(schemaPath)
+	data, err := os.ReadFile(filepath.Clean(schemaPath))
 	require.NoError(t, err, "read error-response-v1.schema.json")
 
 	var doc any

@@ -42,7 +42,9 @@ func setupTestHub(t *testing.T, handler rtws.MessageHandler) (*rtws.Hub, *httpte
 		t.Skipf("skipping: cannot listen on TCP (sandbox?): %v", err)
 		return nil, nil
 	}
-	ln.Close()
+	if err := ln.Close(); err != nil {
+		t.Logf("ln.Close: %v", err)
+	}
 
 	// Start hub in background (Register requires running state).
 	startErr := make(chan error, 1)
@@ -114,7 +116,11 @@ func TestUpgradeHandler_UpgradeFailureResponseIsPublic(t *testing.T) {
 
 	resp, err := server.Client().Get(server.URL + "/ws")
 	require.NoError(t, err)
-	defer resp.Body.Close()
+	defer func() {
+		if err := resp.Body.Close(); err != nil {
+			t.Logf("resp.Body.Close: %v", err)
+		}
+	}()
 	body, err := io.ReadAll(resp.Body)
 	require.NoError(t, err)
 

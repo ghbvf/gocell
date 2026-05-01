@@ -20,7 +20,11 @@ var (
 
 func TestLimiter_AllowsWithinRate(t *testing.T) {
 	l := New(Config{Rate: 10, Burst: 10})
-	defer l.Close(context.Background())
+	t.Cleanup(func() {
+		if err := l.Close(context.Background()); err != nil {
+			t.Logf("limiter close: %v", err)
+		}
+	})
 
 	for i := range 10 {
 		assert.True(t, l.Allow("10.0.0.1"), "request %d within burst should be allowed", i)
@@ -29,7 +33,11 @@ func TestLimiter_AllowsWithinRate(t *testing.T) {
 
 func TestLimiter_RejectsOverRate(t *testing.T) {
 	l := New(Config{Rate: 1, Burst: 1})
-	defer l.Close(context.Background())
+	t.Cleanup(func() {
+		if err := l.Close(context.Background()); err != nil {
+			t.Logf("limiter close: %v", err)
+		}
+	})
 
 	assert.True(t, l.Allow("10.0.0.1"), "first request should be allowed")
 	assert.False(t, l.Allow("10.0.0.1"), "second request should be rejected (burst exhausted)")
@@ -37,7 +45,11 @@ func TestLimiter_RejectsOverRate(t *testing.T) {
 
 func TestLimiter_PerIPIsolation(t *testing.T) {
 	l := New(Config{Rate: 1, Burst: 1})
-	defer l.Close(context.Background())
+	t.Cleanup(func() {
+		if err := l.Close(context.Background()); err != nil {
+			t.Logf("limiter close: %v", err)
+		}
+	})
 
 	assert.True(t, l.Allow("10.0.0.1"), "first IP first request")
 	assert.True(t, l.Allow("10.0.0.2"), "second IP first request — independent bucket")
@@ -46,7 +58,11 @@ func TestLimiter_PerIPIsolation(t *testing.T) {
 
 func TestLimiter_Window(t *testing.T) {
 	l := New(Config{Rate: 100, Burst: 200})
-	defer l.Close(context.Background())
+	t.Cleanup(func() {
+		if err := l.Close(context.Background()); err != nil {
+			t.Logf("limiter close: %v", err)
+		}
+	})
 
 	window, limit := l.Window()
 	assert.Equal(t, time.Second, window, "window should be 1 second")
@@ -60,7 +76,11 @@ func TestLimiter_StaleEntryCleanup(t *testing.T) {
 		CleanupInterval: 50 * time.Millisecond,
 		StaleAfter:      100 * time.Millisecond,
 	})
-	defer l.Close(context.Background())
+	t.Cleanup(func() {
+		if err := l.Close(context.Background()); err != nil {
+			t.Logf("limiter close: %v", err)
+		}
+	})
 
 	// Create entries.
 	l.Allow("stale-ip-1")
@@ -76,7 +96,11 @@ func TestLimiter_StaleEntryCleanup(t *testing.T) {
 
 func TestLimiter_ConcurrentAccess(t *testing.T) {
 	l := New(Config{Rate: 1000, Burst: 1000})
-	defer l.Close(context.Background())
+	t.Cleanup(func() {
+		if err := l.Close(context.Background()); err != nil {
+			t.Logf("limiter close: %v", err)
+		}
+	})
 
 	var wg sync.WaitGroup
 	for i := range 100 {
@@ -93,7 +117,11 @@ func TestLimiter_ConcurrentAccess(t *testing.T) {
 
 func TestLimiter_DefaultConfig(t *testing.T) {
 	l := New(Config{}) // zero-value config → sensible defaults
-	defer l.Close(context.Background())
+	t.Cleanup(func() {
+		if err := l.Close(context.Background()); err != nil {
+			t.Logf("limiter close: %v", err)
+		}
+	})
 
 	// Should not panic and should allow requests.
 	require.True(t, l.Allow("default-test"))

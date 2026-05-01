@@ -177,7 +177,7 @@ replacements:
 		if strings.HasSuffix(filepath.ToSlash(path), "/README.md") {
 			return nil, errors.New("permission denied")
 		}
-		return os.ReadFile(path)
+		return os.ReadFile(filepath.Clean(path))
 	}
 
 	results = v.validateDOCNAME01(true)

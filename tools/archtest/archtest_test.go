@@ -22,9 +22,9 @@ import (
 // This avoids hardcoding the module path, which would silently disable all rules on rename or /v2 bump.
 func readModulePath(t *testing.T, modRoot string) string {
 	t.Helper()
-	f, err := os.Open(filepath.Join(modRoot, "go.mod"))
+	f, err := os.Open(filepath.Clean(filepath.Join(modRoot, "go.mod")))
 	require.NoError(t, err, "cannot open go.mod")
-	defer f.Close()
+	defer func() { require.NoError(t, f.Close()) }()
 
 	scanner := bufio.NewScanner(f)
 	for scanner.Scan() {
@@ -235,10 +235,12 @@ func checkCellOwnedSubpackage(modPrefix, srcPath, imp, srcLayer string) *violati
 			return nil
 		}
 		return &violation{
-			Rule:    "LAYER-06",
-			Pkg:     srcPath,
-			Import:  imp,
-			Message: fmt.Sprintf("LAYER-06: %s imports %s (cell-owned subpackage; only %s* / cmd/* / examples/* may import it)", srcPath, imp, ownerPrefix),
+			Rule:   "LAYER-06",
+			Pkg:    srcPath,
+			Import: imp,
+			Message: fmt.Sprintf(
+				"LAYER-06: %s imports %s (cell-owned subpackage; only %s* / cmd/* / examples/* may import it)",
+				srcPath, imp, ownerPrefix),
 		}
 	}
 	return nil
@@ -590,7 +592,10 @@ func TestLayeringRules(t *testing.T) {
 			for _, imp := range pkg.Imports {
 				if imp == routerPkg {
 					layer07violations = append(layer07violations,
-						fmt.Sprintf("LAYER-07: %s imports %s (cells must not import the router directly; use cell.RouteMux / cell.RouteGroup)", pkg.ImportPath, imp))
+						fmt.Sprintf(
+							"LAYER-07: %s imports %s (cells must not import the router directly;"+
+								" use cell.RouteMux / cell.RouteGroup)",
+							pkg.ImportPath, imp))
 				}
 			}
 		}
@@ -666,7 +671,7 @@ func grepInDir(t *testing.T, root, target string, excludeDirs ...string) []strin
 		if !strings.HasSuffix(path, ".go") {
 			return nil
 		}
-		data, readErr := os.ReadFile(path)
+		data, readErr := os.ReadFile(filepath.Clean(path))
 		if readErr != nil {
 			return readErr
 		}
@@ -1551,7 +1556,7 @@ func TestCorebundleMainLineLimit(t *testing.T) {
 	const maxLines = 30
 	root := findModuleRoot(t)
 	path := filepath.Join(root, "cmd", "corebundle", "main.go")
-	data, err := os.ReadFile(path)
+	data, err := os.ReadFile(filepath.Clean(path))
 	require.NoError(t, err, "read %s", path)
 	lines := countLines(data)
 	assert.LessOrEqualf(t, lines, maxLines,

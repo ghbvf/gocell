@@ -21,6 +21,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/worker"
 	"github.com/ghbvf/gocell/pkg/aeadutil"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/logutil"
 	"github.com/ghbvf/gocell/pkg/secutil"
 )
 
@@ -53,8 +54,8 @@ func applyNamespaceFromEnv(raw *vaultapi.Client) string {
 		return ""
 	}
 	raw.SetNamespace(ns)
-	//nolint:gosec // G706: structured slog field, not string concatenation
-	slog.Info("vault-transit: namespace configured", slog.String("namespace", ns))
+
+	slog.Info("vault-transit: namespace configured", slog.String("namespace", logutil.Sanitize(ns)))
 	return ns
 }
 

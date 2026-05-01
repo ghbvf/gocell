@@ -145,7 +145,7 @@ func testSEC02ListenerAuthChainNonNil(t *testing.T, root string) {
 // findWithListenerNilAuthChain parses path and returns line numbers of every
 // bootstrap.WithListener CallExpr where the 3rd argument is the identifier nil.
 func findWithListenerNilAuthChain(path string) ([]int, error) {
-	data, err := os.ReadFile(path)
+	data, err := os.ReadFile(filepath.Clean(path))
 	if err != nil {
 		return nil, err
 	}
@@ -229,7 +229,7 @@ func testSEC06InternalListenerMustNotUseAuthNone(t *testing.T, root string) {
 }
 
 func findInternalListenerAuthNoneChain(path string) ([]int, error) {
-	data, err := os.ReadFile(path)
+	data, err := os.ReadFile(filepath.Clean(path))
 	if err != nil {
 		return nil, err
 	}
@@ -427,7 +427,7 @@ func testSEC03AdapterTLSValidation(t *testing.T, root string) {
 		pkgCallsValidate := false
 
 		for _, f := range files {
-			data, err := os.ReadFile(f)
+			data, err := os.ReadFile(filepath.Clean(f))
 			if err != nil {
 				continue
 			}
@@ -493,7 +493,7 @@ func testSEC04WebSocketOriginVerify(t *testing.T, root string) {
 // findInsecureSkipVerifyAssign parses path and returns line numbers of every
 // AssignStmt of the form `opts.InsecureSkipVerify = true`.
 func findInsecureSkipVerifyAssign(path string) ([]int, error) {
-	data, err := os.ReadFile(path)
+	data, err := os.ReadFile(filepath.Clean(path))
 	if err != nil {
 		return nil, err
 	}
@@ -598,7 +598,7 @@ func findExampleComposeCredentialViolations(root string) ([]string, error) {
 }
 
 func findComposeCredentialViolations(root, path string) ([]string, error) {
-	data, err := os.ReadFile(path)
+	data, err := os.ReadFile(filepath.Clean(path))
 	if err != nil {
 		return nil, err
 	}

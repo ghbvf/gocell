@@ -42,10 +42,13 @@ func TestTransitKeyProvider_CacheVersionMetrics_ReportsCachedLatestVersion(t *te
 
 func assertCachedKeyVersionMetric(t *testing.T, collector prometheus.Collector, version int) {
 	t.Helper()
-	expected := strings.NewReader(fmt.Sprintf(`# HELP gocell_vault_cached_key_version Latest Vault Transit key version cached by this process; 0 means cache miss.
-# TYPE gocell_vault_cached_key_version gauge
-gocell_vault_cached_key_version{key_name="gocell-config",mount_path="transit"} %d
-`, version))
+	helpLine := "# HELP gocell_vault_cached_key_version " +
+		"Latest Vault Transit key version cached by this process; 0 means cache miss."
+	metricLine := fmt.Sprintf(
+		"gocell_vault_cached_key_version{key_name=\"gocell-config\",mount_path=\"transit\"} %d",
+		version,
+	)
+	expected := strings.NewReader(helpLine + "\n# TYPE gocell_vault_cached_key_version gauge\n" + metricLine + "\n")
 	require.NoError(t, testutil.CollectAndCompare(collector, expected, "gocell_vault_cached_key_version"))
 }
 

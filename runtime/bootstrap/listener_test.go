@@ -104,7 +104,7 @@ func TestWithListenerNet_RealListener(t *testing.T) {
 	if err != nil {
 		t.Skip("cannot bind test listener (sandbox):", err)
 	}
-	defer ln.Close()
+	defer closeListener(t, ln)
 
 	b := New(
 		WithListener(

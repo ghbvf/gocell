@@ -150,7 +150,8 @@ type enqueueRequest struct {
 // This is an operator/management endpoint — only admin or operator roles
 // may enqueue commands. Dequeue, Report, Ack, and ExtendLease are device-facing
 // (subject == deviceID) with admin bypass.
-// Deferred (S43, tracked by PERMISSION-BASED-AUTHZ-01): role-name literals are migrated to permission-based authz when that backlog item lands.
+// Deferred (S43, tracked by PERMISSION-BASED-AUTHZ-01): role-name literals are migrated
+// to permission-based authz when that backlog item lands.
 func (h *Handler) HandleEnqueue(w http.ResponseWriter, r *http.Request) {
 	deviceID := r.PathValue("id")
 
@@ -174,7 +175,8 @@ func (h *Handler) HandleEnqueue(w http.ResponseWriter, r *http.Request) {
 //
 // Trust boundary: subject must match deviceID (device authenticates as itself)
 // or hold admin role.
-// Deferred (S43, tracked by PERMISSION-BASED-AUTHZ-01): role-name literals are migrated to permission-based authz when that backlog item lands.
+// Deferred (S43, tracked by PERMISSION-BASED-AUTHZ-01): role-name literals are migrated
+// to permission-based authz when that backlog item lands.
 func (h *Handler) HandleDequeue(w http.ResponseWriter, r *http.Request) {
 	deviceID := r.PathValue("id")
 

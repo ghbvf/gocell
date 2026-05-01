@@ -286,7 +286,7 @@ func TestAuditCore_RouteGroups(t *testing.T) {
 	assert.NotNil(t, groups[0].Register)
 
 	mux := &stubMux{}
-	groups[0].Register(mux)
+	require.NoError(t, groups[0].Register(mux))
 	assert.GreaterOrEqual(t, mux.handleCount, 1, "should register at least 1 route pattern")
 }
 
@@ -337,7 +337,8 @@ func TestAuditCore_RouteQueryEntries(t *testing.T) {
 
 	r := router.MustNew()
 	for _, rg := range c.RouteGroups() {
-		r.Route(rg.Prefix, func(sub cell.RouteMux) { rg.Register(sub) })
+		rg := rg
+		r.Route(rg.Prefix, func(sub cell.RouteMux) { require.NoError(t, rg.Register(sub)) })
 	}
 	require.NoError(t, r.FinalizeAuth())
 
@@ -430,7 +431,8 @@ func TestAuditCore_Wiring_StaleCursor_DemoVsDurable(t *testing.T) {
 
 			r := router.MustNew()
 			for _, rg := range c.RouteGroups() {
-				r.Route(rg.Prefix, func(sub cell.RouteMux) { rg.Register(sub) })
+				rg := rg
+				r.Route(rg.Prefix, func(sub cell.RouteMux) { require.NoError(t, rg.Register(sub)) })
 			}
 			require.NoError(t, r.FinalizeAuth())
 

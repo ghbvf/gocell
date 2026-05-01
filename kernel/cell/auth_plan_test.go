@@ -109,7 +109,7 @@ func TestMustNewAuthJWT_NilPanics(t *testing.T) {
 
 func TestNewAuthJWTFromAssembly_NilReturnsError(t *testing.T) {
 	t.Parallel()
-	if _, err := cell.NewAuthJWTFromAssembly(nil); err == nil { //nolint:staticcheck // SA1012: deliberate nil arg
+	if _, err := cell.NewAuthJWTFromAssembly(nil); err == nil {
 		t.Error("expected error for nil assembly, got nil")
 	}
 }
@@ -129,7 +129,7 @@ func TestMustNewAuthJWTFromAssembly_NilPanics(t *testing.T) {
 			t.Error("expected panic for nil assembly, got none")
 		}
 	}()
-	cell.MustNewAuthJWTFromAssembly(nil) //nolint:staticcheck // SA1012: deliberate nil arg to test panic guard
+	cell.MustNewAuthJWTFromAssembly(nil)
 }
 
 func TestNewAuthServiceToken_NilStoreReturnsError(t *testing.T) {

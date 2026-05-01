@@ -181,7 +181,7 @@ func collectGoFiles(root string) ([]string, error) {
 // paths it declares. Uses go/parser for correctness; does not execute any Go
 // toolchain commands.
 func parseImports(path string) ([]string, error) {
-	data, err := os.ReadFile(path)
+	data, err := os.ReadFile(filepath.Clean(path))
 	if err != nil {
 		return nil, err
 	}
@@ -206,7 +206,7 @@ func parseImports(path string) ([]string, error) {
 // false positives. Parse failures are returned to make malformed files fail
 // the archtest directly.
 func findCallExpr(path, pkgIdent, selName string) ([]int, error) {
-	data, err := os.ReadFile(path)
+	data, err := os.ReadFile(filepath.Clean(path))
 	if err != nil {
 		return nil, err
 	}

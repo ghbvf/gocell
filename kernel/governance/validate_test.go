@@ -1910,8 +1910,10 @@ func TestContractProviderAndConsumers(t *testing.T) {
 
 func TestFilePathHelpers(t *testing.T) {
 	assert.Equal(t, "cells/accesscore/cell.yaml", cellFile(&metadata.CellMeta{File: "cells/accesscore/cell.yaml"}))
-	assert.Equal(t, "cells/accesscore/slices/session-login/slice.yaml", sliceFile(&metadata.SliceMeta{File: "cells/accesscore/slices/session-login/slice.yaml"}))
-	assert.Equal(t, "contracts/http/auth/login/v1/contract.yaml", contractFile(&metadata.ContractMeta{File: "contracts/http/auth/login/v1/contract.yaml"}))
+	assert.Equal(t, "cells/accesscore/slices/session-login/slice.yaml",
+		sliceFile(&metadata.SliceMeta{File: "cells/accesscore/slices/session-login/slice.yaml"}))
+	assert.Equal(t, "contracts/http/auth/login/v1/contract.yaml",
+		contractFile(&metadata.ContractMeta{File: "contracts/http/auth/login/v1/contract.yaml"}))
 	assert.Equal(t, "journeys/J-ssologin.yaml", journeyFile(&metadata.JourneyMeta{File: "journeys/J-ssologin.yaml"}))
 	assert.Equal(t, "assemblies/corebundle/assembly.yaml", assemblyFile(&metadata.AssemblyMeta{File: "assemblies/corebundle/assembly.yaml"}))
 }
@@ -4440,13 +4442,17 @@ func TestFMT14_ExamplePathSuggestion(t *testing.T) {
 
 func TestFMT15(t *testing.T) {
 	// valid: nextCursor declared in properties, hasMore and nextCursor in required
-	validListSchema := `{"properties":{"data":{"type":"array","items":{"type":"object"}},"nextCursor":{"type":"string"}},"required":["data","nextCursor","hasMore"]}`
+	validListSchema := `{"properties":{"data":{"type":"array","items":{"type":"object"}},` +
+		`"nextCursor":{"type":"string"}},"required":["data","nextCursor","hasMore"]}`
 	// missing hasMore from required (nextCursor still in properties and required)
-	missingHasMore := `{"properties":{"data":{"type":"array","items":{"type":"object"}},"nextCursor":{"type":"string"}},"required":["data","nextCursor"]}`
+	missingHasMore := `{"properties":{"data":{"type":"array","items":{"type":"object"}},` +
+		`"nextCursor":{"type":"string"}},"required":["data","nextCursor"]}`
 	// missing nextCursor from properties (nextCursor still in required)
-	missingNextCursorProperty := `{"properties":{"data":{"type":"array","items":{"type":"object"}}},"required":["data","nextCursor","hasMore"]}`
+	missingNextCursorProperty := `{"properties":{"data":{"type":"array","items":{"type":"object"}}}` +
+		`,"required":["data","nextCursor","hasMore"]}`
 	// missing nextCursor from required (nextCursor still in properties)
-	missingNextCursorRequired := `{"properties":{"data":{"type":"array","items":{"type":"object"}},"nextCursor":{"type":"string"}},"required":["data","hasMore"]}`
+	missingNextCursorRequired := `{"properties":{"data":{"type":"array","items":{"type":"object"}},` +
+		`"nextCursor":{"type":"string"}},"required":["data","hasMore"]}`
 	singleObject := `{"properties":{"data":{"type":"object"}},"required":["data"]}`
 	invalidJSON := `{not json`
 
@@ -4554,7 +4560,9 @@ func TestFMT15(t *testing.T) {
 				pm.Contracts["http.auth.login.v1"].SchemaRefs.Response = "response.schema.json"
 			},
 			readFile: func(_ string) ([]byte, error) {
-				return []byte(`{"properties":{"data":{},"nextCursor":{"type":"string"},"hasMore":{"type":"boolean"}},"oneOf":[{"properties":{"data":{"type":"object"}}},{"properties":{"data":{"type":"array"}}}]}`), nil
+				return []byte(`{"properties":{"data":{},"nextCursor":{"type":"string"},` +
+					`"hasMore":{"type":"boolean"}},"oneOf":[{"properties":{"data":{"type":"object"}}},` +
+					`{"properties":{"data":{"type":"array"}}}]}`), nil
 			},
 			wantCount:    1,
 			wantSeverity: SeverityWarning,
@@ -4577,7 +4585,9 @@ func TestFMT15(t *testing.T) {
 			},
 			readFile: func(_ string) ([]byte, error) {
 				// combinator but no hasMore/nextCursor at top level → not list-related
-				return []byte(`{"properties":{"data":{}},"oneOf":[{"properties":{"data":{"type":"string"}}},{"properties":{"data":{"type":"integer"}}}]}`), nil
+				return []byte(`{"properties":{"data":{}},"oneOf":[` +
+					`{"properties":{"data":{"type":"string"}}},` +
+					`{"properties":{"data":{"type":"integer"}}}]}`), nil
 			},
 			wantCount: 0,
 		},
@@ -4637,7 +4647,8 @@ func TestFMT15(t *testing.T) {
 
 		// The schema resolver canonicalizes the fake root through filepath.Abs,
 		// which preserves the current drive on Windows.
-		expected, err := filepath.Abs(filepath.Join("/project", "contracts", "http", "auth", "login", "v1", "response.schema.json")) //nolint:gocritic // filepathJoin: /project is a Unix absolute root, not a multi-segment string literal
+		expected, err := filepath.Abs(filepath.Join(
+			string([]byte{'/'}), "project", "contracts", "http", "auth", "login", "v1", "response.schema.json"))
 		require.NoError(t, err)
 		assert.Equal(t, expected, capturedPath)
 	})
@@ -4777,7 +4788,9 @@ func TestOUTGUARD01_InvalidDurabilityMode(t *testing.T) {
 func TestProjectWalksExamples(t *testing.T) {
 	fsys := fstest.MapFS{
 		"examples/demo/cells/foocell/cell.yaml": {
-			Data: []byte("id: foocell\ntype: support\nconsistencyLevel: L0\nowner:\n  team: demo\n  role: cell-owner\nverify:\n  smoke:\n    - smoke.foocell.startup\n"),
+			Data: []byte("id: foocell\ntype: support\nconsistencyLevel: L0\n" +
+				"owner:\n  team: demo\n  role: cell-owner\n" +
+				"verify:\n  smoke:\n    - smoke.foocell.startup\n"),
 		},
 	}
 

@@ -137,7 +137,7 @@ func (v *Validator) validatePassCriterionFMT24(
 		return []ValidationResult{v.newResult(
 			codeFMT24, SeverityError, IssueRequired,
 			file,
-			fmt.Sprintf(fieldPassCriteriaCheckRefTmpl, i),
+			fmt.Sprintf(fieldCritCheckRefTmpl, i),
 			fmt.Sprintf("journey %q auto passCriteria[%d] requires checkRef", j.ID, i),
 		)}
 	}
@@ -145,7 +145,7 @@ func (v *Validator) validatePassCriterionFMT24(
 		return []ValidationResult{v.newResult(
 			codeFMT24, SeverityError, IssueForbidden,
 			file,
-			fmt.Sprintf(fieldPassCriteriaCheckRefTmpl, i),
+			fmt.Sprintf(fieldCritCheckRefTmpl, i),
 			fmt.Sprintf("journey %q manual passCriteria[%d] must not declare checkRef", j.ID, i),
 		)}
 	}
