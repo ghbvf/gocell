@@ -27,6 +27,11 @@ linters:
     - funlen
     # 依赖管控
     - gomodguard
+    - depguard
+    # 禁止使用特定函数/包（observability 规范）
+    - forbidigo
+    # 代码风格（dot-imports 等）
+    - revive
     # nolint 治理：所有 //nolint:... 必须带 // <reason>，且必须指明 linter 名
     - nolintlint
 
@@ -109,6 +114,66 @@ linters:
       # the prefix during PR review.
       require-explanation: true
       require-specific: true
+
+    depguard:
+      rules:
+        kernel-isolation:
+          files:
+            - "**/kernel/**"
+            - "!**/kernel/**/*_test.go"
+          deny:
+            - pkg: github.com/ghbvf/gocell/runtime
+              desc: "LAYER-01: kernel/ 不依赖 runtime/（仅 stdlib + pkg/ + gopkg.in/yaml.v3）"
+            - pkg: github.com/ghbvf/gocell/adapters
+              desc: "LAYER-01: kernel/ 不依赖 adapters/"
+            - pkg: github.com/ghbvf/gocell/cells
+              desc: "LAYER-01: kernel/ 不依赖 cells/"
+            - pkg: github.com/ghbvf/gocell/cmd
+              desc: "LAYER-01: kernel/ 不依赖 cmd/"
+            - pkg: github.com/ghbvf/gocell/examples
+              desc: "LAYER-01: kernel/ 不依赖 examples/"
+        cells-no-adapters:
+          files:
+            - "**/cells/**"
+            - "!**/cells/**/*_test.go"
+          deny:
+            - pkg: github.com/ghbvf/gocell/adapters
+              desc: "LAYER-02: cells/ 通过 interface 与 adapter 解耦"
+        runtime-no-cells-or-adapters:
+          files:
+            - "**/runtime/**"
+            - "!**/runtime/**/*_test.go"
+          deny:
+            - pkg: github.com/ghbvf/gocell/cells
+              desc: "LAYER-03: runtime/ 不依赖 cells/"
+            - pkg: github.com/ghbvf/gocell/adapters
+              desc: "LAYER-03: runtime/ 不依赖 adapters/"
+        adapters-no-cells-or-cmd:
+          files:
+            - "**/adapters/**"
+            - "!**/adapters/**/*_test.go"
+          deny:
+            - pkg: github.com/ghbvf/gocell/cells
+              desc: "LAYER-04: adapters/ 不依赖 cells/"
+            - pkg: github.com/ghbvf/gocell/cmd
+              desc: "LAYER-04: adapters/ 不依赖 cmd/"
+            - pkg: github.com/ghbvf/gocell/examples
+              desc: "LAYER-04: adapters/ 不依赖 examples/"
+
+    forbidigo:
+      forbid:
+        - pattern: '^log\.(Printf|Println|Print|Fatal|Fatalf|Fatalln|Panic|Panicf|Panicln)$'
+          msg: "use log/slog (CLAUDE.md observability rule)"
+        - pattern: '^fmt\.(Print|Println|Printf)$'
+          msg: "use slog (production); cmd/ + examples/ are CLI exempt via files filter"
+      analyze-types: true
+      exclude-godoc-examples: true
+
+    revive:
+      # Minimal opt-in: only the rules whose semantics are CLAUDE.md-anchored.
+      # dot-imports replaces tools/archtest/dot_import_test.go's path-grep walk.
+      rules:
+        - name: dot-imports
 
     gomodguard:
       blocked:
@@ -261,6 +326,15 @@ linters:
       - path: ^examples/
         linters:
           - funlen
+      # cmd/ + examples/ are CLI / demo entrypoints; fmt.Print* is legitimate stdout
+      - path: ^cmd/
+        linters:
+          - forbidigo
+        text: 'fmt\.(Print|Println|Printf)'
+      - path: ^examples/
+        linters:
+          - forbidigo
+        text: 'fmt\.(Print|Println|Printf)'
     paths:
       - generated
       - vendor
@@ -268,3 +342,8 @@ linters:
 formatters:
   enable:
     - gofmt
+    - goimports
+  settings:
+    goimports:
+      local-prefixes:
+        - github.com/ghbvf/gocell

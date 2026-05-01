@@ -107,7 +107,8 @@ var cellOwnedSubpackages = map[string]string{
 	"cells/configcore/postgres":     "cells/configcore/",
 }
 
-// checkLayering runs all 5 layering rules against the given packages and returns violations.
+// checkLayering runs 4 metadata-aware layering rules (LAYER-05/06/09/10).
+// LAYER-01..04 path rules are owned by depguard in `.golangci.yml`.
 // modPrefix must include trailing slash (e.g. "github.com/ghbvf/gocell/").
 func checkLayering(modPrefix string, pkgs []pkgInfo) []violation {
 	var out []violation
@@ -120,36 +121,6 @@ func checkLayering(modPrefix string, pkgs []pkgInfo) []violation {
 			impLayer := layerOf(modPrefix, imp)
 			if impLayer == "" {
 				continue // external package, skip
-			}
-
-			var rule string
-			switch {
-			// LAYER-01: kernel/ may only import kernel/ and pkg/ (allow-list).
-			// Any other internal module import is forbidden.
-			case srcLayer == "kernel" && impLayer != "kernel" && impLayer != "pkg":
-				rule = "LAYER-01"
-
-			// LAYER-02: cells/ must not import adapters/
-			case srcLayer == "cells" && impLayer == "adapters":
-				rule = "LAYER-02"
-
-			// LAYER-03: runtime/ must not import cells/ or adapters/
-			case srcLayer == "runtime" && (impLayer == "cells" || impLayer == "adapters"):
-				rule = "LAYER-03"
-
-			// LAYER-04: adapters/ must not import cells/, cmd/, examples/
-			case srcLayer == "adapters" && (impLayer == "cells" || impLayer == "cmd" || impLayer == "examples"):
-				rule = "LAYER-04"
-			}
-
-			if rule != "" {
-				out = append(out, violation{
-					Rule:    rule,
-					Pkg:     pkg.ImportPath,
-					Import:  imp,
-					Message: fmt.Sprintf("%s: %s imports %s", rule, pkg.ImportPath, imp),
-				})
-				continue
 			}
 
 			// LAYER-05: no cross-cell internal imports.
@@ -552,18 +523,7 @@ func TestLayeringRules(t *testing.T) {
 		}
 	}
 
-	t.Run("LAYER-01_kernel_no_upward_imports", func(t *testing.T) {
-		assert.Empty(t, byRule["LAYER-01"], "kernel/ must not import runtime/, adapters/, or cells/")
-	})
-	t.Run("LAYER-02_cells_no_adapter_imports", func(t *testing.T) {
-		assert.Empty(t, byRule["LAYER-02"], "cells/ must not import adapters/")
-	})
-	t.Run("LAYER-03_runtime_no_upward_imports", func(t *testing.T) {
-		assert.Empty(t, byRule["LAYER-03"], "runtime/ must not import cells/ or adapters/")
-	})
-	t.Run("LAYER-04_adapters_no_cell_cmd_example_imports", func(t *testing.T) {
-		assert.Empty(t, byRule["LAYER-04"], "adapters/ must not import cells/, cmd/, or examples/")
-	})
+	// LAYER-01..04 are path-level rules owned by depguard in .golangci.yml.
 	t.Run("LAYER-05_no_cross_cell_internal_imports", func(t *testing.T) {
 		assert.Empty(t, byRule["LAYER-05"], "cells must not import another cell's internal/ packages")
 	})
@@ -923,155 +883,13 @@ func TestIsInternal(t *testing.T) {
 
 func TestCheckLayering(t *testing.T) {
 	const mod = "github.com/ghbvf/gocell/"
+	// Note: LAYER-01..04 path rules are owned by depguard in .golangci.yml.
+	// Only LAYER-05/06/09/10 (metadata-aware rules) are tested here.
 	tests := []struct {
 		name      string
 		pkgs      []pkgInfo
 		wantRules []string // expected rule codes in violations
 	}{
-		{
-			name: "LAYER-01 violation: kernel imports runtime",
-			pkgs: []pkgInfo{
-				{ImportPath: "github.com/ghbvf/gocell/kernel/cell", Imports: []string{
-					"fmt",
-					"github.com/ghbvf/gocell/pkg/errcode",
-					"github.com/ghbvf/gocell/runtime/auth", // forbidden
-				}},
-			},
-			wantRules: []string{"LAYER-01"},
-		},
-		{
-			name: "LAYER-01 violation: kernel imports adapters",
-			pkgs: []pkgInfo{
-				{ImportPath: "github.com/ghbvf/gocell/kernel/outbox", Imports: []string{
-					"github.com/ghbvf/gocell/adapters/postgres", // forbidden
-				}},
-			},
-			wantRules: []string{"LAYER-01"},
-		},
-		{
-			name: "LAYER-01 violation: kernel imports cells",
-			pkgs: []pkgInfo{
-				{ImportPath: "github.com/ghbvf/gocell/kernel/assembly", Imports: []string{
-					"github.com/ghbvf/gocell/cells/accesscore", // forbidden
-				}},
-			},
-			wantRules: []string{"LAYER-01"},
-		},
-		{
-			name: "LAYER-01 violation: kernel imports cmd (allow-list catch-all)",
-			pkgs: []pkgInfo{
-				{ImportPath: "github.com/ghbvf/gocell/kernel/cell", Imports: []string{
-					"github.com/ghbvf/gocell/cmd/gocell", // forbidden by allow-list
-				}},
-			},
-			wantRules: []string{"LAYER-01"},
-		},
-		{
-			name: "LAYER-01 clean: kernel imports kernel (allowed)",
-			pkgs: []pkgInfo{
-				{ImportPath: "github.com/ghbvf/gocell/kernel/governance", Imports: []string{
-					"github.com/ghbvf/gocell/kernel/metadata",
-					"github.com/ghbvf/gocell/kernel/registry",
-				}},
-			},
-			wantRules: nil,
-		},
-		{
-			name: "LAYER-01 clean: kernel imports pkg (allowed)",
-			pkgs: []pkgInfo{
-				{ImportPath: "github.com/ghbvf/gocell/kernel/cell", Imports: []string{
-					"fmt",
-					"github.com/ghbvf/gocell/pkg/errcode",
-					"github.com/ghbvf/gocell/pkg/ctxkeys",
-				}},
-			},
-			wantRules: nil,
-		},
-		{
-			name: "LAYER-02 violation: cells imports adapters",
-			pkgs: []pkgInfo{
-				{ImportPath: "github.com/ghbvf/gocell/cells/accesscore", Imports: []string{
-					"github.com/ghbvf/gocell/kernel/cell",
-					"github.com/ghbvf/gocell/adapters/postgres", // forbidden
-				}},
-			},
-			wantRules: []string{"LAYER-02"},
-		},
-		{
-			name: "LAYER-02 clean: cells imports kernel + runtime (allowed)",
-			pkgs: []pkgInfo{
-				{ImportPath: "github.com/ghbvf/gocell/cells/accesscore", Imports: []string{
-					"github.com/ghbvf/gocell/kernel/cell",
-					"github.com/ghbvf/gocell/runtime/auth",
-				}},
-			},
-			wantRules: nil,
-		},
-		{
-			name: "LAYER-03 violation: runtime imports cells",
-			pkgs: []pkgInfo{
-				{ImportPath: "github.com/ghbvf/gocell/runtime/eventbus", Imports: []string{
-					"github.com/ghbvf/gocell/cells/auditcore", // forbidden
-				}},
-			},
-			wantRules: []string{"LAYER-03"},
-		},
-		{
-			name: "LAYER-03 violation: runtime imports adapters",
-			pkgs: []pkgInfo{
-				{ImportPath: "github.com/ghbvf/gocell/runtime/config", Imports: []string{
-					"github.com/ghbvf/gocell/adapters/redis", // forbidden
-				}},
-			},
-			wantRules: []string{"LAYER-03"},
-		},
-		{
-			name: "LAYER-03 clean: runtime imports kernel + pkg (allowed)",
-			pkgs: []pkgInfo{
-				{ImportPath: "github.com/ghbvf/gocell/runtime/eventbus", Imports: []string{
-					"github.com/ghbvf/gocell/kernel/outbox",
-					"github.com/ghbvf/gocell/pkg/errcode",
-				}},
-			},
-			wantRules: nil,
-		},
-		{
-			name: "LAYER-04 violation: adapters imports cells",
-			pkgs: []pkgInfo{
-				{ImportPath: "github.com/ghbvf/gocell/adapters/redis", Imports: []string{
-					"github.com/ghbvf/gocell/cells/configcore", // forbidden
-				}},
-			},
-			wantRules: []string{"LAYER-04"},
-		},
-		{
-			name: "LAYER-04 violation: adapters imports cmd",
-			pkgs: []pkgInfo{
-				{ImportPath: "github.com/ghbvf/gocell/adapters/postgres", Imports: []string{
-					"github.com/ghbvf/gocell/cmd/gocell", // forbidden
-				}},
-			},
-			wantRules: []string{"LAYER-04"},
-		},
-		{
-			name: "LAYER-04 violation: adapters imports examples",
-			pkgs: []pkgInfo{
-				{ImportPath: "github.com/ghbvf/gocell/adapters/redis", Imports: []string{
-					"github.com/ghbvf/gocell/examples/ssobff", // forbidden
-				}},
-			},
-			wantRules: []string{"LAYER-04"},
-		},
-		{
-			name: "LAYER-04 clean: adapters imports kernel + runtime (allowed)",
-			pkgs: []pkgInfo{
-				{ImportPath: "github.com/ghbvf/gocell/adapters/postgres", Imports: []string{
-					"github.com/ghbvf/gocell/kernel/persistence",
-					"github.com/ghbvf/gocell/runtime/observability/logging",
-				}},
-			},
-			wantRules: nil,
-		},
 		{
 			name: "LAYER-05 violation: cross-cell internal import",
 			pkgs: []pkgInfo{
@@ -1127,20 +945,6 @@ func TestCheckLayering(t *testing.T) {
 			wantRules: []string{"LAYER-06"},
 		},
 		{
-			// Runtime→cell imports are already caught by LAYER-03 before
-			// LAYER-06 has a chance to fire; LAYER-06 is scoped to cell→cell
-			// cases that LAYER-03 does not cover. We keep the case to lock
-			// the precedence: LAYER-03 fires first (stronger signal) and
-			// LAYER-06 is not needed here.
-			name: "LAYER-03 covers runtime importing cell-owned subpkg",
-			pkgs: []pkgInfo{
-				{ImportPath: "github.com/ghbvf/gocell/runtime/bootstrap", Imports: []string{
-					"github.com/ghbvf/gocell/cells/accesscore/initialadmin",
-				}},
-			},
-			wantRules: []string{"LAYER-03"},
-		},
-		{
 			name: "LAYER-06 clean: accesscore itself imports initialadmin (owner)",
 			pkgs: []pkgInfo{
 				{ImportPath: "github.com/ghbvf/gocell/cells/accesscore", Imports: []string{
@@ -1175,21 +979,6 @@ func TestCheckLayering(t *testing.T) {
 				}},
 			},
 			wantRules: nil,
-		},
-		{
-			name: "multiple violations across rules",
-			pkgs: []pkgInfo{
-				{ImportPath: "github.com/ghbvf/gocell/kernel/cell", Imports: []string{
-					"github.com/ghbvf/gocell/runtime/auth",
-				}},
-				{ImportPath: "github.com/ghbvf/gocell/cells/accesscore", Imports: []string{
-					"github.com/ghbvf/gocell/adapters/postgres",
-				}},
-				{ImportPath: "github.com/ghbvf/gocell/runtime/worker", Imports: []string{
-					"github.com/ghbvf/gocell/adapters/redis",
-				}},
-			},
-			wantRules: []string{"LAYER-01", "LAYER-02", "LAYER-03"},
 		},
 		{
 			name: "clean: cmd imports all layers (no rule restricts cmd)",
@@ -1238,28 +1027,21 @@ func TestCheckLayering(t *testing.T) {
 			},
 			wantRules: nil,
 		},
-		// LAYER-03 negative probe for LAYER-07 semantics (TEST-01): a cells/ package
-		// importing runtime/http/router is already caught by LAYER-03 (cells must not
-		// import adapters, and LAYER-03 forbids cells→runtime direct imports would
-		// actually be fine for cells→runtime; the direct router import is LAYER-07 which
-		// is checked inline in TestLayeringRules, not via checkLayering). We confirm
-		// checkLayering detects the underlying LAYER-03 violation when a cell imports
-		// runtime directly — this is the machine-readable test that demonstrates the
-		// rule engine catches forbidden imports. For the LAYER-07 specific inline check,
-		// see the negative_probe sub-test in TestLayeringRules_LAYER07_NegativeProbe below.
+		// LAYER-07 path check: cells→runtime is not forbidden by checkLayering (LAYER-01..04
+		// are now owned by depguard); the actual LAYER-07 guard is implemented inline in
+		// TestLayeringRules. This case documents the expected clean result so the table is
+		// self-consistent. For the LAYER-07 specific inline check, see
+		// TestLayeringRules_LAYER07_NegativeProbe below.
 		{
-			name: "LAYER-07 semantic: cells importing runtime/http/router caught as LAYER-03",
+			name: "LAYER-07 semantic: cells importing runtime/http/router (checkLayering clean)",
 			pkgs: []pkgInfo{
 				{
 					ImportPath: "github.com/ghbvf/gocell/cells/accesscore",
 					Imports: []string{
-						"github.com/ghbvf/gocell/runtime/http/router", // router is runtime — not forbidden by LAYER-02/03 for cells
+						"github.com/ghbvf/gocell/runtime/http/router", // cells→runtime not caught by checkLayering
 					},
 				},
 			},
-			// cells→runtime is allowed by LAYER-03 (only cells→adapters is forbidden);
-			// the actual LAYER-07 guard is implemented inline (not via checkLayering).
-			// This case documents the expected clean result so the table is self-consistent.
 			wantRules: nil,
 		},
 		// LAYER-09: cells/X must not import cells/Y/events (cross-cell public events package).

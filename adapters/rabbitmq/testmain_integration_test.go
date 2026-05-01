@@ -5,7 +5,7 @@ package rabbitmq
 import (
 	"context"
 	"fmt"
-	"log"
+	"log/slog"
 	"os"
 	"sync"
 	"testing"
@@ -49,7 +49,7 @@ func sharedBrokerURL(t *testing.T) string {
 		u, err := container.AmqpURL(ctx)
 		if err != nil {
 			if termErr := container.Terminate(ctx); termErr != nil {
-				log.Printf("rabbitmq: shared broker terminate after AmqpURL failure: %v", termErr)
+				slog.Default().Warn("rabbitmq: shared broker terminate after AmqpURL failure", "error", termErr)
 			}
 			sharedBrokerInitErr = fmt.Errorf("get shared rabbitmq url: %w", err)
 			return
@@ -61,7 +61,7 @@ func sharedBrokerURL(t *testing.T) string {
 				// unavailable. Emit to stderr so CI log scrapers pick up
 				// cleanup failures (Ryuk fallback handles the actual reap,
 				// but a failure here usually hints at Docker-daemon trouble).
-				log.Printf("rabbitmq: shared broker terminate failed: %v", err)
+				slog.Default().Warn("rabbitmq: shared broker terminate failed", "error", err)
 			}
 		}
 	})
