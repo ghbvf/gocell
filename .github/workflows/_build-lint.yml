@@ -155,6 +155,17 @@ jobs:
       - name: Test
         run: go test ${{ matrix.race && '-race' || '' }} -covermode=atomic -coverprofile=coverage-shard-${{ matrix.shard }}.out ${{ matrix.pkgs }} -count=1 -timeout 5m
 
+      # Targeted race gate: tools/archtest/internal/typeseval has a
+      # process-wide SharedResolver cache (sync.Mutex + map[string]*Resolver
+      # at typeseval.go:125-126). TestSharedResolver_ConcurrentInit spawns
+      # 8 goroutines to exercise the locking and is the only goroutine-
+      # spawning concurrency test in the tools tree. The broader tools
+      # shard above runs without -race for speed; this narrow gate keeps
+      # race signal on the actual concurrency surface (~3-9s).
+      - name: Targeted race gate (typeseval cache)
+        if: matrix.shard == 'tools'
+        run: go test -race -count=1 -timeout 1m ./tools/archtest/internal/typeseval/...
+
       # Static governance gates (validate --strict, verify journey, check
       # contract-health, check unconditional-skip, examples internal-import
       # ban) are owned by the dedicated Governance Strict workflow
