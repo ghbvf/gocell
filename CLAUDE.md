@@ -81,6 +81,19 @@ actors.yaml   — 外部 Actor 注册（参与 contract 但不属于 Cell 模型
 
 实现外部协议/标准（密码学、签名、OIDC、migration、可观测性导出等）必须优先使用官方或成熟开源库，禁止自建；实现 GoCell 领域逻辑（Cell/Slice 模型、治理规则、outbox 接口等）保留自建。详见 `docs/reviews/202604061630-dependency-replacement-plan.md`。
 
+## 供应链与安全扫描
+
+四层静态门覆盖依赖与代码安全，PR 与 develop push 上必执行：
+
+| 层 | 工具 | 文件 | 阻塞方式 |
+|---|---|---|---|
+| 编码 | **gosec** | `.golangci.yml` | golangci-lint 失败 fail（PR 模式仅 diff，push 模式全量）|
+| 依赖 | **govulncheck** | `security-vuln.yml` | text-mode gate exit ≠ 0 fail（SARIF mode 在 govulncheck 1.x 永远 exit 0，仅做 Security tab 报告，不能作为 gate）|
+| 模式 SAST | **Semgrep** | `security-static.yml` | gate pass `semgrep scan --error`（无 `--sarif`，nosem 抑制生效，命中即 fail）+ SARIF pass（无 `--error`，写 GitHub Security tab） |
+| 数据流 SAST | **CodeQL** | `security-static.yml` | **upload-only**；PR 阻塞由 repo Code Scanning branch protection 兜底（Settings → Code security → Code scanning → required check `CodeQL`），不在 workflow 退出码 |
+
+`hack/verify-supply-chain-clean.sh` 是 drift-detection 卫生门，拦截 `--exclude/--ignore/-skip` 等绕过 flag 与 `.govulncheckignore`/`.semgrepignore`/CodeQL 宽 `paths-ignore` 等绕过文件；它从 PR head 跑，**不是针对协调 PR 的 fail-closed boundary**——最终阻塞由 PR review（单人维护项目即维护者本人）兜底。报告统一进 GitHub Security tab（SARIF 上传）。
+
 ## 参考框架
 
 开发时参考对标框架解决方案，见 `docs/references/framework-comparison.md`：

@@ -37,24 +37,16 @@ permissions:
   contents: read
 
 jobs:
-  # build-test is a matrix of 5 package shards run in parallel. Previous
-  # empirical data (PR246) showed `go test -race ./...` dominated at 4m34s of
-  # a 5m28s job; sharding lets non-race shards run without the 2-10x race
-  # detector overhead while isolating race coverage to the concurrency-sensitive
-  # kernel/runtime code paths (Prometheus applies the same pattern to tsdb/
-  # textparse — see raw.githubusercontent.com/prometheus/prometheus/main/
-  # .github/workflows/ci.yml). The shard list is intentionally static rather
-  # than the dynamic `go list | shuf | split` approach used by hashicorp/consul:
-  # GoCell's package layout is architectural (kernel/runtime/cells/adapters),
-  # and shard boundaries that mirror those layers produce stable coverage
-  # profiles and make per-shard timing easy to interpret. Swap to dynamic
-  # sharding if shard timings diverge > 2x.
+  # build-test is a matrix of 5 package shards run in parallel. Sharding splits
+  # GoCell's package layout (kernel/tools/runtime/cells/adapters+others) so each
+  # shard's timing maps cleanly to an architectural boundary, making per-shard
+  # cost easy to interpret. Static (tools/) and concurrency-sensitive
+  # (kernel/runtime) shards account for the bulk of test time; isolating tools
+  # cut the critical path from ~340s to ~170s.
   #
-  # tools/ is a separate shard from kernel/ because go/packages static-analysis
-  # tests (archtest, metricschema, generatedverify) load the full module type
-  # graph and account for ~130s of the former combined kernel+tools shard. Running
-  # them in parallel with kernel/ cuts the critical-path wall time from ~340s to
-  # ~170s without touching test logic.
+  # Race-detector responsibility lives in the dedicated test-race.yml workflow,
+  # not here. build-test is purely build / lint / coverage. Swap to dynamic
+  # sharding (consul-style `go list | shuf | split`) if shard timings diverge > 2x.
   build-test:
     runs-on: ubuntu-latest
     strategy:
@@ -63,34 +55,21 @@ jobs:
         include:
           - shard: kernel
             pkgs: ./kernel/...
-            race: true
             static_checks: true
           - shard: tools
             # archtest / metricschema / generatedverify use go/packages to load
             # the full module type graph; they are the slowest test suite (~130s)
             # and are isolated here so they run in parallel with the kernel shard.
-            #
-            # race: false — these are pure read-only static analyses
-            # (packages.Load + AST/types walk + string compare). No goroutines,
-            # no shared mutable state across t.Parallel() subtests; -race adds
-            # 2.5–3.3x runtime for zero signal. Empirically: archtest 30s→9s,
-            # metricschema 25s→9s, generatedverify 20s→6s on Apple Silicon;
-            # ~243s→~95s on linux runner. Race coverage of the project's
-            # concurrency-sensitive paths stays in the kernel/runtime shards.
             pkgs: ./tools/...
-            race: false
             static_checks: false
           - shard: runtime
             pkgs: ./runtime/... ./pkg/...
-            race: true
             static_checks: false
           - shard: cells
             pkgs: ./cells/...
-            race: false
             static_checks: false
           - shard: others
             pkgs: ./adapters/... ./cmd/... ./examples/... ./tests/... ./contracts/...
-            race: false
             static_checks: false
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -143,28 +122,22 @@ jobs:
           args: ${{ inputs.lint-mode == 'pr' && format('--new-from-merge-base=origin/{0}', inputs.base-ref) || '' }}
 
       # Test step: per-shard coverage profile with covermode=atomic. Atomic is
-      # mandatory on -race shards and harmless on non-race shards; using one
-      # mode across all shards avoids mode-header conflicts when sonarcloud
-      # cat-merges profiles.
+      # harmless without -race and keeps a single mode across all shards so
+      # sonarcloud's cat-merge does not hit mode-header conflicts.
       # -coverpkg=./... was previously used here but dropped: every major Go OSS
       # project (grpc-go, prometheus, consul, etcd, tidb, cockroachdb) tests
       # without it, and with per-shard package lists it would actively harm Sonar
       # (each shard would instrument every package but only test its own subset,
       # producing per-shard profiles with 0% on out-of-shard packages that
       # would dilute the merged view). Each shard now reports only what it tested.
+      #
+      # No -race here — Linux race-detector coverage lives in the dedicated
+      # test-race.yml workflow (kernel/, runtime/, pkg/, typeseval cache).
+      # Supplemental Apple Silicon race coverage is in the os-smoke job below
+      # (macOS leg, continue-on-error) — separate ownership: linux-shard
+      # owns the strict gate, os-smoke owns cross-platform smoke.
       - name: Test
-        run: go test ${{ matrix.race && '-race' || '' }} -covermode=atomic -coverprofile=coverage-shard-${{ matrix.shard }}.out ${{ matrix.pkgs }} -count=1 -timeout 5m
-
-      # Targeted race gate: tools/archtest/internal/typeseval has a
-      # process-wide SharedResolver cache (sync.Mutex + map[string]*Resolver
-      # at typeseval.go:125-126). TestSharedResolver_ConcurrentInit spawns
-      # 8 goroutines to exercise the locking and is the only goroutine-
-      # spawning concurrency test in the tools tree. The broader tools
-      # shard above runs without -race for speed; this narrow gate keeps
-      # race signal on the actual concurrency surface (~3-9s).
-      - name: Targeted race gate (typeseval cache)
-        if: matrix.shard == 'tools'
-        run: go test -race -count=1 -timeout 1m ./tools/archtest/internal/typeseval/...
+        run: go test -covermode=atomic -coverprofile=coverage-shard-${{ matrix.shard }}.out ${{ matrix.pkgs }} -count=1 -timeout 5m
 
       # Static governance gates (validate --strict, verify journey, check
       # contract-health, check unconditional-skip, examples internal-import
@@ -520,6 +493,7 @@ jobs:
           restore-keys: ${{ runner.os }}-sonar
 
       - name: SonarQube Scan
+        # nosemgrep: generic.secrets.security.detected-sonarqube-docs-api-key.detected-sonarqube-docs-api-key // SHA-pinned action commit, not an API key
         uses: SonarSource/sonarqube-scan-action@59db25f34e16620e48ab4bb9e4a5dce155cb5432 # v7
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}

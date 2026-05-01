@@ -1,0 +1,57 @@
+name: Test · Race Detector
+
+# Independent race-detector entry point for **Linux** runners.
+# Concurrency-sensitive packages (kernel/, runtime/, pkg/,
+# tools/archtest/internal/typeseval/) are exercised with `-race` here; the
+# main build-test (_build-lint.yml) no longer carries -race in its shard
+# matrix.
+#
+# macOS supplemental race coverage lives in `_build-lint.yml` os-smoke job
+# (curated subset of runtime/shutdown/, accesscore/initialadmin/,
+# runtime/config/, kernel/governance/ — continue-on-error advisory). It is
+# kept separate because Apple Silicon scheduler can surface platform-
+# specific race conditions, and the os-smoke job's continue-on-error
+# disposition is unsuitable for the strict Linux gate.
+#
+# Scope rationale (Linux gate): cells/, adapters/, cmd/, tests/, contracts/
+# run as race: false in build-test today (read-only static or integration
+# packages without goroutine concurrency on the unit-test path). Mirroring
+# the same scope here preserves race coverage without introducing a
+# regression in coverage breadth.
+
+on:
+  push:
+    branches: [develop]
+  pull_request:
+    branches: [develop, main, 'release/**']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  race:
+    name: go test -race
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
+        with:
+          # Pin via go.mod for reproducibility — race-detector signal must be
+          # stable across runs even if a 1.25.x patch lands at run time.
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+
+      - name: go test -race
+        # Concurrency-sensitive packages only:
+        #   - kernel/ ... runtime/ ... pkg/ ... — repository's own goroutines
+        #   - tools/archtest/internal/typeseval/ — process-wide SharedResolver
+        #     cache (sync.Mutex + map) covered by TestSharedResolver_ConcurrentInit
+        run: |
+          go test -race -count=1 -timeout 10m \
+            ./kernel/... \
+            ./runtime/... \
+            ./pkg/... \
+            ./tools/archtest/internal/typeseval/...

@@ -1,0 +1,73 @@
+name: Security · govulncheck
+
+# Supply-chain layer: scan go.mod dependencies (and call-graph reachability)
+# against Go's official vulnerability database (golang.org/x/vuln).
+# ref: golang.org/x/vuln/cmd/govulncheck CLI docs
+#
+# Real blocking semantics — govulncheck `-format sarif` exits 0 even on
+# findings (per its docs: "exits successfully if -format json/sarif/openvex
+# is provided, regardless of detected vulnerabilities"). We therefore run
+# text mode first as the gate, then SARIF mode (always-true) for upload so
+# the Security tab picture is intact even when the gate fails.
+#
+# Policy enforced *by CI*:
+#   - text-mode govulncheck has no -skip / --ignore flags (verify-supply-
+#     chain-clean.sh forbids any such flag in this file).
+#   - .govulncheckignore must NOT exist (same gate).
+#   - Non-zero exit on the text-mode step fails the PR; only fix path is
+#     upgrade or remove the vulnerable code path.
+
+on:
+  push:
+    branches: [develop]
+  pull_request:
+    branches: [develop, main, 'release/**']
+  schedule:
+    # Weekly Mon 18:17 UTC — intentionally collides with otel-collector-nightly
+    # on Mondays (independent workflows, no shared lock needed).
+    - cron: '17 18 * * 1'
+  workflow_dispatch:
+
+# Workflow-level permissions are read-only (least privilege). Each job that
+# needs security-events: write declares it at job level.
+permissions:
+  contents: read
+
+jobs:
+  govulncheck:
+    name: govulncheck
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      security-events: write   # required by upload-sarif
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+
+      - name: Install govulncheck
+        run: |
+          go install golang.org/x/vuln/cmd/govulncheck@latest
+          echo "$HOME/go/bin" >> "$GITHUB_PATH"
+
+      - name: govulncheck (text — gate)
+        # Text mode exits non-zero on findings — this is the actual gate.
+        # No -skip / --ignore: bypass surface is closed.
+        run: govulncheck ./...
+
+      - name: govulncheck (SARIF — for Security tab)
+        if: always()
+        # SARIF mode always exits 0 (per govulncheck docs); always run so the
+        # SARIF report uploads even when the text-mode gate above failed.
+        run: govulncheck -format sarif ./... > govulncheck.sarif
+
+      - name: Upload SARIF to GitHub Security
+        if: always() && hashFiles('govulncheck.sarif') != ''
+        uses: github/codeql-action/upload-sarif@ce64ddcb0d8d890d2df4a9d1c04ff297367dea2a # v3
+        with:
+          sarif_file: govulncheck.sarif
+          category: govulncheck

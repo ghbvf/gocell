@@ -1,0 +1,136 @@
+name: Security · Static Analysis
+
+# SAST layer: CodeQL (data-flow taint analysis, owned by GitHub) + Semgrep
+# (community pattern rules — p/golang, p/owasp-top-ten, p/secrets).
+# ref: github/codeql-action v3 — security-extended queries on Go
+# ref: semgrep p/golang + p/owasp-top-ten + p/secrets community rulesets
+#
+# Blocking semantics differ between the two jobs:
+#   - Semgrep: `semgrep scan --strict --error` exits non-zero on any finding
+#     or rule-parse error — the workflow fails the PR directly.
+#   - CodeQL : analyze uploads SARIF to the Security tab; it does NOT exit
+#     non-zero on findings (the action has no fail-on-findings option). PR
+#     blocking is enforced by GitHub Code Scanning branch protection — set
+#     up the required check at: Settings → Code security → Code scanning →
+#     `CodeQL` as required, then dismiss/resolve alerts as the merge gate.
+#
+# Policy enforced *by CI*:
+#   - Neither job passes --exclude / --exclude-rule / --ignore (verify-
+#     supply-chain-clean.sh forbids these flags in this file).
+#   - .semgrepignore and .github/codeql/codeql-config.yml (with paths-ignore
+#     beyond generated/ or vendor/) are forbidden by the same verify gate.
+
+on:
+  push:
+    branches: [develop]
+  pull_request:
+    branches: [develop, main, 'release/**']
+  schedule:
+    # Weekly Mon 18:17 UTC — intentionally collides with otel-collector-nightly
+    # on Mondays (independent workflows, no shared lock needed).
+    - cron: '17 18 * * 1'
+  workflow_dispatch:
+
+# Workflow-level permissions are read-only (least privilege). Each job that
+# needs security-events: write declares it at job level.
+permissions:
+  contents: read
+
+jobs:
+  codeql:
+    name: CodeQL (Go)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      security-events: write   # required by codeql-action/analyze (SARIF upload)
+      actions: read            # required by codeql-action/init to read workflow metadata
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+
+      - name: Init CodeQL
+        uses: github/codeql-action/init@ce64ddcb0d8d890d2df4a9d1c04ff297367dea2a # v3
+        with:
+          languages: go
+          queries: security-extended
+
+      - name: Autobuild
+        uses: github/codeql-action/autobuild@ce64ddcb0d8d890d2df4a9d1c04ff297367dea2a # v3
+
+      - name: Analyze
+        # Upload-only: PR blocking is via repo Code Scanning branch protection
+        # (see header comment). Do not assume this step's exit code blocks the PR.
+        uses: github/codeql-action/analyze@ce64ddcb0d8d890d2df4a9d1c04ff297367dea2a # v3
+        with:
+          category: codeql-go
+
+  semgrep:
+    name: Semgrep
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      security-events: write   # required by upload-sarif
+    container:
+      # Pinned by version tag + digest (multi-arch OCI index). Bump both
+      # together when tracking upstream rule pack fixes.
+      image: semgrep/semgrep:1.160.0@sha256:7810f1d7884974ab6dda7bef8f4a2c8e165ea2142fd8260515d380e4f1407263
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      # Two-pass invocation. Two Semgrep CLI quirks force this split:
+      #
+      #   1. `--sarif` writes ALL findings (including nosemgrep'd ones,
+      #      tagged `suppressions: [{kind: inSource}]` per SARIF spec) and
+      #      `--error` then counts them in the exit code — so
+      #      `--sarif --error` cannot be made green by nosemgrep. The gate
+      #      pass below runs WITHOUT --sarif so suppressions actually remove
+      #      findings from the count.
+      #
+      #   2. `--strict` returns exit 3 ("invalid target code") whenever any
+      #      target file has parse warnings (~0.1% of our tree). It is NOT
+      #      a "rule-parse error" guard — that is exit 5 ("unparseable YAML")
+      #      and fires automatically without --strict. Dropping --strict
+      #      keeps the gate focused on the actual blocking semantic
+      #      (`--error` exits 1 on findings).
+      #
+      # `semgrep scan` (not `semgrep ci`) is used because `--error` is a
+      # scan-only flag — `semgrep ci` rejects it.
+      - name: semgrep scan (gate — respects nosemgrep)
+        # No --exclude / --exclude-rule: bypass surface is closed.
+        run: |
+          semgrep scan \
+            --config=p/golang \
+            --config=p/owasp-top-ten \
+            --config=p/secrets \
+            --error
+        env:
+          # OSS mode — no Semgrep Cloud token. Community rules ship with
+          # the container image. Telemetry off.
+          SEMGREP_SEND_METRICS: "off"
+
+      - name: semgrep scan (SARIF — for GitHub Security tab)
+        if: always()
+        # No --error here: this pass is upload-only. Suppressed findings
+        # appear in SARIF with `suppressions: [{kind: inSource}]` so they
+        # surface in GitHub Security tab triage UI but don't fail this step.
+        run: |
+          semgrep scan \
+            --config=p/golang \
+            --config=p/owasp-top-ten \
+            --config=p/secrets \
+            --sarif --output=semgrep.sarif
+        env:
+          SEMGREP_SEND_METRICS: "off"
+
+      - name: Upload SARIF to GitHub Security
+        if: always() && hashFiles('semgrep.sarif') != ''
+        uses: github/codeql-action/upload-sarif@ce64ddcb0d8d890d2df4a9d1c04ff297367dea2a # v3
+        with:
+          sarif_file: semgrep.sarif
+          category: semgrep

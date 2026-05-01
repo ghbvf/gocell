@@ -100,6 +100,7 @@ func CompilePublicEndpoints(entries []string) (func(*http.Request) bool, error) 
 	}
 
 	return func(r *http.Request) bool {
+		// nosemgrep: go.lang.security.filepath-clean-misuse.filepath-clean-misuse // URL routing, not file I/O
 		key := matchKey(strings.ToUpper(r.Method), path.Clean(r.URL.Path))
 		return set[key]
 	}, nil
