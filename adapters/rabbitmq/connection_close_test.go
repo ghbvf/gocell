@@ -18,6 +18,8 @@ import (
 	amqp "github.com/rabbitmq/amqp091-go"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 )
 
 // TestConnection_Close_RespectsCtx verifies that Close returns the
@@ -33,7 +35,7 @@ func TestConnection_Close_RespectsCtx(t *testing.T) {
 	elapsed := time.Since(start)
 
 	require.Error(t, err, "Close with pre-canceled ctx must return error")
-	assert.Less(t, elapsed, 50*time.Millisecond,
+	assert.Less(t, elapsed, testtime.MediumPoll,
 		"Close must return promptly with pre-canceled ctx; got %s", elapsed)
 }
 
@@ -72,7 +74,7 @@ func TestConnection_Close_PreCancelledCtxStillStopsReconnectLoop(t *testing.T) {
 	case _, ok := <-conn.closeCh:
 		assert.False(t, ok,
 			"closeCh must be closed by Close so reconnectLoop's select unblocks")
-	case <-time.After(50 * time.Millisecond):
+	case <-time.After(testtime.MediumPoll):
 		t.Fatal("closeCh was not signaled after pre-canceled Close — reconnectLoop would leak")
 	}
 
@@ -81,7 +83,7 @@ func TestConnection_Close_PreCancelledCtxStillStopsReconnectLoop(t *testing.T) {
 	// Give the goroutine a short grace period to complete.
 	assert.Eventually(t, func() bool {
 		return mockConn.closeCount.Load() >= 1
-	}, 200*time.Millisecond, 5*time.Millisecond,
+	}, testtime.D200ms, testtime.FastPoll,
 		"underlying conn.Close() must be called at least once even with pre-canceled ctx — broker must receive close frame")
 }
 
@@ -100,7 +102,7 @@ func TestConnection_Close_Idempotent(t *testing.T) {
 func TestConnection_Close_ClosesConnection(t *testing.T) {
 	conn, _ := newTestConnection(t)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), testtime.D2s)
 	defer cancel()
 
 	err := conn.Close(ctx)
@@ -138,12 +140,12 @@ func TestConnection_Close_RespectsCtxDeadline(t *testing.T) {
 	conn, err := NewConnection(Config{
 		URL:             testAMQPURL,
 		ChannelPoolSize: 1,
-		ConfirmTimeout:  2 * time.Second,
+		ConfirmTimeout:  testtime.D2s,
 	}, WithDialFunc(dialFunc))
 	require.NoError(t, err)
 
 	// Short budget — should expire before the gate is released.
-	budget := 80 * time.Millisecond
+	budget := testtime.D80ms
 	ctx, cancel := context.WithTimeout(context.Background(), budget)
 	defer cancel()
 
@@ -153,7 +155,7 @@ func TestConnection_Close_RespectsCtxDeadline(t *testing.T) {
 
 	// Close must return with a ctx error, not block until gate.
 	require.Error(t, err, "Close must return ctx error when budget exceeded")
-	assert.LessOrEqual(t, elapsed, budget+50*time.Millisecond,
+	assert.LessOrEqual(t, elapsed, budget+testtime.MediumPoll,
 		"Close must return within budget+tolerance; got %s", elapsed)
 
 	// Release the gate so the background goroutine doesn't leak.
@@ -162,7 +164,7 @@ func TestConnection_Close_RespectsCtxDeadline(t *testing.T) {
 	// Verify background goroutine exits cleanly.
 	select {
 	case <-released:
-	case <-time.After(2 * time.Second):
+	case <-time.After(testtime.D2s):
 		t.Error("background Close goroutine did not exit after gate released")
 	}
 }

@@ -10,6 +10,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 )
 
 // brokenWriter always returns an error on Write.
@@ -24,7 +26,7 @@ func TestFormatPayload_WriterError(t *testing.T) {
 	payload := credentialPayload{
 		Username:  "admin",
 		Password:  "secret",
-		ExpiresAt: time.Now().Add(24 * time.Hour),
+		ExpiresAt: time.Now().Add(testtime.D24h),
 	}
 
 	if err := formatPayload(w, payload); err == nil {
@@ -69,7 +71,7 @@ func TestWriteCredentialFile_WritePayloadError(t *testing.T) {
 	err := writeCredentialFile(path, credentialPayload{
 		Username:  "admin",
 		Password:  "pass",
-		ExpiresAt: time.Now().Add(24 * time.Hour),
+		ExpiresAt: time.Now().Add(testtime.D24h),
 	}, withPayloadWriter(func(_ io.Writer, _ credentialPayload) error {
 		return io.ErrClosedPipe
 	}))
@@ -108,7 +110,7 @@ func TestWriteCredentialFile_RenameError(t *testing.T) {
 	if err := writeCredentialFile(path, credentialPayload{
 		Username:  "admin",
 		Password:  "pass",
-		ExpiresAt: time.Now().Add(24 * time.Hour),
+		ExpiresAt: time.Now().Add(testtime.D24h),
 	}); err != nil {
 		t.Fatalf("first write: %v", err)
 	}
@@ -127,7 +129,7 @@ func TestWriteCredentialFile_RenameError(t *testing.T) {
 	err := writeCredentialFile(path, credentialPayload{
 		Username:  "admin",
 		Password:  "pass2",
-		ExpiresAt: time.Now().Add(24 * time.Hour),
+		ExpiresAt: time.Now().Add(testtime.D24h),
 	})
 	// On a read-only dir, OpenFile (O_EXCL) itself would fail before rename.
 	// Either way we get an error — the branch we care about is covered.

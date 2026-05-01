@@ -14,6 +14,15 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/ghbvf/gocell/kernel/outbox"
+	"github.com/ghbvf/gocell/pkg/testutil/testtime"
+)
+
+const (
+	drainCloseCtxBudget     = 2 * time.Second
+	drainCloseCtxBudgetHalf = drainCloseCtxBudget / 2
+	drainShortTimeout       = 150 * time.Millisecond
+	drainShortTimeoutHalf   = drainShortTimeout / 2
+	drainD30ms              = testtime.D30ms
 )
 
 // TestSubscriber_StopIntakeCancelsConsumerButDrainsInflight verifies that
@@ -83,7 +92,7 @@ func TestSubscriber_StopIntakeCancelsConsumerButDrainsInflight(t *testing.T) {
 	}()
 	select {
 	case <-handlerStarted:
-	case <-time.After(3 * time.Second):
+	case <-time.After(testtime.D3s):
 		t.Fatal("handlers did not start within 3s")
 	}
 
@@ -97,7 +106,7 @@ func TestSubscriber_StopIntakeCancelsConsumerButDrainsInflight(t *testing.T) {
 		ch.mu.Lock()
 		defer ch.mu.Unlock()
 		return ch.cancelCalled
-	}, 2*time.Second, 10*time.Millisecond,
+	}, testtime.D2s, testtime.D10ms,
 		"StopIntake must call ch.Cancel to stop broker delivery")
 
 	// Release the handlers so they can complete.
@@ -106,7 +115,7 @@ func TestSubscriber_StopIntakeCancelsConsumerButDrainsInflight(t *testing.T) {
 	// Wait until all 3 handlers have finished.
 	require.Eventually(t, func() bool {
 		return handlerCount.Load() == int64(numDeliveries)
-	}, 3*time.Second, 5*time.Millisecond, "all %d deliveries must be handled", numDeliveries)
+	}, testtime.D3s, testtime.FastPoll, "all %d deliveries must be handled", numDeliveries)
 
 	// Simulate broker closing the deliveries channel after basic.cancel.
 	close(ch.consumeDeliveries)
@@ -115,7 +124,7 @@ func TestSubscriber_StopIntakeCancelsConsumerButDrainsInflight(t *testing.T) {
 	select {
 	case err := <-subDone:
 		assert.NoError(t, err, "Subscribe must return nil after clean drain")
-	case <-time.After(3 * time.Second):
+	case <-time.After(testtime.D3s):
 		t.Fatal("Subscribe did not return after drain completed")
 	}
 
@@ -164,12 +173,12 @@ func TestSubscriber_ConsumerTagTruncation(t *testing.T) {
 		ch.mu.Lock()
 		defer ch.mu.Unlock()
 		return ch.cancelConsumer != "" || ch.cancelCalled || ch.consumeDeliveries != nil
-	}, 2*time.Second, 10*time.Millisecond, "Subscribe should start consuming")
+	}, testtime.D2s, testtime.D10ms, "Subscribe should start consuming")
 
 	cancel()
 	select {
 	case <-subDone:
-	case <-time.After(3 * time.Second):
+	case <-time.After(testtime.D3s):
 		t.Fatal("Subscribe did not return after ctx cancel")
 	}
 
@@ -216,8 +225,6 @@ func TestSubscriber_IntakeStoppedThenCloseNoTimeout(t *testing.T) {
 	mockConn.nextCh = ch
 	mockConn.mu.Unlock()
 
-	const closeCtxBudget = 2 * time.Second
-
 	handler := func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
 		return outbox.HandleResult{Disposition: outbox.DispositionAck}
 	}
@@ -247,7 +254,7 @@ func TestSubscriber_IntakeStoppedThenCloseNoTimeout(t *testing.T) {
 		ch.mu.Lock()
 		defer ch.mu.Unlock()
 		return ch.ackCalled
-	}, 2*time.Second, 5*time.Millisecond, "delivery was not acked")
+	}, testtime.D2s, testtime.FastPoll, "delivery was not acked")
 
 	// StopIntake → deliveries chan closes → Subscribe exits.
 	err := sub.StopIntake(ctx)
@@ -259,7 +266,7 @@ func TestSubscriber_IntakeStoppedThenCloseNoTimeout(t *testing.T) {
 	// Subscribe should exit.
 	select {
 	case <-subDone:
-	case <-time.After(2 * time.Second):
+	case <-time.After(testtime.D2s):
 		t.Fatal("Subscribe did not exit after StopIntake + deliveries close")
 	}
 
@@ -269,7 +276,7 @@ func TestSubscriber_IntakeStoppedThenCloseNoTimeout(t *testing.T) {
 	elapsed := time.Since(start)
 
 	assert.NoError(t, closeErr, "Close must not return ErrAdapterAMQPCloseTimeout after clean drain")
-	assert.Less(t, elapsed, closeCtxBudget/2,
+	assert.Less(t, elapsed, drainCloseCtxBudgetHalf,
 		"Close should finish quickly after StopIntake drained; took %v", elapsed)
 }
 
@@ -284,8 +291,6 @@ func TestSubscriber_HardCloseForcesTimeout(t *testing.T) {
 	mockConn.mu.Lock()
 	mockConn.nextCh = ch
 	mockConn.mu.Unlock()
-
-	const shortTimeout = 150 * time.Millisecond
 
 	neverClose := make(chan struct{})
 	// Unblock the hanging handler goroutine after the test completes so it
@@ -321,7 +326,7 @@ func TestSubscriber_HardCloseForcesTimeout(t *testing.T) {
 
 	// Wait briefly to let the delivery reach the handler goroutine
 	// (consumeLoop dispatches it via wg.Add(1) + go processDelivery).
-	time.Sleep(30 * time.Millisecond)
+	time.Sleep(drainD30ms) //archtest:allow:test-sleep wait for goroutine to enter blocking processDelivery; no started observable
 
 	// Cancel context so consumeLoop exits via ctx.Done(). The processDelivery
 	// goroutine keeps running because it is blocked on neverClose.
@@ -332,13 +337,13 @@ func TestSubscriber_HardCloseForcesTimeout(t *testing.T) {
 	// a race between wg.Add and the wg.Wait goroutine spawned inside Close.
 	select {
 	case <-subDone:
-	case <-time.After(2 * time.Second):
+	case <-time.After(testtime.D2s):
 		t.Fatal("Subscribe did not return after context cancel")
 	}
 
 	// Close with a short deadline — processDelivery is hanging → must time out.
 	// ShutdownTimeout is deprecated; callers now pass ctx with deadline directly.
-	closeCtx, closeCancel := context.WithTimeout(context.Background(), shortTimeout)
+	closeCtx, closeCancel := context.WithTimeout(context.Background(), drainShortTimeout)
 	defer closeCancel()
 
 	start := time.Now()
@@ -348,7 +353,7 @@ func TestSubscriber_HardCloseForcesTimeout(t *testing.T) {
 	// Close must have waited (at least shortTimeout / 2) before giving up.
 	assert.Error(t, closeErr, "Close must return ErrAdapterAMQPCloseTimeout when handler hangs")
 	assert.ErrorContains(t, closeErr, string(ErrAdapterAMQPCloseTimeout))
-	assert.GreaterOrEqual(t, elapsed, shortTimeout/2,
+	assert.GreaterOrEqual(t, elapsed, drainShortTimeoutHalf,
 		"Close should have waited at least half of close ctx deadline")
 }
 
@@ -391,10 +396,10 @@ func TestSubscriber_StopIntake_RespectsCtx(t *testing.T) {
 		sub.runsMu.Lock()
 		defer sub.runsMu.Unlock()
 		return len(sub.runs) > 0
-	}, 2*time.Second, 10*time.Millisecond, "Subscribe must register a subscriptionRun")
+	}, testtime.D2s, testtime.D10ms, "Subscribe must register a subscriptionRun")
 
 	// Call StopIntake with a short ctx; broker Cancel hangs indefinitely.
-	stopCtx, stopCancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	stopCtx, stopCancel := context.WithTimeout(context.Background(), testtime.SlowPoll)
 	defer stopCancel()
 
 	start := time.Now()
@@ -404,7 +409,7 @@ func TestSubscriber_StopIntake_RespectsCtx(t *testing.T) {
 	require.Error(t, err, "StopIntake must return ctx.Err when broker hangs past ctx deadline")
 	assert.ErrorIs(t, err, context.DeadlineExceeded,
 		"StopIntake must propagate ctx.DeadlineExceeded")
-	assert.Less(t, elapsed, 500*time.Millisecond,
+	assert.Less(t, elapsed, testtime.D500ms,
 		"StopIntake must return within a short margin of ctx deadline; got %s", elapsed)
 
 	// Clean up: cancel Subscribe so the goroutine exits.
@@ -434,7 +439,7 @@ func TestSubscriber_StopIntake_PerCallTimeout(t *testing.T) {
 	sub := NewSubscriber(conn, SubscriberConfig{
 		QueueName:                "per-call-timeout-queue",
 		DLXExchange:              "per-call-timeout.dlx",
-		StopIntakePerCallTimeout: 300 * time.Millisecond,
+		StopIntakePerCallTimeout: testtime.D300ms,
 	})
 
 	// Start Subscribe so the consumerTag is registered.
@@ -452,10 +457,10 @@ func TestSubscriber_StopIntake_PerCallTimeout(t *testing.T) {
 		sub.runsMu.Lock()
 		defer sub.runsMu.Unlock()
 		return len(sub.runs) > 0
-	}, 2*time.Second, 10*time.Millisecond, "Subscribe must register a subscriptionRun")
+	}, testtime.D2s, testtime.D10ms, "Subscribe must register a subscriptionRun")
 
 	// Outer ctx is generous; per-call timeout should bound Cancel.
-	stopCtx, stopCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	stopCtx, stopCancel := context.WithTimeout(context.Background(), testtime.SelectAsyncSettle)
 	defer stopCancel()
 
 	start := time.Now()
@@ -464,9 +469,9 @@ func TestSubscriber_StopIntake_PerCallTimeout(t *testing.T) {
 
 	// best-effort: a Cancel that times out is logged as Warn; StopIntake returns nil.
 	require.NoError(t, err, "StopIntake must return nil (best-effort) when per-call timeout fires")
-	assert.GreaterOrEqual(t, elapsed, 250*time.Millisecond,
+	assert.GreaterOrEqual(t, elapsed, testtime.D250ms,
 		"StopIntake must wait at least the per-call timeout; got %s", elapsed)
-	assert.Less(t, elapsed, 1*time.Second,
+	assert.Less(t, elapsed, testtime.D1s,
 		"StopIntake must not exceed per-call timeout substantially; got %s", elapsed)
 
 	subCancel()
@@ -498,7 +503,7 @@ func TestSubscriber_StopIntake_DoesNotHoldLockAcrossBrokerIO(t *testing.T) {
 	sub := NewSubscriber(conn, SubscriberConfig{
 		QueueName:                "lock-free-queue",
 		DLXExchange:              "lock-free.dlx",
-		StopIntakePerCallTimeout: 2 * time.Second,
+		StopIntakePerCallTimeout: testtime.D2s,
 	})
 
 	subCtx, subCancel := context.WithCancel(context.Background())
@@ -514,7 +519,7 @@ func TestSubscriber_StopIntake_DoesNotHoldLockAcrossBrokerIO(t *testing.T) {
 		sub.runsMu.Lock()
 		defer sub.runsMu.Unlock()
 		return len(sub.runs) > 0
-	}, 2*time.Second, 10*time.Millisecond, "Subscribe must register a subscriptionRun")
+	}, testtime.D2s, testtime.D10ms, "Subscribe must register a subscriptionRun")
 
 	// Fire StopIntake in a goroutine; Cancel hangs on hangGate.
 	stopDone := make(chan error, 1)
@@ -535,7 +540,7 @@ func TestSubscriber_StopIntake_DoesNotHoldLockAcrossBrokerIO(t *testing.T) {
 	select {
 	case <-lockAcquired:
 		// success — StopIntake released the lock before invoking broker I/O
-	case <-time.After(500 * time.Millisecond):
+	case <-time.After(testtime.D500ms):
 		t.Fatal("Subscriber.runsMu was held across broker I/O — StopIntake must snapshot then release")
 	}
 
@@ -544,7 +549,7 @@ func TestSubscriber_StopIntake_DoesNotHoldLockAcrossBrokerIO(t *testing.T) {
 	select {
 	case err := <-stopDone:
 		require.NoError(t, err)
-	case <-time.After(3 * time.Second):
+	case <-time.After(testtime.D3s):
 		t.Fatal("StopIntake did not complete after hang released")
 	}
 

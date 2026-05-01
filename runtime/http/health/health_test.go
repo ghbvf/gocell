@@ -13,6 +13,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/assembly"
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -686,6 +687,18 @@ func TestEmptyAssembly(t *testing.T) {
 // 100 ms each sequentially. Used to bound the parallelism semantic assertion.
 const serialBaseline = 300 * time.Millisecond
 
+// healthDeadlineShort is used for deadline/uncooperative probe tests.
+const healthDeadlineShort = 80 * time.Millisecond
+
+// healthReturnMaxElapsed bounds the handler-return-by-deadline assertions.
+const healthReturnMaxElapsed = 200 * time.Millisecond
+
+// healthSerial50 is the 50ms semantic slack for the parallelism test.
+const healthSerial50 = testtime.MediumPoll
+
+// healthParallelMax is the absolute wall-clock upper bound for the parallel test.
+const healthParallelMax = 250 * time.Millisecond
+
 // TestReadyz_ParallelFasterThanSerial verifies that /readyz runs checkers in
 // parallel. With 3 checkers that each sleep 100 ms, the total wall-clock time
 // must be well below 300 ms (serial cost).
@@ -702,10 +715,10 @@ func TestReadyz_ParallelFasterThanSerial(t *testing.T) {
 	defer func() { _ = asm.Stop(context.Background()) }()
 
 	// Use a generous deadline so these tests do not time out.
-	h := New(asm, WithDeadline(2*time.Second))
+	h := New(asm, WithDeadline(testtime.D2s))
 	for _, name := range []string{"probe-a", "probe-b", "probe-c"} {
 		require.NoError(t, h.RegisterChecker(name, func(_ context.Context) error {
-			time.Sleep(100 * time.Millisecond)
+			time.Sleep(testtime.D100ms) //archtest:allow:test-sleep slow handler fixture; sleep IS the test parameter
 			return nil
 		}))
 	}
@@ -721,14 +734,14 @@ func TestReadyz_ParallelFasterThanSerial(t *testing.T) {
 	// Semantic assertion: parallel execution must be at least 50ms faster than
 	// serial. This proves parallelism actually occurred, independent of absolute
 	// timing. This check must never be removed.
-	assert.Less(t, elapsed, serialBaseline-50*time.Millisecond,
+	assert.Less(t, elapsed, serialBaseline-healthSerial50,
 		"3 parallel 100-ms probes must be at least 50ms faster than serial (%v); got %v", serialBaseline, elapsed)
 
 	// Performance assertion: absolute upper bound on typical CI hardware.
 	// If this flaps on resource-constrained CI, wrap in testing.Short() to
 	// skip it in short mode — but keep the semantic assertion above.
 	if !testing.Short() {
-		assert.Less(t, elapsed, 250*time.Millisecond,
+		assert.Less(t, elapsed, healthParallelMax,
 			"3 parallel 100-ms probes must finish in < 250ms (serial would be ~300ms); got %v", elapsed)
 	}
 }
@@ -741,11 +754,11 @@ func TestReadyz_DeadlineExceeded(t *testing.T) {
 	require.NoError(t, asm.Start(context.Background()))
 	defer func() { _ = asm.Stop(context.Background()) }()
 
-	h := New(asm, WithDeadline(50*time.Millisecond))
+	h := New(asm, WithDeadline(testtime.MediumPoll))
 	h.SetVerboseToken(testVerboseToken)
 	require.NoError(t, h.RegisterChecker("slow", func(ctx context.Context) error {
 		select {
-		case <-time.After(500 * time.Millisecond):
+		case <-time.After(testtime.D500ms):
 			return nil
 		case <-ctx.Done():
 			return ctx.Err()
@@ -781,11 +794,11 @@ func TestReadyz_IndependentOfRequestCtx(t *testing.T) {
 	defer func() { _ = asm.Stop(context.Background()) }()
 
 	probeDone := make(chan struct{})
-	h := New(asm, WithDeadline(2*time.Second))
+	h := New(asm, WithDeadline(testtime.D2s))
 	require.NoError(t, h.RegisterChecker("slow-probe", func(ctx context.Context) error {
 		// Probe takes 100 ms but the HTTP request ctx will be canceled
 		// almost immediately — probe must NOT be affected.
-		time.Sleep(100 * time.Millisecond)
+		time.Sleep(testtime.D100ms) //archtest:allow:test-sleep slow handler fixture; sleep IS the test parameter
 		close(probeDone)
 		return nil
 	}))
@@ -797,7 +810,7 @@ func TestReadyz_IndependentOfRequestCtx(t *testing.T) {
 
 	// Cancel request ctx after a very short time (before probe finishes).
 	go func() {
-		time.Sleep(10 * time.Millisecond)
+		time.Sleep(testtime.D10ms) //archtest:allow:test-sleep goroutine timing fixture: controls cancel order
 		reqCancel()
 	}()
 
@@ -807,7 +820,7 @@ func TestReadyz_IndependentOfRequestCtx(t *testing.T) {
 	select {
 	case <-probeDone:
 		// expected
-	case <-time.After(500 * time.Millisecond):
+	case <-time.After(testtime.D500ms):
 		t.Fatal("probe was canceled by request ctx; must use background ctx")
 	}
 	// Aggregate result must be healthy (probe returned nil after sleeping).
@@ -822,7 +835,7 @@ func TestReadyz_ProbePanic_Caught(t *testing.T) {
 	require.NoError(t, asm.Start(context.Background()))
 	defer func() { _ = asm.Stop(context.Background()) }()
 
-	h := New(asm, WithDeadline(2*time.Second))
+	h := New(asm, WithDeadline(testtime.D2s))
 	h.SetVerboseToken(testVerboseToken)
 	require.NoError(t, h.RegisterChecker("panicking", func(_ context.Context) error {
 		panic("something went very wrong")
@@ -1000,7 +1013,7 @@ func TestReadyz_UncooperativeChecker_WrapperReturnsOnDeadline(t *testing.T) {
 	require.NoError(t, asm.Start(context.Background()))
 	defer func() { _ = asm.Stop(context.Background()) }()
 
-	h := New(asm, WithVerboseDisabled(), WithDeadline(80*time.Millisecond))
+	h := New(asm, WithVerboseDisabled(), WithDeadline(healthDeadlineShort))
 
 	// Uncooperative probe: blocks on a channel that only the test closes on
 	// cleanup. Without wrapCtxSafe this would hold runProbesParallel open
@@ -1020,7 +1033,7 @@ func TestReadyz_UncooperativeChecker_WrapperReturnsOnDeadline(t *testing.T) {
 	h.ReadyzHandler()(rr, req)
 	elapsed := time.Since(start)
 
-	assert.Less(t, elapsed, 200*time.Millisecond,
+	assert.Less(t, elapsed, healthReturnMaxElapsed,
 		"handler must return within ~deadline (80ms) even with uncooperative probe; got %v", elapsed)
 	assert.Equal(t, http.StatusServiceUnavailable, rr.Code)
 
@@ -1042,7 +1055,7 @@ func TestReadyz_UncooperativeChecker_VerboseReportsTimeout(t *testing.T) {
 	require.NoError(t, asm.Start(context.Background()))
 	defer func() { _ = asm.Stop(context.Background()) }()
 
-	h := New(asm, WithDeadline(80*time.Millisecond))
+	h := New(asm, WithDeadline(healthDeadlineShort))
 	h.SetVerboseToken(testVerboseToken)
 
 	unblock := make(chan struct{})
@@ -1058,7 +1071,7 @@ func TestReadyz_UncooperativeChecker_VerboseReportsTimeout(t *testing.T) {
 	h.ReadyzHandler()(rr, req)
 	elapsed := time.Since(start)
 
-	assert.Less(t, elapsed, 200*time.Millisecond,
+	assert.Less(t, elapsed, healthReturnMaxElapsed,
 		"handler must return within ~deadline even with uncooperative probe; got %v", elapsed)
 	assert.Equal(t, http.StatusServiceUnavailable, rr.Code)
 
@@ -1349,10 +1362,10 @@ func TestRunOneProbe_DegradedSentinelMappedToDegraded(t *testing.T) {
 	checker := func(_ context.Context) error {
 		return fmt.Errorf("drop ratio exceeded: %w", cell.ErrDegraded)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), testtime.D5s)
 	defer cancel()
 
-	pr := runOneProbe(ctx, checker, 5*time.Second)
+	pr := runOneProbe(ctx, checker, testtime.D5s)
 
 	assert.Equal(t, "degraded", pr.Status,
 		"checker returning wrapped cell.ErrDegraded must produce ProbeResult.Status=degraded")

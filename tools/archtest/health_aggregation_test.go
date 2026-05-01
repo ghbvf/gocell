@@ -60,7 +60,7 @@ func (s *typeMethodSet) has(qualified, methodName string) bool {
 // same simple name do not collide.
 func collectMethodSets(t *testing.T, modRoot string, patterns ...string) *typeMethodSet {
 	t.Helper()
-	pkgs, errs, err := typeseval.LoadPackages(modRoot, patterns...)
+	pkgs, errs, err := typeseval.LoadPackages(modRoot, false, nil, patterns...)
 	require.NoError(t, err, "packages.Load")
 	require.Empty(t, errs, "package load errors: %v", errs)
 

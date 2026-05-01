@@ -281,7 +281,7 @@ func (s *FakeStore) ReclaimStale(
 			r.claimedAt = nil
 		} else {
 			shift := min(newAttempts, 30)
-			delay := cappedDelay(baseDelay*(1<<shift), maxDelay)
+			delay := cappedDelay(baseDelay<<shift, maxDelay)
 			nextRetry := now.Add(delay)
 			r.status = statusPending
 			r.attempts = newAttempts

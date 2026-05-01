@@ -4,9 +4,9 @@ import (
 	"context"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/ghbvf/gocell/kernel/idempotency"
+	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/bootstrap"
 	"github.com/ghbvf/gocell/runtime/eventbus"
@@ -28,7 +28,7 @@ func minimalSharedDepsForAuditTest(t *testing.T, adapterMode string) *SharedDeps
 	privKey, pubKey := auth.MustGenerateTestKeyPair()
 	keySet, err := auth.NewKeySet(privKey, pubKey)
 	require.NoError(t, err)
-	issuer, err := auth.NewJWTIssuer(keySet, "test-issuer", 15*time.Minute,
+	issuer, err := auth.NewJWTIssuer(keySet, "test-issuer", testtime.D15min,
 		auth.WithIssuerAudiencesFromSlice([]string{"test-audience"}))
 	require.NoError(t, err)
 	verifier, err := auth.NewJWTVerifier(keySet,

@@ -7,9 +7,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 )
 
 // testPostgresDSN is a fixture DSN used for unit-level struct tests; no real DB is contacted.
@@ -35,13 +37,13 @@ func TestConfig_ExplicitValues(t *testing.T) {
 	cfg := Config{
 		DSN:         testPostgresDSN,
 		MaxConns:    25,
-		IdleTimeout: 10 * time.Minute,
-		MaxLifetime: 2 * time.Hour,
+		IdleTimeout: testtime.D10min,
+		MaxLifetime: testtime.D2h,
 	}
 	assert.Equal(t, "postgres://test:test@localhost:5432/testdb", cfg.DSN)
 	assert.EqualValues(t, 25, cfg.MaxConns)
-	assert.Equal(t, 10*time.Minute, cfg.IdleTimeout)
-	assert.Equal(t, 2*time.Hour, cfg.MaxLifetime)
+	assert.Equal(t, testtime.D10min, cfg.IdleTimeout)
+	assert.Equal(t, testtime.D2h, cfg.MaxLifetime)
 }
 
 func TestConfig_ApplyDefaults(t *testing.T) {
@@ -68,10 +70,10 @@ func TestConfig_ApplyDefaults(t *testing.T) {
 		},
 		{
 			name:        "all set",
-			input:       Config{MaxConns: 5, IdleTimeout: 2 * time.Minute, MaxLifetime: 30 * time.Minute},
+			input:       Config{MaxConns: 5, IdleTimeout: testtime.D2min, MaxLifetime: testtime.D30min},
 			wantConns:   5,
-			wantIdle:    2 * time.Minute,
-			wantMaxLife: 30 * time.Minute,
+			wantIdle:    testtime.D2min,
+			wantMaxLife: testtime.D30min,
 		},
 		{
 			name:        "negative conns",

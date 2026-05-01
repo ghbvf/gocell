@@ -5,10 +5,10 @@ package main
 import (
 	"context"
 	"testing"
-	"time"
 
 	adapterpg "github.com/ghbvf/gocell/adapters/postgres"
 	kernellifecycle "github.com/ghbvf/gocell/kernel/lifecycle"
+	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/runtime/auth"
 	prom "github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/assert"
@@ -82,7 +82,7 @@ func TestBuildApp_Postgres_UsesConfigCoreDatabaseURL(t *testing.T) {
 
 	setRealModeEnv(t, dsn)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), testtime.D60s)
 	defer cancel()
 
 	// Apply migrations so the schema version matches the binary (required by
@@ -121,7 +121,7 @@ func TestConfigCoreModule_Provide_UsesConfigCoreDatabaseURL(t *testing.T) {
 
 	setRealModeEnv(t, dsn)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), testtime.D60s)
 	defer cancel()
 
 	// Apply migrations so the schema guard in Provide passes.
@@ -178,7 +178,7 @@ func TestConfigCoreModule_Provide_RollsBackPGResourceOnRenewalMetricError(t *tes
 
 	setRealModeEnv(t, dsn)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), testtime.D60s)
 	defer cancel()
 
 	applyMigrationsForMain(t, ctx, dsn)

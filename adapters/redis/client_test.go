@@ -5,13 +5,13 @@ import (
 	"encoding/json"
 	"errors"
 	"testing"
-	"time"
 
 	goredis "github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 )
 
 func TestConfigDefaults(t *testing.T) {
@@ -20,28 +20,28 @@ func TestConfigDefaults(t *testing.T) {
 
 	assert.Equal(t, ModeStandalone, cfg.Mode)
 	assert.Equal(t, "", cfg.Addr) // No unsafe localhost fallback.
-	assert.Equal(t, 5*time.Second, cfg.DialTimeout)
-	assert.Equal(t, 3*time.Second, cfg.ReadTimeout)
-	assert.Equal(t, 3*time.Second, cfg.WriteTimeout)
-	assert.Equal(t, 30*time.Second, cfg.DistLockTTL)
+	assert.Equal(t, testtime.EventuallyLong, cfg.DialTimeout)
+	assert.Equal(t, testtime.D3s, cfg.ReadTimeout)
+	assert.Equal(t, testtime.D3s, cfg.WriteTimeout)
+	assert.Equal(t, testtime.CtxLong, cfg.DistLockTTL)
 }
 
 func TestConfigDefaultsPreserveExisting(t *testing.T) {
 	cfg := Config{
 		Addr:        "redis:6380",
 		Mode:        ModeSentinel,
-		DialTimeout: 10 * time.Second,
-		ReadTimeout: 7 * time.Second,
-		DistLockTTL: 60 * time.Second,
+		DialTimeout: testtime.SelectAsyncSettle,
+		ReadTimeout: testtime.D7s,
+		DistLockTTL: testtime.D60s,
 	}
 	cfg.defaults()
 
 	assert.Equal(t, ModeSentinel, cfg.Mode)
 	assert.Equal(t, "redis:6380", cfg.Addr)
-	assert.Equal(t, 10*time.Second, cfg.DialTimeout)
-	assert.Equal(t, 7*time.Second, cfg.ReadTimeout)
-	assert.Equal(t, 7*time.Second, cfg.WriteTimeout) // Defaults to ReadTimeout.
-	assert.Equal(t, 60*time.Second, cfg.DistLockTTL)
+	assert.Equal(t, testtime.SelectAsyncSettle, cfg.DialTimeout)
+	assert.Equal(t, testtime.D7s, cfg.ReadTimeout)
+	assert.Equal(t, testtime.D7s, cfg.WriteTimeout) // Defaults to ReadTimeout.
+	assert.Equal(t, testtime.D60s, cfg.DistLockTTL)
 }
 
 func TestClientHealth_Success(t *testing.T) {
@@ -196,7 +196,7 @@ func TestClientClose_AcceptsCtx(t *testing.T) {
 	mock := newMockCmdable()
 	client := newClientFromCmdable(mock, Config{})
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), testtime.CtxDefault)
 	defer cancel()
 
 	err := client.Close(ctx)
@@ -250,7 +250,7 @@ func TestConfigValidate_RejectNonTLSRemote(t *testing.T) {
 			cfg: Config{
 				Mode:        ModeStandalone,
 				Addr:        "prod.redis.example.internal:6379",
-				DialTimeout: 100 * time.Millisecond,
+				DialTimeout: testtime.SlowPoll,
 			},
 			wantTLSErr: true,
 		},
@@ -260,7 +260,7 @@ func TestConfigValidate_RejectNonTLSRemote(t *testing.T) {
 				Mode:           ModeSentinel,
 				SentinelAddrs:  []string{"prod1.sentinel.example.internal:26379"},
 				SentinelMaster: "mymaster",
-				DialTimeout:    100 * time.Millisecond,
+				DialTimeout:    testtime.SlowPoll,
 			},
 			wantTLSErr: true,
 		},
@@ -269,7 +269,7 @@ func TestConfigValidate_RejectNonTLSRemote(t *testing.T) {
 			cfg: Config{
 				Mode:        ModeStandalone,
 				Addr:        "127.0.0.1:6379",
-				DialTimeout: 100 * time.Millisecond,
+				DialTimeout: testtime.SlowPoll,
 			},
 			wantTLSErr: false,
 		},
@@ -278,7 +278,7 @@ func TestConfigValidate_RejectNonTLSRemote(t *testing.T) {
 			cfg: Config{
 				Mode:        ModeStandalone,
 				Addr:        "rediss://prod.redis.example.internal:6379",
-				DialTimeout: 100 * time.Millisecond,
+				DialTimeout: testtime.SlowPoll,
 			},
 			wantTLSErr: false,
 		},

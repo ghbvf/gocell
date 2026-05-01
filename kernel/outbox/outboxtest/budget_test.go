@@ -9,6 +9,20 @@ import (
 	"time"
 
 	"github.com/ghbvf/gocell/kernel/outbox"
+	"github.com/ghbvf/gocell/pkg/testutil/testtime"
+	"github.com/stretchr/testify/require"
+)
+
+// Package-level duration constants for budget_test.go.
+const (
+	// testBudgetHangs is the close budget for the hanging-subscriber test.
+	testBudgetHangs = testtime.D100ms
+
+	// testBudgetAwait is the close budget for the awaitWithBudget timeout test.
+	testBudgetAwait = testtime.D50ms
+
+	// budgetMultiplier5 is used to check that elapsed time is less than 5x budget.
+	budgetMultiplier5 = 5
 )
 
 // hangingCloseSubscriber.Close ignores ctx and blocks until the goroutine is
@@ -54,16 +68,15 @@ func (s fastCloseSubscriber) Close(_ context.Context) error { return s.err }
 
 func TestCloseWithBudget_FailsWithinBudgetWhenCloseHangs(t *testing.T) {
 	t.Parallel()
-	const budget = 100 * time.Millisecond
 	const topic = "topic-hangs"
 
 	start := time.Now()
-	err := closeWithBudget(t, hangingCloseSubscriber{}, topic, budget)
+	err := closeWithBudget(t, hangingCloseSubscriber{}, topic, testBudgetHangs)
 	elapsed := time.Since(start)
 
 	assertTrue(t, err != nil, "expected timeout error")
-	if elapsed >= 5*budget {
-		t.Fatalf("closeWithBudget should return promptly after budget; took %s (budget=%s)", elapsed, budget)
+	if elapsed >= budgetMultiplier5*testBudgetHangs {
+		t.Fatalf("closeWithBudget should return promptly after budget; took %s (budget=%s)", elapsed, testBudgetHangs)
 	}
 	assertTrue(t, strings.Contains(err.Error(), topic), "error must include topic identity, got: "+err.Error())
 	assertTrue(t, strings.Contains(err.Error(), "goroutine leaked"),
@@ -95,20 +108,19 @@ func TestCloseWithBudget_PassesErrorThroughOnHappyPath(t *testing.T) {
 
 func TestAwaitWithBudget_TagsErrorWithLabelOnTimeout(t *testing.T) {
 	t.Parallel()
-	const budget = 50 * time.Millisecond
 	const label = "my-join-site"
 	never := make(chan struct{})
 
 	start := time.Now()
-	err := awaitWithBudget(label, never, budget)
+	err := awaitWithBudget(label, never, testBudgetAwait)
 	elapsed := time.Since(start)
 
 	assertTrue(t, err != nil, "expected timeout error")
-	if elapsed < budget {
-		t.Fatalf("awaitWithBudget returned before budget elapsed: %s < %s", elapsed, budget)
+	if elapsed < testBudgetAwait {
+		t.Fatalf("awaitWithBudget returned before budget elapsed: %s < %s", elapsed, testBudgetAwait)
 	}
-	if elapsed >= 5*budget {
-		t.Fatalf("awaitWithBudget should return shortly after budget: %s (budget=%s)", elapsed, budget)
+	if elapsed >= budgetMultiplier5*testBudgetAwait {
+		t.Fatalf("awaitWithBudget should return shortly after budget: %s (budget=%s)", elapsed, testBudgetAwait)
 	}
 	assertTrue(t, strings.Contains(err.Error(), label), "error must include label, got: "+err.Error())
 }
@@ -128,15 +140,11 @@ func TestCloseWithBudget_ConcurrentSafety(t *testing.T) {
 	var done atomic.Int32
 	for range goroutines {
 		go func() {
-			_ = closeWithBudget(t, hangingCloseSubscriber{}, "topic-concurrent", 50*time.Millisecond)
+			_ = closeWithBudget(t, hangingCloseSubscriber{}, "topic-concurrent", testtime.MediumPoll)
 			done.Add(1)
 		}()
 	}
-	deadline := time.Now().Add(5 * time.Second)
-	for done.Load() < goroutines {
-		if time.Now().After(deadline) {
-			t.Fatalf("only %d/%d concurrent closeWithBudget calls returned", done.Load(), goroutines)
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
+	require.Eventually(t, func() bool {
+		return done.Load() >= goroutines
+	}, testtime.D5s, testtime.D10ms, "all %d concurrent closeWithBudget calls must return", goroutines)
 }

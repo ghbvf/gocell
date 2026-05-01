@@ -13,8 +13,17 @@ import (
 
 	"github.com/ghbvf/gocell/cells/accesscore/internal/mem"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+)
+
+const (
+	// d48h is used in TestNewLifecycle_Options to set and assert a 48-hour TTL.
+	d48h = 48 * time.Hour
+	// dNeg2h is used in TestLifecycle_StartWithCustomCredentialPath_SweepsExactFile
+	// to mark a credential as generated 2 hours ago.
+	dNeg2h = -2 * time.Hour
 )
 
 // ---------------------------------------------------------------------------
@@ -61,7 +70,7 @@ func TestNewLifecycle_Options(t *testing.T) {
 	l := NewLifecycle(
 		WithUsername("superadmin"),
 		WithCredentialPath("/tmp/test_cred"),
-		WithTTL(48*time.Hour),
+		WithTTL(d48h),
 		WithPasswordHasher(h),
 		WithScheduler(sched),
 		WithClock(clk),
@@ -69,7 +78,7 @@ func TestNewLifecycle_Options(t *testing.T) {
 
 	assert.Equal(t, "superadmin", l.cfg.Username)
 	assert.Equal(t, "/tmp/test_cred", l.cfg.CredentialPath)
-	assert.Equal(t, 48*time.Hour, l.cfg.TTL)
+	assert.Equal(t, d48h, l.cfg.TTL)
 	assert.Equal(t, h, l.cfg.Hasher)
 	assert.Equal(t, sched, l.cfg.Scheduler)
 	assert.Equal(t, clk, l.cfg.Clock)
@@ -145,7 +154,7 @@ func TestLifecycle_StartWithBind_FirstRun_CreatesAdmin(t *testing.T) {
 		l.mu.Lock()
 		defer l.mu.Unlock()
 		return l.cleaner != nil
-	}, 2*time.Second, 10*time.Millisecond, "cleaner should be assigned after start")
+	}, testtime.D2s, testtime.D10ms, "cleaner should be assigned after start")
 
 	// Cancel context to unblock cleaner.Start().
 	cancel()
@@ -286,7 +295,7 @@ func TestLifecycle_StartWithCustomCredentialPath_SweepsExactFile(t *testing.T) {
 	require.NoError(t, writeCredentialFile(customCredPath, credentialPayload{
 		Username:    "admin",
 		Password:    "secret",
-		GeneratedAt: now.Add(-2 * time.Hour),
+		GeneratedAt: now.Add(dNeg2h),
 		ExpiresAt:   now.Add(-time.Hour),
 	}))
 
@@ -328,7 +337,7 @@ func TestLifecycle_Stop_AfterStart(t *testing.T) {
 		l.mu.Lock()
 		defer l.mu.Unlock()
 		return l.cleaner != nil
-	}, 2*time.Second, 10*time.Millisecond)
+	}, testtime.D2s, testtime.D10ms)
 
 	cancel()
 	require.NoError(t, <-startDone)
@@ -347,7 +356,7 @@ func TestLifecycle_StartFail_CleanerRemainsNil(t *testing.T) {
 	// Use an invalid TTL that will cause newBootstrapper to fail.
 	l := NewLifecycle(
 		WithCredentialPath(filepath.Join(t.TempDir(), "cred")),
-		WithTTL(-1*time.Second), // invalid TTL
+		WithTTL(testtime.DNeg1s), // invalid TTL
 		WithPasswordHasher(BcryptHasher{Cost: 4}),
 		withPasswordSource(newFixedPasswordSourceCross()),
 	)

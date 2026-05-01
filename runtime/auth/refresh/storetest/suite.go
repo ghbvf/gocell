@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/runtime/auth/refresh"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -54,10 +55,16 @@ func (c *FakeClock) Advance(d time.Duration) {
 // per-test setup (e.g. PG schema reset) do it inside Factory.
 type Factory func(t *testing.T, policy refresh.Policy) (store refresh.Store, clock *FakeClock)
 
+// storeMaxAge7d is a typical 7-day MaxAge used across contract tests.
+const storeMaxAge7d = 7 * 24 * time.Hour
+
+// storeMaxAge48h is a 48-hour MaxAge used in ExpiresAt calculation tests.
+const storeMaxAge48h = 48 * time.Hour
+
 // defaultPolicy is the policy used by tests unless they need specific values.
 var defaultPolicy = refresh.Policy{
-	ReuseInterval: 2 * time.Second,
-	MaxAge:        7 * 24 * time.Hour,
+	ReuseInterval: testtime.D2s,
+	MaxAge:        storeMaxAge7d,
 }
 
 const (
@@ -164,13 +171,13 @@ func runT3RotateHappyPath(t *testing.T, factory Factory) {
 // yields a distinct sibling child wire (not a replay of the first child).
 // The append-only model preserves idempotency without leaking tokens.
 func runT4GracePeriod(t *testing.T, factory Factory) {
-	policy := refresh.Policy{ReuseInterval: 5 * time.Second, MaxAge: 7 * 24 * time.Hour}
+	policy := refresh.Policy{ReuseInterval: testtime.D5s, MaxAge: storeMaxAge7d}
 	store, clock := factory(t, policy)
 
 	parentWire, _ := mustIssue(t, store, "sess-4", "user-4")
 	firstChild, _ := mustRotate(t, store, parentWire)
 
-	clock.Advance(3 * time.Second) // < 5s — within grace window
+	clock.Advance(testtime.D3s) // < 5s — within grace window
 
 	secondChild, _, err := store.Rotate(context.Background(), parentWire)
 	require.NoError(t, err, "grace-window retry must succeed")
@@ -181,14 +188,14 @@ func runT4GracePeriod(t *testing.T, factory Factory) {
 // runT5ReuseDetection: parent presented beyond ReuseInterval triggers cascade
 // revocation and ErrRejected; subsequent Rotates on the chain also fail.
 func runT5ReuseDetection(t *testing.T, factory Factory) {
-	policy := refresh.Policy{ReuseInterval: 2 * time.Second, MaxAge: 7 * 24 * time.Hour}
+	policy := refresh.Policy{ReuseInterval: testtime.D2s, MaxAge: storeMaxAge7d}
 	store, clock := factory(t, policy)
 	ctx := context.Background()
 
 	parentWire, _ := mustIssue(t, store, "sess-5", "user-5")
 	childWire, _ := mustRotate(t, store, parentWire)
 
-	clock.Advance(10 * time.Second) // > 2s — beyond grace
+	clock.Advance(testtime.D10s) // > 2s — beyond grace
 
 	_, _, err := store.Rotate(ctx, parentWire)
 	require.ErrorIs(t, err, refresh.ErrRejected, "reuse-after-grace must yield ErrRejected")
@@ -225,11 +232,11 @@ func runT7RevokedToken(t *testing.T, factory Factory) {
 
 // runT8ExpiredToken: clock past MaxAge → ErrRejected.
 func runT8ExpiredToken(t *testing.T, factory Factory) {
-	policy := refresh.Policy{ReuseInterval: 2 * time.Second, MaxAge: 1 * time.Hour}
+	policy := refresh.Policy{ReuseInterval: testtime.D2s, MaxAge: testtime.D1h}
 	store, clock := factory(t, policy)
 
 	wire, _ := mustIssue(t, store, "sess-8", "user-8")
-	clock.Advance(2 * time.Hour)
+	clock.Advance(testtime.D2h)
 
 	_, _, err := store.Rotate(context.Background(), wire)
 	require.ErrorIs(t, err, refresh.ErrRejected)
@@ -305,7 +312,7 @@ func runT10ConcurrentCAS(t *testing.T, factory Factory) {
 
 // runT11ExpiresAtCalc: ExpiresAt == now + MaxAge at Issue time.
 func runT11ExpiresAtCalc(t *testing.T, factory Factory) {
-	policy := refresh.Policy{ReuseInterval: 2 * time.Second, MaxAge: 48 * time.Hour}
+	policy := refresh.Policy{ReuseInterval: testtime.D2s, MaxAge: storeMaxAge48h}
 	store, clock := factory(t, policy)
 
 	now := clock.Now()
@@ -326,14 +333,14 @@ func runT12ErrcodeCategory(t *testing.T) {
 
 // runT13GCRemovesExpired: GC drops rows past expiresAt.
 func runT13GCRemovesExpired(t *testing.T, factory Factory) {
-	policy := refresh.Policy{ReuseInterval: 2 * time.Second, MaxAge: 1 * time.Hour}
+	policy := refresh.Policy{ReuseInterval: testtime.D2s, MaxAge: testtime.D1h}
 	store, clock := factory(t, policy)
 
 	activeWire, _ := mustIssue(t, store, "sess-13a", "user-13a")
 	revokedWire, _ := mustIssue(t, store, "sess-13b", "user-13b")
 	require.NoError(t, store.RevokeSession(context.Background(), "sess-13b"))
 
-	clock.Advance(2 * time.Hour)
+	clock.Advance(testtime.D2h)
 	now := clock.Now()
 
 	removed, err := store.GC(context.Background(), now)
@@ -397,7 +404,7 @@ func runT15AfterRevokeUser(t *testing.T, factory Factory) {
 // yield two distinct child wires (see T4 — this is a stricter assertion
 // on the append-only sibling semantics).
 func runT16GraceInside(t *testing.T, factory Factory) {
-	policy := refresh.Policy{ReuseInterval: 10 * time.Second, MaxAge: 7 * 24 * time.Hour}
+	policy := refresh.Policy{ReuseInterval: testtime.D10s, MaxAge: storeMaxAge7d}
 	store, _ := factory(t, policy)
 
 	parent, _ := mustIssue(t, store, "sess-16", "user-16")
@@ -479,7 +486,7 @@ func runT19PeekDoesNotAdvance(t *testing.T, factory Factory) {
 }
 
 func runT20PeekRejectionParityAndReuseCascade(t *testing.T, factory Factory) {
-	store, clock := factory(t, refresh.Policy{ReuseInterval: 2 * time.Second, MaxAge: time.Hour})
+	store, clock := factory(t, refresh.Policy{ReuseInterval: testtime.D2s, MaxAge: testtime.D1h})
 	ctx := context.Background()
 
 	_, err := store.Peek(ctx, "malformed")
@@ -491,14 +498,14 @@ func runT20PeekRejectionParityAndReuseCascade(t *testing.T, factory Factory) {
 	assert.ErrorIs(t, err, refresh.ErrRejected, "revoked Peek must reject like Rotate")
 
 	expiredWire, _ := mustIssue(t, store, "sess-20-expired", t20Subject)
-	clock.Advance(2 * time.Hour)
+	clock.Advance(testtime.D2h)
 	_, err = store.Peek(ctx, expiredWire)
 	assert.ErrorIs(t, err, refresh.ErrRejected, "expired Peek must reject like Rotate")
 
-	store, clock = factory(t, refresh.Policy{ReuseInterval: 2 * time.Second, MaxAge: time.Hour})
+	store, clock = factory(t, refresh.Policy{ReuseInterval: testtime.D2s, MaxAge: testtime.D1h})
 	parentWire, _ := mustIssue(t, store, "sess-20-reuse", t20Subject)
 	childWire, _ := mustRotate(t, store, parentWire)
-	clock.Advance(3 * time.Second)
+	clock.Advance(testtime.D3s)
 
 	_, err = store.Peek(ctx, parentWire)
 	assert.ErrorIs(t, err, refresh.ErrRejected, "reuse Peek must reject")

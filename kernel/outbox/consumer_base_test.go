@@ -15,6 +15,34 @@ import (
 	"go.uber.org/goleak"
 
 	"github.com/ghbvf/gocell/kernel/idempotency"
+	"github.com/ghbvf/gocell/pkg/testutil/testtime"
+)
+
+// Non-table duration constants used in this file.
+const (
+	// testIdempotencyTTL48h is the explicit TTL used in SetDefaults positive-value tests.
+	testIdempotencyTTL48h = 48 * time.Hour
+
+	// testExponentialDelay3200ms is the expected delay for attempt=5 with base=100ms.
+	testExponentialDelay3200ms = 3200 * time.Millisecond
+
+	// testExpDelay8s is the expected delay for attempt=3 with base=1s (8× base).
+	testExpDelay8s = 8 * time.Second
+
+	// testExpDelay100s is a large base used to verify maxDelay clamping.
+	testExpDelay100s = 100 * time.Second
+
+	// disableLeaseRenewal is the sentinel LeaseRenewalInterval that disables
+	// the lease renewal goroutine (any negative duration).
+	disableLeaseRenewal time.Duration = -1
+
+	// renewalIntervalMultiplier3 is the factor used to block a handler for
+	// 3 renewal intervals in lease-renewal tests.
+	renewalIntervalMultiplier3 = 3
+
+	// renewalIntervalMultiplier5 is the factor used to block a handler for
+	// 5 renewal intervals in lease-lost hard-fence tests.
+	renewalIntervalMultiplier5 = 5
 )
 
 // ConsumerBase lives in kernel/outbox so tests covering its behavior must
@@ -157,7 +185,7 @@ func TestConsumerBaseConfig_SetDefaults_ZeroValues(t *testing.T) {
 	assert.Equal(t, idempotency.DefaultLeaseTTL, cfg.LeaseTTL)
 	assert.Equal(t, 3, cfg.ClaimRetryCount)
 	assert.Equal(t, time.Second, cfg.ClaimRetryBaseDelay)
-	assert.Equal(t, 30*time.Second, cfg.MaxRetryDelay)
+	assert.Equal(t, testtime.D30s, cfg.MaxRetryDelay)
 }
 
 func TestConsumerBaseConfig_SetDefaults_NegativeValuesReplaced(t *testing.T) {
@@ -177,27 +205,27 @@ func TestConsumerBaseConfig_SetDefaults_NegativeValuesReplaced(t *testing.T) {
 	assert.Equal(t, idempotency.DefaultLeaseTTL, cfg.LeaseTTL)
 	assert.Equal(t, 3, cfg.ClaimRetryCount)
 	assert.Equal(t, time.Second, cfg.ClaimRetryBaseDelay)
-	assert.Equal(t, 30*time.Second, cfg.MaxRetryDelay)
+	assert.Equal(t, testtime.D30s, cfg.MaxRetryDelay)
 }
 
 func TestConsumerBaseConfig_SetDefaults_PositiveValuesPreserved(t *testing.T) {
 	cfg := ConsumerBaseConfig{
 		RetryCount:          7,
-		RetryBaseDelay:      500 * time.Millisecond,
-		IdempotencyTTL:      48 * time.Hour,
-		LeaseTTL:            10 * time.Minute,
+		RetryBaseDelay:      testtime.D500ms,
+		IdempotencyTTL:      testIdempotencyTTL48h,
+		LeaseTTL:            testtime.D10min,
 		ClaimRetryCount:     2,
-		ClaimRetryBaseDelay: 250 * time.Millisecond,
-		MaxRetryDelay:       5 * time.Second,
+		ClaimRetryBaseDelay: testtime.D250ms,
+		MaxRetryDelay:       testtime.D5s,
 	}
 	cfg.SetDefaults()
 	assert.Equal(t, 7, cfg.RetryCount)
-	assert.Equal(t, 500*time.Millisecond, cfg.RetryBaseDelay)
-	assert.Equal(t, 48*time.Hour, cfg.IdempotencyTTL)
-	assert.Equal(t, 10*time.Minute, cfg.LeaseTTL)
+	assert.Equal(t, testtime.D500ms, cfg.RetryBaseDelay)
+	assert.Equal(t, testIdempotencyTTL48h, cfg.IdempotencyTTL)
+	assert.Equal(t, testtime.D10min, cfg.LeaseTTL)
 	assert.Equal(t, 2, cfg.ClaimRetryCount)
-	assert.Equal(t, 250*time.Millisecond, cfg.ClaimRetryBaseDelay)
-	assert.Equal(t, 5*time.Second, cfg.MaxRetryDelay)
+	assert.Equal(t, testtime.D250ms, cfg.ClaimRetryBaseDelay)
+	assert.Equal(t, testtime.D5s, cfg.MaxRetryDelay)
 }
 
 // --- exponentialDelay / ExponentialDelay -----------------------------------
@@ -205,8 +233,8 @@ func TestConsumerBaseConfig_SetDefaults_PositiveValuesPreserved(t *testing.T) {
 // TestExponentialDelay_PublicAPI verifies the exported ExponentialDelay
 // function that adapters should use instead of maintaining their own copies.
 func TestExponentialDelay_PublicAPI(t *testing.T) {
-	base := 100 * time.Millisecond
-	maxDelay := 5 * time.Second
+	base := testtime.D100ms
+	maxDelay := testtime.D5s
 	cases := []struct {
 		name     string
 		base     time.Duration
@@ -216,8 +244,8 @@ func TestExponentialDelay_PublicAPI(t *testing.T) {
 	}{
 		{"zero_base_returns_zero", 0, maxDelay, 3, 0},
 		{"attempt_0_equals_base", base, maxDelay, 0, base},
-		{"attempt_1_double", base, maxDelay, 1, 2 * base},
-		{"attempt_5_capped_by_base_shift", base, maxDelay, 5, 3200 * time.Millisecond},
+		{"attempt_1_double", base, maxDelay, 1, testtime.D200ms},
+		{"attempt_5_capped_by_base_shift", base, maxDelay, 5, testExponentialDelay3200ms},
 		{"capped_at_max", base, maxDelay, 10, maxDelay},
 		{"overflow_protection_63", base, maxDelay, 63, maxDelay},
 		{"overflow_protection_65", base, maxDelay, 65, maxDelay},
@@ -241,14 +269,14 @@ func TestExponentialDelay_Table(t *testing.T) {
 		attempt  int
 		want     time.Duration
 	}{
-		{name: "attempt 0 returns base", base: time.Second, maxDelay: 30 * time.Second, attempt: 0, want: time.Second},
-		{name: "attempt 1 doubles", base: time.Second, maxDelay: 30 * time.Second, attempt: 1, want: 2 * time.Second},
-		{name: "attempt 3 is 8x", base: time.Second, maxDelay: 30 * time.Second, attempt: 3, want: 8 * time.Second},
-		{name: "attempt capped at maxDelay", base: time.Second, maxDelay: 30 * time.Second, attempt: 10, want: 30 * time.Second},
-		{name: "large attempt overflow guard", base: time.Second, maxDelay: 30 * time.Second, attempt: 100, want: 30 * time.Second},
-		{name: "zero base returns 0", base: 0, maxDelay: 30 * time.Second, attempt: 5, want: 0},
-		{name: "negative base returns 0", base: -time.Second, maxDelay: 30 * time.Second, attempt: 3, want: 0},
-		{name: "base larger than max returns max", base: 100 * time.Second, maxDelay: 30 * time.Second, attempt: 0, want: 30 * time.Second},
+		{name: "attempt 0 returns base", base: time.Second, maxDelay: testtime.D30s, attempt: 0, want: time.Second},
+		{name: "attempt 1 doubles", base: time.Second, maxDelay: testtime.D30s, attempt: 1, want: testtime.D2s},
+		{name: "attempt 3 is 8x", base: time.Second, maxDelay: testtime.D30s, attempt: 3, want: testExpDelay8s},
+		{name: "attempt capped at maxDelay", base: time.Second, maxDelay: testtime.D30s, attempt: 10, want: testtime.D30s},
+		{name: "large attempt overflow guard", base: time.Second, maxDelay: testtime.D30s, attempt: 100, want: testtime.D30s},
+		{name: "zero base returns 0", base: 0, maxDelay: testtime.D30s, attempt: 5, want: 0},
+		{name: "negative base returns 0", base: -time.Second, maxDelay: testtime.D30s, attempt: 3, want: 0},
+		{name: "base larger than max returns max", base: testExpDelay100s, maxDelay: testtime.D30s, attempt: 0, want: testtime.D30s},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -261,8 +289,8 @@ func TestExponentialDelay_Table(t *testing.T) {
 func TestExponentialDelay_ExactMaxSafeShift(t *testing.T) {
 	base := time.Second
 	maxSafeShift := 63 - bits.Len64(uint64(base))
-	assert.Equal(t, 30*time.Second, ExponentialDelay(base, 30*time.Second, maxSafeShift))
-	assert.Equal(t, 30*time.Second, ExponentialDelay(base, 30*time.Second, maxSafeShift+1))
+	assert.Equal(t, testtime.D30s, ExponentialDelay(base, testtime.D30s, maxSafeShift))
+	assert.Equal(t, testtime.D30s, ExponentialDelay(base, testtime.D30s, maxSafeShift+1))
 }
 
 // --- NewConsumerBase -------------------------------------------------------
@@ -338,7 +366,7 @@ func TestConsumerBase_Wrap_ClaimBusy_Requeues(t *testing.T) {
 	claimer := &fakeClaimer{state: idempotency.ClaimBusy}
 
 	cb, err := NewConsumerBase(claimer, ConsumerBaseConfig{
-		RetryBaseDelay: 5 * time.Millisecond, // short backoff for test
+		RetryBaseDelay: testtime.FastPoll, // short backoff for test
 	})
 	require.NoError(t, err)
 
@@ -453,7 +481,7 @@ func TestConsumerBase_Wrap_CtxCancelled_DuringRetry_Requeues(t *testing.T) {
 
 	cb, err := NewConsumerBase(claimer, ConsumerBaseConfig{
 		RetryCount:     5,
-		RetryBaseDelay: 5 * time.Second, // long enough that ctx cancel wins
+		RetryBaseDelay: testtime.D5s, // long enough that ctx cancel wins
 	})
 	require.NoError(t, err)
 
@@ -546,7 +574,7 @@ func TestConsumerBase_Wrap_ClaimError_FailClosed_CtxCancel(t *testing.T) {
 
 	cb, err := NewConsumerBase(claimer, ConsumerBaseConfig{
 		ClaimRetryCount:     5,
-		ClaimRetryBaseDelay: 5 * time.Second,
+		ClaimRetryBaseDelay: testtime.D5s,
 	})
 	require.NoError(t, err)
 
@@ -593,8 +621,8 @@ func TestConsumerBase_Wrap_MaxRetryDelay_CapsClaimBackoff(t *testing.T) {
 
 	cb, err := NewConsumerBase(claimer, ConsumerBaseConfig{
 		ClaimRetryCount:     3,
-		ClaimRetryBaseDelay: 200 * time.Millisecond,
-		MaxRetryDelay:       20 * time.Millisecond, // clamp well below base
+		ClaimRetryBaseDelay: testtime.D200ms,
+		MaxRetryDelay:       testtime.D20ms, // clamp well below base
 	})
 	require.NoError(t, err)
 
@@ -607,7 +635,7 @@ func TestConsumerBase_Wrap_MaxRetryDelay_CapsClaimBackoff(t *testing.T) {
 	elapsed := time.Since(start)
 
 	// Without cap: 200ms + 400ms = 600ms. With cap 20ms: total well under 200ms.
-	assert.Less(t, elapsed, 300*time.Millisecond, "MaxRetryDelay must cap claim backoff")
+	assert.Less(t, elapsed, testtime.D300ms, "MaxRetryDelay must cap claim backoff")
 }
 
 // --- AsMiddleware ---------------------------------------------------------
@@ -643,12 +671,12 @@ func TestConsumerBase_AsMiddleware_AppliesWrap(t *testing.T) {
 func TestWrap_LeaseRenewal_ExtendsAtInterval(t *testing.T) {
 	defer goleak.VerifyNone(t)
 
-	interval := 20 * time.Millisecond
+	interval := testtime.D20ms
 	receipt := &fakeReceipt{}
 	claimer := &fakeClaimer{state: idempotency.ClaimAcquired, receipt: receipt}
 
 	cb, err := NewConsumerBase(claimer, ConsumerBaseConfig{
-		LeaseTTL:             200 * time.Millisecond,
+		LeaseTTL:             testtime.D200ms,
 		LeaseRenewalInterval: interval,
 	})
 	require.NoError(t, err)
@@ -657,7 +685,7 @@ func TestWrap_LeaseRenewal_ExtendsAtInterval(t *testing.T) {
 	handler := cb.Wrap(Subscription{Topic: "topic", ConsumerGroup: "cg"}, func(ctx context.Context, _ Entry) HandleResult {
 		// Block for ~3 intervals so renewal fires at least twice.
 		select {
-		case <-time.After(3 * interval):
+		case <-time.After(renewalIntervalMultiplier3 * interval):
 		case <-ctx.Done():
 		}
 		close(handlerDone)
@@ -678,7 +706,7 @@ func TestWrap_LeaseRenewal_ExtendsAtInterval(t *testing.T) {
 func TestWrap_LeaseRenewal_ExtendFailure_CancelsHandler(t *testing.T) {
 	defer goleak.VerifyNone(t)
 
-	interval := 20 * time.Millisecond
+	interval := testtime.D20ms
 	receipt := &fakeReceipt{}
 	// Set extendErr to ErrLeaseExpired on 2nd call.
 	callCount := atomic.Int32{}
@@ -687,7 +715,7 @@ func TestWrap_LeaseRenewal_ExtendFailure_CancelsHandler(t *testing.T) {
 	claimer := &fakeClaimer{state: idempotency.ClaimAcquired, receipt: receipt}
 
 	cb, err := NewConsumerBase(claimer, ConsumerBaseConfig{
-		LeaseTTL:             200 * time.Millisecond,
+		LeaseTTL:             testtime.D200ms,
 		LeaseRenewalInterval: interval,
 		RetryCount:           1,
 		RetryBaseDelay:       time.Millisecond,
@@ -701,7 +729,7 @@ func TestWrap_LeaseRenewal_ExtendFailure_CancelsHandler(t *testing.T) {
 		case <-ctx.Done():
 			ctxCancelSeen <- struct{}{}
 			return HandleResult{Disposition: DispositionRequeue, Err: ctx.Err()}
-		case <-time.After(5 * time.Second):
+		case <-time.After(testtime.D5s):
 			t.Error("handler blocked without ctx cancellation")
 			return HandleResult{Disposition: DispositionAck}
 		}
@@ -720,7 +748,7 @@ func TestWrap_LeaseRenewal_ExtendFailure_CancelsHandler(t *testing.T) {
 
 	select {
 	case <-ctxCancelSeen:
-	case <-time.After(3 * time.Second):
+	case <-time.After(testtime.EventuallyDefault):
 		t.Fatal("handler context was not canceled after Extend failure")
 	}
 
@@ -810,8 +838,8 @@ func TestWrap_LeaseRenewal_HandlerComplete_StopsGoroutine(t *testing.T) {
 	claimer := &fakeClaimer{state: idempotency.ClaimAcquired, receipt: receipt}
 
 	cb, err := NewConsumerBase(claimer, ConsumerBaseConfig{
-		LeaseTTL:             1 * time.Second,
-		LeaseRenewalInterval: 50 * time.Millisecond,
+		LeaseTTL:             testtime.D1s,
+		LeaseRenewalInterval: testtime.MediumPoll,
 	})
 	require.NoError(t, err)
 
@@ -833,7 +861,7 @@ func TestWrap_LeaseRenewal_HandlerComplete_StopsGoroutine(t *testing.T) {
 func TestWrap_LeaseRenewalLoop_TransientExtendError_LogsWarnAndContinues(t *testing.T) {
 	defer goleak.VerifyNone(t)
 
-	interval := 20 * time.Millisecond
+	interval := testtime.D20ms
 	transientErr := errors.New("extend: redis timeout")
 
 	// fakeReceipt with extendErr set returns the transient error on every
@@ -843,7 +871,7 @@ func TestWrap_LeaseRenewalLoop_TransientExtendError_LogsWarnAndContinues(t *test
 	claimer := &fakeClaimer{state: idempotency.ClaimAcquired, receipt: receipt}
 
 	cb, err := NewConsumerBase(claimer, ConsumerBaseConfig{
-		LeaseTTL:             200 * time.Millisecond,
+		LeaseTTL:             testtime.D200ms,
 		LeaseRenewalInterval: interval,
 		RetryCount:           1,
 		RetryBaseDelay:       time.Millisecond,
@@ -857,7 +885,7 @@ func TestWrap_LeaseRenewalLoop_TransientExtendError_LogsWarnAndContinues(t *test
 		// Block for 3 intervals so renewal fires at least twice with the
 		// transient error; verify ctx stays live throughout.
 		select {
-		case <-time.After(3 * interval):
+		case <-time.After(renewalIntervalMultiplier3 * interval):
 			// normal exit — ctx was NOT canceled by transient extend error
 		case <-ctx.Done():
 			t.Error("handler context was canceled on transient extend error — must not happen")
@@ -888,7 +916,7 @@ func TestWrap_LeaseRenewal_DisabledWhenIntervalNegative(t *testing.T) {
 
 	cb, err := NewConsumerBase(claimer, ConsumerBaseConfig{
 		LeaseTTL:             idempotency.DefaultLeaseTTL,
-		LeaseRenewalInterval: -1, // negative disables renewal
+		LeaseRenewalInterval: disableLeaseRenewal, // negative disables renewal
 	})
 	require.NoError(t, err)
 
@@ -938,7 +966,7 @@ func TestWrap_LeaseRenewal_DisabledWhenIntervalZeroAndTTLZero(t *testing.T) {
 func TestConsumerBase_LeaseLost_ForceRequeue_EvenWhenHandlerReturnsAck(t *testing.T) {
 	defer goleak.VerifyNone(t)
 
-	interval := 20 * time.Millisecond
+	interval := testtime.D20ms
 	callCount := atomic.Int32{}
 	baseReceipt := &fakeReceipt{}
 
@@ -952,7 +980,7 @@ func TestConsumerBase_LeaseLost_ForceRequeue_EvenWhenHandlerReturnsAck(t *testin
 	claimer := &fakeClaimer{state: idempotency.ClaimAcquired, receipt: spyR}
 
 	cb, err := NewConsumerBase(claimer, ConsumerBaseConfig{
-		LeaseTTL:             200 * time.Millisecond,
+		LeaseTTL:             testtime.D200ms,
 		LeaseRenewalInterval: interval,
 		RetryCount:           1,
 		RetryBaseDelay:       time.Millisecond,
@@ -966,7 +994,7 @@ func TestConsumerBase_LeaseLost_ForceRequeue_EvenWhenHandlerReturnsAck(t *testin
 		// Block to allow renewal goroutine to fire and set leaseLost.
 		// The handler deliberately does NOT check ctx.Done() to simulate a
 		// stale handler that ignores cancellation.
-		time.Sleep(5 * interval)
+		time.Sleep(renewalIntervalMultiplier5 * interval) //archtest:allow:test-sleep Renew extends TTL — polling defeats test
 		return HandleResult{Disposition: DispositionAck}
 	})
 
@@ -983,7 +1011,7 @@ func TestConsumerBase_LeaseLost_ForceRequeue_EvenWhenHandlerReturnsAck(t *testin
 func TestConsumerBase_LeaseLost_HandlerCancellation_StillRequeue(t *testing.T) {
 	defer goleak.VerifyNone(t)
 
-	interval := 20 * time.Millisecond
+	interval := testtime.D20ms
 	callCount := atomic.Int32{}
 	baseReceipt := &fakeReceipt{}
 
@@ -996,7 +1024,7 @@ func TestConsumerBase_LeaseLost_HandlerCancellation_StillRequeue(t *testing.T) {
 	claimer := &fakeClaimer{state: idempotency.ClaimAcquired, receipt: spyR}
 
 	cb, err := NewConsumerBase(claimer, ConsumerBaseConfig{
-		LeaseTTL:             200 * time.Millisecond,
+		LeaseTTL:             testtime.D200ms,
 		LeaseRenewalInterval: interval,
 		RetryCount:           1,
 		RetryBaseDelay:       time.Millisecond,
@@ -1009,7 +1037,7 @@ func TestConsumerBase_LeaseLost_HandlerCancellation_StillRequeue(t *testing.T) {
 		case <-ctx.Done():
 			ctxCancelSeen <- struct{}{}
 			return HandleResult{Disposition: DispositionRequeue, Err: ctx.Err()}
-		case <-time.After(5 * time.Second):
+		case <-time.After(testtime.D5s):
 			t.Error("handler blocked without ctx cancellation")
 			return HandleResult{Disposition: DispositionAck}
 		}
@@ -1019,7 +1047,7 @@ func TestConsumerBase_LeaseLost_HandlerCancellation_StillRequeue(t *testing.T) {
 
 	select {
 	case <-ctxCancelSeen:
-	case <-time.After(3 * time.Second):
+	case <-time.After(testtime.EventuallyDefault):
 		t.Fatal("handler context was not canceled after ErrLeaseExpired")
 	}
 
@@ -1037,8 +1065,8 @@ func TestConsumerBase_LeaseHeld_NormalAck(t *testing.T) {
 	claimer := &fakeClaimer{state: idempotency.ClaimAcquired, receipt: receipt}
 
 	cb, err := NewConsumerBase(claimer, ConsumerBaseConfig{
-		LeaseTTL:             200 * time.Millisecond,
-		LeaseRenewalInterval: 20 * time.Millisecond,
+		LeaseTTL:             testtime.D200ms,
+		LeaseRenewalInterval: testtime.D20ms,
 		RetryCount:           1,
 		RetryBaseDelay:       time.Millisecond,
 	})

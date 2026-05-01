@@ -9,6 +9,7 @@ import (
 
 	"github.com/ghbvf/gocell/cells/accesscore/internal/domain"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/mem"
+	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/runtime/auth/refresh"
 	refreshmem "github.com/ghbvf/gocell/runtime/auth/refresh/memstore"
 	"github.com/ghbvf/gocell/runtime/auth/refresh/storetest"
@@ -23,7 +24,7 @@ import (
 func newCascadeStore(t *testing.T) refresh.Store {
 	t.Helper()
 	clock := storetest.NewFakeClock(time.Now())
-	return refreshmem.MustNew(refresh.Policy{ReuseInterval: 100 * time.Millisecond, MaxAge: time.Hour}, clock, nil)
+	return refreshmem.MustNew(refresh.Policy{ReuseInterval: testtime.SlowPoll, MaxAge: time.Hour}, clock, nil)
 }
 
 func TestService_Logout_RevokesRefreshChain(t *testing.T) {

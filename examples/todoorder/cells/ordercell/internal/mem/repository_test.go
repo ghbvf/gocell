@@ -14,6 +14,18 @@ import (
 	"github.com/ghbvf/gocell/examples/todoorder/cells/ordercell/internal/domain"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/query"
+	"github.com/ghbvf/gocell/pkg/testutil/testtime"
+)
+
+const (
+	// orderD7h is used as cursor offset in paged-list tests; not in testtime table.
+	orderD7h = 7 * time.Hour
+	// orderDNeg24h is used as a past-cursor test offset; not in testtime table.
+	orderDNeg24h = -24 * time.Hour
+	// orderNs100/200/300 are sub-second precision offsets; not in testtime table.
+	orderNs100 = 100 * time.Nanosecond
+	orderNs200 = 200 * time.Nanosecond
+	orderNs300 = 300 * time.Nanosecond
 )
 
 func TestOrderRepository_Create(t *testing.T) {
@@ -209,7 +221,7 @@ func TestOrderRepository_ListPaged_WithCursor(t *testing.T) {
 	}
 
 	// Simulate cursor after ord-07 (created_at = base+7h)
-	cursorTime := base.Add(7 * time.Hour).Format(time.RFC3339Nano)
+	cursorTime := base.Add(orderD7h).Format(time.RFC3339Nano)
 	params := query.ListParams{
 		Limit:        3,
 		CursorValues: []any{cursorTime, "ord-07"},
@@ -236,7 +248,7 @@ func TestOrderRepository_ListPaged_LastPage(t *testing.T) {
 	}
 
 	// Cursor after ord-01 (DESC): only ord-00 left
-	cursorTime := base.Add(1 * time.Hour).Format(time.RFC3339Nano)
+	cursorTime := base.Add(testtime.D1h).Format(time.RFC3339Nano)
 	params := query.ListParams{
 		Limit:        3,
 		CursorValues: []any{cursorTime, "ord-01"},
@@ -329,7 +341,7 @@ func TestOrderRepository_ListPaged_CursorPastEnd(t *testing.T) {
 
 	params := query.ListParams{
 		Limit:        10,
-		CursorValues: []any{base.Add(-24 * time.Hour).Format(time.RFC3339Nano), "000"},
+		CursorValues: []any{base.Add(orderDNeg24h).Format(time.RFC3339Nano), "000"},
 		Sort: []query.SortColumn{
 			{Name: "created_at", Direction: query.SortDESC},
 			{Name: "id", Direction: query.SortASC},
@@ -414,12 +426,12 @@ func TestOrderRepository_ListPaged_SubsecondPrecision(t *testing.T) {
 	ctx := context.Background()
 
 	base := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
-	_ = repo.Create(ctx, &domain.Order{ID: "1", Item: "a", CreatedAt: base.Add(100 * time.Nanosecond)})
-	_ = repo.Create(ctx, &domain.Order{ID: "2", Item: "b", CreatedAt: base.Add(200 * time.Nanosecond)})
-	_ = repo.Create(ctx, &domain.Order{ID: "3", Item: "c", CreatedAt: base.Add(300 * time.Nanosecond)})
+	_ = repo.Create(ctx, &domain.Order{ID: "1", Item: "a", CreatedAt: base.Add(orderNs100)})
+	_ = repo.Create(ctx, &domain.Order{ID: "2", Item: "b", CreatedAt: base.Add(orderNs200)})
+	_ = repo.Create(ctx, &domain.Order{ID: "3", Item: "c", CreatedAt: base.Add(orderNs300)})
 
 	// Cursor at order 2 (200ns), ASC → should return order 3 only.
-	cursorTS := base.Add(200 * time.Nanosecond).Format(time.RFC3339Nano)
+	cursorTS := base.Add(orderNs200).Format(time.RFC3339Nano)
 	params := query.ListParams{
 		Limit:        10,
 		CursorValues: []any{cursorTS, "2"},

@@ -4,11 +4,11 @@ import (
 	"context"
 	"sync/atomic"
 	"testing"
-	"time"
 
 	adapterpg "github.com/ghbvf/gocell/adapters/postgres"
 	"github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/kernel/outbox"
+	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/runtime/bootstrap"
 	"github.com/ghbvf/gocell/runtime/crypto"
 	"github.com/ghbvf/gocell/runtime/eventbus"
@@ -158,7 +158,7 @@ func TestOutboxE2E_CrossCellFanout(t *testing.T) {
 	eb := eventbus.New()
 	t.Cleanup(func() { _ = eb.Close(context.Background()) })
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), testtime.CtxDefault)
 	defer cancel()
 
 	// Two counters — one per consumer group.
@@ -214,7 +214,7 @@ func TestOutboxE2E_CrossCellFanout(t *testing.T) {
 	// stay at 0.
 	require.Eventually(t, func() bool {
 		return accessCalls.Load() == 1 && auditCalls.Load() == 1
-	}, 3*time.Second, 5*time.Millisecond,
+	}, testtime.EventuallyDefault, testtime.FastPoll,
 		"P0 regression: both consumer groups must receive the event; "+
 			"access=%d audit=%d", accessCalls.Load(), auditCalls.Load())
 

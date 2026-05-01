@@ -6,9 +6,19 @@ import (
 	"time"
 
 	kout "github.com/ghbvf/gocell/kernel/outbox"
+	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/runtime/outbox"
 	"github.com/ghbvf/gocell/runtime/outbox/outboxtest"
 )
+
+// fakeStoreClaimTTL is the claimTTL passed to ReclaimStale in the reclaim test.
+const fakeStoreClaimTTL = testtime.D60s
+
+// fakeStoreBaseDelay is the baseDelay passed to ReclaimStale.
+const fakeStoreBaseDelay = testtime.D5s
+
+// fakeStoreMaxDelay is the maxDelay passed to ReclaimStale.
+const fakeStoreMaxDelay = testtime.D5min
 
 // TestFakeStore_ConformanceSuite runs the full Store conformance suite against
 // FakeStore to verify that the in-memory implementation is spec-compliant.
@@ -103,10 +113,10 @@ func TestFakeStore_WithClock(t *testing.T) {
 	}
 
 	// Advance clock and reclaim; nextRetryAt should use new clock value.
-	advanced := base.Add(2 * time.Minute)
+	advanced := base.Add(testtime.D2min)
 	s.WithClock(func() time.Time { return advanced })
 
-	count, err := s.ReclaimStale(ctx, 60*time.Second, 5, 5*time.Second, 5*time.Minute)
+	count, err := s.ReclaimStale(ctx, fakeStoreClaimTTL, 5, fakeStoreBaseDelay, fakeStoreMaxDelay)
 	if err != nil {
 		t.Fatalf("ReclaimStale: %v", err)
 	}

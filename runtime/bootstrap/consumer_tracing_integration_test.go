@@ -13,6 +13,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/wrapper"
+	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/runtime/eventbus"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -152,7 +153,7 @@ func TestBootstrap_ConsumerTracingIntegration(t *testing.T) {
 	select {
 	case got := <-cellImpl.calls:
 		assert.Equal(t, "integration-evt-1", got.ID)
-	case <-time.After(2 * time.Second):
+	case <-time.After(testtime.D2s):
 		t.Fatal("consumer handler was never invoked within 2s")
 	}
 

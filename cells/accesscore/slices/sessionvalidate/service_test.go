@@ -30,6 +30,9 @@ func init() {
 	}
 }
 
+// dNeg2h is the offset for seeding an expired session whose CreatedAt is 2h ago.
+const dNeg2h = -2 * time.Hour
+
 func TestService_VerifyIntent(t *testing.T) {
 	sessionRepo := mem.NewSessionRepository()
 
@@ -60,7 +63,7 @@ func TestService_VerifyIntent(t *testing.T) {
 		UserID:      "usr-3",
 		AccessToken: "dummy3",
 		ExpiresAt:   time.Now().Add(-time.Hour), // already expired
-		CreatedAt:   time.Now().Add(-2 * time.Hour),
+		CreatedAt:   time.Now().Add(dNeg2h),
 	}
 	require.NoError(t, sessionRepo.Create(context.Background(), expiredSession))
 

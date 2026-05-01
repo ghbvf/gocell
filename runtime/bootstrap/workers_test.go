@@ -8,6 +8,7 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/assembly"
 	"github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/runtime/http/router"
 	"github.com/ghbvf/gocell/runtime/worker"
 	"github.com/stretchr/testify/assert"
@@ -52,7 +53,7 @@ func TestRun_WithWorkers_Shutdown(t *testing.T) {
 		WithAssembly(asm),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(ln)),
 		WithListener(cell.InternalListener, "127.0.0.1:0", []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(newLocalListener(t))),
-		WithShutdownTimeout(2*time.Second),
+		WithShutdownTimeout(testtime.D2s),
 		WithWorkers(w),
 	)
 
@@ -69,13 +70,13 @@ func TestRun_WithWorkers_Shutdown(t *testing.T) {
 		}
 		closeBody(t, resp)
 		return true
-	}, 3*time.Second, 50*time.Millisecond, "HTTP server did not become ready")
+	}, testtime.EventuallyDefault, testtime.MediumPoll, "HTTP server did not become ready")
 	cancel()
 
 	select {
 	case runErr := <-done:
 		assert.NoError(t, runErr)
-	case <-time.After(5 * time.Second):
+	case <-time.After(testtime.SelectShutdown):
 		t.Fatal("bootstrap did not shut down in time")
 	}
 }

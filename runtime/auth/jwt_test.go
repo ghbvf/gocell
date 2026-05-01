@@ -15,10 +15,12 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 )
 
 func TestDefaultAccessTokenTTL(t *testing.T) {
-	assert.Equal(t, 15*time.Minute, DefaultAccessTokenTTL,
+	assert.Equal(t, testtime.D15min, DefaultAccessTokenTTL,
 		"DefaultAccessTokenTTL must be 15 minutes")
 	assert.True(t, DefaultAccessTokenTTL > 0,
 		"DefaultAccessTokenTTL must be positive")
@@ -288,7 +290,7 @@ func TestJWTVerifier_MalformedToken(t *testing.T) {
 
 func TestJWTIssuer_RoundTrip(t *testing.T) {
 	ks := mustTestKeySet(t)
-	issuer, err := NewJWTIssuer(ks, "test-issuer", 30*time.Minute)
+	issuer, err := NewJWTIssuer(ks, "test-issuer", testtime.D30min)
 	require.NoError(t, err)
 	verifier, err := NewJWTVerifier(ks, WithExpectedAudiences("gocell"))
 	require.NoError(t, err)

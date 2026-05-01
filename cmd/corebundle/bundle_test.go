@@ -19,6 +19,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/observability/metrics"
 	kworker "github.com/ghbvf/gocell/kernel/worker"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/bootstrap"
 	"github.com/ghbvf/gocell/runtime/crypto"
@@ -224,7 +225,7 @@ func buildTestSharedDeps(t *testing.T) *SharedDeps {
 	privKey, pubKey := auth.MustGenerateTestKeyPair()
 	keySet, err := auth.NewKeySet(privKey, pubKey)
 	require.NoError(t, err)
-	issuer, err := auth.NewJWTIssuer(keySet, "test-issuer", 15*time.Minute, auth.WithIssuerAudiencesFromSlice([]string{"test-audience"}))
+	issuer, err := auth.NewJWTIssuer(keySet, "test-issuer", testtime.D15min, auth.WithIssuerAudiencesFromSlice([]string{"test-audience"}))
 	require.NoError(t, err)
 	verifier, err := auth.NewJWTVerifier(keySet, auth.WithExpectedAudiences("test-audience"))
 	require.NoError(t, err)
@@ -268,7 +269,7 @@ func newValidatedSharedDeps(t *testing.T, topo bootstrap.Topology) *SharedDeps {
 	privKey, pubKey := auth.MustGenerateTestKeyPair()
 	keySet, err := auth.NewKeySet(privKey, pubKey)
 	require.NoError(t, err)
-	issuer, err := auth.NewJWTIssuer(keySet, "test-issuer", 15*time.Minute, auth.WithIssuerAudiencesFromSlice([]string{"test-audience"}))
+	issuer, err := auth.NewJWTIssuer(keySet, "test-issuer", testtime.D15min, auth.WithIssuerAudiencesFromSlice([]string{"test-audience"}))
 	require.NoError(t, err)
 	verifier, err := auth.NewJWTVerifier(keySet, auth.WithExpectedAudiences("test-audience"))
 	require.NoError(t, err)
@@ -655,7 +656,7 @@ func TestBuildBootstrap_MemoryTopology(t *testing.T) {
 	select {
 	case err := <-errCh:
 		assert.NoError(t, err, "memory bootstrap must shut down cleanly")
-	case <-time.After(10 * time.Second):
+	case <-time.After(testtime.SelectAsyncSettle):
 		t.Fatal("bootstrap did not shut down in time")
 	}
 }
@@ -705,7 +706,7 @@ func TestBuildBootstrap_PostgresTopology_FakePGResource(t *testing.T) {
 	select {
 	case err := <-errCh:
 		assert.NoError(t, err)
-	case <-time.After(10 * time.Second):
+	case <-time.After(testtime.SelectAsyncSettle):
 		t.Fatal("bootstrap did not shut down in time")
 	}
 
@@ -753,7 +754,7 @@ func TestBuildBootstrap_AssemblyHasAllCells(t *testing.T) {
 	select {
 	case err := <-errCh:
 		assert.NoError(t, err)
-	case <-time.After(10 * time.Second):
+	case <-time.After(testtime.SelectAsyncSettle):
 		t.Fatal("full assembly bootstrap did not shut down in time")
 	}
 }

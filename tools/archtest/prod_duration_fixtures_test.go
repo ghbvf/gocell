@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/ghbvf/gocell/tools/archtest/internal/typeseval"
+	"github.com/ghbvf/gocell/tools/internal/fileroles"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/tools/go/packages"
@@ -20,10 +21,10 @@ import (
 // runFixtureScan loads the fixture package at fixtureDir and returns the sorted
 // slice of "file.go:line" violation strings using the same walk+predicates as
 // TestProdDurationConst. Paths outside the fixture module root (stdlib, deps)
-// are excluded via the same prodDurationExcludeAbs logic.
+// are excluded via fileroles.Rel returning ok=false.
 func runFixtureScan(t *testing.T, fixtureDir string) []string {
 	t.Helper()
-	pkgs, errs, err := typeseval.LoadPackagesWithTags(fixtureDir, []string{"e2e", "integration", "pg"}, "./...")
+	pkgs, errs, err := typeseval.LoadPackages(fixtureDir, false, []string{"e2e", "integration", "pg"}, "./...")
 	require.NoError(t, err, "packages.Load failed for fixture %s", fixtureDir)
 	require.Empty(t, errs, "package load errors must fail-closed for %s: %v", fixtureDir, errs)
 
@@ -41,16 +42,12 @@ func runFixtureScan(t *testing.T, fixtureDir string) []string {
 			}
 			visited[abs] = true
 
-			// Use fixtureDir as root for exclusion: stdlib/dep files have
-			// paths outside the fixture dir → "../" prefix → excluded.
-			if prodDurationExcludeAbs(fixtureDir, abs) {
+			// Fixtures live in their own ad-hoc module rooted at fixtureDir;
+			// stdlib / dependency files come back with a "../" rel prefix
+			// from fileroles.Rel, which returns ok=false for them.
+			rel, ok := fileroles.Rel(fixtureDir, abs)
+			if !ok {
 				continue
-			}
-
-			// Compute path relative to fixture dir for readable violation strings.
-			rel, err := filepath.Rel(fixtureDir, abs)
-			if err != nil || rel == "" {
-				rel = filepath.Base(abs)
 			}
 
 			raw := scanProdDurationAST(p.Fset, file, rel, p.TypesInfo)
@@ -147,7 +144,7 @@ func TestProdDurationConstFailsClosedOnLoadError(t *testing.T) {
 	root := findModuleRoot(t)
 	fixtureDir := filepath.Join(root, "tools", "archtest", "testdata", "prod_duration_fixtures", "package_load_error")
 
-	_, errs, err := typeseval.LoadPackagesWithTags(fixtureDir, []string{"e2e", "integration", "pg"}, "./...")
+	_, errs, err := typeseval.LoadPackages(fixtureDir, false, []string{"e2e", "integration", "pg"}, "./...")
 	// The load itself should not return a hard error (packages.Load returns
 	// partial results with per-package errors for syntax failures), but there
 	// must be at least one package error.

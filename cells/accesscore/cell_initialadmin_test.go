@@ -16,6 +16,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/kernel/outbox"
+	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/runtime/bootstrap"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -81,7 +82,7 @@ func spinLifecycle(t *testing.T, ctx context.Context, ac *AccessCore) (stop func
 	}
 	startErr = lc.Start(ctx)
 	stop = func() {
-		stopCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		stopCtx, cancel := context.WithTimeout(context.Background(), testtime.CtxDefault)
 		defer cancel()
 		_ = lc.Stop(stopCtx)
 	}
@@ -155,7 +156,7 @@ func TestInit_WithInitialAdminBootstrap_LifecycleHookRegistered(t *testing.T) {
 	}()
 
 	// Give start time to reach cleaner.Start then cancel to unblock.
-	time.Sleep(50 * time.Millisecond)
+	time.Sleep(testtime.ShortSleep) //archtest:allow:test-sleep wait for goroutine to enter blocking cleaner.Start; no started observable
 	cancel()
 	<-stopCh
 	require.NoError(t, startErr)
@@ -258,7 +259,7 @@ func TestInit_BootstrapAdminExists_FreshOrphanFile_SweepCleanerRegistered(t *tes
 	require.NoError(t, err)
 
 	// Write a fresh orphan credential file (expires_at = now + 30m).
-	require.NoError(t, writeFreshOrphanFile(t, credPath, 30*time.Minute))
+	require.NoError(t, writeFreshOrphanFile(t, credPath, testtime.D30min))
 
 	bootstrapOpts := []initialadmin.LifecycleOption{
 		initialadmin.WithCredentialPath(credPath),
@@ -295,7 +296,7 @@ func TestInit_BootstrapAdminExists_FreshOrphanFile_SweepCleanerRegistered(t *tes
 	}()
 
 	// Wait for cleaner.Start to be reached (cleaner assigned inside start()).
-	time.Sleep(50 * time.Millisecond)
+	time.Sleep(testtime.ShortSleep) //archtest:allow:test-sleep wait for goroutine to enter blocking cleaner.Start; no started observable
 	cancel()
 
 	startErr := <-stopCh
@@ -349,7 +350,7 @@ func TestInit_BootstrapUser_HasPasswordResetRequired(t *testing.T) {
 	}()
 
 	// Give cleaner time to start, then cancel.
-	time.Sleep(50 * time.Millisecond)
+	time.Sleep(testtime.ShortSleep) //archtest:allow:test-sleep wait for goroutine to enter blocking cleaner.Start; no started observable
 	cancel()
 	<-stopCh
 	require.NoError(t, startErr)

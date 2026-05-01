@@ -10,6 +10,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 )
 
 func TestNotifyContext_CancelStopsContext(t *testing.T) {
@@ -30,7 +32,7 @@ func TestNotifyContext_CancelStopsContext(t *testing.T) {
 	select {
 	case <-ctx.Done():
 		// expected
-	case <-time.After(time.Second):
+	case <-time.After(testtime.EventuallyShort):
 		t.Fatal("context did not become done after cancel()")
 	}
 
@@ -50,7 +52,7 @@ func TestNotifyContext_InterruptCancelsContext(t *testing.T) {
 	require.NoError(t, err)
 
 	// Give the signal handler a moment to register.
-	time.Sleep(10 * time.Millisecond)
+	time.Sleep(testtime.D10ms) //archtest:allow:test-sleep signal.Notify install has no sync hook
 
 	// Send SIGINT to self.
 	require.NoError(t, proc.Signal(syscall.SIGINT))
@@ -58,7 +60,7 @@ func TestNotifyContext_InterruptCancelsContext(t *testing.T) {
 	select {
 	case <-ctx.Done():
 		// expected
-	case <-time.After(3 * time.Second):
+	case <-time.After(testtime.EventuallyDefault):
 		t.Fatal("context did not become done after SIGINT")
 	}
 

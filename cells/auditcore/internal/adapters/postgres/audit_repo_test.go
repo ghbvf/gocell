@@ -9,6 +9,7 @@ import (
 	"github.com/ghbvf/gocell/cells/auditcore/internal/ports"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/query"
+	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -142,7 +143,7 @@ func TestAuditRepository_Query_WithFilters(t *testing.T) {
 	filters := ports.AuditFilters{
 		EventType: "login",
 		ActorID:   "usr-1",
-		From:      now.Add(-1 * time.Hour),
+		From:      now.Add(testtime.DNeg1h),
 		To:        now,
 	}
 

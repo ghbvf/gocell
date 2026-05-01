@@ -11,10 +11,18 @@ import (
 
 	"github.com/ghbvf/gocell/adapters/postgres"
 	"github.com/ghbvf/gocell/kernel/outbox"
+	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	outboxruntime "github.com/ghbvf/gocell/runtime/outbox"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+)
+
+const (
+	// relayD20ms is the base retry delay for fastRelayConfig; not in testtime table.
+	relayD20ms = 20 * time.Millisecond
+	// relayD300ms is the ClaimTTL for fastRelayConfig; not in testtime table.
+	relayD300ms = 300 * time.Millisecond
 )
 
 // ---------------------------------------------------------------------------
@@ -178,15 +186,15 @@ func queryEntryStatus(t *testing.T, pool *postgres.Pool, id string) (status stri
 // failure-path tests. ClaimTTL > 2*PollInterval to satisfy the relay invariant.
 func fastRelayConfig() outboxruntime.RelayConfig {
 	return outboxruntime.RelayConfig{
-		PollInterval:        50 * time.Millisecond,
+		PollInterval:        testtime.MediumPoll,
 		BatchSize:           10,
 		MaxAttempts:         3,
-		BaseRetryDelay:      20 * time.Millisecond,
-		MaxRetryDelay:       100 * time.Millisecond,
-		ClaimTTL:            300 * time.Millisecond,
-		ReclaimInterval:     100 * time.Millisecond,
-		RetentionPeriod:     1 * time.Hour,
-		DeadRetentionPeriod: 24 * time.Hour,
+		BaseRetryDelay:      relayD20ms,
+		MaxRetryDelay:       testtime.SlowPoll,
+		ClaimTTL:            relayD300ms,
+		ReclaimInterval:     testtime.SlowPoll,
+		RetentionPeriod:     testtime.D1h,
+		DeadRetentionPeriod: testtime.D24h,
 	}
 }
 
@@ -198,13 +206,13 @@ func runRelay(t *testing.T, relay *outboxruntime.Relay) (stop func()) {
 	done := make(chan error, 1)
 	go func() { done <- relay.Start(ctx) }()
 	return func() {
-		stopCtx, stopCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		stopCtx, stopCancel := context.WithTimeout(context.Background(), testtime.SelectShutdown)
 		defer stopCancel()
 		_ = relay.Stop(stopCtx)
 		cancel()
 		select {
 		case <-done:
-		case <-time.After(5 * time.Second):
+		case <-time.After(testtime.SelectShutdown):
 			t.Fatal("relay.Start did not return after Stop")
 		}
 	}
@@ -243,7 +251,7 @@ func TestIntegration_PGRelay_TransientPublishRetry(t *testing.T) {
 	require.Eventually(t, func() bool {
 		status, _, _ := queryEntryStatus(t, pool, id)
 		return status == "published"
-	}, 5*time.Second, 50*time.Millisecond, "entry must reach published after transient retries")
+	}, testtime.EventuallyLong, testtime.MediumPoll, "entry must reach published after transient retries")
 
 	_, attempts, _ := queryEntryStatus(t, pool, id)
 	assert.GreaterOrEqual(t, attempts, 2, "attempts must reflect retry count (publisher saw %d attempts)", pub.attemptsFor(topic))
@@ -272,7 +280,7 @@ func TestIntegration_PGRelay_MaxAttemptsDeadLetter(t *testing.T) {
 	require.Eventually(t, func() bool {
 		status, _, _ := queryEntryStatus(t, pool, id)
 		return status == "dead"
-	}, 5*time.Second, 50*time.Millisecond, "entry must reach dead after MaxAttempts publish failures")
+	}, testtime.EventuallyLong, testtime.MediumPoll, "entry must reach dead after MaxAttempts publish failures")
 
 	status, attempts, deadAt := queryEntryStatus(t, pool, id)
 	assert.Equal(t, "dead", status)
@@ -351,7 +359,7 @@ func TestIntegration_PGRelay_ConcurrentRelaysNoDoublePublish(t *testing.T) {
 			).Scan(&n),
 			"COUNT(*) published")
 		return n == entryCount
-	}, 10*time.Second, 100*time.Millisecond, "all entries must be published exactly once")
+	}, testtime.SelectAsyncSettle, testtime.SlowPoll, "all entries must be published exactly once")
 
 	assert.Equal(t, int64(entryCount), pub.total.Load(),
 		"total publish count must equal entry count (no duplicates from concurrent claim)")
@@ -389,7 +397,7 @@ func TestIntegration_PGRelay_StopMidPublishReclaimTakeover(t *testing.T) {
 	// Wait for relay A to actually begin its publish (i.e. claim the row).
 	select {
 	case <-stuck.entered:
-	case <-time.After(2 * time.Second):
+	case <-time.After(testtime.D2s):
 		t.Fatal("relay A never reached publish")
 	}
 
@@ -403,7 +411,7 @@ func TestIntegration_PGRelay_StopMidPublishReclaimTakeover(t *testing.T) {
 	// Stop relay A. We release the publish first so the goroutine isn't wedged
 	// (the relay's Stop has its own ctx cancellation but we want a clean exit).
 	stuck.release()
-	stopCtx, stopCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	stopCtx, stopCancel := context.WithTimeout(context.Background(), testtime.SelectShutdown)
 	require.NoError(t, relayA.Stop(stopCtx))
 	stopCancel()
 	cancelA()
@@ -419,7 +427,7 @@ func TestIntegration_PGRelay_StopMidPublishReclaimTakeover(t *testing.T) {
 	require.Eventually(t, func() bool {
 		status, _, _ := queryEntryStatus(t, pool, id)
 		return status == "published"
-	}, 10*time.Second, 100*time.Millisecond, "relay B must reclaim and publish the orphaned entry")
+	}, testtime.SelectAsyncSettle, testtime.SlowPoll, "relay B must reclaim and publish the orphaned entry")
 
 	assert.GreaterOrEqual(t, successPub.total.Load(), int64(1), "relay B must publish at least once")
 }

@@ -13,6 +13,8 @@ import (
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
+const authnDNeg6min = -6 * time.Minute
+
 // stubAuthenticator is a test double for the Authenticator interface.
 type stubAuthenticator struct {
 	principal *Principal
@@ -479,7 +481,7 @@ func TestServiceTokenAuthenticator_InvalidMAC_Error(t *testing.T) {
 func TestServiceTokenAuthenticator_Expired_Error(t *testing.T) {
 	ring := mustTestRing(t, testHMACKey, "")
 	now := time.Now()
-	oldTime := now.Add(-6 * time.Minute)
+	oldTime := now.Add(authnDNeg6min)
 	// Token is signed for 6 minutes ago — exceeds ServiceTokenMaxAge.
 	token := GenerateServiceToken(ring, http.MethodGet, "/internal/v1/resource", "", oldTime)
 	a := mustNewServiceTokenAuthenticator(t, ring,

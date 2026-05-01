@@ -11,9 +11,18 @@ import (
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// routerReadyDelay is the time a delayed subscriber takes to signal ready; used
+// to verify Router.Running() timing in RunBlocksUntilReady tests.
+const routerReadyDelay = testtime.D100ms
+
+// routerSlowHandlerDelay is the time a slow handler takes to process a message;
+// used to verify drain-during-close timing.
+const routerSlowHandlerDelay = testtime.D200ms
 
 // Compile-time interface check.
 var _ cell.EventRouter = (*Router)(nil)
@@ -116,7 +125,7 @@ func TestRouter_Run_StartsAllSubscriptions(t *testing.T) {
 	// Wait for Running signal.
 	select {
 	case <-r.Running():
-	case <-time.After(2 * time.Second):
+	case <-time.After(testtime.D2s):
 		t.Fatal("Router did not become ready")
 	}
 
@@ -125,7 +134,7 @@ func TestRouter_Run_StartsAllSubscriptions(t *testing.T) {
 	assert.Eventually(t, func() bool {
 		topics := sub.Topics()
 		return len(topics) == 3
-	}, 2*time.Second, 10*time.Millisecond, "all 3 topics should be subscribed")
+	}, testtime.D2s, testtime.D10ms, "all 3 topics should be subscribed")
 
 	topics := sub.Topics()
 	assert.Contains(t, topics, "topic.a")
@@ -140,7 +149,7 @@ func TestRouter_Run_StartsAllSubscriptions(t *testing.T) {
 		default:
 			return false
 		}
-	}, 2*time.Second, 50*time.Millisecond)
+	}, testtime.D2s, testtime.MediumPoll)
 }
 
 // TestRouter_Run_SubscribeError_ReturnsError verifies that when
@@ -173,14 +182,14 @@ func TestRouter_Run_NoHandlers_BlocksUntilCancel(t *testing.T) {
 	// Running should be closed immediately.
 	select {
 	case <-r.Running():
-	case <-time.After(time.Second):
+	case <-time.After(testtime.EventuallyShort):
 		t.Fatal("Running() should close immediately with no handlers")
 	}
 
 	cancel()
 	select {
 	case <-done:
-	case <-time.After(time.Second):
+	case <-time.After(testtime.EventuallyShort):
 		t.Fatal("Run did not exit after cancel")
 	}
 }
@@ -202,7 +211,7 @@ func TestRouter_Close_CancelsSubscriptions(t *testing.T) {
 
 	select {
 	case <-done:
-	case <-time.After(2 * time.Second):
+	case <-time.After(testtime.D2s):
 		t.Fatal("Run did not exit after Close")
 	}
 }
@@ -232,7 +241,7 @@ func TestRouter_Run_HandlerReceivesMessages(t *testing.T) {
 
 	assert.Eventually(t, func() bool {
 		return received.Load() >= 1
-	}, time.Second, 10*time.Millisecond)
+	}, testtime.EventuallyShort, testtime.D10ms)
 
 	cancel()
 	<-done
@@ -264,7 +273,7 @@ func TestRouter_Run_MultipleHandlersSameSubscriber(t *testing.T) {
 
 	assert.Eventually(t, func() bool {
 		return countA.Load() >= 1 && countB.Load() >= 1
-	}, time.Second, 10*time.Millisecond)
+	}, testtime.EventuallyShort, testtime.D10ms)
 
 	cancel()
 	<-done
@@ -297,7 +306,7 @@ func TestRouter_EventRegistrar_Integration(t *testing.T) {
 
 	assert.Eventually(t, func() bool {
 		return received.Load() >= 1
-	}, time.Second, 10*time.Millisecond)
+	}, testtime.EventuallyShort, testtime.D10ms)
 
 	cancel()
 	<-done
@@ -307,7 +316,7 @@ func TestRouter_Run_RuntimeError_AfterStartup(t *testing.T) {
 	// delayedFailSubscriber: Ready returns immediately-closed channel (so Router
 	// marks itself Running fast), then Subscribe returns an error after the delay.
 	sub := &delayedFailSubscriber{
-		delay: 100 * time.Millisecond,
+		delay: testtime.D100ms,
 		err:   errors.New("connection lost"),
 	}
 	r := New(sub)
@@ -323,7 +332,7 @@ func TestRouter_Run_RuntimeError_AfterStartup(t *testing.T) {
 func TestRouter_HealthLifecycle(t *testing.T) {
 	// subscriber that is ready immediately but fails after 300ms.
 	sub := &delayedFailSubscriber{
-		delay: 300 * time.Millisecond,
+		delay: testtime.D300ms,
 		err:   errors.New("connection lost"),
 	}
 	r := New(sub)
@@ -337,7 +346,7 @@ func TestRouter_HealthLifecycle(t *testing.T) {
 
 	select {
 	case <-r.Running():
-	case <-time.After(2 * time.Second):
+	case <-time.After(testtime.D2s):
 		t.Fatal("router did not become ready")
 	}
 
@@ -345,7 +354,7 @@ func TestRouter_HealthLifecycle(t *testing.T) {
 
 	assert.Eventually(t, func() bool {
 		return r.Health() != nil
-	}, 2*time.Second, 20*time.Millisecond, "router must become unhealthy after runtime failure")
+	}, testtime.D2s, testtime.D20ms, "router must become unhealthy after runtime failure")
 
 	err := <-done
 	require.Error(t, err)
@@ -363,7 +372,7 @@ func TestRouter_Health_AfterGracefulShutdown(t *testing.T) {
 
 	select {
 	case <-r.Running():
-	case <-time.After(2 * time.Second):
+	case <-time.After(testtime.D2s):
 		t.Fatal("router did not become ready")
 	}
 
@@ -372,7 +381,7 @@ func TestRouter_Health_AfterGracefulShutdown(t *testing.T) {
 	cancel()
 	select {
 	case <-done:
-	case <-time.After(5 * time.Second):
+	case <-time.After(testtime.SelectShutdown):
 		t.Fatal("router did not shut down")
 	}
 
@@ -416,7 +425,7 @@ func TestRouter_Close_ZeroHandlers(t *testing.T) {
 
 	select {
 	case <-done:
-	case <-time.After(2 * time.Second):
+	case <-time.After(testtime.D2s):
 		t.Fatal("Run did not exit after Close with zero handlers")
 	}
 }
@@ -434,7 +443,7 @@ func TestRouter_Close_Timeout(t *testing.T) {
 	<-r.Running()
 
 	// Close with a very short timeout — should return context deadline error.
-	closeCtx, closeCancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	closeCtx, closeCancel := context.WithTimeout(context.Background(), testtime.MediumPoll)
 	defer closeCancel()
 	err := r.Close(closeCtx)
 	assert.ErrorIs(t, err, context.DeadlineExceeded)
@@ -615,7 +624,7 @@ func (b *testBus) Ready(sub outbox.Subscription) <-chan struct{} {
 				close(ch)
 				return
 			}
-			time.Sleep(time.Millisecond)
+			time.Sleep(testtime.D1ms) //archtest:allow:test-sleep poll loop waiting for subscription to register; no notification API
 		}
 	}()
 	return ch
@@ -722,7 +731,7 @@ func TestRouter_ConsumerGroup_PropagatesToSubscriber(t *testing.T) {
 	// Wait for all subscriptions to start.
 	require.Eventually(t, func() bool {
 		return len(sub.Calls()) >= 3
-	}, 2*time.Second, 10*time.Millisecond)
+	}, testtime.D2s, testtime.D10ms)
 
 	cancel()
 	<-done
@@ -788,7 +797,7 @@ func (s *delayedReadySubscriber) Ready(sub outbox.Subscription) <-chan struct{} 
 	s.mu.Unlock()
 
 	go func() {
-		time.Sleep(s.delay)
+		time.Sleep(s.delay) //archtest:allow:test-sleep sleep IS the test parameter
 		// Safe to close multiple times? No — we create one per topic so it's fine.
 		select {
 		case <-ch:
@@ -837,7 +846,7 @@ func (s *partialReadySubscriber) Ready(sub outbox.Subscription) <-chan struct{} 
 	ch := make(chan struct{})
 	if sub.Topic == s.slowTopic {
 		go func() {
-			time.Sleep(s.slowDelay)
+			time.Sleep(s.slowDelay) //archtest:allow:test-sleep sleep IS the test parameter
 			close(ch)
 		}()
 	} else {
@@ -856,7 +865,7 @@ func (s *partialReadySubscriber) Close(_ context.Context) error { return nil }
 // NOT closed until the Subscriber.Ready signal fires. The Ready channel closes
 // after 100ms; Running() must close within that window (not at 500ms).
 func TestRouter_RunBlocksUntilReady_NoTimeout(t *testing.T) {
-	const readyDelay = 100 * time.Millisecond
+	const readyDelay = routerReadyDelay
 	sub := newDelayedReadySubscriber(readyDelay)
 
 	r := New(sub)
@@ -869,15 +878,15 @@ func TestRouter_RunBlocksUntilReady_NoTimeout(t *testing.T) {
 
 	select {
 	case <-r.Running():
-	case <-time.After(2 * time.Second):
+	case <-time.After(testtime.D2s):
 		t.Fatal("Router did not become ready within 2s")
 	}
 
 	elapsed := time.Since(start)
 	// Ready fires at ~100ms. Allow ±50ms tolerance.
-	assert.GreaterOrEqual(t, elapsed, readyDelay-10*time.Millisecond,
+	assert.GreaterOrEqual(t, elapsed, readyDelay-testtime.D10ms,
 		"Router became ready too early (before Ready signal fired)")
-	assert.Less(t, elapsed, readyDelay+50*time.Millisecond,
+	assert.Less(t, elapsed, readyDelay+testtime.MediumPoll,
 		"Router took too long after Ready signal (should not wait 500ms)")
 }
 
@@ -932,7 +941,7 @@ func (s *mixedReadySubscriber) Ready(sub outbox.Subscription) <-chan struct{} {
 	}
 	if sub.Topic == s.slowReadyTopic {
 		go func() {
-			time.Sleep(s.slowReadyDelay)
+			time.Sleep(s.slowReadyDelay) //archtest:allow:test-sleep sleep IS the test parameter
 			close(ch)
 		}()
 		return ch
@@ -967,7 +976,7 @@ func TestRouter_ReadyError_PartialNotReady_NoLeak(t *testing.T) {
 		subscribeErrTopic: "topic.subscribe-error",
 		subscribeErr:      subErr,
 		slowReadyTopic:    "topic.slow-ready",
-		slowReadyDelay:    5 * time.Second, // would block test if Run waited
+		slowReadyDelay:    testtime.EventuallyLong, // would block test if Run waited
 	}
 
 	r := New(sub, WithReadyTimeout(0)) // disable timeout to isolate setupErr path
@@ -987,9 +996,9 @@ func TestRouter_ReadyError_PartialNotReady_NoLeak(t *testing.T) {
 		require.Error(t, err)
 		assert.ErrorIs(t, err, subErr, "Run should propagate the Subscribe error")
 		elapsed := time.Since(start)
-		assert.Less(t, elapsed, 1*time.Second,
+		assert.Less(t, elapsed, testtime.D1s,
 			"Run should return promptly on Subscribe error, not wait for slow Ready (5s)")
-	case <-time.After(2 * time.Second):
+	case <-time.After(testtime.D2s):
 		t.Fatal("Run did not return within 2s after Subscribe error — possible block on slow Ready")
 	}
 
@@ -1011,7 +1020,7 @@ func TestRouter_ReadyError_PartialNotReady_NoLeak(t *testing.T) {
 // topic-C Ready closes after 200ms, Router.Running() only closes after all
 // three Ready channels are closed (i.e., at or after 200ms).
 func TestRouter_PartialReady_BlocksUntilAll(t *testing.T) {
-	const slowDelay = 200 * time.Millisecond
+	const slowDelay = routerSlowHandlerDelay
 	sub := &partialReadySubscriber{
 		slowTopic: "topic.c",
 		slowDelay: slowDelay,
@@ -1029,14 +1038,14 @@ func TestRouter_PartialReady_BlocksUntilAll(t *testing.T) {
 
 	select {
 	case <-r.Running():
-	case <-time.After(2 * time.Second):
+	case <-time.After(testtime.D2s):
 		t.Fatal("Router did not become ready within 2s")
 	}
 
 	elapsed := time.Since(start)
 	// All three Ready channels must close; the last is at ~200ms.
-	assert.GreaterOrEqual(t, elapsed, slowDelay-10*time.Millisecond,
+	assert.GreaterOrEqual(t, elapsed, slowDelay-testtime.D10ms,
 		"Router became ready before all Ready channels closed")
-	assert.Less(t, elapsed, slowDelay+100*time.Millisecond,
+	assert.Less(t, elapsed, slowDelay+testtime.D100ms,
 		"Router took too long after all Ready signals fired")
 }

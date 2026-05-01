@@ -8,9 +8,9 @@ import (
 	"net"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 )
 
 // TestWithListener_AppendsToListenerConfigs verifies that calling WithListener
@@ -71,11 +71,11 @@ func TestWithListenerOptions(t *testing.T) {
 		},
 		{
 			name: "WithListenerShutdownGrace_positive",
-			opts: []ListenerOption{WithListenerShutdownGrace(5 * time.Second)},
+			opts: []ListenerOption{WithListenerShutdownGrace(testtime.D5s)},
 		},
 		{
 			name: "WithListenerShutdownGrace_negative_stored_as_is",
-			opts: []ListenerOption{WithListenerShutdownGrace(-1 * time.Second)},
+			opts: []ListenerOption{WithListenerShutdownGrace(testtime.DNeg1s)},
 		},
 		{
 			name: "WithListenerTLS_non_nil",
@@ -141,14 +141,14 @@ func TestWithListenerShutdownGrace_NegativeRejectsAtPhase0(t *testing.T) {
 	b := New(
 		WithListener(
 			cell.PrimaryListener, ":9090", []cell.ListenerAuth{cell.AuthNone{}},
-			WithListenerShutdownGrace(-1*time.Second),
+			WithListenerShutdownGrace(testtime.DNeg1s),
 		),
 	)
 	if b == nil {
 		t.Fatal("Bootstrap.New returned nil")
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), testtime.D2s)
 	defer cancel()
 
 	err := b.Run(ctx)

@@ -15,6 +15,8 @@ import (
 	amqp "github.com/rabbitmq/amqp091-go"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 )
 
 // TestPublisher_Close_Idempotent verifies that Close can be called multiple
@@ -44,7 +46,7 @@ func TestPublisher_Close_CancelledCtxReturnsImmediately(t *testing.T) {
 	require.Error(t, err, "Close with pre-canceled ctx must return error")
 	assert.ErrorIs(t, err, context.Canceled,
 		"Close with pre-canceled ctx must return context.Canceled, got: %v", err)
-	assert.Less(t, elapsed, 50*time.Millisecond,
+	assert.Less(t, elapsed, testtime.MediumPoll,
 		"Close must return promptly with pre-canceled ctx; got %s", elapsed)
 }
 
@@ -89,11 +91,11 @@ func TestPublisher_Close_CtxExceeded_ReturnsTimeoutErr(t *testing.T) {
 	// Give the goroutine a moment to enter the blocking Publish call.
 	// We use a tiny sleep here only to advance past the goroutine schedule
 	// point — this is not a timing assertion.
-	time.Sleep(5 * time.Millisecond)
+	time.Sleep(testtime.FastPoll) //archtest:allow:test-sleep wait for goroutine to enter blocking Publish; no started observable
 
 	// Budget: 100ms — Close must return within this window even though
 	// Publish is still blocked on the gate.
-	budget := 100 * time.Millisecond
+	budget := testtime.SlowPoll
 	closeCtx, closeCancel := context.WithTimeout(context.Background(), budget)
 	defer closeCancel()
 
@@ -103,7 +105,7 @@ func TestPublisher_Close_CtxExceeded_ReturnsTimeoutErr(t *testing.T) {
 
 	// Close must have returned with a timeout error.
 	require.Error(t, err, "Close must return error when ctx budget exceeded")
-	assert.LessOrEqual(t, elapsed, budget+50*time.Millisecond,
+	assert.LessOrEqual(t, elapsed, budget+testtime.MediumPoll,
 		"Close must return within budget+tolerance; got %s", elapsed)
 
 	// Release the gate — unblocks the Publish goroutine.
@@ -113,7 +115,7 @@ func TestPublisher_Close_CtxExceeded_ReturnsTimeoutErr(t *testing.T) {
 	select {
 	case <-publishDone:
 		// goroutine exited — no leak
-	case <-time.After(2 * time.Second):
+	case <-time.After(testtime.D2s):
 		t.Error("Publish goroutine did not exit after gate released (goroutine leak)")
 	}
 }
@@ -149,14 +151,14 @@ func TestPublisher_Close_WaitsForInFlightPublishes(t *testing.T) {
 
 	<-publishStarted
 	// Give the goroutine a moment to enter the blocking Publish call.
-	time.Sleep(5 * time.Millisecond)
+	time.Sleep(testtime.FastPoll) //archtest:allow:test-sleep wait for goroutine to enter blocking Publish; no started observable
 
 	// Ample budget: 3 seconds.
-	closeCtx, closeCancel := context.WithTimeout(context.Background(), 3*time.Second)
+	closeCtx, closeCancel := context.WithTimeout(context.Background(), testtime.EventuallyDefault)
 	defer closeCancel()
 
 	// Release the gate concurrently — simulates Publish completing.
-	releaseAt := time.AfterFunc(20*time.Millisecond, func() { close(gate) })
+	releaseAt := time.AfterFunc(testtime.D20ms, func() { close(gate) })
 	defer releaseAt.Stop()
 
 	// Close should block until Publish is done (gate released).
@@ -169,7 +171,7 @@ func TestPublisher_Close_WaitsForInFlightPublishes(t *testing.T) {
 	default:
 		select {
 		case <-publishDone:
-		case <-time.After(500 * time.Millisecond):
+		case <-time.After(testtime.D500ms):
 			t.Error("Publish did not complete after Close returned")
 		}
 	}
@@ -206,7 +208,7 @@ func (b *blockingPublishChannel) PublishWithContext(
 		// Gate released — proceed with underlying publish.
 	case <-ctx.Done():
 		return ctx.Err()
-	case <-time.After(2 * time.Second):
+	case <-time.After(testtime.D2s):
 		// Safety net: prevent test deadlock if gate is never closed.
 		return errors.New("blockingPublishChannel: safety net timeout — gate not released within 2s")
 	}

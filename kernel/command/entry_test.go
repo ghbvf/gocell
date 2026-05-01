@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -30,23 +31,23 @@ func TestDeadlineFor_ScheduleToSend(t *testing.T) {
 	entry := Entry{
 		ID:        "cmd-1",
 		CreatedAt: created,
-		Timeouts:  Timeouts{ScheduleToSend: 30 * time.Second},
+		Timeouts:  Timeouts{ScheduleToSend: testtime.D30s},
 	}
-	want := created.Add(30 * time.Second)
+	want := created.Add(testtime.D30s)
 	assert.Equal(t, want, entry.DeadlineFor(PhaseScheduleToSend))
 }
 
 func TestDeadlineFor_SendToComplete(t *testing.T) {
 	t.Parallel()
 	created := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
-	sentAt := created.Add(10 * time.Second)
+	sentAt := created.Add(testtime.D10s)
 	entry := Entry{
 		ID:        "cmd-1",
 		CreatedAt: created,
 		SentAt:    &sentAt,
-		Timeouts:  Timeouts{SendToComplete: 5 * time.Minute},
+		Timeouts:  Timeouts{SendToComplete: testtime.D5min},
 	}
-	want := sentAt.Add(5 * time.Minute)
+	want := sentAt.Add(testtime.D5min)
 	assert.Equal(t, want, entry.DeadlineFor(PhaseSendToComplete))
 }
 
@@ -56,7 +57,7 @@ func TestDeadlineFor_SendToComplete_NotYetSent(t *testing.T) {
 		ID:        "cmd-1",
 		CreatedAt: time.Now(),
 		SentAt:    nil, // not yet sent
-		Timeouts:  Timeouts{SendToComplete: 5 * time.Minute},
+		Timeouts:  Timeouts{SendToComplete: testtime.D5min},
 	}
 	// SentAt is nil — deadline cannot be computed.
 	assert.True(t, entry.DeadlineFor(PhaseSendToComplete).IsZero())
@@ -68,9 +69,9 @@ func TestDeadlineFor_Overall(t *testing.T) {
 	entry := Entry{
 		ID:        "cmd-1",
 		CreatedAt: created,
-		Timeouts:  Timeouts{OverallDeadline: 1 * time.Hour},
+		Timeouts:  Timeouts{OverallDeadline: testtime.D1h},
 	}
-	want := created.Add(1 * time.Hour)
+	want := created.Add(testtime.D1h)
 	assert.Equal(t, want, entry.DeadlineFor(PhaseOverall))
 }
 
@@ -79,7 +80,7 @@ func TestDeadlineFor_UnknownPhase(t *testing.T) {
 	entry := Entry{
 		ID:        "cmd-1",
 		CreatedAt: time.Now(),
-		Timeouts:  Timeouts{OverallDeadline: 1 * time.Hour},
+		Timeouts:  Timeouts{OverallDeadline: testtime.D1h},
 	}
 	assert.True(t, entry.DeadlineFor(TimeoutPhase(99)).IsZero())
 }
@@ -89,7 +90,7 @@ func TestDeadlineFor_ZeroPhase(t *testing.T) {
 	entry := Entry{
 		ID:        "cmd-1",
 		CreatedAt: time.Now(),
-		Timeouts:  Timeouts{OverallDeadline: 1 * time.Hour},
+		Timeouts:  Timeouts{OverallDeadline: testtime.D1h},
 	}
 	assert.True(t, entry.DeadlineFor(TimeoutPhase(0)).IsZero(),
 		"zero-value TimeoutPhase must return zero Time")
@@ -192,7 +193,7 @@ func TestValidateNew_NegativeTimeout(t *testing.T) {
 		Payload:     []byte(`{}`),
 		Status:      StatusPending,
 		CreatedAt:   time.Now(),
-		Timeouts:    Timeouts{ScheduleToSend: -1 * time.Second},
+		Timeouts:    Timeouts{ScheduleToSend: testtime.DNeg1s},
 	}
 	err := entry.ValidateNew()
 	assert.Error(t, err)
@@ -214,9 +215,9 @@ func TestValidateNew_NegativeTimeouts_AllFields(t *testing.T) {
 		name     string
 		timeouts Timeouts
 	}{
-		{"negative ScheduleToSend", Timeouts{ScheduleToSend: -1 * time.Second}},
-		{"negative SendToComplete", Timeouts{SendToComplete: -1 * time.Second}},
-		{"negative OverallDeadline", Timeouts{OverallDeadline: -1 * time.Second}},
+		{"negative ScheduleToSend", Timeouts{ScheduleToSend: testtime.DNeg1s}},
+		{"negative SendToComplete", Timeouts{SendToComplete: testtime.DNeg1s}},
+		{"negative OverallDeadline", Timeouts{OverallDeadline: testtime.DNeg1s}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -321,7 +322,7 @@ func TestNewEntry(t *testing.T) {
 	t.Parallel()
 	now := time.Date(2026, 3, 15, 10, 30, 0, 0, time.UTC)
 	entry := NewEntry("cmd-1", "dev-1", "reboot", []byte(`{}`), Timeouts{
-		OverallDeadline: 1 * time.Hour,
+		OverallDeadline: testtime.D1h,
 	}, now)
 	assert.Equal(t, "cmd-1", entry.ID)
 	assert.Equal(t, "dev-1", entry.DeviceID)

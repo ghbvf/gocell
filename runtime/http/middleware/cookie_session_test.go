@@ -8,9 +8,14 @@ import (
 	"time"
 
 	"github.com/ghbvf/gocell/pkg/securecookie"
+	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// cookieExpirySleep is the sleep duration used to let a MaxAge=1s cookie expire.
+// 1100ms > 1s guarantees the cookie is stale by the time we check.
+const cookieExpirySleep = testtime.D1s + testtime.D100ms
 
 func generateKey(t *testing.T) []byte {
 	t.Helper()
@@ -88,7 +93,7 @@ func TestCookieSession_ExpiredCookie_NoInjection(t *testing.T) {
 	encoded, err := sc.Encode("session", []byte("jwt-token"))
 	require.NoError(t, err)
 
-	time.Sleep(1100 * time.Millisecond)
+	time.Sleep(cookieExpirySleep) //archtest:allow:test-sleep TTL physical expiry; backend has no notification API
 
 	capture := &authCapture{}
 	handler := MustCookieSession(cfg)(capture.handler())
@@ -384,7 +389,7 @@ func TestCookieSession_ExpiredCookie_Returns401(t *testing.T) {
 	encoded, err := sc.Encode("session", []byte("jwt-token"))
 	require.NoError(t, err)
 
-	time.Sleep(1100 * time.Millisecond)
+	time.Sleep(cookieExpirySleep) //archtest:allow:test-sleep TTL physical expiry; backend has no notification API
 
 	// Mock AuthMiddleware: returns 401 if no Authorization header.
 	mockAuth := func(next http.Handler) http.Handler {

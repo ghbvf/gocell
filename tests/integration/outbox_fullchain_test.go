@@ -14,6 +14,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/idempotency"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/ctxkeys"
+	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	outboxruntime "github.com/ghbvf/gocell/runtime/outbox"
 	"github.com/ghbvf/gocell/tests/testutil"
 	"github.com/google/uuid"
@@ -24,6 +25,11 @@ import (
 	tcpostgres "github.com/testcontainers/testcontainers-go/modules/postgres"
 	tcredis "github.com/testcontainers/testcontainers-go/modules/redis"
 	"github.com/testcontainers/testcontainers-go/wait"
+)
+
+const (
+	// fullchainD20s is used as the subscriber receive timeout; not in testtime table.
+	fullchainD20s = 20 * time.Second
 )
 
 type queueInspector interface {
@@ -46,7 +52,7 @@ func setupPostgresContainer(t *testing.T) (*postgres.Pool, func()) {
 		tcpostgres.WithPassword("test"),
 		testcontainers.WithWaitStrategy(
 			wait.ForLog("database system is ready to accept connections").
-				WithOccurrence(2).WithStartupTimeout(30*time.Second),
+				WithOccurrence(2).WithStartupTimeout(testtime.CtxLong),
 		),
 	)
 	require.NoError(t, err, "start postgres container")
@@ -78,10 +84,10 @@ func setupRabbitMQContainer(t *testing.T) (*rabbitmq.Connection, func()) {
 
 	conn, err := rabbitmq.NewConnection(rabbitmq.Config{
 		URL:                 amqpURL,
-		ReconnectMaxBackoff: 5 * time.Second,
-		ReconnectBaseDelay:  500 * time.Millisecond,
+		ReconnectMaxBackoff: testtime.SelectShutdown,
+		ReconnectBaseDelay:  testtime.D500ms,
 		ChannelPoolSize:     5,
-		ConfirmTimeout:      10 * time.Second,
+		ConfirmTimeout:      testtime.SelectAsyncSettle,
 	})
 	require.NoError(t, err, "create rabbitmq connection")
 
@@ -121,7 +127,7 @@ func setupRedisContainer(t *testing.T) (*redis.Client, func()) {
 	client, err := redis.NewClient(ctx, redis.Config{
 		Addr:        addr,
 		Mode:        redis.ModeStandalone,
-		DialTimeout: 10 * time.Second,
+		DialTimeout: testtime.SelectAsyncSettle,
 	})
 	require.NoError(t, err, "create redis client")
 
@@ -158,7 +164,7 @@ func waitForSubscriberReady(t *testing.T, conn *rabbitmq.Connection, queueName s
 			return
 		}
 
-		time.Sleep(50 * time.Millisecond)
+		time.Sleep(testtime.MediumPoll) //archtest:allow:test-sleep poll loop waiting for RabbitMQ queue consumer to register; no sync hook
 	}
 
 	t.Fatalf("timed out waiting for subscriber queue %q to become ready", queueName)
@@ -222,7 +228,7 @@ func TestIntegration_OutboxFullChain(t *testing.T) {
 	claimer := redis.NewIdempotencyClaimer(redisClient)
 
 	relayCfg := outboxruntime.DefaultRelayConfig()
-	relayCfg.PollInterval = 200 * time.Millisecond // fast polling for test
+	relayCfg.PollInterval = testtime.D200ms // fast polling for test
 	relayCfg.BatchSize = 10
 	relay := outboxruntime.NewRelay(postgres.NewOutboxStore(pool.DB()), pub, relayCfg)
 
@@ -293,7 +299,7 @@ func TestIntegration_OutboxFullChain(t *testing.T) {
 	// Subscribe context is deliberately clean (no obs IDs). The only way
 	// obs values reach the handler is through SubscriberWithMiddleware's
 	// built-in outermost restore step (entry.Observability → ctxkeys).
-	subCtx, subCancel := context.WithTimeout(context.Background(), 30*time.Second)
+	subCtx, subCancel := context.WithTimeout(context.Background(), testtime.CtxLong)
 	defer subCancel()
 
 	wrappedSub := &outbox.SubscriberWithMiddleware{Inner: sub}
@@ -314,7 +320,7 @@ func TestIntegration_OutboxFullChain(t *testing.T) {
 		})
 	}()
 
-	waitForSubscriberReady(t, rmqConn, "outbox.fullchain.queue", subErrCh, 5*time.Second)
+	waitForSubscriberReady(t, rmqConn, "outbox.fullchain.queue", subErrCh, testtime.SelectShutdown)
 
 	// ---------------------------------------------------------------
 	// Step 6: Start the OutboxRelay in a background goroutine.
@@ -340,7 +346,7 @@ func TestIntegration_OutboxFullChain(t *testing.T) {
 	case err := <-relayErrCh:
 		require.NoError(t, err, "relay exited before publishing the message")
 		t.Fatal("relay exited before publishing the message")
-	case <-time.After(20 * time.Second):
+	case <-time.After(fullchainD20s):
 		t.Fatal("timed out waiting for message from subscriber")
 	}
 
@@ -389,7 +395,7 @@ func TestIntegration_OutboxFullChain(t *testing.T) {
 			return false
 		}
 		return status == "published"
-	}, 5*time.Second, 100*time.Millisecond, "outbox entry should have status='published' after relay")
+	}, testtime.SelectShutdown, testtime.SlowPoll, "outbox entry should have status='published' after relay")
 
 	// ---------------------------------------------------------------
 	// Step 10: Verify idempotency semantics with IdempotencyClaimer.
@@ -484,7 +490,7 @@ func TestIntegration_OutboxFullChain_NoTrace(t *testing.T) {
 	})
 
 	relayCfg := outboxruntime.DefaultRelayConfig()
-	relayCfg.PollInterval = 200 * time.Millisecond
+	relayCfg.PollInterval = testtime.D200ms
 	relayCfg.BatchSize = 10
 	relay := outboxruntime.NewRelay(postgres.NewOutboxStore(pool.DB()), pub, relayCfg)
 
@@ -538,7 +544,7 @@ func TestIntegration_OutboxFullChain_NoTrace(t *testing.T) {
 
 	received := make(chan observedDelivery, 1)
 	// Subscribe context is clean — no obs IDs.
-	subCtx, subCancel := context.WithTimeout(context.Background(), 30*time.Second)
+	subCtx, subCancel := context.WithTimeout(context.Background(), testtime.CtxLong)
 	defer subCancel()
 
 	wrappedSub := &outbox.SubscriberWithMiddleware{Inner: sub}
@@ -560,7 +566,7 @@ func TestIntegration_OutboxFullChain_NoTrace(t *testing.T) {
 		})
 	}()
 
-	waitForSubscriberReady(t, rmqConn, "outbox.fullchain.notrace.queue", subErrCh, 5*time.Second)
+	waitForSubscriberReady(t, rmqConn, "outbox.fullchain.notrace.queue", subErrCh, testtime.SelectShutdown)
 
 	relayCtx, relayCancel := context.WithCancel(ctx)
 	defer relayCancel()
@@ -583,7 +589,7 @@ func TestIntegration_OutboxFullChain_NoTrace(t *testing.T) {
 	case err := <-relayErrCh:
 		require.NoError(t, err, "relay exited before publishing the message")
 		t.Fatal("relay exited before publishing the message")
-	case <-time.After(20 * time.Second):
+	case <-time.After(fullchainD20s):
 		t.Fatal("timed out waiting for message from subscriber")
 	}
 
@@ -653,7 +659,7 @@ func TestIntegration_OutboxWriteRelayMockPublisher(t *testing.T) {
 	mock := &capturingPublisher{messages: make(chan publishedMessage, 10)}
 
 	relayCfg := outboxruntime.DefaultRelayConfig()
-	relayCfg.PollInterval = 100 * time.Millisecond
+	relayCfg.PollInterval = testtime.SlowPoll
 	relayCfg.BatchSize = 10
 	relay := outboxruntime.NewRelay(postgres.NewOutboxStore(pool.DB()), mock, relayCfg)
 
@@ -701,7 +707,7 @@ func TestIntegration_OutboxWriteRelayMockPublisher(t *testing.T) {
 		assert.Equal(t, "agg-mock-1", relayed.AggregateID)
 		assert.JSONEq(t, `{"mock":true}`, string(relayed.Payload))
 
-	case <-time.After(10 * time.Second):
+	case <-time.After(testtime.SelectAsyncSettle):
 		t.Fatal("timed out waiting for mock publisher to receive message")
 	}
 
@@ -710,7 +716,7 @@ func TestIntegration_OutboxWriteRelayMockPublisher(t *testing.T) {
 	require.Eventually(t, func() bool {
 		queryErr := pool.DB().QueryRow(ctx, "SELECT status FROM outbox_entries WHERE id = $1", entryID).Scan(&pubStatus)
 		return queryErr == nil && pubStatus == "published"
-	}, 5*time.Second, 100*time.Millisecond, "outbox entry should have status='published' after relay")
+	}, testtime.SelectShutdown, testtime.SlowPoll, "outbox entry should have status='published' after relay")
 
 	relayCancel()
 	_ = relay.Stop(ctx)

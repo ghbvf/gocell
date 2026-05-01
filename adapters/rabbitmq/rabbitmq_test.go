@@ -22,7 +22,21 @@ import (
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/ctxkeys"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	logctx "github.com/ghbvf/gocell/runtime/observability/logging"
+)
+
+// File-local duration constants for values not in testtime.
+const (
+	rabbitmqD22500ms  = 22500 * time.Millisecond
+	rabbitmqD1250ms   = 1250 * time.Millisecond
+	rabbitmqD1500ms   = 1500 * time.Millisecond
+	rabbitmqD2500ms   = 2500 * time.Millisecond
+	rabbitmqD1300ms   = 1300 * time.Millisecond
+	rabbitmqD8s       = 8 * time.Second
+	rabbitmqDNeg500ms = -500 * time.Millisecond
+	rabbitmqDNeg3s    = -3 * time.Second
+	rabbitmqDNeg1min  = -1 * time.Minute
 )
 
 // testAMQPURL is the standard fixture URL for rabbitmq unit tests.
@@ -339,7 +353,7 @@ func newTestConnection(t *testing.T) (*Connection, *mockConnection) {
 	conn, err := NewConnection(Config{
 		URL:             testAMQPURL,
 		ChannelPoolSize: 5,
-		ConfirmTimeout:  2 * time.Second,
+		ConfirmTimeout:  testtime.D2s,
 	}, WithDialFunc(dialFunc))
 	require.NoError(t, err)
 
@@ -569,7 +583,7 @@ func TestConnection_CloseNoCtx_Idempotent(t *testing.T) {
 func TestConnection_WaitConnected(t *testing.T) {
 	conn, _ := newTestConnection(t)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	ctx, cancel := context.WithTimeout(context.Background(), testtime.SlowPoll)
 	defer cancel()
 
 	// Already connected, should return immediately.
@@ -592,7 +606,7 @@ func TestConnection_WaitConnected_Timeout(t *testing.T) {
 		terminalCh:  make(chan struct{}),
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	ctx, cancel := context.WithTimeout(context.Background(), testtime.MediumPoll)
 	defer cancel()
 
 	err := c.WaitConnected(ctx)
@@ -604,25 +618,25 @@ func TestConfig_Defaults(t *testing.T) {
 	cfg := Config{}
 	cfg.setDefaults()
 
-	assert.Equal(t, 30*time.Second, cfg.ReconnectMaxBackoff)
-	assert.Equal(t, 1*time.Second, cfg.ReconnectBaseDelay)
+	assert.Equal(t, testtime.D30s, cfg.ReconnectMaxBackoff)
+	assert.Equal(t, testtime.D1s, cfg.ReconnectBaseDelay)
 	assert.Equal(t, 10, cfg.ChannelPoolSize)
-	assert.Equal(t, 5*time.Second, cfg.ConfirmTimeout)
+	assert.Equal(t, testtime.EventuallyLong, cfg.ConfirmTimeout)
 }
 
 func TestConfig_Defaults_NegativeValues(t *testing.T) {
 	cfg := Config{
-		ReconnectMaxBackoff: -1 * time.Second,
-		ReconnectBaseDelay:  -500 * time.Millisecond,
+		ReconnectMaxBackoff: testtime.DNeg1s,
+		ReconnectBaseDelay:  rabbitmqDNeg500ms,
 		ChannelPoolSize:     -5,
-		ConfirmTimeout:      -3 * time.Second,
+		ConfirmTimeout:      rabbitmqDNeg3s,
 	}
 	cfg.setDefaults()
 
-	assert.Equal(t, 30*time.Second, cfg.ReconnectMaxBackoff, "negative MaxBackoff should reset to default")
-	assert.Equal(t, 1*time.Second, cfg.ReconnectBaseDelay, "negative BaseDelay should reset to default")
+	assert.Equal(t, testtime.D30s, cfg.ReconnectMaxBackoff, "negative MaxBackoff should reset to default")
+	assert.Equal(t, testtime.D1s, cfg.ReconnectBaseDelay, "negative BaseDelay should reset to default")
 	assert.Equal(t, 10, cfg.ChannelPoolSize, "negative ChannelPoolSize should reset to default")
-	assert.Equal(t, 5*time.Second, cfg.ConfirmTimeout, "negative ConfirmTimeout should reset to default")
+	assert.Equal(t, testtime.EventuallyLong, cfg.ConfirmTimeout, "negative ConfirmTimeout should reset to default")
 }
 
 func TestConnection_BackoffDelay(t *testing.T) {
@@ -635,18 +649,18 @@ func TestConnection_BackoffDelay(t *testing.T) {
 		maxDelay time.Duration // hard cap: never exceeds ReconnectMaxBackoff (30s)
 	}{
 		{name: "attempt 0", attempt: 0,
-			minDelay: 750 * time.Millisecond, maxDelay: 1250 * time.Millisecond},
+			minDelay: testtime.D750ms, maxDelay: rabbitmqD1250ms},
 		{name: "attempt 1", attempt: 1,
-			minDelay: 1500 * time.Millisecond, maxDelay: 2500 * time.Millisecond},
+			minDelay: rabbitmqD1500ms, maxDelay: rabbitmqD2500ms},
 		{name: "attempt 2", attempt: 2,
-			minDelay: 3 * time.Second, maxDelay: 5 * time.Second},
+			minDelay: testtime.D3s, maxDelay: testtime.EventuallyLong},
 		// Capped region: jitter on MaxBackoff → [0.75*30s, 30s] = [22.5s, 30s].
 		{name: "attempt 10 (capped)", attempt: 10,
-			minDelay: 22500 * time.Millisecond, maxDelay: 30 * time.Second},
+			minDelay: rabbitmqD22500ms, maxDelay: testtime.D30s},
 		{name: "attempt 34 (overflow guard)", attempt: 34,
-			minDelay: 22500 * time.Millisecond, maxDelay: 30 * time.Second},
+			minDelay: rabbitmqD22500ms, maxDelay: testtime.D30s},
 		{name: "attempt 100 (far overflow)", attempt: 100,
-			minDelay: 22500 * time.Millisecond, maxDelay: 30 * time.Second},
+			minDelay: rabbitmqD22500ms, maxDelay: testtime.D30s},
 	}
 
 	for _, tt := range tests {
@@ -666,9 +680,9 @@ func TestAddJitter(t *testing.T) {
 		d    time.Duration
 	}{
 		{name: "zero", d: 0},
-		{name: "1s", d: 1 * time.Second},
-		{name: "30s", d: 30 * time.Second},
-		{name: "100ms", d: 100 * time.Millisecond},
+		{name: "1s", d: testtime.D1s},
+		{name: "30s", d: testtime.D30s},
+		{name: "100ms", d: testtime.SlowPoll},
 	}
 
 	for _, tt := range tests {
@@ -694,10 +708,10 @@ func TestAddDownJitter(t *testing.T) {
 		assert.Equal(t, time.Duration(0), addDownJitter(0))
 	})
 	t.Run("negative returns zero", func(t *testing.T) {
-		assert.Equal(t, time.Duration(0), addDownJitter(-1*time.Second))
+		assert.Equal(t, time.Duration(0), addDownJitter(testtime.DNeg1s))
 	})
 	t.Run("positive in [0.75*d, d]", func(t *testing.T) {
-		d := 30 * time.Second
+		d := testtime.D30s
 		for range 100 {
 			got := addDownJitter(d)
 			assert.GreaterOrEqual(t, got, time.Duration(float64(d)*0.75))
@@ -710,18 +724,18 @@ func TestConnection_BackoffDelay_SmallBase(t *testing.T) {
 	// U4: verify small base delay (1ms) doesn't prematurely jump to max.
 	conn := &Connection{
 		config: Config{
-			ReconnectBaseDelay:  1 * time.Millisecond,
-			ReconnectMaxBackoff: 1 * time.Hour,
+			ReconnectBaseDelay:  testtime.D1ms,
+			ReconnectMaxBackoff: testtime.D1h,
 		},
 	}
 	// attempt 10: 1ms * 2^10 = 1.024s — well below 1h, jitter should be around 1s.
 	delay := conn.backoffDelay(10)
-	assert.GreaterOrEqual(t, delay, 750*time.Millisecond)
-	assert.LessOrEqual(t, delay, 1300*time.Millisecond)
+	assert.GreaterOrEqual(t, delay, testtime.D750ms)
+	assert.LessOrEqual(t, delay, rabbitmqD1300ms)
 
 	// attempt 30: 1ms * 2^30 ≈ 1073s ≈ 17.9min — still below 1h.
 	delay30 := conn.backoffDelay(30)
-	assert.Less(t, delay30, 1*time.Hour, "attempt 30 with 1ms base should NOT hit 1h cap")
+	assert.Less(t, delay30, testtime.D1h, "attempt 30 with 1ms base should NOT hit 1h cap")
 }
 
 func TestConnection_ReconnectLoop_CloseExits(t *testing.T) {
@@ -733,7 +747,7 @@ func TestConnection_ReconnectLoop_CloseExits(t *testing.T) {
 	assert.NoError(t, err)
 
 	// After Close, WaitConnected with a short timeout should fail (closeCh closed).
-	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	ctx, cancel := context.WithTimeout(context.Background(), testtime.MediumPoll)
 	defer cancel()
 	// connected was already closed by NewConnection, so this returns nil.
 	// This test verifies Close doesn't panic and exits cleanly.
@@ -759,8 +773,8 @@ func TestConnection_ReconnectLoop_DisconnectAndReconnect(t *testing.T) {
 	conn, err := NewConnection(Config{
 		URL:                 testAMQPURL,
 		ChannelPoolSize:     2,
-		ReconnectBaseDelay:  1 * time.Millisecond,
-		ReconnectMaxBackoff: 5 * time.Millisecond,
+		ReconnectBaseDelay:  testtime.D1ms,
+		ReconnectMaxBackoff: testtime.FastPoll,
 	}, WithDialFunc(dialFunc))
 	require.NoError(t, err)
 	defer func() {
@@ -788,7 +802,7 @@ func TestConnection_ReconnectLoop_DisconnectAndReconnect(t *testing.T) {
 		mu.Lock()
 		defer mu.Unlock()
 		return dialCount >= 2
-	}, 2*time.Second, 10*time.Millisecond, "reconnectLoop should have reconnected")
+	}, testtime.D2s, testtime.D10ms, "reconnectLoop should have reconnected")
 }
 
 // NOTE: TestConnection_ReconnectLoop_PermanentError_ExitsLoop deleted (A.1).
@@ -828,8 +842,8 @@ func TestConnection_ReconnectLoop_RetriesIndefinitelyUntilRecovery(t *testing.T)
 	conn, err := NewConnection(Config{
 		URL:                 testAMQPURL,
 		ChannelPoolSize:     2,
-		ReconnectBaseDelay:  1 * time.Millisecond,
-		ReconnectMaxBackoff: 5 * time.Millisecond,
+		ReconnectBaseDelay:  testtime.D1ms,
+		ReconnectMaxBackoff: testtime.FastPoll,
 	}, WithDialFunc(dialFunc))
 	require.NoError(t, err)
 	defer func() {
@@ -857,15 +871,15 @@ func TestConnection_ReconnectLoop_RetriesIndefinitelyUntilRecovery(t *testing.T)
 		mu.Lock()
 		defer mu.Unlock()
 		return dialCount >= 4
-	}, 5*time.Second, time.Millisecond, "should have retried past 2 failures")
+	}, testtime.EventuallyLong, time.Millisecond, "should have retried past 2 failures")
 
 	// After reconnection, Health should return nil.
 	require.Eventually(t, func() bool {
 		return conn.Health(context.Background()) == nil
-	}, 2*time.Second, time.Millisecond, "connection should be healthy after reconnect")
+	}, testtime.D2s, time.Millisecond, "connection should be healthy after reconnect")
 
 	// WaitConnected should succeed (connected channel re-closed on reconnect).
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), testtime.D2s)
 	defer cancel()
 	waitErr := conn.WaitConnected(ctx)
 	require.NoError(t, waitErr, "WaitConnected should succeed with unbounded reconnect attempts (A.1)")
@@ -1025,8 +1039,8 @@ func TestConnection_ReconnectWithBackoff_RecoverableError_ThenSuccess(t *testing
 	conn := &Connection{
 		config: Config{
 			URL:                 testAMQPURL,
-			ReconnectBaseDelay:  1 * time.Millisecond,
-			ReconnectMaxBackoff: 5 * time.Millisecond,
+			ReconnectBaseDelay:  testtime.D1ms,
+			ReconnectMaxBackoff: testtime.FastPoll,
 		},
 		dial: func(url string) (AMQPConnection, error) {
 			mu.Lock()
@@ -1055,8 +1069,8 @@ func TestConnection_ReconnectWithBackoff_CloseCh(t *testing.T) {
 	conn := &Connection{
 		config: Config{
 			URL:                 testAMQPURL,
-			ReconnectBaseDelay:  10 * time.Second,
-			ReconnectMaxBackoff: 30 * time.Second,
+			ReconnectBaseDelay:  testtime.D10s,
+			ReconnectMaxBackoff: testtime.D30s,
 		},
 		dial: func(url string) (AMQPConnection, error) {
 			return nil, &net.OpError{Op: "dial", Err: errors.New("connection refused")}
@@ -1071,13 +1085,13 @@ func TestConnection_ReconnectWithBackoff_CloseCh(t *testing.T) {
 		done <- conn.reconnectWithBackoff()
 	}()
 
-	time.Sleep(50 * time.Millisecond)
+	time.Sleep(testtime.MediumPoll) //archtest:allow:test-sleep wait for goroutine to enter blocking reconnectWithBackoff
 	close(closeCh)
 
 	select {
 	case ok := <-done:
 		assert.False(t, ok, "must return false when closeCh fires")
-	case <-time.After(2 * time.Second):
+	case <-time.After(testtime.D2s):
 		t.Fatal("reconnectWithBackoff did not return after closeCh was closed")
 	}
 }
@@ -1098,8 +1112,8 @@ func TestConnection_ReconnectWithBackoff_TransientError_ContinuesIndefinitely(t 
 	conn := &Connection{
 		config: Config{
 			URL:                 testAMQPURL,
-			ReconnectBaseDelay:  1 * time.Millisecond,
-			ReconnectMaxBackoff: 5 * time.Millisecond,
+			ReconnectBaseDelay:  testtime.D1ms,
+			ReconnectMaxBackoff: testtime.FastPoll,
 		},
 		dial: func(url string) (AMQPConnection, error) {
 			mu.Lock()
@@ -1118,23 +1132,18 @@ func TestConnection_ReconnectWithBackoff_TransientError_ContinuesIndefinitely(t 
 	}()
 
 	// Wait until at least a few attempts have been made to prove the loop keeps trying.
-	deadline := time.Now().Add(500 * time.Millisecond)
-	for time.Now().Before(deadline) {
+	require.Eventually(t, func() bool {
 		mu.Lock()
-		n := dialCount
-		mu.Unlock()
-		if n >= 5 {
-			break
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
+		defer mu.Unlock()
+		return dialCount >= 5
+	}, testtime.D500ms, testtime.D10ms, "expected at least 5 dial attempts within 500ms")
 
 	close(closeCh)
 
 	select {
 	case ok := <-done:
 		assert.False(t, ok, "must return false when closeCh fires")
-	case <-time.After(2 * time.Second):
+	case <-time.After(testtime.D2s):
 		t.Fatal("reconnectWithBackoff did not return after closeCh was closed")
 	}
 
@@ -1200,7 +1209,7 @@ func TestPublisher_Publish_ConfirmTimeout(t *testing.T) {
 
 	conn, err := NewConnection(Config{
 		URL:            "amqp://test@localhost/",
-		ConfirmTimeout: 50 * time.Millisecond,
+		ConfirmTimeout: testtime.MediumPoll,
 	}, WithDialFunc(dialFunc))
 	require.NoError(t, err)
 	defer func() {
@@ -1268,7 +1277,7 @@ func TestPublisher_Publish_TerminalState_ReturnsPermanentError(t *testing.T) {
 		config: Config{
 			URL:             testAMQPURL,
 			ChannelPoolSize: 2,
-			ConfirmTimeout:  5 * time.Second,
+			ConfirmTimeout:  testtime.EventuallyLong,
 		},
 		channelPool:  make(chan AMQPChannel, 2),
 		closeCh:      make(chan struct{}),
@@ -1400,7 +1409,7 @@ func TestSubscriberConfig_Defaults(t *testing.T) {
 	cfg.setDefaults()
 
 	assert.Equal(t, 10, cfg.PrefetchCount)
-	assert.Equal(t, 2*time.Second, cfg.StopIntakePerCallTimeout)
+	assert.Equal(t, testtime.D2s, cfg.StopIntakePerCallTimeout)
 }
 
 func TestSubscriber_Subscribe_ProcessesDelivery(t *testing.T) {
@@ -1444,7 +1453,7 @@ func TestSubscriber_Subscribe_ProcessesDelivery(t *testing.T) {
 		ch.mu.Lock()
 		defer ch.mu.Unlock()
 		return ch.ackCalled
-	}, 2*time.Second, 5*time.Millisecond, "Ack was not called in time")
+	}, testtime.D2s, testtime.FastPoll, "Ack was not called in time")
 
 	cancel()
 	assert.NoError(t, <-subDone)
@@ -1453,7 +1462,7 @@ func TestSubscriber_Subscribe_ProcessesDelivery(t *testing.T) {
 	case received := <-handled:
 		assert.Equal(t, "evt-001", received.ID)
 		assert.Equal(t, "test.created", received.EventType)
-	case <-time.After(1 * time.Second):
+	case <-time.After(testtime.D1s):
 		t.Fatal("handler was not called")
 	}
 
@@ -1496,7 +1505,7 @@ func TestSubscriber_Subscribe_UnmarshalFailure_Nack(t *testing.T) {
 		ch.mu.Lock()
 		defer ch.mu.Unlock()
 		return ch.nackCalled
-	}, 2*time.Second, 5*time.Millisecond, "Nack was not called in time")
+	}, testtime.D2s, testtime.FastPoll, "Nack was not called in time")
 
 	cancel()
 	assert.NoError(t, <-subDone)
@@ -1591,7 +1600,7 @@ func TestSubscriber_Subscribe_HandlerError_NackWithRequeue(t *testing.T) {
 		ch.mu.Lock()
 		defer ch.mu.Unlock()
 		return ch.nackCalled
-	}, 2*time.Second, 5*time.Millisecond, "Nack was not called in time")
+	}, testtime.D2s, testtime.FastPoll, "Nack was not called in time")
 
 	cancel()
 	assert.NoError(t, <-subDone)
@@ -1693,14 +1702,14 @@ func TestSubscriber_DeliveryChannelClosed_TriggersReconnect(t *testing.T) {
 		ch1.mu.Lock()
 		defer ch1.mu.Unlock()
 		return ch1.qosCalled
-	}, 2*time.Second, 10*time.Millisecond, "subscriber did not start consuming from ch1")
+	}, testtime.D2s, testtime.D10ms, "subscriber did not start consuming from ch1")
 	close(ch1.consumeDeliveries)
 
 	require.Eventually(t, func() bool {
 		ch2.mu.Lock()
 		defer ch2.mu.Unlock()
 		return ch2.qosCalled
-	}, 2*time.Second, 10*time.Millisecond, "subscriber did not reconnect to ch2")
+	}, testtime.D2s, testtime.D10ms, "subscriber did not reconnect to ch2")
 
 	entry := outbox.Entry{ID: "reconnect-001", EventType: "test.reconnected"}
 	entryBytes := makeDeliveryBody(t, entry)
@@ -1713,7 +1722,7 @@ func TestSubscriber_DeliveryChannelClosed_TriggersReconnect(t *testing.T) {
 	select {
 	case id := <-handled:
 		assert.Equal(t, "reconnect-001", id)
-	case <-time.After(2 * time.Second):
+	case <-time.After(testtime.D2s):
 		t.Fatal("handler was not called after reconnect")
 	}
 	cancel()
@@ -1721,7 +1730,7 @@ func TestSubscriber_DeliveryChannelClosed_TriggersReconnect(t *testing.T) {
 	select {
 	case err := <-subscribeDone:
 		assert.NoError(t, err)
-	case <-time.After(2 * time.Second):
+	case <-time.After(testtime.D2s):
 		t.Fatal("Subscribe did not return after cancel")
 	}
 
@@ -1758,7 +1767,7 @@ func TestSubscriber_ReconnectLoop_CtxCancelledDuringWait(t *testing.T) {
 
 	go func() {
 		// Cancel ctx after a short delay to unblock WaitConnected.
-		time.Sleep(50 * time.Millisecond)
+		time.Sleep(testtime.MediumPoll) //archtest:allow:test-sleep goroutine timing fixture: controls cancel order
 		cancel()
 	}()
 
@@ -1947,7 +1956,7 @@ func TestSubscriber_Subscribe_ClosedDuringReconnect(t *testing.T) {
 
 	// Let the subscriber enter the reconnect hot-loop. The loop iterates in
 	// microseconds, so 20ms is many iterations regardless of scheduling.
-	time.Sleep(20 * time.Millisecond)
+	time.Sleep(testtime.D20ms) //archtest:allow:test-sleep wait for goroutine to enter blocking Subscribe reconnect loop; no started observable
 
 	// Simulate disconnection: replace c.connected with an unclosed channel
 	// so that the next WaitConnected call would block.
@@ -1963,7 +1972,7 @@ func TestSubscriber_Subscribe_ClosedDuringReconnect(t *testing.T) {
 	select {
 	case err := <-subscribeDone:
 		assert.NoError(t, err) // Clean exit via subscriber close.
-	case <-time.After(2 * time.Second):
+	case <-time.After(testtime.D2s):
 		t.Fatal("Subscribe did not exit after subscriber close")
 	}
 }
@@ -2135,19 +2144,19 @@ func TestConsumerBaseConfig_Defaults(t *testing.T) {
 	cfg.SetDefaults()
 
 	assert.Equal(t, 3, cfg.RetryCount)
-	assert.Equal(t, 1*time.Second, cfg.RetryBaseDelay)
+	assert.Equal(t, testtime.D1s, cfg.RetryBaseDelay)
 	assert.Equal(t, idempotency.DefaultTTL, cfg.IdempotencyTTL)
 }
 
 func TestConsumerBaseConfig_Defaults_NegativeLeaseTTL(t *testing.T) {
-	cfg := outbox.ConsumerBaseConfig{LeaseTTL: -1 * time.Minute}
+	cfg := outbox.ConsumerBaseConfig{LeaseTTL: rabbitmqDNeg1min}
 	cfg.SetDefaults()
 
 	assert.Equal(t, idempotency.DefaultLeaseTTL, cfg.LeaseTTL)
 }
 
 func TestConsumerBaseConfig_Defaults_NegativeIdempotencyTTL(t *testing.T) {
-	cfg := outbox.ConsumerBaseConfig{IdempotencyTTL: -1 * time.Hour}
+	cfg := outbox.ConsumerBaseConfig{IdempotencyTTL: testtime.DNeg1h}
 	cfg.SetDefaults()
 
 	assert.Equal(t, idempotency.DefaultTTL, cfg.IdempotencyTTL)
@@ -2195,11 +2204,11 @@ func TestSubscriber_ProcessDelivery_CtxCancelled_NackWithRequeue(t *testing.T) {
 		ch.mu.Lock()
 		defer ch.mu.Unlock()
 		return ch.nackCalled
-	}, 2*time.Second, 5*time.Millisecond, "Nack was not called in time")
+	}, testtime.D2s, testtime.FastPoll, "Nack was not called in time")
 
 	select {
 	case <-subDone:
-	case <-time.After(2 * time.Second):
+	case <-time.After(testtime.D2s):
 		t.Fatal("Subscribe did not exit after ctx cancel in handler")
 	}
 
@@ -2268,7 +2277,7 @@ func TestConsumerBase_AsMiddleware_RejectOnPermanentError(t *testing.T) {
 
 	cb, cbErr := outbox.NewConsumerBase(claimer, outbox.ConsumerBaseConfig{
 		RetryCount:     3,
-		RetryBaseDelay: 10 * time.Millisecond,
+		RetryBaseDelay: testtime.D10ms,
 	})
 	require.NoError(t, cbErr)
 
@@ -2658,7 +2667,7 @@ func TestConsumerBase_WrapWithClaimer_Reject_ThreadsReceipt(t *testing.T) {
 
 	cb, cbErr := outbox.NewConsumerBase(claimer, outbox.ConsumerBaseConfig{
 		RetryCount:     1,
-		RetryBaseDelay: 10 * time.Millisecond,
+		RetryBaseDelay: testtime.D10ms,
 	})
 	require.NoError(t, cbErr)
 
@@ -2684,7 +2693,7 @@ func TestConsumerBase_WrapWithClaimer_ExplicitReject_FirstRoundNoRetry(t *testin
 	handlerCallCount := 0
 	cb, cbErr := outbox.NewConsumerBase(claimer, outbox.ConsumerBaseConfig{
 		RetryCount:     3,
-		RetryBaseDelay: 10 * time.Millisecond,
+		RetryBaseDelay: testtime.D10ms,
 	})
 	require.NoError(t, cbErr)
 
@@ -2710,7 +2719,7 @@ func TestConsumerBase_WrapWithClaimer_WrappedPermanentError_FirstRoundReject(t *
 	handlerCallCount := 0
 	cb, cbErr := outbox.NewConsumerBase(claimer, outbox.ConsumerBaseConfig{
 		RetryCount:     3,
-		RetryBaseDelay: 10 * time.Millisecond,
+		RetryBaseDelay: testtime.D10ms,
 	})
 	require.NoError(t, cbErr)
 
@@ -2773,7 +2782,7 @@ func TestConsumerBase_WrapWithClaimer_ClaimError_DefaultFailClosed_LocalRetryThe
 
 	cb, cbErr := outbox.NewConsumerBase(claimer, outbox.ConsumerBaseConfig{
 		ClaimRetryCount:     3,
-		ClaimRetryBaseDelay: 10 * time.Millisecond,
+		ClaimRetryBaseDelay: testtime.D10ms,
 	})
 	require.NoError(t, cbErr)
 
@@ -2801,7 +2810,7 @@ func TestConsumerBase_WrapWithClaimer_ClaimError_DefaultFailClosed_HasBackoff(t 
 	// With jitter, we assert >= base delay only (not exact).
 	cb, cbErr := outbox.NewConsumerBase(claimer, outbox.ConsumerBaseConfig{
 		ClaimRetryCount:     3,
-		ClaimRetryBaseDelay: 20 * time.Millisecond,
+		ClaimRetryBaseDelay: testtime.D20ms,
 	})
 	require.NoError(t, cbErr)
 
@@ -2821,7 +2830,7 @@ func TestConsumerBase_WrapWithClaimer_ClaimError_DefaultFailClosed_HasBackoff(t 
 	assert.Error(t, res.Err)
 	// Base delays: 20ms + 40ms = 60ms between 3 attempts. With jitter >= base,
 	// total must be at least 50ms (allowing timing slack).
-	assert.GreaterOrEqual(t, elapsed, 50*time.Millisecond,
+	assert.GreaterOrEqual(t, elapsed, testtime.MediumPoll,
 		"fail-closed must do local exponential backoff before returning to broker")
 }
 
@@ -2830,7 +2839,7 @@ func TestConsumerBase_WrapWithClaimer_ClaimError_DefaultFailClosed_CtxCancel(t *
 
 	cb, cbErr := outbox.NewConsumerBase(claimer, outbox.ConsumerBaseConfig{
 		ClaimRetryCount:     3,
-		ClaimRetryBaseDelay: 5 * time.Second, // long delay — ctx cancel must short-circuit
+		ClaimRetryBaseDelay: testtime.EventuallyLong, // long delay — ctx cancel must short-circuit
 	})
 	require.NoError(t, cbErr)
 
@@ -2841,7 +2850,7 @@ func TestConsumerBase_WrapWithClaimer_ClaimError_DefaultFailClosed_CtxCancel(t *
 
 	ctx, cancel := context.WithCancel(context.Background())
 	go func() {
-		time.Sleep(50 * time.Millisecond)
+		time.Sleep(testtime.MediumPoll) //archtest:allow:test-sleep goroutine timing fixture: controls cancel order
 		cancel()
 	}()
 
@@ -2850,7 +2859,7 @@ func TestConsumerBase_WrapWithClaimer_ClaimError_DefaultFailClosed_CtxCancel(t *
 	elapsed := time.Since(start)
 
 	assert.Equal(t, outbox.DispositionRequeue, res.Disposition)
-	assert.Less(t, elapsed, 1*time.Second, "ctx cancel must short-circuit the backoff")
+	assert.Less(t, elapsed, testtime.D1s, "ctx cancel must short-circuit the backoff")
 }
 
 func TestConsumerBase_WrapWithClaimer_ClaimError_DefaultFailClosed_RetryCount1(t *testing.T) {
@@ -2859,7 +2868,7 @@ func TestConsumerBase_WrapWithClaimer_ClaimError_DefaultFailClosed_RetryCount1(t
 
 	cb, cbErr := outbox.NewConsumerBase(claimer, outbox.ConsumerBaseConfig{
 		ClaimRetryCount:     1,
-		ClaimRetryBaseDelay: 5 * time.Second,
+		ClaimRetryBaseDelay: testtime.EventuallyLong,
 	})
 	require.NoError(t, cbErr)
 
@@ -2873,7 +2882,7 @@ func TestConsumerBase_WrapWithClaimer_ClaimError_DefaultFailClosed_RetryCount1(t
 	elapsed := time.Since(start)
 
 	assert.Equal(t, outbox.DispositionRequeue, res.Disposition)
-	assert.Less(t, elapsed, 500*time.Millisecond, "RetryCount=1 must not sleep (single attempt)")
+	assert.Less(t, elapsed, testtime.D500ms, "RetryCount=1 must not sleep (single attempt)")
 
 	claimer.mu.Lock()
 	assert.Equal(t, 1, len(claimer.claims), "exactly 1 Claim attempt with ClaimRetryCount=1")
@@ -2889,10 +2898,10 @@ func TestConsumerBase_WrapWithClaimer_ClaimRetryConfig_Independent(t *testing.T)
 	}}
 
 	cb, cbErr := outbox.NewConsumerBase(claimer, outbox.ConsumerBaseConfig{
-		RetryCount:          5,                     // handler retries — should not affect claim
-		RetryBaseDelay:      1 * time.Second,       // handler backoff — should not affect claim
-		ClaimRetryCount:     2,                     // claim retries
-		ClaimRetryBaseDelay: 10 * time.Millisecond, // claim backoff
+		RetryCount:          5,              // handler retries — should not affect claim
+		RetryBaseDelay:      testtime.D1s,   // handler backoff — should not affect claim
+		ClaimRetryCount:     2,              // claim retries
+		ClaimRetryBaseDelay: testtime.D10ms, // claim backoff
 	})
 	require.NoError(t, cbErr)
 
@@ -2910,7 +2919,7 @@ func TestConsumerBase_WrapWithClaimer_ClaimRetryConfig_Independent(t *testing.T)
 	assert.True(t, handlerCalled)
 	assert.Equal(t, outbox.DispositionAck, res.Disposition)
 	// Should complete quickly using claim delay (10ms), not handler delay (1s).
-	assert.Less(t, elapsed, 500*time.Millisecond, "claim retry must use ClaimRetryBaseDelay, not RetryBaseDelay")
+	assert.Less(t, elapsed, testtime.D500ms, "claim retry must use ClaimRetryBaseDelay, not RetryBaseDelay")
 
 	claimer.mu.Lock()
 	assert.Equal(t, 2, claimer.callCount)
@@ -2923,8 +2932,8 @@ func TestConsumerBase_MaxRetryDelay_Caps_ClaimBackoff(t *testing.T) {
 
 	cb, cbErr := outbox.NewConsumerBase(claimer, outbox.ConsumerBaseConfig{
 		ClaimRetryCount:     3,
-		ClaimRetryBaseDelay: 100 * time.Millisecond,
-		MaxRetryDelay:       50 * time.Millisecond, // cap below base — forces all delays to 50ms
+		ClaimRetryBaseDelay: testtime.SlowPoll,
+		MaxRetryDelay:       testtime.MediumPoll, // cap below base — forces all delays to 50ms
 	})
 	require.NoError(t, cbErr)
 
@@ -2939,7 +2948,7 @@ func TestConsumerBase_MaxRetryDelay_Caps_ClaimBackoff(t *testing.T) {
 
 	// Without cap: 100ms + 200ms = 300ms. With cap at 50ms: 50ms + 50ms = 100ms.
 	// Allow generous slack but verify it's well below uncapped.
-	assert.Less(t, elapsed, 250*time.Millisecond,
+	assert.Less(t, elapsed, testtime.D250ms,
 		"MaxRetryDelay must cap exponential backoff growth")
 }
 
@@ -2948,7 +2957,7 @@ func TestConsumerBase_NegativeClaimRetryBaseDelay_NoPanic(t *testing.T) {
 
 	cb, cbErr := outbox.NewConsumerBase(claimer, outbox.ConsumerBaseConfig{
 		ClaimRetryCount:     2,
-		ClaimRetryBaseDelay: -1 * time.Second, // negative — must not panic
+		ClaimRetryBaseDelay: testtime.DNeg1s, // negative — must not panic
 	})
 	require.NoError(t, cbErr)
 
@@ -2967,8 +2976,8 @@ func TestConsumerBase_NegativeMaxRetryDelay_NoPanic(t *testing.T) {
 
 	cb, cbErr := outbox.NewConsumerBase(claimer, outbox.ConsumerBaseConfig{
 		ClaimRetryCount:     2,
-		ClaimRetryBaseDelay: 10 * time.Millisecond,
-		MaxRetryDelay:       -1 * time.Second, // negative — must not panic
+		ClaimRetryBaseDelay: testtime.D10ms,
+		MaxRetryDelay:       testtime.DNeg1s, // negative — must not panic
 	})
 	require.NoError(t, cbErr)
 
@@ -3296,7 +3305,7 @@ func TestConsumerBase_WrapWithClaimer_ClaimBusy_HasBackoff(t *testing.T) {
 	claimer := &mockClaimer{state: idempotency.ClaimBusy}
 
 	cb, cbErr := outbox.NewConsumerBase(claimer, outbox.ConsumerBaseConfig{
-		RetryBaseDelay: 50 * time.Millisecond,
+		RetryBaseDelay: testtime.MediumPoll,
 	})
 	require.NoError(t, cbErr)
 
@@ -3311,7 +3320,7 @@ func TestConsumerBase_WrapWithClaimer_ClaimBusy_HasBackoff(t *testing.T) {
 	elapsed := time.Since(start)
 
 	assert.Equal(t, outbox.DispositionRequeue, res.Disposition)
-	assert.GreaterOrEqual(t, elapsed, 40*time.Millisecond, "ClaimBusy should backoff before requeue")
+	assert.GreaterOrEqual(t, elapsed, subscriberD40ms, "ClaimBusy should backoff before requeue")
 }
 
 // TestProcessDelivery_BrokerAckFails_CommitAlreadyDone verifies the new
@@ -3365,7 +3374,7 @@ func TestConsumerBase_WrapWithClaimer_ClaimError_FailClosed(t *testing.T) {
 	cb, cbErr := outbox.NewConsumerBase(claimer, outbox.ConsumerBaseConfig{
 		ClaimPolicy:         outbox.ClaimPolicyFailClosed,
 		ClaimRetryCount:     3,
-		ClaimRetryBaseDelay: 10 * time.Millisecond,
+		ClaimRetryBaseDelay: testtime.D10ms,
 	})
 	require.NoError(t, cbErr)
 
@@ -3673,27 +3682,27 @@ func TestProcessDelivery_UnknownDisposition_NackWithRequeue(t *testing.T) {
 }
 
 func TestSafeDelay_LargeAttempt_NoPanic(t *testing.T) {
-	result := outbox.ExponentialDelay(time.Second, 30*time.Second, 100)
-	assert.Equal(t, 30*time.Second, result)
+	result := outbox.ExponentialDelay(time.Second, testtime.D30s, 100)
+	assert.Equal(t, testtime.D30s, result)
 }
 
 func TestSafeDelay_ZeroBase(t *testing.T) {
-	result := outbox.ExponentialDelay(0, 30*time.Second, 5)
+	result := outbox.ExponentialDelay(0, testtime.D30s, 5)
 	assert.Equal(t, time.Duration(0), result)
 }
 
 func TestSafeDelay_NormalRange(t *testing.T) {
-	result := outbox.ExponentialDelay(time.Second, 30*time.Second, 3)
-	assert.Equal(t, 8*time.Second, result)
+	result := outbox.ExponentialDelay(time.Second, testtime.D30s, 3)
+	assert.Equal(t, rabbitmqD8s, result)
 }
 
 func TestSafeDelay_ExceedsMax(t *testing.T) {
-	result := outbox.ExponentialDelay(time.Second, 30*time.Second, 10)
-	assert.Equal(t, 30*time.Second, result) // 1024s > 30s → capped
+	result := outbox.ExponentialDelay(time.Second, testtime.D30s, 10)
+	assert.Equal(t, testtime.D30s, result) // 1024s > 30s → capped
 }
 
 func TestSafeDelay_NegativeBase(t *testing.T) {
-	result := outbox.ExponentialDelay(-time.Second, 30*time.Second, 3)
+	result := outbox.ExponentialDelay(-time.Second, testtime.D30s, 3)
 	assert.Equal(t, time.Duration(0), result)
 }
 
@@ -3708,7 +3717,7 @@ func TestConsumerBase_WrapWithClaimer_TransientError_ThenSuccess(t *testing.T) {
 
 	cb, cbErr := outbox.NewConsumerBase(claimer, outbox.ConsumerBaseConfig{
 		RetryCount:     3,
-		RetryBaseDelay: 10 * time.Millisecond,
+		RetryBaseDelay: testtime.D10ms,
 	})
 	require.NoError(t, cbErr)
 
@@ -3741,7 +3750,7 @@ func TestConsumerBase_WrapWithClaimer_ExplicitReject_NoRetry(t *testing.T) {
 
 	cb, cbErr := outbox.NewConsumerBase(claimer, outbox.ConsumerBaseConfig{
 		RetryCount:     5,
-		RetryBaseDelay: 10 * time.Millisecond,
+		RetryBaseDelay: testtime.D10ms,
 	})
 	require.NoError(t, cbErr)
 
@@ -3771,7 +3780,7 @@ func TestConsumerBase_WrapWithClaimer_WrappedPermanentError_Detected(t *testing.
 
 	cb, cbErr := outbox.NewConsumerBase(claimer, outbox.ConsumerBaseConfig{
 		RetryCount:     5,
-		RetryBaseDelay: 10 * time.Millisecond,
+		RetryBaseDelay: testtime.D10ms,
 	})
 	require.NoError(t, cbErr)
 
@@ -3803,7 +3812,7 @@ func TestConsumerBase_WrapWithClaimer_WrappedPermanentError_Detected(t *testing.
 // =============================================================================
 
 func TestSafeDelay_AttemptZero(t *testing.T) {
-	result := outbox.ExponentialDelay(time.Second, 30*time.Second, 0)
+	result := outbox.ExponentialDelay(time.Second, testtime.D30s, 0)
 	assert.Equal(t, time.Second, result)
 }
 
@@ -3811,11 +3820,11 @@ func TestSafeDelay_ExactMaxSafeShift(t *testing.T) {
 	base := time.Second
 	maxSafeShift := 63 - bits.Len64(uint64(base))
 	// At maxSafeShift, result should still be capped to maxDelay.
-	result := outbox.ExponentialDelay(base, 30*time.Second, maxSafeShift)
-	assert.Equal(t, 30*time.Second, result)
+	result := outbox.ExponentialDelay(base, testtime.D30s, maxSafeShift)
+	assert.Equal(t, testtime.D30s, result)
 	// At maxSafeShift+1, also capped (overflow guard).
-	result2 := outbox.ExponentialDelay(base, 30*time.Second, maxSafeShift+1)
-	assert.Equal(t, 30*time.Second, result2)
+	result2 := outbox.ExponentialDelay(base, testtime.D30s, maxSafeShift+1)
+	assert.Equal(t, testtime.D30s, result2)
 }
 
 // =============================================================================
@@ -3849,7 +3858,7 @@ func TestPublisher_Publish_ReconnectExhausted_ReturnsPermanentError(t *testing.T
 		config: Config{
 			URL:             testAMQPURL,
 			ChannelPoolSize: 2,
-			ConfirmTimeout:  5 * time.Second,
+			ConfirmTimeout:  testtime.EventuallyLong,
 		},
 		channelPool:  make(chan AMQPChannel, 2),
 		closeCh:      make(chan struct{}),
@@ -3937,8 +3946,8 @@ func TestConnection_Health_DuringReconnect(t *testing.T) {
 	conn, err := NewConnection(Config{
 		URL:                 testAMQPURL,
 		ChannelPoolSize:     2,
-		ReconnectBaseDelay:  1 * time.Millisecond,
-		ReconnectMaxBackoff: 5 * time.Millisecond,
+		ReconnectBaseDelay:  testtime.D1ms,
+		ReconnectMaxBackoff: testtime.FastPoll,
 	}, WithDialFunc(dialFunc))
 	require.NoError(t, err)
 	defer func() {
@@ -3969,7 +3978,7 @@ func TestConnection_Health_DuringReconnect(t *testing.T) {
 		mu.Lock()
 		defer mu.Unlock()
 		return dialCount >= 2
-	}, 2*time.Second, time.Millisecond, "reconnect dial should be in progress")
+	}, testtime.D2s, time.Millisecond, "reconnect dial should be in progress")
 
 	// Health() should return error during reconnecting state with distinct code.
 	healthErr := conn.Health(context.Background())
@@ -3985,7 +3994,7 @@ func TestConnection_Health_DuringReconnect(t *testing.T) {
 	// Health() should recover.
 	require.Eventually(t, func() bool {
 		return conn.Health(context.Background()) == nil
-	}, 2*time.Second, time.Millisecond, "Health() should return nil after successful reconnect")
+	}, testtime.D2s, time.Millisecond, "Health() should return nil after successful reconnect")
 }
 
 // NOTE: TestConnection_MaxReconnectAttempts_PermanentOverridesExhaustion deleted (A.1).
@@ -4025,7 +4034,7 @@ func TestConnection_WaitConnected_StaleChannelRetry(t *testing.T) {
 	c.mu.Unlock()
 
 	// WaitConnected should NOT return immediately — the new channel is unclosed.
-	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	ctx, cancel := context.WithTimeout(context.Background(), testtime.SlowPoll)
 	defer cancel()
 
 	done := make(chan error, 1)
@@ -4040,7 +4049,7 @@ func TestConnection_WaitConnected_StaleChannelRetry(t *testing.T) {
 		// Should only return after ctx timeout, not prematurely.
 		assert.Error(t, err, "WaitConnected should timeout, not return from stale channel")
 		assert.Contains(t, err.Error(), "canceled")
-	case <-time.After(200 * time.Millisecond):
+	case <-time.After(testtime.D200ms):
 		t.Fatal("WaitConnected hung beyond test deadline")
 	}
 }
@@ -4070,20 +4079,20 @@ func TestConnection_WaitConnected_RaceRevalidation(t *testing.T) {
 
 	// Goroutine simulates reconnectLoop: replace connected, then close new one.
 	go func() {
-		time.Sleep(10 * time.Millisecond)
+		time.Sleep(testtime.D10ms) //archtest:allow:test-sleep goroutine timing fixture: controls disconnect/reconnect sequence
 		c.mu.Lock()
 		c.connected = newConnected
 		c.state = StateDisconnected
 		c.mu.Unlock()
 
-		time.Sleep(30 * time.Millisecond)
+		time.Sleep(drainD30ms) //archtest:allow:test-sleep goroutine timing fixture: controls disconnect/reconnect sequence
 		c.mu.Lock()
 		close(newConnected)
 		c.state = StateConnected
 		c.mu.Unlock()
 	}()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), testtime.D2s)
 	defer cancel()
 
 	err := c.WaitConnected(ctx)
@@ -4129,7 +4138,7 @@ func TestConnection_WaitConnected_ConcurrentDisconnectReconnect(t *testing.T) {
 	// Launch waiters — they will block on the unclosed connected channel.
 	for range numWaiters {
 		wg.Go(func() {
-			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			ctx, cancel := context.WithTimeout(context.Background(), testtime.EventuallyLong)
 			defer cancel()
 			_ = c.ConnectionStatus()
 			errs <- c.WaitConnected(ctx)
@@ -4138,7 +4147,7 @@ func TestConnection_WaitConnected_ConcurrentDisconnectReconnect(t *testing.T) {
 	}
 
 	// Give waiters time to enter select on the unclosed channel.
-	time.Sleep(10 * time.Millisecond)
+	time.Sleep(testtime.D10ms) //archtest:allow:test-sleep wait for goroutines to enter blocking WaitConnected select; no started observable
 
 	// Cycle disconnect/reconnect. The pattern mirrors reconnectLoop:
 	//  1. Replace c.connected with a new unclosed channel (= disconnect)
@@ -4158,7 +4167,7 @@ func TestConnection_WaitConnected_ConcurrentDisconnectReconnect(t *testing.T) {
 	close(initialConnected) // wake initial waiters
 
 	for i := range numCycles {
-		time.Sleep(2 * time.Millisecond)
+		time.Sleep(testtime.D2ms) //archtest:allow:test-sleep interval between fixture writes drives coalescing test
 
 		if i > 0 {
 			// Disconnect: replace with new unclosed channel.
@@ -4170,7 +4179,7 @@ func TestConnection_WaitConnected_ConcurrentDisconnectReconnect(t *testing.T) {
 			firstCh = newCh
 		}
 
-		time.Sleep(2 * time.Millisecond)
+		time.Sleep(testtime.D2ms) //archtest:allow:test-sleep interval between fixture writes drives coalescing test
 
 		// Reconnect: close the current channel = connected.
 		c.mu.Lock()
@@ -4371,8 +4380,8 @@ func TestConnection_ReconnectLoop_StateTransitions(t *testing.T) {
 	conn, err := NewConnection(Config{
 		URL:                 testAMQPURL,
 		ChannelPoolSize:     2,
-		ReconnectBaseDelay:  1 * time.Millisecond,
-		ReconnectMaxBackoff: 5 * time.Millisecond,
+		ReconnectBaseDelay:  testtime.D1ms,
+		ReconnectMaxBackoff: testtime.FastPoll,
 	}, WithDialFunc(dialFunc))
 	require.NoError(t, err)
 	defer func() {
@@ -4403,7 +4412,7 @@ func TestConnection_ReconnectLoop_StateTransitions(t *testing.T) {
 		mu.Lock()
 		defer mu.Unlock()
 		return dialCount >= 2
-	}, 2*time.Second, time.Millisecond)
+	}, testtime.D2s, time.Millisecond)
 
 	assert.Equal(t, StateDisconnected, conn.ConnectionStatus().State,
 		"state should be Disconnected during reconnect")
@@ -4414,7 +4423,7 @@ func TestConnection_ReconnectLoop_StateTransitions(t *testing.T) {
 	// State should recover to Connected.
 	require.Eventually(t, func() bool {
 		return conn.ConnectionStatus().State == StateConnected
-	}, 2*time.Second, time.Millisecond)
+	}, testtime.D2s, time.Millisecond)
 }
 
 func TestConnectionPhase_String(t *testing.T) {
@@ -4450,8 +4459,8 @@ func TestConsumerBase_RetryExhaustion(t *testing.T) {
 		claimer,
 		outbox.ConsumerBaseConfig{
 			RetryCount:     2,
-			RetryBaseDelay: 10 * time.Millisecond,
-			IdempotencyTTL: time.Hour,
+			RetryBaseDelay: testtime.D10ms,
+			IdempotencyTTL: testtime.D1h,
 		},
 	)
 	require.NoError(t, cbErr)
@@ -4490,7 +4499,7 @@ func TestPublisher_Publish_ClosesChannel(t *testing.T) {
 
 	mc := &mockConnection{nextCh: ch}
 	conn := &Connection{
-		config:      Config{URL: "amqp://test@localhost/", ConfirmTimeout: 5 * time.Second},
+		config:      Config{URL: "amqp://test@localhost/", ConfirmTimeout: testtime.EventuallyLong},
 		channelPool: make(chan AMQPChannel, 5),
 		closeCh:     make(chan struct{}),
 		connected:   make(chan struct{}),
@@ -4525,7 +4534,7 @@ func TestPublisher_Publish_CloseError_DoesNotMaskResult(t *testing.T) {
 
 	mc := &mockConnection{nextCh: ch}
 	conn := &Connection{
-		config:      Config{URL: "amqp://test@localhost/", ConfirmTimeout: 5 * time.Second},
+		config:      Config{URL: "amqp://test@localhost/", ConfirmTimeout: testtime.EventuallyLong},
 		channelPool: make(chan AMQPChannel, 5),
 		closeCh:     make(chan struct{}),
 		connected:   make(chan struct{}),

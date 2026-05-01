@@ -6,9 +6,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ghbvf/gocell/kernel/idempotency"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/ghbvf/gocell/kernel/idempotency"
+	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 )
 
 // =============================================================================
@@ -23,7 +25,7 @@ func TestIdempotencyClaimer_Claim_Acquired(t *testing.T) {
 	claimer := newIdempotencyClaimerFromCmdable(mock)
 	ctx := context.Background()
 
-	state, receipt, err := claimer.Claim(ctx, "idem:claim:1", 5*time.Minute, 24*time.Hour)
+	state, receipt, err := claimer.Claim(ctx, "idem:claim:1", testtime.D5min, testtime.D24h)
 	require.NoError(t, err)
 	assert.Equal(t, idempotency.ClaimAcquired, state)
 	assert.NotNil(t, receipt)
@@ -45,7 +47,7 @@ func TestIdempotencyClaimer_Claim_Done(t *testing.T) {
 	mock.mu.Unlock()
 
 	claimer := newIdempotencyClaimerFromCmdable(mock)
-	state, receipt, err := claimer.Claim(ctx, "idem:claim:2", 5*time.Minute, 24*time.Hour)
+	state, receipt, err := claimer.Claim(ctx, "idem:claim:2", testtime.D5min, testtime.D24h)
 	require.NoError(t, err)
 	assert.Equal(t, idempotency.ClaimDone, state)
 	assert.NotNil(t, receipt)
@@ -58,11 +60,11 @@ func TestIdempotencyClaimer_Claim_Busy(t *testing.T) {
 
 	// Pre-set the lease key to simulate another consumer processing.
 	mock.mu.Lock()
-	mock.store["lease:idem:claim:3"] = mockEntry{value: "other-token", expiry: time.Now().Add(5 * time.Minute)}
+	mock.store["lease:idem:claim:3"] = mockEntry{value: "other-token", expiry: time.Now().Add(testtime.D5min)}
 	mock.mu.Unlock()
 
 	claimer := newIdempotencyClaimerFromCmdable(mock)
-	state, receipt, err := claimer.Claim(ctx, "idem:claim:3", 5*time.Minute, 24*time.Hour)
+	state, receipt, err := claimer.Claim(ctx, "idem:claim:3", testtime.D5min, testtime.D24h)
 	require.NoError(t, err)
 	assert.Equal(t, idempotency.ClaimBusy, state)
 	assert.NotNil(t, receipt)
@@ -74,7 +76,7 @@ func TestIdempotencyClaimer_Receipt_Commit(t *testing.T) {
 	claimer := newIdempotencyClaimerFromCmdable(mock)
 	ctx := context.Background()
 
-	state, receipt, err := claimer.Claim(ctx, "idem:commit:1", 5*time.Minute, 24*time.Hour)
+	state, receipt, err := claimer.Claim(ctx, "idem:commit:1", testtime.D5min, testtime.D24h)
 	require.NoError(t, err)
 	require.Equal(t, idempotency.ClaimAcquired, state)
 	require.NotNil(t, receipt)
@@ -98,7 +100,7 @@ func TestIdempotencyClaimer_Receipt_Release(t *testing.T) {
 	claimer := newIdempotencyClaimerFromCmdable(mock)
 	ctx := context.Background()
 
-	state, receipt, err := claimer.Claim(ctx, "idem:release:1", 5*time.Minute, 24*time.Hour)
+	state, receipt, err := claimer.Claim(ctx, "idem:release:1", testtime.D5min, testtime.D24h)
 	require.NoError(t, err)
 	require.Equal(t, idempotency.ClaimAcquired, state)
 	require.NotNil(t, receipt)
@@ -122,7 +124,7 @@ func TestIdempotencyClaimer_After_Commit_Claim_Returns_Done(t *testing.T) {
 	ctx := context.Background()
 
 	// First claim.
-	state, receipt, err := claimer.Claim(ctx, "idem:full:1", 5*time.Minute, 24*time.Hour)
+	state, receipt, err := claimer.Claim(ctx, "idem:full:1", testtime.D5min, testtime.D24h)
 	require.NoError(t, err)
 	require.Equal(t, idempotency.ClaimAcquired, state)
 
@@ -131,7 +133,7 @@ func TestIdempotencyClaimer_After_Commit_Claim_Returns_Done(t *testing.T) {
 	require.NoError(t, err)
 
 	// Second claim should return ClaimDone.
-	state, receipt2, err := claimer.Claim(ctx, "idem:full:1", 5*time.Minute, 24*time.Hour)
+	state, receipt2, err := claimer.Claim(ctx, "idem:full:1", testtime.D5min, testtime.D24h)
 	require.NoError(t, err)
 	assert.Equal(t, idempotency.ClaimDone, state)
 	assert.NotNil(t, receipt2)
@@ -143,7 +145,7 @@ func TestIdempotencyClaimer_After_Release_Claim_Reacquires(t *testing.T) {
 	ctx := context.Background()
 
 	// First claim.
-	state, receipt, err := claimer.Claim(ctx, "idem:reacq:1", 5*time.Minute, 24*time.Hour)
+	state, receipt, err := claimer.Claim(ctx, "idem:reacq:1", testtime.D5min, testtime.D24h)
 	require.NoError(t, err)
 	require.Equal(t, idempotency.ClaimAcquired, state)
 
@@ -152,7 +154,7 @@ func TestIdempotencyClaimer_After_Release_Claim_Reacquires(t *testing.T) {
 	require.NoError(t, err)
 
 	// Second claim should re-acquire (not Done or Busy).
-	state, receipt2, err := claimer.Claim(ctx, "idem:reacq:1", 5*time.Minute, 24*time.Hour)
+	state, receipt2, err := claimer.Claim(ctx, "idem:reacq:1", testtime.D5min, testtime.D24h)
 	require.NoError(t, err)
 	assert.Equal(t, idempotency.ClaimAcquired, state)
 	assert.NotNil(t, receipt2)
@@ -176,7 +178,7 @@ func TestIdempotencyClaimer_Claim_EvalError(t *testing.T) {
 	claimer := newIdempotencyClaimerFromCmdable(mock)
 	ctx := context.Background()
 
-	state, receipt, err := claimer.Claim(ctx, "idem:err:1", 5*time.Minute, 24*time.Hour)
+	state, receipt, err := claimer.Claim(ctx, "idem:err:1", testtime.D5min, testtime.D24h)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "ERR_ADAPTER_REDIS_SET")
 	assert.Equal(t, idempotency.ClaimState(0), state)
@@ -188,7 +190,7 @@ func TestIdempotencyClaimer_Receipt_Commit_StaleToken(t *testing.T) {
 	claimer := newIdempotencyClaimerFromCmdable(mock)
 	ctx := context.Background()
 
-	state, receipt, err := claimer.Claim(ctx, "idem:stale-commit:1", 5*time.Minute, 24*time.Hour)
+	state, receipt, err := claimer.Claim(ctx, "idem:stale-commit:1", testtime.D5min, testtime.D24h)
 	require.NoError(t, err)
 	require.Equal(t, idempotency.ClaimAcquired, state)
 	require.NotNil(t, receipt)
@@ -210,7 +212,7 @@ func TestIdempotencyClaimer_Receipt_Release_StaleToken(t *testing.T) {
 	claimer := newIdempotencyClaimerFromCmdable(mock)
 	ctx := context.Background()
 
-	state, receipt, err := claimer.Claim(ctx, "idem:stale-release:1", 5*time.Minute, 24*time.Hour)
+	state, receipt, err := claimer.Claim(ctx, "idem:stale-release:1", testtime.D5min, testtime.D24h)
 	require.NoError(t, err)
 	require.Equal(t, idempotency.ClaimAcquired, state)
 	require.NotNil(t, receipt)
@@ -233,7 +235,7 @@ func TestIdempotencyClaimer_ViaClientConstructor(t *testing.T) {
 	claimer := NewIdempotencyClaimer(client)
 	ctx := context.Background()
 
-	state, _, err := claimer.Claim(ctx, "idem:client:1", 5*time.Minute, 24*time.Hour)
+	state, _, err := claimer.Claim(ctx, "idem:client:1", testtime.D5min, testtime.D24h)
 	require.NoError(t, err)
 	assert.Equal(t, idempotency.ClaimAcquired, state)
 }
@@ -243,7 +245,7 @@ func TestIdempotencyClaimer_Receipt_DoubleCommit_Idempotent(t *testing.T) {
 	claimer := newIdempotencyClaimerFromCmdable(mock)
 	ctx := context.Background()
 
-	state, receipt, err := claimer.Claim(ctx, "idem:double-commit:1", 5*time.Minute, 24*time.Hour)
+	state, receipt, err := claimer.Claim(ctx, "idem:double-commit:1", testtime.D5min, testtime.D24h)
 	require.NoError(t, err)
 	require.Equal(t, idempotency.ClaimAcquired, state)
 	require.NotNil(t, receipt)
@@ -262,7 +264,7 @@ func TestIdempotencyClaimer_Receipt_DoubleRelease_Idempotent(t *testing.T) {
 	claimer := newIdempotencyClaimerFromCmdable(mock)
 	ctx := context.Background()
 
-	state, receipt, err := claimer.Claim(ctx, "idem:double-release:1", 5*time.Minute, 24*time.Hour)
+	state, receipt, err := claimer.Claim(ctx, "idem:double-release:1", testtime.D5min, testtime.D24h)
 	require.NoError(t, err)
 	require.Equal(t, idempotency.ClaimAcquired, state)
 	require.NotNil(t, receipt)
@@ -281,7 +283,7 @@ func TestIdempotencyClaimer_Receipt_DoubleCommit_ErrorCached(t *testing.T) {
 	claimer := newIdempotencyClaimerFromCmdable(mock)
 	ctx := context.Background()
 
-	state, receipt, err := claimer.Claim(ctx, "idem:double-commit-err:1", 5*time.Minute, 24*time.Hour)
+	state, receipt, err := claimer.Claim(ctx, "idem:double-commit-err:1", testtime.D5min, testtime.D24h)
 	require.NoError(t, err)
 	require.Equal(t, idempotency.ClaimAcquired, state)
 	require.NotNil(t, receipt)
@@ -307,7 +309,7 @@ func TestIdempotencyClaimer_Receipt_DoubleRelease_ErrorCached(t *testing.T) {
 	claimer := newIdempotencyClaimerFromCmdable(mock)
 	ctx := context.Background()
 
-	state, receipt, err := claimer.Claim(ctx, "idem:double-release-err:1", 5*time.Minute, 24*time.Hour)
+	state, receipt, err := claimer.Claim(ctx, "idem:double-release-err:1", testtime.D5min, testtime.D24h)
 	require.NoError(t, err)
 	require.Equal(t, idempotency.ClaimAcquired, state)
 	require.NotNil(t, receipt)
@@ -346,7 +348,7 @@ func TestIdempotencyClaimer_Claim_Concurrent_OneAcquiredOneBusy(t *testing.T) {
 	for range 2 {
 		go func() {
 			defer wg.Done()
-			state, receipt, err := claimer.Claim(ctx, "idem:concurrent:1", 5*time.Minute, 24*time.Hour)
+			state, receipt, err := claimer.Claim(ctx, "idem:concurrent:1", testtime.D5min, testtime.D24h)
 			results <- result{state: state, receipt: receipt, err: err}
 		}()
 	}
@@ -379,7 +381,7 @@ func TestIdempotencyClaimer_Receipt_Commit_TransientError_ThenRetrySuccess(t *te
 	ctx := context.Background()
 
 	// Claim a key successfully.
-	state, receipt, err := claimer.Claim(ctx, "idem:transient:1", 5*time.Minute, 24*time.Hour)
+	state, receipt, err := claimer.Claim(ctx, "idem:transient:1", testtime.D5min, testtime.D24h)
 	require.NoError(t, err)
 	require.Equal(t, idempotency.ClaimAcquired, state)
 	require.NotNil(t, receipt)
@@ -419,12 +421,12 @@ func TestReceipt_Extend_Success(t *testing.T) {
 	claimer := newIdempotencyClaimerFromCmdable(mock)
 	ctx := context.Background()
 
-	_, receipt, err := claimer.Claim(ctx, "idem:extend:1", 5*time.Second, 24*time.Hour)
+	_, receipt, err := claimer.Claim(ctx, "idem:extend:1", testtime.D5s, testtime.D24h)
 	require.NoError(t, err)
 	require.NotNil(t, receipt)
 
 	// Extend should succeed and update the TTL.
-	err = receipt.Extend(ctx, 10*time.Second)
+	err = receipt.Extend(ctx, testtime.SelectAsyncSettle)
 	require.NoError(t, err)
 
 	// The lease key must still exist with updated expiry.
@@ -434,7 +436,7 @@ func TestReceipt_Extend_Success(t *testing.T) {
 
 	require.True(t, hasLease, "lease key should still exist after Extend")
 	// Expiry should be approximately 10s from now (within 1s tolerance).
-	assert.WithinDuration(t, time.Now().Add(10*time.Second), entry.expiry, time.Second)
+	assert.WithinDuration(t, time.Now().Add(testtime.SelectAsyncSettle), entry.expiry, time.Second)
 }
 
 func TestReceipt_Extend_LeaseExpired(t *testing.T) {
@@ -442,7 +444,7 @@ func TestReceipt_Extend_LeaseExpired(t *testing.T) {
 	claimer := newIdempotencyClaimerFromCmdable(mock)
 	ctx := context.Background()
 
-	_, receipt, err := claimer.Claim(ctx, "idem:extend:2", 5*time.Second, 24*time.Hour)
+	_, receipt, err := claimer.Claim(ctx, "idem:extend:2", testtime.D5s, testtime.D24h)
 	require.NoError(t, err)
 	require.NotNil(t, receipt)
 
@@ -452,7 +454,7 @@ func TestReceipt_Extend_LeaseExpired(t *testing.T) {
 	mock.mu.Unlock()
 
 	// Extend on a lost lease must return ErrLeaseExpired.
-	err = receipt.Extend(ctx, 10*time.Second)
+	err = receipt.Extend(ctx, testtime.SelectAsyncSettle)
 	require.Error(t, err)
 	assert.ErrorIs(t, err, idempotency.ErrLeaseExpired)
 }
@@ -462,7 +464,7 @@ func TestReceipt_Extend_BackendDown(t *testing.T) {
 	claimer := newIdempotencyClaimerFromCmdable(mock)
 	ctx := context.Background()
 
-	_, receipt, err := claimer.Claim(ctx, "idem:extend:3", 5*time.Second, 24*time.Hour)
+	_, receipt, err := claimer.Claim(ctx, "idem:extend:3", testtime.D5s, testtime.D24h)
 	require.NoError(t, err)
 	require.NotNil(t, receipt)
 
@@ -470,7 +472,7 @@ func TestReceipt_Extend_BackendDown(t *testing.T) {
 	mock.evalErr = errMock
 
 	// Extend should wrap the error but NOT classify it as ErrLeaseExpired.
-	err = receipt.Extend(ctx, 10*time.Second)
+	err = receipt.Extend(ctx, testtime.SelectAsyncSettle)
 	require.Error(t, err)
 	assert.NotErrorIs(t, err, idempotency.ErrLeaseExpired, "backend error should not be ErrLeaseExpired")
 }
@@ -481,7 +483,7 @@ func TestIdempotencyClaimer_Receipt_Release_TransientError_ThenRetrySuccess(t *t
 	ctx := context.Background()
 
 	// Claim a key successfully.
-	state, receipt, err := claimer.Claim(ctx, "idem:transient-rel:1", 5*time.Minute, 24*time.Hour)
+	state, receipt, err := claimer.Claim(ctx, "idem:transient-rel:1", testtime.D5min, testtime.D24h)
 	require.NoError(t, err)
 	require.Equal(t, idempotency.ClaimAcquired, state)
 	require.NotNil(t, receipt)
@@ -523,12 +525,12 @@ func TestClaimerMockCmdable_DoneKeyExpired_ReturnsAcquired(t *testing.T) {
 	mock.mu.Lock()
 	mock.store["done:idem:expired-done:1"] = mockEntry{
 		value:  "1",
-		expiry: time.Now().Add(-1 * time.Second), // already expired
+		expiry: time.Now().Add(testtime.DNeg1s), // already expired
 	}
 	mock.mu.Unlock()
 
 	claimer := newIdempotencyClaimerFromCmdable(mock)
-	state, receipt, err := claimer.Claim(ctx, "idem:expired-done:1", 5*time.Minute, 24*time.Hour)
+	state, receipt, err := claimer.Claim(ctx, "idem:expired-done:1", testtime.D5min, testtime.D24h)
 	require.NoError(t, err)
 	// Expired done key must not block re-acquisition.
 	assert.Equal(t, idempotency.ClaimAcquired, state)

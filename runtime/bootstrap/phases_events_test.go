@@ -25,6 +25,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/wrapper"
+	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/runtime/eventbus"
 	"github.com/ghbvf/gocell/runtime/http/health"
 	"github.com/stretchr/testify/assert"
@@ -139,7 +140,7 @@ func TestPhase6_EventRouterReadyTimeout_FiresAndReturnsError(t *testing.T) {
 	b := New(
 		WithAssembly(asm),
 		WithSubscriber(neverReadySubscriber{}),
-		WithEventRouterReadyTimeout(80*time.Millisecond),
+		WithEventRouterReadyTimeout(testtime.D80ms),
 	)
 
 	runCtx, s := newPhaseState()
@@ -158,8 +159,8 @@ func TestPhase6_EventRouterReadyTimeout_FiresAndReturnsError(t *testing.T) {
 	// Lower bound proves the timeout fires; upper bound proves the budget is honored
 	// rather than blocking indefinitely. Generous upper bound to keep the test stable
 	// on slow CI without weakening the contract.
-	assert.GreaterOrEqual(t, elapsed, 80*time.Millisecond,
+	assert.GreaterOrEqual(t, elapsed, testtime.D80ms,
 		"timeout must wait at least the configured budget")
-	assert.Less(t, elapsed, 2*time.Second,
+	assert.Less(t, elapsed, testtime.D2s,
 		"timeout must not exceed budget by more than 25x — the option clearly is not plumbed")
 }

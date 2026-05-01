@@ -18,6 +18,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/auth/config"
 )
@@ -246,7 +247,7 @@ func TestNewJWTIssuerFromRegistry_Success(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	issuer, err := config.NewJWTIssuerFromRegistry(reg, 15*time.Minute)
+	issuer, err := config.NewJWTIssuerFromRegistry(reg, testtime.D15min)
 	require.NoError(t, err)
 	require.NotNil(t, issuer)
 
@@ -258,7 +259,7 @@ func TestNewJWTIssuerFromRegistry_Success(t *testing.T) {
 
 // TestNewJWTIssuerFromRegistry_NilRegistry returns an error.
 func TestNewJWTIssuerFromRegistry_NilRegistry(t *testing.T) {
-	_, err := config.NewJWTIssuerFromRegistry(nil, 15*time.Minute)
+	_, err := config.NewJWTIssuerFromRegistry(nil, testtime.D15min)
 	require.Error(t, err)
 }
 
@@ -272,7 +273,7 @@ func TestNewJWTIssuerFromRegistry_NilKeyProv(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	_, err = config.NewJWTIssuerFromRegistry(reg, 15*time.Minute)
+	_, err = config.NewJWTIssuerFromRegistry(reg, testtime.D15min)
 	require.Error(t, err, "nil KeyProv must return error")
 }
 
@@ -431,7 +432,7 @@ func TestNewJWTIssuerFromRegistry_TypedNilKeyProv(t *testing.T) {
 	})
 	require.NoError(t, err, "Registry construction must accept typed-nil (validation deferred to factory)")
 
-	_, err = config.NewJWTIssuerFromRegistry(reg, 15*time.Minute)
+	_, err = config.NewJWTIssuerFromRegistry(reg, testtime.D15min)
 	require.Error(t, err, "typed-nil KeyProv must be rejected by the factory")
 	var ecErr *errcode.Error
 	require.True(t, errors.As(err, &ecErr), "error must be errcode.Error, got %T", err)
@@ -508,7 +509,7 @@ func TestFromEnv_MissingAudience_RealMode_ErrorCode(t *testing.T) {
 // require.Error in TestNewJWTIssuerFromRegistry_NilRegistry with a specific
 // code check (the original test is kept for smoke).
 func TestNewJWTIssuerFromRegistry_NilRegistry_ErrorCode(t *testing.T) {
-	_, err := config.NewJWTIssuerFromRegistry(nil, 15*time.Minute)
+	_, err := config.NewJWTIssuerFromRegistry(nil, testtime.D15min)
 	require.Error(t, err)
 	var ecErr *errcode.Error
 	require.True(t, errors.As(err, &ecErr), "error must be *errcode.Error, got %T", err)
@@ -553,7 +554,7 @@ func TestNewJWTIssuerFromRegistry_NilKeyProv_ErrorCode(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	_, err = config.NewJWTIssuerFromRegistry(reg, 15*time.Minute)
+	_, err = config.NewJWTIssuerFromRegistry(reg, testtime.D15min)
 	require.Error(t, err)
 	var ecErr *errcode.Error
 	require.True(t, errors.As(err, &ecErr))
@@ -574,7 +575,7 @@ func TestNewJWTIssuerVerifierFromRegistry_EndToEnd(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	issuer, err := config.NewJWTIssuerFromRegistry(reg, 15*time.Minute)
+	issuer, err := config.NewJWTIssuerFromRegistry(reg, testtime.D15min)
 	require.NoError(t, err)
 
 	verifier, err := config.NewJWTVerifierFromRegistry(reg)

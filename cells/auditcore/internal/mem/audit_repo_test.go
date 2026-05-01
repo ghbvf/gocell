@@ -14,6 +14,18 @@ import (
 	"github.com/ghbvf/gocell/cells/auditcore/internal/domain"
 	"github.com/ghbvf/gocell/cells/auditcore/internal/ports"
 	"github.com/ghbvf/gocell/pkg/query"
+	"github.com/ghbvf/gocell/pkg/testutil/testtime"
+)
+
+const (
+	// cursorNs100 / cursorNs200 / cursorNs300 are sub-second timestamp offsets
+	// used in cursor precision tests to distinguish entries at the same second.
+	cursorNs100 = 100 * time.Nanosecond
+	cursorNs200 = 200 * time.Nanosecond
+	cursorNs300 = 300 * time.Nanosecond
+	// d3h / dNeg24h are used in time-range and cursor tests.
+	d3h     = 3 * time.Hour
+	dNeg24h = -24 * time.Hour
 )
 
 func TestAuditRepository_Append_And_Len(t *testing.T) {
@@ -192,8 +204,8 @@ func TestAuditRepository_Query_Filter_TimeRange(t *testing.T) {
 
 	// Filter from hour 1 to hour 3 (inclusive boundaries are Before/After)
 	filters := ports.AuditFilters{
-		From: base.Add(1 * time.Hour),
-		To:   base.Add(3 * time.Hour),
+		From: base.Add(testtime.D1h),
+		To:   base.Add(d3h),
 	}
 	result, err := repo.Query(ctx, filters, params)
 	require.NoError(t, err)
@@ -251,7 +263,7 @@ func TestAuditRepository_Query_Cursor(t *testing.T) {
 	}
 
 	// Sort DESC, cursor after ae-03 (timestamp = base+3h)
-	cursorTS := base.Add(3 * time.Hour).Format("2006-01-02T15:04:05.999999999Z07:00")
+	cursorTS := base.Add(d3h).Format("2006-01-02T15:04:05.999999999Z07:00")
 	params := query.ListParams{
 		Limit:        10,
 		CursorValues: []any{cursorTS, "ae-03"},
@@ -280,7 +292,7 @@ func TestAuditRepository_Query_Cursor_PastEnd(t *testing.T) {
 	}))
 
 	// Cursor with timestamp far in the past -> everything in DESC order is before cursor
-	cursorTS := base.Add(-24 * time.Hour).Format("2006-01-02T15:04:05.999999999Z07:00")
+	cursorTS := base.Add(dNeg24h).Format("2006-01-02T15:04:05.999999999Z07:00")
 	params := query.ListParams{
 		Limit:        10,
 		CursorValues: []any{cursorTS, "ae-01"},
@@ -367,19 +379,19 @@ func TestAuditRepository_Query_Cursor_SubsecondPrecision(t *testing.T) {
 	base := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
 	require.NoError(t, repo.Append(ctx, &domain.AuditEntry{
 		ID: "ae-01", EventType: "login", ActorID: "usr-1",
-		Timestamp: base.Add(100 * time.Nanosecond),
+		Timestamp: base.Add(cursorNs100),
 	}))
 	require.NoError(t, repo.Append(ctx, &domain.AuditEntry{
 		ID: "ae-02", EventType: "login", ActorID: "usr-1",
-		Timestamp: base.Add(200 * time.Nanosecond),
+		Timestamp: base.Add(cursorNs200),
 	}))
 	require.NoError(t, repo.Append(ctx, &domain.AuditEntry{
 		ID: "ae-03", EventType: "login", ActorID: "usr-1",
-		Timestamp: base.Add(300 * time.Nanosecond),
+		Timestamp: base.Add(cursorNs300),
 	}))
 
 	// Sort DESC by timestamp, cursor at ae-02.
-	cursorTS := base.Add(200 * time.Nanosecond).Format(time.RFC3339Nano)
+	cursorTS := base.Add(cursorNs200).Format(time.RFC3339Nano)
 	params := query.ListParams{
 		Limit:        10,
 		CursorValues: []any{cursorTS, "ae-02"},

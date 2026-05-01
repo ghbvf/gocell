@@ -10,7 +10,11 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 )
+
+const nonceD6min = 6 * time.Minute
 
 func TestInMemoryNonceStore_FirstUseSucceeds(t *testing.T) {
 	store, err := NewInMemoryNonceStore(ServiceTokenNonceTTL)
@@ -49,7 +53,7 @@ func TestInMemoryNonceStore_ExpiredNonceAllowsReuse(t *testing.T) {
 	require.NoError(t, err)
 
 	// Advance clock past maxAge.
-	now = now.Add(6 * time.Minute)
+	now = now.Add(nonceD6min)
 
 	err = store.CheckAndMark(context.Background(), "nonce-exp")
 	require.NoError(t, err, "expired nonce should be reusable after TTL")
@@ -203,7 +207,7 @@ func TestInMemoryNonceStore_RetentionCoversServiceTokenMaxAge(t *testing.T) {
 		"nonce must still be protected at ServiceTokenNonceTTL-1s")
 
 	// After full TTL, nonce may be reused.
-	now = now.Add(2 * time.Second)
+	now = now.Add(testtime.D2s)
 	require.NoError(t, store.CheckAndMark(ctx, "nonce-a"),
 		"nonce must be reusable after TTL window")
 }

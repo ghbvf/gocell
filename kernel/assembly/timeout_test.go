@@ -7,9 +7,14 @@ import (
 	"time"
 
 	"github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// disableHookTimeout is the sentinel value for HookTimeout that disables
+// per-hook deadline wrapping (any negative duration).
+const disableHookTimeout time.Duration = -1
 
 // slowHookCell blocks in the specified hook until ctx is canceled, allowing
 // tests to drive the hook-timeout path deterministically.
@@ -60,14 +65,14 @@ func TestHookTimeout_DefaultApplied(t *testing.T) {
 }
 
 func TestHookTimeout_CustomValue(t *testing.T) {
-	a := newTestAssembly(t, Config{ID: "timeout-custom", DurabilityMode: cell.DurabilityDemo, HookTimeout: 5 * time.Second})
-	assert.Equal(t, 5*time.Second, a.cfg.HookTimeout)
+	a := newTestAssembly(t, Config{ID: "timeout-custom", DurabilityMode: cell.DurabilityDemo, HookTimeout: testtime.D5s})
+	assert.Equal(t, testtime.D5s, a.cfg.HookTimeout)
 }
 
 func TestHookTimeout_NegativeDisables(t *testing.T) {
 	// Negative value must pass through untouched so the hook inherits parent ctx.
-	a := newTestAssembly(t, Config{ID: "timeout-neg", DurabilityMode: cell.DurabilityDemo, HookTimeout: -1})
-	assert.Equal(t, time.Duration(-1), a.cfg.HookTimeout)
+	a := newTestAssembly(t, Config{ID: "timeout-neg", DurabilityMode: cell.DurabilityDemo, HookTimeout: disableHookTimeout})
+	assert.Equal(t, disableHookTimeout, a.cfg.HookTimeout)
 }
 
 func TestHookTimeout_BeforeStartExceeds(t *testing.T) {
@@ -76,7 +81,7 @@ func TestHookTimeout_BeforeStartExceeds(t *testing.T) {
 	a := newTestAssembly(t, Config{
 		ID:             "timeout-bs",
 		DurabilityMode: cell.DurabilityDemo,
-		HookTimeout:    20 * time.Millisecond,
+		HookTimeout:    testtime.D20ms,
 		HookObserver:   obs,
 	})
 	require.NoError(t, a.Register(newSlowHookCell("S", "BeforeStart")))
@@ -86,14 +91,14 @@ func TestHookTimeout_BeforeStartExceeds(t *testing.T) {
 	assert.True(t, errors.Is(err, context.DeadlineExceeded), "expected DeadlineExceeded, got %v", err)
 
 	// Async dispatcher: drain before reading observer state.
-	require.True(t, a.FlushHookEvents(500*time.Millisecond))
+	require.True(t, a.FlushHookEvents(testtime.D500ms))
 
 	var seen bool
 	for _, e := range obs.snapshot() {
 		if e.CellID == "S" && e.Hook == cell.HookBeforeStart {
 			assert.Equal(t, cell.OutcomeTimeout, e.Outcome)
 			assert.True(t, errors.Is(e.Err, context.DeadlineExceeded))
-			assert.GreaterOrEqual(t, e.Duration, 20*time.Millisecond)
+			assert.GreaterOrEqual(t, e.Duration, testtime.D20ms)
 			seen = true
 		}
 	}
@@ -105,7 +110,7 @@ func TestHookTimeout_AfterStartExceeds(t *testing.T) {
 	a := newTestAssembly(t, Config{
 		ID:             "timeout-as",
 		DurabilityMode: cell.DurabilityDemo,
-		HookTimeout:    20 * time.Millisecond,
+		HookTimeout:    testtime.D20ms,
 		HookObserver:   obs,
 	})
 	require.NoError(t, a.Register(newSlowHookCell("S", "AfterStart")))
@@ -114,7 +119,7 @@ func TestHookTimeout_AfterStartExceeds(t *testing.T) {
 	require.Error(t, err)
 	assert.True(t, errors.Is(err, context.DeadlineExceeded))
 
-	require.True(t, a.FlushHookEvents(500*time.Millisecond))
+	require.True(t, a.FlushHookEvents(testtime.D500ms))
 
 	var seen bool
 	for _, e := range obs.snapshot() {
@@ -181,7 +186,7 @@ func TestHookTimeout_NegativeDisablesDeadline_BehaviourContract(t *testing.T) {
 	a := newTestAssembly(t, Config{
 		ID:             "no-deadline",
 		DurabilityMode: cell.DurabilityDemo,
-		HookTimeout:    -1,
+		HookTimeout:    disableHookTimeout,
 	})
 	require.NoError(t, a.Register(dc))
 	require.NoError(t, a.Start(context.Background()))
@@ -196,7 +201,7 @@ func TestHookTimeout_PositiveAppliesDeadline_BehaviourContract(t *testing.T) {
 	a := newTestAssembly(t, Config{
 		ID:             "with-deadline",
 		DurabilityMode: cell.DurabilityDemo,
-		HookTimeout:    5 * time.Second,
+		HookTimeout:    testtime.D5s,
 	})
 	require.NoError(t, a.Register(dc))
 	require.NoError(t, a.Start(context.Background()))
@@ -210,7 +215,7 @@ func TestHookTimeout_WrappedContextStillClassifiedAsTimeout(t *testing.T) {
 	a := newTestAssembly(t, Config{
 		ID:             "timeout-wrapped",
 		DurabilityMode: cell.DurabilityDemo,
-		HookTimeout:    20 * time.Millisecond,
+		HookTimeout:    testtime.D20ms,
 		HookObserver:   obs,
 	})
 	require.NoError(t, a.Register(newWrappedCtxCell("W")))
@@ -218,7 +223,7 @@ func TestHookTimeout_WrappedContextStillClassifiedAsTimeout(t *testing.T) {
 	err := a.Start(context.Background())
 	require.Error(t, err)
 
-	require.True(t, a.FlushHookEvents(500*time.Millisecond))
+	require.True(t, a.FlushHookEvents(testtime.D500ms))
 
 	var seen bool
 	for _, e := range obs.snapshot() {
@@ -238,7 +243,7 @@ func TestHookTimeout_StopPhaseTimeoutContinues(t *testing.T) {
 	a := newTestAssembly(t, Config{
 		ID:             "timeout-stop",
 		DurabilityMode: cell.DurabilityDemo,
-		HookTimeout:    20 * time.Millisecond,
+		HookTimeout:    testtime.D20ms,
 		HookObserver:   obs,
 	})
 	require.NoError(t, a.Register(newSlowHookCell("S", "BeforeStop")))

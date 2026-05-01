@@ -10,7 +10,6 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/coder/websocket"
 	"github.com/go-chi/chi/v5"
@@ -18,6 +17,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/assembly"
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/pkg/ctxkeys"
+	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/auth/authtest"
 	"github.com/ghbvf/gocell/runtime/http/health"
@@ -187,7 +187,7 @@ func TestRouterChain_WebSocketUpgrade(t *testing.T) {
 
 	wsURL := strings.Replace(srv.URL, "http://", "ws://", 1) + "/ws"
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), testtime.CtxDefault)
 	defer cancel()
 
 	conn, _, err := websocket.Dial(ctx, wsURL, nil)

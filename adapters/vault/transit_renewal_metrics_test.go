@@ -25,7 +25,10 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 )
+
+const transitRenewalBackoffBudget = 3*time.Second + reauthBackoffInitial
 
 func TestTransitKeyProvider_CacheVersionMetrics_ReportsCachedLatestVersion(t *testing.T) {
 	fake := &fakeVaultClient{latestVersion: 7}
@@ -96,7 +99,7 @@ func TestTokenRenewalWorker_HandleRenewal_IncrementsSuccessCounter(t *testing.T)
 	// Wait for the fake watcher's Start to be called.
 	select {
 	case <-fw.startedCh:
-	case <-time.After(2 * time.Second):
+	case <-time.After(testtime.D2s):
 		t.Fatal("watcher.Start() was not called within 2s")
 	}
 
@@ -118,7 +121,7 @@ func TestTokenRenewalWorker_HandleRenewal_IncrementsSuccessCounter(t *testing.T)
 		if err != nil {
 			t.Errorf("Start() returned error, want nil: %v", err)
 		}
-	case <-time.After(2 * time.Second):
+	case <-time.After(testtime.D2s):
 		t.Fatal("Start() did not return after context cancel")
 	}
 
@@ -153,7 +156,7 @@ func TestTokenRenewalWorker_HandleRenewal_MultipleRenewals_AccumulatesSuccessCou
 
 	select {
 	case <-fw.startedCh:
-	case <-time.After(2 * time.Second):
+	case <-time.After(testtime.D2s):
 		t.Fatal("watcher.Start() was not called within 2s")
 	}
 
@@ -174,7 +177,7 @@ func TestTokenRenewalWorker_HandleRenewal_MultipleRenewals_AccumulatesSuccessCou
 
 	select {
 	case <-done:
-	case <-time.After(2 * time.Second):
+	case <-time.After(testtime.D2s):
 		t.Fatal("Start() did not return after context cancel")
 	}
 
@@ -229,7 +232,7 @@ func TestTokenRenewalWorker_HandleDone_NilError_IncrementsFailureCounter(t *test
 		if err != nil {
 			t.Errorf("Start() after ctx cancel must return nil, got: %v", err)
 		}
-	case <-time.After(2 * time.Second):
+	case <-time.After(testtime.D2s):
 		t.Fatal("Start() did not return after DoneCh fired")
 	}
 
@@ -281,7 +284,7 @@ func TestTokenRenewalWorker_HandleDone_NonNilError_IncrementsFailureCounter(t *t
 		if err != nil {
 			t.Errorf("Start() after ctx cancel must return nil, got: %v", err)
 		}
-	case <-time.After(2 * time.Second):
+	case <-time.After(testtime.D2s):
 		t.Fatal("Start() did not return after DoneCh fired with error")
 	}
 
@@ -318,7 +321,7 @@ func TestTokenRenewalWorker_NilCounters_NoopOnRenewal(t *testing.T) {
 
 	select {
 	case <-fw.startedCh:
-	case <-time.After(2 * time.Second):
+	case <-time.After(testtime.D2s):
 		t.Fatal("watcher.Start() not called")
 	}
 
@@ -338,7 +341,7 @@ func TestTokenRenewalWorker_NilCounters_NoopOnRenewal(t *testing.T) {
 		if err != nil {
 			t.Errorf("Start() returned unexpected error: %v", err)
 		}
-	case <-time.After(2 * time.Second):
+	case <-time.After(testtime.D2s):
 		t.Fatal("Start() did not return")
 	}
 	// No panic = pass.
@@ -373,7 +376,7 @@ func TestTokenRenewalWorker_NilCounters_NoopOnDone(t *testing.T) {
 	// Trigger re-auth by firing DoneCh with nil (token no longer renewable).
 	fw.doneCh <- nil
 	// Give re-auth a moment to attempt, then cancel.
-	time.Sleep(50 * time.Millisecond)
+	time.Sleep(testtime.MediumPoll) //archtest:allow:test-sleep wait for goroutine to enter blocking re-auth; no started observable
 	cancel()
 
 	select {
@@ -381,7 +384,7 @@ func TestTokenRenewalWorker_NilCounters_NoopOnDone(t *testing.T) {
 		if err != nil {
 			t.Errorf("Start() after ctx cancel must return nil, got: %v", err)
 		}
-	case <-time.After(2 * time.Second):
+	case <-time.After(testtime.D2s):
 		t.Fatal("Start() did not return")
 	}
 	// No panic = pass.
@@ -437,12 +440,12 @@ func TestRenewalWorker_DoneChError_TriggersReauth(t *testing.T) {
 		fakeAuth.mu.Lock()
 		defer fakeAuth.mu.Unlock()
 		return fakeAuth.calls >= 1
-	}, 2*time.Second, time.Millisecond)
+	}, testtime.D2s, time.Millisecond)
 	cancel()
 
 	select {
 	case <-done:
-	case <-time.After(2 * time.Second):
+	case <-time.After(testtime.D2s):
 		t.Fatal("Start() did not return after ctx cancel")
 	}
 
@@ -497,21 +500,21 @@ func TestRenewalWorker_ReauthBackoff_RetriesUntilCancelled(t *testing.T) {
 	// Wait for authHealthy to drop to 0 (re-auth started).
 	require.Eventually(t, func() bool {
 		return testutil.ToFloat64(authHealthy) == 0
-	}, 2*time.Second, time.Millisecond, "authHealthy should drop to 0 on DoneCh")
+	}, testtime.D2s, time.Millisecond, "authHealthy should drop to 0 on DoneCh")
 
 	// Wait for 2 failure logins to be recorded.
 	require.Eventually(t, func() bool {
 		fakeAuth.mu.Lock()
 		defer fakeAuth.mu.Unlock()
 		return fakeAuth.calls >= 2
-	}, 5*time.Second, 10*time.Millisecond, "expected at least 2 Login calls")
+	}, testtime.EventuallyLong, testtime.D10ms, "expected at least 2 Login calls")
 
 	// Cancel — re-auth loop exits.
 	cancel()
 
 	select {
 	case <-done:
-	case <-time.After(3 * time.Second):
+	case <-time.After(testtime.EventuallyDefault):
 		t.Fatal("Start() did not return after ctx cancel")
 	}
 
@@ -555,7 +558,7 @@ func TestRenewalWorker_CtxCancelDuringReauth_ReturnsCleanly(t *testing.T) {
 		fakeAuth.mu.Lock()
 		defer fakeAuth.mu.Unlock()
 		return fakeAuth.calls >= 1
-	}, 2*time.Second, time.Millisecond)
+	}, testtime.D2s, time.Millisecond)
 
 	// Cancel now — reauthenticate must wake from the sleep and return.
 	cancel()
@@ -565,7 +568,7 @@ func TestRenewalWorker_CtxCancelDuringReauth_ReturnsCleanly(t *testing.T) {
 		if err != nil {
 			t.Errorf("Start() after ctx cancel must return nil, got: %v", err)
 		}
-	case <-time.After(3*time.Second + reauthBackoffInitial):
+	case <-time.After(transitRenewalBackoffBudget):
 		t.Fatal("Start() did not return promptly after ctx cancel (backoff not interruptible?)")
 	}
 }
@@ -614,13 +617,13 @@ func TestRenewalWorker_AuthHealthyGauge_TransitionsOnStates(t *testing.T) {
 	// Wait for gauge to drop to 0.
 	require.Eventually(t, func() bool {
 		return testutil.ToFloat64(authHealthy) == 0
-	}, 2*time.Second, time.Millisecond, "authHealthy should drop to 0 after DoneCh")
+	}, testtime.D2s, time.Millisecond, "authHealthy should drop to 0 after DoneCh")
 
 	cancel()
 
 	select {
 	case <-done:
-	case <-time.After(3 * time.Second):
+	case <-time.After(testtime.EventuallyDefault):
 		t.Fatal("Start() did not return")
 	}
 }
@@ -665,12 +668,12 @@ func TestRenewalWorker_LoginOutcomeCounter_LabelsSet(t *testing.T) {
 	require.Eventually(t, func() bool {
 		return testutil.ToFloat64(loginOutcome.WithLabelValues(
 			string(MethodAppRole), "failure", reasonTimeout)) >= 2
-	}, 5*time.Second, 10*time.Millisecond, "expected 2 timeout failures")
+	}, testtime.EventuallyLong, testtime.D10ms, "expected 2 timeout failures")
 
 	cancel()
 	select {
 	case <-done:
-	case <-time.After(3 * time.Second):
+	case <-time.After(testtime.EventuallyDefault):
 		t.Fatal("Start() did not return")
 	}
 

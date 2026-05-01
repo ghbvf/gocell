@@ -27,6 +27,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/query"
+	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 )
 
 func discardLogger() *slog.Logger { return slog.New(slog.NewTextHandler(io.Discard, nil)) }
@@ -380,7 +381,7 @@ func TestService_CreateAdmin_AlreadyExists_DoesNotHashPassword(t *testing.T) {
 	assert.Equal(t, errcode.ErrSetupAlreadyInitialized, ec.Code)
 	// bcrypt at domain.BcryptCost (=12) takes ~200-2000ms on commodity hardware.
 	// 100ms is a generous ceiling — if bcrypt ran, we'd blow past this.
-	assert.Less(t, elapsed, 100*time.Millisecond,
+	assert.Less(t, elapsed, testtime.SlowPoll,
 		"410 fast-path must not call bcrypt")
 }
 

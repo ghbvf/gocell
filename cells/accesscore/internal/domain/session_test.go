@@ -5,12 +5,13 @@ import (
 	"time"
 
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 func TestNewSession(t *testing.T) {
-	future := time.Now().Add(1 * time.Hour)
+	future := time.Now().Add(testtime.D1h)
 
 	tests := []struct {
 		name        string
@@ -118,12 +119,12 @@ func TestSession_IsExpired(t *testing.T) {
 	}{
 		{
 			name:        "future expiry is not expired",
-			expiresAt:   time.Now().Add(1 * time.Hour),
+			expiresAt:   time.Now().Add(testtime.D1h),
 			wantExpired: false,
 		},
 		{
 			name:        "past expiry is expired",
-			expiresAt:   time.Now().Add(-1 * time.Hour),
+			expiresAt:   time.Now().Add(testtime.DNeg1h),
 			wantExpired: true,
 		},
 	}

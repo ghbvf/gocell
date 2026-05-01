@@ -21,6 +21,8 @@ import (
 	"github.com/ghbvf/gocell/runtime/auth/refresh"
 	refreshmem "github.com/ghbvf/gocell/runtime/auth/refresh/memstore"
 	"github.com/ghbvf/gocell/runtime/auth/refresh/storetest"
+
+	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 )
 
 // testIssuer is declared in service_test.go
@@ -29,7 +31,7 @@ const loginPath = "/api/v1/access/sessions/login"
 
 func newHandlerRefreshStore() refresh.Store {
 	clock := storetest.NewFakeClock(time.Now())
-	return refreshmem.MustNew(refresh.Policy{ReuseInterval: 2 * time.Second, MaxAge: time.Hour}, clock, nil)
+	return refreshmem.MustNew(refresh.Policy{ReuseInterval: testtime.D2s, MaxAge: time.Hour}, clock, nil)
 }
 
 // setup wires the slice handler onto a celltest mux via RegisterRoutes — the

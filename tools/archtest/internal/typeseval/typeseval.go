@@ -9,9 +9,11 @@
 //  1. EvaluateConstString — collapse BasicLit / Ident / SelectorExpr / BinaryExpr
 //     to their compile-time string constant value via go/types' built-in
 //     constant folding.
-//  2. LoadPackages / Resolver / SharedResolver — load a module subtree with
-//     full type info once, then resolve any *ast.Expr to its constant via the
-//     owning packages.Package.
+//  2. LoadPackages / SharedResolver — load a module subtree with full type info
+//     once, then resolve any *ast.Expr to its constant via the owning
+//     packages.Package. Both accept a `tests` flag (true loads test variant
+//     packages, including *_test.go files) and a `tags` slice (joined into
+//     -tags=a,b,c BuildFlags).
 //
 // ref: golang.org/x/tools/go/packages — NeedTypesInfo + constant folding
 // ref: go/types TypesInfo.Types — maps ast.Expr to TypeAndValue (incl. const)
@@ -25,6 +27,7 @@ import (
 	"strings"
 	"sync"
 
+	"golang.org/x/sync/singleflight"
 	"golang.org/x/tools/go/packages"
 )
 
@@ -54,41 +57,23 @@ func (r *Resolver) Packages() []*packages.Package {
 	return r.pkgs
 }
 
-// LoadPackages loads patterns from modRoot with full type info. Returns the
-// flat slice of packages.Errors collected from every package as the second
-// value so callers can fail fast on type-check errors without re-walking.
-func LoadPackages(modRoot string, patterns ...string) ([]*packages.Package, []packages.Error, error) {
+// LoadPackages loads patterns from modRoot with full type info.
+//
+// Parameters:
+//   - tests: when true, load the test variant of each package (includes
+//     *_test.go and adds a synthetic xtest package for `package x_test`).
+//   - tags: joined as `-tags=a,b,c` in BuildFlags; pass nil/empty to omit.
+//
+// Returns the flat slice of packages.Errors collected from every package as
+// the second value so callers can fail fast on type-check errors without
+// re-walking.
+func LoadPackages(modRoot string, tests bool, tags []string, patterns ...string) ([]*packages.Package, []packages.Error, error) {
 	cfg := &packages.Config{
 		Mode: packages.NeedName | packages.NeedFiles | packages.NeedSyntax |
 			packages.NeedTypes | packages.NeedTypesInfo | packages.NeedImports |
 			packages.NeedDeps,
-		Dir: modRoot,
-	}
-	pkgs, err := packages.Load(cfg, patterns...)
-	if err != nil {
-		return nil, nil, fmt.Errorf("packages.Load: %w", err)
-	}
-	var errs []packages.Error
-	packages.Visit(pkgs, nil, func(p *packages.Package) {
-		for i := range p.Errors {
-			p.Errors[i].Msg = modRoot + ": " + p.Errors[i].Msg
-		}
-		errs = append(errs, p.Errors...)
-	})
-	return pkgs, errs, nil
-}
-
-// LoadPackagesWithTags loads patterns from modRoot with the given build tags
-// and full type info. Build tags are joined with commas and passed as
-// -tags=<tags> in BuildFlags. Returns the flat slice of packages.Errors
-// collected from every package as the second value so callers can fail fast
-// on type-check errors without re-walking.
-func LoadPackagesWithTags(modRoot string, tags []string, patterns ...string) ([]*packages.Package, []packages.Error, error) {
-	cfg := &packages.Config{
-		Mode: packages.NeedName | packages.NeedFiles | packages.NeedSyntax |
-			packages.NeedTypes | packages.NeedTypesInfo | packages.NeedImports |
-			packages.NeedDeps,
-		Dir: modRoot,
+		Dir:   modRoot,
+		Tests: tests,
 	}
 	if len(tags) > 0 {
 		cfg.BuildFlags = []string{"-tags=" + strings.Join(tags, ",")}
@@ -107,68 +92,66 @@ func LoadPackagesWithTags(modRoot string, tags []string, patterns ...string) ([]
 	return pkgs, errs, nil
 }
 
-// NewResolver loads patterns from modRoot and returns a Resolver. Type-check
-// errors in any loaded package are turned into a single error so callers do
-// not act on partial type information.
-func NewResolver(modRoot string, patterns ...string) (*Resolver, error) {
-	pkgs, errs, err := LoadPackages(modRoot, patterns...)
-	if err != nil {
-		return nil, err
-	}
-	if len(errs) > 0 {
-		return nil, fmt.Errorf("packages.Load: %d error(s): first=%v", len(errs), errs[0])
-	}
-	return &Resolver{pkgs: pkgs}, nil
-}
-
 var (
 	sharedMu    sync.Mutex
 	sharedCache = map[string]*Resolver{}
+	sharedGroup singleflight.Group
 )
 
-// SharedResolver returns a process-wide cached Resolver keyed on (modRoot,
-// patterns). Successive callers with the same key reuse the loaded packages.
-// Errors are not cached — a transient failure does not poison subsequent calls.
+// SharedResolver returns a process-wide cached Resolver keyed on
+// (modRoot, tests, tags, patterns). Successive callers with the same key
+// reuse the loaded packages. Errors are not cached — a transient failure
+// does not poison subsequent calls.
 //
-// Cache keys are formed by joining modRoot and each pattern with NUL bytes.
-// NUL is illegal in POSIX paths and Go import patterns, so collisions are
-// impossible even when patterns themselves contain "|" or ",".
-func SharedResolver(modRoot string, patterns ...string) (*Resolver, error) {
-	key := modRoot + "\x00" + strings.Join(patterns, "\x00")
-	sharedMu.Lock()
-	defer sharedMu.Unlock()
-	if r, ok := sharedCache[key]; ok {
-		return r, nil
+// Cache keys are formed by joining modRoot, the tests flag, the tag list,
+// and each pattern with NUL bytes. NUL is illegal in POSIX paths and Go
+// import patterns, so collisions are impossible even when patterns
+// themselves contain "|" or ",".
+//
+// Concurrency: the cache is read and written under sharedMu, but the
+// expensive LoadPackages call runs without the lock. singleflight
+// deduplicates concurrent loads of the same key so only one packages.Load
+// is in flight per key, while loads for different keys run in parallel.
+func SharedResolver(modRoot string, tests bool, tags []string, patterns ...string) (*Resolver, error) {
+	testsFlag := "0"
+	if tests {
+		testsFlag = "1"
 	}
-	r, err := NewResolver(modRoot, patterns...)
-	if err != nil {
-		return nil, err
-	}
-	sharedCache[key] = r
-	return r, nil
-}
+	key := modRoot + "\x00" + testsFlag + "\x00" + strings.Join(tags, "\x00") + "\x00" + strings.Join(patterns, "\x00")
 
-// SharedResolverWithTags returns a process-wide cached Resolver keyed on
-// (modRoot, tags, patterns). Tags are included in the cache key so callers
-// using different build-tag sets get independent Resolvers.
-//
-// Cache keys are formed by joining modRoot, the sorted tag list, and each
-// pattern with NUL bytes (NUL is illegal in POSIX paths and Go import patterns).
-func SharedResolverWithTags(modRoot string, tags []string, patterns ...string) (*Resolver, error) {
-	key := modRoot + "\x00" + strings.Join(tags, "\x00") + "\x00" + strings.Join(patterns, "\x00")
 	sharedMu.Lock()
-	defer sharedMu.Unlock()
 	if r, ok := sharedCache[key]; ok {
+		sharedMu.Unlock()
 		return r, nil
 	}
-	pkgs, errs, err := LoadPackagesWithTags(modRoot, tags, patterns...)
+	sharedMu.Unlock()
+
+	v, err, _ := sharedGroup.Do(key, func() (any, error) {
+		// Re-check inside the singleflight group: another caller may have
+		// populated the cache between our miss and entering Do.
+		sharedMu.Lock()
+		if r, ok := sharedCache[key]; ok {
+			sharedMu.Unlock()
+			return r, nil
+		}
+		sharedMu.Unlock()
+
+		pkgs, errs, err := LoadPackages(modRoot, tests, tags, patterns...)
+		if err != nil {
+			return nil, err
+		}
+		if len(errs) > 0 {
+			return nil, fmt.Errorf("packages.Load: %d error(s): first=%v", len(errs), errs[0])
+		}
+		r := &Resolver{pkgs: pkgs}
+
+		sharedMu.Lock()
+		sharedCache[key] = r
+		sharedMu.Unlock()
+		return r, nil
+	})
 	if err != nil {
 		return nil, err
 	}
-	if len(errs) > 0 {
-		return nil, fmt.Errorf("packages.Load: %d error(s): first=%v", len(errs), errs[0])
-	}
-	r := &Resolver{pkgs: pkgs}
-	sharedCache[key] = r
-	return r, nil
+	return v.(*Resolver), nil
 }

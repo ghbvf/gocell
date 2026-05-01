@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/runtime/bootstrap"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -54,7 +55,7 @@ func TestR2_MetricsCollector_RecordsHTTPRequests(t *testing.T) {
 		cancel()
 		select {
 		case <-errCh:
-		case <-time.After(10 * time.Second):
+		case <-time.After(testtime.SelectAsyncSettle):
 			t.Error("bootstrap did not shut down in time")
 		}
 	})
@@ -149,7 +150,7 @@ func TestR2_MetricsTokenGuard_ListenerWiring(t *testing.T) {
 		cancel()
 		select {
 		case <-errCh:
-		case <-time.After(10 * time.Second):
+		case <-time.After(testtime.SelectAsyncSettle):
 			t.Error("bootstrap did not shut down in time")
 		}
 	})

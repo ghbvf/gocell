@@ -5,9 +5,28 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// graceParentBudget is the "short" parent budget used in grace tests (2s).
+const graceParentBudget = testtime.D2s
+
+// graceWithinTolerance is the clock-skew margin for WithinDuration assertions.
+const graceWithinTolerance = testtime.MediumPoll
+
+// graceLargerGrace is the shutGrace value that exceeds the parent budget in BoundedByParent.
+const graceLargerGrace = testtime.D10s
+
+// graceLongParentBudget is the long parent budget used in BoundedByGrace (5s).
+const graceLongParentBudget = testtime.D5s
+
+// graceSmall is the per-listener tighter budget (200ms).
+const graceSmall = testtime.D200ms
+
+// graceNoParent is the shutGrace used when there is no parent deadline (500ms).
+const graceNoParent = testtime.D500ms
 
 // R2-03 + R2-06: shutdownCtxFor must:
 //   - inherit the global shutdownTimeout when shutGrace == 0 (no override).
@@ -17,7 +36,7 @@ import (
 
 func TestShutdownCtxFor_ShutGraceZero_InheritsParentDeadline(t *testing.T) {
 	t.Parallel()
-	parentDeadline := time.Now().Add(2 * time.Second)
+	parentDeadline := time.Now().Add(graceParentBudget)
 	parent, cancelParent := context.WithDeadline(context.Background(), parentDeadline)
 	defer cancelParent()
 
@@ -26,7 +45,7 @@ func TestShutdownCtxFor_ShutGraceZero_InheritsParentDeadline(t *testing.T) {
 
 	got, ok := ctx.Deadline()
 	require.True(t, ok, "shutGrace==0 must return a ctx that inherits the parent deadline")
-	assert.WithinDuration(t, parentDeadline, got, 50*time.Millisecond,
+	assert.WithinDuration(t, parentDeadline, got, graceWithinTolerance,
 		"shutGrace==0 must yield exactly the parent deadline (no per-listener override)")
 }
 
@@ -47,16 +66,16 @@ func TestShutdownCtxFor_ShutGraceLargerThanParent_BoundedByParent(t *testing.T) 
 	// Effective deadline must respect the parent's 2s budget — never extend
 	// past the global shutdownTimeout. Pre-fix used context.Background() which
 	// allowed the full 10s.
-	parentDeadline := time.Now().Add(2 * time.Second)
+	parentDeadline := time.Now().Add(graceParentBudget)
 	parent, cancelParent := context.WithDeadline(context.Background(), parentDeadline)
 	defer cancelParent()
 
-	ctx, cancel := shutdownCtxFor(parent, 10*time.Second)
+	ctx, cancel := shutdownCtxFor(parent, graceLargerGrace)
 	defer cancel()
 
 	got, ok := ctx.Deadline()
 	require.True(t, ok)
-	assert.WithinDuration(t, parentDeadline, got, 100*time.Millisecond,
+	assert.WithinDuration(t, parentDeadline, got, testtime.D100ms,
 		"shutGrace > parent budget must be capped to the parent deadline (R2-03)")
 }
 
@@ -64,18 +83,18 @@ func TestShutdownCtxFor_ShutGraceSmallerThanParent_BoundedByGrace(t *testing.T) 
 	t.Parallel()
 	// shutGrace 200ms vs parent 5s → effective ~200ms (per-listener tighter
 	// budget honored).
-	parentDeadline := time.Now().Add(5 * time.Second)
+	parentDeadline := time.Now().Add(graceLongParentBudget)
 	parent, cancelParent := context.WithDeadline(context.Background(), parentDeadline)
 	defer cancelParent()
 
 	now := time.Now()
-	ctx, cancel := shutdownCtxFor(parent, 200*time.Millisecond)
+	ctx, cancel := shutdownCtxFor(parent, graceSmall)
 	defer cancel()
 
 	got, ok := ctx.Deadline()
 	require.True(t, ok)
-	expected := now.Add(200 * time.Millisecond)
-	assert.WithinDuration(t, expected, got, 50*time.Millisecond,
+	expected := now.Add(graceSmall)
+	assert.WithinDuration(t, expected, got, graceWithinTolerance,
 		"shutGrace < parent budget must produce ~now+shutGrace deadline")
 }
 
@@ -84,10 +103,10 @@ func TestShutdownCtxFor_NoParentDeadline_GraceUsed(t *testing.T) {
 	parent := context.Background()
 
 	now := time.Now()
-	ctx, cancel := shutdownCtxFor(parent, 500*time.Millisecond)
+	ctx, cancel := shutdownCtxFor(parent, graceNoParent)
 	defer cancel()
 
 	got, ok := ctx.Deadline()
 	require.True(t, ok, "shutGrace > 0 with deadline-less parent must produce a deadline at now+shutGrace")
-	assert.WithinDuration(t, now.Add(500*time.Millisecond), got, 50*time.Millisecond)
+	assert.WithinDuration(t, now.Add(graceNoParent), got, graceWithinTolerance)
 }

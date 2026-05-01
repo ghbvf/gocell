@@ -5,14 +5,15 @@ import (
 	"errors"
 	"sync/atomic"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 )
 
 func TestManager_Shutdown_RunsHooksLIFO(t *testing.T) {
-	m := New(WithTimeout(5 * time.Second))
+	m := New(WithTimeout(testtime.SelectShutdown))
 
 	var order []int
 	m.Register(func(ctx context.Context) error {
@@ -35,7 +36,7 @@ func TestManager_Shutdown_RunsHooksLIFO(t *testing.T) {
 }
 
 func TestManager_Shutdown_HookErrorContinues(t *testing.T) {
-	m := New(WithTimeout(5 * time.Second))
+	m := New(WithTimeout(testtime.SelectShutdown))
 
 	var firstCalled atomic.Bool
 	m.Register(func(ctx context.Context) error {
@@ -56,7 +57,7 @@ func TestManager_Shutdown_HookErrorContinues(t *testing.T) {
 }
 
 func TestManager_Shutdown_Timeout(t *testing.T) {
-	m := New(WithTimeout(50 * time.Millisecond))
+	m := New(WithTimeout(testtime.MediumPoll))
 
 	m.Register(func(ctx context.Context) error {
 		// Respect the context deadline.
@@ -69,7 +70,7 @@ func TestManager_Shutdown_Timeout(t *testing.T) {
 }
 
 func TestManager_Shutdown_AllHooksRunOnError(t *testing.T) {
-	m := New(WithTimeout(5 * time.Second))
+	m := New(WithTimeout(testtime.SelectShutdown))
 
 	var order []int
 	m.Register(func(ctx context.Context) error {
@@ -98,7 +99,7 @@ func TestManager_DefaultTimeout(t *testing.T) {
 }
 
 func TestManager_NoHooks(t *testing.T) {
-	m := New(WithTimeout(100 * time.Millisecond))
+	m := New(WithTimeout(testtime.SlowPoll))
 	err := m.Shutdown()
 	// With no hooks and a fresh context, there should be no error.
 	assert.NoError(t, err)

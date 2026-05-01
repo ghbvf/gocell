@@ -5,11 +5,11 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/runtime/http/middleware"
 )
 
@@ -55,7 +55,7 @@ func TestAdapter_OpensAfterFailures(t *testing.T) {
 func TestAdapter_HalfOpenAfterTimeout(t *testing.T) {
 	a := mustNew(t, Config{
 		Name:    "test-halfopen",
-		Timeout: 100 * time.Millisecond, // short timeout for test
+		Timeout: testtime.D100ms, // short timeout for test
 	})
 
 	// Trip the breaker.
@@ -74,13 +74,13 @@ func TestAdapter_HalfOpenAfterTimeout(t *testing.T) {
 		}
 		done(nil) // successful probe
 		return true
-	}, 2*time.Second, 25*time.Millisecond, "breaker must transition to half-open after timeout")
+	}, testtime.D2s, testtime.D25ms, "breaker must transition to half-open after timeout")
 }
 
 func TestAdapter_ClosesAfterHalfOpenSuccess(t *testing.T) {
 	a := mustNew(t, Config{
 		Name:    "test-close",
-		Timeout: 100 * time.Millisecond,
+		Timeout: testtime.D100ms,
 	})
 
 	// Trip the breaker.
@@ -97,7 +97,7 @@ func TestAdapter_ClosesAfterHalfOpenSuccess(t *testing.T) {
 		}
 		done(nil) // successful probe → close
 		return true
-	}, 2*time.Second, 25*time.Millisecond, "breaker must reach half-open")
+	}, testtime.D2s, testtime.D25ms, "breaker must reach half-open")
 
 	// Should be back to closed — multiple requests allowed.
 	for i := range 3 {
@@ -113,7 +113,7 @@ func TestAdapter_OnStateChangeCallback(t *testing.T) {
 	var transitions []string
 	a := mustNew(t, Config{
 		Name:    "test-callback",
-		Timeout: 100 * time.Millisecond,
+		Timeout: testtime.D100ms,
 		OnStateChange: func(name string, from, to State) {
 			transitions = append(transitions, from.String()+"→"+to.String())
 		},
@@ -134,20 +134,20 @@ func TestAdapter_OnStateChangeCallback(t *testing.T) {
 		}
 		done(nil) // successful probe → half-open → closed
 		return true
-	}, 2*time.Second, 25*time.Millisecond, "breaker must reach half-open for callback test")
+	}, testtime.D2s, testtime.D25ms, "breaker must reach half-open for callback test")
 
 	assert.Contains(t, transitions, "open→half-open")
 	assert.Contains(t, transitions, "half-open→closed")
 }
 
 func TestAdapter_RetryAfter_CustomTimeout(t *testing.T) {
-	a := mustNew(t, Config{Name: "test-retry", Timeout: 30 * time.Second})
-	assert.Equal(t, 30*time.Second, a.RetryAfter())
+	a := mustNew(t, Config{Name: "test-retry", Timeout: testtime.D30s})
+	assert.Equal(t, testtime.D30s, a.RetryAfter())
 }
 
 func TestAdapter_RetryAfter_DefaultTimeout(t *testing.T) {
 	a := mustNew(t, Config{Name: "test-retry-default"})
-	assert.Equal(t, 60*time.Second, a.RetryAfter(), "default timeout is 60s")
+	assert.Equal(t, testtime.D60s, a.RetryAfter(), "default timeout is 60s")
 }
 
 func TestAdapter_CustomReadyToTrip(t *testing.T) {
@@ -221,7 +221,7 @@ func TestAdapter_HalfOpen_MaxRequestsConcurrent(t *testing.T) {
 	a := mustNew(t, Config{
 		Name:        "test-halfopen-concurrent",
 		MaxRequests: 1,
-		Timeout:     50 * time.Millisecond,
+		Timeout:     testtime.D50ms,
 	})
 
 	// Trip the breaker: need > 5 consecutive failures (default ReadyToTrip).
@@ -245,7 +245,7 @@ func TestAdapter_HalfOpen_MaxRequestsConcurrent(t *testing.T) {
 			return true
 		}
 		return false
-	}, 2*time.Second, 10*time.Millisecond, "breaker must enter half-open after timeout")
+	}, testtime.D2s, testtime.D10ms, "breaker must enter half-open after timeout")
 
 	// Wait again to enter half-open after re-opening.
 	require.Eventually(t, func() bool {
@@ -256,7 +256,7 @@ func TestAdapter_HalfOpen_MaxRequestsConcurrent(t *testing.T) {
 		// Keep the door open by failing the probe; we need half-open for the race.
 		done(errors.New("probe fail"))
 		return true
-	}, 2*time.Second, 10*time.Millisecond, "breaker must enter half-open for concurrent test")
+	}, testtime.D2s, testtime.D10ms, "breaker must enter half-open for concurrent test")
 
 	// Now concurrently race for the single half-open slot.
 	// gobreaker MaxRequests=1 means only one Allow() call should return true.

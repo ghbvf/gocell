@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/tests/e2e/internal/clients"
 	e2erequire "github.com/ghbvf/gocell/tests/e2e/internal/require"
 )
@@ -22,7 +23,7 @@ import (
 func TestE2E_ConfigEncryption_SensitiveValueNotExposedInResponse(t *testing.T) {
 	e2erequire.Docker(t)
 	e2erequire.PG(t)
-	clients.WaitForReady(t, 30*time.Second)
+	clients.WaitForReady(t, testtime.CtxLong)
 	token := clients.AdminToken(t)
 	key := fmt.Sprintf("e2e.sensitive.%d", time.Now().UnixNano())
 
@@ -52,7 +53,7 @@ func TestE2E_ConfigEncryption_SensitiveValueNotExposedInResponse(t *testing.T) {
 func TestE2E_ConfigEncryption_UpdateAndReadRoundTrip(t *testing.T) {
 	e2erequire.Docker(t)
 	e2erequire.PG(t)
-	clients.WaitForReady(t, 30*time.Second)
+	clients.WaitForReady(t, testtime.CtxLong)
 	token := clients.AdminToken(t)
 	key := fmt.Sprintf("e2e.update.%d", time.Now().UnixNano())
 
@@ -85,7 +86,7 @@ func TestE2E_ConfigEncryption_UpdateAndReadRoundTrip(t *testing.T) {
 func TestE2E_ConfigEncryption_NonSensitiveValueVisibleInResponse(t *testing.T) {
 	e2erequire.Docker(t)
 	e2erequire.PG(t)
-	clients.WaitForReady(t, 30*time.Second)
+	clients.WaitForReady(t, testtime.CtxLong)
 	token := clients.AdminToken(t)
 	key := fmt.Sprintf("e2e.plain.%d", time.Now().UnixNano())
 
@@ -115,7 +116,7 @@ func TestE2E_ConfigEncryption_NonSensitiveValueVisibleInResponse(t *testing.T) {
 func TestE2E_ConfigEncryption_AnonymousRequestRejected(t *testing.T) {
 	e2erequire.Docker(t)
 	e2erequire.PG(t)
-	clients.WaitForReady(t, 30*time.Second)
+	clients.WaitForReady(t, testtime.CtxLong)
 
 	resp := clients.DoJSON(t, http.MethodPost, "/api/v1/config/", map[string]any{
 		"key": "anon.probe", "value": "x", "sensitive": false,

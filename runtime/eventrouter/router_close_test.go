@@ -9,9 +9,15 @@ import (
 	"time"
 
 	"github.com/ghbvf/gocell/kernel/outbox"
+	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+const routerCloseHandlerDuration = testtime.D200ms
+const routerCloseDrainLong = testtime.D5s
+const routerCloseElapsedMax = 600 * time.Millisecond
+const routerCloseDeadlineExtraLong = 6 * time.Second
 
 // ---------------------------------------------------------------------------
 // Three-phase Close tests (Phase 2: drain barrier)
@@ -150,12 +156,12 @@ func TestRouterClose_CallsStopIntakeBeforeCancel(t *testing.T) {
 	// Wait for Running signal — all three phases complete and Phase 4 blocks.
 	select {
 	case <-r.Running():
-	case <-time.After(2 * time.Second):
+	case <-time.After(testtime.D2s):
 		t.Fatal("Router did not become ready")
 	}
 
 	// Ensure Subscribe goroutine is live inside the blocking call.
-	require.True(t, composite.cancelRec.WaitSubscribed(2*time.Second),
+	require.True(t, composite.cancelRec.WaitSubscribed(testtime.D2s),
 		"subscribe goroutine did not start")
 
 	// Invoke Close and wait for it.
@@ -188,7 +194,7 @@ func TestRouterClose_NoStopIntakeFallback(t *testing.T) {
 
 	select {
 	case <-r.Running():
-	case <-time.After(2 * time.Second):
+	case <-time.After(testtime.D2s):
 		t.Fatal("Router did not become ready")
 	}
 
@@ -197,7 +203,7 @@ func TestRouterClose_NoStopIntakeFallback(t *testing.T) {
 
 	select {
 	case <-done:
-	case <-time.After(2 * time.Second):
+	case <-time.After(testtime.D2s):
 		t.Fatal("Run did not exit after Close (no-handler path)")
 	}
 }
@@ -216,7 +222,7 @@ func TestRouterClose_NoStopIntakeFallback_WithHandlers(t *testing.T) {
 
 	select {
 	case <-r.Running():
-	case <-time.After(2 * time.Second):
+	case <-time.After(testtime.D2s):
 		t.Fatal("Router did not become ready")
 	}
 
@@ -225,7 +231,7 @@ func TestRouterClose_NoStopIntakeFallback_WithHandlers(t *testing.T) {
 
 	select {
 	case <-done:
-	case <-time.After(2 * time.Second):
+	case <-time.After(testtime.D2s):
 		t.Fatal("Run did not exit after Close")
 	}
 }
@@ -271,7 +277,7 @@ func (s *inflightSubscriber) Subscribe(ctx context.Context, _ outbox.Subscriptio
 		defer close(handlerFinished)
 		// The in-flight handler ignores ctx — it runs to completion even after
 		// intake is stopped, which is the whole point of the drain barrier.
-		time.Sleep(s.handlerDuration)
+		time.Sleep(s.handlerDuration) //archtest:allow:test-sleep sleep IS the fixture input under test
 		close(s.handlerDone)
 	}()
 
@@ -297,7 +303,7 @@ func (s *inflightSubscriber) StopIntake(_ context.Context) error {
 // until the in-flight handler finishes processing, proving the drain window
 // is preserved between StopIntake (Phase 1) and wg.Wait (Phase 3).
 func TestRouterClose_WaitsForInflightAfterStopIntake(t *testing.T) {
-	const handlerDuration = 200 * time.Millisecond
+	const handlerDuration = routerCloseHandlerDuration
 
 	sub := newInflightSubscriber(handlerDuration)
 
@@ -310,21 +316,21 @@ func TestRouterClose_WaitsForInflightAfterStopIntake(t *testing.T) {
 
 	select {
 	case <-r.Running():
-	case <-time.After(2 * time.Second):
+	case <-time.After(testtime.D2s):
 		t.Fatal("Router did not become ready")
 	}
 
 	// Ensure the Subscribe goroutine is inside its blocking call.
 	select {
 	case <-sub.subscribedCh:
-	case <-time.After(2 * time.Second):
+	case <-time.After(testtime.D2s):
 		t.Fatal("Subscribe goroutine did not start")
 	}
 
 	start := time.Now()
 
 	// Close with a generous timeout — should block until handler finishes.
-	closeCtx, closeCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	closeCtx, closeCancel := context.WithTimeout(context.Background(), testtime.CtxDefault)
 	defer closeCancel()
 
 	closeErr := r.Close(closeCtx)
@@ -333,7 +339,7 @@ func TestRouterClose_WaitsForInflightAfterStopIntake(t *testing.T) {
 	elapsed := time.Since(start)
 
 	// The in-flight handler took ~200ms; Close must have waited for it.
-	assert.GreaterOrEqual(t, elapsed, handlerDuration-20*time.Millisecond,
+	assert.GreaterOrEqual(t, elapsed, handlerDuration-testtime.D20ms,
 		"Close returned too early; in-flight handler was still running")
 
 	// Verify handler actually finished (not just ctx expiry).
@@ -362,7 +368,7 @@ func TestRouterClose_StopIntakeError_ContinuesShutdown(t *testing.T) {
 
 	select {
 	case <-r.Running():
-	case <-time.After(2 * time.Second):
+	case <-time.After(testtime.D2s):
 		t.Fatal("Router did not become ready")
 	}
 
@@ -372,7 +378,7 @@ func TestRouterClose_StopIntakeError_ContinuesShutdown(t *testing.T) {
 
 	select {
 	case <-done:
-	case <-time.After(2 * time.Second):
+	case <-time.After(testtime.D2s):
 		t.Fatal("Run did not exit after Close")
 	}
 
@@ -424,14 +430,14 @@ func TestRouterClose_StopIntakeBlocksNeverCalled_CtxTimeoutContinues(t *testing.
 
 	select {
 	case <-r.Running():
-	case <-time.After(2 * time.Second):
+	case <-time.After(testtime.D2s):
 		t.Fatal("Router did not become ready")
 	}
 
 	// Close with a short ctx; the buggy StopIntake ignores it, but Router.Close
 	// must still return within the ctx budget (+ small margin) by advancing
 	// to Phase 2 autonomously.
-	closeCtx, closeCancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	closeCtx, closeCancel := context.WithTimeout(context.Background(), testtime.D200ms)
 	defer closeCancel()
 
 	start := time.Now()
@@ -441,7 +447,7 @@ func TestRouterClose_StopIntakeBlocksNeverCalled_CtxTimeoutContinues(t *testing.
 	// Close should return ctx.DeadlineExceeded (could not wait for StopIntake).
 	require.Error(t, closeErr, "Close must return ctx error when StopIntake ignores ctx")
 	assert.ErrorIs(t, closeErr, context.DeadlineExceeded)
-	assert.Less(t, elapsed, 600*time.Millisecond,
+	assert.Less(t, elapsed, routerCloseElapsedMax,
 		"Close must not stall significantly past ctx deadline; got %s", elapsed)
 
 	// Release the hanging StopIntake so it exits (avoid goroutine leak).
@@ -449,7 +455,7 @@ func TestRouterClose_StopIntakeBlocksNeverCalled_CtxTimeoutContinues(t *testing.
 
 	select {
 	case <-done:
-	case <-time.After(3 * time.Second):
+	case <-time.After(testtime.EventuallyDefault):
 		t.Fatal("Run did not exit after StopIntake released")
 	}
 }
@@ -490,11 +496,11 @@ func TestRouterClose_WrapsErrorsByPhase(t *testing.T) {
 
 		select {
 		case <-r.Running():
-		case <-time.After(2 * time.Second):
+		case <-time.After(testtime.D2s):
 			t.Fatal("Router did not become ready")
 		}
 
-		closeCtx, closeCancel := context.WithTimeout(context.Background(), 150*time.Millisecond)
+		closeCtx, closeCancel := context.WithTimeout(context.Background(), testtime.D150ms)
 		defer closeCancel()
 
 		err := r.Close(closeCtx)
@@ -514,7 +520,7 @@ func TestRouterClose_WrapsErrorsByPhase(t *testing.T) {
 		close(h.release)
 		select {
 		case <-done:
-		case <-time.After(3 * time.Second):
+		case <-time.After(testtime.EventuallyDefault):
 			t.Fatal("Run did not exit after releasing StopIntake")
 		}
 	})
@@ -522,7 +528,7 @@ func TestRouterClose_WrapsErrorsByPhase(t *testing.T) {
 	t.Run("wg_wait phase label when goroutine drain times out", func(t *testing.T) {
 		// inflightSubscriber simulates a long in-flight message that outlasts the
 		// close ctx. StopIntake is a no-op, so the budget is consumed by wg.Wait.
-		const veryLongDrain = 5 * time.Second
+		const veryLongDrain = routerCloseDrainLong
 		sub := newInflightSubscriber(veryLongDrain)
 
 		r := New(sub)
@@ -537,20 +543,20 @@ func TestRouterClose_WrapsErrorsByPhase(t *testing.T) {
 
 		select {
 		case <-r.Running():
-		case <-time.After(2 * time.Second):
+		case <-time.After(testtime.D2s):
 			t.Fatal("Router did not become ready")
 		}
 
 		// Wait for Subscribe to be live before starting Close.
 		select {
 		case <-sub.subscribedCh:
-		case <-time.After(2 * time.Second):
+		case <-time.After(testtime.D2s):
 			t.Fatal("Subscribe goroutine did not start")
 		}
 
 		// Short ctx — StopIntake returns immediately (no-op), but the 5s inflight
 		// message outlasts the 150ms close budget.
-		closeCtx, closeCancel := context.WithTimeout(context.Background(), 150*time.Millisecond)
+		closeCtx, closeCancel := context.WithTimeout(context.Background(), testtime.D150ms)
 		defer closeCancel()
 
 		err := r.Close(closeCtx)
@@ -567,7 +573,7 @@ func TestRouterClose_WrapsErrorsByPhase(t *testing.T) {
 		runCancel()
 		select {
 		case <-done:
-		case <-time.After(6 * time.Second):
+		case <-time.After(routerCloseDeadlineExtraLong):
 			t.Fatal("Run did not exit")
 		}
 	})
@@ -593,7 +599,7 @@ func TestRouterClose_StopIntakeErr_ProceedsToCancel(t *testing.T) {
 
 	select {
 	case <-r.Running():
-	case <-time.After(2 * time.Second):
+	case <-time.After(testtime.D2s):
 		t.Fatal("Router did not become ready")
 	}
 
@@ -602,7 +608,7 @@ func TestRouterClose_StopIntakeErr_ProceedsToCancel(t *testing.T) {
 
 	select {
 	case <-done:
-	case <-time.After(2 * time.Second):
+	case <-time.After(testtime.D2s):
 		t.Fatal("Run did not exit after Close")
 	}
 }

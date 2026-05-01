@@ -15,6 +15,7 @@ import (
 	"golang.org/x/crypto/bcrypt"
 
 	"github.com/ghbvf/gocell/cells/accesscore/internal/mem"
+	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -71,7 +72,7 @@ func TestBootstrapper_FullFlow_OnCurrentOS(t *testing.T) {
 	require.NoError(t, parseErr)
 	remaining := time.Until(expiresAt)
 	assert.True(t, remaining > 0, "expires_at must be in the future")
-	assert.True(t, remaining <= time.Hour+5*time.Second, "expires_at must be within TTL")
+	assert.True(t, remaining <= time.Hour+testtime.D5s, "expires_at must be within TTL")
 
 	// Admin user must exist with PasswordResetRequired=true.
 	user, getErr := userRepo.GetByUsername(context.Background(), "admin")

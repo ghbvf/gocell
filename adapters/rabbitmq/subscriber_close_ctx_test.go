@@ -23,6 +23,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/ghbvf/gocell/kernel/outbox"
+	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 )
 
 // ---------------------------------------------------------------------------
@@ -95,7 +96,7 @@ func TestSubscriber_Reconnect_E2E_ChannelCloseAfterAllAcks(t *testing.T) {
 	var handlerCount atomic.Int64
 
 	handler := func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
-		time.Sleep(50 * time.Millisecond)
+		time.Sleep(testtime.MediumPoll) //archtest:allow:test-sleep slow handler fixture; sleep IS the test parameter
 		handlerCount.Add(1)
 		return outbox.HandleResult{Disposition: outbox.DispositionAck}
 	}
@@ -127,10 +128,14 @@ func TestSubscriber_Reconnect_E2E_ChannelCloseAfterAllAcks(t *testing.T) {
 	// localWg.Done() has been called for each.
 	require.Eventually(t, func() bool {
 		return handlerCount.Load() == int64(numDeliveries)
-	}, 5*time.Second, 5*time.Millisecond, "all %d handlers must have returned", numDeliveries)
+	}, testtime.EventuallyLong, testtime.FastPoll, "all %d handlers must have returned", numDeliveries)
 
-	// Small sleep to ensure ackTimestampChannel records all ack timestamps.
-	time.Sleep(10 * time.Millisecond)
+	// Poll until ackTimestampChannel has recorded all ack timestamps.
+	require.Eventually(t, func() bool {
+		atCh.mu.Lock()
+		defer atCh.mu.Unlock()
+		return len(atCh.ackCallTimes) >= numDeliveries
+	}, testtime.EventuallyShort, testtime.FastPoll, "all %d ack timestamps must be recorded", numDeliveries)
 
 	// Cancel ctx → consumeLoop exits via ctx.Done() with loopErr == nil.
 	// subscribeOnce calls waitAndClose(ctx). Since ctx is canceled but
@@ -141,14 +146,14 @@ func TestSubscriber_Reconnect_E2E_ChannelCloseAfterAllAcks(t *testing.T) {
 
 	select {
 	case <-subDone:
-	case <-time.After(5 * time.Second):
+	case <-time.After(testtime.EventuallyLong):
 		t.Fatal("Subscribe did not return within 5 s after ctx cancel")
 	}
 
 	// Sweep remaining runs via Subscriber.Close (idempotent — ch.Close is
 	// guarded by sync.Once). This ensures ch.Close is called even if
 	// subscribeOnce's waitAndClose took the ctx.Done() path.
-	closeCtx, closeCancel := context.WithTimeout(context.Background(), 3*time.Second)
+	closeCtx, closeCancel := context.WithTimeout(context.Background(), testtime.EventuallyDefault)
 	defer closeCancel()
 	_ = sub.Close(closeCtx)
 
@@ -220,17 +225,17 @@ func TestSubscriber_Close_RespectsCtxDeadline(t *testing.T) {
 	}()
 
 	// Wait until handler is in-flight.
-	time.Sleep(40 * time.Millisecond)
-	cancel() // exit consume loop
+	time.Sleep(subscriberD40ms) //archtest:allow:test-sleep wait for goroutine to enter blocking handler; no started observable
+	cancel()                    // exit consume loop
 
 	select {
 	case <-subDone:
-	case <-time.After(2 * time.Second):
+	case <-time.After(testtime.D2s):
 		t.Fatal("Subscribe did not return after ctx cancel")
 	}
 
 	// Close with 100ms budget — handler is still hanging.
-	closeCtx, closeCancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	closeCtx, closeCancel := context.WithTimeout(context.Background(), testtime.SlowPoll)
 	defer closeCancel()
 
 	start := time.Now()
@@ -238,7 +243,7 @@ func TestSubscriber_Close_RespectsCtxDeadline(t *testing.T) {
 	elapsed := time.Since(start)
 
 	require.Error(t, closeErr, "Close must return error when ctx expires with in-flight handlers")
-	assert.Less(t, elapsed, 500*time.Millisecond,
+	assert.Less(t, elapsed, testtime.D500ms,
 		"Close must return promptly after ctx deadline; got %s", elapsed)
 }
 
@@ -261,7 +266,7 @@ func TestSubscriber_Close_CancelledCtxReturnsImmediately(t *testing.T) {
 	require.Error(t, err, "Close with pre-canceled ctx must return error")
 	assert.True(t, errors.Is(err, context.Canceled),
 		"error must be context.Canceled, got: %v", err)
-	assert.Less(t, elapsed, 50*time.Millisecond,
+	assert.Less(t, elapsed, testtime.MediumPoll,
 		"Close with pre-canceled ctx must return < 50ms; got %s", elapsed)
 }
 
@@ -287,7 +292,7 @@ func TestSubscriber_Close_PreCancelledCtx(t *testing.T) {
 		"pre-canceled path must return context.Canceled, got: %v", err)
 	assert.NotContains(t, err.Error(), string(ErrAdapterAMQPCloseTimeout),
 		"pre-canceled path must NOT produce the wg.Wait timeout sentinel")
-	assert.Less(t, elapsed, 50*time.Millisecond,
+	assert.Less(t, elapsed, testtime.MediumPoll,
 		"Close with pre-canceled ctx must return < 50ms; got %s", elapsed)
 }
 
@@ -302,7 +307,7 @@ func TestSubscriber_Close_GracefulWithAmpleBudget(t *testing.T) {
 	mockConn.mu.Unlock()
 
 	handler := func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
-		time.Sleep(30 * time.Millisecond)
+		time.Sleep(drainD30ms) //archtest:allow:test-sleep slow handler fixture; sleep IS the test parameter
 		return outbox.HandleResult{Disposition: outbox.DispositionAck}
 	}
 
@@ -327,16 +332,16 @@ func TestSubscriber_Close_GracefulWithAmpleBudget(t *testing.T) {
 		ch.mu.Lock()
 		defer ch.mu.Unlock()
 		return ch.ackCalled
-	}, 2*time.Second, 5*time.Millisecond, "delivery must be acked")
+	}, testtime.D2s, testtime.FastPoll, "delivery must be acked")
 
 	cancel()
 	select {
 	case <-subDone:
-	case <-time.After(2 * time.Second):
+	case <-time.After(testtime.D2s):
 		t.Fatal("Subscribe did not return")
 	}
 
-	closeCtx, closeCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	closeCtx, closeCancel := context.WithTimeout(context.Background(), testtime.CtxDefault)
 	defer closeCancel()
 
 	err := sub.Close(closeCtx)
@@ -364,7 +369,7 @@ func TestSubscriber_Close_InFlightHandlerCompletesBeforeDeadline(t *testing.T) {
 	mockConn.mu.Unlock()
 
 	handler := func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
-		time.Sleep(80 * time.Millisecond)
+		time.Sleep(testtime.D80ms) //archtest:allow:test-sleep slow handler fixture; sleep IS the test parameter
 		return outbox.HandleResult{Disposition: outbox.DispositionAck}
 	}
 
@@ -385,16 +390,16 @@ func TestSubscriber_Close_InFlightHandlerCompletesBeforeDeadline(t *testing.T) {
 	}()
 
 	// Wait until handler is in-flight.
-	time.Sleep(20 * time.Millisecond)
+	time.Sleep(testtime.D20ms) //archtest:allow:test-sleep wait for goroutine to enter blocking handler; no started observable
 	cancel()
 
 	select {
 	case <-subDone:
-	case <-time.After(2 * time.Second):
+	case <-time.After(testtime.D2s):
 		t.Fatal("Subscribe did not return")
 	}
 
-	closeCtx, closeCancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	closeCtx, closeCancel := context.WithTimeout(context.Background(), testtime.D300ms)
 	defer closeCancel()
 
 	err := sub.Close(closeCtx)
@@ -412,7 +417,7 @@ func TestSubscriber_Close_NoDeadlineCtx_WaitsUntilWg(t *testing.T) {
 	mockConn.mu.Unlock()
 
 	handler := func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
-		time.Sleep(150 * time.Millisecond)
+		time.Sleep(testtime.D150ms) //archtest:allow:test-sleep slow handler fixture; sleep IS the test parameter
 		return outbox.HandleResult{Disposition: outbox.DispositionAck}
 	}
 
@@ -432,12 +437,12 @@ func TestSubscriber_Close_NoDeadlineCtx_WaitsUntilWg(t *testing.T) {
 		subDone <- sub.Subscribe(ctx, outbox.Subscription{Topic: "nodeadline.topic"}, handler)
 	}()
 
-	time.Sleep(20 * time.Millisecond)
+	time.Sleep(testtime.D20ms) //archtest:allow:test-sleep wait for goroutine to enter blocking handler; no started observable
 	cancel()
 
 	select {
 	case <-subDone:
-	case <-time.After(2 * time.Second):
+	case <-time.After(testtime.D2s):
 		t.Fatal("Subscribe did not return")
 	}
 
@@ -446,7 +451,7 @@ func TestSubscriber_Close_NoDeadlineCtx_WaitsUntilWg(t *testing.T) {
 	elapsed := time.Since(start)
 
 	assert.NoError(t, err, "Close with Background ctx must wait indefinitely and return nil")
-	assert.GreaterOrEqual(t, elapsed, 100*time.Millisecond,
+	assert.GreaterOrEqual(t, elapsed, testtime.SlowPoll,
 		"Close with Background ctx must have actually waited for handler; got %s", elapsed)
 }
 
@@ -471,7 +476,7 @@ func TestSubscriber_Reconnect_WaitsForInflightBeforeClose(t *testing.T) {
 	// Simulate two processDelivery goroutines: each sleeps 80ms then calls markDeliveryDone.
 	for i := range numDeliveries {
 		go func(_ int) {
-			time.Sleep(80 * time.Millisecond)
+			time.Sleep(testtime.D80ms) //archtest:allow:test-sleep sleep IS the fixture input under test
 			ackMu.Lock()
 			ackTimes = append(ackTimes, time.Now())
 			ackMu.Unlock()
@@ -479,7 +484,7 @@ func TestSubscriber_Reconnect_WaitsForInflightBeforeClose(t *testing.T) {
 		}(i)
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), testtime.D2s)
 	defer cancel()
 
 	err := run.waitAndClose(ctx)
@@ -574,7 +579,7 @@ func TestSubscriber_ReconnectWaitAndCloseTimeout_RunKeptForCloseSweep(t *testing
 
 	// Phase 1: call waitAndClose with a very short ctx — it must timeout because
 	// the goroutines are still blocking on gate.
-	shortCtx, shortCancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	shortCtx, shortCancel := context.WithTimeout(context.Background(), testtime.MediumPoll)
 	defer shortCancel()
 
 	waitErr := run.waitAndClose(shortCtx)
@@ -590,7 +595,7 @@ func TestSubscriber_ReconnectWaitAndCloseTimeout_RunKeptForCloseSweep(t *testing
 	close(gate)
 
 	// Call waitAndClose again with an ample ctx → localWg drains → ch.Close via sync.Once.
-	ampleCtx, ampleCancel := context.WithTimeout(context.Background(), 3*time.Second)
+	ampleCtx, ampleCancel := context.WithTimeout(context.Background(), testtime.EventuallyDefault)
 	defer ampleCancel()
 
 	waitErr2 := run.waitAndClose(ampleCtx)

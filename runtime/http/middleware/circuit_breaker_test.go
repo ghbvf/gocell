@@ -9,7 +9,12 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 )
+
+// cbRetryAfter is the retryAfter value used in TestCircuitBreaker_Open_RetryAfterHeader.
+const cbRetryAfter = testtime.D30s
 
 // mockBreaker implements Allower for testing.
 type mockBreaker struct {
@@ -180,7 +185,7 @@ func (m *mockBreakerWithRetryAfter) RetryAfter() time.Duration {
 func TestCircuitBreaker_Open_RetryAfterHeader(t *testing.T) {
 	cb := &mockBreakerWithRetryAfter{
 		mockBreaker: mockBreaker{open: true},
-		retryAfter:  30 * time.Second,
+		retryAfter:  cbRetryAfter,
 	}
 	handler := MustCircuitBreaker(cb)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		t.Fatal("handler should not be called")

@@ -24,8 +24,24 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/runtime/distlock"
 )
+
+// ttlExpiryMargin is the safety multiplier applied to a small TTL when waiting
+// for the backend to physically expire it. The actual wait equals
+// `ttl * ttlExpiryMargin`; the margin is dimensionless so changing the
+// fixture TTL automatically scales the wait. 5× is empirically sufficient
+// across local Redis and Redis Cluster.
+//
+// C-5 uses polling (SetNX is side-effect-free on a held key, so we can
+// retry until the TTL has expired). C-6 must use a fixed sleep because
+// Renew on a held key extends the TTL — polling Renew would never observe
+// expiry. See docs/architecture/test-time-discipline.md
+// "Intentional real-clock sleeps".
+const ttlExpiryMargin = 5
+
+const conformDNeg1h = -1 * time.Hour
 
 // Literal constants for repeated token/key strings used in conformance tests.
 // Per CLAUDE.md: strings repeated ≥3 times must be extracted as constants.
@@ -185,8 +201,11 @@ func conformC4(t *testing.T, factory DriverFactory) {
 }
 
 // conformC5: After TTL expiry, SetNX on same key succeeds.
-// Uses real time.Sleep — only call via RunDriverTTLConformance for backends
-// that enforce physical TTL (e.g. Redis). Do not call for FakeDriver tests.
+// Polls SetNX with a generous deadline because SetNX has no effect on a
+// still-held key — each poll is safe and the test self-times to whatever
+// the backend's actual expiry latency is.
+// Only call via RunDriverTTLConformance for backends that enforce physical
+// TTL (e.g. Redis). Do not call for FakeDriver tests.
 func conformC5(t *testing.T, factory DriverFactory) {
 	t.Helper()
 	drv := factory(t)
@@ -198,20 +217,26 @@ func conformC5(t *testing.T, factory DriverFactory) {
 		t.Fatalf("C5 initial SetNX: ok=%v err=%v", ok, err)
 	}
 
-	// Wait past TTL — real sleep because we are testing real-clock TTL expiry.
-	time.Sleep(5 * time.Millisecond)
-
-	ok2, err2 := drv.SetNX(ctx, "c5-key", tokenB, ttl)
-	if err2 != nil {
-		t.Fatalf("C5 second SetNX after TTL: %v", err2)
-	}
-	if !ok2 {
-		t.Fatal("C5: SetNX should succeed after TTL expiry")
+	deadline := time.Now().Add(testtime.EventuallyShort)
+	for {
+		ok2, err2 := drv.SetNX(ctx, "c5-key", tokenB, ttl)
+		if err2 != nil {
+			t.Fatalf("C5 second SetNX: %v", err2)
+		}
+		if ok2 {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("C5: SetNX did not succeed within deadline after TTL expiry")
+		}
+		time.Sleep(testtime.FastPoll) //archtest:allow:test-sleep TTL physical expiry; backend has no notification API
 	}
 }
 
 // conformC6: Renew on an expired key returns (false, nil).
-// Uses real time.Sleep — only call via RunDriverTTLConformance.
+// Uses a fixed sleep (not Eventually-style polling) because Renew on a
+// still-held key extends the TTL — polling would defeat the test.
+// Only call via RunDriverTTLConformance.
 func conformC6(t *testing.T, factory DriverFactory) {
 	t.Helper()
 	drv := factory(t)
@@ -223,8 +248,8 @@ func conformC6(t *testing.T, factory DriverFactory) {
 		t.Fatalf("C6 SetNX: ok=%v err=%v", ok, err)
 	}
 
-	// Wait past TTL — real sleep.
-	time.Sleep(5 * time.Millisecond)
+	// Wait ttl × ttlExpiryMargin past the deadline — Renew cannot be polled.
+	time.Sleep(ttl * ttlExpiryMargin) //archtest:allow:test-sleep TTL physical expiry; backend has no notification API
 
 	held, err := drv.Renew(ctx, "c6-key", tokenA, ttl)
 	if err != nil {
@@ -260,7 +285,7 @@ func conformC7(t *testing.T, factory DriverFactory) {
 	} else {
 		// For real drivers: use an already-past-deadline context to force an error.
 		// This validates that the driver faithfully propagates ctx errors.
-		alreadyExpiredCtx, cancel := context.WithDeadline(ctx, time.Now().Add(-1*time.Hour))
+		alreadyExpiredCtx, cancel := context.WithDeadline(ctx, time.Now().Add(conformDNeg1h))
 		defer cancel()
 		_, err := drv.SetNX(alreadyExpiredCtx, "c7-key", tokenA, time.Minute)
 		if err == nil {

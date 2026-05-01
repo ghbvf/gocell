@@ -9,6 +9,14 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/ghbvf/gocell/pkg/testutil/testtime"
+)
+
+const (
+	outboxTestNeg10s    = -10 * time.Second
+	outboxTestNeg72h    = -72 * time.Hour
+	outboxTestNeg30Days = -30 * 24 * time.Hour
 )
 
 // ---------------------------------------------------------------------------
@@ -67,7 +75,7 @@ func TestPGOutboxStore_MarkRetry_Updated(t *testing.T) {
 	}
 	store := NewOutboxStore(db)
 
-	nextRetry := time.Now().Add(10 * time.Second)
+	nextRetry := time.Now().Add(testtime.D10s)
 	updated, err := store.MarkRetry(context.Background(), "e-1", 2, nextRetry, "transient error")
 	require.NoError(t, err)
 	assert.True(t, updated)
@@ -95,7 +103,7 @@ func TestPGOutboxStore_MarkRetry_NotUpdated(t *testing.T) {
 	}
 	store := NewOutboxStore(db)
 
-	updated, err := store.MarkRetry(context.Background(), "e-gone", 1, time.Now().Add(5*time.Second), "err")
+	updated, err := store.MarkRetry(context.Background(), "e-gone", 1, time.Now().Add(testtime.D5s), "err")
 	require.NoError(t, err)
 	assert.False(t, updated)
 }
@@ -106,7 +114,7 @@ func TestPGOutboxStore_MarkRetry_ExecError(t *testing.T) {
 	}
 	store := NewOutboxStore(db)
 
-	_, err := store.MarkRetry(context.Background(), "e-fail", 1, time.Now().Add(5*time.Second), "err")
+	_, err := store.MarkRetry(context.Background(), "e-fail", 1, time.Now().Add(testtime.D5s), "err")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "MarkRetry failed")
 }
@@ -118,7 +126,7 @@ func TestPGOutboxStore_MarkRetry_SanitizesError(t *testing.T) {
 	store := NewOutboxStore(db)
 
 	_, err := store.MarkRetry(context.Background(), "e-1", 1,
-		time.Now().Add(5*time.Second),
+		time.Now().Add(testtime.D5s),
 		"dial tcp: password=secret123 host=db.internal")
 	require.NoError(t, err)
 
@@ -135,7 +143,7 @@ func TestPGOutboxStore_MarkRetry_PastNextRetry_UsesZeroDelay(t *testing.T) {
 	}
 	store := NewOutboxStore(db)
 
-	pastTime := time.Now().Add(-10 * time.Second)
+	pastTime := time.Now().Add(outboxTestNeg10s)
 	_, err := store.MarkRetry(context.Background(), "e-1", 1, pastTime, "err")
 	require.NoError(t, err)
 
@@ -217,7 +225,7 @@ func TestPGOutboxStore_ReclaimStale_ReturnsCount(t *testing.T) {
 	store := NewOutboxStore(db)
 
 	count, err := store.ReclaimStale(context.Background(),
-		60*time.Second, 5, 5*time.Second, 5*time.Minute)
+		testtime.D60s, 5, testtime.D5s, testtime.D5min)
 	require.NoError(t, err)
 	assert.Equal(t, 3, count)
 
@@ -246,7 +254,7 @@ func TestPGOutboxStore_ReclaimStale_ExecError(t *testing.T) {
 	store := NewOutboxStore(db)
 
 	_, err := store.ReclaimStale(context.Background(),
-		60*time.Second, 5, 5*time.Second, 5*time.Minute)
+		testtime.D60s, 5, testtime.D5s, testtime.D5min)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "ReclaimStale failed")
 }
@@ -258,7 +266,7 @@ func TestPGOutboxStore_ReclaimStale_ZeroCount(t *testing.T) {
 	store := NewOutboxStore(db)
 
 	count, err := store.ReclaimStale(context.Background(),
-		60*time.Second, 5, 5*time.Second, 5*time.Minute)
+		testtime.D60s, 5, testtime.D5s, testtime.D5min)
 	require.NoError(t, err)
 	assert.Equal(t, 0, count)
 }
@@ -273,7 +281,7 @@ func TestPGOutboxStore_CleanupPublished_ReturnsCount(t *testing.T) {
 	}
 	store := NewOutboxStore(db)
 
-	cutoff := time.Now().Add(-72 * time.Hour)
+	cutoff := time.Now().Add(outboxTestNeg72h)
 	deleted, err := store.CleanupPublished(context.Background(), cutoff, 1000)
 	require.NoError(t, err)
 	assert.Equal(t, 5, deleted)
@@ -306,7 +314,7 @@ func TestPGOutboxStore_CleanupDead_ReturnsCount(t *testing.T) {
 	}
 	store := NewOutboxStore(db)
 
-	cutoff := time.Now().Add(-30 * 24 * time.Hour)
+	cutoff := time.Now().Add(outboxTestNeg30Days)
 	deleted, err := store.CleanupDead(context.Background(), cutoff, 1000)
 	require.NoError(t, err)
 	assert.Equal(t, 2, deleted)

@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/runtime/http/health"
 )
 
@@ -46,7 +47,7 @@ func CheckCtxRespected(t testing.TB, fn health.Checker, budget time.Duration) {
 		return
 	}
 	if budget <= 0 {
-		budget = 100 * time.Millisecond
+		budget = testtime.SlowPoll
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()

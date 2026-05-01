@@ -6,16 +6,32 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/runtime/distlock"
 	"github.com/ghbvf/gocell/runtime/distlock/locktest"
 )
+
+// mgrWaitTimeout is the real-clock deadline for waitPendingTimers/waitTrackedLocks spin loops.
+const mgrWaitTimeout = testtime.D10s
+
+// mgrTotalTimeout is the maximum wait time for RenewNotify in waitForRenewM.
+const mgrTotalTimeout = testtime.D60s
+
+// mgrTTL1 is the first lock TTL in HeapOrder (4s → renewAt 2s).
+const mgrTTL1 = testtime.D5s - testtime.D1s // 4s
+
+// mgrTTL2 is the second lock TTL in HeapOrder.
+const mgrTTL2 = testtime.D10s
+
+// mgrAdvance2s1ms is the first phase advance in HeapOrder (2s+1ms).
+const mgrAdvance2s1ms = testtime.D2s + testtime.D1ms
 
 // waitPendingTimers spins until fc.PendingTimers() >= 1 or the deadline
 // passes. Called after a renew to ensure the manager has re-registered its
 // next timer before the test advances the clock again.
 func waitPendingTimers(t *testing.T, fc *locktest.FakeClock) {
 	t.Helper()
-	deadline := time.Now().Add(10 * time.Second)
+	deadline := time.Now().Add(mgrWaitTimeout)
 	for fc.PendingTimers() < 1 {
 		if time.Now().After(deadline) {
 			t.Fatalf("waitPendingTimers: timed out waiting for 1 pending timer (got %d)", fc.PendingTimers())
@@ -30,7 +46,7 @@ func waitPendingTimers(t *testing.T, fc *locktest.FakeClock) {
 // can race ahead of handleAdd and capture a later nextRenew baseline.
 func waitTrackedLocks(t *testing.T, m *distlock.Manager, want int) {
 	t.Helper()
-	deadline := time.Now().Add(10 * time.Second)
+	deadline := time.Now().Add(mgrWaitTimeout)
 	for m.Snapshot().Locks < want {
 		if time.Now().After(deadline) {
 			t.Fatalf("waitTrackedLocks: timed out waiting for %d tracked locks (got %d)", want, m.Snapshot().Locks)
@@ -42,15 +58,14 @@ func waitTrackedLocks(t *testing.T, m *distlock.Manager, want int) {
 // waitForRenewM waits until fd.Calls("Renew") >= want using RenewNotify.
 func waitForRenewM(t *testing.T, m *distlock.Manager, fd *locktest.FakeDriver, want int) {
 	t.Helper()
-	const totalTimeout = 60 * time.Second
-	deadline := time.Now().Add(totalTimeout)
+	deadline := time.Now().Add(mgrTotalTimeout)
 	for fd.Calls("Renew") < want {
 		if time.Now().After(deadline) {
 			t.Fatalf("waitForRenewM: timed out waiting for %d Renew calls (got %d)", want, fd.Calls("Renew"))
 		}
 		select {
 		case <-m.RenewNotify():
-		case <-time.After(totalTimeout):
+		case <-time.After(mgrTotalTimeout):
 			t.Fatalf("waitForRenewM: RenewNotify timed out (want %d, got %d)", want, fd.Calls("Renew"))
 		}
 	}
@@ -72,8 +87,8 @@ func TestManager_HeapOrder(t *testing.T) {
 	)
 
 	// ttl1=4s → renewAt=2s. ttl2=10s → renewAt=5s.
-	ttl1 := 4 * time.Second
-	ttl2 := 10 * time.Second
+	ttl1 := mgrTTL1
+	ttl2 := mgrTTL2
 
 	_, release1, err := l.Acquire(context.Background(), "heap-key1", ttl1)
 	if err != nil {
@@ -107,7 +122,7 @@ func TestManager_HeapOrder(t *testing.T) {
 	waitPendingTimers(t, fc)
 
 	// --- Phase 1: advance to 2s+1ms. Only key1 fires (heap order verified). ---
-	fc.Advance(2*time.Second + time.Millisecond) // fake time: 2s+1ms
+	fc.Advance(mgrAdvance2s1ms) // fake time: 2s+1ms
 	waitForRenewM(t, m, fd, 1)
 
 	if fd.Calls("Renew") != 1 {
@@ -116,8 +131,8 @@ func TestManager_HeapOrder(t *testing.T) {
 
 	// --- Phase 2: step past key1 re-queue, stop before key2. ---
 	// key1 re-queued @4s+1ms, key2 @5s. Advance to 4s+2ms so d(key2)=998ms>0.
-	waitPendingTimers(t, fc)                     // key1 re-queued timer registered
-	fc.Advance(2*time.Second + time.Millisecond) // fake time: 4s+2ms
+	waitPendingTimers(t, fc)    // key1 re-queued timer registered
+	fc.Advance(mgrAdvance2s1ms) // fake time: 4s+2ms
 	waitForRenewM(t, m, fd, 2)
 
 	// --- Phase 3: now key2's timer has positive d; advance past 5s. ---
@@ -137,7 +152,7 @@ func TestManager_Lifecycle_LazyStart(t *testing.T) {
 	fd := locktest.NewFakeDriver()
 	l := distlock.MustNew(fd, distlock.WithClock(fc))
 
-	_, release, err := l.Acquire(context.Background(), "lifecycle-key", 10*time.Second)
+	_, release, err := l.Acquire(context.Background(), "lifecycle-key", mgrWaitTimeout)
 	if err != nil {
 		t.Fatalf("Acquire: %v", err)
 	}
@@ -145,7 +160,7 @@ func TestManager_Lifecycle_LazyStart(t *testing.T) {
 	// Wait for the manager to signal it has started.
 	select {
 	case <-mgr(l).Started():
-	case <-time.After(10 * time.Second):
+	case <-time.After(mgrWaitTimeout):
 		t.Fatal("Lifecycle: manager Started channel should close after Acquire")
 	}
 
@@ -155,7 +170,7 @@ func TestManager_Lifecycle_LazyStart(t *testing.T) {
 
 	select {
 	case <-mgr(l).Drained():
-	case <-time.After(10 * time.Second):
+	case <-time.After(mgrWaitTimeout):
 		t.Fatal("Lifecycle: manager should drain after last release")
 	}
 }
@@ -170,13 +185,13 @@ func TestManager_SnapshotLocks(t *testing.T) {
 		t.Errorf("SnapshotLocks: initial count should be 0")
 	}
 
-	_, r1, _ := l.Acquire(context.Background(), "snap-key1", time.Minute)
-	_, r2, _ := l.Acquire(context.Background(), "snap-key2", time.Minute)
+	_, r1, _ := l.Acquire(context.Background(), "snap-key1", testtime.D1min)
+	_, r2, _ := l.Acquire(context.Background(), "snap-key2", testtime.D1min)
 
 	<-mgr(l).Started()
 
 	// Wait for both adds to be processed.
-	deadline := time.Now().Add(10 * time.Second)
+	deadline := time.Now().Add(mgrWaitTimeout)
 	for mgr(l).Snapshot().Locks != 2 {
 		if time.Now().After(deadline) {
 			t.Fatalf("SnapshotLocks: expected 2 locks, got %d", mgr(l).Snapshot().Locks)
@@ -188,7 +203,7 @@ func TestManager_SnapshotLocks(t *testing.T) {
 		t.Logf("r1: %v", err)
 	}
 
-	deadline = time.Now().Add(10 * time.Second)
+	deadline = time.Now().Add(mgrWaitTimeout)
 	for mgr(l).Snapshot().Locks != 1 {
 		if time.Now().After(deadline) {
 			t.Fatalf("SnapshotLocks: expected 1 lock after r1 release, got %d", mgr(l).Snapshot().Locks)
@@ -202,7 +217,7 @@ func TestManager_SnapshotLocks(t *testing.T) {
 
 	select {
 	case <-mgr(l).Drained():
-	case <-time.After(10 * time.Second):
+	case <-time.After(mgrWaitTimeout):
 		t.Fatal("SnapshotLocks: manager should drain after both releases")
 	}
 

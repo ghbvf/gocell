@@ -20,6 +20,13 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+const (
+	// auditNs100 / auditNs200 are sub-second timestamp offsets used in
+	// cursor-isolation tests to produce distinct query fingerprints.
+	auditNs100 = 100 * time.Nanosecond
+	auditNs200 = 200 * time.Nanosecond
+)
+
 func testCodec() *query.CursorCodec {
 	codec, _ := query.NewCursorCodec(bytes.Repeat([]byte("k"), 32))
 	return codec
@@ -331,13 +338,13 @@ func TestService_Query_SubsecondFilterContext(t *testing.T) {
 	}
 
 	// Query A: from = base+100ns
-	filtersA := ports.AuditFilters{From: base.Add(100 * time.Nanosecond)}
+	filtersA := ports.AuditFilters{From: base.Add(auditNs100)}
 	pageA, err := svc.Query(context.Background(), filtersA, query.PageParams{Limit: 3})
 	require.NoError(t, err)
 	require.True(t, pageA.HasMore)
 
 	// Query B: from = base+200ns (same second, different nanosecond)
-	filtersB := ports.AuditFilters{From: base.Add(200 * time.Nanosecond)}
+	filtersB := ports.AuditFilters{From: base.Add(auditNs200)}
 	_, err = svc.Query(context.Background(), filtersB, query.PageParams{
 		Limit:  3,
 		Cursor: pageA.NextCursor,

@@ -11,6 +11,7 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/lifecycle"
 	"github.com/ghbvf/gocell/kernel/worker"
+	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 )
 
 // Compile-time assertion mirrors the production assertion — ensures the
@@ -48,7 +49,7 @@ func TestConnection_Checkers_HonorsCtxDeadline(t *testing.T) {
 	if !errors.Is(err, context.Canceled) {
 		t.Errorf("probe error = %v, want context.Canceled", err)
 	}
-	if elapsed > 50*time.Millisecond {
+	if elapsed > testtime.MediumPoll {
 		t.Errorf("probe took %s — should return immediately on canceled ctx", elapsed)
 	}
 }

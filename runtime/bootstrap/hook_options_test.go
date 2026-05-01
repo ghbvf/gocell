@@ -11,6 +11,7 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/assembly"
 	"github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/runtime/eventbus"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -24,15 +25,17 @@ func (r *recordingHookObserver) OnHookEvent(e cell.HookEvent) {
 	r.events = append(r.events, e)
 }
 
+const hookOptDNeg1 = time.Duration(-1)
+
 func TestWithHookTimeout_PopulatesField(t *testing.T) {
-	b := New(WithHookTimeout(2 * time.Second))
-	assert.Equal(t, 2*time.Second, b.hookTimeout)
+	b := New(WithHookTimeout(testtime.D2s))
+	assert.Equal(t, testtime.D2s, b.hookTimeout)
 	assert.True(t, b.hookTimeoutSet)
 }
 
 func TestWithHookTimeout_NegativeDisables(t *testing.T) {
-	b := New(WithHookTimeout(-1))
-	assert.Equal(t, time.Duration(-1), b.hookTimeout)
+	b := New(WithHookTimeout(hookOptDNeg1))
+	assert.Equal(t, hookOptDNeg1, b.hookTimeout)
 	assert.True(t, b.hookTimeoutSet)
 }
 
@@ -99,7 +102,7 @@ func TestWithAssembly_OverridesHookOptions_BehaviourContract(t *testing.T) {
 		WithListener(cell.InternalListener, "127.0.0.1:0", []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(newLocalListener(t))),
 		WithPublisher(eb),
 		WithSubscriber(eb),
-		WithShutdownTimeout(2*time.Second),
+		WithShutdownTimeout(testtime.D2s),
 	)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -112,7 +115,7 @@ func TestWithAssembly_OverridesHookOptions_BehaviourContract(t *testing.T) {
 	cancel()
 	select {
 	case <-done:
-	case <-time.After(5 * time.Second):
+	case <-time.After(testtime.SelectShutdown):
 		t.Fatal("bootstrap did not shut down in time")
 	}
 

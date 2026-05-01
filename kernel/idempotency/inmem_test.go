@@ -5,6 +5,8 @@ import (
 	"errors"
 	"testing"
 	"time"
+
+	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 )
 
 func TestInMemClaimer_Claim_AcquiredThenCommitted(t *testing.T) {
@@ -70,7 +72,7 @@ func TestInMemClaimer_LeaseExpiry_AllowsReclaim(t *testing.T) {
 	_, _, _ = c.Claim(ctx, "k", time.Second, time.Hour)
 
 	// Advance past lease TTL.
-	c.now = func() time.Time { return base.Add(2 * time.Second) }
+	c.now = func() time.Time { return base.Add(testtime.D2s) }
 	state, _, _ := c.Claim(ctx, "k", time.Second, time.Hour)
 	if state != ClaimAcquired {
 		t.Fatalf("expected reclaim after lease expiry, got %v", state)
@@ -114,7 +116,7 @@ func TestInMemClaimer_Commit_AfterLeaseExpiryAndReclaim_ReturnsStaleError(t *tes
 	_, r1, _ := c.Claim(ctx, "k", time.Second, time.Hour)
 
 	// Lease expires; a second consumer reclaims the key with a fresh token.
-	c.now = func() time.Time { return base.Add(2 * time.Second) }
+	c.now = func() time.Time { return base.Add(testtime.D2s) }
 	_, _, err := c.Claim(ctx, "k", time.Minute, time.Hour)
 	if err != nil {
 		t.Fatalf("reclaim failed: %v", err)
@@ -135,7 +137,7 @@ func TestInMemClaimer_Release_AfterLeaseExpiryAndReclaim_ReturnsStaleError(t *te
 
 	_, r1, _ := c.Claim(ctx, "k", time.Second, time.Hour)
 
-	c.now = func() time.Time { return base.Add(2 * time.Second) }
+	c.now = func() time.Time { return base.Add(testtime.D2s) }
 	_, r2, err := c.Claim(ctx, "k", time.Minute, time.Hour)
 	if err != nil || r2 == nil {
 		t.Fatalf("reclaim failed: err=%v r2=%v", err, r2)

@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/runtime/distlock/locktest"
 )
 
@@ -12,12 +13,12 @@ import (
 // NewTimerAt fires the moment fc.now >= deadline.
 func TestFakeClock_NewTimerAt_FiresAtDeadline(t *testing.T) {
 	fc := locktest.NewFakeClock(epoch)
-	deadline := epoch.Add(5 * time.Second)
+	deadline := epoch.Add(testtime.D5s)
 
 	timer := fc.NewTimerAt(deadline)
 
 	// fc.now=T+4s — not yet at deadline.
-	fc.Advance(4 * time.Second)
+	fc.Advance(testtime.D5s - testtime.D1s)
 	select {
 	case <-timer.C():
 		t.Error("timer at T+5s should not fire at fc.now=T+4s")
@@ -25,10 +26,10 @@ func TestFakeClock_NewTimerAt_FiresAtDeadline(t *testing.T) {
 	}
 
 	// fc.now=T+5s — should fire.
-	fc.Advance(1 * time.Second)
+	fc.Advance(testtime.D1s)
 	select {
 	case <-timer.C():
-	case <-time.After(100 * time.Millisecond):
+	case <-time.After(testtime.D100ms):
 		t.Error("timer at T+5s should fire when fc.now reaches T+5s")
 	}
 }
@@ -51,19 +52,19 @@ func TestFakeClock_NewTimerAt_FiresAtDeadline(t *testing.T) {
 // runner under -race.
 func TestFakeClock_NewTimerAt_NotRebaselinedAcrossIntermediateAdvance(t *testing.T) {
 	fc := locktest.NewFakeClock(epoch)
-	deadline := epoch.Add(5 * time.Second)
+	deadline := epoch.Add(testtime.D5s)
 
 	// Step 3: Advance happens BEFORE timer creation.
-	fc.Advance(3 * time.Second) // fc.now = T+3s
+	fc.Advance(testtime.D3s) // fc.now = T+3s
 
 	// Step 4: NewTimerAt uses ABSOLUTE deadline; immune to intermediate Advance.
 	timer := fc.NewTimerAt(deadline)
 
 	// Step 5: Reach the absolute deadline — must fire.
-	fc.Advance(2 * time.Second) // fc.now = T+5s
+	fc.Advance(testtime.D2s) // fc.now = T+5s
 	select {
 	case <-timer.C():
-	case <-time.After(100 * time.Millisecond):
+	case <-time.After(testtime.D100ms):
 		t.Fatal("NewTimerAt(T+5s) must fire at fc.now=T+5s regardless of " +
 			"intermediate Advance(3s) — pre-fix TC-3 race regression")
 	}
@@ -73,14 +74,14 @@ func TestFakeClock_NewTimerAt_NotRebaselinedAcrossIntermediateAdvance(t *testing
 // deadline already in the past fires right away (mirrors NewTimer(d<=0)).
 func TestFakeClock_NewTimerAt_PastDeadlineFiresImmediately(t *testing.T) {
 	fc := locktest.NewFakeClock(epoch)
-	fc.Advance(10 * time.Second) // fc.now = T+10s
+	fc.Advance(testtime.D10s) // fc.now = T+10s
 
 	// Deadline at T+5s is in the past relative to fc.now.
-	timer := fc.NewTimerAt(epoch.Add(5 * time.Second))
+	timer := fc.NewTimerAt(epoch.Add(testtime.D5s))
 
 	select {
 	case <-timer.C():
-	case <-time.After(100 * time.Millisecond):
+	case <-time.After(testtime.D100ms):
 		t.Error("NewTimerAt(past-deadline) must fire immediately")
 	}
 
@@ -98,7 +99,7 @@ func TestFakeClock_NewTimerAt_DeadlineEqualsNow_FiresImmediately(t *testing.T) {
 
 	select {
 	case <-timer.C():
-	case <-time.After(100 * time.Millisecond):
+	case <-time.After(testtime.D100ms):
 		t.Error("NewTimerAt(now) must fire immediately")
 	}
 }
@@ -114,7 +115,7 @@ func TestFakeClock_NewTimerAt_ConcurrentWithAdvance(t *testing.T) {
 	const iterations = 200
 	for i := range iterations {
 		fc := locktest.NewFakeClock(epoch)
-		deadline := epoch.Add(5 * time.Second)
+		deadline := epoch.Add(testtime.D5s)
 
 		var wg sync.WaitGroup
 		var timer interface {
@@ -129,12 +130,12 @@ func TestFakeClock_NewTimerAt_ConcurrentWithAdvance(t *testing.T) {
 		// Advance enough to reach the deadline. Whether NewTimerAt happens
 		// before or after Advance, the timer must fire because fc.now ends at
 		// T+5s == deadline.
-		fc.Advance(5 * time.Second)
+		fc.Advance(testtime.D5s)
 		wg.Wait()
 
 		select {
 		case <-timer.C():
-		case <-time.After(100 * time.Millisecond):
+		case <-time.After(testtime.D100ms):
 			t.Fatalf("iter %d: timer at T+5s did not fire after Advance(5s) "+
 				"(concurrent NewTimerAt/Advance ordering broke atomicity)", i)
 		}

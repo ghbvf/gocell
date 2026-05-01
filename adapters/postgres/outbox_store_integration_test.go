@@ -10,6 +10,7 @@ import (
 	"time"
 
 	kout "github.com/ghbvf/gocell/kernel/outbox"
+	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	rout "github.com/ghbvf/gocell/runtime/outbox"
 	"github.com/ghbvf/gocell/runtime/outbox/outboxtest"
 	"github.com/stretchr/testify/assert"
@@ -76,16 +77,16 @@ func TestPGOutboxStore_RelayPublishesRollbackStateBeforeAudit(t *testing.T) {
 	store := NewOutboxStore(pool.DB())
 	pub := &recordingPublisher{}
 	relay := rout.NewRelay(store, pub, rout.RelayConfig{
-		PollInterval:        5 * time.Millisecond,
-		ReclaimInterval:     50 * time.Millisecond,
+		PollInterval:        testtime.FastPoll,
+		ReclaimInterval:     testtime.MediumPoll,
 		BatchSize:           10,
 		MaxAttempts:         3,
 		BaseRetryDelay:      time.Millisecond,
-		MaxRetryDelay:       10 * time.Millisecond,
-		ClaimTTL:            100 * time.Millisecond,
+		MaxRetryDelay:       testtime.D10ms,
+		ClaimTTL:            testtime.SlowPoll,
 		RetentionPeriod:     time.Hour,
 		DeadRetentionPeriod: time.Hour,
-		CleanupWaitFloor:    50 * time.Millisecond,
+		CleanupWaitFloor:    testtime.MediumPoll,
 	})
 
 	runCtx, cancel := context.WithCancel(ctx)
@@ -93,7 +94,7 @@ func TestPGOutboxStore_RelayPublishesRollbackStateBeforeAudit(t *testing.T) {
 	errCh := make(chan error, 1)
 	go func() { errCh <- relay.Start(runCtx) }()
 	t.Cleanup(func() {
-		stopCtx, stopCancel := context.WithTimeout(context.Background(), 2*time.Second)
+		stopCtx, stopCancel := context.WithTimeout(context.Background(), testtime.D2s)
 		defer stopCancel()
 		require.NoError(t, relay.Stop(stopCtx))
 		cancel()
@@ -102,7 +103,7 @@ func TestPGOutboxStore_RelayPublishesRollbackStateBeforeAudit(t *testing.T) {
 
 	require.Eventually(t, func() bool {
 		return len(pub.Topics()) >= 2
-	}, 2*time.Second, 10*time.Millisecond)
+	}, testtime.D2s, testtime.D10ms)
 	topics := pub.Topics()
 	require.GreaterOrEqual(t, len(topics), 2)
 	assert.Equal(t, []string{

@@ -4,6 +4,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/runtime/distlock"
 )
 
@@ -15,13 +16,13 @@ import (
 func TestRealClock_NewTimerAt_FiresAtDeadline(t *testing.T) {
 	clk := distlock.RealClockForTest()
 
-	deadline := time.Now().Add(10 * time.Millisecond)
+	deadline := time.Now().Add(testtime.D10ms)
 	timer := clk.NewTimerAt(deadline)
 	defer timer.Stop()
 
 	select {
 	case <-timer.C():
-	case <-time.After(500 * time.Millisecond):
+	case <-time.After(testtime.D500ms):
 		t.Fatal("realClock.NewTimerAt did not fire within 500ms (expected ~10ms)")
 	}
 }
@@ -32,13 +33,13 @@ func TestRealClock_NewTimerAt_FiresAtDeadline(t *testing.T) {
 func TestRealClock_NewTimerAt_PastDeadline_FiresImmediately(t *testing.T) {
 	clk := distlock.RealClockForTest()
 
-	deadline := time.Now().Add(-1 * time.Second)
+	deadline := time.Now().Add(testtime.DNeg1s)
 	timer := clk.NewTimerAt(deadline)
 	defer timer.Stop()
 
 	select {
 	case <-timer.C():
-	case <-time.After(500 * time.Millisecond):
+	case <-time.After(testtime.D500ms):
 		t.Fatal("realClock.NewTimerAt(past) did not fire within 500ms")
 	}
 }

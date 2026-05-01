@@ -16,6 +16,12 @@ import (
 	"go.uber.org/goleak"
 
 	"github.com/ghbvf/gocell/kernel/outbox"
+	"github.com/ghbvf/gocell/pkg/testutil/testtime"
+)
+
+const (
+	subscriberBarrierTimeout = testtime.D500ms
+	subscriberD40ms          = testtime.D40ms
 )
 
 // makeDeliveryBodyWithID constructs a WireMessage-envelope body where the
@@ -73,7 +79,7 @@ func TestProcessDelivery_LegacyEnvelopeFormat_RejectsToDLX(t *testing.T) {
 		ch.mu.Lock()
 		defer ch.mu.Unlock()
 		return ch.nackCalled
-	}, 2*time.Second, 5*time.Millisecond, "Nack was not called in time")
+	}, testtime.D2s, testtime.FastPoll, "Nack was not called in time")
 
 	cancel()
 	assert.NoError(t, <-subDone)
@@ -126,7 +132,7 @@ func TestProcessDelivery_TooLongEntryID_RejectsToDLX(t *testing.T) {
 		ch.mu.Lock()
 		defer ch.mu.Unlock()
 		return ch.nackCalled
-	}, 2*time.Second, 5*time.Millisecond, "Nack was not called in time for too-long ID")
+	}, testtime.D2s, testtime.FastPoll, "Nack was not called in time for too-long ID")
 
 	cancel()
 	assert.NoError(t, <-subDone)
@@ -188,7 +194,7 @@ func TestProcessDelivery_CommitFailsAfterLeaseLost_NacksRequeue(t *testing.T) {
 		ch.mu.Lock()
 		defer ch.mu.Unlock()
 		return ch.nackCalled
-	}, 2*time.Second, 5*time.Millisecond, "Nack was not called after Commit failure")
+	}, testtime.D2s, testtime.FastPoll, "Nack was not called after Commit failure")
 
 	cancel()
 	assert.NoError(t, <-subDone)
@@ -250,7 +256,7 @@ func TestProcessDelivery_CommitSuccess_AcksAndDoesNotRelease(t *testing.T) {
 		ch.mu.Lock()
 		defer ch.mu.Unlock()
 		return ch.ackCalled
-	}, 2*time.Second, 5*time.Millisecond, "Ack was not called after successful Commit")
+	}, testtime.D2s, testtime.FastPoll, "Ack was not called after successful Commit")
 
 	cancel()
 	assert.NoError(t, <-subDone)
@@ -293,7 +299,6 @@ func TestSubscriber_PrefetchCount10_RealConcurrency(t *testing.T) {
 	mockConn.mu.Unlock()
 
 	const numDeliveries = 10
-	const barrierTimeout = 500 * time.Millisecond
 
 	// barrier: each goroutine calls wg.Done() when it enters the handler.
 	// The test thread calls wg.Wait() to verify all 10 are concurrent.
@@ -342,7 +347,7 @@ func TestSubscriber_PrefetchCount10_RealConcurrency(t *testing.T) {
 	select {
 	case <-barrierDone:
 		// All 10 goroutines entered the handler concurrently — pass.
-	case <-time.After(barrierTimeout):
+	case <-time.After(subscriberBarrierTimeout):
 		t.Fatal("consumeLoop is serial: not all 10 deliveries reached handler concurrently within 500ms")
 	}
 
@@ -404,7 +409,7 @@ func TestSubscriber_ConcurrentReceiptCommitSafety(t *testing.T) {
 	// Wait until all 10 commits have been recorded.
 	require.Eventually(t, func() bool {
 		return commitCount.Load() == int64(numDeliveries)
-	}, 3*time.Second, 5*time.Millisecond, "expected %d Receipt.Commit calls", numDeliveries)
+	}, testtime.D3s, testtime.FastPoll, "expected %d Receipt.Commit calls", numDeliveries)
 
 	cancel()
 	assert.NoError(t, <-subDone)
@@ -477,7 +482,7 @@ func TestSubscriber_GoroutineLeakOnClose(t *testing.T) {
 		ch.mu.Lock()
 		defer ch.mu.Unlock()
 		return ch.ackCalled
-	}, 2*time.Second, 5*time.Millisecond)
+	}, testtime.D2s, testtime.FastPoll)
 
 	cancel()
 	assert.NoError(t, <-subDone)
@@ -556,14 +561,14 @@ func TestSubscribeOnce_ReconnectWaitCtx_InheritsParentCancel(t *testing.T) {
 	go func() { subDone <- sub.Subscribe(ctx, outbox.Subscription{Topic: "f3.cancel.topic"}, handler) }()
 
 	// Wait until the handler is in-flight (it will block on neverClose).
-	time.Sleep(40 * time.Millisecond)
+	time.Sleep(subscriberD40ms) //archtest:allow:test-sleep wait for goroutine to enter blocking handler; no started observable
 
 	// Close the deliveries chan to trigger errSubscriptionLost (reconnect path).
 	// This makes consumeLoop return with loopErr != nil, entering waitCtx logic.
 	close(ch.consumeDeliveries)
 
 	// Allow subscribeOnce to enter the waitAndClose phase.
-	time.Sleep(20 * time.Millisecond)
+	time.Sleep(testtime.D20ms) //archtest:allow:test-sleep wait for goroutine to enter blocking waitAndClose; no started observable
 
 	// Cancel the parent ctx — F3 fix ensures waitCtx inherits this cancel.
 	start := time.Now()
@@ -574,9 +579,9 @@ func TestSubscribeOnce_ReconnectWaitCtx_InheritsParentCancel(t *testing.T) {
 		elapsed := time.Since(start)
 		// Must return well within 30 s (the old WithoutCancel ceiling).
 		// Allow 500 ms for goroutine scheduling + WaitConnected loop.
-		assert.Less(t, elapsed, 2*time.Second,
+		assert.Less(t, elapsed, testtime.D2s,
 			"parent cancel must propagate to waitCtx immediately (F3 fix); got %s", elapsed)
-	case <-time.After(5 * time.Second):
+	case <-time.After(testtime.EventuallyLong):
 		cancel() // ensure cleanup
 		t.Fatal("Subscribe did not return within 5 s after parent ctx cancel — F3 WithoutCancel bug still present")
 	}
@@ -610,7 +615,7 @@ func TestSubscribeOnce_ReconnectWaitCtx_NoDeadlineFallsBackTo30s(t *testing.T) {
 
 	// Handler finishes quickly (50 ms) so the 30 s ceiling is never hit.
 	handler := func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
-		time.Sleep(50 * time.Millisecond)
+		time.Sleep(testtime.MediumPoll) //archtest:allow:test-sleep slow handler fixture; sleep IS the test parameter
 		return outbox.HandleResult{Disposition: outbox.DispositionAck}
 	}
 
@@ -644,7 +649,7 @@ func TestSubscribeOnce_ReconnectWaitCtx_NoDeadlineFallsBackTo30s(t *testing.T) {
 		ch.mu.Lock()
 		defer ch.mu.Unlock()
 		return ch.ackCalled
-	}, 3*time.Second, 5*time.Millisecond, "delivery must be acked")
+	}, testtime.D3s, testtime.FastPoll, "delivery must be acked")
 
 	// Close deliveries to trigger errSubscriptionLost in subscribeOnce.
 	// Cancel immediately after — the reconnect loop will exit after ctx is canceled
@@ -655,7 +660,7 @@ func TestSubscribeOnce_ReconnectWaitCtx_NoDeadlineFallsBackTo30s(t *testing.T) {
 	select {
 	case err := <-subDone:
 		assert.NoError(t, err, "Subscribe must return nil on clean ctx cancel")
-	case <-time.After(3 * time.Second):
+	case <-time.After(testtime.EventuallyDefault):
 		t.Fatal("Subscribe did not return within 3 s; possible waitCtx deadlock")
 	}
 }
@@ -698,7 +703,7 @@ func TestProcessDelivery_ValidEntryID_PassesToHandler(t *testing.T) {
 		ch.mu.Lock()
 		defer ch.mu.Unlock()
 		return ch.ackCalled
-	}, 2*time.Second, 5*time.Millisecond, "Ack was not called in time for boundary-length ID")
+	}, testtime.D2s, testtime.FastPoll, "Ack was not called in time for boundary-length ID")
 
 	cancel()
 	assert.NoError(t, <-subDone)
@@ -706,7 +711,7 @@ func TestProcessDelivery_ValidEntryID_PassesToHandler(t *testing.T) {
 	select {
 	case receivedID := <-handled:
 		assert.Equal(t, boundaryID, receivedID, "handler must be called with exact boundary ID")
-	case <-time.After(1 * time.Second):
+	case <-time.After(testtime.D1s):
 		t.Fatal("handler was not called for valid boundary-length entry.ID")
 	}
 
@@ -766,7 +771,7 @@ func TestDispatchAck_CommitFail_NackFail(t *testing.T) {
 		ch.mu.Lock()
 		defer ch.mu.Unlock()
 		return ch.nackCalled
-	}, 2*time.Second, 5*time.Millisecond, "Nack must be called even when it fails")
+	}, testtime.D2s, testtime.FastPoll, "Nack must be called even when it fails")
 
 	cancel()
 	assert.NoError(t, <-subDone)
@@ -823,7 +828,7 @@ func TestDispatchAck_AckFail(t *testing.T) {
 		ch.mu.Lock()
 		defer ch.mu.Unlock()
 		return ch.ackCalled
-	}, 2*time.Second, 5*time.Millisecond, "Ack must be attempted even when it fails")
+	}, testtime.D2s, testtime.FastPoll, "Ack must be attempted even when it fails")
 
 	cancel()
 	assert.NoError(t, <-subDone)
@@ -886,7 +891,7 @@ func TestProcessDelivery_InvalidEntry_ValidateFailure_NacksPermanent(t *testing.
 		ch.mu.Lock()
 		defer ch.mu.Unlock()
 		return ch.nackCalled
-	}, 2*time.Second, 5*time.Millisecond, "nackPermanent must be called for invalid entry")
+	}, testtime.D2s, testtime.FastPoll, "nackPermanent must be called for invalid entry")
 
 	cancel()
 	assert.NoError(t, <-subDone)
@@ -942,7 +947,7 @@ func TestDispatchDisposition_RejectNackFail_LogsError(t *testing.T) {
 		ch.mu.Lock()
 		defer ch.mu.Unlock()
 		return ch.nackCalled
-	}, 2*time.Second, 5*time.Millisecond, "Nack must be called for DispositionReject")
+	}, testtime.D2s, testtime.FastPoll, "Nack must be called for DispositionReject")
 
 	cancel()
 	assert.NoError(t, <-subDone)
@@ -997,7 +1002,7 @@ func TestDispatchDisposition_UnknownDispositionNackFail_LogsError(t *testing.T) 
 		ch.mu.Lock()
 		defer ch.mu.Unlock()
 		return ch.nackCalled
-	}, 2*time.Second, 5*time.Millisecond, "Nack must be called for unknown disposition")
+	}, testtime.D2s, testtime.FastPoll, "Nack must be called for unknown disposition")
 
 	cancel()
 	assert.NoError(t, <-subDone)
@@ -1055,7 +1060,7 @@ func TestReleaseReceipt_ReleaseFail(t *testing.T) {
 		receipt.mu.Lock()
 		defer receipt.mu.Unlock()
 		return receipt.releaseCalled
-	}, 2*time.Second, 5*time.Millisecond, "Release must be called on DispositionReject")
+	}, testtime.D2s, testtime.FastPoll, "Release must be called on DispositionReject")
 
 	cancel()
 	assert.NoError(t, <-subDone)
@@ -1138,7 +1143,7 @@ func TestDispatchAck_AckErr_NotifiesAckFailed(t *testing.T) {
 
 	require.Eventually(t, func() bool {
 		return spy.len() > 0
-	}, 2*time.Second, 5*time.Millisecond, "spy observer must be called")
+	}, testtime.D2s, testtime.FastPoll, "spy observer must be called")
 
 	cancel()
 	assert.NoError(t, <-subDone)
@@ -1196,7 +1201,7 @@ func TestDispatchDisposition_RejectNackErr_NotifiesNackFailed(t *testing.T) {
 
 	require.Eventually(t, func() bool {
 		return spy.len() > 0
-	}, 2*time.Second, 5*time.Millisecond, "spy observer must be called for reject nack failure")
+	}, testtime.D2s, testtime.FastPoll, "spy observer must be called for reject nack failure")
 
 	cancel()
 	assert.NoError(t, <-subDone)
@@ -1256,7 +1261,7 @@ func TestDispatchDisposition_RequeueNackErr_NotifiesNackFailed(t *testing.T) {
 
 	require.Eventually(t, func() bool {
 		return spy.len() > 0
-	}, 2*time.Second, 5*time.Millisecond, "spy observer must be called for requeue nack failure")
+	}, testtime.D2s, testtime.FastPoll, "spy observer must be called for requeue nack failure")
 
 	cancel()
 	assert.NoError(t, <-subDone)

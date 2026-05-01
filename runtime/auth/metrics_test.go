@@ -3,10 +3,10 @@ package auth
 import (
 	"fmt"
 	"testing"
-	"time"
 
 	"github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -28,8 +28,8 @@ func TestAuthMetrics_RecordTokenVerify_NoPanic(t *testing.T) {
 	am, err := NewAuthMetrics(metrics.NopProvider{})
 	require.NoError(t, err)
 	// Should not panic with valid labels.
-	am.recordTokenVerify("success", "ok", 5*time.Millisecond)
-	am.recordTokenVerify("failure", "expired", time.Millisecond)
+	am.recordTokenVerify("success", "ok", testtime.FastPoll)
+	am.recordTokenVerify("failure", "expired", testtime.D1ms)
 }
 
 func TestAuthMetrics_RecordServiceVerify_NoPanic(t *testing.T) {
@@ -42,7 +42,7 @@ func TestAuthMetrics_RecordServiceVerify_NoPanic(t *testing.T) {
 func TestAuthMetrics_NilSafe(t *testing.T) {
 	// nil AuthMetrics should not panic.
 	var am *AuthMetrics
-	am.recordTokenVerify("success", "ok", time.Millisecond)
+	am.recordTokenVerify("success", "ok", testtime.D1ms)
 	am.recordServiceVerify("success", "ok")
 }
 

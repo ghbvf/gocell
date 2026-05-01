@@ -27,10 +27,33 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/assembly"
 	"github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/runtime/eventbus"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// barrierPreDelay is used in HTTPAcceptsDuringPreShutdownDelay to set the pre-shutdown delay.
+const barrierPreDelay = testtime.D300ms
+
+// barrierAssertionDelay is used in RunCtxIndependentOfExternalCtx as the
+// pre-shutdown delay to create a reliable assertion window.
+const barrierAssertionDelay = testtime.D150ms
+
+// barrierShutdownTimeout is the total shutdown budget for TotalBudgetRespected.
+const barrierShutdownTimeout = 600 * time.Millisecond
+
+// barrierPreDelayShorter is the shorter pre-delay in TotalBudgetRespected.
+const barrierPreDelayShorter = testtime.D100ms
+
+// barrierWorkerStartDelay is the delay used by errorAfterStartWorker.
+const barrierWorkerStartDelay = testtime.D100ms
+
+// barrierBudgetTolerance is the slack added to the shutdown budget in elapsed assertions.
+const barrierBudgetTolerance = testtime.D200ms
+
+// barrierBudgetHardLimit is the outer hard deadline for the TotalBudgetRespected test.
+const barrierBudgetHardLimit = barrierShutdownTimeout + testtime.D500ms
 
 // TestShutdown_HTTPAcceptsDuringPreShutdownDelay verifies that:
 //   - After external ctx cancel, HTTP still returns 200 during preShutdownDelay
@@ -40,14 +63,14 @@ func TestShutdown_HTTPAcceptsDuringPreShutdownDelay(t *testing.T) {
 	require.NoError(t, err)
 
 	addr := ln.Addr().String()
-	const preDelay = 300 * time.Millisecond
+	const preDelay = barrierPreDelay
 
 	asm := assembly.New(assembly.Config{ID: "test-pre-delay", DurabilityMode: cell.DurabilityDemo})
 	b := New(
 		WithAssembly(asm),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(ln)),
 		WithListener(cell.InternalListener, "127.0.0.1:0", []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(newLocalListener(t))),
-		WithShutdownTimeout(2*time.Second),
+		WithShutdownTimeout(testtime.D2s),
 		WithPreShutdownDelay(preDelay),
 	)
 
@@ -69,7 +92,7 @@ func TestShutdown_HTTPAcceptsDuringPreShutdownDelay(t *testing.T) {
 		}
 		defer closeBody(t, resp)
 		return resp.StatusCode == http.StatusServiceUnavailable
-	}, 500*time.Millisecond, 10*time.Millisecond,
+	}, testtime.D500ms, testtime.D10ms,
 		"/readyz must flip to 503 at the start of preShutdownDelay")
 
 	// Within the preShutdownDelay window: HTTP main listener must still accept
@@ -93,7 +116,7 @@ func TestShutdown_HTTPAcceptsDuringPreShutdownDelay(t *testing.T) {
 	select {
 	case runErr := <-done:
 		assert.NoError(t, runErr)
-	case <-time.After(5 * time.Second):
+	case <-time.After(testtime.D5s):
 		t.Fatal("bootstrap did not shut down in time")
 	}
 }
@@ -155,12 +178,12 @@ func TestShutdown_RunCtxIndependentOfExternalCtx(t *testing.T) {
 	// phase10ReadinessFlip blocks for the delay duration before LIFO teardown
 	// (which calls workerCancel) runs. This guarantees the worker ctx stays
 	// alive for at least that window — enough to assert temporal separation.
-	const assertionDelay = 150 * time.Millisecond
+	const assertionDelay = barrierAssertionDelay
 	b := New(
 		WithAssembly(asm),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(ln)),
 		WithListener(cell.InternalListener, "127.0.0.1:0", []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(newLocalListener(t))),
-		WithShutdownTimeout(2*time.Second),
+		WithShutdownTimeout(testtime.D2s),
 		WithPreShutdownDelay(assertionDelay),
 		WithWorkers(trackWorker),
 	)
@@ -182,13 +205,13 @@ func TestShutdown_RunCtxIndependentOfExternalCtx(t *testing.T) {
 	select {
 	case <-workerCtxDone:
 		t.Fatal("worker ctx was canceled synchronously with external ctx cancel — they must be independent")
-	case <-time.After(50 * time.Millisecond):
+	case <-time.After(testtime.MediumPoll):
 		// Good: worker ctx still running 50ms after external ctx cancel.
 	}
 
 	select {
 	case <-done:
-	case <-time.After(5 * time.Second):
+	case <-time.After(testtime.D5s):
 		t.Fatal("bootstrap did not shut down in time")
 	}
 
@@ -214,14 +237,14 @@ func TestShutdown_WorkerErrorTriggersOrchestration(t *testing.T) {
 	// error (the worker error) instead of nil when teardown itself is clean,
 	// and the total execution must complete within timeout.
 	workerErr := errors.New("worker exploded")
-	errorWorker := &errorAfterStartWorker{err: workerErr, startDelay: 100 * time.Millisecond}
+	errorWorker := &errorAfterStartWorker{err: workerErr, startDelay: barrierWorkerStartDelay}
 
 	asm := assembly.New(assembly.Config{ID: "test-worker-err", DurabilityMode: cell.DurabilityDemo})
 	b := New(
 		WithAssembly(asm),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(ln)),
 		WithListener(cell.InternalListener, "127.0.0.1:0", []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(newLocalListener(t))),
-		WithShutdownTimeout(2*time.Second),
+		WithShutdownTimeout(testtime.D2s),
 		WithWorkers(errorWorker),
 	)
 
@@ -238,8 +261,8 @@ func TestShutdown_TotalBudgetRespected(t *testing.T) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
 
-	const shutdownTimeout = 600 * time.Millisecond
-	const preDelay = 100 * time.Millisecond
+	const shutdownTimeout = barrierShutdownTimeout
+	const preDelay = barrierPreDelayShorter
 
 	asm := assembly.New(assembly.Config{ID: "test-budget", DurabilityMode: cell.DurabilityDemo})
 	eb := eventbus.New()
@@ -265,9 +288,9 @@ func TestShutdown_TotalBudgetRespected(t *testing.T) {
 	case runErr := <-done:
 		elapsed := time.Since(start)
 		assert.NoError(t, runErr)
-		assert.Less(t, elapsed, shutdownTimeout+200*time.Millisecond,
+		assert.Less(t, elapsed, shutdownTimeout+barrierBudgetTolerance,
 			"total shutdown must complete within budget + tolerance; got %v", elapsed)
-	case <-time.After(shutdownTimeout + 500*time.Millisecond):
+	case <-time.After(barrierBudgetHardLimit):
 		t.Fatal("bootstrap did not shut down within total budget")
 	}
 }
