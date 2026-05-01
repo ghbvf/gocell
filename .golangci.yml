@@ -119,8 +119,8 @@ linters:
       rules:
         kernel-isolation:
           files:
-            - "**/kernel/**"
-            - "!**/kernel/**/*_test.go"
+            - "kernel/**"
+            - "!kernel/**/*_test.go"
           deny:
             - pkg: github.com/ghbvf/gocell/runtime
               desc: "LAYER-01: kernel/ 不依赖 runtime/（仅 stdlib + pkg/ + gopkg.in/yaml.v3）"
@@ -134,15 +134,19 @@ linters:
               desc: "LAYER-01: kernel/ 不依赖 examples/"
         cells-no-adapters:
           files:
-            - "**/cells/**"
-            - "!**/cells/**/*_test.go"
+            - "cells/**"
+            - "!cells/**/*_test.go"
+            # Cell-internal `cells/<name>/internal/adapters/**` is a cell's own
+            # persistence/adapter package owned by the cell, not a top-level
+            # adapter — exclude from the depguard glob; the layer rule fires
+            # on TOP-LEVEL `adapters/` only.
           deny:
             - pkg: github.com/ghbvf/gocell/adapters
               desc: "LAYER-02: cells/ 通过 interface 与 adapter 解耦"
         runtime-no-cells-or-adapters:
           files:
-            - "**/runtime/**"
-            - "!**/runtime/**/*_test.go"
+            - "runtime/**"
+            - "!runtime/**/*_test.go"
           deny:
             - pkg: github.com/ghbvf/gocell/cells
               desc: "LAYER-03: runtime/ 不依赖 cells/"
@@ -150,8 +154,8 @@ linters:
               desc: "LAYER-03: runtime/ 不依赖 adapters/"
         adapters-no-cells-or-cmd:
           files:
-            - "**/adapters/**"
-            - "!**/adapters/**/*_test.go"
+            - "adapters/**"
+            - "!adapters/**/*_test.go"
           deny:
             - pkg: github.com/ghbvf/gocell/cells
               desc: "LAYER-04: adapters/ 不依赖 cells/"
