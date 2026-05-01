@@ -46,7 +46,7 @@ import (
 // Value: 2× the fsnotify eventSeparator pattern (50ms) + CI margin.
 const fsnotifySettleDelay = testtime.D200ms
 
-const slowReloaderDelay = 300 * time.Millisecond
+const slowReloaderDelay = testtime.D300ms
 
 // testVerboseToken is the shared verbose-mode token used in tests that exercise
 // /readyz?verbose. Since PR-MODE-1 (SEC-FAIL-CLOSED), verboseDecision denies

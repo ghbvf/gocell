@@ -49,6 +49,7 @@ func TestTestTimeLiteralIncludeAbs(t *testing.T) {
 		{"outboxtest harness", "runtime/storage/outboxtest/harness.go", true},
 		{"storetest suite", "runtime/auth/refresh/storetest/suite.go", true},
 		{"contracttest fixture", "pkg/contracttest/fixture.go", true},
+		{"commandtest inmem", "kernel/command/commandtest/inmem.go", true},
 
 		// Production code is NOT included (PROD-DURATION-CONST-01 covers it).
 		{"runtime production", "runtime/auth/auth.go", false},
@@ -63,6 +64,7 @@ func TestTestTimeLiteralIncludeAbs(t *testing.T) {
 		{"vendor test", "vendor/github.com/x/y/y_test.go", false},
 		{"generated test", "generated/x/y_test.go", false},
 		{"testdata under runtime", "runtime/foo/testdata/inner/x_test.go", false},
+		{"top-level testdata test", "testdata/fixtures/x_test.go", false},
 
 		// Outside-module paths are excluded.
 		{"absolute outside", "/usr/local/lib/foo_test.go", false},

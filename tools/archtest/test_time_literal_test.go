@@ -140,7 +140,8 @@ func testTimeLiteralIncludeAbs(root, abs string) bool {
 		return false
 	}
 	// Hard exclusions take precedence: the gate must not flag its own
-	// fixtures or any third-party / generated content.
+	// fixtures or any third-party / generated content. testdata/ matches
+	// both top-level (`testdata/foo.go`) and nested (`pkg/x/testdata/foo.go`).
 	switch {
 	case strings.HasPrefix(rel, "tools/archtest/"):
 		return false
@@ -148,7 +149,7 @@ func testTimeLiteralIncludeAbs(root, abs string) bool {
 		return false
 	case strings.HasPrefix(rel, "generated/"):
 		return false
-	case strings.Contains(rel, "/testdata/"):
+	case strings.HasPrefix(rel, "testdata/"), strings.Contains(rel, "/testdata/"):
 		return false
 	}
 	// Inclusions: exactly the predicates PROD-DURATION-CONST-01 uses to
@@ -167,6 +168,8 @@ func testTimeLiteralIncludeAbs(root, abs string) bool {
 	case strings.Contains(rel, "/healthtest/"):
 		return true
 	case strings.Contains(rel, "/contracttest/"):
+		return true
+	case strings.Contains(rel, "/commandtest/"):
 		return true
 	}
 	return false

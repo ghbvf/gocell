@@ -20,7 +20,7 @@ import (
 )
 
 const (
-	subscriberBarrierTimeout = 500 * time.Millisecond
+	subscriberBarrierTimeout = testtime.D500ms
 	subscriberD40ms          = 40 * time.Millisecond
 )
 

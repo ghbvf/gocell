@@ -27,6 +27,7 @@ import (
 	"strings"
 	"sync"
 
+	"golang.org/x/sync/singleflight"
 	"golang.org/x/tools/go/packages"
 )
 
@@ -94,6 +95,7 @@ func LoadPackages(modRoot string, tests bool, tags []string, patterns ...string)
 var (
 	sharedMu    sync.Mutex
 	sharedCache = map[string]*Resolver{}
+	sharedGroup singleflight.Group
 )
 
 // SharedResolver returns a process-wide cached Resolver keyed on
@@ -105,25 +107,51 @@ var (
 // and each pattern with NUL bytes. NUL is illegal in POSIX paths and Go
 // import patterns, so collisions are impossible even when patterns
 // themselves contain "|" or ",".
+//
+// Concurrency: the cache is read and written under sharedMu, but the
+// expensive LoadPackages call runs without the lock. singleflight
+// deduplicates concurrent loads of the same key so only one packages.Load
+// is in flight per key, while loads for different keys run in parallel.
 func SharedResolver(modRoot string, tests bool, tags []string, patterns ...string) (*Resolver, error) {
 	testsFlag := "0"
 	if tests {
 		testsFlag = "1"
 	}
 	key := modRoot + "\x00" + testsFlag + "\x00" + strings.Join(tags, "\x00") + "\x00" + strings.Join(patterns, "\x00")
+
 	sharedMu.Lock()
-	defer sharedMu.Unlock()
 	if r, ok := sharedCache[key]; ok {
+		sharedMu.Unlock()
 		return r, nil
 	}
-	pkgs, errs, err := LoadPackages(modRoot, tests, tags, patterns...)
+	sharedMu.Unlock()
+
+	v, err, _ := sharedGroup.Do(key, func() (any, error) {
+		// Re-check inside the singleflight group: another caller may have
+		// populated the cache between our miss and entering Do.
+		sharedMu.Lock()
+		if r, ok := sharedCache[key]; ok {
+			sharedMu.Unlock()
+			return r, nil
+		}
+		sharedMu.Unlock()
+
+		pkgs, errs, err := LoadPackages(modRoot, tests, tags, patterns...)
+		if err != nil {
+			return nil, err
+		}
+		if len(errs) > 0 {
+			return nil, fmt.Errorf("packages.Load: %d error(s): first=%v", len(errs), errs[0])
+		}
+		r := &Resolver{pkgs: pkgs}
+
+		sharedMu.Lock()
+		sharedCache[key] = r
+		sharedMu.Unlock()
+		return r, nil
+	})
 	if err != nil {
 		return nil, err
 	}
-	if len(errs) > 0 {
-		return nil, fmt.Errorf("packages.Load: %d error(s): first=%v", len(errs), errs[0])
-	}
-	r := &Resolver{pkgs: pkgs}
-	sharedCache[key] = r
-	return r, nil
+	return v.(*Resolver), nil
 }
