@@ -13,6 +13,7 @@ import (
 	amqp "github.com/rabbitmq/amqp091-go"
 
 	"github.com/ghbvf/gocell/adapters/adapterutil"
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
@@ -109,6 +110,11 @@ type SubscriberConfig struct {
 	// StopIntake. A hung broker cannot stall the whole shutdown chain beyond
 	// this budget per consumer. Default: 2s.
 	StopIntakePerCallTimeout time.Duration
+
+	// Clock is the time source used to schedule the drainRemaining timer.
+	// Nil substitutes [clock.Real]; tests inject a [clockmock.FakeClock]
+	// when they need to drive the drain deadline deterministically.
+	Clock clock.Clock
 }
 
 func (sc *SubscriberConfig) setDefaults() {
@@ -117,6 +123,9 @@ func (sc *SubscriberConfig) setDefaults() {
 	}
 	if sc.StopIntakePerCallTimeout == 0 {
 		sc.StopIntakePerCallTimeout = defaultRMQStopIntakePerCallTimeout
+	}
+	if sc.Clock == nil {
+		sc.Clock = clock.Real()
 	}
 }
 
@@ -144,6 +153,7 @@ func (sc *SubscriberConfig) setDefaults() {
 type Subscriber struct {
 	conn   *Connection
 	config SubscriberConfig
+	clock  clock.Clock
 
 	closed  atomic.Bool
 	closeCh chan struct{}
@@ -163,11 +173,15 @@ type Subscriber struct {
 }
 
 // NewSubscriber creates a Subscriber with the given connection and config.
+// SubscriberConfig.Clock defaults to [clock.Real] when unset; tests inject a
+// [clockmock.FakeClock] via the config field when they need deterministic
+// drain-deadline behavior.
 func NewSubscriber(conn *Connection, config SubscriberConfig) *Subscriber {
 	config.setDefaults()
 	return &Subscriber{
 		conn:         conn,
 		config:       config,
+		clock:        config.Clock,
 		closeCh:      make(chan struct{}),
 		stopIntakeCh: make(chan struct{}),
 		runs:         make(map[*subscriptionRun]struct{}),
@@ -646,7 +660,7 @@ func (s *Subscriber) drainRemaining(
 	handler outbox.EntryHandler,
 ) error {
 	ch := run.ch
-	timer := time.NewTimer(currentDrainDeadline())
+	timer := s.clock.NewTimerAt(s.clock.Now().Add(currentDrainDeadline()))
 	defer timer.Stop()
 
 	for {
@@ -668,7 +682,7 @@ func (s *Subscriber) drainRemaining(
 			slog.Info("rabbitmq: drain interrupted by context cancellation",
 				slog.String(logKeyTopic, topic))
 			return nil
-		case <-timer.C:
+		case <-timer.C():
 			slog.Warn("rabbitmq: drain deadline reached, broker did not acknowledge basic.cancel",
 				slog.String(logKeyTopic, topic),
 				slog.Duration("deadline", currentDrainDeadline()))

@@ -17,10 +17,26 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"time"
 
-	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
+
+// Clock abstracts the wall-clock reads this package needs to time-stamp
+// cookies and check expiry. It is intentionally local: pkg/ may not import
+// kernel/, so SecureCookie defines the minimal Now() interface that any
+// kernel/clock.Clock satisfies structurally. Callers in higher layers pass
+// their injected clock.Clock directly via [SecureCookie.WithClock].
+type Clock interface {
+	Now() time.Time
+}
+
+// realClock is the default Clock implementation. It is exported as a private
+// zero-value singleton so [New] can stamp a non-nil clock without forcing
+// every caller to pass one.
+type realClock struct{}
+
+func (realClock) Now() time.Time { return time.Now() }
 
 // SecureCookie encodes and decodes cookie values with HMAC-SHA256 signing
 // and optional AES-GCM encryption.
@@ -28,7 +44,7 @@ type SecureCookie struct {
 	hashKey []byte      // HMAC-SHA256 signing key (required, ≥32 bytes)
 	aead    cipher.AEAD // AES-GCM AEAD (nil if no encryption)
 	maxAge  int         // max cookie age in seconds (0 = no expiry check)
-	clock   clock.Clock // clock used for encoding timestamps and expiry checks
+	clock   Clock       // clock used for encoding timestamps and expiry checks
 }
 
 const (
@@ -62,7 +78,7 @@ func New(hashKey, blockKey []byte) (*SecureCookie, error) {
 	sc := &SecureCookie{
 		hashKey: hk,
 		maxAge:  86400, // default 24h
-		clock:   clock.Real(),
+		clock:   realClock{},
 	}
 
 	if blockKey != nil {
@@ -94,10 +110,16 @@ func (sc *SecureCookie) WithMaxAge(seconds int) *SecureCookie {
 }
 
 // WithClock returns a copy of sc using the given clock for timestamps and
-// expiry checks. Key material is deep-copied.
-func (sc *SecureCookie) WithClock(clk clock.Clock) *SecureCookie {
+// expiry checks. Key material is deep-copied. clk may be nil, in which case
+// the wall-clock implementation is substituted.
+//
+// Any kernel/clock.Clock satisfies the local Clock interface structurally;
+// higher layers pass their injected clock.Clock here without explicit
+// conversion. Tests that need deterministic time inject a clockmock.FakeClock
+// the same way.
+func (sc *SecureCookie) WithClock(clk Clock) *SecureCookie {
 	if clk == nil {
-		clk = clock.Real()
+		clk = realClock{}
 	}
 	hk := make([]byte, len(sc.hashKey))
 	copy(hk, sc.hashKey)

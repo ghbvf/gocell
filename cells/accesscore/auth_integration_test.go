@@ -114,7 +114,7 @@ func loginAndGetPair(t *testing.T, opts ...loginOption) loginResult {
 	ctx := context.Background()
 
 	// Pre-fill alice as admin via direct repo seeding (no bootstrap flow).
-	alice, err := domain.NewUser("alice", "alice@gocell.local", seedAdminPasswordHash())
+	alice, err := domain.NewUser("alice", "alice@gocell.local", seedAdminPasswordHash(), time.Now())
 	require.NoError(t, err)
 	alice.ID = "usr-alice-integration"
 	require.NoError(t, roleRepo.Create(ctx, &domain.Role{

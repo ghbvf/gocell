@@ -142,6 +142,7 @@ func New(cfg Config) *CoreAssembly {
 		QueueSize:   cfg.HookObserverQueueSize,
 		SinkTimeout: cfg.HookObserverSinkTimeout,
 		Provider:    cfg.MetricsProvider,
+		Clock:       cfg.Clock,
 	})
 	return &CoreAssembly{
 		id:         cfg.ID,

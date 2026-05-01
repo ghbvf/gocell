@@ -7,8 +7,8 @@ import (
 	"log/slog"
 	"time"
 
-	kout "github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/clock"
+	kout "github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/runtime/outbox"
 )
@@ -28,7 +28,7 @@ const maxObservabilityJSONBytes = 4 * kout.MaxObservabilityTotalSize
 // Consistency level: L2 (OutboxFact) — adapts the outbox state machine from
 // the relay layer into discrete, testable DB operations.
 type PGOutboxStore struct {
-	db    relayDB    // same interface used by OutboxRelay — Exec/Query/Begin
+	db    relayDB // same interface used by OutboxRelay — Exec/Query/Begin
 	clock clock.Clock
 }
 

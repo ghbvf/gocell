@@ -332,9 +332,9 @@ func (r *Router) runAwaitReady(ctx context.Context, cancel context.CancelFunc, h
 
 	var deadlineCh <-chan time.Time
 	if r.readyTimeout > 0 {
-		timer := time.NewTimer(r.readyTimeout)
+		timer := r.clock.NewTimerAt(r.clock.Now().Add(r.readyTimeout))
 		defer timer.Stop()
-		deadlineCh = timer.C
+		deadlineCh = timer.C()
 	}
 
 	select {
