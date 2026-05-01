@@ -204,7 +204,7 @@ func startBackground(c *cleaner) (cancel context.CancelFunc, done <-chan struct{
 	ch := make(chan struct{})
 	go func() {
 		defer close(ch)
-		_ = c.Start(ctx) //nolint:errcheck // test helper
+		_ = c.Start(ctx)
 	}()
 	return cancel, ch
 }

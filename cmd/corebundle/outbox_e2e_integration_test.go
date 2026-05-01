@@ -263,7 +263,7 @@ func TestOutboxE2E_PGMode_WriteToSubscribe(t *testing.T) {
 	bootstrapToken := loginAdminBootstrap(t, baseURL, e2eUsername, e2eBootstrapPass)
 	// Change password to obtain a token without passwordResetRequired.
 	adminUserID := extractE2ESubFromJWT(t, bootstrapToken)
-	const e2eAdminNewPass = "E2eTest@Pass9876!" //nolint:gosec // test-only credential
+	const e2eAdminNewPass = "E2eTest@Pass9876!"
 	token := changeE2EPassword(t, baseURL, bootstrapToken, adminUserID, e2eBootstrapPass, e2eAdminNewPass)
 
 	createConfig(t, baseURL, token, "e2e.test.key", "e2e-value")
@@ -312,7 +312,7 @@ func TestOutboxE2E_PGMode_WriteToSubscribe(t *testing.T) {
 func loginAdmin(t *testing.T, baseURL, user, pass string) string {
 	t.Helper()
 	body, _ := json.Marshal(map[string]string{"username": user, "password": pass})
-	resp, err := http.Post(baseURL+"/api/v1/access/sessions/login", "application/json", bytes.NewReader(body)) //nolint:noctx
+	resp, err := http.Post(baseURL+"/api/v1/access/sessions/login", "application/json", bytes.NewReader(body))
 	require.NoError(t, err)
 	defer resp.Body.Close()
 	require.Equal(t, http.StatusCreated, resp.StatusCode, "login must succeed (201 Created per sessionlogin contract)")
@@ -338,7 +338,7 @@ func loginAdminBootstrap(t *testing.T, baseURL, user, pass string) string {
 // readE2ECredentials reads username and password from the credential file written
 // by the initial-admin bootstrap.
 func readE2ECredentials(path string) (username, password string, err error) {
-	data, err := os.ReadFile(path) //nolint:gosec // test helper reads a fixed test-temp path
+	data, err := os.ReadFile(path)
 	if err != nil {
 		return "", "", fmt.Errorf("read e2e credential file: %w", err)
 	}
@@ -611,7 +611,7 @@ func TestOutboxE2E_RefetchLoop_AccessCoreCallsInternalGet(t *testing.T) {
 
 	bootstrapToken := loginAdminBootstrap(t, baseURL, e2eUsername, e2eBootstrapPass)
 	adminUserID := extractE2ESubFromJWT(t, bootstrapToken)
-	const refetchTestAdminPass = "RefetchTest@Pass9876!" //nolint:gosec // test-only credential
+	const refetchTestAdminPass = "RefetchTest@Pass9876!"
 	token := changeE2EPassword(t, baseURL, bootstrapToken, adminUserID, e2eBootstrapPass, refetchTestAdminPass)
 
 	// --- Step 8: Publish a config entry — triggers the refetch closed loop ---

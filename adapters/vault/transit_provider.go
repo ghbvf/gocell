@@ -53,7 +53,7 @@ func applyNamespaceFromEnv(raw *vaultapi.Client) string {
 		return ""
 	}
 	raw.SetNamespace(ns)
-	//nolint:gosec // G706: structured slog field, not string concatenation
+
 	slog.Info("vault-transit: namespace configured", slog.String("namespace", ns))
 	return ns
 }

@@ -85,7 +85,7 @@ func (c *HTTPConfigGetter) GetEntry(ctx context.Context, key string) (ports.Conf
 	if err != nil {
 		return ports.ConfigEntry{}, fmt.Errorf("configclient: do request: %w", err)
 	}
-	defer resp.Body.Close() //nolint:errcheck
+	defer resp.Body.Close()
 
 	switch resp.StatusCode {
 	case http.StatusOK:

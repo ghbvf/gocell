@@ -128,7 +128,7 @@ func TestCanonicalEncode_StructFieldsSortedByName(t *testing.T) {
 func TestCanonicalEncode_StructUnexportedFieldsSkipped(t *testing.T) {
 	type s struct {
 		Pub  int
-		priv int //nolint:unused
+		priv int
 	}
 	got := encode(t, s{Pub: 7, priv: 99})
 	assert.Equal(t, "{1K:3:PubI:7}", got)

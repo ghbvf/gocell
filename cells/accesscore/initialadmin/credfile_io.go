@@ -117,7 +117,7 @@ func removeCredentialFile(path string) error {
 // Returns an error when the file cannot be read, the expires_at line is
 // missing, or the value cannot be parsed.
 func readCredentialExpiresAt(path string) (time.Time, error) {
-	data, err := os.ReadFile(path) //nolint:gosec // G304: path is the configured credential file path, validated by the caller
+	data, err := os.ReadFile(path)
 	if err != nil {
 		return time.Time{}, fmt.Errorf("initialadmin: read credential file: %w", err)
 	}

@@ -110,13 +110,13 @@ func UpgradeHandler(hub *rtws.Hub, cfg UpgradeConfig) (http.Handler, error) {
 
 		if regErr := hub.Register(r.Context(), conn); regErr != nil {
 			_ = wsConn.Close(websocket.StatusNormalClosure, "registration rejected")
-			slog.Warn("websocket: register rejected", //nolint:gosec // G706: structured slog fields, not string concatenation
+			slog.Warn("websocket: register rejected",
 				slog.Any("error", regErr),
 				slog.String("remote_addr", r.RemoteAddr),
 			)
 			return
 		}
-		slog.Info("websocket: client connected", //nolint:gosec // G706: structured slog fields, not string concatenation
+		slog.Info("websocket: client connected",
 			slog.String("conn_id", connID),
 			slog.String("remote_addr", r.RemoteAddr),
 		)
@@ -133,7 +133,7 @@ func MustUpgradeHandler(hub *rtws.Hub, cfg UpgradeConfig) http.Handler {
 }
 
 func logUpgradeFailure(r *http.Request, err error) {
-	slog.Error("websocket: upgrade failed", //nolint:gosec // G706: structured slog fields, not string concatenation
+	slog.Error("websocket: upgrade failed",
 		slog.Any("error", err),
 		slog.String("remote_addr", r.RemoteAddr),
 	)

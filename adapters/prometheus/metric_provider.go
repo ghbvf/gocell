@@ -68,7 +68,7 @@ func NewMetricProvider(cfg MetricProviderConfig) (*MetricProvider, error) {
 // (*prom.CounterVec vs *prom.HistogramVec); type assertion + label-lookup paths
 // cannot share a helper without unsafe generic conversion or full reflection.
 //
-//nolint:dupl // mirrors HistogramVec — see godoc above for why the helper is unsafe.
+
 func (p *MetricProvider) CounterVec(opts metrics.CounterOpts) (metrics.CounterVec, error) {
 	cv := prom.NewCounterVec(prom.CounterOpts{
 		Namespace: p.cfg.Namespace,
@@ -116,7 +116,7 @@ func (p *MetricProvider) CounterVec(opts metrics.CounterOpts) (metrics.CounterVe
 // metric name has already been registered, the existing collector is returned
 // (same AlreadyRegisteredError pattern as CounterVec).
 //
-//nolint:dupl // structurally mirrors CounterVec; see CounterVec nolint reason.
+
 func (p *MetricProvider) HistogramVec(opts metrics.HistogramOpts) (metrics.HistogramVec, error) {
 	hv := prom.NewHistogramVec(prom.HistogramOpts{
 		Namespace: p.cfg.Namespace,

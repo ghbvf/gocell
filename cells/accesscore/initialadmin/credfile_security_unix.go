@@ -28,7 +28,6 @@ func (u *unixCredfile) EnsureSecureDir(dir string) error {
 // against TOCTOU where an attacker plants a symlink between Lstat and OpenFile).
 // syscall.O_NOFOLLOW is available on all Unix targets (linux, darwin, *bsd).
 func (u *unixCredfile) SecureNewFile(path string) (*os.File, error) {
-	//nolint:gosec // G304: path is the configured credential file output path, not user-controlled input
 	return os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL|os.O_TRUNC|syscall.O_NOFOLLOW, 0o600)
 }
 

@@ -56,7 +56,6 @@ func TestCtxWithTx_RoundTrip(t *testing.T) {
 }
 
 func TestTxFromContext_NilContext(t *testing.T) {
-	//nolint:staticcheck // testing nil-safety
 	tx, ok := TxFromContext(context.Background())
 	assert.False(t, ok)
 	assert.Nil(t, tx)

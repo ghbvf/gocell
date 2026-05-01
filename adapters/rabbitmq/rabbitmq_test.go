@@ -736,7 +736,7 @@ func TestConnection_ReconnectLoop_DisconnectAndReconnect(t *testing.T) {
 		ReconnectMaxBackoff: 5 * time.Millisecond,
 	}, WithDialFunc(dialFunc))
 	require.NoError(t, err)
-	defer conn.Close(context.Background()) //nolint:errcheck
+	defer conn.Close(context.Background())
 
 	// Wait for reconnectLoop to call NotifyClose.
 	require.Eventually(t, func() bool {
@@ -801,7 +801,7 @@ func TestConnection_ReconnectLoop_RetriesIndefinitelyUntilRecovery(t *testing.T)
 		ReconnectMaxBackoff: 5 * time.Millisecond,
 	}, WithDialFunc(dialFunc))
 	require.NoError(t, err)
-	defer conn.Close(context.Background()) //nolint:errcheck
+	defer conn.Close(context.Background())
 
 	// Wait for reconnectLoop to register NotifyClose.
 	require.Eventually(t, func() bool {
@@ -3735,7 +3735,7 @@ func TestConsumerBase_WrapWithClaimer_WrappedPermanentError_Detected(t *testing.
 
 func TestSafeDelay_AttemptZero(t *testing.T) {
 	result := outbox.ExponentialDelay(time.Second, 30*time.Second, 0)
-	assert.Equal(t, time.Second, result) //nolint:gocritic // commentedOutCode: "base * 2^0 = base" is a math annotation, not commented-out code
+	assert.Equal(t, time.Second, result)
 }
 
 func TestSafeDelay_ExactMaxSafeShift(t *testing.T) {
@@ -3872,7 +3872,7 @@ func TestConnection_Health_DuringReconnect(t *testing.T) {
 		ReconnectMaxBackoff: 5 * time.Millisecond,
 	}, WithDialFunc(dialFunc))
 	require.NoError(t, err)
-	defer conn.Close(context.Background()) //nolint:errcheck
+	defer conn.Close(context.Background())
 
 	// Verify initial health is OK.
 	require.NoError(t, conn.Health(context.Background()), "initial connection should be healthy")
@@ -4302,7 +4302,7 @@ func TestConnection_ReconnectLoop_StateTransitions(t *testing.T) {
 		ReconnectMaxBackoff: 5 * time.Millisecond,
 	}, WithDialFunc(dialFunc))
 	require.NoError(t, err)
-	defer conn.Close(context.Background()) //nolint:errcheck
+	defer conn.Close(context.Background())
 
 	// Initial state: Connected.
 	assert.Equal(t, StateConnected, conn.ConnectionStatus().State, "initial state should be Connected")

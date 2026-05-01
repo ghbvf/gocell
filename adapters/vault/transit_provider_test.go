@@ -1339,7 +1339,7 @@ func TestTransitKeyProvider_ConcurrentEncryptRotate(t *testing.T) {
 					return
 				}
 				// Encrypt may fail transiently during rotation — that is fine.
-				vh.Encrypt(ctx, []byte("payload"), []byte("aad")) //nolint:errcheck
+				vh.Encrypt(ctx, []byte("payload"), []byte("aad"))
 			}
 		})
 	}
@@ -1347,7 +1347,7 @@ func TestTransitKeyProvider_ConcurrentEncryptRotate(t *testing.T) {
 	// 1 goroutine doing periodic rotations.
 	wg.Go(func() {
 		for range rotations {
-			p.Rotate(ctx) //nolint:errcheck
+			p.Rotate(ctx)
 		}
 	})
 

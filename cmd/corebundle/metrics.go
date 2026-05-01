@@ -17,7 +17,7 @@ import (
 // /metrics scrapers when a token is configured. Mirrors the X-Readyz-Token
 // convention for /readyz?verbose — keeping the same shape for all
 // control-plane endpoints lets operators standardize scraper config.
-const metricsTokenHeader = "X-Metrics-Token" //nolint:gosec // G101: metricsTokenHeader is the constant name (not a credential value)
+const metricsTokenHeader = "X-Metrics-Token"
 
 // withMetricsTokenGuard wraps h so requests without a matching
 // X-Metrics-Token header are rejected with 401 Unauthorized.

@@ -41,7 +41,7 @@ func canonicalEncode(w io.Writer, v any) error {
 	return encodeValue(w, reflect.ValueOf(v))
 }
 
-func encodeValue(w io.Writer, v reflect.Value) error { //nolint:cyclop,gocognit
+func encodeValue(w io.Writer, v reflect.Value) error {
 	// Dereference interfaces to the concrete type.
 	if v.Kind() == reflect.Interface {
 		if v.IsNil() {

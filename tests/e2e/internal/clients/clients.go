@@ -65,7 +65,7 @@ func WaitForReady(t *testing.T, timeout time.Duration) {
 	t.Helper()
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
-		resp, err := http.Get(HealthURL() + "/readyz") //nolint:noctx
+		resp, err := http.Get(HealthURL() + "/readyz")
 		if err == nil && resp.StatusCode == http.StatusOK {
 			_ = resp.Body.Close()
 			return

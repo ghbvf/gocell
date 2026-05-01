@@ -32,7 +32,7 @@ func newIdentityRefreshStore() refresh.Store {
 
 // testPassword is a deterministic credential used only in contract tests.
 // Extracted as a constant to satisfy S6437 (no hardcoded credentials).
-const testPassword = "contract-test-P@ssw0rd" //nolint:gosec
+const testPassword = "contract-test-P@ssw0rd"
 
 // --- contract test doubles ---
 

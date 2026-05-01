@@ -35,7 +35,7 @@ func (h *fakeKeyHandle) Encrypt(_ context.Context, plaintext, aad []byte) (ciphe
 	nonce[11] = byte(h.counter)
 	// edk = key id bytes (stand-in for wrapped DEK)
 	edk = []byte(h.id)
-	//nolint:gocritic // commentedOutCode: "ciphertext = len(aad) || aad || XOR(plaintext)" is algorithm documentation, not commented-out code
+
 	ct := make([]byte, 1+len(aad)+len(plaintext))
 	ct[0] = byte(len(aad))
 	copy(ct[1:], aad)

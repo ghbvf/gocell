@@ -99,7 +99,7 @@ func TestUser_LockUnlock(t *testing.T) {
 			name: "unlock after lock",
 			action: func(u *User) {
 				u.Lock()
-				u.Unlock() //nolint:staticcheck,gocritic // Lock/Unlock are domain status methods, not sync.Mutex; defer is intentionally absent (testing sequential lock→unlock)
+				u.Unlock()
 			},
 			wantLocked: false,
 		},

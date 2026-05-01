@@ -277,7 +277,7 @@ func adapterInfoForSharedDeps(shared *SharedDeps) map[string]string {
 // regression test in shared_deps_test.go reference one source of truth.
 // production deployments must mint their own high-entropy token.
 //
-//nolint:gosec // G101: SampleVerboseToken is the constant name (not a credential value);
+
 const SampleVerboseToken = "dev-readyz-verbose-token-change-me"
 
 // Validate is the startup invariant check for all cross-cutting dependencies.
@@ -527,7 +527,6 @@ func LoadSharedDepsFromEnv(ctx context.Context) (*SharedDeps, error) {
 	// GOCELL_HTTP_ADDR pointed at.
 	if legacy := os.Getenv("GOCELL_HTTP_ADDR"); legacy != "" {
 		if os.Getenv("GOCELL_HTTP_PRIMARY_ADDR") == "" && os.Getenv("GOCELL_HTTP_INTERNAL_ADDR") == "" {
-			//nolint:gosec // G706: structured slog field, not string concatenation
 			slog.Warn("GOCELL_HTTP_ADDR is no longer consumed (PR-A14a dual-listener);"+
 				" set GOCELL_HTTP_PRIMARY_ADDR and GOCELL_HTTP_INTERNAL_ADDR instead",
 				slog.String("legacy_value", legacy))

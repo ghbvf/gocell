@@ -25,7 +25,7 @@ const (
 	pathUserByID   = "/api/v1/access/users/{id}"
 	pathUserLock   = "/api/v1/access/users/{id}/lock"
 	pathUserUnlock = "/api/v1/access/users/{id}/unlock"
-	//nolint:gosec // G101: pathUserPassword is the constant name (not a credential value)
+
 	pathUserPassword = "/api/v1/access/users/{id}/password"
 )
 

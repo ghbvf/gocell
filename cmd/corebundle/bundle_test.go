@@ -597,7 +597,7 @@ func TestBuildBootstrap_MemoryTopology(t *testing.T) {
 	waitForHealthy(t, healthAddr)
 
 	// /readyz must be healthy (no PG checker to fail).
-	resp, err := http.Get("http://" + healthAddr + "/readyz") //nolint:noctx
+	resp, err := http.Get("http://" + healthAddr + "/readyz")
 	require.NoError(t, err)
 	defer resp.Body.Close()
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
@@ -684,7 +684,7 @@ func TestBuildBootstrap_AssemblyHasAllCells(t *testing.T) {
 	waitForHealthy(t, healthAddr)
 
 	// /readyz confirms all three cells started and registered their probes.
-	resp, err := http.Get("http://" + healthAddr + "/readyz") //nolint:noctx
+	resp, err := http.Get("http://" + healthAddr + "/readyz")
 	require.NoError(t, err)
 	defer resp.Body.Close()
 	assert.Equal(t, http.StatusOK, resp.StatusCode,

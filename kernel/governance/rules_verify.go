@@ -13,7 +13,7 @@ import (
 
 const (
 	codeVERIFY06                  = "VERIFY-06"
-	fieldPassCriteriaCheckRefTmpl = "passCriteria[%d].checkRef" //nolint:gosec // G101 false positive: field path template, not a credential
+	fieldPassCriteriaCheckRefTmpl = "passCriteria[%d].checkRef"
 
 	// defaultWaiverExpiryTruncation is the granularity used when comparing a
 	// waiver's expiresAt date against the current time. Day-level truncation

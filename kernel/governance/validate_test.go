@@ -4637,7 +4637,7 @@ func TestFMT15(t *testing.T) {
 
 		// The schema resolver canonicalizes the fake root through filepath.Abs,
 		// which preserves the current drive on Windows.
-		expected, err := filepath.Abs(filepath.Join("/project", "contracts", "http", "auth", "login", "v1", "response.schema.json")) //nolint:gocritic // filepathJoin: /project is a Unix absolute root, not a multi-segment string literal
+		expected, err := filepath.Abs(filepath.Join("/project", "contracts", "http", "auth", "login", "v1", "response.schema.json"))
 		require.NoError(t, err)
 		assert.Equal(t, expected, capturedPath)
 	})

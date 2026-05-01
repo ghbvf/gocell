@@ -11,5 +11,5 @@ import "os"
 // allow-list) — both real contracts/ trees and testdata/contracts/ trees
 // flow through here.
 func LoadFixture(path string) ([]byte, error) {
-	return os.ReadFile(path) //nolint:gosec // G304: path validated by caller against contracttest allow-list (in-dir or contractsRoot/shared/)
+	return os.ReadFile(path)
 }

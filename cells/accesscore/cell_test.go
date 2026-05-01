@@ -47,7 +47,7 @@ var _ outbox.Writer = durableOutboxWriter{}
 
 // testPassword is a fixed test-only credential used to seed users in E2E tests.
 // Not a real secret — safe to appear in test source code.
-const testPassword = "secret123" //nolint:gosec // test-only credential
+const testPassword = "secret123"
 
 var (
 	testKeySet, _, _ = auth.MustNewTestKeySet()

@@ -117,7 +117,7 @@ func assertNoPlaintextPassword(t *testing.T, h *capturingHandler, password strin
 //	password=<token>
 //	expires_at=<unix>
 func credentialFromFile(path string) (username, password string, err error) {
-	f, err := os.Open(path) //nolint:gosec // test helper reads a fixed test-temp path
+	f, err := os.Open(path)
 	if err != nil {
 		return "", "", fmt.Errorf("open credential file %s: %w", path, err)
 	}

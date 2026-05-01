@@ -157,7 +157,7 @@ func (lc *lifecycle) Append(h Hook) error {
 // Start executes OnStart for each hook in Append order (fail-fast).
 // On failure, already-started hooks are rolled back in LIFO order.
 // The failed hook's OnStop is NOT called.
-func (lc *lifecycle) Start(ctx context.Context) error { //nolint:cyclop // state machine switch is inherently branchy
+func (lc *lifecycle) Start(ctx context.Context) error {
 	lc.mu.Lock()
 	if lc.state != stateStopped {
 		lc.mu.Unlock()

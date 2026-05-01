@@ -378,7 +378,7 @@ func (a *CoreAssembly) startCellWithHooks(ctx context.Context, c cell.Cell, i in
 		slog.Info("lifecycle: AfterStart", slog.String("cell", c.ID()))
 		if err := a.invokeHook(ctx, c.ID(), cell.HookAfterStart, as.AfterStart); err != nil {
 			// Stop this cell first — its Start already succeeded.
-			a.stopCellWithHooks(ctx, c) //nolint:errcheck // best-effort, logged inside
+			a.stopCellWithHooks(ctx, c)
 			a.rollbackCells(ctx, i-1)
 			return a.failStart(c.ID(), "AfterStart", err)
 		}
@@ -399,7 +399,7 @@ func (a *CoreAssembly) failStart(cellID, phase string, err error) error {
 // All errors are logged inside stopCellWithHooks (best-effort, never abort).
 func (a *CoreAssembly) rollbackCells(ctx context.Context, upTo int) {
 	for j := upTo; j >= 0; j-- {
-		a.stopCellWithHooks(ctx, a.cells[j]) //nolint:errcheck // best-effort, logged inside
+		a.stopCellWithHooks(ctx, a.cells[j])
 	}
 }
 

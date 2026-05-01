@@ -73,7 +73,7 @@ func Run(ctx context.Context, t ValidatedTool, args ...string) ([]byte, error) {
 // in this repo); args are caller-controlled whitelisted invocations from
 // governance/verify helpers, never user input.
 //
-//nolint:gosec // G204: ValidatedTool.path validated at NewTool construction (see docblock).
+
 func RunIn(ctx context.Context, t ValidatedTool, dir string, env []string, args ...string) ([]byte, error) {
 	cmd := exec.CommandContext(ctx, t.path, args...)
 	if dir != "" {

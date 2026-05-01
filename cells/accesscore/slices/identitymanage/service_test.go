@@ -313,7 +313,7 @@ func TestService_ChangePassword_IssuerAlwaysInvoked(t *testing.T) {
 func TestService_ChangePassword_ClearsResetFlag(t *testing.T) {
 	stub := &stubTokenIssuer{pair: dto.TokenPair{}}
 	svc, repo := newServiceWithIssuer(stub)
-	seedUserWithHash(t, repo, "cp-reset", "oldpass", true) //nolint:gocritic // commentedOutCode: PasswordResetRequired=true is a documentation annotation, not commented-out code
+	seedUserWithHash(t, repo, "cp-reset", "oldpass", true)
 
 	_, err := svc.ChangePassword(context.Background(), ChangePasswordInput{
 		UserID:      "usr-cp-reset",

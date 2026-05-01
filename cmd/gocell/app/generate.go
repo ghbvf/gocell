@@ -157,7 +157,7 @@ func writeGeneratedFile(root, outPath string, content []byte, label string) erro
 	if !governance.IsWithinRoot(root, outPath) {
 		return fmt.Errorf("%s: path escapes project root", label)
 	}
-	//nolint:gosec // G304: outPath is validated against project root by IsWithinRoot above
+
 	if existing, err := os.ReadFile(outPath); err == nil && !isGocellGeneratedFile(existing) {
 		return fmt.Errorf("%s: refusing to overwrite non-generated file %s "+
 			"(generated files must start with the gocell header; remove the file or move "+

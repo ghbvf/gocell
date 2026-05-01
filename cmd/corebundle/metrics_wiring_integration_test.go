@@ -70,13 +70,13 @@ func TestR2_MetricsCollector_RecordsHTTPRequests(t *testing.T) {
 	// request is counted against the Prometheus registry backing the auto-wired
 	// collector. Use /healthz on primary (fallback: not found, still traverses
 	// outerMux) — any path will trigger the Metrics middleware.
-	resp, err := http.Get("http://" + primaryAddr + "/healthz") //nolint:noctx
+	resp, err := http.Get("http://" + primaryAddr + "/healthz")
 	require.NoError(t, err)
 	resp.Body.Close()
 
 	// Scrape /metrics from the HealthListener (B2: metrics are isolated on the
 	// dedicated health port, not the primary listener).
-	metricsResp, err := http.Get("http://" + healthAddr + "/metrics") //nolint:noctx
+	metricsResp, err := http.Get("http://" + healthAddr + "/metrics")
 	require.NoError(t, err)
 	defer metricsResp.Body.Close()
 	require.Equal(t, http.StatusOK, metricsResp.StatusCode,

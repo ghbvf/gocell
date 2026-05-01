@@ -169,12 +169,12 @@ func TestRouterChain_WebSocketUpgrade(t *testing.T) {
 	// logging, recovery) does not interfere with the HTTP→WS handshake.
 	// Hub registration is an adapter concern tested in adapters/websocket.
 	upgrader := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		c, err := websocket.Accept(w, r, &websocket.AcceptOptions{InsecureSkipVerify: true}) //nolint:staticcheck
+		c, err := websocket.Accept(w, r, &websocket.AcceptOptions{InsecureSkipVerify: true})
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
-		c.CloseNow() //nolint:staticcheck
+		c.CloseNow()
 	})
 
 	r := MustNew()
@@ -188,9 +188,9 @@ func TestRouterChain_WebSocketUpgrade(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	conn, _, err := websocket.Dial(ctx, wsURL, nil) //nolint:staticcheck
+	conn, _, err := websocket.Dial(ctx, wsURL, nil)
 	require.NoError(t, err, "WebSocket upgrade through router middleware chain must succeed")
-	conn.CloseNow() //nolint:staticcheck
+	conn.CloseNow()
 }
 
 func TestPanicRequestRecordedInAccessLog(t *testing.T) {

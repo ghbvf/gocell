@@ -125,7 +125,7 @@ func WithVerboseDisabled() Option {
 // requests. Verbose access always requires both a matching header and a
 // pre-configured token (see SetVerboseToken); PR-A35 removed the prior
 // "unconfigured = unrestricted" fallback.
-const VerboseTokenHeader = "X-Readyz-Token" //nolint:gosec // G101: VerboseTokenHeader is the constant name (not a credential value)
+const VerboseTokenHeader = "X-Readyz-Token"
 
 // Handler exposes /healthz and /readyz endpoints.
 type Handler struct {
@@ -582,7 +582,6 @@ func (h *Handler) verboseDecision(r *http.Request) (verbose, denied bool) {
 	token := h.verboseToken
 	h.mu.RUnlock()
 	if disabled {
-		//nolint:gosec // G706: slog field-based attributes (slog.String/slog.Any), not string concatenation.
 		slog.Debug("readyz: verbose requested but endpoint is disabled; serving plain aggregate",
 			slog.String("remote_addr", r.RemoteAddr))
 		return false, false
@@ -591,7 +590,6 @@ func (h *Handler) verboseDecision(r *http.Request) (verbose, denied bool) {
 	// configure a token or disable the verbose endpoint. Silently rendering
 	// verbose output when token="" leaks internal health details.
 	if token == "" {
-		//nolint:gosec // G706: slog field-based attributes (slog.String/slog.Any), not string concatenation.
 		slog.Warn("readyz: verbose requested but no token configured; denying",
 			slog.String("reason", "token_unconfigured"),
 			slog.String("hint", "set GOCELL_READYZ_VERBOSE_TOKEN or GOCELL_READYZ_VERBOSE_DISABLED=1"),
@@ -601,7 +599,6 @@ func (h *Handler) verboseDecision(r *http.Request) (verbose, denied bool) {
 	submitted := sha256.Sum256([]byte(r.Header.Get(VerboseTokenHeader)))
 	configured := sha256.Sum256([]byte(token))
 	if subtle.ConstantTimeCompare(submitted[:], configured[:]) != 1 {
-		//nolint:gosec // G706: slog field-based attributes (slog.String/slog.Any), not string concatenation.
 		slog.Warn("readyz: verbose token mismatch at handler layer; denying",
 			slog.String("reason", "token_mismatch"),
 			slog.String("remote_addr", r.RemoteAddr))

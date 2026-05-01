@@ -60,9 +60,6 @@ linters:
       threshold: 150
 
     gosec:
-      excludes:
-        - G115
-        - G404
       config:
         G101:
           pattern: "(?i)passwd|pass|password|pwd|secret|token|apikey"
@@ -116,38 +113,6 @@ linters:
               reason: "satori/go.uuid 已 archived (防再入)"
 
   exclusions:
-    rules:
-      # Test files: defer .Close()，table-driven test 高噪声项
-      - path: _test\.go
-        linters:
-          - errcheck
-          - gocognit
-          - cyclop
-          - funlen
-          - dupl
-          - lll
-          - gosec
-          - godot
-      # examples/ 是示例代码，宽松
-      - path: ^examples/
-        linters:
-          - errcheck
-          - lll
-          - funlen
-          - gocritic
-          - godot
-      # cmd/ CLI 入口允许长函数
-      - path: ^cmd/
-        linters:
-          - funlen
-      # tools/archtest/ AST 工具天然高圈复杂度（防御性配置）
-      - path: ^tools/archtest/
-        linters:
-          - cyclop
-      # governance advisory hints: 仅常量声明文件豁免 lll
-      - path: ^kernel/governance/advisory_hints\.go
-        linters:
-          - lll
     paths:
       - generated
       - vendor

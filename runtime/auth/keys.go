@@ -40,7 +40,7 @@ func validateRSAKeySize(n int, keyKind string) error {
 func Thumbprint(pub *rsa.PublicKey) string {
 	e := base64.RawURLEncoding.EncodeToString(big.NewInt(int64(pub.E)).Bytes())
 	n := base64.RawURLEncoding.EncodeToString(pub.N.Bytes())
-	//nolint:gocritic // sprintfQuotedString: %q adds backslash escaping which breaks RFC 7638 canonical JWK serialization.
+
 	canonical := fmt.Sprintf(`{"e":"%s","kty":"RSA","n":"%s"}`, e, n)
 	hash := sha256.Sum256([]byte(canonical))
 	return base64.RawURLEncoding.EncodeToString(hash[:])

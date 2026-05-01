@@ -44,7 +44,7 @@ func (s *stubTxRunner) RunInTx(_ context.Context, fn func(context.Context) error
 
 // testCredential is a test-only fixture password. Extracted to a variable to
 // avoid static-analysis false positives about hardcoded credentials (go:S6437).
-var testCredential = []byte("test-fixture-password") //nolint:gosec
+var testCredential = []byte("test-fixture-password")
 
 // --- tests ---
 

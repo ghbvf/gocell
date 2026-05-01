@@ -154,7 +154,7 @@ func TestA19_ConfigCoreModule_RegistersKeyProviderReadiness(t *testing.T) {
 	waitForHealthy(t, healthAddr)
 
 	// /readyz must reflect the failing fake probe → 503.
-	resp, err := http.Get("http://" + healthAddr + "/readyz") //nolint:noctx
+	resp, err := http.Get("http://" + healthAddr + "/readyz")
 	require.NoError(t, err)
 	defer resp.Body.Close()
 	assert.Equal(t, http.StatusServiceUnavailable, resp.StatusCode,
@@ -228,7 +228,7 @@ func TestA19_ConfigCoreModule_KeyProviderReady(t *testing.T) {
 
 	healthAddr2 := healthLn2.Addr().String()
 	require.Eventually(t, func() bool {
-		resp, err := http.Get("http://" + healthAddr2 + "/readyz") //nolint:noctx
+		resp, err := http.Get("http://" + healthAddr2 + "/readyz")
 		if err != nil {
 			return false
 		}
