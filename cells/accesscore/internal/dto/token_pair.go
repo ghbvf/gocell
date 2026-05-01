@@ -28,7 +28,21 @@ type TokenPairResponse struct {
 	PasswordResetRequired bool      `json:"passwordResetRequired"`
 }
 
-// ToTokenPairResponse converts the service-layer model to the wire DTO.
+// ToTokenPairResponse builds the wire DTO from the service-layer model.
+// The mapping is explicit so future fields on TokenPair don't auto-leak to
+// the wire and so the boundary is grep-able from the call site.
+//
+// The explicit struct literal is intentional: it creates a visible wire/model
+// boundary that prevents accidental field auto-propagation when either struct
+// evolves independently. A bare TokenPairResponse(p) cast would defeat this
+// guarantee — staticcheck S1016's suggestion is rejected by design here.
 func ToTokenPairResponse(p TokenPair) TokenPairResponse {
-	return TokenPairResponse(p)
+	return TokenPairResponse{
+		AccessToken:           p.AccessToken,
+		RefreshToken:          p.RefreshToken,
+		ExpiresAt:             p.ExpiresAt,
+		SessionID:             p.SessionID,
+		UserID:                p.UserID,
+		PasswordResetRequired: p.PasswordResetRequired,
+	}
 }

@@ -70,31 +70,17 @@ func Run(ctx context.Context, t ValidatedTool, args ...string) ([]byte, error) {
 //
 // ValidatedTool.path is exec.LookPath-resolved at NewTool construction (the
 // single audit point for subprocess invocation in this repo); args are
-// caller-controlled invocations from governance/verify helpers, never user input.
+// caller-controlled whitelisted invocations from governance/verify helpers,
+// never user input. gosec G204 on the variable binary path is a false
+// positive in this exact context — addressed by .golangci.yml gosec.excludes
+// or a path-scoped exemption rather than reshaping the invocation.
 func RunIn(ctx context.Context, t ValidatedTool, dir string, env []string, args ...string) ([]byte, error) {
-	// Build exec.Cmd via struct literal (Go 1.20+ Cancel field) to avoid gosec
-	// G204 false positive on variable binary path. ValidatedTool.path is
-	// LookPath-verified and absolute-normalized at construction (see NewTool).
-	cmdArgs := make([]string, 0, 1+len(args))
-	cmdArgs = append(cmdArgs, t.path)
-	cmdArgs = append(cmdArgs, args...)
-	// Fail-fast: reject already-canceled/expired contexts before forking.
-	if err := ctx.Err(); err != nil {
-		return nil, fmt.Errorf("cmdrun: context already done: %w", err)
+	cmd := exec.CommandContext(ctx, t.path, args...)
+	if dir != "" {
+		cmd.Dir = dir
 	}
-	cmd := &exec.Cmd{
-		Path: t.path,
-		Args: cmdArgs,
-		Dir:  dir,
-		Env:  env,
+	if env != nil {
+		cmd.Env = env
 	}
-	// Mirror exec.CommandContext: kill process when context fires.
-	// context.AfterFunc fires the cleanup once and does not leak if ctx is never canceled.
-	stopFn := context.AfterFunc(ctx, func() {
-		if p := cmd.Process; p != nil {
-			_ = p.Kill()
-		}
-	})
-	defer stopFn()
 	return cmd.CombinedOutput()
 }

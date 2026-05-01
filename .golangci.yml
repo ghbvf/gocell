@@ -181,6 +181,31 @@ linters:
       - path: ^cells/accesscore/slices/rbacassign/service\.go
         linters:
           - dupl
+      # token_pair.go: ToTokenPairResponse uses an explicit struct literal to
+      # create a wire/model boundary that prevents accidental field
+      # auto-leakage when either struct evolves. Source comment documents the
+      # decision; staticcheck S1016 (prefer type conversion) is the wrong
+      # advice in this specific spot.
+      - path: ^cells/accesscore/internal/dto/token_pair\.go
+        linters:
+          - staticcheck
+        text: "S1016"
+      # cmdrun.go: ValidatedTool.path is the single repo-wide audit point for
+      # subprocess invocation (NewTool calls exec.LookPath + filepath.Abs +
+      # filepath.Clean). gosec G204 on the variable binary path is a false
+      # positive — caller paths are whitelisted governance/verify helpers,
+      # never user input.
+      - path: ^pkg/cmdrun/cmdrun\.go
+        linters:
+          - gosec
+        text: "G204"
+      # scaffoldfs.FileMode / DirMode are 0o644 / 0o755 by design (scaffold
+      # output is committed to git and read by multi-user CI bots). Source
+      # comment documents the decision.
+      - path: ^pkg/scaffoldfs/perms\.go
+        linters:
+          - gosec
+        text: "G30(1|6)"
       # cmd/ wiring functions are sequential composition-root assemblies
       # (Provide / LoadSharedDepsFromEnv / NewSSOBFFApp). funlen flags them
       # at 80 lines but breaking apart obscures the reading order — caller
