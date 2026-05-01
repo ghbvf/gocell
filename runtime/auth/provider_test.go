@@ -69,14 +69,14 @@ func TestEnvKeyProvider_RSAKeySet_MissingKeysFails(t *testing.T) {
 }
 
 func TestEnvKeyProvider_HMACKeyRing_ReturnsLoadedRing(t *testing.T) {
-	secret := "this-is-a-32-byte-secret-for-hmac!"
-	t.Setenv(EnvServiceSecret, secret)
+	hmacKey := "this-is-a-32-byte-hmackey-for-!!"
+	t.Setenv(EnvServiceSecret, hmacKey)
 
 	p := NewEnvKeyProvider()
 	ring, err := p.HMACKeyRing()
 	require.NoError(t, err)
 	require.NotNil(t, ring)
-	assert.Equal(t, []byte(secret), ring.Current())
+	assert.Equal(t, []byte(hmacKey), ring.Current())
 }
 
 func TestEnvKeyProvider_HMACKeyRing_WithPrevious(t *testing.T) {

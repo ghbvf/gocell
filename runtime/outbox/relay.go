@@ -2,8 +2,9 @@ package outbox
 
 import (
 	"context"
+	crand "crypto/rand"
+	"encoding/binary"
 	"log/slog"
-	"math/rand/v2"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -735,8 +736,21 @@ func (r *Relay) retryDelay(attempts int) time.Duration {
 	shift := min(attempts, 30)
 	delay := r.cappedDelay(r.cfg.BaseRetryDelay * (retryDelayBase << shift))
 	if delay > 0 {
-		jitter := time.Duration(rand.Int64N(int64(delay/retryJitterDivisor) + 1))
+		jitter := time.Duration(cryptoRandInt64N(int64(delay/retryJitterDivisor) + 1))
 		delay += jitter
 	}
 	return delay
+}
+
+// cryptoRandInt64N returns a non-negative random int64 in [0, n) using
+// crypto/rand. Falls back to 0 on read failure (safe: worst case is no jitter).
+func cryptoRandInt64N(n int64) int64 {
+	if n <= 0 {
+		return 0
+	}
+	var b [8]byte
+	if _, err := crand.Read(b[:]); err != nil {
+		return 0
+	}
+	return int64(binary.LittleEndian.Uint64(b[:])>>1) % n
 }

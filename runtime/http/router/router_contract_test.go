@@ -1,7 +1,6 @@
 package router
 
 import (
-	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -442,7 +441,7 @@ func TestMount_WithRouteParams(t *testing.T) {
 	sub.Get("/{id}", func(w http.ResponseWriter, req *http.Request) {
 		id := chi.URLParam(req, "id")
 		w.Header().Set("X-Param-ID", id)
-		_, _ = fmt.Fprintf(w, "id=%s", id)
+		w.WriteHeader(http.StatusOK)
 	})
 	r.Mount("/users", sub)
 

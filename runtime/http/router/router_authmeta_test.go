@@ -64,8 +64,17 @@ func TestAuthDeclare_NestedRoute_ForwardsWithPrefix(t *testing.T) {
 	r.Route("/api/v1", func(v1 kcell.RouteMux) {
 		v1.Route("/access", func(a kcell.RouteMux) {
 			a.Route("/sessions", func(s kcell.RouteMux) {
-				auth.MustMount(s, auth.Route{Contract: testHTTPContract("POST", "/api/v1/access/sessions/login"), Handler: okHandler, Public: true})
-				auth.MustMount(s, auth.Route{Contract: testHTTPContract("DELETE", "/api/v1/access/sessions/{id}"), Handler: okHandler, Policy: authtest.RequireAuthenticated(), PasswordResetExempt: true})
+				auth.MustMount(s, auth.Route{
+					Contract: testHTTPContract("POST", "/api/v1/access/sessions/login"),
+					Handler:  okHandler,
+					Public:   true,
+				})
+				auth.MustMount(s, auth.Route{
+					Contract:            testHTTPContract("DELETE", "/api/v1/access/sessions/{id}"),
+					Handler:             okHandler,
+					Policy:              authtest.RequireAuthenticated(),
+					PasswordResetExempt: true,
+				})
 			})
 		})
 	})
@@ -445,10 +454,10 @@ func TestFinalizeAuth_NoVerifier_LogsWarning(t *testing.T) {
 func TestFinalizeAuth_RejectsInternalPathOnPrimaryListener(t *testing.T) {
 	r, err := NewForListener(kcell.PrimaryListener)
 	require.NoError(t, err)
-	r.DeclareAuthMeta(kcell.AuthRouteMeta{
+	require.NoError(t, r.DeclareAuthMeta(kcell.AuthRouteMeta{
 		Method: "POST",
 		Path:   "/internal/v1/admin/cmd",
-	})
+	}))
 	err = r.FinalizeAuth()
 	require.Error(t, err, "FinalizeAuth must reject /internal/v1/* on PrimaryListener")
 	assert.Contains(t, err.Error(), "internal", "error must mention 'internal'")
@@ -459,10 +468,10 @@ func TestFinalizeAuth_RejectsInternalPathOnPrimaryListener(t *testing.T) {
 func TestFinalizeAuth_RejectsNonInternalPathOnInternalListener(t *testing.T) {
 	r, err := NewForListener(kcell.InternalListener)
 	require.NoError(t, err)
-	r.DeclareAuthMeta(kcell.AuthRouteMeta{
+	require.NoError(t, r.DeclareAuthMeta(kcell.AuthRouteMeta{
 		Method: "GET",
 		Path:   "/api/v1/items",
-	})
+	}))
 	err = r.FinalizeAuth()
 	require.Error(t, err, "FinalizeAuth must reject non-/internal/v1/* path on InternalListener")
 	assert.Contains(t, err.Error(), "internal listener", "error must mention 'internal listener'")
@@ -482,7 +491,11 @@ func TestFinalizeAuth_PolicyCoverage_DetectsMissingPolicy(t *testing.T) {
 	r.Handle("GET /unguarded", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {}))
 
 	// /guarded is registered via auth.Mount — covered.
-	auth.MustMount(r, auth.Route{Contract: testHTTPContract("GET", "/guarded"), Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {}), Policy: authtest.RequireAuthenticated()})
+	auth.MustMount(r, auth.Route{
+		Contract: testHTTPContract("GET", "/guarded"),
+		Handler:  http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {}),
+		Policy:   authtest.RequireAuthenticated(),
+	})
 
 	err = r.FinalizeAuth()
 	require.Error(t, err)
@@ -495,8 +508,16 @@ func TestFinalizeAuth_PolicyCoverage_AllDeclaredOK(t *testing.T) {
 	r, err := New(WithAuthMiddleware(&authMetaVerifier{err: assert.AnError}))
 	require.NoError(t, err)
 
-	auth.MustMount(r, auth.Route{Contract: testHTTPContract("GET", "/api/v1/items"), Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {}), Policy: authtest.RequireAuthenticated()})
-	auth.MustMount(r, auth.Route{Contract: testHTTPContract("POST", "/api/v1/login"), Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {}), Public: true})
+	auth.MustMount(r, auth.Route{
+		Contract: testHTTPContract("GET", "/api/v1/items"),
+		Handler:  http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {}),
+		Policy:   authtest.RequireAuthenticated(),
+	})
+	auth.MustMount(r, auth.Route{
+		Contract: testHTTPContract("POST", "/api/v1/login"),
+		Handler:  http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {}),
+		Public:   true,
+	})
 
 	err = r.FinalizeAuth()
 	require.NoError(t, err)

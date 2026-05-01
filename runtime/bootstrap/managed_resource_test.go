@@ -105,12 +105,12 @@ func TestManagedResource_RegistersHealthChecker(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewRequestWithContext failed: %v", err)
 	}
-	req.Header.Set(health.VerboseTokenHeader, testVerboseToken)
+	req.Header.Set(health.VerboseAuthHeader, testVerboseToken)
 	resp, err := testHTTPClient.Do(req)
 	if err != nil {
 		t.Fatalf("GET /readyz?verbose failed: %v", err)
 	}
-	defer resp.Body.Close()
+	defer closeBody(t, resp)
 	if resp.StatusCode != http.StatusOK {
 		t.Errorf("expected 200, got %d", resp.StatusCode)
 	}
@@ -464,7 +464,7 @@ func TestRelay_AsManagedResource_RegistersCheckers(t *testing.T) {
 	// GET /readyz?verbose — all three relay checkers must appear.
 	resp, err := verboseGet(ctx, fmt.Sprintf("http://%s", addr))
 	require.NoError(t, err)
-	defer resp.Body.Close()
+	defer closeBody(t, resp)
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
 
 	var body map[string]any
@@ -551,14 +551,14 @@ func TestRelay_AsManagedResource_TrippedBudget_Returns503(t *testing.T) {
 		if err != nil {
 			return false
 		}
-		resp.Body.Close()
+		closeBody(t, resp)
 		return resp.StatusCode == http.StatusServiceUnavailable
 	}, 3*time.Second, 20*time.Millisecond, "/readyz must return 503 after poll budget trips")
 
 	// Verify verbose output contains the unhealthy checker name.
 	verboseResp, err := verboseGet(ctx, fmt.Sprintf("http://%s", addr))
 	require.NoError(t, err)
-	defer verboseResp.Body.Close()
+	defer closeBody(t, verboseResp)
 	assert.Equal(t, http.StatusServiceUnavailable, verboseResp.StatusCode)
 	var body map[string]any
 	require.NoError(t, json.NewDecoder(verboseResp.Body).Decode(&body))
@@ -577,7 +577,7 @@ func TestRelay_AsManagedResource_TrippedBudget_Returns503(t *testing.T) {
 		if err != nil {
 			return false
 		}
-		resp.Body.Close()
+		closeBody(t, resp)
 		return resp.StatusCode == http.StatusOK
 	}, 3*time.Second, 20*time.Millisecond, "/readyz must return 200 after store recovers")
 }
@@ -626,7 +626,7 @@ func TestRelay_AsManagedResource_DisabledBudget_SkipsChecker(t *testing.T) {
 
 	resp, err := verboseGet(ctx, fmt.Sprintf("http://%s", addr))
 	require.NoError(t, err)
-	defer resp.Body.Close()
+	defer closeBody(t, resp)
 
 	var body map[string]any
 	require.NoError(t, json.NewDecoder(resp.Body).Decode(&body))

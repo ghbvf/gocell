@@ -373,7 +373,7 @@ func TestNewServiceTokenAuthenticator_TypedNilRing_ReturnsError(t *testing.T) {
 }
 
 func TestNewServiceTokenAuthenticator_NilNonceStore_ReturnsError(t *testing.T) {
-	ring := mustTestRing(t, testSecret, "")
+	ring := mustTestRing(t, testHMACKey, "")
 	// No WithServiceTokenNonceStore → cfg.nonceStore stays nil → must error.
 	_, err := NewServiceTokenAuthenticator(ring)
 	if err == nil {
@@ -389,7 +389,7 @@ func TestNewServiceTokenAuthenticator_NilNonceStore_ReturnsError(t *testing.T) {
 }
 
 func TestNewServiceTokenAuthenticator_NoopNonceStore_ReturnsError(t *testing.T) {
-	ring := mustTestRing(t, testSecret, "")
+	ring := mustTestRing(t, testHMACKey, "")
 	_, err := NewServiceTokenAuthenticator(ring,
 		WithServiceTokenNonceStore(NewNoopNonceStore()))
 	if err == nil {
@@ -405,7 +405,7 @@ func TestNewServiceTokenAuthenticator_NoopNonceStore_ReturnsError(t *testing.T) 
 }
 
 func TestNewServiceTokenAuthenticator_InMemoryNonceStore_OK(t *testing.T) {
-	ring := mustTestRing(t, testSecret, "")
+	ring := mustTestRing(t, testHMACKey, "")
 	a, err := NewServiceTokenAuthenticator(ring,
 		WithServiceTokenNonceStore(mustNewInMemoryNonceStore(t)))
 	if err != nil {
@@ -419,7 +419,7 @@ func TestNewServiceTokenAuthenticator_InMemoryNonceStore_OK(t *testing.T) {
 // --- existing ServiceToken Authenticator tests (updated to error-first + explicit store) ---
 
 func TestServiceTokenAuthenticator_NoHeader_Absent(t *testing.T) {
-	ring := mustTestRing(t, testSecret, "")
+	ring := mustTestRing(t, testHMACKey, "")
 	a := mustNewServiceTokenAuthenticator(t, ring,
 		WithServiceTokenNonceStore(mustNewInMemoryNonceStore(t)))
 	req := httptest.NewRequest(http.MethodGet, "/internal/v1/resource", nil)
@@ -436,7 +436,7 @@ func TestServiceTokenAuthenticator_NoHeader_Absent(t *testing.T) {
 }
 
 func TestServiceTokenAuthenticator_BearerSchemeIgnored_Absent(t *testing.T) {
-	ring := mustTestRing(t, testSecret, "")
+	ring := mustTestRing(t, testHMACKey, "")
 	a := mustNewServiceTokenAuthenticator(t, ring,
 		WithServiceTokenNonceStore(mustNewInMemoryNonceStore(t)))
 	req := httptest.NewRequest(http.MethodGet, "/internal/v1/resource", nil)
@@ -454,7 +454,7 @@ func TestServiceTokenAuthenticator_BearerSchemeIgnored_Absent(t *testing.T) {
 }
 
 func TestServiceTokenAuthenticator_InvalidMAC_Error(t *testing.T) {
-	ring := mustTestRing(t, testSecret, "")
+	ring := mustTestRing(t, testHMACKey, "")
 	now := time.Now()
 	a := mustNewServiceTokenAuthenticator(t, ring,
 		WithServiceTokenClock(func() time.Time { return now }),
@@ -477,7 +477,7 @@ func TestServiceTokenAuthenticator_InvalidMAC_Error(t *testing.T) {
 }
 
 func TestServiceTokenAuthenticator_Expired_Error(t *testing.T) {
-	ring := mustTestRing(t, testSecret, "")
+	ring := mustTestRing(t, testHMACKey, "")
 	now := time.Now()
 	oldTime := now.Add(-6 * time.Minute)
 	// Token is signed for 6 minutes ago — exceeds ServiceTokenMaxAge.
@@ -500,7 +500,7 @@ func TestServiceTokenAuthenticator_Expired_Error(t *testing.T) {
 }
 
 func TestServiceTokenAuthenticator_NonceReplay_Error(t *testing.T) {
-	ring := mustTestRing(t, testSecret, "")
+	ring := mustTestRing(t, testHMACKey, "")
 	now := time.Now()
 	store := mustNewInMemoryNonceStore(t)
 	a, err := NewServiceTokenAuthenticator(ring,
@@ -542,7 +542,7 @@ func TestServiceTokenAuthenticator_NonceReplay_Error(t *testing.T) {
 }
 
 func TestServiceTokenAuthenticator_Success_PrincipalShape(t *testing.T) {
-	ring := mustTestRing(t, testSecret, "")
+	ring := mustTestRing(t, testHMACKey, "")
 	now := time.Now()
 	a := mustNewServiceTokenAuthenticator(t, ring,
 		WithServiceTokenClock(func() time.Time { return now }),
@@ -643,7 +643,7 @@ func TestJWTAuthenticator_EmptySubject_Error(t *testing.T) {
 // non-Bearer scheme — and the ServiceToken authenticator validates the
 // credential and returns a valid Principal. No cross-bleed between the two.
 func TestUnionAuthenticator_BearerAndServiceToken_NoCrossBleed(t *testing.T) {
-	ring := mustTestRing(t, testSecret, "")
+	ring := mustTestRing(t, testHMACKey, "")
 	now := time.Now()
 
 	// trackingVerifier records whether VerifyIntent was called.
@@ -699,7 +699,7 @@ func (v *trackingIntentVerifier) VerifyIntent(_ context.Context, _ string, _ Tok
 // legacy format token is rejected at the Authenticator level (not just via
 // ServiceTokenMiddleware), returning an error that classifies as a 4xx.
 func TestServiceTokenAuthenticator_LegacyTwoPart_Error(t *testing.T) {
-	ring := mustTestRing(t, testSecret, "")
+	ring := mustTestRing(t, testHMACKey, "")
 	now := time.Now()
 	a := mustNewServiceTokenAuthenticator(t, ring,
 		WithServiceTokenClock(func() time.Time { return now }),
@@ -726,7 +726,7 @@ func TestServiceTokenAuthenticator_LegacyTwoPart_Error(t *testing.T) {
 // TestServiceTokenAuthenticator_FutureTimestamp_Error verifies that a token
 // with a timestamp beyond the allowed service-token clock skew is rejected.
 func TestServiceTokenAuthenticator_FutureTimestamp_Error(t *testing.T) {
-	ring := mustTestRing(t, testSecret, "")
+	ring := mustTestRing(t, testHMACKey, "")
 	// "now" as seen by the authenticator.
 	now := time.Now()
 	// Token is signed just beyond the explicit future-skew window.
@@ -752,7 +752,7 @@ func TestServiceTokenAuthenticator_FutureTimestamp_Error(t *testing.T) {
 }
 
 func TestServiceTokenAuthenticator_FarFutureTimestampOverflow_Error(t *testing.T) {
-	ring := mustTestRing(t, testSecret, "")
+	ring := mustTestRing(t, testHMACKey, "")
 	now := time.Unix(1_700_000_000, 0)
 	farFuture := time.Unix(math.MaxInt64/2, 0)
 	token := GenerateServiceToken(ring, http.MethodGet, "/internal/v1/resource", "", farFuture)
@@ -776,7 +776,7 @@ func TestServiceTokenAuthenticator_FarFutureTimestampOverflow_Error(t *testing.T
 }
 
 func TestServiceTokenAuthenticator_FutureTimestampWithinSkew_Accepted(t *testing.T) {
-	ring := mustTestRing(t, testSecret, "")
+	ring := mustTestRing(t, testHMACKey, "")
 	now := time.Now()
 	futureTime := now.Add(ServiceTokenClockSkew)
 	token := GenerateServiceToken(ring, http.MethodGet, "/internal/v1/resource", "", futureTime)
@@ -800,7 +800,7 @@ func TestServiceTokenAuthenticator_FutureTimestampWithinSkew_Accepted(t *testing
 }
 
 func TestServiceTokenAuthenticator_PastTimestampAtMaxAge_Error(t *testing.T) {
-	ring := mustTestRing(t, testSecret, "")
+	ring := mustTestRing(t, testHMACKey, "")
 	now := time.Now()
 	oldTime := now.Add(-ServiceTokenMaxAge)
 	token := GenerateServiceToken(ring, http.MethodGet, "/internal/v1/resource", "", oldTime)

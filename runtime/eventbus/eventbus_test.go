@@ -407,9 +407,11 @@ func TestSubscribe_ClosedBus(t *testing.T) {
 	bus := New()
 	_ = bus.Close(context.Background())
 
-	err := bus.Subscribe(context.Background(), outbox.Subscription{Topic: "topic"}, func(_ context.Context, e outbox.Entry) outbox.HandleResult {
-		return outbox.HandleResult{Disposition: outbox.DispositionAck}
-	})
+	err := bus.Subscribe(context.Background(),
+		outbox.Subscription{Topic: "topic"},
+		func(_ context.Context, e outbox.Entry) outbox.HandleResult {
+			return outbox.HandleResult{Disposition: outbox.DispositionAck}
+		})
 	assert.Error(t, err)
 }
 
@@ -899,17 +901,19 @@ func TestConsumerGroup_SameGroup_CompetingConsumption(t *testing.T) {
 	wg.Add(2)
 	go func() {
 		defer wg.Done()
-		_ = bus.Subscribe(ctx, outbox.Subscription{Topic: "session.created", ConsumerGroup: "auditcore"}, func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
-			sub1Count.Add(1)
-			return outbox.HandleResult{Disposition: outbox.DispositionAck}
-		})
+		_ = bus.Subscribe(ctx, outbox.Subscription{Topic: "session.created", ConsumerGroup: "auditcore"},
+			func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+				sub1Count.Add(1)
+				return outbox.HandleResult{Disposition: outbox.DispositionAck}
+			})
 	}()
 	go func() {
 		defer wg.Done()
-		_ = bus.Subscribe(ctx, outbox.Subscription{Topic: "session.created", ConsumerGroup: "auditcore"}, func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
-			sub2Count.Add(1)
-			return outbox.HandleResult{Disposition: outbox.DispositionAck}
-		})
+		_ = bus.Subscribe(ctx, outbox.Subscription{Topic: "session.created", ConsumerGroup: "auditcore"},
+			func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+				sub2Count.Add(1)
+				return outbox.HandleResult{Disposition: outbox.DispositionAck}
+			})
 	}()
 
 	require.Eventually(t, func() bool {
@@ -961,17 +965,19 @@ func TestConsumerGroup_DifferentGroups_Fanout(t *testing.T) {
 	wg.Add(2)
 	go func() {
 		defer wg.Done()
-		_ = bus.Subscribe(ctx, outbox.Subscription{Topic: "session.created", ConsumerGroup: "auditcore"}, func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
-			auditCount.Add(1)
-			return outbox.HandleResult{Disposition: outbox.DispositionAck}
-		})
+		_ = bus.Subscribe(ctx, outbox.Subscription{Topic: "session.created", ConsumerGroup: "auditcore"},
+			func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+				auditCount.Add(1)
+				return outbox.HandleResult{Disposition: outbox.DispositionAck}
+			})
 	}()
 	go func() {
 		defer wg.Done()
-		_ = bus.Subscribe(ctx, outbox.Subscription{Topic: "session.created", ConsumerGroup: "configcore"}, func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
-			configCount.Add(1)
-			return outbox.HandleResult{Disposition: outbox.DispositionAck}
-		})
+		_ = bus.Subscribe(ctx, outbox.Subscription{Topic: "session.created", ConsumerGroup: "configcore"},
+			func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+				configCount.Add(1)
+				return outbox.HandleResult{Disposition: outbox.DispositionAck}
+			})
 	}()
 
 	require.Eventually(t, func() bool {
@@ -1079,10 +1085,11 @@ func TestConsumerGroup_ConcurrentPublish_NoRace(t *testing.T) {
 	for range numSubs {
 		go func() {
 			defer wg.Done()
-			_ = bus.Subscribe(ctx, outbox.Subscription{Topic: "race.topic", ConsumerGroup: "race-group"}, func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
-				totalReceived.Add(1)
-				return outbox.HandleResult{Disposition: outbox.DispositionAck}
-			})
+			_ = bus.Subscribe(ctx, outbox.Subscription{Topic: "race.topic", ConsumerGroup: "race-group"},
+				func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+					totalReceived.Add(1)
+					return outbox.HandleResult{Disposition: outbox.DispositionAck}
+				})
 		}()
 	}
 

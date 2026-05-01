@@ -45,7 +45,7 @@ func TestReadyz_Singleflight_DedupsConcurrentRequests(t *testing.T) {
 	// race the barrier release and the dedup window would close early.
 	probeRelease := make(chan struct{})
 	h := New(asm, WithVerboseDisabled(), WithDeadline(2*time.Second))
-	h.RegisterChecker("slow", func(ctx context.Context) error {
+	require.NoError(t, h.RegisterChecker("slow", func(ctx context.Context) error {
 		callCount.Add(1)
 		select {
 		case <-ctx.Done():
@@ -53,7 +53,7 @@ func TestReadyz_Singleflight_DedupsConcurrentRequests(t *testing.T) {
 		case <-probeRelease:
 			return nil
 		}
-	})
+	}))
 
 	const concurrency = 16
 	// readyWG signals that every goroutine has reached the barrier.
@@ -124,7 +124,7 @@ func TestReadyz_Singleflight_SeparateKeysForVerboseVsAggregate(t *testing.T) {
 
 	h := New(asm)
 	h.SetVerboseToken(testVerboseToken)
-	h.RegisterChecker("db", func(_ context.Context) error { return nil })
+	require.NoError(t, h.RegisterChecker("db", func(_ context.Context) error { return nil }))
 
 	plainRec := httptest.NewRecorder()
 	h.ReadyzHandler().ServeHTTP(plainRec,

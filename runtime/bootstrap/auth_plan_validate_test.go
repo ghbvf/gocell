@@ -60,8 +60,11 @@ func TestValidateAuthChainJWTSingleton(t *testing.T) {
 			wantErr: false,
 		},
 		{
-			name:    "AcceptsJWTFromAssemblyFirst",
-			chain:   []cell.ListenerAuth{cell.MustNewAuthJWTFromAssembly(asm), cell.MustNewAuthServiceToken(&applyStubNonceStore{}, &applyStubHMACKeyring{})},
+			name: "AcceptsJWTFromAssemblyFirst",
+			chain: []cell.ListenerAuth{
+				cell.MustNewAuthJWTFromAssembly(asm),
+				cell.MustNewAuthServiceToken(&applyStubNonceStore{}, &applyStubHMACKeyring{}),
+			},
 			wantErr: false,
 		},
 		{

@@ -91,14 +91,14 @@ func loginContractSpec() wrapper.ContractSpec {
 func TestMount_ContractDrivenRoute_RegistersAndForwardsMeta(t *testing.T) {
 	mux := newCaptureMux()
 	handlerCalled := false
-	Mount(mux, Route{
+	require.NoError(t, Mount(mux, Route{
 		Contract: loginContractSpec(),
 		Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			handlerCalled = true
 			w.WriteHeader(http.StatusOK)
 		}),
 		Public: true,
-	})
+	}))
 
 	req := httptest.NewRequest("POST", "/api/v1/access/sessions/login", nil)
 	rec := httptest.NewRecorder()
@@ -114,13 +114,13 @@ func TestMount_ContractDrivenRoute_RegistersAndForwardsMeta(t *testing.T) {
 func TestMount_WritesContractIDIntoContext(t *testing.T) {
 	mux := newCaptureMux()
 	var seen string
-	Mount(mux, Route{
+	require.NoError(t, Mount(mux, Route{
 		Contract: loginContractSpec(),
 		Handler: http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
 			seen, _ = ctxkeys.ContractIDFrom(r.Context())
 		}),
 		Public: true,
-	})
+	}))
 	req := httptest.NewRequest("POST", "/api/v1/access/sessions/login", nil)
 	mux.ServeHTTP(httptest.NewRecorder(), req)
 	assert.Equal(t, "http.auth.login.v1", seen)
@@ -371,14 +371,14 @@ func TestStripMountPrefix_PathSegmentBoundary(t *testing.T) {
 func TestMount_AcceptsRootPrefix(t *testing.T) {
 	mux := newPrefixedCaptureMux("/")
 	require.NotPanics(t, func() {
-		Mount(mux, Route{
+		require.NoError(t, Mount(mux, Route{
 			Contract: wrapper.ContractSpec{
 				ID: "http.auth.login.v1", Kind: "http", Transport: "http",
 				Method: "POST", Path: "/api/v1/access/sessions/login",
 			},
 			Handler: noopHandler,
 			Public:  true,
-		})
+		}))
 	})
 	require.Len(t, mux.metas, 1)
 	// Path is registered at its absolute form (no relative-path stripping
@@ -415,14 +415,14 @@ func TestMount_ReturnsErrorOnPartialSegmentPrefix(t *testing.T) {
 func TestMount_AcceptsValidSegmentPrefix(t *testing.T) {
 	mux := newPrefixedCaptureMux("/api/v1/access")
 	require.NotPanics(t, func() {
-		Mount(mux, Route{
+		require.NoError(t, Mount(mux, Route{
 			Contract: wrapper.ContractSpec{
 				ID: "http.auth.login.v1", Kind: "http", Transport: "http",
 				Method: "POST", Path: "/api/v1/access/sessions/login",
 			},
 			Handler: noopHandler,
 			Public:  true,
-		})
+		}))
 	})
 	require.Len(t, mux.metas, 1)
 	assert.Equal(t, "/sessions/login", mux.metas[0].Path)

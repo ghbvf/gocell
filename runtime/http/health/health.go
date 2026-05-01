@@ -121,11 +121,11 @@ func WithVerboseDisabled() Option {
 	}
 }
 
-// VerboseTokenHeader is the HTTP header used to authenticate /readyz?verbose
+// VerboseAuthHeader is the HTTP header used to authenticate /readyz?verbose
 // requests. Verbose access always requires both a matching header and a
 // pre-configured token (see SetVerboseToken); PR-A35 removed the prior
 // "unconfigured = unrestricted" fallback.
-const VerboseTokenHeader = "X-Readyz-Token"
+const VerboseAuthHeader = "X-Readyz-Token"
 
 // Handler exposes /healthz and /readyz endpoints.
 type Handler struct {
@@ -596,7 +596,7 @@ func (h *Handler) verboseDecision(r *http.Request) (verbose, denied bool) {
 			slog.String("remote_addr", r.RemoteAddr))
 		return false, true
 	}
-	submitted := sha256.Sum256([]byte(r.Header.Get(VerboseTokenHeader)))
+	submitted := sha256.Sum256([]byte(r.Header.Get(VerboseAuthHeader)))
 	configured := sha256.Sum256([]byte(token))
 	if subtle.ConstantTimeCompare(submitted[:], configured[:]) != 1 {
 		slog.Warn("readyz: verbose token mismatch at handler layer; denying",

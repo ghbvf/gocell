@@ -109,7 +109,11 @@ func TestLocker_TC2_RenewIntervalPrecision(t *testing.T) {
 	if err != nil {
 		t.Fatalf("TC-2 Acquire: %v", err)
 	}
-	defer release()
+	defer func() {
+		if err := release(); err != nil {
+			t.Logf("release: %v", err)
+		}
+	}()
 
 	<-mgr(l).Started()
 	waitPendingTimers(t, fc)
@@ -152,14 +156,22 @@ func TestLocker_TC3_RenewError_LockLost(t *testing.T) {
 	if err != nil {
 		t.Fatalf("TC-3 Acquire key3a: %v", err)
 	}
-	defer release1()
+	defer func() {
+		if err := release1(); err != nil {
+			t.Logf("release1: %v", err)
+		}
+	}()
 
 	// Acquire key3b before advancing so both locks are in the manager heap.
 	_, release2, err := l.Acquire(context.Background(), "key3b", ttl)
 	if err != nil {
 		t.Fatalf("TC-3 Acquire key3b: %v", err)
 	}
-	defer release2()
+	defer func() {
+		if err := release2(); err != nil {
+			t.Logf("release2: %v", err)
+		}
+	}()
 
 	<-mgr(l).Started()
 
@@ -228,7 +240,11 @@ func TestLocker_TC4_RenewNotHeld_LockLost(t *testing.T) {
 	if err != nil {
 		t.Fatalf("TC-4 Acquire: %v", err)
 	}
-	defer release()
+	defer func() {
+		if err := release(); err != nil {
+			t.Logf("release: %v", err)
+		}
+	}()
 
 	<-mgr(l).Started()
 	waitPendingTimers(t, fc)
@@ -289,8 +305,10 @@ func TestLocker_TC5_ParentCancel(t *testing.T) {
 			t.Errorf("TC-5a: Cause = %v, want context.Canceled", cause)
 		}
 
-		// release() should not panic.
-		release()
+		// release() should not panic (error is intentionally discarded after context cancel).
+		if err := release(); err != nil {
+			t.Logf("release after cancel: %v", err)
+		}
 	})
 
 	t.Run("TC5b_CustomCausePropagation", func(t *testing.T) {
@@ -327,8 +345,10 @@ func TestLocker_TC5_ParentCancel(t *testing.T) {
 			t.Errorf("TC-5b: Cause = %v, want customErr = %v", cause, customErr)
 		}
 
-		// release() should not panic.
-		release()
+		// release() should not panic (error is intentionally discarded after context cancel).
+		if err := release(); err != nil {
+			t.Logf("release after cancel: %v", err)
+		}
 	})
 }
 
@@ -466,7 +486,9 @@ func TestLocker_TC9_GoroutineCount(t *testing.T) {
 
 	// Release all.
 	for _, r := range results {
-		r.release()
+		if err := r.release(); err != nil {
+			t.Logf("release: %v", err)
+		}
 	}
 
 	// Wait for drain.
@@ -507,7 +529,9 @@ func TestLocker_TC10_LazyLifecycle(t *testing.T) {
 	}
 	<-mgr(l).Started()
 
-	release()
+	if err := release(); err != nil {
+		t.Logf("release: %v", err)
+	}
 	select {
 	case <-mgr(l).Drained():
 	case <-time.After(testTimeout):
@@ -519,7 +543,11 @@ func TestLocker_TC10_LazyLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatalf("TC-10 second Acquire: %v", err)
 	}
-	defer release2()
+	defer func() {
+		if err := release2(); err != nil {
+			t.Logf("release2: %v", err)
+		}
+	}()
 
 	select {
 	case <-mgr(l).Started():
@@ -550,7 +578,11 @@ func TestLocker_TC11_SmallTTLNoSpinLoop(t *testing.T) {
 	if err != nil {
 		t.Fatalf("TC-11 Acquire: %v", err)
 	}
-	defer release()
+	defer func() {
+		if err := release(); err != nil {
+			t.Logf("release: %v", err)
+		}
+	}()
 
 	<-mgr(l).Started()
 
@@ -601,7 +633,11 @@ func TestLocker_TC12_DriftFactor(t *testing.T) {
 	if err != nil {
 		t.Fatalf("TC-12 Acquire: %v", err)
 	}
-	defer release()
+	defer func() {
+		if err := release(); err != nil {
+			t.Logf("release: %v", err)
+		}
+	}()
 
 	<-mgr(l).Started()
 	waitPendingTimers(t, fc)
@@ -671,7 +707,11 @@ func TestLocker_LockCtxValuePropagation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ValuePropagation Acquire: %v", err)
 	}
-	defer release()
+	defer func() {
+		if err := release(); err != nil {
+			t.Logf("release: %v", err)
+		}
+	}()
 
 	got := lockCtx.Value(key)
 	if got != val {
@@ -694,7 +734,11 @@ func TestLocker_LockCtxDeadlinePropagation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("DeadlinePropagation Acquire: %v", err)
 	}
-	defer release()
+	defer func() {
+		if err := release(); err != nil {
+			t.Logf("release: %v", err)
+		}
+	}()
 
 	gotDeadline, ok := lockCtx.Deadline()
 	if !ok {
@@ -822,7 +866,9 @@ func TestLocker_Acquire_RejectsZeroTTL(t *testing.T) {
 			if err == nil {
 				t.Errorf("Acquire with TTL=%v should return error", tc.ttl)
 				if release != nil {
-					release()
+					if err := release(); err != nil {
+						t.Logf("release: %v", err)
+					}
 				}
 			}
 			if lockCtx != nil {
@@ -896,7 +942,11 @@ func TestLocker_ExtremeTTL_LongDuration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ExtremeTTL_Long Acquire: %v", err)
 	}
-	defer release()
+	defer func() {
+		if err := release(); err != nil {
+			t.Logf("release: %v", err)
+		}
+	}()
 
 	<-mgr(l).Started()
 	waitPendingTimers(t, fc)
@@ -927,7 +977,11 @@ func TestLocker_ExtremeTTL_ShortDuration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ExtremeTTL_Short Acquire: %v", err)
 	}
-	defer release()
+	defer func() {
+		if err := release(); err != nil {
+			t.Logf("release: %v", err)
+		}
+	}()
 
 	<-mgr(l).Started()
 
@@ -959,7 +1013,11 @@ func TestLocker_TC13_TransientRenewError_ThenSuccess(t *testing.T) {
 	if err != nil {
 		t.Fatalf("TC-13 Acquire: %v", err)
 	}
-	defer release()
+	defer func() {
+		if err := release(); err != nil {
+			t.Logf("release: %v", err)
+		}
+	}()
 
 	<-mgr(l).Started()
 	waitPendingTimers(t, fc)
@@ -1005,7 +1063,11 @@ func TestLocker_TC14_BudgetExhausted_LockLost(t *testing.T) {
 	if err != nil {
 		t.Fatalf("TC-14 Acquire: %v", err)
 	}
-	defer release()
+	defer func() {
+		if err := release(); err != nil {
+			t.Logf("release: %v", err)
+		}
+	}()
 
 	<-mgr(l).Started()
 	waitPendingTimers(t, fc)
@@ -1048,7 +1110,11 @@ func TestLocker_TC15_PermanentOwnershipLost_NoRetry(t *testing.T) {
 	if err != nil {
 		t.Fatalf("TC-15 Acquire: %v", err)
 	}
-	defer release()
+	defer func() {
+		if err := release(); err != nil {
+			t.Logf("release: %v", err)
+		}
+	}()
 
 	<-mgr(l).Started()
 	waitPendingTimers(t, fc)
@@ -1161,9 +1227,19 @@ func TestLocker_Stats_AfterAcquire(t *testing.T) {
 		t.Errorf("Stats_AfterAcquire: ActiveLocks = %d, want 3", got)
 	}
 
-	defer r1()
-	defer r2()
-	r3()
+	defer func() {
+		if err := r1(); err != nil {
+			t.Logf("r1: %v", err)
+		}
+	}()
+	defer func() {
+		if err := r2(); err != nil {
+			t.Logf("r2: %v", err)
+		}
+	}()
+	if err := r3(); err != nil {
+		t.Logf("r3: %v", err)
+	}
 }
 
 // TestLocker_Stats_AfterRelease verifies Stats().ActiveLocks decrements on release.
@@ -1175,8 +1251,16 @@ func TestLocker_Stats_AfterRelease(t *testing.T) {
 	_, r1, _ := l.Acquire(context.Background(), "stats-rel-key1", time.Minute)
 	_, r2, _ := l.Acquire(context.Background(), "stats-rel-key2", time.Minute)
 	_, r3, _ := l.Acquire(context.Background(), "stats-rel-key3", time.Minute)
-	defer r2()
-	defer r3()
+	defer func() {
+		if err := r2(); err != nil {
+			t.Logf("r2: %v", err)
+		}
+	}()
+	defer func() {
+		if err := r3(); err != nil {
+			t.Logf("r3: %v", err)
+		}
+	}()
 
 	<-mgr(l).Started()
 
@@ -1190,7 +1274,9 @@ func TestLocker_Stats_AfterRelease(t *testing.T) {
 	}
 
 	// Release one lock.
-	r1()
+	if err := r1(); err != nil {
+		t.Logf("r1: %v", err)
+	}
 
 	// Wait for count to drop to 2.
 	deadline = time.Now().Add(testTimeout)

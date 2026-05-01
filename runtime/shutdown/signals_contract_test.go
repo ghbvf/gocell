@@ -73,7 +73,7 @@ func listSignalsSources(t *testing.T) []string {
 // no directive is present so callers can assert the empty case explicitly.
 func readBuildConstraint(t *testing.T, path string) string {
 	t.Helper()
-	src, err := os.ReadFile(path)
+	src, err := os.ReadFile(filepath.Clean(path))
 	require.NoError(t, err)
 	f, err := parser.ParseFile(token.NewFileSet(), path, src, parser.ParseComments)
 	require.NoError(t, err)

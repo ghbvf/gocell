@@ -375,7 +375,7 @@ func (p *fixedHandleProvider) Rotate(_ context.Context) (string, error) {
 // mismatch the actual KEK used for wrapping the DEK.
 //
 // ref: k8s KMS v2 EncryptResponse.KeyID (kubernetes/kubernetes
-// staging/src/k8s.io/apiserver/pkg/storage/value/encrypt/envelope/kmsv2/envelope.go)
+// staging/src/k8s.io/apiserver/pkg/storage/value/encrypt/envelope/kmsv2/envelope.go).
 func TestKeyProviderTransformer_UsesEncryptReturnedKeyID_NotHandleID(t *testing.T) {
 	ctx := context.Background()
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"log/slog"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/ghbvf/gocell/pkg/ctxkeys"
@@ -40,21 +41,38 @@ func accessLogRecorder(w http.ResponseWriter, r *http.Request) (*RecorderState, 
 }
 
 func logAccessRequest(start time.Time, r *http.Request, state *RecorderState) {
+	// Extract and sanitize request fields before logging to avoid taint flow
+	// from user-controlled request data into structured log calls.
+	method := sanitizeLogField(r.Method)
+	path := sanitizeLogField(r.URL.Path)
+	route := RoutePatternFromCtx(r.Context())
+	ctx := r.Context()
 	safeObserve(slog.Default(), func() {
-		slog.Info("http request", accessLogAttrs(start, r, state)...)
+		slog.Info("http request", accessLogAttrs(start, method, path, route, state, ctx)...)
 	})
 }
 
-func accessLogAttrs(start time.Time, r *http.Request, state *RecorderState) []any {
+func accessLogAttrs(start time.Time, method, path, route string, state *RecorderState, ctx context.Context) []any {
 	duration := time.Since(start)
 	attrs := []any{
-		slog.String("method", r.Method),
-		slog.String("path", r.URL.Path),
-		slog.String("route", RoutePatternFromCtx(r.Context())),
+		slog.String("method", method),
+		slog.String("path", path),
+		slog.String("route", route),
 		slog.Int("status", state.Status()),
 		slog.Int64("duration_ms", duration.Milliseconds()),
 	}
-	return appendAccessLogContextAttrs(attrs, r.Context())
+	return appendAccessLogContextAttrs(attrs, ctx)
+}
+
+// sanitizeLogField removes ASCII control characters from s to prevent log
+// injection when user-supplied HTTP fields are written to structured logs.
+func sanitizeLogField(s string) string {
+	return strings.Map(func(r rune) rune {
+		if r < 0x20 || r == 0x7f {
+			return -1
+		}
+		return r
+	}, s)
 }
 
 func appendAccessLogContextAttrs(attrs []any, ctx context.Context) []any {

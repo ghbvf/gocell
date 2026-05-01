@@ -56,6 +56,8 @@ func TestRandomToken_LengthAndUniqueness(t *testing.T) {
 
 	// Clean up.
 	for _, release := range releases {
-		release()
+		if err := release(); err != nil {
+			t.Logf("release: %v", err)
+		}
 	}
 }

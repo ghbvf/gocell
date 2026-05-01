@@ -41,7 +41,7 @@ func Thumbprint(pub *rsa.PublicKey) string {
 	e := base64.RawURLEncoding.EncodeToString(big.NewInt(int64(pub.E)).Bytes())
 	n := base64.RawURLEncoding.EncodeToString(pub.N.Bytes())
 
-	canonical := fmt.Sprintf(`{"e":"%s","kty":"RSA","n":"%s"}`, e, n)
+	canonical := `{"e":"` + e + `","kty":"RSA","n":"` + n + `"}`
 	hash := sha256.Sum256([]byte(canonical))
 	return base64.RawURLEncoding.EncodeToString(hash[:])
 }

@@ -64,7 +64,7 @@ func verboseGet(ctx context.Context, baseURL string) (*http.Response, error) {
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set(health.VerboseTokenHeader, testVerboseToken)
+	req.Header.Set(health.VerboseAuthHeader, testVerboseToken)
 	return testHTTPClient.Do(req)
 }
 
@@ -109,7 +109,7 @@ func waitForHealthy(t *testing.T, addr string) {
 		if err != nil {
 			return false
 		}
-		resp.Body.Close()
+		closeBody(t, resp)
 		return resp.StatusCode == http.StatusOK
 	}, 3*time.Second, 50*time.Millisecond, "HTTP server did not become ready")
 }
@@ -408,7 +408,7 @@ func newContextCaptureCell(id string, got chan map[string]string) *contextCaptur
 }
 
 func (c *contextCaptureCell) RegisterSubscriptions(r cell.EventRouter) error {
-	r.AddContractHandler(testEventSpec("test.context"), func(ctx context.Context, _ outbox.Entry) outbox.HandleResult {
+	return r.AddContractHandler(testEventSpec("test.context"), func(ctx context.Context, _ outbox.Entry) outbox.HandleResult {
 		requestID, _ := ctxkeys.RequestIDFrom(ctx)
 		correlationID, _ := ctxkeys.CorrelationIDFrom(ctx)
 		traceID, _ := ctxkeys.TraceIDFrom(ctx)
@@ -419,7 +419,6 @@ func (c *contextCaptureCell) RegisterSubscriptions(r cell.EventRouter) error {
 		}
 		return outbox.HandleResult{Disposition: outbox.DispositionAck}
 	}, "capture-cell")
-	return nil
 }
 
 type invokeOnceSubscriber struct {
@@ -457,10 +456,9 @@ func (c *eventCell) RegisterSubscriptions(r cell.EventRouter) error {
 	if c.subErr != nil {
 		return c.subErr
 	}
-	r.AddContractHandler(testEventSpec("test.topic"), func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+	return r.AddContractHandler(testEventSpec("test.topic"), func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
 		return outbox.HandleResult{Disposition: outbox.DispositionAck}
 	}, "test")
-	return nil
 }
 
 func TestBootstrap_MissingSubscriber_WithEventRegistrar_Fails(t *testing.T) {
@@ -538,7 +536,7 @@ func TestBootstrap_EventRouter_HappyPath(t *testing.T) {
 		if err != nil {
 			return false
 		}
-		resp.Body.Close()
+		closeBody(t, resp)
 		return resp.StatusCode == http.StatusOK
 	}, 3*time.Second, 50*time.Millisecond, "HTTP server did not become ready")
 
@@ -600,7 +598,7 @@ func TestBootstrap_EventSubscriptions_RestoreObservabilityContext(t *testing.T) 
 		if err != nil {
 			return false
 		}
-		resp.Body.Close()
+		closeBody(t, resp)
 		return resp.StatusCode == http.StatusOK
 	}, 3*time.Second, 50*time.Millisecond, "HTTP server did not become ready")
 
@@ -670,14 +668,14 @@ func TestBootstrap_WithHealthChecker_Healthy(t *testing.T) {
 		if err != nil {
 			return false
 		}
-		resp.Body.Close()
+		closeBody(t, resp)
 		return resp.StatusCode == http.StatusOK
 	}, 3*time.Second, 50*time.Millisecond, "HTTP server did not become ready")
 
 	// GET /readyz?verbose and verify the checker appears as healthy.
 	resp, err := verboseGet(ctx, fmt.Sprintf("http://%s", addr))
 	require.NoError(t, err)
-	defer resp.Body.Close()
+	defer closeBody(t, resp)
 
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
 
@@ -727,14 +725,14 @@ func TestBootstrap_WithHealthChecker_Unhealthy(t *testing.T) {
 		if err != nil {
 			return false
 		}
-		resp.Body.Close()
+		closeBody(t, resp)
 		return true
 	}, 3*time.Second, 50*time.Millisecond, "HTTP server did not become ready")
 
 	// GET /readyz?verbose and verify the checker appears as unhealthy.
 	resp, err := verboseGet(ctx, fmt.Sprintf("http://%s", addr))
 	require.NoError(t, err)
-	defer resp.Body.Close()
+	defer closeBody(t, resp)
 
 	assert.Equal(t, http.StatusServiceUnavailable, resp.StatusCode)
 
@@ -784,13 +782,13 @@ func TestBootstrap_WithAdapterInfo_AppearsInReadyz(t *testing.T) {
 		if err != nil {
 			return false
 		}
-		resp.Body.Close()
+		closeBody(t, resp)
 		return resp.StatusCode == http.StatusOK
 	}, 3*time.Second, 50*time.Millisecond, "HTTP server did not become ready")
 
 	resp, err := verboseGet(ctx, fmt.Sprintf("http://%s", addr))
 	require.NoError(t, err)
-	defer resp.Body.Close()
+	defer closeBody(t, resp)
 
 	var body map[string]any
 	require.NoError(t, json.NewDecoder(resp.Body).Decode(&body))
@@ -857,13 +855,13 @@ func TestBootstrap_HealthContributor_Discovery_AppearsInReadyz(t *testing.T) {
 		if err != nil {
 			return false
 		}
-		resp.Body.Close()
+		closeBody(t, resp)
 		return resp.StatusCode == http.StatusOK
 	}, 3*time.Second, 50*time.Millisecond, "HTTP server did not become ready")
 
 	resp, err := verboseGet(ctx, fmt.Sprintf("http://%s", addr))
 	require.NoError(t, err)
-	defer resp.Body.Close()
+	defer closeBody(t, resp)
 
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
 
@@ -1006,14 +1004,14 @@ func TestBootstrap_WithMultipleHealthCheckers_OneUnhealthy(t *testing.T) {
 		if err != nil {
 			return false
 		}
-		resp.Body.Close()
+		closeBody(t, resp)
 		return resp.StatusCode == http.StatusOK
 	}, 3*time.Second, 50*time.Millisecond, "HTTP server did not become ready")
 
 	// GET /readyz?verbose — one unhealthy checker should make the whole response 503.
 	resp, err := verboseGet(ctx, fmt.Sprintf("http://%s", addr))
 	require.NoError(t, err)
-	defer resp.Body.Close()
+	defer closeBody(t, resp)
 
 	assert.Equal(t, http.StatusServiceUnavailable, resp.StatusCode,
 		"any unhealthy dependency must cause 503")
@@ -1072,7 +1070,7 @@ func TestBootstrap_WithHealthChecker_DynamicStateTransition(t *testing.T) {
 		if err != nil {
 			return false
 		}
-		resp.Body.Close()
+		closeBody(t, resp)
 		return resp.StatusCode == http.StatusOK
 	}, 3*time.Second, 50*time.Millisecond, "HTTP server did not become ready")
 
@@ -1080,7 +1078,7 @@ func TestBootstrap_WithHealthChecker_DynamicStateTransition(t *testing.T) {
 	resp, err := testHTTPClient.Get(fmt.Sprintf("http://%s/readyz", addr))
 	require.NoError(t, err)
 	assert.Equal(t, http.StatusOK, resp.StatusCode, "should be ready when checker is healthy")
-	resp.Body.Close()
+	closeBody(t, resp)
 
 	// Phase 2: flip to unhealthy → 503.
 	unhealthy.Store(true)
@@ -1089,7 +1087,7 @@ func TestBootstrap_WithHealthChecker_DynamicStateTransition(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, http.StatusServiceUnavailable, resp.StatusCode,
 		"should be unready after health state transition")
-	resp.Body.Close()
+	closeBody(t, resp)
 
 	// Phase 3: recover → 200.
 	unhealthy.Store(false)
@@ -1097,7 +1095,7 @@ func TestBootstrap_WithHealthChecker_DynamicStateTransition(t *testing.T) {
 	resp, err = testHTTPClient.Get(fmt.Sprintf("http://%s/readyz", addr))
 	require.NoError(t, err)
 	assert.Equal(t, http.StatusOK, resp.StatusCode, "should recover after health state restores")
-	resp.Body.Close()
+	closeBody(t, resp)
 
 	cancel()
 	select {
@@ -1138,7 +1136,7 @@ func TestBootstrap_ConfigWatcher_ReadyzVerboseIncludesWatcher(t *testing.T) {
 		if err != nil {
 			return false
 		}
-		resp.Body.Close()
+		closeBody(t, resp)
 		return resp.StatusCode == http.StatusOK
 	}, 3*time.Second, 50*time.Millisecond, "HTTP server did not become ready")
 
@@ -1147,7 +1145,7 @@ func TestBootstrap_ConfigWatcher_ReadyzVerboseIncludesWatcher(t *testing.T) {
 		if err != nil {
 			return false
 		}
-		defer resp.Body.Close()
+		defer closeBody(t, resp)
 		if resp.StatusCode != http.StatusOK {
 			return false
 		}
@@ -1205,7 +1203,7 @@ func TestBootstrap_ConfigDriftReadyz_NoDrift(t *testing.T) {
 		if err != nil {
 			return false
 		}
-		defer resp.Body.Close()
+		defer closeBody(t, resp)
 		if resp.StatusCode != http.StatusOK {
 			return false
 		}
@@ -1338,7 +1336,7 @@ func TestBootstrap_ConfigDriftReadyz_HTTP503OnDrift(t *testing.T) {
 		if err != nil {
 			return false
 		}
-		resp.Body.Close()
+		closeBody(t, resp)
 		return resp.StatusCode == http.StatusOK
 	}, 3*time.Second, 50*time.Millisecond, "server did not become ready")
 
@@ -1352,7 +1350,7 @@ func TestBootstrap_ConfigDriftReadyz_HTTP503OnDrift(t *testing.T) {
 		if err != nil {
 			return false
 		}
-		defer resp.Body.Close()
+		defer closeBody(t, resp)
 		if resp.StatusCode != http.StatusServiceUnavailable {
 			return false
 		}
@@ -1457,13 +1455,13 @@ func TestBootstrap_EventRouter_ReadyzVerboseIncludesEventRouter(t *testing.T) {
 		if err != nil {
 			return false
 		}
-		resp.Body.Close()
+		closeBody(t, resp)
 		return resp.StatusCode == http.StatusOK
 	}, 3*time.Second, 50*time.Millisecond, "HTTP server did not become ready")
 
 	resp, err := verboseGet(ctx, fmt.Sprintf("http://%s", addr))
 	require.NoError(t, err)
-	defer resp.Body.Close()
+	defer closeBody(t, resp)
 
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
 
@@ -1668,7 +1666,7 @@ func TestBootstrap_ShutdownDrainsInflightReload(t *testing.T) {
 		if e != nil {
 			return false
 		}
-		resp.Body.Close()
+		closeBody(t, resp)
 		return resp.StatusCode == http.StatusOK
 	}, 3*time.Second, 50*time.Millisecond)
 
@@ -1727,7 +1725,7 @@ func TestBootstrap_ConfigReload_NotifiesCells(t *testing.T) {
 		if e != nil {
 			return false
 		}
-		resp.Body.Close()
+		closeBody(t, resp)
 		return resp.StatusCode == http.StatusOK
 	}, 3*time.Second, 50*time.Millisecond)
 
@@ -1786,7 +1784,7 @@ func TestBootstrap_ConfigReload_ErrorDoesNotCrash(t *testing.T) {
 		if e != nil {
 			return false
 		}
-		resp.Body.Close()
+		closeBody(t, resp)
 		return resp.StatusCode == http.StatusOK
 	}, 3*time.Second, 50*time.Millisecond)
 
@@ -1840,7 +1838,7 @@ func TestBootstrap_ConfigReload_PanicDoesNotCrash(t *testing.T) {
 		if e != nil {
 			return false
 		}
-		resp.Body.Close()
+		closeBody(t, resp)
 		return resp.StatusCode == http.StatusOK
 	}, 3*time.Second, 50*time.Millisecond)
 
@@ -1898,7 +1896,7 @@ func TestBootstrap_ConfigReload_FIFO(t *testing.T) {
 		if e != nil {
 			return false
 		}
-		resp.Body.Close()
+		closeBody(t, resp)
 		return resp.StatusCode == http.StatusOK
 	}, 3*time.Second, 50*time.Millisecond)
 
@@ -1955,7 +1953,7 @@ func TestBootstrap_ConfigReload_NonReloaderSkipped(t *testing.T) {
 		if e != nil {
 			return false
 		}
-		resp.Body.Close()
+		closeBody(t, resp)
 		return resp.StatusCode == http.StatusOK
 	}, 3*time.Second, 50*time.Millisecond)
 
@@ -2011,7 +2009,7 @@ func TestBootstrap_ConfigReload_NoChangeNoCallback(t *testing.T) {
 		if e != nil {
 			return false
 		}
-		resp.Body.Close()
+		closeBody(t, resp)
 		return resp.StatusCode == http.StatusOK
 	}, 3*time.Second, 50*time.Millisecond)
 
@@ -2107,7 +2105,7 @@ func TestBootstrap_ConfigReload_EventIsolation(t *testing.T) {
 		if e != nil {
 			return false
 		}
-		resp.Body.Close()
+		closeBody(t, resp)
 		return resp.StatusCode == http.StatusOK
 	}, 3*time.Second, 50*time.Millisecond)
 
@@ -2168,7 +2166,7 @@ func TestBootstrap_ShutdownNoPostStopReload(t *testing.T) {
 		if e != nil {
 			return false
 		}
-		resp.Body.Close()
+		closeBody(t, resp)
 		return resp.StatusCode == http.StatusOK
 	}, 3*time.Second, 50*time.Millisecond)
 
@@ -2230,7 +2228,7 @@ func TestBootstrap_ShutdownRejectsReloadDuringDrain(t *testing.T) {
 		if e != nil {
 			return false
 		}
-		resp.Body.Close()
+		closeBody(t, resp)
 		return resp.StatusCode == http.StatusOK
 	}, 3*time.Second, 50*time.Millisecond)
 
@@ -2293,7 +2291,7 @@ func TestBootstrap_ConfigReload_GenerationTracking(t *testing.T) {
 		if e != nil {
 			return false
 		}
-		resp.Body.Close()
+		closeBody(t, resp)
 		return resp.StatusCode == http.StatusOK
 	}, 3*time.Second, 50*time.Millisecond)
 
@@ -2381,14 +2379,22 @@ func (c *httpCell) RouteGroups() []cell.RouteGroup {
 		Listener: cell.PrimaryListener,
 		Prefix:   "",
 		Register: func(mux cell.RouteMux) error {
-			auth.MustMount(mux, auth.Route{Contract: testHTTPContract(http.MethodGet, "/api/v1/data"), Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-				w.WriteHeader(http.StatusOK)
-				_, _ = w.Write([]byte(`{"data":"ok"}`))
-			}), Policy: authtest.RequireAuthenticated()})
-			auth.MustMount(mux, auth.Route{Contract: testHTTPContract(http.MethodPost, "/api/v1/access/sessions/login"), Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-				w.WriteHeader(http.StatusOK)
-				_, _ = w.Write([]byte(`{"data":{"token":"test"}}`))
-			}), Public: true})
+			auth.MustMount(mux, auth.Route{
+				Contract: testHTTPContract(http.MethodGet, "/api/v1/data"),
+				Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+					w.WriteHeader(http.StatusOK)
+					_, _ = w.Write([]byte(`{"data":"ok"}`))
+				}),
+				Policy: authtest.RequireAuthenticated(),
+			})
+			auth.MustMount(mux, auth.Route{
+				Contract: testHTTPContract(http.MethodPost, "/api/v1/access/sessions/login"),
+				Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+					w.WriteHeader(http.StatusOK)
+					_, _ = w.Write([]byte(`{"data":{"token":"test"}}`))
+				}),
+				Public: true,
+			})
 			return nil
 		},
 	}}
@@ -2440,14 +2446,14 @@ func TestBootstrap_WithAuthMiddleware_ProtectedRoute_Returns401(t *testing.T) {
 		if err != nil {
 			return false
 		}
-		resp.Body.Close()
+		closeBody(t, resp)
 		return resp.StatusCode == http.StatusOK
 	}, 3*time.Second, 50*time.Millisecond, "HTTP server did not become ready")
 
 	// Protected route without token → 401.
 	resp, err := testHTTPClient.Get(fmt.Sprintf("http://%s/api/v1/data", addr))
 	require.NoError(t, err)
-	defer resp.Body.Close()
+	defer closeBody(t, resp)
 
 	assert.Equal(t, http.StatusUnauthorized, resp.StatusCode,
 		"business route without auth token must return 401")
@@ -2483,14 +2489,22 @@ func (c *publicHTTPCell) RouteGroups() []cell.RouteGroup {
 		Listener: cell.PrimaryListener,
 		Prefix:   "",
 		Register: func(mux cell.RouteMux) error {
-			auth.MustMount(mux, auth.Route{Contract: testHTTPContract(http.MethodGet, "/api/v1/data"), Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-				w.WriteHeader(http.StatusOK)
-				_, _ = w.Write([]byte(`{"data":"ok"}`))
-			}), Public: true})
-			auth.MustMount(mux, auth.Route{Contract: testHTTPContract(http.MethodPost, "/api/v1/access/sessions/login"), Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-				w.WriteHeader(http.StatusOK)
-				_, _ = w.Write([]byte(`{"data":{"token":"test"}}`))
-			}), Public: true})
+			auth.MustMount(mux, auth.Route{
+				Contract: testHTTPContract(http.MethodGet, "/api/v1/data"),
+				Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+					w.WriteHeader(http.StatusOK)
+					_, _ = w.Write([]byte(`{"data":"ok"}`))
+				}),
+				Public: true,
+			})
+			auth.MustMount(mux, auth.Route{
+				Contract: testHTTPContract(http.MethodPost, "/api/v1/access/sessions/login"),
+				Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+					w.WriteHeader(http.StatusOK)
+					_, _ = w.Write([]byte(`{"data":{"token":"test"}}`))
+				}),
+				Public: true,
+			})
 			return nil
 		},
 	}}
@@ -2526,7 +2540,7 @@ func TestBootstrap_WithAuthMiddleware_PublicRoute_Passes(t *testing.T) {
 		if err != nil {
 			return false
 		}
-		resp.Body.Close()
+		closeBody(t, resp)
 		return resp.StatusCode == http.StatusOK
 	}, 3*time.Second, 50*time.Millisecond, "HTTP server did not become ready")
 
@@ -2536,7 +2550,7 @@ func TestBootstrap_WithAuthMiddleware_PublicRoute_Passes(t *testing.T) {
 		"application/json", nil,
 	)
 	require.NoError(t, err)
-	defer resp.Body.Close()
+	defer closeBody(t, resp)
 
 	assert.Equal(t, http.StatusOK, resp.StatusCode,
 		"public login endpoint must be accessible without auth token")
@@ -2583,7 +2597,7 @@ func TestBootstrap_UserRouterOpts_CannotOverrideFrameworkHealth(t *testing.T) {
 	// The framework-managed handler (backed by started asm) responds with 200.
 	resp, err := testHTTPClient.Get(fmt.Sprintf("http://%s/readyz", addr))
 	require.NoError(t, err)
-	defer resp.Body.Close()
+	defer closeBody(t, resp)
 	assert.Equal(t, http.StatusOK, resp.StatusCode,
 		"framework health handler must return 200 for a started assembly")
 
@@ -2621,10 +2635,10 @@ func TestGracefulShutdown_ReadyzUnhealthyBeforeHTTPStop(t *testing.T) {
 			break // server already closed, that's fine
 		}
 		if resp.StatusCode == http.StatusServiceUnavailable {
-			resp.Body.Close()
+			closeBody(t, resp)
 			break // got 503 — drain signal works
 		}
-		resp.Body.Close()
+		closeBody(t, resp)
 		select {
 		case <-deadline:
 			t.Fatal("timed out waiting for /readyz to return 503 during shutdown")
@@ -2706,7 +2720,7 @@ func TestBootstrap_TracingE2E_BusinessRoute(t *testing.T) {
 
 	resp, err := testHTTPClient.Get("http://" + addr + "/api/v1/trace-test")
 	require.NoError(t, err)
-	resp.Body.Close()
+	closeBody(t, resp)
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
 	assert.NotEmpty(t, gotTraceID, "trace_id must be set in handler context via bootstrap tracing")
 
@@ -2755,7 +2769,7 @@ func TestBootstrap_TracingE2E_UpstreamPropagation(t *testing.T) {
 
 	resp, err := testHTTPClient.Do(req)
 	require.NoError(t, err)
-	resp.Body.Close()
+	closeBody(t, resp)
 	assert.Equal(t, upstreamTraceID, gotTraceID,
 		"bootstrap must propagate upstream trace_id from traceparent header")
 
@@ -2794,7 +2808,7 @@ func TestBootstrap_TracingE2E_PanicRoute(t *testing.T) {
 
 	resp, err := testHTTPClient.Get("http://" + addr + "/api/v1/boom")
 	require.NoError(t, err)
-	resp.Body.Close()
+	closeBody(t, resp)
 	assert.Equal(t, http.StatusInternalServerError, resp.StatusCode,
 		"panicking handler must return 500 even with tracing enabled")
 
@@ -2832,7 +2846,7 @@ func TestBootstrap_TracingE2E_InfraEndpoints(t *testing.T) {
 
 	resp, err := testHTTPClient.Get("http://" + addr + "/healthz")
 	require.NoError(t, err)
-	resp.Body.Close()
+	closeBody(t, resp)
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
 
 	// Shut down so all access logs are flushed.
@@ -2869,16 +2883,24 @@ func (c *authProviderCell) RouteGroups() []cell.RouteGroup {
 		Listener: cell.PrimaryListener,
 		Prefix:   "",
 		Register: func(mux cell.RouteMux) error {
-			auth.MustMount(mux, auth.Route{Contract: testHTTPContract(http.MethodGet, "/api/v1/data"), Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-				w.WriteHeader(http.StatusOK)
-				_, _ = w.Write([]byte(`{"data":"ok"}`))
-			}), Policy: authtest.RequireAuthenticated()})
+			auth.MustMount(mux, auth.Route{
+				Contract: testHTTPContract(http.MethodGet, "/api/v1/data"),
+				Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+					w.WriteHeader(http.StatusOK)
+					_, _ = w.Write([]byte(`{"data":"ok"}`))
+				}),
+				Policy: authtest.RequireAuthenticated(),
+			})
 			// F3: login is declared as a public route so auth discovery tests can verify
 			// that no-token requests bypass JWT checks on this endpoint.
-			auth.MustMount(mux, auth.Route{Contract: testHTTPContract(http.MethodPost, "/api/v1/access/sessions/login"), Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-				w.WriteHeader(http.StatusOK)
-				_, _ = w.Write([]byte(`{"data":"login-ok"}`))
-			}), Public: true})
+			auth.MustMount(mux, auth.Route{
+				Contract: testHTTPContract(http.MethodPost, "/api/v1/access/sessions/login"),
+				Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+					w.WriteHeader(http.StatusOK)
+					_, _ = w.Write([]byte(`{"data":"login-ok"}`))
+				}),
+				Public: true,
+			})
 			return nil
 		},
 	}}
@@ -2912,7 +2934,7 @@ func TestBootstrap_AuthDiscovery_ProtectedRoute_Returns401(t *testing.T) {
 	// Protected route without token -> 401.
 	resp, err := testHTTPClient.Get(fmt.Sprintf("http://%s/api/v1/data", addr))
 	require.NoError(t, err)
-	defer resp.Body.Close()
+	defer closeBody(t, resp)
 
 	assert.Equal(t, http.StatusUnauthorized, resp.StatusCode,
 		"discovered auth verifier must protect business routes")
@@ -2963,7 +2985,7 @@ func TestBootstrap_AuthDiscovery_PublicRoute_Passes(t *testing.T) {
 		"application/json", nil,
 	)
 	require.NoError(t, err)
-	defer resp.Body.Close()
+	defer closeBody(t, resp)
 
 	assert.Equal(t, http.StatusOK, resp.StatusCode,
 		"public endpoint must be accessible without auth token via discovered verifier")
@@ -2976,7 +2998,7 @@ func TestBootstrap_AuthDiscovery_PublicRoute_Passes(t *testing.T) {
 	require.NoError(t, err)
 	getResp, err := testHTTPClient.Do(getReq)
 	require.NoError(t, err)
-	defer getResp.Body.Close()
+	defer closeBody(t, getResp)
 	assert.Equal(t, http.StatusUnauthorized, getResp.StatusCode,
 		"GET must not bypass auth when only POST is declared public (method-specific bypass)")
 
@@ -3026,7 +3048,7 @@ func TestBootstrap_WithAuthMiddleware_Precedence(t *testing.T) {
 
 	resp, err := testHTTPClient.Do(req)
 	require.NoError(t, err)
-	defer resp.Body.Close()
+	defer closeBody(t, resp)
 
 	assert.Equal(t, http.StatusOK, resp.StatusCode,
 		"explicit verifier should authenticate successfully")
@@ -3140,7 +3162,7 @@ func TestBootstrap_TrustBoundary_PublicEndpoint_IgnoresClientIDs(t *testing.T) {
 
 		resp, respErr := testHTTPClient.Do(req)
 		require.NoError(t, respErr)
-		defer resp.Body.Close()
+		defer closeBody(t, resp)
 
 		assert.Equal(t, http.StatusOK, resp.StatusCode)
 		actualID := resp.Header.Get("X-Request-Id")
@@ -3159,7 +3181,7 @@ func TestBootstrap_TrustBoundary_PublicEndpoint_IgnoresClientIDs(t *testing.T) {
 
 		resp, respErr := testHTTPClient.Do(req)
 		require.NoError(t, respErr)
-		defer resp.Body.Close()
+		defer closeBody(t, resp)
 
 		assert.Equal(t, http.StatusOK, resp.StatusCode)
 		assert.Equal(t, "trusted-upstream-id", resp.Header.Get("X-Request-Id"),
@@ -3203,7 +3225,7 @@ func TestBootstrap_WithSecurityHeadersOptions_CustomHSTS(t *testing.T) {
 
 	resp, reqErr := testHTTPClient.Get("http://" + addr + "/healthz")
 	require.NoError(t, reqErr)
-	_ = resp.Body.Close()
+	closeBody(t, resp)
 
 	hsts := resp.Header.Get("Strict-Transport-Security")
 	assert.Contains(t, hsts, "includeSubDomains",
@@ -3433,16 +3455,24 @@ func (c *traceCapturingCell) RouteGroups() []cell.RouteGroup {
 		Register: func(mux cell.RouteMux) error {
 			// F3: public/ping is declared public so it creates new trace roots and
 			// rejects client-supplied request IDs.
-			auth.MustMount(mux, auth.Route{Contract: testHTTPContract(http.MethodGet, "/api/v1/public/ping"), Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				tid, _ := ctxkeys.TraceIDFrom(r.Context())
-				c.gotPublic <- tid
-				w.WriteHeader(http.StatusOK)
-			}), Public: true})
-			auth.MustMount(mux, auth.Route{Contract: testHTTPContract(http.MethodGet, "/api/v1/protected/ping"), Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				tid, _ := ctxkeys.TraceIDFrom(r.Context())
-				c.gotProtected <- tid
-				w.WriteHeader(http.StatusOK)
-			}), Policy: authtest.RequireAuthenticated()})
+			auth.MustMount(mux, auth.Route{
+				Contract: testHTTPContract(http.MethodGet, "/api/v1/public/ping"),
+				Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					tid, _ := ctxkeys.TraceIDFrom(r.Context())
+					c.gotPublic <- tid
+					w.WriteHeader(http.StatusOK)
+				}),
+				Public: true,
+			})
+			auth.MustMount(mux, auth.Route{
+				Contract: testHTTPContract(http.MethodGet, "/api/v1/protected/ping"),
+				Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					tid, _ := ctxkeys.TraceIDFrom(r.Context())
+					c.gotProtected <- tid
+					w.WriteHeader(http.StatusOK)
+				}),
+				Policy: authtest.RequireAuthenticated(),
+			})
 			return nil
 		},
 	}}
@@ -3492,7 +3522,7 @@ func TestBootstrap_TrustBoundary_PublicEndpoint_TraceparentIgnored(t *testing.T)
 
 		resp, err := testHTTPClient.Do(req)
 		require.NoError(t, err)
-		resp.Body.Close()
+		closeBody(t, resp)
 		assert.Equal(t, http.StatusOK, resp.StatusCode)
 
 		var gotTraceID string
@@ -3515,7 +3545,7 @@ func TestBootstrap_TrustBoundary_PublicEndpoint_TraceparentIgnored(t *testing.T)
 
 		resp, err := testHTTPClient.Do(req)
 		require.NoError(t, err)
-		resp.Body.Close()
+		closeBody(t, resp)
 		assert.Equal(t, http.StatusOK, resp.StatusCode)
 
 		var gotTraceID string
@@ -3582,7 +3612,11 @@ func (c *publicPingAuthCell) RouteGroups() []cell.RouteGroup {
 		Prefix:   "",
 		Register: func(mux cell.RouteMux) error {
 			// F3: GET /api/v1/public/ping is declared public; HEAD alias is automatic.
-			auth.MustMount(mux, auth.Route{Contract: testHTTPContract(http.MethodGet, "/api/v1/public/ping"), Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) }), Public: true})
+			auth.MustMount(mux, auth.Route{
+				Contract: testHTTPContract(http.MethodGet, "/api/v1/public/ping"),
+				Handler:  http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) }),
+				Public:   true,
+			})
 			return nil
 		},
 	}}
@@ -3622,7 +3656,7 @@ func TestBootstrap_HEADAlias_BypassesAuth(t *testing.T) {
 	require.NoError(t, err)
 	headResp, err := testHTTPClient.Do(headReq)
 	require.NoError(t, err)
-	defer headResp.Body.Close()
+	defer closeBody(t, headResp)
 
 	// HEAD to a public GET endpoint should not return 401 (verifier not called).
 	assert.NotEqual(t, http.StatusUnauthorized, headResp.StatusCode,
@@ -3816,9 +3850,13 @@ func (c *protectedAuthCell) RouteGroups() []cell.RouteGroup {
 		Listener: cell.PrimaryListener,
 		Prefix:   "",
 		Register: func(mux cell.RouteMux) error {
-			auth.MustMount(mux, auth.Route{Contract: testHTTPContract("GET", "/api/v1/protected"), Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-				w.WriteHeader(http.StatusOK)
-			}), Policy: authtest.RequireAuthenticated()})
+			auth.MustMount(mux, auth.Route{
+				Contract: testHTTPContract("GET", "/api/v1/protected"),
+				Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+					w.WriteHeader(http.StatusOK)
+				}),
+				Policy: authtest.RequireAuthenticated(),
+			})
 			return nil
 		},
 	}}

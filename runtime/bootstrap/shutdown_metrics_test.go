@@ -167,7 +167,7 @@ func runWithCancelAndListener(t *testing.T, b *Bootstrap, ln net.Listener) error
 		if err != nil {
 			return false
 		}
-		resp.Body.Close()
+		closeBody(t, resp)
 		return resp.StatusCode == 200
 	}, 3*time.Second, 20*time.Millisecond, "HTTP server did not become healthy")
 
@@ -354,7 +354,7 @@ func TestShutdownMetrics_TimeoutOutcome_Timeout(t *testing.T) {
 		if err != nil {
 			return false
 		}
-		resp.Body.Close()
+		closeBody(t, resp)
 		return resp.StatusCode == 200
 	}, 3*time.Second, 20*time.Millisecond, "HTTP server did not become healthy")
 

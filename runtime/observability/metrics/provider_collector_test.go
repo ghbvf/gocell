@@ -128,5 +128,5 @@ func (h spyHistogram) Observe(v float64) {
 	h.parent.histogramOps[h.name] = append(h.parent.histogramOps[h.name], spyOp{labels: h.labels, value: v})
 }
 
-// silence unused import if toolchain introduces new helpers during refactors
+// silence unused import if toolchain introduces new helpers during refactors.
 var _ = errors.New

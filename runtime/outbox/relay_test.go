@@ -692,7 +692,9 @@ func (s *failingStore) ClaimPending(ctx context.Context, batchSize int) ([]outbo
 	return s.FakeStore.ClaimPending(ctx, batchSize)
 }
 
-func (s *failingStore) ReclaimStale(ctx context.Context, claimTTL time.Duration, maxAttempts int, base, maxDelay time.Duration) (int, error) {
+func (s *failingStore) ReclaimStale(
+	ctx context.Context, claimTTL time.Duration, maxAttempts int, base, maxDelay time.Duration,
+) (int, error) {
 	s.mu.Lock()
 	err := s.reclaimErr
 	s.mu.Unlock()
@@ -913,7 +915,8 @@ func TestRelay_CanRestartAfterTrip_ResetsBudget(t *testing.T) {
 	// healthy because Reset() cleared the stale trip from the first run.
 	checkers := relay.Checkers()
 	require.Contains(t, checkers, "outbox-relay-poll", "poll checker must be registered on second run")
-	assert.Nil(t, checkers["outbox-relay-poll"](context.Background()), "poll checker must be healthy immediately after restart (Reset cleared stale trip)")
+	assert.Nil(t, checkers["outbox-relay-poll"](context.Background()),
+		"poll checker must be healthy immediately after restart (Reset cleared stale trip)")
 }
 
 func TestRelay_Ready_ReturnsReadyChannel(t *testing.T) {

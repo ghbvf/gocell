@@ -49,7 +49,11 @@ func (c *dualListenerCell) RouteGroups() []cell.RouteGroup {
 			Listener: cell.PrimaryListener,
 			Prefix:   "",
 			Register: func(mux cell.RouteMux) error {
-				auth.MustMount(mux, auth.Route{Contract: testHTTPContract(http.MethodGet, "/api/v1/test/ping"), Handler: http.HandlerFunc(c.onPublic), Public: true})
+				auth.MustMount(mux, auth.Route{
+					Contract: testHTTPContract(http.MethodGet, "/api/v1/test/ping"),
+					Handler:  http.HandlerFunc(c.onPublic),
+					Public:   true,
+				})
 				return nil
 			},
 		},
@@ -57,7 +61,10 @@ func (c *dualListenerCell) RouteGroups() []cell.RouteGroup {
 			Listener: cell.InternalListener,
 			Prefix:   "",
 			Register: func(mux cell.RouteMux) error {
-				auth.MustMount(mux, auth.Route{Contract: testHTTPContract(http.MethodGet, "/internal/v1/admin/ping"), Handler: http.HandlerFunc(c.onInternal)})
+				auth.MustMount(mux, auth.Route{
+					Contract: testHTTPContract(http.MethodGet, "/internal/v1/admin/ping"),
+					Handler:  http.HandlerFunc(c.onInternal),
+				})
 				return nil
 			},
 		},
@@ -128,14 +135,14 @@ func TestDualListener_PrimaryReturns404ForInternalPrefix(t *testing.T) {
 		if err != nil {
 			return false
 		}
-		resp.Body.Close()
+		closeBody(t, resp)
 		return resp.StatusCode == http.StatusOK
 	}, 3*time.Second, 50*time.Millisecond, "primary listener did not become ready")
 
 	t.Run("primary_404s_internal_prefix", func(t *testing.T) {
 		resp, err := testHTTPClient.Get(fmt.Sprintf("http://%s/internal/v1/admin/ping", primaryAddr))
 		require.NoError(t, err)
-		defer resp.Body.Close()
+		defer closeBody(t, resp)
 		assert.Equal(t, http.StatusNotFound, resp.StatusCode,
 			"primary listener must 404 on /internal/v1/* — port isolation contract")
 		assert.Equal(t, int64(0), internalHits.Load(),
@@ -145,7 +152,7 @@ func TestDualListener_PrimaryReturns404ForInternalPrefix(t *testing.T) {
 	t.Run("internal_404s_public_prefix", func(t *testing.T) {
 		// internal:port + /api/v1/* → 404
 		resp := getWithServiceToken(t, fmt.Sprintf("http://%s/api/v1/test/ping", internalAddr), internalRing)
-		defer resp.Body.Close()
+		defer closeBody(t, resp)
 		assert.Equal(t, http.StatusNotFound, resp.StatusCode,
 			"internal listener must 404 on /api/v1/*")
 		assert.Equal(t, int64(0), publicHits.Load(),
@@ -155,7 +162,7 @@ func TestDualListener_PrimaryReturns404ForInternalPrefix(t *testing.T) {
 	t.Run("internal_404s_infra_endpoints", func(t *testing.T) {
 		for _, p := range []string{"/healthz", "/readyz", "/metrics", "/"} {
 			resp := getWithServiceToken(t, fmt.Sprintf("http://%s%s", internalAddr, p), internalRing)
-			resp.Body.Close()
+			closeBody(t, resp)
 			assert.Equal(t, http.StatusNotFound, resp.StatusCode,
 				"internal listener must 404 on infra path %q", p)
 		}
@@ -164,14 +171,14 @@ func TestDualListener_PrimaryReturns404ForInternalPrefix(t *testing.T) {
 	t.Run("primary_routes_public_business", func(t *testing.T) {
 		resp, err := testHTTPClient.Get(fmt.Sprintf("http://%s/api/v1/test/ping", primaryAddr))
 		require.NoError(t, err)
-		defer resp.Body.Close()
+		defer closeBody(t, resp)
 		assert.Equal(t, http.StatusOK, resp.StatusCode)
 		assert.Equal(t, int64(1), publicHits.Load())
 	})
 
 	t.Run("internal_routes_internal_business", func(t *testing.T) {
 		resp := getWithServiceToken(t, fmt.Sprintf("http://%s/internal/v1/admin/ping", internalAddr), internalRing)
-		defer resp.Body.Close()
+		defer closeBody(t, resp)
 		assert.Equal(t, http.StatusOK, resp.StatusCode)
 		assert.Equal(t, int64(1), internalHits.Load())
 	})
@@ -229,7 +236,7 @@ func TestDualListener_InternalRoutesAccessibleWithoutJWT(t *testing.T) {
 		if err != nil {
 			return false
 		}
-		resp.Body.Close()
+		closeBody(t, resp)
 		return resp.StatusCode == http.StatusOK
 	}, 3*time.Second, 50*time.Millisecond, "primary listener did not become ready")
 
@@ -237,7 +244,7 @@ func TestDualListener_InternalRoutesAccessibleWithoutJWT(t *testing.T) {
 	// bearer. The internal listener must not install the public JWT verifier.
 	t.Run("internal_accessible_with_service_token_without_jwt", func(t *testing.T) {
 		resp := getWithServiceToken(t, fmt.Sprintf("http://%s/internal/v1/admin/ping", internalAddr), internalRing)
-		defer resp.Body.Close()
+		defer closeBody(t, resp)
 		assert.Equal(t, http.StatusOK, resp.StatusCode,
 			"internal listener must NOT require JWT; ServiceToken is the internal transport guard")
 		assert.Equal(t, int64(1), internalHits.Load())
@@ -247,7 +254,7 @@ func TestDualListener_InternalRoutesAccessibleWithoutJWT(t *testing.T) {
 	t.Run("public_reachable_on_primary", func(t *testing.T) {
 		resp, err := testHTTPClient.Get(fmt.Sprintf("http://%s/api/v1/test/ping", primaryAddr))
 		require.NoError(t, err)
-		defer resp.Body.Close()
+		defer closeBody(t, resp)
 		assert.Equal(t, http.StatusOK, resp.StatusCode)
 	})
 
@@ -347,13 +354,13 @@ func TestDualListener_InternalBindFailure_ClosesOwnedPrimary(t *testing.T) {
 	go func() {
 		conn, _ := callerLn.Accept()
 		if conn != nil {
-			conn.Close()
+			closeConn(t, conn)
 		}
 		close(done)
 	}()
 	dialConn, dialErr := net.Dial("tcp", callerLn.Addr().String())
 	if dialConn != nil {
-		dialConn.Close()
+		closeConn(t, dialConn)
 	}
 	assert.NoError(t, dialErr, "caller-owned primary listener must still accept connections")
 	<-done
@@ -392,7 +399,7 @@ func TestDualListener_ShutdownClosesBothServersNoGoroutineLeak(t *testing.T) {
 		if err != nil {
 			return false
 		}
-		resp.Body.Close()
+		closeBody(t, resp)
 		return resp.StatusCode == http.StatusOK
 	}, 3*time.Second, 50*time.Millisecond, "primary listener did not become ready")
 
@@ -458,7 +465,7 @@ func TestTripleListener_ShutdownNoGoroutineLeak(t *testing.T) {
 		if err != nil {
 			return false
 		}
-		resp.Body.Close()
+		closeBody(t, resp)
 		return resp.StatusCode == http.StatusOK
 	}, 3*time.Second, 50*time.Millisecond, "health listener did not become ready")
 
@@ -502,7 +509,7 @@ func TestTripleListener_MidBindFailure_RollsBackEarlierBindings(t *testing.T) {
 	if err != nil {
 		t.Skip("cannot bind test listener (sandbox):", err)
 	}
-	defer collideLn.Close()
+	defer closeListener(t, collideLn)
 	collidingAddr := collideLn.Addr().String()
 	// collideLn stays open so bootstrap's primary bind collides with EADDRINUSE.
 
@@ -611,8 +618,16 @@ func (c *duplicateMetaCell) RouteGroups() []cell.RouteGroup {
 			Listener: cell.PrimaryListener,
 			Prefix:   "",
 			Register: func(mux cell.RouteMux) error {
-				auth.MustMount(mux, auth.Route{Contract: spec, Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) }), Public: true})
-				auth.MustMount(mux, auth.Route{Contract: spec, Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) }), Public: true})
+				auth.MustMount(mux, auth.Route{
+					Contract: spec,
+					Handler:  http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) }),
+					Public:   true,
+				})
+				auth.MustMount(mux, auth.Route{
+					Contract: spec,
+					Handler:  http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) }),
+					Public:   true,
+				})
 				return nil
 			},
 		},
@@ -835,7 +850,7 @@ func TestPhase7ServeAll_DualListener_NoCloseRace(t *testing.T) {
 		if err != nil {
 			return false
 		}
-		resp.Body.Close()
+		closeBody(t, resp)
 		return resp.StatusCode == http.StatusOK
 	}, 3*time.Second, 50*time.Millisecond, "primary listener did not become ready")
 
@@ -880,7 +895,8 @@ func TestPhase7BindListeners_OwnedSocket_ClosedOnSiblingFailure(t *testing.T) {
 
 	b := New(
 		WithAssembly(asm),
-		WithListener(cell.PrimaryListener, "127.0.0.1:0", []cell.ListenerAuth{cell.AuthNone{}}),  // bootstrap-owned; should succeed then be released
+		// bootstrap-owned; should succeed then be released
+		WithListener(cell.PrimaryListener, "127.0.0.1:0", []cell.ListenerAuth{cell.AuthNone{}}),
 		WithListener(cell.InternalListener, collidingAddr, []cell.ListenerAuth{cell.AuthNone{}}), // collides
 		WithShutdownTimeout(time.Second),
 	)
@@ -961,13 +977,13 @@ func TestRouteGroup_Middleware_OrderPreserved(t *testing.T) {
 		if err != nil {
 			return false
 		}
-		resp.Body.Close()
+		closeBody(t, resp)
 		return resp.StatusCode == http.StatusOK
 	}, 3*time.Second, 50*time.Millisecond, "primary listener did not become ready")
 
 	resp, err := testHTTPClient.Get(fmt.Sprintf("http://%s/api/v1/mwtest/ping", primaryAddr))
 	require.NoError(t, err)
-	resp.Body.Close()
+	closeBody(t, resp)
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
 	assert.Equal(t, []string{"mw1", "mw2"}, order,
 		"middleware must execute in declaration order (first registered = outermost)")
@@ -1019,13 +1035,13 @@ func TestAuthWiring_InternalGuard_WaitsForInternalListenerReady(t *testing.T) {
 		if err != nil {
 			return false
 		}
-		resp.Body.Close()
+		closeBody(t, resp)
 		return resp.StatusCode == http.StatusOK
 	}, 3*time.Second, 50*time.Millisecond, "primary listener did not become ready")
 
 	// Internal listener must also be reachable by the time primary is healthy.
 	resp := getWithServiceToken(t, fmt.Sprintf("http://%s/internal/v1/admin/ping", internalAddr), internalRing)
-	resp.Body.Close()
+	closeBody(t, resp)
 	assert.Equal(t, http.StatusOK, resp.StatusCode,
 		"internal listener must be reachable after primary becomes healthy")
 
@@ -1074,7 +1090,7 @@ func TestShutdown_NumGoroutineBaseline_AfterServerStable(t *testing.T) {
 		if err != nil {
 			return false
 		}
-		resp.Body.Close()
+		closeBody(t, resp)
 		return resp.StatusCode == http.StatusOK
 	}, 3*time.Second, 50*time.Millisecond, "primary listener did not become ready")
 
@@ -1120,9 +1136,10 @@ func TestPhase0_NoListenersDeclared(t *testing.T) {
 // TestPhase0_DuplicateListenerRefs verifies that phase0 fails fast when the
 // same ListenerRef is declared more than once.
 func TestPhase0_DuplicateListenerRefs(t *testing.T) {
+	// Two identical WithListener calls for the same ref — phase0 must reject duplicates.
 	b := New(
 		WithListener(cell.PrimaryListener, "127.0.0.1:0", []cell.ListenerAuth{cell.AuthNone{}}),
-		WithListener(cell.PrimaryListener, "127.0.0.1:0", []cell.ListenerAuth{cell.AuthNone{}}),
+		WithListener(cell.PrimaryListener, "127.0.0.1:1", []cell.ListenerAuth{cell.AuthNone{}}),
 	)
 	err := b.phase0ValidateOptions()
 	require.Error(t, err)

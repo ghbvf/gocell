@@ -336,6 +336,7 @@ func (h *Hub) Register(ctx context.Context, conn Conn) error {
 
 	go func() {
 		defer h.wg.Done()
+		defer cancel() // ensures cancel is called when the goroutine exits
 		h.readLoop(connCtx, entry.conn)
 		h.unregisterEntry(entry)
 	}()

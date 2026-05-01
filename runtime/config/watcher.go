@@ -239,7 +239,7 @@ func (w *Watcher) Start() {
 func (w *Watcher) StartWithContext(ctx context.Context) {
 	go func() {
 		<-ctx.Done()
-		closeCtx, cancel := context.WithTimeout(context.Background(), w.cfg.drainTimeout)
+		closeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), w.cfg.drainTimeout)
 		defer cancel()
 		_ = w.Close(closeCtx)
 	}()
