@@ -136,6 +136,7 @@ linters:
           files:
             - "**/kernel/**"
             - "!**/kernel/**/*_test.go"
+            - "!**/examples/**"  # examples are unrestricted (CLAUDE.md)
           allow:
             - $gostd
             - github.com/ghbvf/gocell/kernel
@@ -149,6 +150,7 @@ linters:
           files:
             - "**/pkg/**"
             - "!**/pkg/**/*_test.go"
+            - "!**/examples/**"
           allow:
             - $gostd
             - github.com/ghbvf/gocell/pkg
@@ -162,6 +164,7 @@ linters:
           files:
             - "**/runtime/**"
             - "!**/runtime/**/*_test.go"
+            - "!**/examples/**"
           allow:
             - $gostd
             - github.com/ghbvf/gocell/kernel
@@ -187,6 +190,7 @@ linters:
             - "**/adapters/**"
             - "!**/adapters/**/*_test.go"
             - "!**/cells/**/adapters/**"
+            - "!**/examples/**"
           allow:
             - $gostd
             - github.com/ghbvf/gocell/kernel
@@ -217,6 +221,7 @@ linters:
           files:
             - "**/cells/**"
             - "!**/cells/**/*_test.go"
+            - "!**/examples/**"
           allow:
             - $gostd
             - github.com/ghbvf/gocell/kernel

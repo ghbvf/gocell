@@ -128,7 +128,7 @@ func buildLintGateCases() []lintGateCase {
 		{
 			name: "depguard_kernel_imports_tools",
 			files: map[string]string{
-				"kernel/foo.go": "package kernel\n\nimport _ \"github.com/ghbvf/gocell/tools/archtest\"\n",
+				"kernel/foo.go":          "package kernel\n\nimport _ \"github.com/ghbvf/gocell/tools/archtest\"\n",
 				"tools/archtest/stub.go": stub("archtest"),
 			},
 			expectFindings: []lintGateFinding{{linter: "depguard", file: "kernel/foo.go"}},
@@ -152,8 +152,8 @@ func buildLintGateCases() []lintGateCase {
 		{
 			name: "depguard_runtime_imports_cells",
 			files: map[string]string{
-				"runtime/r.go":    "package runtime\n\nimport _ \"github.com/ghbvf/gocell/cells\"\n",
-				"cells/stub.go":   stub("cells"),
+				"runtime/r.go":  "package runtime\n\nimport _ \"github.com/ghbvf/gocell/cells\"\n",
+				"cells/stub.go": stub("cells"),
 			},
 			expectFindings: []lintGateFinding{{linter: "depguard", file: "runtime/r.go"}},
 		},
@@ -214,20 +214,28 @@ func writeFixtureFile(t *testing.T, root, rel, content string) {
 	require.NoError(t, os.WriteFile(abs, []byte(content), 0o600))
 }
 
+// copyConfig copies the project .golangci.yml into the synthetic fixture
+// module. Both src (findModuleRoot+.golangci.yml) and dst (t.TempDir()+/...)
+// are derived from controlled test-harness paths, never user input — gosec
+// G304/G703 false positives are suppressed at the call sites.
 func copyConfig(t *testing.T, src, dst string) {
 	t.Helper()
-	data, err := os.ReadFile(src)
+	data, err := os.ReadFile(src) //nolint:gosec // R2-approved: G304 test harness, src is project config
 	require.NoError(t, err)
-	require.NoError(t, os.WriteFile(dst, data, 0o600))
+	require.NoError(t, os.WriteFile(dst, data, 0o600)) //nolint:gosec // R2-approved: G703 t.TempDir() path
 }
 
 // runGolangciLint invokes the binary in cwd=workDir, capturing the JSON
 // report. golangci-lint exits non-zero when issues are present, so we do not
 // fail-fast on exit code; we trust the JSON for assertions.
+//
+// gosec G204 (subprocess via variable) is suppressed because the binary name
+// is the constant string "golangci-lint" — only the JSON output path varies
+// (it lives under t.TempDir() set by the test framework).
 func runGolangciLint(t *testing.T, workDir string) []golangciIssue {
 	t.Helper()
 	out := filepath.Join(workDir, "lint-out.json")
-	cmd := exec.Command("golangci-lint", "run",
+	cmd := exec.Command("golangci-lint", "run", //nolint:gosec // R2-approved: G204 const binary, t.TempDir() arg
 		"--output.json.path", out,
 		"--output.text.path", "/dev/null",
 		"./...",
@@ -235,7 +243,7 @@ func runGolangciLint(t *testing.T, workDir string) []golangciIssue {
 	cmd.Dir = workDir
 	combined, _ := cmd.CombinedOutput()
 
-	data, err := os.ReadFile(out)
+	data, err := os.ReadFile(out) //nolint:gosec // R2-approved: G304 t.TempDir() output path
 	if err != nil {
 		t.Fatalf("read JSON report failed: %v\ngolangci-lint stdout/stderr:\n%s", err, combined)
 	}
