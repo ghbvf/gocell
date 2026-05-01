@@ -251,18 +251,37 @@ func (c *Contract) MustRejectHeaders(t testing.TB, jsonData []byte) {
 	mustRejectJSON(t, c.headersSchema, jsonData, "headers")
 }
 
-// compileSchemaFile reads and compiles a JSON Schema file.
-// Returns nil if filename is empty. Calls t.Fatal on errors.
+// compileSchemaFile reads and compiles a JSON Schema file referenced relative
+// to dir. Returns nil if filename is empty. Calls t.Fatal on errors.
+//
+// Path traversal allow-list (security boundary — schemaRef values come from
+// contract.yaml, which is externally editable):
+//   - filename must be a relative path (absolute paths rejected)
+//   - resolved fullPath must either:
+//     (a) stay within dir (typical: same-directory schema files), OR
+//     (b) resolve under <contractsRoot>/shared/... where contractsRoot is the
+//     nearest ancestor of dir whose basename is "contracts" (canonical
+//     pattern: /<X>/contracts/<kind>/<domain>/<v>/ refs ../shared/ for
+//     cross-contract shared schemas like the error response shape)
+//
+// All other escapes (../../../../etc, /etc/passwd, paths outside any
+// contracts/ tree, etc.) fail closed at t.Fatal.
 func compileSchemaFile(t testing.TB, dir, filename string) *jsonschema.Schema {
 	t.Helper()
 	if filename == "" {
 		return nil
 	}
-
-	fullPath := filepath.Join(dir, filename)
-	if !strings.HasPrefix(filepath.Clean(fullPath), filepath.Clean(dir)) {
-		t.Fatalf("contracttest: schema path %q escapes contract directory", filename)
+	if filepath.IsAbs(filename) {
+		t.Fatalf("contracttest: schema path %q must be relative; absolute paths rejected", filename)
 	}
+
+	cleanDir := filepath.Clean(dir)
+	fullPath := filepath.Clean(filepath.Join(cleanDir, filename))
+
+	if !pathWithinAllowList(t, cleanDir, fullPath) {
+		t.Fatalf("contracttest: schema path %q escapes allow-list (must stay in dir or under contracts/shared/)", filename)
+	}
+
 	data, err := fixtureload.LoadFixture(fullPath)
 	if err != nil {
 		t.Fatalf("contracttest: read schema %q: %v", fullPath, err)
@@ -285,6 +304,40 @@ func compileSchemaFile(t testing.TB, dir, filename string) *jsonschema.Schema {
 	}
 
 	return schema
+}
+
+// pathWithinAllowList reports whether fullPath either stays inside cleanDir
+// or resolves under <contractsRoot>/shared/ where contractsRoot is the
+// nearest ancestor of cleanDir whose basename is "contracts".
+func pathWithinAllowList(_ testing.TB, cleanDir, fullPath string) bool {
+	if fullPath == cleanDir || strings.HasPrefix(fullPath, cleanDir+string(filepath.Separator)) {
+		return true
+	}
+	contractsRoot, ok := findContractsRoot(cleanDir)
+	if !ok {
+		return false
+	}
+	sharedRoot := filepath.Join(contractsRoot, "shared")
+	if fullPath == sharedRoot {
+		return true
+	}
+	return strings.HasPrefix(fullPath, sharedRoot+string(filepath.Separator))
+}
+
+// findContractsRoot walks up from cleanDir until a directory whose basename
+// is "contracts" is found. Returns its path and true on success.
+func findContractsRoot(cleanDir string) (string, bool) {
+	cur := cleanDir
+	for {
+		if filepath.Base(cur) == "contracts" {
+			return cur, true
+		}
+		parent := filepath.Dir(cur)
+		if parent == cur {
+			return "", false
+		}
+		cur = parent
+	}
 }
 
 // validateJSON validates data against a compiled schema.
@@ -372,37 +425,6 @@ func (c *Contract) ValidateErrorResponse(t testing.TB, status int, body []byte) 
 		t.Errorf("contracttest: response entry for status %d in contract %q has empty schemaRef", status, c.ID)
 		return
 	}
-	schema := compileSchemaFileAbsolute(t, c.Dir, entry.SchemaRef)
+	schema := compileSchemaFile(t, c.Dir, entry.SchemaRef)
 	validateJSON(t, schema, body, fmt.Sprintf("error response %d", status))
-}
-
-// compileSchemaFileAbsolute reads and compiles a JSON Schema relative to dir,
-// allowing traversal outside dir (needed for shared schemas via relative paths
-// like "../../../../shared/errors/...").
-func compileSchemaFileAbsolute(t testing.TB, dir, filename string) *jsonschema.Schema {
-	t.Helper()
-	fullPath := filepath.Join(dir, filename)
-
-	data, err := fixtureload.LoadFixture(fullPath)
-	if err != nil {
-		t.Fatalf("contracttest: read schema %q: %v", fullPath, err)
-	}
-
-	var doc any
-	if err := json.Unmarshal(data, &doc); err != nil {
-		t.Fatalf("contracttest: parse schema JSON %q: %v", fullPath, err)
-	}
-
-	compiler := jsonschema.NewCompiler()
-	url := "file:///" + filepath.Clean(fullPath)
-	if err := compiler.AddResource(url, doc); err != nil {
-		t.Fatalf("contracttest: add schema resource %q: %v", fullPath, err)
-	}
-
-	schema, err := compiler.Compile(url)
-	if err != nil {
-		t.Fatalf("contracttest: compile schema %q: %v", fullPath, err)
-	}
-
-	return schema
 }
