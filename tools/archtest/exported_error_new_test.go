@@ -150,10 +150,13 @@ func scanExportedErrorNewAST(
 	return out
 }
 
-// isExportedErrSentinelName reports whether name follows the exported
-// sentinel convention `Err` + uppercase ASCII + zero-or-more word chars.
-// Names like Errno / Errors (4th rune lowercase) and Err alone are not
-// sentinel-pattern matches and are accepted.
+// isExportedErrSentinelName reports whether name follows the exported sentinel
+// convention `Err` + ASCII uppercase + zero-or-more word chars. Names like
+// Errno / Errors (4th byte lowercase) and bare `Err` are not sentinel-pattern
+// matches and are accepted. Go exported identifiers are conventionally ASCII,
+// so byte indexing (`name[3]`) is sufficient — the gate intentionally does not
+// handle Unicode-uppercase 4th runes (e.g. a non-ASCII capital after "Err"
+// would be vanishingly rare in practice).
 func isExportedErrSentinelName(name string) bool {
 	if !strings.HasPrefix(name, "Err") {
 		return false

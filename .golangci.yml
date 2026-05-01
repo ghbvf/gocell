@@ -136,10 +136,12 @@ linters:
           files:
             - "cells/**"
             - "!cells/**/*_test.go"
-            # Cell-internal `cells/<name>/internal/adapters/**` is a cell's own
-            # persistence/adapter package owned by the cell, not a top-level
-            # adapter — exclude from the depguard glob; the layer rule fires
-            # on TOP-LEVEL `adapters/` only.
+            # Note: cell-internal `cells/<name>/internal/adapters/...` is a
+            # cell-owned adapter package, not a top-level `adapters/` violation.
+            # The protection is automatic — `deny.pkg: github.com/ghbvf/gocell/adapters`
+            # is matched as an import-path prefix, so it does NOT match
+            # `github.com/ghbvf/gocell/cells/foo/internal/adapters`. No file-glob
+            # exclusion needed.
           deny:
             - pkg: github.com/ghbvf/gocell/adapters
               desc: "LAYER-02: cells/ 通过 interface 与 adapter 解耦"
@@ -330,7 +332,13 @@ linters:
       - path: ^examples/
         linters:
           - funlen
-      # cmd/ + examples/ are CLI / demo entrypoints; fmt.Print* is legitimate stdout
+      # cmd/ + examples/ are CLI / demo entrypoints; fmt.Print* is legitimate stdout.
+      # Note: this exclusion matches forbidigo's lint message text. If forbidigo
+      # changes its message format upstream, the exclusion would silently fail-open.
+      # Per-pattern `files` exclusion (forbidigo.forbid[].files with negation) was
+      # evaluated against golangci-lint v2.11.4 and does NOT suppress violations —
+      # the files field is include-only; negation globs are not applied as exclusions.
+      # The text-match approach below is the correct mechanism for this version.
       - path: ^cmd/
         linters:
           - forbidigo

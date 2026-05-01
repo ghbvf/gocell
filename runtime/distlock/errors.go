@@ -10,6 +10,14 @@ import (
 // state.cancel). *errcode.Error satisfies both: interface equality is pointer-
 // based, so the package-level var pointer serves as a stable identity just like
 // errors.New did.
+//
+// Note on errors.Is: *errcode.Error has no custom Is(target error) bool method;
+// errors.Is matches by package-level pointer identity. Callers that wrap with
+// fmt.Errorf("%w", ErrLockLost) still work via Unwrap chain traversal.
+// To match by Code regardless of pointer identity, use:
+//
+//	var ec *errcode.Error
+//	if errors.As(err, &ec) && ec.Code == errcode.ErrDistlockLockLost { ... }
 var (
 	// ErrLockLost is set as the context cause when the manager fails to renew
 	// the lock or the backend reports ownership has been taken by another holder.

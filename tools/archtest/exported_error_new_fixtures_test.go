@@ -106,8 +106,10 @@ func TestExportedErrorNewFixtures(t *testing.T) {
 	}
 }
 
-// violationLines extracts the line numbers from "usage.go:<line>: ..." entries.
-var fixtureLineRe = regexp.MustCompile(`^usage\.go:(\d+):`)
+// violationLines extracts the line number from "<rel-path>:<line>: ..." entries.
+// The rel-path prefix may include subdirectories if a fixture grows multiple files;
+// [^:]+ matches any non-colon prefix so the regex stays correct regardless of filename.
+var fixtureLineRe = regexp.MustCompile(`^[^:]+:(\d+):`)
 
 func violationLines(t *testing.T, raw []string) []int {
 	t.Helper()

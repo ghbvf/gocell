@@ -83,8 +83,8 @@ type Diagnostic struct {
 // instead of emitting an empty or placeholder value.
 var ErrUnresolvedMetricSchema = errcode.New(errcode.ErrMetricsSchemaUnresolved, "metrics schema: unresolved metric schema")
 
-// ErrUnresolvedLabel is kept as the historical sentinel for existing callers
-// that only checked unresolved labels.
+// Deprecated: use ErrUnresolvedMetricSchema; this alias exists for historical
+// callers and may be removed once all references migrate.
 var ErrUnresolvedLabel = ErrUnresolvedMetricSchema
 
 const header = governance.YAMLGeneratedPrefix + "metrics-schema. DO NOT EDIT.\n"
