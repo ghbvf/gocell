@@ -131,8 +131,11 @@ jobs:
       # producing per-shard profiles with 0% on out-of-shard packages that
       # would dilute the merged view). Each shard now reports only what it tested.
       #
-      # No -race here — race-detector coverage lives in the dedicated
+      # No -race here — Linux race-detector coverage lives in the dedicated
       # test-race.yml workflow (kernel/, runtime/, pkg/, typeseval cache).
+      # Supplemental Apple Silicon race coverage is in the os-smoke job below
+      # (macOS leg, continue-on-error) — separate ownership: linux-shard
+      # owns the strict gate, os-smoke owns cross-platform smoke.
       - name: Test
         run: go test -covermode=atomic -coverprofile=coverage-shard-${{ matrix.shard }}.out ${{ matrix.pkgs }} -count=1 -timeout 5m
 

@@ -85,12 +85,14 @@ actors.yaml   — 外部 Actor 注册（参与 contract 但不属于 Cell 模型
 
 四层静态门覆盖依赖与代码安全，PR 与 develop push 上必执行：
 
-- **gosec**（`.golangci.yml`）— Go 编码层 lint（PR 模式仅扫 diff，push 模式全量）
-- **govulncheck**（`.github/workflows/security-vuln.yml`）— 官方漏洞库扫描 `go.mod`（全量）
-- **Semgrep**（`.github/workflows/security-static.yml`）— 模式 SAST（`p/golang` + `p/owasp-top-ten` + `p/secrets`，全量）
-- **CodeQL**（`.github/workflows/security-static.yml`）— 数据流分析（`security-extended`，全量）
+| 层 | 工具 | 文件 | 阻塞方式 |
+|---|---|---|---|
+| 编码 | **gosec** | `.golangci.yml` | golangci-lint 失败 fail（PR 模式仅 diff，push 模式全量）|
+| 依赖 | **govulncheck** | `security-vuln.yml` | text-mode gate exit ≠ 0 fail（SARIF mode 在 govulncheck 1.x 永远 exit 0，仅做 Security tab 报告，不能作为 gate）|
+| 模式 SAST | **Semgrep** | `security-static.yml` | `semgrep scan --strict --error` 命中即 fail |
+| 数据流 SAST | **CodeQL** | `security-static.yml` | **upload-only**；PR 阻塞由 repo Code Scanning branch protection 兜底（Settings → Code security → Code scanning → required check `CodeQL`），不在 workflow 退出码 |
 
-报告进 GitHub Security tab（workflows 自带 SARIF 上传）。处置规则由 CI 直接执行：扫描器以 `--strict` / `--error` 运行命中即 fail，全局忽略文件由 `hack/verify-supply-chain-clean.sh` 静态拦截，行级豁免由 nolintlint / verify gate 强制含理由。
+`hack/verify-supply-chain-clean.sh` 是 drift-detection 卫生门，拦截 `--exclude/--ignore/-skip` 等绕过 flag 与 `.govulncheckignore`/`.semgrepignore`/CodeQL 宽 `paths-ignore` 等绕过文件；它从 PR head 跑，**不是针对协调 PR 的 fail-closed boundary**——最终阻塞由 PR review（单人维护项目即维护者本人）兜底。报告统一进 GitHub Security tab（SARIF 上传）。
 
 ## 参考框架
 

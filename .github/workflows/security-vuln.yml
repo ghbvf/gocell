@@ -2,14 +2,20 @@ name: Security · govulncheck
 
 # Supply-chain layer: scan go.mod dependencies (and call-graph reachability)
 # against Go's official vulnerability database (golang.org/x/vuln).
-# ref: golang/govulncheck-action README — SARIF upload + ./... scope
+# ref: golang.org/x/vuln/cmd/govulncheck CLI docs
 #
-# Policy is enforced *by CI*, not by docs:
-#   - Workflow does NOT pass --skip / --ignore (verify-supply-chain-clean.sh
-#     forbids any such flag in this file).
-#   - .govulncheckignore must NOT exist (verify-supply-chain-clean.sh).
-#   - Non-zero exit fails the PR; the only fix path is to upgrade the
-#     dependency or prove not-affected by removing the vulnerable code path.
+# Real blocking semantics — govulncheck `-format sarif` exits 0 even on
+# findings (per its docs: "exits successfully if -format json/sarif/openvex
+# is provided, regardless of detected vulnerabilities"). We therefore run
+# text mode first as the gate, then SARIF mode (always-true) for upload so
+# the Security tab picture is intact even when the gate fails.
+#
+# Policy enforced *by CI*:
+#   - text-mode govulncheck has no -skip / --ignore flags (verify-supply-
+#     chain-clean.sh forbids any such flag in this file).
+#   - .govulncheckignore must NOT exist (same gate).
+#   - Non-zero exit on the text-mode step fails the PR; only fix path is
+#     upgrade or remove the vulnerable code path.
 
 on:
   push:
@@ -43,18 +49,21 @@ jobs:
           go-version-file: go.mod
           cache-dependency-path: go.sum
 
-      - id: scan
-        uses: golang/govulncheck-action@b625fbe08f3bccbe446d94fbf87fcc875a4f50ee # v1.0.4
-        with:
-          go-version-file: go.mod
-          go-package: ./...
-          output-format: sarif
-          output-file: govulncheck.sarif
-          # The action defaults to repo-checkout: true and runs its own
-          # actions/checkout@v4.1.1, which re-adds the Authorization header
-          # after the prior checkout above and fails with a 400 Duplicate
-          # header. Skip the action's internal checkout — ours already ran.
-          repo-checkout: false
+      - name: Install govulncheck
+        run: |
+          go install golang.org/x/vuln/cmd/govulncheck@latest
+          echo "$HOME/go/bin" >> "$GITHUB_PATH"
+
+      - name: govulncheck (text — gate)
+        # Text mode exits non-zero on findings — this is the actual gate.
+        # No -skip / --ignore: bypass surface is closed.
+        run: govulncheck ./...
+
+      - name: govulncheck (SARIF — for Security tab)
+        if: always()
+        # SARIF mode always exits 0 (per govulncheck docs); always run so the
+        # SARIF report uploads even when the text-mode gate above failed.
+        run: govulncheck -format sarif ./... > govulncheck.sarif
 
       - name: Upload SARIF to GitHub Security
         if: always() && hashFiles('govulncheck.sarif') != ''

@@ -5,14 +5,20 @@ name: Security · Static Analysis
 # ref: github/codeql-action v3 — security-extended queries on Go
 # ref: semgrep p/golang + p/owasp-top-ten + p/secrets community rulesets
 #
+# Blocking semantics differ between the two jobs:
+#   - Semgrep: `semgrep scan --strict --error` exits non-zero on any finding
+#     or rule-parse error — the workflow fails the PR directly.
+#   - CodeQL : analyze uploads SARIF to the Security tab; it does NOT exit
+#     non-zero on findings (the action has no fail-on-findings option). PR
+#     blocking is enforced by GitHub Code Scanning branch protection — set
+#     up the required check at: Settings → Code security → Code scanning →
+#     `CodeQL` as required, then dismiss/resolve alerts as the merge gate.
+#
 # Policy enforced *by CI*:
 #   - Neither job passes --exclude / --exclude-rule / --ignore (verify-
 #     supply-chain-clean.sh forbids these flags in this file).
 #   - .semgrepignore and .github/codeql/codeql-config.yml (with paths-ignore
 #     beyond generated/ or vendor/) are forbidden by the same verify gate.
-#   - Semgrep runs with --strict (rule-parse error fails) and --error
-#     (any finding fails). CodeQL "security-extended" suite fails the run on
-#     any open alert by default for new code.
 
 on:
   push:
@@ -57,6 +63,8 @@ jobs:
         uses: github/codeql-action/autobuild@ce64ddcb0d8d890d2df4a9d1c04ff297367dea2a # v3
 
       - name: Analyze
+        # Upload-only: PR blocking is via repo Code Scanning branch protection
+        # (see header comment). Do not assume this step's exit code blocks the PR.
         uses: github/codeql-action/analyze@ce64ddcb0d8d890d2df4a9d1c04ff297367dea2a # v3
         with:
           category: codeql-go

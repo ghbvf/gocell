@@ -1,16 +1,23 @@
 name: Test · Race Detector
 
-# Independent race-detector entry point. Concurrency-sensitive packages
-# (kernel/, runtime/, pkg/, tools/archtest/internal/typeseval/) are exercised
-# with `-race` here; the main build-test (_build-lint.yml) no longer carries
-# any -race responsibility, keeping its shard matrix purely about
-# build/lint/coverage.
+# Independent race-detector entry point for **Linux** runners.
+# Concurrency-sensitive packages (kernel/, runtime/, pkg/,
+# tools/archtest/internal/typeseval/) are exercised with `-race` here; the
+# main build-test (_build-lint.yml) no longer carries -race in its shard
+# matrix.
 #
-# Scope rationale: cells/, adapters/, cmd/, tests/, contracts/ run as
-# race: false in build-test today (read-only static or integration packages
-# without goroutine concurrency on the unit-test path). Mirroring the same
-# scope here preserves race coverage without introducing a regression in
-# coverage breadth.
+# macOS supplemental race coverage lives in `_build-lint.yml` os-smoke job
+# (curated subset of runtime/shutdown/, accesscore/initialadmin/,
+# runtime/config/, kernel/governance/ — continue-on-error advisory). It is
+# kept separate because Apple Silicon scheduler can surface platform-
+# specific race conditions, and the os-smoke job's continue-on-error
+# disposition is unsuitable for the strict Linux gate.
+#
+# Scope rationale (Linux gate): cells/, adapters/, cmd/, tests/, contracts/
+# run as race: false in build-test today (read-only static or integration
+# packages without goroutine concurrency on the unit-test path). Mirroring
+# the same scope here preserves race coverage without introducing a
+# regression in coverage breadth.
 
 on:
   push:

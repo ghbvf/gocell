@@ -1,13 +1,18 @@
 #!/usr/bin/env bash
-# verify-supply-chain-clean enforces "no scanner bypass" as a static gate.
+# verify-supply-chain-clean is a drift-detection / hygiene gate. It rejects
+# accidental additions of supply-chain bypass surfaces:
+#   - Global ignore files (.govulncheckignore / .semgrepignore)
+#   - Bypass flags (--exclude / --exclude-rule / --ignore / -skip) in the
+#     security workflow files
+#   - CodeQL paths-ignore that match anything beyond generated/ or vendor/
+#   - Bare line-level `nosemgrep:` without a `// <reason>` comment
 #
-# Supply-chain scanners (govulncheck, Semgrep, CodeQL) are configured in
-# .github/workflows/security-vuln.yml + security-static.yml to fail on any
-# finding, with no --ignore / --exclude / paths-ignore flags. This script
-# guards against drift: it forbids global ignore files from appearing in the
-# repo, and rejects any future addition of bypass flags to the security
-# workflows. It also enforces that line-level Semgrep suppressions
-# (`// nosemgrep: <rule-id>`) include a reason, mirroring nolintlint.
+# This is NOT a fail-closed boundary against a coordinated malicious PR: it
+# runs from the PR head, so a single PR could weaken both the policy and
+# this checker simultaneously and still pass governance.yml. True fail-closed
+# enforcement against intentional bypass requires PR review by the
+# maintainer (this is a single-reviewer project — that review IS the
+# boundary). The gate's value is catching accidental drift.
 
 set -euo pipefail
 
