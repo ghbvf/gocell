@@ -15,6 +15,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/ghbvf/gocell/examples/todoorder/cells/ordercell/internal/domain"
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/errcode"
@@ -55,6 +56,16 @@ func WithTxManager(tx persistence.TxRunner) Option {
 	return func(s *Service) { s.txRunner = persistence.RunnerOrNoop(tx) }
 }
 
+// WithClock sets the clock used for order timestamps. Defaults to
+// clock.Real() when not provided.
+func WithClock(clk clock.Clock) Option {
+	return func(s *Service) {
+		if clk != nil {
+			s.clock = clk
+		}
+	}
+}
+
 // Service handles order creation business logic.
 // Cell wiring injects either durable or demo defaults, but the service always
 // runs through the same Emitter + TxRunner code path.
@@ -63,6 +74,7 @@ type Service struct {
 	txRunner persistence.TxRunner
 	emitter  outbox.Emitter
 	logger   *slog.Logger
+	clock    clock.Clock
 }
 
 // NewService creates an order-create Service.
@@ -72,6 +84,7 @@ func NewService(repo domain.OrderRepository, logger *slog.Logger, opts ...Option
 		txRunner: persistence.NoopTxRunner{},
 		emitter:  outbox.NewNoopEmitter(),
 		logger:   logger,
+		clock:    clock.Real(),
 	}
 	for _, o := range opts {
 		o(s)
@@ -89,7 +102,7 @@ func (s *Service) Create(ctx context.Context, item string) (*domain.Order, error
 		ID:        "ord" + "-" + uuid.NewString(),
 		Item:      item,
 		Status:    "pending",
-		CreatedAt: time.Now(),
+		CreatedAt: s.clock.Now(),
 	}
 
 	entry, err := s.buildOrderCreatedEntry(order)

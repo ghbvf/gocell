@@ -6,10 +6,10 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/jackc/pgx/v5"
 
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
@@ -29,11 +29,17 @@ var _ outbox.BatchWriter = (*OutboxWriter)(nil)
 // ref: ThreeDotsLabs/watermill-sql offset_adapter_postgresql.go — transactional outbox insert
 // Adopted: INSERT within caller-provided transaction, JSON metadata serialization.
 // Deviated: explicit fail-fast on missing tx instead of auto-begin.
-type OutboxWriter struct{}
+type OutboxWriter struct {
+	clock clock.Clock
+}
 
 // NewOutboxWriter creates an OutboxWriter.
-func NewOutboxWriter() *OutboxWriter {
-	return &OutboxWriter{}
+func NewOutboxWriter(clk ...clock.Clock) *OutboxWriter {
+	c := clock.Real()
+	if len(clk) > 0 && clk[0] != nil {
+		c = clk[0]
+	}
+	return &OutboxWriter{clock: c}
 }
 
 // Write inserts an outbox entry into the outbox_entries table using the
@@ -73,7 +79,7 @@ func (w *OutboxWriter) Write(ctx context.Context, entry outbox.Entry) error {
 
 	createdAt := entry.CreatedAt
 	if createdAt.IsZero() {
-		createdAt = time.Now()
+		createdAt = w.clock.Now()
 	}
 
 	const query = `INSERT INTO outbox_entries
@@ -181,7 +187,7 @@ func (w *OutboxWriter) writeBatchChunk(ctx context.Context, tx pgx.Tx, entries [
 
 		createdAt := e.CreatedAt
 		if createdAt.IsZero() {
-			createdAt = time.Now()
+			createdAt = w.clock.Now()
 		}
 
 		if i > 0 {

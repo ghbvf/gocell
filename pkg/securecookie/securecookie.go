@@ -17,8 +17,8 @@ import (
 	"fmt"
 	"io"
 	"math"
-	"time"
 
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
@@ -28,6 +28,7 @@ type SecureCookie struct {
 	hashKey []byte      // HMAC-SHA256 signing key (required, ≥32 bytes)
 	aead    cipher.AEAD // AES-GCM AEAD (nil if no encryption)
 	maxAge  int         // max cookie age in seconds (0 = no expiry check)
+	clock   clock.Clock // clock used for encoding timestamps and expiry checks
 }
 
 const (
@@ -61,6 +62,7 @@ func New(hashKey, blockKey []byte) (*SecureCookie, error) {
 	sc := &SecureCookie{
 		hashKey: hk,
 		maxAge:  86400, // default 24h
+		clock:   clock.Real(),
 	}
 
 	if blockKey != nil {
@@ -87,6 +89,23 @@ func (sc *SecureCookie) WithMaxAge(seconds int) *SecureCookie {
 		hashKey: hk,
 		aead:    sc.aead, // cipher.AEAD is safe to share (immutable after init)
 		maxAge:  seconds,
+		clock:   sc.clock,
+	}
+}
+
+// WithClock returns a copy of sc using the given clock for timestamps and
+// expiry checks. Key material is deep-copied.
+func (sc *SecureCookie) WithClock(clk clock.Clock) *SecureCookie {
+	if clk == nil {
+		clk = clock.Real()
+	}
+	hk := make([]byte, len(sc.hashKey))
+	copy(hk, sc.hashKey)
+	return &SecureCookie{
+		hashKey: hk,
+		aead:    sc.aead,
+		maxAge:  sc.maxAge,
+		clock:   clk,
 	}
 }
 
@@ -97,7 +116,7 @@ func (sc *SecureCookie) WithMaxAge(seconds int) *SecureCookie {
 func (sc *SecureCookie) Encode(name string, value []byte) (string, error) {
 	// 1. Timestamp
 	ts := make([]byte, timestampLen)
-	now := time.Now().Unix()
+	now := sc.clock.Now().Unix()
 	if now < 0 {
 		// Pre-1970 clock — treat as zero so the encoded value remains parseable.
 		now = 0
@@ -173,7 +192,7 @@ func (sc *SecureCookie) Decode(name string, encoded string) ([]byte, error) {
 			return nil, ErrExpired
 		}
 		created := int64(raw)
-		if time.Now().Unix()-created >= int64(sc.maxAge) {
+		if sc.clock.Now().Unix()-created >= int64(sc.maxAge) {
 			return nil, ErrExpired
 		}
 	}

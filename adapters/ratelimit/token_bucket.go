@@ -7,6 +7,7 @@ import (
 
 	"golang.org/x/time/rate"
 
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/lifecycle"
 	"github.com/ghbvf/gocell/runtime/http/middleware"
 )
@@ -73,18 +74,24 @@ type Limiter struct {
 	staleAfter time.Duration
 	stopOnce   sync.Once
 	stopCh     chan struct{}
+	clock      clock.Clock
 }
 
 // New creates a per-IP token bucket rate limiter. It starts a background
 // goroutine for stale entry cleanup. Call Close() to stop cleanup.
-func New(cfg Config) *Limiter {
+func New(cfg Config, clk ...clock.Clock) *Limiter {
 	cfg.defaults()
+	c := clock.Real()
+	if len(clk) > 0 && clk[0] != nil {
+		c = clk[0]
+	}
 	l := &Limiter{
 		rate:       cfg.Rate,
 		burst:      cfg.Burst,
 		limiters:   make(map[string]*entry),
 		staleAfter: cfg.StaleAfter,
 		stopCh:     make(chan struct{}),
+		clock:      c,
 	}
 	go l.cleanup(cfg.CleanupInterval)
 	return l
@@ -129,7 +136,7 @@ func (l *Limiter) Len() int {
 }
 
 func (l *Limiter) getOrCreate(key string) *entry {
-	now := time.Now()
+	now := l.clock.Now()
 
 	l.mu.RLock()
 	e, ok := l.limiters[key]
@@ -173,7 +180,7 @@ func (l *Limiter) cleanup(interval time.Duration) {
 }
 
 func (l *Limiter) removeStale() {
-	now := time.Now()
+	now := l.clock.Now()
 	l.mu.Lock()
 	defer l.mu.Unlock()
 

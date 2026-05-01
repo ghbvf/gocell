@@ -17,6 +17,7 @@ import (
 	amqp "github.com/rabbitmq/amqp091-go"
 
 	"github.com/ghbvf/gocell/adapters/adapterutil"
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/lifecycle"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/worker"
@@ -311,6 +312,7 @@ func DefaultDial(url string) (AMQPConnection, error) {
 type Connection struct {
 	config Config
 	dial   DialFunc
+	clock  clock.Clock
 
 	mu   sync.RWMutex
 	conn AMQPConnection
@@ -344,6 +346,7 @@ func NewConnection(config Config, opts ...ConnectionOption) (*Connection, error)
 	c := &Connection{
 		config:      config,
 		dial:        DefaultDial,
+		clock:       clock.Real(),
 		channelPool: make(chan AMQPChannel, config.ChannelPoolSize),
 		closeCh:     make(chan struct{}),
 		connected:   make(chan struct{}),
@@ -384,6 +387,16 @@ type ConnectionOption func(*Connection)
 func WithDialFunc(dial DialFunc) ConnectionOption {
 	return func(c *Connection) {
 		c.dial = dial
+	}
+}
+
+// WithConnectionClock sets the clock used for disconnect timestamps. Defaults to
+// clock.Real() when not provided.
+func WithConnectionClock(clk clock.Clock) ConnectionOption {
+	return func(c *Connection) {
+		if clk != nil {
+			c.clock = clk
+		}
 	}
 }
 
@@ -460,7 +473,7 @@ func (c *Connection) markDisconnected(closeErr *amqp.Error) {
 	defer c.mu.Unlock()
 	c.connected = make(chan struct{})
 	c.state = StateDisconnected
-	c.lastDisconnectAt = time.Now().UTC()
+	c.lastDisconnectAt = c.clock.Now().UTC()
 	c.reconnectAttempts = 0
 	if closeErr != nil {
 		c.lastError = sanitizeErrorURL(closeErr.Error(), c.config.URL)

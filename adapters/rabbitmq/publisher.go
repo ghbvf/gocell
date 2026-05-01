@@ -10,6 +10,7 @@ import (
 	amqp "github.com/rabbitmq/amqp091-go"
 
 	"github.com/ghbvf/gocell/adapters/adapterutil"
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
@@ -30,11 +31,29 @@ type Publisher struct {
 	mu     sync.Mutex // guards closed/wg.Add ordering to prevent Add-after-Wait race
 	closed atomic.Bool
 	wg     sync.WaitGroup
+	clock  clock.Clock
+}
+
+// PublisherOption configures a Publisher.
+type PublisherOption func(*Publisher)
+
+// WithPublisherClock sets the clock used for message timestamps. Defaults to
+// clock.Real() when not provided.
+func WithPublisherClock(clk clock.Clock) PublisherOption {
+	return func(p *Publisher) {
+		if clk != nil {
+			p.clock = clk
+		}
+	}
 }
 
 // NewPublisher creates a Publisher backed by the given Connection.
-func NewPublisher(conn *Connection) *Publisher {
-	return &Publisher{conn: conn}
+func NewPublisher(conn *Connection, opts ...PublisherOption) *Publisher {
+	p := &Publisher{conn: conn, clock: clock.Real()}
+	for _, o := range opts {
+		o(p)
+	}
+	return p
 }
 
 // Close waits for all in-flight Publish calls to complete, bounded by ctx.
@@ -118,7 +137,7 @@ func (p *Publisher) Publish(ctx context.Context, topic string, payload []byte) e
 	msg := amqp.Publishing{
 		ContentType:  "application/octet-stream",
 		DeliveryMode: amqp.Persistent,
-		Timestamp:    time.Now().UTC(),
+		Timestamp:    p.clock.Now().UTC(),
 		Body:         payload,
 	}
 
