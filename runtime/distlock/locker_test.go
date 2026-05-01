@@ -865,16 +865,26 @@ func TestLocker_Acquire_RejectsZeroTTL(t *testing.T) {
 			lockCtx, release, err := l.Acquire(context.Background(), "key-zero-ttl", tc.ttl)
 			if err == nil {
 				t.Errorf("Acquire with TTL=%v should return error", tc.ttl)
-				if release != nil {
-					if err := release(); err != nil {
-						t.Logf("release: %v", err)
-					}
-				}
+				releaseIfNotNil(t, release)
 			}
 			if lockCtx != nil {
 				t.Error("Acquire with invalid TTL should return nil lockCtx")
 			}
 		})
+	}
+}
+
+// releaseIfNotNil invokes release if it is non-nil and logs any error from
+// it. Used to keep the unexpected-success path of TTL-rejection tests flat,
+// since test bodies shouldn't carry the cognitive overhead of nested
+// release-and-handle chains.
+func releaseIfNotNil(t *testing.T, release func() error) {
+	t.Helper()
+	if release == nil {
+		return
+	}
+	if err := release(); err != nil {
+		t.Logf("release: %v", err)
 	}
 }
 

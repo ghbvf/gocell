@@ -1333,35 +1333,45 @@ func TestTransitKeyProvider_ConcurrentEncryptRotate(t *testing.T) {
 
 	// 8 goroutines concurrently encrypting.
 	for range encryptWorkers {
-		wg.Go(func() {
-			for range 20 {
-				h, err := p.Current(ctx)
-				if err != nil {
-					return
-				}
-				vh, ok := h.(*vaultTransitHandle)
-				if !ok {
-					return
-				}
-				// Encrypt may fail transiently during rotation — that is fine.
-				if _, _, _, _, encErr := vh.Encrypt(ctx, []byte("payload"), []byte("aad")); encErr != nil {
-					return // transient error during concurrent rotation is expected
-				}
-			}
-		})
+		wg.Go(func() { runConcurrentEncryptLoop(ctx, p, 20) })
 	}
 
 	// 1 goroutine doing periodic rotations.
-	wg.Go(func() {
-		for range rotations {
-			if _, rotErr := p.Rotate(ctx); rotErr != nil {
-				return // transient rotation errors are acceptable in concurrent race tests
-			}
-		}
-	})
+	wg.Go(func() { runConcurrentRotateLoop(ctx, p, rotations) })
 
 	wg.Wait()
 	// No race detector report = pass. The test itself needs -race to be meaningful.
+}
+
+// runConcurrentEncryptLoop is the per-worker body of
+// TestTransitKeyProvider_ConcurrentEncryptRotate. Pulled out so the test
+// itself stays under the cognitive-complexity threshold; transient errors
+// from a parallel Rotate are expected and silently terminate the loop.
+func runConcurrentEncryptLoop(ctx context.Context, p *TransitKeyProvider, iterations int) {
+	for range iterations {
+		h, err := p.Current(ctx)
+		if err != nil {
+			return
+		}
+		vh, ok := h.(*vaultTransitHandle)
+		if !ok {
+			return
+		}
+		if _, _, _, _, err := vh.Encrypt(ctx, []byte("payload"), []byte("aad")); err != nil {
+			return // transient error during concurrent rotation is expected
+		}
+	}
+}
+
+// runConcurrentRotateLoop is the rotator body of
+// TestTransitKeyProvider_ConcurrentEncryptRotate. Transient rotate errors
+// are acceptable in this race test and silently terminate the loop.
+func runConcurrentRotateLoop(ctx context.Context, p *TransitKeyProvider, iterations int) {
+	for range iterations {
+		if _, err := p.Rotate(ctx); err != nil {
+			return
+		}
+	}
 }
 
 // ---------------------------------------------------------------------------

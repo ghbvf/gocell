@@ -62,22 +62,28 @@ const (
 		"    %s:\n" +
 		"      type: string"
 
+	// advHintCCE01TriggerPrefix is the shared lead-in for CCE-01 messages
+	// reporting trigger declaration mismatches on an HTTP contract. The four
+	// CCE-01 hints below all begin with this prefix; the first %q is the
+	// contract id and the second %q is the trigger topic.
+	advHintCCE01TriggerPrefix = "contract %q declares trigger %q"
+
 	// CCE-01: trigger references a contract that is not kind:event.
-	advHintCCE01TriggerNotEvent = "contract %q declares trigger %q" +
+	advHintCCE01TriggerNotEvent = advHintCCE01TriggerPrefix +
 		" but referenced contract kind=%s;" +
 		" triggers must reference kind:event contracts"
 
 	// CCE-01: trigger event contract owner/publisher mismatch.
-	advHintCCE01OwnerMismatch = "contract %q declares trigger %q" +
+	advHintCCE01OwnerMismatch = advHintCCE01TriggerPrefix +
 		" but event contract owner/publisher must both be %s"
 
 	// CCE-01: serving slice does not declare role:publish for the trigger event contract.
-	advHintCCE01SliceNotPublish = "contract %q declares trigger %q" +
+	advHintCCE01SliceNotPublish = advHintCCE01TriggerPrefix +
 		" but serving slice %s/%s does not declare role: publish" +
 		" for that event contract"
 
 	// CCE-01: trigger topic not found in slice emit set.
-	advHintCCE01TriggerNotEmitted = "contract %q declares trigger %q" +
+	advHintCCE01TriggerNotEmitted = advHintCCE01TriggerPrefix +
 		" but no non-test Go file under %s emits it" +
 		" via outbox.Emit or *.Emitter.Emit;" +
 		" serving slice %s/%s must emit the trigger topic" +
