@@ -3,6 +3,7 @@ package cell
 import (
 	"log/slog"
 
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/persistence"
@@ -30,6 +31,10 @@ type EmitterConfig struct {
 	DirectPublishMode outbox.DirectPublishFailureMode
 	// MetricsProvider is REQUIRED when DurabilityDemo mode resolves to a DirectEmitter.
 	MetricsProvider metrics.Provider
+	// Clock is the time source injected into DirectEmitter for CreatedAt stamping.
+	// Required when DurabilityDemo mode resolves to a DirectEmitter; pass
+	// clock.Real() in production and clockmock.New(...) in tests.
+	Clock clock.Clock
 }
 
 // EmitterOutcome reports the resolved emitter and whether it is durable
@@ -109,7 +114,10 @@ func resolveDemoEmitter(cfg EmitterConfig, logger *slog.Logger) (EmitterOutcome,
 					" pass kernel/observability/metrics.NopProvider{} explicitly in tests"+
 					" (e.g. via cells/{accesscore,auditcore,configcore}.WithMetricsProvider(...))")
 		}
-		emitter, err := outbox.NewDirectEmitter(cfg.Publisher, cfg.DirectPublishMode, cfg.MetricsProvider, cfg.CellID, outbox.WithLogger(logger))
+		emitter, err := outbox.NewDirectEmitter(
+			cfg.Publisher, cfg.DirectPublishMode, cfg.MetricsProvider,
+			cfg.Clock, cfg.CellID, outbox.WithLogger(logger),
+		)
 		if err != nil {
 			return EmitterOutcome{}, err
 		}

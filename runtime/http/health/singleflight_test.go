@@ -16,6 +16,7 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/assembly"
 	"github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 )
 
@@ -34,7 +35,7 @@ import (
 //
 // ref: golang.org/x/sync/singleflight/singleflight_test.go#TestDoDupSuppress
 func TestReadyz_Singleflight_DedupsConcurrentRequests(t *testing.T) {
-	asm := assembly.New(assembly.Config{ID: "test-sf", DurabilityMode: cell.DurabilityDemo})
+	asm := assembly.New(assembly.Config{ID: "test-sf", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
 	require.NoError(t, asm.Start(context.Background()))
 	defer func() { _ = asm.Stop(context.Background()) }()
 
@@ -119,7 +120,7 @@ func TestReadyz_Singleflight_DedupsConcurrentRequests(t *testing.T) {
 // regression where verbose and non-verbose bursts share the same
 // singleflight key and return each other's response shape.
 func TestReadyz_Singleflight_SeparateKeysForVerboseVsAggregate(t *testing.T) {
-	asm := assembly.New(assembly.Config{ID: "test-sf-keys", DurabilityMode: cell.DurabilityDemo})
+	asm := assembly.New(assembly.Config{ID: "test-sf-keys", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
 	require.NoError(t, asm.Start(context.Background()))
 	defer func() { _ = asm.Stop(context.Background()) }()
 

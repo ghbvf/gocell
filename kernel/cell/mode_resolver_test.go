@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/persistence"
@@ -102,6 +103,7 @@ func TestResolveEmitter(t *testing.T) {
 				TxRunner:          nil,
 				DirectPublishMode: outbox.DirectPublishFailOpen,
 				MetricsProvider:   metrics.NopProvider{},
+				Clock:             clock.Real(),
 			},
 			wantDurable: false,
 		},
@@ -116,6 +118,7 @@ func TestResolveEmitter(t *testing.T) {
 				TxRunner:          noopTx,
 				DirectPublishMode: outbox.DirectPublishFailOpen,
 				MetricsProvider:   metrics.NopProvider{},
+				Clock:             clock.Real(),
 			},
 			wantDurable: false,
 		},
@@ -170,6 +173,7 @@ func TestResolveEmitter(t *testing.T) {
 				TxRunner:          noopTx,
 				DirectPublishMode: outbox.DirectPublishFailOpen,
 				MetricsProvider:   metrics.NopProvider{},
+				Clock:             clock.Real(),
 			},
 			wantDurable: false,
 		},
@@ -184,6 +188,7 @@ func TestResolveEmitter(t *testing.T) {
 				TxRunner:          nil,
 				DirectPublishMode: outbox.DirectPublishFailClosed,
 				MetricsProvider:   metrics.NopProvider{},
+				Clock:             clock.Real(),
 			},
 			wantDurable: false,
 		},
@@ -365,6 +370,7 @@ func TestResolveCellEmitter(t *testing.T) {
 				DirectPublishMode: outbox.DirectPublishFailClosed,
 				Logger:            logger,
 				MetricsProvider:   metrics.NopProvider{},
+				Clock:             clock.Real(),
 			},
 			ConsistencyLevel: cell.L2,
 		})

@@ -14,6 +14,7 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/assembly"
 	"github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/runtime/config"
@@ -28,7 +29,7 @@ import (
 // map. The asm is started so health.Handler.aggregateCellHealth works.
 func buildPhase5State(t *testing.T) *phaseState {
 	t.Helper()
-	asm := assembly.New(assembly.Config{ID: "phase5-test", DurabilityMode: cell.DurabilityDemo})
+	asm := assembly.New(assembly.Config{ID: "phase5-test", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
 	require.NoError(t, asm.Register(newTestCell("cell-1")))
 	require.NoError(t, asm.Start(context.Background()))
 	t.Cleanup(func() { _ = asm.Stop(context.Background()) })
@@ -138,8 +139,8 @@ func TestPhase0_RejectsNilCircuitBreaker(t *testing.T) {
 // instance as WithAssembly. A mismatch would silently discover the verifier
 // in the plan's asm while the rest of Bootstrap runs against b.assemblyCore.
 func TestPhase0_RejectsAuthJWTFromAssemblyMismatch(t *testing.T) {
-	asmA := assembly.New(assembly.Config{ID: "asm-a", DurabilityMode: cell.DurabilityDemo})
-	asmB := assembly.New(assembly.Config{ID: "asm-b", DurabilityMode: cell.DurabilityDemo})
+	asmA := assembly.New(assembly.Config{ID: "asm-a", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
+	asmB := assembly.New(assembly.Config{ID: "asm-b", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
 	b := New(
 		WithAssembly(asmA),
 		WithListener(cell.PrimaryListener, "127.0.0.1:0",
@@ -153,7 +154,7 @@ func TestPhase0_RejectsAuthJWTFromAssemblyMismatch(t *testing.T) {
 }
 
 func TestPhase0_AcceptsAuthJWTFromAssemblyMatch(t *testing.T) {
-	asm := assembly.New(assembly.Config{ID: "asm-match", DurabilityMode: cell.DurabilityDemo})
+	asm := assembly.New(assembly.Config{ID: "asm-match", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
 	b := New(
 		WithAssembly(asm),
 		WithListener(cell.PrimaryListener, "127.0.0.1:0",
@@ -406,7 +407,7 @@ func TestPhase3_InitAssembly_BuildsDefaultAssemblyWhenNoneProvided(t *testing.T)
 }
 
 func TestPhase3_InitAssembly_UsesPrebuiltAssembly(t *testing.T) {
-	asm := assembly.New(assembly.Config{ID: "pre", DurabilityMode: cell.DurabilityDemo})
+	asm := assembly.New(assembly.Config{ID: "pre", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
 	b := New(WithAssembly(asm))
 	_, s := newPhaseState()
 	s.cfg = config.NewFromMap(make(map[string]any))

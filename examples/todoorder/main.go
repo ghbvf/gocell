@@ -19,6 +19,7 @@ import (
 	ordercell "github.com/ghbvf/gocell/examples/todoorder/cells/ordercell"
 	"github.com/ghbvf/gocell/kernel/assembly"
 	"github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/query"
@@ -63,7 +64,7 @@ func main() {
 	)
 
 	// Build assembly and register the cell.
-	asm := assembly.New(assembly.Config{ID: "todoorder", DurabilityMode: cell.DurabilityDemo})
+	asm := assembly.New(assembly.Config{ID: "todoorder", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
 	if err := asm.Register(oc); err != nil {
 		logger.Error("failed to register ordercell", slog.Any("error", err))
 		os.Exit(1)

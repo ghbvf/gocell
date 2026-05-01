@@ -13,6 +13,7 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/assembly"
 	"github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/kernel/clock"
 	kernelmetrics "github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/runtime/http/router"
 )
@@ -136,6 +137,7 @@ func TestAssembly_FailedStartDrainsDispatcher(t *testing.T) {
 	asm := assembly.New(assembly.Config{
 		ID:             "t-fail",
 		DurabilityMode: cell.DurabilityDemo,
+		Clock:          clock.Real(),
 	})
 	require.NoError(t, asm.Register(failing))
 
@@ -237,7 +239,7 @@ func TestAutoWire_CellLabel_FromExplicitAssemblyID(t *testing.T) {
 func TestAutoWire_CellLabel_DerivedFromAssembly(t *testing.T) {
 	t.Parallel()
 	p := newFakeMetricsProvider()
-	asm := assembly.New(assembly.Config{ID: "asm-id-x", DurabilityMode: cell.DurabilityDemo})
+	asm := assembly.New(assembly.Config{ID: "asm-id-x", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
 	t.Cleanup(asm.Shutdown)
 
 	b := New(WithMetricsProvider(p), WithAssembly(asm))

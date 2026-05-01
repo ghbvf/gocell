@@ -13,6 +13,7 @@ import (
 	configcore "github.com/ghbvf/gocell/cells/configcore"
 	"github.com/ghbvf/gocell/kernel/assembly"
 	"github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/persistence"
@@ -188,7 +189,7 @@ func NewSSOBFFApp(opts ...SSOBFFAppOption) (*SSOBFFApp, error) {
 		configcore.WithMetricsProvider(metrics.NopProvider{}),
 	)
 
-	asm := assembly.New(assembly.Config{ID: "ssobff", DurabilityMode: cell.DurabilityDemo})
+	asm := assembly.New(assembly.Config{ID: "ssobff", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
 	for _, registerErr := range []error{asm.Register(ac), asm.Register(auc), asm.Register(cc)} {
 		if registerErr != nil {
 			return nil, fmt.Errorf("ssobff: register cell: %w", registerErr)

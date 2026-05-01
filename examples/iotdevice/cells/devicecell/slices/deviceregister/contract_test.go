@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/mem"
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/contracttest"
@@ -39,7 +40,7 @@ func newContractHandler() (http.Handler, *recordingPublisher) {
 	repo := mem.NewDeviceRepository()
 	pub := &recordingPublisher{}
 	emitter, err := outbox.NewDirectEmitter(
-		pub, outbox.DirectPublishFailOpen, metrics.NopProvider{}, "devicecell",
+		pub, outbox.DirectPublishFailOpen, metrics.NopProvider{}, clock.Real(), "devicecell",
 		outbox.WithLogger(slog.Default()))
 	if err != nil {
 		panic(err)

@@ -14,6 +14,7 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/assembly"
 	"github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/kernel/clock"
 	kernelmetrics "github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 )
@@ -194,7 +195,7 @@ func runWithCancelAndListener(t *testing.T, b *Bootstrap, ln net.Listener) error
 func TestShutdownMetrics_PhaseCounterTransitions(t *testing.T) {
 	p := newFakeMetricsProvider()
 	ln := newLocalListener(t)
-	asm := assembly.New(assembly.Config{ID: "sm-phase", DurabilityMode: cell.DurabilityDemo})
+	asm := assembly.New(assembly.Config{ID: "sm-phase", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
 	b := New(
 		WithAssembly(asm),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(ln)),
@@ -230,7 +231,7 @@ func TestShutdownMetrics_PhaseCounterTransitions(t *testing.T) {
 func TestShutdownMetrics_DurationRecorded(t *testing.T) {
 	p := newFakeMetricsProvider()
 	ln := newLocalListener(t)
-	asm := assembly.New(assembly.Config{ID: "sm-dur", DurabilityMode: cell.DurabilityDemo})
+	asm := assembly.New(assembly.Config{ID: "sm-dur", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
 	b := New(
 		WithAssembly(asm),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(ln)),
@@ -266,7 +267,7 @@ func TestShutdownMetrics_DurationRecorded(t *testing.T) {
 func TestShutdownMetrics_TimeoutOutcome_Success(t *testing.T) {
 	p := newFakeMetricsProvider()
 	ln := newLocalListener(t)
-	asm := assembly.New(assembly.Config{ID: "sm-ok", DurabilityMode: cell.DurabilityDemo})
+	asm := assembly.New(assembly.Config{ID: "sm-ok", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
 	b := New(
 		WithAssembly(asm),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(ln)),
@@ -329,7 +330,7 @@ func TestShutdownMetrics_TimeoutOutcome_Timeout(t *testing.T) {
 	ln := newLocalListener(t)
 	sw := newSlowWorker()
 
-	asm := assembly.New(assembly.Config{ID: "timeout-test", DurabilityMode: cell.DurabilityDemo})
+	asm := assembly.New(assembly.Config{ID: "timeout-test", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
 
 	// Short timeout so the test completes fast; the slowWorker's Stop will
 	// block just long enough for shutCtx to expire.
@@ -403,7 +404,7 @@ func (w *failingTeardownWorker) Stop(_ context.Context) error {
 func TestShutdownMetrics_Outcome_TeardownError(t *testing.T) {
 	p := newFakeMetricsProvider()
 	ln := newLocalListener(t)
-	asm := assembly.New(assembly.Config{ID: "teardown-err", DurabilityMode: cell.DurabilityDemo})
+	asm := assembly.New(assembly.Config{ID: "teardown-err", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
 
 	failWorker := &failingTeardownWorker{stopErr: fmt.Errorf("simulated teardown failure")}
 
@@ -437,7 +438,7 @@ func TestShutdownMetrics_Outcome_TeardownError(t *testing.T) {
 func TestShutdownMetrics_Outcome_SignalError(t *testing.T) {
 	p := newFakeMetricsProvider()
 	ln := newLocalListener(t)
-	asm := assembly.New(assembly.Config{ID: "signal-err", DurabilityMode: cell.DurabilityDemo})
+	asm := assembly.New(assembly.Config{ID: "signal-err", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
 
 	// Worker returns an error shortly after Start — triggers phase9 signal
 	// with a non-nil err, then phase10 teardown runs cleanly.
@@ -493,7 +494,7 @@ func (w *erroringWorker) Stop(_ context.Context) error { return nil }
 // normally when no metrics provider is configured (NopProvider default).
 func TestShutdownMetrics_DisabledWithoutProvider(t *testing.T) {
 	ln := newLocalListener(t)
-	asm := assembly.New(assembly.Config{ID: "nop-sm", DurabilityMode: cell.DurabilityDemo})
+	asm := assembly.New(assembly.Config{ID: "nop-sm", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
 	b := New(
 		WithAssembly(asm),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(ln)),

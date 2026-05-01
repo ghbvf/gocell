@@ -10,6 +10,7 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/assembly"
 	"github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/wrapper"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
@@ -66,6 +67,7 @@ func TestSubscriptionValidatorInjectedViaRuntimeBaseOptions(t *testing.T) {
 	asm := assembly.New(assembly.Config{
 		ID:             "test-validator-wiring",
 		DurabilityMode: cell.DurabilityDemo,
+		Clock:          clock.Real(),
 	})
 	require.NoError(t, asm.Register(newConfigSubscriberWithoutOwner()))
 

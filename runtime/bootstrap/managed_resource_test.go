@@ -19,6 +19,7 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/assembly"
 	"github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/kernel/clock"
 	kernellifecycle "github.com/ghbvf/gocell/kernel/lifecycle"
 	koutbox "github.com/ghbvf/gocell/kernel/outbox"
 	kworker "github.com/ghbvf/gocell/kernel/worker"
@@ -442,7 +443,7 @@ func (s *managedResourceFailingStore) ClaimPending(ctx context.Context, batchSiz
 func TestRelay_AsManagedResource_RegistersCheckers(t *testing.T) {
 	ln := newLocalListener(t)
 
-	asm := assembly.New(assembly.Config{ID: "test-relay-mr-checkers", DurabilityMode: cell.DurabilityDemo})
+	asm := assembly.New(assembly.Config{ID: "test-relay-mr-checkers", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
 	require.NoError(t, asm.Register(newTestCell("cell-1")))
 
 	relay := newManagedResourceTestRelay()
@@ -492,7 +493,7 @@ func TestRelay_AsManagedResource_RegistersCheckers(t *testing.T) {
 // Migrated from TestWithRelayHealth_TrippedBudget_Returns503.
 func TestRelay_AsManagedResource_TrippedBudget_Returns503(t *testing.T) {
 	ln := newLocalListener(t)
-	asm := assembly.New(assembly.Config{ID: "test-relay-mr-trip", DurabilityMode: cell.DurabilityDemo})
+	asm := assembly.New(assembly.Config{ID: "test-relay-mr-trip", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
 	require.NoError(t, asm.Register(newTestCell("cell-1")))
 
 	store := &managedResourceFailingStore{FakeStore: outboxtest.NewFakeStore()}
@@ -589,7 +590,7 @@ func TestRelay_AsManagedResource_TrippedBudget_Returns503(t *testing.T) {
 // Migrated from TestWithRelayHealth_DisabledBudget_SkipsChecker.
 func TestRelay_AsManagedResource_DisabledBudget_SkipsChecker(t *testing.T) {
 	ln := newLocalListener(t)
-	asm := assembly.New(assembly.Config{ID: "test-relay-mr-disabled", DurabilityMode: cell.DurabilityDemo})
+	asm := assembly.New(assembly.Config{ID: "test-relay-mr-disabled", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
 	require.NoError(t, asm.Register(newTestCell("cell-1")))
 
 	// Poll budget disabled (=0), others enabled.

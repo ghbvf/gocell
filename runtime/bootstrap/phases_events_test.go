@@ -26,6 +26,7 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/assembly"
 	"github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/wrapper"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
@@ -75,7 +76,7 @@ func TestPhase6_ConsumerMiddleware_AppliedInChain(t *testing.T) {
 		return next
 	}
 
-	asm := assembly.New(assembly.Config{ID: "phase6-mw-test", DurabilityMode: cell.DurabilityDemo})
+	asm := assembly.New(assembly.Config{ID: "phase6-mw-test", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
 	t.Cleanup(asm.Shutdown)
 	require.NoError(t, asm.Register(newStubEventCell("stub", "event.phase6.mw.v1")))
 	require.NoError(t, asm.Start(context.Background()))
@@ -133,7 +134,7 @@ func (neverReadySubscriber) Close(_ context.Context) error { return nil }
 func TestPhase6_EventRouterReadyTimeout_FiresAndReturnsError(t *testing.T) {
 	t.Parallel()
 
-	asm := assembly.New(assembly.Config{ID: "phase6-rt-test", DurabilityMode: cell.DurabilityDemo})
+	asm := assembly.New(assembly.Config{ID: "phase6-rt-test", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
 	t.Cleanup(asm.Shutdown)
 	require.NoError(t, asm.Register(newStubEventCell("stub", "event.phase6.rt.v1")))
 	require.NoError(t, asm.Start(context.Background()))

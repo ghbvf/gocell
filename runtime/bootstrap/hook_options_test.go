@@ -14,6 +14,7 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/assembly"
 	"github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/runtime/eventbus"
 )
@@ -88,6 +89,7 @@ func TestWithAssembly_OverridesHookOptions_BehaviourContract(t *testing.T) {
 	asm := assembly.New(assembly.Config{
 		ID:             "override-test",
 		DurabilityMode: cell.DurabilityDemo,
+		Clock:          clock.Real(),
 		HookObserver:   preBuiltObs,
 	})
 

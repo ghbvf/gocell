@@ -12,6 +12,7 @@ import (
 
 	"github.com/ghbvf/gocell/cells/accesscore/internal/domain"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/mem"
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/errcode"
@@ -175,7 +176,7 @@ func TestService_Logout_PublishError_DoesNotFailLogout(t *testing.T) {
 
 	fp := failingPublisher{err: fmt.Errorf("broker unavailable")}
 	emitter, err := outbox.NewDirectEmitter(
-		fp, outbox.DirectPublishFailOpen, metrics.NopProvider{}, "accesscore",
+		fp, outbox.DirectPublishFailOpen, metrics.NopProvider{}, clock.Real(), "accesscore",
 		outbox.WithLogger(slog.Default()))
 	require.NoError(t, err)
 	svc := MustNewService(repo, newLogoutRefreshStore(), slog.Default(), WithEmitter(emitter))

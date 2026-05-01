@@ -30,6 +30,7 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/assembly"
 	"github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/runtime/eventbus"
 )
@@ -66,7 +67,7 @@ func TestShutdown_HTTPAcceptsDuringPreShutdownDelay(t *testing.T) {
 	addr := ln.Addr().String()
 	const preDelay = barrierPreDelay
 
-	asm := assembly.New(assembly.Config{ID: "test-pre-delay", DurabilityMode: cell.DurabilityDemo})
+	asm := assembly.New(assembly.Config{ID: "test-pre-delay", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
 	b := New(
 		WithAssembly(asm),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(ln)),
@@ -173,7 +174,7 @@ func TestShutdown_RunCtxIndependentOfExternalCtx(t *testing.T) {
 		},
 	}
 
-	asm := assembly.New(assembly.Config{ID: "test-ctx-sep", DurabilityMode: cell.DurabilityDemo})
+	asm := assembly.New(assembly.Config{ID: "test-ctx-sep", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
 
 	// preShutdownDelay creates a reliable assertion window: after extCancel(),
 	// phase10ReadinessFlip blocks for the delay duration before LIFO teardown
@@ -240,7 +241,7 @@ func TestShutdown_WorkerErrorTriggersOrchestration(t *testing.T) {
 	workerErr := errors.New("worker exploded")
 	errorWorker := &errorAfterStartWorker{err: workerErr, startDelay: barrierWorkerStartDelay}
 
-	asm := assembly.New(assembly.Config{ID: "test-worker-err", DurabilityMode: cell.DurabilityDemo})
+	asm := assembly.New(assembly.Config{ID: "test-worker-err", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
 	b := New(
 		WithAssembly(asm),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(ln)),
@@ -265,7 +266,7 @@ func TestShutdown_TotalBudgetRespected(t *testing.T) {
 	const shutdownTimeout = barrierShutdownTimeout
 	const preDelay = barrierPreDelayShorter
 
-	asm := assembly.New(assembly.Config{ID: "test-budget", DurabilityMode: cell.DurabilityDemo})
+	asm := assembly.New(assembly.Config{ID: "test-budget", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
 	eb := eventbus.New()
 	b := New(
 		WithAssembly(asm),

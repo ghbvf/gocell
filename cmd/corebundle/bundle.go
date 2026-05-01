@@ -13,6 +13,7 @@ import (
 	configpg "github.com/ghbvf/gocell/cells/configcore/postgres"
 	"github.com/ghbvf/gocell/kernel/assembly"
 	"github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/kernel/clock"
 	kcrypto "github.com/ghbvf/gocell/kernel/crypto"
 	kernellifecycle "github.com/ghbvf/gocell/kernel/lifecycle"
 	"github.com/ghbvf/gocell/kernel/observability/metrics"
@@ -35,6 +36,7 @@ func buildAssembly(
 	asm := assembly.New(assembly.Config{
 		ID:              assemblyID,
 		DurabilityMode:  mode,
+		Clock:           clock.Real(),
 		HookObserver:    ps.hookObserver,
 		MetricsProvider: ps.metricProvider,
 		// HookTimeout omitted → assembly.DefaultHookTimeout (30s) applies.

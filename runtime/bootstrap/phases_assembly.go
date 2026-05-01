@@ -14,6 +14,7 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/assembly"
 	"github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/runtime/config"
 	"github.com/ghbvf/gocell/runtime/eventbus"
@@ -167,7 +168,7 @@ func samePubSubIdentity(pub outbox.Publisher, sub outbox.Subscriber) bool {
 func (b *Bootstrap) phase3InitAssembly(ctx context.Context, s *phaseState) error {
 	asm := b.assemblyCore
 	if asm == nil {
-		cfg := assembly.Config{ID: "default", DurabilityMode: cell.DurabilityDemo}
+		cfg := assembly.Config{ID: "default", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()}
 		if b.hookTimeoutSet {
 			cfg.HookTimeout = b.hookTimeout
 		}

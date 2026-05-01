@@ -22,6 +22,7 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/assembly"
 	"github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/runtime/auth"
 )
@@ -114,7 +115,7 @@ func TestDualListener_PrimaryReturns404ForInternalPrefix(t *testing.T) {
 			w.WriteHeader(http.StatusOK)
 		},
 	)
-	asm := assembly.New(assembly.Config{ID: "dual-primary-404", DurabilityMode: cell.DurabilityDemo})
+	asm := assembly.New(assembly.Config{ID: "dual-primary-404", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
 	require.NoError(t, asm.Register(c))
 	internalAuthChain, internalRing := testInternalAuthChain(t)
 
@@ -216,7 +217,7 @@ func TestDualListener_InternalRoutesAccessibleWithoutJWT(t *testing.T) {
 			w.WriteHeader(http.StatusOK)
 		},
 	)
-	asm := assembly.New(assembly.Config{ID: "dual-nojwt-test", DurabilityMode: cell.DurabilityDemo})
+	asm := assembly.New(assembly.Config{ID: "dual-nojwt-test", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
 	require.NoError(t, asm.Register(c))
 	internalAuthChain, internalRing := testInternalAuthChain(t)
 
@@ -274,7 +275,7 @@ func TestDualListener_InternalRoutesAccessibleWithoutJWT(t *testing.T) {
 // PR-A14b: duplicate address detection is no longer a phase0 check — it
 // surfaces as an OS-level EADDRINUSE error when the second socket is bound.
 func TestDualListener_EqualAddrsBindFails(t *testing.T) {
-	asm := assembly.New(assembly.Config{ID: "equal-addr-test", DurabilityMode: cell.DurabilityDemo})
+	asm := assembly.New(assembly.Config{ID: "equal-addr-test", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
 	// Pre-bind primary to ensure port is held; use the same port for internal.
 	primaryLn := newLocalListener(t)
 	collidingAddr := primaryLn.Addr().String()
@@ -304,7 +305,7 @@ func TestDualListener_Phase0RejectsEmptyAddr(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			asm := assembly.New(assembly.Config{ID: "empty-addr-" + tc.name, DurabilityMode: cell.DurabilityDemo})
+			asm := assembly.New(assembly.Config{ID: "empty-addr-" + tc.name, DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
 			opts := append([]Option{WithAssembly(asm)}, tc.opts...)
 			b := New(opts...)
 
@@ -334,7 +335,7 @@ func TestDualListener_InternalBindFailure_ClosesOwnedPrimary(t *testing.T) {
 	callerLn := newLocalListener(t)
 	collidingAddr := callerLn.Addr().String()
 
-	asm := assembly.New(assembly.Config{ID: "bind-fail-test", DurabilityMode: cell.DurabilityDemo})
+	asm := assembly.New(assembly.Config{ID: "bind-fail-test", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
 
 	b := New(
 		WithAssembly(asm),
@@ -379,7 +380,7 @@ func TestDualListener_ShutdownClosesBothServersNoGoroutineLeak(t *testing.T) {
 		func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) },
 		func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) },
 	)
-	asm := assembly.New(assembly.Config{ID: "shutdown-test", DurabilityMode: cell.DurabilityDemo})
+	asm := assembly.New(assembly.Config{ID: "shutdown-test", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
 	require.NoError(t, asm.Register(c))
 	internalAuthChain, _ := testInternalAuthChain(t)
 
@@ -445,7 +446,7 @@ func TestTripleListener_ShutdownNoGoroutineLeak(t *testing.T) {
 		func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) },
 		func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) },
 	)
-	asm := assembly.New(assembly.Config{ID: "triple-shutdown-test", DurabilityMode: cell.DurabilityDemo})
+	asm := assembly.New(assembly.Config{ID: "triple-shutdown-test", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
 	require.NoError(t, asm.Register(c))
 	internalAuthChain, _ := testInternalAuthChain(t)
 
@@ -515,7 +516,7 @@ func TestTripleListener_MidBindFailure_RollsBackEarlierBindings(t *testing.T) {
 	collidingAddr := collideLn.Addr().String()
 	// collideLn stays open so bootstrap's primary bind collides with EADDRINUSE.
 
-	asm := assembly.New(assembly.Config{ID: "triple-mid-bind-fail", DurabilityMode: cell.DurabilityDemo})
+	asm := assembly.New(assembly.Config{ID: "triple-mid-bind-fail", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
 
 	b := New(
 		WithAssembly(asm),
@@ -583,7 +584,7 @@ func TestDualListener_BootstrapOwnedPrimary_InternalBindFails(t *testing.T) {
 	// Keep collideLn open so the port stays reserved; bootstrap's internal
 	// bind will fail with EADDRINUSE on this port.
 
-	asm := assembly.New(assembly.Config{ID: "bootstrap-owned-fail", DurabilityMode: cell.DurabilityDemo})
+	asm := assembly.New(assembly.Config{ID: "bootstrap-owned-fail", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
 
 	b := New(
 		WithAssembly(asm),
@@ -640,7 +641,7 @@ func (c *duplicateMetaCell) RouteGroups() []cell.RouteGroup {
 // returns an error when the same (method, path) pair is mounted twice on the
 // primary listener — protecting configuration cleanliness (FinalizeAuth invariant).
 func TestDualListener_FinalizeAuth_DuplicateMeta_Errors(t *testing.T) {
-	asm := assembly.New(assembly.Config{ID: "dup-meta-test", DurabilityMode: cell.DurabilityDemo})
+	asm := assembly.New(assembly.Config{ID: "dup-meta-test", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
 	c := &duplicateMetaCell{
 		BaseCell: cell.NewBaseCell(cell.CellMetadata{ID: "dup-meta-cell", Type: cell.CellTypeCore}),
 	}
@@ -831,7 +832,7 @@ func TestPhase7ServeAll_DualListener_NoCloseRace(t *testing.T) {
 		func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) },
 		func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) },
 	)
-	asm := assembly.New(assembly.Config{ID: "race-test", DurabilityMode: cell.DurabilityDemo})
+	asm := assembly.New(assembly.Config{ID: "race-test", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
 	require.NoError(t, asm.Register(c))
 	internalAuthChain, _ := testInternalAuthChain(t)
 
@@ -893,7 +894,7 @@ func TestPhase7BindListeners_OwnedSocket_ClosedOnSiblingFailure(t *testing.T) {
 	holdLn := newLocalListener(t)
 	collidingAddr := holdLn.Addr().String()
 
-	asm := assembly.New(assembly.Config{ID: "owned-sibling-fail", DurabilityMode: cell.DurabilityDemo})
+	asm := assembly.New(assembly.Config{ID: "owned-sibling-fail", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
 
 	b := New(
 		WithAssembly(asm),
@@ -959,7 +960,7 @@ func TestRouteGroup_Middleware_OrderPreserved(t *testing.T) {
 		BaseCell: cell.NewBaseCell(cell.CellMetadata{ID: "mw-order-cell", Type: cell.CellTypeCore}),
 		order:    &order,
 	}
-	asm := assembly.New(assembly.Config{ID: "mw-order-test", DurabilityMode: cell.DurabilityDemo})
+	asm := assembly.New(assembly.Config{ID: "mw-order-test", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
 	require.NoError(t, asm.Register(c))
 
 	primaryLn := newLocalListener(t)
@@ -1014,7 +1015,7 @@ func TestAuthWiring_InternalGuard_WaitsForInternalListenerReady(t *testing.T) {
 		func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) },
 		func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) },
 	)
-	asm := assembly.New(assembly.Config{ID: "auth-wiring-test", DurabilityMode: cell.DurabilityDemo})
+	asm := assembly.New(assembly.Config{ID: "auth-wiring-test", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
 	require.NoError(t, asm.Register(c))
 	internalAuthChain, internalRing := testInternalAuthChain(t)
 
@@ -1071,7 +1072,7 @@ func TestShutdown_NumGoroutineBaseline_AfterServerStable(t *testing.T) {
 		func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) },
 		func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) },
 	)
-	asm := assembly.New(assembly.Config{ID: "goroutine-baseline-test", DurabilityMode: cell.DurabilityDemo})
+	asm := assembly.New(assembly.Config{ID: "goroutine-baseline-test", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
 	require.NoError(t, asm.Register(c))
 	internalAuthChain, _ := testInternalAuthChain(t)
 

@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"reflect"
 
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
@@ -67,6 +68,7 @@ var _ Emitter = (*WriterEmitter)(nil)
 type DirectEmitter struct {
 	publisher         Publisher
 	mode              DirectPublishFailureMode
+	clock             clock.Clock
 	cellID            string
 	logger            *slog.Logger
 	failOpenDroppedCv metrics.CounterVec
@@ -111,12 +113,14 @@ const defaultFailOpenRateThreshold = 0.05 // 5%
 // register the fail-open dropped counter (fqName after Namespace injection:
 // gocell_outbox_emit_failopen_dropped_total); pass metrics.NopProvider{} in
 // tests or demos where no backend is wired. A nil mp returns an errcode error.
+// clk is the clock used to stamp entry.CreatedAt when the caller has not set
+// it; pass clock.Real() in production and clockmock.New(...) in tests.
 //
 // Use WithLogger to override the default slog.Default() logger.
 // Use WithFailOpenRateThreshold to set the drop-ratio threshold for the
 // HealthCheckers checker (default 5%; 0 disables).
 func NewDirectEmitter(
-	p Publisher, mode DirectPublishFailureMode, mp metrics.Provider, cellID string, opts ...DirectEmitterOption,
+	p Publisher, mode DirectPublishFailureMode, mp metrics.Provider, clk clock.Clock, cellID string, opts ...DirectEmitterOption,
 ) (*DirectEmitter, error) {
 	if isNilEmitterDependency(p) {
 		return nil, errcode.New(errcode.ErrCellMissingOutbox,
@@ -125,6 +129,10 @@ func NewDirectEmitter(
 	if mp == nil {
 		return nil, errcode.New(errcode.ErrCellMissingOutbox,
 			"outbox: nil metrics provider for DirectEmitter")
+	}
+	if clk == nil {
+		return nil, errcode.New(errcode.ErrCellMissingOutbox,
+			"outbox: nil clock for DirectEmitter")
 	}
 	if cellID == "" {
 		return nil, errcode.New(errcode.ErrValidationFailed,
@@ -151,6 +159,7 @@ func NewDirectEmitter(
 	return &DirectEmitter{
 		publisher:         p,
 		mode:              mode,
+		clock:             clk,
 		cellID:            cellID,
 		logger:            cfg.logger,
 		failOpenDroppedCv: cv,
@@ -171,6 +180,9 @@ func (e *DirectEmitter) Emit(ctx context.Context, entry Entry) error {
 	}
 	if err := entry.Validate(); err != nil {
 		return err
+	}
+	if entry.CreatedAt.IsZero() {
+		entry.CreatedAt = e.clock.Now().UTC()
 	}
 	// Inject observability from context right before publishing so the entry
 	// carries the originating request's trace/request/correlation identity

@@ -18,6 +18,7 @@ import (
 	deviceregister "github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/slices/deviceregister"
 	devicestatus "github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/slices/devicestatus"
 	"github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/kernel/clock"
 	kcommand "github.com/ghbvf/gocell/kernel/command"
 	"github.com/ghbvf/gocell/kernel/command/commandtest"
 	"github.com/ghbvf/gocell/kernel/observability/metrics"
@@ -157,7 +158,7 @@ func (c *DeviceCell) buildEmitter() (*outbox.DirectEmitter, error) {
 	if mp == nil {
 		mp = metrics.NopProvider{}
 	}
-	return outbox.NewDirectEmitter(c.publisher, outbox.DirectPublishFailOpen, mp, "devicecell", outbox.WithLogger(c.logger))
+	return outbox.NewDirectEmitter(c.publisher, outbox.DirectPublishFailOpen, mp, clock.Real(), "devicecell", outbox.WithLogger(c.logger))
 }
 
 // Init sets up repositories, slice services, and handlers.

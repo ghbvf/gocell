@@ -12,6 +12,7 @@ import (
 	"go.uber.org/goleak"
 
 	"github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 )
@@ -323,6 +324,7 @@ func TestCoreAssembly_StopDrainsDispatcher(t *testing.T) {
 		ID:             "drain-test",
 		DurabilityMode: cell.DurabilityDemo,
 		HookObserver:   obs,
+		Clock:          clock.Real(),
 	})
 	require.NoError(t, a.Register(newHookOrderCell("A", new([]string), "")))
 	require.NoError(t, a.Start(context.Background()))

@@ -11,6 +11,7 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/assembly"
 	"github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/kernel/clock"
 )
 
 // runtimeOnlyHookFields are fields present on bootstrap.Hook that are
@@ -106,7 +107,7 @@ type plainCellForLC struct{ cell.BaseCell }
 // (without starting), sufficient for phase3b type-assertion discovery.
 func buildAsmRegistered(t *testing.T, cells ...cell.Cell) *assembly.CoreAssembly {
 	t.Helper()
-	asm := assembly.New(assembly.Config{ID: "testasm", DurabilityMode: cell.DurabilityDemo})
+	asm := assembly.New(assembly.Config{ID: "testasm", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
 	for _, c := range cells {
 		require.NoError(t, asm.Register(c))
 	}
