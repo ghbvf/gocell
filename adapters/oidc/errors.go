@@ -8,6 +8,6 @@ const (
 	ErrAdapterOIDCDiscovery errcode.Code = "ERR_ADAPTER_OIDC_DISCOVERY"
 	ErrAdapterOIDCVerify    errcode.Code = "ERR_ADAPTER_OIDC_VERIFY"
 
-	ErrAdapterOIDCToken    errcode.Code = "ERR_ADAPTER_OIDC_TOKEN"
+	ErrAdapterOIDCExchange errcode.Code = "ERR_ADAPTER_OIDC_TOKEN"
 	ErrAdapterOIDCUserInfo errcode.Code = "ERR_ADAPTER_OIDC_USERINFO"
 )

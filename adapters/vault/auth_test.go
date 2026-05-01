@@ -53,7 +53,7 @@ func setEnv(t *testing.T, pairs ...string) {
 	if len(pairs)%2 != 0 {
 		t.Fatal("setEnv: odd number of arguments")
 	}
-	for i := 0; i < len(pairs); i += 2 {
+	for i := 0; i+1 < len(pairs); i += 2 {
 		key, val := pairs[i], pairs[i+1]
 		old, wasSet := os.LookupEnv(key)
 		if val == "" {

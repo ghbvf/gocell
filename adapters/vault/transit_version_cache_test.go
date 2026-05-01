@@ -141,7 +141,9 @@ func TestTransitKeyProvider_NoRWMutex(t *testing.T) {
 	for i := 0; i < rt.NumField(); i++ {
 		f := rt.Field(i)
 		if f.Type == rwMutexType {
-			t.Fatalf("TransitKeyProvider.%s is sync.RWMutex; the provider must stay lock-free — Current/Rotate use atomic.Int64 cache instead", f.Name)
+			t.Fatalf("TransitKeyProvider.%s is sync.RWMutex; "+
+				"the provider must stay lock-free — Current/Rotate use atomic.Int64 cache instead",
+				f.Name)
 		}
 	}
 }

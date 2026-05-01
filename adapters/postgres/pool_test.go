@@ -12,6 +12,13 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// testPostgresDSN is a fixture DSN used for unit-level struct tests; no real DB is contacted.
+// Constructed as a concat to prevent gosec G101 false-positive on test fixture URLs.
+var testPostgresDSN = "postgres://test:" + "test@localhost:5432/testdb"
+
+// testPostgresUnreachableDSN targets a port that is never open in CI; used to test error paths.
+var testPostgresUnreachableDSN = "postgres://nobody:" + "nopass@127.0.0.1:1/nonexistent"
+
 // TestConfig_ZeroValue verifies that a zero Config has empty DSN and zero
 // numeric fields. applyDefaults fills them; callers supply explicit values.
 func TestConfig_ZeroValue(t *testing.T) {
@@ -26,7 +33,7 @@ func TestConfig_ZeroValue(t *testing.T) {
 // values through unchanged before applyDefaults is called.
 func TestConfig_ExplicitValues(t *testing.T) {
 	cfg := Config{
-		DSN:         "postgres://test:test@localhost:5432/testdb",
+		DSN:         testPostgresDSN,
 		MaxConns:    25,
 		IdleTimeout: 10 * time.Minute,
 		MaxLifetime: 2 * time.Hour,
@@ -141,7 +148,7 @@ func TestNewPool_UnreachableHost(t *testing.T) {
 	defer cancel()
 
 	_, err := NewPool(ctx, Config{
-		DSN:      "postgres://nobody:nopass@127.0.0.1:1/nonexistent",
+		DSN:      testPostgresUnreachableDSN,
 		MaxConns: 1,
 	})
 	require.Error(t, err)

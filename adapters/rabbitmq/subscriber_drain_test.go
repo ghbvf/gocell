@@ -442,9 +442,10 @@ func TestSubscriber_StopIntake_PerCallTimeout(t *testing.T) {
 	defer subCancel()
 	subDone := make(chan error, 1)
 	go func() {
-		subDone <- sub.Subscribe(subCtx, outbox.Subscription{Topic: "per-call.topic"}, func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
-			return outbox.HandleResult{Disposition: outbox.DispositionAck}
-		})
+		subDone <- sub.Subscribe(subCtx, outbox.Subscription{Topic: "per-call.topic"},
+			func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+				return outbox.HandleResult{Disposition: outbox.DispositionAck}
+			})
 	}()
 
 	require.Eventually(t, func() bool {

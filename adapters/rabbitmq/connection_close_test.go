@@ -136,7 +136,7 @@ func TestConnection_Close_RespectsCtxDeadline(t *testing.T) {
 	}
 
 	conn, err := NewConnection(Config{
-		URL:             "amqp://test:test@localhost:5672/",
+		URL:             testAMQPURL,
 		ChannelPoolSize: 1,
 		ConfirmTimeout:  2 * time.Second,
 	}, WithDialFunc(dialFunc))

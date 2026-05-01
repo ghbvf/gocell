@@ -23,8 +23,10 @@ func TestRedisDriver_CompileTimeInterfaceAssertion(t *testing.T) {
 // Lua script. The test will fail at compile time (constant reference) if the
 // script strings differ from what is expected.
 func TestRedisDriver_LuaScriptContent(t *testing.T) {
-	wantRelease := "\nif redis.call(\"GET\", KEYS[1]) == ARGV[1] then\n    return redis.call(\"DEL\", KEYS[1])\nelse\n    return 0\nend\n"
-	wantRenew := "\nif redis.call(\"GET\", KEYS[1]) == ARGV[1] then\n    return redis.call(\"PEXPIRE\", KEYS[1], ARGV[2])\nelse\n    return 0\nend\n"
+	wantRelease := "\nif redis.call(\"GET\", KEYS[1]) == ARGV[1] then\n" +
+		"    return redis.call(\"DEL\", KEYS[1])\nelse\n    return 0\nend\n"
+	wantRenew := "\nif redis.call(\"GET\", KEYS[1]) == ARGV[1] then\n" +
+		"    return redis.call(\"PEXPIRE\", KEYS[1], ARGV[2])\nelse\n    return 0\nend\n"
 
 	assert.Equal(t, wantRelease, releaseLockScript, "releaseLockScript must not be modified")
 	assert.Equal(t, wantRenew, renewLockScript, "renewLockScript must not be modified")

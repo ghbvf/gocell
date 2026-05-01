@@ -108,17 +108,18 @@ func UpgradeHandler(hub *rtws.Hub, cfg UpgradeConfig) (http.Handler, error) {
 		connID := "ws-" + uuid.NewString()
 		conn := NewConn(connID, wsConn)
 
+		remoteAddr := safeAddr(r.RemoteAddr)
 		if regErr := hub.Register(r.Context(), conn); regErr != nil {
 			_ = wsConn.Close(websocket.StatusNormalClosure, "registration rejected")
 			slog.Warn("websocket: register rejected",
 				slog.Any("error", regErr),
-				slog.String("remote_addr", r.RemoteAddr),
+				slog.String("remote_addr", remoteAddr),
 			)
 			return
 		}
 		slog.Info("websocket: client connected",
 			slog.String("conn_id", connID),
-			slog.String("remote_addr", r.RemoteAddr),
+			slog.String("remote_addr", remoteAddr),
 		)
 	}), nil
 }
@@ -133,10 +134,28 @@ func MustUpgradeHandler(hub *rtws.Hub, cfg UpgradeConfig) http.Handler {
 }
 
 func logUpgradeFailure(r *http.Request, err error) {
+	addr := safeAddr(r.RemoteAddr)
 	slog.Error("websocket: upgrade failed",
 		slog.Any("error", err),
-		slog.String("remote_addr", r.RemoteAddr),
+		slog.String("remote_addr", addr),
 	)
+}
+
+// safeAddr sanitizes a network address string for use in structured log fields,
+// preventing log-injection via malformed values (gosec G706). It parses host:port
+// with net.SplitHostPort; on failure it strips control characters from the raw value.
+func safeAddr(addr string) string {
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		// Fallback: strip control characters from the raw value.
+		return strings.Map(func(c rune) rune {
+			if c < 0x20 || c == 0x7F {
+				return -1
+			}
+			return c
+		}, addr)
+	}
+	return net.JoinHostPort(host, port)
 }
 
 type upgradeAcceptWriter struct {
