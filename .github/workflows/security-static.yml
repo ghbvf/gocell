@@ -1,0 +1,96 @@
+name: Security · Static Analysis
+
+# SAST layer: CodeQL (data-flow taint analysis, owned by GitHub) + Semgrep
+# (community pattern rules — p/golang, p/owasp-top-ten, p/secrets).
+# ref: github/codeql-action v3 — security-extended queries on Go
+# ref: semgrep p/golang + p/owasp-top-ten + p/secrets community rulesets
+#
+# Policy enforced *by CI*:
+#   - Neither job passes --exclude / --exclude-rule / --ignore (verify-
+#     supply-chain-clean.sh forbids these flags in this file).
+#   - .semgrepignore and .github/codeql/codeql-config.yml (with paths-ignore
+#     beyond generated/ or vendor/) are forbidden by the same verify gate.
+#   - Semgrep runs with --strict (rule-parse error fails) and --error
+#     (any finding fails). CodeQL "security-extended" suite fails the run on
+#     any open alert by default for new code.
+
+on:
+  push:
+    branches: [develop]
+  pull_request:
+    branches: [develop, main, 'release/**']
+  schedule:
+    - cron: '17 18 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  security-events: write
+
+jobs:
+  codeql:
+    name: CodeQL (Go)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      security-events: write
+      actions: read
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+
+      - name: Init CodeQL
+        uses: github/codeql-action/init@ce64ddcb0d8d890d2df4a9d1c04ff297367dea2a # v3
+        with:
+          languages: go
+          queries: security-extended
+
+      - name: Autobuild
+        uses: github/codeql-action/autobuild@ce64ddcb0d8d890d2df4a9d1c04ff297367dea2a # v3
+
+      - name: Analyze
+        uses: github/codeql-action/analyze@ce64ddcb0d8d890d2df4a9d1c04ff297367dea2a # v3
+        with:
+          category: codeql-go
+
+  semgrep:
+    name: Semgrep
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      security-events: write
+    container:
+      # Pinned by digest (multi-arch OCI index). Bump together with rule pack
+      # version to track upstream rule fixes; do not float on :latest.
+      image: semgrep/semgrep:latest@sha256:7810f1d7884974ab6dda7bef8f4a2c8e165ea2142fd8260515d380e4f1407263
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: semgrep ci
+        # --strict: rule-parse error fails the run.
+        # --error: any finding (regardless of severity) fails the run.
+        # No --exclude / --exclude-rule: bypass surface is closed.
+        run: |
+          semgrep ci \
+            --config=p/golang \
+            --config=p/owasp-top-ten \
+            --config=p/secrets \
+            --sarif --output=semgrep.sarif \
+            --strict --error
+        env:
+          # OSS mode — no Semgrep Cloud token. Community rules ship with
+          # the container image. Telemetry off.
+          SEMGREP_SEND_METRICS: "off"
+
+      - name: Upload SARIF to GitHub Security
+        if: always() && hashFiles('semgrep.sarif') != ''
+        uses: github/codeql-action/upload-sarif@ce64ddcb0d8d890d2df4a9d1c04ff297367dea2a # v3
+        with:
+          sarif_file: semgrep.sarif
+          category: semgrep

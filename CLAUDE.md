@@ -81,6 +81,17 @@ actors.yaml   — 外部 Actor 注册（参与 contract 但不属于 Cell 模型
 
 实现外部协议/标准（密码学、签名、OIDC、migration、可观测性导出等）必须优先使用官方或成熟开源库，禁止自建；实现 GoCell 领域逻辑（Cell/Slice 模型、治理规则、outbox 接口等）保留自建。详见 `docs/reviews/202604061630-dependency-replacement-plan.md`。
 
+## 供应链与安全扫描
+
+四层静态门覆盖依赖与代码安全，PR 与 develop push 上必执行：
+
+- **gosec**（`.golangci.yml`）— Go 编码层 lint
+- **govulncheck**（`.github/workflows/security-vuln.yml`）— 官方漏洞库扫描 `go.mod`
+- **Semgrep**（`.github/workflows/security-static.yml`）— 模式 SAST（`p/golang` + `p/owasp-top-ten` + `p/secrets`）
+- **CodeQL**（`.github/workflows/security-static.yml`）— 数据流分析（`security-extended`）
+
+报告进 GitHub Security tab（workflows 自带 SARIF 上传）。处置规则由 CI 直接执行：扫描器以 `--strict` / `--error` 运行命中即 fail，全局忽略文件由 `hack/verify-supply-chain-clean.sh` 静态拦截，行级豁免由 nolintlint / verify gate 强制含理由。
+
 ## 参考框架
 
 开发时参考对标框架解决方案，见 `docs/references/framework-comparison.md`：
