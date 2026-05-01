@@ -103,6 +103,7 @@ func CSRF(cfg CSRFConfig) func(http.Handler) http.Handler {
 			}
 			// Step 2: Excluded paths bypass.
 			// Normalize path to prevent traversal (e.g., /a/../b → /b).
+			// nosemgrep: go.lang.security.filepath-clean-misuse.filepath-clean-misuse // URL routing, not file I/O
 			if isExcludedPath(path.Clean(r.URL.Path), st.excluded) {
 				next.ServeHTTP(w, r)
 				return

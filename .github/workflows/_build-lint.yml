@@ -493,6 +493,7 @@ jobs:
           restore-keys: ${{ runner.os }}-sonar
 
       - name: SonarQube Scan
+        # nosemgrep: generic.secrets.security.detected-sonarqube-docs-api-key.detected-sonarqube-docs-api-key // SHA-pinned action commit, not an API key
         uses: SonarSource/sonarqube-scan-action@59db25f34e16620e48ab4bb9e4a5dce155cb5432 # v7
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
