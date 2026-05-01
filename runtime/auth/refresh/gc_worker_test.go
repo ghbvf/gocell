@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 )
 
@@ -19,7 +20,12 @@ type staticClock struct {
 	now time.Time
 }
 
-func (c staticClock) Now() time.Time { return c.now }
+func (c staticClock) Now() time.Time                  { return c.now }
+func (c staticClock) Since(t time.Time) time.Duration { return c.now.Sub(t) }
+func (c staticClock) Until(t time.Time) time.Duration { return t.Sub(c.now) }
+func (c staticClock) NewTimerAt(_ time.Time) clock.Timer {
+	panic("staticClock.NewTimerAt not implemented")
+}
 
 type gcStoreSpy struct {
 	mu      sync.Mutex

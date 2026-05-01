@@ -15,6 +15,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/ghbvf/gocell/cells/accesscore/internal/mem"
+	kernelclock "github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 )
@@ -425,11 +426,16 @@ func TestLifecycle_StopBeforeStart_AbortsCleanlyNoGoroutineLeak(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// fakeClock — used in option tests
+// fakeClock — used in option tests; implements clock.Clock (kernel/clock)
 // ---------------------------------------------------------------------------
 
 type fakeClock struct {
 	t time.Time
 }
 
-func (c *fakeClock) Now() time.Time { return c.t }
+func (c *fakeClock) Now() time.Time                  { return c.t }
+func (c *fakeClock) Since(t time.Time) time.Duration { return c.t.Sub(t) }
+func (c *fakeClock) Until(t time.Time) time.Duration { return t.Sub(c.t) }
+func (c *fakeClock) NewTimerAt(_ time.Time) kernelclock.Timer {
+	panic("fakeClock.NewTimerAt not implemented")
+}

@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/runtime/auth/refresh"
 )
 
@@ -25,7 +26,7 @@ func (c *AccessCore) refreshGCHook() cell.LifecycleHook {
 		OnStart: func(ctx context.Context) error {
 			worker, err := refresh.NewGCWorker(refresh.GCWorkerConfig{
 				Store:     c.refreshStore,
-				Clock:     realClock{},
+				Clock:     clock.Real(),
 				Interval:  c.refreshGCInterval,
 				Retention: c.refreshGCRetention,
 				Logger:    c.logger,

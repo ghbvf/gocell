@@ -22,6 +22,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/runtime/auth/refresh"
@@ -43,6 +44,21 @@ func (c *FakeClock) Now() time.Time {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.now
+}
+
+// Since returns the duration elapsed since t.
+func (c *FakeClock) Since(t time.Time) time.Duration {
+	return c.Now().Sub(t)
+}
+
+// Until returns the duration until t.
+func (c *FakeClock) Until(t time.Time) time.Duration {
+	return t.Sub(c.Now())
+}
+
+// NewTimerAt is not used by store contract tests; panics if called.
+func (c *FakeClock) NewTimerAt(_ time.Time) clock.Timer {
+	panic("storetest.FakeClock.NewTimerAt not implemented")
 }
 
 // Advance moves the clock forward by d.

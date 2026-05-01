@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ghbvf/gocell/kernel/clock/clockmock"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/runtime/distlock"
 	"github.com/ghbvf/gocell/runtime/distlock/locktest"
@@ -77,7 +78,7 @@ func waitForRenewL(t *testing.T, l distlock.Locker, fd *locktest.FakeDriver, wan
 // TC-1: Happy path — acquire, advance to trigger renew, release.
 // Cause == ErrLockReleased.
 func TestLocker_TC1_HappyPath(t *testing.T) {
-	fc := locktest.NewFakeClock(time.Time{})
+	fc := clockmock.New(time.Time{})
 	fd := locktest.NewFakeDriver()
 	l := newTestLocker(fc, fd)
 
@@ -119,7 +120,7 @@ func TestLocker_TC1_HappyPath(t *testing.T) {
 
 // TC-2: Advance ttl*0.5 - 1ns → no renew; Advance 1ns → exactly 1 renew.
 func TestLocker_TC2_RenewIntervalPrecision(t *testing.T) {
-	fc := locktest.NewFakeClock(time.Time{})
+	fc := clockmock.New(time.Time{})
 	fd := locktest.NewFakeDriver()
 	l := newTestLocker(fc, fd)
 
@@ -163,7 +164,7 @@ func TestLocker_TC2_RenewIntervalPrecision(t *testing.T) {
 // SetNextRenewError is single-shot: key3a's one attempt consumes the error;
 // key3b's renew call has no injected error and succeeds.
 func TestLocker_TC3_RenewError_LockLost(t *testing.T) {
-	fc := locktest.NewFakeClock(time.Time{})
+	fc := clockmock.New(time.Time{})
 	fd := locktest.NewFakeDriver()
 	// Use maxRenewAttempts=1 so a single injected error exhausts the budget.
 	l := distlock.MustNew(fd,
@@ -251,7 +252,7 @@ func TestLocker_TC3_RenewError_LockLost(t *testing.T) {
 // TC-4: NextRenewHeld=false → lockCtx canceled with ErrLockLost.
 // Distinct from TC-3 (error vs held=false).
 func TestLocker_TC4_RenewNotHeld_LockLost(t *testing.T) {
-	fc := locktest.NewFakeClock(time.Time{})
+	fc := clockmock.New(time.Time{})
 	fd := locktest.NewFakeDriver()
 	l := newTestLocker(fc, fd)
 
@@ -298,7 +299,7 @@ func TestLocker_TC4_RenewNotHeld_LockLost(t *testing.T) {
 //   - TC-5b: context.WithCancelCause with custom cause → Cause propagated exactly
 func TestLocker_TC5_ParentCancel(t *testing.T) {
 	t.Run("TC5a_PlainCancel", func(t *testing.T) {
-		fc := locktest.NewFakeClock(time.Time{})
+		fc := clockmock.New(time.Time{})
 		fd := locktest.NewFakeDriver()
 		l := newTestLocker(fc, fd)
 
@@ -333,7 +334,7 @@ func TestLocker_TC5_ParentCancel(t *testing.T) {
 	})
 
 	t.Run("TC5b_CustomCausePropagation", func(t *testing.T) {
-		fc := locktest.NewFakeClock(time.Time{})
+		fc := clockmock.New(time.Time{})
 		fd := locktest.NewFakeDriver()
 		l := newTestLocker(fc, fd)
 
@@ -375,7 +376,7 @@ func TestLocker_TC5_ParentCancel(t *testing.T) {
 
 // TC-6: Double release — idempotent, Driver.Release called exactly once.
 func TestLocker_TC6_DoubleRelease(t *testing.T) {
-	fc := locktest.NewFakeClock(time.Time{})
+	fc := clockmock.New(time.Time{})
 	fd := locktest.NewFakeDriver()
 	l := newTestLocker(fc, fd)
 
@@ -409,7 +410,7 @@ func TestLocker_TC6_DoubleRelease(t *testing.T) {
 
 // TC-7: SetNX returns false → Acquire returns ErrLockTimeout; no goroutine leaked.
 func TestLocker_TC7_AcquireBusy(t *testing.T) {
-	fc := locktest.NewFakeClock(time.Time{})
+	fc := clockmock.New(time.Time{})
 	fd := locktest.NewFakeDriver()
 	fd.SetNextSetNX(false)
 
@@ -434,7 +435,7 @@ func TestLocker_TC7_AcquireBusy(t *testing.T) {
 
 // TC-8: Pre-canceled ctx → Acquire returns ctx.Err() without calling SetNX.
 func TestLocker_TC8_PreCanceledCtx(t *testing.T) {
-	fc := locktest.NewFakeClock(time.Time{})
+	fc := clockmock.New(time.Time{})
 	fd := locktest.NewFakeDriver()
 	l := newTestLocker(fc, fd)
 
@@ -457,7 +458,7 @@ func TestLocker_TC8_PreCanceledCtx(t *testing.T) {
 // context machinery — no watcher goroutines are needed.
 // After all releases and drain, goroutine count returns to baseline.
 func TestLocker_TC9_GoroutineCount(t *testing.T) {
-	fc := locktest.NewFakeClock(time.Time{})
+	fc := clockmock.New(time.Time{})
 	fd := locktest.NewFakeDriver()
 	l := newTestLocker(fc, fd)
 
@@ -537,7 +538,7 @@ func TestLocker_TC9_GoroutineCount(t *testing.T) {
 
 // TC-10: Single lock release → Drained closes; next Acquire re-starts manager.
 func TestLocker_TC10_LazyLifecycle(t *testing.T) {
-	fc := locktest.NewFakeClock(time.Time{})
+	fc := clockmock.New(time.Time{})
 	fd := locktest.NewFakeDriver()
 	l := newTestLocker(fc, fd)
 
@@ -589,7 +590,7 @@ func TestLocker_TC10_LazyLifecycle(t *testing.T) {
 // FakeDriver shares FakeClock so TTL expiry logic is coherent with the
 // manager's virtual time.
 func TestLocker_TC11_SmallTTLNoSpinLoop(t *testing.T) {
-	fc := locktest.NewFakeClock(time.Time{})
+	fc := clockmock.New(time.Time{})
 	fd := locktest.NewFakeDriverWithClock(fc.Now)
 	l := newTestLocker(fc, fd)
 
@@ -635,7 +636,7 @@ func TestLocker_TC11_SmallTTLNoSpinLoop(t *testing.T) {
 // LastRenewDeadline() and asserting it falls within a small tolerance of the
 // expected value.
 func TestLocker_TC12_DriftFactor(t *testing.T) {
-	fc := locktest.NewFakeClock(time.Time{})
+	fc := clockmock.New(time.Time{})
 	fd := locktest.NewFakeDriverWithClock(fc.Now)
 
 	const driftFactor = 0.01
@@ -714,7 +715,7 @@ func TestLocker_TC12_DriftFactor(t *testing.T) {
 // TestLocker_LockCtxValuePropagation verifies that context values stored in the
 // parent ctx are accessible via lockCtx (lockCtx derives from ctx).
 func TestLocker_LockCtxValuePropagation(t *testing.T) {
-	fc := locktest.NewFakeClock(time.Time{})
+	fc := clockmock.New(time.Time{})
 	fd := locktest.NewFakeDriver()
 	l := newTestLocker(fc, fd)
 
@@ -743,7 +744,7 @@ func TestLocker_LockCtxValuePropagation(t *testing.T) {
 // TestLocker_LockCtxDeadlinePropagation verifies that the parent deadline is
 // propagated into lockCtx (lockCtx derives from ctx).
 func TestLocker_LockCtxDeadlinePropagation(t *testing.T) {
-	fc := locktest.NewFakeClock(time.Time{})
+	fc := clockmock.New(time.Time{})
 	fd := locktest.NewFakeDriver()
 	l := newTestLocker(fc, fd)
 
@@ -879,7 +880,7 @@ func TestLocker_Acquire_RejectsZeroTTL(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			fc := locktest.NewFakeClock(time.Time{})
+			fc := clockmock.New(time.Time{})
 			fd := locktest.NewFakeDriver()
 			l := newTestLocker(fc, fd)
 
@@ -912,7 +913,7 @@ func releaseIfNotNil(t *testing.T, release func() error) {
 // TestLocker_ConcurrentRelease acquires 100 locks then releases all 100 concurrently.
 // Asserts no panic, no race, and all 100 Driver.Release calls are made.
 func TestLocker_ConcurrentRelease(t *testing.T) {
-	fc := locktest.NewFakeClock(time.Time{})
+	fc := clockmock.New(time.Time{})
 	fd := locktest.NewFakeDriver()
 	l := newTestLocker(fc, fd)
 
@@ -959,7 +960,7 @@ func TestLocker_ConcurrentRelease(t *testing.T) {
 // TestLocker_ExtremeTTL_LongDuration verifies renewal fires at ttl*renewFraction
 // with a 1-hour TTL, using a fake clock (no real waits).
 func TestLocker_ExtremeTTL_LongDuration(t *testing.T) {
-	fc := locktest.NewFakeClock(time.Time{})
+	fc := clockmock.New(time.Time{})
 	fd := locktest.NewFakeDriverWithClock(fc.Now)
 	l := distlock.MustNew(fd,
 		distlock.WithClock(fc),
@@ -994,7 +995,7 @@ func TestLocker_ExtremeTTL_LongDuration(t *testing.T) {
 // TestLocker_ExtremeTTL_ShortDuration verifies that a 1ms TTL does not spin-loop.
 // Each Advance(ttl/2) should trigger exactly one renew.
 func TestLocker_ExtremeTTL_ShortDuration(t *testing.T) {
-	fc := locktest.NewFakeClock(time.Time{})
+	fc := clockmock.New(time.Time{})
 	fd := locktest.NewFakeDriverWithClock(fc.Now)
 	l := distlock.MustNew(fd,
 		distlock.WithClock(fc),
@@ -1034,7 +1035,7 @@ func TestLocker_ExtremeTTL_ShortDuration(t *testing.T) {
 // With the default retry budget (maxRenewAttempts=3), the manager retries and
 // the lock is NOT lost. Calls("Renew") == 2 (1 fail + 1 success).
 func TestLocker_TC13_TransientRenewError_ThenSuccess(t *testing.T) {
-	fc := locktest.NewFakeClock(time.Time{})
+	fc := clockmock.New(time.Time{})
 	fd := locktest.NewFakeDriver()
 	l := newTestLocker(fc, fd) // default maxRenewAttempts=3
 
@@ -1084,7 +1085,7 @@ func TestLocker_TC13_TransientRenewError_ThenSuccess(t *testing.T) {
 // With maxRenewAttempts=3, all 3 attempts fail → ErrLockLost.
 // Calls("Renew") == 3.
 func TestLocker_TC14_BudgetExhausted_LockLost(t *testing.T) {
-	fc := locktest.NewFakeClock(time.Time{})
+	fc := clockmock.New(time.Time{})
 	fd := locktest.NewFakeDriver()
 	l := newTestLocker(fc, fd) // default maxRenewAttempts=3
 
@@ -1131,7 +1132,7 @@ func TestLocker_TC14_BudgetExhausted_LockLost(t *testing.T) {
 // Even with maxRenewAttempts=3, held=false is not an I/O error — no retry.
 // Calls("Renew") == 1.
 func TestLocker_TC15_PermanentOwnershipLost_NoRetry(t *testing.T) {
-	fc := locktest.NewFakeClock(time.Time{})
+	fc := clockmock.New(time.Time{})
 	fd := locktest.NewFakeDriver()
 	l := newTestLocker(fc, fd) // default maxRenewAttempts=3
 
@@ -1198,7 +1199,7 @@ func TestLocker_WithMaxRenewAttempts_Validation(t *testing.T) {
 
 // TestLocker_Release_ReturnsError verifies that release() propagates Driver.Release errors.
 func TestLocker_Release_ReturnsError(t *testing.T) {
-	fc := locktest.NewFakeClock(time.Time{})
+	fc := clockmock.New(time.Time{})
 	fd := locktest.NewFakeDriver()
 	l := newTestLocker(fc, fd)
 
@@ -1223,7 +1224,7 @@ func TestLocker_Release_ReturnsError(t *testing.T) {
 
 // TestLocker_Stats_Empty verifies that a fresh Locker reports 0 active locks.
 func TestLocker_Stats_Empty(t *testing.T) {
-	fc := locktest.NewFakeClock(time.Time{})
+	fc := clockmock.New(time.Time{})
 	fd := locktest.NewFakeDriver()
 	l := newTestLocker(fc, fd)
 
@@ -1235,7 +1236,7 @@ func TestLocker_Stats_Empty(t *testing.T) {
 
 // TestLocker_Stats_AfterAcquire verifies that Stats().ActiveLocks reflects active count.
 func TestLocker_Stats_AfterAcquire(t *testing.T) {
-	fc := locktest.NewFakeClock(time.Time{})
+	fc := clockmock.New(time.Time{})
 	fd := locktest.NewFakeDriver()
 	l := newTestLocker(fc, fd)
 
@@ -1275,7 +1276,7 @@ func TestLocker_Stats_AfterAcquire(t *testing.T) {
 
 // TestLocker_Stats_AfterRelease verifies Stats().ActiveLocks decrements on release.
 func TestLocker_Stats_AfterRelease(t *testing.T) {
-	fc := locktest.NewFakeClock(time.Time{})
+	fc := clockmock.New(time.Time{})
 	fd := locktest.NewFakeDriver()
 	l := newTestLocker(fc, fd)
 

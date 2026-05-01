@@ -8,6 +8,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/runtime/auth/refresh"
 	"github.com/ghbvf/gocell/runtime/auth/refresh/memstore"
 	"github.com/ghbvf/gocell/runtime/auth/refresh/storetest"
@@ -20,8 +21,11 @@ var errTypedNilReaderUsed = errors.New("typed nil reader should have been defaul
 
 type typedNilClock struct{}
 
-func (*typedNilClock) Now() time.Time {
-	return baseTime
+func (*typedNilClock) Now() time.Time                  { return baseTime }
+func (*typedNilClock) Since(t time.Time) time.Duration { return baseTime.Sub(t) }
+func (*typedNilClock) Until(t time.Time) time.Duration { return t.Sub(baseTime) }
+func (*typedNilClock) NewTimerAt(_ time.Time) clock.Timer {
+	panic("typedNilClock.NewTimerAt not implemented")
 }
 
 type typedNilReader struct{}

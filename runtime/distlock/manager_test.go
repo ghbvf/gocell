@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ghbvf/gocell/kernel/clock/clockmock"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/runtime/distlock"
 	"github.com/ghbvf/gocell/runtime/distlock/locktest"
@@ -77,7 +78,7 @@ func waitForRenewM(t *testing.T, m *distlock.Manager, fd *locktest.FakeDriver, w
 // Then we step-advance with waitPendingTimers barriers to avoid d<=0 immediate
 // timers, ensuring key2's timer is properly registered before each advance.
 func TestManager_HeapOrder(t *testing.T) {
-	fc := locktest.NewFakeClock(time.Time{})
+	fc := clockmock.New(time.Time{})
 	fd := locktest.NewFakeDriver()
 	fd.WithClock(fc.Now)
 
@@ -148,7 +149,7 @@ func TestManager_HeapOrder(t *testing.T) {
 // TestManager_Lifecycle_LazyStart verifies that the manager goroutine is not
 // started until the first Acquire and drains after the last release.
 func TestManager_Lifecycle_LazyStart(t *testing.T) {
-	fc := locktest.NewFakeClock(time.Time{})
+	fc := clockmock.New(time.Time{})
 	fd := locktest.NewFakeDriver()
 	l := distlock.MustNew(fd, distlock.WithClock(fc))
 
@@ -177,7 +178,7 @@ func TestManager_Lifecycle_LazyStart(t *testing.T) {
 
 // TestManager_SnapshotLocks verifies that Snapshot().Locks tracks adds and removes.
 func TestManager_SnapshotLocks(t *testing.T) {
-	fc := locktest.NewFakeClock(time.Time{})
+	fc := clockmock.New(time.Time{})
 	fd := locktest.NewFakeDriver()
 	l := distlock.MustNew(fd, distlock.WithClock(fc))
 

@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ghbvf/gocell/kernel/clock/clockmock"
 	"github.com/ghbvf/gocell/runtime/distlock"
 	"github.com/ghbvf/gocell/runtime/distlock/locktest"
 )
@@ -20,7 +21,7 @@ import (
 func TestRandomToken_LengthAndUniqueness(t *testing.T) {
 	const n = 1000
 
-	fc := locktest.NewFakeClock(time.Time{})
+	fc := clockmock.New(time.Time{})
 	fd := locktest.NewFakeDriver()
 	l := distlock.MustNew(fd, distlock.WithClock(fc))
 

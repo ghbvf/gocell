@@ -21,6 +21,7 @@ import (
 	"github.com/ghbvf/gocell/cells/accesscore/slices/sessionvalidate"
 	"github.com/ghbvf/gocell/cells/accesscore/slices/setup"
 	"github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/persistence"
@@ -46,11 +47,6 @@ var defaultRefreshPolicy = refresh.Policy{
 	ReuseInterval: defaultAccessCoreRefreshReuseInterval,
 	MaxAge:        defaultAccessCoreRefreshMaxAge,
 }
-
-// realClock is a minimal refresh.Clock implementation backed by time.Now.
-type realClock struct{}
-
-func (realClock) Now() time.Time { return time.Now() }
 
 // Compile-time interface checks.
 var (
@@ -180,7 +176,7 @@ func WithInMemoryDefaults() Option {
 		c.userRepo = mem.NewUserRepository()
 		c.sessionRepo = mem.NewSessionRepository()
 		c.roleRepo = mem.NewRoleRepository()
-		c.refreshStore = refreshmem.MustNew(defaultRefreshPolicy, realClock{}, nil)
+		c.refreshStore = refreshmem.MustNew(defaultRefreshPolicy, clock.Real(), nil)
 	}
 }
 
