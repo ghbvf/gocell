@@ -67,53 +67,96 @@ func TestCorebundleModulesRejectUnknownCell(t *testing.T) {
 	assert.Contains(t, err.Error(), `unsupported assembly cell "ghostcore"`)
 }
 
-func TestLoadKeySet_DevMode(t *testing.T) {
-	t.Setenv(auth.EnvJWTPrivateKey, "")
-	t.Setenv(auth.EnvJWTPublicKey, "")
-	ks, err := loadKeySet("")
-	require.NoError(t, err)
-	assert.NotNil(t, ks)
-}
+// TestLoadKeySet collapses 5 fragmented per-mode tests into a single
+// table-driven specification. Real-mode fail-closed coverage (corrupted PEM,
+// empty values) added in PR-A64c follow-up R6: prior tests only exercised the
+// happy paths and the missing-env case; corrupted-PEM and one-key-only
+// rejection paths were not regression-locked.
+func TestLoadKeySet(t *testing.T) {
+	priv, pub := generateTestPEM(t)
+	const corruptedPEM = "-----BEGIN GARBAGE-----\nnot a real key\n-----END GARBAGE-----\n"
 
-func TestLoadKeySet_DevMode_PrefersEnvKeys(t *testing.T) {
-	privPEM, pubPEM := generateTestPEM(t)
-	t.Setenv(auth.EnvJWTPrivateKey, string(privPEM))
-	t.Setenv(auth.EnvJWTPublicKey, string(pubPEM))
-	t.Setenv(auth.EnvJWTPrevPublicKey, "")
+	cases := []struct {
+		name        string
+		mode        string
+		envPriv     string
+		envPub      string
+		envPrevPub  string
+		wantErr     bool
+		errContains string
+	}{
+		{
+			name: "dev_mode_no_env_generates_ephemeral",
+			mode: "",
+		},
+		{
+			name:    "dev_mode_with_env_keys_uses_them",
+			mode:    "",
+			envPriv: string(priv),
+			envPub:  string(pub),
+		},
+		{
+			name: "unknown_mode_falls_back_to_dev",
+			// loadKeySet treats any non-"real" mode as dev. Bootstrap normally
+			// rejects unknown GOCELL_ADAPTER_MODE before this is reached; this
+			// case exists to lock down the fallback in case a new valid mode
+			// is added without updating loadKeySet.
+			mode: "reall", // deliberate typo
+		},
+		{
+			name:    "real_mode_with_valid_env_succeeds",
+			mode:    "real",
+			envPriv: string(priv),
+			envPub:  string(pub),
+		},
+		{
+			name:        "real_mode_missing_env_fails_closed",
+			mode:        "real",
+			wantErr:     true,
+			errContains: auth.EnvJWTPrivateKey,
+		},
+		{
+			name:        "real_mode_corrupted_priv_pem_fails_closed",
+			mode:        "real",
+			envPriv:     corruptedPEM,
+			envPub:      string(pub),
+			wantErr:     true,
+			errContains: "real adapter mode requires",
+		},
+		{
+			name:        "real_mode_corrupted_pub_pem_fails_closed",
+			mode:        "real",
+			envPriv:     string(priv),
+			envPub:      corruptedPEM,
+			wantErr:     true,
+			errContains: "real adapter mode requires",
+		},
+		{
+			name:        "real_mode_priv_only_fails_closed",
+			mode:        "real",
+			envPriv:     string(priv),
+			wantErr:     true,
+			errContains: auth.EnvJWTPublicKey,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv(auth.EnvJWTPrivateKey, tc.envPriv)
+			t.Setenv(auth.EnvJWTPublicKey, tc.envPub)
+			t.Setenv(auth.EnvJWTPrevPublicKey, tc.envPrevPub)
 
-	ks, err := loadKeySet("") // dev mode, but env keys provided
-	require.NoError(t, err)
-	assert.NotNil(t, ks)
-}
-
-func TestLoadKeySet_RealMode_MissingEnv(t *testing.T) {
-	t.Setenv(auth.EnvJWTPrivateKey, "")
-	t.Setenv(auth.EnvJWTPublicKey, "")
-
-	_, err := loadKeySet("real")
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), auth.EnvJWTPrivateKey)
-}
-
-func TestLoadKeySet_RealMode_Success(t *testing.T) {
-	privPEM, pubPEM := generateTestPEM(t)
-	t.Setenv(auth.EnvJWTPrivateKey, string(privPEM))
-	t.Setenv(auth.EnvJWTPublicKey, string(pubPEM))
-	t.Setenv(auth.EnvJWTPrevPublicKey, "") // no previous key
-
-	ks, err := loadKeySet("real")
-	require.NoError(t, err)
-	assert.NotNil(t, ks)
-}
-
-func TestLoadKeySet_UnknownMode_StillGeneratesEphemeral(t *testing.T) {
-	// loadKeySet treats any non-"real" mode as dev (ephemeral key pair).
-	// In practice, bootstrap.TopologyFromEnv rejects unknown GOCELL_ADAPTER_MODE
-	// values before loadKeySet is called, so this path is only reachable if a
-	// new valid mode is added without updating loadKeySet.
-	ks, err := loadKeySet("reall") // deliberate typo
-	require.NoError(t, err)
-	assert.NotNil(t, ks)
+			ks, err := loadKeySet(tc.mode)
+			if tc.wantErr {
+				require.Error(t, err)
+				if tc.errContains != "" {
+					assert.Contains(t, err.Error(), tc.errContains)
+				}
+				return
+			}
+			require.NoError(t, err)
+			assert.NotNil(t, ks)
+		})
+	}
 }
 
 func TestRun_DevMode_StartsAndCancels(t *testing.T) {

@@ -285,3 +285,37 @@ func TestSharedDeps_Validate_RealMultiPodRejectsInMemoryClaimerCode(t *testing.T
 	assert.Equal(t, errcode.ErrControlplaneClaimerNotDistributed, ec.Code)
 	assert.Contains(t, ec.Error(), "ERR_CONTROLPLANE_CLAIMER_NOT_DISTRIBUTED")
 }
+
+// TestIsLoopbackBindAddr table-drives the address parser used by
+// validateHealthReachability. Edge cases (empty, IPv6 bracketed, hostname)
+// were not previously regression-locked despite the function gating a
+// production safety check.
+func TestIsLoopbackBindAddr(t *testing.T) {
+	cases := []struct {
+		name string
+		addr string
+		want bool
+	}{
+		{"ipv4 loopback with port", "127.0.0.1:8080", true},
+		{"ipv4 loopback bare", "127.0.0.1", true},
+		{"ipv4 loopback alt range", "127.0.0.5:9090", true},
+		{"ipv6 loopback bracketed", "[::1]:8080", true},
+		{"ipv6 loopback bracketed bare", "[::1]", true},
+		{"ipv6 loopback unbracketed", "::1", true},
+		{"hostname localhost lowercase", "localhost:9090", true},
+		{"hostname localhost mixed case", "LocalHost:9090", true},
+		{"port-only colon means all interfaces", ":8080", false},
+		{"empty string", "", false},
+		{"public ipv4", "8.8.8.8:80", false},
+		{"private ipv4", "10.0.0.5:8080", false},
+		{"unspecified ipv4", "0.0.0.0:8080", false},
+		{"unspecified ipv6", "[::]:8080", false},
+		{"bare hostname not localhost", "example.com:443", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := isLoopbackBindAddr(tc.addr)
+			assert.Equal(t, tc.want, got, "addr=%q", tc.addr)
+		})
+	}
+}
