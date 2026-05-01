@@ -24,6 +24,13 @@ func testCodec() *query.CursorCodec {
 	return codec
 }
 
+// enqueueTestCmd enqueues a single test command entry with standard fixture
+// values (cmdID="cmd-1", deviceID="dev-1"). q must be non-nil, ctx must be valid.
+func enqueueTestCmd(ctx context.Context, q *commandtest.InMemQueue) error {
+	entry := command.NewEntry("cmd-1", "dev-1", "reboot", []byte("x"), command.Timeouts{}, time.Now())
+	return q.Enqueue(ctx, entry, command.EnqueueOptions{})
+}
+
 func TestNewService_NilCodec_ReturnsError(t *testing.T) {
 	devRepo := mem.NewDeviceRepository()
 	q := commandtest.NewInMemQueue()
@@ -170,9 +177,13 @@ func TestService_Dequeue(t *testing.T) {
 	seedDevice(devRepo, "dev-2", "sensor-b")
 
 	// Enqueue 2 commands for dev-1 and 1 for dev-2.
-	require.NoError(t, q.Enqueue(ctx, command.NewEntry("c1", "dev-1", "reboot", []byte("a"), command.Timeouts{}, now), command.EnqueueOptions{}))
-	require.NoError(t, q.Enqueue(ctx, command.NewEntry("c2", "dev-1", "reboot", []byte("b"), command.Timeouts{}, now.Add(time.Second)), command.EnqueueOptions{}))
-	require.NoError(t, q.Enqueue(ctx, command.NewEntry("c3", "dev-2", "reboot", []byte("c"), command.Timeouts{}, now), command.EnqueueOptions{}))
+	opts := command.EnqueueOptions{}
+	require.NoError(t, q.Enqueue(ctx,
+		command.NewEntry("c1", "dev-1", "reboot", []byte("a"), command.Timeouts{}, now), opts))
+	require.NoError(t, q.Enqueue(ctx,
+		command.NewEntry("c2", "dev-1", "reboot", []byte("b"), command.Timeouts{}, now.Add(time.Second)), opts))
+	require.NoError(t, q.Enqueue(ctx,
+		command.NewEntry("c3", "dev-2", "reboot", []byte("c"), command.Timeouts{}, now), opts))
 
 	tests := []struct {
 		name     string
@@ -215,7 +226,7 @@ func TestService_Ack(t *testing.T) {
 			setup: func(dr *mem.DeviceRepository, q *commandtest.InMemQueue) {
 				seedDevice(dr, "dev-1", "sensor-a")
 				ctx := context.Background()
-				_ = q.Enqueue(ctx, command.NewEntry("cmd-1", "dev-1", "reboot", []byte("x"), command.Timeouts{}, time.Now()), command.EnqueueOptions{})
+				_ = enqueueTestCmd(ctx, q)
 				_, _ = q.Dequeue(ctx, "dev-1", 1, command.DefaultLeaseDuration)
 			},
 			deviceID: "dev-1",
@@ -265,7 +276,7 @@ func TestService_Ack_Idempotent(t *testing.T) {
 	svc, devRepo, q := newTestService()
 	ctx := context.Background()
 	seedDevice(devRepo, "dev-1", "sensor-a")
-	require.NoError(t, q.Enqueue(ctx, command.NewEntry("cmd-1", "dev-1", "reboot", []byte("x"), command.Timeouts{}, time.Now()), command.EnqueueOptions{}))
+	require.NoError(t, enqueueTestCmd(ctx, q))
 	_, err := q.Dequeue(ctx, "dev-1", 1, command.DefaultLeaseDuration)
 	require.NoError(t, err)
 
@@ -280,7 +291,7 @@ func TestService_Ack_ConcurrentSameReason_Idempotent(t *testing.T) {
 	svc, devRepo, q := newTestService()
 	ctx := context.Background()
 	seedDevice(devRepo, "dev-1", "sensor-a")
-	require.NoError(t, q.Enqueue(ctx, command.NewEntry("cmd-1", "dev-1", "reboot", []byte("x"), command.Timeouts{}, time.Now()), command.EnqueueOptions{}))
+	require.NoError(t, enqueueTestCmd(ctx, q))
 	_, err := q.Dequeue(ctx, "dev-1", 1, command.DefaultLeaseDuration)
 	require.NoError(t, err)
 
@@ -308,7 +319,7 @@ func TestService_Ack_ConcurrentDifferentReason_RejectsLoser(t *testing.T) {
 	svc, devRepo, q := newTestService()
 	ctx := context.Background()
 	seedDevice(devRepo, "dev-1", "sensor-a")
-	require.NoError(t, q.Enqueue(ctx, command.NewEntry("cmd-1", "dev-1", "reboot", []byte("x"), command.Timeouts{}, time.Now()), command.EnqueueOptions{}))
+	require.NoError(t, enqueueTestCmd(ctx, q))
 	_, err := q.Dequeue(ctx, "dev-1", 1, command.DefaultLeaseDuration)
 	require.NoError(t, err)
 
@@ -340,7 +351,7 @@ func TestService_Ack_LifecycleSentToSucceeded(t *testing.T) {
 	svc, devRepo, q := newTestService()
 	ctx := context.Background()
 	seedDevice(devRepo, "dev-1", "sensor-a")
-	require.NoError(t, q.Enqueue(ctx, command.NewEntry("cmd-1", "dev-1", "reboot", []byte("x"), command.Timeouts{}, time.Now()), command.EnqueueOptions{}))
+	require.NoError(t, enqueueTestCmd(ctx, q))
 	_, err := q.Dequeue(ctx, "dev-1", 1, command.DefaultLeaseDuration)
 	require.NoError(t, err)
 
@@ -361,7 +372,7 @@ func TestService_ExtendLease_RejectsTooLargeExtension(t *testing.T) {
 	svc, devRepo, q := newTestService()
 	ctx := context.Background()
 	seedDevice(devRepo, "dev-1", "sensor-a")
-	require.NoError(t, q.Enqueue(ctx, command.NewEntry("cmd-1", "dev-1", "reboot", []byte("x"), command.Timeouts{}, time.Now()), command.EnqueueOptions{}))
+	require.NoError(t, enqueueTestCmd(ctx, q))
 	_, err := q.Dequeue(ctx, "dev-1", 1, command.DefaultLeaseDuration)
 	require.NoError(t, err)
 

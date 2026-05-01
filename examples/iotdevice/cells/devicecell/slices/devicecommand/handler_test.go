@@ -53,7 +53,11 @@ func setupCommandHandler() (*Handler, *commandtest.InMemQueue) {
 func setupCommandMux() (http.Handler, *commandtest.InMemQueue) {
 	h, q := setupCommandHandler()
 	mux := celltest.NewTestMux()
-	mux.Route("/api/v1/devices", func(sub cell.RouteMux) { h.RegisterRoutes(sub) })
+	mux.Route("/api/v1/devices", func(sub cell.RouteMux) {
+		if err := h.RegisterRoutes(sub); err != nil {
+			panic(err)
+		}
+	})
 	return mux, q
 }
 
@@ -250,7 +254,9 @@ func TestHandleDequeue(t *testing.T) {
 			now := time.Now()
 			for i := range tc.seedCmds {
 				id := "cmd-" + string(rune('a'+i))
-				_ = q.Enqueue(ctx, command.NewEntry(id, "dev-1", "reboot", []byte("p"), command.Timeouts{}, now.Add(time.Duration(i)*time.Second)), command.EnqueueOptions{})
+				entry := command.NewEntry(id, "dev-1", "reboot", []byte("p"),
+					command.Timeouts{}, now.Add(time.Duration(i)*time.Second))
+				_ = q.Enqueue(ctx, entry, command.EnqueueOptions{})
 			}
 
 			w := httptest.NewRecorder()
@@ -285,7 +291,9 @@ func TestHandleDequeue_ClaimBatches(t *testing.T) {
 	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	for i := range 7 {
 		id := "cmd-" + string(rune('a'+i))
-		require.NoError(t, q.Enqueue(ctx, command.NewEntry(id, "dev-1", "reboot", []byte("p"), command.Timeouts{}, base.Add(time.Duration(i)*time.Hour)), command.EnqueueOptions{}))
+		entry := command.NewEntry(id, "dev-1", "reboot", []byte("p"),
+			command.Timeouts{}, base.Add(time.Duration(i)*time.Hour))
+		require.NoError(t, q.Enqueue(ctx, entry, command.EnqueueOptions{}))
 	}
 
 	var allIDs []string
@@ -386,12 +394,15 @@ func TestHandleAck(t *testing.T) {
 			h, q := setupCommandHandler()
 			if tc.seedCmd {
 				ctx := context.Background()
-				_ = q.Enqueue(ctx, command.NewEntry(tc.cmdID, tc.deviceID, "reboot", []byte("x"), command.Timeouts{}, time.Now()), command.EnqueueOptions{})
+				seedEntry := command.NewEntry(tc.cmdID, tc.deviceID, "reboot",
+					[]byte("x"), command.Timeouts{}, time.Now())
+				_ = q.Enqueue(ctx, seedEntry, command.EnqueueOptions{})
 				_, _ = q.Dequeue(ctx, tc.deviceID, 1, command.DefaultLeaseDuration)
 			}
 
 			w := httptest.NewRecorder()
-			req := httptest.NewRequest(http.MethodPost, "/api/v1/devices/"+tc.deviceID+"/commands/"+tc.cmdID+"/ack", strings.NewReader(`{"reason":"success"}`))
+			ackPath := "/api/v1/devices/" + tc.deviceID + "/commands/" + tc.cmdID + "/ack"
+			req := httptest.NewRequest(http.MethodPost, ackPath, strings.NewReader(`{"reason":"success"}`))
 			req.Header.Set("Content-Type", "application/json")
 			req.SetPathValue("id", tc.deviceID)
 			req.SetPathValue("cmdId", tc.cmdID)

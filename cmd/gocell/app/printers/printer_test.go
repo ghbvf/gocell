@@ -692,7 +692,7 @@ func assertGolden(t *testing.T, format, filename string, actual []byte) {
 		require.NoError(t, os.WriteFile(path, actual, 0o644))
 		return
 	}
-	want, err := os.ReadFile(path)
+	want, err := os.ReadFile(filepath.Clean(path))
 	if err != nil {
 		t.Fatalf("read golden %s: %v\n(hint: run with `-update` to create it)", path, err)
 	}

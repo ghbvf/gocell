@@ -64,7 +64,10 @@ type Service struct {
 // cursor codec. Passing nil is a caller programming error;
 // NewService returns errcode.ErrCellMissingCodec so the cell Init() can
 // propagate a structured error instead of a runtime panic.
-func NewService(q commandQueueStore, deviceRepo domain.DeviceRepository, codec *query.CursorCodec, logger *slog.Logger, runMode query.RunMode) (*Service, error) {
+func NewService(
+	q commandQueueStore, deviceRepo domain.DeviceRepository,
+	codec *query.CursorCodec, logger *slog.Logger, runMode query.RunMode,
+) (*Service, error) {
 	if codec == nil {
 		return nil, errcode.New(errcode.ErrCellMissingCodec,
 			"device-command: cursor codec is required")
@@ -162,7 +165,9 @@ func (s *Service) Dequeue(ctx context.Context, deviceID string, limit int, lease
 
 // ScanActive returns a paginated read-only view of non-terminal commands for
 // ops/internal endpoints. It never claims commands or mutates state.
-func (s *Service) ScanActive(ctx context.Context, filter command.ScanFilter, pageReq query.PageParams) (query.PageResult[command.Entry], error) {
+func (s *Service) ScanActive(
+	ctx context.Context, filter command.ScanFilter, pageReq query.PageParams,
+) (query.PageResult[command.Entry], error) {
 	if filter.DeviceID != "" {
 		if _, err := s.deviceRepo.GetByID(ctx, filter.DeviceID); err != nil {
 			return query.PageResult[command.Entry]{}, fmt.Errorf("device-command: lookup device: %w", err)

@@ -158,7 +158,7 @@ func writeGeneratedFile(root, outPath string, content []byte, label string) erro
 		return fmt.Errorf("%s: path escapes project root", label)
 	}
 
-	if existing, err := os.ReadFile(outPath); err == nil && !isGocellGeneratedFile(existing) {
+	if existing, err := os.ReadFile(filepath.Clean(outPath)); err == nil && !isGocellGeneratedFile(existing) {
 		return fmt.Errorf("%s: refusing to overwrite non-generated file %s "+
 			"(generated files must start with the gocell header; remove the file or move "+
 			"hand-written code to a sibling like cmd/<id>/run.go and re-run generation)",

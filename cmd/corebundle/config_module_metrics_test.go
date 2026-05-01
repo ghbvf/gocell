@@ -56,9 +56,14 @@ func TestConfigCoreModule_Provide_ReplacesKeyProviderMetricsOnRepeatedProvide(t 
 
 func assertCachedKeyVersionFromRegistry(t *testing.T, registry *prom.Registry, version float64) {
 	t.Helper()
-	expected := strings.NewReader(fmt.Sprintf(`# HELP gocell_vault_cached_key_version Latest Vault Transit key version cached by this process; 0 means cache miss.
-# TYPE gocell_vault_cached_key_version gauge
-gocell_vault_cached_key_version{key_name="gocell-config",mount_path="transit"} %g
-`, version))
+	const (
+		helpLine = "# HELP gocell_vault_cached_key_version " +
+			"Latest Vault Transit key version cached by this process; 0 means cache miss."
+		typeLine   = "# TYPE gocell_vault_cached_key_version gauge"
+		metricName = `gocell_vault_cached_key_version{key_name="gocell-config",mount_path="transit"}`
+	)
+	metricText := helpLine + "\n" + typeLine + "\n" +
+		fmt.Sprintf("%s %g\n", metricName, version)
+	expected := strings.NewReader(metricText)
 	require.NoError(t, testutil.GatherAndCompare(registry, expected, "gocell_vault_cached_key_version"))
 }

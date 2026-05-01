@@ -15,7 +15,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-const testServiceSecret = "test-service-secret-at-least-32-bytes!!"
+const testServiceKey = "test-service-secret-at-least-32-bytes!!"
 
 func TestInternalAuthChainMissingServiceSecretFailsFast(t *testing.T) {
 	t.Setenv(iotdeviceServiceSecretEnv, "")
@@ -27,7 +27,7 @@ func TestInternalAuthChainMissingServiceSecretFailsFast(t *testing.T) {
 }
 
 func TestInternalAuthChainContainsServiceToken(t *testing.T) {
-	t.Setenv(iotdeviceServiceSecretEnv, testServiceSecret)
+	t.Setenv(iotdeviceServiceSecretEnv, testServiceKey)
 
 	chain, err := newInternalAuthChainFromEnv()
 

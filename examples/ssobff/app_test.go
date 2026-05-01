@@ -12,12 +12,12 @@ import (
 )
 
 func TestNewSSOBFFAppFailsFastWithoutServiceSecret(t *testing.T) {
-	t.Setenv(ssobffServiceSecretEnv, "")
+	t.Setenv(ssobffServiceKeyEnv, "")
 
 	app, err := NewSSOBFFApp(WithSSOBFFLogger(slog.New(slog.NewTextHandler(io.Discard, nil))))
 	require.Error(t, err)
 	require.Nil(t, app)
-	require.True(t, strings.Contains(err.Error(), ssobffServiceSecretEnv), "error must name missing env var: %v", err)
+	require.True(t, strings.Contains(err.Error(), ssobffServiceKeyEnv), "error must name missing env var: %v", err)
 }
 
 func TestNewSSOBFFApp_AcceptsInjectedListeners(t *testing.T) {

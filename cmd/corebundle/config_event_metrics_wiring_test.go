@@ -156,5 +156,8 @@ func (c *recordingCoreConfigEventCollector) RecordEventProcess(cellID, sliceID s
 }
 
 func (c *recordingCoreConfigEventCollector) RecordEventSettlement(cellID, sliceID, disposition string, result outbox.SettlementResult) {
-	c.settlementRecords = append(c.settlementRecords, coreConfigEventSettlementRecord{cell: cellID, slice: sliceID, disposition: disposition, result: result})
+	rec := coreConfigEventSettlementRecord{
+		cell: cellID, slice: sliceID, disposition: disposition, result: result,
+	}
+	c.settlementRecords = append(c.settlementRecords, rec)
 }

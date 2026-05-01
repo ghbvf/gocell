@@ -227,9 +227,9 @@ func TestOrderCell_RouteGroups(t *testing.T) {
 	for _, rg := range c.RouteGroups() {
 		if rg.Listener == cell.PrimaryListener {
 			if rg.Prefix != "" {
-				mux.Route(rg.Prefix, func(sub cell.RouteMux) { rg.Register(sub) })
+				mux.Route(rg.Prefix, func(sub cell.RouteMux) { require.NoError(t, rg.Register(sub)) })
 			} else {
-				rg.Register(mux)
+				require.NoError(t, rg.Register(mux))
 			}
 		}
 	}
@@ -262,9 +262,9 @@ func initCellWithRouter(t *testing.T) *router.Router {
 	for _, rg := range c.RouteGroups() {
 		if rg.Listener == cell.PrimaryListener {
 			if rg.Prefix != "" {
-				r.Route(rg.Prefix, func(sub cell.RouteMux) { rg.Register(sub) })
+				r.Route(rg.Prefix, func(sub cell.RouteMux) { require.NoError(t, rg.Register(sub)) })
 			} else {
-				rg.Register(r)
+				require.NoError(t, rg.Register(r))
 			}
 		}
 	}

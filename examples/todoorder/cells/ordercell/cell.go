@@ -126,7 +126,9 @@ func (c *OrderCell) Init(ctx context.Context, deps cell.Dependencies) error {
 	if c.cursorCodec == nil {
 		if deps.DurabilityMode == cell.DurabilityDurable {
 			return errcode.New(errcode.ErrCellMissingCodec,
-				"ordercell durable mode requires a cursor codec; use WithCursorCodec(query.NewCursorCodec(secret)) — the built-in demo key is public in the source tree")
+				"ordercell durable mode requires a cursor codec; "+
+					"use WithCursorCodec(query.NewCursorCodec(secret)) — "+
+					"the built-in demo key is public in the source tree")
 		}
 		// Each cell uses a distinct demo key to prevent cross-cell cursor reuse in demo mode.
 		codec, err := query.NewCursorCodec([]byte("gocell-demo-ORDER-CELL-key-32b!!"))

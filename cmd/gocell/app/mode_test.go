@@ -30,8 +30,11 @@ func fixtureFailFastError(t *testing.T) string {
 		[]byte("module example.com/test\n"), 0o644))
 	cellDir := filepath.Join(dir, "cells", "bad")
 	require.NoError(t, os.MkdirAll(cellDir, 0o755))
+	badCellYAML := "id: bad\ntype: INVALID\nconsistencyLevel: L1\n" +
+		"owner:\n  team: squad\n  role: cell-owner\n" +
+		"schema:\n  primary: cell_bad\nverify:\n  smoke:\n    - smoke.bad.startup\n"
 	require.NoError(t, os.WriteFile(filepath.Join(cellDir, "cell.yaml"),
-		[]byte("id: bad\ntype: INVALID\nconsistencyLevel: L1\nowner:\n  team: squad\n  role: cell-owner\nschema:\n  primary: cell_bad\nverify:\n  smoke:\n    - smoke.bad.startup\n"), 0o644))
+		[]byte(badCellYAML), 0o644))
 	return dir
 }
 
@@ -290,12 +293,19 @@ func writeKebabSlice(t *testing.T) string {
 		[]byte("module example.com/test\n"), 0o644))
 	cellDir := filepath.Join(dir, "cells", "accesscore")
 	require.NoError(t, os.MkdirAll(cellDir, 0o755))
+	accCellYAML := "id: accesscore\ntype: core\nconsistencyLevel: L1\n" +
+		"owner:\n  team: squad\n  role: cell-owner\n" +
+		"schema:\n  primary: cell_accesscore\n" +
+		"verify:\n  smoke:\n    - smoke.accesscore.startup\n"
 	require.NoError(t, os.WriteFile(filepath.Join(cellDir, "cell.yaml"),
-		[]byte("id: accesscore\ntype: core\nconsistencyLevel: L1\nowner:\n  team: squad\n  role: cell-owner\nschema:\n  primary: cell_accesscore\nverify:\n  smoke:\n    - smoke.accesscore.startup\n"), 0o644))
+		[]byte(accCellYAML), 0o644))
 	sliceDir := filepath.Join(cellDir, "slices", "session-login") // kebab dir
 	require.NoError(t, os.MkdirAll(sliceDir, 0o755))
+	sessionSliceYAML := "id: session-login\nbelongsToCell: accesscore\n" +
+		"contractUsages: []\nverify:\n  unit:\n    - unit.session-login.service\n" +
+		"  contract: []\nallowedFiles:\n  - cells/accesscore/slices/session-login/**\n"
 	require.NoError(t, os.WriteFile(filepath.Join(sliceDir, "slice.yaml"),
-		[]byte("id: session-login\nbelongsToCell: accesscore\ncontractUsages: []\nverify:\n  unit:\n    - unit.session-login.service\n  contract: []\nallowedFiles:\n  - cells/accesscore/slices/session-login/**\n"), 0o644))
+		[]byte(sessionSliceYAML), 0o644))
 	return dir
 }
 
@@ -338,8 +348,12 @@ func TestRunValidate_StrictFailFast_StrictOnlyError(t *testing.T) {
 func TestRunValidate_StrictFailFast_BaseErrorWinsOverStrict(t *testing.T) {
 	dir := writeKebabSlice(t)
 	// Corrupt the cell.yaml so standard rules fire an error before FMT-16 runs.
+	invalidCellYAML := "id: accesscore\ntype: INVALID\nconsistencyLevel: L1\n" +
+		"owner:\n  team: squad\n  role: cell-owner\n" +
+		"schema:\n  primary: cell_accesscore\n" +
+		"verify:\n  smoke:\n    - smoke.accesscore.startup\n"
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "cells", "accesscore", "cell.yaml"),
-		[]byte("id: accesscore\ntype: INVALID\nconsistencyLevel: L1\nowner:\n  team: squad\n  role: cell-owner\nschema:\n  primary: cell_accesscore\nverify:\n  smoke:\n    - smoke.accesscore.startup\n"), 0o644))
+		[]byte(invalidCellYAML), 0o644))
 
 	var gotErr error
 	out := captureStdout(t, func() {
@@ -363,8 +377,12 @@ func TestRunValidate_StrictFailFast_BaseErrorWinsOverStrict(t *testing.T) {
 func writeKebabCellID(t *testing.T) string {
 	t.Helper()
 	dir := setupProject(t, "cells/access-core") // kebab dir matching id
+	kebabCellYAML := "id: access-core\ntype: core\nconsistencyLevel: L1\n" +
+		"owner:\n  team: squad\n  role: cell-owner\n" +
+		"schema:\n  primary: cell_access_core\n" +
+		"verify:\n  smoke:\n    - smoke.access-core.startup\n"
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "cells", "access-core", "cell.yaml"),
-		[]byte("id: access-core\ntype: core\nconsistencyLevel: L1\nowner:\n  team: squad\n  role: cell-owner\nschema:\n  primary: cell_access_core\nverify:\n  smoke:\n    - smoke.access-core.startup\n"), 0o644))
+		[]byte(kebabCellYAML), 0o644))
 	return dir
 }
 
@@ -374,11 +392,19 @@ func writeKebabCellID(t *testing.T) string {
 func writeAllowedFilesMismatch(t *testing.T) string {
 	t.Helper()
 	dir := setupProject(t, "cells/accesscore", "cells/accesscore/slices/validdir")
+	accCoreYAML := "id: accesscore\ntype: core\nconsistencyLevel: L1\n" +
+		"owner:\n  team: squad\n  role: cell-owner\n" +
+		"schema:\n  primary: cell_accesscore\n" +
+		"verify:\n  smoke:\n    - smoke.accesscore.startup\n"
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "cells", "accesscore", "cell.yaml"),
-		[]byte("id: accesscore\ntype: core\nconsistencyLevel: L1\nowner:\n  team: squad\n  role: cell-owner\nschema:\n  primary: cell_accesscore\nverify:\n  smoke:\n    - smoke.accesscore.startup\n"), 0o644))
+		[]byte(accCoreYAML), 0o644))
 	// allowedFiles points to a different slice directory ("wrongdir") — FMT-17 fires.
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "cells", "accesscore", "slices", "validdir", "slice.yaml"),
-		[]byte("id: validdir\nbelongsToCell: accesscore\ncontractUsages: []\nverify:\n  unit:\n    - unit.validdir.service\n  contract: []\nallowedFiles:\n  - cells/accesscore/slices/wrongdir/**\n"), 0o644))
+	validDirYAML := "id: validdir\nbelongsToCell: accesscore\n" +
+		"contractUsages: []\nverify:\n  unit:\n    - unit.validdir.service\n" +
+		"  contract: []\nallowedFiles:\n  - cells/accesscore/slices/wrongdir/**\n"
+	require.NoError(t, os.WriteFile(
+		filepath.Join(dir, "cells", "accesscore", "slices", "validdir", "slice.yaml"),
+		[]byte(validDirYAML), 0o644))
 	return dir
 }
 

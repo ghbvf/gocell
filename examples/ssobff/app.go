@@ -216,7 +216,7 @@ func NewSSOBFFApp(opts ...SSOBFFAppOption) (*SSOBFFApp, error) {
 func defaultSSOBFFAppConfig() *ssobffAppConfig {
 	return &ssobffAppConfig{
 		logger:                slog.Default(),
-		internalServiceSecret: os.Getenv(ssobffServiceSecretEnv),
+		internalServiceSecret: os.Getenv(ssobffServiceKeyEnv),
 		primary:               listenerBinding{addr: envOr("GOCELL_SSOBFF_PRIMARY_ADDR", ":8081")},
 		internal:              listenerBinding{addr: envOr("GOCELL_SSOBFF_INTERNAL_ADDR", "127.0.0.1:9081")},
 		health:                listenerBinding{addr: envOr("GOCELL_SSOBFF_HEALTH_ADDR", "127.0.0.1:9091")},

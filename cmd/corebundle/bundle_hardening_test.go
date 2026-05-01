@@ -72,9 +72,13 @@ func TestBundle_NoBusinessPathLiterals(t *testing.T) {
 // clean.
 func findOffendingLines(t *testing.T, filePath string, patterns ...*regexp.Regexp) []string {
 	t.Helper()
-	f, err := os.Open(filePath)
+	f, err := os.Open(filepath.Clean(filePath))
 	require.NoError(t, err, "open %s", filePath)
-	defer f.Close()
+	t.Cleanup(func() {
+		if err := f.Close(); err != nil {
+			t.Logf("close file: %v", err)
+		}
+	})
 
 	var hits []string
 	scanner := bufio.NewScanner(f)

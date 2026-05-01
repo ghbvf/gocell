@@ -69,7 +69,7 @@ func TestWithMetricsTokenGuard(t *testing.T) {
 			guard := withMetricsTokenGuard(tc.configured, inner)
 			req := httptest.NewRequest(http.MethodGet, "/metrics", http.NoBody)
 			if tc.setHeader {
-				req.Header.Set(metricsTokenHeader, tc.submittedHdr)
+				req.Header.Set(metricsAuthHeader, tc.submittedHdr)
 			}
 			rec := httptest.NewRecorder()
 			guard.ServeHTTP(rec, req)

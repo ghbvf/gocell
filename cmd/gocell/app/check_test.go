@@ -615,7 +615,8 @@ func TestRunUnconditionalSkipAnalyzer_BuildTaggedFile(t *testing.T) {
 
 	// Minimal go.mod — the module path must resolve; no external deps needed.
 	// Use the actual toolchain version so this fixture tracks upgrades automatically.
-	require.NoError(t, os.WriteFile(filepath.Join(root, "go.mod"), fmt.Appendf(nil, "module example.com/skiptest\n\ngo %s\n", goModVersion()), 0o644))
+	goModContent := fmt.Appendf(nil, "module example.com/skiptest\n\ngo %s\n", goModVersion())
+	require.NoError(t, os.WriteFile(filepath.Join(root, "go.mod"), goModContent, 0o644))
 
 	// A package directory.
 	pkgDir := filepath.Join(root, "mypkg")
@@ -626,8 +627,10 @@ func TestRunUnconditionalSkipAnalyzer_BuildTaggedFile(t *testing.T) {
 		"package mypkg\n"), 0o644))
 
 	// A build-tagged test file with an unconditional t.Skip.
-	require.NoError(t, os.WriteFile(filepath.Join(pkgDir, "smoke_test.go"), []byte(
-		"//go:build examples_smoke\n\npackage mypkg\n\nimport \"testing\"\n\nfunc TestSmoke(t *testing.T) {\n\tt.Skip(\"unconditional stub\")\n}\n"), 0o644))
+	smokeContent := "//go:build examples_smoke\n\npackage mypkg\n\n" +
+		"import \"testing\"\n\nfunc TestSmoke(t *testing.T) {\n\tt.Skip(\"unconditional stub\")\n}\n"
+	require.NoError(t, os.WriteFile(filepath.Join(pkgDir, "smoke_test.go"),
+		[]byte(smokeContent), 0o644))
 
 	results, err := runUnconditionalSkipAnalyzer([]string{"./..."}, root)
 	require.NoError(t, err, "analyzer must not error on this synthetic module")
