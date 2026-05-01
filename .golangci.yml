@@ -61,19 +61,16 @@ linters:
     dupl:
       threshold: 150
 
+    errcheck:
+      exclude-functions:
+        # hash.Hash.Write per the io.Writer contract (and the stdlib package
+        # doc) always returns (len(b), nil). Calling it as `h.Write(b)`
+        # without binding the return is the stdlib-documented hmac idiom
+        # (see crypto/hmac godoc Example). The error in the signature is
+        # there only because hash.Hash satisfies io.Writer.
+        - "(hash.Hash).Write"
+
     gosec:
-      excludes:
-        # G404 weak random: jitter/sample/log-dedup paths in this repo have no
-        # cryptographic requirement; math/rand/v2 is the correct choice. Keep
-        # the rule globally off so we don't regress to crypto/rand workarounds.
-        - G404
-        # G706 log injection (taint analysis): gosec taints r.RemoteAddr /
-        # r.Method / r.URL.Path inside net/http handlers and refuses to clear
-        # the taint via strings.Map sanitize helpers. Audit logs need these
-        # fields. Project-level decision: turn G706 off; rely on slog's
-        # structured-attr encoding (no format-string interpolation) to avoid
-        # actual injection.
-        - G706
       config:
         G101:
           pattern: "(?i)passwd|pass|password|pwd|secret|token|apikey"
@@ -199,6 +196,45 @@ linters:
         linters:
           - gosec
         text: "G204"
+      # G404 weak random — retry/jitter sites only (no cryptographic
+      # requirement). math/rand/v2 is the correct choice for backoff jitter.
+      - path: ^adapters/rabbitmq/connection\.go
+        linters:
+          - gosec
+        text: "G404"
+      - path: ^runtime/eventbus/eventbus\.go
+        linters:
+          - gosec
+        text: "G404"
+      - path: ^runtime/outbox/relay\.go
+        linters:
+          - gosec
+        text: "G404"
+      # G706 log injection (taint analysis) — net/http handler false positive
+      # on r.RemoteAddr / r.Method / r.URL.Path: gosec taints these fields
+      # and refuses to clear the taint through sanitize helpers. Audit logs
+      # need these fields; slog's structured-attr encoding (no format-string
+      # interpolation) is not an injection surface in practice.
+      - path: ^runtime/http/health/health\.go
+        linters:
+          - gosec
+        text: "G706"
+      - path: ^runtime/http/middleware/(recovery|csrf)\.go
+        linters:
+          - gosec
+        text: "G706"
+      - path: ^cells/auditcore/slices/auditquery/handler\.go
+        linters:
+          - gosec
+        text: "G706"
+      - path: ^adapters/websocket/handler\.go
+        linters:
+          - gosec
+        text: "G706"
+      - path: ^adapters/vault/transit_provider\.go
+        linters:
+          - gosec
+        text: "G706"
       # scaffoldfs.FileMode / DirMode are 0o644 / 0o755 by design (scaffold
       # output is committed to git and read by multi-user CI bots). Source
       # comment documents the decision.
