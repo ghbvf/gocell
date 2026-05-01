@@ -50,6 +50,11 @@ jobs:
           go-package: ./...
           output-format: sarif
           output-file: govulncheck.sarif
+          # The action defaults to repo-checkout: true and runs its own
+          # actions/checkout@v4.1.1, which re-adds the Authorization header
+          # after the prior checkout above and fails with a 400 Duplicate
+          # header. Skip the action's internal checkout — ours already ran.
+          repo-checkout: false
 
       - name: Upload SARIF to GitHub Security
         if: always() && hashFiles('govulncheck.sarif') != ''

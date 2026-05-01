@@ -75,12 +75,14 @@ jobs:
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
-      - name: semgrep ci
+      - name: semgrep scan
+        # `semgrep scan` (not `semgrep ci`) is required because --strict and
+        # --error are scan-only flags — `semgrep ci` rejects them.
         # --strict: rule-parse error fails the run.
         # --error: any finding (regardless of severity) fails the run.
         # No --exclude / --exclude-rule: bypass surface is closed.
         run: |
-          semgrep ci \
+          semgrep scan \
             --config=p/golang \
             --config=p/owasp-top-ten \
             --config=p/secrets \
