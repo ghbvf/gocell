@@ -24,11 +24,15 @@ const (
 // testEntryID is the canonical entry ID used in pure-function tests.
 const testEntryID = "test-1"
 
-// subscribeInitDelay is the time to wait after launching a Subscribe goroutine
-// for the subscription to register internally. This is a fixed constant;
-// adapter implementations with slower initialization should use a wrapper
-// constructor that includes their own warmup delay.
-const subscribeInitDelay = 50 * time.Millisecond
+// subscribeReadyTimeout caps how long waitForSubscription waits on the
+// subscriber's Ready() channel before falling through. It is a select-arm
+// timeout (not a sleep), used for adapters whose Setup is fire-and-forget
+// and never closes Ready (e.g., persistent brokers where pre-creation is
+// async). For in-memory bus this timeout is never reached because Ready
+// closes synchronously on Subscribe registration. Tests that need to coordinate
+// multiple subscriber registrations should use distinct ConsumerGroups so each
+// gets its own Ready channel — see testMultipleSubscribers for the pattern.
+const subscribeReadyTimeout = 50 * time.Millisecond
 
 // negativeAssertionWindow bounds how long "no further delivery" assertions
 // wait before returning a pass. 200ms is empirically adequate for the

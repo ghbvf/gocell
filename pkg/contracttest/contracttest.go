@@ -18,7 +18,9 @@ package contracttest
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io/fs"
 	"net/http/httptest"
 	"path/filepath"
 	"runtime"
@@ -308,20 +310,45 @@ func compileSchemaFile(t testing.TB, dir, filename string) *jsonschema.Schema {
 
 // pathWithinAllowList reports whether fullPath either stays inside cleanDir
 // or resolves under <contractsRoot>/shared/ where contractsRoot is the
-// nearest ancestor of cleanDir whose basename is "contracts".
+// nearest ancestor of cleanDir whose basename is "contracts". Symlinks in
+// fullPath are resolved via filepath.EvalSymlinks before the prefix check
+// so a symlink under contracts/shared/ pointing outside the allow-list
+// fails closed (purely lexical HasPrefix would accept the symlink itself).
 func pathWithinAllowList(_ testing.TB, cleanDir, fullPath string) bool {
-	if fullPath == cleanDir || strings.HasPrefix(fullPath, cleanDir+string(filepath.Separator)) {
+	resolved, err := evalSymlinkOrSelf(fullPath)
+	if err != nil {
+		return false
+	}
+	if resolved == cleanDir || strings.HasPrefix(resolved, cleanDir+string(filepath.Separator)) {
 		return true
 	}
 	contractsRoot, ok := findContractsRoot(cleanDir)
 	if !ok {
 		return false
 	}
-	sharedRoot := filepath.Join(contractsRoot, "shared")
-	if fullPath == sharedRoot {
+	sharedRoot, err := evalSymlinkOrSelf(filepath.Join(contractsRoot, "shared"))
+	if err != nil {
+		return false
+	}
+	if resolved == sharedRoot {
 		return true
 	}
-	return strings.HasPrefix(fullPath, sharedRoot+string(filepath.Separator))
+	return strings.HasPrefix(resolved, sharedRoot+string(filepath.Separator))
+}
+
+// evalSymlinkOrSelf returns filepath.EvalSymlinks(p), or p itself if the
+// path doesn't exist yet (callers may pass not-yet-created paths during
+// validation). Returns error only when EvalSymlinks fails for an existing
+// path (e.g., broken symlink chain), which we treat as fail-closed.
+func evalSymlinkOrSelf(p string) (string, error) {
+	resolved, err := filepath.EvalSymlinks(p)
+	if err == nil {
+		return resolved, nil
+	}
+	if errors.Is(err, fs.ErrNotExist) {
+		return p, nil
+	}
+	return "", err
 }
 
 // findContractsRoot walks up from cleanDir until a directory whose basename

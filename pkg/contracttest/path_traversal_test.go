@@ -2,9 +2,14 @@ package contracttest
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // fakeT captures Fatalf for path-traversal negative tests so the test binary
@@ -84,3 +89,33 @@ func TestPathWithinAllowList(t *testing.T) {
 // compileSchemaFile because *testing.T.Fatalf aborts via runtime.Goexit (which
 // fakeT cannot replicate without spawning its own goroutine), and the negative
 // security checks are fully exercised at the unit layer.
+
+// TestPathWithinAllowList_RejectsSymlinkEscape covers a real attack vector
+// missed by purely lexical HasPrefix checks: a symlink under contracts/shared/
+// that points outside the allow-list. evalSymlinkOrSelf in the helper resolves
+// the symlink before the prefix comparison so the resolved target (not the
+// symlink itself) is what gets gated.
+func TestPathWithinAllowList_RejectsSymlinkEscape(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlinks require admin privileges on Windows; allow-list still rejects via HasPrefix on resolved path")
+	}
+	tmp := t.TempDir()
+	// Build a fake contracts tree: <tmp>/contracts/http/foo/v1/ + <tmp>/contracts/shared/
+	contractDir := filepath.Join(tmp, "contracts", "http", "foo", "v1")
+	require.NoError(t, os.MkdirAll(contractDir, 0o755))
+	sharedDir := filepath.Join(tmp, "contracts", "shared")
+	require.NoError(t, os.MkdirAll(sharedDir, 0o755))
+	// Plant a symlink under contracts/shared/ pointing to /tmp (outside repo).
+	outsideTarget := t.TempDir() // truly separate temp tree
+	symlinkPath := filepath.Join(sharedDir, "evil")
+	require.NoError(t, os.Symlink(outsideTarget, symlinkPath))
+
+	// schemaRef navigating into the symlink should be rejected because the
+	// resolved target is outside <contractsRoot>/shared/.
+	cleanContractDir := filepath.Clean(contractDir)
+	fullPath := filepath.Clean(filepath.Join(cleanContractDir, "..", "..", "..", "shared", "evil", "schema.json"))
+
+	ft := &fakeT{TB: t}
+	ok := pathWithinAllowList(ft, cleanContractDir, fullPath)
+	assert.False(t, ok, "symlink under shared/ that resolves outside the allow-list must be rejected")
+}

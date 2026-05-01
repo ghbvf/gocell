@@ -33,7 +33,7 @@ func waitForSubscription(t *testing.T, ctx context.Context, sub outbox.Subscribe
 	case <-sub.Ready(subSpec):
 	case <-ctx.Done():
 		t.Fatalf("waitForSubscription: context canceled before subscriber ready: %v", ctx.Err())
-	case <-time.After(subscribeInitDelay):
+	case <-time.After(subscribeReadyTimeout):
 		// Fallback: subscriber did not signal Ready within init delay. This is
 		// acceptable for implementations that return a never-closing Ready channel
 		// (e.g., persistent brokers where setup is fire-and-forget). The caller
@@ -104,7 +104,7 @@ func PublishN(t *testing.T, ctx context.Context, pub outbox.Publisher, topic str
 // IMPORTANT: CollectN only subscribes — the caller must publish messages
 // AFTER calling CollectN (or before, if the implementation is persistent).
 // For at-most-once implementations (e.g., InMemoryEventBus), publish after
-// CollectN returns control, since it includes a subscribeInitDelay wait.
+// CollectN returns control, since it includes a subscribeReadyTimeout wait.
 func CollectN(
 	t *testing.T,
 	ctx context.Context,

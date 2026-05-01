@@ -30,12 +30,16 @@ func TestNewTool(t *testing.T) {
 	})
 }
 
-func TestValidatedTool_ZeroValueIsEmpty(t *testing.T) {
-	// A zero-value ValidatedTool cannot be constructed externally (unexported
-	// field) but if reflectively zero-initialized, Dir returns "." (filepath.Dir
-	// of "") and Run will fail at exec.CommandContext with "no such file".
+func TestValidatedTool_ZeroValueFailsClosed(t *testing.T) {
+	// Zero-value ValidatedTool: legal Go-syntactic construction (`ValidatedTool{}`)
+	// but the unexported `path` field stays "". Dir() returns "." (filepath.Dir
+	// of ""), and Run fails at exec.CommandContext with "no such file or
+	// directory" — fail-closed semantics, never panic, never execute.
 	var zero ValidatedTool
 	assert.Equal(t, ".", zero.Dir(), "zero-value Dir is filepath.Dir(\"\") = \".\"")
+
+	_, err := Run(context.Background(), zero, "version")
+	require.Error(t, err, "zero-value Run must fail-closed, not execute")
 }
 
 func TestRun(t *testing.T) {

@@ -12,9 +12,12 @@ import (
 )
 
 // ValidatedTool wraps an exec.LookPath-resolved absolute path to a tool
-// binary. The unexported `path` field forces construction through NewTool;
-// a zero-value ValidatedTool cannot be created externally and would yield
-// an empty path on Run, surfacing as a process-launch error.
+// binary. The unexported `path` field forces normal API construction
+// through NewTool — package consumers cannot legally produce a non-empty
+// path bypassing LookPath. Zero values (constructed via reflect/unsafe or
+// embedded literal `ValidatedTool{}`) carry an empty path, which makes
+// Run fail-closed at exec.CommandContext with a "no such file or
+// directory" error rather than panicking or executing arbitrary code.
 type ValidatedTool struct{ path string }
 
 // NewTool resolves name via exec.LookPath and wraps the result in a
