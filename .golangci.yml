@@ -134,6 +134,16 @@ linters:
         linters:
           - gosec
         text: "G30(0|1|2|6)"
+      # Test setup/table-driven assertions are inherently long and structurally
+      # repeat across cases. Production thresholds (funlen 80 / gocognit 15 /
+      # cyclop 15 / dupl 150) hurt test readability without a real signal —
+      # waive these four linters in *_test.go.
+      - path: _test\.go
+        linters:
+          - funlen
+          - gocognit
+          - cyclop
+          - dupl
       - path: ^testdata/
         linters:
           - gosec
@@ -151,6 +161,22 @@ linters:
         linters:
           - gosec
         text: "G70(2|3)"
+      # rbacassign/service.go: Assign/Revoke are intentionally mirror-image
+      # public APIs (per-action audit trail). Source comment documents the
+      # decision; dupl flags the duplication structurally.
+      - path: ^cells/accesscore/slices/rbacassign/service\.go
+        linters:
+          - dupl
+      # cmd/ wiring functions are sequential composition-root assemblies
+      # (Provide / LoadSharedDepsFromEnv / NewSSOBFFApp). funlen flags them
+      # at 80 lines but breaking apart obscures the reading order — caller
+      # must scan the assembly top-to-bottom to understand startup sequence.
+      - path: ^cmd/
+        linters:
+          - funlen
+      - path: ^examples/
+        linters:
+          - funlen
     paths:
       - generated
       - vendor

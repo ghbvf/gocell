@@ -50,67 +50,67 @@ func encodeValue(w io.Writer, v reflect.Value) error {
 		}
 		v = v.Elem()
 	}
-
+	if handled, err := encodeScalar(w, v); handled {
+		return err
+	}
 	switch v.Kind() {
-	case reflect.Invalid:
-		_, err := fmt.Fprint(w, "N")
-		return err
-
-	case reflect.Ptr:
-		if v.IsNil() {
-			_, err := fmt.Fprint(w, "N")
-			return err
-		}
-		if _, err := fmt.Fprint(w, "P"); err != nil {
-			return err
-		}
-		return encodeValue(w, v.Elem())
-
-	case reflect.String:
-		s := v.String()
-		_, err := fmt.Fprintf(w, "S:%d:%s", len(s), s)
-		return err
-
-	case reflect.Bool:
-		b := 0
-		if v.Bool() {
-			b = 1
-		}
-		_, err := fmt.Fprintf(w, "B:%d", b)
-		return err
-
-	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
-		_, err := fmt.Fprintf(w, "I:%d", v.Int())
-		return err
-
-	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64, reflect.Uintptr:
-		_, err := fmt.Fprintf(w, "U:%d", v.Uint())
-		return err
-
-	case reflect.Float32, reflect.Float64:
-		_, err := fmt.Fprintf(w, "F:%g", v.Float())
-		return err
-
 	case reflect.Slice:
 		if v.IsNil() {
 			_, err := fmt.Fprint(w, "N")
 			return err
 		}
 		return encodeSequence(w, v)
-
 	case reflect.Array:
 		return encodeSequence(w, v)
-
 	case reflect.Map:
 		return encodeMap(w, v)
-
 	case reflect.Struct:
 		return encodeStruct(w, v)
-
 	default:
 		_, err := fmt.Fprintf(w, "?:%s", v.Type().String())
 		return err
 	}
+}
+
+// encodeScalar handles invalid/ptr/string/bool/int/uint/float kinds and
+// returns handled=true once it consumed a kind. Container kinds (slice /
+// array / map / struct) fall through to encodeValue's switch.
+func encodeScalar(w io.Writer, v reflect.Value) (bool, error) {
+	switch v.Kind() {
+	case reflect.Invalid:
+		_, err := fmt.Fprint(w, "N")
+		return true, err
+	case reflect.Ptr:
+		if v.IsNil() {
+			_, err := fmt.Fprint(w, "N")
+			return true, err
+		}
+		if _, err := fmt.Fprint(w, "P"); err != nil {
+			return true, err
+		}
+		return true, encodeValue(w, v.Elem())
+	case reflect.String:
+		s := v.String()
+		_, err := fmt.Fprintf(w, "S:%d:%s", len(s), s)
+		return true, err
+	case reflect.Bool:
+		b := 0
+		if v.Bool() {
+			b = 1
+		}
+		_, err := fmt.Fprintf(w, "B:%d", b)
+		return true, err
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+		_, err := fmt.Fprintf(w, "I:%d", v.Int())
+		return true, err
+	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64, reflect.Uintptr:
+		_, err := fmt.Fprintf(w, "U:%d", v.Uint())
+		return true, err
+	case reflect.Float32, reflect.Float64:
+		_, err := fmt.Fprintf(w, "F:%g", v.Float())
+		return true, err
+	}
+	return false, nil
 }
 
 func encodeSequence(w io.Writer, v reflect.Value) error {
