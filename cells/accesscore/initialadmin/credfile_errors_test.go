@@ -40,10 +40,12 @@ func TestWriteCredentialFile_OpenFileError(t *testing.T) {
 		t.Fatalf("setup: MkdirAll: %v", err)
 	}
 	// Make directory read-only so no new files can be created.
-	if err := os.Chmod(dir, 0o500); err != nil {
+	readonlyDirPerm := os.FileMode(0o500)
+	if err := os.Chmod(dir, readonlyDirPerm); err != nil {
 		t.Fatalf("setup: Chmod: %v", err)
 	}
-	t.Cleanup(func() { _ = os.Chmod(dir, 0o700) })
+	restoreDirPerm := os.FileMode(0o700)
+	t.Cleanup(func() { _ = os.Chmod(dir, restoreDirPerm) })
 
 	path := filepath.Join(dir, "initial_admin_password")
 	err := writeCredentialFile(path, makePayload("pass"))
@@ -65,10 +67,12 @@ func TestRemoveCredentialFile_RemoveError(t *testing.T) {
 	}
 
 	// Make parent directory read-only to prevent removal.
-	if err := os.Chmod(dir, 0o500); err != nil {
+	readonlyDirPerm2 := os.FileMode(0o500)
+	if err := os.Chmod(dir, readonlyDirPerm2); err != nil {
 		t.Fatalf("setup: Chmod dir: %v", err)
 	}
-	t.Cleanup(func() { _ = os.Chmod(dir, 0o700) })
+	restoreDirPerm2 := os.FileMode(0o700)
+	t.Cleanup(func() { _ = os.Chmod(dir, restoreDirPerm2) })
 
 	err := removeCredentialFile(path)
 	if err == nil {

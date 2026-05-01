@@ -360,8 +360,11 @@ func TestService_ConfigEventMetrics_EntryUpsertedOutcomes(t *testing.T) {
 			}},
 		},
 		{
-			name:    "invalid upsert records permanent error",
-			entry:   outbox.Entry{ID: "bad", Topic: domain.TopicConfigEntryUpserted, Payload: []byte(`{"key":"k","value":"v","version":1,"actorId":"a"}`)},
+			name: "invalid upsert records permanent error",
+			entry: outbox.Entry{
+				ID: "bad", Topic: domain.TopicConfigEntryUpserted,
+				Payload: []byte(`{"key":"k","value":"v","version":1,"actorId":"a"}`),
+			},
 			wantErr: true,
 			wantRecords: []configEventRecord{{
 				cell: "configcore", slice: "configsubscribe", reason: obmetrics.ConfigEventProcessReasonPermanentError,
@@ -436,8 +439,11 @@ func TestService_ConfigEventMetrics_EntryDeletedOutcomes(t *testing.T) {
 			}},
 		},
 		{
-			name:    "invalid delete records permanent error",
-			entry:   outbox.Entry{ID: "bad-delete", Topic: domain.TopicConfigEntryDeleted, Payload: []byte(`{"key":"k","value":"v","version":1,"actorId":"a"}`)},
+			name: "invalid delete records permanent error",
+			entry: outbox.Entry{
+				ID: "bad-delete", Topic: domain.TopicConfigEntryDeleted,
+				Payload: []byte(`{"key":"k","value":"v","version":1,"actorId":"a"}`),
+			},
 			wantErr: true,
 			wantRecords: []configEventRecord{{
 				cell: "configcore", slice: "configsubscribe", reason: obmetrics.ConfigEventProcessReasonPermanentError,

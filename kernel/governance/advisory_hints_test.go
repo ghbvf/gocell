@@ -53,7 +53,7 @@ func TestAdvisoryHints_Golden(t *testing.T) {
 	got := sb.String()
 
 	goldenPath := filepath.Join("testdata", "advisory_hints.golden.txt")
-	want, err := os.ReadFile(goldenPath)
+	want, err := os.ReadFile(filepath.Clean(goldenPath))
 	require.NoError(t, err, "golden missing — create with the current hint contents at %s", goldenPath)
 
 	// Normalize CRLF -> LF so Windows checkouts (with autocrlf=true) compare

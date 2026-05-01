@@ -563,7 +563,9 @@ func TestService_Create_PublishError_DoesNotFailCreate(t *testing.T) {
 	userRepo := mem.NewUserRepository()
 	sessionRepo := mem.NewSessionRepository()
 	fp := failingPublisher{err: errors.New("broker unavailable")}
-	emitter, err := outbox.NewDirectEmitter(fp, outbox.DirectPublishFailOpen, metrics.NopProvider{}, "accesscore", outbox.WithLogger(slog.Default()))
+	emitter, err := outbox.NewDirectEmitter(
+		fp, outbox.DirectPublishFailOpen, metrics.NopProvider{}, "accesscore",
+		outbox.WithLogger(slog.Default()))
 	require.NoError(t, err)
 	svc, err := NewService(userRepo, sessionRepo, newIdentityRefreshStore(), slog.Default(),
 		WithEmitter(emitter), WithTokenIssuer(&stubTokenIssuer{}))
@@ -738,7 +740,7 @@ func TestService_Unlock_UpdateErrorPropagatesAndAbortsBeforeLog(t *testing.T) {
 	user, err := domain.NewUser("rb", "rb@e.t", "hash")
 	require.NoError(t, err)
 	user.ID = "usr-rb"
-	user.Lock()
+	user.LockAccount()
 	require.NoError(t, innerRepo.Create(context.Background(), user))
 
 	failRepo := &failingUpdateRepo{UserRepository: innerRepo, updateErr: errors.New("disk full")}
@@ -917,7 +919,9 @@ func TestService_Lock_RefreshRevokeFailureAbortsBeforePublishAndLog(t *testing.T
 	assert.Contains(t, err.Error(), "refresh DB unavailable", "underlying error must be unwrapable")
 	assert.Equal(t, 1, failRefresh.calls, "refresh.RevokeUser was attempted once")
 	assert.Equal(t, 0, emitter.calls,
-		"publish must not run after refresh-revoke failure: tx must abort first or a TopicUserLocked event would commit while the refresh chain stays live")
+		"publish must not run after refresh-revoke failure:"+
+			" tx must abort first or a TopicUserLocked event"+
+			" would commit while the refresh chain stays live")
 	assert.Nil(t, sloghelper.FindLogEntry(buf.String(), "user locked"),
 		"success log line must not fire when the tx aborts")
 }

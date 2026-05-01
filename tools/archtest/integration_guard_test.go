@@ -91,7 +91,9 @@ func TestCorebundleOutboxWiringDoesNotUseExternalDSNGate(t *testing.T) {
 			findings = append(findings, fset.Position(call.Pos()).String()+": corebundle wiring test must self-provision dependencies")
 		case "LookupEnv", "Getenv":
 			if len(call.Args) == 1 && archStringLiteralValue(call.Args[0]) == "GOCELL_CONFIGCORE_DATABASE_URL" {
-				findings = append(findings, fset.Position(call.Pos()).String()+": corebundle wiring test must not require external GOCELL_CONFIGCORE_DATABASE_URL")
+				findings = append(findings,
+					fset.Position(call.Pos()).String()+
+						": corebundle wiring test must not require external GOCELL_CONFIGCORE_DATABASE_URL")
 			}
 		}
 		return true

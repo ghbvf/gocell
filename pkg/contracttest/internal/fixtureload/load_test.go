@@ -46,7 +46,8 @@ func TestLoadFixture(t *testing.T) {
 		}
 		path := filepath.Join(tmp, "denied.json")
 		require.NoError(t, os.WriteFile(path, []byte("x"), 0o000))
-		t.Cleanup(func() { _ = os.Chmod(path, 0o644) })
+		restorePerm := os.FileMode(0o644)
+		t.Cleanup(func() { _ = os.Chmod(path, restorePerm) })
 
 		_, err := LoadFixture(path)
 		require.Error(t, err)

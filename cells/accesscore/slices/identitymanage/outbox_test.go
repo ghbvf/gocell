@@ -109,7 +109,8 @@ func TestHandler_PatchUser_BadJSON(t *testing.T) {
 func TestHandler_PatchUser_Status(t *testing.T) {
 	r := setup()
 	w := httptest.NewRecorder()
-	req := withAdmin(httptest.NewRequest(http.MethodPost, identityPrefix, strings.NewReader(`{"username":"st","email":"s@b.com","password":"pass1234"}`)))
+	req := withAdmin(httptest.NewRequest(http.MethodPost, identityPrefix,
+		strings.NewReader(`{"username":"st","email":"s@b.com","password":"pass1234"}`)))
 	req.Header.Set("Content-Type", "application/json")
 	r.ServeHTTP(w, req)
 	require.Equal(t, http.StatusCreated, w.Code)
@@ -125,7 +126,8 @@ func TestHandler_PatchUser_Status(t *testing.T) {
 func TestHandler_LockUnlock(t *testing.T) {
 	r := setup()
 	w := httptest.NewRecorder()
-	req := withAdmin(httptest.NewRequest(http.MethodPost, identityPrefix, strings.NewReader(`{"username":"lock","email":"l@b.com","password":"pass1234"}`)))
+	req := withAdmin(httptest.NewRequest(http.MethodPost, identityPrefix,
+		strings.NewReader(`{"username":"lock","email":"l@b.com","password":"pass1234"}`)))
 	req.Header.Set("Content-Type", "application/json")
 	r.ServeHTTP(w, req)
 	require.Equal(t, http.StatusCreated, w.Code)

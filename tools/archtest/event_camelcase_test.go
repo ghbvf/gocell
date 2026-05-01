@@ -47,7 +47,7 @@ func TestEventPayloadSchemasUseCamelCase(t *testing.T) {
 		rel, _ := filepath.Rel(root, path)
 		rel = filepath.ToSlash(rel)
 
-		data, err := os.ReadFile(path)
+		data, err := os.ReadFile(filepath.Clean(path))
 		if err != nil {
 			return fmt.Errorf("read %s: %w", rel, err)
 		}
@@ -142,7 +142,7 @@ func checkEventDTOCamelCase(root string) ([]string, error) {
 // scanDTOJSONTagsCamelCase parses a single Go file and returns violation
 // strings for any struct field json tag whose field name contains an underscore.
 func scanDTOJSONTagsCamelCase(root, path string) ([]string, error) {
-	data, err := os.ReadFile(path)
+	data, err := os.ReadFile(filepath.Clean(path))
 	if err != nil {
 		return nil, err
 	}
@@ -245,7 +245,8 @@ func TestEventPayloadSchemasUseCamelCase_NegativeProbe(t *testing.T) {
 		t.Parallel()
 		tmp := t.TempDir()
 		schemaPath := filepath.Join(tmp, "payload.schema.json")
-		content := `{"$schema":"https://json-schema.org/draft/2020-12/schema","title":"test","type":"object","properties":{"user_id":{"type":"string"},"username":{"type":"string"}}}`
+		content := `{"$schema":"https://json-schema.org/draft/2020-12/schema","title":"test",` +
+			`"type":"object","properties":{"user_id":{"type":"string"},"username":{"type":"string"}}}`
 		require.NoError(t, os.WriteFile(schemaPath, []byte(content), 0o644))
 
 		var schema struct {
@@ -263,7 +264,8 @@ func TestEventPayloadSchemasUseCamelCase_NegativeProbe(t *testing.T) {
 
 	t.Run("camelCase_property_passes", func(t *testing.T) {
 		t.Parallel()
-		content := `{"$schema":"https://json-schema.org/draft/2020-12/schema","title":"test","type":"object","properties":{"userId":{"type":"string"},"username":{"type":"string"}}}`
+		content := `{"$schema":"https://json-schema.org/draft/2020-12/schema","title":"test",` +
+			`"type":"object","properties":{"userId":{"type":"string"},"username":{"type":"string"}}}`
 		var schema struct {
 			Properties map[string]json.RawMessage `json:"properties"`
 		}

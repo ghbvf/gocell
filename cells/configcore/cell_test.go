@@ -225,11 +225,11 @@ func TestConfigCore_RouteGroups(t *testing.T) {
 
 	// Verify the register function actually mounts routes.
 	mux := &stubMux{}
-	groups[0].Register(mux)
+	require.NoError(t, groups[0].Register(mux))
 	assert.GreaterOrEqual(t, mux.handleCount, 2, "should register at least 2 route patterns")
 
 	internalMux := &stubMux{}
-	groups[1].Register(internalMux)
+	require.NoError(t, groups[1].Register(internalMux))
 	assert.GreaterOrEqual(t, internalMux.handleCount, 1, "internal group should register at least 1 route pattern")
 }
 
@@ -282,10 +282,11 @@ func initCellWithRouter(t *testing.T) *router.Router {
 
 	r := router.MustNew()
 	for _, rg := range c.RouteGroups() {
+		rg := rg
 		if rg.Prefix != "" {
-			r.Route(rg.Prefix, func(sub cell.RouteMux) { rg.Register(sub) })
+			r.Route(rg.Prefix, func(sub cell.RouteMux) { require.NoError(t, rg.Register(sub)) })
 		} else {
-			rg.Register(r)
+			require.NoError(t, rg.Register(r))
 		}
 	}
 	require.NoError(t, r.FinalizeAuth())
@@ -473,10 +474,11 @@ func TestConfigCore_CrossSliceCursorRejection_Reverse(t *testing.T) {
 
 	r := router.MustNew()
 	for _, rg := range c.RouteGroups() {
+		rg := rg
 		if rg.Prefix != "" {
-			r.Route(rg.Prefix, func(sub cell.RouteMux) { rg.Register(sub) })
+			r.Route(rg.Prefix, func(sub cell.RouteMux) { require.NoError(t, rg.Register(sub)) })
 		} else {
-			rg.Register(r)
+			require.NoError(t, rg.Register(r))
 		}
 	}
 	require.NoError(t, r.FinalizeAuth())

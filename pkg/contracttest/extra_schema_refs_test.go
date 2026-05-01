@@ -14,7 +14,7 @@ import (
 func TestContractYAML_ExtraSchemaRefs(t *testing.T) {
 	dir := filepath.Join(testdataRoot(), "http", "test", "extrarefs", "v1")
 
-	data, err := os.ReadFile(filepath.Join(dir, "contract.yaml"))
+	data, err := os.ReadFile(filepath.Clean(filepath.Join(dir, "contract.yaml")))
 	if err != nil {
 		t.Fatalf("read contract.yaml: %v", err)
 	}

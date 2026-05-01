@@ -438,25 +438,26 @@ func TestSubscriberWithMiddleware_BuiltInRestore_RestoresAllFields(t *testing.T)
 	cap := &captureSubscriber{}
 	wrapped := &SubscriberWithMiddleware{Inner: cap}
 
-	require.NoError(t, wrapped.Subscribe(context.Background(), Subscription{Topic: "event.test.v1"}, func(ctx context.Context, _ Entry) HandleResult {
-		requestID, ok := ctxkeys.RequestIDFrom(ctx)
-		require.True(t, ok)
-		assert.Equal(t, "req-789", requestID)
+	require.NoError(t, wrapped.Subscribe(context.Background(),
+		Subscription{Topic: "event.test.v1"}, func(ctx context.Context, _ Entry) HandleResult {
+			requestID, ok := ctxkeys.RequestIDFrom(ctx)
+			require.True(t, ok)
+			assert.Equal(t, "req-789", requestID)
 
-		correlationID, ok := ctxkeys.CorrelationIDFrom(ctx)
-		require.True(t, ok)
-		assert.Equal(t, "corr-789", correlationID)
+			correlationID, ok := ctxkeys.CorrelationIDFrom(ctx)
+			require.True(t, ok)
+			assert.Equal(t, "corr-789", correlationID)
 
-		traceID, ok := ctxkeys.TraceIDFrom(ctx)
-		require.True(t, ok)
-		assert.Equal(t, "4bf92f3577b34da6a3ce929d0e0e4736", traceID)
+			traceID, ok := ctxkeys.TraceIDFrom(ctx)
+			require.True(t, ok)
+			assert.Equal(t, "4bf92f3577b34da6a3ce929d0e0e4736", traceID)
 
-		traceParent, ok := ctxkeys.TraceParentFrom(ctx)
-		require.True(t, ok)
-		assert.Equal(t, "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01", traceParent)
+			traceParent, ok := ctxkeys.TraceParentFrom(ctx)
+			require.True(t, ok)
+			assert.Equal(t, "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01", traceParent)
 
-		return HandleResult{Disposition: DispositionAck}
-	}))
+			return HandleResult{Disposition: DispositionAck}
+		}))
 
 	require.NotNil(t, cap.handler)
 	res := cap.handler(context.Background(), Entry{
@@ -476,12 +477,13 @@ func TestSubscriberWithMiddleware_BuiltInRestore_ZeroObservabilityIsNoOp(t *test
 	wrapped := &SubscriberWithMiddleware{Inner: cap}
 
 	called := false
-	require.NoError(t, wrapped.Subscribe(context.Background(), Subscription{Topic: "test.v1"}, func(ctx context.Context, _ Entry) HandleResult {
-		called = true
-		_, ok := ctxkeys.RequestIDFrom(ctx)
-		assert.False(t, ok, "no request_id should be set from zero ObservabilityMetadata")
-		return HandleResult{Disposition: DispositionAck}
-	}))
+	require.NoError(t, wrapped.Subscribe(context.Background(),
+		Subscription{Topic: "test.v1"}, func(ctx context.Context, _ Entry) HandleResult {
+			called = true
+			_, ok := ctxkeys.RequestIDFrom(ctx)
+			assert.False(t, ok, "no request_id should be set from zero ObservabilityMetadata")
+			return HandleResult{Disposition: DispositionAck}
+		}))
 
 	require.NotNil(t, cap.handler)
 	res := cap.handler(context.Background(), Entry{ID: "e1", Observability: ObservabilityMetadata{}})

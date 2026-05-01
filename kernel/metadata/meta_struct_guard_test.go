@@ -14,7 +14,7 @@ import (
 // type.  Adding an entry here requires a justification comment explaining why
 // the KnownFields(true) invariant (G-1) is preserved despite the exception.
 //
-// Key format: "TypeName.FieldName"
+// Key format: "TypeName.FieldName".
 var allowedInlineFields = map[string]bool{
 	// SchemaRefs.Extra uses yaml:",inline" with map[string]string (not any),
 	// so it cannot smuggle arbitrary YAML keys past the decoder; all values

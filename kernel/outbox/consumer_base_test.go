@@ -79,7 +79,9 @@ type signalingClaimer struct {
 	once    sync.Once
 }
 
-func (s *signalingClaimer) Claim(ctx context.Context, key string, leaseTTL, renewInterval time.Duration) (idempotency.ClaimState, Receipt, error) {
+func (s *signalingClaimer) Claim(
+	ctx context.Context, key string, leaseTTL, renewInterval time.Duration,
+) (idempotency.ClaimState, Receipt, error) {
 	s.once.Do(func() {
 		select {
 		case s.started <- struct{}{}:

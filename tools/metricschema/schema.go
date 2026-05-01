@@ -4003,7 +4003,7 @@ type obsAck struct {
 func loadOBS01Acks(root string) (map[string]obsAck, error) {
 	path := filepath.Join(root, "docs", "observability", "metrics-migration-acks.yaml")
 	out := map[string]obsAck{}
-	data, err := os.ReadFile(path)
+	data, err := os.ReadFile(filepath.Clean(path))
 	if errors.Is(err, os.ErrNotExist) {
 		return out, nil
 	}

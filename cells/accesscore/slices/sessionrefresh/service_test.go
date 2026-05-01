@@ -631,7 +631,7 @@ func (s revokeFailingRefreshStore) RevokeSession(context.Context, string) error 
 // TestService_Refresh_SessionNotFound_CascadeRevokes verifies that when
 // sessionRepo.GetByID returns a domain ErrSessionNotFound (not an infra error),
 // Refresh returns ErrAuthRefreshFailed AND calls RevokeSession on the rotated
-// token so the newly-issued child cannot be used by an attacker. (F14)
+// token so the newly-issued child cannot be used by an attacker (F14).
 func TestService_Refresh_SessionNotFound_CascadeRevokes(t *testing.T) {
 	notFoundErr := errcode.NewDomain(errcode.ErrSessionNotFound, "session not found")
 	roleRepo := mem.NewRoleRepository()
@@ -1015,7 +1015,11 @@ func TestRefresh_RotateMismatch_CascadeRevokeFails_PropagatesErr(t *testing.T) {
 	}
 	// rotateMismatchRefreshStore wraps revokeErrStore so Rotate returns mismatch
 	// but RevokeSession delegates to revokeErrStore and fails.
-	mismatchStore := rotateMismatchRefreshStore{Store: revokeErrStore, rotatedSessionID: "tampered-session", rotatedSubjectID: "usr-mismatch-revoke-fail"}
+	mismatchStore := rotateMismatchRefreshStore{
+		Store:            revokeErrStore,
+		rotatedSessionID: "tampered-session",
+		rotatedSubjectID: "usr-mismatch-revoke-fail",
+	}
 	svc := MustNewService(sessionRepo, roleRepo, userRepo, mismatchStore, testIssuer, slog.Default())
 
 	pair, err := svc.Refresh(context.Background(), wireToken)

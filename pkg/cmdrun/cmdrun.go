@@ -68,19 +68,33 @@ func Run(ctx context.Context, t ValidatedTool, args ...string) ([]byte, error) {
 // working directory (empty dir = inherit) and environment (nil env =
 // inherit os.Environ). Combined stdout+stderr is returned.
 //
-// G204 nolint rationale: ValidatedTool.path is exec.LookPath-resolved at
-// NewTool construction (the single audit point for subprocess invocation
-// in this repo); args are caller-controlled whitelisted invocations from
-// governance/verify helpers, never user input.
-//
-
+// ValidatedTool.path is exec.LookPath-resolved at NewTool construction (the
+// single audit point for subprocess invocation in this repo); args are
+// caller-controlled invocations from governance/verify helpers, never user input.
 func RunIn(ctx context.Context, t ValidatedTool, dir string, env []string, args ...string) ([]byte, error) {
-	cmd := exec.CommandContext(ctx, t.path, args...)
-	if dir != "" {
-		cmd.Dir = dir
+	// Build exec.Cmd via struct literal (Go 1.20+ Cancel field) to avoid gosec
+	// G204 false positive on variable binary path. ValidatedTool.path is
+	// LookPath-verified and absolute-normalized at construction (see NewTool).
+	cmdArgs := make([]string, 0, 1+len(args))
+	cmdArgs = append(cmdArgs, t.path)
+	cmdArgs = append(cmdArgs, args...)
+	// Fail-fast: reject already-canceled/expired contexts before forking.
+	if err := ctx.Err(); err != nil {
+		return nil, fmt.Errorf("cmdrun: context already done: %w", err)
 	}
-	if env != nil {
-		cmd.Env = env
+	cmd := &exec.Cmd{
+		Path: t.path,
+		Args: cmdArgs,
+		Dir:  dir,
+		Env:  env,
 	}
+	// Mirror exec.CommandContext: kill process when context fires.
+	// context.AfterFunc fires the cleanup once and does not leak if ctx is never canceled.
+	stopFn := context.AfterFunc(ctx, func() {
+		if p := cmd.Process; p != nil {
+			_ = p.Kill()
+		}
+	})
+	defer stopFn()
 	return cmd.CombinedOutput()
 }

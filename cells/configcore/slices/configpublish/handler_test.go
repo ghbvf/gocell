@@ -109,7 +109,11 @@ func setupHandler() (http.Handler, *mem.ConfigRepository) {
 	svc := NewService(repo, slog.Default())
 	h := NewHandler(svc)
 	mux := celltest.NewTestMux()
-	mux.Route(configPrefix, func(sub cell.RouteMux) { h.RegisterRoutes(sub) })
+	mux.Route(configPrefix, func(sub cell.RouteMux) {
+		if err := h.RegisterRoutes(sub); err != nil {
+			panic("RegisterRoutes: " + err.Error())
+		}
+	})
 	return mux, repo
 }
 

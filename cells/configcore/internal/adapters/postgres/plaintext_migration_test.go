@@ -338,7 +338,7 @@ func TestPlaintextMigrator_MigrateConfigVersions_SingleRow(t *testing.T) {
 // the caller supplied the identical AAD that was used during Encrypt, proving
 // that the migration wires the correct AAD (cellID + configKey).
 //
-// Ciphertext layout: [4-byte big-endian AAD length][AAD bytes][plaintext bytes]
+// Ciphertext layout: [4-byte big-endian AAD length][AAD bytes][plaintext bytes].
 type aadAwareTransformer struct {
 	keyID string
 }

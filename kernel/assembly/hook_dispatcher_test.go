@@ -252,7 +252,10 @@ func TestHookDispatcher_FlushOnIdleReturnsTrue(t *testing.T) {
 // a post-Stop caller never crashes the assembly.
 func TestHookDispatcher_EmitAfterStopCountsQueueFull(t *testing.T) {
 	cv := newSpyCounterVec()
-	d := newHookDispatcher(dispatcherConfig{Observer: cell.NopHookObserver{}, QueueSize: 4, SinkTimeout: time.Second, Provider: &spyProvider{cv: cv}})
+	d := newHookDispatcher(dispatcherConfig{
+		Observer: cell.NopHookObserver{}, QueueSize: 4,
+		SinkTimeout: time.Second, Provider: &spyProvider{cv: cv},
+	})
 
 	d.stop(200 * time.Millisecond)
 	// At least one emit after stop must still not panic; drop is counted.

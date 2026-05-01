@@ -82,11 +82,11 @@ func findIntegrationTagViolations(rootDir string) ([]string, error) {
 // Returns (false, nil) when the file lacks a //go:build line in the header.
 // Returns (false, err) when the line cannot be parsed.
 func fileHasIntegrationTag(path string) (bool, error) {
-	f, err := os.Open(path)
+	f, err := os.Open(filepath.Clean(path))
 	if err != nil {
 		return false, err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	scanner := bufio.NewScanner(f)
 	for scanner.Scan() {

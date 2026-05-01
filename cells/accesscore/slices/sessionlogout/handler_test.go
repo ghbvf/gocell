@@ -47,7 +47,9 @@ func setup() http.Handler {
 
 	svc := MustNewService(sessionRepo, newHandlerLogoutRefreshStore(), slog.Default())
 	mux := celltest.NewTestMux()
-	NewHandler(svc).RegisterRoutes(mux)
+	if err := NewHandler(svc).RegisterRoutes(mux); err != nil {
+		panic("RegisterRoutes: " + err.Error())
+	}
 	return mux
 }
 

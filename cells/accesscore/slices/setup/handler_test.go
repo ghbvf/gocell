@@ -28,7 +28,7 @@ const (
 func newHandlerMux(t *testing.T, h *setup.Handler) http.Handler {
 	t.Helper()
 	mux := celltest.NewTestMux()
-	h.RegisterRoutes(mux)
+	require.NoError(t, h.RegisterRoutes(mux))
 	return mux
 }
 

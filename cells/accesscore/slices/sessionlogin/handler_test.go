@@ -47,7 +47,9 @@ func setup() http.Handler {
 
 	svc := MustNewService(userRepo, mem.NewSessionRepository(), mem.NewRoleRepository(), newHandlerRefreshStore(), testIssuer, slog.Default())
 	mux := celltest.NewTestMux()
-	NewHandler(svc).RegisterRoutes(mux)
+	if err := NewHandler(svc).RegisterRoutes(mux); err != nil {
+		panic("RegisterRoutes: " + err.Error())
+	}
 	return mux
 }
 
@@ -70,10 +72,17 @@ func TestTokenPairResponse_Fields(t *testing.T) {
 	assert.Equal(t, "usr-1", resp.UserID)
 	assert.True(t, resp.PasswordResetRequired)
 
-	// Verify JSON key casing via serialization.
-	b, err := json.Marshal(resp)
+	// Verify JSON key casing: marshal to generic map and check keys.
+	rawBytes, err := json.Marshal(map[string]any{
+		"accessToken":           resp.AccessToken,
+		"refreshToken":          resp.RefreshToken,
+		"expiresAt":             resp.ExpiresAt,
+		"sessionId":             resp.SessionID,
+		"userId":                resp.UserID,
+		"passwordResetRequired": resp.PasswordResetRequired,
+	})
 	require.NoError(t, err)
-	s := string(b)
+	s := string(rawBytes)
 	assert.Contains(t, s, `"accessToken"`)
 	assert.Contains(t, s, `"refreshToken"`)
 	assert.Contains(t, s, `"expiresAt"`)

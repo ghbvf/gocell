@@ -108,7 +108,7 @@ func strictSchemaRefField(field string) bool {
 // "additionalProperties" is set to false. It collects JSON-pointer-style paths
 // of violations (e.g. "$", "$.data", "$.data.items").
 func scanSchemaForStrictMissing(absPath string) ([]string, error) {
-	raw, err := os.ReadFile(absPath)
+	raw, err := os.ReadFile(filepath.Clean(absPath))
 	if err != nil {
 		return nil, err
 	}
@@ -574,7 +574,7 @@ func pathParamsReadyForInputConstraints(h *metadata.HTTPTransportMeta) bool {
 // minimum/maximum on integer/number nodes. Paths use the same JSON-pointer style as
 // scanSchemaForStrictMissing (e.g. "$", "$.user.name", "$.tags.items").
 func scanSchemaForInputConstraints(absPath string) ([]inputConstraintViolation, error) {
-	raw, err := os.ReadFile(absPath)
+	raw, err := os.ReadFile(filepath.Clean(absPath))
 	if err != nil {
 		return nil, err
 	}

@@ -34,15 +34,21 @@ func TestHttpConfigGetV1Serve(t *testing.T) {
 	c.ValidateErrorResponse(t, 403, []byte(`{"error":{"code":"ERR_AUTH_FORBIDDEN","message":"access denied","details":{}}}`))
 
 	// Non-sensitive entry: sensitive=false, value is the real value.
-	c.ValidateResponse(t, []byte(`{"data":{"id":"c-1","key":"app.name","value":"myapp","sensitive":false,"version":1,"createdAt":"2026-01-01T00:00:00Z","updatedAt":"2026-01-01T00:00:00Z"}}`))
+	c.ValidateResponse(t, []byte(`{"data":{"id":"c-1","key":"app.name","value":"myapp",`+
+		`"sensitive":false,"version":1,`+
+		`"createdAt":"2026-01-01T00:00:00Z","updatedAt":"2026-01-01T00:00:00Z"}}`))
 	// Sensitive entry: sensitive=true, value must be redacted.
-	c.ValidateResponse(t, []byte(`{"data":{"id":"c-2","key":"db.password","value":"******","sensitive":true,"version":1,"createdAt":"2026-01-01T00:00:00Z","updatedAt":"2026-01-01T00:00:00Z"}}`))
+	c.ValidateResponse(t, []byte(`{"data":{"id":"c-2","key":"db.password","value":"******",`+
+		`"sensitive":true,"version":1,`+
+		`"createdAt":"2026-01-01T00:00:00Z","updatedAt":"2026-01-01T00:00:00Z"}}`))
 	c.MustRejectResponse(t, []byte(`{"wrong":"shape"}`))
 	// PR-A9: list-shape payloads belong to http.config.list.v1; the single-entry
 	// contract must reject array data.
 	c.MustRejectResponse(t, []byte(`{"data":[],"nextCursor":"","hasMore":false}`))
 	// Missing sensitive field must be rejected (schema requires it).
-	c.MustRejectResponse(t, []byte(`{"data":{"id":"c-1","key":"app.name","value":"myapp","version":1,"createdAt":"2026-01-01T00:00:00Z","updatedAt":"2026-01-01T00:00:00Z"}}`))
+	c.MustRejectResponse(t, []byte(`{"data":{"id":"c-1","key":"app.name","value":"myapp",`+
+		`"version":1,`+
+		`"createdAt":"2026-01-01T00:00:00Z","updatedAt":"2026-01-01T00:00:00Z"}}`))
 }
 
 func TestHttpConfigListV1Serve(t *testing.T) {
@@ -59,15 +65,26 @@ func TestHttpConfigListV1Serve(t *testing.T) {
 	c.ValidateErrorResponse(t, 403, []byte(`{"error":{"code":"ERR_AUTH_FORBIDDEN","message":"access denied","details":{}}}`))
 
 	// Non-sensitive entry: sensitive=false.
-	c.ValidateResponse(t, []byte(`{"data":[{"id":"c-1","key":"app.name","value":"myapp","sensitive":false,"version":1,"createdAt":"2026-01-01T00:00:00Z","updatedAt":"2026-01-01T00:00:00Z"}],"nextCursor":"","hasMore":false}`))
+	c.ValidateResponse(t, []byte(`{"data":[{"id":"c-1","key":"app.name","value":"myapp",`+
+		`"sensitive":false,"version":1,`+
+		`"createdAt":"2026-01-01T00:00:00Z","updatedAt":"2026-01-01T00:00:00Z"}],`+
+		`"nextCursor":"","hasMore":false}`))
 	// Sensitive entry: sensitive=true, value redacted.
-	c.ValidateResponse(t, []byte(`{"data":[{"id":"c-2","key":"db.password","value":"******","sensitive":true,"version":1,"createdAt":"2026-01-01T00:00:00Z","updatedAt":"2026-01-01T00:00:00Z"}],"nextCursor":"","hasMore":false}`))
+	c.ValidateResponse(t, []byte(`{"data":[{"id":"c-2","key":"db.password","value":"******",`+
+		`"sensitive":true,"version":1,`+
+		`"createdAt":"2026-01-01T00:00:00Z","updatedAt":"2026-01-01T00:00:00Z"}],`+
+		`"nextCursor":"","hasMore":false}`))
 	// Single-entry payload belongs to http.config.get.v1.
-	c.MustRejectResponse(t, []byte(`{"data":{"id":"c-1","key":"app.name","value":"myapp","sensitive":false,"version":1,"createdAt":"2026-01-01T00:00:00Z","updatedAt":"2026-01-01T00:00:00Z"}}`))
+	c.MustRejectResponse(t, []byte(`{"data":{"id":"c-1","key":"app.name","value":"myapp",`+
+		`"sensitive":false,"version":1,`+
+		`"createdAt":"2026-01-01T00:00:00Z","updatedAt":"2026-01-01T00:00:00Z"}}`))
 	// Missing pagination envelope must be rejected.
 	c.MustRejectResponse(t, []byte(`{"data":[]}`))
 	// Missing sensitive field must be rejected (schema requires it for each item).
-	c.MustRejectResponse(t, []byte(`{"data":[{"id":"c-1","key":"app.name","value":"myapp","version":1,"createdAt":"2026-01-01T00:00:00Z","updatedAt":"2026-01-01T00:00:00Z"}],"nextCursor":"","hasMore":false}`))
+	c.MustRejectResponse(t, []byte(`{"data":[{"id":"c-1","key":"app.name","value":"myapp",`+
+		`"version":1,`+
+		`"createdAt":"2026-01-01T00:00:00Z","updatedAt":"2026-01-01T00:00:00Z"}],`+
+		`"nextCursor":"","hasMore":false}`))
 }
 
 // authzCase models a row in the runtime mux authz negative-test tables.

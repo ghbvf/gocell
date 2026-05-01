@@ -15,8 +15,10 @@ func TestToTokenPairResponse(t *testing.T) {
 		want TokenPairResponse
 	}{
 		{"all fields populated",
-			TokenPair{AccessToken: "at", RefreshToken: "rt", ExpiresAt: expires, SessionID: "sess-1", UserID: "usr-1", PasswordResetRequired: true},
-			TokenPairResponse{AccessToken: "at", RefreshToken: "rt", ExpiresAt: expires, SessionID: "sess-1", UserID: "usr-1", PasswordResetRequired: true}},
+			TokenPair{AccessToken: "at", RefreshToken: "rt", ExpiresAt: expires,
+				SessionID: "sess-1", UserID: "usr-1", PasswordResetRequired: true},
+			TokenPairResponse{AccessToken: "at", RefreshToken: "rt", ExpiresAt: expires,
+				SessionID: "sess-1", UserID: "usr-1", PasswordResetRequired: true}},
 		{"zero value pair",
 			TokenPair{},
 			TokenPairResponse{}},

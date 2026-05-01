@@ -12,8 +12,8 @@ import (
 )
 
 const (
-	codeVERIFY06                  = "VERIFY-06"
-	fieldPassCriteriaCheckRefTmpl = "passCriteria[%d].checkRef"
+	codeVERIFY06          = "VERIFY-06"
+	fieldCritCheckRefTmpl = "passCriteria[%d].checkRef"
 
 	// defaultWaiverExpiryTruncation is the granularity used when comparing a
 	// waiver's expiresAt date against the current time. Day-level truncation
@@ -322,7 +322,7 @@ func (v *Validator) validateVERIFY05() []ValidationResult {
 			if pc.CheckRef == "" {
 				continue
 			}
-			field := fmt.Sprintf(fieldPassCriteriaCheckRefTmpl, i)
+			field := fmt.Sprintf(fieldCritCheckRefTmpl, i)
 			results = append(results, v.validateVerifyRef(pc.CheckRef, file, field)...)
 		}
 	}
@@ -379,7 +379,7 @@ func (v *Validator) validateVERIFY06CheckRef(
 		return []ValidationResult{v.newResult(
 			codeVERIFY06, SeverityError, IssueMismatch,
 			journeyFile(j),
-			fmt.Sprintf(fieldPassCriteriaCheckRefTmpl, i),
+			fmt.Sprintf(fieldCritCheckRefTmpl, i),
 			fmt.Sprintf("active journey %q auto checkRef %q must belong to the same journey", j.ID, pc.CheckRef),
 		)}
 	}
@@ -393,7 +393,7 @@ func (v *Validator) validateVERIFY06CheckRef(
 	return []ValidationResult{v.newResult(
 		codeVERIFY06, SeverityError, IssueRefNotFound,
 		journeyFile(j),
-		fmt.Sprintf(fieldPassCriteriaCheckRefTmpl, i),
+		fmt.Sprintf(fieldCritCheckRefTmpl, i),
 		fmt.Sprintf("active journey %q auto checkRef %q must resolve to an executable non-skipped test target", j.ID, pc.CheckRef),
 	)}
 }

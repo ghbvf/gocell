@@ -77,13 +77,16 @@ func (hc *HashChain) Len() int {
 // The message is: prevHash + eventID + eventType + actorID + timestamp + payload.
 func (hc *HashChain) computeHash(entry *AuditEntry) string {
 	mac := hmac.New(sha256.New, hc.hmacKey)
-	fmt.Fprintf(mac, "%s|%s|%s|%s|%d|%s",
+	// hash.Hash.Write never returns an error per the io.Writer contract.
+	if _, err := fmt.Fprintf(mac, "%s|%s|%s|%s|%d|%s",
 		entry.PrevHash,
 		entry.EventID,
 		entry.EventType,
 		entry.ActorID,
 		entry.Timestamp.UnixNano(),
 		string(entry.Payload),
-	)
+	); err != nil {
+		panic(fmt.Sprintf("hashchain: HMAC write error (unreachable): %v", err))
+	}
 	return hex.EncodeToString(mac.Sum(nil))
 }

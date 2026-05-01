@@ -40,7 +40,9 @@ func setupHandler() (http.Handler, *mem.ConfigRepository) {
 	}
 	mux := celltest.NewTestMux()
 	mux.Route(configBasePath, func(sub kcell.RouteMux) {
-		NewHandler(svc).RegisterRoutes(sub)
+		if err := NewHandler(svc).RegisterRoutes(sub); err != nil {
+			panic("RegisterRoutes: " + err.Error())
+		}
 	})
 	return mux, repo
 }
@@ -224,7 +226,7 @@ func TestHandler_HandleList_InvalidCursor(t *testing.T) {
 	}
 }
 
-// Sensitive value redaction tests (#27o)
+// Sensitive value redaction tests (#27o).
 func TestHandler_HandleGet_SensitiveRedacted(t *testing.T) {
 	handler, repo := setupHandler()
 	now := time.Now()

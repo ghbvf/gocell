@@ -378,7 +378,7 @@ func listenerDXExprName(expr ast.Expr) string {
 
 func activeDocTermViolations(t *testing.T, root, path string) []string {
 	t.Helper()
-	data, err := os.ReadFile(path)
+	data, err := os.ReadFile(filepath.Clean(path))
 	require.NoError(t, err)
 	lines := strings.Split(string(data), "\n")
 	var violations []string

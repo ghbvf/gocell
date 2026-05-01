@@ -144,7 +144,7 @@ func TestPATHIsAdditive(t *testing.T) {
 	require.NoError(t, res.Err)
 	assert.True(t, res.Passed, res.Output)
 
-	logBytes, err := os.ReadFile(logPath)
+	logBytes, err := os.ReadFile(filepath.Clean(logPath))
 	require.NoError(t, err)
 	assert.Contains(t, string(logBytes), "test ./... -v")
 }

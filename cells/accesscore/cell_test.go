@@ -422,7 +422,8 @@ func TestAccessCore_Init_DurableMode_UsesProdRBACRunMode(t *testing.T) {
 	r := router.MustNew()
 	for _, rg := range c.RouteGroups() {
 		if rg.Listener == cell.PrimaryListener {
-			r.Route(rg.Prefix, func(sub cell.RouteMux) { rg.Register(sub) })
+			rg := rg
+			r.Route(rg.Prefix, func(sub cell.RouteMux) { require.NoError(t, rg.Register(sub)) })
 		}
 	}
 	require.NoError(t, r.FinalizeAuth())
@@ -452,7 +453,7 @@ func TestAccessCore_RouteGroups(t *testing.T) {
 	assert.Equal(t, "/api/v1/access", groups[0].Prefix)
 	assert.NotNil(t, groups[0].Register)
 	primaryMux := &stubMux{}
-	groups[0].Register(primaryMux)
+	require.NoError(t, groups[0].Register(primaryMux))
 	assert.GreaterOrEqual(t, primaryMux.handleCount, 3, "primary group should register at least 3 routes")
 
 	// Second group: InternalListener at /internal/v1/access.
@@ -460,7 +461,7 @@ func TestAccessCore_RouteGroups(t *testing.T) {
 	assert.Equal(t, "/internal/v1/access", groups[1].Prefix)
 	assert.NotNil(t, groups[1].Register)
 	internalMux := &stubMux{}
-	groups[1].Register(internalMux)
+	require.NoError(t, groups[1].Register(internalMux))
 	assert.GreaterOrEqual(t, internalMux.handleCount, 1, "internal group should register at least 1 route")
 }
 
@@ -501,11 +502,12 @@ func initCellWithRouters(t *testing.T) *cellTestRouters {
 	primary := router.MustNew()
 	internal := router.MustNew()
 	for _, rg := range c.RouteGroups() {
+		rg := rg
 		switch rg.Listener {
 		case cell.PrimaryListener:
-			primary.Route(rg.Prefix, func(sub cell.RouteMux) { rg.Register(sub) })
+			primary.Route(rg.Prefix, func(sub cell.RouteMux) { require.NoError(t, rg.Register(sub)) })
 		case cell.InternalListener:
-			internal.Route(rg.Prefix, func(sub cell.RouteMux) { rg.Register(sub) })
+			internal.Route(rg.Prefix, func(sub cell.RouteMux) { require.NoError(t, rg.Register(sub)) })
 		}
 	}
 	require.NoError(t, primary.FinalizeAuth())
@@ -758,11 +760,12 @@ func TestAccessCore_SessionRevocation_E2E(t *testing.T) {
 	// Login via HTTP handler to simulate real flow.
 	r := router.MustNew()
 	for _, rg := range c.RouteGroups() {
+		rg := rg
 		if rg.Listener == cell.PrimaryListener {
 			if rg.Prefix != "" {
-				r.Route(rg.Prefix, func(sub cell.RouteMux) { rg.Register(sub) })
+				r.Route(rg.Prefix, func(sub cell.RouteMux) { require.NoError(t, rg.Register(sub)) })
 			} else {
-				rg.Register(r)
+				require.NoError(t, rg.Register(r))
 			}
 		}
 	}
@@ -840,11 +843,12 @@ func TestAccessCore_RefreshTokenRevocation_E2E(t *testing.T) {
 	// Login via HTTP.
 	r := router.MustNew()
 	for _, rg := range c.RouteGroups() {
+		rg := rg
 		if rg.Listener == cell.PrimaryListener {
 			if rg.Prefix != "" {
-				r.Route(rg.Prefix, func(sub cell.RouteMux) { rg.Register(sub) })
+				r.Route(rg.Prefix, func(sub cell.RouteMux) { require.NoError(t, rg.Register(sub)) })
 			} else {
-				rg.Register(r)
+				require.NoError(t, rg.Register(r))
 			}
 		}
 	}
@@ -907,7 +911,11 @@ func TestAccessCore_RefreshTokenRevocation_E2E(t *testing.T) {
 // seedAdminUser directly creates an admin user in the given repos without going
 // through the bootstrap flow. Used as a test fixture for tests that need
 // "there is an admin user" as a precondition.
-func seedAdminUser(t *testing.T, ctx context.Context, userRepo *mem.UserRepository, roleRepo *mem.RoleRepository, username, password string) *domain.User {
+func seedAdminUser(
+	t *testing.T, ctx context.Context,
+	userRepo *mem.UserRepository, roleRepo *mem.RoleRepository,
+	username, password string,
+) *domain.User {
 	t.Helper()
 	hash, err := bcrypt.GenerateFromPassword([]byte(password), domain.BcryptCost)
 	require.NoError(t, err)
@@ -1004,11 +1012,12 @@ func TestAccessCore_PasswordResetExempt_PropagatesViaRouter(t *testing.T) {
 
 	r := router.MustNew()
 	for _, rg := range c.RouteGroups() {
+		rg := rg
 		if rg.Listener == cell.PrimaryListener {
 			if rg.Prefix != "" {
-				r.Route(rg.Prefix, func(sub cell.RouteMux) { rg.Register(sub) })
+				r.Route(rg.Prefix, func(sub cell.RouteMux) { require.NoError(t, rg.Register(sub)) })
 			} else {
-				rg.Register(r)
+				require.NoError(t, rg.Register(r))
 			}
 		}
 	}

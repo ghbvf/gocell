@@ -385,7 +385,11 @@ func TestProvisioner_Compensate_ToleratesErrorsLogOnly(t *testing.T) {
 
 // --- test helpers ---------------------------------------------------------
 
-func newProvisioner(t *testing.T, user ports.UserRepository, role ports.RoleRepository, id adminprovision.UUIDGenerator) *adminprovision.Provisioner {
+func newProvisioner(
+	t *testing.T,
+	user ports.UserRepository, role ports.RoleRepository,
+	id adminprovision.UUIDGenerator,
+) *adminprovision.Provisioner {
 	t.Helper()
 	p, err := adminprovision.NewProvisioner(user, role, discardLogger(), id)
 	require.NoError(t, err)

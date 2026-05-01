@@ -21,10 +21,14 @@ const rulePanicRegistered01 = "PANIC-REGISTERED-01"
 // "<rel-path>::<Receiver>.<methodName>" to an ADR-pinned justification. Keep
 // this map exactly aligned with docs/architecture/202604270030-architectural-panic-whitelist.md.
 var architecturalPanicWhitelist = map[string]string{
-	"kernel/wrapper/lifecycle.go::recoverAndFinishWithRedactor":              "re-panics from defer recover so outer Recovery middleware can serialize the panic",
-	"runtime/http/middleware/circuit_breaker.go::repanicAfterBreakerFailure": "re-panics from defer recover after reporting circuit-breaker failure",
-	"adapters/postgres/tx_manager.go::repanicAfterTopLevelTxRollback":        "re-panics after top-level transaction rollback so caller panic semantics are preserved",
-	"adapters/postgres/tx_manager.go::repanicAfterSavepointRollback":         "re-panics after savepoint rollback so nested transaction panic semantics are preserved",
+	"kernel/wrapper/lifecycle.go::recoverAndFinishWithRedactor": "re-panics from defer recover" +
+		" so outer Recovery middleware can serialize the panic",
+	"runtime/http/middleware/circuit_breaker.go::repanicAfterBreakerFailure": "re-panics from defer recover" +
+		" after reporting circuit-breaker failure",
+	"adapters/postgres/tx_manager.go::repanicAfterTopLevelTxRollback": "re-panics after" +
+		" top-level transaction rollback so caller panic semantics are preserved",
+	"adapters/postgres/tx_manager.go::repanicAfterSavepointRollback": "re-panics after" +
+		" savepoint rollback so nested transaction panic semantics are preserved",
 }
 
 type panicRegisteredViolation struct {
@@ -172,7 +176,9 @@ func registered() {
 	}
 }
 
-func scanSourceForPanicRegisteredViolations(t *testing.T, src, rel string, whitelist map[string]string) ([]panicRegisteredViolation, map[string]bool) {
+func scanSourceForPanicRegisteredViolations(
+	t *testing.T, src, rel string, whitelist map[string]string,
+) ([]panicRegisteredViolation, map[string]bool) {
 	t.Helper()
 	fset := token.NewFileSet()
 	file, err := parser.ParseFile(fset, rel, src, parser.SkipObjectResolution|parser.ParseComments)
@@ -354,7 +360,7 @@ func assertPanicWhitelistMatchesADR(t *testing.T, root string, usedWhitelist map
 func readPanicWhitelistKeysFromADR(t *testing.T, root string) []string {
 	t.Helper()
 	path := filepath.Join(root, "docs", "architecture", "202604270030-architectural-panic-whitelist.md")
-	data, err := os.ReadFile(path)
+	data, err := os.ReadFile(filepath.Clean(path))
 	require.NoError(t, err)
 
 	var keys []string

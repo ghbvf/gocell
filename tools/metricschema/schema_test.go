@@ -84,7 +84,7 @@ func TestBuild_CorebundleGeneratedSchemaIsCurrent(t *testing.T) {
 	require.NoError(t, err)
 	got, err := Marshal(schema)
 	require.NoError(t, err)
-	want, err := os.ReadFile(filepath.Join(root, "assemblies", "corebundle", "generated", "metrics-schema.yaml"))
+	want, err := os.ReadFile(filepath.Clean(filepath.Join(root, "assemblies", "corebundle", "generated", "metrics-schema.yaml")))
 	require.NoError(t, err)
 	assert.Equal(t, string(want), string(got))
 }
@@ -295,7 +295,9 @@ func TestBuild_EmptyKnownWrapperBucketsUseDefaults(t *testing.T) {
 	for _, cfg := range cfgExprs {
 		cfgExpr, err := parser.ParseExpr(cfg)
 		require.NoError(t, err)
-		buckets, err := sp.configBuckets(cfgExpr.(*ast.CompositeLit), "DurationBuckets", runtimeMetricsPkg, "DefaultDurationBuckets", "fixture.go")
+		buckets, err := sp.configBuckets(
+			cfgExpr.(*ast.CompositeLit), "DurationBuckets",
+			runtimeMetricsPkg, "DefaultDurationBuckets", "fixture.go")
 		require.NoError(t, err)
 		assert.Equal(t, []string{".005", ".01", ".025", ".05", ".1", ".25", ".5", "1", "2.5", "5", "10"}, buckets)
 	}
@@ -2163,8 +2165,10 @@ func writeFile(t *testing.T, root, rel, body string) {
 
 func gitRun(t *testing.T, root string, args ...string) {
 	t.Helper()
-	cmd := exec.Command("git", args...)
-	cmd.Dir = root
+	gitPath, lookErr := exec.LookPath("git")
+	require.NoError(t, lookErr, "git not found in PATH")
+	cmdArgs := append([]string{"git"}, args...)
+	cmd := &exec.Cmd{Path: gitPath, Args: cmdArgs, Dir: root}
 	out, err := cmd.CombinedOutput()
 	require.NoError(t, err, "git %s failed:\n%s", strings.Join(args, " "), string(out))
 }
