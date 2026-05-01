@@ -55,7 +55,7 @@ func ListGeneratedInHEAD(root string) ([]string, error) {
 	// safe. The leading "^" anchors the match to the start of a line, and
 	// generated files emit the sentinel as the first line.
 	pattern := "^(" + GoGeneratedPrefix + "|" + YAMLGeneratedPrefix + ")"
-	cmd := gitCmd("-C", root, "grep",
+	out, err := runGit("-C", root, "grep",
 		"-I",
 		"-l",
 		"-E",
@@ -64,7 +64,6 @@ func ListGeneratedInHEAD(root string) ([]string, error) {
 		"--",
 		"*.go", "*.yml", "*.yaml",
 	)
-	out, err := cmd.Output()
 	if err != nil {
 		var exitErr *exec.ExitError
 		if errors.As(err, &exitErr) {
@@ -72,7 +71,7 @@ func ListGeneratedInHEAD(root string) ([]string, error) {
 				return nil, nil
 			}
 			return nil, fmt.Errorf("git grep HEAD: %s",
-				strings.TrimSpace(string(exitErr.Stderr)))
+				strings.TrimSpace(string(out)))
 		}
 		return nil, fmt.Errorf("git grep HEAD: %w", err)
 	}

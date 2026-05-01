@@ -43,21 +43,29 @@ const negativeAssertionWindow = 200 * time.Millisecond
 
 // TestPubSub runs the full conformance test suite against the given
 // Publisher/Subscriber implementation. Features control which tests are
-// executed; unsupported features are skipped with t.Skip().
+// executed; unsupported features are skipped with t.Skip(). Each batch is
+// nested under a t.Run subtest so CI failures localize to the failing
+// batch (rather than reporting "TestPubSub fail" with no batch context).
+//
+// External adapters (RabbitMQ, NATS, Kafka) can call individual exported
+// RunBatch* functions to validate a subset of conformance — useful when
+// gating a partial-feature broker behind a smoke test.
 //
 // ref: ThreeDotsLabs/watermill pubsub/tests/test_pubsub.go
 func TestPubSub(t *testing.T, features Features, constructor PubSubConstructor) {
 	features.setDefaults()
-	runBatch1Subscribe(t, features, constructor)
-	runBatch2Disposition(t, features, constructor)
-	runBatch3PermanentError(t, features, constructor)
-	runBatch4Receipt(t, features, constructor)
-	runBatch5Lifecycle(t, features, constructor)
-	runBatch6Concurrency(t, features, constructor)
+	t.Run("Batch1_Subscribe", func(t *testing.T) { RunBatch1Subscribe(t, features, constructor) })
+	t.Run("Batch2_Disposition", func(t *testing.T) { RunBatch2Disposition(t, features, constructor) })
+	t.Run("Batch3_PermanentError", func(t *testing.T) { RunBatch3PermanentError(t, features, constructor) })
+	t.Run("Batch4_Receipt", func(t *testing.T) { RunBatch4Receipt(t, features, constructor) })
+	t.Run("Batch5_Lifecycle", func(t *testing.T) { RunBatch5Lifecycle(t, features, constructor) })
+	t.Run("Batch6_Concurrency", func(t *testing.T) { RunBatch6Concurrency(t, features, constructor) })
 }
 
-// runBatch1Subscribe runs core pub/sub tests.
-func runBatch1Subscribe(t *testing.T, features Features, constructor PubSubConstructor) {
+// RunBatch1Subscribe runs core pub/sub tests. Exported so external adapter
+// integration suites can call individual batches without forcing the full
+// TestPubSub matrix.
+func RunBatch1Subscribe(t *testing.T, features Features, constructor PubSubConstructor) {
 	t.Run("PublishSubscribe", func(t *testing.T) {
 		testPublishSubscribe(t, features, constructor)
 	})
@@ -84,8 +92,9 @@ func runBatch1Subscribe(t *testing.T, features Features, constructor PubSubConst
 	})
 }
 
-// runBatch2Disposition runs disposition lifecycle tests.
-func runBatch2Disposition(t *testing.T, features Features, constructor PubSubConstructor) {
+// RunBatch2Disposition runs disposition lifecycle tests. Exported for
+// external adapter conformance gating.
+func RunBatch2Disposition(t *testing.T, features Features, constructor PubSubConstructor) {
 	t.Run("DispositionAck", func(t *testing.T) {
 		testDispositionAck(t, features, constructor)
 	})
@@ -100,8 +109,9 @@ func runBatch2Disposition(t *testing.T, features Features, constructor PubSubCon
 	})
 }
 
-// runBatch3PermanentError runs PermanentError + WrapLegacyHandler tests.
-func runBatch3PermanentError(t *testing.T, features Features, constructor PubSubConstructor) {
+// RunBatch3PermanentError runs PermanentError + WrapLegacyHandler tests.
+// Exported for external adapter conformance gating.
+func RunBatch3PermanentError(t *testing.T, features Features, constructor PubSubConstructor) {
 	t.Run("PermanentErrorCausesReject", func(t *testing.T) {
 		testPermanentErrorCausesReject(t, features, constructor)
 	})
@@ -116,8 +126,9 @@ func runBatch3PermanentError(t *testing.T, features Features, constructor PubSub
 	})
 }
 
-// runBatch4Receipt runs receipt lifecycle tests.
-func runBatch4Receipt(t *testing.T, features Features, constructor PubSubConstructor) {
+// RunBatch4Receipt runs receipt lifecycle tests. Exported for external
+// adapter conformance gating.
+func RunBatch4Receipt(t *testing.T, features Features, constructor PubSubConstructor) {
 	t.Run("ReceiptCommittedOnAck", func(t *testing.T) {
 		testReceiptCommittedOnAck(t, features, constructor)
 	})
@@ -132,8 +143,9 @@ func runBatch4Receipt(t *testing.T, features Features, constructor PubSubConstru
 	})
 }
 
-// runBatch5Lifecycle runs subscriber lifecycle tests.
-func runBatch5Lifecycle(t *testing.T, features Features, constructor PubSubConstructor) {
+// RunBatch5Lifecycle runs subscriber lifecycle tests. Exported for
+// external adapter conformance gating.
+func RunBatch5Lifecycle(t *testing.T, features Features, constructor PubSubConstructor) {
 	t.Run("SubscribeBlocksUntilCancel", func(t *testing.T) {
 		testSubscribeBlocksUntilCancel(t, features, constructor)
 	})
@@ -148,8 +160,9 @@ func runBatch5Lifecycle(t *testing.T, features Features, constructor PubSubConst
 	})
 }
 
-// runBatch6Concurrency runs concurrency and middleware tests.
-func runBatch6Concurrency(t *testing.T, features Features, constructor PubSubConstructor) {
+// RunBatch6Concurrency runs concurrency and middleware tests. Exported
+// for external adapter conformance gating.
+func RunBatch6Concurrency(t *testing.T, features Features, constructor PubSubConstructor) {
 	t.Run("ConcurrentPublish", func(t *testing.T) {
 		testConcurrentPublish(t, features, constructor)
 	})

@@ -5,37 +5,33 @@
 package governance
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"sync"
+
+	"github.com/ghbvf/gocell/pkg/cmdrun"
 )
 
-// gitExecutable resolves git's absolute path once via PATH lookup and
-// caches the result. SonarCloud / gosec G204 flag exec.Command("git", ...)
-// because PATH may include writable directories where an attacker could
-// plant a malicious binary; resolving the path at first use narrows the
-// exposure window to package initialization, after which every git
-// invocation goes through the absolute path captured here. Returns "git"
-// when LookPath fails so callers still produce an honest "executable file
-// not found" error from exec.Run.
-var gitExecutable = sync.OnceValue(func() string {
-	if path, err := exec.LookPath("git"); err == nil {
-		return path
-	}
-	return "git"
+// gitTool resolves the git binary once via cmdrun.NewTool (exec.LookPath).
+// First-call failure is cached so subsequent calls fail-fast with the same
+// error rather than silently degrading. Internal queries use a Background
+// context — these are sub-second diagnostic invocations with no real
+// cancellation surface; cmdrun.Run still receives a ctx because subprocess
+// cancellation is the cmdrun contract.
+var gitTool = sync.OnceValues(func() (cmdrun.ValidatedTool, error) {
+	return cmdrun.NewTool("git")
 })
 
-// gitCmd builds an exec.Cmd that invokes the cached git binary. All git
-// invocations in this package go through this constructor so PATH
-// resolution lives in one place and the SAST suppression rationale stays
-// in one well-documented spot.
-func gitCmd(args ...string) *exec.Cmd {
-	//nolint:gosec // G204: gitExecutable() resolved via exec.LookPath to absolute path at first call;
-	// args are controlled governance queries.
-	return exec.Command(gitExecutable(), args...)
+func runGit(args ...string) ([]byte, error) {
+	tool, err := gitTool()
+	if err != nil {
+		return nil, err
+	}
+	return cmdrun.Run(context.Background(), tool, args...)
 }
 
 // HasGitMetadata reports whether root looks like a git work tree (has a .git
@@ -51,7 +47,8 @@ func HasGitMetadata(root string) bool {
 // to short-circuit before invoking git commands that would fail with
 // "unable to resolve revision".
 func hasHEAD(root string) bool {
-	return gitCmd("-C", root, "rev-parse", "--verify", "--quiet", "HEAD").Run() == nil
+	_, err := runGit("-C", root, "rev-parse", "--verify", "--quiet", "HEAD")
+	return err == nil
 }
 
 // CommittedInHEAD reports whether rel is committed in HEAD at root. Files
@@ -62,13 +59,13 @@ func hasHEAD(root string) bool {
 // as "not committed" (cat-file -e exits non-zero for unknown refs); other
 // errors propagate so the caller fails closed.
 func CommittedInHEAD(root, rel string) (bool, error) {
-	cmd := gitCmd("-C", root, "cat-file", "-e", "HEAD:"+rel)
-	if err := cmd.Run(); err != nil {
-		var exitErr *exec.ExitError
-		if errors.As(err, &exitErr) {
-			return false, nil
-		}
-		return false, fmt.Errorf("git cat-file HEAD:%s: %w", rel, err)
+	_, err := runGit("-C", root, "cat-file", "-e", "HEAD:"+rel)
+	if err == nil {
+		return true, nil
 	}
-	return true, nil
+	var exitErr *exec.ExitError
+	if errors.As(err, &exitErr) {
+		return false, nil
+	}
+	return false, fmt.Errorf("git cat-file HEAD:%s: %w", rel, err)
 }

@@ -30,7 +30,6 @@ const (
 	cmdL0Imports          = "l0-imports"
 	errCannotFindRoot     = "cannot find project root: %w"
 	errMetadataParse      = "metadata parse: %w"
-	errEmitResults        = "emit results: %w"
 	flagFormatDescription = "output format: text|json|sarif"
 	flagSetCheckPrefix    = "check "
 )
@@ -118,7 +117,7 @@ func checkContractHealth(args []string) error {
 	results = append(results, validator.CheckHTTPPathParamUUID(contracts, root)...)
 
 	if err := printer.Print(results); err != nil {
-		return fmt.Errorf(errEmitResults, err)
+		return fmt.Errorf(errEmitResultsFmt, err)
 	}
 
 	if errCount := countContractHealthErrors(results); errCount > 0 {
@@ -760,7 +759,7 @@ func printAndCheck(format string, results []governance.ValidationResult, checkNa
 		return err
 	}
 	if err := printer.Print(results); err != nil {
-		return fmt.Errorf(errEmitResults, err)
+		return fmt.Errorf(errEmitResultsFmt, err)
 	}
 	if n := countErrors(results); n > 0 {
 		return fmt.Errorf("%s: %d issue(s) found", checkName, n)
@@ -820,7 +819,7 @@ func checkUnconditionalSkip(args []string) error {
 	}
 
 	if err := printer.Print(results); err != nil {
-		return fmt.Errorf(errEmitResults, err)
+		return fmt.Errorf(errEmitResultsFmt, err)
 	}
 
 	errCount := countContractHealthErrors(results)

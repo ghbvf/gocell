@@ -5,6 +5,14 @@ package governance
 // so the file is exempt from the lll linter via .golangci.yml exclusions.
 //
 // All const names follow the convention: advHint<RuleID><Suffix>.
+//
+// Constant promotion criteria — promote a literal string into this file when:
+//   (a) it is referenced ≥ 3 times, OR
+//   (b) any single instance exceeds ~80 characters, OR
+//   (c) two or more rules share the same diagnostic vocabulary and would
+//       otherwise drift out of sync independently.
+// Sub-80-char single-use literals stay inline at the rule call site so the
+// rule body remains self-explanatory.
 
 const (
 	// ADV-05: active event contract with no subscribers.
@@ -45,20 +53,18 @@ const (
 		"    %s:\n" +
 		"      type: string"
 
-	// CONTRACT-CONSISTENCY-EMIT-01 hints.
-
-	// Trigger references a contract that is not kind:event.
+	// CCE-01: trigger references a contract that is not kind:event.
 	advHintCCE01TriggerNotEvent = "contract %q declares trigger %q but referenced contract kind=%s; triggers must reference kind:event contracts"
 
-	// Trigger event contract owner/publisher mismatch.
+	// CCE-01: trigger event contract owner/publisher mismatch.
 	advHintCCE01OwnerMismatch = "contract %q declares trigger %q but event contract owner/publisher must both be %s"
 
-	// Serving slice does not declare role:publish for the trigger event contract.
+	// CCE-01: serving slice does not declare role:publish for the trigger event contract.
 	advHintCCE01SliceNotPublish = "contract %q declares trigger %q but serving slice %s/%s does not declare role: publish for that event contract"
 
-	// Trigger topic not found in slice emit set.
+	// CCE-01: trigger topic not found in slice emit set.
 	advHintCCE01TriggerNotEmitted = "contract %q declares trigger %q but no non-test Go file under %s emits it via outbox.Emit or *.Emitter.Emit; serving slice %s/%s must emit the trigger topic as a string literal or named constant"
 
-	// Reverse: slice emits a topic not covered by any HTTP contract trigger.
+	// CCE-01: reverse — slice emits a topic not covered by any HTTP contract trigger.
 	advHintCCE01ReverseEmit = "service emits topic %q in serving slice %s/%s but no HTTP contract served by that slice declares it in triggers; fix: add %q to the slice's HTTP contract triggers or change the emit if dead code"
 )

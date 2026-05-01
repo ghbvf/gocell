@@ -12,12 +12,6 @@ import (
 	"github.com/ghbvf/gocell/kernel/metadata"
 )
 
-// errEmitFmt is the wrapping format every printer write failure is reported
-// under. Using a single constant keeps the CLI exit-status surface stable —
-// CI scripts and tests can grep on the "emit results:" prefix without
-// brittle reliance on multiple call sites agreeing on wording.
-const errEmitFmt = "emit results: %w"
-
 // runValidate implements: gocell validate [--root <path>] [--fail-fast] [--strict] [--format text|json|sarif]
 // Parses all metadata, runs validate-meta and depcheck.
 // exit 0 = pass, exit 1 = errors found.
@@ -105,14 +99,14 @@ func runValidateFailFast(
 	valResults := runValidatorFailFast(validator, strict)
 	if firstErr := firstError(valResults); firstErr != nil {
 		if err := emitFailFast(printer, format, valResults); err != nil {
-			return fmt.Errorf(errEmitFmt, err)
+			return fmt.Errorf(errEmitResultsFmt, err)
 		}
 		return fmt.Errorf("validation failed: %s", firstErr.Code)
 	}
 	depResults := depChecker.CheckFailFast()
 	if firstErr := firstError(depResults); firstErr != nil {
 		if err := emitFailFast(printer, format, depResults); err != nil {
-			return fmt.Errorf(errEmitFmt, err)
+			return fmt.Errorf(errEmitResultsFmt, err)
 		}
 		return fmt.Errorf("validation failed: %s", firstErr.Code)
 	}
@@ -131,7 +125,7 @@ func runValidateFailFast(
 			return nil
 		}
 		if err := printer.Print(nil); err != nil {
-			return fmt.Errorf(errEmitFmt, err)
+			return fmt.Errorf(errEmitResultsFmt, err)
 		}
 		return nil
 	}
@@ -140,7 +134,7 @@ func runValidateFailFast(
 	// reach CI / SARIF Explorer / jq just like in non-fail-fast runs. The
 	// short-circuit guarantee is "stop at first error", not "drop warnings".
 	if err := printer.Print(valResults); err != nil {
-		return fmt.Errorf(errEmitFmt, err)
+		return fmt.Errorf(errEmitResultsFmt, err)
 	}
 	return nil
 }
@@ -185,7 +179,7 @@ func runValidateFull(
 	valResults = append(valResults, depResults...)
 
 	if err := printer.Print(valResults); err != nil {
-		return fmt.Errorf(errEmitFmt, err)
+		return fmt.Errorf(errEmitResultsFmt, err)
 	}
 
 	errCount := 0
