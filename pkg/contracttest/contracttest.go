@@ -336,19 +336,41 @@ func pathWithinAllowList(_ testing.TB, cleanDir, fullPath string) bool {
 	return strings.HasPrefix(resolved, sharedRoot+string(filepath.Separator))
 }
 
-// evalSymlinkOrSelf returns filepath.EvalSymlinks(p), or p itself if the
-// path doesn't exist yet (callers may pass not-yet-created paths during
-// validation). Returns error only when EvalSymlinks fails for an existing
-// path (e.g., broken symlink chain), which we treat as fail-closed.
+// evalSymlinkOrSelf returns filepath.EvalSymlinks(p) when p exists, or
+// resolves the deepest existing ancestor and re-attaches the missing
+// trailing segments when p does not (a non-existent leaf must not be a
+// symlink-bypass loophole — an attacker can plant a symlink at any
+// existing parent dir even if the target file hasn't been created yet).
+// Returns error for a broken symlink chain on an existing path; we treat
+// that as fail-closed.
 func evalSymlinkOrSelf(p string) (string, error) {
-	resolved, err := filepath.EvalSymlinks(p)
-	if err == nil {
+	if resolved, err := filepath.EvalSymlinks(p); err == nil {
 		return resolved, nil
+	} else if !errors.Is(err, fs.ErrNotExist) {
+		return "", err
 	}
-	if errors.Is(err, fs.ErrNotExist) {
-		return p, nil
+	// Path doesn't exist; walk up to deepest existing ancestor and
+	// EvalSymlinks that, then append the unresolved tail.
+	ancestor := p
+	var tail []string
+	for {
+		parent, leaf := filepath.Split(strings.TrimSuffix(ancestor, string(filepath.Separator)))
+		if parent == "" || parent == ancestor {
+			return p, nil // walked to root without finding existing ancestor
+		}
+		ancestor = strings.TrimSuffix(parent, string(filepath.Separator))
+		if ancestor == "" {
+			ancestor = string(filepath.Separator)
+		}
+		tail = append([]string{leaf}, tail...)
+		resolvedAncestor, err := filepath.EvalSymlinks(ancestor)
+		if err == nil {
+			return filepath.Join(append([]string{resolvedAncestor}, tail...)...), nil
+		}
+		if !errors.Is(err, fs.ErrNotExist) {
+			return "", err
+		}
 	}
-	return "", err
 }
 
 // findContractsRoot walks up from cleanDir until a directory whose basename

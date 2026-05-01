@@ -90,14 +90,16 @@ func TestPathWithinAllowList(t *testing.T) {
 // fakeT cannot replicate without spawning its own goroutine), and the negative
 // security checks are fully exercised at the unit layer.
 
-// TestPathWithinAllowList_RejectsSymlinkEscape covers a real attack vector
-// missed by purely lexical HasPrefix checks: a symlink under contracts/shared/
-// that points outside the allow-list. evalSymlinkOrSelf in the helper resolves
-// the symlink before the prefix comparison so the resolved target (not the
-// symlink itself) is what gets gated.
+// TestPathWithinAllowList_RejectsSymlinkEscape covers two real attack vectors
+// missed by purely lexical HasPrefix checks: (a) a symlink under
+// contracts/shared/ pointing to a directory outside the allow-list, and
+// (b) a symlink to a file outside the allow-list. evalSymlinkOrSelf in the
+// helper resolves symlinks (including on the deepest existing ancestor when
+// the leaf does not exist) before the prefix comparison so the resolved
+// target — not the symlink path — is what gets gated.
 func TestPathWithinAllowList_RejectsSymlinkEscape(t *testing.T) {
 	if runtime.GOOS == "windows" {
-		t.Skip("symlinks require admin privileges on Windows; allow-list still rejects via HasPrefix on resolved path")
+		t.Skip("symlinks require admin privileges on Windows")
 	}
 	tmp := t.TempDir()
 	// Build a fake contracts tree: <tmp>/contracts/http/foo/v1/ + <tmp>/contracts/shared/
@@ -105,17 +107,37 @@ func TestPathWithinAllowList_RejectsSymlinkEscape(t *testing.T) {
 	require.NoError(t, os.MkdirAll(contractDir, 0o755))
 	sharedDir := filepath.Join(tmp, "contracts", "shared")
 	require.NoError(t, os.MkdirAll(sharedDir, 0o755))
-	// Plant a symlink under contracts/shared/ pointing to /tmp (outside repo).
-	outsideTarget := t.TempDir() // truly separate temp tree
-	symlinkPath := filepath.Join(sharedDir, "evil")
-	require.NoError(t, os.Symlink(outsideTarget, symlinkPath))
-
-	// schemaRef navigating into the symlink should be rejected because the
-	// resolved target is outside <contractsRoot>/shared/.
 	cleanContractDir := filepath.Clean(contractDir)
-	fullPath := filepath.Clean(filepath.Join(cleanContractDir, "..", "..", "..", "shared", "evil", "schema.json"))
 
-	ft := &fakeT{TB: t}
-	ok := pathWithinAllowList(ft, cleanContractDir, fullPath)
-	assert.False(t, ok, "symlink under shared/ that resolves outside the allow-list must be rejected")
+	t.Run("symlink_to_file_outside_repo_rejected", func(t *testing.T) {
+		// Plant a real file outside the contracts tree, then a symlink under
+		// shared/ pointing at it. EvalSymlinks resolves the symlink → the
+		// resolved path is outside sharedRoot → reject.
+		outside := t.TempDir()
+		secretPath := filepath.Join(outside, "secret.json")
+		require.NoError(t, os.WriteFile(secretPath, []byte("x"), 0o644))
+		symlinkPath := filepath.Join(sharedDir, "evil-secret.json")
+		require.NoError(t, os.Symlink(secretPath, symlinkPath))
+
+		fullPath := filepath.Clean(filepath.Join(cleanContractDir, "..", "..", "..", "shared", "evil-secret.json"))
+		ft := &fakeT{TB: t}
+		ok := pathWithinAllowList(ft, cleanContractDir, fullPath)
+		assert.False(t, ok, "symlink resolving outside contractsRoot/shared must be rejected")
+	})
+
+	t.Run("symlink_dir_with_nonexistent_leaf_rejected", func(t *testing.T) {
+		// Symlink shared/evil-dir → outside dir (no leaf file created).
+		// evalSymlinkOrSelf must walk up to the existing parent (the symlink
+		// itself), resolve it, then re-attach the leaf. Lexical HasPrefix
+		// would otherwise accept because the unresolved fullPath stays under
+		// shared/ syntactically.
+		outside := t.TempDir()
+		symlinkDir := filepath.Join(sharedDir, "evil-dir")
+		require.NoError(t, os.Symlink(outside, symlinkDir))
+
+		fullPath := filepath.Clean(filepath.Join(cleanContractDir, "..", "..", "..", "shared", "evil-dir", "schema.json"))
+		ft := &fakeT{TB: t}
+		ok := pathWithinAllowList(ft, cleanContractDir, fullPath)
+		assert.False(t, ok, "symlink dir with non-existent leaf must still be resolved + rejected")
+	})
 }

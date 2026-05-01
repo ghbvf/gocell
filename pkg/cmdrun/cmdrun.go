@@ -11,24 +11,43 @@ import (
 	"path/filepath"
 )
 
-// ValidatedTool wraps an exec.LookPath-resolved absolute path to a tool
-// binary. The unexported `path` field forces normal API construction
-// through NewTool — package consumers cannot legally produce a non-empty
-// path bypassing LookPath. Zero values (constructed via reflect/unsafe or
-// embedded literal `ValidatedTool{}`) carry an empty path, which makes
+// ValidatedTool wraps a tool binary invocation path with two enforced
+// invariants:
+//
+//  1. The path is exec.LookPath-resolved (the binary exists at construction
+//     time, not at first Run — caller can fail-fast at startup).
+//  2. The path is absolute (filepath.IsAbs == true). LookPath returns a
+//     bare name when name has no path separators and PATH lookup succeeds,
+//     or returns name as-is when name contains a separator. NewTool always
+//     normalizes to filepath.Abs so the resolved binary cannot be hijacked
+//     by later cwd changes or by a writable PATH directory inserted into
+//     PATH after construction.
+//
+// The unexported `path` field forces normal API construction through
+// NewTool — package consumers cannot legally produce a non-empty path
+// bypassing the invariants. Zero values (constructed via reflect/unsafe
+// or embedded literal `ValidatedTool{}`) carry an empty path, which makes
 // Run fail-closed at exec.CommandContext with a "no such file or
 // directory" error rather than panicking or executing arbitrary code.
 type ValidatedTool struct{ path string }
 
-// NewTool resolves name via exec.LookPath and wraps the result in a
-// ValidatedTool. Returns an error wrapping the LookPath failure when name
-// cannot be found in PATH.
+// NewTool resolves name via exec.LookPath, normalizes to an absolute
+// filepath.Clean'd form, and wraps the result in a ValidatedTool. Returns
+// an error wrapping the LookPath failure when name cannot be found in
+// PATH, or filepath.Abs failure (extremely rare — only when getwd fails).
 func NewTool(name string) (ValidatedTool, error) {
 	path, err := exec.LookPath(name)
 	if err != nil {
 		return ValidatedTool{}, fmt.Errorf("cmdrun: lookup %q: %w", name, err)
 	}
-	return ValidatedTool{path: path}, nil
+	if !filepath.IsAbs(path) {
+		abs, err := filepath.Abs(path)
+		if err != nil {
+			return ValidatedTool{}, fmt.Errorf("cmdrun: resolve absolute path for %q: %w", name, err)
+		}
+		path = abs
+	}
+	return ValidatedTool{path: filepath.Clean(path)}, nil
 }
 
 // Dir returns the directory containing the tool binary. Callers use this

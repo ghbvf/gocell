@@ -3,6 +3,7 @@ package cmdrun
 import (
 	"context"
 	"errors"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
@@ -15,11 +16,38 @@ import (
 )
 
 func TestNewTool(t *testing.T) {
-	t.Run("resolves real tool", func(t *testing.T) {
+	t.Run("resolves real tool to absolute path", func(t *testing.T) {
 		tool, err := NewTool(goName())
 		require.NoError(t, err)
 		assert.NotEmpty(t, tool.Dir(), "Dir() should return non-empty for resolved tool")
-		assert.True(t, filepath.IsAbs(tool.Dir()), "Dir() should be absolute")
+		assert.True(t, filepath.IsAbs(tool.Dir()), "Dir() must be absolute (path invariant)")
+		assert.True(t, filepath.IsAbs(tool.path), "path must be absolute (security invariant)")
+	})
+
+	t.Run("normalizes relative LookPath result to absolute", func(t *testing.T) {
+		// LookPath returns a relative path when name contains a separator
+		// (e.g., "./bin/tool"). Plant a binary in tmp + cd there so the
+		// relative name resolves under cwd, then assert NewTool absolutizes.
+		tmp := t.TempDir()
+		// Use the real go binary so the lookup actually succeeds.
+		realGo, err := exec.LookPath(goName())
+		require.NoError(t, err)
+		linkName := "local-go"
+		if runtime.GOOS == "windows" {
+			linkName += ".exe"
+		}
+		linkPath := filepath.Join(tmp, linkName)
+		require.NoError(t, os.Symlink(realGo, linkPath))
+
+		origWD, err := os.Getwd()
+		require.NoError(t, err)
+		t.Cleanup(func() { _ = os.Chdir(origWD) })
+		require.NoError(t, os.Chdir(tmp))
+
+		tool, err := NewTool("./" + linkName)
+		require.NoError(t, err)
+		assert.True(t, filepath.IsAbs(tool.path),
+			"NewTool must normalize relative LookPath result to absolute (got %q)", tool.path)
 	})
 
 	t.Run("fails closed for missing tool", func(t *testing.T) {

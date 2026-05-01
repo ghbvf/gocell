@@ -56,8 +56,13 @@ func TestAdvisoryHints_Golden(t *testing.T) {
 	want, err := os.ReadFile(goldenPath)
 	require.NoError(t, err, "golden missing — create with the current hint contents at %s", goldenPath)
 
-	if got != string(want) {
+	// Normalize CRLF -> LF so Windows checkouts (with autocrlf=true) compare
+	// against the LF-encoded golden the same way Linux/macOS do.
+	wantNorm := strings.ReplaceAll(string(want), "\r\n", "\n")
+	gotNorm := strings.ReplaceAll(got, "\r\n", "\n")
+
+	if gotNorm != wantNorm {
 		t.Errorf("advisory hints drift detected — diff against golden %s\n--- want ---\n%s\n--- got ---\n%s",
-			goldenPath, string(want), got)
+			goldenPath, wantNorm, gotNorm)
 	}
 }
