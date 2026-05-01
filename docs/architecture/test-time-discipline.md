@@ -110,6 +110,39 @@ exposes no synchronization point:
 These keep their own file-local consts rather than importing
 `testtime.*` — the value is meaningful at the site, not a generic timeout.
 
+## Every `time.Sleep` must justify itself (TEST-SLEEP-DISCIPLINE-01)
+
+A second archtest gate, `TEST-SLEEP-DISCIPLINE-01`, requires every
+`time.Sleep(...)` call in test code to carry a same-line annotation:
+
+```go
+time.Sleep(testtime.D500ms) //archtest:allow:test-sleep debounce window IS the test subject
+```
+
+The `<reason>` after the marker is mandatory. The gate is satisfied by
+the marker being present with non-empty reason; what the reason says is
+read by humans at review time. This makes every wall-clock dependency
+in the test suite greppable (`grep -r 'archtest:allow:test-sleep'`) and
+forces a structural decision — "should this be `require.Eventually`
+instead?" — for every new sleep that lands.
+
+Reason templates currently in use across the suite:
+
+| Reason | Pattern |
+|---|---|
+| `TTL physical expiry; backend has no notification API` | Wait for backend to physically expire a key |
+| `signal.Notify install has no sync hook` | OS signal handler registration race |
+| `wait for goroutine to enter blocking <call>; no started observable` | Coordinating with a goroutine that has no "started" hook |
+| `debounce/coalesce window IS the test subject` | Testing wall-clock-driven coalescing |
+| `negative test: must elapse without state change` | Asserting state did NOT change after N |
+| `sleep IS the fixture input under test` | Slow-callback / slow-handler fixture parameters |
+| `fsnotify event delivery has no synchronous hook` | fsnotify physical delivery latency |
+| `goroutine timing fixture: controls cancel order` | Timing fixture in an ephemeral goroutine |
+| `Renew extends TTL — polling defeats test` | Side-effecting probe forces fixed sleep |
+
+If you reach for a different reason, write it inline — make it specific
+enough that a future reader can decide whether to convert to polling.
+
 ## `runtime.Gosched()` is not in scope
 
 `runtime.Gosched()` takes no duration argument and is the canonical
@@ -131,20 +164,36 @@ the FakeClock event loop has no signal source — only the test's own
 `fc.Advance(...)` calls drive it. The gate explicitly does not flag bare
 `runtime.Gosched()` calls.
 
-## Future scope
+## Platform scope
 
-- **D6 PROD-CLOCK-INJECTION-01**. After G6 lands, run a soak window in CI
-  to identify TTL/lease/expiry tests that remain flaky despite the literal
-  cleanup. If real-clock dependence is the residual cause, promote the
-  three local `Clock` interfaces (`runtime/distlock/clock.go`,
-  `runtime/auth/refresh/types.go`, `cells/accesscore/initialadmin/clock.go`)
-  into a shared `kernel/clock/` and force production code to inject it.
-  Tracked as Track D #D6 in `docs/plans/202605011500-029-master-roadmap.md`.
+The gates run on Linux CI (the tools shard in `_build-lint.yml` and the
+governance verify path via `hack/verify-test-time-literal.sh`). Files
+gated behind `//go:build darwin` / `//go:build windows` etc. are
+invisible to the Linux build context and therefore not statically
+scanned by these gates. The test-code library (`pkg/testutil/testtime`,
+helper packages) and the `testtime.*` constants are fully cross-platform
+— other-OS test runs use the same conventions and binaries; only the
+*static enforcement* is Linux-only.
 
-- **forbidigo `time.Sleep` in `*_test.go`**. When G2 enables `forbidigo`
-  cluster-wide, add `time.Sleep` to its forbid list as a belt-and-suspenders
-  guard. The current archtest already enforces named constants, so this
-  duplication is purely defensive.
+Multi-OS coverage relies on the opt-in `os-smoke` workflow
+(`.github/workflows/_build-lint.yml`, gated by `inputs.run-os-smoke`,
+default off). When triggered, that matrix runs the suite on
+`macos-latest` and `windows-latest`. Platform-tagged regressions in
+test-time discipline therefore surface as test failures in os-smoke,
+not as gate violations on the default Linux runner. If a future change
+shifts the trade-off — e.g. flakier platform-tagged tests in
+production — the multi-OS gate enforcement listed under "Future scope"
+becomes the right escalation.
+
+## Future scope (registered follow-ups)
+
+| Item | Tracker | Trigger |
+|---|---|---|
+| **D6 PROD-CLOCK-INJECTION-01** — promote the three local `Clock` interfaces (`runtime/distlock/clock.go`, `runtime/auth/refresh/types.go`, `cells/accesscore/initialadmin/clock.go`) into a shared `kernel/clock/` and inject in production | Track D #D6 in `docs/plans/202605011500-029-master-roadmap.md` | Post-G6 CI soak: identify TTL/lease/expiry tests still flaky after literal cleanup; if real-clock dependence is the residual cause, promote |
+| **forbidigo `time.Sleep` in `*_test.go`** as belt-and-suspenders | G2 in `docs/plans/202605011500-029-master-roadmap.md` | When G2 enables forbidigo cluster-wide |
+| **Slow-test budget gate** — CI fails any single test over a wall-time threshold | New PR (Track D衍生) | Post-G6, once D6 has reduced real-clock dependence enough that thresholds are stable |
+| **`runtime.Gosched()` audit** — re-evaluate after the unified Clock lands | Bundle with D6 | When FakeClock-driven tests can switch to a unified clock and Gosched yields can be replaced with explicit clock advancement |
+| **Multi-OS gate enforcement** — extend `TEST-TIME-LITERAL-01` / `TEST-SLEEP-DISCIPLINE-01` to scan darwin/windows-tagged files | Future PR | If platform-tagged regressions are observed in production; current per-OS smoke jobs are the safety net |
 
 ## References
 

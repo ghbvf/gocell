@@ -95,6 +95,8 @@ const (
 	D10ms  = 10 * time.Millisecond
 	D20ms  = 20 * time.Millisecond
 	D25ms  = 25 * time.Millisecond
+	D30ms  = 30 * time.Millisecond
+	D40ms  = 40 * time.Millisecond
 	D50ms  = 50 * time.Millisecond
 	D80ms  = 80 * time.Millisecond
 	D100ms = 100 * time.Millisecond
