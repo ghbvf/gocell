@@ -1,0 +1,179 @@
+package depgraph
+
+import (
+	"errors"
+	"fmt"
+	"sort"
+	"strings"
+
+	"golang.org/x/tools/go/packages"
+)
+
+// loadMode is the packages.Load mode required to build a Graph and to
+// support downstream type-level analysis (archtest LAYER-08/10 reuse the
+// same loaded packages via RawPackages()).
+const loadMode = packages.NeedName |
+	packages.NeedFiles |
+	packages.NeedImports |
+	packages.NeedSyntax |
+	packages.NeedTypes |
+	packages.NeedTypesInfo |
+	packages.NeedDeps |
+	packages.NeedModule
+
+// LoadOptions configures Load.
+type LoadOptions struct {
+	// IncludeTests, when true, sets packages.Config.Tests so test variants
+	// of each package are loaded. Production-only closure analysis still
+	// excludes test-variant edges, but TestOnly markings on Node become
+	// meaningful (a node is TestOnly if no production package imports it).
+	IncludeTests bool
+
+	// BuildTags is joined as `-tags=a,b,c` and passed to packages.Config.
+	// Empty means no extra tags.
+	BuildTags []string
+
+	// Dir is the directory to run packages.Load from. Empty means the
+	// current working directory.
+	Dir string
+}
+
+// Load builds a Graph by running packages.Load against patterns. The
+// module path is auto-detected from the first loaded package's Module
+// field. Callers do not pass a module path.
+func Load(opts LoadOptions, patterns ...string) (*Graph, error) {
+	cfg := &packages.Config{
+		Mode:  loadMode,
+		Tests: opts.IncludeTests,
+		Dir:   opts.Dir,
+	}
+	if len(opts.BuildTags) > 0 {
+		cfg.BuildFlags = []string{"-tags=" + strings.Join(opts.BuildTags, ",")}
+	}
+	pkgs, err := packages.Load(cfg, patterns...)
+	if err != nil {
+		return nil, fmt.Errorf("packages.Load: %w", err)
+	}
+	if len(pkgs) == 0 {
+		return nil, fmt.Errorf("no packages loaded for patterns %v", patterns)
+	}
+	module := detectModule(pkgs)
+	if module == "" {
+		return nil, errors.New("module path not detected; load with NeedModule and ensure go.mod exists")
+	}
+	return FromPackages(module, pkgs), nil
+}
+
+// FromPackages builds a Graph from already-loaded packages. module must be
+// the bare module path (e.g. "github.com/ghbvf/gocell"). It is the
+// injection point for callers that share a packages.Load with another
+// consumer; archtest uses this to reuse typeseval.SharedResolver's cached
+// load instead of running packages.Load twice per test run.
+func FromPackages(module string, pkgs []*packages.Package) *Graph {
+	g := &Graph{
+		Module:  module,
+		byID:    make(map[string]*Node, len(pkgs)),
+		rawPkgs: pkgs,
+	}
+	for _, p := range pkgs {
+		if p == nil || p.PkgPath == "" {
+			continue
+		}
+		// Skip synthetic test variants (`<pkg>.test` binary, bracketed
+		// `<pkg> [<pkg>.test]` internal-test compile). They are walked
+		// for TestOnly detection in markTestOnly via rawPkgs but do not
+		// appear as graph nodes.
+		if isTestVariant(p.ID) {
+			continue
+		}
+		if _, dup := g.byID[p.PkgPath]; dup {
+			continue
+		}
+		n := &Node{
+			ID:      p.PkgPath,
+			Layer:   LayerOf(module, p.PkgPath),
+			CellID:  CellOf(module, p.PkgPath),
+			SliceID: SliceOf(module, p.PkgPath),
+		}
+		n.Imports = make([]string, 0, len(p.Imports))
+		for imp := range p.Imports {
+			n.Imports = append(n.Imports, imp)
+		}
+		sort.Strings(n.Imports)
+		g.Packages = append(g.Packages, n)
+		g.byID[p.PkgPath] = n
+	}
+	sort.Slice(g.Packages, func(i, j int) bool { return g.Packages[i].ID < g.Packages[j].ID })
+	g.markTestOnly()
+	g.Stats.Packages = len(g.Packages)
+	edges := 0
+	for _, n := range g.Packages {
+		edges += len(n.Imports)
+	}
+	g.Stats.Edges = edges
+	return g
+}
+
+// detectModule returns the first non-empty Module.Path from pkgs, or "".
+func detectModule(pkgs []*packages.Package) string {
+	for _, p := range pkgs {
+		if p != nil && p.Module != nil && p.Module.Path != "" {
+			return p.Module.Path
+		}
+	}
+	return ""
+}
+
+// markTestOnly tags each node TestOnly=true when at least one test
+// variant imports it AND no production package imports it. This isolates
+// helper packages whose sole consumers are *_test.go files. Leaf or
+// orphaned packages (no importers at all) stay TestOnly=false because
+// they are not test-specific — they may be entry points or unused
+// production code.
+//
+// A test variant has an ID containing ".test]" or ending in ".test".
+// When IncludeTests is false, no test variants are loaded and no node is
+// marked TestOnly.
+func (g *Graph) markTestOnly() {
+	prodImports, testImports := g.collectImporters()
+	for _, n := range g.Packages {
+		if !prodImports[n.ID] && testImports[n.ID] {
+			n.TestOnly = true
+		}
+	}
+}
+
+// collectImporters partitions all import edges in the loaded packages
+// into production-side and test-side sets, keyed by importee. The
+// `<pkg>.test` synthetic binary trivially imports `<pkg>`; that
+// structural edge is filtered out so the package under test is not
+// mis-marked as test-only.
+func (g *Graph) collectImporters() (prod, test map[string]bool) {
+	prod = make(map[string]bool, len(g.Packages))
+	test = make(map[string]bool, len(g.Packages))
+	for _, p := range g.rawPkgs {
+		if p == nil {
+			continue
+		}
+		if isTestVariant(p.ID) {
+			selfTested := strings.TrimSuffix(p.ID, ".test")
+			for imp := range p.Imports {
+				if imp == selfTested {
+					continue
+				}
+				test[imp] = true
+			}
+			continue
+		}
+		for imp := range p.Imports {
+			prod[imp] = true
+		}
+	}
+	return prod, test
+}
+
+// isTestVariant reports whether a package ID is a test variant produced by
+// packages.Load with Tests=true.
+func isTestVariant(id string) bool {
+	return strings.Contains(id, ".test]") || strings.HasSuffix(id, ".test")
+}

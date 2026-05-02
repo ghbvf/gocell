@@ -9,13 +9,14 @@ import (
 	"go/types"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/tools/go/packages"
+
+	"github.com/ghbvf/gocell/tools/depgraph"
 )
 
 // readModulePath parses go.mod to extract the module path (e.g. "github.com/ghbvf/gocell").
@@ -54,31 +55,27 @@ type violation struct {
 
 // --- helpers (pure functions) ---
 
-// layerOf extracts the top-level directory for an internal module path.
-// Returns "" for external packages or the module root itself.
-// modPrefix must include trailing slash (e.g. "github.com/ghbvf/gocell/").
+// layerOf is a backward-compatible shim around depgraph.LayerOf that keeps
+// archtest's "external returns empty string" convention. modPrefix must
+// include the trailing slash (e.g. "github.com/ghbvf/gocell/"). Internal
+// packages return their layer name; stdlib / third-party / root collapse
+// to "" so existing skip-on-empty branches in checkLayering keep working.
+//
+// The single source of truth for layer classification is now
+// tools/depgraph/layer.go; this shim only adapts the signature.
 func layerOf(modPrefix, importPath string) string {
-	if !strings.HasPrefix(importPath, modPrefix) {
+	module := strings.TrimSuffix(modPrefix, "/")
+	switch layer := depgraph.LayerOf(module, importPath); layer {
+	case depgraph.LayerStdlib, depgraph.LayerThirdParty, depgraph.LayerRoot, "":
 		return ""
+	default:
+		return layer
 	}
-	rel := strings.TrimPrefix(importPath, modPrefix)
-	if rel == "" {
-		return "" // module root package, no layer
-	}
-	parts := strings.SplitN(rel, "/", 2)
-	return parts[0]
 }
 
-// cellOf extracts the cell ID (e.g. "accesscore") from a cells/ package path.
-// Returns "" if not under cells/.
+// cellOf delegates to depgraph.CellOf with archtest's modPrefix convention.
 func cellOf(modPrefix, importPath string) string {
-	cellsPrefix := modPrefix + "cells/"
-	if !strings.HasPrefix(importPath, cellsPrefix) {
-		return ""
-	}
-	rel := strings.TrimPrefix(importPath, cellsPrefix)
-	parts := strings.SplitN(rel, "/", 2)
-	return parts[0]
+	return depgraph.CellOf(strings.TrimSuffix(modPrefix, "/"), importPath)
 }
 
 // isInternal returns true if the import path contains an internal package segment.
@@ -444,43 +441,31 @@ func findModuleRoot(t *testing.T) string {
 	}
 }
 
-// loadPackages loads all packages under root using golang.org/x/tools/go/packages.
-// The -tags=integration build flag is applied so that integration-tagged files
-// participate in the layering analysis. Errors in individual packages (e.g. Go's
-// internal/ visibility rejection) are tolerated: packages with errors are still
-// included so LAYER-05 violations surface as rule-specific failures rather than
-// a generic command failure that masks other violations.
-func loadPackages(t *testing.T, root string) []pkgInfo {
+// loadDepGraph loads the entire module under root once via depgraph.Load
+// with the integration build tag, returning the typed graph. The same
+// loaded packages back both the dep-graph view (for direct + transitive
+// layer rules) and the *packages.Package slice (for LAYER-08 type-scope
+// scan and LAYER-10 cell-API adapter check). Replaces the previous
+// loadPackages + loadTypedPackages double-load in TestLayeringRules.
+func loadDepGraph(t *testing.T, root string) *depgraph.Graph {
 	t.Helper()
-	cfg := &packages.Config{
-		Mode:       packages.NeedName | packages.NeedImports,
-		Dir:        root,
-		BuildFlags: []string{"-tags=integration"},
-	}
-	pkgs, err := packages.Load(cfg, "./...")
-	require.NoError(t, err, "packages.Load failed")
-
-	var out []pkgInfo
-	for _, p := range pkgs {
-		// Surface per-package load errors so truncation is visible in test output.
-		if len(p.Errors) > 0 {
-			for _, pe := range p.Errors {
-				t.Logf("loadPackages: package %q error: %v", p.PkgPath, pe)
-			}
+	g, err := depgraph.Load(depgraph.LoadOptions{
+		Dir:       root,
+		BuildTags: []string{"integration"},
+	}, "./...")
+	require.NoError(t, err, "depgraph.Load failed")
+	for _, p := range g.RawPackages() {
+		for _, pe := range p.Errors {
+			t.Logf("depgraph.Load: package %q error: %v", p.PkgPath, pe)
 		}
-		imports := make([]string, 0, len(p.Imports))
-		for path := range p.Imports {
-			imports = append(imports, path)
-		}
-		sort.Strings(imports)
-		out = append(out, pkgInfo{
-			ImportPath: p.PkgPath,
-			Imports:    imports,
-		})
 	}
-	return out
+	return g
 }
 
+// loadTypedPackages loads a specific subset of patterns with full type
+// info. Used by tests that scope to a slice of the module
+// (kernel/lifecycle + adapters/, etc.) where the full module graph would
+// be wasteful. TestLayeringRules uses loadDepGraph instead.
 func loadTypedPackages(t *testing.T, root string, patterns ...string) []*packages.Package {
 	t.Helper()
 	cfg := &packages.Config{
@@ -498,14 +483,29 @@ func loadTypedPackages(t *testing.T, root string, patterns ...string) []*package
 	return pkgs
 }
 
-// --- integration test (real go list data) ---
+// pkgInfosFromGraph converts a graph's nodes into the lightweight pkgInfo
+// shape consumed by checkLayering and the negative-probe tests.
+func pkgInfosFromGraph(g *depgraph.Graph) []pkgInfo {
+	out := make([]pkgInfo, 0, len(g.Packages))
+	for _, n := range g.Packages {
+		out = append(out, pkgInfo{
+			ImportPath: n.ID,
+			Imports:    append([]string(nil), n.Imports...),
+		})
+	}
+	return out
+}
+
+// --- integration test (real go/packages data via depgraph) ---
 
 func TestLayeringRules(t *testing.T) {
 	root := findModuleRoot(t)
 	modPrefix := readModulePath(t, root) + "/"
-	pkgs := loadPackages(t, root)
-	typedCellPkgs := loadTypedPackages(t, root, "./cells/...")
-	require.NotEmpty(t, pkgs, "go list returned no packages")
+	module := strings.TrimSuffix(modPrefix, "/")
+
+	g := loadDepGraph(t, root)
+	pkgs := pkgInfosFromGraph(g)
+	require.NotEmpty(t, pkgs, "depgraph returned no packages")
 
 	violations := checkLayering(modPrefix, pkgs)
 
@@ -517,7 +517,7 @@ func TestLayeringRules(t *testing.T) {
 
 	// Summary log for quick diagnosis when multiple rules are violated.
 	if len(violations) > 0 {
-		t.Logf("Found %d layering violation(s):", len(violations))
+		t.Logf("Found %d direct-import layering violation(s):", len(violations))
 		for _, v := range violations {
 			t.Logf("  %s", v.Message)
 		}
@@ -536,16 +536,12 @@ func TestLayeringRules(t *testing.T) {
 	// Cells must go through cell.RouteMux / cell.RouteGroup — the concrete router
 	// implementation is an internal detail of runtime/http/router.
 	t.Run("LAYER-07_no_direct_router_import_in_cells", func(t *testing.T) {
-		modPath := strings.TrimSuffix(modPrefix, "/")
-		routerPkg := modPath + "/runtime/http/router"
+		routerPkg := module + "/runtime/http/router"
 		var layer07violations []string
 		for _, pkg := range pkgs {
 			if layerOf(modPrefix, pkg.ImportPath) != "cells" {
 				continue
 			}
-			// Skip test packages (archtest deliberately uses go list which includes _test).
-			// The import path for external test packages ends with "_test"; internal test
-			// binaries share the same ImportPath but are not reachable from production code.
 			if strings.HasSuffix(pkg.ImportPath, "_test") {
 				continue
 			}
@@ -563,35 +559,31 @@ func TestLayeringRules(t *testing.T) {
 			"cells/ must not directly import runtime/http/router; route through cell.RouteGroup.Register func(cell.RouteMux)")
 	})
 
-	// LAYER-08: no Go file anywhere in the module (outside of this archtest package
-	// itself) may reference the identifier "HTTPRegistrar" — this is the final seal
-	// confirming the legacy interface has been fully removed (PR-A14b).
-	t.Run("LAYER-08_no_HTTPRegistrar_legacy_identifier", func(t *testing.T) {
-		// Exclude tools/archtest itself because the rule definition necessarily
-		// mentions the forbidden string in the test name and comments.
-		hits := grepInDir(t, root, "HTTPRegistrar", "tools/archtest")
-		if len(hits) > 0 {
-			for _, h := range hits {
-				t.Logf("LAYER-08 violation: %s", h)
-			}
+	// LAYER-08: the legacy HTTPRegistrar interface must remain removed
+	// (PR-A14b). This is enforced at the type level: if any package in the
+	// module declares a top-level type named HTTPRegistrar, flag it.
+	// Type-level scope walk is precise where the previous file-grep
+	// over-matched on comments and missed renamed-import aliases.
+	t.Run("LAYER-08_no_HTTPRegistrar_type_definition", func(t *testing.T) {
+		violations := checkLayer08TypedSeal(module, g.RawPackages())
+		for _, v := range violations {
+			t.Logf("LAYER-08 violation: %s", v.Message)
 		}
-		assert.Empty(t, hits,
-			"HTTPRegistrar must not appear anywhere in the codebase; the legacy interface has been fully removed (PR-A14b)")
+		assert.Empty(t, violations,
+			"HTTPRegistrar must not be defined in any module package; the legacy interface remains removed (PR-A14b)")
 	})
 
 	// LAYER-09: cells/X must not import cells/Y/events (cross-cell public events package).
-	// cells/{cell}/events/ packages are owned by the declaring cell; sibling cells must
-	// communicate via contract wire types, not by directly importing the events package.
 	t.Run("LAYER-09_no_cross_cell_events_imports", func(t *testing.T) {
 		assert.Empty(t, byRule["LAYER-09"],
 			"cells/ must not import another cell's events/ package (cells/{cell}/events/); "+
 				"use contract wire types instead (cell-patterns.md three-tier DTO rule)")
 	})
 
-	// LAYER-10: cells/<cell> root package exported APIs must not expose concrete
-	// adapter/driver types. Composition roots may choose adapters; cell root
-	// packages must expose ports and cell-owned options only.
+	// LAYER-10: cells/<cell> root package exported APIs must not expose
+	// concrete adapter/driver types.
 	t.Run("LAYER-10_cell_root_public_api_no_adapter_driver_types", func(t *testing.T) {
+		typedCellPkgs := filterCellPackages(module, g.RawPackages())
 		violations := checkCellPublicAPIAdapterTypes(modPrefix, typedCellPkgs)
 		for _, v := range violations {
 			t.Logf("LAYER-10 violation: %s", v.Message)
@@ -600,54 +592,179 @@ func TestLayeringRules(t *testing.T) {
 			"cells/<cell> exported APIs must not expose concrete adapter/driver types; "+
 				"move adapter-specific factories into composition-root owned wiring or cell-owned adapter subpackages")
 	})
+
+	// --- transitive-closure variants (NEW in PR-V1-DEPGRAPH-TYPED-ARCHTEST) ---
+	//
+	// The direct-import rules above catch a cell A → cell B/internal edge.
+	// They do not catch laundering: A → utility → B/internal. The T-suffix
+	// rules walk depgraph.TransitiveImports to flag indirect violations as
+	// well. False-positive avoidance: TransitiveImports already filters
+	// stdlib / third-party / test-only nodes (closure stays inside the
+	// module on production edges).
+
+	t.Run("LAYER-05T_no_transitive_cross_cell_internal_imports", func(t *testing.T) {
+		violations := checkTransitiveCrossCellInternal(module, g)
+		for _, v := range violations {
+			t.Logf("LAYER-05T violation: %s", v.Message)
+		}
+		assert.Empty(t, violations,
+			"cells must not transitively reach another cell's internal/ packages")
+	})
+
+	t.Run("LAYER-06T_no_transitive_cell_owned_subpackage_imports", func(t *testing.T) {
+		violations := checkTransitiveCellOwnedSubpackage(modPrefix, g)
+		for _, v := range violations {
+			t.Logf("LAYER-06T violation: %s", v.Message)
+		}
+		assert.Empty(t, violations,
+			"cells must not transitively reach a cell-owned public subpackage of a sibling cell")
+	})
+
+	t.Run("LAYER-09T_no_transitive_cross_cell_events_imports", func(t *testing.T) {
+		violations := checkTransitiveCrossCellEvents(module, g)
+		for _, v := range violations {
+			t.Logf("LAYER-09T violation: %s", v.Message)
+		}
+		assert.Empty(t, violations,
+			"cells must not transitively reach another cell's events/ package")
+	})
 }
 
-// grepInDir walks root recursively and returns "file:line:text" strings for
-// every line in a *.go file that contains the literal target string.
-// This is intentionally simple — no regex, exact substring match only.
-// excludeDirs lists directory names (relative to root) to skip entirely.
-func grepInDir(t *testing.T, root, target string, excludeDirs ...string) []string {
-	t.Helper()
-	excludeSet := make(map[string]bool, len(excludeDirs))
-	for _, d := range excludeDirs {
-		excludeSet[filepath.Join(root, d)] = true
+// filterCellPackages returns the subset of pkgs whose path is under
+// <module>/cells/. Replaces the old `loadTypedPackages(t, root, "./cells/...")`
+// double-load pattern.
+func filterCellPackages(module string, pkgs []*packages.Package) []*packages.Package {
+	prefix := module + "/cells/"
+	out := pkgs[:0:0]
+	for _, p := range pkgs {
+		if p == nil {
+			continue
+		}
+		if strings.HasPrefix(p.PkgPath, prefix) {
+			out = append(out, p)
+		}
 	}
-	var hits []string
-	err := filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
-		if err != nil {
-			return err
+	return out
+}
+
+// checkLayer08TypedSeal walks every loaded package's type scope and
+// returns a violation for each top-level TypeName named "HTTPRegistrar".
+// Since Go's type system requires definitions before use, the absence of
+// any such definition implies the absence of any reference. Excludes the
+// archtest package itself (which mentions the name in test fixtures and
+// rule docs as scope-walked-but-string-only matches).
+func checkLayer08TypedSeal(module string, pkgs []*packages.Package) []violation {
+	archtestPkg := module + "/tools/archtest"
+	var out []violation
+	for _, p := range pkgs {
+		if p == nil || p.Types == nil {
+			continue
 		}
-		if info.IsDir() {
-			// Skip excluded dirs, hidden dirs, and vendor.
-			if excludeSet[path] {
-				return filepath.SkipDir
+		if p.PkgPath == archtestPkg {
+			continue
+		}
+		scope := p.Types.Scope()
+		for _, name := range scope.Names() {
+			obj := scope.Lookup(name)
+			tn, ok := obj.(*types.TypeName)
+			if !ok || tn.Name() != "HTTPRegistrar" {
+				continue
 			}
-			name := info.Name()
-			if name == "vendor" || (len(name) > 0 && name[0] == '.') {
-				return filepath.SkipDir
+			out = append(out, violation{
+				Rule: "LAYER-08",
+				Pkg:  p.PkgPath,
+				Message: fmt.Sprintf(
+					"LAYER-08: %s declares type HTTPRegistrar (legacy interface must remain removed; PR-A14b)",
+					p.PkgPath),
+			})
+		}
+	}
+	return out
+}
+
+// checkTransitiveCrossCellInternal flags every cell A whose transitive
+// import closure reaches cells/B/internal/... for any B != A.
+func checkTransitiveCrossCellInternal(module string, g *depgraph.Graph) []violation {
+	var out []violation
+	for _, src := range g.Packages {
+		if src.Layer != depgraph.LayerCells || src.CellID == "" {
+			continue
+		}
+		closure := g.TransitiveImports(src.ID)
+		for dep := range closure {
+			depCell := depgraph.CellOf(module, dep)
+			if depCell == "" || depCell == src.CellID {
+				continue
 			}
-			return nil
+			if !isInternal(dep) {
+				continue
+			}
+			out = append(out, violation{
+				Rule:   "LAYER-05T",
+				Pkg:    src.ID,
+				Import: dep,
+				Message: fmt.Sprintf(
+					"LAYER-05T: %s transitively reaches %s (cross-cell internal via closure)",
+					src.ID, dep),
+			})
 		}
-		if !strings.HasSuffix(path, ".go") {
-			return nil
+	}
+	return out
+}
+
+// checkTransitiveCellOwnedSubpackage flags every cell A whose transitive
+// import closure reaches a cell-owned public subpackage of a sibling cell.
+// The exemption rules mirror checkCellOwnedSubpackage (cmd/ and examples/
+// are unrestricted; the owning cell may import freely).
+func checkTransitiveCellOwnedSubpackage(modPrefix string, g *depgraph.Graph) []violation {
+	var out []violation
+	for _, src := range g.Packages {
+		srcLayer := layerOf(modPrefix, src.ID)
+		if srcLayer == "cmd" || srcLayer == "examples" {
+			continue
 		}
-		data, readErr := os.ReadFile(filepath.Clean(path))
-		if readErr != nil {
-			return readErr
-		}
-		scanner := bufio.NewScanner(bytes.NewReader(data))
-		lineNum := 0
-		for scanner.Scan() {
-			lineNum++
-			if strings.Contains(scanner.Text(), target) {
-				rel, _ := filepath.Rel(root, path)
-				hits = append(hits, fmt.Sprintf("%s:%d: %s", rel, lineNum, strings.TrimSpace(scanner.Text())))
+		closure := g.TransitiveImports(src.ID)
+		for dep := range closure {
+			if v := checkCellOwnedSubpackage(modPrefix, src.ID, dep, srcLayer); v != nil {
+				transV := *v
+				transV.Rule = "LAYER-06T"
+				transV.Message = strings.Replace(transV.Message, "LAYER-06:", "LAYER-06T (transitive):", 1)
+				out = append(out, transV)
 			}
 		}
-		return scanner.Err()
-	})
-	require.NoError(t, err, "error walking module root for grep")
-	return hits
+	}
+	return out
+}
+
+// checkTransitiveCrossCellEvents flags every cell A whose transitive
+// import closure reaches cells/B/events for any B != A.
+func checkTransitiveCrossCellEvents(module string, g *depgraph.Graph) []violation {
+	var out []violation
+	for _, src := range g.Packages {
+		if src.Layer != depgraph.LayerCells || src.CellID == "" {
+			continue
+		}
+		closure := g.TransitiveImports(src.ID)
+		for dep := range closure {
+			depCell := depgraph.CellOf(module, dep)
+			if depCell == "" || depCell == src.CellID {
+				continue
+			}
+			eventsPrefix := module + "/cells/" + depCell + "/events"
+			if dep != eventsPrefix && !strings.HasPrefix(dep, eventsPrefix+"/") {
+				continue
+			}
+			out = append(out, violation{
+				Rule:   "LAYER-09T",
+				Pkg:    src.ID,
+				Import: dep,
+				Message: fmt.Sprintf(
+					"LAYER-09T: %s transitively reaches %s (cross-cell events via closure)",
+					src.ID, dep),
+			})
+		}
+	}
+	return out
 }
 
 // --- unit tests for helper functions ---
@@ -1174,30 +1291,29 @@ func TestLayeringRules_LAYER07_NegativeProbe(t *testing.T) {
 		"violation message must name the forbidden import")
 }
 
-// TestLayeringRules_LAYER08_NegativeProbe is the "test the test" meta-test for
-// LAYER-08 (TEST-01). It creates a temporary file containing the forbidden
-// identifier "HTTPRegistrar" in a non-archtest path, calls grepInDir against
-// a temp root, and asserts the hit is detected. This confirms the grep-based
-// seal check would catch a real violation.
+// TestLayeringRules_LAYER08_NegativeProbe is the "test the test" meta-test
+// for LAYER-08. It builds a synthetic *packages.Package with a
+// types.Package whose top-level scope holds a TypeName named
+// HTTPRegistrar, then asserts checkLayer08TypedSeal flags it. This
+// confirms the typed seal catches a real violation.
 func TestLayeringRules_LAYER08_NegativeProbe(t *testing.T) {
 	t.Parallel()
 
-	// Create a minimal temp directory tree that looks like a Go file containing
-	// the forbidden identifier.
-	root := t.TempDir()
-	cellsDir := filepath.Join(root, "cells", "fakecore")
-	require.NoError(t, os.MkdirAll(cellsDir, 0o755))
+	const module = "github.com/ghbvf/gocell"
+	pkgPath := module + "/cells/fakecore"
+	tp := types.NewPackage(pkgPath, "fakecore")
+	tp.Scope().Insert(types.NewTypeName(token.NoPos, tp, "HTTPRegistrar", nil))
 
-	violatingFile := filepath.Join(cellsDir, "fake_router.go")
-	content := "package fakecore\n\n// HTTPRegistrar is the legacy interface removed in PR-A14b.\ntype HTTPRegistrar interface{}\n"
-	require.NoError(t, os.WriteFile(violatingFile, []byte(content), 0o644))
+	violatingPkg := &packages.Package{
+		PkgPath: pkgPath,
+		Types:   tp,
+	}
 
-	// grepInDir must detect the violation.
-	hits := grepInDir(t, root, "HTTPRegistrar")
-	require.NotEmpty(t, hits,
-		"LAYER-08 negative probe: grepInDir must detect 'HTTPRegistrar' in the synthetic fixture")
-	assert.Contains(t, hits[0], "fake_router.go",
-		"hit must reference the violating file")
+	violations := checkLayer08TypedSeal(module, []*packages.Package{violatingPkg})
+	require.Len(t, violations, 1,
+		"LAYER-08 negative probe: typed seal must flag synthetic HTTPRegistrar declaration")
+	assert.Contains(t, violations[0].Message, "HTTPRegistrar")
+	assert.Equal(t, pkgPath, violations[0].Pkg)
 }
 
 // TestLayeringRules_LAYER09_NegativeProbe is the "test the test" meta-test for
@@ -1265,33 +1381,20 @@ func TestLayeringRules_LAYER09_NegativeProbe(t *testing.T) {
 	}
 }
 
-// TestLoadPackages_IntegrationTagPlumbing verifies that the loadPackages helper
-// passes -tags=integration so that integration-tagged files participate in the
-// layering analysis. It does this by checking that the integration-tagged
-// packages in the real module include at least one package (the archtest
-// package itself is always found), confirming the build flags reach packages.Load.
-func TestLoadPackages_IntegrationTagPlumbing(t *testing.T) {
+// TestLoadDepGraph_IntegrationTagPlumbing verifies that loadDepGraph passes
+// -tags=integration so integration-tagged files participate in the layering
+// analysis. The archtest package itself is always loadable; its presence in
+// the graph is the sanity check that the build flags reached packages.Load.
+func TestLoadDepGraph_IntegrationTagPlumbing(t *testing.T) {
 	root := findModuleRoot(t)
-	pkgs := loadPackages(t, root)
-	// If -tags=integration were missing, conditional imports guarded by
-	// //go:build integration would be invisible. The real module always has
-	// at least the archtest package itself, so a non-empty result is the
-	// minimal sanity check.
-	require.NotEmpty(t, pkgs, "loadPackages must return packages; empty result means -tags=integration broke the load")
+	g := loadDepGraph(t, root)
+	require.NotEmpty(t, g.Packages, "depgraph.Load must return packages; empty result means -tags=integration broke the load")
 
-	// Confirm the build flag is actually present in the config by checking
-	// that the archtest package itself appears (it has no build tag restrictions).
 	modPrefix := readModulePath(t, root) + "/"
 	archtestPkg := modPrefix + "tools/archtest"
-	found := false
-	for _, p := range pkgs {
-		if p.ImportPath == archtestPkg {
-			found = true
-			break
-		}
+	if g.ByID(archtestPkg) == nil {
+		t.Errorf("tools/archtest package must appear in depgraph output (confirms -tags=integration did not break load)")
 	}
-	assert.True(t, found,
-		"tools/archtest package must appear in loadPackages output (confirms -tags=integration did not break load)")
 }
 
 // TestCorebundleMainLineLimit guards V-A8 (CMD-THICK-ENTRY-REDUCE) — the
