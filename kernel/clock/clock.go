@@ -67,6 +67,12 @@ type Timer interface {
 	// was active when Reset was called, false if it had already expired or
 	// been stopped.
 	Reset(d time.Duration) bool
+
+	// ResetAt re-arms the timer to fire at the given absolute deadline.
+	// Use this instead of Reset(clk.Until(deadline)) to eliminate the
+	// read-then-act race between reading Now() and arming the timer.
+	// It returns true if the timer was active when ResetAt was called.
+	ResetAt(deadline time.Time) bool
 }
 
 // Ticker fires repeatedly at a fixed interval, mirroring stdlib time.Ticker.
@@ -131,6 +137,7 @@ type realTimer struct{ t *time.Timer }
 func (rt *realTimer) C() <-chan time.Time        { return rt.t.C }
 func (rt *realTimer) Stop() bool                 { return rt.t.Stop() }
 func (rt *realTimer) Reset(d time.Duration) bool { return rt.t.Reset(d) }
+func (rt *realTimer) ResetAt(d time.Time) bool   { return rt.t.Reset(time.Until(d)) }
 
 type realTicker struct{ t *time.Ticker }
 

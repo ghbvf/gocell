@@ -100,4 +100,3 @@ func WithMaxRenewAttempts(n int) Option {
 		c.maxRenewAttempts = n
 	}
 }
-

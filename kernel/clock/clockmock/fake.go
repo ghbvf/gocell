@@ -148,7 +148,7 @@ func (fc *FakeClock) Sleep(ctx context.Context, until time.Time) error {
 func (fc *FakeClock) Advance(d time.Duration) {
 	fc.mu.Lock()
 	fc.now = fc.now.Add(d)
-	fc.fireDueLocked()
+	fc.fireDueAndUnlock()
 }
 
 // Set moves the clock to t (forward or backward) and fires all timers /
@@ -157,7 +157,7 @@ func (fc *FakeClock) Advance(d time.Duration) {
 func (fc *FakeClock) Set(t time.Time) {
 	fc.mu.Lock()
 	fc.now = t
-	fc.fireDueLocked()
+	fc.fireDueAndUnlock()
 }
 
 // tickerFire pairs a FakeTicker with the time at which it fires.
@@ -229,10 +229,10 @@ func sendDueTickers(dueTickers []tickerFire) {
 	}
 }
 
-// fireDueLocked must be called with fc.mu held; it releases fc.mu before
+// fireDueAndUnlock must be called with fc.mu held; it releases fc.mu before
 // sending to timer channels and launching AfterFunc callbacks to avoid
 // deadlock when receivers call back into the clock.
-func (fc *FakeClock) fireDueLocked() {
+func (fc *FakeClock) fireDueAndUnlock() {
 	now := fc.now
 	dueTimers, remainingTimers := fc.collectDueTimers(now)
 	fc.timers = remainingTimers
@@ -309,6 +309,10 @@ func (ft *FakeTimer) Stop() bool {
 
 // Reset implements [clock.Timer]. Returns true if the timer was active when
 // Reset was called.
+//
+// The channel drain and re-arm are performed while fc.mu is held so that a
+// concurrent sendDueTimers cannot deliver a new tick between the drain and
+// the re-arm, eliminating the I-05 race window.
 func (ft *FakeTimer) Reset(d time.Duration) bool {
 	fc := ft.clock
 
@@ -318,6 +322,8 @@ func (ft *FakeTimer) Reset(d time.Duration) bool {
 	ft.fired = false
 	now := fc.now
 	ft.deadline = now.Add(d)
+
+	// Remove ft from the pending timer list (it will be re-added below if needed).
 	filtered := fc.timers[:0]
 	for _, t := range fc.timers {
 		if t != ft {
@@ -325,6 +331,13 @@ func (ft *FakeTimer) Reset(d time.Duration) bool {
 		}
 	}
 	fc.timers = filtered
+
+	// Drain a stale tick while still holding the lock — sendDueTimers also
+	// acquires fc.mu before writing to ch, so no new tick can arrive here.
+	select {
+	case <-ft.ch:
+	default:
+	}
 
 	immediate := false
 	if d <= 0 {
@@ -336,11 +349,57 @@ func (ft *FakeTimer) Reset(d time.Duration) bool {
 	callback := ft.callback
 	fc.mu.Unlock()
 
-	// Drain a stale tick that may still be in the channel.
+	if immediate {
+		if callback != nil {
+			go callback()
+		} else {
+			select {
+			case ft.ch <- now:
+			default:
+			}
+		}
+	}
+	return wasActive
+}
+
+// ResetAt implements [clock.Timer]. Re-arms the timer to fire at the given
+// absolute deadline. Uses the same locked-drain pattern as Reset to avoid
+// the I-05 race window.
+func (ft *FakeTimer) ResetAt(deadline time.Time) bool {
+	fc := ft.clock
+
+	fc.mu.Lock()
+	wasActive := !ft.stopped && !ft.fired
+	ft.stopped = false
+	ft.fired = false
+	now := fc.now
+	ft.deadline = deadline
+
+	// Remove ft from the pending timer list.
+	filtered := fc.timers[:0]
+	for _, t := range fc.timers {
+		if t != ft {
+			filtered = append(filtered, t)
+		}
+	}
+	fc.timers = filtered
+
+	// Drain a stale tick while holding the lock.
 	select {
 	case <-ft.ch:
 	default:
 	}
+
+	immediate := false
+	if !now.Before(deadline) {
+		ft.fired = true
+		immediate = true
+	} else {
+		fc.timers = append(fc.timers, ft)
+	}
+	callback := ft.callback
+	fc.mu.Unlock()
+
 	if immediate {
 		if callback != nil {
 			go callback()

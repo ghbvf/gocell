@@ -39,6 +39,19 @@
 // the Clock field so that assembly auto-propagates the root clock to every
 // cell's Init.
 //
+// Absolute-time vs relative-time timer API:
+//
+//   - NewTimerAt + ResetAt form the absolute-time API. Callers supply a
+//     time.Time deadline computed once; the timer is armed atomically without
+//     any need to read Now() at arm time. This eliminates the read-then-act
+//     race (capture deadline → goroutine preempted → arm timer using stale
+//     Now()) that the relative-duration API inherits from stdlib.
+//
+//   - NewTimer (via NewTimerAt(c.Now().Add(d))) + Reset(d) form the
+//     relative-time API. These mirror stdlib time.NewTimer / time.Timer.Reset
+//     ergonomics for callers that only need "fire after d". Prod code must
+//     still use them through an injected Clock, not stdlib directly.
+//
 // ref: docs/architecture/202605021500-adr-kernel-clock-injection.md (ADR
 // + 2026-05-02 closure)
 // ref: jonboulle/clockwork — caller-required, no-default Clock parity
