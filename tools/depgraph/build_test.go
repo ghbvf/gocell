@@ -111,15 +111,15 @@ func TestLoad_LayerAndCellAnnotation(t *testing.T) {
 
 	// Layer assignment is derived from the first path segment under the
 	// module root. The synth fixture uses non-GoCell directory names (a,
-	// b, c, d, testhelper) so those classify as LayerThirdParty even
-	// though they are inside the module — that is the documented
-	// fallthrough. cells/ and generated/ are recognized.
+	// b, c, d, testhelper) so those classify as LayerUnknown — internal
+	// to the module but with a first segment not in internalLayerByDir.
+	// cells/ and generated/ are recognized known buckets.
 	cases := []struct {
 		id        string
 		wantLayer string
 		wantCell  string
 	}{
-		{synthModule + "/a", depgraph.LayerThirdParty, ""},
+		{synthModule + "/a", depgraph.LayerUnknown, ""},
 		{synthModule + "/cells/cellA", depgraph.LayerCells, "cellA"},
 		{synthModule + "/generated/foo", depgraph.LayerGenerated, ""},
 	}
@@ -213,6 +213,70 @@ func TestFromPackages_ExplicitModuleOverride(t *testing.T) {
 	if rebuilt.Module != "forced.example/different" {
 		t.Errorf("FromPackages module override: got %q, want %q",
 			rebuilt.Module, "forced.example/different")
+	}
+}
+
+// TestFromPackages_StructuralOnlyContract pins the boundary that depgraph
+// reads only structural fields from each *packages.Package — PkgPath,
+// Imports, ID — and never touches Types / TypesInfo / Syntax / Errors.
+//
+// The test passes packages with those typed fields explicitly nil. If
+// depgraph ever reintroduces a typed-field read (a regression toward the
+// old "shared loader holds typed packages" pattern that R3 removed), this
+// test will panic on nil deref. That is the contract: depgraph.FromPackages
+// must work on minimum-viable structural input so it can be fed by any
+// loader (typeseval.SharedResolver, a hand-written test fixture, or a
+// future stripped-down packages.Load mode), without coupling to a typed
+// load.
+func TestFromPackages_StructuralOnlyContract(t *testing.T) {
+	t.Parallel()
+
+	const module = "example.com/structural"
+	rootPkg := module
+	subPkg := module + "/sub"
+
+	// Build packages with ONLY structural fields populated. Types,
+	// TypesInfo, Syntax, Errors, GoFiles, CompiledGoFiles, Module, Fset
+	// are all nil/zero. ID equals PkgPath (no test variant).
+	pkgs := []*packages.Package{
+		{
+			ID:      rootPkg,
+			PkgPath: rootPkg,
+			Imports: map[string]*packages.Package{
+				subPkg: {ID: subPkg, PkgPath: subPkg},
+			},
+		},
+		{
+			ID:      subPkg,
+			PkgPath: subPkg,
+			Imports: map[string]*packages.Package{},
+		},
+	}
+
+	// Must not panic and must produce a valid graph.
+	g := depgraph.FromPackages(module, pkgs)
+	if g == nil {
+		t.Fatal("FromPackages returned nil graph")
+	}
+	if g.Module != module {
+		t.Errorf("Module = %q, want %q", g.Module, module)
+	}
+	if g.Stats.Packages != 2 {
+		t.Errorf("Stats.Packages = %d, want 2", g.Stats.Packages)
+	}
+	if g.Stats.Edges != 1 {
+		t.Errorf("Stats.Edges = %d, want 1", g.Stats.Edges)
+	}
+	if n := g.ByID(rootPkg); n == nil {
+		t.Errorf("missing root node %q", rootPkg)
+	} else if len(n.Imports) != 1 || n.Imports[0] != subPkg {
+		t.Errorf("root.Imports = %v, want [%q]", n.Imports, subPkg)
+	}
+
+	// Transitive closure also works on structural-only input.
+	closure := g.TransitiveImports(rootPkg)
+	if !closure[subPkg] {
+		t.Errorf("TransitiveImports(%q) missing %q; got %v", rootPkg, subPkg, closure)
 	}
 }
 

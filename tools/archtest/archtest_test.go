@@ -40,12 +40,6 @@ func readModulePath(t *testing.T, modRoot string) string {
 	return ""
 }
 
-// pkgInfo holds the subset of `go list -json` output needed for layering checks.
-type pkgInfo struct {
-	ImportPath string   `json:"ImportPath"`
-	Imports    []string `json:"Imports"`
-}
-
 // violation describes a single layering rule breach.
 type violation struct {
 	Rule    string // e.g. "LAYER-01"
@@ -59,15 +53,21 @@ type violation struct {
 // layerOf is a backward-compatible shim around depgraph.LayerOf that keeps
 // archtest's "external returns empty string" convention. modPrefix must
 // include the trailing slash (e.g. "github.com/ghbvf/gocell/"). Internal
-// packages return their layer name; stdlib / third-party / root collapse
-// to "" so existing skip-on-empty branches in checkLayering keep working.
+// known-bucket packages return their layer name; stdlib / third-party /
+// root / unknown-internal collapse to "" so existing skip-on-empty
+// branches in checkLayering keep working.
+//
+// LayerUnknown is folded here intentionally: depgraph still surfaces
+// internal-unknown distinctly (so future governance code can pick it up),
+// but archtest's current rules are not policy authority for "is every
+// top-level dir classified" — that decision belongs in a dedicated rule.
 //
 // The single source of truth for layer classification is now
 // tools/depgraph/layer.go; this shim only adapts the signature.
 func layerOf(modPrefix, importPath string) string {
 	module := strings.TrimSuffix(modPrefix, "/")
 	switch layer := depgraph.LayerOf(module, importPath); layer {
-	case depgraph.LayerStdlib, depgraph.LayerThirdParty, depgraph.LayerRoot, "":
+	case depgraph.LayerStdlib, depgraph.LayerThirdParty, depgraph.LayerRoot, depgraph.LayerUnknown, "":
 		return ""
 	default:
 		return layer
@@ -105,15 +105,17 @@ var cellOwnedSubpackages = map[string]string{
 	"cells/configcore/postgres":     "cells/configcore/",
 }
 
-// checkLayering runs 4 metadata-aware layering rules (LAYER-05/06/09/10).
+// checkLayering runs 4 metadata-aware layering rules (LAYER-05/06/09/10)
+// over the depgraph view of the module. Consumes Node.ID and Node.Imports
+// directly — there is no longer an intermediate pkgInfo bridge type.
 // LAYER-01..04 path rules are owned by depguard in `.golangci.yml`.
 // modPrefix must include trailing slash (e.g. "github.com/ghbvf/gocell/").
-func checkLayering(modPrefix string, pkgs []pkgInfo) []violation {
+func checkLayering(modPrefix string, g *depgraph.Graph) []violation {
 	var out []violation
 
-	for _, pkg := range pkgs {
-		srcLayer := layerOf(modPrefix, pkg.ImportPath)
-		srcCell := cellOf(modPrefix, pkg.ImportPath)
+	for _, pkg := range g.Packages {
+		srcLayer := layerOf(modPrefix, pkg.ID)
+		srcCell := cellOf(modPrefix, pkg.ID)
 
 		for _, imp := range pkg.Imports {
 			impLayer := layerOf(modPrefix, imp)
@@ -130,9 +132,9 @@ func checkLayering(modPrefix string, pkgs []pkgInfo) []violation {
 				if impCell != "" && impCell != srcCell {
 					out = append(out, violation{
 						Rule:    "LAYER-05",
-						Pkg:     pkg.ImportPath,
+						Pkg:     pkg.ID,
 						Import:  imp,
-						Message: fmt.Sprintf("LAYER-05: %s imports %s (cross-cell internal)", pkg.ImportPath, imp),
+						Message: fmt.Sprintf("LAYER-05: %s imports %s (cross-cell internal)", pkg.ID, imp),
 					})
 				}
 			}
@@ -142,7 +144,7 @@ func checkLayering(modPrefix string, pkgs []pkgInfo) []violation {
 			// unrestricted). Flags cases like cells/auditcore importing
 			// cells/accesscore/initialadmin, which would bypass the cell
 			// boundary without triggering LAYER-05 (no /internal/ segment).
-			if v := checkCellOwnedSubpackage(modPrefix, pkg.ImportPath, imp, srcLayer); v != nil {
+			if v := checkCellOwnedSubpackage(modPrefix, pkg.ID, imp, srcLayer); v != nil {
 				out = append(out, *v)
 			}
 
@@ -151,15 +153,15 @@ func checkLayering(modPrefix string, pkgs []pkgInfo) []violation {
 			// are owned by the declaring cell; sibling cells must use contract wire types instead.
 			// Same-cell self-import is allowed; cmd/ and examples/ are unrestricted.
 			impCell := cellOf(modPrefix, imp)
-			if isRootCellPackage(modPrefix, pkg.ImportPath) && srcCell != "" {
+			if isRootCellPackage(modPrefix, pkg.ID) && srcCell != "" {
 				impRel := strings.TrimPrefix(imp, modPrefix)
 				internalAdaptersPrefix := "cells/" + srcCell + "/internal/adapters/"
 				if strings.HasPrefix(impRel, internalAdaptersPrefix) {
 					out = append(out, violation{
 						Rule:    "LAYER-10",
-						Pkg:     pkg.ImportPath,
+						Pkg:     pkg.ID,
 						Import:  imp,
-						Message: fmt.Sprintf("LAYER-10: %s imports %s (root cell package must not construct concrete adapters)", pkg.ImportPath, imp),
+						Message: fmt.Sprintf("LAYER-10: %s imports %s (root cell package must not construct concrete adapters)", pkg.ID, imp),
 					})
 				}
 			}
@@ -170,9 +172,9 @@ func checkLayering(modPrefix string, pkgs []pkgInfo) []violation {
 				if impRel == eventsPrefix || strings.HasPrefix(impRel, eventsPrefix+"/") {
 					out = append(out, violation{
 						Rule:    "LAYER-09",
-						Pkg:     pkg.ImportPath,
+						Pkg:     pkg.ID,
 						Import:  imp,
-						Message: fmt.Sprintf("LAYER-09: %s imports %s (cross-cell events package; use contract wire types instead)", pkg.ImportPath, imp),
+						Message: fmt.Sprintf("LAYER-09: %s imports %s (cross-cell events package; use contract wire types instead)", pkg.ID, imp),
 					})
 				}
 			}
@@ -480,36 +482,27 @@ func loadModule(t *testing.T, root string) (*depgraph.Graph, []*packages.Package
 	return depgraph.FromPackages(module, typedPkgs), typedPkgs
 }
 
-// loadTypedPackages loads a specific subset of patterns with full type info.
-// Used by tests that scope to a slice of the module (kernel/lifecycle +
-// adapters/, etc.) where the full module graph would be wasteful.
-// TestLayeringRules uses loadModule instead.
-func loadTypedPackages(t *testing.T, root string, patterns ...string) []*packages.Package {
-	t.Helper()
-	cfg := &packages.Config{
-		Mode:       packages.NeedName | packages.NeedSyntax | packages.NeedTypes | packages.NeedTypesInfo,
-		Dir:        root,
-		BuildFlags: []string{"-tags=integration"},
-	}
-	pkgs, err := packages.Load(cfg, patterns...)
-	require.NoError(t, err, "packages.Load failed")
+// filterPkgsByPathPrefix returns the subset of pkgs whose PkgPath equals or
+// starts with any of the given prefixes (a prefix may be the exact package
+// path or a directory like "<module>/adapters/" with trailing slash).
+//
+// Tests that scope to a slice of the module (kernel/lifecycle + adapters/,
+// adapters/ + cmd/corebundle, etc.) use this to filter the cached module-
+// wide load from typeseval.SharedResolver instead of running a second
+// packages.Load with a narrower pattern set. Reuses the cache that
+// TestLayeringRules already populates.
+func filterPkgsByPathPrefix(pkgs []*packages.Package, prefixes ...string) []*packages.Package {
+	out := pkgs[:0:0]
 	for _, p := range pkgs {
-		for _, pe := range p.Errors {
-			t.Logf("loadTypedPackages: package %q error: %v", p.PkgPath, pe)
+		if p == nil {
+			continue
 		}
-	}
-	return pkgs
-}
-
-// pkgInfosFromGraph converts a graph's nodes into the lightweight pkgInfo
-// shape consumed by checkLayering and the negative-probe tests.
-func pkgInfosFromGraph(g *depgraph.Graph) []pkgInfo {
-	out := make([]pkgInfo, 0, len(g.Packages))
-	for _, n := range g.Packages {
-		out = append(out, pkgInfo{
-			ImportPath: n.ID,
-			Imports:    append([]string(nil), n.Imports...),
-		})
+		for _, prefix := range prefixes {
+			if p.PkgPath == strings.TrimSuffix(prefix, "/") || strings.HasPrefix(p.PkgPath, prefix) {
+				out = append(out, p)
+				break
+			}
+		}
 	}
 	return out
 }
@@ -522,10 +515,9 @@ func TestLayeringRules(t *testing.T) {
 	module := strings.TrimSuffix(modPrefix, "/")
 
 	g, typedPkgs := loadModule(t, root)
-	pkgs := pkgInfosFromGraph(g)
-	require.NotEmpty(t, pkgs, "depgraph returned no packages")
+	require.NotEmpty(t, g.Packages, "depgraph returned no packages")
 
-	violations := checkLayering(modPrefix, pkgs)
+	violations := checkLayering(modPrefix, g)
 
 	// Group violations by rule for readable output.
 	byRule := map[string][]string{}
@@ -556,11 +548,11 @@ func TestLayeringRules(t *testing.T) {
 	t.Run("LAYER-07_no_direct_router_import_in_cells", func(t *testing.T) {
 		routerPkg := module + "/runtime/http/router"
 		var layer07violations []string
-		for _, pkg := range pkgs {
-			if layerOf(modPrefix, pkg.ImportPath) != "cells" {
+		for _, pkg := range g.Packages {
+			if layerOf(modPrefix, pkg.ID) != "cells" {
 				continue
 			}
-			if strings.HasSuffix(pkg.ImportPath, "_test") {
+			if strings.HasSuffix(pkg.ID, "_test") {
 				continue
 			}
 			for _, imp := range pkg.Imports {
@@ -569,7 +561,7 @@ func TestLayeringRules(t *testing.T) {
 						fmt.Sprintf(
 							"LAYER-07: %s imports %s (cells must not import the router directly;"+
 								" use cell.RouteMux / cell.RouteGroup)",
-							pkg.ImportPath, imp))
+							pkg.ID, imp))
 				}
 			}
 		}
@@ -649,8 +641,7 @@ func TestLayeringRules(t *testing.T) {
 }
 
 // filterCellPackages returns the subset of pkgs whose path is under
-// <module>/cells/. Replaces the old `loadTypedPackages(t, root, "./cells/...")`
-// (now removed).
+// <module>/cells/.
 // double-load pattern.
 func filterCellPackages(module string, pkgs []*packages.Package) []*packages.Package {
 	prefix := module + "/cells/"
@@ -1029,150 +1020,128 @@ func TestIsInternal(t *testing.T) {
 // --- unit tests for checkLayering (table-driven with mock data) ---
 
 func TestCheckLayering(t *testing.T) {
-	const mod = "github.com/ghbvf/gocell/"
+	const modPrefix = "github.com/ghbvf/gocell/"
+	const module = "github.com/ghbvf/gocell"
 	// Note: LAYER-01..04 path rules are owned by depguard in .golangci.yml.
-	// Only LAYER-05/06/09/10 (metadata-aware rules) are tested here.
+	// Only LAYER-05/06/09/10 (metadata-aware rules) are tested here. Each
+	// case stages a *packages.Package slice that depgraph.FromPackages
+	// folds into the *depgraph.Graph that checkLayering consumes — same
+	// path used by the LAYER-05T/06T/09T NegativeProbes.
 	tests := []struct {
 		name      string
-		pkgs      []pkgInfo
-		wantRules []string // expected rule codes in violations
+		pkgs      []*packages.Package
+		wantRules []string
 	}{
 		{
 			name: "LAYER-05 violation: cross-cell internal import",
-			pkgs: []pkgInfo{
-				{ImportPath: "github.com/ghbvf/gocell/cells/auditcore/slices/auditappend", Imports: []string{
-					"github.com/ghbvf/gocell/cells/accesscore/internal/domain", // forbidden
-				}},
+			pkgs: []*packages.Package{
+				synthPkg(module+"/cells/auditcore/slices/auditappend",
+					module+"/cells/accesscore/internal/domain"),
 			},
 			wantRules: []string{"LAYER-05"},
 		},
 		{
 			name: "LAYER-05 clean: same-cell internal import (allowed)",
-			pkgs: []pkgInfo{
-				{ImportPath: "github.com/ghbvf/gocell/cells/auditcore/slices/auditappend", Imports: []string{
-					"github.com/ghbvf/gocell/cells/auditcore/internal/domain", // same cell, OK
-				}},
+			pkgs: []*packages.Package{
+				synthPkg(module+"/cells/auditcore/slices/auditappend",
+					module+"/cells/auditcore/internal/domain"),
 			},
-			wantRules: nil,
 		},
 		{
 			name: "LAYER-06 violation: sibling cell imports accesscore/initialadmin",
-			pkgs: []pkgInfo{
-				{ImportPath: "github.com/ghbvf/gocell/cells/auditcore", Imports: []string{
-					"github.com/ghbvf/gocell/cells/accesscore/initialadmin", // forbidden — cell-owned subpkg
-				}},
+			pkgs: []*packages.Package{
+				synthPkg(module+"/cells/auditcore",
+					module+"/cells/accesscore/initialadmin"),
 			},
 			wantRules: []string{"LAYER-06"},
 		},
 		{
 			name: "LAYER-06 violation: sibling cell imports configcore/postgres",
-			pkgs: []pkgInfo{
-				{ImportPath: "github.com/ghbvf/gocell/cells/auditcore", Imports: []string{
-					"github.com/ghbvf/gocell/cells/configcore/postgres", // forbidden — cell-owned adapter subpkg
-				}},
+			pkgs: []*packages.Package{
+				synthPkg(module+"/cells/auditcore",
+					module+"/cells/configcore/postgres"),
 			},
 			wantRules: []string{"LAYER-06"},
 		},
 		{
 			name: "LAYER-10 violation: root cell imports own internal adapter",
-			pkgs: []pkgInfo{
-				{ImportPath: "github.com/ghbvf/gocell/cells/accesscore", Imports: []string{
-					"github.com/ghbvf/gocell/cells/accesscore/internal/adapters/http", // forbidden — hidden adapter factory
-				}},
+			pkgs: []*packages.Package{
+				synthPkg(module+"/cells/accesscore",
+					module+"/cells/accesscore/internal/adapters/http"),
 			},
 			wantRules: []string{"LAYER-10"},
 		},
 		{
 			name: "LAYER-06 violation: sibling cell slice imports nested path of initialadmin",
-			pkgs: []pkgInfo{
-				{ImportPath: "github.com/ghbvf/gocell/cells/configcore/slices/configpublish", Imports: []string{
-					"github.com/ghbvf/gocell/cells/accesscore/initialadmin/somesubpkg", // forbidden — nested match
-				}},
+			pkgs: []*packages.Package{
+				synthPkg(module+"/cells/configcore/slices/configpublish",
+					module+"/cells/accesscore/initialadmin/somesubpkg"),
 			},
 			wantRules: []string{"LAYER-06"},
 		},
 		{
 			name: "LAYER-06 clean: accesscore itself imports initialadmin (owner)",
-			pkgs: []pkgInfo{
-				{ImportPath: "github.com/ghbvf/gocell/cells/accesscore", Imports: []string{
-					"github.com/ghbvf/gocell/cells/accesscore/initialadmin", // owner, OK
-				}},
+			pkgs: []*packages.Package{
+				synthPkg(module+"/cells/accesscore",
+					module+"/cells/accesscore/initialadmin"),
 			},
-			wantRules: nil,
 		},
 		{
 			name: "LAYER-06 clean: accesscore slice imports initialadmin (owner tree)",
-			pkgs: []pkgInfo{
-				{ImportPath: "github.com/ghbvf/gocell/cells/accesscore/slices/sessionlogin", Imports: []string{
-					"github.com/ghbvf/gocell/cells/accesscore/initialadmin", // owner tree, OK
-				}},
+			pkgs: []*packages.Package{
+				synthPkg(module+"/cells/accesscore/slices/sessionlogin",
+					module+"/cells/accesscore/initialadmin"),
 			},
-			wantRules: nil,
 		},
 		{
 			name: "LAYER-06 clean: cmd imports initialadmin (composition root)",
-			pkgs: []pkgInfo{
-				{ImportPath: "github.com/ghbvf/gocell/cmd/corebundle", Imports: []string{
-					"github.com/ghbvf/gocell/cells/accesscore/initialadmin", // cmd unrestricted
-				}},
+			pkgs: []*packages.Package{
+				synthPkg(module+"/cmd/corebundle",
+					module+"/cells/accesscore/initialadmin"),
 			},
-			wantRules: nil,
 		},
 		{
 			name: "LAYER-06 clean: examples imports initialadmin (unrestricted)",
-			pkgs: []pkgInfo{
-				{ImportPath: "github.com/ghbvf/gocell/examples/ssobff", Imports: []string{
-					"github.com/ghbvf/gocell/cells/accesscore/initialadmin", // examples unrestricted
-				}},
+			pkgs: []*packages.Package{
+				synthPkg(module+"/examples/ssobff",
+					module+"/cells/accesscore/initialadmin"),
 			},
-			wantRules: nil,
 		},
 		{
 			name: "clean: cmd imports all layers (no rule restricts cmd)",
-			pkgs: []pkgInfo{
-				{ImportPath: "github.com/ghbvf/gocell/cmd/gocell", Imports: []string{
-					"github.com/ghbvf/gocell/kernel/cell",
-					"github.com/ghbvf/gocell/runtime/auth",
-					"github.com/ghbvf/gocell/adapters/postgres",
-					"github.com/ghbvf/gocell/cells/accesscore",
-				}},
+			pkgs: []*packages.Package{
+				synthPkg(module+"/cmd/gocell",
+					module+"/kernel/cell",
+					module+"/runtime/auth",
+					module+"/adapters/postgres",
+					module+"/cells/accesscore"),
 			},
-			wantRules: nil,
 		},
 		{
 			name: "clean: examples imports all layers (unrestricted)",
-			pkgs: []pkgInfo{
-				{ImportPath: "github.com/ghbvf/gocell/examples/ssobff", Imports: []string{
-					"github.com/ghbvf/gocell/kernel/cell",
-					"github.com/ghbvf/gocell/runtime/auth",
-					"github.com/ghbvf/gocell/adapters/postgres",
-					"github.com/ghbvf/gocell/cells/accesscore",
-				}},
+			pkgs: []*packages.Package{
+				synthPkg(module+"/examples/ssobff",
+					module+"/kernel/cell",
+					module+"/runtime/auth",
+					module+"/adapters/postgres",
+					module+"/cells/accesscore"),
 			},
-			wantRules: nil,
 		},
 		{
 			name: "clean: pkg imports nothing forbidden (no rule restricts pkg)",
-			pkgs: []pkgInfo{
-				{ImportPath: "github.com/ghbvf/gocell/pkg/errcode", Imports: []string{
-					"fmt", "net/http",
-				}},
+			pkgs: []*packages.Package{
+				synthPkg(module+"/pkg/errcode", "fmt", "net/http"),
 			},
-			wantRules: nil,
 		},
 		{
-			name:      "empty package list",
-			pkgs:      nil,
-			wantRules: nil,
+			name: "empty package list",
 		},
 		{
 			name: "only external imports (no violations)",
-			pkgs: []pkgInfo{
-				{ImportPath: "github.com/ghbvf/gocell/kernel/cell", Imports: []string{
-					"fmt", "context", "github.com/google/uuid",
-				}},
+			pkgs: []*packages.Package{
+				synthPkg(module+"/kernel/cell",
+					"fmt", "context", "github.com/google/uuid"),
 			},
-			wantRules: nil,
 		},
 		// LAYER-07 path check: cells→runtime is not forbidden by checkLayering (LAYER-01..04
 		// are now owned by depguard); the actual LAYER-07 guard is implemented inline in
@@ -1181,72 +1150,47 @@ func TestCheckLayering(t *testing.T) {
 		// TestLayeringRules_LAYER07_NegativeProbe below.
 		{
 			name: "LAYER-07 semantic: cells importing runtime/http/router (checkLayering clean)",
-			pkgs: []pkgInfo{
-				{
-					ImportPath: "github.com/ghbvf/gocell/cells/accesscore",
-					Imports: []string{
-						"github.com/ghbvf/gocell/runtime/http/router", // cells→runtime not caught by checkLayering
-					},
-				},
+			pkgs: []*packages.Package{
+				synthPkg(module+"/cells/accesscore",
+					module+"/runtime/http/router"),
 			},
-			wantRules: nil,
 		},
 		// LAYER-09: cells/X must not import cells/Y/events (cross-cell public events package).
-		// rationale: cell-patterns.md three-tier DTO rule — cells/{cell}/events/ must not be
-		// shared as wire types across cell boundaries.
 		{
 			name: "LAYER-09 violation: cells/auditcore imports cells/configcore/events",
-			pkgs: []pkgInfo{
-				{
-					ImportPath: "github.com/ghbvf/gocell/cells/auditcore/slices/auditappend",
-					Imports: []string{
-						"github.com/ghbvf/gocell/cells/configcore/events", // cross-cell events import — forbidden
-					},
-				},
+			pkgs: []*packages.Package{
+				synthPkg(module+"/cells/auditcore/slices/auditappend",
+					module+"/cells/configcore/events"),
 			},
 			wantRules: []string{"LAYER-09"},
 		},
 		{
 			name: "LAYER-09 clean: cells/configcore imports cells/configcore/events (same cell, allowed)",
-			pkgs: []pkgInfo{
-				{
-					ImportPath: "github.com/ghbvf/gocell/cells/configcore/slices/configpublish",
-					Imports: []string{
-						"github.com/ghbvf/gocell/cells/configcore/events", // same cell — OK
-					},
-				},
+			pkgs: []*packages.Package{
+				synthPkg(module+"/cells/configcore/slices/configpublish",
+					module+"/cells/configcore/events"),
 			},
-			wantRules: nil,
 		},
 		{
 			name: "LAYER-09 clean: examples imports cells/configcore/events (unrestricted)",
-			pkgs: []pkgInfo{
-				{
-					ImportPath: "github.com/ghbvf/gocell/examples/ssobff",
-					Imports: []string{
-						"github.com/ghbvf/gocell/cells/configcore/events", // examples unrestricted
-					},
-				},
+			pkgs: []*packages.Package{
+				synthPkg(module+"/examples/ssobff",
+					module+"/cells/configcore/events"),
 			},
-			wantRules: nil,
 		},
 		{
 			name: "LAYER-09 clean: cmd imports cells/configcore/events (unrestricted)",
-			pkgs: []pkgInfo{
-				{
-					ImportPath: "github.com/ghbvf/gocell/cmd/corebundle",
-					Imports: []string{
-						"github.com/ghbvf/gocell/cells/configcore/events", // cmd unrestricted
-					},
-				},
+			pkgs: []*packages.Package{
+				synthPkg(module+"/cmd/corebundle",
+					module+"/cells/configcore/events"),
 			},
-			wantRules: nil,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			violations := checkLayering(mod, tt.pkgs)
+			g := depgraph.FromPackages(module, tt.pkgs)
+			violations := checkLayering(modPrefix, g)
 
 			gotRules := make([]string, 0, len(violations))
 			seen := map[string]bool{}
@@ -1261,7 +1205,6 @@ func TestCheckLayering(t *testing.T) {
 				assert.Empty(t, violations, "expected no violations")
 			} else {
 				assert.Equal(t, tt.wantRules, gotRules, "violation rules mismatch")
-				// Verify each violation has all fields populated.
 				for _, v := range violations {
 					assert.NotEmpty(t, v.Rule, "violation.Rule must not be empty")
 					assert.NotEmpty(t, v.Pkg, "violation.Pkg must not be empty")
@@ -1274,45 +1217,41 @@ func TestCheckLayering(t *testing.T) {
 }
 
 // TestLayeringRules_LAYER07_NegativeProbe is the "test the test" meta-test for
-// LAYER-07 (TEST-01). It builds a synthetic pkgInfo slice that contains a
-// cells/ package directly importing runtime/http/router, then runs the LAYER-07
-// check logic inline and asserts the violation is detected. This confirms the
-// rule engine catches the forbidden import before any such import ever reaches
-// the real codebase.
+// LAYER-07 (TEST-01). It builds a synthetic graph that contains a cells/
+// package directly importing runtime/http/router, then runs the LAYER-07
+// inline check (mirroring the live one in TestLayeringRules) and asserts
+// the violation is detected. Confirms the rule engine catches the
+// forbidden import before any such import reaches the real codebase.
 func TestLayeringRules_LAYER07_NegativeProbe(t *testing.T) {
 	t.Parallel()
 
 	const modPrefix = "github.com/ghbvf/gocell/"
-	modPath := strings.TrimSuffix(modPrefix, "/")
-	routerPkg := modPath + "/runtime/http/router"
+	module := strings.TrimSuffix(modPrefix, "/")
+	routerPkg := module + "/runtime/http/router"
+	cellSlice := module + "/cells/accesscore/slices/some_route_slice"
 
-	// Synthetic fixture: a cells/ package that would violate LAYER-07 by
-	// directly importing the router package.
-	syntheticPkgs := []pkgInfo{
-		{
-			ImportPath: modPrefix + "cells/accesscore/slices/some_route_slice",
-			Imports:    []string{routerPkg},
-		},
-	}
+	g := depgraph.FromPackages(module, []*packages.Package{
+		synthPkg(cellSlice, routerPkg),
+		synthPkg(routerPkg),
+	})
 
 	// Run the same inline logic as LAYER-07 in TestLayeringRules.
 	var layer07violations []string
-	for _, pkg := range syntheticPkgs {
-		if layerOf(modPrefix, pkg.ImportPath) != "cells" {
+	for _, pkg := range g.Packages {
+		if layerOf(modPrefix, pkg.ID) != "cells" {
 			continue
 		}
-		if strings.HasSuffix(pkg.ImportPath, "_test") {
+		if strings.HasSuffix(pkg.ID, "_test") {
 			continue
 		}
 		for _, imp := range pkg.Imports {
 			if imp == routerPkg {
 				layer07violations = append(layer07violations,
-					fmt.Sprintf("LAYER-07: %s imports %s", pkg.ImportPath, imp))
+					fmt.Sprintf("LAYER-07: %s imports %s", pkg.ID, imp))
 			}
 		}
 	}
 
-	// The negative probe must find exactly one violation.
 	require.Len(t, layer07violations, 1,
 		"LAYER-07 negative probe: expected exactly one violation for synthetic router import")
 	assert.Contains(t, layer07violations[0], "LAYER-07",
@@ -1347,13 +1286,14 @@ func TestLayeringRules_LAYER08_NegativeProbe(t *testing.T) {
 }
 
 // TestLayeringRules_LAYER09_NegativeProbe is the "test the test" meta-test for
-// LAYER-09. It builds synthetic pkgInfo slices covering all four boundary cases
+// LAYER-09. It builds synthetic graphs covering all four boundary cases
 // (cross-cell violation, same-cell allowed, examples allowed, cmd allowed) and
 // runs checkLayering to confirm the rule fires exactly when expected.
 func TestLayeringRules_LAYER09_NegativeProbe(t *testing.T) {
 	t.Parallel()
 
 	const modPrefix = "github.com/ghbvf/gocell/"
+	module := strings.TrimSuffix(modPrefix, "/")
 
 	tests := []struct {
 		name        string
@@ -1390,8 +1330,11 @@ func TestLayeringRules_LAYER09_NegativeProbe(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			pkgs := []pkgInfo{{ImportPath: tt.src, Imports: []string{tt.imp}}}
-			violations := checkLayering(modPrefix, pkgs)
+			g := depgraph.FromPackages(module, []*packages.Package{
+				synthPkg(tt.src, tt.imp),
+				synthPkg(tt.imp),
+			})
+			violations := checkLayering(modPrefix, g)
 			var layer09 []violation
 			for _, v := range violations {
 				if v.Rule == "LAYER-09" {

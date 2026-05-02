@@ -25,7 +25,8 @@ func TestLayerOf(t *testing.T) {
 		{"tools", testModule + "/tools/archtest", LayerTools},
 		{"tests", testModule + "/tests/integration/foo", LayerTests},
 		{"generated", testModule + "/generated/contracts/foo", LayerGenerated},
-		{"unknown_internal_segment", testModule + "/oddbucket/foo", LayerThirdParty},
+		{"unknown_internal_segment", testModule + "/oddbucket/foo", LayerUnknown},
+		{"unknown_internal_single_segment", testModule + "/oddbucket", LayerUnknown},
 		{"stdlib_short", "fmt", LayerStdlib},
 		{"stdlib_nested", "encoding/json", LayerStdlib},
 		{"stdlib_net", "net/http", LayerStdlib},
@@ -115,6 +116,26 @@ func TestIsStdlib(t *testing.T) {
 				t.Errorf("IsStdlib(%q) = %v, want %v", tt.path, got, tt.want)
 			}
 		})
+	}
+}
+
+// TestLayerOf_InternalUnknownDistinct locks the contract that
+// module-internal-but-unmapped paths are distinguishable from true
+// third-party paths. Collapsing both into LayerThirdParty is fail-open
+// for governance: a new top-level directory under the module would look
+// external and skip any layer rule that filters on module membership.
+func TestLayerOf_InternalUnknownDistinct(t *testing.T) {
+	t.Parallel()
+	internalUnmapped := LayerOf(testModule, testModule+"/jobs/scheduler")
+	externalThird := LayerOf(testModule, "github.com/jackc/pgx/v5")
+	if internalUnmapped == externalThird {
+		t.Fatalf("internal-unknown and third-party must be distinct; both got %q", internalUnmapped)
+	}
+	if internalUnmapped != LayerUnknown {
+		t.Errorf("internal-unmapped path: got %q, want %q", internalUnmapped, LayerUnknown)
+	}
+	if externalThird != LayerThirdParty {
+		t.Errorf("true third-party path: got %q, want %q", externalThird, LayerThirdParty)
 	}
 }
 

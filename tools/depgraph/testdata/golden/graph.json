@@ -3,7 +3,7 @@
   "packages": [
     {
       "id": "example.com/synth/a",
-      "layer": "thirdparty",
+      "layer": "unknown",
       "imports": [
         "example.com/synth/b",
         "example.com/synth/d"
@@ -11,14 +11,14 @@
     },
     {
       "id": "example.com/synth/b",
-      "layer": "thirdparty",
+      "layer": "unknown",
       "imports": [
         "example.com/synth/c"
       ]
     },
     {
       "id": "example.com/synth/c",
-      "layer": "thirdparty",
+      "layer": "unknown",
       "imports": []
     },
     {
@@ -29,7 +29,7 @@
     },
     {
       "id": "example.com/synth/d",
-      "layer": "thirdparty",
+      "layer": "unknown",
       "imports": []
     },
     {
@@ -39,13 +39,13 @@
     },
     {
       "id": "example.com/synth/testhelper",
-      "layer": "thirdparty",
+      "layer": "unknown",
       "imports": [],
       "testOnly": true
     },
     {
       "id": "example.com/synth/xtesthelper",
-      "layer": "thirdparty",
+      "layer": "unknown",
       "imports": [],
       "testOnly": true
     }

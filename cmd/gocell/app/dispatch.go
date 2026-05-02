@@ -93,7 +93,7 @@ func PrintUsage() {
 	fmt.Println("    unconditional-skip [--format text|json|sarif]")
 	fmt.Println("  verify      Run tests and artifact checks            [--id, --active, --files]")
 	fmt.Println("    generated [--module=<module>]")
-	fmt.Println("  graph       Emit module package dependency graph     [--format json|dot, --pattern=./...]")
+	fmt.Println("  graph       Emit module package dependency graph     [--format, --pattern, --root, --include-tests]")
 	fmt.Println()
 	fmt.Println("Run 'gocell <command> -h' for full flag help on a sub-command.")
 }
