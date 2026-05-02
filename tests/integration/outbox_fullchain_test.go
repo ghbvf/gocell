@@ -230,6 +230,7 @@ func TestIntegration_OutboxFullChain(t *testing.T) {
 	claimer := redis.NewIdempotencyClaimer(redisClient)
 
 	relayCfg := outboxruntime.DefaultRelayConfig()
+	relayCfg.Clock = clock.Real()
 	relayCfg.PollInterval = testtime.D200ms // fast polling for test
 	relayCfg.BatchSize = 10
 	relay := outboxruntime.NewRelay(postgres.NewOutboxStore(pool.DB(), clock.Real()), pub, relayCfg)
@@ -493,6 +494,7 @@ func TestIntegration_OutboxFullChain_NoTrace(t *testing.T) {
 	})
 
 	relayCfg := outboxruntime.DefaultRelayConfig()
+	relayCfg.Clock = clock.Real()
 	relayCfg.PollInterval = testtime.D200ms
 	relayCfg.BatchSize = 10
 	relay := outboxruntime.NewRelay(postgres.NewOutboxStore(pool.DB(), clock.Real()), pub, relayCfg)
@@ -662,6 +664,7 @@ func TestIntegration_OutboxWriteRelayMockPublisher(t *testing.T) {
 	mock := &capturingPublisher{messages: make(chan publishedMessage, 10)}
 
 	relayCfg := outboxruntime.DefaultRelayConfig()
+	relayCfg.Clock = clock.Real()
 	relayCfg.PollInterval = testtime.SlowPoll
 	relayCfg.BatchSize = 10
 	relay := outboxruntime.NewRelay(postgres.NewOutboxStore(pool.DB(), clock.Real()), mock, relayCfg)

@@ -232,6 +232,7 @@ func TestOutboxE2E_PGMode_WriteToSubscribe(t *testing.T) {
 
 	baseOpts := []bootstrap.Option{
 		bootstrap.WithAssembly(asm),
+		bootstrap.WithClock(asm.Clock()),
 		bootstrap.WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{cell.MustNewAuthJWTFromAssembly(asm)}, bootstrap.WithListenerNet(ln)),
 		withCorebundleTestInternalListener(t, newCorebundleLocalListener(t)),
 		bootstrap.WithPublisher(eb), bootstrap.WithSubscriber(eb),
@@ -243,7 +244,7 @@ func TestOutboxE2E_PGMode_WriteToSubscribe(t *testing.T) {
 	// A11 regression guard: relay is registered via relayBootstrapOpts from
 	// buildConfigCoreOpts so its Worker/Close/Checkers lifecycle is independently
 	// managed by bootstrap — not carried inside PGResource.Worker().
-	app := bootstrap.New(append(baseOpts, relayBootstrapOpts...)...)
+	app := newBootstrapFromOptions(append(baseOpts, relayBootstrapOpts...))
 
 	appErrCh := make(chan error, 1)
 	appCtx, appCancel := context.WithCancel(ctx)
@@ -591,12 +592,13 @@ func TestOutboxE2E_RefetchLoop_AccessCoreCallsInternalGet(t *testing.T) {
 
 	baseOpts := []bootstrap.Option{
 		bootstrap.WithAssembly(asm),
+		bootstrap.WithClock(asm.Clock()),
 		bootstrap.WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{cell.MustNewAuthJWTFromAssembly(asm)}, bootstrap.WithListenerNet(ln)),
 		withCorebundleTestInternalListener(t, newCorebundleLocalListener(t)),
 		bootstrap.WithPublisher(eb), bootstrap.WithSubscriber(eb),
 		bootstrap.WithShutdownTimeout(testtime.EventuallyDefault),
 	}
-	app := bootstrap.New(append(baseOpts, relayBootstrapOpts...)...)
+	app := newBootstrapFromOptions(append(baseOpts, relayBootstrapOpts...))
 
 	appErrCh := make(chan error, 1)
 	appCtx, appCancel := context.WithCancel(ctx)

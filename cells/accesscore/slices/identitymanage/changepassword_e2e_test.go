@@ -45,7 +45,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-
 // e2eTestKeySet holds a key pair shared across the e2e test.
 var e2eTestKeySet, _, _ = auth.MustNewTestKeySet(clock.Real())
 
@@ -103,10 +102,12 @@ func newE2EFixture() *e2eFixture {
 
 	loginSvc := sessionlogin.MustNewService(
 		userRepo, sessionRepo, roleRepo, refreshStore, e2eIssuer, slog.Default(),
+		sessionlogin.WithClock(clock.Real()),
 	)
 
 	idmSvc, err := NewService(userRepo, sessionRepo, refreshStore, slog.Default(),
 		WithTokenIssuer(&e2eTokenIssuer{svc: loginSvc}),
+		WithClock(clock.Real()),
 	)
 	if err != nil {
 		panic(err)
@@ -214,6 +215,7 @@ func TestChangePassword_FullFlow(t *testing.T) {
 			}
 		})
 		mid := auth.AuthMiddleware(e2eVerifier,
+			auth.WithAuthClock(clock.Real()),
 			auth.WithPasswordResetExemptMatcher(exemptMatcher))(stub)
 		req := httptest.NewRequest(method, path, nil)
 		req.Header.Set("Authorization", "Bearer "+loginPair.AccessToken)
