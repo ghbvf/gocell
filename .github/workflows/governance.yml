@@ -16,6 +16,11 @@ jobs:
   verify:
     name: make verify
     runs-on: ubuntu-latest
+    # `make verify` runs ~9 gates including a small Go test set; real wall
+    # time is ~1 min on a warm runner. 5 min matches the smallest project
+    # timeout (security-vuln.yml's govulncheck) and gives ~5x cushion for
+    # cold Go module cache or runner contention.
+    timeout-minutes: 5
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 

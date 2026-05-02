@@ -16,8 +16,7 @@ change to the driver.
 
 ## Adding a new gate
 
-1. Create `hack/verify-<name>.sh` with shebang `#!/usr/bin/env bash` and
-   `set -euo pipefail`.
+1. Create `hack/verify-<name>.sh` with shebang `#!/usr/bin/env bash`.
 2. `cd "$(dirname "${BASH_SOURCE[0]}")/.."` so the script runs from repo root
    regardless of caller's CWD.
 3. `chmod +x hack/verify-<name>.sh` so the file can be invoked directly
@@ -41,5 +40,5 @@ itself enforces.
 | `verify-journey.sh` | `gocell verify journey --active` (active journeys carry executable auto checks) |
 | `verify-panic-registered.sh` | `PANIC-REGISTERED-01`: production `panic()` calls must be `Must*` or ADR-registered |
 | `verify-scaffold-reject.sh` | `gocell scaffold slice` rejects kebab-case names |
-| `verify-shellcheck.sh` | `shellcheck v0.9.0` lints every project shell script (host binary preferred, official `koalaman/shellcheck` docker image as fallback). Disabled lints `SC1090,SC1091,SC2230` mirror `kubernetes/kubernetes hack/verify-shellcheck.sh`. Replaces the regex-only `verify-shell-safety.sh` from PR #350 — see commit body for the rationale |
+| `verify-shellcheck.sh` | `shellcheck` lints every `*.sh` under `scripts/ hack/ tests/`. Disabled lints `SC1090,SC1091,SC2230` mirror `kubernetes/kubernetes hack/verify-shellcheck.sh`. Replaces the regex-only `verify-shell-safety.sh` from PR #350 |
 | `verify-unconditional-skip.sh` | no `t.Skip` without a runtime predicate |
