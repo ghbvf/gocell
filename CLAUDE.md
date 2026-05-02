@@ -40,22 +40,11 @@ actors.yaml   — 外部 Actor 注册（参与 contract 但不属于 Cell 模型
 - adapters/ 实现 kernel/ 或 runtime/ 定义的接口
 - examples/ 可以依赖所有层
 
-> 路径级 LAYER-01..04 由 `.golangci.yml` 的 depguard 规则在 lint 阶段静态拦截；
-> LAYER-05/06/09/10（跨 cell internal、cell-owned 子包、cross-cell events、root cell → adapters）
-> 需 cell metadata / 类型信息，由 `tools/archtest/` 守护。
-
 ### Cell 开发规则
 
 - 每个 Cell 必须有 cell.yaml（必填：id / type / consistencyLevel / owner / schema.primary / verify.smoke）
-- 每个 Slice 必须有 slice.yaml（必填：id / belongsToCell / contractUsages / verify.unit / verify.contract）
-  - owner、consistencyLevel 缺省时继承 cell.yaml；allowedFiles 必填（FMT-14 治理规则强制，`gocell scaffold` 生成初始值）
-  - 所有 slice / cell / assembly 的目录名和 id 必须为 no-dash 格式；由 `gocell validate --strict` 拦截（FMT-16 扫目录、FMT-C1 扫 cell id、FMT-A1 扫 assembly id）
-- Cell 之间只通过 contract 通信，禁止直接 import 另一个 Cell 的 internal/
-  - 例外：L0 Cell（纯计算库）可被同一 assembly 内的兄弟 Cell 直接 import，无需 contract
-- 动态交付状态（readiness / risk / blocker / done / verified / nextAction / updatedAt）只有 `risk` / `blocker` / `updatedAt` 三字段在 `journeys/status-board.yaml` 的 `StatusBoardEntry` 中合法；其余字段（readiness / done / verified / nextAction）以及所有这些字段出现在 cell.yaml / slice.yaml / contract.yaml / assembly.yaml / journey.yaml 中，均被 `kernel/metadata` parser 的 `yaml.KnownFields(true)` 在解析期拒绝
-- `contract.lifecycle`（draft / active / deprecated）和 `journey.lifecycle`（active / experimental）是治理字段；active journey 在 strict 模式必须至少有 1 条 auto check
-- cell.yaml 不维护 slices、journeys、contracts 反向索引；如需汇总视图，由工具生成
-- 禁止使用旧字段名：cellId / sliceId / contractId / assemblyId / ownedSlices / authoritativeData / producer / consumers / callsContracts / publishes / consumes（详见 metadata-model-v3.md 迁移附录）
+- 每个 Slice 必须有 slice.yaml（必填：id / belongsToCell / contractUsages / verify.unit / verify.contract / allowedFiles）
+- Cell 之间只通过 contract 通信；L0 Cell（纯计算库）可被同一 assembly 内的兄弟 Cell 直接 import
 
 ### 一致性等级（L0-L4）
 
@@ -69,8 +58,8 @@ actors.yaml   — 外部 Actor 注册（参与 contract 但不属于 Cell 模型
 
 ## Go 编码规范
 
-- 错误用 `pkg/errcode` 包，禁止裸 `errors.New` 对外暴露
-- 日志用 `slog`（结构化字段），禁止 `fmt.Println` / `log.Printf`
+- 错误用 `pkg/errcode` 包
+- 日志用 `slog`（结构化字段）
 - DB 字段 `snake_case`，JSON/Query/Path `camelCase`
 - 函数认知复杂度 ≤ 15
 - 新增/修改代码覆盖率 ≥ 80%，kernel/ 层 ≥ 90%（table-driven test）
@@ -85,52 +74,24 @@ actors.yaml   — 外部 Actor 注册（参与 contract 但不属于 Cell 模型
 
 实现外部协议/标准（密码学、签名、OIDC、migration、可观测性导出等）必须优先使用官方或成熟开源库，禁止自建；实现 GoCell 领域逻辑（Cell/Slice 模型、治理规则、outbox 接口等）保留自建。详见 `docs/reviews/202604061630-dependency-replacement-plan.md`。
 
-## 供应链与安全扫描
-
-四层静态门覆盖依赖与代码安全，PR 与 develop push 上必执行：
-
-| 层 | 工具 | 文件 | 阻塞方式 |
-|---|---|---|---|
-| 编码 | **gosec** | `.golangci.yml` | golangci-lint 失败 fail（PR 模式仅 diff，push 模式全量）|
-| 依赖 | **govulncheck** | `security-vuln.yml` | text-mode gate exit ≠ 0 fail（SARIF mode 在 govulncheck 1.x 永远 exit 0，仅做 Security tab 报告，不能作为 gate）|
-| 模式 SAST | **Semgrep** | `security-static.yml` | gate pass `semgrep scan --error`（无 `--sarif`，nosem 抑制生效，命中即 fail）+ SARIF pass（无 `--error`，写 GitHub Security tab） |
-| 数据流 SAST | **CodeQL** | `security-static.yml` | **upload-only**；PR 阻塞由 repo Code Scanning branch protection 兜底（Settings → Code security → Code scanning → required check `CodeQL`），不在 workflow 退出码 |
-
-`hack/verify-supply-chain-clean.sh` 是 drift-detection 卫生门，拦截 `--exclude/--ignore/-skip` 等绕过 flag 与 `.govulncheckignore`/`.semgrepignore`/CodeQL 宽 `paths-ignore` 等绕过文件；它从 PR head 跑，**不是针对协调 PR 的 fail-closed boundary**——最终阻塞由 PR review（单人维护项目即维护者本人）兜底。报告统一进 GitHub Security tab（SARIF 上传）。
-
 ## 参考框架
 
-开发时参考对标框架解决方案，见 `docs/references/framework-comparison.md`：
-- Cell/Slice 声明模型 + 生命周期 + 校验 → Kubernetes
-- Cell 运行时 → Uber fx
-- 代码生成 → go-zero goctl
-- 中间件 → Kratos
-- 配置热更新 → go-micro
-- 事件驱动 → Watermill
+新建或重构层内模块时，先用 `WebFetch` 读对标源码，commit message 注明 `ref: {framework} {file}`。详见 `docs/references/framework-comparison.md`。
 
-> **对标 ≠ 采纳**：以上映射是**吸收设计语义**（接口形状、生命周期钩子、Lifecycle 对称清理、依赖图可视化等），不是引入实现包。GoCell 领域逻辑（Cell/Slice 模型、DI/Lifecycle 编排、错误码体系、metadata schema、治理规则）按上节「依赖选择原则」保留自建。例如：fx 对标点是「Lifecycle 失败矩阵的对称清理算法 + Module 隔离思想」，不是 `import go.uber.org/fx`；GoCell 用 Option pattern + 10-phase + archtest LAYER + boundary.yaml 实现等价语义。
-
-### 对标对比规则
-
-新建或重构 kernel/、cells/、runtime/、adapters/ 下的模块时，**必须**先在线读取对标框架的对应源码再动手：
-
-1. 查 `docs/references/framework-comparison.md` 找到当前模块的 primary/secondary 对标文件路径
-2. 用 `WebFetch` 从 GitHub 拉取对标源码（`https://raw.githubusercontent.com/{owner}/{repo}/main/{path}`）
-3. 提取接口签名、生命周期钩子、错误处理等关键设计决策
-4. 编码时在 PR 描述或 commit message 中注明：`ref: {framework} {file}` + 采纳/偏离理由
+| 模块 | 对标框架 |
+|------|---------|
+| Cell/Slice 声明模型 + 生命周期 + 校验 | Kubernetes |
+| Cell 运行时 | Uber fx |
+| 代码生成 | go-zero goctl |
+| 中间件 | Kratos |
+| 配置热更新 | go-micro |
+| 事件驱动 | Watermill |
 
 ## Sandbox 提权
 
 `git push/pull/fetch` 和 `gh` 命令须用 `dangerouslyDisableSandbox: true`。
 
 ## 文档命名规则
-格式：`yyyyMMddHHmm-编号-实际功能或问题.md`（ date "+%Y%m%d%H%M" 后缀按内容选择，不限 `.md`）
+
+格式：`yyyyMMddHHmm-编号-实际功能或问题.md`
 示例：`202603281443-022-compliance-api-review.md`
-
-
-## Active Technologies
-- Go (latest stable) + `github.com/golang-jwt/jwt/v5` (existing), `crypto/*` stdlib (201-wm2-key-rotation)
-- N/A (in-memory key set, loaded from static config) (201-wm2-key-rotation)
-
-## Recent Changes
-- 201-wm2-key-rotation: Added Go (latest stable) + `github.com/golang-jwt/jwt/v5` (existing), `crypto/*` stdlib
