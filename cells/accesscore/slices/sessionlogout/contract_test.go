@@ -14,10 +14,9 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/ghbvf/gocell/cells/accesscore/internal/domain"
-	"github.com/ghbvf/gocell/cells/accesscore/internal/mem"
+	"github.com/ghbvf/gocell/cells/accesscore/internal/ports"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/testutil"
 	"github.com/ghbvf/gocell/cells/internal/testoutbox"
-	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/contracttest"
@@ -56,7 +55,7 @@ func (noopTxRunner) RunInTx(ctx context.Context, fn func(context.Context) error)
 
 var _ persistence.TxRunner = noopTxRunner{}
 
-func seedContractSession(repo *mem.SessionRepository) string {
+func seedContractSession(repo ports.SessionRepository) string {
 	sess, _ := domain.NewSession(testutil.TestID("usr-1"), "at-1", time.Now().Add(time.Hour), time.Now())
 	sess.ID = testutil.TestID("sess-1")
 	_ = repo.Create(context.Background(), sess)
@@ -69,7 +68,7 @@ func TestHttpAuthSessionDeleteV1Serve(t *testing.T) {
 	root := contracttest.ContractsRoot(t)
 	c := contracttest.LoadByID(t, root, "http.auth.session.delete.v1")
 
-	sessionRepo := mem.NewSessionRepository(clock.Real())
+	sessionRepo := testutil.RealSessionRepo(t)
 	sessID := seedContractSession(sessionRepo)
 	svc := MustNewService(sessionRepo, newContractRefreshStore(), slog.Default(),
 		WithEmitter(testoutbox.MustEmitter(t, &recordingWriter{})), WithTxManager(noopTxRunner{}))
@@ -95,7 +94,7 @@ func TestEventSessionRevokedV1Publish(t *testing.T) {
 	root := contracttest.ContractsRoot(t)
 	c := contracttest.LoadByID(t, root, "event.session.revoked.v1")
 
-	sessionRepo := mem.NewSessionRepository(clock.Real())
+	sessionRepo := testutil.RealSessionRepo(t)
 	writer := &recordingWriter{}
 	svc := MustNewService(sessionRepo, newContractRefreshStore(), slog.Default(),
 		WithEmitter(testoutbox.MustEmitter(t, writer)), WithTxManager(noopTxRunner{}))
@@ -129,7 +128,7 @@ func TestContract_EventRoleAssignedV1_Subscribe_PayloadValid(t *testing.T) {
 	root := contracttest.ContractsRoot(t)
 	c := contracttest.LoadByID(t, root, "event.role.assigned.v1")
 
-	repo := mem.NewSessionRepository(clock.Real())
+	repo := testutil.RealSessionRepo(t)
 	consumer := NewConsumer(repo, slog.Default())
 	handler := outbox.WrapLegacyHandler(consumer.HandleRoleChanged)
 
@@ -152,7 +151,7 @@ func TestContract_EventRoleRevokedV1_Subscribe_PayloadValid(t *testing.T) {
 	root := contracttest.ContractsRoot(t)
 	c := contracttest.LoadByID(t, root, "event.role.revoked.v1")
 
-	repo := mem.NewSessionRepository(clock.Real())
+	repo := testutil.RealSessionRepo(t)
 	consumer := NewConsumer(repo, slog.Default())
 	handler := outbox.WrapLegacyHandler(consumer.HandleRoleChanged)
 
@@ -172,7 +171,7 @@ func TestContract_EventRoleRevokedV1_Subscribe_PayloadValid(t *testing.T) {
 // --- Outbox error propagation test (S3-F1) ---
 
 func TestService_Logout_OutboxWriteError(t *testing.T) {
-	sessionRepo := mem.NewSessionRepository(clock.Real())
+	sessionRepo := testutil.RealSessionRepo(t)
 	seedContractSession(sessionRepo)
 	failWriter := &recordingWriter{err: errors.New("outbox unavailable")}
 	svc := MustNewService(sessionRepo, newContractRefreshStore(), slog.Default(),

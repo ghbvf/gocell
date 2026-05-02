@@ -20,7 +20,7 @@ var testHMACKey = []byte("test-hmac-key-32bytes-long!!!!!!!")
 
 func newTestService() (*Service, *mem.AuditRepository) {
 	repo := mem.NewAuditRepository()
-	return NewService(repo, testHMACKey, slog.Default(), clock.Real()), repo
+	return NewService(repo, testHMACKey, slog.Default(), clock.Real(), WithClock(clock.Real())), repo
 }
 
 func TestService_HandleEvent(t *testing.T) {
@@ -105,7 +105,7 @@ func TestService_HandleEvent_ChainGrows(t *testing.T) {
 // to the DLX instead of silently appending it with a fallback "system" actor.
 func TestService_HandleEvent_InvalidPayload_PermanentError(t *testing.T) {
 	repo := mem.NewAuditRepository()
-	svc := NewService(repo, testHMACKey, slog.Default(), clock.Real())
+	svc := NewService(repo, testHMACKey, slog.Default(), clock.Real(), WithClock(clock.Real()))
 
 	entry := outbox.Entry{
 		ID:        "evt-bad-json",
@@ -137,7 +137,7 @@ func TestService_HandleEvent_PublishError_DoesNotFailAppend(t *testing.T) {
 		fp, outbox.DirectPublishFailOpen, metrics.NopProvider{}, clock.Real(), "auditcore",
 		outbox.WithLogger(slog.Default()))
 	require.NoError(t, err)
-	svc := NewService(repo, testHMACKey, slog.Default(), clock.Real(), WithEmitter(emitter))
+	svc := NewService(repo, testHMACKey, slog.Default(), clock.Real(), WithClock(clock.Real()), WithEmitter(emitter))
 
 	entry := outbox.Entry{
 		ID:        "evt-pub-err",

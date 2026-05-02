@@ -13,6 +13,7 @@ import (
 
 	"github.com/ghbvf/gocell/examples/todoorder/cells/ordercell/internal/domain"
 	"github.com/ghbvf/gocell/examples/todoorder/cells/ordercell/internal/mem"
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/persistence"
 )
@@ -45,6 +46,7 @@ func newTestHandler(t testing.TB) *Handler {
 	svc := NewService(repo, slog.Default(),
 		WithEmitter(mustEmitter(t, outbox.NoopWriter{})),
 		WithTxManager(persistence.NoopTxRunner{}),
+		WithClock(clock.Real()),
 	)
 	return NewHandler(svc)
 }

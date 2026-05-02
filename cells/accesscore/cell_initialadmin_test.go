@@ -16,6 +16,7 @@ import (
 	"github.com/ghbvf/gocell/cells/accesscore/initialadmin"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/domain"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/mem"
+	"github.com/ghbvf/gocell/cells/accesscore/internal/testutil"
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/observability/metrics"
@@ -108,7 +109,7 @@ func newTestCellWithBootstrap(
 	t.Helper()
 	opts := []Option{
 		WithUserRepository(mem.NewUserRepository()),
-		WithSessionRepository(mem.NewSessionRepository(clock.Real())),
+		WithSessionRepository(testutil.RealSessionRepo(t)),
 		WithRoleRepository(mem.NewRoleRepository()),
 		WithOutboxDeps(noopPublisher{}, nil),
 		WithJWTIssuer(testIssuer),
@@ -173,7 +174,7 @@ func TestInit_BootstrapDefaultBehaviorIsNoop(t *testing.T) {
 
 	ac := NewAccessCore(
 		WithUserRepository(userRepo),
-		WithSessionRepository(mem.NewSessionRepository(clock.Real())),
+		WithSessionRepository(testutil.RealSessionRepo(t)),
 		WithRoleRepository(mem.NewRoleRepository()),
 		WithOutboxDeps(noopPublisher{}, nil),
 		WithJWTIssuer(testIssuer),
@@ -218,7 +219,7 @@ func TestInit_BootstrapAlreadyHasAdmin_NilCleaner(t *testing.T) {
 
 	ac := NewAccessCore(
 		WithUserRepository(userRepo),
-		WithSessionRepository(mem.NewSessionRepository(clock.Real())),
+		WithSessionRepository(testutil.RealSessionRepo(t)),
 		WithRoleRepository(roleRepo),
 		WithOutboxDeps(noopPublisher{}, nil),
 		WithJWTIssuer(testIssuer),
@@ -273,7 +274,7 @@ func TestInit_BootstrapAdminExists_FreshOrphanFile_SweepCleanerRegistered(t *tes
 
 	ac := NewAccessCore(
 		WithUserRepository(userRepo),
-		WithSessionRepository(mem.NewSessionRepository(clock.Real())),
+		WithSessionRepository(testutil.RealSessionRepo(t)),
 		WithRoleRepository(roleRepo),
 		WithOutboxDeps(noopPublisher{}, nil),
 		WithJWTIssuer(testIssuer),
@@ -328,7 +329,7 @@ func TestInit_BootstrapUser_HasPasswordResetRequired(t *testing.T) {
 
 	ac := NewAccessCore(
 		WithUserRepository(userRepo),
-		WithSessionRepository(mem.NewSessionRepository(clock.Real())),
+		WithSessionRepository(testutil.RealSessionRepo(t)),
 		WithRoleRepository(mem.NewRoleRepository()),
 		WithOutboxDeps(noopPublisher{}, nil),
 		WithJWTIssuer(testIssuer),

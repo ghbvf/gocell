@@ -15,6 +15,8 @@ import (
 
 	"github.com/ghbvf/gocell/cells/accesscore/internal/domain"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/mem"
+	"github.com/ghbvf/gocell/cells/accesscore/internal/ports"
+	"github.com/ghbvf/gocell/cells/accesscore/internal/testutil"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/kernel/outbox"
@@ -45,7 +47,7 @@ type typedNilRefreshStore struct {
 }
 
 type trackingSessionRepo struct {
-	*mem.SessionRepository
+	ports.SessionRepository
 	created []string
 	deleted []string
 }
@@ -80,7 +82,7 @@ func init() {
 // issuer is constructed with a default audience (Registry path), the Service
 // writes that audience into issued tokens without caching it separately (S31).
 func TestNewService_IssuerDefaultAudienceWrittenToTokens(t *testing.T) {
-	svc, userRepo := newTestService()
+	svc, userRepo := newTestService(t)
 	seedUser(userRepo, "aud-user", "pass123")
 
 	verifier, err := auth.NewJWTVerifier(testKeySet, clock.Real(), auth.WithExpectedAudiences("gocell"))
@@ -99,9 +101,10 @@ func TestNewService_IssuerDefaultAudienceWrittenToTokens(t *testing.T) {
 	assert.NotEmpty(t, pair.RefreshToken, "login must issue a non-empty opaque refresh token")
 }
 
-func newTestService() (*Service, *mem.UserRepository) {
+func newTestService(t testing.TB) (*Service, *mem.UserRepository) {
+	t.Helper()
 	userRepo := mem.NewUserRepository()
-	sessionRepo := mem.NewSessionRepository(clock.Real())
+	sessionRepo := testutil.RealSessionRepo(t)
 	roleRepo := mem.NewRoleRepository()
 	return MustNewService(userRepo, sessionRepo, roleRepo, newTestRefreshStore(),
 		testIssuer, slog.Default(), WithClock(clock.Real())), userRepo
@@ -109,7 +112,7 @@ func newTestService() (*Service, *mem.UserRepository) {
 
 func TestNewService_RejectsTypedNilDependencies(t *testing.T) {
 	userRepo := mem.NewUserRepository()
-	sessionRepo := mem.NewSessionRepository(clock.Real())
+	sessionRepo := testutil.RealSessionRepo(t)
 	roleRepo := mem.NewRoleRepository()
 	refreshStore := newTestRefreshStore()
 
@@ -121,28 +124,28 @@ func TestNewService_RejectsTypedNilDependencies(t *testing.T) {
 			name: "typed nil userRepo",
 			run: func() (*Service, error) {
 				var typedNil *mem.UserRepository
-				return NewService(typedNil, sessionRepo, roleRepo, refreshStore, testIssuer, slog.Default())
+				return NewService(typedNil, sessionRepo, roleRepo, refreshStore, testIssuer, slog.Default(), WithClock(clock.Real()))
 			},
 		},
 		{
 			name: "typed nil sessionRepo",
 			run: func() (*Service, error) {
 				var typedNil *mem.SessionRepository
-				return NewService(userRepo, typedNil, roleRepo, refreshStore, testIssuer, slog.Default())
+				return NewService(userRepo, typedNil, roleRepo, refreshStore, testIssuer, slog.Default(), WithClock(clock.Real()))
 			},
 		},
 		{
 			name: "typed nil roleRepo",
 			run: func() (*Service, error) {
 				var typedNil *mem.RoleRepository
-				return NewService(userRepo, sessionRepo, typedNil, refreshStore, testIssuer, slog.Default())
+				return NewService(userRepo, sessionRepo, typedNil, refreshStore, testIssuer, slog.Default(), WithClock(clock.Real()))
 			},
 		},
 		{
 			name: "typed nil refreshStore",
 			run: func() (*Service, error) {
 				var typedNil *typedNilRefreshStore
-				return NewService(userRepo, sessionRepo, roleRepo, typedNil, testIssuer, slog.Default())
+				return NewService(userRepo, sessionRepo, roleRepo, typedNil, testIssuer, slog.Default(), WithClock(clock.Real()))
 			},
 		},
 	}
@@ -212,7 +215,7 @@ func TestService_Login(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			svc, userRepo := newTestService()
+			svc, userRepo := newTestService(t)
 			tt.setup(userRepo)
 
 			pair, err := svc.Login(context.Background(), tt.input)
@@ -236,7 +239,7 @@ func TestService_Login(t *testing.T) {
 
 func TestService_Login_DemoMode_ExplicitCleanup_NoOrphanSession(t *testing.T) {
 	userRepo := mem.NewUserRepository()
-	sessionRepo := &trackingSessionRepo{SessionRepository: mem.NewSessionRepository(clock.Real())}
+	sessionRepo := &trackingSessionRepo{SessionRepository: testutil.RealSessionRepo(t)}
 	roleRepo := mem.NewRoleRepository()
 	store := failingIssueRefreshStore{Store: newTestRefreshStore(), err: fmt.Errorf("refresh db down")}
 	svc := MustNewService(userRepo, sessionRepo, roleRepo, store, testIssuer, slog.Default(), WithClock(clock.Real()))
@@ -255,7 +258,7 @@ func TestService_Login_DemoMode_ExplicitCleanup_NoOrphanSession(t *testing.T) {
 }
 
 func TestService_Login_TokensContainSessionID(t *testing.T) {
-	svc, userRepo := newTestService()
+	svc, userRepo := newTestService(t)
 	seedUser(userRepo, "sid-user", "pass123")
 
 	// Need a verifier to decode the tokens.
@@ -285,7 +288,7 @@ func (f failingPublisher) Publish(_ context.Context, _ string, _ []byte) error {
 func (f failingPublisher) Close(_ context.Context) error                       { return nil }
 
 func TestLogin_PasswordResetRequiredFlagPropagated(t *testing.T) {
-	svc, userRepo := newTestService()
+	svc, userRepo := newTestService(t)
 
 	// Seed user with PasswordResetRequired=true.
 	hash, _ := bcrypt.GenerateFromPassword([]byte("pass123"), bcrypt.MinCost)
@@ -309,7 +312,7 @@ func TestLogin_PasswordResetRequiredFlagPropagated(t *testing.T) {
 }
 
 func TestLogin_NoResetWhenFlagFalse(t *testing.T) {
-	svc, userRepo := newTestService()
+	svc, userRepo := newTestService(t)
 	seedUser(userRepo, "normal-user", "pass123")
 
 	pair, err := svc.Login(context.Background(), LoginInput{Username: "normal-user", Password: "pass123"})
@@ -325,7 +328,7 @@ func TestLogin_NoResetWhenFlagFalse(t *testing.T) {
 }
 
 func TestService_IssueForUser(t *testing.T) {
-	svc, userRepo := newTestService()
+	svc, userRepo := newTestService(t)
 	seedUser(userRepo, "issue-user", "pass123")
 
 	// Fetch the user ID.
@@ -346,7 +349,7 @@ func TestService_IssueForUser(t *testing.T) {
 
 func TestService_IssueForUser_SessionPersisted(t *testing.T) {
 	userRepo := mem.NewUserRepository()
-	sessionRepo := mem.NewSessionRepository(clock.Real())
+	sessionRepo := testutil.RealSessionRepo(t)
 	roleRepo := mem.NewRoleRepository()
 	svc := MustNewService(userRepo, sessionRepo, roleRepo, newTestRefreshStore(), testIssuer, slog.Default(), WithClock(clock.Real()))
 	seedUser(userRepo, "issue-persist", "pass123")
@@ -369,7 +372,7 @@ func TestService_IssueForUser_SessionPersisted(t *testing.T) {
 
 func TestService_IssueForUser_RefreshStoreUnavailableReturnsInfraAndNoOrphanSession(t *testing.T) {
 	userRepo := mem.NewUserRepository()
-	sessionRepo := &trackingSessionRepo{SessionRepository: mem.NewSessionRepository(clock.Real())}
+	sessionRepo := &trackingSessionRepo{SessionRepository: testutil.RealSessionRepo(t)}
 	roleRepo := mem.NewRoleRepository()
 	store := failingIssueRefreshStore{Store: newTestRefreshStore(), err: fmt.Errorf("refresh db down")}
 	svc := MustNewService(userRepo, sessionRepo, roleRepo, store, testIssuer, slog.Default(), WithClock(clock.Real()))
@@ -413,7 +416,7 @@ func TestService_Login_BlankFieldsRejected(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			svc, _ := newTestService()
+			svc, _ := newTestService(t)
 			_, err := svc.Login(context.Background(), tt.input)
 			require.Error(t, err)
 			var ec *errcode.Error
@@ -435,10 +438,10 @@ func (b *brokenRoleRepo) GetByUserID(_ context.Context, _ string) ([]*domain.Rol
 	return nil, b.err
 }
 
-// countingSessionRepo wraps mem.SessionRepository and counts Create calls so
+// countingSessionRepo wraps ports.SessionRepository and counts Create calls so
 // fail-closed tests can assert the session write never happened.
 type countingSessionRepo struct {
-	*mem.SessionRepository
+	ports.SessionRepository
 	creates int
 }
 
@@ -466,7 +469,7 @@ func (c *countingEmitter) Emit(_ context.Context, _ outbox.Entry) error {
 // seemingly-authenticated user.
 func TestService_Login_RoleFetchFailure_AbortsLogin(t *testing.T) {
 	userRepo := mem.NewUserRepository()
-	sessionRepo := &countingSessionRepo{SessionRepository: mem.NewSessionRepository(clock.Real())}
+	sessionRepo := &countingSessionRepo{SessionRepository: testutil.RealSessionRepo(t)}
 	roleRepo := &brokenRoleRepo{err: fmt.Errorf("roleRepo outage")}
 	seedUser(userRepo, "role-outage", "pass123")
 
@@ -491,7 +494,7 @@ func TestService_Login_RoleFetchFailure_AbortsLogin(t *testing.T) {
 // fail-closed contract for the IssueForUser path (change-password flow).
 func TestService_IssueForUser_RoleFetchFailure_AbortsIssue(t *testing.T) {
 	userRepo := mem.NewUserRepository()
-	sessionRepo := &countingSessionRepo{SessionRepository: mem.NewSessionRepository(clock.Real())}
+	sessionRepo := &countingSessionRepo{SessionRepository: testutil.RealSessionRepo(t)}
 	roleRepo := &brokenRoleRepo{err: fmt.Errorf("roleRepo outage")}
 	seedUser(userRepo, "issue-outage", "pass123")
 	u, err := userRepo.GetByUsername(context.Background(), "issue-outage")
@@ -515,7 +518,7 @@ func TestService_IssueForUser_RoleFetchFailure_AbortsIssue(t *testing.T) {
 // error with "IssueForUser get user" context rather than panicking or returning
 // an empty pair silently.
 func TestService_IssueForUser_GetByIDError(t *testing.T) {
-	svc, _ := newTestService() // userRepo is empty — GetByID will return not-found
+	svc, _ := newTestService(t) // userRepo is empty — GetByID will return not-found
 
 	pair, err := svc.IssueForUser(context.Background(), "nonexistent-user-id")
 	require.Error(t, err, "IssueForUser must fail when user does not exist")
@@ -526,7 +529,7 @@ func TestService_IssueForUser_GetByIDError(t *testing.T) {
 
 func TestService_Login_PublishError_DoesNotFailLogin(t *testing.T) {
 	userRepo := mem.NewUserRepository()
-	sessionRepo := mem.NewSessionRepository(clock.Real())
+	sessionRepo := testutil.RealSessionRepo(t)
 	roleRepo := mem.NewRoleRepository()
 	seedUser(userRepo, "pub-err", "pass123")
 
@@ -548,7 +551,7 @@ func TestService_Login_PublishError_DoesNotFailLogin(t *testing.T) {
 // whether it is called from the Login or ChangePassword path.
 func TestService_IssueForUser_EmitsSessionCreated(t *testing.T) {
 	userRepo := mem.NewUserRepository()
-	sessionRepo := mem.NewSessionRepository(clock.Real())
+	sessionRepo := testutil.RealSessionRepo(t)
 	roleRepo := mem.NewRoleRepository()
 	seedUser(userRepo, "emit-user", "pass123")
 	u, err := userRepo.GetByUsername(context.Background(), "emit-user")
@@ -572,7 +575,7 @@ func TestService_IssueForUser_EmitsSessionCreated(t *testing.T) {
 // returns false and the cleanup branch is skipped.
 func TestPersistSessionWithRefresh_DurableTx_RefreshIssueFails_NoExplicitCleanup(t *testing.T) {
 	userRepo := mem.NewUserRepository()
-	sessionRepo := &trackingSessionRepo{SessionRepository: mem.NewSessionRepository(clock.Real())}
+	sessionRepo := &trackingSessionRepo{SessionRepository: testutil.RealSessionRepo(t)}
 	roleRepo := mem.NewRoleRepository()
 	store := failingIssueRefreshStore{Store: newTestRefreshStore(), err: fmt.Errorf("refresh db down")}
 
@@ -605,7 +608,7 @@ func TestPersistSessionWithRefresh_DurableTx_RefreshIssueFails_NoExplicitCleanup
 func TestCleanupIssuedSession_NotFound_LogsDebug(t *testing.T) {
 	// Use a session repo that always returns not-found on Delete.
 	userRepo := mem.NewUserRepository()
-	sessionRepo := mem.NewSessionRepository(clock.Real())
+	sessionRepo := testutil.RealSessionRepo(t)
 	roleRepo := mem.NewRoleRepository()
 
 	// A failingIssueRefreshStore causes cleanupIssuedSession to be called in
@@ -626,7 +629,7 @@ func TestCleanupIssuedSession_NotFound_LogsDebug(t *testing.T) {
 
 // notFoundOnDeleteSessionRepo returns ErrSessionNotFound when Delete is called.
 type notFoundOnDeleteSessionRepo struct {
-	*mem.SessionRepository
+	ports.SessionRepository
 }
 
 func (r *notFoundOnDeleteSessionRepo) Delete(_ context.Context, _ string) error {

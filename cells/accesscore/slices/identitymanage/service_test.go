@@ -18,6 +18,7 @@ import (
 	"github.com/ghbvf/gocell/cells/accesscore/internal/dto"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/mem"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/ports"
+	"github.com/ghbvf/gocell/cells/accesscore/internal/testutil"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/kernel/outbox"
@@ -38,8 +39,9 @@ func adminCtxForService() context.Context {
 // care about the token pair content.
 var minimalStubIssuer TokenIssuer = &stubTokenIssuer{}
 
-func newTestService() *Service {
-	svc, err := NewService(mem.NewUserRepository(), mem.NewSessionRepository(clock.Real()), newIdentityRefreshStore(), slog.Default(),
+func newTestService(t testing.TB) *Service {
+	t.Helper()
+	svc, err := NewService(mem.NewUserRepository(), testutil.RealSessionRepo(t), newIdentityRefreshStore(), slog.Default(),
 		WithTokenIssuer(minimalStubIssuer), WithClock(clock.Real()))
 	if err != nil {
 		panic("newTestService: " + err.Error())
@@ -51,7 +53,8 @@ func newTestService() *Service {
 // error when WithTokenIssuer is omitted or nil, enforcing fail-fast wiring.
 func TestNewService_RequiresTokenIssuer(t *testing.T) {
 	t.Run("no WithTokenIssuer option", func(t *testing.T) {
-		svc, err := NewService(mem.NewUserRepository(), mem.NewSessionRepository(clock.Real()), newIdentityRefreshStore(), slog.Default())
+		svc, err := NewService(mem.NewUserRepository(), testutil.RealSessionRepo(t), newIdentityRefreshStore(), slog.Default(),
+			WithClock(clock.Real()))
 		require.Error(t, err, "NewService without WithTokenIssuer must fail")
 		assert.Nil(t, svc)
 		var ec *errcode.Error
@@ -60,8 +63,8 @@ func TestNewService_RequiresTokenIssuer(t *testing.T) {
 	})
 
 	t.Run("WithTokenIssuer(nil)", func(t *testing.T) {
-		svc, err := NewService(mem.NewUserRepository(), mem.NewSessionRepository(clock.Real()), newIdentityRefreshStore(), slog.Default(),
-			WithTokenIssuer(nil))
+		svc, err := NewService(mem.NewUserRepository(), testutil.RealSessionRepo(t), newIdentityRefreshStore(), slog.Default(),
+			WithTokenIssuer(nil), WithClock(clock.Real()))
 		require.Error(t, err, "NewService with nil tokenIssuer must fail")
 		assert.Nil(t, svc)
 		var ec *errcode.Error
@@ -83,7 +86,7 @@ func TestService_Create(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			svc := newTestService()
+			svc := newTestService(t)
 			user, err := svc.Create(adminCtxForService(), tt.input)
 			if tt.wantErr {
 				assert.Error(t, err)
@@ -97,7 +100,7 @@ func TestService_Create(t *testing.T) {
 }
 
 func TestService_LockUnlock(t *testing.T) {
-	svc := newTestService()
+	svc := newTestService(t)
 	user, err := svc.Create(adminCtxForService(), CreateInput{
 		Username: "bob", Email: "b@c.d", Password: "hash",
 	})
@@ -115,7 +118,7 @@ func TestService_LockUnlock(t *testing.T) {
 }
 
 func TestService_Lock_RevokesSession(t *testing.T) {
-	sessionRepo := mem.NewSessionRepository(clock.Real())
+	sessionRepo := testutil.RealSessionRepo(t)
 	svc, err := NewService(mem.NewUserRepository(), sessionRepo, newIdentityRefreshStore(), slog.Default(),
 		WithTokenIssuer(minimalStubIssuer), WithClock(clock.Real()))
 	require.NoError(t, err)
@@ -145,7 +148,7 @@ func TestService_Lock_RevokesSession(t *testing.T) {
 }
 
 func TestService_Delete(t *testing.T) {
-	svc := newTestService()
+	svc := newTestService(t)
 	user, _ := svc.Create(adminCtxForService(), CreateInput{
 		Username: "del", Email: "d@e.f", Password: "hash",
 	})
@@ -156,7 +159,7 @@ func TestService_Delete(t *testing.T) {
 }
 
 func TestService_Update(t *testing.T) {
-	svc := newTestService()
+	svc := newTestService(t)
 	user, _ := svc.Create(adminCtxForService(), CreateInput{
 		Username: "upd", Email: "old@e.f", Password: "hash",
 	})
@@ -193,7 +196,7 @@ func seedUserWithHash(t *testing.T, repo *mem.UserRepository, username, password
 }
 
 func TestService_Update_PatchSemantics(t *testing.T) {
-	svc := newTestService()
+	svc := newTestService(t)
 	user, err := svc.Create(adminCtxForService(), CreateInput{
 		Username: "patch", Email: "p@e.f", Password: "hash",
 	})
@@ -222,13 +225,14 @@ func TestService_Update_PatchSemantics(t *testing.T) {
 // ChangePassword tests
 // ---------------------------------------------------------------------------
 
-func newServiceWithIssuer(issuer TokenIssuer) (*Service, *mem.UserRepository) {
+func newServiceWithIssuer(t testing.TB, issuer TokenIssuer) (*Service, *mem.UserRepository) {
+	t.Helper()
 	repo := mem.NewUserRepository()
 	effectiveIssuer := issuer
 	if effectiveIssuer == nil {
 		effectiveIssuer = minimalStubIssuer
 	}
-	svc, err := NewService(repo, mem.NewSessionRepository(clock.Real()), newIdentityRefreshStore(), slog.Default(),
+	svc, err := NewService(repo, testutil.RealSessionRepo(t), newIdentityRefreshStore(), slog.Default(),
 		WithTokenIssuer(effectiveIssuer), WithClock(clock.Real()))
 	if err != nil {
 		panic("newServiceWithIssuer: " + err.Error())
@@ -238,7 +242,7 @@ func newServiceWithIssuer(issuer TokenIssuer) (*Service, *mem.UserRepository) {
 
 func TestService_ChangePassword_VerifyOldPasswordOk(t *testing.T) {
 	stub := &stubTokenIssuer{pair: dto.TokenPair{AccessToken: "new-at", RefreshToken: "new-rt"}}
-	svc, repo := newServiceWithIssuer(stub)
+	svc, repo := newServiceWithIssuer(t, stub)
 	seedUserWithHash(t, repo, "cp-ok", "oldpass", false)
 
 	pair, err := svc.ChangePassword(context.Background(), ChangePasswordInput{
@@ -257,7 +261,7 @@ func TestService_ChangePassword_VerifyOldPasswordOk(t *testing.T) {
 
 func TestService_ChangePassword_VerifyOldPasswordFail(t *testing.T) {
 	stub := &stubTokenIssuer{}
-	svc, repo := newServiceWithIssuer(stub)
+	svc, repo := newServiceWithIssuer(t, stub)
 	seedUserWithHash(t, repo, "cp-bad", "correctpass", false)
 
 	_, err := svc.ChangePassword(context.Background(), ChangePasswordInput{
@@ -275,7 +279,7 @@ func TestService_ChangePassword_VerifyOldPasswordFail(t *testing.T) {
 
 func TestService_ChangePassword_NewPasswordSameAsOld(t *testing.T) {
 	stub := &stubTokenIssuer{}
-	svc, repo := newServiceWithIssuer(stub)
+	svc, repo := newServiceWithIssuer(t, stub)
 	seedUserWithHash(t, repo, "cp-same", "samepass", false)
 
 	_, err := svc.ChangePassword(context.Background(), ChangePasswordInput{
@@ -299,7 +303,7 @@ func TestService_ChangePassword_IssuerAlwaysInvoked(t *testing.T) {
 	// Confirm that a service with a working issuer returns a real pair,
 	// proving the issuer is always invoked (no nil short-circuit path remains).
 	stub := &stubTokenIssuer{pair: dto.TokenPair{AccessToken: "at", RefreshToken: "rt"}}
-	svc, repo := newServiceWithIssuer(stub)
+	svc, repo := newServiceWithIssuer(t, stub)
 	seedUserWithHash(t, repo, "cp-issuer-required", "oldpass", false)
 
 	pair, err := svc.ChangePassword(context.Background(), ChangePasswordInput{
@@ -314,7 +318,7 @@ func TestService_ChangePassword_IssuerAlwaysInvoked(t *testing.T) {
 
 func TestService_ChangePassword_ClearsResetFlag(t *testing.T) {
 	stub := &stubTokenIssuer{pair: dto.TokenPair{}}
-	svc, repo := newServiceWithIssuer(stub)
+	svc, repo := newServiceWithIssuer(t, stub)
 	seedUserWithHash(t, repo, "cp-reset", "oldpass", true)
 
 	_, err := svc.ChangePassword(context.Background(), ChangePasswordInput{
@@ -331,7 +335,7 @@ func TestService_ChangePassword_ClearsResetFlag(t *testing.T) {
 func TestService_ChangePassword_IssuerError(t *testing.T) {
 	issuerErr := errors.New("token sign failure")
 	stub := &stubTokenIssuer{err: issuerErr}
-	svc, repo := newServiceWithIssuer(stub)
+	svc, repo := newServiceWithIssuer(t, stub)
 	seedUserWithHash(t, repo, "cp-issuer-err", "oldpass", false)
 
 	_, err := svc.ChangePassword(context.Background(), ChangePasswordInput{
@@ -349,7 +353,7 @@ func TestService_ChangePassword_IssuerError(t *testing.T) {
 // The freshly issued replacement pair is not itself revoked.
 func TestService_ChangePassword_RevokesPriorSessions(t *testing.T) {
 	userRepo := mem.NewUserRepository()
-	sessionRepo := mem.NewSessionRepository(clock.Real())
+	sessionRepo := testutil.RealSessionRepo(t)
 	stub := &stubTokenIssuer{pair: dto.TokenPair{AccessToken: "new-at", SessionID: "sess-new"}}
 	svc, err := NewService(userRepo, sessionRepo, newIdentityRefreshStore(), slog.Default(),
 		WithTokenIssuer(stub), WithClock(clock.Real()))
@@ -380,12 +384,12 @@ func TestService_ChangePassword_RevokesPriorSessions(t *testing.T) {
 	}
 }
 
-// revokeFailingSessionRepo wraps mem.SessionRepository and fails
+// revokeFailingSessionRepo wraps ports.SessionRepository and fails
 // RevokeByUserID with a fixed error — exercises the F10 transactional
 // boundary: RevokeByUserID failure must abort ChangePassword before any new
 // token is issued.
 type revokeFailingSessionRepo struct {
-	*mem.SessionRepository
+	ports.SessionRepository
 	err error
 }
 
@@ -429,7 +433,7 @@ func (s *snapshotTxRunner) RunInTx(ctx context.Context, fn func(ctx context.Cont
 func TestService_ChangePassword_RevokeFailureAbortsAndNoToken(t *testing.T) {
 	userRepo := mem.NewUserRepository()
 	sessionRepo := &revokeFailingSessionRepo{
-		SessionRepository: mem.NewSessionRepository(clock.Real()),
+		SessionRepository: testutil.RealSessionRepo(t),
 		err:               errors.New("transient DB error"),
 	}
 	issuerCalled := false
@@ -484,7 +488,7 @@ func (r *recordingTokenIssuer) IssueForUser(ctx context.Context, userID string) 
 // ---------------------------------------------------------------------------
 
 func TestService_Create_RequirePasswordResetTrue_UserMarked(t *testing.T) {
-	svc := newTestService()
+	svc := newTestService(t)
 	user, err := svc.Create(adminCtxForService(), CreateInput{
 		Username:             "req-reset",
 		Email:                "r@r.com",
@@ -496,7 +500,7 @@ func TestService_Create_RequirePasswordResetTrue_UserMarked(t *testing.T) {
 }
 
 func TestService_Create_DefaultFalse(t *testing.T) {
-	svc := newTestService()
+	svc := newTestService(t)
 	user, err := svc.Create(adminCtxForService(), CreateInput{
 		Username: "no-reset",
 		Email:    "n@n.com",
@@ -511,7 +515,7 @@ func TestService_Create_DefaultFalse(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestService_Update_SetRequirePasswordResetTrue(t *testing.T) {
-	svc, repo := newServiceWithIssuer(nil)
+	svc, repo := newServiceWithIssuer(t, nil)
 	seedUserWithHash(t, repo, "upd-flag-true", "pass", false)
 
 	flagTrue := true
@@ -524,7 +528,7 @@ func TestService_Update_SetRequirePasswordResetTrue(t *testing.T) {
 }
 
 func TestService_Update_ClearRequirePasswordReset(t *testing.T) {
-	svc, repo := newServiceWithIssuer(nil)
+	svc, repo := newServiceWithIssuer(t, nil)
 	seedUserWithHash(t, repo, "upd-flag-clear", "pass", true) // starts with flag=true
 
 	flagFalse := false
@@ -537,7 +541,7 @@ func TestService_Update_ClearRequirePasswordReset(t *testing.T) {
 }
 
 func TestService_Update_OmittedFieldNoChange(t *testing.T) {
-	svc, repo := newServiceWithIssuer(nil)
+	svc, repo := newServiceWithIssuer(t, nil)
 	seedUserWithHash(t, repo, "upd-flag-omit", "pass", true) // starts with flag=true
 
 	// Update only email, leave RequirePasswordReset nil → no change.
@@ -564,7 +568,7 @@ func (f failingPublisher) Close(_ context.Context) error                       {
 // path was wrapped in a v1 envelope (P1-14 follow-up).
 func TestService_Create_PublishError_DoesNotFailCreate(t *testing.T) {
 	userRepo := mem.NewUserRepository()
-	sessionRepo := mem.NewSessionRepository(clock.Real())
+	sessionRepo := testutil.RealSessionRepo(t)
 	fp := failingPublisher{err: errors.New("broker unavailable")}
 	emitter, err := outbox.NewDirectEmitter(
 		fp, outbox.DirectPublishFailOpen, metrics.NopProvider{}, clock.Real(), "accesscore",
@@ -648,7 +652,7 @@ func newAtomicitySvc(t *testing.T) (*Service, *observingUserRepo, *recordingTxRu
 	t.Helper()
 	runner := &recordingTxRunner{}
 	repo := &observingUserRepo{UserRepository: mem.NewUserRepository(), runner: runner}
-	svc, err := NewService(repo, mem.NewSessionRepository(clock.Real()), newIdentityRefreshStore(), slog.Default(),
+	svc, err := NewService(repo, testutil.RealSessionRepo(t), newIdentityRefreshStore(), slog.Default(),
 		WithTokenIssuer(minimalStubIssuer),
 		WithTxManager(runner), WithClock(clock.Real()))
 	require.NoError(t, err)
@@ -748,7 +752,7 @@ func TestService_Unlock_UpdateErrorPropagatesAndAbortsBeforeLog(t *testing.T) {
 
 	failRepo := &failingUpdateRepo{UserRepository: innerRepo, updateErr: errors.New("disk full")}
 	runner := &recordingTxRunner{}
-	svc, err := NewService(failRepo, mem.NewSessionRepository(clock.Real()), newIdentityRefreshStore(), slog.Default(),
+	svc, err := NewService(failRepo, testutil.RealSessionRepo(t), newIdentityRefreshStore(), slog.Default(),
 		WithTokenIssuer(minimalStubIssuer),
 		WithTxManager(runner), WithClock(clock.Real()))
 	require.NoError(t, err)
@@ -769,7 +773,7 @@ func TestService_Unlock_UpdateErrorPropagatesAndAbortsBeforeLog(t *testing.T) {
 func TestService_Create_BlankUsername_RejectsBeforeRepoCreate(t *testing.T) {
 	runner := &recordingTxRunner{}
 	repo := &observingUserRepo{UserRepository: mem.NewUserRepository(), runner: runner}
-	svc, err := NewService(repo, mem.NewSessionRepository(clock.Real()), newIdentityRefreshStore(), slog.Default(),
+	svc, err := NewService(repo, testutil.RealSessionRepo(t), newIdentityRefreshStore(), slog.Default(),
 		WithTokenIssuer(minimalStubIssuer),
 		WithTxManager(runner), WithClock(clock.Real()))
 	require.NoError(t, err)
@@ -793,7 +797,7 @@ func TestService_Create_BlankUsername_RejectsBeforeRepoCreate(t *testing.T) {
 func TestService_Create_BlankEmail_RejectsBeforeRepoCreate(t *testing.T) {
 	runner := &recordingTxRunner{}
 	repo := &observingUserRepo{UserRepository: mem.NewUserRepository(), runner: runner}
-	svc, err := NewService(repo, mem.NewSessionRepository(clock.Real()), newIdentityRefreshStore(), slog.Default(),
+	svc, err := NewService(repo, testutil.RealSessionRepo(t), newIdentityRefreshStore(), slog.Default(),
 		WithTokenIssuer(minimalStubIssuer),
 		WithTxManager(runner), WithClock(clock.Real()))
 	require.NoError(t, err)
@@ -820,7 +824,7 @@ func TestService_Create_BlankEmail_RejectsBeforeRepoCreate(t *testing.T) {
 func TestService_Create_BlankPassword_RoutesIdentityInvalidInputCode(t *testing.T) {
 	runner := &recordingTxRunner{}
 	repo := &observingUserRepo{UserRepository: mem.NewUserRepository(), runner: runner}
-	svc, err := NewService(repo, mem.NewSessionRepository(clock.Real()), newIdentityRefreshStore(), slog.Default(),
+	svc, err := NewService(repo, testutil.RealSessionRepo(t), newIdentityRefreshStore(), slog.Default(),
 		WithTokenIssuer(minimalStubIssuer),
 		WithTxManager(runner), WithClock(clock.Real()))
 	require.NoError(t, err)
@@ -845,7 +849,7 @@ func TestService_Create_BlankPassword_RoutesIdentityInvalidInputCode(t *testing.
 // the typed error code (stable contract) and the field-name message
 // (debuggability).
 func TestService_Create_RequireNotBlankShortCircuitsOnFirstField(t *testing.T) {
-	svc := newTestService()
+	svc := newTestService(t)
 	_, err := svc.Create(adminCtxForService(), CreateInput{
 		Username: "", Email: "", Password: "",
 	})
@@ -911,7 +915,7 @@ func TestService_Lock_RefreshRevokeFailureAbortsBeforePublishAndLog(t *testing.T
 	var buf bytes.Buffer
 	logger := slog.New(slog.NewJSONHandler(&buf, nil))
 
-	svc, err := NewService(userRepo, mem.NewSessionRepository(clock.Real()), failRefresh, logger,
+	svc, err := NewService(userRepo, testutil.RealSessionRepo(t), failRefresh, logger,
 		WithEmitter(emitter), WithTokenIssuer(minimalStubIssuer), WithClock(clock.Real()))
 	require.NoError(t, err)
 
@@ -946,12 +950,12 @@ func (c *capturingEmitter) Emit(_ context.Context, entry outbox.Entry) error {
 // TestService_Lock_EmitsTypedPayload asserts that Lock emits exactly one
 // event.user.locked.v1 with a non-empty userId and actorId.
 func TestService_Lock_EmitsTypedPayload(t *testing.T) {
-	svc := newTestService()
+	svc := newTestService(t)
 	user, err := svc.Create(adminCtxForService(), CreateInput{Username: "lock-payload", Email: "lp@e.t", Password: "hash"})
 	require.NoError(t, err)
 
 	cap := &capturingEmitter{}
-	svc2, err := NewService(mem.NewUserRepository(), mem.NewSessionRepository(clock.Real()), newIdentityRefreshStore(), slog.Default(),
+	svc2, err := NewService(mem.NewUserRepository(), testutil.RealSessionRepo(t), newIdentityRefreshStore(), slog.Default(),
 		WithEmitter(cap), WithTokenIssuer(minimalStubIssuer), WithClock(clock.Real()))
 	require.NoError(t, err)
 	// Create user in svc2's own repo.
@@ -976,7 +980,7 @@ func TestService_Lock_EmitsTypedPayload(t *testing.T) {
 // with non-empty userId and actorId.
 func TestService_Update_EmitsTypedPayload(t *testing.T) {
 	cap := &capturingEmitter{}
-	svc, err := NewService(mem.NewUserRepository(), mem.NewSessionRepository(clock.Real()), newIdentityRefreshStore(), slog.Default(),
+	svc, err := NewService(mem.NewUserRepository(), testutil.RealSessionRepo(t), newIdentityRefreshStore(), slog.Default(),
 		WithEmitter(cap), WithTokenIssuer(minimalStubIssuer), WithClock(clock.Real()))
 	require.NoError(t, err)
 
@@ -1001,7 +1005,7 @@ func TestService_Update_EmitsTypedPayload(t *testing.T) {
 // with non-empty userId and actorId.
 func TestService_Delete_EmitsTypedPayload(t *testing.T) {
 	cap := &capturingEmitter{}
-	svc, err := NewService(mem.NewUserRepository(), mem.NewSessionRepository(clock.Real()), newIdentityRefreshStore(), slog.Default(),
+	svc, err := NewService(mem.NewUserRepository(), testutil.RealSessionRepo(t), newIdentityRefreshStore(), slog.Default(),
 		WithEmitter(cap), WithTokenIssuer(minimalStubIssuer), WithClock(clock.Real()))
 	require.NoError(t, err)
 
@@ -1024,7 +1028,7 @@ func TestService_Delete_EmitsTypedPayload(t *testing.T) {
 // with non-empty userId and actorId.
 func TestService_Unlock_EmitsTypedPayload(t *testing.T) {
 	cap := &capturingEmitter{}
-	svc, err := NewService(mem.NewUserRepository(), mem.NewSessionRepository(clock.Real()), newIdentityRefreshStore(), slog.Default(),
+	svc, err := NewService(mem.NewUserRepository(), testutil.RealSessionRepo(t), newIdentityRefreshStore(), slog.Default(),
 		WithEmitter(cap), WithTokenIssuer(minimalStubIssuer), WithClock(clock.Real()))
 	require.NoError(t, err)
 
@@ -1048,7 +1052,7 @@ func TestService_Unlock_EmitsTypedPayload(t *testing.T) {
 // context that carries no auth principal returns ErrAuthUnauthorized.
 // This guards the actorFromContext fail-fast invariant.
 func TestService_Lock_NoActor_ReturnsUnauthorized(t *testing.T) {
-	svc := newTestService()
+	svc := newTestService(t)
 	user, err := svc.Create(adminCtxForService(), CreateInput{Username: "lock-noauth", Email: "na@e.t", Password: "hash"})
 	require.NoError(t, err)
 
@@ -1076,7 +1080,7 @@ func TestService_Lock_PublishFailureAbortsBeforeLog(t *testing.T) {
 	var buf bytes.Buffer
 	logger := slog.New(slog.NewJSONHandler(&buf, nil))
 
-	svc, err := NewService(userRepo, mem.NewSessionRepository(clock.Real()), newIdentityRefreshStore(), logger,
+	svc, err := NewService(userRepo, testutil.RealSessionRepo(t), newIdentityRefreshStore(), logger,
 		WithEmitter(emitter), WithTokenIssuer(minimalStubIssuer), WithClock(clock.Real()))
 	require.NoError(t, err)
 

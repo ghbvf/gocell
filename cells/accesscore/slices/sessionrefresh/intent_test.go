@@ -12,7 +12,6 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/ghbvf/gocell/cells/accesscore/internal/domain"
-	"github.com/ghbvf/gocell/cells/accesscore/internal/mem"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/runtime/auth"
 )
@@ -22,7 +21,7 @@ import (
 // After the opaque-store rewrite, ParseOpaque rejects the JWT (wrong
 // selector/verifier format) → refresh.ErrRejected → ErrAuthRefreshFailed.
 func TestService_Refresh_RejectsAccessIntentToken(t *testing.T) {
-	svc, _ := newTestService()
+	svc, _ := newTestService(t)
 
 	// Issue an ACCESS-intent JWT (wrong for /auth/refresh).
 	bogusAccess, err := testIssuer.Issue(auth.TokenIntentAccess, "usr-att", auth.IssueOptions{
@@ -40,7 +39,7 @@ func TestService_Refresh_RejectsAccessIntentToken(t *testing.T) {
 }
 
 func TestService_Refresh_NewTokensCarryCorrectIntents(t *testing.T) {
-	svc, repo, refreshStore := newTestServiceWithRefreshStore("usr-r1")
+	svc, repo, refreshStore := newTestServiceWithRefreshStore(t, "usr-r1")
 
 	sess, err := domain.NewSession("usr-r1", "access-tok", time.Now().Add(time.Hour), time.Now())
 	require.NoError(t, err)
@@ -66,6 +65,3 @@ func TestService_Refresh_NewTokensCarryCorrectIntents(t *testing.T) {
 	_, err = verifier.VerifyIntent(context.Background(), pair.RefreshToken, auth.TokenIntentAccess)
 	require.Error(t, err, "opaque wire token must not verify as access JWT")
 }
-
-// mem import above is only used by domain.NewSession setup.
-var _ = (*mem.SessionRepository)(nil)

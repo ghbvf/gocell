@@ -15,7 +15,8 @@ import (
 	"github.com/ghbvf/gocell/cells/accesscore/internal/domain"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/dto"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/mem"
-	"github.com/ghbvf/gocell/kernel/clock"
+	"github.com/ghbvf/gocell/cells/accesscore/internal/ports"
+	"github.com/ghbvf/gocell/cells/accesscore/internal/testutil"
 	"github.com/ghbvf/gocell/kernel/outbox"
 )
 
@@ -43,9 +44,9 @@ func (s *stubTxRunner) RunInTx(_ context.Context, fn func(context.Context) error
 	return fn(context.Background())
 }
 
-// trackingSessionRepo wraps mem.SessionRepository and counts RevokeByUserID calls.
+// trackingSessionRepo wraps ports.SessionRepository and counts RevokeByUserID calls.
 type trackingSessionRepo struct {
-	*mem.SessionRepository
+	ports.SessionRepository
 	revokeCalls int
 }
 
@@ -65,7 +66,7 @@ func newDurableTestService(t testing.TB, ow *stubOutboxWriter, tx *stubTxRunner)
 			{Resource: "*", Action: "*"},
 		},
 	})
-	sessionRepo := &trackingSessionRepo{SessionRepository: mem.NewSessionRepository(clock.Real())}
+	sessionRepo := &trackingSessionRepo{SessionRepository: testutil.RealSessionRepo(t)}
 	svc := NewService(roleRepo, sessionRepo, slog.Default(),
 		WithEmitter(testoutbox.MustEmitter(t, ow)),
 		WithTxManager(tx),
@@ -218,7 +219,7 @@ func TestService_Assign_Demo_RepeatIsNoop(t *testing.T) {
 			{Resource: "*", Action: "*"},
 		},
 	})
-	sessionRepo := &trackingSessionRepo{SessionRepository: mem.NewSessionRepository(clock.Real())}
+	sessionRepo := &trackingSessionRepo{SessionRepository: testutil.RealSessionRepo(t)}
 	svc := NewService(roleRepo, sessionRepo, slog.Default()) // no opts = demo mode
 
 	require.NoError(t, svc.Assign(context.Background(), "alice", "admin"))

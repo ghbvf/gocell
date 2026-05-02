@@ -88,23 +88,6 @@ type testListeners struct {
 	health   net.Listener
 }
 
-// newTestListeners creates three pre-bound listeners and returns bootstrap.Option
-// values wiring them to PrimaryListener, InternalListener, HealthListener.
-func newTestListeners(t *testing.T) (testListeners, []Option) {
-	t.Helper()
-	tl := testListeners{
-		primary:  newLocalListener(t),
-		internal: newLocalListener(t),
-		health:   newLocalListener(t),
-	}
-	opts := []Option{
-		WithListener(cell.PrimaryListener, tl.primary.Addr().String(), []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(tl.primary)),
-		WithListener(cell.InternalListener, tl.internal.Addr().String(), []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(tl.internal)),
-		WithListener(cell.HealthListener, tl.health.Addr().String(), []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(tl.health)),
-	}
-	return tl, opts
-}
-
 // waitForHealthy polls /healthz on the health listener until it returns 200.
 // In the PR-A14b model, /healthz lives on the HealthListener, not the primary.
 func waitForHealthy(t *testing.T, addr string) {
@@ -478,13 +461,20 @@ func TestBootstrap_MissingSubscriber_WithEventRegistrar_Fails(t *testing.T) {
 	require.NoError(t, asm.Register(ec))
 
 	eb := eventbus.New(eventbus.WithClock(clock.Real()))
-	_, lnOpts := newTestListeners(t)
-	b := New(append([]Option{
+	tl := testListeners{
+		primary:  newLocalListener(t),
+		internal: newLocalListener(t),
+		health:   newLocalListener(t),
+	}
+	b := New(
 		WithClock(clock.Real()),
 		WithAssembly(asm),
 		WithPublisher(eb),
 		// WithSubscriber intentionally omitted.
-	}, lnOpts...)...)
+		WithListener(cell.PrimaryListener, tl.primary.Addr().String(), []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(tl.primary)),
+		WithListener(cell.InternalListener, tl.internal.Addr().String(), []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(tl.internal)),
+		WithListener(cell.HealthListener, tl.health.Addr().String(), []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(tl.health)),
+	)
 
 	err := b.Run(context.Background())
 	require.Error(t, err)

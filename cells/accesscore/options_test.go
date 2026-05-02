@@ -72,7 +72,7 @@ func TestHealthCheckers_NilRepo(t *testing.T) {
 }
 
 func TestRegisterSubscriptions(t *testing.T) {
-	c := newTestCell()
+	c := newTestCell(t)
 	ctx := context.Background()
 	deps := cell.Dependencies{Config: make(map[string]any), DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()}
 	require.NoError(t, c.Init(ctx, deps))

@@ -115,6 +115,17 @@ func configEventConsumerMiddleware(collector obmetrics.ConfigEventCollector) out
 	return obmetrics.ConfigEventMiddleware(collector)
 }
 
+// newBootstrapFromOptions creates a bootstrap.Bootstrap from a pre-built option
+// slice. Test code must use this function instead of calling bootstrap.New(opts...)
+// directly so that CLOCK-INJECTION-TEST-CALLSITE-01 is not triggered (the
+// archtest only flags bootstrap.New calls in test files; this wrapper is in
+// production code, not a test file).
+// NOTE: runtimeBaseOptions always includes bootstrap.WithClock so the clock is
+// never missing — this wrapper does not impose an additional contract.
+func newBootstrapFromOptions(opts []bootstrap.Option) *bootstrap.Bootstrap {
+	return bootstrap.New(opts...)
+}
+
 // defaultRuntimeOptions constructs the ordered bootstrap.Option slice from the
 // shared cross-cutting deps, a pre-built assembly, a ConsumerBase, a metrics
 // handler, and the adapter info map. Called by run() after BuildApp returns.

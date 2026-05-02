@@ -28,7 +28,7 @@ func (failPublisher) Close(_ context.Context) error { return nil }
 
 func newTestService() (*Service, *mem.DeviceRepository) {
 	repo := mem.NewDeviceRepository()
-	return NewService(repo, slog.Default()), repo
+	return NewService(repo, slog.Default(), WithClock(clock.Real())), repo
 }
 
 func TestService_Register(t *testing.T) {
@@ -95,7 +95,7 @@ func TestService_Register_PublishFails_StillReturnsDevice(t *testing.T) {
 		failPublisher{}, outbox.DirectPublishFailOpen,
 		metrics.NopProvider{}, clock.Real(), "devicecell", outbox.WithLogger(slog.Default()))
 	require.NoError(t, err)
-	svc := NewService(repo, slog.Default(), WithEmitter(emitter))
+	svc := NewService(repo, slog.Default(), WithEmitter(emitter), WithClock(clock.Real()))
 
 	dev, err := svc.Register(context.Background(), "sensor-c")
 	require.NoError(t, err, "publish failure should not propagate as error")
@@ -109,7 +109,7 @@ func TestService_Register_PublishFails_FailClosedReturnsError(t *testing.T) {
 		failPublisher{}, outbox.DirectPublishFailClosed,
 		metrics.NopProvider{}, clock.Real(), "devicecell", outbox.WithLogger(slog.Default()))
 	require.NoError(t, err)
-	svc := NewService(repo, slog.Default(), WithEmitter(emitter))
+	svc := NewService(repo, slog.Default(), WithEmitter(emitter), WithClock(clock.Real()))
 
 	dev, err := svc.Register(context.Background(), "sensor-c")
 	require.Error(t, err, "fail-closed publish failure must propagate")
@@ -126,7 +126,7 @@ func TestService_Register_FailOpenDoesNotLogPublished(t *testing.T) {
 		failPublisher{}, outbox.DirectPublishFailOpen,
 		metrics.NopProvider{}, clock.Real(), "devicecell", outbox.WithLogger(logger))
 	require.NoError(t, err)
-	svc := NewService(repo, logger, WithEmitter(emitter))
+	svc := NewService(repo, logger, WithEmitter(emitter), WithClock(clock.Real()))
 
 	dev, err := svc.Register(context.Background(), "sensor-log")
 	require.NoError(t, err)

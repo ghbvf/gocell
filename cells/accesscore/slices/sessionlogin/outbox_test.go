@@ -15,6 +15,8 @@ import (
 	"github.com/ghbvf/gocell/cells/accesscore/internal/domain"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/dto"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/mem"
+	"github.com/ghbvf/gocell/cells/accesscore/internal/ports"
+	"github.com/ghbvf/gocell/cells/accesscore/internal/testutil"
 	"github.com/ghbvf/gocell/cells/internal/testoutbox"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/outbox"
@@ -60,7 +62,7 @@ func seedUserDirect(repo *mem.UserRepository, username, passwordHash string) {
 func TestService_WithEmitter(t *testing.T) {
 	userRepo := mem.NewUserRepository()
 	ow := &stubOutboxWriter{}
-	svc := MustNewService(userRepo, mem.NewSessionRepository(clock.Real()), mem.NewRoleRepository(),
+	svc := MustNewService(userRepo, testutil.RealSessionRepo(t), mem.NewRoleRepository(),
 		newOutboxRefreshStore(), testIssuer, slog.Default(), WithEmitter(testoutbox.MustEmitter(t, ow)), WithClock(clock.Real()))
 
 	hash, _ := bcrypt.GenerateFromPassword(testCredential, bcrypt.MinCost)
@@ -76,7 +78,7 @@ func TestService_WithEmitter(t *testing.T) {
 func TestService_WithTxManager(t *testing.T) {
 	userRepo := mem.NewUserRepository()
 	tx := &stubTxRunner{}
-	svc := MustNewService(userRepo, mem.NewSessionRepository(clock.Real()), mem.NewRoleRepository(),
+	svc := MustNewService(userRepo, testutil.RealSessionRepo(t), mem.NewRoleRepository(),
 		newOutboxRefreshStore(), testIssuer, slog.Default(), WithTxManager(tx), WithClock(clock.Real()))
 
 	hash, _ := bcrypt.GenerateFromPassword(testCredential, bcrypt.MinCost)
@@ -92,9 +94,9 @@ type failingEmitter struct{ err error }
 
 func (f *failingEmitter) Emit(_ context.Context, _ outbox.Entry) error { return f.err }
 
-// trackingOutboxSessionRepo wraps mem.SessionRepository and records Delete calls.
+// trackingOutboxSessionRepo wraps ports.SessionRepository and records Delete calls.
 type trackingOutboxSessionRepo struct {
-	*mem.SessionRepository
+	ports.SessionRepository
 	deleted []string
 }
 
@@ -109,7 +111,7 @@ func (r *trackingOutboxSessionRepo) Delete(ctx context.Context, id string) error
 // atomicity; explicit cleanup would double-delete in a real durable setup.
 func TestPersistSessionWithRefresh_DurableTx_EmitFails_NoExplicitCleanup(t *testing.T) {
 	userRepo := mem.NewUserRepository()
-	sessionRepo := &trackingOutboxSessionRepo{SessionRepository: mem.NewSessionRepository(clock.Real())}
+	sessionRepo := &trackingOutboxSessionRepo{SessionRepository: testutil.RealSessionRepo(t)}
 	roleRepo := mem.NewRoleRepository()
 
 	emitter := &failingEmitter{err: fmt.Errorf("broker down")}
@@ -138,7 +140,7 @@ func TestPersistSessionWithRefresh_DurableTx_EmitFails_NoExplicitCleanup(t *test
 // This is the mirror case of the durable-tx test above.
 func TestPersistSessionWithRefresh_NoopTxRunner_EmitFails_CleanupRuns(t *testing.T) {
 	userRepo := mem.NewUserRepository()
-	sessionRepo := &trackingOutboxSessionRepo{SessionRepository: mem.NewSessionRepository(clock.Real())}
+	sessionRepo := &trackingOutboxSessionRepo{SessionRepository: testutil.RealSessionRepo(t)}
 	roleRepo := mem.NewRoleRepository()
 
 	emitter := &failingEmitter{err: fmt.Errorf("broker down")}

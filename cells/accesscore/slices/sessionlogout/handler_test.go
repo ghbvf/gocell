@@ -13,10 +13,8 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/ghbvf/gocell/cells/accesscore/internal/domain"
-	"github.com/ghbvf/gocell/cells/accesscore/internal/mem"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/testutil"
 	"github.com/ghbvf/gocell/kernel/cell/celltest"
-	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/runtime/auth"
@@ -37,8 +35,9 @@ func newHandlerLogoutRefreshStore() refresh.Store {
 
 // setup wires the slice handler onto a celltest mux via RegisterRoutes — the
 // same code path cell_routes.go takes in production.
-func setup() http.Handler {
-	sessionRepo := mem.NewSessionRepository(clock.Real())
+func setup(t testing.TB) http.Handler {
+	t.Helper()
+	sessionRepo := testutil.RealSessionRepo(t)
 	sess, _ := domain.NewSession(testutil.TestID("usr-1"), "access-tok", time.Now().Add(time.Hour), time.Now())
 	sess.ID = testutil.TestID("sess-1")
 	_ = sessionRepo.Create(context.Background(), sess)
@@ -110,7 +109,7 @@ func TestHandleLogout(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			h := setup()
+			h := setup(t)
 			w := httptest.NewRecorder()
 			var ctx context.Context
 			switch {
@@ -149,7 +148,7 @@ func TestHandleLogout(t *testing.T) {
 // an empty id unreachable via a real HTTP request. The service-level test
 // ensures the validation message uses the contract field name "id".
 func TestHandler_Logout_BlankID(t *testing.T) {
-	svc, repo := newTestService()
+	svc, repo := newTestService(t)
 	seedSession(repo, "sess-1", "usr-1")
 
 	err := svc.Logout(context.Background(), "", "usr-1")

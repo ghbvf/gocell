@@ -11,8 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/ghbvf/gocell/cells/accesscore/internal/domain"
-	"github.com/ghbvf/gocell/cells/accesscore/internal/mem"
-	"github.com/ghbvf/gocell/kernel/clock"
+	"github.com/ghbvf/gocell/cells/accesscore/internal/testutil"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/runtime/auth/refresh"
 	refreshmem "github.com/ghbvf/gocell/runtime/auth/refresh/memstore"
@@ -31,7 +30,7 @@ func newCascadeStore(t *testing.T) refresh.Store {
 
 func TestService_Logout_RevokesRefreshChain(t *testing.T) {
 	ctx := context.Background()
-	sessionRepo := mem.NewSessionRepository(clock.Real())
+	sessionRepo := testutil.RealSessionRepo(t)
 	refreshStore := newCascadeStore(t)
 
 	sessionID := "sess-logout-1"
@@ -59,7 +58,7 @@ func TestService_Logout_RevokesRefreshChain(t *testing.T) {
 
 func TestService_LogoutUser_RevokesAllRefreshChains(t *testing.T) {
 	ctx := context.Background()
-	sessionRepo := mem.NewSessionRepository(clock.Real())
+	sessionRepo := testutil.RealSessionRepo(t)
 	refreshStore := newCascadeStore(t)
 
 	userID := "user-multi-logout"

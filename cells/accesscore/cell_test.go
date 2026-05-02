@@ -14,6 +14,7 @@ import (
 
 	"github.com/ghbvf/gocell/cells/accesscore/internal/domain"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/mem"
+	"github.com/ghbvf/gocell/cells/accesscore/internal/testutil"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -89,10 +90,11 @@ func newTestRefreshStore() refresh.Store {
 	return refreshmem.MustNew(refresh.Policy{ReuseInterval: testtime.D2s, MaxAge: time.Hour}, clock, nil)
 }
 
-func newTestCell() *AccessCore {
+func newTestCell(t testing.TB) *AccessCore {
+	t.Helper()
 	return NewAccessCore(
 		WithUserRepository(mem.NewUserRepository()),
-		WithSessionRepository(mem.NewSessionRepository(clock.Real())),
+		WithSessionRepository(testutil.RealSessionRepo(t)),
 		WithRoleRepository(mem.NewRoleRepository()),
 		WithOutboxDeps(eventbus.New(eventbus.WithClock(clock.Real())), nil),
 		WithJWTIssuer(testIssuer),
@@ -104,10 +106,11 @@ func newTestCell() *AccessCore {
 	)
 }
 
-func newDurableTestCell() *AccessCore {
+func newDurableTestCell(t testing.TB) *AccessCore {
+	t.Helper()
 	return NewAccessCore(
 		WithUserRepository(mem.NewUserRepository()),
-		WithSessionRepository(mem.NewSessionRepository(clock.Real())),
+		WithSessionRepository(testutil.RealSessionRepo(t)),
 		WithRoleRepository(mem.NewRoleRepository()),
 		WithOutboxDeps(eventbus.New(eventbus.WithClock(clock.Real())), nil),
 		WithJWTIssuer(testIssuer),
@@ -122,7 +125,7 @@ func newDurableTestCell() *AccessCore {
 func TestAccessCore_Init_RequiresJWTIssuer(t *testing.T) {
 	c := NewAccessCore(
 		WithUserRepository(mem.NewUserRepository()),
-		WithSessionRepository(mem.NewSessionRepository(clock.Real())),
+		WithSessionRepository(testutil.RealSessionRepo(t)),
 		WithRoleRepository(mem.NewRoleRepository()),
 		WithOutboxDeps(eventbus.New(eventbus.WithClock(clock.Real())), nil),
 		WithJWTVerifier(testVerifier), // issuer missing
@@ -140,7 +143,7 @@ func TestAccessCore_Init_RequiresJWTIssuer(t *testing.T) {
 func TestAccessCore_Init_RequiresJWTVerifier(t *testing.T) {
 	c := NewAccessCore(
 		WithUserRepository(mem.NewUserRepository()),
-		WithSessionRepository(mem.NewSessionRepository(clock.Real())),
+		WithSessionRepository(testutil.RealSessionRepo(t)),
 		WithRoleRepository(mem.NewRoleRepository()),
 		WithOutboxDeps(eventbus.New(eventbus.WithClock(clock.Real())), nil),
 		WithJWTIssuer(testIssuer), // verifier missing
@@ -177,7 +180,7 @@ func TestAccessCore_Init_RequiresRepositoriesBeforeSliceConstruction(t *testing.
 func TestInit_DemoMode_OutboxWithoutTx_Fails(t *testing.T) {
 	c := NewAccessCore(
 		WithUserRepository(mem.NewUserRepository()),
-		WithSessionRepository(mem.NewSessionRepository(clock.Real())),
+		WithSessionRepository(testutil.RealSessionRepo(t)),
 		WithRoleRepository(mem.NewRoleRepository()),
 		WithOutboxDeps(eventbus.New(eventbus.WithClock(clock.Real())), nil),
 		WithJWTIssuer(testIssuer),
@@ -194,7 +197,7 @@ func TestInit_DemoMode_OutboxWithoutTx_Fails(t *testing.T) {
 func TestInit_DemoMode_TxWithoutOutbox_Fails(t *testing.T) {
 	c := NewAccessCore(
 		WithUserRepository(mem.NewUserRepository()),
-		WithSessionRepository(mem.NewSessionRepository(clock.Real())),
+		WithSessionRepository(testutil.RealSessionRepo(t)),
 		WithRoleRepository(mem.NewRoleRepository()),
 		WithOutboxDeps(eventbus.New(eventbus.WithClock(clock.Real())), nil),
 		WithJWTIssuer(testIssuer),
@@ -210,7 +213,7 @@ func TestInit_DemoMode_TxWithoutOutbox_Fails(t *testing.T) {
 
 func TestInit_TxRunnerXOR_BothPresent(t *testing.T) {
 	// Both outboxWriter and txRunner present → should succeed
-	c := newTestCell() // newTestCell includes both
+	c := newTestCell(t) // newTestCell includes both
 	deps := cell.Dependencies{Config: make(map[string]any), DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()}
 	require.NoError(t, c.Init(context.Background(), deps))
 }
@@ -282,7 +285,7 @@ func TestInitRefreshGC_DisabledAndConfigValidation(t *testing.T) {
 }
 
 func TestAccessCore_InitWithRefreshGCRegistersLifecycleHook(t *testing.T) {
-	c := newTestCell()
+	c := newTestCell(t)
 	WithRefreshGC(time.Hour, time.Hour)(c)
 
 	require.NoError(t, c.Init(context.Background(), cell.Dependencies{
@@ -378,7 +381,7 @@ func TestInit_WithEmitter_DurableRequiresDurableEmitter(t *testing.T) {
 }
 
 func TestAccessCore_Lifecycle(t *testing.T) {
-	c := newTestCell()
+	c := newTestCell(t)
 	ctx := context.Background()
 	deps := cell.Dependencies{
 		Config:         make(map[string]any),
@@ -402,14 +405,14 @@ func TestAccessCore_Lifecycle(t *testing.T) {
 }
 
 func TestAccessCore_Metadata(t *testing.T) {
-	c := newTestCell()
+	c := newTestCell(t)
 	assert.Equal(t, "accesscore", c.ID())
 	assert.Equal(t, cell.CellTypeCore, c.Type())
 	assert.Equal(t, cell.L2, c.ConsistencyLevel())
 }
 
 func TestAccessCore_Startup(t *testing.T) {
-	c := newTestCell()
+	c := newTestCell(t)
 	ctx := context.Background()
 	deps := cell.Dependencies{
 		Config:         make(map[string]any),
@@ -423,7 +426,7 @@ func TestAccessCore_Startup(t *testing.T) {
 }
 
 func TestAccessCore_TokenVerifierAndAuthorizer(t *testing.T) {
-	c := newTestCell()
+	c := newTestCell(t)
 	ctx := context.Background()
 	deps := cell.Dependencies{
 		Config:         make(map[string]any),
@@ -437,7 +440,7 @@ func TestAccessCore_TokenVerifierAndAuthorizer(t *testing.T) {
 }
 
 func TestAccessCore_Init_DurableMode_UsesProdRBACRunMode(t *testing.T) {
-	c := newDurableTestCell()
+	c := newDurableTestCell(t)
 	ctx := context.Background()
 	deps := cell.Dependencies{
 		Config:         make(map[string]any),
@@ -464,7 +467,7 @@ func TestAccessCore_Init_DurableMode_UsesProdRBACRunMode(t *testing.T) {
 }
 
 func TestAccessCore_RouteGroups(t *testing.T) {
-	c := newTestCell()
+	c := newTestCell(t)
 	ctx := context.Background()
 	deps := cell.Dependencies{
 		Config:         make(map[string]any),
@@ -519,7 +522,7 @@ type cellTestRouters struct {
 // routers populated. FinalizeAuth is called on each router.
 func initCellWithRouters(t *testing.T) *cellTestRouters {
 	t.Helper()
-	c := newTestCell()
+	c := newTestCell(t)
 	ctx := context.Background()
 	deps := cell.Dependencies{
 		Config:         make(map[string]any),
@@ -660,7 +663,7 @@ func TestAccessCore_RouteUserGet(t *testing.T) {
 func TestAccessCore_RouteRoleAssign(t *testing.T) {
 	r := initCellWithRouters(t).Internal
 
-	// Role "admin" is not seeded in newTestCell() → domain-level 404 (role not found).
+	// Role "admin" is not seeded in newTestCell(t) → domain-level 404 (role not found).
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/internal/v1/access/roles/assign",
 		strings.NewReader(`{"userId":"usr-1","roleId":"admin"}`))
@@ -761,7 +764,7 @@ func TestAccessCore_RouteRolesList(t *testing.T) {
 func TestAccessCore_SessionRevocation_E2E(t *testing.T) {
 	// Use separate repos so we can manipulate session state.
 	userRepo := mem.NewUserRepository()
-	sessionRepo := mem.NewSessionRepository(clock.Real())
+	sessionRepo := testutil.RealSessionRepo(t)
 	roleRepo := mem.NewRoleRepository()
 
 	c := NewAccessCore(
@@ -844,7 +847,7 @@ func TestAccessCore_SessionRevocation_E2E(t *testing.T) {
 // chain: login → refresh → validate refreshed token → revoke → verify rejected.
 func TestAccessCore_RefreshTokenRevocation_E2E(t *testing.T) {
 	userRepo := mem.NewUserRepository()
-	sessionRepo := mem.NewSessionRepository(clock.Real())
+	sessionRepo := testutil.RealSessionRepo(t)
 	roleRepo := mem.NewRoleRepository()
 
 	c := NewAccessCore(
@@ -979,7 +982,7 @@ func TestAccessCore_DirectPrefill_AdminRoleAndUser(t *testing.T) {
 
 	c := NewAccessCore(
 		WithUserRepository(userRepo),
-		WithSessionRepository(mem.NewSessionRepository(clock.Real())),
+		WithSessionRepository(testutil.RealSessionRepo(t)),
 		WithRoleRepository(roleRepo),
 		WithOutboxDeps(eventbus.New(eventbus.WithClock(clock.Real())), nil),
 		WithJWTIssuer(testIssuer),

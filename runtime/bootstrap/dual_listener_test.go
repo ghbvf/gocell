@@ -301,16 +301,15 @@ func TestDualListener_EqualAddrsBindFails(t *testing.T) {
 func TestDualListener_Phase0RejectsEmptyAddr(t *testing.T) {
 	cases := []struct {
 		name string
-		opts []Option
+		l    Option
 	}{
-		{"empty_primary", []Option{WithListener(cell.PrimaryListener, "", []cell.ListenerAuth{cell.AuthNone{}})}},
-		{"empty_internal", []Option{WithListener(cell.InternalListener, "", []cell.ListenerAuth{cell.AuthNone{}})}},
+		{"empty_primary", WithListener(cell.PrimaryListener, "", []cell.ListenerAuth{cell.AuthNone{}})},
+		{"empty_internal", WithListener(cell.InternalListener, "", []cell.ListenerAuth{cell.AuthNone{}})},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			asm := assembly.New(assembly.Config{ID: "empty-addr-" + tc.name, DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
-			opts := append([]Option{WithClock(clock.Real()), WithAssembly(asm)}, tc.opts...)
-			b := New(opts...)
+			b := New(WithClock(clock.Real()), WithAssembly(asm), tc.l)
 
 			ctx, cancel := context.WithTimeout(context.Background(), testtime.D2s)
 			defer cancel()

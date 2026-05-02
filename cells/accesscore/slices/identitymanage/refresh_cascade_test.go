@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/ghbvf/gocell/cells/accesscore/internal/mem"
+	"github.com/ghbvf/gocell/cells/accesscore/internal/testutil"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/runtime/auth"
@@ -34,7 +35,7 @@ func newCascadeStore(t *testing.T) refresh.Store {
 func TestService_Lock_RevokesRefreshChain(t *testing.T) {
 	ctx := auth.TestContext("test-admin", []string{"admin"})
 	userRepo := mem.NewUserRepository()
-	sessionRepo := mem.NewSessionRepository(clock.Real())
+	sessionRepo := testutil.RealSessionRepo(t)
 	refreshStore := newCascadeStore(t)
 
 	svc, err := NewService(userRepo, sessionRepo, refreshStore, slog.Default(),
@@ -65,7 +66,7 @@ func TestService_Lock_RevokesRefreshChain(t *testing.T) {
 
 func TestService_ChangePassword_RevokesRefreshChain(t *testing.T) {
 	ctx := context.Background()
-	sessionRepo := mem.NewSessionRepository(clock.Real())
+	sessionRepo := testutil.RealSessionRepo(t)
 	userRepo := mem.NewUserRepository()
 	refreshStore := newCascadeStore(t)
 
@@ -104,7 +105,7 @@ func TestService_ChangePassword_RevokesRefreshChain(t *testing.T) {
 func TestService_Delete_RevokesRefreshChain(t *testing.T) {
 	ctx := auth.TestContext("test-admin", []string{"admin"})
 	userRepo := mem.NewUserRepository()
-	sessionRepo := mem.NewSessionRepository(clock.Real())
+	sessionRepo := testutil.RealSessionRepo(t)
 	refreshStore := newCascadeStore(t)
 
 	svc, err := NewService(userRepo, sessionRepo, refreshStore, slog.Default(),

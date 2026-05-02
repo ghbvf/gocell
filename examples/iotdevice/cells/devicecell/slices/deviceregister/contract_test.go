@@ -45,7 +45,7 @@ func newContractHandler() (http.Handler, *recordingPublisher) {
 	if err != nil {
 		panic(err)
 	}
-	svc := NewService(repo, slog.Default(), WithEmitter(emitter))
+	svc := NewService(repo, slog.Default(), WithEmitter(emitter), WithClock(clock.Real()))
 	mux := http.NewServeMux()
 	mux.Handle("POST /api/v1/devices", http.HandlerFunc(NewHandler(svc).HandleRegister))
 	return mux, pub

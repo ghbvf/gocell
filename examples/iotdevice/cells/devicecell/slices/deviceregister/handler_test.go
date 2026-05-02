@@ -13,6 +13,7 @@ import (
 
 	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/domain"
 	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/mem"
+	"github.com/ghbvf/gocell/kernel/clock"
 )
 
 func TestToDeviceRegisterResponse_NilInput(t *testing.T) {
@@ -39,7 +40,7 @@ func TestDeviceRegisterResponse_Fields(t *testing.T) {
 
 func setupRegisterHandler() *Handler {
 	repo := mem.NewDeviceRepository()
-	svc := NewService(repo, slog.Default())
+	svc := NewService(repo, slog.Default(), WithClock(clock.Real()))
 	return NewHandler(svc)
 }
 

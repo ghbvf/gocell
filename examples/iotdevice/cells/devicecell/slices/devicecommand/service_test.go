@@ -14,6 +14,7 @@ import (
 
 	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/domain"
 	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/mem"
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/command"
 	"github.com/ghbvf/gocell/kernel/command/commandtest"
 	"github.com/ghbvf/gocell/pkg/errcode"
@@ -38,7 +39,7 @@ func enqueueTestCmd(ctx context.Context, q *commandtest.InMemQueue) error {
 func TestNewService_NilCodec_ReturnsError(t *testing.T) {
 	devRepo := mem.NewDeviceRepository()
 	q := commandtest.NewInMemQueue()
-	svc, err := NewService(q, devRepo, nil, slog.Default(), query.RunModeProd)
+	svc, err := NewService(q, devRepo, nil, slog.Default(), query.RunModeProd, WithClock(clock.Real()))
 	require.Error(t, err)
 	assert.Nil(t, svc)
 	var ecErr *errcode.Error
@@ -49,7 +50,7 @@ func TestNewService_NilCodec_ReturnsError(t *testing.T) {
 func newTestService() (*Service, *mem.DeviceRepository, *commandtest.InMemQueue) {
 	devRepo := mem.NewDeviceRepository()
 	q := commandtest.NewInMemQueue()
-	svc, err := NewService(q, devRepo, testCodec(), slog.Default(), query.RunModeProd)
+	svc, err := NewService(q, devRepo, testCodec(), slog.Default(), query.RunModeProd, WithClock(clock.Real()))
 	if err != nil {
 		panic(err)
 	}

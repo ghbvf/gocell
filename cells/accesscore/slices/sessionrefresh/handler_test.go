@@ -16,6 +16,7 @@ import (
 	"github.com/ghbvf/gocell/cells/accesscore/internal/domain"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/dto"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/mem"
+	"github.com/ghbvf/gocell/cells/accesscore/internal/testutil"
 	"github.com/ghbvf/gocell/kernel/cell/celltest"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/errcode"
@@ -28,8 +29,9 @@ const refreshPath = "/api/v1/access/sessions/refresh"
 
 // setup wires the slice handler onto a celltest mux via RegisterRoutes — the
 // same code path cell_routes.go takes in production.
-func setup() (http.Handler, string) {
-	sessionRepo := mem.NewSessionRepository(clock.Real())
+func setup(t testing.TB) (http.Handler, string) {
+	t.Helper()
+	sessionRepo := testutil.RealSessionRepo(t)
 	refreshStore := newTestRefreshStore()
 
 	sess, _ := domain.NewSession("usr-1", "access-tok", time.Now().Add(time.Hour), time.Now())
@@ -119,7 +121,7 @@ func TestTokenPairResponse_Fields(t *testing.T) {
 }
 
 func TestHandleRefresh(t *testing.T) {
-	h, validToken := setup()
+	h, validToken := setup(t)
 
 	tests := []struct {
 		name       string
@@ -198,7 +200,7 @@ func TestHandleRefresh(t *testing.T) {
 }
 
 func TestHandleRefresh_RefreshStoreUnavailable_Returns503(t *testing.T) {
-	sessionRepo := mem.NewSessionRepository(clock.Real())
+	sessionRepo := testutil.RealSessionRepo(t)
 	userRepo := mem.NewUserRepository()
 	store := unavailableRefreshStore{Store: newTestRefreshStore()}
 	svc := MustNewService(sessionRepo, mem.NewRoleRepository(), userRepo, store, testIssuer, slog.Default(), WithClock(clock.Real()))
@@ -219,7 +221,7 @@ func TestHandleRefresh_RefreshStoreUnavailable_Returns503(t *testing.T) {
 // TestHandler_Refresh_BlankToken verifies that submitting an empty refreshToken
 // returns 400 + ERR_AUTH_REFRESH_INVALID_INPUT + "refreshToken is required".
 func TestHandler_Refresh_BlankToken(t *testing.T) {
-	h, _ := setup()
+	h, _ := setup(t)
 	body := `{"refreshToken":""}`
 	w := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, refreshPath, strings.NewReader(body))

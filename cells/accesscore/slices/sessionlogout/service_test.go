@@ -12,6 +12,8 @@ import (
 
 	"github.com/ghbvf/gocell/cells/accesscore/internal/domain"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/mem"
+	"github.com/ghbvf/gocell/cells/accesscore/internal/ports"
+	"github.com/ghbvf/gocell/cells/accesscore/internal/testutil"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/kernel/outbox"
@@ -31,13 +33,14 @@ type typedNilRefreshStore struct {
 	refresh.Store
 }
 
-func newTestService() (*Service, *mem.SessionRepository) {
-	repo := mem.NewSessionRepository(clock.Real())
+func newTestService(t testing.TB) (*Service, ports.SessionRepository) {
+	t.Helper()
+	repo := testutil.RealSessionRepo(t)
 	return MustNewService(repo, newLogoutRefreshStore(), slog.Default()), repo
 }
 
 func TestNewService_RejectsTypedNilDependencies(t *testing.T) {
-	sessionRepo := mem.NewSessionRepository(clock.Real())
+	sessionRepo := testutil.RealSessionRepo(t)
 	refreshStore := newLogoutRefreshStore()
 
 	cases := []struct {
@@ -71,7 +74,7 @@ func TestNewService_RejectsTypedNilDependencies(t *testing.T) {
 	}
 }
 
-func seedSession(repo *mem.SessionRepository, id, userID string) {
+func seedSession(repo ports.SessionRepository, id, userID string) {
 	sess, _ := domain.NewSession(userID, "at-"+id, time.Now().Add(time.Hour), time.Now())
 	sess.ID = id
 	_ = repo.Create(context.Background(), sess)
@@ -80,7 +83,7 @@ func seedSession(repo *mem.SessionRepository, id, userID string) {
 func TestService_Logout(t *testing.T) {
 	tests := []struct {
 		name         string
-		setup        func(*mem.SessionRepository)
+		setup        func(ports.SessionRepository)
 		sessionID    string
 		callerUserID string
 		wantErr      bool
@@ -88,14 +91,14 @@ func TestService_Logout(t *testing.T) {
 	}{
 		{
 			name:         "valid self logout",
-			setup:        func(r *mem.SessionRepository) { seedSession(r, "sess-1", "usr-1") },
+			setup:        func(r ports.SessionRepository) { seedSession(r, "sess-1", "usr-1") },
 			sessionID:    "sess-1",
 			callerUserID: "usr-1",
 			wantErr:      false,
 		},
 		{
 			name:         "empty session ID",
-			setup:        func(_ *mem.SessionRepository) {},
+			setup:        func(_ ports.SessionRepository) {},
 			sessionID:    "",
 			callerUserID: "usr-1",
 			wantErr:      true,
@@ -103,7 +106,7 @@ func TestService_Logout(t *testing.T) {
 		},
 		{
 			name:         "empty caller user ID",
-			setup:        func(r *mem.SessionRepository) { seedSession(r, "sess-1", "usr-1") },
+			setup:        func(r ports.SessionRepository) { seedSession(r, "sess-1", "usr-1") },
 			sessionID:    "sess-1",
 			callerUserID: "",
 			wantErr:      true,
@@ -111,7 +114,7 @@ func TestService_Logout(t *testing.T) {
 		},
 		{
 			name:         "non-existent session",
-			setup:        func(_ *mem.SessionRepository) {},
+			setup:        func(_ ports.SessionRepository) {},
 			sessionID:    "sess-missing",
 			callerUserID: "usr-1",
 			wantErr:      true,
@@ -123,7 +126,7 @@ func TestService_Logout(t *testing.T) {
 			// missing-session), so no information leaks about whether the
 			// session id belongs to someone else.
 			name:         "other user's session yields not-found",
-			setup:        func(r *mem.SessionRepository) { seedSession(r, "sess-other", "usr-victim") },
+			setup:        func(r ports.SessionRepository) { seedSession(r, "sess-other", "usr-victim") },
 			sessionID:    "sess-other",
 			callerUserID: "usr-attacker",
 			wantErr:      true,
@@ -134,7 +137,7 @@ func TestService_Logout(t *testing.T) {
 			// the first revoke); event is emitted again but consumers must
 			// already dedupe on event_id.
 			name: "already revoked self logout succeeds",
-			setup: func(r *mem.SessionRepository) {
+			setup: func(r ports.SessionRepository) {
 				seedSession(r, "sess-rev", "usr-1")
 				s, _ := r.GetByID(context.Background(), "sess-rev")
 				s.Revoke(time.Now())
@@ -147,7 +150,7 @@ func TestService_Logout(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			svc, repo := newTestService()
+			svc, repo := newTestService(t)
 			tt.setup(repo)
 
 			err := svc.Logout(context.Background(), tt.sessionID, tt.callerUserID)
@@ -171,7 +174,7 @@ func (f failingPublisher) Publish(_ context.Context, _ string, _ []byte) error {
 func (f failingPublisher) Close(_ context.Context) error                       { return nil }
 
 func TestService_Logout_PublishError_DoesNotFailLogout(t *testing.T) {
-	repo := mem.NewSessionRepository(clock.Real())
+	repo := testutil.RealSessionRepo(t)
 	seedSession(repo, "sess-pub", "usr-1")
 
 	fp := failingPublisher{err: fmt.Errorf("broker unavailable")}
@@ -186,7 +189,7 @@ func TestService_Logout_PublishError_DoesNotFailLogout(t *testing.T) {
 }
 
 func TestService_LogoutUser(t *testing.T) {
-	svc, repo := newTestService()
+	svc, repo := newTestService(t)
 	seedSession(repo, "s1", "usr-1")
 	seedSession(repo, "s2", "usr-1")
 

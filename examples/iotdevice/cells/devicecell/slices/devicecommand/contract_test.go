@@ -15,6 +15,7 @@ import (
 	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/mem"
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/cell/celltest"
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/command"
 	"github.com/ghbvf/gocell/kernel/command/commandtest"
 	"github.com/ghbvf/gocell/pkg/contracttest"
@@ -30,7 +31,7 @@ func newContractCommandHandler() (http.Handler, *mem.DeviceRepository, *commandt
 	devRepo := mem.NewDeviceRepository()
 	q := commandtest.NewInMemQueue()
 	codec, _ := query.NewCursorCodec(bytes.Repeat([]byte("k"), 32))
-	svc, err := NewService(q, devRepo, codec, slog.Default(), query.RunModeProd)
+	svc, err := NewService(q, devRepo, codec, slog.Default(), query.RunModeProd, WithClock(clock.Real()))
 	if err != nil {
 		panic(err)
 	}

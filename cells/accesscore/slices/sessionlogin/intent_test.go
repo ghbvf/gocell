@@ -15,7 +15,7 @@ import (
 )
 
 func TestService_Login_IssuesDistinctIntents(t *testing.T) {
-	svc, userRepo := newTestService()
+	svc, userRepo := newTestService(t)
 	seedUser(userRepo, "alice", "s3cret!")
 
 	pair, err := svc.Login(context.Background(), LoginInput{Username: "alice", Password: "s3cret!"})

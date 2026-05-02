@@ -27,6 +27,7 @@ import (
 
 	"github.com/ghbvf/gocell/cells/accesscore/internal/domain"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/mem"
+	"github.com/ghbvf/gocell/cells/accesscore/internal/testutil"
 	"github.com/ghbvf/gocell/cells/accesscore/slices/rbacassign"
 	"github.com/ghbvf/gocell/cells/accesscore/slices/sessionlogin"
 	"github.com/ghbvf/gocell/cells/accesscore/slices/sessionlogout"
@@ -34,6 +35,7 @@ import (
 	"github.com/ghbvf/gocell/cells/accesscore/slices/sessionvalidate"
 	"github.com/ghbvf/gocell/cells/internal/testoutbox"
 	"github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/errcode"
@@ -46,7 +48,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/crypto/bcrypt"
-	"github.com/ghbvf/gocell/kernel/clock"
 )
 
 // seedAdminPasswordHash caches the bcrypt hash for the seed admin password
@@ -149,7 +150,7 @@ func loginAndGetPair(t *testing.T, opts ...loginOption) loginResult {
 
 	c := NewAccessCore(
 		WithUserRepository(userRepo),
-		WithSessionRepository(mem.NewSessionRepository(clock.Real())),
+		WithSessionRepository(testutil.RealSessionRepo(t)),
 		WithRoleRepository(roleRepo),
 		WithOutboxDeps(noopPublisher{}, nil),
 		WithJWTIssuer(issuer),
@@ -295,7 +296,7 @@ func TestAuthIntegration_RoleRevokeInvalidatesSession(t *testing.T) {
 
 	// Shared repos (simulates cell's single repo wiring).
 	roleRepo := mem.NewRoleRepository()
-	sessionRepo := mem.NewSessionRepository(clock.Real())
+	sessionRepo := testutil.RealSessionRepo(t)
 
 	// Seed "member" role.
 	roleRepo.SeedRole(&domain.Role{ID: "member", Name: "member"})

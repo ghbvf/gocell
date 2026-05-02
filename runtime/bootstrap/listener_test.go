@@ -181,35 +181,27 @@ func TestPhase0_RejectsNilAuthChain(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name      string
-		listeners []Option
+		name string
+		l1   Option
+		l2   Option
 	}{
 		{
 			name: "InternalListener nil authChain",
-			listeners: []Option{
-				WithListener(cell.PrimaryListener, ":8080",
-					[]cell.ListenerAuth{cell.AuthNone{}}),
-				WithListener(cell.InternalListener, ":9090", nil), // nil → rejected
-			},
+			l1:   WithListener(cell.PrimaryListener, ":8080", []cell.ListenerAuth{cell.AuthNone{}}),
+			l2:   WithListener(cell.InternalListener, ":9090", nil), // nil → rejected
 		},
 		{
 			name: "HealthListener nil authChain",
-			listeners: []Option{
-				WithListener(cell.PrimaryListener, ":8080",
-					[]cell.ListenerAuth{cell.AuthNone{}}),
-				WithListener(cell.HealthListener, ":9091", nil), // nil → rejected; use AuthNone{}
-			},
+			l1:   WithListener(cell.PrimaryListener, ":8080", []cell.ListenerAuth{cell.AuthNone{}}),
+			l2:   WithListener(cell.HealthListener, ":9091", nil), // nil → rejected; use AuthNone{}
 		},
 		{
 			name: "InternalListener empty slice authChain",
-			listeners: []Option{
-				WithListener(cell.PrimaryListener, ":8080",
-					[]cell.ListenerAuth{cell.AuthNone{}}),
-				// Empty slice == nil for the unauthenticated listener it produces;
-				// phase0 must reject so callers can't bypass the explicit AuthNone{}
-				// marker that archtest SEC-FAIL-CLOSED-02 grep-checks.
-				WithListener(cell.InternalListener, ":9090", []cell.ListenerAuth{}),
-			},
+			l1:   WithListener(cell.PrimaryListener, ":8080", []cell.ListenerAuth{cell.AuthNone{}}),
+			// Empty slice == nil for the unauthenticated listener it produces;
+			// phase0 must reject so callers can't bypass the explicit AuthNone{}
+			// marker that archtest SEC-FAIL-CLOSED-02 grep-checks.
+			l2: WithListener(cell.InternalListener, ":9090", []cell.ListenerAuth{}),
 		},
 	}
 
@@ -217,7 +209,7 @@ func TestPhase0_RejectsNilAuthChain(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			b := New(append([]Option{WithClock(clock.Real())}, tc.listeners...)...)
+			b := New(WithClock(clock.Real()), tc.l1, tc.l2)
 			err := b.phase0ValidateOptions()
 
 			// Phase-2 expectation: error with ErrListenerAuthChainMissing.

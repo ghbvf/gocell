@@ -14,14 +14,15 @@ import (
 	"github.com/ghbvf/gocell/cells/accesscore/internal/domain"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/dto"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/mem"
+	"github.com/ghbvf/gocell/cells/accesscore/internal/testutil"
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/cell/celltest"
-	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/contracttest"
 	"github.com/ghbvf/gocell/runtime/auth"
 )
 
-func newContractHandler() http.Handler {
+func newContractHandler(t *testing.T) http.Handler {
+	t.Helper()
 	roleRepo := mem.NewRoleRepository()
 	roleRepo.SeedRole(&domain.Role{
 		ID: "admin", Name: "admin",
@@ -30,7 +31,7 @@ func newContractHandler() http.Handler {
 	_, _ = roleRepo.AssignToUser(context.Background(), "usr-seed", "admin")
 	_, _ = roleRepo.AssignToUser(context.Background(), "usr-other-admin", "admin") // second admin for last-admin guard
 
-	svc := NewService(roleRepo, mem.NewSessionRepository(clock.Real()), slog.Default())
+	svc := NewService(roleRepo, testutil.RealSessionRepo(t), slog.Default())
 	mux := celltest.NewTestMux()
 	h := NewHandler(svc)
 	mux.Route("/internal/v1/access/roles", func(s cell.RouteMux) {
@@ -44,7 +45,7 @@ func newContractHandler() http.Handler {
 func TestHttpAuthRoleAssignV1Serve(t *testing.T) {
 	root := contracttest.ContractsRoot(t)
 	c := contracttest.LoadByID(t, root, "http.auth.role.assign.v1")
-	handler := newContractHandler()
+	handler := newContractHandler(t)
 
 	// Validate request schema.
 	c.ValidateRequest(t, []byte(`{"userId":"usr-2","roleId":"admin"}`))
@@ -68,7 +69,7 @@ func TestHttpAuthRoleAssignV1Serve(t *testing.T) {
 func TestHttpAuthRoleRevokeV1Serve(t *testing.T) {
 	root := contracttest.ContractsRoot(t)
 	c := contracttest.LoadByID(t, root, "http.auth.role.revoke.v1")
-	handler := newContractHandler()
+	handler := newContractHandler(t)
 
 	// Validate request schema.
 	c.ValidateRequest(t, []byte(`{"userId":"usr-seed","roleId":"admin"}`))

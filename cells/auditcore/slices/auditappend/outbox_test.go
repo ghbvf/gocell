@@ -36,7 +36,7 @@ func (s *stubTxRunner) RunInTx(ctx context.Context, fn func(context.Context) err
 func TestService_WithEmitter(t *testing.T) {
 	repo := mem.NewAuditRepository()
 	ow := &stubOutboxWriter{}
-	svc := NewService(repo, testHMACKey, slog.Default(), clock.Real(), WithEmitter(testoutbox.MustEmitter(t, ow)))
+	svc := NewService(repo, testHMACKey, slog.Default(), clock.Real(), WithClock(clock.Real()), WithEmitter(testoutbox.MustEmitter(t, ow)))
 
 	entry := outbox.Entry{
 		ID:        "evt-1",
@@ -52,7 +52,7 @@ func TestService_WithEmitter(t *testing.T) {
 func TestService_WithTxManager(t *testing.T) {
 	repo := mem.NewAuditRepository()
 	tx := &stubTxRunner{}
-	svc := NewService(repo, testHMACKey, slog.Default(), clock.Real(), WithTxManager(tx))
+	svc := NewService(repo, testHMACKey, slog.Default(), clock.Real(), WithClock(clock.Real()), WithTxManager(tx))
 
 	entry := outbox.Entry{
 		ID:        "evt-1",
@@ -69,7 +69,7 @@ func TestService_WithOutboxAndTx(t *testing.T) {
 	ow := &stubOutboxWriter{}
 	tx := &stubTxRunner{}
 	svc := NewService(repo, testHMACKey, slog.Default(), clock.Real(),
-		WithEmitter(testoutbox.MustEmitter(t, ow)), WithTxManager(tx))
+		WithClock(clock.Real()), WithEmitter(testoutbox.MustEmitter(t, ow)), WithTxManager(tx))
 
 	entry := outbox.Entry{
 		ID:        "evt-1",

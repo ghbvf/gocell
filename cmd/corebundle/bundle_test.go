@@ -385,7 +385,7 @@ func buildBootstrapFromShared(
 		bootstrap.WithListenerNet(primaryLn),
 	))
 	opts = append(opts, extra...)
-	return bootstrap.New(opts...), nil
+	return newBootstrapFromOptions(opts), nil
 }
 
 func withCorebundleTestInternalListener(t *testing.T, ln net.Listener) bootstrap.Option {

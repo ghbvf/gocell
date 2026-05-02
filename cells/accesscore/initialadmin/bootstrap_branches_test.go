@@ -179,7 +179,7 @@ func TestSweep_NonAbsoluteCredentialPath_ReturnsError(t *testing.T) {
 // password source field correctly.
 func TestWithPasswordSourceForTesting_SetsSource(t *testing.T) {
 	src := newFixedPasswordSource()
-	l := NewLifecycle(WithPasswordSourceForTesting(src))
+	l := NewLifecycle(WithClock(kernelclock.Real()), WithPasswordSourceForTesting(src))
 	assert.Equal(t, src, l.cfg.PasswordSource,
 		"WithPasswordSourceForTesting must set cfg.PasswordSource")
 }

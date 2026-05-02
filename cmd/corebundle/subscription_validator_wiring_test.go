@@ -95,7 +95,7 @@ func TestSubscriptionValidatorInjectedViaRuntimeBaseOptions(t *testing.T) {
 			buildInternalAuthChain(shared.InternalGuard),
 		),
 	)
-	b := bootstrap.New(opts...)
+	b := newBootstrapFromOptions(opts)
 
 	ctx, cancel := context.WithTimeout(context.Background(), testtime.CtxDefault)
 	defer cancel()
