@@ -68,6 +68,9 @@ jobs:
           build-mode: manual
 
       - name: Build (CodeQL trace)
+        # Root `./...` does not recurse into nested modules under
+        # tools/archtest/testdata/, so the deliberately-broken fixtures stay
+        # out of the extractor trace.
         run: go build ./...
 
       - name: Analyze

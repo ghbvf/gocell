@@ -41,9 +41,11 @@ while IFS= read -r script; do
 
   checked=$((checked + 1))
   head_block=$(head -n 30 "$script")
+  # All three checks anchor at line head (`^set`) so `pipefail` mentioned in a
+  # comment or string cannot satisfy the gate.
   if ! grep -qE '^set[[:space:]]+-[a-zA-Z]*e' <<<"$head_block" \
      || ! grep -qE '^set[[:space:]]+-[a-zA-Z]*u' <<<"$head_block" \
-     || ! grep -qE 'pipefail' <<<"$head_block"; then
+     || ! grep -qE '^set[[:space:]].*pipefail' <<<"$head_block"; then
     printf 'FAIL: %s missing `set -euo pipefail` in first 30 lines\n' "$script" >&2
     fail=1
   fi
