@@ -13,6 +13,9 @@ import (
 	"github.com/ghbvf/gocell/kernel/clock"
 )
 
+// Ensure time is used by nilClockCarrier methods below.
+var _ = time.Time{}
+
 // nilClockCarrier is the typed-nil carrier we feed to assembly.New to verify
 // the typed-nil rejection path. It satisfies clock.Clock structurally, but
 // every method panics — so if assembly.New ever lets a typed-nil value
@@ -68,43 +71,57 @@ func TestAssemblyNew_RejectsTypedNilClock(t *testing.T) {
 	})
 }
 
-// TestAssemblyStart_DepsCarryClock verifies that the assembly's configured
-// Clock is propagated into cell.Dependencies for every Init call.
-func TestAssemblyStart_DepsCarryClock(t *testing.T) {
+// TestAssemblyStart_SnapshotsPopulatedAfterStart verifies that after a
+// successful Start, Snapshots() returns a non-nil map with one entry per
+// registered cell.
+func TestAssemblyStart_SnapshotsPopulatedAfterStart(t *testing.T) {
 	t.Parallel()
 
-	want := clock.Real()
 	a := assembly.New(assembly.Config{
-		ID:             "deps-clock-test",
+		ID:             "snapshots-test",
 		DurabilityMode: cell.DurabilityDemo,
-		Clock:          want,
+		Clock:          clock.Real(),
 	})
 	t.Cleanup(a.Shutdown)
 
-	c := newClockObservingCell("co")
-	require.NoError(t, a.Register(c))
+	require.NoError(t, a.Register(cell.NewBaseCell(cell.CellMetadata{ID: "c1", Type: cell.CellTypeCore, ConsistencyLevel: cell.L0})))
+	require.NoError(t, a.Register(cell.NewBaseCell(cell.CellMetadata{ID: "c2", Type: cell.CellTypeCore, ConsistencyLevel: cell.L0})))
 	require.NoError(t, a.Start(context.Background()))
 	t.Cleanup(func() { _ = a.Stop(context.Background()) })
 
-	assert.Equal(t, want, c.gotClock,
-		"Init received deps.Clock = %v, want %v (same value as Config.Clock)",
-		c.gotClock, want)
+	snaps := a.Snapshots()
+	require.NotNil(t, snaps, "Snapshots() must be non-nil after Start")
+	assert.Len(t, snaps, 2, "one snapshot per registered cell")
+	_, hasC1 := snaps["c1"]
+	_, hasC2 := snaps["c2"]
+	assert.True(t, hasC1, "snapshot for c1 must exist")
+	assert.True(t, hasC2, "snapshot for c2 must exist")
 }
 
-// clockObservingCell records the Clock instance it receives via Dependencies
-// during Init.
-type clockObservingCell struct {
-	*cell.BaseCell
-	gotClock clock.Clock
-}
+// TestAssemblyStart_SnapshotsCopy verifies that mutations to the returned
+// map do not affect the assembly's internal snapshot state.
+func TestAssemblyStart_SnapshotsCopy(t *testing.T) {
+	t.Parallel()
 
-func newClockObservingCell(id string) *clockObservingCell {
-	return &clockObservingCell{
-		BaseCell: cell.NewBaseCell(cell.CellMetadata{ID: id, Type: cell.CellTypeCore, ConsistencyLevel: cell.L0}),
-	}
-}
+	a := assembly.New(assembly.Config{
+		ID:             "snapshots-copy-test",
+		DurabilityMode: cell.DurabilityDemo,
+		Clock:          clock.Real(),
+	})
+	t.Cleanup(a.Shutdown)
 
-func (c *clockObservingCell) Init(ctx context.Context, deps cell.Dependencies) error {
-	c.gotClock = deps.Clock
-	return c.BaseCell.Init(ctx, deps)
+	require.NoError(t, a.Register(cell.NewBaseCell(cell.CellMetadata{ID: "c1", Type: cell.CellTypeCore, ConsistencyLevel: cell.L0})))
+	require.NoError(t, a.Start(context.Background()))
+	t.Cleanup(func() { _ = a.Stop(context.Background()) })
+
+	snaps := a.Snapshots()
+	require.NotNil(t, snaps)
+
+	// Mutate the returned copy — must not affect a second call.
+	delete(snaps, "c1")
+
+	snaps2 := a.Snapshots()
+	require.NotNil(t, snaps2)
+	_, hasC1 := snaps2["c1"]
+	assert.True(t, hasC1, "deleting from first copy must not affect internal state")
 }

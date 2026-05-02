@@ -108,7 +108,8 @@ type CoreAssembly struct {
 	cells      []cell.Cell
 	cellMap    map[string]cell.Cell
 	state      assemblyState
-	dispatcher *hookDispatcher // owned; lifecycle tied to New/Stop
+	dispatcher *hookDispatcher            // owned; lifecycle tied to New/Stop
+	snapshots  map[string]cell.RegistrySnapshot // keyed by cell ID; populated during startInternal
 }
 
 // New creates a CoreAssembly with the given configuration.
@@ -151,6 +152,7 @@ func New(cfg Config) *CoreAssembly {
 		id:         cfg.ID,
 		cfg:        cfg,
 		cellMap:    make(map[string]cell.Cell),
+		snapshots:  make(map[string]cell.RegistrySnapshot),
 		dispatcher: dispatcher,
 	}
 }
@@ -335,21 +337,21 @@ func (a *CoreAssembly) startInternal(ctx context.Context, cfgMap map[string]any)
 			fmt.Sprintf("assembly %q", a.id), err)
 	}
 
-	deps := cell.Dependencies{
-		Config:         cfgMap,
-		DurabilityMode: a.cfg.DurabilityMode,
-		Clock:          a.cfg.Clock,
-	}
-
-	// Phase 1: Init all cells. If any fails, no cell has been Start'd yet.
+	// Phase 1: Init all cells via per-cell RegistryRecorder.
+	// Each cell declares its capabilities (routes, subscriptions, health, lifecycle,
+	// config-reload) into the recorder; Snapshot() seals it and stores the result.
+	// If any Init fails, no cell has been Start'd yet — safe to return immediately.
 	for _, c := range a.cells {
-		if err := c.Init(ctx, deps); err != nil {
+		recorder := cell.NewRegistryRecorder(cfgMap, a.cfg.DurabilityMode)
+		if err := c.Init(ctx, recorder); err != nil {
 			a.mu.Lock()
 			a.state = stateStopped
+			a.snapshots = make(map[string]cell.RegistrySnapshot)
 			a.mu.Unlock()
 			return errcode.Wrap(errcode.ErrValidationFailed,
 				fmt.Sprintf("assembly: init cell %q", c.ID()), err)
 		}
+		a.snapshots[c.ID()] = recorder.Snapshot()
 	}
 
 	// Phase 2: Start cells in order with lifecycle hooks.
@@ -532,14 +534,34 @@ func (a *CoreAssembly) ID() string {
 	return a.id
 }
 
-// Clock returns the single root [clock.Clock] that the assembly threads
-// through every cell's Init via Dependencies.Clock. Exposed so that
-// Bootstrap can fail-fast when a caller passes both WithAssembly and
-// WithClock with non-identical clock instances.
+// Clock returns the single root [clock.Clock] used by the assembly for
+// lifecycle hook timing. Exposed so that Bootstrap can fail-fast when a
+// caller passes both WithAssembly and WithClock with non-identical clock
+// instances.
 //
 // Always non-nil — assembly.New rejects nil and typed-nil at construction.
 func (a *CoreAssembly) Clock() clock.Clock {
 	return a.cfg.Clock
+}
+
+// Snapshots returns a shallow copy of the per-cell RegistrySnapshot map
+// populated during StartWithConfig / Start. The map is keyed by cell ID.
+// Returns nil when Start has not been called yet or all Init calls failed.
+//
+// The returned map is a copy — mutations do not affect the assembly's
+// internal state. The RegistrySnapshot values themselves are not deep-copied;
+// callers must not mutate the slice/map fields inside each snapshot.
+func (a *CoreAssembly) Snapshots() map[string]cell.RegistrySnapshot {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if len(a.snapshots) == 0 {
+		return nil
+	}
+	cp := make(map[string]cell.RegistrySnapshot, len(a.snapshots))
+	for k, v := range a.snapshots {
+		cp[k] = v
+	}
+	return cp
 }
 
 // CellIDs returns the IDs of all registered cells in registration order.

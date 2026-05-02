@@ -26,8 +26,8 @@ const routerReadyDelay = testtime.D100ms
 // used to verify drain-during-close timing.
 const routerSlowHandlerDelay = testtime.D200ms
 
-// Compile-time interface check.
-var _ cell.EventRouter = (*Router)(nil)
+// Compile-time interface check: Router implements SubscriptionValidatorAdder.
+var _ cell.SubscriptionValidatorAdder = (*Router)(nil)
 
 // --- Mock Subscriber ---
 
@@ -281,21 +281,21 @@ func TestRouter_Run_MultipleHandlersSameSubscriber(t *testing.T) {
 	<-done
 }
 
-func TestRouter_EventRegistrar_Integration(t *testing.T) {
-	// Simulate the bootstrap pattern: cell declares handlers, router runs them.
+func TestRouter_RegistryRecorder_Integration(t *testing.T) {
+	// Simulate the bootstrap pattern: cell registers handlers via RegistryRecorder,
+	// bootstrap drains them into the Router, then Run delivers messages.
 	bus := newTestEventBus(t)
 	r := New(bus, clock.Real())
 
 	var received atomic.Int32
 
-	// Simulate a cell's RegisterSubscriptions.
-	var registrar cell.EventRegistrar = &mockCell{handler: func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+	handler := outbox.EntryHandler(func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
 		received.Add(1)
 		return outbox.HandleResult{Disposition: outbox.DispositionAck}
-	}}
+	})
 
-	err := registrar.RegisterSubscriptions(r)
-	require.NoError(t, err)
+	// Simulate bootstrap drain: AddContractHandler directly (mirrors phase6 loop).
+	require.NoError(t, r.AddContractHandler(testEventSpec("mock.topic"), handler, "mock-cell"))
 	assert.Equal(t, 1, r.HandlerCount())
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -560,15 +560,6 @@ func TestRouter_AddSubscriptionValidator_NilSkipped(t *testing.T) {
 	assert.ErrorIs(t, err, sentinel)
 }
 
-// mockCell implements cell.EventRegistrar for testing.
-type mockCell struct {
-	handler outbox.EntryHandler
-}
-
-func (m *mockCell) RegisterSubscriptions(r cell.EventRouter) error {
-	_ = r.AddContractHandler(testEventSpec("mock.topic"), m.handler, "mock-cell")
-	return nil
-}
 
 // newTestEventBus creates an in-memory pub/sub for Router tests, registered for cleanup.
 func newTestEventBus(t *testing.T) *testBus {

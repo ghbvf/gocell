@@ -90,28 +90,46 @@ func TestLifecycleHookShapeMatchesBootstrapHook(t *testing.T) {
 // Helpers
 // ---------------------------------------------------------------------------
 
-// lcCell is a minimal Cell that implements LifecycleContributor.
+// lcCell is a minimal Cell that registers lifecycle hooks via reg.Lifecycle in Init.
 type lcCell struct {
 	cell.BaseCell
 	hooks []cell.LifecycleHook
 }
 
-func (c *lcCell) LifecycleHooks() []cell.LifecycleHook { return c.hooks }
+func (c *lcCell) Init(ctx context.Context, reg cell.Registry) error {
+	if err := c.BaseCell.Init(ctx, reg); err != nil {
+		return err
+	}
+	for _, h := range c.hooks {
+		reg.Lifecycle(h)
+	}
+	return nil
+}
 
-var _ cell.LifecycleContributor = (*lcCell)(nil)
-
-// plainCellForLC is a Cell that does NOT implement LifecycleContributor.
+// plainCellForLC is a Cell that does NOT register any lifecycle hooks.
 type plainCellForLC struct{ cell.BaseCell }
 
-// buildAsmRegistered creates a CoreAssembly with the given cells registered
-// (without starting), sufficient for phase3b type-assertion discovery.
-func buildAsmRegistered(t *testing.T, cells ...cell.Cell) *assembly.CoreAssembly {
+// buildAsmStarted creates a CoreAssembly with the given cells registered and
+// started, populating cellSnapshots. The assembly is stopped on test cleanup.
+func buildAsmStarted(t *testing.T, cells ...cell.Cell) *assembly.CoreAssembly {
 	t.Helper()
 	asm := assembly.New(assembly.Config{ID: "testasm", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
 	for _, c := range cells {
 		require.NoError(t, asm.Register(c))
 	}
+	require.NoError(t, asm.Start(context.Background()))
+	t.Cleanup(func() { _ = asm.Stop(context.Background()) })
 	return asm
+}
+
+// buildPhaseStateWithSnapshots creates a phaseState whose asm and cellSnapshots
+// are already populated (mirrors what phase3InitAssembly does in production).
+func buildPhaseStateWithSnapshots(t *testing.T, asm *assembly.CoreAssembly) *phaseState {
+	t.Helper()
+	_, s := newPhaseState()
+	s.asm = asm
+	s.cellSnapshots = asm.Snapshots()
+	return s
 }
 
 // ---------------------------------------------------------------------------
@@ -138,46 +156,45 @@ func (m *mockLifecycle) Stop(_ context.Context) error  { return nil }
 // Tests
 // ---------------------------------------------------------------------------
 
-// TestPhase3b_NoCellImplementsContributor verifies no hooks are appended when
-// no cell implements LifecycleContributor.
+// TestPhase3b_NoCellRegistersHooks verifies no hooks are appended when
+// no cell calls reg.Lifecycle in Init.
 func TestPhase3b_NoCellImplementsContributor(t *testing.T) {
 	plain := &plainCellForLC{BaseCell: *cell.NewBaseCell(cell.CellMetadata{ID: "plain"})}
-	asm := buildAsmRegistered(t, plain)
+	asm := buildAsmStarted(t, plain)
 
 	ml := &mockLifecycle{}
 	b := New(WithClock(clock.Real()))
 	b.lifecycle = ml
 
-	_, s := newPhaseState()
-	s.asm = asm
+	s := buildPhaseStateWithSnapshots(t, asm)
+	defer s.runCancel()
 
 	require.NoError(t, b.phase3bDiscoverLifecycleContributor(s))
-	assert.Empty(t, ml.appended, "no hooks expected when no cell implements LifecycleContributor")
+	assert.Empty(t, ml.appended, "no hooks expected when no cell registers Lifecycle hooks")
 }
 
-// TestPhase3b_EmptySliceContributor verifies a cell implementing
-// LifecycleContributor but returning an empty slice (non-nil) is a legal
-// opt-out — phase3b must treat it identically to nil return.
+// TestPhase3b_EmptySliceContributor verifies a cell registering no hooks
+// (empty slice in Init) is a legal opt-out.
 func TestPhase3b_EmptySliceContributor(t *testing.T) {
 	lc := &lcCell{
 		BaseCell: *cell.NewBaseCell(cell.CellMetadata{ID: "mycell"}),
 		hooks:    []cell.LifecycleHook{}, // non-nil empty
 	}
-	asm := buildAsmRegistered(t, lc)
+	asm := buildAsmStarted(t, lc)
 
 	ml := &mockLifecycle{}
 	b := New(WithClock(clock.Real()))
 	b.lifecycle = ml
 
-	_, s := newPhaseState()
-	s.asm = asm
+	s := buildPhaseStateWithSnapshots(t, asm)
+	defer s.runCancel()
 
 	require.NoError(t, b.phase3bDiscoverLifecycleContributor(s))
-	assert.Empty(t, ml.appended, "empty-slice LifecycleHooks must register zero hooks")
+	assert.Empty(t, ml.appended, "empty-hooks Init must register zero hooks")
 }
 
 // TestPhase3b_DuplicateHookName_FailFast verifies that when two cells
-// contribute a hook with the same non-empty Name, the second Append call
+// register a hook with the same non-empty Name, the second Append call
 // fails and phase3b surfaces the conflict with the contributing cell id.
 // Duplicate-Name detection itself lives in Lifecycle.Append (single source
 // of truth, see TestLifecycle_AppendRejectsDuplicateName); phase3b only
@@ -195,14 +212,14 @@ func TestPhase3b_DuplicateHookName_FailFast(t *testing.T) {
 			{Name: "shared.hook", OnStart: func(_ context.Context) error { return nil }},
 		},
 	}
-	asm := buildAsmRegistered(t, cellA, cellB)
+	asm := buildAsmStarted(t, cellA, cellB)
 	b := New(WithClock(clock.Real()))
 	// Use the real lifecycle so Append's dup-name guard actually fires;
 	// mockLifecycle has no state tracking.
 	b.lifecycle = NewLifecycle(LifecycleConfig{Clock: clock.Real()})
 
-	_, s := newPhaseState()
-	s.asm = asm
+	s := buildPhaseStateWithSnapshots(t, asm)
+	defer s.runCancel()
 
 	err := b.phase3bDiscoverLifecycleContributor(s)
 	require.Error(t, err)
@@ -232,23 +249,24 @@ func TestLifecycle_AppendRejectsDuplicateName(t *testing.T) {
 	require.NoError(t, lc.Append(Hook{OnStart: noop}))
 }
 
-// TestPhase3b_NilSliceContributor verifies nil return is also a legal opt-out.
+// TestPhase3b_NilSliceContributor verifies a cell with no hooks registered
+// in Init is a legal opt-out.
 func TestPhase3b_NilSliceContributor(t *testing.T) {
 	lc := &lcCell{
 		BaseCell: *cell.NewBaseCell(cell.CellMetadata{ID: "mycell"}),
 		hooks:    nil,
 	}
-	asm := buildAsmRegistered(t, lc)
+	asm := buildAsmStarted(t, lc)
 
 	ml := &mockLifecycle{}
 	b := New(WithClock(clock.Real()))
 	b.lifecycle = ml
 
-	_, s := newPhaseState()
-	s.asm = asm
+	s := buildPhaseStateWithSnapshots(t, asm)
+	defer s.runCancel()
 
 	require.NoError(t, b.phase3bDiscoverLifecycleContributor(s))
-	assert.Empty(t, ml.appended, "nil LifecycleHooks must register zero hooks")
+	assert.Empty(t, ml.appended, "nil hooks must register zero hooks")
 }
 
 // TestPhase3b_OneCellTwoHooks verifies both hooks are appended in declaration order.
@@ -261,14 +279,14 @@ func TestPhase3b_OneCellTwoHooks(t *testing.T) {
 		BaseCell: *cell.NewBaseCell(cell.CellMetadata{ID: "mycore"}),
 		hooks:    hooks,
 	}
-	asm := buildAsmRegistered(t, lc)
+	asm := buildAsmStarted(t, lc)
 
 	ml := &mockLifecycle{}
 	b := New(WithClock(clock.Real()))
 	b.lifecycle = ml
 
-	_, s := newPhaseState()
-	s.asm = asm
+	s := buildPhaseStateWithSnapshots(t, asm)
+	defer s.runCancel()
 
 	require.NoError(t, b.phase3bDiscoverLifecycleContributor(s))
 	require.Len(t, ml.appended, 2)
@@ -288,14 +306,14 @@ func TestPhase3b_TwoCellsOrderPreserved(t *testing.T) {
 		hooks:    []cell.LifecycleHook{{Name: "beta-hook", OnStop: func(_ context.Context) error { return nil }}},
 	}
 	// Register alpha first, then beta — order must be preserved.
-	asm := buildAsmRegistered(t, lcA, lcB)
+	asm := buildAsmStarted(t, lcA, lcB)
 
 	ml := &mockLifecycle{}
 	b := New(WithClock(clock.Real()))
 	b.lifecycle = ml
 
-	_, s := newPhaseState()
-	s.asm = asm
+	s := buildPhaseStateWithSnapshots(t, asm)
+	defer s.runCancel()
 
 	require.NoError(t, b.phase3bDiscoverLifecycleContributor(s))
 	require.Len(t, ml.appended, 2)
@@ -324,14 +342,14 @@ func TestPhase3b_StampsCellIDOnAppendedHook(t *testing.T) {
 			{Name: "beta-hook", OnStart: func(_ context.Context) error { return nil }},
 		},
 	}
-	asm := buildAsmRegistered(t, lcA, lcB)
+	asm := buildAsmStarted(t, lcA, lcB)
 
 	ml := &mockLifecycle{}
 	b := New(WithClock(clock.Real()))
 	b.lifecycle = ml
 
-	_, s := newPhaseState()
-	s.asm = asm
+	s := buildPhaseStateWithSnapshots(t, asm)
+	defer s.runCancel()
 
 	require.NoError(t, b.phase3bDiscoverLifecycleContributor(s))
 	require.Len(t, ml.appended, 3)
@@ -349,36 +367,45 @@ func TestPhase3b_BothNilSkipped(t *testing.T) {
 			{Name: "no-ops", OnStart: nil, OnStop: nil},
 		},
 	}
-	asm := buildAsmRegistered(t, lc)
+	asm := buildAsmStarted(t, lc)
 
 	ml := &mockLifecycle{}
 	b := New(WithClock(clock.Real()))
 	b.lifecycle = ml
 
-	_, s := newPhaseState()
-	s.asm = asm
+	s := buildPhaseStateWithSnapshots(t, asm)
+	defer s.runCancel()
 
 	require.NoError(t, b.phase3bDiscoverLifecycleContributor(s))
 	assert.Empty(t, ml.appended, "hook with both nil funcs must be skipped")
 }
 
 // TestPhase3b_EmptyNameAllowed verifies a hook with Name="" is still appended
-// (Name is non-required).
+// (Name is non-required at the bootstrap level even though Registry.Lifecycle panics
+// on empty name — tests here use the snapshot path directly).
 func TestPhase3b_EmptyNameAllowed(t *testing.T) {
-	lc := &lcCell{
-		BaseCell: *cell.NewBaseCell(cell.CellMetadata{ID: "mycore"}),
-		hooks: []cell.LifecycleHook{
-			{Name: "", OnStart: func(_ context.Context) error { return nil }},
+	// Directly inject a snapshot with an empty-named hook (bypass Registry.Lifecycle
+	// panic guard — this tests that phase3b itself does not block empty names).
+	asm := assembly.New(assembly.Config{ID: "testasm2", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
+	plain := &plainCellForLC{BaseCell: *cell.NewBaseCell(cell.CellMetadata{ID: "mycore"})}
+	require.NoError(t, asm.Register(plain))
+	require.NoError(t, asm.Start(context.Background()))
+	t.Cleanup(func() { _ = asm.Stop(context.Background()) })
+
+	// Manually build a phaseState with a snapshot that has an empty-named hook.
+	_, s := newPhaseState()
+	s.asm = asm
+	s.cellSnapshots = map[string]cell.RegistrySnapshot{
+		"mycore": {
+			LifecycleHooks: []cell.LifecycleHook{
+				{Name: "", OnStart: func(_ context.Context) error { return nil }},
+			},
 		},
 	}
-	asm := buildAsmRegistered(t, lc)
 
 	ml := &mockLifecycle{}
 	b := New(WithClock(clock.Real()))
 	b.lifecycle = ml
-
-	_, s := newPhaseState()
-	s.asm = asm
 
 	require.NoError(t, b.phase3bDiscoverLifecycleContributor(s))
 	require.Len(t, ml.appended, 1)
@@ -395,14 +422,14 @@ func TestPhase3b_AppendError_PropagatesWithCellAndHookName(t *testing.T) {
 			{Name: "my-hook", OnStart: func(_ context.Context) error { return nil }},
 		},
 	}
-	asm := buildAsmRegistered(t, lc)
+	asm := buildAsmStarted(t, lc)
 
 	ml := &mockLifecycle{appendErr: errors.New("already started")}
 	b := New(WithClock(clock.Real()))
 	b.lifecycle = ml
 
-	_, s := newPhaseState()
-	s.asm = asm
+	s := buildPhaseStateWithSnapshots(t, asm)
+	defer s.runCancel()
 
 	err := b.phase3bDiscoverLifecycleContributor(s)
 	require.Error(t, err)

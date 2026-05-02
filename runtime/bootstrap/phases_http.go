@@ -133,13 +133,14 @@ func (b *Bootstrap) phase5CollectRouteGroups(s *phaseState, routers map[cell.Lis
 		}
 	}
 	for _, id := range s.asm.CellIDs() {
-		c := s.asm.Cell(id)
-		if rgc, ok := c.(cell.RouteGroupContributor); ok {
-			cellGroups := rgc.RouteGroups()
-			for i := range cellGroups {
-				cellGroups[i].CellID = id
-			}
-			groups = append(groups, cellGroups...)
+		snap, ok := s.cellSnapshots[id]
+		if !ok {
+			continue
+		}
+		for i := range snap.RouteGroups {
+			rg := snap.RouteGroups[i]
+			rg.CellID = id
+			groups = append(groups, rg)
 		}
 	}
 	return groups

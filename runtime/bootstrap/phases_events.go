@@ -15,7 +15,6 @@ import (
 	"fmt"
 	"log/slog"
 
-	"github.com/ghbvf/gocell/kernel/assembly"
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/runtime/eventrouter"
@@ -31,7 +30,7 @@ import (
 func (b *Bootstrap) phase6StartEventRouter(runCtx context.Context, s *phaseState) error {
 	sub := s.sub
 	if sub == nil {
-		return b.checkNoEventRegistrars(s.asm)
+		return b.checkNoSubscriptionsWhenSubscriberNil(s)
 	}
 
 	// Observability context restoration is the OUTERMOST step inside
@@ -57,9 +56,16 @@ func (b *Bootstrap) phase6StartEventRouter(runCtx context.Context, s *phaseState
 	}
 
 	for _, id := range s.asm.CellIDs() {
-		c := s.asm.Cell(id)
-		if er, ok := c.(cell.EventRegistrar); ok {
-			if err := er.RegisterSubscriptions(evtRouter); err != nil {
+		snap, ok := s.cellSnapshots[id]
+		if !ok {
+			continue
+		}
+		for _, sub := range snap.Subscriptions {
+			var opts []cell.SubscriptionOption
+			if sub.SliceID != "" {
+				opts = append(opts, cell.WithSubscriptionSliceID(sub.SliceID))
+			}
+			if err := evtRouter.AddContractHandler(sub.Spec, sub.Handler, sub.ConsumerGroup, opts...); err != nil {
 				return fmt.Errorf("bootstrap: cell %s subscription setup failed: %w", id, err)
 			}
 		}
@@ -100,13 +106,18 @@ func (b *Bootstrap) phase6StartEventRouter(runCtx context.Context, s *phaseState
 	return nil
 }
 
-// checkNoEventRegistrars returns an error when any cell implements EventRegistrar
-// but no subscriber is configured.
-func (b *Bootstrap) checkNoEventRegistrars(asm *assembly.CoreAssembly) error {
-	for _, id := range asm.CellIDs() {
-		if _, ok := asm.Cell(id).(cell.EventRegistrar); ok {
+// checkNoSubscriptionsWhenSubscriberNil fails fast when any cell registered
+// subscriptions (via reg.Subscribe in Init) but no subscriber is configured.
+// This prevents silently dropping all event handlers when WithSubscriber is omitted.
+func (b *Bootstrap) checkNoSubscriptionsWhenSubscriberNil(s *phaseState) error {
+	for _, id := range s.asm.CellIDs() {
+		snap, ok := s.cellSnapshots[id]
+		if !ok {
+			continue
+		}
+		if len(snap.Subscriptions) > 0 {
 			return fmt.Errorf(
-				"bootstrap: cell %s implements EventRegistrar but no subscriber is configured; "+
+				"bootstrap: cell %s registered subscriptions but no subscriber is configured; "+
 					"add WithSubscriber to bootstrap options", id)
 		}
 	}

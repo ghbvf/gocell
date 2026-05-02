@@ -58,6 +58,11 @@ type phaseState struct {
 	asm     *assembly.CoreAssembly
 	reloads *reloadGate
 
+	// set by phase3 (after StartWithConfig succeeds): per-cell RegistrySnapshot
+	// produced during cell Init. Keyed by cell ID. Later phases drain the fields
+	// of each snapshot instead of type-asserting on the live cell instances.
+	cellSnapshots map[string]cell.RegistrySnapshot
+
 	// set by phase5
 	hh                   *health.Handler
 	healthRouteGroupOpts []HealthRouteGroupOption            // resolved HealthRouteGroupOption stack (from WithHealthRoutes)

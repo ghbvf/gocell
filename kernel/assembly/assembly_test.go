@@ -48,7 +48,7 @@ func newFailInitCell(id string) *failInitCell {
 	}
 }
 
-func (c *failInitCell) Init(_ context.Context, _ cell.Dependencies) error {
+func (c *failInitCell) Init(_ context.Context, _ cell.Registry) error {
 	return errors.New("init boom")
 }
 
