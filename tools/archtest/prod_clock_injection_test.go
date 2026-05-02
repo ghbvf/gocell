@@ -31,11 +31,12 @@
 //   - kernel/clock/ — owns the canonical Real() implementation; the only
 //     legitimate package that may delegate to the stdlib time API.
 //   - kernel/clock/clockmock/ — owns the deterministic test fake.
-//   - pkg/securecookie/ — pkg/ is constrained by LAYER-01 to stdlib-only
-//     imports, so it cannot reach kernel/clock. The single wall-clock entry
-//     in securecookie's local realClock fallback is exempt; its local Now()
-//     interface is structurally satisfied by kernel/clock.Clock at the
-//     calling layer.
+//
+// pkg/securecookie/ used to be exempt while it carried a local realClock
+// fallback. As of PR #348 Round 2, securecookie deletes the fallback and
+// requires explicit WithClock injection (Encode/Decode call MustHaveClock at
+// entry); the package no longer references stdlib time symbols directly, so
+// the exemption was removed.
 //
 // ref: docs/architecture/202605021500-adr-kernel-clock-injection.md
 // ref: docs/plans/202605011500-029-master-roadmap.md Track D #D6
@@ -64,7 +65,6 @@ import (
 // reference stdlib time symbols directly. See package doc for rationale.
 var allowedRealClockPaths = []string{
 	"kernel/clock/",
-	"pkg/securecookie/",
 }
 
 // forbiddenTimeFns maps each forbidden stdlib time function to the equivalent

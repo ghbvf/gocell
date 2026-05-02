@@ -13,7 +13,7 @@ import (
 func TestMustHaveClock_NilInterface(t *testing.T) {
 	t.Parallel()
 	defer func() {
-		if r := recover(); r == nil {
+		if recover() == nil {
 			t.Fatal("MustHaveClock(nil, ...) did not panic")
 		}
 	}()
@@ -24,7 +24,7 @@ func TestMustHaveClock_NilInterface(t *testing.T) {
 func TestMustHaveClock_TypedNil(t *testing.T) {
 	t.Parallel()
 	defer func() {
-		if r := recover(); r == nil {
+		if recover() == nil {
 			t.Fatal("MustHaveClock(typed-nil, ...) did not panic")
 		}
 	}()
@@ -44,7 +44,7 @@ func TestMustHaveClock_ValidClock(t *testing.T) {
 func TestMustHavePositiveInterval_Negative(t *testing.T) {
 	t.Parallel()
 	defer func() {
-		if r := recover(); r == nil {
+		if recover() == nil {
 			t.Fatal("MustHavePositiveInterval(-1s, ...) did not panic")
 		}
 	}()
@@ -55,7 +55,7 @@ func TestMustHavePositiveInterval_Negative(t *testing.T) {
 func TestMustHavePositiveInterval_Zero(t *testing.T) {
 	t.Parallel()
 	defer func() {
-		if r := recover(); r == nil {
+		if recover() == nil {
 			t.Fatal("MustHavePositiveInterval(0, ...) did not panic")
 		}
 	}()

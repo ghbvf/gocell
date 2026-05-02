@@ -112,8 +112,10 @@ type SubscriberConfig struct {
 	StopIntakePerCallTimeout time.Duration
 
 	// Clock is the time source used to schedule the drainRemaining timer.
-	// Nil substitutes [clock.Real]; tests inject a [clockmock.FakeClock]
-	// when they need to drive the drain deadline deterministically.
+	// Required: NewSubscriber calls clock.MustHaveClock(config.Clock, ...) to
+	// fail-fast on nil. Pass clock.Real() at the composition root, or a
+	// clockmock.FakeClock in tests when they need to drive the drain deadline
+	// deterministically.
 	Clock clock.Clock
 }
 

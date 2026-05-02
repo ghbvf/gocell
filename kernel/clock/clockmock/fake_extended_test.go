@@ -2,6 +2,7 @@ package clockmock_test
 
 import (
 	"context"
+	"errors"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -192,5 +193,23 @@ func TestFakeClock_Sleep_PastDeadlineReturnsImmediately(t *testing.T) {
 	fc := clockmock.New(epoch)
 	if err := fc.Sleep(context.Background(), epoch.Add(-testtime.D1s)); err != nil {
 		t.Fatalf("Sleep on past deadline returned %v, want nil", err)
+	}
+}
+
+// TestFakeClock_Sleep_PastDeadlineWithCanceledCtx locks in the precedence:
+// when both conditions are simultaneously satisfied (fc.Now >= until AND ctx
+// already canceled), Sleep returns ctx.Err() — the past-deadline fast path
+// returns ctx.Err() directly, so cancellation wins over silent success. This
+// matches the RealClock contract (TestRealSleepPastDeadlineWithCanceledCtx).
+func TestFakeClock_Sleep_PastDeadlineWithCanceledCtx(t *testing.T) {
+	fc := clockmock.New(epoch)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	err := fc.Sleep(ctx, epoch.Add(-testtime.D1s))
+	if err == nil {
+		t.Fatalf("Sleep(canceled-ctx, past-deadline) returned nil, want context.Canceled")
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("Sleep(canceled-ctx, past-deadline) returned %v, want context.Canceled", err)
 	}
 }

@@ -287,8 +287,13 @@ fixture sub-packages exercising every bypass shape: `after_violates`,
 asserts the exact violation lines, so any regression that shrinks the
 type-aware predicate fails the fixture suite.
 
-`hack/verify-prod-clock-injection.sh` is the operator-facing wrapper
-around `go test ./tools/archtest/ -run TestProdClockInjection`.
+`hack/verify-prod-clock-injection.sh` is the operator-facing wrapper that
+runs all D6 archtests as one shot:
+`go test ./tools/archtest/ -run 'TestProdClockInjection|TestKernelClockLeafFallback|TestProdClockInjectionFixtures'`
+(extended in PR #348 Round 2 to include the leaf-fallback gate and the
+fixture regression suite). Round 2 also added two additional D6 gates
+(`KERNEL-CLOCK-RESET-RELATIVE-PROD-01`, `CLOCK-INJECTION-TEST-CALLSITE-01`)
+which are part of the broader `tools/archtest` suite invoked by `make verify`.
 
 ### Industry alignment
 

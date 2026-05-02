@@ -2,6 +2,7 @@ package clock_test
 
 import (
 	"context"
+	"errors"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -222,5 +223,24 @@ func TestRealSleepPastDeadline(t *testing.T) {
 	c := clock.Real()
 	if err := c.Sleep(context.Background(), time.Now().Add(realPastDeadlineDelta)); err != nil {
 		t.Fatalf("Sleep on past deadline returned %v, want nil", err)
+	}
+}
+
+// TestRealSleepPastDeadlineWithCanceledCtx locks in the precedence: when both
+// conditions are simultaneously satisfied (deadline already past AND ctx
+// already canceled), Sleep returns ctx.Err() — the past-deadline fast path
+// returns ctx.Err() directly, so cancellation wins over silent success.
+func TestRealSleepPastDeadlineWithCanceledCtx(t *testing.T) {
+	t.Parallel()
+
+	c := clock.Real()
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	err := c.Sleep(ctx, time.Now().Add(realPastDeadlineDelta))
+	if err == nil {
+		t.Fatalf("Sleep(canceled-ctx, past-deadline) returned nil, want context.Canceled")
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("Sleep(canceled-ctx, past-deadline) returned %v, want context.Canceled", err)
 	}
 }
