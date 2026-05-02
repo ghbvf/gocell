@@ -11,6 +11,16 @@ import (
 	"github.com/ghbvf/gocell/tools/depgraph"
 )
 
+// defaultRootDir returns the current working directory, used as the default
+// value for the --root flag when the caller does not supply one.
+func defaultRootDir() string {
+	dir, err := os.Getwd()
+	if err != nil {
+		return "."
+	}
+	return dir
+}
+
 // graphFormat is the rendered representation of a depgraph.Graph.
 type graphFormat string
 
@@ -24,6 +34,7 @@ const (
 type graphOptions struct {
 	Format       graphFormat
 	Pattern      string
+	Root         string
 	IncludeTests bool
 	Out          io.Writer
 }
@@ -51,6 +62,7 @@ func parseGraphArgs(args []string) (graphOptions, error) {
 	fs.SetOutput(io.Discard)
 	format := fs.String("format", "json", "output format: json|dot")
 	pattern := fs.String("pattern", "./...", "package pattern passed to packages.Load")
+	root := fs.String("root", defaultRootDir(), "project root directory passed as Dir to packages.Load")
 	includeTests := fs.Bool("include-tests", false, "load test variants (mark TestOnly nodes)")
 	if err := fs.Parse(args); err != nil {
 		return graphOptions{}, fmt.Errorf("graph: %w", err)
@@ -62,6 +74,7 @@ func parseGraphArgs(args []string) (graphOptions, error) {
 	return graphOptions{
 		Format:       f,
 		Pattern:      *pattern,
+		Root:         *root,
 		IncludeTests: *includeTests,
 	}, nil
 }
@@ -69,6 +82,7 @@ func parseGraphArgs(args []string) (graphOptions, error) {
 func executeGraph(opts graphOptions) error {
 	g, err := depgraph.Load(depgraph.LoadOptions{
 		IncludeTests: opts.IncludeTests,
+		Dir:          opts.Root,
 	}, opts.Pattern)
 	if err != nil {
 		return fmt.Errorf("graph: load: %w", err)

@@ -156,6 +156,11 @@ func (g *Graph) collectImporters() (prod, test map[string]bool) {
 			continue
 		}
 		if isTestVariant(p.ID) {
+			// TrimSuffix relies on the golang.org/x/tools/go/packages convention
+			// that a test-binary ID is exactly "<PkgPath>.test" when Tests=true.
+			// If TrimSuffix has no effect (selfTested == p.ID), the equality guard
+			// below never fires — harmless, because isTestVariant already confirmed
+			// a ".test]" or ".test" suffix is present.
 			selfTested := strings.TrimSuffix(p.ID, ".test")
 			for imp := range p.Imports {
 				if imp == selfTested {

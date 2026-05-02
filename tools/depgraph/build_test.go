@@ -51,6 +51,7 @@ func TestLoad_BuildsNodeMap(t *testing.T) {
 		synthModule + "/d",
 		synthModule + "/generated/foo",
 		synthModule + "/testhelper",
+		synthModule + "/xtesthelper",
 	}
 	got := make([]string, 0, len(g.Packages))
 	for _, n := range g.Packages {
@@ -127,12 +128,32 @@ func TestLoad_TestOnlyMarking(t *testing.T) {
 		t.Error("testhelper.TestOnly = false, want true (only imported from a_test.go)")
 	}
 
+	// xtesthelper is imported only from a_xtest_test.go (package a_test —
+	// external test package). It must also be marked TestOnly=true.
+	xtHelper := g.ByID(synthModule + "/xtesthelper")
+	if xtHelper == nil {
+		t.Fatal("xtesthelper not loaded with IncludeTests=true")
+	}
+	if !xtHelper.TestOnly {
+		t.Error("xtesthelper.TestOnly = false, want true (only imported from external test package a_test)")
+	}
+
 	a := g.ByID(synthModule + "/a")
 	if a == nil {
 		t.Fatal("missing pkg a")
 	}
 	if a.TestOnly {
 		t.Error("a.TestOnly = true, want false (production package)")
+	}
+
+	// Orphaned/leaf packages with zero importers must also stay TestOnly=false:
+	// they may be entry points or unused production code, not test helpers.
+	cellA := g.ByID(synthModule + "/cells/cellA")
+	if cellA == nil {
+		t.Fatal("missing cells/cellA")
+	}
+	if cellA.TestOnly {
+		t.Error("cells/cellA.TestOnly = true, want false (leaf production package with no importers)")
 	}
 }
 

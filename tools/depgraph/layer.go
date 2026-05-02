@@ -40,8 +40,10 @@ var internalLayerByDir = map[string]string{
 //
 // Internal-module packages map to one of LayerKernel..LayerGenerated based
 // on the first path segment. The bare module path itself maps to LayerRoot.
-// Unrecognized first segments in the module fall through to LayerThirdParty
-// (defensive — should not happen in a well-formed repo).
+// Unrecognized first segments inside the module fall through to
+// LayerThirdParty. Callers that need to distinguish "internal but
+// unrecognized" from "true third-party module" should call IsThirdParty
+// first (which checks module membership).
 //
 // External packages classify as LayerStdlib (no dot in first segment) or
 // LayerThirdParty (any other domain).

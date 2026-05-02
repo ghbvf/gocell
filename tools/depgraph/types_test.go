@@ -97,6 +97,41 @@ func TestGraphMarshalJSON_GoldenFile(t *testing.T) {
 	}
 }
 
+func TestGraphMarshalJSON_DoesNotMutateOriginal(t *testing.T) {
+	t.Parallel()
+	g := loadSynth(t, false)
+
+	// Find a node with at least one import to make the test meaningful.
+	var target *depgraph.Node
+	for _, n := range g.Packages {
+		if len(n.Imports) > 0 {
+			target = n
+			break
+		}
+	}
+	if target == nil {
+		t.Skip("no node with imports in synth fixture")
+	}
+
+	// Snapshot the Imports slice before marshaling.
+	before := append([]string(nil), target.Imports...)
+
+	if _, err := json.Marshal(g); err != nil {
+		t.Fatalf("json.Marshal: %v", err)
+	}
+
+	// After marshaling the original imports must be unchanged in order.
+	after := target.Imports
+	if len(after) != len(before) {
+		t.Fatalf("MarshalJSON mutated Imports length: before=%d after=%d", len(before), len(after))
+	}
+	for i := range before {
+		if after[i] != before[i] {
+			t.Errorf("MarshalJSON mutated Imports[%d]: before=%q after=%q", i, before[i], after[i])
+		}
+	}
+}
+
 func TestGraphMarshalJSON_NilGraph(t *testing.T) {
 	t.Parallel()
 	var g *depgraph.Graph

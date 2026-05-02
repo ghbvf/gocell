@@ -7,6 +7,18 @@ import (
 	"testing"
 )
 
+// repoRoot returns the gocell repo root by walking up from the test's working
+// directory until a go.mod is found. This makes the graph tests independent
+// of the working directory that `go test` is invoked from.
+func repoRoot(t *testing.T) string {
+	t.Helper()
+	root, err := findRoot()
+	if err != nil {
+		t.Fatalf("repoRoot: %v", err)
+	}
+	return root
+}
+
 // TestRunGraphJSON exercises the same code path as `gocell graph
 // --format=json` against the real gocell module (the package's own test
 // runs in the worktree root). We assert on shape rather than counts to
@@ -17,6 +29,7 @@ func TestRunGraphJSON(t *testing.T) {
 	if err := executeGraph(graphOptions{
 		Format:  graphFormatJSON,
 		Pattern: "github.com/ghbvf/gocell/tools/depgraph/...",
+		Root:    repoRoot(t),
 		Out:     &buf,
 	}); err != nil {
 		t.Fatalf("executeGraph: %v", err)
@@ -61,6 +74,7 @@ func TestRunGraphDOT(t *testing.T) {
 	if err := executeGraph(graphOptions{
 		Format:  graphFormatDOT,
 		Pattern: "github.com/ghbvf/gocell/tools/depgraph/...",
+		Root:    repoRoot(t),
 		Out:     &buf,
 	}); err != nil {
 		t.Fatalf("executeGraph: %v", err)
@@ -112,6 +126,15 @@ func TestParseGraphArgs(t *testing.T) {
 				}
 				if !opts.IncludeTests {
 					t.Error("IncludeTests = false, want true")
+				}
+			},
+		},
+		{
+			name: "explicit_root",
+			args: []string{"--root=/tmp/myproject"},
+			check: func(t *testing.T, opts graphOptions) {
+				if opts.Root != "/tmp/myproject" {
+					t.Errorf("Root = %q, want /tmp/myproject", opts.Root)
 				}
 			},
 		},

@@ -42,10 +42,16 @@
       "layer": "thirdparty",
       "imports": [],
       "testOnly": true
+    },
+    {
+      "id": "example.com/synth/xtesthelper",
+      "layer": "thirdparty",
+      "imports": [],
+      "testOnly": true
     }
   ],
   "stats": {
-    "packages": 7,
+    "packages": 8,
     "edges": 3
   }
 }
