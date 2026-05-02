@@ -276,6 +276,24 @@ func TestValidateResponse_ExtraFieldPermitted(t *testing.T) {
 	}
 }
 
+// TestValidatePayload_ExtraFieldPermitted — symmetric with TestValidateResponse_ExtraFieldPermitted,
+// locks down ADR-202605031600 on the event payload side: payload schema without
+// additionalProperties:false must accept payloads with extra (future) fields.
+func TestValidatePayload_ExtraFieldPermitted(t *testing.T) {
+	c := LoadByID(t, testdataRoot(), "event.test.valid.v1")
+	// payload schema has no additionalProperties:false → extra field must PASS
+	c.ValidatePayload(t, []byte(`{"key":"k","value":"v","futureField":"x"}`))
+}
+
+// TestValidateHeaders_ExtraFieldPermitted — symmetric with TestValidateResponse_ExtraFieldPermitted,
+// locks down ADR-202605031600 on the event headers side: headers schema without
+// additionalProperties:false must accept headers with extra (future) fields.
+func TestValidateHeaders_ExtraFieldPermitted(t *testing.T) {
+	c := LoadByID(t, testdataRoot(), "event.test.valid.v1")
+	// headers schema has no additionalProperties:false → extra field must PASS
+	c.ValidateHeaders(t, []byte(`{"event_id":"evt-1","futureField":"x"}`))
+}
+
 func TestMustRejectHeaders(t *testing.T) {
 	c := LoadByID(t, testdataRoot(), "event.test.valid.v1")
 	c.MustRejectHeaders(t, []byte(`{}`)) // missing required "event_id"

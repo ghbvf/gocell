@@ -8,7 +8,8 @@
 
 ## Context
 
-GoCell governance rule **FMT-20** (`kernel/governance/rules_strict_extra.go::validateFMTResponseStrict01`)
+GoCell governance rule **FMT-20** (`kernel/governance/rules_strict_extra.go::validateFMTResponseStrict01`,
+since renamed to `validateFMTRequestStrict01` by this ADR — see Decision §1)
 treats request and response schemas symmetrically: every `type:object` node in
 both must declare `additionalProperties: false`, otherwise `gocell validate
 --strict` fails with an error.

@@ -93,7 +93,8 @@ func (v *Validator) fmt20MissingSchemaResults(c *metadata.ContractMeta, rel stri
 		results = append(results, v.newResult(
 			ruleFMT20, SeverityError, IssueRequired,
 			rel, loc,
-			fmt.Sprintf("contract %q schema must declare additionalProperties explicitly (true=open, false=strict) at %s", c.ID, loc),
+			fmt.Sprintf("contract %q request schema must declare additionalProperties:false at %s"+
+				" (strict per FMT-20 / ADR-202605031600)", c.ID, loc),
 		))
 	}
 	return results

@@ -24,7 +24,21 @@
 set -euo pipefail
 
 if [[ $# -ne 2 ]]; then
-    echo "usage: $0 <root-dir> <filename-glob>" >&2
+    cat >&2 <<'USAGE'
+usage: normalize-schema.sh <root-dir> <filename-glob>
+
+Strips `"additionalProperties": false` from JSON schemas at all levels per
+ADR-202605031600 v1 schema evolution. Examples:
+  normalize-schema.sh contracts/http  response.schema.json
+  normalize-schema.sh contracts/event payload.schema.json
+
+Does NOT touch (intentional exclusions, the script does not enforce these —
+glob patterns simply do not match):
+  - request.schema.json (FMT-20 still enforces strict request)
+  - contracts/shared/errors/error-response-v1.schema.json + example mirrors
+    (error envelope is stable, kept strict)
+  - testdata fixtures (different glob patterns)
+USAGE
     exit 2
 fi
 
@@ -46,9 +60,12 @@ while IFS= read -r -d '' f; do
     # Write to sibling .normalize.tmp then atomically mv (same filesystem
     # avoids cross-fs issues and the system TMPDIR being sandbox-restricted).
     tmp="${f}.normalize.tmp"
+    # set -e 下 jq 失败会立即 exit；trap 在 ERR/EXIT 时清掉残余 tmp
+    trap 'rm -f "$tmp"' ERR EXIT
     jq "$JQ_FILTER" "$f" > "$tmp"
     mv "$tmp" "$f"
     count=$((count + 1))
 done < <(find "$root" -type f -name "$glob" -print0)
+trap - ERR EXIT
 
 echo "normalized $count file(s) under $root matching '$glob'"
