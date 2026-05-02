@@ -54,6 +54,16 @@ func Load(opts LoadOptions, patterns ...string) (*Graph, error) {
 	if len(pkgs) == 0 {
 		return nil, fmt.Errorf("no packages loaded for patterns %v", patterns)
 	}
+	// packages.Load reports per-package failures (malformed import path,
+	// type-check failure, missing source) on Package.Errors instead of the
+	// top-level err. A graph built from a partial load would silently miss
+	// nodes / edges; downstream T-rule closures would then return false
+	// negatives. Surface the first error and let the caller decide.
+	for _, p := range pkgs {
+		if len(p.Errors) > 0 {
+			return nil, fmt.Errorf("packages.Load: package %q: %v", p.PkgPath, p.Errors[0])
+		}
+	}
 	module := detectModule(pkgs)
 	if module == "" {
 		return nil, errors.New("module path not detected; load with NeedModule and ensure go.mod exists")

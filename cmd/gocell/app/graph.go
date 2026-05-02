@@ -65,7 +65,10 @@ func parseGraphArgs(args []string) (graphOptions, error) {
 	format := fs.String("format", "json", "output format: json|dot")
 	pattern := fs.String("pattern", "./...", "package pattern passed to packages.Load")
 	root := fs.String("root", defaultRootDir(), "project root directory passed as Dir to packages.Load")
-	includeTests := fs.Bool("include-tests", false, "load test variants (mark TestOnly nodes)")
+	includeTests := fs.Bool("include-tests", false,
+		"load test-variant packages so TestOnly markers are populated; "+
+			"does NOT add or remove packages from the graph (test helper "+
+			"packages always appear regardless of this flag)")
 	if err := fs.Parse(args); err != nil {
 		// flag.ErrHelp is the user asking for `-h`; let Dispatch see it raw
 		// and translate into ExitOK. Other parse errors get the usual prefix.

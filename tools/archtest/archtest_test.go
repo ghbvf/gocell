@@ -692,16 +692,25 @@ func checkLayer08TypedSeal(module string, pkgs []*packages.Package) []violation 
 	return out
 }
 
+// formatTransitivePath joins a closure path as "a → b → c" for human-
+// readable violation messages. The arrow is U+2192 RIGHTWARDS ARROW; tests
+// match on the literal sequence, so changing the separator is a contract
+// break with downstream consumers (CI log parsers, IDE quick-fix UIs).
+func formatTransitivePath(path []string) string {
+	return strings.Join(path, " → ")
+}
+
 // checkTransitiveCrossCellInternal flags every cell A whose transitive
-// import closure reaches cells/B/internal/... for any B != A.
+// import closure reaches cells/B/internal/... for any B != A. The
+// violation message includes the laundering path so reviewers can locate
+// the offending intermediary without grepping the codebase.
 func checkTransitiveCrossCellInternal(module string, g *depgraph.Graph) []violation {
 	var out []violation
 	for _, src := range g.Packages {
 		if src.Layer != depgraph.LayerCells || src.CellID == "" {
 			continue
 		}
-		closure := g.TransitiveImports(src.ID)
-		for dep := range closure {
+		for dep, path := range g.TransitiveImportsWithPaths(src.ID) {
 			depCell := depgraph.CellOf(module, dep)
 			if depCell == "" || depCell == src.CellID {
 				continue
@@ -714,8 +723,8 @@ func checkTransitiveCrossCellInternal(module string, g *depgraph.Graph) []violat
 				Pkg:    src.ID,
 				Import: dep,
 				Message: fmt.Sprintf(
-					"LAYER-05T: %s transitively reaches %s (cross-cell internal via closure)",
-					src.ID, dep),
+					"LAYER-05T: %s transitively reaches %s (cross-cell internal via closure); via: %s",
+					src.ID, dep, formatTransitivePath(path)),
 			})
 		}
 	}
@@ -736,7 +745,7 @@ func checkTransitiveCellOwnedSubpackage(modPrefix string, g *depgraph.Graph) []v
 		if srcLayer == "cmd" || srcLayer == "examples" {
 			continue
 		}
-		for dep := range g.TransitiveImports(src.ID) {
+		for dep, path := range g.TransitiveImportsWithPaths(src.ID) {
 			ownerPrefix, ok := matchCellOwnedSubpackage(modPrefix, dep)
 			if !ok {
 				continue
@@ -749,8 +758,8 @@ func checkTransitiveCellOwnedSubpackage(modPrefix string, g *depgraph.Graph) []v
 				Pkg:    src.ID,
 				Import: dep,
 				Message: fmt.Sprintf(
-					"LAYER-06T: %s transitively reaches %s (cell-owned subpackage; only %s* / cmd/* / examples/* may import it)",
-					src.ID, dep, ownerPrefix),
+					"LAYER-06T: %s transitively reaches %s (cell-owned subpackage; only %s* / cmd/* / examples/* may import it); via: %s",
+					src.ID, dep, ownerPrefix, formatTransitivePath(path)),
 			})
 		}
 	}
@@ -765,8 +774,7 @@ func checkTransitiveCrossCellEvents(module string, g *depgraph.Graph) []violatio
 		if src.Layer != depgraph.LayerCells || src.CellID == "" {
 			continue
 		}
-		closure := g.TransitiveImports(src.ID)
-		for dep := range closure {
+		for dep, path := range g.TransitiveImportsWithPaths(src.ID) {
 			depCell := depgraph.CellOf(module, dep)
 			if depCell == "" || depCell == src.CellID {
 				continue
@@ -780,8 +788,8 @@ func checkTransitiveCrossCellEvents(module string, g *depgraph.Graph) []violatio
 				Pkg:    src.ID,
 				Import: dep,
 				Message: fmt.Sprintf(
-					"LAYER-09T: %s transitively reaches %s (cross-cell events via closure)",
-					src.ID, dep),
+					"LAYER-09T: %s transitively reaches %s (cross-cell events via closure); via: %s",
+					src.ID, dep, formatTransitivePath(path)),
 			})
 		}
 	}
@@ -1390,6 +1398,12 @@ func TestLayeringRules_LAYER05T_NegativeProbe(t *testing.T) {
 	assert.Equal(t, "LAYER-05T", violations[0].Rule)
 	assert.Equal(t, cellA, violations[0].Pkg)
 	assert.Equal(t, cellBInt, violations[0].Import)
+	// The message must surface the laundering chain; otherwise reviewers
+	// have to grep the codebase to find the intermediate hop.
+	assert.Contains(t, violations[0].Message, "via: ",
+		"LAYER-05T message must include via: clause with the closure path")
+	assert.Contains(t, violations[0].Message, util,
+		"LAYER-05T message must name the intermediate package")
 }
 
 // TestLayeringRules_LAYER06T_NegativeProbe verifies the transitive form of
@@ -1429,6 +1443,10 @@ func TestLayeringRules_LAYER06T_NegativeProbe(t *testing.T) {
 	assert.Equal(t, initialadmin, auditcoreViolations[0].Import)
 	assert.Contains(t, auditcoreViolations[0].Message, "transitively reaches",
 		"LAYER-06T message should mark the closure as transitive, not borrow LAYER-06's 'imports' phrasing")
+	assert.Contains(t, auditcoreViolations[0].Message, "via: ",
+		"LAYER-06T message must include via: clause with the closure path")
+	assert.Contains(t, auditcoreViolations[0].Message, util,
+		"LAYER-06T message must name the intermediate package")
 }
 
 // TestLayeringRules_LAYER09T_NegativeProbe verifies the transitive form of
@@ -1454,6 +1472,10 @@ func TestLayeringRules_LAYER09T_NegativeProbe(t *testing.T) {
 	assert.Equal(t, "LAYER-09T", violations[0].Rule)
 	assert.Equal(t, cellA, violations[0].Pkg)
 	assert.Equal(t, cellBEvents, violations[0].Import)
+	assert.Contains(t, violations[0].Message, "via: ",
+		"LAYER-09T message must include via: clause with the closure path")
+	assert.Contains(t, violations[0].Message, util,
+		"LAYER-09T message must name the intermediate package")
 }
 
 // TestLoadModule_IntegrationTagPlumbing verifies that loadModule passes

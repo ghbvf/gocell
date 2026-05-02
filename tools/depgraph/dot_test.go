@@ -23,6 +23,11 @@ func TestWriteDOT_StructuralAssertions(t *testing.T) {
 	if !strings.HasSuffix(strings.TrimSpace(out), "}") {
 		t.Errorf("DOT missing closing brace")
 	}
+	// Lock trailing newline: POSIX text files end with \n, and downstream
+	// pipes (e.g. `gocell graph --format=dot | dot -Tsvg`) expect it.
+	if !strings.HasSuffix(out, "}\n") {
+		t.Errorf("DOT output must end with \"}\\n\"; last bytes: %q", out[max(0, len(out)-8):])
+	}
 
 	// Every loaded node ID appears exactly once as a node declaration
 	// inside its layer cluster.

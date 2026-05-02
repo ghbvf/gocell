@@ -31,11 +31,14 @@
 //
 // Two entry points address two audiences:
 //
-//   - Load(patterns ...string) — self-contained, for CLI or one-shot
-//     consumers. Auto-detects module path from go.mod and runs
-//     packages.Load with the structural modes only
-//     (NeedName | NeedImports | NeedModule). Callers that need typed
-//     analysis must use a separate loader.
+//   - Load(opts LoadOptions, patterns ...string) (*Graph, error) —
+//     self-contained, for CLI or one-shot consumers. Auto-detects module
+//     path from go.mod and runs packages.Load with the structural modes
+//     only (NeedName | NeedImports | NeedModule). Per-package errors
+//     surfaced by packages.Load (malformed import path, type-check
+//     failure, etc.) become a fail-fast error so callers never receive a
+//     silently partial graph. Callers that need typed analysis must use a
+//     separate loader (see archtest's typeseval.SharedResolver).
 //   - FromPackages(module, pkgs) — injection point for callers that
 //     already loaded packages (notably archtest, which shares
 //     typeseval.SharedResolver across structural and type-level rules).

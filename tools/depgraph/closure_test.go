@@ -120,6 +120,76 @@ func TestTransitiveImports_FreshCopy(t *testing.T) {
 	}
 }
 
+// TestTransitiveImportsWithPaths_DAG locks the path-recording contract:
+// each reachable dep is keyed to a chain that starts at the source and
+// ends at the dep, inclusive on both ends. Used by archtest's LAYER-05T/
+// 06T/09T violation messages to render "src → util → dep".
+func TestTransitiveImportsWithPaths_DAG(t *testing.T) {
+	t.Parallel()
+	g := loadSynth(t, false)
+	src := synthModule + "/a"
+	paths := g.TransitiveImportsWithPaths(src)
+
+	// a → b → c, a → d (synth fixture). Each path is anchored at src
+	// and terminates at the dep; b and d are direct, c is transitive.
+	for _, dep := range []string{
+		synthModule + "/b",
+		synthModule + "/c",
+		synthModule + "/d",
+	} {
+		path, ok := paths[dep]
+		if !ok {
+			t.Errorf("missing path entry for %s", dep)
+			continue
+		}
+		if len(path) < 2 {
+			t.Errorf("path to %s too short: %v", dep, path)
+			continue
+		}
+		if path[0] != src {
+			t.Errorf("path[0] = %q, want %q", path[0], src)
+		}
+		if path[len(path)-1] != dep {
+			t.Errorf("path[last] = %q, want %q", path[len(path)-1], dep)
+		}
+	}
+
+	// Source itself must NOT appear as its own key.
+	if _, ok := paths[src]; ok {
+		t.Errorf("source %q should not appear in path map", src)
+	}
+}
+
+// TestTransitiveImportsWithPaths_GhostNodeNotMarked verifies R4-1: a ghost
+// reference (PkgPath in another package's Imports but not loaded into the
+// graph) must not appear in the path map and must not block re-entry from
+// other parents. The previous implementation marked the ghost visited and
+// returned, which was harmless for paths but wrong as defensive scaffolding.
+func TestTransitiveImportsWithPaths_GhostNodeNotMarked(t *testing.T) {
+	t.Parallel()
+	const mod = "example.com/ghost"
+	src := mod + "/src"
+	ghost := mod + "/ghost"
+
+	// src imports a ghost (the ghost package is not in the load).
+	srcPkg := &packages.Package{
+		PkgPath: src,
+		Imports: map[string]*packages.Package{
+			ghost: {PkgPath: ghost},
+		},
+	}
+	g := depgraph.FromPackages(mod, []*packages.Package{srcPkg})
+
+	paths := g.TransitiveImportsWithPaths(src)
+	if _, ok := paths[ghost]; ok {
+		t.Errorf("ghost node %q should not appear in path map; got path %v",
+			ghost, paths[ghost])
+	}
+	if len(paths) != 0 {
+		t.Errorf("expected empty path map for ghost-only graph; got %v", paths)
+	}
+}
+
 // TestTransitiveImports_SelfCycle verifies that a package whose Imports map
 // contains its own PkgPath does not cause an infinite loop, and that the
 // closure result is empty (the only reachable node is self, which is excluded).

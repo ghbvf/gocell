@@ -3,6 +3,7 @@ package depgraph_test
 import (
 	"path/filepath"
 	"sort"
+	"strings"
 	"testing"
 
 	"golang.org/x/tools/go/packages"
@@ -203,6 +204,27 @@ func TestLoad_NoPatternsErr(t *testing.T) {
 	}
 	if _, err := depgraph.Load(depgraph.LoadOptions{Dir: dir}, "./does-not-exist/..."); err == nil {
 		t.Error("Load with non-matching pattern: want error, got nil")
+	}
+}
+
+// TestLoad_RejectsMalformedPattern locks the contract that per-package
+// errors surface from Load instead of being swallowed. packages.Load
+// turns a leading-dash pattern into a single ghost package whose Errors
+// slice contains "malformed import path: leading dash"; without the
+// p.Errors check Load would return a partial graph and the CLI would
+// emit JSON like {packages:[{id:"-find",imports:[]}], stats:{packages:1}}.
+func TestLoad_RejectsMalformedPattern(t *testing.T) {
+	t.Parallel()
+	dir, err := filepath.Abs("testdata/synth")
+	if err != nil {
+		t.Fatalf("filepath.Abs: %v", err)
+	}
+	_, err = depgraph.Load(depgraph.LoadOptions{Dir: dir}, "-find")
+	if err == nil {
+		t.Fatal("Load(\"-find\"): want error, got nil")
+	}
+	if !strings.Contains(err.Error(), "malformed import path") {
+		t.Errorf("error %q does not name the underlying packages.Load failure", err)
 	}
 }
 
