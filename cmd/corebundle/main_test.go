@@ -147,7 +147,7 @@ func TestLoadKeySet(t *testing.T) {
 			t.Setenv(auth.EnvJWTPublicKey, tc.envPub)
 			t.Setenv(auth.EnvJWTPrevPublicKey, tc.envPrevPub)
 
-			ks, err := loadKeySet(tc.mode)
+			ks, err := loadKeySet(tc.mode, clock.Real())
 			if tc.wantErr {
 				require.Error(t, err)
 				if tc.errContains != "" {

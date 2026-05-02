@@ -41,6 +41,7 @@ func minimalSharedDepsForAuditTest(t *testing.T, adapterMode string) *SharedDeps
 	require.NoError(t, err)
 
 	return &SharedDeps{
+		Clock:               clock.Real(),
 		Topology:            bootstrap.Topology{StorageBackend: "memory", AdapterMode: adapterMode},
 		JWTDeps:             jwtDeps{issuer: issuer, verifier: verifier},
 		PromStack:           ps,

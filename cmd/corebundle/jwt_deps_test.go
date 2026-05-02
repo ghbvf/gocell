@@ -53,7 +53,7 @@ func setTestJWTKeyEnv(t *testing.T) {
 func TestBuildJWTDeps_MissingIssuer_Error(t *testing.T) {
 	t.Setenv("GOCELL_JWT_ISSUER", "")
 	t.Setenv("GOCELL_JWT_AUDIENCE", "gocell")
-	_, err := buildJWTDeps("")
+	_, err := buildJWTDeps("", clock.Real())
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "GOCELL_JWT_ISSUER",
 		"error must name the missing env var")
@@ -64,7 +64,7 @@ func TestBuildJWTDeps_MissingIssuer_Error(t *testing.T) {
 func TestBuildJWTDeps_MissingAudience_Error(t *testing.T) {
 	t.Setenv("GOCELL_JWT_ISSUER", "gocell-prod")
 	t.Setenv("GOCELL_JWT_AUDIENCE", "")
-	_, err := buildJWTDeps("")
+	_, err := buildJWTDeps("", clock.Real())
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "GOCELL_JWT_AUDIENCE",
 		"error must name the missing env var")
@@ -90,7 +90,7 @@ func TestBuildJWTDeps_ProdWiring_VerifierRejectsWrongIssuer(t *testing.T) {
 	t.Setenv("GOCELL_JWT_ISSUER", "prod-iss")
 	t.Setenv("GOCELL_JWT_AUDIENCE", "gocell")
 
-	deps, err := buildJWTDeps("")
+	deps, err := buildJWTDeps("", clock.Real())
 	require.NoError(t, err, "buildJWTDeps must succeed with valid env vars")
 
 	// Reload the exact same key material from env — deps already loaded it, so
@@ -130,7 +130,7 @@ func TestBuildJWTDeps_ProdWiring_VerifierRejectsWrongAudience(t *testing.T) {
 	t.Setenv("GOCELL_JWT_ISSUER", "prod-iss")
 	t.Setenv("GOCELL_JWT_AUDIENCE", "gocell")
 
-	deps, err := buildJWTDeps("")
+	deps, err := buildJWTDeps("", clock.Real())
 	require.NoError(t, err, "buildJWTDeps must succeed with valid env vars")
 
 	tok, err := deps.issuer.Issue(auth.TokenIntentAccess, "user-1", auth.IssueOptions{
@@ -159,7 +159,7 @@ func TestBuildJWTDeps_ProdWiring_VerifierRejectsWrongKey(t *testing.T) {
 	t.Setenv("GOCELL_JWT_ISSUER", "prod-iss")
 	t.Setenv("GOCELL_JWT_AUDIENCE", "gocell")
 
-	deps, err := buildJWTDeps("")
+	deps, err := buildJWTDeps("", clock.Real())
 	require.NoError(t, err)
 
 	// Build a completely independent keyset — deps.verifier has no public key
@@ -193,7 +193,7 @@ func TestBuildJWTDeps_LogsEffectiveConfig(t *testing.T) {
 	slog.SetDefault(slog.New(handler))
 	t.Cleanup(func() { slog.SetDefault(prev) })
 
-	_, err := buildJWTDeps("testmode")
+	_, err := buildJWTDeps("testmode", clock.Real())
 	require.NoError(t, err)
 
 	// Parse log lines looking for the JWT deps built record.

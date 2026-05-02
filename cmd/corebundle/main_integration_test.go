@@ -14,6 +14,7 @@ import (
 	"time"
 
 	adapterpg "github.com/ghbvf/gocell/adapters/postgres"
+	"github.com/ghbvf/gocell/kernel/clock"
 	kernelmetrics "github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/runtime/bootstrap"
@@ -77,6 +78,7 @@ func TestBuildConfigCoreOpts_Postgres_SchemaMatched(t *testing.T) {
 		Publisher:        discardPublisher{},
 		MetricsProvider:  kernelmetrics.NopProvider{},
 		ValueTransformer: crypto.NoopTransformer{},
+		Clock:            clock.Real(),
 	})
 
 	require.NoError(t, err, "buildConfigCoreOpts must succeed with a fully migrated DB")
@@ -124,6 +126,7 @@ func TestBuildConfigCoreOpts_Postgres_SchemaMismatch(t *testing.T) {
 		Publisher:        discardPublisher{},
 		MetricsProvider:  kernelmetrics.NopProvider{},
 		ValueTransformer: crypto.NoopTransformer{},
+		Clock:            clock.Real(),
 	})
 
 	require.Error(t, err, "buildConfigCoreOpts must return error when schema is lagged")

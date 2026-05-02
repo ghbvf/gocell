@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	adapterpg "github.com/ghbvf/gocell/adapters/postgres"
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/runtime/bootstrap"
 	"github.com/ghbvf/gocell/runtime/crypto"
@@ -35,6 +36,7 @@ func TestBuildConfigCoreOpts_PGMode_ManagedResourceNonNil(t *testing.T) {
 		Publisher:        discardPublisher{},
 		MetricsProvider:  metrics.NopProvider{},
 		ValueTransformer: crypto.NoopTransformer{},
+		Clock:            clock.Real(),
 	})
 
 	require.NoError(t, err, "postgres mode must not error when DSN is valid")

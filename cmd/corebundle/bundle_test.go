@@ -78,7 +78,7 @@ func TestBuildAssembly_RegisterError(t *testing.T) {
 	c1 := cell.NewBaseCell(cell.CellMetadata{ID: "dup-cell", Type: cell.CellTypeCore})
 	c2 := cell.NewBaseCell(cell.CellMetadata{ID: "dup-cell", Type: cell.CellTypeCore})
 
-	_, err = buildAssembly(ps, "corebundle", cell.DurabilityDemo, c1, c2)
+	_, err = buildAssembly(ps, "corebundle", cell.DurabilityDemo, clock.Real(), c1, c2)
 	require.Error(t, err, "duplicate cell ID must cause buildAssembly to return an error")
 	assert.Contains(t, err.Error(), "dup-cell",
 		"error must mention the duplicate cell ID so operators can diagnose the conflict")
@@ -171,6 +171,7 @@ func TestBuildConfigCoreOpts_PGMode_InvalidDSN_PoolError(t *testing.T) {
 		Publisher:        discardPublisher{},
 		MetricsProvider:  metrics.NopProvider{},
 		ValueTransformer: crypto.NoopTransformer{},
+		Clock:            clock.Real(),
 	})
 
 	require.Error(t, err, "postgres mode with invalid DSN must return an error")
@@ -239,6 +240,7 @@ func buildTestSharedDeps(t *testing.T) *SharedDeps {
 	require.NoError(t, err)
 
 	return &SharedDeps{
+		Clock:                clock.Real(),
 		Topology:             bootstrap.Topology{StorageBackend: "memory", AdapterMode: ""},
 		JWTDeps:              jwtDeps{issuer: issuer, verifier: verifier},
 		PromStack:            ps,
@@ -284,6 +286,7 @@ func newValidatedSharedDeps(t *testing.T, topo bootstrap.Topology) *SharedDeps {
 	require.NoError(t, err)
 
 	deps := &SharedDeps{
+		Clock:                clock.Real(),
 		Topology:             topo,
 		JWTDeps:              jwtDeps{issuer: issuer, verifier: verifier},
 		PromStack:            ps,
@@ -360,7 +363,7 @@ func buildBootstrapFromShared(
 		return nil, err
 	}
 
-	asm, err := buildAssembly(shared.PromStack, "corebundle", durabilityModeForTopology(shared.Topology), cells...)
+	asm, err := buildAssembly(shared.PromStack, "corebundle", durabilityModeForTopology(shared.Topology), shared.Clock, cells...)
 	if err != nil {
 		return nil, err
 	}

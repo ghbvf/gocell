@@ -50,7 +50,7 @@ func runCorebundle(ctx context.Context, assemblyID string, assemblyCellIDs []str
 		return err
 	}
 
-	asm, err := buildAssembly(shared.PromStack, assemblyID, durabilityModeForTopology(shared.Topology), cells...)
+	asm, err := buildAssembly(shared.PromStack, assemblyID, durabilityModeForTopology(shared.Topology), shared.Clock, cells...)
 	if err != nil {
 		return fmt.Errorf("build assembly: %w", err)
 	}

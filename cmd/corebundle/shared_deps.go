@@ -34,6 +34,12 @@ import (
 // ref: kubernetes/kubernetes cmd/kube-apiserver/app/options/validation.go —
 // all required fields validated in one place before startup.
 type SharedDeps struct {
+	// Clock is the single root clock instance threaded through every adapter,
+	// service, and middleware constructed by BuildApp / its module builders.
+	// Tests inject a clockmock.FakeClock to drive time deterministically;
+	// production wires clock.Real() exactly once at the entry point.
+	Clock clock.Clock
+
 	// Topology is the resolved adapter-mode / storage-backend combination.
 	Topology bootstrap.Topology
 
@@ -178,7 +184,7 @@ func buildSharedMetricsDeps() (sharedMetricsDeps, error) {
 	}, nil
 }
 
-func buildSharedReplayDeps(ctx context.Context, topo bootstrap.Topology) (sharedReplayDeps, error) {
+func buildSharedReplayDeps(ctx context.Context, topo bootstrap.Topology, clk clock.Clock) (sharedReplayDeps, error) {
 	redisResult, err := buildRedisClient(ctx, topo)
 	if err != nil {
 		return sharedReplayDeps{}, err
@@ -191,11 +197,11 @@ func buildSharedReplayDeps(ctx context.Context, topo bootstrap.Topology) (shared
 		}
 	}()
 
-	nonceStore, err := buildServiceNonceStore(topo, redisClient)
+	nonceStore, err := buildServiceNonceStore(topo, redisClient, clk)
 	if err != nil {
 		return sharedReplayDeps{}, err
 	}
-	claimer, claimerKind, err := buildConsumerClaimer(topo, redisClient)
+	claimer, claimerKind, err := buildConsumerClaimer(topo, redisClient, clk)
 	if err != nil {
 		return sharedReplayDeps{}, err
 	}
@@ -473,13 +479,17 @@ func isLoopbackBindAddr(addr string) bool {
 //
 // ref: go-zero serviceconf.MustLoad — single parse-validate call at startup.
 func LoadSharedDepsFromEnv(ctx context.Context) (*SharedDeps, error) {
+	// Single root clock: constructed exactly once here and threaded through
+	// every adapter, service, and middleware via SharedDeps.Clock.
+	clk := clock.Real()
+
 	topo, err := bootstrap.TopologyFromEnv()
 	if err != nil {
 		return nil, err
 	}
 	adapterMode := topo.AdapterMode
 
-	jwt, err := buildJWTDeps(adapterMode)
+	jwt, err := buildJWTDeps(adapterMode, clk)
 	if err != nil {
 		return nil, err
 	}
@@ -489,7 +499,7 @@ func LoadSharedDepsFromEnv(ctx context.Context) (*SharedDeps, error) {
 		return nil, err
 	}
 
-	replay, err := buildSharedReplayDeps(ctx, topo)
+	replay, err := buildSharedReplayDeps(ctx, topo, clk)
 	if err != nil {
 		return nil, err
 	}
@@ -500,11 +510,11 @@ func LoadSharedDepsFromEnv(ctx context.Context) (*SharedDeps, error) {
 		}
 	}()
 
-	eb := eventbus.New(eventbus.WithClock(clock.Real()))
+	eb := eventbus.New(eventbus.WithClock(clk))
 
 	primaryAddr, internalAddr, healthAddr := resolveListenerAddrs()
 
-	internalGuard, err := internalGuardFromEnv(adapterMode, replay.NonceStore)
+	internalGuard, err := internalGuardFromEnv(adapterMode, replay.NonceStore, clk)
 	if err != nil {
 		return nil, err
 	}
@@ -536,6 +546,7 @@ func LoadSharedDepsFromEnv(ctx context.Context) (*SharedDeps, error) {
 	}
 
 	deps := &SharedDeps{
+		Clock:                clk,
 		Topology:             topo,
 		JWTDeps:              jwt,
 		PromStack:            metricsDeps.PromStack,

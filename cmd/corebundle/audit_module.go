@@ -7,7 +7,6 @@ import (
 	adapterpg "github.com/ghbvf/gocell/adapters/postgres"
 	auditcore "github.com/ghbvf/gocell/cells/auditcore"
 	"github.com/ghbvf/gocell/kernel/cell"
-	"github.com/ghbvf/gocell/kernel/clock"
 	kernellifecycle "github.com/ghbvf/gocell/kernel/lifecycle"
 	"github.com/ghbvf/gocell/runtime/bootstrap"
 )
@@ -73,7 +72,7 @@ func (AuditCoreModule) Provide(
 			return nil, nil, nil, fmt.Errorf("AuditCoreModule: postgres mode requires SharedPGPool " +
 				"(ConfigCoreModule must run before AuditCoreModule)")
 		}
-		writer := adapterpg.NewOutboxWriter(clock.Real())
+		writer := adapterpg.NewOutboxWriter(shared.Clock)
 		txMgr := adapterpg.NewTxManager(shared.SharedPGPool)
 		// Accumulative WithOutboxDeps: adds writer without replacing the publisher
 		// set above. WithTxManager wires the TxRunner for L2 transactional atomicity.

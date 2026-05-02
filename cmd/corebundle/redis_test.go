@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	adapterredis "github.com/ghbvf/gocell/adapters/redis"
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/idempotency"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/runtime/auth"
@@ -143,14 +144,14 @@ func TestBuildReplayDependencies_RealSinglePodUsesInMemory(t *testing.T) {
 		SinglePodReplayProtection: true,
 	}
 
-	nonceStore, err := buildServiceNonceStore(topo, nil)
+	nonceStore, err := buildServiceNonceStore(topo, nil, clock.Real())
 	require.NoError(t, err)
 	assert.Equal(t, auth.NonceStoreKindInMemory, nonceStore.Kind())
 	inMemoryNonceStore, ok := nonceStore.(*auth.InMemoryNonceStore)
 	require.True(t, ok)
 	assert.Equal(t, auth.ServiceTokenNonceTTL, inMemoryNonceStore.MaxAge())
 
-	claimer, kind, err := buildConsumerClaimer(topo, nil)
+	claimer, kind, err := buildConsumerClaimer(topo, nil, clock.Real())
 	require.NoError(t, err)
 	assert.Equal(t, consumerClaimerKindInMemory, kind)
 	assert.IsType(t, &idempotency.InMemClaimer{}, claimer)
@@ -162,7 +163,7 @@ func TestBuildServiceNonceStore_RealMultiPodRequiresRedisClient(t *testing.T) {
 		StorageBackend: "postgres",
 	}
 
-	store, err := buildServiceNonceStore(topo, nil)
+	store, err := buildServiceNonceStore(topo, nil, clock.Real())
 
 	require.Error(t, err)
 	assert.Nil(t, store)
@@ -178,7 +179,7 @@ func TestBuildServiceNonceStore_DistributedFactoryErrorWrapped(t *testing.T) {
 		return nil, errRedisTestFactory
 	})
 
-	store, err := buildServiceNonceStore(topo, new(adapterredis.Client))
+	store, err := buildServiceNonceStore(topo, new(adapterredis.Client), clock.Real())
 
 	require.Error(t, err)
 	assert.Nil(t, store)
@@ -192,7 +193,7 @@ func TestBuildConsumerClaimer_RealMultiPodRequiresRedisClient(t *testing.T) {
 		StorageBackend: "postgres",
 	}
 
-	claimer, kind, err := buildConsumerClaimer(topo, nil)
+	claimer, kind, err := buildConsumerClaimer(topo, nil, clock.Real())
 
 	require.Error(t, err)
 	assert.Nil(t, claimer)
@@ -220,13 +221,13 @@ func TestBuildReplayDependencies_RealMultiPodConfiguredRedisUsesDistributedStore
 		return fakeDistributedClaimer{}
 	})
 
-	nonceStore, err := buildServiceNonceStore(topo, client)
+	nonceStore, err := buildServiceNonceStore(topo, client, clock.Real())
 	require.NoError(t, err)
 	assert.Same(t, client, gotNonceClient)
 	assert.Equal(t, auth.ServiceTokenNonceTTL, gotNonceTTL)
 	assert.Equal(t, auth.NonceStoreKindDistributed, nonceStore.Kind())
 
-	claimer, kind, err := buildConsumerClaimer(topo, client)
+	claimer, kind, err := buildConsumerClaimer(topo, client, clock.Real())
 	require.NoError(t, err)
 	assert.Same(t, client, gotClaimerClient)
 	assert.Equal(t, consumerClaimerKindDistributed, kind)

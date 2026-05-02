@@ -43,6 +43,7 @@ func TestBuildConfigCoreOpts_InMemoryMode_NoRelay(t *testing.T) {
 		Publisher:        discardPublisher{},
 		MetricsProvider:  metrics.NopProvider{},
 		ValueTransformer: crypto.NoopTransformer{},
+		Clock:            clock.Real(),
 	})
 
 	require.NoError(t, err)
@@ -64,6 +65,7 @@ func TestBuildConfigCoreOpts_UnknownMode_Error(t *testing.T) {
 		Publisher:        discardPublisher{},
 		MetricsProvider:  metrics.NopProvider{},
 		ValueTransformer: crypto.NoopTransformer{},
+		Clock:            clock.Real(),
 	})
 
 	require.Error(t, err)
@@ -85,6 +87,7 @@ func TestBuildConfigCoreOpts_PGMode_MissingDSN(t *testing.T) {
 		Publisher:        discardPublisher{},
 		MetricsProvider:  metrics.NopProvider{},
 		ValueTransformer: crypto.NoopTransformer{},
+		Clock:            clock.Real(),
 	})
 
 	require.Error(t, err, "postgres mode with empty DSN must return an error")

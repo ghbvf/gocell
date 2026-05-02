@@ -96,7 +96,7 @@ func buildBootstrapWithFakeKeyProvider(
 		return nil, err
 	}
 
-	asm, err := buildAssembly(shared.PromStack, "corebundle", durabilityModeForTopology(shared.Topology), cells...)
+	asm, err := buildAssembly(shared.PromStack, "corebundle", durabilityModeForTopology(shared.Topology), shared.Clock, cells...)
 	if err != nil {
 		return nil, err
 	}

@@ -31,12 +31,13 @@ func buildAssembly(
 	ps promStack,
 	assemblyID string,
 	mode cell.DurabilityMode,
+	clk clock.Clock,
 	cells ...cell.Cell,
 ) (*assembly.CoreAssembly, error) {
 	asm := assembly.New(assembly.Config{
 		ID:              assemblyID,
 		DurabilityMode:  mode,
-		Clock:           clock.Real(),
+		Clock:           clk,
 		HookObserver:    ps.hookObserver,
 		MetricsProvider: ps.metricProvider,
 		// HookTimeout omitted → assembly.DefaultHookTimeout (30s) applies.
@@ -85,7 +86,7 @@ func runtimeBaseOptions(
 		// the lifecycle, default-assembly fallback, and cell.Dependencies
 		// every Init receives. The pair is the load-bearing invariant of
 		// PROD-CLOCK-INJECTION-01 — never default-fallback in adapters or cells.
-		bootstrap.WithClock(clock.Real()),
+		bootstrap.WithClock(shared.Clock),
 		bootstrap.WithAssembly(asm),
 		bootstrap.WithPublisher(shared.EventBus),
 		bootstrap.WithSubscriber(shared.EventBus),
@@ -201,7 +202,9 @@ func buildInternalAuthChain(guard *internalGuard) []cell.ListenerAuth {
 // ref: kubernetes/kubernetes pkg/apiserver/admission/config.go — missing
 // EncryptionConfig in an active storage path is a startup error, not a warning.
 // ref: go-kratos/kratos config.Watch — required dependency failure aborts boot.
-func buildKeyProvider(storageBackend, adapterMode, providerName, masterKey, prevMasterKey string) (kcrypto.KeyProvider, error) {
+func buildKeyProvider(
+	storageBackend, adapterMode, providerName, masterKey, prevMasterKey string, clk clock.Clock,
+) (kcrypto.KeyProvider, error) {
 	if providerName == "" {
 		if storageBackend == "postgres" {
 			return nil, errcode.New(errcode.ErrConfigKeyMissing,
@@ -233,7 +236,7 @@ func buildKeyProvider(storageBackend, adapterMode, providerName, masterKey, prev
 		slog.Info("configcore: key provider initialized", slog.String("provider", "local-aes"))
 		return kp, nil
 	case "vault-transit":
-		kp, err := adaptervault.NewTransitKeyProviderFromEnv(isRealMode(adapterMode), clock.Real())
+		kp, err := adaptervault.NewTransitKeyProviderFromEnv(isRealMode(adapterMode), clk)
 		if err != nil {
 			return nil, fmt.Errorf("vault-transit key provider: %w", err)
 		}
@@ -291,6 +294,7 @@ type ConfigCoreModuleConfig struct {
 	MetricsProvider  metrics.Provider
 	ValueTransformer kcrypto.ValueTransformer
 	OnStaleCipher    func(key, storedKeyID, currentKeyID string)
+	Clock            clock.Clock
 }
 
 // ConfigCoreModuleResult bundles the outputs from buildConfigCoreOpts. Using a
@@ -349,7 +353,7 @@ func buildConfigCoreOpts(ctx context.Context, cfg ConfigCoreModuleConfig) (Confi
 				slog.Any("indexes", invalid))
 		}
 
-		outboxWriter := adapterpg.NewOutboxWriter(clock.Real())
+		outboxWriter := adapterpg.NewOutboxWriter(cfg.Clock)
 		txMgr := adapterpg.NewTxManager(pool)
 
 		relayCfg := outboxruntime.DefaultRelayConfig()
@@ -359,8 +363,8 @@ func buildConfigCoreOpts(ctx context.Context, cfg ConfigCoreModuleConfig) (Confi
 			return ConfigCoreModuleResult{}, fmt.Errorf("configcore outbox relay metrics: %w", rmErr)
 		}
 		relayCfg.Metrics = relayMetrics
-		relayCfg.Clock = clock.Real()
-		pgStore := adapterpg.NewOutboxStore(pool.DB(), clock.Real())
+		relayCfg.Clock = cfg.Clock
+		pgStore := adapterpg.NewOutboxStore(pool.DB(), cfg.Clock)
 		relayWorker := outboxruntime.NewRelay(pgStore, cfg.Publisher, relayCfg)
 
 		pgRes, storageOpt, storageErr := buildConfigCorePGStorage(pool, cfg)
@@ -421,7 +425,7 @@ func buildConfigCorePGStorage(
 	if err != nil {
 		return nil, nil, fmt.Errorf("configcore PG resource: %w", err)
 	}
-	storageOpt, err := configpg.WithPool(pool.DB(), clock.Real(),
+	storageOpt, err := configpg.WithPool(pool.DB(), cfg.Clock,
 		configpg.WithValueTransformer(cfg.ValueTransformer),
 		configpg.WithOnStaleCipher(cfg.OnStaleCipher),
 	)
@@ -440,7 +444,7 @@ func buildConsumerBase(deps *SharedDeps) (*outbox.ConsumerBase, error) {
 	if deps.ConsumerClaimer == nil {
 		return nil, fmt.Errorf("construct ConsumerBase: SharedDeps.ConsumerClaimer must be set")
 	}
-	cb, err := outbox.NewConsumerBase(deps.ConsumerClaimer, outbox.ConsumerBaseConfig{}, clock.Real())
+	cb, err := outbox.NewConsumerBase(deps.ConsumerClaimer, outbox.ConsumerBaseConfig{}, deps.Clock)
 	if err != nil {
 		return nil, fmt.Errorf("construct ConsumerBase: %w", err)
 	}

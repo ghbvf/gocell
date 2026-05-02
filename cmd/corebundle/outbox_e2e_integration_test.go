@@ -133,6 +133,7 @@ func TestOutboxE2E_PGMode_WriteToSubscribe(t *testing.T) {
 		Publisher:        eb,
 		MetricsProvider:  kernelmetrics.NopProvider{},
 		ValueTransformer: crypto.NoopTransformer{},
+		Clock:            clock.Real(),
 	})
 	require.NoError(t, err, "buildConfigCoreOpts must succeed in postgres mode")
 	pgRes := modResult.PGResource
@@ -491,6 +492,7 @@ func TestOutboxE2E_RefetchLoop_AccessCoreCallsInternalGet(t *testing.T) {
 		Publisher:        eb,
 		MetricsProvider:  kernelmetrics.NopProvider{},
 		ValueTransformer: crypto.NoopTransformer{},
+		Clock:            clock.Real(),
 	})
 	require.NoError(t, err, "buildConfigCoreOpts must succeed in postgres mode")
 	pgRes := modResult.PGResource
