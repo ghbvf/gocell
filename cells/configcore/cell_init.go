@@ -1,6 +1,6 @@
 // cell_init.go hosts ConfigCore.Init() and the initXxxSlice helpers that
-// construct the six slices during cell initialization. Runtime request-path
-// code lives in cell_routes.go; constructor + options live in cell.go.
+// construct the six slices during cell initialization. Constructor + options
+// live in cell.go.
 package configcore
 
 import (
@@ -18,18 +18,36 @@ import (
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/persistence"
+	"github.com/ghbvf/gocell/kernel/wrapper"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/query"
 )
 
-// Init constructs all slices and registers them. Storage adapters are resolved
-// by composition roots before NewConfigCore receives its repository options.
-func (c *ConfigCore) Init(ctx context.Context, deps cell.Dependencies) error {
-	if err := c.BaseCell.Init(ctx, deps); err != nil {
+// emitterHealthChecker is a local interface satisfied by outbox.DirectEmitter.
+// Avoids a hard import of the concrete type; Batch 4 renames the method to Probes().
+type emitterHealthChecker interface {
+	HealthCheckers() map[string]func(context.Context) error
+}
+
+// Event spec variables for configcore subscriptions. EventSpec id==topic so
+// FMT-18's literal-vs-YAML cross-check sees the ID literal in the call.
+var (
+	specEventConfigEntryUpserted = wrapper.EventSpec("event.config.entry-upserted.v1", "amqp")
+	specEventConfigEntryDeleted  = wrapper.EventSpec("event.config.entry-deleted.v1", "amqp")
+)
+
+// Init constructs all slices and registers routes, subscriptions, and health
+// probes into reg. Storage adapters are resolved by composition roots before
+// NewConfigCore receives its repository options.
+func (c *ConfigCore) Init(ctx context.Context, reg cell.Registry) error {
+	if err := c.BaseCell.Init(ctx, reg); err != nil {
 		return err
 	}
 
-	c.clk = deps.Clock
+	// BaseCell does not expose a Clock accessor; configcore carries its own
+	// clock field derived from the assembly option (set via composition root).
+	// reg has no Config clock; use the cell's own c.clk (injected via option or
+	// default clock.Real()).
 
 	// WithInMemoryDefaults defers repo construction to here so c.clk is available.
 	if c.useInMemoryDefaults {
@@ -37,16 +55,18 @@ func (c *ConfigCore) Init(ctx context.Context, deps cell.Dependencies) error {
 		c.flagRepo = mem.NewFlagRepository(c.clk)
 	}
 
+	durabilityMode := reg.DurabilityMode()
+
 	// deriveModes' PublishFailureMode return is retained for TestConfigCore_DeriveModes
 	// (documents the demo→FailOpen / durable→FailClosed derivation at slice level);
 	// the Cell-boundary DirectEmitter fail mode is now owned by the kernel helper.
-	runMode, _ := c.deriveModes(deps.DurabilityMode)
+	runMode, _ := c.deriveModes(durabilityMode)
 
-	if err := c.resolveEmitter(deps.DurabilityMode); err != nil {
+	if err := c.resolveEmitter(durabilityMode); err != nil {
 		return err
 	}
 
-	if err := c.ensureCursorCodec(deps); err != nil {
+	if err := c.ensureCursorCodec(reg); err != nil {
 		return err
 	}
 
@@ -62,6 +82,65 @@ func (c *ConfigCore) Init(ctx context.Context, deps cell.Dependencies) error {
 	if err := c.initFlagWriteSlice(); err != nil {
 		return err
 	}
+
+	// Register HTTP route groups.
+	reg.RouteGroup(cell.RouteGroup{
+		Listener: cell.PrimaryListener,
+		Prefix:   "/api/v1",
+		Register: func(mux cell.RouteMux) error {
+			var firstErr error
+			captureErr := func(err error) {
+				if err != nil && firstErr == nil {
+					firstErr = err
+				}
+			}
+			mux.Route("/config", func(cfg cell.RouteMux) {
+				captureErr(c.readHandler.RegisterRoutes(cfg))
+				captureErr(c.writeHandler.RegisterRoutes(cfg))
+				captureErr(c.publishHandler.RegisterRoutes(cfg))
+			})
+			mux.Route("/flags", func(f cell.RouteMux) {
+				captureErr(c.flagHandler.RegisterRoutes(f))
+				captureErr(c.flagWriteHandler.RegisterRoutes(f))
+			})
+			return firstErr
+		},
+	})
+	reg.RouteGroup(cell.RouteGroup{
+		Listener: cell.InternalListener,
+		Prefix:   "/internal/v1",
+		Register: func(mux cell.RouteMux) error {
+			var firstErr error
+			mux.Route("/config", func(cfg cell.RouteMux) {
+				if err := c.readHandler.RegisterInternalRoutes(cfg); err != nil {
+					firstErr = err
+				}
+			})
+			return firstErr
+		},
+	})
+
+	// Register event subscriptions.
+	upsertedHandler := outbox.WrapLegacyHandler(c.subscribeSvc.HandleEntryUpserted)
+	if err := reg.Subscribe(
+		specEventConfigEntryUpserted, upsertedHandler, "configcore",
+		cell.WithSubscriptionSliceID("configsubscribe")); err != nil {
+		return fmt.Errorf("configcore: subscribe %s: %w", specEventConfigEntryUpserted.Topic, err)
+	}
+	deletedHandler := outbox.WrapLegacyHandler(c.subscribeSvc.HandleEntryDeleted)
+	if err := reg.Subscribe(
+		specEventConfigEntryDeleted, deletedHandler, "configcore",
+		cell.WithSubscriptionSliceID("configsubscribe")); err != nil {
+		return fmt.Errorf("configcore: subscribe %s: %w", specEventConfigEntryDeleted.Topic, err)
+	}
+
+	// Register health probes (emitter fail-open rate checker).
+	if hc, ok := c.emitter.(emitterHealthChecker); ok {
+		for k, v := range hc.HealthCheckers() {
+			reg.Health(k, v)
+		}
+	}
+
 	return nil
 }
 
@@ -117,11 +196,11 @@ func (c *ConfigCore) deriveModes(durabilityMode cell.DurabilityMode) (query.RunM
 // ensureCursorCodec sets a default cursor codec in demo mode or returns an
 // error in durable mode when no codec was injected.
 // ref: zeromicro/go-zero MustSetUp — fatal on insecure default config.
-func (c *ConfigCore) ensureCursorCodec(deps cell.Dependencies) error {
+func (c *ConfigCore) ensureCursorCodec(reg cell.Registry) error {
 	if c.cursorCodec != nil {
 		return nil
 	}
-	if deps.DurabilityMode == cell.DurabilityDurable {
+	if reg.DurabilityMode() == cell.DurabilityDurable {
 		return errcode.New(errcode.ErrCellMissingCodec,
 			"configcore durable mode requires a cursor codec;"+
 				" use WithCursorCodec(query.NewCursorCodec(secret))"+

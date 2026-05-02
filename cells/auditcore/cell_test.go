@@ -11,7 +11,6 @@ import (
 
 	"github.com/ghbvf/gocell/cells/auditcore/internal/mem"
 	"github.com/ghbvf/gocell/kernel/cell"
-	"github.com/ghbvf/gocell/kernel/cell/celltest"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/kernel/outbox"
@@ -57,17 +56,18 @@ func newTestCell() *AuditCore {
 	)
 }
 
+// newTestRecorder returns a RegistryRecorder for demo mode with an empty config.
+func newTestRecorder() *cell.RegistryRecorder {
+	return cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo)
+}
+
 func TestAuditCore_Lifecycle(t *testing.T) {
 	c := newTestCell()
 	ctx := context.Background()
-	deps := cell.Dependencies{
-		Config:         make(map[string]any),
-		DurabilityMode: cell.DurabilityDemo,
-		Clock:          clock.Real(),
-	}
+	recorder := newTestRecorder()
 
 	// Init
-	require.NoError(t, c.Init(ctx, deps))
+	require.NoError(t, c.Init(ctx, recorder))
 	assert.Equal(t, 4, len(c.OwnedSlices()), "should have 4 slices")
 
 	// Start
@@ -91,12 +91,8 @@ func TestAuditCore_Metadata(t *testing.T) {
 func TestAuditCore_Startup(t *testing.T) {
 	c := newTestCell()
 	ctx := context.Background()
-	deps := cell.Dependencies{
-		Config:         make(map[string]any),
-		DurabilityMode: cell.DurabilityDemo,
-		Clock:          clock.Real(),
-	}
-	require.NoError(t, c.Init(ctx, deps))
+	recorder := newTestRecorder()
+	require.NoError(t, c.Init(ctx, recorder))
 	require.NoError(t, c.Start(ctx))
 	assert.True(t, c.Ready())
 	require.NoError(t, c.Stop(ctx))
@@ -110,13 +106,7 @@ func TestAuditCore_MissingHMACKey(t *testing.T) {
 		// No HMAC key.
 	)
 	ctx := context.Background()
-	deps := cell.Dependencies{
-		Config:         make(map[string]any),
-		DurabilityMode: cell.DurabilityDemo,
-		Clock:          clock.Real(),
-	}
-
-	err := c.Init(ctx, deps)
+	err := c.Init(ctx, cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo))
 	assert.Error(t, err, "should fail without HMAC key")
 }
 
@@ -130,13 +120,11 @@ func TestAuditCore_HMACKeyFromConfig(t *testing.T) {
 		WithMetricsProvider(metrics.NopProvider{}),
 	)
 	ctx := context.Background()
-	deps := cell.Dependencies{
-		Config:         map[string]any{"audit.hmac_key": "config-provided-key-32bytes!!!!!"},
-		DurabilityMode: cell.DurabilityDemo,
-		Clock:          clock.Real(),
-	}
-
-	require.NoError(t, c.Init(ctx, deps))
+	err := c.Init(ctx, cell.NewRegistryRecorder(
+		map[string]any{"audit.hmac_key": "config-provided-key-32bytes!!!!!"},
+		cell.DurabilityDemo,
+	))
+	require.NoError(t, err)
 }
 
 // --- L2 Hard Gate: durable-mode dependency checks ---
@@ -150,7 +138,7 @@ func TestInit_DemoMode_OutboxWithoutTx_Fails(t *testing.T) {
 		WithOutboxDeps(nil, outbox.NoopWriter{}),
 		// txRunner intentionally omitted
 	)
-	err := c.Init(context.Background(), cell.Dependencies{Config: map[string]any{}, DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
+	err := c.Init(context.Background(), cell.NewRegistryRecorder(map[string]any{}, cell.DurabilityDemo))
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "outboxWriter and txRunner")
 }
@@ -164,7 +152,7 @@ func TestInit_DemoMode_TxWithoutOutbox_Fails(t *testing.T) {
 		WithTxManager(persistence.NoopTxRunner{}),
 		// outboxWriter intentionally omitted
 	)
-	err := c.Init(context.Background(), cell.Dependencies{Config: map[string]any{}, DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
+	err := c.Init(context.Background(), cell.NewRegistryRecorder(map[string]any{}, cell.DurabilityDemo))
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "outboxWriter and txRunner")
 }
@@ -175,7 +163,7 @@ func TestInit_DemoMode_NoPublisherNoOutbox_Fails(t *testing.T) {
 		WithArchiveStore(mem.NewArchiveStore()),
 		WithHMACKey(testHMACKey),
 	)
-	err := c.Init(context.Background(), cell.Dependencies{Config: map[string]any{}, DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
+	err := c.Init(context.Background(), cell.NewRegistryRecorder(map[string]any{}, cell.DurabilityDemo))
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "explicit event sink")
 }
@@ -188,12 +176,7 @@ func TestInit_DurableMode_RejectsNoopWriter(t *testing.T) {
 		WithOutboxDeps(nil, outbox.NoopWriter{}),
 		WithTxManager(persistence.NoopTxRunner{}),
 	)
-	deps := cell.Dependencies{
-		Config:         map[string]any{},
-		DurabilityMode: cell.DurabilityDurable,
-		Clock:          clock.Real(),
-	}
-	err := c.Init(context.Background(), deps)
+	err := c.Init(context.Background(), cell.NewRegistryRecorder(map[string]any{}, cell.DurabilityDurable))
 	require.Error(t, err)
 	var ecErr *errcode.Error
 	require.ErrorAs(t, err, &ecErr)
@@ -210,7 +193,7 @@ func TestInit_DemoMode_WithPublisher_Succeeds(t *testing.T) {
 		WithMetricsProvider(metrics.NopProvider{}),
 		// No outboxWriter, no txRunner — demo mode with publisher.
 	)
-	err := c.Init(context.Background(), cell.Dependencies{Config: map[string]any{}, DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
+	err := c.Init(context.Background(), cell.NewRegistryRecorder(map[string]any{}, cell.DurabilityDemo))
 	require.NoError(t, err, "demo mode with publisher should succeed")
 }
 
@@ -222,7 +205,7 @@ func TestInit_DemoMode_ExplicitNoopOutboxPair_Succeeds(t *testing.T) {
 		WithOutboxDeps(nil, outbox.NoopWriter{}),
 		WithTxManager(persistence.NoopTxRunner{}),
 	)
-	err := c.Init(context.Background(), cell.Dependencies{Config: map[string]any{}, DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
+	err := c.Init(context.Background(), cell.NewRegistryRecorder(map[string]any{}, cell.DurabilityDemo))
 	require.NoError(t, err)
 }
 
@@ -237,9 +220,7 @@ func TestAuditInit_WithEmitter_DirectInjection(t *testing.T) {
 		WithHMACKey(testHMACKey),
 		WithEmitter(outbox.NewNoopEmitter()),
 	)
-	require.NoError(t, c.Init(context.Background(), cell.Dependencies{
-		Config: map[string]any{}, DurabilityMode: cell.DurabilityDemo, Clock: clock.Real(),
-	}))
+	require.NoError(t, c.Init(context.Background(), cell.NewRegistryRecorder(map[string]any{}, cell.DurabilityDemo)))
 	assert.NotNil(t, c.emitter)
 	assert.Nil(t, c.pendingOutboxPub)
 	assert.Nil(t, c.pendingOutboxWriter)
@@ -255,7 +236,7 @@ func TestAuditInit_WithEmitterAndOutboxDeps_MutuallyExclusive(t *testing.T) {
 		WithEmitter(outbox.NewNoopEmitter()),
 		WithOutboxDeps(eventbus.New(eventbus.WithClock(clock.Real())), nil),
 	)
-	err := c.Init(context.Background(), cell.Dependencies{Config: map[string]any{}, DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
+	err := c.Init(context.Background(), cell.NewRegistryRecorder(map[string]any{}, cell.DurabilityDemo))
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "mutually exclusive")
 }
@@ -274,9 +255,7 @@ func TestAuditInit_WithEmitter_DurableRequiresDurableEmitter(t *testing.T) {
 		WithEmitter(outbox.NewNoopEmitter()), // non-durable
 		WithTxManager(persistence.NoopTxRunner{}),
 	)
-	err = c.Init(context.Background(), cell.Dependencies{
-		Config: map[string]any{}, DurabilityMode: cell.DurabilityDurable, Clock: clock.Real(),
-	})
+	err = c.Init(context.Background(), cell.NewRegistryRecorder(map[string]any{}, cell.DurabilityDurable))
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "durable")
 }
@@ -284,45 +263,41 @@ func TestAuditInit_WithEmitter_DurableRequiresDurableEmitter(t *testing.T) {
 func TestAuditCore_RouteGroups(t *testing.T) {
 	c := newTestCell()
 	ctx := context.Background()
-	deps := cell.Dependencies{
-		Config:         make(map[string]any),
-		DurabilityMode: cell.DurabilityDemo,
-		Clock:          clock.Real(),
-	}
-	require.NoError(t, c.Init(ctx, deps))
+	recorder := newTestRecorder()
+	require.NoError(t, c.Init(ctx, recorder))
 
-	groups := c.RouteGroups()
-	require.Len(t, groups, 1, "auditcore should declare 1 route group")
-	assert.Equal(t, cell.PrimaryListener, groups[0].Listener)
-	assert.Equal(t, "/api/v1/audit", groups[0].Prefix)
-	assert.NotNil(t, groups[0].Register)
+	snap := recorder.Snapshot()
+	require.Len(t, snap.RouteGroups, 1, "auditcore should declare 1 route group")
+	assert.Equal(t, cell.PrimaryListener, snap.RouteGroups[0].Listener)
+	assert.Equal(t, "/api/v1/audit", snap.RouteGroups[0].Prefix)
+	assert.NotNil(t, snap.RouteGroups[0].Register)
 
 	mux := &stubMux{}
-	require.NoError(t, groups[0].Register(mux))
+	require.NoError(t, snap.RouteGroups[0].Register(mux))
 	assert.GreaterOrEqual(t, mux.handleCount, 1, "should register at least 1 route pattern")
 }
 
 func TestAuditCore_RegisterSubscriptions(t *testing.T) {
 	c := newTestCell()
 	ctx := context.Background()
-	deps := cell.Dependencies{
-		Config:         make(map[string]any),
-		DurabilityMode: cell.DurabilityDemo,
-		Clock:          clock.Real(),
-	}
-	require.NoError(t, c.Init(ctx, deps))
+	recorder := newTestRecorder()
+	require.NoError(t, c.Init(ctx, recorder))
 
-	r := &celltest.StubEventRouter{}
-	require.NoError(t, c.RegisterSubscriptions(r))
-	assert.Equal(t, 13, r.HandlerCount(),
+	snap := recorder.Snapshot()
+	assert.Equal(t, 13, len(snap.Subscriptions),
 		"auditcore registers 13 topic handlers (5 user lifecycle + 2 session + 4 config + 2 role events)")
-	assert.Contains(t, r.Topics, "event.user.updated.v1")
-	assert.Contains(t, r.Topics, "event.user.deleted.v1")
-	assert.Contains(t, r.Topics, "event.user.unlocked.v1")
-	assert.Contains(t, r.Topics, "event.config.entry-upserted.v1")
-	assert.Contains(t, r.Topics, "event.config.entry-deleted.v1")
-	assert.Contains(t, r.Topics, "event.config.version-published.v1")
-	assert.Contains(t, r.Topics, "event.config.rollback.v1")
+
+	topicSet := make(map[string]bool, len(snap.Subscriptions))
+	for _, sub := range snap.Subscriptions {
+		topicSet[sub.Spec.Topic] = true
+	}
+	assert.True(t, topicSet["event.user.updated.v1"])
+	assert.True(t, topicSet["event.user.deleted.v1"])
+	assert.True(t, topicSet["event.user.unlocked.v1"])
+	assert.True(t, topicSet["event.config.entry-upserted.v1"])
+	assert.True(t, topicSet["event.config.entry-deleted.v1"])
+	assert.True(t, topicSet["event.config.version-published.v1"])
+	assert.True(t, topicSet["event.config.rollback.v1"])
 }
 
 // stubMux implements cell.RouteMux for testing.
@@ -342,15 +317,12 @@ func (m *stubMux) With(_ ...func(http.Handler) http.Handler) cell.RouteMux { ret
 func TestAuditCore_RouteQueryEntries(t *testing.T) {
 	c := newTestCell()
 	ctx := context.Background()
-	deps := cell.Dependencies{
-		Config:         make(map[string]any),
-		DurabilityMode: cell.DurabilityDemo,
-		Clock:          clock.Real(),
-	}
-	require.NoError(t, c.Init(ctx, deps))
+	recorder := newTestRecorder()
+	require.NoError(t, c.Init(ctx, recorder))
 
+	snap := recorder.Snapshot()
 	r := router.MustNew(router.WithRouterClock(clock.Real()))
-	for _, rg := range c.RouteGroups() {
+	for _, rg := range snap.RouteGroups {
 		rg := rg
 		r.Route(rg.Prefix, func(sub cell.RouteMux) { require.NoError(t, rg.Register(sub)) })
 	}
@@ -381,11 +353,7 @@ func TestInit_DurableMode_RejectsMissingCursorCodec(t *testing.T) {
 		WithTxManager(durableTxRunner{}),        // non-Nooper; durable-gated CheckNotNoop passes
 		// No WithCursorCodec — durable mode must refuse the demo fallback.
 	)
-	err := c.Init(context.Background(), cell.Dependencies{
-		Config:         map[string]any{},
-		DurabilityMode: cell.DurabilityDurable,
-		Clock:          clock.Real(),
-	})
+	err := c.Init(context.Background(), cell.NewRegistryRecorder(map[string]any{}, cell.DurabilityDurable))
 	require.Error(t, err)
 	var ecErr *errcode.Error
 	require.ErrorAs(t, err, &ecErr)
@@ -439,14 +407,12 @@ func TestAuditCore_Wiring_StaleCursor_DemoVsDurable(t *testing.T) {
 				WithCursorCodec(mustNewCodec(t, productionKey)),
 				WithMetricsProvider(metrics.NopProvider{}),
 			)
-			require.NoError(t, c.Init(context.Background(), cell.Dependencies{
-				Config:         map[string]any{},
-				DurabilityMode: tc.mode,
-				Clock:          clock.Real(),
-			}))
+			recorder := cell.NewRegistryRecorder(map[string]any{}, tc.mode)
+			require.NoError(t, c.Init(context.Background(), recorder))
+			snap := recorder.Snapshot()
 
 			r := router.MustNew(router.WithRouterClock(clock.Real()))
-			for _, rg := range c.RouteGroups() {
+			for _, rg := range snap.RouteGroups {
 				rg := rg
 				r.Route(rg.Prefix, func(sub cell.RouteMux) { require.NoError(t, rg.Register(sub)) })
 			}
@@ -473,23 +439,30 @@ func (w *recordingWriter) Write(_ context.Context, entry outbox.Entry) error {
 }
 
 // TestAuditCore_HealthCheckers_WithDirectEmitter verifies that after Init with
-// a DirectEmitter-backed publisher, HealthCheckers returns the
+// a DirectEmitter-backed publisher, the registry snapshot contains the
 // outbox-failopen-rate checker scoped to "auditcore".
 func TestAuditCore_HealthCheckers_WithDirectEmitter(t *testing.T) {
 	c := newTestCell()
-	deps := cell.Dependencies{Config: make(map[string]any), DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()}
-	require.NoError(t, c.Init(context.Background(), deps))
+	recorder := newTestRecorder()
+	require.NoError(t, c.Init(context.Background(), recorder))
 
-	checkers := c.HealthCheckers()
+	snap := recorder.Snapshot()
 	const emitterKey = "outbox-failopen-rate.auditcore"
-	require.Contains(t, checkers, emitterKey, "DirectEmitter health checker must be aggregated")
-	assert.NoError(t, checkers[emitterKey](context.Background()), "fresh emitter should be healthy")
+	require.Contains(t, snap.HealthCheckers, emitterKey, "DirectEmitter health checker must be aggregated")
+	assert.NoError(t, snap.HealthCheckers[emitterKey](context.Background()), "fresh emitter should be healthy")
 }
 
-// TestAuditCore_HealthCheckers_NilEmitter verifies that HealthCheckers returns
-// an empty map when the emitter does not implement cell.HealthContributor.
+// TestAuditCore_HealthCheckers_NilEmitter verifies that when the emitter does
+// not implement the health-checker interface, no health checkers are registered.
 func TestAuditCore_HealthCheckers_NilEmitter(t *testing.T) {
-	c := NewAuditCore() // no emitter set
-	checkers := c.HealthCheckers()
-	assert.Empty(t, checkers, "nil emitter must produce empty health checkers map")
+	c := NewAuditCore(
+		WithAuditRepository(mem.NewAuditRepository()),
+		WithArchiveStore(mem.NewArchiveStore()),
+		WithHMACKey(testHMACKey),
+		WithEmitter(outbox.NewNoopEmitter()), // WriterEmitter — no HealthCheckers method
+	)
+	recorder := cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo)
+	require.NoError(t, c.Init(context.Background(), recorder))
+	snap := recorder.Snapshot()
+	assert.Empty(t, snap.HealthCheckers, "WriterEmitter must produce empty health checkers map")
 }

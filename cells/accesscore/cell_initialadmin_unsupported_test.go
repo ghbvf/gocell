@@ -10,20 +10,15 @@ import (
 	"github.com/ghbvf/gocell/cells/accesscore/internal/mem"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/testutil"
 	"github.com/ghbvf/gocell/kernel/cell"
-	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-// unsupportedDeps mirrors the unix testDeps helper without the unix build tag.
-func unsupportedDeps() cell.Dependencies {
-	return cell.Dependencies{
-		Config:         make(map[string]any),
-		DurabilityMode: cell.DurabilityDemo,
-		Clock:          clock.Real(),
-	}
+// newUnsupportedTestReg mirrors the unix newTestReg helper without the unix build tag.
+func newUnsupportedTestReg() *cell.RegistryRecorder {
+	return cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo)
 }
 
 // TestAccessCoreInit_InitialAdminUnsupportedPlatform_FailFast verifies that
@@ -44,7 +39,7 @@ func TestAccessCoreInit_InitialAdminUnsupportedPlatform_FailFast(t *testing.T) {
 		WithInitialAdminBootstrap(),
 	)
 
-	err := ac.Init(context.Background(), unsupportedDeps())
+	err := ac.Init(context.Background(), newUnsupportedTestReg())
 	require.Error(t, err,
 		"Init must fail fast when WithInitialAdminBootstrap is active on an unsupported platform")
 
@@ -70,8 +65,10 @@ func TestAccessCoreInit_InitialAdminNotConfigured_NoCheck(t *testing.T) {
 		WithMetricsProvider(metrics.NopProvider{}),
 	)
 
-	require.NoError(t, ac.Init(context.Background(), unsupportedDeps()),
+	rec := newUnsupportedTestReg()
+	require.NoError(t, ac.Init(context.Background(), rec),
 		"Init without WithInitialAdminBootstrap must succeed on any platform")
-	assert.Empty(t, ac.LifecycleHooks(),
+	snap := rec.Snapshot()
+	assert.Empty(t, snap.LifecycleHooks,
 		"LifecycleHooks must be empty when no bootstrap is configured")
 }

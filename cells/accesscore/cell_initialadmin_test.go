@@ -65,14 +65,20 @@ func newCellFixedSource() *fixedReaderForCell {
 	return &fixedReaderForCell{data: b}
 }
 
+// newTestReg returns a RegistryRecorder for demo mode with an empty config.
+// Replaces the removed cell.Dependencies literal.
+func newTestReg() *cell.RegistryRecorder {
+	return cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo)
+}
+
 // spinLifecycle simulates bootstrap phase3b: constructs a bootstrap.Lifecycle,
-// registers AccessCore's LifecycleHooks into it, and calls Start. The returned
+// registers the provided lifecycle hooks into it, and calls Start. The returned
 // stop function triggers Stop when called (safe to defer). If Start fails,
 // startErr is non-nil and stop is still safe to call.
-func spinLifecycle(t *testing.T, ctx context.Context, ac *AccessCore) (stop func(), startErr error) {
+func spinLifecycle(t *testing.T, ctx context.Context, hooks []cell.LifecycleHook) (stop func(), startErr error) {
 	t.Helper()
 	lc := bootstrap.NewLifecycle(bootstrap.LifecycleConfig{Clock: clock.Real()})
-	for _, hook := range ac.LifecycleHooks() {
+	for _, hook := range hooks {
 		if err := lc.Append(bootstrap.Hook{
 			Name:         hook.Name,
 			OnStart:      hook.OnStart,
@@ -90,14 +96,6 @@ func spinLifecycle(t *testing.T, ctx context.Context, ac *AccessCore) (stop func
 		_ = lc.Stop(stopCtx)
 	}
 	return stop, startErr
-}
-
-func testDeps() cell.Dependencies {
-	return cell.Dependencies{
-		Config:         make(map[string]any),
-		DurabilityMode: cell.DurabilityDemo,
-		Clock:          clock.Real(),
-	}
 }
 
 // newTestCellWithBootstrap constructs a fully wired AccessCore using mem repos
@@ -137,11 +135,12 @@ func TestInit_WithInitialAdminBootstrap_LifecycleHookRegistered(t *testing.T) {
 	}
 
 	ac := newTestCellWithBootstrap(t, bootstrapOpts)
-	require.NoError(t, ac.Init(context.Background(), testDeps()))
+	rec := newTestReg()
+	require.NoError(t, ac.Init(context.Background(), rec))
 
-	hooks := ac.LifecycleHooks()
-	require.Len(t, hooks, 1, "WithInitialAdminBootstrap must contribute exactly one hook")
-	assert.Equal(t, "accesscore.initial-admin-bootstrap", hooks[0].Name)
+	snap := rec.Snapshot()
+	require.Len(t, snap.LifecycleHooks, 1, "WithInitialAdminBootstrap must contribute exactly one hook")
+	assert.Equal(t, "accesscore.initial-admin-bootstrap", snap.LifecycleHooks[0].Name)
 
 	// spinLifecycle uses a cancellable context so the cleaner's Start() returns
 	// promptly once we cancel (no need to wait for real TTL).
@@ -153,7 +152,7 @@ func TestInit_WithInitialAdminBootstrap_LifecycleHookRegistered(t *testing.T) {
 	go func() {
 		defer close(stopCh)
 		var stop func()
-		stop, startErr = spinLifecycle(t, ctx, ac)
+		stop, startErr = spinLifecycle(t, ctx, snap.LifecycleHooks)
 		defer stop()
 		// wait for test to cancel
 		<-ctx.Done()
@@ -182,9 +181,11 @@ func TestInit_BootstrapDefaultBehaviorIsNoop(t *testing.T) {
 		WithRefreshStore(newTestRefreshStore()),
 		WithMetricsProvider(metrics.NopProvider{}),
 	)
-	require.NoError(t, ac.Init(context.Background(), testDeps()))
+	rec := newTestReg()
+	require.NoError(t, ac.Init(context.Background(), rec))
 
-	assert.Nil(t, ac.LifecycleHooks(), "LifecycleHooks must return nil when bootstrap is not configured (opt-out)")
+	snap := rec.Snapshot()
+	assert.Empty(t, snap.LifecycleHooks, "LifecycleHooks must be empty when bootstrap is not configured (opt-out)")
 
 	// No users should exist in the repo.
 	_, err := userRepo.GetByUsername(context.Background(), "admin")
@@ -228,10 +229,12 @@ func TestInit_BootstrapAlreadyHasAdmin_NilCleaner(t *testing.T) {
 		WithInitialAdminBootstrap(bootstrapOpts...),
 		WithMetricsProvider(metrics.NopProvider{}),
 	)
-	require.NoError(t, ac.Init(context.Background(), testDeps()))
+	rec := newTestReg()
+	require.NoError(t, ac.Init(context.Background(), rec))
 
+	snap := rec.Snapshot()
 	// Admin already exists and no orphan file → spinLifecycle returns immediately.
-	stop, startErr := spinLifecycle(t, context.Background(), ac)
+	stop, startErr := spinLifecycle(t, context.Background(), snap.LifecycleHooks)
 	defer stop()
 	require.NoError(t, startErr, "bootstrap must silently skip when admin already exists")
 }
@@ -283,10 +286,11 @@ func TestInit_BootstrapAdminExists_FreshOrphanFile_SweepCleanerRegistered(t *tes
 		WithInitialAdminBootstrap(bootstrapOpts...),
 		WithMetricsProvider(metrics.NopProvider{}),
 	)
-	require.NoError(t, ac.Init(context.Background(), testDeps()))
+	rec := newTestReg()
+	require.NoError(t, ac.Init(context.Background(), rec))
 
-	hooks := ac.LifecycleHooks()
-	require.Len(t, hooks, 1)
+	snap := rec.Snapshot()
+	require.Len(t, snap.LifecycleHooks, 1)
 
 	// Use cancellable ctx: the sweep cleaner blocks in Start until ctx.Done or TTL.
 	ctx, cancel := context.WithCancel(context.Background())
@@ -295,7 +299,7 @@ func TestInit_BootstrapAdminExists_FreshOrphanFile_SweepCleanerRegistered(t *tes
 	var stop func()
 	go func() {
 		var sErr error
-		stop, sErr = spinLifecycle(t, ctx, ac)
+		stop, sErr = spinLifecycle(t, ctx, snap.LifecycleHooks)
 		stopCh <- sErr
 	}()
 
@@ -338,8 +342,10 @@ func TestInit_BootstrapUser_HasPasswordResetRequired(t *testing.T) {
 		WithInitialAdminBootstrap(bootstrapOpts...),
 		WithMetricsProvider(metrics.NopProvider{}),
 	)
-	require.NoError(t, ac.Init(context.Background(), testDeps()))
+	rec := newTestReg()
+	require.NoError(t, ac.Init(context.Background(), rec))
 
+	snap := rec.Snapshot()
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -347,7 +353,7 @@ func TestInit_BootstrapUser_HasPasswordResetRequired(t *testing.T) {
 	var startErr error
 	go func() {
 		defer close(stopCh)
-		stop, sErr := spinLifecycle(t, ctx, ac)
+		stop, sErr := spinLifecycle(t, ctx, snap.LifecycleHooks)
 		startErr = sErr
 		defer stop()
 		<-ctx.Done()

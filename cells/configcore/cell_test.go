@@ -16,7 +16,6 @@ import (
 	"github.com/ghbvf/gocell/cells/configcore/internal/mem"
 	"github.com/ghbvf/gocell/cells/configcore/slices/configpublish"
 	"github.com/ghbvf/gocell/kernel/cell"
-	"github.com/ghbvf/gocell/kernel/cell/celltest"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/kernel/outbox"
@@ -39,17 +38,18 @@ func newTestCell() *ConfigCore {
 	)
 }
 
+// newTestRecorder returns a RegistryRecorder for demo mode with an empty config.
+func newTestRecorder() *cell.RegistryRecorder {
+	return cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo)
+}
+
 func TestConfigCore_Lifecycle(t *testing.T) {
 	c := newTestCell()
 	ctx := context.Background()
-	deps := cell.Dependencies{
-		Config:         make(map[string]any),
-		DurabilityMode: cell.DurabilityDemo,
-		Clock:          clock.Real(),
-	}
+	recorder := newTestRecorder()
 
 	// Init
-	require.NoError(t, c.Init(ctx, deps))
+	require.NoError(t, c.Init(ctx, recorder))
 	assert.Equal(t, 6, len(c.OwnedSlices()), "should have 6 slices")
 
 	// Start
@@ -75,12 +75,8 @@ func TestConfigCore_Metadata(t *testing.T) {
 func TestConfigCore_Startup(t *testing.T) {
 	c := newTestCell()
 	ctx := context.Background()
-	deps := cell.Dependencies{
-		Config:         make(map[string]any),
-		DurabilityMode: cell.DurabilityDemo,
-		Clock:          clock.Real(),
-	}
-	require.NoError(t, c.Init(ctx, deps))
+	recorder := newTestRecorder()
+	require.NoError(t, c.Init(ctx, recorder))
 	require.NoError(t, c.Start(ctx))
 	assert.True(t, c.Ready())
 	require.NoError(t, c.Stop(ctx))
@@ -112,9 +108,7 @@ func TestConfigCore_InitDemoMode_RejectsHalfConfiguredPath(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			c := NewConfigCore(tt.opts...)
-			err := c.Init(context.Background(), cell.Dependencies{
-				Config: make(map[string]any), DurabilityMode: cell.DurabilityDemo, Clock: clock.Real(),
-			})
+			err := c.Init(context.Background(), cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo))
 			require.Error(t, err)
 			assert.Contains(t, err.Error(), "outboxWriter and txRunner")
 		})
@@ -128,12 +122,7 @@ func TestConfigCore_InitDurableMode_RejectsNoopWriter(t *testing.T) {
 		WithOutboxDeps(nil, outbox.NoopWriter{}),
 		WithTxManager(persistence.NoopTxRunner{}),
 	)
-	deps := cell.Dependencies{
-		Config:         make(map[string]any),
-		DurabilityMode: cell.DurabilityDurable,
-		Clock:          clock.Real(),
-	}
-	err := c.Init(context.Background(), deps)
+	err := c.Init(context.Background(), cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDurable))
 	require.Error(t, err)
 	var ecErr *errcode.Error
 	require.ErrorAs(t, err, &ecErr)
@@ -143,9 +132,7 @@ func TestConfigCore_InitDurableMode_RejectsNoopWriter(t *testing.T) {
 
 func TestConfigCore_InitDemoMode_NoPublisherNoOutbox_Fails(t *testing.T) {
 	c := NewConfigCore(WithInMemoryDefaults())
-	err := c.Init(context.Background(), cell.Dependencies{
-		Config: make(map[string]any), DurabilityMode: cell.DurabilityDemo, Clock: clock.Real(),
-	})
+	err := c.Init(context.Background(), cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo))
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "explicit event sink")
 }
@@ -156,9 +143,7 @@ func TestConfigCore_InitDemoMode_WithPublisher_Succeeds(t *testing.T) {
 		WithOutboxDeps(eventbus.New(eventbus.WithClock(clock.Real())), nil),
 		WithMetricsProvider(metrics.NopProvider{}),
 	)
-	err := c.Init(context.Background(), cell.Dependencies{
-		Config: make(map[string]any), DurabilityMode: cell.DurabilityDemo, Clock: clock.Real(),
-	})
+	err := c.Init(context.Background(), cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo))
 	require.NoError(t, err)
 }
 
@@ -168,9 +153,7 @@ func TestConfigCore_InitDemoMode_ExplicitNoopOutboxPair_Succeeds(t *testing.T) {
 		WithOutboxDeps(nil, outbox.NoopWriter{}),
 		WithTxManager(persistence.NoopTxRunner{}),
 	)
-	err := c.Init(context.Background(), cell.Dependencies{
-		Config: make(map[string]any), DurabilityMode: cell.DurabilityDemo, Clock: clock.Real(),
-	})
+	err := c.Init(context.Background(), cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo))
 	require.NoError(t, err)
 }
 
@@ -182,9 +165,7 @@ func TestConfigCoreInit_WithEmitter_DirectInjection(t *testing.T) {
 		WithInMemoryDefaults(),
 		WithEmitter(outbox.NewNoopEmitter()),
 	)
-	require.NoError(t, c.Init(context.Background(), cell.Dependencies{
-		Config: make(map[string]any), DurabilityMode: cell.DurabilityDemo, Clock: clock.Real(),
-	}))
+	require.NoError(t, c.Init(context.Background(), cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo)))
 	assert.NotNil(t, c.emitter)
 	assert.Nil(t, c.pendingOutboxPub)
 	assert.Nil(t, c.pendingOutboxWriter)
@@ -198,9 +179,7 @@ func TestConfigCoreInit_WithEmitterAndOutboxDeps_MutuallyExclusive(t *testing.T)
 		WithEmitter(outbox.NewNoopEmitter()),
 		WithOutboxDeps(eventbus.New(eventbus.WithClock(clock.Real())), nil),
 	)
-	err := c.Init(context.Background(), cell.Dependencies{
-		Config: make(map[string]any), DurabilityMode: cell.DurabilityDemo, Clock: clock.Real(),
-	})
+	err := c.Init(context.Background(), cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo))
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "mutually exclusive")
 }
@@ -217,9 +196,7 @@ func TestConfigCoreInit_WithEmitter_DurableRequiresDurableEmitter(t *testing.T) 
 		WithEmitter(outbox.NewNoopEmitter()), // non-durable
 		WithTxManager(persistence.NoopTxRunner{}),
 	)
-	err = c.Init(context.Background(), cell.Dependencies{
-		Config: make(map[string]any), DurabilityMode: cell.DurabilityDurable, Clock: clock.Real(),
-	})
+	err = c.Init(context.Background(), cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDurable))
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "durable")
 }
@@ -227,51 +204,41 @@ func TestConfigCoreInit_WithEmitter_DurableRequiresDurableEmitter(t *testing.T) 
 func TestConfigCore_RouteGroups(t *testing.T) {
 	c := newTestCell()
 	ctx := context.Background()
-	deps := cell.Dependencies{
-		Config:         make(map[string]any),
-		DurabilityMode: cell.DurabilityDemo,
-		Clock:          clock.Real(),
-	}
-	require.NoError(t, c.Init(ctx, deps))
+	recorder := newTestRecorder()
+	require.NoError(t, c.Init(ctx, recorder))
 
-	groups := c.RouteGroups()
-	require.Len(t, groups, 2, "configcore should declare 2 route groups (primary + internal)")
-	assert.Equal(t, cell.PrimaryListener, groups[0].Listener)
-	assert.Equal(t, "/api/v1", groups[0].Prefix)
-	assert.NotNil(t, groups[0].Register)
-	assert.Equal(t, cell.InternalListener, groups[1].Listener)
-	assert.Equal(t, "/internal/v1", groups[1].Prefix)
-	assert.NotNil(t, groups[1].Register)
+	snap := recorder.Snapshot()
+	require.Len(t, snap.RouteGroups, 2, "configcore should declare 2 route groups (primary + internal)")
+	assert.Equal(t, cell.PrimaryListener, snap.RouteGroups[0].Listener)
+	assert.Equal(t, "/api/v1", snap.RouteGroups[0].Prefix)
+	assert.NotNil(t, snap.RouteGroups[0].Register)
+	assert.Equal(t, cell.InternalListener, snap.RouteGroups[1].Listener)
+	assert.Equal(t, "/internal/v1", snap.RouteGroups[1].Prefix)
+	assert.NotNil(t, snap.RouteGroups[1].Register)
 
 	// Verify the register function actually mounts routes.
 	mux := &stubMux{}
-	require.NoError(t, groups[0].Register(mux))
+	require.NoError(t, snap.RouteGroups[0].Register(mux))
 	assert.GreaterOrEqual(t, mux.handleCount, 2, "should register at least 2 route patterns")
 
 	internalMux := &stubMux{}
-	require.NoError(t, groups[1].Register(internalMux))
+	require.NoError(t, snap.RouteGroups[1].Register(internalMux))
 	assert.GreaterOrEqual(t, internalMux.handleCount, 1, "internal group should register at least 1 route pattern")
 }
 
 func TestConfigCore_RegisterSubscriptions(t *testing.T) {
 	c := newTestCell()
 	ctx := context.Background()
-	deps := cell.Dependencies{
-		Config:         make(map[string]any),
-		DurabilityMode: cell.DurabilityDemo,
-		Clock:          clock.Real(),
-	}
-	require.NoError(t, c.Init(ctx, deps))
+	recorder := newTestRecorder()
+	require.NoError(t, c.Init(ctx, recorder))
 
-	r := &celltest.StubEventRouter{}
-	require.NoError(t, c.RegisterSubscriptions(r))
-	assert.Equal(t, 2, r.HandlerCount(),
+	snap := recorder.Snapshot()
+	require.Len(t, snap.Subscriptions, 2,
 		"configcore registers entry-upserted + entry-deleted state-sync handlers")
-	assert.Equal(t, []string{
-		"event.config.entry-upserted.v1",
-		"event.config.entry-deleted.v1",
-	}, r.Topics)
-	assert.Equal(t, []string{"configcore", "configcore"}, r.ConsumerGroups)
+	assert.Equal(t, "event.config.entry-upserted.v1", snap.Subscriptions[0].Spec.Topic)
+	assert.Equal(t, "configcore", snap.Subscriptions[0].ConsumerGroup)
+	assert.Equal(t, "event.config.entry-deleted.v1", snap.Subscriptions[1].Spec.Topic)
+	assert.Equal(t, "configcore", snap.Subscriptions[1].ConsumerGroup)
 }
 
 // stubMux implements cell.RouteMux for testing.
@@ -290,20 +257,17 @@ func (m *stubMux) With(_ ...func(http.Handler) http.Handler) cell.RouteMux { ret
 
 // initCellWithRouter creates an initialized ConfigCore with routes registered
 // on a real chi-based router, ready for HTTP testing.
-// Routes are mounted via RouteGroups (PR-A14b declarative API).
+// Routes are mounted via the registry snapshot (Batch 3 declarative API).
 func initCellWithRouter(t *testing.T) *router.Router {
 	t.Helper()
 	c := newTestCell()
 	ctx := context.Background()
-	deps := cell.Dependencies{
-		Config:         make(map[string]any),
-		DurabilityMode: cell.DurabilityDemo,
-		Clock:          clock.Real(),
-	}
-	require.NoError(t, c.Init(ctx, deps))
+	recorder := newTestRecorder()
+	require.NoError(t, c.Init(ctx, recorder))
 
+	snap := recorder.Snapshot()
 	r := router.MustNew(router.WithRouterClock(clock.Real()))
-	for _, rg := range c.RouteGroups() {
+	for _, rg := range snap.RouteGroups {
 		rg := rg
 		if rg.Prefix != "" {
 			r.Route(rg.Prefix, func(sub cell.RouteMux) { require.NoError(t, rg.Register(sub)) })
@@ -491,11 +455,12 @@ func TestConfigCore_CrossSliceCursorRejection(t *testing.T) {
 func TestConfigCore_CrossSliceCursorRejection_Reverse(t *testing.T) {
 	c := newTestCell()
 	ctx := context.Background()
-	deps := cell.Dependencies{Config: make(map[string]any), DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()}
-	require.NoError(t, c.Init(ctx, deps))
+	recorder := newTestRecorder()
+	require.NoError(t, c.Init(ctx, recorder))
 
+	snap := recorder.Snapshot()
 	r := router.MustNew(router.WithRouterClock(clock.Real()))
-	for _, rg := range c.RouteGroups() {
+	for _, rg := range snap.RouteGroups {
 		rg := rg
 		if rg.Prefix != "" {
 			r.Route(rg.Prefix, func(sub cell.RouteMux) { require.NoError(t, rg.Register(sub)) })
@@ -555,10 +520,7 @@ func TestConfigCore_InitDurable_RejectsMissingCursorCodec(t *testing.T) {
 		WithTxManager(durableTxRunner{}), // non-Nooper; durable-gated CheckNotNoop passes
 		// No WithCursorCodec — durable mode must refuse the demo fallback.
 	)
-	err := c.Init(context.Background(), cell.Dependencies{
-		Config:         map[string]any{},
-		DurabilityMode: cell.DurabilityDurable,
-	})
+	err := c.Init(context.Background(), cell.NewRegistryRecorder(map[string]any{}, cell.DurabilityDurable))
 	require.Error(t, err)
 	var ecErr *errcode.Error
 	require.ErrorAs(t, err, &ecErr)
@@ -612,7 +574,7 @@ func TestConfigCore_DurableInit_WithInjectedRepositories(t *testing.T) {
 	// Writer is accumulated into pendingOutboxWriter pre-Init.
 	assert.NotNil(t, c.pendingOutboxWriter, "WithOutboxDeps must populate pendingOutboxWriter")
 	// Init must succeed with explicitly injected repos.
-	require.NoError(t, c.Init(t.Context(), cell.Dependencies{DurabilityMode: cell.DurabilityDurable, Clock: clock.Real()}))
+	require.NoError(t, c.Init(t.Context(), cell.NewRegistryRecorder(map[string]any{}, cell.DurabilityDurable)))
 	assert.NotNil(t, c.configRepo, "configRepo must be non-nil after Init")
 	assert.NotNil(t, c.flagRepo, "flagRepo must be non-nil after Init")
 }
@@ -657,23 +619,28 @@ func TestConfigCore_DeriveModes(t *testing.T) {
 }
 
 // TestConfigCore_HealthCheckers_WithDirectEmitter verifies that after Init
-// with a DirectEmitter-backed publisher, HealthCheckers returns the
+// with a DirectEmitter-backed publisher, the registry snapshot contains the
 // outbox-failopen-rate checker scoped to "configcore".
 func TestConfigCore_HealthCheckers_WithDirectEmitter(t *testing.T) {
 	c := newTestCell()
-	deps := cell.Dependencies{Config: make(map[string]any), DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()}
-	require.NoError(t, c.Init(context.Background(), deps))
+	recorder := newTestRecorder()
+	require.NoError(t, c.Init(context.Background(), recorder))
 
-	checkers := c.HealthCheckers()
+	snap := recorder.Snapshot()
 	const emitterKey = "outbox-failopen-rate.configcore"
-	require.Contains(t, checkers, emitterKey, "DirectEmitter health checker must be aggregated")
-	assert.NoError(t, checkers[emitterKey](context.Background()), "fresh emitter should be healthy")
+	require.Contains(t, snap.HealthCheckers, emitterKey, "DirectEmitter health checker must be aggregated")
+	assert.NoError(t, snap.HealthCheckers[emitterKey](context.Background()), "fresh emitter should be healthy")
 }
 
-// TestConfigCore_HealthCheckers_NilEmitter verifies that HealthCheckers returns
-// an empty map when the emitter does not implement cell.HealthContributor.
+// TestConfigCore_HealthCheckers_NilEmitter verifies that when the emitter does
+// not implement the health-checker interface, no health checkers are registered.
 func TestConfigCore_HealthCheckers_NilEmitter(t *testing.T) {
-	c := NewConfigCore() // no emitter set
-	checkers := c.HealthCheckers()
-	assert.Empty(t, checkers, "nil emitter must produce empty health checkers map")
+	c := NewConfigCore(
+		WithInMemoryDefaults(),
+		WithEmitter(outbox.NewNoopEmitter()), // WriterEmitter — no HealthCheckers method
+	)
+	recorder := cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo)
+	require.NoError(t, c.Init(context.Background(), recorder))
+	snap := recorder.Snapshot()
+	assert.Empty(t, snap.HealthCheckers, "WriterEmitter must produce empty health checkers map")
 }

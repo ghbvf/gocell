@@ -2,6 +2,7 @@ package accesscore
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/google/uuid"
 
@@ -67,8 +68,8 @@ func (c *AccessCore) resolveEmitter(mode cell.DurabilityMode) error {
 
 // initValidate performs fail-fast validation of required dependencies before
 // constructing slices. Extracted from Init to reduce cognitive complexity.
-func (c *AccessCore) initValidate(deps cell.Dependencies) error {
-	if err := c.resolveEmitter(deps.DurabilityMode); err != nil {
+func (c *AccessCore) initValidate(durabilityMode cell.DurabilityMode) error {
+	if err := c.resolveEmitter(durabilityMode); err != nil {
 		return err
 	}
 
@@ -96,7 +97,7 @@ func (c *AccessCore) initValidate(deps cell.Dependencies) error {
 		return err
 	}
 	if c.cursorCodec == nil {
-		if deps.DurabilityMode == cell.DurabilityDurable {
+		if durabilityMode == cell.DurabilityDurable {
 			return errcode.New(errcode.ErrCellMissingCodec,
 				"accesscore durable mode requires a cursor codec;"+
 					" use WithCursorCodec(query.NewCursorCodec(secret))"+
@@ -109,7 +110,7 @@ func (c *AccessCore) initValidate(deps cell.Dependencies) error {
 		c.cursorCodec = codec
 		c.logger.Warn("accesscore: using default cursor codec (demo mode)")
 	}
-	c.rbacRunMode = query.RunModeForDemo(deps.DurabilityMode == cell.DurabilityDemo)
+	c.rbacRunMode = query.RunModeForDemo(durabilityMode == cell.DurabilityDemo)
 	return nil
 }
 
@@ -255,18 +256,21 @@ func (c *AccessCore) initRbacAssign() {
 	c.AddSlice(cell.NewBaseSlice("rbacassign", "accesscore", rbacAssignLevel))
 }
 
-// Init constructs all 9 slices and wires the initial-admin Lifecycle (when
-// WithInitialAdminBootstrap is active) so LifecycleHooks() remains a pure
-// getter — the kernel.LifecycleContributor contract promises "called after
-// Cell.Init completes", which is precisely where we inject deps.
-func (c *AccessCore) Init(ctx context.Context, deps cell.Dependencies) error {
-	if err := c.BaseCell.Init(ctx, deps); err != nil {
+// emitterHealthChecker is a local interface satisfied by outbox.DirectEmitter.
+// Avoids a hard import of the concrete type; Batch 4 renames the method to Probes().
+type emitterHealthChecker interface {
+	HealthCheckers() map[string]func(context.Context) error
+}
+
+// Init constructs all 9 slices and registers routes, subscriptions, health
+// probes, and lifecycle hooks into reg.
+func (c *AccessCore) Init(ctx context.Context, reg cell.Registry) error {
+	if err := c.BaseCell.Init(ctx, reg); err != nil {
 		return err
 	}
-	c.clk = deps.Clock
 
 	// WithInMemoryDefaults defers sessionRepo and refreshStore construction
-	// to here so that c.clk (set from deps.Clock) is available.
+	// to here so that c.clk is available.
 	if c.useInMemoryDefaults && c.sessionRepo == nil {
 		c.sessionRepo = mem.NewSessionRepository(c.clk)
 	}
@@ -274,16 +278,17 @@ func (c *AccessCore) Init(ctx context.Context, deps cell.Dependencies) error {
 		c.refreshStore = refreshmem.MustNew(defaultRefreshPolicy, c.clk, nil)
 	}
 
-	if err := c.initValidate(deps); err != nil {
+	durabilityMode := reg.DurabilityMode()
+
+	if err := c.initValidate(durabilityMode); err != nil {
 		return err
 	}
 	if err := c.initSlices(); err != nil {
 		return err
 	}
 	if c.initialAdmin != nil {
-		// Platform check fails fast at phase2 Init() rather than at phase3b
-		// LifecycleHook OnStart, so an unsupported GOOS surfaces before any
-		// bootstrap goroutine runs.
+		// Platform check fails fast at Init() rather than at lifecycle OnStart,
+		// so an unsupported GOOS surfaces before any bootstrap goroutine runs.
 		if err := initialadmin.PlatformSupported(); err != nil {
 			return err
 		}
@@ -294,23 +299,89 @@ func (c *AccessCore) Init(ctx context.Context, deps cell.Dependencies) error {
 			Clock:    c.clk,
 		}, c.logger)
 	}
-	return nil
-}
 
-// LifecycleHooks implements cell.LifecycleContributor. Returns the initial-admin
-// hook when WithInitialAdminBootstrap was applied; nil otherwise (opt-out).
-//
-// Pure getter by design: the Bind side-effect lives in Init (see above), so
-// callers can invoke LifecycleHooks multiple times without double-binding.
-// Mirrors fx Hook.callerFrame / Kubernetes controller-runtime Runnable.GetName()
-// — getters must not mutate.
-func (c *AccessCore) LifecycleHooks() []cell.LifecycleHook {
-	var hooks []cell.LifecycleHook
-	if c.initialAdmin != nil {
-		hooks = append(hooks, c.initialAdmin.Hook())
+	// Register HTTP route groups.
+	reg.RouteGroup(cell.RouteGroup{
+		Listener: cell.PrimaryListener,
+		Prefix:   "/api/v1/access",
+		Register: func(mux cell.RouteMux) error {
+			var firstErr error
+			captureErr := func(err error) {
+				if err != nil && firstErr == nil {
+					firstErr = err
+				}
+			}
+			mux.Route("/setup", func(s cell.RouteMux) {
+				captureErr(c.setupHandler.RegisterRoutes(s))
+			})
+			mux.Route("/users", func(s cell.RouteMux) {
+				captureErr(c.identityHandler.RegisterRoutes(s))
+			})
+			mux.Route("/sessions", func(s cell.RouteMux) {
+				captureErr(c.loginHandler.RegisterRoutes(s))
+				captureErr(c.refreshHandler.RegisterRoutes(s))
+				captureErr(c.logoutHandler.RegisterRoutes(s))
+			})
+			mux.Route("/roles", func(s cell.RouteMux) {
+				captureErr(c.rbacHandler.RegisterRoutes(s))
+			})
+			return firstErr
+		},
+	})
+	reg.RouteGroup(cell.RouteGroup{
+		Listener: cell.InternalListener,
+		Prefix:   "/internal/v1/access",
+		Register: func(mux cell.RouteMux) error {
+			var firstErr error
+			mux.Route("/roles", func(s cell.RouteMux) {
+				if err := c.rbacAssignHandler.RegisterRoutes(s); err != nil {
+					firstErr = err
+				}
+			})
+			return firstErr
+		},
+	})
+
+	// Register event subscriptions.
+	upsertedHandler := outbox.WrapLegacyHandler(c.configReceiveSvc.HandleEntryUpserted)
+	if err := reg.Subscribe(
+		specEventConfigEntryUpserted, upsertedHandler, "accesscore",
+		cell.WithSubscriptionSliceID("configreceive")); err != nil {
+		return fmt.Errorf(errFmtSubscribe, specEventConfigEntryUpserted.Topic, err)
 	}
+	deletedHandler := outbox.WrapLegacyHandler(c.configReceiveSvc.HandleEntryDeleted)
+	if err := reg.Subscribe(
+		specEventConfigEntryDeleted, deletedHandler, "accesscore",
+		cell.WithSubscriptionSliceID("configreceive")); err != nil {
+		return fmt.Errorf(errFmtSubscribe, specEventConfigEntryDeleted.Topic, err)
+	}
+	roleHandler := outbox.WrapLegacyHandler(c.rbacSessionConsumer.HandleRoleChanged)
+	if err := reg.Subscribe(specEventRoleAssigned, roleHandler, "accesscore-rbac-session-sync"); err != nil {
+		return fmt.Errorf(errFmtSubscribe, specEventRoleAssigned.Topic, err)
+	}
+	if err := reg.Subscribe(specEventRoleRevoked, roleHandler, "accesscore-rbac-session-sync"); err != nil {
+		return fmt.Errorf(errFmtSubscribe, specEventRoleRevoked.Topic, err)
+	}
+
+	// Register health probes.
+	if hc, ok := c.sessionRepo.(interface {
+		Health(context.Context) error
+	}); ok {
+		reg.Health("session-store", hc.Health)
+	}
+	if hc, ok := c.emitter.(emitterHealthChecker); ok {
+		for k, v := range hc.HealthCheckers() {
+			reg.Health(k, v)
+		}
+	}
+
+	// Register lifecycle hooks.
 	if c.refreshGCEnabled {
-		hooks = append(hooks, c.refreshGCHook())
+		reg.Lifecycle(c.refreshGCHook())
 	}
-	return hooks
+	if c.initialAdmin != nil {
+		reg.Lifecycle(c.initialAdmin.Hook())
+	}
+
+	return nil
 }
