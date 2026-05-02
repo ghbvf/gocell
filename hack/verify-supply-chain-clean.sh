@@ -115,6 +115,10 @@ if find_out=$(grep -rnE 'nosemgrep:' \
   self_name="$(basename "${BASH_SOURCE[0]}")"
   combined=$(printf '%s' "$combined" | grep -vF "$self_name" || true)
   if [[ -n "$combined" ]]; then
+    # shellcheck disable=SC2016
+    # The single-quoted argument is a printf format string; `%s` and the
+    # backticks are literal output, not parameter expansions. SC2016's
+    # heuristic mis-classifies this — single quotes are correct here.
     printf 'FAIL: nosemgrep must be `// nosemgrep: <rule-id> // <reason>`; offending lines:\n%s\n' \
       "$combined" >&2
     fail=1
