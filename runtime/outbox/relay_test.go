@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/ghbvf/gocell/kernel/clock"
 	kernellifecycle "github.com/ghbvf/gocell/kernel/lifecycle"
 	kout "github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
@@ -132,6 +133,7 @@ func fastCfg() outbox.RelayConfig {
 		RetentionPeriod:     testtime.D1h,
 		DeadRetentionPeriod: testtime.D24h,
 		CleanupWaitFloor:    testtime.FastPoll,
+		Clock:               clock.Real(),
 	}
 }
 

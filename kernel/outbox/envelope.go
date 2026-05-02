@@ -31,11 +31,13 @@ type WireMessage struct {
 }
 
 // MarshalEnvelope serializes an Entry into the canonical v1 wire envelope.
+//
+// Callers are responsible for setting entry.CreatedAt before calling
+// MarshalEnvelope; this function is pure (no clock interaction). The PG
+// outbox writer pre-fills CreatedAt from now() at INSERT time, the relay
+// reads it back from the row, and DirectEmitter sets it from its injected
+// clock.Clock — all paths populate CreatedAt before reaching this function.
 func MarshalEnvelope(entry Entry) ([]byte, error) {
-	createdAt := entry.CreatedAt
-	if createdAt.IsZero() {
-		createdAt = time.Now().UTC()
-	}
 	msg := WireMessage{
 		SchemaVersion: EnvelopeSchemaV1,
 		ID:            entry.ID,
@@ -46,53 +48,13 @@ func MarshalEnvelope(entry Entry) ([]byte, error) {
 		Payload:       json.RawMessage(entry.Payload),
 		Metadata:      entry.Metadata,
 		Observability: entry.Observability,
-		CreatedAt:     createdAt,
+		CreatedAt:     entry.CreatedAt,
 	}
 	b, err := json.Marshal(msg)
 	if err != nil {
 		return nil, errcode.Wrap(errcode.ErrEnvelopeSchema, "outbox: marshal envelope", err)
 	}
 	return b, nil
-}
-
-// MustMarshalDirectEnvelope builds a v1 wire envelope for direct-publish
-// paths. Panics with errcode-tagged messages on missing required fields
-// (id/eventType) or json.Marshal failure — these are internal invariants
-// violated only by writer-side programming errors, not user input. The
-// Must prefix marks the panic semantics explicitly; callers that need a
-// recoverable error path should use MarshalEnvelope directly.
-func MustMarshalDirectEnvelope(topic, eventType, id string, payload []byte) []byte {
-	if err := validateDirectEnvelopeArgs(id, eventType); err != nil {
-		panic(err.Error())
-	}
-	raw, err := MarshalEnvelope(Entry{
-		ID:        id,
-		EventType: eventType,
-		Topic:     topic,
-		Payload:   payload,
-		CreatedAt: time.Now().UTC(),
-	})
-	if err != nil {
-		panic(errcode.Wrap(errcode.ErrEnvelopeSchema,
-			"outbox.MustMarshalDirectEnvelope: json.Marshal unexpectedly failed", err).Error())
-	}
-	return raw
-}
-
-// validateDirectEnvelopeArgs returns a non-nil errcode error when id or
-// eventType are empty. Shared with MustMarshalDirectEnvelope so the
-// validation messages stay consistent with the rest of kernel/outbox's
-// errcode-tagged error surface.
-func validateDirectEnvelopeArgs(id, eventType string) error {
-	if id == "" {
-		return errcode.New(errcode.ErrEnvelopeSchema,
-			"outbox.MustMarshalDirectEnvelope: empty id")
-	}
-	if eventType == "" {
-		return errcode.New(errcode.ErrEnvelopeSchema,
-			"outbox.MustMarshalDirectEnvelope: empty eventType")
-	}
-	return nil
 }
 
 // UnmarshalEnvelope decodes a v1 wire envelope into an Entry.

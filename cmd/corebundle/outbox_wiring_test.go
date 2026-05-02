@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	adapterpg "github.com/ghbvf/gocell/adapters/postgres"
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
@@ -42,6 +43,7 @@ func TestBuildConfigCoreOpts_InMemoryMode_NoRelay(t *testing.T) {
 		Publisher:        discardPublisher{},
 		MetricsProvider:  metrics.NopProvider{},
 		ValueTransformer: crypto.NoopTransformer{},
+		Clock:            clock.Real(),
 	})
 
 	require.NoError(t, err)
@@ -63,6 +65,7 @@ func TestBuildConfigCoreOpts_UnknownMode_Error(t *testing.T) {
 		Publisher:        discardPublisher{},
 		MetricsProvider:  metrics.NopProvider{},
 		ValueTransformer: crypto.NoopTransformer{},
+		Clock:            clock.Real(),
 	})
 
 	require.Error(t, err)
@@ -84,6 +87,7 @@ func TestBuildConfigCoreOpts_PGMode_MissingDSN(t *testing.T) {
 		Publisher:        discardPublisher{},
 		MetricsProvider:  metrics.NopProvider{},
 		ValueTransformer: crypto.NoopTransformer{},
+		Clock:            clock.Real(),
 	})
 
 	require.Error(t, err, "postgres mode with empty DSN must return an error")
@@ -156,7 +160,7 @@ func TestTopologyAdapterInfo_TableDriven(t *testing.T) {
 func TestOutboxE2E_CrossCellFanout(t *testing.T) {
 	const topic = "test.fanout.cross-cg.v1"
 
-	eb := eventbus.New()
+	eb := eventbus.New(eventbus.WithClock(clock.Real()))
 	t.Cleanup(func() { _ = eb.Close(context.Background()) })
 
 	ctx, cancel := context.WithTimeout(context.Background(), testtime.CtxDefault)

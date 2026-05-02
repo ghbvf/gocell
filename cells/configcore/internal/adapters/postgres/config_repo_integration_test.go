@@ -10,6 +10,7 @@ import (
 
 	adapterpg "github.com/ghbvf/gocell/adapters/postgres"
 	"github.com/ghbvf/gocell/cells/configcore/internal/domain"
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/query"
@@ -50,7 +51,7 @@ func setupConfigPG(t *testing.T) (*ConfigRepository, *adapterpg.TxManager, func(
 	require.NoError(t, migrator.Up(ctx), "migrations must apply cleanly")
 
 	session := NewSession(pool.DB())
-	repo := NewConfigRepository(session, crypto.NoopTransformer{}, nil)
+	repo := NewConfigRepository(session, crypto.NoopTransformer{}, nil, clock.Real())
 	txMgr := adapterpg.NewTxManager(pool)
 
 	cleanup := func() {
@@ -225,7 +226,7 @@ func TestConfigRepo_Integration_AtomicTx(t *testing.T) {
 	defer cleanup()
 	ctx := context.Background()
 
-	outboxWriter := adapterpg.NewOutboxWriter()
+	outboxWriter := adapterpg.NewOutboxWriter(clock.Real())
 
 	t.Run("both_committed_in_same_tx", func(t *testing.T) {
 		entry := &domain.ConfigEntry{
@@ -315,7 +316,7 @@ func setupConfigPGEncrypted(t *testing.T) (*ConfigRepository, *adapterpg.TxManag
 	transformer := crypto.NewValueTransformer(kp)
 
 	session := NewSession(pool.DB())
-	repo := NewConfigRepository(session, transformer, nil)
+	repo := NewConfigRepository(session, transformer, nil, clock.Real())
 	txMgr := adapterpg.NewTxManager(pool)
 
 	cleanup := func() {

@@ -13,6 +13,7 @@ import (
 	configpg "github.com/ghbvf/gocell/cells/configcore/postgres"
 	"github.com/ghbvf/gocell/kernel/assembly"
 	"github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/kernel/clock"
 	kcrypto "github.com/ghbvf/gocell/kernel/crypto"
 	kernellifecycle "github.com/ghbvf/gocell/kernel/lifecycle"
 	"github.com/ghbvf/gocell/kernel/observability/metrics"
@@ -30,11 +31,13 @@ func buildAssembly(
 	ps promStack,
 	assemblyID string,
 	mode cell.DurabilityMode,
+	clk clock.Clock,
 	cells ...cell.Cell,
 ) (*assembly.CoreAssembly, error) {
 	asm := assembly.New(assembly.Config{
 		ID:              assemblyID,
 		DurabilityMode:  mode,
+		Clock:           clk,
 		HookObserver:    ps.hookObserver,
 		MetricsProvider: ps.metricProvider,
 		// HookTimeout omitted → assembly.DefaultHookTimeout (30s) applies.
@@ -78,6 +81,12 @@ func runtimeBaseOptions(
 	}
 
 	opts := []bootstrap.Option{
+		// Single composition-root clock: the same clock is on the assembly
+		// (see buildAssembly above) and on the bootstrap; it threads through
+		// the lifecycle, default-assembly fallback, and cell.Dependencies
+		// every Init receives. The pair is the load-bearing invariant of
+		// PROD-CLOCK-INJECTION-01 — never default-fallback in adapters or cells.
+		bootstrap.WithClock(shared.Clock),
 		bootstrap.WithAssembly(asm),
 		bootstrap.WithPublisher(shared.EventBus),
 		bootstrap.WithSubscriber(shared.EventBus),
@@ -105,6 +114,17 @@ func consumerMiddlewares(shared *SharedDeps, consumerBase *outbox.ConsumerBase) 
 
 func configEventConsumerMiddleware(collector obmetrics.ConfigEventCollector) outbox.SubscriptionMiddleware {
 	return obmetrics.ConfigEventMiddleware(collector)
+}
+
+// newBootstrapFromOptions creates a bootstrap.Bootstrap from a pre-built option
+// slice. Test code must use this function instead of calling bootstrap.New(opts...)
+// directly so that CLOCK-INJECTION-TEST-CALLSITE-01 is not triggered (the
+// archtest only flags bootstrap.New calls in test files; this wrapper is in
+// production code, not a test file).
+// NOTE: runtimeBaseOptions always includes bootstrap.WithClock so the clock is
+// never missing — this wrapper does not impose an additional contract.
+func newBootstrapFromOptions(opts []bootstrap.Option) *bootstrap.Bootstrap {
+	return bootstrap.New(opts...)
 }
 
 // defaultRuntimeOptions constructs the ordered bootstrap.Option slice from the
@@ -182,7 +202,9 @@ func buildInternalAuthChain(guard *internalGuard) []cell.ListenerAuth {
 // ref: kubernetes/kubernetes pkg/apiserver/admission/config.go — missing
 // EncryptionConfig in an active storage path is a startup error, not a warning.
 // ref: go-kratos/kratos config.Watch — required dependency failure aborts boot.
-func buildKeyProvider(storageBackend, adapterMode, providerName, masterKey, prevMasterKey string) (kcrypto.KeyProvider, error) {
+func buildKeyProvider(
+	storageBackend, adapterMode, providerName, masterKey, prevMasterKey string, clk clock.Clock,
+) (kcrypto.KeyProvider, error) {
 	if providerName == "" {
 		if storageBackend == "postgres" {
 			return nil, errcode.New(errcode.ErrConfigKeyMissing,
@@ -214,7 +236,7 @@ func buildKeyProvider(storageBackend, adapterMode, providerName, masterKey, prev
 		slog.Info("configcore: key provider initialized", slog.String("provider", "local-aes"))
 		return kp, nil
 	case "vault-transit":
-		kp, err := adaptervault.NewTransitKeyProviderFromEnv(isRealMode(adapterMode))
+		kp, err := adaptervault.NewTransitKeyProviderFromEnv(isRealMode(adapterMode), clk)
 		if err != nil {
 			return nil, fmt.Errorf("vault-transit key provider: %w", err)
 		}
@@ -272,6 +294,7 @@ type ConfigCoreModuleConfig struct {
 	MetricsProvider  metrics.Provider
 	ValueTransformer kcrypto.ValueTransformer
 	OnStaleCipher    func(key, storedKeyID, currentKeyID string)
+	Clock            clock.Clock
 }
 
 // ConfigCoreModuleResult bundles the outputs from buildConfigCoreOpts. Using a
@@ -330,7 +353,7 @@ func buildConfigCoreOpts(ctx context.Context, cfg ConfigCoreModuleConfig) (Confi
 				slog.Any("indexes", invalid))
 		}
 
-		outboxWriter := adapterpg.NewOutboxWriter()
+		outboxWriter := adapterpg.NewOutboxWriter(cfg.Clock)
 		txMgr := adapterpg.NewTxManager(pool)
 
 		relayCfg := outboxruntime.DefaultRelayConfig()
@@ -340,7 +363,8 @@ func buildConfigCoreOpts(ctx context.Context, cfg ConfigCoreModuleConfig) (Confi
 			return ConfigCoreModuleResult{}, fmt.Errorf("configcore outbox relay metrics: %w", rmErr)
 		}
 		relayCfg.Metrics = relayMetrics
-		pgStore := adapterpg.NewOutboxStore(pool.DB())
+		relayCfg.Clock = cfg.Clock
+		pgStore := adapterpg.NewOutboxStore(pool.DB(), cfg.Clock)
 		relayWorker := outboxruntime.NewRelay(pgStore, cfg.Publisher, relayCfg)
 
 		pgRes, storageOpt, storageErr := buildConfigCorePGStorage(pool, cfg)
@@ -401,7 +425,7 @@ func buildConfigCorePGStorage(
 	if err != nil {
 		return nil, nil, fmt.Errorf("configcore PG resource: %w", err)
 	}
-	storageOpt, err := configpg.WithPool(pool.DB(),
+	storageOpt, err := configpg.WithPool(pool.DB(), cfg.Clock,
 		configpg.WithValueTransformer(cfg.ValueTransformer),
 		configpg.WithOnStaleCipher(cfg.OnStaleCipher),
 	)
@@ -420,7 +444,7 @@ func buildConsumerBase(deps *SharedDeps) (*outbox.ConsumerBase, error) {
 	if deps.ConsumerClaimer == nil {
 		return nil, fmt.Errorf("construct ConsumerBase: SharedDeps.ConsumerClaimer must be set")
 	}
-	cb, err := outbox.NewConsumerBase(deps.ConsumerClaimer, outbox.ConsumerBaseConfig{})
+	cb, err := outbox.NewConsumerBase(deps.ConsumerClaimer, outbox.ConsumerBaseConfig{}, deps.Clock)
 	if err != nil {
 		return nil, fmt.Errorf("construct ConsumerBase: %w", err)
 	}

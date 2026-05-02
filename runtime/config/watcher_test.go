@@ -14,6 +14,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 )
 
@@ -59,7 +60,7 @@ func TestWatcher_OnChange(t *testing.T) {
 	file := filepath.Join(dir, "config.yaml")
 	touchFile(t, file, "key: val1")
 
-	w, err := NewWatcher(file)
+	w, err := NewWatcher(file, clock.Real())
 	require.NoError(t, err)
 	defer func() { _ = w.Close(context.Background()) }()
 
@@ -87,7 +88,7 @@ func TestWatcher_Close(t *testing.T) {
 	file := filepath.Join(dir, "config.yaml")
 	touchFile(t, file, "key: val")
 
-	w, err := NewWatcher(file)
+	w, err := NewWatcher(file, clock.Real())
 	require.NoError(t, err)
 
 	w.Start()
@@ -100,7 +101,7 @@ func TestWatcher_Close(t *testing.T) {
 }
 
 func TestNewWatcher_InvalidPath(t *testing.T) {
-	_, err := NewWatcher("/nonexistent/file.yaml")
+	_, err := NewWatcher("/nonexistent/file.yaml", clock.Real())
 	assert.Error(t, err)
 }
 
@@ -112,7 +113,7 @@ func TestWatcher_AtomicReplace_RenameCreate(t *testing.T) {
 	file := filepath.Join(dir, "config.yaml")
 	touchFile(t, file, "key: v1")
 
-	w, err := NewWatcher(file)
+	w, err := NewWatcher(file, clock.Real())
 	require.NoError(t, err)
 	defer func() { _ = w.Close(context.Background()) }()
 
@@ -134,7 +135,7 @@ func TestWatcher_AtomicReplace_RemoveRecreate(t *testing.T) {
 	file := filepath.Join(dir, "config.yaml")
 	touchFile(t, file, "key: v1")
 
-	w, err := NewWatcher(file)
+	w, err := NewWatcher(file, clock.Real())
 	require.NoError(t, err)
 	defer func() { _ = w.Close(context.Background()) }()
 
@@ -157,7 +158,7 @@ func TestWatcher_IgnoresUnrelatedFiles(t *testing.T) {
 	other := filepath.Join(dir, "other.yaml")
 	touchFile(t, file, "key: v1")
 
-	w, err := NewWatcher(file)
+	w, err := NewWatcher(file, clock.Real())
 	require.NoError(t, err)
 	defer func() { _ = w.Close(context.Background()) }()
 
@@ -177,7 +178,7 @@ func TestWatcher_StartWithContext(t *testing.T) {
 	file := filepath.Join(dir, "config.yaml")
 	touchFile(t, file, "key: val")
 
-	w, err := NewWatcher(file)
+	w, err := NewWatcher(file, clock.Real())
 	require.NoError(t, err)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -196,7 +197,7 @@ func TestWatcher_HealthLifecycle(t *testing.T) {
 	file := filepath.Join(dir, "config.yaml")
 	touchFile(t, file, "key: val")
 
-	w, err := NewWatcher(file)
+	w, err := NewWatcher(file, clock.Real())
 	require.NoError(t, err)
 
 	require.Error(t, w.Health(), "watcher must be unhealthy before Start")
@@ -219,12 +220,12 @@ func TestNewWatcher_WithOptions_BackwardCompatible(t *testing.T) {
 	touchFile(t, file, "key: val")
 
 	// No options — must still work.
-	w1, err := NewWatcher(file)
+	w1, err := NewWatcher(file, clock.Real())
 	require.NoError(t, err)
 	require.NoError(t, w1.Close(context.Background()))
 
 	// With options — must compile and work.
-	w2, err := NewWatcher(file, WithDebounce(0), WithMaxDebounce(0))
+	w2, err := NewWatcher(file, clock.Real(), WithDebounce(0), WithMaxDebounce(0))
 	require.NoError(t, err)
 	require.NoError(t, w2.Close(context.Background()))
 }
@@ -238,7 +239,7 @@ func TestWatcher_Debounce_CoalescesRapidWrites(t *testing.T) {
 	file := filepath.Join(dir, "config.yaml")
 	touchFile(t, file, "key: v0")
 
-	w, err := NewWatcher(file, WithDebounce(testtime.D200ms), WithMaxDebounce(testtime.D2s))
+	w, err := NewWatcher(file, clock.Real(), WithDebounce(testtime.D200ms), WithMaxDebounce(testtime.D2s))
 	require.NoError(t, err)
 	defer func() { _ = w.Close(context.Background()) }()
 
@@ -265,8 +266,7 @@ func TestWatcher_Debounce_MaxCeiling(t *testing.T) {
 	file := filepath.Join(dir, "config.yaml")
 	touchFile(t, file, "key: v0")
 
-	w, err := NewWatcher(file,
-		WithDebounce(testtime.D200ms),
+	w, err := NewWatcher(file, clock.Real(), WithDebounce(testtime.D200ms),
 		WithMaxDebounce(watcherMaxDebounceCeiling),
 	)
 	require.NoError(t, err)
@@ -309,7 +309,7 @@ func TestWatcher_Debounce_ZeroMeansImmediate(t *testing.T) {
 	file := filepath.Join(dir, "config.yaml")
 	touchFile(t, file, "key: v0")
 
-	w, err := NewWatcher(file, WithDebounce(0))
+	w, err := NewWatcher(file, clock.Real(), WithDebounce(0))
 	require.NoError(t, err)
 	defer func() { _ = w.Close(context.Background()) }()
 
@@ -345,7 +345,7 @@ func TestWatcher_SymlinkPivot_DetectsTargetChange(t *testing.T) {
 	link := filepath.Join(dir, "config.yaml")
 	require.NoError(t, os.Symlink(v1, link))
 
-	w, err := NewWatcher(link, WithDebounce(testtime.MediumPoll))
+	w, err := NewWatcher(link, clock.Real(), WithDebounce(testtime.MediumPoll))
 	require.NoError(t, err)
 	defer func() { _ = w.Close(context.Background()) }()
 
@@ -403,7 +403,7 @@ func TestWatcher_SymlinkPivot_KubernetesDataPattern(t *testing.T) {
 	configLink := filepath.Join(dir, "config.yaml")
 	require.NoError(t, os.Symlink(filepath.Join("..data", "config.yaml"), configLink))
 
-	w, err := NewWatcher(configLink, WithDebounce(testtime.MediumPoll))
+	w, err := NewWatcher(configLink, clock.Real(), WithDebounce(testtime.MediumPoll))
 	require.NoError(t, err)
 	defer func() { _ = w.Close(context.Background()) }()
 
@@ -433,7 +433,7 @@ func TestWatcher_SymlinkPivot_RegularFileUnaffected(t *testing.T) {
 	file := filepath.Join(dir, "config.yaml")
 	touchFile(t, file, "key: v1")
 
-	w, err := NewWatcher(file, WithDebounce(testtime.MediumPoll))
+	w, err := NewWatcher(file, clock.Real(), WithDebounce(testtime.MediumPoll))
 	require.NoError(t, err)
 	defer func() { _ = w.Close(context.Background()) }()
 
@@ -466,7 +466,7 @@ func TestWatcher_WithKeyFilter_StoresPrefixes(t *testing.T) {
 	file := filepath.Join(dir, "config.yaml")
 	touchFile(t, file, "key: val")
 
-	w, err := NewWatcher(file, WithKeyFilter("server.", "db."))
+	w, err := NewWatcher(file, clock.Real(), WithKeyFilter("server.", "db."))
 	require.NoError(t, err)
 	defer func() { _ = w.Close(context.Background()) }()
 
@@ -479,7 +479,7 @@ func TestWatcher_WithKeyFilter_EmptyDefault(t *testing.T) {
 	file := filepath.Join(dir, "config.yaml")
 	touchFile(t, file, "key: val")
 
-	w, err := NewWatcher(file)
+	w, err := NewWatcher(file, clock.Real())
 	require.NoError(t, err)
 	defer func() { _ = w.Close(context.Background()) }()
 
@@ -503,7 +503,7 @@ func TestWatcher_WithMetrics_RecordsEvents(t *testing.T) {
 	touchFile(t, file, "key: v0")
 
 	spy := &spyCollector{}
-	w, err := NewWatcher(file, WithDebounce(0), WithMetrics(spy))
+	w, err := NewWatcher(file, clock.Real(), WithDebounce(0), WithMetrics(spy))
 	require.NoError(t, err)
 	defer func() { _ = w.Close(context.Background()) }()
 
@@ -524,8 +524,7 @@ func TestWatcher_Metrics_DebounceCoalesced(t *testing.T) {
 	touchFile(t, file, "key: v0")
 
 	spy := &spyCollector{}
-	w, err := NewWatcher(file,
-		WithDebounce(testtime.D200ms),
+	w, err := NewWatcher(file, clock.Real(), WithDebounce(testtime.D200ms),
 		WithMaxDebounce(testtime.D2s),
 		WithMetrics(spy),
 	)
@@ -566,7 +565,7 @@ func TestWatcher_Close_WaitsForInFlightCallbacks(t *testing.T) {
 	file := filepath.Join(dir, "config.yaml")
 	touchFile(t, file, "key: v0")
 
-	w, err := NewWatcher(file, WithDebounce(0), WithDrainTimeout(testtime.D2s))
+	w, err := NewWatcher(file, clock.Real(), WithDebounce(0), WithDrainTimeout(testtime.D2s))
 	require.NoError(t, err)
 
 	started := make(chan struct{})
@@ -604,7 +603,7 @@ func TestWatcher_Close_DrainTimeoutPreventsHang(t *testing.T) {
 	// controls the budget via the ctx deadline. This test passes a 200ms budget
 	// to the Close call, which should return promptly even though the callback
 	// sleeps for 10 seconds.
-	w, err := NewWatcher(file, WithDebounce(0))
+	w, err := NewWatcher(file, clock.Real(), WithDebounce(0))
 	require.NoError(t, err)
 
 	started := make(chan struct{})
@@ -639,7 +638,7 @@ func TestWatcher_Close_NoInFlight_Immediate(t *testing.T) {
 	file := filepath.Join(dir, "config.yaml")
 	touchFile(t, file, "key: v0")
 
-	w, err := NewWatcher(file)
+	w, err := NewWatcher(file, clock.Real())
 	require.NoError(t, err)
 	w.Start()
 	waitReady(t, w)
@@ -661,8 +660,7 @@ func TestWatcher_FullLifecycle_AllOptions(t *testing.T) {
 	touchFile(t, file, "key: v0")
 
 	spy := &spyCollector{}
-	w, err := NewWatcher(file,
-		WithDebounce(testtime.D100ms),
+	w, err := NewWatcher(file, clock.Real(), WithDebounce(testtime.D100ms),
 		WithMaxDebounce(testtime.D500ms),
 		WithMetrics(spy),
 		WithDrainTimeout(testtime.D1s),
@@ -699,7 +697,7 @@ func TestWatcher_Close_DuringDebounceTimer(t *testing.T) {
 	file := filepath.Join(dir, "config.yaml")
 	touchFile(t, file, "key: v0")
 
-	w, err := NewWatcher(file, WithDebounce(testtime.D500ms))
+	w, err := NewWatcher(file, clock.Real(), WithDebounce(testtime.D500ms))
 	require.NoError(t, err)
 
 	w.OnChange(func(_ WatchEvent) {})
@@ -721,7 +719,7 @@ func TestWatcher_Close_ConcurrentImmediateCallbacksRace(t *testing.T) {
 	file := filepath.Join(dir, "config.yaml")
 	touchFile(t, file, "key: v0")
 
-	w, err := NewWatcher(file, WithDebounce(0))
+	w, err := NewWatcher(file, clock.Real(), WithDebounce(0))
 	require.NoError(t, err)
 
 	callbackStarted := make(chan struct{})
@@ -763,7 +761,7 @@ func TestWatcher_RaceDetection_ConcurrentWriteAndClose(t *testing.T) {
 	file := filepath.Join(dir, "config.yaml")
 	touchFile(t, file, "key: v0")
 
-	w, err := NewWatcher(file, WithDebounce(testtime.MediumPoll))
+	w, err := NewWatcher(file, clock.Real(), WithDebounce(testtime.MediumPoll))
 	require.NoError(t, err)
 
 	w.OnChange(func(_ WatchEvent) {})
@@ -799,7 +797,7 @@ func TestWatcher_Close_AcceptsCtx(t *testing.T) {
 	file := filepath.Join(dir, "config.yaml")
 	touchFile(t, file, "key: v0")
 
-	w, err := NewWatcher(file, WithDebounce(0))
+	w, err := NewWatcher(file, clock.Real(), WithDebounce(0))
 	require.NoError(t, err)
 
 	ctx, cancel := context.WithTimeout(context.Background(), testtime.CtxDefault)
@@ -817,7 +815,7 @@ func TestWatcher_Close_RespectsCtxDeadline(t *testing.T) {
 	touchFile(t, file, "key: v0")
 
 	// Create a watcher with a long drain timeout (irrelevant — ctx wins).
-	w, err := NewWatcher(file, WithDebounce(0), WithDrainTimeout(testtime.D10s))
+	w, err := NewWatcher(file, clock.Real(), WithDebounce(0), WithDrainTimeout(testtime.D10s))
 	require.NoError(t, err)
 	w.Start()
 	waitReady(t, w)
@@ -861,7 +859,7 @@ func TestWatcher_Close_Idempotent(t *testing.T) {
 	file := filepath.Join(dir, "config.yaml")
 	touchFile(t, file, "key: v0")
 
-	w, err := NewWatcher(file, WithDebounce(0))
+	w, err := NewWatcher(file, clock.Real(), WithDebounce(0))
 	require.NoError(t, err)
 
 	ctx := context.Background()
@@ -891,8 +889,7 @@ func TestWatcher_PivotTick_CoversPositiveBranch(t *testing.T) {
 	link := filepath.Join(dir, "config.yaml")
 	require.NoError(t, os.Symlink(v1, link))
 
-	w, err := NewWatcher(link,
-		WithDebounce(0),
+	w, err := NewWatcher(link, clock.Real(), WithDebounce(0),
 		WithSymlinkPollInterval(testtime.FastPoll),
 	)
 	require.NoError(t, err)
@@ -941,7 +938,7 @@ func TestWatcher_WithSymlinkPollInterval_DisablesPoll(t *testing.T) {
 	require.NoError(t, os.Symlink(v1, link))
 
 	// poll=0 disables the ticker; the watcher must still start and close cleanly.
-	w, err := NewWatcher(link, WithDebounce(0), WithSymlinkPollInterval(0))
+	w, err := NewWatcher(link, clock.Real(), WithDebounce(0), WithSymlinkPollInterval(0))
 	require.NoError(t, err)
 	defer func() { _ = w.Close(context.Background()) }()
 
@@ -974,7 +971,7 @@ func TestWatcher_WithSymlinkPollInterval_CustomInterval(t *testing.T) {
 	require.NoError(t, os.Symlink(v1, link))
 
 	// Use a short custom poll interval so the pivot is detected via the ticker.
-	w, err := NewWatcher(link, WithDebounce(0), WithSymlinkPollInterval(testtime.D20ms))
+	w, err := NewWatcher(link, clock.Real(), WithDebounce(0), WithSymlinkPollInterval(testtime.D20ms))
 	require.NoError(t, err)
 	defer func() { _ = w.Close(context.Background()) }()
 
@@ -1006,7 +1003,7 @@ func TestWatcher_isRelevantEvent_TableDriven(t *testing.T) {
 	target := filepath.Join(dir, "config.yaml")
 	touchFile(t, target, "key: val")
 
-	w, err := NewWatcher(target)
+	w, err := NewWatcher(target, clock.Real())
 	require.NoError(t, err)
 	defer func() { _ = w.Close(context.Background()) }()
 
@@ -1080,7 +1077,7 @@ func TestWatcher_isRelevantEvent_DetectsSymlinkRemovePivot(t *testing.T) {
 	touchFile(t, v2, "key: v2")
 	require.NoError(t, os.Symlink(v1, link))
 
-	w, err := NewWatcher(link)
+	w, err := NewWatcher(link, clock.Real())
 	require.NoError(t, err)
 	defer func() { _ = w.Close(context.Background()) }()
 
@@ -1145,7 +1142,7 @@ func TestWatcher_handleWatcherEvent_MetricOrdering(t *testing.T) {
 	touchFile(t, target, "key: val")
 
 	spy := &orderedSpyCollector{}
-	w, err := NewWatcher(target, WithMetrics(spy), WithDebounce(0))
+	w, err := NewWatcher(target, clock.Real(), WithMetrics(spy), WithDebounce(0))
 	require.NoError(t, err)
 	defer func() { _ = w.Close(context.Background()) }()
 
@@ -1170,7 +1167,7 @@ func TestWatcher_handleSymlinkPivotTick_MetricOrdering(t *testing.T) {
 	touchFile(t, target, "key: val")
 
 	spy := &orderedSpyCollector{}
-	w, err := NewWatcher(target, WithMetrics(spy), WithDebounce(0))
+	w, err := NewWatcher(target, clock.Real(), WithMetrics(spy), WithDebounce(0))
 	require.NoError(t, err)
 	defer func() { _ = w.Close(context.Background()) }()
 

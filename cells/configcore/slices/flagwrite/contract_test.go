@@ -16,6 +16,7 @@ import (
 	"github.com/ghbvf/gocell/cells/configcore/internal/testutil"
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/cell/celltest"
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/contracttest"
 	"github.com/ghbvf/gocell/runtime/auth"
 )
@@ -42,8 +43,8 @@ func newContractMux(svc *Service) http.Handler {
 
 func newContractService(t *testing.T) *Service {
 	t.Helper()
-	repo := mem.NewFlagRepository()
-	svc, err := NewService(repo, slog.Default(),
+	repo := mem.NewFlagRepository(clock.Real())
+	svc, err := NewService(repo, slog.Default(), clock.Real(),
 		WithTxManager(&testutil.NoopTxRunner{}))
 	if err != nil {
 		t.Fatal(err)

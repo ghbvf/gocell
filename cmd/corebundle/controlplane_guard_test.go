@@ -13,6 +13,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/runtime/auth"
 )
 
@@ -22,7 +23,7 @@ import (
 // non-real modes has been removed by the SEC-FAIL-CLOSED change.
 func TestInternalGuardFromEnv_DevMode_MissingSecret_ReturnsError(t *testing.T) {
 	t.Setenv("GOCELL_SERVICE_SECRET", "")
-	_, err := internalGuardFromEnv("", nil) // dev mode
+	_, err := internalGuardFromEnv("", nil, clock.Real()) // dev mode
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "GOCELL_SERVICE_SECRET",
 		"all modes must fail fast when service secret is unset")
@@ -30,7 +31,7 @@ func TestInternalGuardFromEnv_DevMode_MissingSecret_ReturnsError(t *testing.T) {
 
 func TestInternalGuardFromEnv_RealMode_MissingSecret_Error(t *testing.T) {
 	t.Setenv("GOCELL_SERVICE_SECRET", "")
-	_, err := internalGuardFromEnv("real", nil)
+	_, err := internalGuardFromEnv("real", nil, clock.Real())
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "GOCELL_SERVICE_SECRET",
 		"real mode must fail fast when service secret is unset")
@@ -38,14 +39,14 @@ func TestInternalGuardFromEnv_RealMode_MissingSecret_Error(t *testing.T) {
 
 func TestInternalGuardFromEnv_WithSecret_ReturnsGuard(t *testing.T) {
 	t.Setenv("GOCELL_SERVICE_SECRET", freshTestServiceSecret(t))
-	guard, err := internalGuardFromEnv("", nil)
+	guard, err := internalGuardFromEnv("", nil, clock.Real())
 	require.NoError(t, err)
 	assert.NotNil(t, guard, "non-empty secret must produce a non-nil guard")
 }
 
 func TestInternalGuardFromEnv_WithSecret_GuardRejects401WhenNoHeader(t *testing.T) {
 	t.Setenv("GOCELL_SERVICE_SECRET", freshTestServiceSecret(t))
-	guard, err := internalGuardFromEnv("", nil)
+	guard, err := internalGuardFromEnv("", nil, clock.Real())
 	require.NoError(t, err)
 	require.NotNil(t, guard)
 
@@ -68,7 +69,7 @@ func TestInternalGuardFromEnv_WithSecret_GuardRejects401WhenNoHeader(t *testing.
 // forging ServiceTokens using the public demo secret shipped in test fixtures.
 func TestInternalGuardFromEnv_RealMode_DemoServiceSecret_Rejected(t *testing.T) {
 	t.Setenv("GOCELL_SERVICE_SECRET", "service-secret-32-bytes-xxxxxx!!")
-	_, err := internalGuardFromEnv("real", nil)
+	_, err := internalGuardFromEnv("real", nil, clock.Real())
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "GOCELL_SERVICE_SECRET",
 		"error must name the offending env var")
@@ -81,7 +82,7 @@ func TestInternalGuardFromEnv_RealMode_DemoServiceSecret_Rejected(t *testing.T) 
 // the dev/test workflow where demo fixture values are acceptable.
 func TestInternalGuardFromEnv_DevMode_DemoServiceSecret_Allowed(t *testing.T) {
 	t.Setenv("GOCELL_SERVICE_SECRET", "service-secret-32-bytes-xxxxxx!!")
-	guard, err := internalGuardFromEnv("", nil) // dev mode
+	guard, err := internalGuardFromEnv("", nil, clock.Real()) // dev mode
 	require.NoError(t, err)
 	assert.NotNil(t, guard, "dev mode must accept demo key and return a guard")
 }
@@ -92,7 +93,7 @@ func TestInternalGuardFromEnv_DevMode_DemoServiceSecret_Allowed(t *testing.T) {
 func TestInternalGuardFromEnv_RealMode_DemoPreviousServiceSecret_Rejected(t *testing.T) {
 	t.Setenv("GOCELL_SERVICE_SECRET", freshTestServiceSecret(t))
 	t.Setenv("GOCELL_SERVICE_SECRET_PREVIOUS", "service-secret-32-bytes-xxxxxx!!")
-	_, err := internalGuardFromEnv("real", nil)
+	_, err := internalGuardFromEnv("real", nil, clock.Real())
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "GOCELL_SERVICE_SECRET_PREVIOUS",
 		"error must name the offending env var")
@@ -110,7 +111,7 @@ func TestInternalGuardFromEnv_DefaultStoreRejectsReplay(t *testing.T) {
 	secret := freshTestServiceSecret(t)
 	t.Setenv("GOCELL_SERVICE_SECRET", secret)
 
-	guard, err := internalGuardFromEnv("", nil) // dev mode still installs store
+	guard, err := internalGuardFromEnv("", nil, clock.Real()) // dev mode still installs store
 	require.NoError(t, err)
 	require.NotNil(t, guard, "guard must be installed when secret is present")
 
@@ -147,7 +148,7 @@ func TestInternalGuardFromEnv_DefaultStoreRejectsReplay(t *testing.T) {
 // silently exposes the control plane.
 func TestInternalGuardFromEnv_RealMode_GuardInstalledWithSecret(t *testing.T) {
 	t.Setenv("GOCELL_SERVICE_SECRET", freshTestServiceSecret(t))
-	guard, err := internalGuardFromEnv("real", nil)
+	guard, err := internalGuardFromEnv("real", nil, clock.Real())
 	require.NoError(t, err)
 	require.NotNil(t, guard,
 		"real mode with valid service secret must install a non-nil guard")
@@ -163,7 +164,7 @@ func TestInternalGuardFromEnv_RealMode_GuardInstalledWithSecret(t *testing.T) {
 func TestInternalGuardFromEnv_NonceStoreTTL_UsesServiceTokenNonceTTL(t *testing.T) {
 	t.Setenv("GOCELL_SERVICE_SECRET", freshTestServiceSecret(t))
 	t.Setenv("GOCELL_SINGLE_POD", "1") // required after F1: real mode + in_memory needs opt-in
-	guard, err := internalGuardFromEnv("real", nil)
+	guard, err := internalGuardFromEnv("real", nil, clock.Real())
 	require.NoError(t, err)
 
 	store, ok := guard.NonceStore().(*auth.InMemoryNonceStore)
@@ -191,7 +192,7 @@ func TestInternalGuardFromEnv_RequiresSecretInAllModes(t *testing.T) {
 			// No t.Parallel(): t.Setenv must run sequentially (Go testing constraint).
 			t.Setenv("GOCELL_SERVICE_SECRET", "")
 
-			guard, err := internalGuardFromEnv(mode, nil)
+			guard, err := internalGuardFromEnv(mode, nil, clock.Real())
 
 			// Phase-2 expectation: error in ALL modes when secret is empty.
 			// Phase-1 current: non-real modes return (nil, nil) → test FAILS.

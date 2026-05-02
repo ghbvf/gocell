@@ -70,7 +70,10 @@ func (m ConfigCoreModule) Provide(
 	kp := m.KeyProviderOverride
 	if kp == nil {
 		providerName, masterKey, prevMasterKey := LoadConfigCoreKeyProvider()
-		kp, err = buildKeyProvider(shared.Topology.StorageBackend, shared.Topology.AdapterMode, providerName, masterKey, prevMasterKey)
+		kp, err = buildKeyProvider(
+			shared.Topology.StorageBackend, shared.Topology.AdapterMode,
+			providerName, masterKey, prevMasterKey, shared.Clock,
+		)
 		if err != nil {
 			return nil, nil, nil, fmt.Errorf("configcore key provider: %w", err)
 		}
@@ -101,6 +104,7 @@ func (m ConfigCoreModule) Provide(
 		OnStaleCipher: func(_, _, _ string) {
 			staleCipherCounter.Inc()
 		},
+		Clock: shared.Clock,
 	})
 	if err != nil {
 		return nil, nil, nil, err

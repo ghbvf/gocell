@@ -106,12 +106,19 @@ func TestUnmarshalEnvelope_MissingRequiredFieldRejected(t *testing.T) {
 	}
 }
 
-func TestMarshalDirectEnvelope_ProducesV1(t *testing.T) {
+func TestMarshalEnvelope_ProducesV1FromMinimalEntry(t *testing.T) {
 	topic := "event.session.created.v1"
 	id := "direct-id-1"
 	payload := []byte(`{"sessionId":"s-1","userId":"u-42"}`)
 
-	raw := MustMarshalDirectEnvelope(topic, topic, id, payload)
+	raw, err := MarshalEnvelope(Entry{
+		ID:        id,
+		EventType: topic,
+		Topic:     topic,
+		Payload:   payload,
+		CreatedAt: time.Now(),
+	})
+	require.NoError(t, err)
 
 	got, err := UnmarshalEnvelope(topic, raw)
 	require.NoError(t, err)
@@ -154,22 +161,19 @@ func TestUnmarshalEnvelope_PreservesObservability(t *testing.T) {
 	assert.Equal(t, obs, got.Observability)
 }
 
-func TestMarshalDirectEnvelope_PanicsOnEmptyRequiredFields(t *testing.T) {
+func TestEntryValidate_RejectsEmptyRequiredFields(t *testing.T) {
 	tests := []struct {
-		name      string
-		topic     string
-		eventType string
-		id        string
+		name string
+		e    Entry
 	}{
-		{name: "empty id", topic: "t.v1", eventType: "t.v1", id: ""},
-		{name: "empty eventType", topic: "t.v1", eventType: "", id: "some-id"},
+		{name: "empty id", e: Entry{EventType: "t.v1", Topic: "t.v1", Payload: []byte(`{}`)}},
+		{name: "empty eventType and topic", e: Entry{ID: "some-id", Payload: []byte(`{}`)}},
+		{name: "empty payload", e: Entry{ID: "some-id", EventType: "t.v1", Topic: "t.v1"}},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			assert.Panics(t, func() {
-				_ = MustMarshalDirectEnvelope(tt.topic, tt.eventType, tt.id, []byte(`{}`))
-			})
+			assert.Error(t, tt.e.Validate())
 		})
 	}
 }

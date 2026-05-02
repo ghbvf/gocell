@@ -12,6 +12,7 @@ import (
 	"github.com/prometheus/common/expfmt"
 
 	gcprom "github.com/ghbvf/gocell/adapters/prometheus"
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	runtimemetrics "github.com/ghbvf/gocell/runtime/observability/metrics"
@@ -187,7 +188,7 @@ func TestPrometheusExposition_OutboxEmitter_FailOpenDropped_Family(t *testing.T)
 
 	// Fail-open emitter: any Publish error is swallowed, counter incremented.
 	pub := &stubPublisher{err: errors.New("broker unavailable")}
-	emitter, err := outbox.NewDirectEmitter(pub, outbox.DirectPublishFailOpen, p, "test-cell")
+	emitter, err := outbox.NewDirectEmitter(pub, outbox.DirectPublishFailOpen, p, clock.Real(), "test-cell")
 	if err != nil {
 		t.Fatalf("NewDirectEmitter: %v", err)
 	}

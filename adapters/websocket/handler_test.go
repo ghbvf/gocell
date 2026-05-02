@@ -19,6 +19,7 @@ import (
 	"go.uber.org/goleak"
 
 	adapterws "github.com/ghbvf/gocell/adapters/websocket"
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	rtws "github.com/ghbvf/gocell/runtime/websocket"
@@ -33,7 +34,7 @@ var _ = os.Exit // suppress unused import
 func setupTestHub(t *testing.T, handler rtws.MessageHandler) (*rtws.Hub, *httptest.Server) {
 	t.Helper()
 
-	cfg := rtws.DefaultHubConfig()
+	cfg := rtws.DefaultHubConfig(clock.Real())
 	cfg.PingInterval = testtime.SlowPoll
 
 	hub := rtws.NewHub(cfg, handler)
@@ -133,7 +134,7 @@ func TestUpgradeHandler_UpgradeFailureResponseIsPublic(t *testing.T) {
 }
 
 func TestUpgradeHandler_NonHijackerFailsBeforeAccept(t *testing.T) {
-	cfg := rtws.DefaultHubConfig()
+	cfg := rtws.DefaultHubConfig(clock.Real())
 	cfg.PingInterval = testtime.SlowPoll
 	hub := rtws.NewHub(cfg, nil)
 
@@ -341,7 +342,7 @@ func TestHub_StopClosesConnections(t *testing.T) {
 }
 
 func TestDefaultHubConfig(t *testing.T) {
-	cfg := rtws.DefaultHubConfig()
+	cfg := rtws.DefaultHubConfig(clock.Real())
 	assert.Equal(t, testtime.CtxLong, cfg.PingInterval)
 	assert.Equal(t, testtime.CtxDefault, cfg.PingTimeout)
 	assert.Equal(t, int64(64*1024), cfg.ReadLimit)
@@ -349,7 +350,7 @@ func TestDefaultHubConfig(t *testing.T) {
 }
 
 func TestUpgradeHandler_AllowedOrigins(t *testing.T) {
-	cfg := rtws.DefaultHubConfig()
+	cfg := rtws.DefaultHubConfig(clock.Real())
 	hub := rtws.NewHub(cfg, nil)
 
 	handler := requireUpgradeHandler(t, hub, adapterws.UpgradeConfig{
@@ -412,7 +413,7 @@ func TestHub_StopWithActiveConns_NoDeadlock(t *testing.T) {
 }
 
 func TestUpgradeHandler_HubNotRunning_503(t *testing.T) {
-	cfg := rtws.DefaultHubConfig()
+	cfg := rtws.DefaultHubConfig(clock.Real())
 	hub := rtws.NewHub(cfg, nil)
 	// Hub intentionally NOT started.
 
@@ -435,7 +436,7 @@ func TestUpgradeHandler_HubNotRunning_503(t *testing.T) {
 //
 // Positive case: AllowedOrigins: []string{"http://*"} must not panic.
 func TestUpgradeHandler_RejectsEmptyOrigins(t *testing.T) {
-	cfg := rtws.DefaultHubConfig()
+	cfg := rtws.DefaultHubConfig(clock.Real())
 
 	t.Run("empty origins — expect construction error with *errcode.Error", func(t *testing.T) {
 		hub := rtws.NewHub(cfg, nil)
@@ -515,7 +516,7 @@ func TestUpgradeHandler_NilHubTakesPriorityOverOrigins(t *testing.T) {
 }
 
 func TestUpgradeHandler_RejectsWildcardOrigin(t *testing.T) {
-	hub := rtws.NewHub(rtws.DefaultHubConfig(), nil)
+	hub := rtws.NewHub(rtws.DefaultHubConfig(clock.Real()), nil)
 
 	handler, err := adapterws.UpgradeHandler(hub, adapterws.UpgradeConfig{
 		AllowedOrigins: []string{"*"},
@@ -528,7 +529,7 @@ func TestUpgradeHandler_RejectsWildcardOrigin(t *testing.T) {
 }
 
 func TestMustUpgradeHandler_PanicsOnInvalidConfig(t *testing.T) {
-	hub := rtws.NewHub(rtws.DefaultHubConfig(), nil)
+	hub := rtws.NewHub(rtws.DefaultHubConfig(clock.Real()), nil)
 
 	require.Panics(t, func() {
 		_ = adapterws.MustUpgradeHandler(hub, adapterws.UpgradeConfig{
@@ -544,7 +545,7 @@ func TestMustUpgradeHandler_PanicsOnInvalidConfig(t *testing.T) {
 // handshake and would silently disable origin checking. Validate must
 // surface this as ErrWebsocketOriginsInvalid.
 func TestUpgradeHandler_RejectsBareHostOrigin(t *testing.T) {
-	hub := rtws.NewHub(rtws.DefaultHubConfig(), nil)
+	hub := rtws.NewHub(rtws.DefaultHubConfig(clock.Real()), nil)
 
 	handler, err := adapterws.UpgradeHandler(hub, adapterws.UpgradeConfig{
 		AllowedOrigins: []string{"example.com"},
@@ -604,7 +605,7 @@ func TestUpgradeHandler_AllowedOrigin_HandshakeSucceeds(t *testing.T) {
 // the connection. Pairs with the allow test above to lock both directions
 // of the security boundary.
 func TestUpgradeHandler_DisallowedOrigin_HandshakeRejected(t *testing.T) {
-	cfg := rtws.DefaultHubConfig()
+	cfg := rtws.DefaultHubConfig(clock.Real())
 	cfg.PingInterval = testtime.SlowPoll
 	hub := rtws.NewHub(cfg, nil)
 

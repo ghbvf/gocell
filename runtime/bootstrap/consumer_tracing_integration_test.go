@@ -11,6 +11,7 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/assembly"
 	"github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/wrapper"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
@@ -107,7 +108,7 @@ func (c *consumerSpyCell) RegisterSubscriptions(r cell.EventRouter) error {
 // contract metadata.
 func TestBootstrap_ConsumerTracingIntegration(t *testing.T) {
 	spyTracer := &endToEndSpyTracer{}
-	bus := eventbus.New()
+	bus := eventbus.New(eventbus.WithClock(clock.Real()))
 
 	spec := wrapper.ContractSpec{
 		ID: "event.integration.test.v1", Kind: "event", Transport: "inmem",
@@ -122,11 +123,12 @@ func TestBootstrap_ConsumerTracingIntegration(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 
-	asm := assembly.New(assembly.Config{ID: "consumer-trace-int", DurabilityMode: cell.DurabilityDemo})
+	asm := assembly.New(assembly.Config{ID: "consumer-trace-int", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
 	require.NoError(t, asm.Register(cellImpl))
 
 	primaryLn := newLocalListener(t)
 	b := New(
+		WithClock(clock.Real()),
 		WithSubscriber(bus),
 		WithPublisher(bus),
 		WithAssembly(asm),
@@ -144,10 +146,17 @@ func TestBootstrap_ConsumerTracingIntegration(t *testing.T) {
 	waitForHealthy(t, addr)
 
 	// Publish one entry on the topic and await handler invocation.
-	// The bus requires a v1 wire envelope, built via outbox.MarshalDirectEnvelope.
+	// The bus requires a v1 wire envelope, built via outbox.MarshalEnvelope.
 	bodyPayload, _ := json.Marshal(map[string]string{"hello": "world"})
-	envelope := outbox.MustMarshalDirectEnvelope(spec.Topic, "integration.test", "integration-evt-1", bodyPayload)
-	err := bus.Publish(ctx, spec.Topic, envelope)
+	envelope, err := outbox.MarshalEnvelope(outbox.Entry{
+		ID:        "integration-evt-1",
+		EventType: "integration.test",
+		Topic:     spec.Topic,
+		Payload:   bodyPayload,
+		CreatedAt: time.Now(),
+	})
+	require.NoError(t, err)
+	err = bus.Publish(ctx, spec.Topic, envelope)
 	require.NoError(t, err)
 
 	select {

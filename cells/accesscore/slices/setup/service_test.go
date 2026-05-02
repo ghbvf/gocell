@@ -24,6 +24,7 @@ import (
 	"github.com/ghbvf/gocell/cells/accesscore/internal/ports"
 	"github.com/ghbvf/gocell/cells/accesscore/slices/setup"
 	"github.com/ghbvf/gocell/cells/internal/testoutbox"
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/query"
@@ -49,7 +50,7 @@ func newService(t *testing.T, userRepo ports.UserRepository, roleRepo ports.Role
 	t.Helper()
 	prov, err := adminprovision.NewProvisioner(userRepo, roleRepo, discardLogger(), func() string {
 		return "00000000-0000-4000-8000-000000000001"
-	})
+	}, clock.Real())
 	require.NoError(t, err)
 	opts := []setup.Option{}
 	if w != nil {
@@ -68,7 +69,8 @@ func TestNewService_NilProvisioner_Error(t *testing.T) {
 }
 
 func TestNewService_NilLogger_Error(t *testing.T) {
-	prov, _ := adminprovision.NewProvisioner(mem.NewUserRepository(), mem.NewRoleRepository(), discardLogger(), func() string { return "x" })
+	prov, _ := adminprovision.NewProvisioner(mem.NewUserRepository(), mem.NewRoleRepository(),
+		discardLogger(), func() string { return "x" }, clock.Real())
 	_, err := setup.NewService(prov, nil)
 	require.Error(t, err)
 }
@@ -141,10 +143,10 @@ func TestService_CreateAdmin_OrphanRecovered_ReturnsUser_EmitsEvent(t *testing.T
 	// the password hash, assign the admin role, and emit event.user.created.v1
 	// because setup emits only after adminprovision.Ensure returns.
 	userRepo := mem.NewUserRepository()
-	orphan, err := domain.NewUser("root", "root@local", "$2a$10$oldhash00000000000000000000000000000000000000000000000")
+	orphan, err := domain.NewUser("root", "root@local", "$2a$10$oldhash00000000000000000000000000000000000000000000000", time.Now())
 	require.NoError(t, err)
 	orphan.ID = "usr-orphan-prior"
-	orphan.MarkProvisionPending(domain.UserSourceSetup)
+	orphan.MarkProvisionPending(domain.UserSourceSetup, time.Now())
 	require.NoError(t, userRepo.Create(context.Background(), orphan))
 
 	roleRepo := mem.NewRoleRepository()
@@ -390,11 +392,11 @@ func TestService_CreateAdmin_AlreadyExists_DoesNotHashPassword(t *testing.T) {
 // bootstrap row with the same username.
 func TestService_CreateAdmin_BootstrapPendingDuplicate_Returns409WithoutTakeover(t *testing.T) {
 	userRepo := mem.NewUserRepository()
-	orphan, err := domain.NewUser("root", "root@local", "$2a$10$oldhash00000000000000000000000000000000000000000000000")
+	orphan, err := domain.NewUser("root", "root@local", "$2a$10$oldhash00000000000000000000000000000000000000000000000", time.Now())
 	require.NoError(t, err)
 	orphan.ID = "usr-bootstrap-prior"
-	orphan.MarkProvisionPending(domain.UserSourceBootstrap)
-	orphan.MarkPasswordResetRequired()
+	orphan.MarkProvisionPending(domain.UserSourceBootstrap, time.Now())
+	orphan.MarkPasswordResetRequired(time.Now())
 	require.NoError(t, userRepo.Create(context.Background(), orphan))
 
 	roleRepo := mem.NewRoleRepository()
@@ -481,7 +483,7 @@ func TestService_CreateAdmin_AlreadyExists_DetailsContainOnlyNextAction(t *testi
 
 func seedAdmin(t *testing.T, userRepo ports.UserRepository, roleRepo ports.RoleRepository) {
 	t.Helper()
-	u, err := domain.NewUser("existing", "existing@local", "$2a$10$stubhashXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX")
+	u, err := domain.NewUser("existing", "existing@local", "$2a$10$stubhashXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX", time.Now())
 	require.NoError(t, err)
 	u.ID = "usr-seed"
 	require.NoError(t, userRepo.Create(context.Background(), u))

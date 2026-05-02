@@ -11,12 +11,13 @@ import (
 
 	"github.com/ghbvf/gocell/cells/configcore/internal/domain"
 	"github.com/ghbvf/gocell/cells/configcore/internal/mem"
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/query"
 )
 
 func newTestService() (*Service, *mem.ConfigRepository) {
-	repo := mem.NewConfigRepository()
+	repo := mem.NewConfigRepository(clock.Real())
 	logger := slog.Default()
 	codec, _ := query.NewCursorCodec([]byte("gocell-demo-cursor-key-32bytes!!"))
 	svc, err := NewService(repo, codec, logger, query.RunModeProd)
@@ -31,7 +32,7 @@ func newTestService() (*Service, *mem.ConfigRepository) {
 // failing at construction with a structured errcode keeps the nil-deref from
 // surfacing mid-request as a 500.
 func TestNewService_NilCodec_ReturnsError(t *testing.T) {
-	repo := mem.NewConfigRepository()
+	repo := mem.NewConfigRepository(clock.Real())
 	svc, err := NewService(repo, nil, slog.Default(), query.RunModeProd)
 	require.Error(t, err)
 	assert.Nil(t, svc)

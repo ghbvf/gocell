@@ -7,6 +7,8 @@ import (
 	"github.com/stretchr/testify/assert"
 
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
+
+	"github.com/ghbvf/gocell/kernel/clock"
 )
 
 const lcOptDNeg1 = time.Duration(-1)
@@ -23,7 +25,7 @@ func TestWithLifecycleDefaultStartTimeout_PopulatesField(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			b := New(WithLifecycleDefaultStartTimeout(tc.in))
+			b := New(WithClock(clock.Real()), WithLifecycleDefaultStartTimeout(tc.in))
 			assert.Equal(t, tc.want, b.defaultStartTimeout)
 		})
 	}
@@ -41,14 +43,14 @@ func TestWithLifecycleDefaultStopTimeout_PopulatesField(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			b := New(WithLifecycleDefaultStopTimeout(tc.in))
+			b := New(WithClock(clock.Real()), WithLifecycleDefaultStopTimeout(tc.in))
 			assert.Equal(t, tc.want, b.defaultStopTimeout)
 		})
 	}
 }
 
 func TestWithLifecycleDefaultTimeouts_NotCalled_FieldsZero(t *testing.T) {
-	b := New()
+	b := New(WithClock(clock.Real()))
 	assert.Equal(t, time.Duration(0), b.defaultStartTimeout,
 		"unset option must leave field zero so NewLifecycle falls back to DefaultStartTimeout constant")
 	assert.Equal(t, time.Duration(0), b.defaultStopTimeout,

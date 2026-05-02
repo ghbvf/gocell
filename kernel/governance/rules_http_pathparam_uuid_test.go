@@ -8,6 +8,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/metadata"
 	"github.com/ghbvf/gocell/pkg/contracts"
 )
@@ -211,7 +212,7 @@ func handleSomething(w http.ResponseWriter, r *http.Request) {
 				c = makeUUIDContract(contractID, "contracts/http/test/uuid/v1/contract.yaml", tc.uuidParams)
 			}
 
-			validator := NewValidator(project, root)
+			validator := NewValidator(project, root, clock.Real())
 			results := validator.CheckHTTPPathParamUUID([]*metadata.ContractMeta{c}, root)
 
 			var errs []ValidationResult
@@ -309,7 +310,7 @@ import (
 	cA := makeUUIDContract(contractA, "contracts/http/test/uuid/a/v1/contract.yaml", []string{"id", "userID"})
 	cB := makeUUIDContract(contractB, "contracts/http/test/uuid/b/v1/contract.yaml", []string{"userID"})
 
-	validator := NewValidator(project, root)
+	validator := NewValidator(project, root, clock.Real())
 	results := validator.CheckHTTPPathParamUUID([]*metadata.ContractMeta{cA, cB}, root)
 
 	var errMsgs []string

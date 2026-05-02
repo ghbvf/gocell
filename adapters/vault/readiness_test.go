@@ -12,6 +12,7 @@ import (
 	vaultapi "github.com/hashicorp/vault/api"
 
 	vaultadapter "github.com/ghbvf/gocell/adapters/vault"
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/stretchr/testify/assert"
@@ -141,6 +142,7 @@ func TestTransitReadiness_ContextTimeout(t *testing.T) {
 	pUnreachable, constructErr := vaultadapter.NewTransitKeyProvider(
 		ctx, unreachableClient, "transit", "gocell-config",
 		vaultadapter.NewStaticTokenAuth(nil, "any-token"),
+		clock.Real(),
 	)
 	if constructErr != nil {
 		// Constructor failing on an unreachable vault is expected; use the working
@@ -255,7 +257,7 @@ func TestTransitReadiness_RevokedToken(t *testing.T) {
 
 	childVaultClient := vaultadapter.NewVaultAPIClient(childClient)
 	p, err := vaultadapter.NewTransitKeyProvider(ctx, childVaultClient, "transit", "gocell-config",
-		vaultadapter.NewStaticTokenAuth(nil, childToken))
+		vaultadapter.NewStaticTokenAuth(nil, childToken), clock.Real())
 	require.NoError(t, err, "NewTransitKeyProvider with child token must succeed")
 
 	// Verify the probe works before revocation (confirms the policy grants access).

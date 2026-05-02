@@ -15,6 +15,7 @@ import (
 	devicecell "github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell"
 	"github.com/ghbvf/gocell/kernel/assembly"
 	"github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/query"
 	"github.com/ghbvf/gocell/runtime/bootstrap"
 	"github.com/ghbvf/gocell/runtime/eventbus"
@@ -39,7 +40,7 @@ func main() {
 	}
 
 	// In-memory event bus for demo mode.
-	eb := eventbus.New()
+	eb := eventbus.New(eventbus.WithClock(clock.Real()))
 
 	// Cursor codec for pagination (demo mode).
 	cursorCodec, err := query.NewCursorCodec([]byte("iotdevice-cursor-key-32-bytes!!!"))
@@ -56,7 +57,7 @@ func main() {
 	)
 
 	// Build assembly and register the cell.
-	asm := assembly.New(assembly.Config{ID: "iotdevice", DurabilityMode: cell.DurabilityDemo})
+	asm := assembly.New(assembly.Config{ID: "iotdevice", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
 	if err := asm.Register(dc); err != nil {
 		logger.Error("failed to register devicecell", slog.Any("error", err))
 		os.Exit(1)
@@ -80,6 +81,7 @@ func main() {
 	}
 
 	app := bootstrap.New(
+		bootstrap.WithClock(clock.Real()),
 		bootstrap.WithAssembly(asm),
 		bootstrap.WithPublisher(eb), bootstrap.WithSubscriber(eb),
 		bootstrap.WithListener(cell.PrimaryListener, ":8083", []cell.ListenerAuth{cell.MustNewAuthJWT(jwtVerifier)}),

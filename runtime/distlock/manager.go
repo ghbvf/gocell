@@ -8,6 +8,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/ghbvf/gocell/kernel/clock"
 )
 
 // lockID is a monotonically incrementing identifier for active lock entries.
@@ -231,7 +233,7 @@ func (m *Manager) run() {
 // timer to a later deadline. Production realClock behaves identically either
 // way; the discipline is required by FakeClock for deterministic tests and
 // was the root cause of the TC-3 flake.
-func (m *Manager) nextTimer(h *renewHeap) (Timer, <-chan time.Time) {
+func (m *Manager) nextTimer(h *renewHeap) (clock.Timer, <-chan time.Time) {
 	if h.Len() == 0 {
 		return nil, nil
 	}
@@ -242,7 +244,7 @@ func (m *Manager) nextTimer(h *renewHeap) (Timer, <-chan time.Time) {
 // runOnce executes a single iteration of the manager's select loop.
 // Returns true when the manager should exit.
 func (m *Manager) runOnce(
-	timer Timer,
+	timer clock.Timer,
 	timerC <-chan time.Time,
 	locks map[lockID]*lockState,
 	items map[lockID]*heapItem,

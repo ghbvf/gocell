@@ -17,10 +17,20 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"reflect"
 	"time"
 
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
+
+// Clock abstracts the wall-clock reads this package needs to time-stamp
+// cookies and check expiry. It is intentionally local: pkg/ may not import
+// kernel/, so SecureCookie defines the minimal Now() interface that any
+// kernel/clock.Clock satisfies structurally. Callers in higher layers pass
+// their injected clock.Clock directly to [New].
+type Clock interface {
+	Now() time.Time
+}
 
 // SecureCookie encodes and decodes cookie values with HMAC-SHA256 signing
 // and optional AES-GCM encryption.
@@ -28,6 +38,7 @@ type SecureCookie struct {
 	hashKey []byte      // HMAC-SHA256 signing key (required, ≥32 bytes)
 	aead    cipher.AEAD // AES-GCM AEAD (nil if no encryption)
 	maxAge  int         // max cookie age in seconds (0 = no expiry check)
+	clock   Clock       // clock used for encoding timestamps and expiry checks (always non-nil after New)
 }
 
 const (
@@ -44,14 +55,24 @@ var (
 	ErrHMACInvalid      = errcode.New(errcode.ErrSecureCookieHMACInvalid, "securecookie: HMAC verification failed")
 	ErrExpired          = errcode.New(errcode.ErrSecureCookieExpired, "securecookie: cookie has expired")
 	ErrDecryptFailed    = errcode.New(errcode.ErrSecureCookieDecryptFailed, "securecookie: decryption failed")
+	ErrClockRequired    = errcode.New(errcode.ErrValidationFailed, "securecookie: clock is required (nil or typed-nil rejected)")
 )
 
-// New creates a SecureCookie with the given hash key and optional block key.
+// New creates a SecureCookie with the given hash key, optional block key, and
+// required Clock. Returns ErrClockRequired if clk is nil or a typed-nil
+// (interface wrapping a nil pointer) — making this the single, error-style
+// fail-fast point for clock injection (no panic anywhere in the package).
+//
 // hashKey is required (min 32 bytes). blockKey may be nil (signing only)
-// or 16/24/32 bytes (AES-128/192/256-GCM).
-func New(hashKey, blockKey []byte) (*SecureCookie, error) {
+// or 16/24/32 bytes (AES-128/192/256-GCM). clk is required: pass the
+// caller's injected clock.Clock at the composition root, or a
+// clockmock.FakeClock in tests.
+func New(hashKey, blockKey []byte, clk Clock) (*SecureCookie, error) {
 	if len(hashKey) < minHashKey {
 		return nil, ErrHashKeyTooShort
+	}
+	if err := validateClock(clk); err != nil {
+		return nil, err
 	}
 
 	// Deep copy hashKey to prevent caller mutation.
@@ -61,6 +82,7 @@ func New(hashKey, blockKey []byte) (*SecureCookie, error) {
 	sc := &SecureCookie{
 		hashKey: hk,
 		maxAge:  86400, // default 24h
+		clock:   clk,
 	}
 
 	if blockKey != nil {
@@ -78,8 +100,24 @@ func New(hashKey, blockKey []byte) (*SecureCookie, error) {
 	return sc, nil
 }
 
+// validateClock returns ErrClockRequired if clk is nil or a typed-nil
+// (interface wrapping a nil pointer of any reference kind).
+func validateClock(clk Clock) error {
+	if clk == nil {
+		return ErrClockRequired
+	}
+	v := reflect.ValueOf(clk)
+	switch v.Kind() {
+	case reflect.Ptr, reflect.Map, reflect.Chan, reflect.Func, reflect.Slice, reflect.Interface:
+		if v.IsNil() {
+			return ErrClockRequired
+		}
+	}
+	return nil
+}
+
 // WithMaxAge returns a copy of sc with the given max age in seconds.
-// 0 means no expiry check. Key material is deep-copied.
+// 0 means no expiry check. Key material is deep-copied; the clock is shared.
 func (sc *SecureCookie) WithMaxAge(seconds int) *SecureCookie {
 	hk := make([]byte, len(sc.hashKey))
 	copy(hk, sc.hashKey)
@@ -87,6 +125,7 @@ func (sc *SecureCookie) WithMaxAge(seconds int) *SecureCookie {
 		hashKey: hk,
 		aead:    sc.aead, // cipher.AEAD is safe to share (immutable after init)
 		maxAge:  seconds,
+		clock:   sc.clock,
 	}
 }
 
@@ -97,7 +136,7 @@ func (sc *SecureCookie) WithMaxAge(seconds int) *SecureCookie {
 func (sc *SecureCookie) Encode(name string, value []byte) (string, error) {
 	// 1. Timestamp
 	ts := make([]byte, timestampLen)
-	now := time.Now().Unix()
+	now := sc.clock.Now().Unix()
 	if now < 0 {
 		// Pre-1970 clock — treat as zero so the encoded value remains parseable.
 		now = 0
@@ -173,7 +212,7 @@ func (sc *SecureCookie) Decode(name string, encoded string) ([]byte, error) {
 			return nil, ErrExpired
 		}
 		created := int64(raw)
-		if time.Now().Unix()-created >= int64(sc.maxAge) {
+		if sc.clock.Now().Unix()-created >= int64(sc.maxAge) {
 			return nil, ErrExpired
 		}
 	}

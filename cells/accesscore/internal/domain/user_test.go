@@ -2,6 +2,7 @@ package domain
 
 import (
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -53,7 +54,7 @@ func TestNewUser(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			user, err := NewUser(tt.username, tt.email, tt.passwordHash)
+			user, err := NewUser(tt.username, tt.email, tt.passwordHash, time.Now())
 			if tt.wantErr {
 				require.Error(t, err)
 				// Lock errcode classification independently of the message
@@ -93,22 +94,22 @@ func TestUser_LockUnlock(t *testing.T) {
 		},
 		{
 			name:       "lock sets locked",
-			action:     func(u *User) { u.LockAccount() },
+			action:     func(u *User) { u.LockAccount(time.Now()) },
 			wantLocked: true,
 		},
 		{
 			name: "unlock after lock",
 			action: func(u *User) {
-				u.LockAccount()
-				u.UnlockAccount()
+				u.LockAccount(time.Now())
+				u.UnlockAccount(time.Now())
 			},
 			wantLocked: false,
 		},
 		{
 			name: "double lock remains locked",
 			action: func(u *User) {
-				u.LockAccount()
-				u.LockAccount()
+				u.LockAccount(time.Now())
+				u.LockAccount(time.Now())
 			},
 			wantLocked: true,
 		},
@@ -116,7 +117,7 @@ func TestUser_LockUnlock(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			user, err := NewUser("bob", "bob@example.com", "$2a$10$hash")
+			user, err := NewUser("bob", "bob@example.com", "$2a$10$hash", time.Now())
 			require.NoError(t, err)
 
 			tt.action(user)
@@ -127,57 +128,57 @@ func TestUser_LockUnlock(t *testing.T) {
 }
 
 func TestUser_Lock_UpdatesTimestamp(t *testing.T) {
-	user, err := NewUser("charlie", "charlie@example.com", "$2a$10$hash")
+	user, err := NewUser("charlie", "charlie@example.com", "$2a$10$hash", time.Now())
 	require.NoError(t, err)
 
 	before := user.UpdatedAt
-	user.LockAccount()
+	user.LockAccount(time.Now())
 	assert.True(t, !user.UpdatedAt.Before(before), "UpdatedAt should advance after Lock")
 }
 
 func TestUser_DefaultPasswordResetRequiredFalse(t *testing.T) {
-	user, err := NewUser("dave", "dave@example.com", "$2a$10$hash")
+	user, err := NewUser("dave", "dave@example.com", "$2a$10$hash", time.Now())
 	require.NoError(t, err)
 	assert.False(t, user.PasswordResetRequired, "NewUser must default PasswordResetRequired to false")
 }
 
 func TestUser_MarkPasswordResetRequiredSetsFlag(t *testing.T) {
-	user, err := NewUser("eve", "eve@example.com", "$2a$10$hash")
+	user, err := NewUser("eve", "eve@example.com", "$2a$10$hash", time.Now())
 	require.NoError(t, err)
 	require.False(t, user.PasswordResetRequired)
 
 	before := user.UpdatedAt
-	user.MarkPasswordResetRequired()
+	user.MarkPasswordResetRequired(time.Now())
 
 	assert.True(t, user.PasswordResetRequired, "MarkPasswordResetRequired must set flag to true")
 	assert.True(t, !user.UpdatedAt.Before(before), "MarkPasswordResetRequired must advance UpdatedAt")
 }
 
 func TestUser_ClearPasswordResetRequiredUnsets(t *testing.T) {
-	user, err := NewUser("frank", "frank@example.com", "$2a$10$hash")
+	user, err := NewUser("frank", "frank@example.com", "$2a$10$hash", time.Now())
 	require.NoError(t, err)
-	user.MarkPasswordResetRequired()
+	user.MarkPasswordResetRequired(time.Now())
 	require.True(t, user.PasswordResetRequired)
 
 	before := user.UpdatedAt
-	user.ClearPasswordResetRequired()
+	user.ClearPasswordResetRequired(time.Now())
 
 	assert.False(t, user.PasswordResetRequired, "ClearPasswordResetRequired must set flag to false")
 	assert.True(t, !user.UpdatedAt.Before(before), "ClearPasswordResetRequired must advance UpdatedAt")
 }
 
 func TestUser_ProvisionStateLifecycle(t *testing.T) {
-	user, err := NewUser("setup-admin", "setup@example.com", "$2a$10$hash")
+	user, err := NewUser("setup-admin", "setup@example.com", "$2a$10$hash", time.Now())
 	require.NoError(t, err)
 	user.ID = "usr-setup-123"
 
-	user.MarkProvisionPending(UserSourceSetup)
+	user.MarkProvisionPending(UserSourceSetup, time.Now())
 	assert.Equal(t, UserSourceSetup, user.CreationSource)
 	assert.Equal(t, ProvisionStatePending, user.ProvisionState)
 	assert.True(t, user.IsRecoverableProvisionOrphan(UserSourceSetup))
 	assert.False(t, user.IsRecoverableProvisionOrphan(UserSourceBootstrap))
 
-	user.MarkProvisionComplete()
+	user.MarkProvisionComplete(time.Now())
 	assert.Equal(t, ProvisionStateComplete, user.ProvisionState)
 	assert.False(t, user.IsRecoverableProvisionOrphan(UserSourceSetup))
 }

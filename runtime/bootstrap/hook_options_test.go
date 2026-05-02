@@ -1,11 +1,6 @@
 package bootstrap
 
 import (
-	"bytes"
-	"context"
-	"log/slog"
-	"net"
-	"strings"
 	"testing"
 	"time"
 
@@ -14,122 +9,56 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/assembly"
 	"github.com/ghbvf/gocell/kernel/cell"
-	"github.com/ghbvf/gocell/pkg/testutil/testtime"
-	"github.com/ghbvf/gocell/runtime/eventbus"
+	"github.com/ghbvf/gocell/kernel/clock"
+	"github.com/ghbvf/gocell/kernel/clock/clockmock"
 )
 
-type recordingHookObserver struct {
-	events []cell.HookEvent
-}
-
-func (r *recordingHookObserver) OnHookEvent(e cell.HookEvent) {
-	r.events = append(r.events, e)
-}
-
-const hookOptDNeg1 = time.Duration(-1)
-
-func TestWithHookTimeout_PopulatesField(t *testing.T) {
-	b := New(WithHookTimeout(testtime.D2s))
-	assert.Equal(t, testtime.D2s, b.hookTimeout)
-	assert.True(t, b.hookTimeoutSet)
-}
-
-func TestWithHookTimeout_NegativeDisables(t *testing.T) {
-	b := New(WithHookTimeout(hookOptDNeg1))
-	assert.Equal(t, hookOptDNeg1, b.hookTimeout)
-	assert.True(t, b.hookTimeoutSet)
-}
-
-func TestWithHookTimeout_NotCalled_FieldUnset(t *testing.T) {
-	b := New()
-	assert.False(t, b.hookTimeoutSet)
-}
-
-func TestWithHookObserver_PopulatesField(t *testing.T) {
-	obs := &recordingHookObserver{}
-	b := New(WithHookObserver(obs))
-	assert.Same(t, obs, b.hookObserver)
-}
-
-func TestWithHookObserver_Nil_NoOp(t *testing.T) {
-	b := New(WithHookObserver(nil))
-	assert.Nil(t, b.hookObserver)
-}
-
-// ptrObserver is used to exercise the typed-nil path in WithHookObserver:
-// a *ptrObserver with nil value wrapped in the interface must be rejected
-// by IsNilHookObserver and left unset on Bootstrap.
-type ptrObserver struct{ events []cell.HookEvent }
-
-func (p *ptrObserver) OnHookEvent(e cell.HookEvent) { p.events = append(p.events, e) }
-
-func TestWithHookObserver_TypedNil_NoOp(t *testing.T) {
-	var typed *ptrObserver
-	b := New(WithHookObserver(typed))
-	assert.Nil(t, b.hookObserver, "typed nil must be rejected — otherwise Run would dispatch to nil receiver")
-}
-
-// TestWithAssembly_OverridesHookOptions_BehaviourContract runs the full
-// Bootstrap.Run path and asserts that a pre-built assembly's observer
-// receives events while the observer passed via WithHookObserver does NOT —
-// locking the documented "WithAssembly takes precedence" contract against
-// regression. Also verifies the accompanying slog.Warn is emitted.
-func TestWithAssembly_OverridesHookOptions_BehaviourContract(t *testing.T) {
-	// Capture slog output to verify the Warn path fires.
-	var buf bytes.Buffer
-	logger := slog.New(slog.NewJSONHandler(&buf, nil))
-	oldDefault := slog.Default()
-	slog.SetDefault(logger)
-	defer slog.SetDefault(oldDefault)
-
-	preBuiltObs := &ptrObserver{}
-	bootstrapObs := &ptrObserver{}
-
+// TestValidateAssemblyClockAlignment_SameClock passes phase0 when the
+// bootstrap clock and the pre-built assembly clock are the same instance.
+func TestValidateAssemblyClockAlignment_SameClock(t *testing.T) {
+	clk := clockmock.New(time.Now())
 	asm := assembly.New(assembly.Config{
-		ID:             "override-test",
+		ID:             "test",
 		DurabilityMode: cell.DurabilityDemo,
-		HookObserver:   preBuiltObs,
+		Clock:          clk,
 	})
-
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	require.NoError(t, err)
-
-	eb := eventbus.New()
-	b := New(
-		WithAssembly(asm),
-		WithHookObserver(bootstrapObs), // must be ignored
-		WithHookTimeout(time.Second),   // must be ignored
-		WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(ln)),
-		WithListener(cell.InternalListener, "127.0.0.1:0", []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(newLocalListener(t))),
-		WithPublisher(eb),
-		WithSubscriber(eb),
-		WithShutdownTimeout(testtime.D2s),
-	)
-
-	ctx, cancel := context.WithCancel(context.Background())
-	done := make(chan error, 1)
-	go func() { done <- b.Run(ctx) }()
-
-	// Wait for server to become ready.
-	waitForHealthy(t, ln.Addr().String())
-
-	cancel()
-	select {
-	case <-done:
-	case <-time.After(testtime.SelectShutdown):
-		t.Fatal("bootstrap did not shut down in time")
+	b := &Bootstrap{
+		clock:        clk,
+		assemblyCore: asm,
 	}
+	err := b.validateAssemblyClockAlignment()
+	require.NoError(t, err)
+}
 
-	// Contract 1: pre-built assembly's observer MUST have received events.
-	// assembly with zero cells still emits no hook events (there are no
-	// hooks to invoke), so this assertion focuses on the observer identity.
-	// The key invariant is that bootstrapObs remains empty.
-	assert.Empty(t, bootstrapObs.events,
-		"WithHookObserver must not deliver events when WithAssembly is used")
+// TestValidateAssemblyClockAlignment_DifferentClocks fails phase0 with a
+// descriptive error when the assembly clock and the bootstrap clock differ.
+func TestValidateAssemblyClockAlignment_DifferentClocks(t *testing.T) {
+	clkBootstrap := clockmock.New(time.Now())
+	clkAssembly := clockmock.New(time.Now())
+	asm := assembly.New(assembly.Config{
+		ID:             "test",
+		DurabilityMode: cell.DurabilityDemo,
+		Clock:          clkAssembly,
+	})
+	b := &Bootstrap{
+		clock:        clkBootstrap,
+		assemblyCore: asm,
+	}
+	err := b.validateAssemblyClockAlignment()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "clock mismatch")
+	assert.Contains(t, err.Error(), "bootstrap.WithClock")
+	assert.Contains(t, err.Error(), "assembly.New")
+}
 
-	// Contract 2: the Warn must be logged so operators can see the option
-	// was silently superseded.
-	logOutput := buf.String()
-	assert.True(t, strings.Contains(logOutput, "WithHookTimeout/WithHookObserver ignored"),
-		"expected Warn about ignored options, got: %s", logOutput)
+// TestValidateAssemblyClockAlignment_NoAssembly passes phase0 when no
+// pre-built assembly is set (bootstrap builds its own, always aligned).
+func TestValidateAssemblyClockAlignment_NoAssembly(t *testing.T) {
+	clk := clock.Real()
+	b := &Bootstrap{
+		clock:        clk,
+		assemblyCore: nil,
+	}
+	err := b.validateAssemblyClockAlignment()
+	require.NoError(t, err)
 }

@@ -20,6 +20,7 @@ import (
 	"github.com/ghbvf/gocell/cells/configcore/internal/mem"
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/cell/celltest"
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/runtime/auth"
 )
@@ -107,8 +108,8 @@ func TestConfigVersionResponse_OmitsNilPublishedAt(t *testing.T) {
 const configPrefix = "/api/v1/config"
 
 func setupHandler() (http.Handler, *mem.ConfigRepository) {
-	repo := mem.NewConfigRepository()
-	svc := NewService(repo, slog.Default())
+	repo := mem.NewConfigRepository(clock.Real())
+	svc := NewService(repo, slog.Default(), clock.Real())
 	h := NewHandler(svc)
 	mux := celltest.NewTestMux()
 	mux.Route(configPrefix, func(sub cell.RouteMux) {
@@ -262,7 +263,7 @@ func TestHandler_HandleRollback_OK(t *testing.T) {
 	handler, repo := setupHandler()
 	seedForPublish(t, repo)
 	// Publish first to create a version.
-	svc := NewService(repo, slog.Default())
+	svc := NewService(repo, slog.Default(), clock.Real())
 	_, err := svc.Publish(adminCtx(), "app.name")
 	require.NoError(t, err)
 
@@ -322,7 +323,7 @@ func TestHandler_HandleRollback_SensitiveRedacted(t *testing.T) {
 		Version: 1, CreatedAt: now, UpdatedAt: now,
 	}))
 	// Publish v1 carries Sensitive=true into the snapshot.
-	svc := NewService(repo, slog.Default())
+	svc := NewService(repo, slog.Default(), clock.Real())
 	_, err := svc.Publish(adminCtx(), "db.password")
 	require.NoError(t, err)
 
@@ -397,9 +398,9 @@ func TestHandler_HandleRollback_InvalidVersion(t *testing.T) {
 // --- outbox/tx tests ---
 
 func TestService_WithEmitter(t *testing.T) {
-	repo := mem.NewConfigRepository()
+	repo := mem.NewConfigRepository(clock.Real())
 	ow := &stubOutboxWriter{}
-	svc := NewService(repo, slog.Default(), WithEmitter(testoutbox.MustEmitter(t, ow)))
+	svc := NewService(repo, slog.Default(), clock.Real(), WithEmitter(testoutbox.MustEmitter(t, ow)))
 
 	seedForService(repo, "k1", "v1")
 	_, err := svc.Publish(adminCtx(), "k1")
@@ -410,9 +411,9 @@ func TestService_WithEmitter(t *testing.T) {
 }
 
 func TestService_WithTxManager(t *testing.T) {
-	repo := mem.NewConfigRepository()
+	repo := mem.NewConfigRepository(clock.Real())
 	tx := &stubTxRunner{}
-	svc := NewService(repo, slog.Default(), WithTxManager(tx))
+	svc := NewService(repo, slog.Default(), clock.Real(), WithTxManager(tx))
 
 	seedForService(repo, "k2", "v2")
 	_, err := svc.Publish(adminCtx(), "k2")
@@ -422,9 +423,9 @@ func TestService_WithTxManager(t *testing.T) {
 }
 
 func TestService_Rollback_WithOutbox(t *testing.T) {
-	repo := mem.NewConfigRepository()
+	repo := mem.NewConfigRepository(clock.Real())
 	ow := &stubOutboxWriter{}
-	svc := NewService(repo, slog.Default(), WithEmitter(testoutbox.MustEmitter(t, ow)))
+	svc := NewService(repo, slog.Default(), clock.Real(), WithEmitter(testoutbox.MustEmitter(t, ow)))
 
 	seedForService(repo, "k3", "v3")
 	_, err := svc.Publish(adminCtx(), "k3")

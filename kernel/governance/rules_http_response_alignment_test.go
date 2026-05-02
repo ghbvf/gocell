@@ -8,6 +8,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/metadata"
 	"github.com/ghbvf/gocell/pkg/contracts"
 )
@@ -289,7 +290,7 @@ func handleSomething(w http.ResponseWriter, r *http.Request) {
 				c.Kind = "event"
 			}
 
-			validator := NewValidator(project, root)
+			validator := NewValidator(project, root, clock.Real())
 			results := validator.CheckHTTPResponseAlignment([]*metadata.ContractMeta{c}, root)
 
 			var errs []ValidationResult
@@ -402,7 +403,7 @@ func h(w http.ResponseWriter, r *http.Request) {
 			project := makeProject(contractID, sliceRelDir)
 			c := makeContract(contractID, "contracts/http/test/helpers/v1/contract.yaml", tc.responses)
 
-			validator := NewValidator(project, root)
+			validator := NewValidator(project, root, clock.Real())
 			results := validator.CheckHTTPResponseAlignment([]*metadata.ContractMeta{c}, root)
 
 			var errs []ValidationResult

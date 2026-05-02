@@ -4,6 +4,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
@@ -95,8 +96,9 @@ type Sweeper struct {
 	Filter ScanFilter
 	// Interval is how often to scan; defaults to 30s if zero.
 	Interval time.Duration
-	// Now supplies the clock; defaults to time.Now if nil.
-	Now func() time.Time
+	// Clk supplies the clock; use clock.Real() for production, clockmock.New() for tests.
+	// clock.MustHaveClock panics at Start time if nil.
+	Clk clock.Clock
 	// OnError is invoked on non-fatal errors during a sweep tick. nil = no-op.
 	OnError func(error)
 }
@@ -109,26 +111,22 @@ func (s *Sweeper) Start(ctx context.Context) error {
 	if s.Queue == nil {
 		return errcode.New(errcode.ErrValidationFailed, "command: Sweeper.Queue must be non-nil")
 	}
+	clock.MustHaveClock(s.Clk, "command.Sweeper.Start")
 
 	interval := s.Interval
 	if interval <= 0 {
 		interval = defaultCommandSweeperInterval
 	}
 
-	nowFn := s.Now
-	if nowFn == nil {
-		nowFn = time.Now
-	}
-
-	ticker := time.NewTicker(interval)
+	ticker := s.Clk.NewTicker(interval)
 	defer ticker.Stop()
 
 	for {
 		select {
 		case <-ctx.Done():
 			return nil
-		case <-ticker.C:
-			s.runTick(ctx, nowFn())
+		case <-ticker.C():
+			s.runTick(ctx, s.Clk.Now())
 		}
 	}
 }

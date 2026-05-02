@@ -13,6 +13,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/ghbvf/gocell/kernel/clock"
 	kout "github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 )
@@ -275,6 +276,7 @@ func TestRelay_Cleanup_DeletesPublishedAndDead(t *testing.T) {
 		store:   store,
 		cfg:     cfg,
 		metrics: &safeRelayCollector{inner: kout.NoopRelayCollector{}},
+		clock:   clock.Real(),
 	}
 
 	// Use Eventually so the test remains deterministic: the 1ms retention period
@@ -293,6 +295,7 @@ func TestRelay_Cleanup_NoEntries_NoError(t *testing.T) {
 		store:   newMinimalStore(),
 		cfg:     RelayConfig{}.WithDefaults(),
 		metrics: &safeRelayCollector{inner: kout.NoopRelayCollector{}},
+		clock:   clock.Real(),
 	}
 	assert.NoError(t, relay.cleanup(context.Background()))
 }
@@ -302,13 +305,13 @@ func TestRelay_Cleanup_NoEntries_NoError(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestCappedDelay_ZeroAndNegative(t *testing.T) {
-	r := &Relay{cfg: RelayConfig{MaxRetryDelay: testtime.D5min}.WithDefaults()}
+	r := &Relay{cfg: RelayConfig{MaxRetryDelay: testtime.D5min}.WithDefaults(), clock: clock.Real()}
 	assert.Equal(t, time.Duration(0), r.cappedDelay(0))
 	assert.Equal(t, time.Duration(0), r.cappedDelay(testtime.DNeg1s))
 }
 
 func TestCappedDelay_CapsAtMax(t *testing.T) {
-	r := &Relay{cfg: RelayConfig{MaxRetryDelay: testtime.D10s}.WithDefaults()}
+	r := &Relay{cfg: RelayConfig{MaxRetryDelay: testtime.D10s}.WithDefaults(), clock: clock.Real()}
 	assert.Equal(t, testtime.D10s, r.cappedDelay(testtime.D20s))
 	assert.Equal(t, testtime.D5s, r.cappedDelay(testtime.D5s))
 }

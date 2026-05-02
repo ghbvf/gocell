@@ -17,6 +17,7 @@ import (
 	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/mem"
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/cell/celltest"
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/query"
 	"github.com/ghbvf/gocell/runtime/auth"
@@ -27,7 +28,7 @@ import (
 func newTestCell() *DeviceCell {
 	return NewDeviceCell(
 		WithDeviceRepository(mem.NewDeviceRepository()),
-		WithPublisher(eventbus.New()),
+		WithPublisher(eventbus.New(eventbus.WithClock(clock.Real()))),
 	)
 }
 
@@ -52,6 +53,7 @@ func TestDeviceCell_Lifecycle(t *testing.T) {
 	deps := cell.Dependencies{
 		Config:         make(map[string]any),
 		DurabilityMode: cell.DurabilityDemo,
+		Clock:          clock.Real(),
 	}
 
 	// Init
@@ -82,6 +84,7 @@ func TestDeviceCell_Startup(t *testing.T) {
 	deps := cell.Dependencies{
 		Config:         make(map[string]any),
 		DurabilityMode: cell.DurabilityDemo,
+		Clock:          clock.Real(),
 	}
 	require.NoError(t, c.Init(ctx, deps))
 	require.NoError(t, c.Start(ctx))
@@ -91,11 +94,12 @@ func TestDeviceCell_Startup(t *testing.T) {
 
 func TestDeviceCell_InitDefaultsRepositories(t *testing.T) {
 	// No repos injected; Init should use in-memory defaults.
-	c := NewDeviceCell(WithPublisher(eventbus.New()))
+	c := NewDeviceCell(WithPublisher(eventbus.New(eventbus.WithClock(clock.Real()))))
 	ctx := context.Background()
 	deps := cell.Dependencies{
 		Config:         make(map[string]any),
 		DurabilityMode: cell.DurabilityDemo,
+		Clock:          clock.Real(),
 	}
 	require.NoError(t, c.Init(ctx, deps))
 	assert.Len(t, c.OwnedSlices(), 4)
@@ -110,6 +114,7 @@ func TestDeviceCell_InitNoPublisher(t *testing.T) {
 	deps := cell.Dependencies{
 		Config:         make(map[string]any),
 		DurabilityMode: cell.DurabilityDemo,
+		Clock:          clock.Real(),
 	}
 	err := c.Init(ctx, deps)
 	require.Error(t, err)
@@ -123,6 +128,7 @@ func TestDeviceCell_RouteGroups(t *testing.T) {
 	deps := cell.Dependencies{
 		Config:         make(map[string]any),
 		DurabilityMode: cell.DurabilityDemo,
+		Clock:          clock.Real(),
 	}
 	require.NoError(t, c.Init(ctx, deps))
 
@@ -163,10 +169,11 @@ func initCellWithRouter(t *testing.T) *router.Router {
 	deps := cell.Dependencies{
 		Config:         make(map[string]any),
 		DurabilityMode: cell.DurabilityDemo,
+		Clock:          clock.Real(),
 	}
 	require.NoError(t, c.Init(ctx, deps))
 
-	r := router.MustNew()
+	r := router.MustNew(router.WithRouterClock(clock.Real()))
 	for _, rg := range c.RouteGroups() {
 		if rg.Listener == cell.PrimaryListener {
 			if rg.Prefix != "" {
@@ -356,12 +363,13 @@ func TestDeviceCell_RouteAckCommand(t *testing.T) {
 func TestDeviceCell_DurableMode_RejectsMissingCursorCodec(t *testing.T) {
 	c := NewDeviceCell(
 		WithDeviceRepository(mem.NewDeviceRepository()),
-		WithPublisher(eventbus.New()),
+		WithPublisher(eventbus.New(eventbus.WithClock(clock.Real()))),
 		// No WithCursorCodec — durable mode must refuse the demo fallback.
 	)
 	err := c.Init(context.Background(), cell.Dependencies{
 		Config:         map[string]any{},
 		DurabilityMode: cell.DurabilityDurable,
+		Clock:          clock.Real(),
 	})
 	require.Error(t, err)
 	var ecErr *errcode.Error
@@ -376,12 +384,13 @@ func TestDeviceCell_DurableMode_RejectsMissingCursorCodec(t *testing.T) {
 func TestDeviceCell_DurableMode_RejectsInMemCommandQueue(t *testing.T) {
 	c := NewDeviceCell(
 		WithDeviceRepository(mem.NewDeviceRepository()),
-		WithPublisher(eventbus.New()),
+		WithPublisher(eventbus.New(eventbus.WithClock(clock.Real()))),
 		WithCursorCodec(newTestCursorCodec(t)),
 	)
 	err := c.Init(context.Background(), cell.Dependencies{
 		Config:         map[string]any{},
 		DurabilityMode: cell.DurabilityDurable,
+		Clock:          clock.Real(),
 	})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "commandtest.InMemQueue is not suitable for durable deployments")
@@ -399,6 +408,7 @@ func TestDeviceCell_DurableMode_RegisterPublishFailureReturnsCreated(t *testing.
 	require.NoError(t, c.Init(context.Background(), cell.Dependencies{
 		Config:         map[string]any{},
 		DurabilityMode: cell.DurabilityDemo,
+		Clock:          clock.Real(),
 	}))
 
 	rec := httptest.NewRecorder()
@@ -418,6 +428,7 @@ func TestDeviceCell_DemoMode_RegisterPublishFailureReturnsCreated(t *testing.T) 
 	require.NoError(t, c.Init(context.Background(), cell.Dependencies{
 		Config:         map[string]any{},
 		DurabilityMode: cell.DurabilityDemo,
+		Clock:          clock.Real(),
 	}))
 
 	rec := httptest.NewRecorder()
@@ -434,7 +445,7 @@ func TestDeviceCell_DemoMode_RegisterPublishFailureReturnsCreated(t *testing.T) 
 // outbox-failopen-rate checker scoped to "devicecell".
 func TestDeviceCell_HealthCheckers_WithDirectEmitter(t *testing.T) {
 	c := newTestCell()
-	deps := cell.Dependencies{Config: make(map[string]any), DurabilityMode: cell.DurabilityDemo}
+	deps := cell.Dependencies{Config: make(map[string]any), DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()}
 	require.NoError(t, c.Init(context.Background(), deps))
 
 	checkers := c.HealthCheckers()

@@ -16,6 +16,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/ghbvf/gocell/kernel/clock"
+	"github.com/ghbvf/gocell/kernel/clock/clockmock"
 	"github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
@@ -47,10 +49,9 @@ func mustTestRing(t *testing.T, current, previous string) *HMACKeyRing {
 	return ring
 }
 
-func mustTestServiceHandler(t *testing.T, ring *HMACKeyRing, clockFn func() time.Time) http.Handler {
+func mustTestServiceHandler(t *testing.T, ring *HMACKeyRing, clk clock.Clock) http.Handler {
 	t.Helper()
-	return ServiceTokenMiddleware(ring,
-		WithServiceTokenClock(clockFn),
+	return ServiceTokenMiddleware(ring, clk,
 		WithServiceTokenNonceStore(mustNewInMemoryNonceStore(t)),
 	)(
 		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -59,10 +60,9 @@ func mustTestServiceHandler(t *testing.T, ring *HMACKeyRing, clockFn func() time
 	)
 }
 
-func mustTestServiceHandlerFatal(t *testing.T, ring *HMACKeyRing, clockFn func() time.Time) http.Handler {
+func mustTestServiceHandlerFatal(t *testing.T, ring *HMACKeyRing, clk clock.Clock) http.Handler {
 	t.Helper()
-	return ServiceTokenMiddleware(ring,
-		WithServiceTokenClock(clockFn),
+	return ServiceTokenMiddleware(ring, clk,
 		WithServiceTokenNonceStore(mustNewInMemoryNonceStore(t)),
 	)(
 		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -88,7 +88,7 @@ func TestHMACKeyRing_SignWithCurrent(t *testing.T) {
 	token := GenerateServiceToken(ring, http.MethodGet, "/api", "", now)
 
 	singleRing := mustTestRing(t, testHMACKeyNew, "")
-	handler := mustTestServiceHandler(t, singleRing, func() time.Time { return now })
+	handler := mustTestServiceHandler(t, singleRing, clockmock.New(now))
 
 	req := httptest.NewRequest(http.MethodGet, "/api", nil)
 	req.Header.Set("Authorization", "ServiceToken "+token)
@@ -105,7 +105,7 @@ func TestHMACKeyRing_VerifyWithPrevious(t *testing.T) {
 	token := GenerateServiceToken(oldRing, http.MethodGet, "/api", "", now)
 
 	newRing := mustTestRing(t, testHMACKeyNew, testHMACKeyOld)
-	handler := mustTestServiceHandler(t, newRing, func() time.Time { return now })
+	handler := mustTestServiceHandler(t, newRing, clockmock.New(now))
 
 	req := httptest.NewRequest(http.MethodGet, "/api", nil)
 	req.Header.Set("Authorization", "ServiceToken "+token)
@@ -122,7 +122,7 @@ func TestHMACKeyRing_RejectUnknownSecret(t *testing.T) {
 	token := GenerateServiceToken(unknownRing, http.MethodGet, "/api", "", now)
 
 	ring := mustTestRing(t, testHMACKeyNew, testHMACKeyOld)
-	handler := mustTestServiceHandlerFatal(t, ring, func() time.Time { return now })
+	handler := mustTestServiceHandlerFatal(t, ring, clockmock.New(now))
 
 	req := httptest.NewRequest(http.MethodGet, "/api", nil)
 	req.Header.Set("Authorization", "ServiceToken "+token)
@@ -137,7 +137,7 @@ func TestHMACKeyRing_SingleSecretMode(t *testing.T) {
 
 	ring := mustTestRing(t, testHMACKeyOne, "")
 	token := GenerateServiceToken(ring, http.MethodGet, "/api", "", now)
-	handler := mustTestServiceHandler(t, ring, func() time.Time { return now })
+	handler := mustTestServiceHandler(t, ring, clockmock.New(now))
 
 	req := httptest.NewRequest(http.MethodGet, "/api", nil)
 	req.Header.Set("Authorization", "ServiceToken "+token)
@@ -152,7 +152,7 @@ func TestHMACKeyRing_SameSecretBothPositions(t *testing.T) {
 
 	ring := mustTestRing(t, testHMACKeySam, testHMACKeySam)
 	token := GenerateServiceToken(ring, http.MethodGet, "/api", "", now)
-	handler := mustTestServiceHandler(t, ring, func() time.Time { return now })
+	handler := mustTestServiceHandler(t, ring, clockmock.New(now))
 
 	req := httptest.NewRequest(http.MethodGet, "/api", nil)
 	req.Header.Set("Authorization", "ServiceToken "+token)
@@ -239,7 +239,7 @@ func TestServiceTokenMiddleware_ValidToken(t *testing.T) {
 	ring := mustTestRing(t, testHMACKey, "")
 	now := time.Now()
 	token := GenerateServiceToken(ring, http.MethodGet, "/internal/v1/health", "", now)
-	handler := mustTestServiceHandler(t, ring, func() time.Time { return now })
+	handler := mustTestServiceHandler(t, ring, clockmock.New(now))
 
 	req := httptest.NewRequest(http.MethodGet, "/internal/v1/health", nil)
 	req.Header.Set("Authorization", "ServiceToken "+token)
@@ -252,7 +252,7 @@ func TestServiceTokenMiddleware_ValidToken(t *testing.T) {
 func TestServiceTokenMiddleware_InvalidToken(t *testing.T) {
 	ring := mustTestRing(t, testHMACKey, "")
 	now := time.Now()
-	handler := mustTestServiceHandlerFatal(t, ring, func() time.Time { return now })
+	handler := mustTestServiceHandlerFatal(t, ring, clockmock.New(now))
 
 	req := httptest.NewRequest(http.MethodGet, "/internal/v1/health", nil)
 	req.Header.Set("Authorization", "ServiceToken 12345:deadbeef")
@@ -264,7 +264,7 @@ func TestServiceTokenMiddleware_InvalidToken(t *testing.T) {
 
 func TestServiceTokenMiddleware_MissingToken(t *testing.T) {
 	ring := mustTestRing(t, testHMACKey, "")
-	handler := mustTestServiceHandlerFatal(t, ring, time.Now)
+	handler := mustTestServiceHandlerFatal(t, ring, clock.Real())
 
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	rec := httptest.NewRecorder()
@@ -275,7 +275,7 @@ func TestServiceTokenMiddleware_MissingToken(t *testing.T) {
 
 func TestServiceTokenMiddleware_WrongScheme(t *testing.T) {
 	ring := mustTestRing(t, testHMACKey, "")
-	handler := mustTestServiceHandlerFatal(t, ring, time.Now)
+	handler := mustTestServiceHandlerFatal(t, ring, clock.Real())
 
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	req.Header.Set("Authorization", "Bearer some-jwt")
@@ -290,7 +290,7 @@ func TestServiceTokenMiddleware_DifferentPath(t *testing.T) {
 	now := time.Now()
 
 	token := GenerateServiceToken(ring, http.MethodGet, "/other", "", now)
-	handler := mustTestServiceHandlerFatal(t, ring, func() time.Time { return now })
+	handler := mustTestServiceHandlerFatal(t, ring, clockmock.New(now))
 
 	req := httptest.NewRequest(http.MethodGet, "/internal/v1/health", nil)
 	req.Header.Set("Authorization", "ServiceToken "+token)
@@ -301,7 +301,7 @@ func TestServiceTokenMiddleware_DifferentPath(t *testing.T) {
 }
 
 func TestServiceTokenMiddleware_NilRing(t *testing.T) {
-	handler := ServiceTokenMiddleware(nil)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := ServiceTokenMiddleware(nil, clock.Real())(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		t.Fatal("should not be called")
 	}))
 
@@ -314,7 +314,7 @@ func TestServiceTokenMiddleware_NilRing(t *testing.T) {
 
 func TestServiceTokenMiddleware_TypedNilRing(t *testing.T) {
 	var ring *HMACKeyRing
-	handler := ServiceTokenMiddleware(ring)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := ServiceTokenMiddleware(ring, clock.Real())(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		t.Fatal("should not be called")
 	}))
 
@@ -336,7 +336,7 @@ func (*shortKeyringStub) Current() []byte   { return []byte("short") } // 5 byte
 func (*shortKeyringStub) Secrets() [][]byte { return [][]byte{(&shortKeyringStub{}).Current()} }
 
 func TestServiceTokenMiddleware_ShortKeyReturnsErrorMiddleware(t *testing.T) {
-	handler := ServiceTokenMiddleware(&shortKeyringStub{})(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := ServiceTokenMiddleware(&shortKeyringStub{}, clock.Real())(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		t.Fatal("handler must not be reached when ring secret is below MinHMACKeyBytes")
 	}))
 
@@ -351,7 +351,7 @@ func TestServiceTokenMiddleware_ShortKeyReturnsErrorMiddleware(t *testing.T) {
 func TestServiceTokenMiddleware_ExpiredTimestamp(t *testing.T) {
 	ring := mustTestRing(t, testHMACKey, "")
 	now := time.Now()
-	handler := mustTestServiceHandlerFatal(t, ring, func() time.Time { return now })
+	handler := mustTestServiceHandlerFatal(t, ring, clockmock.New(now))
 
 	oldTime := now.Add(svcTokenDNeg6min)
 	token := GenerateServiceToken(ring, http.MethodGet, "/internal/v1/health", "", oldTime)
@@ -366,7 +366,7 @@ func TestServiceTokenMiddleware_ExpiredTimestamp(t *testing.T) {
 func TestServiceTokenMiddleware_ExactBoundary_Rejected(t *testing.T) {
 	ring := mustTestRing(t, testHMACKey, "")
 	now := time.Now()
-	handler := mustTestServiceHandlerFatal(t, ring, func() time.Time { return now })
+	handler := mustTestServiceHandlerFatal(t, ring, clockmock.New(now))
 
 	boundaryTime := now.Add(-ServiceTokenMaxAge)
 	token := GenerateServiceToken(ring, http.MethodGet, "/internal/v1/health", "", boundaryTime)
@@ -381,7 +381,7 @@ func TestServiceTokenMiddleware_ExactBoundary_Rejected(t *testing.T) {
 func TestServiceTokenMiddleware_JustWithinWindow(t *testing.T) {
 	ring := mustTestRing(t, testHMACKey, "")
 	now := time.Now()
-	handler := mustTestServiceHandler(t, ring, func() time.Time { return now })
+	handler := mustTestServiceHandler(t, ring, clockmock.New(now))
 
 	recentTime := now.Add(svcTokenDNeg4min59s)
 	token := GenerateServiceToken(ring, http.MethodGet, "/internal/v1/health", "", recentTime)
@@ -396,7 +396,7 @@ func TestServiceTokenMiddleware_JustWithinWindow(t *testing.T) {
 func TestServiceTokenMiddleware_FutureTimestamp_Rejected(t *testing.T) {
 	ring := mustTestRing(t, testHMACKey, "")
 	now := time.Now()
-	handler := mustTestServiceHandlerFatal(t, ring, func() time.Time { return now })
+	handler := mustTestServiceHandlerFatal(t, ring, clockmock.New(now))
 
 	futureTime := now.Add(svcTokenD6min)
 	token := GenerateServiceToken(ring, http.MethodGet, "/internal/v1/health", "", futureTime)
@@ -410,7 +410,7 @@ func TestServiceTokenMiddleware_FutureTimestamp_Rejected(t *testing.T) {
 
 func TestServiceTokenMiddleware_InvalidFormat_NoColon(t *testing.T) {
 	ring := mustTestRing(t, testHMACKey, "")
-	handler := ServiceTokenMiddleware(ring,
+	handler := ServiceTokenMiddleware(ring, clock.Real(),
 		WithServiceTokenNonceStore(mustNewInMemoryNonceStore(t)),
 	)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		t.Fatal("should not be called")
@@ -476,10 +476,9 @@ func TestGenerateServiceToken_NonceUniqueness(t *testing.T) {
 func TestServiceTokenMiddleware_WithNonceStore_ReplayRejected(t *testing.T) {
 	ring := mustTestRing(t, testHMACKey, "")
 	now := time.Now()
-	store, err := NewInMemoryNonceStore(ServiceTokenNonceTTL)
+	store, err := NewInMemoryNonceStore(ServiceTokenNonceTTL, clock.Real())
 	require.NoError(t, err)
-	handler := ServiceTokenMiddleware(ring,
-		WithServiceTokenClock(func() time.Time { return now }),
+	handler := ServiceTokenMiddleware(ring, clockmock.New(now),
 		WithServiceTokenNonceStore(store),
 	)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -505,10 +504,9 @@ func TestServiceTokenMiddleware_WithNonceStore_ReplayRejected(t *testing.T) {
 func TestServiceTokenMiddleware_WithNonceStore_UniqueTokensAccepted(t *testing.T) {
 	ring := mustTestRing(t, testHMACKey, "")
 	now := time.Now()
-	store, err := NewInMemoryNonceStore(ServiceTokenNonceTTL)
+	store, err := NewInMemoryNonceStore(ServiceTokenNonceTTL, clock.Real())
 	require.NoError(t, err)
-	handler := ServiceTokenMiddleware(ring,
-		WithServiceTokenClock(func() time.Time { return now }),
+	handler := ServiceTokenMiddleware(ring, clockmock.New(now),
 		WithServiceTokenNonceStore(store),
 	)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -538,9 +536,7 @@ func TestServiceTokenMiddleware_DefaultNoNonceStore_ReturnsErrorMiddleware(t *te
 	ring := mustTestRing(t, testHMACKey, "")
 	now := time.Now()
 	// No WithServiceTokenNonceStore — must return an error middleware, not a valid handler.
-	handler := ServiceTokenMiddleware(ring,
-		WithServiceTokenClock(func() time.Time { return now }),
-	)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := ServiceTokenMiddleware(ring, clockmock.New(now))(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		t.Fatal("handler must not be called when NonceStore is missing")
 	}))
 
@@ -561,8 +557,7 @@ func TestServiceTokenMiddleware_DefaultNoNonceStore_ReturnsErrorMiddleware(t *te
 func TestServiceTokenMiddleware_NoopNonceStoreSupplied_ReturnsErrorMiddleware(t *testing.T) {
 	ring := mustTestRing(t, testHMACKey, "")
 	now := time.Now()
-	handler := ServiceTokenMiddleware(ring,
-		WithServiceTokenClock(func() time.Time { return now }),
+	handler := ServiceTokenMiddleware(ring, clockmock.New(now),
 		WithServiceTokenNonceStore(NewNoopNonceStore()),
 	)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		t.Fatal("handler must not be called when NonceStore is Noop")
@@ -583,7 +578,7 @@ func TestServiceTokenMiddleware_NoopNonceStoreSupplied_ReturnsErrorMiddleware(t 
 // the same HTTP 500 status, confirming they share the errorMiddlewareInternal helper.
 func TestServiceTokenMiddleware_NilRing_UsesSharedHelper(t *testing.T) {
 	// nil ring — pre-existing path, should still produce 500.
-	handler := ServiceTokenMiddleware(nil)(
+	handler := ServiceTokenMiddleware(nil, clock.Real())(
 		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			t.Fatal("handler must not be called for nil ring")
 		}),
@@ -628,8 +623,7 @@ func TestServiceTokenMiddleware_LegacyTwoPartFormat_RealSignature_Rejected(t *te
 	// The 2-part format has no nonce, so this is a fully valid legacy credential.
 	legacyToken := legacyTwoPartToken(testHMACKey, method, path, now)
 
-	handler := ServiceTokenMiddleware(ring,
-		WithServiceTokenClock(func() time.Time { return now }),
+	handler := ServiceTokenMiddleware(ring, clockmock.New(now),
 		WithServiceTokenNonceStore(mustNewInMemoryNonceStore(t)),
 	)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		t.Fatal("should not be called: semantically valid 2-part token must be rejected")
@@ -657,8 +651,7 @@ func TestServiceTokenMiddleware_MalformedToken_TwoSegments_Rejected(t *testing.T
 	// Forged hex MAC — not a real HMAC output.
 	forgedMAC := "1700000000:aabbccdd1122334455667788990011223344556677889900112233445566778899"
 
-	handler := ServiceTokenMiddleware(ring,
-		WithServiceTokenClock(func() time.Time { return now }),
+	handler := ServiceTokenMiddleware(ring, clockmock.New(now),
 		WithServiceTokenNonceStore(mustNewInMemoryNonceStore(t)),
 	)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		t.Fatal("should not be called: 2-part token must be rejected")
@@ -681,8 +674,7 @@ func TestServiceTokenMiddleware_WithMetrics_NoPanic(t *testing.T) {
 	now := time.Now()
 	token := GenerateServiceToken(ring, http.MethodGet, "/api", "", now)
 
-	handler := ServiceTokenMiddleware(ring,
-		WithServiceTokenClock(func() time.Time { return now }),
+	handler := ServiceTokenMiddleware(ring, clockmock.New(now),
 		WithServiceTokenNonceStore(mustNewInMemoryNonceStore(t)),
 		WithServiceTokenMetrics(am),
 	)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -709,7 +701,7 @@ func TestServiceTokenMiddleware_QueryBoundInSignature(t *testing.T) {
 
 	// Sign with query=foo=bar
 	token := GenerateServiceToken(ring, http.MethodGet, "/api", "foo=bar", now)
-	handler := mustTestServiceHandler(t, ring, func() time.Time { return now })
+	handler := mustTestServiceHandler(t, ring, clockmock.New(now))
 
 	// Same path+query should succeed.
 	req := httptest.NewRequest(http.MethodGet, "/api?foo=bar", nil)
@@ -737,8 +729,7 @@ func TestServiceTokenMiddleware_InjectsServicePrincipal(t *testing.T) {
 	token := GenerateServiceToken(ring, http.MethodGet, "/internal/v1/resource", "", now)
 
 	var gotPrincipal *Principal
-	handler := ServiceTokenMiddleware(ring,
-		WithServiceTokenClock(func() time.Time { return now }),
+	handler := ServiceTokenMiddleware(ring, clockmock.New(now),
 		WithServiceTokenNonceStore(mustNewInMemoryNonceStore(t)),
 	)(
 		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -845,8 +836,7 @@ func TestServiceToken_LegacyTwoPart_MetricLabel(t *testing.T) {
 
 	legacyToken := legacyTwoPartToken(testHMACKey, http.MethodGet, "/internal/v1/test", now)
 
-	handler := ServiceTokenMiddleware(ring,
-		WithServiceTokenClock(func() time.Time { return now }),
+	handler := ServiceTokenMiddleware(ring, clockmock.New(now),
 		WithServiceTokenNonceStore(mustNewInMemoryNonceStore(t)),
 		WithServiceTokenMetrics(am),
 	)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

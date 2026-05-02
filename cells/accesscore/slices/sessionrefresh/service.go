@@ -12,6 +12,7 @@ import (
 	"github.com/ghbvf/gocell/cells/accesscore/internal/dto"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/ports"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/sessionmint"
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/validation"
 	"github.com/ghbvf/gocell/runtime/auth"
@@ -20,10 +21,17 @@ import (
 
 const errMsgInvalidRefreshToken = "invalid refresh token"
 
-// Option configures a session-refresh Service. No built-in options exist today;
-// the type is declared so future extensions are non-breaking (matches sessionlogin
-// pattern, F8).
+// Option configures a session-refresh Service.
 type Option func(*Service)
+
+// WithClock sets the clock used for token expiry calculation.
+// clk must not be nil; pass clock.Real() for production use.
+func WithClock(clk clock.Clock) Option {
+	return func(s *Service) {
+		clock.MustHaveClock(clk, "sessionrefresh.WithClock")
+		s.clock = clk
+	}
+}
 
 // Service implements token refresh logic.
 type Service struct {
@@ -33,6 +41,7 @@ type Service struct {
 	refreshStore refresh.Store
 	issuer       *auth.JWTIssuer
 	logger       *slog.Logger
+	clock        clock.Clock
 }
 
 // NewService creates a session-refresh Service.
@@ -83,6 +92,7 @@ func NewService(
 	for _, o := range opts {
 		o(s)
 	}
+	clock.MustHaveClock(s.clock, "sessionrefresh.NewService: clock required — use WithClock(c.clk)")
 	return s, nil
 }
 
@@ -148,6 +158,7 @@ func (s *Service) Refresh(ctx context.Context, refreshToken string) (dto.TokenPa
 	minted, err := sessionmint.MintAccess(ctx, sessionmint.Deps{
 		Issuer:   s.issuer,
 		RoleRepo: s.roleRepo,
+		Clk:      s.clock,
 	}, sessionmint.Request{
 		UserID:                session.UserID,
 		SessionID:             session.ID,

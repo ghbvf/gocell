@@ -5,8 +5,8 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
-	"time"
 
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/httputil"
 )
@@ -37,6 +37,7 @@ func AuthMiddleware(verifier IntentTokenVerifier, opts ...AuthOption) func(http.
 	for _, o := range opts {
 		o(&cfg)
 	}
+	clock.MustHaveClock(cfg.clock, "auth.AuthMiddleware")
 
 	isPublic := cfg.publicMatcher
 	if isPublic == nil {
@@ -72,10 +73,10 @@ func handleAuthRequest(w http.ResponseWriter, r *http.Request, next http.Handler
 		return
 	}
 
-	start := time.Now()
+	start := cfg.clock.Now()
 	claims, err := verifier.VerifyIntent(r.Context(), token, TokenIntentAccess)
 	if err != nil {
-		cfg.metrics.recordTokenVerify("failure", classifyTokenError(err), time.Since(start))
+		cfg.metrics.recordTokenVerify("failure", classifyTokenError(err), cfg.clock.Since(start))
 		// S43: expected 4xx (invalid/expired token, unauthorized) → Warn;
 		// infra errors (key load failure, verifier init error) → Error.
 		if errcode.IsExpected4xx(err) {
@@ -94,7 +95,7 @@ func handleAuthRequest(w http.ResponseWriter, r *http.Request, next http.Handler
 		httputil.WriteError(r.Context(), w, http.StatusUnauthorized, "ERR_AUTH_UNAUTHORIZED", "invalid token")
 		return
 	}
-	cfg.metrics.recordTokenVerify("success", "ok", time.Since(start))
+	cfg.metrics.recordTokenVerify("success", "ok", cfg.clock.Since(start))
 
 	// Password-reset enforcement: when the token carries password_reset_required=true,
 	// only exempt endpoints (supplied by the composition root via

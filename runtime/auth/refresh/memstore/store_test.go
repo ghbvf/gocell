@@ -8,6 +8,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/runtime/auth/refresh"
 	"github.com/ghbvf/gocell/runtime/auth/refresh/memstore"
 	"github.com/ghbvf/gocell/runtime/auth/refresh/storetest"
@@ -20,8 +21,20 @@ var errTypedNilReaderUsed = errors.New("typed nil reader should have been defaul
 
 type typedNilClock struct{}
 
-func (*typedNilClock) Now() time.Time {
-	return baseTime
+func (*typedNilClock) Now() time.Time                  { return baseTime }
+func (*typedNilClock) Since(t time.Time) time.Duration { return baseTime.Sub(t) }
+func (*typedNilClock) Until(t time.Time) time.Duration { return t.Sub(baseTime) }
+func (*typedNilClock) NewTimerAt(_ time.Time) clock.Timer {
+	panic("typedNilClock.NewTimerAt not implemented")
+}
+func (*typedNilClock) NewTicker(_ time.Duration) clock.Ticker {
+	panic("typedNilClock.NewTicker not implemented")
+}
+func (*typedNilClock) AfterFunc(_ time.Time, _ func()) clock.Timer {
+	panic("typedNilClock.AfterFunc not implemented")
+}
+func (*typedNilClock) Sleep(_ context.Context, _ time.Time) error {
+	panic("typedNilClock.Sleep not implemented")
 }
 
 type typedNilReader struct{}
@@ -43,12 +56,12 @@ func TestMemStoreContract(t *testing.T) {
 }
 
 func TestNewRejectsInvalidConfig(t *testing.T) {
-	clock := storetest.NewFakeClock(baseTime)
+	clk := storetest.NewFakeClock(baseTime)
 
 	tests := []struct {
 		name   string
 		policy refresh.Policy
-		clock  refresh.Clock
+		clock  clock.Clock
 	}{
 		{
 			name:   "nil clock",
@@ -58,12 +71,12 @@ func TestNewRejectsInvalidConfig(t *testing.T) {
 		{
 			name:   "non-positive max age",
 			policy: refresh.Policy{ReuseInterval: time.Second},
-			clock:  clock,
+			clock:  clk,
 		},
 		{
 			name:   "negative reuse interval",
 			policy: refresh.Policy{ReuseInterval: -time.Second, MaxAge: time.Hour},
-			clock:  clock,
+			clock:  clk,
 		},
 	}
 

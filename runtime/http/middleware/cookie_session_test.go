@@ -10,13 +10,11 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/ghbvf/gocell/kernel/clock"
+	"github.com/ghbvf/gocell/kernel/clock/clockmock"
 	"github.com/ghbvf/gocell/pkg/securecookie"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 )
-
-// cookieExpirySleep is the sleep duration used to let a MaxAge=1s cookie expire.
-// 1100ms > 1s guarantees the cookie is stale by the time we check.
-const cookieExpirySleep = testtime.D1s + testtime.D100ms
 
 func generateKey(t *testing.T) []byte {
 	t.Helper()
@@ -29,7 +27,9 @@ func generateKey(t *testing.T) []byte {
 func newTestSessionConfig(t *testing.T) CookieSessionConfig {
 	t.Helper()
 	secret := generateKey(t)
-	return DefaultCookieSessionConfig(secret)
+	cfg := DefaultCookieSessionConfig(secret)
+	cfg.Clock = clock.Real()
+	return cfg
 }
 
 func newTestSessionConfigEncrypted(t *testing.T) CookieSessionConfig {
@@ -41,7 +41,11 @@ func newTestSessionConfigEncrypted(t *testing.T) CookieSessionConfig {
 
 func encodeCookieValue(t *testing.T, cfg CookieSessionConfig, jwt string) string {
 	t.Helper()
-	sc, err := securecookie.New(cfg.Secret, cfg.EncryptKey)
+	clk := cfg.Clock
+	if clk == nil {
+		clk = clock.Real()
+	}
+	sc, err := securecookie.New(cfg.Secret, cfg.EncryptKey, clk)
 	require.NoError(t, err)
 	name := cfg.CookieName
 	if name == "" {
@@ -86,15 +90,19 @@ func TestCookieSession_ValidCookie_InjectsAuthorization(t *testing.T) {
 }
 
 func TestCookieSession_ExpiredCookie_NoInjection(t *testing.T) {
+	clk := clockmock.New(time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC))
 	cfg := newTestSessionConfig(t)
 	cfg.MaxAge = 1
+	cfg.Clock = clk
 
-	sc, err := securecookie.New(cfg.Secret, nil)
+	sc, err := securecookie.New(cfg.Secret, nil, clk)
 	require.NoError(t, err)
+	sc = sc.WithMaxAge(cfg.MaxAge)
 	encoded, err := sc.Encode("session", []byte("jwt-token"))
 	require.NoError(t, err)
 
-	time.Sleep(cookieExpirySleep) //archtest:allow:test-sleep TTL physical expiry; backend has no notification API
+	// Advance fake clock by 2 seconds to exceed max-age=1.
+	clk.Advance(testtime.D2s)
 
 	capture := &authCapture{}
 	handler := MustCookieSession(cfg)(capture.handler())
@@ -195,9 +203,10 @@ func TestSetSessionCookie_Attributes(t *testing.T) {
 }
 
 func TestSetSessionCookie_ZeroValueConfig_IsSecure(t *testing.T) {
-	// Struct literal with only Secret set should produce Secure cookie.
+	// Struct literal with only Secret+Clock set should produce Secure cookie.
 	cfg := CookieSessionConfig{
 		Secret: generateKey(t),
+		Clock:  clock.Real(),
 	}
 	rec := httptest.NewRecorder()
 	err := SetSessionCookie(rec, cfg, "jwt")
@@ -382,15 +391,19 @@ func TestSessionCookieWriter_CookieSizeLimit(t *testing.T) {
 // An expired cookie means no Authorization is injected, so AuthMiddleware
 // should return 401.
 func TestCookieSession_ExpiredCookie_Returns401(t *testing.T) {
+	clk := clockmock.New(time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC))
 	cfg := newTestSessionConfig(t)
 	cfg.MaxAge = 1
+	cfg.Clock = clk
 
-	sc, err := securecookie.New(cfg.Secret, nil)
+	sc, err := securecookie.New(cfg.Secret, nil, clk)
 	require.NoError(t, err)
+	sc = sc.WithMaxAge(cfg.MaxAge)
 	encoded, err := sc.Encode("session", []byte("jwt-token"))
 	require.NoError(t, err)
 
-	time.Sleep(cookieExpirySleep) //archtest:allow:test-sleep TTL physical expiry; backend has no notification API
+	// Advance fake clock by 2 seconds to exceed max-age=1.
+	clk.Advance(testtime.D2s)
 
 	// Mock AuthMiddleware: returns 401 if no Authorization header.
 	mockAuth := func(next http.Handler) http.Handler {

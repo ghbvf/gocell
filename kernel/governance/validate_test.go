@@ -13,6 +13,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/ghbvf/gocell/kernel/clock"
+	"github.com/ghbvf/gocell/kernel/clock/clockmock"
 	"github.com/ghbvf/gocell/kernel/metadata"
 	"github.com/ghbvf/gocell/kernel/verify"
 	"github.com/ghbvf/gocell/pkg/contracts"
@@ -221,7 +223,7 @@ func findByCode(results []ValidationResult, code string) []ValidationResult {
 func TestValidProject_ZeroErrors(t *testing.T) {
 	pm := validProject()
 	// Use empty root to skip filesystem checks (REF-11, REF-12).
-	val := NewValidator(pm, "")
+	val := NewValidator(pm, "", clock.Real())
 	results := val.Validate()
 	errs := FilterErrors(results)
 	assert.Empty(t, errs, "valid project should have 0 errors, got: %v", errs)
@@ -273,7 +275,7 @@ func TestREF01(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			pm := validProject()
 			tt.setup(pm)
-			val := NewValidator(pm, ".")
+			val := NewValidator(pm, ".", clock.Real())
 			got := findByCode(val.validateREF01(), "REF-01")
 			assert.Len(t, got, tt.wantCount)
 			for _, r := range got {
@@ -313,7 +315,7 @@ func TestREF02(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			pm := validProject()
 			tt.setup(pm)
-			val := NewValidator(pm, ".")
+			val := NewValidator(pm, ".", clock.Real())
 			got := findByCode(val.validateREF02(), "REF-02")
 			assert.Len(t, got, tt.wantCount)
 		})
@@ -350,7 +352,7 @@ func TestREF03(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			pm := validProject()
 			tt.setup(pm)
-			val := NewValidator(pm, ".")
+			val := NewValidator(pm, ".", clock.Real())
 			got := findByCode(val.validateREF03(), "REF-03")
 			assert.Len(t, got, tt.wantCount)
 		})
@@ -387,7 +389,7 @@ func TestREF04(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			pm := validProject()
 			tt.setup(pm)
-			val := NewValidator(pm, ".")
+			val := NewValidator(pm, ".", clock.Real())
 			got := findByCode(val.validateREF04(), "REF-04")
 			assert.Len(t, got, tt.wantCount)
 		})
@@ -422,7 +424,7 @@ func TestREF05(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			pm := validProject()
 			tt.setup(pm)
-			val := NewValidator(pm, ".")
+			val := NewValidator(pm, ".", clock.Real())
 			got := findByCode(val.validateREF05(), "REF-05")
 			assert.Len(t, got, tt.wantCount)
 		})
@@ -452,7 +454,7 @@ func TestREF06(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			pm := validProject()
 			tt.setup(pm)
-			val := NewValidator(pm, ".")
+			val := NewValidator(pm, ".", clock.Real())
 			got := findByCode(val.validateREF06(), "REF-06")
 			assert.Len(t, got, tt.wantCount)
 		})
@@ -482,7 +484,7 @@ func TestREF07(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			pm := validProject()
 			tt.setup(pm)
-			val := NewValidator(pm, ".")
+			val := NewValidator(pm, ".", clock.Real())
 			got := findByCode(val.validateREF07(), "REF-07")
 			assert.Len(t, got, tt.wantCount)
 		})
@@ -512,7 +514,7 @@ func TestREF08(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			pm := validProject()
 			tt.setup(pm)
-			val := NewValidator(pm, ".")
+			val := NewValidator(pm, ".", clock.Real())
 			got := findByCode(val.validateREF08(), "REF-08")
 			assert.Len(t, got, tt.wantCount)
 		})
@@ -553,7 +555,7 @@ func TestREF09(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			pm := validProject()
 			tt.setup(pm)
-			val := NewValidator(pm, ".")
+			val := NewValidator(pm, ".", clock.Real())
 			got := findByCode(val.validateREF09(), "REF-09")
 			assert.Len(t, got, tt.wantCount)
 		})
@@ -591,7 +593,7 @@ func TestTOPO01(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			pm := validProject()
 			tt.setup(pm)
-			val := NewValidator(pm, ".")
+			val := NewValidator(pm, ".", clock.Real())
 			got := findByCode(val.validateTOPO01(), "TOPO-01")
 			assert.Len(t, got, tt.wantCount)
 		})
@@ -630,7 +632,7 @@ func TestTOPO02(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			pm := validProject()
 			tt.setup(pm)
-			val := NewValidator(pm, ".")
+			val := NewValidator(pm, ".", clock.Real())
 			got := findByCode(val.validateTOPO02(), "TOPO-02")
 			assert.Len(t, got, tt.wantCount)
 		})
@@ -675,7 +677,7 @@ func TestTOPO03(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			pm := validProject()
 			tt.setup(pm)
-			val := NewValidator(pm, ".")
+			val := NewValidator(pm, ".", clock.Real())
 			got := findByCode(val.validateTOPO03(), "TOPO-03")
 			assert.Len(t, got, tt.wantCount)
 		})
@@ -769,7 +771,7 @@ func TestTOPO04(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			pm := validProject()
 			tt.setup(pm)
-			val := NewValidator(pm, ".")
+			val := NewValidator(pm, ".", clock.Real())
 			got := findByCode(val.validateTOPO04(), "TOPO-04")
 			assert.Len(t, got, tt.wantCount)
 		})
@@ -790,7 +792,7 @@ func TestTOPO04_EmptyMaxConsistencyLevel(t *testing.T) {
 		Endpoints:        metadata.EndpointsMeta{Server: "ext-gateway", Clients: []string{"accesscore"}},
 	}
 
-	val := NewValidator(pm, "")
+	val := NewValidator(pm, "", clock.Real())
 	got := findByCode(val.validateTOPO04(), "TOPO-04")
 	assert.Empty(t, got, "empty maxConsistencyLevel should mean unconstrained, not malformed")
 }
@@ -809,7 +811,7 @@ func TestTOPO04_MalformedMessage(t *testing.T) {
 		Endpoints:        metadata.EndpointsMeta{Server: "ext-gateway", Clients: []string{"accesscore"}},
 	}
 
-	val := NewValidator(pm, "")
+	val := NewValidator(pm, "", clock.Real())
 	got := findByCode(val.validateTOPO04(), "TOPO-04")
 	require.Len(t, got, 1)
 	assert.Contains(t, got[0].Message, "INVALID")
@@ -866,7 +868,7 @@ func TestTOPO05(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			pm := validProject()
 			tt.setup(pm)
-			val := NewValidator(pm, ".")
+			val := NewValidator(pm, ".", clock.Real())
 			got := findByCode(val.validateTOPO05(), "TOPO-05")
 			assert.Len(t, got, tt.wantCount)
 		})
@@ -904,7 +906,7 @@ func TestTOPO06(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			pm := validProject()
 			tt.setup(pm)
-			val := NewValidator(pm, ".")
+			val := NewValidator(pm, ".", clock.Real())
 			got := findByCode(val.validateTOPO06(), "TOPO-06")
 			assert.Len(t, got, tt.wantCount)
 		})
@@ -1020,7 +1022,7 @@ func TestVERIFY01(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			pm := validProject()
 			tt.setup(pm)
-			val := NewValidator(pm, ".")
+			val := NewValidator(pm, ".", clock.Real())
 			got := findByCode(val.validateVERIFY01(), "VERIFY-01")
 			assert.Len(t, got, tt.wantCount)
 		})
@@ -1115,7 +1117,7 @@ func TestVERIFY02(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			pm := validProject()
 			tt.setup(pm)
-			val := NewValidator(pm, "")
+			val := NewValidator(pm, "", clock.Real())
 			got := findByCode(val.validateVERIFY02(), "VERIFY-02")
 			assert.Len(t, got, tt.wantCount)
 		})
@@ -1130,10 +1132,7 @@ func TestVERIFY02_TimeOverride(t *testing.T) {
 		{Contract: "http.auth.login.v1", Owner: "platform", Reason: "test", ExpiresAt: "2026-04-04"}, // yesterday
 	}
 
-	val := NewValidator(pm, "")
-	val.now = func() time.Time {
-		return time.Date(2026, 4, 5, 0, 0, 0, 0, time.UTC)
-	}
+	val := NewValidator(pm, "", clockmock.New(time.Date(2026, 4, 5, 0, 0, 0, 0, time.UTC)))
 	got := findByCode(val.validateVERIFY02(), "VERIFY-02")
 	require.Len(t, got, 1)
 	assert.Contains(t, got[0].Message, "expired")
@@ -1173,7 +1172,7 @@ func TestVERIFY03(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			pm := validProject()
 			tt.setup(pm)
-			val := NewValidator(pm, ".")
+			val := NewValidator(pm, ".", clock.Real())
 			got := findByCode(val.validateVERIFY03(), "VERIFY-03")
 			assert.Len(t, got, tt.wantCount)
 		})
@@ -1249,7 +1248,7 @@ func TestVERIFY04(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			pm := validProject()
 			tt.setup(pm)
-			val := NewValidator(pm, ".")
+			val := NewValidator(pm, ".", clock.Real())
 			got := findByCode(val.validateVERIFY04(), "VERIFY-04")
 			assert.Len(t, got, tt.wantCount)
 		})
@@ -1376,7 +1375,7 @@ func TestVERIFY05(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			pm := validProject()
 			tt.setup(pm)
-			val := NewValidator(pm, ".")
+			val := NewValidator(pm, ".", clock.Real())
 			got := findByCode(val.validateVERIFY05(), "VERIFY-05")
 			assert.Len(t, got, tt.wantCount)
 		})
@@ -1449,7 +1448,7 @@ func TestVERIFY06(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			pm := validProject()
 			tt.setup(pm)
-			val := NewValidator(pm, ".")
+			val := NewValidator(pm, ".", clock.Real())
 			val.verifyJourneyRef = verifiedJourneyRefVerifier
 			if tt.verifier != nil {
 				val.verifyJourneyRef = tt.verifier
@@ -1492,7 +1491,7 @@ func TestFMT01(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			pm := validProject()
 			tt.setup(pm)
-			val := NewValidator(pm, ".")
+			val := NewValidator(pm, ".", clock.Real())
 			got := findByCode(val.validateFMT01(), "FMT-01")
 			assert.Len(t, got, tt.wantCount)
 		})
@@ -1556,7 +1555,7 @@ func TestFMT24(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			pm := validProject()
 			tt.setup(pm)
-			val := NewValidator(pm, ".")
+			val := NewValidator(pm, ".", clock.Real())
 			got := findByCode(val.validateFMT24(), "FMT-24")
 			assert.Len(t, got, tt.wantCount)
 		})
@@ -1586,7 +1585,7 @@ func TestFMT02(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			pm := validProject()
 			tt.setup(pm)
-			val := NewValidator(pm, ".")
+			val := NewValidator(pm, ".", clock.Real())
 			got := findByCode(val.validateFMT02(), "FMT-02")
 			assert.Len(t, got, tt.wantCount)
 		})
@@ -1623,7 +1622,7 @@ func TestFMT03(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			pm := validProject()
 			tt.setup(pm)
-			val := NewValidator(pm, ".")
+			val := NewValidator(pm, ".", clock.Real())
 			got := findByCode(val.validateFMT03(), "FMT-03")
 			assert.Len(t, got, tt.wantCount)
 		})
@@ -1697,7 +1696,7 @@ func TestFMT04(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			pm := validProject()
 			tt.setup(pm)
-			val := NewValidator(pm, ".")
+			val := NewValidator(pm, ".", clock.Real())
 			got := findByCode(val.validateFMT04(), "FMT-04")
 			assert.Len(t, got, tt.wantCount)
 		})
@@ -1733,7 +1732,7 @@ func TestFMT05(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			pm := validProject()
 			tt.setup(pm)
-			val := NewValidator(pm, ".")
+			val := NewValidator(pm, ".", clock.Real())
 			got := findByCode(val.validateFMT05(), "FMT-05")
 			assert.Len(t, got, tt.wantCount)
 		})
@@ -1814,7 +1813,7 @@ func TestFMT09(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			pm := validProject()
 			tt.setup(pm)
-			val := NewValidator(pm, "")
+			val := NewValidator(pm, "", clock.Real())
 			got := findByCode(val.validateFMT09(), "FMT-09")
 			assert.Len(t, got, tt.wantCount)
 			for _, r := range got {
@@ -1850,7 +1849,7 @@ func TestADV01(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			pm := validProject()
 			tt.setup(pm)
-			val := NewValidator(pm, ".")
+			val := NewValidator(pm, ".", clock.Real())
 			got := findByCode(val.validateADV01(), "ADV-01")
 			assert.Len(t, got, tt.wantCount)
 			for _, r := range got {
@@ -1945,7 +1944,7 @@ func TestValidate_AggregatesAllRules(t *testing.T) {
 	// ADV-01: remove status board
 	pm.StatusBoard = nil
 
-	val := NewValidator(pm, "")
+	val := NewValidator(pm, "", clock.Real())
 	results := val.Validate()
 
 	// Should have at least one REF-01, FMT-01, ADV-01
@@ -1966,7 +1965,7 @@ func TestValidate_EmptyProject(t *testing.T) {
 		Journeys:   make(map[string]*metadata.JourneyMeta),
 		Assemblies: make(map[string]*metadata.AssemblyMeta),
 	}
-	val := NewValidator(pm, "")
+	val := NewValidator(pm, "", clock.Real())
 	results := val.Validate()
 	assert.Empty(t, results, "empty project should produce no validation results")
 }
@@ -2003,7 +2002,7 @@ func TestFMT06(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			pm := validProject()
 			tt.setup(pm)
-			val := NewValidator(pm, "")
+			val := NewValidator(pm, "", clock.Real())
 			got := findByCode(val.validateFMT06(), "FMT-06")
 			assert.Len(t, got, tt.wantCount)
 			for _, r := range got {
@@ -2074,7 +2073,7 @@ func TestFMT07(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			pm := validProject()
 			tt.setup(pm)
-			val := NewValidator(pm, "")
+			val := NewValidator(pm, "", clock.Real())
 			got := findByCode(val.validateFMT07(), "FMT-07")
 			assert.Len(t, got, tt.wantCount)
 			for _, r := range got {
@@ -2141,7 +2140,7 @@ func TestFMT08(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			pm := validProject()
 			tt.setup(pm)
-			val := NewValidator(pm, "")
+			val := NewValidator(pm, "", clock.Real())
 			got := findByCode(val.validateFMT08(), "FMT-08")
 			assert.Len(t, got, tt.wantCount)
 			for _, r := range got {
@@ -2177,7 +2176,7 @@ func TestREF10(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			pm := validProject()
 			tt.setup(pm)
-			val := NewValidator(pm, "")
+			val := NewValidator(pm, "", clock.Real())
 			got := findByCode(val.validateREF10(), "REF-10")
 			assert.Len(t, got, tt.wantCount)
 			for _, r := range got {
@@ -2193,7 +2192,7 @@ func TestREF10(t *testing.T) {
 func TestREF11(t *testing.T) {
 	t.Run("skipped when root is empty", func(t *testing.T) {
 		pm := validProject()
-		val := NewValidator(pm, "")
+		val := NewValidator(pm, "", clock.Real())
 		got := findByCode(val.validateREF11(), "REF-11")
 		assert.Empty(t, got)
 	})
@@ -2208,7 +2207,7 @@ func TestREF11(t *testing.T) {
 		require.NoError(t, os.WriteFile(filepath.Join(entryDir, "main.go"), []byte("package main"), 0o644))
 
 		pm := validProject()
-		val := NewValidator(pm, srcDir)
+		val := NewValidator(pm, srcDir, clock.Real())
 		got := findByCode(val.validateREF11(), "REF-11")
 		assert.Empty(t, got)
 	})
@@ -2219,7 +2218,7 @@ func TestREF11(t *testing.T) {
 		require.NoError(t, os.MkdirAll(srcDir, 0o755))
 
 		pm := validProject()
-		val := NewValidator(pm, srcDir)
+		val := NewValidator(pm, srcDir, clock.Real())
 		got := findByCode(val.validateREF11(), "REF-11")
 		assert.Len(t, got, 1)
 		assert.Equal(t, SeverityError, got[0].Severity)
@@ -2235,7 +2234,7 @@ func TestREF12(t *testing.T) {
 		pm.Contracts["http.auth.login.v1"].SchemaRefs = metadata.SchemaRefsMeta{
 			Request: "request.json",
 		}
-		val := NewValidator(pm, "")
+		val := NewValidator(pm, "", clock.Real())
 		got := findByCode(val.validateREF12(), "REF-12")
 		assert.Empty(t, got)
 	})
@@ -2243,7 +2242,7 @@ func TestREF12(t *testing.T) {
 	t.Run("no schemaRefs is ok", func(t *testing.T) {
 		tmpDir := t.TempDir()
 		pm := validProject()
-		val := NewValidator(pm, tmpDir)
+		val := NewValidator(pm, tmpDir, clock.Real())
 		got := findByCode(val.validateREF12(), "REF-12")
 		assert.Empty(t, got)
 	})
@@ -2260,7 +2259,7 @@ func TestREF12(t *testing.T) {
 		pm.Contracts["http.auth.login.v1"].SchemaRefs = metadata.SchemaRefsMeta{
 			Request: "request.json",
 		}
-		val := NewValidator(pm, tmpDir)
+		val := NewValidator(pm, tmpDir, clock.Real())
 		got := findByCode(val.validateREF12(), "REF-12")
 		assert.Empty(t, got)
 	})
@@ -2276,7 +2275,7 @@ func TestREF12(t *testing.T) {
 			Request:  "request.json",
 			Response: "response.json",
 		}
-		val := NewValidator(pm, tmpDir)
+		val := NewValidator(pm, tmpDir, clock.Real())
 		got := findByCode(val.validateREF12(), "REF-12")
 		assert.Len(t, got, 2) // both missing
 		for _, r := range got {
@@ -2294,7 +2293,7 @@ func TestREF12(t *testing.T) {
 		pm.Contracts["event.session.created.v1"].SchemaRefs = metadata.SchemaRefsMeta{
 			Payload: "payload.json",
 		}
-		val := NewValidator(pm, tmpDir)
+		val := NewValidator(pm, tmpDir, clock.Real())
 		got := findByCode(val.validateREF12(), "REF-12")
 		assert.Len(t, got, 1)
 		assert.Contains(t, got[0].Field, "payload")
@@ -2309,7 +2308,7 @@ func TestREF12(t *testing.T) {
 		pm.Contracts["http.auth.login.v1"].SchemaRefs = metadata.SchemaRefsMeta{
 			Extra: map[string]string{"custom": "custom-schema.json"},
 		}
-		val := NewValidator(pm, tmpDir)
+		val := NewValidator(pm, tmpDir, clock.Real())
 		got := findByCode(val.validateREF12(), "REF-12")
 		require.Len(t, got, 1)
 		assert.Equal(t, "schemaRefs.custom", got[0].Field)
@@ -2326,7 +2325,7 @@ func TestREF12(t *testing.T) {
 		pm.Contracts["http.auth.login.v1"].SchemaRefs = metadata.SchemaRefsMeta{
 			Extra: map[string]string{"custom": "custom-schema.json"},
 		}
-		val := NewValidator(pm, tmpDir)
+		val := NewValidator(pm, tmpDir, clock.Real())
 		got := findByCode(val.validateREF12(), "REF-12")
 		assert.Empty(t, got)
 	})
@@ -2346,7 +2345,7 @@ func TestREF12(t *testing.T) {
 				401: {Description: "unauthorized", SchemaRef: "nonexistent-401.schema.json"},
 			},
 		}
-		val := NewValidator(pm, tmpDir)
+		val := NewValidator(pm, tmpDir, clock.Real())
 		got := findByCode(val.validateREF12(), "REF-12")
 		require.Len(t, got, 1)
 		assert.Equal(t, "endpoints.http.responses[401].schemaRef", got[0].Field)
@@ -2368,7 +2367,7 @@ func TestREF12(t *testing.T) {
 				401: {Description: "unauthorized", SchemaRef: ""},
 			},
 		}
-		val := NewValidator(pm, tmpDir)
+		val := NewValidator(pm, tmpDir, clock.Real())
 		got := findByCode(val.validateREF12(), "REF-12")
 		assert.Empty(t, got)
 	})
@@ -2388,7 +2387,7 @@ func TestREF12(t *testing.T) {
 				401: {Description: "unauthorized", SchemaRef: "error-401.schema.json"},
 			},
 		}
-		val := NewValidator(pm, tmpDir)
+		val := NewValidator(pm, tmpDir, clock.Real())
 		got := findByCode(val.validateREF12(), "REF-12")
 		assert.Empty(t, got)
 	})
@@ -2454,7 +2453,7 @@ func TestREF13(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			pm := validProject()
 			tt.setup(pm)
-			val := NewValidator(pm, "")
+			val := NewValidator(pm, "", clock.Real())
 			got := findByCode(val.validateREF13(), "REF-13")
 			assert.Len(t, got, tt.wantCount)
 			for _, r := range got {
@@ -2511,7 +2510,7 @@ func TestREF14(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			pm := validProject()
 			tt.setup(pm)
-			val := NewValidator(pm, "")
+			val := NewValidator(pm, "", clock.Real())
 			got := findByCode(val.validateREF14(), "REF-14")
 			assert.Len(t, got, tt.wantCount)
 			for _, r := range got {
@@ -2650,7 +2649,7 @@ func TestREF17(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			pm := validProject()
 			tt.setup(pm)
-			val := NewValidator(pm, "")
+			val := NewValidator(pm, "", clock.Real())
 			got := findByCode(val.validateREF17(), "REF-17")
 			assert.Len(t, got, tt.wantCount)
 			for _, r := range got {
@@ -2692,7 +2691,7 @@ func TestREF15(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			pm := validProject()
 			tt.setup(pm)
-			val := NewValidator(pm, "")
+			val := NewValidator(pm, "", clock.Real())
 			got := findByCode(val.validateREF15(), "REF-15")
 			assert.Len(t, got, tt.wantCount)
 			for _, r := range got {
@@ -2748,7 +2747,7 @@ func TestADV03(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			pm := validProject()
 			tt.setup(pm)
-			val := NewValidator(pm, "")
+			val := NewValidator(pm, "", clock.Real())
 			got := findByCode(val.validateADV03(), "ADV-03")
 			assert.Len(t, got, tt.wantCount)
 			for _, r := range got {
@@ -2794,7 +2793,7 @@ func TestADV04(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			pm := validProject()
 			tt.setup(pm)
-			val := NewValidator(pm, "")
+			val := NewValidator(pm, "", clock.Real())
 			got := findByCode(val.validateADV04(), "ADV-04")
 			assert.Len(t, got, tt.wantCount)
 			for _, r := range got {
@@ -2929,7 +2928,7 @@ func TestADV05(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			pm := validProject()
 			tt.setup(pm)
-			val := NewValidator(pm, "")
+			val := NewValidator(pm, "", clock.Real())
 			got := findByCode(val.validateADV05(), "ADV-05")
 			assert.Len(t, got, tt.wantCount)
 			for _, r := range got {
@@ -3266,7 +3265,7 @@ func TestADV06(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			pm := validProject()
 			tt.setup(pm)
-			val := NewValidator(pm, "")
+			val := NewValidator(pm, "", clock.Real())
 			got := findByCode(val.validateADV06(), "ADV-06")
 			assertADV06Findings(t, got, tt)
 		})
@@ -3298,7 +3297,7 @@ func TestRepositoryRoot(t *testing.T) {
 
 func TestActorExists(t *testing.T) {
 	pm := validProject()
-	val := NewValidator(pm, "")
+	val := NewValidator(pm, "", clock.Real())
 
 	assert.True(t, val.actorExists("accesscore"), "cell should be a known actor")
 	assert.True(t, val.actorExists("edge-bff"), "external actor should be known")
@@ -3370,7 +3369,7 @@ func TestREF11_PathTraversal(t *testing.T) {
 
 	pm := validProject()
 	pm.Assemblies["corebundle"].Build.Entrypoint = "../../../etc/passwd"
-	val := NewValidator(pm, srcDir)
+	val := NewValidator(pm, srcDir, clock.Real())
 	got := findByCode(val.validateREF11(), "REF-11")
 	require.Len(t, got, 1)
 	assert.Contains(t, got[0].Message, "path escapes project root")
@@ -3388,7 +3387,7 @@ func TestREF12_PathTraversal(t *testing.T) {
 	pm.Contracts["http.auth.login.v1"].SchemaRefs = metadata.SchemaRefsMeta{
 		Request: "../../evil.json",
 	}
-	val := NewValidator(pm, tmpDir)
+	val := NewValidator(pm, tmpDir, clock.Real())
 	got := findByCode(val.validateREF12(), "REF-12")
 	require.Len(t, got, 1)
 	assert.Contains(t, got[0].Message, "path escapes project root")
@@ -3398,7 +3397,7 @@ func TestREF12_PathTraversal(t *testing.T) {
 // --- S2: NewValidator with nil project ---
 
 func TestNewValidator_NilProject(t *testing.T) {
-	val := NewValidator(nil, ".")
+	val := NewValidator(nil, ".", clock.Real())
 	require.NotNil(t, val)
 
 	// Should not panic and should return empty results.
@@ -3452,7 +3451,7 @@ func TestFMT10(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			pm := validProject()
 			tt.setup(pm)
-			val := NewValidator(pm, "")
+			val := NewValidator(pm, "", clock.Real())
 			got := findByCode(val.validateFMT10(), "FMT-10")
 			assert.Len(t, got, tt.wantCount)
 		})
@@ -3527,7 +3526,7 @@ func TestFMT11(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			pm := validProject()
 			tt.setup(pm)
-			val := NewValidator(pm, "")
+			val := NewValidator(pm, "", clock.Real())
 			got := findByCode(val.validateFMT11(), "FMT-11")
 			assert.Len(t, got, tt.wantCount)
 			for _, r := range got {
@@ -3581,7 +3580,7 @@ func TestFMT12(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			pm := validProject()
 			tt.setup(pm)
-			val := NewValidator(pm, "")
+			val := NewValidator(pm, "", clock.Real())
 			got := findByCode(val.validateFMT12(), "FMT-12")
 			assert.Len(t, got, tt.wantCount)
 			for _, r := range got {
@@ -3947,7 +3946,7 @@ func TestFMT13(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			pm := validProject()
 			tt.setup(pm)
-			val := NewValidator(pm, "")
+			val := NewValidator(pm, "", clock.Real())
 			got := findByCode(val.validateFMT13(), "FMT-13")
 			errors := FilterErrors(got)
 			warnings := FilterWarnings(got)
@@ -3974,7 +3973,7 @@ func TestFMT13_HasHowToFixHint(t *testing.T) {
 	}
 	pm.Contracts["http.auth.login.v1"].SchemaRefs.Response = "response.schema.json"
 
-	val := NewValidator(pm, "")
+	val := NewValidator(pm, "", clock.Real())
 	got := findByCode(val.validateFMT13(), "FMT-13")
 	require.Len(t, got, 1, "expected one FMT-13 finding")
 
@@ -4095,7 +4094,7 @@ func TestTOPO07(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			pm := validProject()
 			tt.setup(pm)
-			val := NewValidator(pm, "")
+			val := NewValidator(pm, "", clock.Real())
 			got := findByCode(val.validateTOPO07(), "TOPO-07")
 			assert.Len(t, got, tt.wantCount)
 			if tt.wantCount == 0 {
@@ -4167,7 +4166,7 @@ func TestTOPO07_FieldNameMatchesKind(t *testing.T) {
 			tt.setup(c)
 			pm.Contracts[c.ID] = c
 
-			val := NewValidator(pm, "")
+			val := NewValidator(pm, "", clock.Real())
 			got := findByCode(val.validateTOPO07(), "TOPO-07")
 			require.NotEmpty(t, got)
 			assert.Equal(t, tt.wantField, got[0].Field)
@@ -4182,7 +4181,7 @@ func TestTOPO07_MalformedMessage(t *testing.T) {
 	}
 	pm.Contracts["http.auth.login.v1"].Endpoints.Clients = []string{"edge-bff"}
 
-	val := NewValidator(pm, "")
+	val := NewValidator(pm, "", clock.Real())
 	got := findByCode(val.validateTOPO07(), "TOPO-07")
 	require.Len(t, got, 1)
 	assert.Contains(t, got[0].Message, "INVALID")
@@ -4237,7 +4236,7 @@ func TestTOPO08(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			pm := validProject()
 			tt.setup(pm)
-			val := NewValidator(pm, "")
+			val := NewValidator(pm, "", clock.Real())
 			got := findByCode(val.validateTOPO08(), "TOPO-08")
 			assert.Len(t, got, tt.wantCount)
 			if tt.wantCount == 0 {
@@ -4261,7 +4260,7 @@ func TestTOPO08_ReplacesADV02(t *testing.T) {
 	pm := validProject()
 	pm.Contracts["http.auth.login.v1"].Lifecycle = "deprecated"
 
-	val := NewValidator(pm, "")
+	val := NewValidator(pm, "", clock.Real())
 	results := val.Validate()
 
 	topo08 := findByCode(results, "TOPO-08")
@@ -4280,7 +4279,7 @@ func TestTOPO08_ReplacesADV02(t *testing.T) {
 func TestREF16(t *testing.T) {
 	t.Run("skipped when root is empty", func(t *testing.T) {
 		pm := validProject()
-		val := NewValidator(pm, "")
+		val := NewValidator(pm, "", clock.Real())
 		got := findByCode(val.validateREF16(), "REF-16")
 		assert.Empty(t, got)
 	})
@@ -4295,7 +4294,7 @@ func TestREF16(t *testing.T) {
 		require.NoError(t, os.WriteFile(filepath.Join(boundaryDir, "boundary.yaml"), []byte("assembly: corebundle"), 0o644))
 
 		pm := validProject()
-		val := NewValidator(pm, srcDir)
+		val := NewValidator(pm, srcDir, clock.Real())
 		got := findByCode(val.validateREF16(), "REF-16")
 		assert.Empty(t, got)
 	})
@@ -4306,7 +4305,7 @@ func TestREF16(t *testing.T) {
 		require.NoError(t, os.MkdirAll(srcDir, 0o755))
 
 		pm := validProject()
-		val := NewValidator(pm, srcDir)
+		val := NewValidator(pm, srcDir, clock.Real())
 		got := findByCode(val.validateREF16(), "REF-16")
 		assert.Len(t, got, 1)
 		assert.Equal(t, SeverityWarning, got[0].Severity)
@@ -4330,7 +4329,7 @@ func TestREF16(t *testing.T) {
 			},
 		}
 
-		val := NewValidator(pm, srcDir)
+		val := NewValidator(pm, srcDir, clock.Real())
 		got := findByCode(val.validateREF16(), "REF-16")
 		// Should find path traversal error for the malicious assembly
 		var traversal []ValidationResult
@@ -4360,7 +4359,7 @@ func TestREF16(t *testing.T) {
 			},
 		}
 
-		val := NewValidator(pm, srcDir)
+		val := NewValidator(pm, srcDir, clock.Real())
 		got := findByCode(val.validateREF16(), "REF-16")
 		assert.Len(t, got, 2) // both assemblies missing boundary.yaml
 	})
@@ -4404,7 +4403,7 @@ func TestFMT14(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			pm := validProject()
 			tt.setup(pm)
-			val := NewValidator(pm, "")
+			val := NewValidator(pm, "", clock.Real())
 			got := findByCode(val.validateFMT14(), "FMT-14")
 			assert.Len(t, got, tt.wantCount)
 			for _, r := range got {
@@ -4433,7 +4432,7 @@ func TestFMT14_ExamplePathSuggestion(t *testing.T) {
 		Assemblies: map[string]*metadata.AssemblyMeta{},
 	}
 
-	val := NewValidator(pm, "")
+	val := NewValidator(pm, "", clock.Real())
 	got := findByCode(val.validateFMT14(), "FMT-14")
 	require.Len(t, got, 1)
 	assert.Contains(t, got[0].Message, `examples/todoorder/cells/ordercell/slices/ordercreate/**`)
@@ -4618,7 +4617,7 @@ func TestFMT15(t *testing.T) {
 			if tt.emptyRoot {
 				root = ""
 			}
-			val := NewValidator(pm, root)
+			val := NewValidator(pm, root, clock.Real())
 			if tt.readFile != nil {
 				val.readFile = tt.readFile
 			}
@@ -4639,7 +4638,7 @@ func TestFMT15(t *testing.T) {
 		pm.Contracts["http.auth.login.v1"].SchemaRefs.Response = "response.schema.json"
 
 		var capturedPath string
-		val := NewValidator(pm, "/project")
+		val := NewValidator(pm, "/project", clock.Real())
 		val.readFile = func(path string) ([]byte, error) {
 			capturedPath = path
 			return []byte(validListSchema), nil
@@ -4719,7 +4718,7 @@ func TestOUTGUARD01(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			pm := validProject()
 			tt.setup(pm)
-			val := NewValidator(pm, ".")
+			val := NewValidator(pm, ".", clock.Real())
 			got := findByCode(val.validateOUTGUARD01(), "OUTGUARD-01")
 			assert.Len(t, got, tt.wantCount)
 			for _, r := range got {
@@ -4751,7 +4750,7 @@ func TestOUTGUARD01_L3_L4_Error(t *testing.T) {
 		Verify:           metadata.CellVerifyMeta{Smoke: []string{"smoke.l4-cell.startup"}},
 	}
 
-	val := NewValidator(pm, ".")
+	val := NewValidator(pm, ".", clock.Real())
 	got := findByCode(val.validateOUTGUARD01(), "OUTGUARD-01")
 	assert.Len(t, got, 2, "both L3 and L4 cells should error")
 }
@@ -4763,7 +4762,7 @@ func TestValidate_OUTGUARD01_Registration(t *testing.T) {
 	pm := validProject()
 	pm.Cells["accesscore"].DurabilityMode = "" // L2, missing → error
 
-	val := NewValidator(pm, ".")
+	val := NewValidator(pm, ".", clock.Real())
 	all := val.Validate()
 	got := findByCode(all, "OUTGUARD-01")
 	assert.NotEmpty(t, got, "OUTGUARD-01 must be registered in Validate() entry point")
@@ -4774,7 +4773,7 @@ func TestOUTGUARD01_InvalidDurabilityMode(t *testing.T) {
 	pm.Cells["accesscore"].DurabilityMode = "banana" // invalid value
 	pm.Cells["auditcore"].DurabilityMode = "durable"
 
-	val := NewValidator(pm, ".")
+	val := NewValidator(pm, ".", clock.Real())
 	got := findByCode(val.validateOUTGUARD01(), "OUTGUARD-01")
 	assert.Len(t, got, 1, "invalid durabilityMode should produce error")
 	assert.Equal(t, SeverityError, got[0].Severity)

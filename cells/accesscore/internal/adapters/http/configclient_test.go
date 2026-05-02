@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/runtime/auth"
 )
@@ -47,7 +48,7 @@ func TestHTTPConfigGetter_GetEntry_OK(t *testing.T) {
 	defer srv.Close()
 
 	ring := newTestRing(t)
-	client := NewHTTPConfigGetterWithHTTPClient(srv.URL, ring, srv.Client())
+	client := NewHTTPConfigGetterWithHTTPClient(srv.URL, ring, srv.Client(), clock.Real())
 	entry, err := client.GetEntry(context.Background(), "app.name")
 	require.NoError(t, err)
 	assert.Equal(t, "app.name", entry.Key)
@@ -67,7 +68,7 @@ func TestHTTPConfigGetter_GetEntry_NotFound(t *testing.T) {
 	defer srv.Close()
 
 	ring := newTestRing(t)
-	client := NewHTTPConfigGetterWithHTTPClient(srv.URL, ring, srv.Client())
+	client := NewHTTPConfigGetterWithHTTPClient(srv.URL, ring, srv.Client(), clock.Real())
 	_, err := client.GetEntry(context.Background(), "missing.key")
 	require.Error(t, err)
 
@@ -95,7 +96,7 @@ func TestHTTPConfigGetter_GetEntry_SensitiveEntry(t *testing.T) {
 	defer srv.Close()
 
 	ring := newTestRing(t)
-	client := NewHTTPConfigGetterWithHTTPClient(srv.URL, ring, srv.Client())
+	client := NewHTTPConfigGetterWithHTTPClient(srv.URL, ring, srv.Client(), clock.Real())
 	entry, err := client.GetEntry(context.Background(), "db.password")
 	require.NoError(t, err)
 	assert.Equal(t, "db.password", entry.Key)
@@ -109,7 +110,7 @@ func TestHTTPConfigGetter_GetEntry_UnexpectedStatus(t *testing.T) {
 	defer srv.Close()
 
 	ring := newTestRing(t)
-	client := NewHTTPConfigGetterWithHTTPClient(srv.URL, ring, srv.Client())
+	client := NewHTTPConfigGetterWithHTTPClient(srv.URL, ring, srv.Client(), clock.Real())
 	_, err := client.GetEntry(context.Background(), "any.key")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "unexpected status 500")

@@ -1,6 +1,10 @@
 package distlock
 
-import "time"
+import (
+	"time"
+
+	"github.com/ghbvf/gocell/kernel/clock"
+)
 
 const (
 	// defaultDistLockReleaseTimeout is the context deadline applied to background
@@ -32,8 +36,8 @@ type config struct {
 	// See WithMaxRenewAttempts.
 	maxRenewAttempts int
 
-	// clock is the time source. Defaults to realClock{}.
-	clock Clock
+	// clock is the time source. Set via New/MustNew required parameter.
+	clock clock.Clock
 }
 
 func defaultConfig() config {
@@ -42,7 +46,6 @@ func defaultConfig() config {
 		driftFactor:      0.01,
 		releaseTimeout:   defaultDistLockReleaseTimeout,
 		maxRenewAttempts: 3,
-		clock:            realClock{},
 	}
 }
 
@@ -95,13 +98,5 @@ func WithReleaseTimeout(d time.Duration) Option {
 func WithMaxRenewAttempts(n int) Option {
 	return func(c *config) {
 		c.maxRenewAttempts = n
-	}
-}
-
-// WithClock replaces the default real-time clock with a controllable
-// implementation. Intended for testing only.
-func WithClock(clk Clock) Option {
-	return func(c *config) {
-		c.clock = clk
 	}
 }

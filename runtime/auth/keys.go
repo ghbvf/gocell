@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
@@ -59,6 +60,10 @@ type VerificationKey struct {
 // key lookup by kid (key identifier). All methods are safe for concurrent use.
 //
 // ref: dexidp/dex server/rotation.go — 3-state model (Active → Verification-only → Pruned)
+//
+// ref: 201-wm2-key-rotation — clock injection is needed so rotation tests can
+// advance time without real sleeps; uses kernel/clock.Clock (not func() time.Time)
+// for consistency with the platform clock contract.
 type KeySet struct {
 	mu               sync.RWMutex
 	signingKey       *rsa.PrivateKey
@@ -67,7 +72,7 @@ type KeySet struct {
 	verificationKeys []VerificationKey
 	keyIndex         map[string]*rsa.PublicKey // kid → public key
 	keyExpiry        map[string]time.Time      // kid → expiry (signing key absent = never expires)
-	now              func() time.Time          // injectable clock for testing; defaults to time.Now
+	clk              clock.Clock               // injectable clock; defaults to clock.Real()
 	logger           *slog.Logger
 }
 
@@ -83,18 +88,13 @@ func WithKeySetLogger(l *slog.Logger) KeySetOption {
 	}
 }
 
-// WithKeySetClock overrides the time source for key expiry checks.
-func WithKeySetClock(fn func() time.Time) KeySetOption {
-	return func(ks *KeySet) {
-		if fn != nil {
-			ks.now = fn
-		}
-	}
-}
-
 // NewKeySet creates a KeySet with a single active signing key pair.
 // The kid is derived deterministically from the public key using RFC 7638.
-func NewKeySet(priv *rsa.PrivateKey, pub *rsa.PublicKey, opts ...KeySetOption) (*KeySet, error) {
+//
+// clk is required; pass clock.Real() at the composition root or
+// clockmock.New(...) in tests. Panics on nil or typed-nil clock.
+func NewKeySet(priv *rsa.PrivateKey, pub *rsa.PublicKey, clk clock.Clock, opts ...KeySetOption) (*KeySet, error) {
+	clock.MustHaveClock(clk, "auth.NewKeySet")
 	if priv == nil || pub == nil {
 		return nil, errcode.New(errcode.ErrAuthKeyInvalid, "signing key pair must not be nil")
 	}
@@ -118,7 +118,7 @@ func NewKeySet(priv *rsa.PrivateKey, pub *rsa.PublicKey, opts ...KeySetOption) (
 		signingKeyID: kid,
 		keyIndex:     map[string]*rsa.PublicKey{kid: pub},
 		keyExpiry:    make(map[string]time.Time),
-		now:          time.Now,
+		clk:          clk,
 		logger:       slog.Default(),
 	}
 	for _, o := range opts {
@@ -137,14 +137,14 @@ func NewKeySet(priv *rsa.PrivateKey, pub *rsa.PublicKey, opts ...KeySetOption) (
 // and one or more verification-only keys. Keys that are already expired at
 // construction time are pruned immediately.
 func NewKeySetWithVerificationKeys(
-	priv *rsa.PrivateKey, pub *rsa.PublicKey, vkeys []VerificationKey, opts ...KeySetOption,
+	priv *rsa.PrivateKey, pub *rsa.PublicKey, clk clock.Clock, vkeys []VerificationKey, opts ...KeySetOption,
 ) (*KeySet, error) {
-	ks, err := NewKeySet(priv, pub, opts...)
+	ks, err := NewKeySet(priv, pub, clk, opts...)
 	if err != nil {
 		return nil, err
 	}
 
-	now := ks.now()
+	now := ks.clk.Now()
 	for _, vk := range vkeys {
 		if vk.PublicKey == nil {
 			return nil, errcode.New(errcode.ErrAuthKeyInvalid, "verification key public key must not be nil")
@@ -208,7 +208,7 @@ func (ks *KeySet) PublicKeyByKID(kid string) (*rsa.PublicKey, error) {
 	// Signing key has no entry in keyExpiry — it never expires.
 	// Verification keys are checked against their expiry.
 	if exp, isVerification := ks.keyExpiry[kid]; isVerification {
-		if !ks.now().Before(exp) {
+		if !ks.clk.Now().Before(exp) {
 			return nil, errcode.New(errcode.ErrAuthKeyInvalid, fmt.Sprintf("kid %s has expired", kid))
 		}
 	}
@@ -224,7 +224,7 @@ func (ks *KeySet) PruneExpired() {
 	ks.mu.Lock()
 	defer ks.mu.Unlock()
 
-	now := ks.now()
+	now := ks.clk.Now()
 	remaining := ks.verificationKeys[:0]
 	for _, vk := range ks.verificationKeys {
 		if now.Before(vk.ExpiresAt) {
@@ -254,9 +254,11 @@ func MustGenerateTestKeyPair() (*rsa.PrivateKey, *rsa.PublicKey) {
 
 // MustNewTestKeySet creates a KeySet from a freshly generated 2048-bit RSA
 // key pair. It panics on error. Intended for test setup and examples only.
-func MustNewTestKeySet() (*KeySet, *rsa.PrivateKey, *rsa.PublicKey) {
+// clk is the clock used for key expiry checks; pass clock.Real() from the
+// composition root or clockmock.New(...) for time-controlled tests.
+func MustNewTestKeySet(clk clock.Clock) (*KeySet, *rsa.PrivateKey, *rsa.PublicKey) {
 	priv, pub := MustGenerateTestKeyPair()
-	ks, err := NewKeySet(priv, pub)
+	ks, err := NewKeySet(priv, pub, clk)
 	if err != nil {
 		panic(fmt.Sprintf("auth: failed to create test key set: %v", err))
 	}
@@ -328,7 +330,8 @@ func LoadKeysFromEnv() (privateKey *rsa.PrivateKey, publicKey *rsa.PublicKey, er
 // active key pair from GOCELL_JWT_PRIVATE_KEY / GOCELL_JWT_PUBLIC_KEY, and
 // optionally loads a verification-only key from GOCELL_JWT_PREV_PUBLIC_KEY
 // with expiry from GOCELL_JWT_PREV_KEY_EXPIRES (RFC 3339).
-func LoadKeySetFromEnv() (*KeySet, error) {
+// clk is required; pass clock.Real() at the composition root.
+func LoadKeySetFromEnv(clk clock.Clock) (*KeySet, error) {
 	priv, pub, err := LoadKeysFromEnv()
 	if err != nil {
 		return nil, err
@@ -336,7 +339,7 @@ func LoadKeySetFromEnv() (*KeySet, error) {
 
 	prevPubPEM := os.Getenv(EnvJWTPrevPublicKey)
 	if prevPubPEM == "" {
-		return NewKeySet(priv, pub)
+		return NewKeySet(priv, pub, clk)
 	}
 
 	prevPub, err := parseRSAPublicKey([]byte(prevPubPEM))
@@ -363,7 +366,7 @@ func LoadKeySetFromEnv() (*KeySet, error) {
 		ExpiresAt: expiresAt,
 	}
 
-	return NewKeySetWithVerificationKeys(priv, pub, []VerificationKey{vk})
+	return NewKeySetWithVerificationKeys(priv, pub, clk, []VerificationKey{vk})
 }
 
 func parseRSAPrivateKey(pemData []byte) (*rsa.PrivateKey, error) {

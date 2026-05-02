@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"log/slog"
 	"time"
+
+	"github.com/ghbvf/gocell/kernel/clock"
 )
 
 // wrapCtxSafe turns an arbitrary Checker into a race-pattern Checker whose
@@ -45,7 +47,7 @@ type probeOutcome struct {
 	panicV any
 }
 
-func wrapCtxSafe(fn Checker) Checker {
+func wrapCtxSafe(fn Checker, clk clock.Clock) Checker {
 	if fn == nil {
 		// Callers are expected to pre-validate; if somehow nil arrives here,
 		// return a Checker that fails closed. This keeps the aggregator safe.
@@ -55,7 +57,7 @@ func wrapCtxSafe(fn Checker) Checker {
 	}
 	return func(ctx context.Context) error {
 		done := make(chan probeOutcome, 1)
-		start := time.Now()
+		start := clk.Now()
 		go func() {
 			var out probeOutcome
 			defer func() {
@@ -80,8 +82,8 @@ func wrapCtxSafe(fn Checker) Checker {
 			// time spent in the probe — a cooperative probe that honors
 			// ctx.Done in the very next instruction must produce a near-zero
 			// cancel_lag even when ctx fires 5s after probe start.
-			cancelAt := time.Now()
-			go watchLateProbeOutcome(ctx.Err(), start, cancelAt, done)
+			cancelAt := clk.Now()
+			go watchLateProbeOutcome(ctx.Err(), start, cancelAt, done, clk)
 			return ctx.Err()
 		case o := <-done:
 			if o.panicV != nil {
@@ -126,10 +128,10 @@ func probePanicError(panicV any) error {
 //
 // The watcher receives from `done` exactly once and exits; it cannot leak
 // beyond the lifetime of the inner goroutine.
-func watchLateProbeOutcome(ctxErr error, start, cancelAt time.Time, done <-chan probeOutcome) {
+func watchLateProbeOutcome(ctxErr error, start, cancelAt time.Time, done <-chan probeOutcome, clk clock.Clock) {
 	o := <-done
-	cancelLag := time.Since(cancelAt)
-	probeTotal := time.Since(start)
+	cancelLag := clk.Since(cancelAt)
+	probeTotal := clk.Since(start)
 	switch {
 	case o.panicV != nil:
 		slog.Warn("health: probe panicked after ctx cancellation; result discarded",

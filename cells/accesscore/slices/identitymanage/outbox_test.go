@@ -16,6 +16,7 @@ import (
 	"github.com/ghbvf/gocell/cells/accesscore/internal/mem"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/testutil"
 	"github.com/ghbvf/gocell/cells/internal/testoutbox"
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/runtime/auth"
 )
@@ -53,7 +54,7 @@ func withAdmin(req *http.Request) *http.Request {
 }
 
 func TestHandler_UpdatePUT(t *testing.T) {
-	r := setup()
+	r := setup(t)
 	w := httptest.NewRecorder()
 	body := `{"username":"upd","email":"u@b.com","password":"pass1234"}`
 	req := withAdmin(httptest.NewRequest(http.MethodPost, identityPrefix, strings.NewReader(body)))
@@ -72,7 +73,7 @@ func TestHandler_UpdatePUT(t *testing.T) {
 }
 
 func TestHandler_UpdatePUT_BadJSON(t *testing.T) {
-	r := setup()
+	r := setup(t)
 	w := httptest.NewRecorder()
 	req := withAdmin(httptest.NewRequest(http.MethodPut, identityPrefix+"/"+testutil.TestID("some-id"), strings.NewReader("{bad")))
 	req.Header.Set("Content-Type", "application/json")
@@ -81,7 +82,7 @@ func TestHandler_UpdatePUT_BadJSON(t *testing.T) {
 }
 
 func TestHandler_PatchUser(t *testing.T) {
-	r := setup()
+	r := setup(t)
 	w := httptest.NewRecorder()
 	body := `{"username":"patch","email":"p@b.com","password":"pass1234"}`
 	req := withAdmin(httptest.NewRequest(http.MethodPost, identityPrefix, strings.NewReader(body)))
@@ -99,7 +100,7 @@ func TestHandler_PatchUser(t *testing.T) {
 }
 
 func TestHandler_PatchUser_BadJSON(t *testing.T) {
-	r := setup()
+	r := setup(t)
 	w := httptest.NewRecorder()
 	req := withAdmin(httptest.NewRequest(http.MethodPatch, identityPrefix+"/some-id", strings.NewReader("{bad")))
 	req.Header.Set("Content-Type", "application/json")
@@ -108,7 +109,7 @@ func TestHandler_PatchUser_BadJSON(t *testing.T) {
 }
 
 func TestHandler_PatchUser_Status(t *testing.T) {
-	r := setup()
+	r := setup(t)
 	w := httptest.NewRecorder()
 	req := withAdmin(httptest.NewRequest(http.MethodPost, identityPrefix,
 		strings.NewReader(`{"username":"st","email":"s@b.com","password":"pass1234"}`)))
@@ -125,7 +126,7 @@ func TestHandler_PatchUser_Status(t *testing.T) {
 }
 
 func TestHandler_LockUnlock(t *testing.T) {
-	r := setup()
+	r := setup(t)
 	w := httptest.NewRecorder()
 	req := withAdmin(httptest.NewRequest(http.MethodPost, identityPrefix,
 		strings.NewReader(`{"username":"lock","email":"l@b.com","password":"pass1234"}`)))
@@ -148,7 +149,7 @@ func TestHandler_LockUnlock(t *testing.T) {
 }
 
 func TestHandler_Lock_NotFound(t *testing.T) {
-	r := setup()
+	r := setup(t)
 	w := httptest.NewRecorder()
 	req := withAdmin(httptest.NewRequest(http.MethodPost, identityPrefix+"/"+testutil.TestID("no-such-id")+"/lock", nil))
 	r.ServeHTTP(w, req)
@@ -156,7 +157,7 @@ func TestHandler_Lock_NotFound(t *testing.T) {
 }
 
 func TestHandler_Unlock_NotFound(t *testing.T) {
-	r := setup()
+	r := setup(t)
 	w := httptest.NewRecorder()
 	req := withAdmin(httptest.NewRequest(http.MethodPost, identityPrefix+"/"+testutil.TestID("no-such-id")+"/unlock", nil))
 	r.ServeHTTP(w, req)
@@ -167,8 +168,8 @@ func TestHandler_Unlock_NotFound(t *testing.T) {
 
 func TestService_WithEmitter(t *testing.T) {
 	ow := &stubOutboxWriter{}
-	svc, err := NewService(mem.NewUserRepository(), mem.NewSessionRepository(), newIdentityRefreshStore(), slog.Default(),
-		WithEmitter(testoutbox.MustEmitter(t, ow)), WithTokenIssuer(outboxStubIssuer))
+	svc, err := NewService(mem.NewUserRepository(), testutil.RealSessionRepo(t), newIdentityRefreshStore(), slog.Default(),
+		WithEmitter(testoutbox.MustEmitter(t, ow)), WithTokenIssuer(outboxStubIssuer), WithClock(clock.Real()))
 	require.NoError(t, err)
 
 	_, err = svc.Create(adminCtxForService(), CreateInput{
@@ -182,8 +183,8 @@ func TestService_WithEmitter(t *testing.T) {
 
 func TestService_WithTxManager(t *testing.T) {
 	tx := &stubTxRunner{}
-	svc, err := NewService(mem.NewUserRepository(), mem.NewSessionRepository(), newIdentityRefreshStore(), slog.Default(),
-		WithTxManager(tx), WithTokenIssuer(outboxStubIssuer))
+	svc, err := NewService(mem.NewUserRepository(), testutil.RealSessionRepo(t), newIdentityRefreshStore(), slog.Default(),
+		WithTxManager(tx), WithTokenIssuer(outboxStubIssuer), WithClock(clock.Real()))
 	require.NoError(t, err)
 
 	_, err = svc.Create(adminCtxForService(), CreateInput{
@@ -195,8 +196,8 @@ func TestService_WithTxManager(t *testing.T) {
 
 func TestService_Lock_WithOutbox(t *testing.T) {
 	ow := &stubOutboxWriter{}
-	svc, err := NewService(mem.NewUserRepository(), mem.NewSessionRepository(), newIdentityRefreshStore(), slog.Default(),
-		WithEmitter(testoutbox.MustEmitter(t, ow)), WithTokenIssuer(outboxStubIssuer))
+	svc, err := NewService(mem.NewUserRepository(), testutil.RealSessionRepo(t), newIdentityRefreshStore(), slog.Default(),
+		WithEmitter(testoutbox.MustEmitter(t, ow)), WithTokenIssuer(outboxStubIssuer), WithClock(clock.Real()))
 	require.NoError(t, err)
 
 	user, err := svc.Create(adminCtxForService(), CreateInput{
@@ -213,25 +214,25 @@ func TestService_Lock_WithOutbox(t *testing.T) {
 }
 
 func TestService_Lock_EmptyID(t *testing.T) {
-	svc := newTestService()
+	svc := newTestService(t)
 	err := svc.Lock(auth.TestContext("test-admin", []string{"admin"}), "")
 	assert.Error(t, err)
 }
 
 func TestService_Unlock_EmptyID(t *testing.T) {
-	svc := newTestService()
+	svc := newTestService(t)
 	err := svc.Unlock(auth.TestContext("test-admin", []string{"admin"}), "")
 	assert.Error(t, err)
 }
 
 func TestService_Delete_EmptyID(t *testing.T) {
-	svc := newTestService()
+	svc := newTestService(t)
 	err := svc.Delete(auth.TestContext("test-admin", []string{"admin"}), "")
 	assert.Error(t, err)
 }
 
 func TestService_Update_EmptyID(t *testing.T) {
-	svc := newTestService()
+	svc := newTestService(t)
 	_, err := svc.Update(auth.TestContext("test-admin", []string{"admin"}), UpdateInput{})
 	assert.Error(t, err)
 }
@@ -240,8 +241,8 @@ func TestService_Update_EmptyID(t *testing.T) {
 
 func TestService_Create_OutboxWriteError(t *testing.T) {
 	ow := &stubOutboxWriter{err: errors.New("outbox unavailable")}
-	svc, err := NewService(mem.NewUserRepository(), mem.NewSessionRepository(), newIdentityRefreshStore(), slog.Default(),
-		WithEmitter(testoutbox.MustEmitter(t, ow)), WithTxManager(&stubTxRunner{}), WithTokenIssuer(outboxStubIssuer))
+	svc, err := NewService(mem.NewUserRepository(), testutil.RealSessionRepo(t), newIdentityRefreshStore(), slog.Default(),
+		WithEmitter(testoutbox.MustEmitter(t, ow)), WithTxManager(&stubTxRunner{}), WithTokenIssuer(outboxStubIssuer), WithClock(clock.Real()))
 	require.NoError(t, err)
 
 	_, err = svc.Create(adminCtxForService(), CreateInput{
@@ -254,8 +255,10 @@ func TestService_Create_OutboxWriteError(t *testing.T) {
 func TestService_Lock_OutboxWriteError(t *testing.T) {
 	repo := mem.NewUserRepository()
 	// Create user with working outbox
-	svcCreate, err := NewService(repo, mem.NewSessionRepository(), newIdentityRefreshStore(), slog.Default(),
-		WithEmitter(testoutbox.MustEmitter(t, &stubOutboxWriter{})), WithTxManager(&stubTxRunner{}), WithTokenIssuer(outboxStubIssuer))
+	svcCreate, err := NewService(repo, testutil.RealSessionRepo(t),
+		newIdentityRefreshStore(), slog.Default(),
+		WithEmitter(testoutbox.MustEmitter(t, &stubOutboxWriter{})), WithTxManager(&stubTxRunner{}),
+		WithTokenIssuer(outboxStubIssuer), WithClock(clock.Real()))
 	require.NoError(t, err)
 	user, err := svcCreate.Create(adminCtxForService(), CreateInput{
 		Username: "bob", Email: "b@c.d", Password: "hash",
@@ -264,8 +267,10 @@ func TestService_Lock_OutboxWriteError(t *testing.T) {
 
 	// Lock with failing outbox
 	failWriter := &stubOutboxWriter{err: errors.New("outbox unavailable")}
-	svcLock, err := NewService(repo, mem.NewSessionRepository(), newIdentityRefreshStore(), slog.Default(),
-		WithEmitter(testoutbox.MustEmitter(t, failWriter)), WithTxManager(&stubTxRunner{}), WithTokenIssuer(outboxStubIssuer))
+	svcLock, err := NewService(repo, testutil.RealSessionRepo(t),
+		newIdentityRefreshStore(), slog.Default(),
+		WithEmitter(testoutbox.MustEmitter(t, failWriter)), WithTxManager(&stubTxRunner{}),
+		WithTokenIssuer(outboxStubIssuer), WithClock(clock.Real()))
 	require.NoError(t, err)
 
 	err = svcLock.Lock(auth.TestContext("test-admin", []string{"admin"}), user.ID)

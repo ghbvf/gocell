@@ -6,6 +6,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/outbox/outboxtest"
 )
@@ -43,10 +44,11 @@ func TestRabbitMQ_Conformance(t *testing.T) {
 		// subtest's teardown cannot bleed into the next.
 		conn := newIntegrationConnection(t, brokerURL)
 
-		pub := NewPublisher(conn)
+		pub := NewPublisher(conn, WithPublisherClock(clock.Real()))
 		sub := NewSubscriber(conn, SubscriberConfig{
 			DLXExchange:   "test.dlx",
 			PrefetchCount: 1,
+			Clock:         clock.Real(),
 		})
 		t.Cleanup(func() { _ = sub.Close(context.Background()) })
 		// outboxtest.PublishN wraps payloads in a v1 wire envelope, matching

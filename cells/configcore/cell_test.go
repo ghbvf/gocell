@@ -17,6 +17,7 @@ import (
 	"github.com/ghbvf/gocell/cells/configcore/slices/configpublish"
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/cell/celltest"
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/persistence"
@@ -29,9 +30,9 @@ import (
 
 func newTestCell() *ConfigCore {
 	return NewConfigCore(
-		WithConfigRepository(mem.NewConfigRepository()),
-		WithFlagRepository(mem.NewFlagRepository()),
-		WithOutboxDeps(eventbus.New(), nil),
+		WithConfigRepository(mem.NewConfigRepository(clock.Real())),
+		WithFlagRepository(mem.NewFlagRepository(clock.Real())),
+		WithOutboxDeps(eventbus.New(eventbus.WithClock(clock.Real())), nil),
 		WithOutboxDeps(nil, outbox.NoopWriter{}),
 		WithTxManager(persistence.NoopTxRunner{}),
 		WithMetricsProvider(metrics.NopProvider{}),
@@ -44,6 +45,7 @@ func TestConfigCore_Lifecycle(t *testing.T) {
 	deps := cell.Dependencies{
 		Config:         make(map[string]any),
 		DurabilityMode: cell.DurabilityDemo,
+		Clock:          clock.Real(),
 	}
 
 	// Init
@@ -76,6 +78,7 @@ func TestConfigCore_Startup(t *testing.T) {
 	deps := cell.Dependencies{
 		Config:         make(map[string]any),
 		DurabilityMode: cell.DurabilityDemo,
+		Clock:          clock.Real(),
 	}
 	require.NoError(t, c.Init(ctx, deps))
 	require.NoError(t, c.Start(ctx))
@@ -92,7 +95,7 @@ func TestConfigCore_InitDemoMode_RejectsHalfConfiguredPath(t *testing.T) {
 			name: "writer without tx manager",
 			opts: []Option{
 				WithInMemoryDefaults(),
-				WithOutboxDeps(eventbus.New(), nil),
+				WithOutboxDeps(eventbus.New(eventbus.WithClock(clock.Real())), nil),
 				WithOutboxDeps(nil, outbox.NoopWriter{}),
 			},
 		},
@@ -100,7 +103,7 @@ func TestConfigCore_InitDemoMode_RejectsHalfConfiguredPath(t *testing.T) {
 			name: "tx manager without writer",
 			opts: []Option{
 				WithInMemoryDefaults(),
-				WithOutboxDeps(eventbus.New(), nil),
+				WithOutboxDeps(eventbus.New(eventbus.WithClock(clock.Real())), nil),
 				WithTxManager(persistence.NoopTxRunner{}),
 			},
 		},
@@ -109,7 +112,9 @@ func TestConfigCore_InitDemoMode_RejectsHalfConfiguredPath(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			c := NewConfigCore(tt.opts...)
-			err := c.Init(context.Background(), cell.Dependencies{Config: make(map[string]any), DurabilityMode: cell.DurabilityDemo})
+			err := c.Init(context.Background(), cell.Dependencies{
+				Config: make(map[string]any), DurabilityMode: cell.DurabilityDemo, Clock: clock.Real(),
+			})
 			require.Error(t, err)
 			assert.Contains(t, err.Error(), "outboxWriter and txRunner")
 		})
@@ -119,13 +124,14 @@ func TestConfigCore_InitDemoMode_RejectsHalfConfiguredPath(t *testing.T) {
 func TestConfigCore_InitDurableMode_RejectsNoopWriter(t *testing.T) {
 	c := NewConfigCore(
 		WithInMemoryDefaults(),
-		WithOutboxDeps(eventbus.New(), nil),
+		WithOutboxDeps(eventbus.New(eventbus.WithClock(clock.Real())), nil),
 		WithOutboxDeps(nil, outbox.NoopWriter{}),
 		WithTxManager(persistence.NoopTxRunner{}),
 	)
 	deps := cell.Dependencies{
 		Config:         make(map[string]any),
 		DurabilityMode: cell.DurabilityDurable,
+		Clock:          clock.Real(),
 	}
 	err := c.Init(context.Background(), deps)
 	require.Error(t, err)
@@ -137,7 +143,9 @@ func TestConfigCore_InitDurableMode_RejectsNoopWriter(t *testing.T) {
 
 func TestConfigCore_InitDemoMode_NoPublisherNoOutbox_Fails(t *testing.T) {
 	c := NewConfigCore(WithInMemoryDefaults())
-	err := c.Init(context.Background(), cell.Dependencies{Config: make(map[string]any), DurabilityMode: cell.DurabilityDemo})
+	err := c.Init(context.Background(), cell.Dependencies{
+		Config: make(map[string]any), DurabilityMode: cell.DurabilityDemo, Clock: clock.Real(),
+	})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "explicit event sink")
 }
@@ -145,10 +153,12 @@ func TestConfigCore_InitDemoMode_NoPublisherNoOutbox_Fails(t *testing.T) {
 func TestConfigCore_InitDemoMode_WithPublisher_Succeeds(t *testing.T) {
 	c := NewConfigCore(
 		WithInMemoryDefaults(),
-		WithOutboxDeps(eventbus.New(), nil),
+		WithOutboxDeps(eventbus.New(eventbus.WithClock(clock.Real())), nil),
 		WithMetricsProvider(metrics.NopProvider{}),
 	)
-	err := c.Init(context.Background(), cell.Dependencies{Config: make(map[string]any), DurabilityMode: cell.DurabilityDemo})
+	err := c.Init(context.Background(), cell.Dependencies{
+		Config: make(map[string]any), DurabilityMode: cell.DurabilityDemo, Clock: clock.Real(),
+	})
 	require.NoError(t, err)
 }
 
@@ -158,7 +168,9 @@ func TestConfigCore_InitDemoMode_ExplicitNoopOutboxPair_Succeeds(t *testing.T) {
 		WithOutboxDeps(nil, outbox.NoopWriter{}),
 		WithTxManager(persistence.NoopTxRunner{}),
 	)
-	err := c.Init(context.Background(), cell.Dependencies{Config: make(map[string]any), DurabilityMode: cell.DurabilityDemo})
+	err := c.Init(context.Background(), cell.Dependencies{
+		Config: make(map[string]any), DurabilityMode: cell.DurabilityDemo, Clock: clock.Real(),
+	})
 	require.NoError(t, err)
 }
 
@@ -170,7 +182,9 @@ func TestConfigCoreInit_WithEmitter_DirectInjection(t *testing.T) {
 		WithInMemoryDefaults(),
 		WithEmitter(outbox.NewNoopEmitter()),
 	)
-	require.NoError(t, c.Init(context.Background(), cell.Dependencies{Config: make(map[string]any), DurabilityMode: cell.DurabilityDemo}))
+	require.NoError(t, c.Init(context.Background(), cell.Dependencies{
+		Config: make(map[string]any), DurabilityMode: cell.DurabilityDemo, Clock: clock.Real(),
+	}))
 	assert.NotNil(t, c.emitter)
 	assert.Nil(t, c.pendingOutboxPub)
 	assert.Nil(t, c.pendingOutboxWriter)
@@ -182,9 +196,11 @@ func TestConfigCoreInit_WithEmitterAndOutboxDeps_MutuallyExclusive(t *testing.T)
 	c := NewConfigCore(
 		WithInMemoryDefaults(),
 		WithEmitter(outbox.NewNoopEmitter()),
-		WithOutboxDeps(eventbus.New(), nil),
+		WithOutboxDeps(eventbus.New(eventbus.WithClock(clock.Real())), nil),
 	)
-	err := c.Init(context.Background(), cell.Dependencies{Config: make(map[string]any), DurabilityMode: cell.DurabilityDemo})
+	err := c.Init(context.Background(), cell.Dependencies{
+		Config: make(map[string]any), DurabilityMode: cell.DurabilityDemo, Clock: clock.Real(),
+	})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "mutually exclusive")
 }
@@ -201,7 +217,9 @@ func TestConfigCoreInit_WithEmitter_DurableRequiresDurableEmitter(t *testing.T) 
 		WithEmitter(outbox.NewNoopEmitter()), // non-durable
 		WithTxManager(persistence.NoopTxRunner{}),
 	)
-	err = c.Init(context.Background(), cell.Dependencies{Config: make(map[string]any), DurabilityMode: cell.DurabilityDurable})
+	err = c.Init(context.Background(), cell.Dependencies{
+		Config: make(map[string]any), DurabilityMode: cell.DurabilityDurable, Clock: clock.Real(),
+	})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "durable")
 }
@@ -212,6 +230,7 @@ func TestConfigCore_RouteGroups(t *testing.T) {
 	deps := cell.Dependencies{
 		Config:         make(map[string]any),
 		DurabilityMode: cell.DurabilityDemo,
+		Clock:          clock.Real(),
 	}
 	require.NoError(t, c.Init(ctx, deps))
 
@@ -240,6 +259,7 @@ func TestConfigCore_RegisterSubscriptions(t *testing.T) {
 	deps := cell.Dependencies{
 		Config:         make(map[string]any),
 		DurabilityMode: cell.DurabilityDemo,
+		Clock:          clock.Real(),
 	}
 	require.NoError(t, c.Init(ctx, deps))
 
@@ -278,10 +298,11 @@ func initCellWithRouter(t *testing.T) *router.Router {
 	deps := cell.Dependencies{
 		Config:         make(map[string]any),
 		DurabilityMode: cell.DurabilityDemo,
+		Clock:          clock.Real(),
 	}
 	require.NoError(t, c.Init(ctx, deps))
 
-	r := router.MustNew()
+	r := router.MustNew(router.WithRouterClock(clock.Real()))
 	for _, rg := range c.RouteGroups() {
 		rg := rg
 		if rg.Prefix != "" {
@@ -470,10 +491,10 @@ func TestConfigCore_CrossSliceCursorRejection(t *testing.T) {
 func TestConfigCore_CrossSliceCursorRejection_Reverse(t *testing.T) {
 	c := newTestCell()
 	ctx := context.Background()
-	deps := cell.Dependencies{Config: make(map[string]any), DurabilityMode: cell.DurabilityDemo}
+	deps := cell.Dependencies{Config: make(map[string]any), DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()}
 	require.NoError(t, c.Init(ctx, deps))
 
-	r := router.MustNew()
+	r := router.MustNew(router.WithRouterClock(clock.Real()))
 	for _, rg := range c.RouteGroups() {
 		rg := rg
 		if rg.Prefix != "" {
@@ -527,9 +548,9 @@ func TestConfigCore_CrossSliceCursorRejection_Reverse(t *testing.T) {
 // public demo key baked into the source tree.
 func TestConfigCore_InitDurable_RejectsMissingCursorCodec(t *testing.T) {
 	c := NewConfigCore(
-		WithConfigRepository(mem.NewConfigRepository()),
-		WithFlagRepository(mem.NewFlagRepository()),
-		WithOutboxDeps(eventbus.New(), nil),
+		WithConfigRepository(mem.NewConfigRepository(clock.Real())),
+		WithFlagRepository(mem.NewFlagRepository(clock.Real())),
+		WithOutboxDeps(eventbus.New(eventbus.WithClock(clock.Real())), nil),
 		WithOutboxDeps(nil, &recordingConfigWriter{}),
 		WithTxManager(durableTxRunner{}), // non-Nooper; durable-gated CheckNotNoop passes
 		// No WithCursorCodec — durable mode must refuse the demo fallback.
@@ -582,16 +603,16 @@ func mustNewCfgCodec(t *testing.T, key []byte) *query.CursorCodec {
 func TestConfigCore_DurableInit_WithInjectedRepositories(t *testing.T) {
 	writer := &recordingConfigWriter{}
 	c := NewConfigCore(
-		WithConfigRepository(mem.NewConfigRepository()),
-		WithFlagRepository(mem.NewFlagRepository()),
+		WithConfigRepository(mem.NewConfigRepository(clock.Real())),
+		WithFlagRepository(mem.NewFlagRepository(clock.Real())),
 		WithTxManager(durableTxRunner{}), // non-Nooper; durable-gated CheckNotNoop passes
-		WithOutboxDeps(eventbus.New(), writer),
+		WithOutboxDeps(eventbus.New(eventbus.WithClock(clock.Real())), writer),
 		WithCursorCodec(mustNewCfgCodec(t, []byte("wiring-test-cfg-cursor-key-32b!!"))),
 	)
 	// Writer is accumulated into pendingOutboxWriter pre-Init.
 	assert.NotNil(t, c.pendingOutboxWriter, "WithOutboxDeps must populate pendingOutboxWriter")
 	// Init must succeed with explicitly injected repos.
-	require.NoError(t, c.Init(t.Context(), cell.Dependencies{DurabilityMode: cell.DurabilityDurable}))
+	require.NoError(t, c.Init(t.Context(), cell.Dependencies{DurabilityMode: cell.DurabilityDurable, Clock: clock.Real()}))
 	assert.NotNil(t, c.configRepo, "configRepo must be non-nil after Init")
 	assert.NotNil(t, c.flagRepo, "flagRepo must be non-nil after Init")
 }
@@ -625,7 +646,7 @@ func TestConfigCore_DeriveModes(t *testing.T) {
 		},
 	}
 
-	c := NewConfigCore(WithInMemoryDefaults(), WithOutboxDeps(eventbus.New(), nil))
+	c := NewConfigCore(WithInMemoryDefaults(), WithOutboxDeps(eventbus.New(eventbus.WithClock(clock.Real())), nil))
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			runMode, publishMode := c.deriveModes(tt.durability)
@@ -640,7 +661,7 @@ func TestConfigCore_DeriveModes(t *testing.T) {
 // outbox-failopen-rate checker scoped to "configcore".
 func TestConfigCore_HealthCheckers_WithDirectEmitter(t *testing.T) {
 	c := newTestCell()
-	deps := cell.Dependencies{Config: make(map[string]any), DurabilityMode: cell.DurabilityDemo}
+	deps := cell.Dependencies{Config: make(map[string]any), DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()}
 	require.NoError(t, c.Init(context.Background(), deps))
 
 	checkers := c.HealthCheckers()

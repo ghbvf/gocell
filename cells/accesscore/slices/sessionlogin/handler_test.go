@@ -17,7 +17,9 @@ import (
 	"github.com/ghbvf/gocell/cells/accesscore/internal/domain"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/dto"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/mem"
+	"github.com/ghbvf/gocell/cells/accesscore/internal/testutil"
 	"github.com/ghbvf/gocell/kernel/cell/celltest"
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/runtime/auth/refresh"
 	refreshmem "github.com/ghbvf/gocell/runtime/auth/refresh/memstore"
 	"github.com/ghbvf/gocell/runtime/auth/refresh/storetest"
@@ -38,7 +40,8 @@ func newHandlerRefreshStore() refresh.Store {
 // same code path cell_routes.go takes in production. Tests dispatch via
 // mux.ServeHTTP so per-package coverage records both HandleLogin and the
 // RegisterRoutes wiring.
-func setup() http.Handler {
+func setup(t *testing.T) http.Handler {
+	t.Helper()
 	userRepo := mem.NewUserRepository()
 	hash, _ := bcrypt.GenerateFromPassword([]byte("correct-pass"), bcrypt.MinCost)
 	user := &domain.User{
@@ -47,7 +50,8 @@ func setup() http.Handler {
 	}
 	_ = userRepo.Create(context.Background(), user)
 
-	svc := MustNewService(userRepo, mem.NewSessionRepository(), mem.NewRoleRepository(), newHandlerRefreshStore(), testIssuer, slog.Default())
+	svc := MustNewService(userRepo, testutil.RealSessionRepo(t), mem.NewRoleRepository(),
+		newHandlerRefreshStore(), testIssuer, slog.Default(), WithClock(clock.Real()))
 	mux := celltest.NewTestMux()
 	if err := NewHandler(svc).RegisterRoutes(mux); err != nil {
 		panic("RegisterRoutes: " + err.Error())
@@ -156,7 +160,7 @@ func TestHandleLogin(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			h := setup()
+			h := setup(t)
 			w := httptest.NewRecorder()
 			req := httptest.NewRequest(http.MethodPost, loginPath, strings.NewReader(tc.body))
 			req.Header.Set("Content-Type", "application/json")
@@ -187,7 +191,7 @@ func assertBlankFieldError(t *testing.T, body []byte, wantCode, wantField string
 // TestHandler_Login_BlankUsername verifies that submitting an empty username
 // returns 400 + ERR_AUTH_LOGIN_INVALID_INPUT + "username is required".
 func TestHandler_Login_BlankUsername(t *testing.T) {
-	h := setup()
+	h := setup(t)
 	body := `{"username":"","password":"correct-pass"}`
 	w := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, loginPath, strings.NewReader(body))
@@ -201,7 +205,7 @@ func TestHandler_Login_BlankUsername(t *testing.T) {
 // TestHandler_Login_BlankPassword verifies that submitting an empty password
 // returns 400 + ERR_AUTH_LOGIN_INVALID_INPUT + "password is required".
 func TestHandler_Login_BlankPassword(t *testing.T) {
-	h := setup()
+	h := setup(t)
 	body := `{"username":"alice","password":""}`
 	w := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, loginPath, strings.NewReader(body))

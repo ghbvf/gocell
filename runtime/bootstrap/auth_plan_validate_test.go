@@ -14,6 +14,7 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/assembly"
 	"github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/kernel/clock"
 )
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -121,12 +122,13 @@ func TestValidateAuthChainJWTSingleton(t *testing.T) {
 func TestValidateAuthPlanAssemblyMatch(t *testing.T) {
 	t.Parallel()
 
-	asmA := assembly.New(assembly.Config{ID: "asm-match-a", DurabilityMode: cell.DurabilityDemo})
-	asmB := assembly.New(assembly.Config{ID: "asm-match-b", DurabilityMode: cell.DurabilityDemo})
+	asmA := assembly.New(assembly.Config{ID: "asm-match-a", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
+	asmB := assembly.New(assembly.Config{ID: "asm-match-b", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
 
 	t.Run("Match_SameInstance", func(t *testing.T) {
 		t.Parallel()
 		b := New(
+			WithClock(clock.Real()),
 			WithAssembly(asmA),
 			WithListener(cell.PrimaryListener, "127.0.0.1:0",
 				[]cell.ListenerAuth{cell.MustNewAuthJWTFromAssembly(asmA)}),
@@ -138,6 +140,7 @@ func TestValidateAuthPlanAssemblyMatch(t *testing.T) {
 	t.Run("Mismatch_DifferentInstances", func(t *testing.T) {
 		t.Parallel()
 		b := New(
+			WithClock(clock.Real()),
 			WithAssembly(asmA),
 			WithListener(cell.PrimaryListener, "127.0.0.1:0",
 				[]cell.ListenerAuth{cell.MustNewAuthJWTFromAssembly(asmB)}),

@@ -15,7 +15,10 @@ import (
 	"github.com/ghbvf/gocell/cells/accesscore/internal/domain"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/dto"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/mem"
+	"github.com/ghbvf/gocell/cells/accesscore/internal/ports"
+	"github.com/ghbvf/gocell/cells/accesscore/internal/testutil"
 	"github.com/ghbvf/gocell/cells/internal/testoutbox"
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/runtime/auth/refresh"
@@ -51,7 +54,7 @@ var testCredential = []byte("test-fixture-password")
 // --- tests ---
 
 func seedUserDirect(repo *mem.UserRepository, username, passwordHash string) {
-	user, _ := domain.NewUser(username, username+"@test.com", passwordHash)
+	user, _ := domain.NewUser(username, username+"@test.com", passwordHash, time.Now())
 	user.ID = "usr-" + username
 	_ = repo.Create(context.Background(), user)
 }
@@ -59,8 +62,8 @@ func seedUserDirect(repo *mem.UserRepository, username, passwordHash string) {
 func TestService_WithEmitter(t *testing.T) {
 	userRepo := mem.NewUserRepository()
 	ow := &stubOutboxWriter{}
-	svc := MustNewService(userRepo, mem.NewSessionRepository(), mem.NewRoleRepository(),
-		newOutboxRefreshStore(), testIssuer, slog.Default(), WithEmitter(testoutbox.MustEmitter(t, ow)))
+	svc := MustNewService(userRepo, testutil.RealSessionRepo(t), mem.NewRoleRepository(),
+		newOutboxRefreshStore(), testIssuer, slog.Default(), WithEmitter(testoutbox.MustEmitter(t, ow)), WithClock(clock.Real()))
 
 	hash, _ := bcrypt.GenerateFromPassword(testCredential, bcrypt.MinCost)
 	seedUserDirect(userRepo, "alice", string(hash))
@@ -75,8 +78,8 @@ func TestService_WithEmitter(t *testing.T) {
 func TestService_WithTxManager(t *testing.T) {
 	userRepo := mem.NewUserRepository()
 	tx := &stubTxRunner{}
-	svc := MustNewService(userRepo, mem.NewSessionRepository(), mem.NewRoleRepository(),
-		newOutboxRefreshStore(), testIssuer, slog.Default(), WithTxManager(tx))
+	svc := MustNewService(userRepo, testutil.RealSessionRepo(t), mem.NewRoleRepository(),
+		newOutboxRefreshStore(), testIssuer, slog.Default(), WithTxManager(tx), WithClock(clock.Real()))
 
 	hash, _ := bcrypt.GenerateFromPassword(testCredential, bcrypt.MinCost)
 	seedUserDirect(userRepo, "bob", string(hash))
@@ -91,9 +94,9 @@ type failingEmitter struct{ err error }
 
 func (f *failingEmitter) Emit(_ context.Context, _ outbox.Entry) error { return f.err }
 
-// trackingOutboxSessionRepo wraps mem.SessionRepository and records Delete calls.
+// trackingOutboxSessionRepo wraps ports.SessionRepository and records Delete calls.
 type trackingOutboxSessionRepo struct {
-	*mem.SessionRepository
+	ports.SessionRepository
 	deleted []string
 }
 
@@ -108,7 +111,7 @@ func (r *trackingOutboxSessionRepo) Delete(ctx context.Context, id string) error
 // atomicity; explicit cleanup would double-delete in a real durable setup.
 func TestPersistSessionWithRefresh_DurableTx_EmitFails_NoExplicitCleanup(t *testing.T) {
 	userRepo := mem.NewUserRepository()
-	sessionRepo := &trackingOutboxSessionRepo{SessionRepository: mem.NewSessionRepository()}
+	sessionRepo := &trackingOutboxSessionRepo{SessionRepository: testutil.RealSessionRepo(t)}
 	roleRepo := mem.NewRoleRepository()
 
 	emitter := &failingEmitter{err: fmt.Errorf("broker down")}
@@ -117,7 +120,8 @@ func TestPersistSessionWithRefresh_DurableTx_EmitFails_NoExplicitCleanup(t *test
 
 	svc := MustNewService(userRepo, sessionRepo, roleRepo, newOutboxRefreshStore(), testIssuer, slog.Default(),
 		WithEmitter(emitter),
-		WithTxManager(tx))
+		WithTxManager(tx),
+		WithClock(clock.Real()))
 
 	hash, _ := bcrypt.GenerateFromPassword(testCredential, bcrypt.MinCost)
 	seedUserDirect(userRepo, "durable-emit-fail", string(hash))
@@ -136,14 +140,14 @@ func TestPersistSessionWithRefresh_DurableTx_EmitFails_NoExplicitCleanup(t *test
 // This is the mirror case of the durable-tx test above.
 func TestPersistSessionWithRefresh_NoopTxRunner_EmitFails_CleanupRuns(t *testing.T) {
 	userRepo := mem.NewUserRepository()
-	sessionRepo := &trackingOutboxSessionRepo{SessionRepository: mem.NewSessionRepository()}
+	sessionRepo := &trackingOutboxSessionRepo{SessionRepository: testutil.RealSessionRepo(t)}
 	roleRepo := mem.NewRoleRepository()
 
 	emitter := &failingEmitter{err: fmt.Errorf("broker down")}
 	// No WithTxManager → service defaults to NoopTxRunner — isNoopTx returns true.
 
 	svc := MustNewService(userRepo, sessionRepo, roleRepo, newOutboxRefreshStore(), testIssuer, slog.Default(),
-		WithEmitter(emitter))
+		WithEmitter(emitter), WithClock(clock.Real()))
 
 	hash, _ := bcrypt.GenerateFromPassword(testCredential, bcrypt.MinCost)
 	seedUserDirect(userRepo, "noop-emit-fail", string(hash))

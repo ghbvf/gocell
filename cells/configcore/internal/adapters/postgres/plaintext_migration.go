@@ -7,6 +7,7 @@ import (
 	"time"
 
 	configcrypto "github.com/ghbvf/gocell/cells/configcore/internal/crypto"
+	"github.com/ghbvf/gocell/kernel/clock"
 	kcrypto "github.com/ghbvf/gocell/kernel/crypto"
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
@@ -92,21 +93,26 @@ type plaintextMigrator struct {
 	db          DBTX
 	transformer kcrypto.ValueTransformer
 	cfg         PlaintextMigrationConfig
+	clk         clock.Clock
 }
 
 // newPlaintextMigrator creates a migrator backed by the given DBTX and
 // transformer. db must already be in a live transaction (the caller is
 // responsible for Tx management so the migrator can participate in the
 // caller's transaction boundary or run outside one as needed).
-func newPlaintextMigrator(db DBTX, transformer kcrypto.ValueTransformer, cfg PlaintextMigrationConfig) (*plaintextMigrator, error) {
+func newPlaintextMigrator(
+	db DBTX, transformer kcrypto.ValueTransformer,
+	cfg PlaintextMigrationConfig, clk clock.Clock,
+) (*plaintextMigrator, error) {
 	if transformer == nil {
 		return nil, errcode.New(errcode.ErrConfigKeyMissing,
 			"plaintext-migrator: transformer must not be nil")
 	}
+	clock.MustHaveClock(clk, "configcore.newPlaintextMigrator")
 	if cfg.BatchSize <= 0 {
 		cfg.BatchSize = 50
 	}
-	return &plaintextMigrator{db: db, transformer: transformer, cfg: cfg}, nil
+	return &plaintextMigrator{db: db, transformer: transformer, cfg: cfg, clk: clk}, nil
 }
 
 // MigrateConfigEntries scans config_entries for sensitive rows with no
@@ -230,10 +236,12 @@ func (m *plaintextMigrator) waitRateLimit(ctx context.Context) error {
 	if m.cfg.RateLimitDelay <= 0 {
 		return nil
 	}
+	timer := m.clk.NewTimerAt(m.clk.Now().Add(m.cfg.RateLimitDelay))
+	defer timer.Stop()
 	select {
 	case <-ctx.Done():
 		return ctx.Err()
-	case <-time.After(m.cfg.RateLimitDelay):
+	case <-timer.C():
 		return nil
 	}
 }

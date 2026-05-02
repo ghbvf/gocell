@@ -20,6 +20,7 @@ import (
 	"github.com/ghbvf/gocell/cells/accesscore/internal/domain"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/mem"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/ports"
+	kernelclock "github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/query"
 )
@@ -61,6 +62,7 @@ func makeDeps(t *testing.T) BootstrapDeps {
 		UserRepo: mem.NewUserRepository(),
 		RoleRepo: mem.NewRoleRepository(),
 		Logger:   logger,
+		Clock:    kernelclock.Real(),
 	}
 }
 
@@ -207,7 +209,7 @@ func TestBootstrap_SkipsWhenAdminExists(t *testing.T) {
 	cfg := makeCfg(t)
 
 	// Seed an admin user directly to simulate an already-bootstrapped state.
-	adminUser, err := domain.NewUser("admin", "admin@gocell.local", "$2a$12$existinghash")
+	adminUser, err := domain.NewUser("admin", "admin@gocell.local", "$2a$12$existinghash", time.Now())
 	require.NoError(t, err)
 	adminUser.ID = "usr-existing-admin"
 	require.NoError(t, deps.RoleRepo.Create(context.Background(), &domain.Role{
@@ -241,6 +243,7 @@ func TestBootstrap_PgRaceDuplicateUserSilentSkip(t *testing.T) {
 		UserRepo: &duplicateUserRepo{inner: mem.NewUserRepository()},
 		RoleRepo: roleRepo,
 		Logger:   logger,
+		Clock:    kernelclock.Real(),
 	}
 	cfg := bootstrapConfig{
 		CredentialPath: filepath.Join(t.TempDir(), "initial_admin_password"),
@@ -345,11 +348,11 @@ func TestBootstrap_OrphanUserRecoveryResumesAssign(t *testing.T) {
 	const crashedRunID = "44444444-4444-4444-8444-444444444477"
 	// Simulate the "previous run crashed between Create and AssignToUser"
 	// state: admin username row exists, but no admin role assignment.
-	orphan, err := domain.NewUser("admin", "admin@gocell.local", "$2a$12$orphanedhashFromPrevRun")
+	orphan, err := domain.NewUser("admin", "admin@gocell.local", "$2a$12$orphanedhashFromPrevRun", time.Now())
 	require.NoError(t, err)
 	orphan.ID = crashedRunID
-	orphan.MarkProvisionPending(domain.UserSourceBootstrap)
-	orphan.MarkPasswordResetRequired()
+	orphan.MarkProvisionPending(domain.UserSourceBootstrap, time.Now())
+	orphan.MarkPasswordResetRequired(time.Now())
 	require.NoError(t, userRepo.Create(context.Background(), orphan))
 	count, err := roleRepo.CountByRole(context.Background(), domain.RoleAdmin)
 	require.NoError(t, err)
@@ -402,6 +405,7 @@ func TestBootstrap_NoPlaintextInAnyLog(t *testing.T) {
 		UserRepo: mem.NewUserRepository(),
 		RoleRepo: mem.NewRoleRepository(),
 		Logger:   logger,
+		Clock:    kernelclock.Real(),
 	}
 	knownPW := knownPassword(t)
 	cfg := bootstrapConfig{
@@ -465,31 +469,31 @@ func TestBootstrap_NewBootstrapperValidatesInput(t *testing.T) {
 	}{
 		{
 			name:    "nil userRepo",
-			deps:    BootstrapDeps{UserRepo: nil, RoleRepo: validRoleRepo, Logger: logger},
+			deps:    BootstrapDeps{UserRepo: nil, RoleRepo: validRoleRepo, Logger: logger, Clock: kernelclock.Real()},
 			cfg:     bootstrapConfig{},
 			wantErr: "UserRepo",
 		},
 		{
 			name:    "nil roleRepo",
-			deps:    BootstrapDeps{UserRepo: validUserRepo, RoleRepo: nil, Logger: logger},
+			deps:    BootstrapDeps{UserRepo: validUserRepo, RoleRepo: nil, Logger: logger, Clock: kernelclock.Real()},
 			cfg:     bootstrapConfig{},
 			wantErr: "RoleRepo",
 		},
 		{
 			name:    "nil logger",
-			deps:    BootstrapDeps{UserRepo: validUserRepo, RoleRepo: validRoleRepo, Logger: nil},
+			deps:    BootstrapDeps{UserRepo: validUserRepo, RoleRepo: validRoleRepo, Logger: nil, Clock: kernelclock.Real()},
 			cfg:     bootstrapConfig{},
 			wantErr: "Logger",
 		},
 		{
 			name:    "negative TTL",
-			deps:    BootstrapDeps{UserRepo: validUserRepo, RoleRepo: validRoleRepo, Logger: logger},
+			deps:    BootstrapDeps{UserRepo: validUserRepo, RoleRepo: validRoleRepo, Logger: logger, Clock: kernelclock.Real()},
 			cfg:     bootstrapConfig{TTL: -time.Minute},
 			wantErr: "TTL",
 		},
 		{
 			name:    "relative env credential path",
-			deps:    BootstrapDeps{UserRepo: validUserRepo, RoleRepo: validRoleRepo, Logger: logger},
+			deps:    BootstrapDeps{UserRepo: validUserRepo, RoleRepo: validRoleRepo, Logger: logger, Clock: kernelclock.Real()},
 			cfg:     bootstrapConfig{},
 			wantErr: "absolute",
 			envDir:  "relative/path",

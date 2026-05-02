@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/runtime/auth"
 )
@@ -37,7 +38,7 @@ type Registry struct {
 	audiences []string
 	keyProv   auth.SigningKeyProvider
 	keyStore  auth.VerificationKeyStore
-	clock     func() time.Time
+	clk       clock.Clock
 	realMode  bool
 }
 
@@ -58,8 +59,9 @@ type Config struct {
 	// KeyStore provides public keys for JWT verification. May be nil in non-real mode.
 	KeyStore auth.VerificationKeyStore
 
-	// Clock overrides the time source. Nil defaults to time.Now.
-	Clock func() time.Time
+	// Clock is required; pass clock.Real() at the composition root or
+	// clockmock.New(...) in tests. Panics on nil or typed-nil clock.
+	Clock clock.Clock
 
 	// RealMode enforces non-empty Issuer and Audiences at construction time.
 	// Set to true in production; leave false for dev/test.
@@ -94,17 +96,14 @@ func New(cfg Config) (*Registry, error) {
 		}
 	}
 
-	clock := cfg.Clock
-	if clock == nil {
-		clock = time.Now
-	}
+	clock.MustHaveClock(cfg.Clock, "auth/config.NewRegistry")
 
 	return &Registry{
 		issuer:    issuer,
 		audiences: auds,
 		keyProv:   cfg.KeyProv,
 		keyStore:  cfg.KeyStore,
-		clock:     clock,
+		clk:       cfg.Clock,
 		realMode:  cfg.RealMode,
 	}, nil
 }
@@ -131,9 +130,9 @@ func (r *Registry) SigningKeyProvider() auth.SigningKeyProvider { return r.keyPr
 // May be nil when the Registry was constructed in non-real mode without keys.
 func (r *Registry) VerificationKeyStore() auth.VerificationKeyStore { return r.keyStore }
 
-// Clock returns the time function used for token timestamps.
-// Always non-nil — defaults to time.Now when not configured.
-func (r *Registry) Clock() func() time.Time { return r.clock }
+// Clock returns the clock used for token timestamps.
+// Always non-nil — required at construction time via Config.Clock.
+func (r *Registry) Clock() clock.Clock { return r.clk }
 
 // ---- FromEnv ----
 
@@ -144,7 +143,7 @@ type envConfig struct {
 	realMode bool
 	keyProv  auth.SigningKeyProvider
 	keyStore auth.VerificationKeyStore
-	clock    func() time.Time
+	clock    clock.Clock
 }
 
 // WithRealMode enables real-mode validation (fail-fast on missing env vars).
@@ -181,9 +180,9 @@ func WithKeySeparate(prov auth.SigningKeyProvider, store auth.VerificationKeySto
 	}
 }
 
-// WithEnvClock overrides the time source for a FromEnv-built Registry.
-func WithEnvClock(fn func() time.Time) EnvOption {
-	return func(c *envConfig) { c.clock = fn }
+// WithEnvClock overrides the clock for a FromEnv-built Registry.
+func WithEnvClock(clk clock.Clock) EnvOption {
+	return func(c *envConfig) { c.clock = clk }
 }
 
 // envVarIssuer is the environment variable for the JWT issuer.
@@ -245,12 +244,11 @@ func NewJWTIssuerFromRegistry(reg *Registry, ttl time.Duration, opts ...auth.JWT
 	}
 
 	// Merge registry-derived settings first, then apply caller opts so tests
-	// can override issuer-clock or default-audience behavior.
+	// can override default-audience behavior.
 	baseOpts := []auth.JWTIssuerOption{
 		auth.WithIssuerAudiencesFromSlice(reg.Audiences()),
-		auth.WithIssuerClock(reg.Clock()),
 	}
-	return auth.NewJWTIssuer(reg.keyProv, reg.issuer, ttl, append(baseOpts, opts...)...)
+	return auth.NewJWTIssuer(reg.keyProv, reg.issuer, ttl, reg.Clock(), append(baseOpts, opts...)...)
 }
 
 // NewJWTVerifierFromRegistry constructs a *auth.JWTVerifier whose expected
@@ -275,7 +273,6 @@ func NewJWTVerifierFromRegistry(reg *Registry, opts ...auth.JWTVerifierOption) (
 		// auds is guaranteed non-empty by the check above; auds[1:] is the zero-length slice when len==1.
 		auth.WithExpectedAudiences(auds[0], auds[1:]...),
 		auth.WithExpectedIssuer(reg.issuer),
-		auth.WithVerifierClock(reg.Clock()),
 	}
-	return auth.NewJWTVerifier(reg.keyStore, append(baseOpts, opts...)...)
+	return auth.NewJWTVerifier(reg.keyStore, reg.Clock(), append(baseOpts, opts...)...)
 }

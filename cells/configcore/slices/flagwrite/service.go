@@ -13,12 +13,12 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"time"
 
 	"github.com/google/uuid"
 
 	"github.com/ghbvf/gocell/cells/configcore/internal/domain"
 	"github.com/ghbvf/gocell/cells/configcore/internal/ports"
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/validation"
@@ -37,14 +37,18 @@ type Service struct {
 	repo     ports.FlagRepository
 	txRunner persistence.TxRunner
 	logger   *slog.Logger
+	clock    clock.Clock
 }
 
 // NewService creates a flag-write Service.
-func NewService(repo ports.FlagRepository, logger *slog.Logger, opts ...Option) (*Service, error) {
+// clk must be non-nil; pass clock.Real() in production and clockmock.New() in tests.
+func NewService(repo ports.FlagRepository, logger *slog.Logger, clk clock.Clock, opts ...Option) (*Service, error) {
+	clock.MustHaveClock(clk, "flagwrite.NewService")
 	s := &Service{
 		repo:     repo,
 		txRunner: persistence.NoopTxRunner{},
 		logger:   logger,
+		clock:    clk,
 	}
 	for _, o := range opts {
 		o(s)
@@ -76,7 +80,7 @@ func (s *Service) Create(ctx context.Context, input CreateInput) (*domain.Featur
 		return nil, err
 	}
 
-	now := time.Now()
+	now := s.clock.Now()
 	flag := &domain.FeatureFlag{
 		ID:                "flg-" + uuid.NewString(),
 		Key:               input.Key,

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	ordercell "github.com/ghbvf/gocell/examples/todoorder/cells/ordercell"
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/runtime/auth"
 )
 
@@ -40,11 +41,11 @@ func issueToken(subject string, rolesCSV string, ttl time.Duration) (string, err
 	if audience == "" {
 		return "", fmt.Errorf("GOCELL_JWT_AUDIENCE must be set")
 	}
-	keySet, err := auth.LoadKeySetFromEnv()
+	keySet, err := auth.LoadKeySetFromEnv(clock.Real())
 	if err != nil {
 		return "", fmt.Errorf("load JWT key set from environment: %w", err)
 	}
-	issuer, err := auth.NewJWTIssuer(keySet, issuerName, ttl,
+	issuer, err := auth.NewJWTIssuer(keySet, issuerName, ttl, clock.Real(),
 		auth.WithIssuerAudiencesFromSlice([]string{audience}))
 	if err != nil {
 		return "", fmt.Errorf("create JWT issuer: %w", err)

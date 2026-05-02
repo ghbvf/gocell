@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
@@ -24,8 +25,8 @@ type sweepConfig struct {
 	// falls back to ResolveCredentialPath("") semantics (GOCELL_STATE_DIR env var
 	// → /run/gocell/initial_admin_password).
 	CredentialPath string
-	// Clock supplies "now" for expiry comparison. nil → realClock{}.
-	Clock Clock
+	// Clock supplies "now" for expiry comparison. nil → clock.Real().
+	Clock clock.Clock
 	// Scheduler is used when constructing the returned cleaner worker. nil → realScheduler{}.
 	Scheduler Scheduler
 	// Logger is optional; nil falls back to slog.Default().
@@ -65,9 +66,7 @@ func sweep(ctx context.Context, cfg sweepConfig) (sweepResult, error) {
 		cfg.Logger = slog.Default()
 	}
 	clk := cfg.Clock
-	if clk == nil {
-		clk = realClock{}
-	}
+	clock.MustHaveClock(clk, "initialadmin.sweep")
 
 	credPath, err := resolveSweepCredentialPath(cfg.CredentialPath)
 	if err != nil {

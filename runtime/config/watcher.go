@@ -28,6 +28,7 @@ import (
 
 	"github.com/fsnotify/fsnotify"
 
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/lifecycle"
 )
 
@@ -58,6 +59,7 @@ type watcherConfig struct {
 	metrics      WatcherCollector
 	drainTimeout time.Duration
 	symPivotPoll time.Duration // polling interval for symlink pivot detection
+	clock        clock.Clock   // required: injected via NewWatcher
 }
 
 const (
@@ -162,8 +164,8 @@ type Watcher struct {
 
 	cfg           watcherConfig
 	lastResolved  string // last resolved symlink target
-	debounceTimer *time.Timer
-	maxTimer      *time.Timer
+	debounceTimer clock.Timer
+	maxTimer      clock.Timer
 	pendingPivot  bool           // true if any coalesced event was a symlink pivot
 	debounceMu    sync.Mutex     // protects timer + pendingPivot manipulation
 	closed        atomic.Bool    // admission gate: true after Close() starts
@@ -175,7 +177,7 @@ type Watcher struct {
 // NewWatcher creates a Watcher for the given file path. The watcher monitors
 // the parent directory and filters events for the target filename.
 // The watcher does not start until Start is called.
-func NewWatcher(path string, opts ...WatcherOption) (*Watcher, error) {
+func NewWatcher(path string, clk clock.Clock, opts ...WatcherOption) (*Watcher, error) {
 	absPath, err := filepath.Abs(path)
 	if err != nil {
 		return nil, fmt.Errorf("config: abs path %s: %w", path, err)
@@ -197,6 +199,8 @@ func NewWatcher(path string, opts ...WatcherOption) (*Watcher, error) {
 	for _, o := range opts {
 		o(&cfg)
 	}
+	clock.MustHaveClock(clk, "config.NewWatcher")
+	cfg.clock = clk
 
 	// Resolve initial symlink target for pivot detection.
 	resolved, _ := filepath.EvalSymlinks(absPath)
@@ -307,8 +311,8 @@ func (w *Watcher) symlinkPivotTicker() (<-chan time.Time, func()) {
 			// no-op: polling is disabled so there is no ticker to stop.
 		}
 	}
-	t := time.NewTicker(w.cfg.symPivotPoll)
-	return t.C, t.Stop
+	t := w.cfg.clock.NewTicker(w.cfg.symPivotPoll)
+	return t.C(), t.Stop
 }
 
 func (w *Watcher) handleWatcherEvent(event fsnotify.Event) {
@@ -317,7 +321,7 @@ func (w *Watcher) handleWatcherEvent(event fsnotify.Event) {
 		return
 	}
 	w.cfg.metrics.RecordEvent(w.eventType(event, symPivot))
-	w.cfg.metrics.RecordLastEventTimestamp(time.Now())
+	w.cfg.metrics.RecordLastEventTimestamp(w.cfg.clock.Now())
 	w.scheduleCallback(symPivot)
 }
 
@@ -326,7 +330,7 @@ func (w *Watcher) handleSymlinkPivotTick() {
 		return
 	}
 	w.cfg.metrics.RecordEvent(EventTypeSymlinkPivot)
-	w.cfg.metrics.RecordLastEventTimestamp(time.Now())
+	w.cfg.metrics.RecordLastEventTimestamp(w.cfg.clock.Now())
 	w.scheduleCallback(true)
 }
 
@@ -417,11 +421,11 @@ func (w *Watcher) scheduleCallback(symPivot bool) {
 		w.debounceTimer.Stop()
 		w.cfg.metrics.RecordDebounceCoalesced()
 	}
-	w.debounceTimer = time.AfterFunc(w.cfg.debounce, w.firePendingCallbacks)
+	w.debounceTimer = w.cfg.clock.AfterFunc(w.cfg.clock.Now().Add(w.cfg.debounce), w.firePendingCallbacks)
 
 	// Start max-debounce ceiling timer if not already running.
 	if w.maxTimer == nil && w.cfg.maxDebounce > 0 {
-		w.maxTimer = time.AfterFunc(w.cfg.maxDebounce, w.firePendingCallbacks)
+		w.maxTimer = w.cfg.clock.AfterFunc(w.cfg.clock.Now().Add(w.cfg.maxDebounce), w.firePendingCallbacks)
 	}
 }
 

@@ -11,6 +11,8 @@ import (
 
 	"github.com/ghbvf/gocell/cells/accesscore/internal/domain"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/ports"
+	"github.com/ghbvf/gocell/kernel/clock"
+	"github.com/ghbvf/gocell/kernel/clock/clockmock"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/query"
 	"github.com/ghbvf/gocell/runtime/auth"
@@ -61,8 +63,8 @@ var _ ports.RoleRepository = (*stubRoleRepo)(nil)
 
 func newTestIssuer(t *testing.T) (*auth.JWTIssuer, *auth.KeySet) {
 	t.Helper()
-	keySet, _, _ := auth.MustNewTestKeySet()
-	issuer, err := auth.NewJWTIssuer(keySet, "gocell-accesscore", auth.DefaultAccessTokenTTL,
+	keySet, _, _ := auth.MustNewTestKeySet(clock.Real())
+	issuer, err := auth.NewJWTIssuer(keySet, "gocell-accesscore", auth.DefaultAccessTokenTTL, clock.Real(),
 		auth.WithIssuerAudiencesFromSlice([]string{"gocell"}))
 	require.NoError(t, err)
 	return issuer, keySet
@@ -76,6 +78,7 @@ func TestMintAccess_Success(t *testing.T) {
 			{ID: "r1", Name: "admin"},
 			{ID: "r2", Name: "auditor"},
 		}},
+		Clk: clock.Real(),
 	}
 	req := Request{UserID: "usr-1", SessionID: "sess-1", PasswordResetRequired: false}
 
@@ -92,6 +95,7 @@ func TestMintAccess_RoleFetchFailure_ReturnsErrAuthRoleFetchFailed(t *testing.T)
 	deps := Deps{
 		Issuer:   issuer,
 		RoleRepo: &stubRoleRepo{err: repoErr},
+		Clk:      clock.Real(),
 	}
 	req := Request{UserID: "usr-1", SessionID: "sess-1"}
 
@@ -114,6 +118,7 @@ func TestMintAccess_EmptyRoles_StillMints(t *testing.T) {
 	deps := Deps{
 		Issuer:   issuer,
 		RoleRepo: &stubRoleRepo{roles: []*domain.Role{}},
+		Clk:      clock.Real(),
 	}
 	req := Request{UserID: "usr-noroles", SessionID: "sess-1"}
 
@@ -129,7 +134,7 @@ func TestMintAccess_DeterministicClock(t *testing.T) {
 	deps := Deps{
 		Issuer:   issuer,
 		RoleRepo: &stubRoleRepo{roles: []*domain.Role{{ID: "r1", Name: "admin"}}},
-		Now:      func() time.Time { return fixed },
+		Clk:      clockmock.New(fixed),
 	}
 	req := Request{UserID: "usr-1", SessionID: "sess-1"}
 
@@ -143,6 +148,7 @@ func TestMintAccess_PasswordResetFlagPropagates(t *testing.T) {
 	deps := Deps{
 		Issuer:   issuer,
 		RoleRepo: &stubRoleRepo{roles: []*domain.Role{{ID: "r1", Name: "admin"}}},
+		Clk:      clock.Real(),
 	}
 	req := Request{UserID: "usr-1", SessionID: "sess-1", PasswordResetRequired: true}
 
@@ -150,7 +156,7 @@ func TestMintAccess_PasswordResetFlagPropagates(t *testing.T) {
 	require.NoError(t, err)
 
 	// Share the issuer's keySet with the verifier so signature validates.
-	verifier, err := auth.NewJWTVerifier(keySet, auth.WithExpectedAudiences("gocell"))
+	verifier, err := auth.NewJWTVerifier(keySet, clock.Real(), auth.WithExpectedAudiences("gocell"))
 	require.NoError(t, err)
 	claims, err := verifier.VerifyIntent(context.Background(), res.AccessToken, auth.TokenIntentAccess)
 	require.NoError(t, err)
@@ -165,6 +171,7 @@ func TestMintAccess_AccessTokenIssueFailure(t *testing.T) {
 	deps := Deps{
 		Issuer:   &stubIssuer{accessErr: accessErr},
 		RoleRepo: &stubRoleRepo{roles: []*domain.Role{{ID: "r1", Name: "admin"}}},
+		Clk:      clock.Real(),
 	}
 	req := Request{UserID: "usr-1", SessionID: "sess-1"}
 

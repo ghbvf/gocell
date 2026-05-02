@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/validation"
 )
@@ -100,11 +101,13 @@ type lockerImpl struct {
 // N active locks = 1 manager goroutine + O(N) heap.
 //
 // ref: plan "共享 manager goroutine" section
-func New(driver Driver, opts ...Option) (Locker, error) {
+func New(driver Driver, clk clock.Clock, opts ...Option) (Locker, error) {
 	if validation.IsNilInterface(driver) {
 		return nil, errcode.New(errcode.ErrValidationFailed, "distlock.New: driver must not be nil")
 	}
+	clock.MustHaveClock(clk, "distlock.New")
 	cfg := defaultConfig()
+	cfg.clock = clk
 	for _, o := range opts {
 		o(&cfg)
 	}
@@ -118,8 +121,8 @@ func New(driver Driver, opts ...Option) (Locker, error) {
 }
 
 // MustNew is the static-wiring variant of New.
-func MustNew(driver Driver, opts ...Option) Locker {
-	l, err := New(driver, opts...)
+func MustNew(driver Driver, clk clock.Clock, opts ...Option) Locker {
+	l, err := New(driver, clk, opts...)
 	if err != nil {
 		panic(err.Error())
 	}

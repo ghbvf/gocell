@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/ghbvf/gocell/cells/configcore/internal/domain"
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/query"
 )
@@ -53,7 +54,7 @@ func TestConfigRepository_Create(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			repo := NewConfigRepository()
+			repo := NewConfigRepository(clock.Real())
 			if tc.setup != nil {
 				tc.setup(repo)
 			}
@@ -72,7 +73,7 @@ func TestConfigRepository_Create(t *testing.T) {
 }
 
 func TestConfigRepository_GetByKey(t *testing.T) {
-	repo := NewConfigRepository()
+	repo := NewConfigRepository(clock.Real())
 	ctx := context.Background()
 
 	now := time.Now()
@@ -97,7 +98,7 @@ func TestConfigRepository_GetByKey(t *testing.T) {
 }
 
 func TestConfigRepository_Update(t *testing.T) {
-	repo := NewConfigRepository()
+	repo := NewConfigRepository(clock.Real())
 	ctx := context.Background()
 
 	now := time.Now()
@@ -128,7 +129,7 @@ func TestConfigRepository_Update(t *testing.T) {
 }
 
 func TestConfigRepository_UpdateForRollback(t *testing.T) {
-	repo := NewConfigRepository()
+	repo := NewConfigRepository(clock.Real())
 	ctx := context.Background()
 
 	now := time.Now()
@@ -156,7 +157,7 @@ func TestConfigRepository_UpdateForRollback(t *testing.T) {
 }
 
 func TestConfigRepository_Delete(t *testing.T) {
-	repo := NewConfigRepository()
+	repo := NewConfigRepository(clock.Real())
 	ctx := context.Background()
 
 	require.NoError(t, repo.Create(ctx, &domain.ConfigEntry{
@@ -180,7 +181,7 @@ func TestConfigRepository_Delete(t *testing.T) {
 }
 
 func TestConfigRepository_List_SortByValue(t *testing.T) {
-	repo := NewConfigRepository()
+	repo := NewConfigRepository(clock.Real())
 	ctx := context.Background()
 	now := time.Now()
 
@@ -213,7 +214,7 @@ func TestConfigRepository_List_SortByValue(t *testing.T) {
 }
 
 func TestConfigRepository_List_SortByVersion(t *testing.T) {
-	repo := NewConfigRepository()
+	repo := NewConfigRepository(clock.Real())
 	ctx := context.Background()
 	now := time.Now()
 
@@ -246,7 +247,7 @@ func TestConfigRepository_List_SortByVersion(t *testing.T) {
 }
 
 func TestConfigRepository_List_SortByKey(t *testing.T) {
-	repo := NewConfigRepository()
+	repo := NewConfigRepository(clock.Real())
 	ctx := context.Background()
 	now := time.Now()
 
@@ -274,7 +275,7 @@ func TestConfigRepository_List_SortByKey(t *testing.T) {
 }
 
 func TestConfigRepository_List_SortByCreatedAt(t *testing.T) {
-	repo := NewConfigRepository()
+	repo := NewConfigRepository(clock.Real())
 	ctx := context.Background()
 	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 
@@ -302,7 +303,7 @@ func TestConfigRepository_List_SortByCreatedAt(t *testing.T) {
 }
 
 func TestConfigRepository_List_SortByUpdatedAt(t *testing.T) {
-	repo := NewConfigRepository()
+	repo := NewConfigRepository(clock.Real())
 	ctx := context.Background()
 	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 
@@ -330,7 +331,7 @@ func TestConfigRepository_List_SortByUpdatedAt(t *testing.T) {
 }
 
 func TestConfigRepository_List_UnknownField(t *testing.T) {
-	repo := NewConfigRepository()
+	repo := NewConfigRepository(clock.Real())
 	ctx := context.Background()
 
 	require.NoError(t, repo.Create(ctx, &domain.ConfigEntry{
@@ -350,7 +351,7 @@ func TestConfigRepository_List_UnknownField(t *testing.T) {
 }
 
 func TestConfigRepository_List_CursorPastEnd(t *testing.T) {
-	repo := NewConfigRepository()
+	repo := NewConfigRepository(clock.Real())
 	ctx := context.Background()
 	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 
@@ -373,7 +374,7 @@ func TestConfigRepository_List_CursorPastEnd(t *testing.T) {
 }
 
 func TestConfigRepository_List_WithCursor(t *testing.T) {
-	repo := NewConfigRepository()
+	repo := NewConfigRepository(clock.Real())
 	ctx := context.Background()
 	now := time.Now()
 
@@ -411,7 +412,7 @@ func TestConfigRepository_List_WithCursor(t *testing.T) {
 }
 
 func TestConfigRepository_List_DESC(t *testing.T) {
-	repo := NewConfigRepository()
+	repo := NewConfigRepository(clock.Real())
 	ctx := context.Background()
 	now := time.Now()
 
@@ -439,7 +440,7 @@ func TestConfigRepository_List_DESC(t *testing.T) {
 }
 
 func TestConfigRepository_List_CursorDESC(t *testing.T) {
-	repo := NewConfigRepository()
+	repo := NewConfigRepository(clock.Real())
 	ctx := context.Background()
 	now := time.Now()
 
@@ -470,7 +471,7 @@ func TestConfigRepository_List_CursorDESC(t *testing.T) {
 }
 
 func TestConfigRepository_List_VersionCursor(t *testing.T) {
-	repo := NewConfigRepository()
+	repo := NewConfigRepository(clock.Real())
 	ctx := context.Background()
 	now := time.Now()
 
@@ -503,7 +504,7 @@ func TestConfigRepository_List_VersionCursor(t *testing.T) {
 }
 
 func TestConfigRepository_PublishVersion_And_GetVersion(t *testing.T) {
-	repo := NewConfigRepository()
+	repo := NewConfigRepository(clock.Real())
 	ctx := context.Background()
 
 	require.NoError(t, repo.PublishVersion(ctx, &domain.ConfigVersion{
@@ -526,7 +527,7 @@ func TestConfigRepository_PublishVersion_And_GetVersion(t *testing.T) {
 }
 
 func TestConfigRepository_List_SubsecondPrecision_CreatedAt(t *testing.T) {
-	repo := NewConfigRepository()
+	repo := NewConfigRepository(clock.Real())
 	ctx := context.Background()
 
 	base := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
@@ -554,7 +555,7 @@ func TestConfigRepository_List_SubsecondPrecision_CreatedAt(t *testing.T) {
 }
 
 func TestConfigRepository_List_SubsecondPrecision_UpdatedAt(t *testing.T) {
-	repo := NewConfigRepository()
+	repo := NewConfigRepository(clock.Real())
 	ctx := context.Background()
 
 	base := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
@@ -585,7 +586,7 @@ func TestConfigRepository_List_SubsecondPrecision_UpdatedAt(t *testing.T) {
 // TestConfigRepository_ConcurrentCRUDAndList verifies that concurrent
 // CRUD and List calls do not race and maintain semantic invariants.
 func TestConfigRepository_ConcurrentCRUDAndList(t *testing.T) {
-	repo := NewConfigRepository()
+	repo := NewConfigRepository(clock.Real())
 	ctx := context.Background()
 
 	const writers = 5
@@ -649,7 +650,7 @@ func TestConfigRepository_ConcurrentCRUDAndList(t *testing.T) {
 // TestConcurrentUpdate_NoLostWrite verifies that concurrent Update calls on the
 // same key each increment the version exactly once — no lost writes under race.
 func TestConcurrentUpdate_NoLostWrite(t *testing.T) {
-	repo := NewConfigRepository()
+	repo := NewConfigRepository(clock.Real())
 	now := time.Now()
 	_ = repo.Create(context.Background(), &domain.ConfigEntry{
 		ID: "cfg-1", Key: "k", Value: "v0", Version: 1,

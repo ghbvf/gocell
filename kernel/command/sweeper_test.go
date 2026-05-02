@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.uber.org/goleak"
 
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/command"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 )
@@ -274,6 +275,7 @@ func TestSweeper_Start_CtxCancelExits(t *testing.T) {
 		Scanner:  scanner,
 		Queue:    q,
 		Interval: testtime.D10ms,
+		Clk:      clock.Real(),
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
@@ -292,6 +294,7 @@ func TestSweeper_Stop_Idempotent(t *testing.T) {
 	s := &command.Sweeper{
 		Scanner: &mockScanner{},
 		Queue:   &mockAckQueue{},
+		Clk:     clock.Real(),
 	}
 	// Stop is a no-op regardless of state.
 	assert.NoError(t, s.Stop(context.Background()))
@@ -301,13 +304,11 @@ func TestSweeper_Stop_Idempotent(t *testing.T) {
 func TestSweeper_Start_InvokesQueueAckOnExpired(t *testing.T) {
 	defer goleak.VerifyNone(t)
 
+	// created is well in the past so the entry is expired relative to clock.Real().Now().
 	created := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	expiredEntry := command.NewEntry("cmd-expired", "dev-1", "reboot", []byte(`{}`), command.Timeouts{
 		OverallDeadline: testtime.D1min,
 	}, created)
-
-	// Fix the clock so the entry appears expired immediately.
-	fixedNow := created.Add(testtime.D2h)
 
 	scanner := &mockScanner{entries: []command.Entry{expiredEntry}}
 	q := &mockAckQueue{}
@@ -317,7 +318,7 @@ func TestSweeper_Start_InvokesQueueAckOnExpired(t *testing.T) {
 		Queue:    q,
 		Filter:   command.ScanFilter{DeviceID: "dev-1"},
 		Interval: testtime.D10ms,
-		Now:      func() time.Time { return fixedNow },
+		Clk:      clock.Real(),
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -347,6 +348,7 @@ func TestSweeper_Start_PropagatesScanFilter(t *testing.T) {
 		Queue:    q,
 		Filter:   filter,
 		Interval: testtime.D10ms,
+		Clk:      clock.Real(),
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -381,6 +383,7 @@ func TestSweeper_Start_OnError_Callback(t *testing.T) {
 		Scanner:  scanner,
 		Queue:    q,
 		Interval: testtime.D10ms,
+		Clk:      clock.Real(),
 		OnError: func(err error) {
 			errMu.Lock()
 			defer errMu.Unlock()
@@ -409,12 +412,11 @@ func TestSweeper_Start_OnError_Callback(t *testing.T) {
 func TestSweeper_Start_AckErrorForwardedToOnError(t *testing.T) {
 	defer goleak.VerifyNone(t)
 
+	// created is well in the past so the entry is expired relative to clock.Real().Now().
 	created := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	expiredEntry := command.NewEntry("cmd-expired", "dev-1", "reboot", []byte(`{}`), command.Timeouts{
 		OverallDeadline: testtime.D1min,
 	}, created)
-
-	fixedNow := created.Add(testtime.D2h)
 
 	scanner := &mockScanner{entries: []command.Entry{expiredEntry}}
 	q := &mockAckQueue{err: errors.New("ack rejected")}
@@ -427,7 +429,7 @@ func TestSweeper_Start_AckErrorForwardedToOnError(t *testing.T) {
 		Scanner:  scanner,
 		Queue:    q,
 		Interval: testtime.D10ms,
-		Now:      func() time.Time { return fixedNow },
+		Clk:      clock.Real(),
 		OnError: func(err error) {
 			errMu.Lock()
 			defer errMu.Unlock()
@@ -453,9 +455,9 @@ func TestSweeper_Start_AckErrorForwardedToOnError(t *testing.T) {
 	assert.GreaterOrEqual(t, n, 1, "OnError must be called when Queue.Ack returns error")
 }
 
-func TestSweeper_DefaultIntervalAndNow(t *testing.T) {
+func TestSweeper_DefaultInterval(t *testing.T) {
 	t.Parallel()
-	// Verify that zero Interval and nil Now don't panic during Start
+	// Verify that zero Interval doesn't panic during Start
 	// by canceling immediately before any tick fires.
 	scanner := &mockScanner{}
 	q := &mockAckQueue{}
@@ -463,8 +465,8 @@ func TestSweeper_DefaultIntervalAndNow(t *testing.T) {
 	s := &command.Sweeper{
 		Scanner: scanner,
 		Queue:   q,
+		Clk:     clock.Real(),
 		// Interval: zero → should default to 30s
-		// Now: nil → should default to time.Now
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())

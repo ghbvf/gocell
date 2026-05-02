@@ -49,7 +49,7 @@ func TestNewSession(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			session, err := NewSession(tt.userID, tt.accessToken, tt.expiresAt)
+			session, err := NewSession(tt.userID, tt.accessToken, tt.expiresAt, time.Now())
 			if tt.wantErr {
 				require.Error(t, err)
 				// Lock the errcode classification — survives helper message
@@ -87,14 +87,14 @@ func TestSession_Revoke(t *testing.T) {
 		},
 		{
 			name:        "revoke marks session revoked",
-			action:      func(s *Session) { s.Revoke() },
+			action:      func(s *Session) { s.Revoke(time.Now()) },
 			wantRevoked: true,
 		},
 		{
 			name: "double revoke stays revoked",
 			action: func(s *Session) {
-				s.Revoke()
-				s.Revoke()
+				s.Revoke(time.Now())
+				s.Revoke(time.Now())
 			},
 			wantRevoked: true,
 		},
@@ -102,7 +102,7 @@ func TestSession_Revoke(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			session, err := NewSession("u-1", "at", time.Now().Add(time.Hour))
+			session, err := NewSession("u-1", "at", time.Now().Add(time.Hour), time.Now())
 			require.NoError(t, err)
 
 			tt.action(session)
@@ -132,10 +132,10 @@ func TestSession_IsExpired(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			session, err := NewSession("u-1", "at", tt.expiresAt)
+			session, err := NewSession("u-1", "at", tt.expiresAt, time.Now())
 			require.NoError(t, err)
 
-			assert.Equal(t, tt.wantExpired, session.IsExpired())
+			assert.Equal(t, tt.wantExpired, session.IsExpired(time.Now()))
 		})
 	}
 }

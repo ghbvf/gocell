@@ -14,6 +14,7 @@ import (
 
 	adapterpg "github.com/ghbvf/gocell/adapters/postgres"
 	adapterredis "github.com/ghbvf/gocell/adapters/redis"
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/idempotency"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/runtime/auth"
@@ -33,6 +34,12 @@ import (
 // ref: kubernetes/kubernetes cmd/kube-apiserver/app/options/validation.go —
 // all required fields validated in one place before startup.
 type SharedDeps struct {
+	// Clock is the single root clock instance threaded through every adapter,
+	// service, and middleware constructed by BuildApp / its module builders.
+	// Tests inject a clockmock.FakeClock to drive time deterministically;
+	// production wires clock.Real() exactly once at the entry point.
+	Clock clock.Clock
+
 	// Topology is the resolved adapter-mode / storage-backend combination.
 	Topology bootstrap.Topology
 
@@ -177,7 +184,7 @@ func buildSharedMetricsDeps() (sharedMetricsDeps, error) {
 	}, nil
 }
 
-func buildSharedReplayDeps(ctx context.Context, topo bootstrap.Topology) (sharedReplayDeps, error) {
+func buildSharedReplayDeps(ctx context.Context, topo bootstrap.Topology, clk clock.Clock) (sharedReplayDeps, error) {
 	redisResult, err := buildRedisClient(ctx, topo)
 	if err != nil {
 		return sharedReplayDeps{}, err
@@ -190,11 +197,11 @@ func buildSharedReplayDeps(ctx context.Context, topo bootstrap.Topology) (shared
 		}
 	}()
 
-	nonceStore, err := buildServiceNonceStore(topo, redisClient)
+	nonceStore, err := buildServiceNonceStore(topo, redisClient, clk)
 	if err != nil {
 		return sharedReplayDeps{}, err
 	}
-	claimer, claimerKind, err := buildConsumerClaimer(topo, redisClient)
+	claimer, claimerKind, err := buildConsumerClaimer(topo, redisClient, clk)
 	if err != nil {
 		return sharedReplayDeps{}, err
 	}
@@ -334,6 +341,13 @@ func (d *SharedDeps) validateCore() []error {
 		errs = append(errs, errcode.New(errcode.ErrValidationFailed,
 			"SharedDeps."+field+" must be set"))
 	}
+	// Clock is the single root clock instance threaded through every adapter,
+	// service, and middleware. Required: a nil here would surface as a deeper
+	// runtime panic (kernel/clock.MustHaveClock or constructors that re-validate).
+	// Validate at startup so misconfiguration fails before any subsystem starts.
+	if d.Clock == nil {
+		missing("Clock")
+	}
 	if d.JWTDeps.issuer == nil {
 		missing("JWTDeps.issuer")
 	}
@@ -472,13 +486,17 @@ func isLoopbackBindAddr(addr string) bool {
 //
 // ref: go-zero serviceconf.MustLoad — single parse-validate call at startup.
 func LoadSharedDepsFromEnv(ctx context.Context) (*SharedDeps, error) {
+	// Single root clock: constructed exactly once here and threaded through
+	// every adapter, service, and middleware via SharedDeps.Clock.
+	clk := clock.Real()
+
 	topo, err := bootstrap.TopologyFromEnv()
 	if err != nil {
 		return nil, err
 	}
 	adapterMode := topo.AdapterMode
 
-	jwt, err := buildJWTDeps(adapterMode)
+	jwt, err := buildJWTDeps(adapterMode, clk)
 	if err != nil {
 		return nil, err
 	}
@@ -488,7 +506,7 @@ func LoadSharedDepsFromEnv(ctx context.Context) (*SharedDeps, error) {
 		return nil, err
 	}
 
-	replay, err := buildSharedReplayDeps(ctx, topo)
+	replay, err := buildSharedReplayDeps(ctx, topo, clk)
 	if err != nil {
 		return nil, err
 	}
@@ -499,11 +517,11 @@ func LoadSharedDepsFromEnv(ctx context.Context) (*SharedDeps, error) {
 		}
 	}()
 
-	eb := eventbus.New()
+	eb := eventbus.New(eventbus.WithClock(clk))
 
 	primaryAddr, internalAddr, healthAddr := resolveListenerAddrs()
 
-	internalGuard, err := internalGuardFromEnv(adapterMode, replay.NonceStore)
+	internalGuard, err := internalGuardFromEnv(adapterMode, replay.NonceStore, clk)
 	if err != nil {
 		return nil, err
 	}
@@ -535,6 +553,7 @@ func LoadSharedDepsFromEnv(ctx context.Context) (*SharedDeps, error) {
 	}
 
 	deps := &SharedDeps{
+		Clock:                clk,
 		Topology:             topo,
 		JWTDeps:              jwt,
 		PromStack:            metricsDeps.PromStack,

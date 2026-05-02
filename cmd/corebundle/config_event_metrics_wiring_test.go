@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/idempotency"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	obmetrics "github.com/ghbvf/gocell/runtime/observability/metrics"
@@ -66,10 +67,10 @@ func TestConsumerMiddlewares_ConfigEventSettlementRunsOutsideConsumerBase(t *tes
 	collector := &recordingCoreConfigEventCollector{}
 	shared := buildTestSharedDeps(t)
 	shared.ConfigEventCollector = collector
-	consumerBase, err := outbox.NewConsumerBase(idempotency.NewInMemClaimer(), outbox.ConsumerBaseConfig{
+	consumerBase, err := outbox.NewConsumerBase(idempotency.NewInMemClaimer(clock.Real()), outbox.ConsumerBaseConfig{
 		RetryCount:     2,
 		RetryBaseDelay: time.Millisecond,
-	})
+	}, clock.Real())
 	require.NoError(t, err)
 
 	attempts := 0
@@ -96,10 +97,10 @@ func TestConsumerMiddlewares_PermanentErrorRecordedAsFinalRejectSettlement(t *te
 	collector := &recordingCoreConfigEventCollector{}
 	shared := buildTestSharedDeps(t)
 	shared.ConfigEventCollector = collector
-	consumerBase, err := outbox.NewConsumerBase(idempotency.NewInMemClaimer(), outbox.ConsumerBaseConfig{
+	consumerBase, err := outbox.NewConsumerBase(idempotency.NewInMemClaimer(clock.Real()), outbox.ConsumerBaseConfig{
 		RetryCount:     2,
 		RetryBaseDelay: time.Millisecond,
-	})
+	}, clock.Real())
 	require.NoError(t, err)
 
 	entry := outbox.Entry{ID: "evt-permanent"}

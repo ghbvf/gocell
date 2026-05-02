@@ -7,6 +7,7 @@ import (
 	"log/slog"
 
 	"github.com/ghbvf/gocell/cells/accesscore/internal/ports"
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/runtime/auth"
 )
@@ -25,11 +26,14 @@ type Service struct {
 	verifier    auth.IntentTokenVerifier
 	sessionRepo ports.SessionRepository
 	logger      *slog.Logger
+	clock       clock.Clock
 }
 
 // NewService creates a session-validate Service.
-func NewService(verifier auth.IntentTokenVerifier, sessionRepo ports.SessionRepository, logger *slog.Logger) *Service {
-	return &Service{verifier: verifier, sessionRepo: sessionRepo, logger: logger}
+// clk must not be nil; pass clock.Real() for production use.
+func NewService(verifier auth.IntentTokenVerifier, sessionRepo ports.SessionRepository, logger *slog.Logger, clk clock.Clock) *Service {
+	clock.MustHaveClock(clk, "sessionvalidate.NewService")
+	return &Service{verifier: verifier, sessionRepo: sessionRepo, logger: logger, clock: clk}
 }
 
 // VerifyIntent validates an access token. This service is intentionally
@@ -87,7 +91,7 @@ func (s *Service) enforceSessionState(ctx context.Context, claims auth.Claims) (
 			slog.String("subject", claims.Subject))
 		return auth.Claims{}, errcode.New(errcode.ErrAuthInvalidToken, errMsgAuthFailed)
 	}
-	if session.IsExpired() {
+	if session.IsExpired(s.clock.Now()) {
 		s.logger.Warn("session-validate: expired session used",
 			slog.String("sid", sid),
 			slog.String("subject", claims.Subject))

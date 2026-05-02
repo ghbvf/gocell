@@ -17,6 +17,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/ghbvf/gocell/kernel/clock"
+	"github.com/ghbvf/gocell/kernel/clock/clockmock"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/runtime/auth"
@@ -38,6 +40,7 @@ func TestNew_RealMode_IssuerRequired(t *testing.T) {
 	_, err := config.New(config.Config{
 		Issuer:    "",
 		Audiences: []string{"gocell"},
+		Clock:     clock.Real(),
 		RealMode:  true,
 	})
 	require.Error(t, err, "RealMode + empty Issuer must return error")
@@ -52,6 +55,7 @@ func TestNew_RealMode_AudiencesRequired(t *testing.T) {
 	_, err := config.New(config.Config{
 		Issuer:    "https://gocell.example",
 		Audiences: nil,
+		Clock:     clock.Real(),
 		RealMode:  true,
 	})
 	require.Error(t, err, "RealMode + nil Audiences must return error")
@@ -65,6 +69,7 @@ func TestNew_RealMode_EmptyAudiencesRequired(t *testing.T) {
 	_, err := config.New(config.Config{
 		Issuer:    "https://gocell.example",
 		Audiences: []string{},
+		Clock:     clock.Real(),
 		RealMode:  true,
 	})
 	require.Error(t, err, "RealMode + empty Audiences slice must return error")
@@ -75,6 +80,7 @@ func TestNew_NonRealMode_AllowsEmpty(t *testing.T) {
 	reg, err := config.New(config.Config{
 		Issuer:    "",
 		Audiences: nil,
+		Clock:     clock.Real(),
 		RealMode:  false,
 	})
 	require.NoError(t, err, "non-real mode must allow empty config")
@@ -89,6 +95,7 @@ func TestRegistry_Audiences_ReturnsCopy(t *testing.T) {
 	reg, err := config.New(config.Config{
 		Issuer:    "gocell",
 		Audiences: []string{"gocell", "api-gateway"},
+		Clock:     clock.Real(),
 		RealMode:  true,
 	})
 	require.NoError(t, err)
@@ -101,27 +108,34 @@ func TestRegistry_Audiences_ReturnsCopy(t *testing.T) {
 		"mutating returned slice must not affect registry state")
 }
 
-// TestRegistry_Clock_DefaultsToTimeNow verifies that a nil Clock falls back to time.Now.
-func TestRegistry_Clock_DefaultsToTimeNow(t *testing.T) {
+// TestRegistry_Clock_Required verifies that a nil Clock panics at construction.
+func TestRegistry_Clock_Required(t *testing.T) {
+	assert.Panics(t, func() {
+		_, _ = config.New(config.Config{
+			Issuer:    "gocell",
+			Audiences: []string{"gocell"},
+			Clock:     nil,
+			RealMode:  true,
+		})
+	}, "nil Clock must panic at construction (MustHaveClock)")
+}
+
+// TestRegistry_Clock_InjectedClock verifies that the injected clock is returned by Clock().
+func TestRegistry_Clock_InjectedClock(t *testing.T) {
+	fixed := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
+	fc := clockmock.New(fixed)
+
 	reg, err := config.New(config.Config{
 		Issuer:    "gocell",
 		Audiences: []string{"gocell"},
-		Clock:     nil,
+		Clock:     fc,
 		RealMode:  true,
 	})
 	require.NoError(t, err)
 
 	clockFn := reg.Clock()
 	require.NotNil(t, clockFn, "Clock() must not return nil")
-
-	now := time.Now()
-	clocked := clockFn()
-	delta := clocked.Sub(now)
-	if delta < 0 {
-		delta = -delta
-	}
-	assert.Less(t, delta, time.Second,
-		"default clock must return time close to time.Now()")
+	assert.Equal(t, fixed, clockFn.Now(), "injected clock must be used")
 }
 
 // TestFromEnv_ReadsIssuerAndAudience verifies that FromEnv reads GOCELL_JWT_ISSUER
@@ -130,7 +144,7 @@ func TestFromEnv_ReadsIssuerAndAudience(t *testing.T) {
 	t.Setenv("GOCELL_JWT_ISSUER", "https://auth.example")
 	t.Setenv("GOCELL_JWT_AUDIENCE", "my-service")
 
-	reg, err := config.FromEnv()
+	reg, err := config.FromEnv(config.WithEnvClock(clock.Real()))
 	require.NoError(t, err)
 	assert.Equal(t, "https://auth.example", reg.Issuer())
 	assert.Equal(t, []string{"my-service"}, reg.Audiences())
@@ -170,6 +184,7 @@ func TestRegistry_KeyProviders_PassThrough(t *testing.T) {
 		Audiences: []string{"gocell"},
 		KeyProv:   prov,
 		KeyStore:  store,
+		Clock:     clock.Real(),
 		RealMode:  true,
 	})
 	require.NoError(t, err)
@@ -188,7 +203,7 @@ func TestFromEnv_IgnoresUnsetVars(t *testing.T) {
 		t.Logf("Unsetenv GOCELL_JWT_AUDIENCE: %v", err)
 	}
 
-	reg, err := config.FromEnv()
+	reg, err := config.FromEnv(config.WithEnvClock(clock.Real()))
 	require.NoError(t, err)
 	assert.Equal(t, "", reg.Issuer())
 	assert.Empty(t, reg.Audiences())
@@ -200,8 +215,8 @@ func TestFromEnv_WithKeys(t *testing.T) {
 	t.Setenv("GOCELL_JWT_ISSUER", "gocell")
 	t.Setenv("GOCELL_JWT_AUDIENCE", "gocell")
 
-	ks, _, _ := auth.MustNewTestKeySet()
-	reg, err := config.FromEnv(config.WithKeys(ks))
+	ks, _, _ := auth.MustNewTestKeySet(clock.Real())
+	reg, err := config.FromEnv(config.WithEnvClock(clock.Real()), config.WithKeys(ks))
 	require.NoError(t, err)
 	assert.NotNil(t, reg.SigningKeyProvider(), "SigningKeyProvider must be set via WithKeys")
 	assert.NotNil(t, reg.VerificationKeyStore(), "VerificationKeyStore must be set via WithKeys")
@@ -215,7 +230,7 @@ func TestFromEnv_WithKeySeparate(t *testing.T) {
 	prov := &stubKeySet{}
 	store := &stubKeySet{}
 
-	reg, err := config.FromEnv(config.WithKeySeparate(prov, store))
+	reg, err := config.FromEnv(config.WithEnvClock(clock.Real()), config.WithKeySeparate(prov, store))
 	require.NoError(t, err)
 	assert.Same(t, prov, reg.SigningKeyProvider())
 	assert.Same(t, store, reg.VerificationKeyStore())
@@ -227,22 +242,23 @@ func TestFromEnv_WithEnvClock(t *testing.T) {
 	t.Setenv("GOCELL_JWT_AUDIENCE", "gocell")
 
 	fixed := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
-	clockFn := func() time.Time { return fixed }
+	fc := clockmock.New(fixed)
 
-	reg, err := config.FromEnv(config.WithEnvClock(clockFn))
+	reg, err := config.FromEnv(config.WithEnvClock(fc))
 	require.NoError(t, err)
-	assert.Equal(t, fixed, reg.Clock()(), "custom clock must be used")
+	assert.Equal(t, fixed, reg.Clock().Now(), "custom clock must be used")
 }
 
 // TestNewJWTIssuerFromRegistry_Success verifies that a Registry with valid keys
 // produces a working JWTIssuer.
 func TestNewJWTIssuerFromRegistry_Success(t *testing.T) {
-	ks, _, _ := auth.MustNewTestKeySet()
+	ks, _, _ := auth.MustNewTestKeySet(clock.Real())
 	reg, err := config.New(config.Config{
 		Issuer:    "gocell",
 		Audiences: []string{"gocell"},
 		KeyProv:   ks,
 		KeyStore:  ks,
+		Clock:     clock.Real(),
 		RealMode:  true,
 	})
 	require.NoError(t, err)
@@ -269,6 +285,7 @@ func TestNewJWTIssuerFromRegistry_NilKeyProv(t *testing.T) {
 		Issuer:    "gocell",
 		Audiences: []string{"gocell"},
 		KeyProv:   nil, // nil
+		Clock:     clock.Real(),
 		RealMode:  false,
 	})
 	require.NoError(t, err)
@@ -280,12 +297,13 @@ func TestNewJWTIssuerFromRegistry_NilKeyProv(t *testing.T) {
 // TestNewJWTVerifierFromRegistry_Success verifies that a Registry with valid keys
 // produces a working JWTVerifier.
 func TestNewJWTVerifierFromRegistry_Success(t *testing.T) {
-	ks, _, _ := auth.MustNewTestKeySet()
+	ks, _, _ := auth.MustNewTestKeySet(clock.Real())
 	reg, err := config.New(config.Config{
 		Issuer:    "gocell",
 		Audiences: []string{"gocell"},
 		KeyProv:   ks,
 		KeyStore:  ks,
+		Clock:     clock.Real(),
 		RealMode:  true,
 	})
 	require.NoError(t, err)
@@ -307,6 +325,7 @@ func TestNewJWTVerifierFromRegistry_NilKeyStore(t *testing.T) {
 		Issuer:    "gocell",
 		Audiences: []string{"gocell"},
 		KeyStore:  nil, // nil
+		Clock:     clock.Real(),
 		RealMode:  false,
 	})
 	require.NoError(t, err)
@@ -317,11 +336,12 @@ func TestNewJWTVerifierFromRegistry_NilKeyStore(t *testing.T) {
 
 // TestNewJWTVerifierFromRegistry_EmptyAudiences returns an error when Audiences is empty.
 func TestNewJWTVerifierFromRegistry_EmptyAudiences(t *testing.T) {
-	ks, _, _ := auth.MustNewTestKeySet()
+	ks, _, _ := auth.MustNewTestKeySet(clock.Real())
 	reg, err := config.New(config.Config{
 		Issuer:    "gocell",
 		Audiences: nil, // empty
 		KeyStore:  ks,
+		Clock:     clock.Real(),
 		RealMode:  false,
 	})
 	require.NoError(t, err)
@@ -338,6 +358,7 @@ func TestNew_RealMode_WhitespaceOnlyIssuerRejected(t *testing.T) {
 	_, err := config.New(config.Config{
 		Issuer:    "   ",
 		Audiences: []string{"gocell"},
+		Clock:     clock.Real(),
 		RealMode:  true,
 	})
 	require.Error(t, err, "RealMode + whitespace-only Issuer must return error")
@@ -352,6 +373,7 @@ func TestNew_RealMode_WhitespaceAudienceElement(t *testing.T) {
 	_, err := config.New(config.Config{
 		Issuer:    "https://gocell.example",
 		Audiences: []string{"   "},
+		Clock:     clock.Real(),
 		RealMode:  true,
 	})
 	require.Error(t, err, "RealMode + whitespace-only Audience element must return error")
@@ -366,6 +388,7 @@ func TestNew_TrimsIssuerAndAudiences(t *testing.T) {
 	reg, err := config.New(config.Config{
 		Issuer:    " acme ",
 		Audiences: []string{" a ", " b "},
+		Clock:     clock.Real(),
 		RealMode:  true,
 	})
 	require.NoError(t, err)
@@ -391,7 +414,7 @@ func TestWithKeys_SigningOnly_LeavesVerificationStoreNil(t *testing.T) {
 	t.Setenv("GOCELL_JWT_AUDIENCE", "gocell")
 
 	prov := &stubSigningOnlyProvider{}
-	reg, err := config.FromEnv(config.WithKeys(prov))
+	reg, err := config.FromEnv(config.WithEnvClock(clock.Real()), config.WithKeys(prov))
 	require.NoError(t, err)
 
 	assert.NotNil(t, reg.SigningKeyProvider(), "SigningKeyProvider must be set")
@@ -406,7 +429,7 @@ func TestWithKeys_SigningOnly_VerifierReturnsError(t *testing.T) {
 	t.Setenv("GOCELL_JWT_AUDIENCE", "gocell")
 
 	prov := &stubSigningOnlyProvider{}
-	reg, err := config.FromEnv(config.WithKeys(prov))
+	reg, err := config.FromEnv(config.WithEnvClock(clock.Real()), config.WithKeys(prov))
 	require.NoError(t, err)
 
 	_, err = config.NewJWTVerifierFromRegistry(reg)
@@ -428,6 +451,7 @@ func TestNewJWTIssuerFromRegistry_TypedNilKeyProv(t *testing.T) {
 		Issuer:    "gocell",
 		Audiences: []string{"gocell"},
 		KeyProv:   ks, // interface holds (type=*KeySet, value=nil)
+		Clock:     clock.Real(),
 		RealMode:  false,
 	})
 	require.NoError(t, err, "Registry construction must accept typed-nil (validation deferred to factory)")
@@ -448,6 +472,7 @@ func TestNewJWTVerifierFromRegistry_TypedNilKeyStore(t *testing.T) {
 		Issuer:    "gocell",
 		Audiences: []string{"gocell"},
 		KeyStore:  ks,
+		Clock:     clock.Real(),
 		RealMode:  false,
 	})
 	require.NoError(t, err)
@@ -467,7 +492,7 @@ func TestWithKeys_TypedNilProvider(t *testing.T) {
 	t.Setenv("GOCELL_JWT_AUDIENCE", "gocell")
 
 	var prov auth.SigningKeyProvider = (*auth.KeySet)(nil)
-	reg, err := config.FromEnv(config.WithKeys(prov))
+	reg, err := config.FromEnv(config.WithEnvClock(clock.Real()), config.WithKeys(prov))
 	require.NoError(t, err)
 	assert.Nil(t, reg.SigningKeyProvider(),
 		"typed-nil provider must NOT be stored (would panic downstream)")
@@ -528,11 +553,12 @@ func TestNewJWTVerifierFromRegistry_NilRegistry_ErrorCode(t *testing.T) {
 // TestNewJWTVerifierFromRegistry_EmptyAudiences_ErrorCode tightens
 // TestNewJWTVerifierFromRegistry_EmptyAudiences.
 func TestNewJWTVerifierFromRegistry_EmptyAudiences_ErrorCode(t *testing.T) {
-	ks, _, _ := auth.MustNewTestKeySet()
+	ks, _, _ := auth.MustNewTestKeySet(clock.Real())
 	reg, err := config.New(config.Config{
 		Issuer:    "gocell",
 		Audiences: nil,
 		KeyStore:  ks,
+		Clock:     clock.Real(),
 		RealMode:  false,
 	})
 	require.NoError(t, err)
@@ -550,6 +576,7 @@ func TestNewJWTIssuerFromRegistry_NilKeyProv_ErrorCode(t *testing.T) {
 		Issuer:    "gocell",
 		Audiences: []string{"gocell"},
 		KeyProv:   nil,
+		Clock:     clock.Real(),
 		RealMode:  false,
 	})
 	require.NoError(t, err)
@@ -565,12 +592,13 @@ func TestNewJWTIssuerFromRegistry_NilKeyProv_ErrorCode(t *testing.T) {
 // TestNewJWTIssuerVerifierFromRegistry_EndToEnd verifies the full round-trip:
 // issue a token via Registry-constructed issuer, verify with Registry-constructed verifier.
 func TestNewJWTIssuerVerifierFromRegistry_EndToEnd(t *testing.T) {
-	ks, _, _ := auth.MustNewTestKeySet()
+	ks, _, _ := auth.MustNewTestKeySet(clock.Real())
 	reg, err := config.New(config.Config{
 		Issuer:    "gocell-test",
 		Audiences: []string{"gocell"},
 		KeyProv:   ks,
 		KeyStore:  ks,
+		Clock:     clock.Real(),
 		RealMode:  true,
 	})
 	require.NoError(t, err)

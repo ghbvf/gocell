@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/ghbvf/gocell/cells/accesscore/internal/ports"
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/runtime/auth"
 )
@@ -43,26 +44,31 @@ type HTTPConfigGetter struct {
 	baseURL string
 	ring    *auth.HMACKeyRing
 	client  *http.Client
+	clock   clock.Clock
 }
 
 // NewHTTPConfigGetter creates a new HTTPConfigGetter.
 // baseURL is the base address of the internal listener (e.g. "http://localhost:9090").
 // ring is used to generate the service token Authorization header.
-func NewHTTPConfigGetter(baseURL string, ring *auth.HMACKeyRing) *HTTPConfigGetter {
+func NewHTTPConfigGetter(baseURL string, ring *auth.HMACKeyRing, clk clock.Clock) *HTTPConfigGetter {
+	clock.MustHaveClock(clk, "accesscore/http.NewHTTPConfigGetter")
 	return &HTTPConfigGetter{
 		baseURL: baseURL,
 		ring:    ring,
 		client:  &http.Client{Timeout: defaultConfigClientHTTPTimeout},
+		clock:   clk,
 	}
 }
 
 // NewHTTPConfigGetterWithHTTPClient creates a new HTTPConfigGetter with a custom
 // *http.Client (used in tests with httptest.Server).
-func NewHTTPConfigGetterWithHTTPClient(baseURL string, ring *auth.HMACKeyRing, httpClient *http.Client) *HTTPConfigGetter {
+func NewHTTPConfigGetterWithHTTPClient(baseURL string, ring *auth.HMACKeyRing, httpClient *http.Client, clk clock.Clock) *HTTPConfigGetter {
+	clock.MustHaveClock(clk, "accesscore/http.NewHTTPConfigGetterWithHTTPClient")
 	return &HTTPConfigGetter{
 		baseURL: baseURL,
 		ring:    ring,
 		client:  httpClient,
+		clock:   clk,
 	}
 }
 
@@ -79,7 +85,7 @@ func (c *HTTPConfigGetter) GetEntry(ctx context.Context, key string) (ports.Conf
 	}
 
 	// Sign the request with a service token so the InternalListener middleware accepts it.
-	token := auth.GenerateServiceToken(c.ring, http.MethodGet, path, "", time.Now())
+	token := auth.GenerateServiceToken(c.ring, http.MethodGet, path, "", c.clock.Now())
 	req.Header.Set("Authorization", "ServiceToken "+token)
 
 	resp, err := c.client.Do(req)

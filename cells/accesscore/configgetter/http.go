@@ -4,6 +4,7 @@ package configgetter
 import (
 	accesscore "github.com/ghbvf/gocell/cells/accesscore"
 	accesshttp "github.com/ghbvf/gocell/cells/accesscore/internal/adapters/http"
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/runtime/auth"
 )
 
@@ -13,6 +14,6 @@ import (
 //
 // contract: http.config.internal.get.v1
 // ref: go-micro config/source/remote — polling + on-change patterns.
-func WithHTTP(baseURL string, ring *auth.HMACKeyRing) accesscore.Option {
-	return accesscore.WithConfigGetter(accesshttp.NewHTTPConfigGetter(baseURL, ring))
+func WithHTTP(baseURL string, ring *auth.HMACKeyRing, clk clock.Clock) accesscore.Option {
+	return accesscore.WithConfigGetter(accesshttp.NewHTTPConfigGetter(baseURL, ring, clk))
 }

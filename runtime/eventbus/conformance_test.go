@@ -4,6 +4,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/outbox/outboxtest"
 	"github.com/ghbvf/gocell/runtime/eventbus"
@@ -20,7 +21,7 @@ func TestInMemoryEventBus_Conformance(t *testing.T) {
 		BlockingSubscribe:  true,
 		BroadcastSubscribe: true,
 	}, func(t *testing.T) (outbox.Publisher, outbox.Subscriber) {
-		bus := eventbus.New(eventbus.WithBufferSize(256))
+		bus := eventbus.New(eventbus.WithClock(clock.Real()), eventbus.WithBufferSize(256))
 		t.Cleanup(func() { _ = bus.Close(context.Background()) })
 		return bus, bus
 	})

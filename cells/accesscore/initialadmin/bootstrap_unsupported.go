@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/ghbvf/gocell/cells/accesscore/internal/ports"
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
@@ -24,7 +25,7 @@ type BootstrapDeps struct {
 	UserRepo ports.UserRepository
 	RoleRepo ports.RoleRepository
 	Logger   *slog.Logger
-	Clock    Clock
+	Clock    clock.Clock
 }
 
 // bootstrapConfig controls the bootstrap behaviour.

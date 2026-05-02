@@ -11,6 +11,7 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/assembly"
 	"github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/kernel/clock"
 )
 
 // runtimeOnlyHookFields are fields present on bootstrap.Hook that are
@@ -106,7 +107,7 @@ type plainCellForLC struct{ cell.BaseCell }
 // (without starting), sufficient for phase3b type-assertion discovery.
 func buildAsmRegistered(t *testing.T, cells ...cell.Cell) *assembly.CoreAssembly {
 	t.Helper()
-	asm := assembly.New(assembly.Config{ID: "testasm", DurabilityMode: cell.DurabilityDemo})
+	asm := assembly.New(assembly.Config{ID: "testasm", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
 	for _, c := range cells {
 		require.NoError(t, asm.Register(c))
 	}
@@ -144,7 +145,7 @@ func TestPhase3b_NoCellImplementsContributor(t *testing.T) {
 	asm := buildAsmRegistered(t, plain)
 
 	ml := &mockLifecycle{}
-	b := New()
+	b := New(WithClock(clock.Real()))
 	b.lifecycle = ml
 
 	_, s := newPhaseState()
@@ -165,7 +166,7 @@ func TestPhase3b_EmptySliceContributor(t *testing.T) {
 	asm := buildAsmRegistered(t, lc)
 
 	ml := &mockLifecycle{}
-	b := New()
+	b := New(WithClock(clock.Real()))
 	b.lifecycle = ml
 
 	_, s := newPhaseState()
@@ -195,10 +196,10 @@ func TestPhase3b_DuplicateHookName_FailFast(t *testing.T) {
 		},
 	}
 	asm := buildAsmRegistered(t, cellA, cellB)
-	b := New()
+	b := New(WithClock(clock.Real()))
 	// Use the real lifecycle so Append's dup-name guard actually fires;
 	// mockLifecycle has no state tracking.
-	b.lifecycle = NewLifecycle(LifecycleConfig{})
+	b.lifecycle = NewLifecycle(LifecycleConfig{Clock: clock.Real()})
 
 	_, s := newPhaseState()
 	s.asm = asm
@@ -216,7 +217,7 @@ func TestPhase3b_DuplicateHookName_FailFast(t *testing.T) {
 // still fails — but this test catches the regression sooner + documents
 // the sentinel (ErrDuplicateHookName) publicly.
 func TestLifecycle_AppendRejectsDuplicateName(t *testing.T) {
-	lc := NewLifecycle(LifecycleConfig{})
+	lc := NewLifecycle(LifecycleConfig{Clock: clock.Real()})
 	noop := func(_ context.Context) error { return nil }
 
 	require.NoError(t, lc.Append(Hook{Name: "foo", OnStart: noop}))
@@ -240,7 +241,7 @@ func TestPhase3b_NilSliceContributor(t *testing.T) {
 	asm := buildAsmRegistered(t, lc)
 
 	ml := &mockLifecycle{}
-	b := New()
+	b := New(WithClock(clock.Real()))
 	b.lifecycle = ml
 
 	_, s := newPhaseState()
@@ -263,7 +264,7 @@ func TestPhase3b_OneCellTwoHooks(t *testing.T) {
 	asm := buildAsmRegistered(t, lc)
 
 	ml := &mockLifecycle{}
-	b := New()
+	b := New(WithClock(clock.Real()))
 	b.lifecycle = ml
 
 	_, s := newPhaseState()
@@ -290,7 +291,7 @@ func TestPhase3b_TwoCellsOrderPreserved(t *testing.T) {
 	asm := buildAsmRegistered(t, lcA, lcB)
 
 	ml := &mockLifecycle{}
-	b := New()
+	b := New(WithClock(clock.Real()))
 	b.lifecycle = ml
 
 	_, s := newPhaseState()
@@ -326,7 +327,7 @@ func TestPhase3b_StampsCellIDOnAppendedHook(t *testing.T) {
 	asm := buildAsmRegistered(t, lcA, lcB)
 
 	ml := &mockLifecycle{}
-	b := New()
+	b := New(WithClock(clock.Real()))
 	b.lifecycle = ml
 
 	_, s := newPhaseState()
@@ -351,7 +352,7 @@ func TestPhase3b_BothNilSkipped(t *testing.T) {
 	asm := buildAsmRegistered(t, lc)
 
 	ml := &mockLifecycle{}
-	b := New()
+	b := New(WithClock(clock.Real()))
 	b.lifecycle = ml
 
 	_, s := newPhaseState()
@@ -373,7 +374,7 @@ func TestPhase3b_EmptyNameAllowed(t *testing.T) {
 	asm := buildAsmRegistered(t, lc)
 
 	ml := &mockLifecycle{}
-	b := New()
+	b := New(WithClock(clock.Real()))
 	b.lifecycle = ml
 
 	_, s := newPhaseState()
@@ -397,7 +398,7 @@ func TestPhase3b_AppendError_PropagatesWithCellAndHookName(t *testing.T) {
 	asm := buildAsmRegistered(t, lc)
 
 	ml := &mockLifecycle{appendErr: errors.New("already started")}
-	b := New()
+	b := New(WithClock(clock.Real()))
 	b.lifecycle = ml
 
 	_, s := newPhaseState()

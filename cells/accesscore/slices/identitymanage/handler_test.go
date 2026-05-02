@@ -21,6 +21,7 @@ import (
 	"github.com/ghbvf/gocell/cells/accesscore/internal/testutil"
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/cell/celltest"
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/runtime/auth"
@@ -40,9 +41,10 @@ func newHandlerIdentityRefreshStore() refresh.Store {
 // do not exercise the ChangePassword token-issuing path.
 var handlerStubIssuer TokenIssuer = &stubTokenIssuer{}
 
-func setup() http.Handler {
-	svc, err := NewService(mem.NewUserRepository(), mem.NewSessionRepository(), newHandlerIdentityRefreshStore(), slog.Default(),
-		WithTokenIssuer(handlerStubIssuer))
+func setup(t testing.TB) http.Handler {
+	t.Helper()
+	svc, err := NewService(mem.NewUserRepository(), testutil.RealSessionRepo(t), newHandlerIdentityRefreshStore(), slog.Default(),
+		WithTokenIssuer(handlerStubIssuer), WithClock(clock.Real()))
 	if err != nil {
 		panic("setup: " + err.Error())
 	}
@@ -57,14 +59,15 @@ func setup() http.Handler {
 }
 
 // setupWithIssuer wires a service with a stub TokenIssuer for ChangePassword tests.
-func setupWithIssuer(issuer TokenIssuer) (http.Handler, *mem.UserRepository) {
+func setupWithIssuer(t testing.TB, issuer TokenIssuer) (http.Handler, *mem.UserRepository) {
+	t.Helper()
 	repo := mem.NewUserRepository()
 	effectiveIssuer := issuer
 	if effectiveIssuer == nil {
 		effectiveIssuer = handlerStubIssuer
 	}
-	svc, err := NewService(repo, mem.NewSessionRepository(), newHandlerIdentityRefreshStore(), slog.Default(),
-		WithTokenIssuer(effectiveIssuer))
+	svc, err := NewService(repo, testutil.RealSessionRepo(t), newHandlerIdentityRefreshStore(), slog.Default(),
+		WithTokenIssuer(effectiveIssuer), WithClock(clock.Real()))
 	if err != nil {
 		panic("setupWithIssuer: " + err.Error())
 	}
@@ -287,7 +290,7 @@ func TestHandler(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			r := setup()
+			r := setup(t)
 			reqPath := identityPrefix
 			if tc.path != "/" {
 				reqPath += tc.path
@@ -313,7 +316,7 @@ func TestHandler(t *testing.T) {
 }
 
 func TestHandler_UpdateUnknownField(t *testing.T) {
-	r := setup()
+	r := setup(t)
 
 	// Create a user first (as admin).
 	w := httptest.NewRecorder()
@@ -342,7 +345,7 @@ func TestHandler_UpdateUnknownField(t *testing.T) {
 }
 
 func TestHandler_PatchRejectsUnknownFields(t *testing.T) {
-	r := setup()
+	r := setup(t)
 
 	// Create a user first (as admin).
 	w := httptest.NewRecorder()
@@ -372,7 +375,7 @@ func TestHandler_PatchRejectsUnknownFields(t *testing.T) {
 }
 
 func TestHandler_CreateThenGetThenDelete(t *testing.T) {
-	r := setup()
+	r := setup(t)
 
 	// Create (admin).
 	w := httptest.NewRecorder()
@@ -408,7 +411,7 @@ func TestHandler_CreateThenGetThenDelete(t *testing.T) {
 }
 
 func TestHandlePatch_TypeValidation(t *testing.T) {
-	r := setup()
+	r := setup(t)
 
 	// Create a user first (admin).
 	w := httptest.NewRecorder()
@@ -481,7 +484,7 @@ func seedUserInRepo(t *testing.T, repo *mem.UserRepository, id, username string)
 	t.Helper()
 	hash, err := bcrypt.GenerateFromPassword([]byte("oldpass"), bcrypt.MinCost)
 	require.NoError(t, err)
-	user, err := domain.NewUser(username, username+"@test.com", string(hash))
+	user, err := domain.NewUser(username, username+"@test.com", string(hash), time.Now())
 	require.NoError(t, err)
 	user.ID = id
 	require.NoError(t, repo.Create(context.Background(), user))
@@ -493,7 +496,7 @@ func TestHandler_ChangePassword_SelfAllowed(t *testing.T) {
 		RefreshToken:          "new-refresh-token",
 		PasswordResetRequired: false,
 	}}
-	r, repo := setupWithIssuer(stubIssuer)
+	r, repo := setupWithIssuer(t, stubIssuer)
 	seedUserInRepo(t, repo, testutil.TestID("usr-self"), "self-user")
 
 	body := `{"oldPassword":"oldpass","newPassword":"newpass"}`
@@ -515,7 +518,7 @@ func TestHandler_ChangePassword_AdminOnAnotherUser_Allowed(t *testing.T) {
 		AccessToken:  issuedAT,
 		RefreshToken: issuedRT,
 	}}
-	r, repo := setupWithIssuer(stubIssuer)
+	r, repo := setupWithIssuer(t, stubIssuer)
 	seedUserInRepo(t, repo, testutil.TestID("usr-target"), "target-user")
 
 	body := `{"oldPassword":"oldpass","newPassword":"newpass2"}`
@@ -530,7 +533,7 @@ func TestHandler_ChangePassword_AdminOnAnotherUser_Allowed(t *testing.T) {
 }
 
 func TestHandler_ChangePassword_StrangerForbidden(t *testing.T) {
-	r, repo := setupWithIssuer(nil)
+	r, repo := setupWithIssuer(t, nil)
 	seedUserInRepo(t, repo, testutil.TestID("usr-victim"), "victim-user")
 
 	body := `{"oldPassword":"oldpass","newPassword":"newpass"}`
@@ -544,7 +547,7 @@ func TestHandler_ChangePassword_StrangerForbidden(t *testing.T) {
 }
 
 func TestHandler_ChangePassword_BadJSON(t *testing.T) {
-	r, repo := setupWithIssuer(nil)
+	r, repo := setupWithIssuer(t, nil)
 	seedUserInRepo(t, repo, testutil.TestID("usr-badjson"), "badjson-user")
 
 	req := httptest.NewRequest(http.MethodPost, identityPrefix+"/"+testutil.TestID("usr-badjson")+"/password", strings.NewReader(`{bad json`))
@@ -557,7 +560,7 @@ func TestHandler_ChangePassword_BadJSON(t *testing.T) {
 }
 
 func TestHandler_Create_RequirePasswordResetField(t *testing.T) {
-	r := setup()
+	r := setup(t)
 
 	// Create with requirePasswordReset=true.
 	w := httptest.NewRecorder()
@@ -573,7 +576,7 @@ func TestHandler_Create_RequirePasswordResetField(t *testing.T) {
 }
 
 func TestHandler_Patch_RequirePasswordResetField(t *testing.T) {
-	r := setup()
+	r := setup(t)
 
 	// Create a user first.
 	w := httptest.NewRecorder()

@@ -14,15 +14,31 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	kernelclock "github.com/ghbvf/gocell/kernel/clock"
 )
 
 // ---------------------------------------------------------------------------
-// fixedClock — deterministic time source for sweep tests
+// fixedClock — deterministic time source for sweep tests; implements clock.Clock
 // ---------------------------------------------------------------------------
 
 type fixedClock struct{ now time.Time }
 
-func (c fixedClock) Now() time.Time { return c.now }
+func (c fixedClock) Now() time.Time                  { return c.now }
+func (c fixedClock) Since(t time.Time) time.Duration { return c.now.Sub(t) }
+func (c fixedClock) Until(t time.Time) time.Duration { return t.Sub(c.now) }
+func (c fixedClock) NewTimerAt(_ time.Time) kernelclock.Timer {
+	panic("fixedClock.NewTimerAt not implemented")
+}
+func (c fixedClock) NewTicker(_ time.Duration) kernelclock.Ticker {
+	panic("fixedClock.NewTicker not implemented")
+}
+func (c fixedClock) AfterFunc(_ time.Time, _ func()) kernelclock.Timer {
+	panic("fixedClock.AfterFunc not implemented")
+}
+func (c fixedClock) Sleep(_ context.Context, _ time.Time) error {
+	panic("fixedClock.Sleep not implemented")
+}
 
 // ---------------------------------------------------------------------------
 // manualScheduler — a no-fire scheduler for sweep tests
@@ -158,6 +174,7 @@ func TestSweep_EmptyCredentialPathUsesDefaultResolver(t *testing.T) {
 func TestSweep_RelativeCredentialPathReturnsError(t *testing.T) {
 	result, err := sweep(context.Background(), sweepConfig{
 		CredentialPath: "relative/initial_admin_password",
+		Clock:          kernelclock.Real(),
 	})
 
 	require.Error(t, err)

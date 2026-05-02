@@ -9,6 +9,8 @@ import (
 	"io"
 	"sync"
 	"time"
+
+	"github.com/ghbvf/gocell/kernel/clock"
 )
 
 // InMemClaimer is a process-local Claimer backed by a map + mutex. It is safe
@@ -28,8 +30,8 @@ import (
 type InMemClaimer struct {
 	mu      sync.Mutex
 	entries map[string]*inMemEntry
-	// now is indirected for tests; production uses time.Now.
-	now func() time.Time
+	// clk is the clock used for expiry; production uses clock.Real().
+	clk clock.Clock
 	// rand is the entropy source for token generation. Indirected for tests
 	// that need to exercise the crypto/rand.Read failure path; production
 	// uses crypto/rand.Reader.
@@ -45,12 +47,16 @@ type inMemEntry struct {
 	expiresAt time.Time
 }
 
-// NewInMemClaimer creates a new in-memory Claimer with default wall-clock
-// and the OS entropy source (crypto/rand.Reader).
-func NewInMemClaimer() *InMemClaimer {
+// NewInMemClaimer creates a new in-memory Claimer with the given clock and
+// the OS entropy source (crypto/rand.Reader).
+//
+// clk must be non-nil; use clock.Real() for production and clockmock.New()
+// in tests. clock.MustHaveClock panics early on nil.
+func NewInMemClaimer(clk clock.Clock) *InMemClaimer {
+	clock.MustHaveClock(clk, "idempotency.NewInMemClaimer")
 	return &InMemClaimer{
 		entries: make(map[string]*inMemEntry),
-		now:     time.Now,
+		clk:     clk,
 		rand:    rand.Reader,
 	}
 }
@@ -60,7 +66,7 @@ func (c *InMemClaimer) Claim(_ context.Context, key string, leaseTTL, doneTTL ti
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	now := c.now()
+	now := c.clk.Now()
 	if existing, ok := c.entries[key]; ok {
 		if now.Before(existing.expiresAt) {
 			if existing.state == ClaimDone {
@@ -118,7 +124,7 @@ func (r *inMemReceipt) Commit(_ context.Context) error {
 			return
 		}
 		entry.state = ClaimDone
-		entry.expiresAt = r.claimer.now().Add(r.doneTTL)
+		entry.expiresAt = r.claimer.clk.Now().Add(r.doneTTL)
 	})
 	return r.err
 }
@@ -147,7 +153,7 @@ func (r *inMemReceipt) Extend(_ context.Context, ttl time.Duration) error {
 	if !ok || entry.token != r.token {
 		return ErrLeaseExpired
 	}
-	entry.expiresAt = r.claimer.now().Add(ttl)
+	entry.expiresAt = r.claimer.clk.Now().Add(ttl)
 	return nil
 }
 

@@ -8,7 +8,9 @@ import (
 	"testing"
 
 	"github.com/ghbvf/gocell/cells/accesscore/internal/mem"
+	"github.com/ghbvf/gocell/cells/accesscore/internal/testutil"
 	"github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/stretchr/testify/assert"
@@ -20,6 +22,7 @@ func unsupportedDeps() cell.Dependencies {
 	return cell.Dependencies{
 		Config:         make(map[string]any),
 		DurabilityMode: cell.DurabilityDemo,
+		Clock:          clock.Real(),
 	}
 }
 
@@ -31,7 +34,7 @@ func unsupportedDeps() cell.Dependencies {
 func TestAccessCoreInit_InitialAdminUnsupportedPlatform_FailFast(t *testing.T) {
 	ac := NewAccessCore(
 		WithUserRepository(mem.NewUserRepository()),
-		WithSessionRepository(mem.NewSessionRepository()),
+		WithSessionRepository(testutil.NewSessionRepoForTest(t)),
 		WithRoleRepository(mem.NewRoleRepository()),
 		WithOutboxDeps(noopPublisher{}, nil),
 		WithJWTIssuer(testIssuer),
@@ -58,7 +61,7 @@ func TestAccessCoreInit_InitialAdminUnsupportedPlatform_FailFast(t *testing.T) {
 func TestAccessCoreInit_InitialAdminNotConfigured_NoCheck(t *testing.T) {
 	ac := NewAccessCore(
 		WithUserRepository(mem.NewUserRepository()),
-		WithSessionRepository(mem.NewSessionRepository()),
+		WithSessionRepository(testutil.NewSessionRepoForTest(t)),
 		WithRoleRepository(mem.NewRoleRepository()),
 		WithOutboxDeps(noopPublisher{}, nil),
 		WithJWTIssuer(testIssuer),

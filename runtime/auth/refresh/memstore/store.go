@@ -22,6 +22,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/validation"
 	"github.com/ghbvf/gocell/runtime/auth/refresh"
@@ -62,7 +63,7 @@ func (r *tokenRecord) toToken() *refresh.Token {
 type store struct {
 	mu     sync.Mutex
 	policy refresh.Policy
-	clock  refresh.Clock
+	clock  clock.Clock
 	rand   io.Reader
 
 	rows []*tokenRecord
@@ -73,7 +74,7 @@ type store struct {
 // Returns an error when clock is nil, policy.MaxAge is not positive, or
 // policy.ReuseInterval is negative. If randReader is nil, crypto/rand.Reader
 // is used.
-func New(policy refresh.Policy, clock refresh.Clock, randReader io.Reader) (refresh.Store, error) {
+func New(policy refresh.Policy, clock clock.Clock, randReader io.Reader) (refresh.Store, error) {
 	if validation.IsNilInterface(clock) {
 		return nil, errcode.New(errcode.ErrValidationFailed, "memstore.New: clock must not be nil")
 	}
@@ -90,7 +91,7 @@ func New(policy refresh.Policy, clock refresh.Clock, randReader io.Reader) (refr
 }
 
 // MustNew is the static-wiring variant of New.
-func MustNew(policy refresh.Policy, clock refresh.Clock, randReader io.Reader) refresh.Store {
+func MustNew(policy refresh.Policy, clock clock.Clock, randReader io.Reader) refresh.Store {
 	store, err := New(policy, clock, randReader)
 	if err != nil {
 		panic(err.Error())

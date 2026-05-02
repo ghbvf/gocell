@@ -1,18 +1,18 @@
-package locktest_test
+package clockmock_test
 
 import (
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/ghbvf/gocell/kernel/clock/clockmock"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
-	"github.com/ghbvf/gocell/runtime/distlock/locktest"
 )
 
 // TestFakeClock_NewTimerAt_FiresAtDeadline verifies that a timer created with
 // NewTimerAt fires the moment fc.now >= deadline.
 func TestFakeClock_NewTimerAt_FiresAtDeadline(t *testing.T) {
-	fc := locktest.NewFakeClock(epoch)
+	fc := clockmock.New(epoch)
 	deadline := epoch.Add(testtime.D5s)
 
 	timer := fc.NewTimerAt(deadline)
@@ -51,7 +51,7 @@ func TestFakeClock_NewTimerAt_FiresAtDeadline(t *testing.T) {
 // which step 5 cannot reach — exact root-cause of TC-3 flake on GitHub
 // runner under -race.
 func TestFakeClock_NewTimerAt_NotRebaselinedAcrossIntermediateAdvance(t *testing.T) {
-	fc := locktest.NewFakeClock(epoch)
+	fc := clockmock.New(epoch)
 	deadline := epoch.Add(testtime.D5s)
 
 	// Step 3: Advance happens BEFORE timer creation.
@@ -73,7 +73,7 @@ func TestFakeClock_NewTimerAt_NotRebaselinedAcrossIntermediateAdvance(t *testing
 // TestFakeClock_NewTimerAt_PastDeadlineFiresImmediately verifies that a
 // deadline already in the past fires right away (mirrors NewTimer(d<=0)).
 func TestFakeClock_NewTimerAt_PastDeadlineFiresImmediately(t *testing.T) {
-	fc := locktest.NewFakeClock(epoch)
+	fc := clockmock.New(epoch)
 	fc.Advance(testtime.D10s) // fc.now = T+10s
 
 	// Deadline at T+5s is in the past relative to fc.now.
@@ -93,7 +93,7 @@ func TestFakeClock_NewTimerAt_PastDeadlineFiresImmediately(t *testing.T) {
 // TestFakeClock_NewTimerAt_DeadlineEqualsNow_FiresImmediately covers the
 // boundary where deadline == fc.now (zero-duration equivalent).
 func TestFakeClock_NewTimerAt_DeadlineEqualsNow_FiresImmediately(t *testing.T) {
-	fc := locktest.NewFakeClock(epoch)
+	fc := clockmock.New(epoch)
 
 	timer := fc.NewTimerAt(epoch) // deadline == fc.now
 
@@ -114,7 +114,7 @@ func TestFakeClock_NewTimerAt_DeadlineEqualsNow_FiresImmediately(t *testing.T) {
 func TestFakeClock_NewTimerAt_ConcurrentWithAdvance(t *testing.T) {
 	const iterations = 200
 	for i := range iterations {
-		fc := locktest.NewFakeClock(epoch)
+		fc := clockmock.New(epoch)
 		deadline := epoch.Add(testtime.D5s)
 
 		var wg sync.WaitGroup

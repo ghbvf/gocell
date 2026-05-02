@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/ghbvf/gocell/cells/configcore/internal/domain"
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/query"
 )
@@ -44,7 +45,7 @@ func TestFlagRepository_Create(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			repo := NewFlagRepository()
+			repo := NewFlagRepository(clock.Real())
 			if tc.setup != nil {
 				tc.setup(repo)
 			}
@@ -63,7 +64,7 @@ func TestFlagRepository_Create(t *testing.T) {
 }
 
 func TestFlagRepository_GetByKey(t *testing.T) {
-	repo := NewFlagRepository()
+	repo := NewFlagRepository(clock.Real())
 	ctx := context.Background()
 
 	require.NoError(t, repo.Create(ctx, &domain.FeatureFlag{
@@ -87,7 +88,7 @@ func TestFlagRepository_GetByKey(t *testing.T) {
 }
 
 func TestFlagRepository_Update(t *testing.T) {
-	repo := NewFlagRepository()
+	repo := NewFlagRepository(clock.Real())
 	ctx := context.Background()
 
 	require.NoError(t, repo.Create(ctx, &domain.FeatureFlag{
@@ -112,7 +113,7 @@ func TestFlagRepository_Update(t *testing.T) {
 }
 
 func TestFlagRepository_List_SortByKey(t *testing.T) {
-	repo := NewFlagRepository()
+	repo := NewFlagRepository(clock.Real())
 	ctx := context.Background()
 
 	require.NoError(t, repo.Create(ctx, &domain.FeatureFlag{
@@ -141,7 +142,7 @@ func TestFlagRepository_List_SortByKey(t *testing.T) {
 }
 
 func TestFlagRepository_List_SortByID(t *testing.T) {
-	repo := NewFlagRepository()
+	repo := NewFlagRepository(clock.Real())
 	ctx := context.Background()
 
 	require.NoError(t, repo.Create(ctx, &domain.FeatureFlag{
@@ -165,7 +166,7 @@ func TestFlagRepository_List_SortByID(t *testing.T) {
 }
 
 func TestFlagRepository_List_UnknownField(t *testing.T) {
-	repo := NewFlagRepository()
+	repo := NewFlagRepository(clock.Real())
 	ctx := context.Background()
 
 	require.NoError(t, repo.Create(ctx, &domain.FeatureFlag{
@@ -185,7 +186,7 @@ func TestFlagRepository_List_UnknownField(t *testing.T) {
 }
 
 func TestFlagRepository_List_CursorPastEnd(t *testing.T) {
-	repo := NewFlagRepository()
+	repo := NewFlagRepository(clock.Real())
 	ctx := context.Background()
 
 	require.NoError(t, repo.Create(ctx, &domain.FeatureFlag{
@@ -206,7 +207,7 @@ func TestFlagRepository_List_CursorPastEnd(t *testing.T) {
 }
 
 func TestFlagRepository_List_WithCursor(t *testing.T) {
-	repo := NewFlagRepository()
+	repo := NewFlagRepository(clock.Real())
 	ctx := context.Background()
 
 	for i := range 5 {
@@ -239,7 +240,7 @@ func TestFlagRepository_List_WithCursor(t *testing.T) {
 }
 
 func TestFlagRepository_List_DESC(t *testing.T) {
-	repo := NewFlagRepository()
+	repo := NewFlagRepository(clock.Real())
 	ctx := context.Background()
 
 	require.NoError(t, repo.Create(ctx, &domain.FeatureFlag{
@@ -264,7 +265,7 @@ func TestFlagRepository_List_DESC(t *testing.T) {
 }
 
 func TestFlagRepository_List_CursorDESC(t *testing.T) {
-	repo := NewFlagRepository()
+	repo := NewFlagRepository(clock.Real())
 	ctx := context.Background()
 
 	require.NoError(t, repo.Create(ctx, &domain.FeatureFlag{
@@ -294,7 +295,7 @@ func TestFlagRepository_List_CursorDESC(t *testing.T) {
 }
 
 func TestFlagRepository_List_Empty(t *testing.T) {
-	repo := NewFlagRepository()
+	repo := NewFlagRepository(clock.Real())
 	params := query.ListParams{
 		Limit: 10,
 		Sort: []query.SortColumn{
@@ -310,7 +311,7 @@ func TestFlagRepository_List_Empty(t *testing.T) {
 // TestFlagRepository_ConcurrentCRUDAndList verifies that concurrent
 // CRUD and List calls do not race and maintain semantic invariants.
 func TestFlagRepository_ConcurrentCRUDAndList(t *testing.T) {
-	repo := NewFlagRepository()
+	repo := NewFlagRepository(clock.Real())
 	ctx := context.Background()
 
 	const writers = 5

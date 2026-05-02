@@ -18,6 +18,7 @@ import (
 	configcore "github.com/ghbvf/gocell/cells/configcore"
 	"github.com/ghbvf/gocell/kernel/assembly"
 	"github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/persistence"
@@ -55,15 +56,15 @@ func TestAuthWiring_RealAssembly_ProtectedRoutes401(t *testing.T) {
 
 	// Set up JWT key pair (same as main.go dev mode).
 	privKey, pubKey := auth.MustGenerateTestKeyPair()
-	keySet, err := auth.NewKeySet(privKey, pubKey)
+	keySet, err := auth.NewKeySet(privKey, pubKey, clock.Real())
 	require.NoError(t, err)
-	jwtIssuer, err := auth.NewJWTIssuer(keySet, "test", testtime.D15min,
+	jwtIssuer, err := auth.NewJWTIssuer(keySet, "test", testtime.D15min, clock.Real(),
 		auth.WithIssuerAudiencesFromSlice([]string{"gocell"}))
 	require.NoError(t, err)
-	jwtVerifier, err := auth.NewJWTVerifier(keySet, auth.WithExpectedAudiences("gocell"))
+	jwtVerifier, err := auth.NewJWTVerifier(keySet, clock.Real(), auth.WithExpectedAudiences("gocell"))
 	require.NoError(t, err)
 
-	eb := eventbus.New()
+	eb := eventbus.New(eventbus.WithClock(clock.Real()))
 	var nw outbox.Writer = outbox.NoopWriter{}
 
 	auditCursorCodec, err := query.NewCursorCodec([]byte("test-audit-cursor-key-32-bytes!!"))
@@ -95,7 +96,7 @@ func TestAuthWiring_RealAssembly_ProtectedRoutes401(t *testing.T) {
 		auditcore.WithMetricsProvider(metrics.NopProvider{}),
 	)
 
-	asm := assembly.New(assembly.Config{ID: "auth-test", DurabilityMode: cell.DurabilityDemo})
+	asm := assembly.New(assembly.Config{ID: "auth-test", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
 	require.NoError(t, asm.Register(ac))
 	require.NoError(t, asm.Register(cc))
 	require.NoError(t, asm.Register(auc))
@@ -105,6 +106,7 @@ func TestAuthWiring_RealAssembly_ProtectedRoutes401(t *testing.T) {
 	// cell.Policy (round-3 collapse): its Validate hook resolves the verifier
 	// from accesscore's authProvider during phase4.
 	app := bootstrap.New(
+		bootstrap.WithClock(clock.Real()),
 		bootstrap.WithAssembly(asm),
 		bootstrap.WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{cell.MustNewAuthJWTFromAssembly(asm)}, bootstrap.WithListenerNet(ln)),
 		withCorebundleTestInternalListener(t, newCorebundleLocalListener(t)),
@@ -251,12 +253,12 @@ func TestAuthWiring_InternalGuard_RequiresServiceToken(t *testing.T) {
 
 	// JWT key pair for auth middleware.
 	privKey, pubKey := auth.MustGenerateTestKeyPair()
-	keySet, err := auth.NewKeySet(privKey, pubKey)
+	keySet, err := auth.NewKeySet(privKey, pubKey, clock.Real())
 	require.NoError(t, err)
-	jwtIssuer, err := auth.NewJWTIssuer(keySet, "guard-test", testtime.D15min,
+	jwtIssuer, err := auth.NewJWTIssuer(keySet, "guard-test", testtime.D15min, clock.Real(),
 		auth.WithIssuerAudiencesFromSlice([]string{"gocell"}))
 	require.NoError(t, err)
-	jwtVerifier, err := auth.NewJWTVerifier(keySet, auth.WithExpectedAudiences("gocell"))
+	jwtVerifier, err := auth.NewJWTVerifier(keySet, clock.Real(), auth.WithExpectedAudiences("gocell"))
 	require.NoError(t, err)
 
 	// Service HMAC key ring for the internal guard.
@@ -269,11 +271,11 @@ func TestAuthWiring_InternalGuard_RequiresServiceToken(t *testing.T) {
 	// Shared across all subtests below — do NOT add t.Parallel() to the
 	// subtests without isolating the store per subtest, or the replay
 	// subtest's nonce can be consumed by a peer before it runs.
-	nonceStore, err := auth.NewInMemoryNonceStore(auth.ServiceTokenNonceTTL)
+	nonceStore, err := auth.NewInMemoryNonceStore(auth.ServiceTokenNonceTTL, clock.Real())
 	require.NoError(t, err)
-	guard := auth.ServiceTokenMiddleware(ring, auth.WithServiceTokenNonceStore(nonceStore))
+	guard := auth.ServiceTokenMiddleware(ring, clock.Real(), auth.WithServiceTokenNonceStore(nonceStore))
 
-	eb := eventbus.New()
+	eb := eventbus.New(eventbus.WithClock(clock.Real()))
 	var nw outbox.Writer = outbox.NoopWriter{}
 
 	auditCursorCodec, err := query.NewCursorCodec([]byte("guard-test-audit-key-32-bytes!!!"))
@@ -305,7 +307,7 @@ func TestAuthWiring_InternalGuard_RequiresServiceToken(t *testing.T) {
 		auditcore.WithMetricsProvider(metrics.NopProvider{}),
 	)
 
-	asm := assembly.New(assembly.Config{ID: "guard-test", DurabilityMode: cell.DurabilityDemo})
+	asm := assembly.New(assembly.Config{ID: "guard-test", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
 	require.NoError(t, asm.Register(ac))
 	require.NoError(t, asm.Register(cc))
 	require.NoError(t, asm.Register(auc))
@@ -320,6 +322,7 @@ func TestAuthWiring_InternalGuard_RequiresServiceToken(t *testing.T) {
 	internalLn := newCorebundleLocalListener(t)
 	internalAuthChain := []cell.ListenerAuth{cell.MustNewAuthServiceToken(nonceStore, ring)}
 	app := bootstrap.New(
+		bootstrap.WithClock(clock.Real()),
 		bootstrap.WithAssembly(asm),
 		bootstrap.WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{cell.MustNewAuthJWTFromAssembly(asm)}, bootstrap.WithListenerNet(ln)),
 		bootstrap.WithListener(cell.InternalListener, internalLn.Addr().String(), internalAuthChain,
@@ -483,15 +486,15 @@ func TestAuthWiring_HealthListener_PrimaryDoesNotServeHealthz(t *testing.T) {
 
 	// JWT key pair.
 	privKey, pubKey := auth.MustGenerateTestKeyPair()
-	keySet, err := auth.NewKeySet(privKey, pubKey)
+	keySet, err := auth.NewKeySet(privKey, pubKey, clock.Real())
 	require.NoError(t, err)
-	jwtIssuer, err := auth.NewJWTIssuer(keySet, "health-test", testtime.D15min,
+	jwtIssuer, err := auth.NewJWTIssuer(keySet, "health-test", testtime.D15min, clock.Real(),
 		auth.WithIssuerAudiencesFromSlice([]string{"gocell"}))
 	require.NoError(t, err)
-	jwtVerifier, err := auth.NewJWTVerifier(keySet, auth.WithExpectedAudiences("gocell"))
+	jwtVerifier, err := auth.NewJWTVerifier(keySet, clock.Real(), auth.WithExpectedAudiences("gocell"))
 	require.NoError(t, err)
 
-	eb := eventbus.New()
+	eb := eventbus.New(eventbus.WithClock(clock.Real()))
 	var nw outbox.Writer = outbox.NoopWriter{}
 
 	auditCursorCodec, err := query.NewCursorCodec([]byte("health-test-audit-key-32-bytes!!"))
@@ -523,12 +526,13 @@ func TestAuthWiring_HealthListener_PrimaryDoesNotServeHealthz(t *testing.T) {
 		auditcore.WithMetricsProvider(metrics.NopProvider{}),
 	)
 
-	asm := assembly.New(assembly.Config{ID: "health-listener-test", DurabilityMode: cell.DurabilityDemo})
+	asm := assembly.New(assembly.Config{ID: "health-listener-test", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
 	require.NoError(t, asm.Register(ac))
 	require.NoError(t, asm.Register(cc))
 	require.NoError(t, asm.Register(auc))
 
 	app := bootstrap.New(
+		bootstrap.WithClock(clock.Real()),
 		bootstrap.WithAssembly(asm),
 		bootstrap.WithListener(cell.PrimaryListener, primaryLn.Addr().String(), []cell.ListenerAuth{cell.MustNewAuthJWTFromAssembly(asm)},
 			bootstrap.WithListenerNet(primaryLn)),

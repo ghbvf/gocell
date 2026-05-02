@@ -18,6 +18,7 @@ import (
 	"github.com/ghbvf/gocell/cells/accesscore/internal/adminprovision"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/domain"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/ports"
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/runtime/worker"
 )
@@ -35,7 +36,7 @@ type BootstrapDeps struct {
 	UserRepo ports.UserRepository
 	RoleRepo ports.RoleRepository
 	Logger   *slog.Logger
-	Clock    Clock
+	Clock    clock.Clock
 }
 
 // bootstrapConfig controls the bootstrap behavior.
@@ -104,14 +105,12 @@ func newBootstrapper(deps BootstrapDeps, cfg bootstrapConfig) (*bootstrapper, er
 	if cfg.TTL == 0 {
 		cfg.TTL = defaultTTL
 	}
-	if deps.Clock == nil {
-		deps.Clock = realClock{}
-	}
+	clock.MustHaveClock(deps.Clock, "initialadmin.newBootstrapper")
 	if cfg.Hasher == nil {
 		cfg.Hasher = defaultPasswordHasher()
 	}
 
-	prov, err := adminprovision.NewProvisioner(deps.UserRepo, deps.RoleRepo, deps.Logger, uuid.NewString)
+	prov, err := adminprovision.NewProvisioner(deps.UserRepo, deps.RoleRepo, deps.Logger, uuid.NewString, deps.Clock)
 	if err != nil {
 		return nil, fmt.Errorf("initialadmin: build provisioner: %w", err)
 	}

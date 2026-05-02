@@ -26,7 +26,8 @@ func NewHashChain(hmacKey []byte) *HashChain {
 
 // Append adds a new entry to the chain. It computes the HMAC-SHA256 hash
 // linking this entry to its predecessor and returns the resulting AuditEntry.
-func (hc *HashChain) Append(eventID, eventType, actorID string, payload []byte) *AuditEntry {
+// now is the wall-clock instant provided by the caller's clock.Clock.
+func (hc *HashChain) Append(eventID, eventType, actorID string, payload []byte, now time.Time) *AuditEntry {
 	prevHash := ""
 	if len(hc.entries) > 0 {
 		prevHash = hc.entries[len(hc.entries)-1].Hash
@@ -36,7 +37,7 @@ func (hc *HashChain) Append(eventID, eventType, actorID string, payload []byte) 
 		EventID:   eventID,
 		EventType: eventType,
 		ActorID:   actorID,
-		Timestamp: time.Now(),
+		Timestamp: now,
 		Payload:   payload,
 		PrevHash:  prevHash,
 	}

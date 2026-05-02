@@ -5,6 +5,8 @@ package initialadmin
 import (
 	"context"
 	"log/slog"
+
+	"github.com/ghbvf/gocell/kernel/clock"
 )
 
 // sweepConfig parameterises startup-time credential sweep.
@@ -12,8 +14,8 @@ import (
 type sweepConfig struct {
 	// CredentialPath is the exact credential file to sweep.
 	CredentialPath string
-	// Clock supplies "now" for expiry comparison. nil → realClock{}.
-	Clock Clock
+	// Clock supplies "now" for expiry comparison. nil → clock.Real().
+	Clock clock.Clock
 	// Scheduler is used when constructing the returned cleaner worker. nil → realScheduler{}.
 	Scheduler Scheduler
 	// Logger is optional; nil falls back to slog.Default().

@@ -9,7 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/ghbvf/gocell/cells/accesscore/internal/dto"
-	"github.com/ghbvf/gocell/cells/accesscore/internal/mem"
+	"github.com/ghbvf/gocell/cells/accesscore/internal/testutil"
 	"github.com/ghbvf/gocell/cells/internal/testoutbox"
 	"github.com/ghbvf/gocell/kernel/outbox"
 )
@@ -33,7 +33,7 @@ func (s *stubTxRunner) RunInTx(_ context.Context, fn func(context.Context) error
 // --- tests ---
 
 func TestService_WithEmitter(t *testing.T) {
-	repo := mem.NewSessionRepository()
+	repo := testutil.RealSessionRepo(t)
 	ow := &stubOutboxWriter{}
 	svc := MustNewService(repo, newLogoutRefreshStore(), slog.Default(), WithEmitter(testoutbox.MustEmitter(t, ow)))
 
@@ -46,7 +46,7 @@ func TestService_WithEmitter(t *testing.T) {
 }
 
 func TestService_WithTxManager(t *testing.T) {
-	repo := mem.NewSessionRepository()
+	repo := testutil.RealSessionRepo(t)
 	tx := &stubTxRunner{}
 	svc := MustNewService(repo, newLogoutRefreshStore(), slog.Default(), WithTxManager(tx))
 
@@ -57,7 +57,7 @@ func TestService_WithTxManager(t *testing.T) {
 }
 
 func TestService_WithOutboxAndTx(t *testing.T) {
-	repo := mem.NewSessionRepository()
+	repo := testutil.RealSessionRepo(t)
 	ow := &stubOutboxWriter{}
 	tx := &stubTxRunner{}
 	svc := MustNewService(repo, newLogoutRefreshStore(), slog.Default(),
@@ -71,7 +71,7 @@ func TestService_WithOutboxAndTx(t *testing.T) {
 }
 
 func TestService_LogoutUser_EmptyID(t *testing.T) {
-	svc, _ := newTestService()
+	svc, _ := newTestService(t)
 	err := svc.LogoutUser(context.Background(), "")
 	assert.Error(t, err)
 }

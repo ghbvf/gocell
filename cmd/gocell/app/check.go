@@ -13,6 +13,7 @@ import (
 	"golang.org/x/tools/go/packages"
 
 	"github.com/ghbvf/gocell/cmd/gocell/app/printers"
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/governance"
 	"github.com/ghbvf/gocell/kernel/metadata"
 	"github.com/ghbvf/gocell/kernel/registry"
@@ -111,7 +112,7 @@ func checkContractHealth(args []string) error {
 		printContractHealthTable(contracts)
 	}
 
-	validator := governance.NewValidator(project, root)
+	validator := governance.NewValidator(project, root, clock.Real())
 	results := validator.CheckContractHealth(contracts)
 	results = append(results, validator.CheckHTTPResponseAlignment(contracts, root)...)
 	results = append(results, validator.CheckHTTPPathParamUUID(contracts, root)...)

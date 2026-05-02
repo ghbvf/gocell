@@ -16,6 +16,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	kcell "github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/runtime/auth"
 )
 
@@ -45,7 +46,7 @@ func countingMW(counter *atomic.Int64) func(http.Handler) http.Handler {
 // the primary listener router (built via NewForListener) returns 404 for any
 // path not registered, including /internal/v1/* and /healthz.
 func TestPerListener_PrimaryRouter_Returns404_ForUnregisteredPaths(t *testing.T) {
-	rtr, err := NewForListener(kcell.PrimaryListener)
+	rtr, err := NewForListener(kcell.PrimaryListener, WithRouterClock(clock.Real()))
 	require.NoError(t, err)
 
 	cases := []string{
@@ -67,7 +68,7 @@ func TestPerListener_PrimaryRouter_Returns404_ForUnregisteredPaths(t *testing.T)
 // TestPerListener_InternalRouter_RoutesInternalPrefix verifies that a route
 // registered on an InternalListener router is reachable through that router.
 func TestPerListener_InternalRouter_RoutesInternalPrefix(t *testing.T) {
-	rtr, err := NewForListener(kcell.InternalListener)
+	rtr, err := NewForListener(kcell.InternalListener, WithRouterClock(clock.Real()))
 	require.NoError(t, err)
 
 	var hit atomic.Int64
@@ -89,7 +90,7 @@ func TestPerListener_InternalRouter_RoutesInternalPrefix(t *testing.T) {
 // TestPerListener_HealthRouter_RoutesHealthPrefix verifies a health-listener
 // router serves health paths.
 func TestPerListener_HealthRouter_RoutesHealthPrefix(t *testing.T) {
-	rtr, err := NewForListener(kcell.HealthListener)
+	rtr, err := NewForListener(kcell.HealthListener, WithRouterClock(clock.Real()))
 	require.NoError(t, err)
 
 	var hit atomic.Int64
@@ -112,7 +113,7 @@ func TestPerListener_Middleware_AppliedToSingleMux(t *testing.T) {
 	var guardCount atomic.Int64
 	guard := countingMW(&guardCount)
 
-	rtr, err := NewForListener(kcell.InternalListener)
+	rtr, err := NewForListener(kcell.InternalListener, WithRouterClock(clock.Real()))
 	require.NoError(t, err)
 
 	rtr.Route("/internal/v1/access", func(sub kcell.RouteMux) {
@@ -133,7 +134,7 @@ func TestPerListener_Middleware_AppliedToSingleMux(t *testing.T) {
 // is explicitly passed. Policy enforcement is at the listener level via
 // PolicyServiceToken / PolicyMTLS, not via WithAuthMiddleware.
 func TestPerListener_InternalRoutes_NoDefaultAuth(t *testing.T) {
-	rtr, err := NewForListener(kcell.InternalListener) // no policy, no auth middleware
+	rtr, err := NewForListener(kcell.InternalListener, WithRouterClock(clock.Real())) // no policy, no auth middleware
 	require.NoError(t, err)
 
 	var reached atomic.Int64
@@ -158,6 +159,7 @@ func TestPerListener_PrimaryRouter_WithAuthMiddleware_Enforces(t *testing.T) {
 	verifier := &dualMuxMockVerifier{err: errors.New("no token provided")}
 
 	rtr, err := NewForListener(kcell.PrimaryListener,
+		WithRouterClock(clock.Real()),
 		WithAuthMiddleware(verifier),
 		// Whitelist the test path from policy coverage; this test validates JWT
 		// enforcement, not auth.Declare coverage.
@@ -184,7 +186,7 @@ func TestPerListener_PrimaryRouter_WithAuthMiddleware_Enforces(t *testing.T) {
 // /internal/v1/* route declared on a zero-ref router (unit-test scenario)
 // passes FinalizeAuth — the listener-identity check is skipped for zero-ref.
 func TestDualMux_FinalizeAuth_InternalPathOnZeroRefAccepted(t *testing.T) {
-	rtr, err := New()
+	rtr, err := New(WithRouterClock(clock.Real()))
 	require.NoError(t, err)
 
 	// Zero-ref router: listener-identity check is skipped.
@@ -200,7 +202,7 @@ func TestDualMux_FinalizeAuth_InternalPathOnZeroRefAccepted(t *testing.T) {
 // TestDualMux_FinalizeAuth_AcceptsConsistentDeclarations confirms the happy
 // path: internal /internal/v1/* and public /api/v1/* routes both pass.
 func TestDualMux_FinalizeAuth_AcceptsConsistentDeclarations(t *testing.T) {
-	rtr, err := New(WithPolicyCoverageWhitelist([]string{
+	rtr, err := New(WithRouterClock(clock.Real()), WithPolicyCoverageWhitelist([]string{
 		"/internal/v1/*",
 		"/api/v1/*",
 	}))
@@ -223,6 +225,7 @@ func TestDualMux_FinalizeAuth_AcceptsConsistentDeclarations(t *testing.T) {
 // route + public-matcher-prefix + policy-coverage-whitelist mechanism).
 func TestInternalPrefixIsolationResponder(t *testing.T) {
 	rtr, err := NewForListener(kcell.PrimaryListener,
+		WithRouterClock(clock.Real()),
 		InternalPrefixIsolationResponder())
 	require.NoError(t, err)
 

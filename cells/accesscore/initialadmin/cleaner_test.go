@@ -13,6 +13,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	kernelclock "github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 )
 
@@ -192,6 +193,7 @@ func newTestCleaner(t *testing.T, path string, sched *fakeScheduler, handler *ca
 		TTL:       testtime.D24h,
 		Logger:    logger,
 		Scheduler: sched,
+		Clock:     kernelclock.Real(),
 	})
 	if err != nil {
 		t.Fatalf("newCleaner: %v", err)
@@ -464,7 +466,7 @@ func TestCleaner_TamperedFileStillDeleted(t *testing.T) {
 }
 
 func TestRealScheduler_AfterFunc(t *testing.T) {
-	s := realScheduler{}
+	s := newRealScheduler(kernelclock.Real())
 	called := make(chan struct{})
 	c := s.AfterFunc(testtime.D1ms, func() { close(called) })
 	// Must return a Cancellable.
@@ -519,6 +521,7 @@ func TestCleaner_RecoversTTLFromFileExpiresAt(t *testing.T) {
 		TTL:       testtime.D24h, // original TTL — Start must ignore this for restart path
 		Logger:    slog.New(handler),
 		Scheduler: sched,
+		Clock:     kernelclock.Real(),
 	})
 	require.NoError(t, err)
 
@@ -559,6 +562,7 @@ func TestCleaner_AlreadyExpired_ImmediateDelete(t *testing.T) {
 		TTL:       testtime.D24h,
 		Logger:    slog.New(handler),
 		Scheduler: sched,
+		Clock:     kernelclock.Real(),
 	})
 	require.NoError(t, err)
 
@@ -593,6 +597,7 @@ func TestCleaner_NoFile_NoOp(t *testing.T) {
 		TTL:       testtime.D24h,
 		Logger:    slog.New(handler),
 		Scheduler: sched,
+		Clock:     kernelclock.Real(),
 	})
 	require.NoError(t, err)
 
@@ -628,6 +633,7 @@ func TestNewCleaner_MissingPath(t *testing.T) {
 		Path:   "",
 		TTL:    testtime.D24h,
 		Logger: slog.Default(),
+		Clock:  kernelclock.Real(),
 	})
 	if err == nil {
 		t.Error("expected error for empty path")
@@ -639,6 +645,7 @@ func TestNewCleaner_ZeroTTL(t *testing.T) {
 		Path:   "/tmp/x",
 		TTL:    0,
 		Logger: slog.Default(),
+		Clock:  kernelclock.Real(),
 	})
 	if err == nil {
 		t.Error("expected error for zero TTL")
@@ -650,6 +657,7 @@ func TestNewCleaner_NilLogger(t *testing.T) {
 		Path:   "/tmp/x",
 		TTL:    testtime.D24h,
 		Logger: nil,
+		Clock:  kernelclock.Real(),
 	})
 	if err == nil {
 		t.Error("expected error for nil logger")
@@ -662,6 +670,7 @@ func TestNewCleaner_DefaultsApplied(t *testing.T) {
 		TTL:    testtime.D24h,
 		Logger: slog.Default(),
 		// Clock and Scheduler omitted → should default to realClock/realScheduler
+		Clock: kernelclock.Real(),
 	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)

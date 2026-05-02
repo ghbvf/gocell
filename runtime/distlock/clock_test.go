@@ -4,8 +4,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
-	"github.com/ghbvf/gocell/runtime/distlock"
 )
 
 const clockDNeg100ms = -100 * time.Millisecond
@@ -13,7 +13,7 @@ const clockDNeg100ms = -100 * time.Millisecond
 // TestRealClock_NowReturnsCurrentTime verifies that the real clock's Now()
 // returns a time within 1ms of time.Now().
 func TestRealClock_NowReturnsCurrentTime(t *testing.T) {
-	clk := distlock.RealClockForTest()
+	clk := clock.Real()
 	before := time.Now()
 	got := clk.Now()
 	after := time.Now()
@@ -27,7 +27,7 @@ func TestRealClock_NowReturnsCurrentTime(t *testing.T) {
 // Uses 10ms — the minimum sane value for race-detector scheduling overhead.
 // Wall-clock waiting is unavoidable for testing realClock timers.
 func TestRealClock_NewTimerAt_FiresAfterDuration(t *testing.T) {
-	clk := distlock.RealClockForTest()
+	clk := clock.Real()
 
 	timer := clk.NewTimerAt(clk.Now().Add(testtime.D10ms))
 	defer timer.Stop()
@@ -43,7 +43,7 @@ func TestRealClock_NewTimerAt_FiresAfterDuration(t *testing.T) {
 // TestRealClock_NewTimerAt_StopReturnsTrueWhenNotFired verifies Stop() returns
 // true if called before the timer fires.
 func TestRealClock_NewTimerAt_StopReturnsTrueWhenNotFired(t *testing.T) {
-	clk := distlock.RealClockForTest()
+	clk := clock.Real()
 
 	// Deadline far in the future so the timer won't fire before we stop it.
 	timer := clk.NewTimerAt(clk.Now().Add(testtime.D10min))
@@ -57,7 +57,7 @@ func TestRealClock_NewTimerAt_StopReturnsTrueWhenNotFired(t *testing.T) {
 // a timer so it fires at the new deadline.
 // Uses 10ms wall-clock wait — unavoidable for realClock timer testing.
 func TestRealClock_NewTimerAt_ResetFiresAfterReset(t *testing.T) {
-	clk := distlock.RealClockForTest()
+	clk := clock.Real()
 
 	// Start a timer with a far-future deadline, stop it, reset to 10ms.
 	timer := clk.NewTimerAt(clk.Now().Add(testtime.D10min))
@@ -74,7 +74,7 @@ func TestRealClock_NewTimerAt_ResetFiresAfterReset(t *testing.T) {
 
 // TestRealClock_Since verifies that Since returns a non-negative duration.
 func TestRealClock_Since(t *testing.T) {
-	clk := distlock.RealClockForTest()
+	clk := clock.Real()
 
 	past := time.Now().Add(clockDNeg100ms)
 	d := clk.Since(past)

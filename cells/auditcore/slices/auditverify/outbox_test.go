@@ -14,6 +14,7 @@ import (
 	"github.com/ghbvf/gocell/cells/auditcore/internal/domain"
 	"github.com/ghbvf/gocell/cells/auditcore/internal/dto"
 	"github.com/ghbvf/gocell/cells/auditcore/internal/mem"
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/kernel/outbox"
 )
@@ -54,7 +55,7 @@ func TestService_WithEmitter(t *testing.T) {
 	// Build a small valid chain.
 	chain := domain.NewHashChain(testHMACKey)
 	for i := range 3 {
-		entry := chain.Append("evt-"+string(rune('0'+i)), "event.test", "actor-1", []byte("payload"))
+		entry := chain.Append("evt-"+string(rune('0'+i)), "event.test", "actor-1", []byte("payload"), clock.Real().Now())
 		require.NoError(t, repo.Append(context.Background(), entry))
 	}
 
@@ -85,7 +86,7 @@ func TestService_VerifyChain_OutboxWriteError_ReturnsError(t *testing.T) {
 	// Build a valid chain so we reach the outbox write path.
 	chain := domain.NewHashChain(testHMACKey)
 	for i := range 3 {
-		entry := chain.Append("evt-"+string(rune('0'+i)), "event.test", "actor-1", []byte("payload"))
+		entry := chain.Append("evt-"+string(rune('0'+i)), "event.test", "actor-1", []byte("payload"), clock.Real().Now())
 		require.NoError(t, repo.Append(context.Background(), entry))
 	}
 
@@ -107,7 +108,7 @@ func TestService_VerifyChain_WithTxRunner_RunsInTx(t *testing.T) {
 
 	chain := domain.NewHashChain(testHMACKey)
 	for i := range 3 {
-		entry := chain.Append("evt-"+string(rune('0'+i)), "event.test", "actor-1", []byte("payload"))
+		entry := chain.Append("evt-"+string(rune('0'+i)), "event.test", "actor-1", []byte("payload"), clock.Real().Now())
 		require.NoError(t, repo.Append(context.Background(), entry))
 	}
 
@@ -128,7 +129,7 @@ func TestService_VerifyChain_TxRunnerError_ReturnsError(t *testing.T) {
 
 	chain := domain.NewHashChain(testHMACKey)
 	for i := range 3 {
-		entry := chain.Append("evt-"+string(rune('0'+i)), "event.test", "actor-1", []byte("payload"))
+		entry := chain.Append("evt-"+string(rune('0'+i)), "event.test", "actor-1", []byte("payload"), clock.Real().Now())
 		require.NoError(t, repo.Append(context.Background(), entry))
 	}
 
@@ -151,14 +152,14 @@ func TestService_VerifyChain_PublishError_DoesNotFailVerify(t *testing.T) {
 	fp := failingPublisher{err: fmt.Errorf("broker unavailable")}
 	// No outboxWriter → goes through direct-publish path.
 	emitter, err := outbox.NewDirectEmitter(
-		fp, outbox.DirectPublishFailOpen, metrics.NopProvider{}, "auditcore",
+		fp, outbox.DirectPublishFailOpen, metrics.NopProvider{}, clock.Real(), "auditcore",
 		outbox.WithLogger(slog.Default()))
 	require.NoError(t, err)
 	svc := NewService(repo, testHMACKey, slog.Default(), WithEmitter(emitter))
 
 	chain := domain.NewHashChain(testHMACKey)
 	for i := range 3 {
-		entry := chain.Append("evt-"+string(rune('0'+i)), "event.test", "actor-1", []byte("payload"))
+		entry := chain.Append("evt-"+string(rune('0'+i)), "event.test", "actor-1", []byte("payload"), clock.Real().Now())
 		require.NoError(t, repo.Append(context.Background(), entry))
 	}
 
@@ -175,7 +176,7 @@ func TestService_VerifyChain_InvalidChain_WithOutbox(t *testing.T) {
 
 	chain := domain.NewHashChain(testHMACKey)
 	for i := range 3 {
-		entry := chain.Append("evt-"+string(rune('0'+i)), "event.test", "actor-1", []byte("payload"))
+		entry := chain.Append("evt-"+string(rune('0'+i)), "event.test", "actor-1", []byte("payload"), clock.Real().Now())
 		if i == 1 {
 			entry.Hash = "tampered"
 		}

@@ -5,6 +5,8 @@ import (
 	"log/slog"
 	"sync"
 	"time"
+
+	"github.com/ghbvf/gocell/kernel/clock"
 )
 
 // Compile-time interface check.
@@ -14,14 +16,17 @@ var _ Worker = (*PeriodicWorker)(nil)
 // are isolated and logged, not propagated.
 type PeriodicWorker struct {
 	mu       sync.Mutex
+	clk      clock.Clock
 	interval time.Duration
 	fn       func(ctx context.Context)
 	done     chan struct{}
 }
 
 // NewPeriodicWorker creates a PeriodicWorker that runs fn every interval.
-func NewPeriodicWorker(interval time.Duration, fn func(ctx context.Context)) *PeriodicWorker {
+func NewPeriodicWorker(clk clock.Clock, interval time.Duration, fn func(ctx context.Context)) *PeriodicWorker {
+	clock.MustHaveClock(clk, "worker.NewPeriodicWorker")
 	return &PeriodicWorker{
+		clk:      clk,
 		interval: interval,
 		fn:       fn,
 		done:     make(chan struct{}),
@@ -37,7 +42,7 @@ func (p *PeriodicWorker) Start(ctx context.Context) error {
 	done := p.done
 	p.mu.Unlock()
 
-	ticker := time.NewTicker(p.interval)
+	ticker := p.clk.NewTicker(p.interval)
 	defer ticker.Stop()
 
 	for {
@@ -46,7 +51,7 @@ func (p *PeriodicWorker) Start(ctx context.Context) error {
 			return ctx.Err()
 		case <-done:
 			return nil
-		case <-ticker.C:
+		case <-ticker.C():
 			p.runSafe(ctx)
 		}
 	}

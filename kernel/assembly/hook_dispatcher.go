@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/observability/metrics"
 )
 
@@ -66,6 +67,7 @@ type hookDispatcher struct {
 	observer    cell.LifecycleHookObserver
 	sinkTimeout time.Duration
 	dropped     metrics.CounterVec // labeled by reason
+	clock       clock.Clock
 	wg          sync.WaitGroup
 	stopOnce    sync.Once
 	done        chan struct{} // closed when the worker loop exits
@@ -93,6 +95,9 @@ type dispatcherConfig struct {
 	// Provider backs drop/queue-depth metrics. Nil falls back to
 	// metrics.NopProvider — dispatcher still works, emissions go nowhere.
 	Provider metrics.Provider
+	// Clock is the time source for flush deadline timers. Required; use
+	// clock.Real() in production and clockmock.New() in tests.
+	Clock clock.Clock
 }
 
 // newHookDispatcher constructs + eagerly starts a dispatcher.
@@ -106,6 +111,7 @@ func newHookDispatcher(cfg dispatcherConfig) *hookDispatcher {
 	if cfg.Provider == nil {
 		cfg.Provider = metrics.NopProvider{}
 	}
+	clock.MustHaveClock(cfg.Clock, "assembly.newHookDispatcher")
 
 	dropped, err := cfg.Provider.CounterVec(metrics.CounterOpts{
 		Name:       "hook_observer_dropped_total",
@@ -127,6 +133,7 @@ func newHookDispatcher(cfg dispatcherConfig) *hookDispatcher {
 		observer:    cfg.Observer,
 		sinkTimeout: cfg.SinkTimeout,
 		dropped:     dropped,
+		clock:       cfg.Clock,
 		done:        make(chan struct{}),
 	}
 	d.wg.Add(1)
@@ -194,18 +201,18 @@ func (d *hookDispatcher) flush(timeout time.Duration) (ok bool) {
 	// false. Tests pass timeouts >= 500ms (see hook_dispatcher_test.go)
 	// to stay comfortably above this pathology. Callers that need
 	// independent budgets can call flush twice.
-	t := time.NewTimer(timeout)
+	t := d.clock.NewTimerAt(d.clock.Now().Add(timeout))
 	defer t.Stop()
 
 	select {
 	case d.ch <- item:
-	case <-t.C:
+	case <-t.C():
 		return false
 	}
 	select {
 	case <-signal:
 		return true
-	case <-t.C:
+	case <-t.C():
 		return false
 	}
 }
@@ -248,10 +255,13 @@ func (d *hookDispatcher) dispatchOne(e cell.HookEvent) {
 		d.observer.OnHookEvent(e)
 	}()
 
+	t := d.clock.NewTimerAt(d.clock.Now().Add(d.sinkTimeout))
 	select {
 	case <-result:
 		// Normal completion or caught panic.
-	case <-time.After(d.sinkTimeout):
+		t.Stop()
+	case <-t.C():
+		t.Stop()
 		d.dropped.With(metrics.Labels{"reason": DropReasonSinkTimeout}).Inc()
 		slog.Warn("lifecycle: hook observer exceeded sink timeout; abandoning",
 			slog.String("cell", e.CellID),
@@ -274,10 +284,13 @@ func (d *hookDispatcher) stop(drainTimeout time.Duration) {
 		if drainTimeout <= 0 {
 			drainTimeout = DefaultHookObserverDrainTimeout
 		}
+		t := d.clock.NewTimerAt(d.clock.Now().Add(drainTimeout))
 		select {
 		case <-d.done:
 			// Drained cleanly.
-		case <-time.After(drainTimeout):
+			t.Stop()
+		case <-t.C():
+			t.Stop()
 			slog.Warn("assembly: hook dispatcher drain timed out; abandoning worker",
 				slog.Duration("timeout", drainTimeout))
 		}

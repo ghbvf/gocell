@@ -17,6 +17,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 )
 
@@ -25,9 +26,9 @@ import (
 func buildAudTestPair(t *testing.T) (*JWTIssuer, *JWTVerifier) {
 	t.Helper()
 	ks := mustTestKeySet(t)
-	issuer, err := NewJWTIssuer(ks, "test", testtime.D15min)
+	issuer, err := NewJWTIssuer(ks, "test", testtime.D15min, clock.Real())
 	require.NoError(t, err)
-	verifier, err := NewJWTVerifier(ks, WithExpectedAudiences("gocell"))
+	verifier, err := NewJWTVerifier(ks, clock.Real(), WithExpectedAudiences("gocell"))
 	require.NoError(t, err)
 	return issuer, verifier
 }
@@ -45,7 +46,7 @@ func TestAuthMiddleware_WrongAudience_Returns401(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	h := AuthMiddleware(verifier)(audProtectedHandler)
+	h := AuthMiddleware(verifier, WithAuthClock(clock.Real()))(audProtectedHandler)
 
 	req := httptest.NewRequest(http.MethodGet, "/protected", nil)
 	req.Header.Set("Authorization", "Bearer "+token)
@@ -62,7 +63,7 @@ func TestAuthMiddleware_MissingAudience_Returns401(t *testing.T) {
 	token, err := issuer.Issue(TokenIntentAccess, "alice", IssueOptions{})
 	require.NoError(t, err)
 
-	h := AuthMiddleware(verifier)(audProtectedHandler)
+	h := AuthMiddleware(verifier, WithAuthClock(clock.Real()))(audProtectedHandler)
 
 	req := httptest.NewRequest(http.MethodGet, "/protected", nil)
 	req.Header.Set("Authorization", "Bearer "+token)

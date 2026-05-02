@@ -13,10 +13,12 @@ import (
 	"github.com/ghbvf/gocell/cells/accesscore/internal/domain"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/mem"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/ports"
+	"github.com/ghbvf/gocell/cells/accesscore/internal/testutil"
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
-func newTestService() (*Service, *mem.RoleRepository, *mem.SessionRepository) {
+func newTestService(t testing.TB) (*Service, *mem.RoleRepository, ports.SessionRepository) {
+	t.Helper()
 	roleRepo := mem.NewRoleRepository()
 	roleRepo.SeedRole(&domain.Role{
 		ID:   "admin",
@@ -25,7 +27,7 @@ func newTestService() (*Service, *mem.RoleRepository, *mem.SessionRepository) {
 			{Resource: "*", Action: "*"},
 		},
 	})
-	sessionRepo := mem.NewSessionRepository()
+	sessionRepo := testutil.RealSessionRepo(t)
 	return NewService(roleRepo, sessionRepo, slog.Default()), roleRepo, sessionRepo
 }
 
@@ -78,7 +80,7 @@ func TestService_Assign(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			svc, repo, _ := newTestService()
+			svc, repo, _ := newTestService(t)
 			if tc.setup != nil {
 				tc.setup(repo)
 			}
@@ -158,7 +160,7 @@ func TestService_Revoke(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			svc, repo, _ := newTestService()
+			svc, repo, _ := newTestService(t)
 			if tc.setup != nil {
 				tc.setup(repo)
 			}
@@ -182,7 +184,7 @@ func TestService_Revoke(t *testing.T) {
 }
 
 func TestService_Revoke_InvalidatesSessions(t *testing.T) {
-	svc, roleRepo, sessionRepo := newTestService()
+	svc, roleRepo, sessionRepo := newTestService(t)
 	ctx := context.Background()
 
 	_, _ = roleRepo.AssignToUser(ctx, "usr-1", "admin")
@@ -198,7 +200,7 @@ func TestService_Revoke_InvalidatesSessions(t *testing.T) {
 }
 
 func TestService_Assign_InvalidatesSessions(t *testing.T) {
-	svc, _, sessionRepo := newTestService()
+	svc, _, sessionRepo := newTestService(t)
 	ctx := context.Background()
 
 	sess := &domain.Session{ID: "sess-2", UserID: "usr-2"}
@@ -261,7 +263,7 @@ func TestService_DemoMode_Assign_CallsSessionRevoke(t *testing.T) {
 				Name:        "admin",
 				Permissions: []domain.Permission{{Resource: "*", Action: "*"}},
 			})
-			sessionRepo := mem.NewSessionRepository()
+			sessionRepo := testutil.RealSessionRepo(t)
 			// Create a session for the user so we can verify revocation.
 			sess := &domain.Session{ID: "sess-" + tc.userID, UserID: tc.userID}
 			require.NoError(t, sessionRepo.Create(context.Background(), sess))
@@ -296,7 +298,7 @@ func TestService_DemoMode_Revoke_CallsSessionRevoke(t *testing.T) {
 			})
 			_, _ = roleRepo.AssignToUser(context.Background(), tc.userID, "admin")
 			_, _ = roleRepo.AssignToUser(context.Background(), "usr-other", "admin") // second admin
-			sessionRepo := mem.NewSessionRepository()
+			sessionRepo := testutil.RealSessionRepo(t)
 			sess := &domain.Session{ID: "sess-" + tc.userID, UserID: tc.userID}
 			require.NoError(t, sessionRepo.Create(context.Background(), sess))
 

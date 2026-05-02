@@ -14,6 +14,7 @@ import (
 	dto "github.com/ghbvf/gocell/examples/todoorder/cells/ordercell/internal/dto"
 	"github.com/ghbvf/gocell/examples/todoorder/cells/ordercell/internal/mem"
 	"github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/errcode"
@@ -258,7 +259,7 @@ func initCellWithRouter(t *testing.T) *router.Router {
 	ctx := context.Background()
 	require.NoError(t, c.Init(ctx, newTestDeps()))
 
-	r := router.MustNew()
+	r := router.MustNew(router.WithRouterClock(clock.Real()))
 	for _, rg := range c.RouteGroups() {
 		if rg.Listener == cell.PrimaryListener {
 			if rg.Prefix != "" {

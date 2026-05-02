@@ -9,6 +9,7 @@ import (
 
 	"github.com/ghbvf/gocell/cells/accesscore/internal/domain"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/ports"
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
@@ -85,13 +86,14 @@ type Provisioner struct {
 	roleRepo ports.RoleRepository
 	logger   *slog.Logger
 	newID    UUIDGenerator
+	clock    clock.Clock
 }
 
 // NewProvisioner constructs a Provisioner. All dependencies are required;
 // passing nil returns an error so mis-wired assemblies fail at startup rather
 // than at the first Ensure call.
 func NewProvisioner(
-	userRepo ports.UserRepository, roleRepo ports.RoleRepository, logger *slog.Logger, newID UUIDGenerator,
+	userRepo ports.UserRepository, roleRepo ports.RoleRepository, logger *slog.Logger, newID UUIDGenerator, clk clock.Clock,
 ) (*Provisioner, error) {
 	if userRepo == nil {
 		return nil, fmt.Errorf("adminprovision: UserRepository is required")
@@ -105,11 +107,13 @@ func NewProvisioner(
 	if newID == nil {
 		return nil, fmt.Errorf("adminprovision: UUIDGenerator is required")
 	}
+	clock.MustHaveClock(clk, "adminprovision.NewProvisioner")
 	return &Provisioner{
 		userRepo: userRepo,
 		roleRepo: roleRepo,
 		logger:   logger,
 		newID:    newID,
+		clock:    clk,
 	}, nil
 }
 
@@ -232,14 +236,15 @@ func (p *Provisioner) ensureAdminRole(ctx context.Context) error {
 //   - {Outcome:OutcomeRaceSkipped}, nil                — concurrent replica finished first
 //   - {Outcome:OutcomeUnknown}, err                    — infra error
 func (p *Provisioner) createUserOrRecover(ctx context.Context, in ProvisionInput) (ProvisionResult, error) {
-	user, err := domain.NewUser(in.Username, in.Email, string(in.PasswordHash))
+	now := p.clock.Now()
+	user, err := domain.NewUser(in.Username, in.Email, string(in.PasswordHash), now)
 	if err != nil {
 		return ProvisionResult{Outcome: OutcomeUnknown}, fmt.Errorf("adminprovision: construct user: %w", err)
 	}
 	user.ID = p.newID()
-	user.MarkProvisionPending(in.Source)
+	user.MarkProvisionPending(in.Source, now)
 	if in.RequireReset {
-		user.MarkPasswordResetRequired()
+		user.MarkPasswordResetRequired(now)
 	}
 
 	createErr := p.userRepo.Create(ctx, user)
@@ -294,7 +299,7 @@ func (p *Provisioner) createUserOrRecover(ctx context.Context, in ProvisionInput
 }
 
 func (p *Provisioner) markProvisionComplete(ctx context.Context, user *domain.User) error {
-	user.MarkProvisionComplete()
+	user.MarkProvisionComplete(p.clock.Now())
 	if err := p.userRepo.Update(ctx, user); err != nil {
 		return fmt.Errorf("adminprovision: mark provision complete: %w", err)
 	}

@@ -21,13 +21,13 @@ import (
 	"github.com/ghbvf/gocell/cells/accesscore/slices/sessionvalidate"
 	"github.com/ghbvf/gocell/cells/accesscore/slices/setup"
 	"github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/query"
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/auth/refresh"
-	refreshmem "github.com/ghbvf/gocell/runtime/auth/refresh/memstore"
 	obmetrics "github.com/ghbvf/gocell/runtime/observability/metrics"
 )
 
@@ -46,11 +46,6 @@ var defaultRefreshPolicy = refresh.Policy{
 	ReuseInterval: defaultAccessCoreRefreshReuseInterval,
 	MaxAge:        defaultAccessCoreRefreshMaxAge,
 }
-
-// realClock is a minimal refresh.Clock implementation backed by time.Now.
-type realClock struct{}
-
-func (realClock) Now() time.Time { return time.Now() }
 
 // Compile-time interface checks.
 var (
@@ -175,12 +170,15 @@ func WithConfigEventCollector(collector obmetrics.ConfigEventCollector) Option {
 
 // WithInMemoryDefaults configures in-memory repositories for development
 // and testing. Not suitable for production use.
+// refreshStore construction is deferred to Init() so that c.clk (set from
+// deps.Clock) is available.
 func WithInMemoryDefaults() Option {
 	return func(c *AccessCore) {
 		c.userRepo = mem.NewUserRepository()
-		c.sessionRepo = mem.NewSessionRepository()
+		// sessionRepo construction is deferred to Init() so that c.clk
+		// (set from deps.Clock) is available for mem.NewSessionRepository.
 		c.roleRepo = mem.NewRoleRepository()
-		c.refreshStore = refreshmem.MustNew(defaultRefreshPolicy, realClock{}, nil)
+		c.useInMemoryDefaults = true
 	}
 }
 
@@ -209,10 +207,15 @@ func WithConfigGetter(c ports.ConfigGetter) Option {
 // AccessCore is the accesscore Cell implementation.
 type AccessCore struct {
 	*cell.BaseCell
+	clk          clock.Clock
 	userRepo     ports.UserRepository
 	sessionRepo  ports.SessionRepository
 	roleRepo     ports.RoleRepository
 	refreshStore refresh.Store
+
+	// useInMemoryDefaults tracks whether WithInMemoryDefaults was applied so
+	// Init() can construct the refreshStore (which needs c.clk) after deps are wired.
+	useInMemoryDefaults bool
 
 	// Outbox wiring. Two mutually exclusive paths populate `emitter`:
 	//   (a) WithEmitter(e)          — `emitter` is set pre-Init.

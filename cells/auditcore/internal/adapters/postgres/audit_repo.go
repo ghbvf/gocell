@@ -5,10 +5,10 @@ package postgres
 
 import (
 	"context"
-	"time"
 
 	"github.com/ghbvf/gocell/cells/auditcore/internal/domain"
 	"github.com/ghbvf/gocell/cells/auditcore/internal/ports"
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/ctxcancel"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/query"
@@ -45,12 +45,15 @@ var _ ports.AuditRepository = (*AuditRepository)(nil)
 
 // AuditRepository implements ports.AuditRepository using PostgreSQL.
 type AuditRepository struct {
-	db DBTX
+	db    DBTX
+	clock clock.Clock
 }
 
 // NewAuditRepository creates an AuditRepository backed by the given DBTX.
-func NewAuditRepository(db DBTX) *AuditRepository {
-	return &AuditRepository{db: db}
+// clk is used to fill in zero Timestamps on Append.
+func NewAuditRepository(db DBTX, clk clock.Clock) *AuditRepository {
+	clock.MustHaveClock(clk, "postgres.NewAuditRepository")
+	return &AuditRepository{db: db, clock: clk}
 }
 
 // Append inserts an audit entry.
@@ -61,7 +64,7 @@ func (r *AuditRepository) Append(ctx context.Context, entry *domain.AuditEntry) 
 
 	ts := entry.Timestamp
 	if ts.IsZero() {
-		ts = time.Now()
+		ts = r.clock.Now()
 	}
 
 	_, err := r.db.Exec(ctx, query,

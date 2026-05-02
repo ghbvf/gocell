@@ -13,6 +13,7 @@ import (
 	cellpg "github.com/ghbvf/gocell/cells/configcore/internal/adapters/postgres"
 	"github.com/ghbvf/gocell/cells/configcore/internal/domain"
 	cctestutil "github.com/ghbvf/gocell/cells/configcore/internal/testutil"
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/crypto"
@@ -64,11 +65,11 @@ func setupWriteService(t *testing.T) (writeBundle, func()) {
 	require.NoError(t, migrator.Up(ctx))
 
 	session := cellpg.NewSession(pool.DB())
-	repo := cellpg.NewConfigRepository(session, crypto.NoopTransformer{}, nil)
-	outboxWriter := adapterpg.NewOutboxWriter()
+	repo := cellpg.NewConfigRepository(session, crypto.NoopTransformer{}, nil, clock.Real())
+	outboxWriter := adapterpg.NewOutboxWriter(clock.Real())
 	txMgr := adapterpg.NewTxManager(pool)
 
-	svc := NewService(repo, slog.Default(),
+	svc := NewService(repo, slog.Default(), clock.Real(),
 		WithEmitter(testoutbox.MustEmitter(t, outboxWriter)),
 		WithTxManager(txMgr),
 	)
@@ -215,13 +216,13 @@ func TestCreate_RollbackOnOutboxFailure(t *testing.T) {
 	require.NoError(t, migrator.Up(ctx))
 
 	session := cellpg.NewSession(pool.DB())
-	repo := cellpg.NewConfigRepository(session, crypto.NoopTransformer{}, nil)
+	repo := cellpg.NewConfigRepository(session, crypto.NoopTransformer{}, nil, clock.Real())
 
 	// Inject a writer that always fails — simulates outbox unavailable.
 	failingWriter := &cctestutil.RecordingWriter{Err: errors.New("outbox broker down")}
 
 	txMgr := adapterpg.NewTxManager(pool)
-	svc := NewService(repo, slog.Default(),
+	svc := NewService(repo, slog.Default(), clock.Real(),
 		WithEmitter(testoutbox.MustEmitter(t, failingWriter)),
 		WithTxManager(txMgr),
 	)

@@ -11,6 +11,7 @@ import (
 
 	"github.com/ghbvf/gocell/examples/todoorder/cells/ordercell/internal/domain"
 	"github.com/ghbvf/gocell/examples/todoorder/cells/ordercell/internal/mem"
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/errcode"
@@ -76,6 +77,7 @@ func TestService_Create(t *testing.T) {
 			svc := NewService(mem.NewOrderRepository(), slog.Default(),
 				WithEmitter(mustEmitter(t, outbox.NoopWriter{})),
 				WithTxManager(persistence.NoopTxRunner{}),
+				WithClock(clock.Real()),
 			)
 
 			order, err := svc.Create(context.Background(), tt.item)
@@ -100,7 +102,7 @@ func TestService_Create_WritesOutboxEntry(t *testing.T) {
 	repo := mem.NewOrderRepository()
 	writer := &recordingWriter{}
 	txRunner := &stubTxRunner{}
-	svc := NewService(repo, slog.Default(), WithEmitter(mustEmitter(t, writer)), WithTxManager(txRunner))
+	svc := NewService(repo, slog.Default(), WithEmitter(mustEmitter(t, writer)), WithTxManager(txRunner), WithClock(clock.Real()))
 
 	order, err := svc.Create(context.Background(), "outbox-item")
 	require.NoError(t, err)
@@ -119,7 +121,7 @@ func TestService_Create_OutboxWriterFailureReturnsError(t *testing.T) {
 	repo := mem.NewOrderRepository()
 	writer := &recordingWriter{err: errors.New("outbox unavailable")}
 	txRunner := &stubTxRunner{}
-	svc := NewService(repo, slog.Default(), WithEmitter(mustEmitter(t, writer)), WithTxManager(txRunner))
+	svc := NewService(repo, slog.Default(), WithEmitter(mustEmitter(t, writer)), WithTxManager(txRunner), WithClock(clock.Real()))
 
 	order, err := svc.Create(context.Background(), "outbox-item")
 	require.Error(t, err)
@@ -142,6 +144,7 @@ func TestService_Create_NoopWriterDemoPath(t *testing.T) {
 	svc := NewService(repo, slog.Default(),
 		WithEmitter(mustEmitter(t, outbox.NoopWriter{})),
 		WithTxManager(persistence.NoopTxRunner{}),
+		WithClock(clock.Real()),
 	)
 
 	order, err := svc.Create(context.Background(), "demo-item")
@@ -155,6 +158,7 @@ func TestService_Create_PersistsOrder(t *testing.T) {
 	svc := NewService(repo, slog.Default(),
 		WithEmitter(mustEmitter(t, outbox.NoopWriter{})),
 		WithTxManager(persistence.NoopTxRunner{}),
+		WithClock(clock.Real()),
 	)
 
 	order, err := svc.Create(context.Background(), "persisted")
@@ -179,6 +183,7 @@ func TestService_Create_RepoFailure(t *testing.T) {
 	svc := NewService(failRepo{}, slog.Default(),
 		WithEmitter(mustEmitter(t, outbox.NoopWriter{})),
 		WithTxManager(persistence.NoopTxRunner{}),
+		WithClock(clock.Real()),
 	)
 
 	order, err := svc.Create(context.Background(), "item")

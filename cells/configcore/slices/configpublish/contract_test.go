@@ -19,15 +19,16 @@ import (
 	"github.com/ghbvf/gocell/cells/internal/testoutbox"
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/cell/celltest"
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/contracttest"
 	"github.com/ghbvf/gocell/runtime/auth"
 )
 
 func newContractService(t testing.TB) (*Service, *mem.ConfigRepository, *testutil.RecordingWriter) {
 	t.Helper()
-	repo := mem.NewConfigRepository()
+	repo := mem.NewConfigRepository(clock.Real())
 	writer := &testutil.RecordingWriter{}
-	svc := NewService(repo, slog.Default(),
+	svc := NewService(repo, slog.Default(), clock.Real(),
 		WithEmitter(testoutbox.MustEmitter(t, writer)), WithTxManager(&testutil.NoopTxRunner{}))
 	return svc, repo, writer
 }

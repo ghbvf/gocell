@@ -6,6 +6,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/metadata"
 )
 
@@ -28,7 +29,7 @@ func TestValidator_Locate_KnownField(t *testing.T) {
 		Cells: map[string]*metadata.CellMeta{},
 	}
 	prepareNode(t, pm, "cells/accesscore/cell.yaml", src)
-	v := NewValidator(pm, "")
+	v := NewValidator(pm, "", clock.Real())
 
 	line, col := v.locate("cells/accesscore/cell.yaml", "id")
 	assert.Equal(t, 1, line, "id line")
@@ -43,7 +44,7 @@ func TestValidator_Locate_KnownField(t *testing.T) {
 // missing file entry, and missing field all return (0, 0).
 func TestValidator_Locate_Fallbacks(t *testing.T) {
 	pm := &metadata.ProjectMeta{Cells: map[string]*metadata.CellMeta{}}
-	v := NewValidator(pm, "")
+	v := NewValidator(pm, "", clock.Real())
 
 	// No file nodes set at all.
 	line, col := v.locate("foo.yaml", "id")
@@ -79,7 +80,7 @@ func TestValidator_NewResult_AutoFillsLocation(t *testing.T) {
 		Slices: map[string]*metadata.SliceMeta{},
 	}
 	prepareNode(t, pm, "cells/x/slices/s/slice.yaml", src)
-	v := NewValidator(pm, "")
+	v := NewValidator(pm, "", clock.Real())
 
 	r := v.newResult("REF-02", SeverityError, IssueRefNotFound,
 		"cells/x/slices/s/slice.yaml", "contractUsages[1].contract",
@@ -99,7 +100,7 @@ func TestValidator_NewResult_AutoFillsLocation(t *testing.T) {
 // the result is still valid but Line/Column remain zero.
 func TestValidator_NewResult_UnknownLocation(t *testing.T) {
 	pm := &metadata.ProjectMeta{Cells: map[string]*metadata.CellMeta{}}
-	v := NewValidator(pm, "")
+	v := NewValidator(pm, "", clock.Real())
 
 	r := v.newResult("REF-01", SeverityError, IssueRefNotFound,
 		"cells/x/slice.yaml", "belongsToCell",
@@ -200,7 +201,7 @@ func TestValidator_Locate_FallsBackToParentForMissingLeaf(t *testing.T) {
 		Contracts: map[string]*metadata.ContractMeta{},
 	}
 	prepareNode(t, pm, "contracts/http/demo/v1/contract.yaml", src)
-	v := NewValidator(pm, "")
+	v := NewValidator(pm, "", clock.Real())
 
 	// The leaf .schemaRef does not exist in the YAML — locator must walk
 	// up to the parent responses[401] mapping value, which yaml.v3 places

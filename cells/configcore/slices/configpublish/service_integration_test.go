@@ -13,6 +13,7 @@ import (
 	cellpg "github.com/ghbvf/gocell/cells/configcore/internal/adapters/postgres"
 	"github.com/ghbvf/gocell/cells/configcore/internal/domain"
 	"github.com/ghbvf/gocell/cells/internal/testoutbox"
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/crypto"
@@ -68,11 +69,11 @@ func setupPublishBundle(t *testing.T) (publishServiceBundle, func()) {
 	require.NoError(t, migrator.Up(ctx))
 
 	session := cellpg.NewSession(pool.DB())
-	repo := cellpg.NewConfigRepository(session, crypto.NoopTransformer{}, nil)
-	outboxWriter := adapterpg.NewOutboxWriter()
+	repo := cellpg.NewConfigRepository(session, crypto.NoopTransformer{}, nil, clock.Real())
+	outboxWriter := adapterpg.NewOutboxWriter(clock.Real())
 	txMgr := adapterpg.NewTxManager(pool)
 
-	svc := NewService(repo, slog.Default(),
+	svc := NewService(repo, slog.Default(), clock.Real(),
 		WithEmitter(testoutbox.MustEmitter(t, outboxWriter)),
 		WithTxManager(txMgr),
 	)
@@ -232,12 +233,12 @@ func TestRollback_AtomicWithOutbox_FailureRollsBackBoth(t *testing.T) {
 	require.NoError(t, migrator.Up(ctx))
 
 	session := cellpg.NewSession(pool.DB())
-	repo := cellpg.NewConfigRepository(session, crypto.NoopTransformer{}, nil)
+	repo := cellpg.NewConfigRepository(session, crypto.NoopTransformer{}, nil, clock.Real())
 	txMgr := adapterpg.NewTxManager(pool)
 
 	// First: seed and publish using a good writer.
-	goodWriter := adapterpg.NewOutboxWriter()
-	svcGood := NewService(repo, slog.Default(),
+	goodWriter := adapterpg.NewOutboxWriter(clock.Real())
+	svcGood := NewService(repo, slog.Default(), clock.Real(),
 		WithEmitter(testoutbox.MustEmitter(t, goodWriter)),
 		WithTxManager(txMgr),
 	)
@@ -258,11 +259,11 @@ func TestRollback_AtomicWithOutbox_FailureRollsBackBoth(t *testing.T) {
 	// rollback audit row. The transaction must roll both the config update and
 	// the first outbox row back.
 	failingWriter := &failOnWriteNumberWriter{
-		delegate: adapterpg.NewOutboxWriter(),
+		delegate: adapterpg.NewOutboxWriter(clock.Real()),
 		failOn:   2,
 		err:      errors.New("outbox broker down"),
 	}
-	svcFail := NewService(repo, slog.Default(),
+	svcFail := NewService(repo, slog.Default(), clock.Real(),
 		WithEmitter(testoutbox.MustEmitter(t, failingWriter)),
 		WithTxManager(txMgr),
 	)

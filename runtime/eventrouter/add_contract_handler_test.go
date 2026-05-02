@@ -8,6 +8,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/wrapper"
 )
@@ -92,7 +93,7 @@ func okHandler() outbox.EntryHandler {
 
 func TestAddContractHandler_NilHandler_ReturnsError(t *testing.T) {
 	t.Parallel()
-	r := New(&blockingSubscriber{})
+	r := New(&blockingSubscriber{}, clock.Real())
 	err := r.AddContractHandler(configEntryUpsertedSpec(), nil, "accesscore")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "nil handler")
@@ -100,7 +101,7 @@ func TestAddContractHandler_NilHandler_ReturnsError(t *testing.T) {
 
 func TestAddContractHandler_EmptyConsumerGroup_ReturnsError(t *testing.T) {
 	t.Parallel()
-	r := New(&blockingSubscriber{})
+	r := New(&blockingSubscriber{}, clock.Real())
 	err := r.AddContractHandler(configEntryUpsertedSpec(), okHandler(), "")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "empty consumerGroup")
@@ -113,7 +114,7 @@ func TestAddContractHandler_NonEventSpec_ReturnsError(t *testing.T) {
 		ID: "http.x.v1", Kind: "http", Transport: "http",
 		Method: "POST", Path: "/x",
 	}
-	r := New(&blockingSubscriber{})
+	r := New(&blockingSubscriber{}, clock.Real())
 	err := r.AddContractHandler(httpSpec, okHandler(), "mycell")
 	require.Error(t, err)
 }
@@ -122,7 +123,7 @@ func TestAddContractHandler_NonEventSpec_ReturnsError(t *testing.T) {
 
 func TestAddContractHandler_RegistersBusinessHandler(t *testing.T) {
 	t.Parallel()
-	r := New(&blockingSubscriber{})
+	r := New(&blockingSubscriber{}, clock.Real())
 	require.NoError(t, r.AddContractHandler(configEntryUpsertedSpec(), okHandler(), "accesscore"))
 	assert.Equal(t, 1, r.HandlerCount())
 
@@ -134,7 +135,7 @@ func TestAddContractHandler_RegistersBusinessHandler(t *testing.T) {
 func TestContractTracingMiddleware_WrapsWithContractSpan(t *testing.T) {
 	t.Parallel()
 	tr := &contractSpyTracer{}
-	r := New(&blockingSubscriber{})
+	r := New(&blockingSubscriber{}, clock.Real())
 
 	var inner bool
 	require.NoError(t, r.AddContractHandler(configEntryUpsertedSpec(), func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
@@ -225,7 +226,7 @@ func TestContractTracingMiddleware_PanicsOnEmptyContractID(t *testing.T) {
 
 func TestAddContractHandler_MultipleRegistrations_HandlersGrow(t *testing.T) {
 	t.Parallel()
-	r := New(&blockingSubscriber{})
+	r := New(&blockingSubscriber{}, clock.Real())
 	for i := range 3 {
 		spec := configEntryUpsertedSpec()
 		spec.Topic = spec.Topic + "." + string(rune('a'+i))
@@ -239,7 +240,7 @@ func TestAddContractHandler_MultipleRegistrations_HandlersGrow(t *testing.T) {
 // is preserved.
 func TestAddContractHandler_HandlerConfigShape(t *testing.T) {
 	t.Parallel()
-	r := New(&blockingSubscriber{})
+	r := New(&blockingSubscriber{}, clock.Real())
 	require.NoError(t, r.AddContractHandler(configEntryUpsertedSpec(), okHandler(), "accesscore"))
 	require.Equal(t, 1, len(r.handlers))
 	cfg := r.handlers[0]

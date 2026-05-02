@@ -20,7 +20,14 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
+
+	"github.com/ghbvf/gocell/kernel/clock"
 )
+
+// e2eClock backs WaitForReady's polling loop. It is the singleton injected
+// via [clock.Real]; e2e tests run against real services so wall-clock time
+// is the only time source that makes sense here.
+var e2eClock = clock.Real()
 
 // defaultE2ERetryInterval is the WaitForReady poll cadence; small enough that
 // startup latency is dominated by the server's own readiness signal.
@@ -63,8 +70,8 @@ func AdminToken(t *testing.T) string {
 // it waits for cell readiness (DB pools, migrations, outbox dispatchers).
 func WaitForReady(t *testing.T, timeout time.Duration) {
 	t.Helper()
-	deadline := time.Now().Add(timeout)
-	for time.Now().Before(deadline) {
+	deadline := e2eClock.Now().Add(timeout)
+	for e2eClock.Now().Before(deadline) {
 		resp, err := http.Get(HealthURL() + "/readyz")
 		if err == nil && resp.StatusCode == http.StatusOK {
 			_ = resp.Body.Close()
@@ -73,7 +80,7 @@ func WaitForReady(t *testing.T, timeout time.Duration) {
 		if resp != nil {
 			_ = resp.Body.Close()
 		}
-		time.Sleep(defaultE2ERetryInterval)
+		_ = e2eClock.Sleep(context.Background(), e2eClock.Now().Add(defaultE2ERetryInterval))
 	}
 	t.Fatalf("server at %s did not become ready within %s", HealthURL(), timeout)
 }

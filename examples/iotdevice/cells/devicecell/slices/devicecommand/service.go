@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/domain"
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/command"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/query"
@@ -49,11 +50,25 @@ type Service struct {
 	codec      *query.CursorCodec
 	logger     *slog.Logger
 	runMode    query.RunMode
+	clock      clock.Clock
 
 	// authz is the optional T3 DEVICE-ENQUEUE-RBAC hook. Nil means no authz
 	// check (demo mode). Deployments that need role-based control set this via
 	// WithAuthz option or direct assignment.
 	authz command.AuthzFunc
+}
+
+// Option configures a device-command Service.
+type Option func(*Service)
+
+// WithClock sets the clock used for command timestamps. Defaults to
+// clock.Real() when not provided.
+func WithClock(clk clock.Clock) Option {
+	return func(s *Service) {
+		if clk != nil {
+			s.clock = clk
+		}
+	}
 }
 
 // NewService creates a device-command Service. runMode controls cursor
@@ -67,18 +82,24 @@ type Service struct {
 func NewService(
 	q commandQueueStore, deviceRepo domain.DeviceRepository,
 	codec *query.CursorCodec, logger *slog.Logger, runMode query.RunMode,
+	opts ...Option,
 ) (*Service, error) {
 	if codec == nil {
 		return nil, errcode.New(errcode.ErrCellMissingCodec,
 			"device-command: cursor codec is required")
 	}
-	return &Service{
+	s := &Service{
 		queue:      q,
 		deviceRepo: deviceRepo,
 		codec:      codec,
 		logger:     logger,
 		runMode:    runMode,
-	}, nil
+		clock:      clock.Real(),
+	}
+	for _, o := range opts {
+		o(s)
+	}
+	return s, nil
 }
 
 // generateID generates a random hex command ID.
@@ -126,7 +147,7 @@ func (s *Service) Enqueue(ctx context.Context, deviceID, commandType, payload st
 		return command.Entry{}, err
 	}
 
-	entry := command.NewEntry(id, deviceID, commandType, []byte(payload), command.Timeouts{}, time.Now())
+	entry := command.NewEntry(id, deviceID, commandType, []byte(payload), command.Timeouts{}, s.clock.Now())
 
 	if err := s.queue.Enqueue(ctx, entry, command.EnqueueOptions{Authz: s.authz}); err != nil {
 		return command.Entry{}, fmt.Errorf("device-command: enqueue: %w", err)
@@ -243,7 +264,7 @@ func entryFieldValue(e command.Entry, field string) any {
 
 // Report records that the device has received the command and started work.
 func (s *Service) Report(ctx context.Context, deviceID, cmdID string) error {
-	now := time.Now()
+	now := s.clock.Now()
 	if err := s.getOwnedCommand(ctx, deviceID, cmdID); err != nil {
 		return err
 	}
@@ -263,7 +284,7 @@ func (s *Service) Ack(ctx context.Context, deviceID, cmdID string, reason comman
 	if !reason.Valid() {
 		return errcode.New(errcode.ErrValidationFailed, "device-command: invalid ack reason")
 	}
-	now := time.Now()
+	now := s.clock.Now()
 	if err := s.getOwnedCommand(ctx, deviceID, cmdID); err != nil {
 		return err
 	}
@@ -292,7 +313,7 @@ func (s *Service) ExtendLease(ctx context.Context, deviceID, cmdID string, exten
 	if err := s.getOwnedCommand(ctx, deviceID, cmdID); err != nil {
 		return err
 	}
-	if err := s.queue.ExtendLease(ctx, cmdID, extension, time.Now()); err != nil {
+	if err := s.queue.ExtendLease(ctx, cmdID, extension, s.clock.Now()); err != nil {
 		return fmt.Errorf("device-command: extend lease: %w", err)
 	}
 	return nil

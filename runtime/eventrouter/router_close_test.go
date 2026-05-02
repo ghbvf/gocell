@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 )
@@ -147,7 +148,7 @@ func (c *compositeStopIntakeSubscriber) StopIntake(ctx context.Context) error {
 func TestRouterClose_CallsStopIntakeBeforeCancel(t *testing.T) {
 	composite := newCompositeStopIntakeSubscriber()
 
-	r := New(composite)
+	r := New(composite, clock.Real())
 	_ = r.AddContractHandler(testEventSpec("topic.drain"), noopHandler, "test")
 
 	ctx := context.Background()
@@ -187,7 +188,7 @@ func TestRouterClose_CallsStopIntakeBeforeCancel(t *testing.T) {
 func TestRouterClose_NoStopIntakeFallback(t *testing.T) {
 	// blockingSubscriber does NOT implement SubscriberIntakeStopper.
 	sub := &blockingSubscriber{}
-	r := New(sub)
+	r := New(sub, clock.Real())
 
 	ctx := context.Background()
 	done := make(chan error, 1)
@@ -214,7 +215,7 @@ func TestRouterClose_NoStopIntakeFallback(t *testing.T) {
 // case is already covered by TestRouter_Close_ZeroHandlers).
 func TestRouterClose_NoStopIntakeFallback_WithHandlers(t *testing.T) {
 	sub := &blockingSubscriber{}
-	r := New(sub)
+	r := New(sub, clock.Real())
 	_ = r.AddContractHandler(testEventSpec("topic.a"), noopHandler, "test")
 
 	ctx := context.Background()
@@ -308,7 +309,7 @@ func TestRouterClose_WaitsForInflightAfterStopIntake(t *testing.T) {
 
 	sub := newInflightSubscriber(handlerDuration)
 
-	r := New(sub)
+	r := New(sub, clock.Real())
 	_ = r.AddContractHandler(testEventSpec("topic.inflight"), noopHandler, "test")
 
 	ctx := context.Background()
@@ -360,7 +361,7 @@ func TestRouterClose_StopIntakeError_ContinuesShutdown(t *testing.T) {
 	sr := &stopIntakeRecorder{
 		stopIntakeErr: context.DeadlineExceeded, // simulate StopIntake timeout
 	}
-	r := New(sr)
+	r := New(sr, clock.Real())
 	_ = r.AddContractHandler(testEventSpec("topic.a"), noopHandler, "test")
 
 	ctx := context.Background()
@@ -420,7 +421,7 @@ func TestRouterClose_StopIntakeBlocksNeverCalled_CtxTimeoutContinues(t *testing.
 		ignoreCtx: true, // buggy adapter: ignores ctx
 	}
 
-	r := New(h)
+	r := New(h, clock.Real())
 	require.NoError(t, r.AddContractHandler(testEventSpec("t"), func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
 		return outbox.HandleResult{Disposition: outbox.DispositionAck}
 	}, "test-cg"))
@@ -486,7 +487,7 @@ func TestRouterClose_WrapsErrorsByPhase(t *testing.T) {
 			ignoreCtx: true,
 		}
 
-		r := New(h)
+		r := New(h, clock.Real())
 		require.NoError(t, r.AddContractHandler(testEventSpec("t"), func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
 			return outbox.HandleResult{Disposition: outbox.DispositionAck}
 		}, "test-cg"))
@@ -532,7 +533,7 @@ func TestRouterClose_WrapsErrorsByPhase(t *testing.T) {
 		const veryLongDrain = routerCloseDrainLong
 		sub := newInflightSubscriber(veryLongDrain)
 
-		r := New(sub)
+		r := New(sub, clock.Real())
 		require.NoError(t, r.AddContractHandler(testEventSpec("t"), func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
 			return outbox.HandleResult{Disposition: outbox.DispositionAck}
 		}, "test-cg"))
@@ -589,7 +590,7 @@ func TestRouterClose_StopIntakeErr_ProceedsToCancel(t *testing.T) {
 	}
 	close(h.release) // allow StopIntake to return immediately
 
-	r := New(h)
+	r := New(h, clock.Real())
 	require.NoError(t, r.AddContractHandler(testEventSpec("t"), func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
 		return outbox.HandleResult{Disposition: outbox.DispositionAck}
 	}, "test-cg"))

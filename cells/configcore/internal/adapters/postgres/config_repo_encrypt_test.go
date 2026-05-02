@@ -28,6 +28,7 @@ import (
 
 	configcrypto "github.com/ghbvf/gocell/cells/configcore/internal/crypto"
 	"github.com/ghbvf/gocell/cells/configcore/internal/domain"
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/query"
 	"github.com/ghbvf/gocell/runtime/crypto"
@@ -98,7 +99,7 @@ func (f *fakeValueTransformer) Decrypt(_ context.Context, ciphertext []byte, key
 // ---------------------------------------------------------------------------
 
 func newEncryptedRepoFromDBTX(db DBTX, tr crypto.ValueTransformer) *ConfigRepository {
-	return &ConfigRepository{db: db, transformer: tr, logger: slog.Default()}
+	return &ConfigRepository{db: db, transformer: tr, logger: slog.Default(), clock: clock.Real()}
 }
 
 // ---------------------------------------------------------------------------
@@ -888,7 +889,7 @@ func TestWithOnStaleCipher_Option(t *testing.T) {
 
 	// Use NewConfigRepository with WithOnStaleCipher option.
 	session := &Session{} // nil pool is fine — db field is set below via direct struct assignment
-	repo := NewConfigRepository(session, tr, nil, WithOnStaleCipher(func(key, storedID, currentID string) {
+	repo := NewConfigRepository(session, tr, nil, clock.Real(), WithOnStaleCipher(func(key, storedID, currentID string) {
 		got = append(got, callbackArgs{key, storedID, currentID})
 	}))
 	// Bypass session for unit test — inject mockDB directly.

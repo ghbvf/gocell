@@ -21,7 +21,6 @@ import (
 	"errors"
 	"log/slog"
 	"slices"
-	"time"
 )
 
 // drainHTTPErrors collects the first error and any additional errors already
@@ -110,32 +109,32 @@ func (b *Bootstrap) phase10OrchestrateShutdown(s *phaseState, sig shutdownSignal
 	defer cancel()
 
 	m := b.shutdownMet
-	totalStart := time.Now()
+	totalStart := b.clock.Now()
 
 	// --- stage 1: readiness flip ---
 	m.recordPhaseEntry(shutdownPhaseReadinessFlip)
-	flipStart := time.Now()
+	flipStart := b.clock.Now()
 	b.phase10ReadinessFlip(shutCtx, s)
-	m.observePhaseDuration(shutdownPhaseReadinessFlip, time.Since(flipStart))
+	m.observePhaseDuration(shutdownPhaseReadinessFlip, b.clock.Since(flipStart))
 
 	// --- stage 2: HTTP drain (explicit; runs BEFORE LIFO teardown) ---
 	m.recordPhaseEntry(shutdownPhaseHTTPDrain)
-	drainStart := time.Now()
+	drainStart := b.clock.Now()
 	var httpDrainErr error
 	if s.httpDrain != nil {
 		httpDrainErr = s.httpDrain(shutCtx)
 	}
-	m.observePhaseDuration(shutdownPhaseHTTPDrain, time.Since(drainStart))
+	m.observePhaseDuration(shutdownPhaseHTTPDrain, b.clock.Since(drainStart))
 
 	// --- stage 3: LIFO teardown ---
 	m.recordPhaseEntry(shutdownPhaseLIFOTeardown)
-	tearStart := time.Now()
+	tearStart := b.clock.Now()
 	teardownErrs := b.phase10LIFOTeardown(shutCtx, s)
-	m.observePhaseDuration(shutdownPhaseLIFOTeardown, time.Since(tearStart))
+	m.observePhaseDuration(shutdownPhaseLIFOTeardown, b.clock.Since(tearStart))
 
 	// --- stage 4: finalize ---
 	m.recordPhaseEntry(shutdownPhaseClosed)
-	m.observePhaseDuration(shutdownPhaseTotal, time.Since(totalStart))
+	m.observePhaseDuration(shutdownPhaseTotal, b.clock.Since(totalStart))
 
 	// Aggregate HTTP drain error with LIFO teardown errors. HTTP drain is
 	// best-effort just like LIFO: a failure here does not prevent backend
@@ -199,8 +198,10 @@ func (b *Bootstrap) phase10ReadinessFlip(shutCtx context.Context, s *phaseState)
 	}
 	slog.Info("bootstrap: pre-shutdown drain delay",
 		slog.Duration("delay", b.preShutdownDelay))
+	t := b.clock.NewTimerAt(b.clock.Now().Add(b.preShutdownDelay))
+	defer t.Stop()
 	select {
-	case <-time.After(b.preShutdownDelay):
+	case <-t.C():
 	case <-shutCtx.Done():
 	}
 }

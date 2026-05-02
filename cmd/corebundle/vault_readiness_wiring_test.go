@@ -96,7 +96,7 @@ func buildBootstrapWithFakeKeyProvider(
 		return nil, err
 	}
 
-	asm, err := buildAssembly(shared.PromStack, "corebundle", durabilityModeForTopology(shared.Topology), cells...)
+	asm, err := buildAssembly(shared.PromStack, "corebundle", durabilityModeForTopology(shared.Topology), shared.Clock, cells...)
 	if err != nil {
 		return nil, err
 	}
@@ -118,7 +118,7 @@ func buildBootstrapWithFakeKeyProvider(
 		bootstrap.WithListenerNet(primaryLn),
 	))
 	opts = append(opts, extra...)
-	return bootstrap.New(opts...), nil
+	return newBootstrapFromOptions(opts), nil
 }
 
 // TestA19_ConfigCoreModule_RegistersKeyProviderReadiness is the bootstrap-level

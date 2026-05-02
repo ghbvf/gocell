@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -136,10 +137,10 @@ func TestHttpAuthSetupAdminV1Serve(t *testing.T) {
 	t.Run("409 bootstrap-pending duplicate response satisfies contract", func(t *testing.T) {
 		userRepo := mem.NewUserRepository()
 		roleRepo := mem.NewRoleRepository()
-		orphan, err := domain.NewUser("root", "root@local", "$2a$10$oldhash00000000000000000000000000000000000000000000000")
+		orphan, err := domain.NewUser("root", "root@local", "$2a$10$oldhash00000000000000000000000000000000000000000000000", time.Now())
 		require.NoError(t, err)
 		orphan.ID = "usr-bootstrap-prior"
-		orphan.MarkProvisionPending(domain.UserSourceBootstrap)
+		orphan.MarkProvisionPending(domain.UserSourceBootstrap, time.Now())
 		require.NoError(t, userRepo.Create(context.Background(), orphan))
 		svc := newService(t, userRepo, roleRepo, &stubWriter{})
 		h := setup.NewHandler(svc)
@@ -212,7 +213,7 @@ func TestEventUserCreatedV1Publish_FromSetup(t *testing.T) {
 
 func seedContractIdentityUser(t *testing.T, userRepo *mem.UserRepository, username, email string) {
 	t.Helper()
-	u, err := domain.NewUser(username, email, "$2a$10$stubhashXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX")
+	u, err := domain.NewUser(username, email, "$2a$10$stubhashXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX", time.Now())
 	require.NoError(t, err)
 	u.ID = "usr-existing"
 	require.NoError(t, userRepo.Create(context.Background(), u))

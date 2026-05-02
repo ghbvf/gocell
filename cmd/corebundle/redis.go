@@ -8,6 +8,7 @@ import (
 	"time"
 
 	adapterredis "github.com/ghbvf/gocell/adapters/redis"
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/idempotency"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/runtime/auth"
@@ -93,7 +94,7 @@ func buildRedisClient(ctx context.Context, topo bootstrap.Topology) (redisClient
 	return redisClientResult{Client: client}, nil
 }
 
-func buildServiceNonceStore(topo bootstrap.Topology, client *adapterredis.Client) (auth.NonceStore, error) {
+func buildServiceNonceStore(topo bootstrap.Topology, client *adapterredis.Client, clk clock.Clock) (auth.NonceStore, error) {
 	if requiresDistributedReplay(topo) {
 		if client == nil {
 			return nil, errcode.New(errcode.ErrControlplaneNonceStoreMissing,
@@ -105,14 +106,16 @@ func buildServiceNonceStore(topo bootstrap.Topology, client *adapterredis.Client
 		}
 		return store, nil
 	}
-	store, err := auth.NewInMemoryNonceStore(auth.ServiceTokenNonceTTL)
+	store, err := auth.NewInMemoryNonceStore(auth.ServiceTokenNonceTTL, clk)
 	if err != nil {
 		return nil, fmt.Errorf("build in-memory nonce store: %w", err)
 	}
 	return store, nil
 }
 
-func buildConsumerClaimer(topo bootstrap.Topology, client *adapterredis.Client) (idempotency.Claimer, consumerClaimerKind, error) {
+func buildConsumerClaimer(
+	topo bootstrap.Topology, client *adapterredis.Client, clk clock.Clock,
+) (idempotency.Claimer, consumerClaimerKind, error) {
 	if requiresDistributedReplay(topo) {
 		if client == nil {
 			return nil, consumerClaimerKindUnknown, errcode.New(errcode.ErrControlplaneClaimerNotDistributed,
@@ -120,5 +123,5 @@ func buildConsumerClaimer(topo bootstrap.Topology, client *adapterredis.Client) 
 		}
 		return newRedisIdempotencyClaimer(client), consumerClaimerKindDistributed, nil
 	}
-	return idempotency.NewInMemClaimer(), consumerClaimerKindInMemory, nil
+	return idempotency.NewInMemClaimer(clk), consumerClaimerKindInMemory, nil
 }

@@ -15,6 +15,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/runtime/auth"
 )
@@ -108,7 +109,7 @@ func TestInternalGuardFromEnv_WarnLogging_TableDriven(t *testing.T) {
 			buf, restore := captureSlogWarnLines(t)
 			t.Cleanup(restore)
 
-			guard, err := internalGuardFromEnv(tc.adapterMode, nil)
+			guard, err := internalGuardFromEnv(tc.adapterMode, nil, clock.Real())
 
 			if tc.wantErr {
 				require.Error(t, err,

@@ -12,6 +12,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/domain"
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
@@ -39,6 +40,7 @@ type Service struct {
 	repo    domain.DeviceRepository
 	emitter outbox.Emitter
 	logger  *slog.Logger
+	clock   clock.Clock
 }
 
 // Option configures a device-register Service.
@@ -53,12 +55,23 @@ func WithEmitter(e outbox.Emitter) Option {
 	}
 }
 
+// WithClock sets the clock used for device timestamps. Defaults to
+// clock.Real() when not provided.
+func WithClock(clk clock.Clock) Option {
+	return func(s *Service) {
+		if clk != nil {
+			s.clock = clk
+		}
+	}
+}
+
 // NewService creates a device-register Service.
 func NewService(repo domain.DeviceRepository, logger *slog.Logger, opts ...Option) *Service {
 	s := &Service{
 		repo:    repo,
 		emitter: outbox.NewNoopEmitter(),
 		logger:  logger,
+		clock:   clock.Real(),
 	}
 	for _, o := range opts {
 		o(s)
@@ -76,7 +89,7 @@ func (s *Service) Register(ctx context.Context, name string) (*domain.Device, er
 		ID:       "dev" + "-" + uuid.NewString(),
 		Name:     name,
 		Status:   "online",
-		LastSeen: time.Now(),
+		LastSeen: s.clock.Now(),
 	}
 
 	if err := s.repo.Create(ctx, device); err != nil {

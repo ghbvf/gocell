@@ -5,11 +5,11 @@ import (
 	"log/slog"
 	"sync"
 	"sync/atomic"
-	"time"
 
 	amqp "github.com/rabbitmq/amqp091-go"
 
 	"github.com/ghbvf/gocell/adapters/adapterutil"
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
@@ -30,11 +30,31 @@ type Publisher struct {
 	mu     sync.Mutex // guards closed/wg.Add ordering to prevent Add-after-Wait race
 	closed atomic.Bool
 	wg     sync.WaitGroup
+	clock  clock.Clock
+}
+
+// PublisherOption configures a Publisher.
+type PublisherOption func(*Publisher)
+
+// WithPublisherClock sets the clock used by the Publisher for timeout and
+// latency tracking. Required — NewPublisher panics if no clock is supplied.
+// Pass clock.Real() at the composition root.
+func WithPublisherClock(clk clock.Clock) PublisherOption {
+	return func(p *Publisher) {
+		p.clock = clk
+	}
 }
 
 // NewPublisher creates a Publisher backed by the given Connection.
-func NewPublisher(conn *Connection) *Publisher {
-	return &Publisher{conn: conn}
+// A clock.Clock must be supplied via WithPublisherClock; NewPublisher panics
+// if no clock is provided.
+func NewPublisher(conn *Connection, opts ...PublisherOption) *Publisher {
+	p := &Publisher{conn: conn}
+	for _, o := range opts {
+		o(p)
+	}
+	clock.MustHaveClock(p.clock, "rabbitmq.NewPublisher")
+	return p
 }
 
 // Close waits for all in-flight Publish calls to complete, bounded by ctx.
@@ -118,7 +138,7 @@ func (p *Publisher) Publish(ctx context.Context, topic string, payload []byte) e
 	msg := amqp.Publishing{
 		ContentType:  "application/octet-stream",
 		DeliveryMode: amqp.Persistent,
-		Timestamp:    time.Now().UTC(),
+		Timestamp:    p.clock.Now().UTC(),
 		Body:         payload,
 	}
 
@@ -127,6 +147,8 @@ func (p *Publisher) Publish(ctx context.Context, topic string, payload []byte) e
 	}
 
 	// Wait for broker confirmation.
+	confirmTimer := p.clock.NewTimerAt(p.clock.Now().Add(p.conn.config.ConfirmTimeout))
+	defer confirmTimer.Stop()
 	select {
 	case confirm, ok := <-confirmCh:
 		if !ok {
@@ -139,7 +161,7 @@ func (p *Publisher) Publish(ctx context.Context, topic string, payload []byte) e
 			slog.String("topic", topic))
 		return nil
 
-	case <-time.After(p.conn.config.ConfirmTimeout):
+	case <-confirmTimer.C():
 		return errcode.New(ErrAdapterAMQPConfirmTimeout, "rabbitmq: publish confirm timed out")
 
 	case <-ctx.Done():

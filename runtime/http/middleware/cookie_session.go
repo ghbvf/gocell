@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/securecookie"
 )
 
@@ -41,6 +42,12 @@ type CookieSessionConfig struct {
 
 	// MaxAge is the cookie max age in seconds. Default: 900 (15min, matches JWT TTL).
 	MaxAge int
+
+	// Clock is used for cookie timestamp and expiry checks.
+	// Required: must be set by the composition root (e.g. clock.Real() in
+	// production, clockmock.New(...) in tests). Panics at Encode/Decode time
+	// if nil (securecookie.requireClock guard).
+	Clock clock.Clock
 }
 
 // DefaultCookieSessionConfig returns a CookieSessionConfig with safe defaults.
@@ -78,7 +85,7 @@ func normalizeCookieSessionConfig(cfg *CookieSessionConfig) {
 func NewCookieSession(cfg CookieSessionConfig) (func(http.Handler) http.Handler, error) {
 	normalizeCookieSessionConfig(&cfg)
 
-	sc, err := securecookie.New(cfg.Secret, cfg.EncryptKey)
+	sc, err := securecookie.New(cfg.Secret, cfg.EncryptKey, cfg.Clock)
 	if err != nil {
 		return nil, fmt.Errorf("cookie_session: %w", err)
 	}
@@ -136,13 +143,16 @@ func MustCookieSession(cfg CookieSessionConfig) func(http.Handler) http.Handler 
 func NewSessionCookieWriter(cfg CookieSessionConfig) (*SessionCookieWriter, error) {
 	normalizeCookieSessionConfig(&cfg)
 
-	sc, err := securecookie.New(cfg.Secret, cfg.EncryptKey)
+	sc, err := securecookie.New(cfg.Secret, cfg.EncryptKey, cfg.Clock)
 	if err != nil {
 		return nil, fmt.Errorf("cookie_session: %w", err)
 	}
 
 	return &SessionCookieWriter{sc: sc, cfg: cfg}, nil
 }
+
+// (sc.WithClock chain removed in PR #348 R4: securecookie.New now takes Clock
+// as a required positional argument; nil/typed-nil returns ErrClockRequired.)
 
 // SessionCookieWriter writes and clears session cookies using a pre-built
 // SecureCookie instance for consistent performance.
@@ -198,7 +208,7 @@ func (w *SessionCookieWriter) Clear(rw http.ResponseWriter) {
 func SetSessionCookie(w http.ResponseWriter, cfg CookieSessionConfig, jwt string) error {
 	normalizeCookieSessionConfig(&cfg)
 
-	sc, err := securecookie.New(cfg.Secret, cfg.EncryptKey)
+	sc, err := securecookie.New(cfg.Secret, cfg.EncryptKey, cfg.Clock)
 	if err != nil {
 		slog.Error("cookie_session: failed to create SecureCookie",
 			slog.Any("error", err))

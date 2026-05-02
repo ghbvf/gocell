@@ -49,8 +49,3 @@ type Policy struct {
 	ReuseInterval time.Duration
 	MaxAge        time.Duration
 }
-
-// Clock abstracts time.Now for deterministic testing.
-type Clock interface {
-	Now() time.Time
-}

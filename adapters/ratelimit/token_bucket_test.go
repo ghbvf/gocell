@@ -9,6 +9,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/ghbvf/gocell/kernel/clock"
+	"github.com/ghbvf/gocell/kernel/clock/clockmock"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/runtime/http/middleware"
 )
@@ -20,7 +22,7 @@ var (
 )
 
 func TestLimiter_AllowsWithinRate(t *testing.T) {
-	l := New(Config{Rate: 10, Burst: 10})
+	l := New(Config{Rate: 10, Burst: 10}, clock.Real())
 	t.Cleanup(func() {
 		if err := l.Close(context.Background()); err != nil {
 			t.Logf("limiter close: %v", err)
@@ -33,7 +35,7 @@ func TestLimiter_AllowsWithinRate(t *testing.T) {
 }
 
 func TestLimiter_RejectsOverRate(t *testing.T) {
-	l := New(Config{Rate: 1, Burst: 1})
+	l := New(Config{Rate: 1, Burst: 1}, clock.Real())
 	t.Cleanup(func() {
 		if err := l.Close(context.Background()); err != nil {
 			t.Logf("limiter close: %v", err)
@@ -45,7 +47,7 @@ func TestLimiter_RejectsOverRate(t *testing.T) {
 }
 
 func TestLimiter_PerIPIsolation(t *testing.T) {
-	l := New(Config{Rate: 1, Burst: 1})
+	l := New(Config{Rate: 1, Burst: 1}, clock.Real())
 	t.Cleanup(func() {
 		if err := l.Close(context.Background()); err != nil {
 			t.Logf("limiter close: %v", err)
@@ -58,7 +60,7 @@ func TestLimiter_PerIPIsolation(t *testing.T) {
 }
 
 func TestLimiter_Window(t *testing.T) {
-	l := New(Config{Rate: 100, Burst: 200})
+	l := New(Config{Rate: 100, Burst: 200}, clock.Real())
 	t.Cleanup(func() {
 		if err := l.Close(context.Background()); err != nil {
 			t.Logf("limiter close: %v", err)
@@ -76,7 +78,7 @@ func TestLimiter_StaleEntryCleanup(t *testing.T) {
 		Burst:           10,
 		CleanupInterval: testtime.MediumPoll,
 		StaleAfter:      testtime.SlowPoll,
-	})
+	}, clock.Real())
 	t.Cleanup(func() {
 		if err := l.Close(context.Background()); err != nil {
 			t.Logf("limiter close: %v", err)
@@ -96,7 +98,7 @@ func TestLimiter_StaleEntryCleanup(t *testing.T) {
 }
 
 func TestLimiter_ConcurrentAccess(t *testing.T) {
-	l := New(Config{Rate: 1000, Burst: 1000})
+	l := New(Config{Rate: 1000, Burst: 1000}, clock.Real())
 	t.Cleanup(func() {
 		if err := l.Close(context.Background()); err != nil {
 			t.Logf("limiter close: %v", err)
@@ -117,7 +119,7 @@ func TestLimiter_ConcurrentAccess(t *testing.T) {
 }
 
 func TestLimiter_DefaultConfig(t *testing.T) {
-	l := New(Config{}) // zero-value config → sensible defaults
+	l := New(Config{}, clock.Real()) // zero-value config → sensible defaults
 	t.Cleanup(func() {
 		if err := l.Close(context.Background()); err != nil {
 			t.Logf("limiter close: %v", err)
@@ -139,7 +141,7 @@ func TestLimiter_DefaultConfig(t *testing.T) {
 // TestLimiter_Close_AcceptsCtx verifies that Close(ctx) exists and stops the
 // background cleanup goroutine when called with ample budget.
 func TestLimiter_Close_AcceptsCtx(t *testing.T) {
-	l := New(Config{CleanupInterval: time.Minute})
+	l := New(Config{CleanupInterval: time.Minute}, clock.Real())
 
 	ctx, cancel := context.WithTimeout(context.Background(), testtime.CtxDefault)
 	defer cancel()
@@ -151,7 +153,7 @@ func TestLimiter_Close_AcceptsCtx(t *testing.T) {
 // TestLimiter_Close_Idempotent verifies that a second Close(ctx) call
 // returns nil immediately (stopOnce guard).
 func TestLimiter_Close_Idempotent(t *testing.T) {
-	l := New(Config{CleanupInterval: time.Minute})
+	l := New(Config{CleanupInterval: time.Minute}, clock.Real())
 	ctx := context.Background()
 
 	assert.NoError(t, l.Close(ctx), "first Close must return nil")
@@ -161,7 +163,7 @@ func TestLimiter_Close_Idempotent(t *testing.T) {
 // TestLimiter_Close_StopsCleanupGoroutine verifies that after Close(ctx),
 // the background cleanup goroutine no longer runs.
 func TestLimiter_Close_StopsCleanupGoroutine(t *testing.T) {
-	l := New(Config{CleanupInterval: testtime.D10ms, StaleAfter: time.Millisecond})
+	l := New(Config{CleanupInterval: testtime.D10ms, StaleAfter: time.Millisecond}, clock.Real())
 	_ = l.Allow("10.0.0.1") // create an entry
 
 	ctx := context.Background()
@@ -179,6 +181,91 @@ func TestLimiter_ImplementsContextCloser(t *testing.T) {
 	var _ interface {
 		Close(ctx context.Context) error
 	} = (*Limiter)(nil)
+}
+
+// ---------------------------------------------------------------------------
+// Token bucket algorithm tests with fake clock injection
+// ---------------------------------------------------------------------------
+
+func TestBucket_AllowN_BurstInitiallyFull(t *testing.T) {
+	clk := clockmock.New(time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC))
+	l := New(Config{Rate: 1, Burst: 3}, clk)
+	t.Cleanup(func() { _ = l.Close(context.Background()) })
+
+	// Burst=3: first 3 requests should be allowed immediately.
+	assert.True(t, l.Allow("ip1"), "first request (burst slot 1)")
+	assert.True(t, l.Allow("ip1"), "second request (burst slot 2)")
+	assert.True(t, l.Allow("ip1"), "third request (burst slot 3)")
+	assert.False(t, l.Allow("ip1"), "fourth request should be rejected (burst exhausted)")
+}
+
+func TestBucket_AllowN_TokensRefillOverTime(t *testing.T) {
+	clk := clockmock.New(time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC))
+	l := New(Config{Rate: 2, Burst: 2}, clk)
+	t.Cleanup(func() { _ = l.Close(context.Background()) })
+
+	// Drain burst.
+	assert.True(t, l.Allow("ip1"))
+	assert.True(t, l.Allow("ip1"))
+	assert.False(t, l.Allow("ip1"), "burst exhausted")
+
+	// Advance 1s → rate=2/s → +2 tokens → allow 2 more.
+	clk.Advance(time.Second)
+	assert.True(t, l.Allow("ip1"), "refilled token 1")
+	assert.True(t, l.Allow("ip1"), "refilled token 2")
+	assert.False(t, l.Allow("ip1"), "no more tokens after refill consumed")
+}
+
+func TestBucket_AllowN_BurstCapNotExceeded(t *testing.T) {
+	clk := clockmock.New(time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC))
+	l := New(Config{Rate: 10, Burst: 3}, clk)
+	t.Cleanup(func() { _ = l.Close(context.Background()) })
+
+	// Start fresh, drain burst.
+	assert.True(t, l.Allow("ip1"))
+	assert.True(t, l.Allow("ip1"))
+	assert.True(t, l.Allow("ip1"))
+	assert.False(t, l.Allow("ip1"))
+
+	// Advance 10s — rate=10/s × 10s = 100 tokens but burst cap = 3.
+	clk.Advance(testtime.D10s)
+	assert.True(t, l.Allow("ip1"), "slot 1 after burst cap refill")
+	assert.True(t, l.Allow("ip1"), "slot 2 after burst cap refill")
+	assert.True(t, l.Allow("ip1"), "slot 3 after burst cap refill")
+	assert.False(t, l.Allow("ip1"), "burst cap enforced; no extra tokens beyond 3")
+}
+
+func TestBucket_AllowN_PerKeyIsolation_FakeClock(t *testing.T) {
+	clk := clockmock.New(time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC))
+	l := New(Config{Rate: 1, Burst: 1}, clk)
+	t.Cleanup(func() { _ = l.Close(context.Background()) })
+
+	assert.True(t, l.Allow("ip-a"), "ip-a first request")
+	assert.True(t, l.Allow("ip-b"), "ip-b first request — independent bucket")
+	assert.False(t, l.Allow("ip-a"), "ip-a burst exhausted")
+
+	clk.Advance(time.Second)
+	assert.True(t, l.Allow("ip-a"), "ip-a refilled after 1s")
+	assert.True(t, l.Allow("ip-b"), "ip-b refilled after 1s")
+}
+
+func TestBucket_ConcurrentSafety_FakeClock(t *testing.T) {
+	clk := clockmock.New(time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC))
+	l := New(Config{Rate: 1000, Burst: 1000}, clk)
+	t.Cleanup(func() { _ = l.Close(context.Background()) })
+
+	var wg sync.WaitGroup
+	for i := range 50 {
+		wg.Add(1)
+		go func(ip string) {
+			defer wg.Done()
+			for range 20 {
+				l.Allow(ip)
+			}
+		}("10.0.0." + itoa(i))
+	}
+	wg.Wait()
+	// No assertion needed; race detector catches data races.
 }
 
 // itoa is a minimal int-to-string for test IP generation.

@@ -9,16 +9,16 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/ghbvf/gocell/cells/accesscore/internal/mem"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/ports"
+	"github.com/ghbvf/gocell/cells/accesscore/internal/testutil"
 	"github.com/ghbvf/gocell/kernel/outbox"
 )
 
 // --- stubs ---
 
-// trackingSessionRepo counts RevokeByUserID calls and delegates to mem.SessionRepository.
+// trackingSessionRepo counts RevokeByUserID calls and delegates to ports.SessionRepository.
 type trackingSessionRepo struct {
-	*mem.SessionRepository
+	ports.SessionRepository
 	revokeCalls int
 }
 
@@ -54,7 +54,7 @@ func makeEntry(id string, payload []byte) outbox.Entry {
 // --- consumer tests ---
 
 func TestConsumer_HandleRoleChanged_HappyPath_ReturnsNil_CallsRevokeByUserID(t *testing.T) {
-	repo := &trackingSessionRepo{SessionRepository: mem.NewSessionRepository()}
+	repo := &trackingSessionRepo{SessionRepository: testutil.RealSessionRepo(t)}
 	c := NewConsumer(repo, slog.Default())
 
 	entry := makeEntry("evt-abc", validPayload("u1"))
@@ -65,7 +65,7 @@ func TestConsumer_HandleRoleChanged_HappyPath_ReturnsNil_CallsRevokeByUserID(t *
 }
 
 func TestConsumer_HandleRoleChanged_MalformedPayload_ReturnsPermanentError(t *testing.T) {
-	repo := &trackingSessionRepo{SessionRepository: mem.NewSessionRepository()}
+	repo := &trackingSessionRepo{SessionRepository: testutil.RealSessionRepo(t)}
 	c := NewConsumer(repo, slog.Default())
 
 	entry := makeEntry("evt-bad", []byte("not-json"))
@@ -77,7 +77,7 @@ func TestConsumer_HandleRoleChanged_MalformedPayload_ReturnsPermanentError(t *te
 }
 
 func TestConsumer_HandleRoleChanged_EmptyUserID_ReturnsPermanentError(t *testing.T) {
-	repo := &trackingSessionRepo{SessionRepository: mem.NewSessionRepository()}
+	repo := &trackingSessionRepo{SessionRepository: testutil.RealSessionRepo(t)}
 	c := NewConsumer(repo, slog.Default())
 
 	entry := makeEntry("evt-empty", validPayload(""))
@@ -109,7 +109,7 @@ func TestConsumer_HandleRoleChanged_TransientRepoError_ReturnsPlainError(t *test
 // Infrastructure-level idempotency (Claimer dedup) is provided by ConsumerBase and is NOT
 // tested here — this test documents the handler's own idempotency contract.
 func TestConsumer_HandleRoleChanged_ReplayIdempotent_SecondCallSafe(t *testing.T) {
-	repo := &trackingSessionRepo{SessionRepository: mem.NewSessionRepository()}
+	repo := &trackingSessionRepo{SessionRepository: testutil.RealSessionRepo(t)}
 	c := NewConsumer(repo, slog.Default())
 
 	entry := makeEntry("evt-replay", validPayload("u1"))
@@ -126,7 +126,7 @@ func TestConsumer_HandleRoleChanged_ReplayIdempotent_SecondCallSafe(t *testing.T
 // --- WrapLegacyHandler disposition tests ---
 
 func TestConsumer_ViaWrapLegacyHandler_PermanentErrorMapsToReject(t *testing.T) {
-	repo := &trackingSessionRepo{SessionRepository: mem.NewSessionRepository()}
+	repo := &trackingSessionRepo{SessionRepository: testutil.RealSessionRepo(t)}
 	c := NewConsumer(repo, slog.Default())
 	handler := outbox.WrapLegacyHandler(c.HandleRoleChanged)
 
@@ -138,7 +138,7 @@ func TestConsumer_ViaWrapLegacyHandler_PermanentErrorMapsToReject(t *testing.T) 
 }
 
 func TestConsumer_ViaWrapLegacyHandler_HappyPathMapsToAck(t *testing.T) {
-	repo := &trackingSessionRepo{SessionRepository: mem.NewSessionRepository()}
+	repo := &trackingSessionRepo{SessionRepository: testutil.RealSessionRepo(t)}
 	c := NewConsumer(repo, slog.Default())
 	handler := outbox.WrapLegacyHandler(c.HandleRoleChanged)
 

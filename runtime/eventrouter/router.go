@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/wrapper"
 )
@@ -88,6 +89,7 @@ type Router struct {
 	started      bool
 	shutdown     bool
 	healthErr    error
+	clock        clock.Clock
 }
 
 // Compile-time interface checks.
@@ -95,11 +97,16 @@ var _ cell.EventRouter = (*Router)(nil)
 var _ cell.SubscriptionValidatorAdder = (*Router)(nil)
 
 // New creates a Router that will use the given Subscriber for all subscriptions.
-func New(sub outbox.Subscriber, opts ...Option) *Router {
+//
+// clk is required; pass clock.Real() at the composition root or
+// clockmock.New(...) in tests. Panics on nil or typed-nil clock.
+func New(sub outbox.Subscriber, clk clock.Clock, opts ...Option) *Router {
+	clock.MustHaveClock(clk, "eventrouter.New")
 	r := &Router{
 		subscriber:   sub,
 		readyTimeout: DefaultReadyTimeout,
 		running:      make(chan struct{}),
+		clock:        clk,
 	}
 	for _, o := range opts {
 		o(r)
@@ -329,9 +336,9 @@ func (r *Router) runAwaitReady(ctx context.Context, cancel context.CancelFunc, h
 
 	var deadlineCh <-chan time.Time
 	if r.readyTimeout > 0 {
-		timer := time.NewTimer(r.readyTimeout)
+		timer := r.clock.NewTimerAt(r.clock.Now().Add(r.readyTimeout))
 		defer timer.Stop()
-		deadlineCh = timer.C
+		deadlineCh = timer.C()
 	}
 
 	select {
@@ -493,7 +500,7 @@ func (r *Router) markShutdown() {
 // ref: ThreeDotsLabs/watermill message/router.go — closingInProgressCh two-phase barrier.
 // ref: uber-go/fx app.go — run ctx vs stop ctx separation.
 func (r *Router) Close(ctx context.Context) error {
-	start := time.Now()
+	start := r.clock.Now()
 
 	// Phase 1: StopIntake — optional graceful degradation.
 	// Subscribers implementing SubscriberIntakeStopper stop accepting new
@@ -519,7 +526,7 @@ func (r *Router) Close(ctx context.Context) error {
 			slog.Warn("eventrouter: StopIntake exceeded ctx budget, advancing to cancel+wait",
 				slog.String("phase", phErr.Phase),
 				slog.Any("error", phErr.Err),
-				slog.Duration("elapsed", time.Since(start)))
+				slog.Duration("elapsed", r.clock.Since(start)))
 			// Do NOT return: we still need to cancel runCtx and reap goroutines
 			// so the caller's resources are released.
 		}
@@ -543,7 +550,7 @@ func (r *Router) Close(ctx context.Context) error {
 
 	select {
 	case <-done:
-		slog.Info("eventrouter: closed", slog.Duration("elapsed", time.Since(start)))
+		slog.Info("eventrouter: closed", slog.Duration("elapsed", r.clock.Since(start)))
 		// If ctx already expired (e.g. StopIntake consumed the budget), surface
 		// the timeout so callers see consistent shutdown outcomes.
 		if ctxErr := ctx.Err(); ctxErr != nil {
@@ -555,7 +562,7 @@ func (r *Router) Close(ctx context.Context) error {
 		slog.Warn("eventrouter: close timed out, some goroutines may still be running",
 			slog.String("phase", phErr.Phase),
 			slog.Any("error", phErr.Err),
-			slog.Duration("elapsed", time.Since(start)))
+			slog.Duration("elapsed", r.clock.Since(start)))
 		return phErr
 	}
 }

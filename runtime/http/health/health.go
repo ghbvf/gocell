@@ -38,6 +38,7 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/assembly"
 	"github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/httputil"
 	"github.com/ghbvf/gocell/pkg/logutil"
@@ -150,15 +151,22 @@ type Handler struct {
 	verboseToken    string            // required match for the X-Readyz-Token header; empty means verbose is denied
 	verboseDisabled bool              // if true, /readyz?verbose is answered with the plain aggregate body
 	shuttingDown    atomic.Bool
+	clock           clock.Clock
 }
 
-// New creates a Handler backed by the given CoreAssembly.
+// New creates a Handler backed by the given CoreAssembly. The clock is
+// required: New panics on nil so misconfiguration fails fast at the
+// composition root. Production wiring threads bootstrap.b.clock here;
+// tests pass clockmock.New(...) for deterministic deadline checks.
+//
 // The default probe deadline is 5 s (Kubernetes readiness probe convention).
-func New(asm *assembly.CoreAssembly, opts ...Option) *Handler {
+func New(asm *assembly.CoreAssembly, clk clock.Clock, opts ...Option) *Handler {
+	clock.MustHaveClock(clk, "health.New")
 	h := &Handler{
 		assembly: asm,
 		checkers: make(map[string]Checker),
 		deadline: defaultHealthDeadline,
+		clock:    clk,
 	}
 	for _, o := range opts {
 		o(h)
@@ -181,7 +189,7 @@ func (h *Handler) RegisterChecker(name string, fn Checker) error {
 	if _, exists := h.checkers[name]; exists {
 		return fmt.Errorf("health: duplicate checker name %q", name)
 	}
-	h.checkers[name] = wrapCtxSafe(fn)
+	h.checkers[name] = wrapCtxSafe(fn, h.clock)
 	return nil
 }
 
@@ -510,7 +518,7 @@ func (h *Handler) runProbesParallel(checkers map[string]Checker) map[string]Prob
 	for name, fn := range checkers {
 		go func() {
 			defer wg.Done()
-			pr := runOneProbe(ctx, fn, h.deadline)
+			pr := runOneProbe(ctx, fn, h.deadline, h.clock)
 			mu.Lock()
 			results[name] = pr
 			mu.Unlock()
@@ -533,10 +541,10 @@ func (h *Handler) runProbesParallel(checkers map[string]Checker) map[string]Prob
 // against a future ctx-parent change silently routing Canceled into the
 // timeout bucket. context.Canceled wrapped by client libraries (pgx /
 // go-redis on failed I/O) is a genuine unhealthy signal, not a timeout.
-func runOneProbe(ctx context.Context, fn Checker, deadline time.Duration) (pr ProbeResult) {
-	start := time.Now()
+func runOneProbe(ctx context.Context, fn Checker, deadline time.Duration, clk clock.Clock) (pr ProbeResult) {
+	start := clk.Now()
 	defer func() {
-		pr.Duration = time.Since(start)
+		pr.Duration = clk.Since(start)
 		if r := recover(); r != nil {
 			pr.Status = "unhealthy"
 			pr.Err = fmt.Errorf("panic: %v", r)

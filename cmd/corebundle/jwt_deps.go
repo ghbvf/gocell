@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/runtime/auth"
 	authconfig "github.com/ghbvf/gocell/runtime/auth/config"
 )
@@ -25,8 +26,8 @@ type jwtDeps struct {
 // ref: kube-apiserver --service-account-issuer — required at startup.
 // ref: Hydra internal/driver/config.DefaultProvider — single Registry pattern
 // plan: docs/plans/202604191515-auth-federated-whistle.md §F1
-func buildJWTDeps(adapterMode string) (jwtDeps, error) {
-	keySet, err := loadKeySet(adapterMode)
+func buildJWTDeps(adapterMode string, clk clock.Clock) (jwtDeps, error) {
+	keySet, err := loadKeySet(adapterMode, clk)
 	if err != nil {
 		return jwtDeps{}, fmt.Errorf("load JWT key set: %w", err)
 	}
@@ -37,6 +38,7 @@ func buildJWTDeps(adapterMode string) (jwtDeps, error) {
 	reg, err := authconfig.FromEnv(
 		authconfig.WithKeys(keySet),
 		authconfig.WithRealMode(true),
+		authconfig.WithEnvClock(clk),
 	)
 	if err != nil {
 		return jwtDeps{}, fmt.Errorf("build JWT registry: %w", err)

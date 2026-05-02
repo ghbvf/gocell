@@ -56,6 +56,30 @@ func (b *Bootstrap) phase0ValidateOptions() error {
 	if err := b.validateHTTPListenerConfigs(); err != nil {
 		return err
 	}
+	if err := b.validateAssemblyClockAlignment(); err != nil {
+		return err
+	}
+	return nil
+}
+
+// validateAssemblyClockAlignment ensures that when a pre-built assembly is
+// supplied via WithAssembly, its internal clock matches the bootstrap clock
+// set via WithClock. A mismatch means lifecycle / shutdown timers and cell
+// Dependencies.Clock would disagree on the current time — a subtle source of
+// flakiness in tests and incorrect timeout behavior in production.
+//
+// Callers must pass the same clock.Clock instance to both:
+//
+//	bootstrap.WithClock(clk) and assembly.New(assembly.Config{Clock: clk})
+func (b *Bootstrap) validateAssemblyClockAlignment() error {
+	if b.assemblyCore == nil {
+		return nil
+	}
+	if b.assemblyCore.Clock() != b.clock {
+		return fmt.Errorf(
+			"bootstrap: clock mismatch — the assembly's Clock and the bootstrap's Clock are different instances; " +
+				"pass the same clock.Clock instance to both bootstrap.WithClock and assembly.New(Config{Clock: ...})")
+	}
 	return nil
 }
 
@@ -97,7 +121,7 @@ func (b *Bootstrap) phase1LoadConfig(s *phaseState) error {
 	// Create the watcher but do NOT start it yet — OnChange must be bound first
 	// (phase4) to prevent a window where file events are lost.
 	if b.configPath != "" {
-		w, err := b.configWatcherFactory(b.configPath)
+		w, err := b.configWatcherFactory(b.configPath, b.clock)
 		if err != nil {
 			return fmt.Errorf("bootstrap: config watcher: %w", err)
 		}
@@ -132,7 +156,7 @@ func (b *Bootstrap) phase2InitPubSub(s *phaseState) {
 	pub := b.publisher
 	sub := b.subscriber
 	if pub == nil && sub == nil {
-		eb := eventbus.New()
+		eb := eventbus.New(eventbus.WithClock(b.clock))
 		pub = eb
 		sub = eb
 	}
@@ -167,19 +191,11 @@ func samePubSubIdentity(pub outbox.Publisher, sub outbox.Subscriber) bool {
 func (b *Bootstrap) phase3InitAssembly(ctx context.Context, s *phaseState) error {
 	asm := b.assemblyCore
 	if asm == nil {
-		cfg := assembly.Config{ID: "default", DurabilityMode: cell.DurabilityDemo}
-		if b.hookTimeoutSet {
-			cfg.HookTimeout = b.hookTimeout
-		}
-		if b.hookObserver != nil {
-			cfg.HookObserver = b.hookObserver
-		}
+		cfg := assembly.Config{ID: "default", DurabilityMode: cell.DurabilityDemo, Clock: b.clock}
 		if b.metricsProvider != nil {
 			cfg.MetricsProvider = b.metricsProvider
 		}
 		asm = assembly.New(cfg)
-	} else if b.hookTimeoutSet || b.hookObserver != nil {
-		slog.Warn("bootstrap: WithHookTimeout/WithHookObserver ignored because WithAssembly was used; configure via assembly.Config")
 	}
 
 	// Register Shutdown BEFORE StartWithConfig: CoreAssembly.New eagerly spawns

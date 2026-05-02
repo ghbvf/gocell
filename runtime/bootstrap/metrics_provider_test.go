@@ -4,10 +4,12 @@ import (
 	"testing"
 
 	kernelmetrics "github.com/ghbvf/gocell/kernel/observability/metrics"
+
+	"github.com/ghbvf/gocell/kernel/clock"
 )
 
 func TestWithMetricsProvider_NopDefault(t *testing.T) {
-	b := New()
+	b := New(WithClock(clock.Real()))
 	p := b.MetricsProvider()
 	if p == nil {
 		t.Fatal("MetricsProvider must never return nil")
@@ -19,14 +21,14 @@ func TestWithMetricsProvider_NopDefault(t *testing.T) {
 
 func TestWithMetricsProvider_StoresValue(t *testing.T) {
 	custom := &recordingProvider{}
-	b := New(WithMetricsProvider(custom))
+	b := New(WithClock(clock.Real()), WithMetricsProvider(custom))
 	if b.MetricsProvider() != custom {
 		t.Fatalf("MetricsProvider did not store the injected provider")
 	}
 }
 
 func TestWithMetricsProvider_NilRetainsDefault(t *testing.T) {
-	b := New(WithMetricsProvider(nil))
+	b := New(WithClock(clock.Real()), WithMetricsProvider(nil))
 	if _, ok := b.MetricsProvider().(kernelmetrics.NopProvider); !ok {
 		t.Fatalf("nil provider must keep the NopProvider default, got %T", b.MetricsProvider())
 	}

@@ -8,6 +8,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
@@ -42,15 +43,19 @@ type HubConfig struct {
 	// MaxConnections is the maximum number of concurrent connections.
 	// 0 means unlimited. Default: 0.
 	MaxConnections int
+	// Clock is the time source. Required; NewHub panics if nil.
+	Clock clock.Clock
 }
 
-// DefaultHubConfig returns a HubConfig with sensible defaults.
-func DefaultHubConfig() HubConfig {
+// DefaultHubConfig returns a HubConfig with sensible defaults. A clock must be
+// provided; pass clock.Real() at the composition root or a clockmock for tests.
+func DefaultHubConfig(clk clock.Clock) HubConfig {
 	return HubConfig{
 		PingInterval: defaultPingInterval,
 		PingTimeout:  defaultPingTimeout,
 		ReadLimit:    defaultReadLimit,
 		PingMissMax:  defaultPingMissMax,
+		Clock:        clk,
 	}
 }
 
@@ -86,6 +91,7 @@ type connEntry struct {
 //	connection teardown; CloseRead for context-based lifecycle.
 type Hub struct {
 	config  HubConfig
+	clk     clock.Clock
 	handler MessageHandler
 
 	state atomic.Int32 // stateIdle → stateRunning → stateStopping → stateStopped
@@ -108,6 +114,7 @@ type Hub struct {
 
 // NewHub creates a Hub. No background goroutines are started until Start.
 func NewHub(cfg HubConfig, handler MessageHandler) *Hub {
+	clock.MustHaveClock(cfg.Clock, "websocket.NewHub")
 	if cfg.PingInterval == 0 {
 		cfg.PingInterval = defaultPingInterval
 	}
@@ -126,6 +133,7 @@ func NewHub(cfg HubConfig, handler MessageHandler) *Hub {
 
 	return &Hub{
 		config:       cfg,
+		clk:          cfg.Clock,
 		handler:      handler,
 		conns:        make(map[string]*connEntry),
 		shutdownDone: make(chan struct{}),
@@ -470,14 +478,14 @@ func (h *Hub) readLoop(ctx context.Context, conn Conn) {
 }
 
 func (h *Hub) pingLoop(ctx context.Context) {
-	ticker := time.NewTicker(h.config.PingInterval)
+	ticker := h.clk.NewTicker(h.config.PingInterval)
 	defer ticker.Stop()
 
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		case <-ticker.C:
+		case <-ticker.C():
 			h.pingAll(ctx)
 		}
 	}

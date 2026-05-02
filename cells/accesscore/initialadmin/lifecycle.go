@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/runtime/worker"
 )
@@ -31,7 +32,7 @@ type config struct {
 	TTL            time.Duration
 	PasswordSource io.Reader
 	Scheduler      Scheduler
-	Clock          Clock
+	Clock          clock.Clock
 	Hasher         PasswordHasher
 }
 
@@ -100,8 +101,8 @@ func WithPasswordSourceForTesting(r io.Reader) LifecycleOption {
 // WithScheduler overrides the cleanup scheduler (tests use fakeScheduler).
 func WithScheduler(s Scheduler) LifecycleOption { return func(l *Lifecycle) { l.cfg.Scheduler = s } }
 
-// WithClock overrides the clock (tests use fakeClock).
-func WithClock(c Clock) LifecycleOption { return func(l *Lifecycle) { l.cfg.Clock = c } }
+// WithClock overrides the clock (tests use clockmock.FakeClock).
+func WithClock(c clock.Clock) LifecycleOption { return func(l *Lifecycle) { l.cfg.Clock = c } }
 
 // NewLifecycle constructs a Lifecycle with the given options. Defaults:
 // Username="admin", CredentialPath resolved at start-time, TTL=24h,
@@ -143,6 +144,11 @@ func (l *Lifecycle) start(ctx context.Context) error {
 	}
 	deps := l.deps
 	cfg := l.cfg
+	// Propagate the injected clock from deps when no explicit WithClock option was set.
+	if cfg.Clock == nil {
+		cfg.Clock = deps.Clock
+	}
+	clock.MustHaveClock(cfg.Clock, "initialadmin.start")
 	logger := l.logger
 	l.mu.Unlock()
 

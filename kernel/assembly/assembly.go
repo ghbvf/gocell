@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
@@ -50,6 +51,13 @@ const DefaultHookTimeout = 30 * time.Second
 type Config struct {
 	ID             string
 	DurabilityMode cell.DurabilityMode // Required: Demo or Durable (zero value rejected by CheckNotNoop)
+
+	// Clock is the time source used for hook-runtime measurement and any
+	// other time-dependent assembly bookkeeping. Required: New panics when
+	// Clock is nil so that missing wiring fails fast at construction time
+	// rather than masquerading as wall-clock-driven flakiness in tests.
+	// Production wiring passes clock.Real(); tests inject clockmock.New(...).
+	Clock clock.Clock
 
 	// HookTimeout bounds every BeforeStart/AfterStart/BeforeStop/AfterStop
 	// hook invocation. Zero uses DefaultHookTimeout. Set to a negative value
@@ -105,11 +113,19 @@ type CoreAssembly struct {
 
 // New creates a CoreAssembly with the given configuration.
 //
+// cfg.Clock is required: assembly.New panics when Clock is nil OR a
+// typed-nil interface (e.g. (*realClock)(nil) wrapped in a clock.Clock
+// value). The single root clock is constructed once at the composition
+// root via clock.Real() and threaded through every assembly + cell;
+// missing wiring fails fast at construction time rather than masquerading
+// as wall-clock-driven flakiness in tests. Tests inject clockmock.New(...).
+//
 // If cfg.HookObserver is nil, cell.NopHookObserver{} is substituted so the
 // hook call sites can emit unconditionally.
 // If cfg.HookTimeout is zero, DefaultHookTimeout is applied. Negative value
 // disables per-hook timeout entirely.
 func New(cfg Config) *CoreAssembly {
+	clock.MustHaveClock(cfg.Clock, "assembly.New")
 	// Normalise nil + typed-nil (interface wrapping a nil pointer) to
 	// NopHookObserver. A typed nil that slips through would dispatch to a
 	// nil receiver on every hook and only manifest as panic-recover log
@@ -129,6 +145,7 @@ func New(cfg Config) *CoreAssembly {
 		QueueSize:   cfg.HookObserverQueueSize,
 		SinkTimeout: cfg.HookObserverSinkTimeout,
 		Provider:    cfg.MetricsProvider,
+		Clock:       cfg.Clock,
 	})
 	return &CoreAssembly{
 		id:         cfg.ID,
@@ -321,6 +338,7 @@ func (a *CoreAssembly) startInternal(ctx context.Context, cfgMap map[string]any)
 	deps := cell.Dependencies{
 		Config:         cfgMap,
 		DurabilityMode: a.cfg.DurabilityMode,
+		Clock:          a.cfg.Clock,
 	}
 
 	// Phase 1: Init all cells. If any fails, no cell has been Start'd yet.
@@ -441,11 +459,11 @@ func callHookSafe(fn func() error) (err error, panicked bool) {
 // event around each hook, record runtime via clock.Now.
 func (a *CoreAssembly) invokeHook(ctx context.Context, cellID string, phase cell.HookPhase, fn func(context.Context) error) error {
 	// Start the wall-clock before WithTimeout so Duration spans the full
-	// ctx-setup + hook-execution window. Otherwise time.Now() runs slightly
+	// ctx-setup + hook-execution window. Otherwise the clock reads slightly
 	// after the deadline timer arms, making Duration < HookTimeout even when
 	// the hook blocked until the deadline fired — breaks assertions like
 	// Duration >= HookTimeout under scheduling jitter.
-	start := time.Now()
+	start := a.cfg.Clock.Now()
 	hookCtx := ctx
 	if a.cfg.HookTimeout > 0 {
 		var cancel context.CancelFunc
@@ -454,7 +472,7 @@ func (a *CoreAssembly) invokeHook(ctx context.Context, cellID string, phase cell
 	}
 
 	err, panicked := callHookSafe(func() error { return fn(hookCtx) })
-	dur := time.Since(start)
+	dur := a.cfg.Clock.Since(start)
 
 	outcome := cell.OutcomeSuccess
 	timedOut := hookCtx.Err() != nil && errors.Is(hookCtx.Err(), context.DeadlineExceeded)
@@ -512,6 +530,16 @@ func (a *CoreAssembly) emitHookEvent(e cell.HookEvent) {
 // ID returns the assembly's identifier as set in Config.ID.
 func (a *CoreAssembly) ID() string {
 	return a.id
+}
+
+// Clock returns the single root [clock.Clock] that the assembly threads
+// through every cell's Init via Dependencies.Clock. Exposed so that
+// Bootstrap can fail-fast when a caller passes both WithAssembly and
+// WithClock with non-identical clock instances.
+//
+// Always non-nil — assembly.New rejects nil and typed-nil at construction.
+func (a *CoreAssembly) Clock() clock.Clock {
+	return a.cfg.Clock
 }
 
 // CellIDs returns the IDs of all registered cells in registration order.

@@ -50,7 +50,7 @@ func (b *Bootstrap) phase6StartEventRouter(runCtx context.Context, s *phaseState
 	evtRouter := eventrouter.New(&outbox.SubscriberWithMiddleware{
 		Inner:      sub,
 		Middleware: mws,
-	}, evtRouterOpts...)
+	}, b.clock, evtRouterOpts...)
 
 	for _, v := range b.subscriptionValidators {
 		evtRouter.AddSubscriptionValidator(v)

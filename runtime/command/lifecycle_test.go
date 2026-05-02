@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/kernel/clock"
 	kcommand "github.com/ghbvf/gocell/kernel/command"
 	"github.com/ghbvf/gocell/kernel/command/commandtest"
 )
@@ -19,6 +20,7 @@ func TestSweeperLifecycle_ContributesHook(t *testing.T) {
 		Scanner:  q,
 		Queue:    q,
 		Interval: time.Hour,
+		Clk:      clock.Real(),
 	})
 
 	var _ cell.LifecycleContributor = lc
@@ -35,6 +37,7 @@ func TestSweeperLifecycle_StartStop(t *testing.T) {
 		Scanner:  q,
 		Queue:    q,
 		Interval: time.Hour,
+		Clk:      clock.Real(),
 	})
 
 	require.NoError(t, lc.Start(context.Background()))

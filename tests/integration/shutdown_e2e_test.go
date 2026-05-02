@@ -32,6 +32,7 @@ import (
 	"time"
 
 	"github.com/ghbvf/gocell/adapters/rabbitmq"
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/tests/testutil"
@@ -94,7 +95,7 @@ func newShutdownTestConn(t *testing.T, amqpURL string) *rabbitmq.Connection {
 		ConfirmTimeout:      testtime.SelectAsyncSettle,
 		ReconnectMaxBackoff: testtime.SelectShutdown,
 		ReconnectBaseDelay:  testtime.D500ms,
-	})
+	}, rabbitmq.WithConnectionClock(clock.Real()))
 	require.NoError(t, err, "create rabbitmq connection for shutdown e2e")
 	t.Cleanup(func() { _ = conn.Close(context.Background()) })
 	return conn
@@ -200,11 +201,12 @@ func TestE2E_ShutdownBarrier_NoMessageLoss(t *testing.T) {
 	pubConn := newShutdownTestConn(t, amqpURL)
 	subConn := newShutdownTestConn(t, amqpURL)
 
-	pub := rabbitmq.NewPublisher(pubConn)
+	pub := rabbitmq.NewPublisher(pubConn, rabbitmq.WithPublisherClock(clock.Real()))
 	sub := rabbitmq.NewSubscriber(subConn, rabbitmq.SubscriberConfig{
 		QueueName:     queueName,
 		PrefetchCount: 10,
 		DLXExchange:   dlxExchange,
+		Clock:         clock.Real(),
 	})
 
 	// Handler counts processed messages. Simulate work with a delay.
@@ -335,16 +337,17 @@ func TestE2E_ShutdownBarrier_BrokerHardClose(t *testing.T) {
 		ConfirmTimeout:      testtime.SelectAsyncSettle,
 		ReconnectMaxBackoff: shutdownD3s,
 		ReconnectBaseDelay:  testtime.D200ms,
-	})
+	}, rabbitmq.WithConnectionClock(clock.Real()))
 	require.NoError(t, err, "create subscriber connection")
 	// Do NOT defer subConn.Close here — the broker will be killed; the
 	// connection teardown is handled implicitly via process exit / GC.
 
-	pub := rabbitmq.NewPublisher(pubConn)
+	pub := rabbitmq.NewPublisher(pubConn, rabbitmq.WithPublisherClock(clock.Real()))
 	sub := rabbitmq.NewSubscriber(subConn, rabbitmq.SubscriberConfig{
 		QueueName:     queueName,
 		PrefetchCount: 5,
 		DLXExchange:   dlxExchange,
+		Clock:         clock.Real(),
 	})
 
 	// Simple handler — just counts deliveries.

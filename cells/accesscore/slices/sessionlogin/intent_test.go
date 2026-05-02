@@ -10,18 +10,19 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/runtime/auth"
 )
 
 func TestService_Login_IssuesDistinctIntents(t *testing.T) {
-	svc, userRepo := newTestService()
+	svc, userRepo := newTestService(t)
 	seedUser(userRepo, "alice", "s3cret!")
 
 	pair, err := svc.Login(context.Background(), LoginInput{Username: "alice", Password: "s3cret!"})
 	require.NoError(t, err)
 	require.NotNil(t, pair)
 
-	testVerifier, err := auth.NewJWTVerifier(testKeySet, auth.WithExpectedAudiences("gocell"))
+	testVerifier, err := auth.NewJWTVerifier(testKeySet, clock.Real(), auth.WithExpectedAudiences("gocell"))
 	require.NoError(t, err)
 
 	accessClaims, err := testVerifier.VerifyIntent(context.Background(), pair.AccessToken, auth.TokenIntentAccess)

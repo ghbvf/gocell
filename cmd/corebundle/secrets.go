@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/query"
 	"github.com/ghbvf/gocell/runtime/auth"
 )
@@ -15,9 +16,9 @@ import (
 // key pair is generated per process (tokens invalidated on restart).
 //
 // ref: Kubernetes kube-apiserver refuses to start without --service-account-key-file.
-func loadKeySet(adapterMode string) (*auth.KeySet, error) {
+func loadKeySet(adapterMode string, clk clock.Clock) (*auth.KeySet, error) {
 	// Prefer env-provided keys regardless of adapter mode.
-	ks, err := auth.LoadKeySetFromEnv()
+	ks, err := auth.LoadKeySetFromEnv(clk)
 	if err == nil {
 		slog.Info("JWT key set loaded from environment variables")
 		return ks, nil
@@ -28,7 +29,7 @@ func loadKeySet(adapterMode string) (*auth.KeySet, error) {
 	// Dev mode: ephemeral keys (acceptable for development only).
 	privKey, pubKey := auth.MustGenerateTestKeyPair()
 	slog.Warn("dev mode: using ephemeral RSA key pair; tokens will be invalidated on restart")
-	return auth.NewKeySet(privKey, pubKey)
+	return auth.NewKeySet(privKey, pubKey, clk)
 }
 
 // cursorCodecConfig encapsulates buildCursorCodec parameters to avoid passing

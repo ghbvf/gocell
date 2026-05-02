@@ -12,6 +12,7 @@ import (
 
 	configcore "github.com/ghbvf/gocell/cells/configcore"
 	cellpg "github.com/ghbvf/gocell/cells/configcore/internal/adapters/postgres"
+	"github.com/ghbvf/gocell/kernel/clock"
 	kcrypto "github.com/ghbvf/gocell/kernel/crypto"
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
@@ -47,6 +48,7 @@ func WithOnStaleCipher(fn func(key, storedKeyID, currentKeyID string)) Option {
 // WithPool injects PostgreSQL-backed config and flag repositories into
 // configcore using the provided pool.
 //
+// clk must be non-nil; pass clock.Real() at the composition root.
 // The pool lifecycle, schema guard, TxManager, outbox writer, and relay remain
 // the composition root's responsibility. This option only adapts the pool into
 // configcore's cell-local repository ports.
@@ -56,11 +58,12 @@ func WithOnStaleCipher(fn func(key, storedKeyID, currentKeyID string)) Option {
 //
 // WithLogger configures repository logs only. Call configcore.WithLogger
 // separately when the cell itself should use the same logger.
-func WithPool(pool *pgxpool.Pool, opts ...Option) (configcore.Option, error) {
+func WithPool(pool *pgxpool.Pool, clk clock.Clock, opts ...Option) (configcore.Option, error) {
 	if pool == nil {
 		return nil, errcode.New(errcode.ErrCellInvalidConfig,
 			"configcore/postgres: WithPool requires a non-nil *pgxpool.Pool")
 	}
+	clock.MustHaveClock(clk, "configcore/postgres.WithPool")
 	cfg := settings{logger: slog.Default()}
 	for _, opt := range opts {
 		opt(&cfg)
@@ -71,7 +74,7 @@ func WithPool(pool *pgxpool.Pool, opts ...Option) (configcore.Option, error) {
 		if cfg.onStaleCipher != nil {
 			repoOpts = append(repoOpts, cellpg.WithOnStaleCipher(cfg.onStaleCipher))
 		}
-		configcore.WithConfigRepository(cellpg.NewConfigRepository(session, cfg.transformer, cfg.logger, repoOpts...))(c)
-		configcore.WithFlagRepository(cellpg.NewFlagRepository(session))(c)
+		configcore.WithConfigRepository(cellpg.NewConfigRepository(session, cfg.transformer, cfg.logger, clk, repoOpts...))(c)
+		configcore.WithFlagRepository(cellpg.NewFlagRepository(session, clk))(c)
 	}, nil
 }

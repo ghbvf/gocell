@@ -13,6 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	kcell "github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/auth/authtest"
 )
@@ -51,7 +52,7 @@ var okHandler = http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 // ---------------------------------------------------------------------------
 
 func TestAuthDeclare_NestedRoute_ForwardsWithPrefix(t *testing.T) {
-	r := MustNew()
+	r := MustNew(WithRouterClock(clock.Real()))
 
 	// Cells commonly register routes under nested mux.Route scopes:
 	//   mux.Route("/api/v1", func(v1) { v1.Route("/access", func(a) {
@@ -92,7 +93,7 @@ func TestAuthDeclare_NestedRoute_ForwardsWithPrefix(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestDeclareAuthMeta_Accumulates(t *testing.T) {
-	r := MustNew()
+	r := MustNew(WithRouterClock(clock.Real()))
 	m1 := kcell.AuthRouteMeta{Method: "GET", Path: "/a", Public: true}
 	m2 := kcell.AuthRouteMeta{Method: "POST", Path: "/b", PasswordResetExempt: true}
 
@@ -109,7 +110,7 @@ func TestDeclareAuthMeta_Accumulates(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestFinalizeAuth_EmptyDeclaration_NoOp(t *testing.T) {
-	r := MustNew()
+	r := MustNew(WithRouterClock(clock.Real()))
 	err := r.FinalizeAuth()
 	require.NoError(t, err)
 	assert.True(t, r.authFinalized)
@@ -136,7 +137,7 @@ func captureSlogWarn(t *testing.T) (*bytes.Buffer, func()) {
 // ---------------------------------------------------------------------------
 
 func TestFinalizeAuth_InternalPathOnPrimary_Rejected(t *testing.T) {
-	r, err := NewForListener(kcell.PrimaryListener)
+	r, err := NewForListener(kcell.PrimaryListener, WithRouterClock(clock.Real()))
 	require.NoError(t, err)
 	// Declare an internal-path meta directly (auth.Route no longer has Delegated).
 	require.NoError(t, r.DeclareAuthMeta(kcell.AuthRouteMeta{
@@ -150,7 +151,7 @@ func TestFinalizeAuth_InternalPathOnPrimary_Rejected(t *testing.T) {
 }
 
 func TestFinalizeAuth_InternalPathOnHealth_Rejected(t *testing.T) {
-	r, err := NewForListener(kcell.HealthListener)
+	r, err := NewForListener(kcell.HealthListener, WithRouterClock(clock.Real()))
 	require.NoError(t, err)
 	require.NoError(t, r.DeclareAuthMeta(kcell.AuthRouteMeta{
 		Method: "GET",
@@ -162,7 +163,7 @@ func TestFinalizeAuth_InternalPathOnHealth_Rejected(t *testing.T) {
 }
 
 func TestFinalizeAuth_InternalPathOnInternal_Accepted(t *testing.T) {
-	r, err := NewForListener(kcell.InternalListener)
+	r, err := NewForListener(kcell.InternalListener, WithRouterClock(clock.Real()))
 	require.NoError(t, err)
 	auth.MustMount(r, auth.Route{
 		Contract: testHTTPContract("GET", "/internal/v1/probe"),
@@ -176,7 +177,7 @@ func TestFinalizeAuth_InternalPathOnZeroRef_Accepted(t *testing.T) {
 	// Unit-test routers built via New() / New() have a zero-value ListenerRef;
 	// the consistency check skips the listener-identity rule for that case so
 	// existing test fixtures stay valid.
-	r := MustNew()
+	r := MustNew(WithRouterClock(clock.Real()))
 	auth.MustMount(r, auth.Route{
 		Contract: testHTTPContract("GET", "/internal/v1/probe"),
 		Handler:  okHandler,
@@ -189,7 +190,7 @@ func TestFinalizeAuth_NoVerifier_EmitsWarn_ByDefault(t *testing.T) {
 	buf, restore := captureSlogWarn(t)
 	defer restore()
 
-	r := MustNew() // no AuthMiddleware, no suppression
+	r := MustNew(WithRouterClock(clock.Real())) // no AuthMiddleware, no suppression
 	auth.MustMount(r, auth.Route{Contract: testHTTPContract("GET", "/healthz"), Handler: okHandler, Public: true})
 	require.NoError(t, r.FinalizeAuth())
 
@@ -202,7 +203,7 @@ func TestFinalizeAuth_NoVerifier_SuppressedWarn_NoOutput(t *testing.T) {
 	defer restore()
 
 	// Mirrors how bootstrap wires HealthListener routers post-R2-11.
-	r, err := New(WithSuppressNoAuthVerifierWarn())
+	r, err := New(WithRouterClock(clock.Real()), WithSuppressNoAuthVerifierWarn())
 	require.NoError(t, err)
 	auth.MustMount(r, auth.Route{Contract: testHTTPContract("GET", "/healthz"), Handler: okHandler, Public: true})
 	require.NoError(t, r.FinalizeAuth())
@@ -217,7 +218,7 @@ func TestFinalizeAuth_NoVerifier_SuppressedWarn_NoOutput(t *testing.T) {
 
 func TestFinalizeAuth_PublicMeta_BypassesAuth(t *testing.T) {
 	verifier := &authMetaVerifier{err: assert.AnError} // should not be called for public
-	r, err := New(WithAuthMiddleware(verifier))
+	r, err := New(WithRouterClock(clock.Real()), WithAuthMiddleware(verifier))
 	require.NoError(t, err)
 
 	// Use auth.Mount so every registered route has a corresponding auth declaration.
@@ -246,7 +247,7 @@ func TestFinalizeAuth_PasswordResetExempt_Meta(t *testing.T) {
 	verifier := &authMetaVerifier{
 		claims: auth.Claims{Subject: "usr-1", PasswordResetRequired: true},
 	}
-	r, err := New(WithAuthMiddleware(verifier))
+	r, err := New(WithRouterClock(clock.Real()), WithAuthMiddleware(verifier))
 	require.NoError(t, err)
 
 	// Use auth.Mount so every registered route has a corresponding auth declaration.
@@ -279,7 +280,7 @@ func TestFinalizeAuth_PasswordResetExempt_Meta(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestFinalizeAuth_DuplicateMeta_ReturnsError(t *testing.T) {
-	r := MustNew()
+	r := MustNew(WithRouterClock(clock.Real()))
 	require.NoError(t, r.DeclareAuthMeta(kcell.AuthRouteMeta{Method: "GET", Path: "/dup", Public: true}))
 	require.NoError(t, r.DeclareAuthMeta(kcell.AuthRouteMeta{Method: "GET", Path: "/dup", Public: true}))
 
@@ -293,7 +294,7 @@ func TestFinalizeAuth_DuplicateMeta_ReturnsError(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestDeclareAuthMeta_AfterFinalized_ReturnsError(t *testing.T) {
-	r := MustNew()
+	r := MustNew(WithRouterClock(clock.Real()))
 	require.NoError(t, r.FinalizeAuth())
 
 	err := r.DeclareAuthMeta(kcell.AuthRouteMeta{Method: "GET", Path: "/late", Public: true})
@@ -306,7 +307,7 @@ func TestDeclareAuthMeta_AfterFinalized_ReturnsError(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestFinalizeAuth_CalledTwice_ReturnsError(t *testing.T) {
-	r := MustNew()
+	r := MustNew(WithRouterClock(clock.Real()))
 	require.NoError(t, r.FinalizeAuth())
 
 	err := r.FinalizeAuth()
@@ -322,7 +323,7 @@ func TestFinalizeAuth_HintDerivedFromPostExemptMeta(t *testing.T) {
 	verifier := &authMetaVerifier{
 		claims: auth.Claims{Subject: "usr-1", PasswordResetRequired: true},
 	}
-	r, err := New(WithAuthMiddleware(verifier))
+	r, err := New(WithRouterClock(clock.Real()), WithAuthMiddleware(verifier))
 	require.NoError(t, err)
 
 	// Use auth.Mount so every registered route has a corresponding auth declaration.
@@ -354,7 +355,7 @@ func TestFinalizeAuth_MultipleDeclaredPublic_ORMerged(t *testing.T) {
 	// Both declared-public-a and declared-public-b should bypass auth;
 	// /protected must still require a token.
 	verifier := &authMetaVerifier{err: assert.AnError}
-	r, err := New(WithAuthMiddleware(verifier))
+	r, err := New(WithRouterClock(clock.Real()), WithAuthMiddleware(verifier))
 	require.NoError(t, err)
 
 	// Use auth.Mount so every registered route has a corresponding auth declaration.
@@ -387,7 +388,7 @@ func TestFinalizeAuth_MultipleDeclaredPublic_ORMerged(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestServeHTTP_AuthMetasWithoutFinalize_FailsClosed(t *testing.T) {
-	r := MustNew()
+	r := MustNew(WithRouterClock(clock.Real()))
 	r.Handle("/guarded", okHandler)
 	require.NoError(t, r.DeclareAuthMeta(kcell.AuthRouteMeta{Method: "GET", Path: "/guarded", Public: true}))
 	// FinalizeAuth intentionally NOT called.
@@ -399,7 +400,7 @@ func TestServeHTTP_AuthMetasWithoutFinalize_FailsClosed(t *testing.T) {
 }
 
 func TestServeHTTP_NoMetas_NoFinalize_OK(t *testing.T) {
-	r := MustNew()
+	r := MustNew(WithRouterClock(clock.Real()))
 	r.Handle("/hello", okHandler)
 	// No auth.Mount calls, no FinalizeAuth — should work fine.
 
@@ -423,7 +424,7 @@ func TestFinalizeAuth_NoVerifier_LogsWarning(t *testing.T) {
 	slog.SetDefault(logger)
 	defer slog.SetDefault(prev)
 
-	r := MustNew() // no WithAuthMiddleware
+	r := MustNew(WithRouterClock(clock.Real())) // no WithAuthMiddleware
 	require.NoError(t, r.DeclareAuthMeta(kcell.AuthRouteMeta{Method: "GET", Path: "/public-route", Public: true}))
 	require.NoError(t, r.FinalizeAuth())
 
@@ -453,7 +454,7 @@ func TestFinalizeAuth_NoVerifier_LogsWarning(t *testing.T) {
 // TestFinalizeAuth_RejectsInternalPathOnPrimaryListener is a regression guard:
 // an /internal/v1/* path mounted on PrimaryListener must fail fast.
 func TestFinalizeAuth_RejectsInternalPathOnPrimaryListener(t *testing.T) {
-	r, err := NewForListener(kcell.PrimaryListener)
+	r, err := NewForListener(kcell.PrimaryListener, WithRouterClock(clock.Real()))
 	require.NoError(t, err)
 	require.NoError(t, r.DeclareAuthMeta(kcell.AuthRouteMeta{
 		Method: "POST",
@@ -467,7 +468,7 @@ func TestFinalizeAuth_RejectsInternalPathOnPrimaryListener(t *testing.T) {
 // TestFinalizeAuth_RejectsNonInternalPathOnInternalListener ensures the inverse:
 // a non-/internal/v1/* path must not be mounted on InternalListener.
 func TestFinalizeAuth_RejectsNonInternalPathOnInternalListener(t *testing.T) {
-	r, err := NewForListener(kcell.InternalListener)
+	r, err := NewForListener(kcell.InternalListener, WithRouterClock(clock.Real()))
 	require.NoError(t, err)
 	require.NoError(t, r.DeclareAuthMeta(kcell.AuthRouteMeta{
 		Method: "GET",
@@ -485,7 +486,7 @@ func TestFinalizeAuth_RejectsNonInternalPathOnInternalListener(t *testing.T) {
 func TestFinalizeAuth_PolicyCoverage_DetectsMissingPolicy(t *testing.T) {
 	// A route registered via raw Handle without auth.Mount must cause
 	// FinalizeAuth to return an error listing the uncovered route.
-	r, err := New(WithAuthMiddleware(&authMetaVerifier{err: assert.AnError}))
+	r, err := New(WithRouterClock(clock.Real()), WithAuthMiddleware(&authMetaVerifier{err: assert.AnError}))
 	require.NoError(t, err)
 
 	// /unguarded is registered without auth.Mount — coverage violation.
@@ -506,7 +507,7 @@ func TestFinalizeAuth_PolicyCoverage_DetectsMissingPolicy(t *testing.T) {
 
 func TestFinalizeAuth_PolicyCoverage_AllDeclaredOK(t *testing.T) {
 	// All registered routes have auth.Mount — FinalizeAuth must succeed.
-	r, err := New(WithAuthMiddleware(&authMetaVerifier{err: assert.AnError}))
+	r, err := New(WithRouterClock(clock.Real()), WithAuthMiddleware(&authMetaVerifier{err: assert.AnError}))
 	require.NoError(t, err)
 
 	auth.MustMount(r, auth.Route{
@@ -528,6 +529,7 @@ func TestFinalizeAuth_PolicyCoverage_WhitelistExempts(t *testing.T) {
 	// Routes matching WithPolicyCoverageWhitelist patterns are exempt from
 	// coverage enforcement even when registered via raw Handle.
 	r, err := New(
+		WithRouterClock(clock.Real()),
 		WithPolicyCoverageWhitelist([]string{"/debug/*"}),
 		WithAuthMiddleware(&authMetaVerifier{err: assert.AnError}),
 	)

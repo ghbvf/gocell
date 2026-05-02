@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/runtime/worker"
 )
 
@@ -32,8 +33,8 @@ type cleanerConfig struct {
 	Path string
 	// TTL is the duration after Start before the credential file is removed. Required; must be > 0.
 	TTL time.Duration
-	// Clock is optional; defaults to realClock{}.
-	Clock Clock
+	// Clock is optional; defaults to clock.Real().
+	Clock clock.Clock
 	// Scheduler is optional; defaults to realScheduler{}.
 	Scheduler Scheduler
 	// Logger is required.
@@ -52,7 +53,7 @@ type cleanerConfig struct {
 type cleaner struct {
 	path      string
 	ttl       time.Duration
-	clock     Clock
+	clock     clock.Clock
 	scheduler Scheduler
 	logger    *slog.Logger
 
@@ -75,12 +76,10 @@ func newCleaner(cfg cleanerConfig) (*cleaner, error) {
 	}
 
 	clk := cfg.Clock
-	if clk == nil {
-		clk = realClock{}
-	}
+	clock.MustHaveClock(clk, "initialadmin.newCleaner")
 	sched := cfg.Scheduler
 	if sched == nil {
-		sched = realScheduler{}
+		sched = newRealScheduler(clk)
 	}
 
 	return &cleaner{

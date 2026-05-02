@@ -26,6 +26,7 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/assembly"
 	"github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/wrapper"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
@@ -67,7 +68,7 @@ func (c *stubEventCell) RegisterSubscriptions(r cell.EventRouter) error {
 func TestPhase6_ConsumerMiddleware_AppliedInChain(t *testing.T) {
 	t.Parallel()
 
-	bus := eventbus.New()
+	bus := eventbus.New(eventbus.WithClock(clock.Real()))
 
 	var mwInvocations atomic.Int32
 	spyMW := func(_ outbox.Subscription, next outbox.EntryHandler) outbox.EntryHandler {
@@ -75,12 +76,13 @@ func TestPhase6_ConsumerMiddleware_AppliedInChain(t *testing.T) {
 		return next
 	}
 
-	asm := assembly.New(assembly.Config{ID: "phase6-mw-test", DurabilityMode: cell.DurabilityDemo})
+	asm := assembly.New(assembly.Config{ID: "phase6-mw-test", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
 	t.Cleanup(asm.Shutdown)
 	require.NoError(t, asm.Register(newStubEventCell("stub", "event.phase6.mw.v1")))
 	require.NoError(t, asm.Start(context.Background()))
 
 	b := New(
+		WithClock(clock.Real()),
 		WithAssembly(asm),
 		WithPublisher(bus),
 		WithSubscriber(bus),
@@ -91,7 +93,7 @@ func TestPhase6_ConsumerMiddleware_AppliedInChain(t *testing.T) {
 	defer s.runCancel()
 	s.asm = asm
 	s.sub = bus
-	s.hh = health.New(asm) // phase5 normally populates this; test bypasses phase5.
+	s.hh = health.New(asm, clock.Real()) // phase5 normally populates this; test bypasses phase5.
 
 	require.NoError(t, b.phase6StartEventRouter(runCtx, s),
 		"phase6 must start cleanly with one stub subscription")
@@ -133,12 +135,13 @@ func (neverReadySubscriber) Close(_ context.Context) error { return nil }
 func TestPhase6_EventRouterReadyTimeout_FiresAndReturnsError(t *testing.T) {
 	t.Parallel()
 
-	asm := assembly.New(assembly.Config{ID: "phase6-rt-test", DurabilityMode: cell.DurabilityDemo})
+	asm := assembly.New(assembly.Config{ID: "phase6-rt-test", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
 	t.Cleanup(asm.Shutdown)
 	require.NoError(t, asm.Register(newStubEventCell("stub", "event.phase6.rt.v1")))
 	require.NoError(t, asm.Start(context.Background()))
 
 	b := New(
+		WithClock(clock.Real()),
 		WithAssembly(asm),
 		WithSubscriber(neverReadySubscriber{}),
 		WithEventRouterReadyTimeout(testtime.D80ms),
@@ -148,7 +151,7 @@ func TestPhase6_EventRouterReadyTimeout_FiresAndReturnsError(t *testing.T) {
 	defer s.runCancel()
 	s.asm = asm
 	s.sub = neverReadySubscriber{}
-	s.hh = health.New(asm)
+	s.hh = health.New(asm, clock.Real())
 
 	start := time.Now()
 	err := b.phase6StartEventRouter(runCtx, s)

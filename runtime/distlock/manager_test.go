@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ghbvf/gocell/kernel/clock/clockmock"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/runtime/distlock"
 	"github.com/ghbvf/gocell/runtime/distlock/locktest"
@@ -29,7 +30,7 @@ const mgrAdvance2s1ms = testtime.D2s + testtime.D1ms
 // waitPendingTimers spins until fc.PendingTimers() >= 1 or the deadline
 // passes. Called after a renew to ensure the manager has re-registered its
 // next timer before the test advances the clock again.
-func waitPendingTimers(t *testing.T, fc *locktest.FakeClock) {
+func waitPendingTimers(t *testing.T, fc *clockmock.FakeClock) {
 	t.Helper()
 	deadline := time.Now().Add(mgrWaitTimeout)
 	for fc.PendingTimers() < 1 {
@@ -77,12 +78,11 @@ func waitForRenewM(t *testing.T, m *distlock.Manager, fd *locktest.FakeDriver, w
 // Then we step-advance with waitPendingTimers barriers to avoid d<=0 immediate
 // timers, ensuring key2's timer is properly registered before each advance.
 func TestManager_HeapOrder(t *testing.T) {
-	fc := locktest.NewFakeClock(time.Time{})
+	fc := clockmock.New(time.Time{})
 	fd := locktest.NewFakeDriver()
 	fd.WithClock(fc.Now)
 
-	l := distlock.MustNew(fd,
-		distlock.WithClock(fc),
+	l := distlock.MustNew(fd, fc,
 		distlock.WithRenewFraction(0.5),
 	)
 
@@ -148,9 +148,9 @@ func TestManager_HeapOrder(t *testing.T) {
 // TestManager_Lifecycle_LazyStart verifies that the manager goroutine is not
 // started until the first Acquire and drains after the last release.
 func TestManager_Lifecycle_LazyStart(t *testing.T) {
-	fc := locktest.NewFakeClock(time.Time{})
+	fc := clockmock.New(time.Time{})
 	fd := locktest.NewFakeDriver()
-	l := distlock.MustNew(fd, distlock.WithClock(fc))
+	l := distlock.MustNew(fd, fc)
 
 	_, release, err := l.Acquire(context.Background(), "lifecycle-key", mgrWaitTimeout)
 	if err != nil {
@@ -177,9 +177,9 @@ func TestManager_Lifecycle_LazyStart(t *testing.T) {
 
 // TestManager_SnapshotLocks verifies that Snapshot().Locks tracks adds and removes.
 func TestManager_SnapshotLocks(t *testing.T) {
-	fc := locktest.NewFakeClock(time.Time{})
+	fc := clockmock.New(time.Time{})
 	fd := locktest.NewFakeDriver()
-	l := distlock.MustNew(fd, distlock.WithClock(fc))
+	l := distlock.MustNew(fd, fc)
 
 	if mgr(l).Snapshot().Locks != 0 {
 		t.Errorf("SnapshotLocks: initial count should be 0")

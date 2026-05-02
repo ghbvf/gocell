@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/pkg/ctxkeys"
 	"github.com/ghbvf/gocell/pkg/errcode"
@@ -38,14 +39,14 @@ func TestWriterEmitter_EmitDelegatesToWriter(t *testing.T) {
 }
 
 func TestDirectEmitter_ConstructRejectsNilPublisher(t *testing.T) {
-	_, err := NewDirectEmitter(nil, DirectPublishFailClosed, metrics.NopProvider{}, "testcell")
+	_, err := NewDirectEmitter(nil, DirectPublishFailClosed, metrics.NopProvider{}, clock.Real(), "testcell")
 
 	assert.Error(t, err)
 }
 
 func TestDirectEmitter_EmitWrapsV1EnvelopeAndPublishes(t *testing.T) {
 	publisher := &recordingEmitterPublisher{}
-	emitter, err := NewDirectEmitter(publisher, DirectPublishFailClosed, metrics.NopProvider{}, "testcell")
+	emitter, err := NewDirectEmitter(publisher, DirectPublishFailClosed, metrics.NopProvider{}, clock.Real(), "testcell")
 	require.NoError(t, err)
 
 	entry := validEntry("direct-emitter")
@@ -69,7 +70,7 @@ func TestDirectEmitter_EmitWrapsV1EnvelopeAndPublishes(t *testing.T) {
 func TestDirectEmitter_FailClosedReturnsPublishError(t *testing.T) {
 	want := errors.New("broker down")
 	publisher := &recordingEmitterPublisher{err: want}
-	emitter, err := NewDirectEmitter(publisher, DirectPublishFailClosed, metrics.NopProvider{}, "testcell")
+	emitter, err := NewDirectEmitter(publisher, DirectPublishFailClosed, metrics.NopProvider{}, clock.Real(), "testcell")
 	require.NoError(t, err)
 
 	got := emitter.Emit(context.Background(), validEntry("direct-fail-closed"))
@@ -80,7 +81,7 @@ func TestDirectEmitter_FailClosedReturnsPublishError(t *testing.T) {
 func TestDirectEmitter_FailOpenSwallowsPublishError(t *testing.T) {
 	want := errors.New("broker down")
 	publisher := &recordingEmitterPublisher{err: want}
-	emitter, err := NewDirectEmitter(publisher, DirectPublishFailOpen, metrics.NopProvider{}, "testcell")
+	emitter, err := NewDirectEmitter(publisher, DirectPublishFailOpen, metrics.NopProvider{}, clock.Real(), "testcell")
 	require.NoError(t, err)
 
 	got := emitter.Emit(context.Background(), validEntry("direct-fail-open"))
@@ -91,7 +92,7 @@ func TestDirectEmitter_FailOpenSwallowsPublishError(t *testing.T) {
 
 func TestDirectEmitter_InvalidEntryFailsBeforePublish(t *testing.T) {
 	publisher := &recordingEmitterPublisher{}
-	emitter, err := NewDirectEmitter(publisher, DirectPublishFailOpen, metrics.NopProvider{}, "testcell")
+	emitter, err := NewDirectEmitter(publisher, DirectPublishFailOpen, metrics.NopProvider{}, clock.Real(), "testcell")
 	require.NoError(t, err)
 
 	got := emitter.Emit(context.Background(), Entry{})
@@ -150,7 +151,7 @@ func TestWriterEmitter_Durable(t *testing.T) {
 
 // TestDirectEmitter_Durable: DirectEmitter is always non-durable by design.
 func TestDirectEmitter_Durable(t *testing.T) {
-	e, err := NewDirectEmitter(&recordingEmitterPublisher{}, DirectPublishFailOpen, metrics.NopProvider{}, "testcell")
+	e, err := NewDirectEmitter(&recordingEmitterPublisher{}, DirectPublishFailOpen, metrics.NopProvider{}, clock.Real(), "testcell")
 	require.NoError(t, err)
 	assert.False(t, e.Durable())
 	assert.False(t, ReportDurable(e))
@@ -192,7 +193,7 @@ func TestDirectEmitter_EntryFailurePolicyOverridesCtorDefault(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			publisher := &recordingEmitterPublisher{err: errors.New("broker down")}
-			emitter, err := NewDirectEmitter(publisher, tc.ctorMode, metrics.NopProvider{}, "testcell")
+			emitter, err := NewDirectEmitter(publisher, tc.ctorMode, metrics.NopProvider{}, clock.Real(), "testcell")
 			require.NoError(t, err)
 
 			entry := validEntry("policy-test-" + tc.name)
@@ -235,7 +236,7 @@ func TestDirectEmitter_FailOpenCounterIncrement(t *testing.T) {
 	spy := &spyMetricsProvider{}
 	publisher := &recordingEmitterPublisher{err: errors.New("broker down")}
 
-	emitter, err := NewDirectEmitter(publisher, DirectPublishFailOpen, spy, "testcell")
+	emitter, err := NewDirectEmitter(publisher, DirectPublishFailOpen, spy, clock.Real(), "testcell")
 	require.NoError(t, err)
 
 	entry := validEntry("counter-test")
@@ -256,7 +257,7 @@ func TestDirectEmitter_FailClosedCounterNotIncremented(t *testing.T) {
 	spy := &spyMetricsProvider{}
 	publisher := &recordingEmitterPublisher{err: errors.New("broker down")}
 
-	emitter, err := NewDirectEmitter(publisher, DirectPublishFailClosed, spy, "testcell")
+	emitter, err := NewDirectEmitter(publisher, DirectPublishFailClosed, spy, clock.Real(), "testcell")
 	require.NoError(t, err)
 
 	entry := validEntry("counter-not-inc-test")
@@ -274,12 +275,21 @@ func TestDirectEmitter_FailClosedCounterNotIncremented(t *testing.T) {
 // metrics.Provider returns an errcode error (fail-fast, not nil-propagation).
 func TestNewDirectEmitter_NilProvider(t *testing.T) {
 	publisher := &recordingEmitterPublisher{}
-	_, err := NewDirectEmitter(publisher, DirectPublishFailClosed, nil, "testcell")
+	_, err := NewDirectEmitter(publisher, DirectPublishFailClosed, nil, clock.Real(), "testcell")
 	require.Error(t, err)
 	// errcode type assertion
 	var ec *errcode.Error
 	require.True(t, errors.As(err, &ec), "must be an errcode.Error, got %T: %v", err, err)
 	assert.Equal(t, errcode.ErrCellMissingOutbox, ec.Code, "expected ErrCellMissingOutbox code")
+}
+
+// TestNewDirectEmitter_NilClock verifies that passing a nil clock panics at
+// construction (fail-fast via MustHaveClock, not silent nil propagation).
+func TestNewDirectEmitter_NilClock(t *testing.T) {
+	publisher := &recordingEmitterPublisher{}
+	assert.Panics(t, func() {
+		_, _ = NewDirectEmitter(publisher, DirectPublishFailClosed, metrics.NopProvider{}, nil, "testcell")
+	}, "nil clock must panic at construction (MustHaveClock)")
 }
 
 // ---------------------------------------------------------------------------
@@ -372,7 +382,7 @@ func TestDirectEmitter_Emit_NilReceiver(t *testing.T) {
 // at construction time with ErrValidationFailed.
 func TestNewDirectEmitter_EmptyCellID(t *testing.T) {
 	publisher := &recordingEmitterPublisher{}
-	_, err := NewDirectEmitter(publisher, DirectPublishFailClosed, metrics.NopProvider{}, "")
+	_, err := NewDirectEmitter(publisher, DirectPublishFailClosed, metrics.NopProvider{}, clock.Real(), "")
 	require.Error(t, err)
 	var ec *errcode.Error
 	require.True(t, errors.As(err, &ec))
@@ -398,7 +408,7 @@ func (alwaysFailProvider) Unregister(_ metrics.Collector) error { return nil }
 // (not swallowed) so the caller knows the emitter was not initialized.
 func TestNewDirectEmitter_CounterVecRegistrationFailure(t *testing.T) {
 	publisher := &recordingEmitterPublisher{}
-	_, err := NewDirectEmitter(publisher, DirectPublishFailClosed, alwaysFailProvider{}, "testcell")
+	_, err := NewDirectEmitter(publisher, DirectPublishFailClosed, alwaysFailProvider{}, clock.Real(), "testcell")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "failopen_dropped counter")
 }
@@ -408,7 +418,7 @@ func TestNewDirectEmitter_CounterVecRegistrationFailure(t *testing.T) {
 func TestNewDirectEmitter_WithLogger(t *testing.T) {
 	logger := slog.Default()
 	publisher := &recordingEmitterPublisher{err: errors.New("broker down")}
-	emitter, err := NewDirectEmitter(publisher, DirectPublishFailOpen, metrics.NopProvider{}, "testcell", WithLogger(logger))
+	emitter, err := NewDirectEmitter(publisher, DirectPublishFailOpen, metrics.NopProvider{}, clock.Real(), "testcell", WithLogger(logger))
 	require.NoError(t, err)
 	require.NotNil(t, emitter)
 	// Confirm emitter works — fail-open path must not error.
@@ -430,7 +440,7 @@ func TestWriterEmitter_Durable_NilReceiver(t *testing.T) {
 // all publishes fail (fail-open), the HealthCheckers checker reports ErrDegraded.
 func TestDirectEmitter_HealthCheckers_DegradedOnHighDropRatio(t *testing.T) {
 	fp := &recordingEmitterPublisher{err: errors.New("broker down")}
-	e, err := NewDirectEmitter(fp, DirectPublishFailOpen, metrics.NopProvider{}, "testcell")
+	e, err := NewDirectEmitter(fp, DirectPublishFailOpen, metrics.NopProvider{}, clock.Real(), "testcell")
 	require.NoError(t, err)
 
 	ctx := context.Background()
@@ -452,7 +462,7 @@ func TestDirectEmitter_HealthCheckers_DegradedOnHighDropRatio(t *testing.T) {
 // all publishes succeed (zero drops), the HealthCheckers checker returns nil.
 func TestDirectEmitter_HealthCheckers_HealthyOnLowDropRatio(t *testing.T) {
 	pub := &recordingEmitterPublisher{} // no error → success path
-	e, err := NewDirectEmitter(pub, DirectPublishFailOpen, metrics.NopProvider{}, "testcell")
+	e, err := NewDirectEmitter(pub, DirectPublishFailOpen, metrics.NopProvider{}, clock.Real(), "testcell")
 	require.NoError(t, err)
 
 	ctx := context.Background()
@@ -475,7 +485,7 @@ func TestNewDirectEmitter_WithLoggerOption(t *testing.T) {
 	customLogger := slog.New(slog.NewTextHandler(io.Discard, &slog.HandlerOptions{Level: slog.LevelDebug}))
 
 	fp := &recordingEmitterPublisher{err: errors.New("broker down")}
-	e, err := NewDirectEmitter(fp, DirectPublishFailOpen, metrics.NopProvider{}, "testcell",
+	e, err := NewDirectEmitter(fp, DirectPublishFailOpen, metrics.NopProvider{}, clock.Real(), "testcell",
 		WithLogger(customLogger))
 	require.NoError(t, err)
 	require.NotNil(t, e)
@@ -488,7 +498,7 @@ func TestNewDirectEmitter_WithLoggerOption(t *testing.T) {
 // WithFailOpenRateThreshold(0) disables the degraded check (checker always nil).
 func TestNewDirectEmitter_WithFailOpenRateThresholdZeroDisables(t *testing.T) {
 	fp := &recordingEmitterPublisher{err: errors.New("broker down")}
-	e, err := NewDirectEmitter(fp, DirectPublishFailOpen, metrics.NopProvider{}, "testcell",
+	e, err := NewDirectEmitter(fp, DirectPublishFailOpen, metrics.NopProvider{}, clock.Real(), "testcell",
 		WithFailOpenRateThreshold(0))
 	require.NoError(t, err)
 
@@ -517,7 +527,7 @@ func TestDirectEmitter_InjectsObservabilityFromContext(t *testing.T) {
 	ctx = ctxkeys.WithTraceID(ctx, wantTraceID)
 
 	publisher := &recordingEmitterPublisher{}
-	emitter, err := NewDirectEmitter(publisher, DirectPublishFailClosed, metrics.NopProvider{}, "testcell")
+	emitter, err := NewDirectEmitter(publisher, DirectPublishFailClosed, metrics.NopProvider{}, clock.Real(), "testcell")
 	require.NoError(t, err)
 
 	entry := validEntry("obs-inject-test")
@@ -540,7 +550,7 @@ func TestDirectEmitter_InjectsObservabilityFromContext(t *testing.T) {
 // WithLogger(nil) falls back to slog.Default() in NewDirectEmitter
 // (defensive — protects against accidental nil logger from caller).
 func TestNewDirectEmitter_WithLoggerNilFallsBackToDefault(t *testing.T) {
-	e, err := NewDirectEmitter(noopPub{}, DirectPublishFailClosed, metrics.NopProvider{}, "test-cell",
+	e, err := NewDirectEmitter(noopPub{}, DirectPublishFailClosed, metrics.NopProvider{}, clock.Real(), "test-cell",
 		WithLogger(nil))
 	require.NoError(t, err)
 	require.NotNil(t, e)

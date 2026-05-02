@@ -12,6 +12,7 @@ import (
 
 	"github.com/ghbvf/gocell/cells/auditcore/internal/domain"
 	"github.com/ghbvf/gocell/cells/auditcore/internal/ports"
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/ctxcancel"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/query"
@@ -159,7 +160,7 @@ func TestAuditRepository_CtxCancel_AllIOBoundaries(t *testing.T) {
 			t.Run(name, func(t *testing.T) {
 				db := &mockDB{}
 				tt.fixture(db, c.cause)
-				repo := NewAuditRepository(db)
+				repo := NewAuditRepository(db, clock.Real())
 
 				err := tt.invoke(repo)
 				require.Error(t, err)
@@ -196,7 +197,7 @@ func TestAuditRepository_CtxCancel_AllIOBoundaries(t *testing.T) {
 // ErrAuditRepoQuery → HTTP 500, not be misclassified as ctx-cancel.
 func TestAuditRepository_CtxCancel_NonCancelStillInfra(t *testing.T) {
 	db := &mockDB{execErr: errors.New("connection refused")}
-	repo := NewAuditRepository(db)
+	repo := NewAuditRepository(db, clock.Real())
 
 	err := repo.Append(context.Background(), &domain.AuditEntry{ID: "ae-x"})
 	require.Error(t, err)

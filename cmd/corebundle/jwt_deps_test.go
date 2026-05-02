@@ -19,6 +19,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/runtime/auth"
@@ -52,7 +53,7 @@ func setTestJWTKeyEnv(t *testing.T) {
 func TestBuildJWTDeps_MissingIssuer_Error(t *testing.T) {
 	t.Setenv("GOCELL_JWT_ISSUER", "")
 	t.Setenv("GOCELL_JWT_AUDIENCE", "gocell")
-	_, err := buildJWTDeps("")
+	_, err := buildJWTDeps("", clock.Real())
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "GOCELL_JWT_ISSUER",
 		"error must name the missing env var")
@@ -63,7 +64,7 @@ func TestBuildJWTDeps_MissingIssuer_Error(t *testing.T) {
 func TestBuildJWTDeps_MissingAudience_Error(t *testing.T) {
 	t.Setenv("GOCELL_JWT_ISSUER", "gocell-prod")
 	t.Setenv("GOCELL_JWT_AUDIENCE", "")
-	_, err := buildJWTDeps("")
+	_, err := buildJWTDeps("", clock.Real())
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "GOCELL_JWT_AUDIENCE",
 		"error must name the missing env var")
@@ -89,15 +90,15 @@ func TestBuildJWTDeps_ProdWiring_VerifierRejectsWrongIssuer(t *testing.T) {
 	t.Setenv("GOCELL_JWT_ISSUER", "prod-iss")
 	t.Setenv("GOCELL_JWT_AUDIENCE", "gocell")
 
-	deps, err := buildJWTDeps("")
+	deps, err := buildJWTDeps("", clock.Real())
 	require.NoError(t, err, "buildJWTDeps must succeed with valid env vars")
 
 	// Reload the exact same key material from env — deps already loaded it, so
 	// tokens signed with this ks are signature-valid against deps.verifier.
-	ks, err := auth.LoadKeySetFromEnv()
+	ks, err := auth.LoadKeySetFromEnv(clock.Real())
 	require.NoError(t, err, "reload keyset from env to mirror deps wiring")
 
-	wrongIssuer, err := auth.NewJWTIssuer(ks, "wrong-iss", testtime.D15min,
+	wrongIssuer, err := auth.NewJWTIssuer(ks, "wrong-iss", testtime.D15min, clock.Real(),
 		auth.WithIssuerAudiencesFromSlice([]string{"gocell"}))
 	require.NoError(t, err)
 
@@ -129,7 +130,7 @@ func TestBuildJWTDeps_ProdWiring_VerifierRejectsWrongAudience(t *testing.T) {
 	t.Setenv("GOCELL_JWT_ISSUER", "prod-iss")
 	t.Setenv("GOCELL_JWT_AUDIENCE", "gocell")
 
-	deps, err := buildJWTDeps("")
+	deps, err := buildJWTDeps("", clock.Real())
 	require.NoError(t, err, "buildJWTDeps must succeed with valid env vars")
 
 	tok, err := deps.issuer.Issue(auth.TokenIntentAccess, "user-1", auth.IssueOptions{
@@ -158,13 +159,13 @@ func TestBuildJWTDeps_ProdWiring_VerifierRejectsWrongKey(t *testing.T) {
 	t.Setenv("GOCELL_JWT_ISSUER", "prod-iss")
 	t.Setenv("GOCELL_JWT_AUDIENCE", "gocell")
 
-	deps, err := buildJWTDeps("")
+	deps, err := buildJWTDeps("", clock.Real())
 	require.NoError(t, err)
 
 	// Build a completely independent keyset — deps.verifier has no public key
 	// matching this kid, so verification must fail at the signature step.
-	strangerKS, _, _ := auth.MustNewTestKeySet()
-	stranger, err := auth.NewJWTIssuer(strangerKS, "prod-iss", testtime.D15min,
+	strangerKS, _, _ := auth.MustNewTestKeySet(clock.Real())
+	stranger, err := auth.NewJWTIssuer(strangerKS, "prod-iss", testtime.D15min, clock.Real(),
 		auth.WithIssuerAudiencesFromSlice([]string{"gocell"}))
 	require.NoError(t, err)
 
@@ -192,7 +193,7 @@ func TestBuildJWTDeps_LogsEffectiveConfig(t *testing.T) {
 	slog.SetDefault(slog.New(handler))
 	t.Cleanup(func() { slog.SetDefault(prev) })
 
-	_, err := buildJWTDeps("testmode")
+	_, err := buildJWTDeps("testmode", clock.Real())
 	require.NoError(t, err)
 
 	// Parse log lines looking for the JWT deps built record.

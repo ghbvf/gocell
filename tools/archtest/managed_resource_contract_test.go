@@ -57,6 +57,7 @@ var adapterManagedResourceOptOut = map[string]string{
 	"adapters/rabbitmq.DialFunc":               "config: injected dial function",
 	"adapters/rabbitmq.PoolStats":              "value-object: channel-pool diagnostic snapshot",
 	"adapters/rabbitmq.Publisher":              "subresource-not-owner: uses caller-owned Connection",
+	"adapters/rabbitmq.PublisherOption":        "config: functional option",
 	"adapters/rabbitmq.Subscriber":             "subresource-not-owner: uses caller-owned Connection",
 	"adapters/rabbitmq.SubscriberConfig":       "config: construction input value",
 	"adapters/ratelimit.Config":                "config: construction input value",

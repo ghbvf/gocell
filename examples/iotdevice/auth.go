@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/runtime/auth"
 )
 
@@ -25,11 +26,11 @@ func newJWTVerifierFromEnv() (*auth.JWTVerifier, error) {
 		return nil, fmt.Errorf("%s must be set", jwtAudienceEnv)
 	}
 
-	keySet, err := auth.LoadKeySetFromEnv()
+	keySet, err := auth.LoadKeySetFromEnv(clock.Real())
 	if err != nil {
 		return nil, fmt.Errorf("load JWT key set from environment: %w", err)
 	}
-	verifier, err := auth.NewJWTVerifier(keySet,
+	verifier, err := auth.NewJWTVerifier(keySet, clock.Real(),
 		auth.WithExpectedAudiences(audience),
 		auth.WithExpectedIssuer(issuer))
 	if err != nil {
@@ -48,7 +49,7 @@ func newInternalAuthChainFromEnv() ([]cell.ListenerAuth, error) {
 	if err != nil {
 		return nil, fmt.Errorf("load %s: %w", iotdeviceServiceSecretEnv, err)
 	}
-	store, err := auth.NewInMemoryNonceStore(auth.ServiceTokenNonceTTL)
+	store, err := auth.NewInMemoryNonceStore(auth.ServiceTokenNonceTTL, clock.Real())
 	if err != nil {
 		return nil, fmt.Errorf("create internal listener nonce store: %w", err)
 	}

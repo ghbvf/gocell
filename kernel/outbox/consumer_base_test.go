@@ -14,6 +14,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.uber.org/goleak"
 
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/idempotency"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 )
@@ -298,13 +299,13 @@ func TestExponentialDelay_ExactMaxSafeShift(t *testing.T) {
 func TestNewConsumerBase_InvalidClaimPolicy(t *testing.T) {
 	_, err := NewConsumerBase(&fakeClaimer{}, ConsumerBaseConfig{
 		ClaimPolicy: ClaimPolicy(99),
-	})
+	}, clock.Real())
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "invalid ClaimPolicy")
 }
 
 func TestNewConsumerBase_DefaultClaimPolicyFailClosed(t *testing.T) {
-	cb, err := NewConsumerBase(&fakeClaimer{}, ConsumerBaseConfig{})
+	cb, err := NewConsumerBase(&fakeClaimer{}, ConsumerBaseConfig{}, clock.Real())
 	require.NoError(t, err)
 	assert.Equal(t, ClaimPolicyFailClosed, cb.config.ClaimPolicy)
 }
@@ -312,7 +313,7 @@ func TestNewConsumerBase_DefaultClaimPolicyFailClosed(t *testing.T) {
 func TestNewConsumerBase_ExplicitFailOpenPreserved(t *testing.T) {
 	cb, err := NewConsumerBase(&fakeClaimer{}, ConsumerBaseConfig{
 		ClaimPolicy: ClaimPolicyFailOpen,
-	})
+	}, clock.Real())
 	require.NoError(t, err)
 	assert.Equal(t, ClaimPolicyFailOpen, cb.config.ClaimPolicy)
 }
@@ -323,7 +324,7 @@ func TestConsumerBase_Wrap_ClaimAcquired_Ack_ThreadsReceipt(t *testing.T) {
 	receipt := &fakeReceipt{}
 	claimer := &fakeClaimer{state: idempotency.ClaimAcquired, receipt: receipt}
 
-	cb, err := NewConsumerBase(claimer, ConsumerBaseConfig{})
+	cb, err := NewConsumerBase(claimer, ConsumerBaseConfig{}, clock.Real())
 	require.NoError(t, err)
 
 	called := false
@@ -347,7 +348,7 @@ func TestConsumerBase_Wrap_ClaimAcquired_Ack_ThreadsReceipt(t *testing.T) {
 func TestConsumerBase_Wrap_ClaimDone_SkipsHandler(t *testing.T) {
 	claimer := &fakeClaimer{state: idempotency.ClaimDone}
 
-	cb, err := NewConsumerBase(claimer, ConsumerBaseConfig{})
+	cb, err := NewConsumerBase(claimer, ConsumerBaseConfig{}, clock.Real())
 	require.NoError(t, err)
 
 	called := false
@@ -367,7 +368,7 @@ func TestConsumerBase_Wrap_ClaimBusy_Requeues(t *testing.T) {
 
 	cb, err := NewConsumerBase(claimer, ConsumerBaseConfig{
 		RetryBaseDelay: testtime.FastPoll, // short backoff for test
-	})
+	}, clock.Real())
 	require.NoError(t, err)
 
 	called := false
@@ -390,7 +391,7 @@ func TestConsumerBase_Wrap_TransientError_RetriesUntilAck(t *testing.T) {
 	cb, err := NewConsumerBase(claimer, ConsumerBaseConfig{
 		RetryCount:     3,
 		RetryBaseDelay: time.Millisecond,
-	})
+	}, clock.Real())
 	require.NoError(t, err)
 
 	attempts := 0
@@ -415,7 +416,7 @@ func TestConsumerBase_Wrap_RetryBudgetExhausted_RejectsToDLX(t *testing.T) {
 	cb, err := NewConsumerBase(claimer, ConsumerBaseConfig{
 		RetryCount:     2,
 		RetryBaseDelay: time.Millisecond,
-	})
+	}, clock.Real())
 	require.NoError(t, err)
 
 	attempts := 0
@@ -437,7 +438,7 @@ func TestConsumerBase_Wrap_ExplicitReject_NoRetry(t *testing.T) {
 	cb, err := NewConsumerBase(claimer, ConsumerBaseConfig{
 		RetryCount:     5,
 		RetryBaseDelay: time.Millisecond,
-	})
+	}, clock.Real())
 	require.NoError(t, err)
 
 	attempts := 0
@@ -459,7 +460,7 @@ func TestConsumerBase_Wrap_WrappedPermanentError_DetectedAndRejected(t *testing.
 	cb, err := NewConsumerBase(claimer, ConsumerBaseConfig{
 		RetryCount:     5,
 		RetryBaseDelay: time.Millisecond,
-	})
+	}, clock.Real())
 	require.NoError(t, err)
 
 	attempts := 0
@@ -482,7 +483,7 @@ func TestConsumerBase_Wrap_CtxCancelled_DuringRetry_Requeues(t *testing.T) {
 	cb, err := NewConsumerBase(claimer, ConsumerBaseConfig{
 		RetryCount:     5,
 		RetryBaseDelay: testtime.D5s, // long enough that ctx cancel wins
-	})
+	}, clock.Real())
 	require.NoError(t, err)
 
 	// Signal channel: handler sends when it has been called, meaning ConsumerBase
@@ -523,7 +524,7 @@ func TestConsumerBase_Wrap_ClaimError_FailClosed_LocalRetryThenSuccess(t *testin
 	cb, err := NewConsumerBase(claimer, ConsumerBaseConfig{
 		ClaimRetryCount:     3,
 		ClaimRetryBaseDelay: time.Millisecond,
-	})
+	}, clock.Real())
 	require.NoError(t, err)
 
 	called := false
@@ -548,7 +549,7 @@ func TestConsumerBase_Wrap_ClaimError_FailClosed_ExhaustedRequeues(t *testing.T)
 	cb, err := NewConsumerBase(claimer, ConsumerBaseConfig{
 		ClaimRetryCount:     2,
 		ClaimRetryBaseDelay: time.Millisecond,
-	})
+	}, clock.Real())
 	require.NoError(t, err)
 
 	called := false
@@ -575,7 +576,7 @@ func TestConsumerBase_Wrap_ClaimError_FailClosed_CtxCancel(t *testing.T) {
 	cb, err := NewConsumerBase(claimer, ConsumerBaseConfig{
 		ClaimRetryCount:     5,
 		ClaimRetryBaseDelay: testtime.D5s,
-	})
+	}, clock.Real())
 	require.NoError(t, err)
 
 	handler := cb.Wrap(Subscription{Topic: "topic", ConsumerGroup: "cg"}, func(_ context.Context, _ Entry) HandleResult {
@@ -601,7 +602,7 @@ func TestConsumerBase_Wrap_ClaimError_FailOpen_ProceedsWithoutReceipt(t *testing
 
 	cb, err := NewConsumerBase(claimer, ConsumerBaseConfig{
 		ClaimPolicy: ClaimPolicyFailOpen,
-	})
+	}, clock.Real())
 	require.NoError(t, err)
 
 	called := false
@@ -623,7 +624,7 @@ func TestConsumerBase_Wrap_MaxRetryDelay_CapsClaimBackoff(t *testing.T) {
 		ClaimRetryCount:     3,
 		ClaimRetryBaseDelay: testtime.D200ms,
 		MaxRetryDelay:       testtime.D20ms, // clamp well below base
-	})
+	}, clock.Real())
 	require.NoError(t, err)
 
 	handler := cb.Wrap(Subscription{Topic: "topic", ConsumerGroup: "cg"}, func(_ context.Context, _ Entry) HandleResult {
@@ -644,7 +645,7 @@ func TestConsumerBase_AsMiddleware_AppliesWrap(t *testing.T) {
 	receipt := &fakeReceipt{}
 	claimer := &fakeClaimer{state: idempotency.ClaimDone, receipt: receipt}
 
-	cb, err := NewConsumerBase(claimer, ConsumerBaseConfig{})
+	cb, err := NewConsumerBase(claimer, ConsumerBaseConfig{}, clock.Real())
 	require.NoError(t, err)
 
 	mw := cb.AsMiddleware()
@@ -678,7 +679,7 @@ func TestWrap_LeaseRenewal_ExtendsAtInterval(t *testing.T) {
 	cb, err := NewConsumerBase(claimer, ConsumerBaseConfig{
 		LeaseTTL:             testtime.D200ms,
 		LeaseRenewalInterval: interval,
-	})
+	}, clock.Real())
 	require.NoError(t, err)
 
 	handlerDone := make(chan struct{})
@@ -719,7 +720,7 @@ func TestWrap_LeaseRenewal_ExtendFailure_CancelsHandler(t *testing.T) {
 		LeaseRenewalInterval: interval,
 		RetryCount:           1,
 		RetryBaseDelay:       time.Millisecond,
-	})
+	}, clock.Real())
 	require.NoError(t, err)
 
 	ctxCancelSeen := make(chan struct{}, 1)
@@ -788,9 +789,9 @@ func TestConsumerBase_DifferentConsumerGroupsNoCollision(t *testing.T) {
 	sub1 := Subscription{Topic: "session.created.v1", ConsumerGroup: "cg-auditcore"}
 	sub2 := Subscription{Topic: "session.created.v1", ConsumerGroup: "cg-configcore"}
 
-	cb1, err := NewConsumerBase(claimer1, ConsumerBaseConfig{})
+	cb1, err := NewConsumerBase(claimer1, ConsumerBaseConfig{}, clock.Real())
 	require.NoError(t, err)
-	cb2, err := NewConsumerBase(claimer2, ConsumerBaseConfig{})
+	cb2, err := NewConsumerBase(claimer2, ConsumerBaseConfig{}, clock.Real())
 	require.NoError(t, err)
 
 	calls1 := 0
@@ -840,7 +841,7 @@ func TestWrap_LeaseRenewal_HandlerComplete_StopsGoroutine(t *testing.T) {
 	cb, err := NewConsumerBase(claimer, ConsumerBaseConfig{
 		LeaseTTL:             testtime.D1s,
 		LeaseRenewalInterval: testtime.MediumPoll,
-	})
+	}, clock.Real())
 	require.NoError(t, err)
 
 	handler := cb.Wrap(Subscription{Topic: "topic", ConsumerGroup: "cg"}, func(_ context.Context, _ Entry) HandleResult {
@@ -875,7 +876,7 @@ func TestWrap_LeaseRenewalLoop_TransientExtendError_LogsWarnAndContinues(t *test
 		LeaseRenewalInterval: interval,
 		RetryCount:           1,
 		RetryBaseDelay:       time.Millisecond,
-	})
+	}, clock.Real())
 	require.NoError(t, err)
 
 	// handlerDone is closed when the handler returns so the test can assert
@@ -917,7 +918,7 @@ func TestWrap_LeaseRenewal_DisabledWhenIntervalNegative(t *testing.T) {
 	cb, err := NewConsumerBase(claimer, ConsumerBaseConfig{
 		LeaseTTL:             idempotency.DefaultLeaseTTL,
 		LeaseRenewalInterval: disableLeaseRenewal, // negative disables renewal
-	})
+	}, clock.Real())
 	require.NoError(t, err)
 
 	handler := cb.Wrap(Subscription{Topic: "topic", ConsumerGroup: "cg"}, func(_ context.Context, _ Entry) HandleResult {
@@ -942,7 +943,7 @@ func TestWrap_LeaseRenewal_DisabledWhenIntervalZeroAndTTLZero(t *testing.T) {
 	cb, err := NewConsumerBase(claimer, ConsumerBaseConfig{
 		LeaseTTL:             idempotency.DefaultLeaseTTL,
 		LeaseRenewalInterval: 0, // should default to LeaseTTL/3
-	})
+	}, clock.Real())
 	require.NoError(t, err)
 
 	handler := cb.Wrap(Subscription{Topic: "topic", ConsumerGroup: "cg"}, func(_ context.Context, _ Entry) HandleResult {
@@ -984,7 +985,7 @@ func TestConsumerBase_LeaseLost_ForceRequeue_EvenWhenHandlerReturnsAck(t *testin
 		LeaseRenewalInterval: interval,
 		RetryCount:           1,
 		RetryBaseDelay:       time.Millisecond,
-	})
+	}, clock.Real())
 	require.NoError(t, err)
 
 	// Handler deliberately ignores ctx.Done() and returns Ack — simulates a
@@ -1028,7 +1029,7 @@ func TestConsumerBase_LeaseLost_HandlerCancellation_StillRequeue(t *testing.T) {
 		LeaseRenewalInterval: interval,
 		RetryCount:           1,
 		RetryBaseDelay:       time.Millisecond,
-	})
+	}, clock.Real())
 	require.NoError(t, err)
 
 	ctxCancelSeen := make(chan struct{}, 1)
@@ -1069,7 +1070,7 @@ func TestConsumerBase_LeaseHeld_NormalAck(t *testing.T) {
 		LeaseRenewalInterval: testtime.D20ms,
 		RetryCount:           1,
 		RetryBaseDelay:       time.Millisecond,
-	})
+	}, clock.Real())
 	require.NoError(t, err)
 
 	handler := cb.Wrap(Subscription{Topic: "topic", ConsumerGroup: "cg"}, func(_ context.Context, _ Entry) HandleResult {

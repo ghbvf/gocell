@@ -273,6 +273,29 @@ linters:
             - github.com/ghbvf/gocell/runtime
             - github.com/ghbvf/gocell/examples/todoorder
             - github.com/google/uuid
+        clockmock-test-only:
+          # PROD-CLOCKMOCK-IMPORT-01: kernel/clock/clockmock is a test-only
+          # package. Production code (non-_test.go) must use clock.Clock via
+          # dependency injection — never import clockmock directly.
+          # Exemptions:
+          #   - tools/archtest/ scans clockmock symbols for archtest wiring
+          #   - kernel/clock/clockmock/ self
+          #   - **/testutil/ test-helper packages (e.g.
+          #     cells/accesscore/internal/testutil/sessionrepo.go) intentionally
+          #     own clockmock construction so test callers don't import it
+          #     directly. These packages are imported only by *_test.go files;
+          #     archtest CLOCK-INJECTION-TEST-CALLSITE-01 enforces that.
+          #   - **/storetest/ runtime test-helper packages (mirror of testutil)
+          files:
+            - "**/*.go"
+            - "!**/*_test.go"
+            - "!**/tools/archtest/**"
+            - "!**/kernel/clock/clockmock/**"
+            - "!**/testutil/**"
+            - "!**/storetest/**"
+          deny:
+            - pkg: github.com/ghbvf/gocell/kernel/clock/clockmock
+              desc: "clockmock is test-only; production code must inject clock.Clock"
 
     forbidigo:
       forbid:

@@ -4,12 +4,15 @@ import (
 	"context"
 	"log/slog"
 	"net/http"
+
+	"github.com/ghbvf/gocell/kernel/clock"
 )
 
 // AuthOption configures auth middleware behavior.
 type AuthOption func(*authConfig)
 
 type authConfig struct {
+	clock                           clock.Clock
 	logger                          *slog.Logger
 	metrics                         *AuthMetrics
 	publicMatcher                   func(*http.Request) bool                 // nil = use []string publicEndpoints path
@@ -19,6 +22,12 @@ type authConfig struct {
 
 func defaultAuthConfig() authConfig {
 	return authConfig{logger: slog.Default()}
+}
+
+// WithAuthClock sets the clock for auth middleware timing (token verification
+// latency metrics). Required; AuthMiddleware panics if not set.
+func WithAuthClock(clk clock.Clock) AuthOption {
+	return func(c *authConfig) { c.clock = clk }
 }
 
 // WithLogger sets the logger for auth middleware.

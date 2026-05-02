@@ -14,12 +14,14 @@ import (
 
 	"github.com/ghbvf/gocell/cells/accesscore/internal/domain"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/mem"
+	"github.com/ghbvf/gocell/cells/accesscore/internal/testutil"
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/cell/celltest"
 	"github.com/ghbvf/gocell/runtime/auth"
 )
 
-func setupHandler() (http.Handler, *mem.RoleRepository) {
+func setupHandler(t *testing.T) (http.Handler, *mem.RoleRepository) {
+	t.Helper()
 	roleRepo := mem.NewRoleRepository()
 	roleRepo.SeedRole(&domain.Role{
 		ID: "admin", Name: "admin",
@@ -27,7 +29,7 @@ func setupHandler() (http.Handler, *mem.RoleRepository) {
 	})
 	_, _ = roleRepo.AssignToUser(context.Background(), "usr-1", "admin")
 
-	svc := NewService(roleRepo, mem.NewSessionRepository(), slog.Default())
+	svc := NewService(roleRepo, testutil.RealSessionRepo(t), slog.Default())
 	mux := celltest.NewTestMux()
 	h := NewHandler(svc)
 	mux.Route("/internal/v1/access/roles", func(s cell.RouteMux) {
@@ -105,7 +107,7 @@ func TestHandler_Assign(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			h, _ := setupHandler()
+			h, _ := setupHandler(t)
 			req := httptest.NewRequest(http.MethodPost, "/internal/v1/access/roles/assign", strings.NewReader(tc.body))
 			req.Header.Set("Content-Type", "application/json")
 			if tc.subject != "" {
@@ -200,7 +202,7 @@ func TestHandler_Revoke(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			h, roleRepo := setupHandler()
+			h, roleRepo := setupHandler(t)
 			if tc.setup != nil {
 				tc.setup(roleRepo)
 			}

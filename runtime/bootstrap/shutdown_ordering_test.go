@@ -28,6 +28,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/ghbvf/gocell/kernel/clock"
 )
 
 // orderingRecorder captures the order in which phase10 stages execute.
@@ -64,7 +66,7 @@ func runPhase10WithRecorder(t *testing.T, sig shutdownSignal, drainErr, teardown
 	t.Helper()
 	rec := &orderingRecorder{}
 
-	b := New() // NopProvider → shutdownMet is disabled; fine for ordering test.
+	b := New(WithClock(clock.Real())) // NopProvider → shutdownMet is disabled; fine for ordering test.
 	_, s := newPhaseState()
 
 	s.httpDrain = func(_ context.Context) error {
@@ -153,7 +155,7 @@ func TestPhase10_HTTPDrainError_AggregatedAndWrapped(t *testing.T) {
 // rather than panic on a nil func call.
 func TestPhase10_NoHTTPDrain_NoOp(t *testing.T) {
 	t.Parallel()
-	b := New()
+	b := New(WithClock(clock.Real()))
 	_, s := newPhaseState()
 	// httpDrain intentionally nil.
 	s.addTeardown(func(_ context.Context) error { return nil })

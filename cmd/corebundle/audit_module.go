@@ -72,7 +72,7 @@ func (AuditCoreModule) Provide(
 			return nil, nil, nil, fmt.Errorf("AuditCoreModule: postgres mode requires SharedPGPool " +
 				"(ConfigCoreModule must run before AuditCoreModule)")
 		}
-		writer := adapterpg.NewOutboxWriter()
+		writer := adapterpg.NewOutboxWriter(shared.Clock)
 		txMgr := adapterpg.NewTxManager(shared.SharedPGPool)
 		// Accumulative WithOutboxDeps: adds writer without replacing the publisher
 		// set above. WithTxManager wires the TxRunner for L2 transactional atomicity.

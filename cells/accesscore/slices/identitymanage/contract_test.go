@@ -14,9 +14,11 @@ import (
 
 	"github.com/ghbvf/gocell/cells/accesscore/internal/dto"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/mem"
+	"github.com/ghbvf/gocell/cells/accesscore/internal/testutil"
 	"github.com/ghbvf/gocell/cells/internal/testoutbox"
 	kcell "github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/cell/celltest"
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/contracttest"
@@ -61,8 +63,8 @@ var contractStubIssuer TokenIssuer = &stubTokenIssuer{}
 
 func setupContractHandler(t testing.TB) http.Handler {
 	t.Helper()
-	svc, err := NewService(mem.NewUserRepository(), mem.NewSessionRepository(), newIdentityRefreshStore(), slog.Default(),
-		WithTokenIssuer(contractStubIssuer))
+	svc, err := NewService(mem.NewUserRepository(), testutil.RealSessionRepo(t), newIdentityRefreshStore(), slog.Default(),
+		WithTokenIssuer(contractStubIssuer), WithClock(clock.Real()))
 	if err != nil {
 		t.Fatalf("setupContractHandler: %v", err)
 	}
@@ -72,8 +74,10 @@ func setupContractHandler(t testing.TB) http.Handler {
 func setupContractHandlerWithOutbox(t testing.TB) (http.Handler, *contractRecordingWriter) {
 	t.Helper()
 	writer := &contractRecordingWriter{}
-	svc, err := NewService(mem.NewUserRepository(), mem.NewSessionRepository(), newIdentityRefreshStore(), slog.Default(),
-		WithEmitter(testoutbox.MustEmitter(t, writer)), WithTxManager(contractTxRunner{}), WithTokenIssuer(contractStubIssuer))
+	svc, err := NewService(mem.NewUserRepository(), testutil.RealSessionRepo(t),
+		newIdentityRefreshStore(), slog.Default(),
+		WithEmitter(testoutbox.MustEmitter(t, writer)), WithTxManager(contractTxRunner{}),
+		WithTokenIssuer(contractStubIssuer), WithClock(clock.Real()))
 	if err != nil {
 		t.Fatalf("setupContractHandlerWithOutbox: %v", err)
 	}
@@ -98,8 +102,8 @@ func buildMux(svc *Service) *celltest.TestMux {
 func setupContractHandlerWithIssuer(t testing.TB, issuer TokenIssuer) (http.Handler, *mem.UserRepository) {
 	t.Helper()
 	repo := mem.NewUserRepository()
-	svc, err := NewService(repo, mem.NewSessionRepository(), newIdentityRefreshStore(), slog.Default(),
-		WithTokenIssuer(issuer))
+	svc, err := NewService(repo, testutil.RealSessionRepo(t), newIdentityRefreshStore(), slog.Default(),
+		WithTokenIssuer(issuer), WithClock(clock.Real()))
 	if err != nil {
 		t.Fatalf("setupContractHandlerWithIssuer: %v", err)
 	}

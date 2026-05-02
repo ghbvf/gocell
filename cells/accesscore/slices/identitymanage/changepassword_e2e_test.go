@@ -35,6 +35,7 @@ import (
 	"github.com/ghbvf/gocell/cells/accesscore/internal/testutil"
 	"github.com/ghbvf/gocell/cells/accesscore/slices/sessionlogin"
 	"github.com/ghbvf/gocell/kernel/cell/celltest"
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/runtime/auth"
@@ -44,19 +45,14 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// realClock is a time.Now-backed refresh.Clock for e2e tests.
-type realClock struct{}
-
-func (realClock) Now() time.Time { return time.Now() }
-
 // e2eTestKeySet holds a key pair shared across the e2e test.
-var e2eTestKeySet, _, _ = auth.MustNewTestKeySet()
+var e2eTestKeySet, _, _ = auth.MustNewTestKeySet(clock.Real())
 
 // e2eIssuer is used by the login service.
 // WithIssuerAudiencesFromSlice(["gocell"]) must match the e2eVerifier's
 // WithExpectedAudiences("gocell") so that VerifyIntent passes audience validation.
 var e2eIssuer = func() *auth.JWTIssuer {
-	i, err := auth.NewJWTIssuer(e2eTestKeySet, "gocell-accesscore", testtime.D15min,
+	i, err := auth.NewJWTIssuer(e2eTestKeySet, "gocell-accesscore", testtime.D15min, clock.Real(),
 		auth.WithIssuerAudiencesFromSlice([]string{"gocell"}))
 	if err != nil {
 		panic("e2e test setup: " + err.Error())
@@ -66,7 +62,7 @@ var e2eIssuer = func() *auth.JWTIssuer {
 
 // e2eVerifier is used to decode tokens in assertions.
 var e2eVerifier = func() *auth.JWTVerifier {
-	v, err := auth.NewJWTVerifier(e2eTestKeySet, auth.WithExpectedAudiences("gocell"))
+	v, err := auth.NewJWTVerifier(e2eTestKeySet, clock.Real(), auth.WithExpectedAudiences("gocell"))
 	if err != nil {
 		panic("e2e test setup: " + err.Error())
 	}
@@ -97,19 +93,21 @@ type e2eFixture struct {
 
 func newE2EFixture() *e2eFixture {
 	userRepo := mem.NewUserRepository()
-	sessionRepo := mem.NewSessionRepository()
+	sessionRepo := mem.NewSessionRepository(clock.Real())
 	roleRepo := mem.NewRoleRepository()
 	refreshStore := refreshmem.MustNew(
 		refresh.Policy{ReuseInterval: testtime.D2s, MaxAge: time.Hour},
-		realClock{}, nil,
+		clock.Real(), nil,
 	)
 
 	loginSvc := sessionlogin.MustNewService(
 		userRepo, sessionRepo, roleRepo, refreshStore, e2eIssuer, slog.Default(),
+		sessionlogin.WithClock(clock.Real()),
 	)
 
 	idmSvc, err := NewService(userRepo, sessionRepo, refreshStore, slog.Default(),
 		WithTokenIssuer(&e2eTokenIssuer{svc: loginSvc}),
+		WithClock(clock.Real()),
 	)
 	if err != nil {
 		panic(err)
@@ -140,13 +138,13 @@ func bootstrapAdminUser(t *testing.T, f *e2eFixture, username, plainPassword str
 	hash, err := bcrypt.GenerateFromPassword([]byte(plainPassword), domain.BcryptCost)
 	require.NoError(t, err)
 
-	user, err := domain.NewUser(username, username+"@gocell.local", string(hash))
+	user, err := domain.NewUser(username, username+"@gocell.local", string(hash), time.Now())
 	require.NoError(t, err)
 	// PR-A45: handler edge ParseUUIDPathParam requires canonical UUIDs in
 	// path positions; testID derives a deterministic UUID from the username
 	// so seed and request paths agree.
 	user.ID = testutil.TestID("e2e-" + username)
-	user.MarkPasswordResetRequired()
+	user.MarkPasswordResetRequired(time.Now())
 	require.NoError(t, f.userRepo.Create(context.Background(), user))
 
 	// Assign admin role.
@@ -217,6 +215,7 @@ func TestChangePassword_FullFlow(t *testing.T) {
 			}
 		})
 		mid := auth.AuthMiddleware(e2eVerifier,
+			auth.WithAuthClock(clock.Real()),
 			auth.WithPasswordResetExemptMatcher(exemptMatcher))(stub)
 		req := httptest.NewRequest(method, path, nil)
 		req.Header.Set("Authorization", "Bearer "+loginPair.AccessToken)

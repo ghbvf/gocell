@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/ghbvf/gocell/cells/auditcore/internal/mem"
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/kernel/outbox"
 )
@@ -19,7 +20,7 @@ var testHMACKey = []byte("test-hmac-key-32bytes-long!!!!!!!")
 
 func newTestService() (*Service, *mem.AuditRepository) {
 	repo := mem.NewAuditRepository()
-	return NewService(repo, testHMACKey, slog.Default()), repo
+	return NewService(repo, testHMACKey, slog.Default(), clock.Real(), WithClock(clock.Real())), repo
 }
 
 func TestService_HandleEvent(t *testing.T) {
@@ -104,7 +105,7 @@ func TestService_HandleEvent_ChainGrows(t *testing.T) {
 // to the DLX instead of silently appending it with a fallback "system" actor.
 func TestService_HandleEvent_InvalidPayload_PermanentError(t *testing.T) {
 	repo := mem.NewAuditRepository()
-	svc := NewService(repo, testHMACKey, slog.Default())
+	svc := NewService(repo, testHMACKey, slog.Default(), clock.Real(), WithClock(clock.Real()))
 
 	entry := outbox.Entry{
 		ID:        "evt-bad-json",
@@ -133,10 +134,10 @@ func TestService_HandleEvent_PublishError_DoesNotFailAppend(t *testing.T) {
 	repo := mem.NewAuditRepository()
 	fp := failingPublisher{err: fmt.Errorf("broker unavailable")}
 	emitter, err := outbox.NewDirectEmitter(
-		fp, outbox.DirectPublishFailOpen, metrics.NopProvider{}, "auditcore",
+		fp, outbox.DirectPublishFailOpen, metrics.NopProvider{}, clock.Real(), "auditcore",
 		outbox.WithLogger(slog.Default()))
 	require.NoError(t, err)
-	svc := NewService(repo, testHMACKey, slog.Default(), WithEmitter(emitter))
+	svc := NewService(repo, testHMACKey, slog.Default(), clock.Real(), WithClock(clock.Real()), WithEmitter(emitter))
 
 	entry := outbox.Entry{
 		ID:        "evt-pub-err",

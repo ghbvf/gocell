@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/ghbvf/gocell/examples/todoorder/cells/ordercell/internal/mem"
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/contracttest"
 )
 
@@ -27,7 +28,7 @@ func newContractHandler(t testing.TB) (http.Handler, *recordingWriter) {
 	t.Helper()
 	repo := mem.NewOrderRepository()
 	writer := &recordingWriter{}
-	svc := NewService(repo, slog.Default(), WithEmitter(mustEmitter(t, writer)), WithTxManager(&stubTxRunner{}))
+	svc := NewService(repo, slog.Default(), WithEmitter(mustEmitter(t, writer)), WithTxManager(&stubTxRunner{}), WithClock(clock.Real()))
 	mux := http.NewServeMux()
 	mux.Handle("POST /api/v1/orders/", http.HandlerFunc(NewHandler(svc).HandleCreate))
 	return mux, writer

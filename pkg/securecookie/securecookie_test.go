@@ -12,11 +12,19 @@ import (
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 )
 
-const (
-	// d1100ms is just over 1s, used to let a max-age=1 cookie expire;
-	// not in the testtime table.
-	d1100ms = 1100 * time.Millisecond
-)
+// fixedClock is a test-local Clock implementation that returns a fixed time.
+// pkg/ cannot import kernel/clockmock (LAYER-01), so tests define their own
+// minimal stub.
+type fixedClock struct {
+	t time.Time
+}
+
+func (c *fixedClock) Now() time.Time { return c.t }
+
+// newFixedClock returns a fixedClock set to a stable test epoch.
+func newFixedClock() *fixedClock {
+	return &fixedClock{t: time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)}
+}
 
 func generateKey(t *testing.T, n int) []byte {
 	t.Helper()
@@ -28,7 +36,7 @@ func generateKey(t *testing.T, n int) []byte {
 
 func TestSecureCookie_SignOnly_RoundTrip(t *testing.T) {
 	hashKey := generateKey(t, 32)
-	sc, err := New(hashKey, nil)
+	sc, err := New(hashKey, nil, newFixedClock())
 	require.NoError(t, err)
 
 	value := []byte("hello world")
@@ -43,7 +51,7 @@ func TestSecureCookie_SignOnly_RoundTrip(t *testing.T) {
 func TestSecureCookie_Encrypted_RoundTrip(t *testing.T) {
 	hashKey := generateKey(t, 32)
 	blockKey := generateKey(t, 32)
-	sc, err := New(hashKey, blockKey)
+	sc, err := New(hashKey, blockKey, newFixedClock())
 	require.NoError(t, err)
 
 	value := []byte("secret data")
@@ -57,7 +65,7 @@ func TestSecureCookie_Encrypted_RoundTrip(t *testing.T) {
 
 func TestSecureCookie_TamperedValue(t *testing.T) {
 	hashKey := generateKey(t, 32)
-	sc, err := New(hashKey, nil)
+	sc, err := New(hashKey, nil, newFixedClock())
 	require.NoError(t, err)
 
 	encoded, err := sc.Encode("test", []byte("original"))
@@ -73,36 +81,50 @@ func TestSecureCookie_TamperedValue(t *testing.T) {
 
 func TestSecureCookie_Expired(t *testing.T) {
 	hashKey := generateKey(t, 32)
-	sc, err := New(hashKey, nil)
+	clk := newFixedClock()
+	sc, err := New(hashKey, nil, clk)
 	require.NoError(t, err)
-
 	sc = sc.WithMaxAge(1)
 
 	encoded, err := sc.Encode("test", []byte("data"))
 	require.NoError(t, err)
 
-	time.Sleep(d1100ms) //archtest:allow:test-sleep TTL physical expiry; backend has no notification API
+	// Advance clock by 2 seconds to exceed max-age=1.
+	clk.t = clk.t.Add(testtime.D2s)
 
 	_, err = sc.Decode("test", encoded)
 	assert.ErrorIs(t, err, ErrExpired)
 }
 
 func TestSecureCookie_HashKeyTooShort(t *testing.T) {
-	_, err := New([]byte("short"), nil)
+	_, err := New([]byte("short"), nil, newFixedClock())
 	assert.ErrorIs(t, err, ErrHashKeyTooShort)
+}
+
+func TestSecureCookie_NilClock_ReturnsError(t *testing.T) {
+	hashKey := generateKey(t, 32)
+	_, err := New(hashKey, nil, nil)
+	assert.ErrorIs(t, err, ErrClockRequired)
+}
+
+func TestSecureCookie_TypedNilClock_ReturnsError(t *testing.T) {
+	hashKey := generateKey(t, 32)
+	var typedNil *fixedClock // typed-nil pointer wrapped in Clock interface
+	_, err := New(hashKey, nil, typedNil)
+	assert.ErrorIs(t, err, ErrClockRequired)
 }
 
 func TestSecureCookie_InvalidBlockKeyLength(t *testing.T) {
 	hashKey := generateKey(t, 32)
 	badBlockKey := generateKey(t, 15)
-	_, err := New(hashKey, badBlockKey)
+	_, err := New(hashKey, badBlockKey, newFixedClock())
 	assert.Error(t, err)
 	assert.True(t, strings.Contains(err.Error(), "blockKey"), "error should mention blockKey")
 }
 
 func TestSecureCookie_EmptyValue_RoundTrip(t *testing.T) {
 	hashKey := generateKey(t, 32)
-	sc, err := New(hashKey, nil)
+	sc, err := New(hashKey, nil, newFixedClock())
 	require.NoError(t, err)
 
 	encoded, err := sc.Encode("test", []byte{})
@@ -115,7 +137,7 @@ func TestSecureCookie_EmptyValue_RoundTrip(t *testing.T) {
 
 func TestSecureCookie_WrongName(t *testing.T) {
 	hashKey := generateKey(t, 32)
-	sc, err := New(hashKey, nil)
+	sc, err := New(hashKey, nil, newFixedClock())
 	require.NoError(t, err)
 
 	encoded, err := sc.Encode("cookie-a", []byte("data"))
@@ -127,15 +149,16 @@ func TestSecureCookie_WrongName(t *testing.T) {
 
 func TestSecureCookie_MaxAgeZero_NeverExpires(t *testing.T) {
 	hashKey := generateKey(t, 32)
-	sc, err := New(hashKey, nil)
+	clk := newFixedClock()
+	sc, err := New(hashKey, nil, clk)
 	require.NoError(t, err)
-
 	sc = sc.WithMaxAge(0)
 
 	encoded, err := sc.Encode("test", []byte("data"))
 	require.NoError(t, err)
 
-	time.Sleep(testtime.MediumPoll) //archtest:allow:test-sleep negative test: must elapse without state change
+	// Advance clock by a large amount — maxAge=0 means no expiry check.
+	clk.t = clk.t.Add(testtime.MediumPoll)
 	decoded, err := sc.Decode("test", encoded)
 	require.NoError(t, err)
 	assert.Equal(t, []byte("data"), decoded)
@@ -154,7 +177,7 @@ func TestSecureCookie_AESKeySizes(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			blockKey := generateKey(t, tt.keyLen)
-			sc, err := New(hashKey, blockKey)
+			sc, err := New(hashKey, blockKey, newFixedClock())
 			require.NoError(t, err)
 
 			value := []byte("test-" + tt.name)
@@ -170,7 +193,7 @@ func TestSecureCookie_AESKeySizes(t *testing.T) {
 
 func TestSecureCookie_Decode_MaliciousInput(t *testing.T) {
 	hashKey := generateKey(t, 32)
-	sc, err := New(hashKey, nil)
+	sc, err := New(hashKey, nil, newFixedClock())
 	require.NoError(t, err)
 
 	tests := []struct {
@@ -193,7 +216,7 @@ func TestSecureCookie_Decode_MaliciousInput(t *testing.T) {
 
 func TestSecureCookie_WithMaxAge_DeepCopyKeys(t *testing.T) {
 	hashKey := generateKey(t, 32)
-	sc, err := New(hashKey, nil)
+	sc, err := New(hashKey, nil, newFixedClock())
 	require.NoError(t, err)
 
 	sc2 := sc.WithMaxAge(60)

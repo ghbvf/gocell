@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/ghbvf/gocell/cells/accesscore/internal/domain"
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/query"
 )
@@ -57,14 +58,14 @@ func TestUserRepository_ConcurrentCreateAndGet(t *testing.T) {
 }
 
 func TestSessionRepository_Health(t *testing.T) {
-	repo := NewSessionRepository()
+	repo := NewSessionRepository(clock.Real())
 	assert.NoError(t, repo.Health(context.Background()), "in-memory session repo is always healthy")
 }
 
 // TestSessionRepository_ConcurrentCreateAndGet verifies that concurrent
 // Create and Get calls do not race. Run with -race to verify.
 func TestSessionRepository_ConcurrentCreateAndGet(t *testing.T) {
-	repo := NewSessionRepository()
+	repo := NewSessionRepository(clock.Real())
 	ctx := context.Background()
 
 	const writers = 5
@@ -333,7 +334,7 @@ func TestRoleRepository_CountByRole_None(t *testing.T) {
 // TestSessionRepository_Update_VersionConflict verifies that updating a session
 // with a stale version returns ErrSessionConflict.
 func TestSessionRepository_Update_VersionConflict(t *testing.T) {
-	repo := NewSessionRepository()
+	repo := NewSessionRepository(clock.Real())
 	ctx := context.Background()
 
 	sess := &domain.Session{
@@ -366,7 +367,7 @@ func TestSessionRepository_Update_VersionConflict(t *testing.T) {
 // TestSessionRepository_Update_VersionIncrement verifies that version is
 // incremented on each successful update.
 func TestSessionRepository_Update_VersionIncrement(t *testing.T) {
-	repo := NewSessionRepository()
+	repo := NewSessionRepository(clock.Real())
 	ctx := context.Background()
 
 	sess := &domain.Session{
@@ -394,7 +395,7 @@ func TestSessionRepository_Update_VersionIncrement(t *testing.T) {
 // updates to the same session result in exactly one success and the rest
 // returning ErrSessionConflict. Run with -race.
 func TestSessionRepository_ConcurrentUpdate(t *testing.T) {
-	repo := NewSessionRepository()
+	repo := NewSessionRepository(clock.Real())
 	ctx := context.Background()
 
 	sess := &domain.Session{
@@ -449,7 +450,7 @@ func TestSessionRepository_ConcurrentUpdate(t *testing.T) {
 // TestSessionRepository_Create_SetsVersion verifies that Create initializes
 // Version to 1 even if the caller passes 0.
 func TestSessionRepository_Create_SetsVersion(t *testing.T) {
-	repo := NewSessionRepository()
+	repo := NewSessionRepository(clock.Real())
 	ctx := context.Background()
 
 	sess := &domain.Session{

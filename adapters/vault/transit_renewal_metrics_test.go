@@ -24,6 +24,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/require"
 
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 )
@@ -86,6 +87,7 @@ func TestTokenRenewalWorker_HandleRenewal_IncrementsSuccessCounter(t *testing.T)
 		logger:         slog.Default(),
 		renewSuccess:   successCtr,
 		renewFailure:   failureCtr,
+		clock:          clock.Real(),
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -144,6 +146,7 @@ func TestTokenRenewalWorker_HandleRenewal_MultipleRenewals_AccumulatesSuccessCou
 		logger:         slog.Default(),
 		renewSuccess:   successCtr,
 		renewFailure:   failureCtr,
+		clock:          clock.Real(),
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -211,6 +214,7 @@ func TestTokenRenewalWorker_HandleDone_NilError_IncrementsFailureCounter(t *test
 		logger:         slog.Default(),
 		renewSuccess:   successCtr,
 		renewFailure:   failureCtr,
+		clock:          clock.Real(),
 	}
 
 	done := make(chan error, 1)
@@ -263,6 +267,7 @@ func TestTokenRenewalWorker_HandleDone_NonNilError_IncrementsFailureCounter(t *t
 		logger:         slog.Default(),
 		renewSuccess:   successCtr,
 		renewFailure:   failureCtr,
+		clock:          clock.Real(),
 	}
 
 	done := make(chan error, 1)
@@ -308,6 +313,7 @@ func TestTokenRenewalWorker_NilCounters_NoopOnRenewal(t *testing.T) {
 		currentWatcher: fw,
 		authMethod:     fakeAuth,
 		logger:         slog.Default(),
+		clock:          clock.Real(),
 		// renewSuccess and renewFailure are nil
 	}
 
@@ -365,6 +371,7 @@ func TestTokenRenewalWorker_NilCounters_NoopOnDone(t *testing.T) {
 		currentWatcher: fw,
 		authMethod:     fakeAuth,
 		logger:         slog.Default(),
+		clock:          clock.Real(),
 		// renewSuccess and renewFailure are nil — no panic test
 	}
 
@@ -425,6 +432,7 @@ func TestRenewalWorker_DoneChError_TriggersReauth(t *testing.T) {
 		authMethod:     fakeAuth,
 		logger:         slog.Default(),
 		loginOutcome:   loginOutcome,
+		clock:          clock.Real(),
 	}
 
 	done := make(chan error, 1)
@@ -487,6 +495,7 @@ func TestRenewalWorker_ReauthBackoff_RetriesUntilCancelled(t *testing.T) {
 		logger:         slog.Default(),
 		loginOutcome:   loginOutcome,
 		authHealthy:    authHealthy,
+		clock:          clock.Real(),
 	}
 
 	done := make(chan error, 1)
@@ -543,6 +552,7 @@ func TestRenewalWorker_CtxCancelDuringReauth_ReturnsCleanly(t *testing.T) {
 		currentWatcher: fw,
 		authMethod:     fakeAuth,
 		logger:         slog.Default(),
+		clock:          clock.Real(),
 	}
 
 	done := make(chan error, 1)
@@ -599,6 +609,7 @@ func TestRenewalWorker_AuthHealthyGauge_TransitionsOnStates(t *testing.T) {
 		authMethod:     fakeAuth,
 		logger:         slog.Default(),
 		authHealthy:    authHealthy,
+		clock:          clock.Real(),
 	}
 
 	done := make(chan error, 1)
@@ -655,6 +666,7 @@ func TestRenewalWorker_LoginOutcomeCounter_LabelsSet(t *testing.T) {
 		authMethod:     fakeAuth,
 		logger:         slog.Default(),
 		loginOutcome:   loginOutcome,
+		clock:          clock.Real(),
 	}
 
 	done := make(chan error, 1)

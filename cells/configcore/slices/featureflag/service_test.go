@@ -11,12 +11,13 @@ import (
 
 	"github.com/ghbvf/gocell/cells/configcore/internal/domain"
 	"github.com/ghbvf/gocell/cells/configcore/internal/mem"
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/query"
 )
 
 func newTestService() (*Service, *mem.FlagRepository) {
-	repo := mem.NewFlagRepository()
+	repo := mem.NewFlagRepository(clock.Real())
 	logger := slog.Default()
 	key := make([]byte, 32)
 	_, _ = rand.Read(key)
@@ -29,7 +30,7 @@ func newTestService() (*Service, *mem.FlagRepository) {
 }
 
 func TestNewService_NilCodec_ReturnsError(t *testing.T) {
-	repo := mem.NewFlagRepository()
+	repo := mem.NewFlagRepository(clock.Real())
 	svc, err := NewService(repo, nil, slog.Default(), query.RunModeProd)
 	require.Error(t, err)
 	assert.Nil(t, svc)
@@ -126,7 +127,7 @@ func TestService_List_InvalidCursor(t *testing.T) {
 }
 
 func TestService_List_ScopeMismatch(t *testing.T) {
-	repo := mem.NewFlagRepository()
+	repo := mem.NewFlagRepository(clock.Real())
 	codec, _ := query.NewCursorCodec([]byte("test-featureflag-cursor-key-32b!"))
 	svc, err := NewService(repo, codec, slog.Default(), query.RunModeProd)
 	require.NoError(t, err)
@@ -152,7 +153,7 @@ func TestService_List_ScopeMismatch(t *testing.T) {
 }
 
 func TestService_List_ContextMismatch(t *testing.T) {
-	repo := mem.NewFlagRepository()
+	repo := mem.NewFlagRepository(clock.Real())
 	codec, _ := query.NewCursorCodec([]byte("test-featureflag-cursor-key-32b!"))
 	svc, err := NewService(repo, codec, slog.Default(), query.RunModeProd)
 	require.NoError(t, err)

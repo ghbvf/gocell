@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 )
 
@@ -27,7 +28,7 @@ func TestPGOutboxStore_MarkPublished_Updated(t *testing.T) {
 	db := &mockDBTX{
 		execResult: pgconn.NewCommandTag("UPDATE 1"),
 	}
-	store := NewOutboxStore(db)
+	store := NewOutboxStore(db, clock.Real())
 
 	updated, err := store.MarkPublished(context.Background(), "e-1")
 	require.NoError(t, err)
@@ -47,7 +48,7 @@ func TestPGOutboxStore_MarkPublished_NotUpdated(t *testing.T) {
 	db := &mockDBTX{
 		execResult: pgconn.NewCommandTag("UPDATE 0"),
 	}
-	store := NewOutboxStore(db)
+	store := NewOutboxStore(db, clock.Real())
 
 	updated, err := store.MarkPublished(context.Background(), "e-reclaimed")
 	require.NoError(t, err)
@@ -58,7 +59,7 @@ func TestPGOutboxStore_MarkPublished_ExecError(t *testing.T) {
 	db := &mockDBTX{
 		execErr: errors.New("exec failed"),
 	}
-	store := NewOutboxStore(db)
+	store := NewOutboxStore(db, clock.Real())
 
 	_, err := store.MarkPublished(context.Background(), "e-fail")
 	require.Error(t, err)
@@ -73,7 +74,7 @@ func TestPGOutboxStore_MarkRetry_Updated(t *testing.T) {
 	db := &mockDBTX{
 		execResult: pgconn.NewCommandTag("UPDATE 1"),
 	}
-	store := NewOutboxStore(db)
+	store := NewOutboxStore(db, clock.Real())
 
 	nextRetry := time.Now().Add(testtime.D10s)
 	updated, err := store.MarkRetry(context.Background(), "e-1", 2, nextRetry, "transient error")
@@ -101,7 +102,7 @@ func TestPGOutboxStore_MarkRetry_NotUpdated(t *testing.T) {
 	db := &mockDBTX{
 		execResult: pgconn.NewCommandTag("UPDATE 0"),
 	}
-	store := NewOutboxStore(db)
+	store := NewOutboxStore(db, clock.Real())
 
 	updated, err := store.MarkRetry(context.Background(), "e-gone", 1, time.Now().Add(testtime.D5s), "err")
 	require.NoError(t, err)
@@ -112,7 +113,7 @@ func TestPGOutboxStore_MarkRetry_ExecError(t *testing.T) {
 	db := &mockDBTX{
 		execErr: errors.New("exec retry failed"),
 	}
-	store := NewOutboxStore(db)
+	store := NewOutboxStore(db, clock.Real())
 
 	_, err := store.MarkRetry(context.Background(), "e-fail", 1, time.Now().Add(testtime.D5s), "err")
 	require.Error(t, err)
@@ -123,7 +124,7 @@ func TestPGOutboxStore_MarkRetry_SanitizesError(t *testing.T) {
 	db := &mockDBTX{
 		execResult: pgconn.NewCommandTag("UPDATE 1"),
 	}
-	store := NewOutboxStore(db)
+	store := NewOutboxStore(db, clock.Real())
 
 	_, err := store.MarkRetry(context.Background(), "e-1", 1,
 		time.Now().Add(testtime.D5s),
@@ -141,7 +142,7 @@ func TestPGOutboxStore_MarkRetry_PastNextRetry_UsesZeroDelay(t *testing.T) {
 	db := &mockDBTX{
 		execResult: pgconn.NewCommandTag("UPDATE 1"),
 	}
-	store := NewOutboxStore(db)
+	store := NewOutboxStore(db, clock.Real())
 
 	pastTime := time.Now().Add(outboxTestNeg10s)
 	_, err := store.MarkRetry(context.Background(), "e-1", 1, pastTime, "err")
@@ -161,7 +162,7 @@ func TestPGOutboxStore_MarkDead_Updated(t *testing.T) {
 	db := &mockDBTX{
 		execResult: pgconn.NewCommandTag("UPDATE 1"),
 	}
-	store := NewOutboxStore(db)
+	store := NewOutboxStore(db, clock.Real())
 
 	updated, err := store.MarkDead(context.Background(), "e-1", 5, "permanent failure")
 	require.NoError(t, err)
@@ -181,7 +182,7 @@ func TestPGOutboxStore_MarkDead_NotUpdated(t *testing.T) {
 	db := &mockDBTX{
 		execResult: pgconn.NewCommandTag("UPDATE 0"),
 	}
-	store := NewOutboxStore(db)
+	store := NewOutboxStore(db, clock.Real())
 
 	updated, err := store.MarkDead(context.Background(), "e-gone", 5, "err")
 	require.NoError(t, err)
@@ -192,7 +193,7 @@ func TestPGOutboxStore_MarkDead_ExecError(t *testing.T) {
 	db := &mockDBTX{
 		execErr: errors.New("exec dead failed"),
 	}
-	store := NewOutboxStore(db)
+	store := NewOutboxStore(db, clock.Real())
 
 	_, err := store.MarkDead(context.Background(), "e-fail", 5, "err")
 	require.Error(t, err)
@@ -203,7 +204,7 @@ func TestPGOutboxStore_MarkDead_SanitizesError(t *testing.T) {
 	db := &mockDBTX{
 		execResult: pgconn.NewCommandTag("UPDATE 1"),
 	}
-	store := NewOutboxStore(db)
+	store := NewOutboxStore(db, clock.Real())
 
 	_, err := store.MarkDead(context.Background(), "e-1", 5, "token=abc123 failed")
 	require.NoError(t, err)
@@ -222,7 +223,7 @@ func TestPGOutboxStore_ReclaimStale_ReturnsCount(t *testing.T) {
 	db := &mockDBTX{
 		execResult: pgconn.NewCommandTag("UPDATE 3"),
 	}
-	store := NewOutboxStore(db)
+	store := NewOutboxStore(db, clock.Real())
 
 	count, err := store.ReclaimStale(context.Background(),
 		testtime.D60s, 5, testtime.D5s, testtime.D5min)
@@ -251,7 +252,7 @@ func TestPGOutboxStore_ReclaimStale_ExecError(t *testing.T) {
 	db := &mockDBTX{
 		execErr: errors.New("exec reclaim failed"),
 	}
-	store := NewOutboxStore(db)
+	store := NewOutboxStore(db, clock.Real())
 
 	_, err := store.ReclaimStale(context.Background(),
 		testtime.D60s, 5, testtime.D5s, testtime.D5min)
@@ -263,7 +264,7 @@ func TestPGOutboxStore_ReclaimStale_ZeroCount(t *testing.T) {
 	db := &mockDBTX{
 		execResult: pgconn.NewCommandTag("UPDATE 0"),
 	}
-	store := NewOutboxStore(db)
+	store := NewOutboxStore(db, clock.Real())
 
 	count, err := store.ReclaimStale(context.Background(),
 		testtime.D60s, 5, testtime.D5s, testtime.D5min)
@@ -279,7 +280,7 @@ func TestPGOutboxStore_CleanupPublished_ReturnsCount(t *testing.T) {
 	db := &mockDBTX{
 		execResult: pgconn.NewCommandTag("DELETE 5"),
 	}
-	store := NewOutboxStore(db)
+	store := NewOutboxStore(db, clock.Real())
 
 	cutoff := time.Now().Add(outboxTestNeg72h)
 	deleted, err := store.CleanupPublished(context.Background(), cutoff, 1000)
@@ -297,7 +298,7 @@ func TestPGOutboxStore_CleanupPublished_ExecError(t *testing.T) {
 	db := &mockDBTX{
 		execErr: errors.New("exec cleanup failed"),
 	}
-	store := NewOutboxStore(db)
+	store := NewOutboxStore(db, clock.Real())
 
 	_, err := store.CleanupPublished(context.Background(), time.Now(), 1000)
 	require.Error(t, err)
@@ -312,7 +313,7 @@ func TestPGOutboxStore_CleanupDead_ReturnsCount(t *testing.T) {
 	db := &mockDBTX{
 		execResult: pgconn.NewCommandTag("DELETE 2"),
 	}
-	store := NewOutboxStore(db)
+	store := NewOutboxStore(db, clock.Real())
 
 	cutoff := time.Now().Add(outboxTestNeg30Days)
 	deleted, err := store.CleanupDead(context.Background(), cutoff, 1000)
@@ -330,7 +331,7 @@ func TestPGOutboxStore_CleanupDead_ExecError(t *testing.T) {
 	db := &mockDBTX{
 		execErr: errors.New("exec dead cleanup failed"),
 	}
-	store := NewOutboxStore(db)
+	store := NewOutboxStore(db, clock.Real())
 
 	_, err := store.CleanupDead(context.Background(), time.Now(), 1000)
 	require.Error(t, err)
@@ -345,7 +346,7 @@ func TestPGOutboxStore_ClaimPending_Empty(t *testing.T) {
 	db := &mockDBTX{
 		queryRows: &mockRows{entries: nil},
 	}
-	store := NewOutboxStore(db)
+	store := NewOutboxStore(db, clock.Real())
 
 	entries, err := store.ClaimPending(context.Background(), 10)
 	require.NoError(t, err)
@@ -362,7 +363,7 @@ func TestPGOutboxStore_ClaimPending_ReturnsEntries(t *testing.T) {
 			makeMockRowData(e2),
 		}},
 	}
-	store := NewOutboxStore(db)
+	store := NewOutboxStore(db, clock.Real())
 
 	entries, err := store.ClaimPending(context.Background(), 10)
 	require.NoError(t, err)
@@ -375,7 +376,7 @@ func TestPGOutboxStore_ClaimPending_ReturnsEntries(t *testing.T) {
 
 func TestPGOutboxStore_ClaimPending_SQLContainsSkipLocked(t *testing.T) {
 	db := &mockDBTX{queryRows: &mockRows{entries: nil}}
-	store := NewOutboxStore(db)
+	store := NewOutboxStore(db, clock.Real())
 
 	_, err := store.ClaimPending(context.Background(), 5)
 	require.NoError(t, err)
@@ -408,7 +409,7 @@ func TestPGOutboxStore_ClaimPending_MetadataNull(t *testing.T) {
 		},
 	}
 	db := &mockDBTX{queryRows: &mockRows{entries: []mockRowData{row}}}
-	store := NewOutboxStore(db)
+	store := NewOutboxStore(db, clock.Real())
 
 	entries, err := store.ClaimPending(context.Background(), 10)
 	require.NoError(t, err)
@@ -420,7 +421,7 @@ func TestPGOutboxStore_ClaimPending_MetadataNull(t *testing.T) {
 
 func TestPGOutboxStore_ClaimPending_BeginError(t *testing.T) {
 	db := &mockDBTX{beginErr: errors.New("connection refused")}
-	store := NewOutboxStore(db)
+	store := NewOutboxStore(db, clock.Real())
 
 	_, err := store.ClaimPending(context.Background(), 10)
 	require.Error(t, err)
@@ -432,7 +433,7 @@ func TestPGOutboxStore_ClaimPending_CommitError(t *testing.T) {
 		queryRows: &mockRows{entries: nil},
 		commitErr: errors.New("commit failed"),
 	}
-	store := NewOutboxStore(db)
+	store := NewOutboxStore(db, clock.Real())
 
 	_, err := store.ClaimPending(context.Background(), 10)
 	require.Error(t, err)
@@ -446,7 +447,7 @@ func TestPGOutboxStore_ClaimPending_ScanError(t *testing.T) {
 			{values: []any{"too-few"}},
 		}},
 	}
-	store := NewOutboxStore(db)
+	store := NewOutboxStore(db, clock.Real())
 
 	_, err := store.ClaimPending(context.Background(), 10)
 	require.Error(t, err)
@@ -465,7 +466,7 @@ func TestPGOutboxStore_ClaimPending_InvalidMetadataJSON(t *testing.T) {
 		},
 	}
 	db := &mockDBTX{queryRows: &mockRows{entries: []mockRowData{row}}}
-	store := NewOutboxStore(db)
+	store := NewOutboxStore(db, clock.Real())
 
 	// Invalid JSON must not fail ClaimPending — entry still returned, metadata nil.
 	entries, err := store.ClaimPending(context.Background(), 10)

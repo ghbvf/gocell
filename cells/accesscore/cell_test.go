@@ -14,12 +14,14 @@ import (
 
 	"github.com/ghbvf/gocell/cells/accesscore/internal/domain"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/mem"
+	"github.com/ghbvf/gocell/cells/accesscore/internal/testutil"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/crypto/bcrypt"
 
 	"github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/persistence"
@@ -52,14 +54,14 @@ var _ outbox.Writer = durableOutboxWriter{}
 const testPassword = "secret123"
 
 var (
-	testKeySet, _, _ = auth.MustNewTestKeySet()
+	testKeySet, _, _ = auth.MustNewTestKeySet(clock.Real())
 	testIssuer       = mustIssuer(testKeySet)
 	testVerifier     = mustVerifier(testKeySet)
 	testCursorCodec  = mustCursorCodec()
 )
 
 func mustIssuer(ks *auth.KeySet) *auth.JWTIssuer {
-	i, err := auth.NewJWTIssuer(ks, "gocell-accesscore", testtime.D15min,
+	i, err := auth.NewJWTIssuer(ks, "gocell-accesscore", testtime.D15min, clock.Real(),
 		auth.WithIssuerAudiencesFromSlice([]string{"gocell"}))
 	if err != nil {
 		panic("test setup: " + err.Error())
@@ -68,7 +70,7 @@ func mustIssuer(ks *auth.KeySet) *auth.JWTIssuer {
 }
 
 func mustVerifier(ks *auth.KeySet) *auth.JWTVerifier {
-	v, err := auth.NewJWTVerifier(ks, auth.WithExpectedAudiences("gocell"))
+	v, err := auth.NewJWTVerifier(ks, clock.Real(), auth.WithExpectedAudiences("gocell"))
 	if err != nil {
 		panic("test setup: " + err.Error())
 	}
@@ -88,12 +90,13 @@ func newTestRefreshStore() refresh.Store {
 	return refreshmem.MustNew(refresh.Policy{ReuseInterval: testtime.D2s, MaxAge: time.Hour}, clock, nil)
 }
 
-func newTestCell() *AccessCore {
+func newTestCell(t testing.TB) *AccessCore {
+	t.Helper()
 	return NewAccessCore(
 		WithUserRepository(mem.NewUserRepository()),
-		WithSessionRepository(mem.NewSessionRepository()),
+		WithSessionRepository(testutil.RealSessionRepo(t)),
 		WithRoleRepository(mem.NewRoleRepository()),
-		WithOutboxDeps(eventbus.New(), nil),
+		WithOutboxDeps(eventbus.New(eventbus.WithClock(clock.Real())), nil),
 		WithJWTIssuer(testIssuer),
 		WithJWTVerifier(testVerifier),
 		WithRefreshStore(newTestRefreshStore()),
@@ -103,12 +106,13 @@ func newTestCell() *AccessCore {
 	)
 }
 
-func newDurableTestCell() *AccessCore {
+func newDurableTestCell(t testing.TB) *AccessCore {
+	t.Helper()
 	return NewAccessCore(
 		WithUserRepository(mem.NewUserRepository()),
-		WithSessionRepository(mem.NewSessionRepository()),
+		WithSessionRepository(testutil.RealSessionRepo(t)),
 		WithRoleRepository(mem.NewRoleRepository()),
-		WithOutboxDeps(eventbus.New(), nil),
+		WithOutboxDeps(eventbus.New(eventbus.WithClock(clock.Real())), nil),
 		WithJWTIssuer(testIssuer),
 		WithJWTVerifier(testVerifier),
 		WithRefreshStore(newTestRefreshStore()),
@@ -121,15 +125,17 @@ func newDurableTestCell() *AccessCore {
 func TestAccessCore_Init_RequiresJWTIssuer(t *testing.T) {
 	c := NewAccessCore(
 		WithUserRepository(mem.NewUserRepository()),
-		WithSessionRepository(mem.NewSessionRepository()),
+		WithSessionRepository(testutil.RealSessionRepo(t)),
 		WithRoleRepository(mem.NewRoleRepository()),
-		WithOutboxDeps(eventbus.New(), nil),
+		WithOutboxDeps(eventbus.New(eventbus.WithClock(clock.Real())), nil),
 		WithJWTVerifier(testVerifier), // issuer missing
 		WithOutboxDeps(nil, outbox.NoopWriter{}),
 		WithTxManager(persistence.NoopTxRunner{}),
 		WithMetricsProvider(metrics.NopProvider{}),
 	)
-	err := c.Init(context.Background(), cell.Dependencies{Config: make(map[string]any), DurabilityMode: cell.DurabilityDemo})
+	err := c.Init(context.Background(), cell.Dependencies{
+		Config: make(map[string]any), DurabilityMode: cell.DurabilityDemo, Clock: clock.Real(),
+	})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "WithJWTIssuer")
 }
@@ -137,22 +143,24 @@ func TestAccessCore_Init_RequiresJWTIssuer(t *testing.T) {
 func TestAccessCore_Init_RequiresJWTVerifier(t *testing.T) {
 	c := NewAccessCore(
 		WithUserRepository(mem.NewUserRepository()),
-		WithSessionRepository(mem.NewSessionRepository()),
+		WithSessionRepository(testutil.RealSessionRepo(t)),
 		WithRoleRepository(mem.NewRoleRepository()),
-		WithOutboxDeps(eventbus.New(), nil),
+		WithOutboxDeps(eventbus.New(eventbus.WithClock(clock.Real())), nil),
 		WithJWTIssuer(testIssuer), // verifier missing
 		WithOutboxDeps(nil, outbox.NoopWriter{}),
 		WithTxManager(persistence.NoopTxRunner{}),
 		WithMetricsProvider(metrics.NopProvider{}),
 	)
-	err := c.Init(context.Background(), cell.Dependencies{Config: make(map[string]any), DurabilityMode: cell.DurabilityDemo})
+	err := c.Init(context.Background(), cell.Dependencies{
+		Config: make(map[string]any), DurabilityMode: cell.DurabilityDemo, Clock: clock.Real(),
+	})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "WithJWTVerifier")
 }
 
 func TestAccessCore_Init_RequiresRepositoriesBeforeSliceConstruction(t *testing.T) {
 	c := NewAccessCore(
-		WithOutboxDeps(eventbus.New(), nil),
+		WithOutboxDeps(eventbus.New(eventbus.WithClock(clock.Real())), nil),
 		WithJWTIssuer(testIssuer),
 		WithJWTVerifier(testVerifier),
 		WithRefreshStore(newTestRefreshStore()),
@@ -161,7 +169,9 @@ func TestAccessCore_Init_RequiresRepositoriesBeforeSliceConstruction(t *testing.
 
 	var err error
 	require.NotPanics(t, func() {
-		err = c.Init(context.Background(), cell.Dependencies{Config: make(map[string]any), DurabilityMode: cell.DurabilityDemo})
+		err = c.Init(context.Background(), cell.Dependencies{
+			Config: make(map[string]any), DurabilityMode: cell.DurabilityDemo, Clock: clock.Real(),
+		})
 	})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "user repository")
@@ -170,15 +180,15 @@ func TestAccessCore_Init_RequiresRepositoriesBeforeSliceConstruction(t *testing.
 func TestInit_DemoMode_OutboxWithoutTx_Fails(t *testing.T) {
 	c := NewAccessCore(
 		WithUserRepository(mem.NewUserRepository()),
-		WithSessionRepository(mem.NewSessionRepository()),
+		WithSessionRepository(testutil.RealSessionRepo(t)),
 		WithRoleRepository(mem.NewRoleRepository()),
-		WithOutboxDeps(eventbus.New(), nil),
+		WithOutboxDeps(eventbus.New(eventbus.WithClock(clock.Real())), nil),
 		WithJWTIssuer(testIssuer),
 		WithJWTVerifier(testVerifier),
 		WithOutboxDeps(nil, outbox.NoopWriter{}),
 		// txRunner intentionally omitted
 	)
-	deps := cell.Dependencies{Config: make(map[string]any), DurabilityMode: cell.DurabilityDemo}
+	deps := cell.Dependencies{Config: make(map[string]any), DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()}
 	err := c.Init(context.Background(), deps)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "outboxWriter and txRunner")
@@ -187,15 +197,15 @@ func TestInit_DemoMode_OutboxWithoutTx_Fails(t *testing.T) {
 func TestInit_DemoMode_TxWithoutOutbox_Fails(t *testing.T) {
 	c := NewAccessCore(
 		WithUserRepository(mem.NewUserRepository()),
-		WithSessionRepository(mem.NewSessionRepository()),
+		WithSessionRepository(testutil.RealSessionRepo(t)),
 		WithRoleRepository(mem.NewRoleRepository()),
-		WithOutboxDeps(eventbus.New(), nil),
+		WithOutboxDeps(eventbus.New(eventbus.WithClock(clock.Real())), nil),
 		WithJWTIssuer(testIssuer),
 		WithJWTVerifier(testVerifier),
 		WithTxManager(persistence.NoopTxRunner{}),
 		// outboxWriter intentionally omitted
 	)
-	deps := cell.Dependencies{Config: make(map[string]any), DurabilityMode: cell.DurabilityDemo}
+	deps := cell.Dependencies{Config: make(map[string]any), DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()}
 	err := c.Init(context.Background(), deps)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "outboxWriter and txRunner")
@@ -203,8 +213,8 @@ func TestInit_DemoMode_TxWithoutOutbox_Fails(t *testing.T) {
 
 func TestInit_TxRunnerXOR_BothPresent(t *testing.T) {
 	// Both outboxWriter and txRunner present → should succeed
-	c := newTestCell() // newTestCell includes both
-	deps := cell.Dependencies{Config: make(map[string]any), DurabilityMode: cell.DurabilityDemo}
+	c := newTestCell(t) // newTestCell includes both
+	deps := cell.Dependencies{Config: make(map[string]any), DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()}
 	require.NoError(t, c.Init(context.Background(), deps))
 }
 
@@ -214,7 +224,9 @@ func TestInit_DemoMode_NoPublisherNoOutbox_Fails(t *testing.T) {
 		WithJWTIssuer(testIssuer),
 		WithJWTVerifier(testVerifier),
 	)
-	err := c.Init(context.Background(), cell.Dependencies{Config: make(map[string]any), DurabilityMode: cell.DurabilityDemo})
+	err := c.Init(context.Background(), cell.Dependencies{
+		Config: make(map[string]any), DurabilityMode: cell.DurabilityDemo, Clock: clock.Real(),
+	})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "explicit event sink")
 }
@@ -223,12 +235,14 @@ func TestInit_DemoMode_WithPublisher_Succeeds(t *testing.T) {
 	// L2 cell, both nil, but publisher present → OK (demo mode with warning)
 	c := NewAccessCore(
 		WithInMemoryDefaults(),
-		WithOutboxDeps(eventbus.New(), nil),
+		WithOutboxDeps(eventbus.New(eventbus.WithClock(clock.Real())), nil),
 		WithJWTIssuer(testIssuer),
 		WithJWTVerifier(testVerifier),
 		WithMetricsProvider(metrics.NopProvider{}),
 	)
-	err := c.Init(context.Background(), cell.Dependencies{Config: make(map[string]any), DurabilityMode: cell.DurabilityDemo})
+	err := c.Init(context.Background(), cell.Dependencies{
+		Config: make(map[string]any), DurabilityMode: cell.DurabilityDemo, Clock: clock.Real(),
+	})
 	require.NoError(t, err)
 }
 
@@ -240,7 +254,9 @@ func TestInit_DemoMode_ExplicitNoopOutboxPair_Succeeds(t *testing.T) {
 		WithOutboxDeps(nil, outbox.NoopWriter{}),
 		WithTxManager(persistence.NoopTxRunner{}),
 	)
-	err := c.Init(context.Background(), cell.Dependencies{Config: make(map[string]any), DurabilityMode: cell.DurabilityDemo})
+	err := c.Init(context.Background(), cell.Dependencies{
+		Config: make(map[string]any), DurabilityMode: cell.DurabilityDemo, Clock: clock.Real(),
+	})
 	require.NoError(t, err)
 }
 
@@ -269,10 +285,12 @@ func TestInitRefreshGC_DisabledAndConfigValidation(t *testing.T) {
 }
 
 func TestAccessCore_InitWithRefreshGCRegistersLifecycleHook(t *testing.T) {
-	c := newTestCell()
+	c := newTestCell(t)
 	WithRefreshGC(time.Hour, time.Hour)(c)
 
-	require.NoError(t, c.Init(context.Background(), cell.Dependencies{Config: make(map[string]any), DurabilityMode: cell.DurabilityDemo}))
+	require.NoError(t, c.Init(context.Background(), cell.Dependencies{
+		Config: make(map[string]any), DurabilityMode: cell.DurabilityDemo, Clock: clock.Real(),
+	}))
 	require.NotNil(t, c.refreshGCCollector)
 
 	hooks := c.LifecycleHooks()
@@ -316,7 +334,9 @@ func TestInit_WithEmitter_DirectInjection(t *testing.T) {
 		WithJWTVerifier(testVerifier),
 		WithEmitter(emitter),
 	)
-	require.NoError(t, c.Init(context.Background(), cell.Dependencies{Config: make(map[string]any), DurabilityMode: cell.DurabilityDemo}))
+	require.NoError(t, c.Init(context.Background(), cell.Dependencies{
+		Config: make(map[string]any), DurabilityMode: cell.DurabilityDemo, Clock: clock.Real(),
+	}))
 	// After Init the cell holds the injected emitter; pending raw deps stay nil.
 	assert.NotNil(t, c.emitter)
 	assert.Nil(t, c.pendingOutboxPub)
@@ -331,9 +351,11 @@ func TestInit_WithEmitterAndOutboxDeps_MutuallyExclusive(t *testing.T) {
 		WithJWTIssuer(testIssuer),
 		WithJWTVerifier(testVerifier),
 		WithEmitter(outbox.NewNoopEmitter()),
-		WithOutboxDeps(eventbus.New(), nil),
+		WithOutboxDeps(eventbus.New(eventbus.WithClock(clock.Real())), nil),
 	)
-	err := c.Init(context.Background(), cell.Dependencies{Config: make(map[string]any), DurabilityMode: cell.DurabilityDemo})
+	err := c.Init(context.Background(), cell.Dependencies{
+		Config: make(map[string]any), DurabilityMode: cell.DurabilityDemo, Clock: clock.Real(),
+	})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "mutually exclusive")
 }
@@ -351,17 +373,20 @@ func TestInit_WithEmitter_DurableRequiresDurableEmitter(t *testing.T) {
 		WithEmitter(outbox.NewNoopEmitter()), // non-durable
 		WithTxManager(durableTxRunner{}),
 	)
-	err := c.Init(context.Background(), cell.Dependencies{Config: make(map[string]any), DurabilityMode: cell.DurabilityDurable})
+	err := c.Init(context.Background(), cell.Dependencies{
+		Config: make(map[string]any), DurabilityMode: cell.DurabilityDurable, Clock: clock.Real(),
+	})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "durable")
 }
 
 func TestAccessCore_Lifecycle(t *testing.T) {
-	c := newTestCell()
+	c := newTestCell(t)
 	ctx := context.Background()
 	deps := cell.Dependencies{
 		Config:         make(map[string]any),
 		DurabilityMode: cell.DurabilityDemo,
+		Clock:          clock.Real(),
 	}
 
 	// Init
@@ -380,18 +405,19 @@ func TestAccessCore_Lifecycle(t *testing.T) {
 }
 
 func TestAccessCore_Metadata(t *testing.T) {
-	c := newTestCell()
+	c := newTestCell(t)
 	assert.Equal(t, "accesscore", c.ID())
 	assert.Equal(t, cell.CellTypeCore, c.Type())
 	assert.Equal(t, cell.L2, c.ConsistencyLevel())
 }
 
 func TestAccessCore_Startup(t *testing.T) {
-	c := newTestCell()
+	c := newTestCell(t)
 	ctx := context.Background()
 	deps := cell.Dependencies{
 		Config:         make(map[string]any),
 		DurabilityMode: cell.DurabilityDemo,
+		Clock:          clock.Real(),
 	}
 	require.NoError(t, c.Init(ctx, deps))
 	require.NoError(t, c.Start(ctx))
@@ -400,11 +426,12 @@ func TestAccessCore_Startup(t *testing.T) {
 }
 
 func TestAccessCore_TokenVerifierAndAuthorizer(t *testing.T) {
-	c := newTestCell()
+	c := newTestCell(t)
 	ctx := context.Background()
 	deps := cell.Dependencies{
 		Config:         make(map[string]any),
 		DurabilityMode: cell.DurabilityDemo,
+		Clock:          clock.Real(),
 	}
 	require.NoError(t, c.Init(ctx, deps))
 
@@ -413,15 +440,16 @@ func TestAccessCore_TokenVerifierAndAuthorizer(t *testing.T) {
 }
 
 func TestAccessCore_Init_DurableMode_UsesProdRBACRunMode(t *testing.T) {
-	c := newDurableTestCell()
+	c := newDurableTestCell(t)
 	ctx := context.Background()
 	deps := cell.Dependencies{
 		Config:         make(map[string]any),
 		DurabilityMode: cell.DurabilityDurable,
+		Clock:          clock.Real(),
 	}
 	require.NoError(t, c.Init(ctx, deps))
 
-	r := router.MustNew()
+	r := router.MustNew(router.WithRouterClock(clock.Real()))
 	for _, rg := range c.RouteGroups() {
 		if rg.Listener == cell.PrimaryListener {
 			rg := rg
@@ -439,11 +467,12 @@ func TestAccessCore_Init_DurableMode_UsesProdRBACRunMode(t *testing.T) {
 }
 
 func TestAccessCore_RouteGroups(t *testing.T) {
-	c := newTestCell()
+	c := newTestCell(t)
 	ctx := context.Background()
 	deps := cell.Dependencies{
 		Config:         make(map[string]any),
 		DurabilityMode: cell.DurabilityDemo,
+		Clock:          clock.Real(),
 	}
 	require.NoError(t, c.Init(ctx, deps))
 
@@ -493,16 +522,17 @@ type cellTestRouters struct {
 // routers populated. FinalizeAuth is called on each router.
 func initCellWithRouters(t *testing.T) *cellTestRouters {
 	t.Helper()
-	c := newTestCell()
+	c := newTestCell(t)
 	ctx := context.Background()
 	deps := cell.Dependencies{
 		Config:         make(map[string]any),
 		DurabilityMode: cell.DurabilityDemo,
+		Clock:          clock.Real(),
 	}
 	require.NoError(t, c.Init(ctx, deps))
 
-	primary := router.MustNew()
-	internal := router.MustNew()
+	primary := router.MustNew(router.WithRouterClock(clock.Real()))
+	internal := router.MustNew(router.WithRouterClock(clock.Real()))
 	for _, rg := range c.RouteGroups() {
 		rg := rg
 		switch rg.Listener {
@@ -633,7 +663,7 @@ func TestAccessCore_RouteUserGet(t *testing.T) {
 func TestAccessCore_RouteRoleAssign(t *testing.T) {
 	r := initCellWithRouters(t).Internal
 
-	// Role "admin" is not seeded in newTestCell() → domain-level 404 (role not found).
+	// Role "admin" is not seeded in newTestCell(t) → domain-level 404 (role not found).
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/internal/v1/access/roles/assign",
 		strings.NewReader(`{"userId":"usr-1","roleId":"admin"}`))
@@ -734,14 +764,14 @@ func TestAccessCore_RouteRolesList(t *testing.T) {
 func TestAccessCore_SessionRevocation_E2E(t *testing.T) {
 	// Use separate repos so we can manipulate session state.
 	userRepo := mem.NewUserRepository()
-	sessionRepo := mem.NewSessionRepository()
+	sessionRepo := testutil.RealSessionRepo(t)
 	roleRepo := mem.NewRoleRepository()
 
 	c := NewAccessCore(
 		WithUserRepository(userRepo),
 		WithSessionRepository(sessionRepo),
 		WithRoleRepository(roleRepo),
-		WithOutboxDeps(eventbus.New(), nil),
+		WithOutboxDeps(eventbus.New(eventbus.WithClock(clock.Real())), nil),
 		WithJWTIssuer(testIssuer),
 		WithJWTVerifier(testVerifier),
 		WithRefreshStore(newTestRefreshStore()),
@@ -750,17 +780,17 @@ func TestAccessCore_SessionRevocation_E2E(t *testing.T) {
 		WithMetricsProvider(metrics.NopProvider{}),
 	)
 	ctx := context.Background()
-	require.NoError(t, c.Init(ctx, cell.Dependencies{Config: make(map[string]any), DurabilityMode: cell.DurabilityDemo}))
+	require.NoError(t, c.Init(ctx, cell.Dependencies{Config: make(map[string]any), DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()}))
 
 	// Seed a user.
 	hash, _ := bcrypt.GenerateFromPassword([]byte(testPassword), bcrypt.DefaultCost)
-	user, err := domain.NewUser("e2e-user", "e2e@test.com", string(hash))
+	user, err := domain.NewUser("e2e-user", "e2e@test.com", string(hash), time.Now())
 	require.NoError(t, err)
 	user.ID = "usr-e2e"
 	require.NoError(t, userRepo.Create(ctx, user))
 
 	// Login via HTTP handler to simulate real flow.
-	r := router.MustNew()
+	r := router.MustNew(router.WithRouterClock(clock.Real()))
 	for _, rg := range c.RouteGroups() {
 		rg := rg
 		if rg.Listener == cell.PrimaryListener {
@@ -804,7 +834,7 @@ func TestAccessCore_SessionRevocation_E2E(t *testing.T) {
 	// Revoke the session.
 	sess, err := sessionRepo.GetByID(ctx, sid)
 	require.NoError(t, err)
-	sess.Revoke()
+	sess.Revoke(time.Now())
 	require.NoError(t, sessionRepo.Update(ctx, sess))
 
 	// Verify same token again — should be rejected.
@@ -817,14 +847,14 @@ func TestAccessCore_SessionRevocation_E2E(t *testing.T) {
 // chain: login → refresh → validate refreshed token → revoke → verify rejected.
 func TestAccessCore_RefreshTokenRevocation_E2E(t *testing.T) {
 	userRepo := mem.NewUserRepository()
-	sessionRepo := mem.NewSessionRepository()
+	sessionRepo := testutil.RealSessionRepo(t)
 	roleRepo := mem.NewRoleRepository()
 
 	c := NewAccessCore(
 		WithUserRepository(userRepo),
 		WithSessionRepository(sessionRepo),
 		WithRoleRepository(roleRepo),
-		WithOutboxDeps(eventbus.New(), nil),
+		WithOutboxDeps(eventbus.New(eventbus.WithClock(clock.Real())), nil),
 		WithJWTIssuer(testIssuer),
 		WithJWTVerifier(testVerifier),
 		WithRefreshStore(newTestRefreshStore()),
@@ -833,17 +863,17 @@ func TestAccessCore_RefreshTokenRevocation_E2E(t *testing.T) {
 		WithMetricsProvider(metrics.NopProvider{}),
 	)
 	ctx := context.Background()
-	require.NoError(t, c.Init(ctx, cell.Dependencies{Config: make(map[string]any), DurabilityMode: cell.DurabilityDemo}))
+	require.NoError(t, c.Init(ctx, cell.Dependencies{Config: make(map[string]any), DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()}))
 
 	// Seed a user.
 	hash, _ := bcrypt.GenerateFromPassword([]byte(testPassword), bcrypt.DefaultCost)
-	user, err := domain.NewUser("refresh-user", "refresh@test.com", string(hash))
+	user, err := domain.NewUser("refresh-user", "refresh@test.com", string(hash), time.Now())
 	require.NoError(t, err)
 	user.ID = "usr-refresh"
 	require.NoError(t, userRepo.Create(ctx, user))
 
 	// Login via HTTP.
-	r := router.MustNew()
+	r := router.MustNew(router.WithRouterClock(clock.Real()))
 	for _, rg := range c.RouteGroups() {
 		rg := rg
 		if rg.Listener == cell.PrimaryListener {
@@ -899,7 +929,7 @@ func TestAccessCore_RefreshTokenRevocation_E2E(t *testing.T) {
 	// Revoke the session.
 	sess, err := sessionRepo.GetByID(ctx, sid)
 	require.NoError(t, err)
-	sess.Revoke()
+	sess.Revoke(time.Now())
 	require.NoError(t, sessionRepo.Update(ctx, sess))
 
 	// Refreshed token should now be rejected.
@@ -922,7 +952,7 @@ func seedAdminUser(
 	hash, err := bcrypt.GenerateFromPassword([]byte(password), domain.BcryptCost)
 	require.NoError(t, err)
 
-	user, err := domain.NewUser(username, username+"@gocell.local", string(hash))
+	user, err := domain.NewUser(username, username+"@gocell.local", string(hash), time.Now())
 	require.NoError(t, err)
 	user.ID = "usr-admin-prefill"
 
@@ -946,15 +976,15 @@ func TestAccessCore_DirectPrefill_AdminRoleAndUser(t *testing.T) {
 	userRepo := mem.NewUserRepository()
 	roleRepo := mem.NewRoleRepository()
 	ctx := context.Background()
-	deps := cell.Dependencies{Config: make(map[string]any), DurabilityMode: cell.DurabilityDemo}
+	deps := cell.Dependencies{Config: make(map[string]any), DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()}
 
 	seedAdminUser(t, ctx, userRepo, roleRepo, "admin", "admin-pass-123")
 
 	c := NewAccessCore(
 		WithUserRepository(userRepo),
-		WithSessionRepository(mem.NewSessionRepository()),
+		WithSessionRepository(testutil.RealSessionRepo(t)),
 		WithRoleRepository(roleRepo),
-		WithOutboxDeps(eventbus.New(), nil),
+		WithOutboxDeps(eventbus.New(eventbus.WithClock(clock.Real())), nil),
 		WithJWTIssuer(testIssuer),
 		WithJWTVerifier(testVerifier),
 		WithRefreshStore(newTestRefreshStore()),
@@ -999,7 +1029,7 @@ func TestAccessCore_DirectPrefill_AdminRoleAndUser(t *testing.T) {
 func TestAccessCore_PasswordResetExempt_PropagatesViaRouter(t *testing.T) {
 	c := NewAccessCore(
 		WithInMemoryDefaults(),
-		WithOutboxDeps(eventbus.New(), nil),
+		WithOutboxDeps(eventbus.New(eventbus.WithClock(clock.Real())), nil),
 		WithJWTIssuer(testIssuer),
 		WithJWTVerifier(testVerifier),
 		WithOutboxDeps(nil, outbox.NoopWriter{}),
@@ -1010,9 +1040,10 @@ func TestAccessCore_PasswordResetExempt_PropagatesViaRouter(t *testing.T) {
 	require.NoError(t, c.Init(ctx, cell.Dependencies{
 		Config:         make(map[string]any),
 		DurabilityMode: cell.DurabilityDemo,
+		Clock:          clock.Real(),
 	}))
 
-	r := router.MustNew()
+	r := router.MustNew(router.WithRouterClock(clock.Real()))
 	for _, rg := range c.RouteGroups() {
 		rg := rg
 		if rg.Listener == cell.PrimaryListener {

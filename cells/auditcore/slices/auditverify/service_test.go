@@ -4,6 +4,7 @@ import (
 	"context"
 	"log/slog"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -33,7 +34,7 @@ func TestService_VerifyChain_ValidEntries(t *testing.T) {
 	// Build a valid chain using the same HMAC key.
 	chain := domain.NewHashChain(testHMACKey)
 	for i := range 3 {
-		entry := chain.Append("evt-"+string(rune('0'+i)), "event.test", "actor-1", []byte("payload"))
+		entry := chain.Append("evt-"+string(rune('0'+i)), "event.test", "actor-1", []byte("payload"), time.Now())
 		require.NoError(t, repo.Append(context.Background(), entry))
 	}
 
@@ -48,7 +49,7 @@ func TestService_VerifyChain_TamperedEntry(t *testing.T) {
 
 	chain := domain.NewHashChain(testHMACKey)
 	for i := range 3 {
-		entry := chain.Append("evt-"+string(rune('0'+i)), "event.test", "actor-1", []byte("payload"))
+		entry := chain.Append("evt-"+string(rune('0'+i)), "event.test", "actor-1", []byte("payload"), time.Now())
 		if i == 1 {
 			// Tamper with the second entry.
 			entry.Hash = "tampered-hash"

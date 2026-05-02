@@ -73,6 +73,7 @@ func (b *Bootstrap) applyListenerAuthChain(
 		case cell.AuthServiceToken:
 			mws = append(mws, auth.ServiceTokenMiddleware(
 				p.Ring,
+				b.clock,
 				auth.WithServiceTokenNonceStore(p.Store),
 			))
 

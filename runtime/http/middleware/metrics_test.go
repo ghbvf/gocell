@@ -8,6 +8,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/stretchr/testify/assert"
 
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/runtime/observability/metrics"
 )
 
@@ -15,7 +16,7 @@ import (
 
 func TestMetrics_RecordsMetrics(t *testing.T) {
 	c := metrics.NewInMemoryCollector()
-	handler := Recorder(Metrics(c)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := Recorder(Metrics(c, clock.Real())(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusCreated)
 	})))
 
@@ -33,7 +34,7 @@ func TestMetrics_RecordsMetrics(t *testing.T) {
 
 func TestMetrics_DefaultStatus200(t *testing.T) {
 	c := metrics.NewInMemoryCollector()
-	handler := Recorder(Metrics(c)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := Recorder(Metrics(c, clock.Real())(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte("ok"))
 	})))
 
@@ -48,7 +49,7 @@ func TestMetrics_DefaultStatus200(t *testing.T) {
 
 func TestMetrics_PanicRecordsStatus500(t *testing.T) {
 	c := metrics.NewInMemoryCollector()
-	handler := Recorder(Metrics(c)(Recovery(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := Recorder(Metrics(c, clock.Real())(Recovery(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		panic("boom")
 	}))))
 
@@ -65,7 +66,7 @@ func TestMetrics_PanicRecordsStatus500(t *testing.T) {
 
 func TestMetrics_Standalone(t *testing.T) {
 	c := metrics.NewInMemoryCollector()
-	handler := Metrics(c)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := Metrics(c, clock.Real())(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusAccepted)
 	}))
 
@@ -82,7 +83,7 @@ func TestMetrics_Standalone(t *testing.T) {
 
 func TestMetrics_MultipleRequests(t *testing.T) {
 	c := metrics.NewInMemoryCollector()
-	handler := Recorder(Metrics(c)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := Recorder(Metrics(c, clock.Real())(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})))
 
@@ -103,7 +104,7 @@ func TestMetrics_RoutePatternCollapse(t *testing.T) {
 	c := metrics.NewInMemoryCollector()
 
 	r := chi.NewRouter()
-	r.Use(Recorder, Metrics(c))
+	r.Use(Recorder, Metrics(c, clock.Real()))
 	r.Get("/api/v1/users/{id}", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})
@@ -128,7 +129,7 @@ func TestMetrics_UnmatchedRouteUsesSentinel(t *testing.T) {
 	c := metrics.NewInMemoryCollector()
 
 	r := chi.NewRouter()
-	r.Use(Recorder, Metrics(c))
+	r.Use(Recorder, Metrics(c, clock.Real()))
 	r.Get("/exists", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})
@@ -150,7 +151,7 @@ func TestMetrics_ChiStaticRoute(t *testing.T) {
 	c := metrics.NewInMemoryCollector()
 
 	r := chi.NewRouter()
-	r.Use(Recorder, Metrics(c))
+	r.Use(Recorder, Metrics(c, clock.Real()))
 	r.Get("/healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})
@@ -168,7 +169,7 @@ func TestMetrics_ChiNestedRoutes(t *testing.T) {
 	c := metrics.NewInMemoryCollector()
 
 	r := chi.NewRouter()
-	r.Use(Recorder, Metrics(c))
+	r.Use(Recorder, Metrics(c, clock.Real()))
 	r.Route("/api/v1", func(r chi.Router) {
 		r.Get("/orders/{orderID}", func(w http.ResponseWriter, _ *http.Request) {
 			w.WriteHeader(http.StatusOK)

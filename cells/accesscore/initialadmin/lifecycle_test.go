@@ -15,6 +15,8 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/ghbvf/gocell/cells/accesscore/internal/mem"
+	kernelclock "github.com/ghbvf/gocell/kernel/clock"
+	"github.com/ghbvf/gocell/kernel/clock/clockmock"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 )
@@ -41,22 +43,23 @@ func makeLifecycleDeps(t *testing.T) BootstrapDeps {
 		UserRepo: mem.NewUserRepository(),
 		RoleRepo: mem.NewRoleRepository(),
 		Logger:   logger,
+		Clock:    kernelclock.Real(),
 	}
 }
 
-// makeLifecycleCfgOpts returns LifecycleOptions that point at a temp dir and
-// use a fast hasher so tests don't pay the bcrypt cost=12 penalty.
-// Uses cross-platform scheduler and password source helpers.
-func makeLifecycleCfgOpts(t *testing.T) []LifecycleOption {
+// newTestLifecycle constructs a Lifecycle with all standard test options and
+// WithClock as a direct argument to satisfy CLOCK-INJECTION-TEST-CALLSITE-01.
+func newTestLifecycle(t *testing.T) *Lifecycle {
 	t.Helper()
 	credPath := filepath.Join(t.TempDir(), "initial_admin_password")
-	return []LifecycleOption{
+	return NewLifecycle(
+		WithClock(kernelclock.Real()),
 		WithCredentialPath(credPath),
 		WithTTL(time.Hour),
 		WithPasswordHasher(BcryptHasher{Cost: 4}),
 		WithScheduler(newFakeSchedulerCross()),
 		withPasswordSource(newFixedPasswordSourceCross()),
-	}
+	)
 }
 
 // ---------------------------------------------------------------------------
@@ -65,7 +68,7 @@ func makeLifecycleCfgOpts(t *testing.T) []LifecycleOption {
 
 func TestNewLifecycle_Options(t *testing.T) {
 	sched := newFakeSchedulerCross()
-	clk := &fakeClock{t: time.Now()}
+	clk := clockmock.New(time.Now())
 	h := BcryptHasher{Cost: 4}
 
 	l := NewLifecycle(
@@ -132,8 +135,7 @@ func TestLifecycle_StartWithoutBind_ReturnsInvalidConfigError(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestLifecycle_StartWithBind_FirstRun_CreatesAdmin(t *testing.T) {
-	opts := makeLifecycleCfgOpts(t)
-	l := NewLifecycle(opts...)
+	l := newTestLifecycle(t)
 
 	deps := makeLifecycleDeps(t)
 	l.Bind(deps, deps.Logger)
@@ -176,8 +178,10 @@ func TestLifecycle_StartWithBind_LogsEffectiveCredentialPathAfterWrite(t *testin
 		UserRepo: mem.NewUserRepository(),
 		RoleRepo: mem.NewRoleRepository(),
 		Logger:   logger,
+		Clock:    kernelclock.Real(),
 	}
 	l := NewLifecycle(
+		WithClock(kernelclock.Real()),
 		WithCredentialPath(credPath),
 		WithTTL(time.Hour),
 		WithPasswordHasher(BcryptHasher{Cost: 4}),
@@ -208,8 +212,7 @@ func TestLifecycle_StartWithBind_LogsEffectiveCredentialPathAfterWrite(t *testin
 // ---------------------------------------------------------------------------
 
 func TestLifecycle_StartWithBind_RepeatRun_AdminExists_NoCleaner(t *testing.T) {
-	opts := makeLifecycleCfgOpts(t)
-	l := NewLifecycle(opts...)
+	l := newTestLifecycle(t)
 
 	deps := makeLifecycleDeps(t)
 	logger := deps.Logger
@@ -219,7 +222,7 @@ func TestLifecycle_StartWithBind_RepeatRun_AdminExists_NoCleaner(t *testing.T) {
 		UserRepo: deps.UserRepo,
 		RoleRepo: deps.RoleRepo,
 		Logger:   logger,
-		Clock:    l.cfg.Clock,
+		Clock:    deps.Clock,
 	}, bootstrapConfig{
 		CredentialPath: l.cfg.CredentialPath,
 		TTL:            l.cfg.TTL,
@@ -260,15 +263,14 @@ func TestLifecycle_StartWithCustomCredentialPath_SweepsExactFile(t *testing.T) {
 	customCredPath := filepath.Join(dir, "custom_admin_password")
 	defaultCredPath := filepath.Join(dir, "initial_admin_password")
 
-	opts := []LifecycleOption{
+	l := NewLifecycle(
+		WithClock(clockmock.New(now)),
 		WithCredentialPath(customCredPath),
 		WithTTL(time.Hour),
-		WithClock(&fakeClock{t: now}),
 		WithPasswordHasher(BcryptHasher{Cost: 4}),
 		WithScheduler(newFakeSchedulerCross()),
 		withPasswordSource(newFixedPasswordSourceCross()),
-	}
-	l := NewLifecycle(opts...)
+	)
 
 	deps := makeLifecycleDeps(t)
 	logger := deps.Logger
@@ -277,7 +279,7 @@ func TestLifecycle_StartWithCustomCredentialPath_SweepsExactFile(t *testing.T) {
 		UserRepo: deps.UserRepo,
 		RoleRepo: deps.RoleRepo,
 		Logger:   logger,
-		Clock:    l.cfg.Clock,
+		Clock:    deps.Clock,
 	}, bootstrapConfig{
 		CredentialPath: customCredPath,
 		TTL:            l.cfg.TTL,
@@ -322,8 +324,7 @@ func TestLifecycle_Stop_Idempotent(t *testing.T) {
 }
 
 func TestLifecycle_Stop_AfterStart(t *testing.T) {
-	opts := makeLifecycleCfgOpts(t)
-	l := NewLifecycle(opts...)
+	l := newTestLifecycle(t)
 
 	deps := makeLifecycleDeps(t)
 	l.Bind(deps, deps.Logger)
@@ -356,6 +357,7 @@ func TestLifecycle_Stop_AfterStart(t *testing.T) {
 func TestLifecycle_StartFail_CleanerRemainsNil(t *testing.T) {
 	// Use an invalid TTL that will cause newBootstrapper to fail.
 	l := NewLifecycle(
+		WithClock(kernelclock.Real()),
 		WithCredentialPath(filepath.Join(t.TempDir(), "cred")),
 		WithTTL(testtime.DNeg1s), // invalid TTL
 		WithPasswordHasher(BcryptHasher{Cost: 4}),
@@ -381,6 +383,7 @@ func TestLifecycle_StartFail_CleanerRemainsNil(t *testing.T) {
 func TestLifecycle_StartFail_RelativeStateDirReturnsInvalidConfigError(t *testing.T) {
 	t.Setenv("GOCELL_STATE_DIR", "relative/path")
 	l := NewLifecycle(
+		WithClock(kernelclock.Real()),
 		WithTTL(time.Hour),
 		WithPasswordHasher(BcryptHasher{Cost: 4}),
 		withPasswordSource(newFixedPasswordSourceCross()),
@@ -402,8 +405,7 @@ func TestLifecycle_StartFail_RelativeStateDirReturnsInvalidConfigError(t *testin
 // ---------------------------------------------------------------------------
 
 func TestLifecycle_StopBeforeStart_AbortsCleanlyNoGoroutineLeak(t *testing.T) {
-	opts := makeLifecycleCfgOpts(t)
-	l := NewLifecycle(opts...)
+	l := newTestLifecycle(t)
 
 	deps := makeLifecycleDeps(t)
 	l.Bind(deps, deps.Logger)
@@ -423,13 +425,3 @@ func TestLifecycle_StopBeforeStart_AbortsCleanlyNoGoroutineLeak(t *testing.T) {
 	assert.Nil(t, cleaner, "cleaner field must stay nil after stopped start")
 	assert.Nil(t, done, "done channel must stay nil — no goroutine spawned")
 }
-
-// ---------------------------------------------------------------------------
-// fakeClock — used in option tests
-// ---------------------------------------------------------------------------
-
-type fakeClock struct {
-	t time.Time
-}
-
-func (c *fakeClock) Now() time.Time { return c.t }

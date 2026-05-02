@@ -18,6 +18,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/ghbvf/gocell/cells/accesscore/internal/mem"
+	kernelclock "github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 )
 
@@ -38,6 +39,7 @@ func TestBootstrapper_FullFlow_OnCurrentOS(t *testing.T) {
 		UserRepo: userRepo,
 		RoleRepo: roleRepo,
 		Logger:   logger,
+		Clock:    kernelclock.Real(),
 	}
 
 	cfg := bootstrapConfig{

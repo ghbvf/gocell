@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/ghbvf/gocell/kernel/clock/clockmock"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 )
 
@@ -76,7 +77,7 @@ func TestDefaultTTL(t *testing.T) {
 // --- InMemClaimer / inMemReceipt Tests ---
 
 func TestInMemClaimer_Claim_Acquired(t *testing.T) {
-	c := NewInMemClaimer()
+	c := NewInMemClaimer(clockmock.New(time.Time{}))
 	state, receipt, err := c.Claim(context.Background(), "key1", testtime.D5min, testtime.D24h)
 	assert.NoError(t, err)
 	assert.Equal(t, ClaimAcquired, state)
@@ -84,7 +85,7 @@ func TestInMemClaimer_Claim_Acquired(t *testing.T) {
 }
 
 func TestInMemClaimer_Claim_Done(t *testing.T) {
-	c := NewInMemClaimer()
+	c := NewInMemClaimer(clockmock.New(time.Time{}))
 	ctx := context.Background()
 
 	// Acquire and commit.
@@ -100,7 +101,7 @@ func TestInMemClaimer_Claim_Done(t *testing.T) {
 }
 
 func TestInMemClaimer_Claim_Busy(t *testing.T) {
-	c := NewInMemClaimer()
+	c := NewInMemClaimer(clockmock.New(time.Time{}))
 	ctx := context.Background()
 
 	// Acquire lease (do not commit/release).
@@ -116,9 +117,10 @@ func TestInMemClaimer_Claim_Busy(t *testing.T) {
 }
 
 func TestInMemClaimer_Claim_ExpiredLease_ReacquiredBySecond(t *testing.T) {
+	fc := clockmock.New(time.Unix(1000, 0))
 	c := &InMemClaimer{
 		entries: make(map[string]*inMemEntry),
-		now:     func() time.Time { return time.Unix(1000, 0) },
+		clk:     fc,
 		rand:    rand.Reader,
 	}
 	ctx := context.Background()
@@ -129,7 +131,7 @@ func TestInMemClaimer_Claim_ExpiredLease_ReacquiredBySecond(t *testing.T) {
 	require.Equal(t, ClaimAcquired, state)
 
 	// Advance clock past expiry.
-	c.now = func() time.Time { return time.Unix(1001, 0) }
+	fc.Set(time.Unix(1001, 0))
 
 	// Second consumer should get ClaimAcquired (expired lease dropped).
 	state2, r2, err2 := c.Claim(ctx, "key-exp", testtime.D5min, testtime.D24h)
@@ -139,7 +141,7 @@ func TestInMemClaimer_Claim_ExpiredLease_ReacquiredBySecond(t *testing.T) {
 }
 
 func TestInMemClaimer_Release(t *testing.T) {
-	c := NewInMemClaimer()
+	c := NewInMemClaimer(clockmock.New(time.Time{}))
 	ctx := context.Background()
 
 	_, receipt, err := c.Claim(ctx, "key-rel", testtime.D5min, testtime.D24h)
@@ -153,7 +155,7 @@ func TestInMemClaimer_Release(t *testing.T) {
 }
 
 func TestInMemReceipt_DoubleCommit_SecondIsNoop(t *testing.T) {
-	c := NewInMemClaimer()
+	c := NewInMemClaimer(clockmock.New(time.Time{}))
 	ctx := context.Background()
 
 	_, receipt, err := c.Claim(ctx, "key-dbl", testtime.D5min, testtime.D24h)
@@ -164,7 +166,7 @@ func TestInMemReceipt_DoubleCommit_SecondIsNoop(t *testing.T) {
 }
 
 func TestInMemReceipt_StaleCommit_AfterRelease_ReturnsError(t *testing.T) {
-	c := NewInMemClaimer()
+	c := NewInMemClaimer(clockmock.New(time.Time{}))
 	ctx := context.Background()
 
 	_, receipt1, err := c.Claim(ctx, "key-stale", testtime.D5min, testtime.D24h)
@@ -184,9 +186,10 @@ func TestInMemReceipt_StaleCommit_AfterRelease_ReturnsError(t *testing.T) {
 // --- inMemReceipt.Extend tests ---
 
 func TestInMemReceipt_Extend_Success(t *testing.T) {
+	fc := clockmock.New(time.Unix(1000, 0))
 	c := &InMemClaimer{
 		entries: make(map[string]*inMemEntry),
-		now:     func() time.Time { return time.Unix(1000, 0) },
+		clk:     fc,
 		rand:    rand.Reader,
 	}
 	ctx := context.Background()
@@ -196,7 +199,7 @@ func TestInMemReceipt_Extend_Success(t *testing.T) {
 	require.NotNil(t, receipt)
 
 	// Advance clock and extend with a new TTL.
-	c.now = func() time.Time { return time.Unix(1100, 0) }
+	fc.Set(time.Unix(1100, 0))
 	newTTL := testtime.D10min
 	extErr := receipt.Extend(ctx, newTTL)
 	assert.NoError(t, extErr)
@@ -211,7 +214,7 @@ func TestInMemReceipt_Extend_Success(t *testing.T) {
 }
 
 func TestInMemReceipt_Extend_AfterRelease_ReturnsErrLeaseExpired(t *testing.T) {
-	c := NewInMemClaimer()
+	c := NewInMemClaimer(clockmock.New(time.Time{}))
 	ctx := context.Background()
 
 	_, receipt, err := c.Claim(ctx, "key-ext-rel", testtime.D5min, testtime.D24h)
@@ -226,9 +229,10 @@ func TestInMemReceipt_Extend_AfterRelease_ReturnsErrLeaseExpired(t *testing.T) {
 }
 
 func TestInMemReceipt_Extend_TokenMismatch_ReturnsErrLeaseExpired(t *testing.T) {
+	fc := clockmock.New(time.Unix(1000, 0))
 	c := &InMemClaimer{
 		entries: make(map[string]*inMemEntry),
-		now:     func() time.Time { return time.Unix(1000, 0) },
+		clk:     fc,
 		rand:    rand.Reader,
 	}
 	ctx := context.Background()
@@ -246,10 +250,10 @@ func TestInMemReceipt_Extend_TokenMismatch_ReturnsErrLeaseExpired(t *testing.T) 
 }
 
 func TestInMemReceipt_Extend_AfterExpiredLease_ReturnsErrLeaseExpired(t *testing.T) {
-	now := time.Unix(1000, 0)
+	fc := clockmock.New(time.Unix(1000, 0))
 	c := &InMemClaimer{
 		entries: make(map[string]*inMemEntry),
-		now:     func() time.Time { return now },
+		clk:     fc,
 		rand:    rand.Reader,
 	}
 	ctx := context.Background()
@@ -258,7 +262,7 @@ func TestInMemReceipt_Extend_AfterExpiredLease_ReturnsErrLeaseExpired(t *testing
 	require.NoError(t, err)
 
 	// Advance clock so another Claim call drops the expired entry.
-	now = time.Unix(1002, 0)
+	fc.Set(time.Unix(1002, 0))
 	// Trigger eviction by claiming again (which drops the expired entry).
 	_, _, _ = c.Claim(ctx, "key-ext-exp", testtime.D5min, testtime.D24h)
 	// Now the entry for old receipt is replaced — token mismatch.

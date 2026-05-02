@@ -4,8 +4,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
-	"github.com/ghbvf/gocell/runtime/distlock"
 )
 
 // TestRealClock_NewTimerAt_FiresAtDeadline verifies that the real clock's
@@ -14,7 +14,7 @@ import (
 //
 // Uses 10ms — minimum sane value for race-detector scheduling overhead.
 func TestRealClock_NewTimerAt_FiresAtDeadline(t *testing.T) {
-	clk := distlock.RealClockForTest()
+	clk := clock.Real()
 
 	deadline := time.Now().Add(testtime.D10ms)
 	timer := clk.NewTimerAt(deadline)
@@ -31,7 +31,7 @@ func TestRealClock_NewTimerAt_FiresAtDeadline(t *testing.T) {
 // passing a deadline in the past still produces a firing timer (negative
 // duration is normalized to fire-immediately by time.NewTimer).
 func TestRealClock_NewTimerAt_PastDeadline_FiresImmediately(t *testing.T) {
-	clk := distlock.RealClockForTest()
+	clk := clock.Real()
 
 	deadline := time.Now().Add(testtime.DNeg1s)
 	timer := clk.NewTimerAt(deadline)

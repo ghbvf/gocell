@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/stretchr/testify/assert"
@@ -24,7 +25,7 @@ import (
 func TestBuildJWTDeps_VerifierEnforcesAudience(t *testing.T) {
 	t.Setenv("GOCELL_JWT_ISSUER", "gocell-test")
 	t.Setenv("GOCELL_JWT_AUDIENCE", "gocell")
-	deps, err := buildJWTDeps("") // dev mode: ephemeral key pair
+	deps, err := buildJWTDeps("", clock.Real()) // dev mode: ephemeral key pair
 	require.NoError(t, err)
 
 	t.Run("accepts_gocell_audience", func(t *testing.T) {
@@ -71,7 +72,7 @@ func TestBuildJWTDeps_VerifierEnforcesAudience(t *testing.T) {
 func TestBuildJWTDeps_VerifierAudience_MatchesIssuerDefault(t *testing.T) {
 	t.Setenv("GOCELL_JWT_ISSUER", "gocell-test")
 	t.Setenv("GOCELL_JWT_AUDIENCE", "gocell")
-	deps, err := buildJWTDeps("")
+	deps, err := buildJWTDeps("", clock.Real())
 	require.NoError(t, err)
 
 	// The audience configured via GOCELL_JWT_AUDIENCE is set as the issuer's default

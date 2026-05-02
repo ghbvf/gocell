@@ -9,6 +9,7 @@ import (
 
 	"github.com/golang-jwt/jwt/v5"
 
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
@@ -125,28 +126,22 @@ func WithExpectedIssuer(iss string) JWTVerifierOption {
 	return func(v *JWTVerifier) { v.expectedIssuer = iss }
 }
 
-// WithVerifierClock overrides the time source used for token expiry validation.
-// Delegates to golang-jwt/jwt v5's WithTimeFunc ParserOption.
-// A nil fn is ignored; the verifier uses time.Now by default.
-func WithVerifierClock(fn func() time.Time) JWTVerifierOption {
-	return func(v *JWTVerifier) {
-		if fn != nil {
-			v.parserOpts = append(v.parserOpts, jwt.WithTimeFunc(fn))
-		}
-	}
-}
-
 // NewJWTVerifier creates a JWTVerifier that validates tokens by looking up the
 // signing key from the VerificationKeyStore using the token's kid header.
+//
+// clk is required; pass clock.Real() at the composition root or
+// clockmock.New(...) in tests. Panics on nil or typed-nil clock.
 //
 // Rejects both plain-nil and typed-nil keys (e.g. var ks *KeySet = nil passed
 // through an interface variable): a typed-nil would panic on the first method
 // call downstream, so we fail fast at construction.
-func NewJWTVerifier(keys VerificationKeyStore, opts ...JWTVerifierOption) (*JWTVerifier, error) {
+func NewJWTVerifier(keys VerificationKeyStore, clk clock.Clock, opts ...JWTVerifierOption) (*JWTVerifier, error) {
+	clock.MustHaveClock(clk, "auth.NewJWTVerifier")
 	if isNilInterfaceValue(keys) {
 		return nil, errcode.New(errcode.ErrAuthKeyInvalid, "verification key store must not be nil")
 	}
 	v := &JWTVerifier{keys: keys}
+	v.parserOpts = append(v.parserOpts, jwt.WithTimeFunc(clk.Now))
 	for _, o := range opts {
 		o(v)
 	}
@@ -311,22 +306,12 @@ type JWTIssuer struct {
 	keys            SigningKeyProvider
 	issuer          string
 	ttl             time.Duration
-	now             func() time.Time
+	clk             clock.Clock
 	defaultAudience []string
 }
 
 // JWTIssuerOption configures a JWTIssuer.
 type JWTIssuerOption func(*JWTIssuer)
-
-// WithIssuerClock overrides the time source used for iat/exp claim generation.
-// A nil fn is ignored; the issuer uses time.Now by default.
-func WithIssuerClock(fn func() time.Time) JWTIssuerOption {
-	return func(i *JWTIssuer) {
-		if fn != nil {
-			i.now = fn
-		}
-	}
-}
 
 // WithIssuerAudiencesFromSlice sets the audience written into tokens when
 // IssueOptions.Audience is nil (fallback / default audience). The slice is
@@ -348,8 +333,12 @@ func WithIssuerAudiencesFromSlice(auds []string) JWTIssuerOption {
 
 // NewJWTIssuer creates a JWTIssuer using the active signing key from the provider.
 //
+// clk is required; pass clock.Real() at the composition root or
+// clockmock.New(...) in tests. Panics on nil or typed-nil clock.
+//
 // Rejects both plain-nil and typed-nil keys (see NewJWTVerifier).
-func NewJWTIssuer(keys SigningKeyProvider, issuer string, ttl time.Duration, opts ...JWTIssuerOption) (*JWTIssuer, error) {
+func NewJWTIssuer(keys SigningKeyProvider, issuer string, ttl time.Duration, clk clock.Clock, opts ...JWTIssuerOption) (*JWTIssuer, error) {
+	clock.MustHaveClock(clk, "auth.NewJWTIssuer")
 	if isNilInterfaceValue(keys) {
 		return nil, errcode.New(errcode.ErrAuthKeyInvalid, "signing key provider must not be nil")
 	}
@@ -357,7 +346,7 @@ func NewJWTIssuer(keys SigningKeyProvider, issuer string, ttl time.Duration, opt
 		keys:   keys,
 		issuer: issuer,
 		ttl:    ttl,
-		now:    time.Now,
+		clk:    clk,
 	}
 	for _, o := range opts {
 		o(i)
@@ -403,7 +392,7 @@ func (i *JWTIssuer) Issue(intent TokenIntent, subject string, opts IssueOptions)
 	if i.keys.SigningKey() == nil {
 		return "", errcode.New(errcode.ErrAuthKeyInvalid, "signing key is nil")
 	}
-	now := i.now()
+	now := i.clk.Now()
 	expiry := i.ttl
 	claims := jwt.MapClaims{
 		"sub":         subject,

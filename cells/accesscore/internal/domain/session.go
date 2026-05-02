@@ -7,6 +7,10 @@ import (
 	"github.com/ghbvf/gocell/pkg/validation"
 )
 
+// Note: Session methods that need a wall-clock value accept a now time.Time
+// parameter so callers supply the time via an injected clock.Clock rather than
+// calling time.Now() directly. This keeps the domain free of framework deps.
+
 // Session represents an authenticated user session with its access token and
 // expiry. Refresh tokens live in runtime/auth/refresh.Store (append-only
 // lineage per migration 012) and are not mirrored on Session.
@@ -21,8 +25,9 @@ type Session struct {
 }
 
 // NewSession creates a new session for the given user.
+// now is the wall-clock instant provided by the caller's clock.Clock.
 // Returns an errcode.Error if any required field is empty.
-func NewSession(userID, accessToken string, expiresAt time.Time) (*Session, error) {
+func NewSession(userID, accessToken string, expiresAt time.Time, now time.Time) (*Session, error) {
 	if err := validation.RequireNotBlank(errcode.ErrAuthSessionInvalidInput,
 		validation.F("userID", userID),
 		validation.F("accessToken", accessToken),
@@ -34,14 +39,14 @@ func NewSession(userID, accessToken string, expiresAt time.Time) (*Session, erro
 		UserID:      userID,
 		AccessToken: accessToken,
 		ExpiresAt:   expiresAt,
-		CreatedAt:   time.Now(),
+		CreatedAt:   now,
 		Version:     1,
 	}, nil
 }
 
-// Revoke marks the session as revoked at the current time.
-func (s *Session) Revoke() {
-	now := time.Now()
+// Revoke marks the session as revoked at the given time.
+// now is the wall-clock instant provided by the caller's clock.Clock.
+func (s *Session) Revoke(now time.Time) {
 	s.RevokedAt = &now
 }
 
@@ -51,6 +56,7 @@ func (s *Session) IsRevoked() bool {
 }
 
 // IsExpired returns true if the session's expiry time has passed.
-func (s *Session) IsExpired() bool {
-	return time.Now().After(s.ExpiresAt)
+// now is the wall-clock instant provided by the caller's clock.Clock.
+func (s *Session) IsExpired(now time.Time) bool {
+	return now.After(s.ExpiresAt)
 }

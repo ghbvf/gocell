@@ -6,7 +6,6 @@ import (
 	"context"
 	"log/slog"
 
-	"github.com/ghbvf/gocell/cells/configcore/internal/mem"
 	"github.com/ghbvf/gocell/cells/configcore/internal/ports"
 	"github.com/ghbvf/gocell/cells/configcore/slices/configpublish"
 	"github.com/ghbvf/gocell/cells/configcore/slices/configread"
@@ -15,6 +14,7 @@ import (
 	"github.com/ghbvf/gocell/cells/configcore/slices/featureflag"
 	"github.com/ghbvf/gocell/cells/configcore/slices/flagwrite"
 	"github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/persistence"
@@ -106,18 +106,22 @@ func WithCursorCodec(codec *query.CursorCodec) Option {
 
 // WithInMemoryDefaults configures in-memory repositories for development
 // and testing. Not suitable for production use.
+// Repository construction is deferred to Init() so that c.clk (set from
+// deps.Clock) is available when mem.NewConfigRepository/NewFlagRepository are called.
 func WithInMemoryDefaults() Option {
-	return func(c *ConfigCore) {
-		c.configRepo = mem.NewConfigRepository()
-		c.flagRepo = mem.NewFlagRepository()
-	}
+	return func(c *ConfigCore) { c.useInMemoryDefaults = true }
 }
 
 // ConfigCore is the configcore Cell implementation.
 type ConfigCore struct {
 	*cell.BaseCell
+	clk        clock.Clock
 	configRepo ports.ConfigRepository
 	flagRepo   ports.FlagRepository
+
+	// useInMemoryDefaults tracks whether WithInMemoryDefaults was applied so
+	// Init() can construct mem repos after c.clk is set from deps.Clock.
+	useInMemoryDefaults bool
 
 	// Outbox wiring (see WithEmitter / WithOutboxDeps godoc for the two
 	// mutually exclusive paths). Private by construction; no exported Option

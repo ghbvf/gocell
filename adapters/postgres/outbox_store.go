@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/ghbvf/gocell/kernel/clock"
 	kout "github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/runtime/outbox"
@@ -27,7 +28,8 @@ const maxObservabilityJSONBytes = 4 * kout.MaxObservabilityTotalSize
 // Consistency level: L2 (OutboxFact) — adapts the outbox state machine from
 // the relay layer into discrete, testable DB operations.
 type PGOutboxStore struct {
-	db relayDB // same interface used by OutboxRelay — Exec/Query/Begin
+	db    relayDB // same interface used by OutboxRelay — Exec/Query/Begin
+	clock clock.Clock
 }
 
 // Compile-time assertion.
@@ -36,8 +38,9 @@ var _ outbox.Store = (*PGOutboxStore)(nil)
 // NewOutboxStore constructs a Store backed by the supplied database handle.
 // The handle is typically a *pgxpool.Pool; it must support short-lived
 // transactions (Begin).
-func NewOutboxStore(db relayDB) *PGOutboxStore {
-	return &PGOutboxStore{db: db}
+func NewOutboxStore(db relayDB, clk clock.Clock) *PGOutboxStore {
+	clock.MustHaveClock(clk, "postgres.NewOutboxStore")
+	return &PGOutboxStore{db: db, clock: clk}
 }
 
 // ---------------------------------------------------------------------------
@@ -174,7 +177,7 @@ func (s *PGOutboxStore) MarkRetry(ctx context.Context, id string, attempts int, 
 	// This matches the writeBack approach: pass a duration interval string
 	// (pgx serializes time.Duration as int64 nanoseconds which PG cannot cast
 	// to interval directly — SQLSTATE 42846).
-	delay := max(time.Until(nextRetryAt), 0)
+	delay := max(s.clock.Until(nextRetryAt), 0)
 	delayInterval := fmt.Sprintf("%d microseconds", delay.Microseconds())
 
 	errMsg := sanitizeError(lastError, 1000)

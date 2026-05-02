@@ -6,11 +6,14 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/ctxkeys"
 	"github.com/ghbvf/gocell/pkg/logutil"
 )
 
-// AccessLog logs structured request/response information via slog.Info.
+// AccessLog returns an HTTP middleware that logs structured request/response
+// information via slog.Info. A clock must be provided; use clock.Real() at the
+// composition root.
 // Fields: method, path, route, status, duration_ms, listener, request_id,
 // correlation_id, trace_id, real_ip. The listener field is emitted only when
 // the router annotated the request with a non-empty physical listener name.
@@ -20,15 +23,23 @@ import (
 // When a RecorderState exists in the context (created by the Recorder
 // middleware), AccessLog reuses it. Otherwise it creates its own to
 // remain usable as a standalone middleware.
-func AccessLog(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		start := time.Now()
+func AccessLog(clk clock.Clock) func(http.Handler) http.Handler {
+	return accessLogWithClock(clk)
+}
 
-		state, rw := accessLogRecorder(w, r)
+// accessLogWithClock is the clock-injectable variant used by AccessLog and tests.
+func accessLogWithClock(clk clock.Clock) func(http.Handler) http.Handler {
+	clock.MustHaveClock(clk, "middleware.AccessLog")
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			start := clk.Now()
 
-		next.ServeHTTP(rw, r)
-		logAccessRequest(start, r, state)
-	})
+			state, rw := accessLogRecorder(w, r)
+
+			next.ServeHTTP(rw, r)
+			logAccessRequest(start, r, state, clk)
+		})
+	}
 }
 
 func accessLogRecorder(w http.ResponseWriter, r *http.Request) (*RecorderState, http.ResponseWriter) {
@@ -40,7 +51,7 @@ func accessLogRecorder(w http.ResponseWriter, r *http.Request) (*RecorderState, 
 	return state, wrapped
 }
 
-func logAccessRequest(start time.Time, r *http.Request, state *RecorderState) {
+func logAccessRequest(start time.Time, r *http.Request, state *RecorderState, clk clock.Clock) {
 	// Extract and sanitize request fields before logging to avoid taint flow
 	// from user-controlled request data into structured log calls.
 	method := logutil.Sanitize(r.Method)
@@ -48,12 +59,12 @@ func logAccessRequest(start time.Time, r *http.Request, state *RecorderState) {
 	route := RoutePatternFromCtx(r.Context())
 	ctx := r.Context()
 	safeObserve(slog.Default(), func() {
-		slog.Info("http request", accessLogAttrs(start, method, path, route, state, ctx)...)
+		slog.Info("http request", accessLogAttrs(start, method, path, route, state, ctx, clk)...)
 	})
 }
 
-func accessLogAttrs(start time.Time, method, path, route string, state *RecorderState, ctx context.Context) []any {
-	duration := time.Since(start)
+func accessLogAttrs(start time.Time, method, path, route string, state *RecorderState, ctx context.Context, clk clock.Clock) []any {
+	duration := clk.Since(start)
 	attrs := []any{
 		slog.String("method", method),
 		slog.String("path", path),

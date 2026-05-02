@@ -6,12 +6,13 @@ import (
 	"sync"
 	"time"
 
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
 type GCWorkerConfig struct {
 	Store     Store
-	Clock     Clock
+	Clock     clock.Clock
 	Interval  time.Duration
 	Retention time.Duration
 	Logger    *slog.Logger
@@ -20,7 +21,7 @@ type GCWorkerConfig struct {
 
 type GCWorker struct {
 	store     Store
-	clock     Clock
+	clock     clock.Clock
 	interval  time.Duration
 	retention time.Duration
 	logger    *slog.Logger
@@ -35,9 +36,7 @@ func NewGCWorker(cfg GCWorkerConfig) (*GCWorker, error) {
 	if cfg.Store == nil {
 		return nil, errcode.New(errcode.ErrCellInvalidConfig, "refresh gc: store is required")
 	}
-	if cfg.Clock == nil {
-		return nil, errcode.New(errcode.ErrCellInvalidConfig, "refresh gc: clock is required")
-	}
+	clock.MustHaveClock(cfg.Clock, "auth/refresh.NewGCWorker")
 	if cfg.Interval <= 0 {
 		return nil, errcode.New(errcode.ErrCellInvalidConfig, "refresh gc: interval must be positive")
 	}
@@ -98,23 +97,23 @@ func (w *GCWorker) loop(ctx context.Context, done chan<- struct{}) {
 	defer close(done)
 	w.runOnce(ctx)
 
-	ticker := time.NewTicker(w.interval)
+	ticker := w.clock.NewTicker(w.interval)
 	defer ticker.Stop()
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		case <-ticker.C:
+		case <-ticker.C():
 			w.runOnce(ctx)
 		}
 	}
 }
 
 func (w *GCWorker) runOnce(ctx context.Context) {
-	start := time.Now()
-	olderThan := w.clock.Now().Add(-w.retention)
+	start := w.clock.Now()
+	olderThan := start.Add(-w.retention)
 	removed, err := w.store.GC(ctx, olderThan)
-	duration := time.Since(start)
+	duration := w.clock.Since(start)
 	if err != nil {
 		w.logger.Error("refresh gc failed", slog.Any("error", err))
 		w.metrics.ObserveRefreshGC(ctx, "failure", 0, duration)

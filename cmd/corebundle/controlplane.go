@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/runtime/auth"
 )
@@ -51,7 +52,7 @@ func (g *internalGuard) NonceStore() auth.NonceStore { return g.nonceStore }
 // ref: Kubernetes kube-apiserver service-account verification — require key
 // material before installing an authentication guard.
 // ref: gorilla/securecookie — replay protection defaults on, not opt-in.
-func internalGuardFromEnv(adapterMode string, store auth.NonceStore) (*internalGuard, error) {
+func internalGuardFromEnv(adapterMode string, store auth.NonceStore, clk clock.Clock) (*internalGuard, error) {
 	secret := os.Getenv(auth.EnvServiceSecret)
 	if secret == "" {
 		return nil, errcode.New(errcode.ErrControlplaneServiceSecretMissing,
@@ -74,12 +75,12 @@ func internalGuardFromEnv(adapterMode string, store auth.NonceStore) (*internalG
 	}
 	if store == nil {
 		var err error
-		store, err = auth.NewInMemoryNonceStore(auth.ServiceTokenNonceTTL)
+		store, err = auth.NewInMemoryNonceStore(auth.ServiceTokenNonceTTL, clk)
 		if err != nil {
 			return nil, fmt.Errorf("build service token nonce store: %w", err)
 		}
 	}
-	mw := auth.ServiceTokenMiddleware(ring, auth.WithServiceTokenNonceStore(store))
+	mw := auth.ServiceTokenMiddleware(ring, clk, auth.WithServiceTokenNonceStore(store))
 	slog.Info("controlplane guard installed",
 		slog.String("nonce_store_kind", string(store.Kind())))
 	return &internalGuard{ring: ring, nonceStore: store, mw: mw}, nil

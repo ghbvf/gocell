@@ -20,6 +20,9 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/ghbvf/gocell/kernel/clock"
+	"github.com/ghbvf/gocell/kernel/clock/clockmock"
 )
 
 // decodeJWTHeader returns the decoded JOSE header map for a token.
@@ -68,7 +71,7 @@ func signRawIntentJWT(t *testing.T, ks *KeySet, tokenUse, typ string, aud []stri
 
 func TestJWTIssuer_IssueWithIntent_Access_EmbedsTokenUseClaimAndAtJWTHeader(t *testing.T) {
 	ks := mustTestKeySet(t)
-	issuer, err := NewJWTIssuer(ks, "gocell", time.Hour)
+	issuer, err := NewJWTIssuer(ks, "gocell", time.Hour, clock.Real())
 	require.NoError(t, err)
 
 	tokenStr, err := issuer.Issue(TokenIntentAccess, "user-1", IssueOptions{
@@ -87,7 +90,7 @@ func TestJWTIssuer_IssueWithIntent_Access_EmbedsTokenUseClaimAndAtJWTHeader(t *t
 
 func TestJWTIssuer_IssueWithIntent_RefreshRejected(t *testing.T) {
 	ks := mustTestKeySet(t)
-	issuer, err := NewJWTIssuer(ks, "gocell", time.Hour)
+	issuer, err := NewJWTIssuer(ks, "gocell", time.Hour, clock.Real())
 	require.NoError(t, err)
 
 	_, err = issuer.Issue(TokenIntent("refresh"), "user-1", IssueOptions{
@@ -100,7 +103,7 @@ func TestJWTIssuer_IssueWithIntent_RefreshRejected(t *testing.T) {
 
 func TestJWTIssuer_IssueWithIntent_InvalidIntent_Rejected(t *testing.T) {
 	ks := mustTestKeySet(t)
-	issuer, err := NewJWTIssuer(ks, "gocell", time.Hour)
+	issuer, err := NewJWTIssuer(ks, "gocell", time.Hour, clock.Real())
 	require.NoError(t, err)
 
 	_, err = issuer.Issue(TokenIntent("bogus"), "user-1", IssueOptions{})
@@ -110,9 +113,9 @@ func TestJWTIssuer_IssueWithIntent_InvalidIntent_Rejected(t *testing.T) {
 
 func TestJWTVerifier_VerifyIntent_PopulatesTokenUseOnClaims(t *testing.T) {
 	ks := mustTestKeySet(t)
-	issuer, err := NewJWTIssuer(ks, "gocell", time.Hour)
+	issuer, err := NewJWTIssuer(ks, "gocell", time.Hour, clock.Real())
 	require.NoError(t, err)
-	verifier, err := NewJWTVerifier(ks, WithExpectedAudiences("gocell"))
+	verifier, err := NewJWTVerifier(ks, clock.Real(), WithExpectedAudiences("gocell"))
 	require.NoError(t, err)
 
 	tokenStr, err := issuer.Issue(TokenIntentAccess, "user-1", IssueOptions{
@@ -127,9 +130,9 @@ func TestJWTVerifier_VerifyIntent_PopulatesTokenUseOnClaims(t *testing.T) {
 
 func TestJWTVerifier_VerifyIntent_AcceptsMatchingIntent(t *testing.T) {
 	ks := mustTestKeySet(t)
-	issuer, err := NewJWTIssuer(ks, "gocell", time.Hour)
+	issuer, err := NewJWTIssuer(ks, "gocell", time.Hour, clock.Real())
 	require.NoError(t, err)
-	verifier, err := NewJWTVerifier(ks, WithExpectedAudiences("gocell"))
+	verifier, err := NewJWTVerifier(ks, clock.Real(), WithExpectedAudiences("gocell"))
 	require.NoError(t, err)
 
 	access, err := issuer.Issue(TokenIntentAccess, "user-1", IssueOptions{
@@ -146,7 +149,7 @@ func TestJWTVerifier_VerifyIntent_AcceptsMatchingIntent(t *testing.T) {
 
 func TestJWTVerifier_VerifyIntent_RejectsLegacyRefreshJWTAtAccessPath(t *testing.T) {
 	ks := mustTestKeySet(t)
-	verifier, err := NewJWTVerifier(ks, WithExpectedAudiences("gocell"))
+	verifier, err := NewJWTVerifier(ks, clock.Real(), WithExpectedAudiences("gocell"))
 	require.NoError(t, err)
 
 	refresh := signRawIntentJWT(t, ks, "refresh", "refresh+jwt", []string{"gocell"})
@@ -158,9 +161,9 @@ func TestJWTVerifier_VerifyIntent_RejectsLegacyRefreshJWTAtAccessPath(t *testing
 
 func TestJWTVerifier_VerifyIntent_RejectsUnknownRefreshExpectedIntent(t *testing.T) {
 	ks := mustTestKeySet(t)
-	issuer, err := NewJWTIssuer(ks, "gocell", time.Hour)
+	issuer, err := NewJWTIssuer(ks, "gocell", time.Hour, clock.Real())
 	require.NoError(t, err)
-	verifier, err := NewJWTVerifier(ks, WithExpectedAudiences("gocell"))
+	verifier, err := NewJWTVerifier(ks, clock.Real(), WithExpectedAudiences("gocell"))
 	require.NoError(t, err)
 
 	access, err := issuer.Issue(TokenIntentAccess, "user-1", IssueOptions{})
@@ -173,9 +176,9 @@ func TestJWTVerifier_VerifyIntent_RejectsUnknownRefreshExpectedIntent(t *testing
 
 func TestJWTVerifier_VerifyIntent_RejectsMissingTokenUseClaim(t *testing.T) {
 	priv, pub := generateTestKeyPair(t)
-	ks, err := NewKeySet(priv, pub)
+	ks, err := NewKeySet(priv, pub, clock.Real())
 	require.NoError(t, err)
-	verifier, err := NewJWTVerifier(ks, WithExpectedAudiences("gocell"))
+	verifier, err := NewJWTVerifier(ks, clock.Real(), WithExpectedAudiences("gocell"))
 	require.NoError(t, err)
 
 	// Manually forge a legacy-style token: valid signature + kid but no token_use claim.
@@ -198,9 +201,9 @@ func TestJWTVerifier_VerifyIntent_RejectsMissingTokenUseClaim(t *testing.T) {
 
 func TestJWTVerifier_VerifyIntent_RejectsHeaderClaimMismatch(t *testing.T) {
 	priv, pub := generateTestKeyPair(t)
-	ks, err := NewKeySet(priv, pub)
+	ks, err := NewKeySet(priv, pub, clock.Real())
 	require.NoError(t, err)
-	verifier, err := NewJWTVerifier(ks, WithExpectedAudiences("gocell"))
+	verifier, err := NewJWTVerifier(ks, clock.Real(), WithExpectedAudiences("gocell"))
 	require.NoError(t, err)
 
 	// Forge a token where typ header says "at+jwt" but token_use claim says "refresh".
@@ -224,9 +227,9 @@ func TestJWTVerifier_VerifyIntent_RejectsHeaderClaimMismatch(t *testing.T) {
 
 func TestJWTVerifier_VerifyIntent_RejectsUnknownIntentArg(t *testing.T) {
 	ks := mustTestKeySet(t)
-	issuer, err := NewJWTIssuer(ks, "gocell", time.Hour)
+	issuer, err := NewJWTIssuer(ks, "gocell", time.Hour, clock.Real())
 	require.NoError(t, err)
-	verifier, err := NewJWTVerifier(ks, WithExpectedAudiences("gocell"))
+	verifier, err := NewJWTVerifier(ks, clock.Real(), WithExpectedAudiences("gocell"))
 	require.NoError(t, err)
 
 	tok, err := issuer.Issue(TokenIntentAccess, "user-1", IssueOptions{})
@@ -240,7 +243,7 @@ func TestJWTVerifier_VerifyIntent_RejectsUnknownIntentArg(t *testing.T) {
 func TestJWTIssuer_IssueWithIntent_AccessUsesConfiguredTTL(t *testing.T) {
 	ks := mustTestKeySet(t)
 	fixedNow := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
-	issuer, err := NewJWTIssuer(ks, "gocell", DefaultAccessTokenTTL, WithIssuerClock(func() time.Time { return fixedNow }))
+	issuer, err := NewJWTIssuer(ks, "gocell", DefaultAccessTokenTTL, clockmock.New(fixedNow))
 	require.NoError(t, err)
 
 	accessStr, err := issuer.Issue(TokenIntentAccess, "user-1", IssueOptions{})
@@ -259,9 +262,9 @@ func TestJWTIssuer_IssueWithIntent_AccessUsesConfiguredTTL(t *testing.T) {
 // carry a plausible token_use claim.
 func TestJWTVerifier_VerifyIntent_RejectsLegacyTypHeader(t *testing.T) {
 	priv, pub := generateTestKeyPair(t)
-	ks, err := NewKeySet(priv, pub)
+	ks, err := NewKeySet(priv, pub, clock.Real())
 	require.NoError(t, err)
-	verifier, err := NewJWTVerifier(ks, WithExpectedAudiences("gocell"))
+	verifier, err := NewJWTVerifier(ks, clock.Real(), WithExpectedAudiences("gocell"))
 	require.NoError(t, err)
 
 	// RFC 7519 legacy: typ="JWT" (upper-case) + token_use=access
@@ -288,9 +291,9 @@ func TestJWTVerifier_VerifyIntent_RejectsLegacyTypHeader(t *testing.T) {
 // without any typ header at all is rejected even when token_use claim is valid.
 func TestJWTVerifier_VerifyIntent_RejectsMissingTypHeader(t *testing.T) {
 	priv, pub := generateTestKeyPair(t)
-	ks, err := NewKeySet(priv, pub)
+	ks, err := NewKeySet(priv, pub, clock.Real())
 	require.NoError(t, err)
-	verifier, err := NewJWTVerifier(ks, WithExpectedAudiences("gocell"))
+	verifier, err := NewJWTVerifier(ks, clock.Real(), WithExpectedAudiences("gocell"))
 	require.NoError(t, err)
 
 	claims := jwt.MapClaims{
@@ -320,9 +323,9 @@ func TestJWTVerifier_VerifyIntent_RejectsMissingTypHeader(t *testing.T) {
 // which leads intentForJWTTyp to return ("", false).
 func TestJWTVerifier_VerifyIntent_RejectsNonStringTypHeader(t *testing.T) {
 	priv, pub := generateTestKeyPair(t)
-	ks, err := NewKeySet(priv, pub)
+	ks, err := NewKeySet(priv, pub, clock.Real())
 	require.NoError(t, err)
-	verifier, err := NewJWTVerifier(ks, WithExpectedAudiences("gocell"))
+	verifier, err := NewJWTVerifier(ks, clock.Real(), WithExpectedAudiences("gocell"))
 	require.NoError(t, err)
 
 	claims := jwt.MapClaims{

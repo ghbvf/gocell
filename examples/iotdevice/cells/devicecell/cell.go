@@ -18,6 +18,7 @@ import (
 	deviceregister "github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/slices/deviceregister"
 	devicestatus "github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/slices/devicestatus"
 	"github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/kernel/clock"
 	kcommand "github.com/ghbvf/gocell/kernel/command"
 	"github.com/ghbvf/gocell/kernel/command/commandtest"
 	"github.com/ghbvf/gocell/kernel/observability/metrics"
@@ -91,6 +92,7 @@ type DeviceCell struct {
 	metricsProvider metrics.Provider
 	commandQueue    commandQueueStore
 	commandSweeper  *commandruntime.SweeperLifecycle
+	clk             clock.Clock // injected from deps.Clock during Init
 
 	registerHandler *deviceregister.Handler
 	commandHandler  *devicecommand.Handler
@@ -157,7 +159,7 @@ func (c *DeviceCell) buildEmitter() (*outbox.DirectEmitter, error) {
 	if mp == nil {
 		mp = metrics.NopProvider{}
 	}
-	return outbox.NewDirectEmitter(c.publisher, outbox.DirectPublishFailOpen, mp, "devicecell", outbox.WithLogger(c.logger))
+	return outbox.NewDirectEmitter(c.publisher, outbox.DirectPublishFailOpen, mp, c.clk, "devicecell", outbox.WithLogger(c.logger))
 }
 
 // Init sets up repositories, slice services, and handlers.
@@ -167,6 +169,9 @@ func (c *DeviceCell) Init(ctx context.Context, deps cell.Dependencies) error {
 	if err := c.BaseCell.Init(ctx, deps); err != nil {
 		return err
 	}
+
+	clock.MustHaveClock(deps.Clock, "devicecell.Init: deps.Clock required (assembly must inject clock)")
+	c.clk = deps.Clock
 
 	// Default to in-memory device repository if none injected.
 	if c.deviceRepo == nil {
@@ -194,7 +199,10 @@ func (c *DeviceCell) Init(ctx context.Context, deps cell.Dependencies) error {
 	c.emitter = builtEmitter
 
 	// device-register slice
-	registerSvc := deviceregister.NewService(c.deviceRepo, c.logger, deviceregister.WithEmitter(builtEmitter))
+	registerSvc := deviceregister.NewService(c.deviceRepo, c.logger,
+		deviceregister.WithEmitter(builtEmitter),
+		deviceregister.WithClock(c.clk),
+	)
 	c.registerHandler = deviceregister.NewHandler(registerSvc)
 	c.AddSlice(cell.NewBaseSlice("deviceregister", "devicecell", cell.L4))
 
@@ -231,7 +239,9 @@ func (c *DeviceCell) Init(ctx context.Context, deps cell.Dependencies) error {
 	}
 	cmdQueue := c.commandQueue
 	commandSvc, err := devicecommand.NewService(cmdQueue, c.deviceRepo, c.cursorCodec, c.logger,
-		query.RunModeForDemo(deps.DurabilityMode == cell.DurabilityDemo))
+		query.RunModeForDemo(deps.DurabilityMode == cell.DurabilityDemo),
+		devicecommand.WithClock(c.clk),
+	)
 	if err != nil {
 		return fmt.Errorf("device-command: %w", err)
 	}

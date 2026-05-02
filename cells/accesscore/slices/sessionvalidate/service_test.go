@@ -12,20 +12,21 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/ghbvf/gocell/cells/accesscore/internal/domain"
-	"github.com/ghbvf/gocell/cells/accesscore/internal/mem"
+	"github.com/ghbvf/gocell/cells/accesscore/internal/testutil"
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/testutil/sloghelper"
 	"github.com/ghbvf/gocell/runtime/auth"
 )
 
 var (
-	testKeySet, testPrivKey, _ = auth.MustNewTestKeySet()
+	testKeySet, testPrivKey, _ = auth.MustNewTestKeySet(clock.Real())
 	testVerifier               *auth.JWTVerifier
 )
 
 func init() {
 	var err error
-	testVerifier, err = auth.NewJWTVerifier(testKeySet, auth.WithExpectedAudiences("gocell"))
+	testVerifier, err = auth.NewJWTVerifier(testKeySet, clock.Real(), auth.WithExpectedAudiences("gocell"))
 	if err != nil {
 		panic("test setup: " + err.Error())
 	}
@@ -35,7 +36,7 @@ func init() {
 const dNeg2h = -2 * time.Hour
 
 func TestService_VerifyIntent(t *testing.T) {
-	sessionRepo := mem.NewSessionRepository()
+	sessionRepo := testutil.RealSessionRepo(t)
 
 	// Seed an active session for revocation tests.
 	activeSession := &domain.Session{
@@ -55,7 +56,7 @@ func TestService_VerifyIntent(t *testing.T) {
 		ExpiresAt:   time.Now().Add(time.Hour),
 		CreatedAt:   time.Now(),
 	}
-	revokedSession.Revoke()
+	revokedSession.Revoke(time.Now())
 	require.NoError(t, sessionRepo.Create(context.Background(), revokedSession))
 
 	// Seed an expired session.
@@ -147,7 +148,7 @@ func TestService_VerifyIntent(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			svc := NewService(testVerifier, sessionRepo, slog.Default())
+			svc := NewService(testVerifier, sessionRepo, slog.Default(), clock.Real())
 
 			claims, err := svc.VerifyIntent(context.Background(), tt.token(), auth.TokenIntentAccess)
 			if tt.wantErr {
@@ -166,7 +167,7 @@ func TestService_VerifyIntent(t *testing.T) {
 
 func TestService_VerifyIntent_NilSessionRepo(t *testing.T) {
 	// When sessionRepo is nil (backward compatibility), sid claim is ignored.
-	svc := NewService(testVerifier, nil, slog.Default())
+	svc := NewService(testVerifier, nil, slog.Default(), clock.Real())
 
 	tok, err := IssueTestToken(testPrivKey, "usr-1", nil, time.Hour, "sess-any")
 	require.NoError(t, err)
@@ -192,7 +193,7 @@ func (errorSessionRepo) RevokeByIDAndOwner(_ context.Context, _, _ string) error
 
 func TestService_VerifyIntent_DBError_FailsClosed(t *testing.T) {
 	// Infrastructure errors (not just "not found") must also fail-closed.
-	svc := NewService(testVerifier, errorSessionRepo{}, slog.Default())
+	svc := NewService(testVerifier, errorSessionRepo{}, slog.Default(), clock.Real())
 
 	tok, err := IssueTestToken(testPrivKey, "usr-1", nil, time.Hour, "sess-db-fail")
 	require.NoError(t, err)
@@ -204,7 +205,7 @@ func TestService_VerifyIntent_DBError_FailsClosed(t *testing.T) {
 
 func TestService_VerifyIntent_NilSessionRepo_NoSid(t *testing.T) {
 	// When sessionRepo is nil (demo mode), tokens without sid are accepted.
-	svc := NewService(testVerifier, nil, slog.Default())
+	svc := NewService(testVerifier, nil, slog.Default(), clock.Real())
 
 	tok, err := IssueTestToken(testPrivKey, "usr-1", nil, time.Hour)
 	require.NoError(t, err)
@@ -270,7 +271,7 @@ func TestLogSessionLookupError_LogLevel(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			var buf bytes.Buffer
 			logger := slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
-			svc := NewService(testVerifier, capturingRepo{getByIDErr: tt.repoErr}, logger)
+			svc := NewService(testVerifier, capturingRepo{getByIDErr: tt.repoErr}, logger, clock.Real())
 
 			tok, err := IssueTestToken(testPrivKey, "usr-log", nil, time.Hour, "sess-log-test")
 			require.NoError(t, err)

@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/metadata"
 )
 
@@ -274,7 +275,7 @@ func TestCheckContractHealth(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			v := NewValidator(&metadata.ProjectMeta{
 				Contracts: map[string]*metadata.ContractMeta{},
-			}, "")
+			}, "", clock.Real())
 			issues := v.CheckContractHealth(tt.contracts)
 			assertContractHealthIssues(t, issues, tt.wantErr, tt.wantMsg)
 		})
@@ -323,7 +324,7 @@ schemaRefs:
 	}
 	require.NotEmpty(t, contracts, "parser must find the contract.yaml")
 
-	v := NewValidator(project, dir)
+	v := NewValidator(project, dir, clock.Real())
 	results := v.CheckContractHealth(contracts)
 	require.NotEmpty(t, results, "empty ownerCell must produce findings")
 
@@ -377,7 +378,7 @@ schemaRefs:
 		contracts = append(contracts, c)
 	}
 
-	v := NewValidator(project, dir)
+	v := NewValidator(project, dir, clock.Real())
 	results := v.CheckContractHealth(contracts)
 	require.NotEmpty(t, results, "responses[401] missing schemaRef must produce a CH-03 finding")
 

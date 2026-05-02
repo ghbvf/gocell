@@ -20,6 +20,7 @@ import (
 	"github.com/ghbvf/gocell/cells/configcore/internal/mem"
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/cell/celltest"
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/runtime/auth"
 )
@@ -55,8 +56,8 @@ func withAdmin(req *http.Request) *http.Request {
 const configPrefix = "/api/v1/config"
 
 func setupHandler() (http.Handler, *mem.ConfigRepository) {
-	repo := mem.NewConfigRepository()
-	svc := NewService(repo, slog.Default())
+	repo := mem.NewConfigRepository(clock.Real())
+	svc := NewService(repo, slog.Default(), clock.Real())
 	h := NewHandler(svc)
 	mux := celltest.NewTestMux()
 	mux.Route(configPrefix, func(sub cell.RouteMux) {
@@ -280,9 +281,9 @@ func TestHandler_HandleUpdate_SensitiveRedacted(t *testing.T) {
 // field at all. Metadata-only model eliminates redaction entirely by not
 // including the value in the event. Subscribers must refetch via GET /api/v1/config/{key}.
 func TestService_Create_SensitiveEventPayloadMetadataOnly(t *testing.T) {
-	repo := mem.NewConfigRepository()
+	repo := mem.NewConfigRepository(clock.Real())
 	ow := &stubOutboxWriter{}
-	svc := NewService(repo, slog.Default(), WithEmitter(testoutbox.MustEmitter(t, ow)))
+	svc := NewService(repo, slog.Default(), clock.Real(), WithEmitter(testoutbox.MustEmitter(t, ow)))
 
 	_, err := svc.Create(auth.TestContext("test-admin", []string{"admin"}), CreateInput{
 		Key: "db.password", Value: "s3cret!", Sensitive: true,
@@ -301,9 +302,9 @@ func TestService_Create_SensitiveEventPayloadMetadataOnly(t *testing.T) {
 // --- outbox/tx service tests ---
 
 func TestService_WithEmitter(t *testing.T) {
-	repo := mem.NewConfigRepository()
+	repo := mem.NewConfigRepository(clock.Real())
 	ow := &stubOutboxWriter{}
-	svc := NewService(repo, slog.Default(), WithEmitter(testoutbox.MustEmitter(t, ow)))
+	svc := NewService(repo, slog.Default(), clock.Real(), WithEmitter(testoutbox.MustEmitter(t, ow)))
 
 	_, err := svc.Create(auth.TestContext("test-admin", []string{"admin"}), CreateInput{Key: "k1", Value: "v1"})
 	require.NoError(t, err)
@@ -313,9 +314,9 @@ func TestService_WithEmitter(t *testing.T) {
 }
 
 func TestService_WithTxManager(t *testing.T) {
-	repo := mem.NewConfigRepository()
+	repo := mem.NewConfigRepository(clock.Real())
 	tx := &stubTxRunner{}
-	svc := NewService(repo, slog.Default(), WithTxManager(tx))
+	svc := NewService(repo, slog.Default(), clock.Real(), WithTxManager(tx))
 
 	_, err := svc.Create(auth.TestContext("test-admin", []string{"admin"}), CreateInput{Key: "k1", Value: "v1"})
 	require.NoError(t, err)
@@ -324,10 +325,10 @@ func TestService_WithTxManager(t *testing.T) {
 }
 
 func TestService_WithOutboxAndTx(t *testing.T) {
-	repo := mem.NewConfigRepository()
+	repo := mem.NewConfigRepository(clock.Real())
 	ow := &stubOutboxWriter{}
 	tx := &stubTxRunner{}
-	svc := NewService(repo, slog.Default(),
+	svc := NewService(repo, slog.Default(), clock.Real(),
 		WithEmitter(testoutbox.MustEmitter(t, ow)), WithTxManager(tx))
 
 	// Create

@@ -25,6 +25,7 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/assembly"
 	"github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/kernel/clock"
 	kernelmetrics "github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/ctxkeys"
@@ -85,23 +86,6 @@ type testListeners struct {
 	primary  net.Listener
 	internal net.Listener
 	health   net.Listener
-}
-
-// newTestListeners creates three pre-bound listeners and returns bootstrap.Option
-// values wiring them to PrimaryListener, InternalListener, HealthListener.
-func newTestListeners(t *testing.T) (testListeners, []Option) {
-	t.Helper()
-	tl := testListeners{
-		primary:  newLocalListener(t),
-		internal: newLocalListener(t),
-		health:   newLocalListener(t),
-	}
-	opts := []Option{
-		WithListener(cell.PrimaryListener, tl.primary.Addr().String(), []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(tl.primary)),
-		WithListener(cell.InternalListener, tl.internal.Addr().String(), []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(tl.internal)),
-		WithListener(cell.HealthListener, tl.health.Addr().String(), []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(tl.health)),
-	}
-	return tl, opts
 }
 
 // waitForHealthy polls /healthz on the health listener until it returns 200.
@@ -174,7 +158,7 @@ func newTestCell(id string) *testCell {
 }
 
 func TestNew_Defaults(t *testing.T) {
-	b := New()
+	b := New(WithClock(clock.Real()))
 	// PR-A14b: no default listeners; callers must declare via WithListener.
 	assert.Nil(t, b.listenerConfigs)
 	assert.Nil(t, b.assemblyCore)
@@ -190,10 +174,11 @@ func TestNew_Defaults(t *testing.T) {
 }
 
 func TestNew_WithOptions(t *testing.T) {
-	asm := assembly.New(assembly.Config{ID: "test", DurabilityMode: cell.DurabilityDemo})
-	eb := eventbus.New()
+	asm := assembly.New(assembly.Config{ID: "test", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
+	eb := eventbus.New(eventbus.WithClock(clock.Real()))
 
 	b := New(
+		WithClock(clock.Real()),
 		WithAssembly(asm),
 		WithPublisher(eb), WithSubscriber(eb),
 		WithListener(cell.PrimaryListener, ":7070", []cell.ListenerAuth{cell.AuthNone{}}),
@@ -219,7 +204,7 @@ func TestNew_WithOptions(t *testing.T) {
 // and TestAutoWire_CellLabel_* (metrics_wiring_test.go).
 func TestNew_WithMetricsProvider(t *testing.T) {
 	custom := struct{ kernelmetrics.NopProvider }{}
-	b := New(WithMetricsProvider(custom))
+	b := New(WithClock(clock.Real()), WithMetricsProvider(custom))
 	assert.Equal(t, custom, b.MetricsProvider(),
 		"MetricsProvider() must return the provider injected via WithMetricsProvider")
 }
@@ -246,7 +231,7 @@ func optionOriginName(opt router.Option) string {
 
 func TestNew_WithTracer(t *testing.T) {
 	tracer := tracing.NewTracer("bootstrap-test")
-	b := New(WithTracer(tracer))
+	b := New(WithClock(clock.Real()), WithTracer(tracer))
 	// WithTracer forwards two router options: router.WithTracer (the tracer
 	// itself) and router.WithTracingOptions(WithProbeFilter(DefaultProbeFilter))
 	// so /healthz, /readyz, /metrics skip span creation on the per-listener
@@ -277,10 +262,11 @@ func TestNew_WithTracer(t *testing.T) {
 func TestBootstrap_InvalidTrustedProxies_ReturnsError(t *testing.T) {
 	// Invalid trusted proxies must return error (not panic), allowing
 	// Bootstrap.Run to roll back already-started components.
-	asm := assembly.New(assembly.Config{ID: "test-proxy-err", DurabilityMode: cell.DurabilityDemo})
+	asm := assembly.New(assembly.Config{ID: "test-proxy-err", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
 	require.NoError(t, asm.Register(newTestCell("cell-1")))
 
 	b := New(
+		WithClock(clock.Real()),
 		WithAssembly(asm),
 		WithListener(cell.PrimaryListener, "127.0.0.1:0", []cell.ListenerAuth{cell.AuthNone{}}),
 		WithRouterOptions(router.WithTrustedProxies([]string{"not-valid"})),
@@ -305,7 +291,7 @@ func TestBootstrap_InvalidTrustedProxies_ReturnsError(t *testing.T) {
 }
 
 func TestNew_WithConfig(t *testing.T) {
-	b := New(WithConfig("/nonexistent.yaml", "APP"))
+	b := New(WithClock(clock.Real()), WithConfig("/nonexistent.yaml", "APP"))
 	assert.Equal(t, "/nonexistent.yaml", b.configPath)
 	assert.Equal(t, "APP", b.envPrefix)
 	// Te-8: configWatcherFactory must remain non-nil after WithConfig (New sets the default).
@@ -314,6 +300,7 @@ func TestNew_WithConfig(t *testing.T) {
 
 func TestBootstrap_RunWithInvalidConfig(t *testing.T) {
 	b := New(
+		WithClock(clock.Real()),
 		WithConfig("/nonexistent/config.yaml", "APP"),
 		WithListener(cell.PrimaryListener, "127.0.0.1:0", []cell.ListenerAuth{cell.AuthNone{}}),
 	)
@@ -327,7 +314,7 @@ func TestBootstrap_RunWithInvalidConfig(t *testing.T) {
 
 func TestBootstrap_AssemblyStartWithConfig(t *testing.T) {
 	// Test that StartWithConfig works correctly with the assembly.
-	asm := assembly.New(assembly.Config{ID: "test", DurabilityMode: cell.DurabilityDemo})
+	asm := assembly.New(assembly.Config{ID: "test", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
 	tc := newTestCell("cell-1")
 	require.NoError(t, asm.Register(tc))
 
@@ -343,7 +330,7 @@ func TestBootstrap_AssemblyStartWithConfig(t *testing.T) {
 }
 
 func TestBootstrap_CellIDs(t *testing.T) {
-	asm := assembly.New(assembly.Config{ID: "test", DurabilityMode: cell.DurabilityDemo})
+	asm := assembly.New(assembly.Config{ID: "test", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
 	require.NoError(t, asm.Register(newTestCell("a")))
 	require.NoError(t, asm.Register(newTestCell("b")))
 
@@ -352,7 +339,7 @@ func TestBootstrap_CellIDs(t *testing.T) {
 }
 
 func TestBootstrap_CellLookup(t *testing.T) {
-	asm := assembly.New(assembly.Config{ID: "test", DurabilityMode: cell.DurabilityDemo})
+	asm := assembly.New(assembly.Config{ID: "test", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
 	tc := newTestCell("lookup")
 	require.NoError(t, asm.Register(tc))
 
@@ -361,9 +348,10 @@ func TestBootstrap_CellLookup(t *testing.T) {
 }
 
 func TestNew_WithPublisherAndSubscriber(t *testing.T) {
-	eb := eventbus.New()
+	eb := eventbus.New(eventbus.WithClock(clock.Real()))
 
 	b := New(
+		WithClock(clock.Real()),
 		WithPublisher(eb),
 		WithSubscriber(eb),
 	)
@@ -373,18 +361,18 @@ func TestNew_WithPublisherAndSubscriber(t *testing.T) {
 }
 
 func TestNew_WithPublisherOnly(t *testing.T) {
-	eb := eventbus.New()
+	eb := eventbus.New(eventbus.WithClock(clock.Real()))
 
-	b := New(WithPublisher(eb))
+	b := New(WithClock(clock.Real()), WithPublisher(eb))
 
 	assert.Equal(t, eb, b.publisher)
 	assert.Nil(t, b.subscriber)
 }
 
 func TestNew_WithSubscriberOnly(t *testing.T) {
-	eb := eventbus.New()
+	eb := eventbus.New(eventbus.WithClock(clock.Real()))
 
-	b := New(WithSubscriber(eb))
+	b := New(WithClock(clock.Real()), WithSubscriber(eb))
 
 	assert.Nil(t, b.publisher)
 	assert.Equal(t, eb, b.subscriber)
@@ -468,17 +456,25 @@ func (c *eventCell) RegisterSubscriptions(r cell.EventRouter) error {
 func TestBootstrap_MissingSubscriber_WithEventRegistrar_Fails(t *testing.T) {
 	// When a cell implements EventRegistrar but no subscriber is configured,
 	// bootstrap must fail at startup instead of silently skipping all subscriptions.
-	asm := assembly.New(assembly.Config{ID: "test-no-sub", DurabilityMode: cell.DurabilityDemo})
+	asm := assembly.New(assembly.Config{ID: "test-no-sub", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
 	ec := newEventCell("needs-sub", nil) // registers a handler
 	require.NoError(t, asm.Register(ec))
 
-	eb := eventbus.New()
-	_, lnOpts := newTestListeners(t)
-	b := New(append([]Option{
+	eb := eventbus.New(eventbus.WithClock(clock.Real()))
+	tl := testListeners{
+		primary:  newLocalListener(t),
+		internal: newLocalListener(t),
+		health:   newLocalListener(t),
+	}
+	b := New(
+		WithClock(clock.Real()),
 		WithAssembly(asm),
 		WithPublisher(eb),
 		// WithSubscriber intentionally omitted.
-	}, lnOpts...)...)
+		WithListener(cell.PrimaryListener, tl.primary.Addr().String(), []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(tl.primary)),
+		WithListener(cell.InternalListener, tl.internal.Addr().String(), []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(tl.internal)),
+		WithListener(cell.HealthListener, tl.health.Addr().String(), []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(tl.health)),
+	)
 
 	err := b.Run(context.Background())
 	require.Error(t, err)
@@ -489,12 +485,13 @@ func TestBootstrap_MissingSubscriber_WithEventRegistrar_Fails(t *testing.T) {
 func TestBootstrap_SubscriptionFailure_TriggersRollback(t *testing.T) {
 	// S3-03: When RegisterSubscriptions fails, Run must rollback previously
 	// started components (assembly) and return an error wrapping the cause.
-	asm := assembly.New(assembly.Config{ID: "test-rollback", DurabilityMode: cell.DurabilityDemo})
+	asm := assembly.New(assembly.Config{ID: "test-rollback", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
 	ec := newEventCell("fail-cell", errors.New("DLX not configured"))
 	require.NoError(t, asm.Register(ec))
 
-	eb := eventbus.New()
+	eb := eventbus.New(eventbus.WithClock(clock.Real()))
 	b := New(
+		WithClock(clock.Real()),
 		WithAssembly(asm),
 		WithPublisher(eb), WithSubscriber(eb),
 		WithListener(cell.PrimaryListener, "127.0.0.1:0", []cell.ListenerAuth{cell.AuthNone{}}),
@@ -516,12 +513,13 @@ func TestBootstrap_EventRouter_HappyPath(t *testing.T) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
 
-	asm := assembly.New(assembly.Config{ID: "test-router-ok", DurabilityMode: cell.DurabilityDemo})
+	asm := assembly.New(assembly.Config{ID: "test-router-ok", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
 	ec := newEventCell("ok-cell", nil) // nil error → registers 1 handler
 	require.NoError(t, asm.Register(ec))
 
-	eb := eventbus.New()
+	eb := eventbus.New(eventbus.WithClock(clock.Real()))
 	b := New(
+		WithClock(clock.Real()),
 		WithAssembly(asm),
 		WithSubscriber(eb),
 		WithPublisher(eb),
@@ -558,7 +556,7 @@ func TestBootstrap_EventSubscriptions_RestoreObservabilityContext(t *testing.T) 
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
 
-	asm := assembly.New(assembly.Config{ID: "test-router-context", DurabilityMode: cell.DurabilityDemo})
+	asm := assembly.New(assembly.Config{ID: "test-router-context", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
 	got := make(chan map[string]string, 1)
 	require.NoError(t, asm.Register(newContextCaptureCell("capture-cell", got)))
 
@@ -576,6 +574,7 @@ func TestBootstrap_EventSubscriptions_RestoreObservabilityContext(t *testing.T) 
 	}}
 
 	b := New(
+		WithClock(clock.Real()),
 		WithAssembly(asm),
 		WithSubscriber(sub),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(ln)),
@@ -622,6 +621,7 @@ func TestBootstrap_RunContextCancel(t *testing.T) {
 	cancel() // Cancel immediately.
 
 	b := New(
+		WithClock(clock.Real()),
 		WithListener(cell.PrimaryListener, "127.0.0.1:0", []cell.ListenerAuth{cell.AuthNone{}}),
 		WithShutdownTimeout(testtime.D1s),
 	)
@@ -637,7 +637,7 @@ func TestBootstrap_DoubleRun_ReturnsError(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // cancel immediately so first Run exits quickly
 
-	b := New(WithListener(cell.PrimaryListener, "127.0.0.1:0", []cell.ListenerAuth{cell.AuthNone{}}))
+	b := New(WithClock(clock.Real()), WithListener(cell.PrimaryListener, "127.0.0.1:0", []cell.ListenerAuth{cell.AuthNone{}}))
 	_ = b.Run(ctx) // first call — may error due to canceled ctx or sandbox
 
 	err := b.Run(ctx) // second call — must be rejected
@@ -649,10 +649,11 @@ func TestBootstrap_WithHealthChecker_Healthy(t *testing.T) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
 
-	asm := assembly.New(assembly.Config{ID: "test-hc-healthy", DurabilityMode: cell.DurabilityDemo})
+	asm := assembly.New(assembly.Config{ID: "test-hc-healthy", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
 	require.NoError(t, asm.Register(newTestCell("cell-1")))
 
 	b := New(
+		WithClock(clock.Real()),
 		WithAssembly(asm),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(ln)),
 		WithListener(cell.InternalListener, "127.0.0.1:0", []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(newLocalListener(t))),
@@ -704,10 +705,11 @@ func TestBootstrap_WithHealthChecker_Unhealthy(t *testing.T) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
 
-	asm := assembly.New(assembly.Config{ID: "test-hc-unhealthy", DurabilityMode: cell.DurabilityDemo})
+	asm := assembly.New(assembly.Config{ID: "test-hc-unhealthy", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
 	require.NoError(t, asm.Register(newTestCell("cell-1")))
 
 	b := New(
+		WithClock(clock.Real()),
 		WithAssembly(asm),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(ln)),
 		WithListener(cell.InternalListener, "127.0.0.1:0", []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(newLocalListener(t))),
@@ -761,10 +763,11 @@ func TestBootstrap_WithAdapterInfo_AppearsInReadyz(t *testing.T) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
 
-	asm := assembly.New(assembly.Config{ID: "test-adapter-info", DurabilityMode: cell.DurabilityDemo})
+	asm := assembly.New(assembly.Config{ID: "test-adapter-info", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
 	require.NoError(t, asm.Register(newTestCell("cell-1")))
 
 	b := New(
+		WithClock(clock.Real()),
 		WithAssembly(asm),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(ln)),
 		WithListener(cell.InternalListener, "127.0.0.1:0", []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(newLocalListener(t))),
@@ -835,13 +838,14 @@ func TestBootstrap_HealthContributor_Discovery_AppearsInReadyz(t *testing.T) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
 
-	asm := assembly.New(assembly.Config{ID: "test-hc-contrib", DurabilityMode: cell.DurabilityDemo})
+	asm := assembly.New(assembly.Config{ID: "test-hc-contrib", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
 	hcc := newHealthContribCell("accesscore", map[string]func(context.Context) error{
 		"session-store": func(_ context.Context) error { return nil },
 	})
 	require.NoError(t, asm.Register(hcc))
 
 	b := New(
+		WithClock(clock.Real()),
 		WithAssembly(asm),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(ln)),
 		WithListener(cell.InternalListener, "127.0.0.1:0", []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(newLocalListener(t))),
@@ -891,7 +895,7 @@ func TestBootstrap_HealthContributor_DuplicateName_FailsFast(t *testing.T) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
 
-	asm := assembly.New(assembly.Config{ID: "test-hc-dup", DurabilityMode: cell.DurabilityDemo})
+	asm := assembly.New(assembly.Config{ID: "test-hc-dup", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
 	// Two cells both return "session-store" probe — should conflict.
 	require.NoError(t, asm.Register(newHealthContribCell("cell-a", map[string]func(context.Context) error{
 		"session-store": func(_ context.Context) error { return nil },
@@ -901,6 +905,7 @@ func TestBootstrap_HealthContributor_DuplicateName_FailsFast(t *testing.T) {
 	})))
 
 	b := New(
+		WithClock(clock.Real()),
 		WithAssembly(asm),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(ln)),
 		WithListener(cell.InternalListener, "127.0.0.1:0", []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(newLocalListener(t))),
@@ -917,6 +922,7 @@ func TestBootstrap_HealthContributor_DuplicateName_FailsFast(t *testing.T) {
 
 func TestWithHealthChecker_EmptyName_ReturnsError(t *testing.T) {
 	b := New(
+		WithClock(clock.Real()),
 		WithHealthChecker("", func(_ context.Context) error { return nil }),
 	)
 	err := b.Run(context.Background())
@@ -935,6 +941,7 @@ func TestWithHealthChecker_ValidationBeforeSideEffects(t *testing.T) {
 	defer slog.SetDefault(oldDefault)
 
 	b := New(
+		WithClock(clock.Real()),
 		WithHealthChecker("", func(_ context.Context) error { return nil }),
 		WithConfig("/nonexistent/config.yaml", "TEST"), // would fail if reached
 	)
@@ -947,6 +954,7 @@ func TestWithHealthChecker_ValidationBeforeSideEffects(t *testing.T) {
 
 func TestWithHealthChecker_NilFunc_ReturnsError(t *testing.T) {
 	b := New(
+		WithClock(clock.Real()),
 		WithHealthChecker("mycheck", nil),
 	)
 	err := b.Run(context.Background())
@@ -964,7 +972,7 @@ func (m *mockAllowerForBootstrap) Allow() (bool, func(error)) {
 func TestWithCircuitBreaker_NilInterface_Error(t *testing.T) {
 	// A bare nil interface must cause Run() to fail-fast with a descriptive
 	// error rather than silently leaving the service without CB protection.
-	b := New(WithCircuitBreaker(nil))
+	b := New(WithClock(clock.Real()), WithCircuitBreaker(nil))
 	err := b.Run(context.Background())
 	require.Error(t, err, "nil interface Allower must return error from Run")
 	assert.Contains(t, err.Error(), "circuit breaker")
@@ -975,7 +983,7 @@ func TestWithCircuitBreaker_TypedNilPointer_Error(t *testing.T) {
 	// but a nil underlying pointer. Calling Allow() on it would panic at runtime.
 	// Bootstrap must detect and reject it just like a bare nil.
 	var cb *mockAllowerForBootstrap // typed nil
-	b := New(WithCircuitBreaker(cb))
+	b := New(WithClock(clock.Real()), WithCircuitBreaker(cb))
 	err := b.Run(context.Background())
 	require.Error(t, err, "typed-nil Allower must return error from Run")
 	assert.Contains(t, err.Error(), "circuit breaker")
@@ -985,10 +993,11 @@ func TestBootstrap_WithMultipleHealthCheckers_OneUnhealthy(t *testing.T) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
 
-	asm := assembly.New(assembly.Config{ID: "test-multi-hc", DurabilityMode: cell.DurabilityDemo})
+	asm := assembly.New(assembly.Config{ID: "test-multi-hc", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
 	require.NoError(t, asm.Register(newTestCell("cell-1")))
 
 	b := New(
+		WithClock(clock.Real()),
 		WithAssembly(asm),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(ln)),
 		WithListener(cell.InternalListener, "127.0.0.1:0", []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(newLocalListener(t))),
@@ -1045,13 +1054,14 @@ func TestBootstrap_WithHealthChecker_DynamicStateTransition(t *testing.T) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
 
-	asm := assembly.New(assembly.Config{ID: "test-dynamic-hc", DurabilityMode: cell.DurabilityDemo})
+	asm := assembly.New(assembly.Config{ID: "test-dynamic-hc", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
 	require.NoError(t, asm.Register(newTestCell("cell-1")))
 
 	// Atomic flag to simulate connection health transitions at runtime.
 	var unhealthy atomic.Bool
 
 	b := New(
+		WithClock(clock.Real()),
 		WithAssembly(asm),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(ln)),
 		WithListener(cell.InternalListener, "127.0.0.1:0", []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(newLocalListener(t))),
@@ -1118,10 +1128,11 @@ func TestBootstrap_ConfigWatcher_ReadyzVerboseIncludesWatcher(t *testing.T) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
 
-	asm := assembly.New(assembly.Config{ID: "test-config-watcher-readyz", DurabilityMode: cell.DurabilityDemo})
+	asm := assembly.New(assembly.Config{ID: "test-config-watcher-readyz", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
 	require.NoError(t, asm.Register(newTestCell("cell-1")))
 
 	b := New(
+		WithClock(clock.Real()),
 		WithAssembly(asm),
 		WithConfig(cfgFile, ""),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(ln)),
@@ -1185,10 +1196,11 @@ func TestBootstrap_ConfigDriftReadyz_NoDrift(t *testing.T) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
 
-	asm := assembly.New(assembly.Config{ID: "test-config-drift-no-drift", DurabilityMode: cell.DurabilityDemo})
+	asm := assembly.New(assembly.Config{ID: "test-config-drift-no-drift", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
 	require.NoError(t, asm.Register(newTestCell("cell-1")))
 
 	b := New(
+		WithClock(clock.Real()),
 		WithAssembly(asm),
 		WithConfig(cfgFile, ""),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(ln)),
@@ -1317,10 +1329,11 @@ func TestBootstrap_ConfigDriftReadyz_HTTP503OnDrift(t *testing.T) {
 	failCell := newReloaderCell("fail-cell")
 	failCell.err = fmt.Errorf("intentional reload failure")
 
-	asm := assembly.New(assembly.Config{ID: "test-drift-http-503", DurabilityMode: cell.DurabilityDemo})
+	asm := assembly.New(assembly.Config{ID: "test-drift-http-503", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
 	require.NoError(t, asm.Register(failCell))
 
 	b := New(
+		WithClock(clock.Real()),
 		WithAssembly(asm),
 		WithConfig(cfgFile, ""),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(ln)),
@@ -1387,17 +1400,18 @@ func TestBootstrap_ConfigWatcherInitFailure_FailsFast(t *testing.T) {
 	cfgFile := filepath.Join(dir, "config.yaml")
 	require.NoError(t, os.WriteFile(cfgFile, []byte("app:\n  name: test\n"), 0o644))
 
-	asm := assembly.New(assembly.Config{ID: "test-config-watcher-fail-fast", DurabilityMode: cell.DurabilityDemo})
+	asm := assembly.New(assembly.Config{ID: "test-config-watcher-fail-fast", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
 	require.NoError(t, asm.Register(newTestCell("cell-1")))
 
 	b := New(
+		WithClock(clock.Real()),
 		WithAssembly(asm),
 		WithConfig(cfgFile, ""),
 		WithListener(cell.PrimaryListener, "127.0.0.1:0", []cell.ListenerAuth{cell.AuthNone{}}),
 		WithShutdownTimeout(testtime.D1s),
 	)
 	// Override instance-level factory to simulate init failure (safe for parallel tests).
-	b.configWatcherFactory = func(string, ...config.WatcherOption) (*config.Watcher, error) {
+	b.configWatcherFactory = func(string, clock.Clock, ...config.WatcherOption) (*config.Watcher, error) {
 		return nil, errors.New("watcher init failed")
 	}
 
@@ -1412,10 +1426,11 @@ func TestBootstrap_WithHealthChecker_ReservedNameConflict_ReturnsError(t *testin
 	cfgFile := filepath.Join(dir, "config.yaml")
 	require.NoError(t, os.WriteFile(cfgFile, []byte("app:\n  name: test\n"), 0o644))
 
-	asm := assembly.New(assembly.Config{ID: "test-reserved-health-checker", DurabilityMode: cell.DurabilityDemo})
+	asm := assembly.New(assembly.Config{ID: "test-reserved-health-checker", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
 	require.NoError(t, asm.Register(newTestCell("cell-1")))
 
 	b := New(
+		WithClock(clock.Real()),
 		WithAssembly(asm),
 		WithConfig(cfgFile, ""),
 		WithListener(cell.PrimaryListener, "127.0.0.1:0", []cell.ListenerAuth{cell.AuthNone{}}),
@@ -1435,11 +1450,12 @@ func TestBootstrap_EventRouter_ReadyzVerboseIncludesEventRouter(t *testing.T) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
 
-	asm := assembly.New(assembly.Config{ID: "test-eventrouter-readyz", DurabilityMode: cell.DurabilityDemo})
+	asm := assembly.New(assembly.Config{ID: "test-eventrouter-readyz", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
 	require.NoError(t, asm.Register(newEventCell("ok-cell", nil)))
 
-	eb := eventbus.New()
+	eb := eventbus.New(eventbus.WithClock(clock.Real()))
 	b := New(
+		WithClock(clock.Real()),
 		WithAssembly(asm),
 		WithPublisher(eb),
 		WithSubscriber(eb),
@@ -1647,11 +1663,12 @@ func TestBootstrap_ShutdownDrainsInflightReload(t *testing.T) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
 
-	asm := assembly.New(assembly.Config{ID: "test-drain", DurabilityMode: cell.DurabilityDemo})
+	asm := assembly.New(assembly.Config{ID: "test-drain", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
 	slow := newSlowReloaderCell("slow-cell", slowReloaderDelay)
 	require.NoError(t, asm.Register(slow))
 
 	b := New(
+		WithClock(clock.Real()),
 		WithAssembly(asm),
 		WithConfig(cfgFile, ""),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(ln)),
@@ -1705,11 +1722,12 @@ func TestBootstrap_ConfigReload_NotifiesCells(t *testing.T) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
 
-	asm := assembly.New(assembly.Config{ID: "test-reload", DurabilityMode: cell.DurabilityDemo})
+	asm := assembly.New(assembly.Config{ID: "test-reload", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
 	rc := newReloaderCell("auth-core")
 	require.NoError(t, asm.Register(rc))
 
 	b := New(
+		WithClock(clock.Real()),
 		WithAssembly(asm),
 		WithConfig(cfgFile, ""),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(ln)),
@@ -1764,12 +1782,13 @@ func TestBootstrap_ConfigReload_ErrorDoesNotCrash(t *testing.T) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
 
-	asm := assembly.New(assembly.Config{ID: "test-reload-err", DurabilityMode: cell.DurabilityDemo})
+	asm := assembly.New(assembly.Config{ID: "test-reload-err", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
 	rc := newReloaderCell("fail-cell")
 	rc.err = errors.New("reload callback failed")
 	require.NoError(t, asm.Register(rc))
 
 	b := New(
+		WithClock(clock.Real()),
 		WithAssembly(asm),
 		WithConfig(cfgFile, ""),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(ln)),
@@ -1818,12 +1837,13 @@ func TestBootstrap_ConfigReload_PanicDoesNotCrash(t *testing.T) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
 
-	asm := assembly.New(assembly.Config{ID: "test-reload-panic", DurabilityMode: cell.DurabilityDemo})
+	asm := assembly.New(assembly.Config{ID: "test-reload-panic", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
 	rc := newReloaderCell("panic-cell")
 	rc.doPanic = true
 	require.NoError(t, asm.Register(rc))
 
 	b := New(
+		WithClock(clock.Real()),
 		WithAssembly(asm),
 		WithConfig(cfgFile, ""),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(ln)),
@@ -1872,7 +1892,7 @@ func TestBootstrap_ConfigReload_FIFO(t *testing.T) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
 
-	asm := assembly.New(assembly.Config{ID: "test-reload-fifo", DurabilityMode: cell.DurabilityDemo})
+	asm := assembly.New(assembly.Config{ID: "test-reload-fifo", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
 	callOrder := make([]string, 0, 3)
 	cells := make([]*reloaderCell, 3)
 	for i, id := range []string{"first", "second", "third"} {
@@ -1882,6 +1902,7 @@ func TestBootstrap_ConfigReload_FIFO(t *testing.T) {
 	}
 
 	b := New(
+		WithClock(clock.Real()),
 		WithAssembly(asm),
 		WithConfig(cfgFile, ""),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(ln)),
@@ -1932,13 +1953,14 @@ func TestBootstrap_ConfigReload_NonReloaderSkipped(t *testing.T) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
 
-	asm := assembly.New(assembly.Config{ID: "test-reload-skip", DurabilityMode: cell.DurabilityDemo})
+	asm := assembly.New(assembly.Config{ID: "test-reload-skip", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
 	plain := newTestCell("plain-cell") // does NOT implement ConfigReloader
 	rc := newReloaderCell("reloader-cell")
 	require.NoError(t, asm.Register(plain))
 	require.NoError(t, asm.Register(rc))
 
 	b := New(
+		WithClock(clock.Real()),
 		WithAssembly(asm),
 		WithConfig(cfgFile, ""),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(ln)),
@@ -1990,11 +2012,12 @@ func TestBootstrap_ConfigReload_NoChangeNoCallback(t *testing.T) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
 
-	asm := assembly.New(assembly.Config{ID: "test-reload-noop", DurabilityMode: cell.DurabilityDemo})
+	asm := assembly.New(assembly.Config{ID: "test-reload-noop", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
 	rc := newReloaderCell("noop-cell")
 	require.NoError(t, asm.Register(rc))
 
 	b := New(
+		WithClock(clock.Real()),
 		WithAssembly(asm),
 		WithConfig(cfgFile, ""),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(ln)),
@@ -2083,7 +2106,7 @@ func TestBootstrap_ConfigReload_EventIsolation(t *testing.T) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
 
-	asm := assembly.New(assembly.Config{ID: "test-isolation", DurabilityMode: cell.DurabilityDemo})
+	asm := assembly.New(assembly.Config{ID: "test-isolation", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
 	mutator := newMutatingReloaderCell("mutator")
 	observer := newReloaderCell("observer")
 	// Register mutator first — it tries to corrupt the event.
@@ -2091,6 +2114,7 @@ func TestBootstrap_ConfigReload_EventIsolation(t *testing.T) {
 	require.NoError(t, asm.Register(observer))
 
 	b := New(
+		WithClock(clock.Real()),
 		WithAssembly(asm),
 		WithConfig(cfgFile, ""),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(ln)),
@@ -2147,11 +2171,12 @@ func TestBootstrap_ShutdownNoPostStopReload(t *testing.T) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
 
-	asm := assembly.New(assembly.Config{ID: "test-shutdown-race", DurabilityMode: cell.DurabilityDemo})
+	asm := assembly.New(assembly.Config{ID: "test-shutdown-race", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
 	rc := newReloaderCell("shutdown-race-cell")
 	require.NoError(t, asm.Register(rc))
 
 	b := New(
+		WithClock(clock.Real()),
 		WithAssembly(asm),
 		WithConfig(cfgFile, ""),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(ln)),
@@ -2207,12 +2232,13 @@ func TestBootstrap_ShutdownRejectsReloadDuringDrain(t *testing.T) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
 
-	asm := assembly.New(assembly.Config{ID: "test-shutdown-drain-reject", DurabilityMode: cell.DurabilityDemo})
+	asm := assembly.New(assembly.Config{ID: "test-shutdown-drain-reject", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
 	rc := newReloaderCell("shutdown-drain-cell")
 	require.NoError(t, asm.Register(rc))
 
 	blocker := newBlockingStopWorker()
 	b := New(
+		WithClock(clock.Real()),
 		WithAssembly(asm),
 		WithConfig(cfgFile, ""),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(ln)),
@@ -2272,11 +2298,12 @@ func TestBootstrap_ConfigReload_GenerationTracking(t *testing.T) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
 
-	asm := assembly.New(assembly.Config{ID: "test-generation", DurabilityMode: cell.DurabilityDemo})
+	asm := assembly.New(assembly.Config{ID: "test-generation", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
 	rc := newReloaderCell("gen-cell")
 	require.NoError(t, asm.Register(rc))
 
 	b := New(
+		WithClock(clock.Real()),
 		WithAssembly(asm),
 		WithConfig(cfgFile, ""),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(ln)),
@@ -2425,7 +2452,7 @@ func TestBootstrap_WithAuthMiddleware_ProtectedRoute_Returns401(t *testing.T) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
 
-	asm := assembly.New(assembly.Config{ID: "test-auth-401", DurabilityMode: cell.DurabilityDemo})
+	asm := assembly.New(assembly.Config{ID: "test-auth-401", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
 	hc := newHTTPCell("auth-test-cell")
 	require.NoError(t, asm.Register(hc))
 
@@ -2434,6 +2461,7 @@ func TestBootstrap_WithAuthMiddleware_ProtectedRoute_Returns401(t *testing.T) {
 	}
 
 	b := New(
+		WithClock(clock.Real()),
 		WithAssembly(asm),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{cell.MustNewAuthJWT(verifier)}, WithListenerNet(ln)),
 		WithListener(cell.InternalListener, "127.0.0.1:0", []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(newLocalListener(t))),
@@ -2519,7 +2547,7 @@ func TestBootstrap_WithAuthMiddleware_PublicRoute_Passes(t *testing.T) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
 
-	asm := assembly.New(assembly.Config{ID: "test-auth-public", DurabilityMode: cell.DurabilityDemo})
+	asm := assembly.New(assembly.Config{ID: "test-auth-public", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
 	hc := newPublicHTTPCell("auth-public-cell")
 	require.NoError(t, asm.Register(hc))
 
@@ -2528,6 +2556,7 @@ func TestBootstrap_WithAuthMiddleware_PublicRoute_Passes(t *testing.T) {
 	}
 
 	b := New(
+		WithClock(clock.Real()),
 		WithAssembly(asm),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{cell.MustNewAuthJWT(verifier)}, WithListenerNet(ln)),
 		WithListener(cell.InternalListener, "127.0.0.1:0", []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(newLocalListener(t))),
@@ -2581,10 +2610,11 @@ func TestBootstrap_UserRouterOpts_CannotOverrideFrameworkHealth(t *testing.T) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
 
-	asm := assembly.New(assembly.Config{ID: "test-health-override", DurabilityMode: cell.DurabilityDemo})
+	asm := assembly.New(assembly.Config{ID: "test-health-override", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
 	require.NoError(t, asm.Register(newTestCell("cell-1")))
 
 	b := New(
+		WithClock(clock.Real()),
 		WithAssembly(asm),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(ln)),
 		WithListener(cell.InternalListener, "127.0.0.1:0", []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(newLocalListener(t))),
@@ -2622,7 +2652,10 @@ func TestGracefulShutdown_ReadyzUnhealthyBeforeHTTPStop(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	errCh := make(chan error, 1)
-	b := New(WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(ln)))
+	b := New(
+		WithClock(clock.Real()),
+		WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(ln)),
+	)
 	go func() { errCh <- b.Run(ctx) }()
 
 	// Wait for server to be ready.
@@ -2704,11 +2737,12 @@ func TestBootstrap_TracingE2E_BusinessRoute(t *testing.T) {
 		return nil
 	})
 
-	asm := assembly.New(assembly.Config{ID: "trace-e2e", DurabilityMode: cell.DurabilityDemo})
+	asm := assembly.New(assembly.Config{ID: "trace-e2e", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
 	require.NoError(t, asm.Register(tc))
 
 	ctx, cancel := context.WithCancel(context.Background())
 	b := New(
+		WithClock(clock.Real()),
 		WithAssembly(asm),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(ln)),
 		WithListener(cell.InternalListener, "127.0.0.1:0", []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(newLocalListener(t))),
@@ -2747,11 +2781,12 @@ func TestBootstrap_TracingE2E_UpstreamPropagation(t *testing.T) {
 		return nil
 	})
 
-	asm := assembly.New(assembly.Config{ID: "trace-upstream", DurabilityMode: cell.DurabilityDemo})
+	asm := assembly.New(assembly.Config{ID: "trace-upstream", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
 	require.NoError(t, asm.Register(tc))
 
 	ctx, cancel := context.WithCancel(context.Background())
 	b := New(
+		WithClock(clock.Real()),
 		WithAssembly(asm),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(ln)),
 		WithListener(cell.InternalListener, "127.0.0.1:0", []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(newLocalListener(t))),
@@ -2792,11 +2827,12 @@ func TestBootstrap_TracingE2E_PanicRoute(t *testing.T) {
 		return nil
 	})
 
-	asm := assembly.New(assembly.Config{ID: "trace-panic", DurabilityMode: cell.DurabilityDemo})
+	asm := assembly.New(assembly.Config{ID: "trace-panic", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
 	require.NoError(t, asm.Register(tc))
 
 	ctx, cancel := context.WithCancel(context.Background())
 	b := New(
+		WithClock(clock.Real()),
 		WithAssembly(asm),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(ln)),
 		WithListener(cell.InternalListener, "127.0.0.1:0", []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(newLocalListener(t))),
@@ -2837,6 +2873,7 @@ func TestBootstrap_TracingE2E_InfraEndpoints(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	b := New(
+		WithClock(clock.Real()),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(ln)),
 		WithListener(cell.InternalListener, "127.0.0.1:0", []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(newLocalListener(t))),
 		WithTracer(tracer),
@@ -2914,7 +2951,7 @@ func TestBootstrap_AuthDiscovery_ProtectedRoute_Returns401(t *testing.T) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
 
-	asm := assembly.New(assembly.Config{ID: "test-auth-discovery-401", DurabilityMode: cell.DurabilityDemo})
+	asm := assembly.New(assembly.Config{ID: "test-auth-discovery-401", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
 	verifier := &bootstrapTestVerifier{
 		err: fmt.Errorf("no token provided"),
 	}
@@ -2922,6 +2959,7 @@ func TestBootstrap_AuthDiscovery_ProtectedRoute_Returns401(t *testing.T) {
 	require.NoError(t, asm.Register(hc))
 
 	b := New(
+		WithClock(clock.Real()),
 		WithAssembly(asm),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{cell.MustNewAuthJWTFromAssembly(asm)}, WithListenerNet(ln)),
 		WithListener(cell.InternalListener, "127.0.0.1:0", []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(newLocalListener(t))),
@@ -2961,7 +2999,7 @@ func TestBootstrap_AuthDiscovery_PublicRoute_Passes(t *testing.T) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
 
-	asm := assembly.New(assembly.Config{ID: "test-auth-discovery-public", DurabilityMode: cell.DurabilityDemo})
+	asm := assembly.New(assembly.Config{ID: "test-auth-discovery-public", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
 	verifier := &bootstrapTestVerifier{
 		err: fmt.Errorf("should not verify for public route"),
 	}
@@ -2969,6 +3007,7 @@ func TestBootstrap_AuthDiscovery_PublicRoute_Passes(t *testing.T) {
 	require.NoError(t, asm.Register(hc))
 
 	b := New(
+		WithClock(clock.Real()),
 		WithAssembly(asm),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{cell.MustNewAuthJWTFromAssembly(asm)}, WithListenerNet(ln)),
 		WithListener(cell.InternalListener, "127.0.0.1:0", []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(newLocalListener(t))),
@@ -3019,7 +3058,7 @@ func TestBootstrap_WithAuthMiddleware_Precedence(t *testing.T) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
 
-	asm := assembly.New(assembly.Config{ID: "test-auth-precedence", DurabilityMode: cell.DurabilityDemo})
+	asm := assembly.New(assembly.Config{ID: "test-auth-precedence", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
 
 	cellVerifier := &bootstrapTestVerifier{
 		err: fmt.Errorf("cell-verifier: should not be called"),
@@ -3032,6 +3071,7 @@ func TestBootstrap_WithAuthMiddleware_Precedence(t *testing.T) {
 	}
 
 	b := New(
+		WithClock(clock.Real()),
 		WithAssembly(asm),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{cell.MustNewAuthJWT(explicitVerifier)}, WithListenerNet(ln)),
 		WithListener(cell.InternalListener, "127.0.0.1:0", []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(newLocalListener(t))),
@@ -3075,11 +3115,12 @@ func TestBootstrap_AuthDiscovery_NoProvider_FailsClosed(t *testing.T) {
 	require.NoError(t, err)
 
 	// Register a plain cell with no TokenVerifier method.
-	asm := assembly.New(assembly.Config{ID: "test-no-auth-provider", DurabilityMode: cell.DurabilityDemo})
+	asm := assembly.New(assembly.Config{ID: "test-no-auth-provider", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
 	hc := newHTTPCell("plain-cell")
 	require.NoError(t, asm.Register(hc))
 
 	b := New(
+		WithClock(clock.Real()),
 		WithAssembly(asm),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{cell.MustNewAuthJWTFromAssembly(asm)}, WithListenerNet(ln)),
 		WithListener(cell.InternalListener, "127.0.0.1:0", []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(newLocalListener(t))),
@@ -3106,11 +3147,12 @@ func TestBootstrap_AuthDiscovery_MultipleProviders_FailsFast(t *testing.T) {
 		claims: auth.Claims{Subject: "user-2", Roles: []string{"admin"}},
 	}
 
-	asm := assembly.New(assembly.Config{ID: "test-multi-auth", DurabilityMode: cell.DurabilityDemo})
+	asm := assembly.New(assembly.Config{ID: "test-multi-auth", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
 	require.NoError(t, asm.Register(newAuthProviderCell("accesscore", verifier1)))
 	require.NoError(t, asm.Register(newAuthProviderCell("identity-core", verifier2)))
 
 	b := New(
+		WithClock(clock.Real()),
 		WithAssembly(asm),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{cell.MustNewAuthJWTFromAssembly(asm)}, WithListenerNet(ln)),
 		WithListener(cell.InternalListener, "127.0.0.1:0", []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(newLocalListener(t))),
@@ -3135,7 +3177,7 @@ func TestBootstrap_TrustBoundary_PublicEndpoint_IgnoresClientIDs(t *testing.T) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
 
-	asm := assembly.New(assembly.Config{ID: "test-trust-boundary", DurabilityMode: cell.DurabilityDemo})
+	asm := assembly.New(assembly.Config{ID: "test-trust-boundary", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
 	verifier := &bootstrapTestVerifier{
 		claims: auth.Claims{Subject: "user-1", Roles: []string{"admin"}},
 	}
@@ -3143,6 +3185,7 @@ func TestBootstrap_TrustBoundary_PublicEndpoint_IgnoresClientIDs(t *testing.T) {
 	require.NoError(t, asm.Register(hc))
 
 	b := New(
+		WithClock(clock.Real()),
 		WithAssembly(asm),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{cell.MustNewAuthJWTFromAssembly(asm)}, WithListenerNet(ln)),
 		WithListener(cell.InternalListener, "127.0.0.1:0", []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(newLocalListener(t))),
@@ -3205,11 +3248,12 @@ func TestBootstrap_WithSecurityHeadersOptions_CustomHSTS(t *testing.T) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
 
-	asm := assembly.New(assembly.Config{ID: "test-sechdr", DurabilityMode: cell.DurabilityDemo})
+	asm := assembly.New(assembly.Config{ID: "test-sechdr", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
 	tc := newTestCell("hsts-cell")
 	require.NoError(t, asm.Register(tc))
 
 	b := New(
+		WithClock(clock.Real()),
 		WithAssembly(asm),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(ln)),
 		WithListener(cell.InternalListener, "127.0.0.1:0", []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(newLocalListener(t))),
@@ -3286,11 +3330,12 @@ func TestBootstrap_ConfigReload_KeyFilter_SkipsUnmatched(t *testing.T) {
 
 	ln := newLocalListener(t)
 
-	asm := assembly.New(assembly.Config{ID: "test-keyfilter-skip", DurabilityMode: cell.DurabilityDemo})
+	asm := assembly.New(assembly.Config{ID: "test-keyfilter-skip", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
 	kfc := newKeyFilterReloaderCell("server-cell", []string{"server."})
 	require.NoError(t, asm.Register(kfc))
 
 	b := New(
+		WithClock(clock.Real()),
 		WithAssembly(asm),
 		WithConfig(cfgFile, ""),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(ln)),
@@ -3335,11 +3380,12 @@ func TestBootstrap_ConfigReload_KeyFilter_NotifiesMatched(t *testing.T) {
 
 	ln := newLocalListener(t)
 
-	asm := assembly.New(assembly.Config{ID: "test-keyfilter-match", DurabilityMode: cell.DurabilityDemo})
+	asm := assembly.New(assembly.Config{ID: "test-keyfilter-match", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
 	kfc := newKeyFilterReloaderCell("server-cell", []string{"server."})
 	require.NoError(t, asm.Register(kfc))
 
 	b := New(
+		WithClock(clock.Real()),
 		WithAssembly(asm),
 		WithConfig(cfgFile, ""),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(ln)),
@@ -3391,11 +3437,12 @@ func TestBootstrap_ConfigReload_NoKeyFilter_ReceivesAll(t *testing.T) {
 
 	ln := newLocalListener(t)
 
-	asm := assembly.New(assembly.Config{ID: "test-keyfilter-nofilter", DurabilityMode: cell.DurabilityDemo})
+	asm := assembly.New(assembly.Config{ID: "test-keyfilter-nofilter", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
 	rc := newReloaderCell("plain-reloader")
 	require.NoError(t, asm.Register(rc))
 
 	b := New(
+		WithClock(clock.Real()),
 		WithAssembly(asm),
 		WithConfig(cfgFile, ""),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(ln)),
@@ -3495,10 +3542,11 @@ func TestBootstrap_TrustBoundary_PublicEndpoint_TraceparentIgnored(t *testing.T)
 	}
 	tc := newTraceCapturingCell("trace-boundary-cell", verifier)
 
-	asm := assembly.New(assembly.Config{ID: "test-traceparent-boundary", DurabilityMode: cell.DurabilityDemo})
+	asm := assembly.New(assembly.Config{ID: "test-traceparent-boundary", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
 	require.NoError(t, asm.Register(tc))
 
 	b := New(
+		WithClock(clock.Real()),
 		WithAssembly(asm),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{cell.MustNewAuthJWTFromAssembly(asm)}, WithListenerNet(ln)),
 		WithListener(cell.InternalListener, "127.0.0.1:0", []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(newLocalListener(t))),
@@ -3581,11 +3629,12 @@ func TestBootstrap_TrustBoundary_PublicEndpoint_TraceparentIgnored(t *testing.T)
 // ---------------------------------------------------------------------------
 
 func TestBootstrap_WithCircuitBreaker_Nil_ReturnsError(t *testing.T) {
-	asm := assembly.New(assembly.Config{ID: "cb-nil-test", DurabilityMode: cell.DurabilityDemo})
+	asm := assembly.New(assembly.Config{ID: "cb-nil-test", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
 	tc := newTestCell("cb-nil-cell")
 	require.NoError(t, asm.Register(tc))
 
 	b := New(
+		WithClock(clock.Real()),
 		WithAssembly(asm),
 		WithCircuitBreaker(nil),
 	)
@@ -3632,7 +3681,7 @@ func TestBootstrap_HEADAlias_BypassesAuth(t *testing.T) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
 
-	asm := assembly.New(assembly.Config{ID: "test-head-alias", DurabilityMode: cell.DurabilityDemo})
+	asm := assembly.New(assembly.Config{ID: "test-head-alias", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
 	verifier := &bootstrapTestVerifier{
 		err: fmt.Errorf("should not be called for GET/HEAD public route"),
 	}
@@ -3641,6 +3690,7 @@ func TestBootstrap_HEADAlias_BypassesAuth(t *testing.T) {
 	require.NoError(t, asm.Register(hc))
 
 	b := New(
+		WithClock(clock.Real()),
 		WithAssembly(asm),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{cell.MustNewAuthJWTFromAssembly(asm)}, WithListenerNet(ln)),
 		WithListener(cell.InternalListener, "127.0.0.1:0", []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(newLocalListener(t))),
@@ -3680,13 +3730,14 @@ func TestBootstrap_HEADAlias_BypassesAuth(t *testing.T) {
 func TestBootstrap_WithLifecycleHook_RunsDuringStart(t *testing.T) {
 	var startCalled, stopCalled atomic.Bool
 
-	asm := assembly.New(assembly.Config{ID: "test-lc-ok", DurabilityMode: cell.DurabilityDemo})
+	asm := assembly.New(assembly.Config{ID: "test-lc-ok", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
 	require.NoError(t, asm.Register(newTestCell("lc-cell-1")))
 
 	ln := newLocalListener(t)
 	addr := ln.Addr().String()
 
 	b := New(
+		WithClock(clock.Real()),
 		WithAssembly(asm),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(ln)),
 		WithListener(cell.InternalListener, "127.0.0.1:0", []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(newLocalListener(t))),
@@ -3722,12 +3773,13 @@ func TestBootstrap_WithLifecycleHook_RunsDuringStart(t *testing.T) {
 func TestBootstrap_WithLifecycleHook_StartFailureHaltsRun(t *testing.T) {
 	wantErr := errors.New("hook-boom")
 
-	asm := assembly.New(assembly.Config{ID: "test-lc-fail", DurabilityMode: cell.DurabilityDemo})
+	asm := assembly.New(assembly.Config{ID: "test-lc-fail", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
 	require.NoError(t, asm.Register(newTestCell("lc-cell-2")))
 
 	ln := newLocalListener(t)
 
 	b := New(
+		WithClock(clock.Real()),
 		WithAssembly(asm),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(ln)),
 		WithListener(cell.InternalListener, "127.0.0.1:0", []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(newLocalListener(t))),
@@ -3766,7 +3818,7 @@ func (m *mockContextCloser) Close(_ context.Context) error {
 //
 // ref: uber-go/fx Lifecycle.Append OnStop(ctx) — managed teardown registration.
 func TestBootstrap_WithManagedCloser_RegistersAsTeardown(t *testing.T) {
-	asm := assembly.New(assembly.Config{ID: "test-managed-closer", DurabilityMode: cell.DurabilityDemo})
+	asm := assembly.New(assembly.Config{ID: "test-managed-closer", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
 	require.NoError(t, asm.Register(newTestCell("managed-cell")))
 
 	ln := newLocalListener(t)
@@ -3777,6 +3829,7 @@ func TestBootstrap_WithManagedCloser_RegistersAsTeardown(t *testing.T) {
 	errCh := make(chan error, 1)
 
 	b := New(
+		WithClock(clock.Real()),
 		WithAssembly(asm),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(ln)),
 		WithListener(cell.InternalListener, "127.0.0.1:0", []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(newLocalListener(t))),
@@ -3797,7 +3850,7 @@ func TestBootstrap_WithManagedCloser_RegistersAsTeardown(t *testing.T) {
 func TestBootstrap_WithManagedCloser_NilIgnored(t *testing.T) {
 	// Passing a nil ContextCloser must not panic at option-construction time.
 	assert.NotPanics(t, func() {
-		_ = New(WithManagedCloser(nil))
+		_ = New(WithClock(clock.Real()), WithManagedCloser(nil))
 	}, "WithManagedCloser(nil) must not panic")
 }
 
@@ -3867,10 +3920,11 @@ func (c *protectedAuthCell) RouteGroups() []cell.RouteGroup {
 }
 
 func TestBootstrap_Phase5_ProtectedRoutesWithoutVerifierFailFast(t *testing.T) {
-	asm := assembly.New(assembly.Config{ID: "test-protected-auth", DurabilityMode: cell.DurabilityDemo})
+	asm := assembly.New(assembly.Config{ID: "test-protected-auth", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
 	require.NoError(t, asm.Register(newProtectedAuthCell("protected-auth-cell")))
 
 	b := New(
+		WithClock(clock.Real()),
 		WithAssembly(asm),
 		WithListener(cell.PrimaryListener, "127.0.0.1:0", []cell.ListenerAuth{cell.AuthNone{}}),
 		WithShutdownTimeout(testtime.D1s),
@@ -3890,10 +3944,11 @@ func TestBootstrap_Phase5_FinalizeAuthError_PropagatesRollback(t *testing.T) {
 	// F8: a cell that declares the same (method, path) twice causes FinalizeAuth
 	// to fail. Bootstrap.Run must propagate the error and roll back (stop the
 	// assembly). No HTTP listener must be started.
-	asm := assembly.New(assembly.Config{ID: "test-dup-auth", DurabilityMode: cell.DurabilityDemo})
+	asm := assembly.New(assembly.Config{ID: "test-dup-auth", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
 	require.NoError(t, asm.Register(newDuplicateAuthCell("dup-cell")))
 
 	b := New(
+		WithClock(clock.Real()),
 		WithAssembly(asm),
 		// PR-A14b: phase0 now requires at least one listener. Phase5 errors
 		// before the listener is actually bound, so no connection is ever served.
@@ -3923,6 +3978,7 @@ func TestBootstrap_Phase5_FinalizeAuthError_PropagatesRollback(t *testing.T) {
 func TestBootstrap_DuplicateListenerRef_FailsFast(t *testing.T) {
 	ln := newLocalListener(t)
 	b := New(
+		WithClock(clock.Real()),
 		// Two declarations for PrimaryListener — second one is the duplicate.
 		WithListener(cell.PrimaryListener, "127.0.0.1:0", []cell.ListenerAuth{cell.AuthNone{}}),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(ln)),
@@ -3944,11 +4000,12 @@ func TestBootstrap_DuplicateListenerRef_FailsFast(t *testing.T) {
 // Note: duplicate route declarations on different prefixes are allowed;
 // duplicate (method, path) within the same prefix is caught by FinalizeAuth.
 func TestBootstrap_DuplicateRouteGroup_FailsFast(t *testing.T) {
-	asm := assembly.New(assembly.Config{ID: "test-dup-rg", DurabilityMode: cell.DurabilityDemo})
+	asm := assembly.New(assembly.Config{ID: "test-dup-rg", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
 	require.NoError(t, asm.Register(newDuplicateAuthCell("dup-rg-cell")))
 
 	ln := newLocalListener(t)
 	b := New(
+		WithClock(clock.Real()),
 		WithAssembly(asm),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(ln)),
 		WithShutdownTimeout(testtime.D1s),
@@ -4008,10 +4065,11 @@ func (c *duplicateInternalCell) RouteGroups() []cell.RouteGroup {
 // error and triggers assembly rollback, matching the same behavior as a
 // PrimaryListener FinalizeAuth failure (TEST-10).
 func TestBootstrap_Phase5_FinalizeFailure_OnInternalListener(t *testing.T) {
-	asm := assembly.New(assembly.Config{ID: "test-dup-internal", DurabilityMode: cell.DurabilityDemo})
+	asm := assembly.New(assembly.Config{ID: "test-dup-internal", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
 	require.NoError(t, asm.Register(newDuplicateInternalCell("dup-internal-cell")))
 
 	b := New(
+		WithClock(clock.Real()),
 		WithAssembly(asm),
 		WithListener(cell.PrimaryListener, "127.0.0.1:0", []cell.ListenerAuth{cell.AuthNone{}}),
 		WithListener(cell.InternalListener, "127.0.0.1:0",
@@ -4080,10 +4138,11 @@ func (c *duplicateHealthCell) RouteGroups() []cell.RouteGroup {
 // FinalizeAuth failure on the HealthListener is propagated as a Bootstrap.Run
 // error and triggers assembly rollback (TEST-13).
 func TestBootstrap_Phase5_FinalizeFailure_OnHealthListener(t *testing.T) {
-	asm := assembly.New(assembly.Config{ID: "test-dup-health", DurabilityMode: cell.DurabilityDemo})
+	asm := assembly.New(assembly.Config{ID: "test-dup-health", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
 	require.NoError(t, asm.Register(newDuplicateHealthCell("dup-health-cell")))
 
 	b := New(
+		WithClock(clock.Real()),
 		WithAssembly(asm),
 		WithListener(cell.PrimaryListener, "127.0.0.1:0", []cell.ListenerAuth{cell.AuthNone{}}),
 		WithListener(cell.HealthListener, "127.0.0.1:0", []cell.ListenerAuth{cell.AuthNone{}}),
@@ -4143,10 +4202,11 @@ func (c *unknownListenerCell) RouteGroups() []cell.RouteGroup {
 // referencing a ListenerRef that was not declared via WithListener causes
 // phase5 to return an error before any HTTP server starts (TEST-03).
 func TestBootstrap_UnknownListenerRef_FailsFast(t *testing.T) {
-	asm := assembly.New(assembly.Config{ID: "unknown-ln-test", DurabilityMode: cell.DurabilityDemo})
+	asm := assembly.New(assembly.Config{ID: "unknown-ln-test", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
 	require.NoError(t, asm.Register(newUnknownListenerCell()))
 
 	b := New(
+		WithClock(clock.Real()),
 		WithAssembly(asm),
 		// Only PrimaryListener declared; cell uses zero-value ref.
 		WithListener(cell.PrimaryListener, "127.0.0.1:0", []cell.ListenerAuth{cell.AuthNone{}}),

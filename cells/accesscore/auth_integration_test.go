@@ -27,6 +27,7 @@ import (
 
 	"github.com/ghbvf/gocell/cells/accesscore/internal/domain"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/mem"
+	"github.com/ghbvf/gocell/cells/accesscore/internal/testutil"
 	"github.com/ghbvf/gocell/cells/accesscore/slices/rbacassign"
 	"github.com/ghbvf/gocell/cells/accesscore/slices/sessionlogin"
 	"github.com/ghbvf/gocell/cells/accesscore/slices/sessionlogout"
@@ -34,6 +35,7 @@ import (
 	"github.com/ghbvf/gocell/cells/accesscore/slices/sessionvalidate"
 	"github.com/ghbvf/gocell/cells/internal/testoutbox"
 	"github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/errcode"
@@ -114,7 +116,7 @@ func loginAndGetPair(t *testing.T, opts ...loginOption) loginResult {
 	ctx := context.Background()
 
 	// Pre-fill alice as admin via direct repo seeding (no bootstrap flow).
-	alice, err := domain.NewUser("alice", "alice@gocell.local", seedAdminPasswordHash())
+	alice, err := domain.NewUser("alice", "alice@gocell.local", seedAdminPasswordHash(), time.Now())
 	require.NoError(t, err)
 	alice.ID = "usr-alice-integration"
 	require.NoError(t, roleRepo.Create(ctx, &domain.Role{
@@ -128,7 +130,7 @@ func loginAndGetPair(t *testing.T, opts ...loginOption) loginResult {
 	intClock := storetest.NewFakeClock(time.Now())
 	intRefreshStore := refreshmem.MustNew(refresh.Policy{ReuseInterval: testtime.D2s, MaxAge: time.Hour}, intClock, nil)
 
-	ks, _, _ := auth.MustNewTestKeySet()
+	ks, _, _ := auth.MustNewTestKeySet(clock.Real())
 
 	require.NotEmpty(t, cfg.verifierAuds, "loginAndGetPair: verifierAuds must not be empty; use withVerifierAuds(\"gocell\") or similar")
 
@@ -140,15 +142,15 @@ func loginAndGetPair(t *testing.T, opts ...loginOption) loginResult {
 		issuerOpts = append(issuerOpts, auth.WithIssuerAudiencesFromSlice(cfg.issuerAuds))
 		// else: explicitly empty → no audience option, issuer mints aud-less tokens.
 	}
-	issuer, err := auth.NewJWTIssuer(ks, "gocell", time.Hour, issuerOpts...)
+	issuer, err := auth.NewJWTIssuer(ks, "gocell", time.Hour, clock.Real(), issuerOpts...)
 	require.NoError(t, err)
 
-	verifier, err := auth.NewJWTVerifier(ks, auth.WithExpectedAudiences(cfg.verifierAuds[0], cfg.verifierAuds[1:]...))
+	verifier, err := auth.NewJWTVerifier(ks, clock.Real(), auth.WithExpectedAudiences(cfg.verifierAuds[0], cfg.verifierAuds[1:]...))
 	require.NoError(t, err)
 
 	c := NewAccessCore(
 		WithUserRepository(userRepo),
-		WithSessionRepository(mem.NewSessionRepository()),
+		WithSessionRepository(testutil.RealSessionRepo(t)),
 		WithRoleRepository(roleRepo),
 		WithOutboxDeps(noopPublisher{}, nil),
 		WithJWTIssuer(issuer),
@@ -160,9 +162,10 @@ func loginAndGetPair(t *testing.T, opts ...loginOption) loginResult {
 	require.NoError(t, c.Init(context.Background(), cell.Dependencies{
 		Config:         make(map[string]any),
 		DurabilityMode: cell.DurabilityDemo,
+		Clock:          clock.Real(),
 	}))
 
-	r := router.MustNew()
+	r := router.MustNew(router.WithRouterClock(clock.Real()))
 	for _, rg := range c.RouteGroups() {
 		if rg.Listener == cell.PrimaryListener {
 			if rg.Prefix != "" {
@@ -239,6 +242,7 @@ func TestAuthIntent_AccessTokenBlockedAtRefreshPath(t *testing.T) {
 	// selector/verifier format) → refresh.ErrRejected → ErrAuthRefreshFailed.
 	refreshSvc := sessionrefresh.MustNewService(
 		fx.Cell.sessionRepo, fx.Cell.roleRepo, fx.Cell.userRepo, fx.Cell.refreshStore, fx.Cell.jwtIssuer, slog.Default(),
+		sessionrefresh.WithClock(clock.Real()),
 	)
 
 	_, err := refreshSvc.Refresh(context.Background(), fx.AccessToken)
@@ -259,6 +263,7 @@ func TestAuthIntent_RefreshTokenSucceedsAtRefreshPath(t *testing.T) {
 
 	refreshSvc := sessionrefresh.MustNewService(
 		fx.Cell.sessionRepo, fx.Cell.roleRepo, fx.Cell.userRepo, fx.Cell.refreshStore, fx.Cell.jwtIssuer, slog.Default(),
+		sessionrefresh.WithClock(clock.Real()),
 	)
 
 	newPair, err := refreshSvc.Refresh(context.Background(), fx.RefreshToken)
@@ -291,7 +296,7 @@ func TestAuthIntegration_RoleRevokeInvalidatesSession(t *testing.T) {
 
 	// Shared repos (simulates cell's single repo wiring).
 	roleRepo := mem.NewRoleRepository()
-	sessionRepo := mem.NewSessionRepository()
+	sessionRepo := testutil.RealSessionRepo(t)
 
 	// Seed "member" role.
 	roleRepo.SeedRole(&domain.Role{ID: "member", Name: "member"})

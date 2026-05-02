@@ -17,6 +17,7 @@ import (
 	"github.com/ghbvf/gocell/cells/accesscore/initialadmin"
 	"github.com/ghbvf/gocell/kernel/assembly"
 	"github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/idempotency"
 	kernellifecycle "github.com/ghbvf/gocell/kernel/lifecycle"
 	"github.com/ghbvf/gocell/kernel/observability/metrics"
@@ -37,7 +38,7 @@ func newTestInternalGuard(t *testing.T) *internalGuard {
 	t.Helper()
 	ring, err := auth.NewHMACKeyRing([]byte("test-secret-32-bytes-long-padding!"), nil)
 	require.NoError(t, err)
-	store, err := auth.NewInMemoryNonceStore(auth.ServiceTokenNonceTTL)
+	store, err := auth.NewInMemoryNonceStore(auth.ServiceTokenNonceTTL, clock.Real())
 	require.NoError(t, err)
 	return &internalGuard{
 		ring:       ring,
@@ -77,7 +78,7 @@ func TestBuildAssembly_RegisterError(t *testing.T) {
 	c1 := cell.NewBaseCell(cell.CellMetadata{ID: "dup-cell", Type: cell.CellTypeCore})
 	c2 := cell.NewBaseCell(cell.CellMetadata{ID: "dup-cell", Type: cell.CellTypeCore})
 
-	_, err = buildAssembly(ps, "corebundle", cell.DurabilityDemo, c1, c2)
+	_, err = buildAssembly(ps, "corebundle", cell.DurabilityDemo, clock.Real(), c1, c2)
 	require.Error(t, err, "duplicate cell ID must cause buildAssembly to return an error")
 	assert.Contains(t, err.Error(), "dup-cell",
 		"error must mention the duplicate cell ID so operators can diagnose the conflict")
@@ -139,7 +140,7 @@ func TestDefaultRuntimeOptions_IncludesRedisHealthAndCloser(t *testing.T) {
 	shared := buildTestSharedDeps(t)
 	shared.InternalHTTPAddr = "127.0.0.1:0"
 	shared.InternalGuard = newTestInternalGuard(t)
-	asm := assembly.New(assembly.Config{ID: "test-redis-options", DurabilityMode: cell.DurabilityDemo})
+	asm := assembly.New(assembly.Config{ID: "test-redis-options", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
 	cb, err := buildConsumerBase(shared)
 	require.NoError(t, err)
 
@@ -170,6 +171,7 @@ func TestBuildConfigCoreOpts_PGMode_InvalidDSN_PoolError(t *testing.T) {
 		Publisher:        discardPublisher{},
 		MetricsProvider:  metrics.NopProvider{},
 		ValueTransformer: crypto.NoopTransformer{},
+		Clock:            clock.Real(),
 	})
 
 	require.Error(t, err, "postgres mode with invalid DSN must return an error")
@@ -221,14 +223,15 @@ func buildTestSharedDeps(t *testing.T) *SharedDeps {
 	t.Setenv("GOCELL_JWT_ISSUER", "test-issuer")
 	t.Setenv("GOCELL_JWT_AUDIENCE", "test-audience")
 
-	eb := eventbus.New()
+	eb := eventbus.New(eventbus.WithClock(clock.Real()))
 
 	privKey, pubKey := auth.MustGenerateTestKeyPair()
-	keySet, err := auth.NewKeySet(privKey, pubKey)
+	keySet, err := auth.NewKeySet(privKey, pubKey, clock.Real())
 	require.NoError(t, err)
-	issuer, err := auth.NewJWTIssuer(keySet, "test-issuer", testtime.D15min, auth.WithIssuerAudiencesFromSlice([]string{"test-audience"}))
+	issuer, err := auth.NewJWTIssuer(keySet, "test-issuer", testtime.D15min, clock.Real(),
+		auth.WithIssuerAudiencesFromSlice([]string{"test-audience"}))
 	require.NoError(t, err)
-	verifier, err := auth.NewJWTVerifier(keySet, auth.WithExpectedAudiences("test-audience"))
+	verifier, err := auth.NewJWTVerifier(keySet, clock.Real(), auth.WithExpectedAudiences("test-audience"))
 	require.NoError(t, err)
 
 	ps, err := buildPromStack()
@@ -237,12 +240,13 @@ func buildTestSharedDeps(t *testing.T) *SharedDeps {
 	require.NoError(t, err)
 
 	return &SharedDeps{
+		Clock:                clock.Real(),
 		Topology:             bootstrap.Topology{StorageBackend: "memory", AdapterMode: ""},
 		JWTDeps:              jwtDeps{issuer: issuer, verifier: verifier},
 		PromStack:            ps,
 		EventBus:             eb,
 		ConfigEventCollector: configEventCollector,
-		ConsumerClaimer:      idempotency.NewInMemClaimer(),
+		ConsumerClaimer:      idempotency.NewInMemClaimer(clock.Real()),
 		ConsumerClaimerKind:  consumerClaimerKindInMemory,
 		InternalHTTPAddr:     "127.0.0.1:9090",
 		InternalGuard:        newTestInternalGuard(t),
@@ -268,11 +272,12 @@ func newValidatedSharedDeps(t *testing.T, topo bootstrap.Topology) *SharedDeps {
 	t.Setenv("GOCELL_STATE_DIR", t.TempDir())
 
 	privKey, pubKey := auth.MustGenerateTestKeyPair()
-	keySet, err := auth.NewKeySet(privKey, pubKey)
+	keySet, err := auth.NewKeySet(privKey, pubKey, clock.Real())
 	require.NoError(t, err)
-	issuer, err := auth.NewJWTIssuer(keySet, "test-issuer", testtime.D15min, auth.WithIssuerAudiencesFromSlice([]string{"test-audience"}))
+	issuer, err := auth.NewJWTIssuer(keySet, "test-issuer", testtime.D15min, clock.Real(),
+		auth.WithIssuerAudiencesFromSlice([]string{"test-audience"}))
 	require.NoError(t, err)
-	verifier, err := auth.NewJWTVerifier(keySet, auth.WithExpectedAudiences("test-audience"))
+	verifier, err := auth.NewJWTVerifier(keySet, clock.Real(), auth.WithExpectedAudiences("test-audience"))
 	require.NoError(t, err)
 
 	ps, err := buildPromStack()
@@ -281,12 +286,13 @@ func newValidatedSharedDeps(t *testing.T, topo bootstrap.Topology) *SharedDeps {
 	require.NoError(t, err)
 
 	deps := &SharedDeps{
+		Clock:                clock.Real(),
 		Topology:             topo,
 		JWTDeps:              jwtDeps{issuer: issuer, verifier: verifier},
 		PromStack:            ps,
-		EventBus:             eventbus.New(),
+		EventBus:             eventbus.New(eventbus.WithClock(clock.Real())),
 		ConfigEventCollector: configEventCollector,
-		ConsumerClaimer:      idempotency.NewInMemClaimer(),
+		ConsumerClaimer:      idempotency.NewInMemClaimer(clock.Real()),
 		ConsumerClaimerKind:  consumerClaimerKindInMemory,
 		InternalHTTPAddr:     "127.0.0.1:9090",
 		InternalGuard:        newTestInternalGuard(t),
@@ -357,7 +363,7 @@ func buildBootstrapFromShared(
 		return nil, err
 	}
 
-	asm, err := buildAssembly(shared.PromStack, "corebundle", durabilityModeForTopology(shared.Topology), cells...)
+	asm, err := buildAssembly(shared.PromStack, "corebundle", durabilityModeForTopology(shared.Topology), shared.Clock, cells...)
 	if err != nil {
 		return nil, err
 	}
@@ -382,7 +388,7 @@ func buildBootstrapFromShared(
 		bootstrap.WithListenerNet(primaryLn),
 	))
 	opts = append(opts, extra...)
-	return bootstrap.New(opts...), nil
+	return newBootstrapFromOptions(opts), nil
 }
 
 func withCorebundleTestInternalListener(t *testing.T, ln net.Listener) bootstrap.Option {

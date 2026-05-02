@@ -21,6 +21,7 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/assembly"
 	"github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/kernel/clock"
 	kernellifecycle "github.com/ghbvf/gocell/kernel/lifecycle"
 	kernelmetrics "github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/kernel/outbox"
@@ -68,15 +69,12 @@ const (
 //	sub-groups runnables by lifecycle batch (HTTPServers / Webhooks / Caches),
 //	not by visual concern.
 type Bootstrap struct {
-	// --- assembly: config loading + CoreAssembly construction + hooks ---
+	// --- assembly: config loading + CoreAssembly construction ---
 	configPath           string
 	envPrefix            string
 	assemblyCore         *assembly.CoreAssembly
 	assemblyID           string
-	hookTimeout          time.Duration
-	hookTimeoutSet       bool
-	hookObserver         cell.LifecycleHookObserver
-	configWatcherFactory func(string, ...config.WatcherOption) (*config.Watcher, error)
+	configWatcherFactory func(string, clock.Clock, ...config.WatcherOption) (*config.Watcher, error)
 
 	// --- http: listener declarations + router options + health + tracing ---
 	listenerConfigs       map[cell.ListenerRef]listenerConfig
@@ -119,6 +117,9 @@ type Bootstrap struct {
 
 	// --- runtime guard ---
 	runOnce sync.Once // Run() single-execution guard
+
+	// --- time source ---
+	clock clock.Clock // required: bootstrap.New panics when WithClock is not applied
 }
 
 // namedChecker pairs a readiness probe name with its check function.
@@ -274,6 +275,7 @@ func New(opts ...Option) *Bootstrap {
 	for _, o := range opts {
 		o(b)
 	}
+	clock.MustHaveClock(b.clock, "bootstrap.New (use bootstrap.WithClock)")
 	// Create the Lifecycle after all options are applied so that
 	// defaultStartTimeout / defaultStopTimeout are set.
 	// Zero values are forwarded as-is; NewLifecycle falls back to the
@@ -283,6 +285,7 @@ func New(opts ...Option) *Bootstrap {
 		DefaultStartTimeout: b.defaultStartTimeout,
 		DefaultStopTimeout:  b.defaultStopTimeout,
 		Logger:              logger,
+		Clock:               b.clock,
 	})
 	for _, reg := range b.lifecycleRegistrars {
 		reg(b.lifecycle)

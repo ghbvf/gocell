@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/ghbvf/gocell/cells/configcore/internal/domain"
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/query"
 	"github.com/ghbvf/gocell/runtime/crypto"
@@ -21,7 +22,7 @@ import (
 // Session layer, allowing unit tests to inject a mockDB directly.
 // Production code always goes through NewConfigRepository(*Session).
 func newConfigRepositoryFromDBTX(db DBTX) *ConfigRepository {
-	return &ConfigRepository{db: db, logger: slog.Default()}
+	return &ConfigRepository{db: db, logger: slog.Default(), clock: clock.Real()}
 }
 
 func TestConfigRepository_Create(t *testing.T) {
@@ -675,7 +676,7 @@ func TestConfigRepository_GetVersion_NotFound(t *testing.T) {
 // repo fails with ErrAdapterPGNoTx when no tx is present in context (F-S-1).
 func TestCreate_WithoutTx_ReturnsNoTxError(t *testing.T) {
 	session := NewSession(nil) // nil pool — resolveWrite never reaches pool path
-	repo := NewConfigRepository(session, nil, nil)
+	repo := NewConfigRepository(session, nil, nil, clock.Real())
 
 	err := repo.Create(context.Background(), &domain.ConfigEntry{Key: "k"})
 	require.Error(t, err)
@@ -689,7 +690,7 @@ func TestCreate_WithoutTx_ReturnsNoTxError(t *testing.T) {
 // repo fails with ErrAdapterPGNoTx when no tx is present in context (F-S-1).
 func TestUpdate_WithoutTx_ReturnsNoTxError(t *testing.T) {
 	session := NewSession(nil)
-	repo := NewConfigRepository(session, nil, nil)
+	repo := NewConfigRepository(session, nil, nil, clock.Real())
 
 	_, err := repo.Update(context.Background(), "k", "v")
 	require.Error(t, err)
@@ -703,7 +704,7 @@ func TestUpdate_WithoutTx_ReturnsNoTxError(t *testing.T) {
 // repo fails with ErrAdapterPGNoTx when no tx is present in context (F-S-1).
 func TestDelete_WithoutTx_ReturnsNoTxError(t *testing.T) {
 	session := NewSession(nil)
-	repo := NewConfigRepository(session, nil, nil)
+	repo := NewConfigRepository(session, nil, nil, clock.Real())
 
 	_, err := repo.Delete(context.Background(), "k")
 	require.Error(t, err)
@@ -718,7 +719,7 @@ func TestDelete_WithoutTx_ReturnsNoTxError(t *testing.T) {
 // context (F-S-1).
 func TestPublishVersion_WithoutTx_ReturnsNoTxError(t *testing.T) {
 	session := NewSession(nil)
-	repo := NewConfigRepository(session, nil, nil)
+	repo := NewConfigRepository(session, nil, nil, clock.Real())
 
 	err := repo.PublishVersion(context.Background(), &domain.ConfigVersion{ConfigID: "cfg-1"})
 	require.Error(t, err)
@@ -785,7 +786,7 @@ func TestConfigRepository_List_RowsError(t *testing.T) {
 // resolveWriteDB path returning an error when no tx is in ctx.
 func TestConfigRepository_Create_WithSession_NoTx(t *testing.T) {
 	s := NewSession(nil)
-	repo := NewConfigRepository(s, nil, nil)
+	repo := NewConfigRepository(s, nil, nil, clock.Real())
 
 	err := repo.Create(context.Background(), &domain.ConfigEntry{Key: "k"})
 	require.Error(t, err)
@@ -801,7 +802,7 @@ func TestConfigRepository_Create_WithSession_NoTx(t *testing.T) {
 // path (r.session != nil branch) is exercised.
 func TestConfigRepository_ResolveDB_SessionPath(t *testing.T) {
 	s := NewSession(nil)
-	repo := NewConfigRepository(s, nil, nil)
+	repo := NewConfigRepository(s, nil, nil, clock.Real())
 
 	// GetByKey uses resolveDB (read path). With nil pool the pool.QueryRow
 	// will panic/nil-deref, but that path goes through poolAdapter.QueryRow

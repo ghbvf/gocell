@@ -5,10 +5,10 @@ import (
 	"context"
 	"fmt"
 	"sync"
-	"time"
 
 	"github.com/ghbvf/gocell/cells/configcore/internal/domain"
 	"github.com/ghbvf/gocell/cells/configcore/internal/ports"
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/query"
 )
@@ -20,12 +20,16 @@ var _ ports.FlagRepository = (*FlagRepository)(nil)
 type FlagRepository struct {
 	mu    sync.RWMutex
 	flags map[string]*domain.FeatureFlag // key -> flag
+	clock clock.Clock
 }
 
 // NewFlagRepository creates an empty in-memory FlagRepository.
-func NewFlagRepository() *FlagRepository {
+// clk must be non-nil; pass clock.Real() in production and clockmock.New() in tests.
+func NewFlagRepository(clk clock.Clock) *FlagRepository {
+	clock.MustHaveClock(clk, "mem.NewFlagRepository")
 	return &FlagRepository{
 		flags: make(map[string]*domain.FeatureFlag),
+		clock: clk,
 	}
 }
 
@@ -70,7 +74,7 @@ func (r *FlagRepository) Update(
 	existing.RolloutPercentage = rolloutPercentage
 	existing.Description = description
 	existing.Version++
-	existing.UpdatedAt = time.Now()
+	existing.UpdatedAt = r.clock.Now()
 	clone := *existing
 	return &clone, nil
 }
@@ -102,7 +106,7 @@ func (r *FlagRepository) Toggle(_ context.Context, key string, enabled bool) (*d
 	}
 	existing.Enabled = enabled
 	existing.Version++
-	existing.UpdatedAt = time.Now()
+	existing.UpdatedAt = r.clock.Now()
 	clone := *existing
 	return &clone, nil
 }

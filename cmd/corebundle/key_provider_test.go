@@ -8,6 +8,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
@@ -21,7 +22,7 @@ const demoMasterKeyHex = "0123456789abcdef0123456789abcdef0123456789abcdef012345
 // storage mode, an empty providerName leads to the no-key sentinel (which the
 // caller maps to NoopTransformer). No encryption is required for in-memory storage.
 func TestBuildKeyProvider_MemoryMode_NoEnv_ReturnsNoKey(t *testing.T) {
-	kp, err := buildKeyProvider("memory", "", "", "", "")
+	kp, err := buildKeyProvider("memory", "", "", "", "", clock.Real())
 	require.NoError(t, err)
 	assert.True(t, isNoKeyProvider(kp), "memory mode + empty provider should return no-key sentinel")
 }
@@ -31,7 +32,7 @@ func TestBuildKeyProvider_MemoryMode_NoEnv_ReturnsNoKey(t *testing.T) {
 // This is the fail-fast guard that prevents silent NoopTransformer fallback,
 // which would persist sensitive config values unencrypted (security invariant).
 func TestBuildKeyProvider_PostgresMode_NoEnv_FailsFast(t *testing.T) {
-	kp, err := buildKeyProvider("postgres", "", "", "", "")
+	kp, err := buildKeyProvider("postgres", "", "", "", "", clock.Real())
 	require.Error(t, err, "postgres mode without provider must fail-fast")
 	assert.Nil(t, kp)
 
@@ -46,7 +47,7 @@ func TestBuildKeyProvider_PostgresMode_NoEnv_FailsFast(t *testing.T) {
 // TestBuildKeyProvider_UnknownProvider_Fails verifies that an unrecognized
 // providerName fails fast rather than silently degrading.
 func TestBuildKeyProvider_UnknownProvider_Fails(t *testing.T) {
-	kp, err := buildKeyProvider("postgres", "", "bogus", "", "")
+	kp, err := buildKeyProvider("postgres", "", "bogus", "", "", clock.Real())
 	require.Error(t, err)
 	assert.Nil(t, kp)
 
@@ -61,7 +62,7 @@ func TestBuildKeyProvider_UnknownProvider_Fails(t *testing.T) {
 // TestBuildKeyProvider_LocalAES_Success verifies local-aes provider wiring
 // with a non-demo key in dev mode.
 func TestBuildKeyProvider_LocalAES_Success(t *testing.T) {
-	kp, err := buildKeyProvider("postgres", "dev", "local-aes", validMasterKeyHex, "")
+	kp, err := buildKeyProvider("postgres", "dev", "local-aes", validMasterKeyHex, "", clock.Real())
 	require.NoError(t, err)
 	require.NotNil(t, kp)
 }
@@ -69,7 +70,7 @@ func TestBuildKeyProvider_LocalAES_Success(t *testing.T) {
 // TestBuildKeyProvider_LocalAES_DemoKey_RealMode_Rejected verifies that
 // local-aes with a well-known demo master key is rejected in real mode.
 func TestBuildKeyProvider_LocalAES_DemoKey_RealMode_Rejected(t *testing.T) {
-	kp, err := buildKeyProvider("postgres", "real", "local-aes", demoMasterKeyHex, "")
+	kp, err := buildKeyProvider("postgres", "real", "local-aes", demoMasterKeyHex, "", clock.Real())
 	require.Error(t, err)
 	assert.Nil(t, kp)
 	assert.Contains(t, err.Error(), "well-known demo key")
@@ -78,7 +79,7 @@ func TestBuildKeyProvider_LocalAES_DemoKey_RealMode_Rejected(t *testing.T) {
 // TestBuildKeyProvider_LocalAES_DemoKey_DevMode_Allowed verifies demo key is
 // accepted in dev mode.
 func TestBuildKeyProvider_LocalAES_DemoKey_DevMode_Allowed(t *testing.T) {
-	kp, err := buildKeyProvider("postgres", "dev", "local-aes", demoMasterKeyHex, "")
+	kp, err := buildKeyProvider("postgres", "dev", "local-aes", demoMasterKeyHex, "", clock.Real())
 	require.NoError(t, err)
 	require.NotNil(t, kp)
 }
@@ -86,7 +87,7 @@ func TestBuildKeyProvider_LocalAES_DemoKey_DevMode_Allowed(t *testing.T) {
 // TestBuildKeyProvider_LocalAES_MissingKey_Fails verifies local-aes fails
 // when master key is absent.
 func TestBuildKeyProvider_LocalAES_MissingKey_Fails(t *testing.T) {
-	kp, err := buildKeyProvider("postgres", "", "local-aes", "", "")
+	kp, err := buildKeyProvider("postgres", "", "local-aes", "", "", clock.Real())
 	require.Error(t, err)
 	assert.Nil(t, kp)
 	assert.Contains(t, err.Error(), "local-aes")
@@ -108,7 +109,7 @@ func TestBuildKeyProvider_VaultTransit_InvalidAddr_FailsFast(t *testing.T) {
 	t.Setenv("VAULT_AUTH_METHOD", "token")
 	t.Setenv("VAULT_TOKEN", "test-token")
 
-	kp, err := buildKeyProvider("postgres", "dev", "vault-transit", "", "")
+	kp, err := buildKeyProvider("postgres", "dev", "vault-transit", "", "", clock.Real())
 	require.Error(t, err, "vault-transit with unreachable VAULT_ADDR must fail startup")
 	assert.Nil(t, kp)
 	assert.Contains(t, err.Error(), "vault-transit",
@@ -126,7 +127,7 @@ func TestBuildKeyProvider_VaultTransit_InvalidAddr_FailsFast(t *testing.T) {
 // to catch both forms.
 func TestBuildKeyProvider_LocalAES_DemoKey_UpperCase_RealMode_Rejected(t *testing.T) {
 	const upperDemoKey = "0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF"
-	kp, err := buildKeyProvider("postgres", "real", "local-aes", upperDemoKey, "")
+	kp, err := buildKeyProvider("postgres", "real", "local-aes", upperDemoKey, "", clock.Real())
 	require.Error(t, err)
 	assert.Nil(t, kp)
 	assert.Contains(t, err.Error(), "well-known demo key")
@@ -136,7 +137,7 @@ func TestBuildKeyProvider_LocalAES_DemoKey_UpperCase_RealMode_Rejected(t *testin
 // that a mixed-case variant of a well-known demo key is rejected in real mode.
 func TestBuildKeyProvider_LocalAES_DemoKey_MixedCase_RealMode_Rejected(t *testing.T) {
 	const mixedDemoKey = "0123456789AbCdEf0123456789AbCdEf0123456789AbCdEf0123456789AbCdEf"
-	kp, err := buildKeyProvider("postgres", "real", "local-aes", mixedDemoKey, "")
+	kp, err := buildKeyProvider("postgres", "real", "local-aes", mixedDemoKey, "", clock.Real())
 	require.Error(t, err)
 	assert.Nil(t, kp)
 	assert.Contains(t, err.Error(), "well-known demo key")
@@ -147,7 +148,7 @@ func TestBuildKeyProvider_LocalAES_DemoKey_MixedCase_RealMode_Rejected(t *testin
 // only the primary masterKey was checked, leaving the rotation key as an
 // active decryption path without demo-key validation (F2 fix).
 func TestBuildKeyProvider_PrevMasterKeyDemo_FailsFast(t *testing.T) {
-	kp, err := buildKeyProvider("postgres", "real", "local-aes", validMasterKeyHex, demoMasterKeyHex)
+	kp, err := buildKeyProvider("postgres", "real", "local-aes", validMasterKeyHex, demoMasterKeyHex, clock.Real())
 	require.Error(t, err, "real mode must reject demo prevMasterKey")
 	assert.Nil(t, kp)
 	assert.Contains(t, err.Error(), "GOCELL_CONFIGCORE_MASTER_KEY_PREVIOUS",
@@ -158,7 +159,7 @@ func TestBuildKeyProvider_PrevMasterKeyDemo_FailsFast(t *testing.T) {
 // TestBuildKeyProvider_PrevMasterKeyDemo_DevMode_Allowed verifies that a demo
 // prevMasterKey is accepted in non-real adapter modes (dev/CI).
 func TestBuildKeyProvider_PrevMasterKeyDemo_DevMode_Allowed(t *testing.T) {
-	kp, err := buildKeyProvider("postgres", "dev", "local-aes", validMasterKeyHex, demoMasterKeyHex)
+	kp, err := buildKeyProvider("postgres", "dev", "local-aes", validMasterKeyHex, demoMasterKeyHex, clock.Real())
 	require.NoError(t, err)
 	require.NotNil(t, kp)
 }
@@ -166,7 +167,7 @@ func TestBuildKeyProvider_PrevMasterKeyDemo_DevMode_Allowed(t *testing.T) {
 // TestBuildKeyProvider_PrevMasterKeyEmpty_RealMode_OK verifies that an empty
 // prevMasterKey is accepted in real mode (key rotation not configured).
 func TestBuildKeyProvider_PrevMasterKeyEmpty_RealMode_OK(t *testing.T) {
-	kp, err := buildKeyProvider("postgres", "real", "local-aes", validMasterKeyHex, "")
+	kp, err := buildKeyProvider("postgres", "real", "local-aes", validMasterKeyHex, "", clock.Real())
 	require.NoError(t, err)
 	require.NotNil(t, kp)
 }
