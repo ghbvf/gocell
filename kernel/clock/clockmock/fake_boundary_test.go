@@ -151,3 +151,104 @@ func TestFakeClock_NewTimerAt_PastDeadline_ImmediateReceive(t *testing.T) {
 		t.Error("NewTimerAt(past deadline) channel was empty; expected immediate delivery")
 	}
 }
+
+// TestFakeClock_Until_BeforeAndAfter verifies Until returns the correct
+// remaining duration including the negative case after the deadline has passed.
+func TestFakeClock_Until_BeforeAndAfter(t *testing.T) {
+	t.Parallel()
+
+	fc := clockmock.New(epoch)
+	deadline := epoch.Add(testtime.D5s)
+
+	if got := fc.Until(deadline); got != testtime.D5s {
+		t.Errorf("Until(epoch+5s) = %v, want %v", got, testtime.D5s)
+	}
+
+	fc.Advance(testtime.D10s)
+	want := -testtime.D5s
+	if got := fc.Until(deadline); got != want {
+		t.Errorf("Until(deadline) after Advance(10s) = %v, want %v", got, want)
+	}
+}
+
+// TestFakeClock_New_ZeroInitialDefaultsToFixedEpoch verifies the IsZero branch
+// of New() picks the deterministic 2024-01-01 UTC fixed epoch.
+func TestFakeClock_New_ZeroInitialDefaultsToFixedEpoch(t *testing.T) {
+	t.Parallel()
+
+	fc := clockmock.New(time.Time{})
+	want := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
+	if got := fc.Now(); !got.Equal(want) {
+		t.Errorf("New(zero).Now() = %v, want %v (fixed default epoch)", got, want)
+	}
+}
+
+// TestFakeClock_Set_FiresDueTimersAndTickers verifies Set jumps the clock
+// forward and triggers all timers/tickers whose deadline is at or before the
+// new time. Backward moves do not un-fire already-fired timers.
+func TestFakeClock_Set_FiresDueTimersAndTickers(t *testing.T) {
+	t.Parallel()
+
+	fc := clockmock.New(epoch)
+
+	timer := fc.NewTimerAt(epoch.Add(testtime.D1s))
+	defer timer.Stop()
+	tk := fc.NewTicker(testtime.D500ms)
+	defer tk.Stop()
+
+	// Jump forward past both deadlines.
+	fc.Set(epoch.Add(testtime.D2s))
+
+	select {
+	case <-timer.C():
+	default:
+		t.Error("timer did not fire after Set jumped past its deadline")
+	}
+	select {
+	case <-tk.C():
+	default:
+		t.Error("ticker did not fire after Set jumped past its deadline")
+	}
+
+	// Backward Set: should not re-fire (timer already drained).
+	fc.Set(epoch)
+	if got := fc.Now(); !got.Equal(epoch) {
+		t.Errorf("Now() after backward Set = %v, want %v", got, epoch)
+	}
+}
+
+// TestFakeTicker_Reset_RearmsAtNewInterval verifies Reset() updates the
+// interval and computes nextFire = Now()+interval. Also covers the stopped→
+// active rebound branch.
+func TestFakeTicker_Reset_RearmsAtNewInterval(t *testing.T) {
+	t.Parallel()
+
+	fc := clockmock.New(epoch)
+	tk := fc.NewTicker(testtime.D1s)
+	defer tk.Stop()
+
+	// Reset to a longer interval.
+	tk.Reset(testtime.D3s)
+	fc.Advance(testtime.D2s) // not yet at new fire
+	select {
+	case <-tk.C():
+		t.Error("ticker fired before Reset deadline (Now+3s)")
+	default:
+	}
+	fc.Advance(testtime.D1s) // now at new fire
+	select {
+	case <-tk.C():
+	default:
+		t.Error("ticker did not fire at new Reset deadline")
+	}
+
+	// Stopped→active rebound branch: Stop, then Reset.
+	tk.Stop()
+	tk.Reset(testtime.D1s)
+	fc.Advance(testtime.D1s)
+	select {
+	case <-tk.C():
+	default:
+		t.Error("Reset after Stop did not re-arm ticker")
+	}
+}
