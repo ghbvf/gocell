@@ -87,6 +87,12 @@ func TestProdClockInjectionFixtures(t *testing.T) {
 		{"dot_import_violates", []int{9}},
 		{"func_value_ref_violates", []int{9}},
 		{"struct_field_assign_violates", []int{14}},
+
+		// Core time symbols — must also be flagged individually.
+		{"now_violates", []int{8}},
+		{"since_violates", []int{8}},
+		{"until_violates", []int{8}},
+		{"newtimer_violates", []int{8}},
 	}
 
 	for _, tc := range cases {

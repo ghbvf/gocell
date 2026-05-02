@@ -37,7 +37,7 @@
 //     interface is structurally satisfied by kernel/clock.Clock at the
 //     calling layer.
 //
-// ref: docs/architecture/adr/202605021400-D6-kernel-clock-injection.md
+// ref: docs/architecture/202605021500-adr-kernel-clock-injection.md
 // ref: docs/plans/202605011500-029-master-roadmap.md Track D #D6
 // ref: dominikh/go-tools analysis/code/code.go CallName / IsCallToAny
 package archtest
@@ -141,7 +141,7 @@ func TestProdClockInjection(t *testing.T) {
 			"clk.Since / clk.Until / clk.NewTimerAt / clk.NewTicker / "+
 			"clk.AfterFunc / clk.Sleep on an injected kernel/clock.Clock; "+
 			"only kernel/clock itself may delegate to the stdlib time package. "+
-			"ref: docs/plans/202605011500-029-master-roadmap.md Track D #D6")
+			"ref: docs/architecture/202605021500-adr-kernel-clock-injection.md")
 }
 
 // isAllowedRealClockPath reports whether rel falls under one of the

@@ -83,6 +83,10 @@ var allowedRealCallerPaths = []string{
 	"examples/ssobff/app.go",                // example composition root
 	"examples/todoorder/main.go",            // example composition root
 	"tests/e2e/internal/clients/clients.go", // e2e suite composition root
+	// Test-helper packages own clock.Real() construction so test callers
+	// don't repeat it. They are imported only by *_test.go files; the
+	// CLOCK-INJECTION-TEST-CALLSITE-01 archtest enforces that boundary.
+	"cells/accesscore/internal/testutil/", // SessionRepoForTest / RealSessionRepo
 }
 
 // TestKernelClockLeafFallback enforces KERNEL-CLOCK-LEAF-FALLBACK-01
