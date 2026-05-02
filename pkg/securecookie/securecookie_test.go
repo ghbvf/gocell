@@ -36,9 +36,8 @@ func generateKey(t *testing.T, n int) []byte {
 
 func TestSecureCookie_SignOnly_RoundTrip(t *testing.T) {
 	hashKey := generateKey(t, 32)
-	sc, err := New(hashKey, nil)
+	sc, err := New(hashKey, nil, newFixedClock())
 	require.NoError(t, err)
-	sc = sc.WithClock(newFixedClock())
 
 	value := []byte("hello world")
 	encoded, err := sc.Encode("test", value)
@@ -52,9 +51,8 @@ func TestSecureCookie_SignOnly_RoundTrip(t *testing.T) {
 func TestSecureCookie_Encrypted_RoundTrip(t *testing.T) {
 	hashKey := generateKey(t, 32)
 	blockKey := generateKey(t, 32)
-	sc, err := New(hashKey, blockKey)
+	sc, err := New(hashKey, blockKey, newFixedClock())
 	require.NoError(t, err)
-	sc = sc.WithClock(newFixedClock())
 
 	value := []byte("secret data")
 	encoded, err := sc.Encode("sess", value)
@@ -67,9 +65,8 @@ func TestSecureCookie_Encrypted_RoundTrip(t *testing.T) {
 
 func TestSecureCookie_TamperedValue(t *testing.T) {
 	hashKey := generateKey(t, 32)
-	sc, err := New(hashKey, nil)
+	sc, err := New(hashKey, nil, newFixedClock())
 	require.NoError(t, err)
-	sc = sc.WithClock(newFixedClock())
 
 	encoded, err := sc.Encode("test", []byte("original"))
 	require.NoError(t, err)
@@ -84,11 +81,10 @@ func TestSecureCookie_TamperedValue(t *testing.T) {
 
 func TestSecureCookie_Expired(t *testing.T) {
 	hashKey := generateKey(t, 32)
-	sc, err := New(hashKey, nil)
-	require.NoError(t, err)
-
 	clk := newFixedClock()
-	sc = sc.WithMaxAge(1).WithClock(clk)
+	sc, err := New(hashKey, nil, clk)
+	require.NoError(t, err)
+	sc = sc.WithMaxAge(1)
 
 	encoded, err := sc.Encode("test", []byte("data"))
 	require.NoError(t, err)
@@ -101,23 +97,35 @@ func TestSecureCookie_Expired(t *testing.T) {
 }
 
 func TestSecureCookie_HashKeyTooShort(t *testing.T) {
-	_, err := New([]byte("short"), nil)
+	_, err := New([]byte("short"), nil, newFixedClock())
 	assert.ErrorIs(t, err, ErrHashKeyTooShort)
+}
+
+func TestSecureCookie_NilClock_ReturnsError(t *testing.T) {
+	hashKey := generateKey(t, 32)
+	_, err := New(hashKey, nil, nil)
+	assert.ErrorIs(t, err, ErrClockRequired)
+}
+
+func TestSecureCookie_TypedNilClock_ReturnsError(t *testing.T) {
+	hashKey := generateKey(t, 32)
+	var typedNil *fixedClock // typed-nil pointer wrapped in Clock interface
+	_, err := New(hashKey, nil, typedNil)
+	assert.ErrorIs(t, err, ErrClockRequired)
 }
 
 func TestSecureCookie_InvalidBlockKeyLength(t *testing.T) {
 	hashKey := generateKey(t, 32)
 	badBlockKey := generateKey(t, 15)
-	_, err := New(hashKey, badBlockKey)
+	_, err := New(hashKey, badBlockKey, newFixedClock())
 	assert.Error(t, err)
 	assert.True(t, strings.Contains(err.Error(), "blockKey"), "error should mention blockKey")
 }
 
 func TestSecureCookie_EmptyValue_RoundTrip(t *testing.T) {
 	hashKey := generateKey(t, 32)
-	sc, err := New(hashKey, nil)
+	sc, err := New(hashKey, nil, newFixedClock())
 	require.NoError(t, err)
-	sc = sc.WithClock(newFixedClock())
 
 	encoded, err := sc.Encode("test", []byte{})
 	require.NoError(t, err)
@@ -129,9 +137,8 @@ func TestSecureCookie_EmptyValue_RoundTrip(t *testing.T) {
 
 func TestSecureCookie_WrongName(t *testing.T) {
 	hashKey := generateKey(t, 32)
-	sc, err := New(hashKey, nil)
+	sc, err := New(hashKey, nil, newFixedClock())
 	require.NoError(t, err)
-	sc = sc.WithClock(newFixedClock())
 
 	encoded, err := sc.Encode("cookie-a", []byte("data"))
 	require.NoError(t, err)
@@ -142,11 +149,10 @@ func TestSecureCookie_WrongName(t *testing.T) {
 
 func TestSecureCookie_MaxAgeZero_NeverExpires(t *testing.T) {
 	hashKey := generateKey(t, 32)
-	sc, err := New(hashKey, nil)
-	require.NoError(t, err)
-
 	clk := newFixedClock()
-	sc = sc.WithMaxAge(0).WithClock(clk)
+	sc, err := New(hashKey, nil, clk)
+	require.NoError(t, err)
+	sc = sc.WithMaxAge(0)
 
 	encoded, err := sc.Encode("test", []byte("data"))
 	require.NoError(t, err)
@@ -171,9 +177,8 @@ func TestSecureCookie_AESKeySizes(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			blockKey := generateKey(t, tt.keyLen)
-			sc, err := New(hashKey, blockKey)
+			sc, err := New(hashKey, blockKey, newFixedClock())
 			require.NoError(t, err)
-			sc = sc.WithClock(newFixedClock())
 
 			value := []byte("test-" + tt.name)
 			encoded, err := sc.Encode("test", value)
@@ -188,9 +193,8 @@ func TestSecureCookie_AESKeySizes(t *testing.T) {
 
 func TestSecureCookie_Decode_MaliciousInput(t *testing.T) {
 	hashKey := generateKey(t, 32)
-	sc, err := New(hashKey, nil)
+	sc, err := New(hashKey, nil, newFixedClock())
 	require.NoError(t, err)
-	sc = sc.WithClock(newFixedClock())
 
 	tests := []struct {
 		name    string
@@ -212,10 +216,10 @@ func TestSecureCookie_Decode_MaliciousInput(t *testing.T) {
 
 func TestSecureCookie_WithMaxAge_DeepCopyKeys(t *testing.T) {
 	hashKey := generateKey(t, 32)
-	sc, err := New(hashKey, nil)
+	sc, err := New(hashKey, nil, newFixedClock())
 	require.NoError(t, err)
 
-	sc2 := sc.WithMaxAge(60).WithClock(newFixedClock())
+	sc2 := sc.WithMaxAge(60)
 
 	// Mutate original hashKey — should not affect sc2.
 	hashKey[0] ^= 0xFF

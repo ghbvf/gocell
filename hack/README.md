@@ -16,8 +16,7 @@ change to the driver.
 
 ## Adding a new gate
 
-1. Create `hack/verify-<name>.sh` with shebang `#!/usr/bin/env bash` and
-   `set -euo pipefail`.
+1. Create `hack/verify-<name>.sh` with shebang `#!/usr/bin/env bash`.
 2. `cd "$(dirname "${BASH_SOURCE[0]}")/.."` so the script runs from repo root
    regardless of caller's CWD.
 3. `chmod +x hack/verify-<name>.sh` so the file can be invoked directly
@@ -43,6 +42,7 @@ itself enforces.
 | `verify-prod-clock-injection.sh` | `PROD-CLOCK-INJECTION-01` + `KERNEL-CLOCK-LEAF-FALLBACK-01` + `TestProdClockInjectionFixtures`: production code must inject `kernel/clock.Clock`; stdlib `time.Now / Since / Until / NewTimer / NewTicker / After / AfterFunc / Tick / Sleep` are forbidden outside leaf adapters |
 | `verify-prod-duration.sh` | `PROD-DURATION-01`: production code must use named duration constants instead of inline time literals |
 | `verify-scaffold-reject.sh` | `gocell scaffold slice` rejects kebab-case names |
+| `verify-shellcheck.sh` | `shellcheck` lints every `*.sh` under `scripts/ hack/ tests/`. Disabled lints `SC1090,SC1091,SC2230` mirror `kubernetes/kubernetes hack/verify-shellcheck.sh`. Replaces the regex-only `verify-shell-safety.sh` from PR #350 |
 | `verify-supply-chain-clean.sh` | drift detection: blocks `--exclude/--ignore/-skip` flags + `.govulncheckignore` / `.semgrepignore` / CodeQL `paths-ignore` workarounds |
 | `verify-test-time-literal.sh` | `TEST-TIME-LITERAL-01`: test-code time literals must be extracted to package-level constants (use `pkg/testutil/testtime.*` for cross-cutting timeouts) |
 | `verify-unconditional-skip.sh` | no `t.Skip` without a runtime predicate |

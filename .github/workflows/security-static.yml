@@ -58,9 +58,24 @@ jobs:
         with:
           languages: go
           queries: security-extended
+          # Manual build mode: Autobuild walks the tree and tries to build every
+          # go.mod it finds, including the 37 deliberately-broken fixture modules
+          # under tools/archtest/testdata/ (used by archtest to verify violation
+          # detection). That triggered "Go files were found but not processed" on
+          # the Code Scanning dashboard. `go build ./...` from the root module
+          # does not recurse into nested modules, so the fixtures are skipped
+          # cleanly and the extractor traces only the main module.
+          build-mode: manual
 
-      - name: Autobuild
-        uses: github/codeql-action/autobuild@ce64ddcb0d8d890d2df4a9d1c04ff297367dea2a # v3
+      - name: Build (CodeQL trace)
+        # `make check-build` is the single repo-wide compile entrypoint
+        # (Makefile: `go build ./...`, no artefacts). Going through the
+        # Makefile keeps CodeQL's extractor trace aligned with the rest of
+        # CI — if `check-build` ever picks up build tags or excludes, CodeQL
+        # follows automatically. Root `./...` does not recurse into nested
+        # modules under tools/archtest/testdata/, so the deliberately-broken
+        # archtest fixtures stay out of the extractor trace.
+        run: make check-build
 
       - name: Analyze
         # Upload-only: PR blocking is via repo Code Scanning branch protection

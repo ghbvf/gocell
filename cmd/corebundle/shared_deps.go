@@ -341,6 +341,13 @@ func (d *SharedDeps) validateCore() []error {
 		errs = append(errs, errcode.New(errcode.ErrValidationFailed,
 			"SharedDeps."+field+" must be set"))
 	}
+	// Clock is the single root clock instance threaded through every adapter,
+	// service, and middleware. Required: a nil here would surface as a deeper
+	// runtime panic (kernel/clock.MustHaveClock or constructors that re-validate).
+	// Validate at startup so misconfiguration fails before any subsystem starts.
+	if d.Clock == nil {
+		missing("Clock")
+	}
 	if d.JWTDeps.issuer == nil {
 		missing("JWTDeps.issuer")
 	}

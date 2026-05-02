@@ -17,21 +17,25 @@
 // time, it must obtain the Clock from a constructor parameter, not by
 // calling kernel/clock.Real() itself.
 //
-// Whitelist (the only legitimate clock.Real() callers):
+// Whitelist (the only legitimate clock.Real() callers within the scanned
+// surface):
 //
 //   - kernel/clock/clock.go              — Real() factory definition itself
 //   - cmd/corebundle/                    — main composition root
 //   - gocell.go                          — top-level entry
-//   - examples/iotdevice/main.go         — example composition root
-//   - examples/ssobff/app.go             — example composition root
-//   - examples/todoorder/main.go         — example composition root
 //   - tests/e2e/internal/clients/clients.go
 //     — non-_test.go helper that owns the e2e suite's clock; the e2e suite
 //     process treats this file as its composition root.
 //
-// _test.go files are explicitly out of scope: this gate scans only
-// production code (IsProductionCode). Test-side clock.Real() cleanup is
-// tracked separately as G12-TEST-CLOCK-REAL-CLEANUP.
+// Out-of-scope by fileroles (no allowlist entry needed):
+//   - examples/ — every Go file under examples/ is excluded by
+//     fileroles.IsProductionCode (PROD-DURATION-CONST-01 contract:
+//     "example projects ship documentation, not production binaries").
+//     Example main.go composition roots therefore do not appear in the
+//     scanned surface and need no allowlist entry.
+//   - *_test.go — fileroles.IsTestCode excludes them; gate scans
+//     production code only. Test-side clock.Real() cleanup is tracked
+//     separately as G12-TEST-CLOCK-REAL-CLEANUP.
 //
 // Resolution is type-driven: every *ast.SelectorExpr is run through
 // go/types.Info.ObjectOf to obtain the resolved *types.Func, then gated on
@@ -79,10 +83,12 @@ var allowedRealCallerPaths = []string{
 	"cmd/corebundle/",                       // main composition root
 	"cmd/gocell/",                           // gocell CLI composition root
 	"gocell.go",                             // top-level entry
-	"examples/iotdevice/main.go",            // example composition root
-	"examples/ssobff/app.go",                // example composition root
-	"examples/todoorder/main.go",            // example composition root
 	"tests/e2e/internal/clients/clients.go", // e2e suite composition root
+	// examples/ is excluded by fileroles.IsProductionCode (see package doc),
+	// so example composition roots (examples/iotdevice/main.go,
+	// examples/ssobff/app.go, examples/todoorder/main.go) do not need
+	// allowlist entries.
+	//
 	// Test-helper packages own clock.Real() construction so test callers
 	// don't repeat it. They are imported only by *_test.go files; the
 	// CLOCK-INJECTION-TEST-CALLSITE-01 archtest enforces that boundary.
@@ -220,4 +226,78 @@ func matchedKernelClockReal(info *types.Info, ident *ast.Ident) bool {
 		return false
 	}
 	return fn.Name() == "Real"
+}
+
+// runLeafFallbackFixtureScan loads the fixture package at fixtureDir and
+// returns the sorted slice of violation strings using the same predicate as
+// TestKernelClockLeafFallback (scanLeafRealCallsAST). The whitelist is
+// intentionally NOT applied here — every fixture path is treated as
+// production code so the gate's detection logic is the only thing under test.
+func runLeafFallbackFixtureScan(t *testing.T, fixtureDir string) []string {
+	t.Helper()
+	pkgs, errs, err := typeseval.LoadPackages(fixtureDir, false, nil, "./...")
+	require.NoError(t, err, "packages.Load failed for fixture %s", fixtureDir)
+	require.Empty(t, errs, "package load errors must fail-closed for %s: %v", fixtureDir, errs)
+
+	var violations []string
+	visited := map[string]bool{}
+
+	packages.Visit(pkgs, nil, func(p *packages.Package) {
+		for i, file := range p.Syntax {
+			if i >= len(p.GoFiles) {
+				continue
+			}
+			abs := p.GoFiles[i]
+			if visited[abs] {
+				continue
+			}
+			visited[abs] = true
+
+			rel, ok := fileroles.Rel(fixtureDir, abs)
+			if !ok {
+				continue
+			}
+
+			violations = append(violations,
+				scanLeafRealCallsAST(p.Fset, file, rel, p.TypesInfo)...)
+		}
+	})
+
+	sort.Strings(violations)
+	return violations
+}
+
+// TestKernelClockLeafFallbackFixtures runs the KERNEL-CLOCK-LEAF-FALLBACK-01
+// scanner over each fixture subpackage and asserts the expected violation
+// count. Mirrors TestProdClockInjectionFixtures (sibling gate).
+func TestKernelClockLeafFallbackFixtures(t *testing.T) {
+	t.Parallel()
+	if testing.Short() {
+		t.Skip("skipping packages.Load-based fixture test in -short mode")
+	}
+
+	root := findModuleRoot(t)
+	base := root + "/tools/archtest/testdata/clock_leaf_fallback_fixtures"
+
+	cases := []struct {
+		pkg          string
+		wantViolReps int // expected number of (file:line) violation reports
+	}{
+		// Positive — must produce 0 violations.
+		{"compliant", 0},
+		// Negative — exercises three call shapes (direct, alias, nil-fallback).
+		// Each produces one (file:line) report (selector + alias + body all on
+		// distinct lines), so 3 reports total.
+		{"violates", 3},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.pkg, func(t *testing.T) {
+			t.Parallel()
+			got := runLeafFallbackFixtureScan(t, base+"/"+tc.pkg)
+			assert.Equal(t, tc.wantViolReps, len(got),
+				"fixture %s: expected %d violation report(s), got %d: %v",
+				tc.pkg, tc.wantViolReps, len(got), got)
+		})
+	}
 }

@@ -27,25 +27,9 @@ import (
 // cookies and check expiry. It is intentionally local: pkg/ may not import
 // kernel/, so SecureCookie defines the minimal Now() interface that any
 // kernel/clock.Clock satisfies structurally. Callers in higher layers pass
-// their injected clock.Clock directly via [SecureCookie.WithClock].
+// their injected clock.Clock directly to [New].
 type Clock interface {
 	Now() time.Time
-}
-
-// MustHaveClock panics when clk is nil or a typed-nil (interface wrapping a
-// nil pointer). pkg/ may not import kernel/clock, so this is a local equivalent
-// of clock.MustHaveClock with the same semantics.
-func MustHaveClock(clk Clock) {
-	if clk == nil {
-		panic("securecookie.WithClock: Clock is required (nil rejected); pass a real clock or clockmock.New in tests")
-	}
-	v := reflect.ValueOf(clk)
-	switch v.Kind() {
-	case reflect.Ptr, reflect.Map, reflect.Chan, reflect.Func, reflect.Slice, reflect.Interface:
-		if v.IsNil() {
-			panic("securecookie.WithClock: Clock is required (typed-nil rejected); pass a real clock or clockmock.New in tests")
-		}
-	}
 }
 
 // SecureCookie encodes and decodes cookie values with HMAC-SHA256 signing
@@ -54,7 +38,7 @@ type SecureCookie struct {
 	hashKey []byte      // HMAC-SHA256 signing key (required, ≥32 bytes)
 	aead    cipher.AEAD // AES-GCM AEAD (nil if no encryption)
 	maxAge  int         // max cookie age in seconds (0 = no expiry check)
-	clock   Clock       // clock used for encoding timestamps and expiry checks
+	clock   Clock       // clock used for encoding timestamps and expiry checks (always non-nil after New)
 }
 
 const (
@@ -71,14 +55,24 @@ var (
 	ErrHMACInvalid      = errcode.New(errcode.ErrSecureCookieHMACInvalid, "securecookie: HMAC verification failed")
 	ErrExpired          = errcode.New(errcode.ErrSecureCookieExpired, "securecookie: cookie has expired")
 	ErrDecryptFailed    = errcode.New(errcode.ErrSecureCookieDecryptFailed, "securecookie: decryption failed")
+	ErrClockRequired    = errcode.New(errcode.ErrValidationFailed, "securecookie: clock is required (nil or typed-nil rejected)")
 )
 
-// New creates a SecureCookie with the given hash key and optional block key.
+// New creates a SecureCookie with the given hash key, optional block key, and
+// required Clock. Returns ErrClockRequired if clk is nil or a typed-nil
+// (interface wrapping a nil pointer) — making this the single, error-style
+// fail-fast point for clock injection (no panic anywhere in the package).
+//
 // hashKey is required (min 32 bytes). blockKey may be nil (signing only)
-// or 16/24/32 bytes (AES-128/192/256-GCM).
-func New(hashKey, blockKey []byte) (*SecureCookie, error) {
+// or 16/24/32 bytes (AES-128/192/256-GCM). clk is required: pass the
+// caller's injected clock.Clock at the composition root, or a
+// clockmock.FakeClock in tests.
+func New(hashKey, blockKey []byte, clk Clock) (*SecureCookie, error) {
 	if len(hashKey) < minHashKey {
 		return nil, ErrHashKeyTooShort
+	}
+	if err := validateClock(clk); err != nil {
+		return nil, err
 	}
 
 	// Deep copy hashKey to prevent caller mutation.
@@ -88,7 +82,7 @@ func New(hashKey, blockKey []byte) (*SecureCookie, error) {
 	sc := &SecureCookie{
 		hashKey: hk,
 		maxAge:  86400, // default 24h
-		clock:   nil,
+		clock:   clk,
 	}
 
 	if blockKey != nil {
@@ -106,8 +100,24 @@ func New(hashKey, blockKey []byte) (*SecureCookie, error) {
 	return sc, nil
 }
 
+// validateClock returns ErrClockRequired if clk is nil or a typed-nil
+// (interface wrapping a nil pointer of any reference kind).
+func validateClock(clk Clock) error {
+	if clk == nil {
+		return ErrClockRequired
+	}
+	v := reflect.ValueOf(clk)
+	switch v.Kind() {
+	case reflect.Ptr, reflect.Map, reflect.Chan, reflect.Func, reflect.Slice, reflect.Interface:
+		if v.IsNil() {
+			return ErrClockRequired
+		}
+	}
+	return nil
+}
+
 // WithMaxAge returns a copy of sc with the given max age in seconds.
-// 0 means no expiry check. Key material is deep-copied.
+// 0 means no expiry check. Key material is deep-copied; the clock is shared.
 func (sc *SecureCookie) WithMaxAge(seconds int) *SecureCookie {
 	hk := make([]byte, len(sc.hashKey))
 	copy(hk, sc.hashKey)
@@ -119,33 +129,11 @@ func (sc *SecureCookie) WithMaxAge(seconds int) *SecureCookie {
 	}
 }
 
-// WithClock returns a copy of sc using the given clock for timestamps and
-// expiry checks. Key material is deep-copied. clk must not be nil or a typed-nil;
-// pass a real clock implementation (e.g. the caller's injected clock or clockmock.New
-// in tests). Panics on nil or typed-nil to fail fast at construction time.
-//
-// Any kernel/clock.Clock satisfies the local Clock interface structurally;
-// higher layers pass their injected clock.Clock here without explicit
-// conversion. Tests that need deterministic time inject a clockmock.FakeClock
-// the same way.
-func (sc *SecureCookie) WithClock(clk Clock) *SecureCookie {
-	MustHaveClock(clk)
-	hk := make([]byte, len(sc.hashKey))
-	copy(hk, sc.hashKey)
-	return &SecureCookie{
-		hashKey: hk,
-		aead:    sc.aead,
-		maxAge:  sc.maxAge,
-		clock:   clk,
-	}
-}
-
 // Encode signs (and optionally encrypts) value, returning a base64url string.
 //
 // Format: base64url( timestamp(8) | [nonce(12) | ciphertext(N)] or payload(N) | hmac(32) )
 // HMAC input: len(name)(4) | name | timestamp | nonce | payload.
 func (sc *SecureCookie) Encode(name string, value []byte) (string, error) {
-	MustHaveClock(sc.clock)
 	// 1. Timestamp
 	ts := make([]byte, timestampLen)
 	now := sc.clock.Now().Unix()
@@ -183,7 +171,6 @@ func (sc *SecureCookie) Encode(name string, value []byte) (string, error) {
 // Decode verifies signature, checks freshness, decrypts, and returns the
 // original value.
 func (sc *SecureCookie) Decode(name string, encoded string) ([]byte, error) {
-	MustHaveClock(sc.clock)
 	raw, err := base64.RawURLEncoding.DecodeString(encoded)
 	if err != nil {
 		return nil, fmt.Errorf("securecookie: base64: %w", err)

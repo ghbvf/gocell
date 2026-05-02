@@ -85,11 +85,10 @@ func normalizeCookieSessionConfig(cfg *CookieSessionConfig) {
 func NewCookieSession(cfg CookieSessionConfig) (func(http.Handler) http.Handler, error) {
 	normalizeCookieSessionConfig(&cfg)
 
-	sc, err := securecookie.New(cfg.Secret, cfg.EncryptKey)
+	sc, err := securecookie.New(cfg.Secret, cfg.EncryptKey, cfg.Clock)
 	if err != nil {
 		return nil, fmt.Errorf("cookie_session: %w", err)
 	}
-	sc = sc.WithClock(cfg.Clock)
 	if cfg.MaxAge > 0 {
 		sc = sc.WithMaxAge(cfg.MaxAge)
 	}
@@ -144,14 +143,16 @@ func MustCookieSession(cfg CookieSessionConfig) func(http.Handler) http.Handler 
 func NewSessionCookieWriter(cfg CookieSessionConfig) (*SessionCookieWriter, error) {
 	normalizeCookieSessionConfig(&cfg)
 
-	sc, err := securecookie.New(cfg.Secret, cfg.EncryptKey)
+	sc, err := securecookie.New(cfg.Secret, cfg.EncryptKey, cfg.Clock)
 	if err != nil {
 		return nil, fmt.Errorf("cookie_session: %w", err)
 	}
-	sc = sc.WithClock(cfg.Clock)
 
 	return &SessionCookieWriter{sc: sc, cfg: cfg}, nil
 }
+
+// (sc.WithClock chain removed in PR #348 R4: securecookie.New now takes Clock
+// as a required positional argument; nil/typed-nil returns ErrClockRequired.)
 
 // SessionCookieWriter writes and clears session cookies using a pre-built
 // SecureCookie instance for consistent performance.
@@ -207,13 +208,12 @@ func (w *SessionCookieWriter) Clear(rw http.ResponseWriter) {
 func SetSessionCookie(w http.ResponseWriter, cfg CookieSessionConfig, jwt string) error {
 	normalizeCookieSessionConfig(&cfg)
 
-	sc, err := securecookie.New(cfg.Secret, cfg.EncryptKey)
+	sc, err := securecookie.New(cfg.Secret, cfg.EncryptKey, cfg.Clock)
 	if err != nil {
 		slog.Error("cookie_session: failed to create SecureCookie",
 			slog.Any("error", err))
 		return fmt.Errorf("cookie_session: %w", err)
 	}
-	sc = sc.WithClock(cfg.Clock)
 
 	encoded, err := sc.Encode(cfg.CookieName, []byte(jwt))
 	if err != nil {

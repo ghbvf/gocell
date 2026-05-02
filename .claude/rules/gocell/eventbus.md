@@ -53,21 +53,24 @@ func handleEvent(ctx context.Context, entry outbox.Entry) outbox.HandleResult {
 
 ### Cell 订阅注册（EventRouter 模式）
 
-Cell 在 `RegisterSubscriptions` 中通过 `r.AddHandler(topic, handler)` 声明订阅意图，
-**禁止手动启动 goroutine 或调用 sub.Subscribe**——Router 管理所有 goroutine 生命周期。
+Cell 在 `RegisterSubscriptions` 中通过 `r.AddContractHandler(spec, handler, consumerGroup)` 声明订阅意图，Router 管理所有 goroutine 生命周期。
 
 ```go
 func (c *MyCell) RegisterSubscriptions(r cell.EventRouter) error {
     handler := outbox.WrapLegacyHandler(c.svc.HandleEvent)
-    r.AddHandler("my.topic.v1", handler)
-    return nil
+    return r.AddContractHandler(wrapper.ContractSpec{
+        ID:        "event.my.topic.v1",
+        Kind:      "event",
+        Transport: "amqp",
+        Topic:     "my.topic.v1",
+    }, handler, c.ID())
 }
 ```
 
-**声明对齐约束**：`r.AddHandler(<topic>, ...)` 的 topic 必须同步声明在三处：
-1. slice.yaml `contractUsages` 含 `{contract: <topic>, role: subscribe}` 条目
+**声明对齐约束**：`spec.ID` 必须同步声明在三处：
+1. slice.yaml `contractUsages` 含 `{contract: event.my.topic.v1, role: subscribe}` 条目
 2. contract.yaml `endpoints.subscribers` 含本 slice 所属 cell 的 ID
-3. slice.yaml `verify.contract` 含 `contract.<topic>.subscribe`
+3. slice.yaml `verify.contract` 含 `contract.event.my.topic.v1.subscribe`
 
 前两项任一漂移由 `gocell validate` ADV-06 规则拦截（error 级，双向校验
 `endpoints.subscribers ↔ contractUsages[role=subscribe]`）。第三项
