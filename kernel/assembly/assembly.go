@@ -113,16 +113,19 @@ type CoreAssembly struct {
 
 // New creates a CoreAssembly with the given configuration.
 //
-// If cfg.Clock is nil, clock.Real() is substituted so the assembly uses
-// wall-clock time. Pass clockmock.New(...) in tests that need time control.
+// cfg.Clock is required: assembly.New panics when Clock is nil OR a
+// typed-nil interface (e.g. (*realClock)(nil) wrapped in a clock.Clock
+// value). The single root clock is constructed once at the composition
+// root via clock.Real() and threaded through every assembly + cell;
+// missing wiring fails fast at construction time rather than masquerading
+// as wall-clock-driven flakiness in tests. Tests inject clockmock.New(...).
+//
 // If cfg.HookObserver is nil, cell.NopHookObserver{} is substituted so the
 // hook call sites can emit unconditionally.
 // If cfg.HookTimeout is zero, DefaultHookTimeout is applied. Negative value
 // disables per-hook timeout entirely.
 func New(cfg Config) *CoreAssembly {
-	if cfg.Clock == nil {
-		cfg.Clock = clock.Real()
-	}
+	clock.MustHaveClock(cfg.Clock, "assembly.New")
 	// Normalise nil + typed-nil (interface wrapping a nil pointer) to
 	// NopHookObserver. A typed nil that slips through would dispatch to a
 	// nil receiver on every hook and only manifest as panic-recover log
@@ -335,6 +338,7 @@ func (a *CoreAssembly) startInternal(ctx context.Context, cfgMap map[string]any)
 	deps := cell.Dependencies{
 		Config:         cfgMap,
 		DurabilityMode: a.cfg.DurabilityMode,
+		Clock:          a.cfg.Clock,
 	}
 
 	// Phase 1: Init all cells. If any fails, no cell has been Start'd yet.
@@ -526,6 +530,16 @@ func (a *CoreAssembly) emitHookEvent(e cell.HookEvent) {
 // ID returns the assembly's identifier as set in Config.ID.
 func (a *CoreAssembly) ID() string {
 	return a.id
+}
+
+// Clock returns the single root [clock.Clock] that the assembly threads
+// through every cell's Init via Dependencies.Clock. Exposed so that
+// Bootstrap can fail-fast when a caller passes both WithAssembly and
+// WithClock with non-identical clock instances.
+//
+// Always non-nil — assembly.New rejects nil and typed-nil at construction.
+func (a *CoreAssembly) Clock() clock.Clock {
+	return a.cfg.Clock
 }
 
 // CellIDs returns the IDs of all registered cells in registration order.

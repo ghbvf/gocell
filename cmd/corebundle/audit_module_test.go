@@ -8,6 +8,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/idempotency"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/runtime/auth"
@@ -25,14 +26,14 @@ func minimalSharedDepsForAuditTest(t *testing.T, adapterMode string) *SharedDeps
 	t.Setenv("GOCELL_JWT_ISSUER", "test-issuer")
 	t.Setenv("GOCELL_JWT_AUDIENCE", "test-audience")
 
-	eb := eventbus.New()
+	eb := eventbus.New(eventbus.WithClock(clock.Real()))
 	privKey, pubKey := auth.MustGenerateTestKeyPair()
-	keySet, err := auth.NewKeySet(privKey, pubKey)
+	keySet, err := auth.NewKeySet(privKey, pubKey, clock.Real())
 	require.NoError(t, err)
-	issuer, err := auth.NewJWTIssuer(keySet, "test-issuer", testtime.D15min,
+	issuer, err := auth.NewJWTIssuer(keySet, "test-issuer", testtime.D15min, clock.Real(),
 		auth.WithIssuerAudiencesFromSlice([]string{"test-audience"}))
 	require.NoError(t, err)
-	verifier, err := auth.NewJWTVerifier(keySet,
+	verifier, err := auth.NewJWTVerifier(keySet, clock.Real(),
 		auth.WithExpectedAudiences("test-audience"))
 	require.NoError(t, err)
 
@@ -44,7 +45,7 @@ func minimalSharedDepsForAuditTest(t *testing.T, adapterMode string) *SharedDeps
 		JWTDeps:             jwtDeps{issuer: issuer, verifier: verifier},
 		PromStack:           ps,
 		EventBus:            eb,
-		ConsumerClaimer:     idempotency.NewInMemClaimer(),
+		ConsumerClaimer:     idempotency.NewInMemClaimer(clock.Real()),
 		ConsumerClaimerKind: consumerClaimerKindInMemory,
 	}
 }

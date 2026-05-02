@@ -10,6 +10,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/ghbvf/gocell/kernel/clock"
 )
 
 // Compile-time interface checks.
@@ -21,7 +23,7 @@ var _ KeyProvider = (*StaticKeyProvider)(nil)
 func TestEnvKeyProvider_RSAKeySet_ReturnsLoadedKeySet(t *testing.T) {
 	setJWTEnvVars(t)
 
-	p := NewEnvKeyProvider()
+	p := NewEnvKeyProvider(clock.Real())
 	ks, err := p.RSAKeySet()
 	require.NoError(t, err)
 	require.NotNil(t, ks)
@@ -40,7 +42,7 @@ func TestEnvKeyProvider_RSAKeySet_WithVerificationKey(t *testing.T) {
 	t.Setenv(EnvJWTPrevPublicKey, string(prevPubPEM))
 	t.Setenv(EnvJWTPrevKeyExpires, time.Now().Add(time.Hour).Format(time.RFC3339))
 
-	p := NewEnvKeyProvider()
+	p := NewEnvKeyProvider(clock.Real())
 	ks, err := p.RSAKeySet()
 	require.NoError(t, err)
 
@@ -62,7 +64,7 @@ func TestEnvKeyProvider_RSAKeySet_MissingKeysFails(t *testing.T) {
 	t.Setenv(EnvJWTPrivateKey, "")
 	t.Setenv(EnvJWTPublicKey, "")
 
-	p := NewEnvKeyProvider()
+	p := NewEnvKeyProvider(clock.Real())
 	ks, err := p.RSAKeySet()
 	assert.Nil(t, ks)
 	assert.Error(t, err)
@@ -72,7 +74,7 @@ func TestEnvKeyProvider_HMACKeyRing_ReturnsLoadedRing(t *testing.T) {
 	hmacKey := "this-is-a-32-byte-hmackey-for-!!"
 	t.Setenv(EnvServiceSecret, hmacKey)
 
-	p := NewEnvKeyProvider()
+	p := NewEnvKeyProvider(clock.Real())
 	ring, err := p.HMACKeyRing()
 	require.NoError(t, err)
 	require.NotNil(t, ring)
@@ -85,7 +87,7 @@ func TestEnvKeyProvider_HMACKeyRing_WithPrevious(t *testing.T) {
 	t.Setenv(EnvServiceSecret, current)
 	t.Setenv(EnvServiceSecretPrevious, previous)
 
-	p := NewEnvKeyProvider()
+	p := NewEnvKeyProvider(clock.Real())
 	ring, err := p.HMACKeyRing()
 	require.NoError(t, err)
 	secrets := ring.Secrets()
@@ -95,7 +97,7 @@ func TestEnvKeyProvider_HMACKeyRing_WithPrevious(t *testing.T) {
 func TestEnvKeyProvider_HMACKeyRing_NotConfiguredReturnsError(t *testing.T) {
 	t.Setenv(EnvServiceSecret, "")
 
-	p := NewEnvKeyProvider()
+	p := NewEnvKeyProvider(clock.Real())
 	ring, err := p.HMACKeyRing()
 	assert.Nil(t, ring)
 	assert.Error(t, err)
@@ -105,7 +107,7 @@ func TestEnvKeyProvider_OnlyRSA_HMACReturnsError(t *testing.T) {
 	setJWTEnvVars(t)
 	t.Setenv(EnvServiceSecret, "")
 
-	p := NewEnvKeyProvider()
+	p := NewEnvKeyProvider(clock.Real())
 
 	ks, err := p.RSAKeySet()
 	require.NoError(t, err)
@@ -121,7 +123,7 @@ func TestEnvKeyProvider_OnlyHMAC_RSAReturnsError(t *testing.T) {
 	t.Setenv(EnvJWTPublicKey, "")
 	t.Setenv(EnvServiceSecret, "this-is-a-32-byte-secret-for-hmac!")
 
-	p := NewEnvKeyProvider()
+	p := NewEnvKeyProvider(clock.Real())
 
 	ks, err := p.RSAKeySet()
 	assert.Nil(t, ks)
@@ -135,7 +137,7 @@ func TestEnvKeyProvider_OnlyHMAC_RSAReturnsError(t *testing.T) {
 func TestEnvKeyProvider_RSAKeySet_ReturnsSameInstance(t *testing.T) {
 	setJWTEnvVars(t)
 
-	p := NewEnvKeyProvider()
+	p := NewEnvKeyProvider(clock.Real())
 	ks1, err := p.RSAKeySet()
 	require.NoError(t, err)
 	require.NotNil(t, ks1)
@@ -147,7 +149,7 @@ func TestEnvKeyProvider_RSAKeySet_ReturnsSameInstance(t *testing.T) {
 func TestEnvKeyProvider_HMACKeyRing_ReturnsSameInstance(t *testing.T) {
 	t.Setenv(EnvServiceSecret, "this-is-a-32-byte-secret-for-hmac!")
 
-	p := NewEnvKeyProvider()
+	p := NewEnvKeyProvider(clock.Real())
 	r1, err := p.HMACKeyRing()
 	require.NoError(t, err)
 	require.NotNil(t, r1)
@@ -159,7 +161,7 @@ func TestEnvKeyProvider_HMACKeyRing_ReturnsSameInstance(t *testing.T) {
 // --- StaticKeyProvider tests ---
 
 func TestStaticKeyProvider_ReturnsProvidedKeySet(t *testing.T) {
-	ks, _, _ := MustNewTestKeySet()
+	ks, _, _ := MustNewTestKeySet(clock.Real())
 	p := NewStaticKeyProvider(ks, nil)
 
 	got, err := p.RSAKeySet()
@@ -194,7 +196,7 @@ func TestStaticKeyProvider_NilHMACKeyRingReturnsError(t *testing.T) {
 // --- MustNewTestKeyProvider tests ---
 
 func TestMustNewTestKeyProvider_ReturnsValidProvider(t *testing.T) {
-	p := MustNewTestKeyProvider()
+	p := MustNewTestKeyProvider(clock.Real())
 	require.NotNil(t, p)
 
 	ks, err := p.RSAKeySet()

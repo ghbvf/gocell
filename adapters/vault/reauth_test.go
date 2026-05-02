@@ -20,6 +20,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/require"
 
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 )
@@ -50,6 +51,7 @@ func TestReauthenticate_BackoffInterruptedByCtxCancel(t *testing.T) {
 	w := &tokenRenewalWorker{
 		authMethod: fakeAuth,
 		logger:     slog.Default(),
+		clock:      clock.Real(),
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -113,6 +115,7 @@ func TestDoReauth_InfiniteRetry_UntilCtxCancel(t *testing.T) {
 		client:     renewer,
 		authMethod: fakeAuth,
 		logger:     slog.Default(),
+		clock:      clock.Real(),
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -183,6 +186,7 @@ func TestDoReauth_SucceedsAfterNFailures(t *testing.T) {
 		authMethod:  fakeAuth,
 		logger:      slog.Default(),
 		authHealthy: authHealthy,
+		clock:       clock.Real(),
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), testtime.SelectAsyncSettle)
@@ -304,6 +308,7 @@ func TestDoReauth_BuildWatcherFailureBackoff(t *testing.T) {
 		client:     renewer,
 		authMethod: fakeAuth,
 		logger:     slog.Default(),
+		clock:      clock.Real(),
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), testtime.D200ms)

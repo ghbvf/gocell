@@ -28,7 +28,6 @@ import (
 	"github.com/ghbvf/gocell/pkg/query"
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/auth/refresh"
-	refreshmem "github.com/ghbvf/gocell/runtime/auth/refresh/memstore"
 	obmetrics "github.com/ghbvf/gocell/runtime/observability/metrics"
 )
 
@@ -171,12 +170,15 @@ func WithConfigEventCollector(collector obmetrics.ConfigEventCollector) Option {
 
 // WithInMemoryDefaults configures in-memory repositories for development
 // and testing. Not suitable for production use.
+// refreshStore construction is deferred to Init() so that c.clk (set from
+// deps.Clock) is available.
 func WithInMemoryDefaults() Option {
 	return func(c *AccessCore) {
 		c.userRepo = mem.NewUserRepository()
-		c.sessionRepo = mem.NewSessionRepository()
+		// sessionRepo construction is deferred to Init() so that c.clk
+		// (set from deps.Clock) is available for mem.NewSessionRepository.
 		c.roleRepo = mem.NewRoleRepository()
-		c.refreshStore = refreshmem.MustNew(defaultRefreshPolicy, clock.Real(), nil)
+		c.useInMemoryDefaults = true
 	}
 }
 
@@ -205,10 +207,15 @@ func WithConfigGetter(c ports.ConfigGetter) Option {
 // AccessCore is the accesscore Cell implementation.
 type AccessCore struct {
 	*cell.BaseCell
+	clk          clock.Clock
 	userRepo     ports.UserRepository
 	sessionRepo  ports.SessionRepository
 	roleRepo     ports.RoleRepository
 	refreshStore refresh.Store
+
+	// useInMemoryDefaults tracks whether WithInMemoryDefaults was applied so
+	// Init() can construct the refreshStore (which needs c.clk) after deps are wired.
+	useInMemoryDefaults bool
 
 	// Outbox wiring. Two mutually exclusive paths populate `emitter`:
 	//   (a) WithEmitter(e)          — `emitter` is set pre-Init.

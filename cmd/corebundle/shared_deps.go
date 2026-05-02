@@ -14,6 +14,7 @@ import (
 
 	adapterpg "github.com/ghbvf/gocell/adapters/postgres"
 	adapterredis "github.com/ghbvf/gocell/adapters/redis"
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/idempotency"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/runtime/auth"
@@ -499,7 +500,7 @@ func LoadSharedDepsFromEnv(ctx context.Context) (*SharedDeps, error) {
 		}
 	}()
 
-	eb := eventbus.New()
+	eb := eventbus.New(eventbus.WithClock(clock.Real()))
 
 	primaryAddr, internalAddr, healthAddr := resolveListenerAddrs()
 

@@ -14,6 +14,8 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/ghbvf/gocell/kernel/clock"
 )
 
 // makeTokenWithIss issues a signed access token carrying the given issuer string.
@@ -42,7 +44,7 @@ func makeTokenWithIss(t *testing.T, ks *KeySet, iss string) string {
 // iss claim matches WithExpectedIssuer is accepted and claims.Issuer is populated.
 func TestJWTVerifier_VerifyIntent_AcceptsMatchingIssuer(t *testing.T) {
 	ks := mustTestKeySet(t)
-	verifier, err := NewJWTVerifier(ks,
+	verifier, err := NewJWTVerifier(ks, clock.Real(),
 		WithExpectedAudiences("gocell"),
 		WithExpectedIssuer("gocell-prod"),
 	)
@@ -58,7 +60,7 @@ func TestJWTVerifier_VerifyIntent_AcceptsMatchingIssuer(t *testing.T) {
 // iss claim does not match WithExpectedIssuer is rejected with ErrAuthInvalidTokenIntent.
 func TestJWTVerifier_VerifyIntent_RejectsIssuerMismatch(t *testing.T) {
 	ks := mustTestKeySet(t)
-	verifier, err := NewJWTVerifier(ks,
+	verifier, err := NewJWTVerifier(ks, clock.Real(),
 		WithExpectedAudiences("gocell"),
 		WithExpectedIssuer("gocell-prod"),
 	)
@@ -75,7 +77,7 @@ func TestJWTVerifier_VerifyIntent_RejectsIssuerMismatch(t *testing.T) {
 // an iss claim is rejected when WithExpectedIssuer is configured.
 func TestJWTVerifier_VerifyIntent_RejectsMissingIssuer(t *testing.T) {
 	ks := mustTestKeySet(t)
-	verifier, err := NewJWTVerifier(ks,
+	verifier, err := NewJWTVerifier(ks, clock.Real(),
 		WithExpectedAudiences("gocell"),
 		WithExpectedIssuer("gocell-prod"),
 	)
@@ -93,7 +95,7 @@ func TestJWTVerifier_VerifyIntent_RejectsMissingIssuer(t *testing.T) {
 // WithExpectedIssuer is not configured, any iss value (including empty) is accepted.
 func TestJWTVerifier_VerifyIntent_NoExpectedIssuer_AllowsAnyIssuer(t *testing.T) {
 	ks := mustTestKeySet(t)
-	verifier, err := NewJWTVerifier(ks, WithExpectedAudiences("gocell"))
+	verifier, err := NewJWTVerifier(ks, clock.Real(), WithExpectedAudiences("gocell"))
 	require.NoError(t, err)
 
 	tests := []struct {
@@ -117,7 +119,7 @@ func TestJWTVerifier_VerifyIntent_NoExpectedIssuer_AllowsAnyIssuer(t *testing.T)
 // and iss mismatch, audience error is returned first (aud check precedes iss check).
 func TestJWTVerifier_VerifyIntent_IssuerCheckAfterAudience(t *testing.T) {
 	ks := mustTestKeySet(t)
-	verifier, err := NewJWTVerifier(ks,
+	verifier, err := NewJWTVerifier(ks, clock.Real(),
 		WithExpectedAudiences("gocell"),
 		WithExpectedIssuer("gocell-prod"),
 	)
@@ -151,7 +153,7 @@ func TestJWTVerifier_VerifyIntent_IssuerCheckAfterAudience(t *testing.T) {
 // equivalent to not calling the option — any issuer is accepted.
 func TestWithExpectedIssuer_EmptyString_NoOp(t *testing.T) {
 	ks := mustTestKeySet(t)
-	verifier, err := NewJWTVerifier(ks,
+	verifier, err := NewJWTVerifier(ks, clock.Real(),
 		WithExpectedAudiences("gocell"),
 		WithExpectedIssuer(""), // should be a no-op
 	)

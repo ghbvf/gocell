@@ -50,13 +50,10 @@ type AuditRepository struct {
 }
 
 // NewAuditRepository creates an AuditRepository backed by the given DBTX.
-// clk is used to fill in zero Timestamps on Append; defaults to clock.Real().
-func NewAuditRepository(db DBTX, clk ...clock.Clock) *AuditRepository {
-	c := clock.Real()
-	if len(clk) > 0 && clk[0] != nil {
-		c = clk[0]
-	}
-	return &AuditRepository{db: db, clock: c}
+// clk is used to fill in zero Timestamps on Append.
+func NewAuditRepository(db DBTX, clk clock.Clock) *AuditRepository {
+	clock.MustHaveClock(clk, "postgres.NewAuditRepository")
+	return &AuditRepository{db: db, clock: clk}
 }
 
 // Append inserts an audit entry.

@@ -97,12 +97,16 @@ var _ cell.EventRouter = (*Router)(nil)
 var _ cell.SubscriptionValidatorAdder = (*Router)(nil)
 
 // New creates a Router that will use the given Subscriber for all subscriptions.
-func New(sub outbox.Subscriber, opts ...Option) *Router {
+//
+// clk is required; pass clock.Real() at the composition root or
+// clockmock.New(...) in tests. Panics on nil or typed-nil clock.
+func New(sub outbox.Subscriber, clk clock.Clock, opts ...Option) *Router {
+	clock.MustHaveClock(clk, "eventrouter.New")
 	r := &Router{
 		subscriber:   sub,
 		readyTimeout: DefaultReadyTimeout,
 		running:      make(chan struct{}),
-		clock:        clock.Real(),
+		clock:        clk,
 	}
 	for _, o := range opts {
 		o(r)

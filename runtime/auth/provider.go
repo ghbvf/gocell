@@ -3,6 +3,7 @@ package auth
 import (
 	"log/slog"
 
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
@@ -57,13 +58,14 @@ type EnvKeyProvider struct {
 // NewEnvKeyProvider loads all available key material from environment variables.
 // It returns a provider even if some key types are not configured — call
 // RSAKeySet() or HMACKeyRing() to check individual domain availability.
-func NewEnvKeyProvider(opts ...EnvKeyProviderOption) *EnvKeyProvider {
+// clk is required; pass clock.Real() at the composition root.
+func NewEnvKeyProvider(clk clock.Clock, opts ...EnvKeyProviderOption) *EnvKeyProvider {
 	p := &EnvKeyProvider{logger: slog.Default()}
 	for _, o := range opts {
 		o(p)
 	}
 
-	ks, rsaErr := LoadKeySetFromEnv()
+	ks, rsaErr := LoadKeySetFromEnv(clk)
 	ring, hmacErr := LoadHMACKeyRingFromEnv()
 	if rsaErr != nil {
 		p.logger.Info("RSA key set not loaded from environment", "error", rsaErr.Error())
@@ -119,8 +121,10 @@ func (p *StaticKeyProvider) HMACKeyRing() (*HMACKeyRing, error) {
 
 // MustNewTestKeyProvider creates a KeyProvider with ephemeral RSA and HMAC keys
 // for testing. It panics on error, following the Go test helper convention.
-func MustNewTestKeyProvider() KeyProvider {
-	ks, _, _ := MustNewTestKeySet()
+// clk is required; pass clock.Real() from the composition root or a clockmock
+// for time-controlled tests.
+func MustNewTestKeyProvider(clk clock.Clock) KeyProvider {
+	ks, _, _ := MustNewTestKeySet(clk)
 	ring, err := NewHMACKeyRing([]byte("test-hmac-secret-at-least-32-bytes!!"), nil)
 	if err != nil {
 		panic("auth: failed to create test HMAC key ring: " + err.Error())

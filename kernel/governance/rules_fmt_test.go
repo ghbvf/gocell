@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/metadata"
 )
 
@@ -44,7 +45,7 @@ func TestFMT13_MissingEndpointsHTTP(t *testing.T) {
 		Assemblies: map[string]*metadata.AssemblyMeta{},
 	}
 
-	v := NewValidator(project, "")
+	v := NewValidator(project, "", clock.Real())
 	results := v.validateFMT13()
 
 	var fmt13Errors []ValidationResult
@@ -90,7 +91,7 @@ func TestFMT13_NonHTTPContractSkipped(t *testing.T) {
 		Assemblies: map[string]*metadata.AssemblyMeta{},
 	}
 
-	v := NewValidator(project, "")
+	v := NewValidator(project, "", clock.Real())
 	results := v.validateFMT13()
 
 	for _, r := range results {
@@ -130,7 +131,7 @@ func TestFMT13_HTTPContractWithEndpoints(t *testing.T) {
 		Assemblies: map[string]*metadata.AssemblyMeta{},
 	}
 
-	v := NewValidator(project, "")
+	v := NewValidator(project, "", clock.Real())
 	results := v.validateFMT13()
 
 	for _, r := range results {

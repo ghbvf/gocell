@@ -11,6 +11,7 @@ import (
 	"github.com/ghbvf/gocell/adapters/postgres"
 	"github.com/ghbvf/gocell/adapters/rabbitmq"
 	"github.com/ghbvf/gocell/adapters/redis"
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/idempotency"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/ctxkeys"
@@ -88,7 +89,7 @@ func setupRabbitMQContainer(t *testing.T) (*rabbitmq.Connection, func()) {
 		ReconnectBaseDelay:  testtime.D500ms,
 		ChannelPoolSize:     5,
 		ConfirmTimeout:      testtime.SelectAsyncSettle,
-	})
+	}, rabbitmq.WithConnectionClock(clock.Real()))
 	require.NoError(t, err, "create rabbitmq connection")
 
 	cleanup := func() {
@@ -218,19 +219,20 @@ func TestIntegration_OutboxFullChain(t *testing.T) {
 	// Step 3: Build components.
 	// ---------------------------------------------------------------
 	txm := postgres.NewTxManager(pool)
-	writer := postgres.NewOutboxWriter()
-	pub := rabbitmq.NewPublisher(rmqConn)
+	writer := postgres.NewOutboxWriter(clock.Real())
+	pub := rabbitmq.NewPublisher(rmqConn, rabbitmq.WithPublisherClock(clock.Real()))
 	sub := rabbitmq.NewSubscriber(rmqConn, rabbitmq.SubscriberConfig{
 		QueueName:     "outbox.fullchain.queue",
 		PrefetchCount: 1,
 		DLXExchange:   "test.dlx",
+		Clock:         clock.Real(),
 	})
 	claimer := redis.NewIdempotencyClaimer(redisClient)
 
 	relayCfg := outboxruntime.DefaultRelayConfig()
 	relayCfg.PollInterval = testtime.D200ms // fast polling for test
 	relayCfg.BatchSize = 10
-	relay := outboxruntime.NewRelay(postgres.NewOutboxStore(pool.DB()), pub, relayCfg)
+	relay := outboxruntime.NewRelay(postgres.NewOutboxStore(pool.DB(), clock.Real()), pub, relayCfg)
 
 	// ---------------------------------------------------------------
 	// Step 4: Business write + outbox write in a single transaction.
@@ -481,18 +483,19 @@ func TestIntegration_OutboxFullChain_NoTrace(t *testing.T) {
 	// Step 3: Build components.
 	// ---------------------------------------------------------------
 	txm := postgres.NewTxManager(pool)
-	writer := postgres.NewOutboxWriter()
-	pub := rabbitmq.NewPublisher(rmqConn)
+	writer := postgres.NewOutboxWriter(clock.Real())
+	pub := rabbitmq.NewPublisher(rmqConn, rabbitmq.WithPublisherClock(clock.Real()))
 	sub := rabbitmq.NewSubscriber(rmqConn, rabbitmq.SubscriberConfig{
 		QueueName:     "outbox.fullchain.notrace.queue",
 		PrefetchCount: 1,
 		DLXExchange:   "test.dlx",
+		Clock:         clock.Real(),
 	})
 
 	relayCfg := outboxruntime.DefaultRelayConfig()
 	relayCfg.PollInterval = testtime.D200ms
 	relayCfg.BatchSize = 10
-	relay := outboxruntime.NewRelay(postgres.NewOutboxStore(pool.DB()), pub, relayCfg)
+	relay := outboxruntime.NewRelay(postgres.NewOutboxStore(pool.DB(), clock.Real()), pub, relayCfg)
 
 	// ---------------------------------------------------------------
 	// Step 4: Business write + outbox write.
@@ -653,7 +656,7 @@ func TestIntegration_OutboxWriteRelayMockPublisher(t *testing.T) {
 	require.NoError(t, migrator.Up(ctx), "migrations must succeed")
 
 	txm := postgres.NewTxManager(pool)
-	writer := postgres.NewOutboxWriter()
+	writer := postgres.NewOutboxWriter(clock.Real())
 
 	// Mock publisher that captures published messages.
 	mock := &capturingPublisher{messages: make(chan publishedMessage, 10)}
@@ -661,7 +664,7 @@ func TestIntegration_OutboxWriteRelayMockPublisher(t *testing.T) {
 	relayCfg := outboxruntime.DefaultRelayConfig()
 	relayCfg.PollInterval = testtime.SlowPoll
 	relayCfg.BatchSize = 10
-	relay := outboxruntime.NewRelay(postgres.NewOutboxStore(pool.DB()), mock, relayCfg)
+	relay := outboxruntime.NewRelay(postgres.NewOutboxStore(pool.DB(), clock.Real()), mock, relayCfg)
 
 	// Write outbox entry within a transaction.
 	entryID := uuid.New().String()
@@ -740,8 +743,8 @@ func TestIntegration_OutboxObservability_ZeroRoundtrip(t *testing.T) {
 	require.NoError(t, migrator.Up(ctx))
 
 	txm := postgres.NewTxManager(pool)
-	writer := postgres.NewOutboxWriter()
-	store := postgres.NewOutboxStore(pool.DB())
+	writer := postgres.NewOutboxWriter(clock.Real())
+	store := postgres.NewOutboxStore(pool.DB(), clock.Real())
 
 	entryID := uuid.New().String()
 	entry := outbox.Entry{

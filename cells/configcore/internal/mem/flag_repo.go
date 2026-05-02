@@ -24,15 +24,12 @@ type FlagRepository struct {
 }
 
 // NewFlagRepository creates an empty in-memory FlagRepository.
-// clk is used for UpdatedAt timestamps; defaults to clock.Real().
-func NewFlagRepository(clk ...clock.Clock) *FlagRepository {
-	c := clock.Real()
-	if len(clk) > 0 && clk[0] != nil {
-		c = clk[0]
-	}
+// clk must be non-nil; pass clock.Real() in production and clockmock.New() in tests.
+func NewFlagRepository(clk clock.Clock) *FlagRepository {
+	clock.MustHaveClock(clk, "mem.NewFlagRepository")
 	return &FlagRepository{
 		flags: make(map[string]*domain.FeatureFlag),
-		clock: c,
+		clock: clk,
 	}
 }
 

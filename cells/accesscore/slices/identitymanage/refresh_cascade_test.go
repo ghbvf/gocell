@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/ghbvf/gocell/cells/accesscore/internal/mem"
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/auth/refresh"
@@ -33,11 +34,11 @@ func newCascadeStore(t *testing.T) refresh.Store {
 func TestService_Lock_RevokesRefreshChain(t *testing.T) {
 	ctx := auth.TestContext("test-admin", []string{"admin"})
 	userRepo := mem.NewUserRepository()
-	sessionRepo := mem.NewSessionRepository()
+	sessionRepo := mem.NewSessionRepository(clock.Real())
 	refreshStore := newCascadeStore(t)
 
 	svc, err := NewService(userRepo, sessionRepo, refreshStore, slog.Default(),
-		WithTokenIssuer(minimalStubIssuer))
+		WithTokenIssuer(minimalStubIssuer), WithClock(clock.Real()))
 	require.NoError(t, err)
 
 	user, err := svc.Create(adminCtxForService(), CreateInput{Username: "dave", Email: "d@e.f", Password: "hash"})
@@ -64,12 +65,12 @@ func TestService_Lock_RevokesRefreshChain(t *testing.T) {
 
 func TestService_ChangePassword_RevokesRefreshChain(t *testing.T) {
 	ctx := context.Background()
-	sessionRepo := mem.NewSessionRepository()
+	sessionRepo := mem.NewSessionRepository(clock.Real())
 	userRepo := mem.NewUserRepository()
 	refreshStore := newCascadeStore(t)
 
 	svc, err := NewService(userRepo, sessionRepo, refreshStore, slog.Default(),
-		WithTokenIssuer(minimalStubIssuer))
+		WithTokenIssuer(minimalStubIssuer), WithClock(clock.Real()))
 	require.NoError(t, err)
 
 	// Use the service to create so it hashes the password for us.
@@ -103,11 +104,11 @@ func TestService_ChangePassword_RevokesRefreshChain(t *testing.T) {
 func TestService_Delete_RevokesRefreshChain(t *testing.T) {
 	ctx := auth.TestContext("test-admin", []string{"admin"})
 	userRepo := mem.NewUserRepository()
-	sessionRepo := mem.NewSessionRepository()
+	sessionRepo := mem.NewSessionRepository(clock.Real())
 	refreshStore := newCascadeStore(t)
 
 	svc, err := NewService(userRepo, sessionRepo, refreshStore, slog.Default(),
-		WithTokenIssuer(minimalStubIssuer))
+		WithTokenIssuer(minimalStubIssuer), WithClock(clock.Real()))
 	require.NoError(t, err)
 
 	user, err := svc.Create(adminCtxForService(), CreateInput{Username: "frank", Email: "f@g.h", Password: "pwd"})

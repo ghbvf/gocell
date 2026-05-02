@@ -19,6 +19,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/runtime/auth"
@@ -94,10 +95,10 @@ func TestBuildJWTDeps_ProdWiring_VerifierRejectsWrongIssuer(t *testing.T) {
 
 	// Reload the exact same key material from env — deps already loaded it, so
 	// tokens signed with this ks are signature-valid against deps.verifier.
-	ks, err := auth.LoadKeySetFromEnv()
+	ks, err := auth.LoadKeySetFromEnv(clock.Real())
 	require.NoError(t, err, "reload keyset from env to mirror deps wiring")
 
-	wrongIssuer, err := auth.NewJWTIssuer(ks, "wrong-iss", testtime.D15min,
+	wrongIssuer, err := auth.NewJWTIssuer(ks, "wrong-iss", testtime.D15min, clock.Real(),
 		auth.WithIssuerAudiencesFromSlice([]string{"gocell"}))
 	require.NoError(t, err)
 
@@ -163,8 +164,8 @@ func TestBuildJWTDeps_ProdWiring_VerifierRejectsWrongKey(t *testing.T) {
 
 	// Build a completely independent keyset — deps.verifier has no public key
 	// matching this kid, so verification must fail at the signature step.
-	strangerKS, _, _ := auth.MustNewTestKeySet()
-	stranger, err := auth.NewJWTIssuer(strangerKS, "prod-iss", testtime.D15min,
+	strangerKS, _, _ := auth.MustNewTestKeySet(clock.Real())
+	stranger, err := auth.NewJWTIssuer(strangerKS, "prod-iss", testtime.D15min, clock.Real(),
 		auth.WithIssuerAudiencesFromSlice([]string{"gocell"}))
 	require.NoError(t, err)
 

@@ -80,6 +80,12 @@ func runtimeBaseOptions(
 	}
 
 	opts := []bootstrap.Option{
+		// Single composition-root clock: the same clock is on the assembly
+		// (see buildAssembly above) and on the bootstrap; it threads through
+		// the lifecycle, default-assembly fallback, and cell.Dependencies
+		// every Init receives. The pair is the load-bearing invariant of
+		// PROD-CLOCK-INJECTION-01 — never default-fallback in adapters or cells.
+		bootstrap.WithClock(clock.Real()),
 		bootstrap.WithAssembly(asm),
 		bootstrap.WithPublisher(shared.EventBus),
 		bootstrap.WithSubscriber(shared.EventBus),
@@ -216,7 +222,7 @@ func buildKeyProvider(storageBackend, adapterMode, providerName, masterKey, prev
 		slog.Info("configcore: key provider initialized", slog.String("provider", "local-aes"))
 		return kp, nil
 	case "vault-transit":
-		kp, err := adaptervault.NewTransitKeyProviderFromEnv(isRealMode(adapterMode))
+		kp, err := adaptervault.NewTransitKeyProviderFromEnv(isRealMode(adapterMode), clock.Real())
 		if err != nil {
 			return nil, fmt.Errorf("vault-transit key provider: %w", err)
 		}
@@ -332,7 +338,7 @@ func buildConfigCoreOpts(ctx context.Context, cfg ConfigCoreModuleConfig) (Confi
 				slog.Any("indexes", invalid))
 		}
 
-		outboxWriter := adapterpg.NewOutboxWriter()
+		outboxWriter := adapterpg.NewOutboxWriter(clock.Real())
 		txMgr := adapterpg.NewTxManager(pool)
 
 		relayCfg := outboxruntime.DefaultRelayConfig()
@@ -342,7 +348,8 @@ func buildConfigCoreOpts(ctx context.Context, cfg ConfigCoreModuleConfig) (Confi
 			return ConfigCoreModuleResult{}, fmt.Errorf("configcore outbox relay metrics: %w", rmErr)
 		}
 		relayCfg.Metrics = relayMetrics
-		pgStore := adapterpg.NewOutboxStore(pool.DB())
+		relayCfg.Clock = clock.Real()
+		pgStore := adapterpg.NewOutboxStore(pool.DB(), clock.Real())
 		relayWorker := outboxruntime.NewRelay(pgStore, cfg.Publisher, relayCfg)
 
 		pgRes, storageOpt, storageErr := buildConfigCorePGStorage(pool, cfg)
@@ -403,7 +410,7 @@ func buildConfigCorePGStorage(
 	if err != nil {
 		return nil, nil, fmt.Errorf("configcore PG resource: %w", err)
 	}
-	storageOpt, err := configpg.WithPool(pool.DB(),
+	storageOpt, err := configpg.WithPool(pool.DB(), clock.Real(),
 		configpg.WithValueTransformer(cfg.ValueTransformer),
 		configpg.WithOnStaleCipher(cfg.OnStaleCipher),
 	)
@@ -422,7 +429,7 @@ func buildConsumerBase(deps *SharedDeps) (*outbox.ConsumerBase, error) {
 	if deps.ConsumerClaimer == nil {
 		return nil, fmt.Errorf("construct ConsumerBase: SharedDeps.ConsumerClaimer must be set")
 	}
-	cb, err := outbox.NewConsumerBase(deps.ConsumerClaimer, outbox.ConsumerBaseConfig{})
+	cb, err := outbox.NewConsumerBase(deps.ConsumerClaimer, outbox.ConsumerBaseConfig{}, clock.Real())
 	if err != nil {
 		return nil, fmt.Errorf("construct ConsumerBase: %w", err)
 	}

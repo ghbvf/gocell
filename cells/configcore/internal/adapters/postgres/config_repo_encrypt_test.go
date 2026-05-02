@@ -889,7 +889,7 @@ func TestWithOnStaleCipher_Option(t *testing.T) {
 
 	// Use NewConfigRepository with WithOnStaleCipher option.
 	session := &Session{} // nil pool is fine — db field is set below via direct struct assignment
-	repo := NewConfigRepository(session, tr, nil, WithOnStaleCipher(func(key, storedID, currentID string) {
+	repo := NewConfigRepository(session, tr, nil, clock.Real(), WithOnStaleCipher(func(key, storedID, currentID string) {
 		got = append(got, callbackArgs{key, storedID, currentID})
 	}))
 	// Bypass session for unit test — inject mockDB directly.

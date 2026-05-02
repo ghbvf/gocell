@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/metadata"
 )
 
@@ -207,7 +208,7 @@ func doEmit(ctx context.Context, e outbox.Emitter) error {
 		httpContract("http.test.action.v1", ownerCell, "L2", []string{topic}),
 	})
 
-	v := NewValidator(project, root)
+	v := NewValidator(project, root, clock.Real())
 	results := v.validateCONTRACTCONSISTENCYEMIT01()
 	if got := findResultByCode(results); len(got) != 0 {
 		t.Errorf("case A: expected 0 findings, got %d: %v", len(got), got)
@@ -224,7 +225,7 @@ func TestCONTRACTCONSISTENCYEMIT01_CaseB(t *testing.T) {
 		httpContract("http.test.action.v1", ownerCell, "L1", []string{topic}),
 	})
 
-	v := NewValidator(project, root)
+	v := NewValidator(project, root, clock.Real())
 	results := v.validateCONTRACTCONSISTENCYEMIT01()
 	got := findResultByCode(results)
 	if len(got) != 1 {
@@ -247,7 +248,7 @@ func TestCONTRACTCONSISTENCYEMIT01_CaseC(t *testing.T) {
 		httpContract("http.test.action.v1", ownerCell, "L2", nil),
 	})
 
-	v := NewValidator(project, root)
+	v := NewValidator(project, root, clock.Real())
 	results := v.validateCONTRACTCONSISTENCYEMIT01()
 	got := findResultByCode(results)
 	if len(got) != 1 {
@@ -288,7 +289,7 @@ func doEmit(ctx context.Context, e outbox.Emitter) error {
 		httpContract("http.test.action.v1", ownerCell, "L2", []string{declaredTopic}),
 	})
 
-	v := NewValidator(project, root)
+	v := NewValidator(project, root, clock.Real())
 	results := v.validateCONTRACTCONSISTENCYEMIT01()
 	got := findResultByCode(results)
 
@@ -354,7 +355,7 @@ func doEmit(ctx context.Context, e outbox.Emitter) error {
 		httpContract("http.test.action.v1", ownerCell, "L2", []string{declaredTopic}),
 	})
 
-	v := NewValidator(project, root)
+	v := NewValidator(project, root, clock.Real())
 	results := v.validateCONTRACTCONSISTENCYEMIT01()
 	got := findResultByCode(results)
 
@@ -398,7 +399,7 @@ func doEmit(ctx context.Context, e outbox.Emitter, v string) error {
 		httpContract("http.test.action.v1", ownerCell, "L2", []string{topic}),
 	})
 
-	v := NewValidator(project, root)
+	v := NewValidator(project, root, clock.Real())
 	results := v.validateCONTRACTCONSISTENCYEMIT01()
 	got := findResultByCode(results)
 
@@ -454,7 +455,7 @@ func doEmit(ctx context.Context, e emitter) error {
 		httpContract("http.test.done.v1", ownerCell, "L2", []string{topic}),
 	})
 
-	v := NewValidator(project, root)
+	v := NewValidator(project, root, clock.Real())
 	results := v.validateCONTRACTCONSISTENCYEMIT01()
 	if got := findResultByCode(results); len(got) != 0 {
 		t.Errorf("receiver-emit-inline: expected 0 findings, got %d: %v", len(got), got)
@@ -496,7 +497,7 @@ func doEmit(ctx context.Context, e emitter) error {
 		httpContract("http.test.done.v1", ownerCell, "L2", []string{topic}),
 	})
 
-	v := NewValidator(project, root)
+	v := NewValidator(project, root, clock.Real())
 	results := v.validateCONTRACTCONSISTENCYEMIT01()
 	if got := findResultByCode(results); len(got) != 0 {
 		t.Errorf("receiver-emit-prebuilt: expected 0 findings, got %d: %v", len(got), got)
@@ -538,7 +539,7 @@ func doWork(ctx context.Context, e outbox.Emitter) error {
 		httpContract("http.test.action.v1", ownerCell, "L2", []string{topic}),
 	})
 
-	v := NewValidator(project, root)
+	v := NewValidator(project, root, clock.Real())
 	results := v.validateCONTRACTCONSISTENCYEMIT01()
 
 	// outbox.Emit sees "topic" (an ident not in fileConsts) → not resolved directly.
@@ -612,7 +613,7 @@ func TestCONTRACTCONSISTENCYEMIT01_ExamplesSkipped(t *testing.T) {
 		Assemblies: map[string]*metadata.AssemblyMeta{},
 	}
 
-	v := NewValidator(project, root)
+	v := NewValidator(project, root, clock.Real())
 	results := v.validateCONTRACTCONSISTENCYEMIT01()
 	if got := findResultByCode(results); len(got) != 0 {
 		t.Errorf("examples-skipped: expected 0 findings, got %d: %v", len(got), got)
@@ -689,7 +690,7 @@ func register(sub handler) {
 		metadata.ContractUsage{Contract: topicB, Role: "subscribe"},
 	)
 
-	v := NewValidator(project, root)
+	v := NewValidator(project, root, clock.Real())
 	results := v.validateCONTRACTCONSISTENCYEMIT01()
 	got := findResultByCode(results)
 
@@ -720,7 +721,7 @@ func TestCONTRACTCONSISTENCYEMIT01_CaseE_NoOpPassthrough(t *testing.T) {
 		httpContract("http.test.noop.v1", ownerCell, "L0", nil),
 	})
 
-	v := NewValidator(project, root)
+	v := NewValidator(project, root, clock.Real())
 	results := v.validateCONTRACTCONSISTENCYEMIT01()
 	got := findResultByCode(results)
 	if len(got) != 0 {
@@ -768,7 +769,7 @@ func doEmit(ctx context.Context, e emitter) error {
 		httpContract("http.test.y.v1", ownerCell, "L2", []string{declaredTopic}),
 	})
 
-	v := NewValidator(project, root)
+	v := NewValidator(project, root, clock.Real())
 	results := v.validateCONTRACTCONSISTENCYEMIT01()
 	got := findResultByCode(results)
 
@@ -832,7 +833,7 @@ func doEmit(ctx context.Context, e outbox.Emitter) error {
 		httpContract("http.test.two.v1", ownerCell, "L2", []string{topic2}),
 	})
 
-	v := NewValidator(project, root)
+	v := NewValidator(project, root, clock.Real())
 	results := v.validateCONTRACTCONSISTENCYEMIT01()
 	got := findResultByCode(results)
 
@@ -909,7 +910,7 @@ func check(topic string) bool {
 		httpContract("http.foo.x.v1", ownerCell, "L2", []string{topicY}),
 	})
 
-	v := NewValidator(project, root)
+	v := NewValidator(project, root, clock.Real())
 	results := v.validateCONTRACTCONSISTENCYEMIT01()
 	got := findResultByCode(results)
 
@@ -976,7 +977,7 @@ func doEmit(ctx context.Context, e outbox.Emitter) error {
 		metadata.ContractUsage{Contract: topic, Role: "publish"},
 	)
 
-	v := NewValidator(project, root)
+	v := NewValidator(project, root, clock.Real())
 	got := findResultByCode(v.validateCONTRACTCONSISTENCYEMIT01())
 	if !hasFindingContaining(got, "httpslice", "no non-test Go file", topic) {
 		t.Fatalf("expected serving-slice forward failure for %q, findings: %v", topic, got)
@@ -1010,7 +1011,7 @@ func doEmit(ctx context.Context, e outbox.Emitter) error {
 	})
 	delete(project.Contracts, topic)
 
-	v := NewValidator(project, root)
+	v := NewValidator(project, root, clock.Real())
 	got := findResultByCode(v.validateCONTRACTCONSISTENCYEMIT01())
 	if !hasFindingContaining(got, "trigger", topic, "existing event contract") {
 		t.Fatalf("expected missing event-contract trigger finding, findings: %v", got)
@@ -1055,7 +1056,7 @@ func doEmit(ctx context.Context, e outbox.Emitter) error {
 		},
 	})
 
-	v := NewValidator(project, root)
+	v := NewValidator(project, root, clock.Real())
 	got := findResultByCode(v.validateCONTRACTCONSISTENCYEMIT01())
 	if !hasFindingContaining(got, "trigger", topic, "kind:event") {
 		t.Fatalf("expected non-event trigger finding, findings: %v", got)
@@ -1089,7 +1090,7 @@ func doEmit(ctx context.Context, e emitter, suffix string) error {
 		httpContract("http.test.action.v1", ownerCell, "L2", []string{topic}),
 	})
 
-	v := NewValidator(project, root)
+	v := NewValidator(project, root, clock.Real())
 	got := findResultByCode(v.validateCONTRACTCONSISTENCYEMIT01())
 	dynamicFound := false
 	for _, r := range got {
@@ -1129,7 +1130,7 @@ func doEmit(ctx context.Context, e outbox.Emitter, suffix string) error {
 		httpContract("http.test.action.v1", ownerCell, "L2", []string{topic}),
 	})
 
-	v := NewValidator(project, root)
+	v := NewValidator(project, root, clock.Real())
 	got := findResultByCode(v.validateCONTRACTCONSISTENCYEMIT01())
 	dynamicFound := false
 	for _, r := range got {
@@ -1185,7 +1186,7 @@ func publish(ctx context.Context, e outbox.Emitter, topic string) error {
 			httpContract("http.test.action.v1", ownerCell, "L2", []string{topic}),
 		})
 
-		v := NewValidator(project, root)
+		v := NewValidator(project, root, clock.Real())
 		got := findResultByCode(v.validateCONTRACTCONSISTENCYEMIT01())
 		if !hasFindingContaining(got, "no non-test Go file", topic) {
 			t.Fatalf("expected same-name helper in another package not to satisfy trigger, findings: %v", got)
@@ -1227,7 +1228,7 @@ func doEmit(ctx context.Context, e emitter) error {
 			httpContract("http.test.action.v1", ownerCell, "L2", []string{topic}),
 		})
 
-		v := NewValidator(project, root)
+		v := NewValidator(project, root, clock.Real())
 		got := findResultByCode(v.validateCONTRACTCONSISTENCYEMIT01())
 		if !hasFindingContaining(got, "no non-test Go file", topic) {
 			t.Fatalf("expected same-name entry in another function not to satisfy trigger, findings: %v", got)
@@ -1325,7 +1326,7 @@ func doEmit(ctx context.Context, receiver emitter, out outbox.Emitter, ch <-chan
 		httpContract("http.test.control.v1", ownerCell, "L2", topics),
 	})
 
-	v := NewValidator(project, root)
+	v := NewValidator(project, root, clock.Real())
 	if got := findResultByCode(v.validateCONTRACTCONSISTENCYEMIT01()); len(got) != 0 {
 		t.Fatalf("control-flow/local-const evidence should satisfy all triggers, got %d findings: %v", len(got), got)
 	}

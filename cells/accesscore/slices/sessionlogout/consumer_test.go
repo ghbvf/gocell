@@ -11,6 +11,7 @@ import (
 
 	"github.com/ghbvf/gocell/cells/accesscore/internal/mem"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/ports"
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/outbox"
 )
 
@@ -54,7 +55,7 @@ func makeEntry(id string, payload []byte) outbox.Entry {
 // --- consumer tests ---
 
 func TestConsumer_HandleRoleChanged_HappyPath_ReturnsNil_CallsRevokeByUserID(t *testing.T) {
-	repo := &trackingSessionRepo{SessionRepository: mem.NewSessionRepository()}
+	repo := &trackingSessionRepo{SessionRepository: mem.NewSessionRepository(clock.Real())}
 	c := NewConsumer(repo, slog.Default())
 
 	entry := makeEntry("evt-abc", validPayload("u1"))
@@ -65,7 +66,7 @@ func TestConsumer_HandleRoleChanged_HappyPath_ReturnsNil_CallsRevokeByUserID(t *
 }
 
 func TestConsumer_HandleRoleChanged_MalformedPayload_ReturnsPermanentError(t *testing.T) {
-	repo := &trackingSessionRepo{SessionRepository: mem.NewSessionRepository()}
+	repo := &trackingSessionRepo{SessionRepository: mem.NewSessionRepository(clock.Real())}
 	c := NewConsumer(repo, slog.Default())
 
 	entry := makeEntry("evt-bad", []byte("not-json"))
@@ -77,7 +78,7 @@ func TestConsumer_HandleRoleChanged_MalformedPayload_ReturnsPermanentError(t *te
 }
 
 func TestConsumer_HandleRoleChanged_EmptyUserID_ReturnsPermanentError(t *testing.T) {
-	repo := &trackingSessionRepo{SessionRepository: mem.NewSessionRepository()}
+	repo := &trackingSessionRepo{SessionRepository: mem.NewSessionRepository(clock.Real())}
 	c := NewConsumer(repo, slog.Default())
 
 	entry := makeEntry("evt-empty", validPayload(""))
@@ -109,7 +110,7 @@ func TestConsumer_HandleRoleChanged_TransientRepoError_ReturnsPlainError(t *test
 // Infrastructure-level idempotency (Claimer dedup) is provided by ConsumerBase and is NOT
 // tested here — this test documents the handler's own idempotency contract.
 func TestConsumer_HandleRoleChanged_ReplayIdempotent_SecondCallSafe(t *testing.T) {
-	repo := &trackingSessionRepo{SessionRepository: mem.NewSessionRepository()}
+	repo := &trackingSessionRepo{SessionRepository: mem.NewSessionRepository(clock.Real())}
 	c := NewConsumer(repo, slog.Default())
 
 	entry := makeEntry("evt-replay", validPayload("u1"))
@@ -126,7 +127,7 @@ func TestConsumer_HandleRoleChanged_ReplayIdempotent_SecondCallSafe(t *testing.T
 // --- WrapLegacyHandler disposition tests ---
 
 func TestConsumer_ViaWrapLegacyHandler_PermanentErrorMapsToReject(t *testing.T) {
-	repo := &trackingSessionRepo{SessionRepository: mem.NewSessionRepository()}
+	repo := &trackingSessionRepo{SessionRepository: mem.NewSessionRepository(clock.Real())}
 	c := NewConsumer(repo, slog.Default())
 	handler := outbox.WrapLegacyHandler(c.HandleRoleChanged)
 
@@ -138,7 +139,7 @@ func TestConsumer_ViaWrapLegacyHandler_PermanentErrorMapsToReject(t *testing.T) 
 }
 
 func TestConsumer_ViaWrapLegacyHandler_HappyPathMapsToAck(t *testing.T) {
-	repo := &trackingSessionRepo{SessionRepository: mem.NewSessionRepository()}
+	repo := &trackingSessionRepo{SessionRepository: mem.NewSessionRepository(clock.Real())}
 	c := NewConsumer(repo, slog.Default())
 	handler := outbox.WrapLegacyHandler(c.HandleRoleChanged)
 

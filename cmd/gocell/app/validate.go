@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/ghbvf/gocell/cmd/gocell/app/printers"
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/governance"
 	"github.com/ghbvf/gocell/kernel/metadata"
 )
@@ -59,7 +60,7 @@ func runValidate(args []string) error {
 		return fmt.Errorf("metadata parse: %w", err)
 	}
 
-	validator := governance.NewValidator(project, rootDir)
+	validator := governance.NewValidator(project, rootDir, clock.Real())
 	depChecker := governance.NewDependencyChecker(project)
 
 	if *failFast {

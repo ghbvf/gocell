@@ -13,6 +13,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 )
@@ -65,6 +66,7 @@ func TestSubscriber_StopIntakeCancelsConsumerButDrainsInflight(t *testing.T) {
 	sub := NewSubscriber(conn, SubscriberConfig{
 		QueueName:   "drain-test-queue",
 		DLXExchange: "drain.dlx",
+		Clock:       clock.Real(),
 	})
 
 	// Pre-load 3 deliveries before Subscribe starts.
@@ -157,6 +159,7 @@ func TestSubscriber_ConsumerTagTruncation(t *testing.T) {
 	sub := NewSubscriber(conn, SubscriberConfig{
 		QueueName:   longQueue,
 		DLXExchange: "trunc.dlx",
+		Clock:       clock.Real(),
 	})
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -202,6 +205,7 @@ func TestSubscriber_StopIntake_Idempotent(t *testing.T) {
 	sub := NewSubscriber(conn, SubscriberConfig{
 		QueueName:   "idempotent-queue",
 		DLXExchange: "idempotent.dlx",
+		Clock:       clock.Real(),
 	})
 
 	ctx := context.Background()
@@ -232,6 +236,7 @@ func TestSubscriber_IntakeStoppedThenCloseNoTimeout(t *testing.T) {
 	sub := NewSubscriber(conn, SubscriberConfig{
 		QueueName:   "close-fast-queue",
 		DLXExchange: "close-fast.dlx",
+		Clock:       clock.Real(),
 	})
 
 	// Send one delivery so Subscribe has something to process.
@@ -305,6 +310,7 @@ func TestSubscriber_HardCloseForcesTimeout(t *testing.T) {
 	sub := NewSubscriber(conn, SubscriberConfig{
 		QueueName:   "timeout-queue",
 		DLXExchange: "timeout.dlx",
+		Clock:       clock.Real(),
 	})
 
 	// Send one delivery to trigger a hanging handler goroutine.
@@ -379,6 +385,7 @@ func TestSubscriber_StopIntake_RespectsCtx(t *testing.T) {
 	sub := NewSubscriber(conn, SubscriberConfig{
 		QueueName:   "ctx-respect-queue",
 		DLXExchange: "ctx-respect.dlx",
+		Clock:       clock.Real(),
 	})
 
 	// Start Subscribe so the consumerTag is registered.
@@ -440,6 +447,7 @@ func TestSubscriber_StopIntake_PerCallTimeout(t *testing.T) {
 		QueueName:                "per-call-timeout-queue",
 		DLXExchange:              "per-call-timeout.dlx",
 		StopIntakePerCallTimeout: testtime.D300ms,
+		Clock:                    clock.Real(),
 	})
 
 	// Start Subscribe so the consumerTag is registered.
@@ -504,6 +512,7 @@ func TestSubscriber_StopIntake_DoesNotHoldLockAcrossBrokerIO(t *testing.T) {
 		QueueName:                "lock-free-queue",
 		DLXExchange:              "lock-free.dlx",
 		StopIntakePerCallTimeout: testtime.D2s,
+		Clock:                    clock.Real(),
 	})
 
 	subCtx, subCancel := context.WithCancel(context.Background())

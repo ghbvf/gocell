@@ -13,6 +13,7 @@ import (
 	"github.com/ghbvf/gocell/cells/accesscore/internal/domain"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/mem"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/ports"
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
@@ -25,7 +26,7 @@ func newTestService() (*Service, *mem.RoleRepository, *mem.SessionRepository) {
 			{Resource: "*", Action: "*"},
 		},
 	})
-	sessionRepo := mem.NewSessionRepository()
+	sessionRepo := mem.NewSessionRepository(clock.Real())
 	return NewService(roleRepo, sessionRepo, slog.Default()), roleRepo, sessionRepo
 }
 
@@ -261,7 +262,7 @@ func TestService_DemoMode_Assign_CallsSessionRevoke(t *testing.T) {
 				Name:        "admin",
 				Permissions: []domain.Permission{{Resource: "*", Action: "*"}},
 			})
-			sessionRepo := mem.NewSessionRepository()
+			sessionRepo := mem.NewSessionRepository(clock.Real())
 			// Create a session for the user so we can verify revocation.
 			sess := &domain.Session{ID: "sess-" + tc.userID, UserID: tc.userID}
 			require.NoError(t, sessionRepo.Create(context.Background(), sess))
@@ -296,7 +297,7 @@ func TestService_DemoMode_Revoke_CallsSessionRevoke(t *testing.T) {
 			})
 			_, _ = roleRepo.AssignToUser(context.Background(), tc.userID, "admin")
 			_, _ = roleRepo.AssignToUser(context.Background(), "usr-other", "admin") // second admin
-			sessionRepo := mem.NewSessionRepository()
+			sessionRepo := mem.NewSessionRepository(clock.Real())
 			sess := &domain.Session{ID: "sess-" + tc.userID, UserID: tc.userID}
 			require.NoError(t, sessionRepo.Create(context.Background(), sess))
 

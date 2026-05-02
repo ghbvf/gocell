@@ -130,10 +130,7 @@ func NewDirectEmitter(
 		return nil, errcode.New(errcode.ErrCellMissingOutbox,
 			"outbox: nil metrics provider for DirectEmitter")
 	}
-	if clk == nil {
-		return nil, errcode.New(errcode.ErrCellMissingOutbox,
-			"outbox: nil clock for DirectEmitter")
-	}
+	clock.MustHaveClock(clk, "outbox.NewDirectEmitter")
 	if cellID == "" {
 		return nil, errcode.New(errcode.ErrValidationFailed,
 			"outbox: cellID must not be empty for DirectEmitter")

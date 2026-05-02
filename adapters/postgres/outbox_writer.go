@@ -34,12 +34,9 @@ type OutboxWriter struct {
 }
 
 // NewOutboxWriter creates an OutboxWriter.
-func NewOutboxWriter(clk ...clock.Clock) *OutboxWriter {
-	c := clock.Real()
-	if len(clk) > 0 && clk[0] != nil {
-		c = clk[0]
-	}
-	return &OutboxWriter{clock: c}
+func NewOutboxWriter(clk clock.Clock) *OutboxWriter {
+	clock.MustHaveClock(clk, "postgres.NewOutboxWriter")
+	return &OutboxWriter{clock: clk}
 }
 
 // Write inserts an outbox entry into the outbox_entries table using the

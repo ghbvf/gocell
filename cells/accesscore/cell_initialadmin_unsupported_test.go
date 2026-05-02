@@ -13,6 +13,7 @@ import (
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/ghbvf/gocell/kernel/clock"
 )
 
 // unsupportedDeps mirrors the unix testDeps helper without the unix build tag.
@@ -20,6 +21,7 @@ func unsupportedDeps() cell.Dependencies {
 	return cell.Dependencies{
 		Config:         make(map[string]any),
 		DurabilityMode: cell.DurabilityDemo,
+		Clock:          clock.Real(),
 	}
 }
 
@@ -31,7 +33,7 @@ func unsupportedDeps() cell.Dependencies {
 func TestAccessCoreInit_InitialAdminUnsupportedPlatform_FailFast(t *testing.T) {
 	ac := NewAccessCore(
 		WithUserRepository(mem.NewUserRepository()),
-		WithSessionRepository(mem.NewSessionRepository()),
+		WithSessionRepository(mem.NewSessionRepository(clock.Real())),
 		WithRoleRepository(mem.NewRoleRepository()),
 		WithOutboxDeps(noopPublisher{}, nil),
 		WithJWTIssuer(testIssuer),
@@ -58,7 +60,7 @@ func TestAccessCoreInit_InitialAdminUnsupportedPlatform_FailFast(t *testing.T) {
 func TestAccessCoreInit_InitialAdminNotConfigured_NoCheck(t *testing.T) {
 	ac := NewAccessCore(
 		WithUserRepository(mem.NewUserRepository()),
-		WithSessionRepository(mem.NewSessionRepository()),
+		WithSessionRepository(mem.NewSessionRepository(clock.Real())),
 		WithRoleRepository(mem.NewRoleRepository()),
 		WithOutboxDeps(noopPublisher{}, nil),
 		WithJWTIssuer(testIssuer),

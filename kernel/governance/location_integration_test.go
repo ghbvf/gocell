@@ -3,6 +3,7 @@
 package governance_test
 
 import (
+	"github.com/ghbvf/gocell/kernel/clock"
 	"testing"
 	"testing/fstest"
 
@@ -39,7 +40,7 @@ func TestLocation_REF01_SliceBelongsToCell(t *testing.T) {
 	pm, err := p.ParseFS(fs)
 	require.NoError(t, err)
 
-	v := governance.NewValidator(pm, "")
+	v := governance.NewValidator(pm, "", clock.Real())
 	results := v.Validate()
 
 	var ref01 *governance.ValidationResult
@@ -85,7 +86,7 @@ func TestLocation_REF02_ContractUsageIndex(t *testing.T) {
 	pm, err := p.ParseFS(fs)
 	require.NoError(t, err)
 
-	v := governance.NewValidator(pm, "")
+	v := governance.NewValidator(pm, "", clock.Real())
 	results := v.Validate()
 
 	var ref02 *governance.ValidationResult
@@ -132,7 +133,7 @@ func TestLocation_REF14_ConsumerActor(t *testing.T) {
 	pm, err := p.ParseFS(fs)
 	require.NoError(t, err)
 
-	v := governance.NewValidator(pm, "")
+	v := governance.NewValidator(pm, "", clock.Real())
 	results := v.Validate()
 
 	var ref14 *governance.ValidationResult
@@ -182,7 +183,7 @@ func TestLocation_ADV04_StatusBoardEntry(t *testing.T) {
 	pm, err := p.ParseFS(fs)
 	require.NoError(t, err)
 
-	v := governance.NewValidator(pm, "")
+	v := governance.NewValidator(pm, "", clock.Real())
 	results := v.Validate()
 
 	var adv04 *governance.ValidationResult
@@ -260,7 +261,7 @@ func TestLocation_NoNodes_NoCrash(t *testing.T) {
 		},
 		Contracts: map[string]*metadata.ContractMeta{},
 	}
-	v := governance.NewValidator(pm, "")
+	v := governance.NewValidator(pm, "", clock.Real())
 	results := v.Validate()
 
 	// At least the REF-01 (cell not found) should fire.

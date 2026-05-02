@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/httputil"
 )
@@ -36,6 +37,7 @@ func AuthMiddleware(verifier IntentTokenVerifier, opts ...AuthOption) func(http.
 	for _, o := range opts {
 		o(&cfg)
 	}
+	clock.MustHaveClock(cfg.clock, "auth.AuthMiddleware")
 
 	isPublic := cfg.publicMatcher
 	if isPublic == nil {

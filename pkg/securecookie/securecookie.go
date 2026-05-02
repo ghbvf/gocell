@@ -17,6 +17,7 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"reflect"
 	"time"
 
 	"github.com/ghbvf/gocell/pkg/errcode"
@@ -37,6 +38,22 @@ type Clock interface {
 type realClock struct{}
 
 func (realClock) Now() time.Time { return time.Now() }
+
+// MustHaveClock panics when clk is nil or a typed-nil (interface wrapping a
+// nil pointer). pkg/ may not import kernel/clock, so this is a local equivalent
+// of clock.MustHaveClock with the same semantics.
+func MustHaveClock(clk Clock) {
+	if clk == nil {
+		panic("securecookie.WithClock: Clock is required (nil rejected); pass a real clock or clockmock.New in tests")
+	}
+	v := reflect.ValueOf(clk)
+	switch v.Kind() {
+	case reflect.Ptr, reflect.Map, reflect.Chan, reflect.Func, reflect.Slice, reflect.Interface:
+		if v.IsNil() {
+			panic("securecookie.WithClock: Clock is required (typed-nil rejected); pass a real clock or clockmock.New in tests")
+		}
+	}
+}
 
 // SecureCookie encodes and decodes cookie values with HMAC-SHA256 signing
 // and optional AES-GCM encryption.
@@ -110,17 +127,16 @@ func (sc *SecureCookie) WithMaxAge(seconds int) *SecureCookie {
 }
 
 // WithClock returns a copy of sc using the given clock for timestamps and
-// expiry checks. Key material is deep-copied. clk may be nil, in which case
-// the wall-clock implementation is substituted.
+// expiry checks. Key material is deep-copied. clk must not be nil or a typed-nil;
+// pass a real clock implementation (e.g. the caller's injected clock or clockmock.New
+// in tests). Panics on nil or typed-nil to fail fast at construction time.
 //
 // Any kernel/clock.Clock satisfies the local Clock interface structurally;
 // higher layers pass their injected clock.Clock here without explicit
 // conversion. Tests that need deterministic time inject a clockmock.FakeClock
 // the same way.
 func (sc *SecureCookie) WithClock(clk Clock) *SecureCookie {
-	if clk == nil {
-		clk = realClock{}
-	}
+	MustHaveClock(clk)
 	hk := make([]byte, len(sc.hashKey))
 	copy(hk, sc.hashKey)
 	return &SecureCookie{

@@ -2,6 +2,7 @@ package postgres
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"testing"
 	"time"
@@ -27,6 +28,15 @@ func (*typedNilRefreshClock) Since(t time.Time) time.Duration { return time.Sinc
 func (*typedNilRefreshClock) Until(t time.Time) time.Duration { return time.Until(t) }
 func (*typedNilRefreshClock) NewTimerAt(t time.Time) clock.Timer {
 	return clock.Real().NewTimerAt(t)
+}
+func (*typedNilRefreshClock) NewTicker(d time.Duration) clock.Ticker {
+	return clock.Real().NewTicker(d)
+}
+func (*typedNilRefreshClock) AfterFunc(t time.Time, fn func()) clock.Timer {
+	return clock.Real().AfterFunc(t, fn)
+}
+func (*typedNilRefreshClock) Sleep(ctx context.Context, t time.Time) error {
+	return clock.Real().Sleep(ctx, t)
 }
 
 type typedNilRefreshReader struct{}

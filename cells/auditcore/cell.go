@@ -174,6 +174,7 @@ type AuditCore struct {
 	logger          *slog.Logger
 	hmacKey         []byte
 	metricsProvider metrics.Provider
+	clk             clock.Clock
 
 	// Slice services.
 	appendSvc    *auditappend.Service
@@ -234,6 +235,7 @@ func NewAuditCore(opts ...Option) *AuditCore {
 
 // Init constructs all 4 slices.
 func (c *AuditCore) Init(ctx context.Context, deps cell.Dependencies) error {
+	c.clk = deps.Clock
 	if err := c.resolveHMACKey(deps.Config); err != nil {
 		return err
 	}
@@ -276,7 +278,7 @@ func (c *AuditCore) resolveEmitter(mode cell.DurabilityMode) error {
 			Logger:            c.logger,
 			DirectPublishMode: outbox.DirectPublishFailClosed,
 			MetricsProvider:   c.metricsProvider,
-			Clock:             clock.Real(),
+			Clock:             c.clk,
 		},
 		PreResolved:      c.emitter,
 		ConsistencyLevel: c.ConsistencyLevel(),
@@ -313,7 +315,7 @@ func (c *AuditCore) resolveHMACKey(cfg map[string]any) error {
 func (c *AuditCore) initSlices() {
 	// audit-append
 	appendOpts := []auditappend.Option{auditappend.WithEmitter(c.emitter), auditappend.WithTxManager(c.txRunner)}
-	c.appendSvc = auditappend.NewService(c.auditRepo, c.hmacKey, c.logger, appendOpts...)
+	c.appendSvc = auditappend.NewService(c.auditRepo, c.hmacKey, c.logger, c.clk, appendOpts...)
 	// L3: 订阅 accesscore/configcore 跨 cell 事件，slice 级别可高于 cell 级别。
 	c.AddSlice(cell.NewBaseSlice("auditappend", "auditcore", cell.L3))
 

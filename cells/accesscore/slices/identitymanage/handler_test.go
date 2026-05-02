@@ -21,6 +21,7 @@ import (
 	"github.com/ghbvf/gocell/cells/accesscore/internal/testutil"
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/cell/celltest"
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/runtime/auth"
@@ -41,8 +42,8 @@ func newHandlerIdentityRefreshStore() refresh.Store {
 var handlerStubIssuer TokenIssuer = &stubTokenIssuer{}
 
 func setup() http.Handler {
-	svc, err := NewService(mem.NewUserRepository(), mem.NewSessionRepository(), newHandlerIdentityRefreshStore(), slog.Default(),
-		WithTokenIssuer(handlerStubIssuer))
+	svc, err := NewService(mem.NewUserRepository(), mem.NewSessionRepository(clock.Real()), newHandlerIdentityRefreshStore(), slog.Default(),
+		WithTokenIssuer(handlerStubIssuer), WithClock(clock.Real()))
 	if err != nil {
 		panic("setup: " + err.Error())
 	}
@@ -63,8 +64,8 @@ func setupWithIssuer(issuer TokenIssuer) (http.Handler, *mem.UserRepository) {
 	if effectiveIssuer == nil {
 		effectiveIssuer = handlerStubIssuer
 	}
-	svc, err := NewService(repo, mem.NewSessionRepository(), newHandlerIdentityRefreshStore(), slog.Default(),
-		WithTokenIssuer(effectiveIssuer))
+	svc, err := NewService(repo, mem.NewSessionRepository(clock.Real()), newHandlerIdentityRefreshStore(), slog.Default(),
+		WithTokenIssuer(effectiveIssuer), WithClock(clock.Real()))
 	if err != nil {
 		panic("setupWithIssuer: " + err.Error())
 	}

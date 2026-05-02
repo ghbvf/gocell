@@ -42,16 +42,14 @@ type FlagRepository struct {
 // NewFlagRepository creates a FlagRepository that resolves the ambient
 // pgx.Tx from the context on each write call.
 //
+// clk must be non-nil; pass clock.Real() in production and clockmock.New() in tests.
 // Requires migrations 008 (table) and 009 (concurrent index) to be applied.
 // The adapterpg schema guard (VerifyExpectedVersion) enforces the actual
 // current expected version at startup; this comment is documentation-only
 // and deliberately does not duplicate that check.
-func NewFlagRepository(s *Session, clk ...clock.Clock) *FlagRepository {
-	c := clock.Real()
-	if len(clk) > 0 && clk[0] != nil {
-		c = clk[0]
-	}
-	return &FlagRepository{session: s, clock: c}
+func NewFlagRepository(s *Session, clk clock.Clock) *FlagRepository {
+	clock.MustHaveClock(clk, "postgres.NewFlagRepository")
+	return &FlagRepository{session: s, clock: clk}
 }
 
 func (r *FlagRepository) resolveDB(ctx context.Context) DBTX {

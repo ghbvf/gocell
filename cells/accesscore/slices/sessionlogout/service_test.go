@@ -32,12 +32,12 @@ type typedNilRefreshStore struct {
 }
 
 func newTestService() (*Service, *mem.SessionRepository) {
-	repo := mem.NewSessionRepository()
+	repo := mem.NewSessionRepository(clock.Real())
 	return MustNewService(repo, newLogoutRefreshStore(), slog.Default()), repo
 }
 
 func TestNewService_RejectsTypedNilDependencies(t *testing.T) {
-	sessionRepo := mem.NewSessionRepository()
+	sessionRepo := mem.NewSessionRepository(clock.Real())
 	refreshStore := newLogoutRefreshStore()
 
 	cases := []struct {
@@ -171,7 +171,7 @@ func (f failingPublisher) Publish(_ context.Context, _ string, _ []byte) error {
 func (f failingPublisher) Close(_ context.Context) error                       { return nil }
 
 func TestService_Logout_PublishError_DoesNotFailLogout(t *testing.T) {
-	repo := mem.NewSessionRepository()
+	repo := mem.NewSessionRepository(clock.Real())
 	seedSession(repo, "sess-pub", "usr-1")
 
 	fp := failingPublisher{err: fmt.Errorf("broker unavailable")}

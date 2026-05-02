@@ -373,7 +373,7 @@ func (v *Validator) validateStatusBoardStateEnum01() []ValidationResult {
 //   - deprecated + date >90d ago → Warning, IssueForbidden
 func (v *Validator) validateContractDeprecatedCleanup01() []ValidationResult {
 	var results []ValidationResult
-	now := v.now()
+	now := v.clk.Now()
 	for _, c := range v.project.Contracts {
 		if c.Lifecycle != "deprecated" {
 			continue

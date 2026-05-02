@@ -8,6 +8,8 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+
+	"github.com/ghbvf/gocell/kernel/clock"
 )
 
 // --- existing cases adapted to new signature ---
@@ -22,7 +24,7 @@ func TestSafeObserve_PanicDoesNotPropagate(t *testing.T) {
 
 func TestMetrics_CollectorPanicDoesNotCrash(t *testing.T) {
 	// A collector that panics in RecordRequest must not crash the request.
-	handler := Recorder(Metrics(&panicCollector{})(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := Recorder(Metrics(&panicCollector{}, clock.Real())(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})))
 

@@ -14,6 +14,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 )
 
@@ -49,7 +50,7 @@ const lifecycleNoTimeout time.Duration = -1
 
 // TestLifecycle_EmptyStartStop_NoError — zero hooks, Start+Stop return nil.
 func TestLifecycle_EmptyStartStop_NoError(t *testing.T) {
-	lc := NewLifecycle(LifecycleConfig{})
+	lc := NewLifecycle(LifecycleConfig{Clock: clock.Real()})
 	ctx := context.Background()
 	require.NoError(t, lc.Start(ctx))
 	require.NoError(t, lc.Stop(ctx))
@@ -66,7 +67,7 @@ func TestLifecycle_SingleHook_StartThenStop_Order(t *testing.T) {
 		mu.Unlock()
 	}
 
-	lc := NewLifecycle(LifecycleConfig{})
+	lc := NewLifecycle(LifecycleConfig{Clock: clock.Real()})
 	_ = lc.Append(Hook{
 		Name: "A",
 		OnStart: func(_ context.Context) error {
@@ -97,7 +98,7 @@ func TestLifecycle_MultiHook_LIFOOrder(t *testing.T) {
 		mu.Unlock()
 	}
 
-	lc := NewLifecycle(LifecycleConfig{})
+	lc := NewLifecycle(LifecycleConfig{Clock: clock.Real()})
 	for _, name := range []string{"A", "B", "C"} {
 		n := name
 		_ = lc.Append(Hook{
@@ -137,7 +138,7 @@ func TestLifecycle_StartFailureMidway_LIFORollback(t *testing.T) {
 
 	cStartErr := errors.New("C start failed")
 
-	lc := NewLifecycle(LifecycleConfig{})
+	lc := NewLifecycle(LifecycleConfig{Clock: clock.Real()})
 	_ = lc.Append(Hook{
 		Name:    "A",
 		OnStart: func(_ context.Context) error { return nil },
@@ -187,7 +188,7 @@ func TestLifecycle_StopBestEffort_ErrorsCollected(t *testing.T) {
 		mu.Unlock()
 	}
 
-	lc := NewLifecycle(LifecycleConfig{})
+	lc := NewLifecycle(LifecycleConfig{Clock: clock.Real()})
 	_ = lc.Append(Hook{
 		Name:    "first",
 		OnStart: func(_ context.Context) error { return nil },
@@ -228,7 +229,7 @@ func TestLifecycle_StopBestEffort_ErrorsCollected(t *testing.T) {
 // Start returns error containing context.DeadlineExceeded; rollback runs for
 // the hooks that succeeded (none in this test, only hook failed).
 func TestLifecycle_PerHookStartTimeout(t *testing.T) {
-	lc := NewLifecycle(LifecycleConfig{})
+	lc := NewLifecycle(LifecycleConfig{Clock: clock.Real()})
 
 	var stopCalled atomic.Bool
 	_ = lc.Append(Hook{
@@ -261,7 +262,7 @@ func TestLifecycle_PerHookStartTimeout(t *testing.T) {
 // TestLifecycle_PerHookStopTimeoutIndependent — OnStop blocks 200ms with
 // StopTimeout=50ms; Stop should return within ~100ms and include DeadlineExceeded.
 func TestLifecycle_PerHookStopTimeoutIndependent(t *testing.T) {
-	lc := NewLifecycle(LifecycleConfig{})
+	lc := NewLifecycle(LifecycleConfig{Clock: clock.Real()})
 
 	_ = lc.Append(Hook{
 		Name:    "slow-stopper",
@@ -294,7 +295,7 @@ func TestLifecycle_PerHookStopTimeoutIndependent(t *testing.T) {
 // TestLifecycle_AppendAfterStart_ReturnsError — Append after Start returns
 // ErrLifecycleAlreadyStarted.
 func TestLifecycle_AppendAfterStart_ReturnsError(t *testing.T) {
-	lc := NewLifecycle(LifecycleConfig{})
+	lc := NewLifecycle(LifecycleConfig{Clock: clock.Real()})
 	ctx := context.Background()
 	require.NoError(t, lc.Start(ctx))
 	err := lc.Append(Hook{Name: "late"})
@@ -305,7 +306,7 @@ func TestLifecycle_AppendAfterStart_ReturnsError(t *testing.T) {
 // TestLifecycle_DoubleStart_ReturnsError — second Start returns
 // ErrLifecycleAlreadyStarted; second Stop is idempotent no-op returning nil.
 func TestLifecycle_DoubleStart_ReturnsError(t *testing.T) {
-	lc := NewLifecycle(LifecycleConfig{})
+	lc := NewLifecycle(LifecycleConfig{Clock: clock.Real()})
 	ctx := context.Background()
 
 	require.NoError(t, lc.Start(ctx), "first Start")
@@ -322,7 +323,7 @@ func TestLifecycle_DoubleStart_ReturnsError(t *testing.T) {
 // before Start; all hooks registered without data race.
 func TestLifecycle_ConcurrentAppend_Safe(t *testing.T) {
 	const n = 100
-	lc := NewLifecycle(LifecycleConfig{})
+	lc := NewLifecycle(LifecycleConfig{Clock: clock.Real()})
 
 	var wg sync.WaitGroup
 	wg.Add(n)
@@ -346,7 +347,7 @@ func TestLifecycle_ConcurrentAppend_Safe(t *testing.T) {
 // TestLifecycle_NegativeTimeout_NoDeadline — per-hook StartTimeout < 0 means no
 // deadline applied; the hook completes normally even if it takes some time.
 func TestLifecycle_NegativeTimeout_NoDeadline(t *testing.T) {
-	lc := NewLifecycle(LifecycleConfig{})
+	lc := NewLifecycle(LifecycleConfig{Clock: clock.Real()})
 
 	var startCtxHadDeadline bool
 	_ = lc.Append(Hook{
@@ -369,7 +370,7 @@ func TestLifecycle_NegativeTimeout_NoDeadline(t *testing.T) {
 // TestLifecycle_NilOnStartOnStop_NoError — Hook with nil OnStart and nil OnStop
 // is a valid no-op; Start and Stop return nil.
 func TestLifecycle_NilOnStartOnStop_NoError(t *testing.T) {
-	lc := NewLifecycle(LifecycleConfig{})
+	lc := NewLifecycle(LifecycleConfig{Clock: clock.Real()})
 	_ = lc.Append(Hook{Name: "noop"}) // both OnStart and OnStop are nil
 
 	ctx := context.Background()
@@ -388,7 +389,7 @@ func TestLifecycle_LogsCellLabel_WhenCellIDSet(t *testing.T) {
 	var buf bytes.Buffer
 	logger := slog.New(slog.NewJSONHandler(&buf, nil))
 
-	lc := NewLifecycle(LifecycleConfig{Logger: logger})
+	lc := NewLifecycle(LifecycleConfig{Logger: logger, Clock: clock.Real()})
 	require.NoError(t, lc.Append(Hook{
 		CellID:  "accesscore",
 		Name:    "accesscore.initial-admin-bootstrap",
@@ -427,7 +428,7 @@ func TestLifecycle_OmitsCellLabel_WhenCellIDEmpty(t *testing.T) {
 	var buf bytes.Buffer
 	logger := slog.New(slog.NewJSONHandler(&buf, nil))
 
-	lc := NewLifecycle(LifecycleConfig{Logger: logger})
+	lc := NewLifecycle(LifecycleConfig{Logger: logger, Clock: clock.Real()})
 	require.NoError(t, lc.Append(Hook{
 		Name:    "external.hook", // CellID intentionally omitted
 		OnStart: func(_ context.Context) error { return nil },
@@ -452,6 +453,7 @@ func TestLifecycle_OnStartNearTimeoutWarns(t *testing.T) {
 	logger := slog.New(slog.NewJSONHandler(&buf, nil))
 
 	lc := NewLifecycle(LifecycleConfig{
+		Clock:               clock.Real(),
 		DefaultStartTimeout: lifecycleDefaultTimeout20ms,
 		Logger:              logger,
 	})
@@ -481,6 +483,7 @@ func TestLifecycle_OnStartNearTimeoutWarnsWithoutCellID(t *testing.T) {
 	logger := slog.New(slog.NewJSONHandler(&buf, nil))
 
 	lc := NewLifecycle(LifecycleConfig{
+		Clock:               clock.Real(),
 		DefaultStartTimeout: lifecycleDefaultTimeout20ms,
 		Logger:              logger,
 	})
@@ -505,6 +508,7 @@ func TestLifecycle_NegativeStartTimeoutSkipsSlowWarn(t *testing.T) {
 	logger := slog.New(slog.NewJSONHandler(&buf, nil))
 
 	lc := NewLifecycle(LifecycleConfig{
+		Clock:               clock.Real(),
 		DefaultStartTimeout: lifecycleDefaultTimeout1ns,
 		Logger:              logger,
 	})

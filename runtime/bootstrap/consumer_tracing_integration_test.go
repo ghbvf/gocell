@@ -108,7 +108,7 @@ func (c *consumerSpyCell) RegisterSubscriptions(r cell.EventRouter) error {
 // contract metadata.
 func TestBootstrap_ConsumerTracingIntegration(t *testing.T) {
 	spyTracer := &endToEndSpyTracer{}
-	bus := eventbus.New()
+	bus := eventbus.New(eventbus.WithClock(clock.Real()))
 
 	spec := wrapper.ContractSpec{
 		ID: "event.integration.test.v1", Kind: "event", Transport: "inmem",
@@ -128,6 +128,7 @@ func TestBootstrap_ConsumerTracingIntegration(t *testing.T) {
 
 	primaryLn := newLocalListener(t)
 	b := New(
+		WithClock(clock.Real()),
 		WithSubscriber(bus),
 		WithPublisher(bus),
 		WithAssembly(asm),

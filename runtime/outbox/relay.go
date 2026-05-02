@@ -115,12 +115,8 @@ type Relay struct {
 	clock clock.Clock
 }
 
-// clk returns the relay's clock, falling back to clock.Real() if nil.
-// This guards tests that construct Relay directly without going through NewRelay.
+// clk returns the relay's clock.
 func (r *Relay) clk() clock.Clock {
-	if r.clock == nil {
-		return clock.Real()
-	}
 	return r.clock
 }
 
@@ -145,13 +141,14 @@ func NewRelay(store Store, pub kout.Publisher, cfg RelayConfig) *Relay {
 			slog.Duration("poll_interval", cfg.PollInterval))
 	}
 
+	clock.MustHaveClock(cfg.Clock, "outbox.NewRelay")
 	r := &Relay{
 		store:   store,
 		pub:     pub,
 		cfg:     cfg,
 		metrics: metrics,
 		readyCh: make(chan struct{}),
-		clock:   clock.Real(),
+		clock:   cfg.Clock,
 	}
 	// Instantiate failure budgets. threshold=0 → nil (disabled).
 	if cfg.PollFailureBudget > 0 {
@@ -297,14 +294,14 @@ func (r *Relay) Stop(ctx context.Context) error {
 
 // pollLoop fetches unpublished entries and publishes them.
 func (r *Relay) pollLoop(ctx context.Context) {
-	ticker := time.NewTicker(r.cfg.PollInterval)
+	ticker := r.clk().NewTicker(r.cfg.PollInterval)
 	defer ticker.Stop()
 
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		case <-ticker.C:
+		case <-ticker.C():
 			err := r.pollOnce(ctx)
 			if err != nil {
 				slog.Warn("outbox relay: poll failed",
@@ -320,14 +317,14 @@ func (r *Relay) pollLoop(ctx context.Context) {
 
 // reclaimLoop periodically runs reclaimStale at ReclaimInterval.
 func (r *Relay) reclaimLoop(ctx context.Context) {
-	ticker := time.NewTicker(r.cfg.ReclaimInterval)
+	ticker := r.clk().NewTicker(r.cfg.ReclaimInterval)
 	defer ticker.Stop()
 
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		case <-ticker.C:
+		case <-ticker.C():
 			err := r.reclaimStale(ctx)
 			if err != nil {
 				slog.Warn("outbox relay: reclaim failed",
@@ -358,10 +355,13 @@ func (r *Relay) cleanupLoop(ctx context.Context) {
 		}
 
 		wait := r.nextCleanupWait(ctx)
+		t := r.clk().NewTimerAt(r.clk().Now().Add(wait))
 		select {
 		case <-ctx.Done():
+			t.Stop()
 			return
-		case <-time.After(wait):
+		case <-t.C():
+			t.Stop()
 		}
 	}
 }

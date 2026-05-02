@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/runtime/eventbus"
 )
@@ -58,12 +59,12 @@ func TestConfigCore_InitDemoMode_EmitsL2DegradationWarn(t *testing.T) {
 
 	c := NewConfigCore(
 		WithInMemoryDefaults(),
-		WithOutboxDeps(eventbus.New(), nil),
+		WithOutboxDeps(eventbus.New(eventbus.WithClock(clock.Real())), nil),
 		WithLogger(logger),
 		WithMetricsProvider(metrics.NopProvider{}),
 	)
 	require.NoError(t, c.Init(context.Background(),
-		cell.Dependencies{DurabilityMode: cell.DurabilityDemo}))
+		cell.Dependencies{DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()}))
 
 	var warn *slog.Record
 	for i := range cap.records {

@@ -13,6 +13,7 @@ import (
 	"github.com/ghbvf/gocell/cells/accesscore/configgetter"
 	"github.com/ghbvf/gocell/cells/accesscore/initialadmin"
 	"github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/kernel/clock"
 	kernellifecycle "github.com/ghbvf/gocell/kernel/lifecycle"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/runtime/bootstrap"
@@ -116,7 +117,7 @@ func (m AccessCoreModule) Provide(
 			return nil, nil, nil, fmt.Errorf("AccessCoreModule: postgres mode requires SharedPGPool " +
 				"(ConfigCoreModule must run before AccessCoreModule)")
 		}
-		writer := adapterpg.NewOutboxWriter()
+		writer := adapterpg.NewOutboxWriter(clock.Real())
 		txMgr := adapterpg.NewTxManager(shared.SharedPGPool)
 		// Accumulative WithOutboxDeps: adds writer without replacing the publisher
 		// set above. WithTxManager wires the TxRunner for L2 transactional atomicity.
@@ -135,7 +136,7 @@ func (m AccessCoreModule) Provide(
 		internalBaseURL := internalAddrToBaseURL(shared.InternalHTTPAddr)
 		if shared.InternalGuard != nil {
 			accessOpts = append(accessOpts,
-				configgetter.WithHTTP(internalBaseURL, shared.InternalGuard.ring),
+				configgetter.WithHTTP(internalBaseURL, shared.InternalGuard.ring, clock.Real()),
 			)
 		}
 	}

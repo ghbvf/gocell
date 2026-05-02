@@ -216,6 +216,7 @@ import (
     mycell "github.com/ghbvf/gocell/cells/mycell"
     "github.com/ghbvf/gocell/kernel/assembly"
     "github.com/ghbvf/gocell/kernel/cell"
+    "github.com/ghbvf/gocell/kernel/clock"
     "github.com/ghbvf/gocell/runtime/bootstrap"
 )
 
@@ -223,11 +224,13 @@ func main() {
     ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
     defer cancel()
 
-    asm := assembly.New(assembly.Config{ID: "myapp", DurabilityMode: cell.DurabilityDemo})
+    clk := clock.Real()
+    asm := assembly.New(assembly.Config{ID: "myapp", DurabilityMode: cell.DurabilityDemo, Clock: clk})
     asm.Register(mycell.New())
 
     app := bootstrap.New(
         bootstrap.WithAssembly(asm),
+        bootstrap.WithClock(clk),
         bootstrap.WithListener(cell.PrimaryListener, ":8080",
             []cell.ListenerAuth{cell.AuthNone{}}),
         bootstrap.WithListener(cell.InternalListener, "127.0.0.1:9090",

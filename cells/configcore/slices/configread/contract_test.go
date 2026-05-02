@@ -13,6 +13,7 @@ import (
 	"github.com/ghbvf/gocell/cells/configcore/internal/mem"
 	kcell "github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/cell/celltest"
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/contracttest"
 	"github.com/ghbvf/gocell/pkg/query"
 	"github.com/ghbvf/gocell/runtime/auth"
@@ -107,7 +108,7 @@ type authzCase struct {
 // Principal must surface as 401 and a service principal without
 // RoleInternalAdmin must surface as 403 — the same Policy production runs.
 func setupInternalHandler() http.Handler {
-	repo := mem.NewConfigRepository()
+	repo := mem.NewConfigRepository(clock.Real())
 	codec, _ := query.NewCursorCodec([]byte("gocell-demo-cursor-key-32bytes!!"))
 	svc, err := NewService(repo, codec, slog.Default(), query.RunModeProd)
 	if err != nil {

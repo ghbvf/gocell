@@ -42,16 +42,6 @@ func WithTxManager(tx persistence.TxRunner) Option {
 	return func(s *Service) { s.txRunner = persistence.RunnerOrNoop(tx) }
 }
 
-// WithClock sets the clock used for config version timestamps. Defaults to
-// clock.Real() when not provided.
-func WithClock(clk clock.Clock) Option {
-	return func(s *Service) {
-		if clk != nil {
-			s.clock = clk
-		}
-	}
-}
-
 // Service implements config publish/rollback business logic.
 type Service struct {
 	repo     ports.ConfigRepository
@@ -62,13 +52,15 @@ type Service struct {
 }
 
 // NewService creates a config-publish Service.
-func NewService(repo ports.ConfigRepository, logger *slog.Logger, opts ...Option) *Service {
+// clk must be non-nil; pass clock.Real() in production and clockmock.New() in tests.
+func NewService(repo ports.ConfigRepository, logger *slog.Logger, clk clock.Clock, opts ...Option) *Service {
+	clock.MustHaveClock(clk, "configpublish.NewService")
 	s := &Service{
 		repo:     repo,
 		txRunner: persistence.NoopTxRunner{},
 		emitter:  outbox.NewNoopEmitter(),
 		logger:   logger,
-		clock:    clock.Real(),
+		clock:    clk,
 	}
 	for _, o := range opts {
 		o(s)

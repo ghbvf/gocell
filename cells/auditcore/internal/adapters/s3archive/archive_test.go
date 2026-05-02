@@ -10,12 +10,13 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/ghbvf/gocell/cells/auditcore/internal/domain"
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
 func TestArchiveStore_Archive(t *testing.T) {
 	uploader := &mockUploader{}
-	store := NewArchiveStore(uploader, "audit/archive/")
+	store := NewArchiveStore(uploader, "audit/archive/", clock.Real())
 
 	entries := []*domain.AuditEntry{
 		{
@@ -57,7 +58,7 @@ func TestArchiveStore_Archive(t *testing.T) {
 
 func TestArchiveStore_Archive_Empty(t *testing.T) {
 	uploader := &mockUploader{}
-	store := NewArchiveStore(uploader, "prefix/")
+	store := NewArchiveStore(uploader, "prefix/", clock.Real())
 
 	err := store.Archive(context.Background(), nil)
 	require.NoError(t, err)
@@ -70,7 +71,7 @@ func TestArchiveStore_Archive_Empty(t *testing.T) {
 
 func TestArchiveStore_Archive_UploadError(t *testing.T) {
 	uploader := &mockUploader{uploadErr: assert.AnError}
-	store := NewArchiveStore(uploader, "prefix/")
+	store := NewArchiveStore(uploader, "prefix/", clock.Real())
 
 	entries := []*domain.AuditEntry{{ID: "ae-1"}}
 	err := store.Archive(context.Background(), entries)

@@ -30,8 +30,10 @@ type Service struct {
 }
 
 // NewService creates a session-validate Service.
-func NewService(verifier auth.IntentTokenVerifier, sessionRepo ports.SessionRepository, logger *slog.Logger) *Service {
-	return &Service{verifier: verifier, sessionRepo: sessionRepo, logger: logger, clock: clock.Real()}
+// clk must not be nil; pass clock.Real() for production use.
+func NewService(verifier auth.IntentTokenVerifier, sessionRepo ports.SessionRepository, logger *slog.Logger, clk clock.Clock) *Service {
+	clock.MustHaveClock(clk, "sessionvalidate.NewService")
+	return &Service{verifier: verifier, sessionRepo: sessionRepo, logger: logger, clock: clk}
 }
 
 // VerifyIntent validates an access token. This service is intentionally

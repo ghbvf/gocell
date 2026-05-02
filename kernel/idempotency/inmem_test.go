@@ -6,11 +6,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ghbvf/gocell/kernel/clock/clockmock"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 )
 
 func TestInMemClaimer_Claim_AcquiredThenCommitted(t *testing.T) {
-	c := NewInMemClaimer()
+	c := NewInMemClaimer(clockmock.New(time.Time{}))
 	ctx := context.Background()
 
 	state, receipt, err := c.Claim(ctx, "k1", time.Minute, time.Hour)
@@ -34,7 +35,7 @@ func TestInMemClaimer_Claim_AcquiredThenCommitted(t *testing.T) {
 }
 
 func TestInMemClaimer_Claim_BusyWhileInFlight(t *testing.T) {
-	c := NewInMemClaimer()
+	c := NewInMemClaimer(clockmock.New(time.Time{}))
 	ctx := context.Background()
 
 	state1, _, _ := c.Claim(ctx, "k", time.Minute, time.Hour)
@@ -49,7 +50,7 @@ func TestInMemClaimer_Claim_BusyWhileInFlight(t *testing.T) {
 }
 
 func TestInMemClaimer_Release_AllowsReclaim(t *testing.T) {
-	c := NewInMemClaimer()
+	c := NewInMemClaimer(clockmock.New(time.Time{}))
 	ctx := context.Background()
 
 	_, r, _ := c.Claim(ctx, "k", time.Minute, time.Hour)
@@ -63,16 +64,14 @@ func TestInMemClaimer_Release_AllowsReclaim(t *testing.T) {
 }
 
 func TestInMemClaimer_LeaseExpiry_AllowsReclaim(t *testing.T) {
-	c := NewInMemClaimer()
+	fc := clockmock.New(time.Time{})
+	c := NewInMemClaimer(fc)
 	ctx := context.Background()
 
-	// Fast-forward clock by mutating `now`.
-	base := time.Now()
-	c.now = func() time.Time { return base }
 	_, _, _ = c.Claim(ctx, "k", time.Second, time.Hour)
 
 	// Advance past lease TTL.
-	c.now = func() time.Time { return base.Add(testtime.D2s) }
+	fc.Advance(testtime.D2s)
 	state, _, _ := c.Claim(ctx, "k", time.Second, time.Hour)
 	if state != ClaimAcquired {
 		t.Fatalf("expected reclaim after lease expiry, got %v", state)
@@ -80,7 +79,7 @@ func TestInMemClaimer_LeaseExpiry_AllowsReclaim(t *testing.T) {
 }
 
 func TestInMemClaimer_DoubleCommit_Idempotent(t *testing.T) {
-	c := NewInMemClaimer()
+	c := NewInMemClaimer(clockmock.New(time.Time{}))
 	ctx := context.Background()
 	_, r, _ := c.Claim(ctx, "k", time.Minute, time.Hour)
 	if err := r.Commit(ctx); err != nil {
@@ -92,7 +91,7 @@ func TestInMemClaimer_DoubleCommit_Idempotent(t *testing.T) {
 }
 
 func TestInMemClaimer_DoubleRelease_Idempotent(t *testing.T) {
-	c := NewInMemClaimer()
+	c := NewInMemClaimer(clockmock.New(time.Time{}))
 	ctx := context.Background()
 	_, r, _ := c.Claim(ctx, "k", time.Minute, time.Hour)
 	if err := r.Release(ctx); err != nil {
@@ -108,15 +107,14 @@ func TestInMemClaimer_DoubleRelease_Idempotent(t *testing.T) {
 // (producing a fresh token), and the original slow consumer then tries to Commit.
 // The stale receipt must not clobber the newer claim's state.
 func TestInMemClaimer_Commit_AfterLeaseExpiryAndReclaim_ReturnsStaleError(t *testing.T) {
-	c := NewInMemClaimer()
+	fc := clockmock.New(time.Time{})
+	c := NewInMemClaimer(fc)
 	ctx := context.Background()
-	base := time.Now()
-	c.now = func() time.Time { return base }
 
 	_, r1, _ := c.Claim(ctx, "k", time.Second, time.Hour)
 
 	// Lease expires; a second consumer reclaims the key with a fresh token.
-	c.now = func() time.Time { return base.Add(testtime.D2s) }
+	fc.Advance(testtime.D2s)
 	_, _, err := c.Claim(ctx, "k", time.Minute, time.Hour)
 	if err != nil {
 		t.Fatalf("reclaim failed: %v", err)
@@ -130,14 +128,13 @@ func TestInMemClaimer_Commit_AfterLeaseExpiryAndReclaim_ReturnsStaleError(t *tes
 // TestInMemClaimer_Release_AfterLeaseExpiryAndReclaim_ReturnsStaleError is the
 // Release counterpart — a stale Release must not drop the newer claim's entry.
 func TestInMemClaimer_Release_AfterLeaseExpiryAndReclaim_ReturnsStaleError(t *testing.T) {
-	c := NewInMemClaimer()
+	fc := clockmock.New(time.Time{})
+	c := NewInMemClaimer(fc)
 	ctx := context.Background()
-	base := time.Now()
-	c.now = func() time.Time { return base }
 
 	_, r1, _ := c.Claim(ctx, "k", time.Second, time.Hour)
 
-	c.now = func() time.Time { return base.Add(testtime.D2s) }
+	fc.Advance(testtime.D2s)
 	_, r2, err := c.Claim(ctx, "k", time.Minute, time.Hour)
 	if err != nil || r2 == nil {
 		t.Fatalf("reclaim failed: err=%v r2=%v", err, r2)
@@ -168,7 +165,7 @@ func (r errReader) Read(_ []byte) (int, error) { return 0, r.err }
 // nil-deref. ClaimBusy is the closest-equivalent caller-action (requeue) for
 // this transient infrastructure failure.
 func TestInMemClaimer_Claim_RandFailure_PreservesContract(t *testing.T) {
-	c := NewInMemClaimer()
+	c := NewInMemClaimer(clockmock.New(time.Time{}))
 	c.rand = errReader{err: errors.New("entropy exhausted")}
 
 	state, receipt, err := c.Claim(context.Background(), "k1", time.Minute, time.Hour)

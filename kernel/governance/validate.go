@@ -10,8 +10,8 @@ package governance
 import (
 	"context"
 	"os"
-	"time"
 
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/metadata"
 	"github.com/ghbvf/gocell/kernel/verify"
 )
@@ -70,7 +70,7 @@ type ValidationResult struct {
 type Validator struct {
 	locator
 	root             string                            // project root for file existence checks
-	now              func() time.Time                  // clock function (injectable for tests)
+	clk              clock.Clock                       // clock (injectable for tests; production uses clock.Real())
 	fileExists       func(path string) bool            // file existence check (injectable for tests)
 	readFile         func(path string) ([]byte, error) // file reader (injectable for tests)
 	actorSet         map[string]bool                   // pre-built set of external actor IDs from actors.yaml (membership = external)
@@ -83,7 +83,8 @@ type Validator struct {
 
 // NewValidator creates a Validator for the given parsed project metadata.
 // If project is nil, an empty ProjectMeta is used to avoid nil-pointer panics.
-func NewValidator(project *metadata.ProjectMeta, root string) *Validator {
+func NewValidator(project *metadata.ProjectMeta, root string, clk clock.Clock) *Validator {
+	clock.MustHaveClock(clk, "governance.NewValidator")
 	if project == nil {
 		project = &metadata.ProjectMeta{
 			Cells:      map[string]*metadata.CellMeta{},
@@ -100,7 +101,7 @@ func NewValidator(project *metadata.ProjectMeta, root string) *Validator {
 	validator := &Validator{
 		locator: locator{project: project},
 		root:    root,
-		now:     time.Now,
+		clk:     clk,
 		fileExists: func(path string) bool {
 			_, err := os.Stat(path)
 			return err == nil

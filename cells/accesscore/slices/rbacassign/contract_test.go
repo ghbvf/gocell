@@ -16,6 +16,7 @@ import (
 	"github.com/ghbvf/gocell/cells/accesscore/internal/mem"
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/cell/celltest"
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/contracttest"
 	"github.com/ghbvf/gocell/runtime/auth"
 )
@@ -29,7 +30,7 @@ func newContractHandler() http.Handler {
 	_, _ = roleRepo.AssignToUser(context.Background(), "usr-seed", "admin")
 	_, _ = roleRepo.AssignToUser(context.Background(), "usr-other-admin", "admin") // second admin for last-admin guard
 
-	svc := NewService(roleRepo, mem.NewSessionRepository(), slog.Default())
+	svc := NewService(roleRepo, mem.NewSessionRepository(clock.Real()), slog.Default())
 	mux := celltest.NewTestMux()
 	h := NewHandler(svc)
 	mux.Route("/internal/v1/access/roles", func(s cell.RouteMux) {

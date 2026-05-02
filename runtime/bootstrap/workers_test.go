@@ -32,13 +32,13 @@ func (w *countWorker) Stop(_ context.Context) error { return nil }
 
 func TestWithWorkers(t *testing.T) {
 	w := &countWorker{}
-	b := New(WithWorkers(w))
+	b := New(WithClock(clock.Real()), WithWorkers(w))
 	assert.Len(t, b.workers, 1)
 }
 
 func TestWithRouterOptions(t *testing.T) {
 	opt := router.WithBodyLimit(512)
-	b := New(WithRouterOptions(opt))
+	b := New(WithClock(clock.Real()), WithRouterOptions(opt))
 	assert.Len(t, b.routerOpts, 1)
 }
 
@@ -52,6 +52,7 @@ func TestRun_WithWorkers_Shutdown(t *testing.T) {
 	w := &countWorker{}
 
 	b := New(
+		WithClock(clock.Real()),
 		WithAssembly(asm),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(ln)),
 		WithListener(cell.InternalListener, "127.0.0.1:0", []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(newLocalListener(t))),

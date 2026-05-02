@@ -14,6 +14,7 @@ import (
 	"github.com/ghbvf/gocell/cells/configcore/internal/domain"
 	"github.com/ghbvf/gocell/cells/configcore/internal/mem"
 	"github.com/ghbvf/gocell/cells/configcore/internal/testutil"
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/persistence"
 )
 
@@ -34,8 +35,8 @@ var _ persistence.TxRunner = (*failingTxRunner)(nil)
 
 func newTestService(t *testing.T) (*Service, *mem.FlagRepository) {
 	t.Helper()
-	repo := mem.NewFlagRepository()
-	svc, err := NewService(repo, slog.Default(),
+	repo := mem.NewFlagRepository(clock.Real())
+	svc, err := NewService(repo, slog.Default(), clock.Real(),
 		WithTxManager(&testutil.NoopTxRunner{}))
 	if err != nil {
 		t.Fatal(err)
@@ -72,7 +73,7 @@ func TestNewService_AllowsHalfWiredDemoPath(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			_, err := NewService(mem.NewFlagRepository(), slog.Default(), tc.opts...)
+			_, err := NewService(mem.NewFlagRepository(clock.Real()), slog.Default(), clock.Real(), tc.opts...)
 			require.NoError(t, err)
 		})
 	}
@@ -83,9 +84,9 @@ func TestNewService_AllowsHalfWiredDemoPath(t *testing.T) {
 // TestFlagWrite_Create_Atomic_RepoInTx verifies that Create writes repo
 // inside a single tx; repo failure propagates correctly.
 func TestFlagWrite_Create_Atomic_RepoInTx(t *testing.T) {
-	repo := mem.NewFlagRepository()
+	repo := mem.NewFlagRepository(clock.Real())
 	tx := &testutil.NoopTxRunner{}
-	svc, err := NewService(repo, slog.Default(), WithTxManager(tx))
+	svc, err := NewService(repo, slog.Default(), clock.Real(), WithTxManager(tx))
 	require.NoError(t, err)
 
 	flag, err := svc.Create(context.Background(), CreateInput{
@@ -104,9 +105,9 @@ func TestFlagWrite_Create_Atomic_RepoInTx(t *testing.T) {
 
 // TestFlagWrite_Create_RepoFails propagates tx-level failures to the caller.
 func TestFlagWrite_Create_RepoFails(t *testing.T) {
-	repo := mem.NewFlagRepository()
+	repo := mem.NewFlagRepository(clock.Real())
 	tx := &failingTxRunner{failErr: errors.New("tx commit failed")}
-	svc, err := NewService(repo, slog.Default(), WithTxManager(tx))
+	svc, err := NewService(repo, slog.Default(), clock.Real(), WithTxManager(tx))
 	require.NoError(t, err)
 
 	_, err = svc.Create(context.Background(), CreateInput{Key: "k"})
@@ -188,8 +189,8 @@ func TestFlagWrite_NoOutboxEmit_AfterDowngrade(t *testing.T) {
 
 	// Behavioral assertion: Create/Update/Toggle/Delete must succeed without
 	// any outbox writer being injected, confirming no emit attempt is made.
-	repo := mem.NewFlagRepository()
-	svc, err := NewService(repo, slog.Default(), WithTxManager(&testutil.NoopTxRunner{}))
+	repo := mem.NewFlagRepository(clock.Real())
+	svc, err := NewService(repo, slog.Default(), clock.Real(), WithTxManager(&testutil.NoopTxRunner{}))
 	require.NoError(t, err)
 
 	_, createErr := svc.Create(context.Background(), CreateInput{Key: "flag-no-emit", Description: "test"})

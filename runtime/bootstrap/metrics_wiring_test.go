@@ -77,16 +77,10 @@ func TestBootstrap_DefaultAssembly_WiresMetricsProvider(t *testing.T) {
 	// field directly — this is a white-box test sharing the package, so
 	// we can construct the default config the same way Run() does and
 	// assert the resulting dispatcher used our Provider.
-	b := New(WithMetricsProvider(spy))
+	b := New(WithClock(clock.Real()), WithMetricsProvider(spy))
 
 	// Mirror bootstrap.Run's default-assembly construction exactly.
-	cfg := assembly.Config{ID: "default", DurabilityMode: cell.DurabilityDemo}
-	if b.hookTimeoutSet {
-		cfg.HookTimeout = b.hookTimeout
-	}
-	if b.hookObserver != nil {
-		cfg.HookObserver = b.hookObserver
-	}
+	cfg := assembly.Config{ID: "default", DurabilityMode: cell.DurabilityDemo, Clock: b.clock}
 	if b.metricsProvider != nil {
 		cfg.MetricsProvider = b.metricsProvider
 	}
@@ -107,8 +101,8 @@ func TestBootstrap_DefaultAssembly_WiresMetricsProvider(t *testing.T) {
 // registry. This is defensive: removing MetricsProvider from the default
 // Config should not regress into nil or panic.
 func TestBootstrap_DefaultAssembly_NoProviderUsesNop(t *testing.T) {
-	b := New()
-	cfg := assembly.Config{ID: "default", DurabilityMode: cell.DurabilityDemo}
+	b := New(WithClock(clock.Real()))
+	cfg := assembly.Config{ID: "default", DurabilityMode: cell.DurabilityDemo, Clock: b.clock}
 	if b.metricsProvider != nil {
 		cfg.MetricsProvider = b.metricsProvider
 	}
@@ -169,7 +163,7 @@ func (c *startFailCell) Start(context.Context) error {
 // metric names: http_requests_total and http_request_duration_seconds.
 func TestBootstrap_MetricsProvider_AutoWiresHTTPCollector(t *testing.T) {
 	spy := &registrationSpy{}
-	b := New(WithMetricsProvider(spy))
+	b := New(WithClock(clock.Real()), WithMetricsProvider(spy))
 
 	opts, err := b.autoWireHTTPMetricsCollector(nil)
 	require.NoError(t, err, "autoWireHTTPMetricsCollector must succeed with a valid provider")
@@ -191,7 +185,7 @@ func TestBootstrap_MetricsProvider_AutoWiresHTTPCollector(t *testing.T) {
 // configured (NopProvider default), autoWireHTTPMetricsCollector returns the
 // input opts unchanged without adding any new options.
 func TestBootstrap_NoMetricsProvider_NoAutoWire(t *testing.T) {
-	b := New() // NopProvider default
+	b := New(WithClock(clock.Real())) // NopProvider default
 
 	initial := []router.Option{}
 	opts, err := b.autoWireHTTPMetricsCollector(initial)
@@ -209,7 +203,7 @@ func TestBootstrap_NoMetricsProvider_NoAutoWire(t *testing.T) {
 func TestAutoWire_CellLabel_FromExplicitAssemblyID(t *testing.T) {
 	t.Parallel()
 	p := newFakeMetricsProvider()
-	b := New(WithMetricsProvider(p), WithAssemblyID("my-service"))
+	b := New(WithClock(clock.Real()), WithMetricsProvider(p), WithAssemblyID("my-service"))
 
 	_, err := b.autoWireHTTPMetricsCollector(nil)
 	require.NoError(t, err)
@@ -242,7 +236,7 @@ func TestAutoWire_CellLabel_DerivedFromAssembly(t *testing.T) {
 	asm := assembly.New(assembly.Config{ID: "asm-id-x", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
 	t.Cleanup(asm.Shutdown)
 
-	b := New(WithMetricsProvider(p), WithAssembly(asm))
+	b := New(WithClock(clock.Real()), WithMetricsProvider(p), WithAssembly(asm))
 
 	_, err := b.autoWireHTTPMetricsCollector(nil)
 	require.NoError(t, err)
@@ -263,7 +257,7 @@ func TestAutoWire_CellLabel_DerivedFromAssembly(t *testing.T) {
 func TestAutoWire_CellLabel_DefaultsWhenNeitherSet(t *testing.T) {
 	t.Parallel()
 	p := newFakeMetricsProvider()
-	b := New(WithMetricsProvider(p))
+	b := New(WithClock(clock.Real()), WithMetricsProvider(p))
 
 	_, err := b.autoWireHTTPMetricsCollector(nil)
 	require.NoError(t, err)
@@ -289,7 +283,7 @@ func TestAutoWireHTTPMetricsCollector_Conflict(t *testing.T) {
 		triggerName: "http_requests_total",
 	}
 
-	b := New(WithMetricsProvider(conflict))
+	b := New(WithClock(clock.Real()), WithMetricsProvider(conflict))
 
 	_, autoErr := b.autoWireHTTPMetricsCollector(nil)
 	require.Error(t, autoErr, "registration error must propagate as a conflict error")

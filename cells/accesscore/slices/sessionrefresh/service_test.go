@@ -18,6 +18,7 @@ import (
 	"github.com/ghbvf/gocell/cells/accesscore/internal/dto"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/mem"
 	"github.com/ghbvf/gocell/cells/accesscore/slices/sessionvalidate"
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/testutil/sloghelper"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
@@ -28,7 +29,7 @@ import (
 )
 
 var (
-	testKeySet, _, _ = auth.MustNewTestKeySet()
+	testKeySet, _, _ = auth.MustNewTestKeySet(clock.Real())
 	testIssuer       *auth.JWTIssuer
 )
 
@@ -36,7 +37,7 @@ func init() {
 	var err error
 	// Issuer is constructed with a default audience via WithIssuerAudiencesFromSlice
 	// (Registry path). The slice service no longer caches audience separately (S31).
-	testIssuer, err = auth.NewJWTIssuer(testKeySet, "gocell-accesscore", auth.DefaultAccessTokenTTL,
+	testIssuer, err = auth.NewJWTIssuer(testKeySet, "gocell-accesscore", auth.DefaultAccessTokenTTL, clock.Real(),
 		auth.WithIssuerAudiencesFromSlice([]string{"gocell"}))
 	if err != nil {
 		panic("test setup: " + err.Error())
@@ -69,7 +70,7 @@ func TestNewService_IssuerDefaultAudienceWrittenOnRefresh(t *testing.T) {
 	pair, err := svc.Refresh(context.Background(), wireToken)
 	require.NoError(t, err)
 
-	verifier, err := auth.NewJWTVerifier(testKeySet, auth.WithExpectedAudiences("gocell"))
+	verifier, err := auth.NewJWTVerifier(testKeySet, clock.Real(), auth.WithExpectedAudiences("gocell"))
 	require.NoError(t, err)
 
 	accessClaims, err := verifier.VerifyIntent(context.Background(), pair.AccessToken, auth.TokenIntentAccess)
@@ -96,7 +97,7 @@ func newTestServiceWithRefreshStore(seedUsers ...string) (*Service, *mem.Session
 // and the underlying FakeClock for tests that need to advance time (e.g. to
 // move past the ReuseInterval so old tokens are rejected rather than grace-retried).
 func newTestServiceWithClock(seedUsers ...string) (*Service, *mem.SessionRepository, refresh.Store, *storetest.FakeClock) {
-	sessionRepo := mem.NewSessionRepository()
+	sessionRepo := mem.NewSessionRepository(clock.Real())
 	roleRepo := mem.NewRoleRepository()
 	userRepo := mem.NewUserRepository()
 	for _, uid := range seedUsers {
@@ -104,25 +105,25 @@ func newTestServiceWithClock(seedUsers ...string) (*Service, *mem.SessionReposit
 		u.ID = uid
 		_ = userRepo.Create(context.Background(), u)
 	}
-	clock := storetest.NewFakeClock(time.Now())
-	refreshStore := refreshmem.MustNew(refresh.Policy{ReuseInterval: testtime.D2s, MaxAge: time.Hour}, clock, nil)
-	svc := MustNewService(sessionRepo, roleRepo, userRepo, refreshStore, testIssuer, slog.Default())
-	return svc, sessionRepo, refreshStore, clock
+	fakeClock := storetest.NewFakeClock(time.Now())
+	refreshStore := refreshmem.MustNew(refresh.Policy{ReuseInterval: testtime.D2s, MaxAge: time.Hour}, fakeClock, nil)
+	svc := MustNewService(sessionRepo, roleRepo, userRepo, refreshStore, testIssuer, slog.Default(), WithClock(clock.Real()))
+	return svc, sessionRepo, refreshStore, fakeClock
 }
 
 // newTestServiceWithUserRepo creates a service and returns the userRepo for
 // tests that need to seed user fixtures and assert on the PasswordResetRequired flag.
 func newTestServiceWithUserRepo() (*Service, *mem.SessionRepository, *mem.UserRepository) {
-	sessionRepo := mem.NewSessionRepository()
+	sessionRepo := mem.NewSessionRepository(clock.Real())
 	roleRepo := mem.NewRoleRepository()
 	userRepo := mem.NewUserRepository()
 	refreshStore := newTestRefreshStore()
-	svc := MustNewService(sessionRepo, roleRepo, userRepo, refreshStore, testIssuer, slog.Default())
+	svc := MustNewService(sessionRepo, roleRepo, userRepo, refreshStore, testIssuer, slog.Default(), WithClock(clock.Real()))
 	return svc, sessionRepo, userRepo
 }
 
 func TestNewService_RejectsTypedNilDependencies(t *testing.T) {
-	sessionRepo := mem.NewSessionRepository()
+	sessionRepo := mem.NewSessionRepository(clock.Real())
 	roleRepo := mem.NewRoleRepository()
 	userRepo := mem.NewUserRepository()
 	refreshStore := newTestRefreshStore()
@@ -216,7 +217,7 @@ func (c *countingSessionRepo) Update(ctx context.Context, s *domain.Session) err
 // and does NOT persist the rotated session — the fail-closed contract of
 // PR-A7 / sessionmint: never issue a silently-degraded token.
 func TestService_Refresh_RoleFetchFailure_AbortsRefresh(t *testing.T) {
-	sessionRepo := &countingSessionRepo{SessionRepository: mem.NewSessionRepository()}
+	sessionRepo := &countingSessionRepo{SessionRepository: mem.NewSessionRepository(clock.Real())}
 	roleRepo := &brokenRoleRepo{err: fmt.Errorf("roleRepo outage")}
 	userRepo := mem.NewUserRepository()
 	u, _ := domain.NewUser("usr-rolefail", "rolefail@test.local", "hash", time.Now())
@@ -224,7 +225,7 @@ func TestService_Refresh_RoleFetchFailure_AbortsRefresh(t *testing.T) {
 	require.NoError(t, userRepo.Create(context.Background(), u))
 
 	refreshStore := newTestRefreshStore()
-	svc := MustNewService(sessionRepo, roleRepo, userRepo, refreshStore, testIssuer, slog.Default())
+	svc := MustNewService(sessionRepo, roleRepo, userRepo, refreshStore, testIssuer, slog.Default(), WithClock(clock.Real()))
 
 	sess, err := domain.NewSession("usr-rolefail", "at", time.Now().Add(time.Hour), time.Now())
 	require.NoError(t, err)
@@ -399,7 +400,7 @@ func TestService_Refresh_NewTokensContainSessionID(t *testing.T) {
 	require.NoError(t, err)
 
 	// Decode the new access token to verify sid.
-	verifier, err := auth.NewJWTVerifier(testKeySet, auth.WithExpectedAudiences("gocell"))
+	verifier, err := auth.NewJWTVerifier(testKeySet, clock.Real(), auth.WithExpectedAudiences("gocell"))
 	require.NoError(t, err)
 
 	accessClaims, err := verifier.VerifyIntent(context.Background(), pair.AccessToken, auth.TokenIntentAccess)
@@ -427,9 +428,9 @@ func TestService_Refresh_UpdatesSessionExpiryForRefreshedAccessToken(t *testing.
 	assert.Equal(t, pair.AccessToken, persisted.AccessToken)
 	assert.Equal(t, pair.ExpiresAt, persisted.ExpiresAt)
 
-	verifier, err := auth.NewJWTVerifier(testKeySet, auth.WithExpectedAudiences("gocell"))
+	verifier, err := auth.NewJWTVerifier(testKeySet, clock.Real(), auth.WithExpectedAudiences("gocell"))
 	require.NoError(t, err)
-	validateSvc := sessionvalidate.NewService(verifier, repo, slog.Default())
+	validateSvc := sessionvalidate.NewService(verifier, repo, slog.Default(), clock.Real())
 	_, err = validateSvc.VerifyIntent(context.Background(), pair.AccessToken, auth.TokenIntentAccess)
 	require.NoError(t, err, "refreshed access token must pass sessionvalidate after original session expiry")
 }
@@ -438,7 +439,7 @@ func TestService_Refresh_UpdatesSessionExpiryForRefreshedAccessToken(t *testing.
 // revoked sessions even when the session is revoked out-of-band after the
 // wire token is issued.
 func TestService_Refresh_SessionAwareVerifier(t *testing.T) {
-	sessionRepo := mem.NewSessionRepository()
+	sessionRepo := mem.NewSessionRepository(clock.Real())
 	roleRepo := mem.NewRoleRepository()
 	userRepo := mem.NewUserRepository()
 	seedUser, _ := domain.NewUser("usr-sa", "usr-sa@test.local", "hash", time.Now())
@@ -446,7 +447,7 @@ func TestService_Refresh_SessionAwareVerifier(t *testing.T) {
 	require.NoError(t, userRepo.Create(context.Background(), seedUser))
 
 	refreshStore := newTestRefreshStore()
-	svc := MustNewService(sessionRepo, roleRepo, userRepo, refreshStore, testIssuer, slog.Default())
+	svc := MustNewService(sessionRepo, roleRepo, userRepo, refreshStore, testIssuer, slog.Default(), WithClock(clock.Real()))
 
 	sess, err := domain.NewSession("usr-sa", "at", time.Now().Add(time.Hour), time.Now())
 	require.NoError(t, err)
@@ -477,11 +478,11 @@ func TestService_Refresh_SessionAwareVerifier(t *testing.T) {
 // when userRepo.GetByID returns an error (user deleted mid-session), refresh
 // must return ErrAuthRefreshFailed rather than signing a new access token.
 func TestRefresh_FailClosedWhenUserUnavailable(t *testing.T) {
-	sessionRepo := mem.NewSessionRepository()
+	sessionRepo := mem.NewSessionRepository(clock.Real())
 	roleRepo := mem.NewRoleRepository()
 	userRepo := mem.NewUserRepository() // intentionally empty — GetByID returns error
 	refreshStore := newTestRefreshStore()
-	svc := MustNewService(sessionRepo, roleRepo, userRepo, refreshStore, testIssuer, slog.Default())
+	svc := MustNewService(sessionRepo, roleRepo, userRepo, refreshStore, testIssuer, slog.Default(), WithClock(clock.Real()))
 
 	sess, err := domain.NewSession("usr-missing", "at", time.Now().Add(time.Hour), time.Now())
 	require.NoError(t, err)
@@ -511,7 +512,7 @@ func TestRefresh_FlagPropagatesFromCurrentUser_AfterClear(t *testing.T) {
 
 	// Recreate with a known refreshStore so we can issue and rotate wire tokens.
 	refreshStore := newTestRefreshStore()
-	svc2 := MustNewService(sessionRepo, mem.NewRoleRepository(), userRepo, refreshStore, testIssuer, slog.Default())
+	svc2 := MustNewService(sessionRepo, mem.NewRoleRepository(), userRepo, refreshStore, testIssuer, slog.Default(), WithClock(clock.Real()))
 
 	sess, _ := domain.NewSession("usr-ref-clear", "at", time.Now().Add(time.Hour), time.Now())
 	sess.ID = "sess-ref-clear"
@@ -524,7 +525,7 @@ func TestRefresh_FlagPropagatesFromCurrentUser_AfterClear(t *testing.T) {
 	require.NoError(t, err)
 	assert.False(t, pair.PasswordResetRequired, "after clearing flag, refreshed token must have claim=false")
 
-	verifier, err := auth.NewJWTVerifier(testKeySet, auth.WithExpectedAudiences("gocell"))
+	verifier, err := auth.NewJWTVerifier(testKeySet, clock.Real(), auth.WithExpectedAudiences("gocell"))
 	require.NoError(t, err)
 	claims, err := verifier.VerifyIntent(context.Background(), pair.AccessToken, auth.TokenIntentAccess)
 	require.NoError(t, err)
@@ -535,7 +536,7 @@ func TestRefresh_FlagPropagatesFromCurrentUser_AfterClear(t *testing.T) {
 // changed their password keeps getting tokens with password_reset_required=true
 // on each refresh.
 func TestRefresh_FlagStillSetWhenUserNotChanged(t *testing.T) {
-	sessionRepo := mem.NewSessionRepository()
+	sessionRepo := mem.NewSessionRepository(clock.Real())
 	userRepo := mem.NewUserRepository()
 
 	// Seed a user with reset flag = true.
@@ -546,7 +547,7 @@ func TestRefresh_FlagStillSetWhenUserNotChanged(t *testing.T) {
 	require.NoError(t, userRepo.Create(context.Background(), user))
 
 	refreshStore := newTestRefreshStore()
-	svc := MustNewService(sessionRepo, mem.NewRoleRepository(), userRepo, refreshStore, testIssuer, slog.Default())
+	svc := MustNewService(sessionRepo, mem.NewRoleRepository(), userRepo, refreshStore, testIssuer, slog.Default(), WithClock(clock.Real()))
 
 	sess, _ := domain.NewSession("usr-ref-reset", "at", time.Now().Add(time.Hour), time.Now())
 	sess.ID = "sess-ref-reset"
@@ -559,7 +560,7 @@ func TestRefresh_FlagStillSetWhenUserNotChanged(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, pair.PasswordResetRequired, "refreshed token must still have claim=true when user hasn't changed password")
 
-	verifier, err := auth.NewJWTVerifier(testKeySet, auth.WithExpectedAudiences("gocell"))
+	verifier, err := auth.NewJWTVerifier(testKeySet, clock.Real(), auth.WithExpectedAudiences("gocell"))
 	require.NoError(t, err)
 	claims, err := verifier.VerifyIntent(context.Background(), pair.AccessToken, auth.TokenIntentAccess)
 	require.NoError(t, err)
@@ -571,14 +572,14 @@ func TestRefresh_FlagStillSetWhenUserNotChanged(t *testing.T) {
 func TestService_Refresh_InfraErrorOnSessionLookup(t *testing.T) {
 	infraErr := fmt.Errorf("db connection timeout")
 	sessionRepo := &infraGetByIDRepo{
-		SessionRepository: *mem.NewSessionRepository(),
+		SessionRepository: *mem.NewSessionRepository(clock.Real()),
 		infraErr:          infraErr,
 	}
 	roleRepo := mem.NewRoleRepository()
 	userRepo := mem.NewUserRepository()
 
 	refreshStore := newTestRefreshStore()
-	svc := MustNewService(sessionRepo, roleRepo, userRepo, refreshStore, testIssuer, slog.Default())
+	svc := MustNewService(sessionRepo, roleRepo, userRepo, refreshStore, testIssuer, slog.Default(), WithClock(clock.Real()))
 
 	// Issue a wire token but don't seed the session — GetByID will return infraErr.
 	wireToken, _, err := refreshStore.Issue(context.Background(), "sess-infra", "usr-infra")
@@ -645,7 +646,7 @@ func TestService_Refresh_SessionNotFound_CascadeRevokes(t *testing.T) {
 
 	spy := &spyRefreshStore{Store: innerStore}
 	sessionRepo := &sessionNotFoundRepo{notFoundErr: notFoundErr}
-	svc := MustNewService(sessionRepo, roleRepo, userRepo, spy, testIssuer, slog.Default())
+	svc := MustNewService(sessionRepo, roleRepo, userRepo, spy, testIssuer, slog.Default(), WithClock(clock.Real()))
 
 	pair, err := svc.Refresh(context.Background(), wireToken)
 	require.Error(t, err, "session-not-found must cause Refresh to fail")
@@ -669,7 +670,7 @@ func TestService_Refresh_CascadeRevokeFailure_ReturnsRefreshUnavailable(t *testi
 		err:   errcode.NewInfra(errcode.ErrInternal, "refresh store down"),
 	}
 	sessionRepo := &sessionNotFoundRepo{notFoundErr: notFoundErr}
-	svc := MustNewService(sessionRepo, roleRepo, userRepo, refreshStore, testIssuer, slog.Default())
+	svc := MustNewService(sessionRepo, roleRepo, userRepo, refreshStore, testIssuer, slog.Default(), WithClock(clock.Real()))
 
 	pair, err := svc.Refresh(context.Background(), wireToken)
 	require.Error(t, err)
@@ -690,7 +691,7 @@ func (r *updateFailingSessionRepo) Update(context.Context, *domain.Session) erro
 
 func TestService_Refresh_SessionUpdateInfraFailure_DoesNotRotate(t *testing.T) {
 	sessionRepo := &updateFailingSessionRepo{
-		SessionRepository: mem.NewSessionRepository(),
+		SessionRepository: mem.NewSessionRepository(clock.Real()),
 		err:               errcode.NewInfra(errcode.ErrInternal, "session update unavailable"),
 	}
 	roleRepo := mem.NewRoleRepository()
@@ -701,7 +702,7 @@ func TestService_Refresh_SessionUpdateInfraFailure_DoesNotRotate(t *testing.T) {
 	require.NoError(t, userRepo.Create(context.Background(), user))
 
 	refreshStore := newTestRefreshStore()
-	svc := MustNewService(sessionRepo, roleRepo, userRepo, refreshStore, testIssuer, slog.Default())
+	svc := MustNewService(sessionRepo, roleRepo, userRepo, refreshStore, testIssuer, slog.Default(), WithClock(clock.Real()))
 	sess, err := domain.NewSession("usr-update-infra", "at", time.Now().Add(time.Hour), time.Now())
 	require.NoError(t, err)
 	sess.ID = "sess-update-infra"
@@ -722,7 +723,7 @@ func TestService_Refresh_SessionUpdateInfraFailure_DoesNotRotate(t *testing.T) {
 
 func TestService_Refresh_SessionUpdateNotFound_CascadeRevokesAndRejects(t *testing.T) {
 	sessionRepo := &updateFailingSessionRepo{
-		SessionRepository: mem.NewSessionRepository(),
+		SessionRepository: mem.NewSessionRepository(clock.Real()),
 		err:               errcode.NewDomain(errcode.ErrSessionNotFound, "session not found"),
 	}
 	roleRepo := mem.NewRoleRepository()
@@ -734,7 +735,7 @@ func TestService_Refresh_SessionUpdateNotFound_CascadeRevokesAndRejects(t *testi
 
 	innerStore := newTestRefreshStore()
 	spy := &spyRefreshStore{Store: innerStore}
-	svc := MustNewService(sessionRepo, roleRepo, userRepo, spy, testIssuer, slog.Default())
+	svc := MustNewService(sessionRepo, roleRepo, userRepo, spy, testIssuer, slog.Default(), WithClock(clock.Real()))
 	sess, err := domain.NewSession("usr-update-missing", "at", time.Now().Add(time.Hour), time.Now())
 	require.NoError(t, err)
 	sess.ID = "sess-update-missing"
@@ -773,6 +774,7 @@ func TestService_Refresh_RejectionMessagesAreUniform(t *testing.T) {
 					innerStore,
 					testIssuer,
 					slog.Default(),
+					WithClock(clock.Real()),
 				)
 				return svc, wireToken
 			},
@@ -796,9 +798,10 @@ func TestService_Refresh_RejectionMessagesAreUniform(t *testing.T) {
 			name: "user not found",
 			build: func(t *testing.T) (*Service, string) {
 				t.Helper()
-				sessionRepo := mem.NewSessionRepository()
+				sessionRepo := mem.NewSessionRepository(clock.Real())
 				refreshStore := newTestRefreshStore()
-				svc := MustNewService(sessionRepo, mem.NewRoleRepository(), mem.NewUserRepository(), refreshStore, testIssuer, slog.Default())
+				svc := MustNewService(sessionRepo, mem.NewRoleRepository(), mem.NewUserRepository(),
+					refreshStore, testIssuer, slog.Default(), WithClock(clock.Real()))
 				sess, err := domain.NewSession("usr-uniform-missing", "at", time.Now().Add(time.Hour), time.Now())
 				require.NoError(t, err)
 				sess.ID = "sess-uniform-missing"
@@ -843,6 +846,7 @@ func TestService_Refresh_CascadeRejectionReasonIsLogged(t *testing.T) {
 					innerStore,
 					testIssuer,
 					logger,
+					WithClock(clock.Real()),
 				)
 				return svc, wireToken
 			},
@@ -944,7 +948,7 @@ func TestRefresh_RotateFailure_ReturnsRefreshUnavailable(t *testing.T) {
 		Store: innerStore,
 		err:   errcode.NewInfra(errcode.ErrInternal, "rotate store down"),
 	}
-	svc2 := MustNewService(sessionRepo, roleRepo, userRepo, failStore, testIssuer, slog.Default())
+	svc2 := MustNewService(sessionRepo, roleRepo, userRepo, failStore, testIssuer, slog.Default(), WithClock(clock.Real()))
 
 	pair, err := svc2.Refresh(context.Background(), wireToken)
 	require.Error(t, err)
@@ -977,7 +981,7 @@ func TestRefresh_RotateMismatch_CascadeRevoke_ReturnsRejected(t *testing.T) {
 	spy := &spyRefreshStore{Store: innerStore}
 	// Override Rotate to return a token with wrong SessionID.
 	mismatchStore := rotateMismatchRefreshStore{Store: spy, rotatedSessionID: "wrong-session", rotatedSubjectID: "usr-mismatch"}
-	svc2 := MustNewService(sessionRepo, roleRepo, userRepo, mismatchStore, testIssuer, slog.Default())
+	svc2 := MustNewService(sessionRepo, roleRepo, userRepo, mismatchStore, testIssuer, slog.Default(), WithClock(clock.Real()))
 
 	pair, err := svc2.Refresh(context.Background(), wireToken)
 	require.Error(t, err)
@@ -1022,7 +1026,7 @@ func TestRefresh_RotateMismatch_CascadeRevokeFails_PropagatesErr(t *testing.T) {
 		rotatedSessionID: "tampered-session",
 		rotatedSubjectID: "usr-mismatch-revoke-fail",
 	}
-	svc := MustNewService(sessionRepo, roleRepo, userRepo, mismatchStore, testIssuer, slog.Default())
+	svc := MustNewService(sessionRepo, roleRepo, userRepo, mismatchStore, testIssuer, slog.Default(), WithClock(clock.Real()))
 
 	pair, err := svc.Refresh(context.Background(), wireToken)
 	require.Error(t, err)

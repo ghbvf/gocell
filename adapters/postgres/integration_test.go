@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/tests/testutil"
@@ -264,7 +265,7 @@ func TestIntegration_OutboxWriter(t *testing.T) {
 	require.NoError(t, migrator.Up(ctx), "migrations must succeed")
 
 	txm := NewTxManager(pool)
-	writer := NewOutboxWriter()
+	writer := NewOutboxWriter(clock.Real())
 
 	t.Run("write_in_tx", func(t *testing.T) {
 		entryID := uuid.New().String()

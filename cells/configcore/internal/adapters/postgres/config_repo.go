@@ -130,29 +130,24 @@ func WithOnStaleCipher(fn func(key, storedKeyID, currentKeyID string)) ConfigRep
 	}
 }
 
-// WithConfigRepoClock sets the clock used for default CreatedAt/UpdatedAt
-// timestamps. Defaults to clock.Real() when not provided.
-func WithConfigRepoClock(clk clock.Clock) ConfigRepoOption {
-	return func(r *ConfigRepository) {
-		if clk != nil {
-			r.clock = clk
-		}
-	}
-}
-
 // NewConfigRepository creates a ConfigRepository that resolves the ambient
 // pgx.Tx from the context on each call, enabling transactional participation
 // via persistence.TxCtxKey. Session is the sole production entry point;
 // use the unexported newConfigRepositoryFromDBTX in tests.
 //
+// clk must be non-nil; pass clock.Real() in production and clockmock.New() in tests.
 // If logger is nil, slog.Default() is used.
 //
 // Requires migrations 001–010 to be applied first (see adapters/postgres/migrations/).
-func NewConfigRepository(s *Session, tr kcrypto.ValueTransformer, logger *slog.Logger, opts ...ConfigRepoOption) *ConfigRepository {
+func NewConfigRepository(
+	s *Session, tr kcrypto.ValueTransformer, logger *slog.Logger,
+	clk clock.Clock, opts ...ConfigRepoOption,
+) *ConfigRepository {
+	clock.MustHaveClock(clk, "postgres.NewConfigRepository")
 	if logger == nil {
 		logger = slog.Default()
 	}
-	r := &ConfigRepository{session: s, transformer: tr, logger: logger, clock: clock.Real()}
+	r := &ConfigRepository{session: s, transformer: tr, logger: logger, clock: clk}
 	for _, opt := range opts {
 		opt(r)
 	}

@@ -19,6 +19,7 @@ import (
 	"github.com/ghbvf/gocell/cells/configcore/internal/mem"
 	kcell "github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/cell/celltest"
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/query"
 	"github.com/ghbvf/gocell/runtime/auth"
 )
@@ -104,7 +105,7 @@ func setupHandler() (http.Handler, *mem.FlagRepository) {
 // RegisterRoutes — nested under /api/v1/flags to match production cell_routes.go
 // (which uses mux.Route to compose the collection-root trailing-slash dispatch).
 func setupHandlerWithCodec() (http.Handler, *mem.FlagRepository, *query.CursorCodec) {
-	repo := mem.NewFlagRepository()
+	repo := mem.NewFlagRepository(clock.Real())
 	codec, _ := query.NewCursorCodec(flagHandlerTestKey)
 	svc, err := NewService(repo, codec, slog.Default(), query.RunModeProd)
 	if err != nil {

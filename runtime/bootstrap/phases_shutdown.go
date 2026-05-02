@@ -21,7 +21,6 @@ import (
 	"errors"
 	"log/slog"
 	"slices"
-	"time"
 )
 
 // drainHTTPErrors collects the first error and any additional errors already
@@ -199,8 +198,10 @@ func (b *Bootstrap) phase10ReadinessFlip(shutCtx context.Context, s *phaseState)
 	}
 	slog.Info("bootstrap: pre-shutdown drain delay",
 		slog.Duration("delay", b.preShutdownDelay))
+	t := b.clock.NewTimerAt(b.clock.Now().Add(b.preShutdownDelay))
+	defer t.Stop()
 	select {
-	case <-time.After(b.preShutdownDelay):
+	case <-t.C():
 	case <-shutCtx.Done():
 	}
 }

@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
@@ -89,16 +90,11 @@ type InMemoryNonceStore struct {
 	seen       map[string]time.Time // nonce → expiry
 	maxAge     time.Duration
 	maxEntries int
-	now        func() time.Time
+	clk        clock.Clock
 }
 
 // InMemoryNonceOption configures an InMemoryNonceStore.
 type InMemoryNonceOption func(*InMemoryNonceStore)
-
-// WithNonceClock overrides the time source (for testing).
-func WithNonceClock(fn func() time.Time) InMemoryNonceOption {
-	return func(s *InMemoryNonceStore) { s.now = fn }
-}
 
 // WithMaxNonceEntries overrides the maximum number of live nonce entries before
 // a forced prune is triggered. The default is defaultMaxNonceEntries.
@@ -106,11 +102,13 @@ func WithMaxNonceEntries(n int) InMemoryNonceOption {
 	return func(s *InMemoryNonceStore) { s.maxEntries = n }
 }
 
-// NewInMemoryNonceStore creates an InMemoryNonceStore with the given maxAge.
-// maxAge must be at least ServiceTokenNonceTTL; a shorter value reintroduces
-// the replay window the store is designed to close, and is rejected with an
-// error.
-func NewInMemoryNonceStore(maxAge time.Duration, opts ...InMemoryNonceOption) (*InMemoryNonceStore, error) {
+// NewInMemoryNonceStore creates an InMemoryNonceStore with the given maxAge and
+// clock. clk must not be nil; use clock.Real() for production and
+// clockmock.New() for tests. maxAge must be at least ServiceTokenNonceTTL; a
+// shorter value reintroduces the replay window the store is designed to close,
+// and is rejected with an error.
+func NewInMemoryNonceStore(maxAge time.Duration, clk clock.Clock, opts ...InMemoryNonceOption) (*InMemoryNonceStore, error) {
+	clock.MustHaveClock(clk, "auth.NewInMemoryNonceStore")
 	if maxAge <= 0 {
 		return nil, fmt.Errorf("auth: nonce store maxAge must be positive, got %v", maxAge)
 	}
@@ -124,7 +122,7 @@ func NewInMemoryNonceStore(maxAge time.Duration, opts ...InMemoryNonceOption) (*
 		seen:       make(map[string]time.Time),
 		maxAge:     maxAge,
 		maxEntries: defaultMaxNonceEntries,
-		now:        time.Now,
+		clk:        clk,
 	}
 	for _, o := range opts {
 		o(s)
@@ -154,7 +152,7 @@ func (s *InMemoryNonceStore) CheckAndMark(_ context.Context, nonce string) error
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	now := s.now()
+	now := s.clk.Now()
 
 	// Lazy prune when map grows past threshold.
 	if len(s.seen) >= s.maxEntries {

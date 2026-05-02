@@ -20,6 +20,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/metadata"
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/bootstrap"
@@ -605,7 +606,7 @@ func guardWithStore(t *testing.T, store auth.NonceStore) *internalGuard {
 // into single-pod replay protection (GOCELL_SINGLE_POD=1) on real mode with
 // the default in-memory nonce store.
 func TestLogSinglePodNonceStoreAcknowledgement_RealSinglePodInMemory_LogsInfo(t *testing.T) {
-	store, err := auth.NewInMemoryNonceStore(auth.ServiceTokenNonceTTL)
+	store, err := auth.NewInMemoryNonceStore(auth.ServiceTokenNonceTTL, clock.Real())
 	require.NoError(t, err)
 	shared := &SharedDeps{
 		Topology: bootstrap.Topology{
@@ -635,7 +636,7 @@ func TestLogSinglePodNonceStoreAcknowledgement_RealSinglePodInMemory_LogsInfo(t 
 // distributed nonce store, multi-pod, or a nil InternalGuard. This protects
 // against accidentally turning the acknowledgement into noise on the dev path.
 func TestLogSinglePodNonceStoreAcknowledgement_NegativePaths_NoInfoLog(t *testing.T) {
-	inMemStore, err := auth.NewInMemoryNonceStore(auth.ServiceTokenNonceTTL)
+	inMemStore, err := auth.NewInMemoryNonceStore(auth.ServiceTokenNonceTTL, clock.Real())
 	require.NoError(t, err)
 
 	cases := []struct {

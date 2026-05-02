@@ -16,6 +16,7 @@ import (
 	vaultapi "github.com/hashicorp/vault/api"
 	"github.com/prometheus/client_golang/prometheus"
 
+	"github.com/ghbvf/gocell/kernel/clock"
 	kcrypto "github.com/ghbvf/gocell/kernel/crypto"
 	"github.com/ghbvf/gocell/kernel/lifecycle"
 	"github.com/ghbvf/gocell/kernel/worker"
@@ -188,6 +189,9 @@ type tokenRenewalWorker struct {
 	authHealthy  prometheus.Gauge       // gocell_vault_token_auth_healthy (1=healthy, 0=re-authing)
 	loginOutcome *prometheus.CounterVec // gocell_vault_auth_login_total{method,result,reason}
 
+	// clock is the time source used for backoff sleeps.
+	clock clock.Clock
+
 	// Internal state protected by mu.
 	//
 	// Stop() and runWatcher's ctx.Done branch may both attempt to stop a
@@ -277,11 +281,14 @@ func (w *tokenRenewalWorker) doReauth(ctx context.Context) (tokenWatcher, bool) 
 		w.logger.WarnContext(ctx, "vault-transit: buildWatcher failed after re-auth; retrying",
 			slog.Any("error", err),
 			slog.Duration("backoff", watcherBackoff))
+		backoffTimer := w.clock.NewTimerAt(w.clock.Now().Add(watcherBackoff))
 		select {
 		case <-ctx.Done():
+			backoffTimer.Stop()
 			return nil, false
-		case <-time.After(watcherBackoff):
+		case <-backoffTimer.C():
 		}
+		backoffTimer.Stop()
 		watcherBackoff *= reauthBackoffMultiplier
 		if watcherBackoff > reauthBackoffCap {
 			watcherBackoff = reauthBackoffCap
@@ -382,12 +389,15 @@ func (w *tokenRenewalWorker) reauthenticate(ctx context.Context) error {
 			slog.Any("error", err),
 			slog.Duration("backoff", backoff))
 
+		retryTimer := w.clock.NewTimerAt(w.clock.Now().Add(backoff))
 		select {
 		case <-ctx.Done():
+			retryTimer.Stop()
 			return errcode.New(errcode.ErrVaultAuthFailed,
 				"vault-transit: re-authentication loop canceled by context")
-		case <-time.After(backoff):
+		case <-retryTimer.C():
 		}
+		retryTimer.Stop()
 		backoff *= reauthBackoffMultiplier
 		if backoff > reauthBackoffCap {
 			backoff = reauthBackoffCap
@@ -659,6 +669,7 @@ type TransitKeyProvider struct {
 	// VaultClient does not implement TokenRenewer (e.g. test fakes).
 	renewalWorker *tokenRenewalWorker
 	logger        *slog.Logger
+	clock         clock.Clock
 }
 
 // NewTransitKeyProvider creates a TransitKeyProvider with the given VaultClient
@@ -679,8 +690,9 @@ type TransitKeyProvider struct {
 //
 // Returns an error if auth is nil, Login fails, or the key existence check fails.
 func NewTransitKeyProvider(
-	ctx context.Context, client VaultClient, mountPath, keyName string, auth AuthMethod,
+	ctx context.Context, client VaultClient, mountPath, keyName string, auth AuthMethod, clk clock.Clock,
 ) (*TransitKeyProvider, error) {
+	clock.MustHaveClock(clk, "vault.NewTransitKeyProvider")
 	if auth == nil {
 		return nil, errcode.New(errcode.ErrVaultAuthFailed,
 			"vault-transit: auth method is required (pass NewStaticTokenAuth in tests)")
@@ -697,6 +709,7 @@ func NewTransitKeyProvider(
 		keyName:    keyName,
 		authMethod: auth,
 		logger:     slog.Default(),
+		clock:      clk,
 	}
 
 	// Perform initial login to acquire token and configure the client.
@@ -757,7 +770,7 @@ func (p *TransitKeyProvider) authenticate(ctx context.Context) (AuthResult, erro
 //
 // ref: hashicorp/vault api/client.go@main — DefaultConfig + NewClient
 // ref: hashicorp/vault api/auth/approle/approle.go — AppRole auth
-func NewTransitKeyProviderFromEnv(realMode bool) (*TransitKeyProvider, error) {
+func NewTransitKeyProviderFromEnv(realMode bool, clk clock.Clock) (*TransitKeyProvider, error) {
 	// F-2: VAULT_ADDR is required — fail fast rather than silently defaulting to
 	// the SDK loopback address (https://127.0.0.1:8200), which contradicts docs
 	// that mark VAULT_ADDR as required and hides misconfigurations.
@@ -820,7 +833,7 @@ func NewTransitKeyProviderFromEnv(realMode bool) (*TransitKeyProvider, error) {
 	keyName := os.Getenv("GOCELL_VAULT_TRANSIT_KEY")
 
 	client := NewVaultAPIClient(raw)
-	p, err := NewTransitKeyProvider(ctx, client, mountPath, keyName, auth)
+	p, err := NewTransitKeyProvider(ctx, client, mountPath, keyName, auth, clk)
 	if err != nil {
 		return nil, err
 	}
@@ -1285,6 +1298,7 @@ func (p *TransitKeyProvider) initTokenRenewal(ctx context.Context, result AuthRe
 		client:     renewer,
 		authMethod: p.authMethod,
 		logger:     p.logger,
+		clock:      p.clock,
 		renewSuccess: prometheus.NewCounter(prometheus.CounterOpts{
 			Namespace: "gocell",
 			Subsystem: "vault",

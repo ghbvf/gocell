@@ -15,6 +15,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
@@ -130,7 +131,8 @@ func newMalformedDatakeyHandle(t *testing.T, response map[string]any) (*fakeVaul
 		fake.lastWriteData = data
 		return response, nil
 	}
-	p, err := NewTransitKeyProvider(context.Background(), fake, "transit", "gocell-config", NewStaticTokenAuth(nil, "test-token"))
+	p, err := NewTransitKeyProvider(context.Background(), fake,
+		"transit", "gocell-config", NewStaticTokenAuth(nil, "test-token"), clock.Real())
 	if err != nil {
 		t.Fatalf("NewTransitKeyProvider: %v", err)
 	}

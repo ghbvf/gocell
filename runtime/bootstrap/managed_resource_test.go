@@ -85,6 +85,7 @@ func TestManagedResource_RegistersHealthChecker(t *testing.T) {
 
 	ln := newLocalListener(t)
 	app := New(
+		WithClock(clock.Real()),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(ln)),
 		WithListener(cell.InternalListener, "127.0.0.1:0", []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(newLocalListener(t))),
 		WithManagedResource(res),
@@ -131,6 +132,7 @@ func TestManagedResource_RegistersWorker(t *testing.T) {
 
 	ln := newLocalListener(t)
 	app := New(
+		WithClock(clock.Real()),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(ln)),
 		WithListener(cell.InternalListener, "127.0.0.1:0", []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(newLocalListener(t))),
 		WithManagedResource(res),
@@ -182,6 +184,7 @@ func TestManagedResource_LIFOClose(t *testing.T) {
 
 	ln := newLocalListener(t)
 	app := New(
+		WithClock(clock.Real()),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(ln)),
 		WithListener(cell.InternalListener, "127.0.0.1:0", []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(newLocalListener(t))),
 		WithManagedResource(res1),
@@ -241,6 +244,7 @@ func TestManagedResource_NilWorkerNoOp(t *testing.T) {
 
 	ln := newLocalListener(t)
 	app := New(
+		WithClock(clock.Real()),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(ln)),
 		WithListener(cell.InternalListener, "127.0.0.1:0", []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(newLocalListener(t))),
 		WithManagedResource(res),
@@ -273,6 +277,7 @@ func TestManagedResource_CloseErrorPropagates(t *testing.T) {
 
 	ln := newLocalListener(t)
 	app := New(
+		WithClock(clock.Real()),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(ln)),
 		WithListener(cell.InternalListener, "127.0.0.1:0", []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(newLocalListener(t))),
 		WithManagedResource(res1),
@@ -310,7 +315,7 @@ func TestManagedResource_CloseErrorPropagates(t *testing.T) {
 // ref: uber-go/fx internal/lifecycle/lifecycle.go Append — hook registration
 // does no nil-substitution; bad inputs surface before any component starts.
 func TestWithManagedResource_NilFailFast(t *testing.T) {
-	app := New(WithManagedResource(nil))
+	app := New(WithClock(clock.Real()), WithManagedResource(nil))
 	err := app.Run(context.Background())
 	if err == nil {
 		t.Fatal("Run must fail when WithManagedResource(nil) was used")
@@ -333,7 +338,7 @@ func TestWithManagedResource_TypedNilFailFast(t *testing.T) {
 	var res *fakeResource // typed nil
 	var iface kernellifecycle.ManagedResource = res
 
-	app := New(WithManagedResource(iface))
+	app := New(WithClock(clock.Real()), WithManagedResource(iface))
 	err := app.Run(context.Background())
 	if err == nil {
 		t.Fatal("Run must fail when WithManagedResource receives a typed-nil interface")
@@ -358,6 +363,7 @@ func TestManagedResource_CloseErrorPropagatesToPhase10(t *testing.T) {
 
 	ln := newLocalListener(t)
 	app := New(
+		WithClock(clock.Real()),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(ln)),
 		WithListener(cell.InternalListener, "127.0.0.1:0", []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(newLocalListener(t))),
 		WithManagedResource(res),
@@ -410,6 +416,7 @@ func newManagedResourceTestRelay() *runtimeoutbox.Relay {
 		PollFailureBudget:    3,
 		ReclaimFailureBudget: 3,
 		CleanupFailureBudget: 3,
+		Clock:                clock.Real(),
 	}
 	return runtimeoutbox.NewRelay(outboxtest.NewFakeStore(), &koutbox.DiscardPublisher{}, cfg)
 }
@@ -449,6 +456,7 @@ func TestRelay_AsManagedResource_RegistersCheckers(t *testing.T) {
 	relay := newManagedResourceTestRelay()
 
 	b := New(
+		WithClock(clock.Real()),
 		WithAssembly(asm),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(ln)),
 		WithListener(cell.InternalListener, "127.0.0.1:0", []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(newLocalListener(t))),
@@ -513,10 +521,12 @@ func TestRelay_AsManagedResource_TrippedBudget_Returns503(t *testing.T) {
 		PollFailureBudget:    3,
 		ReclaimFailureBudget: 3,
 		CleanupFailureBudget: 3,
+		Clock:                clock.Real(),
 	}
 	relay := runtimeoutbox.NewRelay(store, &koutbox.DiscardPublisher{}, cfg)
 
 	b := New(
+		WithClock(clock.Real()),
 		WithAssembly(asm),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(ln)),
 		WithListener(cell.InternalListener, "127.0.0.1:0", []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(newLocalListener(t))),
@@ -608,10 +618,12 @@ func TestRelay_AsManagedResource_DisabledBudget_SkipsChecker(t *testing.T) {
 		PollFailureBudget:    0, // disabled
 		ReclaimFailureBudget: 3,
 		CleanupFailureBudget: 3,
+		Clock:                clock.Real(),
 	}
 	relay := runtimeoutbox.NewRelay(outboxtest.NewFakeStore(), &koutbox.DiscardPublisher{}, cfg)
 
 	b := New(
+		WithClock(clock.Real()),
 		WithAssembly(asm),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(ln)),
 		WithListener(cell.InternalListener, "127.0.0.1:0", []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(newLocalListener(t))),
@@ -773,7 +785,7 @@ func TestExpandManagedResources_CloseFailure_TeardownErrorIncludesResourceType(t
 		s.addNamedTeardown(td.name, td.fn)
 	}
 
-	errs := New().phase10LIFOTeardown(context.Background(), s)
+	errs := New(WithClock(clock.Real())).phase10LIFOTeardown(context.Background(), s)
 	require.Len(t, errs, 1)
 	assert.Contains(t, errs[0].Error(), "*bootstrap.orderedCloseResource")
 
@@ -852,6 +864,7 @@ func TestManagedResource_LIFOCloseBySequence(t *testing.T) {
 
 	ln := newLocalListener(t)
 	app := New(
+		WithClock(clock.Real()),
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(ln)),
 		WithListener(cell.InternalListener, "127.0.0.1:0", []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(newLocalListener(t))),
 		// pgRes registered FIRST (simulating ConfigCoreModule.Provide).

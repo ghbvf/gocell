@@ -22,6 +22,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
@@ -29,7 +30,7 @@ import (
 // Pass nil to produce a token without an aud claim.
 func makeTokenWithAud(t *testing.T, ks *KeySet, aud []string) string {
 	t.Helper()
-	issuer, err := NewJWTIssuer(ks, "gocell", time.Hour)
+	issuer, err := NewJWTIssuer(ks, "gocell", time.Hour, clock.Real())
 	require.NoError(t, err)
 	tok, err := issuer.Issue(TokenIntentAccess, "user-1", IssueOptions{Audience: aud})
 	require.NoError(t, err)
@@ -161,7 +162,7 @@ func TestJWTVerifier_VerifyIntent_AudienceTable(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			ks := mustTestKeySet(t)
 			require.NotEmpty(t, tc.expectedAuds, "test case must declare expectedAuds")
-			verifier, err := NewJWTVerifier(ks,
+			verifier, err := NewJWTVerifier(ks, clock.Real(),
 				WithExpectedAudiences(tc.expectedAuds[0], tc.expectedAuds[1:]...))
 			require.NoError(t, err)
 
@@ -187,7 +188,7 @@ func TestJWTVerifier_VerifyIntent_AudienceTable(t *testing.T) {
 // hard error instead of silently skipping audience validation.
 func TestNewJWTVerifier_NoAudiences_ReturnsError(t *testing.T) {
 	ks := mustTestKeySet(t)
-	_, err := NewJWTVerifier(ks)
+	_, err := NewJWTVerifier(ks, clock.Real())
 	require.Error(t, err, "NewJWTVerifier without WithExpectedAudiences must return an error")
 	assert.Contains(t, err.Error(), "audience")
 	var ecErr *errcode.Error
@@ -244,7 +245,7 @@ func TestJWTIssuer_DefaultAudience_Table(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			ks := mustTestKeySet(t)
-			issuer, err := NewJWTIssuer(ks, "gocell", time.Hour,
+			issuer, err := NewJWTIssuer(ks, "gocell", time.Hour, clock.Real(),
 				WithIssuerAudiencesFromSlice(tc.issuerAuds),
 			)
 			require.NoError(t, err)

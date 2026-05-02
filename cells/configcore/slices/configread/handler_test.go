@@ -17,6 +17,7 @@ import (
 	"github.com/ghbvf/gocell/cells/configcore/internal/mem"
 	kcell "github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/cell/celltest"
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/query"
 	"github.com/ghbvf/gocell/runtime/auth"
 )
@@ -33,7 +34,7 @@ func asAdmin(req *http.Request) *http.Request {
 // nested under /api/v1/config to match the production cell_routes.go layout
 // (which uses mux.Route to compose the collection-root trailing-slash dispatch).
 func setupHandler() (http.Handler, *mem.ConfigRepository) {
-	repo := mem.NewConfigRepository()
+	repo := mem.NewConfigRepository(clock.Real())
 	codec, _ := query.NewCursorCodec([]byte("gocell-demo-cursor-key-32bytes!!"))
 	svc, err := NewService(repo, codec, slog.Default(), query.RunModeProd)
 	if err != nil {

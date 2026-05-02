@@ -26,6 +26,15 @@ func (c staticClock) Until(t time.Time) time.Duration { return t.Sub(c.now) }
 func (c staticClock) NewTimerAt(_ time.Time) clock.Timer {
 	panic("staticClock.NewTimerAt not implemented")
 }
+func (c staticClock) NewTicker(d time.Duration) clock.Ticker {
+	return clock.Real().NewTicker(d)
+}
+func (c staticClock) AfterFunc(_ time.Time, _ func()) clock.Timer {
+	panic("staticClock.AfterFunc not implemented")
+}
+func (c staticClock) Sleep(_ context.Context, _ time.Time) error {
+	panic("staticClock.Sleep not implemented")
+}
 
 type gcStoreSpy struct {
 	mu      sync.Mutex
@@ -117,7 +126,6 @@ func TestNewGCWorker_ValidatesConfigAndDefaults(t *testing.T) {
 		cfg  GCWorkerConfig
 	}{
 		{name: "missing store", cfg: GCWorkerConfig{Clock: valid.Clock, Interval: valid.Interval, Retention: valid.Retention}},
-		{name: "missing clock", cfg: GCWorkerConfig{Store: store, Interval: valid.Interval, Retention: valid.Retention}},
 		{name: "non-positive interval", cfg: GCWorkerConfig{Store: store, Clock: valid.Clock, Interval: 0, Retention: valid.Retention}},
 		{name: "non-positive retention", cfg: GCWorkerConfig{Store: store, Clock: valid.Clock, Interval: valid.Interval, Retention: 0}},
 	}
@@ -128,6 +136,12 @@ func TestNewGCWorker_ValidatesConfigAndDefaults(t *testing.T) {
 			assert.Nil(t, worker)
 		})
 	}
+	// nil clock panics at construction (fail-fast via MustHaveClock).
+	t.Run("missing clock panics", func(t *testing.T) {
+		assert.Panics(t, func() {
+			_, _ = NewGCWorker(GCWorkerConfig{Store: store, Interval: valid.Interval, Retention: valid.Retention})
+		}, "nil clock must panic at construction via MustHaveClock")
+	})
 
 	worker, err := NewGCWorker(valid)
 	require.NoError(t, err)

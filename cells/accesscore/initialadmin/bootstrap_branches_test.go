@@ -17,6 +17,7 @@ import (
 	"github.com/ghbvf/gocell/cells/accesscore/internal/domain"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/mem"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/ports"
+	kernelclock "github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/query"
 )
 
@@ -164,6 +165,7 @@ func TestSweep_NonAbsoluteCredentialPath_ReturnsError(t *testing.T) {
 	_, err := sweep(context.Background(), sweepConfig{
 		CredentialPath: "relative/path",
 		Logger:         nil, // nil falls back to slog.Default
+		Clock:          kernelclock.Real(),
 	})
 	require.Error(t, err, "non-absolute CredentialPath must return an error")
 	assert.Contains(t, err.Error(), "absolute")
@@ -202,6 +204,7 @@ func TestGenerateAndHash_HashError(t *testing.T) {
 			UserRepo: mem.NewUserRepository(),
 			RoleRepo: mem.NewRoleRepository(),
 			Logger:   logger,
+			Clock:    kernelclock.Real(),
 		},
 		cfg: bootstrapConfig{
 			PasswordSource: newFixedPasswordSource(),
@@ -229,6 +232,7 @@ func TestNewBootstrapper_ResolvesCredPathViaEnv(t *testing.T) {
 		UserRepo: mem.NewUserRepository(),
 		RoleRepo: mem.NewRoleRepository(),
 		Logger:   logger,
+		Clock:    kernelclock.Real(),
 	}
 	bs, err := newBootstrapper(deps, bootstrapConfig{TTL: time.Hour})
 	require.NoError(t, err)

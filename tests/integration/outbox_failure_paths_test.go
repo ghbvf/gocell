@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/ghbvf/gocell/adapters/postgres"
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	outboxruntime "github.com/ghbvf/gocell/runtime/outbox"
@@ -32,7 +33,7 @@ const (
 // adapters/postgres/outbox_relay_integration_test.go (deleted in S30 Phase F)
 // against the new wiring used by cmd/corebundle:
 //
-//     pgStore := postgres.NewOutboxStore(pool.DB())
+//     pgStore := postgres.NewOutboxStore(pool.DB(), clock.Real())
 //     relay   := outboxruntime.NewRelay(pgStore, publisher, cfg)
 //
 // We exercise four scenarios that the Store-only conformance suite cannot
@@ -157,7 +158,7 @@ func writeOutboxEntry(t *testing.T, pool *postgres.Pool, topic string, payload [
 	t.Helper()
 	id := uuid.New().String()
 	txm := postgres.NewTxManager(pool)
-	writer := postgres.NewOutboxWriter()
+	writer := postgres.NewOutboxWriter(clock.Real())
 	require.NoError(t,
 		txm.RunInTx(context.Background(), func(txCtx context.Context) error {
 			return writer.Write(txCtx, outbox.Entry{
@@ -195,6 +196,7 @@ func fastRelayConfig() outboxruntime.RelayConfig {
 		ReclaimInterval:     testtime.SlowPoll,
 		RetentionPeriod:     testtime.D1h,
 		DeadRetentionPeriod: testtime.D24h,
+		Clock:               clock.Real(),
 	}
 }
 
@@ -243,7 +245,7 @@ func TestIntegration_PGRelay_TransientPublishRetry(t *testing.T) {
 	id := writeOutboxEntry(t, pool, topic, []byte(`{"phase":"transient"}`))
 
 	pub := newFlakyPublisher(2) // fail twice, succeed third
-	relay := outboxruntime.NewRelay(postgres.NewOutboxStore(pool.DB()), pub, fastRelayConfig())
+	relay := outboxruntime.NewRelay(postgres.NewOutboxStore(pool.DB(), clock.Real()), pub, fastRelayConfig())
 
 	stop := runRelay(t, relay)
 	defer stop()
@@ -272,7 +274,7 @@ func TestIntegration_PGRelay_MaxAttemptsDeadLetter(t *testing.T) {
 	pub := &alwaysFailPublisher{}
 	cfg := fastRelayConfig()
 	cfg.MaxAttempts = 3 // bound the test
-	relay := outboxruntime.NewRelay(postgres.NewOutboxStore(pool.DB()), pub, cfg)
+	relay := outboxruntime.NewRelay(postgres.NewOutboxStore(pool.DB(), clock.Real()), pub, cfg)
 
 	stop := runRelay(t, relay)
 	defer stop()
@@ -342,8 +344,8 @@ func TestIntegration_PGRelay_ConcurrentRelaysNoDoublePublish(t *testing.T) {
 	cfg := fastRelayConfig()
 	cfg.BatchSize = 5 // small batch so the two relays interleave
 
-	relayA := outboxruntime.NewRelay(postgres.NewOutboxStore(pool.DB()), pub, cfg)
-	relayB := outboxruntime.NewRelay(postgres.NewOutboxStore(pool.DB()), pub, cfg)
+	relayA := outboxruntime.NewRelay(postgres.NewOutboxStore(pool.DB(), clock.Real()), pub, cfg)
+	relayB := outboxruntime.NewRelay(postgres.NewOutboxStore(pool.DB(), clock.Real()), pub, cfg)
 
 	stopA := runRelay(t, relayA)
 	defer stopA()
@@ -388,7 +390,7 @@ func TestIntegration_PGRelay_StopMidPublishReclaimTakeover(t *testing.T) {
 	cfg := fastRelayConfig()
 	cfg.MaxAttempts = 5
 
-	relayA := outboxruntime.NewRelay(postgres.NewOutboxStore(pool.DB()), stuck, cfg)
+	relayA := outboxruntime.NewRelay(postgres.NewOutboxStore(pool.DB(), clock.Real()), stuck, cfg)
 
 	stopACtx, cancelA := context.WithCancel(context.Background())
 	doneA := make(chan error, 1)
@@ -420,7 +422,7 @@ func TestIntegration_PGRelay_StopMidPublishReclaimTakeover(t *testing.T) {
 	// Relay B starts fresh; ReclaimStale should rescue the row and a new
 	// publish (now via a always-success publisher) will mark it published.
 	successPub := newCountingPublisher()
-	relayB := outboxruntime.NewRelay(postgres.NewOutboxStore(pool.DB()), successPub, cfg)
+	relayB := outboxruntime.NewRelay(postgres.NewOutboxStore(pool.DB(), clock.Real()), successPub, cfg)
 	stopB := runRelay(t, relayB)
 	defer stopB()
 

@@ -15,6 +15,7 @@ import (
 	"github.com/ghbvf/gocell/cells/accesscore/internal/domain"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/dto"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/mem"
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/outbox"
 )
 
@@ -64,7 +65,7 @@ func newDurableTestService(t testing.TB, ow *stubOutboxWriter, tx *stubTxRunner)
 			{Resource: "*", Action: "*"},
 		},
 	})
-	sessionRepo := &trackingSessionRepo{SessionRepository: mem.NewSessionRepository()}
+	sessionRepo := &trackingSessionRepo{SessionRepository: mem.NewSessionRepository(clock.Real())}
 	svc := NewService(roleRepo, sessionRepo, slog.Default(),
 		WithEmitter(testoutbox.MustEmitter(t, ow)),
 		WithTxManager(tx),
@@ -217,7 +218,7 @@ func TestService_Assign_Demo_RepeatIsNoop(t *testing.T) {
 			{Resource: "*", Action: "*"},
 		},
 	})
-	sessionRepo := &trackingSessionRepo{SessionRepository: mem.NewSessionRepository()}
+	sessionRepo := &trackingSessionRepo{SessionRepository: mem.NewSessionRepository(clock.Real())}
 	svc := NewService(roleRepo, sessionRepo, slog.Default()) // no opts = demo mode
 
 	require.NoError(t, svc.Assign(context.Background(), "alice", "admin"))

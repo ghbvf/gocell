@@ -14,6 +14,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/testutil/sloghelper"
@@ -44,7 +45,7 @@ func TestAuthMiddleware_ValidToken(t *testing.T) {
 	verifier := &mockVerifier{
 		claims: Claims{Subject: "user-1", Roles: []string{"admin"}},
 	}
-	handler := AuthMiddleware(verifier)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := AuthMiddleware(verifier, WithAuthClock(clock.Real()))(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		p, ok := FromContext(r.Context())
 		assert.True(t, ok)
 		assert.Equal(t, "user-1", p.Subject)
@@ -62,7 +63,7 @@ func TestAuthMiddleware_ValidToken(t *testing.T) {
 
 func TestAuthMiddleware_MissingToken(t *testing.T) {
 	verifier := &mockVerifier{}
-	handler := AuthMiddleware(verifier)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := AuthMiddleware(verifier, WithAuthClock(clock.Real()))(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		t.Fatal("should not be called")
 	}))
 
@@ -76,7 +77,7 @@ func TestAuthMiddleware_MissingToken(t *testing.T) {
 
 func TestAuthMiddleware_InvalidToken(t *testing.T) {
 	verifier := &mockVerifier{err: errors.New("expired")}
-	handler := AuthMiddleware(verifier)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := AuthMiddleware(verifier, WithAuthClock(clock.Real()))(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		t.Fatal("should not be called")
 	}))
 
@@ -90,7 +91,7 @@ func TestAuthMiddleware_InvalidToken(t *testing.T) {
 
 func TestAuthMiddleware_NonBearerScheme(t *testing.T) {
 	verifier := &mockVerifier{}
-	handler := AuthMiddleware(verifier)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := AuthMiddleware(verifier, WithAuthClock(clock.Real()))(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		t.Fatal("should not be called")
 	}))
 
@@ -108,7 +109,7 @@ func TestAuthMiddleware_NoMatcher_AllPathsRequireAuth(t *testing.T) {
 	// with Public:true, which compiles into a WithPublicEndpointMatcher at
 	// FinalizeAuth time.
 	verifier := &mockVerifier{err: errors.New("should not be called")}
-	handler := AuthMiddleware(verifier)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := AuthMiddleware(verifier, WithAuthClock(clock.Real()))(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
 
@@ -130,9 +131,10 @@ func TestAuthMiddleware_NoMatcher_AllPathsRequireAuth(t *testing.T) {
 func TestAuthMiddleware_PublicEndpointMatcher_Bypasses(t *testing.T) {
 	verifier := &mockVerifier{err: errors.New("should not be called")}
 	matcher := func(r *http.Request) bool { return r.URL.Path == "/custom/public" }
-	handler := AuthMiddleware(verifier, WithPublicEndpointMatcher(matcher))(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-	}))
+	handler := AuthMiddleware(verifier, WithAuthClock(clock.Real()), WithPublicEndpointMatcher(matcher))(
+		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusOK)
+		}))
 
 	// Declared public endpoint should pass without token.
 	req := httptest.NewRequest(http.MethodGet, "/custom/public", nil)
@@ -149,7 +151,7 @@ func TestAuthMiddleware_PublicEndpointMatcher_Bypasses(t *testing.T) {
 
 func TestAuthMiddleware_ProtectedEndpointNoToken(t *testing.T) {
 	verifier := &mockVerifier{}
-	handler := AuthMiddleware(verifier)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := AuthMiddleware(verifier, WithAuthClock(clock.Real()))(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		t.Fatal("should not be called")
 	}))
 
@@ -236,7 +238,7 @@ func TestAuthMiddleware_WithLogger_LogsToBuffer(t *testing.T) {
 	var buf bytes.Buffer
 	logger := slog.New(slog.NewJSONHandler(&buf, nil))
 	verifier := &mockVerifier{err: errors.New("token expired")}
-	handler := AuthMiddleware(verifier, WithLogger(logger))(
+	handler := AuthMiddleware(verifier, WithAuthClock(clock.Real()), WithLogger(logger))(
 		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			t.Fatal("should not be called")
 		}),
@@ -274,7 +276,7 @@ func TestAuthMiddleware_LogLevel_Expected4xx_Warn(t *testing.T) {
 			var buf bytes.Buffer
 			logger := slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
 			verifier := &mockVerifier{err: tc.err}
-			handler := AuthMiddleware(verifier, WithLogger(logger))(
+			handler := AuthMiddleware(verifier, WithAuthClock(clock.Real()), WithLogger(logger))(
 				http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 					t.Fatal("should not be called")
 				}),
@@ -319,7 +321,7 @@ func TestAuthMiddleware_LogLevel_InfraError_Error(t *testing.T) {
 			var buf bytes.Buffer
 			logger := slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
 			verifier := &mockVerifier{err: tc.err}
-			handler := AuthMiddleware(verifier, WithLogger(logger))(
+			handler := AuthMiddleware(verifier, WithAuthClock(clock.Real()), WithLogger(logger))(
 				http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 					t.Fatal("should not be called")
 				}),
@@ -347,7 +349,7 @@ func TestAuthMiddleware_WithMetrics_NoPanic(t *testing.T) {
 	require.NoError(t, err)
 
 	verifier := &mockVerifier{claims: Claims{Subject: "user-1"}}
-	handler := AuthMiddleware(verifier, WithMetrics(am))(
+	handler := AuthMiddleware(verifier, WithAuthClock(clock.Real()), WithMetrics(am))(
 		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusOK)
 		}),
@@ -362,7 +364,7 @@ func TestAuthMiddleware_WithMetrics_NoPanic(t *testing.T) {
 
 	// Failure path.
 	failVerifier := &mockVerifier{err: errors.New("expired")}
-	failHandler := AuthMiddleware(failVerifier, WithMetrics(am))(
+	failHandler := AuthMiddleware(failVerifier, WithAuthClock(clock.Real()), WithMetrics(am))(
 		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			t.Fatal("should not be called")
 		}),
@@ -382,7 +384,7 @@ func TestAuthMiddleware_WithPublicEndpointMatcher_MethodAware(t *testing.T) {
 		return r.Method == "POST" && r.URL.Path == "/foo"
 	}
 
-	handler := AuthMiddleware(verifier, WithPublicEndpointMatcher(matcher))(
+	handler := AuthMiddleware(verifier, WithAuthClock(clock.Real()), WithPublicEndpointMatcher(matcher))(
 		http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			w.WriteHeader(http.StatusOK)
 		}),
@@ -460,7 +462,7 @@ func TestAuthMiddleware_PasswordResetRequired_DefaultMatcherIsFailClosed(t *test
 	verifier := &mockVerifier{
 		claims: Claims{Subject: "usr-bootstrap", PasswordResetRequired: true},
 	}
-	handler := AuthMiddleware(verifier)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	handler := AuthMiddleware(verifier, WithAuthClock(clock.Real()))(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		t.Fatal("no route must be exempt when no matcher is wired")
 	}))
 
@@ -489,6 +491,7 @@ func TestAuthMiddleware_PasswordResetRequired_BlocksBusinessRoute(t *testing.T) 
 		claims: Claims{Subject: "usr-bootstrap", PasswordResetRequired: true},
 	}
 	handler := AuthMiddleware(verifier,
+		WithAuthClock(clock.Real()),
 		WithPasswordResetChangeEndpointHintFn(func() string { return "POST /api/v1/access/users/{id}/password" }),
 	)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		t.Fatal("should not reach business handler when password reset is required")
@@ -512,6 +515,7 @@ func TestAuthMiddleware_PasswordResetRequired_AllowsChangePassword_PathTemplate(
 	}
 	reached := false
 	handler := AuthMiddleware(verifier,
+		WithAuthClock(clock.Real()),
 		WithPasswordResetExemptMatcher(testExemptMatcher(t)),
 	)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		reached = true
@@ -555,7 +559,7 @@ func TestAuthMiddleware_PasswordResetRequired_AllowsChangePassword_VariousIDs(t 
 	exempt := testExemptMatcher(t)
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			h := AuthMiddleware(verifier, WithPasswordResetExemptMatcher(exempt))(okHandler)
+			h := AuthMiddleware(verifier, WithAuthClock(clock.Real()), WithPasswordResetExemptMatcher(exempt))(okHandler)
 			req := httptest.NewRequest(tc.method, tc.path, nil)
 			req.Header.Set("Authorization", "Bearer reset-token")
 			rec := httptest.NewRecorder()
@@ -574,6 +578,7 @@ func TestAuthMiddleware_PasswordResetRequired_AllowsLogout(t *testing.T) {
 	}
 	reached := false
 	handler := AuthMiddleware(verifier,
+		WithAuthClock(clock.Real()),
 		WithPasswordResetExemptMatcher(testExemptMatcher(t)),
 	)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		reached = true
@@ -596,6 +601,7 @@ func TestAuthMiddleware_PasswordResetRequired_BlocksWrongMethodOnExempt(t *testi
 		claims: Claims{Subject: "usr-bootstrap", PasswordResetRequired: true},
 	}
 	handler := AuthMiddleware(verifier,
+		WithAuthClock(clock.Real()),
 		WithPasswordResetChangeEndpointHintFn(func() string { return "POST /api/v1/access/users/{id}/password" }),
 	)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		t.Fatal("GET on change-password path must NOT be exempt")
@@ -621,9 +627,10 @@ func TestAuthMiddleware_PasswordResetRequired_OmitsHintWhenNotConfigured(t *test
 	verifier := &mockVerifier{
 		claims: Claims{Subject: "usr-bootstrap", PasswordResetRequired: true},
 	}
-	handler := AuthMiddleware(verifier, WithLogger(logger))(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		t.Fatal("should not reach handler")
-	}))
+	handler := AuthMiddleware(verifier, WithAuthClock(clock.Real()), WithLogger(logger))(
+		http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			t.Fatal("should not reach handler")
+		}))
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/configs", nil)
 	req.Header.Set("Authorization", "Bearer reset-token")
@@ -660,7 +667,7 @@ func TestAuthMiddleware_NoResetClaim_PassesThrough(t *testing.T) {
 		claims: Claims{Subject: "usr-normal", Roles: []string{"user"}},
 	}
 	reached := false
-	handler := AuthMiddleware(verifier)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := AuthMiddleware(verifier, WithAuthClock(clock.Real()))(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		reached = true
 		w.WriteHeader(http.StatusOK)
 	}))
@@ -690,7 +697,7 @@ func TestAuthMiddleware_NoResetClaim_PassesThrough(t *testing.T) {
 func TestAuthMiddleware_NilDelegatedMatcher_NoEffect(t *testing.T) {
 	verifier := &mockVerifier{}
 
-	handler := AuthMiddleware(verifier)(
+	handler := AuthMiddleware(verifier, WithAuthClock(clock.Real()))(
 		http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			t.Fatal("must not reach handler")
 		}),
@@ -721,7 +728,7 @@ func TestAuthMiddleware_InjectsPrincipal(t *testing.T) {
 		},
 	}
 	var gotPrincipal *Principal
-	handler := AuthMiddleware(verifier)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := AuthMiddleware(verifier, WithAuthClock(clock.Real()))(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		p, ok := FromContext(r.Context())
 		require.True(t, ok, "Principal must be present in context after successful auth")
 		gotPrincipal = p
@@ -755,6 +762,7 @@ func TestAuthMiddleware_InjectsPrincipal_PasswordResetRequired(t *testing.T) {
 		},
 	}
 	handler := AuthMiddleware(verifier,
+		WithAuthClock(clock.Real()),
 		WithPasswordResetExemptMatcher(func(method, path string) bool {
 			return method == http.MethodPost && path == "/api/v1/access/users/usr-bootstrap/password"
 		}),
@@ -780,7 +788,7 @@ func TestAuthMiddleware_InjectsPrincipal_PasswordResetRequired(t *testing.T) {
 func TestAuthMiddleware_NoPrincipalOnUnauth(t *testing.T) {
 	verifier := &mockVerifier{err: fmt.Errorf("must not be called")}
 	matcher := func(r *http.Request) bool { return r.URL.Path == "/public/path" }
-	handler := AuthMiddleware(verifier, WithPublicEndpointMatcher(matcher))(
+	handler := AuthMiddleware(verifier, WithAuthClock(clock.Real()), WithPublicEndpointMatcher(matcher))(
 		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			p, ok := FromContext(r.Context())
 			assert.False(t, ok, "public endpoint must not have Principal in context")

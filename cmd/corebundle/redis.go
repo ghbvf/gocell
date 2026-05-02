@@ -8,6 +8,7 @@ import (
 	"time"
 
 	adapterredis "github.com/ghbvf/gocell/adapters/redis"
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/idempotency"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/runtime/auth"
@@ -105,7 +106,7 @@ func buildServiceNonceStore(topo bootstrap.Topology, client *adapterredis.Client
 		}
 		return store, nil
 	}
-	store, err := auth.NewInMemoryNonceStore(auth.ServiceTokenNonceTTL)
+	store, err := auth.NewInMemoryNonceStore(auth.ServiceTokenNonceTTL, clock.Real())
 	if err != nil {
 		return nil, fmt.Errorf("build in-memory nonce store: %w", err)
 	}
@@ -120,5 +121,5 @@ func buildConsumerClaimer(topo bootstrap.Topology, client *adapterredis.Client) 
 		}
 		return newRedisIdempotencyClaimer(client), consumerClaimerKindDistributed, nil
 	}
-	return idempotency.NewInMemClaimer(), consumerClaimerKindInMemory, nil
+	return idempotency.NewInMemClaimer(clock.Real()), consumerClaimerKindInMemory, nil
 }

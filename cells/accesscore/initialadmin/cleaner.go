@@ -76,12 +76,10 @@ func newCleaner(cfg cleanerConfig) (*cleaner, error) {
 	}
 
 	clk := cfg.Clock
-	if clk == nil {
-		clk = clock.Real()
-	}
+	clock.MustHaveClock(clk, "initialadmin.newCleaner")
 	sched := cfg.Scheduler
 	if sched == nil {
-		sched = realScheduler{}
+		sched = newRealScheduler(clk)
 	}
 
 	return &cleaner{

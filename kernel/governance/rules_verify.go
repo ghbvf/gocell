@@ -73,7 +73,7 @@ func (v *Validator) buildActiveWaiverSet(s *metadata.SliceMeta) map[string]bool 
 		if err != nil {
 			continue // unparseable expiresAt, invalid waiver
 		}
-		if t.Before(v.now().UTC().Truncate(defaultWaiverExpiryTruncation)) {
+		if t.Before(v.clk.Now().UTC().Truncate(defaultWaiverExpiryTruncation)) {
 			continue // expired waiver, not valid
 		}
 		waiverSet[w.Contract] = true
@@ -139,7 +139,7 @@ func (v *Validator) validateWaiverVERIFY02(file string, i int, w metadata.Waiver
 		))
 		return results
 	}
-	if t.Before(v.now().UTC().Truncate(defaultWaiverExpiryTruncation)) {
+	if t.Before(v.clk.Now().UTC().Truncate(defaultWaiverExpiryTruncation)) {
 		results = append(results, v.newResult(
 			"VERIFY-02", SeverityError, IssueInvalid,
 			file,

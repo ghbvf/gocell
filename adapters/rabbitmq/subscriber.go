@@ -124,9 +124,6 @@ func (sc *SubscriberConfig) setDefaults() {
 	if sc.StopIntakePerCallTimeout == 0 {
 		sc.StopIntakePerCallTimeout = defaultRMQStopIntakePerCallTimeout
 	}
-	if sc.Clock == nil {
-		sc.Clock = clock.Real()
-	}
 }
 
 // Subscriber implements outbox.Subscriber using RabbitMQ.
@@ -173,10 +170,11 @@ type Subscriber struct {
 }
 
 // NewSubscriber creates a Subscriber with the given connection and config.
-// SubscriberConfig.Clock defaults to [clock.Real] when unset; tests inject a
-// [clockmock.FakeClock] via the config field when they need deterministic
-// drain-deadline behavior.
+// SubscriberConfig.Clock must be set (pass clock.Real() at the composition
+// root, or a clockmock.FakeClock in tests). NewSubscriber panics if Clock
+// is nil.
 func NewSubscriber(conn *Connection, config SubscriberConfig) *Subscriber {
+	clock.MustHaveClock(config.Clock, "rabbitmq.NewSubscriber")
 	config.setDefaults()
 	return &Subscriber{
 		conn:         conn,

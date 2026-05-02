@@ -12,6 +12,7 @@ import (
 	"github.com/ghbvf/gocell/cells/auditcore/internal/mem"
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/cell/celltest"
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/persistence"
@@ -48,7 +49,7 @@ func newTestCell() *AuditCore {
 	return NewAuditCore(
 		WithAuditRepository(mem.NewAuditRepository()),
 		WithArchiveStore(mem.NewArchiveStore()),
-		WithOutboxDeps(eventbus.New(), nil),
+		WithOutboxDeps(eventbus.New(eventbus.WithClock(clock.Real())), nil),
 		WithHMACKey(testHMACKey),
 		WithOutboxDeps(nil, outbox.NoopWriter{}),
 		WithTxManager(persistence.NoopTxRunner{}),
@@ -62,6 +63,7 @@ func TestAuditCore_Lifecycle(t *testing.T) {
 	deps := cell.Dependencies{
 		Config:         make(map[string]any),
 		DurabilityMode: cell.DurabilityDemo,
+		Clock:          clock.Real(),
 	}
 
 	// Init
@@ -92,6 +94,7 @@ func TestAuditCore_Startup(t *testing.T) {
 	deps := cell.Dependencies{
 		Config:         make(map[string]any),
 		DurabilityMode: cell.DurabilityDemo,
+		Clock:          clock.Real(),
 	}
 	require.NoError(t, c.Init(ctx, deps))
 	require.NoError(t, c.Start(ctx))
@@ -103,13 +106,14 @@ func TestAuditCore_MissingHMACKey(t *testing.T) {
 	c := NewAuditCore(
 		WithAuditRepository(mem.NewAuditRepository()),
 		WithArchiveStore(mem.NewArchiveStore()),
-		WithOutboxDeps(eventbus.New(), nil),
+		WithOutboxDeps(eventbus.New(eventbus.WithClock(clock.Real())), nil),
 		// No HMAC key.
 	)
 	ctx := context.Background()
 	deps := cell.Dependencies{
 		Config:         make(map[string]any),
 		DurabilityMode: cell.DurabilityDemo,
+		Clock:          clock.Real(),
 	}
 
 	err := c.Init(ctx, deps)
@@ -120,7 +124,7 @@ func TestAuditCore_HMACKeyFromConfig(t *testing.T) {
 	c := NewAuditCore(
 		WithAuditRepository(mem.NewAuditRepository()),
 		WithArchiveStore(mem.NewArchiveStore()),
-		WithOutboxDeps(eventbus.New(), nil),
+		WithOutboxDeps(eventbus.New(eventbus.WithClock(clock.Real())), nil),
 		WithOutboxDeps(nil, outbox.NoopWriter{}),
 		WithTxManager(persistence.NoopTxRunner{}),
 		WithMetricsProvider(metrics.NopProvider{}),
@@ -129,6 +133,7 @@ func TestAuditCore_HMACKeyFromConfig(t *testing.T) {
 	deps := cell.Dependencies{
 		Config:         map[string]any{"audit.hmac_key": "config-provided-key-32bytes!!!!!"},
 		DurabilityMode: cell.DurabilityDemo,
+		Clock:          clock.Real(),
 	}
 
 	require.NoError(t, c.Init(ctx, deps))
@@ -140,12 +145,12 @@ func TestInit_DemoMode_OutboxWithoutTx_Fails(t *testing.T) {
 	c := NewAuditCore(
 		WithAuditRepository(mem.NewAuditRepository()),
 		WithArchiveStore(mem.NewArchiveStore()),
-		WithOutboxDeps(eventbus.New(), nil),
+		WithOutboxDeps(eventbus.New(eventbus.WithClock(clock.Real())), nil),
 		WithHMACKey(testHMACKey),
 		WithOutboxDeps(nil, outbox.NoopWriter{}),
 		// txRunner intentionally omitted
 	)
-	err := c.Init(context.Background(), cell.Dependencies{Config: map[string]any{}, DurabilityMode: cell.DurabilityDemo})
+	err := c.Init(context.Background(), cell.Dependencies{Config: map[string]any{}, DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "outboxWriter and txRunner")
 }
@@ -154,12 +159,12 @@ func TestInit_DemoMode_TxWithoutOutbox_Fails(t *testing.T) {
 	c := NewAuditCore(
 		WithAuditRepository(mem.NewAuditRepository()),
 		WithArchiveStore(mem.NewArchiveStore()),
-		WithOutboxDeps(eventbus.New(), nil),
+		WithOutboxDeps(eventbus.New(eventbus.WithClock(clock.Real())), nil),
 		WithHMACKey(testHMACKey),
 		WithTxManager(persistence.NoopTxRunner{}),
 		// outboxWriter intentionally omitted
 	)
-	err := c.Init(context.Background(), cell.Dependencies{Config: map[string]any{}, DurabilityMode: cell.DurabilityDemo})
+	err := c.Init(context.Background(), cell.Dependencies{Config: map[string]any{}, DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "outboxWriter and txRunner")
 }
@@ -170,7 +175,7 @@ func TestInit_DemoMode_NoPublisherNoOutbox_Fails(t *testing.T) {
 		WithArchiveStore(mem.NewArchiveStore()),
 		WithHMACKey(testHMACKey),
 	)
-	err := c.Init(context.Background(), cell.Dependencies{Config: map[string]any{}, DurabilityMode: cell.DurabilityDemo})
+	err := c.Init(context.Background(), cell.Dependencies{Config: map[string]any{}, DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "explicit event sink")
 }
@@ -186,6 +191,7 @@ func TestInit_DurableMode_RejectsNoopWriter(t *testing.T) {
 	deps := cell.Dependencies{
 		Config:         map[string]any{},
 		DurabilityMode: cell.DurabilityDurable,
+		Clock:          clock.Real(),
 	}
 	err := c.Init(context.Background(), deps)
 	require.Error(t, err)
@@ -199,12 +205,12 @@ func TestInit_DemoMode_WithPublisher_Succeeds(t *testing.T) {
 	c := NewAuditCore(
 		WithAuditRepository(mem.NewAuditRepository()),
 		WithArchiveStore(mem.NewArchiveStore()),
-		WithOutboxDeps(eventbus.New(), nil),
+		WithOutboxDeps(eventbus.New(eventbus.WithClock(clock.Real())), nil),
 		WithHMACKey(testHMACKey),
 		WithMetricsProvider(metrics.NopProvider{}),
 		// No outboxWriter, no txRunner — demo mode with publisher.
 	)
-	err := c.Init(context.Background(), cell.Dependencies{Config: map[string]any{}, DurabilityMode: cell.DurabilityDemo})
+	err := c.Init(context.Background(), cell.Dependencies{Config: map[string]any{}, DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
 	require.NoError(t, err, "demo mode with publisher should succeed")
 }
 
@@ -216,7 +222,7 @@ func TestInit_DemoMode_ExplicitNoopOutboxPair_Succeeds(t *testing.T) {
 		WithOutboxDeps(nil, outbox.NoopWriter{}),
 		WithTxManager(persistence.NoopTxRunner{}),
 	)
-	err := c.Init(context.Background(), cell.Dependencies{Config: map[string]any{}, DurabilityMode: cell.DurabilityDemo})
+	err := c.Init(context.Background(), cell.Dependencies{Config: map[string]any{}, DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
 	require.NoError(t, err)
 }
 
@@ -231,7 +237,9 @@ func TestAuditInit_WithEmitter_DirectInjection(t *testing.T) {
 		WithHMACKey(testHMACKey),
 		WithEmitter(outbox.NewNoopEmitter()),
 	)
-	require.NoError(t, c.Init(context.Background(), cell.Dependencies{Config: map[string]any{}, DurabilityMode: cell.DurabilityDemo}))
+	require.NoError(t, c.Init(context.Background(), cell.Dependencies{
+		Config: map[string]any{}, DurabilityMode: cell.DurabilityDemo, Clock: clock.Real(),
+	}))
 	assert.NotNil(t, c.emitter)
 	assert.Nil(t, c.pendingOutboxPub)
 	assert.Nil(t, c.pendingOutboxWriter)
@@ -245,9 +253,9 @@ func TestAuditInit_WithEmitterAndOutboxDeps_MutuallyExclusive(t *testing.T) {
 		WithArchiveStore(mem.NewArchiveStore()),
 		WithHMACKey(testHMACKey),
 		WithEmitter(outbox.NewNoopEmitter()),
-		WithOutboxDeps(eventbus.New(), nil),
+		WithOutboxDeps(eventbus.New(eventbus.WithClock(clock.Real())), nil),
 	)
-	err := c.Init(context.Background(), cell.Dependencies{Config: map[string]any{}, DurabilityMode: cell.DurabilityDemo})
+	err := c.Init(context.Background(), cell.Dependencies{Config: map[string]any{}, DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "mutually exclusive")
 }
@@ -266,7 +274,9 @@ func TestAuditInit_WithEmitter_DurableRequiresDurableEmitter(t *testing.T) {
 		WithEmitter(outbox.NewNoopEmitter()), // non-durable
 		WithTxManager(persistence.NoopTxRunner{}),
 	)
-	err = c.Init(context.Background(), cell.Dependencies{Config: map[string]any{}, DurabilityMode: cell.DurabilityDurable})
+	err = c.Init(context.Background(), cell.Dependencies{
+		Config: map[string]any{}, DurabilityMode: cell.DurabilityDurable, Clock: clock.Real(),
+	})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "durable")
 }
@@ -277,6 +287,7 @@ func TestAuditCore_RouteGroups(t *testing.T) {
 	deps := cell.Dependencies{
 		Config:         make(map[string]any),
 		DurabilityMode: cell.DurabilityDemo,
+		Clock:          clock.Real(),
 	}
 	require.NoError(t, c.Init(ctx, deps))
 
@@ -297,6 +308,7 @@ func TestAuditCore_RegisterSubscriptions(t *testing.T) {
 	deps := cell.Dependencies{
 		Config:         make(map[string]any),
 		DurabilityMode: cell.DurabilityDemo,
+		Clock:          clock.Real(),
 	}
 	require.NoError(t, c.Init(ctx, deps))
 
@@ -333,10 +345,11 @@ func TestAuditCore_RouteQueryEntries(t *testing.T) {
 	deps := cell.Dependencies{
 		Config:         make(map[string]any),
 		DurabilityMode: cell.DurabilityDemo,
+		Clock:          clock.Real(),
 	}
 	require.NoError(t, c.Init(ctx, deps))
 
-	r := router.MustNew()
+	r := router.MustNew(router.WithRouterClock(clock.Real()))
 	for _, rg := range c.RouteGroups() {
 		rg := rg
 		r.Route(rg.Prefix, func(sub cell.RouteMux) { require.NoError(t, rg.Register(sub)) })
@@ -362,7 +375,7 @@ func TestInit_DurableMode_RejectsMissingCursorCodec(t *testing.T) {
 	c := NewAuditCore(
 		WithAuditRepository(mem.NewAuditRepository()),
 		WithArchiveStore(mem.NewArchiveStore()),
-		WithOutboxDeps(eventbus.New(), nil),
+		WithOutboxDeps(eventbus.New(eventbus.WithClock(clock.Real())), nil),
 		WithHMACKey(testHMACKey),
 		WithOutboxDeps(nil, &recordingWriter{}), // non-Nooper; durable-gated CheckNotNoop passes
 		WithTxManager(durableTxRunner{}),        // non-Nooper; durable-gated CheckNotNoop passes
@@ -371,6 +384,7 @@ func TestInit_DurableMode_RejectsMissingCursorCodec(t *testing.T) {
 	err := c.Init(context.Background(), cell.Dependencies{
 		Config:         map[string]any{},
 		DurabilityMode: cell.DurabilityDurable,
+		Clock:          clock.Real(),
 	})
 	require.Error(t, err)
 	var ecErr *errcode.Error
@@ -418,7 +432,7 @@ func TestAuditCore_Wiring_StaleCursor_DemoVsDurable(t *testing.T) {
 			c := NewAuditCore(
 				WithAuditRepository(mem.NewAuditRepository()),
 				WithArchiveStore(mem.NewArchiveStore()),
-				WithOutboxDeps(eventbus.New(), nil),
+				WithOutboxDeps(eventbus.New(eventbus.WithClock(clock.Real())), nil),
 				WithHMACKey(testHMACKey),
 				WithOutboxDeps(nil, tc.outbox),
 				WithTxManager(tc.tx),
@@ -428,9 +442,10 @@ func TestAuditCore_Wiring_StaleCursor_DemoVsDurable(t *testing.T) {
 			require.NoError(t, c.Init(context.Background(), cell.Dependencies{
 				Config:         map[string]any{},
 				DurabilityMode: tc.mode,
+				Clock:          clock.Real(),
 			}))
 
-			r := router.MustNew()
+			r := router.MustNew(router.WithRouterClock(clock.Real()))
 			for _, rg := range c.RouteGroups() {
 				rg := rg
 				r.Route(rg.Prefix, func(sub cell.RouteMux) { require.NoError(t, rg.Register(sub)) })
@@ -462,7 +477,7 @@ func (w *recordingWriter) Write(_ context.Context, entry outbox.Entry) error {
 // outbox-failopen-rate checker scoped to "auditcore".
 func TestAuditCore_HealthCheckers_WithDirectEmitter(t *testing.T) {
 	c := newTestCell()
-	deps := cell.Dependencies{Config: make(map[string]any), DurabilityMode: cell.DurabilityDemo}
+	deps := cell.Dependencies{Config: make(map[string]any), DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()}
 	require.NoError(t, c.Init(context.Background(), deps))
 
 	checkers := c.HealthCheckers()

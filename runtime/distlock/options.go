@@ -36,7 +36,7 @@ type config struct {
 	// See WithMaxRenewAttempts.
 	maxRenewAttempts int
 
-	// clock is the time source. Defaults to clock.Real().
+	// clock is the time source. Set via New/MustNew required parameter.
 	clock clock.Clock
 }
 
@@ -46,7 +46,6 @@ func defaultConfig() config {
 		driftFactor:      0.01,
 		releaseTimeout:   defaultDistLockReleaseTimeout,
 		maxRenewAttempts: 3,
-		clock:            clock.Real(),
 	}
 }
 
@@ -102,10 +101,3 @@ func WithMaxRenewAttempts(n int) Option {
 	}
 }
 
-// WithClock replaces the default real-time clock with a controllable
-// implementation. Intended for testing only.
-func WithClock(clk clock.Clock) Option {
-	return func(c *config) {
-		c.clock = clk
-	}
-}

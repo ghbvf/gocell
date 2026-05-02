@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/httputil"
 	"github.com/ghbvf/gocell/pkg/validation"
@@ -61,7 +62,7 @@ const MinHMACKeyBytes = cell.MinHMACKeyBytes
 
 // serviceTokenConfig holds per-middleware options.
 type serviceTokenConfig struct {
-	now        func() time.Time
+	clk        clock.Clock
 	logger     *slog.Logger
 	nonceStore NonceStore
 	metrics    *AuthMetrics
@@ -70,11 +71,11 @@ type serviceTokenConfig struct {
 // ServiceTokenOption configures ServiceTokenMiddleware behavior.
 type ServiceTokenOption func(*serviceTokenConfig)
 
-// WithServiceTokenClock overrides the time source for timestamp validation.
-func WithServiceTokenClock(fn func() time.Time) ServiceTokenOption {
+// WithServiceTokenClock overrides the clock for timestamp validation.
+func WithServiceTokenClock(clk clock.Clock) ServiceTokenOption {
 	return func(c *serviceTokenConfig) {
-		if fn != nil {
-			c.now = fn
+		if clk != nil {
+			c.clk = clk
 		}
 	}
 }
@@ -202,9 +203,10 @@ func LoadHMACKeyRingFromEnv() (*HMACKeyRing, error) {
 // authenticator build failure) return an error middleware that serves 500 on every
 // request. All misconfiguration paths share the same errorMiddlewareInternal helper
 // so the 500 behavior is consistent and observable via the "internal" metric label.
-func ServiceTokenMiddleware(ring cell.HMACKeyring, opts ...ServiceTokenOption) func(http.Handler) http.Handler {
+func ServiceTokenMiddleware(ring cell.HMACKeyring, clk clock.Clock, opts ...ServiceTokenOption) func(http.Handler) http.Handler {
+	clock.MustHaveClock(clk, "auth.ServiceTokenMiddleware")
 	cfg := serviceTokenConfig{
-		now:    time.Now,
+		clk:    clk,
 		logger: slog.Default(),
 	}
 	for _, o := range opts {
@@ -237,7 +239,7 @@ func ServiceTokenMiddleware(ring cell.HMACKeyring, opts ...ServiceTokenOption) f
 	// Construct a single Authenticator instance for the lifetime of this
 	// middleware. All validation and Principal construction is delegated here,
 	// eliminating the previously duplicated logic in handleServiceToken.
-	authenticator, err := NewServiceTokenAuthenticator(ring, opts...)
+	authenticator, err := NewServiceTokenAuthenticator(ring, clk, opts...)
 	if err != nil {
 		return errorMiddlewareInternal(cfg, "authenticator build failed: "+err.Error())
 	}

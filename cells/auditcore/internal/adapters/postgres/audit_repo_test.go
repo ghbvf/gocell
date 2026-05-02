@@ -10,6 +10,7 @@ import (
 
 	"github.com/ghbvf/gocell/cells/auditcore/internal/domain"
 	"github.com/ghbvf/gocell/cells/auditcore/internal/ports"
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/query"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
@@ -17,7 +18,7 @@ import (
 
 func TestAuditRepository_Append(t *testing.T) {
 	db := &mockDB{}
-	repo := NewAuditRepository(db)
+	repo := NewAuditRepository(db, clock.Real())
 
 	entry := &domain.AuditEntry{
 		ID:        "ae-1",
@@ -41,7 +42,7 @@ func TestAuditRepository_Append(t *testing.T) {
 
 func TestAuditRepository_Append_ZeroTimestamp(t *testing.T) {
 	db := &mockDB{}
-	repo := NewAuditRepository(db)
+	repo := NewAuditRepository(db, clock.Real())
 
 	entry := &domain.AuditEntry{
 		ID:        "ae-2",
@@ -58,7 +59,7 @@ func TestAuditRepository_Append_ZeroTimestamp(t *testing.T) {
 
 func TestAuditRepository_Append_Error(t *testing.T) {
 	db := &mockDB{execErr: assert.AnError}
-	repo := NewAuditRepository(db)
+	repo := NewAuditRepository(db, clock.Real())
 
 	err := repo.Append(context.Background(), &domain.AuditEntry{ID: "ae-3"})
 	require.Error(t, err)
@@ -78,7 +79,7 @@ func TestAuditRepository_GetRange(t *testing.T) {
 			},
 		},
 	}
-	repo := NewAuditRepository(db)
+	repo := NewAuditRepository(db, clock.Real())
 
 	entries, err := repo.GetRange(context.Background(), 0, 10)
 	require.NoError(t, err)
@@ -89,7 +90,7 @@ func TestAuditRepository_GetRange(t *testing.T) {
 
 func TestAuditRepository_GetRange_Empty(t *testing.T) {
 	db := &mockDB{queryRows: &mockRowSet{}}
-	repo := NewAuditRepository(db)
+	repo := NewAuditRepository(db, clock.Real())
 
 	entries, err := repo.GetRange(context.Background(), 0, 10)
 	require.NoError(t, err)
@@ -98,7 +99,7 @@ func TestAuditRepository_GetRange_Empty(t *testing.T) {
 
 func TestAuditRepository_GetRange_InvalidRange(t *testing.T) {
 	db := &mockDB{}
-	repo := NewAuditRepository(db)
+	repo := NewAuditRepository(db, clock.Real())
 
 	entries, err := repo.GetRange(context.Background(), 5, 2)
 	require.NoError(t, err)
@@ -110,7 +111,7 @@ func TestAuditRepository_GetRange_InvalidRange(t *testing.T) {
 // future callers that serialize the result directly (nil → JSON null).
 func TestAuditRepository_GetRange_EmptyNonNil(t *testing.T) {
 	db := &mockDB{}
-	repo := NewAuditRepository(db)
+	repo := NewAuditRepository(db, clock.Real())
 
 	cases := []struct {
 		name string
@@ -139,7 +140,7 @@ func TestAuditRepository_Query_WithFilters(t *testing.T) {
 			},
 		},
 	}
-	repo := NewAuditRepository(db)
+	repo := NewAuditRepository(db, clock.Real())
 
 	filters := ports.AuditFilters{
 		EventType: "login",

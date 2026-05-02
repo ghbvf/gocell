@@ -82,8 +82,7 @@ func TestManager_HeapOrder(t *testing.T) {
 	fd := locktest.NewFakeDriver()
 	fd.WithClock(fc.Now)
 
-	l := distlock.MustNew(fd,
-		distlock.WithClock(fc),
+	l := distlock.MustNew(fd, fc,
 		distlock.WithRenewFraction(0.5),
 	)
 
@@ -151,7 +150,7 @@ func TestManager_HeapOrder(t *testing.T) {
 func TestManager_Lifecycle_LazyStart(t *testing.T) {
 	fc := clockmock.New(time.Time{})
 	fd := locktest.NewFakeDriver()
-	l := distlock.MustNew(fd, distlock.WithClock(fc))
+	l := distlock.MustNew(fd, fc)
 
 	_, release, err := l.Acquire(context.Background(), "lifecycle-key", mgrWaitTimeout)
 	if err != nil {
@@ -180,7 +179,7 @@ func TestManager_Lifecycle_LazyStart(t *testing.T) {
 func TestManager_SnapshotLocks(t *testing.T) {
 	fc := clockmock.New(time.Time{})
 	fd := locktest.NewFakeDriver()
-	l := distlock.MustNew(fd, distlock.WithClock(fc))
+	l := distlock.MustNew(fd, fc)
 
 	if mgr(l).Snapshot().Locks != 0 {
 		t.Errorf("SnapshotLocks: initial count should be 0")

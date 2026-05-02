@@ -24,6 +24,7 @@ import (
 	"github.com/ghbvf/gocell/cells/accesscore/internal/ports"
 	"github.com/ghbvf/gocell/cells/accesscore/slices/setup"
 	"github.com/ghbvf/gocell/cells/internal/testoutbox"
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/query"
@@ -49,7 +50,7 @@ func newService(t *testing.T, userRepo ports.UserRepository, roleRepo ports.Role
 	t.Helper()
 	prov, err := adminprovision.NewProvisioner(userRepo, roleRepo, discardLogger(), func() string {
 		return "00000000-0000-4000-8000-000000000001"
-	})
+	}, clock.Real())
 	require.NoError(t, err)
 	opts := []setup.Option{}
 	if w != nil {
@@ -68,7 +69,8 @@ func TestNewService_NilProvisioner_Error(t *testing.T) {
 }
 
 func TestNewService_NilLogger_Error(t *testing.T) {
-	prov, _ := adminprovision.NewProvisioner(mem.NewUserRepository(), mem.NewRoleRepository(), discardLogger(), func() string { return "x" })
+	prov, _ := adminprovision.NewProvisioner(mem.NewUserRepository(), mem.NewRoleRepository(),
+		discardLogger(), func() string { return "x" }, clock.Real())
 	_, err := setup.NewService(prov, nil)
 	require.Error(t, err)
 }

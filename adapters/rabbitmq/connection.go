@@ -340,13 +340,14 @@ type Connection struct {
 
 // NewConnection creates a new Connection with the given config.
 // It attempts an initial connection and starts the reconnect loop.
+// A clock.Clock must be supplied via WithConnectionClock; NewConnection
+// panics if no clock is provided (use clock.Real() at the composition root).
 func NewConnection(config Config, opts ...ConnectionOption) (*Connection, error) {
 	config.setDefaults()
 
 	c := &Connection{
 		config:      config,
 		dial:        DefaultDial,
-		clock:       clock.Real(),
 		channelPool: make(chan AMQPChannel, config.ChannelPoolSize),
 		closeCh:     make(chan struct{}),
 		connected:   make(chan struct{}),
@@ -356,6 +357,8 @@ func NewConnection(config Config, opts ...ConnectionOption) (*Connection, error)
 	for _, opt := range opts {
 		opt(c)
 	}
+
+	clock.MustHaveClock(c.clock, "rabbitmq.NewConnection")
 
 	if err := c.connect(); err != nil {
 		// Classify initial connection failure: permanent errors get a distinct code
@@ -390,13 +393,12 @@ func WithDialFunc(dial DialFunc) ConnectionOption {
 	}
 }
 
-// WithConnectionClock sets the clock used for disconnect timestamps. Defaults to
-// clock.Real() when not provided.
+// WithConnectionClock sets the clock used by the Connection for reconnect
+// backoff and timeout calculations. Required — NewConnection panics if no
+// clock is supplied. Pass clock.Real() at the composition root.
 func WithConnectionClock(clk clock.Clock) ConnectionOption {
 	return func(c *Connection) {
-		if clk != nil {
-			c.clock = clk
-		}
+		c.clock = clk
 	}
 }
 
@@ -516,10 +518,12 @@ func (c *Connection) reconnectWithBackoff() bool {
 			slog.Int("attempt", attempt+1),
 			slog.Duration("delay", delay))
 
+		t := c.clock.NewTimerAt(c.clock.Now().Add(delay))
 		select {
 		case <-c.closeCh:
+			t.Stop()
 			return false
-		case <-time.After(delay):
+		case <-t.C():
 		}
 
 		if err := c.connect(); err != nil {

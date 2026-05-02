@@ -9,6 +9,7 @@ import (
 
 	adapterpg "github.com/ghbvf/gocell/adapters/postgres"
 	"github.com/ghbvf/gocell/cells/configcore/internal/domain"
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/tests/testutil"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
@@ -44,7 +45,7 @@ func setupFlagPG(t *testing.T) (*FlagRepository, *adapterpg.TxManager, func()) {
 	require.NoError(t, migrator.Up(ctx), "migrations must apply cleanly")
 
 	session := NewSession(pool.DB())
-	repo := NewFlagRepository(session)
+	repo := NewFlagRepository(session, clock.Real())
 	txMgr := adapterpg.NewTxManager(pool)
 
 	cleanup := func() {
@@ -86,7 +87,7 @@ func TestFlagRepo_Restart_Persistence(t *testing.T) {
 	// same PG container) to verify no in-memory state is retained between
 	// repository instances. In production, restarting the binary would create
 	// a new pool+session pointed at the same PG — this mirrors that behaviour.
-	repo2 := NewFlagRepository(repo.session)
+	repo2 := NewFlagRepository(repo.session, clock.Real())
 
 	got, err := repo2.GetByKey(ctx, "restart.test.flag")
 	require.NoError(t, err)
@@ -131,7 +132,7 @@ func TestFlagRepo_Toggle_Persistence(t *testing.T) {
 	assert.True(t, toggled.Enabled)
 
 	// Re-read via a "new" repo instance to confirm persistence.
-	repo2 := NewFlagRepository(repo.session)
+	repo2 := NewFlagRepository(repo.session, clock.Real())
 	got, err := repo2.GetByKey(ctx, "toggle.persist.flag")
 	require.NoError(t, err)
 	assert.Equal(t, 2, got.Version, "version must persist after toggle")

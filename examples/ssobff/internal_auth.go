@@ -5,6 +5,7 @@ import (
 	"os"
 
 	"github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/runtime/auth"
 )
 
@@ -24,7 +25,7 @@ func newInternalAuthChain(secret string) ([]cell.ListenerAuth, error) {
 	if err != nil {
 		return nil, fmt.Errorf("load %s: %w", ssobffServiceKeyEnv, err)
 	}
-	store, err := auth.NewInMemoryNonceStore(auth.ServiceTokenNonceTTL)
+	store, err := auth.NewInMemoryNonceStore(auth.ServiceTokenNonceTTL, clock.Real())
 	if err != nil {
 		return nil, fmt.Errorf("create internal listener nonce store: %w", err)
 	}

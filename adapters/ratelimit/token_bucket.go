@@ -79,19 +79,16 @@ type Limiter struct {
 
 // New creates a per-IP token bucket rate limiter. It starts a background
 // goroutine for stale entry cleanup. Call Close() to stop cleanup.
-func New(cfg Config, clk ...clock.Clock) *Limiter {
+func New(cfg Config, clk clock.Clock) *Limiter {
+	clock.MustHaveClock(clk, "ratelimit.New")
 	cfg.defaults()
-	c := clock.Real()
-	if len(clk) > 0 && clk[0] != nil {
-		c = clk[0]
-	}
 	l := &Limiter{
 		rate:       cfg.Rate,
 		burst:      cfg.Burst,
 		limiters:   make(map[string]*entry),
 		staleAfter: cfg.StaleAfter,
 		stopCh:     make(chan struct{}),
-		clock:      c,
+		clock:      clk,
 	}
 	go l.cleanup(cfg.CleanupInterval)
 	return l
@@ -166,14 +163,14 @@ func (l *Limiter) getOrCreate(key string) *entry {
 }
 
 func (l *Limiter) cleanup(interval time.Duration) {
-	ticker := time.NewTicker(interval)
+	ticker := l.clock.NewTicker(interval)
 	defer ticker.Stop()
 
 	for {
 		select {
 		case <-l.stopCh:
 			return
-		case <-ticker.C:
+		case <-ticker.C():
 			l.removeStale()
 		}
 	}

@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/ghbvf/gocell/kernel/clock"
 	kworker "github.com/ghbvf/gocell/kernel/worker"
 
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
@@ -160,7 +161,7 @@ func (w *orderWorker) Stop(ctx context.Context) error {
 
 func TestPeriodicWorker_ExecutesFunction(t *testing.T) {
 	var count atomic.Int32
-	pw := NewPeriodicWorker(testtime.D10ms, func(ctx context.Context) {
+	pw := NewPeriodicWorker(clock.Real(), testtime.D10ms, func(ctx context.Context) {
 		count.Add(1)
 	})
 
@@ -181,7 +182,7 @@ func TestPeriodicWorker_ExecutesFunction(t *testing.T) {
 
 func TestPeriodicWorker_PanicIsolation(t *testing.T) {
 	var count atomic.Int32
-	pw := NewPeriodicWorker(testtime.D10ms, func(ctx context.Context) {
+	pw := NewPeriodicWorker(clock.Real(), testtime.D10ms, func(ctx context.Context) {
 		n := count.Add(1)
 		if n == 1 {
 			panic("test panic")
@@ -204,7 +205,7 @@ func TestPeriodicWorker_PanicIsolation(t *testing.T) {
 }
 
 func TestPeriodicWorker_Stop(t *testing.T) {
-	pw := NewPeriodicWorker(time.Hour, func(ctx context.Context) {})
+	pw := NewPeriodicWorker(clock.Real(), time.Hour, func(ctx context.Context) {})
 
 	done := make(chan error, 1)
 	go func() {
@@ -225,7 +226,7 @@ func TestPeriodicWorker_Stop(t *testing.T) {
 
 func TestPeriodicWorker_RestartAfterStop(t *testing.T) {
 	var count atomic.Int32
-	pw := NewPeriodicWorker(testtime.D10ms, func(ctx context.Context) {
+	pw := NewPeriodicWorker(clock.Real(), testtime.D10ms, func(ctx context.Context) {
 		count.Add(1)
 	})
 

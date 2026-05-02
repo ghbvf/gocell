@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/ctxkeys"
 )
 
@@ -25,7 +26,7 @@ func TestAccessLog_LogsFields(t *testing.T) {
 		w.WriteHeader(http.StatusCreated)
 	})
 	// Recorder creates the shared RecorderState that AccessLog reads.
-	handler := Recorder(AccessLog(inner))
+	handler := Recorder(AccessLog(clock.Real())(inner))
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/users", nil)
 	// Simulate request_id already in context
@@ -63,7 +64,7 @@ func TestAccessLog_Standalone(t *testing.T) {
 		w.WriteHeader(http.StatusNotFound)
 	})
 	// No Recorder — AccessLog creates its own RecorderState.
-	handler := AccessLog(inner)
+	handler := AccessLog(clock.Real())(inner)
 
 	req := httptest.NewRequest(http.MethodGet, "/missing", nil)
 	rec := httptest.NewRecorder()
@@ -87,7 +88,7 @@ func TestAccessLog_DefaultStatus200(t *testing.T) {
 		_, _ = w.Write([]byte("ok"))
 	})
 	// Recorder creates the shared RecorderState that AccessLog reads.
-	handler := Recorder(AccessLog(inner))
+	handler := Recorder(AccessLog(clock.Real())(inner))
 
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	rec := httptest.NewRecorder()
@@ -109,7 +110,7 @@ func TestAccessLog_TraceID_WhenSet(t *testing.T) {
 	inner := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})
-	handler := Recorder(AccessLog(inner))
+	handler := Recorder(AccessLog(clock.Real())(inner))
 
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	ctx := ctxkeys.WithTraceID(req.Context(), "abc123trace")
@@ -133,7 +134,7 @@ func TestAccessLog_Listener_WhenSet(t *testing.T) {
 	inner := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusAccepted)
 	})
-	handler := ListenerContext("internal")(Recorder(AccessLog(inner)))
+	handler := ListenerContext("internal")(Recorder(AccessLog(clock.Real())(inner)))
 
 	req := httptest.NewRequest(http.MethodPatch, "/internal/v1/config/key", nil)
 	rec := httptest.NewRecorder()
@@ -154,7 +155,7 @@ func TestAccessLog_NoListener_WhenNotSet(t *testing.T) {
 	inner := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})
-	handler := Recorder(AccessLog(inner))
+	handler := Recorder(AccessLog(clock.Real())(inner))
 
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	rec := httptest.NewRecorder()
@@ -175,7 +176,7 @@ func TestAccessLog_NoTraceID_WhenNotSet(t *testing.T) {
 	inner := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})
-	handler := Recorder(AccessLog(inner))
+	handler := Recorder(AccessLog(clock.Real())(inner))
 
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	rec := httptest.NewRecorder()

@@ -32,16 +32,13 @@ type ArchiveStore struct {
 
 // NewArchiveStore creates an ArchiveStore that uses the given ObjectUploader.
 // keyPrefix is prepended to all object keys (e.g., "audit/archive/").
-// clk is used to generate timestamped object keys; defaults to clock.Real().
-func NewArchiveStore(uploader ObjectUploader, keyPrefix string, clk ...clock.Clock) *ArchiveStore {
-	c := clock.Real()
-	if len(clk) > 0 && clk[0] != nil {
-		c = clk[0]
-	}
+// clk is used to generate timestamped object keys.
+func NewArchiveStore(uploader ObjectUploader, keyPrefix string, clk clock.Clock) *ArchiveStore {
+	clock.MustHaveClock(clk, "s3archive.NewArchiveStore")
 	return &ArchiveStore{
 		uploader:  uploader,
 		keyPrefix: keyPrefix,
-		clock:     c,
+		clock:     clk,
 	}
 }
 

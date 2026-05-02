@@ -3,17 +3,30 @@ package bootstrap
 // options_assembly.go — With* option functions covering config loading and
 // CoreAssembly construction.
 //
-// Covers: WithConfig, WithAssembly, WithAssemblyID, WithHookTimeout,
-// WithHookObserver.
+// Covers: WithConfig, WithAssembly, WithAssemblyID, WithClock.
 //
 // ref: uber-go/fx app.go — Option pattern; each Option targets a single concern.
 
 import (
-	"time"
-
 	"github.com/ghbvf/gocell/kernel/assembly"
-	"github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/kernel/clock"
 )
+
+// WithClock sets the single root [clock.Clock] threaded through the
+// bootstrap, default assembly, lifecycle, and (via Dependencies) every
+// registered cell. It is required: bootstrap.New panics when WithClock is
+// not applied. Production callers pass clock.Real(); tests pass
+// clockmock.New(...).
+//
+// When WithAssembly is also used, the same clock instance must be passed
+// to both bootstrap.WithClock and assembly.New(Config{Clock: ...}).
+// Bootstrap.Run performs a phase0 fail-fast check and returns an error
+// when the two instances differ.
+func WithClock(clk clock.Clock) Option {
+	return func(b *Bootstrap) {
+		b.clock = clk
+	}
+}
 
 // WithConfig sets the YAML config path and environment prefix.
 func WithConfig(yamlPath, envPrefix string) Option {
@@ -43,38 +56,5 @@ func WithAssembly(asm *assembly.CoreAssembly) Option {
 func WithAssemblyID(id string) Option {
 	return func(b *Bootstrap) {
 		b.assemblyID = id
-	}
-}
-
-// WithHookTimeout configures the per-hook deadline for the default
-// assembly built when no WithAssembly option is supplied. Zero uses
-// assembly.DefaultHookTimeout. Negative values disable per-hook
-// timeouts entirely.
-//
-// When WithAssembly is used, the pre-built assembly's Config.HookTimeout
-// takes precedence — this option has no effect. For pre-built assemblies,
-// set the value directly on assembly.Config when constructing.
-func WithHookTimeout(d time.Duration) Option {
-	return func(b *Bootstrap) {
-		b.hookTimeout = d
-		b.hookTimeoutSet = true
-	}
-}
-
-// WithHookObserver registers a cell lifecycle hook observer for the
-// default assembly built when no WithAssembly option is supplied.
-//
-// When WithAssembly is used, the pre-built assembly's Config.HookObserver
-// takes precedence — this option has no effect. For pre-built assemblies,
-// set the observer directly on assembly.Config when constructing.
-//
-// A nil observer (including a typed nil wrapping a nil concrete pointer)
-// is equivalent to not calling this option.
-func WithHookObserver(obs cell.LifecycleHookObserver) Option {
-	return func(b *Bootstrap) {
-		if cell.IsNilHookObserver(obs) {
-			return
-		}
-		b.hookObserver = obs
 	}
 }

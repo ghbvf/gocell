@@ -80,7 +80,7 @@ func WaitForReady(t *testing.T, timeout time.Duration) {
 		if resp != nil {
 			_ = resp.Body.Close()
 		}
-		time.Sleep(defaultE2ERetryInterval)
+		_ = e2eClock.Sleep(context.Background(), e2eClock.Now().Add(defaultE2ERetryInterval))
 	}
 	t.Fatalf("server at %s did not become ready within %s", HealthURL(), timeout)
 }

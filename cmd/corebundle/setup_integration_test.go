@@ -53,15 +53,15 @@ func TestSetupEndpoints_FirstRunFlow(t *testing.T) {
 	require.NoError(t, err)
 
 	privKey, pubKey := auth.MustGenerateTestKeyPair()
-	keySet, err := auth.NewKeySet(privKey, pubKey)
+	keySet, err := auth.NewKeySet(privKey, pubKey, clock.Real())
 	require.NoError(t, err)
-	jwtIssuer, err := auth.NewJWTIssuer(keySet, "test", testtime.D15min,
+	jwtIssuer, err := auth.NewJWTIssuer(keySet, "test", testtime.D15min, clock.Real(),
 		auth.WithIssuerAudiencesFromSlice([]string{"gocell"}))
 	require.NoError(t, err)
-	jwtVerifier, err := auth.NewJWTVerifier(keySet, auth.WithExpectedAudiences("gocell"))
+	jwtVerifier, err := auth.NewJWTVerifier(keySet, clock.Real(), auth.WithExpectedAudiences("gocell"))
 	require.NoError(t, err)
 
-	eb := eventbus.New()
+	eb := eventbus.New(eventbus.WithClock(clock.Real()))
 	var nw outbox.Writer = outbox.NoopWriter{}
 
 	auditCursorCodec, err := query.NewCursorCodec([]byte("test-audit-cursor-key-32-bytes!!"))
@@ -99,6 +99,7 @@ func TestSetupEndpoints_FirstRunFlow(t *testing.T) {
 	require.NoError(t, asm.Register(auc))
 
 	app := bootstrap.New(
+		bootstrap.WithClock(clock.Real()),
 		bootstrap.WithAssembly(asm),
 		bootstrap.WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{cell.MustNewAuthJWTFromAssembly(asm)}, bootstrap.WithListenerNet(ln)),
 		withCorebundleTestInternalListener(t, newCorebundleLocalListener(t)),

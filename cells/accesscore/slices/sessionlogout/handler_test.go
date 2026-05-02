@@ -16,6 +16,7 @@ import (
 	"github.com/ghbvf/gocell/cells/accesscore/internal/mem"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/testutil"
 	"github.com/ghbvf/gocell/kernel/cell/celltest"
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/runtime/auth"
@@ -37,7 +38,7 @@ func newHandlerLogoutRefreshStore() refresh.Store {
 // setup wires the slice handler onto a celltest mux via RegisterRoutes — the
 // same code path cell_routes.go takes in production.
 func setup() http.Handler {
-	sessionRepo := mem.NewSessionRepository()
+	sessionRepo := mem.NewSessionRepository(clock.Real())
 	sess, _ := domain.NewSession(testutil.TestID("usr-1"), "access-tok", time.Now().Add(time.Hour), time.Now())
 	sess.ID = testutil.TestID("sess-1")
 	_ = sessionRepo.Create(context.Background(), sess)

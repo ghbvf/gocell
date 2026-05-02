@@ -13,6 +13,7 @@ import (
 
 	devicecell "github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell"
 	"github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/runtime/auth"
 )
 
@@ -59,9 +60,9 @@ func TestJWTVerifierFromEnvAcceptsRS256AndRejectsDemoOrHS256Tokens(t *testing.T)
 	verifier, err := newJWTVerifierFromEnv()
 	require.NoError(t, err)
 
-	keySet, err := auth.LoadKeySetFromEnv()
+	keySet, err := auth.LoadKeySetFromEnv(clock.Real())
 	require.NoError(t, err)
-	issuer, err := auth.NewJWTIssuer(keySet, "iotdevice-local", time.Minute,
+	issuer, err := auth.NewJWTIssuer(keySet, "iotdevice-local", time.Minute, clock.Real(),
 		auth.WithIssuerAudiencesFromSlice([]string{"gocell"}))
 	require.NoError(t, err)
 	token, err := issuer.Issue(auth.TokenIntentAccess, "iot-admin", auth.IssueOptions{

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/runtime/auth"
 	authconfig "github.com/ghbvf/gocell/runtime/auth/config"
 )
@@ -37,6 +38,7 @@ func buildJWTDeps(adapterMode string) (jwtDeps, error) {
 	reg, err := authconfig.FromEnv(
 		authconfig.WithKeys(keySet),
 		authconfig.WithRealMode(true),
+		authconfig.WithEnvClock(clock.Real()),
 	)
 	if err != nil {
 		return jwtDeps{}, fmt.Errorf("build JWT registry: %w", err)

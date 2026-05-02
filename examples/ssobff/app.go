@@ -140,7 +140,7 @@ func NewSSOBFFApp(opts ...SSOBFFAppOption) (*SSOBFFApp, error) {
 		return nil, fmt.Errorf("ssobff: configure internal listener auth: %w", err)
 	}
 
-	eb := eventbus.New()
+	eb := eventbus.New(eventbus.WithClock(clock.Real()))
 	// Demo only: test keys are generated in-process, so tokens do not survive
 	// restart and cannot be verified by another replica.
 	jwtIssuer, jwtVerifier, err := newSSOBFFJWT()
@@ -197,6 +197,7 @@ func NewSSOBFFApp(opts ...SSOBFFAppOption) (*SSOBFFApp, error) {
 	}
 
 	b := bootstrap.New(
+		bootstrap.WithClock(clock.Real()),
 		bootstrap.WithAssembly(asm),
 		bootstrap.WithPublisher(eb),
 		bootstrap.WithSubscriber(eb),
@@ -226,16 +227,16 @@ func defaultSSOBFFAppConfig() *ssobffAppConfig {
 
 func newSSOBFFJWT() (*auth.JWTIssuer, *auth.JWTVerifier, error) {
 	privKey, pubKey := auth.MustGenerateTestKeyPair()
-	keySet, err := auth.NewKeySet(privKey, pubKey)
+	keySet, err := auth.NewKeySet(privKey, pubKey, clock.Real())
 	if err != nil {
 		return nil, nil, fmt.Errorf("ssobff: create key set: %w", err)
 	}
-	jwtIssuer, err := auth.NewJWTIssuer(keySet, "ssobff-dev", 15*time.Minute,
+	jwtIssuer, err := auth.NewJWTIssuer(keySet, "ssobff-dev", 15*time.Minute, clock.Real(),
 		auth.WithIssuerAudiencesFromSlice([]string{"gocell"}))
 	if err != nil {
 		return nil, nil, fmt.Errorf("ssobff: create JWT issuer: %w", err)
 	}
-	jwtVerifier, err := auth.NewJWTVerifier(keySet,
+	jwtVerifier, err := auth.NewJWTVerifier(keySet, clock.Real(),
 		auth.WithExpectedAudiences("gocell"),
 		auth.WithExpectedIssuer("ssobff-dev"))
 	if err != nil {

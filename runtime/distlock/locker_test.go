@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/clock/clockmock"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/runtime/distlock"
@@ -52,7 +53,7 @@ func mgr(l distlock.Locker) *distlock.Manager {
 
 // newTestLocker constructs a Locker backed by FakeDriver + clockmock.FakeClock.
 func newTestLocker(fc *clockmock.FakeClock, fd *locktest.FakeDriver) distlock.Locker {
-	return distlock.MustNew(fd, distlock.WithClock(fc))
+	return distlock.MustNew(fd, fc)
 }
 
 type typedNilDriver struct{}
@@ -167,8 +168,7 @@ func TestLocker_TC3_RenewError_LockLost(t *testing.T) {
 	fc := clockmock.New(time.Time{})
 	fd := locktest.NewFakeDriver()
 	// Use maxRenewAttempts=1 so a single injected error exhausts the budget.
-	l := distlock.MustNew(fd,
-		distlock.WithClock(fc),
+	l := distlock.MustNew(fd, fc,
 		distlock.WithMaxRenewAttempts(1),
 	)
 
@@ -641,8 +641,7 @@ func TestLocker_TC12_DriftFactor(t *testing.T) {
 
 	const driftFactor = 0.01
 	const renewFraction = 0.5
-	l := distlock.MustNew(fd,
-		distlock.WithClock(fc),
+	l := distlock.MustNew(fd, fc,
 		distlock.WithDriftFactor(driftFactor),
 		distlock.WithRenewFraction(renewFraction),
 	)
@@ -778,12 +777,12 @@ func TestLocker_New_PanicsOnNilDriver(t *testing.T) {
 			t.Error("New(nil) should panic")
 		}
 	}()
-	_ = distlock.MustNew(nil)
+	_ = distlock.MustNew(nil, clock.Real())
 }
 
 func TestLocker_New_ReturnsErrorOnTypedNilDriver(t *testing.T) {
 	var driver *typedNilDriver
-	locker, err := distlock.New(driver)
+	locker, err := distlock.New(driver, clock.Real())
 	if err == nil {
 		t.Fatal("New(typed nil driver) should return error")
 	}
@@ -812,7 +811,7 @@ func TestLocker_New_PanicsOnInvalidRenewFraction(t *testing.T) {
 					t.Errorf("New with renewFraction=%v should panic", tc.fraction)
 				}
 			}()
-			_ = distlock.MustNew(fd, distlock.WithRenewFraction(tc.fraction))
+			_ = distlock.MustNew(fd, clock.Real(), distlock.WithRenewFraction(tc.fraction))
 		})
 	}
 }
@@ -835,7 +834,7 @@ func TestLocker_New_PanicsOnInvalidDriftFactor(t *testing.T) {
 					t.Errorf("New with driftFactor=%v should panic", tc.factor)
 				}
 			}()
-			_ = distlock.MustNew(fd, distlock.WithDriftFactor(tc.factor))
+			_ = distlock.MustNew(fd, clock.Real(), distlock.WithDriftFactor(tc.factor))
 		})
 	}
 }
@@ -857,7 +856,7 @@ func TestLocker_New_PanicsOnNonPositiveReleaseTimeout(t *testing.T) {
 					t.Errorf("New with releaseTimeout=%v should panic", tc.timeout)
 				}
 			}()
-			_ = distlock.MustNew(fd, distlock.WithReleaseTimeout(tc.timeout))
+			_ = distlock.MustNew(fd, clock.Real(), distlock.WithReleaseTimeout(tc.timeout))
 		})
 	}
 }
@@ -962,8 +961,7 @@ func TestLocker_ConcurrentRelease(t *testing.T) {
 func TestLocker_ExtremeTTL_LongDuration(t *testing.T) {
 	fc := clockmock.New(time.Time{})
 	fd := locktest.NewFakeDriverWithClock(fc.Now)
-	l := distlock.MustNew(fd,
-		distlock.WithClock(fc),
+	l := distlock.MustNew(fd, fc,
 		distlock.WithRenewFraction(0.5),
 	)
 
@@ -997,8 +995,7 @@ func TestLocker_ExtremeTTL_LongDuration(t *testing.T) {
 func TestLocker_ExtremeTTL_ShortDuration(t *testing.T) {
 	fc := clockmock.New(time.Time{})
 	fd := locktest.NewFakeDriverWithClock(fc.Now)
-	l := distlock.MustNew(fd,
-		distlock.WithClock(fc),
+	l := distlock.MustNew(fd, fc,
 		distlock.WithRenewFraction(0.5),
 	)
 
@@ -1192,7 +1189,7 @@ func TestLocker_WithMaxRenewAttempts_Validation(t *testing.T) {
 					t.Errorf("New with maxRenewAttempts=%d should panic", tc.n)
 				}
 			}()
-			_ = distlock.MustNew(fd, distlock.WithMaxRenewAttempts(tc.n))
+			_ = distlock.MustNew(fd, clock.Real(), distlock.WithMaxRenewAttempts(tc.n))
 		})
 	}
 }

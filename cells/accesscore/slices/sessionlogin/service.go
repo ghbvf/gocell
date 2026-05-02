@@ -42,13 +42,12 @@ func WithTxManager(tx persistence.TxRunner) Option {
 	return func(s *Service) { s.txRunner = persistence.RunnerOrNoop(tx) }
 }
 
-// WithClock sets the clock used for session creation timestamps. Defaults to
-// clock.Real() when not provided.
+// WithClock sets the clock used for session creation timestamps.
+// clk must not be nil; pass clock.Real() for production use.
 func WithClock(clk clock.Clock) Option {
 	return func(s *Service) {
-		if clk != nil {
-			s.clock = clk
-		}
+		clock.MustHaveClock(clk, "sessionlogin.WithClock")
+		s.clock = clk
 	}
 }
 
@@ -104,11 +103,11 @@ func NewService(
 		emitter:      outbox.NewNoopEmitter(),
 		issuer:       issuer,
 		logger:       logger,
-		clock:        clock.Real(),
 	}
 	for _, o := range opts {
 		o(s)
 	}
+	clock.MustHaveClock(s.clock, "sessionlogin.NewService: clock required — use WithClock(c.clk)")
 	return s, nil
 }
 
@@ -161,6 +160,7 @@ func (s *Service) Login(ctx context.Context, input LoginInput) (dto.TokenPair, e
 	minted, err := sessionmint.MintAccess(ctx, sessionmint.Deps{
 		Issuer:   s.issuer,
 		RoleRepo: s.roleRepo,
+		Clk:      s.clock,
 	}, sessionmint.Request{
 		UserID:                user.ID,
 		SessionID:             sessionID,
@@ -300,6 +300,7 @@ func (s *Service) IssueForUser(ctx context.Context, userID string) (dto.TokenPai
 	minted, err := sessionmint.MintAccess(ctx, sessionmint.Deps{
 		Issuer:   s.issuer,
 		RoleRepo: s.roleRepo,
+		Clk:      s.clock,
 	}, sessionmint.Request{
 		UserID:                userID,
 		SessionID:             sessionID,

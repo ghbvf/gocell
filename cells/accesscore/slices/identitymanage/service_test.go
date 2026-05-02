@@ -39,8 +39,8 @@ func adminCtxForService() context.Context {
 var minimalStubIssuer TokenIssuer = &stubTokenIssuer{}
 
 func newTestService() *Service {
-	svc, err := NewService(mem.NewUserRepository(), mem.NewSessionRepository(), newIdentityRefreshStore(), slog.Default(),
-		WithTokenIssuer(minimalStubIssuer))
+	svc, err := NewService(mem.NewUserRepository(), mem.NewSessionRepository(clock.Real()), newIdentityRefreshStore(), slog.Default(),
+		WithTokenIssuer(minimalStubIssuer), WithClock(clock.Real()))
 	if err != nil {
 		panic("newTestService: " + err.Error())
 	}
@@ -51,7 +51,7 @@ func newTestService() *Service {
 // error when WithTokenIssuer is omitted or nil, enforcing fail-fast wiring.
 func TestNewService_RequiresTokenIssuer(t *testing.T) {
 	t.Run("no WithTokenIssuer option", func(t *testing.T) {
-		svc, err := NewService(mem.NewUserRepository(), mem.NewSessionRepository(), newIdentityRefreshStore(), slog.Default())
+		svc, err := NewService(mem.NewUserRepository(), mem.NewSessionRepository(clock.Real()), newIdentityRefreshStore(), slog.Default())
 		require.Error(t, err, "NewService without WithTokenIssuer must fail")
 		assert.Nil(t, svc)
 		var ec *errcode.Error
@@ -60,7 +60,7 @@ func TestNewService_RequiresTokenIssuer(t *testing.T) {
 	})
 
 	t.Run("WithTokenIssuer(nil)", func(t *testing.T) {
-		svc, err := NewService(mem.NewUserRepository(), mem.NewSessionRepository(), newIdentityRefreshStore(), slog.Default(),
+		svc, err := NewService(mem.NewUserRepository(), mem.NewSessionRepository(clock.Real()), newIdentityRefreshStore(), slog.Default(),
 			WithTokenIssuer(nil))
 		require.Error(t, err, "NewService with nil tokenIssuer must fail")
 		assert.Nil(t, svc)
@@ -115,9 +115,9 @@ func TestService_LockUnlock(t *testing.T) {
 }
 
 func TestService_Lock_RevokesSession(t *testing.T) {
-	sessionRepo := mem.NewSessionRepository()
+	sessionRepo := mem.NewSessionRepository(clock.Real())
 	svc, err := NewService(mem.NewUserRepository(), sessionRepo, newIdentityRefreshStore(), slog.Default(),
-		WithTokenIssuer(minimalStubIssuer))
+		WithTokenIssuer(minimalStubIssuer), WithClock(clock.Real()))
 	require.NoError(t, err)
 
 	user, err := svc.Create(adminCtxForService(), CreateInput{
@@ -228,8 +228,8 @@ func newServiceWithIssuer(issuer TokenIssuer) (*Service, *mem.UserRepository) {
 	if effectiveIssuer == nil {
 		effectiveIssuer = minimalStubIssuer
 	}
-	svc, err := NewService(repo, mem.NewSessionRepository(), newIdentityRefreshStore(), slog.Default(),
-		WithTokenIssuer(effectiveIssuer))
+	svc, err := NewService(repo, mem.NewSessionRepository(clock.Real()), newIdentityRefreshStore(), slog.Default(),
+		WithTokenIssuer(effectiveIssuer), WithClock(clock.Real()))
 	if err != nil {
 		panic("newServiceWithIssuer: " + err.Error())
 	}
@@ -349,10 +349,10 @@ func TestService_ChangePassword_IssuerError(t *testing.T) {
 // The freshly issued replacement pair is not itself revoked.
 func TestService_ChangePassword_RevokesPriorSessions(t *testing.T) {
 	userRepo := mem.NewUserRepository()
-	sessionRepo := mem.NewSessionRepository()
+	sessionRepo := mem.NewSessionRepository(clock.Real())
 	stub := &stubTokenIssuer{pair: dto.TokenPair{AccessToken: "new-at", SessionID: "sess-new"}}
 	svc, err := NewService(userRepo, sessionRepo, newIdentityRefreshStore(), slog.Default(),
-		WithTokenIssuer(stub))
+		WithTokenIssuer(stub), WithClock(clock.Real()))
 	require.NoError(t, err)
 
 	seedUserWithHash(t, userRepo, "cp-revoke", "oldpass", false)
@@ -429,7 +429,7 @@ func (s *snapshotTxRunner) RunInTx(ctx context.Context, fn func(ctx context.Cont
 func TestService_ChangePassword_RevokeFailureAbortsAndNoToken(t *testing.T) {
 	userRepo := mem.NewUserRepository()
 	sessionRepo := &revokeFailingSessionRepo{
-		SessionRepository: mem.NewSessionRepository(),
+		SessionRepository: mem.NewSessionRepository(clock.Real()),
 		err:               errors.New("transient DB error"),
 	}
 	issuerCalled := false
@@ -439,7 +439,8 @@ func TestService_ChangePassword_RevokeFailureAbortsAndNoToken(t *testing.T) {
 	spyIssuer := &recordingTokenIssuer{inner: stub, called: &issuerCalled}
 	svc, err := NewService(userRepo, sessionRepo, newIdentityRefreshStore(), slog.Default(),
 		WithTokenIssuer(spyIssuer),
-		WithTxManager(&snapshotTxRunner{repo: userRepo, userID: "usr-cp-tx-fail"}))
+		WithTxManager(&snapshotTxRunner{repo: userRepo, userID: "usr-cp-tx-fail"}),
+		WithClock(clock.Real()))
 	require.NoError(t, err)
 
 	seedUserWithHash(t, userRepo, "cp-tx-fail", "oldpass", false)
@@ -563,14 +564,14 @@ func (f failingPublisher) Close(_ context.Context) error                       {
 // path was wrapped in a v1 envelope (P1-14 follow-up).
 func TestService_Create_PublishError_DoesNotFailCreate(t *testing.T) {
 	userRepo := mem.NewUserRepository()
-	sessionRepo := mem.NewSessionRepository()
+	sessionRepo := mem.NewSessionRepository(clock.Real())
 	fp := failingPublisher{err: errors.New("broker unavailable")}
 	emitter, err := outbox.NewDirectEmitter(
 		fp, outbox.DirectPublishFailOpen, metrics.NopProvider{}, clock.Real(), "accesscore",
 		outbox.WithLogger(slog.Default()))
 	require.NoError(t, err)
 	svc, err := NewService(userRepo, sessionRepo, newIdentityRefreshStore(), slog.Default(),
-		WithEmitter(emitter), WithTokenIssuer(&stubTokenIssuer{}))
+		WithEmitter(emitter), WithTokenIssuer(&stubTokenIssuer{}), WithClock(clock.Real()))
 	require.NoError(t, err)
 
 	user, err := svc.Create(adminCtxForService(), CreateInput{
@@ -647,9 +648,9 @@ func newAtomicitySvc(t *testing.T) (*Service, *observingUserRepo, *recordingTxRu
 	t.Helper()
 	runner := &recordingTxRunner{}
 	repo := &observingUserRepo{UserRepository: mem.NewUserRepository(), runner: runner}
-	svc, err := NewService(repo, mem.NewSessionRepository(), newIdentityRefreshStore(), slog.Default(),
+	svc, err := NewService(repo, mem.NewSessionRepository(clock.Real()), newIdentityRefreshStore(), slog.Default(),
 		WithTokenIssuer(minimalStubIssuer),
-		WithTxManager(runner))
+		WithTxManager(runner), WithClock(clock.Real()))
 	require.NoError(t, err)
 	return svc, repo, runner
 }
@@ -747,9 +748,9 @@ func TestService_Unlock_UpdateErrorPropagatesAndAbortsBeforeLog(t *testing.T) {
 
 	failRepo := &failingUpdateRepo{UserRepository: innerRepo, updateErr: errors.New("disk full")}
 	runner := &recordingTxRunner{}
-	svc, err := NewService(failRepo, mem.NewSessionRepository(), newIdentityRefreshStore(), slog.Default(),
+	svc, err := NewService(failRepo, mem.NewSessionRepository(clock.Real()), newIdentityRefreshStore(), slog.Default(),
 		WithTokenIssuer(minimalStubIssuer),
-		WithTxManager(runner))
+		WithTxManager(runner), WithClock(clock.Real()))
 	require.NoError(t, err)
 
 	err = svc.Unlock(adminCtxForService(), "usr-rb")
@@ -768,9 +769,9 @@ func TestService_Unlock_UpdateErrorPropagatesAndAbortsBeforeLog(t *testing.T) {
 func TestService_Create_BlankUsername_RejectsBeforeRepoCreate(t *testing.T) {
 	runner := &recordingTxRunner{}
 	repo := &observingUserRepo{UserRepository: mem.NewUserRepository(), runner: runner}
-	svc, err := NewService(repo, mem.NewSessionRepository(), newIdentityRefreshStore(), slog.Default(),
+	svc, err := NewService(repo, mem.NewSessionRepository(clock.Real()), newIdentityRefreshStore(), slog.Default(),
 		WithTokenIssuer(minimalStubIssuer),
-		WithTxManager(runner))
+		WithTxManager(runner), WithClock(clock.Real()))
 	require.NoError(t, err)
 
 	user, err := svc.Create(adminCtxForService(), CreateInput{
@@ -792,9 +793,9 @@ func TestService_Create_BlankUsername_RejectsBeforeRepoCreate(t *testing.T) {
 func TestService_Create_BlankEmail_RejectsBeforeRepoCreate(t *testing.T) {
 	runner := &recordingTxRunner{}
 	repo := &observingUserRepo{UserRepository: mem.NewUserRepository(), runner: runner}
-	svc, err := NewService(repo, mem.NewSessionRepository(), newIdentityRefreshStore(), slog.Default(),
+	svc, err := NewService(repo, mem.NewSessionRepository(clock.Real()), newIdentityRefreshStore(), slog.Default(),
 		WithTokenIssuer(minimalStubIssuer),
-		WithTxManager(runner))
+		WithTxManager(runner), WithClock(clock.Real()))
 	require.NoError(t, err)
 
 	user, err := svc.Create(adminCtxForService(), CreateInput{
@@ -819,9 +820,9 @@ func TestService_Create_BlankEmail_RejectsBeforeRepoCreate(t *testing.T) {
 func TestService_Create_BlankPassword_RoutesIdentityInvalidInputCode(t *testing.T) {
 	runner := &recordingTxRunner{}
 	repo := &observingUserRepo{UserRepository: mem.NewUserRepository(), runner: runner}
-	svc, err := NewService(repo, mem.NewSessionRepository(), newIdentityRefreshStore(), slog.Default(),
+	svc, err := NewService(repo, mem.NewSessionRepository(clock.Real()), newIdentityRefreshStore(), slog.Default(),
 		WithTokenIssuer(minimalStubIssuer),
-		WithTxManager(runner))
+		WithTxManager(runner), WithClock(clock.Real()))
 	require.NoError(t, err)
 
 	user, err := svc.Create(adminCtxForService(), CreateInput{
@@ -910,8 +911,8 @@ func TestService_Lock_RefreshRevokeFailureAbortsBeforePublishAndLog(t *testing.T
 	var buf bytes.Buffer
 	logger := slog.New(slog.NewJSONHandler(&buf, nil))
 
-	svc, err := NewService(userRepo, mem.NewSessionRepository(), failRefresh, logger,
-		WithEmitter(emitter), WithTokenIssuer(minimalStubIssuer))
+	svc, err := NewService(userRepo, mem.NewSessionRepository(clock.Real()), failRefresh, logger,
+		WithEmitter(emitter), WithTokenIssuer(minimalStubIssuer), WithClock(clock.Real()))
 	require.NoError(t, err)
 
 	err = svc.Lock(adminCtxForService(), "usr-rf-fail")
@@ -950,8 +951,8 @@ func TestService_Lock_EmitsTypedPayload(t *testing.T) {
 	require.NoError(t, err)
 
 	cap := &capturingEmitter{}
-	svc2, err := NewService(mem.NewUserRepository(), mem.NewSessionRepository(), newIdentityRefreshStore(), slog.Default(),
-		WithEmitter(cap), WithTokenIssuer(minimalStubIssuer))
+	svc2, err := NewService(mem.NewUserRepository(), mem.NewSessionRepository(clock.Real()), newIdentityRefreshStore(), slog.Default(),
+		WithEmitter(cap), WithTokenIssuer(minimalStubIssuer), WithClock(clock.Real()))
 	require.NoError(t, err)
 	// Create user in svc2's own repo.
 	user2, err := svc2.Create(adminCtxForService(), CreateInput{Username: user.Username + "2", Email: "lp2@e.t", Password: "hash"})
@@ -975,8 +976,8 @@ func TestService_Lock_EmitsTypedPayload(t *testing.T) {
 // with non-empty userId and actorId.
 func TestService_Update_EmitsTypedPayload(t *testing.T) {
 	cap := &capturingEmitter{}
-	svc, err := NewService(mem.NewUserRepository(), mem.NewSessionRepository(), newIdentityRefreshStore(), slog.Default(),
-		WithEmitter(cap), WithTokenIssuer(minimalStubIssuer))
+	svc, err := NewService(mem.NewUserRepository(), mem.NewSessionRepository(clock.Real()), newIdentityRefreshStore(), slog.Default(),
+		WithEmitter(cap), WithTokenIssuer(minimalStubIssuer), WithClock(clock.Real()))
 	require.NoError(t, err)
 
 	user, err := svc.Create(adminCtxForService(), CreateInput{Username: "upd-payload", Email: "up@e.t", Password: "hash"})
@@ -1000,8 +1001,8 @@ func TestService_Update_EmitsTypedPayload(t *testing.T) {
 // with non-empty userId and actorId.
 func TestService_Delete_EmitsTypedPayload(t *testing.T) {
 	cap := &capturingEmitter{}
-	svc, err := NewService(mem.NewUserRepository(), mem.NewSessionRepository(), newIdentityRefreshStore(), slog.Default(),
-		WithEmitter(cap), WithTokenIssuer(minimalStubIssuer))
+	svc, err := NewService(mem.NewUserRepository(), mem.NewSessionRepository(clock.Real()), newIdentityRefreshStore(), slog.Default(),
+		WithEmitter(cap), WithTokenIssuer(minimalStubIssuer), WithClock(clock.Real()))
 	require.NoError(t, err)
 
 	user, err := svc.Create(adminCtxForService(), CreateInput{Username: "del-payload", Email: "dp@e.t", Password: "hash"})
@@ -1023,8 +1024,8 @@ func TestService_Delete_EmitsTypedPayload(t *testing.T) {
 // with non-empty userId and actorId.
 func TestService_Unlock_EmitsTypedPayload(t *testing.T) {
 	cap := &capturingEmitter{}
-	svc, err := NewService(mem.NewUserRepository(), mem.NewSessionRepository(), newIdentityRefreshStore(), slog.Default(),
-		WithEmitter(cap), WithTokenIssuer(minimalStubIssuer))
+	svc, err := NewService(mem.NewUserRepository(), mem.NewSessionRepository(clock.Real()), newIdentityRefreshStore(), slog.Default(),
+		WithEmitter(cap), WithTokenIssuer(minimalStubIssuer), WithClock(clock.Real()))
 	require.NoError(t, err)
 
 	user, err := svc.Create(adminCtxForService(), CreateInput{Username: "unl-payload", Email: "ulp@e.t", Password: "hash"})
@@ -1075,8 +1076,8 @@ func TestService_Lock_PublishFailureAbortsBeforeLog(t *testing.T) {
 	var buf bytes.Buffer
 	logger := slog.New(slog.NewJSONHandler(&buf, nil))
 
-	svc, err := NewService(userRepo, mem.NewSessionRepository(), newIdentityRefreshStore(), logger,
-		WithEmitter(emitter), WithTokenIssuer(minimalStubIssuer))
+	svc, err := NewService(userRepo, mem.NewSessionRepository(clock.Real()), newIdentityRefreshStore(), logger,
+		WithEmitter(emitter), WithTokenIssuer(minimalStubIssuer), WithClock(clock.Real()))
 	require.NoError(t, err)
 
 	err = svc.Lock(adminCtxForService(), "usr-pub-fail")

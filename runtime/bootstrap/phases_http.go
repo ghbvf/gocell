@@ -77,7 +77,7 @@ func (b *Bootstrap) phase5InitHealthHandler(s *phaseState) error {
 	if cfg.verboseDisabled {
 		hhOpts = append(hhOpts, health.WithVerboseDisabled())
 	}
-	hh := health.New(s.asm, hhOpts...)
+	hh := health.New(s.asm, b.clock, hhOpts...)
 	if b.adapterInfo != nil {
 		hh.SetAdapterInfo(b.adapterInfo)
 	}
@@ -317,7 +317,12 @@ func (b *Bootstrap) validateAuthVerifierForDeclaredRoutes(ref cell.ListenerRef, 
 // the JWT verifier is installed via router.WithAuthMiddleware so the router
 // can build matcher-aware AuthMiddleware after FinalizeAuth.
 func (b *Bootstrap) buildListenerRouterOpts(_ *phaseState, ref cell.ListenerRef, cfg listenerConfig) ([]router.Option, error) {
-	opts := make([]router.Option, 0, len(b.routerOpts)+6)
+	opts := make([]router.Option, 0, len(b.routerOpts)+7)
+	// Always inject the bootstrap clock into every listener router so that
+	// middleware.AccessLog and middleware.Metrics get a real clock. This must
+	// come before b.routerOpts so a caller-supplied WithRouterClock can
+	// override it.
+	opts = append(opts, router.WithRouterClock(b.clock))
 	opts = append(opts, b.routerOpts...)
 
 	// R2: auto-wire HTTP metrics collector when a Provider is configured.
@@ -417,7 +422,10 @@ func (b *Bootstrap) autoWireHTTPMetricsCollector(opts []router.Option) ([]router
 // buildAuthRouterOptions assembles the auth-middleware and optional metrics
 // options for the given verifier.
 func (b *Bootstrap) buildAuthRouterOptions(v auth.IntentTokenVerifier) ([]router.Option, error) {
-	opts := []router.Option{router.WithAuthMiddleware(v)}
+	opts := []router.Option{
+		router.WithAuthMiddleware(v),
+		router.WithRouterClock(b.clock),
+	}
 	if b.metricsProvider == nil {
 		return opts, nil
 	}

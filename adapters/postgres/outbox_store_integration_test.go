@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ghbvf/gocell/kernel/clock"
 	kout "github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	rout "github.com/ghbvf/gocell/runtime/outbox"
@@ -41,7 +42,7 @@ func TestPGOutboxStore_ConformanceSuite(t *testing.T) {
 		for _, ce := range seed {
 			insertSeedRow(t, pool, ce)
 		}
-		return NewOutboxStore(pool.DB())
+		return NewOutboxStore(pool.DB(), clock.Real())
 	}
 
 	outboxtest.RunStoreConformanceSuite(t, factory)
@@ -74,7 +75,7 @@ func TestPGOutboxStore_RelayPublishesRollbackStateBeforeAudit(t *testing.T) {
 		CreatedAt:     base.Add(time.Microsecond),
 	}})
 
-	store := NewOutboxStore(pool.DB())
+	store := NewOutboxStore(pool.DB(), clock.Real())
 	pub := &recordingPublisher{}
 	relay := rout.NewRelay(store, pub, rout.RelayConfig{
 		PollInterval:        testtime.FastPoll,
@@ -87,6 +88,7 @@ func TestPGOutboxStore_RelayPublishesRollbackStateBeforeAudit(t *testing.T) {
 		RetentionPeriod:     time.Hour,
 		DeadRetentionPeriod: time.Hour,
 		CleanupWaitFloor:    testtime.MediumPoll,
+		Clock:               clock.Real(),
 	})
 
 	runCtx, cancel := context.WithCancel(ctx)

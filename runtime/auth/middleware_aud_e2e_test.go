@@ -17,6 +17,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
@@ -44,7 +45,7 @@ func TestAuthMiddleware_AudienceE2E_RealServer(t *testing.T) {
 			token, err := issuer.Issue(TokenIntentAccess, "alice", opts)
 			require.NoError(t, err)
 
-			srv := httptest.NewServer(AuthMiddleware(verifier)(audProtectedHandler))
+			srv := httptest.NewServer(AuthMiddleware(verifier, WithAuthClock(clock.Real()))(audProtectedHandler))
 			t.Cleanup(srv.Close)
 
 			// Bind the request lifetime to the test's context so that go test's

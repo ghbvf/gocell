@@ -16,6 +16,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 )
 
@@ -23,7 +24,7 @@ import (
 // times without error (atomic closed flag guard).
 func TestPublisher_Close_Idempotent(t *testing.T) {
 	conn, _ := newTestConnection(t)
-	pub := NewPublisher(conn)
+	pub := NewPublisher(conn, WithPublisherClock(clock.Real()))
 
 	ctx := context.Background()
 	assert.NoError(t, pub.Close(ctx), "first Close must succeed")
@@ -34,7 +35,7 @@ func TestPublisher_Close_Idempotent(t *testing.T) {
 // pre-canceled ctx returns the ctx error promptly (< 50ms) without hanging.
 func TestPublisher_Close_CancelledCtxReturnsImmediately(t *testing.T) {
 	conn, _ := newTestConnection(t)
-	pub := NewPublisher(conn)
+	pub := NewPublisher(conn, WithPublisherClock(clock.Real()))
 
 	cancelledCtx, cancel := context.WithCancel(context.Background())
 	cancel() // already canceled
@@ -73,7 +74,7 @@ func TestPublisher_Close_CtxExceeded_ReturnsTimeoutErr(t *testing.T) {
 	mockConn.nextChIface = blocking
 	mockConn.mu.Unlock()
 
-	pub := NewPublisher(conn)
+	pub := NewPublisher(conn, WithPublisherClock(clock.Real()))
 
 	// publishDone is closed when the Publish goroutine exits.
 	publishDone := make(chan struct{})
@@ -139,7 +140,7 @@ func TestPublisher_Close_WaitsForInFlightPublishes(t *testing.T) {
 	mockConn.nextChIface = blocking
 	mockConn.mu.Unlock()
 
-	pub := NewPublisher(conn)
+	pub := NewPublisher(conn, WithPublisherClock(clock.Real()))
 
 	publishStarted := make(chan struct{})
 	publishDone := make(chan error, 1)

@@ -88,6 +88,7 @@ func main() {
 	}
 
 	app := bootstrap.New(
+		bootstrap.WithClock(clock.Real()),
 		bootstrap.WithAssembly(asm),
 		bootstrap.WithListener(cell.PrimaryListener, ":8082",
 			[]cell.ListenerAuth{cell.MustNewAuthJWT(jwtVerifier)}),

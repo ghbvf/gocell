@@ -47,13 +47,13 @@ import (
 
 
 // e2eTestKeySet holds a key pair shared across the e2e test.
-var e2eTestKeySet, _, _ = auth.MustNewTestKeySet()
+var e2eTestKeySet, _, _ = auth.MustNewTestKeySet(clock.Real())
 
 // e2eIssuer is used by the login service.
 // WithIssuerAudiencesFromSlice(["gocell"]) must match the e2eVerifier's
 // WithExpectedAudiences("gocell") so that VerifyIntent passes audience validation.
 var e2eIssuer = func() *auth.JWTIssuer {
-	i, err := auth.NewJWTIssuer(e2eTestKeySet, "gocell-accesscore", testtime.D15min,
+	i, err := auth.NewJWTIssuer(e2eTestKeySet, "gocell-accesscore", testtime.D15min, clock.Real(),
 		auth.WithIssuerAudiencesFromSlice([]string{"gocell"}))
 	if err != nil {
 		panic("e2e test setup: " + err.Error())
@@ -63,7 +63,7 @@ var e2eIssuer = func() *auth.JWTIssuer {
 
 // e2eVerifier is used to decode tokens in assertions.
 var e2eVerifier = func() *auth.JWTVerifier {
-	v, err := auth.NewJWTVerifier(e2eTestKeySet, auth.WithExpectedAudiences("gocell"))
+	v, err := auth.NewJWTVerifier(e2eTestKeySet, clock.Real(), auth.WithExpectedAudiences("gocell"))
 	if err != nil {
 		panic("e2e test setup: " + err.Error())
 	}
@@ -94,7 +94,7 @@ type e2eFixture struct {
 
 func newE2EFixture() *e2eFixture {
 	userRepo := mem.NewUserRepository()
-	sessionRepo := mem.NewSessionRepository()
+	sessionRepo := mem.NewSessionRepository(clock.Real())
 	roleRepo := mem.NewRoleRepository()
 	refreshStore := refreshmem.MustNew(
 		refresh.Policy{ReuseInterval: testtime.D2s, MaxAge: time.Hour},

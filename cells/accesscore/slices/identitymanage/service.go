@@ -74,13 +74,12 @@ func WithTxManager(tx persistence.TxRunner) Option {
 	return func(s *Service) { s.txRunner = persistence.RunnerOrNoop(tx) }
 }
 
-// WithClock sets the clock used for timestamping operations. Defaults to
-// clock.Real() when not provided.
+// WithClock sets the clock used for timestamping operations.
+// clk must not be nil; pass clock.Real() for production use.
 func WithClock(clk clock.Clock) Option {
 	return func(s *Service) {
-		if clk != nil {
-			s.clock = clk
-		}
+		clock.MustHaveClock(clk, "identitymanage.WithClock")
+		s.clock = clk
 	}
 }
 
@@ -133,7 +132,6 @@ func NewService(
 		txRunner:     persistence.NoopTxRunner{},
 		emitter:      outbox.NewNoopEmitter(),
 		logger:       logger,
-		clock:        clock.Real(),
 	}
 	for _, o := range opts {
 		o(s)
@@ -142,6 +140,7 @@ func NewService(
 		return nil, errcode.New(errcode.ErrCellMissingTokenIssuer,
 			"identity-manage: tokenIssuer is required; wire via WithTokenIssuer")
 	}
+	clock.MustHaveClock(s.clock, "identitymanage.NewService: clock required — use WithClock(c.clk)")
 	return s, nil
 }
 

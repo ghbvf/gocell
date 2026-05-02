@@ -14,6 +14,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/ghbvf/gocell/kernel/clock"
+	"github.com/ghbvf/gocell/kernel/clock/clockmock"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 )
@@ -102,7 +104,7 @@ func TestThumbprint_Base64URLEncoded(t *testing.T) {
 func TestNewKeySet_SingleKey(t *testing.T) {
 	priv, pub := generateTestKeyPair(t)
 
-	ks, err := NewKeySet(priv, pub)
+	ks, err := NewKeySet(priv, pub, clock.Real())
 	require.NoError(t, err)
 	assert.NotNil(t, ks)
 	assert.Equal(t, Thumbprint(pub), ks.SigningKeyID())
@@ -112,7 +114,7 @@ func TestNewKeySet_SingleKey(t *testing.T) {
 func TestNewKeySet_PublicKeyByKID(t *testing.T) {
 	priv, pub := generateTestKeyPair(t)
 
-	ks, err := NewKeySet(priv, pub)
+	ks, err := NewKeySet(priv, pub, clock.Real())
 	require.NoError(t, err)
 
 	got, err := ks.PublicKeyByKID(ks.SigningKeyID())
@@ -123,7 +125,7 @@ func TestNewKeySet_PublicKeyByKID(t *testing.T) {
 func TestNewKeySet_UnknownKID(t *testing.T) {
 	priv, pub := generateTestKeyPair(t)
 
-	ks, err := NewKeySet(priv, pub)
+	ks, err := NewKeySet(priv, pub, clock.Real())
 	require.NoError(t, err)
 
 	_, err = ks.PublicKeyByKID("nonexistent-kid")
@@ -135,7 +137,7 @@ func TestNewKeySet_UnknownKID(t *testing.T) {
 }
 
 func TestNewKeySet_NilKeyReturnsError(t *testing.T) {
-	_, err := NewKeySet(nil, nil)
+	_, err := NewKeySet(nil, nil, clock.Real())
 	require.Error(t, err)
 
 	var ecErr *errcode.Error
@@ -147,7 +149,7 @@ func TestNewKeySet_MismatchedKeyPairReturnsError(t *testing.T) {
 	priv1, _ := generateTestKeyPair(t)
 	_, pub2 := generateTestKeyPair(t)
 
-	_, err := NewKeySet(priv1, pub2) // private from pair 1, public from pair 2
+	_, err := NewKeySet(priv1, pub2, clock.Real()) // private from pair 1, public from pair 2
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "do not form a valid pair")
 }
@@ -155,7 +157,7 @@ func TestNewKeySet_MismatchedKeyPairReturnsError(t *testing.T) {
 func TestNewKeySet_WeakKeyReturnsError(t *testing.T) {
 	weakKey := loadWeak1024Key(t)
 
-	_, err := NewKeySet(weakKey, &weakKey.PublicKey)
+	_, err := NewKeySet(weakKey, &weakKey.PublicKey, clock.Real())
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "1024")
 }
@@ -170,7 +172,7 @@ func TestNewKeySetWithVerificationKeys_RejectsWeakKey(t *testing.T) {
 		ExpiresAt: time.Now().Add(time.Hour),
 	}
 
-	_, err := NewKeySetWithVerificationKeys(priv, pub, []VerificationKey{vk})
+	_, err := NewKeySetWithVerificationKeys(priv, pub, clock.Real(), []VerificationKey{vk})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "1024")
 	assert.Contains(t, err.Error(), "verification")
@@ -186,7 +188,7 @@ func TestNewKeySetWithVerificationKeys_RejectsEmptyKeyID(t *testing.T) {
 		ExpiresAt: time.Now().Add(time.Hour),
 	}
 
-	_, err := NewKeySetWithVerificationKeys(priv, pub, []VerificationKey{vk})
+	_, err := NewKeySetWithVerificationKeys(priv, pub, clock.Real(), []VerificationKey{vk})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "must not be empty")
 }
@@ -200,7 +202,7 @@ func TestNewKeySetWithVerificationKeys_RejectsNilPublicKey(t *testing.T) {
 		ExpiresAt: time.Now().Add(time.Hour),
 	}
 
-	_, err := NewKeySetWithVerificationKeys(priv, pub, []VerificationKey{vk})
+	_, err := NewKeySetWithVerificationKeys(priv, pub, clock.Real(), []VerificationKey{vk})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "must not be nil")
 }
@@ -217,7 +219,7 @@ func TestKeySet_VerificationKeyLookup(t *testing.T) {
 		ExpiresAt: time.Now().Add(time.Hour),
 	}
 
-	ks, err := NewKeySetWithVerificationKeys(priv1, pub1, []VerificationKey{vk})
+	ks, err := NewKeySetWithVerificationKeys(priv1, pub1, clock.Real(), []VerificationKey{vk})
 	require.NoError(t, err)
 
 	// Can look up verification key by kid.
@@ -241,7 +243,7 @@ func TestKeySet_OnlySignsWithActiveKey(t *testing.T) {
 		ExpiresAt: time.Now().Add(time.Hour),
 	}
 
-	ks, err := NewKeySetWithVerificationKeys(priv1, pub1, []VerificationKey{vk})
+	ks, err := NewKeySetWithVerificationKeys(priv1, pub1, clock.Real(), []VerificationKey{vk})
 	require.NoError(t, err)
 
 	// SigningKeyID must be the active key, not the verification key.
@@ -261,7 +263,7 @@ func TestKeySet_PruneExpiredKeys(t *testing.T) {
 	}
 
 	// Already-expired keys are pruned at construction time.
-	ks, err := NewKeySetWithVerificationKeys(priv1, pub1, []VerificationKey{vk})
+	ks, err := NewKeySetWithVerificationKeys(priv1, pub1, clock.Real(), []VerificationKey{vk})
 	require.NoError(t, err)
 
 	_, err = ks.PublicKeyByKID(vk.KeyID)
@@ -279,7 +281,8 @@ func TestKeySet_PruneExpired_AfterTimeAdvance(t *testing.T) {
 		ExpiresAt: baseTime.Add(time.Hour),
 	}
 
-	ks, err := NewKeySetWithVerificationKeys(priv1, pub1, []VerificationKey{vk})
+	clk := clockmock.New(baseTime)
+	ks, err := NewKeySetWithVerificationKeys(priv1, pub1, clk, []VerificationKey{vk})
 	require.NoError(t, err)
 
 	// Key should be accessible before expiry.
@@ -287,8 +290,8 @@ func TestKeySet_PruneExpired_AfterTimeAdvance(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, pub2, got)
 
-	// Advance clock past expiry using injectable now func.
-	WithKeySetClock(func() time.Time { return baseTime.Add(testtime.D2h) })(ks)
+	// Advance clock past expiry.
+	clk.Advance(testtime.D2h)
 
 	// Key should be pruned now.
 	_, err = ks.PublicKeyByKID(vk.KeyID)
@@ -305,7 +308,7 @@ func TestKeySet_ZeroExpiryPrunesImmediately(t *testing.T) {
 		ExpiresAt: time.Time{}, // zero value
 	}
 
-	ks, err := NewKeySetWithVerificationKeys(priv1, pub1, []VerificationKey{vk})
+	ks, err := NewKeySetWithVerificationKeys(priv1, pub1, clock.Real(), []VerificationKey{vk})
 	require.NoError(t, err)
 
 	_, err = ks.PublicKeyByKID(vk.KeyID)
@@ -329,7 +332,7 @@ func TestKeySet_RapidRotationReplacesOldest(t *testing.T) {
 	}
 
 	// Both verification keys should be present.
-	ks, err := NewKeySetWithVerificationKeys(priv1, pub1, []VerificationKey{vk1, vk2})
+	ks, err := NewKeySetWithVerificationKeys(priv1, pub1, clock.Real(), []VerificationKey{vk1, vk2})
 	require.NoError(t, err)
 
 	got1, err := ks.PublicKeyByKID(vk1.KeyID)
@@ -349,7 +352,7 @@ func TestLoadKeySetFromEnv_ActiveOnly(t *testing.T) {
 	t.Setenv(EnvJWTPrevPublicKey, "")
 	t.Setenv(EnvJWTPrevKeyExpires, "")
 
-	ks, err := LoadKeySetFromEnv()
+	ks, err := LoadKeySetFromEnv(clock.Real())
 	require.NoError(t, err)
 	assert.NotEmpty(t, ks.SigningKeyID())
 }
@@ -363,7 +366,7 @@ func TestLoadKeySetFromEnv_WithVerificationKey(t *testing.T) {
 	t.Setenv(EnvJWTPrevPublicKey, string(prevPubPEM))
 	t.Setenv(EnvJWTPrevKeyExpires, time.Now().Add(time.Hour).Format(time.RFC3339))
 
-	ks, err := LoadKeySetFromEnv()
+	ks, err := LoadKeySetFromEnv(clock.Real())
 	require.NoError(t, err)
 	assert.NotEmpty(t, ks.SigningKeyID())
 
@@ -381,7 +384,7 @@ func TestLoadKeySetFromEnv_MissingActiveFails(t *testing.T) {
 	t.Setenv(EnvJWTPrivateKey, "")
 	t.Setenv(EnvJWTPublicKey, "")
 
-	_, err := LoadKeySetFromEnv()
+	_, err := LoadKeySetFromEnv(clock.Real())
 	require.Error(t, err)
 
 	var ecErr *errcode.Error
@@ -398,7 +401,7 @@ func TestLoadKeySetFromEnv_PrevKeyMissingExpiryFails(t *testing.T) {
 	t.Setenv(EnvJWTPrevPublicKey, string(prevPubPEM))
 	t.Setenv(EnvJWTPrevKeyExpires, "") // missing
 
-	_, err := LoadKeySetFromEnv()
+	_, err := LoadKeySetFromEnv(clock.Real())
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), EnvJWTPrevKeyExpires)
 }
@@ -411,7 +414,7 @@ func TestLoadKeySetFromEnv_InvalidPrevPEMFails(t *testing.T) {
 	t.Setenv(EnvJWTPrevPublicKey, "not-valid-pem")
 	t.Setenv(EnvJWTPrevKeyExpires, time.Now().Add(time.Hour).Format(time.RFC3339))
 
-	_, err := LoadKeySetFromEnv()
+	_, err := LoadKeySetFromEnv(clock.Real())
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "no PEM block")
 }
@@ -425,7 +428,7 @@ func TestLoadKeySetFromEnv_InvalidExpiryFails(t *testing.T) {
 	t.Setenv(EnvJWTPrevPublicKey, string(prevPubPEM))
 	t.Setenv(EnvJWTPrevKeyExpires, "not-a-date")
 
-	_, err := LoadKeySetFromEnv()
+	_, err := LoadKeySetFromEnv(clock.Real())
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "RFC 3339")
 }
@@ -437,7 +440,7 @@ func TestKeySet_LifecycleLog_Activation(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(&buf, nil))
 
 	priv, pub := generateTestKeyPair(t)
-	_, err := NewKeySet(priv, pub, WithKeySetLogger(logger))
+	_, err := NewKeySet(priv, pub, clock.Real(), WithKeySetLogger(logger))
 	require.NoError(t, err)
 
 	output := buf.String()
@@ -458,7 +461,7 @@ func TestKeySet_LifecycleLog_VerificationOnly(t *testing.T) {
 		ExpiresAt: time.Now().Add(time.Hour),
 	}
 
-	_, err := NewKeySetWithVerificationKeys(priv1, pub1, []VerificationKey{vk}, WithKeySetLogger(logger))
+	_, err := NewKeySetWithVerificationKeys(priv1, pub1, clock.Real(), []VerificationKey{vk}, WithKeySetLogger(logger))
 	require.NoError(t, err)
 
 	output := buf.String()
@@ -480,11 +483,12 @@ func TestKeySet_LifecycleLog_Pruning(t *testing.T) {
 		ExpiresAt: baseTime.Add(time.Hour),
 	}
 
-	ks, err := NewKeySetWithVerificationKeys(priv1, pub1, []VerificationKey{vk}, WithKeySetLogger(logger))
+	clk := clockmock.New(baseTime)
+	ks, err := NewKeySetWithVerificationKeys(priv1, pub1, clk, []VerificationKey{vk}, WithKeySetLogger(logger))
 	require.NoError(t, err)
 
 	// Advance clock past expiry.
-	WithKeySetClock(func() time.Time { return baseTime.Add(testtime.D2h) })(ks)
+	clk.Advance(testtime.D2h)
 
 	// Reset buffer so only PruneExpired log is captured.
 	buf.Reset()
@@ -508,7 +512,7 @@ func TestKeySet_ConcurrentPublicKeyByKID(t *testing.T) {
 		ExpiresAt: time.Now().Add(time.Hour),
 	}
 
-	ks, err := NewKeySetWithVerificationKeys(priv, pub, []VerificationKey{vk})
+	ks, err := NewKeySetWithVerificationKeys(priv, pub, clock.Real(), []VerificationKey{vk})
 	require.NoError(t, err)
 
 	// Run concurrent lookups — go test -race will detect data races.
@@ -538,7 +542,7 @@ func TestKeySet_ConcurrentPruneExpiredAndRead(t *testing.T) {
 		ExpiresAt: time.Now().Add(time.Hour),
 	}
 
-	ks, err := NewKeySetWithVerificationKeys(priv, pub, []VerificationKey{vk})
+	ks, err := NewKeySetWithVerificationKeys(priv, pub, clock.Real(), []VerificationKey{vk})
 	require.NoError(t, err)
 
 	// Run PruneExpired (write lock) concurrently with PublicKeyByKID (read lock).

@@ -123,7 +123,7 @@ func TestOutboxE2E_PGMode_WriteToSubscribe(t *testing.T) {
 	_ = migrationPool.Close(ctx)
 
 	// --- Step 3: Build production-shaped bundle: eb is the relay publisher ---
-	eb := eventbus.New()
+	eb := eventbus.New(eventbus.WithClock(clock.Real()))
 
 	t.Setenv("GOCELL_CELL_ADAPTER_MODE", "postgres")
 
@@ -179,12 +179,12 @@ func TestOutboxE2E_PGMode_WriteToSubscribe(t *testing.T) {
 	hmacKey := []byte("test-hmac-key-32-bytes-long!!!!!")
 
 	privKey, pubKey := auth.MustGenerateTestKeyPair()
-	keySet, err := auth.NewKeySet(privKey, pubKey)
+	keySet, err := auth.NewKeySet(privKey, pubKey, clock.Real())
 	require.NoError(t, err)
-	jwtIssuer, err := auth.NewJWTIssuer(keySet, "test", testtime.D15min,
+	jwtIssuer, err := auth.NewJWTIssuer(keySet, "test", testtime.D15min, clock.Real(),
 		auth.WithIssuerAudiencesFromSlice([]string{"gocell"}))
 	require.NoError(t, err)
-	jwtVerifier, err := auth.NewJWTVerifier(keySet, auth.WithExpectedAudiences("gocell"))
+	jwtVerifier, err := auth.NewJWTVerifier(keySet, clock.Real(), auth.WithExpectedAudiences("gocell"))
 	require.NoError(t, err)
 
 	cursorCodec, err := query.NewCursorCodec([]byte("test-config-cursor-key-32bytes!!"))
@@ -481,7 +481,7 @@ func TestOutboxE2E_RefetchLoop_AccessCoreCallsInternalGet(t *testing.T) {
 	_ = migrationPool.Close(ctx)
 
 	// --- Step 3: Build production-shaped bundle ---
-	eb := eventbus.New()
+	eb := eventbus.New(eventbus.WithClock(clock.Real()))
 	t.Setenv("GOCELL_CELL_ADAPTER_MODE", "postgres")
 
 	modResult, err := buildConfigCoreOpts(ctx, ConfigCoreModuleConfig{
@@ -539,12 +539,12 @@ func TestOutboxE2E_RefetchLoop_AccessCoreCallsInternalGet(t *testing.T) {
 	hmacKey := []byte("test-hmac-key-32-bytes-long!!!!!")
 
 	privKey, pubKey := auth.MustGenerateTestKeyPair()
-	keySet, err := auth.NewKeySet(privKey, pubKey)
+	keySet, err := auth.NewKeySet(privKey, pubKey, clock.Real())
 	require.NoError(t, err)
-	jwtIssuer, err := auth.NewJWTIssuer(keySet, "test", testtime.D15min,
+	jwtIssuer, err := auth.NewJWTIssuer(keySet, "test", testtime.D15min, clock.Real(),
 		auth.WithIssuerAudiencesFromSlice([]string{"gocell"}))
 	require.NoError(t, err)
-	jwtVerifier, err := auth.NewJWTVerifier(keySet, auth.WithExpectedAudiences("gocell"))
+	jwtVerifier, err := auth.NewJWTVerifier(keySet, clock.Real(), auth.WithExpectedAudiences("gocell"))
 	require.NoError(t, err)
 
 	cursorCodec, err := query.NewCursorCodec([]byte("test-config-cursor-key-32bytes!!"))
@@ -570,7 +570,7 @@ func TestOutboxE2E_RefetchLoop_AccessCoreCallsInternalGet(t *testing.T) {
 		accesscore.WithJWTVerifier(jwtVerifier),
 		accesscore.WithInitialAdminBootstrap(),
 		accesscore.WithMetricsProvider(kernelmetrics.NopProvider{}),
-		configgetter.WithHTTP(internalSrv.URL, testRing),
+		configgetter.WithHTTP(internalSrv.URL, testRing, clock.Real()),
 	)
 	auditCell := auditcore.NewAuditCore(
 		auditcore.WithInMemoryDefaults(),

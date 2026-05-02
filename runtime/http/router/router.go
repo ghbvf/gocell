@@ -24,6 +24,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	kcell "github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/wrapper"
 	"github.com/ghbvf/gocell/pkg/ctxkeys"
 	"github.com/ghbvf/gocell/pkg/errcode"
@@ -250,6 +251,13 @@ func WithSuppressNoAuthVerifierWarn() Option {
 	}
 }
 
+// WithRouterClock sets the clock used by the router's auth middleware for
+// latency metric recording. Required when WithAuthMiddleware is also supplied;
+// auth.AuthMiddleware panics on nil clock.
+func WithRouterClock(clk clock.Clock) Option {
+	return func(r *Router) { r.clock = clk }
+}
+
 // WithDefaultMiddleware appends middleware functions to the router's default
 // middleware chain. These are installed AFTER the early-responder layer and
 // BEFORE the per-router protections (rate-limiter, circuit-breaker, auth).
@@ -318,6 +326,10 @@ type Router struct {
 	// service-token gates) so their startup does not produce false alarms.
 	// R2-11 ops noise fix.
 	suppressNoVerifierWarn bool
+
+	// clock is required when authVerifier is set; passed to auth.AuthMiddleware
+	// via auth.WithAuthClock so the auth middleware can record latency metrics.
+	clock clock.Clock
 
 	// earlyResponders runs as middleware BEFORE the policy layer; the first
 	// matching predicate writes a response and short-circuits the chain.
@@ -489,9 +501,9 @@ func (r *Router) buildMux(realIPMW func(http.Handler) http.Handler) error {
 	if r.tracer != nil {
 		r.mux.Use(middleware.Tracing(r.tracer, r.tracingOpts...))
 	}
-	r.mux.Use(middleware.AccessLog)
+	r.mux.Use(middleware.AccessLog(r.clock))
 	if r.metricsCollector != nil {
-		r.mux.Use(middleware.Metrics(r.metricsCollector))
+		r.mux.Use(middleware.Metrics(r.metricsCollector, r.clock))
 	}
 	r.mux.Use(
 		middleware.Recovery,
@@ -539,6 +551,7 @@ func (r *Router) buildMux(realIPMW func(http.Handler) http.Handler) error {
 // buildAuthOpts constructs the AuthOption slice for the auth middleware.
 func (r *Router) buildAuthOpts() []auth.AuthOption {
 	opts := []auth.AuthOption{
+		auth.WithAuthClock(r.clock),
 		auth.WithPublicEndpointMatcher(func(req *http.Request) bool {
 			if r.authPublicMatcher == nil {
 				return false

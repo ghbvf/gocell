@@ -66,9 +66,7 @@ func sweep(ctx context.Context, cfg sweepConfig) (sweepResult, error) {
 		cfg.Logger = slog.Default()
 	}
 	clk := cfg.Clock
-	if clk == nil {
-		clk = clock.Real()
-	}
+	clock.MustHaveClock(clk, "initialadmin.sweep")
 
 	credPath, err := resolveSweepCredentialPath(cfg.CredentialPath)
 	if err != nil {

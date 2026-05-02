@@ -5,7 +5,6 @@ import (
 	"log/slog"
 	"sync"
 	"sync/atomic"
-	"time"
 
 	amqp "github.com/rabbitmq/amqp091-go"
 
@@ -37,22 +36,24 @@ type Publisher struct {
 // PublisherOption configures a Publisher.
 type PublisherOption func(*Publisher)
 
-// WithPublisherClock sets the clock used for message timestamps. Defaults to
-// clock.Real() when not provided.
+// WithPublisherClock sets the clock used by the Publisher for timeout and
+// latency tracking. Required — NewPublisher panics if no clock is supplied.
+// Pass clock.Real() at the composition root.
 func WithPublisherClock(clk clock.Clock) PublisherOption {
 	return func(p *Publisher) {
-		if clk != nil {
-			p.clock = clk
-		}
+		p.clock = clk
 	}
 }
 
 // NewPublisher creates a Publisher backed by the given Connection.
+// A clock.Clock must be supplied via WithPublisherClock; NewPublisher panics
+// if no clock is provided.
 func NewPublisher(conn *Connection, opts ...PublisherOption) *Publisher {
-	p := &Publisher{conn: conn, clock: clock.Real()}
+	p := &Publisher{conn: conn}
 	for _, o := range opts {
 		o(p)
 	}
+	clock.MustHaveClock(p.clock, "rabbitmq.NewPublisher")
 	return p
 }
 
@@ -146,6 +147,8 @@ func (p *Publisher) Publish(ctx context.Context, topic string, payload []byte) e
 	}
 
 	// Wait for broker confirmation.
+	confirmTimer := p.clock.NewTimerAt(p.clock.Now().Add(p.conn.config.ConfirmTimeout))
+	defer confirmTimer.Stop()
 	select {
 	case confirm, ok := <-confirmCh:
 		if !ok {
@@ -158,7 +161,7 @@ func (p *Publisher) Publish(ctx context.Context, topic string, payload []byte) e
 			slog.String("topic", topic))
 		return nil
 
-	case <-time.After(p.conn.config.ConfirmTimeout):
+	case <-confirmTimer.C():
 		return errcode.New(ErrAdapterAMQPConfirmTimeout, "rabbitmq: publish confirm timed out")
 
 	case <-ctx.Done():

@@ -56,8 +56,7 @@ func WithTxManager(tx persistence.TxRunner) Option {
 	return func(s *Service) { s.txRunner = persistence.RunnerOrNoop(tx) }
 }
 
-// WithClock sets the clock used for audit entry timestamps. Defaults to
-// clock.Real() when not provided.
+// WithClock sets the clock used for audit entry timestamps.
 func WithClock(clk clock.Clock) Option {
 	return func(s *Service) {
 		if clk != nil {
@@ -82,15 +81,17 @@ func NewService(
 	repo ports.AuditRepository,
 	hmacKey []byte,
 	logger *slog.Logger,
+	clk clock.Clock,
 	opts ...Option,
 ) *Service {
+	clock.MustHaveClock(clk, "auditappend.NewService")
 	s := &Service{
 		repo:     repo,
 		chain:    domain.NewHashChain(hmacKey),
 		txRunner: persistence.NoopTxRunner{},
 		emitter:  outbox.NewNoopEmitter(),
 		logger:   logger,
-		clock:    clock.Real(),
+		clock:    clk,
 	}
 	for _, o := range opts {
 		o(s)

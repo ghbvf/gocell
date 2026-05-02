@@ -42,6 +42,7 @@ func makeLifecycleDeps(t *testing.T) BootstrapDeps {
 		UserRepo: mem.NewUserRepository(),
 		RoleRepo: mem.NewRoleRepository(),
 		Logger:   logger,
+		Clock:    kernelclock.Real(),
 	}
 }
 
@@ -177,6 +178,7 @@ func TestLifecycle_StartWithBind_LogsEffectiveCredentialPathAfterWrite(t *testin
 		UserRepo: mem.NewUserRepository(),
 		RoleRepo: mem.NewRoleRepository(),
 		Logger:   logger,
+		Clock:    kernelclock.Real(),
 	}
 	l := NewLifecycle(
 		WithCredentialPath(credPath),
@@ -220,7 +222,7 @@ func TestLifecycle_StartWithBind_RepeatRun_AdminExists_NoCleaner(t *testing.T) {
 		UserRepo: deps.UserRepo,
 		RoleRepo: deps.RoleRepo,
 		Logger:   logger,
-		Clock:    l.cfg.Clock,
+		Clock:    deps.Clock,
 	}, bootstrapConfig{
 		CredentialPath: l.cfg.CredentialPath,
 		TTL:            l.cfg.TTL,
@@ -278,7 +280,7 @@ func TestLifecycle_StartWithCustomCredentialPath_SweepsExactFile(t *testing.T) {
 		UserRepo: deps.UserRepo,
 		RoleRepo: deps.RoleRepo,
 		Logger:   logger,
-		Clock:    l.cfg.Clock,
+		Clock:    deps.Clock,
 	}, bootstrapConfig{
 		CredentialPath: customCredPath,
 		TTL:            l.cfg.TTL,
@@ -438,4 +440,13 @@ func (c *fakeClock) Since(t time.Time) time.Duration { return c.t.Sub(t) }
 func (c *fakeClock) Until(t time.Time) time.Duration { return t.Sub(c.t) }
 func (c *fakeClock) NewTimerAt(_ time.Time) kernelclock.Timer {
 	panic("fakeClock.NewTimerAt not implemented")
+}
+func (c *fakeClock) NewTicker(_ time.Duration) kernelclock.Ticker {
+	panic("fakeClock.NewTicker not implemented")
+}
+func (c *fakeClock) AfterFunc(_ time.Time, _ func()) kernelclock.Timer {
+	panic("fakeClock.AfterFunc not implemented")
+}
+func (c *fakeClock) Sleep(_ context.Context, _ time.Time) error {
+	panic("fakeClock.Sleep not implemented")
 }

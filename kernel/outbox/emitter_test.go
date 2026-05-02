@@ -283,15 +283,13 @@ func TestNewDirectEmitter_NilProvider(t *testing.T) {
 	assert.Equal(t, errcode.ErrCellMissingOutbox, ec.Code, "expected ErrCellMissingOutbox code")
 }
 
-// TestNewDirectEmitter_NilClock verifies that passing a nil clock returns an
-// errcode error (fail-fast, not nil-propagation).
+// TestNewDirectEmitter_NilClock verifies that passing a nil clock panics at
+// construction (fail-fast via MustHaveClock, not silent nil propagation).
 func TestNewDirectEmitter_NilClock(t *testing.T) {
 	publisher := &recordingEmitterPublisher{}
-	_, err := NewDirectEmitter(publisher, DirectPublishFailClosed, metrics.NopProvider{}, nil, "testcell")
-	require.Error(t, err)
-	var ec *errcode.Error
-	require.True(t, errors.As(err, &ec), "must be an errcode.Error, got %T: %v", err, err)
-	assert.Equal(t, errcode.ErrCellMissingOutbox, ec.Code, "expected ErrCellMissingOutbox code")
+	assert.Panics(t, func() {
+		_, _ = NewDirectEmitter(publisher, DirectPublishFailClosed, metrics.NopProvider{}, nil, "testcell")
+	}, "nil clock must panic at construction (MustHaveClock)")
 }
 
 // ---------------------------------------------------------------------------

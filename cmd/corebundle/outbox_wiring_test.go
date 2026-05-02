@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	adapterpg "github.com/ghbvf/gocell/adapters/postgres"
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
@@ -156,7 +157,7 @@ func TestTopologyAdapterInfo_TableDriven(t *testing.T) {
 func TestOutboxE2E_CrossCellFanout(t *testing.T) {
 	const topic = "test.fanout.cross-cg.v1"
 
-	eb := eventbus.New()
+	eb := eventbus.New(eventbus.WithClock(clock.Real()))
 	t.Cleanup(func() { _ = eb.Close(context.Background()) })
 
 	ctx, cancel := context.WithTimeout(context.Background(), testtime.CtxDefault)

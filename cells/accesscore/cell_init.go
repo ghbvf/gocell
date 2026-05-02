@@ -7,6 +7,7 @@ import (
 
 	"github.com/ghbvf/gocell/cells/accesscore/initialadmin"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/adminprovision"
+	"github.com/ghbvf/gocell/cells/accesscore/internal/mem"
 	"github.com/ghbvf/gocell/cells/accesscore/slices/authorizationdecide"
 	"github.com/ghbvf/gocell/cells/accesscore/slices/configreceive"
 	"github.com/ghbvf/gocell/cells/accesscore/slices/identitymanage"
@@ -18,13 +19,13 @@ import (
 	"github.com/ghbvf/gocell/cells/accesscore/slices/sessionvalidate"
 	"github.com/ghbvf/gocell/cells/accesscore/slices/setup"
 	"github.com/ghbvf/gocell/kernel/cell"
-	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/query"
 	"github.com/ghbvf/gocell/runtime/auth/refresh"
+	refreshmem "github.com/ghbvf/gocell/runtime/auth/refresh/memstore"
 )
 
 // resolveEmitter delegates to cell.ResolveCellEmitter (mutual exclusion +
@@ -48,7 +49,7 @@ func (c *AccessCore) resolveEmitter(mode cell.DurabilityMode) error {
 			Logger:            c.logger,
 			DirectPublishMode: outbox.DirectPublishFailClosed,
 			MetricsProvider:   c.metricsProvider,
-			Clock:             clock.Real(),
+			Clock:             c.clk,
 		},
 		PreResolved:      c.emitter,
 		ConsistencyLevel: c.ConsistencyLevel(),
@@ -139,7 +140,11 @@ func (c *AccessCore) initRefreshGC() error {
 func (c *AccessCore) initSlices() error {
 	// session-login must be constructed before identity-manage because
 	// ChangePassword injects loginSvc as the TokenIssuer.
-	loginOpts := []sessionlogin.Option{sessionlogin.WithEmitter(c.emitter), sessionlogin.WithTxManager(c.txRunner)}
+	loginOpts := []sessionlogin.Option{
+		sessionlogin.WithEmitter(c.emitter),
+		sessionlogin.WithTxManager(c.txRunner),
+		sessionlogin.WithClock(c.clk),
+	}
 	loginSvc, err := sessionlogin.NewService(c.userRepo, c.sessionRepo, c.roleRepo, c.refreshStore, c.jwtIssuer, c.logger, loginOpts...)
 	if err != nil {
 		return err
@@ -148,7 +153,11 @@ func (c *AccessCore) initSlices() error {
 	c.AddSlice(cell.NewBaseSlice("sessionlogin", "accesscore", cell.L2))
 
 	// identity-manage: inject loginSvc as TokenIssuer for ChangePassword.
-	identityOpts := []identitymanage.Option{identitymanage.WithEmitter(c.emitter), identitymanage.WithTxManager(c.txRunner)}
+	identityOpts := []identitymanage.Option{
+		identitymanage.WithEmitter(c.emitter),
+		identitymanage.WithTxManager(c.txRunner),
+		identitymanage.WithClock(c.clk),
+	}
 	identityOpts = append(identityOpts, identitymanage.WithTokenIssuer(loginSvc))
 	identitySvc, err := identitymanage.NewService(c.userRepo, c.sessionRepo, c.refreshStore, c.logger, identityOpts...)
 	if err != nil {
@@ -158,14 +167,17 @@ func (c *AccessCore) initSlices() error {
 	c.AddSlice(cell.NewBaseSlice("identitymanage", "accesscore", cell.L1))
 
 	// session-validate (before session-refresh: provides session-aware verifier)
-	c.validateSvc = sessionvalidate.NewService(c.jwtVerifier, c.sessionRepo, c.logger)
+	c.validateSvc = sessionvalidate.NewService(c.jwtVerifier, c.sessionRepo, c.logger, c.clk)
 	c.AddSlice(cell.NewBaseSlice("sessionvalidate", "accesscore", cell.L0))
 
 	// session-refresh uses refresh.Store for token state validation and
 	// rotation. No JWT verifier is needed — the opaque wire format is
 	// validated by the store itself; any malformed input (including an
 	// access JWT replay attempt) returns ErrRejected.
-	refreshSvc, err := sessionrefresh.NewService(c.sessionRepo, c.roleRepo, c.userRepo, c.refreshStore, c.jwtIssuer, c.logger)
+	refreshSvc, err := sessionrefresh.NewService(
+		c.sessionRepo, c.roleRepo, c.userRepo, c.refreshStore,
+		c.jwtIssuer, c.logger, sessionrefresh.WithClock(c.clk),
+	)
 	if err != nil {
 		return err
 	}
@@ -211,7 +223,7 @@ func (c *AccessCore) initSlices() error {
 
 	// setup: interactive first-run admin provisioning (Public HTTP endpoints).
 	// Uses shared adminprovision.Provisioner so semantics match initialadmin.
-	setupProv, err := adminprovision.NewProvisioner(c.userRepo, c.roleRepo, c.logger, uuid.NewString)
+	setupProv, err := adminprovision.NewProvisioner(c.userRepo, c.roleRepo, c.logger, uuid.NewString, c.clk)
 	if err != nil {
 		return err
 	}
@@ -251,6 +263,17 @@ func (c *AccessCore) Init(ctx context.Context, deps cell.Dependencies) error {
 	if err := c.BaseCell.Init(ctx, deps); err != nil {
 		return err
 	}
+	c.clk = deps.Clock
+
+	// WithInMemoryDefaults defers sessionRepo and refreshStore construction
+	// to here so that c.clk (set from deps.Clock) is available.
+	if c.useInMemoryDefaults && c.sessionRepo == nil {
+		c.sessionRepo = mem.NewSessionRepository(c.clk)
+	}
+	if c.useInMemoryDefaults && c.refreshStore == nil {
+		c.refreshStore = refreshmem.MustNew(defaultRefreshPolicy, c.clk, nil)
+	}
+
 	if err := c.initValidate(deps); err != nil {
 		return err
 	}
@@ -268,7 +291,7 @@ func (c *AccessCore) Init(ctx context.Context, deps cell.Dependencies) error {
 			UserRepo: c.userRepo,
 			RoleRepo: c.roleRepo,
 			Logger:   c.logger,
-			Clock:    nil,
+			Clock:    c.clk,
 		}, c.logger)
 	}
 	return nil

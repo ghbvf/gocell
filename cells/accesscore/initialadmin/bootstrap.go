@@ -105,14 +105,12 @@ func newBootstrapper(deps BootstrapDeps, cfg bootstrapConfig) (*bootstrapper, er
 	if cfg.TTL == 0 {
 		cfg.TTL = defaultTTL
 	}
-	if deps.Clock == nil {
-		deps.Clock = clock.Real()
-	}
+	clock.MustHaveClock(deps.Clock, "initialadmin.newBootstrapper")
 	if cfg.Hasher == nil {
 		cfg.Hasher = defaultPasswordHasher()
 	}
 
-	prov, err := adminprovision.NewProvisioner(deps.UserRepo, deps.RoleRepo, deps.Logger, uuid.NewString)
+	prov, err := adminprovision.NewProvisioner(deps.UserRepo, deps.RoleRepo, deps.Logger, uuid.NewString, deps.Clock)
 	if err != nil {
 		return nil, fmt.Errorf("initialadmin: build provisioner: %w", err)
 	}

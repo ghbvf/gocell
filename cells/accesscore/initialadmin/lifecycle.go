@@ -144,6 +144,11 @@ func (l *Lifecycle) start(ctx context.Context) error {
 	}
 	deps := l.deps
 	cfg := l.cfg
+	// Propagate the injected clock from deps when no explicit WithClock option was set.
+	if cfg.Clock == nil {
+		cfg.Clock = deps.Clock
+	}
+	clock.MustHaveClock(cfg.Clock, "initialadmin.start")
 	logger := l.logger
 	l.mu.Unlock()
 

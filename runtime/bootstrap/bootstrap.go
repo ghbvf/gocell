@@ -69,15 +69,12 @@ const (
 //	sub-groups runnables by lifecycle batch (HTTPServers / Webhooks / Caches),
 //	not by visual concern.
 type Bootstrap struct {
-	// --- assembly: config loading + CoreAssembly construction + hooks ---
+	// --- assembly: config loading + CoreAssembly construction ---
 	configPath           string
 	envPrefix            string
 	assemblyCore         *assembly.CoreAssembly
 	assemblyID           string
-	hookTimeout          time.Duration
-	hookTimeoutSet       bool
-	hookObserver         cell.LifecycleHookObserver
-	configWatcherFactory func(string, ...config.WatcherOption) (*config.Watcher, error)
+	configWatcherFactory func(string, clock.Clock, ...config.WatcherOption) (*config.Watcher, error)
 
 	// --- http: listener declarations + router options + health + tracing ---
 	listenerConfigs       map[cell.ListenerRef]listenerConfig
@@ -122,7 +119,7 @@ type Bootstrap struct {
 	runOnce sync.Once // Run() single-execution guard
 
 	// --- time source ---
-	clock clock.Clock // nil → clock.Real() applied in New()
+	clock clock.Clock // required: bootstrap.New panics when WithClock is not applied
 }
 
 // namedChecker pairs a readiness probe name with its check function.
@@ -278,9 +275,7 @@ func New(opts ...Option) *Bootstrap {
 	for _, o := range opts {
 		o(b)
 	}
-	if b.clock == nil {
-		b.clock = clock.Real()
-	}
+	clock.MustHaveClock(b.clock, "bootstrap.New (use bootstrap.WithClock)")
 	// Create the Lifecycle after all options are applied so that
 	// defaultStartTimeout / defaultStopTimeout are set.
 	// Zero values are forwarded as-is; NewLifecycle falls back to the

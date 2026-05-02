@@ -17,6 +17,7 @@ import (
 	"github.com/ghbvf/gocell/cells/accesscore/internal/domain"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/mem"
 	"github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
@@ -69,7 +70,7 @@ func newCellFixedSource() *fixedReaderForCell {
 // startErr is non-nil and stop is still safe to call.
 func spinLifecycle(t *testing.T, ctx context.Context, ac *AccessCore) (stop func(), startErr error) {
 	t.Helper()
-	lc := bootstrap.NewLifecycle(bootstrap.LifecycleConfig{})
+	lc := bootstrap.NewLifecycle(bootstrap.LifecycleConfig{Clock: clock.Real()})
 	for _, hook := range ac.LifecycleHooks() {
 		if err := lc.Append(bootstrap.Hook{
 			Name:         hook.Name,
@@ -94,6 +95,7 @@ func testDeps() cell.Dependencies {
 	return cell.Dependencies{
 		Config:         make(map[string]any),
 		DurabilityMode: cell.DurabilityDemo,
+		Clock:          clock.Real(),
 	}
 }
 
@@ -106,7 +108,7 @@ func newTestCellWithBootstrap(
 	t.Helper()
 	opts := []Option{
 		WithUserRepository(mem.NewUserRepository()),
-		WithSessionRepository(mem.NewSessionRepository()),
+		WithSessionRepository(mem.NewSessionRepository(clock.Real())),
 		WithRoleRepository(mem.NewRoleRepository()),
 		WithOutboxDeps(noopPublisher{}, nil),
 		WithJWTIssuer(testIssuer),
@@ -171,7 +173,7 @@ func TestInit_BootstrapDefaultBehaviorIsNoop(t *testing.T) {
 
 	ac := NewAccessCore(
 		WithUserRepository(userRepo),
-		WithSessionRepository(mem.NewSessionRepository()),
+		WithSessionRepository(mem.NewSessionRepository(clock.Real())),
 		WithRoleRepository(mem.NewRoleRepository()),
 		WithOutboxDeps(noopPublisher{}, nil),
 		WithJWTIssuer(testIssuer),
@@ -216,7 +218,7 @@ func TestInit_BootstrapAlreadyHasAdmin_NilCleaner(t *testing.T) {
 
 	ac := NewAccessCore(
 		WithUserRepository(userRepo),
-		WithSessionRepository(mem.NewSessionRepository()),
+		WithSessionRepository(mem.NewSessionRepository(clock.Real())),
 		WithRoleRepository(roleRepo),
 		WithOutboxDeps(noopPublisher{}, nil),
 		WithJWTIssuer(testIssuer),
@@ -271,7 +273,7 @@ func TestInit_BootstrapAdminExists_FreshOrphanFile_SweepCleanerRegistered(t *tes
 
 	ac := NewAccessCore(
 		WithUserRepository(userRepo),
-		WithSessionRepository(mem.NewSessionRepository()),
+		WithSessionRepository(mem.NewSessionRepository(clock.Real())),
 		WithRoleRepository(roleRepo),
 		WithOutboxDeps(noopPublisher{}, nil),
 		WithJWTIssuer(testIssuer),
@@ -326,7 +328,7 @@ func TestInit_BootstrapUser_HasPasswordResetRequired(t *testing.T) {
 
 	ac := NewAccessCore(
 		WithUserRepository(userRepo),
-		WithSessionRepository(mem.NewSessionRepository()),
+		WithSessionRepository(mem.NewSessionRepository(clock.Real())),
 		WithRoleRepository(mem.NewRoleRepository()),
 		WithOutboxDeps(noopPublisher{}, nil),
 		WithJWTIssuer(testIssuer),

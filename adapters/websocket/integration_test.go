@@ -11,6 +11,7 @@ import (
 	"github.com/coder/websocket"
 
 	adapterws "github.com/ghbvf/gocell/adapters/websocket"
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	rtws "github.com/ghbvf/gocell/runtime/websocket"
 
@@ -25,7 +26,7 @@ import (
 // setupIntegrationHub creates a running Hub + httptest server for integration tests.
 func setupIntegrationHub(t *testing.T, handler rtws.MessageHandler) (*rtws.Hub, *httptest.Server) {
 	t.Helper()
-	cfg := rtws.DefaultHubConfig()
+	cfg := rtws.DefaultHubConfig(clock.Real())
 	cfg.PingInterval = testtime.D200ms
 	hub := rtws.NewHub(cfg, handler)
 

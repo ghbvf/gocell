@@ -18,6 +18,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
@@ -65,6 +66,7 @@ type InMemoryEventBus struct {
 	closed        bool
 	deadLettersMu sync.Mutex
 	deadLetters   []DeadLetter
+	clk           clock.Clock
 
 	// readyMu guards readyChans. Separate from mu to avoid lock ordering issues.
 	readyMu    sync.Mutex
@@ -89,7 +91,14 @@ func WithBufferSize(size int) Option {
 	}
 }
 
-// New creates an InMemoryEventBus.
+// WithClock sets the clock used for retry delays. Default: clock.Real().
+func WithClock(clk clock.Clock) Option {
+	return func(b *InMemoryEventBus) {
+		b.clk = clk
+	}
+}
+
+// New creates an InMemoryEventBus. A clock must be provided via WithClock.
 func New(opts ...Option) *InMemoryEventBus {
 	b := &InMemoryEventBus{
 		groupSubs:  make(map[string]map[string]*groupState),
@@ -99,6 +108,7 @@ func New(opts ...Option) *InMemoryEventBus {
 	for _, o := range opts {
 		o(b)
 	}
+	clock.MustHaveClock(b.clk, "eventbus.New")
 	return b
 }
 
@@ -415,7 +425,7 @@ func (b *InMemoryEventBus) handleWithRetry(ctx context.Context, topic string, en
 		}
 		lastErr = err
 		// Wait for retry delay or ctx cancellation.
-		if !awaitRetry(ctx, res.Disposition, attempt) {
+		if !awaitRetry(ctx, b.clk, res.Disposition, attempt) {
 			return
 		}
 	}
@@ -531,12 +541,14 @@ func retryDelay(attempt int) time.Duration {
 
 // awaitRetry sleeps for the retry delay then returns true, or returns false
 // if ctx is canceled. For invalid disposition, uses the same delay logic.
-func awaitRetry(ctx context.Context, _ outbox.Disposition, attempt int) bool {
+func awaitRetry(ctx context.Context, clk clock.Clock, _ outbox.Disposition, attempt int) bool {
 	delay := retryDelay(attempt)
+	t := clk.NewTimerAt(clk.Now().Add(delay))
+	defer t.Stop()
 	select {
 	case <-ctx.Done():
 		return false
-	case <-time.After(delay):
+	case <-t.C():
 		return true
 	}
 }

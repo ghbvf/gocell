@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.uber.org/goleak"
 
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 )
 
@@ -147,7 +148,7 @@ func startHub(t *testing.T, cfg HubConfig, handler MessageHandler) *Hub {
 // ---------------------------------------------------------------------------
 
 func TestHub_StopUnblocksStart(t *testing.T) {
-	hub := NewHub(DefaultHubConfig(), nil)
+	hub := NewHub(DefaultHubConfig(clock.Real()), nil)
 
 	startErr := make(chan error, 1)
 	go func() { startErr <- hub.Start(context.Background()) }()
@@ -169,7 +170,7 @@ func TestHub_StopUnblocksStart(t *testing.T) {
 }
 
 func TestHub_DoubleStart(t *testing.T) {
-	hub := startHub(t, DefaultHubConfig(), nil)
+	hub := startHub(t, DefaultHubConfig(clock.Real()), nil)
 
 	err := hub.Start(context.Background())
 	require.Error(t, err)
@@ -177,7 +178,7 @@ func TestHub_DoubleStart(t *testing.T) {
 }
 
 func TestHub_DoubleStop(t *testing.T) {
-	hub := NewHub(DefaultHubConfig(), nil)
+	hub := NewHub(DefaultHubConfig(clock.Real()), nil)
 	startErr := make(chan error, 1)
 	go func() { startErr <- hub.Start(context.Background()) }()
 	require.Eventually(t, func() bool {
@@ -195,13 +196,13 @@ func TestHub_DoubleStop(t *testing.T) {
 }
 
 func TestHub_StopBeforeStart(t *testing.T) {
-	hub := NewHub(DefaultHubConfig(), nil)
+	hub := NewHub(DefaultHubConfig(clock.Real()), nil)
 	require.NoError(t, hub.Stop(context.Background()))
 	assert.Equal(t, stateStopped, hub.state.Load())
 }
 
 func TestHub_StartAfterStop(t *testing.T) {
-	hub := NewHub(DefaultHubConfig(), nil)
+	hub := NewHub(DefaultHubConfig(clock.Real()), nil)
 	require.NoError(t, hub.Stop(context.Background()))
 
 	err := hub.Start(context.Background())
@@ -210,7 +211,7 @@ func TestHub_StartAfterStop(t *testing.T) {
 }
 
 func TestHub_StopTimeout(t *testing.T) {
-	hub := NewHub(DefaultHubConfig(), nil)
+	hub := NewHub(DefaultHubConfig(clock.Real()), nil)
 	startErr := make(chan error, 1)
 	go func() { startErr <- hub.Start(context.Background()) }()
 	require.Eventually(t, func() bool {
@@ -234,7 +235,7 @@ func TestHub_StopTimeout(t *testing.T) {
 }
 
 func TestHub_ExternalContextCancel(t *testing.T) {
-	hub := NewHub(DefaultHubConfig(), nil)
+	hub := NewHub(DefaultHubConfig(clock.Real()), nil)
 	ctx, cancel := context.WithCancel(context.Background())
 
 	startErr := make(chan error, 1)
@@ -290,7 +291,7 @@ func TestHub_RegisterAndReadLoop(t *testing.T) {
 		mu.Unlock()
 	}
 
-	hub := startHub(t, DefaultHubConfig(), handler)
+	hub := startHub(t, DefaultHubConfig(clock.Real()), handler)
 
 	conn := newFakeConn("sender")
 	require.NoError(t, hub.Register(context.Background(), conn))
@@ -316,7 +317,7 @@ func TestHub_RegisterUsesContextValues(t *testing.T) {
 	const want = "trace-123"
 	got := make(chan any, 1)
 	registerCtx := context.WithValue(context.Background(), ctxKey("trace-id"), want)
-	hub := NewHub(DefaultHubConfig(), func(ctx context.Context, _ string, _ []byte) {
+	hub := NewHub(DefaultHubConfig(clock.Real()), func(ctx context.Context, _ string, _ []byte) {
 		got <- ctx.Value(ctxKey("trace-id"))
 	})
 
@@ -347,7 +348,7 @@ func TestHub_RegisterUsesContextValues(t *testing.T) {
 }
 
 func TestHub_RegisterDuringStop(t *testing.T) {
-	hub := NewHub(DefaultHubConfig(), nil)
+	hub := NewHub(DefaultHubConfig(clock.Real()), nil)
 	startErr := make(chan error, 1)
 	go func() { startErr <- hub.Start(context.Background()) }()
 	require.Eventually(t, func() bool {
@@ -372,7 +373,7 @@ func TestHub_RegisterDuringStop(t *testing.T) {
 }
 
 func TestHub_RegisterOnStoppedHub(t *testing.T) {
-	hub := NewHub(DefaultHubConfig(), nil)
+	hub := NewHub(DefaultHubConfig(clock.Real()), nil)
 	_ = hub.Stop(context.Background())
 
 	conn := newFakeConn("late")
@@ -383,7 +384,7 @@ func TestHub_RegisterOnStoppedHub(t *testing.T) {
 }
 
 func TestHub_Unregister(t *testing.T) {
-	hub := startHub(t, DefaultHubConfig(), nil)
+	hub := startHub(t, DefaultHubConfig(clock.Real()), nil)
 
 	conn := newFakeConn("c1")
 	require.NoError(t, hub.Register(context.Background(), conn))
@@ -399,7 +400,7 @@ func TestHub_Unregister(t *testing.T) {
 }
 
 func TestHub_UnregisterIdempotent(t *testing.T) {
-	hub := startHub(t, DefaultHubConfig(), nil)
+	hub := startHub(t, DefaultHubConfig(clock.Real()), nil)
 
 	conn := newFakeConn("c1")
 	require.NoError(t, hub.Register(context.Background(), conn))
@@ -414,7 +415,7 @@ func TestHub_UnregisterIdempotent(t *testing.T) {
 }
 
 func TestHub_RegisterDuplicateID(t *testing.T) {
-	hub := startHub(t, DefaultHubConfig(), nil)
+	hub := startHub(t, DefaultHubConfig(clock.Real()), nil)
 
 	connA := newFakeConn("dup")
 	require.NoError(t, hub.Register(context.Background(), connA))
@@ -436,7 +437,7 @@ func TestHub_RegisterDuplicateID(t *testing.T) {
 }
 
 func TestHub_MaxConnections(t *testing.T) {
-	cfg := DefaultHubConfig()
+	cfg := DefaultHubConfig(clock.Real())
 	cfg.MaxConnections = 2
 	hub := startHub(t, cfg, nil)
 
@@ -462,7 +463,7 @@ func TestHub_MaxConnections(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestHub_RegisterStopRace(t *testing.T) {
-	hub := NewHub(DefaultHubConfig(), nil)
+	hub := NewHub(DefaultHubConfig(clock.Real()), nil)
 
 	startErr := make(chan error, 1)
 	go func() { startErr <- hub.Start(context.Background()) }()
@@ -492,7 +493,7 @@ func TestHub_RegisterStopRace(t *testing.T) {
 }
 
 func TestHub_ConcurrentBroadcast(t *testing.T) {
-	hub := startHub(t, DefaultHubConfig(), nil)
+	hub := startHub(t, DefaultHubConfig(clock.Real()), nil)
 
 	conns := make([]*fakeConn, 5)
 	for i := range conns {
@@ -520,7 +521,7 @@ func TestHub_ConcurrentBroadcast(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestHub_Broadcast(t *testing.T) {
-	hub := startHub(t, DefaultHubConfig(), nil)
+	hub := startHub(t, DefaultHubConfig(clock.Real()), nil)
 
 	c1 := newFakeConn("c1")
 	c2 := newFakeConn("c2")
@@ -536,7 +537,7 @@ func TestHub_Broadcast(t *testing.T) {
 }
 
 func TestHub_BroadcastSlowConn(t *testing.T) {
-	hub := startHub(t, DefaultHubConfig(), nil)
+	hub := startHub(t, DefaultHubConfig(clock.Real()), nil)
 
 	fast := newFakeConn("fast")
 	slow := newFakeConn("slow")
@@ -557,7 +558,7 @@ func TestHub_BroadcastSlowConn(t *testing.T) {
 }
 
 func TestHub_Send(t *testing.T) {
-	hub := startHub(t, DefaultHubConfig(), nil)
+	hub := startHub(t, DefaultHubConfig(clock.Real()), nil)
 
 	conn := newFakeConn("target")
 	require.NoError(t, hub.Register(context.Background(), conn))
@@ -568,7 +569,7 @@ func TestHub_Send(t *testing.T) {
 }
 
 func TestHub_SendNotFound(t *testing.T) {
-	hub := NewHub(DefaultHubConfig(), nil)
+	hub := NewHub(DefaultHubConfig(clock.Real()), nil)
 	err := hub.Send(context.Background(), "nonexistent", []byte("x"))
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "not found")
@@ -590,7 +591,7 @@ func TestHub_MessageHandler(t *testing.T) {
 		mu.Unlock()
 	}
 
-	hub := startHub(t, DefaultHubConfig(), handler)
+	hub := startHub(t, DefaultHubConfig(clock.Real()), handler)
 
 	conn := newFakeConn("h1")
 	require.NoError(t, hub.Register(context.Background(), conn))
@@ -616,7 +617,7 @@ func TestHub_MessageHandler(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestHub_PingMissThreshold(t *testing.T) {
-	cfg := DefaultHubConfig()
+	cfg := DefaultHubConfig(clock.Real())
 	cfg.PingInterval = testtime.D10ms
 	cfg.PingTimeout = testtime.FastPoll
 	cfg.PingMissMax = 3
@@ -634,7 +635,7 @@ func TestHub_PingMissThreshold(t *testing.T) {
 }
 
 func TestHub_PingMissReset(t *testing.T) {
-	cfg := DefaultHubConfig()
+	cfg := DefaultHubConfig(clock.Real())
 	cfg.PingInterval = testtime.D10ms
 	cfg.PingTimeout = testtime.FastPoll
 	cfg.PingMissMax = 3
@@ -679,7 +680,7 @@ func TestHub_PingMissReset(t *testing.T) {
 }
 
 func TestHub_PingLoopRunsOnInterval(t *testing.T) {
-	cfg := DefaultHubConfig()
+	cfg := DefaultHubConfig(clock.Real())
 	cfg.PingInterval = testtime.D10ms
 	cfg.PingTimeout = testtime.FastPoll
 
@@ -699,7 +700,7 @@ func TestHub_PingLoopRunsOnInterval(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestDefaultHubConfig(t *testing.T) {
-	cfg := DefaultHubConfig()
+	cfg := DefaultHubConfig(clock.Real())
 	assert.Equal(t, testtime.D30s, cfg.PingInterval)
 	assert.Equal(t, testtime.D5s, cfg.PingTimeout)
 	assert.Equal(t, int64(64*1024), cfg.ReadLimit)
@@ -713,6 +714,7 @@ func TestNewHub_PreservesExplicitConfig(t *testing.T) {
 		ReadLimit:      1024,
 		PingMissMax:    5,
 		MaxConnections: 9,
+		Clock:          clock.Real(),
 	}
 	handler := func(context.Context, string, []byte) {}
 
@@ -723,7 +725,7 @@ func TestNewHub_PreservesExplicitConfig(t *testing.T) {
 }
 
 func TestHub_IsRunning(t *testing.T) {
-	hub := NewHub(DefaultHubConfig(), nil)
+	hub := NewHub(DefaultHubConfig(clock.Real()), nil)
 	assert.False(t, hub.IsRunning(), "idle hub")
 
 	startErr := make(chan error, 1)
@@ -738,7 +740,7 @@ func TestHub_IsRunning(t *testing.T) {
 }
 
 func TestHub_StopDeadlineHonored(t *testing.T) {
-	hub := NewHub(DefaultHubConfig(), nil)
+	hub := NewHub(DefaultHubConfig(clock.Real()), nil)
 	startErr := make(chan error, 1)
 	go func() { startErr <- hub.Start(context.Background()) }()
 	require.Eventually(t, func() bool {
@@ -767,7 +769,7 @@ func TestHub_StopDeadlineHonored(t *testing.T) {
 }
 
 func TestNewHub_NilHandler(t *testing.T) {
-	hub := NewHub(DefaultHubConfig(), nil)
+	hub := NewHub(DefaultHubConfig(clock.Real()), nil)
 	assert.NotNil(t, hub.handler, "nil handler should be replaced with noop")
 	hub.handler(context.Background(), "test", []byte("data"))
 }
@@ -834,12 +836,12 @@ func TestHub_StateMachine(t *testing.T) {
 	}{
 		{
 			"idle+Stop",
-			func() *Hub { return NewHub(DefaultHubConfig(), nil) },
+			func() *Hub { return NewHub(DefaultHubConfig(clock.Real()), nil) },
 			stopAction, "",
 		},
 		{
 			"idle+Register",
-			func() *Hub { return NewHub(DefaultHubConfig(), nil) },
+			func() *Hub { return NewHub(DefaultHubConfig(clock.Real()), nil) },
 			registerAction, "not running",
 		},
 		{
@@ -861,7 +863,7 @@ func TestHub_StateMachine(t *testing.T) {
 		{
 			"stopped+Start",
 			func() *Hub {
-				h := NewHub(DefaultHubConfig(), nil)
+				h := NewHub(DefaultHubConfig(clock.Real()), nil)
 				_ = h.Stop(context.Background())
 				return h
 			},
@@ -871,7 +873,7 @@ func TestHub_StateMachine(t *testing.T) {
 		{
 			"stopped+Stop",
 			func() *Hub {
-				h := NewHub(DefaultHubConfig(), nil)
+				h := NewHub(DefaultHubConfig(clock.Real()), nil)
 				_ = h.Stop(context.Background())
 				return h
 			},
@@ -880,7 +882,7 @@ func TestHub_StateMachine(t *testing.T) {
 		{
 			"stopped+Register",
 			func() *Hub {
-				h := NewHub(DefaultHubConfig(), nil)
+				h := NewHub(DefaultHubConfig(clock.Real()), nil)
 				_ = h.Stop(context.Background())
 				return h
 			},
@@ -905,7 +907,7 @@ func TestHub_StateMachine(t *testing.T) {
 // startHubBackground starts a Hub and registers cleanup.
 func startHubBackground(t *testing.T) *Hub {
 	t.Helper()
-	hub := NewHub(DefaultHubConfig(), nil)
+	hub := NewHub(DefaultHubConfig(clock.Real()), nil)
 	startErr := make(chan error, 1)
 	go func() { startErr <- hub.Start(context.Background()) }()
 	require.Eventually(t, func() bool {
@@ -980,7 +982,7 @@ func TestConnConformance_ConcurrentWriteClose(t *testing.T) {
 // Real WebSocket upgrade tests are in adapters/websocket/handler_test.go.
 
 func TestHub_IsRunning_Contract(t *testing.T) {
-	hub := NewHub(DefaultHubConfig(), nil)
+	hub := NewHub(DefaultHubConfig(clock.Real()), nil)
 
 	// idle → not running
 	assert.False(t, hub.IsRunning())

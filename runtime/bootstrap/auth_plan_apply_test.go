@@ -16,6 +16,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/runtime/auth"
 	routerpkg "github.com/ghbvf/gocell/runtime/http/router"
 )
@@ -61,6 +62,7 @@ func (a *applyStubAssemblyRef) CellIDs() []string { return a.cellIDs }
 func newMinimalBootstrap() *Bootstrap {
 	return &Bootstrap{
 		listenerConfigs: make(map[cell.ListenerRef]listenerConfig),
+		clock:           clock.Real(),
 	}
 }
 

@@ -12,13 +12,14 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/ctxkeys"
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
 func TestOutboxWriter_Write_NoTx(t *testing.T) {
-	w := NewOutboxWriter()
+	w := NewOutboxWriter(clock.Real())
 	entry := outbox.Entry{
 		ID:            "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
 		AggregateID:   "agg-1",
@@ -37,7 +38,7 @@ func TestOutboxWriter_Write_NoTx(t *testing.T) {
 }
 
 func TestOutboxWriter_Write_Success(t *testing.T) {
-	w := NewOutboxWriter()
+	w := NewOutboxWriter(clock.Real())
 	tx := &mockOutboxTx{}
 
 	ctx := CtxWithTx(context.Background(), tx)
@@ -72,7 +73,7 @@ func TestOutboxWriter_Write_Success(t *testing.T) {
 }
 
 func TestOutboxWriter_Write_WithTopic(t *testing.T) {
-	w := NewOutboxWriter()
+	w := NewOutboxWriter(clock.Real())
 	tx := &mockOutboxTx{}
 
 	ctx := CtxWithTx(context.Background(), tx)
@@ -95,7 +96,7 @@ func TestOutboxWriter_Write_WithTopic(t *testing.T) {
 }
 
 func TestOutboxWriter_Write_InjectsObservabilityFromContext(t *testing.T) {
-	w := NewOutboxWriter()
+	w := NewOutboxWriter(clock.Real())
 	tx := &mockOutboxTx{}
 
 	ctx := CtxWithTx(context.Background(), tx)
@@ -135,7 +136,7 @@ func TestOutboxWriter_Write_InjectsObservabilityFromContext(t *testing.T) {
 }
 
 func TestOutboxWriter_Write_ZeroCreatedAt(t *testing.T) {
-	w := NewOutboxWriter()
+	w := NewOutboxWriter(clock.Real())
 	tx := &mockOutboxTx{}
 
 	ctx := CtxWithTx(context.Background(), tx)
@@ -156,7 +157,7 @@ func TestOutboxWriter_Write_ZeroCreatedAt(t *testing.T) {
 }
 
 func TestOutboxWriter_Write_TxExecError(t *testing.T) {
-	w := NewOutboxWriter()
+	w := NewOutboxWriter(clock.Real())
 	tx := &mockOutboxTx{execErr: errcode.New(ErrAdapterPGQuery, "exec failed")}
 
 	ctx := CtxWithTx(context.Background(), tx)
@@ -176,7 +177,7 @@ func TestOutboxWriter_Write_TxExecError(t *testing.T) {
 }
 
 func TestOutboxWriter_Write_EmptyID(t *testing.T) {
-	w := NewOutboxWriter()
+	w := NewOutboxWriter(clock.Real())
 	tx := &mockOutboxTx{}
 
 	ctx := CtxWithTx(context.Background(), tx)
@@ -197,7 +198,7 @@ func TestOutboxWriter_Write_EmptyID(t *testing.T) {
 }
 
 func TestOutboxWriter_Write_InvalidID(t *testing.T) {
-	w := NewOutboxWriter()
+	w := NewOutboxWriter(clock.Real())
 	tx := &mockOutboxTx{}
 	ctx := CtxWithTx(context.Background(), tx)
 
@@ -232,7 +233,7 @@ func TestOutboxWriter_Write_InvalidID(t *testing.T) {
 }
 
 func TestOutboxWriter_Write_ValidUUIDs(t *testing.T) {
-	w := NewOutboxWriter()
+	w := NewOutboxWriter(clock.Real())
 	tx := &mockOutboxTx{}
 	ctx := CtxWithTx(context.Background(), tx)
 
@@ -268,7 +269,7 @@ func TestOutboxWriter_Write_ValidUUIDs(t *testing.T) {
 }
 
 func TestOutboxWriter_Write_MissingTopic(t *testing.T) {
-	w := NewOutboxWriter()
+	w := NewOutboxWriter(clock.Real())
 	tx := &mockOutboxTx{}
 	ctx := CtxWithTx(context.Background(), tx)
 
@@ -289,7 +290,7 @@ func TestOutboxWriter_Write_MissingTopic(t *testing.T) {
 }
 
 func TestOutboxWriter_Write_MissingPayload(t *testing.T) {
-	w := NewOutboxWriter()
+	w := NewOutboxWriter(clock.Real())
 	tx := &mockOutboxTx{}
 	ctx := CtxWithTx(context.Background(), tx)
 
@@ -312,7 +313,7 @@ func TestOutboxWriter_Write_MissingPayload(t *testing.T) {
 // --- WriteBatch Tests ---
 
 func TestOutboxWriter_WriteBatch_EmptySlice(t *testing.T) {
-	w := NewOutboxWriter()
+	w := NewOutboxWriter(clock.Real())
 	tx := &mockOutboxTx{}
 	ctx := CtxWithTx(context.Background(), tx)
 
@@ -326,7 +327,7 @@ func TestOutboxWriter_WriteBatch_EmptySlice(t *testing.T) {
 }
 
 func TestOutboxWriter_WriteBatch_NoTx(t *testing.T) {
-	w := NewOutboxWriter()
+	w := NewOutboxWriter(clock.Real())
 	entries := []outbox.Entry{{
 		ID: "a1b2c3d4-e5f6-7890-abcd-ef1234567890", Topic: "t", Payload: []byte("{}"),
 	}}
@@ -340,7 +341,7 @@ func TestOutboxWriter_WriteBatch_NoTx(t *testing.T) {
 }
 
 func TestOutboxWriter_WriteBatch_Success(t *testing.T) {
-	w := NewOutboxWriter()
+	w := NewOutboxWriter(clock.Real())
 	tx := &mockOutboxTx{}
 	ctx := CtxWithTx(context.Background(), tx)
 
@@ -362,7 +363,7 @@ func TestOutboxWriter_WriteBatch_Success(t *testing.T) {
 }
 
 func TestOutboxWriter_WriteBatch_InjectsObservabilityFromContext(t *testing.T) {
-	w := NewOutboxWriter()
+	w := NewOutboxWriter(clock.Real())
 	tx := &mockOutboxTx{}
 
 	ctx := CtxWithTx(context.Background(), tx)
@@ -422,7 +423,7 @@ func TestOutboxWriter_WriteBatch_InjectsObservabilityFromContext(t *testing.T) {
 }
 
 func TestOutboxWriter_WriteBatch_InvalidEntry(t *testing.T) {
-	w := NewOutboxWriter()
+	w := NewOutboxWriter(clock.Real())
 	tx := &mockOutboxTx{}
 	ctx := CtxWithTx(context.Background(), tx)
 
@@ -451,7 +452,7 @@ func TestOutboxWriter_WriteBatch_InvalidEntry(t *testing.T) {
 }
 
 func TestOutboxWriter_WriteBatch_ExecError(t *testing.T) {
-	w := NewOutboxWriter()
+	w := NewOutboxWriter(clock.Real())
 	tx := &mockOutboxTx{execErr: errcode.New(ErrAdapterPGQuery, "batch exec failed")}
 	ctx := CtxWithTx(context.Background(), tx)
 
@@ -468,7 +469,7 @@ func TestOutboxWriter_WriteBatch_ExecError(t *testing.T) {
 }
 
 func TestOutboxWriter_WriteBatch_ChunksLargeBatch(t *testing.T) {
-	w := NewOutboxWriter()
+	w := NewOutboxWriter(clock.Real())
 	tx := &mockOutboxTx{}
 	ctx := CtxWithTx(context.Background(), tx)
 

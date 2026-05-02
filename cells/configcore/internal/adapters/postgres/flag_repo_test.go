@@ -339,7 +339,7 @@ func TestFlagRepo_WithoutTx_WritePathsRequireTx(t *testing.T) {
 	session := NewSession(nil)
 
 	t.Run("Create", func(t *testing.T) {
-		repo := NewFlagRepository(session)
+		repo := NewFlagRepository(session, clock.Real())
 		err := repo.Create(context.Background(), &domain.FeatureFlag{Key: "k"})
 		require.Error(t, err)
 		var ec *errcode.Error
@@ -348,7 +348,7 @@ func TestFlagRepo_WithoutTx_WritePathsRequireTx(t *testing.T) {
 	})
 
 	t.Run("Update", func(t *testing.T) {
-		repo := NewFlagRepository(session)
+		repo := NewFlagRepository(session, clock.Real())
 		_, err := repo.Update(context.Background(), "k", false, 0, "")
 		require.Error(t, err)
 		var ec *errcode.Error
@@ -357,7 +357,7 @@ func TestFlagRepo_WithoutTx_WritePathsRequireTx(t *testing.T) {
 	})
 
 	t.Run("Delete", func(t *testing.T) {
-		repo := NewFlagRepository(session)
+		repo := NewFlagRepository(session, clock.Real())
 		_, err := repo.Delete(context.Background(), "k")
 		require.Error(t, err)
 		var ec *errcode.Error
@@ -366,7 +366,7 @@ func TestFlagRepo_WithoutTx_WritePathsRequireTx(t *testing.T) {
 	})
 
 	t.Run("Toggle", func(t *testing.T) {
-		repo := NewFlagRepository(session)
+		repo := NewFlagRepository(session, clock.Real())
 		_, err := repo.Toggle(context.Background(), "k", true)
 		require.Error(t, err)
 		var ec *errcode.Error

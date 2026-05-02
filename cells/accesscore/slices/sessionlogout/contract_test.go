@@ -17,6 +17,7 @@ import (
 	"github.com/ghbvf/gocell/cells/accesscore/internal/mem"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/testutil"
 	"github.com/ghbvf/gocell/cells/internal/testoutbox"
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/contracttest"
@@ -68,7 +69,7 @@ func TestHttpAuthSessionDeleteV1Serve(t *testing.T) {
 	root := contracttest.ContractsRoot(t)
 	c := contracttest.LoadByID(t, root, "http.auth.session.delete.v1")
 
-	sessionRepo := mem.NewSessionRepository()
+	sessionRepo := mem.NewSessionRepository(clock.Real())
 	sessID := seedContractSession(sessionRepo)
 	svc := MustNewService(sessionRepo, newContractRefreshStore(), slog.Default(),
 		WithEmitter(testoutbox.MustEmitter(t, &recordingWriter{})), WithTxManager(noopTxRunner{}))
@@ -94,7 +95,7 @@ func TestEventSessionRevokedV1Publish(t *testing.T) {
 	root := contracttest.ContractsRoot(t)
 	c := contracttest.LoadByID(t, root, "event.session.revoked.v1")
 
-	sessionRepo := mem.NewSessionRepository()
+	sessionRepo := mem.NewSessionRepository(clock.Real())
 	writer := &recordingWriter{}
 	svc := MustNewService(sessionRepo, newContractRefreshStore(), slog.Default(),
 		WithEmitter(testoutbox.MustEmitter(t, writer)), WithTxManager(noopTxRunner{}))
@@ -128,7 +129,7 @@ func TestContract_EventRoleAssignedV1_Subscribe_PayloadValid(t *testing.T) {
 	root := contracttest.ContractsRoot(t)
 	c := contracttest.LoadByID(t, root, "event.role.assigned.v1")
 
-	repo := mem.NewSessionRepository()
+	repo := mem.NewSessionRepository(clock.Real())
 	consumer := NewConsumer(repo, slog.Default())
 	handler := outbox.WrapLegacyHandler(consumer.HandleRoleChanged)
 
@@ -151,7 +152,7 @@ func TestContract_EventRoleRevokedV1_Subscribe_PayloadValid(t *testing.T) {
 	root := contracttest.ContractsRoot(t)
 	c := contracttest.LoadByID(t, root, "event.role.revoked.v1")
 
-	repo := mem.NewSessionRepository()
+	repo := mem.NewSessionRepository(clock.Real())
 	consumer := NewConsumer(repo, slog.Default())
 	handler := outbox.WrapLegacyHandler(consumer.HandleRoleChanged)
 
@@ -171,7 +172,7 @@ func TestContract_EventRoleRevokedV1_Subscribe_PayloadValid(t *testing.T) {
 // --- Outbox error propagation test (S3-F1) ---
 
 func TestService_Logout_OutboxWriteError(t *testing.T) {
-	sessionRepo := mem.NewSessionRepository()
+	sessionRepo := mem.NewSessionRepository(clock.Real())
 	seedContractSession(sessionRepo)
 	failWriter := &recordingWriter{err: errors.New("outbox unavailable")}
 	svc := MustNewService(sessionRepo, newContractRefreshStore(), slog.Default(),

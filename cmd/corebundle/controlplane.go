@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/runtime/auth"
 )
@@ -74,12 +75,12 @@ func internalGuardFromEnv(adapterMode string, store auth.NonceStore) (*internalG
 	}
 	if store == nil {
 		var err error
-		store, err = auth.NewInMemoryNonceStore(auth.ServiceTokenNonceTTL)
+		store, err = auth.NewInMemoryNonceStore(auth.ServiceTokenNonceTTL, clock.Real())
 		if err != nil {
 			return nil, fmt.Errorf("build service token nonce store: %w", err)
 		}
 	}
-	mw := auth.ServiceTokenMiddleware(ring, auth.WithServiceTokenNonceStore(store))
+	mw := auth.ServiceTokenMiddleware(ring, clock.Real(), auth.WithServiceTokenNonceStore(store))
 	slog.Info("controlplane guard installed",
 		slog.String("nonce_store_kind", string(store.Kind())))
 	return &internalGuard{ring: ring, nonceStore: store, mw: mw}, nil

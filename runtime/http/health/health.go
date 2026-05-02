@@ -154,14 +154,19 @@ type Handler struct {
 	clock           clock.Clock
 }
 
-// New creates a Handler backed by the given CoreAssembly.
+// New creates a Handler backed by the given CoreAssembly. The clock is
+// required: New panics on nil so misconfiguration fails fast at the
+// composition root. Production wiring threads bootstrap.b.clock here;
+// tests pass clockmock.New(...) for deterministic deadline checks.
+//
 // The default probe deadline is 5 s (Kubernetes readiness probe convention).
-func New(asm *assembly.CoreAssembly, opts ...Option) *Handler {
+func New(asm *assembly.CoreAssembly, clk clock.Clock, opts ...Option) *Handler {
+	clock.MustHaveClock(clk, "health.New")
 	h := &Handler{
 		assembly: asm,
 		checkers: make(map[string]Checker),
 		deadline: defaultHealthDeadline,
-		clock:    clock.Real(),
+		clock:    clk,
 	}
 	for _, o := range opts {
 		o(h)

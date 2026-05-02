@@ -5,6 +5,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/metadata"
 )
 
@@ -82,7 +83,7 @@ func TestValidateSliceConsistency(t *testing.T) {
 				Journeys:   map[string]*metadata.JourneyMeta{},
 				Assemblies: map[string]*metadata.AssemblyMeta{},
 			}
-			v := NewValidator(project, ".")
+			v := NewValidator(project, ".", clock.Real())
 			results := v.validateSliceConsistency()
 
 			var errCount int
@@ -115,7 +116,7 @@ func TestValidateSliceConsistency_MissingParentCell(t *testing.T) {
 		Journeys:   map[string]*metadata.JourneyMeta{},
 		Assemblies: map[string]*metadata.AssemblyMeta{},
 	}
-	v := NewValidator(project, ".")
+	v := NewValidator(project, ".", clock.Real())
 	results := v.validateSliceConsistency()
 	assert.Empty(t, results, "missing parent cell should be silently skipped")
 }

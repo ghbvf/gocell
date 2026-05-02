@@ -11,6 +11,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/idempotency"
 )
 
@@ -222,6 +223,7 @@ func ExponentialDelay(base, maxDelay time.Duration, attempt int) time.Duration {
 type ConsumerBase struct {
 	claimer idempotency.Claimer
 	config  ConsumerBaseConfig
+	clk     clock.Clock
 }
 
 // logWithContext delegates to slog.LogAttrs with the given context, ensuring
@@ -237,9 +239,13 @@ func logWithContext(ctx context.Context, level slog.Level, msg string, attrs ...
 // ClaimPolicy). The returned Receipt is threaded through HandleResult so that
 // the Subscriber can Commit/Release after broker Ack/Nack.
 //
+// clk is the time source for backoff sleeps. It must be non-nil; pass
+// clock.Real() in production and clockmock.New() in tests.
+//
 // ref: nats-go Connect() (*Conn, error), watermill-amqp NewSubscriber() (*Subscriber, error)
 // — constructors return error, never panic.
-func NewConsumerBase(claimer idempotency.Claimer, config ConsumerBaseConfig) (*ConsumerBase, error) {
+func NewConsumerBase(claimer idempotency.Claimer, config ConsumerBaseConfig, clk clock.Clock) (*ConsumerBase, error) {
+	clock.MustHaveClock(clk, "outbox.NewConsumerBase")
 	if !config.ClaimPolicy.Valid() {
 		return nil, fmt.Errorf("outbox: invalid ClaimPolicy %d (valid range: 0..%d)",
 			config.ClaimPolicy, claimPolicySentinel-1)
@@ -248,6 +254,7 @@ func NewConsumerBase(claimer idempotency.Claimer, config ConsumerBaseConfig) (*C
 	return &ConsumerBase{
 		claimer: claimer,
 		config:  config,
+		clk:     clk,
 	}, nil
 }
 
@@ -372,9 +379,12 @@ func (cb *ConsumerBase) claimWithRetry(
 				slog.Int("max_retries", cb.config.ClaimRetryCount),
 				slog.Duration("backoff", delay),
 				slog.Any("error", err))
+			t := cb.clk.NewTimerAt(cb.clk.Now().Add(delay))
 			select {
-			case <-time.After(delay):
+			case <-t.C():
+				t.Stop()
 			case <-ctx.Done():
+				t.Stop()
 				return 0, nil, ctx.Err()
 			}
 		}
@@ -405,9 +415,12 @@ func (cb *ConsumerBase) handleClaimState(
 			slog.String(logKeyEventID, entry.ID),
 			slog.String(logKeyTopic, topic),
 			slog.Duration("backoff", delay))
+		t := cb.clk.NewTimerAt(cb.clk.Now().Add(delay))
 		select {
-		case <-time.After(delay):
+		case <-t.C():
+			t.Stop()
 		case <-ctx.Done():
+			t.Stop()
 		}
 		return HandleResult{Disposition: DispositionRequeue}
 	default:
@@ -455,10 +468,13 @@ func (cb *ConsumerBase) waitBackoff(ctx context.Context, topic string, entry Ent
 		slog.Duration("backoff", delay),
 		slog.Any("error", lastErr))
 
+	t := cb.clk.NewTimerAt(cb.clk.Now().Add(delay))
 	select {
-	case <-time.After(delay):
+	case <-t.C():
+		t.Stop()
 		return false
 	case <-ctx.Done():
+		t.Stop()
 		return true
 	}
 }
@@ -605,14 +621,14 @@ func (cb *ConsumerBase) leaseRenewalLoop(
 	interval time.Duration,
 	onLeaseLost func(),
 ) {
-	ticker := time.NewTicker(interval)
+	ticker := cb.clk.NewTicker(interval)
 	defer ticker.Stop()
 
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		case <-ticker.C:
+		case <-ticker.C():
 			extendCtx := context.WithoutCancel(ctx)
 			if err := receipt.Extend(extendCtx, cb.config.LeaseTTL); err != nil {
 				if errors.Is(err, idempotency.ErrLeaseExpired) {

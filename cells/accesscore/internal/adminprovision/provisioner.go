@@ -93,7 +93,7 @@ type Provisioner struct {
 // passing nil returns an error so mis-wired assemblies fail at startup rather
 // than at the first Ensure call.
 func NewProvisioner(
-	userRepo ports.UserRepository, roleRepo ports.RoleRepository, logger *slog.Logger, newID UUIDGenerator,
+	userRepo ports.UserRepository, roleRepo ports.RoleRepository, logger *slog.Logger, newID UUIDGenerator, clk clock.Clock,
 ) (*Provisioner, error) {
 	if userRepo == nil {
 		return nil, fmt.Errorf("adminprovision: UserRepository is required")
@@ -107,12 +107,13 @@ func NewProvisioner(
 	if newID == nil {
 		return nil, fmt.Errorf("adminprovision: UUIDGenerator is required")
 	}
+	clock.MustHaveClock(clk, "adminprovision.NewProvisioner")
 	return &Provisioner{
 		userRepo: userRepo,
 		roleRepo: roleRepo,
 		logger:   logger,
 		newID:    newID,
-		clock:    clock.Real(),
+		clock:    clk,
 	}, nil
 }
 

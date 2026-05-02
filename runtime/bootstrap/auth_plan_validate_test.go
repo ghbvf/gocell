@@ -128,6 +128,7 @@ func TestValidateAuthPlanAssemblyMatch(t *testing.T) {
 	t.Run("Match_SameInstance", func(t *testing.T) {
 		t.Parallel()
 		b := New(
+			WithClock(clock.Real()),
 			WithAssembly(asmA),
 			WithListener(cell.PrimaryListener, "127.0.0.1:0",
 				[]cell.ListenerAuth{cell.MustNewAuthJWTFromAssembly(asmA)}),
@@ -139,6 +140,7 @@ func TestValidateAuthPlanAssemblyMatch(t *testing.T) {
 	t.Run("Mismatch_DifferentInstances", func(t *testing.T) {
 		t.Parallel()
 		b := New(
+			WithClock(clock.Real()),
 			WithAssembly(asmA),
 			WithListener(cell.PrimaryListener, "127.0.0.1:0",
 				[]cell.ListenerAuth{cell.MustNewAuthJWTFromAssembly(asmB)}),

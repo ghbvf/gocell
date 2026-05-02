@@ -40,7 +40,7 @@ func main() {
 	}
 
 	// In-memory event bus for demo mode.
-	eb := eventbus.New()
+	eb := eventbus.New(eventbus.WithClock(clock.Real()))
 
 	// Cursor codec for pagination (demo mode).
 	cursorCodec, err := query.NewCursorCodec([]byte("iotdevice-cursor-key-32-bytes!!!"))
@@ -81,6 +81,7 @@ func main() {
 	}
 
 	app := bootstrap.New(
+		bootstrap.WithClock(clock.Real()),
 		bootstrap.WithAssembly(asm),
 		bootstrap.WithPublisher(eb), bootstrap.WithSubscriber(eb),
 		bootstrap.WithListener(cell.PrimaryListener, ":8083", []cell.ListenerAuth{cell.MustNewAuthJWT(jwtVerifier)}),

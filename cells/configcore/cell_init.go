@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log/slog"
 
+	"github.com/ghbvf/gocell/cells/configcore/internal/mem"
 	"github.com/ghbvf/gocell/cells/configcore/slices/configpublish"
 	"github.com/ghbvf/gocell/cells/configcore/slices/configread"
 	"github.com/ghbvf/gocell/cells/configcore/slices/configsubscribe"
@@ -15,7 +16,6 @@ import (
 	"github.com/ghbvf/gocell/cells/configcore/slices/featureflag"
 	"github.com/ghbvf/gocell/cells/configcore/slices/flagwrite"
 	"github.com/ghbvf/gocell/kernel/cell"
-	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/errcode"
@@ -27,6 +27,14 @@ import (
 func (c *ConfigCore) Init(ctx context.Context, deps cell.Dependencies) error {
 	if err := c.BaseCell.Init(ctx, deps); err != nil {
 		return err
+	}
+
+	c.clk = deps.Clock
+
+	// WithInMemoryDefaults defers repo construction to here so c.clk is available.
+	if c.useInMemoryDefaults {
+		c.configRepo = mem.NewConfigRepository(c.clk)
+		c.flagRepo = mem.NewFlagRepository(c.clk)
 	}
 
 	// deriveModes' PublishFailureMode return is retained for TestConfigCore_DeriveModes
@@ -77,7 +85,7 @@ func (c *ConfigCore) resolveEmitter(mode cell.DurabilityMode) error {
 			Logger:            c.logger,
 			DirectPublishMode: outbox.DirectPublishFailClosed,
 			MetricsProvider:   c.metricsProvider,
-			Clock:             clock.Real(),
+			Clock:             c.clk,
 		},
 		PreResolved:      c.emitter,
 		ConsistencyLevel: c.ConsistencyLevel(),
@@ -132,7 +140,7 @@ func (c *ConfigCore) ensureCursorCodec(deps cell.Dependencies) error {
 
 func (c *ConfigCore) initWriteSlice() {
 	opts := []configwrite.Option{configwrite.WithEmitter(c.emitter), configwrite.WithTxManager(c.txRunner)}
-	writeSvc := configwrite.NewService(c.configRepo, c.logger, opts...)
+	writeSvc := configwrite.NewService(c.configRepo, c.logger, c.clk, opts...)
 	c.writeHandler = configwrite.NewHandler(writeSvc)
 	c.AddSlice(cell.NewBaseSlice("configwrite", "configcore", cell.L2))
 }
@@ -152,7 +160,7 @@ func (c *ConfigCore) initPublishSlice() {
 		configpublish.WithEmitter(c.emitter),
 		configpublish.WithTxManager(c.txRunner),
 	}
-	publishSvc := configpublish.NewService(c.configRepo, c.logger, opts...)
+	publishSvc := configpublish.NewService(c.configRepo, c.logger, c.clk, opts...)
 	c.publishHandler = configpublish.NewHandler(publishSvc)
 	c.AddSlice(cell.NewBaseSlice("configpublish", "configcore", cell.L2))
 }
@@ -179,7 +187,7 @@ func (c *ConfigCore) initFlagSlice(runMode query.RunMode) error {
 // the contract never had a subscriber, so outbox emission was dead work.
 func (c *ConfigCore) initFlagWriteSlice() error {
 	opts := []flagwrite.Option{flagwrite.WithTxManager(c.txRunner)}
-	flagWriteSvc, err := flagwrite.NewService(c.flagRepo, c.logger, opts...)
+	flagWriteSvc, err := flagwrite.NewService(c.flagRepo, c.logger, c.clk, opts...)
 	if err != nil {
 		return fmt.Errorf("configcore: init flag-write slice: %w", err)
 	}

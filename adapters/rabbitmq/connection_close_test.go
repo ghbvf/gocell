@@ -19,6 +19,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 )
 
@@ -141,7 +142,7 @@ func TestConnection_Close_RespectsCtxDeadline(t *testing.T) {
 		URL:             testAMQPURL,
 		ChannelPoolSize: 1,
 		ConfirmTimeout:  testtime.D2s,
-	}, WithDialFunc(dialFunc))
+	}, WithDialFunc(dialFunc), WithConnectionClock(clock.Real()))
 	require.NoError(t, err)
 
 	// Short budget — should expire before the gate is released.

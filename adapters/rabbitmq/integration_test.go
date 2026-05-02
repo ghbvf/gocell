@@ -13,6 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 	tcrabbitmq "github.com/testcontainers/testcontainers-go/modules/rabbitmq"
 
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/idempotency"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
@@ -46,7 +47,7 @@ func startRabbitMQDedicatedContainer(t *testing.T, config Config) (*Connection, 
 		config.ConfirmTimeout = testtime.SelectAsyncSettle
 	}
 
-	conn, err := NewConnection(config)
+	conn, err := NewConnection(config, WithConnectionClock(clock.Real()))
 	require.NoError(t, err, "create dedicated rabbitmq connection")
 
 	cleanup := func() {
@@ -78,7 +79,7 @@ func startRabbitMQ(t *testing.T) (*Connection, func()) {
 		ConfirmTimeout:      testtime.SelectAsyncSettle,
 		ReconnectMaxBackoff: testtime.EventuallyLong,
 		ReconnectBaseDelay:  testtime.D500ms,
-	})
+	}, WithConnectionClock(clock.Real()))
 	require.NoError(t, err, "create connection against shared rabbitmq broker")
 	return conn, func() { _ = conn.Close(context.Background()) }
 }
@@ -108,7 +109,7 @@ func newIntegrationConnection(t *testing.T, amqpURL string) *Connection {
 		ConfirmTimeout:      testtime.SelectAsyncSettle,
 		ReconnectMaxBackoff: testtime.EventuallyLong,
 		ReconnectBaseDelay:  testtime.D500ms,
-	})
+	}, WithConnectionClock(clock.Real()))
 	require.NoError(t, err, "create per-subtest rabbitmq connection")
 	t.Cleanup(func() { _ = conn.Close(context.Background()) })
 	return conn
@@ -165,7 +166,7 @@ func TestIntegration_PublishConsume(t *testing.T) {
 	conn, cleanup := startRabbitMQ(t)
 	defer cleanup()
 
-	pub := NewPublisher(conn)
+	pub := NewPublisher(conn, WithPublisherClock(clock.Real()))
 	topic := "test.integration.events"
 	queueName := "test.integration.queue"
 
@@ -174,6 +175,7 @@ func TestIntegration_PublishConsume(t *testing.T) {
 		QueueName:     queueName,
 		PrefetchCount: 1,
 		DLXExchange:   "test.dlx",
+		Clock:         clock.Real(),
 	})
 
 	ctx := context.Background()
@@ -235,7 +237,7 @@ func TestIntegration_PublishOnly(t *testing.T) {
 	conn, cleanup := startRabbitMQ(t)
 	defer cleanup()
 
-	pub := NewPublisher(conn)
+	pub := NewPublisher(conn, WithPublisherClock(clock.Real()))
 	topic := "test.integration.publish-only"
 
 	entry := outbox.Entry{
@@ -268,7 +270,7 @@ func TestIntegration_ConsumerBaseRetry(t *testing.T) {
 	defer cleanup()
 
 	ctx := context.Background()
-	pub := NewPublisher(conn)
+	pub := NewPublisher(conn, WithPublisherClock(clock.Real()))
 
 	const (
 		topic       = "test.retry.e2e"
@@ -300,6 +302,7 @@ func TestIntegration_ConsumerBaseRetry(t *testing.T) {
 			RetryBaseDelay: testtime.MediumPoll,
 			IdempotencyTTL: time.Hour,
 		},
+		clock.Real(),
 	)
 	require.NoError(t, cbErr)
 
@@ -308,6 +311,7 @@ func TestIntegration_ConsumerBaseRetry(t *testing.T) {
 		QueueName:     mainQueue,
 		PrefetchCount: 1,
 		DLXExchange:   dlxExchange,
+		Clock:         clock.Real(),
 	})
 
 	var callCount atomic.Int32
@@ -449,7 +453,7 @@ func TestIntegration_DLXBrokerNative(t *testing.T) {
 	defer cleanup()
 
 	ctx := context.Background()
-	pub := NewPublisher(conn)
+	pub := NewPublisher(conn, WithPublisherClock(clock.Real()))
 
 	const (
 		topic       = "test.dlx.e2e"
@@ -480,6 +484,7 @@ func TestIntegration_DLXBrokerNative(t *testing.T) {
 		QueueName:     mainQueue,
 		PrefetchCount: 1,
 		DLXExchange:   dlxExchange,
+		Clock:         clock.Real(),
 	})
 
 	subCtx, subCancel := context.WithTimeout(ctx, testtime.D20s)

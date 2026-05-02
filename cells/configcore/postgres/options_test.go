@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	configcore "github.com/ghbvf/gocell/cells/configcore"
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/runtime/crypto"
 )
@@ -33,7 +34,7 @@ func TestOptionsApplySettings(t *testing.T) {
 
 func TestWithPoolWiresStaleCipherCallback(t *testing.T) {
 	pool := &pgxpool.Pool{}
-	opt, err := WithPool(pool, WithOnStaleCipher(func(_, _, _ string) {}))
+	opt, err := WithPool(pool, clock.Real(), WithOnStaleCipher(func(_, _, _ string) {}))
 	require.NoError(t, err)
 	c := configcore.NewConfigCore(
 		opt,
@@ -47,7 +48,7 @@ func TestWithPoolWiresStaleCipherCallback(t *testing.T) {
 }
 
 func TestWithPoolRejectsNilPool(t *testing.T) {
-	opt, err := WithPool(nil)
+	opt, err := WithPool(nil, clock.Real())
 	require.Error(t, err)
 	assert.Nil(t, opt)
 	var coded *errcode.Error

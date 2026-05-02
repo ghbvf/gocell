@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/metadata"
 )
 
@@ -20,7 +21,7 @@ func TestValidateDOCNAME01_StrictScansActiveDocs(t *testing.T) {
 	writeFile(t, root, "docs/reviews/old.md", "Historical sso-bff is allowed here.\n")
 	writeFile(t, root, "templates/adr.md", "Use ssobff here.\n")
 
-	v := NewValidator(validProject(), root)
+	v := NewValidator(validProject(), root, clock.Real())
 	results := v.validateDOCNAME01(true)
 
 	require.Len(t, results, 1)
@@ -41,14 +42,14 @@ func TestValidateDOCNAME01_NonStrictSilent(t *testing.T) {
 	writeDocNamingGuard(t, root)
 	writeFile(t, root, "README.md", "Use sso-bff here.\n")
 
-	v := NewValidator(validProject(), root)
+	v := NewValidator(validProject(), root, clock.Real())
 	assert.Empty(t, v.validateDOCNAME01(false))
 }
 
 func TestValidateDOCNAME01_MissingGuardIsStrictError(t *testing.T) {
 	root := t.TempDir()
 
-	v := NewValidator(validProject(), root)
+	v := NewValidator(validProject(), root, clock.Real())
 	results := v.validateDOCNAME01(true)
 
 	require.Len(t, results, 1)
@@ -71,7 +72,7 @@ replacements:
 	writeFile(t, root, "examples/todoorder/README.md", "todo-order should fail; todo-orderly should not.\n")
 	writeFile(t, root, "examples/ssobff/README.md", "todoorder is already clean.\n")
 
-	v := NewValidator(validProject(), root)
+	v := NewValidator(validProject(), root, clock.Real())
 	results := v.validateDOCNAME01(true)
 
 	require.Len(t, results, 1)
@@ -136,7 +137,7 @@ replacements:
 			root := t.TempDir()
 			writeFile(t, root, "docs/architecture/naming-guard.yaml", tt.config)
 
-			v := NewValidator(validProject(), root)
+			v := NewValidator(validProject(), root, clock.Real())
 			results := v.validateDOCNAME01(true)
 
 			require.NotEmpty(t, results)
@@ -159,7 +160,7 @@ replacements:
     replacement: ssobff
 `)
 	writeFile(t, root, "README.md", "Use sso-bff here.\n")
-	v := NewValidator(validProject(), root)
+	v := NewValidator(validProject(), root, clock.Real())
 
 	results := v.validateDOCNAME01(true)
 	require.Len(t, results, 1)
@@ -173,7 +174,7 @@ replacements:
   - literal: sso-bff
     replacement: ssobff
 `)
-	v = NewValidator(validProject(), root)
+	v = NewValidator(validProject(), root, clock.Real())
 	v.readFile = func(path string) ([]byte, error) {
 		if strings.HasSuffix(filepath.ToSlash(path), "/README.md") {
 			return nil, errors.New("permission denied")
@@ -189,7 +190,7 @@ replacements:
 }
 
 func TestValidateDOCNAME01_EmptyRootSilent(t *testing.T) {
-	v := NewValidator(validProject(), "")
+	v := NewValidator(validProject(), "", clock.Real())
 	assert.Empty(t, v.validateDOCNAME01(true))
 }
 
@@ -206,7 +207,7 @@ func TestValidateStrict_IncludesDOCNAME01(t *testing.T) {
 	writeDocNamingGuard(t, root)
 	writeFile(t, root, "README.md", "Use sso-bff here.\n")
 
-	v := NewValidator(emptyDocNamingProject(), root)
+	v := NewValidator(emptyDocNamingProject(), root, clock.Real())
 	assertDOCNAME01Present(t, v.ValidateStrict(true))
 }
 
@@ -215,7 +216,7 @@ func TestValidateStrictFailFast_IncludesDOCNAME01(t *testing.T) {
 	writeDocNamingGuard(t, root)
 	writeFile(t, root, "README.md", "Use sso-bff here.\n")
 
-	v := NewValidator(emptyDocNamingProject(), root)
+	v := NewValidator(emptyDocNamingProject(), root, clock.Real())
 	results := v.ValidateStrictFailFast()
 
 	require.Len(t, results, 1)

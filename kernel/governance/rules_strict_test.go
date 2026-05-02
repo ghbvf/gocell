@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/metadata"
 )
 
@@ -45,7 +46,7 @@ func TestStrictValidator_KebabDirDisallowed(t *testing.T) {
 	}
 
 	// Non-strict: kebab dir in slice dir should produce warning, not error.
-	v := NewValidator(project, "")
+	v := NewValidator(project, "", clock.Real())
 	results := v.ValidateStrict(false)
 	hasKebabError := false
 	for _, r := range results {
@@ -110,7 +111,7 @@ func TestStrictValidator_AllowedFilesMismatch(t *testing.T) {
 	}
 
 	// Non-strict: no FMT-17 error.
-	v := NewValidator(project, "")
+	v := NewValidator(project, "", clock.Real())
 	results := v.ValidateStrict(false)
 	for _, r := range results {
 		if r.Code == "FMT-17" && r.Severity == SeverityError {
@@ -137,7 +138,7 @@ func TestValidateStrict_IncludesVERIFY06OnlyWhenStrict(t *testing.T) {
 		{Text: "manual signoff", Mode: "manual"},
 	}
 
-	v := NewValidator(project, "")
+	v := NewValidator(project, "", clock.Real())
 	for _, r := range v.ValidateStrict(false) {
 		if r.Code == "VERIFY-06" {
 			t.Fatalf("non-strict validation must not produce VERIFY-06: %s", r.Message)
@@ -163,7 +164,7 @@ func TestValidateStrictFailFast_IncludesVERIFY06WhenBaseClean(t *testing.T) {
 		{Text: "manual signoff", Mode: "manual"},
 	}
 
-	results := NewValidator(project, "").ValidateStrictFailFast()
+	results := NewValidator(project, "", clock.Real()).ValidateStrictFailFast()
 	if len(results) == 0 {
 		t.Fatal("expected VERIFY-06 from strict fail-fast")
 	}
@@ -213,7 +214,7 @@ func TestValidateStrictFailFast_ShortCircuitsOnBaseError(t *testing.T) {
 		Assemblies: map[string]*metadata.AssemblyMeta{},
 	}
 
-	v := NewValidator(project, "")
+	v := NewValidator(project, "", clock.Real())
 	results := v.ValidateStrictFailFast()
 
 	// Must contain at least one error.
@@ -265,7 +266,7 @@ func TestValidateStrictFailFast_RunsFMT16FMT17WhenNoBaseError(t *testing.T) {
 		Assemblies: map[string]*metadata.AssemblyMeta{},
 	}
 
-	v := NewValidator(project, "")
+	v := NewValidator(project, "", clock.Real())
 	results := v.ValidateStrictFailFast()
 
 	hasFMT16 := false
@@ -290,7 +291,7 @@ func TestValidateStrict_EmptyProject(t *testing.T) {
 		Assemblies: map[string]*metadata.AssemblyMeta{},
 	}
 
-	v := NewValidator(project, "")
+	v := NewValidator(project, "", clock.Real())
 	strictResults := v.ValidateStrict(true)
 	baseResults := v.Validate()
 
@@ -349,7 +350,7 @@ func TestValidateStrict_NonStrictEquivalentToValidate(t *testing.T) {
 		Assemblies: map[string]*metadata.AssemblyMeta{},
 	}
 
-	v := NewValidator(project, "")
+	v := NewValidator(project, "", clock.Real())
 	nonStrictResults := v.ValidateStrict(false)
 	baseResults := v.Validate()
 
@@ -420,7 +421,7 @@ func TestStrictValidator_NodashSliceClean(t *testing.T) {
 		Assemblies: map[string]*metadata.AssemblyMeta{},
 	}
 
-	v := NewValidator(project, "")
+	v := NewValidator(project, "", clock.Real())
 	results := v.ValidateStrict(true)
 	for _, r := range results {
 		if (r.Code == "FMT-16" || r.Code == "FMT-17") && r.Severity == SeverityError {
@@ -467,7 +468,7 @@ func TestStrictValidator_FMT16_PathIDSplit_KebabDirNoDashID(t *testing.T) {
 		Assemblies: map[string]*metadata.AssemblyMeta{},
 	}
 
-	v := NewValidator(project, "")
+	v := NewValidator(project, "", clock.Real())
 	results := v.ValidateStrict(true)
 
 	var gotFMT16 bool
@@ -517,7 +518,7 @@ func TestREF05_PathIDSplit_FiresWhenDirAndIDDisagree(t *testing.T) {
 		Assemblies: map[string]*metadata.AssemblyMeta{},
 	}
 
-	v := NewValidator(project, "")
+	v := NewValidator(project, "", clock.Real())
 	results := v.Validate() // REF-05 is a standard rule, not strict-only
 
 	var gotREF05 bool
@@ -554,7 +555,7 @@ func TestStrictValidator_FMTC1_KebabCellID(t *testing.T) {
 		Assemblies: map[string]*metadata.AssemblyMeta{},
 	}
 
-	v := NewValidator(project, "")
+	v := NewValidator(project, "", clock.Real())
 
 	// Non-strict: silent.
 	for _, r := range v.ValidateStrict(false) {
@@ -594,7 +595,7 @@ func TestStrictValidator_FMTA1_KebabAssemblyID(t *testing.T) {
 		},
 	}
 
-	v := NewValidator(project, "")
+	v := NewValidator(project, "", clock.Real())
 
 	for _, r := range v.ValidateStrict(false) {
 		if r.Code == "FMT-A1" {
@@ -635,7 +636,7 @@ func TestStrictValidator_FMT16_KebabCellDir(t *testing.T) {
 		Assemblies: map[string]*metadata.AssemblyMeta{},
 	}
 
-	v := NewValidator(project, "")
+	v := NewValidator(project, "", clock.Real())
 
 	var got bool
 	for _, r := range v.ValidateStrict(true) {
@@ -668,7 +669,7 @@ func TestStrictValidator_FMT16_KebabAssemblyDir(t *testing.T) {
 		},
 	}
 
-	v := NewValidator(project, "")
+	v := NewValidator(project, "", clock.Real())
 
 	var got bool
 	for _, r := range v.ValidateStrict(true) {
@@ -710,7 +711,7 @@ func TestStrictValidator_FMTC1_FMTA1_NoDashClean(t *testing.T) {
 		},
 	}
 
-	v := NewValidator(project, "")
+	v := NewValidator(project, "", clock.Real())
 	for _, r := range v.ValidateStrict(true) {
 		if r.Code == "FMT-C1" || r.Code == "FMT-A1" {
 			t.Errorf("clean no-dash project should not produce %s: %s", r.Code, r.Message)
@@ -759,7 +760,7 @@ func TestStrictValidator_FMT17_AllowedFilesAgainstRealDir(t *testing.T) {
 		Assemblies: map[string]*metadata.AssemblyMeta{},
 	}
 
-	v := NewValidator(project, "")
+	v := NewValidator(project, "", clock.Real())
 	results := v.ValidateStrict(true)
 
 	var gotFMT17 bool

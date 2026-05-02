@@ -27,16 +27,13 @@ type ConfigRepository struct {
 }
 
 // NewConfigRepository creates an empty in-memory ConfigRepository.
-// clk is used for UpdatedAt timestamps; defaults to clock.Real().
-func NewConfigRepository(clk ...clock.Clock) *ConfigRepository {
-	c := clock.Real()
-	if len(clk) > 0 && clk[0] != nil {
-		c = clk[0]
-	}
+// clk must be non-nil; pass clock.Real() in production and clockmock.New() in tests.
+func NewConfigRepository(clk clock.Clock) *ConfigRepository {
+	clock.MustHaveClock(clk, "mem.NewConfigRepository")
 	return &ConfigRepository{
 		entries:  make(map[string]*domain.ConfigEntry),
 		versions: make(map[string][]*domain.ConfigVersion),
-		clock:    c,
+		clock:    clk,
 	}
 }
 

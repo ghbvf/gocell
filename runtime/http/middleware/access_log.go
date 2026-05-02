@@ -11,7 +11,9 @@ import (
 	"github.com/ghbvf/gocell/pkg/logutil"
 )
 
-// AccessLog logs structured request/response information via slog.Info.
+// AccessLog returns an HTTP middleware that logs structured request/response
+// information via slog.Info. A clock must be provided; use clock.Real() at the
+// composition root.
 // Fields: method, path, route, status, duration_ms, listener, request_id,
 // correlation_id, trace_id, real_ip. The listener field is emitted only when
 // the router annotated the request with a non-empty physical listener name.
@@ -21,12 +23,13 @@ import (
 // When a RecorderState exists in the context (created by the Recorder
 // middleware), AccessLog reuses it. Otherwise it creates its own to
 // remain usable as a standalone middleware.
-func AccessLog(next http.Handler) http.Handler {
-	return accessLogWithClock(clock.Real())(next)
+func AccessLog(clk clock.Clock) func(http.Handler) http.Handler {
+	return accessLogWithClock(clk)
 }
 
 // accessLogWithClock is the clock-injectable variant used by AccessLog and tests.
 func accessLogWithClock(clk clock.Clock) func(http.Handler) http.Handler {
+	clock.MustHaveClock(clk, "middleware.AccessLog")
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			start := clk.Now()

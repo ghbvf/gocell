@@ -38,12 +38,9 @@ var _ outbox.Store = (*PGOutboxStore)(nil)
 // NewOutboxStore constructs a Store backed by the supplied database handle.
 // The handle is typically a *pgxpool.Pool; it must support short-lived
 // transactions (Begin).
-func NewOutboxStore(db relayDB, clk ...clock.Clock) *PGOutboxStore {
-	c := clock.Real()
-	if len(clk) > 0 && clk[0] != nil {
-		c = clk[0]
-	}
-	return &PGOutboxStore{db: db, clock: c}
+func NewOutboxStore(db relayDB, clk clock.Clock) *PGOutboxStore {
+	clock.MustHaveClock(clk, "postgres.NewOutboxStore")
+	return &PGOutboxStore{db: db, clock: clk}
 }
 
 // ---------------------------------------------------------------------------

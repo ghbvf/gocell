@@ -50,23 +50,25 @@ type HTTPConfigGetter struct {
 // NewHTTPConfigGetter creates a new HTTPConfigGetter.
 // baseURL is the base address of the internal listener (e.g. "http://localhost:9090").
 // ring is used to generate the service token Authorization header.
-func NewHTTPConfigGetter(baseURL string, ring *auth.HMACKeyRing) *HTTPConfigGetter {
+func NewHTTPConfigGetter(baseURL string, ring *auth.HMACKeyRing, clk clock.Clock) *HTTPConfigGetter {
+	clock.MustHaveClock(clk, "accesscore/http.NewHTTPConfigGetter")
 	return &HTTPConfigGetter{
 		baseURL: baseURL,
 		ring:    ring,
 		client:  &http.Client{Timeout: defaultConfigClientHTTPTimeout},
-		clock:   clock.Real(),
+		clock:   clk,
 	}
 }
 
 // NewHTTPConfigGetterWithHTTPClient creates a new HTTPConfigGetter with a custom
 // *http.Client (used in tests with httptest.Server).
-func NewHTTPConfigGetterWithHTTPClient(baseURL string, ring *auth.HMACKeyRing, httpClient *http.Client) *HTTPConfigGetter {
+func NewHTTPConfigGetterWithHTTPClient(baseURL string, ring *auth.HMACKeyRing, httpClient *http.Client, clk clock.Clock) *HTTPConfigGetter {
+	clock.MustHaveClock(clk, "accesscore/http.NewHTTPConfigGetterWithHTTPClient")
 	return &HTTPConfigGetter{
 		baseURL: baseURL,
 		ring:    ring,
 		client:  httpClient,
-		clock:   clock.Real(),
+		clock:   clk,
 	}
 }
 

@@ -16,6 +16,7 @@ import (
 	"github.com/ghbvf/gocell/cells/accesscore/internal/domain"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/mem"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/ports"
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/query"
 )
@@ -69,7 +70,7 @@ func TestNewProvisioner_NilDependency_ReturnsError(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			_, err := adminprovision.NewProvisioner(tc.user, tc.role, tc.log, tc.id)
+			_, err := adminprovision.NewProvisioner(tc.user, tc.role, tc.log, tc.id, clock.Real())
 			require.Error(t, err)
 		})
 	}
@@ -392,7 +393,7 @@ func newProvisioner(
 	id adminprovision.UUIDGenerator,
 ) *adminprovision.Provisioner {
 	t.Helper()
-	p, err := adminprovision.NewProvisioner(user, role, discardLogger(), id)
+	p, err := adminprovision.NewProvisioner(user, role, discardLogger(), id, clock.Real())
 	require.NoError(t, err)
 	return p
 }

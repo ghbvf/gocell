@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/runtime/http/middleware"
 )
@@ -20,7 +21,7 @@ var (
 )
 
 func TestLimiter_AllowsWithinRate(t *testing.T) {
-	l := New(Config{Rate: 10, Burst: 10})
+	l := New(Config{Rate: 10, Burst: 10}, clock.Real())
 	t.Cleanup(func() {
 		if err := l.Close(context.Background()); err != nil {
 			t.Logf("limiter close: %v", err)
@@ -33,7 +34,7 @@ func TestLimiter_AllowsWithinRate(t *testing.T) {
 }
 
 func TestLimiter_RejectsOverRate(t *testing.T) {
-	l := New(Config{Rate: 1, Burst: 1})
+	l := New(Config{Rate: 1, Burst: 1}, clock.Real())
 	t.Cleanup(func() {
 		if err := l.Close(context.Background()); err != nil {
 			t.Logf("limiter close: %v", err)
@@ -45,7 +46,7 @@ func TestLimiter_RejectsOverRate(t *testing.T) {
 }
 
 func TestLimiter_PerIPIsolation(t *testing.T) {
-	l := New(Config{Rate: 1, Burst: 1})
+	l := New(Config{Rate: 1, Burst: 1}, clock.Real())
 	t.Cleanup(func() {
 		if err := l.Close(context.Background()); err != nil {
 			t.Logf("limiter close: %v", err)
@@ -58,7 +59,7 @@ func TestLimiter_PerIPIsolation(t *testing.T) {
 }
 
 func TestLimiter_Window(t *testing.T) {
-	l := New(Config{Rate: 100, Burst: 200})
+	l := New(Config{Rate: 100, Burst: 200}, clock.Real())
 	t.Cleanup(func() {
 		if err := l.Close(context.Background()); err != nil {
 			t.Logf("limiter close: %v", err)
@@ -76,7 +77,7 @@ func TestLimiter_StaleEntryCleanup(t *testing.T) {
 		Burst:           10,
 		CleanupInterval: testtime.MediumPoll,
 		StaleAfter:      testtime.SlowPoll,
-	})
+	}, clock.Real())
 	t.Cleanup(func() {
 		if err := l.Close(context.Background()); err != nil {
 			t.Logf("limiter close: %v", err)
@@ -96,7 +97,7 @@ func TestLimiter_StaleEntryCleanup(t *testing.T) {
 }
 
 func TestLimiter_ConcurrentAccess(t *testing.T) {
-	l := New(Config{Rate: 1000, Burst: 1000})
+	l := New(Config{Rate: 1000, Burst: 1000}, clock.Real())
 	t.Cleanup(func() {
 		if err := l.Close(context.Background()); err != nil {
 			t.Logf("limiter close: %v", err)
@@ -117,7 +118,7 @@ func TestLimiter_ConcurrentAccess(t *testing.T) {
 }
 
 func TestLimiter_DefaultConfig(t *testing.T) {
-	l := New(Config{}) // zero-value config → sensible defaults
+	l := New(Config{}, clock.Real()) // zero-value config → sensible defaults
 	t.Cleanup(func() {
 		if err := l.Close(context.Background()); err != nil {
 			t.Logf("limiter close: %v", err)
@@ -139,7 +140,7 @@ func TestLimiter_DefaultConfig(t *testing.T) {
 // TestLimiter_Close_AcceptsCtx verifies that Close(ctx) exists and stops the
 // background cleanup goroutine when called with ample budget.
 func TestLimiter_Close_AcceptsCtx(t *testing.T) {
-	l := New(Config{CleanupInterval: time.Minute})
+	l := New(Config{CleanupInterval: time.Minute}, clock.Real())
 
 	ctx, cancel := context.WithTimeout(context.Background(), testtime.CtxDefault)
 	defer cancel()
@@ -151,7 +152,7 @@ func TestLimiter_Close_AcceptsCtx(t *testing.T) {
 // TestLimiter_Close_Idempotent verifies that a second Close(ctx) call
 // returns nil immediately (stopOnce guard).
 func TestLimiter_Close_Idempotent(t *testing.T) {
-	l := New(Config{CleanupInterval: time.Minute})
+	l := New(Config{CleanupInterval: time.Minute}, clock.Real())
 	ctx := context.Background()
 
 	assert.NoError(t, l.Close(ctx), "first Close must return nil")
@@ -161,7 +162,7 @@ func TestLimiter_Close_Idempotent(t *testing.T) {
 // TestLimiter_Close_StopsCleanupGoroutine verifies that after Close(ctx),
 // the background cleanup goroutine no longer runs.
 func TestLimiter_Close_StopsCleanupGoroutine(t *testing.T) {
-	l := New(Config{CleanupInterval: testtime.D10ms, StaleAfter: time.Millisecond})
+	l := New(Config{CleanupInterval: testtime.D10ms, StaleAfter: time.Millisecond}, clock.Real())
 	_ = l.Allow("10.0.0.1") // create an entry
 
 	ctx := context.Background()

@@ -10,6 +10,7 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/cell/celltest"
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/persistence"
@@ -24,14 +25,41 @@ func TestWithLogger(t *testing.T) {
 }
 
 func TestWithInMemoryDefaults(t *testing.T) {
-	c := NewAccessCore(WithInMemoryDefaults())
+	c := NewAccessCore(
+		WithInMemoryDefaults(),
+		WithJWTIssuer(testIssuer),
+		WithJWTVerifier(testVerifier),
+		WithRefreshStore(newTestRefreshStore()),
+		WithOutboxDeps(nil, outbox.NoopWriter{}),
+		WithTxManager(persistence.NoopTxRunner{}),
+	)
+	// userRepo and roleRepo are set eagerly; sessionRepo is deferred to Init()
+	// so that deps.Clock is available (clock injection pattern).
 	assert.NotNil(t, c.userRepo)
-	assert.NotNil(t, c.sessionRepo)
 	assert.NotNil(t, c.roleRepo)
+	// Verify sessionRepo is wired after Init.
+	require.NoError(t, c.Init(context.Background(), cell.Dependencies{
+		Config:         make(map[string]any),
+		DurabilityMode: cell.DurabilityDemo,
+		Clock:          clock.Real(),
+	}))
+	assert.NotNil(t, c.sessionRepo)
 }
 
 func TestHealthCheckers_InMemory(t *testing.T) {
-	c := NewAccessCore(WithInMemoryDefaults())
+	c := NewAccessCore(
+		WithInMemoryDefaults(),
+		WithJWTIssuer(testIssuer),
+		WithJWTVerifier(testVerifier),
+		WithRefreshStore(newTestRefreshStore()),
+		WithOutboxDeps(nil, outbox.NoopWriter{}),
+		WithTxManager(persistence.NoopTxRunner{}),
+	)
+	require.NoError(t, c.Init(context.Background(), cell.Dependencies{
+		Config:         make(map[string]any),
+		DurabilityMode: cell.DurabilityDemo,
+		Clock:          clock.Real(),
+	}))
 	checkers := c.HealthCheckers()
 	require.Contains(t, checkers, "session-store", "in-memory session repo implements Health()")
 	assert.NoError(t, checkers["session-store"](context.Background()))
@@ -46,7 +74,7 @@ func TestHealthCheckers_NilRepo(t *testing.T) {
 func TestRegisterSubscriptions(t *testing.T) {
 	c := newTestCell()
 	ctx := context.Background()
-	deps := cell.Dependencies{Config: make(map[string]any), DurabilityMode: cell.DurabilityDemo}
+	deps := cell.Dependencies{Config: make(map[string]any), DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()}
 	require.NoError(t, c.Init(ctx, deps))
 
 	r := &celltest.StubEventRouter{}
@@ -75,7 +103,7 @@ func TestInit_DurableMode_MissingOutboxWriter(t *testing.T) {
 		WithJWTVerifier(testVerifier),
 		WithTxManager(durableTxRunner{}),
 	)
-	deps := cell.Dependencies{Config: make(map[string]any), DurabilityMode: cell.DurabilityDurable}
+	deps := cell.Dependencies{Config: make(map[string]any), DurabilityMode: cell.DurabilityDurable, Clock: clock.Real()}
 	err := c.Init(context.Background(), deps)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "outboxWriter")
@@ -92,6 +120,7 @@ func TestInit_DurableMode_RejectsNoopWriter(t *testing.T) {
 	deps := cell.Dependencies{
 		Config:         make(map[string]any),
 		DurabilityMode: cell.DurabilityDurable,
+		Clock:          clock.Real(),
 	}
 	err := c.Init(context.Background(), deps)
 	require.Error(t, err)
@@ -106,7 +135,7 @@ func TestInit_MissingJWTIssuerAndVerifier(t *testing.T) {
 		WithOutboxDeps(nil, outbox.NoopWriter{}),
 		WithTxManager(persistence.NoopTxRunner{}),
 	)
-	deps := cell.Dependencies{Config: make(map[string]any), DurabilityMode: cell.DurabilityDemo}
+	deps := cell.Dependencies{Config: make(map[string]any), DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()}
 	err := c.Init(context.Background(), deps)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "WithJWTIssuer")
@@ -121,10 +150,10 @@ func TestHealthCheckers_WithDirectEmitter(t *testing.T) {
 		WithInMemoryDefaults(),
 		WithJWTIssuer(testIssuer),
 		WithJWTVerifier(testVerifier),
-		WithOutboxDeps(eventbus.New(), nil),
+		WithOutboxDeps(eventbus.New(eventbus.WithClock(clock.Real())), nil),
 		WithMetricsProvider(metrics.NopProvider{}),
 	)
-	deps := cell.Dependencies{Config: make(map[string]any), DurabilityMode: cell.DurabilityDemo}
+	deps := cell.Dependencies{Config: make(map[string]any), DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()}
 	require.NoError(t, c.Init(context.Background(), deps))
 
 	checkers := c.HealthCheckers()
@@ -135,12 +164,26 @@ func TestHealthCheckers_WithDirectEmitter(t *testing.T) {
 }
 
 // TestHealthCheckers_WithNoopEmitter verifies that when the emitter does not
-// implement cell.HealthContributor (e.g. DiscardPublisher-backed emitter
-// after Init in demo mode with no metrics), only cell-owned checkers appear.
+// implement cell.HealthContributor (WriterEmitter via NoopWriter path),
+// only cell-owned checkers appear.
 func TestHealthCheckers_NoEmitterChecker(t *testing.T) {
-	// WithEmitter(nil) → emitter field stays nil → no HealthContributor
-	c := NewAccessCore(WithInMemoryDefaults())
-	// Do NOT Init — emitter is nil pre-Init; HealthCheckers must handle that.
+	// WriterEmitter (NoopWriter path) does not implement HealthContributor,
+	// so no outbox-failopen-rate checker is produced.
+	// sessionRepo is deferred to Init() (clock injection pattern), so Init
+	// must be called before HealthCheckers() to have session-store present.
+	c := NewAccessCore(
+		WithInMemoryDefaults(),
+		WithJWTIssuer(testIssuer),
+		WithJWTVerifier(testVerifier),
+		WithRefreshStore(newTestRefreshStore()),
+		WithOutboxDeps(nil, outbox.NoopWriter{}),
+		WithTxManager(persistence.NoopTxRunner{}),
+	)
+	require.NoError(t, c.Init(context.Background(), cell.Dependencies{
+		Config:         make(map[string]any),
+		DurabilityMode: cell.DurabilityDemo,
+		Clock:          clock.Real(),
+	}))
 	checkers := c.HealthCheckers()
 	assert.Contains(t, checkers, "session-store", "session-store must still be present")
 	for k := range checkers {

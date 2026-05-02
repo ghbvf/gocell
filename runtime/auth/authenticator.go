@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/validation"
 )
@@ -143,8 +144,9 @@ func jwtClaimsToPrincipal(c Claims) *Principal {
 //
 // ref: HashiCorp Vault server fail-closed defaults (no Noop-equivalent path).
 // ref: kubernetes/apiserver pkg/authentication — typed (Authenticator, error).
-func NewServiceTokenAuthenticator(ring cell.HMACKeyring, opts ...ServiceTokenOption) (Authenticator, error) {
-	cfg := serviceTokenConfig{now: time.Now}
+func NewServiceTokenAuthenticator(ring cell.HMACKeyring, clk clock.Clock, opts ...ServiceTokenOption) (Authenticator, error) {
+	clock.MustHaveClock(clk, "auth.NewServiceTokenAuthenticator")
+	cfg := serviceTokenConfig{clk: clk}
 	for _, o := range opts {
 		o(&cfg)
 	}
@@ -214,11 +216,7 @@ func verifyServiceTokenPayload(ring cell.HMACKeyring, payload string, cfg servic
 		return errcode.NewAuth(errcode.ErrAuthUnauthorized, "invalid service token timestamp")
 	}
 
-	nowFn := cfg.now
-	if nowFn == nil {
-		nowFn = time.Now
-	}
-	now := nowFn()
+	now := cfg.clk.Now()
 	tokenTime := time.Unix(ts, 0)
 	if tokenTime.After(now.Add(ServiceTokenClockSkew)) {
 		return errcode.NewAuth(errcode.ErrAuthTokenExpired, "service token timestamp is too far in the future")

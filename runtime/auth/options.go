@@ -21,7 +21,13 @@ type authConfig struct {
 }
 
 func defaultAuthConfig() authConfig {
-	return authConfig{clock: clock.Real(), logger: slog.Default()}
+	return authConfig{logger: slog.Default()}
+}
+
+// WithAuthClock sets the clock for auth middleware timing (token verification
+// latency metrics). Required; AuthMiddleware panics if not set.
+func WithAuthClock(clk clock.Clock) AuthOption {
+	return func(c *authConfig) { c.clock = clk }
 }
 
 // WithLogger sets the logger for auth middleware.

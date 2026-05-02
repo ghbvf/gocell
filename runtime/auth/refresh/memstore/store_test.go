@@ -27,6 +27,15 @@ func (*typedNilClock) Until(t time.Time) time.Duration { return t.Sub(baseTime) 
 func (*typedNilClock) NewTimerAt(_ time.Time) clock.Timer {
 	panic("typedNilClock.NewTimerAt not implemented")
 }
+func (*typedNilClock) NewTicker(_ time.Duration) clock.Ticker {
+	panic("typedNilClock.NewTicker not implemented")
+}
+func (*typedNilClock) AfterFunc(_ time.Time, _ func()) clock.Timer {
+	panic("typedNilClock.AfterFunc not implemented")
+}
+func (*typedNilClock) Sleep(_ context.Context, _ time.Time) error {
+	panic("typedNilClock.Sleep not implemented")
+}
 
 type typedNilReader struct{}
 

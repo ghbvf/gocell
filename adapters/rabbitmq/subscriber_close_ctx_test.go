@@ -22,6 +22,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 )
@@ -115,6 +116,7 @@ func TestSubscriber_Reconnect_E2E_ChannelCloseAfterAllAcks(t *testing.T) {
 		QueueName:     "f6-ack-order-queue",
 		DLXExchange:   "f6-ack-order.dlx",
 		PrefetchCount: numDeliveries,
+		Clock:         clock.Real(),
 	})
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -185,6 +187,7 @@ func newSubNoShutdown(conn *Connection, queueName, dlx string) *Subscriber {
 	return NewSubscriber(conn, SubscriberConfig{
 		QueueName:   queueName,
 		DLXExchange: dlx,
+		Clock:       clock.Real(),
 	})
 }
 

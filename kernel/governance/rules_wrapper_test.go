@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/metadata"
 )
 
@@ -59,7 +60,7 @@ func TestValidateContractSpecLiteral(t *testing.T) {
 			},
 		},
 	}
-	v := NewValidator(project, t.TempDir())
+	v := NewValidator(project, t.TempDir(), clock.Real())
 
 	assert.Empty(t, v.validateContractSpecLiteral(contractSpecLiteral{
 		file:   "cells/accesscore/routes.go",
@@ -215,7 +216,7 @@ var spec = wrapper.ContractSpec{ID: "imposter.v1", Kind: "http", Transport: "htt
 // string literal produce a visible FMT-18 error instead of being silently
 // dropped.
 func TestValidateContractSpecLiteral_UnresolvedWarns(t *testing.T) {
-	v := NewValidator(&metadata.ProjectMeta{}, t.TempDir())
+	v := NewValidator(&metadata.ProjectMeta{}, t.TempDir(), clock.Real())
 	results := v.validateContractSpecLiteral(contractSpecLiteral{
 		file:       "cells/mystery/mystery.go",
 		line:       42,
@@ -413,7 +414,7 @@ func runFMT19Case(t *testing.T, source string, wantErrors int, wantText string) 
 	require.NoError(t, os.WriteFile(filepath.Join(wrapperDir, "state_test.go"),
 		[]byte("package wrapper\nvar ignored Tracer = nil\n"), 0o644))
 
-	results := NewValidator(&metadata.ProjectMeta{}, root).validateFMT19(true)
+	results := NewValidator(&metadata.ProjectMeta{}, root, clock.Real()).validateFMT19(true)
 	assert.Len(t, results, wantErrors, "got results: %v", results)
 	for _, r := range results {
 		assert.Equal(t, codeFMT19, r.Code)

@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/ghbvf/gocell/cells/accesscore/internal/ports"
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/runtime/auth"
 )
@@ -40,8 +41,8 @@ type Deps struct {
 	Issuer TokenIssuer
 	// RoleRepo resolves the user's current role names. Required.
 	RoleRepo ports.RoleRepository
-	// Now returns the current time; defaults to time.Now when nil.
-	Now func() time.Time
+	// Clk supplies the current time. Required; MustHaveClock panics if nil.
+	Clk clock.Clock
 }
 
 // Request is the per-call input for a MintAccess.
@@ -53,7 +54,7 @@ type Request struct {
 
 // Result is the MintAccess output.
 //
-// ExpiresAt is sampled from Deps.Now (or time.Now) at MintAccess entry; the
+// ExpiresAt is sampled from Deps.Clk (or clock.Real()) at MintAccess entry; the
 // JWT's own exp claim is stamped independently inside the issuer a moment
 // later. Treat Result.ExpiresAt as the business-layer expiry (used for Session
 // persistence) — the authoritative wire value is the JWT exp claim.
@@ -73,11 +74,9 @@ func MintAccess(ctx context.Context, deps Deps, req Request) (Result, error) {
 			"sessionmint: fetch roles", err)
 	}
 
-	now := time.Now
-	if deps.Now != nil {
-		now = deps.Now
-	}
-	expiresAt := now().Add(auth.DefaultAccessTokenTTL)
+	clk := deps.Clk
+	clock.MustHaveClock(clk, "sessionmint.MintAccess")
+	expiresAt := clk.Now().Add(auth.DefaultAccessTokenTTL)
 
 	access, err := deps.Issuer.Issue(auth.TokenIntentAccess, req.UserID, auth.IssueOptions{
 		Roles:                 roles,

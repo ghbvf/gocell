@@ -38,7 +38,7 @@ func newTestInternalGuard(t *testing.T) *internalGuard {
 	t.Helper()
 	ring, err := auth.NewHMACKeyRing([]byte("test-secret-32-bytes-long-padding!"), nil)
 	require.NoError(t, err)
-	store, err := auth.NewInMemoryNonceStore(auth.ServiceTokenNonceTTL)
+	store, err := auth.NewInMemoryNonceStore(auth.ServiceTokenNonceTTL, clock.Real())
 	require.NoError(t, err)
 	return &internalGuard{
 		ring:       ring,
@@ -222,14 +222,15 @@ func buildTestSharedDeps(t *testing.T) *SharedDeps {
 	t.Setenv("GOCELL_JWT_ISSUER", "test-issuer")
 	t.Setenv("GOCELL_JWT_AUDIENCE", "test-audience")
 
-	eb := eventbus.New()
+	eb := eventbus.New(eventbus.WithClock(clock.Real()))
 
 	privKey, pubKey := auth.MustGenerateTestKeyPair()
-	keySet, err := auth.NewKeySet(privKey, pubKey)
+	keySet, err := auth.NewKeySet(privKey, pubKey, clock.Real())
 	require.NoError(t, err)
-	issuer, err := auth.NewJWTIssuer(keySet, "test-issuer", testtime.D15min, auth.WithIssuerAudiencesFromSlice([]string{"test-audience"}))
+	issuer, err := auth.NewJWTIssuer(keySet, "test-issuer", testtime.D15min, clock.Real(),
+		auth.WithIssuerAudiencesFromSlice([]string{"test-audience"}))
 	require.NoError(t, err)
-	verifier, err := auth.NewJWTVerifier(keySet, auth.WithExpectedAudiences("test-audience"))
+	verifier, err := auth.NewJWTVerifier(keySet, clock.Real(), auth.WithExpectedAudiences("test-audience"))
 	require.NoError(t, err)
 
 	ps, err := buildPromStack()
@@ -243,7 +244,7 @@ func buildTestSharedDeps(t *testing.T) *SharedDeps {
 		PromStack:            ps,
 		EventBus:             eb,
 		ConfigEventCollector: configEventCollector,
-		ConsumerClaimer:      idempotency.NewInMemClaimer(),
+		ConsumerClaimer:      idempotency.NewInMemClaimer(clock.Real()),
 		ConsumerClaimerKind:  consumerClaimerKindInMemory,
 		InternalHTTPAddr:     "127.0.0.1:9090",
 		InternalGuard:        newTestInternalGuard(t),
@@ -269,11 +270,12 @@ func newValidatedSharedDeps(t *testing.T, topo bootstrap.Topology) *SharedDeps {
 	t.Setenv("GOCELL_STATE_DIR", t.TempDir())
 
 	privKey, pubKey := auth.MustGenerateTestKeyPair()
-	keySet, err := auth.NewKeySet(privKey, pubKey)
+	keySet, err := auth.NewKeySet(privKey, pubKey, clock.Real())
 	require.NoError(t, err)
-	issuer, err := auth.NewJWTIssuer(keySet, "test-issuer", testtime.D15min, auth.WithIssuerAudiencesFromSlice([]string{"test-audience"}))
+	issuer, err := auth.NewJWTIssuer(keySet, "test-issuer", testtime.D15min, clock.Real(),
+		auth.WithIssuerAudiencesFromSlice([]string{"test-audience"}))
 	require.NoError(t, err)
-	verifier, err := auth.NewJWTVerifier(keySet, auth.WithExpectedAudiences("test-audience"))
+	verifier, err := auth.NewJWTVerifier(keySet, clock.Real(), auth.WithExpectedAudiences("test-audience"))
 	require.NoError(t, err)
 
 	ps, err := buildPromStack()
@@ -285,9 +287,9 @@ func newValidatedSharedDeps(t *testing.T, topo bootstrap.Topology) *SharedDeps {
 		Topology:             topo,
 		JWTDeps:              jwtDeps{issuer: issuer, verifier: verifier},
 		PromStack:            ps,
-		EventBus:             eventbus.New(),
+		EventBus:             eventbus.New(eventbus.WithClock(clock.Real())),
 		ConfigEventCollector: configEventCollector,
-		ConsumerClaimer:      idempotency.NewInMemClaimer(),
+		ConsumerClaimer:      idempotency.NewInMemClaimer(clock.Real()),
 		ConsumerClaimerKind:  consumerClaimerKindInMemory,
 		InternalHTTPAddr:     "127.0.0.1:9090",
 		InternalGuard:        newTestInternalGuard(t),

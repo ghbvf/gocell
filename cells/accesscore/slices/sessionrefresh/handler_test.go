@@ -17,6 +17,7 @@ import (
 	"github.com/ghbvf/gocell/cells/accesscore/internal/dto"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/mem"
 	"github.com/ghbvf/gocell/kernel/cell/celltest"
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/runtime/auth/refresh"
 )
@@ -28,7 +29,7 @@ const refreshPath = "/api/v1/access/sessions/refresh"
 // setup wires the slice handler onto a celltest mux via RegisterRoutes — the
 // same code path cell_routes.go takes in production.
 func setup() (http.Handler, string) {
-	sessionRepo := mem.NewSessionRepository()
+	sessionRepo := mem.NewSessionRepository(clock.Real())
 	refreshStore := newTestRefreshStore()
 
 	sess, _ := domain.NewSession("usr-1", "access-tok", time.Now().Add(time.Hour), time.Now())
@@ -48,7 +49,7 @@ func setup() (http.Handler, string) {
 	u.ID = "usr-1"
 	_ = userRepo.Create(context.Background(), u)
 
-	svc := MustNewService(sessionRepo, mem.NewRoleRepository(), userRepo, refreshStore, testIssuer, slog.Default())
+	svc := MustNewService(sessionRepo, mem.NewRoleRepository(), userRepo, refreshStore, testIssuer, slog.Default(), WithClock(clock.Real()))
 	mux := celltest.NewTestMux()
 	if err := NewHandler(svc).RegisterRoutes(mux); err != nil {
 		panic("RegisterRoutes: " + err.Error())
@@ -197,10 +198,10 @@ func TestHandleRefresh(t *testing.T) {
 }
 
 func TestHandleRefresh_RefreshStoreUnavailable_Returns503(t *testing.T) {
-	sessionRepo := mem.NewSessionRepository()
+	sessionRepo := mem.NewSessionRepository(clock.Real())
 	userRepo := mem.NewUserRepository()
 	store := unavailableRefreshStore{Store: newTestRefreshStore()}
-	svc := MustNewService(sessionRepo, mem.NewRoleRepository(), userRepo, store, testIssuer, slog.Default())
+	svc := MustNewService(sessionRepo, mem.NewRoleRepository(), userRepo, store, testIssuer, slog.Default(), WithClock(clock.Real()))
 	mux := celltest.NewTestMux()
 	if err := NewHandler(svc).RegisterRoutes(mux); err != nil {
 		panic("RegisterRoutes: " + err.Error())

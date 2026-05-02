@@ -21,15 +21,12 @@ type SessionRepository struct {
 }
 
 // NewSessionRepository creates an empty in-memory SessionRepository.
-// clk is the clock used for timestamping revocations; defaults to clock.Real().
-func NewSessionRepository(clk ...clock.Clock) *SessionRepository {
-	c := clock.Real()
-	if len(clk) > 0 && clk[0] != nil {
-		c = clk[0]
-	}
+// clk is the clock used for timestamping revocations.
+func NewSessionRepository(clk clock.Clock) *SessionRepository {
+	clock.MustHaveClock(clk, "mem.NewSessionRepository")
 	return &SessionRepository{
 		byID:  make(map[string]*domain.Session),
-		clock: c,
+		clock: clk,
 	}
 }
 

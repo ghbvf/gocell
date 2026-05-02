@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	configcrypto "github.com/ghbvf/gocell/cells/configcore/internal/crypto"
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
@@ -140,20 +141,20 @@ func (noopTransformerForMigTest) Decrypt(_ context.Context, ciphertext []byte, _
 // ---------------------------------------------------------------------------
 
 func TestPlaintextMigrator_NilTransformer_Fails(t *testing.T) {
-	_, err := newPlaintextMigrator(&fakeDB{}, nil, PlaintextMigrationConfig{})
+	_, err := newPlaintextMigrator(&fakeDB{}, nil, PlaintextMigrationConfig{}, clock.Real())
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "transformer must not be nil")
 }
 
 func TestPlaintextMigrator_DefaultBatchSize(t *testing.T) {
-	m, err := newPlaintextMigrator(&fakeDB{}, noopTransformerForMigTest{}, PlaintextMigrationConfig{BatchSize: 0})
+	m, err := newPlaintextMigrator(&fakeDB{}, noopTransformerForMigTest{}, PlaintextMigrationConfig{BatchSize: 0}, clock.Real())
 	require.NoError(t, err)
 	assert.Equal(t, 50, m.cfg.BatchSize)
 }
 
 func TestPlaintextMigrator_MigrateConfigEntries_Empty(t *testing.T) {
 	db := &fakeDB{}
-	m, err := newPlaintextMigrator(db, noopTransformerForMigTest{}, PlaintextMigrationConfig{BatchSize: 10})
+	m, err := newPlaintextMigrator(db, noopTransformerForMigTest{}, PlaintextMigrationConfig{BatchSize: 10}, clock.Real())
 	require.NoError(t, err)
 
 	result, err := m.MigrateConfigEntries(context.Background())
@@ -168,7 +169,7 @@ func TestPlaintextMigrator_MigrateConfigEntries_SingleRow(t *testing.T) {
 			{id: "row-1", key: "db.password", value: "s3cret", sensitive: true},
 		},
 	}
-	m, err := newPlaintextMigrator(db, noopTransformerForMigTest{}, PlaintextMigrationConfig{BatchSize: 10})
+	m, err := newPlaintextMigrator(db, noopTransformerForMigTest{}, PlaintextMigrationConfig{BatchSize: 10}, clock.Real())
 	require.NoError(t, err)
 
 	result, err := m.MigrateConfigEntries(context.Background())
@@ -195,7 +196,7 @@ func TestPlaintextMigrator_MigrateConfigEntries_BatchProcessing(t *testing.T) {
 		}
 	}
 	db := &fakeDB{rows: rows}
-	m, err := newPlaintextMigrator(db, noopTransformerForMigTest{}, PlaintextMigrationConfig{BatchSize: 3})
+	m, err := newPlaintextMigrator(db, noopTransformerForMigTest{}, PlaintextMigrationConfig{BatchSize: 3}, clock.Real())
 	require.NoError(t, err)
 
 	// fakeDB returns all pending each Query call regardless of prior Exec (no in-memory update).
@@ -205,7 +206,7 @@ func TestPlaintextMigrator_MigrateConfigEntries_BatchProcessing(t *testing.T) {
 	// We simulate idempotency by making Exec update the rows in memory.
 	// For simplicity, override db.rows to shrink after each batch by wrapping.
 	db2 := &batchFakeDB{rows: rows}
-	m2, err := newPlaintextMigrator(db2, noopTransformerForMigTest{}, PlaintextMigrationConfig{BatchSize: 3})
+	m2, err := newPlaintextMigrator(db2, noopTransformerForMigTest{}, PlaintextMigrationConfig{BatchSize: 3}, clock.Real())
 	require.NoError(t, err)
 
 	result, err := m2.MigrateConfigEntries(context.Background())
@@ -261,7 +262,7 @@ func (db *batchFakeDB) QueryRow(_ context.Context, _ string, _ ...any) Row {
 
 func TestPlaintextMigrator_QueryError_Propagates(t *testing.T) {
 	db := &fakeDB{queryErr: errors.New("connection lost")}
-	m, err := newPlaintextMigrator(db, noopTransformerForMigTest{}, PlaintextMigrationConfig{})
+	m, err := newPlaintextMigrator(db, noopTransformerForMigTest{}, PlaintextMigrationConfig{}, clock.Real())
 	require.NoError(t, err)
 
 	_, err = m.MigrateConfigEntries(context.Background())
@@ -274,7 +275,7 @@ func TestPlaintextMigrator_ExecError_Propagates(t *testing.T) {
 		rows:    []migrationRow{{id: "r1", key: "k", value: "v", sensitive: true}},
 		execErr: errors.New("update failed"),
 	}
-	m, err := newPlaintextMigrator(db, noopTransformerForMigTest{}, PlaintextMigrationConfig{})
+	m, err := newPlaintextMigrator(db, noopTransformerForMigTest{}, PlaintextMigrationConfig{}, clock.Real())
 	require.NoError(t, err)
 
 	_, err = m.MigrateConfigEntries(context.Background())
@@ -290,7 +291,7 @@ func TestPlaintextMigrator_Idempotent_AlreadyEncryptedRowsSkipped(t *testing.T) 
 			{id: "r2", key: "k2", value: "plaintext", sensitive: true},
 		},
 	}
-	m, err := newPlaintextMigrator(db, noopTransformerForMigTest{}, PlaintextMigrationConfig{})
+	m, err := newPlaintextMigrator(db, noopTransformerForMigTest{}, PlaintextMigrationConfig{}, clock.Real())
 	require.NoError(t, err)
 
 	result, err := m.MigrateConfigEntries(context.Background())
@@ -306,7 +307,7 @@ func TestPlaintextMigrator_NonSensitiveRowsSkipped(t *testing.T) {
 			{id: "r1", key: "k1", value: "open", sensitive: false},
 		},
 	}
-	m, err := newPlaintextMigrator(db, noopTransformerForMigTest{}, PlaintextMigrationConfig{})
+	m, err := newPlaintextMigrator(db, noopTransformerForMigTest{}, PlaintextMigrationConfig{}, clock.Real())
 	require.NoError(t, err)
 
 	result, err := m.MigrateConfigEntries(context.Background())
@@ -321,7 +322,7 @@ func TestPlaintextMigrator_MigrateConfigVersions_SingleRow(t *testing.T) {
 			{id: "v1", key: "app.secret", value: "tok", sensitive: true},
 		},
 	}
-	m, err := newPlaintextMigrator(db, noopTransformerForMigTest{}, PlaintextMigrationConfig{})
+	m, err := newPlaintextMigrator(db, noopTransformerForMigTest{}, PlaintextMigrationConfig{}, clock.Real())
 	require.NoError(t, err)
 
 	result, err := m.MigrateConfigVersions(context.Background())
@@ -402,7 +403,7 @@ func TestPlaintextMigration_AADBinding(t *testing.T) {
 					{id: "row-1", key: tc.configKey, value: tc.value, sensitive: true},
 				},
 			}
-			m, err := newPlaintextMigrator(db, tr, PlaintextMigrationConfig{BatchSize: 10})
+			m, err := newPlaintextMigrator(db, tr, PlaintextMigrationConfig{BatchSize: 10}, clock.Real())
 			require.NoError(t, err)
 
 			result, err := m.MigrateConfigEntries(ctx)
@@ -481,7 +482,7 @@ func TestPlaintextMigrator_CAS_ConcurrentWrite_Skipped(t *testing.T) {
 			{id: "r1", key: "db.password", value: "s3cret", sensitive: true},
 		},
 	}
-	m, err := newPlaintextMigrator(db, noopTransformerForMigTest{}, PlaintextMigrationConfig{})
+	m, err := newPlaintextMigrator(db, noopTransformerForMigTest{}, PlaintextMigrationConfig{}, clock.Real())
 	require.NoError(t, err)
 
 	result, err := m.MigrateConfigEntries(context.Background())
@@ -515,7 +516,7 @@ func TestPlaintextMigration_ConfigVersions_AADBinding(t *testing.T) {
 			{id: "cv-row-1", key: configID, value: value, sensitive: true},
 		},
 	}
-	m, err := newPlaintextMigrator(db, tr, PlaintextMigrationConfig{BatchSize: 10})
+	m, err := newPlaintextMigrator(db, tr, PlaintextMigrationConfig{BatchSize: 10}, clock.Real())
 	require.NoError(t, err)
 
 	result, err := m.MigrateConfigVersions(ctx)
