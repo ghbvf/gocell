@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/ctxkeys"
 )
 
@@ -361,6 +362,7 @@ func TestCSRF_CookieSessionIntegration(t *testing.T) {
 	// Test the CSRF → CookieSession middleware chain.
 	secret := generateKey(t)
 	sessCfg := DefaultCookieSessionConfig(secret)
+	sessCfg.Clock = clock.Real()
 
 	csrfCfg := CSRFConfig{
 		TrustedOrigins:     []string{"https://app.example.com"},

@@ -32,13 +32,6 @@ type Clock interface {
 	Now() time.Time
 }
 
-// realClock is the default Clock implementation. It is exported as a private
-// zero-value singleton so [New] can stamp a non-nil clock without forcing
-// every caller to pass one.
-type realClock struct{}
-
-func (realClock) Now() time.Time { return time.Now() }
-
 // MustHaveClock panics when clk is nil or a typed-nil (interface wrapping a
 // nil pointer). pkg/ may not import kernel/clock, so this is a local equivalent
 // of clock.MustHaveClock with the same semantics.
@@ -95,7 +88,7 @@ func New(hashKey, blockKey []byte) (*SecureCookie, error) {
 	sc := &SecureCookie{
 		hashKey: hk,
 		maxAge:  86400, // default 24h
-		clock:   realClock{},
+		clock:   nil,
 	}
 
 	if blockKey != nil {
@@ -152,6 +145,7 @@ func (sc *SecureCookie) WithClock(clk Clock) *SecureCookie {
 // Format: base64url( timestamp(8) | [nonce(12) | ciphertext(N)] or payload(N) | hmac(32) )
 // HMAC input: len(name)(4) | name | timestamp | nonce | payload.
 func (sc *SecureCookie) Encode(name string, value []byte) (string, error) {
+	MustHaveClock(sc.clock)
 	// 1. Timestamp
 	ts := make([]byte, timestampLen)
 	now := sc.clock.Now().Unix()
@@ -189,6 +183,7 @@ func (sc *SecureCookie) Encode(name string, value []byte) (string, error) {
 // Decode verifies signature, checks freshness, decrypts, and returns the
 // original value.
 func (sc *SecureCookie) Decode(name string, encoded string) ([]byte, error) {
+	MustHaveClock(sc.clock)
 	raw, err := base64.RawURLEncoding.DecodeString(encoded)
 	if err != nil {
 		return nil, fmt.Errorf("securecookie: base64: %w", err)

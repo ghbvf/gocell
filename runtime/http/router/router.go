@@ -423,6 +423,9 @@ func NewForListener(ref kcell.ListenerRef, opts ...Option) (*Router, error) {
 	if err != nil {
 		return nil, err
 	}
+	if r.clock == nil {
+		return nil, fmt.Errorf("router: clock required — use WithRouterClock(clk)")
+	}
 
 	if err := r.buildMux(realIPMW); err != nil {
 		return nil, err

@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/ghbvf/gocell/kernel/clock"
+	"github.com/ghbvf/gocell/kernel/clock/clockmock"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/runtime/http/middleware"
 )
@@ -180,6 +181,91 @@ func TestLimiter_ImplementsContextCloser(t *testing.T) {
 	var _ interface {
 		Close(ctx context.Context) error
 	} = (*Limiter)(nil)
+}
+
+// ---------------------------------------------------------------------------
+// Token bucket algorithm tests with fake clock injection
+// ---------------------------------------------------------------------------
+
+func TestBucket_AllowN_BurstInitiallyFull(t *testing.T) {
+	clk := clockmock.New(time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC))
+	l := New(Config{Rate: 1, Burst: 3}, clk)
+	t.Cleanup(func() { _ = l.Close(context.Background()) })
+
+	// Burst=3: first 3 requests should be allowed immediately.
+	assert.True(t, l.Allow("ip1"), "first request (burst slot 1)")
+	assert.True(t, l.Allow("ip1"), "second request (burst slot 2)")
+	assert.True(t, l.Allow("ip1"), "third request (burst slot 3)")
+	assert.False(t, l.Allow("ip1"), "fourth request should be rejected (burst exhausted)")
+}
+
+func TestBucket_AllowN_TokensRefillOverTime(t *testing.T) {
+	clk := clockmock.New(time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC))
+	l := New(Config{Rate: 2, Burst: 2}, clk)
+	t.Cleanup(func() { _ = l.Close(context.Background()) })
+
+	// Drain burst.
+	assert.True(t, l.Allow("ip1"))
+	assert.True(t, l.Allow("ip1"))
+	assert.False(t, l.Allow("ip1"), "burst exhausted")
+
+	// Advance 1s → rate=2/s → +2 tokens → allow 2 more.
+	clk.Advance(time.Second)
+	assert.True(t, l.Allow("ip1"), "refilled token 1")
+	assert.True(t, l.Allow("ip1"), "refilled token 2")
+	assert.False(t, l.Allow("ip1"), "no more tokens after refill consumed")
+}
+
+func TestBucket_AllowN_BurstCapNotExceeded(t *testing.T) {
+	clk := clockmock.New(time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC))
+	l := New(Config{Rate: 10, Burst: 3}, clk)
+	t.Cleanup(func() { _ = l.Close(context.Background()) })
+
+	// Start fresh, drain burst.
+	assert.True(t, l.Allow("ip1"))
+	assert.True(t, l.Allow("ip1"))
+	assert.True(t, l.Allow("ip1"))
+	assert.False(t, l.Allow("ip1"))
+
+	// Advance 10s — rate=10/s × 10s = 100 tokens but burst cap = 3.
+	clk.Advance(testtime.D10s)
+	assert.True(t, l.Allow("ip1"), "slot 1 after burst cap refill")
+	assert.True(t, l.Allow("ip1"), "slot 2 after burst cap refill")
+	assert.True(t, l.Allow("ip1"), "slot 3 after burst cap refill")
+	assert.False(t, l.Allow("ip1"), "burst cap enforced; no extra tokens beyond 3")
+}
+
+func TestBucket_AllowN_PerKeyIsolation_FakeClock(t *testing.T) {
+	clk := clockmock.New(time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC))
+	l := New(Config{Rate: 1, Burst: 1}, clk)
+	t.Cleanup(func() { _ = l.Close(context.Background()) })
+
+	assert.True(t, l.Allow("ip-a"), "ip-a first request")
+	assert.True(t, l.Allow("ip-b"), "ip-b first request — independent bucket")
+	assert.False(t, l.Allow("ip-a"), "ip-a burst exhausted")
+
+	clk.Advance(time.Second)
+	assert.True(t, l.Allow("ip-a"), "ip-a refilled after 1s")
+	assert.True(t, l.Allow("ip-b"), "ip-b refilled after 1s")
+}
+
+func TestBucket_ConcurrentSafety_FakeClock(t *testing.T) {
+	clk := clockmock.New(time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC))
+	l := New(Config{Rate: 1000, Burst: 1000}, clk)
+	t.Cleanup(func() { _ = l.Close(context.Background()) })
+
+	var wg sync.WaitGroup
+	for i := range 50 {
+		wg.Add(1)
+		go func(ip string) {
+			defer wg.Done()
+			for range 20 {
+				l.Allow(ip)
+			}
+		}("10.0.0." + itoa(i))
+	}
+	wg.Wait()
+	// No assertion needed; race detector catches data races.
 }
 
 // itoa is a minimal int-to-string for test IP generation.

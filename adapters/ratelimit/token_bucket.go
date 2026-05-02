@@ -1,11 +1,23 @@
+// Package ratelimit implements a per-key in-process token bucket rate limiter.
+//
+// The bucket math (refill, burst cap, AllowN) reads time exclusively through
+// the injected clock.Clock — both the cleanup ticker and the per-key
+// bucket.lastRefill state advance only when the injected clock advances.
+// FakeClock-driven tests can therefore exhaustively exercise burst/recovery
+// behavior without sleeping.
+//
+// ref: ADR docs/architecture/202605021500-adr-kernel-clock-injection.md
+// (D6 PROD-CLOCK-INJECTION-01) — adapters/ratelimit replaced
+// golang.org/x/time/rate.Limiter (which hard-codes time.Now() in its internal
+// reserveN path) with this self-contained bucket so the D6 contract holds
+// end-to-end at the rate-limit boundary.
 package ratelimit
 
 import (
 	"context"
+	"math"
 	"sync"
 	"time"
-
-	"golang.org/x/time/rate"
 
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/lifecycle"
@@ -57,13 +69,35 @@ func (c *Config) defaults() {
 	}
 }
 
+// bucket is a self-contained token bucket. It is not safe for concurrent use
+// on its own; callers must hold the parent Limiter's mu lock.
+type bucket struct {
+	tokens     float64
+	lastRefill time.Time
+}
+
+// allowN refills tokens based on elapsed time and returns whether n tokens are
+// available. Semantics match golang.org/x/time/rate.Limiter.Allow() with the
+// token-refill-on-call approach: each call may add tokens proportional to
+// elapsed wall-clock time before checking availability.
+func (b *bucket) allowN(now time.Time, ratePerSec float64, burst float64, n int) bool {
+	elapsed := now.Sub(b.lastRefill).Seconds()
+	b.tokens = math.Min(burst, b.tokens+elapsed*ratePerSec)
+	b.lastRefill = now
+	if b.tokens < float64(n) {
+		return false
+	}
+	b.tokens -= float64(n)
+	return true
+}
+
 type entry struct {
-	limiter  *rate.Limiter
+	bucket   bucket
 	lastSeen time.Time
 }
 
 // Limiter implements middleware.RateLimiter and middleware.WindowedRateLimiter
-// using per-key token buckets backed by golang.org/x/time/rate.
+// using per-key token buckets with a self-contained token bucket algorithm.
 type Limiter struct {
 	rate  float64
 	burst int
@@ -96,8 +130,22 @@ func New(cfg Config, clk clock.Clock) *Limiter {
 
 // Allow checks whether the request identified by key should be allowed.
 func (l *Limiter) Allow(key string) bool {
-	e := l.getOrCreate(key)
-	return e.limiter.Allow()
+	now := l.clock.Now()
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	e, ok := l.limiters[key]
+	if !ok {
+		e = &entry{
+			bucket: bucket{
+				tokens:     float64(l.burst),
+				lastRefill: now,
+			},
+			lastSeen: now,
+		}
+		l.limiters[key] = e
+	}
+	e.lastSeen = now
+	return e.bucket.allowN(now, l.rate, float64(l.burst), 1)
 }
 
 // Window returns the rate limit window and limit, satisfying
@@ -130,36 +178,6 @@ func (l *Limiter) Len() int {
 	l.mu.RLock()
 	defer l.mu.RUnlock()
 	return len(l.limiters)
-}
-
-func (l *Limiter) getOrCreate(key string) *entry {
-	now := l.clock.Now()
-
-	l.mu.RLock()
-	e, ok := l.limiters[key]
-	l.mu.RUnlock()
-	if ok {
-		l.mu.Lock()
-		e.lastSeen = now
-		l.mu.Unlock()
-		return e
-	}
-
-	l.mu.Lock()
-	defer l.mu.Unlock()
-
-	// Double-check after acquiring write lock.
-	if e, ok = l.limiters[key]; ok {
-		e.lastSeen = now
-		return e
-	}
-
-	e = &entry{
-		limiter:  rate.NewLimiter(rate.Limit(l.rate), l.burst),
-		lastSeen: now,
-	}
-	l.limiters[key] = e
-	return e
 }
 
 func (l *Limiter) cleanup(interval time.Duration) {

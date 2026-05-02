@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/securecookie"
 )
 
@@ -41,6 +42,12 @@ type CookieSessionConfig struct {
 
 	// MaxAge is the cookie max age in seconds. Default: 900 (15min, matches JWT TTL).
 	MaxAge int
+
+	// Clock is used for cookie timestamp and expiry checks.
+	// Required: must be set by the composition root (e.g. clock.Real() in
+	// production, clockmock.New(...) in tests). Panics at Encode/Decode time
+	// if nil (securecookie.requireClock guard).
+	Clock clock.Clock
 }
 
 // DefaultCookieSessionConfig returns a CookieSessionConfig with safe defaults.
@@ -82,6 +89,7 @@ func NewCookieSession(cfg CookieSessionConfig) (func(http.Handler) http.Handler,
 	if err != nil {
 		return nil, fmt.Errorf("cookie_session: %w", err)
 	}
+	sc = sc.WithClock(cfg.Clock)
 	if cfg.MaxAge > 0 {
 		sc = sc.WithMaxAge(cfg.MaxAge)
 	}
@@ -140,6 +148,7 @@ func NewSessionCookieWriter(cfg CookieSessionConfig) (*SessionCookieWriter, erro
 	if err != nil {
 		return nil, fmt.Errorf("cookie_session: %w", err)
 	}
+	sc = sc.WithClock(cfg.Clock)
 
 	return &SessionCookieWriter{sc: sc, cfg: cfg}, nil
 }
@@ -204,6 +213,7 @@ func SetSessionCookie(w http.ResponseWriter, cfg CookieSessionConfig, jwt string
 			slog.Any("error", err))
 		return fmt.Errorf("cookie_session: %w", err)
 	}
+	sc = sc.WithClock(cfg.Clock)
 
 	encoded, err := sc.Encode(cfg.CookieName, []byte(jwt))
 	if err != nil {
