@@ -68,10 +68,14 @@ jobs:
           build-mode: manual
 
       - name: Build (CodeQL trace)
-        # Root `./...` does not recurse into nested modules under
-        # tools/archtest/testdata/, so the deliberately-broken fixtures stay
-        # out of the extractor trace.
-        run: go build ./...
+        # `make check-build` is the single repo-wide compile entrypoint
+        # (Makefile: `go build ./...`, no artefacts). Going through the
+        # Makefile keeps CodeQL's extractor trace aligned with the rest of
+        # CI — if `check-build` ever picks up build tags or excludes, CodeQL
+        # follows automatically. Root `./...` does not recurse into nested
+        # modules under tools/archtest/testdata/, so the deliberately-broken
+        # archtest fixtures stay out of the extractor trace.
+        run: make check-build
 
       - name: Analyze
         # Upload-only: PR blocking is via repo Code Scanning branch protection
