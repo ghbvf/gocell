@@ -4,11 +4,11 @@
 >
 > **v1.0 GA 后 / v1.1 路线图**：[`docs/plans/archive/202604301204-028-post-v1.0-leverage-and-v1.1-roadmap.md`](plans/archive/202604301204-028-post-v1.0-leverage-and-v1.1-roadmap.md) — 13 PR / 10-14 周（Batch 1 Codegen 全栈 + archtest 升级 / Batch 2 应用层 + 错误库 / Batch 3 装备期；E8/E12 永久 won't-do）
 >
-> 基线: `origin/develop @ 7444228e`（2026-05-01，最新合入 PR #341）
+> 基线: `origin/develop @ 165f69b7`（2026-05-03，最新合入 PR#352 K#01 typed dep graph）
 >
-> 最新合并 PR：#341 / #340 / #339 / #338 / #337 / #334 / #335 / #336 / #333 / #332 / #331 / #316 / #325 / #324 / #326（截至 2026-05-01）
+> 最新合并 PR：#352 / #351 / #350 / #349 / #348 / #347 / #346 / #345 / #344 / #343 / #342 / #341 / #340 / #339 / #338（截至 2026-05-03）
 >
-> 最近完成：#341 PR-A64b modernize batch -fix（rangeint/forvar/testingcontext/stringsseq/waitgroupgo 自动重构 + outboxtest caller-enforced Close/join budget hardening）/ #340 PR-A64a websocket coder fork（nhooyr.io/websocket → coder/websocket）+ watcher loop 拆分 + V-A5/A7 deprecated adapter API 清理 / #339 fix(runtime) watcher loop lint complexity reduction / #338 PR-CFG-I auth fail-closed alignment（runtime/auth 拒绝 nil ring + 缺/Noop NonceStore + sessionlogin durable-tx 双重清理降噪 + F1-F6 注释清理）/ #337 chore(deps) 合并 #327-#330 dependabot bumps + Qodana CI trust boundary 修复 / #334 PR-A48 CONFIG-EVENT-CONSUMER-METRICS-01（拆 process / settlement 双指标 + SettlementObserver hook + retry_exhausted 枚举 + SubscriptionValidator + observer panic recover）/ #335 PR-CI-5 PANIC-REGISTERED-01（production panic 全处理，ADR 永久白名单 4 条）/ #336 PR-CI-6 PROD-DURATION-CONST-01（literal duration 全抽 const，universal walk 实现）/ #333 PR-A66 BOOTSTRAP-STRUCT-DECOMPOSE
+> 最近完成：#352 K#01 DEPGRAPH-TYPED-ARCHTEST（typed package dep graph `tools/depgraph/` + archtest transitive closure，`Graph()` API 确定供 J1/J2 复用）/ #351 G4 follow-up shellcheck（K8s-style `verify-shellcheck.sh` pinned v0.9.0 + docker fallback，替换 regex gate）/ #350 G4 SHELL-SAFETY-01（`set -euo pipefail` + regex verify gate + CodeQL manual build）/ #349 docs trim CLAUDE.md + fix eventbus API + cmd/governance CLAUDE.md / #348 D6 PROD-CLOCK-INJECTION-01（`kernel/clock/` Clock interface + FakeClock + 全仓 95 处 `time.Now` 注入式 + archtest gate，含 follow-up closure 9 函数覆盖）/ #347 G1+G2+G7 CI-LINT（goimports + depguard + forbidigo + revive + EXPORTED-ERROR-NEW archtest gate）/ #346 G6 TEST-TIME-LITERAL-01（一级 6 family + Eventually 字面量全收口 + CI gate）/ #345 F3 SUPPLY-CHAIN（govulncheck + Semgrep + CodeQL + race workflow）/ #344 G8-nolintlint（nolintlint 启用，gofumpt 待）/ #342 PR-A64c 12 main linters baseline（1130→0 finding）/ #341 PR-A64b modernize batch -fix
 >
 > 当前 OPEN PR：暂无（详见 `gh pr list`）
 >
