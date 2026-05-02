@@ -3,8 +3,6 @@ package depgraph
 import (
 	"encoding/json"
 	"sort"
-
-	"golang.org/x/tools/go/packages"
 )
 
 // Graph is the typed dependency graph for one Go module. Wire-format stable.
@@ -13,9 +11,7 @@ type Graph struct {
 	Packages []*Node `json:"packages"`
 	Stats    Stats   `json:"stats"`
 
-	byID    map[string]*Node           // O(1) lookup; not serialized
-	rawPkgs []*packages.Package        // accessor for typeseval reuse
-	closure map[string]map[string]bool // memoized transitive closure (production paths)
+	byID map[string]*Node // O(1) lookup; not serialized
 }
 
 // Node represents one Go package. Edges (Imports) use ID strings (not pointers)
@@ -99,15 +95,4 @@ func (g *Graph) ByID(id string) *Node {
 		return nil
 	}
 	return g.byID[id]
-}
-
-// RawPackages exposes the underlying *packages.Package slice so callers
-// (notably archtest's typeseval-backed LAYER-10) can reuse the same load
-// without a second packages.Load. Returns nil if the graph was built
-// without retaining raw packages.
-func (g *Graph) RawPackages() []*packages.Package {
-	if g == nil {
-		return nil
-	}
-	return g.rawPkgs
 }

@@ -15,21 +15,17 @@ import "strings"
 // reachability does not.
 //
 // Returns an empty (non-nil) map when id is not in the graph or has no
-// reachable internal imports. Results are memoized per Graph.
+// reachable internal imports. Each call returns a fresh map; the caller
+// owns it and may mutate freely. The cost is one DFS per call (O(E) in
+// production-edge count for the reachable subgraph), which is dominated
+// by the underlying packages.Load on archtest's call sites.
 func (g *Graph) TransitiveImports(id string) map[string]bool {
 	if g == nil {
 		return map[string]bool{}
 	}
-	if g.closure == nil {
-		g.closure = make(map[string]map[string]bool, len(g.Packages))
-	}
-	if cached, ok := g.closure[id]; ok {
-		return cached
-	}
 	visited := make(map[string]bool)
 	g.dfs(id, visited)
 	delete(visited, id) // exclude self
-	g.closure[id] = visited
 	return visited
 }
 

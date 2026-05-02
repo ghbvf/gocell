@@ -5,6 +5,8 @@ import (
 	"sort"
 	"testing"
 
+	"golang.org/x/tools/go/packages"
+
 	"github.com/ghbvf/gocell/tools/depgraph"
 )
 
@@ -25,6 +27,27 @@ func loadSynth(t *testing.T, includeTests bool) *depgraph.Graph {
 		t.Fatalf("Load: %v", err)
 	}
 	return g
+}
+
+// loadSynthPackages runs packages.Load directly so callers that need the
+// raw *packages.Package slice (e.g. FromPackages override tests) can stage
+// their input without going through depgraph.Load.
+func loadSynthPackages(t *testing.T, includeTests bool) []*packages.Package {
+	t.Helper()
+	dir, err := filepath.Abs("testdata/synth")
+	if err != nil {
+		t.Fatalf("filepath.Abs: %v", err)
+	}
+	cfg := &packages.Config{
+		Mode:  packages.NeedName | packages.NeedImports | packages.NeedModule,
+		Dir:   dir,
+		Tests: includeTests,
+	}
+	pkgs, err := packages.Load(cfg, "./...")
+	if err != nil {
+		t.Fatalf("packages.Load: %v", err)
+	}
+	return pkgs
 }
 
 func TestLoad_AutoDetectsModule(t *testing.T) {
@@ -157,20 +180,6 @@ func TestLoad_TestOnlyMarking(t *testing.T) {
 	}
 }
 
-func TestLoad_RawPackagesAccessor(t *testing.T) {
-	t.Parallel()
-	g := loadSynth(t, false)
-	raw := g.RawPackages()
-	if len(raw) == 0 {
-		t.Fatal("RawPackages() empty")
-	}
-	for _, p := range raw {
-		if p.PkgPath == "" {
-			t.Errorf("raw package has empty PkgPath: %+v", p)
-		}
-	}
-}
-
 func TestLoad_StatsCountsPackagesAndEdges(t *testing.T) {
 	t.Parallel()
 	g := loadSynth(t, false)
@@ -199,8 +208,8 @@ func TestLoad_NoPatternsErr(t *testing.T) {
 
 func TestFromPackages_ExplicitModuleOverride(t *testing.T) {
 	t.Parallel()
-	g := loadSynth(t, false)
-	rebuilt := depgraph.FromPackages("forced.example/different", g.RawPackages())
+	pkgs := loadSynthPackages(t, false)
+	rebuilt := depgraph.FromPackages("forced.example/different", pkgs)
 	if rebuilt.Module != "forced.example/different" {
 		t.Errorf("FromPackages module override: got %q, want %q",
 			rebuilt.Module, "forced.example/different")

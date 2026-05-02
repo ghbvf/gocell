@@ -9,16 +9,13 @@ import (
 	"golang.org/x/tools/go/packages"
 )
 
-// loadMode is the packages.Load mode required to build a Graph and to
-// support downstream type-level analysis (archtest LAYER-08/10 reuse the
-// same loaded packages via RawPackages()).
+// loadMode is the packages.Load mode required to build a Graph. depgraph
+// only needs the structural fields (PkgPath, Imports, Module); type-level
+// analysis lives in archtest's typeseval package and runs its own Load.
+// Keeping this mode lean avoids forcing CLI / Track J consumers to pay
+// the 3-10x cost of NeedSyntax/NeedTypes/NeedTypesInfo/NeedDeps.
 const loadMode = packages.NeedName |
-	packages.NeedFiles |
 	packages.NeedImports |
-	packages.NeedSyntax |
-	packages.NeedTypes |
-	packages.NeedTypesInfo |
-	packages.NeedDeps |
 	packages.NeedModule
 
 // LoadOptions configures Load.
@@ -69,11 +66,13 @@ func Load(opts LoadOptions, patterns ...string) (*Graph, error) {
 // injection point for callers that share a packages.Load with another
 // consumer; archtest uses this to reuse typeseval.SharedResolver's cached
 // load instead of running packages.Load twice per test run.
+//
+// Only structural fields (PkgPath, Imports, ID for test-variant filtering)
+// are read; pkgs is not retained after the call returns.
 func FromPackages(module string, pkgs []*packages.Package) *Graph {
 	g := &Graph{
-		Module:  module,
-		byID:    make(map[string]*Node, len(pkgs)),
-		rawPkgs: pkgs,
+		Module: module,
+		byID:   make(map[string]*Node, len(pkgs)),
 	}
 	for _, p := range pkgs {
 		if p == nil || p.PkgPath == "" {
@@ -81,8 +80,8 @@ func FromPackages(module string, pkgs []*packages.Package) *Graph {
 		}
 		// Skip synthetic test variants (`<pkg>.test` binary, bracketed
 		// `<pkg> [<pkg>.test]` internal-test compile). They are walked
-		// for TestOnly detection in markTestOnly via rawPkgs but do not
-		// appear as graph nodes.
+		// for TestOnly detection in markTestOnly but do not appear as
+		// graph nodes.
 		if isTestVariant(p.ID) {
 			continue
 		}
@@ -104,7 +103,7 @@ func FromPackages(module string, pkgs []*packages.Package) *Graph {
 		g.byID[p.PkgPath] = n
 	}
 	sort.Slice(g.Packages, func(i, j int) bool { return g.Packages[i].ID < g.Packages[j].ID })
-	g.markTestOnly()
+	g.markTestOnly(pkgs)
 	g.Stats.Packages = len(g.Packages)
 	edges := 0
 	for _, n := range g.Packages {
@@ -134,8 +133,8 @@ func detectModule(pkgs []*packages.Package) string {
 // A test variant has an ID containing ".test]" or ending in ".test".
 // When IncludeTests is false, no test variants are loaded and no node is
 // marked TestOnly.
-func (g *Graph) markTestOnly() {
-	prodImports, testImports := g.collectImporters()
+func (g *Graph) markTestOnly(pkgs []*packages.Package) {
+	prodImports, testImports := collectImporters(pkgs)
 	for _, n := range g.Packages {
 		if !prodImports[n.ID] && testImports[n.ID] {
 			n.TestOnly = true
@@ -143,15 +142,14 @@ func (g *Graph) markTestOnly() {
 	}
 }
 
-// collectImporters partitions all import edges in the loaded packages
-// into production-side and test-side sets, keyed by importee. The
-// `<pkg>.test` synthetic binary trivially imports `<pkg>`; that
-// structural edge is filtered out so the package under test is not
-// mis-marked as test-only.
-func (g *Graph) collectImporters() (prod, test map[string]bool) {
-	prod = make(map[string]bool, len(g.Packages))
-	test = make(map[string]bool, len(g.Packages))
-	for _, p := range g.rawPkgs {
+// collectImporters partitions all import edges in pkgs into production-side
+// and test-side sets, keyed by importee. The `<pkg>.test` synthetic binary
+// trivially imports `<pkg>`; that structural edge is filtered out so the
+// package under test is not mis-marked as test-only.
+func collectImporters(pkgs []*packages.Package) (prod, test map[string]bool) {
+	prod = make(map[string]bool, len(pkgs))
+	test = make(map[string]bool, len(pkgs))
+	for _, p := range pkgs {
 		if p == nil {
 			continue
 		}

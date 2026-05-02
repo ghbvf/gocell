@@ -57,19 +57,6 @@ func (r *Resolver) Packages() []*packages.Package {
 	return r.pkgs
 }
 
-// NewResolverFromPackages wraps an externally loaded packages slice in a
-// Resolver. It is the injection point for callers (notably archtest's
-// TestMain, which shares a single packages.Load with tools/depgraph) to
-// avoid running packages.Load twice per archtest invocation.
-//
-// Caller is responsible for loading with the modes typeseval needs
-// (NeedTypesInfo + NeedSyntax + NeedTypes); SharedResolver and
-// LoadPackages set them automatically. depgraph.Load uses the same
-// superset.
-func NewResolverFromPackages(pkgs []*packages.Package) *Resolver {
-	return &Resolver{pkgs: pkgs}
-}
-
 // LoadPackages loads patterns from modRoot with full type info.
 //
 // Parameters:

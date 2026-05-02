@@ -16,6 +16,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"golang.org/x/tools/go/packages"
 
+	"github.com/ghbvf/gocell/tools/archtest/internal/typeseval"
 	"github.com/ghbvf/gocell/tools/depgraph"
 )
 
@@ -180,38 +181,53 @@ func checkLayering(modPrefix string, pkgs []pkgInfo) []violation {
 	return out
 }
 
+// matchCellOwnedSubpackage reports whether dep falls inside a cell-owned
+// public subpackage entry, returning the owner-tree prefix (with trailing
+// slash) when it does. Pure lookup — no exemption logic.
+func matchCellOwnedSubpackage(modPrefix, dep string) (ownerPrefix string, ok bool) {
+	impRel := strings.TrimPrefix(dep, modPrefix)
+	for ownedRel, ownerPrefix := range cellOwnedSubpackages {
+		if impRel == ownedRel || strings.HasPrefix(impRel, ownedRel+"/") {
+			return ownerPrefix, true
+		}
+	}
+	return "", false
+}
+
+// isCellOwnedSubpackageExempt reports whether srcPath is permitted to
+// import a cell-owned subpackage rooted at ownerPrefix. cmd/ and examples/
+// are universally unrestricted; the owning cell's tree may import freely.
+func isCellOwnedSubpackageExempt(modPrefix, srcPath, srcLayer, ownerPrefix string) bool {
+	if srcLayer == "cmd" || srcLayer == "examples" {
+		return true
+	}
+	srcRel := strings.TrimPrefix(srcPath, modPrefix)
+	// ownerRoot covers the case where srcRel is the cell root itself
+	// (e.g. "cells/accesscore") which HasPrefix("cells/accesscore/") would
+	// reject due to the missing trailing slash.
+	ownerRoot := strings.TrimSuffix(ownerPrefix, "/")
+	return srcRel == ownerRoot || strings.HasPrefix(srcRel, ownerPrefix)
+}
+
 // checkCellOwnedSubpackage returns a LAYER-06 violation if imp is a cell-owned
 // public subpackage that src is not permitted to import. Returns nil when the
 // import is allowed or unrelated.
 func checkCellOwnedSubpackage(modPrefix, srcPath, imp, srcLayer string) *violation {
-	impRel := strings.TrimPrefix(imp, modPrefix)
-	for ownedRel, ownerPrefix := range cellOwnedSubpackages {
-		if impRel != ownedRel && !strings.HasPrefix(impRel, ownedRel+"/") {
-			continue
-		}
-		// cmd/ and examples/ are universally unrestricted consumers.
-		if srcLayer == "cmd" || srcLayer == "examples" {
-			return nil
-		}
-		srcRel := strings.TrimPrefix(srcPath, modPrefix)
-		// The owning cell's tree may import its own subpackage freely.
-		// ownerRoot covers the case where srcRel is the cell root itself
-		// (e.g. "cells/accesscore") which HasPrefix("cells/accesscore/")
-		// would reject due to the missing trailing slash.
-		ownerRoot := strings.TrimSuffix(ownerPrefix, "/")
-		if srcRel == ownerRoot || strings.HasPrefix(srcRel, ownerPrefix) {
-			return nil
-		}
-		return &violation{
-			Rule:   "LAYER-06",
-			Pkg:    srcPath,
-			Import: imp,
-			Message: fmt.Sprintf(
-				"LAYER-06: %s imports %s (cell-owned subpackage; only %s* / cmd/* / examples/* may import it)",
-				srcPath, imp, ownerPrefix),
-		}
+	ownerPrefix, ok := matchCellOwnedSubpackage(modPrefix, imp)
+	if !ok {
+		return nil
 	}
-	return nil
+	if isCellOwnedSubpackageExempt(modPrefix, srcPath, srcLayer, ownerPrefix) {
+		return nil
+	}
+	return &violation{
+		Rule:   "LAYER-06",
+		Pkg:    srcPath,
+		Import: imp,
+		Message: fmt.Sprintf(
+			"LAYER-06: %s imports %s (cell-owned subpackage; only %s* / cmd/* / examples/* may import it)",
+			srcPath, imp, ownerPrefix),
+	}
 }
 
 func isRootCellPackage(modPrefix, importPath string) bool {
@@ -441,31 +457,33 @@ func findModuleRoot(t *testing.T) string {
 	}
 }
 
-// loadDepGraph loads the entire module under root once via depgraph.Load
-// with the integration build tag, returning the typed graph. The same
-// loaded packages back both the dep-graph view (for direct + transitive
-// layer rules) and the *packages.Package slice (for LAYER-08 type-scope
-// scan and LAYER-10 cell-API adapter check). Replaces the previous
-// loadPackages + loadTypedPackages double-load in TestLayeringRules.
-func loadDepGraph(t *testing.T, root string) *depgraph.Graph {
+// loadModule loads the entire module under root once via
+// typeseval.SharedResolver (process-wide singleflight cache), then folds the
+// resulting *packages.Package slice into a depgraph.Graph for layer rules.
+//
+// Returning both views from a single Load avoids running packages.Load twice
+// per test invocation: the typed slice powers LAYER-08 (type-scope walk) and
+// LAYER-10 (cell-API adapter check); the graph powers LAYER-05/06/09 plus
+// the transitive variants. Subsequent calls within the same process reuse
+// the cached resolver result.
+func loadModule(t *testing.T, root string) (*depgraph.Graph, []*packages.Package) {
 	t.Helper()
-	g, err := depgraph.Load(depgraph.LoadOptions{
-		Dir:       root,
-		BuildTags: []string{"integration"},
-	}, "./...")
-	require.NoError(t, err, "depgraph.Load failed")
-	for _, p := range g.RawPackages() {
+	resolver, err := typeseval.SharedResolver(root, false /* tests */, []string{"integration"}, "./...")
+	require.NoError(t, err, "typeseval.SharedResolver failed")
+	typedPkgs := resolver.Packages()
+	for _, p := range typedPkgs {
 		for _, pe := range p.Errors {
-			t.Logf("depgraph.Load: package %q error: %v", p.PkgPath, pe)
+			t.Logf("packages.Load: package %q error: %v", p.PkgPath, pe)
 		}
 	}
-	return g
+	module := readModulePath(t, root)
+	return depgraph.FromPackages(module, typedPkgs), typedPkgs
 }
 
-// loadTypedPackages loads a specific subset of patterns with full type
-// info. Used by tests that scope to a slice of the module
-// (kernel/lifecycle + adapters/, etc.) where the full module graph would
-// be wasteful. TestLayeringRules uses loadDepGraph instead.
+// loadTypedPackages loads a specific subset of patterns with full type info.
+// Used by tests that scope to a slice of the module (kernel/lifecycle +
+// adapters/, etc.) where the full module graph would be wasteful.
+// TestLayeringRules uses loadModule instead.
 func loadTypedPackages(t *testing.T, root string, patterns ...string) []*packages.Package {
 	t.Helper()
 	cfg := &packages.Config{
@@ -503,7 +521,7 @@ func TestLayeringRules(t *testing.T) {
 	modPrefix := readModulePath(t, root) + "/"
 	module := strings.TrimSuffix(modPrefix, "/")
 
-	g := loadDepGraph(t, root)
+	g, typedPkgs := loadModule(t, root)
 	pkgs := pkgInfosFromGraph(g)
 	require.NotEmpty(t, pkgs, "depgraph returned no packages")
 
@@ -565,7 +583,7 @@ func TestLayeringRules(t *testing.T) {
 	// Type-level scope walk is precise where the previous file-grep
 	// over-matched on comments and missed renamed-import aliases.
 	t.Run("LAYER-08_no_HTTPRegistrar_type_definition", func(t *testing.T) {
-		violations := checkLayer08TypedSeal(module, g.RawPackages())
+		violations := checkLayer08TypedSeal(module, typedPkgs)
 		for _, v := range violations {
 			t.Logf("LAYER-08 violation: %s", v.Message)
 		}
@@ -583,7 +601,7 @@ func TestLayeringRules(t *testing.T) {
 	// LAYER-10: cells/<cell> root package exported APIs must not expose
 	// concrete adapter/driver types.
 	t.Run("LAYER-10_cell_root_public_api_no_adapter_driver_types", func(t *testing.T) {
-		typedCellPkgs := filterCellPackages(module, g.RawPackages())
+		typedCellPkgs := filterCellPackages(module, typedPkgs)
 		violations := checkCellPublicAPIAdapterTypes(modPrefix, typedCellPkgs)
 		for _, v := range violations {
 			t.Logf("LAYER-10 violation: %s", v.Message)
@@ -632,6 +650,7 @@ func TestLayeringRules(t *testing.T) {
 
 // filterCellPackages returns the subset of pkgs whose path is under
 // <module>/cells/. Replaces the old `loadTypedPackages(t, root, "./cells/...")`
+// (now removed).
 // double-load pattern.
 func filterCellPackages(module string, pkgs []*packages.Package) []*packages.Package {
 	prefix := module + "/cells/"
@@ -715,7 +734,10 @@ func checkTransitiveCrossCellInternal(module string, g *depgraph.Graph) []violat
 // checkTransitiveCellOwnedSubpackage flags every cell A whose transitive
 // import closure reaches a cell-owned public subpackage of a sibling cell.
 // The exemption rules mirror checkCellOwnedSubpackage (cmd/ and examples/
-// are unrestricted; the owning cell may import freely).
+// are unrestricted; the owning cell may import freely). Builds violation
+// records directly via the shared matchCellOwnedSubpackage /
+// isCellOwnedSubpackageExempt helpers — no string-replace coupling to the
+// direct-form message template.
 func checkTransitiveCellOwnedSubpackage(modPrefix string, g *depgraph.Graph) []violation {
 	var out []violation
 	for _, src := range g.Packages {
@@ -723,14 +745,22 @@ func checkTransitiveCellOwnedSubpackage(modPrefix string, g *depgraph.Graph) []v
 		if srcLayer == "cmd" || srcLayer == "examples" {
 			continue
 		}
-		closure := g.TransitiveImports(src.ID)
-		for dep := range closure {
-			if v := checkCellOwnedSubpackage(modPrefix, src.ID, dep, srcLayer); v != nil {
-				transV := *v
-				transV.Rule = "LAYER-06T"
-				transV.Message = strings.Replace(transV.Message, "LAYER-06:", "LAYER-06T (transitive):", 1)
-				out = append(out, transV)
+		for dep := range g.TransitiveImports(src.ID) {
+			ownerPrefix, ok := matchCellOwnedSubpackage(modPrefix, dep)
+			if !ok {
+				continue
 			}
+			if isCellOwnedSubpackageExempt(modPrefix, src.ID, srcLayer, ownerPrefix) {
+				continue
+			}
+			out = append(out, violation{
+				Rule:   "LAYER-06T",
+				Pkg:    src.ID,
+				Import: dep,
+				Message: fmt.Sprintf(
+					"LAYER-06T: %s transitively reaches %s (cell-owned subpackage; only %s* / cmd/* / examples/* may import it)",
+					src.ID, dep, ownerPrefix),
+			})
 		}
 	}
 	return out
@@ -1381,14 +1411,116 @@ func TestLayeringRules_LAYER09_NegativeProbe(t *testing.T) {
 	}
 }
 
-// TestLoadDepGraph_IntegrationTagPlumbing verifies that loadDepGraph passes
+// synthPkg builds a minimal *packages.Package with the given path and
+// import edges. Used by the LAYER-05T/06T/09T negative probes to stage
+// transitive closure scenarios without touching real source files.
+func synthPkg(path string, imports ...string) *packages.Package {
+	imps := make(map[string]*packages.Package, len(imports))
+	for _, imp := range imports {
+		imps[imp] = &packages.Package{PkgPath: imp}
+	}
+	return &packages.Package{PkgPath: path, Imports: imps}
+}
+
+// TestLayeringRules_LAYER05T_NegativeProbe is the "test the test" meta-test for
+// LAYER-05T. It synthesizes the laundering pattern cellA → pkg/util → cellB/internal
+// and asserts checkTransitiveCrossCellInternal flags it. The intermediate hop is
+// pkg/ (not cells/) so only cellA fires the rule; this isolates the closure-walk
+// guarantee from any "all reachable cells fire" coincidence.
+func TestLayeringRules_LAYER05T_NegativeProbe(t *testing.T) {
+	t.Parallel()
+
+	const module = "github.com/ghbvf/gocell"
+	cellA := module + "/cells/cellA"
+	util := module + "/pkg/util"
+	cellBInt := module + "/cells/cellB/internal/domain"
+
+	g := depgraph.FromPackages(module, []*packages.Package{
+		synthPkg(cellA, util),
+		synthPkg(util, cellBInt),
+		synthPkg(cellBInt),
+	})
+
+	violations := checkTransitiveCrossCellInternal(module, g)
+	require.Len(t, violations, 1,
+		"LAYER-05T negative probe: must flag cellA → pkg/util → cellB/internal laundering")
+	assert.Equal(t, "LAYER-05T", violations[0].Rule)
+	assert.Equal(t, cellA, violations[0].Pkg)
+	assert.Equal(t, cellBInt, violations[0].Import)
+}
+
+// TestLayeringRules_LAYER06T_NegativeProbe verifies the transitive form of
+// LAYER-06: a sibling cell must not reach a cell-owned public subpackage
+// even via an intermediate utility. accesscore/initialadmin is a real
+// entry in cellOwnedSubpackages, so this also exercises the lookup table.
+// The intermediate hop is pkg/util to avoid an extra source-side cell
+// firing the rule (auditcore is the only cell on the path).
+func TestLayeringRules_LAYER06T_NegativeProbe(t *testing.T) {
+	t.Parallel()
+
+	const modPrefix = "github.com/ghbvf/gocell/"
+	module := strings.TrimSuffix(modPrefix, "/")
+	auditcore := module + "/cells/auditcore"
+	util := module + "/pkg/util"
+	initialadmin := module + "/cells/accesscore/initialadmin"
+
+	g := depgraph.FromPackages(module, []*packages.Package{
+		synthPkg(auditcore, util),
+		synthPkg(util, initialadmin),
+		synthPkg(initialadmin),
+	})
+
+	violations := checkTransitiveCellOwnedSubpackage(modPrefix, g)
+	// Both auditcore and util reach initialadmin; util has srcLayer="pkg" so
+	// it is not exempt — the rule fires for any non-cmd/non-examples source.
+	// Filter to the auditcore violation that the probe is specifically guarding.
+	var auditcoreViolations []violation
+	for _, v := range violations {
+		if v.Pkg == auditcore {
+			auditcoreViolations = append(auditcoreViolations, v)
+		}
+	}
+	require.Len(t, auditcoreViolations, 1,
+		"LAYER-06T negative probe: must flag auditcore → util → accesscore/initialadmin (got: %v)", violations)
+	assert.Equal(t, "LAYER-06T", auditcoreViolations[0].Rule)
+	assert.Equal(t, initialadmin, auditcoreViolations[0].Import)
+	assert.Contains(t, auditcoreViolations[0].Message, "transitively reaches",
+		"LAYER-06T message should mark the closure as transitive, not borrow LAYER-06's 'imports' phrasing")
+}
+
+// TestLayeringRules_LAYER09T_NegativeProbe verifies the transitive form of
+// LAYER-09: cellA must not reach cellB/events through any utility chain.
+// pkg/util as intermediate keeps the source-side cell count at exactly one.
+func TestLayeringRules_LAYER09T_NegativeProbe(t *testing.T) {
+	t.Parallel()
+
+	const module = "github.com/ghbvf/gocell"
+	cellA := module + "/cells/cellA"
+	util := module + "/pkg/util"
+	cellBEvents := module + "/cells/cellB/events"
+
+	g := depgraph.FromPackages(module, []*packages.Package{
+		synthPkg(cellA, util),
+		synthPkg(util, cellBEvents),
+		synthPkg(cellBEvents),
+	})
+
+	violations := checkTransitiveCrossCellEvents(module, g)
+	require.Len(t, violations, 1,
+		"LAYER-09T negative probe: must flag cellA → pkg/util → cellB/events laundering")
+	assert.Equal(t, "LAYER-09T", violations[0].Rule)
+	assert.Equal(t, cellA, violations[0].Pkg)
+	assert.Equal(t, cellBEvents, violations[0].Import)
+}
+
+// TestLoadModule_IntegrationTagPlumbing verifies that loadModule passes
 // -tags=integration so integration-tagged files participate in the layering
 // analysis. The archtest package itself is always loadable; its presence in
 // the graph is the sanity check that the build flags reached packages.Load.
-func TestLoadDepGraph_IntegrationTagPlumbing(t *testing.T) {
+func TestLoadModule_IntegrationTagPlumbing(t *testing.T) {
 	root := findModuleRoot(t)
-	g := loadDepGraph(t, root)
-	require.NotEmpty(t, g.Packages, "depgraph.Load must return packages; empty result means -tags=integration broke the load")
+	g, _ := loadModule(t, root)
+	require.NotEmpty(t, g.Packages, "loadModule must return packages; empty result means -tags=integration broke the load")
 
 	modPrefix := readModulePath(t, root) + "/"
 	archtestPkg := modPrefix + "tools/archtest"

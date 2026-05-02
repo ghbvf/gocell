@@ -2,6 +2,7 @@ package app
 
 import (
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -59,12 +60,18 @@ func runGraph(args []string) error {
 
 func parseGraphArgs(args []string) (graphOptions, error) {
 	fs := flag.NewFlagSet("graph", flag.ContinueOnError)
-	fs.SetOutput(io.Discard)
+	// Default output (os.Stderr) is preserved so `-h` prints usage; do not
+	// silence with io.Discard. Dispatch maps flag.ErrHelp → exit code 0.
 	format := fs.String("format", "json", "output format: json|dot")
 	pattern := fs.String("pattern", "./...", "package pattern passed to packages.Load")
 	root := fs.String("root", defaultRootDir(), "project root directory passed as Dir to packages.Load")
 	includeTests := fs.Bool("include-tests", false, "load test variants (mark TestOnly nodes)")
 	if err := fs.Parse(args); err != nil {
+		// flag.ErrHelp is the user asking for `-h`; let Dispatch see it raw
+		// and translate into ExitOK. Other parse errors get the usual prefix.
+		if errors.Is(err, flag.ErrHelp) {
+			return graphOptions{}, err
+		}
 		return graphOptions{}, fmt.Errorf("graph: %w", err)
 	}
 	f := graphFormat(strings.ToLower(*format))

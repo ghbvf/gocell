@@ -6,6 +6,8 @@
 package app
 
 import (
+	"errors"
+	"flag"
 	"fmt"
 	"os"
 )
@@ -53,6 +55,12 @@ func Dispatch(args []string) int {
 		return ExitUsage
 	}
 	if err := cmd(args[1:]); err != nil {
+		// `-h` lands here as flag.ErrHelp after the sub-command's flag.Parse
+		// already printed its own usage. Treat as a successful help request,
+		// not a runtime failure.
+		if errors.Is(err, flag.ErrHelp) {
+			return ExitOK
+		}
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		return ExitRuntime
 	}

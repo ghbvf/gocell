@@ -86,10 +86,11 @@ func TestTransitiveImports_ExcludesTestOnly(t *testing.T) {
 	}
 }
 
-// TestTransitiveImports_Idempotent renamed from the previous "Memoization"
-// test. The cache is verified by mutating the returned map: the second call
-// must return the same underlying map (cache hit), so the deletion is visible.
-func TestTransitiveImports_Idempotent(t *testing.T) {
+// TestTransitiveImports_FreshCopy proves the contract that each call returns
+// an independent map: mutating the first result must not leak into a second
+// call. Without this guarantee, archtest's per-rule iteration could pollute
+// the closure for sibling rules.
+func TestTransitiveImports_FreshCopy(t *testing.T) {
 	t.Parallel()
 	g := loadSynth(t, false)
 	first := g.TransitiveImports(synthModule + "/a")
@@ -97,18 +98,25 @@ func TestTransitiveImports_Idempotent(t *testing.T) {
 		t.Fatal("expected non-empty closure for /a")
 	}
 
-	// Delete one key from the returned map. Because TransitiveImports memoizes
-	// by returning the cached map directly, the second call must see the same
-	// (now mutated) map — proving the cache is reused, not rebuilt.
-	var deleted string
+	// Snapshot the keys so we can detect any drift after mutation.
+	snapshot := keys(first)
+	sort.Strings(snapshot)
+
+	// Mutate the first result aggressively.
 	for k := range first {
-		deleted = k
 		delete(first, k)
-		break
 	}
+	first["bogus"] = true
+
+	// Second call must reproduce the original closure independently.
 	second := g.TransitiveImports(synthModule + "/a")
-	if second[deleted] {
-		t.Errorf("memoization: deleted key %q still present in second call; cache was not reused", deleted)
+	gotSlice := keys(second)
+	sort.Strings(gotSlice)
+	if !equalStrings(gotSlice, snapshot) {
+		t.Errorf("second call returned %v, want %v (mutation of first leaked)", gotSlice, snapshot)
+	}
+	if second["bogus"] {
+		t.Errorf("second call contains injected key; results not independent")
 	}
 }
 
