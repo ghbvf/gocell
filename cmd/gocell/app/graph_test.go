@@ -88,78 +88,61 @@ func TestRunGraphDOT(t *testing.T) {
 	}
 }
 
-func TestParseGraphArgs(t *testing.T) {
-	t.Parallel()
-	tests := []struct {
-		name    string
-		args    []string
-		wantErr bool
-		check   func(t *testing.T, opts graphOptions)
-	}{
-		{
-			name: "default_json",
-			args: nil,
-			check: func(t *testing.T, opts graphOptions) {
-				if opts.Format != graphFormatJSON {
-					t.Errorf("Format = %q, want json", opts.Format)
-				}
-				if opts.Pattern != "./..." {
-					t.Errorf("Pattern = %q, want ./...", opts.Pattern)
-				}
-			},
-		},
-		{
-			name: "explicit_dot_uppercase",
-			args: []string{"--format=DOT"},
-			check: func(t *testing.T, opts graphOptions) {
-				if opts.Format != graphFormatDOT {
-					t.Errorf("Format = %q, want dot", opts.Format)
-				}
-			},
-		},
-		{
-			name: "custom_pattern_and_tests",
-			args: []string{"--pattern=./tools/...", "--include-tests"},
-			check: func(t *testing.T, opts graphOptions) {
-				if opts.Pattern != "./tools/..." {
-					t.Errorf("Pattern = %q, want ./tools/...", opts.Pattern)
-				}
-				if !opts.IncludeTests {
-					t.Error("IncludeTests = false, want true")
-				}
-			},
-		},
-		{
-			name: "explicit_root",
-			args: []string{"--root=/tmp/myproject"},
-			check: func(t *testing.T, opts graphOptions) {
-				if opts.Root != "/tmp/myproject" {
-					t.Errorf("Root = %q, want /tmp/myproject", opts.Root)
-				}
-			},
-		},
-		{
-			name:    "unknown_format",
-			args:    []string{"--format=xml"},
-			wantErr: true,
-		},
+// mustParseGraphArgs parses args and fails the test on error. Used by the
+// TestParseGraphArgs_* family below to keep each scenario at cognitive
+// complexity ≤ 4 — the previous table-driven form with per-row check
+// closures landed at 26 (SonarCloud brain-overload).
+func mustParseGraphArgs(t *testing.T, args []string) graphOptions {
+	t.Helper()
+	opts, err := parseGraphArgs(args)
+	if err != nil {
+		t.Fatalf("parseGraphArgs(%v): %v", args, err)
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			opts, err := parseGraphArgs(tt.args)
-			if tt.wantErr {
-				if err == nil {
-					t.Errorf("expected error, got nil; opts=%+v", opts)
-				}
-				return
-			}
-			if err != nil {
-				t.Fatalf("parseGraphArgs: %v", err)
-			}
-			if tt.check != nil {
-				tt.check(t, opts)
-			}
-		})
+	return opts
+}
+
+func TestParseGraphArgs_Defaults(t *testing.T) {
+	t.Parallel()
+	opts := mustParseGraphArgs(t, nil)
+	if opts.Format != graphFormatJSON {
+		t.Errorf("Format = %q, want json", opts.Format)
+	}
+	if opts.Pattern != "./..." {
+		t.Errorf("Pattern = %q, want ./...", opts.Pattern)
+	}
+}
+
+func TestParseGraphArgs_FormatIsCaseInsensitive(t *testing.T) {
+	t.Parallel()
+	opts := mustParseGraphArgs(t, []string{"--format=DOT"})
+	if opts.Format != graphFormatDOT {
+		t.Errorf("Format = %q, want dot", opts.Format)
+	}
+}
+
+func TestParseGraphArgs_CustomPatternAndIncludeTests(t *testing.T) {
+	t.Parallel()
+	opts := mustParseGraphArgs(t, []string{"--pattern=./tools/...", "--include-tests"})
+	if opts.Pattern != "./tools/..." {
+		t.Errorf("Pattern = %q, want ./tools/...", opts.Pattern)
+	}
+	if !opts.IncludeTests {
+		t.Error("IncludeTests = false, want true")
+	}
+}
+
+func TestParseGraphArgs_RootFlag(t *testing.T) {
+	t.Parallel()
+	opts := mustParseGraphArgs(t, []string{"--root=/tmp/myproject"})
+	if opts.Root != "/tmp/myproject" {
+		t.Errorf("Root = %q, want /tmp/myproject", opts.Root)
+	}
+}
+
+func TestParseGraphArgs_UnknownFormatRejects(t *testing.T) {
+	t.Parallel()
+	opts, err := parseGraphArgs([]string{"--format=xml"})
+	if err == nil {
+		t.Errorf("expected error for unknown format, got nil; opts=%+v", opts)
 	}
 }
