@@ -28,7 +28,7 @@ bootstrap.WithListener(cell.PrimaryListener, shared.PrimaryHTTPAddr,
 
 // Internal：控制平面 + ServiceToken（HMAC-SHA256 + replay guard）
 bootstrap.WithListener(cell.InternalListener, shared.InternalHTTPAddr,
-    []cell.ListenerAuth{cell.MustNewAuthServiceToken(guard.NonceStore(), guard.ring)})
+    []cell.ListenerAuth{cell.MustNewAuthServiceToken(guard.NonceStore(), guard.Ring())})
 
 // Health：/healthz /readyz /metrics，显式无认证
 bootstrap.WithListener(cell.HealthListener, shared.HealthHTTPAddr,
