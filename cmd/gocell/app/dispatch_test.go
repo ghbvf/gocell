@@ -79,6 +79,28 @@ func TestDispatch_Contract(t *testing.T) {
 				"unknown scaffold type",
 			},
 		},
+		{
+			// flag.ErrHelp must propagate through Dispatch as a successful
+			// help invocation, not a runtime error. Regression guard: the
+			// previous io.Discard + fmt.Errorf wrapping turned `-h` into
+			// "error: graph: flag: help requested" with exit 1.
+			//
+			// stdlib flag emits single-dash flag names in usage; we assert
+			// "-format" / "-root" without expanding the test to long form.
+			name:         "graph -h is a successful help request, exit ExitOK",
+			args:         []string{"graph", "-h"},
+			wantExit:     ExitOK,
+			stderrSub:    []string{"Usage of graph", "-format", "-root", "-include-tests"},
+			stdoutNotSub: []string{"error:"},
+		},
+		{
+			// Same contract for the long form. flag package reports both
+			// `-h` and `-help` as ErrHelp.
+			name:      "graph --help is a successful help request, exit ExitOK",
+			args:      []string{"graph", "--help"},
+			wantExit:  ExitOK,
+			stderrSub: []string{"Usage of graph"},
+		},
 	}
 
 	for _, tt := range tests {

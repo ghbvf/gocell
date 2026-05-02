@@ -1,0 +1,57 @@
+{
+  "module": "example.com/synth",
+  "packages": [
+    {
+      "id": "example.com/synth/a",
+      "layer": "unknown",
+      "imports": [
+        "example.com/synth/b",
+        "example.com/synth/d"
+      ]
+    },
+    {
+      "id": "example.com/synth/b",
+      "layer": "unknown",
+      "imports": [
+        "example.com/synth/c"
+      ]
+    },
+    {
+      "id": "example.com/synth/c",
+      "layer": "unknown",
+      "imports": []
+    },
+    {
+      "id": "example.com/synth/cells/cellA",
+      "layer": "cells",
+      "cellId": "cellA",
+      "imports": []
+    },
+    {
+      "id": "example.com/synth/d",
+      "layer": "unknown",
+      "imports": []
+    },
+    {
+      "id": "example.com/synth/generated/foo",
+      "layer": "generated",
+      "imports": []
+    },
+    {
+      "id": "example.com/synth/testhelper",
+      "layer": "unknown",
+      "imports": [],
+      "testOnly": true
+    },
+    {
+      "id": "example.com/synth/xtesthelper",
+      "layer": "unknown",
+      "imports": [],
+      "testOnly": true
+    }
+  ],
+  "stats": {
+    "packages": 8,
+    "edges": 3
+  }
+}

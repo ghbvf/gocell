@@ -85,7 +85,10 @@ var adapterManagedResourceOptOut = map[string]string{
 func TestAdaptersExportedTypesManagedResourceOrOptOut(t *testing.T) {
 	root := findModuleRoot(t)
 	modulePath := readModulePath(t, root)
-	pkgs := loadTypedPackages(t, root, "./kernel/lifecycle", "./adapters/...")
+	_, allPkgs := loadModule(t, root)
+	pkgs := filterPkgsByPathPrefix(allPkgs,
+		modulePath+"/kernel/lifecycle",
+		modulePath+"/adapters/")
 	managedResource := managedResourceInterface(t, pkgs, modulePath)
 	adapterTypes := collectAdapterExportedTypes(pkgs, modulePath)
 
@@ -106,7 +109,10 @@ func TestAdaptersExportedTypesManagedResourceOrOptOut(t *testing.T) {
 func TestAdapterManagedResourceCheckerNamesUseReadySuffix(t *testing.T) {
 	root := findModuleRoot(t)
 	modulePath := readModulePath(t, root)
-	pkgs := loadTypedPackages(t, root, "./adapters/...", "./cmd/corebundle")
+	_, allPkgs := loadModule(t, root)
+	pkgs := filterPkgsByPathPrefix(allPkgs,
+		modulePath+"/adapters/",
+		modulePath+"/cmd/corebundle")
 
 	var violations []string
 	for _, pkg := range pkgs {

@@ -6,6 +6,8 @@
 package app
 
 import (
+	"errors"
+	"flag"
 	"fmt"
 	"os"
 )
@@ -21,6 +23,7 @@ var commands = map[string]func(args []string) error{
 	"generate": runGenerate,
 	"check":    runCheck,
 	"verify":   runVerify,
+	"graph":    runGraph,
 }
 
 // Exit codes. Follows the common POSIX convention used by tools like go
@@ -52,6 +55,12 @@ func Dispatch(args []string) int {
 		return ExitUsage
 	}
 	if err := cmd(args[1:]); err != nil {
+		// `-h` lands here as flag.ErrHelp after the sub-command's flag.Parse
+		// already printed its own usage. Treat as a successful help request,
+		// not a runtime failure.
+		if errors.Is(err, flag.ErrHelp) {
+			return ExitOK
+		}
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		return ExitRuntime
 	}
@@ -84,6 +93,7 @@ func PrintUsage() {
 	fmt.Println("    unconditional-skip [--format text|json|sarif]")
 	fmt.Println("  verify      Run tests and artifact checks            [--id, --active, --files]")
 	fmt.Println("    generated [--module=<module>]")
+	fmt.Println("  graph       Emit module package dependency graph     [--format, --pattern, --root, --include-tests]")
 	fmt.Println()
 	fmt.Println("Run 'gocell <command> -h' for full flag help on a sub-command.")
 }
