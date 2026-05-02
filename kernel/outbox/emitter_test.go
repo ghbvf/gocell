@@ -433,12 +433,12 @@ func TestWriterEmitter_Durable_NilReceiver(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// HealthCheckers tests
+// Probes tests
 // ---------------------------------------------------------------------------
 
-// TestDirectEmitter_HealthCheckers_DegradedOnHighDropRatio verifies that after
-// all publishes fail (fail-open), the HealthCheckers checker reports ErrDegraded.
-func TestDirectEmitter_HealthCheckers_DegradedOnHighDropRatio(t *testing.T) {
+// TestDirectEmitter_Probes_DegradedOnHighDropRatio verifies that after
+// all publishes fail (fail-open), the Probes checker reports ErrDegraded.
+func TestDirectEmitter_Probes_DegradedOnHighDropRatio(t *testing.T) {
 	fp := &recordingEmitterPublisher{err: errors.New("broker down")}
 	e, err := NewDirectEmitter(fp, DirectPublishFailOpen, metrics.NopProvider{}, clock.Real(), "testcell")
 	require.NoError(t, err)
@@ -449,7 +449,7 @@ func TestDirectEmitter_HealthCheckers_DegradedOnHighDropRatio(t *testing.T) {
 		require.NoError(t, e.Emit(ctx, entry)) // fail-open does not return err
 	}
 
-	checkers := e.HealthCheckers()
+	checkers := e.Probes()
 	require.Contains(t, checkers, "outbox-failopen-rate.testcell")
 
 	// 10 drops / 10 total = 100% > 5% default threshold → Tripped
@@ -458,9 +458,9 @@ func TestDirectEmitter_HealthCheckers_DegradedOnHighDropRatio(t *testing.T) {
 	assert.ErrorIs(t, checkErr, ErrDegraded)
 }
 
-// TestDirectEmitter_HealthCheckers_HealthyOnLowDropRatio verifies that when
-// all publishes succeed (zero drops), the HealthCheckers checker returns nil.
-func TestDirectEmitter_HealthCheckers_HealthyOnLowDropRatio(t *testing.T) {
+// TestDirectEmitter_Probes_HealthyOnLowDropRatio verifies that when
+// all publishes succeed (zero drops), the Probes checker returns nil.
+func TestDirectEmitter_Probes_HealthyOnLowDropRatio(t *testing.T) {
 	pub := &recordingEmitterPublisher{} // no error → success path
 	e, err := NewDirectEmitter(pub, DirectPublishFailOpen, metrics.NopProvider{}, clock.Real(), "testcell")
 	require.NoError(t, err)
@@ -471,7 +471,7 @@ func TestDirectEmitter_HealthCheckers_HealthyOnLowDropRatio(t *testing.T) {
 		require.NoError(t, e.Emit(ctx, entry))
 	}
 
-	checkers := e.HealthCheckers()
+	checkers := e.Probes()
 	require.Contains(t, checkers, "outbox-failopen-rate.testcell")
 
 	// 0 drops / 10 total = 0% < 5% threshold → not tripped
@@ -509,7 +509,7 @@ func TestNewDirectEmitter_WithFailOpenRateThresholdZeroDisables(t *testing.T) {
 	}
 
 	// threshold 0 → Tripped always false
-	checkErr := e.HealthCheckers()["outbox-failopen-rate.testcell"](ctx)
+	checkErr := e.Probes()["outbox-failopen-rate.testcell"](ctx)
 	assert.NoError(t, checkErr)
 }
 

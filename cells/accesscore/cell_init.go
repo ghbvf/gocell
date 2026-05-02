@@ -20,6 +20,7 @@ import (
 	"github.com/ghbvf/gocell/cells/accesscore/slices/sessionvalidate"
 	"github.com/ghbvf/gocell/cells/accesscore/slices/setup"
 	"github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/persistence"
@@ -256,15 +257,16 @@ func (c *AccessCore) initRbacAssign() {
 	c.AddSlice(cell.NewBaseSlice("rbacassign", "accesscore", rbacAssignLevel))
 }
 
-// emitterHealthChecker is a local interface satisfied by outbox.DirectEmitter.
-// Avoids a hard import of the concrete type; Batch 4 renames the method to Probes().
-type emitterHealthChecker interface {
-	HealthCheckers() map[string]func(context.Context) error
+// emitterProber is a local interface satisfied by outbox.DirectEmitter.
+// Avoids a hard import of the concrete type; exposes Probes() per K8s probe terminology.
+type emitterProber interface {
+	Probes() map[string]func(context.Context) error
 }
 
 // Init constructs all 9 slices and registers routes, subscriptions, health
 // probes, and lifecycle hooks into reg.
 func (c *AccessCore) Init(ctx context.Context, reg cell.Registry) error {
+	clock.MustHaveClock(c.clk, "accesscore.Init")
 	if err := c.BaseCell.Init(ctx, reg); err != nil {
 		return err
 	}
@@ -286,21 +288,40 @@ func (c *AccessCore) Init(ctx context.Context, reg cell.Registry) error {
 	if err := c.initSlices(); err != nil {
 		return err
 	}
-	if c.initialAdmin != nil {
-		// Platform check fails fast at Init() rather than at lifecycle OnStart,
-		// so an unsupported GOOS surfaces before any bootstrap goroutine runs.
-		if err := initialadmin.PlatformSupported(); err != nil {
-			return err
-		}
-		c.initialAdmin.Bind(initialadmin.BootstrapDeps{
-			UserRepo: c.userRepo,
-			RoleRepo: c.roleRepo,
-			Logger:   c.logger,
-			Clock:    c.clk,
-		}, c.logger)
+	if err := c.bindInitialAdmin(); err != nil {
+		return err
 	}
 
-	// Register HTTP route groups.
+	c.registerRouteGroups(reg)
+	if err := c.registerSubscriptions(reg); err != nil {
+		return err
+	}
+	c.registerHealthAndLifecycle(reg)
+
+	return nil
+}
+
+// bindInitialAdmin validates platform support and binds repos to the initialAdmin lifecycle.
+func (c *AccessCore) bindInitialAdmin() error {
+	if c.initialAdmin == nil {
+		return nil
+	}
+	// Platform check fails fast at Init() rather than at lifecycle OnStart,
+	// so an unsupported GOOS surfaces before any bootstrap goroutine runs.
+	if err := initialadmin.PlatformSupported(); err != nil {
+		return err
+	}
+	c.initialAdmin.Bind(initialadmin.BootstrapDeps{
+		UserRepo: c.userRepo,
+		RoleRepo: c.roleRepo,
+		Logger:   c.logger,
+		Clock:    c.clk,
+	}, c.logger)
+	return nil
+}
+
+// registerRouteGroups registers HTTP route groups for primary and internal listeners.
+func (c *AccessCore) registerRouteGroups(reg cell.Registry) {
 	reg.RouteGroup(cell.RouteGroup{
 		Listener: cell.PrimaryListener,
 		Prefix:   "/api/v1/access",
@@ -341,8 +362,10 @@ func (c *AccessCore) Init(ctx context.Context, reg cell.Registry) error {
 			return firstErr
 		},
 	})
+}
 
-	// Register event subscriptions.
+// registerSubscriptions registers config and role-change event handlers into reg.
+func (c *AccessCore) registerSubscriptions(reg cell.Registry) error {
 	upsertedHandler := outbox.WrapLegacyHandler(c.configReceiveSvc.HandleEntryUpserted)
 	if err := reg.Subscribe(
 		specEventConfigEntryUpserted, upsertedHandler, "accesscore",
@@ -362,26 +385,25 @@ func (c *AccessCore) Init(ctx context.Context, reg cell.Registry) error {
 	if err := reg.Subscribe(specEventRoleRevoked, roleHandler, "accesscore-rbac-session-sync"); err != nil {
 		return fmt.Errorf(errFmtSubscribe, specEventRoleRevoked.Topic, err)
 	}
+	return nil
+}
 
-	// Register health probes.
+// registerHealthAndLifecycle registers health probes and lifecycle hooks into reg.
+func (c *AccessCore) registerHealthAndLifecycle(reg cell.Registry) {
 	if hc, ok := c.sessionRepo.(interface {
 		Health(context.Context) error
 	}); ok {
 		reg.Health("session-store", hc.Health)
 	}
-	if hc, ok := c.emitter.(emitterHealthChecker); ok {
-		for k, v := range hc.HealthCheckers() {
+	if hc, ok := c.emitter.(emitterProber); ok {
+		for k, v := range hc.Probes() {
 			reg.Health(k, v)
 		}
 	}
-
-	// Register lifecycle hooks.
 	if c.refreshGCEnabled {
 		reg.Lifecycle(c.refreshGCHook())
 	}
 	if c.initialAdmin != nil {
 		reg.Lifecycle(c.initialAdmin.Hook())
 	}
-
-	return nil
 }

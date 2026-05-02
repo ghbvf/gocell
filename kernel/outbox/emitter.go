@@ -89,7 +89,7 @@ func WithLogger(l *slog.Logger) DirectEmitterOption {
 }
 
 // WithFailOpenRateThreshold sets the drop ratio threshold above which the
-// emitter's HealthCheckers checker reports cell.ErrDegraded.
+// emitter's Probes checker reports cell.ErrDegraded.
 //
 // Default is 0.05 (5%) — the tracker is enabled by default because fail-open
 // drop monitoring is framework infrastructure responsibility, not a per-cell
@@ -118,7 +118,7 @@ const defaultFailOpenRateThreshold = 0.05 // 5%
 //
 // Use WithLogger to override the default slog.Default() logger.
 // Use WithFailOpenRateThreshold to set the drop-ratio threshold for the
-// HealthCheckers checker (default 5%; 0 disables).
+// Probes checker (default 5%; 0 disables).
 func NewDirectEmitter(
 	p Publisher, mode DirectPublishFailureMode, mp metrics.Provider, clk clock.Clock, cellID string, opts ...DirectEmitterOption,
 ) (*DirectEmitter, error) {
@@ -218,7 +218,7 @@ func (e *DirectEmitter) Emit(ctx context.Context, entry Entry) error {
 
 var _ Emitter = (*DirectEmitter)(nil)
 
-// ErrDegraded is the canonical sentinel returned by DirectEmitter.HealthCheckers
+// ErrDegraded is the canonical sentinel returned by DirectEmitter.Probes
 // to signal "operational but degraded" — the emitter is still serving requests
 // but the fail-open drop ratio has exceeded the configured threshold, meaning
 // events are silently lost at an elevated rate.
@@ -235,11 +235,11 @@ var _ Emitter = (*DirectEmitter)(nil)
 // ref: kernel/cell/health.go — cell-layer alias to this sentinel.
 var ErrDegraded = errcode.New(errcode.ErrOutboxDegraded, "degraded")
 
-// HealthCheckers implements cell.HealthContributor. The checker name is
-// scoped by cellID to avoid collisions when multiple cells own a
+// Probes returns a probe map for cells to register via reg.Health(...). The
+// probe name is scoped by cellID to avoid collisions when multiple cells own a
 // DirectEmitter (each /readyz checker name MUST be globally unique).
 //
-// The checker returns ErrDegraded when the fail-open drop ratio exceeds the
+// The probe returns ErrDegraded when the fail-open drop ratio exceeds the
 // threshold configured via WithFailOpenRateThreshold (default 5%). The /readyz
 // aggregator detects this via errors.Is and maps to HTTP 200 + status="degraded"
 // rather than 503.
@@ -253,7 +253,7 @@ var ErrDegraded = errcode.New(errcode.ErrOutboxDegraded, "degraded")
 //
 // ref: kernel/outbox/emitter.go ErrDegraded
 // ref: cells/accesscore/cell_providers.go:22-38 — kebab-case checker name convention
-func (e *DirectEmitter) HealthCheckers() map[string]func(context.Context) error {
+func (e *DirectEmitter) Probes() map[string]func(context.Context) error {
 	return map[string]func(context.Context) error{
 		"outbox-failopen-rate." + e.cellID: e.checkFailOpenRate,
 	}

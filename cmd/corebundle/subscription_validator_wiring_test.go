@@ -34,22 +34,22 @@ func newConfigSubscriberWithoutOwner() *configSubscriberWithoutOwner {
 	}
 }
 
-// RegisterSubscriptions implements cell.EventRegistrar. It registers a
-// config-event subscription without SliceID — intentionally missing owner
-// metadata — so the ConfigEventOwnerValidator injected via runtimeBaseOptions
-// rejects it at phase6.
-func (c *configSubscriberWithoutOwner) RegisterSubscriptions(r cell.EventRouter) error {
+// Init registers a config-event subscription without SliceID — intentionally
+// missing owner metadata — so the ConfigEventOwnerValidator injected via
+// runtimeBaseOptions rejects it at phase6.
+func (c *configSubscriberWithoutOwner) Init(ctx context.Context, reg cell.Registry) error {
+	if err := c.BaseCell.Init(ctx, reg); err != nil {
+		return err
+	}
 	spec := wrapper.EventSpec("event.config.entry-upserted.v1", "amqp")
 	// Intentionally omit cell.WithSubscriptionSliceID to trigger validator.
-	return r.AddContractHandler(spec,
+	return reg.Subscribe(spec,
 		func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
 			return outbox.HandleResult{Disposition: outbox.DispositionAck}
 		},
 		"testcellnoowner", // consumerGroup == cell ID
 	)
 }
-
-var _ cell.EventRegistrar = (*configSubscriberWithoutOwner)(nil)
 
 // TestSubscriptionValidatorInjectedViaRuntimeBaseOptions is the E2E wiring
 // guard for Finding 3 (PR #334 L4 review round-2): verifies that

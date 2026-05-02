@@ -108,7 +108,7 @@ type CoreAssembly struct {
 	cells      []cell.Cell
 	cellMap    map[string]cell.Cell
 	state      assemblyState
-	dispatcher *hookDispatcher            // owned; lifecycle tied to New/Stop
+	dispatcher *hookDispatcher                  // owned; lifecycle tied to New/Stop
 	snapshots  map[string]cell.RegistrySnapshot // keyed by cell ID; populated during startInternal
 }
 

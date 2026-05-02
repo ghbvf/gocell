@@ -135,6 +135,7 @@ func (m ConfigCoreModule) Provide(
 	baseOpts := []configcore.Option{
 		// Outbox wiring is provided by buildConfigCoreOpts (PG adapter includes
 		// the transactional writer; memory adapter passes writer=nil).
+		configcore.WithClock(shared.Clock),
 		configcore.WithCursorCodec(cursorCodec),
 		configcore.WithMetricsProvider(shared.PromStack.metricProvider),
 		configcore.WithConfigEventCollector(shared.ConfigEventCollector),

@@ -69,9 +69,9 @@ type handlerConfig struct {
 	contract      wrapper.ContractSpec
 }
 
-// Router manages event subscription lifecycle. It implements cell.EventRouter
-// for the declaration phase (AddContractHandler) and provides Run/Close for the
-// execution phase.
+// Router manages event subscription lifecycle. It is populated from
+// RegistrySnapshot.Subscriptions drained by bootstrap phase6, and provides
+// Run/Close for the execution phase.
 //
 // Run MUST be called at most once. Calling Run a second time returns an error.
 type Router struct {
@@ -122,10 +122,9 @@ func New(sub outbox.Subscriber, clk clock.Clock, opts ...Option) *Router {
 // Subscriber.Setup / Subscribe lifecycle is derived from spec.Topic — callers
 // do not pass a separate topic string.
 //
-// Returns a non-nil error when handler is nil, consumerGroup is empty, the
-// spec is malformed, or kernel/cell.EventRouter contract is otherwise
-// violated; callers (Cell.RegisterSubscriptions) should propagate the error
-// to the bootstrap phase5 walker.
+// Returns a non-nil error when handler is nil, consumerGroup is empty, or the
+// spec is malformed; callers should propagate the error to the bootstrap
+// phase6 subscription walker.
 func (r *Router) AddContractHandler(
 	spec wrapper.ContractSpec, handler outbox.EntryHandler, consumerGroup string, opts ...cell.SubscriptionOption,
 ) error {

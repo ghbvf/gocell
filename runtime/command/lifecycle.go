@@ -38,11 +38,6 @@ func NewSweeperLifecycle(name string, sweeper *kcommand.Sweeper) *SweeperLifecyc
 	return &SweeperLifecycle{Name: name, Sweeper: sweeper}
 }
 
-// LifecycleHooks implements cell.LifecycleContributor.
-func (l *SweeperLifecycle) LifecycleHooks() []cell.LifecycleHook {
-	return []cell.LifecycleHook{l.Hook()}
-}
-
 // Hook returns the single lifecycle hook managed by SweeperLifecycle.
 func (l *SweeperLifecycle) Hook() cell.LifecycleHook {
 	return cell.LifecycleHook{

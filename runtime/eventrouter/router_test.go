@@ -560,7 +560,6 @@ func TestRouter_AddSubscriptionValidator_NilSkipped(t *testing.T) {
 	assert.ErrorIs(t, err, sentinel)
 }
 
-
 // newTestEventBus creates an in-memory pub/sub for Router tests, registered for cleanup.
 func newTestEventBus(t *testing.T) *testBus {
 	t.Helper()

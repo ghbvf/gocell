@@ -92,13 +92,15 @@ type consumerSpyCell struct {
 	calls chan outbox.Entry
 }
 
-func (c *consumerSpyCell) RegisterSubscriptions(r cell.EventRouter) error {
+func (c *consumerSpyCell) Init(ctx context.Context, reg cell.Registry) error {
+	if err := c.BaseCell.Init(ctx, reg); err != nil {
+		return err
+	}
 	handler := outbox.EntryHandler(func(_ context.Context, entry outbox.Entry) outbox.HandleResult {
 		c.calls <- entry
 		return outbox.HandleResult{Disposition: outbox.DispositionAck}
 	})
-	_ = r.AddContractHandler(c.spec, handler, "consumer-spy")
-	return nil
+	return reg.Subscribe(c.spec, handler, "consumer-spy")
 }
 
 // TestBootstrap_ConsumerTracingIntegration wires bootstrap ->

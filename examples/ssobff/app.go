@@ -150,6 +150,7 @@ func NewSSOBFFApp(opts ...SSOBFFAppOption) (*SSOBFFApp, error) {
 
 	var nw outbox.Writer = outbox.NoopWriter{}
 	ac := accesscore.NewAccessCore(
+		accesscore.WithClock(clock.Real()),
 		accesscore.WithInMemoryDefaults(),
 		accesscore.WithInitialAdminBootstrap(),
 		accesscore.WithOutboxDeps(eb, nw),
@@ -167,6 +168,7 @@ func NewSSOBFFApp(opts ...SSOBFFAppOption) (*SSOBFFApp, error) {
 		return nil, fmt.Errorf("ssobff: create audit cursor codec: %w", err)
 	}
 	auc := auditcore.NewAuditCore(
+		auditcore.WithClock(clock.Real()),
 		auditcore.WithInMemoryDefaults(),
 		auditcore.WithOutboxDeps(eb, nw),
 		auditcore.WithHMACKey([]byte("ssobff-dev-hmac-key-32-bytes!!!!")),
@@ -181,6 +183,7 @@ func NewSSOBFFApp(opts ...SSOBFFAppOption) (*SSOBFFApp, error) {
 		return nil, fmt.Errorf("ssobff: create config cursor codec: %w", err)
 	}
 	cc := configcore.NewConfigCore(
+		configcore.WithClock(clock.Real()),
 		configcore.WithInMemoryDefaults(),
 		configcore.WithOutboxDeps(eb, nw),
 		configcore.WithTxManager(persistence.NoopTxRunner{}),

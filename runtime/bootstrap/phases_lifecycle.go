@@ -4,13 +4,14 @@ package bootstrap
 // (phase3b + health-checker helpers called from phase5).
 //
 // Covers:
-//   - phase3b: LifecycleContributor auto-discovery
+//   - phase3b: LifecycleHooks drain from RegistrySnapshot
 //   - registerAllHealthCheckers / registerCellHealthCheckers / registerOneCellHealthCheckers
 //   - registerConfigDriftChecker
 //
 // ref: uber-go/fx lifecycle.go — lifecycle hook registration ordering and
 // duplicate-Name detection at Append time (kernel/lifecycle mirrors this contract).
-// ref: kernel/cell.HealthContributor — mirrored auto-discovery pattern for health checkers.
+// ref: kernel/cell.Registry.Health — cells register probes via reg.Health during Init;
+// bootstrap drains HealthCheckers from RegistrySnapshot in this phase.
 
 import (
 	"context"

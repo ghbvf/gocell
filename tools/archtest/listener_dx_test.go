@@ -264,7 +264,8 @@ func forbiddenProductionSurfaceViolations(t *testing.T, root, path string) []str
 
 func routeGroupRegisterSignatureViolations(t *testing.T, root string) []string {
 	t.Helper()
-	path := filepath.Join(root, "kernel", "cell", "routegroup.go")
+	// RouteGroup struct is defined in registry.go (merged in batch 1/4).
+	path := filepath.Join(root, "kernel", "cell", "registry.go")
 	fset := token.NewFileSet()
 	file, err := parser.ParseFile(fset, path, nil, parser.SkipObjectResolution)
 	require.NoError(t, err)

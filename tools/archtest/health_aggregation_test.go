@@ -13,8 +13,8 @@ package archtest
 // recognized as implementing ManagedResource.
 //
 // Enforcement scope: runtime/, adapters/ packages only.
-// Excluded: cells/, kernel/cell/ — HealthCheckersContributor is a different
-// interface that intentionally doesn't bundle Worker/Close.
+// Excluded: cells/, kernel/cell/ — health probes are registered via
+// Registry.Health(...) and do not bundle Worker/Close.
 
 import (
 	"go/ast"

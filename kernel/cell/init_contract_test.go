@@ -20,7 +20,7 @@ import (
 // still uses Dependencies.
 func compileCellInitSignature() {
 	// A function literal that satisfies the Cell.Init shape.
-	var _ func(context.Context, Registry) error = func(_ context.Context, _ Registry) error {
+	var _ = func(_ context.Context, _ Registry) error {
 		return nil
 	}
 }

@@ -199,14 +199,19 @@ func TestOutboxE2E_PGMode_WriteToSubscribe(t *testing.T) {
 
 	// cellAdapterOpts already includes WithOutboxDeps(eb, pgWriter) from
 	// buildConfigCoreOpts — no separate publisher wiring needed.
-	configOpts := append([]configcore.Option{
+	// Go prevents mixing positional args and slice spread, so WithClock is
+	// prepended into the slice; the allow-marker below documents this.
+	cellAdapterOpts = append([]configcore.Option{
+		configcore.WithClock(clock.Real()),
 		configcore.WithCursorCodec(cursorCodec),
+		configcore.WithMetricsProvider(kernelmetrics.NopProvider{}),
 	}, cellAdapterOpts...)
-	configCell := configcore.NewConfigCore(configOpts...)
+	configCell := configcore.NewConfigCore(cellAdapterOpts...) //archtest:allow:clock-injection:via-slice options slice starts with WithClock(clock.Real()) prepended above; Go prevents mixing positional + spread
 
 	// Wire accesscore with WithInitialAdminBootstrap.
 	// Bootstrap phase3b auto-discovers LifecycleHooks() — no worker.Lazy sink needed.
 	accessCell := accesscore.NewAccessCore(
+		accesscore.WithClock(clock.Real()),
 		accesscore.WithInMemoryDefaults(),
 		accesscore.WithOutboxDeps(eb, nil),
 		accesscore.WithJWTIssuer(jwtIssuer),
@@ -215,6 +220,7 @@ func TestOutboxE2E_PGMode_WriteToSubscribe(t *testing.T) {
 		accesscore.WithMetricsProvider(kernelmetrics.NopProvider{}),
 	)
 	auditCell := auditcore.NewAuditCore(
+		auditcore.WithClock(clock.Real()),
 		auditcore.WithInMemoryDefaults(),
 		auditcore.WithOutboxDeps(eb, nil),
 		auditcore.WithHMACKey(hmacKey),
@@ -558,15 +564,20 @@ func TestOutboxE2E_RefetchLoop_AccessCoreCallsInternalGet(t *testing.T) {
 	e2eStateDir := t.TempDir()
 	t.Setenv("GOCELL_STATE_DIR", e2eStateDir)
 
-	configOpts := append([]configcore.Option{
+	// Go prevents mixing positional args and slice spread, so WithClock is
+	// prepended into the slice; the allow-marker below documents this.
+	cellAdapterOpts = append([]configcore.Option{
+		configcore.WithClock(clock.Real()),
 		configcore.WithCursorCodec(cursorCodec),
+		configcore.WithMetricsProvider(kernelmetrics.NopProvider{}),
 	}, cellAdapterOpts...)
-	configCell := configcore.NewConfigCore(configOpts...)
+	configCell := configcore.NewConfigCore(cellAdapterOpts...) //archtest:allow:clock-injection:via-slice options slice starts with WithClock(clock.Real()) prepended above; Go prevents mixing positional + spread
 
 	// Wire accesscore with the HTTPConfigGetter pointing at the stub server.
 	// After receiving an entry-upserted event, configreceive will call
 	// internalSrv.URL + /internal/v1/config/{key}, and the stub records it.
 	accessCell := accesscore.NewAccessCore(
+		accesscore.WithClock(clock.Real()),
 		accesscore.WithInMemoryDefaults(),
 		accesscore.WithOutboxDeps(eb, nil),
 		accesscore.WithJWTIssuer(jwtIssuer),
@@ -576,6 +587,7 @@ func TestOutboxE2E_RefetchLoop_AccessCoreCallsInternalGet(t *testing.T) {
 		configgetter.WithHTTP(internalSrv.URL, testRing, clock.Real()),
 	)
 	auditCell := auditcore.NewAuditCore(
+		auditcore.WithClock(clock.Real()),
 		auditcore.WithInMemoryDefaults(),
 		auditcore.WithOutboxDeps(eb, nil),
 		auditcore.WithHMACKey(hmacKey),

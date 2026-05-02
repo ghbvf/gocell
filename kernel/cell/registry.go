@@ -370,10 +370,15 @@ func (r *RegistryRecorder) Health(name string, check func(context.Context) error
 // Lifecycle appends a lifecycle hook. Panics when Name is empty (programming error).
 func (r *RegistryRecorder) Lifecycle(h LifecycleHook) {
 	r.mustNotBeFinalized("Lifecycle")
+	MustHaveLifecycleHookName(h)
+	r.lifecycleHooks = append(r.lifecycleHooks, h)
+}
+
+// MustHaveLifecycleHookName panics when the hook Name is empty (programming error).
+func MustHaveLifecycleHookName(h LifecycleHook) {
 	if h.Name == "" {
 		panic("registry Lifecycle: hook Name must not be empty (programming error)")
 	}
-	r.lifecycleHooks = append(r.lifecycleHooks, h)
 }
 
 // OnConfigReload registers a config-reload callback. Panics when prefixes
@@ -383,15 +388,20 @@ func (r *RegistryRecorder) OnConfigReload(
 	fn func(context.Context, ConfigChangeEvent) error,
 ) {
 	r.mustNotBeFinalized("OnConfigReload")
+	MustHaveNonEmptyConfigPrefixes(prefixes)
+	r.configReloaders = append(r.configReloaders, ConfigReloadRequest{
+		Prefixes: prefixes,
+		Fn:       fn,
+	})
+}
+
+// MustHaveNonEmptyConfigPrefixes panics when any prefix is an empty string (programming error).
+func MustHaveNonEmptyConfigPrefixes(prefixes []string) {
 	for _, p := range prefixes {
 		if p == "" {
 			panic("registry OnConfigReload: prefixes must not contain an empty string (programming error)")
 		}
 	}
-	r.configReloaders = append(r.configReloaders, ConfigReloadRequest{
-		Prefixes: prefixes,
-		Fn:       fn,
-	})
 }
 
 // Snapshot finalizes the recorder and returns an immutable RegistrySnapshot.
@@ -428,7 +438,12 @@ func (r *RegistryRecorder) Snapshot() RegistrySnapshot {
 
 // mustNotBeFinalized panics when the recorder has already been finalized.
 func (r *RegistryRecorder) mustNotBeFinalized(method string) {
-	if r.finalized {
+	MustNotBeRegistryFinalized(r.finalized, method)
+}
+
+// MustNotBeRegistryFinalized panics when finalized is true (programming error).
+func MustNotBeRegistryFinalized(finalized bool, method string) {
+	if finalized {
 		panic("registry " + method + ": called after Snapshot() — registration must happen during Cell.Init (programming error)")
 	}
 }

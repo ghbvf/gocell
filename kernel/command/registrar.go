@@ -1,7 +1,9 @@
 package command
 
 // QueueRegistrar is an optional interface a Cell may implement to receive
-// its command.Queue dependency from the runtime (mirrors kernel/cell.RouteGroupContributor).
+// its command.Queue dependency from the runtime; it is the optional
+// injection-direction interface for command queue handles; the cell-side
+// equivalent is collapsed into cell.Registry.
 // Runtimes SHOULD probe this via type assertion during Cell.Init.
 //
 // The concrete Queue instance is owned by the composition root (or a

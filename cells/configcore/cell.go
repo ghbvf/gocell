@@ -100,8 +100,9 @@ func WithCursorCodec(codec *query.CursorCodec) Option {
 	return func(c *ConfigCore) { c.cursorCodec = codec }
 }
 
-// WithClock sets the time source for this Cell. Defaults to clock.Real() when
-// not set. Tests inject a deterministic clock to control time-sensitive logic.
+// WithClock sets the time source for this Cell. Required — Init() panics via
+// clock.MustHaveClock if not set. Composition root passes clock.Real(); tests
+// inject a deterministic clock to control time-sensitive logic.
 func WithClock(clk clock.Clock) Option {
 	return func(c *ConfigCore) { c.clk = clk }
 }
@@ -159,7 +160,6 @@ func NewConfigCore(opts ...Option) *ConfigCore {
 			Verify:           cell.CellVerify{Smoke: []string{"configcore/smoke"}},
 		}),
 		logger: slog.Default(),
-		clk:    clock.Real(),
 	}
 	for _, o := range opts {
 		o(c)

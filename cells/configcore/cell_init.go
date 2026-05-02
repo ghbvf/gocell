@@ -16,6 +16,7 @@ import (
 	"github.com/ghbvf/gocell/cells/configcore/slices/featureflag"
 	"github.com/ghbvf/gocell/cells/configcore/slices/flagwrite"
 	"github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/kernel/wrapper"
@@ -23,10 +24,10 @@ import (
 	"github.com/ghbvf/gocell/pkg/query"
 )
 
-// emitterHealthChecker is a local interface satisfied by outbox.DirectEmitter.
-// Avoids a hard import of the concrete type; Batch 4 renames the method to Probes().
-type emitterHealthChecker interface {
-	HealthCheckers() map[string]func(context.Context) error
+// emitterProber is a local interface satisfied by outbox.DirectEmitter.
+// Avoids a hard import of the concrete type; exposes Probes() per K8s probe terminology.
+type emitterProber interface {
+	Probes() map[string]func(context.Context) error
 }
 
 // Event spec variables for configcore subscriptions. EventSpec id==topic so
@@ -40,14 +41,14 @@ var (
 // probes into reg. Storage adapters are resolved by composition roots before
 // NewConfigCore receives its repository options.
 func (c *ConfigCore) Init(ctx context.Context, reg cell.Registry) error {
+	clock.MustHaveClock(c.clk, "configcore.Init")
 	if err := c.BaseCell.Init(ctx, reg); err != nil {
 		return err
 	}
 
 	// BaseCell does not expose a Clock accessor; configcore carries its own
-	// clock field derived from the assembly option (set via composition root).
-	// reg has no Config clock; use the cell's own c.clk (injected via option or
-	// default clock.Real()).
+	// clock field validated via MustHaveClock above (set via WithClock option
+	// from composition root or test). reg has no Config clock; use c.clk.
 
 	// WithInMemoryDefaults defers repo construction to here so c.clk is available.
 	if c.useInMemoryDefaults {
@@ -65,11 +66,30 @@ func (c *ConfigCore) Init(ctx context.Context, reg cell.Registry) error {
 	if err := c.resolveEmitter(durabilityMode); err != nil {
 		return err
 	}
-
 	if err := c.ensureCursorCodec(reg); err != nil {
 		return err
 	}
+	if err := c.initAllSlices(runMode); err != nil {
+		return err
+	}
 
+	c.registerRouteGroups(reg)
+	if err := c.registerSubscriptions(reg); err != nil {
+		return err
+	}
+
+	// Register health probes (emitter fail-open rate checker).
+	if hc, ok := c.emitter.(emitterProber); ok {
+		for k, v := range hc.Probes() {
+			reg.Health(k, v)
+		}
+	}
+
+	return nil
+}
+
+// initAllSlices constructs all 6 configcore slices.
+func (c *ConfigCore) initAllSlices(runMode query.RunMode) error {
 	c.initWriteSlice()
 	if err := c.initReadSlice(runMode); err != nil {
 		return err
@@ -79,11 +99,11 @@ func (c *ConfigCore) Init(ctx context.Context, reg cell.Registry) error {
 	if err := c.initFlagSlice(runMode); err != nil {
 		return err
 	}
-	if err := c.initFlagWriteSlice(); err != nil {
-		return err
-	}
+	return c.initFlagWriteSlice()
+}
 
-	// Register HTTP route groups.
+// registerRouteGroups registers HTTP route groups for primary and internal listeners.
+func (c *ConfigCore) registerRouteGroups(reg cell.Registry) {
 	reg.RouteGroup(cell.RouteGroup{
 		Listener: cell.PrimaryListener,
 		Prefix:   "/api/v1",
@@ -119,8 +139,10 @@ func (c *ConfigCore) Init(ctx context.Context, reg cell.Registry) error {
 			return firstErr
 		},
 	})
+}
 
-	// Register event subscriptions.
+// registerSubscriptions registers configsubscribe event handlers into reg.
+func (c *ConfigCore) registerSubscriptions(reg cell.Registry) error {
 	upsertedHandler := outbox.WrapLegacyHandler(c.subscribeSvc.HandleEntryUpserted)
 	if err := reg.Subscribe(
 		specEventConfigEntryUpserted, upsertedHandler, "configcore",
@@ -133,14 +155,6 @@ func (c *ConfigCore) Init(ctx context.Context, reg cell.Registry) error {
 		cell.WithSubscriptionSliceID("configsubscribe")); err != nil {
 		return fmt.Errorf("configcore: subscribe %s: %w", specEventConfigEntryDeleted.Topic, err)
 	}
-
-	// Register health probes (emitter fail-open rate checker).
-	if hc, ok := c.emitter.(emitterHealthChecker); ok {
-		for k, v := range hc.HealthCheckers() {
-			reg.Health(k, v)
-		}
-	}
-
 	return nil
 }
 

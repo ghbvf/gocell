@@ -33,6 +33,20 @@ func (b *Bootstrap) phase6StartEventRouter(runCtx context.Context, s *phaseState
 		return b.checkNoSubscriptionsWhenSubscriberNil(s)
 	}
 
+	evtRouter := b.buildEventRouter(sub)
+	if err := b.drainCellSubscriptions(s, evtRouter); err != nil {
+		return err
+	}
+
+	if evtRouter.HandlerCount() == 0 {
+		return nil
+	}
+
+	return b.startAndRegisterEventRouter(runCtx, s, evtRouter)
+}
+
+// buildEventRouter creates the event router with middleware and validators.
+func (b *Bootstrap) buildEventRouter(sub outbox.Subscriber) *eventrouter.Router {
 	// Observability context restoration is the OUTERMOST step inside
 	// SubscriberWithMiddleware.Subscribe — built-in invariant, not a
 	// middleware here. ContractTracingMiddleware therefore observes a
@@ -54,7 +68,11 @@ func (b *Bootstrap) phase6StartEventRouter(runCtx context.Context, s *phaseState
 	for _, v := range b.subscriptionValidators {
 		evtRouter.AddSubscriptionValidator(v)
 	}
+	return evtRouter
+}
 
+// drainCellSubscriptions registers all cell snapshot subscriptions into the router.
+func (b *Bootstrap) drainCellSubscriptions(s *phaseState, evtRouter *eventrouter.Router) error {
 	for _, id := range s.asm.CellIDs() {
 		snap, ok := s.cellSnapshots[id]
 		if !ok {
@@ -70,11 +88,12 @@ func (b *Bootstrap) phase6StartEventRouter(runCtx context.Context, s *phaseState
 			}
 		}
 	}
+	return nil
+}
 
-	if evtRouter.HandlerCount() == 0 {
-		return nil
-	}
-
+// startAndRegisterEventRouter registers the health probe, starts the router goroutine,
+// and wires teardown.
+func (b *Bootstrap) startAndRegisterEventRouter(runCtx context.Context, s *phaseState, evtRouter *eventrouter.Router) error {
 	evtHealth := evtRouter.Health // func() error — wrap to ctx-aware signature
 	if err := s.registerHealthChecker(eventRouterCheckerName, func(_ context.Context) error {
 		return evtHealth()

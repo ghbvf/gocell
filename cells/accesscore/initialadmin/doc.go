@@ -19,9 +19,9 @@
 // # Usage
 //
 // The package exposes [Lifecycle] as the composition-root entry point. Wire
-// it into accesscore via [accesscore.WithInitialAdminBootstrap] — Bootstrap
-// auto-discovers the returned Hook through [cell.LifecycleContributor], so
-// composition code is a single line:
+// it into accesscore via [accesscore.WithInitialAdminBootstrap]; accesscore.Init
+// registers the returned Hook via reg.Lifecycle, so composition code is a single
+// line:
 //
 //	accessCore := accesscore.NewAccessCore(
 //	    accesscore.WithUserRepository(userRepo),
@@ -34,7 +34,7 @@
 //	// bootstrap.New auto-wires the returned Hook at phase3b.
 //
 // Omit [accesscore.WithInitialAdminBootstrap] entirely (e.g., demo mode) and
-// no Hook is registered — LifecycleHooks() returns nil.
+// no Hook is registered — Init does not call reg.Lifecycle.
 //
 // # Construction order
 //
@@ -43,9 +43,10 @@
 //
 //  1. [NewLifecycle] — collects user config via [LifecycleOption]s.
 //  2. [Lifecycle.Bind] — wired by accesscore.Init once UserRepo/RoleRepo exist.
-//  3. [Lifecycle.Hook] — returned by accesscore.LifecycleHooks(); Bootstrap
-//     phase3b Appends it to the lifecycle; Hook.OnStart reads Bind state at
-//     invocation time so ordering is enforced without framework coupling.
+//  3. [Lifecycle.Hook] — registered by accesscore.Init via reg.Lifecycle;
+//     Bootstrap phase3b drains it from the RegistrySnapshot; Hook.OnStart reads
+//     Bind state at invocation time so ordering is enforced without framework
+//     coupling.
 //
 // # Blocking semantics
 //

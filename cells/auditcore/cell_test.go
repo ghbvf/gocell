@@ -46,6 +46,7 @@ func mustNewCodec(t *testing.T, key []byte) *query.CursorCodec {
 
 func newTestCell() *AuditCore {
 	return NewAuditCore(
+		WithClock(clock.Real()),
 		WithAuditRepository(mem.NewAuditRepository()),
 		WithArchiveStore(mem.NewArchiveStore()),
 		WithOutboxDeps(eventbus.New(eventbus.WithClock(clock.Real())), nil),
@@ -100,6 +101,7 @@ func TestAuditCore_Startup(t *testing.T) {
 
 func TestAuditCore_MissingHMACKey(t *testing.T) {
 	c := NewAuditCore(
+		WithClock(clock.Real()),
 		WithAuditRepository(mem.NewAuditRepository()),
 		WithArchiveStore(mem.NewArchiveStore()),
 		WithOutboxDeps(eventbus.New(eventbus.WithClock(clock.Real())), nil),
@@ -112,6 +114,7 @@ func TestAuditCore_MissingHMACKey(t *testing.T) {
 
 func TestAuditCore_HMACKeyFromConfig(t *testing.T) {
 	c := NewAuditCore(
+		WithClock(clock.Real()),
 		WithAuditRepository(mem.NewAuditRepository()),
 		WithArchiveStore(mem.NewArchiveStore()),
 		WithOutboxDeps(eventbus.New(eventbus.WithClock(clock.Real())), nil),
@@ -131,6 +134,7 @@ func TestAuditCore_HMACKeyFromConfig(t *testing.T) {
 
 func TestInit_DemoMode_OutboxWithoutTx_Fails(t *testing.T) {
 	c := NewAuditCore(
+		WithClock(clock.Real()),
 		WithAuditRepository(mem.NewAuditRepository()),
 		WithArchiveStore(mem.NewArchiveStore()),
 		WithOutboxDeps(eventbus.New(eventbus.WithClock(clock.Real())), nil),
@@ -145,6 +149,7 @@ func TestInit_DemoMode_OutboxWithoutTx_Fails(t *testing.T) {
 
 func TestInit_DemoMode_TxWithoutOutbox_Fails(t *testing.T) {
 	c := NewAuditCore(
+		WithClock(clock.Real()),
 		WithAuditRepository(mem.NewAuditRepository()),
 		WithArchiveStore(mem.NewArchiveStore()),
 		WithOutboxDeps(eventbus.New(eventbus.WithClock(clock.Real())), nil),
@@ -159,6 +164,7 @@ func TestInit_DemoMode_TxWithoutOutbox_Fails(t *testing.T) {
 
 func TestInit_DemoMode_NoPublisherNoOutbox_Fails(t *testing.T) {
 	c := NewAuditCore(
+		WithClock(clock.Real()),
 		WithAuditRepository(mem.NewAuditRepository()),
 		WithArchiveStore(mem.NewArchiveStore()),
 		WithHMACKey(testHMACKey),
@@ -170,6 +176,7 @@ func TestInit_DemoMode_NoPublisherNoOutbox_Fails(t *testing.T) {
 
 func TestInit_DurableMode_RejectsNoopWriter(t *testing.T) {
 	c := NewAuditCore(
+		WithClock(clock.Real()),
 		WithAuditRepository(mem.NewAuditRepository()),
 		WithArchiveStore(mem.NewArchiveStore()),
 		WithHMACKey(testHMACKey),
@@ -186,6 +193,7 @@ func TestInit_DurableMode_RejectsNoopWriter(t *testing.T) {
 
 func TestInit_DemoMode_WithPublisher_Succeeds(t *testing.T) {
 	c := NewAuditCore(
+		WithClock(clock.Real()),
 		WithAuditRepository(mem.NewAuditRepository()),
 		WithArchiveStore(mem.NewArchiveStore()),
 		WithOutboxDeps(eventbus.New(eventbus.WithClock(clock.Real())), nil),
@@ -199,6 +207,7 @@ func TestInit_DemoMode_WithPublisher_Succeeds(t *testing.T) {
 
 func TestInit_DemoMode_ExplicitNoopOutboxPair_Succeeds(t *testing.T) {
 	c := NewAuditCore(
+		WithClock(clock.Real()),
 		WithAuditRepository(mem.NewAuditRepository()),
 		WithArchiveStore(mem.NewArchiveStore()),
 		WithHMACKey(testHMACKey),
@@ -215,6 +224,7 @@ func TestInit_DemoMode_ExplicitNoopOutboxPair_Succeeds(t *testing.T) {
 // ref: kubernetes/client-go rest.RESTClientFor — factory-composed client.
 func TestAuditInit_WithEmitter_DirectInjection(t *testing.T) {
 	c := NewAuditCore(
+		WithClock(clock.Real()),
 		WithAuditRepository(mem.NewAuditRepository()),
 		WithArchiveStore(mem.NewArchiveStore()),
 		WithHMACKey(testHMACKey),
@@ -230,6 +240,7 @@ func TestAuditInit_WithEmitter_DirectInjection(t *testing.T) {
 // setting both provisioning paths at once.
 func TestAuditInit_WithEmitterAndOutboxDeps_MutuallyExclusive(t *testing.T) {
 	c := NewAuditCore(
+		WithClock(clock.Real()),
 		WithAuditRepository(mem.NewAuditRepository()),
 		WithArchiveStore(mem.NewArchiveStore()),
 		WithHMACKey(testHMACKey),
@@ -248,6 +259,7 @@ func TestAuditInit_WithEmitter_DurableRequiresDurableEmitter(t *testing.T) {
 	cursorCodec, err := query.NewCursorCodec([]byte("audit-wrapper-durable-test-key!!"))
 	require.NoError(t, err)
 	c := NewAuditCore(
+		WithClock(clock.Real()),
 		WithAuditRepository(mem.NewAuditRepository()),
 		WithArchiveStore(mem.NewArchiveStore()),
 		WithHMACKey(testHMACKey),
@@ -345,6 +357,7 @@ func TestAuditCore_RouteQueryEntries(t *testing.T) {
 // same wiring when a codec *is* provided.
 func TestInit_DurableMode_RejectsMissingCursorCodec(t *testing.T) {
 	c := NewAuditCore(
+		WithClock(clock.Real()),
 		WithAuditRepository(mem.NewAuditRepository()),
 		WithArchiveStore(mem.NewArchiveStore()),
 		WithOutboxDeps(eventbus.New(eventbus.WithClock(clock.Real())), nil),
@@ -398,6 +411,7 @@ func TestAuditCore_Wiring_StaleCursor_DemoVsDurable(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			c := NewAuditCore(
+				WithClock(clock.Real()),
 				WithAuditRepository(mem.NewAuditRepository()),
 				WithArchiveStore(mem.NewArchiveStore()),
 				WithOutboxDeps(eventbus.New(eventbus.WithClock(clock.Real())), nil),
@@ -456,6 +470,7 @@ func TestAuditCore_HealthCheckers_WithDirectEmitter(t *testing.T) {
 // not implement the health-checker interface, no health checkers are registered.
 func TestAuditCore_HealthCheckers_NilEmitter(t *testing.T) {
 	c := NewAuditCore(
+		WithClock(clock.Real()),
 		WithAuditRepository(mem.NewAuditRepository()),
 		WithArchiveStore(mem.NewArchiveStore()),
 		WithHMACKey(testHMACKey),

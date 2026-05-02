@@ -99,6 +99,7 @@ func (m AccessCoreModule) Provide(
 	}
 
 	accessOpts := []accesscore.Option{
+		accesscore.WithClock(shared.Clock),
 		accesscore.WithInMemoryDefaults(),
 		// Publisher set unconditionally; outboxWriter set conditionally below.
 		// cell.ResolveEmitter picks DirectEmitter(FailOpen) when writer is nil

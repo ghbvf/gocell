@@ -149,6 +149,7 @@ func loginAndGetPair(t *testing.T, opts ...loginOption) loginResult {
 	require.NoError(t, err)
 
 	c := NewAccessCore(
+		WithClock(clock.Real()),
 		WithUserRepository(userRepo),
 		WithSessionRepository(testutil.RealSessionRepo(t)),
 		WithRoleRepository(roleRepo),

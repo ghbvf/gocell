@@ -19,12 +19,13 @@ import (
 
 func TestWithLogger(t *testing.T) {
 	logger := slog.Default()
-	c := NewAccessCore(WithLogger(logger))
+	c := NewAccessCore(WithClock(clock.Real()), WithLogger(logger))
 	assert.Equal(t, logger, c.logger)
 }
 
 func TestWithInMemoryDefaults(t *testing.T) {
 	c := NewAccessCore(
+		WithClock(clock.Real()),
 		WithInMemoryDefaults(),
 		WithJWTIssuer(testIssuer),
 		WithJWTVerifier(testVerifier),
@@ -43,6 +44,7 @@ func TestWithInMemoryDefaults(t *testing.T) {
 
 func TestHealthCheckers_InMemory(t *testing.T) {
 	c := NewAccessCore(
+		WithClock(clock.Real()),
 		WithInMemoryDefaults(),
 		WithJWTIssuer(testIssuer),
 		WithJWTVerifier(testVerifier),
@@ -61,6 +63,7 @@ func TestHealthCheckers_WithInMemoryDefaults_SessionStorePresent(t *testing.T) {
 	// WithInMemoryDefaults defers sessionRepo construction to Init() so that
 	// c.clk is available; after Init the session-store health probe is registered.
 	c := NewAccessCore(
+		WithClock(clock.Real()),
 		WithJWTIssuer(testIssuer),
 		WithJWTVerifier(testVerifier),
 		WithInMemoryDefaults(),
@@ -100,6 +103,7 @@ func TestInit_DurableMode_MissingOutboxWriter(t *testing.T) {
 	// durableTxRunner is a non-Noop runner so the durable-mode CheckNotNoop
 	// passes and we reach the actual missing-outboxWriter assertion.
 	c := NewAccessCore(
+		WithClock(clock.Real()),
 		WithJWTIssuer(testIssuer),
 		WithJWTVerifier(testVerifier),
 		WithTxManager(durableTxRunner{}),
@@ -111,6 +115,7 @@ func TestInit_DurableMode_MissingOutboxWriter(t *testing.T) {
 
 func TestInit_DurableMode_RejectsNoopWriter(t *testing.T) {
 	c := NewAccessCore(
+		WithClock(clock.Real()),
 		WithInMemoryDefaults(),
 		WithJWTIssuer(testIssuer),
 		WithJWTVerifier(testVerifier),
@@ -127,6 +132,7 @@ func TestInit_DurableMode_RejectsNoopWriter(t *testing.T) {
 
 func TestInit_MissingJWTIssuerAndVerifier(t *testing.T) {
 	c := NewAccessCore(
+		WithClock(clock.Real()),
 		WithOutboxDeps(nil, outbox.NoopWriter{}),
 		WithTxManager(persistence.NoopTxRunner{}),
 	)
@@ -141,6 +147,7 @@ func TestInit_MissingJWTIssuerAndVerifier(t *testing.T) {
 // session-store checker and the outbox-failopen-rate checker.
 func TestHealthCheckers_WithDirectEmitter(t *testing.T) {
 	c := NewAccessCore(
+		WithClock(clock.Real()),
 		WithInMemoryDefaults(),
 		WithJWTIssuer(testIssuer),
 		WithJWTVerifier(testVerifier),
@@ -166,6 +173,7 @@ func TestHealthCheckers_NoEmitterChecker(t *testing.T) {
 	// sessionRepo is deferred to Init() (clock injection pattern), so Init
 	// must be called before snapshot to have session-store present.
 	c := NewAccessCore(
+		WithClock(clock.Real()),
 		WithInMemoryDefaults(),
 		WithJWTIssuer(testIssuer),
 		WithJWTVerifier(testVerifier),

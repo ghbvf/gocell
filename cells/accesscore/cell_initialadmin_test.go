@@ -66,7 +66,6 @@ func newCellFixedSource() *fixedReaderForCell {
 }
 
 // newTestReg returns a RegistryRecorder for demo mode with an empty config.
-// Replaces the removed cell.Dependencies literal.
 func newTestReg() *cell.RegistryRecorder {
 	return cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo)
 }
@@ -105,7 +104,22 @@ func newTestCellWithBootstrap(
 	bootstrapOpts []initialadmin.LifecycleOption,
 ) *AccessCore {
 	t.Helper()
-	opts := []Option{
+	if len(bootstrapOpts) > 0 {
+		return NewAccessCore(
+			WithClock(clock.Real()),
+			WithUserRepository(mem.NewUserRepository()),
+			WithSessionRepository(testutil.RealSessionRepo(t)),
+			WithRoleRepository(mem.NewRoleRepository()),
+			WithOutboxDeps(noopPublisher{}, nil),
+			WithJWTIssuer(testIssuer),
+			WithJWTVerifier(testVerifier),
+			WithRefreshStore(newTestRefreshStore()),
+			WithMetricsProvider(metrics.NopProvider{}),
+			WithInitialAdminBootstrap(bootstrapOpts...),
+		)
+	}
+	return NewAccessCore(
+		WithClock(clock.Real()),
 		WithUserRepository(mem.NewUserRepository()),
 		WithSessionRepository(testutil.RealSessionRepo(t)),
 		WithRoleRepository(mem.NewRoleRepository()),
@@ -114,11 +128,7 @@ func newTestCellWithBootstrap(
 		WithJWTVerifier(testVerifier),
 		WithRefreshStore(newTestRefreshStore()),
 		WithMetricsProvider(metrics.NopProvider{}),
-	}
-	if len(bootstrapOpts) > 0 {
-		opts = append(opts, WithInitialAdminBootstrap(bootstrapOpts...))
-	}
-	return NewAccessCore(opts...)
+	)
 }
 
 // TestInit_WithInitialAdminBootstrap_LifecycleHookRegistered verifies that when
@@ -172,6 +182,7 @@ func TestInit_BootstrapDefaultBehaviorIsNoop(t *testing.T) {
 	userRepo := mem.NewUserRepository()
 
 	ac := NewAccessCore(
+		WithClock(clock.Real()),
 		WithUserRepository(userRepo),
 		WithSessionRepository(testutil.RealSessionRepo(t)),
 		WithRoleRepository(mem.NewRoleRepository()),
@@ -219,6 +230,7 @@ func TestInit_BootstrapAlreadyHasAdmin_NilCleaner(t *testing.T) {
 	}
 
 	ac := NewAccessCore(
+		WithClock(clock.Real()),
 		WithUserRepository(userRepo),
 		WithSessionRepository(testutil.RealSessionRepo(t)),
 		WithRoleRepository(roleRepo),
@@ -276,6 +288,7 @@ func TestInit_BootstrapAdminExists_FreshOrphanFile_SweepCleanerRegistered(t *tes
 	}
 
 	ac := NewAccessCore(
+		WithClock(clock.Real()),
 		WithUserRepository(userRepo),
 		WithSessionRepository(testutil.RealSessionRepo(t)),
 		WithRoleRepository(roleRepo),
@@ -332,6 +345,7 @@ func TestInit_BootstrapUser_HasPasswordResetRequired(t *testing.T) {
 	}
 
 	ac := NewAccessCore(
+		WithClock(clock.Real()),
 		WithUserRepository(userRepo),
 		WithSessionRepository(testutil.RealSessionRepo(t)),
 		WithRoleRepository(mem.NewRoleRepository()),

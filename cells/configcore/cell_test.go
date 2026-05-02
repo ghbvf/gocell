@@ -29,6 +29,7 @@ import (
 
 func newTestCell() *ConfigCore {
 	return NewConfigCore(
+		WithClock(clock.Real()),
 		WithConfigRepository(mem.NewConfigRepository(clock.Real())),
 		WithFlagRepository(mem.NewFlagRepository(clock.Real())),
 		WithOutboxDeps(eventbus.New(eventbus.WithClock(clock.Real())), nil),
@@ -83,40 +84,37 @@ func TestConfigCore_Startup(t *testing.T) {
 }
 
 func TestConfigCore_InitDemoMode_RejectsHalfConfiguredPath(t *testing.T) {
-	tests := []struct {
-		name string
-		opts []Option
-	}{
-		{
-			name: "writer without tx manager",
-			opts: []Option{
-				WithInMemoryDefaults(),
-				WithOutboxDeps(eventbus.New(eventbus.WithClock(clock.Real())), nil),
-				WithOutboxDeps(nil, outbox.NoopWriter{}),
-			},
-		},
-		{
-			name: "tx manager without writer",
-			opts: []Option{
-				WithInMemoryDefaults(),
-				WithOutboxDeps(eventbus.New(eventbus.WithClock(clock.Real())), nil),
-				WithTxManager(persistence.NoopTxRunner{}),
-			},
-		},
+	checkHalfConfigured := func(t *testing.T, c *ConfigCore) {
+		t.Helper()
+		err := c.Init(context.Background(), cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo))
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "outboxWriter and txRunner")
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			c := NewConfigCore(tt.opts...)
-			err := c.Init(context.Background(), cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo))
-			require.Error(t, err)
-			assert.Contains(t, err.Error(), "outboxWriter and txRunner")
-		})
-	}
+	t.Run("writer without tx manager", func(t *testing.T) {
+		c := NewConfigCore(
+			WithClock(clock.Real()),
+			WithInMemoryDefaults(),
+			WithOutboxDeps(eventbus.New(eventbus.WithClock(clock.Real())), nil),
+			WithOutboxDeps(nil, outbox.NoopWriter{}),
+		)
+		checkHalfConfigured(t, c)
+	})
+
+	t.Run("tx manager without writer", func(t *testing.T) {
+		c := NewConfigCore(
+			WithClock(clock.Real()),
+			WithInMemoryDefaults(),
+			WithOutboxDeps(eventbus.New(eventbus.WithClock(clock.Real())), nil),
+			WithTxManager(persistence.NoopTxRunner{}),
+		)
+		checkHalfConfigured(t, c)
+	})
 }
 
 func TestConfigCore_InitDurableMode_RejectsNoopWriter(t *testing.T) {
 	c := NewConfigCore(
+		WithClock(clock.Real()),
 		WithInMemoryDefaults(),
 		WithOutboxDeps(eventbus.New(eventbus.WithClock(clock.Real())), nil),
 		WithOutboxDeps(nil, outbox.NoopWriter{}),
@@ -131,7 +129,7 @@ func TestConfigCore_InitDurableMode_RejectsNoopWriter(t *testing.T) {
 }
 
 func TestConfigCore_InitDemoMode_NoPublisherNoOutbox_Fails(t *testing.T) {
-	c := NewConfigCore(WithInMemoryDefaults())
+	c := NewConfigCore(WithClock(clock.Real()), WithInMemoryDefaults())
 	err := c.Init(context.Background(), cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo))
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "explicit event sink")
@@ -139,6 +137,7 @@ func TestConfigCore_InitDemoMode_NoPublisherNoOutbox_Fails(t *testing.T) {
 
 func TestConfigCore_InitDemoMode_WithPublisher_Succeeds(t *testing.T) {
 	c := NewConfigCore(
+		WithClock(clock.Real()),
 		WithInMemoryDefaults(),
 		WithOutboxDeps(eventbus.New(eventbus.WithClock(clock.Real())), nil),
 		WithMetricsProvider(metrics.NopProvider{}),
@@ -149,6 +148,7 @@ func TestConfigCore_InitDemoMode_WithPublisher_Succeeds(t *testing.T) {
 
 func TestConfigCore_InitDemoMode_ExplicitNoopOutboxPair_Succeeds(t *testing.T) {
 	c := NewConfigCore(
+		WithClock(clock.Real()),
 		WithInMemoryDefaults(),
 		WithOutboxDeps(nil, outbox.NoopWriter{}),
 		WithTxManager(persistence.NoopTxRunner{}),
@@ -162,6 +162,7 @@ func TestConfigCore_InitDemoMode_ExplicitNoopOutboxPair_Succeeds(t *testing.T) {
 // ref: kubernetes/client-go rest.RESTClientFor — factory-composed client.
 func TestConfigCoreInit_WithEmitter_DirectInjection(t *testing.T) {
 	c := NewConfigCore(
+		WithClock(clock.Real()),
 		WithInMemoryDefaults(),
 		WithEmitter(outbox.NewNoopEmitter()),
 	)
@@ -175,6 +176,7 @@ func TestConfigCoreInit_WithEmitter_DirectInjection(t *testing.T) {
 // against setting both paths at once.
 func TestConfigCoreInit_WithEmitterAndOutboxDeps_MutuallyExclusive(t *testing.T) {
 	c := NewConfigCore(
+		WithClock(clock.Real()),
 		WithInMemoryDefaults(),
 		WithEmitter(outbox.NewNoopEmitter()),
 		WithOutboxDeps(eventbus.New(eventbus.WithClock(clock.Real())), nil),
@@ -191,6 +193,7 @@ func TestConfigCoreInit_WithEmitter_DurableRequiresDurableEmitter(t *testing.T) 
 	cursorCodec, err := query.NewCursorCodec([]byte("cfg-wrapper-durable-test-key!!!!"))
 	require.NoError(t, err)
 	c := NewConfigCore(
+		WithClock(clock.Real()),
 		WithInMemoryDefaults(),
 		WithCursorCodec(cursorCodec),
 		WithEmitter(outbox.NewNoopEmitter()), // non-durable
@@ -513,6 +516,7 @@ func TestConfigCore_CrossSliceCursorRejection_Reverse(t *testing.T) {
 // public demo key baked into the source tree.
 func TestConfigCore_InitDurable_RejectsMissingCursorCodec(t *testing.T) {
 	c := NewConfigCore(
+		WithClock(clock.Real()),
 		WithConfigRepository(mem.NewConfigRepository(clock.Real())),
 		WithFlagRepository(mem.NewFlagRepository(clock.Real())),
 		WithOutboxDeps(eventbus.New(eventbus.WithClock(clock.Real())), nil),
@@ -565,6 +569,7 @@ func mustNewCfgCodec(t *testing.T, key []byte) *query.CursorCodec {
 func TestConfigCore_DurableInit_WithInjectedRepositories(t *testing.T) {
 	writer := &recordingConfigWriter{}
 	c := NewConfigCore(
+		WithClock(clock.Real()),
 		WithConfigRepository(mem.NewConfigRepository(clock.Real())),
 		WithFlagRepository(mem.NewFlagRepository(clock.Real())),
 		WithTxManager(durableTxRunner{}), // non-Nooper; durable-gated CheckNotNoop passes
@@ -608,7 +613,7 @@ func TestConfigCore_DeriveModes(t *testing.T) {
 		},
 	}
 
-	c := NewConfigCore(WithInMemoryDefaults(), WithOutboxDeps(eventbus.New(eventbus.WithClock(clock.Real())), nil))
+	c := NewConfigCore(WithClock(clock.Real()), WithInMemoryDefaults(), WithOutboxDeps(eventbus.New(eventbus.WithClock(clock.Real())), nil))
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			runMode, publishMode := c.deriveModes(tt.durability)
@@ -636,6 +641,7 @@ func TestConfigCore_HealthCheckers_WithDirectEmitter(t *testing.T) {
 // not implement the health-checker interface, no health checkers are registered.
 func TestConfigCore_HealthCheckers_NilEmitter(t *testing.T) {
 	c := NewConfigCore(
+		WithClock(clock.Real()),
 		WithInMemoryDefaults(),
 		WithEmitter(outbox.NewNoopEmitter()), // WriterEmitter — no HealthCheckers method
 	)
