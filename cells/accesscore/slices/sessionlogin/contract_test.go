@@ -15,8 +15,10 @@ func TestHttpAuthLoginV1Serve(t *testing.T) {
 		`"expiresAt":"2026-01-01T00:00:00Z","sessionId":"sess-1","userId":"usr-1",`+
 		`"passwordResetRequired":false}}`))
 	c.MustRejectRequest(t, []byte(`{"username":"alice"}`))
-	// Schema enforces additionalProperties:false — unknown fields must be rejected.
-	c.MustRejectResponse(t, []byte(`{"data":{"accessToken":"x","refreshToken":"y",`+
+	// Per ADR-202605031600 v1 schema evolution, response schema is lenient:
+	// unknown fields are accepted so v1 can grow optional fields without
+	// breaking clients. Lock down the lenient behavior here.
+	c.ValidateResponse(t, []byte(`{"data":{"accessToken":"x","refreshToken":"y",`+
 		`"expiresAt":"2026-01-01T00:00:00Z","sessionId":"s","userId":"u",`+
 		`"passwordResetRequired":false,"unexpected":"x"}}`))
 

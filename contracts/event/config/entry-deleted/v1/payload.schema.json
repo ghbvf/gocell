@@ -4,10 +4,22 @@
   "type": "object",
   "description": "Emitted after config Delete. Metadata-only: carries key + version. version is the version of the deleted entry and is used by subscribers for monotonic tombstone protection — a replayed older upsert (at-least-once delivery) must be rejected when version <= tombstone version.",
   "properties": {
-    "key":     { "type": "string", "pattern": "\\S" },
-    "version": { "type": "integer", "minimum": 1, "description": "Version of the deleted config entry. Subscribers use this to protect against stale upsert replays after a delete." },
-    "actorId": { "type": "string" }
+    "key": {
+      "type": "string",
+      "pattern": "\\S"
+    },
+    "version": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Version of the deleted config entry. Subscribers use this to protect against stale upsert replays after a delete."
+    },
+    "actorId": {
+      "type": "string"
+    }
   },
-  "required": ["key", "version", "actorId"],
-  "additionalProperties": false
+  "required": [
+    "key",
+    "version",
+    "actorId"
+  ]
 }

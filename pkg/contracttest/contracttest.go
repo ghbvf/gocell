@@ -136,6 +136,44 @@ func Load(t testing.TB, contractDir string) *Contract {
 	return c
 }
 
+// LoadFromString builds a Contract from inline JSON schema strings, bypassing
+// the fixture filesystem. Useful for unit tests that want to assert schema
+// behavior without creating testdata files. Empty schema strings produce a
+// nil schema (the corresponding Validate* call becomes a no-op).
+func LoadFromString(t testing.TB, contractID, requestSchema, responseSchema string) *Contract {
+	t.Helper()
+	c := &Contract{
+		ID:   contractID,
+		Kind: "http",
+	}
+	if requestSchema != "" {
+		c.requestSchema = compileSchemaFromString(t, contractID+"/request", requestSchema)
+	}
+	if responseSchema != "" {
+		c.responseSchema = compileSchemaFromString(t, contractID+"/response", responseSchema)
+	}
+	c.extraSchemas = make(map[string]*jsonschema.Schema)
+	return c
+}
+
+func compileSchemaFromString(t testing.TB, refName, schemaJSON string) *jsonschema.Schema {
+	t.Helper()
+	var doc any
+	if err := json.Unmarshal([]byte(schemaJSON), &doc); err != nil {
+		t.Fatalf("contracttest: parse inline schema %q: %v", refName, err)
+	}
+	compiler := jsonschema.NewCompiler()
+	url := "mem:///" + refName
+	if err := compiler.AddResource(url, doc); err != nil {
+		t.Fatalf("contracttest: add inline schema %q: %v", refName, err)
+	}
+	schema, err := compiler.Compile(url)
+	if err != nil {
+		t.Fatalf("contracttest: compile inline schema %q: %v", refName, err)
+	}
+	return schema
+}
+
 // LoadByID resolves a contract ID to its directory path and loads it.
 // The ID "http.auth.user.create.v1" is converted to the path
 // contractsRoot/http/auth/user/create/v1/.

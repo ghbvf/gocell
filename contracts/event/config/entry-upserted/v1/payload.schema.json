@@ -4,10 +4,23 @@
   "type": "object",
   "description": "Metadata-only notification: subscribers MUST refetch via GET /api/v1/config/{key} to obtain the value. ref: NATS subject+bytes / Watermill payload-bytes boundary.",
   "properties": {
-    "key": { "type": "string", "pattern": "\\S", "description": "non-blank config key; matches ConfigEntry.Key validation" },
-    "version": { "type": "integer", "minimum": 1, "description": "monotonically increasing; starts at 1, matches ConfigEntry.Version" },
-    "actorId": { "type": "string" }
+    "key": {
+      "type": "string",
+      "pattern": "\\S",
+      "description": "non-blank config key; matches ConfigEntry.Key validation"
+    },
+    "version": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "monotonically increasing; starts at 1, matches ConfigEntry.Version"
+    },
+    "actorId": {
+      "type": "string"
+    }
   },
-  "required": ["key", "version", "actorId"],
-  "additionalProperties": false
+  "required": [
+    "key",
+    "version",
+    "actorId"
+  ]
 }

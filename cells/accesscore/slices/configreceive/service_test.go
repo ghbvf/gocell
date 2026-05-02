@@ -100,10 +100,6 @@ func TestHandleEntryUpserted_InvalidPayload_PermanentError(t *testing.T) {
 		{"invalid version zero", []byte(`{"key":"jwt.ttl","version":0,"actorId":"admin-1"}`), "invalid version"},
 		{"missing actorId", []byte(`{"key":"jwt.ttl","version":1}`), "missing actorId"},
 		{"empty actorId", []byte(`{"key":"jwt.ttl","version":1,"actorId":""}`), "missing actorId"},
-		// value field is rejected — payload must be metadata-only
-		{"value field present", []byte(`{"key":"jwt.ttl","value":"30m","version":1,"actorId":"admin-1"}`), "unknown field"},
-		{"extra sensitive field", []byte(`{"key":"jwt.ttl","version":1,"actorId":"admin-1","sensitive":false}`), "unknown field"},
-		{"old action field", []byte(`{"action":"updated","key":"jwt.ttl","version":1,"actorId":"admin-1"}`), "unknown field"},
 	}
 
 	for _, tt := range tests {
@@ -147,7 +143,6 @@ func TestHandleEntryDeleted_InvalidPayload_PermanentError(t *testing.T) {
 		{"version zero", []byte(`{"key":"jwt.ttl","version":0,"actorId":"admin-1"}`), "invalid version"},
 		{"missing actorId", []byte(`{"key":"jwt.ttl","version":1}`), "missing actorId"},
 		{"empty actorId", []byte(`{"key":"jwt.ttl","version":1,"actorId":""}`), "missing actorId"},
-		{"extra value field", []byte(`{"key":"jwt.ttl","version":1,"actorId":"admin-1","value":"old"}`), "unknown field"},
 	}
 
 	for _, tt := range tests {
@@ -200,11 +195,15 @@ func TestWrapLegacyHandler_EntryUpserted_InvalidJSON_Reject(t *testing.T) {
 	assert.Error(t, result.Err)
 }
 
-func TestWrapLegacyHandler_EntryUpserted_ValueField_Reject(t *testing.T) {
+// TestWrapLegacyHandler_EntryUpserted_ValueField_Accepted locks down
+// ADR-202605031600 v1 schema evolution: an extra "value" field on a
+// metadata-only event payload must NOT be rejected at runtime. The
+// metadata-only contract is enforced by producers (don't emit value);
+// consumers ignore the extra field and Ack normally.
+func TestWrapLegacyHandler_EntryUpserted_ValueField_Accepted(t *testing.T) {
 	svc := NewService(slog.Default())
 	handler := outbox.WrapLegacyHandler(svc.HandleEntryUpserted)
 
-	// value field is now rejected — metadata-only schema
 	entry := outbox.Entry{
 		ID:      "evt-wrap-3",
 		Topic:   TopicConfigEntryUpserted,
@@ -212,8 +211,9 @@ func TestWrapLegacyHandler_EntryUpserted_ValueField_Reject(t *testing.T) {
 	}
 	result := handler(context.Background(), entry)
 
-	assert.Equal(t, outbox.DispositionReject, result.Disposition)
-	assert.Error(t, result.Err)
+	assert.Equal(t, outbox.DispositionAck, result.Disposition,
+		"lenient consumer must Ack metadata-only events even when extra fields appear")
+	assert.NoError(t, result.Err)
 }
 
 func TestHandleEntryUpserted_WithConfigGetter_FetchOK(t *testing.T) {
@@ -320,7 +320,7 @@ func TestHandleEntryUpserted_ConfigEventMetricsOutcomes(t *testing.T) {
 		},
 		{
 			name:    "invalid payload records permanent error",
-			payload: []byte(`{"key":"jwt.ttl","value":"30m","version":1,"actorId":"adm-1"}`),
+			payload: []byte(`not-json{`),
 			wantErr: true,
 			wantRecords: []configEventRecord{{
 				cell: "accesscore", slice: "configreceive", reason: obmetrics.ConfigEventProcessReasonPermanentError,
@@ -372,7 +372,7 @@ func TestHandleEntryDeleted_ConfigEventMetricsOutcomes(t *testing.T) {
 		},
 		{
 			name:    "invalid delete records permanent error",
-			payload: []byte(`{"key":"jwt.ttl","value":"old","version":3,"actorId":"adm-1"}`),
+			payload: []byte(`not-json{`),
 			wantErr: true,
 			wantRecords: []configEventRecord{{
 				cell: "accesscore", slice: "configreceive", reason: obmetrics.ConfigEventProcessReasonPermanentError,

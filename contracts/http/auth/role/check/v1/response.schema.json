@@ -6,12 +6,16 @@
     "data": {
       "type": "object",
       "properties": {
-        "hasRole": { "type": "boolean" }
+        "hasRole": {
+          "type": "boolean"
+        }
       },
-      "required": ["hasRole"],
-      "additionalProperties": false
+      "required": [
+        "hasRole"
+      ]
     }
   },
-  "required": ["data"],
-  "additionalProperties": false
+  "required": [
+    "data"
+  ]
 }

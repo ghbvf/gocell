@@ -7,9 +7,15 @@
     "data": {
       "type": "object",
       "properties": {
-        "id": { "type": "string" },
-        "configId": { "type": "string" },
-        "version": { "type": "integer" },
+        "id": {
+          "type": "string"
+        },
+        "configId": {
+          "type": "string"
+        },
+        "version": {
+          "type": "integer"
+        },
         "value": {
           "type": "string",
           "description": "Snapshot value. If sensitive=true, this is the redaction placeholder \"******\", not the real secret."
@@ -18,12 +24,21 @@
           "type": "boolean",
           "description": "True iff the source ConfigEntry is sensitive. When true, value is redacted in this response and clients must NOT echo it back as input."
         },
-        "publishedAt": { "type": "string", "format": "date-time" }
+        "publishedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
       },
-      "required": ["id", "configId", "version", "value", "sensitive"],
-      "additionalProperties": false
+      "required": [
+        "id",
+        "configId",
+        "version",
+        "value",
+        "sensitive"
+      ]
     }
   },
-  "required": ["data"],
-  "additionalProperties": false
+  "required": [
+    "data"
+  ]
 }

@@ -3,27 +3,58 @@
   "title": "http.config.list.v1.response",
   "description": "Paginated list of ConfigEntry.",
   "type": "object",
-  "required": ["data", "nextCursor", "hasMore"],
-  "additionalProperties": false,
+  "required": [
+    "data",
+    "nextCursor",
+    "hasMore"
+  ],
   "properties": {
     "data": {
       "type": "array",
       "items": {
         "type": "object",
-        "required": ["id", "key", "value", "sensitive", "version", "createdAt", "updatedAt"],
-        "additionalProperties": false,
+        "required": [
+          "id",
+          "key",
+          "value",
+          "sensitive",
+          "version",
+          "createdAt",
+          "updatedAt"
+        ],
         "properties": {
-          "id": { "type": "string" },
-          "key": { "type": "string" },
-          "value": { "type": "string" },
-          "sensitive": { "type": "boolean", "description": "true 表示该 entry 的 value 已脱敏返回" },
-          "version": { "type": "integer" },
-          "createdAt": { "type": "string", "format": "date-time" },
-          "updatedAt": { "type": "string", "format": "date-time" }
+          "id": {
+            "type": "string"
+          },
+          "key": {
+            "type": "string"
+          },
+          "value": {
+            "type": "string"
+          },
+          "sensitive": {
+            "type": "boolean",
+            "description": "true 表示该 entry 的 value 已脱敏返回"
+          },
+          "version": {
+            "type": "integer"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time"
+          }
         }
       }
     },
-    "nextCursor": { "type": "string" },
-    "hasMore": { "type": "boolean" }
+    "nextCursor": {
+      "type": "string"
+    },
+    "hasMore": {
+      "type": "boolean"
+    }
   }
 }

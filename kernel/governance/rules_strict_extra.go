@@ -29,38 +29,40 @@ const (
 // deprecatedAt date and the validation run before FMT-23 fires a warning.
 const defaultDeprecationGracePeriod = 90 * 24 * time.Hour
 
-// --- FMT-20 (formerly FMT-RESPONSE-STRICT-01) ---
+// --- FMT-20 (request schema strict additionalProperties) ---
 
-// validateFMTResponseStrict01 scans every HTTP-kind contract's request/response
-// JSON schemas. For each "type":"object" node in the schema (recursive), if it
-// lacks "additionalProperties": false, a violation is emitted.
+// validateFMTRequestStrict01 scans every HTTP-kind contract's request schema.
+// For each "type":"object" node in the schema (recursive), if it lacks
+// "additionalProperties": false, a violation is emitted. Response and event
+// schemas are intentionally lenient per ADR-202605031600 (v1 schema evolution).
 //
 // Rule ID: FMT-20.
 // Severity: Error, IssueRequired.
-// ref: k8s.io/apiserver admission/plugin/schema — strict schema validation pattern.
-func (v *Validator) validateFMTResponseStrict01() []ValidationResult {
+// ref: kubernetes/kubernetes apiserver — StrictSerializer applies to request
+// decoding only; response encoding bypasses fieldValidation.
+func (v *Validator) validateFMTRequestStrict01() []ValidationResult {
 	var results []ValidationResult
 	for _, c := range v.project.Contracts {
 		if c.Kind != "http" {
 			continue
 		}
-		results = append(results, v.validateFMTResponseStrictContract(c)...)
+		results = append(results, v.validateFMTRequestStrictContract(c)...)
 	}
 	return results
 }
 
-func (v *Validator) validateFMTResponseStrictContract(c *metadata.ContractMeta) []ValidationResult {
+func (v *Validator) validateFMTRequestStrictContract(c *metadata.ContractMeta) []ValidationResult {
 	var results []ValidationResult
 	for _, ref := range metadata.ContractSchemaRefs(c) {
 		if !strictSchemaRefField(ref.Field) || ref.Ref == "" {
 			continue
 		}
-		results = append(results, v.validateFMTResponseStrictRef(c, ref)...)
+		results = append(results, v.validateFMTRequestStrictRef(c, ref)...)
 	}
 	return results
 }
 
-func (v *Validator) validateFMTResponseStrictRef(c *metadata.ContractMeta, ref metadata.ContractSchemaRef) []ValidationResult {
+func (v *Validator) validateFMTRequestStrictRef(c *metadata.ContractMeta, ref metadata.ContractSchemaRef) []ValidationResult {
 	resolved, resolveErr := metadata.ResolveContractSchemaRef(v.root, c, ref)
 	if resolveErr != nil {
 		return []ValidationResult{v.newResult(
@@ -97,10 +99,12 @@ func (v *Validator) fmt20MissingSchemaResults(c *metadata.ContractMeta, rel stri
 	return results
 }
 
+// strictSchemaRefField returns true for schema reference fields that must declare
+// additionalProperties:false. Per ADR-202605031600 only request schemas are
+// strict; response and endpoints.http.responses[*] are intentionally excluded
+// to allow v1 evolution (new optional response fields without major bump).
 func strictSchemaRefField(field string) bool {
-	return field == "schemaRefs.request" ||
-		field == "schemaRefs.response" ||
-		strings.HasPrefix(field, "endpoints.http.responses[")
+	return field == "schemaRefs.request"
 }
 
 // scanSchemaForStrictMissing reads a JSON schema file and recursively walks it.

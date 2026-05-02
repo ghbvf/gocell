@@ -27,8 +27,11 @@ func TestEventConfigEntryUpsertedV1Subscribe(t *testing.T) {
 	// Invalid version
 	c.MustRejectPayload(t, []byte(`{"key":"app.name","version":0,"actorId":"adm-1"}`))
 
-	// value field must be rejected (metadata-only schema, additionalProperties: false)
-	c.MustRejectPayload(t, []byte(`{"key":"app.name","value":"newval","version":2,"actorId":"adm-1"}`))
+	// Per ADR-202605031600, event payload schema is lenient: extra fields
+	// (including a stray "value") are accepted at the schema layer. The
+	// metadata-only contract is enforced by producers (don't emit value);
+	// consumers ignore unknown fields.
+	c.ValidatePayload(t, []byte(`{"key":"app.name","value":"newval","version":2,"actorId":"adm-1"}`))
 
 	c.MustRejectHeaders(t, []byte(`{}`))
 }
@@ -53,8 +56,9 @@ func TestEventConfigEntryDeletedV1Subscribe(t *testing.T) {
 	// Invalid version.
 	c.MustRejectPayload(t, []byte(`{"key":"app.name","version":0,"actorId":"adm-1"}`))
 
-	// Additional properties forbidden.
-	c.MustRejectPayload(t, []byte(`{"key":"app.name","version":1,"actorId":"adm-1","value":"old"}`))
+	// Per ADR-202605031600, event payload schema is lenient: extra fields
+	// accepted (no additionalProperties:false enforcement).
+	c.ValidatePayload(t, []byte(`{"key":"app.name","version":1,"actorId":"adm-1","value":"old"}`))
 
 	c.MustRejectHeaders(t, []byte(`{}`))
 }

@@ -6,12 +6,16 @@
     "data": {
       "type": "object",
       "properties": {
-        "hasAdmin": { "type": "boolean" }
+        "hasAdmin": {
+          "type": "boolean"
+        }
       },
-      "required": ["hasAdmin"],
-      "additionalProperties": false
+      "required": [
+        "hasAdmin"
+      ]
     }
   },
-  "required": ["data"],
-  "additionalProperties": false
+  "required": [
+    "data"
+  ]
 }

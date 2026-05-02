@@ -21,12 +21,15 @@ func TestDecodeEntryUpserted(t *testing.T) {
 		{"valid with actorId", `{"key":"k1","version":2,"actorId":"admin-1"}`, false, "k1", 2},
 		{"missing-actorId-rejected", `{"key":"k1","version":2}`, true, "", 0},
 		{"empty-actorId-rejected", `{"key":"k1","version":2,"actorId":""}`, true, "", 0},
-		{"value-field-rejected (metadata-only)", `{"key":"k1","value":"v","version":2,"actorId":"admin-1"}`, true, "", 0},
+		// extra fields accepted lenient per ADR-202605031600; payload-shape
+		// constraints (e.g. forbidden "value") are enforced by the schema
+		// validator in TestDecodeEntryUpserted_AlignedWithContractSchema.
+		{"value-field-accepted-runtime", `{"key":"k1","value":"v","version":2,"actorId":"admin-1"}`, false, "k1", 2},
+		{"unknown-field-accepted", `{"key":"k1","version":2,"actorId":"admin-1","extra":1}`, false, "k1", 2},
 		{"missing-key", `{"version":2,"actorId":"admin-1"}`, true, "", 0},
 		{"empty-key", `{"key":"","version":2,"actorId":"admin-1"}`, true, "", 0},
 		{"missing-version", `{"key":"k1","actorId":"admin-1"}`, true, "", 0},
 		{"invalid-version-zero", `{"key":"k1","version":0,"actorId":"admin-1"}`, true, "", 0},
-		{"unknown-field", `{"key":"k1","version":2,"actorId":"admin-1","extra":1}`, true, "", 0},
 		{"multiple-json-values", `{"key":"k1","version":1,"actorId":"admin-1"}{"key":"k2","version":2,"actorId":"admin-1"}`, true, "", 0},
 	}
 	for _, tc := range cases {
@@ -98,7 +101,8 @@ func TestDecodeEntryDeleted(t *testing.T) {
 		{"missing-version", `{"key":"k1","actorId":"admin-1"}`, true, "", 0},
 		{"version-zero", `{"key":"k1","version":0,"actorId":"admin-1"}`, true, "", 0},
 		{"version-negative", `{"key":"k1","version":-1,"actorId":"admin-1"}`, true, "", 0},
-		{"unknown-field", `{"key":"k1","version":1,"actorId":"admin-1","extra":"x"}`, true, "", 0},
+		// extra fields accepted lenient per ADR-202605031600.
+		{"unknown-field-accepted", `{"key":"k1","version":1,"actorId":"admin-1","extra":"x"}`, false, "k1", 1},
 		{"multiple-json-values", `{"key":"k1","version":1,"actorId":"admin-1"}{"key":"k2","version":2,"actorId":"admin-1"}`, true, "", 0},
 	}
 	for _, tc := range cases {

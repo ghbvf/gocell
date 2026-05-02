@@ -10,6 +10,11 @@
 ## 向后兼容规则
 
 1. v1 响应只增不删
+   - response / event payload schema 禁止 `additionalProperties: false`（含 nested），允许 v1 持续加 optional 字段
+   - request schema 必须 `additionalProperties: false`（拒未知字段，对应 K8s `StrictSerializer`），由 FMT-20 守护
+   - 共享 error envelope（`contracts/shared/errors/error-response-v1.schema.json`）例外：保持 strict
+   - cell event consumer 不得调用 `json.Decoder.DisallowUnknownFields()`
+   - 详见 ADR `docs/architecture/202605031600-adr-v1-schema-evolution.md`
 2. 新增请求参数必须有默认值
 3. Deprecation 至少保留 2 个 Sprint（4 周）
 4. 统一列表响应格式：`{"data": [...], "nextCursor": "...", "hasMore": bool}`

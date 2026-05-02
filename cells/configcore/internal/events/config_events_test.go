@@ -42,9 +42,6 @@ func TestDecodeEntryUpsertedRejectsInvalidPayload(t *testing.T) {
 		{"missing actorId", []byte(`{"key":"jwt.ttl","version":1}`), "missing actorId"},
 		{"empty actorId", []byte(`{"key":"jwt.ttl","version":1,"actorId":""}`), "missing actorId"},
 		{"blank actorId", []byte(`{"key":"jwt.ttl","version":1,"actorId":"   "}`), "missing actorId"},
-		// Critical: wire carrying value field must be rejected (DisallowUnknownFields)
-		{"value field present — must reject", []byte(`{"key":"jwt.ttl","value":"30m","version":1,"actorId":"admin-1"}`), "unknown field"},
-		{"sensitive field present", []byte(`{"key":"jwt.ttl","version":1,"actorId":"admin-1","sensitive":false}`), "unknown field"},
 		{"multiple values", []byte(`{"key":"jwt.ttl","version":1,"actorId":"admin-1"} {}`), "multiple JSON values"},
 	}
 
@@ -53,6 +50,31 @@ func TestDecodeEntryUpsertedRejectsInvalidPayload(t *testing.T) {
 			_, err := DecodeEntryUpserted(tt.payload)
 			require.Error(t, err)
 			assert.Contains(t, err.Error(), tt.wantErr)
+		})
+	}
+}
+
+// TestDecodeEntryUpserted_AcceptsExtraFields locks down ADR-202605031600 v1
+// schema evolution: producers may add optional fields, and consumers must
+// not reject them. The schema validator (contracts/.../payload.schema.json)
+// is the source of truth for "value field forbidden in event"; the runtime
+// decoder is intentionally lenient.
+func TestDecodeEntryUpserted_AcceptsExtraFields(t *testing.T) {
+	cases := []struct {
+		name    string
+		payload []byte
+	}{
+		{"extra value field", []byte(`{"key":"jwt.ttl","version":1,"actorId":"admin-1","value":"30m"}`)},
+		{"extra sensitive field", []byte(`{"key":"jwt.ttl","version":1,"actorId":"admin-1","sensitive":false}`)},
+		{"future producer field", []byte(`{"key":"jwt.ttl","version":1,"actorId":"admin-1","traceId":"abc-123"}`)},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := DecodeEntryUpserted(tc.payload)
+			require.NoError(t, err, "lenient decoder must accept extra fields per ADR-202605031600")
+			assert.Equal(t, "jwt.ttl", got.Key)
+			assert.Equal(t, 1, got.Version)
+			assert.Equal(t, "admin-1", got.ActorID)
 		})
 	}
 }
@@ -75,7 +97,6 @@ func TestDecodeEntryDeleted(t *testing.T) {
 		{"version negative", []byte(`{"key":"jwt.ttl","version":-1,"actorId":"admin-1"}`), true, "", 0, "invalid version"},
 		{"missing actorId", []byte(`{"key":"jwt.ttl","version":1}`), true, "", 0, "missing actorId"},
 		{"empty actorId", []byte(`{"key":"jwt.ttl","version":1,"actorId":""}`), true, "", 0, "missing actorId"},
-		{"unknown field", []byte(`{"key":"jwt.ttl","version":1,"actorId":"admin-1","value":"old"}`), true, "", 0, "unknown field"},
 		{"multiple json values", []byte(`{"key":"jwt.ttl","version":1,"actorId":"admin-1"}{}`), true, "", 0, "multiple JSON values"},
 		{"invalid json", []byte("not-json"), true, "", 0, "invalid"},
 	}

@@ -6,15 +6,29 @@
     "data": {
       "type": "object",
       "properties": {
-        "id": { "type": "string" },
-        "name": { "type": "string" },
-        "status": { "type": "string" },
-        "lastSeen": { "type": "string", "format": "date-time" }
+        "id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        },
+        "lastSeen": {
+          "type": "string",
+          "format": "date-time"
+        }
       },
-      "required": ["id", "name", "status", "lastSeen"],
-      "additionalProperties": false
+      "required": [
+        "id",
+        "name",
+        "status",
+        "lastSeen"
+      ]
     }
   },
-  "required": ["data"],
-  "additionalProperties": false
+  "required": [
+    "data"
+  ]
 }

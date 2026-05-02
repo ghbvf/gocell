@@ -2,23 +2,60 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "http.config.flags.get.v1.response",
   "type": "object",
-  "required": ["data"],
-  "additionalProperties": false,
+  "required": [
+    "data"
+  ],
   "properties": {
     "data": {
       "type": "object",
-      "required": ["id", "key", "type", "enabled", "rolloutPercentage", "description", "version", "createdAt", "updatedAt"],
-      "additionalProperties": false,
+      "required": [
+        "id",
+        "key",
+        "type",
+        "enabled",
+        "rolloutPercentage",
+        "description",
+        "version",
+        "createdAt",
+        "updatedAt"
+      ],
       "properties": {
-        "id": { "type": "string" },
-        "key": { "type": "string" },
-        "type": { "type": "string", "enum": ["boolean", "percentage"] },
-        "enabled": { "type": "boolean" },
-        "rolloutPercentage": { "type": "integer", "minimum": 0, "maximum": 100 },
-        "description": { "type": "string" },
-        "version": { "type": "integer", "minimum": 1 },
-        "createdAt": { "type": "string", "format": "date-time" },
-        "updatedAt": { "type": "string", "format": "date-time" }
+        "id": {
+          "type": "string"
+        },
+        "key": {
+          "type": "string"
+        },
+        "type": {
+          "type": "string",
+          "enum": [
+            "boolean",
+            "percentage"
+          ]
+        },
+        "enabled": {
+          "type": "boolean"
+        },
+        "rolloutPercentage": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 100
+        },
+        "description": {
+          "type": "string"
+        },
+        "version": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
       }
     }
   }

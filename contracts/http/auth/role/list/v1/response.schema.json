@@ -8,28 +8,48 @@
       "items": {
         "type": "object",
         "properties": {
-          "id": { "type": "string" },
-          "name": { "type": "string" },
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
           "permissions": {
             "type": "array",
             "items": {
               "type": "object",
               "properties": {
-                "resource": { "type": "string" },
-                "action": { "type": "string" }
+                "resource": {
+                  "type": "string"
+                },
+                "action": {
+                  "type": "string"
+                }
               },
-              "required": ["resource", "action"],
-              "additionalProperties": false
+              "required": [
+                "resource",
+                "action"
+              ]
             }
           }
         },
-        "required": ["id", "name", "permissions"],
-        "additionalProperties": false
+        "required": [
+          "id",
+          "name",
+          "permissions"
+        ]
       }
     },
-    "nextCursor": { "type": "string" },
-    "hasMore": { "type": "boolean" }
+    "nextCursor": {
+      "type": "string"
+    },
+    "hasMore": {
+      "type": "boolean"
+    }
   },
-  "required": ["data", "nextCursor", "hasMore"],
-  "additionalProperties": false
+  "required": [
+    "data",
+    "nextCursor",
+    "hasMore"
+  ]
 }

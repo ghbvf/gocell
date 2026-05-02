@@ -37,13 +37,17 @@ type EntryDeleted struct {
 	ActorID string `json:"actorId"`
 }
 
-// DecodeEntryUpserted strictly decodes and validates event.config.entry-upserted.v1.
-// The payload must not contain a "value" field — this decoder rejects unknown fields.
+// DecodeEntryUpserted decodes and validates event.config.entry-upserted.v1.
+// Unknown fields are accepted (lenient) per ADR-202605031600 v1 schema
+// evolution: producers may add optional fields without breaking consumers.
+// The contract still forbids carrying the entry value in the event — that
+// payload-shape rule is enforced by the schema validator during contract
+// tests, not by the runtime decoder.
 // ActorID is required (PR-CFG-G1 G.2): producer must populate it from the
 // authenticated principal; an empty actorId indicates a contract violation.
 func DecodeEntryUpserted(data []byte) (EntryUpserted, error) {
 	var event EntryUpserted
-	if err := decodeStrict(data, &event); err != nil {
+	if err := decodeLenient(data, &event); err != nil {
 		return EntryUpserted{}, err
 	}
 	if strings.TrimSpace(event.Key) == "" {
@@ -58,11 +62,12 @@ func DecodeEntryUpserted(data []byte) (EntryUpserted, error) {
 	return event, nil
 }
 
-// DecodeEntryDeleted strictly decodes and validates event.config.entry-deleted.v1.
-// ActorID required — see DecodeEntryUpserted.
+// DecodeEntryDeleted decodes and validates event.config.entry-deleted.v1.
+// Same lenient/validation contract as DecodeEntryUpserted: unknown fields
+// accepted; ActorID required.
 func DecodeEntryDeleted(data []byte) (EntryDeleted, error) {
 	var event EntryDeleted
-	if err := decodeStrict(data, &event); err != nil {
+	if err := decodeLenient(data, &event); err != nil {
 		return EntryDeleted{}, err
 	}
 	if strings.TrimSpace(event.Key) == "" {
@@ -77,9 +82,12 @@ func DecodeEntryDeleted(data []byte) (EntryDeleted, error) {
 	return event, nil
 }
 
-func decodeStrict(data []byte, dst any) error {
+// decodeLenient unmarshals event payload bytes into dst. Unknown fields are
+// accepted (lenient) per ADR-202605031600 v1 schema evolution: producers can
+// add new optional fields without breaking existing consumers. Multiple JSON
+// values in the same payload are still rejected (single-message contract).
+func decodeLenient(data []byte, dst any) error {
 	dec := json.NewDecoder(bytes.NewReader(data))
-	dec.DisallowUnknownFields()
 	if err := dec.Decode(dst); err != nil {
 		return err
 	}

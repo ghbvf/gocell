@@ -6,14 +6,24 @@
     "data": {
       "type": "object",
       "properties": {
-        "id": { "type": "string" },
-        "name": { "type": "string" },
-        "status": { "type": "string" }
+        "id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        }
       },
-      "required": ["id", "name", "status"],
-      "additionalProperties": false
+      "required": [
+        "id",
+        "name",
+        "status"
+      ]
     }
   },
-  "required": ["data"],
-  "additionalProperties": false
+  "required": [
+    "data"
+  ]
 }

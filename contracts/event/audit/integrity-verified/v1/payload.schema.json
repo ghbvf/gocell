@@ -3,10 +3,19 @@
   "title": "event.audit.integrity-verified.v1.payload",
   "type": "object",
   "properties": {
-    "valid": { "type": "boolean" },
-    "firstInvalidIndex": { "type": "integer" },
-    "entriesChecked": { "type": "integer" }
+    "valid": {
+      "type": "boolean"
+    },
+    "firstInvalidIndex": {
+      "type": "integer"
+    },
+    "entriesChecked": {
+      "type": "integer"
+    }
   },
-  "required": ["valid", "firstInvalidIndex", "entriesChecked"],
-  "additionalProperties": false
+  "required": [
+    "valid",
+    "firstInvalidIndex",
+    "entriesChecked"
+  ]
 }

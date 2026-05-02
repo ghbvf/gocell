@@ -3,10 +3,20 @@
   "title": "event.role.revoked.v1.payload",
   "type": "object",
   "properties": {
-    "userId": {"type": "string"},
-    "roleId": {"type": "string"},
-    "action": {"type": "string", "const": "revoked"}
+    "userId": {
+      "type": "string"
+    },
+    "roleId": {
+      "type": "string"
+    },
+    "action": {
+      "type": "string",
+      "const": "revoked"
+    }
   },
-  "required": ["userId", "roleId", "action"],
-  "additionalProperties": false
+  "required": [
+    "userId",
+    "roleId",
+    "action"
+  ]
 }

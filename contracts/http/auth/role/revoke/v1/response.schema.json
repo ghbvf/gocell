@@ -6,14 +6,24 @@
     "data": {
       "type": "object",
       "properties": {
-        "userId": { "type": "string" },
-        "roleId": { "type": "string" },
-        "revoked": { "type": "boolean" }
+        "userId": {
+          "type": "string"
+        },
+        "roleId": {
+          "type": "string"
+        },
+        "revoked": {
+          "type": "boolean"
+        }
       },
-      "required": ["userId", "roleId", "revoked"],
-      "additionalProperties": false
+      "required": [
+        "userId",
+        "roleId",
+        "revoked"
+      ]
     }
   },
-  "required": ["data"],
-  "additionalProperties": false
+  "required": [
+    "data"
+  ]
 }

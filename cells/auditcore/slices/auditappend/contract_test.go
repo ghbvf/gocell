@@ -60,7 +60,8 @@ func TestEventConfigEntryUpsertedV1Subscribe(t *testing.T) {
 	// actorId required since G.2 migration
 	c.ValidatePayload(t, []byte(`{"key":"k","version":1,"actorId":"admin-1"}`))
 	c.MustRejectPayload(t, []byte(`{"key":"k","version":1}`)) // missing required actorId
-	c.MustRejectPayload(t, []byte(`{"key":"k","value":"v","version":1,"actorId":"a"}`))
+	// Per ADR-202605031600, extra fields accepted (lenient).
+	c.ValidatePayload(t, []byte(`{"key":"k","value":"v","version":1,"actorId":"a"}`))
 	c.MustRejectPayload(t, []byte(`{"key":"","version":1,"actorId":"a"}`))
 	c.MustRejectPayload(t, []byte(`{"key":"   ","version":1,"actorId":"a"}`))
 	c.MustRejectPayload(t, []byte(`{"key":"k","version":0,"actorId":"a"}`))
@@ -92,9 +93,10 @@ func TestEventConfigVersionPublishedV1Subscribe(t *testing.T) {
 
 	// actorId required since G.2 migration
 	c.ValidatePayload(t, []byte(`{"key":"k","configId":"cfg-1","version":1,"actorId":"admin-1"}`))
-	c.MustRejectPayload(t, []byte(`{"key":"k","configId":"cfg-1","version":1}`))                                 // missing actorId
-	c.MustRejectPayload(t, []byte(`{"key":"k","configId":"cfg-1","version":1,"actorId":"a","sensitive":false}`)) // additional property
-	c.MustRejectPayload(t, []byte(`{"key":"k","actorId":"a"}`))                                                  // missing configId + version
+	c.MustRejectPayload(t, []byte(`{"key":"k","configId":"cfg-1","version":1}`)) // missing actorId
+	// Per ADR-202605031600, additional properties accepted (lenient).
+	c.ValidatePayload(t, []byte(`{"key":"k","configId":"cfg-1","version":1,"actorId":"a","sensitive":false}`))
+	c.MustRejectPayload(t, []byte(`{"key":"k","actorId":"a"}`)) // missing configId + version
 }
 
 func TestEventConfigRollbackV1Subscribe(t *testing.T) {
