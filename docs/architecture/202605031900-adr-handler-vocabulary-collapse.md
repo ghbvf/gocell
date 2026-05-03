@@ -102,7 +102,7 @@ ends with K#12 (PR-V1-OUTBOX-RECEIPT-EXTRACT). The adapters/rabbitmq
 dependency on kernel/idempotency that surfaces from this design is part
 of the same compromise envelope and resolves at the same time.
 
-## Trade-off Q5 — actorID system fallback in audit-append
+## Trade-off Q5 — actorID system fallback in auditappend
 
 `auditappend.HandleEvent` falls back to `actorID = "system"` when the event
 payload contains neither `actorId` nor `userId`. This is an explicit trade-off:

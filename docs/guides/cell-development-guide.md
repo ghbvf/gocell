@@ -191,14 +191,16 @@ func (c *MyCell) Init(ctx context.Context, reg cell.Registry) error {
     if err := c.BaseCell.Init(ctx, reg); err != nil {
         return err
     }
-    handler := outbox.WrapLegacyHandler(c.svc.HandleEvent) // 旧签名 → EntryHandler
+    // c.svc.HandleEvent 是 outbox.EntryHandler 类型 (ctx, entry) → HandleResult
+    // 由 029 #03 ADR Decision 1 起直接传入，不再需要 WrapLegacyHandler 适配。
+    //
     // EventSpec(id, transport) helper for the common case Topic == ID.
     // FMT-18 cross-checks both ContractSpec{} literals and EventSpec(...) calls
     // against contracts/**/contract.yaml — strict-only: the check fires under
     // `gocell validate --strict` (and the strict CI job), not plain `validate`.
     // The id argument must be a string literal so the AST can resolve it;
     // computed ids surface as a FMT-18 WARNING.
-    if err := reg.Subscribe(wrapper.EventSpec("event.my.topic.v1", "amqp"), handler, c.ID()); err != nil {
+    if err := reg.Subscribe(wrapper.EventSpec("event.my.topic.v1", "amqp"), c.svc.HandleEvent, c.ID()); err != nil {
         return err
     }
     return nil
