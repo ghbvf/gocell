@@ -58,7 +58,7 @@ func assertReject(t testing.TB, got outbox.HandleResult) {
 
 func TestNewService_TxRunnerRequired(t *testing.T) {
 	repo := mem.NewAuditRepository()
-	_, err := NewService(repo, testHMACKey, slog.Default(), clock.Real() /* no WithTxManager */)
+	_, err := NewService(repo, testHMACKey, slog.Default(), clock.Real(), WithClock(clock.Real()) /* no WithTxManager */)
 	require.Error(t, err)
 	var ec *errcode.Error
 	require.ErrorAs(t, err, &ec)
