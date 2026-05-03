@@ -354,6 +354,85 @@ func TestCatalog_PackageDepsLoading(t *testing.T) {
 	}
 }
 
+// TestCatalog_IncludeAbsent_DefaultsAll verifies that omitting ?include= returns
+// IncludeAll (dependencies block present).
+func TestCatalog_IncludeAbsent_DefaultsAll(t *testing.T) {
+	t.Parallel()
+
+	h := buildTestHandler(t)
+	rr := doAdminRequest(t, h, "/api/v1/devtools/catalog")
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+	var doc metadata.Document
+	if err := json.Unmarshal(rr.Body.Bytes(), &doc); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if doc.Dependencies == nil {
+		t.Error("expected Dependencies block when include param is absent (IncludeAll default)")
+	}
+}
+
+// TestCatalog_IncludeExplicitEmpty_ZeroBlocks verifies that ?include= (present
+// but empty) returns zero optional blocks.
+func TestCatalog_IncludeExplicitEmpty_ZeroBlocks(t *testing.T) {
+	t.Parallel()
+
+	h := buildTestHandler(t)
+	rr := doAdminRequest(t, h, "/api/v1/devtools/catalog?include=")
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+	var doc metadata.Document
+	if err := json.Unmarshal(rr.Body.Bytes(), &doc); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if doc.Dependencies != nil {
+		t.Error("expected no Dependencies block when include= is explicitly empty")
+	}
+	if len(doc.StatusBoard) > 0 {
+		t.Error("expected no StatusBoard when include= is explicitly empty")
+	}
+}
+
+// TestCatalog_FormatXML_BadRequest verifies that ?format=xml returns 400.
+func TestCatalog_FormatXML_BadRequest(t *testing.T) {
+	t.Parallel()
+
+	h := buildTestHandler(t)
+	rr := doAdminRequest(t, h, "/api/v1/devtools/catalog?format=xml")
+
+	if rr.Code != http.StatusBadRequest {
+		t.Errorf("expected 400 for unknown format, got %d: %s", rr.Code, rr.Body.String())
+	}
+	assertErrValidation(t, rr)
+	if !strings.Contains(rr.Body.String(), "xml") {
+		t.Errorf("error message must mention 'xml', got: %s", rr.Body.String())
+	}
+}
+
+// TestCatalog_Root_RelativePath verifies that HTTP handler sets doc.Root to "."
+// (relative path) so absolute server paths are not exposed to clients.
+func TestCatalog_Root_RelativePath(t *testing.T) {
+	t.Parallel()
+
+	h := buildTestHandler(t)
+	rr := doAdminRequest(t, h, "/api/v1/devtools/catalog?include=")
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+	var doc metadata.Document
+	if err := json.Unmarshal(rr.Body.Bytes(), &doc); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if doc.Root != "." {
+		t.Errorf("doc.Root = %q, want \".\" (HTTP must not expose absolute paths)", doc.Root)
+	}
+}
+
 func TestCatalog_PackageDepsReady(t *testing.T) {
 	t.Parallel()
 

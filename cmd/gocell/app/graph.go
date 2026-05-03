@@ -106,7 +106,7 @@ func executeGraph(opts graphOptions) error {
 			return fmt.Errorf("graph: encode json: %w", err)
 		}
 	case graphFormatDOT:
-		if err := g.WriteDOT(w); err != nil {
+		if err := depgraph.WriteDOT(g, w); err != nil {
 			return fmt.Errorf("graph: write dot: %w", err)
 		}
 	}

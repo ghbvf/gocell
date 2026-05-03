@@ -206,11 +206,11 @@ type BuildMeta struct {
 
 // StatusBoardEntry maps to a single entry in journeys/status-board.yaml.
 type StatusBoardEntry struct {
-	JourneyID string `yaml:"journeyId"`
-	State     string `yaml:"state"`
-	Risk      string `yaml:"risk"`
-	Blocker   string `yaml:"blocker"`
-	UpdatedAt string `yaml:"updatedAt"`
+	JourneyID string `json:"journeyId" yaml:"journeyId"`
+	State     string `json:"state"     yaml:"state"`
+	Risk      string `json:"risk"      yaml:"risk"`
+	Blocker   string `json:"blocker"   yaml:"blocker"`
+	UpdatedAt string `json:"updatedAt" yaml:"updatedAt"`
 }
 
 // ActorMeta maps to a single entry in actors.yaml.

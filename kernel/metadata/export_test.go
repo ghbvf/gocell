@@ -295,11 +295,11 @@ func TestBuildDocument_FilterCellsFocus_ConsumerContracts(t *testing.T) {
 	assert.Contains(t, names, "Contract/event.audit.entry.v1",
 		"contract consumed by focus cell must appear even when owned by another cell")
 
-	// auditcore cell itself should NOT appear (it's not a direct neighbor in cell-graph terms).
-	for _, n := range names {
-		assert.NotEqual(t, "Cell/auditcore", n,
-			"auditcore cell itself should not appear when focusing on accesscore")
-	}
+	// auditcore IS a first-order neighbor because it owns a contract consumed by
+	// accesscore (F-A3: contract owner of consumed contracts is added to the
+	// expanded focus set). It must appear.
+	assert.Contains(t, names, "Cell/auditcore",
+		"auditcore must appear: it owns a contract consumed by the focus cell")
 }
 
 // ---- TestBuildDocument_IncludeMask ----
@@ -564,6 +564,14 @@ func TestAPIVersionFrozen(t *testing.T) {
 	assert.Equal(t, "gocell.io/v1alpha1", metadata.APIVersionV1)
 }
 
+// TestSchemaVersionLiteral hard-locks the exact literal values of
+// SchemaVersionV1 and APIVersionV1, independent of golden files.
+// Golden files can be regenerated via -update; this test cannot be bypassed.
+func TestSchemaVersionLiteral(t *testing.T) {
+	require.Equal(t, "v1", metadata.SchemaVersionV1)
+	require.Equal(t, "gocell.io/v1alpha1", metadata.APIVersionV1)
+}
+
 // ---- TestMarshalDocument_JSONGolden ----
 
 func TestMarshalDocument_JSONGolden(t *testing.T) {
@@ -591,7 +599,7 @@ func TestMarshalDocument_JSONGolden(t *testing.T) {
 // ---- TestMarshalDocument_YAMLGolden ----
 
 func TestMarshalDocument_YAMLGolden(t *testing.T) {
-	pm := minimalPM()
+	pm := fullPM()
 	opts := metadata.ExportOptions{
 		Now:    fixedNow,
 		Root:   "/projects/gocell",
@@ -645,6 +653,156 @@ func TestMarshalDocument_FilteredGolden(t *testing.T) {
 	require.Equal(t, string(want), string(got))
 }
 
+// ---- TestBuildDocument_FilterCellsFocus_L0Dep ----
+
+// TestBuildDocument_FilterCellsFocus_L0Dep verifies that when focus=[A] and A
+// has a L0 dependency on cell B, then B appears in the filtered entities.
+func TestBuildDocument_FilterCellsFocus_L0Dep(t *testing.T) {
+	pm := &metadata.ProjectMeta{
+		Cells: map[string]*metadata.CellMeta{
+			"cella": {
+				ID:               "cella",
+				ConsistencyLevel: "L1",
+				L0Dependencies:   []metadata.L0DepMeta{{Cell: "cellb", Reason: "crypto"}},
+			},
+			"cellb": {
+				ID:               "cellb",
+				ConsistencyLevel: "L0",
+			},
+		},
+		Slices:     map[string]*metadata.SliceMeta{},
+		Contracts:  map[string]*metadata.ContractMeta{},
+		Journeys:   map[string]*metadata.JourneyMeta{},
+		Assemblies: map[string]*metadata.AssemblyMeta{},
+		Actors:     []metadata.ActorMeta{},
+	}
+	opts := metadata.ExportOptions{
+		Now:    fixedNow,
+		Filter: metadata.Filter{Cells: []string{"cella"}, Include: 0},
+	}
+	doc, err := metadata.BuildDocument(pm, opts)
+	require.NoError(t, err)
+
+	names := make([]string, 0, len(doc.Entities))
+	for _, e := range doc.Entities {
+		names = append(names, e.Kind+"/"+e.Metadata.Name)
+	}
+	assert.Contains(t, names, "Cell/cella", "focus cell must be present")
+	assert.Contains(t, names, "Cell/cellb", "L0 dep of focus cell must be present (F-A3)")
+}
+
+// TestBuildDocument_FilterCellsFocus_ContractClient verifies that when focus=[A]
+// and A owns a contract C consumed by cell D, then D appears in filtered entities.
+func TestBuildDocument_FilterCellsFocus_ContractClient(t *testing.T) {
+	pm := &metadata.ProjectMeta{
+		Cells: map[string]*metadata.CellMeta{
+			"cella": {ID: "cella", ConsistencyLevel: "L1"},
+			"celld": {ID: "celld", ConsistencyLevel: "L1"},
+		},
+		Slices: map[string]*metadata.SliceMeta{},
+		Contracts: map[string]*metadata.ContractMeta{
+			"http.cella.api.v1": {
+				ID:        "http.cella.api.v1",
+				Kind:      "http",
+				OwnerCell: "cella",
+				Endpoints: metadata.EndpointsMeta{
+					Server:  "cella",
+					Clients: []string{"celld"},
+				},
+			},
+		},
+		Journeys:   map[string]*metadata.JourneyMeta{},
+		Assemblies: map[string]*metadata.AssemblyMeta{},
+		Actors:     []metadata.ActorMeta{},
+	}
+	opts := metadata.ExportOptions{
+		Now:    fixedNow,
+		Filter: metadata.Filter{Cells: []string{"cella"}, Include: 0},
+	}
+	doc, err := metadata.BuildDocument(pm, opts)
+	require.NoError(t, err)
+
+	names := make([]string, 0, len(doc.Entities))
+	for _, e := range doc.Entities {
+		names = append(names, e.Kind+"/"+e.Metadata.Name)
+	}
+	assert.Contains(t, names, "Cell/cella", "focus cell must be present")
+	assert.Contains(t, names, "Cell/celld", "contract client cell must be present (F-A3)")
+}
+
+// ---- TestBuildDocument_DepsFilter_CellFocus ----
+
+// TestBuildDocument_DepsFilter_CellFocus verifies that when filter.Cells is
+// set, dependencies.cells.nodes only contains cells from the filtered entities.
+func TestBuildDocument_DepsFilter_CellFocus(t *testing.T) {
+	pm := fullPM()
+	cellDeps := &metadata.CellDepGraph{
+		Nodes: []string{"accesscore", "auditcore"},
+		Edges: []metadata.CellEdge{{From: "accesscore", To: "auditcore"}},
+	}
+	opts := metadata.ExportOptions{
+		Now:  fixedNow,
+		Root: "/projects/gocell",
+		Filter: metadata.Filter{
+			Cells:   []string{"accesscore"},
+			Include: metadata.IncludeCellDeps,
+		},
+		CellDeps: cellDeps,
+	}
+	doc, err := metadata.BuildDocument(pm, opts)
+	require.NoError(t, err)
+	require.NotNil(t, doc.Dependencies)
+	require.NotNil(t, doc.Dependencies.Cells)
+
+	// Only accesscore (the focused cell) should appear in nodes; auditcore is
+	// not a first-order neighbor of accesscore in the contract graph.
+	for _, n := range doc.Dependencies.Cells.Nodes {
+		assert.NotEqual(t, "auditcore", n,
+			"auditcore must not appear in filtered cellDeps.Nodes when focus=[accesscore]")
+	}
+	// No edge from accesscore→auditcore since auditcore is filtered out.
+	for _, e := range doc.Dependencies.Cells.Edges {
+		assert.False(t, e.From == "accesscore" && e.To == "auditcore",
+			"edge accesscore→auditcore must not appear when auditcore is filtered")
+	}
+}
+
+// TestBuildDocument_DepsFilter_Layers verifies that when filter.Layers=[cells],
+// dependencies.packages only contains packages with layer="cells".
+func TestBuildDocument_DepsFilter_Layers(t *testing.T) {
+	cellsNode := &kerneldepgraph.Node{
+		ID:      "github.com/foo/bar/cells/myapp",
+		Layer:   "cells",
+		Imports: []string{},
+	}
+	kernelNode := &kerneldepgraph.Node{
+		ID:      "github.com/foo/bar/kernel/core",
+		Layer:   "kernel",
+		Imports: []string{},
+	}
+	g := kerneldepgraph.FromNodes("github.com/foo/bar", []*kerneldepgraph.Node{cellsNode, kernelNode})
+	pm := minimalPM()
+	opts := metadata.ExportOptions{
+		Now:  fixedNow,
+		Root: "/projects/gocell",
+		Filter: metadata.Filter{
+			Layers:  []string{"cells"},
+			Include: metadata.IncludePackageDeps,
+		},
+		Packages: &metadata.PackageDepsView{Status: "ready", Graph: g},
+	}
+	doc, err := metadata.BuildDocument(pm, opts)
+	require.NoError(t, err)
+	require.NotNil(t, doc.Dependencies)
+	require.NotNil(t, doc.Dependencies.Packages)
+	require.NotNil(t, doc.Dependencies.Packages.Graph)
+
+	for _, pkg := range doc.Dependencies.Packages.Graph.Packages {
+		assert.Equal(t, "cells", pkg.Layer,
+			"filtered packageDeps graph must only contain packages with layer=cells")
+	}
+}
+
 // ---- TestMarshalDocument_BadFormat ----
 
 func TestMarshalDocument_BadFormat(t *testing.T) {
@@ -692,6 +850,7 @@ func TestCamelCaseTags(t *testing.T) {
 		metadata.AssemblySpec{},
 		metadata.AssemblySpecBuild{},
 		metadata.ActorSpec{},
+		metadata.StatusBoardEntry{},
 	}
 
 	for _, root := range roots {

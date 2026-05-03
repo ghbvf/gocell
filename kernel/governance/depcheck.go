@@ -212,16 +212,27 @@ func (dc *DependencyChecker) addSliceEdges(graph map[string]map[string]bool, s *
 			continue
 		}
 		for _, consumerCell := range consumers {
-			if consumerCell == providerCell {
-				continue // self-edge is not a cross-cell dependency
-			}
-			if graph[consumerCell] == nil {
-				graph[consumerCell] = make(map[string]bool)
-			}
-			graph[consumerCell][providerCell] = true
+			dc.addCellEdge(graph, consumerCell, providerCell)
 		}
 	}
 	return errs
+}
+
+// addCellEdge adds a directed edge consumerCell → providerCell to graph,
+// skipping self-edges and non-cell IDs (actor entries from actors.yaml).
+func (dc *DependencyChecker) addCellEdge(graph map[string]map[string]bool, consumerCell, providerCell string) {
+	if consumerCell == providerCell {
+		return // self-edge is not a cross-cell dependency
+	}
+	// Skip actor IDs: actors.yaml entries participate in contracts but
+	// are not cells — including them would pollute the cell dep graph.
+	if _, isCell := dc.project.Cells[consumerCell]; !isCell {
+		return
+	}
+	if graph[consumerCell] == nil {
+		graph[consumerCell] = make(map[string]bool)
+	}
+	graph[consumerCell][providerCell] = true
 }
 
 // detectCycle runs three-color DFS on the directed graph and returns the

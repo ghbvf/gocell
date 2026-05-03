@@ -304,7 +304,15 @@ func BuildDocument(pm *ProjectMeta, opts ExportOptions) (Document, error) {
 	}
 
 	entities := buildEntities(pm, opts.Filter)
-	entities = applyFilter(entities, opts.Filter)
+
+	// Expand the cell focus set before filtering so first-order neighbors
+	// (L0 deps, contract clients, contract owners) are included in the output.
+	filter := opts.Filter
+	if len(filter.Cells) > 0 {
+		filter.Cells = expandCellFocusSet(pm, filter.Cells)
+	}
+
+	entities = applyFilter(entities, filter)
 	sortEntities(entities)
 
 	doc := Document{
@@ -316,11 +324,14 @@ func BuildDocument(pm *ProjectMeta, opts ExportOptions) (Document, error) {
 		Entities:      entities,
 	}
 
-	if opts.Filter.Include&IncludeStatusBoard != 0 {
+	if filter.Include&IncludeStatusBoard != 0 {
 		doc.StatusBoard = pm.StatusBoard
 	}
 
-	doc.Dependencies = buildDependencies(opts)
+	// Pass the expanded filter for dependency graph filtering.
+	optsWithExpandedFilter := opts
+	optsWithExpandedFilter.Filter = filter
+	doc.Dependencies = buildDependencies(optsWithExpandedFilter, entities)
 
 	return doc, nil
 }
@@ -552,6 +563,106 @@ func buildActorEntity(a ActorMeta, _ IncludeMask) Entity {
 	}
 }
 
+// expandCellFocusSet computes the expanded cell set for focus-mode filtering.
+// Starting from the seed cells in focus, it adds:
+//   - L0 dependencies declared in each focus cell's cell.yaml
+//   - Cells that own contracts consumed by slices of focus cells
+//   - Cells that are clients of contracts owned by focus cells
+//
+// Returns a deduplicated, sorted slice so the result is stable.
+func expandCellFocusSet(pm *ProjectMeta, focus []string) []string {
+	expanded := make(map[string]bool, len(focus))
+	for _, c := range focus {
+		expanded[c] = true
+	}
+
+	addL0Deps(pm, expanded, focus)
+
+	contractOwner, contractClients := buildContractMaps(pm)
+
+	addContractClients(pm, expanded, contractOwner, contractClients)
+	addContractOwners(pm, expanded, contractOwner)
+
+	result := make([]string, 0, len(expanded))
+	for c := range expanded {
+		result = append(result, c)
+	}
+	sort.Strings(result)
+	return result
+}
+
+// addL0Deps adds L0 dependency cell IDs to expanded for each focus cell.
+func addL0Deps(pm *ProjectMeta, expanded map[string]bool, focus []string) {
+	for _, f := range focus {
+		cell := pm.Cells[f]
+		if cell == nil {
+			continue
+		}
+		for _, dep := range cell.L0Dependencies {
+			expanded[dep.Cell] = true
+		}
+	}
+}
+
+// buildContractMaps returns two maps: contractID→ownerCell and
+// contractID→[]consumerCells derived from endpoint declarations.
+func buildContractMaps(pm *ProjectMeta) (ownerMap map[string]string, clientsMap map[string][]string) {
+	ownerMap = make(map[string]string, len(pm.Contracts))
+	clientsMap = make(map[string][]string, len(pm.Contracts))
+	for _, c := range pm.Contracts {
+		if c == nil {
+			continue
+		}
+		ownerMap[c.ID] = c.OwnerCell
+		clientsMap[c.ID] = contractConsumers(c)
+	}
+	return
+}
+
+// contractConsumers returns the endpoint consumer cell IDs for a contract.
+func contractConsumers(c *ContractMeta) []string {
+	switch c.Kind {
+	case "http":
+		return c.Endpoints.Clients
+	case "event":
+		return c.Endpoints.Subscribers
+	case "command":
+		return c.Endpoints.Invokers
+	case "projection":
+		return c.Endpoints.Readers
+	default:
+		return nil
+	}
+}
+
+// addContractClients adds cells that consume contracts owned by focus cells.
+func addContractClients(pm *ProjectMeta, expanded map[string]bool, ownerMap map[string]string, clientsMap map[string][]string) {
+	for contractID, ownerCell := range ownerMap {
+		if !expanded[ownerCell] {
+			continue
+		}
+		for _, client := range clientsMap[contractID] {
+			if pm.Cells[client] != nil {
+				expanded[client] = true
+			}
+		}
+	}
+}
+
+// addContractOwners adds owner cells of contracts consumed by slices of focus cells.
+func addContractOwners(pm *ProjectMeta, expanded map[string]bool, ownerMap map[string]string) {
+	for _, s := range pm.Slices {
+		if s == nil || !expanded[s.BelongsToCell] {
+			continue
+		}
+		for _, u := range s.ContractUsages {
+			if owner, ok := ownerMap[u.Contract]; ok && owner != "" && pm.Cells[owner] != nil {
+				expanded[owner] = true
+			}
+		}
+	}
+}
+
 // applyFilter applies kind, layer, and cell focus filters to entities.
 func applyFilter(entities []Entity, filter Filter) []Entity {
 	if len(filter.Kinds) == 0 && len(filter.Layers) == 0 && len(filter.Cells) == 0 {
@@ -713,17 +824,24 @@ func buildIncludeEcho(mask IncludeMask) []string {
 	return names
 }
 
-// buildDependencies builds the Dependencies block from opts.
-func buildDependencies(opts ExportOptions) *Dependencies {
+// buildDependencies builds the Dependencies block from opts, applying the same
+// filter used for entities so focused views stay consistent.
+//
+// entities is the already-filtered entity list; it is used to derive the
+// allowed cell set for CellDepGraph filtering (focus + first-order neighbors
+// that survived the entity filter).
+func buildDependencies(opts ExportOptions, entities []Entity) *Dependencies {
 	var deps Dependencies
 	hasDeps := false
 
 	if opts.Filter.Include&IncludeCellDeps != 0 && opts.CellDeps != nil {
-		deps.Cells = opts.CellDeps
+		filtered := filterCellDepGraph(opts.CellDeps, opts.Filter, entities)
+		deps.Cells = filtered
 		hasDeps = true
 	}
 	if opts.Filter.Include&IncludePackageDeps != 0 && opts.Packages != nil {
-		deps.Packages = opts.Packages
+		filtered := filterPackageDepsView(opts.Packages, opts.Filter)
+		deps.Packages = filtered
 		hasDeps = true
 	}
 
@@ -731,6 +849,71 @@ func buildDependencies(opts ExportOptions) *Dependencies {
 		return nil
 	}
 	return &deps
+}
+
+// filterCellDepGraph returns a filtered CellDepGraph. When filter.Cells is
+// non-empty, only nodes/edges for cells present in the filtered entities are
+// included. When filter.Cells is empty, the original graph is returned as-is.
+func filterCellDepGraph(g *CellDepGraph, filter Filter, entities []Entity) *CellDepGraph {
+	if len(filter.Cells) == 0 {
+		return g
+	}
+	// Build allowed set from entities that survived the filter (Kind==Cell).
+	allowed := make(map[string]bool)
+	for _, e := range entities {
+		if e.Kind == "Cell" {
+			allowed[e.Metadata.Name] = true
+		}
+	}
+	if len(allowed) == 0 {
+		return &CellDepGraph{Nodes: []string{}, Edges: []CellEdge{}}
+	}
+
+	var nodes []string
+	for _, n := range g.Nodes {
+		if allowed[n] {
+			nodes = append(nodes, n)
+		}
+	}
+	var edges []CellEdge
+	for _, e := range g.Edges {
+		if allowed[e.From] && allowed[e.To] {
+			edges = append(edges, e)
+		}
+	}
+	if nodes == nil {
+		nodes = []string{}
+	}
+	if edges == nil {
+		edges = []CellEdge{}
+	}
+	return &CellDepGraph{
+		Nodes:   nodes,
+		Edges:   edges,
+		BuiltAt: g.BuiltAt,
+	}
+}
+
+// filterPackageDepsView returns a filtered PackageDepsView. When filter.Layers
+// is non-empty, only packages whose layer is in the allowed set are retained,
+// and Stats are recomputed. When filter.Layers is empty, the original view is
+// returned as-is. Non-ready views (status != "ready") are returned unchanged
+// since there is no Graph to filter.
+func filterPackageDepsView(v *PackageDepsView, filter Filter) *PackageDepsView {
+	if len(filter.Layers) == 0 {
+		return v
+	}
+	if v.Graph == nil {
+		return v
+	}
+	layerSet := toStringSet(filter.Layers)
+	// kerneldepgraph.Graph filtering: keep packages whose layer is allowed.
+	// We cannot mutate the shared Graph pointer, so build a new one.
+	return &PackageDepsView{
+		Status: v.Status,
+		Graph:  v.Graph.FilterByLayer(layerSet),
+		Error:  v.Error,
+	}
 }
 
 // MarshalDocument serializes d as JSON or YAML according to format. Returns

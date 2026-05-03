@@ -2,9 +2,12 @@
 // for building a GoCell dependency graph from live module source.
 //
 // The core data model (Graph, Node, Stats, layer constants, LayerOf, CellOf,
-// SliceOf, TransitiveImports, WriteDOT) is defined in kernel/depgraph.
-// Callers that only need graph data and layer classification should import
-// kernel/depgraph directly to avoid the heavy golang.org/x/tools dependency.
+// SliceOf, TransitiveImports) is defined in kernel/depgraph. Callers that only
+// need graph data and layer classification should import kernel/depgraph directly
+// to avoid the heavy golang.org/x/tools dependency.
+//
+// DOT rendering lives here (WriteDOT) rather than in kernel/depgraph, because
+// the Graphviz presentation concern belongs in the tools layer, not in kernel.
 //
 // This package provides the packages.Load entry points:
 //

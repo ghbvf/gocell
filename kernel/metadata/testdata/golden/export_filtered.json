@@ -73,15 +73,9 @@
   "dependencies": {
     "cells": {
       "nodes": [
-        "accesscore",
-        "auditcore"
+        "accesscore"
       ],
-      "edges": [
-        {
-          "from": "accesscore",
-          "to": "auditcore"
-        }
-      ]
+      "edges": []
     },
     "packages": {
       "status": "loading"

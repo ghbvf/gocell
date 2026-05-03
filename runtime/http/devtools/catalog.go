@@ -126,7 +126,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	body, err := metadata.MarshalDocument(doc, format)
 	if err != nil {
 		// format is validated above to be "json" or "yaml" — not user-controlled.
-		slog.Error("devtools: MarshalDocument failed", //nolint:gosec // format is "json"|"yaml", not user-controlled
+		slog.Error("devtools: MarshalDocument failed", //nolint:gosec // format validated to "json"|"yaml" in parseQuery before reaching here
 			slog.String("format", format),
 			slog.Any("error", err),
 		)
@@ -142,10 +142,12 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 // buildExportOptions assembles ExportOptions from the handler state and filter.
+// Root is always set to "." for HTTP responses to avoid leaking absolute server
+// paths to clients; CLI callers retain their absolute path via h.root.
 func buildExportOptions(h *Handler, filter metadata.Filter) metadata.ExportOptions {
 	opts := metadata.ExportOptions{
 		Now:    h.clock.Now(),
-		Root:   h.root,
+		Root:   ".",
 		Filter: filter,
 	}
 	if filter.Include&metadata.IncludeCellDeps != 0 {
@@ -174,7 +176,15 @@ func parseQuery(ctx context.Context, w http.ResponseWriter, r *http.Request) (me
 
 	cells := parseCells(q.Get("cells"))
 
-	include, ok := parseInclude(ctx, w, q.Get("include"))
+	// Distinguish "omitted" (?include absent → IncludeAll) from "explicit empty"
+	// (?include= → 0). q.Has returns true only when the key appears in the query
+	// string, even with an empty value.
+	includeRaw := ""
+	includePresent := q.Has("include")
+	if includePresent {
+		includeRaw = q.Get("include")
+	}
+	include, ok := parseInclude(ctx, w, includeRaw, includePresent)
 	if !ok {
 		return metadata.Filter{}, "", false
 	}
@@ -182,6 +192,12 @@ func parseQuery(ctx context.Context, w http.ResponseWriter, r *http.Request) (me
 	format := q.Get("format")
 	if format == "" {
 		format = "json"
+	}
+	if format != "json" && format != "yaml" {
+		httputil.WritePublicError(ctx, w, http.StatusBadRequest,
+			string(errcode.ErrValidationFailed),
+			"unknown format value: "+format)
+		return metadata.Filter{}, "", false
 	}
 
 	return metadata.Filter{
@@ -244,11 +260,16 @@ func parseCells(raw string) []string {
 	return result
 }
 
-// parseInclude parses the ?include= parameter into an IncludeMask. An empty
-// string returns IncludeAll. Unknown values write a 400 response and return false.
-func parseInclude(ctx context.Context, w http.ResponseWriter, raw string) (metadata.IncludeMask, bool) {
-	if raw == "" {
+// parseInclude parses the ?include= parameter into an IncludeMask.
+// When present is false (parameter absent), returns IncludeAll.
+// When present is true and raw is empty, returns 0 (no optional blocks).
+// Unknown values write a 400 response and return false.
+func parseInclude(ctx context.Context, w http.ResponseWriter, raw string, present bool) (metadata.IncludeMask, bool) {
+	if !present {
 		return metadata.IncludeAll, true
+	}
+	if raw == "" {
+		return 0, true
 	}
 	parts := strings.Split(raw, ",")
 	var mask metadata.IncludeMask

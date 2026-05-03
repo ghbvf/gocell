@@ -3,6 +3,7 @@ package app
 import (
 	"flag"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"sort"
@@ -20,6 +21,10 @@ var validIncludeTokens = []string{"cellDeps", "packageDeps", "relations", "statu
 // validKinds is the set of accepted --kinds= tokens.
 // References metadata.AllKinds — single source of truth.
 var validKinds = metadata.AllKinds
+
+// validLayers is the set of accepted --layers= tokens.
+// References metadata.AllLayers — single source of truth.
+var validLayersList = metadata.AllLayers
 
 // runExport dispatches `export <subcommand>` to its handler. catalog and
 // metadata are byte-equal aliases sharing exportCatalog as the implementation.
@@ -109,14 +114,24 @@ func attachCellDeps(opts *metadata.ExportOptions, filter metadata.Filter, pm *me
 	return nil
 }
 
-// attachPackageDeps populates opts.Packages when IncludePackageDeps is set in the filter.
+// attachPackageDeps populates opts.Packages when IncludePackageDeps is set in
+// the filter. Load failures are degraded gracefully: the export continues with
+// a PackageDepsView{Status: "error"} so all other blocks remain intact.
 func attachPackageDeps(opts *metadata.ExportOptions, filter metadata.Filter, rootDir string) error {
 	if filter.Include&metadata.IncludePackageDeps == 0 {
 		return nil
 	}
 	g, err := depgraph.Load(depgraph.LoadOptions{Dir: rootDir}, "./...")
 	if err != nil {
-		return fmt.Errorf("package dep graph load: %w", err)
+		slog.Error("export: package dep graph load failed",
+			slog.String("root", rootDir),
+			slog.Any("error", err),
+		)
+		opts.Packages = &metadata.PackageDepsView{
+			Status: "error",
+			Error:  "package dep load failed",
+		}
+		return nil
 	}
 	opts.Packages = &metadata.PackageDepsView{Status: "ready", Graph: g}
 	return nil
@@ -159,7 +174,10 @@ func buildFilter(kinds, layers, cells, include string) (metadata.Filter, error) 
 		return metadata.Filter{}, err
 	}
 
-	parsedLayers := parseTokensOpen(layers)
+	parsedLayers, err := parseTokens(layers, validLayersList, "layers")
+	if err != nil {
+		return metadata.Filter{}, err
+	}
 	parsedCells := parseTokensOpen(cells)
 
 	mask, err := parseInclude(include)

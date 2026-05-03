@@ -117,15 +117,13 @@ func TestRunExport_BadKind(t *testing.T) {
 	assert.Contains(t, err.Error(), "Bogus")
 }
 
-// TestRunExport_BadLayer is a compile-time regression guard: --layers is
-// open-ended, so any value is accepted. This test documents the intended
-// behavior (open-ended) rather than asserting an error.
+// TestRunExport_BadLayer verifies that an unknown --layers token errors with
+// a message naming the unknown value.
 func TestRunExport_BadLayer(t *testing.T) {
-	// layers is open-ended: no validation error is expected for unknown values.
 	root := copyFixtureToTempDir(t)
-	err := runExport([]string{"catalog", "--root=" + root, "--layers=notaknownlayer", "--include="})
-	// No error expected — open-ended set.
-	require.NoError(t, err)
+	err := runExport([]string{"catalog", "--root=" + root, "--layers=foo", "--include="})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "foo")
 }
 
 // TestRunExport_IncludeNone verifies that --include="" produces a document
@@ -401,4 +399,45 @@ func TestDispatch_UsageContainsExport(t *testing.T) {
 	exit, stdout, _ := captureDispatch(t, []string{})
 	assert.Equal(t, ExitUsage, exit)
 	assert.Contains(t, stdout, "export")
+}
+
+// TestRunExport_PackageDepsLoadError verifies that when depgraph.Load fails
+// (e.g. invalid project), the CLI exits 0 and the document still contains a
+// dependencies.packages block with status="error".
+func TestRunExport_PackageDepsLoadError(t *testing.T) {
+	// Build a minimal fixture that has valid cell metadata but an invalid
+	// go.mod (empty module path) to make depgraph.Load fail.
+	root := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(root, "go.mod"),
+		[]byte("module \n"), 0o644)) // empty module path triggers load error
+	require.NoError(t, os.WriteFile(filepath.Join(root, "actors.yaml"),
+		[]byte("# no actors\n"), 0o644))
+	require.NoError(t, os.MkdirAll(filepath.Join(root, "journeys"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(root, "journeys", "status-board.yaml"),
+		[]byte("# no entries\n"), 0o644))
+
+	outPath := filepath.Join(t.TempDir(), "out.json")
+	err := runExport([]string{
+		"catalog", "--root=" + root,
+		"--include=packageDeps",
+		"--out=" + outPath,
+	})
+	// Graceful degrade: exit 0.
+	require.NoError(t, err, "CLI must exit 0 even when packageDeps load fails")
+
+	data, readErr := os.ReadFile(outPath) //nolint:gosec // test output file
+	require.NoError(t, readErr)
+
+	var doc struct {
+		Dependencies *struct {
+			Packages *struct {
+				Status string `json:"status"`
+			} `json:"packages"`
+		} `json:"dependencies"`
+	}
+	require.NoError(t, json.Unmarshal(data, &doc))
+	require.NotNil(t, doc.Dependencies, "dependencies block must be present")
+	require.NotNil(t, doc.Dependencies.Packages, "dependencies.packages must be present")
+	assert.Equal(t, "error", doc.Dependencies.Packages.Status,
+		"dependencies.packages.status must be 'error' on load failure")
 }

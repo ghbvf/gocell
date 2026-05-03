@@ -1602,4 +1602,16 @@ func TestKernelDepgraphIsolation(t *testing.T) {
 		assert.True(t, found,
 			"tools/depgraph must import kernel/depgraph (expected dependency direction)")
 	})
+
+	t.Run("kernel_depgraph_no_xtools_transitive", func(t *testing.T) {
+		// Strengthen the direct-import check: also verify that kernel/depgraph
+		// does not transitively import golang.org/x/tools/ via any intermediary.
+		// This ensures that future additions to kernel/depgraph cannot sneak in
+		// the heavy x/tools dependency through a helper package.
+		kernelTransitive := g.TransitiveImports(kernelDepgraphPkg)
+		for imp := range kernelTransitive {
+			require.False(t, strings.HasPrefix(imp, "golang.org/x/tools/"),
+				"kernel/depgraph must not transitively import golang.org/x/tools/; found: %s", imp)
+		}
+	})
 }

@@ -39,6 +39,23 @@ func FromNodes(module string, nodes []*Node) *Graph {
 	return g
 }
 
+// FilterByLayer returns a new Graph containing only the packages whose Layer
+// is in allowedLayers. Stats are recomputed from the retained packages.
+// The original Graph is not modified. Returns an empty Graph if no packages
+// match or if g is nil.
+func (g *Graph) FilterByLayer(allowedLayers map[string]bool) *Graph {
+	if g == nil {
+		return &Graph{Module: "", Packages: []*Node{}, Stats: Stats{}}
+	}
+	var filtered []*Node
+	for _, n := range g.Packages {
+		if allowedLayers[n.Layer] {
+			filtered = append(filtered, n)
+		}
+	}
+	return FromNodes(g.Module, filtered)
+}
+
 // MarkTestOnly tags each node in g TestOnly=true when it is imported by at
 // least one test consumer (testImporters) and no production consumer
 // (prodImporters). Leaf / orphaned packages (absent from both sets) remain

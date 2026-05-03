@@ -619,3 +619,53 @@ func TestDependencyChecker_NilProject(t *testing.T) {
 	results := dc.Check()
 	assert.Empty(t, results, "nil project should produce no findings")
 }
+
+// TestGraph_ActorNodesFiltered verifies that Graph() does not include actor IDs
+// (from actors.yaml) as nodes or edge endpoints. Actors participate in contracts
+// via endpoints.clients but are not cells and must not appear in the cell dep graph.
+func TestGraph_ActorNodesFiltered(t *testing.T) {
+	// Setup: cell-a provides a contract that lists "webclient" (actor) as a client.
+	// Without the filter, "webclient" would be added as a consumerCell node.
+	project := &metadata.ProjectMeta{
+		Cells: map[string]*metadata.CellMeta{
+			"cell-a": {ID: "cell-a", ConsistencyLevel: "L1"},
+		},
+		Slices: map[string]*metadata.SliceMeta{
+			"cell-a/slice-a": {
+				ID:            "slice-a",
+				BelongsToCell: "cell-a",
+				ContractUsages: []metadata.ContractUsage{
+					{Contract: "http.api.v1", Role: "serve"},
+				},
+			},
+		},
+		Contracts: map[string]*metadata.ContractMeta{
+			"http.api.v1": {
+				ID:        "http.api.v1",
+				Kind:      "http",
+				OwnerCell: "cell-a",
+				Endpoints: metadata.EndpointsMeta{
+					Server:  "cell-a",
+					Clients: []string{"webclient"}, // actor, not a cell
+				},
+			},
+		},
+		Assemblies: map[string]*metadata.AssemblyMeta{},
+		Actors:     []metadata.ActorMeta{{ID: "webclient", MaxConsistencyLevel: "L0"}},
+	}
+
+	dc := NewDependencyChecker(project)
+	g, errs := dc.Graph()
+
+	require.Empty(t, errs, "no resolution errors expected")
+
+	// Nodes must only contain cell IDs — actor "webclient" must be absent.
+	for _, n := range g.Nodes {
+		assert.NotEqual(t, "webclient", n, "actor ID must not appear as a graph node")
+	}
+	// Edges must not reference the actor.
+	for _, e := range g.Edges {
+		assert.NotEqual(t, "webclient", e.From, "actor must not appear as edge From")
+		assert.NotEqual(t, "webclient", e.To, "actor must not appear as edge To")
+	}
+}
