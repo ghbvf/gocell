@@ -157,3 +157,37 @@ func shortPath(path string) string {
 	}
 	return parts[len(parts)-2] + "." + parts[len(parts)-1]
 }
+
+// TestExportStructs_NoMapCatchall asserts that none of the export wire structs
+// carry map[string]any or yaml:",inline" fields, preserving the same G-1
+// invariant the metadata structs must uphold. These structs are part of the
+// Document wire format and must remain predictable.
+func TestExportStructs_NoMapCatchall(t *testing.T) {
+	roots := []any{
+		metadata.Document{},
+		metadata.Entity{},
+		metadata.EntityMetadata{},
+		metadata.Relation{},
+		metadata.Dependencies{},
+		metadata.CellDepGraph{},
+		metadata.CellEdge{},
+		metadata.PackageDepsView{},
+		metadata.FilterEcho{},
+		metadata.CellSpec{},
+		metadata.CellSpecOwner{},
+		metadata.CellSpecSchema{},
+		metadata.CellSpecL0Dep{},
+		metadata.SliceSpec{},
+		metadata.SliceSpecContractUsage{},
+		metadata.ContractSpec{},
+		metadata.JourneySpec{},
+		metadata.JourneyPassCrit{},
+		metadata.AssemblySpec{},
+		metadata.AssemblySpecBuild{},
+		metadata.ActorSpec{},
+	}
+	for _, root := range roots {
+		typ := reflect.TypeOf(root)
+		checkStruct(t, typ, typ.Name(), 0, 3)
+	}
+}

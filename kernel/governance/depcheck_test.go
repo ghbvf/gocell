@@ -1,6 +1,8 @@
 package governance
 
 import (
+	"encoding/json"
+	"sort"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -407,6 +409,195 @@ func TestDEP03_CellNotInAnyAssembly(t *testing.T) {
 	assert.Equal(t, SeverityError, dep03[0].Severity)
 	assert.Contains(t, dep03[0].Message, "not assigned to any assembly")
 }
+
+// --- Graph() ---
+
+func TestDependencyChecker_Graph_Empty(t *testing.T) {
+	project := &metadata.ProjectMeta{
+		Cells:      map[string]*metadata.CellMeta{},
+		Slices:     map[string]*metadata.SliceMeta{},
+		Contracts:  map[string]*metadata.ContractMeta{},
+		Assemblies: map[string]*metadata.AssemblyMeta{},
+	}
+	dc := NewDependencyChecker(project)
+	g, errs := dc.Graph()
+	assert.Empty(t, errs)
+	assert.NotNil(t, g.Nodes, "Nodes must not be nil")
+	assert.Empty(t, g.Nodes)
+	assert.Nil(t, g.Edges)
+}
+
+func TestDependencyChecker_Graph_Acyclic(t *testing.T) {
+	// cell-a → cell-b (cell-a depends on cell-b as L0)
+	project := &metadata.ProjectMeta{
+		Cells: map[string]*metadata.CellMeta{
+			"cell-a": {
+				ID:               "cell-a",
+				ConsistencyLevel: "L2",
+				L0Dependencies:   nil,
+			},
+			"cell-b": {
+				ID:               "cell-b",
+				ConsistencyLevel: "L0",
+			},
+		},
+		Slices: map[string]*metadata.SliceMeta{
+			"cell-a/slice-a": {
+				ID:            "slice-a",
+				BelongsToCell: "cell-a",
+				ContractUsages: []metadata.ContractUsage{
+					{Contract: "http.a-calls-b.v1", Role: "call"},
+				},
+			},
+			"cell-b/slice-b": {
+				ID:            "slice-b",
+				BelongsToCell: "cell-b",
+				ContractUsages: []metadata.ContractUsage{
+					{Contract: "http.a-calls-b.v1", Role: "serve"},
+				},
+			},
+		},
+		Contracts: map[string]*metadata.ContractMeta{
+			"http.a-calls-b.v1": {
+				ID:        "http.a-calls-b.v1",
+				Kind:      "http",
+				OwnerCell: "cell-b",
+				Endpoints: metadata.EndpointsMeta{
+					Server:  "cell-b",
+					Clients: []string{"cell-a"},
+				},
+			},
+		},
+		Assemblies: map[string]*metadata.AssemblyMeta{},
+	}
+	dc := NewDependencyChecker(project)
+	g, errs := dc.Graph()
+	assert.Empty(t, errs)
+
+	// Nodes sorted
+	assert.True(t, sort.StringsAreSorted(g.Nodes), "Nodes must be sorted")
+	assert.Contains(t, g.Nodes, "cell-a")
+	assert.Contains(t, g.Nodes, "cell-b")
+
+	// Should have at least one edge (cell-a → cell-b)
+	found := false
+	for _, e := range g.Edges {
+		if e.From == "cell-a" && e.To == "cell-b" {
+			found = true
+		}
+	}
+	assert.True(t, found, "expected edge cell-a → cell-b")
+}
+
+func TestDependencyChecker_Graph_IsolatedCells(t *testing.T) {
+	project := &metadata.ProjectMeta{
+		Cells: map[string]*metadata.CellMeta{
+			"alone": {ID: "alone", ConsistencyLevel: "L1"},
+		},
+		Slices:     map[string]*metadata.SliceMeta{},
+		Contracts:  map[string]*metadata.ContractMeta{},
+		Assemblies: map[string]*metadata.AssemblyMeta{},
+	}
+	dc := NewDependencyChecker(project)
+	g, errs := dc.Graph()
+	assert.Empty(t, errs)
+	assert.Contains(t, g.Nodes, "alone", "isolated cell must appear in Nodes")
+}
+
+func TestDependencyChecker_Graph_DeterministicOrder(t *testing.T) {
+	project := &metadata.ProjectMeta{
+		Cells: map[string]*metadata.CellMeta{
+			"cell-a": {ID: "cell-a", ConsistencyLevel: "L1"},
+			"cell-b": {ID: "cell-b", ConsistencyLevel: "L1"},
+			"cell-c": {ID: "cell-c", ConsistencyLevel: "L1"},
+		},
+		Slices: map[string]*metadata.SliceMeta{
+			"cell-a/slice-a": {
+				ID:            "slice-a",
+				BelongsToCell: "cell-a",
+				ContractUsages: []metadata.ContractUsage{
+					{Contract: "http.a-to-b.v1", Role: "serve"},
+				},
+			},
+			"cell-b/slice-b": {
+				ID:            "slice-b",
+				BelongsToCell: "cell-b",
+				ContractUsages: []metadata.ContractUsage{
+					{Contract: "http.b-to-c.v1", Role: "serve"},
+				},
+			},
+		},
+		Contracts: map[string]*metadata.ContractMeta{
+			"http.a-to-b.v1": {
+				ID:   "http.a-to-b.v1",
+				Kind: "http",
+				Endpoints: metadata.EndpointsMeta{
+					Server:  "cell-a",
+					Clients: []string{"cell-b"},
+				},
+			},
+			"http.b-to-c.v1": {
+				ID:   "http.b-to-c.v1",
+				Kind: "http",
+				Endpoints: metadata.EndpointsMeta{
+					Server:  "cell-b",
+					Clients: []string{"cell-c"},
+				},
+			},
+		},
+		Assemblies: map[string]*metadata.AssemblyMeta{},
+	}
+
+	dc := NewDependencyChecker(project)
+	first, errs := dc.Graph()
+	require.Empty(t, errs)
+
+	firstBytes, err := json.Marshal(first)
+	require.NoError(t, err)
+
+	for i := 0; i < 50; i++ {
+		g, errs := dc.Graph()
+		require.Empty(t, errs)
+		b, err := json.Marshal(g)
+		require.NoError(t, err)
+		assert.Equal(t, string(firstBytes), string(b), "Graph must be byte-equal on iteration %d", i)
+	}
+}
+
+func TestDependencyChecker_Graph_PropagatesValidationErrors(t *testing.T) {
+	// Construct ProjectMeta with a slice using a serve role on a contract that
+	// has an unknown kind — this triggers buildDependencyGraph's error path
+	// (cannot resolve consumers for unknown contract kind).
+	project := &metadata.ProjectMeta{
+		Cells: map[string]*metadata.CellMeta{
+			"cell-x": {ID: "cell-x", ConsistencyLevel: "L2"},
+		},
+		Slices: map[string]*metadata.SliceMeta{
+			"cell-x/slice-x": {
+				ID:            "slice-x",
+				BelongsToCell: "cell-x",
+				ContractUsages: []metadata.ContractUsage{
+					{Contract: "grpc.unknown.v1", Role: "serve"},
+				},
+			},
+		},
+		Contracts: map[string]*metadata.ContractMeta{
+			"grpc.unknown.v1": {
+				ID:   "grpc.unknown.v1",
+				Kind: "grpc", // unknown kind → consumers resolution fails
+				Endpoints: metadata.EndpointsMeta{
+					Server: "cell-x",
+				},
+			},
+		},
+		Assemblies: map[string]*metadata.AssemblyMeta{},
+	}
+	dc := NewDependencyChecker(project)
+	_, errs := dc.Graph()
+	assert.NotEmpty(t, errs, "should propagate validation errors from buildDependencyGraph")
+}
+
+// findByCode returns all results matching the given code (helper shared with existing tests).
 
 // --- empty project ---
 

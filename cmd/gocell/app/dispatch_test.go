@@ -53,7 +53,7 @@ func TestDispatch_Contract(t *testing.T) {
 			name:      "no args prints usage to stdout and returns ExitUsage",
 			args:      []string{},
 			wantExit:  ExitUsage,
-			stdoutSub: []string{"Usage: gocell", "validate", "scaffold"},
+			stdoutSub: []string{"Usage: gocell", "validate", "scaffold", "export"},
 			// Usage itself is not an error condition, so nothing on stderr.
 		},
 		{

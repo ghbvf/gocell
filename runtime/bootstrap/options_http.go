@@ -16,7 +16,9 @@ import (
 	"context"
 	"time"
 
+	"github.com/ghbvf/gocell/kernel/metadata"
 	"github.com/ghbvf/gocell/kernel/wrapper"
+	"github.com/ghbvf/gocell/runtime/http/devtools"
 	"github.com/ghbvf/gocell/runtime/http/middleware"
 	"github.com/ghbvf/gocell/runtime/http/router"
 	"github.com/ghbvf/gocell/runtime/observability/tracing"
@@ -161,6 +163,24 @@ func WithReadyzDeadline(d time.Duration) Option {
 func WithAdapterInfo(info map[string]string) Option {
 	return func(b *Bootstrap) {
 		b.adapterInfo = info
+	}
+}
+
+// WithDevtoolsCatalog enables the GET /api/v1/devtools/catalog endpoint on
+// the primary listener with admin-only gating (auth.AnyRole("admin")).
+//
+// Pass nil pm to leave the endpoint disabled; this allows composition roots
+// to attempt metadata parse and degrade gracefully (no error / no warning
+// from bootstrap layer when parse fails).
+//
+// loadFunc is the package-dep loader closure injected by composition root —
+// kernel/runtime cannot import tools/depgraph (LAYER-03). Typically wraps
+// tools/depgraph.Load.
+func WithDevtoolsCatalog(pm *metadata.ProjectMeta, root string, loadFunc devtools.LoadFunc) Option {
+	return func(b *Bootstrap) {
+		b.devtoolsMeta = pm
+		b.devtoolsRoot = root
+		b.devtoolsLoadFunc = loadFunc
 	}
 }
 

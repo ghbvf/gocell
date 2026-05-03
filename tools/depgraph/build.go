@@ -7,6 +7,8 @@ import (
 	"strings"
 
 	"golang.org/x/tools/go/packages"
+
+	kerneldepgraph "github.com/ghbvf/gocell/kernel/depgraph"
 )
 
 // loadMode is the packages.Load mode required to build a Graph. depgraph
@@ -38,7 +40,7 @@ type LoadOptions struct {
 // Load builds a Graph by running packages.Load against patterns. The
 // module path is auto-detected from the first loaded package's Module
 // field. Callers do not pass a module path.
-func Load(opts LoadOptions, patterns ...string) (*Graph, error) {
+func Load(opts LoadOptions, patterns ...string) (*kerneldepgraph.Graph, error) {
 	cfg := &packages.Config{
 		Mode:  loadMode,
 		Tests: opts.IncludeTests,
@@ -79,47 +81,35 @@ func Load(opts LoadOptions, patterns ...string) (*Graph, error) {
 //
 // Only structural fields (PkgPath, Imports, ID for test-variant filtering)
 // are read; pkgs is not retained after the call returns.
-func FromPackages(module string, pkgs []*packages.Package) *Graph {
-	g := &Graph{
-		Module: module,
-		byID:   make(map[string]*Node, len(pkgs)),
-	}
+func FromPackages(module string, pkgs []*packages.Package) *kerneldepgraph.Graph {
+	nodes := make([]*kerneldepgraph.Node, 0, len(pkgs))
 	for _, p := range pkgs {
 		if p == nil || p.PkgPath == "" {
 			continue
 		}
 		// Skip synthetic test variants (`<pkg>.test` binary, bracketed
 		// `<pkg> [<pkg>.test]` internal-test compile). They are walked
-		// for TestOnly detection in markTestOnly but do not appear as
+		// for TestOnly detection in MarkTestOnly but do not appear as
 		// graph nodes.
 		if isTestVariant(p.ID) {
 			continue
 		}
-		if _, dup := g.byID[p.PkgPath]; dup {
-			continue
-		}
-		n := &Node{
+		n := &kerneldepgraph.Node{
 			ID:      p.PkgPath,
-			Layer:   LayerOf(module, p.PkgPath),
-			CellID:  CellOf(module, p.PkgPath),
-			SliceID: SliceOf(module, p.PkgPath),
+			Layer:   kerneldepgraph.LayerOf(module, p.PkgPath),
+			CellID:  kerneldepgraph.CellOf(module, p.PkgPath),
+			SliceID: kerneldepgraph.SliceOf(module, p.PkgPath),
 		}
 		n.Imports = make([]string, 0, len(p.Imports))
 		for imp := range p.Imports {
 			n.Imports = append(n.Imports, imp)
 		}
 		sort.Strings(n.Imports)
-		g.Packages = append(g.Packages, n)
-		g.byID[p.PkgPath] = n
+		nodes = append(nodes, n)
 	}
-	sort.Slice(g.Packages, func(i, j int) bool { return g.Packages[i].ID < g.Packages[j].ID })
-	g.markTestOnly(pkgs)
-	g.Stats.Packages = len(g.Packages)
-	edges := 0
-	for _, n := range g.Packages {
-		edges += len(n.Imports)
-	}
-	g.Stats.Edges = edges
+	g := kerneldepgraph.FromNodes(module, nodes)
+	prod, test := collectImporters(pkgs)
+	kerneldepgraph.MarkTestOnly(g, prod, test)
 	return g
 }
 
@@ -131,25 +121,6 @@ func detectModule(pkgs []*packages.Package) string {
 		}
 	}
 	return ""
-}
-
-// markTestOnly tags each node TestOnly=true when at least one test
-// variant imports it AND no production package imports it. This isolates
-// helper packages whose sole consumers are *_test.go files. Leaf or
-// orphaned packages (no importers at all) stay TestOnly=false because
-// they are not test-specific — they may be entry points or unused
-// production code.
-//
-// A test variant has an ID containing ".test]" or ending in ".test".
-// When IncludeTests is false, no test variants are loaded and no node is
-// marked TestOnly.
-func (g *Graph) markTestOnly(pkgs []*packages.Package) {
-	prodImports, testImports := collectImporters(pkgs)
-	for _, n := range g.Packages {
-		if !prodImports[n.ID] && testImports[n.ID] {
-			n.TestOnly = true
-		}
-	}
 }
 
 // collectImporters partitions all import edges in pkgs into production-side

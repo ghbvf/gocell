@@ -1,0 +1,6 @@
+id: http.test.v1
+kind: http
+lifecycle: active
+endpoints:
+  server: testcell
+  clients: []

@@ -4,12 +4,12 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ghbvf/gocell/tools/depgraph"
+	"github.com/ghbvf/gocell/kernel/depgraph"
 )
 
 func TestWriteDOT_StructuralAssertions(t *testing.T) {
 	t.Parallel()
-	g := loadSynth(t, false)
+	g := buildSynth(false)
 
 	var sb strings.Builder
 	if err := g.WriteDOT(&sb); err != nil {
@@ -63,7 +63,7 @@ func TestWriteDOT_StructuralAssertions(t *testing.T) {
 
 func TestWriteDOT_Deterministic(t *testing.T) {
 	t.Parallel()
-	g := loadSynth(t, false)
+	g := buildSynth(false)
 	var a, b strings.Builder
 	if err := g.WriteDOT(&a); err != nil {
 		t.Fatalf("WriteDOT first: %v", err)

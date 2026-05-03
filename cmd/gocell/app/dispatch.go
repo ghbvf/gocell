@@ -24,6 +24,7 @@ var commands = map[string]func(args []string) error{
 	"check":    runCheck,
 	"verify":   runVerify,
 	"graph":    runGraph,
+	"export":   runExport,
 }
 
 // Exit codes. Follows the common POSIX convention used by tools like go
@@ -94,6 +95,7 @@ func PrintUsage() {
 	fmt.Println("  verify      Run tests and artifact checks            [--id, --active, --files]")
 	fmt.Println("    generated [--module=<module>]")
 	fmt.Println("  graph       Emit module package dependency graph     [--format, --pattern, --root, --include-tests]")
+	fmt.Println("  export <catalog|metadata>  Export project catalog (entities + dep graphs) as JSON/YAML")
 	fmt.Println()
 	fmt.Println("Run 'gocell <command> -h' for full flag help on a sub-command.")
 }

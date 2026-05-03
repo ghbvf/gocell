@@ -16,13 +16,16 @@ import (
 	"github.com/ghbvf/gocell/kernel/clock"
 	kcrypto "github.com/ghbvf/gocell/kernel/crypto"
 	kernellifecycle "github.com/ghbvf/gocell/kernel/lifecycle"
+	"github.com/ghbvf/gocell/kernel/metadata"
 	"github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/runtime/bootstrap"
 	"github.com/ghbvf/gocell/runtime/crypto"
+	"github.com/ghbvf/gocell/runtime/http/devtools"
 	obmetrics "github.com/ghbvf/gocell/runtime/observability/metrics"
 	outboxruntime "github.com/ghbvf/gocell/runtime/outbox"
+	toolsdepgraph "github.com/ghbvf/gocell/tools/depgraph"
 )
 
 // buildAssembly constructs the runtime Assembly and registers the generated
@@ -167,6 +170,7 @@ func defaultRuntimeOptions(
 	if shared.HealthHTTPAddr != "" {
 		opts = append(opts, bootstrap.WithListener(cell.HealthListener, shared.HealthHTTPAddr, []cell.ListenerAuth{cell.AuthNone{}}))
 	}
+	opts = append(opts, devtoolsOption(shared))
 	return opts
 }
 
@@ -433,6 +437,32 @@ func buildConfigCorePGStorage(
 		return nil, nil, fmt.Errorf("configcore PG repository wiring: %w", err)
 	}
 	return pgRes, storageOpt, nil
+}
+
+// devtoolsOption builds the WithDevtoolsCatalog bootstrap option for the catalog
+// endpoint. Best-effort metadata parse: logs at Warn and degrades gracefully when
+// GOCELL_PROJECT_ROOT is not set or doesn't expose a valid project tree. The endpoint
+// is silently absent when pm is nil — Bootstrap treats nil pm as "disabled".
+func devtoolsOption(shared *SharedDeps) bootstrap.Option {
+	root := shared.ProjectRoot
+	if root == "" {
+		return bootstrap.WithDevtoolsCatalog(nil, "", nil)
+	}
+	pm, err := metadata.NewParser(root).Parse()
+	if err != nil {
+		slog.Warn("devtools: project metadata parse failed; catalog endpoint disabled",
+			slog.String("root", root),
+			slog.Any("error", err))
+		return bootstrap.WithDevtoolsCatalog(nil, "", nil)
+	}
+	loadFunc := func(ctx context.Context, dir string) *metadata.PackageDepsView {
+		g, loadErr := toolsdepgraph.Load(toolsdepgraph.LoadOptions{Dir: dir}, "./...")
+		if loadErr != nil {
+			return &metadata.PackageDepsView{Status: "error", Error: loadErr.Error()}
+		}
+		return &metadata.PackageDepsView{Status: "ready", Graph: g}
+	}
+	return bootstrap.WithDevtoolsCatalog(pm, root, devtools.LoadFunc(loadFunc))
 }
 
 // buildConsumerBase constructs ConsumerBase from the topology-selected

@@ -1,0 +1,58 @@
+schemaVersion: v1
+apiVersion: gocell.io/v1alpha1
+generatedAt: "2026-05-03T12:00:00Z"
+root: /projects/gocell
+query:
+    kinds: []
+    layers: []
+    cells: []
+    include:
+        - cellDeps
+        - packageDeps
+        - relations
+        - statusBoard
+entities:
+    - apiVersion: gocell.io/v1alpha1
+      kind: Cell
+      metadata:
+        name: accesscore
+        uid: cell/accesscore
+      spec:
+        type: core
+        consistencyLevel: L1
+        owner:
+            team: platform
+            role: owner
+        schema:
+            primary: access.schema.json
+        verifySmoke:
+            - smoke.accesscore.login
+    - apiVersion: gocell.io/v1alpha1
+      kind: Contract
+      metadata:
+        name: http.access.login.v1
+        uid: contract/http.access.login.v1
+        file: contracts/http/access/login/v1/contract.yaml
+      spec:
+        kind: http
+        ownerCell: accesscore
+        lifecycle: active
+      relations:
+        - type: ownedBy
+          targetRef: cell/accesscore
+    - apiVersion: gocell.io/v1alpha1
+      kind: Slice
+      metadata:
+        name: sessionlogin
+        uid: slice/sessionlogin
+      spec:
+        belongsToCell: accesscore
+        consistencyLevel: L1
+        contractUsages:
+            - contract: http.access.login.v1
+              role: serve
+      relations:
+        - type: partOf
+          targetRef: cell/accesscore
+        - type: uses
+          targetRef: contract/http.access.login.v1

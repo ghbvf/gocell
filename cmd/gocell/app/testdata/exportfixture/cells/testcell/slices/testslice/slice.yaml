@@ -1,0 +1,11 @@
+id: testslice
+belongsToCell: testcell
+consistencyLevel: L1
+contractUsages:
+  - contract: http.test.v1
+    role: provide
+verify:
+  unit: []
+  contract: []
+allowedFiles:
+  - "*.go"

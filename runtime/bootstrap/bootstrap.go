@@ -23,11 +23,13 @@ import (
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/clock"
 	kernellifecycle "github.com/ghbvf/gocell/kernel/lifecycle"
+	"github.com/ghbvf/gocell/kernel/metadata"
 	kernelmetrics "github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/wrapper"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/runtime/config"
+	"github.com/ghbvf/gocell/runtime/http/devtools"
 	"github.com/ghbvf/gocell/runtime/http/router"
 	metricsmiddleware "github.com/ghbvf/gocell/runtime/observability/metrics"
 	"github.com/ghbvf/gocell/runtime/observability/tracing"
@@ -114,6 +116,12 @@ type Bootstrap struct {
 	httpCollector      metricsmiddleware.Collector
 	shutdownMet        *shutdownMetrics
 	shutdownMetricsErr error
+
+	// --- devtools catalog endpoint (J1 PR-A37) ---
+	// All zero/nil = endpoint not registered.
+	devtoolsMeta     *metadata.ProjectMeta // parsed catalog source
+	devtoolsRoot     string                // displayed in Document.Root
+	devtoolsLoadFunc devtools.LoadFunc     // package-dep loader closure (composition-root injects tools/depgraph.Load)
 
 	// --- runtime guard ---
 	runOnce sync.Once // Run() single-execution guard
@@ -428,9 +436,10 @@ func (b *Bootstrap) Run(ctx context.Context) error {
 	if err := b.phase4WireAuthAndWatcher(s); err != nil {
 		return rollback(err)
 	}
-	if err := b.phase5BuildRouters(s); err != nil {
+	if err := b.phase5BuildRouters(ctx, s); err != nil {
 		return rollback(err)
 	}
+	registerDevtoolsLoaderTeardown(s)
 	if err := b.phase6StartEventRouter(runCtx, s); err != nil {
 		return rollback(err)
 	}
