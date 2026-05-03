@@ -18,7 +18,8 @@ import (
 var validIncludeTokens = []string{"cellDeps", "packageDeps", "relations", "statusBoard"}
 
 // validKinds is the set of accepted --kinds= tokens.
-var validKinds = []string{"Cell", "Slice", "Contract", "Journey", "Assembly", "Actor"}
+// References metadata.AllKinds — single source of truth.
+var validKinds = metadata.AllKinds
 
 // runExport dispatches `export <subcommand>` to its handler. catalog and
 // metadata are byte-equal aliases sharing exportCatalog as the implementation.
@@ -44,7 +45,7 @@ func exportCatalog(args []string) error {
 	kinds := fs.String("kinds", "", "comma-separated entity kinds; empty = all")
 	layers := fs.String("layers", "", "comma-separated layers; empty = all")
 	cellsArg := fs.String("cells", "", "comma-separated cell IDs to focus on (with first-order neighbors); empty = all")
-	root := fs.String("root", "", "project root directory; empty = auto-detect from go.mod")
+	root := fs.String("root", "", "project root directory; empty triggers go.mod auto-detection (walks up from cwd to find nearest go.mod)")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}

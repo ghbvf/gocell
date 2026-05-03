@@ -9,6 +9,12 @@
 // introspection routes, FMT-18 exempt because the spec ID prefix
 // "http.framework.devtools." identifies it as runtime-internal).
 //
+// Wire format note: catalog responses use the Backstage Catalog Entity
+// envelope at top level (apiVersion/kind/metadata/spec). They do NOT wrap
+// in {"data": ...} per api-versioning.md — that envelope rule applies to
+// cell-owned business routes; framework-internal routes (this package +
+// runtime/http/health) follow their own wire formats.
+//
 // Roadmap reference: docs/plans/202605011500-029-master-roadmap.md
 //   - Track J · DevTools Platform (J1 PR-A37 + J2 absorb)
 //

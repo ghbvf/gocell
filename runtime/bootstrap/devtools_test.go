@@ -92,11 +92,12 @@ func TestBuildCellDepGraph_Empty(t *testing.T) {
 		Slices:    map[string]*metadata.SliceMeta{},
 		Contracts: map[string]*metadata.ContractMeta{},
 	}
-	g := buildCellDepGraph(pm)
+	g := buildCellDepGraph(pm, clock.Real())
 
 	require.NotNil(t, g)
 	assert.Empty(t, g.Nodes)
 	assert.Empty(t, g.Edges)
+	assert.NotEmpty(t, g.BuiltAt, "BuiltAt must be stamped")
 }
 
 // TestBuildCellDepGraph_Sorted verifies that multi-cell ProjectMeta produces
@@ -114,12 +115,13 @@ func TestBuildCellDepGraph_Sorted(t *testing.T) {
 		Slices:    map[string]*metadata.SliceMeta{},
 		Contracts: map[string]*metadata.ContractMeta{},
 	}
-	g := buildCellDepGraph(pm)
+	g := buildCellDepGraph(pm, clock.Real())
 
 	require.NotNil(t, g)
 	require.Len(t, g.Nodes, 3)
 	assert.Equal(t, []string{"acell", "mcell", "zcell"}, g.Nodes, "nodes must be sorted alphabetically")
 	assert.Empty(t, g.Edges, "no slices → no edges")
+	assert.NotEmpty(t, g.BuiltAt, "BuiltAt must be stamped")
 }
 
 // TestPhase5CollectRouteGroups_AppendsDevtools verifies that when

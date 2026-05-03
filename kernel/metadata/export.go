@@ -47,6 +47,19 @@ const (
 // `?include=` query parameter is provided.
 const IncludeAll = IncludeRelations | IncludeStatusBoard | IncludeCellDeps | IncludePackageDeps
 
+// AllKinds enumerates the entity kinds BuildDocument can emit. Consumers
+// that need a whitelist (HTTP query validation, CLI flag validation) should
+// reference this slice as the single source of truth.
+var AllKinds = []string{"Actor", "Assembly", "Cell", "Contract", "Journey", "Slice"}
+
+// AllLayers enumerates the layers used by entityLayer + tools/depgraph nodes.
+// Consumers that need a whitelist should reference this slice.
+var AllLayers = []string{
+	"adapters", "cells", "cmd", "examples", "generated",
+	"kernel", "pkg", "root", "runtime", "stdlib", "tests",
+	"thirdparty", "tools", "unknown",
+}
+
 // Filter is the projection applied to a ProjectMeta when building a Document.
 // Empty slices mean "no filter on this dimension" (all entities pass). Cells,
 // when non-empty, switches to focus mode: only the listed cells + their
@@ -144,9 +157,14 @@ type Dependencies struct {
 // CellDepGraph is the cell-level (cell.yaml dependencies field) view. Built by
 // the caller from kernel/governance.DependencyChecker.Graph(). Nodes/Edges
 // sorted deterministically.
+//
+// BuiltAt records when this graph was last constructed (RFC3339 UTC). HTTP
+// clients can use this to detect stale graphs — the field does not change
+// between requests because the graph is built once at bootstrap time.
 type CellDepGraph struct {
-	Nodes []string   `json:"nodes" yaml:"nodes"`
-	Edges []CellEdge `json:"edges" yaml:"edges"`
+	Nodes   []string   `json:"nodes"             yaml:"nodes"`
+	Edges   []CellEdge `json:"edges"             yaml:"edges"`
+	BuiltAt string     `json:"builtAt,omitempty" yaml:"builtAt,omitempty"`
 }
 
 // CellEdge is a directed dependency between two cells.
@@ -540,20 +558,10 @@ func applyFilter(entities []Entity, filter Filter) []Entity {
 		return entities
 	}
 
-	kindSet := make(map[string]bool, len(filter.Kinds))
-	for _, k := range filter.Kinds {
-		kindSet[k] = true
-	}
-
-	layerSet := make(map[string]bool, len(filter.Layers))
-	for _, l := range filter.Layers {
-		layerSet[l] = true
-	}
-
-	cellSet := make(map[string]bool, len(filter.Cells))
-	for _, c := range filter.Cells {
-		cellSet[c] = true
-	}
+	kindSet := toStringSet(filter.Kinds)
+	layerSet := toStringSet(filter.Layers)
+	cellSet := toStringSet(filter.Cells)
+	consumedContracts := buildConsumedContracts(entities, cellSet)
 
 	var out []Entity
 	for _, e := range entities {
@@ -563,7 +571,7 @@ func applyFilter(entities []Entity, filter Filter) []Entity {
 		if len(layerSet) > 0 && !layerSet[entityLayer(e.Kind)] {
 			continue
 		}
-		if len(cellSet) > 0 && !cellFocusMatch(e, cellSet) {
+		if len(cellSet) > 0 && !cellFocusMatch(e, cellSet, consumedContracts) {
 			continue
 		}
 		out = append(out, e)
@@ -571,9 +579,48 @@ func applyFilter(entities []Entity, filter Filter) []Entity {
 	return out
 }
 
-// cellFocusMatch returns true if the entity is the focus cell itself,
-// one of its slices (partOf relation), or a contract it owns (ownedBy relation).
-func cellFocusMatch(e Entity, cellSet map[string]bool) bool {
+// toStringSet converts a slice of strings to a map[string]bool for O(1) lookup.
+func toStringSet(vals []string) map[string]bool {
+	if len(vals) == 0 {
+		return nil
+	}
+	m := make(map[string]bool, len(vals))
+	for _, v := range vals {
+		m[v] = true
+	}
+	return m
+}
+
+// buildConsumedContracts scans slice entities and returns the set of contract
+// IDs referenced via contractUsages by slices belonging to any cell in cellSet.
+func buildConsumedContracts(entities []Entity, cellSet map[string]bool) map[string]bool {
+	if len(cellSet) == 0 {
+		return nil
+	}
+	consumed := make(map[string]bool)
+	for _, e := range entities {
+		if e.Kind != "Slice" {
+			continue
+		}
+		spec, ok := e.Spec.(SliceSpec)
+		if !ok || !cellSet[spec.BelongsToCell] {
+			continue
+		}
+		for _, u := range spec.ContractUsages {
+			consumed[u.Contract] = true
+		}
+	}
+	return consumed
+}
+
+// cellFocusMatch returns true if the entity should be included when filtering
+// by cell focus. An entity passes when:
+//   - Kind==Cell and the cell is in cellSet
+//   - Kind==Slice and its BelongsToCell is in cellSet
+//   - Kind==Contract and its OwnerCell is in cellSet, OR any focus-cell slice
+//     references it via contractUsages (consumer-side match, pre-computed in
+//     consumedContracts by applyFilter)
+func cellFocusMatch(e Entity, cellSet map[string]bool, consumedContracts map[string]bool) bool {
 	if e.Kind == "Cell" && cellSet[e.Metadata.Name] {
 		return true
 	}
@@ -588,12 +635,9 @@ func cellFocusMatch(e Entity, cellSet map[string]bool) bool {
 		if ok && cellSet[spec.OwnerCell] {
 			return true
 		}
-		// also include contracts where the focus cell is a consumer
-		for _, r := range e.Relations {
-			if r.Type == "ownedBy" {
-				// already handled above
-				continue
-			}
+		// Also include contracts consumed by any focus-cell slice.
+		if consumedContracts[e.Metadata.Name] {
+			return true
 		}
 	}
 	return false

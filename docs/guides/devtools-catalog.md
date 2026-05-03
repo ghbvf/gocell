@@ -28,7 +28,7 @@ Wire schema 借鉴 [Backstage Catalog Entity model](https://backstage.io/docs/fe
 | `--include` | 逗号列表 | `cellDeps,packageDeps,statusBoard,relations`（全开） | 可选输出块，值：`cellDeps,packageDeps,statusBoard,relations` |
 | `--format` | `json\|yaml` | `json` | 输出格式 |
 | `--out` | 文件路径 | `""`（stdout） | 输出文件路径；空则写 stdout |
-| `--root` | 目录路径 | `"."` | GoCell 项目根目录（含 cells/、contracts/、journeys/ 等） |
+| `--root` | 目录路径 | `""`（触发 go.mod 自动探测，向上找最近 go.mod 所在目录） | GoCell 项目根目录（含 cells/、contracts/、journeys/ 等） |
 
 ### 示例
 
@@ -100,7 +100,6 @@ GET /api/v1/devtools/catalog
 | `cells` | 逗号列表 | `""` | 同 CLI `--cells` |
 | `include` | 逗号列表 | `cellDeps,packageDeps,statusBoard,relations` | 同 CLI `--include` |
 | `format` | `json\|yaml` | `json` | 响应格式；yaml 时 Content-Type: application/yaml |
-| `wait` | `true\|false` | `false` | 若 `packageDeps` 正在加载中，`wait=true` 返回 503 + Retry-After；`false` 返回 200 含 `status: "loading"` |
 
 ### curl 示例
 
@@ -158,7 +157,7 @@ bootstrap 启动
 
 | `status` 值 | 含义 | 行为 |
 |-------------|------|------|
-| `"loading"` | 包图尚未就绪 | 返回 200，`dependencies.packages: {"status": "loading"}`；加 `?wait=true` 改返 503 + `Retry-After: 5` |
+| `"loading"` | 包图尚未就绪 | 返回 200，`dependencies.packages: {"status": "loading"}`；前端可自行 poll 直到 `status` 变为 `"ready"` |
 | `"ready"` | 包图已就绪 | 返回 200，`dependencies.packages.graph` 含完整图数据 |
 | `"error"` | 包图加载失败 | 返回 200，`dependencies.packages: {"status": "error", "error": "..."}`；其余块（entities/cellDeps/statusBoard）正常返回，不受影响 |
 
@@ -256,6 +255,12 @@ const catalog: CatalogDocument = await resp.json();
 ---
 
 ## 工程注意
+
+### Wire Envelope 豁免（不套 `{"data": ...}`）
+
+`devtools/catalog` 与 `/healthz`、`/readyz` 一样属 **framework-internal admin endpoint**，wire 形态直接返回 Backstage Catalog Entity envelope（`apiVersion/kind/metadata/spec` 顶层结构），**不套 `{"data": ...}`**。
+
+业务 API 强制的 `{"data": ...}` envelope（参见 `.claude/rules/gocell/api-versioning.md`）仅适用于 cell-owned routes；runtime 内部治理路由（本端点 + `/healthz` `/readyz` `/metrics`）遵循各自的 wire 格式。
 
 ### bootstrap-wired（无 contract.yaml）
 

@@ -25,6 +25,12 @@ const roleAdmin = "admin"
 // specCatalog is the framework-internal ContractSpec for the devtools catalog
 // endpoint. The "http.framework.devtools." prefix exempts it from FMT-18
 // contract-yaml presence validation because it lives in runtime/, not cells/.
+//
+// Note: catalog responses use the Backstage Catalog Entity envelope at top
+// level (apiVersion/kind/metadata/spec). They do NOT wrap in {"data": ...}
+// per api-versioning.md — that envelope rule applies to cell-owned business
+// routes; framework-internal routes (this + /healthz /readyz /metrics) follow
+// their own wire formats.
 var specCatalog = wrapper.ContractSpec{
 	ID:        "http.framework.devtools.catalog.v1",
 	Kind:      "http",
@@ -34,31 +40,20 @@ var specCatalog = wrapper.ContractSpec{
 }
 
 // validKinds is the whitelist for the ?kinds= query parameter.
-var validKinds = map[string]bool{
-	"Cell":     true,
-	"Slice":    true,
-	"Contract": true,
-	"Journey":  true,
-	"Assembly": true,
-	"Actor":    true,
-}
+// Derived from metadata.AllKinds — single source of truth.
+var validKinds = sliceToSet(metadata.AllKinds)
 
 // validLayers is the whitelist for the ?layers= query parameter.
-var validLayers = map[string]bool{
-	"cells":      true,
-	"kernel":     true,
-	"runtime":    true,
-	"adapters":   true,
-	"pkg":        true,
-	"cmd":        true,
-	"examples":   true,
-	"tools":      true,
-	"tests":      true,
-	"generated":  true,
-	"root":       true,
-	"stdlib":     true,
-	"thirdparty": true,
-	"unknown":    true,
+// Derived from metadata.AllLayers — single source of truth.
+var validLayers = sliceToSet(metadata.AllLayers)
+
+// sliceToSet converts a string slice to a map[string]bool for O(1) lookup.
+func sliceToSet(vals []string) map[string]bool {
+	m := make(map[string]bool, len(vals))
+	for _, v := range vals {
+		m[v] = true
+	}
+	return m
 }
 
 // Handler serves the devtools catalog HTTP endpoint.
@@ -71,7 +66,7 @@ type Handler struct {
 }
 
 // NewHandler constructs a Handler. cellGraph may be nil (omits cell dep graph).
-// pkgLoader must be non-nil.
+// pkgLoader may be nil; when nil the package-deps block is omitted from output.
 func NewHandler(
 	project *metadata.ProjectMeta,
 	cellGraph *metadata.CellDepGraph,
@@ -93,12 +88,11 @@ func RouteGroup(h *Handler) cell.RouteGroup {
 	return cell.RouteGroup{
 		Listener: cell.PrimaryListener,
 		Register: func(mux cell.RouteMux) error {
-			auth.MustMount(mux, auth.Route{
+			return auth.Mount(mux, auth.Route{
 				Contract: specCatalog,
 				Handler:  http.HandlerFunc(h.ServeHTTP),
 				Policy:   auth.AnyRole(roleAdmin),
 			})
-			return nil
 		},
 	}
 }
@@ -106,13 +100,6 @@ func RouteGroup(h *Handler) cell.RouteGroup {
 // ServeHTTP handles GET /api/v1/devtools/catalog.
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-
-	// Enforce admin policy.
-	if err := auth.AnyRole(roleAdmin)(r); err != nil {
-		httputil.WritePublicError(ctx, w, http.StatusForbidden,
-			string(errcode.ErrAuthForbidden), "access denied")
-		return
-	}
 
 	// Parse and validate query parameters.
 	filter, format, ok := parseQuery(ctx, w, r)
@@ -164,7 +151,7 @@ func buildExportOptions(h *Handler, filter metadata.Filter) metadata.ExportOptio
 	if filter.Include&metadata.IncludeCellDeps != 0 {
 		opts.CellDeps = h.cellGraph
 	}
-	if filter.Include&metadata.IncludePackageDeps != 0 {
+	if filter.Include&metadata.IncludePackageDeps != 0 && h.pkgLoader != nil {
 		opts.Packages = h.pkgLoader.View()
 	}
 	return opts

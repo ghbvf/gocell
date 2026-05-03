@@ -257,6 +257,51 @@ func TestBuildDocument_FilterCellsFocus(t *testing.T) {
 	}
 }
 
+// ---- TestBuildDocument_FilterCellsFocus_ConsumerContracts ----
+
+// TestBuildDocument_FilterCellsFocus_ConsumerContracts verifies that when a
+// focus cell does NOT own a contract but consumes it via contractUsages, the
+// contract is still included in the filtered output (consumer-side match).
+func TestBuildDocument_FilterCellsFocus_ConsumerContracts(t *testing.T) {
+	// Build a ProjectMeta where:
+	//   - accesscore does NOT own event.audit.entry.v1 (owned by auditcore)
+	//   - but accesscore.sessionlogin subscribes to it via contractUsages
+	pm := fullPM()
+	// Add a contractUsage on the existing sessionlogin slice to subscribe to
+	// event.audit.entry.v1 (which is owned by auditcore, not accesscore).
+	pm.Slices["accesscore/sessionlogin"].ContractUsages = append(
+		pm.Slices["accesscore/sessionlogin"].ContractUsages,
+		metadata.ContractUsage{Contract: "event.audit.entry.v1", Role: "subscribe"},
+	)
+
+	opts := baseOpts()
+	opts.Filter.Cells = []string{"accesscore"}
+	doc, err := metadata.BuildDocument(pm, opts)
+	require.NoError(t, err)
+
+	names := make([]string, 0, len(doc.Entities))
+	for _, e := range doc.Entities {
+		names = append(names, e.Kind+"/"+e.Metadata.Name)
+	}
+
+	// accesscore is the focus cell — must be present.
+	assert.Contains(t, names, "Cell/accesscore")
+	// sessionlogin belongs to accesscore — must be present.
+	assert.Contains(t, names, "Slice/sessionlogin")
+	// http.access.login.v1 is owned by accesscore — must be present.
+	assert.Contains(t, names, "Contract/http.access.login.v1")
+	// event.audit.entry.v1 is owned by auditcore but consumed by accesscore —
+	// consumer-side match must include it.
+	assert.Contains(t, names, "Contract/event.audit.entry.v1",
+		"contract consumed by focus cell must appear even when owned by another cell")
+
+	// auditcore cell itself should NOT appear (it's not a direct neighbor in cell-graph terms).
+	for _, n := range names {
+		assert.NotEqual(t, "Cell/auditcore", n,
+			"auditcore cell itself should not appear when focusing on accesscore")
+	}
+}
+
 // ---- TestBuildDocument_IncludeMask ----
 
 func TestBuildDocument_IncludeMask(t *testing.T) {

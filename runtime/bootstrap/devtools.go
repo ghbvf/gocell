@@ -11,7 +11,9 @@ import (
 	"context"
 	"log/slog"
 	"sort"
+	"time"
 
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/governance"
 	"github.com/ghbvf/gocell/kernel/metadata"
 	"github.com/ghbvf/gocell/runtime/http/devtools"
@@ -42,7 +44,7 @@ func (b *Bootstrap) phase5InitDevtoolsHandler(ctx context.Context, s *phaseState
 	if b.devtoolsMeta == nil {
 		return nil
 	}
-	cellGraph := buildCellDepGraph(b.devtoolsMeta)
+	cellGraph := buildCellDepGraph(b.devtoolsMeta, b.clock)
 	var loader *devtools.PackageDepLoader
 	if b.devtoolsLoadFunc != nil {
 		loader = devtools.NewPackageDepLoader(ctx, b.devtoolsRoot, b.clock, b.devtoolsLoadFunc)
@@ -55,7 +57,8 @@ func (b *Bootstrap) phase5InitDevtoolsHandler(ctx context.Context, s *phaseState
 // buildCellDepGraph runs governance.DependencyChecker.Graph() and converts to
 // kernel/metadata.CellDepGraph. Validation errors (cycles etc.) are logged at
 // Warn but do not block bootstrap — endpoint surfaces "best-effort" graph.
-func buildCellDepGraph(pm *metadata.ProjectMeta) *metadata.CellDepGraph {
+// BuiltAt is stamped from clk so operators can see how stale the graph is.
+func buildCellDepGraph(pm *metadata.ProjectMeta, clk clock.Clock) *metadata.CellDepGraph {
 	dc := governance.NewDependencyChecker(pm)
 	g, errs := dc.Graph()
 	if len(errs) > 0 {
@@ -63,8 +66,9 @@ func buildCellDepGraph(pm *metadata.ProjectMeta) *metadata.CellDepGraph {
 			slog.Int("error_count", len(errs)))
 	}
 	out := &metadata.CellDepGraph{
-		Nodes: append([]string(nil), g.Nodes...),
-		Edges: make([]metadata.CellEdge, 0, len(g.Edges)),
+		Nodes:   append([]string(nil), g.Nodes...),
+		Edges:   make([]metadata.CellEdge, 0, len(g.Edges)),
+		BuiltAt: clk.Now().UTC().Format(time.RFC3339),
 	}
 	sort.Strings(out.Nodes)
 	for _, e := range g.Edges {
