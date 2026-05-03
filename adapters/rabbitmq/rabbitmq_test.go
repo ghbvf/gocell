@@ -2469,7 +2469,9 @@ func TestConsumerBase_AsMiddleware_LogsRestoredContext(t *testing.T) {
 		receipt: receipt,
 	}}}
 
-	cb, cbErr := outbox.NewConsumerBase(claimer, outbox.ConsumerBaseConfig{}, clock.Real())
+	cb, cbErr := outbox.NewConsumerBase(claimer, outbox.ConsumerBaseConfig{
+		RetryBaseDelay: testtime.D10ms,
+	}, clock.Real())
 	require.NoError(t, cbErr)
 
 	var capturedHandler outbox.EntryHandler

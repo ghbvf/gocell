@@ -310,9 +310,9 @@ func (cb *ConsumerBase) Wrap(sub Subscription, handler EntryHandler) EntryHandle
 					slog.String(logKeyTopic, topic),
 					slog.String(logKeyConsumerGroup, consumerGroup),
 					slog.Any("error", err))
-				return cb.retryLoop(ctx, topic, entry, handler, nil)
+				return cb.retryLoop(ctx, consumerGroup, topic, entry, handler, nil)
 			}
-			return cb.handleClaimState(ctx, topic, entry, handler, state, receipt)
+			return cb.handleClaimState(ctx, consumerGroup, topic, entry, handler, state, receipt)
 		}
 
 		// Fail-closed: claimWithRetry handles all attempts with backoff + jitter.
@@ -326,7 +326,7 @@ func (cb *ConsumerBase) Wrap(sub Subscription, handler EntryHandler) EntryHandle
 				slog.Any("error", err))
 			return HandleResult{Disposition: DispositionRequeue, Err: err}
 		}
-		return cb.handleClaimState(ctx, topic, entry, handler, state, receipt)
+		return cb.handleClaimState(ctx, consumerGroup, topic, entry, handler, state, receipt)
 	}
 }
 
@@ -398,6 +398,7 @@ func (cb *ConsumerBase) claimWithRetry(
 // fail-closed paths share the same ClaimDone / ClaimBusy / ClaimAcquired logic.
 func (cb *ConsumerBase) handleClaimState(
 	ctx context.Context,
+	consumerGroup string,
 	topic string,
 	entry Entry,
 	handler EntryHandler,
@@ -426,7 +427,7 @@ func (cb *ConsumerBase) handleClaimState(
 		return HandleResult{Disposition: DispositionRequeue}
 	default:
 		// ClaimAcquired -- start lease-renewal goroutine before invoking handler.
-		return cb.runWithRenewal(ctx, topic, entry, handler, receipt)
+		return cb.runWithRenewal(ctx, consumerGroup, topic, entry, handler, receipt)
 	}
 }
 
@@ -480,6 +481,7 @@ func (cb *ConsumerBase) waitBackoff(ctx context.Context, topic string, entry Ent
 // to Commit/Release after broker Ack/Nack.
 func (cb *ConsumerBase) retryLoop(
 	ctx context.Context,
+	consumerGroup string,
 	topic string,
 	entry Entry,
 	handler EntryHandler,
@@ -497,9 +499,10 @@ func (cb *ConsumerBase) retryLoop(
 		}
 
 		if isPermanentRejection(lastResult) {
-			logWithContext(ctx, slog.LevelWarn, "outbox: permanent error, rejecting to DLX",
+			logWithContext(ctx, slog.LevelError, "outbox: handler rejected entry, routing to DLX",
 				slog.String(logKeyEventID, entry.ID),
 				slog.String(logKeyTopic, topic),
+				slog.String(logKeyConsumerGroup, consumerGroup),
 				slog.Any("error", lastResult.Err))
 			return HandleResult{
 				Disposition:   DispositionReject,
@@ -526,9 +529,10 @@ func (cb *ConsumerBase) retryLoop(
 	}
 
 	// Exhausted all retries -- reject so broker routes to DLX.
-	logWithContext(ctx, slog.LevelError, "outbox: retry budget exhausted, rejecting to DLX",
+	logWithContext(ctx, slog.LevelWarn, "outbox: retry budget exhausted, rejecting to DLX",
 		slog.String(logKeyEventID, entry.ID),
 		slog.String(logKeyTopic, topic),
+		slog.String(logKeyConsumerGroup, consumerGroup),
 		slog.Int("retry_count", cb.config.RetryCount),
 		slog.Any("error", lastResult.Err))
 	return HandleResult{
@@ -556,6 +560,7 @@ func (cb *ConsumerBase) retryLoop(
 // Cognitive complexity is kept ≤15 by delegating the ticker loop to leaseRenewalLoop.
 func (cb *ConsumerBase) runWithRenewal(
 	ctx context.Context,
+	consumerGroup string,
 	topic string,
 	entry Entry,
 	handler EntryHandler,
@@ -564,7 +569,7 @@ func (cb *ConsumerBase) runWithRenewal(
 	interval := cb.config.LeaseRenewalInterval
 	// Skip renewal when disabled (negative) or receipt is nil.
 	if interval <= 0 || receipt == nil {
-		return cb.retryLoop(ctx, topic, entry, handler, receipt)
+		return cb.retryLoop(ctx, consumerGroup, topic, entry, handler, receipt)
 	}
 
 	var leaseLost atomic.Bool
@@ -581,7 +586,7 @@ func (cb *ConsumerBase) runWithRenewal(
 		})
 	}()
 
-	result := cb.retryLoop(renewCtx, topic, entry, handler, receipt)
+	result := cb.retryLoop(renewCtx, consumerGroup, topic, entry, handler, receipt)
 
 	// Signal the renewal goroutine to stop and wait for it.
 	cancelRenew()

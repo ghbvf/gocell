@@ -109,7 +109,6 @@ func NewService(
 	return s, nil
 }
 
-
 // HandleEvent processes an incoming event by appending it to the hash chain.
 //
 // Consumer: cg-auditcore-audit-append
