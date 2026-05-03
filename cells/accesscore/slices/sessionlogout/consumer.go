@@ -45,7 +45,7 @@ func NewConsumer(repo ports.SessionRepository, logger *slog.Logger) *Consumer {
 }
 
 // HandleRoleChanged is a LegacyHandler (func(context.Context, outbox.Entry) error).
-// Compose with outbox.WrapLegacyHandler to obtain an EntryHandler for cell.EventRouter.
+// Compose with outbox.WrapLegacyHandler to obtain an EntryHandler for reg.Subscribe.
 //
 // Behavior:
 //   - Unmarshal failure → PermanentError (message routed to DLX, no retry).

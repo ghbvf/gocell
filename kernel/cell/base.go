@@ -88,7 +88,7 @@ func (b *BaseCell) ConsumedContracts() []Contract {
 }
 
 // Init prepares the cell. Only allowed from the new or stopped state.
-func (b *BaseCell) Init(_ context.Context, _ Dependencies) error {
+func (b *BaseCell) Init(_ context.Context, _ Registry) error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if b.state != cellStateNew && b.state != cellStateStopped {

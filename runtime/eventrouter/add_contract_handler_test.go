@@ -94,7 +94,7 @@ func okHandler() outbox.EntryHandler {
 func TestAddContractHandler_NilHandler_ReturnsError(t *testing.T) {
 	t.Parallel()
 	r := New(&blockingSubscriber{}, clock.Real())
-	err := r.AddContractHandler(configEntryUpsertedSpec(), nil, "accesscore")
+	err := r.AddContractHandler(configEntryUpsertedSpec(), nil, "accesscore", "accesscore")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "nil handler")
 }
@@ -102,7 +102,7 @@ func TestAddContractHandler_NilHandler_ReturnsError(t *testing.T) {
 func TestAddContractHandler_EmptyConsumerGroup_ReturnsError(t *testing.T) {
 	t.Parallel()
 	r := New(&blockingSubscriber{}, clock.Real())
-	err := r.AddContractHandler(configEntryUpsertedSpec(), okHandler(), "")
+	err := r.AddContractHandler(configEntryUpsertedSpec(), okHandler(), "", "test")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "empty consumerGroup")
 }
@@ -115,7 +115,7 @@ func TestAddContractHandler_NonEventSpec_ReturnsError(t *testing.T) {
 		Method: "POST", Path: "/x",
 	}
 	r := New(&blockingSubscriber{}, clock.Real())
-	err := r.AddContractHandler(httpSpec, okHandler(), "mycell")
+	err := r.AddContractHandler(httpSpec, okHandler(), "mycell", "mycell")
 	require.Error(t, err)
 }
 
@@ -124,7 +124,7 @@ func TestAddContractHandler_NonEventSpec_ReturnsError(t *testing.T) {
 func TestAddContractHandler_RegistersBusinessHandler(t *testing.T) {
 	t.Parallel()
 	r := New(&blockingSubscriber{}, clock.Real())
-	require.NoError(t, r.AddContractHandler(configEntryUpsertedSpec(), okHandler(), "accesscore"))
+	require.NoError(t, r.AddContractHandler(configEntryUpsertedSpec(), okHandler(), "accesscore", "accesscore"))
 	assert.Equal(t, 1, r.HandlerCount())
 
 	// Router stores the business handler; bootstrap-owned middleware wraps it.
@@ -141,7 +141,7 @@ func TestContractTracingMiddleware_WrapsWithContractSpan(t *testing.T) {
 	require.NoError(t, r.AddContractHandler(configEntryUpsertedSpec(), func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
 		inner = true
 		return outbox.HandleResult{Disposition: outbox.DispositionAck}
-	}, "accesscore"))
+	}, "accesscore", "accesscore"))
 	require.Equal(t, 1, r.HandlerCount())
 
 	// Drive one entry through the middleware position used by bootstrap:
@@ -230,7 +230,7 @@ func TestAddContractHandler_MultipleRegistrations_HandlersGrow(t *testing.T) {
 	for i := range 3 {
 		spec := configEntryUpsertedSpec()
 		spec.Topic = spec.Topic + "." + string(rune('a'+i))
-		require.NoError(t, r.AddContractHandler(spec, okHandler(), "accesscore"))
+		require.NoError(t, r.AddContractHandler(spec, okHandler(), "accesscore", "accesscore"))
 	}
 	assert.Equal(t, 3, r.HandlerCount())
 }
@@ -241,10 +241,34 @@ func TestAddContractHandler_MultipleRegistrations_HandlersGrow(t *testing.T) {
 func TestAddContractHandler_HandlerConfigShape(t *testing.T) {
 	t.Parallel()
 	r := New(&blockingSubscriber{}, clock.Real())
-	require.NoError(t, r.AddContractHandler(configEntryUpsertedSpec(), okHandler(), "accesscore"))
+	require.NoError(t, r.AddContractHandler(configEntryUpsertedSpec(), okHandler(), "accesscore", "accesscore"))
 	require.Equal(t, 1, len(r.handlers))
 	cfg := r.handlers[0]
 	assert.Equal(t, "event.config.entry-upserted.v1", cfg.topic, "topic derived from spec.Topic")
 	assert.Equal(t, "accesscore", cfg.consumerGroup, "consumerGroup preserved")
 	assert.NotNil(t, cfg.handler, "handler stored")
+}
+
+// TestAddContractHandler_OwnerCellIDDistinctFromConsumerGroup verifies that
+// when ownerCellID differs from consumerGroup, Subscription.CellID takes the
+// ownerCellID value (not consumerGroup).
+//
+// Concrete scenario: accesscore RBAC sync uses
+//
+//	consumerGroup = "accesscore-rbac-session-sync"
+//	ownerCellID   = "accesscore"
+//
+// The Subscription.CellID must be "accesscore" for correct observability labels.
+//
+// ref: ThreeDotsLabs/watermill router.AddHandler handlerName / NATS subscription metadata.
+func TestAddContractHandler_OwnerCellIDDistinctFromConsumerGroup(t *testing.T) {
+	t.Parallel()
+	r := New(&blockingSubscriber{}, clock.Real())
+	const consumerGroup = "accesscore-rbac-session-sync"
+	const ownerCellID = "accesscore"
+	require.NoError(t, r.AddContractHandler(configEntryUpsertedSpec(), okHandler(), consumerGroup, ownerCellID))
+	require.Equal(t, 1, len(r.handlers))
+	sub := r.handlers[0].subscription()
+	assert.Equal(t, consumerGroup, sub.ConsumerGroup, "ConsumerGroup must be preserved as-is")
+	assert.Equal(t, ownerCellID, sub.CellID, "CellID must be ownerCellID, not consumerGroup")
 }

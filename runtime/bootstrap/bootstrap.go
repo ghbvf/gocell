@@ -40,9 +40,9 @@ type Option func(*Bootstrap)
 
 // readyz probe names; consumed by phases_assembly.go / bootstrap_phases.go.
 const (
-	configWatcherCheckerName = "config-watcher"
-	configDriftCheckerName   = "config-drift"
-	eventRouterCheckerName   = "eventrouter"
+	configWatcherCheckerName = "config_watcher"
+	configDriftCheckerName   = "config_drift"
+	eventRouterCheckerName   = "event_router"
 )
 
 // Bootstrap orchestrates the GoCell application lifecycle.
@@ -411,7 +411,7 @@ func (b *Bootstrap) Run(ctx context.Context) error {
 	if err := b.phase3InitAssembly(ctx, s); err != nil {
 		return rollback(err)
 	}
-	if err := b.phase3bDiscoverLifecycleContributor(s); err != nil {
+	if err := b.phase3bDrainLifecycleHooks(s); err != nil {
 		return rollback(err)
 	}
 	// Lifecycle Start — fail-fast; LIFO rollback is handled by Lifecycle itself.

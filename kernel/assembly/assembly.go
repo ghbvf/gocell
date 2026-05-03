@@ -47,6 +47,16 @@ const (
 // GoCell picks 30s as midpoint — cell lifecycle is closer to k8s scope.
 const DefaultHookTimeout = 30 * time.Second
 
+// DefaultReloadTimeout is the per-invocation deadline applied to each
+// OnConfigReload callback when Config.ReloadTimeout is zero. Deliberately the
+// same value as DefaultHookTimeout so reload callbacks share the same timeout
+// budget as lifecycle hooks — but named independently to avoid semantic
+// confusion between lifecycle hooks and config-reload callbacks.
+//
+// ref: etcd clientv3 Watch ctx propagation — watchers propagate the caller's ctx.
+// ref: k8s SharedInformer ctx propagation — informer callbacks carry caller ctx.
+const DefaultReloadTimeout = DefaultHookTimeout
+
 // Config holds assembly-level configuration.
 type Config struct {
 	ID             string
@@ -97,6 +107,19 @@ type Config struct {
 	// zero-dependency default. Wire a real provider to make dropped events
 	// visible in dashboards.
 	MetricsProvider metrics.Provider
+
+	// ReloadTimeout bounds each OnConfigReload callback invocation. Zero uses
+	// DefaultReloadTimeout. Negative disables the per-invocation timeout
+	// (callbacks inherit the parent ctx's deadline only).
+	//
+	// Semantics mirror HookTimeout: soft-cancel — the ctx passed to the
+	// callback is canceled when the deadline fires, but the callback goroutine
+	// continues until it observes ctx. A well-behaved callback should return
+	// promptly when ctx.Done() closes.
+	//
+	// ref: etcd clientv3 Watch — watchers propagate the caller's ctx.
+	// ref: k8s SharedInformer — informer callbacks carry a bounded ctx.
+	ReloadTimeout time.Duration
 }
 
 // CoreAssembly is the default Assembly implementation. It manages a set of
@@ -108,7 +131,8 @@ type CoreAssembly struct {
 	cells      []cell.Cell
 	cellMap    map[string]cell.Cell
 	state      assemblyState
-	dispatcher *hookDispatcher // owned; lifecycle tied to New/Stop
+	dispatcher *hookDispatcher                  // owned; lifecycle tied to New/Stop
+	snapshots  map[string]cell.RegistrySnapshot // keyed by cell ID; populated during startInternal
 }
 
 // New creates a CoreAssembly with the given configuration.
@@ -136,6 +160,9 @@ func New(cfg Config) *CoreAssembly {
 	if cfg.HookTimeout == 0 {
 		cfg.HookTimeout = DefaultHookTimeout
 	}
+	if cfg.ReloadTimeout == 0 {
+		cfg.ReloadTimeout = DefaultReloadTimeout
+	}
 	// Eagerly construct the async dispatcher at New() time (not lazy on first
 	// emit) so its lifetime is deterministic: callers that construct an
 	// assembly and never Start it can still call Stop to drain cleanly, and
@@ -151,6 +178,7 @@ func New(cfg Config) *CoreAssembly {
 		id:         cfg.ID,
 		cfg:        cfg,
 		cellMap:    make(map[string]cell.Cell),
+		snapshots:  make(map[string]cell.RegistrySnapshot),
 		dispatcher: dispatcher,
 	}
 }
@@ -217,6 +245,11 @@ func (a *CoreAssembly) Stop(ctx context.Context) error {
 
 	a.mu.Lock()
 	a.state = stateStopped
+	// Clear the remaining snapshot entries after all cells have stopped.
+	// stopCellWithHooks deletes each cell's entry individually; this final
+	// reset covers any entries that may have been added concurrently or
+	// missed due to rollback paths.
+	a.snapshots = make(map[string]cell.RegistrySnapshot)
 	a.mu.Unlock()
 
 	// Drain the async hook dispatcher after all cells have reported their
@@ -286,6 +319,11 @@ func (a *CoreAssembly) stopCellWithHooks(ctx context.Context, c cell.Cell) []err
 				fmt.Sprintf("assembly: AfterStop cell %q", c.ID()), err))
 		}
 	}
+	// Remove the stopped cell's snapshot so Snapshots() never returns stale
+	// data for cells that are no longer running.
+	a.mu.Lock()
+	delete(a.snapshots, c.ID())
+	a.mu.Unlock()
 	return errs
 }
 
@@ -335,21 +373,26 @@ func (a *CoreAssembly) startInternal(ctx context.Context, cfgMap map[string]any)
 			fmt.Sprintf("assembly %q", a.id), err)
 	}
 
-	deps := cell.Dependencies{
-		Config:         cfgMap,
-		DurabilityMode: a.cfg.DurabilityMode,
-		Clock:          a.cfg.Clock,
-	}
-
-	// Phase 1: Init all cells. If any fails, no cell has been Start'd yet.
+	// Phase 1: Init all cells via per-cell RegistryRecorder.
+	// Each cell declares its capabilities (routes, subscriptions, health, lifecycle,
+	// config-reload) into the recorder; Snapshot() seals it and stores the result.
+	// If any Init fails, no cell has been Start'd yet — safe to return immediately.
+	//
+	// Each cell receives an independent deep copy of cfgMap so that one cell's
+	// Init or Start path cannot mutate the config seen by another cell.
+	// ref: spf13/viper AllSettings() returns a deep copy for the same reason;
+	//      k8s client-go DeepCopyObject — each consumer owns its own value.
 	for _, c := range a.cells {
-		if err := c.Init(ctx, deps); err != nil {
+		recorder := cell.NewRegistryRecorder(cloneConfigMap(cfgMap), a.cfg.DurabilityMode)
+		if err := c.Init(ctx, recorder); err != nil {
 			a.mu.Lock()
 			a.state = stateStopped
+			a.snapshots = make(map[string]cell.RegistrySnapshot)
 			a.mu.Unlock()
 			return errcode.Wrap(errcode.ErrValidationFailed,
 				fmt.Sprintf("assembly: init cell %q", c.ID()), err)
 		}
+		a.snapshots[c.ID()] = recorder.Snapshot()
 	}
 
 	// Phase 2: Start cells in order with lifecycle hooks.
@@ -404,10 +447,16 @@ func (a *CoreAssembly) startCellWithHooks(ctx context.Context, c cell.Cell, i in
 	return nil
 }
 
-// failStart transitions the assembly to stopped and returns a wrapped error.
+// failStart transitions the assembly to stopped, clears the snapshots map
+// (since the assembly did not reach the Started state, the snapshot data is
+// no longer valid), and returns a wrapped error.
+//
+// Snapshots() documents this invariant: it returns an empty map when the
+// assembly is not in the running state.
 func (a *CoreAssembly) failStart(cellID, phase string, err error) error {
 	a.mu.Lock()
 	a.state = stateStopped
+	a.snapshots = make(map[string]cell.RegistrySnapshot)
 	a.mu.Unlock()
 	return errcode.Wrap(errcode.ErrLifecycleInvalid,
 		fmt.Sprintf("assembly: %s cell %q", phase, cellID), err)
@@ -532,14 +581,49 @@ func (a *CoreAssembly) ID() string {
 	return a.id
 }
 
-// Clock returns the single root [clock.Clock] that the assembly threads
-// through every cell's Init via Dependencies.Clock. Exposed so that
-// Bootstrap can fail-fast when a caller passes both WithAssembly and
-// WithClock with non-identical clock instances.
+// Clock returns the single root [clock.Clock] used by the assembly for
+// lifecycle hook timing. Exposed so that Bootstrap can fail-fast when a
+// caller passes both WithAssembly and WithClock with non-identical clock
+// instances.
 //
 // Always non-nil — assembly.New rejects nil and typed-nil at construction.
 func (a *CoreAssembly) Clock() clock.Clock {
 	return a.cfg.Clock
+}
+
+// ReloadTimeout returns the per-invocation deadline applied to each
+// OnConfigReload callback as configured by Config.ReloadTimeout. Always
+// non-zero after construction (zero is normalized to DefaultReloadTimeout by
+// New). Negative values disable the per-invocation timeout.
+func (a *CoreAssembly) ReloadTimeout() time.Duration {
+	return a.cfg.ReloadTimeout
+}
+
+// Snapshots returns the per-cell registry declarations recorded during Init.
+// Returns an empty map when assembly is not in running state (Init failure,
+// Start failure, or after Stop).
+//
+// The returned map is a copy keyed by cell ID — mutations do not affect the
+// assembly's internal state. The RegistrySnapshot values themselves are not
+// deep-copied; callers must not mutate the slice/map fields inside each snapshot.
+//
+// Invariant: Snapshots() returns a non-empty map only when the assembly is in
+// stateStarted. failStart, Stop, and rollbackCells all clear the map so that
+// callers never observe stale snapshots from a prior run.
+//
+// ref: uber-go/fx App.Done lifecycle state machine — state gates access to
+// component metadata.
+func (a *CoreAssembly) Snapshots() map[string]cell.RegistrySnapshot {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if len(a.snapshots) == 0 {
+		return nil
+	}
+	cp := make(map[string]cell.RegistrySnapshot, len(a.snapshots))
+	for k, v := range a.snapshots {
+		cp[k] = v
+	}
+	return cp
 }
 
 // CellIDs returns the IDs of all registered cells in registration order.
@@ -558,4 +642,52 @@ func (a *CoreAssembly) Cell(id string) cell.Cell {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	return a.cellMap[id]
+}
+
+// cloneConfigMap returns a deep copy of a map[string]any config snapshot so
+// that each cell's Init call receives an independent value — mutations in one
+// cell's Init path cannot affect sibling cells.
+//
+// Three value shapes are handled recursively:
+//   - map[string]any — recurse into nested maps
+//   - []any — recurse into slice elements
+//   - scalar (string, bool, number, nil, etc.) — copy by value (no reference)
+//
+// reflect is intentionally not used; type assertions are sufficient for the
+// config value space and avoid allocating reflect.Value temporaries.
+//
+// ref: spf13/viper AllSettings() — returns a deep copy of its internal map.
+// ref: k8s.io/apimachinery runtime.DefaultUnstructuredConverter — deep-copies
+//
+//	map[string]interface{} config trees without reflect.
+func cloneConfigMap(m map[string]any) map[string]any {
+	if m == nil {
+		return nil
+	}
+	dst := make(map[string]any, len(m))
+	for k, v := range m {
+		dst[k] = cloneConfigValue(v)
+	}
+	return dst
+}
+
+// cloneConfigValue deep-copies a single config value.
+func cloneConfigValue(v any) any {
+	switch t := v.(type) {
+	case map[string]any:
+		return cloneConfigMap(t)
+	case []any:
+		if t == nil {
+			return nil
+		}
+		dst := make([]any, len(t))
+		for i, elem := range t {
+			dst[i] = cloneConfigValue(elem)
+		}
+		return dst
+	default:
+		// Scalars (string, bool, int64, float64, nil, etc.) are value types —
+		// copying by assignment is safe.
+		return v
+	}
 }

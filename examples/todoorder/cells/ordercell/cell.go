@@ -27,11 +27,8 @@ const (
 	RoleCustomer = dto.RoleCustomer
 )
 
-// Compile-time interface checks.
-var (
-	_ cell.Cell                  = (*OrderCell)(nil)
-	_ cell.RouteGroupContributor = (*OrderCell)(nil)
-)
+// Compile-time interface check.
+var _ cell.Cell = (*OrderCell)(nil)
 
 // WithCursorCodec sets the cursor codec for pagination.
 func WithCursorCodec(c *query.CursorCodec) Option {
@@ -94,13 +91,16 @@ func NewOrderCell(opts ...Option) *OrderCell {
 	return c
 }
 
-// Init sets up repositories, slice services, and handlers.
-func (c *OrderCell) Init(ctx context.Context, deps cell.Dependencies) error {
-	if err := c.BaseCell.Init(ctx, deps); err != nil {
+// Init sets up repositories, slice services, handlers, and registers routes
+// into reg.
+func (c *OrderCell) Init(ctx context.Context, reg cell.Registry) error {
+	if err := c.BaseCell.Init(ctx, reg); err != nil {
 		return err
 	}
 
-	if err := c.resolveOutboxDeps(deps.DurabilityMode); err != nil {
+	durabilityMode := reg.DurabilityMode()
+
+	if err := c.resolveOutboxDeps(durabilityMode); err != nil {
 		return err
 	}
 
@@ -124,7 +124,7 @@ func (c *OrderCell) Init(ctx context.Context, deps cell.Dependencies) error {
 	// with a key that ships in the source tree.
 	// ref: zeromicro/go-zero MustSetUp — fatal on insecure default config.
 	if c.cursorCodec == nil {
-		if deps.DurabilityMode == cell.DurabilityDurable {
+		if durabilityMode == cell.DurabilityDurable {
 			return errcode.New(errcode.ErrCellMissingCodec,
 				"ordercell durable mode requires a cursor codec; "+
 					"use WithCursorCodec(query.NewCursorCodec(secret)) — "+
@@ -141,12 +141,35 @@ func (c *OrderCell) Init(ctx context.Context, deps cell.Dependencies) error {
 
 	// order-query slice
 	querySvc, err := orderquery.NewService(c.repo, c.cursorCodec, c.logger,
-		query.RunModeForDemo(deps.DurabilityMode == cell.DurabilityDemo))
+		query.RunModeForDemo(durabilityMode == cell.DurabilityDemo))
 	if err != nil {
 		return fmt.Errorf("order-query: %w", err)
 	}
 	c.queryHandler = orderquery.NewHandler(querySvc)
 	c.AddSlice(cell.NewBaseSlice("orderquery", "ordercell", cell.L0))
+
+	// Register route groups.
+	//
+	// ref: kubernetes/kubernetes pkg/endpoints/installer.go — one installer per
+	// resource owns its own route + authz declaration.
+	// ref: go-zero rest/server.go AddRoutes — per-listener route declaration.
+	reg.RouteGroup(cell.RouteGroup{
+		Listener: cell.PrimaryListener,
+		Prefix:   "/api/v1",
+		Register: func(mux cell.RouteMux) error {
+			var firstErr error
+			captureErr := func(err error) {
+				if err != nil && firstErr == nil {
+					firstErr = err
+				}
+			}
+			mux.Route("/orders", func(orders cell.RouteMux) {
+				captureErr(c.createHandler.RegisterRoutes(orders))
+				captureErr(c.queryHandler.RegisterRoutes(orders))
+			})
+			return firstErr
+		},
+	})
 
 	return nil
 }
@@ -178,34 +201,4 @@ func (c *OrderCell) resolveOutboxDeps(mode cell.DurabilityMode) error {
 	}
 	c.emitter = emitter
 	return nil
-}
-
-// RouteGroups declares ordercell's HTTP route groups on the PrimaryListener.
-// Each slice owns its own ContractSpec literals + auth.Route declarations
-// (admin policy included) in its handler.go's RegisterRoutes; cell.go is pure
-// wiring.
-//
-// ref: kubernetes/kubernetes pkg/endpoints/installer.go — one installer per
-// resource owns its own route + authz declaration.
-// ref: go-zero rest/server.go AddRoutes — per-listener route declaration.
-func (c *OrderCell) RouteGroups() []cell.RouteGroup {
-	return []cell.RouteGroup{
-		{
-			Listener: cell.PrimaryListener,
-			Prefix:   "/api/v1",
-			Register: func(mux cell.RouteMux) error {
-				var firstErr error
-				captureErr := func(err error) {
-					if err != nil && firstErr == nil {
-						firstErr = err
-					}
-				}
-				mux.Route("/orders", func(orders cell.RouteMux) {
-					captureErr(c.createHandler.RegisterRoutes(orders))
-					captureErr(c.queryHandler.RegisterRoutes(orders))
-				})
-				return firstErr
-			},
-		},
-	}
 }

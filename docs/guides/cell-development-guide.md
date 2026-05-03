@@ -80,42 +80,43 @@ func NewMyCell(opts ...Option) *MyCell {
     return c
 }
 
-func (c *MyCell) Init(ctx context.Context, deps cell.Dependencies) error {
-    if err := c.BaseCell.Init(ctx, deps); err != nil {
+func (c *MyCell) Init(ctx context.Context, reg cell.Registry) error {
+    if err := c.BaseCell.Init(ctx, reg); err != nil {
         return err
     }
     // 构造 Slice 并注册
     c.AddSlice(cell.NewBaseSlice("myslice", "mycell", cell.L1))
+    // 后续 4-7 节通过 reg.RouteGroup / reg.Subscribe / reg.Health /
+    // reg.Lifecycle / reg.OnConfigReload 声明本 cell 的能力。
     return nil
 }
 ```
 
 ### 4. 注册 HTTP 路由（可选）
 
-实现 `cell.RouteGroupContributor` 接口，Cell 通过 `RouteGroups()` 声明
-每组路由所属的物理 listener，并在 `Register` 闭包里使用 `auth.Mount`
-声明鉴权语义（F3 模式，参见
+通过 `reg.RouteGroup(...)` 在 `Init` 内声明每组路由所属的物理 listener，
+并在 `Register` 闭包里使用 `auth.Mount` 声明鉴权语义（参见
 [runtime-api.md](../../.claude/rules/gocell/runtime-api.md)）：
 
 ```go
-var _ cell.RouteGroupContributor = (*MyCell)(nil)
-
-func (c *MyCell) RouteGroups() []cell.RouteGroup {
-    return []cell.RouteGroup{
-        cell.SingleGroup(cell.PrimaryListener, "/api/v1/my-resource", func(mux cell.RouteMux) error {
-            return auth.Mount(mux, auth.Route{
-                Contract: wrapper.ContractSpec{
-                    ID:        "http.mycell.my-resource.get.v1",
-                    Kind:      "http",
-                    Transport: "http",
-                    Method:    "GET",
-                    Path:      "/api/v1/my-resource/{id}",
-                },
-                Handler: http.HandlerFunc(c.handler.Get),
-                Policy:  auth.Authenticated(),
-            })
-        }),
+func (c *MyCell) Init(ctx context.Context, reg cell.Registry) error {
+    if err := c.BaseCell.Init(ctx, reg); err != nil {
+        return err
     }
+    reg.RouteGroup(cell.SingleGroup(cell.PrimaryListener, "/api/v1/my-resource", func(mux cell.RouteMux) error {
+        return auth.Mount(mux, auth.Route{
+            Contract: wrapper.ContractSpec{
+                ID:        "http.mycell.my-resource.get.v1",
+                Kind:      "http",
+                Transport: "http",
+                Method:    "GET",
+                Path:      "/api/v1/my-resource/{id}",
+            },
+            Handler: http.HandlerFunc(c.handler.Get),
+            Policy:  auth.Authenticated(),
+        })
+    }))
+    return nil
 }
 ```
 
@@ -127,38 +128,40 @@ func (c *MyCell) RouteGroups() []cell.RouteGroup {
 - **internal** (`127.0.0.1:9090` 默认) — 仅 `/internal/v1/*` 控制面路由；service-token / mTLS 通过 `bootstrap.WithListener(cell.InternalListener, ..., []cell.ListenerAuth{...})` 装配为 listener 级鉴权层。
 - **health** (`127.0.0.1:9091` local/dev 默认；生产 PodIP/Service probe 用 `:9091`) — 仅 `/healthz`、`/readyz`、`/metrics`。
 
-Cell 在 `RouteGroups()` 里按 listener + 路径前缀声明，bootstrap 会把每组路由挂到对应 listener 的独立 router：
+Cell 在 `Init` 内按 listener + 路径前缀分别调 `reg.RouteGroup(...)`，bootstrap 会把每组路由挂到对应 listener 的独立 router：
 
 ```go
-func (c *MyCell) RouteGroups() []cell.RouteGroup {
-    return []cell.RouteGroup{
-        cell.SingleGroup(cell.PrimaryListener, "/api/v1/my-resource", func(mux cell.RouteMux) error {
-            return auth.Mount(mux, auth.Route{
-                Contract: wrapper.ContractSpec{
-                    ID:        "http.mycell.my-resource.get.v1",
-                    Kind:      "http",
-                    Transport: "http",
-                    Method:    "GET",
-                    Path:      "/api/v1/my-resource/{id}",
-                },
-                Handler: http.HandlerFunc(c.handler.Get),
-                Policy:  auth.Authenticated(),
-            })
-        }),
-        cell.SingleGroup(cell.InternalListener, "/internal/v1/my-resource", func(mux cell.RouteMux) error {
-            return auth.Mount(mux, auth.Route{
-                Contract: wrapper.ContractSpec{
-                    ID:        "http.mycell.my-resource.admin-op.v1",
-                    Kind:      "http",
-                    Transport: "http",
-                    Method:    "POST",
-                    Path:      "/internal/v1/my-resource/admin-op",
-                },
-                Handler: http.HandlerFunc(c.handler.AdminOp),
-                Policy:  auth.AnyRole(auth.RoleInternalAdmin),
-            })
-        }),
+func (c *MyCell) Init(ctx context.Context, reg cell.Registry) error {
+    if err := c.BaseCell.Init(ctx, reg); err != nil {
+        return err
     }
+    reg.RouteGroup(cell.SingleGroup(cell.PrimaryListener, "/api/v1/my-resource", func(mux cell.RouteMux) error {
+        return auth.Mount(mux, auth.Route{
+            Contract: wrapper.ContractSpec{
+                ID:        "http.mycell.my-resource.get.v1",
+                Kind:      "http",
+                Transport: "http",
+                Method:    "GET",
+                Path:      "/api/v1/my-resource/{id}",
+            },
+            Handler: http.HandlerFunc(c.handler.Get),
+            Policy:  auth.Authenticated(),
+        })
+    }))
+    reg.RouteGroup(cell.SingleGroup(cell.InternalListener, "/internal/v1/my-resource", func(mux cell.RouteMux) error {
+        return auth.Mount(mux, auth.Route{
+            Contract: wrapper.ContractSpec{
+                ID:        "http.mycell.my-resource.admin-op.v1",
+                Kind:      "http",
+                Transport: "http",
+                Method:    "POST",
+                Path:      "/internal/v1/my-resource/admin-op",
+            },
+            Handler: http.HandlerFunc(c.handler.AdminOp),
+            Policy:  auth.AnyRole(auth.RoleInternalAdmin),
+        })
+    }))
+    return nil
 }
 ```
 
@@ -170,23 +173,24 @@ func (c *MyCell) RouteGroups() []cell.RouteGroup {
 
 ### 5. 注册事件订阅（可选）
 
-实现 `cell.EventRegistrar` 接口，**通过 EventRouter 声明订阅意图**——
-禁止手动启动 goroutine 或直接调 `Subscriber.Subscribe`，goroutine 生命周期、
-错误收敛、Setup/Ready 阶段一律由 Router 统一接管。
+通过 `reg.Subscribe(...)` 在 `Init` 内声明订阅意图——禁止手动启动 goroutine 或
+直接调 `Subscriber.Subscribe`，goroutine 生命周期、错误收敛、Setup/Ready 阶段
+一律由 EventRouter 统一接管。
 
 ```go
-var _ cell.EventRegistrar = (*MyCell)(nil)
-
-// RegisterSubscriptions 在启动阶段被框架调用一次。每次 AddContractHandler 注册
-// 一个 (contract, handler, consumerGroup) 三元组：
+// Init 内每次 reg.Subscribe(...) 注册一个 (contract, handler, consumerGroup) 三元组：
 //   - contract      : contract id、broker 路由键、observability metadata
 //   - handler       : outbox.EntryHandler 业务处理函数
 //   - consumerGroup : 通常等于 cell.ID()，作为幂等键命名空间；同 group 竞争消费，
-//                     不同 group 各自一份（fanout）
+//                     不同 group 各自一份（fanout）。drain loop 已知真实 owner cellID，
+//                     consumerGroup 与 owner 解耦（参见 watermill router.AddHandler 模式）
 //
 // 框架会包装 ConsumerBase（两阶段 Claim/Commit/Release + 退避重试 + DLX 路由），
 // 业务 handler 只需返回 outbox.HandleResult{Disposition: Ack/Requeue/Reject}。
-func (c *MyCell) RegisterSubscriptions(r cell.EventRouter) error {
+func (c *MyCell) Init(ctx context.Context, reg cell.Registry) error {
+    if err := c.BaseCell.Init(ctx, reg); err != nil {
+        return err
+    }
     handler := outbox.WrapLegacyHandler(c.svc.HandleEvent) // 旧签名 → EntryHandler
     // EventSpec(id, transport) helper for the common case Topic == ID.
     // FMT-18 cross-checks both ContractSpec{} literals and EventSpec(...) calls
@@ -194,7 +198,9 @@ func (c *MyCell) RegisterSubscriptions(r cell.EventRouter) error {
     // `gocell validate --strict` (and the strict CI job), not plain `validate`.
     // The id argument must be a string literal so the AST can resolve it;
     // computed ids surface as a FMT-18 WARNING.
-    r.AddContractHandler(wrapper.EventSpec("event.my.topic.v1", "amqp"), handler, c.ID())
+    if err := reg.Subscribe(wrapper.EventSpec("event.my.topic.v1", "amqp"), handler, c.ID()); err != nil {
+        return err
+    }
     return nil
 }
 ```
@@ -269,8 +275,11 @@ func WithMyRepo(r ports.MyRepository) Option {
     return func(c *MyCell) { c.repo = r }
 }
 
-// Init 中分发给 Slice
-func (c *MyCell) Init(ctx context.Context, deps cell.Dependencies) error {
+// Init 中分发给 Slice，并通过 reg.* 声明能力
+func (c *MyCell) Init(ctx context.Context, reg cell.Registry) error {
+    if err := c.BaseCell.Init(ctx, reg); err != nil {
+        return err
+    }
     svc := myslice.NewService(c.repo, c.logger)
     c.handler = myslice.NewHandler(svc)
     c.AddSlice(cell.NewBaseSlice("myslice", "mycell", cell.L1))
@@ -294,14 +303,16 @@ func WithInMemoryDefaults() Option {
 
 ```go
 func TestMyCell_Lifecycle(t *testing.T) {
-    c := NewMyCell(WithInMemoryDefaults())
+    c := NewMyCell(WithInMemoryDefaults(), WithClock(clock.Real()))
     ctx := context.Background()
-    deps := cell.Dependencies{
-        Config:         make(map[string]any),
-        DurabilityMode: cell.DurabilityDemo,
-    }
+    rec := cell.NewRegistryRecorder(map[string]any{}, cell.DurabilityDemo)
 
-    require.NoError(t, c.Init(ctx, deps))
+    require.NoError(t, c.Init(ctx, rec))
+    snap := rec.Snapshot()
+    // 用 snap.RouteGroups / snap.Subscriptions / snap.HealthCheckers 等
+    // 字段断言 cell 注册的能力声明
+    require.NotEmpty(t, snap.HealthCheckers)
+
     require.NoError(t, c.Start(ctx))
     assert.Equal(t, "healthy", c.Health().Status)
     require.NoError(t, c.Stop(ctx))
@@ -347,10 +358,11 @@ func TestIntegration_MyCellSmoke(t *testing.T) {
     repo := newPostgresRepo(dsn)
     c := NewMyCell(
         WithPostgresRepo(repo),
+        WithClock(clock.Real()),
     )
-    deps := cell.Dependencies{...}
+    rec := cell.NewRegistryRecorder(map[string]any{}, cell.DurabilityDemo)
 
-    require.NoError(t, c.Init(ctx, deps))
+    require.NoError(t, c.Init(ctx, rec))
     require.NoError(t, c.Start(ctx))
     defer c.Stop(ctx)
 

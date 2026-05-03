@@ -7,7 +7,6 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"maps"
 	"time"
 
 	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/domain"
@@ -37,14 +36,8 @@ const (
 	RoleDevice   = dto.RoleDevice
 )
 
-// Compile-time interface checks.
-var (
-	_ cell.Cell                  = (*DeviceCell)(nil)
-	_ cell.RouteGroupContributor = (*DeviceCell)(nil)
-	_ cell.LifecycleContributor  = (*DeviceCell)(nil)
-	_ kcommand.QueueRegistrar    = (*DeviceCell)(nil)
-	_ cell.HealthContributor     = (*DeviceCell)(nil)
-)
+// Compile-time interface check.
+var _ cell.Cell = (*DeviceCell)(nil)
 
 type commandQueueStore interface {
 	kcommand.Queue
@@ -81,35 +74,28 @@ func WithMetricsProvider(mp metrics.Provider) Option {
 	return func(c *DeviceCell) { c.metricsProvider = mp }
 }
 
+// WithClock sets the clock used by this cell. Must be called before Init.
+func WithClock(clk clock.Clock) Option {
+	return func(c *DeviceCell) { c.clk = clk }
+}
+
 // DeviceCell is the devicecell Cell implementation.
 type DeviceCell struct {
 	*cell.BaseCell
 	deviceRepo      domain.DeviceRepository
 	publisher       outbox.Publisher
-	emitter         outbox.Emitter // set during Init; retained for HealthCheckers
+	emitter         outbox.Emitter // set during Init; retained for Probes
 	cursorCodec     *query.CursorCodec
 	logger          *slog.Logger
 	metricsProvider metrics.Provider
 	commandQueue    commandQueueStore
 	commandSweeper  *commandruntime.SweeperLifecycle
-	clk             clock.Clock // injected from deps.Clock during Init
+	clk             clock.Clock // injected from reg.Config during Init
 
 	registerHandler *deviceregister.Handler
 	commandHandler  *devicecommand.Handler
 	statusHandler   *devicestatus.Handler
 	listHandler     *devicelist.Handler
-}
-
-// HealthCheckers implements cell.HealthContributor. Aggregates the outbox
-// emitter's HealthCheckers (fail-open drop rate → degraded signal) so /readyz
-// surfaces "device events are being lost in fail-open path" without polluting
-// the cell's primary Cell.Health() signal.
-func (c *DeviceCell) HealthCheckers() map[string]func(context.Context) error {
-	checkers := make(map[string]func(context.Context) error)
-	if hc, ok := c.emitter.(cell.HealthContributor); ok {
-		maps.Copy(checkers, hc.HealthCheckers())
-	}
-	return checkers
 }
 
 // RegisterCommandQueue implements kernel/command.QueueRegistrar. The supplied
@@ -122,14 +108,6 @@ func (c *DeviceCell) RegisterCommandQueue(q kcommand.Queue) {
 		return
 	}
 	c.commandQueue = store
-}
-
-// LifecycleHooks contributes the device-command sweeper hook after Init wires it.
-func (c *DeviceCell) LifecycleHooks() []cell.LifecycleHook {
-	if c.commandSweeper == nil {
-		return nil
-	}
-	return c.commandSweeper.LifecycleHooks()
 }
 
 // NewDeviceCell creates a new DeviceCell with the given options.
@@ -162,17 +140,35 @@ func (c *DeviceCell) buildEmitter() (*outbox.DirectEmitter, error) {
 	return outbox.NewDirectEmitter(c.publisher, outbox.DirectPublishFailOpen, mp, c.clk, "devicecell", outbox.WithLogger(c.logger))
 }
 
-// Init sets up repositories, slice services, and handlers.
+// Init sets up repositories, slice services, handlers, and registers routes,
+// lifecycle hooks, and health probes into reg.
 // L4 Cells do not use outboxWriter (KG-07 decision). The Cell boundary
 // adapts the publisher to a direct emitter for event publishing.
-func (c *DeviceCell) Init(ctx context.Context, deps cell.Dependencies) error {
-	if err := c.BaseCell.Init(ctx, deps); err != nil {
+func (c *DeviceCell) Init(ctx context.Context, reg cell.Registry) error {
+	if err := c.BaseCell.Init(ctx, reg); err != nil {
 		return err
 	}
 
-	clock.MustHaveClock(deps.Clock, "devicecell.Init: deps.Clock required (assembly must inject clock)")
-	c.clk = deps.Clock
+	durabilityMode := reg.DurabilityMode()
 
+	// Clock must be injected via WithClock before Init.
+	clock.MustHaveClock(c.clk, "devicecell.Init: clock required; use WithClock(clock.Real()) in assembly")
+
+	if err := c.initDeps(durabilityMode); err != nil {
+		return err
+	}
+	if err := c.initSlices(durabilityMode); err != nil {
+		return err
+	}
+
+	c.registerRouteGroups(reg)
+	c.registerHealthAndLifecycle(reg)
+
+	return nil
+}
+
+// initDeps validates and resolves publisher, emitter, and cursor codec.
+func (c *DeviceCell) initDeps(durabilityMode cell.DurabilityMode) error {
 	// Default to in-memory device repository if none injected.
 	if c.deviceRepo == nil {
 		c.deviceRepo = mem.NewDeviceRepository()
@@ -189,7 +185,7 @@ func (c *DeviceCell) Init(ctx context.Context, deps cell.Dependencies) error {
 	// fail-open here because this example path has no transactional outbox.
 	// The request succeeds once persistence succeeds; publish misses are
 	// operational follow-up, not create failure.
-	if err := cell.CheckNotNoop(deps.DurabilityMode, "devicecell", c.publisher); err != nil {
+	if err := cell.CheckNotNoop(durabilityMode, "devicecell", c.publisher); err != nil {
 		return err
 	}
 	builtEmitter, err := c.buildEmitter()
@@ -198,21 +194,13 @@ func (c *DeviceCell) Init(ctx context.Context, deps cell.Dependencies) error {
 	}
 	c.emitter = builtEmitter
 
-	// device-register slice
-	registerSvc := deviceregister.NewService(c.deviceRepo, c.logger,
-		deviceregister.WithEmitter(builtEmitter),
-		deviceregister.WithClock(c.clk),
-	)
-	c.registerHandler = deviceregister.NewHandler(registerSvc)
-	c.AddSlice(cell.NewBaseSlice("deviceregister", "devicecell", cell.L4))
-
 	// Default cursor codec for pagination if not injected. Durable mode
 	// refuses the public demo-key fallback — an assembly that forgets to
 	// wire a production codec must fail closed, not silently sign cursors
 	// with a key that ships in the source tree.
 	// ref: zeromicro/go-zero MustSetUp — fatal on insecure default config.
 	if c.cursorCodec == nil {
-		if deps.DurabilityMode == cell.DurabilityDurable {
+		if durabilityMode == cell.DurabilityDurable {
 			return errcode.New(errcode.ErrCellMissingCodec,
 				"devicecell durable mode requires a cursor codec; "+
 					"use WithCursorCodec(query.NewCursorCodec(secret)) — "+
@@ -226,11 +214,23 @@ func (c *DeviceCell) Init(ctx context.Context, deps cell.Dependencies) error {
 		c.cursorCodec = codec
 		c.logger.Warn("devicecell: using default cursor codec (demo mode)")
 	}
+	return nil
+}
+
+// initSlices constructs all 4 device slices and the command sweeper.
+func (c *DeviceCell) initSlices(durabilityMode cell.DurabilityMode) error {
+	// device-register slice
+	registerSvc := deviceregister.NewService(c.deviceRepo, c.logger,
+		deviceregister.WithEmitter(c.emitter),
+		deviceregister.WithClock(c.clk),
+	)
+	c.registerHandler = deviceregister.NewHandler(registerSvc)
+	c.AddSlice(cell.NewBaseSlice("deviceregister", "devicecell", cell.L4))
 
 	// device-command slice: uses commandtest.InMemQueue as the command store in
 	// demo/example mode. For a production deployment, inject a durable adapter
 	// implementing command.Queue + command.ActiveScanner via RegisterCommandQueue.
-	if c.commandQueue == nil && deps.DurabilityMode == cell.DurabilityDurable {
+	if c.commandQueue == nil && durabilityMode == cell.DurabilityDurable {
 		return fmt.Errorf("devicecell: commandtest.InMemQueue is not suitable for durable " +
 			"deployments; wire a durable command.Queue adapter instead")
 	}
@@ -239,7 +239,7 @@ func (c *DeviceCell) Init(ctx context.Context, deps cell.Dependencies) error {
 	}
 	cmdQueue := c.commandQueue
 	commandSvc, err := devicecommand.NewService(cmdQueue, c.deviceRepo, c.cursorCodec, c.logger,
-		query.RunModeForDemo(deps.DurabilityMode == cell.DurabilityDemo),
+		query.RunModeForDemo(durabilityMode == cell.DurabilityDemo),
 		devicecommand.WithClock(c.clk),
 	)
 	if err != nil {
@@ -264,64 +264,56 @@ func (c *DeviceCell) Init(ctx context.Context, deps cell.Dependencies) error {
 
 	// device-list slice
 	listSvc, err := devicelist.NewService(c.deviceRepo, c.cursorCodec, c.logger,
-		query.RunModeForDemo(deps.DurabilityMode == cell.DurabilityDemo))
+		query.RunModeForDemo(durabilityMode == cell.DurabilityDemo))
 	if err != nil {
 		return fmt.Errorf("device-list: %w", err)
 	}
 	c.listHandler = devicelist.NewHandler(listSvc)
 	c.AddSlice(cell.NewBaseSlice("devicelist", "devicecell", cell.L0))
-
 	return nil
 }
 
-// RouteGroups declares devicecell's HTTP route groups: the public
-// /api/v1/devices/* tree on the PrimaryListener and the internal
-// /internal/v1/devicecommands ops route on the InternalListener.
-//
-// Each slice owns its own ContractSpec literals + auth.Route declarations in
-// its handler.go's RegisterRoutes. cell.go is pure wiring: it picks the
-// listener + URL prefix and delegates to slice.RegisterRoutes.
-//
-// F5 round-3: the InternalListener group restores RegisterInternalRoutes
-// which the PR-A14b RouteGroups migration accidentally dropped. The
-// commandHandler.HandleScanActive endpoint is required by the
-// http.device.command.scan-active.v1 contract.
-//
-// ref: kubernetes/kubernetes pkg/endpoints/installer.go — one installer per
-// resource owns its own route + authz declaration.
-// ref: go-zero rest/server.go AddRoutes — per-listener route declaration.
-func (c *DeviceCell) RouteGroups() []cell.RouteGroup {
-	return []cell.RouteGroup{
-		{
-			Listener: cell.PrimaryListener,
-			// Empty prefix: contract specs already carry absolute /api/v1/...
-			// paths, so we mount routes directly on the root mux without an
-			// outer Route("/api/v1") wrapper that would double-prefix.
-			Prefix: "",
-			Register: func(mux cell.RouteMux) error {
-				var firstErr error
-				captureErr := func(err error) {
-					if err != nil && firstErr == nil {
-						firstErr = err
-					}
+// registerRouteGroups registers primary and internal HTTP route groups.
+func (c *DeviceCell) registerRouteGroups(reg cell.Registry) {
+	reg.RouteGroup(cell.RouteGroup{
+		Listener: cell.PrimaryListener,
+		// Empty prefix: contract specs already carry absolute /api/v1/...
+		// paths, so we mount routes directly on the root mux without an
+		// outer Route("/api/v1") wrapper that would double-prefix.
+		Prefix: "",
+		Register: func(mux cell.RouteMux) error {
+			var firstErr error
+			captureErr := func(err error) {
+				if err != nil && firstErr == nil {
+					firstErr = err
 				}
-				mux.Route("/api/v1/devices", func(devices cell.RouteMux) {
-					captureErr(c.registerHandler.RegisterRoutes(devices))
-					captureErr(c.listHandler.RegisterRoutes(devices))
-					captureErr(c.statusHandler.RegisterRoutes(devices))
-					// device-command public routes (enqueue, dequeue, report, ack,
-					// extend-lease) live under /api/v1/devices/{id}/commands.
-					captureErr(c.commandHandler.RegisterRoutes(devices))
-				})
-				return firstErr
-			},
+			}
+			mux.Route("/api/v1/devices", func(devices cell.RouteMux) {
+				captureErr(c.registerHandler.RegisterRoutes(devices))
+				captureErr(c.listHandler.RegisterRoutes(devices))
+				captureErr(c.statusHandler.RegisterRoutes(devices))
+				// device-command public routes (enqueue, dequeue, report, ack,
+				// extend-lease) live under /api/v1/devices/{id}/commands.
+				captureErr(c.commandHandler.RegisterRoutes(devices))
+			})
+			return firstErr
 		},
-		{
-			Listener: cell.InternalListener,
-			Prefix:   "",
-			Register: func(mux cell.RouteMux) error {
-				return c.commandHandler.RegisterInternalRoutes(mux)
-			},
+	})
+	reg.RouteGroup(cell.RouteGroup{
+		Listener: cell.InternalListener,
+		Prefix:   "",
+		Register: func(mux cell.RouteMux) error {
+			return c.commandHandler.RegisterInternalRoutes(mux)
 		},
+	})
+}
+
+// registerHealthAndLifecycle registers health probes and the sweeper lifecycle hook.
+func (c *DeviceCell) registerHealthAndLifecycle(reg cell.Registry) {
+	if hc, ok := c.emitter.(cell.HealthProber); ok {
+		for k, v := range hc.Probes() {
+			reg.Health(k, v)
+		}
 	}
+	reg.Lifecycle(c.commandSweeper.Hook())
 }

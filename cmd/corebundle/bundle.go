@@ -83,9 +83,9 @@ func runtimeBaseOptions(
 	opts := []bootstrap.Option{
 		// Single composition-root clock: the same clock is on the assembly
 		// (see buildAssembly above) and on the bootstrap; it threads through
-		// the lifecycle, default-assembly fallback, and cell.Dependencies
-		// every Init receives. The pair is the load-bearing invariant of
-		// PROD-CLOCK-INJECTION-01 — never default-fallback in adapters or cells.
+		// the lifecycle and default-assembly fallback. The pair is the
+		// load-bearing invariant of PROD-CLOCK-INJECTION-01 — never
+		// default-fallback in adapters or cells.
 		bootstrap.WithClock(shared.Clock),
 		bootstrap.WithAssembly(asm),
 		bootstrap.WithPublisher(shared.EventBus),
@@ -124,7 +124,7 @@ func configEventConsumerMiddleware(collector obmetrics.ConfigEventCollector) out
 // NOTE: runtimeBaseOptions always includes bootstrap.WithClock so the clock is
 // never missing — this wrapper does not impose an additional contract.
 func newBootstrapFromOptions(opts []bootstrap.Option) *bootstrap.Bootstrap {
-	return bootstrap.New(opts...)
+	return bootstrap.New(opts...) //archtest:allow:clock-injection:via-slice opts assembled by defaultRuntimeOptions includes WithClock
 }
 
 // defaultRuntimeOptions constructs the ordered bootstrap.Option slice from the

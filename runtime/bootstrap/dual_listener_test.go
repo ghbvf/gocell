@@ -46,32 +46,34 @@ func newDualListenerCell(onPublic, onInternal func(http.ResponseWriter, *http.Re
 	}
 }
 
-func (c *dualListenerCell) RouteGroups() []cell.RouteGroup {
-	return []cell.RouteGroup{
-		{
-			Listener: cell.PrimaryListener,
-			Prefix:   "",
-			Register: func(mux cell.RouteMux) error {
-				auth.MustMount(mux, auth.Route{
-					Contract: testHTTPContract(http.MethodGet, "/api/v1/test/ping"),
-					Handler:  http.HandlerFunc(c.onPublic),
-					Public:   true,
-				})
-				return nil
-			},
-		},
-		{
-			Listener: cell.InternalListener,
-			Prefix:   "",
-			Register: func(mux cell.RouteMux) error {
-				auth.MustMount(mux, auth.Route{
-					Contract: testHTTPContract(http.MethodGet, "/internal/v1/admin/ping"),
-					Handler:  http.HandlerFunc(c.onInternal),
-				})
-				return nil
-			},
-		},
+func (c *dualListenerCell) Init(ctx context.Context, reg cell.Registry) error {
+	if err := c.BaseCell.Init(ctx, reg); err != nil {
+		return err
 	}
+	reg.RouteGroup(cell.RouteGroup{
+		Listener: cell.PrimaryListener,
+		Prefix:   "",
+		Register: func(mux cell.RouteMux) error {
+			auth.MustMount(mux, auth.Route{
+				Contract: testHTTPContract(http.MethodGet, "/api/v1/test/ping"),
+				Handler:  http.HandlerFunc(c.onPublic),
+				Public:   true,
+			})
+			return nil
+		},
+	})
+	reg.RouteGroup(cell.RouteGroup{
+		Listener: cell.InternalListener,
+		Prefix:   "",
+		Register: func(mux cell.RouteMux) error {
+			auth.MustMount(mux, auth.Route{
+				Contract: testHTTPContract(http.MethodGet, "/internal/v1/admin/ping"),
+				Handler:  http.HandlerFunc(c.onInternal),
+			})
+			return nil
+		},
+	})
+	return nil
 }
 
 func testInternalAuthChain(t *testing.T) ([]cell.ListenerAuth, *auth.HMACKeyRing) {
@@ -621,27 +623,29 @@ type duplicateMetaCell struct {
 	*cell.BaseCell
 }
 
-func (c *duplicateMetaCell) RouteGroups() []cell.RouteGroup {
-	spec := testHTTPContract(http.MethodGet, "/api/v1/dup/ping")
-	return []cell.RouteGroup{
-		{
-			Listener: cell.PrimaryListener,
-			Prefix:   "",
-			Register: func(mux cell.RouteMux) error {
-				auth.MustMount(mux, auth.Route{
-					Contract: spec,
-					Handler:  http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) }),
-					Public:   true,
-				})
-				auth.MustMount(mux, auth.Route{
-					Contract: spec,
-					Handler:  http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) }),
-					Public:   true,
-				})
-				return nil
-			},
-		},
+func (c *duplicateMetaCell) Init(ctx context.Context, reg cell.Registry) error {
+	if err := c.BaseCell.Init(ctx, reg); err != nil {
+		return err
 	}
+	spec := testHTTPContract(http.MethodGet, "/api/v1/dup/ping")
+	reg.RouteGroup(cell.RouteGroup{
+		Listener: cell.PrimaryListener,
+		Prefix:   "",
+		Register: func(mux cell.RouteMux) error {
+			auth.MustMount(mux, auth.Route{
+				Contract: spec,
+				Handler:  http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) }),
+				Public:   true,
+			})
+			auth.MustMount(mux, auth.Route{
+				Contract: spec,
+				Handler:  http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) }),
+				Public:   true,
+			})
+			return nil
+		},
+	})
+	return nil
 }
 
 // TestDualListener_FinalizeAuth_DuplicateMeta_Errors verifies that FinalizeAuth
@@ -931,7 +935,10 @@ type middlewareOrderCell struct {
 	order *[]string
 }
 
-func (c *middlewareOrderCell) RouteGroups() []cell.RouteGroup {
+func (c *middlewareOrderCell) Init(ctx context.Context, reg cell.Registry) error {
+	if err := c.BaseCell.Init(ctx, reg); err != nil {
+		return err
+	}
 	order := c.order
 	mw1 := func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -945,21 +952,20 @@ func (c *middlewareOrderCell) RouteGroups() []cell.RouteGroup {
 			next.ServeHTTP(w, r)
 		})
 	}
-	return []cell.RouteGroup{
-		{
-			Listener:   cell.PrimaryListener,
-			Prefix:     "/api/v1/mwtest",
-			Middleware: []func(http.Handler) http.Handler{mw1, mw2},
-			Register: func(mux cell.RouteMux) error {
-				auth.MustMount(mux, auth.Route{
-					Contract: testHTTPContract(http.MethodGet, "/api/v1/mwtest/ping"),
-					Handler:  http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) }),
-					Public:   true,
-				})
-				return nil
-			},
+	reg.RouteGroup(cell.RouteGroup{
+		Listener:   cell.PrimaryListener,
+		Prefix:     "/api/v1/mwtest",
+		Middleware: []func(http.Handler) http.Handler{mw1, mw2},
+		Register: func(mux cell.RouteMux) error {
+			auth.MustMount(mux, auth.Route{
+				Contract: testHTTPContract(http.MethodGet, "/api/v1/mwtest/ping"),
+				Handler:  http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) }),
+				Public:   true,
+			})
+			return nil
 		},
-	}
+	})
+	return nil
 }
 
 // TestRouteGroup_Middleware_OrderPreserved verifies that RouteGroup.Middleware

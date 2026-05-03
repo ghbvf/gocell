@@ -29,6 +29,7 @@ func newTestCell() *DeviceCell {
 	return NewDeviceCell(
 		WithDeviceRepository(mem.NewDeviceRepository()),
 		WithPublisher(eventbus.New(eventbus.WithClock(clock.Real()))),
+		WithClock(clock.Real()),
 	)
 }
 
@@ -47,17 +48,17 @@ func newTestCursorCodec(t *testing.T) *query.CursorCodec {
 	return codec
 }
 
+func newTestRec() *cell.RegistryRecorder {
+	return cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo)
+}
+
 func TestDeviceCell_Lifecycle(t *testing.T) {
 	c := newTestCell()
 	ctx := context.Background()
-	deps := cell.Dependencies{
-		Config:         make(map[string]any),
-		DurabilityMode: cell.DurabilityDemo,
-		Clock:          clock.Real(),
-	}
+	rec := newTestRec()
 
 	// Init
-	require.NoError(t, c.Init(ctx, deps))
+	require.NoError(t, c.Init(ctx, rec))
 	assert.Len(t, c.OwnedSlices(), 4, "should have 4 slices")
 
 	// Start
@@ -81,12 +82,8 @@ func TestDeviceCell_Metadata(t *testing.T) {
 func TestDeviceCell_Startup(t *testing.T) {
 	c := newTestCell()
 	ctx := context.Background()
-	deps := cell.Dependencies{
-		Config:         make(map[string]any),
-		DurabilityMode: cell.DurabilityDemo,
-		Clock:          clock.Real(),
-	}
-	require.NoError(t, c.Init(ctx, deps))
+	rec := newTestRec()
+	require.NoError(t, c.Init(ctx, rec))
 	require.NoError(t, c.Start(ctx))
 	assert.True(t, c.Ready())
 	require.NoError(t, c.Stop(ctx))
@@ -94,14 +91,13 @@ func TestDeviceCell_Startup(t *testing.T) {
 
 func TestDeviceCell_InitDefaultsRepositories(t *testing.T) {
 	// No repos injected; Init should use in-memory defaults.
-	c := NewDeviceCell(WithPublisher(eventbus.New(eventbus.WithClock(clock.Real()))))
+	c := NewDeviceCell(
+		WithPublisher(eventbus.New(eventbus.WithClock(clock.Real()))),
+		WithClock(clock.Real()),
+	)
 	ctx := context.Background()
-	deps := cell.Dependencies{
-		Config:         make(map[string]any),
-		DurabilityMode: cell.DurabilityDemo,
-		Clock:          clock.Real(),
-	}
-	require.NoError(t, c.Init(ctx, deps))
+	rec := newTestRec()
+	require.NoError(t, c.Init(ctx, rec))
 	assert.Len(t, c.OwnedSlices(), 4)
 }
 
@@ -109,14 +105,11 @@ func TestDeviceCell_InitNoPublisher(t *testing.T) {
 	// No publisher injected; Init should fail-fast (NIL-PUB-P1).
 	c := NewDeviceCell(
 		WithDeviceRepository(mem.NewDeviceRepository()),
+		WithClock(clock.Real()),
 	)
 	ctx := context.Background()
-	deps := cell.Dependencies{
-		Config:         make(map[string]any),
-		DurabilityMode: cell.DurabilityDemo,
-		Clock:          clock.Real(),
-	}
-	err := c.Init(ctx, deps)
+	rec := newTestRec()
+	err := c.Init(ctx, rec)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "publisher")
 	assert.Contains(t, err.Error(), "DiscardPublisher")
@@ -125,15 +118,12 @@ func TestDeviceCell_InitNoPublisher(t *testing.T) {
 func TestDeviceCell_RouteGroups(t *testing.T) {
 	c := newTestCell()
 	ctx := context.Background()
-	deps := cell.Dependencies{
-		Config:         make(map[string]any),
-		DurabilityMode: cell.DurabilityDemo,
-		Clock:          clock.Real(),
-	}
-	require.NoError(t, c.Init(ctx, deps))
+	rec := newTestRec()
+	require.NoError(t, c.Init(ctx, rec))
+	snap := rec.Snapshot()
 
 	mux := celltest.NewTestMux()
-	for _, rg := range c.RouteGroups() {
+	for _, rg := range snap.RouteGroups {
 		if rg.Listener == cell.PrimaryListener {
 			if rg.Prefix != "" {
 				mux.Route(rg.Prefix, func(sub cell.RouteMux) { require.NoError(t, rg.Register(sub)) })
@@ -166,15 +156,12 @@ func initCellWithRouter(t *testing.T) *router.Router {
 	t.Helper()
 	c := newTestCell()
 	ctx := context.Background()
-	deps := cell.Dependencies{
-		Config:         make(map[string]any),
-		DurabilityMode: cell.DurabilityDemo,
-		Clock:          clock.Real(),
-	}
-	require.NoError(t, c.Init(ctx, deps))
+	rec := newTestRec()
+	require.NoError(t, c.Init(ctx, rec))
+	snap := rec.Snapshot()
 
 	r := router.MustNew(router.WithRouterClock(clock.Real()))
-	for _, rg := range c.RouteGroups() {
+	for _, rg := range snap.RouteGroups {
 		if rg.Listener == cell.PrimaryListener {
 			if rg.Prefix != "" {
 				r.Route(rg.Prefix, func(sub cell.RouteMux) { require.NoError(t, rg.Register(sub)) })
@@ -364,13 +351,10 @@ func TestDeviceCell_DurableMode_RejectsMissingCursorCodec(t *testing.T) {
 	c := NewDeviceCell(
 		WithDeviceRepository(mem.NewDeviceRepository()),
 		WithPublisher(eventbus.New(eventbus.WithClock(clock.Real()))),
+		WithClock(clock.Real()),
 		// No WithCursorCodec — durable mode must refuse the demo fallback.
 	)
-	err := c.Init(context.Background(), cell.Dependencies{
-		Config:         map[string]any{},
-		DurabilityMode: cell.DurabilityDurable,
-		Clock:          clock.Real(),
-	})
+	err := c.Init(context.Background(), cell.NewRegistryRecorder(map[string]any{}, cell.DurabilityDurable))
 	require.Error(t, err)
 	var ecErr *errcode.Error
 	require.ErrorAs(t, err, &ecErr)
@@ -385,13 +369,10 @@ func TestDeviceCell_DurableMode_RejectsInMemCommandQueue(t *testing.T) {
 	c := NewDeviceCell(
 		WithDeviceRepository(mem.NewDeviceRepository()),
 		WithPublisher(eventbus.New(eventbus.WithClock(clock.Real()))),
+		WithClock(clock.Real()),
 		WithCursorCodec(newTestCursorCodec(t)),
 	)
-	err := c.Init(context.Background(), cell.Dependencies{
-		Config:         map[string]any{},
-		DurabilityMode: cell.DurabilityDurable,
-		Clock:          clock.Real(),
-	})
+	err := c.Init(context.Background(), cell.NewRegistryRecorder(map[string]any{}, cell.DurabilityDurable))
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "commandtest.InMemQueue is not suitable for durable deployments")
 }
@@ -403,13 +384,10 @@ func TestDeviceCell_DurableMode_RegisterPublishFailureReturnsCreated(t *testing.
 	c := NewDeviceCell(
 		WithDeviceRepository(mem.NewDeviceRepository()),
 		WithPublisher(failingPublisher{}),
+		WithClock(clock.Real()),
 		WithCursorCodec(newTestCursorCodec(t)),
 	)
-	require.NoError(t, c.Init(context.Background(), cell.Dependencies{
-		Config:         map[string]any{},
-		DurabilityMode: cell.DurabilityDemo,
-		Clock:          clock.Real(),
-	}))
+	require.NoError(t, c.Init(context.Background(), cell.NewRegistryRecorder(map[string]any{}, cell.DurabilityDemo)))
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/devices/", strings.NewReader(`{"name":"sensor-fail"}`))
@@ -424,12 +402,9 @@ func TestDeviceCell_DemoMode_RegisterPublishFailureReturnsCreated(t *testing.T) 
 	c := NewDeviceCell(
 		WithDeviceRepository(mem.NewDeviceRepository()),
 		WithPublisher(failingPublisher{}),
+		WithClock(clock.Real()),
 	)
-	require.NoError(t, c.Init(context.Background(), cell.Dependencies{
-		Config:         map[string]any{},
-		DurabilityMode: cell.DurabilityDemo,
-		Clock:          clock.Real(),
-	}))
+	require.NoError(t, c.Init(context.Background(), cell.NewRegistryRecorder(map[string]any{}, cell.DurabilityDemo)))
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/devices/", strings.NewReader(`{"name":"sensor-demo"}`))
@@ -440,24 +415,28 @@ func TestDeviceCell_DemoMode_RegisterPublishFailureReturnsCreated(t *testing.T) 
 		"demo mode keeps direct publish fail-open behavior")
 }
 
-// TestDeviceCell_HealthCheckers_WithDirectEmitter verifies that after Init
-// with a DirectEmitter-backed publisher, HealthCheckers returns the
+// TestDeviceCell_Probes_WithDirectEmitter verifies that after Init
+// with a DirectEmitter-backed publisher, the snapshot contains the
 // outbox-failopen-rate checker scoped to "devicecell".
-func TestDeviceCell_HealthCheckers_WithDirectEmitter(t *testing.T) {
+func TestDeviceCell_Probes_WithDirectEmitter(t *testing.T) {
 	c := newTestCell()
-	deps := cell.Dependencies{Config: make(map[string]any), DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()}
-	require.NoError(t, c.Init(context.Background(), deps))
+	rec := cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo)
+	require.NoError(t, c.Init(context.Background(), rec))
+	snap := rec.Snapshot()
 
-	checkers := c.HealthCheckers()
 	const emitterKey = "outbox-failopen-rate.devicecell"
-	require.Contains(t, checkers, emitterKey, "DirectEmitter health checker must be aggregated")
-	assert.NoError(t, checkers[emitterKey](context.Background()), "fresh emitter should be healthy")
+	require.Contains(t, snap.HealthCheckers, emitterKey, "DirectEmitter probe must be aggregated")
+	assert.NoError(t, snap.HealthCheckers[emitterKey](context.Background()), "fresh emitter should be healthy")
 }
 
-// TestDeviceCell_HealthCheckers_BeforeInit verifies that HealthCheckers
-// returns an empty map before Init (emitter field is nil).
-func TestDeviceCell_HealthCheckers_BeforeInit(t *testing.T) {
-	c := newTestCell() // emitter not set until Init
-	checkers := c.HealthCheckers()
-	assert.Empty(t, checkers, "pre-Init emitter field is nil; no health checkers expected")
+// TestDeviceCell_LifecycleHookRegistered verifies that Init registers the
+// command sweeper lifecycle hook via reg.Lifecycle.
+func TestDeviceCell_LifecycleHookRegistered(t *testing.T) {
+	c := newTestCell()
+	rec := cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo)
+	require.NoError(t, c.Init(context.Background(), rec))
+	snap := rec.Snapshot()
+
+	require.Len(t, snap.LifecycleHooks, 1, "Init must register exactly one lifecycle hook (command sweeper)")
+	assert.Equal(t, "devicecommand.sweeper", snap.LifecycleHooks[0].Name)
 }

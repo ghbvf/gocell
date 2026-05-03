@@ -8,7 +8,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/clock"
 	kcommand "github.com/ghbvf/gocell/kernel/command"
 	"github.com/ghbvf/gocell/kernel/command/commandtest"
@@ -23,12 +22,10 @@ func TestSweeperLifecycle_ContributesHook(t *testing.T) {
 		Clk:      clock.Real(),
 	})
 
-	var _ cell.LifecycleContributor = lc
-	hooks := lc.LifecycleHooks()
-	require.Len(t, hooks, 1)
-	assert.Equal(t, "devicecommand.sweeper", hooks[0].Name)
-	assert.NotNil(t, hooks[0].OnStart)
-	assert.NotNil(t, hooks[0].OnStop)
+	hook := lc.Hook()
+	assert.Equal(t, "devicecommand.sweeper", hook.Name)
+	assert.NotNil(t, hook.OnStart)
+	assert.NotNil(t, hook.OnStop)
 }
 
 func TestSweeperLifecycle_StartStop(t *testing.T) {

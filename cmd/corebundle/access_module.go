@@ -99,6 +99,7 @@ func (m AccessCoreModule) Provide(
 	}
 
 	accessOpts := []accesscore.Option{
+		accesscore.WithClock(shared.Clock),
 		accesscore.WithInMemoryDefaults(),
 		// Publisher set unconditionally; outboxWriter set conditionally below.
 		// cell.ResolveEmitter picks DirectEmitter(FailOpen) when writer is nil
@@ -142,7 +143,7 @@ func (m AccessCoreModule) Provide(
 	if mode == adminProvisionModeBootstrap {
 		accessOpts = append(accessOpts, accesscore.WithInitialAdminBootstrap(m.InitialAdminOpts...))
 	}
-	c := accesscore.NewAccessCore(accessOpts...)
+	c := accesscore.NewAccessCore(accessOpts...) //archtest:allow:clock-injection:via-slice WithClock prepended to accessOpts above
 	// Bootstrap phase3b auto-discovers c.LifecycleHooks() — no WithWorkers needed.
 	return c, nil, nil, nil
 }

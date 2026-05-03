@@ -49,11 +49,7 @@ var defaultRefreshPolicy = refresh.Policy{
 
 // Compile-time interface checks.
 var (
-	_ cell.Cell                  = (*AccessCore)(nil)
-	_ cell.RouteGroupContributor = (*AccessCore)(nil)
-	_ cell.HealthContributor     = (*AccessCore)(nil)
-	_ cell.EventRegistrar        = (*AccessCore)(nil)
-	_ cell.LifecycleContributor  = (*AccessCore)(nil)
+	_ cell.Cell = (*AccessCore)(nil)
 )
 
 // Option configures an AccessCore Cell.
@@ -168,24 +164,30 @@ func WithConfigEventCollector(collector obmetrics.ConfigEventCollector) Option {
 	return func(c *AccessCore) { c.configEventCollector = collector }
 }
 
+// WithClock sets the time source for this Cell. Required — Init() panics via
+// clock.MustHaveClock if not set. Composition root passes clock.Real(); tests
+// inject a deterministic clock to control time-sensitive logic.
+func WithClock(clk clock.Clock) Option {
+	return func(c *AccessCore) { c.clk = clk }
+}
+
 // WithInMemoryDefaults configures in-memory repositories for development
 // and testing. Not suitable for production use.
-// refreshStore construction is deferred to Init() so that c.clk (set from
-// deps.Clock) is available.
+// sessionRepo and refreshStore construction are deferred to Init() so that
+// c.clk is available.
 func WithInMemoryDefaults() Option {
 	return func(c *AccessCore) {
 		c.userRepo = mem.NewUserRepository()
-		// sessionRepo construction is deferred to Init() so that c.clk
-		// (set from deps.Clock) is available for mem.NewSessionRepository.
+		// sessionRepo construction is deferred to Init() so that c.clk is
+		// available for mem.NewSessionRepository.
 		c.roleRepo = mem.NewRoleRepository()
 		c.useInMemoryDefaults = true
 	}
 }
 
 // WithInitialAdminBootstrap enables first-run admin bootstrap (scheme H).
-// Bootstrap auto-discovers the returned Lifecycle via cell.LifecycleContributor
-// (kernel/cell.LifecycleContributor → runtime/bootstrap phase3b) and wires
-// OnStart/OnStop — no composition-root plumbing required.
+// The lifecycle hook is registered via reg.Lifecycle in Init so the bootstrap
+// phase wires OnStart/OnStop — no composition-root plumbing required.
 //
 // ref: docs/architecture/202604181900-adr-auth-setup-first-run.md (scheme H)
 func WithInitialAdminBootstrap(opts ...initialadmin.LifecycleOption) Option {
@@ -242,7 +244,7 @@ type AccessCore struct {
 	refreshGCCollector   refresh.GCCollector
 	refreshGC            *refresh.GCWorker
 
-	// initialAdmin wires first-run admin bootstrap via LifecycleContributor;
+	// initialAdmin wires first-run admin bootstrap via reg.Lifecycle(...);
 	// nil means the feature is disabled.
 	initialAdmin *initialadmin.Lifecycle
 

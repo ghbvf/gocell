@@ -149,7 +149,7 @@ func TestRouterClose_CallsStopIntakeBeforeCancel(t *testing.T) {
 	composite := newCompositeStopIntakeSubscriber()
 
 	r := New(composite, clock.Real())
-	_ = r.AddContractHandler(testEventSpec("topic.drain"), noopHandler, "test")
+	_ = r.AddContractHandler(testEventSpec("topic.drain"), noopHandler, "test", "test")
 
 	ctx := context.Background()
 	done := make(chan error, 1)
@@ -216,7 +216,7 @@ func TestRouterClose_NoStopIntakeFallback(t *testing.T) {
 func TestRouterClose_NoStopIntakeFallback_WithHandlers(t *testing.T) {
 	sub := &blockingSubscriber{}
 	r := New(sub, clock.Real())
-	_ = r.AddContractHandler(testEventSpec("topic.a"), noopHandler, "test")
+	_ = r.AddContractHandler(testEventSpec("topic.a"), noopHandler, "test", "test")
 
 	ctx := context.Background()
 	done := make(chan error, 1)
@@ -310,7 +310,7 @@ func TestRouterClose_WaitsForInflightAfterStopIntake(t *testing.T) {
 	sub := newInflightSubscriber(handlerDuration)
 
 	r := New(sub, clock.Real())
-	_ = r.AddContractHandler(testEventSpec("topic.inflight"), noopHandler, "test")
+	_ = r.AddContractHandler(testEventSpec("topic.inflight"), noopHandler, "test", "test")
 
 	ctx := context.Background()
 	done := make(chan error, 1)
@@ -362,7 +362,7 @@ func TestRouterClose_StopIntakeError_ContinuesShutdown(t *testing.T) {
 		stopIntakeErr: context.DeadlineExceeded, // simulate StopIntake timeout
 	}
 	r := New(sr, clock.Real())
-	_ = r.AddContractHandler(testEventSpec("topic.a"), noopHandler, "test")
+	_ = r.AddContractHandler(testEventSpec("topic.a"), noopHandler, "test", "test")
 
 	ctx := context.Background()
 	done := make(chan error, 1)
@@ -424,7 +424,7 @@ func TestRouterClose_StopIntakeBlocksNeverCalled_CtxTimeoutContinues(t *testing.
 	r := New(h, clock.Real())
 	require.NoError(t, r.AddContractHandler(testEventSpec("t"), func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
 		return outbox.HandleResult{Disposition: outbox.DispositionAck}
-	}, "test-cg"))
+	}, "test-cg", "test"))
 
 	runCtx := t.Context()
 	done := make(chan error, 1)
@@ -490,7 +490,7 @@ func TestRouterClose_WrapsErrorsByPhase(t *testing.T) {
 		r := New(h, clock.Real())
 		require.NoError(t, r.AddContractHandler(testEventSpec("t"), func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
 			return outbox.HandleResult{Disposition: outbox.DispositionAck}
-		}, "test-cg"))
+		}, "test-cg", "test"))
 
 		runCtx := t.Context()
 		done := make(chan error, 1)
@@ -536,7 +536,7 @@ func TestRouterClose_WrapsErrorsByPhase(t *testing.T) {
 		r := New(sub, clock.Real())
 		require.NoError(t, r.AddContractHandler(testEventSpec("t"), func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
 			return outbox.HandleResult{Disposition: outbox.DispositionAck}
-		}, "test-cg"))
+		}, "test-cg", "test"))
 
 		runCtx, runCancel := context.WithCancel(context.Background())
 		defer runCancel()
@@ -593,7 +593,7 @@ func TestRouterClose_StopIntakeErr_ProceedsToCancel(t *testing.T) {
 	r := New(h, clock.Real())
 	require.NoError(t, r.AddContractHandler(testEventSpec("t"), func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
 		return outbox.HandleResult{Disposition: outbox.DispositionAck}
-	}, "test-cg"))
+	}, "test-cg", "test"))
 
 	runCtx := t.Context()
 	done := make(chan error, 1)

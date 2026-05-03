@@ -149,6 +149,7 @@ func loginAndGetPair(t *testing.T, opts ...loginOption) loginResult {
 	require.NoError(t, err)
 
 	c := NewAccessCore(
+		WithClock(clock.Real()),
 		WithUserRepository(userRepo),
 		WithSessionRepository(testutil.RealSessionRepo(t)),
 		WithRoleRepository(roleRepo),
@@ -159,14 +160,13 @@ func loginAndGetPair(t *testing.T, opts ...loginOption) loginResult {
 		WithMetricsProvider(metrics.NopProvider{}),
 		// Demo mode: no tx+outbox required.
 	)
-	require.NoError(t, c.Init(context.Background(), cell.Dependencies{
-		Config:         make(map[string]any),
-		DurabilityMode: cell.DurabilityDemo,
-		Clock:          clock.Real(),
-	}))
+	intReg := cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo)
+	require.NoError(t, c.Init(context.Background(), intReg))
 
+	intSnap := intReg.Snapshot()
 	r := router.MustNew(router.WithRouterClock(clock.Real()))
-	for _, rg := range c.RouteGroups() {
+	for _, rg := range intSnap.RouteGroups {
+		rg := rg
 		if rg.Listener == cell.PrimaryListener {
 			if rg.Prefix != "" {
 				r.Route(rg.Prefix, func(sub cell.RouteMux) { rg.Register(sub) })

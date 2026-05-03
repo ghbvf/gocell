@@ -68,10 +68,7 @@ var auditAppendSpecs = map[string]wrapper.ContractSpec{
 
 // Compile-time interface checks.
 var (
-	_ cell.Cell                  = (*AuditCore)(nil)
-	_ cell.RouteGroupContributor = (*AuditCore)(nil)
-	_ cell.EventRegistrar        = (*AuditCore)(nil)
-	_ cell.HealthContributor     = (*AuditCore)(nil)
+	_ cell.Cell = (*AuditCore)(nil)
 )
 
 // Option configures an AuditCore Cell.
@@ -148,6 +145,13 @@ func WithCursorCodec(codec *query.CursorCodec) Option {
 	return func(c *AuditCore) { c.cursorCodec = codec }
 }
 
+// WithClock sets the time source for this Cell. Required — Init() panics via
+// clock.MustHaveClock if not set. Composition root passes clock.Real(); tests
+// inject a deterministic clock to control time-sensitive logic.
+func WithClock(clk clock.Clock) Option {
+	return func(c *AuditCore) { c.clk = clk }
+}
+
 // WithInMemoryDefaults configures in-memory repositories for development
 // and testing. Not suitable for production use.
 func WithInMemoryDefaults() Option {
@@ -183,35 +187,6 @@ type AuditCore struct {
 	queryHandler *auditquery.Handler
 }
 
-// HealthCheckers implements cell.HealthContributor. Aggregates the outbox
-// emitter's HealthCheckers (currently fail-open drop rate → degraded signal)
-// so /readyz surfaces "audit events are being lost in fail-open path"
-// without polluting the cell's primary Cell.Health() signal.
-//
-// Note: auditcore uses DirectPublishFailClosed, so the fail-open checker
-// will never trip in normal operation; the checker is still wired for
-// consistency and forward-compatibility.
-//
-// The emitter checker (outbox-failopen-rate.auditcore) is enabled by default
-// at a 5% threshold; it returns cell.ErrDegraded when the fail-open drop ratio
-// sustained between two /readyz probes exceeds that threshold. Disable via
-// outbox.WithFailOpenRateThreshold(0) when constructing the emitter.
-func (c *AuditCore) HealthCheckers() map[string]func(context.Context) error {
-	checkers := make(map[string]func(context.Context) error)
-	if hc, ok := c.emitter.(cell.HealthContributor); ok {
-		for k, v := range hc.HealthCheckers() {
-			if _, dup := checkers[k]; dup {
-				slog.Error("auditcore: duplicate health checker name; emitter checker dropped",
-					slog.String("checker", k),
-					slog.String("source", "outbox-emitter"))
-				continue
-			}
-			checkers[k] = v
-		}
-	}
-	return checkers
-}
-
 // NewAuditCore creates a new AuditCore Cell.
 func NewAuditCore(opts ...Option) *AuditCore {
 	c := &AuditCore{
@@ -233,16 +208,20 @@ func NewAuditCore(opts ...Option) *AuditCore {
 	return c
 }
 
-// Init constructs all 4 slices.
-func (c *AuditCore) Init(ctx context.Context, deps cell.Dependencies) error {
-	c.clk = deps.Clock
-	if err := c.resolveHMACKey(deps.Config); err != nil {
+// Init constructs all 4 slices and registers routes, subscriptions, and health
+// probes into reg.
+func (c *AuditCore) Init(ctx context.Context, reg cell.Registry) error {
+	clock.MustHaveClock(c.clk, "auditcore.Init")
+	if err := c.resolveHMACKey(reg.Config()); err != nil {
 		return err
 	}
-	if err := c.BaseCell.Init(ctx, deps); err != nil {
+	if err := c.BaseCell.Init(ctx, reg); err != nil {
 		return err
 	}
-	if err := c.resolveEmitter(deps.DurabilityMode); err != nil {
+
+	durabilityMode := reg.DurabilityMode()
+
+	if err := c.resolveEmitter(durabilityMode); err != nil {
 		return err
 	}
 	c.initSlices()
@@ -251,10 +230,44 @@ func (c *AuditCore) Init(ctx context.Context, deps cell.Dependencies) error {
 	// wire a production codec must fail closed, not silently sign cursors
 	// with a key that ships in the source tree.
 	// ref: zeromicro/go-zero MustSetUp — fatal on insecure default config.
-	if err := c.initCursorCodec(deps.DurabilityMode); err != nil {
+	if err := c.initCursorCodec(durabilityMode); err != nil {
 		return err
 	}
-	return c.initQuerySlice(deps.DurabilityMode)
+	if err := c.initQuerySlice(durabilityMode); err != nil {
+		return err
+	}
+
+	// Register HTTP route group.
+	reg.RouteGroup(cell.RouteGroup{
+		Listener: cell.PrimaryListener,
+		Prefix:   "/api/v1/audit",
+		Register: func(mux cell.RouteMux) error {
+			return c.queryHandler.RegisterRoutes(mux)
+		},
+	})
+
+	// Register event subscriptions.
+	handler := outbox.WrapLegacyHandler(c.appendSvc.HandleEvent)
+	for _, topic := range auditappend.Topics {
+		spec, ok := auditAppendSpecs[topic]
+		if !ok {
+			return fmt.Errorf("auditcore: missing ContractSpec for topic %q — "+
+				"auditAppendSpecs and auditappend.Topics must stay in sync", topic)
+		}
+		if err := reg.Subscribe(spec, handler, "auditcore",
+			cell.WithSubscriptionSliceID("auditappend")); err != nil {
+			return fmt.Errorf("auditcore: subscribe %s: %w", topic, err)
+		}
+	}
+
+	// Register health probes (emitter fail-open rate checker).
+	if hc, ok := c.emitter.(cell.HealthProber); ok {
+		for k, v := range hc.Probes() {
+			reg.Health(k, v)
+		}
+	}
+
+	return nil
 }
 
 // resolveEmitter delegates to cell.ResolveCellEmitter (mutual exclusion +
@@ -364,40 +377,5 @@ func (c *AuditCore) initCursorCodec(mode cell.DurabilityMode) error {
 	c.cursorCodec = codec
 	c.logger.Warn("auditcore: using default cursor codec (demo mode)",
 		slog.String("cell", c.ID()))
-	return nil
-}
-
-// RouteGroups declares auditcore's HTTP route groups on the PrimaryListener.
-//
-// ref: go-zero rest/server.go AddRoutes — per-listener route declaration.
-func (c *AuditCore) RouteGroups() []cell.RouteGroup {
-	return []cell.RouteGroup{
-		{
-			Listener: cell.PrimaryListener,
-			Prefix:   "/api/v1/audit",
-			Register: func(mux cell.RouteMux) error {
-				return c.queryHandler.RegisterRoutes(mux)
-			},
-		},
-	}
-}
-
-// RegisterSubscriptions declares event subscriptions for all audit topics.
-// Each topic has a matching wrapper.ContractSpec so every consumed entry
-// emits a CONSUME span annotated with gocell.contract.id; the Router
-// manages goroutine lifecycle and setup-error detection.
-func (c *AuditCore) RegisterSubscriptions(r cell.EventRouter) error {
-	handler := outbox.WrapLegacyHandler(c.appendSvc.HandleEvent)
-	for _, topic := range auditappend.Topics {
-		spec, ok := auditAppendSpecs[topic]
-		if !ok {
-			return fmt.Errorf("auditcore: missing ContractSpec for topic %q — "+
-				"auditAppendSpecs and auditappend.Topics must stay in sync", topic)
-		}
-		if err := r.AddContractHandler(spec, handler, "auditcore",
-			cell.WithSubscriptionSliceID("auditappend")); err != nil {
-			return fmt.Errorf("auditcore: subscribe %s: %w", topic, err)
-		}
-	}
 	return nil
 }

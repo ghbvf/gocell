@@ -58,6 +58,7 @@ func (AuditCoreModule) Provide(
 	}
 
 	auditOpts := []auditcore.Option{
+		auditcore.WithClock(shared.Clock),
 		auditcore.WithInMemoryDefaults(),
 		// Publisher set unconditionally; outboxWriter set conditionally below.
 		// cell.ResolveEmitter picks DirectEmitter(FailOpen) when writer is nil
@@ -81,7 +82,7 @@ func (AuditCoreModule) Provide(
 			auditcore.WithTxManager(txMgr),
 		)
 	}
-	c := auditcore.NewAuditCore(auditOpts...)
+	c := auditcore.NewAuditCore(auditOpts...) //archtest:allow:clock-injection:via-slice WithClock prepended to auditOpts above
 	return c, nil, nil, nil
 }
 

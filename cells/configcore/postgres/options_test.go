@@ -37,6 +37,7 @@ func TestWithPoolWiresStaleCipherCallback(t *testing.T) {
 	opt, err := WithPool(pool, clock.Real(), WithOnStaleCipher(func(_, _, _ string) {}))
 	require.NoError(t, err)
 	c := configcore.NewConfigCore(
+		configcore.WithClock(clock.Real()),
 		opt,
 	)
 

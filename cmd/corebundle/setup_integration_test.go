@@ -70,6 +70,7 @@ func TestSetupEndpoints_FirstRunFlow(t *testing.T) {
 	require.NoError(t, err)
 
 	ac := accesscore.NewAccessCore(
+		accesscore.WithClock(clock.Real()),
 		accesscore.WithInMemoryDefaults(),
 		accesscore.WithOutboxDeps(eb, nw),
 		accesscore.WithJWTIssuer(jwtIssuer),
@@ -78,6 +79,7 @@ func TestSetupEndpoints_FirstRunFlow(t *testing.T) {
 		accesscore.WithMetricsProvider(metrics.NopProvider{}),
 	)
 	cc := configcore.NewConfigCore(
+		configcore.WithClock(clock.Real()),
 		configcore.WithInMemoryDefaults(),
 		configcore.WithOutboxDeps(eb, nw),
 		configcore.WithTxManager(noopTxRunner{}),
@@ -85,6 +87,7 @@ func TestSetupEndpoints_FirstRunFlow(t *testing.T) {
 		configcore.WithMetricsProvider(metrics.NopProvider{}),
 	)
 	auc := auditcore.NewAuditCore(
+		auditcore.WithClock(clock.Real()),
 		auditcore.WithInMemoryDefaults(),
 		auditcore.WithOutboxDeps(eb, nw),
 		auditcore.WithHMACKey([]byte("test-hmac-key-32-bytes-long!!!!")),

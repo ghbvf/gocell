@@ -3,6 +3,7 @@ package assembly
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"testing"
 
@@ -48,7 +49,7 @@ func newFailInitCell(id string) *failInitCell {
 	}
 }
 
-func (c *failInitCell) Init(_ context.Context, _ cell.Dependencies) error {
+func (c *failInitCell) Init(_ context.Context, _ cell.Registry) error {
 	return errors.New("init boom")
 }
 
@@ -437,4 +438,135 @@ func TestAssemblyStart_InvalidDurabilityMode_Rejects(t *testing.T) {
 	err := a.Start(context.Background())
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "invalid DurabilityMode 99")
+}
+
+// ---------------------------------------------------------------------------
+// Snapshot lifecycle tests — ref: uber-go/fx App.Done lifecycle state machine.
+// ---------------------------------------------------------------------------
+
+// TestAssembly_Snapshots_EmptyAfterInitFailure verifies that when a cell's
+// Init returns an error, Snapshots() returns an empty map (not populated data
+// from cells that succeeded Init before the failure).
+func TestAssembly_Snapshots_EmptyAfterInitFailure(t *testing.T) {
+	t.Parallel()
+
+	a := newTestAssembly(t, Config{ID: "snap-init-fail", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
+	good := cell.NewBaseCell(cell.CellMetadata{ID: "good", Type: cell.CellTypeCore})
+	bad := newFailInitCell("bad")
+
+	require.NoError(t, a.Register(good))
+	require.NoError(t, a.Register(bad))
+
+	err := a.Start(context.Background())
+	require.Error(t, err)
+
+	snaps := a.Snapshots()
+	assert.Empty(t, snaps, "Snapshots() must return empty map after Init failure")
+}
+
+// TestAssembly_Snapshots_EmptyAfterStartFailure verifies that when a cell's
+// Start returns an error (after a successful Init), Snapshots() returns an
+// empty map (assembly did not reach the Started state).
+func TestAssembly_Snapshots_EmptyAfterStartFailure(t *testing.T) {
+	t.Parallel()
+
+	a := newTestAssembly(t, Config{ID: "snap-start-fail", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
+	good := cell.NewBaseCell(cell.CellMetadata{ID: "good", Type: cell.CellTypeCore})
+	bad := newFailStartCell("bad")
+
+	require.NoError(t, a.Register(good))
+	require.NoError(t, a.Register(bad))
+
+	err := a.Start(context.Background())
+	require.Error(t, err)
+
+	snaps := a.Snapshots()
+	assert.Empty(t, snaps, "Snapshots() must return empty map after Start failure")
+}
+
+// TestAssembly_Snapshots_EmptyAfterStop verifies that after a successful
+// Start + Stop cycle, Snapshots() returns an empty map.
+func TestAssembly_Snapshots_EmptyAfterStop(t *testing.T) {
+	t.Parallel()
+
+	a := newTestAssembly(t, Config{ID: "snap-after-stop", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
+	c := cell.NewBaseCell(cell.CellMetadata{ID: "c", Type: cell.CellTypeCore})
+
+	require.NoError(t, a.Register(c))
+	require.NoError(t, a.Start(context.Background()))
+
+	// Before Stop: snapshots should be non-empty.
+	snaps := a.Snapshots()
+	assert.NotEmpty(t, snaps, "Snapshots() must be non-empty while assembly is running")
+
+	require.NoError(t, a.Stop(context.Background()))
+
+	// After Stop: snapshots should be empty.
+	snaps = a.Snapshots()
+	assert.Empty(t, snaps, "Snapshots() must return empty map after Stop")
+}
+
+// TestAssembly_StartInternal_PerCellConfigIsolation verifies that each cell
+// receives an independent deep copy of the config map so that mutations by one
+// cell's Init path do not affect sibling cells.
+//
+// ref: spf13/viper AllSettings() — returns a deep copy for isolation.
+// ref: k8s client-go DeepCopyObject — each consumer owns its own value.
+func TestAssembly_StartInternal_PerCellConfigIsolation(t *testing.T) {
+	t.Parallel()
+
+	const key = "shared_key"
+	cfgMap := map[string]any{key: "original"}
+
+	// firstCell records the value it sees and mutates the map it received.
+	var firstSeen string
+	firstCell := &configMutatingCell{
+		BaseCell: cell.NewBaseCell(cell.CellMetadata{
+			ID: "first", Type: cell.CellTypeCore, ConsistencyLevel: cell.L0,
+		}),
+		onInit: func(reg cell.Registry) error {
+			firstSeen = fmt.Sprintf("%v", reg.Config()[key])
+			// Mutate the map — should NOT affect the second cell.
+			reg.Config()[key] = "mutated-by-first"
+			return nil
+		},
+	}
+
+	// secondCell reads the value after firstCell's Init has already mutated its own copy.
+	var secondSeen string
+	secondCell := &configMutatingCell{
+		BaseCell: cell.NewBaseCell(cell.CellMetadata{
+			ID: "second", Type: cell.CellTypeCore, ConsistencyLevel: cell.L0,
+		}),
+		onInit: func(reg cell.Registry) error {
+			secondSeen = fmt.Sprintf("%v", reg.Config()[key])
+			return nil
+		},
+	}
+
+	a := newTestAssembly(t, Config{ID: "isolation-test", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
+	require.NoError(t, a.Register(firstCell))
+	require.NoError(t, a.Register(secondCell))
+
+	require.NoError(t, a.StartWithConfig(context.Background(), cfgMap))
+	defer a.Stop(context.Background()) //nolint:errcheck // teardown best-effort; assertions cover lifecycle
+
+	assert.Equal(t, "original", firstSeen, "first cell should see original value")
+	assert.Equal(t, "original", secondSeen, "second cell should see original value, not mutation from first cell")
+}
+
+// configMutatingCell is a test cell that calls onInit during Init.
+type configMutatingCell struct {
+	*cell.BaseCell
+	onInit func(cell.Registry) error
+}
+
+func (c *configMutatingCell) Init(ctx context.Context, reg cell.Registry) error {
+	if err := c.BaseCell.Init(ctx, reg); err != nil {
+		return err
+	}
+	if c.onInit != nil {
+		return c.onInit(reg)
+	}
+	return nil
 }

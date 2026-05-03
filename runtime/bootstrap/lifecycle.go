@@ -27,7 +27,7 @@ var ErrLifecycleAlreadyStarted = errcode.New(errcode.ErrBootstrapLifecycle, "lif
 
 // ErrDuplicateHookName is returned by Append when a non-empty Hook.Name has
 // already been registered. The single source of truth for duplicate-name
-// detection lives here so that phase3b (LifecycleContributor auto-discovery)
+// detection lives here so that phase3b (cell.Registry.Lifecycle snapshot drain)
 // and WithLifecycle (explicit composition-root Append) share the same guard
 // without having to re-synchronize per-path "seen" maps.
 //
@@ -51,8 +51,8 @@ const (
 // Hook is a pair of lifecycle callbacks invoked in Append order on Start and
 // reverse order on Stop. A zero-value OnStart/OnStop means no-op.
 //
-// The CellID field is stamped by phase3b when a hook is discovered from a
-// cell.LifecycleContributor; hooks appended via bootstrap.WithLifecycle
+// The CellID field is stamped by phase3b when a hook is drained from a
+// cell's Registry.Lifecycle snapshot; hooks appended via bootstrap.WithLifecycle
 // leave it empty. It is a runtime-only observability dimension (not mirrored
 // on cell.LifecycleHook) — cells never self-declare their identity here, by
 // analogy with uber-go/fx's unexported Hook.callerFrame which the framework

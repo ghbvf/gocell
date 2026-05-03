@@ -24,6 +24,12 @@
 // Scope: option-pattern ("WithClock(clk) as option arg"). Positional Clock
 // parameters are out of scope for v1.
 //
+// Exemption: when Go syntax prevents passing WithClock as a direct arg
+// (e.g. the options come from a dynamically-built slice that already contains
+// WithClock, and mixing positional + spread is not valid Go), annotate the
+// call site with `//archtest:allow:clock-injection:via-slice <reason>` on the
+// same line as the closing `)`. The reason field is mandatory.
+//
 // ref: docs/architecture/202605021500-adr-kernel-clock-injection.md
 // ref: docs/plans/202605011500-029-master-roadmap.md Track D #D6
 package archtest
@@ -45,6 +51,36 @@ import (
 	"github.com/ghbvf/gocell/tools/internal/fileroles"
 	"github.com/ghbvf/gocell/tools/internal/prodscan"
 )
+
+// clockViaSliceAllowMarker is the annotation that exempts a constructor call
+// from CLOCK-INJECTION-TEST-CALLSITE-01 when Go syntax prevents passing
+// WithClock as a direct arg (e.g. options come from a dynamically-built slice
+// that already includes WithClock, and positional + spread is not valid Go).
+// The annotation must appear on the same line as the call's closing ")" with
+// a non-empty reason: `//archtest:allow:clock-injection:via-slice <reason>`.
+const clockViaSliceAllowMarker = "//archtest:allow:clock-injection:via-slice"
+
+// clockCallsiteAllowedLines returns the set of source line numbers in file
+// that carry a valid clockViaSliceAllowMarker with a non-empty reason.
+func clockCallsiteAllowedLines(fset *token.FileSet, file *ast.File) map[int]bool {
+	out := map[int]bool{}
+	for _, cg := range file.Comments {
+		for _, c := range cg.List {
+			text := strings.TrimSpace(c.Text)
+			if !strings.HasPrefix(text, clockViaSliceAllowMarker) {
+				continue
+			}
+			// Require a non-empty reason after the marker.
+			rest := strings.TrimSpace(strings.TrimPrefix(text, clockViaSliceAllowMarker))
+			if rest == "" {
+				continue
+			}
+			line := fset.Position(c.Slash).Line
+			out[line] = true
+		}
+	}
+	return out
+}
 
 // clockRequiredCtor holds a collected constructor whose package has a WithClock
 // option function.
@@ -178,6 +214,11 @@ func resolvedFunc(fun ast.Expr, info *types.Info) *types.Func {
 
 // scanClockCallsiteAST walks file looking for calls to any constructor in
 // ctors from test files, and reports violations where WithClock is missing.
+//
+// A call may be exempted by placing `//archtest:allow:clock-injection:via-slice
+// <reason>` on the same line as the call's closing ")" when Go syntax prevents
+// passing WithClock as a direct positional arg (e.g. options live in a
+// dynamically-built slice that already contains WithClock).
 func scanClockCallsiteAST(
 	fset *token.FileSet,
 	file *ast.File,
@@ -185,6 +226,7 @@ func scanClockCallsiteAST(
 	info *types.Info,
 	ctors map[string]clockRequiredCtor,
 ) []string {
+	allowedLines := clockCallsiteAllowedLines(fset, file)
 	var out []string
 	seen := map[string]bool{}
 
@@ -209,6 +251,11 @@ func scanClockCallsiteAST(
 			return true
 		}
 		if callsWithClock(call.Args, info, ctor.withClockFullName) {
+			return true
+		}
+		// Check for explicit exemption via allow-marker on the closing-paren line.
+		closingLine := fset.Position(call.Rparen).Line
+		if allowedLines[closingLine] {
 			return true
 		}
 		line := fset.Position(call.Pos()).Line

@@ -2,33 +2,7 @@ package cell
 
 import (
 	"context"
-
-	"github.com/ghbvf/gocell/kernel/clock"
 )
-
-// Dependencies is the set of collaborators injected into a Cell during Init.
-//
-// ADR: Frozen — fields intentionally minimal.
-//
-// Status: Accepted (2026-04-11, CS-AR-2); revised (2026-05-02, D6) to
-// add the Clock field — this is the required carrier for the single
-// composition-root clock that PROD-CLOCK-INJECTION-01 mandates.
-//
-// Decision: Dependencies carries Config, DurabilityMode, and Clock.
-// Cross-cell access MUST go through contracts, not through a shared
-// cell graph. Concrete dependencies (repos, outbox writers, publishers)
-// are injected via functional options at cell construction time, not
-// via Dependencies — Clock is the single exception because every cell
-// needs the same time source for deterministic testability.
-//
-// The struct wrapper is retained (rather than passing map[string]any
-// directly) for forward compatibility: future fields (e.g. Secrets,
-// ServiceLocator) can be added without changing the Cell.Init signature.
-type Dependencies struct {
-	Config         map[string]any
-	DurabilityMode DurabilityMode // Required: Demo or Durable (zero value rejected); see durability.go
-	Clock          clock.Clock    // Required: assembly.New rejects nil + typed-nil at construction; see kernel/assembly/assembly.go
-}
 
 // VerifySpec describes the verification requirements for a Slice.
 type VerifySpec struct {
@@ -93,13 +67,13 @@ type Cell interface {
 	Type() CellType
 	// ConsistencyLevel reports the cell's declared consistency tier (L0–L4).
 	ConsistencyLevel() Level
-	// Init wires injected dependencies; called once before Start. Init failure
-	// aborts assembly start without invoking Stop, so implementations must NOT
-	// acquire resources that require explicit release (open connections, spawn
-	// goroutines, lease distributed locks). Defer such acquisition to Start so
-	// Start/Stop remain symmetric. Init may validate config, build in-memory
-	// state, and register slices.
-	Init(ctx context.Context, deps Dependencies) error
+	// Init registers cell capabilities via the provided Registry; called once
+	// before Start. Init failure aborts assembly start without invoking Stop,
+	// so implementations must NOT acquire resources that require explicit release
+	// (open connections, spawn goroutines, lease distributed locks). Defer such
+	// acquisition to Start so Start/Stop remain symmetric. Init may validate
+	// config, build in-memory state, and register slices.
+	Init(ctx context.Context, reg Registry) error
 	// Start brings the cell to a running state. Returns nil only when the cell
 	// is fully ready to serve traffic. Canceling ctx must abort startup.
 	// Resources acquired here must be released by the matching Stop call.

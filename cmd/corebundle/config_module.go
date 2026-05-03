@@ -135,11 +135,12 @@ func (m ConfigCoreModule) Provide(
 	baseOpts := []configcore.Option{
 		// Outbox wiring is provided by buildConfigCoreOpts (PG adapter includes
 		// the transactional writer; memory adapter passes writer=nil).
+		configcore.WithClock(shared.Clock),
 		configcore.WithCursorCodec(cursorCodec),
 		configcore.WithMetricsProvider(shared.PromStack.metricProvider),
 		configcore.WithConfigEventCollector(shared.ConfigEventCollector),
 	}
-	c := configcore.NewConfigCore(append(baseOpts, cellOpts...)...)
+	c := configcore.NewConfigCore(append(baseOpts, cellOpts...)...) //archtest:allow:clock-injection:via-slice WithClock in baseOpts
 
 	// Register Vault diagnostics when the KeyProvider exposes them.
 	if err := registerKeyProviderMetrics(kp, shared); err != nil {

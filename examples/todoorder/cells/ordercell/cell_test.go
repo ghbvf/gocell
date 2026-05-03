@@ -22,11 +22,8 @@ import (
 	"github.com/ghbvf/gocell/runtime/http/router"
 )
 
-func newTestDeps() cell.Dependencies {
-	return cell.Dependencies{
-		Config:         make(map[string]any),
-		DurabilityMode: cell.DurabilityDemo,
-	}
+func newTestRec() *cell.RegistryRecorder {
+	return cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo)
 }
 
 // newTestCell creates an OrderCell with NoopWriter + NoopTxRunner (unified outbox path).
@@ -41,10 +38,10 @@ func newTestCell() *OrderCell {
 func TestOrderCell_Lifecycle(t *testing.T) {
 	c := newTestCell()
 	ctx := context.Background()
-	deps := newTestDeps()
+	rec := newTestRec()
 
 	// Init
-	require.NoError(t, c.Init(ctx, deps))
+	require.NoError(t, c.Init(ctx, rec))
 	assert.Len(t, c.OwnedSlices(), 2, "should have 2 slices (order-create, order-query)")
 
 	// Start
@@ -68,7 +65,7 @@ func TestOrderCell_Metadata(t *testing.T) {
 func TestOrderCell_Startup(t *testing.T) {
 	c := newTestCell()
 	ctx := context.Background()
-	require.NoError(t, c.Init(ctx, newTestDeps()))
+	require.NoError(t, c.Init(ctx, newTestRec()))
 	require.NoError(t, c.Start(ctx))
 	assert.True(t, c.Ready())
 	require.NoError(t, c.Stop(ctx))
@@ -108,7 +105,7 @@ func TestOrderCell_InitDefaults(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			c := NewOrderCell(tt.opts...)
-			err := c.Init(context.Background(), newTestDeps())
+			err := c.Init(context.Background(), newTestRec())
 			if tt.wantErr {
 				require.Error(t, err)
 				assert.Contains(t, err.Error(), "outboxWriter and txRunner")
@@ -122,7 +119,7 @@ func TestOrderCell_InitDefaults(t *testing.T) {
 
 func TestOrderCell_DefaultInit_DemoModeRequiresExplicitOutboxPair(t *testing.T) {
 	c := NewOrderCell()
-	err := c.Init(context.Background(), newTestDeps())
+	err := c.Init(context.Background(), newTestRec())
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "outboxWriter and txRunner")
 }
@@ -145,7 +142,7 @@ func TestOrderCell_DemoMode_RejectsHalfConfiguredPath(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			c := NewOrderCell(tt.opts...)
-			err := c.Init(context.Background(), newTestDeps())
+			err := c.Init(context.Background(), newTestRec())
 			require.Error(t, err)
 			assert.Contains(t, err.Error(), "outboxWriter and txRunner")
 		})
@@ -157,11 +154,7 @@ func TestOrderCell_DurableMode_RejectsNoopWriter(t *testing.T) {
 		WithOutboxWriter(outbox.NoopWriter{}),
 		WithTxManager(persistence.NoopTxRunner{}),
 	)
-	deps := cell.Dependencies{
-		Config:         make(map[string]any),
-		DurabilityMode: cell.DurabilityDurable,
-	}
-	err := c.Init(context.Background(), deps)
+	err := c.Init(context.Background(), cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDurable))
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "durable mode rejects")
 }
@@ -176,10 +169,7 @@ func TestOrderCell_DurableMode_RejectsMissingCursorCodec(t *testing.T) {
 		WithOutboxWriter(&orderRecordingWriter{}),
 		WithTxManager(orderLocalTxRunner{}),
 	)
-	err := c.Init(context.Background(), cell.Dependencies{
-		Config:         map[string]any{},
-		DurabilityMode: cell.DurabilityDurable,
-	})
+	err := c.Init(context.Background(), cell.NewRegistryRecorder(map[string]any{}, cell.DurabilityDurable))
 	require.Error(t, err)
 	var ecErr *errcode.Error
 	require.ErrorAs(t, err, &ecErr)
@@ -212,20 +202,18 @@ func TestOrderCell_DemoMode_AllowsNoopWriter(t *testing.T) {
 		WithOutboxWriter(outbox.NoopWriter{}),
 		WithTxManager(persistence.NoopTxRunner{}),
 	)
-	deps := cell.Dependencies{
-		Config:         make(map[string]any),
-		DurabilityMode: cell.DurabilityDemo,
-	}
-	require.NoError(t, c.Init(context.Background(), deps))
+	require.NoError(t, c.Init(context.Background(), newTestRec()))
 }
 
 func TestOrderCell_RouteGroups(t *testing.T) {
 	c := newTestCell()
 	ctx := context.Background()
-	require.NoError(t, c.Init(ctx, newTestDeps()))
+	rec := newTestRec()
+	require.NoError(t, c.Init(ctx, rec))
+	snap := rec.Snapshot()
 
 	mux := &stubMux{}
-	for _, rg := range c.RouteGroups() {
+	for _, rg := range snap.RouteGroups {
 		if rg.Listener == cell.PrimaryListener {
 			if rg.Prefix != "" {
 				mux.Route(rg.Prefix, func(sub cell.RouteMux) { require.NoError(t, rg.Register(sub)) })
@@ -257,10 +245,12 @@ func initCellWithRouter(t *testing.T) *router.Router {
 	t.Helper()
 	c := newTestCell()
 	ctx := context.Background()
-	require.NoError(t, c.Init(ctx, newTestDeps()))
+	rec := newTestRec()
+	require.NoError(t, c.Init(ctx, rec))
+	snap := rec.Snapshot()
 
 	r := router.MustNew(router.WithRouterClock(clock.Real()))
-	for _, rg := range c.RouteGroups() {
+	for _, rg := range snap.RouteGroups {
 		if rg.Listener == cell.PrimaryListener {
 			if rg.Prefix != "" {
 				r.Route(rg.Prefix, func(sub cell.RouteMux) { require.NoError(t, rg.Register(sub)) })

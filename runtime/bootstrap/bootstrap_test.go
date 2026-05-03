@@ -378,7 +378,8 @@ func TestNew_WithSubscriberOnly(t *testing.T) {
 	assert.Equal(t, eb, b.subscriber)
 }
 
-// eventCell implements cell.EventRegistrar with a configurable error.
+// eventCell registers a subscription via reg.Subscribe in Init.
+// subErr can be set to simulate a cell that fails subscription setup.
 type eventCell struct {
 	*cell.BaseCell
 	subErr error
@@ -399,8 +400,11 @@ func newContextCaptureCell(id string, got chan map[string]string) *contextCaptur
 	}
 }
 
-func (c *contextCaptureCell) RegisterSubscriptions(r cell.EventRouter) error {
-	return r.AddContractHandler(testEventSpec("test.context"), func(ctx context.Context, _ outbox.Entry) outbox.HandleResult {
+func (c *contextCaptureCell) Init(ctx context.Context, reg cell.Registry) error {
+	if err := c.BaseCell.Init(ctx, reg); err != nil {
+		return err
+	}
+	return reg.Subscribe(testEventSpec("test.context"), func(ctx context.Context, _ outbox.Entry) outbox.HandleResult {
 		requestID, _ := ctxkeys.RequestIDFrom(ctx)
 		correlationID, _ := ctxkeys.CorrelationIDFrom(ctx)
 		traceID, _ := ctxkeys.TraceIDFrom(ctx)
@@ -444,18 +448,21 @@ func newEventCell(id string, subErr error) *eventCell {
 	}
 }
 
-func (c *eventCell) RegisterSubscriptions(r cell.EventRouter) error {
+func (c *eventCell) Init(ctx context.Context, reg cell.Registry) error {
+	if err := c.BaseCell.Init(ctx, reg); err != nil {
+		return err
+	}
 	if c.subErr != nil {
 		return c.subErr
 	}
-	return r.AddContractHandler(testEventSpec("test.topic"), func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+	return reg.Subscribe(testEventSpec("test.topic"), func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
 		return outbox.HandleResult{Disposition: outbox.DispositionAck}
 	}, "test")
 }
 
-func TestBootstrap_MissingSubscriber_WithEventRegistrar_Fails(t *testing.T) {
-	// When a cell implements EventRegistrar but no subscriber is configured,
-	// bootstrap must fail at startup instead of silently skipping all subscriptions.
+func TestBootstrap_MissingSubscriber_WithCellSubscriptions_Fails(t *testing.T) {
+	// When a cell registers subscriptions via reg.Subscribe(...) but no subscriber
+	// is configured, bootstrap must fail at startup instead of silently skipping.
 	asm := assembly.New(assembly.Config{ID: "test-no-sub", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
 	ec := newEventCell("needs-sub", nil) // registers a handler
 	require.NoError(t, asm.Register(ec))
@@ -478,7 +485,7 @@ func TestBootstrap_MissingSubscriber_WithEventRegistrar_Fails(t *testing.T) {
 
 	err := b.Run(context.Background())
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "EventRegistrar")
+	assert.Contains(t, err.Error(), "registered subscriptions")
 	assert.Contains(t, err.Error(), "no subscriber")
 }
 
@@ -502,7 +509,6 @@ func TestBootstrap_SubscriptionFailure_TriggersRollback(t *testing.T) {
 	err := b.Run(ctx)
 
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "subscription setup failed")
 	assert.Contains(t, err.Error(), "DLX not configured")
 	// After rollback, assembly should be stopped (health returns empty or degraded).
 	// The key assertion is that Run returns the error instead of hanging.
@@ -813,9 +819,9 @@ func TestBootstrap_WithAdapterInfo_AppearsInReadyz(t *testing.T) {
 	}
 }
 
-// --- HealthContributor discovery tests ---
+// --- Registry.Health drain tests ---
 
-// healthContribCell is a Cell that implements cell.HealthContributor.
+// healthContribCell registers health checkers via reg.Health in Init.
 type healthContribCell struct {
 	*cell.BaseCell
 	checkers map[string]func(context.Context) error
@@ -828,19 +834,23 @@ func newHealthContribCell(id string, checkers map[string]func(context.Context) e
 	}
 }
 
-func (c *healthContribCell) HealthCheckers() map[string]func(context.Context) error {
-	return c.checkers
+func (c *healthContribCell) Init(ctx context.Context, reg cell.Registry) error {
+	if err := c.BaseCell.Init(ctx, reg); err != nil {
+		return err
+	}
+	for name, fn := range c.checkers {
+		reg.Health(name, fn)
+	}
+	return nil
 }
 
-var _ cell.HealthContributor = (*healthContribCell)(nil)
-
-func TestBootstrap_HealthContributor_Discovery_AppearsInReadyz(t *testing.T) {
+func TestBootstrap_RegistryHealth_DrainAppearsInReadyz(t *testing.T) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
 
 	asm := assembly.New(assembly.Config{ID: "test-hc-contrib", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
 	hcc := newHealthContribCell("accesscore", map[string]func(context.Context) error{
-		"session-store": func(_ context.Context) error { return nil },
+		"session_store_ready": func(_ context.Context) error { return nil },
 	})
 	require.NoError(t, asm.Register(hcc))
 
@@ -877,10 +887,10 @@ func TestBootstrap_HealthContributor_Discovery_AppearsInReadyz(t *testing.T) {
 	require.NoError(t, json.NewDecoder(resp.Body).Decode(&body))
 	deps, ok := readyzPayload(t, body)["dependencies"].(map[string]any)
 	require.True(t, ok, "response must contain dependencies map")
-	sessionStore, ok := deps["session-store"].(map[string]any)
+	sessionStore, ok := deps["session_store_ready"].(map[string]any)
 	require.True(t, ok, "session-store entry must be a map")
 	assert.Equal(t, "healthy", sessionStore["status"],
-		"HealthContributor-discovered probe should appear in /readyz verbose")
+		"Registry-registered probe should appear in /readyz verbose")
 
 	cancel()
 	select {
@@ -891,17 +901,17 @@ func TestBootstrap_HealthContributor_Discovery_AppearsInReadyz(t *testing.T) {
 	}
 }
 
-func TestBootstrap_HealthContributor_DuplicateName_FailsFast(t *testing.T) {
+func TestBootstrap_RegistryHealth_DuplicateName_FailsFast(t *testing.T) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
 
 	asm := assembly.New(assembly.Config{ID: "test-hc-dup", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
-	// Two cells both return "session-store" probe — should conflict.
+	// Two cells both return "session_store_ready" probe — should conflict.
 	require.NoError(t, asm.Register(newHealthContribCell("cell-a", map[string]func(context.Context) error{
-		"session-store": func(_ context.Context) error { return nil },
+		"session_store_ready": func(_ context.Context) error { return nil },
 	})))
 	require.NoError(t, asm.Register(newHealthContribCell("cell-b", map[string]func(context.Context) error{
-		"session-store": func(_ context.Context) error { return nil },
+		"session_store_ready": func(_ context.Context) error { return nil },
 	})))
 
 	b := New(
@@ -917,7 +927,7 @@ func TestBootstrap_HealthContributor_DuplicateName_FailsFast(t *testing.T) {
 	err = b.Run(ctx)
 	require.Error(t, err, "duplicate probe names across cells should fail")
 	assert.Contains(t, err.Error(), "duplicate health checker")
-	assert.Contains(t, err.Error(), "session-store")
+	assert.Contains(t, err.Error(), "session_store_ready")
 }
 
 func TestWithHealthChecker_EmptyName_ReturnsError(t *testing.T) {
@@ -1434,7 +1444,7 @@ func TestBootstrap_WithHealthChecker_ReservedNameConflict_ReturnsError(t *testin
 		WithAssembly(asm),
 		WithConfig(cfgFile, ""),
 		WithListener(cell.PrimaryListener, "127.0.0.1:0", []cell.ListenerAuth{cell.AuthNone{}}),
-		WithHealthChecker("config-watcher", func(_ context.Context) error { return nil }),
+		WithHealthChecker("config_watcher", func(_ context.Context) error { return nil }),
 		WithShutdownTimeout(testtime.D1s),
 	)
 
@@ -1442,7 +1452,7 @@ func TestBootstrap_WithHealthChecker_ReservedNameConflict_ReturnsError(t *testin
 		err := b.Run(context.Background())
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "duplicate health checker")
-		assert.Contains(t, err.Error(), "config-watcher")
+		assert.Contains(t, err.Error(), "config_watcher")
 	})
 }
 
@@ -1489,8 +1499,8 @@ func TestBootstrap_EventRouter_ReadyzVerboseIncludesEventRouter(t *testing.T) {
 	require.NoError(t, json.NewDecoder(resp.Body).Decode(&body))
 	deps, ok := readyzPayload(t, body)["dependencies"].(map[string]any)
 	require.True(t, ok, "verbose readyz output must contain dependencies")
-	erProbe, ok := deps["eventrouter"].(map[string]any)
-	require.True(t, ok, "eventrouter probe must be a structured ProbeResult")
+	erProbe, ok := deps["event_router"].(map[string]any)
+	require.True(t, ok, "event_router probe must be a structured ProbeResult")
 	assert.Equal(t, "healthy", erProbe["status"])
 
 	cancel()
@@ -1547,10 +1557,10 @@ func TestSnapshotConfig_Fallback(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// ConfigReloader integration tests (WM-34)
+// OnConfigReload integration tests (WM-34)
 // ---------------------------------------------------------------------------
 
-// reloaderCell is a Cell that implements cell.ConfigReloader for testing.
+// reloaderCell registers a config-reload callback via reg.OnConfigReload in Init.
 type reloaderCell struct {
 	*cell.BaseCell
 	mu         sync.Mutex
@@ -1570,18 +1580,24 @@ func newReloaderCell(id string) *reloaderCell {
 	}
 }
 
-func (c *reloaderCell) OnConfigReload(event cell.ConfigChangeEvent) error {
-	if c.doPanic {
-		c.panicCount.Add(1)
-		panic("intentional test panic in OnConfigReload")
+func (c *reloaderCell) Init(ctx context.Context, reg cell.Registry) error {
+	if err := c.BaseCell.Init(ctx, reg); err != nil {
+		return err
 	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.events = append(c.events, event)
-	if c.callOrder != nil {
-		*c.callOrder = append(*c.callOrder, c.ID())
-	}
-	return c.err
+	reg.OnConfigReload(nil, func(_ context.Context, event cell.ConfigChangeEvent) error {
+		if c.doPanic {
+			c.panicCount.Add(1)
+			panic("intentional test panic in OnConfigReload")
+		}
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		c.events = append(c.events, event)
+		if c.callOrder != nil {
+			*c.callOrder = append(*c.callOrder, c.ID())
+		}
+		return c.err
+	})
+	return nil
 }
 
 func (c *reloaderCell) eventCount() int {
@@ -1643,10 +1659,17 @@ func newSlowReloaderCell(id string, delay time.Duration) *slowReloaderCell {
 	}
 }
 
-func (c *slowReloaderCell) OnConfigReload(_ cell.ConfigChangeEvent) error {
-	c.called.Add(1)
-	time.Sleep(c.delay) //archtest:allow:test-sleep slow handler fixture; sleep IS the test parameter
-	c.completed.Add(1)
+func (c *slowReloaderCell) Init(ctx context.Context, reg cell.Registry) error {
+	if err := c.BaseCell.Init(ctx, reg); err != nil {
+		return err
+	}
+	d := c.delay
+	reg.OnConfigReload(nil, func(_ context.Context, _ cell.ConfigChangeEvent) error {
+		c.called.Add(1)
+		time.Sleep(d) //archtest:allow:test-sleep slow handler fixture; sleep IS the test parameter
+		c.completed.Add(1)
+		return nil
+	})
 	return nil
 }
 
@@ -1954,7 +1977,7 @@ func TestBootstrap_ConfigReload_NonReloaderSkipped(t *testing.T) {
 	require.NoError(t, err)
 
 	asm := assembly.New(assembly.Config{ID: "test-reload-skip", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
-	plain := newTestCell("plain-cell") // does NOT implement ConfigReloader
+	plain := newTestCell("plain-cell") // does NOT call reg.OnConfigReload
 	rc := newReloaderCell("reloader-cell")
 	require.NoError(t, asm.Register(plain))
 	require.NoError(t, asm.Register(rc))
@@ -1991,7 +2014,7 @@ func TestBootstrap_ConfigReload_NonReloaderSkipped(t *testing.T) {
 		return rc.eventCount() >= 1
 	}, testtime.EventuallyDefault, testtime.MediumPoll)
 
-	// Plain cell should not have been called (it doesn't implement ConfigReloader).
+	// Plain cell should not have been called (it doesn't call reg.OnConfigReload).
 	// The test verifies by checking that only the reloader cell receives events.
 	assert.Equal(t, 1, rc.eventCount())
 
@@ -2087,14 +2110,20 @@ func newMutatingReloaderCell(id string) *mutatingReloaderCell {
 	}
 }
 
-func (c *mutatingReloaderCell) OnConfigReload(event cell.ConfigChangeEvent) error {
-	c.called.Add(1)
-	// Attempt to corrupt shared state.
-	if len(event.Added) > 0 {
-		event.Added[0] = "CORRUPTED"
+func (c *mutatingReloaderCell) Init(ctx context.Context, reg cell.Registry) error {
+	if err := c.BaseCell.Init(ctx, reg); err != nil {
+		return err
 	}
-	event.Config["INJECTED"] = "malicious"
-	delete(event.Config, "key")
+	reg.OnConfigReload(nil, func(_ context.Context, event cell.ConfigChangeEvent) error {
+		c.called.Add(1)
+		// Attempt to corrupt shared state.
+		if len(event.Added) > 0 {
+			event.Added[0] = "CORRUPTED"
+		}
+		event.Config["INJECTED"] = "malicious"
+		delete(event.Config, "key")
+		return nil
+	})
 	return nil
 }
 
@@ -2405,8 +2434,11 @@ func newHTTPCell(id string) *httpCell {
 	}
 }
 
-func (c *httpCell) RouteGroups() []cell.RouteGroup {
-	return []cell.RouteGroup{{
+func (c *httpCell) Init(ctx context.Context, reg cell.Registry) error {
+	if err := c.BaseCell.Init(ctx, reg); err != nil {
+		return err
+	}
+	reg.RouteGroup(cell.RouteGroup{
 		Listener: cell.PrimaryListener,
 		Prefix:   "",
 		Register: func(mux cell.RouteMux) error {
@@ -2428,7 +2460,8 @@ func (c *httpCell) RouteGroups() []cell.RouteGroup {
 			})
 			return nil
 		},
-	}}
+	})
+	return nil
 }
 
 // bootstrapTestVerifier is a minimal IntentTokenVerifier for bootstrap tests.
@@ -2516,8 +2549,11 @@ func newPublicHTTPCell(id string) *publicHTTPCell {
 	}
 }
 
-func (c *publicHTTPCell) RouteGroups() []cell.RouteGroup {
-	return []cell.RouteGroup{{
+func (c *publicHTTPCell) Init(ctx context.Context, reg cell.Registry) error {
+	if err := c.BaseCell.Init(ctx, reg); err != nil {
+		return err
+	}
+	reg.RouteGroup(cell.RouteGroup{
 		Listener: cell.PrimaryListener,
 		Prefix:   "",
 		Register: func(mux cell.RouteMux) error {
@@ -2539,7 +2575,8 @@ func (c *publicHTTPCell) RouteGroups() []cell.RouteGroup {
 			})
 			return nil
 		},
-	}}
+	})
+	return nil
 }
 
 func TestBootstrap_WithAuthMiddleware_PublicRoute_Passes(t *testing.T) {
@@ -2710,15 +2747,18 @@ func newTracingTestCell(id string, fn func(mux cell.RouteMux) error) *tracingTes
 	}
 }
 
-func (c *tracingTestCell) RouteGroups() []cell.RouteGroup {
-	if c.registerFn == nil {
-		return nil
+func (c *tracingTestCell) Init(ctx context.Context, reg cell.Registry) error {
+	if err := c.BaseCell.Init(ctx, reg); err != nil {
+		return err
 	}
-	return []cell.RouteGroup{{
-		Listener: cell.PrimaryListener,
-		Prefix:   "",
-		Register: c.registerFn,
-	}}
+	if c.registerFn != nil {
+		reg.RouteGroup(cell.RouteGroup{
+			Listener: cell.PrimaryListener,
+			Prefix:   "",
+			Register: c.registerFn,
+		})
+	}
+	return nil
 }
 
 func TestBootstrap_TracingE2E_BusinessRoute(t *testing.T) {
@@ -2902,7 +2942,7 @@ func TestBootstrap_TracingE2E_InfraEndpoints(t *testing.T) {
 
 // --- Auth Provider discovery (post-Init cell discovery) ---
 
-// authProviderCell implements RouteGroupContributor and exposes an IntentTokenVerifier.
+// authProviderCell registers a route group via reg.RouteGroup and exposes an IntentTokenVerifier.
 type authProviderCell struct {
 	*cell.BaseCell
 	verifier auth.IntentTokenVerifier
@@ -2919,8 +2959,11 @@ func (c *authProviderCell) TokenVerifier() auth.IntentTokenVerifier {
 	return c.verifier
 }
 
-func (c *authProviderCell) RouteGroups() []cell.RouteGroup {
-	return []cell.RouteGroup{{
+func (c *authProviderCell) Init(ctx context.Context, reg cell.Registry) error {
+	if err := c.BaseCell.Init(ctx, reg); err != nil {
+		return err
+	}
+	reg.RouteGroup(cell.RouteGroup{
 		Listener: cell.PrimaryListener,
 		Prefix:   "",
 		Register: func(mux cell.RouteMux) error {
@@ -2944,7 +2987,8 @@ func (c *authProviderCell) RouteGroups() []cell.RouteGroup {
 			})
 			return nil
 		},
-	}}
+	})
+	return nil
 }
 
 func TestBootstrap_AuthDiscovery_ProtectedRoute_Returns401(t *testing.T) {
@@ -3291,10 +3335,11 @@ func TestBootstrap_WithSecurityHeadersOptions_CustomHSTS(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// ConfigKeyFilterer integration tests (CFG-KEYFILTER-WIRE-01)
+// OnConfigReload prefix-filter integration tests (CFG-KEYFILTER-WIRE-01)
 // ---------------------------------------------------------------------------
 
-// keyFilterReloaderCell implements ConfigReloader + ConfigKeyFilterer for testing.
+// keyFilterReloaderCell registers a config-reload callback with key-prefix
+// filtering via reg.OnConfigReload in Init.
 type keyFilterReloaderCell struct {
 	*cell.BaseCell
 	prefixes []string
@@ -3312,13 +3357,15 @@ func newKeyFilterReloaderCell(id string, prefixes []string) *keyFilterReloaderCe
 	}
 }
 
-func (c *keyFilterReloaderCell) OnConfigReload(event cell.ConfigChangeEvent) error {
-	c.reloaded <- event
+func (c *keyFilterReloaderCell) Init(ctx context.Context, reg cell.Registry) error {
+	if err := c.BaseCell.Init(ctx, reg); err != nil {
+		return err
+	}
+	reg.OnConfigReload(c.prefixes, func(_ context.Context, event cell.ConfigChangeEvent) error {
+		c.reloaded <- event
+		return nil
+	})
 	return nil
-}
-
-func (c *keyFilterReloaderCell) ConfigKeyPrefixes() []string {
-	return c.prefixes
 }
 
 // TestBootstrap_ConfigReload_KeyFilter_SkipsUnmatched verifies that a cell with
@@ -3427,9 +3474,9 @@ func TestBootstrap_ConfigReload_KeyFilter_NotifiesMatched(t *testing.T) {
 	}
 }
 
-// TestBootstrap_ConfigReload_NoKeyFilter_ReceivesAll verifies backward
-// compatibility: a cell implementing only ConfigReloader (no ConfigKeyFilterer)
-// receives all config change notifications regardless of which keys changed.
+// TestBootstrap_ConfigReload_NoKeyFilter_ReceivesAll verifies that a cell
+// calling reg.OnConfigReload with nil prefixes receives all config change
+// notifications regardless of which keys changed.
 func TestBootstrap_ConfigReload_NoKeyFilter_ReceivesAll(t *testing.T) {
 	dir := t.TempDir()
 	cfgFile := filepath.Join(dir, "config.yaml")
@@ -3463,7 +3510,7 @@ func TestBootstrap_ConfigReload_NoKeyFilter_ReceivesAll(t *testing.T) {
 
 	require.Eventually(t, func() bool {
 		return rc.eventCount() >= 1
-	}, testtime.EventuallyDefault, testtime.MediumPoll, "plain ConfigReloader must receive all notifications")
+	}, testtime.EventuallyDefault, testtime.MediumPoll, "plain OnConfigReload (no prefixes) must receive all notifications")
 
 	cancel()
 	select {
@@ -3499,8 +3546,11 @@ func (c *traceCapturingCell) TokenVerifier() auth.IntentTokenVerifier {
 	return c.verifier
 }
 
-func (c *traceCapturingCell) RouteGroups() []cell.RouteGroup {
-	return []cell.RouteGroup{{
+func (c *traceCapturingCell) Init(ctx context.Context, reg cell.Registry) error {
+	if err := c.BaseCell.Init(ctx, reg); err != nil {
+		return err
+	}
+	reg.RouteGroup(cell.RouteGroup{
 		Listener: cell.PrimaryListener,
 		Prefix:   "",
 		Register: func(mux cell.RouteMux) error {
@@ -3526,7 +3576,8 @@ func (c *traceCapturingCell) RouteGroups() []cell.RouteGroup {
 			})
 			return nil
 		},
-	}}
+	})
+	return nil
 }
 
 // TestBootstrap_TrustBoundary_PublicEndpoint_TraceparentIgnored verifies the
@@ -3659,8 +3710,11 @@ func newPublicPingAuthCell(id string, verifier auth.IntentTokenVerifier) *public
 
 func (c *publicPingAuthCell) TokenVerifier() auth.IntentTokenVerifier { return c.verifier }
 
-func (c *publicPingAuthCell) RouteGroups() []cell.RouteGroup {
-	return []cell.RouteGroup{{
+func (c *publicPingAuthCell) Init(ctx context.Context, reg cell.Registry) error {
+	if err := c.BaseCell.Init(ctx, reg); err != nil {
+		return err
+	}
+	reg.RouteGroup(cell.RouteGroup{
 		Listener: cell.PrimaryListener,
 		Prefix:   "",
 		Register: func(mux cell.RouteMux) error {
@@ -3672,7 +3726,8 @@ func (c *publicPingAuthCell) RouteGroups() []cell.RouteGroup {
 			})
 			return nil
 		},
-	}}
+	})
+	return nil
 }
 
 // TestBootstrap_HEADAlias_BypassesAuth tests I-17: GET public endpoint
@@ -3873,8 +3928,11 @@ func newDuplicateAuthCell(id string) *duplicateAuthCell {
 	}
 }
 
-func (c *duplicateAuthCell) RouteGroups() []cell.RouteGroup {
-	return []cell.RouteGroup{{
+func (c *duplicateAuthCell) Init(ctx context.Context, reg cell.Registry) error {
+	if err := c.BaseCell.Init(ctx, reg); err != nil {
+		return err
+	}
+	reg.RouteGroup(cell.RouteGroup{
 		Listener: cell.PrimaryListener,
 		Prefix:   "",
 		Register: func(mux cell.RouteMux) error {
@@ -3886,7 +3944,8 @@ func (c *duplicateAuthCell) RouteGroups() []cell.RouteGroup {
 			auth.MustMount(mux, auth.Route{Contract: testHTTPContract("GET", "/api/v1/dup"), Handler: handler, Public: true})
 			return nil
 		},
-	}}
+	})
+	return nil
 }
 
 type protectedAuthCell struct {
@@ -3902,8 +3961,11 @@ func newProtectedAuthCell(id string) *protectedAuthCell {
 	}
 }
 
-func (c *protectedAuthCell) RouteGroups() []cell.RouteGroup {
-	return []cell.RouteGroup{{
+func (c *protectedAuthCell) Init(ctx context.Context, reg cell.Registry) error {
+	if err := c.BaseCell.Init(ctx, reg); err != nil {
+		return err
+	}
+	reg.RouteGroup(cell.RouteGroup{
 		Listener: cell.PrimaryListener,
 		Prefix:   "",
 		Register: func(mux cell.RouteMux) error {
@@ -3916,7 +3978,8 @@ func (c *protectedAuthCell) RouteGroups() []cell.RouteGroup {
 			})
 			return nil
 		},
-	}}
+	})
+	return nil
 }
 
 func TestBootstrap_Phase5_ProtectedRoutesWithoutVerifierFailFast(t *testing.T) {
@@ -4038,11 +4101,14 @@ func newDuplicateInternalCell(id string) *duplicateInternalCell {
 	}
 }
 
-func (c *duplicateInternalCell) RouteGroups() []cell.RouteGroup {
+func (c *duplicateInternalCell) Init(ctx context.Context, reg cell.Registry) error {
+	if err := c.BaseCell.Init(ctx, reg); err != nil {
+		return err
+	}
 	handler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})
-	return []cell.RouteGroup{{
+	reg.RouteGroup(cell.RouteGroup{
 		Listener: cell.InternalListener,
 		Prefix:   "",
 		Register: func(mux cell.RouteMux) error {
@@ -4057,7 +4123,8 @@ func (c *duplicateInternalCell) RouteGroups() []cell.RouteGroup {
 			})
 			return nil
 		},
-	}}
+	})
+	return nil
 }
 
 // TestBootstrap_Phase5_FinalizeFailure_OnInternalListener verifies that a
@@ -4110,11 +4177,14 @@ func newDuplicateHealthCell(id string) *duplicateHealthCell {
 	}
 }
 
-func (c *duplicateHealthCell) RouteGroups() []cell.RouteGroup {
+func (c *duplicateHealthCell) Init(ctx context.Context, reg cell.Registry) error {
+	if err := c.BaseCell.Init(ctx, reg); err != nil {
+		return err
+	}
 	handler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})
-	return []cell.RouteGroup{{
+	reg.RouteGroup(cell.RouteGroup{
 		Listener: cell.HealthListener,
 		Prefix:   "",
 		Register: func(mux cell.RouteMux) error {
@@ -4131,7 +4201,8 @@ func (c *duplicateHealthCell) RouteGroups() []cell.RouteGroup {
 			})
 			return nil
 		},
-	}}
+	})
+	return nil
 }
 
 // TestBootstrap_Phase5_FinalizeFailure_OnHealthListener verifies that a
@@ -4180,22 +4251,24 @@ func newUnknownListenerCell() *unknownListenerCell {
 	}
 }
 
-func (c *unknownListenerCell) RouteGroups() []cell.RouteGroup {
-	// Zero-value ListenerRef — not registered with any WithListener call.
-	return []cell.RouteGroup{
-		{
-			Listener: cell.ListenerRef{}, // zero value — undeclared
-			Prefix:   "/api/v1/unknown",
-			Register: func(mux cell.RouteMux) error {
-				auth.MustMount(mux, auth.Route{
-					Contract: testHTTPContract(http.MethodGet, "/api/v1/unknown/ping"),
-					Handler:  http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {}),
-					Public:   true,
-				})
-				return nil
-			},
-		},
+func (c *unknownListenerCell) Init(ctx context.Context, reg cell.Registry) error {
+	if err := c.BaseCell.Init(ctx, reg); err != nil {
+		return err
 	}
+	// Zero-value ListenerRef — not registered with any WithListener call.
+	reg.RouteGroup(cell.RouteGroup{
+		Listener: cell.ListenerRef{}, // zero value — undeclared
+		Prefix:   "/api/v1/unknown",
+		Register: func(mux cell.RouteMux) error {
+			auth.MustMount(mux, auth.Route{
+				Contract: testHTTPContract(http.MethodGet, "/api/v1/unknown/ping"),
+				Handler:  http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {}),
+				Public:   true,
+			})
+			return nil
+		},
+	})
+	return nil
 }
 
 // TestBootstrap_UnknownListenerRef_FailsFast verifies that a RouteGroup

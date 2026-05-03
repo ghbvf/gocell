@@ -30,8 +30,8 @@ import (
 )
 
 // phase5BuildRouters builds one Router per declared listener, collects
-// RouteGroups from all RouteGroupContributor cells, mounts each group on its
-// listener's router, and finalizes auth on the primary router.
+// RouteGroups from all cell snapshots, mounts each group on its listener's
+// router, and finalizes auth on the primary router.
 //
 // PR-A14b: replaces the single-router phase5BuildHTTPRouter. Each listener
 // now gets its own chi.Mux root with a policy applied at build time.
@@ -111,7 +111,7 @@ func (b *Bootstrap) phase5BuildPerListenerRouters(s *phaseState) (map[cell.Liste
 	return routers, nil
 }
 
-// phase5CollectRouteGroups collects RouteGroups from health and RouteGroupContributor cells.
+// phase5CollectRouteGroups collects RouteGroups from health and cell snapshots.
 // Each RouteGroup is annotated with the contributing cell ID (OPS-02).
 //
 // Health-listener fallback: when no HealthListener is declared, /healthz and
@@ -133,13 +133,14 @@ func (b *Bootstrap) phase5CollectRouteGroups(s *phaseState, routers map[cell.Lis
 		}
 	}
 	for _, id := range s.asm.CellIDs() {
-		c := s.asm.Cell(id)
-		if rgc, ok := c.(cell.RouteGroupContributor); ok {
-			cellGroups := rgc.RouteGroups()
-			for i := range cellGroups {
-				cellGroups[i].CellID = id
-			}
-			groups = append(groups, cellGroups...)
+		snap, ok := s.cellSnapshots[id]
+		if !ok {
+			continue
+		}
+		for i := range snap.RouteGroups {
+			rg := snap.RouteGroups[i]
+			rg.CellID = id
+			groups = append(groups, rg)
 		}
 	}
 	return groups

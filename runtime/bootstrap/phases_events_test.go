@@ -34,8 +34,8 @@ import (
 	"github.com/ghbvf/gocell/runtime/http/health"
 )
 
-// stubEventCell is a minimal EventRegistrar that registers a single
-// contract-first subscription. Used by the phase6 wiring tests below.
+// stubEventCell is a minimal cell that registers a single contract-first
+// subscription via reg.Subscribe(...). Used by the phase6 wiring tests below.
 type stubEventCell struct {
 	*cell.BaseCell
 	spec wrapper.ContractSpec
@@ -53,11 +53,14 @@ func newStubEventCell(id, topic string) *stubEventCell {
 	}
 }
 
-func (c *stubEventCell) RegisterSubscriptions(r cell.EventRouter) error {
+func (c *stubEventCell) Init(ctx context.Context, reg cell.Registry) error {
+	if err := c.BaseCell.Init(ctx, reg); err != nil {
+		return err
+	}
 	noopHandler := outbox.EntryHandler(func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
 		return outbox.HandleResult{Disposition: outbox.DispositionAck}
 	})
-	return r.AddContractHandler(c.spec, noopHandler, "stub-cg")
+	return reg.Subscribe(c.spec, noopHandler, "stub-cg")
 }
 
 // TestPhase6_ConsumerMiddleware_AppliedInChain verifies that a middleware
@@ -92,6 +95,7 @@ func TestPhase6_ConsumerMiddleware_AppliedInChain(t *testing.T) {
 	runCtx, s := newPhaseState()
 	defer s.runCancel()
 	s.asm = asm
+	s.cellSnapshots = asm.Snapshots()
 	s.sub = bus
 	s.hh = health.New(asm, clock.Real()) // phase5 normally populates this; test bypasses phase5.
 
@@ -150,6 +154,7 @@ func TestPhase6_EventRouterReadyTimeout_FiresAndReturnsError(t *testing.T) {
 	runCtx, s := newPhaseState()
 	defer s.runCancel()
 	s.asm = asm
+	s.cellSnapshots = asm.Snapshots()
 	s.sub = neverReadySubscriber{}
 	s.hh = health.New(asm, clock.Real())
 

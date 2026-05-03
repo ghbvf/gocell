@@ -4,68 +4,58 @@ package bootstrap
 // (phase3b + health-checker helpers called from phase5).
 //
 // Covers:
-//   - phase3b: LifecycleContributor auto-discovery
+//   - phase3b: LifecycleHooks drain from RegistrySnapshot
 //   - registerAllHealthCheckers / registerCellHealthCheckers / registerOneCellHealthCheckers
 //   - registerConfigDriftChecker
 //
 // ref: uber-go/fx lifecycle.go — lifecycle hook registration ordering and
 // duplicate-Name detection at Append time (kernel/lifecycle mirrors this contract).
-// ref: kernel/cell.HealthContributor — mirrored auto-discovery pattern for health checkers.
+// ref: kernel/cell.Registry.Health — cells register probes via reg.Health during Init;
+// bootstrap drains HealthCheckers from RegistrySnapshot in this phase.
 
 import (
 	"context"
 	"fmt"
 	"sort"
 
-	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/runtime/config"
 )
 
-// phase3bDiscoverLifecycleContributor auto-registers lifecycle hooks from all
-// cells implementing cell.LifecycleContributor. Mirrors registerCellHealthCheckers
-// to keep the discovery pattern symmetric.
+// phase3bDrainLifecycleHooks drains LifecycleHooks from each cell's
+// RegistrySnapshot and registers them with the bootstrap Lifecycle. Hooks are
+// appended in cell-registration order; within a cell they are appended in
+// declaration order.
 //
-// Must run after phase3InitAssembly (cells need Init to have populated any
-// state the hooks close over) and before lifecycle.Start(ctx).
+// Must run after phase3InitAssembly (s.cellSnapshots is populated there) and
+// before lifecycle.Start(ctx).
 //
 // Cross-path uniqueness: Lifecycle.Append is the single source of truth for
 // duplicate-Name detection (returns ErrDuplicateHookName). That guard covers
-// every entry path into the shared Lifecycle — phase3b auto-discovery,
+// every entry path into the shared Lifecycle — phase3b snapshot drain,
 // WithLifecycle explicit registration, and any future callers — without
 // needing a phase-local "seen" map that could drift from reality.
 //
 // ref: github.com/uber-go/fx internal/lifecycle/lifecycle.go — Hook, Append ordering.
-// ref: kernel/cell.HealthContributor — mirrored auto-discovery pattern.
-func (b *Bootstrap) phase3bDiscoverLifecycleContributor(s *phaseState) error {
+func (b *Bootstrap) phase3bDrainLifecycleHooks(s *phaseState) error {
 	for _, id := range s.asm.CellIDs() {
-		lc, ok := s.asm.Cell(id).(cell.LifecycleContributor)
+		snap, ok := s.cellSnapshots[id]
 		if !ok {
 			continue
 		}
-		if err := b.registerOneCellLifecycleHooks(id, lc); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-// registerOneCellLifecycleHooks appends the hooks from a single cell. Duplicate
-// Name detection is delegated to Lifecycle.Append. Extracted from phase3b to
-// keep cognitive complexity under the project ceiling.
-func (b *Bootstrap) registerOneCellLifecycleHooks(id string, lc cell.LifecycleContributor) error {
-	for _, h := range lc.LifecycleHooks() {
-		if h.OnStart == nil && h.OnStop == nil {
-			continue
-		}
-		if err := b.lifecycle.Append(Hook{
-			CellID:       id,
-			Name:         h.Name,
-			OnStart:      h.OnStart,
-			OnStop:       h.OnStop,
-			StartTimeout: h.StartTimeout,
-			StopTimeout:  h.StopTimeout,
-		}); err != nil {
-			return fmt.Errorf("bootstrap: cell %q lifecycle hook %q: %w", id, h.Name, err)
+		for _, h := range snap.LifecycleHooks {
+			if h.OnStart == nil && h.OnStop == nil {
+				continue
+			}
+			if err := b.lifecycle.Append(Hook{
+				CellID:       id,
+				Name:         h.Name,
+				OnStart:      h.OnStart,
+				OnStop:       h.OnStop,
+				StartTimeout: h.StartTimeout,
+				StopTimeout:  h.StopTimeout,
+			}); err != nil {
+				return fmt.Errorf("bootstrap: cell %q lifecycle hook %q: %w", id, h.Name, err)
+			}
 		}
 	}
 	return nil
@@ -93,14 +83,15 @@ func (b *Bootstrap) registerAllHealthCheckers(s *phaseState) error {
 	return b.registerConfigDriftChecker(s)
 }
 
-// registerCellHealthCheckers auto-discovers HealthContributor cells.
+// registerCellHealthCheckers drains HealthCheckers from each cell's RegistrySnapshot.
+// Checkers are registered in sorted order (by name) for deterministic readyz output.
 func (b *Bootstrap) registerCellHealthCheckers(s *phaseState) error {
 	for _, id := range s.asm.CellIDs() {
-		hcc, ok := s.asm.Cell(id).(cell.HealthContributor)
+		snap, ok := s.cellSnapshots[id]
 		if !ok {
 			continue
 		}
-		if err := b.registerOneCellHealthCheckers(s, id, hcc); err != nil {
+		if err := b.registerOneCellHealthCheckers(s, id, snap.HealthCheckers); err != nil {
 			return err
 		}
 	}
@@ -108,9 +99,8 @@ func (b *Bootstrap) registerCellHealthCheckers(s *phaseState) error {
 }
 
 // registerOneCellHealthCheckers registers all health checkers from a single
-// HealthContributor cell, in sorted order.
-func (b *Bootstrap) registerOneCellHealthCheckers(s *phaseState, id string, hcc cell.HealthContributor) error {
-	cellCheckers := hcc.HealthCheckers()
+// cell's snapshot map, in sorted order.
+func (b *Bootstrap) registerOneCellHealthCheckers(s *phaseState, id string, cellCheckers map[string]func(context.Context) error) error {
 	names := make([]string, 0, len(cellCheckers))
 	for k := range cellCheckers {
 		names = append(names, k)

@@ -7,7 +7,7 @@ package bootstrap
 // are split across per-concern files:
 //
 //	phases_assembly.go  — phases 0–4  (config, assembly, auth, watcher)
-//	phases_lifecycle.go — phase 3b    (LifecycleContributor + health checkers)
+//	phases_lifecycle.go — phase 3b    (lifecycle hook drain + health checkers)
 //	phases_http.go      — phase 5     (router construction, auth validation)
 //	phases_events.go    — phase 6     (event router startup)
 //	phases_workers.go   — phase 8     (worker group startup)
@@ -57,6 +57,11 @@ type phaseState struct {
 	// set by phase3
 	asm     *assembly.CoreAssembly
 	reloads *reloadGate
+
+	// set by phase3 (after StartWithConfig succeeds): per-cell RegistrySnapshot
+	// produced during cell Init. Keyed by cell ID. Later phases drain the fields
+	// of each snapshot instead of type-asserting on the live cell instances.
+	cellSnapshots map[string]cell.RegistrySnapshot
 
 	// set by phase5
 	hh                   *health.Handler

@@ -178,28 +178,26 @@ func New() *MyCell {
     }
 }
 
-func (c *MyCell) Init(ctx context.Context, deps cell.Dependencies) error {
-    return c.BaseCell.Init(ctx, deps)
-}
-
-func (c *MyCell) RouteGroups() []cell.RouteGroup {
-    return []cell.RouteGroup{
-        cell.SingleGroup(cell.PrimaryListener, "/api/v1", func(mux cell.RouteMux) error {
-            return auth.Mount(mux, auth.Route{
-                Contract: wrapper.ContractSpec{
-                    ID:        "http.mycell.hello.v1",
-                    Kind:      "http",
-                    Transport: "http",
-                    Method:    "GET",
-                    Path:      "/api/v1/hello",
-                },
-                Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-                    _, _ = w.Write([]byte(`{"message":"hello from mycell"}`))
-                }),
-                Public: true,
-            })
-        }),
+func (c *MyCell) Init(ctx context.Context, reg cell.Registry) error {
+    if err := c.BaseCell.Init(ctx, reg); err != nil {
+        return err
     }
+    reg.RouteGroup(cell.SingleGroup(cell.PrimaryListener, "/api/v1", func(mux cell.RouteMux) error {
+        return auth.Mount(mux, auth.Route{
+            Contract: wrapper.ContractSpec{
+                ID:        "http.mycell.hello.v1",
+                Kind:      "http",
+                Transport: "http",
+                Method:    "GET",
+                Path:      "/api/v1/hello",
+            },
+            Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+                _, _ = w.Write([]byte(`{"message":"hello from mycell"}`))
+            }),
+            Public: true,
+        })
+    }))
+    return nil
 }
 ```
 

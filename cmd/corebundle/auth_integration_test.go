@@ -73,6 +73,7 @@ func TestAuthWiring_RealAssembly_ProtectedRoutes401(t *testing.T) {
 	require.NoError(t, err)
 
 	ac := accesscore.NewAccessCore(
+		accesscore.WithClock(clock.Real()),
 		accesscore.WithInMemoryDefaults(),
 		accesscore.WithOutboxDeps(eb, nw),
 		accesscore.WithJWTIssuer(jwtIssuer),
@@ -81,6 +82,7 @@ func TestAuthWiring_RealAssembly_ProtectedRoutes401(t *testing.T) {
 		accesscore.WithMetricsProvider(metrics.NopProvider{}),
 	)
 	cc := configcore.NewConfigCore(
+		configcore.WithClock(clock.Real()),
 		configcore.WithInMemoryDefaults(),
 		configcore.WithOutboxDeps(eb, nw),
 		configcore.WithTxManager(noopTxRunner{}),
@@ -88,6 +90,7 @@ func TestAuthWiring_RealAssembly_ProtectedRoutes401(t *testing.T) {
 		configcore.WithMetricsProvider(metrics.NopProvider{}),
 	)
 	auc := auditcore.NewAuditCore(
+		auditcore.WithClock(clock.Real()),
 		auditcore.WithInMemoryDefaults(),
 		auditcore.WithOutboxDeps(eb, nw),
 		auditcore.WithHMACKey([]byte("test-hmac-key-32-bytes-long!!!!")),
@@ -284,6 +287,7 @@ func TestAuthWiring_InternalGuard_RequiresServiceToken(t *testing.T) {
 	require.NoError(t, err)
 
 	ac := accesscore.NewAccessCore(
+		accesscore.WithClock(clock.Real()),
 		accesscore.WithInMemoryDefaults(),
 		accesscore.WithOutboxDeps(eb, nw),
 		accesscore.WithJWTIssuer(jwtIssuer),
@@ -292,6 +296,7 @@ func TestAuthWiring_InternalGuard_RequiresServiceToken(t *testing.T) {
 		accesscore.WithMetricsProvider(metrics.NopProvider{}),
 	)
 	cc := configcore.NewConfigCore(
+		configcore.WithClock(clock.Real()),
 		configcore.WithInMemoryDefaults(),
 		configcore.WithOutboxDeps(eb, nw),
 		configcore.WithTxManager(noopTxRunner{}),
@@ -299,6 +304,7 @@ func TestAuthWiring_InternalGuard_RequiresServiceToken(t *testing.T) {
 		configcore.WithMetricsProvider(metrics.NopProvider{}),
 	)
 	auc := auditcore.NewAuditCore(
+		auditcore.WithClock(clock.Real()),
 		auditcore.WithInMemoryDefaults(),
 		auditcore.WithOutboxDeps(eb, nw),
 		auditcore.WithHMACKey([]byte("guard-test-hmac-key-32-bytes!!!!!")),
@@ -503,6 +509,7 @@ func TestAuthWiring_HealthListener_PrimaryDoesNotServeHealthz(t *testing.T) {
 	require.NoError(t, err)
 
 	ac := accesscore.NewAccessCore(
+		accesscore.WithClock(clock.Real()),
 		accesscore.WithInMemoryDefaults(),
 		accesscore.WithOutboxDeps(eb, nw),
 		accesscore.WithJWTIssuer(jwtIssuer),
@@ -511,6 +518,7 @@ func TestAuthWiring_HealthListener_PrimaryDoesNotServeHealthz(t *testing.T) {
 		accesscore.WithMetricsProvider(metrics.NopProvider{}),
 	)
 	cc := configcore.NewConfigCore(
+		configcore.WithClock(clock.Real()),
 		configcore.WithInMemoryDefaults(),
 		configcore.WithOutboxDeps(eb, nw),
 		configcore.WithTxManager(noopTxRunner{}),
@@ -518,6 +526,7 @@ func TestAuthWiring_HealthListener_PrimaryDoesNotServeHealthz(t *testing.T) {
 		configcore.WithMetricsProvider(metrics.NopProvider{}),
 	)
 	auc := auditcore.NewAuditCore(
+		auditcore.WithClock(clock.Real()),
 		auditcore.WithInMemoryDefaults(),
 		auditcore.WithOutboxDeps(eb, nw),
 		auditcore.WithHMACKey([]byte("health-test-hmac-key-32-bytes!!")),

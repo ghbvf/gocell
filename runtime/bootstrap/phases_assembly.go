@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"log/slog"
 	"reflect"
+	"time"
 
 	"github.com/ghbvf/gocell/kernel/assembly"
 	"github.com/ghbvf/gocell/kernel/cell"
@@ -213,6 +214,9 @@ func (b *Bootstrap) phase3InitAssembly(ctx context.Context, s *phaseState) error
 	}
 
 	s.asm = asm
+	// Copy the per-cell RegistrySnapshots from the assembly so that later phases
+	// (3b / 5 / 6) drain them instead of type-asserting on the live cell instances.
+	s.cellSnapshots = asm.Snapshots()
 
 	// reloads gates config-reload callbacks: reject new entries once shutdown
 	// begins; drain in-flight before stopping the assembly.
@@ -264,13 +268,16 @@ func (b *Bootstrap) buildOnChangeCallback(s *phaseState, yamlPath, envPrefix str
 			return
 		}
 		defer s.reloads.Leave()
-		b.applyConfigReload(s, evt, yamlPath, envPrefix)
+		// Use context.Background as the root: the watcher fires from a goroutine
+		// that has no caller context. Timeout is applied per-callback inside
+		// invokeReloader using s.asm.ReloadTimeout().
+		b.applyConfigReload(context.Background(), s, evt, yamlPath, envPrefix)
 	}
 }
 
 // applyConfigReload performs the actual config reload: Reload → Diff → notify cells.
 // Extracted to keep buildOnChangeCallback's cognitive complexity ≤ 15.
-func (b *Bootstrap) applyConfigReload(s *phaseState, evt config.WatchEvent, yamlPath, envPrefix string) {
+func (b *Bootstrap) applyConfigReload(ctx context.Context, s *phaseState, evt config.WatchEvent, yamlPath, envPrefix string) {
 	rc, ok := s.cfg.(config.Reloader)
 	if !ok {
 		return
@@ -294,7 +301,7 @@ func (b *Bootstrap) applyConfigReload(s *phaseState, evt config.WatchEvent, yaml
 	if g, ok := s.cfg.(config.Generationer); ok {
 		gen = g.Generation()
 	}
-	allOK := b.notifyCellsConfigChanged(s.asm, newSnap, added, updated, removed, gen)
+	allOK := b.notifyCellsConfigChanged(ctx, s, newSnap, added, updated, removed, gen)
 	if allOK {
 		if og, ok := s.cfg.(config.ObservedGenerationer); ok {
 			og.SetObservedGeneration(gen)
@@ -312,75 +319,83 @@ func syncObservedGeneration(cfg config.Config) {
 	}
 }
 
-// notifyCellsConfigChanged notifies all ConfigReloader cells about a config change.
-// Returns true only when every cell applied the change successfully.
+// notifyCellsConfigChanged notifies all cells that registered OnConfigReload
+// callbacks (via cell.Registry.OnConfigReload) about a config change.
+// Returns true only when every callback applied the change successfully.
 func (b *Bootstrap) notifyCellsConfigChanged(
-	asm *assembly.CoreAssembly,
+	ctx context.Context,
+	s *phaseState,
 	newSnap map[string]any,
 	added, updated, removed []string,
 	gen int64,
 ) bool {
+	timeout := s.asm.ReloadTimeout()
 	allOK := true
-	for _, id := range asm.CellIDs() {
-		c := asm.Cell(id)
-		cr, ok := c.(cell.ConfigReloader)
+	for _, id := range s.asm.CellIDs() {
+		snap, ok := s.cellSnapshots[id]
 		if !ok {
 			continue
 		}
-		if !b.shouldNotifyCell(c, added, updated, removed) {
-			continue
-		}
-		cfgSnap := b.buildCellConfigSnap(c, newSnap)
-		evt := cell.ConfigChangeEvent{
-			Added:      cloneStrings(added),
-			Updated:    cloneStrings(updated),
-			Removed:    cloneStrings(removed),
-			Config:     cfgSnap,
-			Generation: gen,
-		}
-		if !b.invokeCellReload(id, cr, evt) {
-			allOK = false
+		for _, req := range snap.ConfigReloaders {
+			if !shouldNotifyReloader(req, added, updated, removed) {
+				continue
+			}
+			cfgSnap := buildConfigSnapForReloader(req, newSnap)
+			evt := cell.ConfigChangeEvent{
+				Added:      cloneStrings(added),
+				Updated:    cloneStrings(updated),
+				Removed:    cloneStrings(removed),
+				Config:     cfgSnap,
+				Generation: gen,
+			}
+			if !invokeReloader(ctx, id, req.Fn, evt, timeout) {
+				allOK = false
+			}
 		}
 	}
 	return allOK
 }
 
-// shouldNotifyCell returns true when a cell has no key-filter or one of the
-// changed keys matches the declared prefixes.
-func (b *Bootstrap) shouldNotifyCell(c cell.Cell, added, updated, removed []string) bool {
-	kf, ok := c.(cell.ConfigKeyFilterer)
-	if !ok {
-		return true
-	}
-	prefixes := kf.ConfigKeyPrefixes()
-	if len(prefixes) == 0 {
+// shouldNotifyReloader returns true when the reload request has no prefix
+// filter or at least one changed key matches a declared prefix.
+func shouldNotifyReloader(req cell.ConfigReloadRequest, added, updated, removed []string) bool {
+	if len(req.Prefixes) == 0 {
 		return true
 	}
 	changedKeys := make([]string, 0, len(added)+len(updated)+len(removed))
 	changedKeys = append(changedKeys, added...)
 	changedKeys = append(changedKeys, updated...)
 	changedKeys = append(changedKeys, removed...)
-	return config.NewKeyFilter(prefixes...).Matches(changedKeys)
+	return config.NewKeyFilter(req.Prefixes...).Matches(changedKeys)
 }
 
-// buildCellConfigSnap constructs the config snapshot for a single cell,
-// optionally filtered to the declared key prefixes.
-func (b *Bootstrap) buildCellConfigSnap(c cell.Cell, newSnap map[string]any) map[string]any {
+// buildConfigSnapForReloader constructs the config snapshot for a single reload
+// request, optionally filtered to the declared key prefixes.
+func buildConfigSnapForReloader(req cell.ConfigReloadRequest, newSnap map[string]any) map[string]any {
 	snap := cloneMap(newSnap)
-	kf, ok := c.(cell.ConfigKeyFilterer)
-	if !ok {
-		return snap
-	}
-	prefixes := kf.ConfigKeyPrefixes()
-	if len(prefixes) > 0 {
-		snap = filterMapByPrefixes(snap, prefixes)
+	if len(req.Prefixes) > 0 {
+		snap = filterMapByPrefixes(snap, req.Prefixes)
 	}
 	return snap
 }
 
-// invokeCellReload calls cr.OnConfigReload inside a recover fence.
-// Returns true on success.
-func (b *Bootstrap) invokeCellReload(id string, cr cell.ConfigReloader, evt cell.ConfigChangeEvent) (ok bool) {
+// invokeReloader calls fn inside a recover fence with an optional per-call
+// timeout derived from the assembly's ReloadTimeout. Returns true on success.
+//
+// timeout semantics:
+//   - positive: a child context with that deadline is derived from ctx and
+//     passed to fn; cancel is deferred after fn returns.
+//   - zero or negative: ctx is passed directly (no additional deadline).
+//
+// ref: etcd clientv3 Watch ctx propagation — watchers propagate the caller's ctx.
+// ref: k8s SharedInformer — informer callbacks carry a bounded ctx.
+func invokeReloader(
+	ctx context.Context,
+	id string,
+	fn func(context.Context, cell.ConfigChangeEvent) error,
+	evt cell.ConfigChangeEvent,
+	timeout time.Duration,
+) (ok bool) {
 	ok = true
 	func() {
 		defer func() {
@@ -391,7 +406,15 @@ func (b *Bootstrap) invokeCellReload(id string, cr cell.ConfigReloader, evt cell
 					slog.String("type", fmt.Sprintf("%T", r)))
 			}
 		}()
-		if err := cr.OnConfigReload(evt); err != nil {
+
+		callCtx := ctx
+		if timeout > 0 {
+			var cancel context.CancelFunc
+			callCtx, cancel = context.WithTimeout(ctx, timeout)
+			defer cancel()
+		}
+
+		if err := fn(callCtx, evt); err != nil {
 			ok = false
 			slog.Error("bootstrap: config reload callback failed",
 				slog.String("cell", id),

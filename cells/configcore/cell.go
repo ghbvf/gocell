@@ -3,7 +3,6 @@
 package configcore
 
 import (
-	"context"
 	"log/slog"
 
 	"github.com/ghbvf/gocell/cells/configcore/internal/ports"
@@ -24,10 +23,7 @@ import (
 
 // Compile-time interface checks.
 var (
-	_ cell.Cell                  = (*ConfigCore)(nil)
-	_ cell.RouteGroupContributor = (*ConfigCore)(nil)
-	_ cell.EventRegistrar        = (*ConfigCore)(nil)
-	_ cell.HealthContributor     = (*ConfigCore)(nil)
+	_ cell.Cell = (*ConfigCore)(nil)
 )
 
 // Option configures a ConfigCore Cell.
@@ -104,10 +100,17 @@ func WithCursorCodec(codec *query.CursorCodec) Option {
 	return func(c *ConfigCore) { c.cursorCodec = codec }
 }
 
+// WithClock sets the time source for this Cell. Required — Init() panics via
+// clock.MustHaveClock if not set. Composition root passes clock.Real(); tests
+// inject a deterministic clock to control time-sensitive logic.
+func WithClock(clk clock.Clock) Option {
+	return func(c *ConfigCore) { c.clk = clk }
+}
+
 // WithInMemoryDefaults configures in-memory repositories for development
 // and testing. Not suitable for production use.
-// Repository construction is deferred to Init() so that c.clk (set from
-// deps.Clock) is available when mem.NewConfigRepository/NewFlagRepository are called.
+// Repository construction is deferred to Init() so that c.clk is available
+// when mem.NewConfigRepository/NewFlagRepository are called.
 func WithInMemoryDefaults() Option {
 	return func(c *ConfigCore) { c.useInMemoryDefaults = true }
 }
@@ -143,31 +146,6 @@ type ConfigCore struct {
 	flagHandler      *featureflag.Handler
 	flagWriteHandler *flagwrite.Handler
 	subscribeSvc     *configsubscribe.Service
-}
-
-// HealthCheckers implements cell.HealthContributor. Aggregates the outbox
-// emitter's HealthCheckers (currently fail-open drop rate → degraded signal)
-// so /readyz surfaces "config events are being lost in fail-open path"
-// without polluting the cell's primary Cell.Health() signal.
-//
-// The emitter checker (outbox-failopen-rate.configcore) is enabled by default
-// at a 5% threshold; it returns cell.ErrDegraded when the fail-open drop ratio
-// sustained between two /readyz probes exceeds that threshold. Disable via
-// outbox.WithFailOpenRateThreshold(0) when constructing the emitter.
-func (c *ConfigCore) HealthCheckers() map[string]func(context.Context) error {
-	checkers := make(map[string]func(context.Context) error)
-	if hc, ok := c.emitter.(cell.HealthContributor); ok {
-		for k, v := range hc.HealthCheckers() {
-			if _, dup := checkers[k]; dup {
-				slog.Error("configcore: duplicate health checker name; emitter checker dropped",
-					slog.String("checker", k),
-					slog.String("source", "outbox-emitter"))
-				continue
-			}
-			checkers[k] = v
-		}
-	}
-	return checkers
 }
 
 // NewConfigCore creates a new ConfigCore Cell.

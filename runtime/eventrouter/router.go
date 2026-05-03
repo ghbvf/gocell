@@ -65,13 +65,14 @@ type handlerConfig struct {
 	topic         string
 	handler       outbox.EntryHandler
 	consumerGroup string
+	cellID        string // ownerCellID resolved by AddContractHandler; used for Subscription.CellID
 	sliceID       string
 	contract      wrapper.ContractSpec
 }
 
-// Router manages event subscription lifecycle. It implements cell.EventRouter
-// for the declaration phase (AddContractHandler) and provides Run/Close for the
-// execution phase.
+// Router manages event subscription lifecycle. It is populated from
+// RegistrySnapshot.Subscriptions drained by bootstrap phase6, and provides
+// Run/Close for the execution phase.
 //
 // Run MUST be called at most once. Calling Run a second time returns an error.
 type Router struct {
@@ -93,7 +94,6 @@ type Router struct {
 }
 
 // Compile-time interface checks.
-var _ cell.EventRouter = (*Router)(nil)
 var _ cell.SubscriptionValidatorAdder = (*Router)(nil)
 
 // New creates a Router that will use the given Subscriber for all subscriptions.
@@ -123,12 +123,18 @@ func New(sub outbox.Subscriber, clk clock.Clock, opts ...Option) *Router {
 // Subscriber.Setup / Subscribe lifecycle is derived from spec.Topic — callers
 // do not pass a separate topic string.
 //
-// Returns a non-nil error when handler is nil, consumerGroup is empty, the
-// spec is malformed, or kernel/cell.EventRouter contract is otherwise
-// violated; callers (Cell.RegisterSubscriptions) should propagate the error
-// to the bootstrap phase5 walker.
+// ownerCellID is the cell that owns this subscription — distinct from
+// consumerGroup (which may include a role suffix like "accesscore-rbac-session-sync").
+// When set, Subscription.CellID is populated from ownerCellID; otherwise it
+// falls back to consumerGroup for backward compatibility.
+//
+// Returns a non-nil error when handler is nil, consumerGroup is empty, or the
+// spec is malformed; callers should propagate the error to the bootstrap
+// phase6 subscription walker.
+//
+// ref: ThreeDotsLabs/watermill router.AddHandler handlerName / NATS subscription metadata.
 func (r *Router) AddContractHandler(
-	spec wrapper.ContractSpec, handler outbox.EntryHandler, consumerGroup string, opts ...cell.SubscriptionOption,
+	spec wrapper.ContractSpec, handler outbox.EntryHandler, consumerGroup string, ownerCellID string, opts ...cell.SubscriptionOption,
 ) error {
 	if handler == nil {
 		return fmt.Errorf("eventrouter: AddContractHandler called with nil handler")
@@ -142,11 +148,23 @@ func (r *Router) AddContractHandler(
 	if err := spec.Validate(); err != nil {
 		return fmt.Errorf("eventrouter: AddContractHandler: %w", err)
 	}
-	var subOpts cell.SubscriptionOptions
+	req := cell.SubscriptionRequest{
+		Spec:          spec,
+		Handler:       handler,
+		ConsumerGroup: consumerGroup,
+		OwnerCellID:   ownerCellID,
+	}
 	for _, opt := range opts {
 		if opt != nil {
-			opt(&subOpts)
+			opt(&req)
 		}
+	}
+
+	// Resolve the cell ID: use ownerCellID when provided; fall back to
+	// consumerGroup so test-direct callers that pass "" still get a label.
+	cellID := ownerCellID
+	if cellID == "" {
+		cellID = consumerGroup
 	}
 
 	// Build a representative Subscription so validators can inspect all fields.
@@ -155,8 +173,8 @@ func (r *Router) AddContractHandler(
 	candidateSub := outbox.Subscription{
 		Topic:         spec.Topic,
 		ConsumerGroup: consumerGroup,
-		CellID:        consumerGroup, // eventrouter uses consumerGroup as CellID
-		SliceID:       subOpts.SliceID,
+		CellID:        cellID,
+		SliceID:       req.SliceID,
 	}
 	r.mu.Lock()
 	currentValidators := make([]cell.SubscriptionValidator, len(r.validators))
@@ -182,7 +200,8 @@ func (r *Router) AddContractHandler(
 		topic:         spec.Topic,
 		handler:       handler,
 		consumerGroup: consumerGroup,
-		sliceID:       subOpts.SliceID,
+		cellID:        cellID,
+		sliceID:       req.SliceID,
 		contract:      spec,
 	})
 	return nil
@@ -416,7 +435,7 @@ func (h handlerConfig) subscription() outbox.Subscription {
 	sub := outbox.Subscription{
 		Topic:         h.topic,
 		ConsumerGroup: h.consumerGroup,
-		CellID:        h.consumerGroup,
+		CellID:        h.cellID,
 		SliceID:       h.sliceID,
 	}
 	if h.contract.ID != "" {

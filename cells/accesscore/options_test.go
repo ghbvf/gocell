@@ -9,7 +9,6 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/ghbvf/gocell/kernel/cell"
-	"github.com/ghbvf/gocell/kernel/cell/celltest"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/kernel/outbox"
@@ -20,12 +19,13 @@ import (
 
 func TestWithLogger(t *testing.T) {
 	logger := slog.Default()
-	c := NewAccessCore(WithLogger(logger))
+	c := NewAccessCore(WithClock(clock.Real()), WithLogger(logger))
 	assert.Equal(t, logger, c.logger)
 }
 
 func TestWithInMemoryDefaults(t *testing.T) {
 	c := NewAccessCore(
+		WithClock(clock.Real()),
 		WithInMemoryDefaults(),
 		WithJWTIssuer(testIssuer),
 		WithJWTVerifier(testVerifier),
@@ -34,20 +34,17 @@ func TestWithInMemoryDefaults(t *testing.T) {
 		WithTxManager(persistence.NoopTxRunner{}),
 	)
 	// userRepo and roleRepo are set eagerly; sessionRepo is deferred to Init()
-	// so that deps.Clock is available (clock injection pattern).
+	// so that c.clk is available (clock injection pattern).
 	assert.NotNil(t, c.userRepo)
 	assert.NotNil(t, c.roleRepo)
 	// Verify sessionRepo is wired after Init.
-	require.NoError(t, c.Init(context.Background(), cell.Dependencies{
-		Config:         make(map[string]any),
-		DurabilityMode: cell.DurabilityDemo,
-		Clock:          clock.Real(),
-	}))
+	require.NoError(t, c.Init(context.Background(), cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo)))
 	assert.NotNil(t, c.sessionRepo)
 }
 
 func TestHealthCheckers_InMemory(t *testing.T) {
 	c := NewAccessCore(
+		WithClock(clock.Real()),
 		WithInMemoryDefaults(),
 		WithJWTIssuer(testIssuer),
 		WithJWTVerifier(testVerifier),
@@ -55,74 +52,77 @@ func TestHealthCheckers_InMemory(t *testing.T) {
 		WithOutboxDeps(nil, outbox.NoopWriter{}),
 		WithTxManager(persistence.NoopTxRunner{}),
 	)
-	require.NoError(t, c.Init(context.Background(), cell.Dependencies{
-		Config:         make(map[string]any),
-		DurabilityMode: cell.DurabilityDemo,
-		Clock:          clock.Real(),
-	}))
-	checkers := c.HealthCheckers()
-	require.Contains(t, checkers, "session-store", "in-memory session repo implements Health()")
-	assert.NoError(t, checkers["session-store"](context.Background()))
+	rec := cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo)
+	require.NoError(t, c.Init(context.Background(), rec))
+	snap := rec.Snapshot()
+	require.Contains(t, snap.HealthCheckers, "session_store_ready", "in-memory session repo implements Health()")
+	assert.NoError(t, snap.HealthCheckers["session_store_ready"](context.Background()))
 }
 
-func TestHealthCheckers_NilRepo(t *testing.T) {
-	c := NewAccessCore() // no repo set
-	checkers := c.HealthCheckers()
-	assert.Empty(t, checkers, "nil session repo produces no health checkers")
+func TestHealthCheckers_WithInMemoryDefaults_SessionStorePresent(t *testing.T) {
+	// WithInMemoryDefaults defers sessionRepo construction to Init() so that
+	// c.clk is available; after Init the session-store health probe is registered.
+	c := NewAccessCore(
+		WithClock(clock.Real()),
+		WithJWTIssuer(testIssuer),
+		WithJWTVerifier(testVerifier),
+		WithInMemoryDefaults(),
+		WithOutboxDeps(nil, outbox.NoopWriter{}),
+		WithTxManager(persistence.NoopTxRunner{}),
+	)
+	rec := cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo)
+	require.NoError(t, c.Init(context.Background(), rec))
+	snap := rec.Snapshot()
+	assert.Contains(t, snap.HealthCheckers, "session_store_ready")
 }
 
 func TestRegisterSubscriptions(t *testing.T) {
 	c := newTestCell(t)
 	ctx := context.Background()
-	deps := cell.Dependencies{Config: make(map[string]any), DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()}
-	require.NoError(t, c.Init(ctx, deps))
+	rec := cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo)
+	require.NoError(t, c.Init(ctx, rec))
 
-	r := &celltest.StubEventRouter{}
-	require.NoError(t, c.RegisterSubscriptions(r))
-	// accesscore now registers 4 topic handlers:
+	snap := rec.Snapshot()
+	// accesscore registers 4 topic handlers:
 	//   1. event.config.entry-upserted.v1  (config-receive, consumer group: accesscore)
 	//   2. event.config.entry-deleted.v1   (config-receive, consumer group: accesscore)
 	//   3. event.role.assigned.v1          (rbac-session-sync, consumer group: accesscore-rbac-session-sync)
 	//   4. event.role.revoked.v1           (rbac-session-sync, consumer group: accesscore-rbac-session-sync)
-	assert.Equal(t, 4, r.HandlerCount(), "accesscore should register 4 topic handlers")
-	assert.Equal(t, "event.config.entry-upserted.v1", r.Topics[0])
-	assert.Equal(t, "accesscore", r.ConsumerGroups[0])
-	assert.Equal(t, "event.config.entry-deleted.v1", r.Topics[1])
-	assert.Equal(t, "accesscore", r.ConsumerGroups[1])
-	assert.Equal(t, "event.role.assigned.v1", r.Topics[2])
-	assert.Equal(t, "accesscore-rbac-session-sync", r.ConsumerGroups[2])
-	assert.Equal(t, "event.role.revoked.v1", r.Topics[3])
-	assert.Equal(t, "accesscore-rbac-session-sync", r.ConsumerGroups[3])
+	require.Len(t, snap.Subscriptions, 4, "accesscore should register 4 topic handlers")
+	assert.Equal(t, "event.config.entry-upserted.v1", snap.Subscriptions[0].Spec.Topic)
+	assert.Equal(t, "accesscore", snap.Subscriptions[0].ConsumerGroup)
+	assert.Equal(t, "event.config.entry-deleted.v1", snap.Subscriptions[1].Spec.Topic)
+	assert.Equal(t, "accesscore", snap.Subscriptions[1].ConsumerGroup)
+	assert.Equal(t, "event.role.assigned.v1", snap.Subscriptions[2].Spec.Topic)
+	assert.Equal(t, "accesscore-rbac-session-sync", snap.Subscriptions[2].ConsumerGroup)
+	assert.Equal(t, "event.role.revoked.v1", snap.Subscriptions[3].Spec.Topic)
+	assert.Equal(t, "accesscore-rbac-session-sync", snap.Subscriptions[3].ConsumerGroup)
 }
 
 func TestInit_DurableMode_MissingOutboxWriter(t *testing.T) {
 	// durableTxRunner is a non-Noop runner so the durable-mode CheckNotNoop
 	// passes and we reach the actual missing-outboxWriter assertion.
 	c := NewAccessCore(
+		WithClock(clock.Real()),
 		WithJWTIssuer(testIssuer),
 		WithJWTVerifier(testVerifier),
 		WithTxManager(durableTxRunner{}),
 	)
-	deps := cell.Dependencies{Config: make(map[string]any), DurabilityMode: cell.DurabilityDurable, Clock: clock.Real()}
-	err := c.Init(context.Background(), deps)
+	err := c.Init(context.Background(), cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDurable))
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "outboxWriter")
 }
 
 func TestInit_DurableMode_RejectsNoopWriter(t *testing.T) {
 	c := NewAccessCore(
+		WithClock(clock.Real()),
 		WithInMemoryDefaults(),
 		WithJWTIssuer(testIssuer),
 		WithJWTVerifier(testVerifier),
 		WithOutboxDeps(nil, outbox.NoopWriter{}),
 		WithTxManager(persistence.NoopTxRunner{}),
 	)
-	deps := cell.Dependencies{
-		Config:         make(map[string]any),
-		DurabilityMode: cell.DurabilityDurable,
-		Clock:          clock.Real(),
-	}
-	err := c.Init(context.Background(), deps)
+	err := c.Init(context.Background(), cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDurable))
 	require.Error(t, err)
 	var ecErr *errcode.Error
 	require.ErrorAs(t, err, &ecErr)
@@ -132,11 +132,11 @@ func TestInit_DurableMode_RejectsNoopWriter(t *testing.T) {
 
 func TestInit_MissingJWTIssuerAndVerifier(t *testing.T) {
 	c := NewAccessCore(
+		WithClock(clock.Real()),
 		WithOutboxDeps(nil, outbox.NoopWriter{}),
 		WithTxManager(persistence.NoopTxRunner{}),
 	)
-	deps := cell.Dependencies{Config: make(map[string]any), DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()}
-	err := c.Init(context.Background(), deps)
+	err := c.Init(context.Background(), cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo))
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "WithJWTIssuer")
 	assert.Contains(t, err.Error(), "WithJWTVerifier")
@@ -144,34 +144,36 @@ func TestInit_MissingJWTIssuerAndVerifier(t *testing.T) {
 
 // TestHealthCheckers_WithDirectEmitter verifies that after Init with a
 // DirectEmitter-backed publisher, HealthCheckers returns both the
-// session-store checker and the outbox-failopen-rate checker.
+// session_store_ready checker and the outbox-failopen-rate checker.
 func TestHealthCheckers_WithDirectEmitter(t *testing.T) {
 	c := NewAccessCore(
+		WithClock(clock.Real()),
 		WithInMemoryDefaults(),
 		WithJWTIssuer(testIssuer),
 		WithJWTVerifier(testVerifier),
 		WithOutboxDeps(eventbus.New(eventbus.WithClock(clock.Real())), nil),
 		WithMetricsProvider(metrics.NopProvider{}),
 	)
-	deps := cell.Dependencies{Config: make(map[string]any), DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()}
-	require.NoError(t, c.Init(context.Background(), deps))
+	rec := cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo)
+	require.NoError(t, c.Init(context.Background(), rec))
 
-	checkers := c.HealthCheckers()
-	require.Contains(t, checkers, "session-store", "session-store checker must be present")
+	snap := rec.Snapshot()
+	require.Contains(t, snap.HealthCheckers, "session_store_ready", "session_store_ready checker must be present")
 	const emitterKey = "outbox-failopen-rate.accesscore"
-	require.Contains(t, checkers, emitterKey, "DirectEmitter health checker must be aggregated")
-	assert.NoError(t, checkers[emitterKey](context.Background()), "fresh emitter should be healthy")
+	require.Contains(t, snap.HealthCheckers, emitterKey, "DirectEmitter health checker must be aggregated")
+	assert.NoError(t, snap.HealthCheckers[emitterKey](context.Background()), "fresh emitter should be healthy")
 }
 
 // TestHealthCheckers_WithNoopEmitter verifies that when the emitter does not
-// implement cell.HealthContributor (WriterEmitter via NoopWriter path),
+// implement emitterHealthChecker (WriterEmitter via NoopWriter path),
 // only cell-owned checkers appear.
 func TestHealthCheckers_NoEmitterChecker(t *testing.T) {
-	// WriterEmitter (NoopWriter path) does not implement HealthContributor,
+	// WriterEmitter (NoopWriter path) does not implement emitterHealthChecker,
 	// so no outbox-failopen-rate checker is produced.
 	// sessionRepo is deferred to Init() (clock injection pattern), so Init
-	// must be called before HealthCheckers() to have session-store present.
+	// must be called before snapshot to have session-store present.
 	c := NewAccessCore(
+		WithClock(clock.Real()),
 		WithInMemoryDefaults(),
 		WithJWTIssuer(testIssuer),
 		WithJWTVerifier(testVerifier),
@@ -179,14 +181,11 @@ func TestHealthCheckers_NoEmitterChecker(t *testing.T) {
 		WithOutboxDeps(nil, outbox.NoopWriter{}),
 		WithTxManager(persistence.NoopTxRunner{}),
 	)
-	require.NoError(t, c.Init(context.Background(), cell.Dependencies{
-		Config:         make(map[string]any),
-		DurabilityMode: cell.DurabilityDemo,
-		Clock:          clock.Real(),
-	}))
-	checkers := c.HealthCheckers()
-	assert.Contains(t, checkers, "session-store", "session-store must still be present")
-	for k := range checkers {
+	rec := cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo)
+	require.NoError(t, c.Init(context.Background(), rec))
+	snap := rec.Snapshot()
+	assert.Contains(t, snap.HealthCheckers, "session_store_ready", "session-store must still be present")
+	for k := range snap.HealthCheckers {
 		assert.NotContains(t, k, "outbox-failopen-rate",
 			"nil emitter must not produce outbox checker: key=%s", k)
 	}

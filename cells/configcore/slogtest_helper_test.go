@@ -58,13 +58,14 @@ func TestConfigCore_InitDemoMode_EmitsL2DegradationWarn(t *testing.T) {
 	logger := slog.New(cap)
 
 	c := NewConfigCore(
+		WithClock(clock.Real()),
 		WithInMemoryDefaults(),
 		WithOutboxDeps(eventbus.New(eventbus.WithClock(clock.Real())), nil),
 		WithLogger(logger),
 		WithMetricsProvider(metrics.NopProvider{}),
 	)
 	require.NoError(t, c.Init(context.Background(),
-		cell.Dependencies{DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()}))
+		cell.NewRegistryRecorder(map[string]any{}, cell.DurabilityDemo)))
 
 	var warn *slog.Record
 	for i := range cap.records {

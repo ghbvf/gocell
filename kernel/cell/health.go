@@ -2,8 +2,8 @@ package cell
 
 import "github.com/ghbvf/gocell/kernel/outbox"
 
-// ErrDegraded is the canonical sentinel returned by cell.HealthContributor
-// checkers to signal "operational but degraded" — the cell is still serving
+// ErrDegraded is the canonical sentinel returned by Registry health checks
+// to signal "operational but degraded" — the cell is still serving
 // traffic, but a non-critical capability is impaired (e.g., outbox fail-open
 // drop rate exceeded threshold). The /readyz aggregator detects ErrDegraded
 // via errors.Is and maps it to HTTP 200 + body status="degraded" rather than
