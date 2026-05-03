@@ -59,6 +59,24 @@ type Registry interface {
 	//   - spec.Kind != "event"
 	//
 	// Cell.Init should propagate the error via `if err := ...; err != nil { return err }`.
+	//
+	// The handler type outbox.EntryHandler is the canonical event handler in
+	// kernel/; cell.Registry consumes it directly rather than wrapping it in a
+	// cell-local alias. This mirrors the industry pattern where a registry/router
+	// depends on its event primitive's handler signature:
+	//   ref: ThreeDotsLabs/watermill message/router.go AddHandler — handler func type
+	//        defined in message/, consumed directly by router.AddHandler.
+	//   ref: k8s.io/client-go/tools/cache SharedInformer.AddEventHandler — cache.ResourceEventHandler
+	//        defined in cache/, passed directly to informer.AddEventHandler.
+	//
+	// The subscription is not started here; Bootstrap drains all registered
+	// SubscriptionRequests in phase6 and hands them to the event router.
+	// This two-phase pattern (register intent in Init, start goroutines in
+	// bootstrap) mirrors ThreeDotsLabs/watermill router.AddHandler — handler
+	// registration and router.Run are separate lifecycle steps.
+	//
+	// ref: ThreeDotsLabs/watermill message/router.go AddHandler (handler
+	// registration decoupled from goroutine start).
 	Subscribe(spec wrapper.ContractSpec, handler outbox.EntryHandler, consumerGroup string, opts ...SubscriptionOption) error
 
 	// Health registers a named readiness probe. If name is already registered,
@@ -184,6 +202,21 @@ type SubscriptionRequest struct {
 	Handler       outbox.EntryHandler
 	ConsumerGroup string
 	SliceID       string
+
+	// OwnerCellID is the cell that owns this subscription. It is NOT set by the
+	// cell itself during Init — cells only know their ConsumerGroup. Instead,
+	// bootstrap's drainCellSubscriptions fills this field from the cell-ID key
+	// used to look up the snapshot, so the event router can record the true
+	// owner cell for observability (CellID label in metrics/traces) rather than
+	// overloading ConsumerGroup as a proxy cell identity.
+	//
+	// Example: accesscore registers subscriptions with
+	//   ConsumerGroup = "accesscore-rbac-session-sync"
+	//   OwnerCellID   = "accesscore"   (set by drain loop)
+	// so that Subscription.CellID = "accesscore" (the cell), not the consumer group.
+	//
+	// ref: ThreeDotsLabs/watermill router.AddHandler handlerName / NATS subscription metadata.
+	OwnerCellID string
 }
 
 // SubscriptionOption mutates a SubscriptionRequest to attach optional metadata.

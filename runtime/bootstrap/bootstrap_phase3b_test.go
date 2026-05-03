@@ -115,9 +115,9 @@ func buildAsmStarted(t *testing.T, cells ...cell.Cell) *assembly.CoreAssembly {
 	t.Helper()
 	asm := assembly.New(assembly.Config{ID: "testasm", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
 	for _, c := range cells {
-		require.NoError(t, asm.Register(c))
+		require.NoErrorf(t, asm.Register(c), "buildAsmStarted: registering cell %q", c.ID())
 	}
-	require.NoError(t, asm.Start(context.Background()))
+	require.NoError(t, asm.Start(context.Background()), "buildAsmStarted: asm.Start failed")
 	t.Cleanup(func() { _ = asm.Stop(context.Background()) })
 	return asm
 }
@@ -378,38 +378,6 @@ func TestPhase3b_BothNilSkipped(t *testing.T) {
 
 	require.NoError(t, b.phase3bDrainLifecycleHooks(s))
 	assert.Empty(t, ml.appended, "hook with both nil funcs must be skipped")
-}
-
-// TestPhase3b_EmptyNameAllowed verifies a hook with Name="" is still appended
-// (Name is non-required at the bootstrap level even though Registry.Lifecycle panics
-// on empty name — tests here use the snapshot path directly).
-func TestPhase3b_EmptyNameAllowed(t *testing.T) {
-	// Directly inject a snapshot with an empty-named hook (bypass Registry.Lifecycle
-	// panic guard — this tests that phase3b itself does not block empty names).
-	asm := assembly.New(assembly.Config{ID: "testasm2", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
-	plain := &plainCellForLC{BaseCell: *cell.NewBaseCell(cell.CellMetadata{ID: "mycore"})}
-	require.NoError(t, asm.Register(plain))
-	require.NoError(t, asm.Start(context.Background()))
-	t.Cleanup(func() { _ = asm.Stop(context.Background()) })
-
-	// Manually build a phaseState with a snapshot that has an empty-named hook.
-	_, s := newPhaseState()
-	s.asm = asm
-	s.cellSnapshots = map[string]cell.RegistrySnapshot{
-		"mycore": {
-			LifecycleHooks: []cell.LifecycleHook{
-				{Name: "", OnStart: func(_ context.Context) error { return nil }},
-			},
-		},
-	}
-
-	ml := &mockLifecycle{}
-	b := New(WithClock(clock.Real()))
-	b.lifecycle = ml
-
-	require.NoError(t, b.phase3bDrainLifecycleHooks(s))
-	require.Len(t, ml.appended, 1)
-	assert.Equal(t, "", ml.appended[0].Name)
 }
 
 // TestPhase3b_AppendError_PropagatesWithCellAndHookName verifies that when

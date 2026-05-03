@@ -80,11 +80,14 @@ func (b *Bootstrap) drainCellSubscriptions(s *phaseState, evtRouter *eventrouter
 			continue
 		}
 		for _, sub := range snap.Subscriptions {
+			// Drain loop knows the true owner cell; set OwnerCellID so the
+			// event router can record it independently of ConsumerGroup.
+			sub.OwnerCellID = id
 			var opts []cell.SubscriptionOption
 			if sub.SliceID != "" {
 				opts = append(opts, cell.WithSubscriptionSliceID(sub.SliceID))
 			}
-			if err := evtRouter.AddContractHandler(sub.Spec, sub.Handler, sub.ConsumerGroup, opts...); err != nil {
+			if err := evtRouter.AddContractHandler(sub.Spec, sub.Handler, sub.ConsumerGroup, sub.OwnerCellID, opts...); err != nil {
 				return fmt.Errorf("bootstrap: cell %s subscription setup failed: %w", id, err)
 			}
 		}

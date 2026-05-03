@@ -106,8 +106,8 @@ func TestRouter_AddContractHandler_RegistersTopics(t *testing.T) {
 	sub := &blockingSubscriber{}
 	r := New(sub, clock.Real())
 
-	_ = r.AddContractHandler(testEventSpec("topic.a"), noopHandler, "test")
-	_ = r.AddContractHandler(testEventSpec("topic.b"), noopHandler, "test")
+	_ = r.AddContractHandler(testEventSpec("topic.a"), noopHandler, "test", "test")
+	_ = r.AddContractHandler(testEventSpec("topic.b"), noopHandler, "test", "test")
 
 	assert.Equal(t, 2, r.HandlerCount())
 }
@@ -116,9 +116,9 @@ func TestRouter_Run_StartsAllSubscriptions(t *testing.T) {
 	sub := &blockingSubscriber{}
 	r := New(sub, clock.Real())
 
-	_ = r.AddContractHandler(testEventSpec("topic.a"), noopHandler, "test")
-	_ = r.AddContractHandler(testEventSpec("topic.b"), noopHandler, "test")
-	_ = r.AddContractHandler(testEventSpec("topic.c"), noopHandler, "test")
+	_ = r.AddContractHandler(testEventSpec("topic.a"), noopHandler, "test", "test")
+	_ = r.AddContractHandler(testEventSpec("topic.b"), noopHandler, "test", "test")
+	_ = r.AddContractHandler(testEventSpec("topic.c"), noopHandler, "test", "test")
 
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
@@ -164,7 +164,7 @@ func TestRouter_Run_SubscribeError_ReturnsError(t *testing.T) {
 	sub := &failingSubscriber{err: subscribeErr}
 	r := New(sub, clock.Real())
 
-	_ = r.AddContractHandler(testEventSpec("topic.fail"), noopHandler, "test")
+	_ = r.AddContractHandler(testEventSpec("topic.fail"), noopHandler, "test", "test")
 
 	ctx := t.Context()
 
@@ -200,7 +200,7 @@ func TestRouter_Close_CancelsSubscriptions(t *testing.T) {
 	sub := &blockingSubscriber{}
 	r := New(sub, clock.Real())
 
-	_ = r.AddContractHandler(testEventSpec("topic.a"), noopHandler, "test")
+	_ = r.AddContractHandler(testEventSpec("topic.a"), noopHandler, "test", "test")
 
 	ctx := context.Background()
 	done := make(chan error, 1)
@@ -229,7 +229,7 @@ func TestRouter_Run_HandlerReceivesMessages(t *testing.T) {
 	}
 
 	r := New(bus, clock.Real())
-	_ = r.AddContractHandler(testEventSpec("test.topic"), handler, "test")
+	_ = r.AddContractHandler(testEventSpec("test.topic"), handler, "test", "test")
 
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
@@ -258,11 +258,11 @@ func TestRouter_Run_MultipleHandlersSameSubscriber(t *testing.T) {
 	require.NoError(t, r.AddContractHandler(testEventSpec("topic.a"), func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
 		countA.Add(1)
 		return outbox.HandleResult{Disposition: outbox.DispositionAck}
-	}, "test"))
+	}, "test", "test"))
 	require.NoError(t, r.AddContractHandler(testEventSpec("topic.b"), func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
 		countB.Add(1)
 		return outbox.HandleResult{Disposition: outbox.DispositionAck}
-	}, "test"))
+	}, "test", "test"))
 
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
@@ -295,7 +295,7 @@ func TestRouter_RegistryRecorder_Integration(t *testing.T) {
 	})
 
 	// Simulate bootstrap drain: AddContractHandler directly (mirrors phase6 loop).
-	require.NoError(t, r.AddContractHandler(testEventSpec("mock.topic"), handler, "mock-cell"))
+	require.NoError(t, r.AddContractHandler(testEventSpec("mock.topic"), handler, "mock-cell", "mock-cell"))
 	assert.Equal(t, 1, r.HandlerCount())
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -322,7 +322,7 @@ func TestRouter_Run_RuntimeError_AfterStartup(t *testing.T) {
 		err:   errors.New("connection lost"),
 	}
 	r := New(sub, clock.Real())
-	_ = r.AddContractHandler(testEventSpec("topic.a"), noopHandler, "test")
+	_ = r.AddContractHandler(testEventSpec("topic.a"), noopHandler, "test", "test")
 
 	ctx := t.Context()
 
@@ -338,7 +338,7 @@ func TestRouter_HealthLifecycle(t *testing.T) {
 		err:   errors.New("connection lost"),
 	}
 	r := New(sub, clock.Real())
-	_ = r.AddContractHandler(testEventSpec("topic.a"), noopHandler, "test")
+	_ = r.AddContractHandler(testEventSpec("topic.a"), noopHandler, "test", "test")
 
 	require.Error(t, r.Health(), "router must be unhealthy before Run")
 
@@ -366,7 +366,7 @@ func TestRouter_HealthLifecycle(t *testing.T) {
 func TestRouter_Health_AfterGracefulShutdown(t *testing.T) {
 	sub := &blockingSubscriber{}
 	r := New(sub, clock.Real())
-	_ = r.AddContractHandler(testEventSpec("topic.a"), noopHandler, "test")
+	_ = r.AddContractHandler(testEventSpec("topic.a"), noopHandler, "test", "test")
 
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
@@ -395,7 +395,7 @@ func TestRouter_Health_AfterGracefulShutdown(t *testing.T) {
 func TestRouter_Run_DoubleRun_ReturnsError(t *testing.T) {
 	sub := &blockingSubscriber{}
 	r := New(sub, clock.Real())
-	_ = r.AddContractHandler(testEventSpec("topic.a"), noopHandler, "test")
+	_ = r.AddContractHandler(testEventSpec("topic.a"), noopHandler, "test", "test")
 
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
@@ -437,7 +437,7 @@ func TestRouter_Close_Timeout(t *testing.T) {
 	stuck := make(chan struct{})
 	sub := &stuckSubscriber{block: stuck}
 	r := New(sub, clock.Real())
-	_ = r.AddContractHandler(testEventSpec("topic.stuck"), noopHandler, "test")
+	_ = r.AddContractHandler(testEventSpec("topic.stuck"), noopHandler, "test", "test")
 
 	ctx := t.Context()
 	go func() { _ = r.Run(ctx) }()
@@ -455,19 +455,19 @@ func TestRouter_Close_Timeout(t *testing.T) {
 
 func TestRouter_AddContractHandler_ReturnsErrorOnEmptyTopic(t *testing.T) {
 	r := New(&blockingSubscriber{}, clock.Real())
-	assert.Error(t, r.AddContractHandler(testEventSpec(""), noopHandler, "test"))
+	assert.Error(t, r.AddContractHandler(testEventSpec(""), noopHandler, "test", "test"))
 }
 
 func TestRouter_AddContractHandler_ReturnsErrorOnNilHandler(t *testing.T) {
 	r := New(&blockingSubscriber{}, clock.Real())
-	assert.Error(t, r.AddContractHandler(testEventSpec("topic"), nil, "test"))
+	assert.Error(t, r.AddContractHandler(testEventSpec("topic"), nil, "test", "test"))
 }
 
 func TestRouter_Run_PanicInSubscriber_CapturedAsError(t *testing.T) {
 	// A subscriber whose Subscribe panics.
 	panickySub := &panickingSubscriber{}
 	r := New(panickySub, clock.Real())
-	_ = r.AddContractHandler(testEventSpec("topic.panic"), noopHandler, "test")
+	_ = r.AddContractHandler(testEventSpec("topic.panic"), noopHandler, "test", "test")
 
 	ctx := t.Context()
 
@@ -525,7 +525,7 @@ func TestRouter_AddSubscriptionValidator_ChainSucceeds(t *testing.T) {
 	r.AddSubscriptionValidator(func(_ outbox.Subscription) error { return nil })
 	r.AddSubscriptionValidator(func(_ outbox.Subscription) error { return nil })
 
-	err := r.AddContractHandler(testEventSpec("event.config.entry-upserted.v1"), noopHandler, "accesscore",
+	err := r.AddContractHandler(testEventSpec("event.config.entry-upserted.v1"), noopHandler, "accesscore", "accesscore",
 		cell.WithSubscriptionSliceID("configreceive"))
 	require.NoError(t, err)
 }
@@ -540,7 +540,7 @@ func TestRouter_AddSubscriptionValidator_FirstFailureAggregated(t *testing.T) {
 	r.AddSubscriptionValidator(func(_ outbox.Subscription) error { return sentinel1 })
 	r.AddSubscriptionValidator(func(_ outbox.Subscription) error { return sentinel2 })
 
-	err := r.AddContractHandler(testEventSpec("event.config.entry-upserted.v1"), noopHandler, "accesscore")
+	err := r.AddContractHandler(testEventSpec("event.config.entry-upserted.v1"), noopHandler, "accesscore", "accesscore")
 	require.Error(t, err)
 	assert.ErrorIs(t, err, sentinel1, "first validator error must be included")
 	assert.ErrorIs(t, err, sentinel2, "second validator error must be included")
@@ -555,7 +555,7 @@ func TestRouter_AddSubscriptionValidator_NilSkipped(t *testing.T) {
 	r.AddSubscriptionValidator(nil)
 	r.AddSubscriptionValidator(func(_ outbox.Subscription) error { return sentinel })
 
-	err := r.AddContractHandler(testEventSpec("event.config.entry-upserted.v1"), noopHandler, "accesscore")
+	err := r.AddContractHandler(testEventSpec("event.config.entry-upserted.v1"), noopHandler, "accesscore", "accesscore")
 	require.Error(t, err)
 	assert.ErrorIs(t, err, sentinel)
 }
@@ -711,10 +711,10 @@ func TestRouter_ConsumerGroup_PropagatesToSubscriber(t *testing.T) {
 	sub := &recordingGroupSubscriber{}
 	r := New(sub, clock.Real())
 
-	_ = r.AddContractHandler(testEventSpec("session.created"), noopHandler, "auditcore")
+	_ = r.AddContractHandler(testEventSpec("session.created"), noopHandler, "auditcore", "auditcore")
 	_ = r.AddContractHandler(testEventSpec("config.entry-upserted"), noopHandler,
-		"configcore", cell.WithSubscriptionSliceID("configsubscribe"))
-	_ = r.AddContractHandler(testEventSpec("legacy.event"), noopHandler, "legacy-cell")
+		"configcore", "configcore", cell.WithSubscriptionSliceID("configsubscribe"))
+	_ = r.AddContractHandler(testEventSpec("legacy.event"), noopHandler, "legacy-cell", "legacy-cell")
 
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
@@ -753,9 +753,46 @@ func TestRouter_ConsumerGroup_PropagatesToSubscriber(t *testing.T) {
 
 func TestRouter_AddContractHandler_ReturnsErrorOnEmptyConsumerGroup(t *testing.T) {
 	r := New(&blockingSubscriber{}, clock.Real())
-	err := r.AddContractHandler(testEventSpec("topic"), noopHandler, "")
+	err := r.AddContractHandler(testEventSpec("topic"), noopHandler, "", "test")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "empty consumerGroup")
+}
+
+// TestRouter_OwnerCellID_DistinctFromConsumerGroup verifies that when
+// ownerCellID differs from consumerGroup, Subscription.CellID carries
+// ownerCellID — not consumerGroup. This is the accesscore RBAC sync scenario:
+//
+//	ConsumerGroup = "accesscore-rbac-session-sync"   (role-specific queue name)
+//	OwnerCellID   = "accesscore"                     (true owning cell)
+//
+// ref: watermill router.AddHandler handlerName / NATS subscription metadata.
+func TestRouter_OwnerCellID_DistinctFromConsumerGroup(t *testing.T) {
+	sub := &recordingGroupSubscriber{}
+	r := New(sub, clock.Real())
+
+	const consumerGroup = "accesscore-rbac-session-sync"
+	const ownerCellID = "accesscore"
+
+	err := r.AddContractHandler(testEventSpec("session.created"), noopHandler, consumerGroup, ownerCellID)
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- r.Run(ctx) }()
+
+	require.Eventually(t, func() bool {
+		return len(sub.Calls()) >= 1
+	}, testtime.D2s, testtime.D10ms)
+
+	cancel()
+	<-done
+
+	calls := sub.Calls()
+	require.Len(t, calls, 1)
+	assert.Equal(t, consumerGroup, calls[0].ConsumerGroup,
+		"ConsumerGroup must be forwarded verbatim to the broker")
+	assert.Equal(t, ownerCellID, calls[0].CellID,
+		"Subscription.CellID must carry ownerCellID, not consumerGroup")
 }
 
 // ---------------------------------------------------------------------------
@@ -861,7 +898,7 @@ func TestRouter_RunBlocksUntilReady_NoTimeout(t *testing.T) {
 	sub := newDelayedReadySubscriber(readyDelay)
 
 	r := New(sub, clock.Real())
-	_ = r.AddContractHandler(testEventSpec("topic.a"), noopHandler, "test")
+	_ = r.AddContractHandler(testEventSpec("topic.a"), noopHandler, "test", "test")
 
 	ctx := t.Context()
 
@@ -889,7 +926,7 @@ func TestRouter_SetupErrorAborts(t *testing.T) {
 	sub := &setupFailSubscriber{err: setupErr}
 
 	r := New(sub, clock.Real())
-	_ = r.AddContractHandler(testEventSpec("topic.fail"), noopHandler, "test")
+	_ = r.AddContractHandler(testEventSpec("topic.fail"), noopHandler, "test", "test")
 
 	ctx := t.Context()
 
@@ -973,9 +1010,9 @@ func TestRouter_ReadyError_PartialNotReady_NoLeak(t *testing.T) {
 
 	r := New(sub, clock.Real(), WithReadyTimeout(0)) // disable timeout to isolate setupErr path
 
-	_ = r.AddContractHandler(testEventSpec("topic.fast"), noopHandler, "test")
-	_ = r.AddContractHandler(testEventSpec(sub.subscribeErrTopic), noopHandler, "test")
-	_ = r.AddContractHandler(testEventSpec(sub.slowReadyTopic), noopHandler, "test")
+	_ = r.AddContractHandler(testEventSpec("topic.fast"), noopHandler, "test", "test")
+	_ = r.AddContractHandler(testEventSpec(sub.subscribeErrTopic), noopHandler, "test", "test")
+	_ = r.AddContractHandler(testEventSpec(sub.slowReadyTopic), noopHandler, "test", "test")
 
 	ctx := t.Context()
 
@@ -1019,9 +1056,9 @@ func TestRouter_PartialReady_BlocksUntilAll(t *testing.T) {
 	}
 
 	r := New(sub, clock.Real())
-	_ = r.AddContractHandler(testEventSpec("topic.a"), noopHandler, "test")
-	_ = r.AddContractHandler(testEventSpec("topic.b"), noopHandler, "test")
-	_ = r.AddContractHandler(testEventSpec("topic.c"), noopHandler, "test")
+	_ = r.AddContractHandler(testEventSpec("topic.a"), noopHandler, "test", "test")
+	_ = r.AddContractHandler(testEventSpec("topic.b"), noopHandler, "test", "test")
+	_ = r.AddContractHandler(testEventSpec("topic.c"), noopHandler, "test", "test")
 
 	ctx := t.Context()
 

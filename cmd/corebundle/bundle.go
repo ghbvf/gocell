@@ -124,7 +124,7 @@ func configEventConsumerMiddleware(collector obmetrics.ConfigEventCollector) out
 // NOTE: runtimeBaseOptions always includes bootstrap.WithClock so the clock is
 // never missing — this wrapper does not impose an additional contract.
 func newBootstrapFromOptions(opts []bootstrap.Option) *bootstrap.Bootstrap {
-	return bootstrap.New(opts...)
+	return bootstrap.New(opts...) //archtest:allow:clock-injection:via-slice opts assembled by defaultRuntimeOptions includes WithClock
 }
 
 // defaultRuntimeOptions constructs the ordered bootstrap.Option slice from the

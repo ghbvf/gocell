@@ -850,7 +850,7 @@ func TestBootstrap_RegistryHealth_DrainAppearsInReadyz(t *testing.T) {
 
 	asm := assembly.New(assembly.Config{ID: "test-hc-contrib", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
 	hcc := newHealthContribCell("accesscore", map[string]func(context.Context) error{
-		"session-store": func(_ context.Context) error { return nil },
+		"session_store_ready": func(_ context.Context) error { return nil },
 	})
 	require.NoError(t, asm.Register(hcc))
 
@@ -887,7 +887,7 @@ func TestBootstrap_RegistryHealth_DrainAppearsInReadyz(t *testing.T) {
 	require.NoError(t, json.NewDecoder(resp.Body).Decode(&body))
 	deps, ok := readyzPayload(t, body)["dependencies"].(map[string]any)
 	require.True(t, ok, "response must contain dependencies map")
-	sessionStore, ok := deps["session-store"].(map[string]any)
+	sessionStore, ok := deps["session_store_ready"].(map[string]any)
 	require.True(t, ok, "session-store entry must be a map")
 	assert.Equal(t, "healthy", sessionStore["status"],
 		"Registry-registered probe should appear in /readyz verbose")
@@ -906,12 +906,12 @@ func TestBootstrap_RegistryHealth_DuplicateName_FailsFast(t *testing.T) {
 	require.NoError(t, err)
 
 	asm := assembly.New(assembly.Config{ID: "test-hc-dup", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
-	// Two cells both return "session-store" probe — should conflict.
+	// Two cells both return "session_store_ready" probe — should conflict.
 	require.NoError(t, asm.Register(newHealthContribCell("cell-a", map[string]func(context.Context) error{
-		"session-store": func(_ context.Context) error { return nil },
+		"session_store_ready": func(_ context.Context) error { return nil },
 	})))
 	require.NoError(t, asm.Register(newHealthContribCell("cell-b", map[string]func(context.Context) error{
-		"session-store": func(_ context.Context) error { return nil },
+		"session_store_ready": func(_ context.Context) error { return nil },
 	})))
 
 	b := New(
@@ -927,7 +927,7 @@ func TestBootstrap_RegistryHealth_DuplicateName_FailsFast(t *testing.T) {
 	err = b.Run(ctx)
 	require.Error(t, err, "duplicate probe names across cells should fail")
 	assert.Contains(t, err.Error(), "duplicate health checker")
-	assert.Contains(t, err.Error(), "session-store")
+	assert.Contains(t, err.Error(), "session_store_ready")
 }
 
 func TestWithHealthChecker_EmptyName_ReturnsError(t *testing.T) {
@@ -1444,7 +1444,7 @@ func TestBootstrap_WithHealthChecker_ReservedNameConflict_ReturnsError(t *testin
 		WithAssembly(asm),
 		WithConfig(cfgFile, ""),
 		WithListener(cell.PrimaryListener, "127.0.0.1:0", []cell.ListenerAuth{cell.AuthNone{}}),
-		WithHealthChecker("config-watcher", func(_ context.Context) error { return nil }),
+		WithHealthChecker("config_watcher", func(_ context.Context) error { return nil }),
 		WithShutdownTimeout(testtime.D1s),
 	)
 
@@ -1452,7 +1452,7 @@ func TestBootstrap_WithHealthChecker_ReservedNameConflict_ReturnsError(t *testin
 		err := b.Run(context.Background())
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "duplicate health checker")
-		assert.Contains(t, err.Error(), "config-watcher")
+		assert.Contains(t, err.Error(), "config_watcher")
 	})
 }
 
@@ -1499,8 +1499,8 @@ func TestBootstrap_EventRouter_ReadyzVerboseIncludesEventRouter(t *testing.T) {
 	require.NoError(t, json.NewDecoder(resp.Body).Decode(&body))
 	deps, ok := readyzPayload(t, body)["dependencies"].(map[string]any)
 	require.True(t, ok, "verbose readyz output must contain dependencies")
-	erProbe, ok := deps["eventrouter"].(map[string]any)
-	require.True(t, ok, "eventrouter probe must be a structured ProbeResult")
+	erProbe, ok := deps["event_router"].(map[string]any)
+	require.True(t, ok, "event_router probe must be a structured ProbeResult")
 	assert.Equal(t, "healthy", erProbe["status"])
 
 	cancel()

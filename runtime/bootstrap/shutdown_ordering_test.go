@@ -163,3 +163,83 @@ func TestPhase10_NoHTTPDrain_NoOp(t *testing.T) {
 	err := b.phase10OrchestrateShutdown(s, shutdownSignal{reason: reasonCtxCancel})
 	require.NoError(t, err, "nil httpDrain must be a no-op, not a panic")
 }
+
+// TestPhase10ShutdownStageOrder locks the complete four-stage shutdown sequence:
+//
+//	stage1 readiness_flip → stage2 http_drain → stage3 lifo_teardown (LIFO) → stage4 closed
+//
+// This test pins the explicit ordering that phase10OrchestrateShutdown
+// enforces. A future refactor that re-registers httpDrain into the LIFO chain
+// (e.g. to share error aggregation) would silently break the ordering
+// invariant; this test catches that regression.
+//
+// Stages 2-3 are directly observable via the orderingRecorder (http_drain and
+// LIFO teardown hooks). Stage 1 (readiness flip) has no externally observable
+// event without spinning up a real HTTP server; its presence is verified by
+// the code structure and the sibling tests TestPhase10_HTTPDrainsBeforeLIFO_*.
+// Stage 4 (finalize / closed) is verified by the nil error return from
+// phase10OrchestrateShutdown and the runCancel call.
+//
+// The canonical four-stage invariant under test:
+//
+//	http_drain must appear before any LIFO teardown step, regardless of which
+//	signal triggered shutdown (ctx cancel / HTTP error / worker error).
+//
+// Three signal variants (ctx cancel, worker error, router error) exercise all
+// code paths that reach phase10OrchestrateShutdown in production.
+func TestPhase10ShutdownStageOrder(t *testing.T) {
+	t.Parallel()
+
+	signals := []struct {
+		name string
+		sig  shutdownSignal
+	}{
+		{"ctx_cancel", shutdownSignal{reason: reasonCtxCancel}},
+		{"worker_error", shutdownSignal{reason: reasonWorkerError, err: errors.New("worker failed")}},
+		{"router_error", shutdownSignal{reason: reasonRouterError, err: errors.New("router failed")}},
+	}
+
+	for _, tc := range signals {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			rec := &orderingRecorder{}
+			b := New(WithClock(clock.Real()))
+			_, s := newPhaseState()
+
+			// Stage 2: HTTP drain (explicit, runs before LIFO).
+			s.httpDrain = func(_ context.Context) error {
+				rec.record("http_drain")
+				return nil
+			}
+
+			// Stage 3: LIFO teardown — two entries in registration order.
+			// Under LIFO: worker_stop (registered 2nd) runs before
+			// assembly_stop (registered 1st).
+			s.addTeardown(func(_ context.Context) error {
+				rec.record("assembly_stop")
+				return nil
+			})
+			s.addTeardown(func(_ context.Context) error {
+				rec.record("worker_stop")
+				return nil
+			})
+
+			err := b.phase10OrchestrateShutdown(s, tc.sig)
+			if tc.sig.err != nil {
+				// Signal error surfaces when teardown itself is clean.
+				require.ErrorIs(t, err, tc.sig.err,
+					"signal error must propagate when teardown is clean")
+			} else {
+				require.NoError(t, err)
+			}
+
+			// http_drain (stage 2) must precede all LIFO teardown steps (stage 3).
+			assert.Equal(t,
+				[]string{"http_drain", "worker_stop", "assembly_stop"},
+				rec.snapshot(),
+				"phase10 must complete http_drain before any LIFO teardown step",
+			)
+		})
+	}
+}

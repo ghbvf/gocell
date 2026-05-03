@@ -40,9 +40,9 @@ type Option func(*Bootstrap)
 
 // readyz probe names; consumed by phases_assembly.go / bootstrap_phases.go.
 const (
-	configWatcherCheckerName = "config-watcher"
-	configDriftCheckerName   = "config-drift"
-	eventRouterCheckerName   = "eventrouter"
+	configWatcherCheckerName = "config_watcher"
+	configDriftCheckerName   = "config_drift"
+	eventRouterCheckerName   = "event_router"
 )
 
 // Bootstrap orchestrates the GoCell application lifecycle.

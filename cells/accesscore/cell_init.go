@@ -387,7 +387,7 @@ func (c *AccessCore) registerHealthAndLifecycle(reg cell.Registry) {
 	if hc, ok := c.sessionRepo.(interface {
 		Health(context.Context) error
 	}); ok {
-		reg.Health("session-store", hc.Health)
+		reg.Health("session_store_ready", hc.Health)
 	}
 	if hc, ok := c.emitter.(cell.HealthProber); ok {
 		for k, v := range hc.Probes() {

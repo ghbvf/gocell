@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"log/slog"
 	"reflect"
+	"time"
 
 	"github.com/ghbvf/gocell/kernel/assembly"
 	"github.com/ghbvf/gocell/kernel/cell"
@@ -267,13 +268,16 @@ func (b *Bootstrap) buildOnChangeCallback(s *phaseState, yamlPath, envPrefix str
 			return
 		}
 		defer s.reloads.Leave()
-		b.applyConfigReload(s, evt, yamlPath, envPrefix)
+		// Use context.Background as the root: the watcher fires from a goroutine
+		// that has no caller context. Timeout is applied per-callback inside
+		// invokeReloader using s.asm.ReloadTimeout().
+		b.applyConfigReload(context.Background(), s, evt, yamlPath, envPrefix)
 	}
 }
 
 // applyConfigReload performs the actual config reload: Reload → Diff → notify cells.
 // Extracted to keep buildOnChangeCallback's cognitive complexity ≤ 15.
-func (b *Bootstrap) applyConfigReload(s *phaseState, evt config.WatchEvent, yamlPath, envPrefix string) {
+func (b *Bootstrap) applyConfigReload(ctx context.Context, s *phaseState, evt config.WatchEvent, yamlPath, envPrefix string) {
 	rc, ok := s.cfg.(config.Reloader)
 	if !ok {
 		return
@@ -297,7 +301,7 @@ func (b *Bootstrap) applyConfigReload(s *phaseState, evt config.WatchEvent, yaml
 	if g, ok := s.cfg.(config.Generationer); ok {
 		gen = g.Generation()
 	}
-	allOK := b.notifyCellsConfigChanged(s, newSnap, added, updated, removed, gen)
+	allOK := b.notifyCellsConfigChanged(ctx, s, newSnap, added, updated, removed, gen)
 	if allOK {
 		if og, ok := s.cfg.(config.ObservedGenerationer); ok {
 			og.SetObservedGeneration(gen)
@@ -319,11 +323,13 @@ func syncObservedGeneration(cfg config.Config) {
 // callbacks (via cell.Registry.OnConfigReload) about a config change.
 // Returns true only when every callback applied the change successfully.
 func (b *Bootstrap) notifyCellsConfigChanged(
+	ctx context.Context,
 	s *phaseState,
 	newSnap map[string]any,
 	added, updated, removed []string,
 	gen int64,
 ) bool {
+	timeout := s.asm.ReloadTimeout()
 	allOK := true
 	for _, id := range s.asm.CellIDs() {
 		snap, ok := s.cellSnapshots[id]
@@ -342,7 +348,7 @@ func (b *Bootstrap) notifyCellsConfigChanged(
 				Config:     cfgSnap,
 				Generation: gen,
 			}
-			if !invokeReloader(id, req.Fn, evt) {
+			if !invokeReloader(ctx, id, req.Fn, evt, timeout) {
 				allOK = false
 			}
 		}
@@ -373,8 +379,23 @@ func buildConfigSnapForReloader(req cell.ConfigReloadRequest, newSnap map[string
 	return snap
 }
 
-// invokeReloader calls fn inside a recover fence. Returns true on success.
-func invokeReloader(id string, fn func(context.Context, cell.ConfigChangeEvent) error, evt cell.ConfigChangeEvent) (ok bool) {
+// invokeReloader calls fn inside a recover fence with an optional per-call
+// timeout derived from the assembly's ReloadTimeout. Returns true on success.
+//
+// timeout semantics:
+//   - positive: a child context with that deadline is derived from ctx and
+//     passed to fn; cancel is deferred after fn returns.
+//   - zero or negative: ctx is passed directly (no additional deadline).
+//
+// ref: etcd clientv3 Watch ctx propagation — watchers propagate the caller's ctx.
+// ref: k8s SharedInformer — informer callbacks carry a bounded ctx.
+func invokeReloader(
+	ctx context.Context,
+	id string,
+	fn func(context.Context, cell.ConfigChangeEvent) error,
+	evt cell.ConfigChangeEvent,
+	timeout time.Duration,
+) (ok bool) {
 	ok = true
 	func() {
 		defer func() {
@@ -385,7 +406,15 @@ func invokeReloader(id string, fn func(context.Context, cell.ConfigChangeEvent) 
 					slog.String("type", fmt.Sprintf("%T", r)))
 			}
 		}()
-		if err := fn(context.Background(), evt); err != nil {
+
+		callCtx := ctx
+		if timeout > 0 {
+			var cancel context.CancelFunc
+			callCtx, cancel = context.WithTimeout(ctx, timeout)
+			defer cancel()
+		}
+
+		if err := fn(callCtx, evt); err != nil {
 			ok = false
 			slog.Error("bootstrap: config reload callback failed",
 				slog.String("cell", id),

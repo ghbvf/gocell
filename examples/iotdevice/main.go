@@ -39,8 +39,12 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Single root clock shared by assembly, bootstrap, eventbus, and cell.
+	// ref: docs/architecture/202605021500-adr-kernel-clock-injection.md
+	clk := clock.Real()
+
 	// In-memory event bus for demo mode.
-	eb := eventbus.New(eventbus.WithClock(clock.Real()))
+	eb := eventbus.New(eventbus.WithClock(clk))
 
 	// Cursor codec for pagination (demo mode).
 	cursorCodec, err := query.NewCursorCodec([]byte("iotdevice-cursor-key-32-bytes!!!"))
@@ -51,13 +55,14 @@ func main() {
 
 	// Create the device cell with in-memory defaults.
 	dc := devicecell.NewDeviceCell(
+		devicecell.WithClock(clk),
 		devicecell.WithPublisher(eb),
 		devicecell.WithCursorCodec(cursorCodec),
 		devicecell.WithLogger(logger),
 	)
 
 	// Build assembly and register the cell.
-	asm := assembly.New(assembly.Config{ID: "iotdevice", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
+	asm := assembly.New(assembly.Config{ID: "iotdevice", DurabilityMode: cell.DurabilityDemo, Clock: clk})
 	if err := asm.Register(dc); err != nil {
 		logger.Error("failed to register devicecell", slog.Any("error", err))
 		os.Exit(1)
@@ -81,7 +86,7 @@ func main() {
 	}
 
 	app := bootstrap.New(
-		bootstrap.WithClock(clock.Real()),
+		bootstrap.WithClock(clk),
 		bootstrap.WithAssembly(asm),
 		bootstrap.WithPublisher(eb), bootstrap.WithSubscriber(eb),
 		bootstrap.WithListener(cell.PrimaryListener, ":8083", []cell.ListenerAuth{cell.MustNewAuthJWT(jwtVerifier)}),

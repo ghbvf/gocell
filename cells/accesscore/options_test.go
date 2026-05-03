@@ -55,8 +55,8 @@ func TestHealthCheckers_InMemory(t *testing.T) {
 	rec := cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo)
 	require.NoError(t, c.Init(context.Background(), rec))
 	snap := rec.Snapshot()
-	require.Contains(t, snap.HealthCheckers, "session-store", "in-memory session repo implements Health()")
-	assert.NoError(t, snap.HealthCheckers["session-store"](context.Background()))
+	require.Contains(t, snap.HealthCheckers, "session_store_ready", "in-memory session repo implements Health()")
+	assert.NoError(t, snap.HealthCheckers["session_store_ready"](context.Background()))
 }
 
 func TestHealthCheckers_WithInMemoryDefaults_SessionStorePresent(t *testing.T) {
@@ -73,7 +73,7 @@ func TestHealthCheckers_WithInMemoryDefaults_SessionStorePresent(t *testing.T) {
 	rec := cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo)
 	require.NoError(t, c.Init(context.Background(), rec))
 	snap := rec.Snapshot()
-	assert.Contains(t, snap.HealthCheckers, "session-store")
+	assert.Contains(t, snap.HealthCheckers, "session_store_ready")
 }
 
 func TestRegisterSubscriptions(t *testing.T) {
@@ -144,7 +144,7 @@ func TestInit_MissingJWTIssuerAndVerifier(t *testing.T) {
 
 // TestHealthCheckers_WithDirectEmitter verifies that after Init with a
 // DirectEmitter-backed publisher, HealthCheckers returns both the
-// session-store checker and the outbox-failopen-rate checker.
+// session_store_ready checker and the outbox-failopen-rate checker.
 func TestHealthCheckers_WithDirectEmitter(t *testing.T) {
 	c := NewAccessCore(
 		WithClock(clock.Real()),
@@ -158,7 +158,7 @@ func TestHealthCheckers_WithDirectEmitter(t *testing.T) {
 	require.NoError(t, c.Init(context.Background(), rec))
 
 	snap := rec.Snapshot()
-	require.Contains(t, snap.HealthCheckers, "session-store", "session-store checker must be present")
+	require.Contains(t, snap.HealthCheckers, "session_store_ready", "session_store_ready checker must be present")
 	const emitterKey = "outbox-failopen-rate.accesscore"
 	require.Contains(t, snap.HealthCheckers, emitterKey, "DirectEmitter health checker must be aggregated")
 	assert.NoError(t, snap.HealthCheckers[emitterKey](context.Background()), "fresh emitter should be healthy")
@@ -184,7 +184,7 @@ func TestHealthCheckers_NoEmitterChecker(t *testing.T) {
 	rec := cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo)
 	require.NoError(t, c.Init(context.Background(), rec))
 	snap := rec.Snapshot()
-	assert.Contains(t, snap.HealthCheckers, "session-store", "session-store must still be present")
+	assert.Contains(t, snap.HealthCheckers, "session_store_ready", "session-store must still be present")
 	for k := range snap.HealthCheckers {
 		assert.NotContains(t, k, "outbox-failopen-rate",
 			"nil emitter must not produce outbox checker: key=%s", k)

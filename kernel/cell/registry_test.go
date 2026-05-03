@@ -139,16 +139,16 @@ func TestRegistry_Health_DuplicateName_LogsDropsSecond(t *testing.T) {
 	checker1 := func(_ context.Context) error { return nil }
 	checker2 := func(_ context.Context) error { return assert.AnError }
 
-	rec.Health("session-store", checker1)
-	rec.Health("session-store", checker2) // duplicate — should log error + drop
+	rec.Health("session_store_ready", checker1)
+	rec.Health("session_store_ready", checker2) // duplicate — should log error + drop
 
 	snap := rec.Snapshot()
-	require.Contains(t, snap.HealthCheckers, "session-store")
+	require.Contains(t, snap.HealthCheckers, "session_store_ready")
 	// checker1 must be retained (the second was dropped).
-	assert.NoError(t, snap.HealthCheckers["session-store"](context.Background()))
+	assert.NoError(t, snap.HealthCheckers["session_store_ready"](context.Background()))
 
 	// A slog error must have been emitted.
-	assert.Contains(t, logBuf.String(), "session-store")
+	assert.Contains(t, logBuf.String(), "session_store_ready")
 }
 
 // ---------------------------------------------------------------------------
