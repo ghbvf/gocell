@@ -13,7 +13,7 @@ func TestCorebundleDoesNotDependOnToolsDepgraph(t *testing.T) {
 	root := findModuleRoot(t)
 	module := readModulePath(t, root)
 
-	cmd := exec.Command("go", "list", "-deps", "./cmd/corebundle") //nolint:gosec // const binary and args
+	cmd := exec.Command("go", "list", "-deps", "./cmd/corebundle")
 	cmd.Dir = root
 	output, err := cmd.CombinedOutput()
 	require.NoError(t, err, string(output))

@@ -18,7 +18,9 @@ import (
 // minimalProjectMeta returns a *metadata.ProjectMeta with one cell, sufficient
 // to exercise buildCellDepGraph without triggering validation errors from nil
 // fields inside governance.DependencyChecker.
-func minimalProjectMeta(cellID string) *metadata.ProjectMeta {
+func minimalProjectMeta() *metadata.ProjectMeta {
+	const cellID = "testcell"
+
 	return &metadata.ProjectMeta{
 		Cells: map[string]*metadata.CellMeta{
 			cellID: {
@@ -58,7 +60,7 @@ func TestPhase5InitDevtoolsHandler_NilMeta(t *testing.T) {
 // pkgGraph is nil, the handler is constructed with nil pkgGraph.
 func TestPhase5InitDevtoolsHandler_WithMeta(t *testing.T) {
 	t.Parallel()
-	pm := minimalProjectMeta("testcell")
+	pm := minimalProjectMeta()
 	b := New(WithClock(clock.Real()), WithDevtoolsCatalog(pm, "/tmp/test", nil))
 
 	_, s := newPhaseState()
@@ -72,7 +74,7 @@ func TestPhase5InitDevtoolsHandler_WithMeta(t *testing.T) {
 // pkgGraph are provided, the handler is constructed with the pkgGraph.
 func TestPhase5InitDevtoolsHandler_WithPkgGraph(t *testing.T) {
 	t.Parallel()
-	pm := minimalProjectMeta("testcell")
+	pm := minimalProjectMeta()
 	b := New(WithClock(clock.Real()), WithDevtoolsCatalog(pm, "/tmp/test", minimalPkgGraph()))
 
 	_, s := newPhaseState()
@@ -132,7 +134,7 @@ func TestPhase5CollectRouteGroups_AppendsDevtools(t *testing.T) {
 	s := buildPhase5State(t)
 
 	// Install a devtools handler on the phaseState to simulate phase5InitDevtoolsHandler.
-	pm := minimalProjectMeta("testcell")
+	pm := minimalProjectMeta()
 	s.devtoolsHandler = devtools.NewHandler(pm, nil, nil, "/tmp", clock.Real())
 
 	routers := map[cell.ListenerRef]*router.Router{
@@ -176,7 +178,7 @@ func TestPhase5CollectRouteGroups_NoDevtools(t *testing.T) {
 	baselineCount := len(withoutDevtools)
 	assert.Greater(t, baselineCount, 0, "health groups must always be present")
 
-	pm := minimalProjectMeta("testcell")
+	pm := minimalProjectMeta()
 	s.devtoolsHandler = devtools.NewHandler(pm, nil, nil, "/tmp", clock.Real())
 	withHandler := b.phase5CollectRouteGroups(s, routers)
 	assert.Len(t, withHandler, baselineCount+1,
