@@ -30,8 +30,8 @@ import (
 )
 
 // phase5BuildRouters builds one Router per declared listener, collects
-// RouteGroups from all RouteGroupContributor cells, mounts each group on its
-// listener's router, and finalizes auth on the primary router.
+// RouteGroups from all cell snapshots, mounts each group on its listener's
+// router, and finalizes auth on the primary router.
 //
 // PR-A14b: replaces the single-router phase5BuildHTTPRouter. Each listener
 // now gets its own chi.Mux root with a policy applied at build time.
@@ -111,7 +111,7 @@ func (b *Bootstrap) phase5BuildPerListenerRouters(s *phaseState) (map[cell.Liste
 	return routers, nil
 }
 
-// phase5CollectRouteGroups collects RouteGroups from health and RouteGroupContributor cells.
+// phase5CollectRouteGroups collects RouteGroups from health and cell snapshots.
 // Each RouteGroup is annotated with the contributing cell ID (OPS-02).
 //
 // Health-listener fallback: when no HealthListener is declared, /healthz and

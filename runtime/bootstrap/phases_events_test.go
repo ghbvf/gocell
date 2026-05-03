@@ -34,8 +34,8 @@ import (
 	"github.com/ghbvf/gocell/runtime/http/health"
 )
 
-// stubEventCell is a minimal EventRegistrar that registers a single
-// contract-first subscription. Used by the phase6 wiring tests below.
+// stubEventCell is a minimal cell that registers a single contract-first
+// subscription via reg.Subscribe(...). Used by the phase6 wiring tests below.
 type stubEventCell struct {
 	*cell.BaseCell
 	spec wrapper.ContractSpec

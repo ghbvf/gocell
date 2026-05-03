@@ -30,7 +30,7 @@ var runtimeOnlyHookFields = map[string]string{
 }
 
 // TestLifecycleHookShapeMatchesBootstrapHook is a drift guard: the field-copy
-// bridge in phase3bDiscoverLifecycleContributor silently loses any fields
+// bridge in phase3bDrainLifecycleHooks silently loses any fields
 // added to bootstrap.Hook that are missing from kernel/cell.LifecycleHook
 // (or vice-versa). The reflect-based check keeps the two struct shapes in
 // lock-step: if bootstrap.Hook gains a Priority field tomorrow, this test
@@ -169,7 +169,7 @@ func TestPhase3b_NoCellImplementsContributor(t *testing.T) {
 	s := buildPhaseStateWithSnapshots(t, asm)
 	defer s.runCancel()
 
-	require.NoError(t, b.phase3bDiscoverLifecycleContributor(s))
+	require.NoError(t, b.phase3bDrainLifecycleHooks(s))
 	assert.Empty(t, ml.appended, "no hooks expected when no cell registers Lifecycle hooks")
 }
 
@@ -189,7 +189,7 @@ func TestPhase3b_EmptySliceContributor(t *testing.T) {
 	s := buildPhaseStateWithSnapshots(t, asm)
 	defer s.runCancel()
 
-	require.NoError(t, b.phase3bDiscoverLifecycleContributor(s))
+	require.NoError(t, b.phase3bDrainLifecycleHooks(s))
 	assert.Empty(t, ml.appended, "empty-hooks Init must register zero hooks")
 }
 
@@ -221,7 +221,7 @@ func TestPhase3b_DuplicateHookName_FailFast(t *testing.T) {
 	s := buildPhaseStateWithSnapshots(t, asm)
 	defer s.runCancel()
 
-	err := b.phase3bDiscoverLifecycleContributor(s)
+	err := b.phase3bDrainLifecycleHooks(s)
 	require.Error(t, err)
 	assert.ErrorIs(t, err, ErrDuplicateHookName, "must surface ErrDuplicateHookName via %%w chain")
 	assert.Contains(t, err.Error(), "cellB", "second cell id must appear in wrapped error")
@@ -265,7 +265,7 @@ func TestPhase3b_NilSliceContributor(t *testing.T) {
 	s := buildPhaseStateWithSnapshots(t, asm)
 	defer s.runCancel()
 
-	require.NoError(t, b.phase3bDiscoverLifecycleContributor(s))
+	require.NoError(t, b.phase3bDrainLifecycleHooks(s))
 	assert.Empty(t, ml.appended, "nil hooks must register zero hooks")
 }
 
@@ -288,7 +288,7 @@ func TestPhase3b_OneCellTwoHooks(t *testing.T) {
 	s := buildPhaseStateWithSnapshots(t, asm)
 	defer s.runCancel()
 
-	require.NoError(t, b.phase3bDiscoverLifecycleContributor(s))
+	require.NoError(t, b.phase3bDrainLifecycleHooks(s))
 	require.Len(t, ml.appended, 2)
 	assert.Equal(t, "start-db", ml.appended[0].Name)
 	assert.Equal(t, "start-cache", ml.appended[1].Name)
@@ -315,7 +315,7 @@ func TestPhase3b_TwoCellsOrderPreserved(t *testing.T) {
 	s := buildPhaseStateWithSnapshots(t, asm)
 	defer s.runCancel()
 
-	require.NoError(t, b.phase3bDiscoverLifecycleContributor(s))
+	require.NoError(t, b.phase3bDrainLifecycleHooks(s))
 	require.Len(t, ml.appended, 2)
 	assert.Equal(t, "alpha-hook", ml.appended[0].Name)
 	assert.Equal(t, "beta-hook", ml.appended[1].Name)
@@ -351,7 +351,7 @@ func TestPhase3b_StampsCellIDOnAppendedHook(t *testing.T) {
 	s := buildPhaseStateWithSnapshots(t, asm)
 	defer s.runCancel()
 
-	require.NoError(t, b.phase3bDiscoverLifecycleContributor(s))
+	require.NoError(t, b.phase3bDrainLifecycleHooks(s))
 	require.Len(t, ml.appended, 3)
 	assert.Equal(t, "alpha", ml.appended[0].CellID, "hook from alpha must carry CellID=alpha")
 	assert.Equal(t, "alpha", ml.appended[1].CellID, "second alpha hook must also carry CellID=alpha")
@@ -376,7 +376,7 @@ func TestPhase3b_BothNilSkipped(t *testing.T) {
 	s := buildPhaseStateWithSnapshots(t, asm)
 	defer s.runCancel()
 
-	require.NoError(t, b.phase3bDiscoverLifecycleContributor(s))
+	require.NoError(t, b.phase3bDrainLifecycleHooks(s))
 	assert.Empty(t, ml.appended, "hook with both nil funcs must be skipped")
 }
 
@@ -407,7 +407,7 @@ func TestPhase3b_EmptyNameAllowed(t *testing.T) {
 	b := New(WithClock(clock.Real()))
 	b.lifecycle = ml
 
-	require.NoError(t, b.phase3bDiscoverLifecycleContributor(s))
+	require.NoError(t, b.phase3bDrainLifecycleHooks(s))
 	require.Len(t, ml.appended, 1)
 	assert.Equal(t, "", ml.appended[0].Name)
 }
@@ -431,7 +431,7 @@ func TestPhase3b_AppendError_PropagatesWithCellAndHookName(t *testing.T) {
 	s := buildPhaseStateWithSnapshots(t, asm)
 	defer s.runCancel()
 
-	err := b.phase3bDiscoverLifecycleContributor(s)
+	err := b.phase3bDrainLifecycleHooks(s)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "mycore")
 	assert.Contains(t, err.Error(), "my-hook")

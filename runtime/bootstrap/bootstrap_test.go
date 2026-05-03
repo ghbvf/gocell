@@ -460,9 +460,9 @@ func (c *eventCell) Init(ctx context.Context, reg cell.Registry) error {
 	}, "test")
 }
 
-func TestBootstrap_MissingSubscriber_WithEventRegistrar_Fails(t *testing.T) {
-	// When a cell implements EventRegistrar but no subscriber is configured,
-	// bootstrap must fail at startup instead of silently skipping all subscriptions.
+func TestBootstrap_MissingSubscriber_WithCellSubscriptions_Fails(t *testing.T) {
+	// When a cell registers subscriptions via reg.Subscribe(...) but no subscriber
+	// is configured, bootstrap must fail at startup instead of silently skipping.
 	asm := assembly.New(assembly.Config{ID: "test-no-sub", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
 	ec := newEventCell("needs-sub", nil) // registers a handler
 	require.NoError(t, asm.Register(ec))
@@ -819,7 +819,7 @@ func TestBootstrap_WithAdapterInfo_AppearsInReadyz(t *testing.T) {
 	}
 }
 
-// --- HealthContributor discovery tests ---
+// --- Registry.Health drain tests ---
 
 // healthContribCell registers health checkers via reg.Health in Init.
 type healthContribCell struct {
@@ -844,7 +844,7 @@ func (c *healthContribCell) Init(ctx context.Context, reg cell.Registry) error {
 	return nil
 }
 
-func TestBootstrap_HealthContributor_Discovery_AppearsInReadyz(t *testing.T) {
+func TestBootstrap_RegistryHealth_DrainAppearsInReadyz(t *testing.T) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
 
@@ -890,7 +890,7 @@ func TestBootstrap_HealthContributor_Discovery_AppearsInReadyz(t *testing.T) {
 	sessionStore, ok := deps["session-store"].(map[string]any)
 	require.True(t, ok, "session-store entry must be a map")
 	assert.Equal(t, "healthy", sessionStore["status"],
-		"HealthContributor-discovered probe should appear in /readyz verbose")
+		"Registry-registered probe should appear in /readyz verbose")
 
 	cancel()
 	select {
@@ -901,7 +901,7 @@ func TestBootstrap_HealthContributor_Discovery_AppearsInReadyz(t *testing.T) {
 	}
 }
 
-func TestBootstrap_HealthContributor_DuplicateName_FailsFast(t *testing.T) {
+func TestBootstrap_RegistryHealth_DuplicateName_FailsFast(t *testing.T) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
 
@@ -1557,7 +1557,7 @@ func TestSnapshotConfig_Fallback(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// ConfigReloader integration tests (WM-34)
+// OnConfigReload integration tests (WM-34)
 // ---------------------------------------------------------------------------
 
 // reloaderCell registers a config-reload callback via reg.OnConfigReload in Init.
@@ -1977,7 +1977,7 @@ func TestBootstrap_ConfigReload_NonReloaderSkipped(t *testing.T) {
 	require.NoError(t, err)
 
 	asm := assembly.New(assembly.Config{ID: "test-reload-skip", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
-	plain := newTestCell("plain-cell") // does NOT implement ConfigReloader
+	plain := newTestCell("plain-cell") // does NOT call reg.OnConfigReload
 	rc := newReloaderCell("reloader-cell")
 	require.NoError(t, asm.Register(plain))
 	require.NoError(t, asm.Register(rc))
@@ -2014,7 +2014,7 @@ func TestBootstrap_ConfigReload_NonReloaderSkipped(t *testing.T) {
 		return rc.eventCount() >= 1
 	}, testtime.EventuallyDefault, testtime.MediumPoll)
 
-	// Plain cell should not have been called (it doesn't implement ConfigReloader).
+	// Plain cell should not have been called (it doesn't call reg.OnConfigReload).
 	// The test verifies by checking that only the reloader cell receives events.
 	assert.Equal(t, 1, rc.eventCount())
 
@@ -2942,7 +2942,7 @@ func TestBootstrap_TracingE2E_InfraEndpoints(t *testing.T) {
 
 // --- Auth Provider discovery (post-Init cell discovery) ---
 
-// authProviderCell implements RouteGroupContributor and exposes an IntentTokenVerifier.
+// authProviderCell registers a route group via reg.RouteGroup and exposes an IntentTokenVerifier.
 type authProviderCell struct {
 	*cell.BaseCell
 	verifier auth.IntentTokenVerifier
@@ -3335,7 +3335,7 @@ func TestBootstrap_WithSecurityHeadersOptions_CustomHSTS(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// ConfigKeyFilterer integration tests (CFG-KEYFILTER-WIRE-01)
+// OnConfigReload prefix-filter integration tests (CFG-KEYFILTER-WIRE-01)
 // ---------------------------------------------------------------------------
 
 // keyFilterReloaderCell registers a config-reload callback with key-prefix
@@ -3474,9 +3474,9 @@ func TestBootstrap_ConfigReload_KeyFilter_NotifiesMatched(t *testing.T) {
 	}
 }
 
-// TestBootstrap_ConfigReload_NoKeyFilter_ReceivesAll verifies backward
-// compatibility: a cell implementing only ConfigReloader (no ConfigKeyFilterer)
-// receives all config change notifications regardless of which keys changed.
+// TestBootstrap_ConfigReload_NoKeyFilter_ReceivesAll verifies that a cell
+// calling reg.OnConfigReload with nil prefixes receives all config change
+// notifications regardless of which keys changed.
 func TestBootstrap_ConfigReload_NoKeyFilter_ReceivesAll(t *testing.T) {
 	dir := t.TempDir()
 	cfgFile := filepath.Join(dir, "config.yaml")
@@ -3510,7 +3510,7 @@ func TestBootstrap_ConfigReload_NoKeyFilter_ReceivesAll(t *testing.T) {
 
 	require.Eventually(t, func() bool {
 		return rc.eventCount() >= 1
-	}, testtime.EventuallyDefault, testtime.MediumPoll, "plain ConfigReloader must receive all notifications")
+	}, testtime.EventuallyDefault, testtime.MediumPoll, "plain OnConfigReload (no prefixes) must receive all notifications")
 
 	cancel()
 	select {

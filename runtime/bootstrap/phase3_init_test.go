@@ -5,7 +5,7 @@ package bootstrap
 // Covers:
 //   - phase3InitAssembly populates s.cellSnapshots after StartWithConfig
 //   - init error aborts before Start (no cells started)
-//   - phase3bDiscoverLifecycleContributor (LIFO / ordering / snapshot-drain)
+//   - phase3bDrainLifecycleHooks (LIFO / ordering / snapshot-drain)
 //   - phase5CollectRouteGroups drains RouteGroups from snapshots
 //   - phase6StartEventRouter drains Subscriptions from snapshots
 //   - TestBootstrap_NoSubscriptionsAndNoSubscriber_Succeeds
@@ -212,7 +212,7 @@ func TestPhase3_InitErrorAbortsBeforeStart(t *testing.T) {
 }
 
 // TestPhase3b_LIFOAppendOfLifecycleHooksFromSnapshots verifies that
-// phase3bDiscoverLifecycleContributor appends hooks in cell-registration order
+// phase3bDrainLifecycleHooks appends hooks in cell-registration order
 // (alpha before beta) and that LIFO on Stop means beta stops before alpha.
 func TestPhase3b_LIFOAppendOfLifecycleHooksFromSnapshots(t *testing.T) {
 	alpha := newLifecycleRegisterCell("alpha", "alpha-start")
@@ -228,7 +228,7 @@ func TestPhase3b_LIFOAppendOfLifecycleHooksFromSnapshots(t *testing.T) {
 	s := buildPhaseStateWithSnapshots(t, asm)
 	defer s.runCancel()
 
-	require.NoError(t, b.phase3bDiscoverLifecycleContributor(s))
+	require.NoError(t, b.phase3bDrainLifecycleHooks(s))
 	require.Len(t, ml.appended, 2)
 	assert.Equal(t, "alpha-start", ml.appended[0].Name, "alpha hook must be appended first (FIFO registration)")
 	assert.Equal(t, "beta-start", ml.appended[1].Name, "beta hook must be appended second")

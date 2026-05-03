@@ -7,7 +7,7 @@ package bootstrap
 // are split across per-concern files:
 //
 //	phases_assembly.go  — phases 0–4  (config, assembly, auth, watcher)
-//	phases_lifecycle.go — phase 3b    (LifecycleContributor + health checkers)
+//	phases_lifecycle.go — phase 3b    (lifecycle hook drain + health checkers)
 //	phases_http.go      — phase 5     (router construction, auth validation)
 //	phases_events.go    — phase 6     (event router startup)
 //	phases_workers.go   — phase 8     (worker group startup)

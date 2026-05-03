@@ -21,7 +21,7 @@ import (
 	"github.com/ghbvf/gocell/runtime/config"
 )
 
-// phase3bDiscoverLifecycleContributor drains LifecycleHooks from each cell's
+// phase3bDrainLifecycleHooks drains LifecycleHooks from each cell's
 // RegistrySnapshot and registers them with the bootstrap Lifecycle. Hooks are
 // appended in cell-registration order; within a cell they are appended in
 // declaration order.
@@ -36,7 +36,7 @@ import (
 // needing a phase-local "seen" map that could drift from reality.
 //
 // ref: github.com/uber-go/fx internal/lifecycle/lifecycle.go — Hook, Append ordering.
-func (b *Bootstrap) phase3bDiscoverLifecycleContributor(s *phaseState) error {
+func (b *Bootstrap) phase3bDrainLifecycleHooks(s *phaseState) error {
 	for _, id := range s.asm.CellIDs() {
 		snap, ok := s.cellSnapshots[id]
 		if !ok {

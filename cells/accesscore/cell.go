@@ -244,7 +244,7 @@ type AccessCore struct {
 	refreshGCCollector   refresh.GCCollector
 	refreshGC            *refresh.GCWorker
 
-	// initialAdmin wires first-run admin bootstrap via LifecycleContributor;
+	// initialAdmin wires first-run admin bootstrap via reg.Lifecycle(...);
 	// nil means the feature is disabled.
 	initialAdmin *initialadmin.Lifecycle
 

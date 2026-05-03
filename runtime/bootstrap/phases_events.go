@@ -4,7 +4,8 @@ package bootstrap
 //
 // Covers:
 //   - phase6StartEventRouter: subscription registration + evtRouter.Run on runCtx
-//   - checkNoEventRegistrars: fail-fast when EventRegistrar cells have no subscriber
+//   - checkNoSubscriptionsWhenSubscriberNil: fail-fast when cells declared
+//     subscriptions but no subscriber is configured
 //
 // ref: uber-go/fx app.go — Run vs stop ctx separation: event router uses runCtx
 // (independent of external ctx) so lifecycle is owned by phase10 teardown, not
