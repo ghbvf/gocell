@@ -134,6 +134,24 @@ func TestFromMissingKey(t *testing.T) {
 	}
 }
 
+func TestMustCellIDFrom(t *testing.T) {
+	t.Run("returns id when present", func(t *testing.T) {
+		ctx := WithCellID(context.Background(), "accesscore")
+		assert.Equal(t, "accesscore", MustCellIDFrom(ctx))
+	})
+	t.Run("panics when key absent", func(t *testing.T) {
+		assert.PanicsWithValue(t,
+			"ctxkeys: cell ID missing from context (bootstrap must inject before downstream middleware reads it)",
+			func() { MustCellIDFrom(context.Background()) })
+	})
+	t.Run("panics when value is empty string", func(t *testing.T) {
+		ctx := WithCellID(context.Background(), "")
+		assert.PanicsWithValue(t,
+			"ctxkeys: cell ID missing from context (bootstrap must inject before downstream middleware reads it)",
+			func() { MustCellIDFrom(ctx) })
+	})
+}
+
 func TestMultipleKeysInSameContext(t *testing.T) {
 	ctx := context.Background()
 	ctx = WithCellID(ctx, "accesscore")

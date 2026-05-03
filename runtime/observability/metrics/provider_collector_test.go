@@ -8,32 +8,29 @@ import (
 	"github.com/ghbvf/gocell/runtime/observability/metrics"
 )
 
-func TestProviderCollector_RejectsMissingDeps(t *testing.T) {
-	if _, err := metrics.NewProviderCollector(nil, metrics.ProviderCollectorConfig{CellID: "x"}); err == nil {
+func TestProviderCollector_RejectsNilProvider(t *testing.T) {
+	if _, err := metrics.NewProviderCollector(nil, metrics.ProviderCollectorConfig{}); err == nil {
 		t.Fatal("nil Provider must be rejected")
-	}
-	if _, err := metrics.NewProviderCollector(kernelmetrics.NopProvider{}, metrics.ProviderCollectorConfig{}); err == nil {
-		t.Fatal("empty CellID must be rejected")
 	}
 }
 
 func TestProviderCollector_NopProviderNoPanic(t *testing.T) {
-	c, err := metrics.NewProviderCollector(kernelmetrics.NopProvider{}, metrics.ProviderCollectorConfig{CellID: "dev"})
+	c, err := metrics.NewProviderCollector(kernelmetrics.NopProvider{}, metrics.ProviderCollectorConfig{})
 	if err != nil {
 		t.Fatalf("NewProviderCollector: %v", err)
 	}
 	// Recording through the Nop provider must not panic.
-	c.RecordRequest("GET", "/api/v1/users", 200, 0.05)
-	c.RecordRequest("POST", "/api/v1/users", 201, 0.12)
+	c.RecordRequest("dev", "GET", "/api/v1/users", 200, 0.05)
+	c.RecordRequest("dev", "POST", "/api/v1/users", 201, 0.12)
 }
 
-func TestProviderCollector_EmitsExpectedLabels(t *testing.T) {
+func TestProviderCollector_EmitsCellLabelFromArg(t *testing.T) {
 	p := newSpyProvider()
-	c, err := metrics.NewProviderCollector(p, metrics.ProviderCollectorConfig{CellID: "accesscore"})
+	c, err := metrics.NewProviderCollector(p, metrics.ProviderCollectorConfig{})
 	if err != nil {
 		t.Fatalf("NewProviderCollector: %v", err)
 	}
-	c.RecordRequest("GET", "/api/v1/sessions", 200, 0.01)
+	c.RecordRequest("accesscore", "GET", "/api/v1/sessions", 200, 0.01)
 
 	ops := p.counterOps["http_requests_total"]
 	if len(ops) != 1 {
@@ -49,6 +46,33 @@ func TestProviderCollector_EmitsExpectedLabels(t *testing.T) {
 	for k, v := range wants {
 		if got[k] != v {
 			t.Errorf("label %s = %q, want %q (all=%v)", k, got[k], v, got)
+		}
+	}
+}
+
+func TestProviderCollector_PerCallCellLabel(t *testing.T) {
+	// Two calls with different cellID values must yield two distinct label sets;
+	// no global / cached cellID can leak between calls.
+	p := newSpyProvider()
+	c, err := metrics.NewProviderCollector(p, metrics.ProviderCollectorConfig{})
+	if err != nil {
+		t.Fatalf("NewProviderCollector: %v", err)
+	}
+	c.RecordRequest("accesscore", "GET", "/api/v1/sessions", 200, 0.01)
+	c.RecordRequest("auditcore", "GET", "/api/v1/audit", 200, 0.02)
+	c.RecordRequest("_runtime", "GET", "/healthz", 200, 0.001)
+
+	ops := p.counterOps["http_requests_total"]
+	if len(ops) != 3 {
+		t.Fatalf("want 3 counter ops, got %d", len(ops))
+	}
+	cells := map[string]bool{}
+	for _, op := range ops {
+		cells[op.labels["cell"]] = true
+	}
+	for _, want := range []string{"accesscore", "auditcore", "_runtime"} {
+		if !cells[want] {
+			t.Errorf("missing cell label %q in %v", want, cells)
 		}
 	}
 }

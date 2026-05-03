@@ -27,6 +27,22 @@ func CellIDFrom(ctx context.Context) (string, bool) {
 	return v, ok
 }
 
+// MustCellIDFrom returns the cell ID from ctx or panics when the value is
+// missing or empty. Callers running under HTTP middleware that should always
+// observe an upstream-injected cell ID — for example the runtime/http/middleware
+// metrics recorder running behind the bootstrap-installed cell-id chain — use
+// this helper instead of branching on a fallback. A panic here indicates that
+// the bootstrap injection chain has been bypassed, which is a framework bug
+// rather than a user-facing condition; let it surface so an archtest catches
+// it before the binary ships.
+func MustCellIDFrom(ctx context.Context) string {
+	v, ok := CellIDFrom(ctx)
+	if !ok || v == "" {
+		panic("ctxkeys: cell ID missing from context (bootstrap must inject before downstream middleware reads it)")
+	}
+	return v
+}
+
 // WithSliceID returns a new context carrying the given slice ID.
 func WithSliceID(ctx context.Context, id string) context.Context {
 	return context.WithValue(ctx, SliceID, id)

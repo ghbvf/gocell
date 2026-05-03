@@ -17,6 +17,7 @@ package bootstrap
 
 import (
 	"fmt"
+	"net/http"
 	"sort"
 	"strings"
 
@@ -25,6 +26,7 @@ import (
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/http/health"
+	httpmiddleware "github.com/ghbvf/gocell/runtime/http/middleware"
 	"github.com/ghbvf/gocell/runtime/http/router"
 	metricsmiddleware "github.com/ghbvf/gocell/runtime/observability/metrics"
 )
@@ -176,10 +178,22 @@ func (b *Bootstrap) phase5MountRouteGroups(routers map[cell.ListenerRef]*router.
 // declare their routes on a different listener). Listener-level authChain is
 // already installed by router.WithDefaultMiddleware; group Middleware runs
 // after that chain at request time (chi sub-mux With order).
+//
+// HTTP-METRICS-LABEL-REALIGN: when rg.CellID is populated by phase5 (every
+// cell-owned RouteGroup), prepend WithCellIDContext(rg.CellID) so the cell
+// identity overrides the listener-root "_runtime" sentinel inside this
+// sub-mux. The chi sub-mux With order is "outer to inner", so a value
+// written here lands later than the root middleware's WithValue and wins.
+// rg.CellID == "" only happens for framework-owned health groups before
+// phase5 stamps them; we leave them on the root sentinel by skipping
+// injection rather than emitting cell="" (an ambiguous label).
 func (b *Bootstrap) mountOneRouteGroup(rtr *router.Router, rg cell.RouteGroup, _ int) error {
 	register := rg.Register
-	if len(rg.Middleware) > 0 {
-		mws := rg.Middleware
+	mws := rg.Middleware
+	if rg.CellID != "" {
+		mws = append([]func(http.Handler) http.Handler{httpmiddleware.WithCellIDContext(rg.CellID)}, mws...)
+	}
+	if len(mws) > 0 {
 		inner := register
 		register = func(sub cell.RouteMux) error {
 			return inner(sub.With(mws...))
@@ -378,6 +392,13 @@ func (b *Bootstrap) buildListenerRouterOpts(_ *phaseState, ref cell.ListenerRef,
 // collector construction will fail with a duplicate-name error. The error is
 // wrapped with an actionable message that tells operators which side to remove.
 //
+// HTTP-METRICS-LABEL-REALIGN: cell labels are no longer derived globally here.
+// router installs WithCellIDContext("_runtime") at the listener-root layer and
+// mountOneRouteGroup overrides it per-cell at the route-group layer; the
+// recorded cell label is the value present in the request context when
+// middleware.Metrics fires. This collector is provider-neutral and labels each
+// observation from its RecordRequest cellID argument.
+//
 // ref: runtime/observability/metrics.NewProviderCollector — provider-neutral
 // HTTP collector that records http_requests_total + http_request_duration_seconds.
 func (b *Bootstrap) autoWireHTTPMetricsCollector(opts []router.Option) ([]router.Option, error) {
@@ -394,21 +415,7 @@ func (b *Bootstrap) autoWireHTTPMetricsCollector(opts []router.Option) ([]router
 	// share the same collector and do not attempt to re-register Prometheus
 	// counters/histograms with the same names.
 	if b.httpCollector == nil {
-		// Derive cell ID from the most specific source available:
-		//  1. Explicit WithAssemblyID — caller's intent takes precedence.
-		//  2. Pre-built assembly's ID (b.assemblyCore.ID()) — avoids requiring callers
-		//     to repeat the assembly ID when using WithAssembly(asm).
-		//  3. Fallback "default" — matches the ID used by the auto-built assembly.
-		cellID := b.assemblyID
-		if cellID == "" && b.assemblyCore != nil {
-			cellID = b.assemblyCore.ID()
-		}
-		if cellID == "" {
-			cellID = "default"
-		}
-		collector, err := metricsmiddleware.NewProviderCollector(b.metricsProvider, metricsmiddleware.ProviderCollectorConfig{
-			CellID: cellID,
-		})
+		collector, err := metricsmiddleware.NewProviderCollector(b.metricsProvider, metricsmiddleware.ProviderCollectorConfig{})
 		if err != nil {
 			return nil, fmt.Errorf(
 				"bootstrap: metrics auto-wire conflict: WithMetricsProvider already constructs the HTTP collector; "+

@@ -20,7 +20,14 @@ type Collector interface {
 	// RecordRequest records a completed HTTP request with the given labels.
 	// route is the route pattern (e.g. "/api/v1/users/{id}"), not the actual
 	// request path. Using route patterns prevents metric cardinality explosion.
-	RecordRequest(method, route string, status int, durationSeconds float64)
+	//
+	// cellID identifies the cell that owns the matched RouteGroup, or
+	// "_runtime" for framework-owned paths (healthz/readyz/metrics, unmatched
+	// 404s, listeners with no business RouteGroup attached). Bootstrap
+	// installs ctx-injecting middleware at both the listener-root and route-
+	// group layers so the value is always present at the time middleware
+	// invokes RecordRequest; see runtime/http/middleware.WithCellIDContext.
+	RecordRequest(cellID, method, route string, status int, durationSeconds float64)
 }
 
 // Snapshot is a point-in-time view of recorded metrics.
@@ -46,13 +53,13 @@ func NewInMemoryCollector() *InMemoryCollector {
 	}
 }
 
-func metricKey(method, route string, status int) string {
-	return fmt.Sprintf("%s %s %d", method, route, status)
+func metricKey(cellID, method, route string, status int) string {
+	return fmt.Sprintf("%s %s %s %d", cellID, method, route, status)
 }
 
 // RecordRequest records a completed HTTP request.
-func (c *InMemoryCollector) RecordRequest(method, route string, status int, durationSeconds float64) {
-	key := metricKey(method, route, status)
+func (c *InMemoryCollector) RecordRequest(cellID, method, route string, status int, durationSeconds float64) {
+	key := metricKey(cellID, method, route, status)
 
 	c.mu.RLock()
 	cnt, cntOK := c.counts[key]
@@ -104,6 +111,7 @@ func (c *InMemoryCollector) Handler() http.Handler {
 		w.Header().Set("Content-Type", "application/json")
 
 		type entry struct {
+			Cell       string `json:"cell"`
 			Method     string `json:"method"`
 			Route      string `json:"route"`
 			Status     int    `json:"status"`
@@ -113,10 +121,11 @@ func (c *InMemoryCollector) Handler() http.Handler {
 
 		var entries []entry
 		for k, count := range snap.RequestCounts {
-			var method, route string
+			var cell, method, route string
 			var status int
-			_, _ = fmt.Sscanf(k, "%s %s %d", &method, &route, &status)
+			_, _ = fmt.Sscanf(k, "%s %s %s %d", &cell, &method, &route, &status)
 			entries = append(entries, entry{
+				Cell:       cell,
 				Method:     method,
 				Route:      route,
 				Status:     status,
@@ -124,7 +133,12 @@ func (c *InMemoryCollector) Handler() http.Handler {
 				DurationMs: snap.DurationSumsMs[k],
 			})
 		}
-		sort.Slice(entries, func(i, j int) bool { return entries[i].Route < entries[j].Route })
+		sort.Slice(entries, func(i, j int) bool {
+			if entries[i].Cell != entries[j].Cell {
+				return entries[i].Cell < entries[j].Cell
+			}
+			return entries[i].Route < entries[j].Route
+		})
 
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"metrics": entries,

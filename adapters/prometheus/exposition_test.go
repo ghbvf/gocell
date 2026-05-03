@@ -67,14 +67,12 @@ func expose(t *testing.T, reg *prom.Registry) string {
 // is an immediate Grafana regression.
 func TestPrometheusExposition_HTTPCollector_FamiliesAndLabels(t *testing.T) {
 	p, reg := newProvider(t)
-	c, err := runtimemetrics.NewProviderCollector(p, runtimemetrics.ProviderCollectorConfig{
-		CellID: "test-cell",
-	})
+	c, err := runtimemetrics.NewProviderCollector(p, runtimemetrics.ProviderCollectorConfig{})
 	if err != nil {
 		t.Fatalf("NewProviderCollector: %v", err)
 	}
-	c.RecordRequest("GET", "/api/v1/users", 200, 0.15)
-	c.RecordRequest("POST", "/api/v1/users", 201, 0.05)
+	c.RecordRequest("test-cell", "GET", "/api/v1/users", 200, 0.15)
+	c.RecordRequest("test-cell", "POST", "/api/v1/users", 201, 0.05)
 
 	body := expose(t, reg)
 

@@ -92,8 +92,18 @@ func TestR2_MetricsCollector_RecordsHTTPRequests(t *testing.T) {
 			"This verifies the full wiring chain: WithMetricsProvider → autoWireHTTPMetricsCollector "+
 			"→ router.WithMetricsCollector → middleware.Metrics → RecordRequest → Prometheus registry. "+
 			"Got /metrics body (first 400 chars): %s", truncateMetrics(bodyStr, 400))
-	assert.Contains(t, bodyStr, `cell="corebundle"`,
-		"R2: /metrics output must have cell=\"corebundle\" label (proves auto-wire derives cell label from assembly ID). "+
+	// HTTP-METRICS-LABEL-REALIGN: requests that do not match any cell-owned
+	// RouteGroup must be labelled with the framework "_runtime" sentinel
+	// (installed by router.go), not with the assembly ID. The /healthz hit on
+	// PrimaryListener does not match any RouteGroup (HealthListener carries
+	// /healthz on its own router), so it falls through to the sentinel layer.
+	assert.Contains(t, bodyStr, `cell="_runtime"`,
+		"R2: /metrics output must label framework-owned requests cell=\"_runtime\" "+
+			"(installed by router.go on every listener-root mux). "+
+			"Got /metrics body (first 400 chars): %s", truncateMetrics(bodyStr, 400))
+	assert.NotContains(t, bodyStr, `cell="corebundle"`,
+		"R2: post HTTP-METRICS-LABEL-REALIGN, the assembly ID must not leak into the cell label. "+
+			"A regression that re-derives cellID from b.assemblyID would fail here. "+
 			"Got /metrics body (first 400 chars): %s", truncateMetrics(bodyStr, 400))
 }
 

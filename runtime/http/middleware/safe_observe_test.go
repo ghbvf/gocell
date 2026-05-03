@@ -24,9 +24,10 @@ func TestSafeObserve_PanicDoesNotPropagate(t *testing.T) {
 
 func TestMetrics_CollectorPanicDoesNotCrash(t *testing.T) {
 	// A collector that panics in RecordRequest must not crash the request.
-	handler := Recorder(Metrics(&panicCollector{}, clock.Real())(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	okHandler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
-	})))
+	})
+	handler := WithCellIDContext("test-cell")(Recorder(Metrics(&panicCollector{}, clock.Real())(okHandler)))
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/test", nil)
@@ -50,7 +51,7 @@ func TestAccessLog_PanicDoesNotCrash(t *testing.T) {
 // panicCollector implements metrics.Collector but panics on RecordRequest.
 type panicCollector struct{}
 
-func (p *panicCollector) RecordRequest(_, _ string, _ int, _ float64) {
+func (p *panicCollector) RecordRequest(_, _, _ string, _ int, _ float64) {
 	panic("collector panic in RecordRequest")
 }
 

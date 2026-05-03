@@ -5,6 +5,7 @@ import (
 	"net/http"
 
 	"github.com/ghbvf/gocell/kernel/clock"
+	"github.com/ghbvf/gocell/kernel/ctxkeys"
 	"github.com/ghbvf/gocell/runtime/observability/metrics"
 )
 
@@ -15,6 +16,14 @@ import (
 // When a RecorderState exists in the context (created by the Recorder
 // middleware), Metrics reuses it. Otherwise it creates its own to
 // remain usable as a standalone middleware.
+//
+// The cell identity stamped on every emitted observation is read from the
+// request context via ctxkeys.MustCellIDFrom — bootstrap installs
+// WithCellIDContext middleware at the listener-root layer (with the framework
+// "_runtime" sentinel) and at the route-group layer (with each cell's ID), so
+// the value is always present on requests that reach this middleware. A
+// missing value indicates a framework wiring bug; the panic surfaces it at
+// startup or in tests rather than silently emitting metrics under a fallback.
 func Metrics(collector metrics.Collector, clk clock.Clock) func(http.Handler) http.Handler {
 	return metricsWithClock(collector, clk)
 }
@@ -37,7 +46,8 @@ func metricsWithClock(collector metrics.Collector, clk clock.Clock) func(http.Ha
 
 			safeObserve(slog.Default(), func() {
 				route := RoutePatternFromCtx(r.Context())
-				collector.RecordRequest(r.Method, route, state.Status(), clk.Since(start).Seconds())
+				cellID := ctxkeys.MustCellIDFrom(r.Context())
+				collector.RecordRequest(cellID, r.Method, route, state.Status(), clk.Since(start).Seconds())
 			})
 		})
 	}

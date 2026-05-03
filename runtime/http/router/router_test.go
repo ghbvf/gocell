@@ -236,8 +236,9 @@ func TestPanicRequestRecordedInMetrics(t *testing.T) {
 	assert.Equal(t, http.StatusInternalServerError, rec.Code)
 
 	snap := mc.Snapshot()
-	key := "GET /boom 500"
-	assert.Equal(t, int64(1), snap.RequestCounts[key], "metrics must record panic request as status 500")
+	key := "_runtime GET /boom 500"
+	assert.Equal(t, int64(1), snap.RequestCounts[key],
+		"metrics must record panic request as status 500 under cell=_runtime (router-installed sentinel)")
 }
 
 func TestNormalRequestUnchanged(t *testing.T) {
@@ -266,9 +267,10 @@ func TestNormalRequestUnchanged(t *testing.T) {
 	require.True(t, found, "access log entry must exist")
 	assert.Equal(t, float64(200), entry["status"])
 
-	// Verify metrics recorded status 200.
+	// Verify metrics recorded status 200 under the listener-root sentinel
+	// (no RouteGroup means no per-cell override fired).
 	snap := mc.Snapshot()
-	key := "GET /ok 200"
+	key := "_runtime GET /ok 200"
 	assert.Equal(t, int64(1), snap.RequestCounts[key])
 }
 
@@ -578,9 +580,9 @@ func TestWithTracer_PanicRequestRecordedInMetrics(t *testing.T) {
 
 	assert.Equal(t, http.StatusInternalServerError, rec.Code)
 	snap := mc.Snapshot()
-	key := "GET /boom-full 500"
+	key := "_runtime GET /boom-full 500"
 	assert.Equal(t, int64(1), snap.RequestCounts[key],
-		"metrics must record panic request as 500 even with tracing in chain")
+		"metrics must record panic request as 500 even with tracing in chain (cell=_runtime — router sentinel)")
 }
 
 // --- Rate limiter wiring ---
