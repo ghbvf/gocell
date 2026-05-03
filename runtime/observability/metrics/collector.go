@@ -140,8 +140,12 @@ func (c *InMemoryCollector) Handler() http.Handler {
 			return entries[i].Route < entries[j].Route
 		})
 
+		// Use the unified list response envelope ({"data": [...]}) consistent
+		// with .claude/rules/gocell/api-versioning.md and the other HTTP list
+		// endpoints. Inherited "metrics" wrapper would have left this dev/test
+		// handler the only inconsistent shape on the metrics surface.
 		_ = json.NewEncoder(w).Encode(map[string]any{
-			"metrics": entries,
+			"data": entries,
 		})
 	})
 }

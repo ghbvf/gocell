@@ -28,8 +28,8 @@ func TestInMemoryCollector_Handler(t *testing.T) {
 
 	var result map[string]any
 	require.NoError(t, json.Unmarshal(body, &result))
-	entries, ok := result["metrics"].([]any)
-	require.True(t, ok)
+	entries, ok := result["data"].([]any)
+	require.True(t, ok, "Handler must wrap list payloads under the unified \"data\" key")
 	assert.Len(t, entries, 2) // GET /api 200 and POST /api 201
 }
 

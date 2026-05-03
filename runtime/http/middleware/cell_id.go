@@ -71,6 +71,15 @@ func cellIDStateFrom(ctx context.Context) *cellIDState {
 // / the metrics endpoint itself / unmatched paths) leave the metrics
 // recorder's default sentinel in place.
 //
+// Empty-cellID guard: an empty cellID is silently ignored on the metrics
+// state — the upstream sentinel survives so dashboards keep matching the
+// framework label. The ctxkeys side is also skipped so logging/tracing do
+// not record a misleading empty cell ID. PANIC-REGISTERED-01 (ADR) prohibits
+// fail-fast panic at this layer, and bootstrap.mountOneRouteGroup already
+// guards rg.CellID != "" before installing this middleware, so the only way
+// to reach the empty branch is a future caller that constructs the handler
+// directly — that caller's mistake should not corrupt the cell label space.
+//
 // ref: go-chi/chi RouteContext — same mutable-pointer pattern for letting
 // outer middleware observe a value resolved by sub-mux dispatch.
 // ref: kubernetes apiserver pkg/endpoints/metrics/metrics.go — component
@@ -79,6 +88,10 @@ func WithCellIDContext(cellID string) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			ctx := r.Context()
+			if cellID == "" {
+				next.ServeHTTP(w, r)
+				return
+			}
 			if cs := cellIDStateFrom(ctx); cs != nil {
 				cs.cellID = cellID
 			}
