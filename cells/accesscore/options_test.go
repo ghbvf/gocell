@@ -12,7 +12,6 @@ import (
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/kernel/outbox"
-	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/runtime/eventbus"
 )
@@ -31,7 +30,7 @@ func TestWithInMemoryDefaults(t *testing.T) {
 		WithJWTVerifier(testVerifier),
 		WithRefreshStore(newTestRefreshStore()),
 		WithOutboxDeps(nil, outbox.NoopWriter{}),
-		WithTxManager(persistence.NoopTxRunner{}),
+		WithTxManager(durableTxRunner{}),
 	)
 	// userRepo and roleRepo are set eagerly; sessionRepo is deferred to Init()
 	// so that c.clk is available (clock injection pattern).
@@ -50,7 +49,7 @@ func TestHealthCheckers_InMemory(t *testing.T) {
 		WithJWTVerifier(testVerifier),
 		WithRefreshStore(newTestRefreshStore()),
 		WithOutboxDeps(nil, outbox.NoopWriter{}),
-		WithTxManager(persistence.NoopTxRunner{}),
+		WithTxManager(durableTxRunner{}),
 	)
 	rec := cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo)
 	require.NoError(t, c.Init(context.Background(), rec))
@@ -68,7 +67,7 @@ func TestHealthCheckers_WithInMemoryDefaults_SessionStorePresent(t *testing.T) {
 		WithJWTVerifier(testVerifier),
 		WithInMemoryDefaults(),
 		WithOutboxDeps(nil, outbox.NoopWriter{}),
-		WithTxManager(persistence.NoopTxRunner{}),
+		WithTxManager(durableTxRunner{}),
 	)
 	rec := cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo)
 	require.NoError(t, c.Init(context.Background(), rec))
@@ -120,7 +119,7 @@ func TestInit_DurableMode_RejectsNoopWriter(t *testing.T) {
 		WithJWTIssuer(testIssuer),
 		WithJWTVerifier(testVerifier),
 		WithOutboxDeps(nil, outbox.NoopWriter{}),
-		WithTxManager(persistence.NoopTxRunner{}),
+		WithTxManager(durableTxRunner{}),
 	)
 	err := c.Init(context.Background(), cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDurable))
 	require.Error(t, err)
@@ -134,7 +133,7 @@ func TestInit_MissingJWTIssuerAndVerifier(t *testing.T) {
 	c := NewAccessCore(
 		WithClock(clock.Real()),
 		WithOutboxDeps(nil, outbox.NoopWriter{}),
-		WithTxManager(persistence.NoopTxRunner{}),
+		WithTxManager(durableTxRunner{}),
 	)
 	err := c.Init(context.Background(), cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo))
 	assert.Error(t, err)
@@ -152,6 +151,7 @@ func TestHealthCheckers_WithDirectEmitter(t *testing.T) {
 		WithJWTIssuer(testIssuer),
 		WithJWTVerifier(testVerifier),
 		WithOutboxDeps(eventbus.New(eventbus.WithClock(clock.Real())), nil),
+		WithTxManager(durableTxRunner{}),
 		WithMetricsProvider(metrics.NopProvider{}),
 	)
 	rec := cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo)
@@ -179,7 +179,7 @@ func TestHealthCheckers_NoEmitterChecker(t *testing.T) {
 		WithJWTVerifier(testVerifier),
 		WithRefreshStore(newTestRefreshStore()),
 		WithOutboxDeps(nil, outbox.NoopWriter{}),
-		WithTxManager(persistence.NoopTxRunner{}),
+		WithTxManager(durableTxRunner{}),
 	)
 	rec := cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo)
 	require.NoError(t, c.Init(context.Background(), rec))

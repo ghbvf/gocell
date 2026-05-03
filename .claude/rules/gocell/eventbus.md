@@ -49,7 +49,27 @@ func handleEvent(ctx context.Context, entry outbox.Entry) outbox.HandleResult {
 | `DispositionReject` | 永久失败 | broker Nack(requeue=false) → DLX |
 
 - **零值 HandleResult{} 的 Disposition 是 invalid**（不等于 Ack），会被安全降级为 Requeue
-- `PermanentError` 包装的错误即使返回 Requeue 也会被 ConsumerBase 升级为 Reject
+- `PermanentError` 是错误分类标签（用于 logging/metric 区分），**不触发 Disposition 升级**；handler 必须 explicit 返回 `DispositionReject` 才会路由到 DLX。返回 `Requeue + PermanentError` 会按 Requeue 走完 retry budget，最终经预算耗尽路径转 Reject（详见 ADR `docs/architecture/202605031900-adr-handler-vocabulary-collapse.md`）
+
+### Service 构造模式（fail-fast on nil TxRunner）
+
+Outbox-bound service 构造函数统一签名 `func NewXxx(...) (*XxxService, error)`，
+body 顶层包含：
+
+```go
+if s.txRunner == nil {
+    return nil, errcode.New(errcode.ErrValidationFailed,
+        "xxx: TxRunner required; use WithTxManager")
+}
+```
+
+12 个 service 全部遵循（accesscore: sessionlogin/sessionlogout/setup/rbacassign/identitymanage；
+auditcore: auditappend/auditverify；configcore: flagwrite/configpublish/configwrite；
+examples: ordercreate）。`OUTBOX-SERVICE-01` archtest 静态守卫该模式：禁止 method 内 nil
+fallback；构造期 fail-fast 是唯一允许的 nil-branch。
+
+`WithTxManager` 选项的入参 nil 静默忽略（保持 option 函数幂等），最终 nil 校验由
+`NewService` 完成。
 
 ### Cell 订阅注册（Registry builder 模式）
 
@@ -60,13 +80,12 @@ func (c *MyCell) Init(ctx context.Context, reg cell.Registry) error {
     if err := c.BaseCell.Init(ctx, reg); err != nil {
         return err
     }
-    handler := outbox.WrapLegacyHandler(c.svc.HandleEvent)
     return reg.Subscribe(wrapper.ContractSpec{
         ID:        "event.my.topic.v1",
         Kind:      "event",
         Transport: "amqp",
         Topic:     "my.topic.v1",
-    }, handler, c.ID())
+    }, c.svc.HandleEvent, c.ID())
 }
 ```
 
@@ -83,18 +102,6 @@ func (c *MyCell) Init(ctx context.Context, reg cell.Registry) error {
 `endpoints.subscribers ↔ contractUsages[role=subscribe]`）。第三项
 `verify.contract` ↔ `contractUsages` 闭环由 VERIFY-01 拦截，与 ADV-06 互补。
 
-### 旧 handler 迁移
-
-使用 `outbox.WrapLegacyHandler` 适配旧签名：
-
-```go
-legacy := func(ctx context.Context, entry outbox.Entry) error { ... }
-handler := outbox.WrapLegacyHandler(legacy)
-// nil error → Ack, PermanentError → Reject, other error → Requeue
-```
-
-WrapLegacyHandler 检测 PermanentError 并返回 DispositionReject，无需 ConsumerBase 包装即可路由到 DLX。
-
 ## 死信路由
 
 - DLX 由 broker 原生处理（`DispositionReject` → `Nack(requeue=false)` → DLX exchange）
@@ -103,8 +110,10 @@ WrapLegacyHandler 检测 PermanentError 并返回 DispositionReject，无需 Con
 
 ## 幂等模型
 
-- 使用 `Claimer`（两阶段 Claim/Commit/Release），不再使用旧 `Checker`
-- Claim 获取处理租约 → handler 执行 → broker Ack 后 Commit / 失败时 Release
+- ConsumerBase 内部使用 `kernel/idempotency.Claimer`（两阶段 Claim/Commit/Release）实现幂等；handler 作者**不需要** import `kernel/idempotency`，也不需要在 `HandleResult` 中读写 `Receipt` 字段（029 #03 ADR Decision 3 删除了 outbox.Receipt type alias；HandleResult.Receipt
+字段保留为 Subscriber 内部 hand-off，handler 不读不写，由 HANDLER-RECEIPT-WRITE-01
+archtest 守卫；详见 K#12 PR-V1-OUTBOX-RECEIPT-EXTRACT follow-up）
+- Claim 获取处理租约 → handler 执行 → broker Ack 后 Commit / 失败时 Release（由 Subscriber delivery loop 完成）
 - 默认 fail-closed：Claimer 故障时 Requeue，不丢弃幂等保护
 
 ## Stream 命名

@@ -208,8 +208,6 @@ func NewAuditCore(opts ...Option) *AuditCore {
 	return c
 }
 
-// Init constructs all 4 slices and registers routes, subscriptions, and health
-// probes into reg.
 func (c *AuditCore) Init(ctx context.Context, reg cell.Registry) error {
 	clock.MustHaveClock(c.clk, "auditcore.Init")
 	if err := c.resolveHMACKey(reg.Config()); err != nil {
@@ -224,7 +222,22 @@ func (c *AuditCore) Init(ctx context.Context, reg cell.Registry) error {
 	if err := c.resolveEmitter(durabilityMode); err != nil {
 		return err
 	}
-	c.initSlices()
+	// resolveEmitter enforces the (OutboxWriter, TxRunner) pairing invariant
+	// using the original c.txRunner; only after it succeeds do we install the
+	// demoTxRunner fallback so slice constructors see a non-nil TxRunner.
+	if c.txRunner == nil {
+		c.logger.Warn("auditcore: using cell.DemoTxRunner (demo mode)",
+			slog.String("durability_mode", durabilityMode.String()))
+		c.txRunner = cell.DemoTxRunner{}
+	}
+	// Guard: DemoTxRunner implements Nooper — reject it in DurabilityDurable mode
+	// so that assemblies that forget to wire a real TxRunner fail at Init() time.
+	if err := cell.CheckNotNoop(durabilityMode, "auditcore", c.txRunner); err != nil {
+		return err
+	}
+	if err := c.initSlices(); err != nil {
+		return err
+	}
 	// Default cursor codec for pagination if not injected. Durable mode
 	// refuses the public demo-key fallback — an assembly that forgets to
 	// wire a production codec must fail closed, not silently sign cursors
@@ -247,7 +260,7 @@ func (c *AuditCore) Init(ctx context.Context, reg cell.Registry) error {
 	})
 
 	// Register event subscriptions.
-	handler := outbox.WrapLegacyHandler(c.appendSvc.HandleEvent)
+	handler := c.appendSvc.HandleEvent
 	for _, topic := range auditappend.Topics {
 		spec, ok := auditAppendSpecs[topic]
 		if !ok {
@@ -302,7 +315,6 @@ func (c *AuditCore) resolveEmitter(mode cell.DurabilityMode) error {
 	c.emitter = outcome.Emitter
 	c.pendingOutboxPub = nil
 	c.pendingOutboxWriter = nil
-	c.txRunner = persistence.RunnerOrNoop(c.txRunner)
 	return nil
 }
 
@@ -325,22 +337,31 @@ func (c *AuditCore) resolveHMACKey(cfg map[string]any) error {
 // initSlices constructs and registers the audit-append, audit-verify, and
 // audit-archive slices. audit-query is initialized separately in initQuerySlice
 // because it requires the cursor codec to be resolved first.
-func (c *AuditCore) initSlices() {
+func (c *AuditCore) initSlices() error {
 	// audit-append
 	appendOpts := []auditappend.Option{auditappend.WithEmitter(c.emitter), auditappend.WithTxManager(c.txRunner)}
-	c.appendSvc = auditappend.NewService(c.auditRepo, c.hmacKey, c.logger, c.clk, appendOpts...)
+	appendSvc, err := auditappend.NewService(c.auditRepo, c.hmacKey, c.logger, c.clk, appendOpts...)
+	if err != nil {
+		return fmt.Errorf("auditappend: %w", err)
+	}
+	c.appendSvc = appendSvc
 	// L3: 订阅 accesscore/configcore 跨 cell 事件，slice 级别可高于 cell 级别。
 	c.AddSlice(cell.NewBaseSlice("auditappend", "auditcore", cell.L3))
 
 	// audit-verify
 	verifyOpts := []auditverify.Option{auditverify.WithEmitter(c.emitter), auditverify.WithTxManager(c.txRunner)}
-	c.verifySvc = auditverify.NewService(c.auditRepo, c.hmacKey, c.logger, verifyOpts...)
+	verifySvc, err := auditverify.NewService(c.auditRepo, c.hmacKey, c.logger, verifyOpts...)
+	if err != nil {
+		return fmt.Errorf("auditverify: %w", err)
+	}
+	c.verifySvc = verifySvc
 	// L2: publishes event.audit.integrity-verified.v1 via transactional outbox.
 	c.AddSlice(cell.NewBaseSlice("auditverify", "auditcore", cell.L2))
 
 	// audit-archive (stub)
 	c.archiveSvc = auditarchive.NewService()
 	c.AddSlice(cell.NewBaseSlice("auditarchive", "auditcore", cell.L1))
+	return nil
 }
 
 // initQuerySlice constructs the audit-query handler slice. Must be called after

@@ -93,9 +93,9 @@ handler 永久错误（payload / schema / 语义问题）或显式 DispositionRe
     summary: "Config event consumer permanent reject ({{ $labels.cell }}/{{ $labels.slice }})"
     description: |
       Config event consumer {{ $labels.cell }}/{{ $labels.slice }} is routing
-      permanent payload/handler errors to DLX (result=success means PermanentError or
-      explicit DispositionReject, not retry exhaustion).
-      Check consumer logs for "permanent error, rejecting to DLX" and verify
+      handler-explicit errors to DLX (result=success means the handler returned
+      DispositionReject, not retry exhaustion — log level Error).
+      Check consumer logs for "handler rejected entry, routing to DLX" and verify
       producer/contract drift.
 ```
 

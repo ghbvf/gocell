@@ -16,6 +16,7 @@ import (
 	"go.uber.org/goleak"
 
 	"github.com/ghbvf/gocell/kernel/clock"
+	"github.com/ghbvf/gocell/kernel/idempotency"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 )
@@ -439,7 +440,7 @@ func (r *countingReceipt) Commit(_ context.Context) error {
 func (r *countingReceipt) Release(_ context.Context) error                 { return nil }
 func (r *countingReceipt) Extend(_ context.Context, _ time.Duration) error { return nil }
 
-var _ outbox.Receipt = (*countingReceipt)(nil)
+var _ idempotency.Receipt = (*countingReceipt)(nil)
 
 // TestSubscriber_GoroutineLeakOnClose verifies that Close() properly waits
 // for all in-flight processDelivery goroutines and leaves no residual goroutines

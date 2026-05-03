@@ -21,11 +21,19 @@ import (
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/outbox"
-	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/query"
 	"github.com/ghbvf/gocell/runtime/bootstrap"
 	"github.com/ghbvf/gocell/runtime/shutdown"
 )
+
+// demoTxRunner is a pass-through TxRunner for demo mode: executes fn directly
+// without a database transaction (no L2 atomicity). Production assemblies must
+// inject a real TxRunner (e.g., postgres.TxManager).
+type demoTxRunner struct{}
+
+func (demoTxRunner) RunInTx(ctx context.Context, fn func(context.Context) error) error {
+	return fn(ctx)
+}
 
 func main() {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
@@ -58,7 +66,7 @@ func main() {
 	// (e.g., postgres.TxManager) for durable event delivery via relay.
 	oc := ordercell.NewOrderCell(
 		ordercell.WithOutboxWriter(outbox.NoopWriter{}),
-		ordercell.WithTxManager(persistence.NoopTxRunner{}),
+		ordercell.WithTxManager(demoTxRunner{}),
 		ordercell.WithCursorCodec(cursorCodec),
 		ordercell.WithLogger(logger),
 	)

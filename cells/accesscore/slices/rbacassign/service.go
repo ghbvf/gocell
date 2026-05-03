@@ -52,7 +52,11 @@ func WithEmitter(e outbox.Emitter) Option {
 
 // WithTxManager sets the TxRunner for L2 atomicity (must be paired with WithEmitter).
 func WithTxManager(tx persistence.TxRunner) Option {
-	return func(s *Service) { s.txRunner = persistence.RunnerOrNoop(tx) }
+	return func(s *Service) {
+		if tx != nil {
+			s.txRunner = tx
+		}
+	}
 }
 
 // NewService creates a new rbac-assign service.
@@ -64,11 +68,10 @@ func NewService(
 	sessionRepo ports.SessionRepository,
 	logger *slog.Logger,
 	opts ...Option,
-) *Service {
+) (*Service, error) {
 	s := &Service{
 		roleRepo:              roleRepo,
 		sessionRepo:           sessionRepo,
-		txRunner:              persistence.NoopTxRunner{},
 		emitter:               outbox.NewNoopEmitter(),
 		syncSessionRevocation: true,
 		logger:                logger,
@@ -76,7 +79,10 @@ func NewService(
 	for _, o := range opts {
 		o(s)
 	}
-	return s
+	if s.txRunner == nil {
+		return nil, errcode.New(errcode.ErrValidationFailed, "rbacassign: TxRunner required; use WithTxManager")
+	}
+	return s, nil
 }
 
 // writeOutboxEntry writes a role-change outbox entry. Called inside a transaction.

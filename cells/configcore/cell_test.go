@@ -34,7 +34,7 @@ func newTestCell() *ConfigCore {
 		WithFlagRepository(mem.NewFlagRepository(clock.Real())),
 		WithOutboxDeps(eventbus.New(eventbus.WithClock(clock.Real())), nil),
 		WithOutboxDeps(nil, outbox.NoopWriter{}),
-		WithTxManager(persistence.NoopTxRunner{}),
+		WithTxManager(durableTxRunner{}),
 		WithMetricsProvider(metrics.NopProvider{}),
 	)
 }
@@ -106,7 +106,7 @@ func TestConfigCore_InitDemoMode_RejectsHalfConfiguredPath(t *testing.T) {
 			WithClock(clock.Real()),
 			WithInMemoryDefaults(),
 			WithOutboxDeps(eventbus.New(eventbus.WithClock(clock.Real())), nil),
-			WithTxManager(persistence.NoopTxRunner{}),
+			WithTxManager(durableTxRunner{}),
 		)
 		checkHalfConfigured(t, c)
 	})
@@ -118,7 +118,7 @@ func TestConfigCore_InitDurableMode_RejectsNoopWriter(t *testing.T) {
 		WithInMemoryDefaults(),
 		WithOutboxDeps(eventbus.New(eventbus.WithClock(clock.Real())), nil),
 		WithOutboxDeps(nil, outbox.NoopWriter{}),
-		WithTxManager(persistence.NoopTxRunner{}),
+		WithTxManager(durableTxRunner{}),
 	)
 	err := c.Init(context.Background(), cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDurable))
 	require.Error(t, err)
@@ -151,7 +151,7 @@ func TestConfigCore_InitDemoMode_ExplicitNoopOutboxPair_Succeeds(t *testing.T) {
 		WithClock(clock.Real()),
 		WithInMemoryDefaults(),
 		WithOutboxDeps(nil, outbox.NoopWriter{}),
-		WithTxManager(persistence.NoopTxRunner{}),
+		WithTxManager(durableTxRunner{}),
 	)
 	err := c.Init(context.Background(), cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo))
 	require.NoError(t, err)
@@ -197,7 +197,7 @@ func TestConfigCoreInit_WithEmitter_DurableRequiresDurableEmitter(t *testing.T) 
 		WithInMemoryDefaults(),
 		WithCursorCodec(cursorCodec),
 		WithEmitter(outbox.NewNoopEmitter()), // non-durable
-		WithTxManager(persistence.NoopTxRunner{}),
+		WithTxManager(durableTxRunner{}),
 	)
 	err = c.Init(context.Background(), cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDurable))
 	require.Error(t, err)

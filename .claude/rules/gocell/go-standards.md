@@ -63,6 +63,7 @@ paths:
 - 空实现/no-op/fallback 写明业务原因（注释）
 - 构造函数出口保证所有字段非 nil——可选依赖在构造函数内 fallback（如 `outbox.DiscardPublisher{}`）
 - 加密/签名/鉴权优先复用现有安全封装
+- Outbox-bound service 构造函数必须 fail-fast on nil TxRunner，签名 `func NewXxx(...) (*Service, error)`，body 顶层 `if txRunner == nil { return nil, errcode.New(...) }`。由 `OUTBOX-SERVICE-01` archtest 静态守卫
 
 ## 命名规范
 

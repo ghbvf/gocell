@@ -26,12 +26,23 @@ func newTestRec() *cell.RegistryRecorder {
 	return cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo)
 }
 
-// newTestCell creates an OrderCell with NoopWriter + NoopTxRunner (unified outbox path).
+// demoTxRunner is a pass-through TxRunner for demo-mode tests. Replaces the
+// deleted persistence.NoopTxRunner — no transactional isolation, suitable only
+// for in-memory test doubles.
+type demoTxRunner struct{}
+
+func (demoTxRunner) RunInTx(ctx context.Context, fn func(context.Context) error) error {
+	return fn(ctx)
+}
+
+var _ persistence.TxRunner = demoTxRunner{}
+
+// newTestCell creates an OrderCell with NoopWriter + demoTxRunner (unified outbox path).
 func newTestCell() *OrderCell {
 	return NewOrderCell(
 		WithRepository(mem.NewOrderRepository()),
 		WithOutboxWriter(outbox.NoopWriter{}),
-		WithTxManager(persistence.NoopTxRunner{}),
+		WithTxManager(demoTxRunner{}),
 	)
 }
 
@@ -87,7 +98,7 @@ func TestOrderCell_InitDefaults(t *testing.T) {
 			name: "NoopWriter + NoopTxRunner succeeds (demo mode)",
 			opts: []Option{
 				WithOutboxWriter(outbox.NoopWriter{}),
-				WithTxManager(persistence.NoopTxRunner{}),
+				WithTxManager(demoTxRunner{}),
 			},
 			wantSlices: 2,
 		},
@@ -96,7 +107,7 @@ func TestOrderCell_InitDefaults(t *testing.T) {
 			opts: []Option{
 				WithRepository(mem.NewOrderRepository()),
 				WithOutboxWriter(outbox.NoopWriter{}),
-				WithTxManager(persistence.NoopTxRunner{}),
+				WithTxManager(demoTxRunner{}),
 			},
 			wantSlices: 2,
 		},
@@ -135,7 +146,7 @@ func TestOrderCell_DemoMode_RejectsHalfConfiguredPath(t *testing.T) {
 		},
 		{
 			name: "tx manager without writer",
-			opts: []Option{WithTxManager(persistence.NoopTxRunner{})},
+			opts: []Option{WithTxManager(demoTxRunner{})},
 		},
 	}
 
@@ -152,7 +163,7 @@ func TestOrderCell_DemoMode_RejectsHalfConfiguredPath(t *testing.T) {
 func TestOrderCell_DurableMode_RejectsNoopWriter(t *testing.T) {
 	c := NewOrderCell(
 		WithOutboxWriter(outbox.NoopWriter{}),
-		WithTxManager(persistence.NoopTxRunner{}),
+		WithTxManager(demoTxRunner{}),
 	)
 	err := c.Init(context.Background(), cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDurable))
 	require.Error(t, err)
@@ -200,7 +211,7 @@ func (orderLocalTxRunner) RunInTx(ctx context.Context, fn func(context.Context) 
 func TestOrderCell_DemoMode_AllowsNoopWriter(t *testing.T) {
 	c := NewOrderCell(
 		WithOutboxWriter(outbox.NoopWriter{}),
-		WithTxManager(persistence.NoopTxRunner{}),
+		WithTxManager(demoTxRunner{}),
 	)
 	require.NoError(t, c.Init(context.Background(), newTestRec()))
 }

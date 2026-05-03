@@ -39,7 +39,7 @@ func TestService_Lock_RevokesRefreshChain(t *testing.T) {
 	refreshStore := newCascadeStore(t)
 
 	svc, err := NewService(userRepo, sessionRepo, refreshStore, slog.Default(),
-		WithTokenIssuer(minimalStubIssuer), WithClock(clock.Real()))
+		WithTokenIssuer(minimalStubIssuer), WithClock(clock.Real()), WithTxManager(contractTxRunner{}))
 	require.NoError(t, err)
 
 	user, err := svc.Create(adminCtxForService(), CreateInput{Username: "dave", Email: "d@e.f", Password: "hash"})
@@ -71,7 +71,7 @@ func TestService_ChangePassword_RevokesRefreshChain(t *testing.T) {
 	refreshStore := newCascadeStore(t)
 
 	svc, err := NewService(userRepo, sessionRepo, refreshStore, slog.Default(),
-		WithTokenIssuer(minimalStubIssuer), WithClock(clock.Real()))
+		WithTokenIssuer(minimalStubIssuer), WithClock(clock.Real()), WithTxManager(contractTxRunner{}))
 	require.NoError(t, err)
 
 	// Use the service to create so it hashes the password for us.
@@ -109,7 +109,7 @@ func TestService_Delete_RevokesRefreshChain(t *testing.T) {
 	refreshStore := newCascadeStore(t)
 
 	svc, err := NewService(userRepo, sessionRepo, refreshStore, slog.Default(),
-		WithTokenIssuer(minimalStubIssuer), WithClock(clock.Real()))
+		WithTokenIssuer(minimalStubIssuer), WithClock(clock.Real()), WithTxManager(contractTxRunner{}))
 	require.NoError(t, err)
 
 	user, err := svc.Create(adminCtxForService(), CreateInput{Username: "frank", Email: "f@g.h", Password: "pwd"})

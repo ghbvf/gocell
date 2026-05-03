@@ -26,10 +26,19 @@ import (
 	"github.com/ghbvf/gocell/cells/internal/testoutbox"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/outbox"
+	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/query"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 )
+
+type noopTxRunner struct{}
+
+func (noopTxRunner) RunInTx(ctx context.Context, fn func(context.Context) error) error {
+	return fn(ctx)
+}
+
+var _ persistence.TxRunner = noopTxRunner{}
 
 func discardLogger() *slog.Logger { return slog.New(slog.NewTextHandler(io.Discard, nil)) }
 
@@ -52,7 +61,7 @@ func newService(t *testing.T, userRepo ports.UserRepository, roleRepo ports.Role
 		return "00000000-0000-4000-8000-000000000001"
 	}, clock.Real())
 	require.NoError(t, err)
-	opts := []setup.Option{}
+	opts := []setup.Option{setup.WithTxManager(noopTxRunner{})}
 	if w != nil {
 		opts = append(opts, setup.WithEmitter(testoutbox.MustEmitter(t, w)))
 	}
@@ -73,6 +82,18 @@ func TestNewService_NilLogger_Error(t *testing.T) {
 		discardLogger(), func() string { return "x" }, clock.Real())
 	_, err := setup.NewService(prov, nil)
 	require.Error(t, err)
+}
+
+func TestNewService_TxRunnerRequired(t *testing.T) {
+	prov, err := adminprovision.NewProvisioner(mem.NewUserRepository(), mem.NewRoleRepository(),
+		discardLogger(), func() string { return "x" }, clock.Real())
+	require.NoError(t, err)
+	_, err = setup.NewService(prov, discardLogger() /* no WithTxManager */)
+	require.Error(t, err)
+	var ec *errcode.Error
+	require.ErrorAs(t, err, &ec)
+	assert.Equal(t, errcode.ErrValidationFailed, ec.Code)
+	assert.Contains(t, err.Error(), "TxRunner required")
 }
 
 // --- Status ---------------------------------------------------------------

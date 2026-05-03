@@ -14,8 +14,33 @@ import (
 	"github.com/ghbvf/gocell/cells/accesscore/internal/mem"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/ports"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/testutil"
+	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
+
+// rbacFakeTxRunner is a test-only pass-through TxRunner (no real transaction).
+type rbacFakeTxRunner struct{}
+
+func (rbacFakeTxRunner) RunInTx(ctx context.Context, fn func(context.Context) error) error {
+	return fn(ctx)
+}
+
+var _ persistence.TxRunner = rbacFakeTxRunner{}
+
+// mustNewService creates a Service with a fake TxRunner, failing the test on error.
+func mustNewService(
+	t testing.TB,
+	roleRepo ports.RoleRepository,
+	sessionRepo ports.SessionRepository,
+	logger *slog.Logger,
+	opts ...Option,
+) *Service {
+	t.Helper()
+	opts = append([]Option{WithTxManager(rbacFakeTxRunner{})}, opts...)
+	svc, err := NewService(roleRepo, sessionRepo, logger, opts...)
+	require.NoError(t, err)
+	return svc
+}
 
 func newTestService(t testing.TB) (*Service, *mem.RoleRepository, ports.SessionRepository) {
 	t.Helper()
@@ -28,7 +53,18 @@ func newTestService(t testing.TB) (*Service, *mem.RoleRepository, ports.SessionR
 		},
 	})
 	sessionRepo := testutil.RealSessionRepo(t)
-	return NewService(roleRepo, sessionRepo, slog.Default()), roleRepo, sessionRepo
+	return mustNewService(t, roleRepo, sessionRepo, slog.Default()), roleRepo, sessionRepo
+}
+
+func TestNewService_TxRunnerRequired(t *testing.T) {
+	roleRepo := mem.NewRoleRepository()
+	sessionRepo := testutil.RealSessionRepo(t)
+	_, err := NewService(roleRepo, sessionRepo, slog.Default() /* no WithTxManager */)
+	require.Error(t, err)
+	var ec *errcode.Error
+	require.ErrorAs(t, err, &ec)
+	assert.Equal(t, errcode.ErrValidationFailed, ec.Code)
+	assert.Contains(t, err.Error(), "TxRunner required")
 }
 
 func TestService_Assign(t *testing.T) {
@@ -226,7 +262,7 @@ func TestService_Revoke_SessionRevokeFail_ReturnsError(t *testing.T) {
 	_, _ = roleRepo.AssignToUser(context.Background(), "usr-1", "admin")
 	_, _ = roleRepo.AssignToUser(context.Background(), "usr-2", "admin") // second admin to pass last-admin guard
 
-	svc := NewService(roleRepo, failingSessionRepo{}, slog.Default())
+	svc := mustNewService(t, roleRepo, failingSessionRepo{}, slog.Default())
 	err := svc.Revoke(context.Background(), "usr-1", "admin")
 	require.Error(t, err, "revoke must fail-closed when session revocation fails")
 	assert.Contains(t, err.Error(), "session revoke failed")
@@ -236,15 +272,14 @@ func TestService_Assign_SessionRevokeFail_ReturnsError(t *testing.T) {
 	roleRepo := mem.NewRoleRepository()
 	roleRepo.SeedRole(&domain.Role{ID: "admin", Name: "admin"})
 
-	svc := NewService(roleRepo, failingSessionRepo{}, slog.Default())
+	svc := mustNewService(t, roleRepo, failingSessionRepo{}, slog.Default())
 	err := svc.Assign(context.Background(), "usr-1", "admin")
 	require.Error(t, err, "assign must fail-closed when session revocation fails")
 	assert.Contains(t, err.Error(), "session revoke failed")
 }
 
-// TestService_DemoMode_* proves that in demo mode (no WithEmitter / WithTxManager),
-// sessionRepo.RevokeByUserID is still called exactly once per Assign and Revoke, preserving
-// backward-compatible dual-write behavior.
+// TestService_Assign_CallsSessionRevoke proves that sessionRepo.RevokeByUserID
+// is called exactly once per Assign, invalidating the user's active sessions.
 func TestService_DemoMode_Assign_CallsSessionRevoke(t *testing.T) {
 	tests := []struct {
 		name   string
@@ -268,8 +303,7 @@ func TestService_DemoMode_Assign_CallsSessionRevoke(t *testing.T) {
 			sess := &domain.Session{ID: "sess-" + tc.userID, UserID: tc.userID}
 			require.NoError(t, sessionRepo.Create(context.Background(), sess))
 
-			// No opts → demo mode.
-			svc := NewService(roleRepo, sessionRepo, slog.Default())
+			svc := mustNewService(t, roleRepo, sessionRepo, slog.Default())
 			require.NoError(t, svc.Assign(context.Background(), tc.userID, tc.roleID))
 
 			s, err := sessionRepo.GetByID(context.Background(), "sess-"+tc.userID)
@@ -302,7 +336,7 @@ func TestService_DemoMode_Revoke_CallsSessionRevoke(t *testing.T) {
 			sess := &domain.Session{ID: "sess-" + tc.userID, UserID: tc.userID}
 			require.NoError(t, sessionRepo.Create(context.Background(), sess))
 
-			svc := NewService(roleRepo, sessionRepo, slog.Default())
+			svc := mustNewService(t, roleRepo, sessionRepo, slog.Default())
 			require.NoError(t, svc.Revoke(context.Background(), tc.userID, tc.roleID))
 
 			s, err := sessionRepo.GetByID(context.Background(), "sess-"+tc.userID)

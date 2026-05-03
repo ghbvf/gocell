@@ -64,7 +64,7 @@ var contractStubIssuer TokenIssuer = &stubTokenIssuer{}
 func setupContractHandler(t testing.TB) http.Handler {
 	t.Helper()
 	svc, err := NewService(mem.NewUserRepository(), testutil.RealSessionRepo(t), newIdentityRefreshStore(), slog.Default(),
-		WithTokenIssuer(contractStubIssuer), WithClock(clock.Real()))
+		WithTokenIssuer(contractStubIssuer), WithClock(clock.Real()), WithTxManager(contractTxRunner{}))
 	if err != nil {
 		t.Fatalf("setupContractHandler: %v", err)
 	}
@@ -103,7 +103,7 @@ func setupContractHandlerWithIssuer(t testing.TB, issuer TokenIssuer) (http.Hand
 	t.Helper()
 	repo := mem.NewUserRepository()
 	svc, err := NewService(repo, testutil.RealSessionRepo(t), newIdentityRefreshStore(), slog.Default(),
-		WithTokenIssuer(issuer), WithClock(clock.Real()))
+		WithTokenIssuer(issuer), WithClock(clock.Real()), WithTxManager(contractTxRunner{}))
 	if err != nil {
 		t.Fatalf("setupContractHandlerWithIssuer: %v", err)
 	}

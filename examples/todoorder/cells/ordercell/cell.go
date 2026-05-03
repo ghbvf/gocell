@@ -111,10 +111,13 @@ func (c *OrderCell) Init(ctx context.Context, reg cell.Registry) error {
 	}
 
 	// order-create slice — unified outbox path, no publisher fork.
-	createSvc := ordercreate.NewService(c.repo, c.logger,
+	createSvc, err := ordercreate.NewService(c.repo, c.logger,
 		ordercreate.WithEmitter(c.emitter),
 		ordercreate.WithTxManager(c.txRunner),
 	)
+	if err != nil {
+		return fmt.Errorf("ordercreate: %w", err)
+	}
 	c.createHandler = ordercreate.NewHandler(createSvc)
 	c.AddSlice(cell.NewBaseSlice("ordercreate", "ordercell", cell.L2))
 
@@ -194,7 +197,6 @@ func (c *OrderCell) resolveOutboxDeps(mode cell.DurabilityMode) error {
 		return errcode.New(errcode.ErrCellMissingOutbox,
 			"ordercell demo mode requires outboxWriter and txRunner together; inject both explicitly")
 	}
-	c.txRunner = persistence.RunnerOrNoop(c.txRunner)
 	emitter, err := outbox.NewWriterEmitter(c.outboxWriter)
 	if err != nil {
 		return err

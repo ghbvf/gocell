@@ -448,6 +448,11 @@ func assertNoError(t *testing.T, err error) {
 	}
 }
 
+// assertEqual is a generic table-test helper. golangci-lint unparam currently
+// observes a single int32(1) call site, but the helper is positioned as the
+// reusable equality assertion for future table-driven tests across this file.
+//
+//nolint:unparam // helper kept generic for future int/string/struct callers
 func assertEqual(t *testing.T, want, got any, msgAndArgs ...any) {
 	t.Helper()
 	if !reflect.DeepEqual(want, got) {

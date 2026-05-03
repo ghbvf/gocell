@@ -16,12 +16,20 @@ import (
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/kernel/outbox"
-	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/query"
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/bootstrap"
 	"github.com/ghbvf/gocell/runtime/eventbus"
 )
+
+// demoTxRunner is a pass-through TxRunner used in demo mode. It executes fn
+// directly without a database transaction — no L2 atomicity guarantees.
+// Production assemblies inject a real TxRunner (e.g., postgres.TxManager).
+type demoTxRunner struct{}
+
+func (demoTxRunner) RunInTx(ctx context.Context, fn func(context.Context) error) error {
+	return fn(ctx)
+}
 
 // SSOBFFApp is the shared ssobff composition root used by main and tests.
 type SSOBFFApp struct {
@@ -156,7 +164,7 @@ func NewSSOBFFApp(opts ...SSOBFFAppOption) (*SSOBFFApp, error) {
 		accesscore.WithOutboxDeps(eb, nw),
 		accesscore.WithJWTIssuer(jwtIssuer),
 		accesscore.WithJWTVerifier(jwtVerifier),
-		accesscore.WithTxManager(persistence.NoopTxRunner{}),
+		accesscore.WithTxManager(demoTxRunner{}),
 		accesscore.WithLogger(cfg.logger),
 		accesscore.WithMetricsProvider(metrics.NopProvider{}),
 	)
@@ -172,7 +180,7 @@ func NewSSOBFFApp(opts ...SSOBFFAppOption) (*SSOBFFApp, error) {
 		auditcore.WithInMemoryDefaults(),
 		auditcore.WithOutboxDeps(eb, nw),
 		auditcore.WithHMACKey([]byte("ssobff-dev-hmac-key-32-bytes!!!!")),
-		auditcore.WithTxManager(persistence.NoopTxRunner{}),
+		auditcore.WithTxManager(demoTxRunner{}),
 		auditcore.WithCursorCodec(auditCursorCodec),
 		auditcore.WithLogger(cfg.logger),
 		auditcore.WithMetricsProvider(metrics.NopProvider{}),
@@ -186,7 +194,7 @@ func NewSSOBFFApp(opts ...SSOBFFAppOption) (*SSOBFFApp, error) {
 		configcore.WithClock(clock.Real()),
 		configcore.WithInMemoryDefaults(),
 		configcore.WithOutboxDeps(eb, nw),
-		configcore.WithTxManager(persistence.NoopTxRunner{}),
+		configcore.WithTxManager(demoTxRunner{}),
 		configcore.WithCursorCodec(configCursorCodec),
 		configcore.WithLogger(cfg.logger),
 		configcore.WithMetricsProvider(metrics.NopProvider{}),

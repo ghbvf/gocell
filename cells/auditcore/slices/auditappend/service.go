@@ -17,6 +17,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/persistence"
+	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
 // Topics lists the event topics consumed by audit-append. The handler is
@@ -53,7 +54,11 @@ func WithEmitter(e outbox.Emitter) Option {
 
 // WithTxManager sets the TxRunner for transactional guarantees (L2 atomicity).
 func WithTxManager(tx persistence.TxRunner) Option {
-	return func(s *Service) { s.txRunner = persistence.RunnerOrNoop(tx) }
+	return func(s *Service) {
+		if tx != nil {
+			s.txRunner = tx
+		}
+	}
 }
 
 // WithClock sets the clock used for audit entry timestamps.
@@ -76,46 +81,54 @@ type Service struct {
 	clock    clock.Clock
 }
 
-// NewService creates an audit-append Service.
+// NewService creates an audit-append Service. Returns an error if txRunner is nil.
+// TxRunner must be provided via WithTxManager; nil txRunner is rejected to
+// prevent silent loss of L2 atomicity guarantees.
 func NewService(
 	repo ports.AuditRepository,
 	hmacKey []byte,
 	logger *slog.Logger,
 	clk clock.Clock,
 	opts ...Option,
-) *Service {
+) (*Service, error) {
 	clock.MustHaveClock(clk, "auditappend.NewService")
 	s := &Service{
-		repo:     repo,
-		chain:    domain.NewHashChain(hmacKey),
-		txRunner: persistence.NoopTxRunner{},
-		emitter:  outbox.NewNoopEmitter(),
-		logger:   logger,
-		clock:    clk,
+		repo:    repo,
+		chain:   domain.NewHashChain(hmacKey),
+		emitter: outbox.NewNoopEmitter(),
+		logger:  logger,
+		clock:   clk,
 	}
 	for _, o := range opts {
 		o(s)
 	}
-	return s
+	if s.txRunner == nil {
+		return nil, errcode.New(errcode.ErrValidationFailed,
+			"auditappend: TxRunner required; use WithTxManager (demo callers must inject an explicit pass-through TxRunner)")
+	}
+	return s, nil
 }
 
 // HandleEvent processes an incoming event by appending it to the hash chain.
 //
 // Consumer: cg-auditcore-audit-append
-// Idempotency key: entry:{group}:{event-id}, TTL 24h
-// ACK timing: after hash chain append + repo persist
-// Retry: transient errors -> NACK+backoff / permanent errors -> dead letter.
-func (s *Service) HandleEvent(ctx context.Context, entry outbox.Entry) error {
+// Idempotency: Claimer (two-phase Claim/Commit/Release), TTL 24h.
+// Disposition: Ack on success / Requeue on transient / Reject on permanent.
+// DLX: broker-native via DispositionReject → Nack(requeue=false).
+func (s *Service) HandleEvent(ctx context.Context, entry outbox.Entry) outbox.HandleResult {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	// Reject invalid JSON payloads immediately — an unparseable payload can
 	// never be audited correctly and retrying will not fix it. Route to DLX
-	// via PermanentError so operators can inspect the dead letter.
+	// via DispositionReject so operators can inspect the dead letter.
 	if !json.Valid(entry.Payload) {
-		return outbox.NewPermanentError(fmt.Errorf(
-			"audit-append: invalid JSON payload event=%s type=%s",
-			entry.ID, entry.EventType))
+		return outbox.HandleResult{
+			Disposition: outbox.DispositionReject,
+			Err: outbox.NewPermanentError(fmt.Errorf(
+				"audit-append: invalid JSON payload event=%s type=%s",
+				entry.ID, entry.EventType)),
+		}
 	}
 
 	// Extract actorId from payload. PR-CFG-G1 G.2 made actorId required for all
@@ -149,6 +162,7 @@ func (s *Service) HandleEvent(ctx context.Context, entry outbox.Entry) error {
 			"validation regression suspected",
 			slog.String("event_id", entry.ID),
 			slog.String("event_type", entry.EventType))
+		// Fail-safe fallback — see ADR Q5 (at-least-once audit > actor traceability).
 		actorID = "system"
 	}
 
@@ -163,19 +177,19 @@ func (s *Service) HandleEvent(ctx context.Context, entry outbox.Entry) error {
 
 	// Persist + outbox write in a transaction for L2 atomicity.
 	persistFn := s.buildPersistFn(auditEntry, appendedEvent)
-	persistErr := s.runPersist(ctx, persistFn)
-	if persistErr != nil {
+	if persistErr := s.runPersist(ctx, persistFn); persistErr != nil {
 		s.logger.Error("audit-append: failed to persist entry",
 			slog.Any("error", persistErr),
 			slog.String("event_id", entry.ID),
 			slog.String("event_type", entry.EventType))
-		return persistErr
+		// Transient failure — ConsumerBase will back-off and retry.
+		return outbox.HandleResult{Disposition: outbox.DispositionRequeue, Err: persistErr}
 	}
 
 	s.logger.Info("audit entry appended",
 		slog.String("entry_id", auditEntry.ID),
 		slog.String("event_type", entry.EventType))
-	return nil
+	return outbox.HandleResult{Disposition: outbox.DispositionAck}
 }
 
 // buildPersistFn returns a transaction function that persists the audit entry

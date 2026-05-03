@@ -58,15 +58,7 @@ func handleEvent(ctx context.Context, entry outbox.Entry) outbox.HandleResult {
 | `DispositionReject` | 永久失败 | broker Nack(requeue=false) → DLX |
 
 - **零值 `HandleResult{}` 的 Disposition 是 invalid**（不等于 Ack），会被安全降级为 Requeue
-- `PermanentError` 包装的错误即使返回 Requeue 也会被 ConsumerBase 升级为 Reject
-
-## 旧 handler 迁移
-
-```go
-legacy := func(ctx context.Context, entry outbox.Entry) error { ... }
-handler := outbox.WrapLegacyHandler(legacy)
-// nil error → Ack, PermanentError → Reject, other error → Requeue
-```
+- `PermanentError` 是错误分类标签（用于 logging/metric 区分），**不触发 Disposition 升级**；handler 必须 explicit 返回 `DispositionReject` 才会路由到 DLX（029 #03 ADR Decision 4，与 `kernel/outbox/consumer_base.go::isPermanentRejection` 一致）
 
 ## 死信路由
 

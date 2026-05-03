@@ -100,14 +100,21 @@ func newE2EFixture() *e2eFixture {
 		clock.Real(), nil,
 	)
 
+	// Shared no-op TxRunner — both services fail-fast on nil after 029 #03
+	// ADR Decision 2 (persistence.NoopTxRunner deletion). The e2e flow has
+	// no DB, so a stub that just invokes fn(ctx) satisfies the L2 contract.
+	tx := &stubTxRunner{}
+
 	loginSvc := sessionlogin.MustNewService(
 		userRepo, sessionRepo, roleRepo, refreshStore, e2eIssuer, slog.Default(),
 		sessionlogin.WithClock(clock.Real()),
+		sessionlogin.WithTxManager(tx),
 	)
 
 	idmSvc, err := NewService(userRepo, sessionRepo, refreshStore, slog.Default(),
 		WithTokenIssuer(&e2eTokenIssuer{svc: loginSvc}),
 		WithClock(clock.Real()),
+		WithTxManager(tx),
 	)
 	if err != nil {
 		panic(err)
