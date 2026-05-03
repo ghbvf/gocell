@@ -22,9 +22,6 @@ const (
 	skipNoReceipt = "implementation does not support receipt"
 )
 
-// testEntryID is the canonical entry ID used in pure-function tests.
-const testEntryID = "test-1"
-
 // subscribeReadyTimeout caps how long waitForSubscription waits on the
 // subscriber's Ready() channel before falling through. It is a select-arm
 // timeout (not a sleep), used for adapters whose Setup is fire-and-forget

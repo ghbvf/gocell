@@ -28,7 +28,13 @@ func (rbacFakeTxRunner) RunInTx(ctx context.Context, fn func(context.Context) er
 var _ persistence.TxRunner = rbacFakeTxRunner{}
 
 // mustNewService creates a Service with a fake TxRunner, failing the test on error.
-func mustNewService(t testing.TB, roleRepo ports.RoleRepository, sessionRepo ports.SessionRepository, logger *slog.Logger, opts ...Option) *Service {
+func mustNewService(
+	t testing.TB,
+	roleRepo ports.RoleRepository,
+	sessionRepo ports.SessionRepository,
+	logger *slog.Logger,
+	opts ...Option,
+) *Service {
 	t.Helper()
 	opts = append([]Option{WithTxManager(rbacFakeTxRunner{})}, opts...)
 	svc, err := NewService(roleRepo, sessionRepo, logger, opts...)

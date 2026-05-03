@@ -36,7 +36,10 @@ func (s *stubTxRunner) RunInTx(ctx context.Context, fn func(context.Context) err
 func TestService_WithEmitter(t *testing.T) {
 	repo := mem.NewAuditRepository()
 	ow := &stubOutboxWriter{}
-	svc, err := NewService(repo, testHMACKey, slog.Default(), clock.Real(), WithClock(clock.Real()), WithEmitter(testoutbox.MustEmitter(t, ow)))
+	svc, err := NewService(repo, testHMACKey, slog.Default(), clock.Real(),
+		WithClock(clock.Real()),
+		WithEmitter(testoutbox.MustEmitter(t, ow)),
+		WithTxManager(directRunner{}))
 	require.NoError(t, err)
 
 	entry := outbox.Entry{

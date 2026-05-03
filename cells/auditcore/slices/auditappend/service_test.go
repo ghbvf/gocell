@@ -21,7 +21,7 @@ var testHMACKey = []byte("test-hmac-key-32bytes-long!!!!!!!")
 func newTestService(t testing.TB) (*Service, *mem.AuditRepository) {
 	t.Helper()
 	repo := mem.NewAuditRepository()
-	svc, err := NewService(repo, testHMACKey, slog.Default(), clock.Real(), WithClock(clock.Real()))
+	svc, err := NewService(repo, testHMACKey, slog.Default(), clock.Real(), WithClock(clock.Real()), WithTxManager(directRunner{}))
 	require.NoError(t, err)
 	return svc, repo
 }
@@ -42,10 +42,10 @@ func assertReject(t testing.TB, got outbox.HandleResult) {
 
 func TestService_HandleEvent(t *testing.T) {
 	tests := []struct {
-		name        string
-		entry       outbox.Entry
-		wantReject  bool
-		wantChain   int
+		name       string
+		entry      outbox.Entry
+		wantReject bool
+		wantChain  int
 	}{
 		{
 			name: "user created event",
@@ -122,7 +122,7 @@ func TestService_HandleEvent_ChainGrows(t *testing.T) {
 // error that must not be retried.
 func TestService_HandleEvent_InvalidPayload_Reject(t *testing.T) {
 	repo := mem.NewAuditRepository()
-	svc, err := NewService(repo, testHMACKey, slog.Default(), clock.Real(), WithClock(clock.Real()))
+	svc, err := NewService(repo, testHMACKey, slog.Default(), clock.Real(), WithClock(clock.Real()), WithTxManager(directRunner{}))
 	require.NoError(t, err)
 
 	entry := outbox.Entry{
@@ -155,7 +155,10 @@ func TestService_HandleEvent_PublishError_DoesNotFailAppend(t *testing.T) {
 		fp, outbox.DirectPublishFailOpen, metrics.NopProvider{}, clock.Real(), "auditcore",
 		outbox.WithLogger(slog.Default()))
 	require.NoError(t, err)
-	svc, err := NewService(repo, testHMACKey, slog.Default(), clock.Real(), WithClock(clock.Real()), WithEmitter(emitter))
+	svc, err := NewService(repo, testHMACKey, slog.Default(), clock.Real(),
+		WithClock(clock.Real()),
+		WithEmitter(emitter),
+		WithTxManager(directRunner{}))
 	require.NoError(t, err)
 
 	entry := outbox.Entry{

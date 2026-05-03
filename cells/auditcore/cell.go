@@ -210,6 +210,21 @@ func NewAuditCore(opts ...Option) *AuditCore {
 
 // Init constructs all 4 slices and registers routes, subscriptions, and health
 // probes into reg.
+// demoTxRunner is the explicit pass-through TxRunner installed at the cell
+// boundary when the composition root has not provided one (publisher-only
+// demo assemblies). After 029 #03 ADR Decision 2 deleted
+// persistence.RunnerOrNoop, slice constructors fail-fast on nil TxRunner;
+// this cell-level fallback keeps demo paths buildable without re-introducing
+// a kernel-wide noop helper.
+type demoTxRunner struct{}
+
+func (demoTxRunner) RunInTx(ctx context.Context, fn func(context.Context) error) error {
+	if fn == nil {
+		return nil
+	}
+	return fn(ctx)
+}
+
 func (c *AuditCore) Init(ctx context.Context, reg cell.Registry) error {
 	clock.MustHaveClock(c.clk, "auditcore.Init")
 	if err := c.resolveHMACKey(reg.Config()); err != nil {
@@ -223,6 +238,12 @@ func (c *AuditCore) Init(ctx context.Context, reg cell.Registry) error {
 
 	if err := c.resolveEmitter(durabilityMode); err != nil {
 		return err
+	}
+	// resolveEmitter enforces the (OutboxWriter, TxRunner) pairing invariant
+	// using the original c.txRunner; only after it succeeds do we install the
+	// demoTxRunner fallback so slice constructors see a non-nil TxRunner.
+	if c.txRunner == nil {
+		c.txRunner = demoTxRunner{}
 	}
 	if err := c.initSlices(); err != nil {
 		return err

@@ -35,7 +35,9 @@ func (s *stubTxRunner) RunInTx(_ context.Context, fn func(context.Context) error
 func TestService_WithEmitter(t *testing.T) {
 	repo := testutil.RealSessionRepo(t)
 	ow := &stubOutboxWriter{}
-	svc := MustNewService(repo, newLogoutRefreshStore(), slog.Default(), WithEmitter(testoutbox.MustEmitter(t, ow)), WithTxManager(noopTxRunner{}))
+	svc := MustNewService(repo, newLogoutRefreshStore(), slog.Default(),
+		WithEmitter(testoutbox.MustEmitter(t, ow)),
+		WithTxManager(noopTxRunner{}))
 
 	seedSession(repo, "sess-1", "usr-1")
 

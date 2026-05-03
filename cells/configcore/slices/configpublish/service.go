@@ -57,6 +57,8 @@ type Service struct {
 
 // NewService creates a config-publish Service.
 // clk must be non-nil; pass clock.Real() in production and clockmock.New() in tests.
+// TxRunner must be provided via WithTxManager; nil txRunner is rejected to
+// prevent silent loss of L1 atomicity guarantees on snapshot creation.
 func NewService(repo ports.ConfigRepository, logger *slog.Logger, clk clock.Clock, opts ...Option) (*Service, error) {
 	clock.MustHaveClock(clk, "configpublish.NewService")
 	s := &Service{
@@ -67,6 +69,10 @@ func NewService(repo ports.ConfigRepository, logger *slog.Logger, clk clock.Cloc
 	}
 	for _, o := range opts {
 		o(s)
+	}
+	if s.txRunner == nil {
+		return nil, errcode.New(errcode.ErrValidationFailed,
+			"configpublish: TxRunner required; use WithTxManager")
 	}
 	return s, nil
 }
@@ -207,13 +213,9 @@ func (s *Service) rollbackInTx(txCtx context.Context, key string, targetVersion 
 	return updated, nil
 }
 
-// runInTx wraps fn in a transaction when txRunner is set.
-// If txRunner is nil (publisher-only demo path), fn is called directly — L2
-// atomicity is not guaranteed, which is acceptable when using DirectEmitter
-// (no outbox write needs transactional framing).
+// runInTx wraps fn in a transaction. txRunner is guaranteed non-nil by the
+// constructor's fail-fast check, so this is a thin pass-through; demo mode
+// callers must inject an explicit pass-through TxRunner via WithTxManager.
 func (s *Service) runInTx(ctx context.Context, fn func(ctx context.Context) error) error {
-	if s.txRunner == nil {
-		return fn(ctx)
-	}
 	return s.txRunner.RunInTx(ctx, fn)
 }

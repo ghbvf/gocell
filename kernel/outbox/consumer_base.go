@@ -443,7 +443,7 @@ func requeueResult(err error, receipt idempotency.Receipt) HandleResult {
 // permanent rejection. After 029 #03 ADR Decision 4, ConsumerBase no longer
 // upgrades PermanentError-wrapped errors to Reject — handlers must be
 // explicit (return DispositionReject) to route to DLX. PermanentError
-// remains as a classification tag for logging/metrics, with no behavioural
+// remains as a classification tag for logging/metrics, with no behavioral
 // effect on Disposition.
 func isPermanentRejection(result HandleResult) bool {
 	return result.Disposition == DispositionReject

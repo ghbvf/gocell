@@ -30,6 +30,21 @@ var (
 	specEventConfigEntryDeleted  = wrapper.EventSpec("event.config.entry-deleted.v1", "amqp")
 )
 
+// demoTxRunner is the explicit pass-through TxRunner injected at the cell
+// boundary when the composition root has not provided one (typically demo or
+// publisher-only assemblies). After 029 #03 ADR Decision 2 deleted
+// persistence.RunnerOrNoop, slice constructors fail-fast on nil TxRunner;
+// this cell-level fallback keeps demo paths buildable without re-introducing
+// a kernel-wide noop helper.
+type demoTxRunner struct{}
+
+func (demoTxRunner) RunInTx(ctx context.Context, fn func(context.Context) error) error {
+	if fn == nil {
+		return nil
+	}
+	return fn(ctx)
+}
+
 // Init constructs all slices and registers routes, subscriptions, and health
 // probes into reg. Storage adapters are resolved by composition roots before
 // NewConfigCore receives its repository options.
@@ -58,6 +73,12 @@ func (c *ConfigCore) Init(ctx context.Context, reg cell.Registry) error {
 
 	if err := c.resolveEmitter(durabilityMode); err != nil {
 		return err
+	}
+	// resolveEmitter enforces the (OutboxWriter, TxRunner) pairing invariant
+	// using the original c.txRunner; only after it succeeds do we install the
+	// demoTxRunner fallback so slice constructors see a non-nil TxRunner.
+	if c.txRunner == nil {
+		c.txRunner = demoTxRunner{}
 	}
 	if err := c.ensureCursorCodec(reg); err != nil {
 		return err

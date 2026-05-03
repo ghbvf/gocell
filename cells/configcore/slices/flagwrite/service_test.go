@@ -61,18 +61,19 @@ func seedFlag(t *testing.T, repo *mem.FlagRepository, key string) {
 
 // --- Test: constructor ---
 
-// TestNewService_TxRunnerOptional verifies that NewService accepts both wired
-// and nil TxRunner. Atomicity is only guaranteed when a real TxRunner is provided;
-// nil is acceptable for demo/publisher-only paths where runInTx calls fn directly.
-func TestNewService_TxRunnerOptional(t *testing.T) {
+// TestNewService_TxRunnerRequired locks the constructor fail-fast contract
+// introduced in 029 #03 ADR Decision 2 (deletion of persistence.RunnerOrNoop).
+// Demo callers must inject an explicit pass-through TxRunner via WithTxManager
+// rather than relying on a silent nil fallback.
+func TestNewService_TxRunnerRequired(t *testing.T) {
 	t.Run("with_tx_runner_succeeds", func(t *testing.T) {
 		_, err := NewService(mem.NewFlagRepository(clock.Real()), slog.Default(), clock.Real(),
 			WithTxManager(&testutil.NoopTxRunner{}))
 		require.NoError(t, err)
 	})
-	t.Run("without_tx_runner_succeeds_demo_path", func(t *testing.T) {
+	t.Run("without_tx_runner_fails_fast", func(t *testing.T) {
 		_, err := NewService(mem.NewFlagRepository(clock.Real()), slog.Default(), clock.Real())
-		require.NoError(t, err)
+		require.Error(t, err)
 	})
 }
 

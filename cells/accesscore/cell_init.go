@@ -118,7 +118,29 @@ func (c *AccessCore) initValidate(durabilityMode cell.DurabilityMode) error {
 		c.logger.Warn("accesscore: using default cursor codec (demo mode)")
 	}
 	c.rbacRunMode = query.RunModeForDemo(durabilityMode == cell.DurabilityDemo)
+	// resolveEmitter (called above) enforces the (OutboxWriter, TxRunner)
+	// pairing invariant using the original c.txRunner; only after it
+	// succeeds do we install the demoTxRunner fallback so slice constructors
+	// see a non-nil TxRunner.
+	if c.txRunner == nil {
+		c.txRunner = demoTxRunner{}
+	}
 	return nil
+}
+
+// demoTxRunner is the explicit pass-through TxRunner installed at the cell
+// boundary when the composition root has not provided one (demo or
+// publisher-only assemblies). After 029 #03 ADR Decision 2 deleted
+// persistence.RunnerOrNoop, slice constructors fail-fast on nil TxRunner;
+// this cell-level fallback keeps demo paths buildable without re-introducing
+// a kernel-wide noop helper.
+type demoTxRunner struct{}
+
+func (demoTxRunner) RunInTx(ctx context.Context, fn func(context.Context) error) error {
+	if fn == nil {
+		return nil
+	}
+	return fn(ctx)
 }
 
 func (c *AccessCore) initRefreshGC() error {
@@ -143,8 +165,13 @@ func (c *AccessCore) initRefreshGC() error {
 	return nil
 }
 
-// initSlices constructs all 9 slice services and handlers.
-// Extracted from Init to reduce cognitive complexity.
+// initSlices constructs all 9 slice services and handlers in declaration
+// order. The function is a thin sequential composition root — breaking it
+// further would scatter the dependency-injection wiring across multiple
+// helpers and obscure the cross-slice ordering constraints (e.g. login must
+// be constructed before identity-manage to inject TokenIssuer).
+//
+//nolint:funlen // sequential cell composition root; readability over funlen budget
 func (c *AccessCore) initSlices() error {
 	// session-login must be constructed before identity-manage because
 	// ChangePassword injects loginSvc as the TokenIssuer.

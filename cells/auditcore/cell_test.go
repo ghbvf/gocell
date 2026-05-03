@@ -36,16 +36,9 @@ func (durableTxRunner) RunInTx(ctx context.Context, fn func(context.Context) err
 
 var _ persistence.TxRunner = durableTxRunner{}
 
-// demoTxRunner is a pass-through TxRunner for demo-mode tests. It provides
-// no transactional isolation — suitable only for in-memory test doubles.
-// Replaces the deleted persistence.NoopTxRunner.
-type demoTxRunner struct{}
-
-func (demoTxRunner) RunInTx(ctx context.Context, fn func(context.Context) error) error {
-	return fn(ctx)
-}
-
-var _ persistence.TxRunner = demoTxRunner{}
+// demoTxRunner moved to cells/auditcore/cell.go (cell-boundary fallback).
+// Tests reuse the production type so the cell-init nil fallback path is
+// exercised end-to-end rather than being shadowed by a parallel test stub.
 
 // mustNewCodec constructs a CursorCodec with the given key or fails the test.
 func mustNewCodec(t *testing.T, key []byte) *query.CursorCodec {

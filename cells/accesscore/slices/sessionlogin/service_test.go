@@ -243,7 +243,9 @@ func TestService_Login_DemoMode_ExplicitCleanup_NoOrphanSession(t *testing.T) {
 	roleRepo := mem.NewRoleRepository()
 	store := failingIssueRefreshStore{Store: newTestRefreshStore(), err: fmt.Errorf("refresh db down")}
 	// noopTxRunner (Noop()==true) triggers the isNoopTx cleanup path.
-	svc := MustNewService(userRepo, sessionRepo, roleRepo, store, testIssuer, slog.Default(), WithClock(clock.Real()), WithTxManager(noopTxRunner{}))
+	svc := MustNewService(userRepo, sessionRepo, roleRepo, store, testIssuer, slog.Default(),
+		WithClock(clock.Real()),
+		WithTxManager(noopTxRunner{}))
 	seedUser(userRepo, "refresh-down", "pass123")
 
 	pair, err := svc.Login(context.Background(), LoginInput{Username: "refresh-down", Password: "pass123"})
@@ -352,7 +354,9 @@ func TestService_IssueForUser_SessionPersisted(t *testing.T) {
 	userRepo := mem.NewUserRepository()
 	sessionRepo := testutil.RealSessionRepo(t)
 	roleRepo := mem.NewRoleRepository()
-	svc := MustNewService(userRepo, sessionRepo, roleRepo, newTestRefreshStore(), testIssuer, slog.Default(), WithClock(clock.Real()), WithTxManager(&stubTxRunner{}))
+	svc := MustNewService(userRepo, sessionRepo, roleRepo, newTestRefreshStore(), testIssuer, slog.Default(),
+		WithClock(clock.Real()),
+		WithTxManager(&stubTxRunner{}))
 	seedUser(userRepo, "issue-persist", "pass123")
 
 	u, err := userRepo.GetByUsername(context.Background(), "issue-persist")
@@ -377,7 +381,9 @@ func TestService_IssueForUser_RefreshStoreUnavailableReturnsInfraAndNoOrphanSess
 	roleRepo := mem.NewRoleRepository()
 	store := failingIssueRefreshStore{Store: newTestRefreshStore(), err: fmt.Errorf("refresh db down")}
 	// noopTxRunner (Noop()==true) triggers the isNoopTx cleanup path.
-	svc := MustNewService(userRepo, sessionRepo, roleRepo, store, testIssuer, slog.Default(), WithClock(clock.Real()), WithTxManager(noopTxRunner{}))
+	svc := MustNewService(userRepo, sessionRepo, roleRepo, store, testIssuer, slog.Default(),
+		WithClock(clock.Real()),
+		WithTxManager(noopTxRunner{}))
 	seedUser(userRepo, "issue-refresh-down", "pass123")
 	u, err := userRepo.GetByUsername(context.Background(), "issue-refresh-down")
 	require.NoError(t, err)
@@ -502,7 +508,9 @@ func TestService_IssueForUser_RoleFetchFailure_AbortsIssue(t *testing.T) {
 	u, err := userRepo.GetByUsername(context.Background(), "issue-outage")
 	require.NoError(t, err)
 
-	svc := MustNewService(userRepo, sessionRepo, roleRepo, newTestRefreshStore(), testIssuer, slog.Default(), WithClock(clock.Real()), WithTxManager(&stubTxRunner{}))
+	svc := MustNewService(userRepo, sessionRepo, roleRepo, newTestRefreshStore(), testIssuer, slog.Default(),
+		WithClock(clock.Real()),
+		WithTxManager(&stubTxRunner{}))
 
 	pair, err := svc.IssueForUser(context.Background(), u.ID)
 	require.Error(t, err, "IssueForUser must fail when role fetch fails")
@@ -619,7 +627,9 @@ func TestCleanupIssuedSession_NotFound_LogsDebug(t *testing.T) {
 	store := failingIssueRefreshStore{Store: newTestRefreshStore(), err: fmt.Errorf("refresh db down")}
 	// noopTxRunner (Noop()==true) triggers the isNoopTx cleanup path, exercising
 	// the not-found branch in cleanupIssuedSession.
-	svc := MustNewService(userRepo, notFoundSessionRepo, roleRepo, store, testIssuer, slog.Default(), WithClock(clock.Real()), WithTxManager(noopTxRunner{}))
+	svc := MustNewService(userRepo, notFoundSessionRepo, roleRepo, store, testIssuer, slog.Default(),
+		WithClock(clock.Real()),
+		WithTxManager(noopTxRunner{}))
 	seedUser(userRepo, "cleanup-not-found", "pass123")
 
 	// Should not panic or return an unexpected error — the original refresh issue error propagates.

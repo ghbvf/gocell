@@ -458,7 +458,7 @@ func TestConsumerBase_Wrap_ExplicitReject_NoRetry(t *testing.T) {
 // PermanentError-wrapped Err, ConsumerBase MUST keep the Disposition as
 // Requeue and exhaust the retry budget — it does not implicitly upgrade to
 // Reject. Handlers must be explicit about routing to DLX by returning
-// DispositionReject themselves. This removes the legacy fallback behaviour
+// DispositionReject themselves. This removes the legacy fallback behavior
 // originally needed by WrapLegacyHandler (now deleted).
 func TestConsumerBase_Wrap_WrappedPermanentErrorInRequeue_NotEscalated(t *testing.T) {
 	receipt := &fakeReceipt{}

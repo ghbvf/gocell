@@ -48,7 +48,7 @@ func (s *stubTxRunner) RunInTx(_ context.Context, fn func(context.Context) error
 }
 
 // noopTxRunner is a pass-through TxRunner that implements cell.Nooper (Noop()==true),
-// signalling to the service that no real transaction is available (demo/test mode).
+// signaling to the service that no real transaction is available (demo/test mode).
 // The service uses isNoopTx to decide whether to run explicit session cleanup on failure.
 type noopTxRunner struct{}
 
@@ -74,7 +74,10 @@ func TestService_WithEmitter(t *testing.T) {
 	userRepo := mem.NewUserRepository()
 	ow := &stubOutboxWriter{}
 	svc := MustNewService(userRepo, testutil.RealSessionRepo(t), mem.NewRoleRepository(),
-		newOutboxRefreshStore(), testIssuer, slog.Default(), WithEmitter(testoutbox.MustEmitter(t, ow)), WithTxManager(&stubTxRunner{}), WithClock(clock.Real()))
+		newOutboxRefreshStore(), testIssuer, slog.Default(),
+		WithEmitter(testoutbox.MustEmitter(t, ow)),
+		WithTxManager(&stubTxRunner{}),
+		WithClock(clock.Real()))
 
 	hash, _ := bcrypt.GenerateFromPassword(testCredential, bcrypt.MinCost)
 	seedUserDirect(userRepo, "alice", string(hash))

@@ -39,13 +39,6 @@ func requireAck(t *testing.T, result outbox.HandleResult) {
 	assert.NoError(t, result.Err)
 }
 
-// requireReject asserts that the handler result is a permanent rejection.
-func requireReject(t *testing.T, result outbox.HandleResult) {
-	t.Helper()
-	assert.Equal(t, outbox.DispositionReject, result.Disposition)
-	assert.Error(t, result.Err)
-}
-
 type recordingConfigEventCollector struct {
 	records []configEventRecord
 }

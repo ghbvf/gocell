@@ -23,7 +23,7 @@ type fakeWriter struct{}
 func (fakeWriter) Write(_ context.Context, _ outbox.Entry) error { return nil }
 
 // noopTxRunner is a TxRunner that runs fn without a transaction. It implements
-// cell.Nooper so ResolveEmitter can recognise it as a non-durable test stub.
+// cell.Nooper so ResolveEmitter can recognize it as a non-durable test stub.
 type noopTxRunner struct{}
 
 func (noopTxRunner) RunInTx(_ context.Context, fn func(context.Context) error) error {

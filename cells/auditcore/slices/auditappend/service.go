@@ -17,6 +17,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/persistence"
+	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
 // Topics lists the event topics consumed by audit-append. The handler is
@@ -98,17 +99,16 @@ func NewService(
 		o(s)
 	}
 	if s.txRunner == nil {
-		// Publisher-only demo path: cell uses direct-publish emitter without a
-		// transactional outbox. Provide a pass-through runner so the persist
-		// fn executes without a database transaction (no L2 atomicity).
-		s.txRunner = directRunner{}
+		return nil, errcode.New(errcode.ErrValidationFailed,
+			"auditappend: TxRunner required; use WithTxManager (demo callers must inject an explicit pass-through TxRunner)")
 	}
 	return s, nil
 }
 
-// directRunner executes fn directly in the calling goroutine, with no
-// transaction wrapper. Used when no TxRunner is injected (publisher-only
-// demo mode). L2 atomicity is not guaranteed — suitable only for demo/test.
+// directRunner is retained as the canonical pass-through TxRunner that demo
+// callers can inject via WithTxManager when running without real DB-level
+// transactions. Constructor fail-fast ensures it (or a real TxRunner) is
+// always present at runtime.
 type directRunner struct{}
 
 func (directRunner) RunInTx(ctx context.Context, fn func(context.Context) error) error {
@@ -118,9 +118,9 @@ func (directRunner) RunInTx(ctx context.Context, fn func(context.Context) error)
 // HandleEvent processes an incoming event by appending it to the hash chain.
 //
 // Consumer: cg-auditcore-audit-append
-// Idempotency: Claimer (two-phase Claim/Commit/Release), TTL 24h
-// Disposition: Ack on success / Requeue on transient / Reject on permanent
-// DLX: broker-native via DispositionReject → Nack(requeue=false)
+// Idempotency: Claimer (two-phase Claim/Commit/Release), TTL 24h.
+// Disposition: Ack on success / Requeue on transient / Reject on permanent.
+// DLX: broker-native via DispositionReject → Nack(requeue=false).
 func (s *Service) HandleEvent(ctx context.Context, entry outbox.Entry) outbox.HandleResult {
 	s.mu.Lock()
 	defer s.mu.Unlock()

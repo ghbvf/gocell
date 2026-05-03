@@ -151,9 +151,17 @@ func checkSliceServiceOutboxFile(root, modPath, path string) ([]outboxServiceVio
 		}
 	}
 
+	// Track the enclosing FuncDecl while walking so OUTBOX-SERVICE-01 can
+	// allow constructor-level fail-fast validation (NewService) while still
+	// rejecting runtime-method silent fallback. After 029 #03 ADR Decision 2
+	// removed persistence.RunnerOrNoop, constructors fail-fast on nil
+	// TxRunner (returning *Service, error) is the explicit replacement for
+	// the deleted helper; method-internal fallback remains forbidden.
+	var enclosing *ast.FuncDecl
 	ast.Inspect(file, func(n ast.Node) bool {
 		switch expr := n.(type) {
 		case *ast.FuncDecl:
+			enclosing = expr
 			if isWithOutboxWriterFunc(expr) {
 				violations = append(violations, outboxServiceViolation{
 					Rule:    outboxServiceRuleWriterAdapter,
@@ -171,12 +179,13 @@ func checkSliceServiceOutboxFile(root, modPath, path string) ([]outboxServiceVio
 				})
 			}
 		case *ast.BinaryExpr:
-			if isTxRunnerNilComparison(expr) {
+			if isTxRunnerNilComparison(expr) && !isConstructorFailFast(enclosing) {
 				violations = append(violations, outboxServiceViolation{
-					Rule:    outboxServiceRuleTxRunnerNil,
-					File:    rel,
-					Line:    fset.Position(expr.Pos()).Line,
-					Message: "service layer must not branch on txRunner nil mode",
+					Rule: outboxServiceRuleTxRunnerNil,
+					File: rel,
+					Line: fset.Position(expr.Pos()).Line,
+					Message: "service layer must not branch on txRunner nil mode" +
+						" (allowed only in NewService constructor as fail-fast validation returning error)",
 				})
 			}
 		case *ast.CallExpr:
@@ -252,6 +261,27 @@ func isTxRunnerNilComparison(expr *ast.BinaryExpr) bool {
 	}
 	return (isTxRunnerExpr(expr.X) && isNilIdent(expr.Y)) ||
 		(isNilIdent(expr.X) && isTxRunnerExpr(expr.Y))
+}
+
+// isConstructorFailFast reports whether fn is a service constructor
+// (NewService) returning (*Service, error). After 029 #03 ADR Decision 2
+// constructors are allowed to fail-fast on nil TxRunner because that is the
+// explicit, error-surfacing replacement for the deleted persistence.RunnerOrNoop
+// helper. Method-level nil fallback (e.g. runInTx that skips tx when nil)
+// remains forbidden because it silently degrades to non-transactional mode.
+func isConstructorFailFast(fn *ast.FuncDecl) bool {
+	if fn == nil || fn.Recv != nil { // method (has receiver) — not a constructor
+		return false
+	}
+	if !strings.HasPrefix(fn.Name.Name, "New") {
+		return false
+	}
+	if fn.Type == nil || fn.Type.Results == nil || len(fn.Type.Results.List) != 2 {
+		return false
+	}
+	last := fn.Type.Results.List[len(fn.Type.Results.List)-1]
+	id, ok := last.Type.(*ast.Ident)
+	return ok && id.Name == "error"
 }
 
 func isTxRunnerExpr(expr ast.Expr) bool {

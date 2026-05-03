@@ -46,9 +46,8 @@ type Service struct {
 
 // NewService creates a flag-write Service.
 // clk must be non-nil; pass clock.Real() in production and clockmock.New() in tests.
-// tx should be non-nil for production use (L1 atomicity). When nil, runInTx
-// calls fn directly without transactional framing (acceptable for demo paths
-// where the cell operates without outbox infrastructure).
+// TxRunner must be provided via WithTxManager; nil txRunner is rejected to
+// prevent silent loss of L1 atomicity guarantees on flag writes.
 func NewService(repo ports.FlagRepository, logger *slog.Logger, clk clock.Clock, opts ...Option) (*Service, error) {
 	clock.MustHaveClock(clk, "flagwrite.NewService")
 	s := &Service{
@@ -58,6 +57,10 @@ func NewService(repo ports.FlagRepository, logger *slog.Logger, clk clock.Clock,
 	}
 	for _, o := range opts {
 		o(s)
+	}
+	if s.txRunner == nil {
+		return nil, errcode.New(errcode.ErrValidationFailed,
+			"flagwrite: TxRunner required; use WithTxManager")
 	}
 	return s, nil
 }
@@ -192,12 +195,9 @@ func (s *Service) Delete(ctx context.Context, key string) error {
 	return nil
 }
 
-// runInTx wraps fn in a transaction when txRunner is set.
-// If txRunner is nil (demo path without outbox infrastructure), fn is called
-// directly — L1 atomicity is not guaranteed.
+// runInTx wraps fn in a transaction. txRunner is guaranteed non-nil by the
+// constructor's fail-fast check; demo callers must inject an explicit
+// pass-through TxRunner via WithTxManager.
 func (s *Service) runInTx(ctx context.Context, fn func(ctx context.Context) error) error {
-	if s.txRunner == nil {
-		return fn(ctx)
-	}
 	return s.txRunner.RunInTx(ctx, fn)
 }

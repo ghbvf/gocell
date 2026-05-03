@@ -1976,8 +1976,8 @@ func TestSubscriber_Subscribe_ClosedDuringReconnect(t *testing.T) {
 	go func() {
 		subscribeDone <- sub.Subscribe(context.Background(), outbox.Subscription{Topic: "test.topic"},
 			func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
-			return outbox.HandleResult{Disposition: outbox.DispositionAck}
-		})
+				return outbox.HandleResult{Disposition: outbox.DispositionAck}
+			})
 	}()
 
 	// Let the subscriber enter the reconnect hot-loop. The loop iterates in
@@ -2764,7 +2764,7 @@ func TestConsumerBase_WrapWithClaimer_ExplicitReject_FirstRoundNoRetry(t *testin
 
 // Removed: TestConsumerBase_WrapWithClaimer_WrappedPermanentError_FirstRoundReject
 // After 029 #03 ADR Decision 4, PermanentError wrapped in Requeue no longer
-// short-circuits to Reject. The equivalent retry-budget-exhaust behaviour is
+// short-circuits to Reject. The equivalent retry-budget-exhaust behavior is
 // locked by kernel/outbox.TestConsumerBase_Wrap_WrappedPermanentErrorInRequeue_NotEscalated;
 // duplicating that assertion at the adapter layer adds no coverage.
 
