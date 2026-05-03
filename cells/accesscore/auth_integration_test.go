@@ -331,6 +331,7 @@ func TestAuthIntegration_RoleRevokeInvalidatesSession(t *testing.T) {
 	res := consumer.HandleRoleChanged(ctx, stubWriter.entries[0])
 	require.Equal(t, outbox.DispositionAck, res.Disposition,
 		"role-revoke event must be Acked; got %v err=%v", res.Disposition, res.Err)
+	assert.NoError(t, res.Err, "role-revoke Ack must carry nil Err")
 
 	// Bob's session must now be revoked.
 	sess, err := sessionRepo.GetByID(ctx, "sess-bob")

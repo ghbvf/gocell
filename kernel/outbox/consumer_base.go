@@ -534,6 +534,7 @@ func (cb *ConsumerBase) retryLoop(
 		slog.String(logKeyTopic, topic),
 		slog.String(logKeyConsumerGroup, consumerGroup),
 		slog.Int("retry_count", cb.config.RetryCount),
+		slog.String("process_reason", "retry_exhausted"),
 		slog.Any("error", lastResult.Err))
 	return HandleResult{
 		Disposition:   DispositionReject,

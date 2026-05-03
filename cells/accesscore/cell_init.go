@@ -3,6 +3,7 @@ package accesscore
 import (
 	"context"
 	"fmt"
+	"log/slog"
 
 	"github.com/google/uuid"
 
@@ -123,6 +124,8 @@ func (c *AccessCore) initValidate(durabilityMode cell.DurabilityMode) error {
 	// succeeds do we install the demoTxRunner fallback so slice constructors
 	// see a non-nil TxRunner.
 	if c.txRunner == nil {
+		c.logger.Warn("accesscore: using cell.DemoTxRunner (demo mode)",
+			slog.String("durability_mode", durabilityMode.String()))
 		c.txRunner = cell.DemoTxRunner{}
 	}
 	// Guard: DemoTxRunner implements Nooper — reject it in DurabilityDurable mode

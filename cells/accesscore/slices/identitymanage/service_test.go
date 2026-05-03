@@ -59,6 +59,20 @@ func newTestService(t testing.TB) *Service {
 	return svc
 }
 
+// TestNewService_TxRunnerRequired asserts that NewService fails fast with
+// errcode.ErrValidationFailed when WithTxManager is omitted (nil TxRunner).
+// Symmetric with the other 10 outbox-bound services per OUTBOX-SERVICE-01.
+func TestNewService_TxRunnerRequired(t *testing.T) {
+	svc, err := NewService(mem.NewUserRepository(), testutil.RealSessionRepo(t), newIdentityRefreshStore(), slog.Default(),
+		WithTokenIssuer(minimalStubIssuer), WithClock(clock.Real()) /* no WithTxManager */)
+	require.Error(t, err)
+	assert.Nil(t, svc)
+	var ec *errcode.Error
+	require.ErrorAs(t, err, &ec)
+	assert.Equal(t, errcode.ErrValidationFailed, ec.Code)
+	assert.Contains(t, err.Error(), "TxRunner required")
+}
+
 // TestNewService_RequiresTokenIssuer asserts that NewService returns a non-nil
 // error when WithTokenIssuer is omitted or nil, enforcing fail-fast wiring.
 func TestNewService_RequiresTokenIssuer(t *testing.T) {

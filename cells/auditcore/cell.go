@@ -226,6 +226,8 @@ func (c *AuditCore) Init(ctx context.Context, reg cell.Registry) error {
 	// using the original c.txRunner; only after it succeeds do we install the
 	// demoTxRunner fallback so slice constructors see a non-nil TxRunner.
 	if c.txRunner == nil {
+		c.logger.Warn("auditcore: using cell.DemoTxRunner (demo mode)",
+			slog.String("durability_mode", durabilityMode.String()))
 		c.txRunner = cell.DemoTxRunner{}
 	}
 	// Guard: DemoTxRunner implements Nooper — reject it in DurabilityDurable mode
