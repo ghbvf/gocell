@@ -441,9 +441,9 @@ func buildConfigCorePGStorage(
 }
 
 // devtoolsOption builds the WithDevtoolsCatalog bootstrap option for the catalog
-// endpoint. Best-effort metadata parse: logs at Warn and degrades gracefully when
-// GOCELL_PROJECT_ROOT is not set or doesn't expose a valid project tree. The endpoint
-// is silently absent when pm is nil — Bootstrap treats nil pm as "disabled".
+// endpoint. Best-effort metadata parse: logs and degrades gracefully when
+// GOCELL_PROJECT_ROOT is not set or doesn't expose a valid project tree. The
+// endpoint is absent when pm is nil — Bootstrap treats nil pm as "disabled".
 //
 // generatedPackageGraph is the build-time generated package dep graph from
 // catalog_gen.go (produced by `go generate ./cmd/corebundle/`). When nil (e.g.
@@ -451,6 +451,7 @@ func buildConfigCorePGStorage(
 func devtoolsOption(shared *SharedDeps) bootstrap.Option {
 	root := shared.ProjectRoot
 	if root == "" {
+		slog.Info("devtools: GOCELL_PROJECT_ROOT unset; catalog endpoint disabled")
 		return bootstrap.WithDevtoolsCatalog(nil, "", nil)
 	}
 	pm, err := metadata.NewParser(root).Parse()
@@ -460,6 +461,7 @@ func devtoolsOption(shared *SharedDeps) bootstrap.Option {
 			slog.Any("error", err))
 		return bootstrap.WithDevtoolsCatalog(nil, "", nil)
 	}
+	slog.Info("devtools: catalog endpoint enabled", slog.String("root", root))
 	return bootstrap.WithDevtoolsCatalog(pm, root, generatedPackageGraph)
 }
 

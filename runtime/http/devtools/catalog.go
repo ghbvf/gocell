@@ -4,13 +4,13 @@ import (
 	"context"
 	"log/slog"
 	"net/http"
-	"strings"
 
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/clock"
 	kerneldepgraph "github.com/ghbvf/gocell/kernel/depgraph"
 	"github.com/ghbvf/gocell/kernel/metadata"
 	"github.com/ghbvf/gocell/kernel/wrapper"
+	"github.com/ghbvf/gocell/pkg/csvparam"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/httputil"
 	"github.com/ghbvf/gocell/runtime/auth"
@@ -40,21 +40,14 @@ var specCatalog = wrapper.ContractSpec{
 	Path:      "/devtools/catalog",
 }
 
-// validKinds is the whitelist for the ?kinds= query parameter.
-// Derived from metadata.AllKinds — single source of truth.
-var validKinds = sliceToSet(metadata.AllKinds)
+// validIncludeTokens is the set of accepted ?include= tokens.
+var validIncludeTokens = []string{"cellDeps", "packageDeps", "relations", "statusBoard"}
 
-// validLayers is the whitelist for the ?layers= query parameter.
-// Derived from metadata.AllLayers — single source of truth.
-var validLayers = sliceToSet(metadata.AllLayers)
-
-// sliceToSet converts a string slice to a map[string]bool for O(1) lookup.
-func sliceToSet(vals []string) map[string]bool {
-	m := make(map[string]bool, len(vals))
-	for _, v := range vals {
-		m[v] = true
-	}
-	return m
+var includeTokenToMask = map[string]metadata.IncludeMask{
+	"relations":   metadata.IncludeRelations,
+	"statusBoard": metadata.IncludeStatusBoard,
+	"cellDeps":    metadata.IncludeCellDeps,
+	"packageDeps": metadata.IncludePackageDeps,
 }
 
 // Handler serves the devtools catalog HTTP endpoint.
@@ -166,17 +159,19 @@ func buildExportOptions(h *Handler, filter metadata.Filter) metadata.ExportOptio
 func parseQuery(ctx context.Context, w http.ResponseWriter, r *http.Request) (metadata.Filter, string, bool) {
 	q := r.URL.Query()
 
-	kinds, ok := parseCSVWhitelist(ctx, w, q.Get("kinds"), validKinds, "kinds")
-	if !ok {
+	kinds, err := csvparam.ParseAllowed(q.Get("kinds"), metadata.AllKinds, "kinds")
+	if err != nil {
+		writeValidationError(ctx, w, err.Error())
 		return metadata.Filter{}, "", false
 	}
 
-	layers, ok := parseCSVWhitelist(ctx, w, q.Get("layers"), validLayers, "layers")
-	if !ok {
+	layers, err := csvparam.ParseAllowed(q.Get("layers"), metadata.AllLayers, "layers")
+	if err != nil {
+		writeValidationError(ctx, w, err.Error())
 		return metadata.Filter{}, "", false
 	}
 
-	cells := parseCells(q.Get("cells"))
+	cells := csvparam.Parse(q.Get("cells"))
 
 	// Distinguish "omitted" (?include absent → IncludeAll) from "explicit empty"
 	// (?include= → 0). q.Has returns true only when the key appears in the query
@@ -196,9 +191,7 @@ func parseQuery(ctx context.Context, w http.ResponseWriter, r *http.Request) (me
 		format = "json"
 	}
 	if format != "json" && format != "yaml" {
-		httputil.WritePublicError(ctx, w, http.StatusBadRequest,
-			string(errcode.ErrValidationFailed),
-			"unknown format value: "+format)
+		writeValidationError(ctx, w, "invalid format parameter")
 		return metadata.Filter{}, "", false
 	}
 
@@ -210,58 +203,6 @@ func parseQuery(ctx context.Context, w http.ResponseWriter, r *http.Request) (me
 	}, format, true
 }
 
-// parseCSVWhitelist splits a comma-separated string, trims whitespace,
-// deduplicates, and validates each token against allowedSet.
-func parseCSVWhitelist(
-	ctx context.Context,
-	w http.ResponseWriter,
-	raw string,
-	allowedSet map[string]bool,
-	paramName string,
-) ([]string, bool) {
-	if raw == "" {
-		return nil, true
-	}
-	parts := strings.Split(raw, ",")
-	seen := make(map[string]bool, len(parts))
-	result := make([]string, 0, len(parts))
-	for _, p := range parts {
-		v := strings.TrimSpace(p)
-		if v == "" {
-			continue
-		}
-		if !allowedSet[v] {
-			httputil.WritePublicError(ctx, w, http.StatusBadRequest,
-				string(errcode.ErrValidationFailed),
-				"unknown "+paramName+" value: "+v)
-			return nil, false
-		}
-		if !seen[v] {
-			seen[v] = true
-			result = append(result, v)
-		}
-	}
-	return result, true
-}
-
-// parseCells splits a comma-separated cell ID list, deduplicating.
-func parseCells(raw string) []string {
-	if raw == "" {
-		return nil
-	}
-	parts := strings.Split(raw, ",")
-	result := make([]string, 0, len(parts))
-	seen := make(map[string]bool, len(parts))
-	for _, p := range parts {
-		v := strings.TrimSpace(p)
-		if v != "" && !seen[v] {
-			seen[v] = true
-			result = append(result, v)
-		}
-	}
-	return result
-}
-
 // parseInclude parses the ?include= parameter into an IncludeMask.
 // When present is false (parameter absent), returns IncludeAll.
 // When present is true and raw is empty, returns 0 (no optional blocks).
@@ -270,21 +211,19 @@ func parseInclude(ctx context.Context, w http.ResponseWriter, raw string, presen
 	if !present {
 		return metadata.IncludeAll, true
 	}
-	if raw == "" {
-		return 0, true
+	tokens, err := csvparam.ParseAllowed(raw, validIncludeTokens, "include")
+	if err != nil {
+		writeValidationError(ctx, w, err.Error())
+		return 0, false
 	}
-	parts := strings.Split(raw, ",")
 	var mask metadata.IncludeMask
-	for _, p := range parts {
-		v := strings.TrimSpace(p)
-		if v == "" {
-			continue
-		}
-		bit, ok := includeBit(v)
+	for _, token := range tokens {
+		bit, ok := includeTokenToMask[token]
 		if !ok {
-			httputil.WritePublicError(ctx, w, http.StatusBadRequest,
-				string(errcode.ErrValidationFailed),
-				"unknown include value: "+v)
+			writeValidationError(ctx, w, csvparam.UnknownTokenError{
+				Param:   "include",
+				Allowed: validIncludeTokens,
+			}.Error())
 			return 0, false
 		}
 		mask |= bit
@@ -292,26 +231,15 @@ func parseInclude(ctx context.Context, w http.ResponseWriter, raw string, presen
 	return mask, true
 }
 
-// includeBit maps an include token name to its IncludeMask bit.
-func includeBit(s string) (metadata.IncludeMask, bool) {
-	switch s {
-	case "relations":
-		return metadata.IncludeRelations, true
-	case "statusBoard":
-		return metadata.IncludeStatusBoard, true
-	case "cellDeps":
-		return metadata.IncludeCellDeps, true
-	case "packageDeps":
-		return metadata.IncludePackageDeps, true
-	default:
-		return 0, false
-	}
+func writeValidationError(ctx context.Context, w http.ResponseWriter, message string) {
+	httputil.WritePublicError(ctx, w, http.StatusBadRequest,
+		string(errcode.ErrValidationFailed), message)
 }
 
 // contentType returns the Content-Type header value for the given format.
 func contentType(format string) string {
 	if format == "yaml" {
-		return "application/yaml; charset=utf-8"
+		return "application/yaml"
 	}
 	return "application/json; charset=utf-8"
 }

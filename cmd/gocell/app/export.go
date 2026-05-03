@@ -6,12 +6,12 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/governance"
 	"github.com/ghbvf/gocell/kernel/metadata"
+	"github.com/ghbvf/gocell/pkg/csvparam"
 	"github.com/ghbvf/gocell/tools/depgraph"
 )
 
@@ -169,16 +169,16 @@ func loadProjectMeta(root string) (*metadata.ProjectMeta, error) {
 // buildFilter constructs a metadata.Filter from comma-separated CLI arguments.
 // Returns an error if any token is unrecognized.
 func buildFilter(kinds, layers, cells, include string) (metadata.Filter, error) {
-	parsedKinds, err := parseTokens(kinds, validKinds, "kinds")
+	parsedKinds, err := csvparam.ParseAllowed(kinds, validKinds, "kinds")
 	if err != nil {
-		return metadata.Filter{}, err
+		return metadata.Filter{}, fmt.Errorf("export: %w", err)
 	}
 
-	parsedLayers, err := parseTokens(layers, validLayersList, "layers")
+	parsedLayers, err := csvparam.ParseAllowed(layers, validLayersList, "layers")
 	if err != nil {
-		return metadata.Filter{}, err
+		return metadata.Filter{}, fmt.Errorf("export: %w", err)
 	}
-	parsedCells := parseTokensOpen(cells)
+	parsedCells := csvparam.Parse(cells)
 
 	mask, err := parseInclude(include)
 	if err != nil {
@@ -193,58 +193,6 @@ func buildFilter(kinds, layers, cells, include string) (metadata.Filter, error) 
 	}, nil
 }
 
-// parseTokens splits a comma-separated string, trims whitespace, deduplicates,
-// and validates each token against the allowed set. Returns nil (not empty slice)
-// when s is empty (means "all"). Returns a sorted slice.
-func parseTokens(s string, allowed []string, flagName string) ([]string, error) {
-	if strings.TrimSpace(s) == "" {
-		return nil, nil
-	}
-	allowedSet := make(map[string]bool, len(allowed))
-	for _, v := range allowed {
-		allowedSet[v] = true
-	}
-	seen := make(map[string]bool)
-	var result []string
-	for _, tok := range strings.Split(s, ",") {
-		tok = strings.TrimSpace(tok)
-		if tok == "" {
-			continue
-		}
-		if !allowedSet[tok] {
-			return nil, fmt.Errorf("export: unknown %s %q (valid: %s)", flagName, tok, strings.Join(allowed, ", "))
-		}
-		if !seen[tok] {
-			seen[tok] = true
-			result = append(result, tok)
-		}
-	}
-	sort.Strings(result)
-	return result, nil
-}
-
-// parseTokensOpen splits a comma-separated string without whitelist validation.
-// Used for --layers and --cells which are open-ended sets.
-func parseTokensOpen(s string) []string {
-	if strings.TrimSpace(s) == "" {
-		return nil
-	}
-	seen := make(map[string]bool)
-	var result []string
-	for _, tok := range strings.Split(s, ",") {
-		tok = strings.TrimSpace(tok)
-		if tok == "" {
-			continue
-		}
-		if !seen[tok] {
-			seen[tok] = true
-			result = append(result, tok)
-		}
-	}
-	sort.Strings(result)
-	return result
-}
-
 // includeTokenToMask maps the wire token name to its IncludeMask bit.
 var includeTokenToMask = map[string]metadata.IncludeMask{
 	"cellDeps":    metadata.IncludeCellDeps,
@@ -256,19 +204,18 @@ var includeTokenToMask = map[string]metadata.IncludeMask{
 // parseInclude converts a comma-separated include token string to an IncludeMask.
 // An empty string returns zero (nothing included). Unknown tokens return an error.
 func parseInclude(s string) (metadata.IncludeMask, error) {
-	if strings.TrimSpace(s) == "" {
-		return 0, nil
+	tokens, err := csvparam.ParseAllowed(s, validIncludeTokens, "include")
+	if err != nil {
+		return 0, fmt.Errorf("export: %w", err)
 	}
 	var mask metadata.IncludeMask
-	for _, tok := range strings.Split(s, ",") {
-		tok = strings.TrimSpace(tok)
-		if tok == "" {
-			continue
-		}
+	for _, tok := range tokens {
 		bit, ok := includeTokenToMask[tok]
 		if !ok {
-			return 0, fmt.Errorf("export: unknown include token %q (valid: %s)",
-				tok, strings.Join(validIncludeTokens, ", "))
+			return 0, fmt.Errorf("export: %w", csvparam.UnknownTokenError{
+				Param:   "include",
+				Allowed: validIncludeTokens,
+			})
 		}
 		mask |= bit
 	}

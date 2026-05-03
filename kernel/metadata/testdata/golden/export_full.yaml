@@ -3,9 +3,6 @@ apiVersion: gocell.io/v1alpha1
 generatedAt: "2026-05-03T12:00:00Z"
 root: /projects/gocell
 query:
-    kinds: []
-    layers: []
-    cells: []
     include:
         - cellDeps
         - packageDeps

@@ -35,6 +35,13 @@ func buildTestHandler(t *testing.T) *devtools.Handler {
 				Schema:           metadata.SchemaMeta{Primary: "public.sessions"},
 				Verify:           metadata.CellVerifyMeta{Smoke: []string{"smoke.accesscore.health"}},
 			},
+			"auditcore": {
+				ID:               "auditcore",
+				Type:             "support",
+				ConsistencyLevel: "L2",
+				Owner:            metadata.OwnerMeta{Team: "platform", Role: "owner"},
+				Schema:           metadata.SchemaMeta{Primary: "public.audit"},
+			},
 		},
 		Slices:      map[string]*metadata.SliceMeta{},
 		Contracts:   map[string]*metadata.ContractMeta{},
@@ -44,7 +51,7 @@ func buildTestHandler(t *testing.T) *devtools.Handler {
 		Actors:      []metadata.ActorMeta{},
 	}
 	cellGraph := &metadata.CellDepGraph{
-		Nodes: []string{"accesscore"},
+		Nodes: []string{"accesscore", "auditcore"},
 		Edges: []metadata.CellEdge{},
 	}
 	return devtools.NewHandler(project, cellGraph, minimalPkgGraph(), "/test-root", clock.Real())
@@ -169,6 +176,26 @@ func TestCatalog_CellsFocus(t *testing.T) {
 	if rr.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d: %s", rr.Code, rr.Body.String())
 	}
+	var doc metadata.Document
+	if err := json.Unmarshal(rr.Body.Bytes(), &doc); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	var names []string
+	for _, e := range doc.Entities {
+		names = append(names, e.Kind+"/"+e.Metadata.Name)
+	}
+	if !containsString(names, "Cell/accesscore") {
+		t.Fatalf("focused response missing accesscore cell: %v", names)
+	}
+	if containsString(names, "Cell/auditcore") {
+		t.Fatalf("focused response leaked unrelated auditcore cell: %v", names)
+	}
+	if doc.Dependencies == nil || doc.Dependencies.Cells == nil {
+		t.Fatalf("focused response missing cellDeps block")
+	}
+	if got := doc.Dependencies.Cells.Nodes; len(got) != 1 || got[0] != "accesscore" {
+		t.Fatalf("focused cellDeps nodes = %v, want [accesscore]", got)
+	}
 }
 
 func TestCatalog_IncludeMask_OnlyRelations(t *testing.T) {
@@ -229,7 +256,7 @@ func TestCatalog_FormatYAML(t *testing.T) {
 		t.Fatalf("expected 200, got %d: %s", rr.Code, rr.Body.String())
 	}
 	ct := rr.Header().Get("Content-Type")
-	if !strings.Contains(ct, "application/yaml") {
+	if ct != "application/yaml" {
 		t.Errorf("Content-Type = %q, want application/yaml", ct)
 	}
 }
@@ -244,6 +271,9 @@ func TestCatalog_BadKind(t *testing.T) {
 		t.Errorf("expected 400 for unknown kind, got %d: %s", rr.Code, rr.Body.String())
 	}
 	assertErrValidation(t, rr)
+	if strings.Contains(rr.Body.String(), "Frobnicator") {
+		t.Errorf("public error must not echo invalid kind token: %s", rr.Body.String())
+	}
 }
 
 func TestCatalog_BadLayer(t *testing.T) {
@@ -256,6 +286,9 @@ func TestCatalog_BadLayer(t *testing.T) {
 		t.Errorf("expected 400 for unknown layer, got %d: %s", rr.Code, rr.Body.String())
 	}
 	assertErrValidation(t, rr)
+	if strings.Contains(rr.Body.String(), "nonexistent_layer") {
+		t.Errorf("public error must not echo invalid layer token: %s", rr.Body.String())
+	}
 }
 
 func TestCatalog_BadInclude(t *testing.T) {
@@ -268,6 +301,9 @@ func TestCatalog_BadInclude(t *testing.T) {
 		t.Errorf("expected 400 for unknown include flag, got %d: %s", rr.Code, rr.Body.String())
 	}
 	assertErrValidation(t, rr)
+	if strings.Contains(rr.Body.String(), "unknownFlag") {
+		t.Errorf("public error must not echo invalid include token: %s", rr.Body.String())
+	}
 }
 
 // assertErrValidation checks that the response body contains an ERR_VALIDATION_*
@@ -402,8 +438,8 @@ func TestCatalog_FormatXML_BadRequest(t *testing.T) {
 		t.Errorf("expected 400 for unknown format, got %d: %s", rr.Code, rr.Body.String())
 	}
 	assertErrValidation(t, rr)
-	if !strings.Contains(rr.Body.String(), "xml") {
-		t.Errorf("error message must mention 'xml', got: %s", rr.Body.String())
+	if strings.Contains(rr.Body.String(), "xml") {
+		t.Errorf("public error must not echo invalid format token: %s", rr.Body.String())
 	}
 }
 
@@ -425,4 +461,13 @@ func TestCatalog_Root_RelativePath(t *testing.T) {
 	if doc.Root != "." {
 		t.Errorf("doc.Root = %q, want \".\" (HTTP must not expose absolute paths)", doc.Root)
 	}
+}
+
+func containsString(vals []string, want string) bool {
+	for _, v := range vals {
+		if v == want {
+			return true
+		}
+	}
+	return false
 }

@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	kerneldepgraph "github.com/ghbvf/gocell/kernel/depgraph"
+	"github.com/ghbvf/gocell/tools/generatedcatalog"
 )
 
 // TestEmitCatalogFile_OutputCompiles verifies that emitCatalogFile produces
@@ -36,7 +37,7 @@ func TestEmitCatalogFile_OutputCompiles(t *testing.T) {
 		},
 	})
 
-	src, err := emitCatalogFile("mypkg", "github.com/example/mod", g)
+	src, err := generatedcatalog.EmitFile("mypkg", "github.com/example/mod", g)
 	if err != nil {
 		t.Fatalf("emitCatalogFile: %v", err)
 	}
@@ -53,7 +54,7 @@ func TestEmitCatalogFile_EmptyGraph(t *testing.T) {
 	t.Parallel()
 
 	g := kerneldepgraph.FromNodes("github.com/example/mod", nil)
-	src, err := emitCatalogFile("main", "github.com/example/mod", g)
+	src, err := generatedcatalog.EmitFile("main", "github.com/example/mod", g)
 	if err != nil {
 		t.Fatalf("emitCatalogFile: %v", err)
 	}

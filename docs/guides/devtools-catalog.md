@@ -23,7 +23,7 @@ Wire schema 借鉴 [Backstage Catalog Entity model](https://backstage.io/docs/fe
 | Flag | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
 | `--kinds` | 逗号列表 | `""`（全部） | 实体类型筛选，可选值：`Cell,Slice,Contract,Journey,Assembly,Actor` |
-| `--layers` | 逗号列表 | `""`（全部） | 层筛选，作用于 packageDeps 节点过滤 + cell 归属层，可选值：`cells,kernel,runtime,adapters,pkg,cmd,examples,tools` |
+| `--layers` | 逗号列表 | `""`（全部） | 层筛选，作用于 entities 与 packageDeps 节点过滤；可选值：`adapters,actors,assemblies,cells,cmd,contracts,examples,generated,journeys,kernel,pkg,root,runtime,stdlib,tests,thirdparty,tools,unknown` |
 | `--cells` | 逗号列表 | `""`（全部） | Focus 模式：仅输出指定 cell + 一阶邻居（依赖/被依赖 cell、所属 slice、contractUsages） |
 | `--include` | 逗号列表 | `cellDeps,packageDeps,statusBoard,relations`（全开） | 可选输出块，值：`cellDeps,packageDeps,statusBoard,relations` |
 | `--format` | `json\|yaml` | `json` | 输出格式 |
@@ -38,7 +38,7 @@ Wire schema 借鉴 [Backstage Catalog Entity model](https://backstage.io/docs/fe
 gocell export catalog
 ```
 
-输出包含所有实体、cellDeps、packageDeps、statusBoard、relations。包级 dep graph 同步加载（5-10s，CI/Docker build 场景可接受）。
+输出包含所有实体、cellDeps、packageDeps、statusBoard、relations。CLI 包级 dep graph 同步加载（5-10s，CI/Docker build 场景可接受）；HTTP 端点使用 build-time generated graph，不做运行时加载或等待。
 
 **示例 2：按实体类型过滤，只看 Cell 和 Contract**
 
@@ -96,7 +96,7 @@ GET /devtools/catalog
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
 | `kinds` | 逗号列表 | `""` | 同 CLI `--kinds` |
-| `layers` | 逗号列表 | `""` | 同 CLI `--layers` |
+| `layers` | 逗号列表 | `""` | 同 CLI `--layers`；可选值同上 |
 | `cells` | 逗号列表 | `""` | 同 CLI `--cells` |
 | `include` | 逗号列表 | `cellDeps,packageDeps,statusBoard,relations` | 同 CLI `--include` |
 | `format` | `json\|yaml` | `json` | 响应格式；yaml 时 Content-Type: application/yaml |
@@ -202,7 +202,7 @@ const catalog: CatalogDocument = await resp.json();
   "apiVersion": "gocell.io/v1alpha1",
   "generatedAt": "2026-05-03T00:00:00Z",
   "root": "/path/to/project",
-  "query": { "kinds": [], "layers": [], "cells": [], "include": "..." },
+  "query": { "include": ["cellDeps", "packageDeps", "relations", "statusBoard"] },
   "entities": [
     {
       "kind": "Cell",
@@ -211,7 +211,7 @@ const catalog: CatalogDocument = await resp.json();
     }
   ],
   "statusBoard": [
-    { "id": "J-useronboarding", "status": "planned", "owner": "..." }
+    { "journeyId": "J-useronboarding", "state": "planned", "risk": "", "blocker": "", "updatedAt": "2026-05-03" }
   ],
   "dependencies": {
     "cells": {

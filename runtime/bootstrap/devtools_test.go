@@ -171,10 +171,14 @@ func TestPhase5CollectRouteGroups_NoDevtools(t *testing.T) {
 		cell.PrimaryListener: buildRouter(t, cell.PrimaryListener),
 	}
 
-	withDevtools := b.phase5CollectRouteGroups(s, routers)
+	withoutDevtools := b.phase5CollectRouteGroups(s, routers)
 
-	// Simulate s.devtoolsHandler = nil (already nil); count groups for a
-	// baseline without devtools.
-	baselineCount := len(withDevtools)
+	baselineCount := len(withoutDevtools)
 	assert.Greater(t, baselineCount, 0, "health groups must always be present")
+
+	pm := minimalProjectMeta("testcell")
+	s.devtoolsHandler = devtools.NewHandler(pm, nil, nil, "/tmp", clock.Real())
+	withHandler := b.phase5CollectRouteGroups(s, routers)
+	assert.Len(t, withHandler, baselineCount+1,
+		"installing devtools handler must append exactly one route group")
 }

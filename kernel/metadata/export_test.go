@@ -867,6 +867,50 @@ func TestBuildDocument_DepsFilter_Layers(t *testing.T) {
 	}
 }
 
+// TestBuildDocument_DepsFilter_PackageCells verifies that when filter.Cells is
+// set, dependencies.packages only contains packages owned by the focused cells.
+func TestBuildDocument_DepsFilter_PackageCells(t *testing.T) {
+	accessNode := &kerneldepgraph.Node{
+		ID:      "github.com/foo/bar/cells/accesscore/session",
+		Layer:   "cells",
+		CellID:  "accesscore",
+		Imports: []string{},
+	}
+	auditNode := &kerneldepgraph.Node{
+		ID:      "github.com/foo/bar/cells/auditcore/audit",
+		Layer:   "cells",
+		CellID:  "auditcore",
+		Imports: []string{},
+	}
+	kernelNode := &kerneldepgraph.Node{
+		ID:      "github.com/foo/bar/kernel/core",
+		Layer:   "kernel",
+		Imports: []string{},
+	}
+	g := kerneldepgraph.FromNodes("github.com/foo/bar", []*kerneldepgraph.Node{accessNode, auditNode, kernelNode})
+	pm := fullPM()
+	opts := metadata.ExportOptions{
+		Now:  fixedNow,
+		Root: "/projects/gocell",
+		Filter: metadata.Filter{
+			Cells:   []string{"accesscore"},
+			Include: metadata.IncludePackageDeps,
+		},
+		Packages: &metadata.PackageDepsView{Status: "ready", Graph: g},
+	}
+	doc, err := metadata.BuildDocument(pm, opts)
+	require.NoError(t, err)
+	require.NotNil(t, doc.Dependencies)
+	require.NotNil(t, doc.Dependencies.Packages)
+	require.NotNil(t, doc.Dependencies.Packages.Graph)
+
+	var ids []string
+	for _, pkg := range doc.Dependencies.Packages.Graph.Packages {
+		ids = append(ids, pkg.ID)
+	}
+	assert.Equal(t, []string{"github.com/foo/bar/cells/accesscore/session"}, ids)
+}
+
 // ---- TestMarshalDocument_BadFormat ----
 
 func TestMarshalDocument_BadFormat(t *testing.T) {

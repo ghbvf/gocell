@@ -55,9 +55,9 @@ var AllKinds = []string{"Actor", "Assembly", "Cell", "Contract", "Journey", "Sli
 // AllLayers enumerates the layers used by entityLayer + tools/depgraph nodes.
 // Consumers that need a whitelist should reference this slice.
 var AllLayers = []string{
-	"adapters", "cells", "cmd", "examples", "generated",
-	"kernel", "pkg", "root", "runtime", "stdlib", "tests",
-	"thirdparty", "tools", "unknown",
+	"adapters", "actors", "assemblies", "cells", "cmd", "contracts",
+	"examples", "generated", "journeys", "kernel", "pkg", "root",
+	"runtime", "stdlib", "tests", "thirdparty", "tools", "unknown",
 }
 
 // Filter is the projection applied to a ProjectMeta when building a Document.
@@ -77,10 +77,10 @@ type Filter struct {
 // wire stability). Allows clients to confirm which filters the server actually
 // applied without parsing query strings themselves.
 type FilterEcho struct {
-	Kinds   []string `json:"kinds"   yaml:"kinds"`
-	Layers  []string `json:"layers"  yaml:"layers"`
-	Cells   []string `json:"cells"   yaml:"cells"`
-	Include []string `json:"include" yaml:"include"` // sorted: ["cellDeps","packageDeps","relations","statusBoard"] subset
+	Kinds   []string `json:"kinds,omitempty"  yaml:"kinds,omitempty"`
+	Layers  []string `json:"layers,omitempty" yaml:"layers,omitempty"`
+	Cells   []string `json:"cells,omitempty"  yaml:"cells,omitempty"`
+	Include []string `json:"include"          yaml:"include"` // sorted: ["cellDeps","packageDeps","relations","statusBoard"] subset
 }
 
 // ExportOptions configures BuildDocument. All fields besides Now and Filter
@@ -912,24 +912,32 @@ func filterCellDepGraph(g *CellDepGraph, filter Filter, entities []Entity) *Cell
 	}
 }
 
-// filterPackageDepsView returns a filtered PackageDepsView. When filter.Layers
-// is non-empty, only packages whose layer is in the allowed set are retained,
-// and Stats are recomputed. When filter.Layers is empty, the original view is
-// returned as-is. Non-ready views (status != "ready") are returned unchanged
-// since there is no Graph to filter.
+// filterPackageDepsView returns a filtered PackageDepsView. Layer filters keep
+// only packages whose layer is allowed; cell focus filters keep only packages
+// owned by cells that survived focus expansion. Stats are recomputed. Non-ready
+// views are returned unchanged when there is no Graph to filter.
 func filterPackageDepsView(v *PackageDepsView, filter Filter) *PackageDepsView {
-	if len(filter.Layers) == 0 {
+	if len(filter.Layers) == 0 && len(filter.Cells) == 0 {
 		return v
 	}
 	if v.Graph == nil {
 		return v
 	}
 	layerSet := toStringSet(filter.Layers)
-	// kerneldepgraph.Graph filtering: keep packages whose layer is allowed.
-	// We cannot mutate the shared Graph pointer, so build a new one.
+	cellSet := toStringSet(filter.Cells)
+	nodes := make([]*kerneldepgraph.Node, 0, len(v.Graph.Packages))
+	for _, n := range v.Graph.Packages {
+		if len(layerSet) > 0 && !layerSet[n.Layer] {
+			continue
+		}
+		if len(cellSet) > 0 && !cellSet[n.CellID] {
+			continue
+		}
+		nodes = append(nodes, n)
+	}
 	return &PackageDepsView{
 		Status: v.Status,
-		Graph:  v.Graph.FilterByLayer(layerSet),
+		Graph:  kerneldepgraph.FromNodes(v.Graph.Module, nodes),
 		Error:  v.Error,
 	}
 }

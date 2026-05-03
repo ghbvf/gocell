@@ -13,8 +13,7 @@ func TestRunVerifyGenerated_SyntheticProjectPasses(t *testing.T) {
 	root := newGeneratedVerifyAppFixture(t)
 	withWorkingDir(t, root)
 
-	require.NoError(t, runGenerate([]string{"assembly", "--id=fixture"}))
-	require.NoError(t, runGenerate([]string{"metrics-schema", "--id=fixture"}))
+	generateAllAppFixtureArtifacts(t)
 
 	var err error
 	out := captureStdout(t, func() {
@@ -22,15 +21,14 @@ func TestRunVerifyGenerated_SyntheticProjectPasses(t *testing.T) {
 	})
 
 	require.NoError(t, err)
-	assert.Contains(t, out, "Generated artifacts verified: 3 files")
+	assert.Contains(t, out, "Generated artifacts verified: 4 files")
 }
 
 func TestRunVerifyGenerated_ReportsDrift(t *testing.T) {
 	root := newGeneratedVerifyAppFixture(t)
 	withWorkingDir(t, root)
 
-	require.NoError(t, runGenerate([]string{"assembly", "--id=fixture"}))
-	require.NoError(t, runGenerate([]string{"metrics-schema", "--id=fixture"}))
+	generateAllAppFixtureArtifacts(t)
 	writeAppFixtureFile(t, root, "assemblies/fixture/generated/boundary.yaml", []byte("stale\n"))
 
 	err := runVerify([]string{"generated"})
@@ -45,6 +43,26 @@ func newGeneratedVerifyAppFixture(t *testing.T) string {
 
 	root := t.TempDir()
 	writeAppFixtureFile(t, root, "go.mod", []byte("module example.com/generatedfixture\n\ngo 1.25.0\n"))
+	writeAppFixtureFile(t, root, "kernel/depgraph/depgraph.go", []byte(`package depgraph
+
+type Graph struct {
+	Module   string
+	Packages []*Node
+}
+
+type Node struct {
+	ID       string
+	Layer    string
+	CellID   string
+	SliceID  string
+	TestOnly bool
+	Imports  []string
+}
+
+func FromNodes(module string, nodes []*Node) *Graph {
+	return &Graph{Module: module, Packages: nodes}
+}
+`))
 	writeAppFixtureFile(t, root, "assemblies/fixture/assembly.yaml", []byte(`id: fixture
 cells: []
 build:
@@ -69,6 +87,23 @@ func runFixture(context.Context, string, []string) error {
 }
 `))
 	return root
+}
+
+func generateAllAppFixtureArtifacts(t *testing.T) {
+	t.Helper()
+
+	require.NoError(t, runGenerate([]string{"assembly", "--id=fixture"}))
+	require.NoError(t, runGenerate([]string{"metrics-schema", "--id=fixture"}))
+	require.NoError(t, runGenerate([]string{
+		"catalog",
+		"--out=cmd/corebundle/catalog_gen.go",
+		"--package=main",
+	}))
+	require.NoError(t, runGenerate([]string{
+		"catalog",
+		"--out=cmd/corebundle/catalog_gen.go",
+		"--package=main",
+	}))
 }
 
 func withWorkingDir(t *testing.T, dir string) {

@@ -104,7 +104,8 @@ func TestRunExport_BadInclude(t *testing.T) {
 	root := copyFixtureToTempDir(t)
 	err := runExport([]string{"catalog", "--root=" + root, "--include=foobar"})
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "foobar")
+	assert.Contains(t, err.Error(), "unknown include token")
+	assert.NotContains(t, err.Error(), "foobar")
 	// Error message must hint at valid tokens.
 	assert.Contains(t, err.Error(), "cellDeps")
 }
@@ -114,16 +115,18 @@ func TestRunExport_BadKind(t *testing.T) {
 	root := copyFixtureToTempDir(t)
 	err := runExport([]string{"catalog", "--root=" + root, "--kinds=Bogus", "--include="})
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "Bogus")
+	assert.Contains(t, err.Error(), "unknown kinds token")
+	assert.NotContains(t, err.Error(), "Bogus")
 }
 
-// TestRunExport_BadLayer verifies that an unknown --layers token errors with
-// a message naming the unknown value.
+// TestRunExport_BadLayer verifies that an unknown --layers token errors without
+// echoing the invalid value.
 func TestRunExport_BadLayer(t *testing.T) {
 	root := copyFixtureToTempDir(t)
 	err := runExport([]string{"catalog", "--root=" + root, "--layers=foo", "--include="})
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "foo")
+	assert.Contains(t, err.Error(), "unknown layers token")
+	assert.NotContains(t, err.Error(), "foo")
 }
 
 // TestRunExport_IncludeNone verifies that --include="" produces a document
@@ -401,10 +404,9 @@ func TestDispatch_UsageContainsExport(t *testing.T) {
 	assert.Contains(t, stdout, "export")
 }
 
-// TestRunExport_PackageDepsLoadError verifies that when depgraph.Load fails
-// (e.g. invalid project), the CLI exits 0 and the document still contains a
-// dependencies.packages block with status="error".
-func TestRunExport_PackageDepsLoadError(t *testing.T) {
+// TestRunExport_DefaultPackageDepsLoadError verifies that the default export
+// path degrades when depgraph.Load fails instead of failing the whole document.
+func TestRunExport_DefaultPackageDepsLoadError(t *testing.T) {
 	// Build a minimal fixture that has valid cell metadata but an invalid
 	// go.mod (empty module path) to make depgraph.Load fail.
 	root := t.TempDir()
@@ -419,7 +421,6 @@ func TestRunExport_PackageDepsLoadError(t *testing.T) {
 	outPath := filepath.Join(t.TempDir(), "out.json")
 	err := runExport([]string{
 		"catalog", "--root=" + root,
-		"--include=packageDeps",
 		"--out=" + outPath,
 	})
 	// Graceful degrade: exit 0.

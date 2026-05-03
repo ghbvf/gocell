@@ -4,8 +4,6 @@
   "generatedAt": "2026-05-03T12:00:00Z",
   "root": "/projects/gocell",
   "query": {
-    "kinds": null,
-    "layers": null,
     "cells": [
       "accesscore"
     ],
