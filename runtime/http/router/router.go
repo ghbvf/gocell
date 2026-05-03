@@ -506,17 +506,13 @@ func (r *Router) buildMux(realIPMW func(http.Handler) http.Handler) error {
 	}
 	r.mux.Use(middleware.AccessLog(r.clock))
 	if r.metricsCollector != nil {
-		// HTTP-METRICS-LABEL-REALIGN: install the framework-sentinel cell-id
-		// context BEFORE Metrics so any request reaching this listener — health
-		// probes, unmatched 404s, listeners with no business RouteGroup mounted
-		// — is labeled cell="_runtime". RouteGroup-level WithCellIDContext
-		// installed by bootstrap.mountOneRouteGroup runs *after* this layer
-		// inside the chi sub-mux, overriding the sentinel for business routes.
-		// This is the only listener-root injection point — bootstrap does not
-		// install another tier on the root mux.
-		// ref: kubernetes apiserver pkg/endpoints/metrics/metrics.go —
-		// component label captured at registration time.
-		r.mux.Use(middleware.WithCellIDContext("_runtime"))
+		// HTTP-METRICS-LABEL-REALIGN: middleware.Metrics attaches its own
+		// mutable *cellIDState seeded with the framework "_runtime"
+		// sentinel; bootstrap.mountOneRouteGroup installs
+		// WithCellIDContext on each cell-owned sub-mux to mutate that
+		// state. The recorder fires after next.ServeHTTP returns, so it
+		// observes whichever value won — sentinel for framework routes,
+		// the cell ID for business routes.
 		r.mux.Use(middleware.Metrics(r.metricsCollector, r.clock))
 	}
 	r.mux.Use(

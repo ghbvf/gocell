@@ -5,7 +5,6 @@ import (
 	"net/http"
 
 	"github.com/ghbvf/gocell/kernel/clock"
-	"github.com/ghbvf/gocell/kernel/ctxkeys"
 	"github.com/ghbvf/gocell/runtime/observability/metrics"
 )
 
@@ -17,13 +16,15 @@ import (
 // middleware), Metrics reuses it. Otherwise it creates its own to
 // remain usable as a standalone middleware.
 //
-// The cell identity stamped on every emitted observation is read from the
-// request context via ctxkeys.MustCellIDFrom — bootstrap installs
-// WithCellIDContext middleware at the listener-root layer (with the framework
-// "_runtime" sentinel) and at the route-group layer (with each cell's ID), so
-// the value is always present on requests that reach this middleware. A
-// missing value indicates a framework wiring bug; the panic surfaces it at
-// startup or in tests rather than silently emitting metrics under a fallback.
+// Cell-label resolution: this middleware attaches a *cellIDState seeded with
+// RuntimeCellIDSentinel to the request context before invoking next. Any
+// downstream WithCellIDContext middleware (installed by
+// bootstrap.mountOneRouteGroup on a chi sub-mux) mutates that state to its
+// cell's ID. After next returns the recorder reads the resolved value from
+// the same struct — chi's RouteContext uses the same mutable-pointer pattern
+// so outer middleware can observe values written by sub-mux dispatch.
+// Framework-owned paths (healthz, readyz, /metrics, unmatched 404s,
+// listeners with no business RouteGroup) keep the sentinel.
 func Metrics(collector metrics.Collector, clk clock.Clock) func(http.Handler) http.Handler {
 	return metricsWithClock(collector, clk)
 }
@@ -42,12 +43,12 @@ func metricsWithClock(collector metrics.Collector, clk clock.Clock) func(http.Ha
 				w = wrapped
 			}
 
-			next.ServeHTTP(w, r)
+			ctx, cs := withCellIDState(r.Context(), RuntimeCellIDSentinel)
+			next.ServeHTTP(w, r.WithContext(ctx))
 
 			safeObserve(slog.Default(), func() {
 				route := RoutePatternFromCtx(r.Context())
-				cellID := ctxkeys.MustCellIDFrom(r.Context())
-				collector.RecordRequest(cellID, r.Method, route, state.Status(), clk.Since(start).Seconds())
+				collector.RecordRequest(cs.cellID, r.Method, route, state.Status(), clk.Since(start).Seconds())
 			})
 		})
 	}

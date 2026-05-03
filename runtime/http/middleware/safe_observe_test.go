@@ -27,7 +27,7 @@ func TestMetrics_CollectorPanicDoesNotCrash(t *testing.T) {
 	okHandler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})
-	handler := WithCellIDContext("test-cell")(Recorder(Metrics(&panicCollector{}, clock.Real())(okHandler)))
+	handler := Recorder(Metrics(&panicCollector{}, clock.Real())(okHandler))
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/test", nil)

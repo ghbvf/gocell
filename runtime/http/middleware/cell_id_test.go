@@ -1,6 +1,7 @@
 package middleware
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -10,10 +11,13 @@ import (
 	"github.com/ghbvf/gocell/kernel/ctxkeys"
 )
 
-func TestWithCellIDContext_InjectsCellIDIntoCtx(t *testing.T) {
+func TestWithCellIDContext_WritesCtxkey(t *testing.T) {
+	// The sub-mux WithCellIDContext middleware must update ctxkeys.CellID so
+	// downstream logging/tracing observes the cell ID inside the handler.
 	var observed string
 	handler := WithCellIDContext("accesscore")(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
-		observed = ctxkeys.MustCellIDFrom(r.Context())
+		v, _ := ctxkeys.CellIDFrom(r.Context())
+		observed = v
 	}))
 
 	rec := httptest.NewRecorder()
@@ -22,52 +26,54 @@ func TestWithCellIDContext_InjectsCellIDIntoCtx(t *testing.T) {
 	assert.Equal(t, "accesscore", observed)
 }
 
-func TestWithCellIDContext_GroupOverridesRoot(t *testing.T) {
-	// Listener-root middleware (_runtime sentinel) wraps the route-group
-	// middleware (cell ID), which wraps the handler. The handler must
-	// observe the route-group cell ID — the inner WithValue overrides the
-	// outer one for the same key.
-	var observed string
-	final := http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
-		observed = ctxkeys.MustCellIDFrom(r.Context())
-	})
-	chain := WithCellIDContext("_runtime")(WithCellIDContext("accesscore")(final))
+func TestWithCellIDContext_MutatesCellIDStateForOuterMetrics(t *testing.T) {
+	// Recreate the production layout: an outer middleware seeds *cellIDState
+	// with RuntimeCellIDSentinel (the analog of metrics.Metrics on the
+	// listener-root mux); a sub-mux WithCellIDContext mutates the same
+	// pointer; the outer middleware reads the resolved value after next.
+	var resolved string
+	outer := func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			ctx, cs := withCellIDState(r.Context(), RuntimeCellIDSentinel)
+			next.ServeHTTP(w, r.WithContext(ctx))
+			resolved = cs.cellID
+		})
+	}
+	final := http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) {})
+	chain := outer(WithCellIDContext("accesscore")(final))
 
 	rec := httptest.NewRecorder()
 	chain.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/sessions", nil))
 
-	assert.Equal(t, "accesscore", observed)
+	assert.Equal(t, "accesscore", resolved,
+		"outer (root-mux) middleware must observe the cell ID written by the inner (sub-mux) layer; "+
+			"this is the chi-style mutable-pointer pattern that the metrics recorder depends on")
 }
 
-func TestWithCellIDContext_RuntimeSentinelReachesUnmatchedHandler(t *testing.T) {
-	// When only the listener-root layer is installed (no RouteGroup matched),
-	// the handler still observes a non-empty cell ID — the framework sentinel.
-	var observed string
-	handler := WithCellIDContext("_runtime")(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
-		observed = ctxkeys.MustCellIDFrom(r.Context())
+func TestWithCellIDContext_NoUpstreamStateIsNop(t *testing.T) {
+	// When there is no metrics layer upstream (e.g. a unit test exercises
+	// WithCellIDContext alone), mutating the absent state must not panic and
+	// the ctxkeys write must still happen so logging/tracing keeps working.
+	var seen string
+	handler := WithCellIDContext("accesscore")(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		v, _ := ctxkeys.CellIDFrom(r.Context())
+		seen = v
 	}))
 
 	rec := httptest.NewRecorder()
-	handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/healthz", nil))
+	handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/", nil))
 
-	assert.Equal(t, "_runtime", observed)
+	assert.Equal(t, "accesscore", seen)
 }
 
-func TestWithCellIDContext_EmptyCellIDInjectsEmptyValue(t *testing.T) {
-	// WithCellIDContext does not validate cellID — both call sites
-	// (router.go literal "_runtime" and bootstrap.mountOneRouteGroup
-	// guarded by rg.CellID != "") already enforce non-empty. The
-	// downstream consumer middleware.Metrics calls MustCellIDFrom and
-	// panics on empty value — that is the single fail-fast point. This
-	// test pins the lightweight constructor contract: empty in, empty
-	// out, no early panic.
-	var observed string
-	final := http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
-		v, _ := ctxkeys.CellIDFrom(r.Context())
-		observed = v
-	})
-	chain := WithCellIDContext("")(final)
-	rec := httptest.NewRecorder()
-	chain.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/", nil))
-	assert.Equal(t, "", observed)
+func TestCellIDStateFrom_ReturnsNilWhenUnattached(t *testing.T) {
+	assert.Nil(t, cellIDStateFrom(context.Background()),
+		"cellIDStateFrom must return nil when no metrics layer attached the state — "+
+			"callers must handle this rather than dereference unconditionally")
+}
+
+func TestRuntimeCellIDSentinel_IsExportedConstant(t *testing.T) {
+	// Pin the sentinel value: dashboards / alerts match against this literal,
+	// and the archtest pulls it directly from this constant.
+	assert.Equal(t, "_runtime", RuntimeCellIDSentinel)
 }

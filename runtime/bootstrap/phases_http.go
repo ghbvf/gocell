@@ -181,11 +181,12 @@ func (b *Bootstrap) phase5MountRouteGroups(routers map[cell.ListenerRef]*router.
 //
 // HTTP-METRICS-LABEL-REALIGN: when rg.CellID is populated by phase5 (every
 // cell-owned RouteGroup), prepend WithCellIDContext(rg.CellID) so the cell
-// identity overrides the listener-root "_runtime" sentinel inside this
-// sub-mux. The chi sub-mux With order is "outer to inner", so a value
-// written here lands later than the root middleware's WithValue and wins.
-// rg.CellID == "" only happens for framework-owned health groups before
-// phase5 stamps them; we leave them on the root sentinel by skipping
+// identity overrides the framework "_runtime" sentinel that
+// middleware.Metrics seeds into the in-flight cellIDState. WithCellIDContext
+// mutates that mutable state pointer (chi-style RouteContext pattern), so
+// the root-mux recorder reads the per-cell value after next.ServeHTTP
+// returns. rg.CellID == "" only happens for framework-owned health groups
+// before phase5 stamps them; we leave them on the sentinel by skipping
 // injection rather than emitting cell="" (an ambiguous label).
 func (b *Bootstrap) mountOneRouteGroup(rtr *router.Router, rg cell.RouteGroup, _ int) error {
 	register := rg.Register
@@ -393,11 +394,13 @@ func (b *Bootstrap) buildListenerRouterOpts(_ *phaseState, ref cell.ListenerRef,
 // wrapped with an actionable message that tells operators which side to remove.
 //
 // HTTP-METRICS-LABEL-REALIGN: cell labels are no longer derived globally here.
-// router installs WithCellIDContext("_runtime") at the listener-root layer and
-// mountOneRouteGroup overrides it per-cell at the route-group layer; the
-// recorded cell label is the value present in the request context when
-// middleware.Metrics fires. This collector is provider-neutral and labels each
-// observation from its RecordRequest cellID argument.
+// middleware.Metrics seeds a mutable cellIDState with RuntimeCellIDSentinel
+// at the listener-root layer; bootstrap.mountOneRouteGroup installs
+// WithCellIDContext on each cell-owned RouteGroup to mutate that state with
+// the cell's ID. The recorded cell label is the value resolved into the
+// state by the time middleware.Metrics fires after next.ServeHTTP returns.
+// This collector is provider-neutral and labels each observation from its
+// RecordRequest cellID argument.
 //
 // ref: runtime/observability/metrics.NewProviderCollector — provider-neutral
 // HTTP collector that records http_requests_total + http_request_duration_seconds.

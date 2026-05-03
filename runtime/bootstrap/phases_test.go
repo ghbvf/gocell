@@ -6,6 +6,8 @@ import (
 	"crypto/x509"
 	"errors"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
 
@@ -20,6 +22,7 @@ import (
 	"github.com/ghbvf/gocell/runtime/config"
 	"github.com/ghbvf/gocell/runtime/http/health"
 	"github.com/ghbvf/gocell/runtime/http/router"
+	"github.com/ghbvf/gocell/runtime/observability/metrics"
 )
 
 // --- phase5CollectRouteGroups: HealthListener fallback tests (R2-07) ---
@@ -91,6 +94,101 @@ func TestPhase5CollectRouteGroups_HealthListenerPresent_PreservesHealthListener(
 	for i, rg := range groups {
 		assert.Equal(t, cell.HealthListener, rg.Listener,
 			"group[%d]: with HealthListener declared, framework health groups must stay on HealthListener (no fallback remap)", i)
+	}
+}
+
+// --- mountOneRouteGroup: per-cell metrics label propagation ---
+
+// TestMountOneRouteGroup_PerCellMetricsLabel pins the bootstrap-level
+// contract for HTTP-METRICS-LABEL-REALIGN: when two RouteGroups with
+// different CellID values are mounted on the same router, requests
+// landing in each subtree must produce metrics observations carrying
+// that group's CellID — not the listener-root "_runtime" sentinel and
+// not a global value derived from assembly identity.
+//
+// This is the unit-test counterpart to the build-tag-gated integration
+// test in cmd/corebundle/metrics_wiring_integration_test.go: it runs
+// during ordinary `go test ./...` and exercises mountOneRouteGroup
+// directly rather than the full Run() lifecycle, so a regression that
+// dropped the per-group WithCellIDContext prepend (e.g. by removing the
+// rg.CellID != "" branch) is caught at unit-test time.
+func TestMountOneRouteGroup_PerCellMetricsLabel(t *testing.T) {
+	t.Parallel()
+	mc := metrics.NewInMemoryCollector()
+	rtr, err := router.NewForListener(cell.PrimaryListener,
+		router.WithRouterClock(clock.Real()),
+		router.WithMetricsCollector(mc),
+	)
+	require.NoError(t, err)
+
+	b := New(WithClock(clock.Real()))
+
+	groups := []cell.RouteGroup{
+		{
+			Listener: cell.PrimaryListener,
+			Prefix:   "/api/v1/access",
+			CellID:   "accesscore",
+			Register: func(mux cell.RouteMux) error {
+				mux.Handle("/sessions", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+					w.WriteHeader(http.StatusOK)
+				}))
+				return nil
+			},
+		},
+		{
+			Listener: cell.PrimaryListener,
+			Prefix:   "/api/v1/audit",
+			CellID:   "auditcore",
+			Register: func(mux cell.RouteMux) error {
+				mux.Handle("/events", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+					w.WriteHeader(http.StatusOK)
+				}))
+				return nil
+			},
+		},
+	}
+	for i, rg := range groups {
+		require.NoError(t, b.mountOneRouteGroup(rtr, rg, i),
+			"mounting RouteGroup %d (cell=%s) must succeed", i, rg.CellID)
+	}
+
+	// Drive one request into each subtree.
+	for _, tc := range []struct{ method, path string }{
+		{http.MethodGet, "/api/v1/access/sessions"},
+		{http.MethodGet, "/api/v1/audit/events"},
+	} {
+		rec := httptest.NewRecorder()
+		rtr.Handler().ServeHTTP(rec, httptest.NewRequest(tc.method, tc.path, nil))
+		require.Equal(t, http.StatusOK, rec.Code, "%s %s must reach the cell handler", tc.method, tc.path)
+	}
+
+	// And one request that does NOT match either RouteGroup. The router
+	// installs WithCellIDContext("_runtime") at the listener-root mux
+	// level; an unmatched request should be labeled with that sentinel,
+	// proving the fallback layer remains in place.
+	rec := httptest.NewRecorder()
+	rtr.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/orphan", nil))
+	require.Equal(t, http.StatusNotFound, rec.Code)
+
+	snap := mc.Snapshot()
+	wantKeys := []string{
+		"accesscore GET /api/v1/access/sessions 200",
+		"auditcore GET /api/v1/audit/events 200",
+		"_runtime GET unmatched 404",
+	}
+	for _, key := range wantKeys {
+		assert.Equalf(t, int64(1), snap.RequestCounts[key],
+			"want exactly one observation under %q; full snapshot=%v", key, snap.RequestCounts)
+	}
+
+	// Negative assertion: the assembly-derived "phase5-test" cellID
+	// (from buildPhase5State, were it used) and the legacy "default"
+	// fallback must NOT appear — neither path should leak into metrics.
+	for _, forbidden := range []string{"phase5-test", "default"} {
+		for key := range snap.RequestCounts {
+			assert.NotContainsf(t, key, forbidden+" ",
+				"cell label %q must not appear in metrics snapshot (regression to global cellID derivation)", forbidden)
+		}
 	}
 }
 

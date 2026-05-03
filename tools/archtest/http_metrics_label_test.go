@@ -4,33 +4,31 @@ package archtest
 // HTTP-METRICS-LABEL-REALIGN contract (D1, 2026-05-04):
 //
 //   - HTTP-METRICS-LABEL-CELLID-CTXSOURCE-01:
-//     runtime/http/middleware/metrics.go must read the cell label from ctx via
-//     ctxkeys.MustCellIDFrom — proving there is no fallback branch and no
-//     instance-level cellID. A revert that pulls cellID from a struct field or
-//     adds an `if cellID == "" { cellID = "_runtime" }` fallback would silently
-//     erode the per-request label guarantee; this rule blocks it.
+//     runtime/http/middleware/metrics.go must read the cell label from the
+//     in-flight cellIDState via withCellIDState/cs.cellID — chi-style mutable
+//     pointer pattern that lets sub-mux WithCellIDContext middleware override
+//     the sentinel set at the listener root. A revert that pulls cellID from
+//     a struct field, adds a string-valued ctxkeys read on the wrong layer,
+//     or branches on a fallback would silently erode the per-request label
+//     guarantee; this rule blocks it.
 //
 //   - HTTP-METRICS-LABEL-NO-ASSEMBLY-DERIVE-01:
 //     runtime/bootstrap/phases_http.go must not derive any metrics cellID from
 //     b.assemblyID, b.assemblyCore.ID(), or the literal "default". Pre-realign
 //     code did exactly this and broke multi-cell assembly attribution; the new
-//     contract is "cellID flows from RouteGroup.CellID via ctx, never from
-//     assembly identity".
+//     contract is "cellID flows from RouteGroup.CellID via mutable state,
+//     never from assembly identity".
 //
 //   - HTTP-METRICS-LABEL-NO-CONFIG-CELLID-01:
 //     runtime/observability/metrics.ProviderCollectorConfig must not contain a
 //     CellID field. Holding cellID on the collector instance rather than per
 //     RecordRequest call is the architectural pattern this PR removes.
 //
-//   - HTTP-METRICS-LABEL-LISTENER-ROOT-RUNTIME-01:
-//     runtime/http/router/router.go must install
-//     middleware.WithCellIDContext("_runtime") before middleware.Metrics on the
-//     listener root mux. This is the *single* listener-root sentinel injection
-//     point — bootstrap and other layers no longer inject any fallback. If
-//     this call is removed or moved (e.g. someone tries to install the
-//     sentinel inside bootstrap or inside Metrics itself), unmatched and
-//     framework-owned requests would emit an empty cell label, breaking
-//     dashboards.
+//   - HTTP-METRICS-LABEL-RUNTIME-SENTINEL-01:
+//     runtime/http/middleware/metrics.go must seed the cellIDState with
+//     RuntimeCellIDSentinel ("_runtime"), so framework-owned requests
+//     (healthz / readyz / metrics endpoint / unmatched 404s) emit the
+//     framework label rather than an empty value or a per-listener guess.
 //
 // All four rules use go/ast so reorderings, alias renames, and indirect
 // imports are detected even without changing the surface API.
@@ -40,7 +38,6 @@ import (
 	"go/parser"
 	"go/token"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -51,14 +48,17 @@ const (
 	ruleHTTPMetricsLabelCtxSource01      = "HTTP-METRICS-LABEL-CELLID-CTXSOURCE-01"
 	ruleHTTPMetricsLabelNoAssemblyDerive = "HTTP-METRICS-LABEL-NO-ASSEMBLY-DERIVE-01"
 	ruleHTTPMetricsLabelNoConfigCellID   = "HTTP-METRICS-LABEL-NO-CONFIG-CELLID-01"
-	ruleHTTPMetricsLabelListenerRoot     = "HTTP-METRICS-LABEL-LISTENER-ROOT-RUNTIME-01"
+	ruleHTTPMetricsLabelRuntimeSentinel  = "HTTP-METRICS-LABEL-RUNTIME-SENTINEL-01"
 
 	httpMetricsRuntimeSentinelLiteral = `"_runtime"`
 )
 
-// TestHTTPMetricsLabelCellIDCtxSource01 verifies metrics.go calls
-// ctxkeys.MustCellIDFrom(r.Context()) — i.e. cell label originates from ctx,
-// not from a struct field, fallback default, or local computation.
+// TestHTTPMetricsLabelCellIDCtxSource01 verifies metrics.go uses the chi-style
+// mutable cellIDState pattern: a call to withCellIDState(...) seeds the per-
+// request struct, and the recorder reads the resolved cellID from that
+// struct's field. Plain ctxkeys reads on the listener-root layer would miss
+// values written by sub-mux WithCellIDContext middleware (chi child contexts
+// are detached from the parent), so this rule pins the correct mechanism.
 func TestHTTPMetricsLabelCellIDCtxSource01(t *testing.T) {
 	root := findModuleRoot(t)
 	target := filepath.Join(root, "runtime", "http", "middleware", "metrics.go")
@@ -69,37 +69,36 @@ func TestHTTPMetricsLabelCellIDCtxSource01(t *testing.T) {
 	file, err := parser.ParseFile(fset, target, nil, parser.SkipObjectResolution)
 	require.NoErrorf(t, err, "%s: parse failed", rel)
 
-	importsCtxkeys := false
-	for _, imp := range file.Imports {
-		if strings.Trim(imp.Path.Value, `"`) == "github.com/ghbvf/gocell/kernel/ctxkeys" {
-			importsCtxkeys = true
-			break
-		}
-	}
-	assert.Truef(t, importsCtxkeys,
-		"%s: %s — file must import kernel/ctxkeys to read the cell label from request context",
-		rel, ruleHTTPMetricsLabelCtxSource01)
-
-	callsMustCellIDFrom := false
+	var (
+		callsWithCellIDState bool
+		readsCellIDStateFld  bool
+	)
 	ast.Inspect(file, func(n ast.Node) bool {
-		call, ok := n.(*ast.CallExpr)
-		if !ok {
-			return true
+		switch v := n.(type) {
+		case *ast.CallExpr:
+			if id, ok := v.Fun.(*ast.Ident); ok && id.Name == "withCellIDState" {
+				callsWithCellIDState = true
+			}
+		case *ast.SelectorExpr:
+			// Detect any access of `something.cellID` — typically `cs.cellID`
+			// inside the safeObserve closure that hands the resolved label
+			// to collector.RecordRequest.
+			if v.Sel.Name == "cellID" {
+				readsCellIDStateFld = true
+			}
 		}
-		sel, ok := call.Fun.(*ast.SelectorExpr)
-		if !ok {
-			return true
-		}
-		if sel.Sel.Name != "MustCellIDFrom" {
-			return true
-		}
-		callsMustCellIDFrom = true
-		return false
+		return true
 	})
-	assert.Truef(t, callsMustCellIDFrom,
-		"%s: %s — middleware.Metrics must call ctxkeys.MustCellIDFrom(...) "+
-			"to obtain the cell label; a fallback branch or instance-level cellID "+
-			"silently undermines the per-request labeling contract",
+
+	assert.Truef(t, callsWithCellIDState,
+		"%s: %s — middleware.Metrics must call withCellIDState(...) to seed the "+
+			"per-request mutable cell-id container; only this layer can be observed by "+
+			"sub-mux WithCellIDContext mutations after next.ServeHTTP returns",
+		rel, ruleHTTPMetricsLabelCtxSource01)
+	assert.Truef(t, readsCellIDStateFld,
+		"%s: %s — middleware.Metrics must read the resolved label via cs.cellID; "+
+			"reading ctxkeys.CellIDFrom on the listener-root layer would miss the per-cell "+
+			"override written into a chi sub-mux child context",
 		rel, ruleHTTPMetricsLabelCtxSource01)
 }
 
@@ -225,13 +224,20 @@ func TestHTTPMetricsLabelNoConfigCellID01(t *testing.T) {
 		rel, ruleHTTPMetricsLabelNoConfigCellID)
 }
 
-// TestHTTPMetricsLabelListenerRootRuntime01 verifies router.go installs
-// middleware.WithCellIDContext("_runtime") immediately before
-// middleware.Metrics on the listener root mux. The order matters: cell-id
-// must populate ctx before Metrics tries to read it.
-func TestHTTPMetricsLabelListenerRootRuntime01(t *testing.T) {
+// TestHTTPMetricsLabelRuntimeSentinel01 verifies metrics.go contains the
+// "_runtime" string literal in a withCellIDState call — proving the recorder
+// seeds its mutable cell-id state with the framework sentinel rather than an
+// empty value or a per-listener guess. A regression that drops the sentinel
+// would leave framework-owned requests (healthz, readyz, /metrics, unmatched
+// 404s) emitting an empty cell label, breaking dashboards that match
+// `cell="_runtime"` for framework traffic.
+//
+// The walk is structurally pinned: the literal must appear as an argument
+// to a call to withCellIDState, not just somewhere in the file (e.g. a
+// comment, an unrelated helper, an unused constant).
+func TestHTTPMetricsLabelRuntimeSentinel01(t *testing.T) {
 	root := findModuleRoot(t)
-	target := filepath.Join(root, "runtime", "http", "router", "router.go")
+	target := filepath.Join(root, "runtime", "http", "middleware", "metrics.go")
 	rel, _ := filepath.Rel(root, target)
 	rel = filepath.ToSlash(rel)
 
@@ -239,62 +245,37 @@ func TestHTTPMetricsLabelListenerRootRuntime01(t *testing.T) {
 	file, err := parser.ParseFile(fset, target, nil, parser.SkipObjectResolution)
 	require.NoErrorf(t, err, "%s: parse failed", rel)
 
-	// Walk the AST collecting every middleware.WithCellIDContext("_runtime")
-	// and middleware.Metrics(...) call. Then assert (a) the WithCellIDContext
-	// call exists with literal "_runtime", and (b) it precedes the Metrics
-	// call within the same statement list.
-	type callRef struct {
-		name string
-		pos  token.Pos
-		arg0 string
-	}
-	var calls []callRef
-
+	seedsRuntimeSentinel := false
 	ast.Inspect(file, func(n ast.Node) bool {
 		call, ok := n.(*ast.CallExpr)
 		if !ok {
 			return true
 		}
-		sel, ok := call.Fun.(*ast.SelectorExpr)
-		if !ok {
+		// Match `withCellIDState(<ctx>, RuntimeCellIDSentinel)` —
+		// either a bare identifier or a selector. Permitting either
+		// keeps the rule resilient to package-internal vs imported
+		// usage changes.
+		id, ok := call.Fun.(*ast.Ident)
+		if !ok || id.Name != "withCellIDState" {
 			return true
 		}
-		switch sel.Sel.Name {
-		case "WithCellIDContext", "Metrics":
-			ref := callRef{name: sel.Sel.Name, pos: call.Pos()}
-			if len(call.Args) > 0 {
-				if lit, ok := call.Args[0].(*ast.BasicLit); ok && lit.Kind == token.STRING {
-					ref.arg0 = lit.Value
+		for _, arg := range call.Args {
+			switch v := arg.(type) {
+			case *ast.Ident:
+				if v.Name == "RuntimeCellIDSentinel" {
+					seedsRuntimeSentinel = true
+				}
+			case *ast.BasicLit:
+				if v.Kind == token.STRING && v.Value == httpMetricsRuntimeSentinelLiteral {
+					seedsRuntimeSentinel = true
 				}
 			}
-			calls = append(calls, ref)
 		}
 		return true
 	})
 
-	var sentinelPos, metricsPos token.Pos
-	for _, c := range calls {
-		if c.name == "WithCellIDContext" && c.arg0 == httpMetricsRuntimeSentinelLiteral {
-			if sentinelPos == token.NoPos || c.pos < sentinelPos {
-				sentinelPos = c.pos
-			}
-		}
-		if c.name == "Metrics" {
-			if metricsPos == token.NoPos || c.pos < metricsPos {
-				metricsPos = c.pos
-			}
-		}
-	}
-
-	require.NotEqualf(t, token.NoPos, sentinelPos,
-		`%s: %s — router.go must call middleware.WithCellIDContext("_runtime") on the listener root mux`,
-		rel, ruleHTTPMetricsLabelListenerRoot)
-	require.NotEqualf(t, token.NoPos, metricsPos,
-		"%s: %s — router.go must call middleware.Metrics on the listener root mux",
-		rel, ruleHTTPMetricsLabelListenerRoot)
-
-	assert.Lessf(t, int(sentinelPos), int(metricsPos),
-		`%s: %s — middleware.WithCellIDContext("_runtime") must appear before middleware.Metrics `+
-			"so the sentinel populates request ctx before the recorder reads it",
-		rel, ruleHTTPMetricsLabelListenerRoot)
+	assert.Truef(t, seedsRuntimeSentinel,
+		`%s: %s — middleware.Metrics must seed withCellIDState with RuntimeCellIDSentinel `+
+			`(or the literal "_runtime"); without it, framework-owned routes emit an empty cell label`,
+		rel, ruleHTTPMetricsLabelRuntimeSentinel)
 }
