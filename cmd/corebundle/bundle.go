@@ -482,7 +482,7 @@ func devtoolsOption(shared *SharedDeps) bootstrap.Option {
 			slog.String("cwd", cwd))
 		return bootstrap.WithDevtoolsCatalog(nil, "", nil)
 	}
-	pm, err := parseProjectWithTimeout(absRoot, defaultDevtoolsParseTimeout)
+	pm, err := parseProjectWithTimeout(absRoot, defaultDevtoolsParseTimeout, shared.Clock)
 	if err != nil {
 		return bootstrap.WithDevtoolsCatalog(nil, "", nil)
 	}
@@ -493,8 +493,9 @@ func devtoolsOption(shared *SharedDeps) bootstrap.Option {
 // parseProjectWithTimeout runs metadata.NewParser(absRoot).Parse() in a
 // goroutine and returns within timeout. On parse error or timeout the catalog
 // endpoint is disabled (best-effort degradation); the caller receives nil and
-// the error/timeout is already logged here.
-func parseProjectWithTimeout(absRoot string, timeout time.Duration) (*metadata.ProjectMeta, error) {
+// the error/timeout is already logged here. The clock is injected for testability
+// and to satisfy PROD-CLOCK-INJECTION-01 (no time.After in production).
+func parseProjectWithTimeout(absRoot string, timeout time.Duration, clk clock.Clock) (*metadata.ProjectMeta, error) {
 	type parseResult struct {
 		pm  *metadata.ProjectMeta
 		err error
@@ -504,6 +505,8 @@ func parseProjectWithTimeout(absRoot string, timeout time.Duration) (*metadata.P
 		pm, err := metadata.NewParser(absRoot).Parse()
 		done <- parseResult{pm, err}
 	}()
+	timer := clk.NewTimerAt(clk.Now().Add(timeout))
+	defer timer.Stop()
 	select {
 	case r := <-done:
 		if r.err != nil {
@@ -513,7 +516,7 @@ func parseProjectWithTimeout(absRoot string, timeout time.Duration) (*metadata.P
 			return nil, r.err
 		}
 		return r.pm, nil
-	case <-time.After(timeout):
+	case <-timer.C():
 		slog.Warn("devtools: project metadata parse timeout; catalog endpoint disabled",
 			slog.String("root", absRoot),
 			slog.Duration("timeout", timeout))
