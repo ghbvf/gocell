@@ -33,9 +33,6 @@ var specCatalog = wrapper.ContractSpec{
 	Path:      "/api/v1/devtools/catalog",
 }
 
-// validIncludeTokens is the set of accepted ?include= tokens.
-var validIncludeTokens = []string{"cellDeps", "packageDeps", "relations", "statusBoard"}
-
 // Handler serves the devtools catalog HTTP endpoint.
 type Handler struct {
 	project   *metadata.ProjectMeta
@@ -215,29 +212,15 @@ func parseInclude(ctx context.Context, w http.ResponseWriter, raw string, presen
 	if !present {
 		return catalog.AllIncluded(), true
 	}
-	tokens, err := csvparam.ParseAllowed(raw, validIncludeTokens, "include")
+	tokens, err := csvparam.ParseAllowed(raw, catalog.AllIncludeTokens, "include")
 	if err != nil {
 		writeValidationError(ctx, w, err.Error())
 		return catalog.IncludeOptions{}, false
 	}
-	var inc catalog.IncludeOptions
-	for _, token := range tokens {
-		switch token {
-		case "cellDeps":
-			inc.CellDeps = true
-		case "packageDeps":
-			inc.PackageDeps = true
-		case "relations":
-			inc.Relations = true
-		case "statusBoard":
-			inc.StatusBoard = true
-		default:
-			writeValidationError(ctx, w, csvparam.UnknownTokenError{
-				Param:   "include",
-				Allowed: validIncludeTokens,
-			}.Error())
-			return catalog.IncludeOptions{}, false
-		}
+	inc, err := catalog.ParseIncludeTokens(tokens)
+	if err != nil {
+		writeValidationError(ctx, w, err.Error())
+		return catalog.IncludeOptions{}, false
 	}
 	return inc, true
 }

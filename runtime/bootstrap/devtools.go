@@ -10,8 +10,6 @@ package bootstrap
 import (
 	"context"
 	"log/slog"
-	"sort"
-	"time"
 
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/governance"
@@ -34,9 +32,10 @@ func (b *Bootstrap) phase5InitDevtoolsHandler(_ context.Context, s *phaseState) 
 }
 
 // buildCellDepGraph runs governance.DependencyChecker.Graph() and converts to
-// catalog.CellDepGraph. Validation errors (cycles etc.) are logged at Warn but
-// do not block bootstrap — endpoint surfaces "best-effort" graph.
-// BuiltAt is stamped from clk so operators can see how stale the graph is.
+// catalog.CellDepGraph via catalog.NewCellDepGraph. Validation errors (cycles
+// etc.) are logged at Warn but do not block bootstrap — endpoint surfaces a
+// "best-effort" graph. BuiltAt is stamped from clk so operators can detect
+// stale graphs.
 func buildCellDepGraph(pm *metadata.ProjectMeta, clk clock.Clock) *catalog.CellDepGraph {
 	dc := governance.NewDependencyChecker(pm)
 	g, errs := dc.Graph()
@@ -44,20 +43,5 @@ func buildCellDepGraph(pm *metadata.ProjectMeta, clk clock.Clock) *catalog.CellD
 		slog.Warn("devtools: cell dep graph has validation errors; graph may be incomplete",
 			slog.Int("error_count", len(errs)))
 	}
-	out := &catalog.CellDepGraph{
-		Nodes:   append([]string(nil), g.Nodes...),
-		Edges:   make([]catalog.CellEdge, 0, len(g.Edges)),
-		BuiltAt: clk.Now().UTC().Format(time.RFC3339),
-	}
-	sort.Strings(out.Nodes)
-	for _, e := range g.Edges {
-		out.Edges = append(out.Edges, catalog.CellEdge{From: e.From, To: e.To})
-	}
-	sort.Slice(out.Edges, func(i, j int) bool {
-		if out.Edges[i].From != out.Edges[j].From {
-			return out.Edges[i].From < out.Edges[j].From
-		}
-		return out.Edges[i].To < out.Edges[j].To
-	})
-	return out
+	return catalog.NewCellDepGraph(g, clk)
 }

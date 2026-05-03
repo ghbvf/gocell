@@ -405,7 +405,17 @@ func addContractOwners(pm *metadata.ProjectMeta, expanded map[string]bool, owner
 	}
 }
 
-// applyFilter applies kind, layer, and cell focus filters to entities.
+// applyFilter trims doc.Entities according to filter using strict AND semantics
+// across kinds × layers × cells:
+//   - When all three are non-empty, an entity must match all three to survive.
+//   - In particular, ?layers=cells&cells=foo will drop Contract/Journey
+//     entities owned by foo because their entityLayer is "contracts"/"journeys",
+//     not "cells". To get a focus view that includes a cell's contracts and
+//     journeys, use ?cells=foo without ?layers.
+//
+// This AND policy is intentional: callers expressing both axes mean "the
+// intersection". Document changes here MUST be mirrored in
+// docs/guides/devtools-catalog.md "多维过滤 AND 语义" section.
 func applyFilter(entities []Entity, filter Filter) []Entity {
 	if len(filter.Kinds) == 0 && len(filter.Layers) == 0 && len(filter.Cells) == 0 {
 		return entities
@@ -537,7 +547,10 @@ func buildFilterEcho(f Filter) FilterEcho {
 	}
 }
 
-// buildIncludeEcho converts IncludeOptions to a sorted []string of active flag names.
+// buildIncludeEcho converts IncludeOptions to a sorted []string of active flag
+// names. Returns nil (not an empty slice) when no flags are set so that
+// omitempty on FilterEcho.Include elides the key from the wire output,
+// consistent with Kinds/Layers/Cells (which are also omitted when empty).
 func buildIncludeEcho(inc IncludeOptions) []string {
 	var names []string
 	if inc.CellDeps {
@@ -551,6 +564,9 @@ func buildIncludeEcho(inc IncludeOptions) []string {
 	}
 	if inc.StatusBoard {
 		names = append(names, "statusBoard")
+	}
+	if len(names) == 0 {
+		return nil
 	}
 	sort.Strings(names)
 	return names

@@ -16,9 +16,6 @@ import (
 	"github.com/ghbvf/gocell/tools/depgraph"
 )
 
-// validIncludeTokens is the set of accepted --include= tokens.
-var validIncludeTokens = []string{"cellDeps", "packageDeps", "relations", "statusBoard"}
-
 // validKinds is the set of accepted --kinds= tokens.
 // References catalog.AllKinds — single source of truth.
 var validKinds = catalog.AllKinds
@@ -81,7 +78,7 @@ func exportCatalog(args []string) error {
 		Filter: filter,
 	}
 
-	if err := attachCellDeps(&opts, filter, pm); err != nil {
+	if err := attachCellDeps(&opts, filter, pm, opts.Clock); err != nil {
 		return err
 	}
 
@@ -103,15 +100,15 @@ func exportCatalog(args []string) error {
 }
 
 // attachCellDeps populates opts.CellDeps when CellDeps is set in the filter.
-func attachCellDeps(opts *catalog.ExportOptions, filter catalog.Filter, pm *metadata.ProjectMeta) error {
+func attachCellDeps(opts *catalog.ExportOptions, filter catalog.Filter, pm *metadata.ProjectMeta, clk clock.Clock) error {
 	if !filter.Include.CellDeps {
 		return nil
 	}
-	cd, errs := governance.NewDependencyChecker(pm).Graph()
+	g, errs := governance.NewDependencyChecker(pm).Graph()
 	if len(errs) > 0 {
 		return fmt.Errorf("cell dep graph build had validation errors:\n%s", formatValidationErrors(errs))
 	}
-	opts.CellDeps = toMetadataCellDepGraph(cd)
+	opts.CellDeps = catalog.NewCellDepGraph(g, clk)
 	return nil
 }
 
@@ -196,41 +193,11 @@ func buildFilter(kinds, layers, cells, include string) (catalog.Filter, error) {
 // parseInclude converts a comma-separated include token string to an IncludeOptions.
 // An empty string returns zero (nothing included). Unknown tokens return an error.
 func parseInclude(s string) (catalog.IncludeOptions, error) {
-	tokens, err := csvparam.ParseAllowed(s, validIncludeTokens, "include")
+	tokens, err := csvparam.ParseAllowed(s, catalog.AllIncludeTokens, "include")
 	if err != nil {
 		return catalog.IncludeOptions{}, fmt.Errorf("export: %w", err)
 	}
-	var inc catalog.IncludeOptions
-	for _, tok := range tokens {
-		switch tok {
-		case "cellDeps":
-			inc.CellDeps = true
-		case "packageDeps":
-			inc.PackageDeps = true
-		case "relations":
-			inc.Relations = true
-		case "statusBoard":
-			inc.StatusBoard = true
-		default:
-			return catalog.IncludeOptions{}, fmt.Errorf("export: %w", csvparam.UnknownTokenError{
-				Param:   "include",
-				Allowed: validIncludeTokens,
-			})
-		}
-	}
-	return inc, nil
-}
-
-// toMetadataCellDepGraph converts a governance.Graph to *catalog.CellDepGraph.
-func toMetadataCellDepGraph(g governance.Graph) *catalog.CellDepGraph {
-	edges := make([]catalog.CellEdge, 0, len(g.Edges))
-	for _, e := range g.Edges {
-		edges = append(edges, catalog.CellEdge{From: e.From, To: e.To})
-	}
-	return &catalog.CellDepGraph{
-		Nodes: g.Nodes,
-		Edges: edges,
-	}
+	return catalog.ParseIncludeTokens(tokens)
 }
 
 // formatValidationErrors formats a slice of governance.ValidationResult as a

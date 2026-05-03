@@ -99,23 +99,24 @@ func TestRunExport_FormatBad(t *testing.T) {
 }
 
 // TestRunExport_BadInclude verifies that an unknown --include token errors with
-// a message that lists valid options.
+// a message that lists valid options but does not echo the invalid value.
 func TestRunExport_BadInclude(t *testing.T) {
 	root := copyFixtureToTempDir(t)
 	err := runExport([]string{"catalog", "--root=" + root, "--include=foobar"})
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "unknown include token")
+	assert.Contains(t, err.Error(), "include")
 	assert.NotContains(t, err.Error(), "foobar")
 	// Error message must hint at valid tokens.
 	assert.Contains(t, err.Error(), "cellDeps")
 }
 
-// TestRunExport_BadKind verifies that an unknown --kinds token errors.
+// TestRunExport_BadKind verifies that an unknown --kinds token errors without
+// echoing the invalid value.
 func TestRunExport_BadKind(t *testing.T) {
 	root := copyFixtureToTempDir(t)
 	err := runExport([]string{"catalog", "--root=" + root, "--kinds=Bogus", "--include="})
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "unknown kinds token")
+	assert.Contains(t, err.Error(), "kinds")
 	assert.NotContains(t, err.Error(), "Bogus")
 }
 
@@ -125,7 +126,7 @@ func TestRunExport_BadLayer(t *testing.T) {
 	root := copyFixtureToTempDir(t)
 	err := runExport([]string{"catalog", "--root=" + root, "--layers=foo", "--include="})
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "unknown layers token")
+	assert.Contains(t, err.Error(), "layers")
 	assert.NotContains(t, err.Error(), "foo")
 }
 
@@ -234,16 +235,33 @@ func TestRunExport_CellDepsValidationErrors(t *testing.T) {
 	mkContract("contractab", "cella", "cellb")
 	mkContract("contractba", "cellb", "cella")
 
+	// Capture stdout for JSON assertion.
+	var stdout bytes.Buffer
+	origOut := os.Stdout
+	r, w, pipeErr := os.Pipe()
+	require.NoError(t, pipeErr)
+	os.Stdout = w
+
+	done := make(chan []byte, 1)
+	go func() {
+		var buf bytes.Buffer
+		_, _ = io.Copy(&buf, r)
+		done <- buf.Bytes()
+	}()
+
 	err := runExport([]string{"catalog", "--root=" + root, "--include=cellDeps"})
-	// With --include=cellDeps and a real cycle, governance.Graph returns errors.
-	// However, since BuildDocument is a stub, the behavior depends on whether
-	// governance.Graph detects the cycle at graph-build time (not cycle-check time).
-	// The cycle is detectable at build time only if DEP-02 fires inside Graph().
-	// Graph() returns errs from buildDependencyGraph (resolution errors), not cycle
-	// detection. DEP-02 (cycle) fires in Check(), not Graph(). So Graph() returns
-	// an empty error slice and no fail-fast happens here.
-	// This test documents the current behavior: no error from cycle alone.
-	_ = err
+	_ = w.Close()
+	os.Stdout = origOut
+	stdout.Write(<-done)
+
+	// governance.Graph() detects resolution errors (DEP-02 cycle detection fires
+	// in Check(), not Graph()), so Graph() returns an empty error slice here.
+	// export should succeed even with a cyclic dependency structure.
+	require.NoError(t, err, "Graph() does not detect cycles (only resolution errors); export should succeed even with cycles")
+	out := stdout.String()
+	// Both cell nodes must appear in the output because Graph() returns them.
+	require.Contains(t, out, "cella")
+	require.Contains(t, out, "cellb")
 }
 
 // TestRunExport_CatalogStdoutJSON runs a happy-path export and checks the

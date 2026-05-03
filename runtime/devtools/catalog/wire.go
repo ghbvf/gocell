@@ -10,7 +10,11 @@
 package catalog
 
 import (
+	"time"
+
+	"github.com/ghbvf/gocell/kernel/clock"
 	kerneldepgraph "github.com/ghbvf/gocell/kernel/depgraph"
+	"github.com/ghbvf/gocell/kernel/governance"
 )
 
 // Wire-format constants. Bumping either of these is a breaking change that
@@ -69,10 +73,11 @@ type Filter struct {
 // wire stability). Allows clients to confirm which filters the server actually
 // applied without parsing query strings themselves.
 type FilterEcho struct {
-	Kinds   []string `json:"kinds,omitempty"  yaml:"kinds,omitempty"`
-	Layers  []string `json:"layers,omitempty" yaml:"layers,omitempty"`
-	Cells   []string `json:"cells,omitempty"  yaml:"cells,omitempty"`
-	Include []string `json:"include"          yaml:"include"` // sorted: ["cellDeps","packageDeps","relations","statusBoard"] subset
+	Kinds  []string `json:"kinds,omitempty"  yaml:"kinds,omitempty"`
+	Layers []string `json:"layers,omitempty" yaml:"layers,omitempty"`
+	Cells  []string `json:"cells,omitempty"  yaml:"cells,omitempty"`
+	// Include is a sorted subset of AllIncludeTokens; omitted when empty.
+	Include []string `json:"include,omitempty" yaml:"include,omitempty"`
 }
 
 // Document is the top-level wire envelope. Backstage-style five-field root +
@@ -263,4 +268,20 @@ type AssemblySpecBuild struct {
 // ActorSpec is Document.Entities[Kind=="Actor"].Spec.
 type ActorSpec struct {
 	MaxConsistencyLevel string `json:"maxConsistencyLevel,omitempty" yaml:"maxConsistencyLevel,omitempty"`
+}
+
+// NewCellDepGraph constructs a CellDepGraph from a governance.Graph snapshot.
+// Both HTTP (bootstrap.phase5InitDevtoolsHandler) and CLI (cmd/gocell export
+// catalog) call this so the wire shape and field-population semantics stay in
+// lock-step. BuiltAt is set from clk so consumers can detect stale graphs.
+func NewCellDepGraph(g governance.Graph, clk clock.Clock) *CellDepGraph {
+	edges := make([]CellEdge, 0, len(g.Edges))
+	for _, e := range g.Edges {
+		edges = append(edges, CellEdge{From: e.From, To: e.To})
+	}
+	return &CellDepGraph{
+		Nodes:   append([]string(nil), g.Nodes...),
+		Edges:   edges,
+		BuiltAt: clk.Now().UTC().Format(time.RFC3339),
+	}
 }

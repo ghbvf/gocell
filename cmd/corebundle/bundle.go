@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	adapterpg "github.com/ghbvf/gocell/adapters/postgres"
 	adaptervault "github.com/ghbvf/gocell/adapters/vault"
@@ -441,6 +442,11 @@ func buildConfigCorePGStorage(
 	return pgRes, storageOpt, nil
 }
 
+// defaultDevtoolsParseTimeout is the max time allowed for project metadata
+// parsing during bootstrap. Exceeding this disables the catalog endpoint
+// (best-effort degradation) rather than blocking server startup.
+const defaultDevtoolsParseTimeout = 30 * time.Second
+
 // devtoolsOption builds the WithDevtoolsCatalog bootstrap option for the catalog
 // endpoint. Best-effort metadata parse: logs at Warn (degraded operation per
 // observability.md) and disables the endpoint when GOCELL_PROJECT_ROOT is unset,
@@ -476,15 +482,43 @@ func devtoolsOption(shared *SharedDeps) bootstrap.Option {
 			slog.String("cwd", cwd))
 		return bootstrap.WithDevtoolsCatalog(nil, "", nil)
 	}
-	pm, err := metadata.NewParser(absRoot).Parse()
+	pm, err := parseProjectWithTimeout(absRoot, defaultDevtoolsParseTimeout)
 	if err != nil {
-		slog.Warn("devtools: project metadata parse failed; catalog endpoint disabled",
-			slog.String("root", absRoot),
-			slog.Any("error", err))
 		return bootstrap.WithDevtoolsCatalog(nil, "", nil)
 	}
 	slog.Info("devtools: catalog endpoint enabled", slog.String("root", absRoot))
 	return bootstrap.WithDevtoolsCatalog(pm, absRoot, generatedPackageGraph)
+}
+
+// parseProjectWithTimeout runs metadata.NewParser(absRoot).Parse() in a
+// goroutine and returns within timeout. On parse error or timeout the catalog
+// endpoint is disabled (best-effort degradation); the caller receives nil and
+// the error/timeout is already logged here.
+func parseProjectWithTimeout(absRoot string, timeout time.Duration) (*metadata.ProjectMeta, error) {
+	type parseResult struct {
+		pm  *metadata.ProjectMeta
+		err error
+	}
+	done := make(chan parseResult, 1)
+	go func() {
+		pm, err := metadata.NewParser(absRoot).Parse()
+		done <- parseResult{pm, err}
+	}()
+	select {
+	case r := <-done:
+		if r.err != nil {
+			slog.Warn("devtools: project metadata parse failed; catalog endpoint disabled",
+				slog.String("root", absRoot),
+				slog.Any("error", r.err))
+			return nil, r.err
+		}
+		return r.pm, nil
+	case <-time.After(timeout):
+		slog.Warn("devtools: project metadata parse timeout; catalog endpoint disabled",
+			slog.String("root", absRoot),
+			slog.Duration("timeout", timeout))
+		return nil, fmt.Errorf("devtools: parse timeout after %s", timeout)
+	}
 }
 
 // buildConsumerBase constructs ConsumerBase from the topology-selected
