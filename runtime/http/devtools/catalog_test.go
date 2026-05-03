@@ -472,3 +472,63 @@ func containsString(vals []string, want string) bool {
 	}
 	return false
 }
+
+// TestCatalog_Cells_RejectsUnknownID verifies that the cells parameter is
+// allowlist-validated against the project's known cell IDs (B2 / SEC-02).
+// Without this guard, querying ?cells=arbitrary-id leaks existence info via
+// response shape differences.
+func TestCatalog_Cells_RejectsUnknownID(t *testing.T) {
+	t.Parallel()
+
+	h := buildTestHandler(t)
+	rr := doAdminRequest(t, h, "/api/v1/devtools/catalog?cells=nonexistent-cell")
+
+	if rr.Code != http.StatusBadRequest {
+		t.Errorf("expected 400 for unknown cell, got %d: %s", rr.Code, rr.Body.String())
+	}
+	assertErrValidation(t, rr)
+	if strings.Contains(rr.Body.String(), "nonexistent-cell") {
+		t.Errorf("public error must not echo invalid cell token: %s", rr.Body.String())
+	}
+}
+
+// TestCatalog_Cells_AcceptsKnownID verifies the allowlist actually permits
+// project-declared cell IDs.
+func TestCatalog_Cells_AcceptsKnownID(t *testing.T) {
+	t.Parallel()
+
+	h := buildTestHandler(t)
+	rr := doAdminRequest(t, h, "/api/v1/devtools/catalog?cells=accesscore")
+
+	if rr.Code != http.StatusOK {
+		t.Errorf("expected 200 for known cell ID, got %d: %s", rr.Code, rr.Body.String())
+	}
+}
+
+// TestCatalog_ConcurrentRequests verifies the handler is safe under concurrent
+// load. Combined with `go test -race`, this catches data races on shared state
+// (project, cellGraph, pkgGraph). 10 goroutines × 5 requests each.
+func TestCatalog_ConcurrentRequests(t *testing.T) {
+	t.Parallel()
+
+	h := buildTestHandler(t)
+	const goroutines = 10
+	const reqsPerG = 5
+
+	done := make(chan struct{}, goroutines)
+	for i := 0; i < goroutines; i++ {
+		go func() {
+			defer func() { done <- struct{}{} }()
+			for j := 0; j < reqsPerG; j++ {
+				rr := doAdminRequest(t, h, "/api/v1/devtools/catalog")
+				if rr.Code != http.StatusOK {
+					t.Errorf("concurrent request got %d: %s", rr.Code, rr.Body.String())
+					return
+				}
+			}
+		}()
+	}
+	for i := 0; i < goroutines; i++ {
+		<-done
+	}
+}

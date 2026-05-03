@@ -1,6 +1,4 @@
 // Package main is the corebundle composition root.
-//
-//go:generate go run ../gocell generate catalog --out=catalog_gen.go --package=main
 package main
 
 import (
@@ -8,6 +6,8 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 
 	adapterpg "github.com/ghbvf/gocell/adapters/postgres"
@@ -18,6 +18,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/clock"
 	kcrypto "github.com/ghbvf/gocell/kernel/crypto"
+	"github.com/ghbvf/gocell/kernel/governance"
 	kernellifecycle "github.com/ghbvf/gocell/kernel/lifecycle"
 	"github.com/ghbvf/gocell/kernel/metadata"
 	"github.com/ghbvf/gocell/kernel/observability/metrics"
@@ -441,9 +442,10 @@ func buildConfigCorePGStorage(
 }
 
 // devtoolsOption builds the WithDevtoolsCatalog bootstrap option for the catalog
-// endpoint. Best-effort metadata parse: logs and degrades gracefully when
-// GOCELL_PROJECT_ROOT is not set or doesn't expose a valid project tree. The
-// endpoint is absent when pm is nil — Bootstrap treats nil pm as "disabled".
+// endpoint. Best-effort metadata parse: logs at Warn (degraded operation per
+// observability.md) and disables the endpoint when GOCELL_PROJECT_ROOT is unset,
+// resolves outside the working tree, or doesn't expose a valid project tree.
+// The endpoint is absent when pm is nil — Bootstrap treats nil pm as "disabled".
 //
 // generatedPackageGraph is the build-time generated package dep graph from
 // catalog_gen.go (produced by `go generate ./cmd/corebundle/`). When nil (e.g.
@@ -451,18 +453,38 @@ func buildConfigCorePGStorage(
 func devtoolsOption(shared *SharedDeps) bootstrap.Option {
 	root := shared.ProjectRoot
 	if root == "" {
-		slog.Info("devtools: GOCELL_PROJECT_ROOT unset; catalog endpoint disabled")
+		slog.Warn("devtools: GOCELL_PROJECT_ROOT unset; catalog endpoint disabled")
 		return bootstrap.WithDevtoolsCatalog(nil, "", nil)
 	}
-	pm, err := metadata.NewParser(root).Parse()
+	absRoot, err := filepath.Abs(root)
 	if err != nil {
-		slog.Warn("devtools: project metadata parse failed; catalog endpoint disabled",
+		slog.Warn("devtools: GOCELL_PROJECT_ROOT path resolution failed; catalog endpoint disabled",
 			slog.String("root", root),
 			slog.Any("error", err))
 		return bootstrap.WithDevtoolsCatalog(nil, "", nil)
 	}
-	slog.Info("devtools: catalog endpoint enabled", slog.String("root", root))
-	return bootstrap.WithDevtoolsCatalog(pm, root, generatedPackageGraph)
+	cwd, err := os.Getwd()
+	if err != nil {
+		slog.Warn("devtools: cwd lookup failed; catalog endpoint disabled",
+			slog.Any("error", err))
+		return bootstrap.WithDevtoolsCatalog(nil, "", nil)
+	}
+	if !governance.IsWithinRoot(cwd, absRoot) {
+		slog.Warn("devtools: GOCELL_PROJECT_ROOT escapes working tree; catalog endpoint disabled",
+			slog.String("root", root),
+			slog.String("absRoot", absRoot),
+			slog.String("cwd", cwd))
+		return bootstrap.WithDevtoolsCatalog(nil, "", nil)
+	}
+	pm, err := metadata.NewParser(absRoot).Parse()
+	if err != nil {
+		slog.Warn("devtools: project metadata parse failed; catalog endpoint disabled",
+			slog.String("root", absRoot),
+			slog.Any("error", err))
+		return bootstrap.WithDevtoolsCatalog(nil, "", nil)
+	}
+	slog.Info("devtools: catalog endpoint enabled", slog.String("root", absRoot))
+	return bootstrap.WithDevtoolsCatalog(pm, absRoot, generatedPackageGraph)
 }
 
 // buildConsumerBase constructs ConsumerBase from the topology-selected

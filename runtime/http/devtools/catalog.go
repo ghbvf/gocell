@@ -17,13 +17,6 @@ import (
 	"github.com/ghbvf/gocell/runtime/devtools/catalog"
 )
 
-// roleAdmin gates all devtools catalog routes.
-//
-// Keep in sync with cells/accesscore/internal/domain.RoleAdmin (cell-isolation
-// rules forbid runtime/ from importing internal/ packages, so each consumer
-// holds a manually-synced copy of the role string).
-const roleAdmin = "admin"
-
 // specCatalog is the framework-internal ContractSpec for the devtools catalog
 // endpoint. The "http.framework.devtools." prefix exempts it from FMT-18
 // contract-yaml presence validation because it lives in runtime/, not cells/.
@@ -31,14 +24,13 @@ const roleAdmin = "admin"
 // Note: catalog responses use the Backstage Catalog Entity envelope at top
 // level (apiVersion/kind/metadata/spec). They do NOT wrap in {"data": ...}
 // per api-versioning.md — that envelope rule applies to cell-owned business
-// routes; framework-internal routes (this + /healthz /readyz /metrics) follow
-// their own wire formats.
+// routes; framework-internal routes follow their own wire formats.
 var specCatalog = wrapper.ContractSpec{
 	ID:        "http.framework.devtools.catalog.v1",
 	Kind:      "http",
 	Transport: "http",
 	Method:    "GET",
-	Path:      "/devtools/catalog",
+	Path:      "/api/v1/devtools/catalog",
 }
 
 // validIncludeTokens is the set of accepted ?include= tokens.
@@ -80,18 +72,18 @@ func RouteGroup(h *Handler) cell.RouteGroup {
 			return auth.Mount(mux, auth.Route{
 				Contract: specCatalog,
 				Handler:  http.HandlerFunc(h.ServeHTTP),
-				Policy:   auth.AnyRole(roleAdmin),
+				Policy:   auth.AnyRole(auth.RoleAdmin),
 			})
 		},
 	}
 }
 
-// ServeHTTP handles GET /devtools/catalog.
+// ServeHTTP handles GET /api/v1/devtools/catalog.
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
 	// Parse and validate query parameters.
-	filter, format, ok := parseQuery(ctx, w, r)
+	filter, format, ok := parseQuery(ctx, w, r, h.knownCellIDs())
 	if !ok {
 		return
 	}
@@ -148,9 +140,23 @@ func buildExportOptions(h *Handler, filter catalog.Filter) catalog.ExportOptions
 	return opts
 }
 
+// knownCellIDs returns the set of cell IDs the project declares. Used as the
+// allowlist for the ?cells= query parameter so unknown IDs are rejected at the
+// edge instead of leaking existence info via response shape differences.
+func (h *Handler) knownCellIDs() []string {
+	if h.project == nil {
+		return nil
+	}
+	ids := make([]string, 0, len(h.project.Cells))
+	for _, c := range h.project.Cells {
+		ids = append(ids, c.ID)
+	}
+	return ids
+}
+
 // parseQuery extracts and validates query parameters from r. On any validation
 // error it writes a 400 response and returns false.
-func parseQuery(ctx context.Context, w http.ResponseWriter, r *http.Request) (catalog.Filter, string, bool) {
+func parseQuery(ctx context.Context, w http.ResponseWriter, r *http.Request, knownCells []string) (catalog.Filter, string, bool) {
 	q := r.URL.Query()
 
 	kinds, err := csvparam.ParseAllowed(q.Get("kinds"), catalog.AllKinds, "kinds")
@@ -165,7 +171,11 @@ func parseQuery(ctx context.Context, w http.ResponseWriter, r *http.Request) (ca
 		return catalog.Filter{}, "", false
 	}
 
-	cells := csvparam.Parse(q.Get("cells"))
+	cells, err := csvparam.ParseAllowed(q.Get("cells"), knownCells, "cells")
+	if err != nil {
+		writeValidationError(ctx, w, err.Error())
+		return catalog.Filter{}, "", false
+	}
 
 	// Distinguish "omitted" (?include absent → AllIncluded) from "explicit empty"
 	// (?include= → zero IncludeOptions). q.Has returns true only when the key
