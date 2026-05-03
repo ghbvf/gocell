@@ -179,6 +179,100 @@ func TestMountRouteGroup_CellAttribution_PrefixRejectsAnd405(t *testing.T) {
 	)])
 }
 
+func TestMountRouteGroup_CellOwnership_DuplicatePathTemplateAcrossCellsFails(t *testing.T) {
+	r := MustNew(WithRouterClock(clock.Real()))
+
+	require.NoError(t, r.MountRouteGroup(cell.RouteGroup{
+		Listener: cell.PrimaryListener,
+		Prefix:   "/api/v1",
+		CellID:   "accesscore",
+		Register: func(mux cell.RouteMux) error {
+			mux.Handle("GET /users/{id}", http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+			return nil
+		},
+	}))
+
+	err := r.MountRouteGroup(cell.RouteGroup{
+		Listener: cell.PrimaryListener,
+		Prefix:   "",
+		CellID:   "auditcore",
+		Register: func(mux cell.RouteMux) error {
+			mux.Handle("POST /api/v1/users/{id}", http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+			return nil
+		},
+	})
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "duplicate route ownership")
+	assert.Contains(t, err.Error(), "/api/v1/users/{id}")
+	assert.Contains(t, err.Error(), "accesscore")
+	assert.Contains(t, err.Error(), "auditcore")
+}
+
+func TestMountRouteGroup_CellOwnership_DuplicatePathTemplateSameCellAllowed(t *testing.T) {
+	r := MustNew(WithRouterClock(clock.Real()))
+
+	require.NoError(t, r.MountRouteGroup(cell.RouteGroup{
+		Listener: cell.PrimaryListener,
+		Prefix:   "/api/v1",
+		CellID:   "accesscore",
+		Register: func(mux cell.RouteMux) error {
+			mux.Handle("GET /users/{id}", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(http.StatusOK)
+			}))
+			return nil
+		},
+	}))
+	require.NoError(t, r.MountRouteGroup(cell.RouteGroup{
+		Listener: cell.PrimaryListener,
+		Prefix:   "",
+		CellID:   "accesscore",
+		Register: func(mux cell.RouteMux) error {
+			mux.Handle("POST /api/v1/users/{id}", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(http.StatusCreated)
+			}))
+			return nil
+		},
+	}))
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/users/42", nil)
+	r.ServeHTTP(rec, req)
+	assert.Equal(t, http.StatusOK, rec.Code)
+
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodPost, "/api/v1/users/42", nil)
+	r.ServeHTTP(rec, req)
+	assert.Equal(t, http.StatusCreated, rec.Code)
+}
+
+func TestMountRouteGroup_CellAttribution_MethodNotAllowedUsesPathOwnership(t *testing.T) {
+	mc := metrics.NewInMemoryCollector()
+	r := MustNew(WithRouterClock(clock.Real()), WithMetricsCollector(mc))
+
+	require.NoError(t, r.MountRouteGroup(cell.RouteGroup{
+		Listener: cell.PrimaryListener,
+		Prefix:   "/api/v1/devices",
+		CellID:   "devicecell",
+		Register: func(mux cell.RouteMux) error {
+			mux.Handle("GET /{id}", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(http.StatusOK)
+			}))
+			return nil
+		},
+	}))
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/devices/abc", nil)
+	r.ServeHTTP(rec, req)
+	assert.Equal(t, http.StatusMethodNotAllowed, rec.Code)
+
+	snap := mc.Snapshot()
+	assert.Equal(t, int64(1), snap.RequestCounts[routerRequestKey(
+		"devicecell", http.MethodPost, "/api/v1/devices/{id}", http.StatusMethodNotAllowed,
+	)])
+}
+
 func TestMountRouteGroup_CellAttribution_AuthReject(t *testing.T) {
 	mc := metrics.NewInMemoryCollector()
 	verifier := &routerTestVerifier{claims: auth.Claims{Subject: "user-1"}}

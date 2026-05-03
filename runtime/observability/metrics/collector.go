@@ -20,10 +20,15 @@ type Collector interface {
 	// route is the route pattern (e.g. "/api/v1/users/{id}"), not the actual
 	// request path. Using route patterns prevents metric cardinality explosion.
 	//
-	// cellID identifies the cell that owns the matched RouteGroup, or
-	// "_runtime" for framework-owned paths (healthz/readyz/metrics, unmatched
-	// 404s, listeners with no business RouteGroup attached). The router root
-	// resolves this ownership before protection middleware can short-circuit.
+	// cellID is the coarse owner dimension for the request. It is supplied by
+	// the caller, normally runtime/http/router's root CellAttribution
+	// middleware, from RouteGroup ownership before protection middleware can
+	// short-circuit. It is not inferred by the collector from assembly,
+	// config, route path, tenant, slice, or contract metadata.
+	//
+	// Use the owning cell ID for cell-owned RouteGroups, or "_runtime" for
+	// framework-owned paths (healthz/readyz/metrics, unmatched 404s, listeners
+	// with no business RouteGroup attached).
 	RecordRequest(cellID, method, route string, status int, durationSeconds float64)
 }
 

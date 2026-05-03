@@ -314,7 +314,8 @@ type Router struct {
 	// by auth.Mount. Tracing uses these as a fallback when upstream middleware
 	// short-circuits before wrapper.HTTPHandler can contribute attrs.
 	declaredHTTPContracts      []wrapper.ContractSpec
-	ownedRoutes                []ownedRoutePattern
+	ownedRoutes                []ownedRoutePath
+	routePatterns              []registeredRoutePattern
 	ownedPrefixes              []ownedRoutePrefix
 	passwordResetExemptMatcher func(method, urlPath string) bool
 	derivedHint                string
@@ -346,15 +347,19 @@ type earlyResponder struct {
 	handler   http.HandlerFunc
 }
 
-type ownedRoutePattern struct {
-	method string
+type ownedRoutePrefix struct {
+	prefix string
+	cellID string
+}
+
+type ownedRoutePath struct {
 	path   string
 	cellID string
 }
 
-type ownedRoutePrefix struct {
-	prefix string
-	cellID string
+type registeredRoutePattern struct {
+	method string
+	path   string
 }
 
 // earlyResponderMiddleware turns an earlyResponder into a chi middleware that
@@ -639,10 +644,13 @@ func (r *Router) MountRouteGroup(rg kcell.RouteGroup) error {
 		return fmt.Errorf("router: RouteGroup for listener %q has nil Register function", rg.Listener.String())
 	}
 	if rg.CellID != "" && rg.Prefix != "" {
-		r.recordOwnedPrefix(rg.CellID, rg.Prefix)
+		if err := r.recordOwnedPrefix(rg.CellID, rg.Prefix); err != nil {
+			return err
+		}
 	}
 
 	var registerErr error
+	var adapterErr error
 	if rg.Prefix != "" {
 		r.mux.Route(rg.Prefix, func(cr chi.Router) {
 			if len(rg.Middleware) > 0 {
@@ -654,22 +662,31 @@ func (r *Router) MountRouteGroup(rg kcell.RouteGroup) error {
 				declarer: r,
 				owner:    r,
 				cellID:   rg.CellID,
+				err:      &adapterErr,
 			}
 			registerErr = rg.Register(sub)
 		})
-		return registerErr
+		if registerErr != nil {
+			return registerErr
+		}
+		return adapterErr
 	}
 
 	cr := chi.Router(r.mux)
 	if len(rg.Middleware) > 0 {
 		cr = r.mux.With(rg.Middleware...)
 	}
-	return rg.Register(&chiRouterAdapter{
+	registerErr = rg.Register(&chiRouterAdapter{
 		cr:       cr,
 		declarer: r,
 		owner:    r,
 		cellID:   rg.CellID,
+		err:      &adapterErr,
 	})
+	if registerErr != nil {
+		return registerErr
+	}
+	return adapterErr
 }
 
 // DeclareAuthMeta implements cell.AuthRouteDeclarer. It accumulates auth route
@@ -892,23 +909,54 @@ func (r *Router) DeclaredAuthMetas() []kcell.AuthRouteMeta {
 	return out
 }
 
-func (r *Router) recordOwnedPrefix(cellID, prefix string) {
+func (r *Router) recordOwnedPrefix(cellID, prefix string) error {
 	if cellID == "" || strings.TrimSpace(prefix) == "" {
-		return
+		return nil
 	}
 	prefix = cleanRoutePath(prefix)
+	for _, owned := range r.ownedPrefixes {
+		if owned.prefix != prefix {
+			continue
+		}
+		if owned.cellID == cellID {
+			return nil
+		}
+		return fmt.Errorf(
+			"router: duplicate route ownership for path %q: cell %q already owns it, cell %q cannot also own it",
+			prefix, owned.cellID, cellID)
+	}
 	r.ownedPrefixes = append(r.ownedPrefixes, ownedRoutePrefix{prefix: prefix, cellID: cellID})
+	return nil
 }
 
-func (r *Router) recordOwnedRoutePattern(cellID, method, routePath string) {
+func (r *Router) recordOwnedRoutePath(cellID, routePath string) error {
 	routePath = cleanRoutePath(routePath)
 	if cellID == "" || routePath == "" {
+		return nil
+	}
+	for _, owned := range r.ownedRoutes {
+		if owned.path != routePath {
+			continue
+		}
+		if owned.cellID == cellID {
+			return nil
+		}
+		return fmt.Errorf(
+			"router: duplicate route ownership for path %q: cell %q already owns it, cell %q cannot also own it",
+			routePath, owned.cellID, cellID)
+	}
+	r.ownedRoutes = append(r.ownedRoutes, ownedRoutePath{path: routePath, cellID: cellID})
+	return nil
+}
+
+func (r *Router) recordRoutePattern(method, routePath string) {
+	routePath = cleanRoutePath(routePath)
+	if routePath == "" {
 		return
 	}
-	r.ownedRoutes = append(r.ownedRoutes, ownedRoutePattern{
+	r.routePatterns = append(r.routePatterns, registeredRoutePattern{
 		method: strings.ToUpper(method),
 		path:   routePath,
-		cellID: cellID,
 	})
 }
 
@@ -988,23 +1036,23 @@ func (r *Router) resolveCellID(_ string, urlPath string) (string, bool) {
 }
 
 func (r *Router) resolveHTTPRoutePattern(method, urlPath string) (string, bool) {
-	if route, ok := r.resolveOwnedRoutePattern(method, urlPath, true); ok {
+	if route, ok := r.resolveRegisteredRoutePattern(method, urlPath, true); ok {
 		return route, true
 	}
 	if route, ok := r.resolveContractRoutePattern(method, urlPath, true); ok {
 		return route, true
 	}
-	if route, ok := r.resolveOwnedRoutePattern(method, urlPath, false); ok {
+	if route, ok := r.resolveRegisteredRoutePattern(method, urlPath, false); ok {
 		return route, true
 	}
 	return r.resolveContractRoutePattern(method, urlPath, false)
 }
 
-func (r *Router) resolveOwnedRoutePattern(method, urlPath string, requireMethod bool) (string, bool) {
+func (r *Router) resolveRegisteredRoutePattern(method, urlPath string, requireMethod bool) (string, bool) {
 	urlPath = cleanRoutePath(urlPath)
 	bestRoute := ""
 	bestScore := -1
-	for _, route := range r.ownedRoutes {
+	for _, route := range r.routePatterns {
 		if requireMethod && !routeMethodMatches(route.method, method) {
 			continue
 		}
@@ -1152,6 +1200,7 @@ type chiRouterAdapter struct {
 	declarer kcell.AuthRouteDeclarer
 	owner    *Router
 	cellID   string
+	err      *error
 }
 
 // Compile-time checks: chiRouterAdapter forwards AuthRouteMeta + declares
@@ -1167,41 +1216,63 @@ var _ kcell.HTTPContractDeclarer = (*chiRouterAdapter)(nil)
 func (a *chiRouterAdapter) Prefix() string { return a.prefix }
 
 func (a *chiRouterAdapter) Handle(pattern string, handler http.Handler) {
+	if a.hasRegistrationErr() {
+		return
+	}
 	if method, routePath := splitHandlePattern(pattern); routePath != "" {
-		a.recordOwnedRoute(method, routePath)
+		if err := a.recordOwnedRoute(method, routePath); err != nil {
+			a.setRegistrationErr(err)
+			return
+		}
 	}
 	a.cr.Handle(pattern, handler)
 }
 
 func (a *chiRouterAdapter) Route(pattern string, fn func(kcell.RouteMux)) {
+	if a.hasRegistrationErr() {
+		return
+	}
+	fullPrefix := joinPrefix(a.prefix, pattern)
+	if err := a.recordOwnedPrefix(fullPrefix); err != nil {
+		a.setRegistrationErr(err)
+		return
+	}
 	a.cr.Route(pattern, func(cr chi.Router) {
-		fullPrefix := joinPrefix(a.prefix, pattern)
-		a.recordOwnedPrefix(fullPrefix)
 		sub := &chiRouterAdapter{
 			cr:       cr,
 			prefix:   fullPrefix,
 			declarer: a.declarer,
 			owner:    a.owner,
 			cellID:   a.cellID,
+			err:      a.err,
 		}
 		fn(sub)
 	})
 }
 
 func (a *chiRouterAdapter) Mount(pattern string, handler http.Handler) {
-	a.recordOwnedPrefix(joinPrefix(a.prefix, pattern))
+	if a.hasRegistrationErr() {
+		return
+	}
+	if err := a.recordOwnedPrefix(joinPrefix(a.prefix, pattern)); err != nil {
+		a.setRegistrationErr(err)
+		return
+	}
 	a.cr.Mount(pattern, handler)
 }
 
 func (a *chiRouterAdapter) Group(fn func(kcell.RouteMux)) {
+	if a.hasRegistrationErr() {
+		return
+	}
 	a.cr.Group(func(cr chi.Router) {
-		sub := &chiRouterAdapter{cr: cr, prefix: a.prefix, declarer: a.declarer, owner: a.owner, cellID: a.cellID}
+		sub := &chiRouterAdapter{cr: cr, prefix: a.prefix, declarer: a.declarer, owner: a.owner, cellID: a.cellID, err: a.err}
 		fn(sub)
 	})
 }
 
 func (a *chiRouterAdapter) With(mw ...func(http.Handler) http.Handler) kcell.RouteMux {
-	return &chiRouterAdapter{cr: a.cr.With(mw...), prefix: a.prefix, declarer: a.declarer, owner: a.owner, cellID: a.cellID}
+	return &chiRouterAdapter{cr: a.cr.With(mw...), prefix: a.prefix, declarer: a.declarer, owner: a.owner, cellID: a.cellID, err: a.err}
 }
 
 // DeclareAuthMeta composes the adapter's mount prefix with the declared path
@@ -1220,8 +1291,14 @@ func (a *chiRouterAdapter) DeclareAuthMeta(m kcell.AuthRouteMeta) error {
 // Router-rooted declarer. ContractSpec.Path is already the canonical full
 // path, so unlike AuthRouteMeta it is not composed with the chi prefix.
 func (a *chiRouterAdapter) DeclareHTTPContract(spec wrapper.ContractSpec) error {
-	if a.owner != nil && a.cellID != "" {
-		a.owner.recordOwnedRoutePattern(a.cellID, spec.Method, spec.Path)
+	if a.owner != nil {
+		a.owner.recordRoutePattern(spec.Method, spec.Path)
+		if a.cellID != "" {
+			if err := a.owner.recordOwnedRoutePath(a.cellID, spec.Path); err != nil {
+				a.setRegistrationErr(err)
+				return err
+			}
+		}
 	}
 	if a.declarer == nil {
 		return nil
@@ -1232,18 +1309,37 @@ func (a *chiRouterAdapter) DeclareHTTPContract(spec wrapper.ContractSpec) error 
 	return nil
 }
 
-func (a *chiRouterAdapter) recordOwnedPrefix(prefix string) {
+func (a *chiRouterAdapter) recordOwnedPrefix(prefix string) error {
 	if a.owner == nil || a.cellID == "" {
-		return
+		return nil
 	}
-	a.owner.recordOwnedPrefix(a.cellID, prefix)
+	return a.owner.recordOwnedPrefix(a.cellID, prefix)
 }
 
-func (a *chiRouterAdapter) recordOwnedRoute(method, routePath string) {
-	if a.owner == nil || a.cellID == "" {
+func (a *chiRouterAdapter) recordOwnedRoute(method, routePath string) error {
+	if a.owner == nil {
+		return nil
+	}
+	fullPath := joinPrefix(a.prefix, routePath)
+	a.owner.recordRoutePattern(method, fullPath)
+	if a.cellID == "" {
+		return nil
+	}
+	if err := a.owner.recordOwnedRoutePath(a.cellID, fullPath); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (a *chiRouterAdapter) setRegistrationErr(err error) {
+	if err == nil || a.err == nil || *a.err != nil {
 		return
 	}
-	a.owner.recordOwnedRoutePattern(a.cellID, method, joinPrefix(a.prefix, routePath))
+	*a.err = err
+}
+
+func (a *chiRouterAdapter) hasRegistrationErr() bool {
+	return a.err != nil && *a.err != nil
 }
 
 // joinPrefix composes a parent mount prefix with a child pattern/path,
