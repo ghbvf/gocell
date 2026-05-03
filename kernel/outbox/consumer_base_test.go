@@ -453,12 +453,19 @@ func TestConsumerBase_Wrap_ExplicitReject_NoRetry(t *testing.T) {
 	assert.Same(t, receipt, res.Receipt)
 }
 
-func TestConsumerBase_Wrap_WrappedPermanentError_DetectedAndRejected(t *testing.T) {
+// TestConsumerBase_Wrap_WrappedPermanentErrorInRequeue_NotEscalated locks the
+// Q2 decision (029 #03 ADR Decision 4): when a handler returns Requeue with a
+// PermanentError-wrapped Err, ConsumerBase MUST keep the Disposition as
+// Requeue and exhaust the retry budget — it does not implicitly upgrade to
+// Reject. Handlers must be explicit about routing to DLX by returning
+// DispositionReject themselves. This removes the legacy fallback behaviour
+// originally needed by WrapLegacyHandler (now deleted).
+func TestConsumerBase_Wrap_WrappedPermanentErrorInRequeue_NotEscalated(t *testing.T) {
 	receipt := &fakeReceipt{}
 	claimer := &fakeClaimer{state: idempotency.ClaimAcquired, receipt: receipt}
 
 	cb, err := NewConsumerBase(claimer, ConsumerBaseConfig{
-		RetryCount:     5,
+		RetryCount:     3,
 		RetryBaseDelay: time.Millisecond,
 	}, clock.Real())
 	require.NoError(t, err)
@@ -473,8 +480,9 @@ func TestConsumerBase_Wrap_WrappedPermanentError_DetectedAndRejected(t *testing.
 	})
 
 	res := handler(context.Background(), Entry{ID: "evt-perm"})
-	assert.Equal(t, 1, attempts, "wrapped PermanentError must be detected on first attempt")
-	assert.Equal(t, DispositionReject, res.Disposition)
+	assert.Equal(t, 3, attempts, "PermanentError wrapped in Requeue must NOT short-circuit; budget must exhaust")
+	assert.Equal(t, DispositionReject, res.Disposition,
+		"after retry budget exhaustion, ConsumerBase rejects to DLX (this is the budget-exhaust path, not a PermErr upgrade)")
 }
 
 func TestConsumerBase_Wrap_CtxCancelled_DuringRetry_Requeues(t *testing.T) {
