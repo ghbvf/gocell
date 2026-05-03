@@ -273,6 +273,46 @@ func TestMountRouteGroup_CellAttribution_MethodNotAllowedUsesPathOwnership(t *te
 	)])
 }
 
+func TestMountRouteGroup_CellAttribution_StaticPathBeatsGenericTemplate(t *testing.T) {
+	mc := metrics.NewInMemoryCollector()
+	limiter := &routerTestLimiter{allow: false}
+	r := MustNew(WithRouterClock(clock.Real()), WithMetricsCollector(mc), WithRateLimiter(limiter))
+
+	require.NoError(t, r.MountRouteGroup(cell.RouteGroup{
+		Listener: cell.PrimaryListener,
+		CellID:   "genericcore",
+		Register: func(mux cell.RouteMux) error {
+			mux.Handle("GET /api/v1/{resource}", http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+				t.Fatal("handler must not run when rate limiter rejects")
+			}))
+			return nil
+		},
+	}))
+	require.NoError(t, r.MountRouteGroup(cell.RouteGroup{
+		Listener: cell.PrimaryListener,
+		CellID:   "accesscore",
+		Register: func(mux cell.RouteMux) error {
+			mux.Handle("GET /api/v1/users", http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+				t.Fatal("handler must not run when rate limiter rejects")
+			}))
+			return nil
+		},
+	}))
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/users", nil)
+	r.ServeHTTP(rec, req)
+	assert.Equal(t, http.StatusTooManyRequests, rec.Code)
+
+	snap := mc.Snapshot()
+	assert.Equal(t, int64(1), snap.RequestCounts[routerRequestKey(
+		"accesscore", http.MethodGet, "/api/v1/users", http.StatusTooManyRequests,
+	)])
+	assert.Equal(t, int64(0), snap.RequestCounts[routerRequestKey(
+		"genericcore", http.MethodGet, "/api/v1/{resource}", http.StatusTooManyRequests,
+	)])
+}
+
 func TestMountRouteGroup_CellAttribution_AuthReject(t *testing.T) {
 	mc := metrics.NewInMemoryCollector()
 	verifier := &routerTestVerifier{claims: auth.Claims{Subject: "user-1"}}

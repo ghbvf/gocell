@@ -362,6 +362,13 @@ type registeredRoutePattern struct {
 	path   string
 }
 
+type routeMatchRank struct {
+	staticSegments int
+	paramSegments  int
+	depth          int
+	length         int
+}
+
 // earlyResponderMiddleware turns an earlyResponder into a chi middleware that
 // short-circuits when the predicate matches.
 func earlyResponderMiddleware(er earlyResponder) func(http.Handler) http.Handler {
@@ -1012,13 +1019,13 @@ func (r *Router) resolveHTTPContractAttrs(method, urlPath string) ([]wrapper.Att
 func (r *Router) resolveCellID(_ string, urlPath string) (string, bool) {
 	urlPath = cleanRoutePath(urlPath)
 	bestCell := ""
-	bestScore := -1
+	var bestScore routeMatchRank
 
 	for _, route := range r.ownedRoutes {
 		if !routePatternMatches(route.path, urlPath) {
 			continue
 		}
-		if score := routeMatchScore(route.path); score > bestScore {
+		if score := routeMatchScore(route.path); routeMatchScoreGreater(score, bestScore) {
 			bestScore = score
 			bestCell = route.cellID
 		}
@@ -1027,7 +1034,7 @@ func (r *Router) resolveCellID(_ string, urlPath string) (string, bool) {
 		if !segmentPrefixMatches(urlPath, prefix.prefix) {
 			continue
 		}
-		if score := routeMatchScore(prefix.prefix); score > bestScore {
+		if score := routeMatchScore(prefix.prefix); routeMatchScoreGreater(score, bestScore) {
 			bestScore = score
 			bestCell = prefix.cellID
 		}
@@ -1051,7 +1058,7 @@ func (r *Router) resolveHTTPRoutePattern(method, urlPath string) (string, bool) 
 func (r *Router) resolveRegisteredRoutePattern(method, urlPath string, requireMethod bool) (string, bool) {
 	urlPath = cleanRoutePath(urlPath)
 	bestRoute := ""
-	bestScore := -1
+	var bestScore routeMatchRank
 	for _, route := range r.routePatterns {
 		if requireMethod && !routeMethodMatches(route.method, method) {
 			continue
@@ -1059,7 +1066,7 @@ func (r *Router) resolveRegisteredRoutePattern(method, urlPath string, requireMe
 		if !routePatternMatches(route.path, urlPath) {
 			continue
 		}
-		if score := routeMatchScore(route.path); score > bestScore {
+		if score := routeMatchScore(route.path); routeMatchScoreGreater(score, bestScore) {
 			bestScore = score
 			bestRoute = route.path
 		}
@@ -1070,7 +1077,7 @@ func (r *Router) resolveRegisteredRoutePattern(method, urlPath string, requireMe
 func (r *Router) resolveContractRoutePattern(method, urlPath string, requireMethod bool) (string, bool) {
 	urlPath = cleanRoutePath(urlPath)
 	bestRoute := ""
-	bestScore := -1
+	var bestScore routeMatchRank
 	for _, spec := range r.declaredHTTPContracts {
 		if requireMethod && !contractMethodMatches(spec.Method, method) {
 			continue
@@ -1079,7 +1086,7 @@ func (r *Router) resolveContractRoutePattern(method, urlPath string, requireMeth
 		if !routePatternMatches(routePath, urlPath) {
 			continue
 		}
-		if score := routeMatchScore(routePath); score > bestScore {
+		if score := routeMatchScore(routePath); routeMatchScoreGreater(score, bestScore) {
 			bestScore = score
 			bestRoute = routePath
 		}
@@ -1134,8 +1141,42 @@ func segmentPrefixMatches(concrete, prefix string) bool {
 	return concrete == prefix || strings.HasPrefix(concrete, prefix+"/")
 }
 
-func routeMatchScore(routePath string) int {
-	return len(cleanRoutePath(routePath))
+func routeMatchScore(routePath string) routeMatchRank {
+	routePath = cleanRoutePath(routePath)
+	rank := routeMatchRank{length: len(routePath)}
+	for _, segment := range routeSegments(routePath) {
+		if segment == "*" || segment == "" {
+			continue
+		}
+		rank.depth++
+		if strings.HasPrefix(segment, "{") && strings.HasSuffix(segment, "}") {
+			rank.paramSegments++
+			continue
+		}
+		rank.staticSegments++
+	}
+	return rank
+}
+
+func routeMatchScoreGreater(candidate, current routeMatchRank) bool {
+	if candidate.staticSegments != current.staticSegments {
+		return candidate.staticSegments > current.staticSegments
+	}
+	if candidate.paramSegments != current.paramSegments {
+		return candidate.paramSegments > current.paramSegments
+	}
+	if candidate.depth != current.depth {
+		return candidate.depth > current.depth
+	}
+	return candidate.length > current.length
+}
+
+func routeSegments(routePath string) []string {
+	trimmed := strings.Trim(cleanRoutePath(routePath), "/")
+	if trimmed == "" {
+		return nil
+	}
+	return strings.Split(trimmed, "/")
 }
 
 func splitHandlePattern(pattern string) (method, routePath string) {
