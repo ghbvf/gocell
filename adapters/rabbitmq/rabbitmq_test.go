@@ -1639,7 +1639,9 @@ func TestSubscriber_Subscribe_DefaultQueueName(t *testing.T) {
 	cancel() // Cancel immediately so Subscribe exits.
 
 	err := sub.Subscribe(ctx, outbox.Subscription{Topic: "my.topic"},
-		outbox.WrapLegacyHandler(func(_ context.Context, _ outbox.Entry) error { return nil }))
+		func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+			return outbox.HandleResult{Disposition: outbox.DispositionAck}
+		})
 	assert.NoError(t, err)
 
 	ch.mu.Lock()
@@ -1662,7 +1664,9 @@ func TestSubscriber_Subscribe_AfterClose(t *testing.T) {
 	assert.NoError(t, sub.Close(context.Background()))
 
 	err := sub.Subscribe(context.Background(), outbox.Subscription{Topic: "test.topic"},
-		outbox.WrapLegacyHandler(func(_ context.Context, _ outbox.Entry) error { return nil }))
+		func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+			return outbox.HandleResult{Disposition: outbox.DispositionAck}
+		})
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "ERR_ADAPTER_AMQP_SUBSCRIBE")
 }
@@ -1785,7 +1789,9 @@ func TestSubscriber_ReconnectLoop_CtxCancelledDuringWait(t *testing.T) {
 	}()
 
 	err := sub.Subscribe(ctx, outbox.Subscription{Topic: "test.topic"},
-		outbox.WrapLegacyHandler(func(_ context.Context, _ outbox.Entry) error { return nil }))
+		func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+			return outbox.HandleResult{Disposition: outbox.DispositionAck}
+		})
 	assert.NoError(t, err) // Clean exit via ctx cancel during WaitConnected.
 }
 
@@ -1913,7 +1919,9 @@ func TestSubscriber_SubscribeOnce_AcquireChannelFails(t *testing.T) {
 
 	// subscribeOnce should return an error (channel acquisition failure).
 	err = sub.subscribeOnce(context.Background(), "test.topic", "test-queue",
-		outbox.WrapLegacyHandler(func(_ context.Context, _ outbox.Entry) error { return nil }))
+		func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+			return outbox.HandleResult{Disposition: outbox.DispositionAck}
+		})
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "ERR_ADAPTER_AMQP")
 
@@ -1967,7 +1975,9 @@ func TestSubscriber_Subscribe_ClosedDuringReconnect(t *testing.T) {
 	subscribeDone := make(chan error, 1)
 	go func() {
 		subscribeDone <- sub.Subscribe(context.Background(), outbox.Subscription{Topic: "test.topic"},
-			outbox.WrapLegacyHandler(func(_ context.Context, _ outbox.Entry) error { return nil }))
+			func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+			return outbox.HandleResult{Disposition: outbox.DispositionAck}
+		})
 	}()
 
 	// Let the subscriber enter the reconnect hot-loop. The loop iterates in
@@ -2014,7 +2024,9 @@ func TestSubscriber_Subscribe_ConsumerGroupQueueName(t *testing.T) {
 	cancel() // Cancel immediately so Subscribe exits after setup.
 
 	err := sub.Subscribe(ctx, outbox.Subscription{Topic: "session.created"},
-		outbox.WrapLegacyHandler(func(_ context.Context, _ outbox.Entry) error { return nil }))
+		func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+			return outbox.HandleResult{Disposition: outbox.DispositionAck}
+		})
 	assert.NoError(t, err)
 
 	ch.mu.Lock()
@@ -2044,7 +2056,9 @@ func TestSubscriber_Subscribe_ExplicitQueueName_OverridesConsumerGroup(t *testin
 	cancel()
 
 	err := sub.Subscribe(ctx, outbox.Subscription{Topic: "session.created"},
-		outbox.WrapLegacyHandler(func(_ context.Context, _ outbox.Entry) error { return nil }))
+		func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+			return outbox.HandleResult{Disposition: outbox.DispositionAck}
+		})
 	assert.NoError(t, err)
 
 	ch.mu.Lock()
@@ -2072,7 +2086,9 @@ func TestSubscriber_Subscribe_NoConsumerGroup_FallsBackToTopic(t *testing.T) {
 	cancel()
 
 	err := sub.Subscribe(ctx, outbox.Subscription{Topic: "my.topic"},
-		outbox.WrapLegacyHandler(func(_ context.Context, _ outbox.Entry) error { return nil }))
+		func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+			return outbox.HandleResult{Disposition: outbox.DispositionAck}
+		})
 	assert.NoError(t, err)
 
 	ch.mu.Lock()
@@ -2100,7 +2116,9 @@ func TestSubscriber_Subscribe_DLXExchange_SetsQueueArgs(t *testing.T) {
 	cancel()
 
 	err := sub.Subscribe(ctx, outbox.Subscription{Topic: "test.topic"},
-		outbox.WrapLegacyHandler(func(_ context.Context, _ outbox.Entry) error { return nil }))
+		func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+			return outbox.HandleResult{Disposition: outbox.DispositionAck}
+		})
 	assert.NoError(t, err)
 
 	ch.mu.Lock()
@@ -2131,7 +2149,9 @@ func TestSubscriber_Subscribe_DLXExchangeWithRoutingKey(t *testing.T) {
 	cancel()
 
 	err := sub.Subscribe(ctx, outbox.Subscription{Topic: "test.topic"},
-		outbox.WrapLegacyHandler(func(_ context.Context, _ outbox.Entry) error { return nil }))
+		func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+			return outbox.HandleResult{Disposition: outbox.DispositionAck}
+		})
 	assert.NoError(t, err)
 
 	ch.mu.Lock()
@@ -2152,7 +2172,9 @@ func TestSubscriber_Subscribe_NoDLX_ReturnsError(t *testing.T) {
 	})
 
 	err := sub.Subscribe(context.Background(), outbox.Subscription{Topic: "test.topic"},
-		outbox.WrapLegacyHandler(func(_ context.Context, _ outbox.Entry) error { return nil }))
+		func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+			return outbox.HandleResult{Disposition: outbox.DispositionAck}
+		})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "DLXExchange is required")
 }
@@ -2599,17 +2621,17 @@ func (r *mockReceipt) Extend(_ context.Context, _ time.Duration) error {
 	return r.extendErr
 }
 
-var _ outbox.Receipt = (*mockReceipt)(nil)
+var _ idempotency.Receipt = (*mockReceipt)(nil)
 
 type mockClaimer struct {
 	mu      sync.Mutex
 	state   idempotency.ClaimState
-	receipt outbox.Receipt
+	receipt idempotency.Receipt
 	err     error
 	claims  []string
 }
 
-func (c *mockClaimer) Claim(_ context.Context, key string, _, _ time.Duration) (idempotency.ClaimState, outbox.Receipt, error) {
+func (c *mockClaimer) Claim(_ context.Context, key string, _, _ time.Duration) (idempotency.ClaimState, idempotency.Receipt, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.claims = append(c.claims, key)
@@ -2773,11 +2795,11 @@ type sequenceClaimer struct {
 
 type claimResponse struct {
 	state   idempotency.ClaimState
-	receipt outbox.Receipt
+	receipt idempotency.Receipt
 	err     error
 }
 
-func (c *sequenceClaimer) Claim(_ context.Context, _ string, _, _ time.Duration) (idempotency.ClaimState, outbox.Receipt, error) {
+func (c *sequenceClaimer) Claim(_ context.Context, _ string, _, _ time.Duration) (idempotency.ClaimState, idempotency.Receipt, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	idx := c.callCount
@@ -3327,7 +3349,9 @@ func TestProcessDelivery_Reject_NoDLX_SubscribeReturnsError(t *testing.T) {
 	})
 
 	err := sub.Subscribe(context.Background(), outbox.Subscription{Topic: "test.topic"},
-		outbox.WrapLegacyHandler(func(_ context.Context, _ outbox.Entry) error { return nil }))
+		func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+			return outbox.HandleResult{Disposition: outbox.DispositionAck}
+		})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "DLXExchange is required")
 }

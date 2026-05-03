@@ -14,6 +14,7 @@ import (
 
 	"github.com/ghbvf/gocell/adapters/adapterutil"
 	"github.com/ghbvf/gocell/kernel/clock"
+	"github.com/ghbvf/gocell/kernel/idempotency"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
@@ -899,7 +900,7 @@ func (s *Subscriber) dispatchAck(
 // defaultRMQReceiptOpTimeout. Uses context.WithoutCancel so the operation
 // completes even during graceful shutdown. reason is used for structured log
 // fields.
-func releaseReceipt(ctx context.Context, receipt outbox.Receipt, topic, eventID, reason string) {
+func releaseReceipt(ctx context.Context, receipt idempotency.Receipt, topic, eventID, reason string) {
 	if receipt == nil {
 		return
 	}
