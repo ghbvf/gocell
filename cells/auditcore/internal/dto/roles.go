@@ -8,7 +8,3 @@
 // runtime auth values, not contract wire data, so they belong here rather
 // than in a cross-cell shared package.
 package dto
-
-// RoleAdmin is the role name required to access audit query endpoints.
-// Defined here so auditquery handler does not use a string literal directly.
-const RoleAdmin = "admin"

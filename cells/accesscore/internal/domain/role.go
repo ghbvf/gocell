@@ -1,8 +1,5 @@
 package domain
 
-// RoleAdmin is the well-known admin role name used across accesscore.
-const RoleAdmin = "admin"
-
 // Permission represents a single allowed action on a resource.
 type Permission struct {
 	Resource string
