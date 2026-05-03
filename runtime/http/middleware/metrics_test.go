@@ -12,6 +12,10 @@ import (
 	"github.com/ghbvf/gocell/runtime/observability/metrics"
 )
 
+func requestKey(cell, method, route string, status int) metrics.RequestKey {
+	return metrics.RequestKey{Cell: cell, Method: method, Route: route, Status: status}
+}
+
 // --- Standalone tests (no chi router → route = "unmatched") ---
 
 func TestMetrics_RecordsMetrics(t *testing.T) {
@@ -27,9 +31,7 @@ func TestMetrics_RecordsMetrics(t *testing.T) {
 	assert.Equal(t, http.StatusCreated, rec.Code)
 
 	snap := c.Snapshot()
-	// No upstream WithCellIDContext layer — Metrics seeds its own state with
-	// RuntimeCellIDSentinel and reads back the same value.
-	key := "_runtime POST unmatched 201"
+	key := requestKey("_runtime", http.MethodPost, "unmatched", http.StatusCreated)
 	assert.Equal(t, int64(1), snap.RequestCounts[key])
 }
 
@@ -44,7 +46,7 @@ func TestMetrics_DefaultStatus200(t *testing.T) {
 	handler.ServeHTTP(rec, req)
 
 	snap := c.Snapshot()
-	key := "_runtime GET unmatched 200"
+	key := requestKey("_runtime", http.MethodGet, "unmatched", http.StatusOK)
 	assert.Equal(t, int64(1), snap.RequestCounts[key])
 }
 
@@ -62,7 +64,7 @@ func TestMetrics_PanicRecordsStatus500(t *testing.T) {
 	assert.Equal(t, http.StatusInternalServerError, rec.Code)
 
 	snap := c.Snapshot()
-	key := "_runtime GET unmatched 500"
+	key := requestKey("_runtime", http.MethodGet, "unmatched", http.StatusInternalServerError)
 	assert.Equal(t, int64(1), snap.RequestCounts[key], "panic request must be recorded as status 500 in metrics")
 }
 
@@ -79,7 +81,26 @@ func TestMetrics_Standalone(t *testing.T) {
 	assert.Equal(t, http.StatusAccepted, rec.Code)
 
 	snap := c.Snapshot()
-	key := "_runtime POST unmatched 202"
+	key := requestKey("_runtime", http.MethodPost, "unmatched", http.StatusAccepted)
+	assert.Equal(t, int64(1), snap.RequestCounts[key])
+}
+
+func TestMetrics_RouteResolverFallback(t *testing.T) {
+	c := metrics.NewInMemoryCollector()
+	handler := Metrics(c, clock.Real(), WithRoutePatternResolver(func(method, path string) (string, bool) {
+		assert.Equal(t, http.MethodGet, method)
+		assert.Equal(t, "/api/v1/access/users/42", path)
+		return "/api/v1/access/users/{id}", true
+	}))(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+	}))
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/access/users/42", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	snap := c.Snapshot()
+	key := requestKey("_runtime", http.MethodGet, "/api/v1/access/users/{id}", http.StatusUnauthorized)
 	assert.Equal(t, int64(1), snap.RequestCounts[key])
 }
 
@@ -96,31 +117,33 @@ func TestMetrics_MultipleRequests(t *testing.T) {
 	}
 
 	snap := c.Snapshot()
-	key := "_runtime GET unmatched 200"
+	key := requestKey("_runtime", http.MethodGet, "unmatched", http.StatusOK)
 	assert.Equal(t, int64(5), snap.RequestCounts[key])
 }
 
-// TestMetrics_SubMuxOverridesRuntimeSentinel pins the "single injection /
-// two-layer override" contract: Metrics installs a *cellIDState seeded with
-// RuntimeCellIDSentinel; a downstream WithCellIDContext (analogous to
-// bootstrap.mountOneRouteGroup at the chi sub-mux layer) mutates the same
-// pointer; the recorder sees the per-cell value, not the sentinel.
-func TestMetrics_SubMuxOverridesRuntimeSentinel(t *testing.T) {
+func TestMetrics_ReadsCellIDFromContext(t *testing.T) {
 	c := metrics.NewInMemoryCollector()
 
 	r := chi.NewRouter()
-	r.Use(Recorder, Metrics(c, clock.Real()))
-	r.Group(func(sub chi.Router) {
-		sub.Use(WithCellIDContext("accesscore"))
-		sub.Get("/api/v1/users/{id}", func(w http.ResponseWriter, _ *http.Request) {
-			w.WriteHeader(http.StatusOK)
-		})
+	r.Use(
+		Recorder,
+		CellAttribution(func(_ string, path string) (string, bool) {
+			switch path {
+			case "/api/v1/users/42":
+				return "accesscore", true
+			case "/api/v1/audit/99":
+				return "auditcore", true
+			default:
+				return "", false
+			}
+		}),
+		Metrics(c, clock.Real()),
+	)
+	r.Get("/api/v1/users/{id}", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
 	})
-	r.Group(func(sub chi.Router) {
-		sub.Use(WithCellIDContext("auditcore"))
-		sub.Get("/api/v1/audit/{id}", func(w http.ResponseWriter, _ *http.Request) {
-			w.WriteHeader(http.StatusOK)
-		})
+	r.Get("/api/v1/audit/{id}", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
 	})
 	// One unmatched request — falls through with the sentinel.
 	r.Get("/orphan-but-matched", func(w http.ResponseWriter, _ *http.Request) {
@@ -138,11 +161,11 @@ func TestMetrics_SubMuxOverridesRuntimeSentinel(t *testing.T) {
 	}
 
 	snap := c.Snapshot()
-	for _, key := range []string{
-		"accesscore GET /api/v1/users/{id} 200",
-		"auditcore GET /api/v1/audit/{id} 200",
-		"_runtime GET /orphan-but-matched 200",
-		"_runtime GET unmatched 404",
+	for _, key := range []metrics.RequestKey{
+		requestKey("accesscore", http.MethodGet, "/api/v1/users/{id}", http.StatusOK),
+		requestKey("auditcore", http.MethodGet, "/api/v1/audit/{id}", http.StatusOK),
+		requestKey("_runtime", http.MethodGet, "/orphan-but-matched", http.StatusOK),
+		requestKey("_runtime", http.MethodGet, "unmatched", http.StatusNotFound),
 	} {
 		assert.Equalf(t, int64(1), snap.RequestCounts[key],
 			"want exactly one observation under %q; full snapshot=%v", key, snap.RequestCounts)
@@ -155,12 +178,18 @@ func TestMetrics_RoutePatternCollapse(t *testing.T) {
 	c := metrics.NewInMemoryCollector()
 
 	r := chi.NewRouter()
-	r.Use(Recorder, Metrics(c, clock.Real()))
-	r.Group(func(sub chi.Router) {
-		sub.Use(WithCellIDContext("test-cell"))
-		sub.Get("/api/v1/users/{id}", func(w http.ResponseWriter, _ *http.Request) {
-			w.WriteHeader(http.StatusOK)
-		})
+	r.Use(
+		Recorder,
+		CellAttribution(func(_ string, path string) (string, bool) {
+			if path != "" {
+				return "test-cell", true
+			}
+			return "", false
+		}),
+		Metrics(c, clock.Real()),
+	)
+	r.Get("/api/v1/users/{id}", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
 	})
 
 	// Hit with different path parameters — all should collapse to one metric key.
@@ -172,7 +201,7 @@ func TestMetrics_RoutePatternCollapse(t *testing.T) {
 	}
 
 	snap := c.Snapshot()
-	key := "test-cell GET /api/v1/users/{id} 200"
+	key := requestKey("test-cell", http.MethodGet, "/api/v1/users/{id}", http.StatusOK)
 	assert.Equal(t, int64(4), snap.RequestCounts[key],
 		"parameterized routes must collapse to route pattern, not actual path")
 	assert.Len(t, snap.RequestCounts, 1,
@@ -188,8 +217,8 @@ func TestMetrics_UnmatchedRouteUsesSentinel(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 	})
 
-	// Hit random 404 paths — all should collapse to "unmatched" sentinel
-	// under cell="_runtime" (no sub-mux WithCellIDContext fired).
+	// Hit random 404 paths — all should collapse to "unmatched" under
+	// cell="_runtime" (no root attribution resolved a cell).
 	for _, path := range []string{"/random1", "/random2", "/attack-path"} {
 		req := httptest.NewRequest(http.MethodGet, path, nil)
 		rec := httptest.NewRecorder()
@@ -197,7 +226,7 @@ func TestMetrics_UnmatchedRouteUsesSentinel(t *testing.T) {
 	}
 
 	snap := c.Snapshot()
-	key := "_runtime GET unmatched 404"
+	key := requestKey("_runtime", http.MethodGet, "unmatched", http.StatusNotFound)
 	assert.Equal(t, int64(3), snap.RequestCounts[key],
 		"unmatched routes must all map to sentinel 'unmatched' label under cell=_runtime")
 }
@@ -216,9 +245,7 @@ func TestMetrics_ChiStaticRoute(t *testing.T) {
 	r.ServeHTTP(rec, req)
 
 	snap := c.Snapshot()
-	// /healthz on a router with no per-route WithCellIDContext keeps the
-	// listener-root sentinel — this is the framework-owned probe path.
-	key := "_runtime GET /healthz 200"
+	key := requestKey("_runtime", http.MethodGet, "/healthz", http.StatusOK)
 	assert.Equal(t, int64(1), snap.RequestCounts[key])
 }
 
@@ -226,9 +253,17 @@ func TestMetrics_ChiNestedRoutes(t *testing.T) {
 	c := metrics.NewInMemoryCollector()
 
 	r := chi.NewRouter()
-	r.Use(Recorder, Metrics(c, clock.Real()))
+	r.Use(
+		Recorder,
+		CellAttribution(func(_ string, path string) (string, bool) {
+			if path != "" {
+				return "test-cell", true
+			}
+			return "", false
+		}),
+		Metrics(c, clock.Real()),
+	)
 	r.Route("/api/v1", func(r chi.Router) {
-		r.Use(WithCellIDContext("test-cell"))
 		r.Get("/orders/{orderID}", func(w http.ResponseWriter, _ *http.Request) {
 			w.WriteHeader(http.StatusOK)
 		})
@@ -239,7 +274,7 @@ func TestMetrics_ChiNestedRoutes(t *testing.T) {
 	r.ServeHTTP(rec, req)
 
 	snap := c.Snapshot()
-	key := "test-cell GET /api/v1/orders/{orderID} 200"
+	key := requestKey("test-cell", http.MethodGet, "/api/v1/orders/{orderID}", http.StatusOK)
 	assert.Equal(t, int64(1), snap.RequestCounts[key],
 		"nested routes must produce combined route pattern under the per-cell label")
 }

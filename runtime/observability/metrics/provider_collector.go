@@ -15,10 +15,9 @@ var DefaultDurationBuckets = []float64{.005, .01, .025, .05, .1, .25, .5, 1, 2.5
 
 // ProviderCollectorConfig configures NewProviderCollector.
 //
-// Cell identity is not part of this config — it is derived per request via
-// runtime/http/middleware.WithCellIDContext (installed by bootstrap at the
-// listener-root and route-group layers) and supplied through RecordRequest's
-// cellID argument. See D1 HTTP-METRICS-LABEL-REALIGN.
+// Cell identity is not part of this config — it is derived per request by
+// router-owned root attribution and supplied through RecordRequest's cellID
+// argument. See D1 HTTP-METRICS-LABEL-REALIGN.
 type ProviderCollectorConfig struct {
 	// DurationBuckets overrides DefaultDurationBuckets; zero value uses defaults.
 	DurationBuckets []float64

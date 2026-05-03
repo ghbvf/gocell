@@ -5,7 +5,7 @@ package bootstrap
 //
 // Covers:
 //   - phase5BuildRouters / phase5InitHealthHandler / phase5BuildPerListenerRouters
-//   - phase5CollectRouteGroups / phase5MountRouteGroups / mountOneRouteGroup
+//   - phase5CollectRouteGroups / phase5MountRouteGroups
 //   - phase5FinalizeAllRouters
 //   - validateInternalGuardForDeclaredRoutes / declaredInternalRoutes
 //   - validateAuthVerifierForDeclaredRoutes
@@ -17,7 +17,6 @@ package bootstrap
 
 import (
 	"fmt"
-	"net/http"
 	"sort"
 	"strings"
 
@@ -26,7 +25,6 @@ import (
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/http/health"
-	httpmiddleware "github.com/ghbvf/gocell/runtime/http/middleware"
 	"github.com/ghbvf/gocell/runtime/http/router"
 	metricsmiddleware "github.com/ghbvf/gocell/runtime/observability/metrics"
 )
@@ -160,7 +158,7 @@ func (b *Bootstrap) phase5MountRouteGroups(routers map[cell.ListenerRef]*router.
 		if rg.Register == nil {
 			return fmt.Errorf("bootstrap: RouteGroup for listener %q has nil Register function", rg.Listener.String())
 		}
-		if err := b.mountOneRouteGroup(rtr, rg, i); err != nil {
+		if err := rtr.MountRouteGroup(rg); err != nil {
 			cellID := rg.CellID
 			if cellID == "" {
 				cellID = "<framework>"
@@ -170,52 +168,6 @@ func (b *Bootstrap) phase5MountRouteGroups(routers map[cell.ListenerRef]*router.
 		}
 	}
 	return nil
-}
-
-// mountOneRouteGroup mounts a single RouteGroup on its router and applies any
-// non-auth Middleware in declaration order. PR269 round-3: group-level auth is
-// gone — auth scheme is a listener concern (cells that need a different scheme
-// declare their routes on a different listener). Listener-level authChain is
-// already installed by router.WithDefaultMiddleware; group Middleware runs
-// after that chain at request time (chi sub-mux With order).
-//
-// HTTP-METRICS-LABEL-REALIGN: when rg.CellID is populated by phase5 (every
-// cell-owned RouteGroup), prepend WithCellIDContext(rg.CellID) so the cell
-// identity overrides the framework "_runtime" sentinel that
-// middleware.Metrics seeds into the in-flight cellIDState. WithCellIDContext
-// mutates that mutable state pointer (chi-style RouteContext pattern), so
-// the root-mux recorder reads the per-cell value after next.ServeHTTP
-// returns. rg.CellID == "" only happens for framework-owned health groups
-// before phase5 stamps them; we leave them on the sentinel by skipping
-// injection rather than emitting cell="" (an ambiguous label).
-func (b *Bootstrap) mountOneRouteGroup(rtr *router.Router, rg cell.RouteGroup, _ int) error {
-	register := rg.Register
-	mws := rg.Middleware
-	if rg.CellID != "" {
-		mws = append([]func(http.Handler) http.Handler{httpmiddleware.WithCellIDContext(rg.CellID)}, mws...)
-	}
-	if len(mws) > 0 {
-		inner := register
-		register = func(sub cell.RouteMux) error {
-			return inner(sub.With(mws...))
-		}
-	}
-	var registerErr error
-	if rg.Prefix != "" {
-		// rtr.Route signature is from cell.RouteMux which still takes a no-error
-		// closure; capture the Register error via the outer variable so it
-		// surfaces to the phase5 walker. rtr.Route is synchronous (chi.Mux
-		// builds the sub-tree before returning) so registerErr is read after
-		// the closure exits — no data race on the outer variable.
-		rtr.Route(rg.Prefix, func(sub cell.RouteMux) {
-			if err := register(sub); err != nil {
-				registerErr = err
-			}
-		})
-	} else {
-		registerErr = register(rtr)
-	}
-	return registerErr
 }
 
 // phase5FinalizeAllRouters installs /internal/v1/* isolation on the primary
@@ -393,14 +345,9 @@ func (b *Bootstrap) buildListenerRouterOpts(_ *phaseState, ref cell.ListenerRef,
 // collector construction will fail with a duplicate-name error. The error is
 // wrapped with an actionable message that tells operators which side to remove.
 //
-// HTTP-METRICS-LABEL-REALIGN: cell labels are no longer derived globally here.
-// middleware.Metrics seeds a mutable cellIDState with RuntimeCellIDSentinel
-// at the listener-root layer; bootstrap.mountOneRouteGroup installs
-// WithCellIDContext on each cell-owned RouteGroup to mutate that state with
-// the cell's ID. The recorded cell label is the value resolved into the
-// state by the time middleware.Metrics fires after next.ServeHTTP returns.
-// This collector is provider-neutral and labels each observation from its
-// RecordRequest cellID argument.
+// HTTP-METRICS-LABEL-REALIGN: cell labels are resolved by router-owned root
+// attribution from RouteGroup ownership. This collector is provider-neutral
+// and labels each observation from its RecordRequest cellID argument.
 //
 // ref: runtime/observability/metrics.NewProviderCollector — provider-neutral
 // HTTP collector that records http_requests_total + http_request_duration_seconds.

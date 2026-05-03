@@ -97,22 +97,15 @@ func TestPhase5CollectRouteGroups_HealthListenerPresent_PreservesHealthListener(
 	}
 }
 
-// --- mountOneRouteGroup: per-cell metrics label propagation ---
+// --- phase5MountRouteGroups: per-cell metrics label propagation ---
 
-// TestMountOneRouteGroup_PerCellMetricsLabel pins the bootstrap-level
+// TestPhase5MountRouteGroups_PerCellMetricsLabel pins the bootstrap-level
 // contract for HTTP-METRICS-LABEL-REALIGN: when two RouteGroups with
 // different CellID values are mounted on the same router, requests
 // landing in each subtree must produce metrics observations carrying
-// that group's CellID — not the listener-root "_runtime" sentinel and
+// that group's CellID — not the framework "_runtime" sentinel and
 // not a global value derived from assembly identity.
-//
-// This is the unit-test counterpart to the build-tag-gated integration
-// test in cmd/corebundle/metrics_wiring_integration_test.go: it runs
-// during ordinary `go test ./...` and exercises mountOneRouteGroup
-// directly rather than the full Run() lifecycle, so a regression that
-// dropped the per-group WithCellIDContext prepend (e.g. by removing the
-// rg.CellID != "" branch) is caught at unit-test time.
-func TestMountOneRouteGroup_PerCellMetricsLabel(t *testing.T) {
+func TestPhase5MountRouteGroups_PerCellMetricsLabel(t *testing.T) {
 	t.Parallel()
 	mc := metrics.NewInMemoryCollector()
 	rtr, err := router.NewForListener(cell.PrimaryListener,
@@ -147,10 +140,9 @@ func TestMountOneRouteGroup_PerCellMetricsLabel(t *testing.T) {
 			},
 		},
 	}
-	for i, rg := range groups {
-		require.NoError(t, b.mountOneRouteGroup(rtr, rg, i),
-			"mounting RouteGroup %d (cell=%s) must succeed", i, rg.CellID)
-	}
+	require.NoError(t, b.phase5MountRouteGroups(map[cell.ListenerRef]*router.Router{
+		cell.PrimaryListener: rtr,
+	}, groups))
 
 	// Drive one request into each subtree.
 	for _, tc := range []struct{ method, path string }{
@@ -162,19 +154,17 @@ func TestMountOneRouteGroup_PerCellMetricsLabel(t *testing.T) {
 		require.Equal(t, http.StatusOK, rec.Code, "%s %s must reach the cell handler", tc.method, tc.path)
 	}
 
-	// And one request that does NOT match either RouteGroup. The router
-	// installs WithCellIDContext("_runtime") at the listener-root mux
-	// level; an unmatched request should be labeled with that sentinel,
-	// proving the fallback layer remains in place.
+	// And one request that does NOT match either RouteGroup. It should be
+	// labeled with the framework sentinel, proving the fallback remains in place.
 	rec := httptest.NewRecorder()
 	rtr.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/orphan", nil))
 	require.Equal(t, http.StatusNotFound, rec.Code)
 
 	snap := mc.Snapshot()
-	wantKeys := []string{
-		"accesscore GET /api/v1/access/sessions 200",
-		"auditcore GET /api/v1/audit/events 200",
-		"_runtime GET unmatched 404",
+	wantKeys := []metrics.RequestKey{
+		{Cell: "accesscore", Method: http.MethodGet, Route: "/api/v1/access/sessions", Status: http.StatusOK},
+		{Cell: "auditcore", Method: http.MethodGet, Route: "/api/v1/audit/events", Status: http.StatusOK},
+		{Cell: "_runtime", Method: http.MethodGet, Route: "unmatched", Status: http.StatusNotFound},
 	}
 	for _, key := range wantKeys {
 		assert.Equalf(t, int64(1), snap.RequestCounts[key],
@@ -186,7 +176,7 @@ func TestMountOneRouteGroup_PerCellMetricsLabel(t *testing.T) {
 	// fallback must NOT appear — neither path should leak into metrics.
 	for _, forbidden := range []string{"phase5-test", "default"} {
 		for key := range snap.RequestCounts {
-			assert.NotContainsf(t, key, forbidden+" ",
+			assert.NotEqualf(t, forbidden, key.Cell,
 				"cell label %q must not appear in metrics snapshot (regression to global cellID derivation)", forbidden)
 		}
 	}

@@ -223,6 +223,8 @@ func TestAutoWire_CellLabel_FromCtxArg(t *testing.T) {
 		"RecordRequest must emit cell=_runtime for the second call")
 	assert.Equal(t, float64(0), reqs.totalForLabel("cell", "my-service"),
 		"a regression that derived cell from assembly ID would fail here")
+	assert.Equal(t, float64(0), reqs.totalForLabel("cell", "default"),
+		"a regression to the legacy default fallback would fail here")
 
 	dur := p.histogram("http_request_duration_seconds")
 	require.NotNil(t, dur)

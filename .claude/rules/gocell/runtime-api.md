@@ -47,7 +47,7 @@ func (c *AccessCore) Init(ctx context.Context, reg cell.Registry) error {
         Register: func(mux cell.RouteMux) error {
             // mux.Route 的 callback 仍是 func(RouteMux) 无 error 返回，
             // 用 outer-variable closure 捕获 slice 错误并通过 Register 返回
-            // 给 phase5。bootstrap/mountOneRouteGroup 用同样模式。
+            // 给 phase5。Router.MountRouteGroup 用同样模式。
             var firstErr error
             captureErr := func(err error) {
                 if err != nil && firstErr == nil {

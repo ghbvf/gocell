@@ -39,8 +39,9 @@ func TestInMemoryCollector_Snapshot(t *testing.T) {
 	c.RecordRequest("accesscore", "GET", "/a", 200, 0.002)
 
 	snap := c.Snapshot()
-	assert.Equal(t, int64(2), snap.RequestCounts["accesscore GET /a 200"])
-	assert.True(t, snap.DurationSumsMs["accesscore GET /a 200"] >= 0)
+	key := RequestKey{Cell: "accesscore", Method: "GET", Route: "/a", Status: 200}
+	assert.Equal(t, int64(2), snap.RequestCounts[key])
+	assert.True(t, snap.DurationSumsMs[key] >= 0)
 }
 
 func TestInMemoryCollector_PerCellSeparation(t *testing.T) {
@@ -49,8 +50,12 @@ func TestInMemoryCollector_PerCellSeparation(t *testing.T) {
 	c.RecordRequest("auditcore", "GET", "/api/v1/sessions", 200, 0.002)
 
 	snap := c.Snapshot()
-	assert.Equal(t, int64(1), snap.RequestCounts["accesscore GET /api/v1/sessions 200"])
-	assert.Equal(t, int64(1), snap.RequestCounts["auditcore GET /api/v1/sessions 200"])
+	assert.Equal(t, int64(1), snap.RequestCounts[RequestKey{
+		Cell: "accesscore", Method: "GET", Route: "/api/v1/sessions", Status: 200,
+	}])
+	assert.Equal(t, int64(1), snap.RequestCounts[RequestKey{
+		Cell: "auditcore", Method: "GET", Route: "/api/v1/sessions", Status: 200,
+	}])
 }
 
 // Verify interface compliance at compile time.

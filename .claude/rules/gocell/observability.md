@@ -24,9 +24,9 @@
 
 `http_requests_total` 与 `http_request_duration_seconds` 的 `cell` label 表示请求落入的 cell：
 
-- **业务请求**：`cell=<cellID>` — 由 `bootstrap.mountOneRouteGroup` 在挂载 `RouteGroup` 时把 `WithCellIDContext(rg.CellID)` 注入到 chi sub-mux，使该 group 内的所有 handler 在请求 ctx 看到具体 cellID（来源 = K#02 `phase5CollectRouteGroups` 自动填充的 `RouteGroup.CellID`）。
-- **框架/未匹配请求**：`cell="_runtime"` 哨兵 — 由 `runtime/http/middleware/metrics.go` 在 listener root mux 上的 `Metrics` 中间件内部 seed（用 `RuntimeCellIDSentinel` 常量），覆盖 `/healthz`、`/readyz`、`/metrics` 自身、404 等所有未落入业务 RouteGroup 的请求。
+- **业务请求**：`cell=<cellID>` — 由 `runtime/http/router.Router.MountRouteGroup` 记录 `RouteGroup.CellID` 与 HTTP namespace 的 ownership，listener-root `CellAttribution` middleware 在 tracing/access-log/metrics/protection 之前写入 `kernel/ctxkeys.CellID`。成功 handler、auth/rate-limit/circuit-breaker/body-limit 前置拒绝、chi 405 都必须使用同一 cell。
+- **框架/未匹配请求**：`cell="_runtime"` 哨兵 — `runtime/http/middleware.Metrics` 在 `ctxkeys.CellID` 缺失时使用 `RuntimeCellIDSentinel`，覆盖 `/healthz`、`/readyz`、`/metrics` 自身、listener 外 404 等所有未落入业务 RouteGroup 的请求。
 
-实现采用 chi `RouteContext` 同款 mutable-pointer 模式：`Metrics` 中间件在 ctx 注入 `*cellIDState{cellID: "_runtime"}`，sub-mux 的 `WithCellIDContext` mutate 该指针的 `cellID` 字段；`Metrics` 在 `next.ServeHTTP` 返回后从同一指针读取，因此 root 层 recorder 看到的是 sub-mux 写入的最终值。这是因为 chi sub-mux 的 `r.WithContext(WithValue(...))` 仅对 child chain 可见，root middleware 的 ctx 不会被自动更新；mutable pointer 恰好解决这个 detached-context 问题。
+`RouteGroup.Prefix` 非空时按 path segment 前缀归属；`Prefix == ""` 不表示拥有整个 listener，而是从该 RouteGroup 内实际注册的 `Route` / `Handle` / `Mount` / `auth.Mount` 合同路径派生归属。重叠 namespace 按最长前缀/最长模板胜出。
 
-`metrics` 中间件读取 `cs.cellID` — 不再读 `ctxkeys`，无 fallback 分支。dashboards / alert 直接 match `cell="_runtime"` 表达框架流量。回退由 `tools/archtest/http_metrics_label_test.go` 4 条 archtest 守护：CTXSOURCE（cellIDState 模式）/ NO-ASSEMBLY-DERIVE / NO-CONFIG-CELLID / RUNTIME-SENTINEL（哨兵字面量）。
+`metrics` 中间件只读取 `ctxkeys.CellIDFrom`，缺失时使用 `_runtime`。route label 对前置拒绝使用 router 的 route-template fallback resolver，避免业务路径拒绝被记为 `route="unmatched"`。回退由 `tools/archtest/http_metrics_label_test.go` 守护：CTXSOURCE / ROUTER-ATTRIBUTION / NO-ASSEMBLY-DERIVE / NO-CONFIG-CELLID / RUNTIME-SENTINEL。

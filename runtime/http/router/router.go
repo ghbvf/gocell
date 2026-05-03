@@ -90,7 +90,7 @@ func WithRequestIDOptions(opts ...middleware.RequestIDOption) Option {
 }
 
 // WithRateLimiter enables per-IP rate limiting in the default middleware chain.
-// When provided, the rate limiter is placed after AccessLog and before Metrics.
+// When provided, the rate limiter is placed after observability and before auth.
 //
 // ref: go-zero — rate limiting as default middleware when configured
 func WithRateLimiter(rl middleware.RateLimiter) Option {
@@ -314,6 +314,8 @@ type Router struct {
 	// by auth.Mount. Tracing uses these as a fallback when upstream middleware
 	// short-circuits before wrapper.HTTPHandler can contribute attrs.
 	declaredHTTPContracts      []wrapper.ContractSpec
+	ownedRoutes                []ownedRoutePattern
+	ownedPrefixes              []ownedRoutePrefix
 	passwordResetExemptMatcher func(method, urlPath string) bool
 	derivedHint                string
 
@@ -342,6 +344,17 @@ type Router struct {
 type earlyResponder struct {
 	predicate func(*http.Request) bool
 	handler   http.HandlerFunc
+}
+
+type ownedRoutePattern struct {
+	method string
+	path   string
+	cellID string
+}
+
+type ownedRoutePrefix struct {
+	prefix string
+	cellID string
 }
 
 // earlyResponderMiddleware turns an earlyResponder into a chi middleware that
@@ -393,7 +406,7 @@ func MustNew(opts ...Option) *Router {
 //
 // The middleware chain is:
 //
-//	ListenerContext → RequestID → RealIP → Recorder → [Tracing] → AccessLog → [Metrics]
+//	ListenerContext → RequestID → RealIP → Recorder → CellAttribution → [Tracing] → AccessLog → [Metrics]
 //	→ Recovery → SecurityHeaders → [earlyResponders] → [defaultMiddleware]
 //	→ [RateLimit] → [CircuitBreaker] → [Auth] → BodyLimit → handlers
 //
@@ -473,7 +486,7 @@ func (r *Router) buildRealIPMiddleware() (func(http.Handler) http.Handler, error
 //
 // Chain order (outer to inner):
 //
-//	ListenerContext → RequestID → RealIP → Recorder → [Tracing] → AccessLog → [Metrics]
+//	ListenerContext → RequestID → RealIP → Recorder → CellAttribution → [Tracing] → AccessLog → [Metrics]
 //	→ Recovery → SecurityHeaders → [earlyResponders] → [defaultMiddleware]
 //	→ [RateLimit] → [CircuitBreaker] → [Auth] → BodyLimit → handlers
 func (r *Router) buildMux(realIPMW func(http.Handler) http.Handler) error {
@@ -500,20 +513,18 @@ func (r *Router) buildMux(realIPMW func(http.Handler) http.Handler) error {
 		middleware.RequestIDWithOptions(r.requestIDOpts...),
 		realIPMW,
 		middleware.Recorder,
+		middleware.CellAttribution(r.resolveCellID),
 	)
 	if r.tracer != nil {
 		r.mux.Use(middleware.Tracing(r.tracer, r.tracingOpts...))
 	}
 	r.mux.Use(middleware.AccessLog(r.clock))
 	if r.metricsCollector != nil {
-		// HTTP-METRICS-LABEL-REALIGN: middleware.Metrics attaches its own
-		// mutable *cellIDState seeded with the framework "_runtime"
-		// sentinel; bootstrap.mountOneRouteGroup installs
-		// WithCellIDContext on each cell-owned sub-mux to mutate that
-		// state. The recorder fires after next.ServeHTTP returns, so it
-		// observes whichever value won — sentinel for framework routes,
-		// the cell ID for business routes.
-		r.mux.Use(middleware.Metrics(r.metricsCollector, r.clock))
+		r.mux.Use(middleware.Metrics(
+			r.metricsCollector,
+			r.clock,
+			middleware.WithRoutePatternResolver(r.resolveHTTPRoutePattern),
+		))
 	}
 	r.mux.Use(
 		middleware.Recovery,
@@ -617,6 +628,48 @@ func (r *Router) Mount(prefix string, handler http.Handler) {
 // registered through it, without modifying the receiver.
 func (r *Router) With(mw ...func(http.Handler) http.Handler) kcell.RouteMux {
 	return &chiRouterAdapter{cr: r.mux.With(mw...), declarer: r}
+}
+
+// MountRouteGroup mounts a cell RouteGroup and records its HTTP namespace
+// ownership for root-level observability. Cell ownership is resolved before
+// protection middleware, so auth/rate-limit/circuit-breaker/body-limit rejects
+// and chi 405s receive the same cell label as successful handler executions.
+func (r *Router) MountRouteGroup(rg kcell.RouteGroup) error {
+	if rg.Register == nil {
+		return fmt.Errorf("router: RouteGroup for listener %q has nil Register function", rg.Listener.String())
+	}
+	if rg.CellID != "" && rg.Prefix != "" {
+		r.recordOwnedPrefix(rg.CellID, rg.Prefix)
+	}
+
+	var registerErr error
+	if rg.Prefix != "" {
+		r.mux.Route(rg.Prefix, func(cr chi.Router) {
+			if len(rg.Middleware) > 0 {
+				cr = cr.With(rg.Middleware...)
+			}
+			sub := &chiRouterAdapter{
+				cr:       cr,
+				prefix:   rg.Prefix,
+				declarer: r,
+				owner:    r,
+				cellID:   rg.CellID,
+			}
+			registerErr = rg.Register(sub)
+		})
+		return registerErr
+	}
+
+	cr := chi.Router(r.mux)
+	if len(rg.Middleware) > 0 {
+		cr = r.mux.With(rg.Middleware...)
+	}
+	return rg.Register(&chiRouterAdapter{
+		cr:       cr,
+		declarer: r,
+		owner:    r,
+		cellID:   rg.CellID,
+	})
 }
 
 // DeclareAuthMeta implements cell.AuthRouteDeclarer. It accumulates auth route
@@ -839,6 +892,26 @@ func (r *Router) DeclaredAuthMetas() []kcell.AuthRouteMeta {
 	return out
 }
 
+func (r *Router) recordOwnedPrefix(cellID, prefix string) {
+	if cellID == "" || strings.TrimSpace(prefix) == "" {
+		return
+	}
+	prefix = cleanRoutePath(prefix)
+	r.ownedPrefixes = append(r.ownedPrefixes, ownedRoutePrefix{prefix: prefix, cellID: cellID})
+}
+
+func (r *Router) recordOwnedRoutePattern(cellID, method, routePath string) {
+	routePath = cleanRoutePath(routePath)
+	if cellID == "" || routePath == "" {
+		return
+	}
+	r.ownedRoutes = append(r.ownedRoutes, ownedRoutePattern{
+		method: strings.ToUpper(method),
+		path:   routePath,
+		cellID: cellID,
+	})
+}
+
 // not404Handler writes a 404 JSON body. Used when a primary-listener router
 // needs an explicit 404 for /internal/v1/* paths.
 // Exported for bootstrap's phase5 to install as a route group on the primary
@@ -888,11 +961,102 @@ func (r *Router) resolveHTTPContractAttrs(method, urlPath string) ([]wrapper.Att
 	return nil, false
 }
 
+func (r *Router) resolveCellID(_ string, urlPath string) (string, bool) {
+	urlPath = cleanRoutePath(urlPath)
+	bestCell := ""
+	bestScore := -1
+
+	for _, route := range r.ownedRoutes {
+		if !routePatternMatches(route.path, urlPath) {
+			continue
+		}
+		if score := routeMatchScore(route.path); score > bestScore {
+			bestScore = score
+			bestCell = route.cellID
+		}
+	}
+	for _, prefix := range r.ownedPrefixes {
+		if !segmentPrefixMatches(urlPath, prefix.prefix) {
+			continue
+		}
+		if score := routeMatchScore(prefix.prefix); score > bestScore {
+			bestScore = score
+			bestCell = prefix.cellID
+		}
+	}
+	return bestCell, bestCell != ""
+}
+
+func (r *Router) resolveHTTPRoutePattern(method, urlPath string) (string, bool) {
+	if route, ok := r.resolveOwnedRoutePattern(method, urlPath, true); ok {
+		return route, true
+	}
+	if route, ok := r.resolveContractRoutePattern(method, urlPath, true); ok {
+		return route, true
+	}
+	if route, ok := r.resolveOwnedRoutePattern(method, urlPath, false); ok {
+		return route, true
+	}
+	return r.resolveContractRoutePattern(method, urlPath, false)
+}
+
+func (r *Router) resolveOwnedRoutePattern(method, urlPath string, requireMethod bool) (string, bool) {
+	urlPath = cleanRoutePath(urlPath)
+	bestRoute := ""
+	bestScore := -1
+	for _, route := range r.ownedRoutes {
+		if requireMethod && !routeMethodMatches(route.method, method) {
+			continue
+		}
+		if !routePatternMatches(route.path, urlPath) {
+			continue
+		}
+		if score := routeMatchScore(route.path); score > bestScore {
+			bestScore = score
+			bestRoute = route.path
+		}
+	}
+	return bestRoute, bestRoute != ""
+}
+
+func (r *Router) resolveContractRoutePattern(method, urlPath string, requireMethod bool) (string, bool) {
+	urlPath = cleanRoutePath(urlPath)
+	bestRoute := ""
+	bestScore := -1
+	for _, spec := range r.declaredHTTPContracts {
+		if requireMethod && !contractMethodMatches(spec.Method, method) {
+			continue
+		}
+		routePath := cleanRoutePath(spec.Path)
+		if !routePatternMatches(routePath, urlPath) {
+			continue
+		}
+		if score := routeMatchScore(routePath); score > bestScore {
+			bestScore = score
+			bestRoute = routePath
+		}
+	}
+	return bestRoute, bestRoute != ""
+}
+
+func routeMethodMatches(routeMethod, requestMethod string) bool {
+	return routeMethod == "" || contractMethodMatches(routeMethod, requestMethod)
+}
+
 func contractMethodMatches(contractMethod, requestMethod string) bool {
 	return contractMethod == requestMethod || (contractMethod == http.MethodGet && requestMethod == http.MethodHead)
 }
 
 func contractPathMatches(template, concrete string) bool {
+	return routePatternMatches(template, concrete)
+}
+
+func routePatternMatches(template, concrete string) bool {
+	template = cleanRoutePath(template)
+	concrete = cleanRoutePath(concrete)
+	if strings.HasSuffix(template, "/*") {
+		return segmentPrefixMatches(concrete, strings.TrimSuffix(template, "/*"))
+	}
 	tParts := strings.Split(strings.Trim(template, "/"), "/")
 	cParts := strings.Split(strings.Trim(concrete, "/"), "/")
 	if len(tParts) != len(cParts) {
@@ -911,6 +1075,41 @@ func contractPathMatches(template, concrete string) bool {
 		}
 	}
 	return true
+}
+
+func segmentPrefixMatches(concrete, prefix string) bool {
+	concrete = cleanRoutePath(concrete)
+	prefix = cleanRoutePath(prefix)
+	if prefix == "/" {
+		return true
+	}
+	return concrete == prefix || strings.HasPrefix(concrete, prefix+"/")
+}
+
+func routeMatchScore(routePath string) int {
+	return len(cleanRoutePath(routePath))
+}
+
+func splitHandlePattern(pattern string) (method, routePath string) {
+	fields := strings.Fields(pattern)
+	if len(fields) >= 2 {
+		return strings.ToUpper(fields[0]), fields[1]
+	}
+	return "", pattern
+}
+
+func cleanRoutePath(routePath string) string {
+	if routePath == "" {
+		return "/"
+	}
+	if !strings.HasPrefix(routePath, "/") {
+		routePath = "/" + routePath
+	}
+	cleaned := path.Clean(routePath)
+	if cleaned == "." {
+		return "/"
+	}
+	return cleaned
 }
 
 func httpContractAttrs(spec wrapper.ContractSpec) []wrapper.Attr {
@@ -951,6 +1150,8 @@ type chiRouterAdapter struct {
 	cr       chi.Router
 	prefix   string
 	declarer kcell.AuthRouteDeclarer
+	owner    *Router
+	cellID   string
 }
 
 // Compile-time checks: chiRouterAdapter forwards AuthRouteMeta + declares
@@ -966,33 +1167,41 @@ var _ kcell.HTTPContractDeclarer = (*chiRouterAdapter)(nil)
 func (a *chiRouterAdapter) Prefix() string { return a.prefix }
 
 func (a *chiRouterAdapter) Handle(pattern string, handler http.Handler) {
+	if method, routePath := splitHandlePattern(pattern); routePath != "" {
+		a.recordOwnedRoute(method, routePath)
+	}
 	a.cr.Handle(pattern, handler)
 }
 
 func (a *chiRouterAdapter) Route(pattern string, fn func(kcell.RouteMux)) {
 	a.cr.Route(pattern, func(cr chi.Router) {
+		fullPrefix := joinPrefix(a.prefix, pattern)
+		a.recordOwnedPrefix(fullPrefix)
 		sub := &chiRouterAdapter{
 			cr:       cr,
-			prefix:   joinPrefix(a.prefix, pattern),
+			prefix:   fullPrefix,
 			declarer: a.declarer,
+			owner:    a.owner,
+			cellID:   a.cellID,
 		}
 		fn(sub)
 	})
 }
 
 func (a *chiRouterAdapter) Mount(pattern string, handler http.Handler) {
+	a.recordOwnedPrefix(joinPrefix(a.prefix, pattern))
 	a.cr.Mount(pattern, handler)
 }
 
 func (a *chiRouterAdapter) Group(fn func(kcell.RouteMux)) {
 	a.cr.Group(func(cr chi.Router) {
-		sub := &chiRouterAdapter{cr: cr, prefix: a.prefix, declarer: a.declarer}
+		sub := &chiRouterAdapter{cr: cr, prefix: a.prefix, declarer: a.declarer, owner: a.owner, cellID: a.cellID}
 		fn(sub)
 	})
 }
 
 func (a *chiRouterAdapter) With(mw ...func(http.Handler) http.Handler) kcell.RouteMux {
-	return &chiRouterAdapter{cr: a.cr.With(mw...), prefix: a.prefix, declarer: a.declarer}
+	return &chiRouterAdapter{cr: a.cr.With(mw...), prefix: a.prefix, declarer: a.declarer, owner: a.owner, cellID: a.cellID}
 }
 
 // DeclareAuthMeta composes the adapter's mount prefix with the declared path
@@ -1011,6 +1220,9 @@ func (a *chiRouterAdapter) DeclareAuthMeta(m kcell.AuthRouteMeta) error {
 // Router-rooted declarer. ContractSpec.Path is already the canonical full
 // path, so unlike AuthRouteMeta it is not composed with the chi prefix.
 func (a *chiRouterAdapter) DeclareHTTPContract(spec wrapper.ContractSpec) error {
+	if a.owner != nil && a.cellID != "" {
+		a.owner.recordOwnedRoutePattern(a.cellID, spec.Method, spec.Path)
+	}
 	if a.declarer == nil {
 		return nil
 	}
@@ -1018,6 +1230,20 @@ func (a *chiRouterAdapter) DeclareHTTPContract(spec wrapper.ContractSpec) error 
 		return declarer.DeclareHTTPContract(spec)
 	}
 	return nil
+}
+
+func (a *chiRouterAdapter) recordOwnedPrefix(prefix string) {
+	if a.owner == nil || a.cellID == "" {
+		return
+	}
+	a.owner.recordOwnedPrefix(a.cellID, prefix)
+}
+
+func (a *chiRouterAdapter) recordOwnedRoute(method, routePath string) {
+	if a.owner == nil || a.cellID == "" {
+		return
+	}
+	a.owner.recordOwnedRoutePattern(a.cellID, method, joinPrefix(a.prefix, routePath))
 }
 
 // joinPrefix composes a parent mount prefix with a child pattern/path,

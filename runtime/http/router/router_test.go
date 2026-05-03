@@ -52,6 +52,10 @@ func findAccessLogEntry(logs []byte, wantPath string) (map[string]any, bool) {
 	return nil, false
 }
 
+func routerRequestKey(cellID, method, route string, status int) metrics.RequestKey {
+	return metrics.RequestKey{Cell: cellID, Method: method, Route: route, Status: status}
+}
+
 func TestRouterImplementsRouteMux(t *testing.T) {
 	r := MustNew(WithRouterClock(clock.Real()))
 	var mux cell.RouteMux = r
@@ -135,6 +139,236 @@ func TestRouteGroup(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/ping", nil)
 	r.ServeHTTP(rec, req)
 	assert.Equal(t, http.StatusOK, rec.Code)
+}
+
+func TestMountRouteGroup_CellAttribution_PrefixRejectsAnd405(t *testing.T) {
+	mc := metrics.NewInMemoryCollector()
+	limiter := &routerTestLimiter{allow: false}
+	r := MustNew(WithRouterClock(clock.Real()), WithMetricsCollector(mc), WithRateLimiter(limiter))
+
+	err := r.MountRouteGroup(cell.RouteGroup{
+		Listener: cell.PrimaryListener,
+		Prefix:   "/api/v1/access",
+		CellID:   "accesscore",
+		Register: func(mux cell.RouteMux) error {
+			mux.Handle("GET /users/{id}", http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+				t.Fatal("handler must not run when rate limiter rejects")
+			}))
+			return nil
+		},
+	})
+	require.NoError(t, err)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/access/users/42", nil)
+	r.ServeHTTP(rec, req)
+	assert.Equal(t, http.StatusTooManyRequests, rec.Code)
+
+	limiter.allow = true
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodPost, "/api/v1/access/users/42", nil)
+	r.ServeHTTP(rec, req)
+	assert.Equal(t, http.StatusMethodNotAllowed, rec.Code)
+
+	snap := mc.Snapshot()
+	assert.Equal(t, int64(1), snap.RequestCounts[routerRequestKey(
+		"accesscore", http.MethodGet, "/api/v1/access/users/{id}", http.StatusTooManyRequests,
+	)])
+	assert.Equal(t, int64(1), snap.RequestCounts[routerRequestKey(
+		"accesscore", http.MethodPost, "/api/v1/access/users/{id}", http.StatusMethodNotAllowed,
+	)])
+}
+
+func TestMountRouteGroup_CellAttribution_AuthReject(t *testing.T) {
+	mc := metrics.NewInMemoryCollector()
+	verifier := &routerTestVerifier{claims: auth.Claims{Subject: "user-1"}}
+	r := MustNew(WithRouterClock(clock.Real()), WithMetricsCollector(mc), WithAuthMiddleware(verifier))
+
+	require.NoError(t, r.MountRouteGroup(cell.RouteGroup{
+		Listener: cell.PrimaryListener,
+		Prefix:   "/api/v1/secure",
+		CellID:   "accesscore",
+		Register: func(mux cell.RouteMux) error {
+			return auth.Mount(mux, auth.Route{
+				Contract: testHTTPContract(http.MethodGet, "/api/v1/secure/{id}"),
+				Handler: http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+					t.Fatal("handler must not run when auth rejects")
+				}),
+				Policy: authtest.RequireAuthenticated(),
+			})
+		},
+	}))
+	require.NoError(t, r.FinalizeAuth())
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/secure/42", nil)
+	r.ServeHTTP(rec, req)
+	assert.Equal(t, http.StatusUnauthorized, rec.Code)
+
+	snap := mc.Snapshot()
+	assert.Equal(t, int64(1), snap.RequestCounts[routerRequestKey(
+		"accesscore", http.MethodGet, "/api/v1/secure/{id}", http.StatusUnauthorized,
+	)])
+}
+
+func TestMountRouteGroup_CellAttribution_CircuitBreakerReject(t *testing.T) {
+	mc := metrics.NewInMemoryCollector()
+	breaker := &routerTestBreaker{allowErr: fmt.Errorf("open")}
+	r := MustNew(WithRouterClock(clock.Real()), WithMetricsCollector(mc), WithCircuitBreaker(breaker))
+
+	require.NoError(t, r.MountRouteGroup(cell.RouteGroup{
+		Listener: cell.PrimaryListener,
+		Prefix:   "/api/v1/cb",
+		CellID:   "auditcore",
+		Register: func(mux cell.RouteMux) error {
+			mux.Handle("GET /events", http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+				t.Fatal("handler must not run when circuit breaker rejects")
+			}))
+			return nil
+		},
+	}))
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/cb/events", nil)
+	r.ServeHTTP(rec, req)
+	assert.Equal(t, http.StatusServiceUnavailable, rec.Code)
+
+	snap := mc.Snapshot()
+	assert.Equal(t, int64(1), snap.RequestCounts[routerRequestKey(
+		"auditcore", http.MethodGet, "/api/v1/cb/events", http.StatusServiceUnavailable,
+	)])
+}
+
+func TestMountRouteGroup_CellAttribution_BodyLimitReject(t *testing.T) {
+	mc := metrics.NewInMemoryCollector()
+	r := MustNew(WithRouterClock(clock.Real()), WithMetricsCollector(mc), WithBodyLimit(4))
+
+	require.NoError(t, r.MountRouteGroup(cell.RouteGroup{
+		Listener: cell.PrimaryListener,
+		Prefix:   "/api/v1/upload",
+		CellID:   "configcore",
+		Register: func(mux cell.RouteMux) error {
+			mux.Handle("POST /blob", http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+				t.Fatal("handler must not run when body limit rejects")
+			}))
+			return nil
+		},
+	}))
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/upload/blob", strings.NewReader("too-large"))
+	r.ServeHTTP(rec, req)
+	assert.Equal(t, http.StatusRequestEntityTooLarge, rec.Code)
+
+	snap := mc.Snapshot()
+	assert.Equal(t, int64(1), snap.RequestCounts[routerRequestKey(
+		"configcore", http.MethodPost, "/api/v1/upload/blob", http.StatusRequestEntityTooLarge,
+	)])
+}
+
+func TestMountRouteGroup_CellAttribution_EmptyPrefixNestedRoutes(t *testing.T) {
+	mc := metrics.NewInMemoryCollector()
+	r := MustNew(WithRouterClock(clock.Real()), WithMetricsCollector(mc))
+
+	err := r.MountRouteGroup(cell.RouteGroup{
+		Listener: cell.PrimaryListener,
+		CellID:   "devicecell",
+		Register: func(mux cell.RouteMux) error {
+			mux.Route("/api/v1/devices", func(devices cell.RouteMux) {
+				devices.Handle("GET /{id}", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+					w.WriteHeader(http.StatusOK)
+				}))
+			})
+			return nil
+		},
+	})
+	require.NoError(t, err)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/devices/abc", nil)
+	r.ServeHTTP(rec, req)
+	assert.Equal(t, http.StatusOK, rec.Code)
+
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodGet, "/outside", nil)
+	r.ServeHTTP(rec, req)
+	assert.Equal(t, http.StatusNotFound, rec.Code)
+
+	snap := mc.Snapshot()
+	assert.Equal(t, int64(1), snap.RequestCounts[routerRequestKey(
+		"devicecell", http.MethodGet, "/api/v1/devices/{id}", http.StatusOK,
+	)])
+	assert.Equal(t, int64(1), snap.RequestCounts[routerRequestKey(
+		"_runtime", http.MethodGet, "unmatched", http.StatusNotFound,
+	)])
+}
+
+func TestMountRouteGroup_CellAttribution_LongestPrefixWins(t *testing.T) {
+	mc := metrics.NewInMemoryCollector()
+	limiter := &routerTestLimiter{allow: false}
+	r := MustNew(WithRouterClock(clock.Real()), WithMetricsCollector(mc), WithRateLimiter(limiter))
+
+	require.NoError(t, r.MountRouteGroup(cell.RouteGroup{
+		Listener: cell.PrimaryListener,
+		Prefix:   "/api/v1",
+		CellID:   "configcore",
+		Register: func(mux cell.RouteMux) error {
+			mux.Handle("GET /config", http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+			return nil
+		},
+	}))
+	require.NoError(t, r.MountRouteGroup(cell.RouteGroup{
+		Listener: cell.PrimaryListener,
+		Prefix:   "/api/v1/access",
+		CellID:   "accesscore",
+		Register: func(mux cell.RouteMux) error {
+			mux.Handle("GET /users", http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+			return nil
+		},
+	}))
+
+	for _, path := range []string{"/api/v1/config", "/api/v1/access/users"} {
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		r.ServeHTTP(rec, req)
+		assert.Equal(t, http.StatusTooManyRequests, rec.Code)
+	}
+
+	snap := mc.Snapshot()
+	assert.Equal(t, int64(1), snap.RequestCounts[routerRequestKey(
+		"configcore", http.MethodGet, "/api/v1/config", http.StatusTooManyRequests,
+	)])
+	assert.Equal(t, int64(1), snap.RequestCounts[routerRequestKey(
+		"accesscore", http.MethodGet, "/api/v1/access/users", http.StatusTooManyRequests,
+	)])
+}
+
+func TestMountRouteGroup_CellAttribution_RawMountPrefix(t *testing.T) {
+	mc := metrics.NewInMemoryCollector()
+	r := MustNew(WithRouterClock(clock.Real()), WithMetricsCollector(mc))
+
+	require.NoError(t, r.MountRouteGroup(cell.RouteGroup{
+		Listener: cell.PrimaryListener,
+		CellID:   "mountcell",
+		Register: func(mux cell.RouteMux) error {
+			sub := chi.NewRouter()
+			sub.Get("/ok", func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(http.StatusNoContent)
+			})
+			mux.Mount("/mounted", sub)
+			return nil
+		},
+	}))
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/mounted/ok", nil)
+	r.ServeHTTP(rec, req)
+	assert.Equal(t, http.StatusNoContent, rec.Code)
+
+	snap := mc.Snapshot()
+	assert.Equal(t, int64(1), snap.RequestCounts[routerRequestKey(
+		"mountcell", http.MethodGet, "/mounted/ok", http.StatusNoContent,
+	)])
 }
 
 func TestGroup(t *testing.T) {
@@ -236,7 +470,7 @@ func TestPanicRequestRecordedInMetrics(t *testing.T) {
 	assert.Equal(t, http.StatusInternalServerError, rec.Code)
 
 	snap := mc.Snapshot()
-	key := "_runtime GET /boom 500"
+	key := routerRequestKey("_runtime", http.MethodGet, "/boom", http.StatusInternalServerError)
 	assert.Equal(t, int64(1), snap.RequestCounts[key],
 		"metrics must record panic request as status 500 under cell=_runtime (router-installed sentinel)")
 }
@@ -270,7 +504,7 @@ func TestNormalRequestUnchanged(t *testing.T) {
 	// Verify metrics recorded status 200 under the listener-root sentinel
 	// (no RouteGroup means no per-cell override fired).
 	snap := mc.Snapshot()
-	key := "_runtime GET /ok 200"
+	key := routerRequestKey("_runtime", http.MethodGet, "/ok", http.StatusOK)
 	assert.Equal(t, int64(1), snap.RequestCounts[key])
 }
 
@@ -580,7 +814,7 @@ func TestWithTracer_PanicRequestRecordedInMetrics(t *testing.T) {
 
 	assert.Equal(t, http.StatusInternalServerError, rec.Code)
 	snap := mc.Snapshot()
-	key := "_runtime GET /boom-full 500"
+	key := routerRequestKey("_runtime", http.MethodGet, "/boom-full", http.StatusInternalServerError)
 	assert.Equal(t, int64(1), snap.RequestCounts[key],
 		"metrics must record panic request as 500 even with tracing in chain (cell=_runtime — router sentinel)")
 }
@@ -827,10 +1061,10 @@ func TestMetrics_Records429And503(t *testing.T) {
 	snap := mc.Snapshot()
 	found429, found503 := false, false
 	for key, count := range snap.RequestCounts {
-		if strings.Contains(key, "429") && count > 0 {
+		if key.Status == http.StatusTooManyRequests && count > 0 {
 			found429 = true
 		}
-		if strings.Contains(key, "503") && count > 0 {
+		if key.Status == http.StatusServiceUnavailable && count > 0 {
 			found503 = true
 		}
 	}
