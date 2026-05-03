@@ -137,6 +137,8 @@ func TestFromNodes_DedupAndSort(t *testing.T) {
 	t.Parallel()
 	const mod = "example.com/test"
 	nodes := []*depgraph.Node{
+		nil,
+		{ID: "", Layer: depgraph.LayerUnknown, Imports: []string{mod + "/ignored"}},
 		{ID: mod + "/z", Layer: depgraph.LayerUnknown, Imports: []string{}},
 		{ID: mod + "/a", Layer: depgraph.LayerUnknown, Imports: []string{mod + "/z"}},
 		{ID: mod + "/z", Layer: depgraph.LayerUnknown, Imports: []string{}}, // duplicate
@@ -150,6 +152,53 @@ func TestFromNodes_DedupAndSort(t *testing.T) {
 	}
 	if len(g.Packages) < 2 || g.Packages[0].ID != mod+"/a" {
 		t.Errorf("Packages not sorted by ID; got %v", packageIDs(g))
+	}
+}
+
+func TestFilterByLayer(t *testing.T) {
+	t.Parallel()
+	const mod = "example.com/filter"
+	g := depgraph.FromNodes(mod, []*depgraph.Node{
+		{ID: mod + "/kernel", Layer: depgraph.LayerKernel, Imports: []string{mod + "/pkg"}},
+		{ID: mod + "/pkg", Layer: depgraph.LayerPkg, Imports: []string{}},
+		{ID: mod + "/runtime", Layer: depgraph.LayerRuntime, Imports: []string{mod + "/pkg"}},
+	})
+
+	filtered := g.FilterByLayer(map[string]bool{
+		depgraph.LayerKernel: true,
+		depgraph.LayerPkg:    true,
+	})
+
+	if filtered.Module != mod {
+		t.Fatalf("filtered.Module = %q, want %q", filtered.Module, mod)
+	}
+	if filtered.Stats.Packages != 2 {
+		t.Fatalf("filtered package count = %d, want 2", filtered.Stats.Packages)
+	}
+	if filtered.Stats.Edges != 1 {
+		t.Fatalf("filtered edge count = %d, want 1", filtered.Stats.Edges)
+	}
+	if filtered.ByID(mod+"/runtime") != nil {
+		t.Fatalf("runtime layer should have been filtered out")
+	}
+	if filtered.ByID(mod+"/kernel") == nil || filtered.ByID(mod+"/pkg") == nil {
+		t.Fatalf("kernel and pkg layers should be retained; got IDs %v", packageIDs(filtered))
+	}
+	if g.ByID(mod+"/runtime") == nil {
+		t.Fatalf("FilterByLayer mutated original graph")
+	}
+}
+
+func TestFilterByLayer_NilGraph(t *testing.T) {
+	t.Parallel()
+	var g *depgraph.Graph
+	filtered := g.FilterByLayer(map[string]bool{depgraph.LayerKernel: true})
+
+	if filtered == nil {
+		t.Fatal("FilterByLayer(nil) returned nil graph")
+	}
+	if filtered.Module != "" || filtered.Stats.Packages != 0 || filtered.Stats.Edges != 0 || len(filtered.Packages) != 0 {
+		t.Fatalf("FilterByLayer(nil) = %+v, want empty graph", filtered)
 	}
 }
 
@@ -169,6 +218,31 @@ func TestMarkTestOnly(t *testing.T) {
 	}
 	if n := g.ByID(mod + "/prod"); n == nil || n.TestOnly {
 		t.Errorf("prod.TestOnly = true, want false")
+	}
+}
+
+func TestByID_NilAndMissing(t *testing.T) {
+	t.Parallel()
+	var nilGraph *depgraph.Graph
+	if got := nilGraph.ByID("anything"); got != nil {
+		t.Fatalf("nilGraph.ByID returned %v, want nil", got)
+	}
+
+	g := buildSynth(false)
+	if got := g.ByID("missing"); got != nil {
+		t.Fatalf("ByID(missing) returned %v, want nil", got)
+	}
+}
+
+func TestNodeMarshalJSON_NilReceiver(t *testing.T) {
+	t.Parallel()
+	var n *depgraph.Node
+	raw, err := n.MarshalJSON()
+	if err != nil {
+		t.Fatalf("nil Node MarshalJSON: %v", err)
+	}
+	if string(raw) != "null" {
+		t.Fatalf("nil Node MarshalJSON = %q, want null", raw)
 	}
 }
 

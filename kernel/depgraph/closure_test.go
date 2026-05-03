@@ -80,6 +80,15 @@ func TestTransitiveImports_MissingNode(t *testing.T) {
 	}
 }
 
+func TestTransitiveImports_NilGraph(t *testing.T) {
+	t.Parallel()
+	var g *depgraph.Graph
+	got := g.TransitiveImports("example.com/synth/a")
+	if len(got) != 0 {
+		t.Errorf("TransitiveImports(nil graph) = %v, want empty", got)
+	}
+}
+
 func TestTransitiveImports_StaysInModule(t *testing.T) {
 	t.Parallel()
 	g := buildSynthForClosure(true) // withTestOnly=true exercises full graph
