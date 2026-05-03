@@ -325,7 +325,7 @@ func BuildDocument(pm *ProjectMeta, opts ExportOptions) (Document, error) {
 	}
 
 	if filter.Include&IncludeStatusBoard != 0 {
-		doc.StatusBoard = pm.StatusBoard
+		doc.StatusBoard = redactStatusBoard(pm.StatusBoard)
 	}
 
 	// Pass the expanded filter for dependency graph filtering.
@@ -334,6 +334,24 @@ func BuildDocument(pm *ProjectMeta, opts ExportOptions) (Document, error) {
 	doc.Dependencies = buildDependencies(optsWithExpandedFilter, entities)
 
 	return doc, nil
+}
+
+// redactStatusBoard returns a copy of entries with risk and blocker fields
+// cleared for entries in speculative states (draft or planned). Entries in
+// operational states (todo/doing/blocked/ready) are returned unchanged.
+// This prevents internal planning narratives from leaking into publicly
+// embedded consumers (e.g. gocell-web bundle) while still exposing
+// journey presence and delivery state.
+func redactStatusBoard(entries []StatusBoardEntry) []StatusBoardEntry {
+	out := make([]StatusBoardEntry, len(entries))
+	for i, e := range entries {
+		out[i] = e
+		if e.State == "draft" || e.State == "planned" {
+			out[i].Risk = ""
+			out[i].Blocker = ""
+		}
+	}
+	return out
 }
 
 // buildEntities collects all entities from pm, applying relations based on mask.

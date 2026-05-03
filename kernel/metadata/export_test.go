@@ -436,6 +436,70 @@ func TestBuildDocument_IncludeMask(t *testing.T) {
 	}
 }
 
+// ---- TestBuildDocument_StatusBoardRedaction ----
+
+// TestBuildDocument_StatusBoardRedaction verifies that entries with state=draft
+// or state=planned have their risk and blocker fields cleared in the output,
+// while entries in operational states (doing/blocked) pass through unchanged.
+func TestBuildDocument_StatusBoardRedaction(t *testing.T) {
+	pm := &metadata.ProjectMeta{
+		Cells:      map[string]*metadata.CellMeta{},
+		Slices:     map[string]*metadata.SliceMeta{},
+		Contracts:  map[string]*metadata.ContractMeta{},
+		Journeys:   map[string]*metadata.JourneyMeta{},
+		Assemblies: map[string]*metadata.AssemblyMeta{},
+		Actors:     []metadata.ActorMeta{},
+		StatusBoard: []metadata.StatusBoardEntry{
+			{JourneyID: "J-draft", State: "draft", Risk: "high", Blocker: "internal risk detail", UpdatedAt: "2026-05-03"},
+			{JourneyID: "J-planned", State: "planned", Risk: "medium", Blocker: "some blocker note", UpdatedAt: "2026-05-03"},
+			{JourneyID: "J-doing", State: "doing", Risk: "low", Blocker: "no blocker", UpdatedAt: "2026-05-03"},
+			{JourneyID: "J-blocked", State: "blocked", Risk: "high", Blocker: "db migration pending", UpdatedAt: "2026-05-03"},
+		},
+	}
+	opts := metadata.ExportOptions{
+		Now:    fixedNow,
+		Filter: metadata.Filter{Include: metadata.IncludeStatusBoard},
+	}
+	doc, err := metadata.BuildDocument(pm, opts)
+	require.NoError(t, err)
+	require.Len(t, doc.StatusBoard, 4)
+
+	byID := make(map[string]metadata.StatusBoardEntry, 4)
+	for _, e := range doc.StatusBoard {
+		byID[e.JourneyID] = e
+	}
+
+	// draft: risk and blocker must be cleared; journeyId/state/updatedAt preserved.
+	draft := byID["J-draft"]
+	assert.Equal(t, "draft", draft.State)
+	assert.Equal(t, "J-draft", draft.JourneyID)
+	assert.Equal(t, "2026-05-03", draft.UpdatedAt)
+	assert.Empty(t, draft.Risk, "draft entry: risk must be redacted")
+	assert.Empty(t, draft.Blocker, "draft entry: blocker must be redacted")
+
+	// planned: risk and blocker must be cleared; journeyId/state/updatedAt preserved.
+	planned := byID["J-planned"]
+	assert.Equal(t, "planned", planned.State)
+	assert.Equal(t, "J-planned", planned.JourneyID)
+	assert.Equal(t, "2026-05-03", planned.UpdatedAt)
+	assert.Empty(t, planned.Risk, "planned entry: risk must be redacted")
+	assert.Empty(t, planned.Blocker, "planned entry: blocker must be redacted")
+
+	// doing: risk and blocker must be preserved unchanged.
+	doing := byID["J-doing"]
+	assert.Equal(t, "low", doing.Risk, "doing entry: risk must be preserved")
+	assert.Equal(t, "no blocker", doing.Blocker, "doing entry: blocker must be preserved")
+
+	// blocked: risk and blocker must be preserved unchanged.
+	blocked := byID["J-blocked"]
+	assert.Equal(t, "high", blocked.Risk, "blocked entry: risk must be preserved")
+	assert.Equal(t, "db migration pending", blocked.Blocker, "blocked entry: blocker must be preserved")
+
+	// Verify original pm.StatusBoard is not mutated.
+	assert.Equal(t, "high", pm.StatusBoard[0].Risk, "original pm entries must not be mutated")
+	assert.Equal(t, "internal risk detail", pm.StatusBoard[0].Blocker, "original pm entries must not be mutated")
+}
+
 // ---- TestBuildDocument_PackageDepsLoading ----
 
 func TestBuildDocument_PackageDepsLoading(t *testing.T) {

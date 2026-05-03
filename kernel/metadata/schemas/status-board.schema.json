@@ -17,7 +17,7 @@
       "state": {
         "type": "string",
         "description": "Current delivery state of the journey.",
-        "enum": ["todo", "doing", "blocked", "ready"]
+        "enum": ["draft", "planned", "todo", "doing", "blocked", "ready"]
       },
       "risk": {
         "type": "string",

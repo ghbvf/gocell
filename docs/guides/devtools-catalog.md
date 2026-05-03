@@ -237,7 +237,7 @@ const catalog: CatalogDocument = await resp.json();
 | 块 | 字段 | 说明 |
 |----|------|------|
 | `entities` | `[]Entity` | Cell/Slice/Contract/Journey/Assembly/Actor 实体列表，Backstage Entity model 结构 |
-| `statusBoard` | `[]StatusBoardEntry` | 来自 `journeys/status-board.yaml` 的所有条目原样输出 |
+| `statusBoard` | `[]StatusBoardEntry` | 来自 `journeys/status-board.yaml`；state 为 `draft` 或 `planned` 的条目，`risk` 与 `blocker` 字段在输出中清空（保留 `journeyId/state/updatedAt`），避免公开发布的 gocell-web bundle 暴露内部规划叙述 |
 | `dependencies` | `*Dependencies` | 包含 `cells`（cell 级依赖图）和 `packages`（包级 typed dep graph）两个子块 |
 
 `entities[*].relations` 字段（如 hasPart/partOf/dependsOn/ownedBy）对称遵循 [Backstage well-known relations](https://backstage.io/docs/features/software-catalog/well-known-relations) 命名约定。
