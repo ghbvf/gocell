@@ -15,7 +15,6 @@ import (
 	"github.com/ghbvf/gocell/examples/todoorder/cells/ordercell/internal/mem"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/outbox"
-	"github.com/ghbvf/gocell/kernel/persistence"
 )
 
 func TestToOrderCreateResponse_NilInput(t *testing.T) {
@@ -43,11 +42,12 @@ func TestOrderCreateResponse_Fields(t *testing.T) {
 func newTestHandler(t testing.TB) *Handler {
 	t.Helper()
 	repo := mem.NewOrderRepository()
-	svc := NewService(repo, slog.Default(),
+	svc, err := NewService(repo, slog.Default(),
 		WithEmitter(mustEmitter(t, outbox.NoopWriter{})),
-		WithTxManager(persistence.NoopTxRunner{}),
+		WithTxManager(&stubTxRunner{}),
 		WithClock(clock.Real()),
 	)
+	require.NoError(t, err)
 	return NewHandler(svc)
 }
 

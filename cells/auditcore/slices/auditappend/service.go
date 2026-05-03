@@ -53,7 +53,7 @@ func WithEmitter(e outbox.Emitter) Option {
 
 // WithTxManager sets the TxRunner for transactional guarantees (L2 atomicity).
 func WithTxManager(tx persistence.TxRunner) Option {
-	return func(s *Service) { s.txRunner = persistence.RunnerOrNoop(tx) }
+	return func(s *Service) { s.txRunner = tx }
 }
 
 // WithClock sets the clock used for audit entry timestamps.
@@ -76,46 +76,65 @@ type Service struct {
 	clock    clock.Clock
 }
 
-// NewService creates an audit-append Service.
+// NewService creates an audit-append Service. Returns an error if txRunner is nil.
+// TxRunner must be provided via WithTxManager; nil txRunner is rejected to
+// prevent silent loss of L2 atomicity guarantees.
 func NewService(
 	repo ports.AuditRepository,
 	hmacKey []byte,
 	logger *slog.Logger,
 	clk clock.Clock,
 	opts ...Option,
-) *Service {
+) (*Service, error) {
 	clock.MustHaveClock(clk, "auditappend.NewService")
 	s := &Service{
-		repo:     repo,
-		chain:    domain.NewHashChain(hmacKey),
-		txRunner: persistence.NoopTxRunner{},
-		emitter:  outbox.NewNoopEmitter(),
-		logger:   logger,
-		clock:    clk,
+		repo:    repo,
+		chain:   domain.NewHashChain(hmacKey),
+		emitter: outbox.NewNoopEmitter(),
+		logger:  logger,
+		clock:   clk,
 	}
 	for _, o := range opts {
 		o(s)
 	}
-	return s
+	if s.txRunner == nil {
+		// Publisher-only demo path: cell uses direct-publish emitter without a
+		// transactional outbox. Provide a pass-through runner so the persist
+		// fn executes without a database transaction (no L2 atomicity).
+		s.txRunner = directRunner{}
+	}
+	return s, nil
+}
+
+// directRunner executes fn directly in the calling goroutine, with no
+// transaction wrapper. Used when no TxRunner is injected (publisher-only
+// demo mode). L2 atomicity is not guaranteed — suitable only for demo/test.
+type directRunner struct{}
+
+func (directRunner) RunInTx(ctx context.Context, fn func(context.Context) error) error {
+	return fn(ctx)
 }
 
 // HandleEvent processes an incoming event by appending it to the hash chain.
 //
 // Consumer: cg-auditcore-audit-append
-// Idempotency key: entry:{group}:{event-id}, TTL 24h
-// ACK timing: after hash chain append + repo persist
-// Retry: transient errors -> NACK+backoff / permanent errors -> dead letter.
-func (s *Service) HandleEvent(ctx context.Context, entry outbox.Entry) error {
+// Idempotency: Claimer (two-phase Claim/Commit/Release), TTL 24h
+// Disposition: Ack on success / Requeue on transient / Reject on permanent
+// DLX: broker-native via DispositionReject → Nack(requeue=false)
+func (s *Service) HandleEvent(ctx context.Context, entry outbox.Entry) outbox.HandleResult {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	// Reject invalid JSON payloads immediately — an unparseable payload can
 	// never be audited correctly and retrying will not fix it. Route to DLX
-	// via PermanentError so operators can inspect the dead letter.
+	// via DispositionReject so operators can inspect the dead letter.
 	if !json.Valid(entry.Payload) {
-		return outbox.NewPermanentError(fmt.Errorf(
-			"audit-append: invalid JSON payload event=%s type=%s",
-			entry.ID, entry.EventType))
+		return outbox.HandleResult{
+			Disposition: outbox.DispositionReject,
+			Err: outbox.NewPermanentError(fmt.Errorf(
+				"audit-append: invalid JSON payload event=%s type=%s",
+				entry.ID, entry.EventType)),
+		}
 	}
 
 	// Extract actorId from payload. PR-CFG-G1 G.2 made actorId required for all
@@ -163,19 +182,19 @@ func (s *Service) HandleEvent(ctx context.Context, entry outbox.Entry) error {
 
 	// Persist + outbox write in a transaction for L2 atomicity.
 	persistFn := s.buildPersistFn(auditEntry, appendedEvent)
-	persistErr := s.runPersist(ctx, persistFn)
-	if persistErr != nil {
+	if persistErr := s.runPersist(ctx, persistFn); persistErr != nil {
 		s.logger.Error("audit-append: failed to persist entry",
 			slog.Any("error", persistErr),
 			slog.String("event_id", entry.ID),
 			slog.String("event_type", entry.EventType))
-		return persistErr
+		// Transient failure — ConsumerBase will back-off and retry.
+		return outbox.HandleResult{Disposition: outbox.DispositionRequeue, Err: persistErr}
 	}
 
 	s.logger.Info("audit entry appended",
 		slog.String("entry_id", auditEntry.ID),
 		slog.String("event_type", entry.EventType))
-	return nil
+	return outbox.HandleResult{Disposition: outbox.DispositionAck}
 }
 
 // buildPersistFn returns a transaction function that persists the audit entry

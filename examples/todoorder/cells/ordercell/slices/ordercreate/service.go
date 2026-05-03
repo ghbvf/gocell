@@ -1,8 +1,8 @@
 // Package ordercreate implements the order-create slice: creating orders
 // and publishing order.created events via the transactional outbox pattern.
 //
-// Demo mode injects NoopWriter + NoopTxRunner to exercise the same code
-// path as production (zero fork). ref: Watermill GoChannel / Uber fx pattern.
+// Demo mode injects NoopWriter + a pass-through TxRunner to exercise the same
+// code path as production (zero fork). ref: Watermill GoChannel / Uber fx pattern.
 package ordercreate
 
 import (
@@ -53,7 +53,7 @@ func WithEmitter(e outbox.Emitter) Option {
 
 // WithTxManager sets the TxRunner for transactional guarantees.
 func WithTxManager(tx persistence.TxRunner) Option {
-	return func(s *Service) { s.txRunner = persistence.RunnerOrNoop(tx) }
+	return func(s *Service) { s.txRunner = tx }
 }
 
 // WithClock sets the clock used for order timestamps. Defaults to
@@ -77,19 +77,22 @@ type Service struct {
 	clock    clock.Clock
 }
 
-// NewService creates an order-create Service.
-func NewService(repo domain.OrderRepository, logger *slog.Logger, opts ...Option) *Service {
+// NewService creates an order-create Service. Returns an error if txRunner is nil.
+// Callers (ordercell.Init) guarantee txRunner is non-nil via resolveOutboxDeps.
+func NewService(repo domain.OrderRepository, logger *slog.Logger, opts ...Option) (*Service, error) {
 	s := &Service{
-		repo:     repo,
-		txRunner: persistence.NoopTxRunner{},
-		emitter:  outbox.NewNoopEmitter(),
-		logger:   logger,
-		clock:    clock.Real(),
+		repo:    repo,
+		emitter: outbox.NewNoopEmitter(),
+		logger:  logger,
+		clock:   clock.Real(),
 	}
 	for _, o := range opts {
 		o(s)
 	}
-	return s
+	if s.txRunner == nil {
+		return nil, errcode.New(errcode.ErrValidationFailed, "ordercreate: TxRunner required")
+	}
+	return s, nil
 }
 
 // Create creates a new order and writes an outbox entry atomically.

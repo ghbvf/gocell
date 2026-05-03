@@ -15,13 +15,16 @@ import (
 
 var testHMACKey = []byte("test-hmac-key-32bytes-long!!!!!!!")
 
-func newTestService() (*Service, *mem.AuditRepository) {
+func newTestService(t testing.TB) (*Service, *mem.AuditRepository) {
+	t.Helper()
 	repo := mem.NewAuditRepository()
-	return NewService(repo, testHMACKey, slog.Default()), repo
+	svc, err := NewService(repo, testHMACKey, slog.Default())
+	require.NoError(t, err)
+	return svc, repo
 }
 
 func TestService_VerifyChain_Empty(t *testing.T) {
-	svc, _ := newTestService()
+	svc, _ := newTestService(t)
 	result, err := svc.VerifyChain(context.Background(), 0, 100)
 	require.NoError(t, err)
 	assert.True(t, result.Valid)
@@ -29,7 +32,7 @@ func TestService_VerifyChain_Empty(t *testing.T) {
 }
 
 func TestService_VerifyChain_ValidEntries(t *testing.T) {
-	svc, repo := newTestService()
+	svc, repo := newTestService(t)
 
 	// Build a valid chain using the same HMAC key.
 	chain := domain.NewHashChain(testHMACKey)
@@ -45,7 +48,7 @@ func TestService_VerifyChain_ValidEntries(t *testing.T) {
 }
 
 func TestService_VerifyChain_TamperedEntry(t *testing.T) {
-	svc, repo := newTestService()
+	svc, repo := newTestService(t)
 
 	chain := domain.NewHashChain(testHMACKey)
 	for i := range 3 {

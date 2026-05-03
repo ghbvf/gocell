@@ -50,7 +50,8 @@ func (f *failingTxRunner) RunInTx(_ context.Context, _ func(context.Context) err
 func TestService_WithEmitter(t *testing.T) {
 	repo := mem.NewAuditRepository()
 	ow := &stubOutboxWriter{}
-	svc := NewService(repo, testHMACKey, slog.Default(), WithEmitter(testoutbox.MustEmitter(t, ow)))
+	svc, err := NewService(repo, testHMACKey, slog.Default(), WithEmitter(testoutbox.MustEmitter(t, ow)))
+	require.NoError(t, err)
 
 	// Build a small valid chain.
 	chain := domain.NewHashChain(testHMACKey)
@@ -72,7 +73,8 @@ func TestService_WithEmitter(t *testing.T) {
 func TestService_WithTxManager(t *testing.T) {
 	repo := mem.NewAuditRepository()
 	tx := &stubTxRunner{}
-	_ = NewService(repo, testHMACKey, slog.Default(), WithTxManager(tx))
+	_, err := NewService(repo, testHMACKey, slog.Default(), WithTxManager(tx))
+	require.NoError(t, err)
 	// TxManager option is set — verifying it compiles and runs.
 	assert.Equal(t, 0, tx.calls)
 }
@@ -81,7 +83,8 @@ func TestService_VerifyChain_OutboxWriteError_ReturnsError(t *testing.T) {
 	repo := mem.NewAuditRepository()
 	failErr := fmt.Errorf("outbox write failure")
 	fw := &failingOutboxWriter{err: failErr}
-	svc := NewService(repo, testHMACKey, slog.Default(), WithEmitter(testoutbox.MustEmitter(t, fw)))
+	svc, err := NewService(repo, testHMACKey, slog.Default(), WithEmitter(testoutbox.MustEmitter(t, fw)))
+	require.NoError(t, err)
 
 	// Build a valid chain so we reach the outbox write path.
 	chain := domain.NewHashChain(testHMACKey)
@@ -90,10 +93,10 @@ func TestService_VerifyChain_OutboxWriteError_ReturnsError(t *testing.T) {
 		require.NoError(t, repo.Append(context.Background(), entry))
 	}
 
-	result, err := svc.VerifyChain(context.Background(), 0, 10)
+	result, verifyErr := svc.VerifyChain(context.Background(), 0, 10)
 	// Durable path: outbox write error must propagate, not be swallowed.
-	require.Error(t, err, "outbox write error should propagate in durable mode")
-	assert.Contains(t, err.Error(), "outbox write failure")
+	require.Error(t, verifyErr, "outbox write error should propagate in durable mode")
+	assert.Contains(t, verifyErr.Error(), "outbox write failure")
 	// Result should still be returned (verification completed before persist).
 	require.NotNil(t, result)
 	assert.True(t, result.Valid)
@@ -103,8 +106,9 @@ func TestService_VerifyChain_WithTxRunner_RunsInTx(t *testing.T) {
 	repo := mem.NewAuditRepository()
 	ow := &stubOutboxWriter{}
 	tx := &stubTxRunner{}
-	svc := NewService(repo, testHMACKey, slog.Default(),
+	svc, err := NewService(repo, testHMACKey, slog.Default(),
 		WithEmitter(testoutbox.MustEmitter(t, ow)), WithTxManager(tx))
+	require.NoError(t, err)
 
 	chain := domain.NewHashChain(testHMACKey)
 	for i := range 3 {
@@ -112,8 +116,8 @@ func TestService_VerifyChain_WithTxRunner_RunsInTx(t *testing.T) {
 		require.NoError(t, repo.Append(context.Background(), entry))
 	}
 
-	result, err := svc.VerifyChain(context.Background(), 0, 10)
-	require.NoError(t, err)
+	result, verifyErr := svc.VerifyChain(context.Background(), 0, 10)
+	require.NoError(t, verifyErr)
 	assert.True(t, result.Valid)
 	assert.Equal(t, 1, tx.calls, "txRunner should have been called once")
 	require.Len(t, ow.entries, 1, "outbox writer should have received the event within tx")
@@ -124,8 +128,9 @@ func TestService_VerifyChain_TxRunnerError_ReturnsError(t *testing.T) {
 	ow := &stubOutboxWriter{}
 	txErr := fmt.Errorf("db connection lost")
 	ftx := &failingTxRunner{err: txErr}
-	svc := NewService(repo, testHMACKey, slog.Default(),
+	svc, err := NewService(repo, testHMACKey, slog.Default(),
 		WithEmitter(testoutbox.MustEmitter(t, ow)), WithTxManager(ftx))
+	require.NoError(t, err)
 
 	chain := domain.NewHashChain(testHMACKey)
 	for i := range 3 {
@@ -133,10 +138,10 @@ func TestService_VerifyChain_TxRunnerError_ReturnsError(t *testing.T) {
 		require.NoError(t, repo.Append(context.Background(), entry))
 	}
 
-	result, err := svc.VerifyChain(context.Background(), 0, 10)
+	result, verifyErr := svc.VerifyChain(context.Background(), 0, 10)
 	// TxRunner error must propagate — fn is never called.
-	require.Error(t, err, "txRunner error should propagate")
-	assert.Contains(t, err.Error(), "db connection lost")
+	require.Error(t, verifyErr, "txRunner error should propagate")
+	assert.Contains(t, verifyErr.Error(), "db connection lost")
 	require.NotNil(t, result, "result should still be returned")
 	assert.True(t, result.Valid, "verification completed before persist")
 	assert.Empty(t, ow.entries, "outbox writer should not be called when txRunner fails")
@@ -155,7 +160,8 @@ func TestService_VerifyChain_PublishError_DoesNotFailVerify(t *testing.T) {
 		fp, outbox.DirectPublishFailOpen, metrics.NopProvider{}, clock.Real(), "auditcore",
 		outbox.WithLogger(slog.Default()))
 	require.NoError(t, err)
-	svc := NewService(repo, testHMACKey, slog.Default(), WithEmitter(emitter))
+	svc, err := NewService(repo, testHMACKey, slog.Default(), WithEmitter(emitter))
+	require.NoError(t, err)
 
 	chain := domain.NewHashChain(testHMACKey)
 	for i := range 3 {
@@ -163,8 +169,8 @@ func TestService_VerifyChain_PublishError_DoesNotFailVerify(t *testing.T) {
 		require.NoError(t, repo.Append(context.Background(), entry))
 	}
 
-	result, err := svc.VerifyChain(context.Background(), 0, 10)
-	require.NoError(t, err, "publish failure in demo mode should not fail verify")
+	result, verifyErr := svc.VerifyChain(context.Background(), 0, 10)
+	require.NoError(t, verifyErr, "publish failure in demo mode should not fail verify")
 	assert.True(t, result.Valid)
 	assert.Equal(t, 3, result.EntriesChecked)
 }
@@ -172,7 +178,8 @@ func TestService_VerifyChain_PublishError_DoesNotFailVerify(t *testing.T) {
 func TestService_VerifyChain_InvalidChain_WithOutbox(t *testing.T) {
 	repo := mem.NewAuditRepository()
 	ow := &stubOutboxWriter{}
-	svc := NewService(repo, testHMACKey, slog.Default(), WithEmitter(testoutbox.MustEmitter(t, ow)))
+	svc, err := NewService(repo, testHMACKey, slog.Default(), WithEmitter(testoutbox.MustEmitter(t, ow)))
+	require.NoError(t, err)
 
 	chain := domain.NewHashChain(testHMACKey)
 	for i := range 3 {
@@ -183,8 +190,8 @@ func TestService_VerifyChain_InvalidChain_WithOutbox(t *testing.T) {
 		require.NoError(t, repo.Append(context.Background(), entry))
 	}
 
-	result, err := svc.VerifyChain(context.Background(), 0, 10)
-	require.NoError(t, err)
+	result, verifyErr := svc.VerifyChain(context.Background(), 0, 10)
+	require.NoError(t, verifyErr)
 	assert.False(t, result.Valid)
 
 	// Even on invalid chain, the event is published.

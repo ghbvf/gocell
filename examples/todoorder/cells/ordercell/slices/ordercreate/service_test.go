@@ -74,21 +74,22 @@ func TestService_Create(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			svc := NewService(mem.NewOrderRepository(), slog.Default(),
+			svc, err := NewService(mem.NewOrderRepository(), slog.Default(),
 				WithEmitter(mustEmitter(t, outbox.NoopWriter{})),
-				WithTxManager(persistence.NoopTxRunner{}),
+				WithTxManager(&stubTxRunner{}),
 				WithClock(clock.Real()),
 			)
+			require.NoError(t, err)
 
-			order, err := svc.Create(context.Background(), tt.item)
+			order, createErr := svc.Create(context.Background(), tt.item)
 			if tt.wantErr {
-				require.Error(t, err)
+				require.Error(t, createErr)
 				var ecErr *errcode.Error
-				require.ErrorAs(t, err, &ecErr)
+				require.ErrorAs(t, createErr, &ecErr)
 				assert.Equal(t, tt.errCode, ecErr.Code)
 				assert.Nil(t, order)
 			} else {
-				require.NoError(t, err)
+				require.NoError(t, createErr)
 				require.NotNil(t, order)
 				assert.Equal(t, tt.item, order.Item)
 				assert.Equal(t, "pending", order.Status)
@@ -102,7 +103,8 @@ func TestService_Create_WritesOutboxEntry(t *testing.T) {
 	repo := mem.NewOrderRepository()
 	writer := &recordingWriter{}
 	txRunner := &stubTxRunner{}
-	svc := NewService(repo, slog.Default(), WithEmitter(mustEmitter(t, writer)), WithTxManager(txRunner), WithClock(clock.Real()))
+	svc, err := NewService(repo, slog.Default(), WithEmitter(mustEmitter(t, writer)), WithTxManager(txRunner), WithClock(clock.Real()))
+	require.NoError(t, err)
 
 	order, err := svc.Create(context.Background(), "outbox-item")
 	require.NoError(t, err)
@@ -121,10 +123,11 @@ func TestService_Create_OutboxWriterFailureReturnsError(t *testing.T) {
 	repo := mem.NewOrderRepository()
 	writer := &recordingWriter{err: errors.New("outbox unavailable")}
 	txRunner := &stubTxRunner{}
-	svc := NewService(repo, slog.Default(), WithEmitter(mustEmitter(t, writer)), WithTxManager(txRunner), WithClock(clock.Real()))
+	svc, err := NewService(repo, slog.Default(), WithEmitter(mustEmitter(t, writer)), WithTxManager(txRunner), WithClock(clock.Real()))
+	require.NoError(t, err)
 
-	order, err := svc.Create(context.Background(), "outbox-item")
-	require.Error(t, err)
+	order, createErr := svc.Create(context.Background(), "outbox-item")
+	require.Error(t, createErr)
 	assert.Nil(t, order)
 	assert.Equal(t, 1, txRunner.calls)
 
@@ -141,28 +144,30 @@ func TestService_Create_OutboxWriterFailureReturnsError(t *testing.T) {
 func TestService_Create_NoopWriterDemoPath(t *testing.T) {
 	// Demo mode: NoopWriter validates entries then discards. Same outbox code path.
 	repo := mem.NewOrderRepository()
-	svc := NewService(repo, slog.Default(),
+	svc, err := NewService(repo, slog.Default(),
 		WithEmitter(mustEmitter(t, outbox.NoopWriter{})),
-		WithTxManager(persistence.NoopTxRunner{}),
+		WithTxManager(&stubTxRunner{}),
 		WithClock(clock.Real()),
 	)
-
-	order, err := svc.Create(context.Background(), "demo-item")
 	require.NoError(t, err)
+
+	order, createErr := svc.Create(context.Background(), "demo-item")
+	require.NoError(t, createErr)
 	require.NotNil(t, order)
 	assert.Equal(t, "demo-item", order.Item)
 }
 
 func TestService_Create_PersistsOrder(t *testing.T) {
 	repo := mem.NewOrderRepository()
-	svc := NewService(repo, slog.Default(),
+	svc, err := NewService(repo, slog.Default(),
 		WithEmitter(mustEmitter(t, outbox.NoopWriter{})),
-		WithTxManager(persistence.NoopTxRunner{}),
+		WithTxManager(&stubTxRunner{}),
 		WithClock(clock.Real()),
 	)
-
-	order, err := svc.Create(context.Background(), "persisted")
 	require.NoError(t, err)
+
+	order, createErr := svc.Create(context.Background(), "persisted")
+	require.NoError(t, createErr)
 
 	got, err := repo.GetByID(context.Background(), order.ID)
 	require.NoError(t, err)
@@ -180,14 +185,29 @@ func (failRepo) Create(_ context.Context, _ *domain.Order) error {
 }
 
 func TestService_Create_RepoFailure(t *testing.T) {
-	svc := NewService(failRepo{}, slog.Default(),
+	svc, err := NewService(failRepo{}, slog.Default(),
 		WithEmitter(mustEmitter(t, outbox.NoopWriter{})),
-		WithTxManager(persistence.NoopTxRunner{}),
+		WithTxManager(&stubTxRunner{}),
 		WithClock(clock.Real()),
 	)
+	require.NoError(t, err)
 
-	order, err := svc.Create(context.Background(), "item")
-	require.Error(t, err)
+	order, createErr := svc.Create(context.Background(), "item")
+	require.Error(t, createErr)
 	assert.Nil(t, order)
-	assert.Contains(t, err.Error(), "persist")
+	assert.Contains(t, createErr.Error(), "persist")
+}
+
+// TestService_NilTxRunner_FailsFast verifies that NewService rejects nil TxRunner.
+func TestService_NilTxRunner_FailsFast(t *testing.T) {
+	_, err := NewService(mem.NewOrderRepository(), slog.Default(),
+		WithEmitter(mustEmitter(t, outbox.NoopWriter{})),
+		// No WithTxManager — txRunner remains nil.
+		WithClock(clock.Real()),
+	)
+	require.Error(t, err)
+	var ecErr *errcode.Error
+	require.ErrorAs(t, err, &ecErr)
+	assert.Equal(t, errcode.ErrValidationFailed, ecErr.Code)
+	assert.Contains(t, err.Error(), "TxRunner required")
 }
