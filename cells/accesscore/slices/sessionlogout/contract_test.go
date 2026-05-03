@@ -130,11 +130,10 @@ func TestContract_EventRoleAssignedV1_Subscribe_PayloadValid(t *testing.T) {
 
 	repo := testutil.RealSessionRepo(t)
 	consumer := NewConsumer(repo, slog.Default())
-	handler := outbox.WrapLegacyHandler(consumer.HandleRoleChanged)
 
 	payload := []byte(`{"userId":"usr-123","roleId":"admin","action":"assigned"}`)
 	c.ValidatePayload(t, payload)
-	result := handler(context.Background(), outbox.Entry{
+	result := consumer.HandleRoleChanged(context.Background(), outbox.Entry{
 		ID:        "evt-test-assigned",
 		EventType: "event.role.assigned.v1",
 		Payload:   payload,
@@ -153,11 +152,10 @@ func TestContract_EventRoleRevokedV1_Subscribe_PayloadValid(t *testing.T) {
 
 	repo := testutil.RealSessionRepo(t)
 	consumer := NewConsumer(repo, slog.Default())
-	handler := outbox.WrapLegacyHandler(consumer.HandleRoleChanged)
 
 	payload := []byte(`{"userId":"usr-123","roleId":"admin","action":"revoked"}`)
 	c.ValidatePayload(t, payload)
-	result := handler(context.Background(), outbox.Entry{
+	result := consumer.HandleRoleChanged(context.Background(), outbox.Entry{
 		ID:        "evt-test-revoked",
 		EventType: "event.role.revoked.v1",
 		Payload:   payload,

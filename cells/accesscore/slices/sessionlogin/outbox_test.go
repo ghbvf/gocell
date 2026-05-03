@@ -47,6 +47,17 @@ func (s *stubTxRunner) RunInTx(_ context.Context, fn func(context.Context) error
 	return fn(context.Background())
 }
 
+// noopTxRunner is a pass-through TxRunner that implements cell.Nooper (Noop()==true),
+// signalling to the service that no real transaction is available (demo/test mode).
+// The service uses isNoopTx to decide whether to run explicit session cleanup on failure.
+type noopTxRunner struct{}
+
+func (noopTxRunner) RunInTx(ctx context.Context, fn func(context.Context) error) error {
+	return fn(ctx)
+}
+
+func (noopTxRunner) Noop() bool { return true }
+
 // testCredential is a test-only fixture password. Extracted to a variable to
 // avoid static-analysis false positives about hardcoded credentials (go:S6437).
 var testCredential = []byte("test-fixture-password")
@@ -63,7 +74,7 @@ func TestService_WithEmitter(t *testing.T) {
 	userRepo := mem.NewUserRepository()
 	ow := &stubOutboxWriter{}
 	svc := MustNewService(userRepo, testutil.RealSessionRepo(t), mem.NewRoleRepository(),
-		newOutboxRefreshStore(), testIssuer, slog.Default(), WithEmitter(testoutbox.MustEmitter(t, ow)), WithClock(clock.Real()))
+		newOutboxRefreshStore(), testIssuer, slog.Default(), WithEmitter(testoutbox.MustEmitter(t, ow)), WithTxManager(&stubTxRunner{}), WithClock(clock.Real()))
 
 	hash, _ := bcrypt.GenerateFromPassword(testCredential, bcrypt.MinCost)
 	seedUserDirect(userRepo, "alice", string(hash))
@@ -135,7 +146,7 @@ func TestPersistSessionWithRefresh_DurableTx_EmitFails_NoExplicitCleanup(t *test
 }
 
 // TestPersistSessionWithRefresh_NoopTxRunner_EmitFails_CleanupRuns verifies
-// that when NoopTxRunner (demo mode) is in use and outbox.Emit fails,
+// that when a Nooper TxRunner (cell.Nooper.Noop()==true) is in use and outbox.Emit fails,
 // cleanupIssuedSession IS called to compensate the already-written session.
 // This is the mirror case of the durable-tx test above.
 func TestPersistSessionWithRefresh_NoopTxRunner_EmitFails_CleanupRuns(t *testing.T) {
@@ -144,10 +155,10 @@ func TestPersistSessionWithRefresh_NoopTxRunner_EmitFails_CleanupRuns(t *testing
 	roleRepo := mem.NewRoleRepository()
 
 	emitter := &failingEmitter{err: fmt.Errorf("broker down")}
-	// No WithTxManager → service defaults to NoopTxRunner — isNoopTx returns true.
-
+	// noopTxRunner implements cell.Nooper (Noop()==true) → isNoopTx returns true,
+	// so the service runs explicit session cleanup on emit failure.
 	svc := MustNewService(userRepo, sessionRepo, roleRepo, newOutboxRefreshStore(), testIssuer, slog.Default(),
-		WithEmitter(emitter), WithClock(clock.Real()))
+		WithEmitter(emitter), WithTxManager(noopTxRunner{}), WithClock(clock.Real()))
 
 	hash, _ := bcrypt.GenerateFromPassword(testCredential, bcrypt.MinCost)
 	seedUserDirect(userRepo, "noop-emit-fail", string(hash))

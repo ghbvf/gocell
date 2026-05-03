@@ -44,24 +44,19 @@ func (c *recordingConfigEventCollector) RecordEventProcess(cellID, sliceID strin
 func (c *recordingConfigEventCollector) RecordEventSettlement(string, string, string, outbox.SettlementResult) {
 }
 
+// callWithConfigEventOwner runs handler through ConfigEventMiddleware and returns
+// (disposition, err) extracted from the HandleResult.
 func callWithConfigEventOwner(
 	collector obmetrics.ConfigEventCollector,
 	entry outbox.Entry,
-	fn func(context.Context, outbox.Entry) error,
-) error {
-	var err error
+	fn outbox.EntryHandler,
+) (outbox.Disposition, error) {
 	wrapped := obmetrics.ConfigEventMiddleware(collector)(
 		outbox.Subscription{Topic: entry.Topic, ConsumerGroup: "accesscore", CellID: "accesscore", SliceID: "configreceive"},
-		func(ctx context.Context, entry outbox.Entry) outbox.HandleResult {
-			err = fn(ctx, entry)
-			if err != nil {
-				return outbox.HandleResult{Disposition: outbox.DispositionRequeue, Err: err}
-			}
-			return outbox.HandleResult{Disposition: outbox.DispositionAck}
-		},
+		fn,
 	)
-	wrapped(context.Background(), entry)
-	return err
+	result := wrapped(context.Background(), entry)
+	return result.Disposition, result.Err
 }
 
 func TestHandleEntryUpserted_ValidPayload(t *testing.T) {
@@ -81,7 +76,9 @@ func TestHandleEntryUpserted_ValidPayload(t *testing.T) {
 				Topic:   TopicConfigEntryUpserted,
 				Payload: tt.payload,
 			}
-			assert.NoError(t, svc.HandleEntryUpserted(context.Background(), entry))
+			result := svc.HandleEntryUpserted(context.Background(), entry)
+			assert.Equal(t, outbox.DispositionAck, result.Disposition)
+			assert.NoError(t, result.Err)
 		})
 	}
 }
@@ -111,12 +108,13 @@ func TestHandleEntryUpserted_InvalidPayload_PermanentError(t *testing.T) {
 				Payload: tt.payload,
 			}
 
-			err := svc.HandleEntryUpserted(context.Background(), entry)
-			require.Error(t, err)
-			assert.Contains(t, err.Error(), tt.wantErr)
+			result := svc.HandleEntryUpserted(context.Background(), entry)
+			assert.Equal(t, outbox.DispositionReject, result.Disposition)
+			require.Error(t, result.Err)
+			assert.Contains(t, result.Err.Error(), tt.wantErr)
 
 			var permErr *outbox.PermanentError
-			assert.ErrorAs(t, err, &permErr)
+			assert.True(t, errors.As(result.Err, &permErr))
 		})
 	}
 }
@@ -128,7 +126,9 @@ func TestHandleEntryDeleted_ValidPayload(t *testing.T) {
 		Topic:   TopicConfigEntryDeleted,
 		Payload: []byte(`{"key":"jwt.ttl","version":3,"actorId":"admin-1"}`),
 	}
-	assert.NoError(t, svc.HandleEntryDeleted(context.Background(), entry))
+	result := svc.HandleEntryDeleted(context.Background(), entry)
+	assert.Equal(t, outbox.DispositionAck, result.Disposition)
+	assert.NoError(t, result.Err)
 }
 
 func TestHandleEntryDeleted_InvalidPayload_PermanentError(t *testing.T) {
@@ -154,12 +154,13 @@ func TestHandleEntryDeleted_InvalidPayload_PermanentError(t *testing.T) {
 				Payload: tt.payload,
 			}
 
-			err := svc.HandleEntryDeleted(context.Background(), entry)
-			require.Error(t, err)
-			assert.Contains(t, err.Error(), tt.wantErr)
+			result := svc.HandleEntryDeleted(context.Background(), entry)
+			assert.Equal(t, outbox.DispositionReject, result.Disposition)
+			require.Error(t, result.Err)
+			assert.Contains(t, result.Err.Error(), tt.wantErr)
 
 			var permErr *outbox.PermanentError
-			assert.ErrorAs(t, err, &permErr)
+			assert.True(t, errors.As(result.Err, &permErr))
 		})
 	}
 }
@@ -169,47 +170,44 @@ func TestTopicConstants(t *testing.T) {
 	assert.Equal(t, "event.config.entry-deleted.v1", TopicConfigEntryDeleted)
 }
 
-func TestWrapLegacyHandler_EntryUpserted_ValidPayload_Ack(t *testing.T) {
+func TestHandleEntryUpserted_DirectHandler_ValidPayload_Ack(t *testing.T) {
 	svc := NewService(slog.Default())
-	handler := outbox.WrapLegacyHandler(svc.HandleEntryUpserted)
 
 	entry := outbox.Entry{
-		ID:      "evt-wrap-1",
+		ID:      "evt-direct-1",
 		Topic:   TopicConfigEntryUpserted,
 		Payload: []byte(`{"key":"jwt.ttl","version":1,"actorId":"admin-1"}`),
 	}
-	result := handler(context.Background(), entry)
+	result := svc.HandleEntryUpserted(context.Background(), entry)
 
 	assert.Equal(t, outbox.DispositionAck, result.Disposition)
 	assert.NoError(t, result.Err)
 }
 
-func TestWrapLegacyHandler_EntryUpserted_InvalidJSON_Reject(t *testing.T) {
+func TestHandleEntryUpserted_DirectHandler_InvalidJSON_Reject(t *testing.T) {
 	svc := NewService(slog.Default())
-	handler := outbox.WrapLegacyHandler(svc.HandleEntryUpserted)
 
-	entry := outbox.Entry{ID: "evt-wrap-2", Topic: TopicConfigEntryUpserted, Payload: []byte("bad{")}
-	result := handler(context.Background(), entry)
+	entry := outbox.Entry{ID: "evt-direct-2", Topic: TopicConfigEntryUpserted, Payload: []byte("bad{")}
+	result := svc.HandleEntryUpserted(context.Background(), entry)
 
 	assert.Equal(t, outbox.DispositionReject, result.Disposition)
 	assert.Error(t, result.Err)
 }
 
-// TestWrapLegacyHandler_EntryUpserted_ValueField_Accepted locks down
+// TestHandleEntryUpserted_ValueField_Accepted locks down
 // ADR-202605031600 v1 schema evolution: an extra "value" field on a
 // metadata-only event payload must NOT be rejected at runtime. The
 // metadata-only contract is enforced by producers (don't emit value);
 // consumers ignore the extra field and Ack normally.
-func TestWrapLegacyHandler_EntryUpserted_ValueField_Accepted(t *testing.T) {
+func TestHandleEntryUpserted_ValueField_Accepted(t *testing.T) {
 	svc := NewService(slog.Default())
-	handler := outbox.WrapLegacyHandler(svc.HandleEntryUpserted)
 
 	entry := outbox.Entry{
-		ID:      "evt-wrap-3",
+		ID:      "evt-direct-3",
 		Topic:   TopicConfigEntryUpserted,
 		Payload: []byte(`{"key":"jwt.ttl","value":"30m","version":1,"actorId":"admin-1"}`),
 	}
-	result := handler(context.Background(), entry)
+	result := svc.HandleEntryUpserted(context.Background(), entry)
 
 	assert.Equal(t, outbox.DispositionAck, result.Disposition,
 		"lenient consumer must Ack metadata-only events even when extra fields appear")
@@ -227,15 +225,15 @@ func TestHandleEntryUpserted_WithConfigGetter_FetchOK(t *testing.T) {
 		Topic:   TopicConfigEntryUpserted,
 		Payload: []byte(`{"key":"jwt.ttl","version":2,"actorId":"adm-1"}`),
 	}
-	err := svc.HandleEntryUpserted(context.Background(), entry)
-	require.NoError(t, err)
+	result := svc.HandleEntryUpserted(context.Background(), entry)
+	assert.Equal(t, outbox.DispositionAck, result.Disposition)
+	assert.NoError(t, result.Err)
 	// F5: assert stub was called with the correct key from the event payload.
 	assert.Equal(t, "jwt.ttl", stub.calledWith, "ConfigGetter.GetEntry must be called with the event's key")
 }
 
 // TestHandleEntryUpserted_WithConfigGetter_FetchError asserts that a transient
-// fetch error (non-404) causes HandleEntryUpserted to return an error so the
-// legacy handler wrapper triggers Requeue instead of silently Acking.
+// fetch error (non-404) causes HandleEntryUpserted to return DispositionRequeue.
 func TestHandleEntryUpserted_WithConfigGetter_FetchError(t *testing.T) {
 	stub := &stubConfigGetter{
 		err: errors.New("configcore unavailable"),
@@ -247,15 +245,15 @@ func TestHandleEntryUpserted_WithConfigGetter_FetchError(t *testing.T) {
 		Topic:   TopicConfigEntryUpserted,
 		Payload: []byte(`{"key":"jwt.ttl","version":1,"actorId":"adm-1"}`),
 	}
-	// Transient fetch failure must return a non-nil error → Requeue (not Ack).
-	err := svc.HandleEntryUpserted(context.Background(), entry)
-	require.Error(t, err, "transient fetch failure must return non-nil error to trigger Requeue")
+	result := svc.HandleEntryUpserted(context.Background(), entry)
+	assert.Equal(t, outbox.DispositionRequeue, result.Disposition, "transient fetch failure must trigger Requeue")
+	assert.Error(t, result.Err)
 	assert.Equal(t, "jwt.ttl", stub.calledWith, "ConfigGetter.GetEntry must be called with the event's key")
 }
 
 // TestHandleEntryUpserted_WithConfigGetter_FetchNotFound asserts that a 404
-// (config entry genuinely gone) is treated as a stale event: log Warn + Ack
-// (returning nil), since retrying cannot help when the entry no longer exists.
+// (config entry genuinely gone) is treated as a stale event: log Warn + Ack,
+// since retrying cannot help when the entry no longer exists.
 func TestHandleEntryUpserted_WithConfigGetter_FetchNotFound(t *testing.T) {
 	stub := &stubConfigGetter{
 		err: errcode.NewDomain(errcode.ErrConfigNotFound, "config entry not found"),
@@ -267,9 +265,9 @@ func TestHandleEntryUpserted_WithConfigGetter_FetchNotFound(t *testing.T) {
 		Topic:   TopicConfigEntryUpserted,
 		Payload: []byte(`{"key":"jwt.ttl","version":1,"actorId":"adm-1"}`),
 	}
-	// 404 → stale event → Ack (nil error), no retry.
-	err := svc.HandleEntryUpserted(context.Background(), entry)
-	require.NoError(t, err, "not-found fetch error must return nil (stale event, no retry needed)")
+	result := svc.HandleEntryUpserted(context.Background(), entry)
+	assert.Equal(t, outbox.DispositionAck, result.Disposition, "not-found fetch must Ack (stale event, no retry needed)")
+	assert.NoError(t, result.Err)
 }
 
 func TestHandleEntryUpserted_WithoutConfigGetter_NoFetch(t *testing.T) {
@@ -281,21 +279,23 @@ func TestHandleEntryUpserted_WithoutConfigGetter_NoFetch(t *testing.T) {
 		Topic:   TopicConfigEntryUpserted,
 		Payload: []byte(`{"key":"jwt.ttl","version":1,"actorId":"adm-1"}`),
 	}
-	err := svc.HandleEntryUpserted(context.Background(), entry)
-	require.NoError(t, err)
+	result := svc.HandleEntryUpserted(context.Background(), entry)
+	assert.Equal(t, outbox.DispositionAck, result.Disposition)
+	assert.NoError(t, result.Err)
 }
 
 func TestHandleEntryUpserted_ConfigEventMetricsOutcomes(t *testing.T) {
 	tests := []struct {
-		name        string
-		getter      ports.ConfigGetter
-		payload     []byte
-		wantErr     bool
-		wantRecords []configEventRecord
+		name            string
+		getter          ports.ConfigGetter
+		payload         []byte
+		wantDisposition outbox.Disposition
+		wantRecords     []configEventRecord
 	}{
 		{
-			name:    "valid upsert without getter records ack",
-			payload: []byte(`{"key":"jwt.ttl","version":1,"actorId":"adm-1"}`),
+			name:            "valid upsert without getter records ack",
+			payload:         []byte(`{"key":"jwt.ttl","version":1,"actorId":"adm-1"}`),
+			wantDisposition: outbox.DispositionAck,
 			wantRecords: []configEventRecord{{
 				cell: "accesscore", slice: "configreceive", reason: obmetrics.ConfigEventProcessReasonAck,
 			}},
@@ -305,33 +305,35 @@ func TestHandleEntryUpserted_ConfigEventMetricsOutcomes(t *testing.T) {
 			getter: &stubConfigGetter{entry: ports.ConfigEntry{
 				Key: "jwt.ttl", Value: "30m", Version: 1,
 			}},
-			payload: []byte(`{"key":"jwt.ttl","version":1,"actorId":"adm-1"}`),
+			payload:         []byte(`{"key":"jwt.ttl","version":1,"actorId":"adm-1"}`),
+			wantDisposition: outbox.DispositionAck,
 			wantRecords: []configEventRecord{{
 				cell: "accesscore", slice: "configreceive", reason: obmetrics.ConfigEventProcessReasonAck,
 			}},
 		},
 		{
-			name:    "getter not found records stale",
-			getter:  &stubConfigGetter{err: errcode.NewDomain(errcode.ErrConfigNotFound, "missing")},
-			payload: []byte(`{"key":"jwt.ttl","version":1,"actorId":"adm-1"}`),
+			name:            "getter not found records stale",
+			getter:          &stubConfigGetter{err: errcode.NewDomain(errcode.ErrConfigNotFound, "missing")},
+			payload:         []byte(`{"key":"jwt.ttl","version":1,"actorId":"adm-1"}`),
+			wantDisposition: outbox.DispositionAck,
 			wantRecords: []configEventRecord{{
 				cell: "accesscore", slice: "configreceive", reason: obmetrics.ConfigEventProcessReasonStale,
 			}},
 		},
 		{
-			name:    "invalid payload records permanent error",
-			payload: []byte(`not-json{`),
-			wantErr: true,
+			name:            "invalid payload records permanent error",
+			payload:         []byte(`not-json{`),
+			wantDisposition: outbox.DispositionReject,
 			wantRecords: []configEventRecord{{
 				cell: "accesscore", slice: "configreceive", reason: obmetrics.ConfigEventProcessReasonPermanentError,
 			}},
 		},
 		{
-			name:        "transient getter error records no service outcome",
-			getter:      &stubConfigGetter{err: errors.New("configcore unavailable")},
-			payload:     []byte(`{"key":"jwt.ttl","version":1,"actorId":"adm-1"}`),
-			wantErr:     true,
-			wantRecords: nil,
+			name:            "transient getter error records no service outcome",
+			getter:          &stubConfigGetter{err: errors.New("configcore unavailable")},
+			payload:         []byte(`{"key":"jwt.ttl","version":1,"actorId":"adm-1"}`),
+			wantDisposition: outbox.DispositionRequeue,
+			wantRecords:     nil,
 		},
 	}
 
@@ -345,12 +347,8 @@ func TestHandleEntryUpserted_ConfigEventMetricsOutcomes(t *testing.T) {
 			svc := NewService(slog.Default(), opts...)
 			entry := outbox.Entry{ID: "evt-metrics", Topic: TopicConfigEntryUpserted, Payload: tt.payload}
 
-			err := callWithConfigEventOwner(collector, entry, svc.HandleEntryUpserted)
-			if tt.wantErr {
-				require.Error(t, err)
-			} else {
-				require.NoError(t, err)
-			}
+			disposition, _ := callWithConfigEventOwner(collector, entry, svc.HandleEntryUpserted)
+			assert.Equal(t, tt.wantDisposition, disposition)
 			assert.Equal(t, tt.wantRecords, collector.records)
 		})
 	}
@@ -358,22 +356,23 @@ func TestHandleEntryUpserted_ConfigEventMetricsOutcomes(t *testing.T) {
 
 func TestHandleEntryDeleted_ConfigEventMetricsOutcomes(t *testing.T) {
 	tests := []struct {
-		name        string
-		payload     []byte
-		wantErr     bool
-		wantRecords []configEventRecord
+		name            string
+		payload         []byte
+		wantDisposition outbox.Disposition
+		wantRecords     []configEventRecord
 	}{
 		{
-			name:    "valid delete records ack",
-			payload: []byte(`{"key":"jwt.ttl","version":3,"actorId":"adm-1"}`),
+			name:            "valid delete records ack",
+			payload:         []byte(`{"key":"jwt.ttl","version":3,"actorId":"adm-1"}`),
+			wantDisposition: outbox.DispositionAck,
 			wantRecords: []configEventRecord{{
 				cell: "accesscore", slice: "configreceive", reason: obmetrics.ConfigEventProcessReasonAck,
 			}},
 		},
 		{
-			name:    "invalid delete records permanent error",
-			payload: []byte(`not-json{`),
-			wantErr: true,
+			name:            "invalid delete records permanent error",
+			payload:         []byte(`not-json{`),
+			wantDisposition: outbox.DispositionReject,
 			wantRecords: []configEventRecord{{
 				cell: "accesscore", slice: "configreceive", reason: obmetrics.ConfigEventProcessReasonPermanentError,
 			}},
@@ -386,12 +385,8 @@ func TestHandleEntryDeleted_ConfigEventMetricsOutcomes(t *testing.T) {
 			svc := NewService(slog.Default(), WithConfigEventCollector(collector))
 			entry := outbox.Entry{ID: "evt-del-metrics", Topic: TopicConfigEntryDeleted, Payload: tt.payload}
 
-			err := callWithConfigEventOwner(collector, entry, svc.HandleEntryDeleted)
-			if tt.wantErr {
-				require.Error(t, err)
-			} else {
-				require.NoError(t, err)
-			}
+			disposition, _ := callWithConfigEventOwner(collector, entry, svc.HandleEntryDeleted)
+			assert.Equal(t, tt.wantDisposition, disposition)
 			assert.Equal(t, tt.wantRecords, collector.records)
 		})
 	}

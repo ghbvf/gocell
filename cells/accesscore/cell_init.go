@@ -23,7 +23,6 @@ import (
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/kernel/outbox"
-	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/query"
 	"github.com/ghbvf/gocell/runtime/auth/refresh"
@@ -39,15 +38,23 @@ import (
 // outbox.Entry.FailurePolicy — archtest OUTBOX-TOPIC-FAILOPEN-01 bans opt-in
 // for security topics.
 //
+// txRunnerForEmitter is nil when operating in publisher-only demo mode (no
+// outboxWriter), so that the ResolveEmitter pairing invariant is not violated.
+// c.txRunner is still propagated to slice services in initSlices.
+//
 // ref: kubernetes/client-go rest.RESTClientFor — factory-composed typed client.
 func (c *AccessCore) resolveEmitter(mode cell.DurabilityMode) error {
+	txRunnerForEmitter := c.txRunner
+	if c.pendingOutboxWriter == nil {
+		txRunnerForEmitter = nil
+	}
 	outcome, err := cell.ResolveCellEmitter(cell.CellEmitterInputs{
 		EmitterConfig: cell.EmitterConfig{
 			CellID:            "accesscore",
 			Mode:              mode,
 			Publisher:         c.pendingOutboxPub,
 			OutboxWriter:      c.pendingOutboxWriter,
-			TxRunner:          c.txRunner,
+			TxRunner:          txRunnerForEmitter,
 			Logger:            c.logger,
 			DirectPublishMode: outbox.DirectPublishFailClosed,
 			MetricsProvider:   c.metricsProvider,
@@ -63,7 +70,6 @@ func (c *AccessCore) resolveEmitter(mode cell.DurabilityMode) error {
 	c.rbacEmitterMode = outcome.Durable
 	c.pendingOutboxPub = nil
 	c.pendingOutboxWriter = nil
-	c.txRunner = persistence.RunnerOrNoop(c.txRunner)
 	return nil
 }
 
@@ -210,7 +216,9 @@ func (c *AccessCore) initSlices() error {
 
 	// rbac-assign — durable mode (outboxWriter + txRunner) upgrades to L2 OutboxFact;
 	// demo mode (both nil) stays at L0 (in-memory repos, synchronous dual-write).
-	c.initRbacAssign()
+	if err := c.initRbacAssign(); err != nil {
+		return err
+	}
 
 	// rbac-session-sync consumer: handles role-change events and invalidates sessions.
 	c.rbacSessionConsumer = sessionlogout.NewConsumer(c.sessionRepo, c.logger)
@@ -243,18 +251,22 @@ func (c *AccessCore) initSlices() error {
 
 // initRbacAssign constructs the rbac-assign slice. Extracted to keep initSlices
 // within cognitive complexity bounds.
-func (c *AccessCore) initRbacAssign() {
+func (c *AccessCore) initRbacAssign() error {
 	rbacOpts := []rbacassign.Option{rbacassign.WithTxManager(c.txRunner)}
 	if c.rbacEmitterMode {
 		rbacOpts = append(rbacOpts, rbacassign.WithEmitter(c.emitter))
 	}
-	rbacAssignSvc := rbacassign.NewService(c.roleRepo, c.sessionRepo, c.logger, rbacOpts...)
+	rbacAssignSvc, err := rbacassign.NewService(c.roleRepo, c.sessionRepo, c.logger, rbacOpts...)
+	if err != nil {
+		return err
+	}
 	c.rbacAssignHandler = rbacassign.NewHandler(rbacAssignSvc)
 	rbacAssignLevel := cell.L0
 	if c.rbacEmitterMode {
 		rbacAssignLevel = cell.L2
 	}
 	c.AddSlice(cell.NewBaseSlice("rbacassign", "accesscore", rbacAssignLevel))
+	return nil
 }
 
 // Init constructs all 9 slices and registers routes, subscriptions, health
@@ -360,23 +372,20 @@ func (c *AccessCore) registerRouteGroups(reg cell.Registry) {
 
 // registerSubscriptions registers config and role-change event handlers into reg.
 func (c *AccessCore) registerSubscriptions(reg cell.Registry) error {
-	upsertedHandler := outbox.WrapLegacyHandler(c.configReceiveSvc.HandleEntryUpserted)
 	if err := reg.Subscribe(
-		specEventConfigEntryUpserted, upsertedHandler, "accesscore",
+		specEventConfigEntryUpserted, c.configReceiveSvc.HandleEntryUpserted, "accesscore",
 		cell.WithSubscriptionSliceID("configreceive")); err != nil {
 		return fmt.Errorf(errFmtSubscribe, specEventConfigEntryUpserted.Topic, err)
 	}
-	deletedHandler := outbox.WrapLegacyHandler(c.configReceiveSvc.HandleEntryDeleted)
 	if err := reg.Subscribe(
-		specEventConfigEntryDeleted, deletedHandler, "accesscore",
+		specEventConfigEntryDeleted, c.configReceiveSvc.HandleEntryDeleted, "accesscore",
 		cell.WithSubscriptionSliceID("configreceive")); err != nil {
 		return fmt.Errorf(errFmtSubscribe, specEventConfigEntryDeleted.Topic, err)
 	}
-	roleHandler := outbox.WrapLegacyHandler(c.rbacSessionConsumer.HandleRoleChanged)
-	if err := reg.Subscribe(specEventRoleAssigned, roleHandler, "accesscore-rbac-session-sync"); err != nil {
+	if err := reg.Subscribe(specEventRoleAssigned, c.rbacSessionConsumer.HandleRoleChanged, "accesscore-rbac-session-sync"); err != nil {
 		return fmt.Errorf(errFmtSubscribe, specEventRoleAssigned.Topic, err)
 	}
-	if err := reg.Subscribe(specEventRoleRevoked, roleHandler, "accesscore-rbac-session-sync"); err != nil {
+	if err := reg.Subscribe(specEventRoleRevoked, c.rbacSessionConsumer.HandleRoleChanged, "accesscore-rbac-session-sync"); err != nil {
 		return fmt.Errorf(errFmtSubscribe, specEventRoleRevoked.Topic, err)
 	}
 	return nil

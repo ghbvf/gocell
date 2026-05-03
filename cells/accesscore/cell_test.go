@@ -102,7 +102,7 @@ func newTestCell(t testing.TB) *AccessCore {
 		WithJWTVerifier(testVerifier),
 		WithRefreshStore(newTestRefreshStore()),
 		WithOutboxDeps(nil, outbox.NoopWriter{}),
-		WithTxManager(persistence.NoopTxRunner{}),
+		WithTxManager(durableTxRunner{}),
 		WithMetricsProvider(metrics.NopProvider{}),
 	)
 }
@@ -133,7 +133,7 @@ func TestAccessCore_Init_RequiresJWTIssuer(t *testing.T) {
 		WithOutboxDeps(eventbus.New(eventbus.WithClock(clock.Real())), nil),
 		WithJWTVerifier(testVerifier), // issuer missing
 		WithOutboxDeps(nil, outbox.NoopWriter{}),
-		WithTxManager(persistence.NoopTxRunner{}),
+		WithTxManager(durableTxRunner{}),
 		WithMetricsProvider(metrics.NopProvider{}),
 	)
 	err := c.Init(context.Background(), cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo))
@@ -150,7 +150,7 @@ func TestAccessCore_Init_RequiresJWTVerifier(t *testing.T) {
 		WithOutboxDeps(eventbus.New(eventbus.WithClock(clock.Real())), nil),
 		WithJWTIssuer(testIssuer), // verifier missing
 		WithOutboxDeps(nil, outbox.NoopWriter{}),
-		WithTxManager(persistence.NoopTxRunner{}),
+		WithTxManager(durableTxRunner{}),
 		WithMetricsProvider(metrics.NopProvider{}),
 	)
 	err := c.Init(context.Background(), cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo))
@@ -193,7 +193,10 @@ func TestInit_DemoMode_OutboxWithoutTx_Fails(t *testing.T) {
 	assert.Contains(t, err.Error(), "outboxWriter and txRunner")
 }
 
-func TestInit_DemoMode_TxWithoutOutbox_Fails(t *testing.T) {
+func TestInit_DemoMode_TxWithoutOutbox_PublisherMode_Succeeds(t *testing.T) {
+	// Publisher-only mode with txRunner: txRunner is for slice services (required
+	// since B-1 deleted NoopTxRunner); it is not passed to the emitter resolver
+	// so the writer/txRunner pairing invariant is not violated. Init must succeed.
 	c := NewAccessCore(
 		WithClock(clock.Real()),
 		WithUserRepository(mem.NewUserRepository()),
@@ -202,12 +205,13 @@ func TestInit_DemoMode_TxWithoutOutbox_Fails(t *testing.T) {
 		WithOutboxDeps(eventbus.New(eventbus.WithClock(clock.Real())), nil),
 		WithJWTIssuer(testIssuer),
 		WithJWTVerifier(testVerifier),
-		WithTxManager(persistence.NoopTxRunner{}),
-		// outboxWriter intentionally omitted
+		WithRefreshStore(newTestRefreshStore()),
+		WithTxManager(durableTxRunner{}),
+		WithMetricsProvider(metrics.NopProvider{}),
+		// outboxWriter intentionally omitted — publisher-only mode
 	)
 	err := c.Init(context.Background(), cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo))
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "outboxWriter and txRunner")
+	require.NoError(t, err)
 }
 
 func TestInit_TxRunnerXOR_BothPresent(t *testing.T) {
@@ -236,6 +240,7 @@ func TestInit_DemoMode_WithPublisher_Succeeds(t *testing.T) {
 		WithOutboxDeps(eventbus.New(eventbus.WithClock(clock.Real())), nil),
 		WithJWTIssuer(testIssuer),
 		WithJWTVerifier(testVerifier),
+		WithTxManager(durableTxRunner{}),
 		WithMetricsProvider(metrics.NopProvider{}),
 	)
 	err := c.Init(context.Background(), cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo))
@@ -249,7 +254,7 @@ func TestInit_DemoMode_ExplicitNoopOutboxPair_Succeeds(t *testing.T) {
 		WithJWTIssuer(testIssuer),
 		WithJWTVerifier(testVerifier),
 		WithOutboxDeps(nil, outbox.NoopWriter{}),
-		WithTxManager(persistence.NoopTxRunner{}),
+		WithTxManager(durableTxRunner{}),
 	)
 	err := c.Init(context.Background(), cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo))
 	require.NoError(t, err)
@@ -328,6 +333,7 @@ func TestInit_WithEmitter_DirectInjection(t *testing.T) {
 		WithJWTIssuer(testIssuer),
 		WithJWTVerifier(testVerifier),
 		WithEmitter(emitter),
+		WithTxManager(durableTxRunner{}),
 	)
 	require.NoError(t, c.Init(context.Background(), cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo)))
 	// After Init the cell holds the injected emitter; pending raw deps stay nil.
@@ -744,7 +750,7 @@ func TestAccessCore_SessionRevocation_E2E(t *testing.T) {
 		WithJWTVerifier(testVerifier),
 		WithRefreshStore(newTestRefreshStore()),
 		WithOutboxDeps(nil, outbox.NoopWriter{}),
-		WithTxManager(persistence.NoopTxRunner{}),
+		WithTxManager(durableTxRunner{}),
 		WithMetricsProvider(metrics.NopProvider{}),
 	)
 	ctx := context.Background()
@@ -830,7 +836,7 @@ func TestAccessCore_RefreshTokenRevocation_E2E(t *testing.T) {
 		WithJWTVerifier(testVerifier),
 		WithRefreshStore(newTestRefreshStore()),
 		WithOutboxDeps(nil, outbox.NoopWriter{}),
-		WithTxManager(persistence.NoopTxRunner{}),
+		WithTxManager(durableTxRunner{}),
 		WithMetricsProvider(metrics.NopProvider{}),
 	)
 	ctx := context.Background()
@@ -962,7 +968,7 @@ func TestAccessCore_DirectPrefill_AdminRoleAndUser(t *testing.T) {
 		WithJWTVerifier(testVerifier),
 		WithRefreshStore(newTestRefreshStore()),
 		WithOutboxDeps(nil, outbox.NoopWriter{}),
-		WithTxManager(persistence.NoopTxRunner{}),
+		WithTxManager(durableTxRunner{}),
 		WithMetricsProvider(metrics.NopProvider{}),
 	)
 	require.NoError(t, c.Init(ctx, cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo)))
@@ -1007,7 +1013,7 @@ func TestAccessCore_PasswordResetExempt_PropagatesViaRouter(t *testing.T) {
 		WithJWTIssuer(testIssuer),
 		WithJWTVerifier(testVerifier),
 		WithOutboxDeps(nil, outbox.NoopWriter{}),
-		WithTxManager(persistence.NoopTxRunner{}),
+		WithTxManager(durableTxRunner{}),
 		WithMetricsProvider(metrics.NopProvider{}),
 	)
 	ctx := context.Background()

@@ -44,30 +44,37 @@ func NewConsumer(repo ports.SessionRepository, logger *slog.Logger) *Consumer {
 	return &Consumer{sessionRepo: repo, logger: logger}
 }
 
-// HandleRoleChanged is a LegacyHandler (func(context.Context, outbox.Entry) error).
-// Compose with outbox.WrapLegacyHandler to obtain an EntryHandler for reg.Subscribe.
+// HandleRoleChanged is an EntryHandler (func(context.Context, outbox.Entry) outbox.HandleResult).
+// Register directly via reg.Subscribe — no WrapLegacyHandler needed.
 //
 // Behavior:
-//   - Unmarshal failure → PermanentError (message routed to DLX, no retry).
-//   - Empty userId in payload → PermanentError.
-//   - sessionRepo error → plain error (transient; WrapLegacyHandler maps to Requeue).
-//   - Success → nil (WrapLegacyHandler maps to Ack).
-func (c *Consumer) HandleRoleChanged(ctx context.Context, entry outbox.Entry) error {
+//   - Unmarshal failure → DispositionReject (PermanentError, routed to DLX).
+//   - Empty userId in payload → DispositionReject (PermanentError, routed to DLX).
+//   - sessionRepo error → DispositionRequeue (transient, retried by ConsumerBase).
+//   - Success → DispositionAck.
+func (c *Consumer) HandleRoleChanged(ctx context.Context, entry outbox.Entry) outbox.HandleResult {
 	var payload dto.RoleChangedEvent
 	if err := json.Unmarshal(entry.Payload, &payload); err != nil {
-		return outbox.NewPermanentError(
-			fmt.Errorf("sessionlogout: decode role-changed payload: %w", err),
-		)
+		return outbox.HandleResult{
+			Disposition: outbox.DispositionReject,
+			Err:         outbox.NewPermanentError(fmt.Errorf("sessionlogout: decode role-changed payload: %w", err)),
+		}
 	}
 
 	if payload.UserID == "" {
-		return outbox.NewPermanentError(
-			errcode.New(errcode.ErrAuthRBACInvalidInput, "sessionlogout: role-changed payload missing userId"),
-		)
+		return outbox.HandleResult{
+			Disposition: outbox.DispositionReject,
+			Err: outbox.NewPermanentError(
+				errcode.New(errcode.ErrAuthRBACInvalidInput, "sessionlogout: role-changed payload missing userId"),
+			),
+		}
 	}
 
 	if err := c.sessionRepo.RevokeByUserID(ctx, payload.UserID); err != nil {
-		return fmt.Errorf("sessionlogout: revoke sessions for user %s: %w", payload.UserID, err)
+		return outbox.HandleResult{
+			Disposition: outbox.DispositionRequeue,
+			Err:         fmt.Errorf("sessionlogout: revoke sessions for user %s: %w", payload.UserID, err),
+		}
 	}
 
 	c.logger.Info("sessions invalidated on role change",
@@ -76,5 +83,5 @@ func (c *Consumer) HandleRoleChanged(ctx context.Context, entry outbox.Entry) er
 		slog.String("action", payload.Action),
 		slog.String("event_id", entry.ID))
 
-	return nil
+	return outbox.HandleResult{Disposition: outbox.DispositionAck}
 }

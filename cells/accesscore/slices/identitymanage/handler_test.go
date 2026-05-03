@@ -44,7 +44,7 @@ var handlerStubIssuer TokenIssuer = &stubTokenIssuer{}
 func setup(t testing.TB) http.Handler {
 	t.Helper()
 	svc, err := NewService(mem.NewUserRepository(), testutil.RealSessionRepo(t), newHandlerIdentityRefreshStore(), slog.Default(),
-		WithTokenIssuer(handlerStubIssuer), WithClock(clock.Real()))
+		WithTokenIssuer(handlerStubIssuer), WithClock(clock.Real()), WithTxManager(contractTxRunner{}))
 	if err != nil {
 		panic("setup: " + err.Error())
 	}
@@ -67,7 +67,7 @@ func setupWithIssuer(t testing.TB, issuer TokenIssuer) (http.Handler, *mem.UserR
 		effectiveIssuer = handlerStubIssuer
 	}
 	svc, err := NewService(repo, testutil.RealSessionRepo(t), newHandlerIdentityRefreshStore(), slog.Default(),
-		WithTokenIssuer(effectiveIssuer), WithClock(clock.Real()))
+		WithTokenIssuer(effectiveIssuer), WithClock(clock.Real()), WithTxManager(contractTxRunner{}))
 	if err != nil {
 		panic("setupWithIssuer: " + err.Error())
 	}

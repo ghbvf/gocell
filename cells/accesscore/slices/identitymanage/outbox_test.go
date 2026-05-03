@@ -169,7 +169,7 @@ func TestHandler_Unlock_NotFound(t *testing.T) {
 func TestService_WithEmitter(t *testing.T) {
 	ow := &stubOutboxWriter{}
 	svc, err := NewService(mem.NewUserRepository(), testutil.RealSessionRepo(t), newIdentityRefreshStore(), slog.Default(),
-		WithEmitter(testoutbox.MustEmitter(t, ow)), WithTokenIssuer(outboxStubIssuer), WithClock(clock.Real()))
+		WithEmitter(testoutbox.MustEmitter(t, ow)), WithTokenIssuer(outboxStubIssuer), WithClock(clock.Real()), WithTxManager(&stubTxRunner{}))
 	require.NoError(t, err)
 
 	_, err = svc.Create(adminCtxForService(), CreateInput{
@@ -197,7 +197,7 @@ func TestService_WithTxManager(t *testing.T) {
 func TestService_Lock_WithOutbox(t *testing.T) {
 	ow := &stubOutboxWriter{}
 	svc, err := NewService(mem.NewUserRepository(), testutil.RealSessionRepo(t), newIdentityRefreshStore(), slog.Default(),
-		WithEmitter(testoutbox.MustEmitter(t, ow)), WithTokenIssuer(outboxStubIssuer), WithClock(clock.Real()))
+		WithEmitter(testoutbox.MustEmitter(t, ow)), WithTokenIssuer(outboxStubIssuer), WithClock(clock.Real()), WithTxManager(&stubTxRunner{}))
 	require.NoError(t, err)
 
 	user, err := svc.Create(adminCtxForService(), CreateInput{
