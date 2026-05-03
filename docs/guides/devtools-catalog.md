@@ -2,7 +2,7 @@
 
 ## 概览
 
-`gocell export catalog` / `GET /devtools/catalog` 提供统一的项目元数据目录（Unified Catalog），把 GoCell 项目中的 Cell、Slice、Contract、Journey、Assembly、Actor 实体，以及 cell 级依赖图（`cellDeps`）、包级 typed dep graph（`packageDeps`）、状态看板（`statusBoard`）整合为单一文档，通过查询参数（query / flag）按需裁剪输出。
+`gocell export catalog` / `GET /api/v1/devtools/catalog` 提供统一的项目元数据目录（Unified Catalog），把 GoCell 项目中的 Cell、Slice、Contract、Journey、Assembly、Actor 实体，以及 cell 级依赖图（`cellDeps`）、包级 typed dep graph（`packageDeps`）、状态看板（`statusBoard`）整合为单一文档，通过查询参数（query / flag）按需裁剪输出。
 
 设计目标：
 
@@ -84,12 +84,12 @@ const catalog = await fetch('/catalog.json').then(r => r.json());
 ### 端点
 
 ```
-GET /devtools/catalog
+GET /api/v1/devtools/catalog
 ```
 
-- 鉴权：`admin` 角色（`auth.AnyRole("admin")`），非 admin 返回 403，未认证返回 401。
-- bootstrap-wired：与 `runtime/http/health/` 同范式，无 `contract.yaml`（framework 自省路由，见下文工程注意）。路径不带 `/api/v1/` 前缀（与 `/healthz`、`/readyz` 同模式：framework 自省路由不携带业务 API 版本号）。
-- 需通过 `GOCELL_PROJECT_ROOT` 环境变量指定项目根目录（corebundle 默认读取），否则 handler 不注册。
+- 鉴权：`admin` 角色（`auth.AnyRole(auth.RoleAdmin)`），非 admin 返回 403，未认证返回 401。
+- bootstrap-wired：通过 `runtime/http/devtools/` 包注册，无 `contract.yaml`（framework 自省路由，见下文工程注意）。路径遵循 api-versioning.md 的 `/api/v1/` 前缀规则（与业务 API 一致），区别于 `/healthz`、`/readyz` 这类无版本健康端点。
+- 需通过 `GOCELL_PROJECT_ROOT` 环境变量指定项目根目录（corebundle 默认读取，启动时校验路径合法且在工作树内），否则 handler 不注册。
 
 ### Query 参数全表
 
@@ -114,7 +114,7 @@ TOKEN=$(curl -s -X POST http://localhost:8080/api/v1/auth/sessions \
 
 # 拉取完整 catalog
 curl -H "Authorization: Bearer $TOKEN" \
-  'http://localhost:8080/devtools/catalog' | jq '.schemaVersion, (.entities | length)'
+  'http://localhost:8080/api/v1/devtools/catalog' | jq '.schemaVersion, (.entities | length)'
 ```
 
 **示例 2：非 admin 用户访问（403）**
@@ -122,7 +122,7 @@ curl -H "Authorization: Bearer $TOKEN" \
 ```bash
 curl -s -o /dev/null -w "%{http_code}" \
   -H "Authorization: Bearer $NON_ADMIN_TOKEN" \
-  'http://localhost:8080/devtools/catalog'
+  'http://localhost:8080/api/v1/devtools/catalog'
 # 输出: 403
 ```
 
@@ -130,7 +130,7 @@ curl -s -o /dev/null -w "%{http_code}" \
 
 ```bash
 curl -s -o /dev/null -w "%{http_code}" \
-  'http://localhost:8080/devtools/catalog'
+  'http://localhost:8080/api/v1/devtools/catalog'
 # 输出: 401
 ```
 
@@ -139,17 +139,20 @@ curl -s -o /dev/null -w "%{http_code}" \
 ```bash
 curl -H "Authorization: Bearer $TOKEN" \
   'http://localhost:8080/devtools/catalog?cells=accesscore&include=packageDeps,cellDeps' \
-  | jq '.dependencies.packages.status, .dependencies.cells.nodes'
+  | jq '.dependencies.packages.graph.rootModule, .dependencies.cells.nodes'
 ```
 
-### build-time packageDeps（`dependencies.packages.status`）
+### build-time packageDeps（`dependencies.packages.graph`）
 
 包级 dep graph 在 **构建期** 由 `go generate ./cmd/corebundle/` 生成并提交为 `cmd/corebundle/catalog_gen.go`。HTTP handler 启动时直接读取已编译进二进制的图数据，零运行时 goroutine、零等待时间。
 
+`PackageDepsView` 只有两种形态：成功时返回 `{"graph": {...}}`，失败时返回 `{"error": "..."}`。`Graph != nil` 等价于 ready，`Error != ""` 等价于 error；不再单独维护 `status` 枚举字段（J2 lazy-load 方案已被 build-time 生成替代，loading 状态不会出现，移除冗余字段）。
+
 | 场景 | `dependencies.packages` 块 | 行为 |
 |------|---------------------------|------|
-| `catalog_gen.go` 已生成（正常情况） | `{"status": "ready", "graph": {...}}` | 返回 200，包图始终就绪 |
+| `catalog_gen.go` 已生成（正常情况） | `{"graph": {...}}` | 返回 200，包图始终就绪 |
 | `catalog_gen.go` 未生成（首次 clone / 忘记 `go generate`） | 缺席（块整体不出现） | 返回 200，其余块（entities/cellDeps/statusBoard）正常返回 |
+| CLI 同步加载失败 | `{"error": "..."}` | CLI 退出码非 0，error 字段含失败描述（HTTP 不出现该形态——HTTP 只用 build-time graph） |
 
 **重新生成时机**：cells/、contracts/、packages 有结构性变动后，重新执行：
 
@@ -166,7 +169,9 @@ go generate ./cmd/corebundle/
 在 `gocell-web` 的 `Dockerfile` build 阶段调用 CLI 嵌入静态 catalog 文件，前端同源加载，无需任何 live endpoint：
 
 ```dockerfile
-# Stage 1: 导出 catalog（需要 gocell CLI + 项目源码）
+# Stage 1: 导出 catalog
+# 需要 Go toolchain：--include=packageDeps 通过 tools/depgraph (go/packages) 同步
+# 加载 5-10s。若不需要 packageDeps，可移除该值改用更小的 builder image。
 FROM golang:1.24-alpine AS catalog-builder
 WORKDIR /gocell
 COPY . .
@@ -219,7 +224,6 @@ const catalog: CatalogDocument = await resp.json();
       "edges": [{ "from": "accesscore", "to": "configcore" }]
     },
     "packages": {
-      "status": "ready",
       "graph": {
         "rootModule": "github.com/ghbvf/gocell",
         "packages": [ { "importPath": "...", "layer": "cells", "cellID": "accesscore" } ],
@@ -274,17 +278,21 @@ CLI `gocell export catalog --include=packageDeps` 仍同步调用 `tools/depgrap
 
 ### Wire Envelope 豁免（不套 `{"data": ...}`）
 
-`devtools/catalog` 与 `/healthz`、`/readyz` 一样属 **framework-internal admin endpoint**，wire 形态直接返回 Backstage Catalog Entity envelope（`apiVersion/kind/metadata/spec` 顶层结构），**不套 `{"data": ...}`**。
+`/api/v1/devtools/catalog` 是 **framework-internal admin endpoint**，wire 形态直接返回 Backstage Catalog Entity envelope（`apiVersion/kind/metadata/spec` 顶层结构），**不套 `{"data": ...}`**。
 
 业务 API 强制的 `{"data": ...}` envelope（参见 `.claude/rules/gocell/api-versioning.md`）仅适用于 cell-owned routes；runtime 内部治理路由（本端点 + `/healthz` `/readyz` `/metrics`）遵循各自的 wire 格式。
 
+### Wire 类型归属（runtime/devtools/catalog/）
+
+Wire format 类型（`Document` / `Entity` / `IncludeOptions` / `ExportOptions` / `BuildDocument` / `MarshalDocument` 等）声明在 `runtime/devtools/catalog/` 包，CLI 与 HTTP handler 通过参数接收 `*kernel/metadata.ProjectMeta`。`kernel/metadata` 只承载 ProjectMeta 解析模型，下游产品 import `kernel/metadata` 时不会被 wire format 锁定（详见 ADR `docs/architecture/202605040030-adr-wire-format-out-of-kernel.md`）。
+
 ### bootstrap-wired（无 contract.yaml）
 
-`/devtools/catalog` 路由落在 `runtime/http/devtools/` 包，通过 bootstrap `WithDevtoolsCatalog(pm, root)` Option 接入，与 `runtime/http/health/` 同范式（framework 自省路由）。**不建 cell、不建 contract.yaml**，原因：
+`/api/v1/devtools/catalog` 路由落在 `runtime/http/devtools/` 包，通过 bootstrap `WithDevtoolsCatalog(pm, root, generatedPackageGraph)` Option 接入，与 `runtime/http/health/` 同范式（framework 自省路由）。**不建 cell、不建 contract.yaml**，原因：
 
 1. devtools 无业务状态、无事件、无 outbox，建 cell 净增 ~5 YAML/schema 文件
 2. 描述 catalog API 的 contract 自身会在 catalog 目录中被它自己描述，引发语义循环
-3. 当前唯一鉴权需求（admin-gated）由 bootstrap-level `auth.AnyRole("admin")` 直接满足，无需 contract-level RBAC
+3. 当前唯一鉴权需求（admin-gated）由 bootstrap-level `auth.AnyRole(auth.RoleAdmin)` 直接满足，无需 contract-level RBAC
 
 未来若触发升级条件（见 backlog T10 DEVTOOLS-CELL-PROMOTION-01），可将其迁移为正式 cell。
 
