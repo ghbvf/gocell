@@ -21,5 +21,6 @@
     "key",
     "version",
     "actorId"
-  ]
+  ],
+  "unevaluatedProperties": false
 }

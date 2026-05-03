@@ -126,14 +126,17 @@ const fmt20SchemaClean = `{
     }
 }`
 
-// TestFMT20_RequestSchemaStrict is the consolidated coverage matrix for
-// FMT-20 on the request side. Each row encodes one schema shape that the
-// walker must classify correctly.
-func TestFMT20_RequestSchemaStrict(t *testing.T) {
+// TestFMT20_BySchemaSide is the consolidated FMT-20 coverage matrix. Each row
+// is run twice — once with the schema mounted as request.schema.json (FMT-20
+// must report wantRequestFields) and once as response.schema.json (FMT-20 must
+// report nothing per ADR-202605031600). Folding the two directions into one
+// table makes it structurally impossible for a new shape to be added on one
+// side and forgotten on the other.
+func TestFMT20_BySchemaSide(t *testing.T) {
 	cases := []struct {
-		name       string
-		schema     string
-		wantFields []string // nil => expect no FMT-20 violations
+		name              string
+		schema            string
+		wantRequestFields []string // nil => expect no FMT-20 violations
 	}{
 		{"TopLevelMissingAP", fmt20SchemaTopLevelMissing, []string{"$", "$.data"}},
 		{"ArrayItemsObjectMissingAP", fmt20SchemaArrayItems, []string{"$.list.items"}},
@@ -144,30 +147,13 @@ func TestFMT20_RequestSchemaStrict(t *testing.T) {
 		{"CleanRequestSchema", fmt20SchemaClean, nil},
 	}
 	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
+		t.Run(tc.name+"/Request", func(t *testing.T) {
 			dir := t.TempDir()
 			v := NewValidator(fmt20Fixture(t, dir, "case", tc.schema), dir, clock.Real())
 			matches := findByCode(v.Validate(), "FMT-20")
-			assertFMT20RequiredFields(t, matches, tc.wantFields)
+			assertFMT20RequiredFields(t, matches, tc.wantRequestFields)
 		})
-	}
-}
-
-// TestFMT20_ResponseSchemaIgnored is regression coverage for ADR-202605031600.
-// Response schemas with the same shapes that would trigger FMT-20 on the
-// request side must NOT trigger FMT-20.
-func TestFMT20_ResponseSchemaIgnored(t *testing.T) {
-	cases := []struct {
-		name   string
-		schema string
-	}{
-		{"TopLevelMissing", fmt20SchemaTopLevelMissing},
-		{"ArrayItemsMissing", fmt20SchemaArrayItems},
-		{"AllOfMissing", fmt20SchemaAllOf},
-		{"IfThenElseMissing", fmt20SchemaIfThenElse},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
+		t.Run(tc.name+"/Response", func(t *testing.T) {
 			dir := t.TempDir()
 			v := NewValidator(fmt20ResponseFixture(t, dir, "case", tc.schema), dir, clock.Real())
 			matches := findByCode(v.Validate(), "FMT-20")

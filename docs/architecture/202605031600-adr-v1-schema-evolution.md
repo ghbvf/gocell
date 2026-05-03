@@ -73,9 +73,9 @@ direction-agnostic.
 
 ### 2. Schema files — strip `additionalProperties: false`
 
-All v1 response and event schemas are normalized via the new
-`hack/scripts/normalize-schema.sh` (jq one-liner, replayable for future
-schemas):
+All v1 response and event schemas are normalized via
+`hack/verify-schema-policy.sh --fix` (jq-based, replayable for future
+schemas; same tool used by CI in check mode):
 
 | Subtree | File pattern | Files |
 |---------|-------------|-------|
@@ -101,7 +101,48 @@ without code change.
 `DisallowUnknownFields()` — it serves HTTP request decoding, which is the
 strict side of the split.
 
-### 4. Error envelope — exception, stays strict
+### 4. Metadata-only event payload — whitelist via `unevaluatedProperties`
+
+A subset of event payloads are deliberately **metadata-only**: they carry the
+identifiers a subscriber needs to refetch state, never the state itself. The
+canonical examples are `event.config.entry-upserted.v1` and
+`event.config.entry-deleted.v1` — subscribers receive `key + version + actorId`
+and `MUST` refetch the value via `GET /api/v1/config/{key}`.
+
+For these schemas the lenient default (no `additionalProperties` declaration)
+is the wrong tool: a buggy producer slipping a `value` field into the payload
+would (a) pass `contracttest.ValidatePayload`, (b) reach `auditcore` as raw
+bytes, (c) land in the audit DB, and (d) surface in `GET /api/v1/audit/entries`
+— turning a metadata bus into a configuration-content side channel.
+
+The fix is a JSON Schema whitelist via `unevaluatedProperties: false`:
+
+```json
+{
+  "type": "object",
+  "properties": { "key": {...}, "version": {...}, "actorId": {...} },
+  "required": ["key", "version", "actorId"],
+  "unevaluatedProperties": false
+}
+```
+
+`unevaluatedProperties` is a **different keyword** from `additionalProperties`
+(JSON Schema 2020-12 §11.3 vs §10.3.2.3) and is therefore not affected by
+FMT-20 (which only scans `additionalProperties`). Adding a new field requires
+an explicit `properties` entry — the schema diff makes the intent reviewable
+in code review. Existing subscribers continue to work because they ignore
+fields they don't decode; the only thing rejected is the unannounced field at
+contract-test time, which fails CI before merge.
+
+The four current metadata-only event schemas adopting this pattern:
+`event.config.entry-upserted.v1`, `event.config.entry-deleted.v1`,
+`event.config.version-published.v1`, `event.config.rollback.v1`.
+
+Future event payloads that carry only identifiers (not state) MUST follow the
+same pattern. State-carrying event payloads remain lenient (no
+`additionalProperties` and no `unevaluatedProperties`) per §1.
+
+### 5. Error envelope — exception, stays strict
 
 `contracts/shared/errors/error-response-v1.schema.json` (and its 2
 `examples/*/contracts/shared/errors/` mirrors) keep

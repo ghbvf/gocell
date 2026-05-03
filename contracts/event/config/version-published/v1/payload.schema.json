@@ -22,5 +22,6 @@
     "configId",
     "version",
     "actorId"
-  ]
+  ],
+  "unevaluatedProperties": false
 }

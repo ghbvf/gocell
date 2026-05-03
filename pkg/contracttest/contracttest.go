@@ -269,24 +269,43 @@ func (c *Contract) ValidateHTTPResponseRecorder(t testing.TB, recorder *httptest
 
 // MustRejectRequest asserts that jsonData is rejected by the request schema.
 // This proves the schema is not trivially permissive.
+//
+// Rejection sources: missing `required` fields, type/pattern/enum mismatch, or
+// extra fields under `additionalProperties: false` / `unevaluatedProperties:
+// false`. Request schemas are strict (FMT-20), so extra fields are rejected.
 func (c *Contract) MustRejectRequest(t testing.TB, jsonData []byte) {
 	t.Helper()
 	mustRejectJSON(t, c.requestSchema, jsonData, "request")
 }
 
 // MustRejectResponse asserts that jsonData is rejected by the response schema.
+//
+// Note: per ADR-202605031600, response schemas are lenient by default — extra
+// fields are accepted unless the schema explicitly declares
+// `additionalProperties: false` or `unevaluatedProperties: false`. To prove
+// extra-field rejection, the schema must declare a closed-shape constraint
+// (typical for error envelopes and metadata-only payloads). For lenient
+// response schemas, MustRejectResponse only catches missing required fields,
+// type/pattern/enum mismatch, and similar non-additive violations.
 func (c *Contract) MustRejectResponse(t testing.TB, jsonData []byte) {
 	t.Helper()
 	mustRejectJSON(t, c.responseSchema, jsonData, "response")
 }
 
 // MustRejectPayload asserts that jsonData is rejected by the payload schema.
+//
+// Note: per ADR-202605031600, event payload schemas are lenient by default;
+// metadata-only payloads add `unevaluatedProperties: false` to forbid extra
+// fields. See MustRejectResponse for the full lenient-schema caveat.
 func (c *Contract) MustRejectPayload(t testing.TB, jsonData []byte) {
 	t.Helper()
 	mustRejectJSON(t, c.payloadSchema, jsonData, "payload")
 }
 
 // MustRejectHeaders asserts that jsonData is rejected by the headers schema.
+//
+// Note: per ADR-202605031600, event headers schemas are lenient by default.
+// See MustRejectResponse for the full lenient-schema caveat.
 func (c *Contract) MustRejectHeaders(t testing.TB, jsonData []byte) {
 	t.Helper()
 	mustRejectJSON(t, c.headersSchema, jsonData, "headers")

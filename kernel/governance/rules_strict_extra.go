@@ -54,7 +54,10 @@ func (v *Validator) validateFMTRequestStrict01() []ValidationResult {
 func (v *Validator) validateFMTRequestStrictContract(c *metadata.ContractMeta) []ValidationResult {
 	var results []ValidationResult
 	for _, ref := range metadata.ContractSchemaRefs(c) {
-		if !strictSchemaRefField(ref.Field) || ref.Ref == "" {
+		// FMT-20 only scans request schemas; response and
+		// endpoints.http.responses[*] are intentionally excluded per
+		// ADR-202605031600 (v1 schema evolution).
+		if ref.Field != "schemaRefs.request" || ref.Ref == "" {
 			continue
 		}
 		results = append(results, v.validateFMTRequestStrictRef(c, ref)...)
@@ -98,14 +101,6 @@ func (v *Validator) fmt20MissingSchemaResults(c *metadata.ContractMeta, rel stri
 		))
 	}
 	return results
-}
-
-// strictSchemaRefField returns true for schema reference fields that must declare
-// additionalProperties:false. Per ADR-202605031600 only request schemas are
-// strict; response and endpoints.http.responses[*] are intentionally excluded
-// to allow v1 evolution (new optional response fields without major bump).
-func strictSchemaRefField(field string) bool {
-	return field == "schemaRefs.request"
 }
 
 // scanSchemaForStrictMissing reads a JSON schema file and recursively walks it.

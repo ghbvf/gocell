@@ -213,6 +213,50 @@ asm := assembly.New(assembly.Config{ID: "myapp", DurabilityMode: cell.Durability
 asm.Register(mycell.NewMyCell(...))
 ```
 
+## Schema 演化
+
+`contracts/{kind}/{domain}/v{N}/*.schema.json` 是跨 cell 的唯一契约。schema
+按方向分三种政策（详见
+[ADR-202605031600](../architecture/202605031600-adr-v1-schema-evolution.md)
+和 [api-versioning.md](../../.claude/rules/gocell/api-versioning.md)）：
+
+| 政策 | 适用 schema | 约束 | 守护 |
+|------|-------------|------|------|
+| **strict (request)** | `request.schema.json`、`error-response-v1.schema.json` | 必须声明 `additionalProperties: false`（含嵌套） | FMT-20 + `verify-schema-policy.sh` |
+| **lenient (response/event)** | `response.schema.json`、`payload.schema.json`、`headers.schema.json` | **禁止**声明 `additionalProperties: false`（允许 v1 加 optional 字段不破坏 client/consumer） | `verify-schema-policy.sh --check` |
+| **metaonly (whitelist)** | metadata-only event payload（载体只携带 identifier，不携带 state，如 `event.config.entry-upserted.v1`） | 必须声明 `unevaluatedProperties: false`，新增字段必须显式加到 `properties`（防止状态字段误传） | `verify-schema-policy.sh --check` |
+
+### 加新字段的工作流
+
+| 场景 | 步骤 |
+|------|------|
+| 给 v1 response/event payload 加 optional 字段 | 1) 改 schema `properties`；2) 改 typed struct + JSON tag；3) contract test 通过；CI 自动校验 |
+| 给 v1 request 加可选字段 | 同上；schema 仍 strict（FMT-20），所以必须更新 `properties` 列表 |
+| 给 metadata-only event 加 identifier 字段 | 同上；`unevaluatedProperties: false` 要求 `properties` 必须列出所有合法字段 |
+| 删字段 / 改字段类型 / 改字段含义 | 必须 v2 — 不在 v1 演化范围内 |
+
+### 检查命令
+
+```bash
+bash hack/verify-schema-policy.sh           # check 全部策略
+bash hack/verify-schema-policy.sh --fix     # auto-strip lenient 违规（误加 additionalProperties:false 时）
+go run ./cmd/gocell validate                # gocell 元数据 + FMT-20 + 全部规则
+```
+
+### contract test 怎么用
+
+`pkg/contracttest` 提供两组对称 API：`Validate*` 检验合规、`MustReject*`
+断言负向。lenient schema 下，`MustReject*` 仅捕获 `required`/`type`/`pattern`
+等非加性违规；要断言"额外字段被拒"，schema 必须 metaonly 或 strict。
+
+```go
+c := contracttest.LoadByID(t, root, "event.config.entry-upserted.v1")
+c.ValidatePayload(t, payload)                                          // 正向
+c.MustRejectPayload(t, []byte(`{"key":"k"}`))                         // 缺 required → 拒
+c.MustRejectPayload(t, []byte(`{"key":"k","version":1,"actorId":"a","value":"x"}`))
+                                                                       // metaonly: extra "value" → 拒
+```
+
 ## Slice 依赖注入模式
 
 GoCell 使用**构造时注入**：所有依赖通过 Option 函数在 `New*Cell()` 时传入，Cell 在 `Init()` 中将依赖分发给各 Slice。

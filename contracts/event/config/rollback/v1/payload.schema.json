@@ -22,5 +22,6 @@
     "targetVersion",
     "newVersion",
     "actorId"
-  ]
+  ],
+  "unevaluatedProperties": false
 }
