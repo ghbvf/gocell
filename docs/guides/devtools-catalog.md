@@ -101,6 +101,18 @@ GET /api/v1/devtools/catalog
 | `include` | 逗号列表 | `cellDeps,packageDeps,statusBoard,relations` | 同 CLI `--include` |
 | `format` | `json\|yaml` | `json` | 响应格式；yaml 时 Content-Type: application/yaml |
 
+### 多维过滤 AND 语义
+
+`kinds`、`layers`、`cells` 三个过滤参数同时存在时按 **AND** 组合（实体须同时满足所有非空条件才保留）。具体行为：
+
+| 场景 | 结果 |
+|------|------|
+| `?cells=accesscore`（单维 focus） | 输出 accesscore + 一阶邻居（含其拥有的 Contracts/Journeys，因为 layers 未限制） |
+| `?layers=cells&cells=accesscore`（双维 AND） | **只输出 Kind=Cell 实体且属于 accesscore 邻居集**；Contract/Journey 实体被过滤掉，因为它们的 `entityLayer` 是 `contracts`/`journeys`，不在 `layers=cells` 集合内 |
+| `?kinds=Contract&cells=accesscore` | 只输出 accesscore 拥有的 Contract 实体 |
+
+> **建议**：focus 单个 cell + 看其完整邻居（含契约）→ 用 `?cells=foo` **不要带** `?layers=`。如果想限定到某层 + 某 cell，明确知道后果。
+
 ### curl 示例
 
 **示例 1：admin token 正常访问**
@@ -138,7 +150,7 @@ curl -s -o /dev/null -w "%{http_code}" \
 
 ```bash
 curl -H "Authorization: Bearer $TOKEN" \
-  'http://localhost:8080/devtools/catalog?cells=accesscore&include=packageDeps,cellDeps' \
+  'http://localhost:8080/api/v1/devtools/catalog?cells=accesscore&include=packageDeps,cellDeps' \
   | jq '.dependencies.packages.graph.rootModule, .dependencies.cells.nodes'
 ```
 
