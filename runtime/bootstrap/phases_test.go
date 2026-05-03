@@ -6,6 +6,8 @@ import (
 	"crypto/x509"
 	"errors"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
 
@@ -20,6 +22,7 @@ import (
 	"github.com/ghbvf/gocell/runtime/config"
 	"github.com/ghbvf/gocell/runtime/http/health"
 	"github.com/ghbvf/gocell/runtime/http/router"
+	"github.com/ghbvf/gocell/runtime/observability/metrics"
 )
 
 // --- phase5CollectRouteGroups: HealthListener fallback tests (R2-07) ---
@@ -91,6 +94,117 @@ func TestPhase5CollectRouteGroups_HealthListenerPresent_PreservesHealthListener(
 	for i, rg := range groups {
 		assert.Equal(t, cell.HealthListener, rg.Listener,
 			"group[%d]: with HealthListener declared, framework health groups must stay on HealthListener (no fallback remap)", i)
+	}
+}
+
+// --- phase5MountRouteGroups: per-cell metrics label propagation ---
+
+// TestPhase5MountRouteGroups_PerCellMetricsLabel pins the bootstrap-level
+// contract for HTTP-METRICS-LABEL-REALIGN: when two RouteGroups with
+// different CellID values are mounted on the same router, requests
+// landing in each subtree must produce metrics observations carrying
+// that group's CellID — not the framework "_runtime" sentinel and
+// not a global value derived from assembly identity.
+func TestPhase5MountRouteGroups_PerCellMetricsLabel(t *testing.T) {
+	t.Parallel()
+	mc := metrics.NewInMemoryCollector()
+	rtr, err := router.NewForListener(cell.PrimaryListener,
+		router.WithRouterClock(clock.Real()),
+		router.WithMetricsCollector(mc),
+	)
+	require.NoError(t, err)
+
+	b := New(WithClock(clock.Real()))
+
+	groups := []cell.RouteGroup{
+		{
+			Listener: cell.PrimaryListener,
+			Prefix:   "/api/v1/access",
+			CellID:   "accesscore",
+			Register: func(mux cell.RouteMux) error {
+				mux.Handle("/sessions", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+					w.WriteHeader(http.StatusOK)
+				}))
+				return nil
+			},
+		},
+		{
+			Listener: cell.PrimaryListener,
+			Prefix:   "/api/v1/audit",
+			CellID:   "auditcore",
+			Register: func(mux cell.RouteMux) error {
+				mux.Handle("/events", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+					w.WriteHeader(http.StatusOK)
+				}))
+				return nil
+			},
+		},
+		{
+			Listener: cell.PrimaryListener,
+			Prefix:   "/framework",
+			// CellID intentionally empty: framework-owned RouteGroups should
+			// serve real matched routes but record metrics under _runtime.
+			Register: func(mux cell.RouteMux) error {
+				mux.Handle("GET /ping", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+					w.WriteHeader(http.StatusNoContent)
+				}))
+				return nil
+			},
+		},
+	}
+	require.NoError(t, b.phase5MountRouteGroups(map[cell.ListenerRef]*router.Router{
+		cell.PrimaryListener: rtr,
+	}, groups))
+
+	// Drive one request into each subtree.
+	for _, tc := range []struct{ method, path string }{
+		{http.MethodGet, "/api/v1/access/sessions"},
+		{http.MethodGet, "/api/v1/audit/events"},
+	} {
+		rec := httptest.NewRecorder()
+		rtr.Handler().ServeHTTP(rec, httptest.NewRequest(tc.method, tc.path, nil))
+		require.Equal(t, http.StatusOK, rec.Code, "%s %s must reach the cell handler", tc.method, tc.path)
+	}
+
+	// A registered RouteGroup without CellID is a matched framework-owned route,
+	// not an unmatched 404. It must still record under the _runtime sentinel.
+	rec := httptest.NewRecorder()
+	rtr.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/framework/ping", nil))
+	require.Equal(t, http.StatusNoContent, rec.Code)
+
+	// Method mismatches on framework-owned RouteGroups should keep _runtime but
+	// still use the route-template fallback rather than route="unmatched".
+	rec = httptest.NewRecorder()
+	rtr.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/framework/ping", nil))
+	require.Equal(t, http.StatusMethodNotAllowed, rec.Code)
+
+	// And one request that does NOT match either RouteGroup. It should be
+	// labeled with the framework sentinel, proving the fallback remains in place.
+	rec = httptest.NewRecorder()
+	rtr.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/orphan", nil))
+	require.Equal(t, http.StatusNotFound, rec.Code)
+
+	snap := mc.Snapshot()
+	wantKeys := []metrics.RequestKey{
+		{Cell: "accesscore", Method: http.MethodGet, Route: "/api/v1/access/sessions", Status: http.StatusOK},
+		{Cell: "auditcore", Method: http.MethodGet, Route: "/api/v1/audit/events", Status: http.StatusOK},
+		{Cell: "_runtime", Method: http.MethodGet, Route: "/framework/ping", Status: http.StatusNoContent},
+		{Cell: "_runtime", Method: http.MethodPost, Route: "/framework/ping", Status: http.StatusMethodNotAllowed},
+		{Cell: "_runtime", Method: http.MethodGet, Route: "unmatched", Status: http.StatusNotFound},
+	}
+	for _, key := range wantKeys {
+		assert.Equalf(t, int64(1), snap.RequestCounts[key],
+			"want exactly one observation under %q; full snapshot=%v", key, snap.RequestCounts)
+	}
+
+	// Negative assertion: the assembly-derived "phase5-test" cellID
+	// (from buildPhase5State, were it used) and the legacy "default"
+	// fallback must NOT appear — neither path should leak into metrics.
+	for _, forbidden := range []string{"phase5-test", "default"} {
+		for key := range snap.RequestCounts {
+			assert.NotEqualf(t, forbidden, key.Cell,
+				"cell label %q must not appear in metrics snapshot (regression to global cellID derivation)", forbidden)
+		}
 	}
 }
 

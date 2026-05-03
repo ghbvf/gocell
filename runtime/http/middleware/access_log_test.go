@@ -12,7 +12,8 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/ghbvf/gocell/kernel/clock"
-	"github.com/ghbvf/gocell/pkg/ctxkeys"
+	kctxkeys "github.com/ghbvf/gocell/kernel/ctxkeys"
+	pkgctxkeys "github.com/ghbvf/gocell/pkg/ctxkeys"
 )
 
 func TestAccessLog_LogsFields(t *testing.T) {
@@ -30,8 +31,8 @@ func TestAccessLog_LogsFields(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/users", nil)
 	// Simulate request_id already in context
-	ctx := ctxkeys.WithRequestID(req.Context(), "req-123")
-	ctx = ctxkeys.WithCorrelationID(ctx, "corr-123")
+	ctx := pkgctxkeys.WithRequestID(req.Context(), "req-123")
+	ctx = pkgctxkeys.WithCorrelationID(ctx, "corr-123")
 	req = req.WithContext(ctx)
 
 	rec := httptest.NewRecorder()
@@ -113,7 +114,7 @@ func TestAccessLog_TraceID_WhenSet(t *testing.T) {
 	handler := Recorder(AccessLog(clock.Real())(inner))
 
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
-	ctx := ctxkeys.WithTraceID(req.Context(), "abc123trace")
+	ctx := pkgctxkeys.WithTraceID(req.Context(), "abc123trace")
 	req = req.WithContext(ctx)
 
 	rec := httptest.NewRecorder()
@@ -122,6 +123,28 @@ func TestAccessLog_TraceID_WhenSet(t *testing.T) {
 	var logEntry map[string]any
 	require.NoError(t, json.Unmarshal(buf.Bytes(), &logEntry))
 	assert.Equal(t, "abc123trace", logEntry["trace_id"])
+}
+
+func TestAccessLog_CellID_WhenSet(t *testing.T) {
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&buf, nil))
+	original := slog.Default()
+	slog.SetDefault(logger)
+	defer slog.SetDefault(original)
+
+	inner := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+	handler := Recorder(AccessLog(clock.Real())(inner))
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/access/users", nil)
+	req = req.WithContext(kctxkeys.WithCellID(req.Context(), "accesscore"))
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	var logEntry map[string]any
+	require.NoError(t, json.Unmarshal(buf.Bytes(), &logEntry))
+	assert.Equal(t, "accesscore", logEntry["cell_id"])
 }
 
 func TestAccessLog_Listener_WhenSet(t *testing.T) {

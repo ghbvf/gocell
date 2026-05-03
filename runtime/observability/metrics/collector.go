@@ -8,7 +8,6 @@ package metrics
 
 import (
 	"encoding/json"
-	"fmt"
 	"net/http"
 	"sort"
 	"sync"
@@ -20,39 +19,56 @@ type Collector interface {
 	// RecordRequest records a completed HTTP request with the given labels.
 	// route is the route pattern (e.g. "/api/v1/users/{id}"), not the actual
 	// request path. Using route patterns prevents metric cardinality explosion.
-	RecordRequest(method, route string, status int, durationSeconds float64)
+	//
+	// cellID is the coarse owner dimension for the request. It is supplied by
+	// the caller, normally runtime/http/router's root CellAttribution
+	// middleware, from RouteGroup ownership before protection middleware can
+	// short-circuit. It is not inferred by the collector from assembly,
+	// config, route path, tenant, slice, or contract metadata.
+	//
+	// Use the owning cell ID for cell-owned RouteGroups, or "_runtime" for
+	// framework-owned paths (healthz/readyz/metrics, unmatched 404s, listeners
+	// with no business RouteGroup attached).
+	RecordRequest(cellID, method, route string, status int, durationSeconds float64)
+}
+
+// RequestKey identifies one low-cardinality HTTP request metric series.
+type RequestKey struct {
+	Cell   string
+	Method string
+	Route  string
+	Status int
 }
 
 // Snapshot is a point-in-time view of recorded metrics.
 type Snapshot struct {
-	// Key is "method route status" (e.g. "GET /api/v1/users/{id} 200").
-	RequestCounts  map[string]int64
-	DurationSumsMs map[string]int64
+	RequestCounts  map[RequestKey]int64
+	DurationSumsMs map[RequestKey]int64
 }
 
 // InMemoryCollector is a simple in-memory metrics collector for development
 // and testing. It records request counts and cumulative duration.
 type InMemoryCollector struct {
 	mu        sync.RWMutex
-	counts    map[string]*atomic.Int64
-	durations map[string]*atomic.Int64 // cumulative duration in microseconds
+	counts    map[RequestKey]*atomic.Int64
+	durations map[RequestKey]*atomic.Int64 // cumulative duration in microseconds
 }
 
 // NewInMemoryCollector creates an InMemoryCollector.
 func NewInMemoryCollector() *InMemoryCollector {
 	return &InMemoryCollector{
-		counts:    make(map[string]*atomic.Int64),
-		durations: make(map[string]*atomic.Int64),
+		counts:    make(map[RequestKey]*atomic.Int64),
+		durations: make(map[RequestKey]*atomic.Int64),
 	}
 }
 
-func metricKey(method, route string, status int) string {
-	return fmt.Sprintf("%s %s %d", method, route, status)
+func metricKey(cellID, method, route string, status int) RequestKey {
+	return RequestKey{Cell: cellID, Method: method, Route: route, Status: status}
 }
 
 // RecordRequest records a completed HTTP request.
-func (c *InMemoryCollector) RecordRequest(method, route string, status int, durationSeconds float64) {
-	key := metricKey(method, route, status)
+func (c *InMemoryCollector) RecordRequest(cellID, method, route string, status int, durationSeconds float64) {
+	key := metricKey(cellID, method, route, status)
 
 	c.mu.RLock()
 	cnt, cntOK := c.counts[key]
@@ -82,8 +98,8 @@ func (c *InMemoryCollector) Snapshot() Snapshot {
 	defer c.mu.RUnlock()
 
 	snap := Snapshot{
-		RequestCounts:  make(map[string]int64, len(c.counts)),
-		DurationSumsMs: make(map[string]int64, len(c.durations)),
+		RequestCounts:  make(map[RequestKey]int64, len(c.counts)),
+		DurationSumsMs: make(map[RequestKey]int64, len(c.durations)),
 	}
 	for k, v := range c.counts {
 		snap.RequestCounts[k] = v.Load()
@@ -104,6 +120,7 @@ func (c *InMemoryCollector) Handler() http.Handler {
 		w.Header().Set("Content-Type", "application/json")
 
 		type entry struct {
+			Cell       string `json:"cell"`
 			Method     string `json:"method"`
 			Route      string `json:"route"`
 			Status     int    `json:"status"`
@@ -112,22 +129,35 @@ func (c *InMemoryCollector) Handler() http.Handler {
 		}
 
 		var entries []entry
-		for k, count := range snap.RequestCounts {
-			var method, route string
-			var status int
-			_, _ = fmt.Sscanf(k, "%s %s %d", &method, &route, &status)
+		for key, count := range snap.RequestCounts {
 			entries = append(entries, entry{
-				Method:     method,
-				Route:      route,
-				Status:     status,
+				Cell:       key.Cell,
+				Method:     key.Method,
+				Route:      key.Route,
+				Status:     key.Status,
 				Count:      count,
-				DurationMs: snap.DurationSumsMs[k],
+				DurationMs: snap.DurationSumsMs[key],
 			})
 		}
-		sort.Slice(entries, func(i, j int) bool { return entries[i].Route < entries[j].Route })
+		sort.Slice(entries, func(i, j int) bool {
+			if entries[i].Cell != entries[j].Cell {
+				return entries[i].Cell < entries[j].Cell
+			}
+			if entries[i].Route != entries[j].Route {
+				return entries[i].Route < entries[j].Route
+			}
+			if entries[i].Method != entries[j].Method {
+				return entries[i].Method < entries[j].Method
+			}
+			return entries[i].Status < entries[j].Status
+		})
 
+		// Use the unified list response envelope ({"data": [...]}) consistent
+		// with .claude/rules/gocell/api-versioning.md and the other HTTP list
+		// endpoints. Inherited "metrics" wrapper would have left this dev/test
+		// handler the only inconsistent shape on the metrics surface.
 		_ = json.NewEncoder(w).Encode(map[string]any{
-			"metrics": entries,
+			"data": entries,
 		})
 	})
 }

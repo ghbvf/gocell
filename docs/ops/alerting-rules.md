@@ -12,6 +12,58 @@
 
 ---
 
+## HTTP Metrics `cell` Label 迁移 / Runbook
+
+HTTP 指标 `gocell_http_requests_total` 与 `gocell_http_request_duration_seconds` 的
+`cell` label 现在表示请求归属的粗粒度 cell owner，由 router root attribution 从
+`RouteGroup.CellID` / HTTP namespace 写入。collector 不再从 assembly/config/default
+推导 cell，也不做旧 label / 新 label 的 double-write。
+
+`cell="_runtime"` 是运行时哨兵，不代表业务 cell 或错误状态。它覆盖没有落入任何
+cell-owned RouteGroup 的请求，例如 `/healthz`、`/readyz`、`/metrics`、listener 外 404、
+framework isolation 404，以及未归属 listener 的流量。业务 RouteGroup namespace 内的
+auth / rate-limit / circuit-breaker / body-limit 前置拒绝和 chi 405 应继续归属对应业务
+cell。
+
+推荐过滤：
+
+- 业务 SLO / 业务错误率 / cell dashboard：`{cell!="_runtime"}`
+- 运行时探针、scrape 自身、未匹配流量排查：`{cell="_runtime"}`
+- listener 总流量 / 容量评估：不过滤 `cell`
+
+Prometheus 侧过渡建议：
+
+```yaml
+groups:
+- name: gocell-http-metrics-cell-label
+  rules:
+  - record: gocell:http_requests:rate5m_by_cell_route_status
+    expr: |
+      sum by (cell, method, route, status) (
+        rate(gocell_http_requests_total{cell!="_runtime"}[5m])
+      )
+  - record: gocell:http_request_duration:p95_by_cell_route
+    expr: |
+      histogram_quantile(
+        0.95,
+        sum by (le, cell, route) (
+          rate(gocell_http_request_duration_seconds_bucket{cell!="_runtime"}[5m])
+        )
+      )
+```
+
+remote-write 或业务专用 Prometheus 若不需要 runtime series，可在 scrape 侧丢弃
+`_runtime`，避免在代码里恢复兼容写入：
+
+```yaml
+metric_relabel_configs:
+- source_labels: [__name__, cell]
+  regex: 'gocell_http_(requests_total|request_duration_seconds(_bucket|_sum|_count)?);_runtime'
+  action: drop
+```
+
+---
+
 ## Outbox 可观测性
 
 ### OutboxEmitFailOpenDropped

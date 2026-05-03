@@ -66,11 +66,19 @@ func TestR2_MetricsCollector_RecordsHTTPRequests(t *testing.T) {
 	// Wait until the health listener is healthy before firing measurement requests.
 	waitForHealthy(t, healthAddr)
 
-	// Fire a request to the primary listener — this traverses outerMux which
-	// includes the Metrics middleware wired by autoWireHTTPMetricsCollector. The
-	// request is counted against the Prometheus registry backing the auto-wired
-	// collector. Use /healthz on primary (fallback: not found, still traverses
-	// outerMux) — any path will trigger the Metrics middleware.
+	// Fire a real business request to the primary listener. /setup/status is a
+	// public accesscore endpoint, so it exercises the positive e2e path where
+	// phase5 stamps accesscore onto the RouteGroup and router attribution carries
+	// that cell label into the metrics collector.
+	businessResp, err := http.Get("http://" + primaryAddr + "/api/v1/access/setup/status")
+	require.NoError(t, err)
+	require.Equal(t, http.StatusOK, businessResp.StatusCode)
+	businessResp.Body.Close()
+
+	// Fire a request to the primary listener that does not match any cell-owned
+	// RouteGroup. It still traverses outerMux, including the Metrics middleware
+	// wired by autoWireHTTPMetricsCollector, but must keep the framework
+	// "_runtime" sentinel rather than deriving a label from the assembly ID.
 	resp, err := http.Get("http://" + primaryAddr + "/healthz")
 	require.NoError(t, err)
 	resp.Body.Close()
@@ -92,8 +100,21 @@ func TestR2_MetricsCollector_RecordsHTTPRequests(t *testing.T) {
 			"This verifies the full wiring chain: WithMetricsProvider → autoWireHTTPMetricsCollector "+
 			"→ router.WithMetricsCollector → middleware.Metrics → RecordRequest → Prometheus registry. "+
 			"Got /metrics body (first 400 chars): %s", truncateMetrics(bodyStr, 400))
-	assert.Contains(t, bodyStr, `cell="corebundle"`,
-		"R2: /metrics output must have cell=\"corebundle\" label (proves auto-wire derives cell label from assembly ID). "+
+	assert.Contains(t, bodyStr, `http_requests_total{cell="accesscore",method="GET",route="/api/v1/access/setup/status",status="200"}`,
+		"R2: /metrics output must label a real accesscore business request cell=\"accesscore\". "+
+			"Got /metrics body (first 400 chars): %s", truncateMetrics(bodyStr, 400))
+	// HTTP-METRICS-LABEL-REALIGN: requests that do not match any cell-owned
+	// RouteGroup must be labelled with the framework "_runtime" sentinel
+	// (installed by router.go), not with the assembly ID. The /healthz hit on
+	// PrimaryListener does not match any RouteGroup (HealthListener carries
+	// /healthz on its own router), so it falls through to the sentinel layer.
+	assert.Contains(t, bodyStr, `cell="_runtime"`,
+		"R2: /metrics output must label framework-owned requests cell=\"_runtime\" "+
+			"(installed by router.go on every listener-root mux). "+
+			"Got /metrics body (first 400 chars): %s", truncateMetrics(bodyStr, 400))
+	assert.NotContains(t, bodyStr, `cell="corebundle"`,
+		"R2: post HTTP-METRICS-LABEL-REALIGN, the assembly ID must not leak into the cell label. "+
+			"A regression that re-derives cellID from b.assemblyID would fail here. "+
 			"Got /metrics body (first 400 chars): %s", truncateMetrics(bodyStr, 400))
 }
 

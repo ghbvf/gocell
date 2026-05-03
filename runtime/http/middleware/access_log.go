@@ -7,15 +7,16 @@ import (
 	"time"
 
 	"github.com/ghbvf/gocell/kernel/clock"
-	"github.com/ghbvf/gocell/pkg/ctxkeys"
+	kctxkeys "github.com/ghbvf/gocell/kernel/ctxkeys"
+	pkgctxkeys "github.com/ghbvf/gocell/pkg/ctxkeys"
 	"github.com/ghbvf/gocell/pkg/logutil"
 )
 
 // AccessLog returns an HTTP middleware that logs structured request/response
 // information via slog.Info. A clock must be provided; use clock.Real() at the
 // composition root.
-// Fields: method, path, route, status, duration_ms, listener, request_id,
-// correlation_id, trace_id, real_ip. The listener field is emitted only when
+// Fields: method, path, route, status, duration_ms, listener, cell_id,
+// request_id, correlation_id, trace_id, real_ip. The listener field is emitted only when
 // the router annotated the request with a non-empty physical listener name.
 //
 // ref: go-zero rest/handler/loghandler.go — structured request logging with trace context
@@ -77,10 +78,11 @@ func accessLogAttrs(start time.Time, method, path, route string, state *Recorder
 
 func appendAccessLogContextAttrs(attrs []any, ctx context.Context) []any {
 	attrs = appendAccessLogAttrFrom(ctx, attrs, "listener", listenerFromContext)
-	attrs = appendAccessLogAttrFrom(ctx, attrs, "request_id", ctxkeys.RequestIDFrom)
-	attrs = appendAccessLogAttrFrom(ctx, attrs, "correlation_id", ctxkeys.CorrelationIDFrom)
-	attrs = appendAccessLogAttrFrom(ctx, attrs, "trace_id", ctxkeys.TraceIDFrom)
-	attrs = appendAccessLogAttrFrom(ctx, attrs, "real_ip", ctxkeys.RealIPFrom)
+	attrs = appendAccessLogAttrFrom(ctx, attrs, "cell_id", kctxkeys.CellIDFrom)
+	attrs = appendAccessLogAttrFrom(ctx, attrs, "request_id", pkgctxkeys.RequestIDFrom)
+	attrs = appendAccessLogAttrFrom(ctx, attrs, "correlation_id", pkgctxkeys.CorrelationIDFrom)
+	attrs = appendAccessLogAttrFrom(ctx, attrs, "trace_id", pkgctxkeys.TraceIDFrom)
+	attrs = appendAccessLogAttrFrom(ctx, attrs, "real_ip", pkgctxkeys.RealIPFrom)
 	return attrs
 }
 

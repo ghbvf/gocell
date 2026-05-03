@@ -5,7 +5,7 @@ package bootstrap
 //
 // Covers:
 //   - phase5BuildRouters / phase5InitHealthHandler / phase5BuildPerListenerRouters
-//   - phase5CollectRouteGroups / phase5MountRouteGroups / mountOneRouteGroup
+//   - phase5CollectRouteGroups / phase5MountRouteGroups
 //   - phase5FinalizeAllRouters
 //   - validateInternalGuardForDeclaredRoutes / declaredInternalRoutes
 //   - validateAuthVerifierForDeclaredRoutes
@@ -158,7 +158,7 @@ func (b *Bootstrap) phase5MountRouteGroups(routers map[cell.ListenerRef]*router.
 		if rg.Register == nil {
 			return fmt.Errorf("bootstrap: RouteGroup for listener %q has nil Register function", rg.Listener.String())
 		}
-		if err := b.mountOneRouteGroup(rtr, rg, i); err != nil {
+		if err := rtr.MountRouteGroup(rg); err != nil {
 			cellID := rg.CellID
 			if cellID == "" {
 				cellID = "<framework>"
@@ -168,39 +168,6 @@ func (b *Bootstrap) phase5MountRouteGroups(routers map[cell.ListenerRef]*router.
 		}
 	}
 	return nil
-}
-
-// mountOneRouteGroup mounts a single RouteGroup on its router and applies any
-// non-auth Middleware in declaration order. PR269 round-3: group-level auth is
-// gone — auth scheme is a listener concern (cells that need a different scheme
-// declare their routes on a different listener). Listener-level authChain is
-// already installed by router.WithDefaultMiddleware; group Middleware runs
-// after that chain at request time (chi sub-mux With order).
-func (b *Bootstrap) mountOneRouteGroup(rtr *router.Router, rg cell.RouteGroup, _ int) error {
-	register := rg.Register
-	if len(rg.Middleware) > 0 {
-		mws := rg.Middleware
-		inner := register
-		register = func(sub cell.RouteMux) error {
-			return inner(sub.With(mws...))
-		}
-	}
-	var registerErr error
-	if rg.Prefix != "" {
-		// rtr.Route signature is from cell.RouteMux which still takes a no-error
-		// closure; capture the Register error via the outer variable so it
-		// surfaces to the phase5 walker. rtr.Route is synchronous (chi.Mux
-		// builds the sub-tree before returning) so registerErr is read after
-		// the closure exits — no data race on the outer variable.
-		rtr.Route(rg.Prefix, func(sub cell.RouteMux) {
-			if err := register(sub); err != nil {
-				registerErr = err
-			}
-		})
-	} else {
-		registerErr = register(rtr)
-	}
-	return registerErr
 }
 
 // phase5FinalizeAllRouters installs /internal/v1/* isolation on the primary
@@ -378,6 +345,10 @@ func (b *Bootstrap) buildListenerRouterOpts(_ *phaseState, ref cell.ListenerRef,
 // collector construction will fail with a duplicate-name error. The error is
 // wrapped with an actionable message that tells operators which side to remove.
 //
+// HTTP-METRICS-LABEL-REALIGN: cell labels are resolved by router-owned root
+// attribution from RouteGroup ownership. This collector is provider-neutral
+// and labels each observation from its RecordRequest cellID argument.
+//
 // ref: runtime/observability/metrics.NewProviderCollector — provider-neutral
 // HTTP collector that records http_requests_total + http_request_duration_seconds.
 func (b *Bootstrap) autoWireHTTPMetricsCollector(opts []router.Option) ([]router.Option, error) {
@@ -394,21 +365,7 @@ func (b *Bootstrap) autoWireHTTPMetricsCollector(opts []router.Option) ([]router
 	// share the same collector and do not attempt to re-register Prometheus
 	// counters/histograms with the same names.
 	if b.httpCollector == nil {
-		// Derive cell ID from the most specific source available:
-		//  1. Explicit WithAssemblyID — caller's intent takes precedence.
-		//  2. Pre-built assembly's ID (b.assemblyCore.ID()) — avoids requiring callers
-		//     to repeat the assembly ID when using WithAssembly(asm).
-		//  3. Fallback "default" — matches the ID used by the auto-built assembly.
-		cellID := b.assemblyID
-		if cellID == "" && b.assemblyCore != nil {
-			cellID = b.assemblyCore.ID()
-		}
-		if cellID == "" {
-			cellID = "default"
-		}
-		collector, err := metricsmiddleware.NewProviderCollector(b.metricsProvider, metricsmiddleware.ProviderCollectorConfig{
-			CellID: cellID,
-		})
+		collector, err := metricsmiddleware.NewProviderCollector(b.metricsProvider, metricsmiddleware.ProviderCollectorConfig{})
 		if err != nil {
 			return nil, fmt.Errorf(
 				"bootstrap: metrics auto-wire conflict: WithMetricsProvider already constructs the HTTP collector; "+

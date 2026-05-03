@@ -193,81 +193,43 @@ func TestBootstrap_NoMetricsProvider_NoAutoWire(t *testing.T) {
 	assert.Len(t, opts, 0, "NopProvider must not add any router options")
 }
 
-// TestAutoWire_CellLabel_FromExplicitAssemblyID verifies that WithAssemblyID
-// flows all the way through to the cell label emitted on every RecordRequest
-// call, not just to metric registration. The previous test only proved that
-// http_requests_total was registered — a regression that hard-coded
-// cell="default" inside RecordRequest would still pass that weaker assertion.
-//
-// finding 2 (PR-A66 round-2): close the cell-label behavior gap.
-func TestAutoWire_CellLabel_FromExplicitAssemblyID(t *testing.T) {
+// TestAutoWire_CellLabel_FromCtxArg verifies that the cell label emitted on
+// each RecordRequest call is whatever is passed as the cellID argument — not
+// a global derived from assembly ID. This pins the
+// HTTP-METRICS-LABEL-REALIGN contract: the collector is provider-neutral and
+// the cell identity flows from the request ctx (via Metrics middleware), not
+// from collector construction.
+func TestAutoWire_CellLabel_FromCtxArg(t *testing.T) {
 	t.Parallel()
 	p := newFakeMetricsProvider()
+	// WithAssemblyID is irrelevant to metrics labels post-realign; use it to
+	// prove the assembly ID does not leak into the cell label.
 	b := New(WithClock(clock.Real()), WithMetricsProvider(p), WithAssemblyID("my-service"))
 
 	_, err := b.autoWireHTTPMetricsCollector(nil)
 	require.NoError(t, err)
 	require.NotNil(t, b.httpCollector, "autoWire must cache collector on b.httpCollector")
 
-	// Drive a real RecordRequest through the wired collector. This is the
-	// step the original spy could not exercise: cell label is set per-call,
-	// not per-registration.
-	b.httpCollector.RecordRequest("GET", "/api/v1/users", 200, 0.05)
+	// Driving distinct cellIDs proves the collector does not cache one;
+	// each call emits the cellID it was given.
+	b.httpCollector.RecordRequest("accesscore", "GET", "/api/v1/users", 200, 0.05)
+	b.httpCollector.RecordRequest("_runtime", "GET", "/healthz", 200, 0.001)
 
 	reqs := p.counter("http_requests_total")
 	require.NotNil(t, reqs, "http_requests_total must be registered")
-	assert.Equal(t, float64(1), reqs.totalForLabel("cell", "my-service"),
-		"RecordRequest must emit cell=my-service")
+	assert.Equal(t, float64(1), reqs.totalForLabel("cell", "accesscore"),
+		"RecordRequest must emit cell=accesscore for the first call")
+	assert.Equal(t, float64(1), reqs.totalForLabel("cell", "_runtime"),
+		"RecordRequest must emit cell=_runtime for the second call")
+	assert.Equal(t, float64(0), reqs.totalForLabel("cell", "my-service"),
+		"a regression that derived cell from assembly ID would fail here")
 	assert.Equal(t, float64(0), reqs.totalForLabel("cell", "default"),
-		"a regression that hard-codes cell=default would fail here")
+		"a regression to the legacy default fallback would fail here")
 
 	dur := p.histogram("http_request_duration_seconds")
 	require.NotNil(t, dur)
-	assert.NotEmpty(t, dur.observationsForLabel("cell", "my-service"),
-		"duration histogram must also carry cell=my-service")
-}
-
-// TestAutoWire_CellLabel_DerivedFromAssembly verifies that omitting
-// WithAssemblyID but supplying WithAssembly(asm) makes asm.ID() the cell
-// label — not "default" and not the empty string.
-func TestAutoWire_CellLabel_DerivedFromAssembly(t *testing.T) {
-	t.Parallel()
-	p := newFakeMetricsProvider()
-	asm := assembly.New(assembly.Config{ID: "asm-id-x", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
-	t.Cleanup(asm.Shutdown)
-
-	b := New(WithClock(clock.Real()), WithMetricsProvider(p), WithAssembly(asm))
-
-	_, err := b.autoWireHTTPMetricsCollector(nil)
-	require.NoError(t, err)
-	require.NotNil(t, b.httpCollector)
-	b.httpCollector.RecordRequest("POST", "/api/v1/items", 201, 0.01)
-
-	reqs := p.counter("http_requests_total")
-	require.NotNil(t, reqs)
-	assert.Equal(t, float64(1), reqs.totalForLabel("cell", "asm-id-x"),
-		"cell label must be derived from assembly ID when WithAssemblyID is not set")
-	assert.Equal(t, float64(0), reqs.totalForLabel("cell", "default"),
-		"must not fall back to default when an assembly is wired")
-}
-
-// TestAutoWire_CellLabel_DefaultsWhenNeitherSet pins the no-config fallback
-// so a future change can't silently switch the default. Operators rely on
-// "default" as the sentinel that signals "no assembly identity wired".
-func TestAutoWire_CellLabel_DefaultsWhenNeitherSet(t *testing.T) {
-	t.Parallel()
-	p := newFakeMetricsProvider()
-	b := New(WithClock(clock.Real()), WithMetricsProvider(p))
-
-	_, err := b.autoWireHTTPMetricsCollector(nil)
-	require.NoError(t, err)
-	require.NotNil(t, b.httpCollector)
-	b.httpCollector.RecordRequest("GET", "/healthz", 200, 0.001)
-
-	reqs := p.counter("http_requests_total")
-	require.NotNil(t, reqs)
-	assert.Equal(t, float64(1), reqs.totalForLabel("cell", "default"),
-		"with no WithAssemblyID and no WithAssembly, the cell label must default to 'default'")
+	assert.NotEmpty(t, dur.observationsForLabel("cell", "accesscore"),
+		"duration histogram must also carry cell=accesscore for the first observation")
 }
 
 // TestAutoWireHTTPMetricsCollector_Conflict verifies that when the provider
