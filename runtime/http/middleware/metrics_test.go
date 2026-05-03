@@ -127,7 +127,7 @@ func TestMetrics_ReadsCellIDFromContext(t *testing.T) {
 	r := chi.NewRouter()
 	r.Use(
 		Recorder,
-		CellAttribution(func(_ string, path string) (string, bool) {
+		CellAttribution(func(_, path string) (string, bool) {
 			switch path {
 			case "/api/v1/users/42":
 				return "accesscore", true
@@ -180,7 +180,7 @@ func TestMetrics_RoutePatternCollapse(t *testing.T) {
 	r := chi.NewRouter()
 	r.Use(
 		Recorder,
-		CellAttribution(func(_ string, path string) (string, bool) {
+		CellAttribution(func(_, path string) (string, bool) {
 			if path != "" {
 				return "test-cell", true
 			}
@@ -255,7 +255,7 @@ func TestMetrics_ChiNestedRoutes(t *testing.T) {
 	r := chi.NewRouter()
 	r.Use(
 		Recorder,
-		CellAttribution(func(_ string, path string) (string, bool) {
+		CellAttribution(func(_, path string) (string, bool) {
 			if path != "" {
 				return "test-cell", true
 			}

@@ -259,7 +259,21 @@ func (c *AuditCore) Init(ctx context.Context, reg cell.Registry) error {
 		},
 	})
 
-	// Register event subscriptions.
+	if err := c.registerAuditAppendSubscriptions(reg); err != nil {
+		return err
+	}
+
+	// Register health probes (emitter fail-open rate checker).
+	if hc, ok := c.emitter.(cell.HealthProber); ok {
+		for k, v := range hc.Probes() {
+			reg.Health(k, v)
+		}
+	}
+
+	return nil
+}
+
+func (c *AuditCore) registerAuditAppendSubscriptions(reg cell.Registry) error {
 	handler := c.appendSvc.HandleEvent
 	for _, topic := range auditappend.Topics {
 		spec, ok := auditAppendSpecs[topic]
@@ -272,14 +286,6 @@ func (c *AuditCore) Init(ctx context.Context, reg cell.Registry) error {
 			return fmt.Errorf("auditcore: subscribe %s: %w", topic, err)
 		}
 	}
-
-	// Register health probes (emitter fail-open rate checker).
-	if hc, ok := c.emitter.(cell.HealthProber); ok {
-		for k, v := range hc.Probes() {
-			reg.Health(k, v)
-		}
-	}
-
 	return nil
 }
 

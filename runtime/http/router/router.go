@@ -1016,7 +1016,7 @@ func (r *Router) resolveHTTPContractAttrs(method, urlPath string) ([]wrapper.Att
 	return nil, false
 }
 
-func (r *Router) resolveCellID(_ string, urlPath string) (string, bool) {
+func (r *Router) resolveCellID(_, urlPath string) (string, bool) {
 	urlPath = cleanRoutePath(urlPath)
 	bestCell := ""
 	var bestScore routeMatchRank
