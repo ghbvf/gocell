@@ -114,36 +114,37 @@ func checkExportTags(t *testing.T, typ reflect.Type, path string) {
 	}
 	for i := range typ.NumField() {
 		f := typ.Field(i)
-		if !f.IsExported() {
-			continue
+		if f.IsExported() {
+			checkExportTag(t, f, path+"."+f.Name)
 		}
-		fieldPath := path + "." + f.Name
-		jsonTag, hasJSON := f.Tag.Lookup("json")
-		yamlTag, hasYAML := f.Tag.Lookup("yaml")
+	}
+}
 
-		if !hasJSON || !hasYAML {
-			t.Errorf("field %s missing json or yaml tag (json=%v, yaml=%v)", fieldPath, hasJSON, hasYAML)
-			continue
-		}
+// checkExportTag validates a single struct field's json/yaml tag pair.
+// Extracted from checkExportTags to keep cognitive complexity below the
+// project ceiling.
+func checkExportTag(t *testing.T, f reflect.StructField, fieldPath string) {
+	t.Helper()
+	jsonTag, hasJSON := f.Tag.Lookup("json")
+	yamlTag, hasYAML := f.Tag.Lookup("yaml")
 
-		jsonName := strings.Split(jsonTag, ",")[0]
-		yamlName := strings.Split(yamlTag, ",")[0]
+	if !hasJSON || !hasYAML {
+		t.Errorf("field %s missing json or yaml tag (json=%v, yaml=%v)", fieldPath, hasJSON, hasYAML)
+		return
+	}
 
-		if jsonName == "-" || yamlName == "-" {
-			continue
-		}
-		if jsonName == "" || yamlName == "" {
-			continue
-		}
+	jsonName := strings.Split(jsonTag, ",")[0]
+	yamlName := strings.Split(yamlTag, ",")[0]
 
-		// json tag must start with lowercase
-		if len(jsonName) > 0 && jsonName[0] >= 'A' && jsonName[0] <= 'Z' {
-			t.Errorf("field %s json tag %q starts with uppercase", fieldPath, jsonName)
-		}
-		// json and yaml tag names must match
-		if jsonName != yamlName {
-			t.Errorf("field %s json tag %q != yaml tag %q", fieldPath, jsonName, yamlName)
-		}
+	if jsonName == "-" || yamlName == "-" || jsonName == "" || yamlName == "" {
+		return
+	}
+
+	if jsonName[0] >= 'A' && jsonName[0] <= 'Z' {
+		t.Errorf("field %s json tag %q starts with uppercase", fieldPath, jsonName)
+	}
+	if jsonName != yamlName {
+		t.Errorf("field %s json tag %q != yaml tag %q", fieldPath, jsonName, yamlName)
 	}
 }
 

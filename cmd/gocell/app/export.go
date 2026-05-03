@@ -16,6 +16,10 @@ import (
 	"github.com/ghbvf/gocell/tools/depgraph"
 )
 
+// errExportPrefix wraps validation errors surfaced by `gocell export <sub>`
+// with a stable prefix so users can grep operator output by command.
+const errExportPrefix = "export: %w"
+
 // validKinds is the set of accepted --kinds= tokens.
 // References catalog.AllKinds — single source of truth.
 var validKinds = catalog.AllKinds
@@ -168,12 +172,12 @@ func loadProjectMeta(root string) (*metadata.ProjectMeta, error) {
 func buildFilter(kinds, layers, cells, include string) (catalog.Filter, error) {
 	parsedKinds, err := csvparam.ParseAllowed(kinds, validKinds, "kinds")
 	if err != nil {
-		return catalog.Filter{}, fmt.Errorf("export: %w", err)
+		return catalog.Filter{}, fmt.Errorf(errExportPrefix, err)
 	}
 
 	parsedLayers, err := csvparam.ParseAllowed(layers, validLayersList, "layers")
 	if err != nil {
-		return catalog.Filter{}, fmt.Errorf("export: %w", err)
+		return catalog.Filter{}, fmt.Errorf(errExportPrefix, err)
 	}
 	parsedCells := csvparam.Parse(cells)
 
@@ -195,7 +199,7 @@ func buildFilter(kinds, layers, cells, include string) (catalog.Filter, error) {
 func parseInclude(s string) (catalog.IncludeOptions, error) {
 	tokens, err := csvparam.ParseAllowed(s, catalog.AllIncludeTokens, "include")
 	if err != nil {
-		return catalog.IncludeOptions{}, fmt.Errorf("export: %w", err)
+		return catalog.IncludeOptions{}, fmt.Errorf(errExportPrefix, err)
 	}
 	return catalog.ParseIncludeTokens(tokens)
 }

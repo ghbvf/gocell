@@ -384,40 +384,48 @@ func TestBuildDocument_IncludeOptions(t *testing.T) {
 			}
 			doc, err := catalog.BuildDocument(pm, opts)
 			require.NoError(t, err)
-
-			hasRelations := false
-			for _, e := range doc.Entities {
-				if len(e.Relations) > 0 {
-					hasRelations = true
-					break
-				}
-			}
-			if tc.wantRelations {
-				assert.True(t, hasRelations, "expected relations to be present")
-			} else {
-				assert.False(t, hasRelations, "expected relations to be absent")
-			}
-
-			if tc.wantStatus {
-				assert.NotEmpty(t, doc.StatusBoard, "expected statusBoard to be present")
-			} else {
-				assert.Empty(t, doc.StatusBoard, "expected statusBoard to be absent")
-			}
-
-			if tc.wantCellDeps {
-				require.NotNil(t, doc.Dependencies, "expected Dependencies block")
-				assert.NotNil(t, doc.Dependencies.Cells, "expected Dependencies.Cells")
-			} else if doc.Dependencies != nil {
-				assert.Nil(t, doc.Dependencies.Cells, "expected Dependencies.Cells to be absent")
-			}
-
-			if tc.wantPkgDeps {
-				require.NotNil(t, doc.Dependencies, "expected Dependencies block")
-				assert.NotNil(t, doc.Dependencies.Packages, "expected Dependencies.Packages")
-			} else if doc.Dependencies != nil {
-				assert.Nil(t, doc.Dependencies.Packages, "expected Dependencies.Packages to be absent")
-			}
+			assertIncludeFlags(t, doc, tc.wantRelations, tc.wantStatus, tc.wantCellDeps, tc.wantPkgDeps)
 		})
+	}
+}
+
+// assertIncludeFlags verifies presence/absence of the four optional document
+// blocks driven by IncludeOptions. Extracted from TestBuildDocument_IncludeOptions
+// to keep the loop body's cognitive complexity below the project ceiling.
+func assertIncludeFlags(t *testing.T, doc catalog.Document, wantRelations, wantStatus, wantCellDeps, wantPkgDeps bool) {
+	t.Helper()
+
+	hasRelations := false
+	for _, e := range doc.Entities {
+		if len(e.Relations) > 0 {
+			hasRelations = true
+			break
+		}
+	}
+	assert.Equal(t, wantRelations, hasRelations, "relations presence mismatch")
+
+	if wantStatus {
+		assert.NotEmpty(t, doc.StatusBoard, "expected statusBoard to be present")
+	} else {
+		assert.Empty(t, doc.StatusBoard, "expected statusBoard to be absent")
+	}
+
+	assertDepBlock(t, doc, wantCellDeps, func(d *catalog.Dependencies) any { return d.Cells }, "Dependencies.Cells")
+	assertDepBlock(t, doc, wantPkgDeps, func(d *catalog.Dependencies) any { return d.Packages }, "Dependencies.Packages")
+}
+
+// assertDepBlock checks a single sub-block of doc.Dependencies, picked by
+// `pick`. When `want` is true the sub-block must be non-nil; otherwise it
+// must be nil (or the parent Dependencies may be absent entirely).
+func assertDepBlock(t *testing.T, doc catalog.Document, want bool, pick func(*catalog.Dependencies) any, label string) {
+	t.Helper()
+	if want {
+		require.NotNil(t, doc.Dependencies, "expected Dependencies block for %s", label)
+		assert.NotNil(t, pick(doc.Dependencies), "expected %s", label)
+		return
+	}
+	if doc.Dependencies != nil {
+		assert.Nil(t, pick(doc.Dependencies), "expected %s to be absent", label)
 	}
 }
 
