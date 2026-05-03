@@ -9,7 +9,6 @@ package eventbus
 
 import (
 	"context"
-	"errors"
 	"log/slog"
 
 	// nosemgrep: go.lang.security.audit.crypto.math_random.math-random-used // non-crypto retry jitter; gosec G404 already silenced at usage sites
@@ -481,24 +480,16 @@ func (b *InMemoryEventBus) processResult(
 	}
 }
 
-// handleRequeue processes DispositionRequeue: upgrades to dead letter on
-// PermanentError, otherwise schedules retry with backoff.
+// handleRequeue processes DispositionRequeue: schedule retry with backoff.
+// PermanentError 不再短路 — 与 ConsumerBase 029 #03 ADR Decision 4 对齐：
+// PermanentError 仅作分类标签（用于 logging/metrics），handler 必须显式返回
+// DispositionReject 才会立刻路由 DLX；Requeue 一律走 retry budget，预算耗尽
+// 后落到 handleWithRetry 的 retries-exhausted DLX 路径。
 func (b *InMemoryEventBus) handleRequeue(
 	ctx context.Context, topic string, entry outbox.Entry, res outbox.HandleResult, attempt int,
 ) (done bool, lastErr error) {
 	if res.Receipt != nil {
 		releaseReceipt(ctx, res.Receipt, topic, entry.ID)
-	}
-	var permErr *outbox.PermanentError
-	if res.Err != nil && errors.As(res.Err, &permErr) {
-		slog.Warn("eventbus: permanent error in requeue, routing to dead letter",
-			slog.String("topic", topic),
-			slog.String("entry_id", entry.ID),
-			slog.Any("error", res.Err),
-		)
-		b.appendDeadLetter(topic, entry, res.Err)
-		outbox.NotifySettlement(ctx, res, entry, outbox.DispositionReject, outbox.SettlementResultSuccess, nil)
-		return true, nil
 	}
 	delay := retryDelay(attempt)
 	slog.Warn("eventbus: handler requested requeue, retrying",

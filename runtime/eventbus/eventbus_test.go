@@ -304,7 +304,12 @@ func TestSubscribe_RejectGoesDirectlyToDeadLetter(t *testing.T) {
 	<-done
 }
 
-func TestSubscribe_PermanentErrorInRequeue_RoutesToDeadLetter(t *testing.T) {
+// TestSubscribe_PermanentErrorInRequeue_WalksRetryBudget asserts that
+// PermanentError tagged on a Requeue result does NOT short-circuit to DLX
+// (regression guard for 029 #03 ADR Decision 4). The handler is invoked
+// maxRetries times; final DLX entry preserves the PermanentError wrap so
+// downstream metrics can still classify it.
+func TestSubscribe_PermanentErrorInRequeue_WalksRetryBudget(t *testing.T) {
 	bus := New(WithClock(clock.Real()), WithBufferSize(16))
 	defer func() { _ = bus.Close(context.Background()) }()
 
@@ -315,8 +320,6 @@ func TestSubscribe_PermanentErrorInRequeue_RoutesToDeadLetter(t *testing.T) {
 	go func() {
 		done <- bus.Subscribe(ctx, outbox.Subscription{Topic: "perm.requeue"}, func(_ context.Context, e outbox.Entry) outbox.HandleResult {
 			attempts.Add(1)
-			// Return Requeue with PermanentError — eventbus should detect
-			// the PermanentError and route directly to dead letter.
 			return outbox.HandleResult{
 				Disposition: outbox.DispositionRequeue,
 				Err:         outbox.NewPermanentError(errors.New("unmarshal failed")),
@@ -329,19 +332,19 @@ func TestSubscribe_PermanentErrorInRequeue_RoutesToDeadLetter(t *testing.T) {
 	err := bus.Publish(context.Background(), "perm.requeue", makeSimpleEnvelope(t, "perm.requeue"))
 	require.NoError(t, err)
 
-	// Should go directly to dead letter on first attempt (no retries).
 	assert.Eventually(t, func() bool {
 		return bus.DeadLetterLen() == 1
-	}, testtime.EventuallyShort, testtime.MediumPoll)
+	}, busEventually10x, testtime.MediumPoll)
 
-	assert.Equal(t, int32(1), attempts.Load(),
-		"PermanentError in Requeue must not trigger retries")
+	assert.Equal(t, int32(maxRetries), attempts.Load(),
+		"PermanentError on Requeue must walk full retry budget (no short-circuit)")
 
 	dl := bus.DrainDeadLetters()
 	require.Len(t, dl, 1)
 
 	var permErr *outbox.PermanentError
-	assert.True(t, errors.As(dl[0].LastErr, &permErr))
+	assert.True(t, errors.As(dl[0].LastErr, &permErr),
+		"PermanentError classification must survive retry-exhausted DLX path")
 
 	cancel()
 	<-done
