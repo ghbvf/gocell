@@ -13,9 +13,9 @@ import (
 // EmitterConfig bundles the inputs needed to resolve an outbox.Emitter
 // for a Cell according to DurabilityMode rules.
 //
-// Callers should pre-apply persistence.RunnerOrNoop(txRunner) before passing
-// when they want a unified code path; ResolveEmitter itself accepts nil TxRunner
-// and treats it as absent (no pairing with a real writer is possible).
+// ResolveEmitter accepts nil TxRunner and treats it as absent (no pairing with
+// a real writer is possible). Callers in Durable mode must inject a real
+// TxRunner explicitly; Demo mode tolerates nil and any Nooper implementation.
 //
 // MetricsProvider is required for DirectEmitter resolution paths. Pass
 // metrics.NopProvider{} explicitly in tests.
