@@ -61,6 +61,27 @@ func HandleFoo(ctx interface{}, entry interface{}) outbox.HandleResult {
 	}
 }
 
+// TestHandlerReceiptWrite_DetectsFuncLitViolation guards the gap from PR-358
+// review: an inline anonymous handler (e.g. literal passed to reg.Subscribe)
+// must also be flagged. Without FuncLit walking, a function literal returning
+// outbox.HandleResult could write the Receipt field undetected.
+func TestHandlerReceiptWrite_DetectsFuncLitViolation(t *testing.T) {
+	src := `package x
+import "github.com/ghbvf/gocell/kernel/outbox"
+func Register() {
+	_ = func(ctx interface{}, entry interface{}) outbox.HandleResult {
+		return outbox.HandleResult{Receipt: nil}
+	}
+}`
+	vs, err := hrCheckSource("<fixture-funclit>", src)
+	if err != nil {
+		t.Fatalf("hrCheckSource: %v", err)
+	}
+	if len(vs) == 0 {
+		t.Error("HANDLER-RECEIPT-WRITE-01 detector did not flag inline FuncLit Receipt write")
+	}
+}
+
 // hrCheckFile parses a single file and returns HANDLER-RECEIPT-WRITE-01 violations.
 func hrCheckFile(path, rel string) ([]string, error) {
 	fset := token.NewFileSet()
@@ -83,14 +104,14 @@ func hrCheckSource(label, src string) ([]string, error) {
 }
 
 // hrCheckAST walks a parsed AST file and emits HANDLER-RECEIPT-WRITE-01
-// violations for any function that:
+// violations for any function — FuncDecl OR FuncLit (anonymous functions
+// passed inline to e.g. reg.Subscribe) — that:
 //
 //  1. Has a return type matching outbox.HandleResult (SelectorExpr or bare
 //     Ident "HandleResult"), and
 //  2. In its body contains either:
 //     (a) a CompositeLit of type HandleResult with a "Receipt" key-value field, or
-//     (b) an assignment whose LHS is a SelectorExpr whose Sel.Name == "Receipt"
-//     on an expression that was previously assigned a HandleResult value.
+//     (b) an assignment whose LHS is a SelectorExpr whose Sel.Name == "Receipt".
 //
 // Because AST-only analysis has no type information, the detector uses naming
 // heuristics: it flags SelectorExpr.Sel.Name == "Receipt" on any selector that
@@ -100,41 +121,58 @@ func hrCheckAST(fset *token.FileSet, f *ast.File, label string) []string {
 	var violations []string
 
 	ast.Inspect(f, func(n ast.Node) bool {
-		fn, ok := n.(*ast.FuncDecl)
-		if !ok || fn.Body == nil {
+		var funcType *ast.FuncType
+		var body *ast.BlockStmt
+		switch fn := n.(type) {
+		case *ast.FuncDecl:
+			funcType, body = fn.Type, fn.Body
+		case *ast.FuncLit:
+			funcType, body = fn.Type, fn.Body
+		default:
 			return true
 		}
-		if !hrReturnsHandleResult(fn) {
+		if body == nil || !hrFuncTypeReturnsHandleResult(funcType) {
 			return true
 		}
-		// Walk the function body for Receipt writes.
-		ast.Inspect(fn.Body, func(inner ast.Node) bool {
-			switch node := inner.(type) {
-			case *ast.CompositeLit:
-				if hrIsHandleResultType(node.Type) {
-					for _, elt := range node.Elts {
-						kv, ok := elt.(*ast.KeyValueExpr)
-						if !ok {
-							continue
-						}
-						key, ok := kv.Key.(*ast.Ident)
-						if ok && key.Name == "Receipt" {
-							pos := fset.Position(node.Pos())
-							violations = append(violations, hrViolation(label, pos.Line))
-						}
+		violations = append(violations, hrInspectBodyForReceiptWrites(fset, body, label)...)
+		return true
+	})
+	return violations
+}
+
+// hrInspectBodyForReceiptWrites walks a function body and returns
+// HANDLER-RECEIPT-WRITE-01 violations. It does NOT descend into nested
+// function literals — those are inspected independently by the outer
+// ast.Inspect walk in hrCheckAST, so double-counting is avoided.
+func hrInspectBodyForReceiptWrites(fset *token.FileSet, body *ast.BlockStmt, label string) []string {
+	var violations []string
+	ast.Inspect(body, func(inner ast.Node) bool {
+		switch node := inner.(type) {
+		case *ast.FuncLit:
+			return false // independent walk handles nested handler literals
+		case *ast.CompositeLit:
+			if hrIsHandleResultType(node.Type) {
+				for _, elt := range node.Elts {
+					kv, ok := elt.(*ast.KeyValueExpr)
+					if !ok {
+						continue
 					}
-				}
-			case *ast.AssignStmt:
-				for _, lhs := range node.Lhs {
-					sel, ok := lhs.(*ast.SelectorExpr)
-					if ok && sel.Sel.Name == "Receipt" {
+					key, ok := kv.Key.(*ast.Ident)
+					if ok && key.Name == "Receipt" {
 						pos := fset.Position(node.Pos())
 						violations = append(violations, hrViolation(label, pos.Line))
 					}
 				}
 			}
-			return true
-		})
+		case *ast.AssignStmt:
+			for _, lhs := range node.Lhs {
+				sel, ok := lhs.(*ast.SelectorExpr)
+				if ok && sel.Sel.Name == "Receipt" {
+					pos := fset.Position(node.Pos())
+					violations = append(violations, hrViolation(label, pos.Line))
+				}
+			}
+		}
 		return true
 	})
 	return violations
@@ -147,14 +185,15 @@ func hrViolation(file string, line int) string {
 		" the field is reserved for ConsumerBase → Subscriber-delivery-loop hand-off (see ADR Q1, K#12)"
 }
 
-// hrReturnsHandleResult reports whether fn's result list includes a type
-// expression matching outbox.HandleResult (via SelectorExpr) or bare "HandleResult"
-// (via Ident). Methods and standalone functions are both checked.
-func hrReturnsHandleResult(fn *ast.FuncDecl) bool {
-	if fn.Type == nil || fn.Type.Results == nil {
+// hrFuncTypeReturnsHandleResult reports whether ft's result list includes
+// a type expression matching outbox.HandleResult (via SelectorExpr) or bare
+// "HandleResult" (via Ident). Works for both *ast.FuncDecl.Type and
+// *ast.FuncLit.Type.
+func hrFuncTypeReturnsHandleResult(ft *ast.FuncType) bool {
+	if ft == nil || ft.Results == nil {
 		return false
 	}
-	for _, field := range fn.Type.Results.List {
+	for _, field := range ft.Results.List {
 		if hrIsHandleResultType(field.Type) {
 			return true
 		}
