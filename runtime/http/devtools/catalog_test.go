@@ -1,46 +1,28 @@
 package devtools_test
 
 import (
-	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/ghbvf/gocell/kernel/clock"
+	kerneldepgraph "github.com/ghbvf/gocell/kernel/depgraph"
 	"github.com/ghbvf/gocell/kernel/metadata"
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/http/devtools"
 )
 
-const (
-	catalogTestPollTimeout  = 5 * time.Second
-	catalogTestPollInterval = 5 * time.Millisecond
-)
-
-// stubLoader returns a PackageDepLoader whose View immediately becomes the
-// given fixed value.
-func stubLoader(t *testing.T, view *metadata.PackageDepsView) *devtools.PackageDepLoader {
-	t.Helper()
-	loader := devtools.NewPackageDepLoader(
-		context.Background(),
-		"/stub-root",
-		clock.Real(),
-		devtools.LoadFunc(func(_ context.Context, _ string) *metadata.PackageDepsView {
-			return view
-		}),
-	)
-	t.Cleanup(func() {
-		if err := loader.Close(); err != nil {
-			t.Errorf("stubLoader.Close: %v", err)
-		}
+// minimalPkgGraph returns a small *kerneldepgraph.Graph for use in tests.
+func minimalPkgGraph() *kerneldepgraph.Graph {
+	return kerneldepgraph.FromNodes("github.com/ghbvf/gocell", []*kerneldepgraph.Node{
+		{ID: "github.com/ghbvf/gocell/kernel/cell", Layer: "kernel", Imports: []string{}},
 	})
-	return loader
 }
 
-// buildTestHandler constructs a Handler with synthetic ProjectMeta data.
+// buildTestHandler constructs a Handler with synthetic ProjectMeta data and a
+// non-nil pkgGraph (build-time path, always ready).
 func buildTestHandler(t *testing.T) *devtools.Handler {
 	t.Helper()
 	project := &metadata.ProjectMeta{
@@ -65,8 +47,7 @@ func buildTestHandler(t *testing.T) *devtools.Handler {
 		Nodes: []string{"accesscore"},
 		Edges: []metadata.CellEdge{},
 	}
-	loader := stubLoader(t, &metadata.PackageDepsView{Status: "ready"})
-	return devtools.NewHandler(project, cellGraph, loader, "/test-root", clock.Real())
+	return devtools.NewHandler(project, cellGraph, minimalPkgGraph(), "/test-root", clock.Real())
 }
 
 // doAdminRequest fires a GET request with an admin auth context.
@@ -102,7 +83,7 @@ func TestCatalog_Default_AdminGetsFullSnapshot(t *testing.T) {
 	t.Parallel()
 
 	h := buildTestHandler(t)
-	rr := doAdminRequest(t, h, "/api/v1/devtools/catalog")
+	rr := doAdminRequest(t, h, "/devtools/catalog")
 
 	if rr.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d: %s", rr.Code, rr.Body.String())
@@ -128,23 +109,20 @@ func TestCatalog_Default_AdminGetsFullSnapshot(t *testing.T) {
 // router middleware — not by the handler itself. When the handler is invoked
 // directly via httptest (bypassing the router), non-admin and unauthenticated
 // requests are not rejected at the handler level.
-//
-// End-to-end 401/403 enforcement is covered by bootstrap integration tests
-// that exercise the full listener auth chain + router Policy pipeline.
 func TestCatalog_Policy_EnforcedByRouter_NotByHandler(t *testing.T) {
 	t.Parallel()
 
 	h := buildTestHandler(t)
 
 	// Non-admin user — handler does not enforce Policy directly; router does.
-	rrNonAdmin := doUserRequest(t, h, "/api/v1/devtools/catalog")
+	rrNonAdmin := doUserRequest(t, h, "/devtools/catalog")
 	if rrNonAdmin.Code != http.StatusOK {
 		t.Errorf("expected handler to pass through non-admin (policy enforced by router), got %d: %s",
 			rrNonAdmin.Code, rrNonAdmin.Body.String())
 	}
 
 	// No subject at all — same; handler passes through without enforcing Policy.
-	rrAnon := doAnonRequest(t, h, "/api/v1/devtools/catalog")
+	rrAnon := doAnonRequest(t, h, "/devtools/catalog")
 	if rrAnon.Code != http.StatusOK {
 		t.Errorf("expected handler to pass through unauthenticated (policy enforced by router), got %d: %s",
 			rrAnon.Code, rrAnon.Body.String())
@@ -155,7 +133,7 @@ func TestCatalog_FilterKinds(t *testing.T) {
 	t.Parallel()
 
 	h := buildTestHandler(t)
-	rr := doAdminRequest(t, h, "/api/v1/devtools/catalog?kinds=Cell,Contract")
+	rr := doAdminRequest(t, h, "/devtools/catalog?kinds=Cell,Contract")
 
 	if rr.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d: %s", rr.Code, rr.Body.String())
@@ -175,7 +153,7 @@ func TestCatalog_FilterLayers(t *testing.T) {
 	t.Parallel()
 
 	h := buildTestHandler(t)
-	rr := doAdminRequest(t, h, "/api/v1/devtools/catalog?layers=cells")
+	rr := doAdminRequest(t, h, "/devtools/catalog?layers=cells")
 
 	if rr.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d: %s", rr.Code, rr.Body.String())
@@ -186,7 +164,7 @@ func TestCatalog_CellsFocus(t *testing.T) {
 	t.Parallel()
 
 	h := buildTestHandler(t)
-	rr := doAdminRequest(t, h, "/api/v1/devtools/catalog?cells=accesscore")
+	rr := doAdminRequest(t, h, "/devtools/catalog?cells=accesscore")
 
 	if rr.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d: %s", rr.Code, rr.Body.String())
@@ -197,7 +175,7 @@ func TestCatalog_IncludeMask_OnlyRelations(t *testing.T) {
 	t.Parallel()
 
 	h := buildTestHandler(t)
-	rr := doAdminRequest(t, h, "/api/v1/devtools/catalog?include=relations")
+	rr := doAdminRequest(t, h, "/devtools/catalog?include=relations")
 
 	if rr.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d: %s", rr.Code, rr.Body.String())
@@ -224,7 +202,7 @@ func TestCatalog_IncludeMask_NoFlags_DefaultsAll(t *testing.T) {
 	t.Parallel()
 
 	h := buildTestHandler(t)
-	rr := doAdminRequest(t, h, "/api/v1/devtools/catalog")
+	rr := doAdminRequest(t, h, "/devtools/catalog")
 
 	if rr.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d: %s", rr.Code, rr.Body.String())
@@ -242,7 +220,7 @@ func TestCatalog_FormatYAML(t *testing.T) {
 	t.Parallel()
 
 	h := buildTestHandler(t)
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/devtools/catalog?format=yaml", nil)
+	req := httptest.NewRequest(http.MethodGet, "/devtools/catalog?format=yaml", nil)
 	req = req.WithContext(auth.TestContext("admin-user", []string{"admin"}))
 	rr := httptest.NewRecorder()
 	h.ServeHTTP(rr, req)
@@ -260,7 +238,7 @@ func TestCatalog_BadKind(t *testing.T) {
 	t.Parallel()
 
 	h := buildTestHandler(t)
-	rr := doAdminRequest(t, h, "/api/v1/devtools/catalog?kinds=Frobnicator")
+	rr := doAdminRequest(t, h, "/devtools/catalog?kinds=Frobnicator")
 
 	if rr.Code != http.StatusBadRequest {
 		t.Errorf("expected 400 for unknown kind, got %d: %s", rr.Code, rr.Body.String())
@@ -272,7 +250,7 @@ func TestCatalog_BadLayer(t *testing.T) {
 	t.Parallel()
 
 	h := buildTestHandler(t)
-	rr := doAdminRequest(t, h, "/api/v1/devtools/catalog?layers=nonexistent_layer")
+	rr := doAdminRequest(t, h, "/devtools/catalog?layers=nonexistent_layer")
 
 	if rr.Code != http.StatusBadRequest {
 		t.Errorf("expected 400 for unknown layer, got %d: %s", rr.Code, rr.Body.String())
@@ -284,7 +262,7 @@ func TestCatalog_BadInclude(t *testing.T) {
 	t.Parallel()
 
 	h := buildTestHandler(t)
-	rr := doAdminRequest(t, h, "/api/v1/devtools/catalog?include=unknownFlag")
+	rr := doAdminRequest(t, h, "/devtools/catalog?include=unknownFlag")
 
 	if rr.Code != http.StatusBadRequest {
 		t.Errorf("expected 400 for unknown include flag, got %d: %s", rr.Code, rr.Body.String())
@@ -310,23 +288,10 @@ func assertErrValidation(t *testing.T, rr *httptest.ResponseRecorder) {
 	}
 }
 
-func TestCatalog_PackageDepsLoading(t *testing.T) {
+// TestCatalog_PackageDeps_NilGraph verifies that when pkgGraph is nil, the
+// packageDeps block is absent from the response (build-time graph not generated).
+func TestCatalog_PackageDeps_NilGraph(t *testing.T) {
 	t.Parallel()
-
-	// Create a loader that stays in "loading" state.
-	ready := make(chan struct{})
-	loader := devtools.NewPackageDepLoader(
-		context.Background(),
-		"/stub-root",
-		clock.Real(),
-		slowLoadFunc(ready, &metadata.PackageDepsView{Status: "ready"}),
-	)
-	t.Cleanup(func() {
-		close(ready)
-		if err := loader.Close(); err != nil {
-			t.Errorf("loader.Close: %v", err)
-		}
-	})
 
 	project := &metadata.ProjectMeta{
 		Cells:      map[string]*metadata.CellMeta{},
@@ -336,9 +301,38 @@ func TestCatalog_PackageDepsLoading(t *testing.T) {
 		Assemblies: map[string]*metadata.AssemblyMeta{},
 		Actors:     []metadata.ActorMeta{},
 	}
-	h := devtools.NewHandler(project, nil, loader, "/root", clock.Real())
+	// nil pkgGraph — packageDeps block must be absent.
+	h := devtools.NewHandler(project, nil, nil, "/root", clock.Real())
 
-	rr := doAdminRequest(t, h, "/api/v1/devtools/catalog")
+	rr := doAdminRequest(t, h, "/devtools/catalog")
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rr.Code)
+	}
+	var doc metadata.Document
+	if err := json.Unmarshal(rr.Body.Bytes(), &doc); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if doc.Dependencies != nil && doc.Dependencies.Packages != nil {
+		t.Error("expected packageDeps block absent when pkgGraph is nil")
+	}
+}
+
+// TestCatalog_PackageDeps_NonNilGraph verifies that when pkgGraph is non-nil,
+// the packageDeps block is present with status=ready.
+func TestCatalog_PackageDeps_NonNilGraph(t *testing.T) {
+	t.Parallel()
+
+	project := &metadata.ProjectMeta{
+		Cells:      map[string]*metadata.CellMeta{},
+		Slices:     map[string]*metadata.SliceMeta{},
+		Contracts:  map[string]*metadata.ContractMeta{},
+		Journeys:   map[string]*metadata.JourneyMeta{},
+		Assemblies: map[string]*metadata.AssemblyMeta{},
+		Actors:     []metadata.ActorMeta{},
+	}
+	h := devtools.NewHandler(project, nil, minimalPkgGraph(), "/root", clock.Real())
+
+	rr := doAdminRequest(t, h, "/devtools/catalog")
 	if rr.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d", rr.Code)
 	}
@@ -347,10 +341,10 @@ func TestCatalog_PackageDepsLoading(t *testing.T) {
 		t.Fatalf("unmarshal: %v", err)
 	}
 	if doc.Dependencies == nil || doc.Dependencies.Packages == nil {
-		t.Fatal("expected Dependencies.Packages in response")
+		t.Fatal("expected Dependencies.Packages block when pkgGraph is non-nil")
 	}
-	if doc.Dependencies.Packages.Status != "loading" {
-		t.Errorf("packages status = %q, want loading", doc.Dependencies.Packages.Status)
+	if doc.Dependencies.Packages.Status != "ready" {
+		t.Errorf("packages status = %q, want ready", doc.Dependencies.Packages.Status)
 	}
 }
 
@@ -360,7 +354,7 @@ func TestCatalog_IncludeAbsent_DefaultsAll(t *testing.T) {
 	t.Parallel()
 
 	h := buildTestHandler(t)
-	rr := doAdminRequest(t, h, "/api/v1/devtools/catalog")
+	rr := doAdminRequest(t, h, "/devtools/catalog")
 
 	if rr.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d: %s", rr.Code, rr.Body.String())
@@ -380,7 +374,7 @@ func TestCatalog_IncludeExplicitEmpty_ZeroBlocks(t *testing.T) {
 	t.Parallel()
 
 	h := buildTestHandler(t)
-	rr := doAdminRequest(t, h, "/api/v1/devtools/catalog?include=")
+	rr := doAdminRequest(t, h, "/devtools/catalog?include=")
 
 	if rr.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d: %s", rr.Code, rr.Body.String())
@@ -402,7 +396,7 @@ func TestCatalog_FormatXML_BadRequest(t *testing.T) {
 	t.Parallel()
 
 	h := buildTestHandler(t)
-	rr := doAdminRequest(t, h, "/api/v1/devtools/catalog?format=xml")
+	rr := doAdminRequest(t, h, "/devtools/catalog?format=xml")
 
 	if rr.Code != http.StatusBadRequest {
 		t.Errorf("expected 400 for unknown format, got %d: %s", rr.Code, rr.Body.String())
@@ -419,7 +413,7 @@ func TestCatalog_Root_RelativePath(t *testing.T) {
 	t.Parallel()
 
 	h := buildTestHandler(t)
-	rr := doAdminRequest(t, h, "/api/v1/devtools/catalog?include=")
+	rr := doAdminRequest(t, h, "/devtools/catalog?include=")
 
 	if rr.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d: %s", rr.Code, rr.Body.String())
@@ -430,45 +424,5 @@ func TestCatalog_Root_RelativePath(t *testing.T) {
 	}
 	if doc.Root != "." {
 		t.Errorf("doc.Root = %q, want \".\" (HTTP must not expose absolute paths)", doc.Root)
-	}
-}
-
-func TestCatalog_PackageDepsReady(t *testing.T) {
-	t.Parallel()
-
-	loader := stubLoader(t, &metadata.PackageDepsView{Status: "ready"})
-
-	// Wait for loader to reach ready state.
-	deadline := time.Now().Add(catalogTestPollTimeout)
-	for time.Now().Before(deadline) {
-		if loader.View().Status == "ready" {
-			break
-		}
-		time.Sleep(catalogTestPollInterval) //archtest:allow:test-sleep poll loop waiting for stub loader goroutine to publish initial view
-	}
-
-	project := &metadata.ProjectMeta{
-		Cells:      map[string]*metadata.CellMeta{},
-		Slices:     map[string]*metadata.SliceMeta{},
-		Contracts:  map[string]*metadata.ContractMeta{},
-		Journeys:   map[string]*metadata.JourneyMeta{},
-		Assemblies: map[string]*metadata.AssemblyMeta{},
-		Actors:     []metadata.ActorMeta{},
-	}
-	h := devtools.NewHandler(project, nil, loader, "/root", clock.Real())
-
-	rr := doAdminRequest(t, h, "/api/v1/devtools/catalog")
-	if rr.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d", rr.Code)
-	}
-	var doc metadata.Document
-	if err := json.Unmarshal(rr.Body.Bytes(), &doc); err != nil {
-		t.Fatalf("unmarshal: %v", err)
-	}
-	if doc.Dependencies == nil || doc.Dependencies.Packages == nil {
-		t.Fatal("expected Dependencies.Packages in response")
-	}
-	if doc.Dependencies.Packages.Status != "ready" {
-		t.Errorf("packages status = %q, want ready", doc.Dependencies.Packages.Status)
 	}
 }

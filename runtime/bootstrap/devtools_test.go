@@ -9,6 +9,7 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/clock"
+	kerneldepgraph "github.com/ghbvf/gocell/kernel/depgraph"
 	"github.com/ghbvf/gocell/kernel/metadata"
 	"github.com/ghbvf/gocell/runtime/http/devtools"
 	"github.com/ghbvf/gocell/runtime/http/router"
@@ -31,9 +32,16 @@ func minimalProjectMeta(cellID string) *metadata.ProjectMeta {
 	}
 }
 
+// minimalPkgGraph returns a minimal *kerneldepgraph.Graph for use in tests.
+func minimalPkgGraph() *kerneldepgraph.Graph {
+	return kerneldepgraph.FromNodes("github.com/ghbvf/gocell", []*kerneldepgraph.Node{
+		{ID: "github.com/ghbvf/gocell/kernel/cell", Layer: "kernel", Imports: []string{}},
+	})
+}
+
 // TestPhase5InitDevtoolsHandler_NilMeta verifies that when b.devtoolsMeta is nil
-// (WithDevtoolsCatalog not called, or called with nil pm), the handler and
-// loader fields remain nil — endpoint silently absent, no panic.
+// (WithDevtoolsCatalog not called, or called with nil pm), the handler field
+// remains nil — endpoint silently absent, no panic.
 func TestPhase5InitDevtoolsHandler_NilMeta(t *testing.T) {
 	t.Parallel()
 	b := New(WithClock(clock.Real()))
@@ -44,11 +52,10 @@ func TestPhase5InitDevtoolsHandler_NilMeta(t *testing.T) {
 
 	require.NoError(t, err)
 	assert.Nil(t, s.devtoolsHandler)
-	assert.Nil(t, s.devtoolsLoader)
 }
 
 // TestPhase5InitDevtoolsHandler_WithMeta verifies that when pm is non-nil and
-// loadFunc is nil, the handler is constructed but loader remains nil.
+// pkgGraph is nil, the handler is constructed with nil pkgGraph.
 func TestPhase5InitDevtoolsHandler_WithMeta(t *testing.T) {
 	t.Parallel()
 	pm := minimalProjectMeta("testcell")
@@ -59,28 +66,20 @@ func TestPhase5InitDevtoolsHandler_WithMeta(t *testing.T) {
 
 	require.NoError(t, err)
 	assert.NotNil(t, s.devtoolsHandler, "handler must be non-nil when meta is provided")
-	assert.Nil(t, s.devtoolsLoader, "loader must be nil when loadFunc is nil")
 }
 
-// TestPhase5InitDevtoolsHandler_WithLoadFunc verifies that when both pm and
-// loadFunc are provided, both handler and loader are non-nil.
-func TestPhase5InitDevtoolsHandler_WithLoadFunc(t *testing.T) {
+// TestPhase5InitDevtoolsHandler_WithPkgGraph verifies that when both pm and
+// pkgGraph are provided, the handler is constructed with the pkgGraph.
+func TestPhase5InitDevtoolsHandler_WithPkgGraph(t *testing.T) {
 	t.Parallel()
 	pm := minimalProjectMeta("testcell")
-	loadFunc := func(_ context.Context, _ string) *metadata.PackageDepsView {
-		return &metadata.PackageDepsView{Status: "ready"}
-	}
-	b := New(WithClock(clock.Real()), WithDevtoolsCatalog(pm, "/tmp/test", devtools.LoadFunc(loadFunc)))
+	b := New(WithClock(clock.Real()), WithDevtoolsCatalog(pm, "/tmp/test", minimalPkgGraph()))
 
 	_, s := newPhaseState()
 	err := b.phase5InitDevtoolsHandler(context.Background(), s)
 
 	require.NoError(t, err)
 	assert.NotNil(t, s.devtoolsHandler, "handler must be non-nil when meta is provided")
-	assert.NotNil(t, s.devtoolsLoader, "loader must be non-nil when loadFunc is provided")
-
-	// Clean up background goroutine.
-	require.NoError(t, s.devtoolsLoader.Close())
 }
 
 // TestBuildCellDepGraph_Empty verifies that an empty (no cells) ProjectMeta

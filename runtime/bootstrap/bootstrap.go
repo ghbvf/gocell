@@ -22,6 +22,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/assembly"
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/clock"
+	kerneldepgraph "github.com/ghbvf/gocell/kernel/depgraph"
 	kernellifecycle "github.com/ghbvf/gocell/kernel/lifecycle"
 	"github.com/ghbvf/gocell/kernel/metadata"
 	kernelmetrics "github.com/ghbvf/gocell/kernel/observability/metrics"
@@ -29,7 +30,6 @@ import (
 	"github.com/ghbvf/gocell/kernel/wrapper"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/runtime/config"
-	"github.com/ghbvf/gocell/runtime/http/devtools"
 	"github.com/ghbvf/gocell/runtime/http/router"
 	metricsmiddleware "github.com/ghbvf/gocell/runtime/observability/metrics"
 	"github.com/ghbvf/gocell/runtime/observability/tracing"
@@ -121,7 +121,7 @@ type Bootstrap struct {
 	// All zero/nil = endpoint not registered.
 	devtoolsMeta     *metadata.ProjectMeta // parsed catalog source
 	devtoolsRoot     string                // displayed in Document.Root
-	devtoolsLoadFunc devtools.LoadFunc     // package-dep loader closure (composition-root injects tools/depgraph.Load)
+	devtoolsPkgGraph *kerneldepgraph.Graph // build-time generated package dep graph (nil = omit packageDeps block)
 
 	// --- runtime guard ---
 	runOnce sync.Once // Run() single-execution guard
@@ -439,7 +439,6 @@ func (b *Bootstrap) Run(ctx context.Context) error {
 	if err := b.phase5BuildRouters(ctx, s); err != nil {
 		return rollback(err)
 	}
-	registerDevtoolsLoaderTeardown(s)
 	if err := b.phase6StartEventRouter(runCtx, s); err != nil {
 		return rollback(err)
 	}

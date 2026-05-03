@@ -1,3 +1,6 @@
+// Package main is the corebundle composition root.
+//
+//go:generate go run ../gocell generate catalog --out=catalog_gen.go --package=main
 package main
 
 import (
@@ -22,10 +25,8 @@ import (
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/runtime/bootstrap"
 	"github.com/ghbvf/gocell/runtime/crypto"
-	"github.com/ghbvf/gocell/runtime/http/devtools"
 	obmetrics "github.com/ghbvf/gocell/runtime/observability/metrics"
 	outboxruntime "github.com/ghbvf/gocell/runtime/outbox"
-	toolsdepgraph "github.com/ghbvf/gocell/tools/depgraph"
 )
 
 // buildAssembly constructs the runtime Assembly and registers the generated
@@ -443,6 +444,10 @@ func buildConfigCorePGStorage(
 // endpoint. Best-effort metadata parse: logs at Warn and degrades gracefully when
 // GOCELL_PROJECT_ROOT is not set or doesn't expose a valid project tree. The endpoint
 // is silently absent when pm is nil — Bootstrap treats nil pm as "disabled".
+//
+// generatedPackageGraph is the build-time generated package dep graph from
+// catalog_gen.go (produced by `go generate ./cmd/corebundle/`). When nil (e.g.
+// go generate has not been run), the packageDeps block is simply omitted.
 func devtoolsOption(shared *SharedDeps) bootstrap.Option {
 	root := shared.ProjectRoot
 	if root == "" {
@@ -455,14 +460,7 @@ func devtoolsOption(shared *SharedDeps) bootstrap.Option {
 			slog.Any("error", err))
 		return bootstrap.WithDevtoolsCatalog(nil, "", nil)
 	}
-	loadFunc := func(ctx context.Context, dir string) *metadata.PackageDepsView {
-		g, loadErr := toolsdepgraph.Load(toolsdepgraph.LoadOptions{Dir: dir}, "./...")
-		if loadErr != nil {
-			return &metadata.PackageDepsView{Status: "error", Error: loadErr.Error()}
-		}
-		return &metadata.PackageDepsView{Status: "ready", Graph: g}
-	}
-	return bootstrap.WithDevtoolsCatalog(pm, root, devtools.LoadFunc(loadFunc))
+	return bootstrap.WithDevtoolsCatalog(pm, root, generatedPackageGraph)
 }
 
 // buildConsumerBase constructs ConsumerBase from the topology-selected

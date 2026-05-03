@@ -4,8 +4,8 @@ package bootstrap
 //
 // phase5InitDevtoolsHandler builds the devtools.Handler when b.devtoolsMeta
 // is non-nil. It converts the kernel/governance.Graph to kernel/metadata.CellDepGraph
-// and constructs the PackageDepLoader if a loadFunc was provided. The handler
-// is stored on phaseState; phase5CollectRouteGroups appends RouteGroup if present.
+// and passes the build-time generated pkgGraph (if any). The handler is stored
+// on phaseState; phase5CollectRouteGroups appends RouteGroup if present.
 
 import (
 	"context"
@@ -19,38 +19,16 @@ import (
 	"github.com/ghbvf/gocell/runtime/http/devtools"
 )
 
-// registerDevtoolsLoaderTeardown registers a LIFO teardown to close the
-// devtools package loader when it was started. The loader is nil when
-// WithDevtoolsCatalog was not called or loadFunc was not provided.
-// Extracted from Bootstrap.Run to keep Run's cognitive complexity within budget.
-func registerDevtoolsLoaderTeardown(s *phaseState) {
-	if s.devtoolsLoader == nil {
-		return
-	}
-	loader := s.devtoolsLoader
-	s.addNamedTeardown("devtools_loader", func(_ context.Context) error {
-		if err := loader.Close(); err != nil {
-			slog.Warn("devtools loader close", slog.Any("error", err))
-		}
-		return nil
-	})
-}
-
 // phase5InitDevtoolsHandler builds the devtools catalog handler when
 // b.devtoolsMeta != nil. Returns nil (no error) when meta is nil — endpoint
 // silently absent. The handler is stored on phaseState; phase5CollectRouteGroups
 // appends RouteGroup if present.
-func (b *Bootstrap) phase5InitDevtoolsHandler(ctx context.Context, s *phaseState) error {
+func (b *Bootstrap) phase5InitDevtoolsHandler(_ context.Context, s *phaseState) error {
 	if b.devtoolsMeta == nil {
 		return nil
 	}
 	cellGraph := buildCellDepGraph(b.devtoolsMeta, b.clock)
-	var loader *devtools.PackageDepLoader
-	if b.devtoolsLoadFunc != nil {
-		loader = devtools.NewPackageDepLoader(ctx, b.devtoolsRoot, b.clock, b.devtoolsLoadFunc)
-	}
-	s.devtoolsHandler = devtools.NewHandler(b.devtoolsMeta, cellGraph, loader, b.devtoolsRoot, b.clock)
-	s.devtoolsLoader = loader
+	s.devtoolsHandler = devtools.NewHandler(b.devtoolsMeta, cellGraph, b.devtoolsPkgGraph, b.devtoolsRoot, b.clock)
 	return nil
 }
 

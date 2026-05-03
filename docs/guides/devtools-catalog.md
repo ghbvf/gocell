@@ -2,7 +2,7 @@
 
 ## 概览
 
-`gocell export catalog` / `GET /api/v1/devtools/catalog` 提供统一的项目元数据目录（Unified Catalog），把 GoCell 项目中的 Cell、Slice、Contract、Journey、Assembly、Actor 实体，以及 cell 级依赖图（`cellDeps`）、包级 typed dep graph（`packageDeps`）、状态看板（`statusBoard`）整合为单一文档，通过查询参数（query / flag）按需裁剪输出。
+`gocell export catalog` / `GET /devtools/catalog` 提供统一的项目元数据目录（Unified Catalog），把 GoCell 项目中的 Cell、Slice、Contract、Journey、Assembly、Actor 实体，以及 cell 级依赖图（`cellDeps`）、包级 typed dep graph（`packageDeps`）、状态看板（`statusBoard`）整合为单一文档，通过查询参数（query / flag）按需裁剪输出。
 
 设计目标：
 
@@ -84,11 +84,11 @@ const catalog = await fetch('/catalog.json').then(r => r.json());
 ### 端点
 
 ```
-GET /api/v1/devtools/catalog
+GET /devtools/catalog
 ```
 
 - 鉴权：`admin` 角色（`auth.AnyRole("admin")`），非 admin 返回 403，未认证返回 401。
-- bootstrap-wired：与 `runtime/http/health/` 同范式，无 `contract.yaml`（framework 自省路由，见下文工程注意）。
+- bootstrap-wired：与 `runtime/http/health/` 同范式，无 `contract.yaml`（framework 自省路由，见下文工程注意）。路径不带 `/api/v1/` 前缀（与 `/healthz`、`/readyz` 同模式：framework 自省路由不携带业务 API 版本号）。
 - 需通过 `GOCELL_PROJECT_ROOT` 环境变量指定项目根目录（corebundle 默认读取），否则 handler 不注册。
 
 ### Query 参数全表
@@ -114,7 +114,7 @@ TOKEN=$(curl -s -X POST http://localhost:8080/api/v1/auth/sessions \
 
 # 拉取完整 catalog
 curl -H "Authorization: Bearer $TOKEN" \
-  'http://localhost:8080/api/v1/devtools/catalog' | jq '.schemaVersion, (.entities | length)'
+  'http://localhost:8080/devtools/catalog' | jq '.schemaVersion, (.entities | length)'
 ```
 
 **示例 2：非 admin 用户访问（403）**
@@ -122,7 +122,7 @@ curl -H "Authorization: Bearer $TOKEN" \
 ```bash
 curl -s -o /dev/null -w "%{http_code}" \
   -H "Authorization: Bearer $NON_ADMIN_TOKEN" \
-  'http://localhost:8080/api/v1/devtools/catalog'
+  'http://localhost:8080/devtools/catalog'
 # 输出: 403
 ```
 
@@ -130,7 +130,7 @@ curl -s -o /dev/null -w "%{http_code}" \
 
 ```bash
 curl -s -o /dev/null -w "%{http_code}" \
-  'http://localhost:8080/api/v1/devtools/catalog'
+  'http://localhost:8080/devtools/catalog'
 # 输出: 401
 ```
 
@@ -138,28 +138,26 @@ curl -s -o /dev/null -w "%{http_code}" \
 
 ```bash
 curl -H "Authorization: Bearer $TOKEN" \
-  'http://localhost:8080/api/v1/devtools/catalog?cells=accesscore&include=packageDeps,cellDeps' \
+  'http://localhost:8080/devtools/catalog?cells=accesscore&include=packageDeps,cellDeps' \
   | jq '.dependencies.packages.status, .dependencies.cells.nodes'
 ```
 
-### lazy-load 状态机（`dependencies.packages.status`）
+### build-time packageDeps（`dependencies.packages.status`）
 
-包级 dep graph 在 bootstrap 后台 goroutine 异步加载（`tools/depgraph.Load()`，约 5-10s）。Handler 持有原子状态：
+包级 dep graph 在 **构建期** 由 `go generate ./cmd/corebundle/` 生成并提交为 `cmd/corebundle/catalog_gen.go`。HTTP handler 启动时直接读取已编译进二进制的图数据，零运行时 goroutine、零等待时间。
 
+| 场景 | `dependencies.packages` 块 | 行为 |
+|------|---------------------------|------|
+| `catalog_gen.go` 已生成（正常情况） | `{"status": "ready", "graph": {...}}` | 返回 200，包图始终就绪 |
+| `catalog_gen.go` 未生成（首次 clone / 忘记 `go generate`） | 缺席（块整体不出现） | 返回 200，其余块（entities/cellDeps/statusBoard）正常返回 |
+
+**重新生成时机**：cells/、contracts/、packages 有结构性变动后，重新执行：
+
+```bash
+go generate ./cmd/corebundle/
 ```
-bootstrap 启动
-    │
-    ▼
- loading ──── goroutine 完成 ──── ready
-    │
-    └──────── goroutine 失败 ──── error
-```
 
-| `status` 值 | 含义 | 行为 |
-|-------------|------|------|
-| `"loading"` | 包图尚未就绪 | 返回 200，`dependencies.packages: {"status": "loading"}`；前端可自行 poll 直到 `status` 变为 `"ready"` |
-| `"ready"` | 包图已就绪 | 返回 200，`dependencies.packages.graph` 含完整图数据 |
-| `"error"` | 包图加载失败 | 返回 200，`dependencies.packages: {"status": "error", "error": "..."}`；其余块（entities/cellDeps/statusBoard）正常返回，不受影响 |
+然后将更新后的 `cmd/corebundle/catalog_gen.go` 提交进仓库。
 
 ---
 
@@ -256,6 +254,24 @@ const catalog: CatalogDocument = await resp.json();
 
 ## 工程注意
 
+### Build-time Codegen（packageDeps）
+
+`packageDeps` 图由 `gocell generate catalog` 子命令生成，输出为 `cmd/corebundle/catalog_gen.go`：
+
+```bash
+# 重新生成（cells/contracts 有结构变动后执行）
+go generate ./cmd/corebundle/
+
+# 或直接调用
+go run ./cmd/gocell generate catalog \
+  --out=cmd/corebundle/catalog_gen.go \
+  --package=main
+```
+
+生成的文件包含一个 `var generatedPackageGraph = func() *kerneldepgraph.Graph { ... }()` 变量，由 `cmd/corebundle/bundle.go` 通过 `bootstrap.WithDevtoolsCatalog(pm, root, generatedPackageGraph)` 注入。HTTP handler 启动时 graph 始终处于 ready 状态，零运行时 goroutine。
+
+CLI `gocell export catalog --include=packageDeps` 仍同步调用 `tools/depgraph.Load()`（操作者上下文，避免 stale 数据），不受此设置影响。
+
 ### Wire Envelope 豁免（不套 `{"data": ...}`）
 
 `devtools/catalog` 与 `/healthz`、`/readyz` 一样属 **framework-internal admin endpoint**，wire 形态直接返回 Backstage Catalog Entity envelope（`apiVersion/kind/metadata/spec` 顶层结构），**不套 `{"data": ...}`**。
@@ -264,7 +280,7 @@ const catalog: CatalogDocument = await resp.json();
 
 ### bootstrap-wired（无 contract.yaml）
 
-`/api/v1/devtools/catalog` 路由落在 `runtime/http/devtools/` 包，通过 bootstrap `WithDevtoolsCatalog(pm, root)` Option 接入，与 `runtime/http/health/` 同范式（framework 自省路由）。**不建 cell、不建 contract.yaml**，原因：
+`/devtools/catalog` 路由落在 `runtime/http/devtools/` 包，通过 bootstrap `WithDevtoolsCatalog(pm, root)` Option 接入，与 `runtime/http/health/` 同范式（framework 自省路由）。**不建 cell、不建 contract.yaml**，原因：
 
 1. devtools 无业务状态、无事件、无 outbox，建 cell 净增 ~5 YAML/schema 文件
 2. 描述 catalog API 的 contract 自身会在 catalog 目录中被它自己描述，引发语义循环
@@ -288,7 +304,7 @@ ENV GOCELL_PROJECT_ROOT=/app
 
 ### CLI 包级加载耗时
 
-`--include=packageDeps` 触发同步调用 `tools/depgraph.Load()`（基于 `golang.org/x/tools/go/packages`），耗时约 5-10s。适用于：
+CLI `--include=packageDeps` 触发同步调用 `tools/depgraph.Load()`（基于 `golang.org/x/tools/go/packages`），耗时约 5-10s。适用于：
 
 - CI build 阶段（单次执行，可接受）
 - Docker build-time 嵌入静态文件
@@ -296,7 +312,7 @@ ENV GOCELL_PROJECT_ROOT=/app
 
 **不包含 `packageDeps`** 时（如 `--include=cellDeps,statusBoard,relations`），执行时间 < 1s。
 
-HTTP 端点异步加载，不阻塞服务启动。
+HTTP 端点使用 build-time 生成的图，零运行时加载等待。
 
 ### 升级路径
 

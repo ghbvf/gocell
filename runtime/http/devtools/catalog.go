@@ -8,6 +8,7 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/clock"
+	kerneldepgraph "github.com/ghbvf/gocell/kernel/depgraph"
 	"github.com/ghbvf/gocell/kernel/metadata"
 	"github.com/ghbvf/gocell/kernel/wrapper"
 	"github.com/ghbvf/gocell/pkg/errcode"
@@ -36,7 +37,7 @@ var specCatalog = wrapper.ContractSpec{
 	Kind:      "http",
 	Transport: "http",
 	Method:    "GET",
-	Path:      "/api/v1/devtools/catalog",
+	Path:      "/devtools/catalog",
 }
 
 // validKinds is the whitelist for the ?kinds= query parameter.
@@ -60,24 +61,25 @@ func sliceToSet(vals []string) map[string]bool {
 type Handler struct {
 	project   *metadata.ProjectMeta
 	cellGraph *metadata.CellDepGraph
-	pkgLoader *PackageDepLoader
+	pkgGraph  *kerneldepgraph.Graph
 	root      string
 	clock     clock.Clock
 }
 
 // NewHandler constructs a Handler. cellGraph may be nil (omits cell dep graph).
-// pkgLoader may be nil; when nil the package-deps block is omitted from output.
+// pkgGraph may be nil; when nil the package-deps block is omitted from output.
+// pkgGraph is the build-time generated graph from cmd/corebundle/catalog_gen.go.
 func NewHandler(
 	project *metadata.ProjectMeta,
 	cellGraph *metadata.CellDepGraph,
-	pkgLoader *PackageDepLoader,
+	pkgGraph *kerneldepgraph.Graph,
 	root string,
 	clk clock.Clock,
 ) *Handler {
 	return &Handler{
 		project:   project,
 		cellGraph: cellGraph,
-		pkgLoader: pkgLoader,
+		pkgGraph:  pkgGraph,
 		root:      root,
 		clock:     clk,
 	}
@@ -97,7 +99,7 @@ func RouteGroup(h *Handler) cell.RouteGroup {
 	}
 }
 
-// ServeHTTP handles GET /api/v1/devtools/catalog.
+// ServeHTTP handles GET /devtools/catalog.
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
@@ -153,8 +155,8 @@ func buildExportOptions(h *Handler, filter metadata.Filter) metadata.ExportOptio
 	if filter.Include&metadata.IncludeCellDeps != 0 {
 		opts.CellDeps = h.cellGraph
 	}
-	if filter.Include&metadata.IncludePackageDeps != 0 && h.pkgLoader != nil {
-		opts.Packages = h.pkgLoader.View()
+	if filter.Include&metadata.IncludePackageDeps != 0 && h.pkgGraph != nil {
+		opts.Packages = &metadata.PackageDepsView{Status: "ready", Graph: h.pkgGraph}
 	}
 	return opts
 }

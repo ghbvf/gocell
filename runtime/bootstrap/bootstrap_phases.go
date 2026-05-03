@@ -70,7 +70,6 @@ type phaseState struct {
 	rtr                  *router.Router                      // primary listener's router (may be nil when no primary)
 	routers              map[cell.ListenerRef]*router.Router // all per-listener routers
 	devtoolsHandler      *devtools.Handler                   // non-nil when WithDevtoolsCatalog is active
-	devtoolsLoader       *devtools.PackageDepLoader          // non-nil when loadFunc was provided
 
 	// set by phase7; consumed by phase10 as an explicit drain stage BEFORE LIFO
 	// teardown so workers / event router / assembly stop only AFTER HTTP intake
