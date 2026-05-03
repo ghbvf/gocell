@@ -123,24 +123,14 @@ func (c *AccessCore) initValidate(durabilityMode cell.DurabilityMode) error {
 	// succeeds do we install the demoTxRunner fallback so slice constructors
 	// see a non-nil TxRunner.
 	if c.txRunner == nil {
-		c.txRunner = demoTxRunner{}
+		c.txRunner = cell.DemoTxRunner{}
+	}
+	// Guard: DemoTxRunner implements Nooper — reject it in DurabilityDurable mode
+	// so that assemblies that forget to wire a real TxRunner fail at Init() time.
+	if err := cell.CheckNotNoop(durabilityMode, "accesscore", c.txRunner); err != nil {
+		return err
 	}
 	return nil
-}
-
-// demoTxRunner is the explicit pass-through TxRunner installed at the cell
-// boundary when the composition root has not provided one (demo or
-// publisher-only assemblies). After 029 #03 ADR Decision 2 deleted
-// persistence.RunnerOrNoop, slice constructors fail-fast on nil TxRunner;
-// this cell-level fallback keeps demo paths buildable without re-introducing
-// a kernel-wide noop helper.
-type demoTxRunner struct{}
-
-func (demoTxRunner) RunInTx(ctx context.Context, fn func(context.Context) error) error {
-	if fn == nil {
-		return nil
-	}
-	return fn(ctx)
 }
 
 func (c *AccessCore) initRefreshGC() error {

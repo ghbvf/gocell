@@ -36,10 +36,6 @@ func (durableTxRunner) RunInTx(ctx context.Context, fn func(context.Context) err
 
 var _ persistence.TxRunner = durableTxRunner{}
 
-// demoTxRunner moved to cells/auditcore/cell.go (cell-boundary fallback).
-// Tests reuse the production type so the cell-init nil fallback path is
-// exercised end-to-end rather than being shadowed by a parallel test stub.
-
 // mustNewCodec constructs a CursorCodec with the given key or fails the test.
 func mustNewCodec(t *testing.T, key []byte) *query.CursorCodec {
 	t.Helper()
@@ -56,7 +52,7 @@ func newTestCell() *AuditCore {
 		WithOutboxDeps(eventbus.New(eventbus.WithClock(clock.Real())), nil),
 		WithHMACKey(testHMACKey),
 		WithOutboxDeps(nil, outbox.NoopWriter{}),
-		WithTxManager(demoTxRunner{}),
+		WithTxManager(cell.DemoTxRunner{}),
 		WithMetricsProvider(metrics.NopProvider{}),
 	)
 }
@@ -123,7 +119,7 @@ func TestAuditCore_HMACKeyFromConfig(t *testing.T) {
 		WithArchiveStore(mem.NewArchiveStore()),
 		WithOutboxDeps(eventbus.New(eventbus.WithClock(clock.Real())), nil),
 		WithOutboxDeps(nil, outbox.NoopWriter{}),
-		WithTxManager(demoTxRunner{}),
+		WithTxManager(cell.DemoTxRunner{}),
 		WithMetricsProvider(metrics.NopProvider{}),
 	)
 	ctx := context.Background()
@@ -158,7 +154,7 @@ func TestInit_DemoMode_TxWithoutOutbox_Fails(t *testing.T) {
 		WithArchiveStore(mem.NewArchiveStore()),
 		WithOutboxDeps(eventbus.New(eventbus.WithClock(clock.Real())), nil),
 		WithHMACKey(testHMACKey),
-		WithTxManager(demoTxRunner{}),
+		WithTxManager(cell.DemoTxRunner{}),
 		// outboxWriter intentionally omitted
 	)
 	err := c.Init(context.Background(), cell.NewRegistryRecorder(map[string]any{}, cell.DurabilityDemo))
@@ -185,7 +181,7 @@ func TestInit_DurableMode_RejectsNoopWriter(t *testing.T) {
 		WithArchiveStore(mem.NewArchiveStore()),
 		WithHMACKey(testHMACKey),
 		WithOutboxDeps(nil, outbox.NoopWriter{}),
-		WithTxManager(demoTxRunner{}),
+		WithTxManager(cell.DemoTxRunner{}),
 	)
 	err := c.Init(context.Background(), cell.NewRegistryRecorder(map[string]any{}, cell.DurabilityDurable))
 	require.Error(t, err)
@@ -216,7 +212,7 @@ func TestInit_DemoMode_ExplicitNoopOutboxPair_Succeeds(t *testing.T) {
 		WithArchiveStore(mem.NewArchiveStore()),
 		WithHMACKey(testHMACKey),
 		WithOutboxDeps(nil, outbox.NoopWriter{}),
-		WithTxManager(demoTxRunner{}),
+		WithTxManager(cell.DemoTxRunner{}),
 	)
 	err := c.Init(context.Background(), cell.NewRegistryRecorder(map[string]any{}, cell.DurabilityDemo))
 	require.NoError(t, err)
@@ -269,7 +265,7 @@ func TestAuditInit_WithEmitter_DurableRequiresDurableEmitter(t *testing.T) {
 		WithHMACKey(testHMACKey),
 		WithCursorCodec(cursorCodec),
 		WithEmitter(outbox.NewNoopEmitter()), // non-durable
-		WithTxManager(demoTxRunner{}),
+		WithTxManager(cell.DemoTxRunner{}),
 	)
 	err = c.Init(context.Background(), cell.NewRegistryRecorder(map[string]any{}, cell.DurabilityDurable))
 	require.Error(t, err)
@@ -407,7 +403,7 @@ func TestAuditCore_Wiring_StaleCursor_DemoVsDurable(t *testing.T) {
 			name:       "demo returns first page",
 			mode:       cell.DurabilityDemo,
 			outbox:     outbox.NoopWriter{},
-			tx:         demoTxRunner{},
+			tx:         cell.DemoTxRunner{},
 			wantStatus: http.StatusOK,
 		},
 	}
