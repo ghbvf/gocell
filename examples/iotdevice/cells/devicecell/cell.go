@@ -310,16 +310,10 @@ func (c *DeviceCell) registerRouteGroups(reg cell.Registry) {
 
 // registerHealthAndLifecycle registers health probes and the sweeper lifecycle hook.
 func (c *DeviceCell) registerHealthAndLifecycle(reg cell.Registry) {
-	if hc, ok := c.emitter.(emitterProber); ok {
+	if hc, ok := c.emitter.(cell.HealthProber); ok {
 		for k, v := range hc.Probes() {
 			reg.Health(k, v)
 		}
 	}
 	reg.Lifecycle(c.commandSweeper.Hook())
-}
-
-// emitterProber is a local interface satisfied by outbox.DirectEmitter.
-// Avoids a hard import of the concrete type; exposes Probes() per K8s probe terminology.
-type emitterProber interface {
-	Probes() map[string]func(context.Context) error
 }

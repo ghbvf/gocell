@@ -208,12 +208,6 @@ func NewAuditCore(opts ...Option) *AuditCore {
 	return c
 }
 
-// emitterProber is a local interface satisfied by outbox.DirectEmitter.
-// Avoids a hard import of the concrete type; exposes Probes() per K8s probe terminology.
-type emitterProber interface {
-	Probes() map[string]func(context.Context) error
-}
-
 // Init constructs all 4 slices and registers routes, subscriptions, and health
 // probes into reg.
 func (c *AuditCore) Init(ctx context.Context, reg cell.Registry) error {
@@ -267,7 +261,7 @@ func (c *AuditCore) Init(ctx context.Context, reg cell.Registry) error {
 	}
 
 	// Register health probes (emitter fail-open rate checker).
-	if hc, ok := c.emitter.(emitterProber); ok {
+	if hc, ok := c.emitter.(cell.HealthProber); ok {
 		for k, v := range hc.Probes() {
 			reg.Health(k, v)
 		}

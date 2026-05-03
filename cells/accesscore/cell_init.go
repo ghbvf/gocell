@@ -257,12 +257,6 @@ func (c *AccessCore) initRbacAssign() {
 	c.AddSlice(cell.NewBaseSlice("rbacassign", "accesscore", rbacAssignLevel))
 }
 
-// emitterProber is a local interface satisfied by outbox.DirectEmitter.
-// Avoids a hard import of the concrete type; exposes Probes() per K8s probe terminology.
-type emitterProber interface {
-	Probes() map[string]func(context.Context) error
-}
-
 // Init constructs all 9 slices and registers routes, subscriptions, health
 // probes, and lifecycle hooks into reg.
 func (c *AccessCore) Init(ctx context.Context, reg cell.Registry) error {
@@ -395,7 +389,7 @@ func (c *AccessCore) registerHealthAndLifecycle(reg cell.Registry) {
 	}); ok {
 		reg.Health("session-store", hc.Health)
 	}
-	if hc, ok := c.emitter.(emitterProber); ok {
+	if hc, ok := c.emitter.(cell.HealthProber); ok {
 		for k, v := range hc.Probes() {
 			reg.Health(k, v)
 		}

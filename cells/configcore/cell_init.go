@@ -24,12 +24,6 @@ import (
 	"github.com/ghbvf/gocell/pkg/query"
 )
 
-// emitterProber is a local interface satisfied by outbox.DirectEmitter.
-// Avoids a hard import of the concrete type; exposes Probes() per K8s probe terminology.
-type emitterProber interface {
-	Probes() map[string]func(context.Context) error
-}
-
 // Event spec variables for configcore subscriptions. EventSpec id==topic so
 // FMT-18's literal-vs-YAML cross-check sees the ID literal in the call.
 var (
@@ -79,7 +73,7 @@ func (c *ConfigCore) Init(ctx context.Context, reg cell.Registry) error {
 	}
 
 	// Register health probes (emitter fail-open rate checker).
-	if hc, ok := c.emitter.(emitterProber); ok {
+	if hc, ok := c.emitter.(cell.HealthProber); ok {
 		for k, v := range hc.Probes() {
 			reg.Health(k, v)
 		}

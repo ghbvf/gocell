@@ -183,23 +183,23 @@ type SubscriptionRequest struct {
 	Spec          wrapper.ContractSpec
 	Handler       outbox.EntryHandler
 	ConsumerGroup string
-	Options       SubscriptionOptions
 	SliceID       string
 }
 
-// SubscriptionOptions carries optional event-subscription owner metadata.
-type SubscriptionOptions struct {
-	SliceID string
-}
-
-// SubscriptionOption configures optional event subscription metadata.
-type SubscriptionOption func(*SubscriptionOptions)
+// SubscriptionOption mutates a SubscriptionRequest to attach optional metadata.
+type SubscriptionOption func(*SubscriptionRequest)
 
 // WithSubscriptionSliceID declares the owning slice for subscription observability.
 func WithSubscriptionSliceID(sliceID string) SubscriptionOption {
-	return func(o *SubscriptionOptions) {
-		o.SliceID = sliceID
+	return func(r *SubscriptionRequest) {
+		r.SliceID = sliceID
 	}
+}
+
+// HealthProber is implemented by components that expose a probe set for
+// cells to register via reg.Health(...) (notably outbox.DirectEmitter).
+type HealthProber interface {
+	Probes() map[string]func(context.Context) error
 }
 
 // SubscriptionValidator validates a Subscription at registration time.
@@ -337,21 +337,23 @@ func (r *RegistryRecorder) Subscribe(
 		return errcode.New(errcode.ErrValidationFailed,
 			"registry Subscribe: spec.Kind must be \"event\", got \""+spec.Kind+"\"")
 	}
-
-	var subOpts SubscriptionOptions
-	for _, opt := range opts {
-		if opt != nil {
-			opt(&subOpts)
-		}
+	if spec.Topic == "" {
+		return errcode.New(errcode.ErrValidationFailed,
+			"registry Subscribe: spec.Topic must not be empty")
 	}
 
-	r.subscriptions = append(r.subscriptions, SubscriptionRequest{
+	req := SubscriptionRequest{
 		Spec:          spec,
 		Handler:       handler,
 		ConsumerGroup: consumerGroup,
-		Options:       subOpts,
-		SliceID:       subOpts.SliceID,
-	})
+	}
+	for _, opt := range opts {
+		if opt != nil {
+			opt(&req)
+		}
+	}
+
+	r.subscriptions = append(r.subscriptions, req)
 	return nil
 }
 
@@ -359,12 +361,20 @@ func (r *RegistryRecorder) Subscribe(
 // Error level and the second registration is silently dropped (first-wins).
 func (r *RegistryRecorder) Health(name string, check func(context.Context) error) {
 	r.mustNotBeFinalized("Health")
+	MustHaveNonEmptyHealthName(name)
 	if _, exists := r.healthCheckers[name]; exists {
 		r.log.Error("registry Health: duplicate checker name — second registration dropped",
 			slog.String("checker_name", name))
 		return
 	}
 	r.healthCheckers[name] = check
+}
+
+// MustHaveNonEmptyHealthName panics when name is empty (programming error).
+func MustHaveNonEmptyHealthName(name string) {
+	if name == "" {
+		panic("registry Health: name must not be empty (programming error)")
+	}
 }
 
 // Lifecycle appends a lifecycle hook. Panics when Name is empty (programming error).
@@ -382,13 +392,14 @@ func MustHaveLifecycleHookName(h LifecycleHook) {
 }
 
 // OnConfigReload registers a config-reload callback. Panics when prefixes
-// contains an empty string (programming error).
+// contains an empty string or fn is nil (programming errors).
 func (r *RegistryRecorder) OnConfigReload(
 	prefixes []string,
 	fn func(context.Context, ConfigChangeEvent) error,
 ) {
 	r.mustNotBeFinalized("OnConfigReload")
 	MustHaveNonEmptyConfigPrefixes(prefixes)
+	MustHaveNonNilConfigReloadFn(fn)
 	r.configReloaders = append(r.configReloaders, ConfigReloadRequest{
 		Prefixes: prefixes,
 		Fn:       fn,
@@ -401,6 +412,13 @@ func MustHaveNonEmptyConfigPrefixes(prefixes []string) {
 		if p == "" {
 			panic("registry OnConfigReload: prefixes must not contain an empty string (programming error)")
 		}
+	}
+}
+
+// MustHaveNonNilConfigReloadFn panics when fn is nil (programming error).
+func MustHaveNonNilConfigReloadFn(fn func(context.Context, ConfigChangeEvent) error) {
+	if fn == nil {
+		panic("registry OnConfigReload: fn must not be nil (programming error)")
 	}
 }
 

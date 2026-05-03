@@ -140,10 +140,14 @@ func (r *Router) AddContractHandler(
 	if err := spec.Validate(); err != nil {
 		return fmt.Errorf("eventrouter: AddContractHandler: %w", err)
 	}
-	var subOpts cell.SubscriptionOptions
+	req := cell.SubscriptionRequest{
+		Spec:          spec,
+		Handler:       handler,
+		ConsumerGroup: consumerGroup,
+	}
 	for _, opt := range opts {
 		if opt != nil {
-			opt(&subOpts)
+			opt(&req)
 		}
 	}
 
@@ -154,7 +158,7 @@ func (r *Router) AddContractHandler(
 		Topic:         spec.Topic,
 		ConsumerGroup: consumerGroup,
 		CellID:        consumerGroup, // eventrouter uses consumerGroup as CellID
-		SliceID:       subOpts.SliceID,
+		SliceID:       req.SliceID,
 	}
 	r.mu.Lock()
 	currentValidators := make([]cell.SubscriptionValidator, len(r.validators))
@@ -180,7 +184,7 @@ func (r *Router) AddContractHandler(
 		topic:         spec.Topic,
 		handler:       handler,
 		consumerGroup: consumerGroup,
-		sliceID:       subOpts.SliceID,
+		sliceID:       req.SliceID,
 		contract:      spec,
 	})
 	return nil

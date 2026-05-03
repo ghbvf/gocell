@@ -328,6 +328,73 @@ func TestRouteGroupStruct_FieldCombinations(t *testing.T) {
 	}
 }
 
+// ---------------------------------------------------------------------------
+// TestRegistry_Subscribe_RejectsEmptyTopic
+// ---------------------------------------------------------------------------
+
+func TestRegistry_Subscribe_RejectsEmptyTopic(t *testing.T) {
+	rec := NewRegistryRecorder(nil, DurabilityDurable)
+	spec := wrapper.ContractSpec{
+		ID:        "event.foo.v1",
+		Kind:      "event",
+		Transport: "amqp",
+		Topic:     "", // empty — must be rejected
+	}
+	err := rec.Subscribe(spec, noopHandler, "cg-test")
+	require.Error(t, err)
+	assert.Contains(t, strings.ToLower(err.Error()), "topic")
+}
+
+// ---------------------------------------------------------------------------
+// TestRegistry_OnConfigReload_NilFn_Panics
+// ---------------------------------------------------------------------------
+
+func TestRegistry_OnConfigReload_NilFn_Panics(t *testing.T) {
+	rec := NewRegistryRecorder(nil, DurabilityDurable)
+	require.Panics(t, func() {
+		rec.OnConfigReload([]string{"cfg."}, nil)
+	})
+}
+
+// ---------------------------------------------------------------------------
+// TestRegistry_Health_EmptyName_Panics
+// ---------------------------------------------------------------------------
+
+func TestRegistry_Health_EmptyName_Panics(t *testing.T) {
+	rec := NewRegistryRecorder(nil, DurabilityDurable)
+	require.Panics(t, func() {
+		rec.Health("", func(context.Context) error { return nil })
+	})
+}
+
+// ---------------------------------------------------------------------------
+// TestRegistry_Snapshot_DefensiveCopy
+// ---------------------------------------------------------------------------
+
+func TestRegistry_Snapshot_DefensiveCopy(t *testing.T) {
+	// Verify that the RegistrySnapshot is a defensive copy: mutating the
+	// snapshot's slices/maps must not affect the recorder's internal state.
+	rec := NewRegistryRecorder(nil, DurabilityDurable)
+
+	// Register one of each type before taking the snapshot.
+	rec.RouteGroup(SingleGroup(PrimaryListener, "/api/v1/x", func(RouteMux) error { return nil }))
+	err := rec.Subscribe(testRegistrySpec("snap.test"), noopHandler, "cg-snap")
+	require.NoError(t, err)
+	rec.Health("snap-probe", func(context.Context) error { return nil })
+
+	snap := rec.Snapshot()
+
+	// Mutate snap fields.
+	snap.RouteGroups = append(snap.RouteGroups, SingleGroup(PrimaryListener, "/extra", func(RouteMux) error { return nil }))
+	snap.Subscriptions = append(snap.Subscriptions, SubscriptionRequest{ConsumerGroup: "injected"})
+	snap.HealthCheckers["injected-probe"] = func(context.Context) error { return nil }
+
+	// The recorder's internal counters must remain at the original sizes.
+	assert.Len(t, rec.routeGroups, 1, "snap mutation must not affect recorder.routeGroups")
+	assert.Len(t, rec.subscriptions, 1, "snap mutation must not affect recorder.subscriptions")
+	assert.Len(t, rec.healthCheckers, 1, "snap mutation must not affect recorder.healthCheckers")
+}
+
 // Compile-time: RouteGroup.Register accepts RouteMux.
 var _ = RouteGroup{Register: func(m RouteMux) error {
 	m.Handle("GET /", http.NotFoundHandler())
