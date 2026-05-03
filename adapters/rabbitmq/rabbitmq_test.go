@@ -2509,8 +2509,13 @@ func TestConsumerBase_AsMiddleware_LogsRestoredContext(t *testing.T) {
 	})
 	assert.Equal(t, outbox.DispositionReject, res.Disposition)
 
+	// After 029 #03 ADR Decision 4 the handler is invoked RetryCount times
+	// (PermanentError-in-Requeue no longer short-circuits to Reject), so the
+	// buffer holds a stream of JSON log entries. Decode the first entry to
+	// verify ObservabilityMetadata was restored on the consumer-side context.
+	dec := json.NewDecoder(&buf)
 	var logEntry map[string]any
-	require.NoError(t, json.Unmarshal(buf.Bytes(), &logEntry))
+	require.NoError(t, dec.Decode(&logEntry))
 	assert.Equal(t, "trace-log-1", logEntry["trace_id"])
 	assert.Equal(t, "req-log-1", logEntry["request_id"])
 	assert.Equal(t, "corr-log-1", logEntry["correlation_id"])
@@ -2757,33 +2762,11 @@ func TestConsumerBase_WrapWithClaimer_ExplicitReject_FirstRoundNoRetry(t *testin
 	assert.Same(t, receipt, res.Receipt)
 }
 
-func TestConsumerBase_WrapWithClaimer_WrappedPermanentError_FirstRoundReject(t *testing.T) {
-	receipt := &mockReceipt{}
-	claimer := &mockClaimer{state: idempotency.ClaimAcquired, receipt: receipt}
-
-	handlerCallCount := 0
-	cb, cbErr := outbox.NewConsumerBase(claimer, outbox.ConsumerBaseConfig{
-		RetryCount:     3,
-		RetryBaseDelay: testtime.D10ms,
-	}, clock.Real())
-	require.NoError(t, cbErr)
-
-	handler := cb.Wrap(outbox.Subscription{Topic: "test.topic", ConsumerGroup: "test-group"},
-		func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
-			handlerCallCount++
-			// Wrapped PermanentError — must be detected by errors.As through fmt.Errorf wrapping.
-			return outbox.HandleResult{
-				Disposition: outbox.DispositionRequeue,
-				Err:         fmt.Errorf("handler context: %w", outbox.NewPermanentError(errors.New("unmarshal failed"))),
-			}
-		})
-
-	res := handler(context.Background(), outbox.Entry{ID: "evt-perm-wrapped"})
-	assert.Equal(t, outbox.DispositionReject, res.Disposition,
-		"wrapped PermanentError must be detected and upgraded to Reject")
-	assert.Equal(t, 1, handlerCallCount, "PermanentError must skip retry loop — handler called exactly once")
-	assert.Same(t, receipt, res.Receipt)
-}
+// Removed: TestConsumerBase_WrapWithClaimer_WrappedPermanentError_FirstRoundReject
+// After 029 #03 ADR Decision 4, PermanentError wrapped in Requeue no longer
+// short-circuits to Reject. The equivalent retry-budget-exhaust behaviour is
+// locked by kernel/outbox.TestConsumerBase_Wrap_WrappedPermanentErrorInRequeue_NotEscalated;
+// duplicating that assertion at the adapter layer adds no coverage.
 
 // sequenceClaimer returns different results on successive Claim calls.
 // Used to test claimWithRetry: first N calls fail, then succeed.
@@ -3831,36 +3814,10 @@ func TestConsumerBase_WrapWithClaimer_ExplicitReject_NoRetry(t *testing.T) {
 	assert.Same(t, receipt, res.Receipt, "Receipt should be threaded through for Reject")
 }
 
-func TestConsumerBase_WrapWithClaimer_WrappedPermanentError_Detected(t *testing.T) {
-	// Handler returns Requeue with fmt.Errorf("ctx: %w", outbox.NewPermanentError(...)).
-	// retryLoop should detect PermanentError via errors.As and upgrade to Reject.
-	receipt := &mockReceipt{}
-	claimer := &mockClaimer{state: idempotency.ClaimAcquired, receipt: receipt}
-
-	cb, cbErr := outbox.NewConsumerBase(claimer, outbox.ConsumerBaseConfig{
-		RetryCount:     5,
-		RetryBaseDelay: testtime.D10ms,
-	}, clock.Real())
-	require.NoError(t, cbErr)
-
-	callCount := 0
-	handler := cb.Wrap(outbox.Subscription{Topic: "test.topic", ConsumerGroup: "test-group"},
-		func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
-			callCount++
-			return outbox.HandleResult{
-				Disposition: outbox.DispositionRequeue,
-				Err:         fmt.Errorf("ctx: %w", outbox.NewPermanentError(errors.New("bad payload"))),
-			}
-		})
-
-	entry := outbox.Entry{ID: "evt-wrapped-perm"}
-	res := handler(context.Background(), entry)
-
-	assert.Equal(t, 1, callCount, "handler should be called once (PermanentError detected, no retry)")
-	assert.Equal(t, outbox.DispositionReject, res.Disposition,
-		"wrapped PermanentError should be detected by errors.As and upgraded to Reject")
-	assert.Same(t, receipt, res.Receipt, "Receipt should be threaded through for Reject")
-}
+// Removed: TestConsumerBase_WrapWithClaimer_WrappedPermanentError_Detected
+// Same rationale as above — after 029 #03 ADR Decision 4, ConsumerBase no
+// longer detects-and-upgrades a wrapped PermanentError. Coverage moved to
+// kernel/outbox.TestConsumerBase_Wrap_WrappedPermanentErrorInRequeue_NotEscalated.
 
 // NOTE: TestConnection_MaxReconnectAttempts_One deleted (A.1 semantics).
 // Reconnect has no attempt cap; successor behavior is covered by
