@@ -15,8 +15,8 @@ allowed-tools: [Read, Write, Edit, Glob, Grep, Bash, Agent, AskUserQuestion]
 |------|------|---------|-----------|--------|
 | L1 | 不探索 | 不需要 | 1-2 并行 | 1 reviewer |
 | L2 | 1 explorer | 展示给用户 | 1-2 并行 | 1 reviewer |
-| L3（默认） | 3 并行 explorer | AskUserQuestion 确认 | 2-3 并行 | 1 reviewer |
-| L4 | 3 并行 explorer | AskUserQuestion 确认 | 2-3 并行 | 6角色6个并行 |
+| L3（默认） | 3 并行 explorer | AskUserQuestion 确认 | ≤ 4 并行 | 1 reviewer |
+| L4 | 3 并行 explorer | AskUserQuestion 确认 | ≤ 4 并行 | 6角色6个并行 |
 
 ---
 
@@ -55,6 +55,11 @@ allowed-tools: [Read, Write, Edit, Glob, Grep, Bash, Agent, AskUserQuestion]
 
 按"方案与计划原则"生成改动文件清单（按依赖顺序）、任务分组（串行/并行批次）、TDD 测试先写清单、对标参考（`ref: framework file`）。生成后执行"反思自检"，L3 用 AskUserQuestion 与用户确认计划后继续。
 
+**并行批次分析**（改动文件 ≥ 4 时必须在计划中明确）：
+- 标注各任务的文件归属和批次编号
+- 标注批次间依赖关系（有依赖 → 串行；无依赖 → 可并行）
+- 解决同文件冲突：同一文件必须归入同一批次/agent
+
 ---
 
 ## 阶段 3：Worktree
@@ -78,12 +83,34 @@ git worktree add worktrees/<NNN-short-name> -b <branch-name> origin/develop
 
 ## 阶段 5：实施
 
-启动 `developer` 子 agent（L1/L2 → 1-2 个；L3 → 2-3 个，按批次并行）：
+### 5.0 分组与并行度决策（实施前必须执行）
 
-```
-在 worktree worktrees/<NNN> 中实施，所有 go 命令用 go -C worktrees/<NNN>。
-完成后：go build ./... && go test ./... && golangci-lint run ./...（0 issues 才 commit）。
-提交格式：<type>(<scope>): <描述>
+主 agent 根据阶段 2 的改动文件清单和批次依赖关系，**自主决定**：
+- 哪些任务无文件交叉且无逻辑依赖 → 可并行启动 developer agent
+- 哪些任务有依赖或改同一文件 → 串行或归入同一 agent
+
+**硬约束**：
+- 同一文件只能分给同一 agent（防写冲突）
+- 有前置依赖的批次必须等上一批全部完成后再启动
+- 并行 developer agent 上限 **4 个**
+
+### 5.1 Sub-agent prompt 自包含要求
+
+每个 developer sub-agent prompt 必须包含：
+- worktree 路径（`worktrees/<NNN>`）
+- 分配的任务列表（文件路径 + 改动描述）
+- go 命令格式：`go -C worktrees/<NNN> test ./...`
+- CLAUDE.md 关键约束（分层规则、覆盖率要求）
+- commit 格式：`<type>(<scope>): <描述>`
+
+每个 sub-agent 在自己负责的任务上**串行**执行 Edit-Test Loop，完成后跑 `golangci-lint run ./...`（0 issues 才 commit）。
+
+### 5.2 主 agent 汇总（所有并行 agent 完成后）
+
+```bash
+go -C worktrees/<NNN> build ./...
+go -C worktrees/<NNN> test ./...
+golangci-lint run ./...   # 0 issues 才进阶段 6
 ```
 
 ---
