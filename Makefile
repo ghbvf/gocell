@@ -11,9 +11,17 @@
 # build produces shippable binaries into bin/. Use `make check-build` when the
 # goal is a full-repo compile check (no artefacts) — mirrors the
 # Kubernetes/kratos/go-zero split between `verify` and `build`.
+#
+# `go generate ./cmd/corebundle/` runs first so cmd/corebundle/catalog_gen.go
+# (gated by `//go:build catalog_gen`) is regenerated for the local platform;
+# the `-tags=catalog_gen` build flag selects that file over catalog_gen_stub.go,
+# producing a binary with the full package dep graph. Plain `go build ./...`
+# without the tag uses the stub (empty graph) so newcomers don't need to run
+# `go generate` before their first build. See docs/guides/devtools-catalog.md.
 build:
 	mkdir -p bin
-	go build -o bin/ ./cmd/... ./examples/...
+	go generate ./cmd/corebundle/
+	go build -tags=catalog_gen -o bin/ ./cmd/... ./examples/...
 
 check-build:
 	go build ./...

@@ -270,23 +270,44 @@ const catalog: CatalogDocument = await resp.json();
 
 ## 工程注意
 
-### Build-time Codegen（packageDeps）
+### Build-time Codegen（packageDeps）— Build-tag stub 设计
 
-`packageDeps` 图由 `gocell generate catalog` 子命令生成，输出为 `cmd/corebundle/catalog_gen.go`：
+`packageDeps` 图由 `gocell generate catalog` 子命令生成，输出为 `cmd/corebundle/catalog_gen.go`，但**该文件不 commit 到仓库**（`.gitignore` 黑名单 + `hack/verify-gitignore-respect.sh` 守卫）。
+
+#### 为什么不 commit
+
+`tools/depgraph.Load` 内部用 `golang.org/x/tools/go/packages.Load`，对 production package 的 `.Imports` 字段处理在 macOS 与 Linux 上有微差（已知 quirk：当某 production 包有 internal `_test.go` import 了生产代码不 import 的包时，平台对是否合并到 production `.Imports` 行为不一致）。任何 commit 进仓库的 `catalog_gen.go` 都会跨平台 byte-equal 漂移，CI 永远 fail。
+
+参考开源实践：Kubernetes 用 dev-container 强制环境一致；buf 锁工具版本；go-zero 不 commit 任何 generated 文件。我们采用 go-zero 路线 + build-tag stub 兜底 onboarding。
+
+#### 两个文件 + 两个 build tag
+
+| 文件 | 状态 | build tag | 内容 |
+|------|------|----------|------|
+| `cmd/corebundle/catalog_gen_stub.go` | **committed** | `//go:build !catalog_gen`（默认 build 用） | 空 graph stub（`FromNodes("...", []*Node{})`）；catalog 端点的 `dependencies.packages.graph` 字段为空（其余块正常） |
+| `cmd/corebundle/catalog_gen.go` | **.gitignore**，每次 generate 重新产生 | `//go:build catalog_gen` | 真实完整 graph，由 `tools/depgraph.Load(./...)` 抽取 |
+
+#### 三种 build 路径
 
 ```bash
-# 重新生成（cells/contracts 有结构变动后执行）
-go generate ./cmd/corebundle/
+# 1. 新开发者刚 git clone — 直接 build 即可（用 stub，packageDeps 为空但其余功能正常）
+go build ./cmd/corebundle/
 
-# 或直接调用
-go run ./cmd/gocell generate catalog \
-  --out=cmd/corebundle/catalog_gen.go \
-  --package=main
+# 2. 想看完整 packageDeps（本地 dev / 测试 catalog 端点）
+make build                                    # Makefile 自动 generate + -tags=catalog_gen
+# 等价于：
+go generate ./cmd/corebundle/
+go build -tags=catalog_gen ./cmd/corebundle/
+
+# 3. CI / prod docker build — 同 #2
+go generate ./cmd/corebundle/ && go build -tags=catalog_gen -o bin/corebundle ./cmd/corebundle/
 ```
 
-生成的文件包含一个 `var generatedPackageGraph = func() *kerneldepgraph.Graph { ... }()` 变量，由 `cmd/corebundle/bundle.go` 通过 `bootstrap.WithDevtoolsCatalog(pm, root, generatedPackageGraph)` 注入。HTTP handler 启动时 graph 始终处于 ready 状态，零运行时 goroutine。
+CLI `gocell export catalog --include=packageDeps` 不受 build-tag 影响 — CLI 直接调 `tools/depgraph.Load()`（操作者上下文，避免 stale 数据），始终输出完整 graph。
 
-CLI `gocell export catalog --include=packageDeps` 仍同步调用 `tools/depgraph.Load()`（操作者上下文，避免 stale 数据），不受此设置影响。
+#### 防误 commit
+
+`hack/verify-gitignore-respect.sh`（被 `make verify` 自动 glob 起来）扫描"必须不被追踪"的白名单（含 `cmd/corebundle/catalog_gen.go`），若有人 `git add -f` 强加进来则 verify fail。新增建造产物加 .gitignore 时，同步加进该脚本的白名单。
 
 ### Wire Envelope 豁免（不套 `{"data": ...}`）
 
