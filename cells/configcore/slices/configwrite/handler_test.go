@@ -57,7 +57,10 @@ const configPrefix = "/api/v1/config"
 
 func setupHandler() (http.Handler, *mem.ConfigRepository) {
 	repo := mem.NewConfigRepository(clock.Real())
-	svc := NewService(repo, slog.Default(), clock.Real())
+	svc, err := NewService(repo, slog.Default(), clock.Real(), WithTxManager(&stubTxRunner{}))
+	if err != nil {
+		panic("setupHandler: " + err.Error())
+	}
 	h := NewHandler(svc)
 	mux := celltest.NewTestMux()
 	mux.Route(configPrefix, func(sub cell.RouteMux) {
@@ -283,9 +286,11 @@ func TestHandler_HandleUpdate_SensitiveRedacted(t *testing.T) {
 func TestService_Create_SensitiveEventPayloadMetadataOnly(t *testing.T) {
 	repo := mem.NewConfigRepository(clock.Real())
 	ow := &stubOutboxWriter{}
-	svc := NewService(repo, slog.Default(), clock.Real(), WithEmitter(testoutbox.MustEmitter(t, ow)))
+	svc, err := NewService(repo, slog.Default(), clock.Real(),
+		WithEmitter(testoutbox.MustEmitter(t, ow)), WithTxManager(&stubTxRunner{}))
+	require.NoError(t, err)
 
-	_, err := svc.Create(auth.TestContext("test-admin", []string{"admin"}), CreateInput{
+	_, err = svc.Create(auth.TestContext("test-admin", []string{"admin"}), CreateInput{
 		Key: "db.password", Value: "s3cret!", Sensitive: true,
 	})
 	require.NoError(t, err)
@@ -304,9 +309,11 @@ func TestService_Create_SensitiveEventPayloadMetadataOnly(t *testing.T) {
 func TestService_WithEmitter(t *testing.T) {
 	repo := mem.NewConfigRepository(clock.Real())
 	ow := &stubOutboxWriter{}
-	svc := NewService(repo, slog.Default(), clock.Real(), WithEmitter(testoutbox.MustEmitter(t, ow)))
+	svc, err := NewService(repo, slog.Default(), clock.Real(),
+		WithEmitter(testoutbox.MustEmitter(t, ow)), WithTxManager(&stubTxRunner{}))
+	require.NoError(t, err)
 
-	_, err := svc.Create(auth.TestContext("test-admin", []string{"admin"}), CreateInput{Key: "k1", Value: "v1"})
+	_, err = svc.Create(auth.TestContext("test-admin", []string{"admin"}), CreateInput{Key: "k1", Value: "v1"})
 	require.NoError(t, err)
 
 	assert.Len(t, ow.entries, 1, "outbox writer should receive one entry")
@@ -316,9 +323,10 @@ func TestService_WithEmitter(t *testing.T) {
 func TestService_WithTxManager(t *testing.T) {
 	repo := mem.NewConfigRepository(clock.Real())
 	tx := &stubTxRunner{}
-	svc := NewService(repo, slog.Default(), clock.Real(), WithTxManager(tx))
+	svc, err := NewService(repo, slog.Default(), clock.Real(), WithTxManager(tx))
+	require.NoError(t, err)
 
-	_, err := svc.Create(auth.TestContext("test-admin", []string{"admin"}), CreateInput{Key: "k1", Value: "v1"})
+	_, err = svc.Create(auth.TestContext("test-admin", []string{"admin"}), CreateInput{Key: "k1", Value: "v1"})
 	require.NoError(t, err)
 
 	assert.Equal(t, 1, tx.calls, "tx runner should be called once")
@@ -328,11 +336,12 @@ func TestService_WithOutboxAndTx(t *testing.T) {
 	repo := mem.NewConfigRepository(clock.Real())
 	ow := &stubOutboxWriter{}
 	tx := &stubTxRunner{}
-	svc := NewService(repo, slog.Default(), clock.Real(),
+	svc, err := NewService(repo, slog.Default(), clock.Real(),
 		WithEmitter(testoutbox.MustEmitter(t, ow)), WithTxManager(tx))
+	require.NoError(t, err)
 
 	// Create
-	_, err := svc.Create(auth.TestContext("test-admin", []string{"admin"}), CreateInput{Key: "k1", Value: "v1"})
+	_, err = svc.Create(auth.TestContext("test-admin", []string{"admin"}), CreateInput{Key: "k1", Value: "v1"})
 	require.NoError(t, err)
 
 	// Update

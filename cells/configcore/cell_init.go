@@ -18,7 +18,6 @@ import (
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/outbox"
-	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/kernel/wrapper"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/query"
@@ -84,11 +83,15 @@ func (c *ConfigCore) Init(ctx context.Context, reg cell.Registry) error {
 
 // initAllSlices constructs all 6 configcore slices.
 func (c *ConfigCore) initAllSlices(runMode query.RunMode) error {
-	c.initWriteSlice()
+	if err := c.initWriteSlice(); err != nil {
+		return err
+	}
 	if err := c.initReadSlice(runMode); err != nil {
 		return err
 	}
-	c.initPublishSlice()
+	if err := c.initPublishSlice(); err != nil {
+		return err
+	}
 	c.initSubscribeSlice()
 	if err := c.initFlagSlice(runMode); err != nil {
 		return err
@@ -137,15 +140,13 @@ func (c *ConfigCore) registerRouteGroups(reg cell.Registry) {
 
 // registerSubscriptions registers configsubscribe event handlers into reg.
 func (c *ConfigCore) registerSubscriptions(reg cell.Registry) error {
-	upsertedHandler := outbox.WrapLegacyHandler(c.subscribeSvc.HandleEntryUpserted)
 	if err := reg.Subscribe(
-		specEventConfigEntryUpserted, upsertedHandler, "configcore",
+		specEventConfigEntryUpserted, c.subscribeSvc.HandleEntryUpserted, "configcore",
 		cell.WithSubscriptionSliceID("configsubscribe")); err != nil {
 		return fmt.Errorf("configcore: subscribe %s: %w", specEventConfigEntryUpserted.Topic, err)
 	}
-	deletedHandler := outbox.WrapLegacyHandler(c.subscribeSvc.HandleEntryDeleted)
 	if err := reg.Subscribe(
-		specEventConfigEntryDeleted, deletedHandler, "configcore",
+		specEventConfigEntryDeleted, c.subscribeSvc.HandleEntryDeleted, "configcore",
 		cell.WithSubscriptionSliceID("configsubscribe")); err != nil {
 		return fmt.Errorf("configcore: subscribe %s: %w", specEventConfigEntryDeleted.Topic, err)
 	}
@@ -183,7 +184,6 @@ func (c *ConfigCore) resolveEmitter(mode cell.DurabilityMode) error {
 	c.emitter = outcome.Emitter
 	c.pendingOutboxPub = nil
 	c.pendingOutboxWriter = nil
-	c.txRunner = persistence.RunnerOrNoop(c.txRunner)
 	return nil
 }
 
@@ -225,11 +225,15 @@ func (c *ConfigCore) ensureCursorCodec(reg cell.Registry) error {
 	return nil
 }
 
-func (c *ConfigCore) initWriteSlice() {
+func (c *ConfigCore) initWriteSlice() error {
 	opts := []configwrite.Option{configwrite.WithEmitter(c.emitter), configwrite.WithTxManager(c.txRunner)}
-	writeSvc := configwrite.NewService(c.configRepo, c.logger, c.clk, opts...)
+	writeSvc, err := configwrite.NewService(c.configRepo, c.logger, c.clk, opts...)
+	if err != nil {
+		return fmt.Errorf("configcore: init write slice: %w", err)
+	}
 	c.writeHandler = configwrite.NewHandler(writeSvc)
 	c.AddSlice(cell.NewBaseSlice("configwrite", "configcore", cell.L2))
+	return nil
 }
 
 func (c *ConfigCore) initReadSlice(runMode query.RunMode) error {
@@ -242,14 +246,18 @@ func (c *ConfigCore) initReadSlice(runMode query.RunMode) error {
 	return nil
 }
 
-func (c *ConfigCore) initPublishSlice() {
+func (c *ConfigCore) initPublishSlice() error {
 	opts := []configpublish.Option{
 		configpublish.WithEmitter(c.emitter),
 		configpublish.WithTxManager(c.txRunner),
 	}
-	publishSvc := configpublish.NewService(c.configRepo, c.logger, c.clk, opts...)
+	publishSvc, err := configpublish.NewService(c.configRepo, c.logger, c.clk, opts...)
+	if err != nil {
+		return fmt.Errorf("configcore: init publish slice: %w", err)
+	}
 	c.publishHandler = configpublish.NewHandler(publishSvc)
 	c.AddSlice(cell.NewBaseSlice("configpublish", "configcore", cell.L2))
+	return nil
 }
 
 func (c *ConfigCore) initSubscribeSlice() {

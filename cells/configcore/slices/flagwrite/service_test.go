@@ -61,22 +61,19 @@ func seedFlag(t *testing.T, repo *mem.FlagRepository, key string) {
 
 // --- Test: constructor ---
 
-// TestNewService_AllowsHalfWiredDemoPath verifies that service construction no
-// longer uses nil-mode coupling; Cell wiring owns durable-mode validation.
-func TestNewService_AllowsHalfWiredDemoPath(t *testing.T) {
-	cases := []struct {
-		name string
-		opts []Option
-	}{
-		{"only_tx_runner", []Option{WithTxManager(&testutil.NoopTxRunner{})}},
-		{"no_opts", []Option{}},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			_, err := NewService(mem.NewFlagRepository(clock.Real()), slog.Default(), clock.Real(), tc.opts...)
-			require.NoError(t, err)
-		})
-	}
+// TestNewService_TxRunnerOptional verifies that NewService accepts both wired
+// and nil TxRunner. Atomicity is only guaranteed when a real TxRunner is provided;
+// nil is acceptable for demo/publisher-only paths where runInTx calls fn directly.
+func TestNewService_TxRunnerOptional(t *testing.T) {
+	t.Run("with_tx_runner_succeeds", func(t *testing.T) {
+		_, err := NewService(mem.NewFlagRepository(clock.Real()), slog.Default(), clock.Real(),
+			WithTxManager(&testutil.NoopTxRunner{}))
+		require.NoError(t, err)
+	})
+	t.Run("without_tx_runner_succeeds_demo_path", func(t *testing.T) {
+		_, err := NewService(mem.NewFlagRepository(clock.Real()), slog.Default(), clock.Real())
+		require.NoError(t, err)
+	})
 }
 
 // --- Test: Create atomicity ---

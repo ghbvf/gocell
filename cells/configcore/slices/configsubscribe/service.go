@@ -129,13 +129,16 @@ func (s *Service) recordConfigEventProcess(ctx context.Context, reason obmetrics
 // Idempotency: Claimer (two-phase Claim/Commit/Release), TTL 24h
 // Disposition: Ack on success / Requeue on transient / Reject on permanent
 // DLX: broker-native via DispositionReject → Nack(requeue=false).
-func (s *Service) HandleEntryUpserted(ctx context.Context, entry outbox.Entry) error {
+func (s *Service) HandleEntryUpserted(ctx context.Context, entry outbox.Entry) outbox.HandleResult {
 	event, err := configevents.DecodeEntryUpserted(entry.Payload)
 	if err != nil {
 		s.logger.Error("config-subscribe: failed to unmarshal entry-upserted event, routing to dead letter",
 			slog.Any("error", err), slog.String("entry_id", entry.ID))
 		s.recordConfigEventProcess(ctx, obmetrics.ConfigEventProcessReasonPermanentError)
-		return outbox.NewPermanentError(fmt.Errorf("config-subscribe: unmarshal entry-upserted payload: %w", err))
+		return outbox.HandleResult{
+			Disposition: outbox.DispositionReject,
+			Err:         outbox.NewPermanentError(fmt.Errorf("config-subscribe: unmarshal entry-upserted payload: %w", err)),
+		}
 	}
 
 	s.cache.mu.Lock()
@@ -147,7 +150,7 @@ func (s *Service) HandleEntryUpserted(ctx context.Context, entry outbox.Entry) e
 			slog.Int("incoming_version", event.Version),
 			slog.Int("known_version", known.version))
 		s.recordConfigEventProcess(ctx, obmetrics.ConfigEventProcessReasonStale)
-		return nil
+		return outbox.HandleResult{Disposition: outbox.DispositionAck}
 	}
 	s.cache.entries[event.Key] = cacheEntry{version: event.Version, present: true}
 	s.cache.mu.Unlock()
@@ -155,7 +158,7 @@ func (s *Service) HandleEntryUpserted(ctx context.Context, entry outbox.Entry) e
 		slog.String("key", event.Key),
 		slog.Int("version", event.Version))
 	s.recordConfigEventProcess(ctx, obmetrics.ConfigEventProcessReasonAck)
-	return nil
+	return outbox.HandleResult{Disposition: outbox.DispositionAck}
 }
 
 // HandleEntryDeleted processes an event.config.entry-deleted.v1 event.
@@ -173,13 +176,16 @@ func (s *Service) HandleEntryUpserted(ctx context.Context, entry outbox.Entry) e
 // Idempotency: Claimer (two-phase Claim/Commit/Release), TTL 24h
 // Disposition: Ack on success / Requeue on transient / Reject on permanent
 // DLX: broker-native via DispositionReject → Nack(requeue=false).
-func (s *Service) HandleEntryDeleted(ctx context.Context, entry outbox.Entry) error {
+func (s *Service) HandleEntryDeleted(ctx context.Context, entry outbox.Entry) outbox.HandleResult {
 	event, err := configevents.DecodeEntryDeleted(entry.Payload)
 	if err != nil {
 		s.logger.Error("config-subscribe: failed to unmarshal entry-deleted event, routing to dead letter",
 			slog.Any("error", err), slog.String("entry_id", entry.ID))
 		s.recordConfigEventProcess(ctx, obmetrics.ConfigEventProcessReasonPermanentError)
-		return outbox.NewPermanentError(fmt.Errorf("config-subscribe: unmarshal entry-deleted payload: %w", err))
+		return outbox.HandleResult{
+			Disposition: outbox.DispositionReject,
+			Err:         outbox.NewPermanentError(fmt.Errorf("config-subscribe: unmarshal entry-deleted payload: %w", err)),
+		}
 	}
 
 	s.cache.mu.Lock()
@@ -195,7 +201,7 @@ func (s *Service) HandleEntryDeleted(ctx context.Context, entry outbox.Entry) er
 			slog.Int("incoming_version", event.Version),
 			slog.Int("known_version", known.version))
 		s.recordConfigEventProcess(ctx, obmetrics.ConfigEventProcessReasonStale)
-		return nil
+		return outbox.HandleResult{Disposition: outbox.DispositionAck}
 	}
 	s.cache.entries[event.Key] = cacheEntry{version: event.Version, present: false}
 	s.cache.mu.Unlock()
@@ -203,5 +209,5 @@ func (s *Service) HandleEntryDeleted(ctx context.Context, entry outbox.Entry) er
 		slog.String("key", event.Key),
 		slog.Int("version", event.Version))
 	s.recordConfigEventProcess(ctx, obmetrics.ConfigEventProcessReasonAck)
-	return nil
+	return outbox.HandleResult{Disposition: outbox.DispositionAck}
 }

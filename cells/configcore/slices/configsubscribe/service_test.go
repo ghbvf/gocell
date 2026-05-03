@@ -32,6 +32,20 @@ func makeEntryDeleted(key string, version int) outbox.Entry {
 	return outbox.Entry{ID: "test-delete", Topic: domain.TopicConfigEntryDeleted, Payload: payload}
 }
 
+// requireAck asserts that the handler result is a successful Ack with no error.
+func requireAck(t *testing.T, result outbox.HandleResult) {
+	t.Helper()
+	assert.Equal(t, outbox.DispositionAck, result.Disposition)
+	assert.NoError(t, result.Err)
+}
+
+// requireReject asserts that the handler result is a permanent rejection.
+func requireReject(t *testing.T, result outbox.HandleResult) {
+	t.Helper()
+	assert.Equal(t, outbox.DispositionReject, result.Disposition)
+	assert.Error(t, result.Err)
+}
+
 type recordingConfigEventCollector struct {
 	records []configEventRecord
 }
@@ -52,21 +66,18 @@ func (c *recordingConfigEventCollector) RecordEventSettlement(string, string, st
 func callWithConfigEventOwner(
 	collector obmetrics.ConfigEventCollector,
 	entry outbox.Entry,
-	fn func(context.Context, outbox.Entry) error,
-) error {
-	var err error
+	fn func(context.Context, outbox.Entry) outbox.HandleResult,
+) outbox.HandleResult {
+	var result outbox.HandleResult
 	wrapped := obmetrics.ConfigEventMiddleware(collector)(
 		outbox.Subscription{Topic: entry.Topic, ConsumerGroup: "configcore", CellID: "configcore", SliceID: "configsubscribe"},
 		func(ctx context.Context, entry outbox.Entry) outbox.HandleResult {
-			err = fn(ctx, entry)
-			if err != nil {
-				return outbox.HandleResult{Disposition: outbox.DispositionRequeue, Err: err}
-			}
-			return outbox.HandleResult{Disposition: outbox.DispositionAck}
+			result = fn(ctx, entry)
+			return result
 		},
 	)
 	wrapped(context.Background(), entry)
-	return err
+	return result
 }
 
 func TestService_HandleEntryUpserted(t *testing.T) {
@@ -112,7 +123,7 @@ func TestService_HandleEntryUpserted(t *testing.T) {
 			svc := NewService(slog.Default())
 
 			for _, e := range tt.events {
-				require.NoError(t, svc.HandleEntryUpserted(context.Background(), e))
+				requireAck(t, svc.HandleEntryUpserted(context.Background(), e))
 			}
 
 			assert.Equal(t, tt.wantLen, svc.Cache().Len())
@@ -129,9 +140,9 @@ func TestService_HandleEntryUpserted_Monotonicity(t *testing.T) {
 	svc := NewService(slog.Default())
 
 	// v3 → v5 → v3 (replay): final state must be v5.
-	require.NoError(t, svc.HandleEntryUpserted(context.Background(), makeEntryUpserted("k", 3)))
-	require.NoError(t, svc.HandleEntryUpserted(context.Background(), makeEntryUpserted("k", 5)))
-	require.NoError(t, svc.HandleEntryUpserted(context.Background(), makeEntryUpserted("k", 3)))
+	requireAck(t, svc.HandleEntryUpserted(context.Background(), makeEntryUpserted("k", 3)))
+	requireAck(t, svc.HandleEntryUpserted(context.Background(), makeEntryUpserted("k", 5)))
+	requireAck(t, svc.HandleEntryUpserted(context.Background(), makeEntryUpserted("k", 3)))
 
 	v, ok := svc.Cache().GetVersion("k")
 	require.True(t, ok)
@@ -140,8 +151,8 @@ func TestService_HandleEntryUpserted_Monotonicity(t *testing.T) {
 
 func TestService_HandleEntryDeleted(t *testing.T) {
 	svc := NewService(slog.Default())
-	require.NoError(t, svc.HandleEntryUpserted(context.Background(), makeEntryUpserted("k", 1)))
-	require.NoError(t, svc.HandleEntryDeleted(context.Background(), makeEntryDeleted("k", 2)))
+	requireAck(t, svc.HandleEntryUpserted(context.Background(), makeEntryUpserted("k", 1)))
+	requireAck(t, svc.HandleEntryDeleted(context.Background(), makeEntryDeleted("k", 2)))
 
 	// Len counts only active entries; after delete, Len must be 0.
 	assert.Equal(t, 0, svc.Cache().Len())
@@ -157,7 +168,7 @@ func TestService_HandleEntryDeleted_NonExistentKey(t *testing.T) {
 	svc := NewService(slog.Default())
 
 	// No prior upsert — delete must still succeed and record a tombstone.
-	require.NoError(t, svc.HandleEntryDeleted(context.Background(), makeEntryDeleted("nonexistent", 1)))
+	requireAck(t, svc.HandleEntryDeleted(context.Background(), makeEntryDeleted("nonexistent", 1)))
 	assert.Equal(t, 0, svc.Cache().Len())
 	v, present := svc.Cache().GetVersion("nonexistent")
 	assert.False(t, present)
@@ -169,10 +180,10 @@ func TestService_HandleEntryDeleted_NonExistentKey(t *testing.T) {
 func TestService_Tombstone_ReplayedOlderUpsertRejected(t *testing.T) {
 	svc := NewService(slog.Default())
 
-	require.NoError(t, svc.HandleEntryUpserted(context.Background(), makeEntryUpserted("k", 1)))
-	require.NoError(t, svc.HandleEntryDeleted(context.Background(), makeEntryDeleted("k", 2)))
-	// Replayed older upsert must be rejected.
-	require.NoError(t, svc.HandleEntryUpserted(context.Background(), makeEntryUpserted("k", 1)))
+	requireAck(t, svc.HandleEntryUpserted(context.Background(), makeEntryUpserted("k", 1)))
+	requireAck(t, svc.HandleEntryDeleted(context.Background(), makeEntryDeleted("k", 2)))
+	// Replayed older upsert must be rejected (silently — returns Ack because stale).
+	requireAck(t, svc.HandleEntryUpserted(context.Background(), makeEntryUpserted("k", 1)))
 
 	v, present := svc.Cache().GetVersion("k")
 	assert.False(t, present, "replayed upsert must not resurrect a tombstoned key")
@@ -186,9 +197,9 @@ func TestService_Tombstone_ReplayedOlderUpsertRejected(t *testing.T) {
 func TestService_Tombstone_ReplayedOlderDeleteRejected(t *testing.T) {
 	svc := NewService(slog.Default())
 
-	require.NoError(t, svc.HandleEntryUpserted(context.Background(), makeEntryUpserted("k", 3)))
-	// Stale delete with older version must be dropped.
-	require.NoError(t, svc.HandleEntryDeleted(context.Background(), makeEntryDeleted("k", 2)))
+	requireAck(t, svc.HandleEntryUpserted(context.Background(), makeEntryUpserted("k", 3)))
+	// Stale delete with older version must be dropped (silently — returns Ack).
+	requireAck(t, svc.HandleEntryDeleted(context.Background(), makeEntryDeleted("k", 2)))
 
 	v, present := svc.Cache().GetVersion("k")
 	assert.True(t, present, "stale delete must not tombstone a newer active entry")
@@ -201,10 +212,10 @@ func TestService_Tombstone_ReplayedOlderDeleteRejected(t *testing.T) {
 func TestService_Tombstone_DeleteThenHigherUpsertRestores(t *testing.T) {
 	svc := NewService(slog.Default())
 
-	require.NoError(t, svc.HandleEntryUpserted(context.Background(), makeEntryUpserted("k", 1)))
-	require.NoError(t, svc.HandleEntryDeleted(context.Background(), makeEntryDeleted("k", 2)))
+	requireAck(t, svc.HandleEntryUpserted(context.Background(), makeEntryUpserted("k", 1)))
+	requireAck(t, svc.HandleEntryDeleted(context.Background(), makeEntryDeleted("k", 2)))
 	// A new upsert with version > tombstone restores the entry.
-	require.NoError(t, svc.HandleEntryUpserted(context.Background(), makeEntryUpserted("k", 3)))
+	requireAck(t, svc.HandleEntryUpserted(context.Background(), makeEntryUpserted("k", 3)))
 
 	v, present := svc.Cache().GetVersion("k")
 	assert.True(t, present, "upsert after delete with higher version must restore entry")
@@ -218,9 +229,9 @@ func TestService_Tombstone_DeleteThenHigherUpsertRestores(t *testing.T) {
 func TestService_GetVersion_AfterDelete_ReturnsTombstoneVersion(t *testing.T) {
 	svc := NewService(slog.Default())
 
-	require.NoError(t, svc.HandleEntryUpserted(context.Background(), makeEntryUpserted("k", 5)))
+	requireAck(t, svc.HandleEntryUpserted(context.Background(), makeEntryUpserted("k", 5)))
 	// Normal delete: version equals the last upsert version (V >= known → accepted).
-	require.NoError(t, svc.HandleEntryDeleted(context.Background(), makeEntryDeleted("k", 5)))
+	requireAck(t, svc.HandleEntryDeleted(context.Background(), makeEntryDeleted("k", 5)))
 
 	v, present := svc.Cache().GetVersion("k")
 	assert.False(t, present, "GetVersion must return present=false after delete")
@@ -234,14 +245,120 @@ func TestService_GetVersion_AfterDelete_ReturnsTombstoneVersion(t *testing.T) {
 func TestService_Tombstone_SameVersionDeleteAccepted(t *testing.T) {
 	svc := NewService(slog.Default())
 
-	require.NoError(t, svc.HandleEntryUpserted(context.Background(), makeEntryUpserted("k", 3)))
+	requireAck(t, svc.HandleEntryUpserted(context.Background(), makeEntryUpserted("k", 3)))
 	// delete at same version as existing upsert: V >= known → accepted as tombstone.
-	require.NoError(t, svc.HandleEntryDeleted(context.Background(), makeEntryDeleted("k", 3)))
+	requireAck(t, svc.HandleEntryDeleted(context.Background(), makeEntryDeleted("k", 3)))
 
 	v, present := svc.Cache().GetVersion("k")
 	assert.False(t, present, "same-version delete must tombstone the entry")
 	assert.Equal(t, 3, v)
 	assert.Equal(t, 0, svc.Cache().Len())
+}
+
+// --- Three-state HandleResult tests (Ack / Reject / Requeue) ---
+
+// TestHandleEntryUpserted_HappyPath_Ack verifies the happy path returns DispositionAck.
+func TestHandleEntryUpserted_HappyPath_Ack(t *testing.T) {
+	svc := NewService(slog.Default())
+	result := svc.HandleEntryUpserted(context.Background(), makeEntryUpserted("k", 1))
+	assert.Equal(t, outbox.DispositionAck, result.Disposition)
+	assert.NoError(t, result.Err)
+	assert.Equal(t, 1, svc.Cache().Len())
+}
+
+// TestHandleEntryUpserted_InvalidPayload_Reject verifies that unparseable payloads
+// return DispositionReject with a PermanentError (routes to DLX, no retry).
+func TestHandleEntryUpserted_InvalidPayload_Reject(t *testing.T) {
+	cases := []struct {
+		name    string
+		payload []byte
+		wantMsg string
+	}{
+		{"invalid json", []byte("not-json"), "unmarshal"},
+		{"missing actorId", []byte(`{"key":"k","version":1}`), "missing actorId"},
+		{"missing key", []byte(`{"version":1,"actorId":"a"}`), "missing key"},
+		{"invalid version zero", []byte(`{"key":"k","version":0,"actorId":"a"}`), "invalid version"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			svc := NewService(slog.Default())
+			entry := outbox.Entry{ID: "bad", Topic: domain.TopicConfigEntryUpserted, Payload: tc.payload}
+			result := svc.HandleEntryUpserted(context.Background(), entry)
+
+			assert.Equal(t, outbox.DispositionReject, result.Disposition)
+			require.Error(t, result.Err)
+			assert.Contains(t, result.Err.Error(), tc.wantMsg)
+
+			var permErr *outbox.PermanentError
+			require.ErrorAs(t, result.Err, &permErr)
+
+			assert.Equal(t, 0, svc.Cache().Len())
+		})
+	}
+}
+
+// TestHandleEntryUpserted_RepoErr_Requeue is not applicable for configsubscribe:
+// the in-memory cache does not return errors. Stale events return Ack (silently dropped).
+// This test verifies stale handling returns Ack, not Requeue.
+func TestHandleEntryUpserted_RepoErr_Requeue(t *testing.T) {
+	svc := NewService(slog.Default())
+	// Seed version 5.
+	requireAck(t, svc.HandleEntryUpserted(context.Background(), makeEntryUpserted("k", 5)))
+	// Stale replay (version 3 <= 5) — returns Ack, not an error.
+	result := svc.HandleEntryUpserted(context.Background(), makeEntryUpserted("k", 3))
+	assert.Equal(t, outbox.DispositionAck, result.Disposition)
+	assert.NoError(t, result.Err)
+}
+
+// TestHandleEntryDeleted_HappyPath_Ack verifies the happy path returns DispositionAck.
+func TestHandleEntryDeleted_HappyPath_Ack(t *testing.T) {
+	svc := NewService(slog.Default())
+	requireAck(t, svc.HandleEntryUpserted(context.Background(), makeEntryUpserted("k", 1)))
+	result := svc.HandleEntryDeleted(context.Background(), makeEntryDeleted("k", 2))
+	assert.Equal(t, outbox.DispositionAck, result.Disposition)
+	assert.NoError(t, result.Err)
+	assert.Equal(t, 0, svc.Cache().Len())
+}
+
+// TestHandleEntryDeleted_InvalidPayload_Reject verifies that unparseable delete payloads
+// return DispositionReject with a PermanentError (routes to DLX, no retry).
+func TestHandleEntryDeleted_InvalidPayload_Reject(t *testing.T) {
+	cases := []struct {
+		name    string
+		payload []byte
+	}{
+		{"invalid json", []byte("not-json")},
+		{"missing key", []byte(`{"version":1,"actorId":"a"}`)},
+		{"missing version", []byte(`{"key":"k","actorId":"a"}`)},
+		{"version zero", []byte(`{"key":"k","version":0,"actorId":"a"}`)},
+		{"missing actorId", []byte(`{"key":"k","version":1}`)},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			svc := NewService(slog.Default())
+			entry := outbox.Entry{ID: "bad-delete", Topic: domain.TopicConfigEntryDeleted, Payload: tc.payload}
+			result := svc.HandleEntryDeleted(context.Background(), entry)
+
+			assert.Equal(t, outbox.DispositionReject, result.Disposition)
+			require.Error(t, result.Err)
+
+			var permErr *outbox.PermanentError
+			require.ErrorAs(t, result.Err, &permErr)
+		})
+	}
+}
+
+// TestHandleEntryDeleted_RepoErr_Requeue: in-memory cache does not error;
+// stale deletes return Ack (silently dropped).
+func TestHandleEntryDeleted_RepoErr_Requeue(t *testing.T) {
+	svc := NewService(slog.Default())
+	requireAck(t, svc.HandleEntryUpserted(context.Background(), makeEntryUpserted("k", 5)))
+	// Stale delete (version 3 < 5) — returns Ack, not an error.
+	result := svc.HandleEntryDeleted(context.Background(), makeEntryDeleted("k", 3))
+	assert.Equal(t, outbox.DispositionAck, result.Disposition)
+	assert.NoError(t, result.Err)
 }
 
 func TestService_HandleEntryUpserted_InvalidPayload(t *testing.T) {
@@ -262,13 +379,14 @@ func TestService_HandleEntryUpserted_InvalidPayload(t *testing.T) {
 			svc := NewService(slog.Default())
 			entry := outbox.Entry{ID: "bad", Topic: domain.TopicConfigEntryUpserted, Payload: tt.payload}
 
-			err := svc.HandleEntryUpserted(context.Background(), entry)
-			require.Error(t, err)
-			assert.Contains(t, err.Error(), tt.wantErr)
+			result := svc.HandleEntryUpserted(context.Background(), entry)
+			assert.Equal(t, outbox.DispositionReject, result.Disposition)
+			require.Error(t, result.Err)
+			assert.Contains(t, result.Err.Error(), tt.wantErr)
 			assert.Equal(t, 0, svc.Cache().Len())
 
 			var permErr *outbox.PermanentError
-			require.ErrorAs(t, err, &permErr)
+			require.ErrorAs(t, result.Err, &permErr)
 		})
 	}
 }
@@ -289,14 +407,15 @@ func TestService_HandleEntryDeleted_InvalidPayload(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			svc := NewService(slog.Default())
-			require.NoError(t, svc.HandleEntryUpserted(context.Background(), makeEntryUpserted("existing.key", 1)))
+			requireAck(t, svc.HandleEntryUpserted(context.Background(), makeEntryUpserted("existing.key", 1)))
 
 			entry := outbox.Entry{ID: "bad-delete", Topic: domain.TopicConfigEntryDeleted, Payload: tt.payload}
-			err := svc.HandleEntryDeleted(context.Background(), entry)
-			require.Error(t, err)
+			result := svc.HandleEntryDeleted(context.Background(), entry)
+			assert.Equal(t, outbox.DispositionReject, result.Disposition)
+			require.Error(t, result.Err)
 
 			var permErr *outbox.PermanentError
-			require.ErrorAs(t, err, &permErr)
+			require.ErrorAs(t, result.Err, &permErr)
 			assert.Equal(t, 1, svc.Cache().Len(), "cache must be unchanged after invalid delete")
 			_, ok := svc.Cache().GetVersion("existing.key")
 			require.True(t, ok)
@@ -304,10 +423,10 @@ func TestService_HandleEntryDeleted_InvalidPayload(t *testing.T) {
 	}
 }
 
-// TestWrapLegacyHandler_Reject_Cases covers payloads that must still be
+// TestHandleEntryUpserted_Reject_Cases covers payloads that must be
 // rejected under ADR-202605031600. Lenient consumers tolerate extra fields,
 // but invalid JSON and missing required fields remain permanent failures.
-func TestWrapLegacyHandler_Reject_Cases(t *testing.T) {
+func TestHandleEntryUpserted_Reject_Cases(t *testing.T) {
 	cases := []struct {
 		name    string
 		payload []byte
@@ -319,10 +438,8 @@ func TestWrapLegacyHandler_Reject_Cases(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			svc := NewService(slog.Default())
-			handler := outbox.WrapLegacyHandler(svc.HandleEntryUpserted)
-
 			entry := outbox.Entry{ID: "bad", Topic: domain.TopicConfigEntryUpserted, Payload: tc.payload}
-			result := handler(context.Background(), entry)
+			result := svc.HandleEntryUpserted(context.Background(), entry)
 
 			assert.Equal(t, outbox.DispositionReject, result.Disposition)
 			assert.Error(t, result.Err)
@@ -335,7 +452,7 @@ func TestService_ConfigEventMetrics_EntryUpsertedOutcomes(t *testing.T) {
 		name        string
 		arrange     func(*Service)
 		entry       outbox.Entry
-		wantErr     bool
+		wantReject  bool
 		wantRecords []configEventRecord
 	}{
 		{
@@ -348,7 +465,7 @@ func TestService_ConfigEventMetrics_EntryUpsertedOutcomes(t *testing.T) {
 		{
 			name: "replayed older upsert records stale",
 			arrange: func(svc *Service) {
-				require.NoError(t, svc.HandleEntryUpserted(context.Background(), makeEntryUpserted("app.name", 2)))
+				requireAck(t, svc.HandleEntryUpserted(context.Background(), makeEntryUpserted("app.name", 2)))
 			},
 			entry: makeEntryUpserted("app.name", 1),
 			wantRecords: []configEventRecord{{
@@ -361,7 +478,7 @@ func TestService_ConfigEventMetrics_EntryUpsertedOutcomes(t *testing.T) {
 				ID: "bad", Topic: domain.TopicConfigEntryUpserted,
 				Payload: []byte(`not-json{`),
 			},
-			wantErr: true,
+			wantReject: true,
 			wantRecords: []configEventRecord{{
 				cell: "configcore", slice: "configsubscribe", reason: obmetrics.ConfigEventProcessReasonPermanentError,
 			}},
@@ -377,11 +494,11 @@ func TestService_ConfigEventMetrics_EntryUpsertedOutcomes(t *testing.T) {
 				collector.records = nil
 			}
 
-			err := callWithConfigEventOwner(collector, tt.entry, svc.HandleEntryUpserted)
-			if tt.wantErr {
-				require.Error(t, err)
+			result := callWithConfigEventOwner(collector, tt.entry, svc.HandleEntryUpserted)
+			if tt.wantReject {
+				assert.Equal(t, outbox.DispositionReject, result.Disposition)
 			} else {
-				require.NoError(t, err)
+				assert.Equal(t, outbox.DispositionAck, result.Disposition)
 			}
 			assert.Equal(t, tt.wantRecords, collector.records)
 		})
@@ -393,7 +510,7 @@ func TestService_ConfigEventMetrics_EntryDeletedOutcomes(t *testing.T) {
 		name        string
 		arrange     func(*Service)
 		entry       outbox.Entry
-		wantErr     bool
+		wantReject  bool
 		wantRecords []configEventRecord
 	}{
 		{
@@ -406,7 +523,7 @@ func TestService_ConfigEventMetrics_EntryDeletedOutcomes(t *testing.T) {
 		{
 			name: "same-version delete records ack",
 			arrange: func(svc *Service) {
-				require.NoError(t, svc.HandleEntryUpserted(context.Background(), makeEntryUpserted("app.name", 3)))
+				requireAck(t, svc.HandleEntryUpserted(context.Background(), makeEntryUpserted("app.name", 3)))
 			},
 			entry: makeEntryDeleted("app.name", 3),
 			wantRecords: []configEventRecord{{
@@ -416,7 +533,7 @@ func TestService_ConfigEventMetrics_EntryDeletedOutcomes(t *testing.T) {
 		{
 			name: "older delete records stale",
 			arrange: func(svc *Service) {
-				require.NoError(t, svc.HandleEntryUpserted(context.Background(), makeEntryUpserted("app.name", 3)))
+				requireAck(t, svc.HandleEntryUpserted(context.Background(), makeEntryUpserted("app.name", 3)))
 			},
 			entry: makeEntryDeleted("app.name", 2),
 			wantRecords: []configEventRecord{{
@@ -426,8 +543,8 @@ func TestService_ConfigEventMetrics_EntryDeletedOutcomes(t *testing.T) {
 		{
 			name: "replayed same-version tombstone records stale",
 			arrange: func(svc *Service) {
-				require.NoError(t, svc.HandleEntryUpserted(context.Background(), makeEntryUpserted("app.name", 3)))
-				require.NoError(t, svc.HandleEntryDeleted(context.Background(), makeEntryDeleted("app.name", 3)))
+				requireAck(t, svc.HandleEntryUpserted(context.Background(), makeEntryUpserted("app.name", 3)))
+				requireAck(t, svc.HandleEntryDeleted(context.Background(), makeEntryDeleted("app.name", 3)))
 			},
 			entry: makeEntryDeleted("app.name", 3),
 			wantRecords: []configEventRecord{{
@@ -440,7 +557,7 @@ func TestService_ConfigEventMetrics_EntryDeletedOutcomes(t *testing.T) {
 				ID: "bad-delete", Topic: domain.TopicConfigEntryDeleted,
 				Payload: []byte(`not-json{`),
 			},
-			wantErr: true,
+			wantReject: true,
 			wantRecords: []configEventRecord{{
 				cell: "configcore", slice: "configsubscribe", reason: obmetrics.ConfigEventProcessReasonPermanentError,
 			}},
@@ -456,11 +573,11 @@ func TestService_ConfigEventMetrics_EntryDeletedOutcomes(t *testing.T) {
 				collector.records = nil
 			}
 
-			err := callWithConfigEventOwner(collector, tt.entry, svc.HandleEntryDeleted)
-			if tt.wantErr {
-				require.Error(t, err)
+			result := callWithConfigEventOwner(collector, tt.entry, svc.HandleEntryDeleted)
+			if tt.wantReject {
+				assert.Equal(t, outbox.DispositionReject, result.Disposition)
 			} else {
-				require.NoError(t, err)
+				assert.Equal(t, outbox.DispositionAck, result.Disposition)
 			}
 			assert.Equal(t, tt.wantRecords, collector.records)
 		})
