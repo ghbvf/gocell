@@ -10,10 +10,12 @@
           "type": "string"
         }
       },
-      "required": ["status"],
-      "additionalProperties": false
+      "required": [
+        "status"
+      ]
     }
   },
-  "required": ["data"],
-  "additionalProperties": false
+  "required": [
+    "data"
+  ]
 }

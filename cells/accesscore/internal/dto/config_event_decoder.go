@@ -50,12 +50,13 @@ type entryDeletedWire struct {
 	ActorID string `json:"actorId"`
 }
 
-// DecodeEntryUpserted strictly decodes and validates event.config.entry-upserted.v1.
-// Rejects unknown fields (including legacy "value") and enforces non-empty key,
-// version >= 1, and non-empty actorId (PR-CFG-G1 G.2 contract requirement).
+// DecodeEntryUpserted decodes and validates event.config.entry-upserted.v1.
+// Unknown fields are accepted (lenient) per ADR-202605031600 v1 schema
+// evolution. Validation still enforces non-empty key, version >= 1, and
+// non-empty actorId (PR-CFG-G1 G.2 contract requirement).
 func DecodeEntryUpserted(data []byte) (EntryUpserted, error) {
 	var wire entryUpsertedWire
-	if err := decodeStrict(data, &wire); err != nil {
+	if err := decodeLenient(data, &wire); err != nil {
 		return EntryUpserted{}, err
 	}
 	if strings.TrimSpace(wire.Key) == "" {
@@ -70,11 +71,12 @@ func DecodeEntryUpserted(data []byte) (EntryUpserted, error) {
 	return EntryUpserted(wire), nil
 }
 
-// DecodeEntryDeleted strictly decodes and validates event.config.entry-deleted.v1.
-// Same validation as DecodeEntryUpserted: key + version >= 1 + non-empty actorId.
+// DecodeEntryDeleted decodes and validates event.config.entry-deleted.v1.
+// Same lenient/validation contract as DecodeEntryUpserted: unknown fields
+// accepted; key + version >= 1 + non-empty actorId enforced.
 func DecodeEntryDeleted(data []byte) (EntryDeleted, error) {
 	var wire entryDeletedWire
-	if err := decodeStrict(data, &wire); err != nil {
+	if err := decodeLenient(data, &wire); err != nil {
 		return EntryDeleted{}, err
 	}
 	if strings.TrimSpace(wire.Key) == "" {
@@ -89,9 +91,12 @@ func DecodeEntryDeleted(data []byte) (EntryDeleted, error) {
 	return EntryDeleted(wire), nil
 }
 
-func decodeStrict(data []byte, dst any) error {
+// decodeLenient unmarshals event payload bytes into dst. Unknown fields are
+// accepted (lenient) per ADR-202605031600 v1 schema evolution: producers can
+// add new optional fields without breaking existing consumers. Multiple JSON
+// values in the same payload are still rejected (single-message contract).
+func decodeLenient(data []byte, dst any) error {
 	dec := json.NewDecoder(bytes.NewReader(data))
-	dec.DisallowUnknownFields()
 	if err := dec.Decode(dst); err != nil {
 		return err
 	}

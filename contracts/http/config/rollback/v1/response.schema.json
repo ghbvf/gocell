@@ -7,8 +7,12 @@
     "data": {
       "type": "object",
       "properties": {
-        "id": { "type": "string" },
-        "key": { "type": "string" },
+        "id": {
+          "type": "string"
+        },
+        "key": {
+          "type": "string"
+        },
         "value": {
           "type": "string",
           "description": "Live value after rollback. If sensitive=true, this is the redaction placeholder \"******\", not the real secret."
@@ -17,14 +21,30 @@
           "type": "boolean",
           "description": "True iff the rolled-back snapshot was marked sensitive. When true, value is redacted and clients must NOT echo it back as input."
         },
-        "version": { "type": "integer" },
-        "createdAt": { "type": "string", "format": "date-time" },
-        "updatedAt": { "type": "string", "format": "date-time" }
+        "version": {
+          "type": "integer"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
       },
-      "required": ["id", "key", "value", "sensitive", "version", "createdAt", "updatedAt"],
-      "additionalProperties": false
+      "required": [
+        "id",
+        "key",
+        "value",
+        "sensitive",
+        "version",
+        "createdAt",
+        "updatedAt"
+      ]
     }
   },
-  "required": ["data"],
-  "additionalProperties": false
+  "required": [
+    "data"
+  ]
 }

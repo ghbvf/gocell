@@ -6,17 +6,37 @@
     "data": {
       "type": "object",
       "properties": {
-        "accessToken": { "type": "string" },
-        "refreshToken": { "type": "string" },
-        "expiresAt": { "type": "string", "format": "date-time" },
-        "sessionId": { "type": "string" },
-        "userId": { "type": "string" },
-        "passwordResetRequired": { "type": "boolean" }
+        "accessToken": {
+          "type": "string"
+        },
+        "refreshToken": {
+          "type": "string"
+        },
+        "expiresAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "sessionId": {
+          "type": "string"
+        },
+        "userId": {
+          "type": "string"
+        },
+        "passwordResetRequired": {
+          "type": "boolean"
+        }
       },
-      "required": ["accessToken", "refreshToken", "expiresAt", "sessionId", "userId", "passwordResetRequired"],
-      "additionalProperties": false
+      "required": [
+        "accessToken",
+        "refreshToken",
+        "expiresAt",
+        "sessionId",
+        "userId",
+        "passwordResetRequired"
+      ]
     }
   },
-  "required": ["data"],
-  "additionalProperties": false
+  "required": [
+    "data"
+  ]
 }

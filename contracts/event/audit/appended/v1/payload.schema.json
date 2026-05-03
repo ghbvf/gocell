@@ -3,9 +3,15 @@
   "title": "event.audit.appended.v1.payload",
   "type": "object",
   "properties": {
-    "auditEntryId": { "type": "string" },
-    "eventType": { "type": "string" }
+    "auditEntryId": {
+      "type": "string"
+    },
+    "eventType": {
+      "type": "string"
+    }
   },
-  "required": ["auditEntryId", "eventType"],
-  "additionalProperties": false
+  "required": [
+    "auditEntryId",
+    "eventType"
+  ]
 }

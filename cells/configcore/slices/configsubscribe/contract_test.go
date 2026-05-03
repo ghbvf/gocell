@@ -27,7 +27,10 @@ func TestEventConfigEntryUpsertedV1Subscribe(t *testing.T) {
 	// Invalid version
 	c.MustRejectPayload(t, []byte(`{"key":"app.name","version":0,"actorId":"adm-1"}`))
 
-	// value field must be rejected (metadata-only schema, additionalProperties: false)
+	// Per ADR-202605031600 §4 (metadata-only event policy), the payload
+	// schema declares unevaluatedProperties:false to forbid state-bearing
+	// fields like "value"; a buggy producer leaking config content via the
+	// event bus is rejected here at contract-test time, before merge.
 	c.MustRejectPayload(t, []byte(`{"key":"app.name","value":"newval","version":2,"actorId":"adm-1"}`))
 
 	c.MustRejectHeaders(t, []byte(`{}`))
@@ -53,7 +56,8 @@ func TestEventConfigEntryDeletedV1Subscribe(t *testing.T) {
 	// Invalid version.
 	c.MustRejectPayload(t, []byte(`{"key":"app.name","version":0,"actorId":"adm-1"}`))
 
-	// Additional properties forbidden.
+	// Per ADR-202605031600 §4 (metadata-only), payload schema declares
+	// unevaluatedProperties:false; a stray "value" field is rejected here.
 	c.MustRejectPayload(t, []byte(`{"key":"app.name","version":1,"actorId":"adm-1","value":"old"}`))
 
 	c.MustRejectHeaders(t, []byte(`{}`))

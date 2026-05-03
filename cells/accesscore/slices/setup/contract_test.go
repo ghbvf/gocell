@@ -27,9 +27,9 @@ func TestHttpAuthSetupStatusV1Serve(t *testing.T) {
 
 	c.ValidateResponse(t, []byte(`{"data":{"hasAdmin":false}}`))
 	c.ValidateResponse(t, []byte(`{"data":{"hasAdmin":true}}`))
-	// additionalProperties:false — unknown fields rejected.
-	c.MustRejectResponse(t, []byte(`{"data":{"hasAdmin":false,"unexpected":"x"}}`))
-	// required hasAdmin
+	// Per ADR-202605031600, response schema is lenient — unknown fields accepted.
+	c.ValidateResponse(t, []byte(`{"data":{"hasAdmin":false,"unexpected":"x"}}`))
+	// required hasAdmin still enforced (structural, not strict-AP).
 	c.MustRejectResponse(t, []byte(`{"data":{}}`))
 
 	// Also exercise the real handler and feed its recorded output through the

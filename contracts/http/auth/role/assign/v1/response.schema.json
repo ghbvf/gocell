@@ -6,14 +6,24 @@
     "data": {
       "type": "object",
       "properties": {
-        "userId": { "type": "string" },
-        "roleId": { "type": "string" },
-        "assigned": { "type": "boolean" }
+        "userId": {
+          "type": "string"
+        },
+        "roleId": {
+          "type": "string"
+        },
+        "assigned": {
+          "type": "boolean"
+        }
       },
-      "required": ["userId", "roleId", "assigned"],
-      "additionalProperties": false
+      "required": [
+        "userId",
+        "roleId",
+        "assigned"
+      ]
     }
   },
-  "required": ["data"],
-  "additionalProperties": false
+  "required": [
+    "data"
+  ]
 }

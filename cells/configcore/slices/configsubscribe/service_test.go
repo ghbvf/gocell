@@ -252,13 +252,9 @@ func TestService_HandleEntryUpserted_InvalidPayload(t *testing.T) {
 	}{
 		{"invalid json", []byte("not-json"), "unmarshal"},
 		{"missing key", []byte(`{"version":1,"actorId":"a"}`), "missing key"},
-		// value field must now be rejected (metadata-only schema)
-		{"value field present", []byte(`{"key":"k","value":"v","version":1,"actorId":"a"}`), "unknown field"},
 		{"invalid version zero", []byte(`{"key":"k","version":0,"actorId":"a"}`), "invalid version"},
 		{"missing actorId", []byte(`{"key":"k","version":1}`), "missing actorId"},
 		{"empty actorId", []byte(`{"key":"k","version":1,"actorId":""}`), "missing actorId"},
-		{"extra sensitive field", []byte(`{"key":"k","version":1,"actorId":"a","sensitive":false}`), "unknown field"},
-		{"old action field", []byte(`{"action":"updated","key":"k","version":1,"actorId":"a"}`), "unknown field"},
 	}
 
 	for _, tt := range tests {
@@ -288,7 +284,6 @@ func TestService_HandleEntryDeleted_InvalidPayload(t *testing.T) {
 		{"missing version", []byte(`{"key":"existing.key","actorId":"a"}`), "invalid version"},
 		{"version zero", []byte(`{"key":"existing.key","version":0,"actorId":"a"}`), "invalid version"},
 		{"missing actorId", []byte(`{"key":"existing.key","version":1}`), "missing actorId"},
-		{"extra value field", []byte(`{"key":"existing.key","value":"old","version":1,"actorId":"a"}`), "unknown field"},
 	}
 
 	for _, tt := range tests {
@@ -309,16 +304,16 @@ func TestService_HandleEntryDeleted_InvalidPayload(t *testing.T) {
 	}
 }
 
-// TestWrapLegacyHandler_Reject_Cases is a table-driven test covering both
-// invalid JSON and the forbidden value field in a metadata-only payload.
+// TestWrapLegacyHandler_Reject_Cases covers payloads that must still be
+// rejected under ADR-202605031600. Lenient consumers tolerate extra fields,
+// but invalid JSON and missing required fields remain permanent failures.
 func TestWrapLegacyHandler_Reject_Cases(t *testing.T) {
 	cases := []struct {
 		name    string
 		payload []byte
 	}{
 		{"invalid json", []byte("not-json")},
-		// Old wire format with value field — must be rejected
-		{"value field present", []byte(`{"key":"k","value":"some-value","version":1}`)},
+		{"missing actorId", []byte(`{"key":"k","version":1}`)},
 	}
 
 	for _, tc := range cases {
@@ -364,7 +359,7 @@ func TestService_ConfigEventMetrics_EntryUpsertedOutcomes(t *testing.T) {
 			name: "invalid upsert records permanent error",
 			entry: outbox.Entry{
 				ID: "bad", Topic: domain.TopicConfigEntryUpserted,
-				Payload: []byte(`{"key":"k","value":"v","version":1,"actorId":"a"}`),
+				Payload: []byte(`not-json{`),
 			},
 			wantErr: true,
 			wantRecords: []configEventRecord{{
@@ -443,7 +438,7 @@ func TestService_ConfigEventMetrics_EntryDeletedOutcomes(t *testing.T) {
 			name: "invalid delete records permanent error",
 			entry: outbox.Entry{
 				ID: "bad-delete", Topic: domain.TopicConfigEntryDeleted,
-				Payload: []byte(`{"key":"k","value":"v","version":1,"actorId":"a"}`),
+				Payload: []byte(`not-json{`),
 			},
 			wantErr: true,
 			wantRecords: []configEventRecord{{

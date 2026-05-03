@@ -4,11 +4,24 @@
   "type": "object",
   "description": "Emitted by configpublish.Rollback when a config entry is reverted to a prior version. Topic name is the discriminator — no action field.",
   "properties": {
-    "key": { "type": "string" },
-    "targetVersion": { "type": "integer" },
-    "newVersion": { "type": "integer" },
-    "actorId": { "type": "string" }
+    "key": {
+      "type": "string"
+    },
+    "targetVersion": {
+      "type": "integer"
+    },
+    "newVersion": {
+      "type": "integer"
+    },
+    "actorId": {
+      "type": "string"
+    }
   },
-  "required": ["key", "targetVersion", "newVersion", "actorId"],
-  "additionalProperties": false
+  "required": [
+    "key",
+    "targetVersion",
+    "newVersion",
+    "actorId"
+  ],
+  "unevaluatedProperties": false
 }

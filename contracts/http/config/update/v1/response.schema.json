@@ -38,12 +38,10 @@
         "version",
         "createdAt",
         "updatedAt"
-      ],
-      "additionalProperties": false
+      ]
     }
   },
   "required": [
     "data"
-  ],
-  "additionalProperties": false
+  ]
 }

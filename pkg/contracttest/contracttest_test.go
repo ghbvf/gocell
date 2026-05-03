@@ -257,6 +257,43 @@ func TestMustRejectPayload(t *testing.T) {
 	c.MustRejectPayload(t, []byte(`{"key":"k"}`)) // missing required "value"
 }
 
+// TestValidateResponse_ExtraFieldPermitted locks down ADR-202605031600 v1
+// schema evolution at the helper level: a response schema without
+// additionalProperties:false must accept payloads with extra (future) fields.
+// Uses LoadFromString so the assertion is self-contained and does not depend
+// on testdata fixtures that may evolve independently.
+func TestValidateResponse_ExtraFieldPermitted(t *testing.T) {
+	c := LoadFromString(t, "test.lenient.v1",
+		`{"type":"object","properties":{"id":{"type":"string"}},"required":["id"],"additionalProperties":false}`,
+		`{"type":"object","properties":{"id":{"type":"string"}},"required":["id"]}`)
+	// Lenient response schema accepts the unknown "futureField".
+	c.ValidateResponse(t, []byte(`{"id":"x","futureField":"v"}`))
+	// Strict request schema still rejects unknown fields.
+	mockT := &mockTB{}
+	c.ValidateRequest(mockT, []byte(`{"id":"x","extra":"bad"}`))
+	if !mockT.failed {
+		t.Error("strict request schema must reject unknown field per FMT-20")
+	}
+}
+
+// TestValidatePayload_ExtraFieldPermitted — symmetric with TestValidateResponse_ExtraFieldPermitted,
+// locks down ADR-202605031600 on the event payload side: payload schema without
+// additionalProperties:false must accept payloads with extra (future) fields.
+func TestValidatePayload_ExtraFieldPermitted(t *testing.T) {
+	c := LoadByID(t, testdataRoot(), "event.test.valid.v1")
+	// payload schema has no additionalProperties:false → extra field must PASS
+	c.ValidatePayload(t, []byte(`{"key":"k","value":"v","futureField":"x"}`))
+}
+
+// TestValidateHeaders_ExtraFieldPermitted — symmetric with TestValidateResponse_ExtraFieldPermitted,
+// locks down ADR-202605031600 on the event headers side: headers schema without
+// additionalProperties:false must accept headers with extra (future) fields.
+func TestValidateHeaders_ExtraFieldPermitted(t *testing.T) {
+	c := LoadByID(t, testdataRoot(), "event.test.valid.v1")
+	// headers schema has no additionalProperties:false → extra field must PASS
+	c.ValidateHeaders(t, []byte(`{"event_id":"evt-1","futureField":"x"}`))
+}
+
 func TestMustRejectHeaders(t *testing.T) {
 	c := LoadByID(t, testdataRoot(), "event.test.valid.v1")
 	c.MustRejectHeaders(t, []byte(`{}`)) // missing required "event_id"

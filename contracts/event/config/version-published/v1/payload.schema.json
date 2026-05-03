@@ -4,11 +4,24 @@
   "type": "object",
   "description": "Emitted by configpublish.Publish when a new ConfigVersion snapshot is created. Topic name is the discriminator — no action field.",
   "properties": {
-    "key": { "type": "string" },
-    "configId": { "type": "string" },
-    "version": { "type": "integer" },
-    "actorId": { "type": "string" }
+    "key": {
+      "type": "string"
+    },
+    "configId": {
+      "type": "string"
+    },
+    "version": {
+      "type": "integer"
+    },
+    "actorId": {
+      "type": "string"
+    }
   },
-  "required": ["key", "configId", "version", "actorId"],
-  "additionalProperties": false
+  "required": [
+    "key",
+    "configId",
+    "version",
+    "actorId"
+  ],
+  "unevaluatedProperties": false
 }

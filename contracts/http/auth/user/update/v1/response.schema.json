@@ -27,10 +27,17 @@
           "format": "date-time"
         }
       },
-      "required": ["id", "username", "email", "status", "createdAt", "updatedAt"],
-      "additionalProperties": false
+      "required": [
+        "id",
+        "username",
+        "email",
+        "status",
+        "createdAt",
+        "updatedAt"
+      ]
     }
   },
-  "required": ["data"],
-  "additionalProperties": false
+  "required": [
+    "data"
+  ]
 }

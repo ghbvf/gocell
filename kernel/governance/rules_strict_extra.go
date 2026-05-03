@@ -29,38 +29,43 @@ const (
 // deprecatedAt date and the validation run before FMT-23 fires a warning.
 const defaultDeprecationGracePeriod = 90 * 24 * time.Hour
 
-// --- FMT-20 (formerly FMT-RESPONSE-STRICT-01) ---
+// --- FMT-20 (request schema strict additionalProperties) ---
 
-// validateFMTResponseStrict01 scans every HTTP-kind contract's request/response
-// JSON schemas. For each "type":"object" node in the schema (recursive), if it
-// lacks "additionalProperties": false, a violation is emitted.
+// validateFMTRequestStrict01 scans every HTTP-kind contract's request schema.
+// For each "type":"object" node in the schema (recursive), if it lacks
+// "additionalProperties": false, a violation is emitted. Response and event
+// schemas are intentionally lenient per ADR-202605031600 (v1 schema evolution).
 //
 // Rule ID: FMT-20.
 // Severity: Error, IssueRequired.
-// ref: k8s.io/apiserver admission/plugin/schema — strict schema validation pattern.
-func (v *Validator) validateFMTResponseStrict01() []ValidationResult {
+// ref: kubernetes/kubernetes apiserver — StrictSerializer applies to request
+// decoding only; response encoding bypasses fieldValidation.
+func (v *Validator) validateFMTRequestStrict01() []ValidationResult {
 	var results []ValidationResult
 	for _, c := range v.project.Contracts {
 		if c.Kind != "http" {
 			continue
 		}
-		results = append(results, v.validateFMTResponseStrictContract(c)...)
+		results = append(results, v.validateFMTRequestStrictContract(c)...)
 	}
 	return results
 }
 
-func (v *Validator) validateFMTResponseStrictContract(c *metadata.ContractMeta) []ValidationResult {
+func (v *Validator) validateFMTRequestStrictContract(c *metadata.ContractMeta) []ValidationResult {
 	var results []ValidationResult
 	for _, ref := range metadata.ContractSchemaRefs(c) {
-		if !strictSchemaRefField(ref.Field) || ref.Ref == "" {
+		// FMT-20 only scans request schemas; response and
+		// endpoints.http.responses[*] are intentionally excluded per
+		// ADR-202605031600 (v1 schema evolution).
+		if ref.Field != "schemaRefs.request" || ref.Ref == "" {
 			continue
 		}
-		results = append(results, v.validateFMTResponseStrictRef(c, ref)...)
+		results = append(results, v.validateFMTRequestStrictRef(c, ref)...)
 	}
 	return results
 }
 
-func (v *Validator) validateFMTResponseStrictRef(c *metadata.ContractMeta, ref metadata.ContractSchemaRef) []ValidationResult {
+func (v *Validator) validateFMTRequestStrictRef(c *metadata.ContractMeta, ref metadata.ContractSchemaRef) []ValidationResult {
 	resolved, resolveErr := metadata.ResolveContractSchemaRef(v.root, c, ref)
 	if resolveErr != nil {
 		return []ValidationResult{v.newResult(
@@ -91,16 +96,11 @@ func (v *Validator) fmt20MissingSchemaResults(c *metadata.ContractMeta, rel stri
 		results = append(results, v.newResult(
 			ruleFMT20, SeverityError, IssueRequired,
 			rel, loc,
-			fmt.Sprintf("contract %q schema must declare additionalProperties explicitly (true=open, false=strict) at %s", c.ID, loc),
+			fmt.Sprintf("contract %q request schema must declare additionalProperties:false at %s"+
+				" (strict per FMT-20 / ADR-202605031600)", c.ID, loc),
 		))
 	}
 	return results
-}
-
-func strictSchemaRefField(field string) bool {
-	return field == "schemaRefs.request" ||
-		field == "schemaRefs.response" ||
-		strings.HasPrefix(field, "endpoints.http.responses[")
 }
 
 // scanSchemaForStrictMissing reads a JSON schema file and recursively walks it.
@@ -258,11 +258,12 @@ func decodeJSONPointerToken(s string) string {
 	return strings.ReplaceAll(s, "~0", "~")
 }
 
-// checkAdditionalProperties emits a violation when the node has no
-// "additionalProperties" key at all. An explicit bool (true or false) is
-// accepted — the schema author consciously opted in or out of extra properties.
-// An object value (e.g. {"type":"string"}) is treated as missing because it is
-// not a deliberate open/closed declaration.
+// checkAdditionalProperties emits a violation unless the node declares
+// `additionalProperties: false`. Per ADR-202605031600, FMT-20 only scans
+// request schemas, where the goal is strictly closed shape — `true` (explicit
+// open) is just as much a bypass as the missing-key case, so both fail. An
+// object value (e.g. {"type":"string"}) is also rejected because it is a
+// constraint on extra-property values, not a closed-shape declaration.
 func checkAdditionalProperties(node map[string]any, path string, missing *[]string) {
 	ap, hasAP := node["additionalProperties"]
 	if !hasAP {
@@ -270,11 +271,12 @@ func checkAdditionalProperties(node map[string]any, path string, missing *[]stri
 		*missing = append(*missing, path)
 		return
 	}
-	// Explicit bool (true = open, false = strict) — author made a choice, accept.
-	if _, ok := ap.(bool); ok {
+	if b, ok := ap.(bool); ok && !b {
+		// Only `additionalProperties: false` satisfies FMT-20.
 		return
 	}
-	// Object value (schema form) is not a deliberate open/closed declaration.
+	// `true`, object value, or any other shape is a violation: request schemas
+	// must be strictly closed.
 	*missing = append(*missing, path)
 }
 

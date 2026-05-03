@@ -3,14 +3,41 @@
   "$comment": "DEPRECATED 2026-04-25 (PR #266): retired event, no subscriber",
   "title": "event.flag.changed.v1.payload",
   "type": "object",
-  "required": ["eventId", "action", "key", "enabled", "version", "occurredAt"],
+  "required": [
+    "eventId",
+    "action",
+    "key",
+    "enabled",
+    "version",
+    "occurredAt"
+  ],
   "properties": {
-    "eventId":    { "type": "string", "description": "UUID for idempotency" },
-    "action":     { "type": "string", "enum": ["created", "updated", "toggled", "deleted"] },
-    "key":        { "type": "string" },
-    "enabled":    { "type": "boolean" },
-    "version":    { "type": "integer", "minimum": 1 },
-    "occurredAt": { "type": "string", "format": "date-time" }
-  },
-  "additionalProperties": false
+    "eventId": {
+      "type": "string",
+      "description": "UUID for idempotency"
+    },
+    "action": {
+      "type": "string",
+      "enum": [
+        "created",
+        "updated",
+        "toggled",
+        "deleted"
+      ]
+    },
+    "key": {
+      "type": "string"
+    },
+    "enabled": {
+      "type": "boolean"
+    },
+    "version": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "occurredAt": {
+      "type": "string",
+      "format": "date-time"
+    }
+  }
 }

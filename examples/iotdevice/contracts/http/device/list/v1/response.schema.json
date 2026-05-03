@@ -8,18 +8,38 @@
       "items": {
         "type": "object",
         "properties": {
-          "id":       { "type": "string" },
-          "name":     { "type": "string" },
-          "status":   { "type": "string" },
-          "lastSeen": { "type": "string", "format": "date-time" }
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "lastSeen": {
+            "type": "string",
+            "format": "date-time"
+          }
         },
-        "required": ["id", "name", "status", "lastSeen"],
-        "additionalProperties": false
+        "required": [
+          "id",
+          "name",
+          "status",
+          "lastSeen"
+        ]
       }
     },
-    "nextCursor": { "type": "string" },
-    "hasMore":    { "type": "boolean" }
+    "nextCursor": {
+      "type": "string"
+    },
+    "hasMore": {
+      "type": "boolean"
+    }
   },
-  "required": ["data", "nextCursor", "hasMore"],
-  "additionalProperties": false
+  "required": [
+    "data",
+    "nextCursor",
+    "hasMore"
+  ]
 }
