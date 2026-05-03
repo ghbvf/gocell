@@ -14,7 +14,21 @@ import (
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/kernel/outbox"
+	"github.com/ghbvf/gocell/kernel/persistence"
 )
+
+// directRunner is a test-only pass-through TxRunner for auditappend tests.
+// Moved from service.go (Fix 4): directRunner is dead code in production
+// (the cell-level demoTxRunner is injected instead); keeping it here in
+// the test package makes the test-only intent explicit.
+type directRunner struct{}
+
+// Compile-time assertion: directRunner must satisfy persistence.TxRunner.
+var _ persistence.TxRunner = directRunner{}
+
+func (directRunner) RunInTx(ctx context.Context, fn func(context.Context) error) error {
+	return fn(ctx)
+}
 
 var testHMACKey = []byte("test-hmac-key-32bytes-long!!!!!!!")
 

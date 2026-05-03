@@ -54,7 +54,11 @@ func WithEmitter(e outbox.Emitter) Option {
 
 // WithTxManager sets the TxRunner for transactional guarantees (L2 atomicity).
 func WithTxManager(tx persistence.TxRunner) Option {
-	return func(s *Service) { s.txRunner = tx }
+	return func(s *Service) {
+		if tx != nil {
+			s.txRunner = tx
+		}
+	}
 }
 
 // WithClock sets the clock used for audit entry timestamps.
@@ -105,15 +109,6 @@ func NewService(
 	return s, nil
 }
 
-// directRunner is retained as the canonical pass-through TxRunner that demo
-// callers can inject via WithTxManager when running without real DB-level
-// transactions. Constructor fail-fast ensures it (or a real TxRunner) is
-// always present at runtime.
-type directRunner struct{}
-
-func (directRunner) RunInTx(ctx context.Context, fn func(context.Context) error) error {
-	return fn(ctx)
-}
 
 // HandleEvent processes an incoming event by appending it to the hash chain.
 //
