@@ -22,7 +22,7 @@ import (
 //
 // Wiring: these guarantees are provided by outbox.ConsumerBase, which
 // bootstrap injects via WithConsumerMiddleware — the handler below only
-// needs to produce a LegacyHandler return value; ConsumerBase wraps it to
+// needs to produce a HandleResult; ConsumerBase wraps it to
 // enforce claim/backoff/DLX semantics. See cmd/corebundle/main.go for the
 // concrete wiring (in-mem Claimer in corebundle; redis IdempotencyClaimer
 // in multi-pod deployments).

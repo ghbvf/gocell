@@ -163,6 +163,7 @@ func (s *Service) HandleEvent(ctx context.Context, entry outbox.Entry) outbox.Ha
 			"validation regression suspected",
 			slog.String("event_id", entry.ID),
 			slog.String("event_type", entry.EventType))
+		// Fail-safe fallback — see ADR Q5 (at-least-once audit > actor traceability).
 		actorID = "system"
 	}
 

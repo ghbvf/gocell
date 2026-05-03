@@ -50,7 +50,7 @@ func (f *failingTxRunner) RunInTx(_ context.Context, _ func(context.Context) err
 func TestService_WithEmitter(t *testing.T) {
 	repo := mem.NewAuditRepository()
 	ow := &stubOutboxWriter{}
-	svc, err := NewService(repo, testHMACKey, slog.Default(), WithEmitter(testoutbox.MustEmitter(t, ow)))
+	svc, err := NewService(repo, testHMACKey, slog.Default(), WithEmitter(testoutbox.MustEmitter(t, ow)), WithTxManager(&stubTxRunner{}))
 	require.NoError(t, err)
 
 	// Build a small valid chain.
@@ -83,7 +83,7 @@ func TestService_VerifyChain_OutboxWriteError_ReturnsError(t *testing.T) {
 	repo := mem.NewAuditRepository()
 	failErr := fmt.Errorf("outbox write failure")
 	fw := &failingOutboxWriter{err: failErr}
-	svc, err := NewService(repo, testHMACKey, slog.Default(), WithEmitter(testoutbox.MustEmitter(t, fw)))
+	svc, err := NewService(repo, testHMACKey, slog.Default(), WithEmitter(testoutbox.MustEmitter(t, fw)), WithTxManager(&stubTxRunner{}))
 	require.NoError(t, err)
 
 	// Build a valid chain so we reach the outbox write path.
@@ -160,7 +160,7 @@ func TestService_VerifyChain_PublishError_DoesNotFailVerify(t *testing.T) {
 		fp, outbox.DirectPublishFailOpen, metrics.NopProvider{}, clock.Real(), "auditcore",
 		outbox.WithLogger(slog.Default()))
 	require.NoError(t, err)
-	svc, err := NewService(repo, testHMACKey, slog.Default(), WithEmitter(emitter))
+	svc, err := NewService(repo, testHMACKey, slog.Default(), WithEmitter(emitter), WithTxManager(&stubTxRunner{}))
 	require.NoError(t, err)
 
 	chain := domain.NewHashChain(testHMACKey)
@@ -178,7 +178,7 @@ func TestService_VerifyChain_PublishError_DoesNotFailVerify(t *testing.T) {
 func TestService_VerifyChain_InvalidChain_WithOutbox(t *testing.T) {
 	repo := mem.NewAuditRepository()
 	ow := &stubOutboxWriter{}
-	svc, err := NewService(repo, testHMACKey, slog.Default(), WithEmitter(testoutbox.MustEmitter(t, ow)))
+	svc, err := NewService(repo, testHMACKey, slog.Default(), WithEmitter(testoutbox.MustEmitter(t, ow)), WithTxManager(&stubTxRunner{}))
 	require.NoError(t, err)
 
 	chain := domain.NewHashChain(testHMACKey)

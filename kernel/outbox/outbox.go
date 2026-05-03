@@ -525,9 +525,12 @@ type HandleResult struct {
 	Err         error // optional: logged/observed; nil for success
 
 	// Receipt is the Subscriber-implementer-internal channel for delivery loop
-	// Commit/Release after broker Ack/Nack. Business handlers MUST NOT write
-	// this field — it is set exclusively by ConsumerBase. See 029 #12
-	// (PR-V1-OUTBOX-RECEIPT-EXTRACT) for v2 extraction roadmap.
+	// Commit/Release after broker Ack/Nack. Business handlers MUST NOT read or
+	// write this field — reading observes an unspecified intermediate state,
+	// writing silently overwrites the ConsumerBase-set value and breaks
+	// idempotency Commit/Release. The HANDLER-RECEIPT-WRITE-01 archtest rule
+	// statically enforces the no-write half. See 029 #12 (PR-V1-OUTBOX-RECEIPT-EXTRACT)
+	// for v2 extraction roadmap.
 	Receipt idempotency.Receipt
 
 	// ProcessReason is a low-cardinality handler/process classification, such
@@ -575,8 +578,8 @@ func NotifySettlement(
 }
 
 // EntryHandler is the Solution B handler signature. Business handlers return
-// a HandleResult that declares the intended broker disposition and carries an
-// optional idempotency Receipt.
+// a HandleResult that declares the intended broker disposition. The Receipt
+// field is a Subscriber-implementer hand-off; see HandleResult godoc.
 type EntryHandler func(context.Context, Entry) HandleResult
 
 // ---------------------------------------------------------------------------

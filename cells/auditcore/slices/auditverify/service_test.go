@@ -18,7 +18,7 @@ var testHMACKey = []byte("test-hmac-key-32bytes-long!!!!!!!")
 func newTestService(t testing.TB) (*Service, *mem.AuditRepository) {
 	t.Helper()
 	repo := mem.NewAuditRepository()
-	svc, err := NewService(repo, testHMACKey, slog.Default())
+	svc, err := NewService(repo, testHMACKey, slog.Default(), WithTxManager(&stubTxRunner{}))
 	require.NoError(t, err)
 	return svc, repo
 }

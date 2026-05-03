@@ -97,6 +97,25 @@ follow-up is tracked as **029 #12 PR-V1-OUTBOX-RECEIPT-EXTRACT** in the
 master roadmap (single source of truth — `docs/backlog.md` does not get a
 duplicate entry).
 
+This is an explicitly accepted, time-bounded architecture compromise that
+ends with K#12 (PR-V1-OUTBOX-RECEIPT-EXTRACT). The adapters/rabbitmq
+dependency on kernel/idempotency that surfaces from this design is part
+of the same compromise envelope and resolves at the same time.
+
+## Trade-off Q5 — actorID system fallback in audit-append
+
+`auditappend.HandleEvent` falls back to `actorID = "system"` when the event
+payload contains neither `actorId` nor `userId`. This is an explicit trade-off:
+
+- **At-least-once audit semantics take priority** — dropping an audit entry
+  because of missing actor metadata is worse than recording it under a sentinel
+- **Producer-side validation already enforces actorId** for admin-write events
+  (PR-CFG-G1 G.2: configcore + accesscore decoders reject empty actorId)
+- **Reaching the fallback path means producer regression** — the handler logs
+  at Error level so data-quality dashboards surface the regression
+
+The fallback is fail-safe, not a routine path; do not rely on it.
+
 ## Consequences
 
 - Public API surface area in `kernel/outbox` + `kernel/persistence`
