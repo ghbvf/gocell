@@ -10,9 +10,9 @@ paths:
 
 ## Auth 路由声明 + 三 listener + RouteGroup (PR-A14b / PR262)
 
-每个 Cell 实现 `RouteGroupContributor` 接口，通过 `RouteGroups()` 声明路由组。
+每个 Cell 在 `Init(ctx, reg)` 中通过 `reg.RouteGroup(...)` 声明路由组。
 每个路由组指定目标 listener、URL 前缀、以及注册回调（`Register func(mux cell.RouteMux) error` — PR-MODE-6: error-first 链路，phase5 把 Register 的错误连同 cell+listener+prefix 上下文 wrap 后冒泡到 `Bootstrap.Run`）。
-Bootstrap 在 phase5 收集所有路由组并挂载到对应 listener 的 chi.Mux 上。
+Bootstrap 在 phase5 drain 所有 `RegistrySnapshot.RouteGroups` 并挂载到对应 listener 的 chi.Mux 上。
 
 每条业务路由通过 `auth.Mount(mux, auth.Route{...})` 注册（**不是** `auth.Declare`/`auth.RouteDecl` —— 这两个旧符号已删除）。`auth.Route.Contract` 是 `wrapper.ContractSpec`，承载 method+path+contract id；Mount 自动 strip listener prefix、注册 chi handler、转发 AuthRouteMeta 给 FinalizeAuth。Mount 返回 `error`（PR-MODE-6 ERROR-FIRST-API）；`auth.MustMount` 是 composition-root fail-fast 包装，但 **slice handler 内部应直接用 `auth.Mount` + 错误传播**，让错误一路冒泡到 phase5。
 
@@ -36,37 +36,39 @@ func (h *Handler) RegisterRoutes(mux cell.RouteHandler) error {
     return nil
 }
 
-// Cell.RouteGroups — PR-A14b 声明式路由组（PR-MODE-6 错误链路贯通）
-func (c *AccessCore) RouteGroups() []cell.RouteGroup {
-    return []cell.RouteGroup{
-        {
-            Listener: cell.PrimaryListener,
-            Prefix:   "/api/v1/access",
-            Register: func(mux cell.RouteMux) error {
-                // mux.Route 的 callback 仍是 func(RouteMux) 无 error 返回，
-                // 用 outer-variable closure 捕获 slice 错误并通过 Register 返回
-                // 给 phase5。bootstrap/mountOneRouteGroup 用同样模式。
-                var firstErr error
-                captureErr := func(err error) {
-                    if err != nil && firstErr == nil {
-                        firstErr = err
-                    }
-                }
-                mux.Route("/sessions", func(s cell.RouteMux) {
-                    captureErr(c.loginHandler.RegisterRoutes(s))
-                    captureErr(c.logoutHandler.RegisterRoutes(s))
-                })
-                return firstErr
-            },
-        },
-        {
-            Listener: cell.InternalListener,
-            Prefix:   "/internal/v1/access",
-            Register: func(mux cell.RouteMux) error {
-                return c.rbacAssignHandler.RegisterRoutes(mux)
-            },
-        },
+// Cell.Init — PR-A14b 声明式路由组（PR-MODE-6 错误链路贯通），通过 reg.RouteGroup 注册
+func (c *AccessCore) Init(ctx context.Context, reg cell.Registry) error {
+    if err := c.BaseCell.Init(ctx, reg); err != nil {
+        return err
     }
+    reg.RouteGroup(cell.RouteGroup{
+        Listener: cell.PrimaryListener,
+        Prefix:   "/api/v1/access",
+        Register: func(mux cell.RouteMux) error {
+            // mux.Route 的 callback 仍是 func(RouteMux) 无 error 返回，
+            // 用 outer-variable closure 捕获 slice 错误并通过 Register 返回
+            // 给 phase5。bootstrap/mountOneRouteGroup 用同样模式。
+            var firstErr error
+            captureErr := func(err error) {
+                if err != nil && firstErr == nil {
+                    firstErr = err
+                }
+            }
+            mux.Route("/sessions", func(s cell.RouteMux) {
+                captureErr(c.loginHandler.RegisterRoutes(s))
+                captureErr(c.logoutHandler.RegisterRoutes(s))
+            })
+            return firstErr
+        },
+    })
+    reg.RouteGroup(cell.RouteGroup{
+        Listener: cell.InternalListener,
+        Prefix:   "/internal/v1/access",
+        Register: func(mux cell.RouteMux) error {
+            return c.rbacAssignHandler.RegisterRoutes(mux)
+        },
+    })
+    return nil
 }
 
 // composition root — WithListener(ref, addr, authChain []cell.ListenerAuth, ...ListenerOption)
@@ -194,7 +196,7 @@ internal listener 的 `ServiceTokenMiddleware` 必须带一个 replay-safe `auth
 
 ### FinalizeAuth 生命周期
 
-`Bootstrap.Run` 在所有 `RouteGroups()` 挂载完成后自动调用 primary listener 的 `rtr.FinalizeAuth()`：
+`Bootstrap.Run` 在所有 `reg.RouteGroup(...)` drain 自 RegistrySnapshot 并挂载完成后自动调用 primary listener 的 `rtr.FinalizeAuth()`：
 
 1. 收集所有 `auth.Mount` 推送的 `AuthRouteMeta`
 2. 去重 `(method, path)` — 重复 fail-fast

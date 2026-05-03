@@ -51,14 +51,17 @@ func handleEvent(ctx context.Context, entry outbox.Entry) outbox.HandleResult {
 - **零值 HandleResult{} 的 Disposition 是 invalid**（不等于 Ack），会被安全降级为 Requeue
 - `PermanentError` 包装的错误即使返回 Requeue 也会被 ConsumerBase 升级为 Reject
 
-### Cell 订阅注册（EventRouter 模式）
+### Cell 订阅注册（Registry builder 模式）
 
-Cell 在 `RegisterSubscriptions` 中通过 `r.AddContractHandler(spec, handler, consumerGroup)` 声明订阅意图，Router 管理所有 goroutine 生命周期。
+Cell 在 `Init(ctx, reg)` 中通过 `reg.Subscribe(spec, handler, consumerGroup)` 声明订阅意图，bootstrap 把 RegistrySnapshot.Subscriptions drain 到 EventRouter，Router 管理所有 goroutine 生命周期。
 
 ```go
-func (c *MyCell) RegisterSubscriptions(r cell.EventRouter) error {
+func (c *MyCell) Init(ctx context.Context, reg cell.Registry) error {
+    if err := c.BaseCell.Init(ctx, reg); err != nil {
+        return err
+    }
     handler := outbox.WrapLegacyHandler(c.svc.HandleEvent)
-    return r.AddContractHandler(wrapper.ContractSpec{
+    return reg.Subscribe(wrapper.ContractSpec{
         ID:        "event.my.topic.v1",
         Kind:      "event",
         Transport: "amqp",
@@ -66,6 +69,10 @@ func (c *MyCell) RegisterSubscriptions(r cell.EventRouter) error {
     }, handler, c.ID())
 }
 ```
+
+`consumerGroup` 与 owner cellID 解耦：drain loop 用 RegistrySnapshot 的 cell ID 作为
+`Subscription.CellID`（observability owner），`consumerGroup` 仅作 broker 分区/竞争消费标识。
+两者通常同值（`c.ID()`），需要 sub-group 的场景（例如 fan-out 消费）可显式分离。
 
 **声明对齐约束**：`spec.ID` 必须同步声明在三处：
 1. slice.yaml `contractUsages` 含 `{contract: event.my.topic.v1, role: subscribe}` 条目
