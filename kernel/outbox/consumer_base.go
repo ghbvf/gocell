@@ -292,7 +292,7 @@ func (cb *ConsumerBase) AsMiddleware() SubscriptionMiddleware {
 //   - handler returns DispositionRequeue -> pass through as Requeue
 //   - handler returns DispositionReject -> pass through as Reject
 //   - handler returns error with non-Ack disposition -> retry with backoff
-//   - PermanentError -> Reject (broker routes to DLX)
+//   - DispositionReject (handler-explicit) -> Reject (broker routes to DLX)
 //   - retry budget exhausted -> Reject
 //   - ctx canceled / shutdown -> Requeue
 func (cb *ConsumerBase) Wrap(sub Subscription, handler EntryHandler) EntryHandler {
@@ -346,8 +346,9 @@ func (cb *ConsumerBase) claimWithRetry(
 	entry Entry,
 	idempotencyKey string,
 	consumerGroup string,
-) (idempotency.ClaimState, Receipt, error) {
+) (idempotency.ClaimState, idempotency.Receipt, error) {
 	var lastErr error
+	var zeroReceipt idempotency.Receipt
 
 	for attempt := 0; attempt < cb.config.ClaimRetryCount; attempt++ {
 		state, receipt, err := cb.claimer.Claim(
@@ -362,7 +363,7 @@ func (cb *ConsumerBase) claimWithRetry(
 		lastErr = err
 
 		if ctx.Err() != nil {
-			return 0, nil, ctx.Err()
+			return 0, zeroReceipt, ctx.Err()
 		}
 		if attempt < cb.config.ClaimRetryCount-1 {
 			base := ExponentialDelay(cb.config.ClaimRetryBaseDelay, cb.config.MaxRetryDelay, attempt)
@@ -390,7 +391,7 @@ func (cb *ConsumerBase) claimWithRetry(
 		}
 	}
 
-	return 0, nil, lastErr
+	return 0, zeroReceipt, lastErr
 }
 
 // handleClaimState dispatches on the Claim result state. Both fail-open and
@@ -401,7 +402,7 @@ func (cb *ConsumerBase) handleClaimState(
 	entry Entry,
 	handler EntryHandler,
 	state idempotency.ClaimState,
-	receipt Receipt,
+	receipt idempotency.Receipt,
 ) HandleResult {
 	switch state {
 	case idempotency.ClaimDone:
@@ -430,7 +431,7 @@ func (cb *ConsumerBase) handleClaimState(
 }
 
 // requeueResult constructs a Requeue HandleResult with the given error and receipt.
-func requeueResult(err error, receipt Receipt) HandleResult {
+func requeueResult(err error, receipt idempotency.Receipt) HandleResult {
 	return HandleResult{
 		Disposition: DispositionRequeue,
 		Err:         err,
@@ -438,19 +439,14 @@ func requeueResult(err error, receipt Receipt) HandleResult {
 	}
 }
 
-// isPermanentRejection reports whether the handler's last result is terminal —
-// either an explicit DispositionReject or any error wrapping a PermanentError.
-// The second case lets WrapLegacyHandler (which always returns Requeue) still
-// surface PermanentError to DLX.
+// isPermanentRejection reports whether the handler returned an explicit
+// permanent rejection. After 029 #03 ADR Decision 4, ConsumerBase no longer
+// upgrades PermanentError-wrapped errors to Reject — handlers must be
+// explicit (return DispositionReject) to route to DLX. PermanentError
+// remains as a classification tag for logging/metrics, with no behavioural
+// effect on Disposition.
 func isPermanentRejection(result HandleResult) bool {
-	if result.Disposition == DispositionReject {
-		return true
-	}
-	if result.Err == nil {
-		return false
-	}
-	var permErr *PermanentError
-	return errors.As(result.Err, &permErr)
+	return result.Disposition == DispositionReject
 }
 
 // waitBackoff sleeps for exponential backoff before the next retry, returning
@@ -487,7 +483,7 @@ func (cb *ConsumerBase) retryLoop(
 	topic string,
 	entry Entry,
 	handler EntryHandler,
-	receipt Receipt,
+	receipt idempotency.Receipt,
 ) HandleResult {
 	var lastResult HandleResult
 	for attempt := range cb.config.RetryCount {
@@ -563,7 +559,7 @@ func (cb *ConsumerBase) runWithRenewal(
 	topic string,
 	entry Entry,
 	handler EntryHandler,
-	receipt Receipt,
+	receipt idempotency.Receipt,
 ) HandleResult {
 	interval := cb.config.LeaseRenewalInterval
 	// Skip renewal when disabled (negative) or receipt is nil.
@@ -617,7 +613,7 @@ func (cb *ConsumerBase) leaseRenewalLoop(
 	ctx context.Context,
 	topic string,
 	entry Entry,
-	receipt Receipt,
+	receipt idempotency.Receipt,
 	interval time.Duration,
 	onLeaseLost func(),
 ) {

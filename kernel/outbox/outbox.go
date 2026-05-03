@@ -6,7 +6,6 @@ package outbox
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"log/slog"
 	"slices"
@@ -481,14 +480,6 @@ func (d Disposition) String() string {
 	}
 }
 
-// Receipt is the canonical import path for consumer Receipt. Callers should use
-// outbox.Receipt rather than importing kernel/idempotency directly.
-//
-// Implementation note: this is a type alias to idempotency.Receipt so existing
-// code compiles during migration. Once all callers use outbox.Receipt, the alias
-// may be replaced with a standalone interface in a future version.
-type Receipt = idempotency.Receipt
-
 // SettlementResult describes whether the subscriber completed the final broker
 // settlement action. It intentionally observes the boundary after Commit,
 // Ack/Nack, and receipt release decisions, not the handler's process result.
@@ -531,8 +522,13 @@ func (f SettlementObserverFunc) ObserveSettlement(ctx context.Context, obs Settl
 // Receipt.Commit or Receipt.Release based on the broker outcome.
 type HandleResult struct {
 	Disposition Disposition
-	Err         error   // optional: logged/observed; nil for success
-	Receipt     Receipt // nil when idempotency is not in use
+	Err         error // optional: logged/observed; nil for success
+
+	// Receipt is the Subscriber-implementer-internal channel for delivery loop
+	// Commit/Release after broker Ack/Nack. Business handlers MUST NOT write
+	// this field — it is set exclusively by ConsumerBase. See 029 #12
+	// (PR-V1-OUTBOX-RECEIPT-EXTRACT) for v2 extraction roadmap.
+	Receipt idempotency.Receipt
 
 	// ProcessReason is a low-cardinality handler/process classification, such
 	// as "ack", "stale", or "permanent_error". It is not a broker outcome.
@@ -616,34 +612,6 @@ func NewPermanentError(err error) *PermanentError {
 }
 
 // ---------------------------------------------------------------------------
-// Legacy compatibility
-// ---------------------------------------------------------------------------
-
-// LegacyHandler is the pre-Solution-B handler signature kept for reference.
-// New code should use EntryHandler.
-type LegacyHandler = func(context.Context, Entry) error
-
-// WrapLegacyHandler adapts a LegacyHandler to the new EntryHandler contract:
-//   - nil error         -> DispositionAck
-//   - PermanentError    -> DispositionReject (routed to DLX)
-//   - other non-nil err -> DispositionRequeue (transient by default)
-//
-// This allows existing cell handlers to compile against the new Subscriber
-// interface without immediate rewrite.
-func WrapLegacyHandler(fn LegacyHandler) EntryHandler {
-	return func(ctx context.Context, entry Entry) HandleResult {
-		if err := fn(ctx, entry); err != nil {
-			var permErr *PermanentError
-			if errors.As(err, &permErr) {
-				return HandleResult{Disposition: DispositionReject, Err: err}
-			}
-			return HandleResult{Disposition: DispositionRequeue, Err: err}
-		}
-		return HandleResult{Disposition: DispositionAck}
-	}
-}
-
-// ---------------------------------------------------------------------------
 // Subscriber
 // ---------------------------------------------------------------------------
 
@@ -686,7 +654,9 @@ type Subscriber interface {
 	Close(ctx context.Context) error
 }
 
-// SubscriberIntakeStopper is an optional capability for Subscriber implementations.
+// SubscriberIntakeStopper is a Subscriber-implementer extension contract.
+// Business handlers should never reference this interface.
+//
 // Subscribers that implement it can stop accepting new deliveries while still
 // processing in-flight ones, enabling a two-phase drain during shutdown
 // (stop intake → wait in-flight handlers). Router.Close calls StopIntake on

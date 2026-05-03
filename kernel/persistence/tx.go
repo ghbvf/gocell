@@ -3,10 +3,7 @@
 // adapters/postgres) and consumed by cells via dependency injection.
 package persistence
 
-import (
-	"context"
-	"fmt"
-)
+import "context"
 
 // TxRunner executes fn within a database transaction. The transaction
 // is embedded in the context so that participants (e.g., outbox.Writer)
@@ -14,36 +11,4 @@ import (
 // adapters/postgres.TxManager).
 type TxRunner interface {
 	RunInTx(ctx context.Context, fn func(ctx context.Context) error) error
-}
-
-// NoopTxRunner executes fn directly without a real transaction.
-// Use for demo mode and unit tests that do not require transactional
-// guarantees. Unlike a nil TxRunner, NoopTxRunner is safe to call
-// unconditionally, enabling unified code paths (no demo/durable fork).
-type NoopTxRunner struct{}
-
-// RunInTx calls fn with the provided context (no transaction wrapping).
-// Returns an error when fn is nil so callers can propagate wiring mistakes
-// through their normal startup or request error path.
-func (NoopTxRunner) RunInTx(ctx context.Context, fn func(ctx context.Context) error) error {
-	if fn == nil {
-		return fmt.Errorf("persistence: nil fn passed to RunInTx")
-	}
-	return fn(ctx)
-}
-
-var _ TxRunner = NoopTxRunner{}
-
-// Noop implements cell.Nooper. CheckNotNoop rejects NoopTxRunner in durable mode.
-func (NoopTxRunner) Noop() bool { return true }
-
-// RunnerOrNoop returns r when it is non-nil, otherwise an explicit NoopTxRunner.
-//
-// This keeps call paths unconditional while still making demo-mode transaction
-// behavior visible to durability checks.
-func RunnerOrNoop(r TxRunner) TxRunner {
-	if r == nil {
-		return NoopTxRunner{}
-	}
-	return r
 }

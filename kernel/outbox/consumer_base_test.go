@@ -80,17 +80,17 @@ func (r *fakeReceipt) Extend(_ context.Context, _ time.Duration) error {
 	return r.extendErr
 }
 
-var _ Receipt = (*fakeReceipt)(nil)
+var _ idempotency.Receipt = (*fakeReceipt)(nil)
 
 type fakeClaimer struct {
 	mu      sync.Mutex
 	state   idempotency.ClaimState
-	receipt Receipt
+	receipt idempotency.Receipt
 	err     error
 	calls   []string
 }
 
-func (c *fakeClaimer) Claim(_ context.Context, key string, _, _ time.Duration) (idempotency.ClaimState, Receipt, error) {
+func (c *fakeClaimer) Claim(_ context.Context, key string, _, _ time.Duration) (idempotency.ClaimState, idempotency.Receipt, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.calls = append(c.calls, key)
@@ -110,7 +110,7 @@ type signalingClaimer struct {
 
 func (s *signalingClaimer) Claim(
 	ctx context.Context, key string, leaseTTL, renewInterval time.Duration,
-) (idempotency.ClaimState, Receipt, error) {
+) (idempotency.ClaimState, idempotency.Receipt, error) {
 	s.once.Do(func() {
 		select {
 		case s.started <- struct{}{}:
@@ -124,7 +124,7 @@ var _ idempotency.Claimer = (*signalingClaimer)(nil)
 
 type claimOutcome struct {
 	state   idempotency.ClaimState
-	receipt Receipt
+	receipt idempotency.Receipt
 	err     error
 }
 
@@ -136,7 +136,7 @@ type sequenceClaimer struct {
 	callCount int
 }
 
-func (c *sequenceClaimer) Claim(_ context.Context, _ string, _, _ time.Duration) (idempotency.ClaimState, Receipt, error) {
+func (c *sequenceClaimer) Claim(_ context.Context, _ string, _, _ time.Duration) (idempotency.ClaimState, idempotency.Receipt, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	idx := c.callCount
@@ -782,7 +782,7 @@ func (s *spyExtendReceipt) Extend(ctx context.Context, ttl time.Duration) error 
 	return s.receipt.Extend(ctx, ttl)
 }
 
-var _ Receipt = (*spyExtendReceipt)(nil)
+var _ idempotency.Receipt = (*spyExtendReceipt)(nil)
 
 // TestConsumerBase_DifferentConsumerGroupsNoCollision verifies that two distinct
 // ConsumerGroups processing the same entry.ID each reach ClaimAcquired independently
