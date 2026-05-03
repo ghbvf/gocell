@@ -7,19 +7,27 @@ import (
 	"strings"
 )
 
-// UnknownTokenError reports that a CSV token was not in the allowed set. The
-// raw token is intentionally omitted so public validation errors do not echo
-// user-supplied input.
+// UnknownTokenError reports that one or more CSV tokens were not in the allowed
+// set. The raw tokens are intentionally omitted from the Error() message so
+// public validation errors do not echo user-supplied input (XSS / log injection
+// prevention). Use the Tokens field for structured logging only.
 type UnknownTokenError struct {
 	Param   string
 	Allowed []string
+	// Tokens holds the unknown input values. They are excluded from the Error()
+	// message — consume via structured slog fields, never inline into responses.
+	Tokens []string
 }
 
 func (e UnknownTokenError) Error() string {
-	if len(e.Allowed) == 0 {
-		return fmt.Sprintf("unknown %s token", e.Param)
+	n := len(e.Tokens)
+	if n == 0 {
+		n = 1 // conservative: at least one token was rejected
 	}
-	return fmt.Sprintf("unknown %s token (valid: %s)", e.Param, strings.Join(e.Allowed, ", "))
+	if len(e.Allowed) == 0 {
+		return fmt.Sprintf("invalid %s: %d token(s) not allowed", e.Param, n)
+	}
+	return fmt.Sprintf("invalid %s: %d token(s) not allowed (valid: %s)", e.Param, n, strings.Join(e.Allowed, ", "))
 }
 
 // Parse splits raw on commas, trims whitespace, removes empty tokens,
@@ -48,6 +56,8 @@ func Parse(raw string) []string {
 }
 
 // ParseAllowed parses raw using Parse and validates every token against allowed.
+// All unknown tokens are collected before returning the error so callers receive
+// the full set of violations in a single pass.
 func ParseAllowed(raw string, allowed []string, param string) ([]string, error) {
 	tokens := Parse(raw)
 	if len(tokens) == 0 {
@@ -57,12 +67,17 @@ func ParseAllowed(raw string, allowed []string, param string) ([]string, error) 
 	for _, token := range allowed {
 		allowedSet[token] = true
 	}
+	var unknown []string
 	for _, token := range tokens {
 		if !allowedSet[token] {
-			return nil, UnknownTokenError{
-				Param:   param,
-				Allowed: append([]string(nil), allowed...),
-			}
+			unknown = append(unknown, token)
+		}
+	}
+	if len(unknown) > 0 {
+		return nil, UnknownTokenError{
+			Param:   param,
+			Allowed: append([]string(nil), allowed...),
+			Tokens:  unknown,
 		}
 	}
 	return tokens, nil
