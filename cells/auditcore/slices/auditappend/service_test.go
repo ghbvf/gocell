@@ -10,25 +10,68 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/ghbvf/gocell/cells/auditcore/internal/domain"
 	"github.com/ghbvf/gocell/cells/auditcore/internal/mem"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/kernel/outbox"
+	"github.com/ghbvf/gocell/kernel/persistence"
+	"github.com/ghbvf/gocell/pkg/errcode"
 )
+
+// directRunner is a test-only pass-through TxRunner for auditappend tests.
+// Moved from service.go (Fix 4): directRunner is dead code in production
+// (the cell-level demoTxRunner is injected instead); keeping it here in
+// the test package makes the test-only intent explicit.
+type directRunner struct{}
+
+// Compile-time assertion: directRunner must satisfy persistence.TxRunner.
+var _ persistence.TxRunner = directRunner{}
+
+func (directRunner) RunInTx(ctx context.Context, fn func(context.Context) error) error {
+	return fn(ctx)
+}
 
 var testHMACKey = []byte("test-hmac-key-32bytes-long!!!!!!!")
 
-func newTestService() (*Service, *mem.AuditRepository) {
+func newTestService(t testing.TB) (*Service, *mem.AuditRepository) {
+	t.Helper()
 	repo := mem.NewAuditRepository()
-	return NewService(repo, testHMACKey, slog.Default(), clock.Real(), WithClock(clock.Real())), repo
+	svc, err := NewService(repo, testHMACKey, slog.Default(), clock.Real(), WithClock(clock.Real()), WithTxManager(directRunner{}))
+	require.NoError(t, err)
+	return svc, repo
+}
+
+// assertAck asserts that HandleResult indicates a successful Ack disposition.
+func assertAck(t testing.TB, got outbox.HandleResult) {
+	t.Helper()
+	assert.Equal(t, outbox.DispositionAck, got.Disposition, "expected DispositionAck, got %v (err=%v)", got.Disposition, got.Err)
+	assert.NoError(t, got.Err)
+}
+
+// assertReject asserts that HandleResult indicates a permanent rejection (DLX path).
+func assertReject(t testing.TB, got outbox.HandleResult) {
+	t.Helper()
+	assert.Equal(t, outbox.DispositionReject, got.Disposition, "expected DispositionReject, got %v", got.Disposition)
+	assert.Error(t, got.Err)
+}
+
+func TestNewService_TxRunnerRequired(t *testing.T) {
+	repo := mem.NewAuditRepository()
+	_, err := NewService(repo, testHMACKey, slog.Default(), clock.Real(), WithClock(clock.Real()) /* no WithTxManager */)
+	require.Error(t, err)
+	var ec *errcode.Error
+	require.ErrorAs(t, err, &ec)
+	assert.Equal(t, errcode.ErrValidationFailed, ec.Code)
+	assert.Contains(t, err.Error(), "TxRunner required")
 }
 
 func TestService_HandleEvent(t *testing.T) {
 	tests := []struct {
-		name      string
-		entry     outbox.Entry
-		wantErr   bool
-		wantChain int
+		name       string
+		entry      outbox.Entry
+		wantReject bool
+		wantChain  int
 	}{
 		{
 			name: "user created event",
@@ -70,13 +113,13 @@ func TestService_HandleEvent(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			svc, repo := newTestService()
+			svc, repo := newTestService(t)
 
-			err := svc.HandleEvent(context.Background(), tt.entry)
-			if tt.wantErr {
-				assert.Error(t, err)
+			result := svc.HandleEvent(context.Background(), tt.entry)
+			if tt.wantReject {
+				assertReject(t, result)
 			} else {
-				require.NoError(t, err)
+				assertAck(t, result)
 				assert.Equal(t, tt.wantChain, svc.ChainLen())
 				assert.Equal(t, tt.wantChain, repo.Len())
 			}
@@ -85,7 +128,7 @@ func TestService_HandleEvent(t *testing.T) {
 }
 
 func TestService_HandleEvent_ChainGrows(t *testing.T) {
-	svc, repo := newTestService()
+	svc, repo := newTestService(t)
 
 	for i := range 5 {
 		entry := outbox.Entry{
@@ -93,19 +136,20 @@ func TestService_HandleEvent_ChainGrows(t *testing.T) {
 			EventType: "event.user.created.v1",
 			Payload:   mustJSON(map[string]any{"userId": "usr-1"}),
 		}
-		require.NoError(t, svc.HandleEvent(context.Background(), entry))
+		assertAck(t, svc.HandleEvent(context.Background(), entry))
 	}
 
 	assert.Equal(t, 5, svc.ChainLen())
 	assert.Equal(t, 5, repo.Len())
 }
 
-// TestService_HandleEvent_InvalidPayload_PermanentError asserts that an invalid
-// JSON payload causes HandleEvent to return a PermanentError, routing the event
-// to the DLX instead of silently appending it with a fallback "system" actor.
-func TestService_HandleEvent_InvalidPayload_PermanentError(t *testing.T) {
+// TestService_HandleEvent_InvalidPayload_Reject asserts that an invalid JSON
+// payload causes HandleEvent to return DispositionReject (DLX path) — permanent
+// error that must not be retried.
+func TestService_HandleEvent_InvalidPayload_Reject(t *testing.T) {
 	repo := mem.NewAuditRepository()
-	svc := NewService(repo, testHMACKey, slog.Default(), clock.Real(), WithClock(clock.Real()))
+	svc, err := NewService(repo, testHMACKey, slog.Default(), clock.Real(), WithClock(clock.Real()), WithTxManager(directRunner{}))
+	require.NoError(t, err)
 
 	entry := outbox.Entry{
 		ID:        "evt-bad-json",
@@ -113,12 +157,12 @@ func TestService_HandleEvent_InvalidPayload_PermanentError(t *testing.T) {
 		Payload:   []byte("{invalid json}"),
 	}
 
-	err := svc.HandleEvent(context.Background(), entry)
-	require.Error(t, err, "invalid JSON payload must cause HandleEvent to fail (route to DLX)")
+	result := svc.HandleEvent(context.Background(), entry)
+	assertReject(t, result)
 
 	var permErr *outbox.PermanentError
-	require.ErrorAs(t, err, &permErr, "error must be a PermanentError so legacy handler wrapper routes to DLX")
-	assert.Contains(t, err.Error(), "evt-bad-json", "error message must contain event ID")
+	require.ErrorAs(t, result.Err, &permErr, "Err must wrap a PermanentError so ConsumerBase routes to DLX")
+	assert.Contains(t, result.Err.Error(), "evt-bad-json", "error message must contain event ID")
 
 	// Verify the chain was NOT appended — invalid payload must not pollute the audit chain.
 	assert.Equal(t, 0, svc.ChainLen(), "invalid payload must not be appended to the audit chain")
@@ -137,15 +181,19 @@ func TestService_HandleEvent_PublishError_DoesNotFailAppend(t *testing.T) {
 		fp, outbox.DirectPublishFailOpen, metrics.NopProvider{}, clock.Real(), "auditcore",
 		outbox.WithLogger(slog.Default()))
 	require.NoError(t, err)
-	svc := NewService(repo, testHMACKey, slog.Default(), clock.Real(), WithClock(clock.Real()), WithEmitter(emitter))
+	svc, err := NewService(repo, testHMACKey, slog.Default(), clock.Real(),
+		WithClock(clock.Real()),
+		WithEmitter(emitter),
+		WithTxManager(directRunner{}))
+	require.NoError(t, err)
 
 	entry := outbox.Entry{
 		ID:        "evt-pub-err",
 		EventType: "event.user.created.v1",
 		Payload:   mustJSON(map[string]any{"userId": "usr-1"}),
 	}
-	err = svc.HandleEvent(context.Background(), entry)
-	require.NoError(t, err, "publish failure in demo mode should not fail append")
+	result := svc.HandleEvent(context.Background(), entry)
+	assertAck(t, result)
 	assert.Equal(t, 1, svc.ChainLen(), "entry should still be appended to chain")
 }
 
@@ -187,13 +235,13 @@ func TestService_HandleEvent_ActorExtraction(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			svc, repo := newTestService()
+			svc, repo := newTestService(t)
 			entry := outbox.Entry{
 				ID:        "evt-" + tt.name,
 				EventType: tt.eventType,
 				Payload:   mustJSON(tt.payload),
 			}
-			require.NoError(t, svc.HandleEvent(context.Background(), entry))
+			assertAck(t, svc.HandleEvent(context.Background(), entry))
 
 			entries, err := repo.GetRange(context.Background(), 0, 1)
 			require.NoError(t, err)
@@ -201,6 +249,39 @@ func TestService_HandleEvent_ActorExtraction(t *testing.T) {
 			assert.Equal(t, tt.wantActorID, entries[0].ActorID)
 		})
 	}
+}
+
+// failingAppendRepo wraps mem.AuditRepository but always returns a sentinel error on Append.
+type failingAppendRepo struct {
+	*mem.AuditRepository
+	err error
+}
+
+func (f *failingAppendRepo) Append(_ context.Context, _ *domain.AuditEntry) error {
+	return f.err
+}
+
+// TestService_HandleEvent_RepoAppendFails_Requeue covers the persistFn→repo.Append
+// failure branch (service.go:180-187): a transient persistence error must produce
+// DispositionRequeue so ConsumerBase can back off and retry.
+func TestService_HandleEvent_RepoAppendFails_Requeue(t *testing.T) {
+	sentinel := fmt.Errorf("db unavailable")
+	repo := &failingAppendRepo{AuditRepository: mem.NewAuditRepository(), err: sentinel}
+
+	svc, err := NewService(repo, testHMACKey, slog.Default(), clock.Real(),
+		WithClock(clock.Real()), WithTxManager(directRunner{}))
+	require.NoError(t, err)
+
+	entry := outbox.Entry{
+		ID:        "evt-repo-fail",
+		EventType: "event.user.created.v1",
+		Payload:   mustJSON(map[string]any{"userId": "usr-1"}),
+	}
+
+	result := svc.HandleEvent(context.Background(), entry)
+	assert.Equal(t, outbox.DispositionRequeue, result.Disposition)
+	require.Error(t, result.Err)
+	assert.ErrorIs(t, result.Err, sentinel, "result.Err must wrap the sentinel repo error")
 }
 
 func mustJSON(v any) []byte {

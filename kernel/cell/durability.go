@@ -41,8 +41,8 @@ func (m DurabilityMode) String() string {
 // Types that implement Nooper are rejected by CheckNotNoop when the
 // assembly runs in DurabilityDurable mode.
 //
-// Kernel noop types (outbox.NoopWriter, outbox.DiscardPublisher,
-// persistence.NoopTxRunner) implement this interface.
+// Kernel noop types (outbox.NoopWriter, outbox.DiscardPublisher) implement
+// this interface; cells in Demo mode may register their own Nooper TxRunners.
 type Nooper interface {
 	Noop() bool
 }

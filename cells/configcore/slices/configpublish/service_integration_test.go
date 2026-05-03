@@ -73,7 +73,7 @@ func setupPublishBundle(t *testing.T) (publishServiceBundle, func()) {
 	outboxWriter := adapterpg.NewOutboxWriter(clock.Real())
 	txMgr := adapterpg.NewTxManager(pool)
 
-	svc := NewService(repo, slog.Default(), clock.Real(),
+	svc, err := NewService(repo, slog.Default(), clock.Real(),
 		WithEmitter(testoutbox.MustEmitter(t, outboxWriter)),
 		WithTxManager(txMgr),
 	)
@@ -238,10 +238,11 @@ func TestRollback_AtomicWithOutbox_FailureRollsBackBoth(t *testing.T) {
 
 	// First: seed and publish using a good writer.
 	goodWriter := adapterpg.NewOutboxWriter(clock.Real())
-	svcGood := NewService(repo, slog.Default(), clock.Real(),
+	svcGood, err := NewService(repo, slog.Default(), clock.Real(),
 		WithEmitter(testoutbox.MustEmitter(t, goodWriter)),
 		WithTxManager(txMgr),
 	)
+	require.NoError(t, err)
 
 	b := publishServiceBundle{svc: svcGood, repo: repo, pool: pool.DB(), txMgr: txMgr}
 	seedConfigEntry(t, b, "rollback.failure.key", "initial-value")
@@ -263,10 +264,11 @@ func TestRollback_AtomicWithOutbox_FailureRollsBackBoth(t *testing.T) {
 		failOn:   2,
 		err:      errors.New("outbox broker down"),
 	}
-	svcFail := NewService(repo, slog.Default(), clock.Real(),
+	svcFail, err := NewService(repo, slog.Default(), clock.Real(),
 		WithEmitter(testoutbox.MustEmitter(t, failingWriter)),
 		WithTxManager(txMgr),
 	)
+	require.NoError(t, err)
 
 	_, err = svcFail.Rollback(svcCtx, "rollback.failure.key", 1)
 	require.Error(t, err)

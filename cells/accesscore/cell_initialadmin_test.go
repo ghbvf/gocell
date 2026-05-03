@@ -114,6 +114,7 @@ func newTestCellWithBootstrap(
 			WithJWTIssuer(testIssuer),
 			WithJWTVerifier(testVerifier),
 			WithRefreshStore(newTestRefreshStore()),
+			WithTxManager(durableTxRunner{}),
 			WithMetricsProvider(metrics.NopProvider{}),
 			WithInitialAdminBootstrap(bootstrapOpts...),
 		)
@@ -127,6 +128,7 @@ func newTestCellWithBootstrap(
 		WithJWTIssuer(testIssuer),
 		WithJWTVerifier(testVerifier),
 		WithRefreshStore(newTestRefreshStore()),
+		WithTxManager(durableTxRunner{}),
 		WithMetricsProvider(metrics.NopProvider{}),
 	)
 }
@@ -190,6 +192,7 @@ func TestInit_BootstrapDefaultBehaviorIsNoop(t *testing.T) {
 		WithJWTIssuer(testIssuer),
 		WithJWTVerifier(testVerifier),
 		WithRefreshStore(newTestRefreshStore()),
+		WithTxManager(durableTxRunner{}),
 		WithMetricsProvider(metrics.NopProvider{}),
 	)
 	rec := newTestReg()
@@ -239,6 +242,7 @@ func TestInit_BootstrapAlreadyHasAdmin_NilCleaner(t *testing.T) {
 		WithJWTVerifier(testVerifier),
 		WithRefreshStore(newTestRefreshStore()),
 		WithInitialAdminBootstrap(bootstrapOpts...),
+		WithTxManager(durableTxRunner{}),
 		WithMetricsProvider(metrics.NopProvider{}),
 	)
 	rec := newTestReg()
@@ -297,6 +301,7 @@ func TestInit_BootstrapAdminExists_FreshOrphanFile_SweepCleanerRegistered(t *tes
 		WithJWTVerifier(testVerifier),
 		WithRefreshStore(newTestRefreshStore()),
 		WithInitialAdminBootstrap(bootstrapOpts...),
+		WithTxManager(durableTxRunner{}),
 		WithMetricsProvider(metrics.NopProvider{}),
 	)
 	rec := newTestReg()
@@ -354,6 +359,7 @@ func TestInit_BootstrapUser_HasPasswordResetRequired(t *testing.T) {
 		WithJWTVerifier(testVerifier),
 		WithRefreshStore(newTestRefreshStore()),
 		WithInitialAdminBootstrap(bootstrapOpts...),
+		WithTxManager(durableTxRunner{}),
 		WithMetricsProvider(metrics.NopProvider{}),
 	)
 	rec := newTestReg()

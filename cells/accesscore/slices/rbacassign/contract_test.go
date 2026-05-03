@@ -31,7 +31,7 @@ func newContractHandler(t *testing.T) http.Handler {
 	_, _ = roleRepo.AssignToUser(context.Background(), "usr-seed", "admin")
 	_, _ = roleRepo.AssignToUser(context.Background(), "usr-other-admin", "admin") // second admin for last-admin guard
 
-	svc := NewService(roleRepo, testutil.RealSessionRepo(t), slog.Default())
+	svc := mustNewService(t, roleRepo, testutil.RealSessionRepo(t), slog.Default())
 	mux := celltest.NewTestMux()
 	h := NewHandler(svc)
 	mux.Route("/internal/v1/access/roles", func(s cell.RouteMux) {

@@ -74,16 +74,19 @@ func NewService(logger *slog.Logger, opts ...Option) *Service {
 // HandleEntryUpserted processes an event.config.entry-upserted.v1 event.
 // When a ConfigGetter is configured it fetches the current entry value from
 // configcore (contract: http.config.internal.get.v1) and logs it. Fetch
-// failures are retriable: a transient error is returned (triggering Requeue)
-// so the consumer pipeline retries. A 404 (entry truly gone) is treated as
-// a stale event: log Warn and Ack (retry cannot help).
-func (s *Service) HandleEntryUpserted(ctx context.Context, entry outbox.Entry) error {
+// failures are retriable: a transient Requeue is returned so the consumer
+// pipeline retries. A 404 (entry truly gone) is treated as a stale event:
+// log Warn and Ack (retry cannot help).
+func (s *Service) HandleEntryUpserted(ctx context.Context, entry outbox.Entry) outbox.HandleResult {
 	event, err := dto.DecodeEntryUpserted(entry.Payload)
 	if err != nil {
 		s.logger.Error("config-receive: failed to unmarshal entry-upserted event, routing to dead letter",
 			slog.Any("error", err), slog.String("entry_id", entry.ID))
 		s.recordConfigEventProcess(ctx, obmetrics.ConfigEventProcessReasonPermanentError)
-		return outbox.NewPermanentError(fmt.Errorf("config-receive: unmarshal entry-upserted payload: %w", err))
+		return outbox.HandleResult{
+			Disposition: outbox.DispositionReject,
+			Err:         outbox.NewPermanentError(fmt.Errorf("config-receive: unmarshal entry-upserted payload: %w", err)),
+		}
 	}
 
 	s.logger.Debug("config-receive: config upserted",
@@ -101,15 +104,14 @@ func (s *Service) HandleEntryUpserted(ctx context.Context, entry outbox.Entry) e
 					slog.String("key", event.Key),
 					slog.Int("version", event.Version))
 				s.recordConfigEventProcess(ctx, obmetrics.ConfigEventProcessReasonStale)
-				return nil
+				return outbox.HandleResult{Disposition: outbox.DispositionAck}
 			}
-			// Transient failure — return error so the legacy handler wrapper
-			// triggers Requeue and the consumer pipeline retries.
+			// Transient failure — Requeue so the consumer pipeline retries.
 			s.logger.Error("config-receive: failed to fetch config entry after upsert",
 				slog.Any("error", fetchErr),
 				slog.String("key", event.Key),
 				slog.Int("version", event.Version))
-			return fetchErr
+			return outbox.HandleResult{Disposition: outbox.DispositionRequeue, Err: fetchErr}
 		}
 		s.logger.Info("config-receive: fetched config entry",
 			slog.String("key", cfg.Key),
@@ -118,24 +120,27 @@ func (s *Service) HandleEntryUpserted(ctx context.Context, entry outbox.Entry) e
 	}
 
 	s.recordConfigEventProcess(ctx, obmetrics.ConfigEventProcessReasonAck)
-	return nil
+	return outbox.HandleResult{Disposition: outbox.DispositionAck}
 }
 
 // HandleEntryDeleted processes an event.config.entry-deleted.v1 event.
-func (s *Service) HandleEntryDeleted(ctx context.Context, entry outbox.Entry) error {
+func (s *Service) HandleEntryDeleted(ctx context.Context, entry outbox.Entry) outbox.HandleResult {
 	event, err := dto.DecodeEntryDeleted(entry.Payload)
 	if err != nil {
 		s.logger.Error("config-receive: failed to unmarshal entry-deleted event, routing to dead letter",
 			slog.Any("error", err), slog.String("entry_id", entry.ID))
 		s.recordConfigEventProcess(ctx, obmetrics.ConfigEventProcessReasonPermanentError)
-		return outbox.NewPermanentError(fmt.Errorf("config-receive: unmarshal entry-deleted payload: %w", err))
+		return outbox.HandleResult{
+			Disposition: outbox.DispositionReject,
+			Err:         outbox.NewPermanentError(fmt.Errorf("config-receive: unmarshal entry-deleted payload: %w", err)),
+		}
 	}
 
 	s.logger.Debug("config-receive: config deleted",
 		slog.String("key", event.Key),
 		slog.Int("version", event.Version))
 	s.recordConfigEventProcess(ctx, obmetrics.ConfigEventProcessReasonAck)
-	return nil
+	return outbox.HandleResult{Disposition: outbox.DispositionAck}
 }
 
 func (s *Service) recordConfigEventProcess(ctx context.Context, reason obmetrics.ConfigEventProcessReason) {

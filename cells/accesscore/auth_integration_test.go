@@ -314,10 +314,11 @@ func TestAuthIntegration_RoleRevokeInvalidatesSession(t *testing.T) {
 	// Wire rbacassign with outbox stubs (durable mode).
 	stubWriter := &rbacStubOutboxWriter{}
 	stubTx := &rbacStubTxRunner{}
-	assignSvc := rbacassign.NewService(roleRepo, sessionRepo, slog.Default(),
+	assignSvc, err := rbacassign.NewService(roleRepo, sessionRepo, slog.Default(),
 		rbacassign.WithEmitter(testoutbox.MustEmitter(t, stubWriter)),
 		rbacassign.WithTxManager(stubTx),
 	)
+	require.NoError(t, err)
 
 	// Wire the sessionlogout consumer.
 	consumer := sessionlogout.NewConsumer(sessionRepo, slog.Default())
@@ -327,7 +328,10 @@ func TestAuthIntegration_RoleRevokeInvalidatesSession(t *testing.T) {
 	require.Len(t, stubWriter.entries, 1, "Revoke must produce exactly one outbox entry")
 
 	// Deliver the outbox entry synchronously to the consumer (simulates relay dispatch).
-	require.NoError(t, consumer.HandleRoleChanged(ctx, stubWriter.entries[0]))
+	res := consumer.HandleRoleChanged(ctx, stubWriter.entries[0])
+	require.Equal(t, outbox.DispositionAck, res.Disposition,
+		"role-revoke event must be Acked; got %v err=%v", res.Disposition, res.Err)
+	assert.NoError(t, res.Err, "role-revoke Ack must carry nil Err")
 
 	// Bob's session must now be revoked.
 	sess, err := sessionRepo.GetByID(ctx, "sess-bob")

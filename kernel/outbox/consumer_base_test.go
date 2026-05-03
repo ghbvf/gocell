@@ -80,17 +80,17 @@ func (r *fakeReceipt) Extend(_ context.Context, _ time.Duration) error {
 	return r.extendErr
 }
 
-var _ Receipt = (*fakeReceipt)(nil)
+var _ idempotency.Receipt = (*fakeReceipt)(nil)
 
 type fakeClaimer struct {
 	mu      sync.Mutex
 	state   idempotency.ClaimState
-	receipt Receipt
+	receipt idempotency.Receipt
 	err     error
 	calls   []string
 }
 
-func (c *fakeClaimer) Claim(_ context.Context, key string, _, _ time.Duration) (idempotency.ClaimState, Receipt, error) {
+func (c *fakeClaimer) Claim(_ context.Context, key string, _, _ time.Duration) (idempotency.ClaimState, idempotency.Receipt, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.calls = append(c.calls, key)
@@ -110,7 +110,7 @@ type signalingClaimer struct {
 
 func (s *signalingClaimer) Claim(
 	ctx context.Context, key string, leaseTTL, renewInterval time.Duration,
-) (idempotency.ClaimState, Receipt, error) {
+) (idempotency.ClaimState, idempotency.Receipt, error) {
 	s.once.Do(func() {
 		select {
 		case s.started <- struct{}{}:
@@ -124,7 +124,7 @@ var _ idempotency.Claimer = (*signalingClaimer)(nil)
 
 type claimOutcome struct {
 	state   idempotency.ClaimState
-	receipt Receipt
+	receipt idempotency.Receipt
 	err     error
 }
 
@@ -136,7 +136,7 @@ type sequenceClaimer struct {
 	callCount int
 }
 
-func (c *sequenceClaimer) Claim(_ context.Context, _ string, _, _ time.Duration) (idempotency.ClaimState, Receipt, error) {
+func (c *sequenceClaimer) Claim(_ context.Context, _ string, _, _ time.Duration) (idempotency.ClaimState, idempotency.Receipt, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	idx := c.callCount
@@ -453,12 +453,19 @@ func TestConsumerBase_Wrap_ExplicitReject_NoRetry(t *testing.T) {
 	assert.Same(t, receipt, res.Receipt)
 }
 
-func TestConsumerBase_Wrap_WrappedPermanentError_DetectedAndRejected(t *testing.T) {
+// TestConsumerBase_Wrap_WrappedPermanentErrorInRequeue_NotEscalated locks the
+// Q2 decision (029 #03 ADR Decision 4): when a handler returns Requeue with a
+// PermanentError-wrapped Err, ConsumerBase MUST keep the Disposition as
+// Requeue and exhaust the retry budget — it does not implicitly upgrade to
+// Reject. Handlers must be explicit about routing to DLX by returning
+// DispositionReject themselves. This removes the legacy fallback behavior
+// originally needed by WrapLegacyHandler (now deleted).
+func TestConsumerBase_Wrap_WrappedPermanentErrorInRequeue_NotEscalated(t *testing.T) {
 	receipt := &fakeReceipt{}
 	claimer := &fakeClaimer{state: idempotency.ClaimAcquired, receipt: receipt}
 
 	cb, err := NewConsumerBase(claimer, ConsumerBaseConfig{
-		RetryCount:     5,
+		RetryCount:     3,
 		RetryBaseDelay: time.Millisecond,
 	}, clock.Real())
 	require.NoError(t, err)
@@ -473,8 +480,9 @@ func TestConsumerBase_Wrap_WrappedPermanentError_DetectedAndRejected(t *testing.
 	})
 
 	res := handler(context.Background(), Entry{ID: "evt-perm"})
-	assert.Equal(t, 1, attempts, "wrapped PermanentError must be detected on first attempt")
-	assert.Equal(t, DispositionReject, res.Disposition)
+	assert.Equal(t, 3, attempts, "PermanentError wrapped in Requeue must NOT short-circuit; budget must exhaust")
+	assert.Equal(t, DispositionReject, res.Disposition,
+		"after retry budget exhaustion, ConsumerBase rejects to DLX (this is the budget-exhaust path, not a PermErr upgrade)")
 }
 
 func TestConsumerBase_Wrap_CtxCancelled_DuringRetry_Requeues(t *testing.T) {
@@ -774,7 +782,7 @@ func (s *spyExtendReceipt) Extend(ctx context.Context, ttl time.Duration) error 
 	return s.receipt.Extend(ctx, ttl)
 }
 
-var _ Receipt = (*spyExtendReceipt)(nil)
+var _ idempotency.Receipt = (*spyExtendReceipt)(nil)
 
 // TestConsumerBase_DifferentConsumerGroupsNoCollision verifies that two distinct
 // ConsumerGroups processing the same entry.ID each reach ClaimAcquired independently

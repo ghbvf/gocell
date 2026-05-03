@@ -39,7 +39,11 @@ func WithEmitter(e outbox.Emitter) Option {
 
 // WithTxManager sets the TxRunner for transactional guarantees (L2 atomicity).
 func WithTxManager(tx persistence.TxRunner) Option {
-	return func(s *Service) { s.txRunner = persistence.RunnerOrNoop(tx) }
+	return func(s *Service) {
+		if tx != nil {
+			s.txRunner = tx
+		}
+	}
 }
 
 // Service implements config publish/rollback business logic.
@@ -53,19 +57,24 @@ type Service struct {
 
 // NewService creates a config-publish Service.
 // clk must be non-nil; pass clock.Real() in production and clockmock.New() in tests.
-func NewService(repo ports.ConfigRepository, logger *slog.Logger, clk clock.Clock, opts ...Option) *Service {
+// TxRunner must be provided via WithTxManager; nil txRunner is rejected to
+// prevent silent loss of L1 atomicity guarantees on snapshot creation.
+func NewService(repo ports.ConfigRepository, logger *slog.Logger, clk clock.Clock, opts ...Option) (*Service, error) {
 	clock.MustHaveClock(clk, "configpublish.NewService")
 	s := &Service{
-		repo:     repo,
-		txRunner: persistence.NoopTxRunner{},
-		emitter:  outbox.NewNoopEmitter(),
-		logger:   logger,
-		clock:    clk,
+		repo:    repo,
+		emitter: outbox.NewNoopEmitter(),
+		logger:  logger,
+		clock:   clk,
 	}
 	for _, o := range opts {
 		o(s)
 	}
-	return s
+	if s.txRunner == nil {
+		return nil, errcode.New(errcode.ErrValidationFailed,
+			"configpublish: TxRunner required; use WithTxManager")
+	}
+	return s, nil
 }
 
 // actorFromContext extracts the admin actor from the request context.
@@ -204,6 +213,9 @@ func (s *Service) rollbackInTx(txCtx context.Context, key string, targetVersion 
 	return updated, nil
 }
 
+// runInTx wraps fn in a transaction. txRunner is guaranteed non-nil by the
+// constructor's fail-fast check, so this is a thin pass-through; demo mode
+// callers must inject an explicit pass-through TxRunner via WithTxManager.
 func (s *Service) runInTx(ctx context.Context, fn func(ctx context.Context) error) error {
 	return s.txRunner.RunInTx(ctx, fn)
 }

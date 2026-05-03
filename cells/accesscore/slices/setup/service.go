@@ -54,7 +54,11 @@ func WithEmitter(e outbox.Emitter) Option {
 
 // WithTxManager sets the TxRunner for L2 atomicity (user write + event emit).
 func WithTxManager(tx persistence.TxRunner) Option {
-	return func(s *Service) { s.txRunner = persistence.RunnerOrNoop(tx) }
+	return func(s *Service) {
+		if tx != nil {
+			s.txRunner = tx
+		}
+	}
 }
 
 // Service implements the setup slice's business logic.
@@ -76,12 +80,14 @@ func NewService(provisioner *adminprovision.Provisioner, logger *slog.Logger, op
 	}
 	s := &Service{
 		provisioner: provisioner,
-		txRunner:    persistence.NoopTxRunner{},
 		emitter:     outbox.NewNoopEmitter(),
 		logger:      logger,
 	}
 	for _, o := range opts {
 		o(s)
+	}
+	if s.txRunner == nil {
+		return nil, errcode.New(errcode.ErrValidationFailed, "setup: TxRunner required; use WithTxManager")
 	}
 	return s, nil
 }

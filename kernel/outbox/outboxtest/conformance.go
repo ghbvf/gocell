@@ -22,9 +22,6 @@ const (
 	skipNoReceipt = "implementation does not support receipt"
 )
 
-// testEntryID is the canonical entry ID used in pure-function tests.
-const testEntryID = "test-1"
-
 // subscribeReadyTimeout caps how long waitForSubscription waits on the
 // subscriber's Ready() channel before falling through. It is a select-arm
 // timeout (not a sleep), used for adapters whose Setup is fire-and-forget
@@ -114,20 +111,11 @@ func RunBatch2Disposition(t *testing.T, features Features, constructor PubSubCon
 	})
 }
 
-// RunBatch3PermanentError runs PermanentError + WrapLegacyHandler tests.
+// RunBatch3PermanentError runs PermanentError disposition tests.
 // Exported for external adapter conformance gating.
 func RunBatch3PermanentError(t *testing.T, features Features, constructor PubSubConstructor) {
 	t.Run("PermanentErrorCausesReject", func(t *testing.T) {
 		testPermanentErrorCausesReject(t, features, constructor)
-	})
-	t.Run("WrapLegacyHandler_Success", func(t *testing.T) {
-		testWrapLegacyHandlerSuccess(t)
-	})
-	t.Run("WrapLegacyHandler_TransientError", func(t *testing.T) {
-		testWrapLegacyHandlerTransientError(t)
-	})
-	t.Run("WrapLegacyHandler_PermanentError", func(t *testing.T) {
-		testWrapLegacyHandlerPermanentError(t)
 	})
 }
 
@@ -537,7 +525,7 @@ func testZeroValueDisposition(t *testing.T, features Features, constructor PubSu
 }
 
 // ---------------------------------------------------------------------------
-// Batch 3: PermanentError + WrapLegacyHandler (pure function tests)
+// Batch 3: PermanentError disposition tests
 // ---------------------------------------------------------------------------
 
 func testPermanentErrorCausesReject(t *testing.T, features Features, constructor PubSubConstructor) {
@@ -547,58 +535,23 @@ func testPermanentErrorCausesReject(t *testing.T, features Features, constructor
 
 	h := newHarness(t, constructor)
 	var callCount atomic.Int32
-	legacy := outbox.WrapLegacyHandler(func(_ context.Context, _ outbox.Entry) error {
-		return outbox.NewPermanentError(fmt.Errorf("unmarshal failed"))
-	})
 
 	h.subscribe(func(ctx context.Context, entry outbox.Entry) outbox.HandleResult {
 		callCount.Add(1)
-		res := legacy(ctx, entry)
 		h.signalDone()
-		return res
+		return outbox.HandleResult{
+			Disposition: outbox.DispositionReject,
+			Err:         outbox.NewPermanentError(fmt.Errorf("unmarshal failed")),
+		}
 	})
 
 	h.publishAndWait([]byte(`{"test":"permanent-error"}`))
-	// fail-fast: 1 prior delivery; PermanentError via WrapLegacyHandler should reject.
+	// fail-fast: 1 prior delivery; DispositionReject should route to DLX, not retry.
 	h.assertNoMoreDeliveries(1, negativeAssertionWindow,
-		"PermanentError via WrapLegacyHandler should cause reject, not retry")
+		"DispositionReject should cause reject, not retry")
 	assertEqual(t, int32(1), callCount.Load(),
-		"PermanentError via WrapLegacyHandler should cause reject, not retry")
+		"DispositionReject should cause reject, not retry")
 	h.teardown()
-}
-
-func testWrapLegacyHandlerSuccess(t *testing.T) {
-	legacy := func(_ context.Context, _ outbox.Entry) error { return nil }
-	handler := outbox.WrapLegacyHandler(legacy)
-
-	res := handler(t.Context(), outbox.Entry{ID: testEntryID})
-	assertEqual(t, outbox.DispositionAck, res.Disposition)
-	assertTrue(t, res.Err == nil, "expected nil error")
-}
-
-func testWrapLegacyHandlerTransientError(t *testing.T) {
-	legacy := func(_ context.Context, _ outbox.Entry) error {
-		return fmt.Errorf("transient db error")
-	}
-	handler := outbox.WrapLegacyHandler(legacy)
-
-	res := handler(t.Context(), outbox.Entry{ID: testEntryID})
-	assertEqual(t, outbox.DispositionRequeue, res.Disposition)
-	assertTrue(t, res.Err != nil, "expected non-nil error")
-}
-
-func testWrapLegacyHandlerPermanentError(t *testing.T) {
-	legacy := func(_ context.Context, _ outbox.Entry) error {
-		return outbox.NewPermanentError(fmt.Errorf("bad payload"))
-	}
-	handler := outbox.WrapLegacyHandler(legacy)
-
-	res := handler(t.Context(), outbox.Entry{ID: testEntryID})
-	assertEqual(t, outbox.DispositionReject, res.Disposition)
-	assertTrue(t, res.Err != nil, "expected non-nil error")
-
-	var permErr *outbox.PermanentError
-	assertTrue(t, errors.As(res.Err, &permErr), "expected PermanentError via errors.As")
 }
 
 // ---------------------------------------------------------------------------

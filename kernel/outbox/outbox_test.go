@@ -567,51 +567,6 @@ func TestHandleResult_ZeroValueDispositionIsInvalid(t *testing.T) {
 	assert.False(t, res.Disposition.Valid())
 }
 
-// --- WrapLegacyHandler Tests ---
-
-func TestWrapLegacyHandler_Success(t *testing.T) {
-	legacy := func(_ context.Context, _ Entry) error { return nil }
-	handler := WrapLegacyHandler(legacy)
-
-	res := handler(context.Background(), Entry{ID: "1"})
-	assert.Equal(t, DispositionAck, res.Disposition)
-	assert.NoError(t, res.Err)
-}
-
-func TestWrapLegacyHandler_Error(t *testing.T) {
-	legacy := func(_ context.Context, _ Entry) error { return assert.AnError }
-	handler := WrapLegacyHandler(legacy)
-
-	res := handler(context.Background(), Entry{ID: "1"})
-	assert.Equal(t, DispositionRequeue, res.Disposition)
-	assert.Equal(t, assert.AnError, res.Err)
-}
-
-func TestWrapLegacyHandler_PermanentError(t *testing.T) {
-	legacy := func(_ context.Context, _ Entry) error {
-		return NewPermanentError(errors.New("unmarshal failed"))
-	}
-	handler := WrapLegacyHandler(legacy)
-
-	res := handler(context.Background(), Entry{ID: "1"})
-	assert.Equal(t, DispositionReject, res.Disposition)
-	assert.Error(t, res.Err)
-
-	var permErr *PermanentError
-	assert.True(t, errors.As(res.Err, &permErr))
-}
-
-func TestWrapLegacyHandler_WrappedPermanentError(t *testing.T) {
-	legacy := func(_ context.Context, _ Entry) error {
-		return fmt.Errorf("handler context: %w", NewPermanentError(errors.New("bad payload")))
-	}
-	handler := WrapLegacyHandler(legacy)
-
-	res := handler(context.Background(), Entry{ID: "1"})
-	assert.Equal(t, DispositionReject, res.Disposition,
-		"wrapped PermanentError must be detected via errors.As")
-}
-
 // --- PermanentError Tests ---
 
 func TestPermanentError(t *testing.T) {

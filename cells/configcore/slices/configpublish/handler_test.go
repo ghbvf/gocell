@@ -109,7 +109,10 @@ const configPrefix = "/api/v1/config"
 
 func setupHandler() (http.Handler, *mem.ConfigRepository) {
 	repo := mem.NewConfigRepository(clock.Real())
-	svc := NewService(repo, slog.Default(), clock.Real())
+	svc, err := NewService(repo, slog.Default(), clock.Real(), WithTxManager(&stubTxRunner{}))
+	if err != nil {
+		panic("setupHandler: " + err.Error())
+	}
 	h := NewHandler(svc)
 	mux := celltest.NewTestMux()
 	mux.Route(configPrefix, func(sub cell.RouteMux) {
@@ -263,8 +266,9 @@ func TestHandler_HandleRollback_OK(t *testing.T) {
 	handler, repo := setupHandler()
 	seedForPublish(t, repo)
 	// Publish first to create a version.
-	svc := NewService(repo, slog.Default(), clock.Real())
-	_, err := svc.Publish(adminCtx(), "app.name")
+	svc, err := NewService(repo, slog.Default(), clock.Real(), WithTxManager(&stubTxRunner{}))
+	require.NoError(t, err)
+	_, err = svc.Publish(adminCtx(), "app.name")
 	require.NoError(t, err)
 
 	w := httptest.NewRecorder()
@@ -323,8 +327,9 @@ func TestHandler_HandleRollback_SensitiveRedacted(t *testing.T) {
 		Version: 1, CreatedAt: now, UpdatedAt: now,
 	}))
 	// Publish v1 carries Sensitive=true into the snapshot.
-	svc := NewService(repo, slog.Default(), clock.Real())
-	_, err := svc.Publish(adminCtx(), "db.password")
+	svc, err := NewService(repo, slog.Default(), clock.Real(), WithTxManager(&stubTxRunner{}))
+	require.NoError(t, err)
+	_, err = svc.Publish(adminCtx(), "db.password")
 	require.NoError(t, err)
 
 	w := httptest.NewRecorder()
@@ -400,10 +405,12 @@ func TestHandler_HandleRollback_InvalidVersion(t *testing.T) {
 func TestService_WithEmitter(t *testing.T) {
 	repo := mem.NewConfigRepository(clock.Real())
 	ow := &stubOutboxWriter{}
-	svc := NewService(repo, slog.Default(), clock.Real(), WithEmitter(testoutbox.MustEmitter(t, ow)))
+	svc, err := NewService(repo, slog.Default(), clock.Real(),
+		WithEmitter(testoutbox.MustEmitter(t, ow)), WithTxManager(&stubTxRunner{}))
+	require.NoError(t, err)
 
 	seedForService(repo, "k1", "v1")
-	_, err := svc.Publish(adminCtx(), "k1")
+	_, err = svc.Publish(adminCtx(), "k1")
 	require.NoError(t, err)
 
 	assert.Len(t, ow.entries, 1)
@@ -413,10 +420,11 @@ func TestService_WithEmitter(t *testing.T) {
 func TestService_WithTxManager(t *testing.T) {
 	repo := mem.NewConfigRepository(clock.Real())
 	tx := &stubTxRunner{}
-	svc := NewService(repo, slog.Default(), clock.Real(), WithTxManager(tx))
+	svc, err := NewService(repo, slog.Default(), clock.Real(), WithTxManager(tx))
+	require.NoError(t, err)
 
 	seedForService(repo, "k2", "v2")
-	_, err := svc.Publish(adminCtx(), "k2")
+	_, err = svc.Publish(adminCtx(), "k2")
 	require.NoError(t, err)
 
 	assert.Equal(t, 1, tx.calls)
@@ -425,10 +433,12 @@ func TestService_WithTxManager(t *testing.T) {
 func TestService_Rollback_WithOutbox(t *testing.T) {
 	repo := mem.NewConfigRepository(clock.Real())
 	ow := &stubOutboxWriter{}
-	svc := NewService(repo, slog.Default(), clock.Real(), WithEmitter(testoutbox.MustEmitter(t, ow)))
+	svc, err := NewService(repo, slog.Default(), clock.Real(),
+		WithEmitter(testoutbox.MustEmitter(t, ow)), WithTxManager(&stubTxRunner{}))
+	require.NoError(t, err)
 
 	seedForService(repo, "k3", "v3")
-	_, err := svc.Publish(adminCtx(), "k3")
+	_, err = svc.Publish(adminCtx(), "k3")
 	require.NoError(t, err)
 
 	_, err = svc.Rollback(adminCtx(), "k3", 1)

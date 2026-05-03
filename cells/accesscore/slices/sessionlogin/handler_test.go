@@ -51,7 +51,7 @@ func setup(t *testing.T) http.Handler {
 	_ = userRepo.Create(context.Background(), user)
 
 	svc := MustNewService(userRepo, testutil.RealSessionRepo(t), mem.NewRoleRepository(),
-		newHandlerRefreshStore(), testIssuer, slog.Default(), WithClock(clock.Real()))
+		newHandlerRefreshStore(), testIssuer, slog.Default(), WithClock(clock.Real()), WithTxManager(&stubTxRunner{}))
 	mux := celltest.NewTestMux()
 	if err := NewHandler(svc).RegisterRoutes(mux); err != nil {
 		panic("RegisterRoutes: " + err.Error())

@@ -1639,7 +1639,9 @@ func TestSubscriber_Subscribe_DefaultQueueName(t *testing.T) {
 	cancel() // Cancel immediately so Subscribe exits.
 
 	err := sub.Subscribe(ctx, outbox.Subscription{Topic: "my.topic"},
-		outbox.WrapLegacyHandler(func(_ context.Context, _ outbox.Entry) error { return nil }))
+		func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+			return outbox.HandleResult{Disposition: outbox.DispositionAck}
+		})
 	assert.NoError(t, err)
 
 	ch.mu.Lock()
@@ -1662,7 +1664,9 @@ func TestSubscriber_Subscribe_AfterClose(t *testing.T) {
 	assert.NoError(t, sub.Close(context.Background()))
 
 	err := sub.Subscribe(context.Background(), outbox.Subscription{Topic: "test.topic"},
-		outbox.WrapLegacyHandler(func(_ context.Context, _ outbox.Entry) error { return nil }))
+		func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+			return outbox.HandleResult{Disposition: outbox.DispositionAck}
+		})
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "ERR_ADAPTER_AMQP_SUBSCRIBE")
 }
@@ -1785,7 +1789,9 @@ func TestSubscriber_ReconnectLoop_CtxCancelledDuringWait(t *testing.T) {
 	}()
 
 	err := sub.Subscribe(ctx, outbox.Subscription{Topic: "test.topic"},
-		outbox.WrapLegacyHandler(func(_ context.Context, _ outbox.Entry) error { return nil }))
+		func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+			return outbox.HandleResult{Disposition: outbox.DispositionAck}
+		})
 	assert.NoError(t, err) // Clean exit via ctx cancel during WaitConnected.
 }
 
@@ -1913,7 +1919,9 @@ func TestSubscriber_SubscribeOnce_AcquireChannelFails(t *testing.T) {
 
 	// subscribeOnce should return an error (channel acquisition failure).
 	err = sub.subscribeOnce(context.Background(), "test.topic", "test-queue",
-		outbox.WrapLegacyHandler(func(_ context.Context, _ outbox.Entry) error { return nil }))
+		func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+			return outbox.HandleResult{Disposition: outbox.DispositionAck}
+		})
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "ERR_ADAPTER_AMQP")
 
@@ -1967,7 +1975,9 @@ func TestSubscriber_Subscribe_ClosedDuringReconnect(t *testing.T) {
 	subscribeDone := make(chan error, 1)
 	go func() {
 		subscribeDone <- sub.Subscribe(context.Background(), outbox.Subscription{Topic: "test.topic"},
-			outbox.WrapLegacyHandler(func(_ context.Context, _ outbox.Entry) error { return nil }))
+			func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+				return outbox.HandleResult{Disposition: outbox.DispositionAck}
+			})
 	}()
 
 	// Let the subscriber enter the reconnect hot-loop. The loop iterates in
@@ -2014,7 +2024,9 @@ func TestSubscriber_Subscribe_ConsumerGroupQueueName(t *testing.T) {
 	cancel() // Cancel immediately so Subscribe exits after setup.
 
 	err := sub.Subscribe(ctx, outbox.Subscription{Topic: "session.created"},
-		outbox.WrapLegacyHandler(func(_ context.Context, _ outbox.Entry) error { return nil }))
+		func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+			return outbox.HandleResult{Disposition: outbox.DispositionAck}
+		})
 	assert.NoError(t, err)
 
 	ch.mu.Lock()
@@ -2044,7 +2056,9 @@ func TestSubscriber_Subscribe_ExplicitQueueName_OverridesConsumerGroup(t *testin
 	cancel()
 
 	err := sub.Subscribe(ctx, outbox.Subscription{Topic: "session.created"},
-		outbox.WrapLegacyHandler(func(_ context.Context, _ outbox.Entry) error { return nil }))
+		func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+			return outbox.HandleResult{Disposition: outbox.DispositionAck}
+		})
 	assert.NoError(t, err)
 
 	ch.mu.Lock()
@@ -2072,7 +2086,9 @@ func TestSubscriber_Subscribe_NoConsumerGroup_FallsBackToTopic(t *testing.T) {
 	cancel()
 
 	err := sub.Subscribe(ctx, outbox.Subscription{Topic: "my.topic"},
-		outbox.WrapLegacyHandler(func(_ context.Context, _ outbox.Entry) error { return nil }))
+		func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+			return outbox.HandleResult{Disposition: outbox.DispositionAck}
+		})
 	assert.NoError(t, err)
 
 	ch.mu.Lock()
@@ -2100,7 +2116,9 @@ func TestSubscriber_Subscribe_DLXExchange_SetsQueueArgs(t *testing.T) {
 	cancel()
 
 	err := sub.Subscribe(ctx, outbox.Subscription{Topic: "test.topic"},
-		outbox.WrapLegacyHandler(func(_ context.Context, _ outbox.Entry) error { return nil }))
+		func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+			return outbox.HandleResult{Disposition: outbox.DispositionAck}
+		})
 	assert.NoError(t, err)
 
 	ch.mu.Lock()
@@ -2131,7 +2149,9 @@ func TestSubscriber_Subscribe_DLXExchangeWithRoutingKey(t *testing.T) {
 	cancel()
 
 	err := sub.Subscribe(ctx, outbox.Subscription{Topic: "test.topic"},
-		outbox.WrapLegacyHandler(func(_ context.Context, _ outbox.Entry) error { return nil }))
+		func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+			return outbox.HandleResult{Disposition: outbox.DispositionAck}
+		})
 	assert.NoError(t, err)
 
 	ch.mu.Lock()
@@ -2152,7 +2172,9 @@ func TestSubscriber_Subscribe_NoDLX_ReturnsError(t *testing.T) {
 	})
 
 	err := sub.Subscribe(context.Background(), outbox.Subscription{Topic: "test.topic"},
-		outbox.WrapLegacyHandler(func(_ context.Context, _ outbox.Entry) error { return nil }))
+		func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+			return outbox.HandleResult{Disposition: outbox.DispositionAck}
+		})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "DLXExchange is required")
 }
@@ -2447,7 +2469,9 @@ func TestConsumerBase_AsMiddleware_LogsRestoredContext(t *testing.T) {
 		receipt: receipt,
 	}}}
 
-	cb, cbErr := outbox.NewConsumerBase(claimer, outbox.ConsumerBaseConfig{}, clock.Real())
+	cb, cbErr := outbox.NewConsumerBase(claimer, outbox.ConsumerBaseConfig{
+		RetryBaseDelay: testtime.D10ms,
+	}, clock.Real())
 	require.NoError(t, cbErr)
 
 	var capturedHandler outbox.EntryHandler
@@ -2487,8 +2511,13 @@ func TestConsumerBase_AsMiddleware_LogsRestoredContext(t *testing.T) {
 	})
 	assert.Equal(t, outbox.DispositionReject, res.Disposition)
 
+	// After 029 #03 ADR Decision 4 the handler is invoked RetryCount times
+	// (PermanentError-in-Requeue no longer short-circuits to Reject), so the
+	// buffer holds a stream of JSON log entries. Decode the first entry to
+	// verify ObservabilityMetadata was restored on the consumer-side context.
+	dec := json.NewDecoder(&buf)
 	var logEntry map[string]any
-	require.NoError(t, json.Unmarshal(buf.Bytes(), &logEntry))
+	require.NoError(t, dec.Decode(&logEntry))
 	assert.Equal(t, "trace-log-1", logEntry["trace_id"])
 	assert.Equal(t, "req-log-1", logEntry["request_id"])
 	assert.Equal(t, "corr-log-1", logEntry["correlation_id"])
@@ -2599,17 +2628,17 @@ func (r *mockReceipt) Extend(_ context.Context, _ time.Duration) error {
 	return r.extendErr
 }
 
-var _ outbox.Receipt = (*mockReceipt)(nil)
+var _ idempotency.Receipt = (*mockReceipt)(nil)
 
 type mockClaimer struct {
 	mu      sync.Mutex
 	state   idempotency.ClaimState
-	receipt outbox.Receipt
+	receipt idempotency.Receipt
 	err     error
 	claims  []string
 }
 
-func (c *mockClaimer) Claim(_ context.Context, key string, _, _ time.Duration) (idempotency.ClaimState, outbox.Receipt, error) {
+func (c *mockClaimer) Claim(_ context.Context, key string, _, _ time.Duration) (idempotency.ClaimState, idempotency.Receipt, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.claims = append(c.claims, key)
@@ -2735,33 +2764,11 @@ func TestConsumerBase_WrapWithClaimer_ExplicitReject_FirstRoundNoRetry(t *testin
 	assert.Same(t, receipt, res.Receipt)
 }
 
-func TestConsumerBase_WrapWithClaimer_WrappedPermanentError_FirstRoundReject(t *testing.T) {
-	receipt := &mockReceipt{}
-	claimer := &mockClaimer{state: idempotency.ClaimAcquired, receipt: receipt}
-
-	handlerCallCount := 0
-	cb, cbErr := outbox.NewConsumerBase(claimer, outbox.ConsumerBaseConfig{
-		RetryCount:     3,
-		RetryBaseDelay: testtime.D10ms,
-	}, clock.Real())
-	require.NoError(t, cbErr)
-
-	handler := cb.Wrap(outbox.Subscription{Topic: "test.topic", ConsumerGroup: "test-group"},
-		func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
-			handlerCallCount++
-			// Wrapped PermanentError — must be detected by errors.As through fmt.Errorf wrapping.
-			return outbox.HandleResult{
-				Disposition: outbox.DispositionRequeue,
-				Err:         fmt.Errorf("handler context: %w", outbox.NewPermanentError(errors.New("unmarshal failed"))),
-			}
-		})
-
-	res := handler(context.Background(), outbox.Entry{ID: "evt-perm-wrapped"})
-	assert.Equal(t, outbox.DispositionReject, res.Disposition,
-		"wrapped PermanentError must be detected and upgraded to Reject")
-	assert.Equal(t, 1, handlerCallCount, "PermanentError must skip retry loop — handler called exactly once")
-	assert.Same(t, receipt, res.Receipt)
-}
+// Removed: TestConsumerBase_WrapWithClaimer_WrappedPermanentError_FirstRoundReject
+// After 029 #03 ADR Decision 4, PermanentError wrapped in Requeue no longer
+// short-circuits to Reject. The equivalent retry-budget-exhaust behavior is
+// locked by kernel/outbox.TestConsumerBase_Wrap_WrappedPermanentErrorInRequeue_NotEscalated;
+// duplicating that assertion at the adapter layer adds no coverage.
 
 // sequenceClaimer returns different results on successive Claim calls.
 // Used to test claimWithRetry: first N calls fail, then succeed.
@@ -2773,11 +2780,11 @@ type sequenceClaimer struct {
 
 type claimResponse struct {
 	state   idempotency.ClaimState
-	receipt outbox.Receipt
+	receipt idempotency.Receipt
 	err     error
 }
 
-func (c *sequenceClaimer) Claim(_ context.Context, _ string, _, _ time.Duration) (idempotency.ClaimState, outbox.Receipt, error) {
+func (c *sequenceClaimer) Claim(_ context.Context, _ string, _, _ time.Duration) (idempotency.ClaimState, idempotency.Receipt, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	idx := c.callCount
@@ -3327,7 +3334,9 @@ func TestProcessDelivery_Reject_NoDLX_SubscribeReturnsError(t *testing.T) {
 	})
 
 	err := sub.Subscribe(context.Background(), outbox.Subscription{Topic: "test.topic"},
-		outbox.WrapLegacyHandler(func(_ context.Context, _ outbox.Entry) error { return nil }))
+		func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+			return outbox.HandleResult{Disposition: outbox.DispositionAck}
+		})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "DLXExchange is required")
 }
@@ -3807,36 +3816,10 @@ func TestConsumerBase_WrapWithClaimer_ExplicitReject_NoRetry(t *testing.T) {
 	assert.Same(t, receipt, res.Receipt, "Receipt should be threaded through for Reject")
 }
 
-func TestConsumerBase_WrapWithClaimer_WrappedPermanentError_Detected(t *testing.T) {
-	// Handler returns Requeue with fmt.Errorf("ctx: %w", outbox.NewPermanentError(...)).
-	// retryLoop should detect PermanentError via errors.As and upgrade to Reject.
-	receipt := &mockReceipt{}
-	claimer := &mockClaimer{state: idempotency.ClaimAcquired, receipt: receipt}
-
-	cb, cbErr := outbox.NewConsumerBase(claimer, outbox.ConsumerBaseConfig{
-		RetryCount:     5,
-		RetryBaseDelay: testtime.D10ms,
-	}, clock.Real())
-	require.NoError(t, cbErr)
-
-	callCount := 0
-	handler := cb.Wrap(outbox.Subscription{Topic: "test.topic", ConsumerGroup: "test-group"},
-		func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
-			callCount++
-			return outbox.HandleResult{
-				Disposition: outbox.DispositionRequeue,
-				Err:         fmt.Errorf("ctx: %w", outbox.NewPermanentError(errors.New("bad payload"))),
-			}
-		})
-
-	entry := outbox.Entry{ID: "evt-wrapped-perm"}
-	res := handler(context.Background(), entry)
-
-	assert.Equal(t, 1, callCount, "handler should be called once (PermanentError detected, no retry)")
-	assert.Equal(t, outbox.DispositionReject, res.Disposition,
-		"wrapped PermanentError should be detected by errors.As and upgraded to Reject")
-	assert.Same(t, receipt, res.Receipt, "Receipt should be threaded through for Reject")
-}
+// Removed: TestConsumerBase_WrapWithClaimer_WrappedPermanentError_Detected
+// Same rationale as above — after 029 #03 ADR Decision 4, ConsumerBase no
+// longer detects-and-upgrades a wrapped PermanentError. Coverage moved to
+// kernel/outbox.TestConsumerBase_Wrap_WrappedPermanentErrorInRequeue_NotEscalated.
 
 // NOTE: TestConnection_MaxReconnectAttempts_One deleted (A.1 semantics).
 // Reconnect has no attempt cap; successor behavior is covered by

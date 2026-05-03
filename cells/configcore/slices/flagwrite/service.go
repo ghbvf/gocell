@@ -29,7 +29,11 @@ type Option func(*Service)
 
 // WithTxManager sets the TxRunner for transactional guarantees (L1 atomicity).
 func WithTxManager(tx persistence.TxRunner) Option {
-	return func(s *Service) { s.txRunner = persistence.RunnerOrNoop(tx) }
+	return func(s *Service) {
+		if tx != nil {
+			s.txRunner = tx
+		}
+	}
 }
 
 // Service implements flag write business logic (L1 LocalTx).
@@ -42,16 +46,21 @@ type Service struct {
 
 // NewService creates a flag-write Service.
 // clk must be non-nil; pass clock.Real() in production and clockmock.New() in tests.
+// TxRunner must be provided via WithTxManager; nil txRunner is rejected to
+// prevent silent loss of L1 atomicity guarantees on flag writes.
 func NewService(repo ports.FlagRepository, logger *slog.Logger, clk clock.Clock, opts ...Option) (*Service, error) {
 	clock.MustHaveClock(clk, "flagwrite.NewService")
 	s := &Service{
-		repo:     repo,
-		txRunner: persistence.NoopTxRunner{},
-		logger:   logger,
-		clock:    clk,
+		repo:   repo,
+		logger: logger,
+		clock:  clk,
 	}
 	for _, o := range opts {
 		o(s)
+	}
+	if s.txRunner == nil {
+		return nil, errcode.New(errcode.ErrValidationFailed,
+			"flagwrite: TxRunner required; use WithTxManager")
 	}
 	return s, nil
 }
@@ -186,6 +195,9 @@ func (s *Service) Delete(ctx context.Context, key string) error {
 	return nil
 }
 
+// runInTx wraps fn in a transaction. txRunner is guaranteed non-nil by the
+// constructor's fail-fast check; demo callers must inject an explicit
+// pass-through TxRunner via WithTxManager.
 func (s *Service) runInTx(ctx context.Context, fn func(ctx context.Context) error) error {
 	return s.txRunner.RunInTx(ctx, fn)
 }

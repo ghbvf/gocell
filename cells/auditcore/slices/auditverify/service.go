@@ -12,6 +12,7 @@ import (
 	"github.com/ghbvf/gocell/cells/auditcore/internal/ports"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/persistence"
+	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
 // VerifyResult holds the outcome of a chain verification.
@@ -35,7 +36,11 @@ func WithEmitter(e outbox.Emitter) Option {
 
 // WithTxManager sets the TxRunner for transactional guarantees (L2 atomicity).
 func WithTxManager(tx persistence.TxRunner) Option {
-	return func(s *Service) { s.txRunner = persistence.RunnerOrNoop(tx) }
+	return func(s *Service) {
+		if tx != nil {
+			s.txRunner = tx
+		}
+	}
 }
 
 // Service verifies hash chain integrity.
@@ -47,24 +52,29 @@ type Service struct {
 	logger   *slog.Logger
 }
 
-// NewService creates an audit-verify Service.
+// NewService creates an audit-verify Service. Returns an error if txRunner is nil.
+// TxRunner must be provided via WithTxManager; nil txRunner is rejected to
+// prevent silent loss of L2 atomicity guarantees.
 func NewService(
 	repo ports.AuditRepository,
 	hmacKey []byte,
 	logger *slog.Logger,
 	opts ...Option,
-) *Service {
+) (*Service, error) {
 	s := &Service{
-		repo:     repo,
-		chain:    domain.NewHashChain(hmacKey),
-		txRunner: persistence.NoopTxRunner{},
-		emitter:  outbox.NewNoopEmitter(),
-		logger:   logger,
+		repo:    repo,
+		chain:   domain.NewHashChain(hmacKey),
+		emitter: outbox.NewNoopEmitter(),
+		logger:  logger,
 	}
 	for _, o := range opts {
 		o(s)
 	}
-	return s
+	if s.txRunner == nil {
+		return nil, errcode.New(errcode.ErrValidationFailed,
+			"auditverify: TxRunner required; use WithTxManager")
+	}
+	return s, nil
 }
 
 // VerifyChain verifies the integrity of all entries in the given range.

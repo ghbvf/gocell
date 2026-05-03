@@ -46,7 +46,7 @@ var generatedPackageGraph = func() *kerneldepgraph.Graph {
 		{
 			ID:      "github.com/ghbvf/gocell/adapters/rabbitmq",
 			Layer:   "adapters",
-			Imports: []string{"context", "errors", "fmt", "github.com/ghbvf/gocell/adapters/adapterutil", "github.com/ghbvf/gocell/kernel/clock", "github.com/ghbvf/gocell/kernel/lifecycle", "github.com/ghbvf/gocell/kernel/outbox", "github.com/ghbvf/gocell/kernel/worker", "github.com/ghbvf/gocell/pkg/errcode", "github.com/ghbvf/gocell/runtime/observability/poolstats", "github.com/rabbitmq/amqp091-go", "hash/crc32", "log/slog", "math/rand/v2", "net", "net/url", "strings", "sync", "sync/atomic", "time"},
+			Imports: []string{"context", "errors", "fmt", "github.com/ghbvf/gocell/adapters/adapterutil", "github.com/ghbvf/gocell/kernel/clock", "github.com/ghbvf/gocell/kernel/idempotency", "github.com/ghbvf/gocell/kernel/lifecycle", "github.com/ghbvf/gocell/kernel/outbox", "github.com/ghbvf/gocell/kernel/worker", "github.com/ghbvf/gocell/pkg/errcode", "github.com/ghbvf/gocell/runtime/observability/poolstats", "github.com/rabbitmq/amqp091-go", "hash/crc32", "log/slog", "math/rand/v2", "net", "net/url", "strings", "sync", "sync/atomic", "time"},
 		},
 		{
 			ID:      "github.com/ghbvf/gocell/adapters/ratelimit",
@@ -256,7 +256,7 @@ var generatedPackageGraph = func() *kerneldepgraph.Graph {
 			Layer:   "cells",
 			CellID:  "auditcore",
 			SliceID: "auditappend",
-			Imports: []string{"context", "encoding/json", "fmt", "github.com/ghbvf/gocell/cells/auditcore/internal/domain", "github.com/ghbvf/gocell/cells/auditcore/internal/dto", "github.com/ghbvf/gocell/cells/auditcore/internal/ports", "github.com/ghbvf/gocell/kernel/clock", "github.com/ghbvf/gocell/kernel/outbox", "github.com/ghbvf/gocell/kernel/persistence", "github.com/google/uuid", "log/slog", "sync"},
+			Imports: []string{"context", "encoding/json", "fmt", "github.com/ghbvf/gocell/cells/auditcore/internal/domain", "github.com/ghbvf/gocell/cells/auditcore/internal/dto", "github.com/ghbvf/gocell/cells/auditcore/internal/ports", "github.com/ghbvf/gocell/kernel/clock", "github.com/ghbvf/gocell/kernel/outbox", "github.com/ghbvf/gocell/kernel/persistence", "github.com/ghbvf/gocell/pkg/errcode", "github.com/google/uuid", "log/slog", "sync"},
 		},
 		{
 			ID:      "github.com/ghbvf/gocell/cells/auditcore/slices/auditarchive",
@@ -277,7 +277,7 @@ var generatedPackageGraph = func() *kerneldepgraph.Graph {
 			Layer:   "cells",
 			CellID:  "auditcore",
 			SliceID: "auditverify",
-			Imports: []string{"context", "fmt", "github.com/ghbvf/gocell/cells/auditcore/internal/domain", "github.com/ghbvf/gocell/cells/auditcore/internal/dto", "github.com/ghbvf/gocell/cells/auditcore/internal/ports", "github.com/ghbvf/gocell/kernel/outbox", "github.com/ghbvf/gocell/kernel/persistence", "log/slog"},
+			Imports: []string{"context", "fmt", "github.com/ghbvf/gocell/cells/auditcore/internal/domain", "github.com/ghbvf/gocell/cells/auditcore/internal/dto", "github.com/ghbvf/gocell/cells/auditcore/internal/ports", "github.com/ghbvf/gocell/kernel/outbox", "github.com/ghbvf/gocell/kernel/persistence", "github.com/ghbvf/gocell/pkg/errcode", "log/slog"},
 		},
 		{
 			ID:      "github.com/ghbvf/gocell/cells/configcore",
@@ -464,12 +464,12 @@ var generatedPackageGraph = func() *kerneldepgraph.Graph {
 		{
 			ID:      "github.com/ghbvf/gocell/examples/ssobff",
 			Layer:   "examples",
-			Imports: []string{"context", "fmt", "github.com/ghbvf/gocell/cells/accesscore", "github.com/ghbvf/gocell/cells/auditcore", "github.com/ghbvf/gocell/cells/configcore", "github.com/ghbvf/gocell/kernel/assembly", "github.com/ghbvf/gocell/kernel/cell", "github.com/ghbvf/gocell/kernel/clock", "github.com/ghbvf/gocell/kernel/observability/metrics", "github.com/ghbvf/gocell/kernel/outbox", "github.com/ghbvf/gocell/kernel/persistence", "github.com/ghbvf/gocell/pkg/query", "github.com/ghbvf/gocell/runtime/auth", "github.com/ghbvf/gocell/runtime/bootstrap", "github.com/ghbvf/gocell/runtime/eventbus", "github.com/ghbvf/gocell/runtime/shutdown", "log/slog", "net", "os", "time"},
+			Imports: []string{"context", "fmt", "github.com/ghbvf/gocell/cells/accesscore", "github.com/ghbvf/gocell/cells/auditcore", "github.com/ghbvf/gocell/cells/configcore", "github.com/ghbvf/gocell/kernel/assembly", "github.com/ghbvf/gocell/kernel/cell", "github.com/ghbvf/gocell/kernel/clock", "github.com/ghbvf/gocell/kernel/observability/metrics", "github.com/ghbvf/gocell/kernel/outbox", "github.com/ghbvf/gocell/pkg/query", "github.com/ghbvf/gocell/runtime/auth", "github.com/ghbvf/gocell/runtime/bootstrap", "github.com/ghbvf/gocell/runtime/eventbus", "github.com/ghbvf/gocell/runtime/shutdown", "log/slog", "net", "os", "time"},
 		},
 		{
 			ID:      "github.com/ghbvf/gocell/examples/todoorder",
 			Layer:   "examples",
-			Imports: []string{"context", "fmt", "github.com/ghbvf/gocell/examples/todoorder/cells/ordercell", "github.com/ghbvf/gocell/kernel/assembly", "github.com/ghbvf/gocell/kernel/cell", "github.com/ghbvf/gocell/kernel/clock", "github.com/ghbvf/gocell/kernel/outbox", "github.com/ghbvf/gocell/kernel/persistence", "github.com/ghbvf/gocell/pkg/query", "github.com/ghbvf/gocell/runtime/auth", "github.com/ghbvf/gocell/runtime/bootstrap", "github.com/ghbvf/gocell/runtime/shutdown", "log/slog", "os", "strings"},
+			Imports: []string{"context", "fmt", "github.com/ghbvf/gocell/examples/todoorder/cells/ordercell", "github.com/ghbvf/gocell/kernel/assembly", "github.com/ghbvf/gocell/kernel/cell", "github.com/ghbvf/gocell/kernel/clock", "github.com/ghbvf/gocell/kernel/outbox", "github.com/ghbvf/gocell/pkg/query", "github.com/ghbvf/gocell/runtime/auth", "github.com/ghbvf/gocell/runtime/bootstrap", "github.com/ghbvf/gocell/runtime/shutdown", "log/slog", "os", "strings"},
 		},
 		{
 			ID:      "github.com/ghbvf/gocell/examples/todoorder/cells/ordercell",
@@ -604,12 +604,12 @@ var generatedPackageGraph = func() *kerneldepgraph.Graph {
 		{
 			ID:      "github.com/ghbvf/gocell/kernel/outbox/outboxtest",
 			Layer:   "kernel",
-			Imports: []string{"bytes", "context", "crypto/rand", "encoding/hex", "encoding/json", "errors", "fmt", "github.com/ghbvf/gocell/kernel/outbox", "github.com/ghbvf/gocell/pkg/testutil/testtime", "reflect", "sync", "sync/atomic", "testing", "time"},
+			Imports: []string{"bytes", "context", "crypto/rand", "encoding/hex", "encoding/json", "errors", "fmt", "github.com/ghbvf/gocell/kernel/idempotency", "github.com/ghbvf/gocell/kernel/outbox", "github.com/ghbvf/gocell/pkg/testutil/testtime", "reflect", "sync", "sync/atomic", "testing", "time"},
 		},
 		{
 			ID:      "github.com/ghbvf/gocell/kernel/persistence",
 			Layer:   "kernel",
-			Imports: []string{"context", "fmt"},
+			Imports: []string{"context"},
 		},
 		{
 			ID:      "github.com/ghbvf/gocell/kernel/registry",
@@ -794,7 +794,7 @@ var generatedPackageGraph = func() *kerneldepgraph.Graph {
 		{
 			ID:      "github.com/ghbvf/gocell/runtime/eventbus",
 			Layer:   "runtime",
-			Imports: []string{"context", "errors", "github.com/ghbvf/gocell/kernel/clock", "github.com/ghbvf/gocell/kernel/outbox", "github.com/ghbvf/gocell/pkg/errcode", "log/slog", "math/rand/v2", "sync", "sync/atomic", "time"},
+			Imports: []string{"context", "github.com/ghbvf/gocell/kernel/clock", "github.com/ghbvf/gocell/kernel/idempotency", "github.com/ghbvf/gocell/kernel/outbox", "github.com/ghbvf/gocell/pkg/errcode", "log/slog", "math/rand/v2", "sync", "sync/atomic", "time"},
 		},
 		{
 			ID:      "github.com/ghbvf/gocell/runtime/eventrouter",

@@ -53,111 +53,79 @@ func makeEntry(id string, payload []byte) outbox.Entry {
 
 // --- consumer tests ---
 
-func TestConsumer_HandleRoleChanged_HappyPath_ReturnsNil_CallsRevokeByUserID(t *testing.T) {
+func TestHandleRoleChanged_Ack(t *testing.T) {
 	repo := &trackingSessionRepo{SessionRepository: testutil.RealSessionRepo(t)}
 	c := NewConsumer(repo, slog.Default())
 
 	entry := makeEntry("evt-abc", validPayload("u1"))
-	err := c.HandleRoleChanged(context.Background(), entry)
+	result := c.HandleRoleChanged(context.Background(), entry)
 
-	require.NoError(t, err)
+	assert.Equal(t, outbox.DispositionAck, result.Disposition)
+	assert.NoError(t, result.Err)
 	assert.Equal(t, 1, repo.revokeCalls, "RevokeByUserID must be called exactly once")
 }
 
-func TestConsumer_HandleRoleChanged_MalformedPayload_ReturnsPermanentError(t *testing.T) {
+func TestHandleRoleChanged_PermErrReject_MalformedPayload(t *testing.T) {
 	repo := &trackingSessionRepo{SessionRepository: testutil.RealSessionRepo(t)}
 	c := NewConsumer(repo, slog.Default())
 
 	entry := makeEntry("evt-bad", []byte("not-json"))
-	err := c.HandleRoleChanged(context.Background(), entry)
+	result := c.HandleRoleChanged(context.Background(), entry)
 
-	require.Error(t, err)
+	assert.Equal(t, outbox.DispositionReject, result.Disposition)
+	require.Error(t, result.Err)
 	var permErr *outbox.PermanentError
-	assert.True(t, errors.As(err, &permErr), "malformed payload must return PermanentError")
+	assert.True(t, errors.As(result.Err, &permErr), "malformed payload must return PermanentError")
 }
 
-func TestConsumer_HandleRoleChanged_EmptyUserID_ReturnsPermanentError(t *testing.T) {
+func TestHandleRoleChanged_PermErrReject_EmptyUserID(t *testing.T) {
 	repo := &trackingSessionRepo{SessionRepository: testutil.RealSessionRepo(t)}
 	c := NewConsumer(repo, slog.Default())
 
 	entry := makeEntry("evt-empty", validPayload(""))
-	err := c.HandleRoleChanged(context.Background(), entry)
+	result := c.HandleRoleChanged(context.Background(), entry)
 
-	require.Error(t, err)
+	assert.Equal(t, outbox.DispositionReject, result.Disposition)
+	require.Error(t, result.Err)
 	var permErr *outbox.PermanentError
-	assert.True(t, errors.As(err, &permErr), "empty userId must return PermanentError")
+	assert.True(t, errors.As(result.Err, &permErr), "empty userId must return PermanentError")
 }
 
-func TestConsumer_HandleRoleChanged_TransientRepoError_ReturnsPlainError(t *testing.T) {
+func TestHandleRoleChanged_RepoErrRequeue(t *testing.T) {
 	dbErr := errors.New("db down")
 	repo := &errorSessionRepo{err: dbErr}
 	c := NewConsumer(repo, slog.Default())
 
 	entry := makeEntry("evt-transient", validPayload("u1"))
-	err := c.HandleRoleChanged(context.Background(), entry)
+	result := c.HandleRoleChanged(context.Background(), entry)
 
-	require.Error(t, err)
-	// Must NOT be a PermanentError (WrapLegacyHandler maps to Requeue).
+	assert.Equal(t, outbox.DispositionRequeue, result.Disposition)
+	require.Error(t, result.Err)
+	// Must NOT be a PermanentError — transient errors trigger Requeue.
 	var permErr *outbox.PermanentError
-	assert.False(t, errors.As(err, &permErr), "transient DB error must NOT be PermanentError")
-	assert.ErrorIs(t, err, dbErr)
+	assert.False(t, errors.As(result.Err, &permErr), "transient DB error must NOT be PermanentError")
+	assert.ErrorIs(t, result.Err, dbErr)
 }
 
-// TestConsumer_HandleRoleChanged_ReplayIdempotent_SecondCallSafe verifies that calling the
+// TestHandleRoleChanged_ReplayIdempotent_SecondCallSafe verifies that calling the
 // handler twice with the same entry ID is safe. The handler itself is naturally idempotent
 // because RevokeByUserID is idempotent (revoking already-revoked sessions is a no-op).
 // Infrastructure-level idempotency (Claimer dedup) is provided by ConsumerBase and is NOT
 // tested here — this test documents the handler's own idempotency contract.
-func TestConsumer_HandleRoleChanged_ReplayIdempotent_SecondCallSafe(t *testing.T) {
+func TestHandleRoleChanged_ReplayIdempotent_SecondCallSafe(t *testing.T) {
 	repo := &trackingSessionRepo{SessionRepository: testutil.RealSessionRepo(t)}
 	c := NewConsumer(repo, slog.Default())
 
 	entry := makeEntry("evt-replay", validPayload("u1"))
 
 	// First call.
-	require.NoError(t, c.HandleRoleChanged(context.Background(), entry))
-	// Second call — must also return nil (idempotent).
-	require.NoError(t, c.HandleRoleChanged(context.Background(), entry))
+	result1 := c.HandleRoleChanged(context.Background(), entry)
+	assert.Equal(t, outbox.DispositionAck, result1.Disposition)
+
+	// Second call — must also Ack (idempotent).
+	result2 := c.HandleRoleChanged(context.Background(), entry)
+	assert.Equal(t, outbox.DispositionAck, result2.Disposition)
 
 	// sessionRepo.RevokeByUserID is called twice — both are safe because the operation is idempotent.
 	assert.Equal(t, 2, repo.revokeCalls)
-}
-
-// --- WrapLegacyHandler disposition tests ---
-
-func TestConsumer_ViaWrapLegacyHandler_PermanentErrorMapsToReject(t *testing.T) {
-	repo := &trackingSessionRepo{SessionRepository: testutil.RealSessionRepo(t)}
-	c := NewConsumer(repo, slog.Default())
-	handler := outbox.WrapLegacyHandler(c.HandleRoleChanged)
-
-	entry := makeEntry("evt-perm", []byte("not-json"))
-	result := handler(context.Background(), entry)
-
-	assert.Equal(t, outbox.DispositionReject, result.Disposition)
-	require.NotNil(t, result.Err)
-}
-
-func TestConsumer_ViaWrapLegacyHandler_HappyPathMapsToAck(t *testing.T) {
-	repo := &trackingSessionRepo{SessionRepository: testutil.RealSessionRepo(t)}
-	c := NewConsumer(repo, slog.Default())
-	handler := outbox.WrapLegacyHandler(c.HandleRoleChanged)
-
-	entry := makeEntry("evt-ack", validPayload("u1"))
-	result := handler(context.Background(), entry)
-
-	assert.Equal(t, outbox.DispositionAck, result.Disposition)
-	assert.Nil(t, result.Err)
-}
-
-func TestConsumer_ViaWrapLegacyHandler_TransientMapsToRequeue(t *testing.T) {
-	dbErr := errors.New("transient db error")
-	repo := &errorSessionRepo{err: dbErr}
-	c := NewConsumer(repo, slog.Default())
-	handler := outbox.WrapLegacyHandler(c.HandleRoleChanged)
-
-	entry := makeEntry("evt-requeue", validPayload("u1"))
-	result := handler(context.Background(), entry)
-
-	assert.Equal(t, outbox.DispositionRequeue, result.Disposition)
-	require.NotNil(t, result.Err)
 }

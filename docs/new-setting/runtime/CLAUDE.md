@@ -104,21 +104,15 @@ Cell 在 `RegisterSubscriptions` 中通过 `r.AddContractHandler(spec, handler, 
 
 ```go
 func (c *MyCell) RegisterSubscriptions(r cell.EventRouter) error {
-    handler := outbox.WrapLegacyHandler(c.svc.HandleEvent)
+    // c.svc.HandleEvent 直接实现 outbox.EntryHandler — 业务返回
+    // outbox.HandleResult{Disposition: Ack/Requeue/Reject}（029 #03 ADR
+    // Decision 1：WrapLegacyHandler 已删除，没有 error→Disposition 适配层）。
     r.AddContractHandler(wrapper.ContractSpec{
         ID:        "event.my.topic.v1",
         Kind:      "event",
         Transport: "amqp",
         Topic:     "my.topic.v1",
-    }, handler, c.ID())
+    }, c.svc.HandleEvent, c.ID())
     return nil
 }
-```
-
-旧签名迁移：
-
-```go
-legacy := func(ctx context.Context, entry outbox.Entry) error { ... }
-handler := outbox.WrapLegacyHandler(legacy)
-// nil error → Ack, PermanentError → Reject, other error → Requeue
 ```

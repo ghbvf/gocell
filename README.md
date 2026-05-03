@@ -270,7 +270,7 @@ GoCell assemblies must declare a `DurabilityMode` explicitly (zero value is reje
 
 | Mode | Value | Noop Allowed | Use Case |
 |------|-------|-------------|----------|
-| `DurabilityDemo` | 1 | Yes — `NoopWriter`, `NoopTxRunner`, `DiscardPublisher` accepted; missing Tx/outbox dependencies are completed with explicit no-op defaults | Development, unit tests, examples |
+| `DurabilityDemo` | 1 | Yes — `NoopWriter`, `cell.DemoTxRunner`, `DiscardPublisher` accepted; missing Tx/outbox dependencies are completed with explicit no-op defaults | Development, unit tests, examples |
 | `DurabilityDurable` | 2 | No — `CheckNotNoop` rejects at `Init()` and L2 Cells require a real outbox writer + Tx runner | Production storage topologies |
 
 ```go
@@ -284,7 +284,7 @@ asm := assembly.New(assembly.Config{ID: "dev", DurabilityMode: cell.DurabilityDe
 `cmd/corebundle` maps PostgreSQL storage topology to `DurabilityDurable`;
 development and memory storage topologies use `DurabilityDemo` so examples can
 run without a database or broker. Demo mode is explicit: Cells inject
-`NoopTxRunner` / `NoopEmitter` when dependencies are absent, or a direct
+`cell.DemoTxRunner` / `NoopEmitter` when dependencies are absent, or a direct
 `outbox.Emitter` when a publisher is supplied without a durable writer. Durable
 mode never silently falls back to those no-op dependencies.
 

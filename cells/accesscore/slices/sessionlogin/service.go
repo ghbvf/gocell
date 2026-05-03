@@ -39,7 +39,11 @@ func WithEmitter(e outbox.Emitter) Option {
 
 // WithTxManager sets the TxRunner for transactional guarantees (L2 atomicity).
 func WithTxManager(tx persistence.TxRunner) Option {
-	return func(s *Service) { s.txRunner = persistence.RunnerOrNoop(tx) }
+	return func(s *Service) {
+		if tx != nil {
+			s.txRunner = tx
+		}
+	}
 }
 
 // WithClock sets the clock used for session creation timestamps.
@@ -99,13 +103,15 @@ func NewService(
 		sessionRepo:  sessionRepo,
 		roleRepo:     roleRepo,
 		refreshStore: refreshStore,
-		txRunner:     persistence.NoopTxRunner{},
 		emitter:      outbox.NewNoopEmitter(),
 		issuer:       issuer,
 		logger:       logger,
 	}
 	for _, o := range opts {
 		o(s)
+	}
+	if s.txRunner == nil {
+		return nil, errcode.New(errcode.ErrValidationFailed, "sessionlogin: TxRunner required; use WithTxManager")
 	}
 	clock.MustHaveClock(s.clock, "sessionlogin.NewService: clock required — use WithClock(c.clk)")
 	return s, nil

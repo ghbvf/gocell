@@ -36,7 +36,18 @@ type typedNilRefreshStore struct {
 func newTestService(t testing.TB) (*Service, ports.SessionRepository) {
 	t.Helper()
 	repo := testutil.RealSessionRepo(t)
-	return MustNewService(repo, newLogoutRefreshStore(), slog.Default()), repo
+	return MustNewService(repo, newLogoutRefreshStore(), slog.Default(), WithTxManager(noopTxRunner{})), repo
+}
+
+func TestNewService_TxRunnerRequired(t *testing.T) {
+	repo := testutil.RealSessionRepo(t)
+	refreshStore := newLogoutRefreshStore()
+	_, err := NewService(repo, refreshStore, slog.Default() /* no WithTxManager */)
+	require.Error(t, err)
+	var ec *errcode.Error
+	require.ErrorAs(t, err, &ec)
+	assert.Equal(t, errcode.ErrValidationFailed, ec.Code)
+	assert.Contains(t, err.Error(), "TxRunner required")
 }
 
 func TestNewService_RejectsTypedNilDependencies(t *testing.T) {
@@ -182,7 +193,7 @@ func TestService_Logout_PublishError_DoesNotFailLogout(t *testing.T) {
 		fp, outbox.DirectPublishFailOpen, metrics.NopProvider{}, clock.Real(), "accesscore",
 		outbox.WithLogger(slog.Default()))
 	require.NoError(t, err)
-	svc := MustNewService(repo, newLogoutRefreshStore(), slog.Default(), WithEmitter(emitter))
+	svc := MustNewService(repo, newLogoutRefreshStore(), slog.Default(), WithEmitter(emitter), WithTxManager(noopTxRunner{}))
 
 	err = svc.Logout(context.Background(), "sess-pub", "usr-1")
 	require.NoError(t, err, "publish failure in demo mode should not fail logout")

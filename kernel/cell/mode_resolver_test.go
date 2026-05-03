@@ -12,7 +12,6 @@ import (
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/kernel/outbox"
-	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
@@ -22,6 +21,19 @@ import (
 type fakeWriter struct{}
 
 func (fakeWriter) Write(_ context.Context, _ outbox.Entry) error { return nil }
+
+// noopTxRunner is a TxRunner that runs fn without a transaction. It implements
+// cell.Nooper so ResolveEmitter can recognize it as a non-durable test stub.
+type noopTxRunner struct{}
+
+func (noopTxRunner) RunInTx(_ context.Context, fn func(context.Context) error) error {
+	if fn == nil {
+		return nil
+	}
+	return fn(context.Background())
+}
+
+func (noopTxRunner) Noop() bool { return true }
 
 // fakeTxRunner is a real (non-noop) persistence.TxRunner for test use.
 type fakeTxRunner struct{}
@@ -41,7 +53,7 @@ func TestResolveEmitter(t *testing.T) {
 	t.Parallel()
 
 	noopWriter := outbox.NoopWriter{}
-	noopTx := persistence.NoopTxRunner{}
+	noopTx := noopTxRunner{}
 	noopPub := &outbox.DiscardPublisher{}
 	realW := fakeWriter{}
 	realTx := fakeTxRunner{}

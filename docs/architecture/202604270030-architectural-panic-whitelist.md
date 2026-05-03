@@ -111,8 +111,7 @@ tracing semantics.
   declaration returns errors, `auth.Mount` propagates them, and a router with
   declared auth metadata but missing `FinalizeAuth` fails closed with HTTP 500
   instead of panicking. No router whitelist entry was added.
-- `kernel/persistence.NoopTxRunner.RunInTx(nil)`,
-  `command.ActiveScanner.GetCommand` not-found handling,
+- `command.ActiveScanner.GetCommand` not-found handling,
   `adminprovision.Ensure`, initial-admin cleanup (including exact custom
   credential-path sweep), governance helpers,
   archtest AST helpers, and `tools/nogo/unconditionalskip` were adjusted so

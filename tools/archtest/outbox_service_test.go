@@ -151,9 +151,17 @@ func checkSliceServiceOutboxFile(root, modPath, path string) ([]outboxServiceVio
 		}
 	}
 
+	// Track the enclosing FuncDecl while walking so OUTBOX-SERVICE-01 can
+	// allow constructor-level fail-fast validation (NewService) while still
+	// rejecting runtime-method silent fallback. After 029 #03 ADR Decision 2
+	// removed persistence.RunnerOrNoop, constructors fail-fast on nil
+	// TxRunner (returning *Service, error) is the explicit replacement for
+	// the deleted helper; method-internal fallback remains forbidden.
+	var enclosing *ast.FuncDecl
 	ast.Inspect(file, func(n ast.Node) bool {
 		switch expr := n.(type) {
 		case *ast.FuncDecl:
+			enclosing = expr
 			if isWithOutboxWriterFunc(expr) {
 				violations = append(violations, outboxServiceViolation{
 					Rule:    outboxServiceRuleWriterAdapter,
@@ -171,12 +179,15 @@ func checkSliceServiceOutboxFile(root, modPath, path string) ([]outboxServiceVio
 				})
 			}
 		case *ast.BinaryExpr:
-			if isTxRunnerNilComparison(expr) {
+			if isTxRunnerNilComparison(expr) && !isConstructorFailFast(enclosing) {
 				violations = append(violations, outboxServiceViolation{
-					Rule:    outboxServiceRuleTxRunnerNil,
-					File:    rel,
-					Line:    fset.Position(expr.Pos()).Line,
-					Message: "service layer must not branch on txRunner nil mode",
+					Rule: outboxServiceRuleTxRunnerNil,
+					File: rel,
+					Line: fset.Position(expr.Pos()).Line,
+					Message: "service layer must not branch on txRunner nil mode" +
+						" (allowed only in NewService constructor as fail-fast validation returning error)." +
+						" To opt in, change NewXxx to NewXxx(...) (*T, error) and add a top-level:" +
+						" if txRunner == nil { return nil, errcode.New(errcode.ErrValidationFailed, ...) }",
 				})
 			}
 		case *ast.CallExpr:
@@ -252,6 +263,85 @@ func isTxRunnerNilComparison(expr *ast.BinaryExpr) bool {
 	}
 	return (isTxRunnerExpr(expr.X) && isNilIdent(expr.Y)) ||
 		(isNilIdent(expr.X) && isTxRunnerExpr(expr.Y))
+}
+
+// isConstructorFailFast reports whether fn is a service constructor that
+// performs explicit fail-fast validation on a nil TxRunner. After 029 #03 ADR
+// Decision 2, constructors are allowed to fail-fast on nil TxRunner because
+// that is the explicit, error-surfacing replacement for the deleted
+// persistence.RunnerOrNoop helper. Method-level nil fallback (e.g. runInTx
+// that skips tx when nil) remains forbidden because it silently degrades to
+// non-transactional mode.
+//
+// A function qualifies iff all of the following hold:
+//  1. It is a top-level function (no receiver) whose name starts with "New".
+//  2. It returns exactly two results, the last of which is "error".
+//  3. Its body's top-level statement list (Body.List, not recursively nested)
+//     contains at least one statement matching isFailFastReturn — i.e. an
+//     if-statement of the form:
+//     if <txRunner-expr> == nil { return nil, <non-nil-expr> }
+//
+// Condition (3) prevents a NewFoo that internally installs a silent noop
+// fallback (if s.txRunner == nil { s.txRunner = noopRunner{} }) from being
+// whitelisted by the mere presence of a New* signature returning (*T, error).
+func isConstructorFailFast(fn *ast.FuncDecl) bool {
+	if fn == nil || fn.Recv != nil { // method (has receiver) — not a constructor
+		return false
+	}
+	if !strings.HasPrefix(fn.Name.Name, "New") {
+		return false
+	}
+	if fn.Type == nil || fn.Type.Results == nil || len(fn.Type.Results.List) != 2 {
+		return false
+	}
+	last := fn.Type.Results.List[len(fn.Type.Results.List)-1]
+	id, ok := last.Type.(*ast.Ident)
+	if !ok || id.Name != "error" {
+		return false
+	}
+	if fn.Body == nil {
+		return false
+	}
+	for _, stmt := range fn.Body.List {
+		ifStmt, ok := stmt.(*ast.IfStmt)
+		if ok && isFailFastReturn(ifStmt) {
+			return true
+		}
+	}
+	return false
+}
+
+// isFailFastReturn reports whether stmt is an if-statement of the form:
+//
+//	if <txRunner-expr> == nil { return nil, <non-nil-expr> }
+//
+// The else branch is not examined. Only top-level return statements inside
+// stmt.Body are checked; nested blocks are not recursed into.
+func isFailFastReturn(stmt *ast.IfStmt) bool {
+	// Condition must be a binary == expression with one side being a
+	// txRunner expression and the other being nil.
+	binExpr, ok := stmt.Cond.(*ast.BinaryExpr)
+	if !ok || binExpr.Op != token.EQL {
+		return false
+	}
+	if (!isTxRunnerExpr(binExpr.X) || !isNilIdent(binExpr.Y)) &&
+		(!isNilIdent(binExpr.X) || !isTxRunnerExpr(binExpr.Y)) {
+		return false
+	}
+	// The body must contain at least one return statement whose first result
+	// is nil and whose second result is any non-nil expression.
+	for _, bodyStmt := range stmt.Body.List {
+		ret, ok := bodyStmt.(*ast.ReturnStmt)
+		if !ok || len(ret.Results) != 2 {
+			continue
+		}
+		firstIsNil := isNilIdent(ret.Results[0])
+		secondIsNonNil := !isNilIdent(ret.Results[1])
+		if firstIsNil && secondIsNonNil {
+			return true
+		}
+	}
+	return false
 }
 
 func isTxRunnerExpr(expr ast.Expr) bool {
