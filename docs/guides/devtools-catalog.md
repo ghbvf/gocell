@@ -1,0 +1,374 @@
+# DevTools Catalog 使用指南
+
+## 概览
+
+`gocell export catalog` / `GET /api/v1/devtools/catalog` 提供统一的项目元数据目录（Unified Catalog），把 GoCell 项目中的 Cell、Slice、Contract、Journey、Assembly、Actor 实体，以及 cell 级依赖图（`cellDeps`）、包级 typed dep graph（`packageDeps`）、状态看板（`statusBoard`）整合为单一文档，通过查询参数（query / flag）按需裁剪输出。
+
+设计目标：
+
+- **gocell-web 解耦**：前端构建时调 `gocell export catalog --out=public/catalog.json`，同源 `fetch('/catalog.json')` 加载，零 CORS，零 live endpoint 部署耦合。
+- **单端点多视图**：CLI flags 与 HTTP query 参数语义对称，前后端消费相同 wire schema。
+- **admin-gated 默认**：HTTP 端点默认 `admin` 角色访问（`auth.AnyRole("admin")`），符合 PR-CFG-4 fail-secure 范式。
+
+Wire schema 借鉴 [Backstage Catalog Entity model](https://backstage.io/docs/features/software-catalog/descriptor-format)（不引任何 Backstage 依赖），包级依赖图借鉴 [loov/goda](https://github.com/loov/goda) 内部 pkggraph 数据模型。
+
+---
+
+## CLI 用法
+
+主命令为 `gocell export catalog`，`gocell export metadata` 是其别名（输出完全相同，byte-equal）。
+
+### Flag 全表
+
+| Flag | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| `--kinds` | 逗号列表 | `""`（全部） | 实体类型筛选，可选值：`Cell,Slice,Contract,Journey,Assembly,Actor` |
+| `--layers` | 逗号列表 | `""`（全部） | 层筛选，作用于 entities 与 packageDeps 节点过滤；可选值：`adapters,actors,assemblies,cells,cmd,contracts,examples,generated,journeys,kernel,pkg,root,runtime,stdlib,tests,thirdparty,tools,unknown` |
+| `--cells` | 逗号列表 | `""`（全部） | Focus 模式：仅输出指定 cell + 一阶邻居（依赖/被依赖 cell、所属 slice、contractUsages） |
+| `--include` | 逗号列表 | `cellDeps,packageDeps,statusBoard,relations`（全开） | 可选输出块，值：`cellDeps,packageDeps,statusBoard,relations` |
+| `--format` | `json\|yaml` | `json` | 输出格式 |
+| `--out` | 文件路径 | `""`（stdout） | 输出文件路径；空则写 stdout |
+| `--root` | 目录路径 | `""`（触发 go.mod 自动探测，向上找最近 go.mod 所在目录） | GoCell 项目根目录（含 cells/、contracts/、journeys/ 等） |
+
+### 示例
+
+**示例 1：默认全量输出（stdout，JSON）**
+
+```bash
+gocell export catalog
+```
+
+输出包含所有实体、cellDeps、packageDeps、statusBoard、relations。CLI 包级 dep graph 同步加载（5-10s，CI/Docker build 场景可接受）；HTTP 端点使用 build-time generated graph，不做运行时加载或等待。
+
+**示例 2：按实体类型过滤，只看 Cell 和 Contract**
+
+```bash
+gocell export catalog --kinds=Cell,Contract --format=yaml --out=catalog.yaml
+```
+
+`entities` 只含 Kind=Cell 和 Kind=Contract 的条目，其余块不受影响。
+
+**示例 3：聚焦 accesscore cell + 关系视图**
+
+```bash
+gocell export catalog --cells=accesscore --include=cellDeps,relations
+```
+
+输出仅包含 `accesscore` 及其一阶邻居实体，附 cellDeps 图和 relations 列表；packageDeps 和 statusBoard 不输出（未在 `--include` 中声明）。
+
+**示例 4：导出包级 dep graph（YAML 格式）**
+
+```bash
+gocell export catalog --include=packageDeps --format=yaml --out=public/package-deps.yaml
+```
+
+触发同步 `tools/depgraph.Load()`（约 5-10s），输出 `dependencies.packages` 块含完整包图节点和边。
+
+**示例 5：gocell-web Dockerfile build 阶段嵌入**
+
+```dockerfile
+RUN gocell export catalog --include=cellDeps,packageDeps,statusBoard,relations \
+    --out=public/catalog.json
+```
+
+前端使用：
+
+```typescript
+const catalog = await fetch('/catalog.json').then(r => r.json());
+```
+
+---
+
+## HTTP 用法
+
+### 端点
+
+```
+GET /api/v1/devtools/catalog
+```
+
+- 鉴权：`admin` 角色（`auth.AnyRole(auth.RoleAdmin)`），非 admin 返回 403，未认证返回 401。
+- bootstrap-wired：通过 `runtime/http/devtools/` 包注册，无 `contract.yaml`（framework 自省路由，见下文工程注意）。路径遵循 api-versioning.md 的 `/api/v1/` 前缀规则（与业务 API 一致），区别于 `/healthz`、`/readyz` 这类无版本健康端点。
+- 需通过 `GOCELL_PROJECT_ROOT` 环境变量指定项目根目录（corebundle 默认读取，启动时校验路径合法且在工作树内），否则 handler 不注册。
+
+### Query 参数全表
+
+| 参数 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| `kinds` | 逗号列表 | `""` | 同 CLI `--kinds` |
+| `layers` | 逗号列表 | `""` | 同 CLI `--layers`；可选值同上 |
+| `cells` | 逗号列表 | `""` | 同 CLI `--cells` |
+| `include` | 逗号列表 | `cellDeps,packageDeps,statusBoard,relations` | 同 CLI `--include` |
+| `format` | `json\|yaml` | `json` | 响应格式；yaml 时 Content-Type: application/yaml |
+
+### 多维过滤 AND 语义
+
+`kinds`、`layers`、`cells` 三个过滤参数同时存在时按 **AND** 组合（实体须同时满足所有非空条件才保留）。具体行为：
+
+| 场景 | 结果 |
+|------|------|
+| `?cells=accesscore`（单维 focus） | 输出 accesscore + 一阶邻居（含其拥有的 Contracts/Journeys，因为 layers 未限制） |
+| `?layers=cells&cells=accesscore`（双维 AND） | **只输出 Kind=Cell 实体且属于 accesscore 邻居集**；Contract/Journey 实体被过滤掉，因为它们的 `entityLayer` 是 `contracts`/`journeys`，不在 `layers=cells` 集合内 |
+| `?kinds=Contract&cells=accesscore` | 只输出 accesscore 拥有的 Contract 实体 |
+
+> **建议**：focus 单个 cell + 看其完整邻居（含契约）→ 用 `?cells=foo` **不要带** `?layers=`。如果想限定到某层 + 某 cell，明确知道后果。
+
+### curl 示例
+
+**示例 1：admin token 正常访问**
+
+```bash
+# 获取 admin token（开发环境）
+TOKEN=$(curl -s -X POST http://localhost:8080/api/v1/auth/sessions \
+  -H 'Content-Type: application/json' \
+  -d '{"username":"admin","password":"YOUR_ADMIN_PASSWORD"}' \
+  | jq -r '.data.accessToken')
+
+# 拉取完整 catalog
+curl -H "Authorization: Bearer $TOKEN" \
+  'http://localhost:8080/api/v1/devtools/catalog' | jq '.schemaVersion, (.entities | length)'
+```
+
+**示例 2：非 admin 用户访问（403）**
+
+```bash
+curl -s -o /dev/null -w "%{http_code}" \
+  -H "Authorization: Bearer $NON_ADMIN_TOKEN" \
+  'http://localhost:8080/api/v1/devtools/catalog'
+# 输出: 403
+```
+
+**示例 3：未认证访问（401）**
+
+```bash
+curl -s -o /dev/null -w "%{http_code}" \
+  'http://localhost:8080/api/v1/devtools/catalog'
+# 输出: 401
+```
+
+**示例 4：聚焦 cell + packageDeps 组合**
+
+```bash
+curl -H "Authorization: Bearer $TOKEN" \
+  'http://localhost:8080/api/v1/devtools/catalog?cells=accesscore&include=packageDeps,cellDeps' \
+  | jq '.dependencies.packages.graph.rootModule, .dependencies.cells.nodes'
+```
+
+### build-time packageDeps（`dependencies.packages.graph`）
+
+包级 dep graph 在 **构建期** 由 `go generate ./cmd/corebundle/` 生成并提交为 `cmd/corebundle/catalog_gen.go`。HTTP handler 启动时直接读取已编译进二进制的图数据，零运行时 goroutine、零等待时间。
+
+`PackageDepsView` 只有两种形态：成功时返回 `{"graph": {...}}`，失败时返回 `{"error": "..."}`。`Graph != nil` 等价于 ready，`Error != ""` 等价于 error；不再单独维护 `status` 枚举字段（J2 lazy-load 方案已被 build-time 生成替代，loading 状态不会出现，移除冗余字段）。
+
+| 场景 | `dependencies.packages` 块 | 行为 |
+|------|---------------------------|------|
+| `catalog_gen.go` 已生成（正常情况） | `{"graph": {...}}` | 返回 200，包图始终就绪 |
+| `catalog_gen.go` 未生成（首次 clone / 忘记 `go generate`） | 缺席（块整体不出现） | 返回 200，其余块（entities/cellDeps/statusBoard）正常返回 |
+| CLI 同步加载失败 | `{"error": "..."}` | CLI 退出码非 0，error 字段含失败描述（HTTP 不出现该形态——HTTP 只用 build-time graph） |
+
+**重新生成时机**：cells/、contracts/、packages 有结构性变动后，重新执行：
+
+```bash
+go generate ./cmd/corebundle/
+```
+
+然后将更新后的 `cmd/corebundle/catalog_gen.go` 提交进仓库。
+
+---
+
+## gocell-web 集成
+
+在 `gocell-web` 的 `Dockerfile` build 阶段调用 CLI 嵌入静态 catalog 文件，前端同源加载，无需任何 live endpoint：
+
+```dockerfile
+# Stage 1: 导出 catalog
+# 需要 Go toolchain：--include=packageDeps 通过 tools/depgraph (go/packages) 同步
+# 加载 5-10s。若不需要 packageDeps，可移除该值改用更小的 builder image。
+FROM golang:1.24-alpine AS catalog-builder
+WORKDIR /gocell
+COPY . .
+RUN go install ./cmd/gocell && \
+    gocell export catalog \
+      --include=cellDeps,packageDeps,statusBoard,relations \
+      --out=public/catalog.json
+
+# Stage 2: 前端构建
+FROM node:22-alpine AS frontend
+WORKDIR /app
+COPY --from=catalog-builder /gocell/public/catalog.json public/catalog.json
+# ... npm install && npm run build ...
+```
+
+前端加载（TypeScript）：
+
+```typescript
+// 同源加载，零 CORS
+const resp = await fetch('/catalog.json');
+const catalog: CatalogDocument = await resp.json();
+```
+
+---
+
+## Wire Envelope Schema 摘要
+
+顶层结构（`schemaVersion: "v1"`, `apiVersion: "gocell.io/v1alpha1"`）：
+
+```json
+{
+  "schemaVersion": "v1",
+  "apiVersion": "gocell.io/v1alpha1",
+  "generatedAt": "2026-05-03T00:00:00Z",
+  "root": "/path/to/project",
+  "query": { "include": ["cellDeps", "packageDeps", "relations", "statusBoard"] },
+  "entities": [
+    {
+      "kind": "Cell",
+      "metadata": { "name": "accesscore", "owner": "...", "labels": {} },
+      "spec": { "consistencyLevel": "L1", "type": "core" }
+    }
+  ],
+  "statusBoard": [
+    { "journeyId": "J-useronboarding", "state": "planned", "risk": "", "blocker": "", "updatedAt": "2026-05-03" }
+  ],
+  "dependencies": {
+    "cells": {
+      "nodes": ["accesscore", "configcore"],
+      "edges": [{ "from": "accesscore", "to": "configcore" }]
+    },
+    "packages": {
+      "graph": {
+        "rootModule": "github.com/ghbvf/gocell",
+        "packages": [ { "importPath": "...", "layer": "cells", "cellID": "accesscore" } ],
+        "edges": [ { "from": "...", "to": "..." } ]
+      }
+    }
+  }
+}
+```
+
+三个顶层功能块：
+
+| 块 | 字段 | 说明 |
+|----|------|------|
+| `entities` | `[]Entity` | Cell/Slice/Contract/Journey/Assembly/Actor 实体列表，Backstage Entity model 结构 |
+| `statusBoard` | `[]StatusBoardEntry` | 来自 `journeys/status-board.yaml`；state 为 `draft` 或 `planned` 的条目，`risk` 与 `blocker` 字段在输出中清空（保留 `journeyId/state/updatedAt`），避免公开发布的 gocell-web bundle 暴露内部规划叙述 |
+| `dependencies` | `*Dependencies` | 包含 `cells`（cell 级依赖图）和 `packages`（包级 typed dep graph）两个子块 |
+
+`entities[*].relations` 字段（如 hasPart/partOf/dependsOn/ownedBy）对称遵循 [Backstage well-known relations](https://backstage.io/docs/features/software-catalog/well-known-relations) 命名约定。
+
+---
+
+## Backstage 借鉴说明
+
+本模块借鉴了 Backstage Catalog 的实体模型（Entity / kind / metadata / spec 层级结构）和关系语义（well-known relations），但**不引入任何 Backstage 依赖**：
+
+- 仅复用其文档化的命名约定和 wire shape，满足 GoCell 项目的 cell-native 治理需求
+- GoCell 的 Entity 是 Cell/Slice/Contract/Journey/Assembly/Actor，与 Backstage 的 Component/API/System/Domain 存在映射但不完全等价
+- 未来若需要接入 Backstage 生态，wire schema 差量最小化，适配成本低
+
+---
+
+## 工程注意
+
+### Build-time Codegen（packageDeps）— Build-tag stub 设计
+
+`packageDeps` 图由 `gocell generate catalog` 子命令生成，输出为 `cmd/corebundle/catalog_gen.go`，但**该文件不 commit 到仓库**（`.gitignore` 黑名单 + `hack/verify-gitignore-respect.sh` 守卫）。
+
+#### 为什么不 commit
+
+`tools/depgraph.Load` 内部用 `golang.org/x/tools/go/packages.Load`，对 production package 的 `.Imports` 字段处理在 macOS 与 Linux 上有微差（已知 quirk：当某 production 包有 internal `_test.go` import 了生产代码不 import 的包时，平台对是否合并到 production `.Imports` 行为不一致）。任何 commit 进仓库的 `catalog_gen.go` 都会跨平台 byte-equal 漂移，CI 永远 fail。
+
+参考开源实践：Kubernetes 用 dev-container 强制环境一致；buf 锁工具版本；go-zero 不 commit 任何 generated 文件。我们采用 go-zero 路线 + build-tag stub 兜底 onboarding。
+
+#### 两个文件 + 两个 build tag
+
+| 文件 | 状态 | build tag | 内容 |
+|------|------|----------|------|
+| `cmd/corebundle/catalog_gen_stub.go` | **committed** | `//go:build !catalog_gen`（默认 build 用） | 空 graph stub（`FromNodes("...", []*Node{})`）；catalog 端点的 `dependencies.packages.graph` 字段为空（其余块正常） |
+| `cmd/corebundle/catalog_gen.go` | **.gitignore**，每次 generate 重新产生 | `//go:build catalog_gen` | 真实完整 graph，由 `tools/depgraph.Load(./...)` 抽取 |
+
+#### 三种 build 路径
+
+```bash
+# 1. 新开发者刚 git clone — 直接 build 即可（用 stub，packageDeps 为空但其余功能正常）
+go build ./cmd/corebundle/
+
+# 2. 想看完整 packageDeps（本地 dev / 测试 catalog 端点）
+make build                                    # Makefile 自动 generate + -tags=catalog_gen
+# 等价于：
+go generate ./cmd/corebundle/
+go build -tags=catalog_gen ./cmd/corebundle/
+
+# 3. CI / prod docker build — 同 #2
+go generate ./cmd/corebundle/ && go build -tags=catalog_gen -o bin/corebundle ./cmd/corebundle/
+```
+
+CLI `gocell export catalog --include=packageDeps` 不受 build-tag 影响 — CLI 直接调 `tools/depgraph.Load()`（操作者上下文，避免 stale 数据），始终输出完整 graph。
+
+#### 防误 commit
+
+`hack/verify-gitignore-respect.sh`（被 `make verify` 自动 glob 起来）扫描"必须不被追踪"的白名单（含 `cmd/corebundle/catalog_gen.go`），若有人 `git add -f` 强加进来则 verify fail。新增建造产物加 .gitignore 时，同步加进该脚本的白名单。
+
+### Wire Envelope 豁免（不套 `{"data": ...}`）
+
+`/api/v1/devtools/catalog` 是 **framework-internal admin endpoint**，wire 形态直接返回 Backstage Catalog Entity envelope（`apiVersion/kind/metadata/spec` 顶层结构），**不套 `{"data": ...}`**。
+
+业务 API 强制的 `{"data": ...}` envelope（参见 `.claude/rules/gocell/api-versioning.md`）仅适用于 cell-owned routes；runtime 内部治理路由（本端点 + `/healthz` `/readyz` `/metrics`）遵循各自的 wire 格式。
+
+### Wire 类型归属（runtime/devtools/catalog/）
+
+Wire format 类型（`Document` / `Entity` / `IncludeOptions` / `ExportOptions` / `BuildDocument` / `MarshalDocument` 等）声明在 `runtime/devtools/catalog/` 包，CLI 与 HTTP handler 通过参数接收 `*kernel/metadata.ProjectMeta`。`kernel/metadata` 只承载 ProjectMeta 解析模型，下游产品 import `kernel/metadata` 时不会被 wire format 锁定（详见 ADR `docs/architecture/202605040030-adr-wire-format-out-of-kernel.md`）。
+
+### bootstrap-wired（无 contract.yaml）
+
+`/api/v1/devtools/catalog` 路由落在 `runtime/http/devtools/` 包，通过 bootstrap `WithDevtoolsCatalog(pm, root, generatedPackageGraph)` Option 接入，与 `runtime/http/health/` 同范式（framework 自省路由）。**不建 cell、不建 contract.yaml**，原因：
+
+1. devtools 无业务状态、无事件、无 outbox，建 cell 净增 ~5 YAML/schema 文件
+2. 描述 catalog API 的 contract 自身会在 catalog 目录中被它自己描述，引发语义循环
+3. 当前唯一鉴权需求（admin-gated）由 bootstrap-level `auth.AnyRole(auth.RoleAdmin)` 直接满足，无需 contract-level RBAC
+
+未来若触发升级条件（见 backlog T10 DEVTOOLS-CELL-PROMOTION-01），可将其迁移为正式 cell。
+
+### 环境变量
+
+`corebundle` 通过 `GOCELL_PROJECT_ROOT` 决定是否启用 devtools handler：
+
+```bash
+# 本地开发（项目根目录）
+GOCELL_PROJECT_ROOT=/path/to/gocell ./bin/corebundle
+
+# Docker 部署
+ENV GOCELL_PROJECT_ROOT=/app
+```
+
+未设置 `GOCELL_PROJECT_ROOT` 时，`WithDevtoolsCatalog` 不注册路由（不影响服务启动）。
+
+### CLI 包级加载耗时
+
+CLI `--include=packageDeps` 触发同步调用 `tools/depgraph.Load()`（基于 `golang.org/x/tools/go/packages`），耗时约 5-10s。适用于：
+
+- CI build 阶段（单次执行，可接受）
+- Docker build-time 嵌入静态文件
+- 本地开发调试
+
+**不包含 `packageDeps`** 时（如 `--include=cellDeps,statusBoard,relations`），执行时间 < 1s。
+
+HTTP 端点使用 build-time 生成的图，零运行时加载等待。
+
+### 升级路径
+
+若满足以下任一触发条件，参考 backlog T10 DEVTOOLS-CELL-PROMOTION-01 进行 cell 化迁移：
+
+- (a) 某 cell 需要在 catalog 中携带 cell-自定义字段且需 contract schema 强校验
+- (b) devtools 需要发事件（订阅/广播 catalog 变更）
+- (c) 出现非 admin 的细粒度 RBAC 需求（不同角色看不同字段）
+
+---
+
+## 参考（commit message ref）
+
+以下三条 ref 随本特性的 commit message 一并记录：
+
+- `ref: backstage/backstage packages/catalog-model/src/entity/Entity.ts@master`
+- `ref: backstage/backstage docs/features/software-catalog/well-known-relations.md@master`
+- `ref: loov/goda internal/pkggraph`

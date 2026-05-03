@@ -1,0 +1,10 @@
+id: testcell
+type: platform
+consistencyLevel: L1
+owner:
+  team: platform
+  role: owner
+schema:
+  primary: testcell
+verify:
+  smoke: []

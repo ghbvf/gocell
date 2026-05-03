@@ -2,11 +2,65 @@ package governance
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/ghbvf/gocell/kernel/metadata"
 	"github.com/ghbvf/gocell/kernel/registry"
 )
+
+// Graph is the cell-level directed dependency graph produced by DependencyChecker.
+// Nodes and Edges are deterministically sorted (Nodes alphabetically; Edges by
+// From then To) so callers can byte-compare two Graph values.
+type Graph struct {
+	Nodes []string
+	Edges []Edge
+}
+
+// Edge is a directed dependency between two cells: From depends on To.
+type Edge struct {
+	From string
+	To   string
+}
+
+// Graph builds the cell dependency graph from the project metadata and returns
+// it together with any resolution errors encountered during construction.
+// The returned Graph is always fully sorted (Nodes and Edges) for determinism.
+// If resolution errors are present the graph may be incomplete, but it still
+// contains all nodes for cells that were resolved cleanly.
+func (dc *DependencyChecker) Graph() (Graph, []ValidationResult) {
+	if dc.project == nil {
+		return Graph{Nodes: []string{}}, nil
+	}
+	raw, errs := dc.buildDependencyGraph()
+	return rawGraphToGraph(raw), errs
+}
+
+// rawGraphToGraph converts the internal adjacency map to a sorted Graph.
+func rawGraphToGraph(raw map[string]map[string]bool) Graph {
+	nodes := make([]string, 0, len(raw))
+	for n := range raw {
+		nodes = append(nodes, n)
+	}
+	sort.Strings(nodes)
+
+	var edges []Edge
+	for _, from := range nodes {
+		tos := make([]string, 0, len(raw[from]))
+		for to := range raw[from] {
+			tos = append(tos, to)
+		}
+		sort.Strings(tos)
+		for _, to := range tos {
+			edges = append(edges, Edge{From: from, To: to})
+		}
+	}
+
+	return Graph{
+		Nodes: nodes,
+		Edges: edges,
+	}
+}
 
 // DependencyChecker validates structural dependencies between cells. It
 // embeds locator so locate/newResult and the project field are shared with
@@ -158,16 +212,27 @@ func (dc *DependencyChecker) addSliceEdges(graph map[string]map[string]bool, s *
 			continue
 		}
 		for _, consumerCell := range consumers {
-			if consumerCell == providerCell {
-				continue // self-edge is not a cross-cell dependency
-			}
-			if graph[consumerCell] == nil {
-				graph[consumerCell] = make(map[string]bool)
-			}
-			graph[consumerCell][providerCell] = true
+			dc.addCellEdge(graph, consumerCell, providerCell)
 		}
 	}
 	return errs
+}
+
+// addCellEdge adds a directed edge consumerCell → providerCell to graph,
+// skipping self-edges and non-cell IDs (actor entries from actors.yaml).
+func (dc *DependencyChecker) addCellEdge(graph map[string]map[string]bool, consumerCell, providerCell string) {
+	if consumerCell == providerCell {
+		return // self-edge is not a cross-cell dependency
+	}
+	// Skip actor IDs: actors.yaml entries participate in contracts but
+	// are not cells — including them would pollute the cell dep graph.
+	if _, isCell := dc.project.Cells[consumerCell]; !isCell {
+		return
+	}
+	if graph[consumerCell] == nil {
+		graph[consumerCell] = make(map[string]bool)
+	}
+	graph[consumerCell][providerCell] = true
 }
 
 // detectCycle runs three-color DFS on the directed graph and returns the

@@ -20,7 +20,7 @@ import (
 //	gocell generate indexes (placeholder)
 func runGenerate(args []string) error {
 	if len(args) < 1 {
-		return fmt.Errorf("usage: gocell generate <assembly|metrics-schema|indexes> [flags]")
+		return fmt.Errorf("usage: gocell generate <assembly|catalog|metrics-schema|indexes> [flags]")
 	}
 	if isHelpFlag(args[0]) {
 		return printGenerateHelp()
@@ -34,10 +34,12 @@ func runGenerate(args []string) error {
 		return generateAssembly(subArgs)
 	case "metrics-schema":
 		return generateMetricsSchema(subArgs)
+	case "catalog":
+		return generateCatalog(subArgs)
 	case "indexes":
 		return fmt.Errorf("not implemented: gocell generate indexes")
 	default:
-		return fmt.Errorf("unknown generate type: %s (expected assembly, metrics-schema, or indexes)", subtype)
+		return fmt.Errorf("unknown generate type: %s (expected assembly, catalog, metrics-schema, or indexes)", subtype)
 	}
 }
 

@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/ghbvf/gocell/cells/auditcore/internal/domain"
-	"github.com/ghbvf/gocell/cells/auditcore/internal/dto"
 	"github.com/ghbvf/gocell/cells/auditcore/internal/ports"
 	cell "github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/wrapper"
@@ -73,7 +72,7 @@ func auditQueryPolicy(r *http.Request) error {
 	if actorID == "" || actorID == p.Subject {
 		return nil
 	}
-	return auth.AnyRole(dto.RoleAdmin)(r)
+	return auth.AnyRole(auth.RoleAdmin)(r)
 }
 
 // RegisterRoutes registers auditquery routes with the audit-query policy

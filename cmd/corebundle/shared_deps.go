@@ -145,6 +145,11 @@ type SharedDeps struct {
 	// the debug channel.
 	VerboseDisabled bool
 
+	// ProjectRoot is the directory used by the devtools catalog endpoint to
+	// locate cell.yaml / slice.yaml metadata. Read from GOCELL_PROJECT_ROOT;
+	// empty when the var is unset (endpoint is disabled gracefully).
+	ProjectRoot string
+
 	// metricsHandler is the Prometheus HTTP handler built once in
 	// LoadSharedDepsFromEnv and reused by defaultRuntimeOptions.
 	metricsHandler http.Handler
@@ -571,6 +576,7 @@ func LoadSharedDepsFromEnv(ctx context.Context) (*SharedDeps, error) {
 		VerboseToken:         verboseToken,
 		VerboseDisabled:      verboseDisabled,
 		metricsHandler:       metricsHandler,
+		ProjectRoot:          os.Getenv("GOCELL_PROJECT_ROOT"),
 	}
 
 	if err := deps.Validate(); err != nil {

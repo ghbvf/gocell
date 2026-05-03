@@ -15,7 +15,6 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/ghbvf/gocell/cells/configcore/internal/domain"
-	dto "github.com/ghbvf/gocell/cells/configcore/internal/dto"
 	"github.com/ghbvf/gocell/cells/configcore/internal/mem"
 	kcell "github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/cell/celltest"
@@ -31,7 +30,7 @@ const flagsBasePath = "/api/v1/flags"
 // asAdminFlag attaches an admin Principal to req so it satisfies the
 // auth.AnyRole(RoleAdmin) policy applied by RegisterRoutes.
 func asAdminFlag(req *http.Request) *http.Request {
-	return req.WithContext(auth.TestContext("admin-user", []string{string(dto.RoleAdmin)}))
+	return req.WithContext(auth.TestContext("admin-user", []string{auth.RoleAdmin}))
 }
 
 func TestToFeatureFlagResponse_NilInput(t *testing.T) {

@@ -120,11 +120,11 @@ func loginAndGetPair(t *testing.T, opts ...loginOption) loginResult {
 	require.NoError(t, err)
 	alice.ID = "usr-alice-integration"
 	require.NoError(t, roleRepo.Create(ctx, &domain.Role{
-		ID: domain.RoleAdmin, Name: domain.RoleAdmin,
+		ID: auth.RoleAdmin, Name: auth.RoleAdmin,
 		Permissions: []domain.Permission{{Resource: "*", Action: "*"}},
 	}))
 	require.NoError(t, userRepo.Create(ctx, alice))
-	_, err = roleRepo.AssignToUser(ctx, alice.ID, domain.RoleAdmin)
+	_, err = roleRepo.AssignToUser(ctx, alice.ID, auth.RoleAdmin)
 	require.NoError(t, err)
 
 	intClock := storetest.NewFakeClock(time.Now())

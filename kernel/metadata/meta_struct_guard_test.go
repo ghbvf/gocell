@@ -7,6 +7,7 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/metadata"
 	"github.com/ghbvf/gocell/pkg/contracts"
+	"github.com/ghbvf/gocell/runtime/devtools/catalog"
 )
 
 // allowedInlineFields lists struct fields that are explicitly permitted to
@@ -156,4 +157,38 @@ func shortPath(path string) string {
 		return path
 	}
 	return parts[len(parts)-2] + "." + parts[len(parts)-1]
+}
+
+// TestExportStructs_NoMapCatchall asserts that none of the export wire structs
+// carry map[string]any or yaml:",inline" fields, preserving the same G-1
+// invariant the metadata structs must uphold. These structs are part of the
+// Document wire format (now in runtime/devtools/catalog) and must remain predictable.
+func TestExportStructs_NoMapCatchall(t *testing.T) {
+	roots := []any{
+		catalog.Document{},
+		catalog.Entity{},
+		catalog.EntityMetadata{},
+		catalog.Relation{},
+		catalog.Dependencies{},
+		catalog.CellDepGraph{},
+		catalog.CellEdge{},
+		catalog.PackageDepsView{},
+		catalog.FilterEcho{},
+		catalog.CellSpec{},
+		catalog.CellSpecOwner{},
+		catalog.CellSpecSchema{},
+		catalog.CellSpecL0Dep{},
+		catalog.SliceSpec{},
+		catalog.SliceSpecContractUsage{},
+		catalog.ContractSpec{},
+		catalog.JourneySpec{},
+		catalog.JourneyPassCrit{},
+		catalog.AssemblySpec{},
+		catalog.AssemblySpecBuild{},
+		catalog.ActorSpec{},
+	}
+	for _, root := range roots {
+		typ := reflect.TypeOf(root)
+		checkStruct(t, typ, typ.Name(), 0, 3)
+	}
 }

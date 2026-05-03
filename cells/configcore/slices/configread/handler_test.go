@@ -27,7 +27,7 @@ const configBasePath = "/api/v1/config"
 // asAdmin attaches an admin Principal to req so it satisfies the
 // auth.AnyRole(RoleAdmin) policy applied by RegisterRoutes.
 func asAdmin(req *http.Request) *http.Request {
-	return req.WithContext(auth.TestContext("admin-user", []string{string(dto.RoleAdmin)}))
+	return req.WithContext(auth.TestContext("admin-user", []string{auth.RoleAdmin}))
 }
 
 // setupHandler wires the slice handler onto a celltest mux via RegisterRoutes —

@@ -8,13 +8,14 @@ import (
 
 	"golang.org/x/tools/go/packages"
 
+	kerneldepgraph "github.com/ghbvf/gocell/kernel/depgraph"
 	"github.com/ghbvf/gocell/tools/depgraph"
 )
 
 const synthModule = "example.com/synth"
 
 // loadSynth loads the testdata/synth fake module.
-func loadSynth(t *testing.T, includeTests bool) *depgraph.Graph {
+func loadSynth(t *testing.T, includeTests bool) *kerneldepgraph.Graph {
 	t.Helper()
 	dir, err := filepath.Abs("testdata/synth")
 	if err != nil {
@@ -120,9 +121,9 @@ func TestLoad_LayerAndCellAnnotation(t *testing.T) {
 		wantLayer string
 		wantCell  string
 	}{
-		{synthModule + "/a", depgraph.LayerUnknown, ""},
-		{synthModule + "/cells/cellA", depgraph.LayerCells, "cellA"},
-		{synthModule + "/generated/foo", depgraph.LayerGenerated, ""},
+		{synthModule + "/a", kerneldepgraph.LayerUnknown, ""},
+		{synthModule + "/cells/cellA", kerneldepgraph.LayerCells, "cellA"},
+		{synthModule + "/generated/foo", kerneldepgraph.LayerGenerated, ""},
 	}
 	for _, c := range cases {
 		t.Run(c.id, func(t *testing.T) {

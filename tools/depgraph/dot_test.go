@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	kerneldepgraph "github.com/ghbvf/gocell/kernel/depgraph"
 	"github.com/ghbvf/gocell/tools/depgraph"
 )
 
@@ -12,19 +13,18 @@ func TestWriteDOT_StructuralAssertions(t *testing.T) {
 	g := loadSynth(t, false)
 
 	var sb strings.Builder
-	if err := g.WriteDOT(&sb); err != nil {
+	if err := depgraph.WriteDOT(g, &sb); err != nil {
 		t.Fatalf("WriteDOT: %v", err)
 	}
 	out := sb.String()
 
 	if !strings.HasPrefix(out, "digraph depgraph {") {
-		t.Errorf("DOT missing header: %s", out[:64])
+		t.Errorf("DOT missing header: %s", out[:min(64, len(out))])
 	}
 	if !strings.HasSuffix(strings.TrimSpace(out), "}") {
 		t.Errorf("DOT missing closing brace")
 	}
-	// Lock trailing newline: POSIX text files end with \n, and downstream
-	// pipes (e.g. `gocell graph --format=dot | dot -Tsvg`) expect it.
+	// Lock trailing newline: POSIX text files end with \n.
 	if !strings.HasSuffix(out, "}\n") {
 		t.Errorf("DOT output must end with \"}\\n\"; last bytes: %q", out[max(0, len(out)-8):])
 	}
@@ -65,10 +65,10 @@ func TestWriteDOT_Deterministic(t *testing.T) {
 	t.Parallel()
 	g := loadSynth(t, false)
 	var a, b strings.Builder
-	if err := g.WriteDOT(&a); err != nil {
+	if err := depgraph.WriteDOT(g, &a); err != nil {
 		t.Fatalf("WriteDOT first: %v", err)
 	}
-	if err := g.WriteDOT(&b); err != nil {
+	if err := depgraph.WriteDOT(g, &b); err != nil {
 		t.Fatalf("WriteDOT second: %v", err)
 	}
 	if a.String() != b.String() {
@@ -78,9 +78,9 @@ func TestWriteDOT_Deterministic(t *testing.T) {
 
 func TestWriteDOT_NilGraph(t *testing.T) {
 	t.Parallel()
-	var nilGraph *depgraph.Graph
+	var nilGraph *kerneldepgraph.Graph
 	var sb strings.Builder
-	if err := nilGraph.WriteDOT(&sb); err != nil {
+	if err := depgraph.WriteDOT(nilGraph, &sb); err != nil {
 		t.Fatalf("WriteDOT(nil): %v", err)
 	}
 	if !strings.Contains(sb.String(), "digraph depgraph") {

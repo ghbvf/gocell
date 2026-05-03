@@ -114,49 +114,49 @@ func (h *Handler) RegisterRoutes(mux kcell.RouteMux) error {
 	if err := auth.Mount(mux, auth.Route{
 		Contract: specUserCreate,
 		Handler:  http.HandlerFunc(h.handleCreate),
-		Policy:   auth.AnyRole(domain.RoleAdmin),
+		Policy:   auth.AnyRole(auth.RoleAdmin),
 	}); err != nil {
 		return err
 	}
 	if err := auth.Mount(mux, auth.Route{
 		Contract: specUserGet,
 		Handler:  http.HandlerFunc(h.handleGet),
-		Policy:   auth.SelfOr("id", domain.RoleAdmin),
+		Policy:   auth.SelfOr("id", auth.RoleAdmin),
 	}); err != nil {
 		return err
 	}
 	if err := auth.Mount(mux, auth.Route{
 		Contract: specUserUpdate,
 		Handler:  http.HandlerFunc(h.handleUpdate),
-		Policy:   auth.SelfOr("id", domain.RoleAdmin),
+		Policy:   auth.SelfOr("id", auth.RoleAdmin),
 	}); err != nil {
 		return err
 	}
 	if err := auth.Mount(mux, auth.Route{
 		Contract: specUserPatch,
 		Handler:  http.HandlerFunc(h.handlePatch),
-		Policy:   auth.SelfOr("id", domain.RoleAdmin),
+		Policy:   auth.SelfOr("id", auth.RoleAdmin),
 	}); err != nil {
 		return err
 	}
 	if err := auth.Mount(mux, auth.Route{
 		Contract: specUserDelete,
 		Handler:  http.HandlerFunc(h.handleDelete),
-		Policy:   auth.AnyRole(domain.RoleAdmin),
+		Policy:   auth.AnyRole(auth.RoleAdmin),
 	}); err != nil {
 		return err
 	}
 	if err := auth.Mount(mux, auth.Route{
 		Contract: specUserLock,
 		Handler:  http.HandlerFunc(h.handleLock),
-		Policy:   auth.AnyRole(domain.RoleAdmin),
+		Policy:   auth.AnyRole(auth.RoleAdmin),
 	}); err != nil {
 		return err
 	}
 	if err := auth.Mount(mux, auth.Route{
 		Contract: specUserUnlock,
 		Handler:  http.HandlerFunc(h.handleUnlock),
-		Policy:   auth.AnyRole(domain.RoleAdmin),
+		Policy:   auth.AnyRole(auth.RoleAdmin),
 	}); err != nil {
 		return err
 	}
@@ -167,7 +167,7 @@ func (h *Handler) RegisterRoutes(mux kcell.RouteMux) error {
 	if err := auth.Mount(mux, auth.Route{
 		Contract:            specUserChangePassword,
 		Handler:             http.HandlerFunc(h.handleChangePassword),
-		Policy:              auth.SelfOr("id", domain.RoleAdmin),
+		Policy:              auth.SelfOr("id", auth.RoleAdmin),
 		PasswordResetExempt: true,
 	}); err != nil {
 		return err

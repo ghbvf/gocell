@@ -16,6 +16,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"golang.org/x/tools/go/packages"
 
+	kerneldepgraph "github.com/ghbvf/gocell/kernel/depgraph"
 	"github.com/ghbvf/gocell/tools/archtest/internal/typeseval"
 	"github.com/ghbvf/gocell/tools/depgraph"
 )
@@ -66,17 +67,17 @@ type violation struct {
 // tools/depgraph/layer.go; this shim only adapts the signature.
 func layerOf(modPrefix, importPath string) string {
 	module := strings.TrimSuffix(modPrefix, "/")
-	switch layer := depgraph.LayerOf(module, importPath); layer {
-	case depgraph.LayerStdlib, depgraph.LayerThirdParty, depgraph.LayerRoot, depgraph.LayerUnknown, "":
+	switch layer := kerneldepgraph.LayerOf(module, importPath); layer {
+	case kerneldepgraph.LayerStdlib, kerneldepgraph.LayerThirdParty, kerneldepgraph.LayerRoot, kerneldepgraph.LayerUnknown, "":
 		return ""
 	default:
 		return layer
 	}
 }
 
-// cellOf delegates to depgraph.CellOf with archtest's modPrefix convention.
+// cellOf delegates to kerneldepgraph.CellOf with archtest's modPrefix convention.
 func cellOf(modPrefix, importPath string) string {
-	return depgraph.CellOf(strings.TrimSuffix(modPrefix, "/"), importPath)
+	return kerneldepgraph.CellOf(strings.TrimSuffix(modPrefix, "/"), importPath)
 }
 
 // isInternal returns true if the import path contains an internal package segment.
@@ -110,7 +111,7 @@ var cellOwnedSubpackages = map[string]string{
 // directly — there is no longer an intermediate pkgInfo bridge type.
 // LAYER-01..04 path rules are owned by depguard in `.golangci.yml`.
 // modPrefix must include trailing slash (e.g. "github.com/ghbvf/gocell/").
-func checkLayering(modPrefix string, g *depgraph.Graph) []violation {
+func checkLayering(modPrefix string, g *kerneldepgraph.Graph) []violation {
 	var out []violation
 
 	for _, pkg := range g.Packages {
@@ -468,7 +469,7 @@ func findModuleRoot(t *testing.T) string {
 // LAYER-10 (cell-API adapter check); the graph powers LAYER-05/06/09 plus
 // the transitive variants. Subsequent calls within the same process reuse
 // the cached resolver result.
-func loadModule(t *testing.T, root string) (*depgraph.Graph, []*packages.Package) {
+func loadModule(t *testing.T, root string) (*kerneldepgraph.Graph, []*packages.Package) {
 	t.Helper()
 	resolver, err := typeseval.SharedResolver(root, false /* tests */, []string{"integration"}, "./...")
 	require.NoError(t, err, "typeseval.SharedResolver failed")
@@ -704,14 +705,14 @@ func formatTransitivePath(path []string) string {
 // import closure reaches cells/B/internal/... for any B != A. The
 // violation message includes the laundering path so reviewers can locate
 // the offending intermediary without grepping the codebase.
-func checkTransitiveCrossCellInternal(module string, g *depgraph.Graph) []violation {
+func checkTransitiveCrossCellInternal(module string, g *kerneldepgraph.Graph) []violation {
 	var out []violation
 	for _, src := range g.Packages {
-		if src.Layer != depgraph.LayerCells || src.CellID == "" {
+		if src.Layer != kerneldepgraph.LayerCells || src.CellID == "" {
 			continue
 		}
 		for dep, path := range g.TransitiveImportsWithPaths(src.ID) {
-			depCell := depgraph.CellOf(module, dep)
+			depCell := kerneldepgraph.CellOf(module, dep)
 			if depCell == "" || depCell == src.CellID {
 				continue
 			}
@@ -738,7 +739,7 @@ func checkTransitiveCrossCellInternal(module string, g *depgraph.Graph) []violat
 // records directly via the shared matchCellOwnedSubpackage /
 // isCellOwnedSubpackageExempt helpers — no string-replace coupling to the
 // direct-form message template.
-func checkTransitiveCellOwnedSubpackage(modPrefix string, g *depgraph.Graph) []violation {
+func checkTransitiveCellOwnedSubpackage(modPrefix string, g *kerneldepgraph.Graph) []violation {
 	var out []violation
 	for _, src := range g.Packages {
 		srcLayer := layerOf(modPrefix, src.ID)
@@ -768,14 +769,14 @@ func checkTransitiveCellOwnedSubpackage(modPrefix string, g *depgraph.Graph) []v
 
 // checkTransitiveCrossCellEvents flags every cell A whose transitive
 // import closure reaches cells/B/events for any B != A.
-func checkTransitiveCrossCellEvents(module string, g *depgraph.Graph) []violation {
+func checkTransitiveCrossCellEvents(module string, g *kerneldepgraph.Graph) []violation {
 	var out []violation
 	for _, src := range g.Packages {
-		if src.Layer != depgraph.LayerCells || src.CellID == "" {
+		if src.Layer != kerneldepgraph.LayerCells || src.CellID == "" {
 			continue
 		}
 		for dep, path := range g.TransitiveImportsWithPaths(src.ID) {
-			depCell := depgraph.CellOf(module, dep)
+			depCell := kerneldepgraph.CellOf(module, dep)
 			if depCell == "" || depCell == src.CellID {
 				continue
 			}
@@ -1546,4 +1547,71 @@ func TestCorebundleMainLineLimit(t *testing.T) {
 			"re-evaluate V-A8-DEFERRED triggers in docs/backlog.md and "+
 			"docs/plans/202604252100-026-post-v1.0-cleanup-plan.md before raising the limit",
 		lines, maxLines)
+}
+
+// TestKernelDepgraphIsolation locks the dependency boundary introduced by the
+// Phase 1 depgraph split (J1 PR-A37):
+//
+//  1. kernel/depgraph must not import golang.org/x/tools/... (any sub-path).
+//     kernel/ is stdlib-only; the heavy go/packages integration lives in
+//     tools/depgraph and must not leak into the kernel layer.
+//  2. kernel/depgraph must not import tools/depgraph (no upward cycle).
+//  3. tools/depgraph may import kernel/depgraph (expected one-way dependency).
+//
+// These rules complement the depguard LAYER-01 static guard in .golangci.yml,
+// which fires at lint time; this test fires at integration-test time against
+// the actual dependency graph loaded by typeseval.SharedResolver.
+func TestKernelDepgraphIsolation(t *testing.T) {
+	root := findModuleRoot(t)
+	g, _ := loadModule(t, root)
+	module := readModulePath(t, root)
+
+	kernelDepgraphPkg := module + "/kernel/depgraph"
+	toolsDepgraphPkg := module + "/tools/depgraph"
+
+	kernelNode := g.ByID(kernelDepgraphPkg)
+	require.NotNilf(t, kernelNode,
+		"kernel/depgraph package not found in depgraph; "+
+			"confirm kernel/depgraph/ exists and is included in the integration build")
+
+	t.Run("kernel_depgraph_no_xtools_import", func(t *testing.T) {
+		for _, imp := range kernelNode.Imports {
+			assert.False(t, strings.HasPrefix(imp, "golang.org/x/tools/"),
+				"kernel/depgraph must not import golang.org/x/tools; found: %s", imp)
+		}
+	})
+
+	t.Run("kernel_depgraph_no_tools_depgraph_import", func(t *testing.T) {
+		for _, imp := range kernelNode.Imports {
+			assert.NotEqual(t, toolsDepgraphPkg, imp,
+				"kernel/depgraph must not import tools/depgraph (no upward cycle)")
+		}
+	})
+
+	t.Run("tools_depgraph_imports_kernel_depgraph", func(t *testing.T) {
+		toolsNode := g.ByID(toolsDepgraphPkg)
+		require.NotNilf(t, toolsNode,
+			"tools/depgraph package not found in depgraph")
+		var found bool
+		for _, imp := range toolsNode.Imports {
+			if imp == kernelDepgraphPkg {
+				found = true
+				break
+			}
+		}
+		assert.True(t, found,
+			"tools/depgraph must import kernel/depgraph (expected dependency direction)")
+	})
+
+	t.Run("kernel_depgraph_no_xtools_transitive", func(t *testing.T) {
+		// Strengthen the direct-import check: also verify that kernel/depgraph
+		// does not transitively import golang.org/x/tools/ via any intermediary.
+		// This ensures that future additions to kernel/depgraph cannot sneak in
+		// the heavy x/tools dependency through a helper package.
+		kernelTransitive := g.TransitiveImports(kernelDepgraphPkg)
+		for imp := range kernelTransitive {
+			require.False(t, strings.HasPrefix(imp, "golang.org/x/tools/"),
+				"kernel/depgraph must not transitively import golang.org/x/tools/; found: %s", imp)
+		}
+	})
 }

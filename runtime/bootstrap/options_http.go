@@ -16,6 +16,8 @@ import (
 	"context"
 	"time"
 
+	kerneldepgraph "github.com/ghbvf/gocell/kernel/depgraph"
+	"github.com/ghbvf/gocell/kernel/metadata"
 	"github.com/ghbvf/gocell/kernel/wrapper"
 	"github.com/ghbvf/gocell/runtime/http/middleware"
 	"github.com/ghbvf/gocell/runtime/http/router"
@@ -161,6 +163,25 @@ func WithReadyzDeadline(d time.Duration) Option {
 func WithAdapterInfo(info map[string]string) Option {
 	return func(b *Bootstrap) {
 		b.adapterInfo = info
+	}
+}
+
+// WithDevtoolsCatalog enables the GET /devtools/catalog endpoint on
+// the primary listener with admin-only gating (auth.AnyRole("admin")).
+//
+// Pass nil pm to leave the endpoint disabled; this allows composition roots
+// to attempt metadata parse and degrade gracefully (no error / no warning
+// from bootstrap layer when parse fails).
+//
+// pkgGraph is the build-time generated package dependency graph (from
+// cmd/corebundle/catalog_gen.go generatedPackageGraph). Pass nil to omit the
+// packageDeps block entirely. The graph is produced at build time by running
+// `go generate ./cmd/corebundle/` and committed as catalog_gen.go.
+func WithDevtoolsCatalog(pm *metadata.ProjectMeta, root string, pkgGraph *kerneldepgraph.Graph) Option {
+	return func(b *Bootstrap) {
+		b.devtoolsMeta = pm
+		b.devtoolsRoot = root
+		b.devtoolsPkgGraph = pkgGraph
 	}
 }
 

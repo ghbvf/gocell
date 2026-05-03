@@ -5,7 +5,6 @@ import (
 	"time"
 
 	"github.com/ghbvf/gocell/cells/configcore/internal/domain"
-	dto "github.com/ghbvf/gocell/cells/configcore/internal/dto"
 	kcell "github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/wrapper"
 	"github.com/ghbvf/gocell/pkg/httputil"
@@ -87,21 +86,21 @@ func (h *Handler) RegisterRoutes(mux kcell.RouteHandler) error {
 	if err := auth.Mount(mux, auth.Route{
 		Contract: specFlagsList,
 		Handler:  http.HandlerFunc(h.HandleList),
-		Policy:   auth.AnyRole(dto.RoleAdmin),
+		Policy:   auth.AnyRole(auth.RoleAdmin),
 	}); err != nil {
 		return err
 	}
 	if err := auth.Mount(mux, auth.Route{
 		Contract: specFlagsGet,
 		Handler:  http.HandlerFunc(h.HandleGet),
-		Policy:   auth.AnyRole(dto.RoleAdmin),
+		Policy:   auth.AnyRole(auth.RoleAdmin),
 	}); err != nil {
 		return err
 	}
 	if err := auth.Mount(mux, auth.Route{
 		Contract: specFlagsEvaluate,
 		Handler:  http.HandlerFunc(h.HandleEvaluate),
-		Policy:   auth.AnyRole(dto.RoleAdmin),
+		Policy:   auth.AnyRole(auth.RoleAdmin),
 	}); err != nil {
 		return err
 	}

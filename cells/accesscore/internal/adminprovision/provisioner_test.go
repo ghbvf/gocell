@@ -19,6 +19,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/query"
+	"github.com/ghbvf/gocell/runtime/auth"
 )
 
 func discardLogger() *slog.Logger { return slog.New(slog.NewTextHandler(io.Discard, nil)) }
@@ -121,7 +122,7 @@ func TestProvisioner_Ensure_FreshSystem_CreatesUserAndRole(t *testing.T) {
 	assert.Equal(t, domain.UserSourceBootstrap, user.CreationSource)
 	assert.Equal(t, domain.ProvisionStateComplete, user.ProvisionState)
 	// Role assigned
-	cnt, err := roleRepo.CountByRole(context.Background(), domain.RoleAdmin)
+	cnt, err := roleRepo.CountByRole(context.Background(), auth.RoleAdmin)
 	require.NoError(t, err)
 	assert.Equal(t, 1, cnt)
 }
@@ -183,7 +184,7 @@ func TestProvisioner_Ensure_OrphanRecovered_ResumesAssignment(t *testing.T) {
 	assert.Equal(t, domain.UserSourceBootstrap, refreshed.CreationSource)
 	assert.Equal(t, domain.ProvisionStateComplete, refreshed.ProvisionState)
 	// Role now assigned
-	cnt, err := roleRepo.CountByRole(context.Background(), domain.RoleAdmin)
+	cnt, err := roleRepo.CountByRole(context.Background(), auth.RoleAdmin)
 	require.NoError(t, err)
 	assert.Equal(t, 1, cnt)
 }
@@ -212,7 +213,7 @@ func TestProvisioner_Ensure_DuplicateIdentityUser_ReturnsConflictWithoutTakeover
 	assert.False(t, refreshed.PasswordResetRequired)
 	assert.Equal(t, domain.UserSourceIdentity, refreshed.CreationSource)
 	assert.Equal(t, domain.ProvisionStateNone, refreshed.ProvisionState)
-	cnt, err := roleRepo.CountByRole(context.Background(), domain.RoleAdmin)
+	cnt, err := roleRepo.CountByRole(context.Background(), auth.RoleAdmin)
 	require.NoError(t, err)
 	assert.Equal(t, 0, cnt, "duplicate identity user must not be promoted")
 }
@@ -247,7 +248,7 @@ func TestProvisioner_Ensure_DuplicateDifferentSource_ReturnsConflictWithoutTakeo
 	assert.True(t, refreshed.PasswordResetRequired)
 	assert.Equal(t, domain.UserSourceBootstrap, refreshed.CreationSource)
 	assert.Equal(t, domain.ProvisionStatePending, refreshed.ProvisionState)
-	cnt, err := roleRepo.CountByRole(context.Background(), domain.RoleAdmin)
+	cnt, err := roleRepo.CountByRole(context.Background(), auth.RoleAdmin)
 	require.NoError(t, err)
 	assert.Equal(t, 0, cnt, "different-source pending row must not be promoted")
 }
@@ -312,7 +313,7 @@ func TestProvisioner_Ensure_RoleCreateNonDuplicateError_Surfaced(t *testing.T) {
 func TestProvisioner_Ensure_RoleCreateDuplicate_Tolerated(t *testing.T) {
 	// Admin role already exists (but no users assigned yet).
 	roleRepo := mem.NewRoleRepository()
-	role := &domain.Role{ID: domain.RoleAdmin, Name: domain.RoleAdmin}
+	role := &domain.Role{ID: auth.RoleAdmin, Name: auth.RoleAdmin}
 	require.NoError(t, roleRepo.Create(context.Background(), role))
 
 	p := newProvisioner(t, mem.NewUserRepository(), roleRepo, fixedUUID("x"))
@@ -370,7 +371,7 @@ func TestProvisioner_Compensate_RemovesRoleAndUser(t *testing.T) {
 
 	p.Compensate(context.Background(), user.ID)
 
-	cnt, err := roleRepo.CountByRole(context.Background(), domain.RoleAdmin)
+	cnt, err := roleRepo.CountByRole(context.Background(), auth.RoleAdmin)
 	require.NoError(t, err)
 	assert.Equal(t, 0, cnt, "role assignment removed")
 	_, err = userRepo.GetByID(context.Background(), user.ID)
@@ -404,8 +405,8 @@ func seedAdmin(t *testing.T, userRepo ports.UserRepository, roleRepo ports.RoleR
 	require.NoError(t, err)
 	u.ID = id
 	require.NoError(t, userRepo.Create(context.Background(), u))
-	require.NoError(t, roleRepo.Create(context.Background(), &domain.Role{ID: domain.RoleAdmin, Name: domain.RoleAdmin}))
-	_, err = roleRepo.AssignToUser(context.Background(), u.ID, domain.RoleAdmin)
+	require.NoError(t, roleRepo.Create(context.Background(), &domain.Role{ID: auth.RoleAdmin, Name: auth.RoleAdmin}))
+	_, err = roleRepo.AssignToUser(context.Background(), u.ID, auth.RoleAdmin)
 	require.NoError(t, err)
 }
 

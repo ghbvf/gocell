@@ -16,6 +16,7 @@ package bootstrap
 // built at startup time, then the listener is sealed before serving begins.
 
 import (
+	"context"
 	"fmt"
 	"sort"
 	"strings"
@@ -24,6 +25,7 @@ import (
 	kernelmetrics "github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/runtime/auth"
+	"github.com/ghbvf/gocell/runtime/http/devtools"
 	"github.com/ghbvf/gocell/runtime/http/health"
 	"github.com/ghbvf/gocell/runtime/http/router"
 	metricsmiddleware "github.com/ghbvf/gocell/runtime/observability/metrics"
@@ -37,8 +39,11 @@ import (
 // now gets its own chi.Mux root with a policy applied at build time.
 //
 // ref: go-kratos/kratos app.go — per-server middleware at build time.
-func (b *Bootstrap) phase5BuildRouters(s *phaseState) error {
+func (b *Bootstrap) phase5BuildRouters(ctx context.Context, s *phaseState) error {
 	if err := b.phase5InitHealthHandler(s); err != nil {
+		return err
+	}
+	if err := b.phase5InitDevtoolsHandler(ctx, s); err != nil {
 		return err
 	}
 	routers, err := b.phase5BuildPerListenerRouters(s)
@@ -131,6 +136,9 @@ func (b *Bootstrap) phase5CollectRouteGroups(s *phaseState, routers map[cell.Lis
 				groups[i].Listener = cell.PrimaryListener
 			}
 		}
+	}
+	if s.devtoolsHandler != nil {
+		groups = append(groups, devtools.RouteGroup(s.devtoolsHandler))
 	}
 	for _, id := range s.asm.CellIDs() {
 		snap, ok := s.cellSnapshots[id]

@@ -1,5 +1,5 @@
 // Package generatedverify verifies checked-in generated artifacts from
-// metadata-derived expectations.
+// project-derived expectations.
 package generatedverify
 
 import (
@@ -17,7 +17,7 @@ import (
 )
 
 // Artifact is one generated file that must be checked in exactly as derived
-// from assembly metadata.
+// from project inputs.
 type Artifact struct {
 	AssemblyID string
 	Kind       string
@@ -25,7 +25,7 @@ type Artifact struct {
 	Content    []byte
 }
 
-// Drift describes one mismatch between metadata-derived expectations and the
+// Drift describes one mismatch between project-derived expectations and the
 // checked-in repository state.
 type Drift struct {
 	AssemblyID string
@@ -56,8 +56,8 @@ func (r Result) Passed() bool {
 // generators that have been retired).
 const driftKindUnexpected = "unexpected"
 
-// Verify derives every generated artifact path and content from project
-// metadata, then compares the result with the checked-in repository state.
+// Verify derives every generated artifact path and content from project inputs,
+// then compares the result with the checked-in repository state.
 //
 // Two checks run against different data sources, deliberately:
 //
@@ -142,7 +142,7 @@ func Verify(root, module string, project *metadata.ProjectMeta) (*Result, error)
 }
 
 // ExpectedArtifacts derives the complete generated-artifact manifest and
-// in-memory content from assembly metadata.
+// in-memory content from project inputs.
 func ExpectedArtifacts(root, module string, project *metadata.ProjectMeta) ([]Artifact, error) {
 	if project == nil {
 		return nil, fmt.Errorf("project metadata is nil")
@@ -157,7 +157,7 @@ func ExpectedArtifacts(root, module string, project *metadata.ProjectMeta) ([]Ar
 	sort.Strings(ids)
 
 	gen := assembly.NewGenerator(project, module, root)
-	artifacts := make([]Artifact, 0, len(ids)*3)
+	artifacts := make([]Artifact, 0, len(ids)*3+1)
 	for _, id := range ids {
 		asm := project.Assemblies[id]
 		if asm == nil {
@@ -201,6 +201,14 @@ func ExpectedArtifacts(root, module string, project *metadata.ProjectMeta) ([]Ar
 			Content:    metricsContent,
 		})
 	}
+	// Note: cmd/corebundle/catalog_gen.go (catalog-graph) is intentionally
+	// not in this manifest. It is .gitignore'd and produced per-build by
+	// `go generate ./cmd/corebundle/` (gated by the catalog_gen build tag);
+	// catalog_gen_stub.go covers the default build with an empty graph.
+	// Rationale: go/packages.Load reports slightly different .Imports across
+	// macOS and Linux due to a known internal-test-import quirk, so any
+	// committed copy would deterministically drift cross-platform. See
+	// docs/guides/devtools-catalog.md (Build-tag stub design).
 	if err := validateArtifactPaths(root, artifacts); err != nil {
 		return nil, err
 	}

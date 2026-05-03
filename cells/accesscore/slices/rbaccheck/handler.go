@@ -68,14 +68,14 @@ func (h *Handler) RegisterRoutes(mux kcell.RouteMux) error {
 	if err := auth.Mount(mux, auth.Route{
 		Contract: specRoleList,
 		Handler:  http.HandlerFunc(h.handleListRoles),
-		Policy:   auth.SelfOr("userID", "admin"),
+		Policy:   auth.SelfOr("userID", auth.RoleAdmin),
 	}); err != nil {
 		return err
 	}
 	if err := auth.Mount(mux, auth.Route{
 		Contract: specRoleCheck,
 		Handler:  http.HandlerFunc(h.handleHasRole),
-		Policy:   auth.SelfOr("userID", "admin"),
+		Policy:   auth.SelfOr("userID", auth.RoleAdmin),
 	}); err != nil {
 		return err
 	}
