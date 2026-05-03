@@ -19,6 +19,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/kernel/outbox"
+	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/runtime/auth"
 )
 
@@ -45,6 +46,16 @@ func newDurableTestService(t testing.TB) (*Service, *mem.ConfigRepository, *test
 		WithEmitter(testoutbox.MustEmitter(t, writer)), WithTxManager(&testutil.NoopTxRunner{}))
 	require.NoError(t, err)
 	return svc, repo, writer
+}
+
+func TestNewService_TxRunnerRequired(t *testing.T) {
+	repo := mem.NewConfigRepository(clock.Real())
+	_, err := NewService(repo, slog.Default(), clock.Real() /* no WithTxManager */)
+	require.Error(t, err)
+	var ec *errcode.Error
+	require.ErrorAs(t, err, &ec)
+	assert.Equal(t, errcode.ErrValidationFailed, ec.Code)
+	assert.Contains(t, err.Error(), "TxRunner required")
 }
 
 func TestService_Create(t *testing.T) {

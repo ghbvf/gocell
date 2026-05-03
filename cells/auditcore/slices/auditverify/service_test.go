@@ -11,6 +11,7 @@ import (
 
 	"github.com/ghbvf/gocell/cells/auditcore/internal/domain"
 	"github.com/ghbvf/gocell/cells/auditcore/internal/mem"
+	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
 var testHMACKey = []byte("test-hmac-key-32bytes-long!!!!!!!")
@@ -21,6 +22,16 @@ func newTestService(t testing.TB) (*Service, *mem.AuditRepository) {
 	svc, err := NewService(repo, testHMACKey, slog.Default(), WithTxManager(&stubTxRunner{}))
 	require.NoError(t, err)
 	return svc, repo
+}
+
+func TestNewService_TxRunnerRequired(t *testing.T) {
+	repo := mem.NewAuditRepository()
+	_, err := NewService(repo, testHMACKey, slog.Default() /* no WithTxManager */)
+	require.Error(t, err)
+	var ec *errcode.Error
+	require.ErrorAs(t, err, &ec)
+	assert.Equal(t, errcode.ErrValidationFailed, ec.Code)
+	assert.Contains(t, err.Error(), "TxRunner required")
 }
 
 func TestService_VerifyChain_Empty(t *testing.T) {

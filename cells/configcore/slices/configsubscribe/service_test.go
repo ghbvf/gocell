@@ -291,10 +291,9 @@ func TestHandleEntryUpserted_InvalidPayload_Reject(t *testing.T) {
 	}
 }
 
-// TestHandleEntryUpserted_RepoErr_Requeue is not applicable for configsubscribe:
-// the in-memory cache does not return errors. Stale events return Ack (silently dropped).
-// This test verifies stale handling returns Ack, not Requeue.
-func TestHandleEntryUpserted_RepoErr_Requeue(t *testing.T) {
+// TestHandleEntryUpserted_StaleVersion_Ack verifies that a stale (lower-version)
+// replay returns DispositionAck (silently dropped, not requeued).
+func TestHandleEntryUpserted_StaleVersion_Ack(t *testing.T) {
 	svc := NewService(slog.Default())
 	// Seed version 5.
 	requireAck(t, svc.HandleEntryUpserted(context.Background(), makeEntryUpserted("k", 5)))

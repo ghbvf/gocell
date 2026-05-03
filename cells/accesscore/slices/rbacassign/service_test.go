@@ -56,6 +56,17 @@ func newTestService(t testing.TB) (*Service, *mem.RoleRepository, ports.SessionR
 	return mustNewService(t, roleRepo, sessionRepo, slog.Default()), roleRepo, sessionRepo
 }
 
+func TestNewService_TxRunnerRequired(t *testing.T) {
+	roleRepo := mem.NewRoleRepository()
+	sessionRepo := testutil.RealSessionRepo(t)
+	_, err := NewService(roleRepo, sessionRepo, slog.Default() /* no WithTxManager */)
+	require.Error(t, err)
+	var ec *errcode.Error
+	require.ErrorAs(t, err, &ec)
+	assert.Equal(t, errcode.ErrValidationFailed, ec.Code)
+	assert.Contains(t, err.Error(), "TxRunner required")
+}
+
 func TestService_Assign(t *testing.T) {
 	tests := []struct {
 		name     string

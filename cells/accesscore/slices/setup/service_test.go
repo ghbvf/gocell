@@ -84,6 +84,18 @@ func TestNewService_NilLogger_Error(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestNewService_TxRunnerRequired(t *testing.T) {
+	prov, err := adminprovision.NewProvisioner(mem.NewUserRepository(), mem.NewRoleRepository(),
+		discardLogger(), func() string { return "x" }, clock.Real())
+	require.NoError(t, err)
+	_, err = setup.NewService(prov, discardLogger() /* no WithTxManager */)
+	require.Error(t, err)
+	var ec *errcode.Error
+	require.ErrorAs(t, err, &ec)
+	assert.Equal(t, errcode.ErrValidationFailed, ec.Code)
+	assert.Contains(t, err.Error(), "TxRunner required")
+}
+
 // --- Status ---------------------------------------------------------------
 
 func TestService_Status_NoAdmin_ReturnsFalse(t *testing.T) {

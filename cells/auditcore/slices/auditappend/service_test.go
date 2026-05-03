@@ -10,11 +10,13 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/ghbvf/gocell/cells/auditcore/internal/domain"
 	"github.com/ghbvf/gocell/cells/auditcore/internal/mem"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/persistence"
+	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
 // directRunner is a test-only pass-through TxRunner for auditappend tests.
@@ -52,6 +54,16 @@ func assertReject(t testing.TB, got outbox.HandleResult) {
 	t.Helper()
 	assert.Equal(t, outbox.DispositionReject, got.Disposition, "expected DispositionReject, got %v", got.Disposition)
 	assert.Error(t, got.Err)
+}
+
+func TestNewService_TxRunnerRequired(t *testing.T) {
+	repo := mem.NewAuditRepository()
+	_, err := NewService(repo, testHMACKey, slog.Default(), clock.Real() /* no WithTxManager */)
+	require.Error(t, err)
+	var ec *errcode.Error
+	require.ErrorAs(t, err, &ec)
+	assert.Equal(t, errcode.ErrValidationFailed, ec.Code)
+	assert.Contains(t, err.Error(), "TxRunner required")
 }
 
 func TestService_HandleEvent(t *testing.T) {
@@ -237,6 +249,39 @@ func TestService_HandleEvent_ActorExtraction(t *testing.T) {
 			assert.Equal(t, tt.wantActorID, entries[0].ActorID)
 		})
 	}
+}
+
+// failingAppendRepo wraps mem.AuditRepository but always returns a sentinel error on Append.
+type failingAppendRepo struct {
+	*mem.AuditRepository
+	err error
+}
+
+func (f *failingAppendRepo) Append(_ context.Context, _ *domain.AuditEntry) error {
+	return f.err
+}
+
+// TestService_HandleEvent_RepoAppendFails_Requeue covers the persistFn→repo.Append
+// failure branch (service.go:180-187): a transient persistence error must produce
+// DispositionRequeue so ConsumerBase can back off and retry.
+func TestService_HandleEvent_RepoAppendFails_Requeue(t *testing.T) {
+	sentinel := fmt.Errorf("db unavailable")
+	repo := &failingAppendRepo{AuditRepository: mem.NewAuditRepository(), err: sentinel}
+
+	svc, err := NewService(repo, testHMACKey, slog.Default(), clock.Real(),
+		WithClock(clock.Real()), WithTxManager(directRunner{}))
+	require.NoError(t, err)
+
+	entry := outbox.Entry{
+		ID:        "evt-repo-fail",
+		EventType: "event.user.created.v1",
+		Payload:   mustJSON(map[string]any{"userId": "usr-1"}),
+	}
+
+	result := svc.HandleEvent(context.Background(), entry)
+	assert.Equal(t, outbox.DispositionRequeue, result.Disposition)
+	require.Error(t, result.Err)
+	assert.ErrorIs(t, result.Err, sentinel, "result.Err must wrap the sentinel repo error")
 }
 
 func mustJSON(v any) []byte {

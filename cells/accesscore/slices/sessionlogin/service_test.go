@@ -110,6 +110,20 @@ func newTestService(t testing.TB) (*Service, *mem.UserRepository) {
 		testIssuer, slog.Default(), WithClock(clock.Real()), WithTxManager(&stubTxRunner{})), userRepo
 }
 
+func TestNewService_TxRunnerRequired(t *testing.T) {
+	userRepo := mem.NewUserRepository()
+	sessionRepo := testutil.RealSessionRepo(t)
+	roleRepo := mem.NewRoleRepository()
+	refreshStore := newTestRefreshStore()
+	_, err := NewService(userRepo, sessionRepo, roleRepo, refreshStore, testIssuer,
+		slog.Default(), WithClock(clock.Real()) /* no WithTxManager */)
+	require.Error(t, err)
+	var ec *errcode.Error
+	require.ErrorAs(t, err, &ec)
+	assert.Equal(t, errcode.ErrValidationFailed, ec.Code)
+	assert.Contains(t, err.Error(), "TxRunner required")
+}
+
 func TestNewService_RejectsTypedNilDependencies(t *testing.T) {
 	userRepo := mem.NewUserRepository()
 	sessionRepo := testutil.RealSessionRepo(t)

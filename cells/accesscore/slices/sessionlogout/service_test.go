@@ -39,6 +39,17 @@ func newTestService(t testing.TB) (*Service, ports.SessionRepository) {
 	return MustNewService(repo, newLogoutRefreshStore(), slog.Default(), WithTxManager(noopTxRunner{})), repo
 }
 
+func TestNewService_TxRunnerRequired(t *testing.T) {
+	repo := testutil.RealSessionRepo(t)
+	refreshStore := newLogoutRefreshStore()
+	_, err := NewService(repo, refreshStore, slog.Default() /* no WithTxManager */)
+	require.Error(t, err)
+	var ec *errcode.Error
+	require.ErrorAs(t, err, &ec)
+	assert.Equal(t, errcode.ErrValidationFailed, ec.Code)
+	assert.Contains(t, err.Error(), "TxRunner required")
+}
+
 func TestNewService_RejectsTypedNilDependencies(t *testing.T) {
 	sessionRepo := testutil.RealSessionRepo(t)
 	refreshStore := newLogoutRefreshStore()

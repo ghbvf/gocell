@@ -69,6 +69,16 @@ func mustSeedEntry(repo *mem.ConfigRepository, key, value string) {
 	})
 }
 
+func TestNewService_TxRunnerRequired(t *testing.T) {
+	repo := mem.NewConfigRepository(clock.Real())
+	_, err := NewService(repo, slog.Default(), clock.Real() /* no WithTxManager */)
+	require.Error(t, err)
+	var ec *errcode.Error
+	require.ErrorAs(t, err, &ec)
+	assert.Equal(t, errcode.ErrValidationFailed, ec.Code)
+	assert.Contains(t, err.Error(), "TxRunner required")
+}
+
 func TestService_Publish(t *testing.T) {
 	tests := []struct {
 		name    string
