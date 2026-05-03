@@ -34,6 +34,7 @@ validate:
 generate:
 	for d in assemblies/*/; do go run ./cmd/gocell generate assembly --id="$$(basename "$$d")"; done
 	for d in assemblies/*/; do go run ./cmd/gocell generate metrics-schema --id="$$(basename "$$d")"; done
+	go generate ./cmd/corebundle/
 
 cover:
 	go test ./... -coverprofile=coverage.out
