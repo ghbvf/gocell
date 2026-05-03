@@ -21,7 +21,7 @@ func TestRunVerifyGenerated_SyntheticProjectPasses(t *testing.T) {
 	})
 
 	require.NoError(t, err)
-	assert.Contains(t, out, "Generated artifacts verified: 4 files")
+	assert.Contains(t, out, "Generated artifacts verified: 3 files")
 }
 
 func TestRunVerifyGenerated_ReportsDrift(t *testing.T) {
@@ -94,16 +94,6 @@ func generateAllAppFixtureArtifacts(t *testing.T) {
 
 	require.NoError(t, runGenerate([]string{"assembly", "--id=fixture"}))
 	require.NoError(t, runGenerate([]string{"metrics-schema", "--id=fixture"}))
-	require.NoError(t, runGenerate([]string{
-		"catalog",
-		"--out=cmd/corebundle/catalog_gen.go",
-		"--package=main",
-	}))
-	require.NoError(t, runGenerate([]string{
-		"catalog",
-		"--out=cmd/corebundle/catalog_gen.go",
-		"--package=main",
-	}))
 }
 
 func withWorkingDir(t *testing.T, dir string) {

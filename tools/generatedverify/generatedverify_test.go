@@ -19,23 +19,20 @@ func TestExpectedArtifactsDerivesManifestFromMetadata(t *testing.T) {
 	artifacts, err := ExpectedArtifacts(root, fixtureModule, project)
 	require.NoError(t, err)
 
-	require.Len(t, artifacts, 4)
+	require.Len(t, artifacts, 3)
 	assert.Equal(t, []string{
 		"cmd/fixture/main.go",
 		"assemblies/fixture/generated/boundary.yaml",
 		"assemblies/fixture/generated/metrics-schema.yaml",
-		"cmd/corebundle/catalog_gen.go",
 	}, artifactPaths(artifacts))
 	assert.Equal(t, []string{
 		"assembly-entrypoint",
 		"boundary",
 		"metrics-schema",
-		"catalog-graph",
 	}, artifactKinds(artifacts))
 	assert.Contains(t, string(artifacts[0].Content), "runFixture")
 	assert.Contains(t, string(artifacts[1].Content), "assemblyId: fixture")
 	assert.Contains(t, string(artifacts[2].Content), "entrypoint: cmd/fixture/main.go")
-	assert.Contains(t, string(artifacts[3].Content), "generatedPackageGraph")
 }
 
 func TestVerifyPassesWhenExpectedFilesAreCommitted(t *testing.T) {
@@ -48,7 +45,7 @@ func TestVerifyPassesWhenExpectedFilesAreCommitted(t *testing.T) {
 
 	assert.True(t, result.Passed())
 	assert.Empty(t, result.Drifts)
-	assert.Len(t, result.Artifacts, 4)
+	assert.Len(t, result.Artifacts, 3)
 }
 
 func TestVerifyReportsMissingAndChangedArtifacts(t *testing.T) {
@@ -76,11 +73,6 @@ func TestVerifyReportsMissingAndChangedArtifacts(t *testing.T) {
 			Kind:       "metrics-schema",
 			Path:       "assemblies/fixture/generated/metrics-schema.yaml",
 			Message:    "file is missing",
-		},
-		{
-			Kind:    "catalog-graph",
-			Path:    "cmd/corebundle/catalog_gen.go",
-			Message: "file is missing",
 		},
 		{
 			AssemblyID: "fixture",
@@ -115,11 +107,6 @@ func TestVerifyReportsUncommittedArtifactsInsideGitRepo(t *testing.T) {
 			Message:    "file is not committed in HEAD",
 		},
 		{
-			Kind:    "catalog-graph",
-			Path:    "cmd/corebundle/catalog_gen.go",
-			Message: "file is not committed in HEAD",
-		},
-		{
 			AssemblyID: "fixture",
 			Kind:       "assembly-entrypoint",
 			Path:       "cmd/fixture/main.go",
@@ -148,7 +135,7 @@ func TestVerifyRejectsStagedButUncommittedArtifact(t *testing.T) {
 		assert.Equal(t, "file is not committed in HEAD", d.Message,
 			"every drift must be uncommitted-in-HEAD; got %+v", d)
 	}
-	assert.Len(t, result.Drifts, 4)
+	assert.Len(t, result.Drifts, 3)
 }
 
 // TestVerifyDetectsOrphanedAssemblyGeneratedArtifact covers the

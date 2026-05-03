@@ -156,25 +156,6 @@ jobs:
         if: matrix.static_checks
         run: go vet -tags=e2e ./tests/e2e/...
 
-      # Re-generate catalog_gen.go on CI before verify.
-      #
-      # cmd/corebundle/catalog_gen.go is built from go/packages.Load(./...),
-      # whose Imports field for production packages can vary slightly between
-      # macOS and Linux when an internal _test.go file in the same package
-      # imports a package the production code does not (a known go/packages
-      # quirk: macOS excludes the test-only import from production .Imports,
-      # Linux includes it). The committed file is generated on developer
-      # machines (predominantly macOS); without this step, every CI run on
-      # Linux drifts vs the committed version even though no source changed.
-      #
-      # We re-generate on CI immediately before `verify generated` so the
-      # subsequent drift check compares CI-generated vs CI-generated (always
-      # equal), while the committed file remains a cache/fallback for local
-      # builds that must work without go-toolchain Load latency.
-      - name: Re-generate catalog_gen.go (cross-platform consistency)
-        if: matrix.static_checks
-        run: go generate ./cmd/corebundle/
-
       # Generated-artifact gate (PR-CFG-M follow-up):
       # assembly.yaml is the source-of-truth for runtime cell order, generated
       # entrypoint paths, boundary contracts, and assembly-reachable metrics

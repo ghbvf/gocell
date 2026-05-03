@@ -13,8 +13,6 @@ import (
 	"github.com/ghbvf/gocell/kernel/assembly"
 	"github.com/ghbvf/gocell/kernel/governance"
 	"github.com/ghbvf/gocell/kernel/metadata"
-	"github.com/ghbvf/gocell/tools/depgraph"
-	"github.com/ghbvf/gocell/tools/generatedcatalog"
 	"github.com/ghbvf/gocell/tools/metricschema"
 )
 
@@ -57,6 +55,22 @@ func (r Result) Passed() bool {
 // manifest — orphans from removed assemblies, renamed entrypoints, or
 // generators that have been retired).
 const driftKindUnexpected = "unexpected"
+
+// reverseEnumerationSkip lists committed generator-marked files that are
+// intentionally NOT byte-equal verified and so must be skipped by the
+// orphan reverse-enumeration check.
+//
+// cmd/corebundle/catalog_gen.go is built from go/packages.Load(./...) which
+// reports slightly different .Imports values across macOS and Linux for
+// production packages whose internal *_test.go files import packages the
+// production code does not (a known go/packages quirk). Trying to enforce
+// byte-equal across platforms requires a forced dev environment (Kubernetes
+// uses dev-containers; we don't). The committed file is a build cache for
+// developer convenience; CI builds use it as-is. Run `make generate` and
+// commit when import topology changes.
+var reverseEnumerationSkip = map[string]struct{}{
+	"cmd/corebundle/catalog_gen.go": {},
+}
 
 // Verify derives every generated artifact path and content from project inputs,
 // then compares the result with the checked-in repository state.
@@ -120,6 +134,9 @@ func Verify(root, module string, project *metadata.ProjectMeta) (*Result, error)
 		}
 		for _, p := range generatedPaths {
 			if _, expected := expectedSet[p]; expected {
+				continue
+			}
+			if _, skip := reverseEnumerationSkip[p]; skip {
 				continue
 			}
 			result.Drifts = append(result.Drifts, Drift{
@@ -203,31 +220,27 @@ func ExpectedArtifacts(root, module string, project *metadata.ProjectMeta) ([]Ar
 			Content:    metricsContent,
 		})
 	}
-	catalog, err := expectedCatalogGraphArtifact(root, module)
-	if err != nil {
-		return nil, err
-	}
-	artifacts = append(artifacts, catalog)
+	// Note: cmd/corebundle/catalog_gen.go (catalog-graph) is intentionally
+	// excluded from byte-equal drift verification.
+	//
+	// catalog_gen.go is built from go/packages.Load(./...). For a production
+	// package whose internal *_test.go imports a package the production code
+	// does not (e.g. runtime/http/middleware/tracing_test.go imports
+	// kernel/ctxkeys, but the prod files don't), go/packages reports
+	// different .Imports values across macOS and Linux — a known
+	// platform-specific quirk in how internal-test imports are merged.
+	//
+	// Trying to enforce byte-equal across platforms requires a forced dev
+	// environment (Kubernetes uses dev-containers; we don't). The accepted
+	// trade-off here: the file is committed for local build convenience
+	// (no pre-build `go generate` required) and minor staleness is
+	// tolerated — the catalog endpoint may emit a slightly different import
+	// list per platform, but functional correctness is unaffected. Run
+	// `make generate` and commit when import topology changes.
 	if err := validateArtifactPaths(root, artifacts); err != nil {
 		return nil, err
 	}
 	return artifacts, nil
-}
-
-func expectedCatalogGraphArtifact(root, module string) (Artifact, error) {
-	graph, err := depgraph.Load(depgraph.LoadOptions{Dir: root}, "./...")
-	if err != nil {
-		return Artifact{}, fmt.Errorf("generate expected catalog graph: %w", err)
-	}
-	content, err := generatedcatalog.EmitFile(generatedcatalog.CorebundlePackage, module, graph)
-	if err != nil {
-		return Artifact{}, fmt.Errorf("serialize expected catalog graph: %w", err)
-	}
-	return Artifact{
-		Kind:    "catalog-graph",
-		Path:    generatedcatalog.CorebundlePath,
-		Content: content,
-	}, nil
 }
 
 // AssemblyEntrypointPath returns the metadata-derived generated entrypoint path
