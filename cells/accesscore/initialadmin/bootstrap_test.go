@@ -23,6 +23,7 @@ import (
 	kernelclock "github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/query"
+	"github.com/ghbvf/gocell/runtime/auth"
 )
 
 // ---- helpers ----------------------------------------------------------------
@@ -185,7 +186,7 @@ func TestBootstrap_FirstRun_CreatesUserAndWritesFile(t *testing.T) {
 	roles, rolesErr := roleRepo.GetByUserID(context.Background(), user.ID)
 	require.NoError(t, rolesErr)
 	require.Len(t, roles, 1)
-	assert.Equal(t, domain.RoleAdmin, roles[0].ID)
+	assert.Equal(t, auth.RoleAdmin, roles[0].ID)
 }
 
 func TestBootstrap_FirstRun_UserHasPasswordResetRequired(t *testing.T) {
@@ -213,10 +214,10 @@ func TestBootstrap_SkipsWhenAdminExists(t *testing.T) {
 	require.NoError(t, err)
 	adminUser.ID = "usr-existing-admin"
 	require.NoError(t, deps.RoleRepo.Create(context.Background(), &domain.Role{
-		ID: domain.RoleAdmin, Name: domain.RoleAdmin,
+		ID: auth.RoleAdmin, Name: auth.RoleAdmin,
 	}))
 	require.NoError(t, deps.UserRepo.Create(context.Background(), adminUser))
-	_, err = deps.RoleRepo.AssignToUser(context.Background(), adminUser.ID, domain.RoleAdmin)
+	_, err = deps.RoleRepo.AssignToUser(context.Background(), adminUser.ID, auth.RoleAdmin)
 	require.NoError(t, err)
 
 	// Run: should be a no-op.
@@ -312,7 +313,7 @@ func TestBootstrap_CredFileFailureCompensatesUserAndRole(t *testing.T) {
 	require.Error(t, runErr, "credfile failure must surface an error")
 
 	// Compensation: admin count back to zero so next startup re-runs bootstrap.
-	count, err := roleRepo.CountByRole(context.Background(), domain.RoleAdmin)
+	count, err := roleRepo.CountByRole(context.Background(), auth.RoleAdmin)
 	require.NoError(t, err)
 	assert.Equal(t, 0, count,
 		"admin role assignment must be rolled back after credfile failure")
@@ -354,7 +355,7 @@ func TestBootstrap_OrphanUserRecoveryResumesAssign(t *testing.T) {
 	orphan.MarkProvisionPending(domain.UserSourceBootstrap, time.Now())
 	orphan.MarkPasswordResetRequired(time.Now())
 	require.NoError(t, userRepo.Create(context.Background(), orphan))
-	count, err := roleRepo.CountByRole(context.Background(), domain.RoleAdmin)
+	count, err := roleRepo.CountByRole(context.Background(), auth.RoleAdmin)
 	require.NoError(t, err)
 	require.Equal(t, 0, count, "precondition: no admin role assignment yet")
 
@@ -389,7 +390,7 @@ func TestBootstrap_OrphanUserRecoveryResumesAssign(t *testing.T) {
 	roles, err := roleRepo.GetByUserID(context.Background(), recovered.ID)
 	require.NoError(t, err)
 	require.Len(t, roles, 1)
-	assert.Equal(t, domain.RoleAdmin, roles[0].ID)
+	assert.Equal(t, auth.RoleAdmin, roles[0].ID)
 
 	// Credential file must exist with username=admin and the fresh password.
 	knownPW := knownPassword(t)

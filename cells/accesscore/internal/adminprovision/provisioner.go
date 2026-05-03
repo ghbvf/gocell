@@ -11,6 +11,7 @@ import (
 	"github.com/ghbvf/gocell/cells/accesscore/internal/ports"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/runtime/auth"
 )
 
 // ProvisionOutcome is the result classification returned from Ensure.
@@ -122,7 +123,7 @@ func NewProvisioner(
 // Infrastructure errors bubble up unchanged so callers can distinguish a known
 // "no admin" from a transient RoleRepo outage.
 func (p *Provisioner) Status(ctx context.Context) (bool, error) {
-	count, err := p.roleRepo.CountByRole(ctx, domain.RoleAdmin)
+	count, err := p.roleRepo.CountByRole(ctx, auth.RoleAdmin)
 	if err != nil {
 		return false, fmt.Errorf("adminprovision: count admin users: %w", err)
 	}
@@ -179,7 +180,7 @@ func (p *Provisioner) Ensure(ctx context.Context, in ProvisionInput) (ProvisionR
 	}
 
 	// 4. Assign admin role (idempotent).
-	if _, err := p.roleRepo.AssignToUser(ctx, result.User.ID, domain.RoleAdmin); err != nil {
+	if _, err := p.roleRepo.AssignToUser(ctx, result.User.ID, auth.RoleAdmin); err != nil {
 		return ProvisionResult{Outcome: OutcomeUnknown}, fmt.Errorf("adminprovision: assign admin role: %w", err)
 	}
 	if err := p.markProvisionComplete(ctx, result.User); err != nil {
@@ -194,7 +195,7 @@ func (p *Provisioner) Ensure(ctx context.Context, in ProvisionInput) (ProvisionR
 // a post-Ensure side effect (e.g., credfile write) fails. Errors are logged,
 // not returned: the operator's immediate concern is the outer failure.
 func (p *Provisioner) Compensate(ctx context.Context, userID string) {
-	if err := p.roleRepo.RemoveFromUser(ctx, userID, domain.RoleAdmin); err != nil {
+	if err := p.roleRepo.RemoveFromUser(ctx, userID, auth.RoleAdmin); err != nil {
 		p.logger.Error("admin provision compensate: unassign role failed",
 			slog.String("event", "admin_provision_compensate"),
 			slog.String("user_id", userID),
@@ -214,8 +215,8 @@ func (p *Provisioner) Compensate(ctx context.Context, userID string) {
 
 func (p *Provisioner) ensureAdminRole(ctx context.Context) error {
 	adminRole := &domain.Role{
-		ID:   domain.RoleAdmin,
-		Name: domain.RoleAdmin,
+		ID:   auth.RoleAdmin,
+		Name: auth.RoleAdmin,
 		Permissions: []domain.Permission{
 			{Resource: "*", Action: "*"},
 		},
@@ -258,7 +259,7 @@ func (p *Provisioner) createUserOrRecover(ctx context.Context, in ProvisionInput
 	}
 
 	// Duplicate — race or orphan recovery.
-	recount, err := p.roleRepo.CountByRole(ctx, domain.RoleAdmin)
+	recount, err := p.roleRepo.CountByRole(ctx, auth.RoleAdmin)
 	if err != nil {
 		return ProvisionResult{Outcome: OutcomeUnknown}, fmt.Errorf("adminprovision: recount after duplicate user: %w", err)
 	}
@@ -307,7 +308,7 @@ func (p *Provisioner) markProvisionComplete(ctx context.Context, user *domain.Us
 }
 
 func (p *Provisioner) rollbackAssignedAdmin(ctx context.Context, userID string) {
-	if err := p.roleRepo.RemoveFromUser(ctx, userID, domain.RoleAdmin); err != nil {
+	if err := p.roleRepo.RemoveFromUser(ctx, userID, auth.RoleAdmin); err != nil {
 		p.logger.Error("admin provision: rollback assigned role failed",
 			slog.String("event", "admin_provision_rollback"),
 			slog.String("user_id", userID),

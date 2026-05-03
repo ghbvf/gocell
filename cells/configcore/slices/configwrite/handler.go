@@ -99,21 +99,21 @@ func (h *Handler) RegisterRoutes(mux cell.RouteHandler) error {
 	if err := auth.Mount(mux, auth.Route{
 		Contract: specConfigWrite,
 		Handler:  http.HandlerFunc(h.HandleCreate),
-		Policy:   auth.AnyRole(dto.RoleAdmin),
+		Policy:   auth.AnyRole(auth.RoleAdmin),
 	}); err != nil {
 		return err
 	}
 	if err := auth.Mount(mux, auth.Route{
 		Contract: specConfigUpdate,
 		Handler:  http.HandlerFunc(h.HandleUpdate),
-		Policy:   auth.AnyRole(dto.RoleAdmin),
+		Policy:   auth.AnyRole(auth.RoleAdmin),
 	}); err != nil {
 		return err
 	}
 	if err := auth.Mount(mux, auth.Route{
 		Contract: specConfigDelete,
 		Handler:  http.HandlerFunc(h.HandleDelete),
-		Policy:   auth.AnyRole(dto.RoleAdmin),
+		Policy:   auth.AnyRole(auth.RoleAdmin),
 	}); err != nil {
 		return err
 	}

@@ -1,0 +1,150 @@
+schemaVersion: v1
+apiVersion: gocell.io/v1alpha1
+generatedAt: "2026-05-03T12:00:00Z"
+root: /projects/gocell
+query:
+    include:
+        - cellDeps
+        - packageDeps
+        - relations
+        - statusBoard
+entities:
+    - apiVersion: gocell.io/v1alpha1
+      kind: Actor
+      metadata:
+        name: webclient
+        uid: actor/webclient
+      spec:
+        maxConsistencyLevel: L0
+    - apiVersion: gocell.io/v1alpha1
+      kind: Assembly
+      metadata:
+        name: mainbundle
+        uid: assembly/mainbundle
+      spec:
+        cells:
+            - accesscore
+            - auditcore
+        build:
+            entrypoint: cmd/server/main.go
+            binary: gocell-server
+      relations:
+        - type: contains
+          targetRef: cell/accesscore
+        - type: contains
+          targetRef: cell/auditcore
+    - apiVersion: gocell.io/v1alpha1
+      kind: Cell
+      metadata:
+        name: accesscore
+        uid: cell/accesscore
+      spec:
+        type: core
+        consistencyLevel: L1
+        owner:
+            team: platform
+            role: owner
+        schema:
+            primary: access.schema.json
+        verifySmoke:
+            - smoke.accesscore.login
+    - apiVersion: gocell.io/v1alpha1
+      kind: Cell
+      metadata:
+        name: auditcore
+        uid: cell/auditcore
+      spec:
+        type: support
+        consistencyLevel: L2
+        owner:
+            team: platform
+            role: owner
+        schema:
+            primary: audit.schema.json
+        verifySmoke:
+            - smoke.auditcore.write
+    - apiVersion: gocell.io/v1alpha1
+      kind: Contract
+      metadata:
+        name: event.audit.entry.v1
+        uid: contract/event.audit.entry.v1
+        file: contracts/event/audit/entry/v1/contract.yaml
+      spec:
+        kind: event
+        ownerCell: auditcore
+        lifecycle: active
+      relations:
+        - type: ownedBy
+          targetRef: cell/auditcore
+    - apiVersion: gocell.io/v1alpha1
+      kind: Contract
+      metadata:
+        name: http.access.login.v1
+        uid: contract/http.access.login.v1
+        file: contracts/http/access/login/v1/contract.yaml
+      spec:
+        kind: http
+        ownerCell: accesscore
+        lifecycle: active
+      relations:
+        - type: ownedBy
+          targetRef: cell/accesscore
+    - apiVersion: gocell.io/v1alpha1
+      kind: Journey
+      metadata:
+        name: J-001
+        uid: journey/J-001
+        file: journeys/J-001.yaml
+      spec:
+        goal: User can login
+        lifecycle: active
+        owner:
+            team: platform
+            role: owner
+        cells:
+            - accesscore
+        contracts:
+            - http.access.login.v1
+        passCriteria:
+            - text: Login succeeds
+              mode: auto
+      relations:
+        - type: covers
+          targetRef: cell/accesscore
+    - apiVersion: gocell.io/v1alpha1
+      kind: Slice
+      metadata:
+        name: auditwrite
+        uid: slice/auditwrite
+      spec:
+        belongsToCell: auditcore
+        consistencyLevel: L2
+        contractUsages:
+            - contract: event.audit.entry.v1
+              role: publish
+      relations:
+        - type: partOf
+          targetRef: cell/auditcore
+        - type: uses
+          targetRef: contract/event.audit.entry.v1
+    - apiVersion: gocell.io/v1alpha1
+      kind: Slice
+      metadata:
+        name: sessionlogin
+        uid: slice/sessionlogin
+      spec:
+        belongsToCell: accesscore
+        consistencyLevel: L1
+        contractUsages:
+            - contract: http.access.login.v1
+              role: serve
+      relations:
+        - type: partOf
+          targetRef: cell/accesscore
+        - type: uses
+          targetRef: contract/http.access.login.v1
+statusBoard:
+    - journeyId: J-001
+      state: green
+      risk: low
+      updatedAt: "2026-05-03"

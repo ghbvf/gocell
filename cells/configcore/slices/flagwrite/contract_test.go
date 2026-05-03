@@ -11,7 +11,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/ghbvf/gocell/cells/configcore/internal/dto"
 	"github.com/ghbvf/gocell/cells/configcore/internal/mem"
 	"github.com/ghbvf/gocell/cells/configcore/internal/testutil"
 	"github.com/ghbvf/gocell/kernel/cell"
@@ -67,7 +66,7 @@ func TestHttpConfigFlagsCreateV1Serve(t *testing.T) {
 	req := httptest.NewRequest(c.HTTP.Method, c.HTTP.Path,
 		strings.NewReader(`{"key":"my-flag","enabled":false,"rolloutPercentage":0,"description":"test"}`))
 	req.Header.Set("Content-Type", "application/json")
-	req = req.WithContext(auth.TestContext(testAdminSubject, []string{dto.RoleAdmin}))
+	req = req.WithContext(auth.TestContext(testAdminSubject, []string{auth.RoleAdmin}))
 	mux.ServeHTTP(rec, req)
 	assert.Equal(t, http.StatusCreated, rec.Code, "body: %s", rec.Body)
 	c.ValidateHTTPResponseRecorder(t, rec)
@@ -100,7 +99,7 @@ func TestHttpConfigFlagsUpdateV1Serve(t *testing.T) {
 	req := httptest.NewRequest(c.HTTP.Method, path,
 		strings.NewReader(`{"enabled":true,"rolloutPercentage":50,"description":"updated"}`))
 	req.Header.Set("Content-Type", "application/json")
-	req = req.WithContext(auth.TestContext(testAdminSubject, []string{dto.RoleAdmin}))
+	req = req.WithContext(auth.TestContext(testAdminSubject, []string{auth.RoleAdmin}))
 	mux.ServeHTTP(rec, req)
 	assert.Equal(t, http.StatusOK, rec.Code, "body: %s", rec.Body)
 	c.ValidateHTTPResponseRecorder(t, rec)
@@ -113,7 +112,7 @@ func TestHttpConfigFlagsUpdateV1Serve(t *testing.T) {
 	req2 := httptest.NewRequest(c.HTTP.Method, path,
 		strings.NewReader(`{"enabled":true}`))
 	req2.Header.Set("Content-Type", "application/json")
-	req2 = req2.WithContext(auth.TestContext(testAdminSubject, []string{dto.RoleAdmin}))
+	req2 = req2.WithContext(auth.TestContext(testAdminSubject, []string{auth.RoleAdmin}))
 	mux.ServeHTTP(rec2, req2)
 	assert.Equal(t, http.StatusBadRequest, rec2.Code,
 		"PUT with missing fields must 400; got body: %s", rec2.Body)
@@ -127,7 +126,7 @@ func TestHttpConfigFlagsUpdateV1Serve(t *testing.T) {
 		recBad := httptest.NewRecorder()
 		reqBad := httptest.NewRequest(c.HTTP.Method, path, strings.NewReader(bad))
 		reqBad.Header.Set("Content-Type", "application/json")
-		reqBad = reqBad.WithContext(auth.TestContext(testAdminSubject, []string{dto.RoleAdmin}))
+		reqBad = reqBad.WithContext(auth.TestContext(testAdminSubject, []string{auth.RoleAdmin}))
 		mux.ServeHTTP(recBad, reqBad)
 		assert.Equal(t, http.StatusBadRequest, recBad.Code,
 			"PUT with out-of-range rolloutPercentage must 400; body %q got %s",
@@ -155,7 +154,7 @@ func TestHttpConfigFlagsToggleV1Serve(t *testing.T) {
 	req := httptest.NewRequest(c.HTTP.Method, path,
 		strings.NewReader(`{"enabled":true}`))
 	req.Header.Set("Content-Type", "application/json")
-	req = req.WithContext(auth.TestContext(testAdminSubject, []string{dto.RoleAdmin}))
+	req = req.WithContext(auth.TestContext(testAdminSubject, []string{auth.RoleAdmin}))
 	mux.ServeHTTP(rec, req)
 	assert.Equal(t, http.StatusOK, rec.Code, "body: %s", rec.Body)
 	c.ValidateHTTPResponseRecorder(t, rec)
@@ -176,11 +175,11 @@ func TestHttpConfigFlagsDeleteV1Serve(t *testing.T) {
 	path := strings.ReplaceAll(c.HTTP.Path, "{key}", "del-flag")
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(c.HTTP.Method, path, http.NoBody)
-	req = req.WithContext(auth.TestContext(testAdminSubject, []string{dto.RoleAdmin}))
+	req = req.WithContext(auth.TestContext(testAdminSubject, []string{auth.RoleAdmin}))
 	mux.ServeHTTP(rec, req)
 	assert.Equal(t, http.StatusNoContent, rec.Code, "body: %s", rec.Body)
 }
 
 func testAdminCtx() context.Context {
-	return auth.TestContext(testAdminSubject, []string{dto.RoleAdmin})
+	return auth.TestContext(testAdminSubject, []string{auth.RoleAdmin})
 }

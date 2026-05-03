@@ -22,6 +22,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
+	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/bootstrap"
 )
 
@@ -216,13 +217,13 @@ func TestInit_BootstrapAlreadyHasAdmin_NilCleaner(t *testing.T) {
 
 	// Pre-seed an admin.
 	require.NoError(t, roleRepo.Create(context.Background(), &domain.Role{
-		ID: domain.RoleAdmin, Name: domain.RoleAdmin,
+		ID: auth.RoleAdmin, Name: auth.RoleAdmin,
 	}))
 	adminUser, err := domain.NewUser("admin", "admin@gocell.local", "$2a$12$testhash", time.Now())
 	require.NoError(t, err)
 	adminUser.ID = "usr-preexisting-admin"
 	require.NoError(t, userRepo.Create(context.Background(), adminUser))
-	_, err = roleRepo.AssignToUser(context.Background(), adminUser.ID, domain.RoleAdmin)
+	_, err = roleRepo.AssignToUser(context.Background(), adminUser.ID, auth.RoleAdmin)
 	require.NoError(t, err)
 
 	bootstrapOpts := []initialadmin.LifecycleOption{
@@ -272,13 +273,13 @@ func TestInit_BootstrapAdminExists_FreshOrphanFile_SweepCleanerRegistered(t *tes
 
 	// Pre-seed an admin so EnsureAdmin returns (nil, nil).
 	require.NoError(t, roleRepo.Create(context.Background(), &domain.Role{
-		ID: domain.RoleAdmin, Name: domain.RoleAdmin,
+		ID: auth.RoleAdmin, Name: auth.RoleAdmin,
 	}))
 	adminUser, err := domain.NewUser("admin", "admin@gocell.local", "$2a$12$testhash", time.Now())
 	require.NoError(t, err)
 	adminUser.ID = "usr-preexisting-admin"
 	require.NoError(t, userRepo.Create(context.Background(), adminUser))
-	_, err = roleRepo.AssignToUser(context.Background(), adminUser.ID, domain.RoleAdmin)
+	_, err = roleRepo.AssignToUser(context.Background(), adminUser.ID, auth.RoleAdmin)
 	require.NoError(t, err)
 
 	// Write a fresh orphan credential file (expires_at = now + 30m).

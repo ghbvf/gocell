@@ -3,7 +3,7 @@ package bootstrap
 // devtools.go — phase5 helper for building the devtools catalog handler.
 //
 // phase5InitDevtoolsHandler builds the devtools.Handler when b.devtoolsMeta
-// is non-nil. It converts the kernel/governance.Graph to kernel/metadata.CellDepGraph
+// is non-nil. It converts the kernel/governance.Graph to catalog.CellDepGraph
 // and passes the build-time generated pkgGraph (if any). The handler is stored
 // on phaseState; phase5CollectRouteGroups appends RouteGroup if present.
 
@@ -16,6 +16,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/governance"
 	"github.com/ghbvf/gocell/kernel/metadata"
+	"github.com/ghbvf/gocell/runtime/devtools/catalog"
 	"github.com/ghbvf/gocell/runtime/http/devtools"
 )
 
@@ -33,24 +34,24 @@ func (b *Bootstrap) phase5InitDevtoolsHandler(_ context.Context, s *phaseState) 
 }
 
 // buildCellDepGraph runs governance.DependencyChecker.Graph() and converts to
-// kernel/metadata.CellDepGraph. Validation errors (cycles etc.) are logged at
-// Warn but do not block bootstrap — endpoint surfaces "best-effort" graph.
+// catalog.CellDepGraph. Validation errors (cycles etc.) are logged at Warn but
+// do not block bootstrap — endpoint surfaces "best-effort" graph.
 // BuiltAt is stamped from clk so operators can see how stale the graph is.
-func buildCellDepGraph(pm *metadata.ProjectMeta, clk clock.Clock) *metadata.CellDepGraph {
+func buildCellDepGraph(pm *metadata.ProjectMeta, clk clock.Clock) *catalog.CellDepGraph {
 	dc := governance.NewDependencyChecker(pm)
 	g, errs := dc.Graph()
 	if len(errs) > 0 {
 		slog.Warn("devtools: cell dep graph has validation errors; graph may be incomplete",
 			slog.Int("error_count", len(errs)))
 	}
-	out := &metadata.CellDepGraph{
+	out := &catalog.CellDepGraph{
 		Nodes:   append([]string(nil), g.Nodes...),
-		Edges:   make([]metadata.CellEdge, 0, len(g.Edges)),
+		Edges:   make([]catalog.CellEdge, 0, len(g.Edges)),
 		BuiltAt: clk.Now().UTC().Format(time.RFC3339),
 	}
 	sort.Strings(out.Nodes)
 	for _, e := range g.Edges {
-		out.Edges = append(out.Edges, metadata.CellEdge{From: e.From, To: e.To})
+		out.Edges = append(out.Edges, catalog.CellEdge{From: e.From, To: e.To})
 	}
 	sort.Slice(out.Edges, func(i, j int) bool {
 		if out.Edges[i].From != out.Edges[j].From {

@@ -68,14 +68,14 @@ func (h *Handler) RegisterRoutes(mux cell.RouteHandler) error {
 	if err := auth.Mount(mux, auth.Route{
 		Contract: specConfigPublish,
 		Handler:  http.HandlerFunc(h.HandlePublish),
-		Policy:   auth.AnyRole(dto.RoleAdmin),
+		Policy:   auth.AnyRole(auth.RoleAdmin),
 	}); err != nil {
 		return err
 	}
 	if err := auth.Mount(mux, auth.Route{
 		Contract: specConfigRollback,
 		Handler:  http.HandlerFunc(h.HandleRollback),
-		Policy:   auth.AnyRole(dto.RoleAdmin),
+		Policy:   auth.AnyRole(auth.RoleAdmin),
 	}); err != nil {
 		return err
 	}

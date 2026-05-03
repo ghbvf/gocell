@@ -14,6 +14,7 @@ import (
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/httputil"
 	"github.com/ghbvf/gocell/runtime/auth"
+	"github.com/ghbvf/gocell/runtime/devtools/catalog"
 )
 
 // roleAdmin gates all devtools catalog routes.
@@ -43,17 +44,10 @@ var specCatalog = wrapper.ContractSpec{
 // validIncludeTokens is the set of accepted ?include= tokens.
 var validIncludeTokens = []string{"cellDeps", "packageDeps", "relations", "statusBoard"}
 
-var includeTokenToMask = map[string]metadata.IncludeMask{
-	"relations":   metadata.IncludeRelations,
-	"statusBoard": metadata.IncludeStatusBoard,
-	"cellDeps":    metadata.IncludeCellDeps,
-	"packageDeps": metadata.IncludePackageDeps,
-}
-
 // Handler serves the devtools catalog HTTP endpoint.
 type Handler struct {
 	project   *metadata.ProjectMeta
-	cellGraph *metadata.CellDepGraph
+	cellGraph *catalog.CellDepGraph
 	pkgGraph  *kerneldepgraph.Graph
 	root      string
 	clock     clock.Clock
@@ -64,7 +58,7 @@ type Handler struct {
 // pkgGraph is the build-time generated graph from cmd/corebundle/catalog_gen.go.
 func NewHandler(
 	project *metadata.ProjectMeta,
-	cellGraph *metadata.CellDepGraph,
+	cellGraph *catalog.CellDepGraph,
 	pkgGraph *kerneldepgraph.Graph,
 	root string,
 	clk clock.Clock,
@@ -106,7 +100,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	opts := buildExportOptions(h, filter)
 
 	// Build document.
-	doc, err := metadata.BuildDocument(h.project, opts)
+	doc, err := catalog.BuildDocument(h.project, opts)
 	if err != nil {
 		slog.Error("devtools: BuildDocument failed",
 			slog.Any("error", err),
@@ -118,7 +112,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Marshal document.
-	body, err := metadata.MarshalDocument(doc, format)
+	body, err := catalog.MarshalDocument(doc, format)
 	if err != nil {
 		// format is validated above to be "json" or "yaml" — not user-controlled.
 		slog.Error("devtools: MarshalDocument failed", //nolint:gosec // format validated to "json"|"yaml" in parseQuery before reaching here
@@ -139,51 +133,51 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // buildExportOptions assembles ExportOptions from the handler state and filter.
 // Root is always set to "." for HTTP responses to avoid leaking absolute server
 // paths to clients; CLI callers retain their absolute path via h.root.
-func buildExportOptions(h *Handler, filter metadata.Filter) metadata.ExportOptions {
-	opts := metadata.ExportOptions{
-		Now:    h.clock.Now(),
+func buildExportOptions(h *Handler, filter catalog.Filter) catalog.ExportOptions {
+	opts := catalog.ExportOptions{
+		Clock:  h.clock,
 		Root:   ".",
 		Filter: filter,
 	}
-	if filter.Include&metadata.IncludeCellDeps != 0 {
+	if filter.Include.CellDeps {
 		opts.CellDeps = h.cellGraph
 	}
-	if filter.Include&metadata.IncludePackageDeps != 0 && h.pkgGraph != nil {
-		opts.Packages = &metadata.PackageDepsView{Status: "ready", Graph: h.pkgGraph}
+	if filter.Include.PackageDeps && h.pkgGraph != nil {
+		opts.Packages = &catalog.PackageDepsView{Graph: h.pkgGraph}
 	}
 	return opts
 }
 
 // parseQuery extracts and validates query parameters from r. On any validation
 // error it writes a 400 response and returns false.
-func parseQuery(ctx context.Context, w http.ResponseWriter, r *http.Request) (metadata.Filter, string, bool) {
+func parseQuery(ctx context.Context, w http.ResponseWriter, r *http.Request) (catalog.Filter, string, bool) {
 	q := r.URL.Query()
 
-	kinds, err := csvparam.ParseAllowed(q.Get("kinds"), metadata.AllKinds, "kinds")
+	kinds, err := csvparam.ParseAllowed(q.Get("kinds"), catalog.AllKinds, "kinds")
 	if err != nil {
 		writeValidationError(ctx, w, err.Error())
-		return metadata.Filter{}, "", false
+		return catalog.Filter{}, "", false
 	}
 
-	layers, err := csvparam.ParseAllowed(q.Get("layers"), metadata.AllLayers, "layers")
+	layers, err := csvparam.ParseAllowed(q.Get("layers"), catalog.AllLayers, "layers")
 	if err != nil {
 		writeValidationError(ctx, w, err.Error())
-		return metadata.Filter{}, "", false
+		return catalog.Filter{}, "", false
 	}
 
 	cells := csvparam.Parse(q.Get("cells"))
 
-	// Distinguish "omitted" (?include absent → IncludeAll) from "explicit empty"
-	// (?include= → 0). q.Has returns true only when the key appears in the query
-	// string, even with an empty value.
+	// Distinguish "omitted" (?include absent → AllIncluded) from "explicit empty"
+	// (?include= → zero IncludeOptions). q.Has returns true only when the key
+	// appears in the query string, even with an empty value.
 	includeRaw := ""
 	includePresent := q.Has("include")
 	if includePresent {
 		includeRaw = q.Get("include")
 	}
-	include, ok := parseInclude(ctx, w, includeRaw, includePresent)
+	inc, ok := parseInclude(ctx, w, includeRaw, includePresent)
 	if !ok {
-		return metadata.Filter{}, "", false
+		return catalog.Filter{}, "", false
 	}
 
 	format := q.Get("format")
@@ -192,43 +186,50 @@ func parseQuery(ctx context.Context, w http.ResponseWriter, r *http.Request) (me
 	}
 	if format != "json" && format != "yaml" {
 		writeValidationError(ctx, w, "invalid format parameter")
-		return metadata.Filter{}, "", false
+		return catalog.Filter{}, "", false
 	}
 
-	return metadata.Filter{
+	return catalog.Filter{
 		Kinds:   kinds,
 		Layers:  layers,
 		Cells:   cells,
-		Include: include,
+		Include: inc,
 	}, format, true
 }
 
-// parseInclude parses the ?include= parameter into an IncludeMask.
-// When present is false (parameter absent), returns IncludeAll.
-// When present is true and raw is empty, returns 0 (no optional blocks).
+// parseInclude parses the ?include= parameter into an IncludeOptions.
+// When present is false (parameter absent), returns AllIncluded().
+// When present is true and raw is empty, returns zero IncludeOptions.
 // Unknown values write a 400 response and return false.
-func parseInclude(ctx context.Context, w http.ResponseWriter, raw string, present bool) (metadata.IncludeMask, bool) {
+func parseInclude(ctx context.Context, w http.ResponseWriter, raw string, present bool) (catalog.IncludeOptions, bool) {
 	if !present {
-		return metadata.IncludeAll, true
+		return catalog.AllIncluded(), true
 	}
 	tokens, err := csvparam.ParseAllowed(raw, validIncludeTokens, "include")
 	if err != nil {
 		writeValidationError(ctx, w, err.Error())
-		return 0, false
+		return catalog.IncludeOptions{}, false
 	}
-	var mask metadata.IncludeMask
+	var inc catalog.IncludeOptions
 	for _, token := range tokens {
-		bit, ok := includeTokenToMask[token]
-		if !ok {
+		switch token {
+		case "cellDeps":
+			inc.CellDeps = true
+		case "packageDeps":
+			inc.PackageDeps = true
+		case "relations":
+			inc.Relations = true
+		case "statusBoard":
+			inc.StatusBoard = true
+		default:
 			writeValidationError(ctx, w, csvparam.UnknownTokenError{
 				Param:   "include",
 				Allowed: validIncludeTokens,
 			}.Error())
-			return 0, false
+			return catalog.IncludeOptions{}, false
 		}
-		mask |= bit
 	}
-	return mask, true
+	return inc, true
 }
 
 func writeValidationError(ctx context.Context, w http.ResponseWriter, message string) {
@@ -246,7 +247,7 @@ func contentType(format string) string {
 
 // writeBody writes body bytes to w, logging any write error.
 // Extracted to satisfy gosec G705 (XSS via taint analysis) — the taint
-// originates in metadata.MarshalDocument which produces deterministic,
+// originates in catalog.MarshalDocument which produces deterministic,
 // admin-only output; the nolint annotation is intentional.
 func writeBody(w http.ResponseWriter, body []byte) {
 	if _, err := w.Write(body); err != nil { //nolint:gosec // body is serialized catalog metadata, admin-only endpoint

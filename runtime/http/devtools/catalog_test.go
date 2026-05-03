@@ -11,6 +11,7 @@ import (
 	kerneldepgraph "github.com/ghbvf/gocell/kernel/depgraph"
 	"github.com/ghbvf/gocell/kernel/metadata"
 	"github.com/ghbvf/gocell/runtime/auth"
+	"github.com/ghbvf/gocell/runtime/devtools/catalog"
 	"github.com/ghbvf/gocell/runtime/http/devtools"
 )
 
@@ -50,9 +51,9 @@ func buildTestHandler(t *testing.T) *devtools.Handler {
 		StatusBoard: []metadata.StatusBoardEntry{},
 		Actors:      []metadata.ActorMeta{},
 	}
-	cellGraph := &metadata.CellDepGraph{
+	cellGraph := &catalog.CellDepGraph{
 		Nodes: []string{"accesscore", "auditcore"},
-		Edges: []metadata.CellEdge{},
+		Edges: []catalog.CellEdge{},
 	}
 	return devtools.NewHandler(project, cellGraph, minimalPkgGraph(), "/test-root", clock.Real())
 }
@@ -99,12 +100,12 @@ func TestCatalog_Default_AdminGetsFullSnapshot(t *testing.T) {
 	if !strings.Contains(ct, "application/json") {
 		t.Errorf("Content-Type = %q, want application/json", ct)
 	}
-	var doc metadata.Document
+	var doc catalog.Document
 	if err := json.Unmarshal(rr.Body.Bytes(), &doc); err != nil {
 		t.Fatalf("unmarshal response: %v", err)
 	}
-	if doc.SchemaVersion != metadata.SchemaVersionV1 {
-		t.Errorf("schemaVersion = %q, want %q", doc.SchemaVersion, metadata.SchemaVersionV1)
+	if doc.SchemaVersion != catalog.SchemaVersionV1 {
+		t.Errorf("schemaVersion = %q, want %q", doc.SchemaVersion, catalog.SchemaVersionV1)
 	}
 	if len(doc.Entities) == 0 {
 		t.Error("expected non-empty Entities")
@@ -145,7 +146,7 @@ func TestCatalog_FilterKinds(t *testing.T) {
 	if rr.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d: %s", rr.Code, rr.Body.String())
 	}
-	var doc metadata.Document
+	var doc catalog.Document
 	if err := json.Unmarshal(rr.Body.Bytes(), &doc); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
@@ -176,7 +177,7 @@ func TestCatalog_CellsFocus(t *testing.T) {
 	if rr.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d: %s", rr.Code, rr.Body.String())
 	}
-	var doc metadata.Document
+	var doc catalog.Document
 	if err := json.Unmarshal(rr.Body.Bytes(), &doc); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
@@ -207,7 +208,7 @@ func TestCatalog_IncludeMask_OnlyRelations(t *testing.T) {
 	if rr.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d: %s", rr.Code, rr.Body.String())
 	}
-	var doc metadata.Document
+	var doc catalog.Document
 	if err := json.Unmarshal(rr.Body.Bytes(), &doc); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
@@ -234,12 +235,12 @@ func TestCatalog_IncludeMask_NoFlags_DefaultsAll(t *testing.T) {
 	if rr.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d: %s", rr.Code, rr.Body.String())
 	}
-	var doc metadata.Document
+	var doc catalog.Document
 	if err := json.Unmarshal(rr.Body.Bytes(), &doc); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
 	if doc.Dependencies == nil {
-		t.Error("expected Dependencies block when no include filter (IncludeAll)")
+		t.Error("expected Dependencies block when no include filter (AllIncluded)")
 	}
 }
 
@@ -344,7 +345,7 @@ func TestCatalog_PackageDeps_NilGraph(t *testing.T) {
 	if rr.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d", rr.Code)
 	}
-	var doc metadata.Document
+	var doc catalog.Document
 	if err := json.Unmarshal(rr.Body.Bytes(), &doc); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
@@ -354,7 +355,7 @@ func TestCatalog_PackageDeps_NilGraph(t *testing.T) {
 }
 
 // TestCatalog_PackageDeps_NonNilGraph verifies that when pkgGraph is non-nil,
-// the packageDeps block is present with status=ready.
+// the packageDeps block is present with Graph != nil.
 func TestCatalog_PackageDeps_NonNilGraph(t *testing.T) {
 	t.Parallel()
 
@@ -372,20 +373,20 @@ func TestCatalog_PackageDeps_NonNilGraph(t *testing.T) {
 	if rr.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d", rr.Code)
 	}
-	var doc metadata.Document
+	var doc catalog.Document
 	if err := json.Unmarshal(rr.Body.Bytes(), &doc); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
 	if doc.Dependencies == nil || doc.Dependencies.Packages == nil {
 		t.Fatal("expected Dependencies.Packages block when pkgGraph is non-nil")
 	}
-	if doc.Dependencies.Packages.Status != "ready" {
-		t.Errorf("packages status = %q, want ready", doc.Dependencies.Packages.Status)
+	if doc.Dependencies.Packages.Graph == nil {
+		t.Error("packages Graph must be non-nil when pkgGraph is provided")
 	}
 }
 
 // TestCatalog_IncludeAbsent_DefaultsAll verifies that omitting ?include= returns
-// IncludeAll (dependencies block present).
+// AllIncluded (dependencies block present).
 func TestCatalog_IncludeAbsent_DefaultsAll(t *testing.T) {
 	t.Parallel()
 
@@ -395,12 +396,12 @@ func TestCatalog_IncludeAbsent_DefaultsAll(t *testing.T) {
 	if rr.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d: %s", rr.Code, rr.Body.String())
 	}
-	var doc metadata.Document
+	var doc catalog.Document
 	if err := json.Unmarshal(rr.Body.Bytes(), &doc); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
 	if doc.Dependencies == nil {
-		t.Error("expected Dependencies block when include param is absent (IncludeAll default)")
+		t.Error("expected Dependencies block when include param is absent (AllIncluded default)")
 	}
 }
 
@@ -415,7 +416,7 @@ func TestCatalog_IncludeExplicitEmpty_ZeroBlocks(t *testing.T) {
 	if rr.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d: %s", rr.Code, rr.Body.String())
 	}
-	var doc metadata.Document
+	var doc catalog.Document
 	if err := json.Unmarshal(rr.Body.Bytes(), &doc); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
@@ -454,7 +455,7 @@ func TestCatalog_Root_RelativePath(t *testing.T) {
 	if rr.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d: %s", rr.Code, rr.Body.String())
 	}
-	var doc metadata.Document
+	var doc catalog.Document
 	if err := json.Unmarshal(rr.Body.Bytes(), &doc); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}

@@ -432,13 +432,13 @@ func TestRunExport_DefaultPackageDepsLoadError(t *testing.T) {
 	var doc struct {
 		Dependencies *struct {
 			Packages *struct {
-				Status string `json:"status"`
+				Error string `json:"error"`
 			} `json:"packages"`
 		} `json:"dependencies"`
 	}
 	require.NoError(t, json.Unmarshal(data, &doc))
 	require.NotNil(t, doc.Dependencies, "dependencies block must be present")
 	require.NotNil(t, doc.Dependencies.Packages, "dependencies.packages must be present")
-	assert.Equal(t, "error", doc.Dependencies.Packages.Status,
-		"dependencies.packages.status must be 'error' on load failure")
+	assert.NotEmpty(t, doc.Dependencies.Packages.Error,
+		"dependencies.packages.error must be non-empty on load failure")
 }

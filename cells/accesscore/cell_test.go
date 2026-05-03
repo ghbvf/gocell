@@ -936,14 +936,14 @@ func seedAdminUser(
 	user.ID = "usr-admin-prefill"
 
 	require.NoError(t, roleRepo.Create(ctx, &domain.Role{
-		ID:   domain.RoleAdmin,
-		Name: domain.RoleAdmin,
+		ID:   auth.RoleAdmin,
+		Name: auth.RoleAdmin,
 		Permissions: []domain.Permission{
 			{Resource: "*", Action: "*"},
 		},
 	}))
 	require.NoError(t, userRepo.Create(ctx, user))
-	_, err = roleRepo.AssignToUser(ctx, user.ID, domain.RoleAdmin)
+	_, err = roleRepo.AssignToUser(ctx, user.ID, auth.RoleAdmin)
 	require.NoError(t, err)
 	return user
 }

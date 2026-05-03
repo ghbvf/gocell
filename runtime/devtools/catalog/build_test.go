@@ -1,28 +1,30 @@
-// Package metadata_test · export_test.go: TDD tests for BuildDocument + MarshalDocument.
-// Uses package metadata_test (external test package) to avoid import cycles.
-package metadata_test
+// Package catalog_test — build_test.go: TDD tests for BuildDocument.
+package catalog_test
 
 import (
-	"encoding/json"
 	"flag"
-	"os"
-	"reflect"
 	"sort"
-	"strings"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/ghbvf/gocell/kernel/clock/clockmock"
 	kerneldepgraph "github.com/ghbvf/gocell/kernel/depgraph"
 	"github.com/ghbvf/gocell/kernel/metadata"
+	"github.com/ghbvf/gocell/runtime/devtools/catalog"
 )
 
 var update = flag.Bool("update", false, "update golden files")
 
-// fixedNow is an anchored timestamp for deterministic test output.
-var fixedNow = time.Date(2026, 5, 3, 12, 0, 0, 0, time.UTC)
+// fixedTime is an anchored timestamp for deterministic test output.
+var fixedTime = time.Date(2026, 5, 3, 12, 0, 0, 0, time.UTC)
+
+// fixedClock returns a FakeClock frozen at fixedTime.
+func fixedClock() *clockmock.FakeClock {
+	return clockmock.New(fixedTime)
+}
 
 // ---- fixture helpers ----
 
@@ -124,12 +126,12 @@ func fullPM() *metadata.ProjectMeta {
 	return pm
 }
 
-// opts returns a baseline ExportOptions.
-func baseOpts() metadata.ExportOptions {
-	return metadata.ExportOptions{
-		Now:    fixedNow,
+// baseOpts returns a baseline ExportOptions.
+func baseOpts() catalog.ExportOptions {
+	return catalog.ExportOptions{
+		Clock:  fixedClock(),
 		Root:   "/projects/gocell",
-		Filter: metadata.Filter{Include: metadata.IncludeAll},
+		Filter: catalog.Filter{Include: catalog.AllIncluded()},
 	}
 }
 
@@ -138,15 +140,15 @@ func baseOpts() metadata.ExportOptions {
 func TestBuildDocument_FullSnapshot(t *testing.T) {
 	pm := fullPM()
 	opts := baseOpts()
-	doc, err := metadata.BuildDocument(pm, opts)
+	doc, err := catalog.BuildDocument(pm, opts)
 	require.NoError(t, err)
 
 	assert.Equal(t, "v1", doc.SchemaVersion)
 	assert.Equal(t, "gocell.io/v1alpha1", doc.APIVersion)
-	assert.Equal(t, fixedNow.UTC().Format(time.RFC3339), doc.GeneratedAt)
+	assert.Equal(t, fixedTime.UTC().Format(time.RFC3339), doc.GeneratedAt)
 	assert.Equal(t, "/projects/gocell", doc.Root)
 
-	// With IncludeAll, statusBoard should be present.
+	// With AllIncluded, statusBoard should be present.
 	assert.NotEmpty(t, doc.StatusBoard)
 
 	// Entities: 2 cells + 2 slices + 2 contracts + 1 journey + 1 assembly + 1 actor = 9
@@ -166,22 +168,22 @@ func TestBuildDocument_FullSnapshot(t *testing.T) {
 	for _, e := range doc.Entities {
 		switch e.Kind {
 		case "Cell":
-			_, ok := e.Spec.(metadata.CellSpec)
+			_, ok := e.Spec.(catalog.CellSpec)
 			assert.True(t, ok, "Cell entity should have CellSpec, got %T", e.Spec)
 		case "Slice":
-			_, ok := e.Spec.(metadata.SliceSpec)
+			_, ok := e.Spec.(catalog.SliceSpec)
 			assert.True(t, ok, "Slice entity should have SliceSpec, got %T", e.Spec)
 		case "Contract":
-			_, ok := e.Spec.(metadata.ContractSpec)
+			_, ok := e.Spec.(catalog.ContractSpec)
 			assert.True(t, ok, "Contract entity should have ContractSpec, got %T", e.Spec)
 		case "Journey":
-			_, ok := e.Spec.(metadata.JourneySpec)
+			_, ok := e.Spec.(catalog.JourneySpec)
 			assert.True(t, ok, "Journey entity should have JourneySpec, got %T", e.Spec)
 		case "Assembly":
-			_, ok := e.Spec.(metadata.AssemblySpec)
+			_, ok := e.Spec.(catalog.AssemblySpec)
 			assert.True(t, ok, "Assembly entity should have AssemblySpec, got %T", e.Spec)
 		case "Actor":
-			_, ok := e.Spec.(metadata.ActorSpec)
+			_, ok := e.Spec.(catalog.ActorSpec)
 			assert.True(t, ok, "Actor entity should have ActorSpec, got %T", e.Spec)
 		}
 		kindSeen[e.Kind] = true
@@ -203,7 +205,7 @@ func TestBuildDocument_FilterKinds(t *testing.T) {
 	pm := fullPM()
 	opts := baseOpts()
 	opts.Filter.Kinds = []string{"Cell", "Contract"}
-	doc, err := metadata.BuildDocument(pm, opts)
+	doc, err := catalog.BuildDocument(pm, opts)
 	require.NoError(t, err)
 
 	for _, e := range doc.Entities {
@@ -220,7 +222,7 @@ func TestBuildDocument_FilterLayers(t *testing.T) {
 	pm := fullPM()
 	opts := baseOpts()
 	opts.Filter.Layers = []string{"cells"}
-	doc, err := metadata.BuildDocument(pm, opts)
+	doc, err := catalog.BuildDocument(pm, opts)
 	require.NoError(t, err)
 
 	for _, e := range doc.Entities {
@@ -237,11 +239,9 @@ func TestBuildDocument_FilterCellsFocus(t *testing.T) {
 	pm := fullPM()
 	opts := baseOpts()
 	opts.Filter.Cells = []string{"accesscore"}
-	doc, err := metadata.BuildDocument(pm, opts)
+	doc, err := catalog.BuildDocument(pm, opts)
 	require.NoError(t, err)
 
-	// accesscore cell + its slices + contracts it participates in + contract owners
-	// At minimum: accesscore cell, sessionlogin slice, http.access.login.v1 contract
 	names := make([]string, 0, len(doc.Entities))
 	for _, e := range doc.Entities {
 		names = append(names, e.Kind+"/"+e.Metadata.Name)
@@ -263,12 +263,7 @@ func TestBuildDocument_FilterCellsFocus(t *testing.T) {
 // focus cell does NOT own a contract but consumes it via contractUsages, the
 // contract is still included in the filtered output (consumer-side match).
 func TestBuildDocument_FilterCellsFocus_ConsumerContracts(t *testing.T) {
-	// Build a ProjectMeta where:
-	//   - accesscore does NOT own event.audit.entry.v1 (owned by auditcore)
-	//   - but accesscore.sessionlogin subscribes to it via contractUsages
 	pm := fullPM()
-	// Add a contractUsage on the existing sessionlogin slice to subscribe to
-	// event.audit.entry.v1 (which is owned by auditcore, not accesscore).
 	pm.Slices["accesscore/sessionlogin"].ContractUsages = append(
 		pm.Slices["accesscore/sessionlogin"].ContractUsages,
 		metadata.ContractUsage{Contract: "event.audit.entry.v1", Role: "subscribe"},
@@ -276,7 +271,7 @@ func TestBuildDocument_FilterCellsFocus_ConsumerContracts(t *testing.T) {
 
 	opts := baseOpts()
 	opts.Filter.Cells = []string{"accesscore"}
-	doc, err := metadata.BuildDocument(pm, opts)
+	doc, err := catalog.BuildDocument(pm, opts)
 	require.NoError(t, err)
 
 	names := make([]string, 0, len(doc.Entities))
@@ -284,88 +279,78 @@ func TestBuildDocument_FilterCellsFocus_ConsumerContracts(t *testing.T) {
 		names = append(names, e.Kind+"/"+e.Metadata.Name)
 	}
 
-	// accesscore is the focus cell — must be present.
 	assert.Contains(t, names, "Cell/accesscore")
-	// sessionlogin belongs to accesscore — must be present.
 	assert.Contains(t, names, "Slice/sessionlogin")
-	// http.access.login.v1 is owned by accesscore — must be present.
 	assert.Contains(t, names, "Contract/http.access.login.v1")
-	// event.audit.entry.v1 is owned by auditcore but consumed by accesscore —
-	// consumer-side match must include it.
 	assert.Contains(t, names, "Contract/event.audit.entry.v1",
 		"contract consumed by focus cell must appear even when owned by another cell")
-
-	// auditcore IS a first-order neighbor because it owns a contract consumed by
-	// accesscore (F-A3: contract owner of consumed contracts is added to the
-	// expanded focus set). It must appear.
 	assert.Contains(t, names, "Cell/auditcore",
 		"auditcore must appear: it owns a contract consumed by the focus cell")
 }
 
-// ---- TestBuildDocument_IncludeMask ----
+// ---- TestBuildDocument_IncludeOptions ----
 
-func TestBuildDocument_IncludeMask(t *testing.T) {
-	cellDeps := &metadata.CellDepGraph{
+func TestBuildDocument_IncludeOptions(t *testing.T) {
+	cellDeps := &catalog.CellDepGraph{
 		Nodes: []string{"accesscore"},
-		Edges: []metadata.CellEdge{},
+		Edges: []catalog.CellEdge{},
 	}
-	pkgs := &metadata.PackageDepsView{
-		Status: "ready",
-		Graph:  &kerneldepgraph.Graph{},
+	pkgs := &catalog.PackageDepsView{
+		Graph: &kerneldepgraph.Graph{},
 	}
 	pm := fullPM()
 
 	cases := []struct {
 		name          string
-		mask          metadata.IncludeMask
-		wantRelations bool // at least one entity has relations
-		wantStatus    bool // statusBoard present
-		wantCellDeps  bool // dependencies.cells present
-		wantPkgDeps   bool // dependencies.packages present
+		inc           catalog.IncludeOptions
+		wantRelations bool
+		wantStatus    bool
+		wantCellDeps  bool
+		wantPkgDeps   bool
 	}{
 		{
-			name:          "IncludeRelations only",
-			mask:          metadata.IncludeRelations,
+			name:          "Relations only",
+			inc:           catalog.IncludeOptions{Relations: true},
 			wantRelations: true,
 			wantStatus:    false,
 			wantCellDeps:  false,
 			wantPkgDeps:   false,
 		},
 		{
-			name:          "IncludeStatusBoard only",
-			mask:          metadata.IncludeStatusBoard,
+			name:          "StatusBoard only",
+			inc:           catalog.IncludeOptions{StatusBoard: true},
 			wantRelations: false,
 			wantStatus:    true,
 			wantCellDeps:  false,
 			wantPkgDeps:   false,
 		},
 		{
-			name:          "IncludeCellDeps only",
-			mask:          metadata.IncludeCellDeps,
+			name:          "CellDeps only",
+			inc:           catalog.IncludeOptions{CellDeps: true},
 			wantRelations: false,
 			wantStatus:    false,
 			wantCellDeps:  true,
 			wantPkgDeps:   false,
 		},
 		{
-			name:          "IncludePackageDeps only",
-			mask:          metadata.IncludePackageDeps,
+			name:          "PackageDeps only",
+			inc:           catalog.IncludeOptions{PackageDeps: true},
 			wantRelations: false,
 			wantStatus:    false,
 			wantCellDeps:  false,
 			wantPkgDeps:   true,
 		},
 		{
-			name:          "IncludeAll",
-			mask:          metadata.IncludeAll,
+			name:          "AllIncluded",
+			inc:           catalog.AllIncluded(),
 			wantRelations: true,
 			wantStatus:    true,
 			wantCellDeps:  true,
 			wantPkgDeps:   true,
 		},
 		{
-			name:          "zero mask",
-			mask:          0,
+			name:          "zero IncludeOptions",
+			inc:           catalog.IncludeOptions{},
 			wantRelations: false,
 			wantStatus:    false,
 			wantCellDeps:  false,
@@ -373,7 +358,7 @@ func TestBuildDocument_IncludeMask(t *testing.T) {
 		},
 		{
 			name:          "Relations+CellDeps",
-			mask:          metadata.IncludeRelations | metadata.IncludeCellDeps,
+			inc:           catalog.IncludeOptions{Relations: true, CellDeps: true},
 			wantRelations: true,
 			wantStatus:    false,
 			wantCellDeps:  true,
@@ -381,7 +366,7 @@ func TestBuildDocument_IncludeMask(t *testing.T) {
 		},
 		{
 			name:          "StatusBoard+PackageDeps",
-			mask:          metadata.IncludeStatusBoard | metadata.IncludePackageDeps,
+			inc:           catalog.IncludeOptions{StatusBoard: true, PackageDeps: true},
 			wantRelations: false,
 			wantStatus:    true,
 			wantCellDeps:  false,
@@ -391,13 +376,13 @@ func TestBuildDocument_IncludeMask(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			opts := metadata.ExportOptions{
-				Now:      fixedNow,
-				Filter:   metadata.Filter{Include: tc.mask},
+			opts := catalog.ExportOptions{
+				Clock:    fixedClock(),
+				Filter:   catalog.Filter{Include: tc.inc},
 				CellDeps: cellDeps,
 				Packages: pkgs,
 			}
-			doc, err := metadata.BuildDocument(pm, opts)
+			doc, err := catalog.BuildDocument(pm, opts)
 			require.NoError(t, err)
 
 			hasRelations := false
@@ -438,9 +423,6 @@ func TestBuildDocument_IncludeMask(t *testing.T) {
 
 // ---- TestBuildDocument_StatusBoardRedaction ----
 
-// TestBuildDocument_StatusBoardRedaction verifies that entries with state=draft
-// or state=planned have their risk and blocker fields cleared in the output,
-// while entries in operational states (doing/blocked) pass through unchanged.
 func TestBuildDocument_StatusBoardRedaction(t *testing.T) {
 	pm := &metadata.ProjectMeta{
 		Cells:      map[string]*metadata.CellMeta{},
@@ -456,20 +438,19 @@ func TestBuildDocument_StatusBoardRedaction(t *testing.T) {
 			{JourneyID: "J-blocked", State: "blocked", Risk: "high", Blocker: "db migration pending", UpdatedAt: "2026-05-03"},
 		},
 	}
-	opts := metadata.ExportOptions{
-		Now:    fixedNow,
-		Filter: metadata.Filter{Include: metadata.IncludeStatusBoard},
+	opts := catalog.ExportOptions{
+		Clock:  fixedClock(),
+		Filter: catalog.Filter{Include: catalog.IncludeOptions{StatusBoard: true}},
 	}
-	doc, err := metadata.BuildDocument(pm, opts)
+	doc, err := catalog.BuildDocument(pm, opts)
 	require.NoError(t, err)
 	require.Len(t, doc.StatusBoard, 4)
 
-	byID := make(map[string]metadata.StatusBoardEntry, 4)
+	byID := make(map[string]catalog.StatusBoardEntry, 4)
 	for _, e := range doc.StatusBoard {
 		byID[e.JourneyID] = e
 	}
 
-	// draft: risk and blocker must be cleared; journeyId/state/updatedAt preserved.
 	draft := byID["J-draft"]
 	assert.Equal(t, "draft", draft.State)
 	assert.Equal(t, "J-draft", draft.JourneyID)
@@ -477,7 +458,6 @@ func TestBuildDocument_StatusBoardRedaction(t *testing.T) {
 	assert.Empty(t, draft.Risk, "draft entry: risk must be redacted")
 	assert.Empty(t, draft.Blocker, "draft entry: blocker must be redacted")
 
-	// planned: risk and blocker must be cleared; journeyId/state/updatedAt preserved.
 	planned := byID["J-planned"]
 	assert.Equal(t, "planned", planned.State)
 	assert.Equal(t, "J-planned", planned.JourneyID)
@@ -485,12 +465,10 @@ func TestBuildDocument_StatusBoardRedaction(t *testing.T) {
 	assert.Empty(t, planned.Risk, "planned entry: risk must be redacted")
 	assert.Empty(t, planned.Blocker, "planned entry: blocker must be redacted")
 
-	// doing: risk and blocker must be preserved unchanged.
 	doing := byID["J-doing"]
 	assert.Equal(t, "low", doing.Risk, "doing entry: risk must be preserved")
 	assert.Equal(t, "no blocker", doing.Blocker, "doing entry: blocker must be preserved")
 
-	// blocked: risk and blocker must be preserved unchanged.
 	blocked := byID["J-blocked"]
 	assert.Equal(t, "high", blocked.Risk, "blocked entry: risk must be preserved")
 	assert.Equal(t, "db migration pending", blocked.Blocker, "blocked entry: blocker must be preserved")
@@ -500,57 +478,59 @@ func TestBuildDocument_StatusBoardRedaction(t *testing.T) {
 	assert.Equal(t, "internal risk detail", pm.StatusBoard[0].Blocker, "original pm entries must not be mutated")
 }
 
-// ---- TestBuildDocument_PackageDepsLoading ----
+// ---- TestBuildDocument_PackageDeps_Loading ----
 
-func TestBuildDocument_PackageDepsLoading(t *testing.T) {
+// TestBuildDocument_PackageDeps_Loading verifies that a PackageDepsView with no
+// Graph and no Error (loading state: Graph==nil, Error=="") is passed through.
+func TestBuildDocument_PackageDeps_Loading(t *testing.T) {
 	pm := minimalPM()
-	opts := metadata.ExportOptions{
-		Now: fixedNow,
-		Filter: metadata.Filter{
-			Include: metadata.IncludePackageDeps,
+	opts := catalog.ExportOptions{
+		Clock: fixedClock(),
+		Filter: catalog.Filter{
+			Include: catalog.IncludeOptions{PackageDeps: true},
 		},
-		Packages: &metadata.PackageDepsView{Status: "loading"},
+		Packages: &catalog.PackageDepsView{}, // loading: Graph==nil, Error==""
 	}
-	doc, err := metadata.BuildDocument(pm, opts)
+	doc, err := catalog.BuildDocument(pm, opts)
 	require.NoError(t, err)
 	require.NotNil(t, doc.Dependencies)
 	require.NotNil(t, doc.Dependencies.Packages)
-	assert.Equal(t, "loading", doc.Dependencies.Packages.Status)
+	assert.Nil(t, doc.Dependencies.Packages.Graph, "loading state: Graph must be nil")
+	assert.Empty(t, doc.Dependencies.Packages.Error, "loading state: Error must be empty")
+}
+
+// ---- TestBuildDocument_PackageDeps_Error ----
+
+func TestBuildDocument_PackageDeps_Error(t *testing.T) {
+	pm := minimalPM()
+	opts := catalog.ExportOptions{
+		Clock: fixedClock(),
+		Filter: catalog.Filter{
+			Include: catalog.IncludeOptions{PackageDeps: true},
+		},
+		Packages: &catalog.PackageDepsView{Error: "foo"},
+	}
+	doc, err := catalog.BuildDocument(pm, opts)
+	require.NoError(t, err)
+	require.NotNil(t, doc.Dependencies)
+	require.NotNil(t, doc.Dependencies.Packages)
+	assert.Equal(t, "foo", doc.Dependencies.Packages.Error)
 	assert.Nil(t, doc.Dependencies.Packages.Graph)
 }
 
-// ---- TestBuildDocument_PackageDepsError ----
+// ---- TestBuildDocument_PackageDeps_Ready ----
 
-func TestBuildDocument_PackageDepsError(t *testing.T) {
-	pm := minimalPM()
-	opts := metadata.ExportOptions{
-		Now: fixedNow,
-		Filter: metadata.Filter{
-			Include: metadata.IncludePackageDeps,
-		},
-		Packages: &metadata.PackageDepsView{Status: "error", Error: "foo"},
-	}
-	doc, err := metadata.BuildDocument(pm, opts)
-	require.NoError(t, err)
-	require.NotNil(t, doc.Dependencies)
-	require.NotNil(t, doc.Dependencies.Packages)
-	assert.Equal(t, "error", doc.Dependencies.Packages.Status)
-	assert.Equal(t, "foo", doc.Dependencies.Packages.Error)
-}
-
-// ---- TestBuildDocument_PackageDepsReady ----
-
-func TestBuildDocument_PackageDepsReady(t *testing.T) {
+func TestBuildDocument_PackageDeps_Ready(t *testing.T) {
 	pm := minimalPM()
 	g := &kerneldepgraph.Graph{}
-	opts := metadata.ExportOptions{
-		Now: fixedNow,
-		Filter: metadata.Filter{
-			Include: metadata.IncludePackageDeps,
+	opts := catalog.ExportOptions{
+		Clock: fixedClock(),
+		Filter: catalog.Filter{
+			Include: catalog.IncludeOptions{PackageDeps: true},
 		},
-		Packages: &metadata.PackageDepsView{Status: "ready", Graph: g},
+		Packages: &catalog.PackageDepsView{Graph: g},
 	}
-	doc, err := metadata.BuildDocument(pm, opts)
+	doc, err := catalog.BuildDocument(pm, opts)
 	require.NoError(t, err)
 	require.NotNil(t, doc.Dependencies)
 	require.NotNil(t, doc.Dependencies.Packages)
@@ -561,23 +541,25 @@ func TestBuildDocument_PackageDepsReady(t *testing.T) {
 
 func TestBuildDocument_QueryEcho(t *testing.T) {
 	pm := minimalPM()
-	opts := metadata.ExportOptions{
-		Now: fixedNow,
-		Filter: metadata.Filter{
-			Kinds:   []string{"Cell"},
-			Layers:  []string{"cells"},
-			Cells:   []string{"accesscore"},
-			Include: metadata.IncludeRelations | metadata.IncludeStatusBoard,
+	opts := catalog.ExportOptions{
+		Clock: fixedClock(),
+		Filter: catalog.Filter{
+			Kinds:  []string{"Cell"},
+			Layers: []string{"cells"},
+			Cells:  []string{"accesscore"},
+			Include: catalog.IncludeOptions{
+				Relations:   true,
+				StatusBoard: true,
+			},
 		},
 	}
-	doc, err := metadata.BuildDocument(pm, opts)
+	doc, err := catalog.BuildDocument(pm, opts)
 	require.NoError(t, err)
 
 	assert.Equal(t, []string{"Cell"}, doc.Query.Kinds)
 	assert.Equal(t, []string{"cells"}, doc.Query.Layers)
 	assert.Equal(t, []string{"accesscore"}, doc.Query.Cells)
 
-	// Include echoed as sorted []string
 	include := doc.Query.Include
 	assert.True(t, sort.StringsAreSorted(include), "Include echo must be sorted")
 	assert.Contains(t, include, "relations")
@@ -586,16 +568,16 @@ func TestBuildDocument_QueryEcho(t *testing.T) {
 	assert.NotContains(t, include, "packageDeps")
 }
 
-// ---- TestBuildDocument_RejectsZeroNow ----
+// ---- TestBuildDocument_RejectsNilClock ----
 
-func TestBuildDocument_RejectsZeroNow(t *testing.T) {
+func TestBuildDocument_RejectsNilClock(t *testing.T) {
 	pm := minimalPM()
-	opts := metadata.ExportOptions{
-		Now:    time.Time{}, // zero
-		Filter: metadata.Filter{Include: metadata.IncludeAll},
+	opts := catalog.ExportOptions{
+		Clock:  nil, // nil clock must be rejected
+		Filter: catalog.Filter{Include: catalog.AllIncluded()},
 	}
-	_, err := metadata.BuildDocument(pm, opts)
-	assert.Error(t, err, "zero opts.Now must return an error")
+	_, err := catalog.BuildDocument(pm, opts)
+	assert.Error(t, err, "nil opts.Clock must return an error")
 }
 
 // ---- TestRelationsDeterministic ----
@@ -604,11 +586,11 @@ func TestRelationsDeterministic(t *testing.T) {
 	pm := fullPM()
 	opts := baseOpts()
 
-	first, err := metadata.BuildDocument(pm, opts)
+	first, err := catalog.BuildDocument(pm, opts)
 	require.NoError(t, err)
 
 	for i := 0; i < 100; i++ {
-		doc, err := metadata.BuildDocument(pm, opts)
+		doc, err := catalog.BuildDocument(pm, opts)
 		require.NoError(t, err)
 		require.Equal(t, len(first.Entities), len(doc.Entities))
 		for j := range first.Entities {
@@ -618,109 +600,8 @@ func TestRelationsDeterministic(t *testing.T) {
 	}
 }
 
-// ---- TestSchemaVersionFrozen / TestAPIVersionFrozen ----
-
-func TestSchemaVersionFrozen(t *testing.T) {
-	assert.Equal(t, "v1", metadata.SchemaVersionV1)
-}
-
-func TestAPIVersionFrozen(t *testing.T) {
-	assert.Equal(t, "gocell.io/v1alpha1", metadata.APIVersionV1)
-}
-
-// TestSchemaVersionLiteral hard-locks the exact literal values of
-// SchemaVersionV1 and APIVersionV1, independent of golden files.
-// Golden files can be regenerated via -update; this test cannot be bypassed.
-func TestSchemaVersionLiteral(t *testing.T) {
-	require.Equal(t, "v1", metadata.SchemaVersionV1)
-	require.Equal(t, "gocell.io/v1alpha1", metadata.APIVersionV1)
-}
-
-// ---- TestMarshalDocument_JSONGolden ----
-
-func TestMarshalDocument_JSONGolden(t *testing.T) {
-	pm := minimalPM()
-	opts := metadata.ExportOptions{
-		Now:    fixedNow,
-		Root:   "/projects/gocell",
-		Filter: metadata.Filter{Include: metadata.IncludeAll},
-	}
-	d, err := metadata.BuildDocument(pm, opts)
-	require.NoError(t, err)
-
-	got, err := metadata.MarshalDocument(d, "json")
-	require.NoError(t, err)
-
-	goldenPath := "testdata/golden/export_minimal.json"
-	if *update {
-		require.NoError(t, os.WriteFile(goldenPath, got, 0o644))
-	}
-	want, err := os.ReadFile(goldenPath)
-	require.NoError(t, err)
-	require.Equal(t, string(want), string(got))
-}
-
-// ---- TestMarshalDocument_YAMLGolden ----
-
-func TestMarshalDocument_YAMLGolden(t *testing.T) {
-	pm := fullPM()
-	opts := metadata.ExportOptions{
-		Now:    fixedNow,
-		Root:   "/projects/gocell",
-		Filter: metadata.Filter{Include: metadata.IncludeAll},
-	}
-	d, err := metadata.BuildDocument(pm, opts)
-	require.NoError(t, err)
-
-	got, err := metadata.MarshalDocument(d, "yaml")
-	require.NoError(t, err)
-
-	goldenPath := "testdata/golden/export_full.yaml"
-	if *update {
-		require.NoError(t, os.WriteFile(goldenPath, got, 0o644))
-	}
-	want, err := os.ReadFile(goldenPath)
-	require.NoError(t, err)
-	require.Equal(t, string(want), string(got))
-}
-
-// ---- TestMarshalDocument_FilteredGolden ----
-
-func TestMarshalDocument_FilteredGolden(t *testing.T) {
-	pm := fullPM()
-	cellDeps := &metadata.CellDepGraph{
-		Nodes: []string{"accesscore", "auditcore"},
-		Edges: []metadata.CellEdge{{From: "accesscore", To: "auditcore"}},
-	}
-	opts := metadata.ExportOptions{
-		Now:  fixedNow,
-		Root: "/projects/gocell",
-		Filter: metadata.Filter{
-			Cells:   []string{"accesscore"},
-			Include: metadata.IncludeCellDeps | metadata.IncludePackageDeps,
-		},
-		CellDeps: cellDeps,
-		Packages: &metadata.PackageDepsView{Status: "loading"},
-	}
-	d, err := metadata.BuildDocument(pm, opts)
-	require.NoError(t, err)
-
-	got, err := metadata.MarshalDocument(d, "json")
-	require.NoError(t, err)
-
-	goldenPath := "testdata/golden/export_filtered.json"
-	if *update {
-		require.NoError(t, os.WriteFile(goldenPath, got, 0o644))
-	}
-	want, err := os.ReadFile(goldenPath)
-	require.NoError(t, err)
-	require.Equal(t, string(want), string(got))
-}
-
 // ---- TestBuildDocument_FilterCellsFocus_L0Dep ----
 
-// TestBuildDocument_FilterCellsFocus_L0Dep verifies that when focus=[A] and A
-// has a L0 dependency on cell B, then B appears in the filtered entities.
 func TestBuildDocument_FilterCellsFocus_L0Dep(t *testing.T) {
 	pm := &metadata.ProjectMeta{
 		Cells: map[string]*metadata.CellMeta{
@@ -740,11 +621,11 @@ func TestBuildDocument_FilterCellsFocus_L0Dep(t *testing.T) {
 		Assemblies: map[string]*metadata.AssemblyMeta{},
 		Actors:     []metadata.ActorMeta{},
 	}
-	opts := metadata.ExportOptions{
-		Now:    fixedNow,
-		Filter: metadata.Filter{Cells: []string{"cella"}, Include: 0},
+	opts := catalog.ExportOptions{
+		Clock:  fixedClock(),
+		Filter: catalog.Filter{Cells: []string{"cella"}, Include: catalog.IncludeOptions{}},
 	}
-	doc, err := metadata.BuildDocument(pm, opts)
+	doc, err := catalog.BuildDocument(pm, opts)
 	require.NoError(t, err)
 
 	names := make([]string, 0, len(doc.Entities))
@@ -779,11 +660,11 @@ func TestBuildDocument_FilterCellsFocus_ContractClient(t *testing.T) {
 		Assemblies: map[string]*metadata.AssemblyMeta{},
 		Actors:     []metadata.ActorMeta{},
 	}
-	opts := metadata.ExportOptions{
-		Now:    fixedNow,
-		Filter: metadata.Filter{Cells: []string{"cella"}, Include: 0},
+	opts := catalog.ExportOptions{
+		Clock:  fixedClock(),
+		Filter: catalog.Filter{Cells: []string{"cella"}, Include: catalog.IncludeOptions{}},
 	}
-	doc, err := metadata.BuildDocument(pm, opts)
+	doc, err := catalog.BuildDocument(pm, opts)
 	require.NoError(t, err)
 
 	names := make([]string, 0, len(doc.Entities))
@@ -796,35 +677,30 @@ func TestBuildDocument_FilterCellsFocus_ContractClient(t *testing.T) {
 
 // ---- TestBuildDocument_DepsFilter_CellFocus ----
 
-// TestBuildDocument_DepsFilter_CellFocus verifies that when filter.Cells is
-// set, dependencies.cells.nodes only contains cells from the filtered entities.
 func TestBuildDocument_DepsFilter_CellFocus(t *testing.T) {
 	pm := fullPM()
-	cellDeps := &metadata.CellDepGraph{
+	cellDeps := &catalog.CellDepGraph{
 		Nodes: []string{"accesscore", "auditcore"},
-		Edges: []metadata.CellEdge{{From: "accesscore", To: "auditcore"}},
+		Edges: []catalog.CellEdge{{From: "accesscore", To: "auditcore"}},
 	}
-	opts := metadata.ExportOptions{
-		Now:  fixedNow,
-		Root: "/projects/gocell",
-		Filter: metadata.Filter{
+	opts := catalog.ExportOptions{
+		Clock: fixedClock(),
+		Root:  "/projects/gocell",
+		Filter: catalog.Filter{
 			Cells:   []string{"accesscore"},
-			Include: metadata.IncludeCellDeps,
+			Include: catalog.IncludeOptions{CellDeps: true},
 		},
 		CellDeps: cellDeps,
 	}
-	doc, err := metadata.BuildDocument(pm, opts)
+	doc, err := catalog.BuildDocument(pm, opts)
 	require.NoError(t, err)
 	require.NotNil(t, doc.Dependencies)
 	require.NotNil(t, doc.Dependencies.Cells)
 
-	// Only accesscore (the focused cell) should appear in nodes; auditcore is
-	// not a first-order neighbor of accesscore in the contract graph.
 	for _, n := range doc.Dependencies.Cells.Nodes {
 		assert.NotEqual(t, "auditcore", n,
 			"auditcore must not appear in filtered cellDeps.Nodes when focus=[accesscore]")
 	}
-	// No edge from accesscore→auditcore since auditcore is filtered out.
 	for _, e := range doc.Dependencies.Cells.Edges {
 		assert.False(t, e.From == "accesscore" && e.To == "auditcore",
 			"edge accesscore→auditcore must not appear when auditcore is filtered")
@@ -846,16 +722,16 @@ func TestBuildDocument_DepsFilter_Layers(t *testing.T) {
 	}
 	g := kerneldepgraph.FromNodes("github.com/foo/bar", []*kerneldepgraph.Node{cellsNode, kernelNode})
 	pm := minimalPM()
-	opts := metadata.ExportOptions{
-		Now:  fixedNow,
-		Root: "/projects/gocell",
-		Filter: metadata.Filter{
+	opts := catalog.ExportOptions{
+		Clock: fixedClock(),
+		Root:  "/projects/gocell",
+		Filter: catalog.Filter{
 			Layers:  []string{"cells"},
-			Include: metadata.IncludePackageDeps,
+			Include: catalog.IncludeOptions{PackageDeps: true},
 		},
-		Packages: &metadata.PackageDepsView{Status: "ready", Graph: g},
+		Packages: &catalog.PackageDepsView{Graph: g},
 	}
-	doc, err := metadata.BuildDocument(pm, opts)
+	doc, err := catalog.BuildDocument(pm, opts)
 	require.NoError(t, err)
 	require.NotNil(t, doc.Dependencies)
 	require.NotNil(t, doc.Dependencies.Packages)
@@ -889,16 +765,16 @@ func TestBuildDocument_DepsFilter_PackageCells(t *testing.T) {
 	}
 	g := kerneldepgraph.FromNodes("github.com/foo/bar", []*kerneldepgraph.Node{accessNode, auditNode, kernelNode})
 	pm := fullPM()
-	opts := metadata.ExportOptions{
-		Now:  fixedNow,
-		Root: "/projects/gocell",
-		Filter: metadata.Filter{
+	opts := catalog.ExportOptions{
+		Clock: fixedClock(),
+		Root:  "/projects/gocell",
+		Filter: catalog.Filter{
 			Cells:   []string{"accesscore"},
-			Include: metadata.IncludePackageDeps,
+			Include: catalog.IncludeOptions{PackageDeps: true},
 		},
-		Packages: &metadata.PackageDepsView{Status: "ready", Graph: g},
+		Packages: &catalog.PackageDepsView{Graph: g},
 	}
-	doc, err := metadata.BuildDocument(pm, opts)
+	doc, err := catalog.BuildDocument(pm, opts)
 	require.NoError(t, err)
 	require.NotNil(t, doc.Dependencies)
 	require.NotNil(t, doc.Dependencies.Packages)
@@ -911,101 +787,162 @@ func TestBuildDocument_DepsFilter_PackageCells(t *testing.T) {
 	assert.Equal(t, []string{"github.com/foo/bar/cells/accesscore/session"}, ids)
 }
 
-// ---- TestMarshalDocument_BadFormat ----
+// ---- NEW TESTS (A5 specification) ----
 
-func TestMarshalDocument_BadFormat(t *testing.T) {
-	d := metadata.Document{}
-	_, err := metadata.MarshalDocument(d, "xml")
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "xml")
+// TestBuildDocument_Redaction_AllStates verifies risk/blocker redaction for all
+// status board states: draft/planned are redacted; doing/blocked/ready are not.
+func TestBuildDocument_Redaction_AllStates(t *testing.T) {
+	cases := []struct {
+		state      string
+		risk       string
+		blocker    string
+		wantRedact bool
+	}{
+		{state: "draft", risk: "high", blocker: "blocker text", wantRedact: true},
+		{state: "planned", risk: "medium", blocker: "another blocker", wantRedact: true},
+		{state: "doing", risk: "low", blocker: "doing blocker", wantRedact: false},
+		{state: "blocked", risk: "high", blocker: "blocked note", wantRedact: false},
+		{state: "ready", risk: "none", blocker: "ready note", wantRedact: false},
+	}
+
+	for _, tc := range cases {
+		t.Run("state="+tc.state, func(t *testing.T) {
+			pm := &metadata.ProjectMeta{
+				Cells:      map[string]*metadata.CellMeta{},
+				Slices:     map[string]*metadata.SliceMeta{},
+				Contracts:  map[string]*metadata.ContractMeta{},
+				Journeys:   map[string]*metadata.JourneyMeta{},
+				Assemblies: map[string]*metadata.AssemblyMeta{},
+				Actors:     []metadata.ActorMeta{},
+				StatusBoard: []metadata.StatusBoardEntry{
+					{
+						JourneyID: "J-test",
+						State:     tc.state,
+						Risk:      tc.risk,
+						Blocker:   tc.blocker,
+						UpdatedAt: "2026-05-04",
+					},
+				},
+			}
+			opts := catalog.ExportOptions{
+				Clock:  fixedClock(),
+				Filter: catalog.Filter{Include: catalog.IncludeOptions{StatusBoard: true}},
+			}
+			doc, err := catalog.BuildDocument(pm, opts)
+			require.NoError(t, err)
+			require.Len(t, doc.StatusBoard, 1)
+
+			entry := doc.StatusBoard[0]
+			assert.Equal(t, tc.state, entry.State, "state must be preserved")
+			if tc.wantRedact {
+				assert.Empty(t, entry.Risk, "risk must be redacted for state=%s", tc.state)
+				assert.Empty(t, entry.Blocker, "blocker must be redacted for state=%s", tc.state)
+			} else {
+				assert.Equal(t, tc.risk, entry.Risk, "risk must be preserved for state=%s", tc.state)
+				assert.Equal(t, tc.blocker, entry.Blocker, "blocker must be preserved for state=%s", tc.state)
+			}
+		})
+	}
 }
 
-// ---- TestMarshalDocument_EmptyDocument ----
+// TestBuildDocument_Filter_MultiDim verifies multi-dimensional filter combinations.
+func TestBuildDocument_Filter_MultiDim(t *testing.T) {
+	pm := fullPM()
 
-func TestMarshalDocument_EmptyDocument(t *testing.T) {
-	d := metadata.Document{}
-	got, err := metadata.MarshalDocument(d, "json")
+	// kinds×cells: only Cell entities for accesscore
+	t.Run("kinds=Cell,cells=accesscore", func(t *testing.T) {
+		opts := catalog.ExportOptions{
+			Clock: fixedClock(),
+			Filter: catalog.Filter{
+				Kinds:   []string{"Cell"},
+				Cells:   []string{"accesscore"},
+				Include: catalog.IncludeOptions{},
+			},
+		}
+		doc, err := catalog.BuildDocument(pm, opts)
+		require.NoError(t, err)
+		for _, e := range doc.Entities {
+			assert.Equal(t, "Cell", e.Kind, "only Cell entities should appear")
+		}
+		assert.Len(t, doc.Entities, 1, "only accesscore cell entity expected")
+	})
+
+	// kinds×layers: kinds=Cell,Slice and layers=cells must give same result as layers=cells alone
+	t.Run("kinds=Cell+Slice,layers=cells", func(t *testing.T) {
+		opts := catalog.ExportOptions{
+			Clock: fixedClock(),
+			Filter: catalog.Filter{
+				Kinds:   []string{"Cell", "Slice"},
+				Layers:  []string{"cells"},
+				Include: catalog.IncludeOptions{},
+			},
+		}
+		doc, err := catalog.BuildDocument(pm, opts)
+		require.NoError(t, err)
+		for _, e := range doc.Entities {
+			assert.Contains(t, []string{"Cell", "Slice"}, e.Kind)
+		}
+	})
+
+	// Three-dimensional: kinds + layers + cells
+	t.Run("kinds=Slice,layers=cells,cells=accesscore", func(t *testing.T) {
+		opts := catalog.ExportOptions{
+			Clock: fixedClock(),
+			Filter: catalog.Filter{
+				Kinds:   []string{"Slice"},
+				Layers:  []string{"cells"},
+				Cells:   []string{"accesscore"},
+				Include: catalog.IncludeOptions{},
+			},
+		}
+		doc, err := catalog.BuildDocument(pm, opts)
+		require.NoError(t, err)
+		for _, e := range doc.Entities {
+			assert.Equal(t, "Slice", e.Kind, "only Slice entities expected")
+			spec, ok := e.Spec.(catalog.SliceSpec)
+			require.True(t, ok)
+			assert.Equal(t, "accesscore", spec.BelongsToCell, "slice must belong to accesscore")
+		}
+	})
+}
+
+// TestBuildDocument_GeneratedAt_HonorsInjectedClock verifies that the clock
+// injection is respected: GeneratedAt == injected clock time.
+func TestBuildDocument_GeneratedAt_HonorsInjectedClock(t *testing.T) {
+	injected := time.Date(2024, 3, 15, 9, 30, 0, 0, time.UTC)
+	clk := clockmock.New(injected)
+	pm := minimalPM()
+	opts := catalog.ExportOptions{
+		Clock:  clk,
+		Filter: catalog.Filter{Include: catalog.IncludeOptions{}},
+	}
+	doc, err := catalog.BuildDocument(pm, opts)
+	require.NoError(t, err)
+	assert.Equal(t, injected.UTC().Format(time.RFC3339), doc.GeneratedAt,
+		"GeneratedAt must equal injected clock time")
+}
+
+// TestBuildDocument_PackageDeps_NoStatusField verifies that PackageDepsView
+// wire output does not contain a "status" key in the JSON output (A4 compliance).
+func TestBuildDocument_PackageDeps_NoStatusField(t *testing.T) {
+	pm := minimalPM()
+	g := &kerneldepgraph.Graph{}
+	opts := catalog.ExportOptions{
+		Clock: fixedClock(),
+		Filter: catalog.Filter{
+			Include: catalog.IncludeOptions{PackageDeps: true},
+		},
+		Packages: &catalog.PackageDepsView{Graph: g},
+	}
+	doc, err := catalog.BuildDocument(pm, opts)
 	require.NoError(t, err)
 
-	var m map[string]any
-	require.NoError(t, json.Unmarshal(got, &m))
-	assert.Contains(t, m, "schemaVersion", "schemaVersion field must be present")
-	assert.Contains(t, m, "apiVersion", "apiVersion field must be present")
-}
+	// Marshal to JSON and verify no "status" key appears in packages block.
+	body, err := catalog.MarshalDocument(doc, "json")
+	require.NoError(t, err)
 
-// ---- TestCamelCaseTags ----
-
-func TestCamelCaseTags(t *testing.T) {
-	roots := []any{
-		metadata.Document{},
-		metadata.Entity{},
-		metadata.EntityMetadata{},
-		metadata.Relation{},
-		metadata.Dependencies{},
-		metadata.CellDepGraph{},
-		metadata.CellEdge{},
-		metadata.PackageDepsView{},
-		metadata.FilterEcho{},
-		metadata.CellSpec{},
-		metadata.CellSpecOwner{},
-		metadata.CellSpecSchema{},
-		metadata.CellSpecL0Dep{},
-		metadata.SliceSpec{},
-		metadata.SliceSpecContractUsage{},
-		metadata.ContractSpec{},
-		metadata.JourneySpec{},
-		metadata.JourneyPassCrit{},
-		metadata.AssemblySpec{},
-		metadata.AssemblySpecBuild{},
-		metadata.ActorSpec{},
-		metadata.StatusBoardEntry{},
-	}
-
-	for _, root := range roots {
-		typ := reflect.TypeOf(root)
-		checkExportTags(t, typ, typ.Name())
-	}
-}
-
-func checkExportTags(t *testing.T, typ reflect.Type, path string) {
-	t.Helper()
-	for typ.Kind() == reflect.Ptr {
-		typ = typ.Elem()
-	}
-	if typ.Kind() != reflect.Struct {
-		return
-	}
-	for i := range typ.NumField() {
-		f := typ.Field(i)
-		if !f.IsExported() {
-			continue
-		}
-		fieldPath := path + "." + f.Name
-		jsonTag, hasJSON := f.Tag.Lookup("json")
-		yamlTag, hasYAML := f.Tag.Lookup("yaml")
-
-		if !hasJSON || !hasYAML {
-			t.Errorf("field %s missing json or yaml tag (json=%v, yaml=%v)", fieldPath, hasJSON, hasYAML)
-			continue
-		}
-
-		jsonName := strings.Split(jsonTag, ",")[0]
-		yamlName := strings.Split(yamlTag, ",")[0]
-
-		if jsonName == "-" || yamlName == "-" {
-			continue
-		}
-		if jsonName == "" || yamlName == "" {
-			continue
-		}
-
-		// json tag must start with lowercase
-		if len(jsonName) > 0 && jsonName[0] >= 'A' && jsonName[0] <= 'Z' {
-			t.Errorf("field %s json tag %q starts with uppercase", fieldPath, jsonName)
-		}
-		// json and yaml tag names must match
-		if jsonName != yamlName {
-			t.Errorf("field %s json tag %q != yaml tag %q", fieldPath, jsonName, yamlName)
-		}
-	}
+	// The JSON must not contain a "status" key at all in this output.
+	bodyStr := string(body)
+	assert.NotContains(t, bodyStr, `"status"`,
+		"PackageDepsView wire output must not contain 'status' key (A4 compliance)")
 }

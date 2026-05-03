@@ -30,6 +30,7 @@ import (
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/query"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
+	"github.com/ghbvf/gocell/runtime/auth"
 )
 
 type noopTxRunner struct{}
@@ -137,7 +138,7 @@ func TestService_CreateAdmin_FreshSystem_Creates_EmitsEvent(t *testing.T) {
 	assert.NoError(t, parseErr, "user ID must be a valid UUID")
 
 	// Verify admin role assigned
-	cnt, err := roleRepo.CountByRole(context.Background(), domain.RoleAdmin)
+	cnt, err := roleRepo.CountByRole(context.Background(), auth.RoleAdmin)
 	require.NoError(t, err)
 	assert.Equal(t, 1, cnt)
 
@@ -187,7 +188,7 @@ func TestService_CreateAdmin_OrphanRecovered_ReturnsUser_EmitsEvent(t *testing.T
 	assert.Equal(t, dto.TopicUserCreated, w.entries[0].EventType)
 
 	// Admin role now assigned to the orphan user.
-	cnt, err := roleRepo.CountByRole(context.Background(), domain.RoleAdmin)
+	cnt, err := roleRepo.CountByRole(context.Background(), auth.RoleAdmin)
 	require.NoError(t, err)
 	assert.Equal(t, 1, cnt)
 }
@@ -376,7 +377,7 @@ func TestService_CreateAdmin_Concurrent_OnlyOneSucceeds(t *testing.T) {
 	assert.Equal(t, workers-1, retires, "all other callers must see retired")
 
 	// Final authoritative count is 1.
-	cnt, err := roleRepo.CountByRole(context.Background(), domain.RoleAdmin)
+	cnt, err := roleRepo.CountByRole(context.Background(), auth.RoleAdmin)
 	require.NoError(t, err)
 	assert.Equal(t, 1, cnt)
 }
@@ -440,7 +441,7 @@ func TestService_CreateAdmin_BootstrapPendingDuplicate_Returns409WithoutTakeover
 	assert.True(t, refreshed.PasswordResetRequired)
 	assert.Equal(t, domain.UserSourceBootstrap, refreshed.CreationSource)
 	assert.Equal(t, domain.ProvisionStatePending, refreshed.ProvisionState)
-	cnt, err := roleRepo.CountByRole(context.Background(), domain.RoleAdmin)
+	cnt, err := roleRepo.CountByRole(context.Background(), auth.RoleAdmin)
 	require.NoError(t, err)
 	assert.Equal(t, 0, cnt)
 }
@@ -508,8 +509,8 @@ func seedAdmin(t *testing.T, userRepo ports.UserRepository, roleRepo ports.RoleR
 	require.NoError(t, err)
 	u.ID = "usr-seed"
 	require.NoError(t, userRepo.Create(context.Background(), u))
-	require.NoError(t, roleRepo.Create(context.Background(), &domain.Role{ID: domain.RoleAdmin, Name: domain.RoleAdmin}))
-	_, err = roleRepo.AssignToUser(context.Background(), u.ID, domain.RoleAdmin)
+	require.NoError(t, roleRepo.Create(context.Background(), &domain.Role{ID: auth.RoleAdmin, Name: auth.RoleAdmin}))
+	_, err = roleRepo.AssignToUser(context.Background(), u.ID, auth.RoleAdmin)
 	require.NoError(t, err)
 }
 
@@ -531,7 +532,7 @@ func (r *countErrRoleRepo) RemoveFromUserIfNotLast(_ context.Context, _, _ strin
 	return true, nil
 }
 func (r *countErrRoleRepo) GetByID(_ context.Context, _ string) (*domain.Role, error) {
-	return &domain.Role{ID: domain.RoleAdmin}, nil
+	return &domain.Role{ID: auth.RoleAdmin}, nil
 }
 func (r *countErrRoleRepo) ListByUserID(_ context.Context, _ string, _ query.ListParams) ([]*domain.Role, error) {
 	return nil, nil

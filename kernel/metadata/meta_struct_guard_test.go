@@ -7,6 +7,7 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/metadata"
 	"github.com/ghbvf/gocell/pkg/contracts"
+	"github.com/ghbvf/gocell/runtime/devtools/catalog"
 )
 
 // allowedInlineFields lists struct fields that are explicitly permitted to
@@ -161,30 +162,30 @@ func shortPath(path string) string {
 // TestExportStructs_NoMapCatchall asserts that none of the export wire structs
 // carry map[string]any or yaml:",inline" fields, preserving the same G-1
 // invariant the metadata structs must uphold. These structs are part of the
-// Document wire format and must remain predictable.
+// Document wire format (now in runtime/devtools/catalog) and must remain predictable.
 func TestExportStructs_NoMapCatchall(t *testing.T) {
 	roots := []any{
-		metadata.Document{},
-		metadata.Entity{},
-		metadata.EntityMetadata{},
-		metadata.Relation{},
-		metadata.Dependencies{},
-		metadata.CellDepGraph{},
-		metadata.CellEdge{},
-		metadata.PackageDepsView{},
-		metadata.FilterEcho{},
-		metadata.CellSpec{},
-		metadata.CellSpecOwner{},
-		metadata.CellSpecSchema{},
-		metadata.CellSpecL0Dep{},
-		metadata.SliceSpec{},
-		metadata.SliceSpecContractUsage{},
-		metadata.ContractSpec{},
-		metadata.JourneySpec{},
-		metadata.JourneyPassCrit{},
-		metadata.AssemblySpec{},
-		metadata.AssemblySpecBuild{},
-		metadata.ActorSpec{},
+		catalog.Document{},
+		catalog.Entity{},
+		catalog.EntityMetadata{},
+		catalog.Relation{},
+		catalog.Dependencies{},
+		catalog.CellDepGraph{},
+		catalog.CellEdge{},
+		catalog.PackageDepsView{},
+		catalog.FilterEcho{},
+		catalog.CellSpec{},
+		catalog.CellSpecOwner{},
+		catalog.CellSpecSchema{},
+		catalog.CellSpecL0Dep{},
+		catalog.SliceSpec{},
+		catalog.SliceSpecContractUsage{},
+		catalog.ContractSpec{},
+		catalog.JourneySpec{},
+		catalog.JourneyPassCrit{},
+		catalog.AssemblySpec{},
+		catalog.AssemblySpecBuild{},
+		catalog.ActorSpec{},
 	}
 	for _, root := range roots {
 		typ := reflect.TypeOf(root)

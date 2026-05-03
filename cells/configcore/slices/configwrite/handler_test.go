@@ -47,7 +47,7 @@ func (s *stubTxRunner) RunInTx(ctx context.Context, fn func(context.Context) err
 // non-auth logic (e.g. validation, business errors) and need to pass the
 // auth guard.
 func withAdmin(req *http.Request) *http.Request {
-	return req.WithContext(auth.TestContext(testAdminSubject, []string{dto.RoleAdmin}))
+	return req.WithContext(auth.TestContext(testAdminSubject, []string{auth.RoleAdmin}))
 }
 
 // --- handler tests ---
@@ -369,7 +369,7 @@ func TestHandler_Authz_Create(t *testing.T) {
 	}{
 		{"no_auth", "", nil, false, http.StatusUnauthorized, "ERR_AUTH_UNAUTHORIZED"},
 		{"non_admin", "user-1", []string{"viewer"}, true, http.StatusForbidden, "ERR_AUTH_FORBIDDEN"},
-		{"admin", testAdminSubject, []string{dto.RoleAdmin}, true, http.StatusCreated, ""},
+		{"admin", testAdminSubject, []string{auth.RoleAdmin}, true, http.StatusCreated, ""},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -409,8 +409,8 @@ func TestHandler_Authz_Update(t *testing.T) {
 	}{
 		{"no_auth", "", nil, false, nil, "/nonexistent", http.StatusUnauthorized, "ERR_AUTH_UNAUTHORIZED"},
 		{"non_admin", "user-1", []string{"viewer"}, true, nil, "/nonexistent", http.StatusForbidden, "ERR_AUTH_FORBIDDEN"},
-		{"admin", testAdminSubject, []string{dto.RoleAdmin}, true, nil, "/nonexistent", http.StatusNotFound, ""},
-		{"admin_success", testAdminSubject, []string{dto.RoleAdmin}, true, func(r *mem.ConfigRepository) {
+		{"admin", testAdminSubject, []string{auth.RoleAdmin}, true, nil, "/nonexistent", http.StatusNotFound, ""},
+		{"admin_success", testAdminSubject, []string{auth.RoleAdmin}, true, func(r *mem.ConfigRepository) {
 			now := time.Now()
 			_ = r.Create(context.Background(), &domain.ConfigEntry{
 				ID: "au-1", Key: "test.update", Value: "v", Version: 1, CreatedAt: now, UpdatedAt: now,
@@ -458,8 +458,8 @@ func TestHandler_Authz_Delete(t *testing.T) {
 	}{
 		{"no_auth", "", nil, false, nil, "/nonexistent", http.StatusUnauthorized, "ERR_AUTH_UNAUTHORIZED"},
 		{"non_admin", "user-1", []string{"viewer"}, true, nil, "/nonexistent", http.StatusForbidden, "ERR_AUTH_FORBIDDEN"},
-		{"admin", testAdminSubject, []string{dto.RoleAdmin}, true, nil, "/nonexistent", http.StatusNotFound, ""},
-		{"admin_success", testAdminSubject, []string{dto.RoleAdmin}, true, func(r *mem.ConfigRepository) {
+		{"admin", testAdminSubject, []string{auth.RoleAdmin}, true, nil, "/nonexistent", http.StatusNotFound, ""},
+		{"admin_success", testAdminSubject, []string{auth.RoleAdmin}, true, func(r *mem.ConfigRepository) {
 			now := time.Now()
 			_ = r.Create(context.Background(), &domain.ConfigEntry{
 				ID: "ad-1", Key: "test.delete", Value: "v", Version: 1, CreatedAt: now, UpdatedAt: now,

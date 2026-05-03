@@ -124,10 +124,10 @@ func newE2EFixture() *e2eFixture {
 	// Policies are declared via auth.Mount to match production wiring.
 	mux := celltest.NewTestMux()
 	h := NewHandler(idmSvc)
-	auth.MustMount(mux, auth.Route{Contract: testHTTPContract("POST", "/api/v1/access/users"), Handler: http.HandlerFunc(h.handleCreate), Policy: auth.AnyRole(domain.RoleAdmin)})
-	auth.MustMount(mux, auth.Route{Contract: testHTTPContract("GET", "/api/v1/access/users/{id}"), Handler: http.HandlerFunc(h.handleGet), Policy: auth.SelfOr("id", domain.RoleAdmin)})
-	auth.MustMount(mux, auth.Route{Contract: testHTTPContract("PATCH", "/api/v1/access/users/{id}"), Handler: http.HandlerFunc(h.handlePatch), Policy: auth.SelfOr("id", domain.RoleAdmin)})
-	auth.MustMount(mux, auth.Route{Contract: testHTTPContract("POST", "/api/v1/access/users/{id}/password"), Handler: http.HandlerFunc(h.handleChangePassword), Policy: auth.SelfOr("id", domain.RoleAdmin)})
+	auth.MustMount(mux, auth.Route{Contract: testHTTPContract("POST", "/api/v1/access/users"), Handler: http.HandlerFunc(h.handleCreate), Policy: auth.AnyRole(auth.RoleAdmin)})
+	auth.MustMount(mux, auth.Route{Contract: testHTTPContract("GET", "/api/v1/access/users/{id}"), Handler: http.HandlerFunc(h.handleGet), Policy: auth.SelfOr("id", auth.RoleAdmin)})
+	auth.MustMount(mux, auth.Route{Contract: testHTTPContract("PATCH", "/api/v1/access/users/{id}"), Handler: http.HandlerFunc(h.handlePatch), Policy: auth.SelfOr("id", auth.RoleAdmin)})
+	auth.MustMount(mux, auth.Route{Contract: testHTTPContract("POST", "/api/v1/access/users/{id}/password"), Handler: http.HandlerFunc(h.handleChangePassword), Policy: auth.SelfOr("id", auth.RoleAdmin)})
 
 	return &e2eFixture{
 		mux:         mux,
@@ -156,12 +156,12 @@ func bootstrapAdminUser(t *testing.T, f *e2eFixture, username, plainPassword str
 
 	// Assign admin role.
 	adminRole := &domain.Role{
-		ID:          domain.RoleAdmin,
-		Name:        domain.RoleAdmin,
+		ID:          auth.RoleAdmin,
+		Name:        auth.RoleAdmin,
 		Permissions: []domain.Permission{{Resource: "*", Action: "*"}},
 	}
 	_ = f.roleRepo.Create(context.Background(), adminRole)
-	_, err = f.roleRepo.AssignToUser(context.Background(), user.ID, domain.RoleAdmin)
+	_, err = f.roleRepo.AssignToUser(context.Background(), user.ID, auth.RoleAdmin)
 	require.NoError(t, err)
 
 	return user.ID
@@ -250,7 +250,7 @@ func TestChangePassword_FullFlow(t *testing.T) {
 	cpReq := httptest.NewRequest(http.MethodPost, "/api/v1/access/users/"+userID+"/password",
 		bytes.NewReader(cpBody))
 	cpReq.Header.Set("Content-Type", "application/json")
-	cpReq = cpReq.WithContext(auth.TestContext(userID, []string{domain.RoleAdmin}))
+	cpReq = cpReq.WithContext(auth.TestContext(userID, []string{auth.RoleAdmin}))
 	cpW := httptest.NewRecorder()
 	f.mux.ServeHTTP(cpW, cpReq)
 	require.Equal(t, http.StatusOK, cpW.Code, "ChangePassword must return 200; body=%s", cpW.Body.String())
@@ -275,7 +275,7 @@ func TestChangePassword_FullFlow(t *testing.T) {
 
 	// --- Step 6: GET succeeds with new token (unblocked) ---
 	getReq := httptest.NewRequest(http.MethodGet, "/api/v1/access/users/"+userID, nil)
-	getReq = getReq.WithContext(auth.TestContext(userID, []string{domain.RoleAdmin}))
+	getReq = getReq.WithContext(auth.TestContext(userID, []string{auth.RoleAdmin}))
 	getW := httptest.NewRecorder()
 	f.mux.ServeHTTP(getW, getReq)
 	assert.Equal(t, http.StatusOK, getW.Code, "GET must succeed after password change")
@@ -294,7 +294,7 @@ func TestChangePassword_RejectsBadOldPassword(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/access/users/"+userID+"/password",
 		bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
-	req = req.WithContext(auth.TestContext(userID, []string{domain.RoleAdmin}))
+	req = req.WithContext(auth.TestContext(userID, []string{auth.RoleAdmin}))
 	w := httptest.NewRecorder()
 	f.mux.ServeHTTP(w, req)
 

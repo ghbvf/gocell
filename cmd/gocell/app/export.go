@@ -12,6 +12,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/governance"
 	"github.com/ghbvf/gocell/kernel/metadata"
 	"github.com/ghbvf/gocell/pkg/csvparam"
+	"github.com/ghbvf/gocell/runtime/devtools/catalog"
 	"github.com/ghbvf/gocell/tools/depgraph"
 )
 
@@ -19,12 +20,12 @@ import (
 var validIncludeTokens = []string{"cellDeps", "packageDeps", "relations", "statusBoard"}
 
 // validKinds is the set of accepted --kinds= tokens.
-// References metadata.AllKinds — single source of truth.
-var validKinds = metadata.AllKinds
+// References catalog.AllKinds — single source of truth.
+var validKinds = catalog.AllKinds
 
 // validLayers is the set of accepted --layers= tokens.
-// References metadata.AllLayers — single source of truth.
-var validLayersList = metadata.AllLayers
+// References catalog.AllLayers — single source of truth.
+var validLayersList = catalog.AllLayers
 
 // runExport dispatches `export <subcommand>` to its handler. catalog and
 // metadata are byte-equal aliases sharing exportCatalog as the implementation.
@@ -74,8 +75,8 @@ func exportCatalog(args []string) error {
 		return err
 	}
 
-	opts := metadata.ExportOptions{
-		Now:    clock.Real().Now().UTC(),
+	opts := catalog.ExportOptions{
+		Clock:  clock.Real(),
 		Root:   rootDir,
 		Filter: filter,
 	}
@@ -88,12 +89,12 @@ func exportCatalog(args []string) error {
 		return err
 	}
 
-	doc, err := metadata.BuildDocument(pm, opts)
+	doc, err := catalog.BuildDocument(pm, opts)
 	if err != nil {
 		return err
 	}
 
-	body, err := metadata.MarshalDocument(doc, *format)
+	body, err := catalog.MarshalDocument(doc, *format)
 	if err != nil {
 		return err
 	}
@@ -101,9 +102,9 @@ func exportCatalog(args []string) error {
 	return writeOut(*out, body)
 }
 
-// attachCellDeps populates opts.CellDeps when IncludeCellDeps is set in the filter.
-func attachCellDeps(opts *metadata.ExportOptions, filter metadata.Filter, pm *metadata.ProjectMeta) error {
-	if filter.Include&metadata.IncludeCellDeps == 0 {
+// attachCellDeps populates opts.CellDeps when CellDeps is set in the filter.
+func attachCellDeps(opts *catalog.ExportOptions, filter catalog.Filter, pm *metadata.ProjectMeta) error {
+	if !filter.Include.CellDeps {
 		return nil
 	}
 	cd, errs := governance.NewDependencyChecker(pm).Graph()
@@ -114,11 +115,11 @@ func attachCellDeps(opts *metadata.ExportOptions, filter metadata.Filter, pm *me
 	return nil
 }
 
-// attachPackageDeps populates opts.Packages when IncludePackageDeps is set in
-// the filter. Load failures are degraded gracefully: the export continues with
-// a PackageDepsView{Status: "error"} so all other blocks remain intact.
-func attachPackageDeps(opts *metadata.ExportOptions, filter metadata.Filter, rootDir string) error {
-	if filter.Include&metadata.IncludePackageDeps == 0 {
+// attachPackageDeps populates opts.Packages when PackageDeps is set in the
+// filter. Load failures are degraded gracefully: the export continues with
+// a PackageDepsView{Error: "..."} so all other blocks remain intact.
+func attachPackageDeps(opts *catalog.ExportOptions, filter catalog.Filter, rootDir string) error {
+	if !filter.Include.PackageDeps {
 		return nil
 	}
 	g, err := depgraph.Load(depgraph.LoadOptions{Dir: rootDir}, "./...")
@@ -127,13 +128,12 @@ func attachPackageDeps(opts *metadata.ExportOptions, filter metadata.Filter, roo
 			slog.String("root", rootDir),
 			slog.Any("error", err),
 		)
-		opts.Packages = &metadata.PackageDepsView{
-			Status: "error",
-			Error:  "package dep load failed",
+		opts.Packages = &catalog.PackageDepsView{
+			Error: "package dep load failed",
 		}
 		return nil
 	}
-	opts.Packages = &metadata.PackageDepsView{Status: "ready", Graph: g}
+	opts.Packages = &catalog.PackageDepsView{Graph: g}
 	return nil
 }
 
@@ -166,69 +166,68 @@ func loadProjectMeta(root string) (*metadata.ProjectMeta, error) {
 	return pm, nil
 }
 
-// buildFilter constructs a metadata.Filter from comma-separated CLI arguments.
+// buildFilter constructs a catalog.Filter from comma-separated CLI arguments.
 // Returns an error if any token is unrecognized.
-func buildFilter(kinds, layers, cells, include string) (metadata.Filter, error) {
+func buildFilter(kinds, layers, cells, include string) (catalog.Filter, error) {
 	parsedKinds, err := csvparam.ParseAllowed(kinds, validKinds, "kinds")
 	if err != nil {
-		return metadata.Filter{}, fmt.Errorf("export: %w", err)
+		return catalog.Filter{}, fmt.Errorf("export: %w", err)
 	}
 
 	parsedLayers, err := csvparam.ParseAllowed(layers, validLayersList, "layers")
 	if err != nil {
-		return metadata.Filter{}, fmt.Errorf("export: %w", err)
+		return catalog.Filter{}, fmt.Errorf("export: %w", err)
 	}
 	parsedCells := csvparam.Parse(cells)
 
-	mask, err := parseInclude(include)
+	inc, err := parseInclude(include)
 	if err != nil {
-		return metadata.Filter{}, err
+		return catalog.Filter{}, err
 	}
 
-	return metadata.Filter{
+	return catalog.Filter{
 		Kinds:   parsedKinds,
 		Layers:  parsedLayers,
 		Cells:   parsedCells,
-		Include: mask,
+		Include: inc,
 	}, nil
 }
 
-// includeTokenToMask maps the wire token name to its IncludeMask bit.
-var includeTokenToMask = map[string]metadata.IncludeMask{
-	"cellDeps":    metadata.IncludeCellDeps,
-	"packageDeps": metadata.IncludePackageDeps,
-	"relations":   metadata.IncludeRelations,
-	"statusBoard": metadata.IncludeStatusBoard,
-}
-
-// parseInclude converts a comma-separated include token string to an IncludeMask.
+// parseInclude converts a comma-separated include token string to an IncludeOptions.
 // An empty string returns zero (nothing included). Unknown tokens return an error.
-func parseInclude(s string) (metadata.IncludeMask, error) {
+func parseInclude(s string) (catalog.IncludeOptions, error) {
 	tokens, err := csvparam.ParseAllowed(s, validIncludeTokens, "include")
 	if err != nil {
-		return 0, fmt.Errorf("export: %w", err)
+		return catalog.IncludeOptions{}, fmt.Errorf("export: %w", err)
 	}
-	var mask metadata.IncludeMask
+	var inc catalog.IncludeOptions
 	for _, tok := range tokens {
-		bit, ok := includeTokenToMask[tok]
-		if !ok {
-			return 0, fmt.Errorf("export: %w", csvparam.UnknownTokenError{
+		switch tok {
+		case "cellDeps":
+			inc.CellDeps = true
+		case "packageDeps":
+			inc.PackageDeps = true
+		case "relations":
+			inc.Relations = true
+		case "statusBoard":
+			inc.StatusBoard = true
+		default:
+			return catalog.IncludeOptions{}, fmt.Errorf("export: %w", csvparam.UnknownTokenError{
 				Param:   "include",
 				Allowed: validIncludeTokens,
 			})
 		}
-		mask |= bit
 	}
-	return mask, nil
+	return inc, nil
 }
 
-// toMetadataCellDepGraph converts a governance.Graph to *metadata.CellDepGraph.
-func toMetadataCellDepGraph(g governance.Graph) *metadata.CellDepGraph {
-	edges := make([]metadata.CellEdge, 0, len(g.Edges))
+// toMetadataCellDepGraph converts a governance.Graph to *catalog.CellDepGraph.
+func toMetadataCellDepGraph(g governance.Graph) *catalog.CellDepGraph {
+	edges := make([]catalog.CellEdge, 0, len(g.Edges))
 	for _, e := range g.Edges {
-		edges = append(edges, metadata.CellEdge{From: e.From, To: e.To})
+		edges = append(edges, catalog.CellEdge{From: e.From, To: e.To})
 	}
-	return &metadata.CellDepGraph{
+	return &catalog.CellDepGraph{
 		Nodes: g.Nodes,
 		Edges: edges,
 	}

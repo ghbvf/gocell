@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/ghbvf/gocell/cells/configcore/internal/domain"
-	"github.com/ghbvf/gocell/cells/configcore/internal/dto"
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/wrapper"
 	"github.com/ghbvf/gocell/pkg/errcode"
@@ -225,28 +224,28 @@ func (h *Handler) RegisterRoutes(mux cell.RouteHandler) error {
 	if err := auth.Mount(mux, auth.Route{
 		Contract: specFlagsCreate,
 		Handler:  http.HandlerFunc(h.HandleCreate),
-		Policy:   auth.AnyRole(dto.RoleAdmin),
+		Policy:   auth.AnyRole(auth.RoleAdmin),
 	}); err != nil {
 		return err
 	}
 	if err := auth.Mount(mux, auth.Route{
 		Contract: specFlagsUpdate,
 		Handler:  http.HandlerFunc(h.HandleUpdate),
-		Policy:   auth.AnyRole(dto.RoleAdmin),
+		Policy:   auth.AnyRole(auth.RoleAdmin),
 	}); err != nil {
 		return err
 	}
 	if err := auth.Mount(mux, auth.Route{
 		Contract: specFlagsToggle,
 		Handler:  http.HandlerFunc(h.HandleToggle),
-		Policy:   auth.AnyRole(dto.RoleAdmin),
+		Policy:   auth.AnyRole(auth.RoleAdmin),
 	}); err != nil {
 		return err
 	}
 	if err := auth.Mount(mux, auth.Route{
 		Contract: specFlagsDelete,
 		Handler:  http.HandlerFunc(h.HandleDelete),
-		Policy:   auth.AnyRole(dto.RoleAdmin),
+		Policy:   auth.AnyRole(auth.RoleAdmin),
 	}); err != nil {
 		return err
 	}

@@ -11,6 +11,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/clock"
 	kerneldepgraph "github.com/ghbvf/gocell/kernel/depgraph"
 	"github.com/ghbvf/gocell/kernel/metadata"
+	"github.com/ghbvf/gocell/runtime/devtools/catalog"
 	"github.com/ghbvf/gocell/runtime/http/devtools"
 	"github.com/ghbvf/gocell/runtime/http/router"
 )
@@ -184,3 +185,6 @@ func TestPhase5CollectRouteGroups_NoDevtools(t *testing.T) {
 	assert.Len(t, withHandler, baselineCount+1,
 		"installing devtools handler must append exactly one route group")
 }
+
+// Ensure catalog package types compile correctly in bootstrap test context.
+var _ *catalog.CellDepGraph = (*catalog.CellDepGraph)(nil)
