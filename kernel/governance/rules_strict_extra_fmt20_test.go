@@ -126,6 +126,16 @@ const fmt20SchemaClean = `{
     }
 }`
 
+// fmt20SchemaExplicitOpen exercises the regression guard for ADR-202605031600:
+// `additionalProperties: true` is an explicit open declaration, equivalent to
+// missing-key as far as FMT-20 is concerned, and must trip the request-side
+// violation. Response side ignores it (FMT-20 only scans request schemas).
+const fmt20SchemaExplicitOpen = `{
+    "type": "object",
+    "additionalProperties": true,
+    "properties": {"id": {"type": "string"}}
+}`
+
 // TestFMT20_BySchemaSide is the consolidated FMT-20 coverage matrix. Each row
 // is run twice — once with the schema mounted as request.schema.json (FMT-20
 // must report wantRequestFields) and once as response.schema.json (FMT-20 must
@@ -144,6 +154,7 @@ func TestFMT20_BySchemaSide(t *testing.T) {
 		{"AllOfMissingAP", fmt20SchemaAllOf, []string{"$.data.allOf[0]"}},
 		{"IfThenElseConditional", fmt20SchemaIfThenElse, []string{"$.payload.then", "$.payload.else"}},
 		{"LocalRefThroughComposition", fmt20SchemaLocalRef, []string{"$.data.choice.oneOf[0]"}},
+		{"ExplicitAdditionalPropertiesTrue", fmt20SchemaExplicitOpen, []string{"$"}},
 		{"CleanRequestSchema", fmt20SchemaClean, nil},
 	}
 	for _, tc := range cases {

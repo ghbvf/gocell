@@ -449,17 +449,20 @@ func TestCheckAdditionalProperties_ObjectValueTreatedAsMissing(t *testing.T) {
 		"additionalProperties as object value must be treated as missing")
 }
 
-// TestCheckAdditionalProperties_TrueValueAccepted verifies that an explicit
-// additionalProperties: true is accepted (author chose open schema intentionally).
-func TestCheckAdditionalProperties_TrueValueAccepted(t *testing.T) {
+// TestCheckAdditionalProperties_TrueValueRejected verifies that an explicit
+// additionalProperties: true is rejected per ADR-202605031600. FMT-20 only
+// scans request schemas, where strict closed-shape is the only acceptable
+// declaration — explicit `true` is functionally identical to the missing-key
+// bypass and must fail the same way.
+func TestCheckAdditionalProperties_TrueValueRejected(t *testing.T) {
 	node := map[string]any{
 		"type":                 "object",
 		"additionalProperties": true,
 	}
 	var missing []string
 	checkAdditionalProperties(node, "$", &missing)
-	assert.Empty(t, missing,
-		"additionalProperties:true must be accepted — author explicitly declared open schema")
+	assert.Equal(t, []string{"$"}, missing,
+		"additionalProperties:true must be rejected — request schemas must be strictly closed (ADR-202605031600)")
 }
 
 // TestCheckAdditionalProperties_FalseValueAccepted verifies that an explicit

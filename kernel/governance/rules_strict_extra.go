@@ -258,11 +258,12 @@ func decodeJSONPointerToken(s string) string {
 	return strings.ReplaceAll(s, "~0", "~")
 }
 
-// checkAdditionalProperties emits a violation when the node has no
-// "additionalProperties" key at all. An explicit bool (true or false) is
-// accepted — the schema author consciously opted in or out of extra properties.
-// An object value (e.g. {"type":"string"}) is treated as missing because it is
-// not a deliberate open/closed declaration.
+// checkAdditionalProperties emits a violation unless the node declares
+// `additionalProperties: false`. Per ADR-202605031600, FMT-20 only scans
+// request schemas, where the goal is strictly closed shape — `true` (explicit
+// open) is just as much a bypass as the missing-key case, so both fail. An
+// object value (e.g. {"type":"string"}) is also rejected because it is a
+// constraint on extra-property values, not a closed-shape declaration.
 func checkAdditionalProperties(node map[string]any, path string, missing *[]string) {
 	ap, hasAP := node["additionalProperties"]
 	if !hasAP {
@@ -270,11 +271,12 @@ func checkAdditionalProperties(node map[string]any, path string, missing *[]stri
 		*missing = append(*missing, path)
 		return
 	}
-	// Explicit bool (true = open, false = strict) — author made a choice, accept.
-	if _, ok := ap.(bool); ok {
+	if b, ok := ap.(bool); ok && !b {
+		// Only `additionalProperties: false` satisfies FMT-20.
 		return
 	}
-	// Object value (schema form) is not a deliberate open/closed declaration.
+	// `true`, object value, or any other shape is a violation: request schemas
+	// must be strictly closed.
 	*missing = append(*missing, path)
 }
 
