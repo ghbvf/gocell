@@ -303,8 +303,8 @@ func TestAuthMiddleware_LogLevel_Expected4xx_Warn(t *testing.T) {
 // TestAuthMiddleware_LogLevel_InfraError_Error verifies S43: infra errors
 // (verifier init failure, key load failure) must log at Error, not Warn.
 //
-// P1-1: ErrAuthKeyMissing maps to HTTP 500 in codeToStatus (infra), so it must
-// NOT appear in expected4xxCodes. This test confirms it logs at Error level.
+// P1-1: ErrAuthKeyMissing is constructed with KindInternal (infra), so it must
+// log at Error level rather than the sampled 4xx Warn path.
 func TestAuthMiddleware_LogLevel_InfraError_Error(t *testing.T) {
 	infraErrs := []struct {
 		name string

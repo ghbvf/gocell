@@ -261,7 +261,7 @@ func TestValueTransformer_Encrypt_CurrentKeyError(t *testing.T) {
 // handle.Encrypt returns an error, Encrypt surfaces it.
 func TestValueTransformer_Encrypt_HandleEncryptError(t *testing.T) {
 	ctx := context.Background()
-	encErr := &errcode.Error{Code: errcode.ErrKeyProviderEncryptFailed, Message: "cipher error"}
+	encErr := errcode.New(errcode.KindInternal, errcode.ErrKeyProviderEncryptFailed, "cipher error")
 	p := &singleHandleProvider{handle: &errorKeyHandle{encryptErr: encErr}}
 	tr := crypto.NewValueTransformer(p)
 

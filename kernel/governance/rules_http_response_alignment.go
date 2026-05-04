@@ -83,159 +83,33 @@ var httpStatusNameToCode = map[string]int{
 	"StatusNetworkAuthenticationRequired": 511,
 }
 
-// errcodeNameToStatus maps errcode constant short names (e.g. "ErrAuthUserNotFound")
-// to HTTP status codes via httputil.statusForErrcodeName. Hand-curated to cover every
-// errcode constant that handlers in this repo return as a 4xx/5xx response — when
-// adding a new errcode constant used in a handler, extend this table. The rule
-// logs a Debug message for unknown names so gaps are visible at analysis time
-// without failing the build.
-var errcodeNameToStatus = func() map[string]int {
-	pairs := []struct {
-		name string
-		code errcode.Code
-	}{
-		{"ErrAuthUserNotFound", errcode.ErrAuthUserNotFound},
-		{"ErrAuthUserDuplicate", errcode.ErrAuthUserDuplicate},
-		{"ErrAuthRoleNotFound", errcode.ErrAuthRoleNotFound},
-		{"ErrAuthRoleDuplicate", errcode.ErrAuthRoleDuplicate},
-		{"ErrAuthSelfDelete", errcode.ErrAuthSelfDelete},
-		{"ErrAuthInvalidInput", errcode.ErrAuthInvalidInput},
-		{"ErrAuthIdentityInvalidInput", errcode.ErrAuthIdentityInvalidInput},
-		{"ErrAuthRBACInvalidInput", errcode.ErrAuthRBACInvalidInput},
-		{"ErrAuthSessionInvalidInput", errcode.ErrAuthSessionInvalidInput},
-		{"ErrAuthLogoutInvalidInput", errcode.ErrAuthLogoutInvalidInput},
-		{"ErrAuthRefreshInvalidInput", errcode.ErrAuthRefreshInvalidInput},
-		{"ErrAuthLoginInvalidInput", errcode.ErrAuthLoginInvalidInput},
-		{"ErrAuthLoginFailed", errcode.ErrAuthLoginFailed},
-		{"ErrAuthRefreshFailed", errcode.ErrAuthRefreshFailed},
-		{"ErrAuthRefreshUnavailable", errcode.ErrAuthRefreshUnavailable},
-		{"ErrAuthForbidden", errcode.ErrAuthForbidden},
-		{"ErrAuthInvalidToken", errcode.ErrAuthInvalidToken},
-		{"ErrAuthTokenInvalid", errcode.ErrAuthTokenInvalid},
-		{"ErrAuthTokenExpired", errcode.ErrAuthTokenExpired},
-		{"ErrAuthInvalidTokenIntent", errcode.ErrAuthInvalidTokenIntent},
-		{"ErrAuthUnauthorized", errcode.ErrAuthUnauthorized},
-		{"ErrAuthPasswordResetRequired", errcode.ErrAuthPasswordResetRequired},
-		{"ErrAuthUserLocked", errcode.ErrAuthUserLocked},
-		{"ErrAuthKeyInvalid", errcode.ErrAuthKeyInvalid},
-		{"ErrAuthKeyMissing", errcode.ErrAuthKeyMissing},
-		{"ErrAuthRoleFetchFailed", errcode.ErrAuthRoleFetchFailed},
-		{"ErrAuthVerifierConfig", errcode.ErrAuthVerifierConfig},
-		{"ErrAuthReplayDetected", errcode.ErrAuthReplayDetected},
-		{"ErrSessionNotFound", errcode.ErrSessionNotFound},
-		{"ErrSessionConflict", errcode.ErrSessionConflict},
-		{"ErrValidationFailed", errcode.ErrValidationFailed},
-		{"ErrValidationInvalidUUID", errcode.ErrValidationInvalidUUID},
-		{"ErrCellNotFound", errcode.ErrCellNotFound},
-		{"ErrSliceNotFound", errcode.ErrSliceNotFound},
-		{"ErrContractNotFound", errcode.ErrContractNotFound},
-		{"ErrAssemblyNotFound", errcode.ErrAssemblyNotFound},
-		{"ErrOrderNotFound", errcode.ErrOrderNotFound},
-		{"ErrDeviceNotFound", errcode.ErrDeviceNotFound},
-		{"ErrCommandNotFound", errcode.ErrCommandNotFound},
-		{"ErrConfigNotFound", errcode.ErrConfigNotFound},
-		{"ErrConfigDuplicate", errcode.ErrConfigDuplicate},
-		{"ErrConfigInvalidInput", errcode.ErrConfigInvalidInput},
-		{"ErrConfigPublishInvalidInput", errcode.ErrConfigPublishInvalidInput},
-		{"ErrConfigRepoNotFound", errcode.ErrConfigRepoNotFound},
-		{"ErrConfigRepoDuplicate", errcode.ErrConfigRepoDuplicate},
-		{"ErrConfigRepoQuery", errcode.ErrConfigRepoQuery},
-		{"ErrFlagNotFound", errcode.ErrFlagNotFound},
-		{"ErrFlagDuplicate", errcode.ErrFlagDuplicate},
-		{"ErrFlagInvalidInput", errcode.ErrFlagInvalidInput},
-		{"ErrFlagRepoQuery", errcode.ErrFlagRepoQuery},
-		{"ErrAuditRepoNotFound", errcode.ErrAuditRepoNotFound},
-		{"ErrAuditRepoQuery", errcode.ErrAuditRepoQuery},
-		{"ErrArchiveUpload", errcode.ErrArchiveUpload},
-		{"ErrArchiveMarshal", errcode.ErrArchiveMarshal},
-		{"ErrInternal", errcode.ErrInternal},
-		{"ErrNotImplemented", errcode.ErrNotImplemented},
-		{"ErrRateLimited", errcode.ErrRateLimited},
-		{"ErrCSRFOriginDenied", errcode.ErrCSRFOriginDenied},
-		{"ErrBodyTooLarge", errcode.ErrBodyTooLarge},
-		{"ErrCursorInvalid", errcode.ErrCursorInvalid},
-		{"ErrPageSizeExceeded", errcode.ErrPageSizeExceeded},
-		{"ErrInvalidTimeFormat", errcode.ErrInvalidTimeFormat},
-		{"ErrSetupAlreadyInitialized", errcode.ErrSetupAlreadyInitialized},
-		{"ErrDistlockTimeout", errcode.ErrDistlockTimeout},
-		{"ErrClientCanceled", errcode.ErrClientCanceled},
-		{"ErrServerTimeout", errcode.ErrServerTimeout},
-		{"ErrReadyzVerboseDenied", errcode.ErrReadyzVerboseDenied},
-		{"ErrNonceStoreFull", errcode.ErrNonceStoreFull},
-		{"ErrKeyProviderKeyNotFound", errcode.ErrKeyProviderKeyNotFound},
-		{"ErrKeyProviderAuthFailed", errcode.ErrKeyProviderAuthFailed},
-		{"ErrKeyProviderEncryptFailed", errcode.ErrKeyProviderEncryptFailed},
-		{"ErrKeyProviderDecryptFailed", errcode.ErrKeyProviderDecryptFailed},
-		{"ErrKeyProviderRotateFailed", errcode.ErrKeyProviderRotateFailed},
-		{"ErrKeyProviderTransient", errcode.ErrKeyProviderTransient},
-		{"ErrConfigDecryptFailed", errcode.ErrConfigDecryptFailed},
-		{"ErrConfigEncryptFailed", errcode.ErrConfigEncryptFailed},
-		{"ErrConfigKeyMissing", errcode.ErrConfigKeyMissing},
-		{"ErrVaultAuthFailed", errcode.ErrVaultAuthFailed},
-	}
-	m := make(map[string]int, len(pairs))
-	for _, p := range pairs {
-		status := statusForErrcodeName(p.name)
-		if status >= 400 {
-			m[p.name] = status
-		}
-	}
-	return m
-}()
-
-func statusForErrcodeName(name string) int {
-	switch {
-	case strings.Contains(name, "NotFound"), name == "ErrZeroTestMatch":
-		return http.StatusNotFound
-	case strings.Contains(name, "Duplicate"), strings.Contains(name, "Conflict"),
-		name == "ErrAuthSelfDelete", strings.Contains(name, "Distlock"), strings.Contains(name, "Idempotency"):
-		return http.StatusConflict
-	case strings.Contains(name, "InvalidInput"), strings.Contains(name, "InvalidUUID"),
-		name == "ErrValidationFailed", name == "ErrCursorInvalid", name == "ErrPageSizeExceeded",
-		name == "ErrInvalidTimeFormat", strings.Contains(name, "MetricsLabel"),
-		strings.Contains(name, "SecureCookie"):
-		return http.StatusBadRequest
-	case strings.Contains(name, "Unauthorized"), strings.Contains(name, "Token"), strings.Contains(name, "LoginFailed"),
-		strings.Contains(name, "RefreshFailed"), strings.Contains(name, "ReplayDetected"),
-		name == "ErrReadyzVerboseDenied":
-		return http.StatusUnauthorized
-	case strings.Contains(name, "Forbidden"), strings.Contains(name, "CSRF"), strings.Contains(name, "PasswordResetRequired"),
-		strings.Contains(name, "UserLocked"):
-		return http.StatusForbidden
-	case strings.Contains(name, "Unavailable"), strings.Contains(name, "CircuitOpen"), strings.Contains(name, "Hub"),
-		strings.Contains(name, "RelayBudget"), strings.Contains(name, "Transient"), strings.Contains(name, "NonceStoreFull"),
-		strings.Contains(name, "OutboxDegraded"):
-		return http.StatusServiceUnavailable
-	case name == "ErrSetupAlreadyInitialized":
-		return http.StatusGone
-	case name == "ErrBodyTooLarge":
-		return http.StatusRequestEntityTooLarge
-	case name == "ErrRateLimited":
-		return http.StatusTooManyRequests
-	case name == "ErrClientCanceled":
-		return errcode.StatusClientClosedRequest
-	case name == "ErrServerTimeout":
-		return http.StatusGatewayTimeout
-	case name == "ErrNotImplemented":
-		return http.StatusNotImplemented
-	default:
-		return http.StatusInternalServerError
-	}
-}
-
 // httpHelperWritesStatuses maps pkg/httputil helper names that write HTTP error
 // responses internally to the set of ≥400 status codes they may emit.
-// Hand-curated because the helpers don't expose status as parameters — handler
-// AST sees only the call site. When a new helper that writes responses is
-// added, register it here or CH-04 silently skips alignment for that call site
-// (slog.Warn at scan time alerts the developer).
+// Helpers whose status is explicit through errcode.Kind (WritePublic) are
+// handled separately by collectWritePublicKind.
 var httpHelperWritesStatuses = map[string][]int{
 	"WriteError":             {},
-	"WritePublic":            {http.StatusBadRequest, http.StatusUnauthorized, http.StatusInternalServerError, http.StatusServiceUnavailable},
 	"DecodeJSON":             {http.StatusBadRequest, http.StatusRequestEntityTooLarge},
 	"DecodeJSONStrict":       {http.StatusBadRequest, http.StatusRequestEntityTooLarge},
+	"ParsePageParams":        {http.StatusBadRequest},
 	"ParseUUIDPathParam":     {http.StatusBadRequest},
 	"ParsePageParamsOrWrite": {http.StatusBadRequest},
+}
+
+var errcodeKindNameToStatus = map[string]int{
+	"KindInternal":         errcode.KindInternal.Status(),
+	"KindInvalid":          errcode.KindInvalid.Status(),
+	"KindUnauthenticated":  errcode.KindUnauthenticated.Status(),
+	"KindPermissionDenied": errcode.KindPermissionDenied.Status(),
+	"KindNotFound":         errcode.KindNotFound.Status(),
+	"KindConflict":         errcode.KindConflict.Status(),
+	"KindGone":             errcode.KindGone.Status(),
+	"KindPayloadTooLarge":  errcode.KindPayloadTooLarge.Status(),
+	"KindRateLimited":      errcode.KindRateLimited.Status(),
+	"KindClientClosed":     errcode.KindClientClosed.Status(),
+	"KindDeadlineExceeded": errcode.KindDeadlineExceeded.Status(),
+	"KindUnavailable":      errcode.KindUnavailable.Status(),
+	"KindNotImplemented":   errcode.KindNotImplemented.Status(),
 }
 
 // CheckHTTPResponseAlignment enforces CH-04: every 4xx/5xx status code that a
@@ -727,7 +601,7 @@ func collectStatusCodesFromNode(node ast.Node, out map[int]struct{}) {
 			return true
 		}
 		collectHTTPStatusSelectors(call, out)
-		collectErrcodeConstants(call, out)
+		collectErrcodeKinds(call, out)
 		collectHelperWriteStatuses(call, out)
 		return true
 	})
@@ -751,10 +625,11 @@ func collectHTTPStatusSelectors(call *ast.CallExpr, out map[int]struct{}) {
 	}
 }
 
-// collectErrcodeConstants looks for errcode.ErrXxx constants inside known
-// errcode constructor calls (New, NewDomain, NewInfra, Safe, Wrap) and maps
-// them to HTTP status codes. Only >=400 codes are added to out.
-func collectErrcodeConstants(call *ast.CallExpr, out map[int]struct{}) {
+// collectErrcodeKinds looks for errcode.KindXxx values inside errcode.New/Wrap
+// calls and maps them through errcode.Kind.Status. Code names are deliberately
+// ignored: runtime status is Kind-derived, so CH-04 must not reintroduce a
+// second code-name status table.
+func collectErrcodeKinds(call *ast.CallExpr, out map[int]struct{}) {
 	fun, ok := call.Fun.(*ast.SelectorExpr)
 	if !ok {
 		return
@@ -764,30 +639,15 @@ func collectErrcodeConstants(call *ast.CallExpr, out map[int]struct{}) {
 		return
 	}
 	switch fun.Sel.Name {
-	case "New", "NewDomain", "NewInfra", "Safe", "Wrap":
+	case "New", "Wrap":
 	default:
 		return
 	}
-	codeArg := errcodeCodeArg(fun.Sel.Name, call.Args)
-	if codeArg == nil {
-		return
-	}
-	arg, ok := codeArg.(*ast.SelectorExpr)
-	if !ok {
-		return
-	}
-	argPkg, ok := arg.X.(*ast.Ident)
-	if !ok || argPkg.Name != "errcode" {
-		return
-	}
-	name := arg.Sel.Name
-	status, found := errcodeNameToStatus[name]
+	kindArg := errcodeKindArg(call.Args)
+	status, found := errcodeKindStatus(kindArg)
 	if !found {
-		// When handlers start using a new errcode constant, register it in the
-		// errcodeNameToStatus pairs slice above, or CH-04 silently skips
-		// alignment checks for that constant's status code.
-		slog.Warn("CH-04: unknown errcode constant in handler, skipping alignment check",
-			slog.String("constant", name))
+		slog.Warn("CH-04: errcode constructor without static Kind selector, skipping alignment check",
+			slog.String("constructor", fun.Sel.Name))
 		return
 	}
 	if status >= 400 {
@@ -795,26 +655,24 @@ func collectErrcodeConstants(call *ast.CallExpr, out map[int]struct{}) {
 	}
 }
 
-func errcodeCodeArg(funcName string, args []ast.Expr) ast.Expr {
+func errcodeKindArg(args []ast.Expr) ast.Expr {
 	if len(args) == 0 {
 		return nil
-	}
-	switch funcName {
-	case "New", "Wrap":
-		if len(args) >= 2 && isErrcodeKindSelector(args[0]) {
-			return args[1]
-		}
 	}
 	return args[0]
 }
 
-func isErrcodeKindSelector(expr ast.Expr) bool {
+func errcodeKindStatus(expr ast.Expr) (int, bool) {
 	sel, ok := expr.(*ast.SelectorExpr)
 	if !ok {
-		return false
+		return 0, false
 	}
 	pkg, ok := sel.X.(*ast.Ident)
-	return ok && pkg.Name == "errcode" && strings.HasPrefix(sel.Sel.Name, "Kind")
+	if !ok || pkg.Name != "errcode" {
+		return 0, false
+	}
+	status, ok := errcodeKindNameToStatus[sel.Sel.Name]
+	return status, ok
 }
 
 // collectHelperWriteStatuses detects httputil.<HelperName>(w, ...) calls and
@@ -835,6 +693,10 @@ func collectHelperWriteStatuses(call *ast.CallExpr, out map[int]struct{}) {
 		return
 	}
 	helperName := sel.Sel.Name
+	if helperName == "WritePublic" {
+		collectWritePublicKind(call, out)
+		return
+	}
 	statuses, known := httpHelperWritesStatuses[helperName]
 	if !known {
 		// Not every httputil function writes a response. Only warn for names
@@ -845,8 +707,6 @@ func collectHelperWriteStatuses(call *ast.CallExpr, out map[int]struct{}) {
 			"WriteJSON":                       {}, // writes, but caller supplies the status — already caught by collectHTTPStatusSelectors
 			"DecodeJSON":                      {},
 			"DecodeJSONStrict":                {}, // strict variant; same semantics as DecodeJSON
-			"ParsePageParams":                 {}, // returns (PageParams, error); caller invokes WriteError on err
-			"ParseUUIDPathParam":              {}, // writes 400 on invalid; status visible in writer call site
 			"WithClientErrorLogSampling":      {}, // logging decorator — no status write
 			"WithClientErrorLogSamplingEvery": {}, // logging decorator — no status write
 		}
@@ -860,6 +720,21 @@ func collectHelperWriteStatuses(call *ast.CallExpr, out map[int]struct{}) {
 		if s >= 400 {
 			out[s] = struct{}{}
 		}
+	}
+}
+
+func collectWritePublicKind(call *ast.CallExpr, out map[int]struct{}) {
+	if len(call.Args) < 3 {
+		slog.Warn("CH-04: httputil.WritePublic without Kind argument, skipping alignment check")
+		return
+	}
+	status, found := errcodeKindStatus(call.Args[2])
+	if !found {
+		slog.Warn("CH-04: httputil.WritePublic without static Kind selector, skipping alignment check")
+		return
+	}
+	if status >= 400 {
+		out[status] = struct{}{}
 	}
 }
 

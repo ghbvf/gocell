@@ -211,7 +211,8 @@ func (c *Contract) ValidateHeaders(t testing.TB, jsonData []byte) {
 
 // ValidateSchemaRef validates jsonData against the schema referenced by the
 // given key name. This covers both well-known refs (request, response, payload,
-// headers) and extra refs declared in schemaRefs. No-op if the key is not found.
+// headers) and extra refs declared in schemaRefs. Unknown keys fail the test so
+// schemaRef typos cannot pass silently.
 func (c *Contract) ValidateSchemaRef(t testing.TB, key string, jsonData []byte) {
 	t.Helper()
 	switch key {
@@ -230,7 +231,8 @@ func (c *Contract) ValidateSchemaRef(t testing.TB, key string, jsonData []byte) 
 	}
 	schema, ok := c.extraSchemas[key]
 	if !ok {
-		return // no-op: ref not declared
+		t.Errorf("contracttest: schemaRef key %q is not declared in contract %q", key, c.ID)
+		return
 	}
 	validateJSON(t, schema, jsonData, key)
 }

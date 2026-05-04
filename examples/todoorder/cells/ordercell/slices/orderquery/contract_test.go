@@ -53,6 +53,25 @@ func TestHttpOrderGetV1Serve(t *testing.T) {
 	c.ValidateHTTPResponseRecorder(t, rec)
 }
 
+func TestHttpOrderGetV1Serve_NotFound(t *testing.T) {
+	root := contracttest.ExampleContractsRoot(t, "todoorder")
+	c := contracttest.LoadByID(t, root, "http.order.get.v1")
+	svc := newContractQuerySvc()
+	h := getv1.NewHandler(svc, nil)
+
+	mux := http.NewServeMux()
+	mux.Handle(c.HTTP.Method+" "+c.HTTP.Path, h)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(c.HTTP.Method, strings.Replace(c.HTTP.Path, "{id}", "missing-order", 1), nil)
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("expected 404, got %d: %s", rec.Code, rec.Body.String())
+	}
+	c.ValidateErrorResponse(t, http.StatusNotFound, rec.Body.Bytes())
+}
+
 func TestHttpOrderListV1Serve(t *testing.T) {
 	root := contracttest.ExampleContractsRoot(t, "todoorder")
 	c := contracttest.LoadByID(t, root, "http.order.list.v1")

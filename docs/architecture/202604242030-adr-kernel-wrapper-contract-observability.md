@@ -22,7 +22,7 @@
 
 PR-A9 (`CONTRACT-META-01`, PR #239) elevated HTTP contract transport
 metadata (method, path, path/query params, success status, responses) to
-first-class values on `pkg/contracts.HTTPTransport` and extended governance
+first-class values on `kernel/metadata.HTTPTransportMeta` and extended governance
 to cross-check path templates vs. declared path params (FMT-13). The
 follow-on gap: **at runtime no observability channel carries the owning
 contract id.** Trace spans derive their name from chi's `RouteContext`

@@ -137,7 +137,7 @@ func TestGetByKey_NotFound_HasDomainCategory(t *testing.T) {
 //
 // IsInfraError is preserved (true) for both branches so health.Checker
 // timeout-bucket behavior is unchanged; the HTTP layer routes 499/504 via
-// codeToStatus, not via IsInfraError.
+// errcode.Kind, not via IsInfraError.
 func TestConfigRepo_CtxCanceled_ReturnsClientCanceled(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -247,9 +247,8 @@ func TestConfigRepo_CtxCanceled_ReturnsClientCanceled(t *testing.T) {
 //   - other cause (auth / tamper) → CategoryAuth (distinguishes KMS auth
 //     from generic infra outages on dashboards)
 //
-// The HTTP status mapping for the non-cancel branches is unchanged
-// (ErrConfigDecryptFailed / ErrConfigRepoQuery → 500); only the in-process
-// classifier shifts.
+// The HTTP status mapping is now explicit: transient key-provider failures are
+// KindUnavailable, while non-transient crypto failures remain KindInternal.
 func TestConfigRepo_CryptoOpError_CauseAwareClassification(t *testing.T) {
 	repo := newConfigRepositoryFromDBTX(&mockDB{})
 	ops := []struct {
@@ -284,6 +283,8 @@ func TestConfigRepo_CryptoOpError_CauseAwareClassification(t *testing.T) {
 				require.NotNil(t, ec)
 				assert.Equal(t, tc.code, ec.Code,
 					"transient cause must NOT rewrite to ErrClientCanceled")
+				assert.Equal(t, errcode.KindUnavailable, ec.Kind,
+					"transient KeyProvider faults must map to HTTP 503")
 				assert.Equal(t, errcode.CategoryInfra, ec.Category,
 					"transient KeyProvider faults must remain CategoryInfra (Vault outage signal)")
 				assert.True(t, errcode.IsInfraError(ec),
@@ -298,6 +299,7 @@ func TestConfigRepo_CryptoOpError_CauseAwareClassification(t *testing.T) {
 				ec := repo.cryptoOpError(tc.code, tc.op, "key=foo", assert.AnError)
 				require.NotNil(t, ec)
 				assert.Equal(t, tc.code, ec.Code)
+				assert.Equal(t, errcode.KindInternal, ec.Kind)
 				assert.Equal(t, errcode.CategoryAuth, ec.Category,
 					"unclassified KMS / tamper failures must be CategoryAuth")
 				assert.False(t, errcode.IsInfraError(ec),

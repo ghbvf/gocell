@@ -253,7 +253,7 @@ go run ./cmd/gocell validate                # gocell 元数据 + FMT-20 + 全部
 
 ### contract test 怎么用
 
-`pkg/contracttest` 提供两组对称 API：`Validate*` 检验合规、`MustReject*`
+`tests/contracttest` 提供两组对称 API：`Validate*` 检验合规、`MustReject*`
 断言负向。lenient schema 下，`MustReject*` 仅捕获 `required`/`type`/`pattern`
 等非加性违规；要断言"额外字段被拒"，schema 必须 metaonly 或 strict。
 

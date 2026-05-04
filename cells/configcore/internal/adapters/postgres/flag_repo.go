@@ -89,21 +89,15 @@ func (r *FlagRepository) scanFlagOrMapError(_ context.Context, row Row, op, key 
 		return nil, cancelErr
 	}
 	if errors.Is(err, pgx.ErrNoRows) {
-		return nil, &errcode.Error{
-			Code:            errcode.ErrFlagNotFound,
-			Message:         "flag not found",
-			InternalMessage: fmt.Sprintf("flag repo: %s miss key=%s", op, key),
-			Cause:           err,
-			Category:        errcode.CategoryDomain,
-		}
+		return nil, errcode.Wrap(errcode.KindNotFound, errcode.ErrFlagNotFound, "flag not found", err,
+			errcode.WithInternal(fmt.Sprintf("flag repo: %s miss key=%s", op, key)),
+			errcode.WithCategory(errcode.CategoryDomain),
+		)
 	}
-	return nil, &errcode.Error{
-		Code:            errcode.ErrFlagRepoQuery,
-		Message:         "flag repo query failed",
-		InternalMessage: fmt.Sprintf("flag repo: %s scan error key=%s", op, key),
-		Cause:           err,
-		Category:        errcode.CategoryInfra,
-	}
+	return nil, errcode.Wrap(errcode.KindInternal, errcode.ErrFlagRepoQuery, "flag repo query failed", err,
+		errcode.WithInternal(fmt.Sprintf("flag repo: %s scan error key=%s", op, key)),
+		errcode.WithCategory(errcode.CategoryInfra),
+	)
 }
 
 // scanFlagRow scans a single row (order matches flagColumns) into a
@@ -152,13 +146,10 @@ func (r *FlagRepository) Create(ctx context.Context, flag *domain.FeatureFlag) e
 		}
 		// InternalMessage carries the key for operator triage; the public
 		// Message stays generic so user input never echoes in API responses.
-		return &errcode.Error{
-			Code:            errcode.ErrFlagRepoQuery,
-			Message:         "flag repo: create failed",
-			InternalMessage: "flag repo: Create failed (key=" + flag.Key + ")",
-			Cause:           err,
-			Category:        errcode.CategoryInfra,
-		}
+		return errcode.Wrap(errcode.KindInternal, errcode.ErrFlagRepoQuery, "flag repo: create failed", err,
+			errcode.WithInternal("flag repo: Create failed (key="+flag.Key+")"),
+			errcode.WithCategory(errcode.CategoryInfra),
+		)
 	}
 	return nil
 }

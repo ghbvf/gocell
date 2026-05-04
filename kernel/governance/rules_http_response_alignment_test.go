@@ -169,7 +169,7 @@ func h(w http.ResponseWriter, r *http.Request) {
 			wantErrors: []string{"handler returns 500 but contract does not declare it"},
 		},
 		{
-			name: "errcode indirect: ErrAuthUserNotFound maps to 404",
+			name: "errcode indirect: KindNotFound maps to 404",
 			handlerSrc: `
 func h(w http.ResponseWriter, r *http.Request) {
 	_ = errcode.New(errcode.KindNotFound, errcode.ErrAuthUserNotFound, "not found")
@@ -179,6 +179,18 @@ func h(w http.ResponseWriter, r *http.Request) {
 				401: {Description: "unauthorized", SchemaRef: "err.json"},
 			},
 			wantErrors: []string{"handler returns 404 but contract does not declare it"},
+		},
+		{
+			name: "errcode kind wins over code name: notfound code with internal kind maps to 500",
+			handlerSrc: `
+func h(w http.ResponseWriter, r *http.Request) {
+	_ = errcode.New(errcode.KindInternal, errcode.ErrAuthUserNotFound, "not found")
+}
+`,
+			responses: map[int]metadata.HTTPResponseMeta{
+				404: {Description: "not found", SchemaRef: "err.json"},
+			},
+			wantErrors: []string{"handler returns 500 but contract does not declare it"},
 		},
 		{
 			name: "errcode indirect happy: ErrValidationFailed→400 declared",
@@ -313,21 +325,6 @@ func handleSomething(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// TestErrcodeNameToStatus_AllPairsResolve guards against silent drift between
-// the hand-curated `errcodeNameToStatus` table and pkg/errcode/codeToStatus.
-// Every entry MUST resolve to a status code >= 400 (else CH-04 silently skips
-// it at runtime and slog.Warn fires at init time, hidden in normal CI output).
-func TestErrcodeNameToStatus_AllPairsResolve(t *testing.T) {
-	for name, status := range errcodeNameToStatus {
-		if status < 400 {
-			t.Errorf("errcodeNameToStatus[%q] = %d, expected >= 400 (CH-04 only validates 4xx/5xx)", name, status)
-		}
-	}
-	if len(errcodeNameToStatus) == 0 {
-		t.Fatal("errcodeNameToStatus is empty — table population failed")
-	}
-}
-
 // writeGeneratedHandlerFile writes a minimal handler_gen.go under
 // <root>/generated/contracts/<segments...>/ that matches the gocell codegen
 // format. The caller provides the status code(s) emitted by the handle method.
@@ -351,6 +348,7 @@ package testpkg
 import (
 	"net/http"
 	"github.com/ghbvf/gocell/kernel/wrapper"
+	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/httputil"
 )
 
@@ -445,6 +443,15 @@ func TestCheckHTTPResponseAlignment_GeneratedHandler(t *testing.T) {
 				400: {Description: "bad request", SchemaRef: "err.json"},
 			},
 			wantErrors: []string{"handler returns 413 but contract does not declare it"},
+		},
+		{
+			name: "mismatch: generated handler WriteError with direct KindNotFound error missing 404",
+			statusBody: `	httputil.WriteError(r.Context(), w, errcode.New(errcode.KindNotFound, errcode.ErrOrderNotFound, "order not found"))
+`,
+			responses: map[int]metadata.HTTPResponseMeta{
+				400: {Description: "bad request", SchemaRef: "err.json"},
+			},
+			wantErrors: []string{"handler returns 404 but contract does not declare it"},
 		},
 		{
 			// Neg test: generated handler with StatusCreated (201) is not ≥400, no finding.
@@ -593,6 +600,34 @@ func h(w http.ResponseWriter, r *http.Request) {
 				200: {},
 			},
 			wantErrors: []string{"handler returns 400 but contract does not declare it"},
+		},
+		{
+			name: "ParsePageParams plus WriteError: handler returns parser error through canonical writer",
+			handlerSrc: `
+func h(w http.ResponseWriter, r *http.Request) {
+	_, err := httputil.ParsePageParams(r)
+	if err != nil {
+		httputil.WriteError(r.Context(), w, err)
+		return
+	}
+}
+`,
+			responses: map[int]metadata.HTTPResponseMeta{
+				200: {},
+			},
+			wantErrors: []string{"handler returns 400 but contract does not declare it"},
+		},
+		{
+			name: "WritePublic: kind argument drives status",
+			handlerSrc: `
+func h(w http.ResponseWriter, r *http.Request) {
+	httputil.WritePublic(r.Context(), w, errcode.KindRateLimited, errcode.ErrRateLimited, "rate limited")
+}
+`,
+			responses: map[int]metadata.HTTPResponseMeta{
+				400: {Description: "bad request", SchemaRef: "err.json"},
+			},
+			wantErrors: []string{"handler returns 429 but contract does not declare it"},
 		},
 	}
 

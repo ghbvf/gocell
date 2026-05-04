@@ -65,8 +65,13 @@ func TestLoad_ExtraSchemaRefs(t *testing.T) {
 		t.Error("expected ValidateSchemaRef to fail for missing required field, but it passed")
 	}
 
-	// Prove that ValidateSchemaRef is a no-op for unknown keys.
-	c.ValidateSchemaRef(t, "nonexistentKey", []byte(`{"anything":"goes"}`))
+	// Prove that ValidateSchemaRef fails for unknown keys instead of creating
+	// false-positive contract tests.
+	mockT = &mockTB{}
+	c.ValidateSchemaRef(mockT, "nonexistentKey", []byte(`{"anything":"goes"}`))
+	if !mockT.failed {
+		t.Error("expected ValidateSchemaRef to fail for an unknown schemaRef key, but it passed")
+	}
 
 	// Prove that ValidateSchemaRef dispatches well-known keys correctly.
 	c.ValidateSchemaRef(t, "response", []byte(`{"data":{}}`))

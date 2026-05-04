@@ -171,6 +171,21 @@ func TestRedactString(t *testing.T) {
 			want: `password=<REDACTED>`,
 		},
 		{
+			name: "json_password_quoted",
+			in:   `{"password":"hunter2","user":"alice"}`,
+			want: `{"password":"<REDACTED>","user":"alice"}`,
+		},
+		{
+			name: "json_token_quoted_with_spaces",
+			in:   `{"token" : "abc.def.ghi","ok":true}`,
+			want: `{"token" : "<REDACTED>","ok":true}`,
+		},
+		{
+			name: "json_secret_escaped_quote",
+			in:   `{"secret":"abc\"def","user":"alice"}`,
+			want: `{"secret":"<REDACTED>","user":"alice"}`,
+		},
+		{
 			name: "noMatch_passthrough",
 			in:   "plain validation error: field foo missing",
 			want: "plain validation error: field foo missing",
@@ -199,6 +214,11 @@ func TestRedactString_DoesNotLeakSensitiveValue(t *testing.T) {
 	out := redaction.RedactString("login: password=" + secret + " end")
 	if strings.Contains(out, secret) {
 		t.Errorf("redacted output still contains secret value: %q", out)
+	}
+
+	jsonOut := redaction.RedactString(`{"token":"` + secret + `","user":"alice"}`)
+	if strings.Contains(jsonOut, secret) {
+		t.Errorf("redacted JSON output still contains secret value: %q", jsonOut)
 	}
 }
 

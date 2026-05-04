@@ -21,19 +21,12 @@ import (
 // Mask is the literal substituted in place of redacted values.
 const Mask = "<REDACTED>"
 
-// Value-boundary policy across all three patterns: consume up to the next
+// Value-boundary policy across free-form patterns: consume up to the next
 // whitespace (or newline for authorization). NEVER stop at `,` or `;` even
 // though doing so would preserve more context — fail-closed cannot assume
 // secrets are free of those characters. A base64url JWT plus padding, an
 // ODBC `Pwd=a;b;c` block embedded inside a larger DSN, or a comma-separated
 // secret value would otherwise leak the suffix.
-//
-// Trade-off: a JSON-style error like
-// `{"password":"abc","user":"alice"}` masks the entire trailing slice
-// (`"abc","user":"alice"}`) instead of just the secret. Co-located
-// fields — usernames, timestamps, surrounding JSON — are typically PII or
-// recoverable from the slog structured-field copy of the same error, so
-// the over-mask is the cheaper failure mode.
 
 // authorizationPattern handles HTTP `Authorization` header form where the
 // value is `Bearer <token>` / `Basic <b64>` (whitespace-separated). value
@@ -71,6 +64,13 @@ var defaultPattern = regexp.MustCompile(
 	`(?i)(password|passwd|pwd|secret|token|api[_-]?key|bearer|private[_-]?key|signing[_-]?key|dsn)\s*[:=]\s*\S+`,
 )
 
+// quotedJSONPattern handles common JSON-in-error fragments such as
+// `{"password":"..."}`. It is separate from defaultPattern because the quote
+// between the key and `:` is valid JSON but not a key=value separator.
+var quotedJSONPattern = regexp.MustCompile(
+	`(?i)("(?:password|passwd|pwd|secret|token|api[_-]?key|bearer|private[_-]?key|signing[_-]?key|dsn)"\s*:\s*)"(?:\\.|[^"\\])*"`,
+)
+
 // allPatterns runs in order. ORDER IS A CORRECTNESS CONSTRAINT, not a
 // performance optimization: `authorizationPattern` must consume the full
 // `Authorization: Bearer <token>` line before `defaultPattern` runs,
@@ -78,10 +78,16 @@ var defaultPattern = regexp.MustCompile(
 // `Bearer` literal — leaving the real token bare. Likewise
 // `connectionStringPattern` consumes the entire ODBC `Server=...;Pwd=...`
 // block before `defaultPattern` walks the residue.
-var allPatterns = []*regexp.Regexp{
-	authorizationPattern,
-	connectionStringPattern,
-	defaultPattern,
+type redactionPattern struct {
+	re   *regexp.Regexp
+	mask func(string) string
+}
+
+var allPatterns = []redactionPattern{
+	{authorizationPattern, maskAfterSeparator},
+	{connectionStringPattern, maskAfterSeparator},
+	{quotedJSONPattern, maskJSONStringValue},
+	{defaultPattern, maskAfterSeparator},
 }
 
 // RedactString masks sensitive `key=value` / `key: value` substrings in s,
@@ -89,7 +95,7 @@ var allPatterns = []*regexp.Regexp{
 // value portion with Mask.
 func RedactString(s string) string {
 	for _, p := range allPatterns {
-		s = p.ReplaceAllStringFunc(s, maskAfterSeparator)
+		s = p.re.ReplaceAllStringFunc(s, p.mask)
 	}
 	return s
 }
@@ -114,6 +120,24 @@ func maskAfterSeparator(match string) string {
 		}
 	}
 	// Unreachable: every pattern requires a `:` or `=` between key and value.
+	return match
+}
+
+func maskJSONStringValue(match string) string {
+	for i := 0; i < len(match); i++ {
+		if match[i] != ':' {
+			continue
+		}
+		j := i + 1
+		for j < len(match) {
+			switch match[j] {
+			case ' ', '\t', '\r', '\n':
+				j++
+			default:
+				return match[:j] + `"` + Mask + `"`
+			}
+		}
+	}
 	return match
 }
 

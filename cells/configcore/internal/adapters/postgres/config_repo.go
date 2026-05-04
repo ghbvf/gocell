@@ -42,9 +42,9 @@ import (
 //
 // Public Message stays a generic descriptor; InternalMessage embeds the
 // identifier (config key or configID) for internal triage only. The HTTP
-// status mapping is driven independently by codeToStatus
-// (ErrConfigEncryptFailed → 500, ErrConfigDecryptFailed → 500,
-// ErrConfigRepoQuery → 500, ErrClientCanceled → 499); only the in-process classifier shifts.
+// status is explicit: context cancellation is handled by ctxcancel, transient
+// key-provider faults are unavailable, and all other crypto failures are
+// internal.
 //
 // ref: google/tink aead/subtle/aes_gcm.go — symmetric crypto errors do not
 // carry key identifiers in Error() strings.
@@ -54,16 +54,15 @@ func (r *ConfigRepository) cryptoOpError(code errcode.Code, op, identifier strin
 		return cancelErr
 	}
 	category := errcode.CategoryAuth
+	kind := errcode.KindInternal
 	if errcode.IsTransient(cause) {
 		category = errcode.CategoryInfra
+		kind = errcode.KindUnavailable
 	}
-	return &errcode.Error{
-		Code:            code,
-		Message:         fmt.Sprintf("config repo: %s failed", op),
-		InternalMessage: fmt.Sprintf("config repo: %s failed (%s)", op, identifier),
-		Cause:           cause,
-		Category:        category,
-	}
+	return errcode.Wrap(kind, code, fmt.Sprintf("config repo: %s failed", op), cause,
+		errcode.WithInternal(fmt.Sprintf("config repo: %s failed (%s)", op, identifier)),
+		errcode.WithCategory(category),
+	)
 }
 
 // DBTX abstracts the database operations needed by ConfigRepository.
@@ -289,13 +288,10 @@ func (r *ConfigRepository) Create(ctx context.Context, entry *domain.ConfigEntry
 		if cancelErr := ctxcancel.Wrap(err, "Create", "key="+entry.Key); cancelErr != nil {
 			return cancelErr
 		}
-		return &errcode.Error{
-			Code:            errcode.ErrConfigRepoQuery,
-			Message:         "config repo: create failed",
-			InternalMessage: fmt.Sprintf("config repo: Create failed (key=%s)", entry.Key),
-			Cause:           err,
-			Category:        errcode.CategoryInfra,
-		}
+		return errcode.Wrap(errcode.KindInternal, errcode.ErrConfigRepoQuery, "config repo: create failed", err,
+			errcode.WithInternal(fmt.Sprintf("config repo: Create failed (key=%s)", entry.Key)),
+			errcode.WithCategory(errcode.CategoryInfra),
+		)
 	}
 	return nil
 }
@@ -354,21 +350,17 @@ func (r *ConfigRepository) scanConfigOrMapError(
 		return nil, nil, nil, nil, nil, infraErr
 	}
 	if errors.Is(err, pgx.ErrNoRows) {
-		return nil, nil, nil, nil, nil, &errcode.Error{
-			Code:            errcode.ErrConfigRepoNotFound,
-			Message:         "config not found",
-			InternalMessage: fmt.Sprintf("config repo: %s miss key=%s", op, key),
-			Cause:           err,
-			Category:        errcode.CategoryDomain,
-		}
+		return nil, nil, nil, nil, nil, errcode.Wrap(errcode.KindNotFound, errcode.ErrConfigRepoNotFound,
+			"config not found", err,
+			errcode.WithInternal(fmt.Sprintf("config repo: %s miss key=%s", op, key)),
+			errcode.WithCategory(errcode.CategoryDomain),
+		)
 	}
-	return nil, nil, nil, nil, nil, &errcode.Error{
-		Code:            errcode.ErrConfigRepoQuery,
-		Message:         "config repo query failed",
-		InternalMessage: fmt.Sprintf("config repo: %s scan error key=%s", op, key),
-		Cause:           err,
-		Category:        errcode.CategoryInfra,
-	}
+	return nil, nil, nil, nil, nil, errcode.Wrap(errcode.KindInternal, errcode.ErrConfigRepoQuery,
+		"config repo query failed", err,
+		errcode.WithInternal(fmt.Sprintf("config repo: %s scan error key=%s", op, key)),
+		errcode.WithCategory(errcode.CategoryInfra),
+	)
 }
 
 // decryptScannedEntry applies fail-closed sensitive-value decryption and stale-key
@@ -469,21 +461,17 @@ func (r *ConfigRepository) Update(ctx context.Context, key string, value string)
 			return nil, infraErr
 		}
 		if errors.Is(scanErr, pgx.ErrNoRows) {
-			return nil, &errcode.Error{
-				Code:            errcode.ErrConfigRepoNotFound,
-				Message:         "config not found",
-				InternalMessage: fmt.Sprintf("config repo: Update miss key=%s", key),
-				Cause:           scanErr,
-				Category:        errcode.CategoryDomain,
-			}
+			return nil, errcode.Wrap(errcode.KindNotFound, errcode.ErrConfigRepoNotFound,
+				"config not found", scanErr,
+				errcode.WithInternal(fmt.Sprintf("config repo: Update miss key=%s", key)),
+				errcode.WithCategory(errcode.CategoryDomain),
+			)
 		}
-		return nil, &errcode.Error{
-			Code:            errcode.ErrConfigRepoQuery,
-			Message:         "config repo query failed",
-			InternalMessage: fmt.Sprintf("config repo: Update select-for-update error key=%s", key),
-			Cause:           scanErr,
-			Category:        errcode.CategoryInfra,
-		}
+		return nil, errcode.Wrap(errcode.KindInternal, errcode.ErrConfigRepoQuery,
+			"config repo query failed", scanErr,
+			errcode.WithInternal(fmt.Sprintf("config repo: Update select-for-update error key=%s", key)),
+			errcode.WithCategory(errcode.CategoryInfra),
+		)
 	}
 
 	return r.doUpdate(ctx, db, "Update", key, value, sensitive)
@@ -721,21 +709,17 @@ func (r *ConfigRepository) GetVersion(ctx context.Context, configID string, vers
 			return nil, infraErr
 		}
 		if errors.Is(err, pgx.ErrNoRows) {
-			return nil, &errcode.Error{
-				Code:            errcode.ErrConfigRepoNotFound,
-				Message:         "config version not found",
-				InternalMessage: fmt.Sprintf("config repo: GetVersion miss config_id=%s version=%d", configID, version),
-				Cause:           err,
-				Category:        errcode.CategoryDomain,
-			}
+			return nil, errcode.Wrap(errcode.KindNotFound, errcode.ErrConfigRepoNotFound,
+				"config version not found", err,
+				errcode.WithInternal(fmt.Sprintf("config repo: GetVersion miss config_id=%s version=%d", configID, version)),
+				errcode.WithCategory(errcode.CategoryDomain),
+			)
 		}
-		return nil, &errcode.Error{
-			Code:            errcode.ErrConfigRepoQuery,
-			Message:         "config repo query failed",
-			InternalMessage: fmt.Sprintf("config repo: GetVersion scan error config_id=%s version=%d", configID, version),
-			Cause:           err,
-			Category:        errcode.CategoryInfra,
-		}
+		return nil, errcode.Wrap(errcode.KindInternal, errcode.ErrConfigRepoQuery,
+			"config repo query failed", err,
+			errcode.WithInternal(fmt.Sprintf("config repo: GetVersion scan error config_id=%s version=%d", configID, version)),
+			errcode.WithCategory(errcode.CategoryInfra),
+		)
 	}
 
 	// Fail-closed enforcement for sensitive versions.
