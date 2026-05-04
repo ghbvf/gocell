@@ -25,7 +25,7 @@ allowed-tools: [Read, Write, Edit, Glob, Grep, Bash, Agent, AskUserQuestion]
 **L2**：启动 1 个 `explorer` agent，研究对标开源项目实现方案，查 `docs/references/framework-comparison.md` 找 primary 对标框架，用 WebFetch 拉取源码（`raw.githubusercontent.com`），提取接口签名、生命周期、错误处理关键设计，输出采纳建议和偏离理由。
 
 **L3（默认）**：并行启动 3 个 `explorer` agent：
-1. 对标框架实现方案（同 L2）
+1. 对标开源项目实现方案
 2. 测试策略（table-driven / 集成 / benchmark 覆盖模式）
 3. 边界条件与安全处理
 
