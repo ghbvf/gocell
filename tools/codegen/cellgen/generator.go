@@ -3,7 +3,7 @@ package cellgen
 import (
 	"embed"
 	"fmt"
-	"os"
+	"log/slog"
 	"path/filepath"
 	"sort"
 	"text/template"
@@ -98,10 +98,7 @@ func Generate(root string, project *metadata.ProjectMeta, opts Options) (Result,
 		// mode, which is silent on opt-out cells by design).
 		if cell.GoStructName == "" {
 			if !opts.Verify {
-				fmt.Fprintf(os.Stderr,
-					"cellgen: skipping cell %q (no goStructName in cell.yaml;"+
-						" add goStructName: <YourStructName> to opt in)\n",
-					cell.ID)
+				slog.Info("cellgen: skipping cell (no goStructName)", slog.String("cell_id", cell.ID))
 			}
 			continue
 		}

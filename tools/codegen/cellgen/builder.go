@@ -10,6 +10,11 @@ import (
 	"github.com/ghbvf/gocell/tools/codegen/markergen"
 )
 
+// stubTopicPattern matches scaffold-generated stub topic strings that look
+// like "event.foo.created.v1" or contain ".foo." — indicating the developer
+// forgot to replace the stub with a real contract id.
+var stubTopicPattern = regexp.MustCompile(`event\.foo\.|\.created\.v1`)
+
 // listenerRefPattern matches valid Go constant references for cell listeners,
 // e.g. "cell.PrimaryListener", "cell.InternalListener". Builder validates each
 // declared listener.Ref against this pattern so a typo in cell.yaml fails fast
@@ -152,7 +157,8 @@ func validateBundleRoutes(cellID string, routes []markergen.RouteSpec, listeners
 	for _, r := range routes {
 		if _, ok := listeners[r.Listener]; !ok {
 			return fmt.Errorf("cellgen build: cell %q slice %q route references undeclared listener %q "+
-				"(declare with +cell:listener marker in cell.go)",
+				"(declare with +cell:listener marker in cell.go, "+
+				"or remove the +slice:route marker if this field should not be a route handler)",
 				cellID, r.Slice, r.Listener)
 		}
 	}
@@ -235,8 +241,12 @@ func buildSubscriptionsFromBundle(p *metadata.ProjectMeta, cellID string, subs [
 func buildSubscriptionSpecFromBundle(p *metadata.ProjectMeta, cellID string, sub markergen.SubscribeSpec) (SubscriptionGenSpec, error) {
 	contract, ok := p.Contracts[sub.Topic]
 	if !ok {
-		return SubscriptionGenSpec{}, fmt.Errorf("cellgen build: cell %q slice %q subscribes to unknown contract %q",
-			cellID, sub.Slice, sub.Topic)
+		prefix := ""
+		if stubTopicPattern.MatchString(sub.Topic) {
+			prefix = "looks like a scaffold stub — replace topic with a real contract id; "
+		}
+		return SubscriptionGenSpec{}, fmt.Errorf("cellgen build: cell %q slice %q %ssubscribes to unknown contract %q",
+			cellID, sub.Slice, prefix, sub.Topic)
 	}
 	if contract.Kind != "event" {
 		return SubscriptionGenSpec{}, fmt.Errorf("cellgen build: cell %q slice %q subscribes to non-event contract %q (kind=%s)",

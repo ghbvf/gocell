@@ -50,6 +50,14 @@ func TestCollectFromCellFile(t *testing.T) {
 			fixture:   "cell_othertools.go",
 			wantCount: 0,
 		},
+		{
+			name:          "cell_withmarkers: fieldLevel FieldName extraction",
+			fixture:       "cell_withmarkers.go",
+			wantCount:     3,
+			wantNames:     []string{"cell:listener", "slice:route", "slice:subscribe"},
+			wantTargets:   []markerTarget{typeLevel, fieldLevel, fieldLevel},
+			wantFieldName: []string{"", "Items", "Sub"},
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

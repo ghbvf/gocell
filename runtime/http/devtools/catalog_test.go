@@ -509,6 +509,35 @@ func buildTestHandlerWithWire(t *testing.T) *devtools.Handler {
 	return devtools.NewHandler(project, nil, nil, "/test-root", clock.Real(), summaries)
 }
 
+// assertWireSummaryFields validates the wireSummary object within a Cell entity
+// spec. Extracted to keep TestCatalog_WireSummary_Injected within the
+// cognitive complexity budget (< 15).
+func assertWireSummaryFields(t *testing.T, spec map[string]any) {
+	t.Helper()
+	ws, ok := spec["wireSummary"]
+	if !ok {
+		t.Errorf("Cell entity spec missing wireSummary field")
+		return
+	}
+	wsMap, ok := ws.(map[string]any)
+	if !ok {
+		t.Errorf("wireSummary is not an object: %T", ws)
+		return
+	}
+	cellID, _ := wsMap["cellId"].(string)
+	if cellID != "accesscore" {
+		t.Errorf("wireSummary.cellId = %q, want accesscore", cellID)
+	}
+	listeners, _ := wsMap["listeners"].([]any)
+	if len(listeners) != 1 {
+		t.Errorf("wireSummary.listeners len = %d, want 1", len(listeners))
+	}
+	routes, _ := wsMap["routes"].([]any)
+	if len(routes) != 1 {
+		t.Errorf("wireSummary.routes len = %d, want 1", len(routes))
+	}
+}
+
 // TestCatalog_WireSummary_Injected verifies that when wireSummaries are
 // provided to NewHandler, each Cell entity's spec contains a wireSummary
 // object with the expected listener / route / subscribe surface.
@@ -539,28 +568,7 @@ func TestCatalog_WireSummary_Injected(t *testing.T) {
 		if e.Kind != "Cell" {
 			continue
 		}
-		ws, ok := e.Spec["wireSummary"]
-		if !ok {
-			t.Errorf("Cell entity spec missing wireSummary field")
-			continue
-		}
-		wsMap, ok := ws.(map[string]any)
-		if !ok {
-			t.Errorf("wireSummary is not an object: %T", ws)
-			continue
-		}
-		cellID, _ := wsMap["cellId"].(string)
-		if cellID != "accesscore" {
-			t.Errorf("wireSummary.cellId = %q, want accesscore", cellID)
-		}
-		listeners, _ := wsMap["listeners"].([]any)
-		if len(listeners) != 1 {
-			t.Errorf("wireSummary.listeners len = %d, want 1", len(listeners))
-		}
-		routes, _ := wsMap["routes"].([]any)
-		if len(routes) != 1 {
-			t.Errorf("wireSummary.routes len = %d, want 1", len(routes))
-		}
+		assertWireSummaryFields(t, e.Spec)
 		found = true
 	}
 	if !found {

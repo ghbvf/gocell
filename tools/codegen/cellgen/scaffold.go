@@ -3,6 +3,7 @@ package cellgen
 import (
 	"bytes"
 	"fmt"
+	"go/format"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -35,6 +36,9 @@ type ScaffoldSpec struct {
 	// ConsistencyLevel is the cell consistency level (e.g. "L0"-"L4").
 	// Defaults to "L1" when empty.
 	ConsistencyLevel string
+	// DryRun, when true, performs conflict detection and returns the list
+	// of paths that would be written without writing any files.
+	DryRun bool
 }
 
 // cellGoTemplate is parsed once from the shared templateFS. Uses
@@ -66,6 +70,10 @@ l0Dependencies: []
 // markers, cell.yaml, and the K#05 marker conventions in place. Returns an
 // error if any output file already exists (caller must remove first).
 //
+// When spec.DryRun is true, only conflict detection is performed — no files
+// are written. Callers can use this to validate inputs and detect path
+// conflicts in CI without mutating the filesystem.
+//
 // Generated files:
 //   - <root>/<targetDir>/cell.go  — struct + stub markers + initInternal hook
 //   - <root>/<targetDir>/cell.yaml — metadata with goStructName set
@@ -94,12 +102,17 @@ func ScaffoldCell(root, targetDir string, spec ScaffoldSpec) error {
 		}
 	}
 
-	cellGoContent, err := renderTemplate(cellGoTemplate, spec)
+	// DryRun: conflict check passed; skip filesystem mutations.
+	if spec.DryRun {
+		return nil
+	}
+
+	cellGoContent, err := renderTemplate(cellGoTemplate, spec, true)
 	if err != nil {
 		return fmt.Errorf("scaffold cell: render cell.go: %w", err)
 	}
 
-	cellYAMLContent, err := renderTemplate(cellYAMLTemplate, spec)
+	cellYAMLContent, err := renderTemplate(cellYAMLTemplate, spec, false)
 	if err != nil {
 		return fmt.Errorf("scaffold cell: render cell.yaml: %w", err)
 	}
@@ -153,10 +166,20 @@ func validateScaffoldSpec(spec ScaffoldSpec) error {
 }
 
 // renderTemplate executes tmpl with data and returns the rendered bytes.
-func renderTemplate(tmpl *template.Template, data any) ([]byte, error) {
+// When isGoSource is true the output is validated (and formatted) via
+// go/format.Source so that template bugs are caught at scaffold time rather
+// than producing invalid Go that breaks at compile time.
+func renderTemplate(tmpl *template.Template, data any, isGoSource bool) ([]byte, error) {
 	var buf bytes.Buffer
 	if err := tmpl.Execute(&buf, data); err != nil {
 		return nil, err
+	}
+	if isGoSource {
+		formatted, err := format.Source(buf.Bytes())
+		if err != nil {
+			return nil, fmt.Errorf("rendered Go source is not valid: %w", err)
+		}
+		return formatted, nil
 	}
 	return buf.Bytes(), nil
 }

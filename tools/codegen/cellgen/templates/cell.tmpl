@@ -42,8 +42,11 @@ var (
 	{{ .SpecVarName }} = wrapper.EventSpec({{ printf "%q" .ContractID }}, {{ printf "%q" .Transport }})
 {{- end }}
 )
+
+const subscribeErrFormat = {{ printf "%q" (printf "%s: subscribe %%s: %%w" .CellID) }}
 {{ end }}
 
+//nolint:gocognit // generated code: complexity intrinsic to cell's subscribe count
 func (c *{{.StructName}}) Init(ctx context.Context, reg cell.Registry) error {
 	if err := c.BaseCell.Init(ctx, reg); err != nil {
 		return err
@@ -83,7 +86,7 @@ func (c *{{.StructName}}) Init(ctx context.Context, reg cell.Registry) error {
 {{- range .Subscriptions }}
 	if err := reg.Subscribe({{ .SpecVarName }}, {{ .HandlerExpr }}, {{ if .ConsumerGroup }}{{ printf "%q" .ConsumerGroup }}{{ else }}{{ printf "%q" $.ConsumerGroupDefault }}{{ end }},
 		cell.WithSubscriptionSliceID({{ printf "%q" .SliceID }})); err != nil {
-		return fmt.Errorf({{ printf "%q" $.CellID }}+": subscribe %s: %w", {{ .SpecVarName }}.Topic, err)
+		return fmt.Errorf(subscribeErrFormat, {{ .SpecVarName }}.Topic, err)
 	}
 {{ end }}
 	return nil

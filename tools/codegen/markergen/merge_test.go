@@ -31,32 +31,27 @@ func TestMerge_MarkerPath(t *testing.T) {
 	t.Parallel()
 	td := testdataDir(t)
 
-	// cell.File points to a yaml inside testdata, so filepath.Dir gives testdata/
-	// and Merge will look for testdata/cell.go.  We rename the fixture to "cell.go"
-	// in a temp dir.
+	// Use a stable <tmp>/cells/markercell/ layout so Merge can compute
+	// filepath.Join(projectRoot, "cells/markercell", "cell.go") deterministically.
 	tmp := t.TempDir()
-	copyFile(t, filepath.Join(td, "cell_withmarkers.go"), filepath.Join(tmp, "cell.go"))
+	cellDir := filepath.Join(tmp, "cells", "markercell")
+	if err := os.MkdirAll(cellDir, 0o750); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	copyFile(t, filepath.Join(td, "cell_withmarkers.go"), filepath.Join(cellDir, "cell.go"))
 
 	project := buildProjectMeta(
 		map[string]*metadata.CellMeta{
 			"markercell": {
 				ID:   "markercell",
-				File: "fakedir/cell.yaml", // Dir("fakedir/cell.yaml") → "fakedir"
+				File: "cells/markercell/cell.yaml",
 			},
 		},
 		map[string]*metadata.SliceMeta{},
 	)
-	// Override: cell.File dir must match tmp. Adjust manually.
-	project.Cells["markercell"].File = filepath.Join(filepath.Base(tmp), "cell.yaml")
 
-	// Merge uses filepath.Join(projectRoot, filepath.Dir(cell.File), "cell.go").
-	// projectRoot = parent of tmp, Dir(cell.File) = Base(tmp).
-	projectRoot := filepath.Dir(tmp)
-	// Re-set cell.File to relative path from projectRoot.
-	rel, _ := filepath.Rel(projectRoot, filepath.Join(tmp, "cell.yaml"))
-	project.Cells["markercell"].File = rel
-
-	bundles, err := Merge(projectRoot, project)
+	// projectRoot = tmp; Merge will look for tmp/cells/markercell/cell.go.
+	bundles, err := Merge(tmp, project)
 	if err != nil {
 		t.Fatalf("Merge: %v", err)
 	}
@@ -159,8 +154,8 @@ func TestMerge_ErrorAccumulation(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error from bad marker")
 	}
-	if !strings.Contains(err.Error(), "ref") {
-		t.Errorf("error should mention missing 'ref' field, got: %v", err)
+	if !strings.Contains(err.Error(), `missing required field "ref"`) {
+		t.Errorf("error should contain `missing required field \"ref\"`, got: %v", err)
 	}
 	// SEC-03/OPS-04: error must carry cellID and must NOT contain absolute path.
 	if !strings.Contains(err.Error(), "badcell") {

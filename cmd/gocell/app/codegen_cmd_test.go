@@ -23,6 +23,27 @@ var stubSpec = codegenSpec[cellgen.Result]{
 //
 // K#05 W2 DX defaults: --all=true (run all when no args), positional id wins.
 
+// runParseCodegenFlagCase executes a single parseCodegenFlags test case and
+// reports failures via t. Extracted to keep TestParseCodegenFlags within the
+// cognitive complexity budget (< 15).
+func runParseCodegenFlagCase(t *testing.T, args []string, wantDry, wantVer bool, wantOnly, wantErrIn string) {
+	t.Helper()
+	dryRun, verify, only, err := parseCodegenFlags(stubSpec, args)
+	if wantErrIn != "" {
+		if err == nil || !strings.Contains(err.Error(), wantErrIn) {
+			t.Fatalf("expected error containing %q, got %v", wantErrIn, err)
+		}
+		return
+	}
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if dryRun != wantDry || verify != wantVer || only != wantOnly {
+		t.Fatalf("got dryRun=%v verify=%v only=%q; want dryRun=%v verify=%v only=%q",
+			dryRun, verify, only, wantDry, wantVer, wantOnly)
+	}
+}
+
 func TestParseCodegenFlags(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
@@ -64,20 +85,7 @@ func TestParseCodegenFlags(t *testing.T) {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			dryRun, verify, only, err := parseCodegenFlags(stubSpec, tc.args)
-			if tc.wantErrIn != "" {
-				if err == nil || !strings.Contains(err.Error(), tc.wantErrIn) {
-					t.Fatalf("expected error containing %q, got %v", tc.wantErrIn, err)
-				}
-				return
-			}
-			if err != nil {
-				t.Fatalf("unexpected error: %v", err)
-			}
-			if dryRun != tc.wantDry || verify != tc.wantVer || only != tc.wantOnly {
-				t.Fatalf("got dryRun=%v verify=%v only=%q; want dryRun=%v verify=%v only=%q",
-					dryRun, verify, only, tc.wantDry, tc.wantVer, tc.wantOnly)
-			}
+			runParseCodegenFlagCase(t, tc.args, tc.wantDry, tc.wantVer, tc.wantOnly, tc.wantErrIn)
 		})
 	}
 }

@@ -49,6 +49,9 @@ var (
 	specEventUserUpdated            = wrapper.EventSpec("event.user.updated.v1", "amqp")
 )
 
+const subscribeErrFormat = "auditcore: subscribe %s: %w"
+
+//nolint:gocognit // generated code: complexity intrinsic to cell's subscribe count
 func (c *AuditCore) Init(ctx context.Context, reg cell.Registry) error {
 	if err := c.BaseCell.Init(ctx, reg); err != nil {
 		return err
@@ -75,67 +78,67 @@ func (c *AuditCore) Init(ctx context.Context, reg cell.Registry) error {
 
 	if err := reg.Subscribe(specEventConfigEntryDeleted, c.appendSvc.HandleEvent, "auditcore",
 		cell.WithSubscriptionSliceID("auditappend")); err != nil {
-		return fmt.Errorf("auditcore"+": subscribe %s: %w", specEventConfigEntryDeleted.Topic, err)
+		return fmt.Errorf(subscribeErrFormat, specEventConfigEntryDeleted.Topic, err)
 	}
 
 	if err := reg.Subscribe(specEventConfigEntryUpserted, c.appendSvc.HandleEvent, "auditcore",
 		cell.WithSubscriptionSliceID("auditappend")); err != nil {
-		return fmt.Errorf("auditcore"+": subscribe %s: %w", specEventConfigEntryUpserted.Topic, err)
+		return fmt.Errorf(subscribeErrFormat, specEventConfigEntryUpserted.Topic, err)
 	}
 
 	if err := reg.Subscribe(specEventConfigRollback, c.appendSvc.HandleEvent, "auditcore",
 		cell.WithSubscriptionSliceID("auditappend")); err != nil {
-		return fmt.Errorf("auditcore"+": subscribe %s: %w", specEventConfigRollback.Topic, err)
+		return fmt.Errorf(subscribeErrFormat, specEventConfigRollback.Topic, err)
 	}
 
 	if err := reg.Subscribe(specEventConfigVersionPublished, c.appendSvc.HandleEvent, "auditcore",
 		cell.WithSubscriptionSliceID("auditappend")); err != nil {
-		return fmt.Errorf("auditcore"+": subscribe %s: %w", specEventConfigVersionPublished.Topic, err)
+		return fmt.Errorf(subscribeErrFormat, specEventConfigVersionPublished.Topic, err)
 	}
 
 	if err := reg.Subscribe(specEventRoleAssigned, c.appendSvc.HandleEvent, "auditcore",
 		cell.WithSubscriptionSliceID("auditappend")); err != nil {
-		return fmt.Errorf("auditcore"+": subscribe %s: %w", specEventRoleAssigned.Topic, err)
+		return fmt.Errorf(subscribeErrFormat, specEventRoleAssigned.Topic, err)
 	}
 
 	if err := reg.Subscribe(specEventRoleRevoked, c.appendSvc.HandleEvent, "auditcore",
 		cell.WithSubscriptionSliceID("auditappend")); err != nil {
-		return fmt.Errorf("auditcore"+": subscribe %s: %w", specEventRoleRevoked.Topic, err)
+		return fmt.Errorf(subscribeErrFormat, specEventRoleRevoked.Topic, err)
 	}
 
 	if err := reg.Subscribe(specEventSessionCreated, c.appendSvc.HandleEvent, "auditcore",
 		cell.WithSubscriptionSliceID("auditappend")); err != nil {
-		return fmt.Errorf("auditcore"+": subscribe %s: %w", specEventSessionCreated.Topic, err)
+		return fmt.Errorf(subscribeErrFormat, specEventSessionCreated.Topic, err)
 	}
 
 	if err := reg.Subscribe(specEventSessionRevoked, c.appendSvc.HandleEvent, "auditcore",
 		cell.WithSubscriptionSliceID("auditappend")); err != nil {
-		return fmt.Errorf("auditcore"+": subscribe %s: %w", specEventSessionRevoked.Topic, err)
+		return fmt.Errorf(subscribeErrFormat, specEventSessionRevoked.Topic, err)
 	}
 
 	if err := reg.Subscribe(specEventUserCreated, c.appendSvc.HandleEvent, "auditcore",
 		cell.WithSubscriptionSliceID("auditappend")); err != nil {
-		return fmt.Errorf("auditcore"+": subscribe %s: %w", specEventUserCreated.Topic, err)
+		return fmt.Errorf(subscribeErrFormat, specEventUserCreated.Topic, err)
 	}
 
 	if err := reg.Subscribe(specEventUserDeleted, c.appendSvc.HandleEvent, "auditcore",
 		cell.WithSubscriptionSliceID("auditappend")); err != nil {
-		return fmt.Errorf("auditcore"+": subscribe %s: %w", specEventUserDeleted.Topic, err)
+		return fmt.Errorf(subscribeErrFormat, specEventUserDeleted.Topic, err)
 	}
 
 	if err := reg.Subscribe(specEventUserLocked, c.appendSvc.HandleEvent, "auditcore",
 		cell.WithSubscriptionSliceID("auditappend")); err != nil {
-		return fmt.Errorf("auditcore"+": subscribe %s: %w", specEventUserLocked.Topic, err)
+		return fmt.Errorf(subscribeErrFormat, specEventUserLocked.Topic, err)
 	}
 
 	if err := reg.Subscribe(specEventUserUnlocked, c.appendSvc.HandleEvent, "auditcore",
 		cell.WithSubscriptionSliceID("auditappend")); err != nil {
-		return fmt.Errorf("auditcore"+": subscribe %s: %w", specEventUserUnlocked.Topic, err)
+		return fmt.Errorf(subscribeErrFormat, specEventUserUnlocked.Topic, err)
 	}
 
 	if err := reg.Subscribe(specEventUserUpdated, c.appendSvc.HandleEvent, "auditcore",
 		cell.WithSubscriptionSliceID("auditappend")); err != nil {
-		return fmt.Errorf("auditcore"+": subscribe %s: %w", specEventUserUpdated.Topic, err)
+		return fmt.Errorf(subscribeErrFormat, specEventUserUpdated.Topic, err)
 	}
 
 	return nil

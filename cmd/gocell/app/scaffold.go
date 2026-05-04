@@ -111,29 +111,7 @@ func scaffoldCell(root string, args []string) error {
 		return fmt.Errorf("--team is required")
 	}
 
-	// In dry-run mode, delegate to kernel/scaffold which validates opts and
-	// detects file conflicts without writing. Non-dry-run path generates the
-	// richer K#05 skeleton (cell.go with stub markers + cell.yaml with
-	// goStructName) via cellgen.ScaffoldCell.
-	if *dryRun {
-		s := scaffold.New(root).WithDryRun(true)
-		if err := s.CreateCell(scaffold.CellOpts{
-			ID:               *id,
-			Type:             *cellType,
-			ConsistencyLevel: *level,
-			OwnerTeam:        *team,
-		}); err != nil {
-			return err
-		}
-		// Report each file that would be written so callers can see paths.
-		yamlPath := filepath.Join("cells", *id, "cell.yaml")
-		goPath := filepath.Join("cells", *id, "cell.go")
-		fmt.Printf("(dry-run) Would create %s\n", filepath.ToSlash(yamlPath))
-		fmt.Printf("(dry-run) Would create %s\n", filepath.ToSlash(goPath))
-		return nil
-	}
-
-	// Resolve Go identifiers.
+	// Resolve Go identifiers shared by both dry-run and live paths.
 	resolvedStruct := *structName
 	if resolvedStruct == "" {
 		resolvedStruct = cellIDToPascalCase(*id)
@@ -145,6 +123,9 @@ func scaffoldCell(root string, args []string) error {
 		return fmt.Errorf("scaffold cell: read module path: %w", err)
 	}
 
+	// Both dry-run and live paths delegate to cellgen.ScaffoldCell; DryRun=true
+	// performs conflict detection only without writing any files. This unifies
+	// path-computation logic so dry-run and live runs always agree on output paths.
 	if err := cellgen.ScaffoldCell(root, filepath.Join("cells", *id), cellgen.ScaffoldSpec{
 		CellID:           *id,
 		StructName:       resolvedStruct,
@@ -153,8 +134,18 @@ func scaffoldCell(root string, args []string) error {
 		OwnerTeam:        *team,
 		Type:             *cellType,
 		ConsistencyLevel: *level,
+		DryRun:           *dryRun,
 	}); err != nil {
 		return err
+	}
+
+	if *dryRun {
+		// Report each file that would be written so callers can see paths.
+		yamlPath := filepath.Join("cells", *id, "cell.yaml")
+		goPath := filepath.Join("cells", *id, "cell.go")
+		fmt.Printf("(dry-run) Would create %s\n", filepath.ToSlash(yamlPath))
+		fmt.Printf("(dry-run) Would create %s\n", filepath.ToSlash(goPath))
+		return nil
 	}
 
 	reportScaffold(scaffoldReport{

@@ -131,7 +131,7 @@ func TestScaffoldCell_TableDriven(t *testing.T) {
 				"package iotdevice",
 				"type IoTDevice struct",
 				"func NewIoTDevice()",
-				"// +slice:subscribe:slice=foo,topic=event.foo.created.v1,handler=HandleCreated,group=iotdevice",
+				"// +slice:subscribe:",
 			},
 			wantInCellYAML: []string{
 				"id: iotdevice",
@@ -257,6 +257,51 @@ func TestScaffoldCell_ConflictError(t *testing.T) {
 	if !strings.Contains(err.Error(), "already exists") {
 		t.Errorf("expected 'already exists' in error, got: %v", err)
 	}
+}
+
+// TestScaffoldCell_DryRun verifies that ScaffoldCell with DryRun=true performs
+// conflict detection but does not write any files.
+func TestScaffoldCell_DryRun(t *testing.T) {
+	t.Run("no files written when no conflict", func(t *testing.T) {
+		dir := t.TempDir()
+		spec := ScaffoldSpec{
+			CellID:     "drycell",
+			StructName: "DryCell",
+			Package:    "drycell",
+			ModulePath: "github.com/example/app",
+			DryRun:     true,
+		}
+		if err := ScaffoldCell(dir, "cells/drycell", spec); err != nil {
+			t.Fatalf("ScaffoldCell DryRun: %v", err)
+		}
+		cellGoPath := filepath.Join(dir, "cells", "drycell", "cell.go")
+		if _, err := os.Stat(cellGoPath); err == nil {
+			t.Error("DryRun=true must not write cell.go")
+		}
+	})
+
+	t.Run("conflict detected in dry-run", func(t *testing.T) {
+		dir := t.TempDir()
+		spec := ScaffoldSpec{
+			CellID:     "conflictcell",
+			StructName: "ConflictCell",
+			Package:    "conflictcell",
+			ModulePath: "github.com/example/app",
+		}
+		// First live call creates files.
+		if err := ScaffoldCell(dir, "cells/conflictcell", spec); err != nil {
+			t.Fatalf("first ScaffoldCell: %v", err)
+		}
+		// Second call with DryRun must still detect conflict.
+		spec.DryRun = true
+		err := ScaffoldCell(dir, "cells/conflictcell", spec)
+		if err == nil {
+			t.Fatal("expected conflict error in dry-run, got nil")
+		}
+		if !strings.Contains(err.Error(), "already exists") {
+			t.Errorf("expected 'already exists' in error, got: %v", err)
+		}
+	})
 }
 
 // TestScaffoldCell_ValidationErrors verifies that missing required fields

@@ -28,6 +28,8 @@ type collectedMarker struct {
 //
 // Only markers with known GoCell prefixes ("cell:" / "slice:") are returned;
 // other "// +" markers (e.g. controller-gen, protoc) are silently skipped.
+// Marker comments on func declarations are silently skipped; place markers on
+// the struct field or type declaration only.
 //
 // ref: kubernetes-sigs/controller-tools pkg/markers/collect.go@main
 func CollectFromCellFile(path string) ([]collectedMarker, error) {

@@ -38,6 +38,9 @@ var (
 	specEventConfigEntryUpserted = wrapper.EventSpec("event.config.entry-upserted.v1", "amqp")
 )
 
+const subscribeErrFormat = "configcore: subscribe %s: %w"
+
+//nolint:gocognit // generated code: complexity intrinsic to cell's subscribe count
 func (c *ConfigCore) Init(ctx context.Context, reg cell.Registry) error {
 	if err := c.BaseCell.Init(ctx, reg); err != nil {
 		return err
@@ -89,12 +92,12 @@ func (c *ConfigCore) Init(ctx context.Context, reg cell.Registry) error {
 
 	if err := reg.Subscribe(specEventConfigEntryDeleted, c.subscribeSvc.HandleEntryDeleted, "configcore",
 		cell.WithSubscriptionSliceID("configsubscribe")); err != nil {
-		return fmt.Errorf("configcore"+": subscribe %s: %w", specEventConfigEntryDeleted.Topic, err)
+		return fmt.Errorf(subscribeErrFormat, specEventConfigEntryDeleted.Topic, err)
 	}
 
 	if err := reg.Subscribe(specEventConfigEntryUpserted, c.subscribeSvc.HandleEntryUpserted, "configcore",
 		cell.WithSubscriptionSliceID("configsubscribe")); err != nil {
-		return fmt.Errorf("configcore"+": subscribe %s: %w", specEventConfigEntryUpserted.Topic, err)
+		return fmt.Errorf(subscribeErrFormat, specEventConfigEntryUpserted.Topic, err)
 	}
 
 	return nil

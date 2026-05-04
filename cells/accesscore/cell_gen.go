@@ -40,6 +40,9 @@ var (
 	specEventRoleRevoked         = wrapper.EventSpec("event.role.revoked.v1", "amqp")
 )
 
+const subscribeErrFormat = "accesscore: subscribe %s: %w"
+
+//nolint:gocognit // generated code: complexity intrinsic to cell's subscribe count
 func (c *AccessCore) Init(ctx context.Context, reg cell.Registry) error {
 	if err := c.BaseCell.Init(ctx, reg); err != nil {
 		return err
@@ -96,22 +99,22 @@ func (c *AccessCore) Init(ctx context.Context, reg cell.Registry) error {
 
 	if err := reg.Subscribe(specEventConfigEntryDeleted, c.configReceiveSvc.HandleEntryDeleted, "accesscore",
 		cell.WithSubscriptionSliceID("configreceive")); err != nil {
-		return fmt.Errorf("accesscore"+": subscribe %s: %w", specEventConfigEntryDeleted.Topic, err)
+		return fmt.Errorf(subscribeErrFormat, specEventConfigEntryDeleted.Topic, err)
 	}
 
 	if err := reg.Subscribe(specEventConfigEntryUpserted, c.configReceiveSvc.HandleEntryUpserted, "accesscore",
 		cell.WithSubscriptionSliceID("configreceive")); err != nil {
-		return fmt.Errorf("accesscore"+": subscribe %s: %w", specEventConfigEntryUpserted.Topic, err)
+		return fmt.Errorf(subscribeErrFormat, specEventConfigEntryUpserted.Topic, err)
 	}
 
 	if err := reg.Subscribe(specEventRoleAssigned, c.rbacSessionConsumer.HandleRoleChanged, "accesscore-rbac-session-sync",
 		cell.WithSubscriptionSliceID("sessionlogout")); err != nil {
-		return fmt.Errorf("accesscore"+": subscribe %s: %w", specEventRoleAssigned.Topic, err)
+		return fmt.Errorf(subscribeErrFormat, specEventRoleAssigned.Topic, err)
 	}
 
 	if err := reg.Subscribe(specEventRoleRevoked, c.rbacSessionConsumer.HandleRoleChanged, "accesscore-rbac-session-sync",
 		cell.WithSubscriptionSliceID("sessionlogout")); err != nil {
-		return fmt.Errorf("accesscore"+": subscribe %s: %w", specEventRoleRevoked.Topic, err)
+		return fmt.Errorf(subscribeErrFormat, specEventRoleRevoked.Topic, err)
 	}
 
 	return nil

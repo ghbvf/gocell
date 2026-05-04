@@ -54,6 +54,10 @@ func Merge(projectRoot string, project *metadata.ProjectMeta) (map[string]WireBu
 		for _, e := range errs {
 			allErrs.Append(fmt.Errorf("cell %s: %w", cellID, e))
 		}
+		if len(errs) > 0 {
+			// Skip writing a partial bundle; the errors are in allErrs.
+			continue
+		}
 		result[cellID] = bundle
 	}
 
@@ -189,6 +193,8 @@ func parseSubscribe(m collectedMarker) (SubscribeSpec, error) {
 }
 
 // checkUnknownFields reports an error for each key in kv that is not in allowed.
+// When the Levenshtein distance to the nearest allowed field is ≤ 2, appends a
+// "(did you mean %q?)" suggestion to the error message.
 func checkUnknownFields(m collectedMarker, kv map[string]string, allowed []string, errs *errList) {
 	allowedSet := make(map[string]struct{}, len(allowed))
 	for _, a := range allowed {
@@ -196,7 +202,12 @@ func checkUnknownFields(m collectedMarker, kv map[string]string, allowed []strin
 	}
 	for k := range kv {
 		if _, ok := allowedSet[k]; !ok {
-			errs.Append(fmt.Errorf("cell.go:%d: marker %q has unknown field %q", m.Line, m.Name, k))
+			sug := suggestMarkerName(k, allowed)
+			if sug != "" {
+				errs.Append(fmt.Errorf("cell.go:%d: marker %q has unknown field %q (did you mean %q?)", m.Line, m.Name, k, sug))
+			} else {
+				errs.Append(fmt.Errorf("cell.go:%d: marker %q has unknown field %q", m.Line, m.Name, k))
+			}
 		}
 	}
 }

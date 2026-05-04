@@ -1,6 +1,7 @@
 package markergen
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 )
@@ -91,6 +92,7 @@ func (e *errList) Append(err error) {
 }
 
 // AsError returns nil when the list is empty, or an aggregated error otherwise.
+// When len > 1, errors.Join is used (Go 1.20+) to preserve %w chains.
 func (e errList) AsError() error {
 	if len(e) == 0 {
 		return nil
@@ -98,11 +100,7 @@ func (e errList) AsError() error {
 	if len(e) == 1 {
 		return e[0]
 	}
-	msgs := make([]string, len(e))
-	for i, err := range e {
-		msgs[i] = err.Error()
-	}
-	return fmt.Errorf("%s", strings.Join(msgs, "; "))
+	return errors.Join(e...)
 }
 
 // levenshtein computes the edit distance between strings a and b using
