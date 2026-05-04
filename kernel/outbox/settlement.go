@@ -18,10 +18,13 @@ import "context"
 // the Settlement view (renewal stays inside ConsumerBase).
 //
 // ref: nats-io/nats.go jetstream/message.go Msg interface — settle ops
-//      (Ack/Nak/Term/InProgress) abstracted into a single interface
+//
+//	(Ack/Nak/Term/InProgress) abstracted into a single interface
+//
 // ref: IBM/sarama consumer_group.go ConsumeClaim(session ConsumerGroupSession,
-//      claim ConsumerGroupClaim) — settle handle as explicit method parameter
-//      rather than a ctx side-channel
+//
+//	claim ConsumerGroupClaim) — settle handle as explicit method parameter
+//	rather than a ctx side-channel
 type Settlement interface {
 	Commit(ctx context.Context) error
 	Release(ctx context.Context) error

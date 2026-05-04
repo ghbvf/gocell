@@ -260,19 +260,20 @@ func testTopicIsolation(t *testing.T, _ Features, constructor PubSubConstructor)
 	subDone := make(chan struct{})
 	go func() {
 		defer close(subDone)
-		_ = sub.Subscribe(subCtx, outbox.Subscription{Topic: topicA}, func(_ context.Context, entry outbox.Entry) outbox.HandleResult {
-			select {
-			case deliveryA <- struct{}{}:
-			default:
-			}
-			mu.Lock()
-			receivedA = append(receivedA, entry)
-			if len(receivedA) >= 1 {
-				closeOnceA.Do(func() { close(doneA) })
-			}
-			mu.Unlock()
-			return outbox.HandleResult{Disposition: outbox.DispositionAck}
-		})
+		_ = sub.Subscribe(subCtx, outbox.Subscription{Topic: topicA},
+			outbox.EntryToSubscriberHandler(func(_ context.Context, entry outbox.Entry) outbox.HandleResult {
+				select {
+				case deliveryA <- struct{}{}:
+				default:
+				}
+				mu.Lock()
+				receivedA = append(receivedA, entry)
+				if len(receivedA) >= 1 {
+					closeOnceA.Do(func() { close(doneA) })
+				}
+				mu.Unlock()
+				return outbox.HandleResult{Disposition: outbox.DispositionAck}
+			}))
 	}()
 	waitForSubscription(t, ctx, sub, topicA, "")
 
@@ -333,17 +334,17 @@ func testMultipleSubscribers(t *testing.T, _ Features, constructor PubSubConstru
 	sub2Spec := outbox.Subscription{Topic: topic, ConsumerGroup: "broadcast-2"}
 
 	wg.Go(func() {
-		_ = sub.Subscribe(subCtx, sub1Spec, func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+		_ = sub.Subscribe(subCtx, sub1Spec, outbox.EntryToSubscriberHandler(func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
 			sub1Received.Add(1)
 			return outbox.HandleResult{Disposition: outbox.DispositionAck}
-		})
+		}))
 	})
 
 	wg.Go(func() {
-		_ = sub.Subscribe(subCtx, sub2Spec, func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+		_ = sub.Subscribe(subCtx, sub2Spec, outbox.EntryToSubscriberHandler(func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
 			sub2Received.Add(1)
 			return outbox.HandleResult{Disposition: outbox.DispositionAck}
-		})
+		}))
 	})
 
 	waitForSubscription(t, ctx, sub, topic, "broadcast-1")
@@ -385,14 +386,15 @@ func testCompetingConsumers(t *testing.T, _ Features, constructor PubSubConstruc
 	// Start two competing subscribers on the same topic.
 	for range 2 {
 		wg.Go(func() {
-			_ = sub.Subscribe(subCtx, outbox.Subscription{Topic: topic}, func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
-				select {
-				case delivery <- struct{}{}:
-				default:
-				}
-				totalReceived.Add(1)
-				return outbox.HandleResult{Disposition: outbox.DispositionAck}
-			})
+			_ = sub.Subscribe(subCtx, outbox.Subscription{Topic: topic},
+				outbox.EntryToSubscriberHandler(func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+					select {
+					case delivery <- struct{}{}:
+					default:
+					}
+					totalReceived.Add(1)
+					return outbox.HandleResult{Disposition: outbox.DispositionAck}
+				}))
 		})
 	}
 
@@ -566,15 +568,18 @@ func testReceiptCommittedOnAck(t *testing.T, features Features, constructor PubS
 	h := newHarness(t, constructor)
 	receipt := NewMockReceipt()
 
-	h.subscribe(func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+	// Settlement is now returned as the second value from SubscriberHandler,
+	// not embedded in HandleResult. subscribeWithHandler accepts SubscriberHandler
+	// directly so the conformance test can inject a mock Settlement.
+	h.subscribeWithHandler(func(_ context.Context, _ outbox.Entry) (outbox.HandleResult, outbox.Settlement) {
 		h.signalDone()
-		return outbox.HandleResult{Disposition: outbox.DispositionAck, Receipt: receipt}
+		return outbox.HandleResult{Disposition: outbox.DispositionAck}, receipt
 	})
 
 	h.publishAndWait([]byte(`{"test":"receipt-ack"}`))
 	assertEventually(t, func() bool { return receipt.Committed() },
-		testtime.D5s, testtime.D10ms, "Receipt.Commit should be called on Ack")
-	assertFalse(t, receipt.Released(), "Receipt.Release should NOT be called on Ack")
+		testtime.D5s, testtime.D10ms, "Settlement.Commit should be called on Ack")
+	assertFalse(t, receipt.Released(), "Settlement.Release should NOT be called on Ack")
 	h.teardown()
 }
 
@@ -589,19 +594,18 @@ func testReceiptReleasedOnReject(t *testing.T, features Features, constructor Pu
 	h := newHarness(t, constructor)
 	receipt := NewMockReceipt()
 
-	h.subscribe(func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+	h.subscribeWithHandler(func(_ context.Context, _ outbox.Entry) (outbox.HandleResult, outbox.Settlement) {
 		h.signalDone()
 		return outbox.HandleResult{
 			Disposition: outbox.DispositionReject,
 			Err:         outbox.NewPermanentError(fmt.Errorf("bad")),
-			Receipt:     receipt,
-		}
+		}, receipt
 	})
 
 	h.publishAndWait([]byte(`{"test":"receipt-reject"}`))
 	assertEventually(t, func() bool { return receipt.Released() },
-		testtime.D5s, testtime.D10ms, "Receipt.Release should be called on Reject")
-	assertFalse(t, receipt.Committed(), "Receipt.Commit should NOT be called on Reject")
+		testtime.D5s, testtime.D10ms, "Settlement.Release should be called on Reject")
+	assertFalse(t, receipt.Committed(), "Settlement.Commit should NOT be called on Reject")
 	h.teardown()
 }
 
@@ -617,32 +621,31 @@ func testReceiptReleasedOnRequeue(t *testing.T, features Features, constructor P
 	receipt := NewMockReceipt()
 	var callCount atomic.Int32
 
-	h.subscribe(func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+	h.subscribeWithHandler(func(_ context.Context, _ outbox.Entry) (outbox.HandleResult, outbox.Settlement) {
 		n := callCount.Add(1)
 		if n == 1 {
 			h.signalDone()
 			return outbox.HandleResult{
 				Disposition: outbox.DispositionRequeue,
 				Err:         fmt.Errorf("transient"),
-				Receipt:     receipt,
-			}
+			}, receipt
 		}
-		return outbox.HandleResult{Disposition: outbox.DispositionAck}
+		return outbox.HandleResult{Disposition: outbox.DispositionAck}, nil
 	})
 
 	h.publishAndWait([]byte(`{"test":"receipt-requeue"}`))
 	assertEventually(t, func() bool { return receipt.Released() },
-		testtime.D5s, testtime.D10ms, "Receipt.Release should be called on Requeue")
+		testtime.D5s, testtime.D10ms, "Settlement.Release should be called on Requeue")
 	h.teardown()
 }
 
 // testReceiptCommitFailureDoesNotAck guards the cross-transport invariant
 // added in the F2 fix (PR #184): when handler returns DispositionAck but
-// Receipt.Commit fails (lease lost / token mismatch / backend error), the
+// Settlement.Commit fails (lease lost / token mismatch / backend error), the
 // adapter must NOT treat the message as successfully acknowledged. RabbitMQ
 // translates this to Nack(requeue=true); InMemoryEventBus retries via its
 // internal retry loop. Either way the handler must be re-invoked, evidenced
-// by an additional Receipt.Commit attempt or a redelivery.
+// by an additional Settlement.Commit attempt or a redelivery.
 //
 // Without this guard, regression to the pre-F2 semantics (eventbus silently
 // promoting Commit failure to success) would cause stale lease holders to
@@ -653,17 +656,17 @@ func testReceiptCommitFailureDoesNotAck(t *testing.T, features Features, constru
 	}
 
 	h := newHarness(t, constructor)
-	// Receipt whose Commit always returns an error — emulates lease-lost /
+	// Settlement whose Commit always returns an error — emulates lease-lost /
 	// token-mismatch backend response.
 	receipt := NewMockReceiptWithErrors(errors.New("commit fails (test)"), nil)
 
 	var deliveries atomic.Int32
-	h.subscribe(func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+	h.subscribeWithHandler(func(_ context.Context, _ outbox.Entry) (outbox.HandleResult, outbox.Settlement) {
 		n := deliveries.Add(1)
 		if n == 1 {
 			h.signalDone() // wake publisher after first delivery
 		}
-		return outbox.HandleResult{Disposition: outbox.DispositionAck, Receipt: receipt}
+		return outbox.HandleResult{Disposition: outbox.DispositionAck}, receipt
 	})
 
 	h.publishAndWait([]byte(`{"test":"commit-fail"}`))
@@ -693,9 +696,10 @@ func testSubscribeBlocksUntilCancel(t *testing.T, features Features, constructor
 
 	subscribeReturned := make(chan error, 1)
 	go func() {
-		err := sub.Subscribe(ctx, outbox.Subscription{Topic: TestTopic(t)}, func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
-			return outbox.HandleResult{Disposition: outbox.DispositionAck}
-		})
+		err := sub.Subscribe(ctx, outbox.Subscription{Topic: TestTopic(t)},
+			outbox.EntryToSubscriberHandler(func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+				return outbox.HandleResult{Disposition: outbox.DispositionAck}
+			}))
 		subscribeReturned <- err
 	}()
 
@@ -725,9 +729,10 @@ func testCloseTerminatesSubscribers(t *testing.T, _ Features, constructor PubSub
 	subscribeReturned := make(chan struct{})
 	go func() {
 		defer close(subscribeReturned)
-		_ = sub.Subscribe(ctx, outbox.Subscription{Topic: topic}, func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
-			return outbox.HandleResult{Disposition: outbox.DispositionAck}
-		})
+		_ = sub.Subscribe(ctx, outbox.Subscription{Topic: topic},
+			outbox.EntryToSubscriberHandler(func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+				return outbox.HandleResult{Disposition: outbox.DispositionAck}
+			}))
 	}()
 	waitForSubscription(t, ctx, sub, topic, "")
 
@@ -809,8 +814,8 @@ func testSubscriberWithMiddleware(t *testing.T, _ Features, constructor PubSubCo
 	h := newHarness(t, constructor)
 
 	var middlewareCalled atomic.Bool
-	middleware := func(_ outbox.Subscription, next outbox.EntryHandler) outbox.EntryHandler {
-		return func(ctx context.Context, entry outbox.Entry) outbox.HandleResult {
+	middleware := func(_ outbox.Subscription, next outbox.SubscriberHandler) outbox.SubscriberHandler {
+		return func(ctx context.Context, entry outbox.Entry) (outbox.HandleResult, outbox.Settlement) {
 			middlewareCalled.Store(true)
 			return next(ctx, entry)
 		}

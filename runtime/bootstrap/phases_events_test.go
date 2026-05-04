@@ -75,7 +75,7 @@ func TestPhase6_ConsumerMiddleware_AppliedInChain(t *testing.T) {
 	bus := eventbus.New(eventbus.WithClock(clock.Real()))
 
 	var mwInvocations atomic.Int32
-	spyMW := func(_ outbox.Subscription, next outbox.EntryHandler) outbox.EntryHandler {
+	spyMW := func(_ outbox.Subscription, next outbox.SubscriberHandler) outbox.SubscriberHandler {
 		mwInvocations.Add(1) // counted at wrap time, once per Subscribe.
 		return next
 	}
@@ -126,7 +126,7 @@ func (neverReadySubscriber) Ready(_ outbox.Subscription) <-chan struct{} {
 	return make(chan struct{})
 }
 
-func (neverReadySubscriber) Subscribe(ctx context.Context, _ outbox.Subscription, _ outbox.EntryHandler) error {
+func (neverReadySubscriber) Subscribe(ctx context.Context, _ outbox.Subscription, _ outbox.SubscriberHandler) error {
 	<-ctx.Done()
 	return ctx.Err()
 }

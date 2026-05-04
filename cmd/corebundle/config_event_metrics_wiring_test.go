@@ -36,11 +36,11 @@ func TestConfigEventConsumerMiddlewareUsesSubscriptionOwnerMetadata(t *testing.T
 		SliceID:       "configreceive",
 	}
 	entry := outbox.Entry{ID: "evt-target"}
-	wrapped := mw(sub, func(context.Context, outbox.Entry) outbox.HandleResult {
+	wrapped := mw(sub, outbox.EntryToSubscriberHandler(func(context.Context, outbox.Entry) outbox.HandleResult {
 		return outbox.HandleResult{Disposition: outbox.DispositionAck}
-	})
+	}))
 
-	result := wrapped(context.Background(), entry)
+	result, _ := wrapped(context.Background(), entry)
 	outbox.NotifySettlement(context.Background(), result, entry, outbox.DispositionAck, outbox.SettlementResultSuccess, nil)
 
 	require.Equal(t, []coreConfigEventSettlementRecord{{
@@ -77,13 +77,13 @@ func TestConsumerMiddlewares_ConfigEventSettlementRunsOutsideConsumerBase(t *tes
 	entry := outbox.Entry{ID: "evt-retry-exhausted"}
 	wrapped := composeConsumerMiddleware(consumerMiddlewares(shared, consumerBase),
 		outbox.Subscription{Topic: "event.config.entry-upserted.v1", ConsumerGroup: "accesscore", CellID: "accesscore", SliceID: "configreceive"},
-		func(context.Context, outbox.Entry) outbox.HandleResult {
+		outbox.EntryToSubscriberHandler(func(context.Context, outbox.Entry) outbox.HandleResult {
 			attempts++
 			return outbox.HandleResult{Disposition: outbox.DispositionRequeue, Err: errors.New("transient")}
-		},
+		}),
 	)
 
-	result := wrapped(context.Background(), entry)
+	result, _ := wrapped(context.Background(), entry)
 	outbox.NotifySettlement(context.Background(), result, entry, result.Disposition, outbox.SettlementResultRetryExhausted, nil)
 
 	assert.Equal(t, 2, attempts)
@@ -106,15 +106,15 @@ func TestConsumerMiddlewares_PermanentErrorRecordedAsFinalRejectSettlement(t *te
 	entry := outbox.Entry{ID: "evt-permanent"}
 	wrapped := composeConsumerMiddleware(consumerMiddlewares(shared, consumerBase),
 		outbox.Subscription{Topic: "event.config.entry-upserted.v1", ConsumerGroup: "accesscore", CellID: "accesscore", SliceID: "configreceive"},
-		func(context.Context, outbox.Entry) outbox.HandleResult {
+		outbox.EntryToSubscriberHandler(func(context.Context, outbox.Entry) outbox.HandleResult {
 			return outbox.HandleResult{
 				Disposition: outbox.DispositionReject,
 				Err:         outbox.NewPermanentError(errors.New("bad payload")),
 			}
-		},
+		}),
 	)
 
-	result := wrapped(context.Background(), entry)
+	result, _ := wrapped(context.Background(), entry)
 	outbox.NotifySettlement(context.Background(), result, entry, result.Disposition, outbox.SettlementResultSuccess, nil)
 
 	assert.Equal(t, outbox.DispositionReject, result.Disposition)
@@ -126,8 +126,8 @@ func TestConsumerMiddlewares_PermanentErrorRecordedAsFinalRejectSettlement(t *te
 func composeConsumerMiddleware(
 	mws []outbox.SubscriptionMiddleware,
 	sub outbox.Subscription,
-	handler outbox.EntryHandler,
-) outbox.EntryHandler {
+	handler outbox.SubscriberHandler,
+) outbox.SubscriberHandler {
 	wrapped := handler
 	for _, v := range slices.Backward(mws) {
 		wrapped = v(sub, wrapped)

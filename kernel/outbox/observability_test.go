@@ -420,7 +420,7 @@ func TestEntry_InjectObservabilityFromContext_EmptyContextYieldsZero(t *testing.
 // captureSubscriber is a stub Subscriber that captures the handler passed to
 // Subscribe so the test can invoke it directly with a synthetic Entry.
 type captureSubscriber struct {
-	handler EntryHandler
+	handler SubscriberHandler
 }
 
 func (c *captureSubscriber) Setup(context.Context, Subscription) error { return nil }
@@ -429,7 +429,7 @@ func (c *captureSubscriber) Ready(Subscription) <-chan struct{} {
 	close(ch)
 	return ch
 }
-func (c *captureSubscriber) Subscribe(_ context.Context, _ Subscription, h EntryHandler) error {
+func (c *captureSubscriber) Subscribe(_ context.Context, _ Subscription, h SubscriberHandler) error {
 	c.handler = h
 	return nil
 }
@@ -440,7 +440,8 @@ func TestSubscriberWithMiddleware_BuiltInRestore_RestoresAllFields(t *testing.T)
 	wrapped := &SubscriberWithMiddleware{Inner: cap}
 
 	require.NoError(t, wrapped.Subscribe(context.Background(),
-		Subscription{Topic: "event.test.v1"}, func(ctx context.Context, _ Entry) HandleResult {
+		Subscription{Topic: "event.test.v1"},
+		EntryToSubscriberHandler(func(ctx context.Context, _ Entry) HandleResult {
 			requestID, ok := ctxkeys.RequestIDFrom(ctx)
 			require.True(t, ok)
 			assert.Equal(t, "req-789", requestID)
@@ -458,10 +459,10 @@ func TestSubscriberWithMiddleware_BuiltInRestore_RestoresAllFields(t *testing.T)
 			assert.Equal(t, "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01", traceParent)
 
 			return HandleResult{Disposition: DispositionAck}
-		}))
+		})))
 
 	require.NotNil(t, cap.handler)
-	res := cap.handler(context.Background(), Entry{
+	res, _ := cap.handler(context.Background(), Entry{
 		ID: "evt-789",
 		Observability: ObservabilityMetadata{
 			RequestID:     "req-789",
@@ -479,15 +480,16 @@ func TestSubscriberWithMiddleware_BuiltInRestore_ZeroObservabilityIsNoOp(t *test
 
 	called := false
 	require.NoError(t, wrapped.Subscribe(context.Background(),
-		Subscription{Topic: "test.v1"}, func(ctx context.Context, _ Entry) HandleResult {
+		Subscription{Topic: "test.v1"},
+		EntryToSubscriberHandler(func(ctx context.Context, _ Entry) HandleResult {
 			called = true
 			_, ok := ctxkeys.RequestIDFrom(ctx)
 			assert.False(t, ok, "no request_id should be set from zero ObservabilityMetadata")
 			return HandleResult{Disposition: DispositionAck}
-		}))
+		})))
 
 	require.NotNil(t, cap.handler)
-	res := cap.handler(context.Background(), Entry{ID: "e1", Observability: ObservabilityMetadata{}})
+	res, _ := cap.handler(context.Background(), Entry{ID: "e1", Observability: ObservabilityMetadata{}})
 	assert.True(t, called)
 	assert.Equal(t, DispositionAck, res.Disposition)
 }
@@ -498,19 +500,20 @@ func TestSubscriberWithMiddleware_BuiltInRestore_ZeroObservabilityIsNoOp(t *test
 func TestSubscriberWithMiddleware_RestoreIsOutermost(t *testing.T) {
 	cap := &captureSubscriber{}
 	var seenInMiddleware string
-	userMW := func(_ Subscription, next EntryHandler) EntryHandler {
-		return func(ctx context.Context, entry Entry) HandleResult {
+	userMW := func(_ Subscription, next SubscriberHandler) SubscriberHandler {
+		return func(ctx context.Context, entry Entry) (HandleResult, Settlement) {
 			seenInMiddleware, _ = ctxkeys.RequestIDFrom(ctx)
 			return next(ctx, entry)
 		}
 	}
 	wrapped := &SubscriberWithMiddleware{Inner: cap, Middleware: []SubscriptionMiddleware{userMW}}
 
-	require.NoError(t, wrapped.Subscribe(context.Background(), Subscription{Topic: "test.v1"}, func(_ context.Context, _ Entry) HandleResult {
-		return HandleResult{Disposition: DispositionAck}
-	}))
+	require.NoError(t, wrapped.Subscribe(context.Background(), Subscription{Topic: "test.v1"},
+		EntryToSubscriberHandler(func(_ context.Context, _ Entry) HandleResult {
+			return HandleResult{Disposition: DispositionAck}
+		})))
 	require.NotNil(t, cap.handler)
-	cap.handler(context.Background(), Entry{
+	_, _ = cap.handler(context.Background(), Entry{
 		ID:            "e1",
 		Observability: ObservabilityMetadata{RequestID: "req-outermost"},
 	})

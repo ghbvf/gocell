@@ -12,7 +12,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/ghbvf/gocell/kernel/idempotency"
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
@@ -519,19 +518,11 @@ func (f SettlementObserverFunc) ObserveSettlement(ctx context.Context, obs Settl
 
 // HandleResult carries the business handler's processing outcome.
 // The Subscriber inspects Disposition to decide Ack/Nack, then calls
-// Receipt.Commit or Receipt.Release based on the broker outcome.
+// Settlement.Commit or Settlement.Release (received via SubscriberHandler
+// return value) based on the broker outcome.
 type HandleResult struct {
 	Disposition Disposition
 	Err         error // optional: logged/observed; nil for success
-
-	// Receipt is the Subscriber-implementer-internal channel for delivery loop
-	// Commit/Release after broker Ack/Nack. Business handlers MUST NOT read or
-	// write this field — reading observes an unspecified intermediate state,
-	// writing silently overwrites the ConsumerBase-set value and breaks
-	// idempotency Commit/Release. The HANDLER-RECEIPT-WRITE-01 archtest rule
-	// statically enforces the no-write half. See 029 #12 (PR-V1-OUTBOX-RECEIPT-EXTRACT)
-	// for v2 extraction roadmap.
-	Receipt idempotency.Receipt
 
 	// ProcessReason is a low-cardinality handler/process classification, such
 	// as "ack", "stale", or "permanent_error". It is not a broker outcome.
@@ -577,10 +568,31 @@ func NotifySettlement(
 	}
 }
 
-// EntryHandler is the Solution B handler signature. Business handlers return
-// a HandleResult that declares the intended broker disposition. The Receipt
-// field is a Subscriber-implementer hand-off; see HandleResult godoc.
+// EntryHandler is the business handler signature. Business handlers return a
+// HandleResult that declares the intended broker disposition. Settlement is
+// not visible to business handlers — it is delivered via SubscriberHandler,
+// which is the Subscriber-layer interface (not business layer).
 type EntryHandler func(context.Context, Entry) HandleResult
+
+// SubscriberHandler is the Subscriber-layer handler type that ConsumerBase.Wrap
+// returns and Subscriber.Subscribe accepts. It extends EntryHandler with a
+// Settlement return value so Subscriber implementations can call
+// Settlement.Commit before broker Ack and Settlement.Release after broker Nack
+// without any idempotency types leaking into business code.
+//
+// Settlement may be nil when ConsumerBase has no idempotency state (fail-open
+// claim error, ClaimDone, ClaimBusy short-circuit). Subscribers MUST nil-check
+// before calling Commit/Release.
+//
+// Business handlers use EntryHandler — they never see Settlement. The type
+// separation provides compile-time enforcement without archtest gates.
+//
+// ref: IBM/sarama consumer_group.go ConsumeClaim(session ConsumerGroupSession,
+//
+//	claim ConsumerGroupClaim) — settle handle as explicit method parameter
+//
+// ref: nats-io/nats.go jetstream/message.go Msg interface (Ack/Nak/Term)
+type SubscriberHandler func(ctx context.Context, entry Entry) (HandleResult, Settlement)
 
 // ---------------------------------------------------------------------------
 // PermanentError -- error classification (domain concept)
@@ -647,7 +659,12 @@ type Subscriber interface {
 	// Subscription.ConsumerGroup identifies the logical consumer group.
 	// Subscribers sharing the same group compete for messages (load-balanced);
 	// different groups each receive a full copy (fanout).
-	Subscribe(ctx context.Context, sub Subscription, handler EntryHandler) error
+	//
+	// handler is SubscriberHandler (not EntryHandler) so the Subscriber can
+	// receive Settlement alongside HandleResult without idempotency types
+	// leaking into business code. Callers that hold an EntryHandler (e.g.,
+	// bootstrap drain from cells/Init) MUST lift it via entryToSubscriberHandler.
+	Subscribe(ctx context.Context, sub Subscription, handler SubscriberHandler) error
 
 	// Close terminates all active subscriptions and releases resources.
 	// The ctx parameter allows callers to share a shutdown budget.
@@ -719,12 +736,16 @@ func (s *SubscriberWithMiddleware) Ready(sub Subscription) <-chan struct{} {
 // applied to ctx before any user middleware sees it. Restoration is
 // idempotent (existing non-empty ctx values win) and zero-struct safe
 // (no fields set ⇒ no-op).
-func (s *SubscriberWithMiddleware) Subscribe(ctx context.Context, sub Subscription, handler EntryHandler) error {
+//
+// handler is SubscriberHandler so Settlement flows from ConsumerBase.Wrap
+// through the middleware chain and into the Subscriber implementation without
+// leaking idempotency types into business code.
+func (s *SubscriberWithMiddleware) Subscribe(ctx context.Context, sub Subscription, handler SubscriberHandler) error {
 	wrapped := handler
 	for _, v := range slices.Backward(s.Middleware) {
 		wrapped = v(sub, wrapped)
 	}
-	withRestore := func(reqCtx context.Context, entry Entry) HandleResult {
+	withRestore := func(reqCtx context.Context, entry Entry) (HandleResult, Settlement) {
 		return wrapped(entry.Observability.RestoreToContext(reqCtx), entry)
 	}
 	return s.Inner.Subscribe(ctx, sub, withRestore)
@@ -745,4 +766,19 @@ func (s *SubscriberWithMiddleware) StopIntake(ctx context.Context) error {
 		return nil
 	}
 	return stopper.StopIntake(ctx)
+}
+
+// EntryToSubscriberHandler lifts a business EntryHandler into a SubscriberHandler
+// by returning a nil Settlement. Business handlers (cells/Init registrations)
+// do not produce Settlement — ConsumerBase.Wrap is the source of Settlement.
+// Bootstrap drain calls this when it needs to pass a raw EntryHandler to
+// Subscriber.Subscribe, which now accepts SubscriberHandler.
+//
+// The returned Settlement is always nil: business code is not responsible for
+// idempotency settlement. ConsumerBase.AsMiddleware() wraps the handler before
+// Subscribe is called, replacing this nil settlement with a real one.
+func EntryToSubscriberHandler(h EntryHandler) SubscriberHandler {
+	return func(ctx context.Context, entry Entry) (HandleResult, Settlement) {
+		return h(ctx, entry), nil
+	}
 }

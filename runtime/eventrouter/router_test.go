@@ -43,7 +43,7 @@ func (s *blockingSubscriber) Ready(_ outbox.Subscription) <-chan struct{} {
 	close(ch)
 	return ch
 }
-func (s *blockingSubscriber) Subscribe(ctx context.Context, sub outbox.Subscription, _ outbox.EntryHandler) error {
+func (s *blockingSubscriber) Subscribe(ctx context.Context, sub outbox.Subscription, _ outbox.SubscriberHandler) error {
 	s.mu.Lock()
 	s.topics = append(s.topics, sub.Topic)
 	s.mu.Unlock()
@@ -72,7 +72,7 @@ func (s *failingSubscriber) Ready(_ outbox.Subscription) <-chan struct{} {
 	close(ch)
 	return ch
 }
-func (s *failingSubscriber) Subscribe(_ context.Context, _ outbox.Subscription, _ outbox.EntryHandler) error {
+func (s *failingSubscriber) Subscribe(_ context.Context, _ outbox.Subscription, _ outbox.SubscriberHandler) error {
 	return s.err
 }
 func (s *failingSubscriber) Close(_ context.Context) error { return nil }
@@ -90,7 +90,7 @@ func (s *delayedFailSubscriber) Ready(_ outbox.Subscription) <-chan struct{} {
 	close(ch)
 	return ch
 }
-func (s *delayedFailSubscriber) Subscribe(ctx context.Context, _ outbox.Subscription, _ outbox.EntryHandler) error {
+func (s *delayedFailSubscriber) Subscribe(ctx context.Context, _ outbox.Subscription, _ outbox.SubscriberHandler) error {
 	select {
 	case <-time.After(s.delay):
 		return s.err
@@ -487,7 +487,7 @@ func (s *stuckSubscriber) Ready(_ outbox.Subscription) <-chan struct{} {
 	close(ch)
 	return ch
 }
-func (s *stuckSubscriber) Subscribe(_ context.Context, _ outbox.Subscription, _ outbox.EntryHandler) error {
+func (s *stuckSubscriber) Subscribe(_ context.Context, _ outbox.Subscription, _ outbox.SubscriberHandler) error {
 	<-s.block // ignores ctx -- simulates unresponsive subscriber
 	return nil
 }
@@ -502,7 +502,7 @@ func (s *panickingSubscriber) Ready(_ outbox.Subscription) <-chan struct{} {
 	close(ch)
 	return ch
 }
-func (s *panickingSubscriber) Subscribe(_ context.Context, _ outbox.Subscription, _ outbox.EntryHandler) error {
+func (s *panickingSubscriber) Subscribe(_ context.Context, _ outbox.Subscription, _ outbox.SubscriberHandler) error {
 	panic("boom")
 }
 func (s *panickingSubscriber) Close(_ context.Context) error { return nil }
@@ -622,7 +622,7 @@ func (b *testBus) Ready(sub outbox.Subscription) <-chan struct{} {
 	return ch
 }
 
-func (b *testBus) Subscribe(ctx context.Context, sub outbox.Subscription, handler outbox.EntryHandler) error {
+func (b *testBus) Subscribe(ctx context.Context, sub outbox.Subscription, handler outbox.SubscriberHandler) error {
 	subCtx, cancel := context.WithCancel(ctx)
 	s := &testSub{ch: make(chan outbox.Entry, b.bufSize), cancel: cancel}
 
@@ -683,7 +683,7 @@ func (s *recordingGroupSubscriber) Ready(_ outbox.Subscription) <-chan struct{} 
 	close(ch)
 	return ch
 }
-func (s *recordingGroupSubscriber) Subscribe(ctx context.Context, sub outbox.Subscription, _ outbox.EntryHandler) error {
+func (s *recordingGroupSubscriber) Subscribe(ctx context.Context, sub outbox.Subscription, _ outbox.SubscriberHandler) error {
 	s.mu.Lock()
 	s.calls = append(s.calls, groupSubscribeCall{
 		Topic:         sub.Topic,
@@ -838,7 +838,7 @@ func (s *delayedReadySubscriber) Ready(sub outbox.Subscription) <-chan struct{} 
 	return ch
 }
 
-func (s *delayedReadySubscriber) Subscribe(ctx context.Context, _ outbox.Subscription, _ outbox.EntryHandler) error {
+func (s *delayedReadySubscriber) Subscribe(ctx context.Context, _ outbox.Subscription, _ outbox.SubscriberHandler) error {
 	<-ctx.Done()
 	return ctx.Err()
 }
@@ -856,7 +856,7 @@ func (s *setupFailSubscriber) Ready(_ outbox.Subscription) <-chan struct{} {
 	close(ch)
 	return ch
 }
-func (s *setupFailSubscriber) Subscribe(_ context.Context, _ outbox.Subscription, _ outbox.EntryHandler) error {
+func (s *setupFailSubscriber) Subscribe(_ context.Context, _ outbox.Subscription, _ outbox.SubscriberHandler) error {
 	s.subscribeCnt.Add(1)
 	return nil
 }
@@ -884,7 +884,7 @@ func (s *partialReadySubscriber) Ready(sub outbox.Subscription) <-chan struct{} 
 	return ch
 }
 
-func (s *partialReadySubscriber) Subscribe(ctx context.Context, _ outbox.Subscription, _ outbox.EntryHandler) error {
+func (s *partialReadySubscriber) Subscribe(ctx context.Context, _ outbox.Subscription, _ outbox.SubscriberHandler) error {
 	<-ctx.Done()
 	return ctx.Err()
 }
@@ -979,7 +979,7 @@ func (s *mixedReadySubscriber) Ready(sub outbox.Subscription) <-chan struct{} {
 	return ch
 }
 
-func (s *mixedReadySubscriber) Subscribe(ctx context.Context, sub outbox.Subscription, _ outbox.EntryHandler) error {
+func (s *mixedReadySubscriber) Subscribe(ctx context.Context, sub outbox.Subscription, _ outbox.SubscriberHandler) error {
 	s.subscribeCalls.Add(1)
 	if sub.Topic == s.subscribeErrTopic {
 		return s.subscribeErr

@@ -110,10 +110,8 @@ func (c *MyCell) Init(ctx context.Context, reg cell.Registry) error {
 
 ## 幂等模型
 
-- ConsumerBase 内部使用 `kernel/idempotency.Claimer`（两阶段 Claim/Commit/Release）实现幂等；handler 作者**不需要** import `kernel/idempotency`，也不需要在 `HandleResult` 中读写 `Receipt` 字段（029 #03 ADR Decision 3 删除了 outbox.Receipt type alias；HandleResult.Receipt
-字段保留为 Subscriber 内部 hand-off，handler 不读不写，由 HANDLER-RECEIPT-WRITE-01
-archtest 守卫；详见 K#12 PR-V1-OUTBOX-RECEIPT-EXTRACT follow-up）
-- Claim 获取处理租约 → handler 执行 → broker Ack 后 Commit / 失败时 Release（由 Subscriber delivery loop 完成）
+- ConsumerBase 内部使用 `kernel/idempotency.Claimer`（两阶段 Claim/Commit/Release）实现幂等；handler 作者**不需要** import `kernel/idempotency`，也不需要读写任何 Settlement 字段（K#12 PR-V1-OUTBOX-RECEIPT-EXTRACT 已将 settlement 从 `HandleResult` 中提取为独立的 `outbox.Settlement` 接口，由 Subscriber 层在 `SubscriberHandler` 返回值中携带，业务 handler 只返回 `HandleResult`）
+- Claim 获取处理租约 → handler 执行 → broker Ack 后 Settlement.Commit / 失败时 Settlement.Release（由 Subscriber delivery loop 完成）
 - 默认 fail-closed：Claimer 故障时 Requeue，不丢弃幂等保护
 
 ## Stream 命名

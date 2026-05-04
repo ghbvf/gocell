@@ -72,4 +72,11 @@ func (s Subscription) ObservabilityID() string {
 // can route, log, and observe per-subscription rather than per-topic.
 //
 // Apply in order: [0] is outermost, [len-1] is innermost.
-type SubscriptionMiddleware func(sub Subscription, next EntryHandler) EntryHandler
+//
+// The next handler is SubscriberHandler (not EntryHandler) so that Settlement
+// flows through the middleware chain. Middleware that only observes metrics or
+// tracing can forward Settlement transparently: result, settlement := next(ctx, entry).
+// Business handlers (EntryHandler) never appear in the middleware chain —
+// they are lifted to SubscriberHandler by ConsumerBase.Wrap or EntryToSubscriberHandler
+// before being passed to SubscriberWithMiddleware.Subscribe.
+type SubscriptionMiddleware func(sub Subscription, next SubscriberHandler) SubscriberHandler

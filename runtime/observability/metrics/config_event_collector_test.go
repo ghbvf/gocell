@@ -67,13 +67,13 @@ func TestConfigEventMiddleware_RecordsProcessReasonFromSubscriptionOwner(t *test
 	mw := obmetrics.ConfigEventMiddleware(collector)
 	wrapped := mw(
 		outbox.Subscription{Topic: "event.config.entry-upserted.v1", ConsumerGroup: "accesscore", CellID: "accesscore", SliceID: "configreceive"},
-		func(ctx context.Context, _ outbox.Entry) outbox.HandleResult {
+		outbox.EntryToSubscriberHandler(func(ctx context.Context, _ outbox.Entry) outbox.HandleResult {
 			obmetrics.RecordConfigEventProcess(ctx, collector, obmetrics.ConfigEventProcessReasonAck)
 			return outbox.HandleResult{Disposition: outbox.DispositionAck}
-		},
+		}),
 	)
 
-	result := wrapped(context.Background(), outbox.Entry{ID: "evt-1"})
+	result, _ := wrapped(context.Background(), outbox.Entry{ID: "evt-1"})
 
 	assert.Equal(t, outbox.DispositionAck, result.Disposition)
 	require.Equal(t, []configEventProcessRecord{{
@@ -88,12 +88,12 @@ func TestConfigEventMiddleware_RecordsSettlementOnlyAfterNotification(t *testing
 	entry := outbox.Entry{ID: "evt-1"}
 	wrapped := mw(
 		outbox.Subscription{Topic: "event.config.entry-upserted.v1", ConsumerGroup: "accesscore", CellID: "accesscore", SliceID: "configreceive"},
-		func(context.Context, outbox.Entry) outbox.HandleResult {
+		outbox.EntryToSubscriberHandler(func(context.Context, outbox.Entry) outbox.HandleResult {
 			return outbox.HandleResult{Disposition: outbox.DispositionRequeue}
-		},
+		}),
 	)
 
-	result := wrapped(context.Background(), entry)
+	result, _ := wrapped(context.Background(), entry)
 	assert.Empty(t, collector.settlementRecords)
 
 	outbox.NotifySettlement(context.Background(), result, entry, outbox.DispositionRequeue, outbox.SettlementResultSuccess, nil)
@@ -111,11 +111,11 @@ func TestConfigEventMiddleware_SkipsSubscriptionsWithoutOwnerOrConfigTopic(t *te
 		{Topic: "event.config.entry-upserted.v1", ConsumerGroup: "accesscore", CellID: "accesscore"},
 		{Topic: "event.audit.appended.v1", ConsumerGroup: "auditcore", CellID: "auditcore", SliceID: "auditappend"},
 	} {
-		wrapped := mw(sub, func(ctx context.Context, _ outbox.Entry) outbox.HandleResult {
+		wrapped := mw(sub, outbox.EntryToSubscriberHandler(func(ctx context.Context, _ outbox.Entry) outbox.HandleResult {
 			obmetrics.RecordConfigEventProcess(ctx, collector, obmetrics.ConfigEventProcessReasonAck)
 			return outbox.HandleResult{Disposition: outbox.DispositionAck}
-		})
-		result := wrapped(context.Background(), outbox.Entry{ID: "evt-1"})
+		}))
+		result, _ := wrapped(context.Background(), outbox.Entry{ID: "evt-1"})
 		outbox.NotifySettlement(context.Background(), result,
 			outbox.Entry{ID: "evt-1"}, outbox.DispositionAck, outbox.SettlementResultSuccess, nil)
 	}
@@ -212,12 +212,12 @@ func TestConfigEventMiddleware_RetryExhaustedSettlement(t *testing.T) {
 	entry := outbox.Entry{ID: "evt-retry-exhausted"}
 	wrapped := mw(
 		outbox.Subscription{Topic: "event.config.entry-upserted.v1", ConsumerGroup: "accesscore", CellID: "accesscore", SliceID: "configreceive"},
-		func(context.Context, outbox.Entry) outbox.HandleResult {
+		outbox.EntryToSubscriberHandler(func(context.Context, outbox.Entry) outbox.HandleResult {
 			return outbox.HandleResult{Disposition: outbox.DispositionReject, ProcessReason: "retry_exhausted"}
-		},
+		}),
 	)
 
-	result := wrapped(context.Background(), entry)
+	result, _ := wrapped(context.Background(), entry)
 	outbox.NotifySettlement(context.Background(), result, entry, outbox.DispositionReject, outbox.SettlementResultRetryExhausted, nil)
 
 	require.Equal(t, []configEventSettlementRecord{{

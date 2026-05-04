@@ -78,7 +78,7 @@ func (r *cancelTimeRecorder) Setup(ctx context.Context, sub outbox.Subscription)
 func (r *cancelTimeRecorder) Ready(sub outbox.Subscription) <-chan struct{} {
 	return r.inner.Ready(sub)
 }
-func (r *cancelTimeRecorder) Subscribe(ctx context.Context, sub outbox.Subscription, handler outbox.EntryHandler) error {
+func (r *cancelTimeRecorder) Subscribe(ctx context.Context, sub outbox.Subscription, handler outbox.SubscriberHandler) error {
 	// Signal that we are inside Subscribe.
 	select {
 	case <-r.subscribedCh:
@@ -132,7 +132,7 @@ func (c *compositeStopIntakeSubscriber) Setup(ctx context.Context, sub outbox.Su
 func (c *compositeStopIntakeSubscriber) Ready(sub outbox.Subscription) <-chan struct{} {
 	return c.cancelRec.Ready(sub)
 }
-func (c *compositeStopIntakeSubscriber) Subscribe(ctx context.Context, sub outbox.Subscription, handler outbox.EntryHandler) error {
+func (c *compositeStopIntakeSubscriber) Subscribe(ctx context.Context, sub outbox.Subscription, handler outbox.SubscriberHandler) error {
 	return c.cancelRec.Subscribe(ctx, sub, handler)
 }
 func (c *compositeStopIntakeSubscriber) Close(ctx context.Context) error {
@@ -266,7 +266,7 @@ func (s *inflightSubscriber) Ready(_ outbox.Subscription) <-chan struct{} {
 // Subscribe launches one simulated in-flight handler that takes handlerDuration
 // to complete. It blocks until the handler finishes (mirroring real subscribers
 // that drain in-flight before returning from Subscribe).
-func (s *inflightSubscriber) Subscribe(ctx context.Context, _ outbox.Subscription, _ outbox.EntryHandler) error {
+func (s *inflightSubscriber) Subscribe(ctx context.Context, _ outbox.Subscription, _ outbox.SubscriberHandler) error {
 	select {
 	case <-s.subscribedCh:
 	default:

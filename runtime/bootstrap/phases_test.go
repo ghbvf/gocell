@@ -957,7 +957,7 @@ func (s *phaseTestSubscriber) Ready(_ outbox.Subscription) <-chan struct{} {
 	close(ch)
 	return ch
 }
-func (s *phaseTestSubscriber) Subscribe(_ context.Context, _ outbox.Subscription, _ outbox.EntryHandler) error {
+func (s *phaseTestSubscriber) Subscribe(_ context.Context, _ outbox.Subscription, _ outbox.SubscriberHandler) error {
 	return nil
 }
 func (s *phaseTestSubscriber) Close(_ context.Context) error { return nil }
@@ -976,7 +976,7 @@ func (s *phaseTestSubscriberCloser) Ready(_ outbox.Subscription) <-chan struct{}
 	close(ch)
 	return ch
 }
-func (s *phaseTestSubscriberCloser) Subscribe(_ context.Context, _ outbox.Subscription, _ outbox.EntryHandler) error {
+func (s *phaseTestSubscriberCloser) Subscribe(_ context.Context, _ outbox.Subscription, _ outbox.SubscriberHandler) error {
 	return nil
 }
 func (s *phaseTestSubscriberCloser) Close(_ context.Context) error {
@@ -997,7 +997,7 @@ func (b *phaseTestSharedBus) Ready(_ outbox.Subscription) <-chan struct{} {
 	close(ch)
 	return ch
 }
-func (b *phaseTestSharedBus) Subscribe(_ context.Context, _ outbox.Subscription, _ outbox.EntryHandler) error {
+func (b *phaseTestSharedBus) Subscribe(_ context.Context, _ outbox.Subscription, _ outbox.SubscriberHandler) error {
 	return nil
 }
 func (b *phaseTestSharedBus) Close(_ context.Context) error {
@@ -1023,7 +1023,7 @@ func (s *pubSubCtxSpy) Ready(_ outbox.Subscription) <-chan struct{} {
 	close(ch)
 	return ch
 }
-func (s *pubSubCtxSpy) Subscribe(_ context.Context, _ outbox.Subscription, _ outbox.EntryHandler) error {
+func (s *pubSubCtxSpy) Subscribe(_ context.Context, _ outbox.Subscription, _ outbox.SubscriberHandler) error {
 	return nil
 }
 func (s *pubSubCtxSpy) Close(ctx context.Context) error {
@@ -1043,7 +1043,7 @@ func (b nonComparablePubSub) Ready(_ outbox.Subscription) <-chan struct{} {
 	close(ch)
 	return ch
 }
-func (b nonComparablePubSub) Subscribe(_ context.Context, _ outbox.Subscription, _ outbox.EntryHandler) error {
+func (b nonComparablePubSub) Subscribe(_ context.Context, _ outbox.Subscription, _ outbox.SubscriberHandler) error {
 	return nil
 }
 func (b nonComparablePubSub) Close(_ context.Context) error { return nil }

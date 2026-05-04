@@ -57,7 +57,10 @@ func TestOutboxHandleResultNoReceiptField(t *testing.T) {
 		t.Fatal("HandleResult struct definition not found in kernel/outbox/outbox.go")
 	}
 	if receiptField != "" {
-		t.Errorf("OUTBOX-HANDLERESULT-NO-RECEIPT-FIELD-01: kernel/outbox/outbox.go:%d: HandleResult must not declare a %s field — Settlement is delivered via SubscriberHandler return value (see 029 K#12)", receiptLine, receiptField)
+		t.Errorf("OUTBOX-HANDLERESULT-NO-RECEIPT-FIELD-01: kernel/outbox/outbox.go:%d: "+
+			"HandleResult must not declare a %s field — Settlement is delivered "+
+			"via SubscriberHandler return value (see 029 K#12)",
+			receiptLine, receiptField)
 	}
 }
 

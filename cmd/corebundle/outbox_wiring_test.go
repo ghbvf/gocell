@@ -172,19 +172,19 @@ func TestOutboxE2E_CrossCellFanout(t *testing.T) {
 	// Subscribe with ConsumerGroup "accesscore" (simulates cells/accesscore).
 	accessSub := outbox.Subscription{Topic: topic, ConsumerGroup: "accesscore"}
 	go func() {
-		_ = eb.Subscribe(ctx, accessSub, func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+		_ = eb.Subscribe(ctx, accessSub, outbox.EntryToSubscriberHandler(func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
 			accessCalls.Add(1)
 			return outbox.HandleResult{Disposition: outbox.DispositionAck}
-		})
+		}))
 	}()
 
 	// Subscribe with ConsumerGroup "auditcore" (simulates cells/auditcore).
 	auditSub := outbox.Subscription{Topic: topic, ConsumerGroup: "auditcore"}
 	go func() {
-		_ = eb.Subscribe(ctx, auditSub, func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+		_ = eb.Subscribe(ctx, auditSub, outbox.EntryToSubscriberHandler(func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
 			auditCalls.Add(1)
 			return outbox.HandleResult{Disposition: outbox.DispositionAck}
-		})
+		}))
 	}()
 
 	// Wait until both subscribe goroutines have registered (Finding F5: replace

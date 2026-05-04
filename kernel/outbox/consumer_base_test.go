@@ -333,11 +333,11 @@ func TestConsumerBase_Wrap_ClaimAcquired_Ack_ThreadsReceipt(t *testing.T) {
 		return HandleResult{Disposition: DispositionAck}
 	})
 
-	res := handler(context.Background(), Entry{ID: "evt-1"})
+	res, settlement := handler(context.Background(), Entry{ID: "evt-1"})
 
 	assert.True(t, called)
 	assert.Equal(t, DispositionAck, res.Disposition)
-	assert.Same(t, receipt, res.Receipt)
+	assert.Same(t, receipt, settlement)
 
 	receipt.mu.Lock()
 	defer receipt.mu.Unlock()
@@ -357,10 +357,10 @@ func TestConsumerBase_Wrap_ClaimDone_SkipsHandler(t *testing.T) {
 		return HandleResult{Disposition: DispositionAck}
 	})
 
-	res := handler(context.Background(), Entry{ID: "evt-dup"})
+	res, settlement := handler(context.Background(), Entry{ID: "evt-dup"})
 	assert.False(t, called, "ClaimDone must skip the handler")
 	assert.Equal(t, DispositionAck, res.Disposition)
-	assert.Nil(t, res.Receipt)
+	assert.Nil(t, settlement)
 }
 
 func TestConsumerBase_Wrap_ClaimBusy_Requeues(t *testing.T) {
@@ -377,7 +377,7 @@ func TestConsumerBase_Wrap_ClaimBusy_Requeues(t *testing.T) {
 		return HandleResult{Disposition: DispositionAck}
 	})
 
-	res := handler(context.Background(), Entry{ID: "evt-busy"})
+	res, _ := handler(context.Background(), Entry{ID: "evt-busy"})
 	assert.False(t, called)
 	assert.Equal(t, DispositionRequeue, res.Disposition)
 }
@@ -403,10 +403,10 @@ func TestConsumerBase_Wrap_TransientError_RetriesUntilAck(t *testing.T) {
 		return HandleResult{Disposition: DispositionAck}
 	})
 
-	res := handler(context.Background(), Entry{ID: "evt-retry"})
+	res, settlement := handler(context.Background(), Entry{ID: "evt-retry"})
 	assert.Equal(t, 2, attempts)
 	assert.Equal(t, DispositionAck, res.Disposition)
-	assert.Same(t, receipt, res.Receipt)
+	assert.Same(t, receipt, settlement)
 }
 
 func TestConsumerBase_Wrap_RetryBudgetExhausted_RejectsToDLX(t *testing.T) {
@@ -425,10 +425,10 @@ func TestConsumerBase_Wrap_RetryBudgetExhausted_RejectsToDLX(t *testing.T) {
 		return HandleResult{Disposition: DispositionRequeue, Err: errors.New("always fail")}
 	})
 
-	res := handler(context.Background(), Entry{ID: "evt-exhaust"})
+	res, settlement := handler(context.Background(), Entry{ID: "evt-exhaust"})
 	assert.Equal(t, 2, attempts)
 	assert.Equal(t, DispositionReject, res.Disposition)
-	assert.Same(t, receipt, res.Receipt)
+	assert.Same(t, receipt, settlement)
 }
 
 func TestConsumerBase_Wrap_ExplicitReject_NoRetry(t *testing.T) {
@@ -447,10 +447,10 @@ func TestConsumerBase_Wrap_ExplicitReject_NoRetry(t *testing.T) {
 		return HandleResult{Disposition: DispositionReject, Err: errors.New("bad payload")}
 	})
 
-	res := handler(context.Background(), Entry{ID: "evt-explicit-reject"})
+	res, settlement := handler(context.Background(), Entry{ID: "evt-explicit-reject"})
 	assert.Equal(t, 1, attempts, "DispositionReject must skip retries")
 	assert.Equal(t, DispositionReject, res.Disposition)
-	assert.Same(t, receipt, res.Receipt)
+	assert.Same(t, receipt, settlement)
 }
 
 // TestConsumerBase_Wrap_WrappedPermanentErrorInRequeue_NotEscalated locks the
@@ -479,7 +479,7 @@ func TestConsumerBase_Wrap_WrappedPermanentErrorInRequeue_NotEscalated(t *testin
 		}
 	})
 
-	res := handler(context.Background(), Entry{ID: "evt-perm"})
+	res, _ := handler(context.Background(), Entry{ID: "evt-perm"})
 	assert.Equal(t, 3, attempts, "PermanentError wrapped in Requeue must NOT short-circuit; budget must exhaust")
 	assert.Equal(t, DispositionReject, res.Disposition,
 		"after retry budget exhaustion, ConsumerBase rejects to DLX (this is the budget-exhaust path, not a PermErr upgrade)")
@@ -512,7 +512,7 @@ func TestConsumerBase_Wrap_CtxCancelled_DuringRetry_Requeues(t *testing.T) {
 	}()
 
 	start := time.Now()
-	res := handler(ctx, Entry{ID: "evt-ctx"})
+	res, _ := handler(ctx, Entry{ID: "evt-ctx"})
 	elapsed := time.Since(start)
 
 	assert.Equal(t, DispositionRequeue, res.Disposition)
@@ -541,10 +541,10 @@ func TestConsumerBase_Wrap_ClaimError_FailClosed_LocalRetryThenSuccess(t *testin
 		return HandleResult{Disposition: DispositionAck}
 	})
 
-	res := handler(context.Background(), Entry{ID: "evt-claim-retry"})
+	res, settlement := handler(context.Background(), Entry{ID: "evt-claim-retry"})
 	assert.True(t, called)
 	assert.Equal(t, DispositionAck, res.Disposition)
-	assert.Same(t, receipt, res.Receipt)
+	assert.Same(t, receipt, settlement)
 
 	claimer.mu.Lock()
 	defer claimer.mu.Unlock()
@@ -566,7 +566,7 @@ func TestConsumerBase_Wrap_ClaimError_FailClosed_ExhaustedRequeues(t *testing.T)
 		return HandleResult{Disposition: DispositionAck}
 	})
 
-	res := handler(context.Background(), Entry{ID: "evt-claim-fail"})
+	res, _ := handler(context.Background(), Entry{ID: "evt-claim-fail"})
 	assert.False(t, called, "handler must not run when claim is exhausted")
 	assert.Equal(t, DispositionRequeue, res.Disposition)
 	assert.Error(t, res.Err)
@@ -598,7 +598,7 @@ func TestConsumerBase_Wrap_ClaimError_FailClosed_CtxCancel(t *testing.T) {
 	}()
 
 	start := time.Now()
-	res := handler(ctx, Entry{ID: "evt-claim-ctx"})
+	res, _ := handler(ctx, Entry{ID: "evt-claim-ctx"})
 	elapsed := time.Since(start)
 
 	assert.Equal(t, DispositionRequeue, res.Disposition)
@@ -619,10 +619,10 @@ func TestConsumerBase_Wrap_ClaimError_FailOpen_ProceedsWithoutReceipt(t *testing
 		return HandleResult{Disposition: DispositionAck}
 	})
 
-	res := handler(context.Background(), Entry{ID: "evt-fail-open"})
+	res, settlement := handler(context.Background(), Entry{ID: "evt-fail-open"})
 	assert.True(t, called, "fail-open must invoke handler despite claim failure")
 	assert.Equal(t, DispositionAck, res.Disposition)
-	assert.Nil(t, res.Receipt, "no receipt when claim failed under fail-open")
+	assert.Nil(t, settlement, "no settlement when claim failed under fail-open")
 }
 
 func TestConsumerBase_Wrap_MaxRetryDelay_CapsClaimBackoff(t *testing.T) {
@@ -640,7 +640,7 @@ func TestConsumerBase_Wrap_MaxRetryDelay_CapsClaimBackoff(t *testing.T) {
 	})
 
 	start := time.Now()
-	_ = handler(context.Background(), Entry{ID: "evt-cap"})
+	_, _ = handler(context.Background(), Entry{ID: "evt-cap"})
 	elapsed := time.Since(start)
 
 	// Without cap: 200ms + 400ms = 600ms. With cap 20ms: total well under 200ms.
@@ -660,12 +660,12 @@ func TestConsumerBase_AsMiddleware_AppliesWrap(t *testing.T) {
 	require.NotNil(t, mw)
 
 	called := false
-	wrapped := mw(Subscription{Topic: "topic", ConsumerGroup: "cg"}, func(_ context.Context, _ Entry) HandleResult {
+	wrapped := mw(Subscription{Topic: "topic", ConsumerGroup: "cg"}, EntryToSubscriberHandler(func(_ context.Context, _ Entry) HandleResult {
 		called = true
 		return HandleResult{Disposition: DispositionAck}
-	})
+	}))
 
-	res := wrapped(context.Background(), Entry{ID: "evt-mw"})
+	res, _ := wrapped(context.Background(), Entry{ID: "evt-mw"})
 	assert.False(t, called, "ClaimDone should short-circuit the wrapped handler")
 	assert.Equal(t, DispositionAck, res.Disposition)
 }
@@ -701,7 +701,7 @@ func TestWrap_LeaseRenewal_ExtendsAtInterval(t *testing.T) {
 		return HandleResult{Disposition: DispositionAck}
 	})
 
-	res := handler(context.Background(), Entry{ID: "evt-renewal"})
+	res, _ := handler(context.Background(), Entry{ID: "evt-renewal"})
 	<-handlerDone
 
 	assert.Equal(t, DispositionAck, res.Disposition)
@@ -753,7 +753,7 @@ func TestWrap_LeaseRenewal_ExtendFailure_CancelsHandler(t *testing.T) {
 	}
 	claimer.receipt = spyReceipt
 
-	res := handler(context.Background(), Entry{ID: "evt-expire"})
+	res, _ := handler(context.Background(), Entry{ID: "evt-expire"})
 
 	select {
 	case <-ctxCancelSeen:
@@ -815,8 +815,8 @@ func TestConsumerBase_DifferentConsumerGroupsNoCollision(t *testing.T) {
 	})
 
 	entry := Entry{ID: "shared-event-id-001"}
-	res1 := handler1(context.Background(), entry)
-	res2 := handler2(context.Background(), entry)
+	res1, _ := handler1(context.Background(), entry)
+	res2, _ := handler2(context.Background(), entry)
 
 	assert.Equal(t, DispositionAck, res1.Disposition, "handler1 must reach ClaimAcquired")
 	assert.Equal(t, DispositionAck, res2.Disposition, "handler2 must reach ClaimAcquired")
@@ -857,7 +857,7 @@ func TestWrap_LeaseRenewal_HandlerComplete_StopsGoroutine(t *testing.T) {
 		return HandleResult{Disposition: DispositionAck}
 	})
 
-	res := handler(context.Background(), Entry{ID: "evt-quick"})
+	res, _ := handler(context.Background(), Entry{ID: "evt-quick"})
 	assert.Equal(t, DispositionAck, res.Disposition)
 	// goleak.VerifyNone(t) at defer will catch any leaked goroutines.
 }
@@ -903,7 +903,7 @@ func TestWrap_LeaseRenewalLoop_TransientExtendError_LogsWarnAndContinues(t *test
 		return HandleResult{Disposition: DispositionAck}
 	})
 
-	res := handler(context.Background(), Entry{ID: "evt-transient-extend"})
+	res, _ := handler(context.Background(), Entry{ID: "evt-transient-extend"})
 	<-handlerDone
 
 	// Handler must complete with Ack — transient extend failure must not affect outcome.
@@ -933,7 +933,7 @@ func TestWrap_LeaseRenewal_DisabledWhenIntervalNegative(t *testing.T) {
 		return HandleResult{Disposition: DispositionAck}
 	})
 
-	res := handler(context.Background(), Entry{ID: "evt-neg-interval"})
+	res, _ := handler(context.Background(), Entry{ID: "evt-neg-interval"})
 	assert.Equal(t, DispositionAck, res.Disposition)
 	assert.Equal(t, int32(0), receipt.extendCalls.Load(), "Extend must not be called when interval is negative")
 }
@@ -958,7 +958,7 @@ func TestWrap_LeaseRenewal_DisabledWhenIntervalZeroAndTTLZero(t *testing.T) {
 		return HandleResult{Disposition: DispositionAck}
 	})
 
-	res := handler(context.Background(), Entry{ID: "evt-zero"})
+	res, _ := handler(context.Background(), Entry{ID: "evt-zero"})
 	assert.Equal(t, DispositionAck, res.Disposition)
 	// With very fast handler, no Extend should have been called.
 	assert.Equal(t, int32(0), receipt.extendCalls.Load())
@@ -1007,7 +1007,7 @@ func TestConsumerBase_LeaseLost_ForceRequeue_EvenWhenHandlerReturnsAck(t *testin
 		return HandleResult{Disposition: DispositionAck}
 	})
 
-	res := handler(context.Background(), Entry{ID: "evt-lease-lost-ack"})
+	res, _ := handler(context.Background(), Entry{ID: "evt-lease-lost-ack"})
 
 	// The hard fence must downgrade Ack → Requeue.
 	assert.Equal(t, DispositionRequeue, res.Disposition,
@@ -1052,7 +1052,7 @@ func TestConsumerBase_LeaseLost_HandlerCancellation_StillRequeue(t *testing.T) {
 		}
 	})
 
-	res := handler(context.Background(), Entry{ID: "evt-lease-lost-requeue"})
+	res, _ := handler(context.Background(), Entry{ID: "evt-lease-lost-requeue"})
 
 	select {
 	case <-ctxCancelSeen:
@@ -1085,9 +1085,9 @@ func TestConsumerBase_LeaseHeld_NormalAck(t *testing.T) {
 		return HandleResult{Disposition: DispositionAck}
 	})
 
-	res := handler(context.Background(), Entry{ID: "evt-normal-ack"})
+	res, settlement := handler(context.Background(), Entry{ID: "evt-normal-ack"})
 	assert.Equal(t, DispositionAck, res.Disposition,
 		"hard fence must not downgrade Ack when lease is always held")
-	assert.Same(t, receipt, res.Receipt,
-		"receipt must be threaded through on normal Ack path")
+	assert.Same(t, receipt, settlement,
+		"settlement must be threaded through on normal Ack path")
 }

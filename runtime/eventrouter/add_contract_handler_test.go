@@ -147,8 +147,8 @@ func TestContractTracingMiddleware_WrapsWithContractSpan(t *testing.T) {
 	// Drive one entry through the middleware position used by bootstrap:
 	// contract tracing sits outside the stored business handler.
 	sub := r.handlers[0].subscription()
-	wrapped := ContractTracingMiddleware(tr)(sub, r.handlers[0].handler)
-	res := wrapped(context.Background(), outbox.Entry{EventType: "event.config.entry-upserted.v1"})
+	wrapped := ContractTracingMiddleware(tr)(sub, outbox.EntryToSubscriberHandler(r.handlers[0].handler))
+	res, _ := wrapped(context.Background(), outbox.Entry{EventType: "event.config.entry-upserted.v1"})
 	assert.Equal(t, outbox.DispositionAck, res.Disposition)
 	assert.True(t, inner, "inner handler must run")
 
@@ -176,18 +176,18 @@ func TestContractTracingMiddleware_CoversDownstreamShortCircuit(t *testing.T) {
 	}
 
 	var businessCalled bool
-	business := func(context.Context, outbox.Entry) outbox.HandleResult {
+	business := outbox.EntryToSubscriberHandler(func(context.Context, outbox.Entry) outbox.HandleResult {
 		businessCalled = true
 		return outbox.HandleResult{Disposition: outbox.DispositionAck}
-	}
-	shortCircuit := func(_ outbox.Subscription, _ outbox.EntryHandler) outbox.EntryHandler {
-		return func(context.Context, outbox.Entry) outbox.HandleResult {
-			return outbox.HandleResult{Disposition: outbox.DispositionRequeue}
+	})
+	shortCircuit := func(_ outbox.Subscription, _ outbox.SubscriberHandler) outbox.SubscriberHandler {
+		return func(context.Context, outbox.Entry) (outbox.HandleResult, outbox.Settlement) {
+			return outbox.HandleResult{Disposition: outbox.DispositionRequeue}, nil
 		}
 	}
 
 	wrapped := ContractTracingMiddleware(tr)(sub, shortCircuit(sub, business))
-	res := wrapped(context.Background(), outbox.Entry{EventType: "event.config.entry-upserted.v1"})
+	res, _ := wrapped(context.Background(), outbox.Entry{EventType: "event.config.entry-upserted.v1"})
 
 	assert.Equal(t, outbox.DispositionRequeue, res.Disposition)
 	assert.False(t, businessCalled, "downstream middleware should be allowed to skip business handler")
@@ -201,27 +201,33 @@ func TestContractTracingMiddleware_CoversDownstreamShortCircuit(t *testing.T) {
 // TestContractTracingMiddleware_PanicsOnEmptyContractID documents the F4
 // fail-fast: once the ContractID==""  early-return was removed, a
 // subscription that somehow reaches the middleware without a ContractID
-// must panic via wrapper.WrapConsumer's spec.Validate() rather than
+// must panic via wrapper.MustWrapConsumer's spec.Validate() rather than
 // silently skip tracing. Router.AddContractHandler prevents this today;
 // this test is the backstop that catches any future regression.
+//
+// Note: with the per-delivery MustWrapConsumer pattern, the panic fires at
+// first delivery (not at middleware construction time). AddContractHandler's
+// spec validation is the primary guard; this test covers the delivery-time backstop.
 func TestContractTracingMiddleware_PanicsOnEmptyContractID(t *testing.T) {
 	t.Parallel()
 	sub := outbox.Subscription{
 		Topic:         "event.legacy.v1",
 		ConsumerGroup: "legacy",
 		// ContractID intentionally empty — simulates a legacy registration
-		// path sneaking back in. wrapper.WrapConsumer.spec.Validate() must
-		// panic at construction time so the regression is loud.
+		// path sneaking back in. wrapper.MustWrapConsumer spec.Validate() must
+		// panic at first delivery so the regression is loud.
 	}
 	defer func() {
 		r := recover()
-		require.NotNil(t, r, "empty ContractID must panic at middleware construction")
+		require.NotNil(t, r, "empty ContractID must panic at first delivery")
 	}()
 
-	_ = ContractTracingMiddleware(wrapper.NoopTracer{})(sub,
-		func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+	handler := ContractTracingMiddleware(wrapper.NoopTracer{})(sub,
+		outbox.EntryToSubscriberHandler(func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
 			return outbox.HandleResult{Disposition: outbox.DispositionAck}
-		})
+		}))
+	// Invoke the handler — panic must fire at delivery time.
+	_, _ = handler(context.Background(), outbox.Entry{EventType: "event.legacy.v1"})
 }
 
 func TestAddContractHandler_MultipleRegistrations_HandlersGrow(t *testing.T) {

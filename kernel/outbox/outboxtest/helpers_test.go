@@ -290,7 +290,7 @@ func (f *fakePubSub) Ready(_ outbox.Subscription) <-chan struct{} {
 	return f.readyChannel()
 }
 
-func (f *fakePubSub) Subscribe(ctx context.Context, sub outbox.Subscription, handler outbox.EntryHandler) error {
+func (f *fakePubSub) Subscribe(ctx context.Context, sub outbox.Subscription, handler outbox.SubscriberHandler) error {
 	ch := make(chan outbox.Entry, 64)
 	f.mu.Lock()
 	f.subs = append(f.subs, ch)

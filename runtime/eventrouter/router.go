@@ -335,7 +335,7 @@ func (r *Router) runSubscribe(ctx context.Context, handlers []handlerConfig, set
 			slog.Info("eventrouter: starting subscription",
 				slog.String("topic", sub.Topic),
 				slog.String("consumer_group", sub.ConsumerGroup))
-			err := r.subscriber.Subscribe(ctx, sub, h.handler)
+			err := r.subscriber.Subscribe(ctx, sub, outbox.EntryToSubscriberHandler(h.handler))
 			if err != nil && ctx.Err() == nil {
 				setupErr <- fmt.Errorf("eventrouter: topic %s: %w", sub.Topic, err)
 			}

@@ -126,20 +126,20 @@ func ConfigEventMiddleware(collector ConfigEventCollector) outbox.SubscriptionMi
 	if collector == nil {
 		collector = NoopConfigEventCollector{}
 	}
-	return func(sub outbox.Subscription, next outbox.EntryHandler) outbox.EntryHandler {
+	return func(sub outbox.Subscription, next outbox.SubscriberHandler) outbox.SubscriberHandler {
 		if !isConfigEventSubscription(sub) {
 			// Fast path: non-config-prefix or non-config topic — skip instrumentation.
 			return next
 		}
 		owner := configEventOwner{cellID: sub.CellID, sliceID: sub.SliceID}
-		return func(ctx context.Context, entry outbox.Entry) outbox.HandleResult {
+		return func(ctx context.Context, entry outbox.Entry) (outbox.HandleResult, outbox.Settlement) {
 			ctx = context.WithValue(ctx, configEventOwnerContextKey{}, owner)
-			result := next(ctx, entry)
+			result, settlement := next(ctx, entry)
 			result.SettlementObservers = append(result.SettlementObservers, configEventSettlementObserver{
 				collector: collector,
 				owner:     owner,
 			})
-			return result
+			return result, settlement
 		}
 	}
 }

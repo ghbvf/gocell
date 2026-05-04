@@ -125,7 +125,7 @@ func CollectN(
 	subCtx, cancel := context.WithCancel(ctx)
 	t.Cleanup(cancel)
 
-	handler := func(_ context.Context, entry outbox.Entry) outbox.HandleResult {
+	handler := outbox.EntryToSubscriberHandler(func(_ context.Context, entry outbox.Entry) outbox.HandleResult {
 		mu.Lock()
 		collected = append(collected, entry)
 		count := len(collected)
@@ -135,7 +135,7 @@ func CollectN(
 			closeOnce.Do(func() { close(done) })
 		}
 		return outbox.HandleResult{Disposition: outbox.DispositionAck}
-	}
+	})
 
 	// Subscribe blocks -- run in goroutine.
 	subDone := make(chan struct{})
@@ -207,16 +207,17 @@ func startCollecting(t *testing.T, ctx context.Context, sub outbox.Subscriber, t
 	go func() {
 		defer close(c.subDone)
 		close(ready) // signal: goroutine is running, Subscribe call is imminent
-		err := sub.Subscribe(subCtx, outbox.Subscription{Topic: topic}, func(_ context.Context, entry outbox.Entry) outbox.HandleResult {
-			c.mu.Lock()
-			c.collected = append(c.collected, entry)
-			count := len(c.collected)
-			c.mu.Unlock()
-			if count >= c.n {
-				c.closeOnce.Do(func() { close(c.done) })
-			}
-			return outbox.HandleResult{Disposition: outbox.DispositionAck}
-		})
+		err := sub.Subscribe(subCtx, outbox.Subscription{Topic: topic},
+			outbox.EntryToSubscriberHandler(func(_ context.Context, entry outbox.Entry) outbox.HandleResult {
+				c.mu.Lock()
+				c.collected = append(c.collected, entry)
+				count := len(c.collected)
+				c.mu.Unlock()
+				if count >= c.n {
+					c.closeOnce.Do(func() { close(c.done) })
+				}
+				return outbox.HandleResult{Disposition: outbox.DispositionAck}
+			}))
 		if err != nil && !errors.Is(err, context.Canceled) {
 			c.t.Errorf("unexpected Subscribe error: %v", err)
 		}
@@ -304,23 +305,54 @@ func newHarness(t *testing.T, constructor PubSubConstructor) *pubSubHarness {
 	}
 }
 
-// subscribe launches a Subscribe goroutine with the given handler.
-// Waits for the goroutine to start and Subscribe to be called.
-// Every handler invocation emits a non-blocking send on deliveryEvents so that
-// negative-assertion helpers can detect redeliveries via select+timeout.
-// Subscribe errors (other than context.Canceled) are surfaced via t.Errorf.
-func (h *pubSubHarness) subscribe(handler outbox.EntryHandler) {
+// subscribeWithHandler launches a Subscribe goroutine with the given SubscriberHandler.
+// Used for receipt-lifecycle tests that need to control the Settlement return value.
+// Every handler invocation emits a non-blocking send on deliveryEvents.
+func (h *pubSubHarness) subscribeWithHandler(handler outbox.SubscriberHandler) {
 	h.T.Helper()
 	ctx, cancel := context.WithCancel(h.T.Context())
 	h.cancel = cancel
 	h.T.Cleanup(cancel)
-	wrapped := func(hctx context.Context, entry outbox.Entry) outbox.HandleResult {
+	wrapped := func(hctx context.Context, entry outbox.Entry) (outbox.HandleResult, outbox.Settlement) {
 		select {
 		case h.deliveryEvents <- struct{}{}:
 		default:
 		}
 		return handler(hctx, entry)
 	}
+	ready := make(chan struct{})
+	go func() {
+		defer close(h.subDone)
+		close(ready)
+		err := h.Sub.Subscribe(ctx, outbox.Subscription{Topic: h.Topic}, wrapped)
+		if err != nil && !errors.Is(err, context.Canceled) {
+			h.T.Errorf("unexpected Subscribe error: %v", err)
+		}
+	}()
+	<-ready
+	waitForSubscription(h.T, ctx, h.Sub, h.Topic, "")
+}
+
+// subscribe launches a Subscribe goroutine with the given handler.
+// Waits for the goroutine to start and Subscribe to be called.
+// Every handler invocation emits a non-blocking send on deliveryEvents so that
+// negative-assertion helpers can detect redeliveries via select+timeout.
+// Subscribe errors (other than context.Canceled) are surfaced via t.Errorf.
+//
+// handler is EntryHandler (business signature); it is lifted to SubscriberHandler
+// via EntryToSubscriberHandler before passing to Subscriber.Subscribe.
+func (h *pubSubHarness) subscribe(handler outbox.EntryHandler) {
+	h.T.Helper()
+	ctx, cancel := context.WithCancel(h.T.Context())
+	h.cancel = cancel
+	h.T.Cleanup(cancel)
+	wrapped := outbox.EntryToSubscriberHandler(func(hctx context.Context, entry outbox.Entry) outbox.HandleResult {
+		select {
+		case h.deliveryEvents <- struct{}{}:
+		default:
+		}
+		return handler(hctx, entry)
+	})
 	ready := make(chan struct{})
 	go func() {
 		defer close(h.subDone)
