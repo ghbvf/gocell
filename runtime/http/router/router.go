@@ -93,14 +93,17 @@ func stripPatternMethod(pattern string) string {
 	return pattern
 }
 
-// patternRecorderMiddleware installs an empty *patternRecorder into ctx so
-// the dispatch wrapper has somewhere to write the matched pattern. Must be
-// the outermost middleware so all observability layers can read the result
-// after next.ServeHTTP returns.
-func patternRecorderMiddleware(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		ctx := middleware.WithRoutePatternRecorder(r.Context())
-		next.ServeHTTP(w, r.WithContext(ctx))
+// patternRecorderMiddleware installs both the request-scoped *patternRecorder
+// (so the dispatch wrapper has somewhere to write the matched pattern) AND the
+// router's own resolveHTTPRoutePattern as the shared RouteResolver fallback
+// (so observability middleware that runs after a short-circuit reject still
+// gets a non-"unmatched" route label). Must be the outermost middleware so
+// every observing layer sees the same context.
+func (r *Router) patternRecorderMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		ctx := middleware.WithRoutePatternRecorder(req.Context())
+		ctx = middleware.WithRouteResolver(ctx, r.resolveHTTPRoutePattern)
+		next.ServeHTTP(w, req.WithContext(ctx))
 	})
 }
 
@@ -551,11 +554,12 @@ func NewForListener(ref kcell.ListenerRef, opts ...Option) (*Router, error) {
 //
 // The composition (outer → inner) is:
 //
-//	patternRecorderMiddleware → r.middlewares (in declaration order) →
+//	r.patternRecorderMiddleware → r.middlewares (in declaration order) →
 //	  patternRecordingMux → *http.ServeMux → leaf handler
 //
-// patternRecorderMiddleware installs the *patternRecorder so observability
-// layers can read the matched route pattern after next.ServeHTTP returns.
+// r.patternRecorderMiddleware installs the *patternRecorder and injects the
+// router's route resolver so all observability layers see a consistent route
+// label even on short-circuit reject paths (auth, rate limit, 405).
 // patternRecordingMux fills the recorder by asking ServeMux.Handler for the
 // matched pattern before dispatching the leaf handler.
 //
@@ -642,11 +646,7 @@ func (r *Router) buildMux(realIPMW func(http.Handler) http.Handler) error {
 	}
 	r.use(middleware.AccessLog(r.clock))
 	if r.metricsCollector != nil {
-		r.use(middleware.Metrics(
-			r.metricsCollector,
-			r.clock,
-			middleware.WithRoutePatternResolver(r.resolveHTTPRoutePattern),
-		))
+		r.use(middleware.Metrics(r.metricsCollector, r.clock))
 	}
 	r.use(
 		middleware.Recovery,
@@ -698,7 +698,7 @@ func (r *Router) buildMux(realIPMW func(http.Handler) http.Handler) error {
 func (r *Router) composeHandler() {
 	dispatcher := &patternRecordingMux{mux: r.mux}
 	all := make([]Middleware, 0, len(r.middlewares)+1)
-	all = append(all, patternRecorderMiddleware)
+	all = append(all, r.patternRecorderMiddleware)
 	all = append(all, r.middlewares...)
 	r.handler = &composedHandler{h: chain(http.Handler(dispatcher), all...)}
 }
@@ -1508,14 +1508,7 @@ func (a *nativeMuxAdapter) Handle(pattern string, handler http.Handler) {
 	}
 	method, routePath := splitHandlePattern(pattern)
 	if routePath != "" {
-		fullPath := joinPrefix(a.prefix, routePath)
-		if a.owner != nil && !a.owner.markMuxHandler(method, fullPath) {
-			// Duplicate registration — defer to FinalizeAuth for the
-			// user-visible error. See Router.Handle for context.
-			return
-		}
-		if err := a.recordOwnedRoute(method, routePath); err != nil {
-			a.setRegistrationErr(err)
+		if ok := a.registerRoutePath(method, routePath); !ok {
 			return
 		}
 	}
@@ -1531,6 +1524,35 @@ func (a *nativeMuxAdapter) Handle(pattern string, handler http.Handler) {
 	if a.prefix != "" && routePath == "/" {
 		a.mux.Handle(combineEndSlashPattern(a.prefix, method), handler)
 	}
+}
+
+// registerRoutePath enforces route ownership and ServeMux dedup for a single
+// (method, routePath) pair. Returns true when the caller should proceed with
+// mux.Handle; returns false when the registration should be skipped (duplicate
+// same-cell path) or has recorded an error (cross-cell path conflict).
+//
+// Ordering contract:
+//  1. Cross-cell ownership check first — duplicate path from a different cell
+//     must fail-fast even when the mux would silently drop the second call.
+//  2. ServeMux dedup — same-cell second registration is silently dropped;
+//     FinalizeAuth.partitionAuthMetas is the structured signal for that case.
+//  3. Route pattern recorded only after both checks pass.
+func (a *nativeMuxAdapter) registerRoutePath(method, routePath string) bool {
+	if a.owner == nil {
+		return true
+	}
+	fullPath := joinPrefix(a.prefix, routePath)
+	if a.cellID != "" {
+		if err := a.owner.recordOwnedRoutePath(a.cellID, fullPath); err != nil {
+			a.setRegistrationErr(err)
+			return false
+		}
+	}
+	if !a.owner.markMuxHandler(method, fullPath) {
+		return false
+	}
+	a.owner.recordRoutePattern(method, fullPath)
+	return true
 }
 
 func (a *nativeMuxAdapter) Route(pattern string, fn func(kcell.RouteMux)) {
@@ -1639,21 +1661,6 @@ func (a *nativeMuxAdapter) recordOwnedPrefix(prefix string) error {
 		return nil
 	}
 	return a.owner.recordOwnedPrefix(a.cellID, prefix)
-}
-
-func (a *nativeMuxAdapter) recordOwnedRoute(method, routePath string) error {
-	if a.owner == nil {
-		return nil
-	}
-	fullPath := joinPrefix(a.prefix, routePath)
-	a.owner.recordRoutePattern(method, fullPath)
-	if a.cellID == "" {
-		return nil
-	}
-	if err := a.owner.recordOwnedRoutePath(a.cellID, fullPath); err != nil {
-		return err
-	}
-	return nil
 }
 
 func (a *nativeMuxAdapter) setRegistrationErr(err error) {

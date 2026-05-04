@@ -60,7 +60,7 @@ func logAccessRequest(start time.Time, r *http.Request, state *RecorderState, cl
 	// from user-controlled request data into structured log calls.
 	method := logutil.Sanitize(r.Method)
 	path := logutil.Sanitize(r.URL.Path)
-	route := RoutePatternFromCtx(r.Context())
+	route := RouteFor(r.Context(), r.Method, r.URL.Path)
 	ctx := r.Context()
 	safeObserve(slog.Default(), func() {
 		slog.Info("http request", accessLogAttrs(start, method, path, route, state, ctx, clk)...)

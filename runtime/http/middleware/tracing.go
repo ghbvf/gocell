@@ -267,7 +267,7 @@ func finalRouteAndContractAttrs(
 	carrier *wrapper.AttrCarrier,
 	cfg tracingConfig,
 ) (string, []wrapper.Attr) {
-	route := RoutePatternFromCtx(r.Context())
+	route := RouteFor(r.Context(), r.Method, r.URL.Path)
 	if len(carrier.Attrs) > 0 {
 		return route, carrier.Attrs
 	}

@@ -1,7 +1,7 @@
 // route_pattern.go shares a request-scoped *patternRecorder between
 // runtime/http/router (which writes the matched ServeMux pattern via
 // RecordRoutePattern in the dispatch wrapper) and observability middleware
-// (which reads it through RoutePatternFromCtx after next.ServeHTTP returns).
+// (which reads it through RouteFor after next.ServeHTTP returns).
 //
 // The recorder lives in this package — not in router/ — for two reasons:
 //  1. Tracing / AccessLog / Metrics already live here and read the value;
@@ -15,6 +15,12 @@
 // patternRecordingMux; reads happen many times (one per observing
 // middleware) but always after dispatch has returned, so no synchronization
 // is required.
+//
+// Short-circuit paths (auth reject, rate limit, circuit breaker, body limit,
+// 405) complete before patternRecordingMux runs, so the recorder is still
+// empty. The router injects a RouteResolver via WithRouteResolver so RouteFor
+// can fall back to it and all three observability layers (Metrics, AccessLog,
+// Tracing) see a consistent, non-"unmatched" label on those paths.
 package middleware
 
 import "context"
@@ -52,15 +58,51 @@ func RecordRoutePattern(ctx context.Context, pattern string) {
 	}
 }
 
-// RoutePatternFromCtx extracts the matched route pattern recorded for the
-// current request. Must be called AFTER next.ServeHTTP returns — the recorder
-// is populated only once dispatch has selected a registered handler.
+// RouteResolver maps a concrete (method, urlPath) to a low-cardinality route
+// pattern. Routers inject one via WithRouteResolver before the observability
+// middleware chain runs so RouteFor can recover the pattern on requests
+// rejected before dispatch (auth, rate limit, circuit breaker, body limit,
+// 405). Returns ok=false when the request does not match any registered route.
+type RouteResolver func(method, urlPath string) (pattern string, ok bool)
+
+type routeResolverKey struct{}
+
+// WithRouteResolver returns a copy of ctx carrying fn as the shared
+// router-supplied route resolver. Called once per request by the router root
+// before observability middleware runs.
+func WithRouteResolver(ctx context.Context, fn RouteResolver) context.Context {
+	if fn == nil {
+		return ctx
+	}
+	return context.WithValue(ctx, routeResolverKey{}, fn)
+}
+
+// RouteResolverFrom retrieves the resolver installed by WithRouteResolver,
+// or nil when none is registered (e.g. a middleware unit test that builds
+// a chain without the router).
+func RouteResolverFrom(ctx context.Context) RouteResolver {
+	if fn, ok := ctx.Value(routeResolverKey{}).(RouteResolver); ok {
+		return fn
+	}
+	return nil
+}
+
+// RouteFor returns the matched route pattern for the current request. It reads
+// the dispatch-time recorder first, then falls back to the router-supplied
+// RouteResolver (typically populated for short-circuit rejections that returned
+// before patternRecordingMux ran). Returns UnmatchedRoute when neither source
+// produces a non-empty pattern.
 //
-// Returns UnmatchedRoute when no recorder is installed or the pattern is
-// empty (404 / unmatched requests).
-func RoutePatternFromCtx(ctx context.Context) string {
+// Tracing / AccessLog / Metrics share this single accessor so their route
+// labels stay consistent on reject paths.
+func RouteFor(ctx context.Context, method, urlPath string) string {
 	if rec, ok := ctx.Value(patternRecorderKey{}).(*patternRecorder); ok && rec.pattern != "" {
 		return rec.pattern
+	}
+	if resolver := RouteResolverFrom(ctx); resolver != nil {
+		if p, ok := resolver(method, urlPath); ok && p != "" {
+			return p
+		}
 	}
 	return UnmatchedRoute
 }

@@ -85,16 +85,27 @@ func TestMetrics_Standalone(t *testing.T) {
 }
 
 func TestMetrics_RouteResolverFallback(t *testing.T) {
+	// RouteFor falls back to the RouteResolver injected via WithRouteResolver,
+	// so Metrics sees the template pattern even on reject paths (no dispatch
+	// recorder populated). The resolver is injected into the request context
+	// before the Metrics middleware runs — mirroring what the router does via
+	// patternRecorderMiddleware + WithRouteResolver.
 	c := metrics.NewInMemoryCollector()
-	handler := Metrics(c, clock.Real(), WithRoutePatternResolver(func(method, path string) (string, bool) {
+	resolver := RouteResolver(func(method, path string) (string, bool) {
 		assert.Equal(t, http.MethodGet, method)
 		assert.Equal(t, "/api/v1/access/users/42", path)
 		return "/api/v1/access/users/{id}", true
-	}))(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	})
+	handler := Metrics(c, clock.Real())(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusUnauthorized)
 	}))
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/access/users/42", nil)
+	// Inject resolver into context (simulates what the router does).
+	ctx := WithRoutePatternRecorder(req.Context())
+	ctx = WithRouteResolver(ctx, resolver)
+	req = req.WithContext(ctx)
+
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 
