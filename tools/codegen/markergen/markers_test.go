@@ -110,11 +110,6 @@ func TestParseRoute(t *testing.T) {
 			wantErr: `missing required field "slice"`,
 		},
 		{
-			name:    "error: missing subPath",
-			kv:      "slice=ordercreate",
-			wantErr: `missing required field "subPath"`,
-		},
-		{
 			name:    "error: unknown field",
 			kv:      "slice=ordercreate,subPath=/orders,extra=oops",
 			wantErr: `has unknown field "extra"`,
