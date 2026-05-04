@@ -1,0 +1,25 @@
+{{template "contractHeader" .}}
+
+package {{.PackageName}}
+{{- if eq .Kind "http"}}
+
+import "context"
+
+// Service is the business interface that the {{.ContractID}} server cell must implement.
+// The generated handler in handler_gen.go wires HTTP decode/encode + auth around this interface.
+type Service interface {
+	{{.Endpoint.HandlerMethod}}(ctx context.Context, req *Request) (*Response, error)
+}
+{{- else if eq .Kind "event"}}
+
+import (
+	"context"
+
+	"github.com/ghbvf/gocell/kernel/outbox"
+)
+
+// EventHandler is the business interface that subscribers of {{.ContractID}} must implement.
+type EventHandler interface {
+	{{.Event.HandlerMethod}}(ctx context.Context, entry outbox.Entry, payload *Payload) outbox.HandleResult
+}
+{{- end}}

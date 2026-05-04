@@ -55,6 +55,11 @@
       "description": "Delivery guarantee. Required for kind=event.",
       "enum": ["at-least-once", "exactly-once"]
     },
+    "codegen": {
+      "type": "boolean",
+      "default": false,
+      "description": "Opt the contract into `gocell generate contract` output. When true, contractgen produces types_gen.go / iface_gen.go (and handler_gen.go for kind=http). Default false; will be removed in PR-4 when all contracts are migrated."
+    },
     "description": {
       "type": "string",
       "description": "Human-readable description of the contract's purpose."

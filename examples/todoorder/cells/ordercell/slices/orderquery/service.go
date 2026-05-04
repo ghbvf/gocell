@@ -7,9 +7,15 @@ import (
 	"time"
 
 	"github.com/ghbvf/gocell/examples/todoorder/cells/ordercell/internal/domain"
+	getv1 "github.com/ghbvf/gocell/generated/contracts/http/order/get/v1"
+	listv1 "github.com/ghbvf/gocell/generated/contracts/http/order/list/v1"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/query"
 )
+
+// Compile-time assertions: Service implements both generated interfaces.
+var _ getv1.Service = (*Service)(nil)
+var _ listv1.Service = (*Service)(nil)
 
 // orderSort defines the default sort for order listings.
 var orderSort = []query.SortColumn{
@@ -50,8 +56,8 @@ func (s *Service) GetByID(ctx context.Context, id string) (*domain.Order, error)
 	return s.repo.GetByID(ctx, id)
 }
 
-// List returns a paginated page of orders.
-func (s *Service) List(ctx context.Context, pageReq query.PageParams) (query.PageResult[*domain.Order], error) {
+// list is the internal paginated query implementation.
+func (s *Service) list(ctx context.Context, pageReq query.PageParams) (query.PageResult[*domain.Order], error) {
 	qctx := query.QueryContext("endpoint", "order-query")
 	return query.ExecutePagedQuery(ctx, query.PagedQueryConfig[*domain.Order]{
 		Codec:      s.codec,
@@ -67,4 +73,57 @@ func (s *Service) List(ctx context.Context, pageReq query.PageParams) (query.Pag
 		OnCursorErr: query.LogCursorError(s.logger, "order-query"),
 		RunMode:     s.runMode,
 	})
+}
+
+// Get implements getv1.Service.
+func (s *Service) Get(ctx context.Context, req *getv1.Request) (*getv1.Response, error) {
+	order, err := s.GetByID(ctx, req.ID)
+	if err != nil {
+		return nil, err
+	}
+	return toGetResponse(order), nil
+}
+
+// List implements listv1.Service.
+func (s *Service) List(ctx context.Context, req *listv1.Request) (*listv1.Response, error) {
+	pageReq := query.PageParams{
+		Cursor: req.Cursor,
+		Limit:  int(req.Limit),
+	}
+	result, err := s.list(ctx, pageReq)
+	if err != nil {
+		return nil, err
+	}
+	return toListResponse(result), nil
+}
+
+func toGetResponse(o *domain.Order) *getv1.Response {
+	if o == nil {
+		return nil
+	}
+	return &getv1.Response{
+		Data: &getv1.ResponseData{
+			ID:        o.ID,
+			Item:      o.Item,
+			Status:    o.Status,
+			CreatedAt: o.CreatedAt.Format(time.RFC3339),
+		},
+	}
+}
+
+func toListResponse(result query.PageResult[*domain.Order]) *listv1.Response {
+	items := make([]*listv1.ResponseDataItem, 0, len(result.Items))
+	for _, o := range result.Items {
+		items = append(items, &listv1.ResponseDataItem{
+			ID:        o.ID,
+			Item:      o.Item,
+			Status:    o.Status,
+			CreatedAt: o.CreatedAt.Format(time.RFC3339),
+		})
+	}
+	return &listv1.Response{
+		Data:       items,
+		NextCursor: result.NextCursor,
+		HasMore:    result.HasMore,
+	}
 }

@@ -1,0 +1,16 @@
+{{template "contractHeader" .}}
+
+package {{.PackageName}}
+{{range .DTOs}}
+{{- if .Doc}}// {{.Name}} — {{.Doc}}
+{{- else}}// {{.Name}} is a generated DTO for contract {{$.ContractID}}.
+{{- end}}
+type {{.Name}} struct {
+{{- range .Fields}}
+{{- if .Doc}}
+	// {{.Doc}}
+{{- end}}
+	{{.Name}} {{.GoType}} `json:"{{.JSONTag}}"`
+{{- end}}
+}
+{{end}}

@@ -11,18 +11,10 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/ghbvf/gocell/examples/todoorder/cells/ordercell/internal/mem"
+	createv1 "github.com/ghbvf/gocell/generated/contracts/http/order/create/v1"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/contracttest"
 )
-
-func TestSpecOrderCreateMatchesContract(t *testing.T) {
-	root := contracttest.ExampleContractsRoot(t, "todoorder")
-	c := contracttest.LoadByID(t, root, "http.order.create.v1")
-	require.NotNil(t, c.HTTP)
-	require.Equal(t, c.ID, specOrderCreate.ID)
-	require.Equal(t, c.HTTP.Method, specOrderCreate.Method)
-	require.Equal(t, c.HTTP.Path, specOrderCreate.Path)
-}
 
 func newContractHandler(t testing.TB) (http.Handler, *recordingWriter) {
 	t.Helper()
@@ -30,9 +22,8 @@ func newContractHandler(t testing.TB) (http.Handler, *recordingWriter) {
 	writer := &recordingWriter{}
 	svc, err := NewService(repo, slog.Default(), WithEmitter(mustEmitter(t, writer)), WithTxManager(&stubTxRunner{}), WithClock(clock.Real()))
 	require.NoError(t, err)
-	mux := http.NewServeMux()
-	mux.Handle("POST /api/v1/orders/", http.HandlerFunc(NewHandler(svc).HandleCreate))
-	return mux, writer
+	h := createv1.NewHandler(svc, nil)
+	return h, writer
 }
 
 func TestHttpOrderCreateV1Serve(t *testing.T) {
@@ -43,6 +34,7 @@ func TestHttpOrderCreateV1Serve(t *testing.T) {
 	c.ValidateRequest(t, []byte(`{"item":"widget"}`))
 	c.MustRejectRequest(t, []byte(`{"item":"x","extra":"bad"}`))
 
+	// No path params — direct ServeHTTP works without a chi router context.
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(c.HTTP.Method, c.HTTP.Path, strings.NewReader(`{"item":"widget"}`))
 	req.Header.Set("Content-Type", "application/json")

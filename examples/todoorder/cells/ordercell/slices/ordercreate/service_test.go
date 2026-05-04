@@ -11,6 +11,7 @@ import (
 
 	"github.com/ghbvf/gocell/examples/todoorder/cells/ordercell/internal/domain"
 	"github.com/ghbvf/gocell/examples/todoorder/cells/ordercell/internal/mem"
+	createv1 "github.com/ghbvf/gocell/generated/contracts/http/order/create/v1"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/persistence"
@@ -81,19 +82,20 @@ func TestService_Create(t *testing.T) {
 			)
 			require.NoError(t, err)
 
-			order, createErr := svc.Create(context.Background(), tt.item)
+			resp, createErr := svc.Create(context.Background(), &createv1.Request{Item: tt.item})
 			if tt.wantErr {
 				require.Error(t, createErr)
 				var ecErr *errcode.Error
 				require.ErrorAs(t, createErr, &ecErr)
 				assert.Equal(t, tt.errCode, ecErr.Code)
-				assert.Nil(t, order)
+				assert.Nil(t, resp)
 			} else {
 				require.NoError(t, createErr)
-				require.NotNil(t, order)
-				assert.Equal(t, tt.item, order.Item)
-				assert.Equal(t, "pending", order.Status)
-				assert.NotEmpty(t, order.ID)
+				require.NotNil(t, resp)
+				require.NotNil(t, resp.Data)
+				assert.Equal(t, tt.item, resp.Data.Item)
+				assert.Equal(t, "pending", resp.Data.Status)
+				assert.NotEmpty(t, resp.Data.ID)
 			}
 		})
 	}
@@ -106,17 +108,18 @@ func TestService_Create_WritesOutboxEntry(t *testing.T) {
 	svc, err := NewService(repo, slog.Default(), WithEmitter(mustEmitter(t, writer)), WithTxManager(txRunner), WithClock(clock.Real()))
 	require.NoError(t, err)
 
-	order, err := svc.Create(context.Background(), "outbox-item")
+	resp, err := svc.Create(context.Background(), &createv1.Request{Item: "outbox-item"})
 	require.NoError(t, err)
-	require.NotNil(t, order)
+	require.NotNil(t, resp)
+	require.NotNil(t, resp.Data)
 	require.Len(t, writer.entries, 1, "should write exactly one outbox entry")
 	assert.Equal(t, 1, txRunner.calls, "should run inside txRunner")
 	assert.NotEmpty(t, writer.entries[0].ID)
-	assert.Equal(t, order.ID, writer.entries[0].AggregateID)
+	assert.Equal(t, resp.Data.ID, writer.entries[0].AggregateID)
 	assert.Equal(t, "order", writer.entries[0].AggregateType)
 	assert.Equal(t, TopicOrderCreated, writer.entries[0].EventType)
 	assert.Equal(t, TopicOrderCreated, writer.entries[0].RoutingTopic())
-	assert.Contains(t, string(writer.entries[0].Payload), order.ID)
+	assert.Contains(t, string(writer.entries[0].Payload), resp.Data.ID)
 }
 
 func TestService_Create_OutboxWriterFailureReturnsError(t *testing.T) {
@@ -126,9 +129,9 @@ func TestService_Create_OutboxWriterFailureReturnsError(t *testing.T) {
 	svc, err := NewService(repo, slog.Default(), WithEmitter(mustEmitter(t, writer)), WithTxManager(txRunner), WithClock(clock.Real()))
 	require.NoError(t, err)
 
-	order, createErr := svc.Create(context.Background(), "outbox-item")
+	resp, createErr := svc.Create(context.Background(), &createv1.Request{Item: "outbox-item"})
 	require.Error(t, createErr)
-	assert.Nil(t, order)
+	assert.Nil(t, resp)
 	assert.Equal(t, 1, txRunner.calls)
 
 	// Document known limitation: stubTxRunner has no rollback, so the order
@@ -151,10 +154,11 @@ func TestService_Create_NoopWriterDemoPath(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	order, createErr := svc.Create(context.Background(), "demo-item")
+	resp, createErr := svc.Create(context.Background(), &createv1.Request{Item: "demo-item"})
 	require.NoError(t, createErr)
-	require.NotNil(t, order)
-	assert.Equal(t, "demo-item", order.Item)
+	require.NotNil(t, resp)
+	require.NotNil(t, resp.Data)
+	assert.Equal(t, "demo-item", resp.Data.Item)
 }
 
 func TestService_Create_PersistsOrder(t *testing.T) {
@@ -166,12 +170,14 @@ func TestService_Create_PersistsOrder(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	order, createErr := svc.Create(context.Background(), "persisted")
+	resp, createErr := svc.Create(context.Background(), &createv1.Request{Item: "persisted"})
 	require.NoError(t, createErr)
+	require.NotNil(t, resp)
+	require.NotNil(t, resp.Data)
 
-	got, err := repo.GetByID(context.Background(), order.ID)
+	got, err := repo.GetByID(context.Background(), resp.Data.ID)
 	require.NoError(t, err)
-	assert.Equal(t, order.ID, got.ID)
+	assert.Equal(t, resp.Data.ID, got.ID)
 	assert.Equal(t, "persisted", got.Item)
 }
 
@@ -192,9 +198,9 @@ func TestService_Create_RepoFailure(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	order, createErr := svc.Create(context.Background(), "item")
+	resp, createErr := svc.Create(context.Background(), &createv1.Request{Item: "item"})
 	require.Error(t, createErr)
-	assert.Nil(t, order)
+	assert.Nil(t, resp)
 	assert.Contains(t, createErr.Error(), "persist")
 }
 

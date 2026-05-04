@@ -167,6 +167,11 @@ type ContractMeta struct {
 	Replayable        *bool          `yaml:"replayable,omitempty"`
 	IdempotencyKey    string         `yaml:"idempotencyKey,omitempty"`
 	DeliverySemantics string         `yaml:"deliverySemantics,omitempty"`
+	// Codegen opts the contract into `gocell generate contract` output.
+	// When true, contractgen produces types_gen.go / iface_gen.go (and
+	// handler_gen.go for kind=http) under generated/contracts/<kind>/<...>/v<N>/.
+	// Default false. PR-4 will remove this opt-in once all contracts are migrated.
+	Codegen bool `yaml:"codegen,omitempty"`
 	// Description / DeprecatedAt are documentation only — excluded from
 	// structural fingerprint via fingerprint:"-".
 	Description  string `yaml:"description,omitempty" fingerprint:"-"`

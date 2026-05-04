@@ -3,6 +3,7 @@ kind: http
 ownerCell: ordercell
 consistencyLevel: L2
 lifecycle: active
+codegen: true
 endpoints:
   server: ordercell
   clients:

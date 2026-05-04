@@ -1,0 +1,21 @@
+id: http.config.delete.v1
+kind: http
+ownerCell: configcell
+consistencyLevel: L1
+lifecycle: active
+endpoints:
+  server: configcell
+  http:
+    method: DELETE
+    path: /api/v1/config/{key}
+    pathParams:
+      key:
+        type: string
+        minLength: 1
+        maxLength: 128
+    successStatus: 204
+    noContent: true
+schemaRefs:
+  request: request.schema.json
+  response: response.schema.json
+codegen: true
