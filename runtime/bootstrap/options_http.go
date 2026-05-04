@@ -160,11 +160,23 @@ func WithAdapterInfo(info map[string]string) Option {
 // cmd/corebundle/catalog_gen.go generatedPackageGraph). Pass nil to omit the
 // packageDeps block entirely. The graph is produced at build time by running
 // `go generate ./cmd/corebundle/` and committed as catalog_gen.go.
-func WithDevtoolsCatalog(pm *metadata.ProjectMeta, root string, pkgGraph *kerneldepgraph.Graph) Option {
+//
+// wireSummaries supplies per-cell wire surface summaries derived from cell.go
+// marker comments via BuildCellWireSummaries. Pass nil to omit the wireSummary
+// field on all Cell entities (safe default when markers are absent).
+func WithDevtoolsCatalog(
+	pm *metadata.ProjectMeta,
+	root string,
+	pkgGraph *kerneldepgraph.Graph,
+	wireSummaries ...[]metadata.CellWireSummary,
+) Option {
 	return func(b *Bootstrap) {
 		b.devtoolsMeta = pm
 		b.devtoolsRoot = root
 		b.devtoolsPkgGraph = pkgGraph
+		if len(wireSummaries) > 0 {
+			b.devtoolsWireSummaries = wireSummaries[0]
+		}
 	}
 }
 

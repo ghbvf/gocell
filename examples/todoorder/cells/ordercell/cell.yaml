@@ -11,6 +11,3 @@ verify:
   smoke:
     - smoke.ordercell.startup
 goStructName: OrderCell
-listeners:
-  - ref: cell.PrimaryListener
-    prefix: /api/v1

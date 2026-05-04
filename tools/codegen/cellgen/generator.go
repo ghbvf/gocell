@@ -3,13 +3,15 @@ package cellgen
 import (
 	"embed"
 	"fmt"
-	"os"
+	"log/slog"
 	"path/filepath"
 	"sort"
+	"strings"
 	"text/template"
 
 	"github.com/ghbvf/gocell/kernel/metadata"
 	"github.com/ghbvf/gocell/tools/codegen"
+	"github.com/ghbvf/gocell/tools/codegen/markergen"
 )
 
 //go:embed templates/*.tmpl
@@ -80,6 +82,20 @@ func Generate(root string, project *metadata.ProjectMeta, opts Options) (Result,
 		return res, fmt.Errorf("cellgen generate: cell %q not found", opts.OnlyCell)
 	}
 
+	// K#05 W2: read wire declarations directly from cell.go marker comments
+	// via markergen.Merge. Builder receives WireBundle per cell.
+	//
+	// K05-09: When OnlyCell is set, filter the project view to the target cell
+	// so unrelated cells' marker errors don't block single-cell generation.
+	mergeProject := project
+	if opts.OnlyCell != "" {
+		mergeProject = projectFilteredToCell(project, opts.OnlyCell)
+	}
+	bundles, err := markergen.Merge(root, mergeProject)
+	if err != nil {
+		return res, fmt.Errorf("cellgen generate: markergen merge: %w", err)
+	}
+
 	for _, id := range cellIDs {
 		cell := project.Cells[id]
 		// Skip cells without GoStructName — they have not opted into codegen
@@ -90,14 +106,11 @@ func Generate(root string, project *metadata.ProjectMeta, opts Options) (Result,
 		// mode, which is silent on opt-out cells by design).
 		if cell.GoStructName == "" {
 			if !opts.Verify {
-				fmt.Fprintf(os.Stderr,
-					"cellgen: skipping cell %q (no goStructName in cell.yaml;"+
-						" add goStructName: <YourStructName> to opt in)\n",
-					cell.ID)
+				slog.Info("cellgen: skipping cell (no goStructName)", slog.String("cell_id", cell.ID))
 			}
 			continue
 		}
-		if err := generateOneCell(root, project, cell, opts, &res); err != nil {
+		if err := generateOneCell(root, project, cell, bundles[id], opts, &res); err != nil {
 			return res, err
 		}
 	}
@@ -106,8 +119,15 @@ func Generate(root string, project *metadata.ProjectMeta, opts Options) (Result,
 
 // generateOneCell renders cell_gen.go and per-slice slice_gen.go for the
 // given cell, appending outcomes to res.
-func generateOneCell(root string, project *metadata.ProjectMeta, cell *metadata.CellMeta, opts Options, res *Result) error {
-	spec, err := BuildCellSpec(project, cell.ID)
+func generateOneCell(
+	root string,
+	project *metadata.ProjectMeta,
+	cell *metadata.CellMeta,
+	bundle markergen.WireBundle,
+	opts Options,
+	res *Result,
+) error {
+	spec, err := BuildCellSpec(project, cell.ID, bundle)
 	if err != nil {
 		return err
 	}
@@ -115,7 +135,7 @@ func generateOneCell(root string, project *metadata.ProjectMeta, cell *metadata.
 		return err
 	}
 	for _, sid := range slicesForCellSorted(project, cell.ID) {
-		sliceSpec, err := BuildSliceSpec(project, cell.ID, sid)
+		sliceSpec, err := BuildSliceSpec(project, cell.ID, sid, bundle)
 		if err != nil {
 			return err
 		}
@@ -149,6 +169,8 @@ type CellArtifact struct {
 // without touching disk. Returns one CellArtifact per produced file (one
 // cell_gen.go plus one slice_gen.go per slice with subscribes). Cells
 // without GoStructName return (nil, nil) — same opt-in semantics as Generate.
+//
+//nolint:gocognit // sequential render-cell + per-slice render loop; complexity is the price of single-pass artifact emission
 func RenderCellArtifacts(root string, project *metadata.ProjectMeta, cellID string) ([]CellArtifact, error) {
 	if project == nil {
 		return nil, fmt.Errorf("cellgen render artifacts: project is nil")
@@ -161,9 +183,15 @@ func RenderCellArtifacts(root string, project *metadata.ProjectMeta, cellID stri
 		return nil, nil
 	}
 
+	bundles, err := markergen.Merge(root, project)
+	if err != nil {
+		return nil, fmt.Errorf("cellgen render artifacts: markergen merge: %w", err)
+	}
+	bundle := bundles[cellID]
+
 	var out []CellArtifact
 
-	cellSpec, err := BuildCellSpec(project, cellID)
+	cellSpec, err := BuildCellSpec(project, cellID, bundle)
 	if err != nil {
 		return nil, err
 	}
@@ -184,7 +212,7 @@ func RenderCellArtifacts(root string, project *metadata.ProjectMeta, cellID stri
 	out = append(out, CellArtifact{Kind: "cell-gen", RelPath: cellRel, Content: cellContent})
 
 	for _, sid := range slicesForCellSorted(project, cellID) {
-		sliceSpec, err := BuildSliceSpec(project, cellID, sid)
+		sliceSpec, err := BuildSliceSpec(project, cellID, sid, bundle)
 		if err != nil {
 			return nil, err
 		}
@@ -295,4 +323,29 @@ func recordResult(res *Result, w codegen.WriteResult) {
 	default:
 		res.Generated = append(res.Generated, w.Path)
 	}
+}
+
+// projectFilteredToCell returns a shallow copy of project containing only the
+// target cell and its slices. This is used by Generate when OnlyCell is set so
+// that markergen.Merge only parses the target cell's cell.go, preventing
+// unrelated cells' marker errors from blocking single-cell generation.
+//
+// The returned ProjectMeta shares the same Contracts map (read-only in this
+// context) and shallow-copies Cells and Slices to the filtered set.
+func projectFilteredToCell(project *metadata.ProjectMeta, cellID string) *metadata.ProjectMeta {
+	filtered := &metadata.ProjectMeta{
+		Cells:     make(map[string]*metadata.CellMeta, 1),
+		Slices:    make(map[string]*metadata.SliceMeta),
+		Contracts: project.Contracts,
+	}
+	if cell, ok := project.Cells[cellID]; ok {
+		filtered.Cells[cellID] = cell
+	}
+	prefix := cellID + "/"
+	for key, s := range project.Slices {
+		if strings.HasPrefix(key, prefix) {
+			filtered.Slices[key] = s
+		}
+	}
+	return filtered
 }

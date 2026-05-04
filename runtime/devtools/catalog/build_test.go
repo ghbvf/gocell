@@ -930,6 +930,148 @@ func TestBuildDocument_GeneratedAt_HonorsInjectedClock(t *testing.T) {
 		"GeneratedAt must equal injected clock time")
 }
 
+// ---- TestInjectWireSummaries ----
+
+// TestInjectWireSummaries_CellSpecWire verifies that InjectWireSummaries
+// replaces Cell entity Spec with a CellSpecWire embedding the original CellSpec
+// plus the matching CellWireSummary. Non-Cell entities are left unchanged.
+func TestInjectWireSummaries_CellSpecWire(t *testing.T) {
+	entities := []catalog.Entity{
+		{
+			Kind:     "Cell",
+			Metadata: catalog.EntityMetadata{Name: "accesscore"},
+			Spec: catalog.CellSpec{
+				Type:             "core",
+				ConsistencyLevel: "L1",
+			},
+		},
+		{
+			Kind:     "Cell",
+			Metadata: catalog.EntityMetadata{Name: "auditcore"},
+			Spec: catalog.CellSpec{
+				Type:             "support",
+				ConsistencyLevel: "L2",
+			},
+		},
+		{
+			Kind:     "Slice",
+			Metadata: catalog.EntityMetadata{Name: "sessionlogin"},
+			Spec:     catalog.SliceSpec{BelongsToCell: "accesscore"},
+		},
+	}
+
+	summaries := []metadata.CellWireSummary{
+		{
+			CellID: "accesscore",
+			Listeners: []metadata.WireListenerView{
+				{Ref: "cell.PrimaryListener", Prefix: "/api/v1/access"},
+			},
+		},
+	}
+
+	catalog.InjectWireSummaries(entities, summaries)
+
+	// accesscore must have CellSpecWire with populated WireSummary.
+	spec0, ok0 := entities[0].Spec.(catalog.CellSpecWire)
+	require.True(t, ok0, "accesscore spec must be CellSpecWire after injection")
+	assert.Equal(t, "core", spec0.Type)
+	require.NotNil(t, spec0.WireSummary)
+	assert.Equal(t, "accesscore", spec0.WireSummary.CellID)
+	require.Len(t, spec0.WireSummary.Listeners, 1)
+	assert.Equal(t, "/api/v1/access", spec0.WireSummary.Listeners[0].Prefix)
+
+	// auditcore has no matching summary: WireSummary == nil (omitempty in JSON).
+	spec1, ok1 := entities[1].Spec.(catalog.CellSpecWire)
+	require.True(t, ok1, "auditcore spec must be CellSpecWire after injection")
+	assert.Nil(t, spec1.WireSummary, "auditcore WireSummary must be nil when no match")
+
+	// Slice entity must be unchanged.
+	_, isSliceSpec := entities[2].Spec.(catalog.SliceSpec)
+	assert.True(t, isSliceSpec, "Slice entity must retain its SliceSpec")
+}
+
+// TestInjectWireSummaries_EmptySummaries verifies that passing nil summaries
+// produces CellSpecWire with nil WireSummary (omitempty). The call-site guard
+// `len(opts.WireSummaries) > 0` in BuildDocument prevents this path in
+// practice; InjectWireSummaries itself does not skip on nil — it converts to
+// CellSpecWire with WireSummary==nil so JSON/YAML output omits the field.
+func TestInjectWireSummaries_EmptySummaries(t *testing.T) {
+	entities := []catalog.Entity{
+		{
+			Kind:     "Cell",
+			Metadata: catalog.EntityMetadata{Name: "accesscore"},
+			Spec:     catalog.CellSpec{Type: "core"},
+		},
+	}
+	catalog.InjectWireSummaries(entities, nil)
+
+	wire, isCellSpecWire := entities[0].Spec.(catalog.CellSpecWire)
+	require.True(t, isCellSpecWire, "entity Spec becomes CellSpecWire even with nil summaries")
+	assert.Nil(t, wire.WireSummary, "WireSummary must be nil when no matching summary exists")
+}
+
+// TestBuildDocument_WireSummariesInjected verifies that BuildDocument populates
+// CellSpecWire on Cell entities when opts.WireSummaries is non-empty.
+func TestBuildDocument_WireSummariesInjected(t *testing.T) {
+	pm := minimalPM() // 1 cell: accesscore
+	opts := catalog.ExportOptions{
+		Clock:  fixedClock(),
+		Filter: catalog.Filter{Include: catalog.IncludeOptions{}},
+		WireSummaries: []metadata.CellWireSummary{
+			{
+				CellID: "accesscore",
+				Listeners: []metadata.WireListenerView{
+					{Ref: "cell.PrimaryListener", Prefix: "/api/v1/access"},
+				},
+			},
+		},
+	}
+
+	doc, err := catalog.BuildDocument(pm, opts)
+	require.NoError(t, err)
+
+	var cellEntity *catalog.Entity
+	for i := range doc.Entities {
+		if doc.Entities[i].Kind == "Cell" && doc.Entities[i].Metadata.Name == "accesscore" {
+			cellEntity = &doc.Entities[i]
+			break
+		}
+	}
+	require.NotNil(t, cellEntity, "accesscore entity must be present")
+
+	wire, ok := cellEntity.Spec.(catalog.CellSpecWire)
+	require.True(t, ok, "accesscore spec must be CellSpecWire when WireSummaries are provided")
+	require.NotNil(t, wire.WireSummary)
+	assert.Equal(t, "accesscore", wire.WireSummary.CellID)
+}
+
+// TestBuildWireSummaryIndex_UniqueIDs verifies that buildWireSummaryIndex
+// (called via InjectWireSummaries) handles duplicate CellIDs by keeping last.
+func TestInjectWireSummaries_DuplicateCellID(t *testing.T) {
+	entities := []catalog.Entity{
+		{
+			Kind:     "Cell",
+			Metadata: catalog.EntityMetadata{Name: "accesscore"},
+			Spec:     catalog.CellSpec{Type: "core"},
+		},
+	}
+	summaries := []metadata.CellWireSummary{
+		{CellID: "accesscore", Listeners: []metadata.WireListenerView{{Ref: "first", Prefix: "/first"}}},
+		{CellID: "accesscore", Listeners: []metadata.WireListenerView{{Ref: "second", Prefix: "/second"}}},
+	}
+
+	catalog.InjectWireSummaries(entities, summaries)
+
+	wire, ok := entities[0].Spec.(catalog.CellSpecWire)
+	require.True(t, ok)
+	require.NotNil(t, wire.WireSummary)
+	// buildWireSummaryIndex iterates and last write wins.
+	assert.Equal(t, "/second", wire.WireSummary.Listeners[0].Prefix,
+		"last summary with same CellID should win")
+}
+
+// ---- TestBuildDocument_PackageDeps_NoStatusField ----
+
 // TestBuildDocument_PackageDeps_NoStatusField verifies that PackageDepsView
 // wire output does not contain a "status" key in the JSON output (A4 compliance).
 func TestBuildDocument_PackageDeps_NoStatusField(t *testing.T) {

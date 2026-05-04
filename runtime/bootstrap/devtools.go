@@ -27,7 +27,7 @@ func (b *Bootstrap) phase5InitDevtoolsHandler(_ context.Context, s *phaseState) 
 		return nil
 	}
 	cellGraph := buildCellDepGraph(b.devtoolsMeta, b.clock)
-	s.devtoolsHandler = devtools.NewHandler(b.devtoolsMeta, cellGraph, b.devtoolsPkgGraph, b.devtoolsRoot, b.clock)
+	s.devtoolsHandler = devtools.NewHandler(b.devtoolsMeta, cellGraph, b.devtoolsPkgGraph, b.devtoolsRoot, b.clock, b.devtoolsWireSummaries)
 	return nil
 }
 

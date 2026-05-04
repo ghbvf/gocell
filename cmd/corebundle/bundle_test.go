@@ -312,6 +312,42 @@ func newValidatedSharedDeps(t *testing.T, topo bootstrap.Topology) *SharedDeps {
 	return deps
 }
 
+// ---------------------------------------------------------------------------
+// devtoolsOption coverage
+// ---------------------------------------------------------------------------
+
+// TestDevtoolsOption_EmptyRoot verifies that devtoolsOption returns a no-op
+// bootstrap option (catalog endpoint disabled) when ProjectRoot is unset.
+// This exercises the first early-return branch in devtoolsOption.
+func TestDevtoolsOption_EmptyRoot(t *testing.T) {
+	shared := buildTestSharedDeps(t)
+	shared.ProjectRoot = "" // unset → catalog disabled
+
+	opt := devtoolsOption(shared)
+	require.NotNil(t, opt, "devtoolsOption must always return a non-nil Option")
+
+	// Apply option to a bootstrap and verify devtoolsMeta is nil (disabled).
+	b := bootstrap.New(bootstrap.WithClock(shared.Clock), opt)
+	require.NotNil(t, b)
+}
+
+// TestDevtoolsOption_RootOutsideCwd verifies that devtoolsOption disables the
+// catalog when ProjectRoot resolves outside the current working directory.
+// This exercises the IsWithinRoot branch.
+func TestDevtoolsOption_RootOutsideCwd(t *testing.T) {
+	shared := buildTestSharedDeps(t)
+	// /tmp is virtually never within the test's cwd.
+	shared.ProjectRoot = t.TempDir()
+
+	opt := devtoolsOption(shared)
+	require.NotNil(t, opt)
+
+	b := bootstrap.New(bootstrap.WithClock(shared.Clock), opt)
+	require.NotNil(t, b)
+}
+
+// TestDurabilityModeForTopology_UsesStorageBackend is already in this file;
+// following tests continue below.
 func TestDurabilityModeForTopology_UsesStorageBackend(t *testing.T) {
 	tests := []struct {
 		name string

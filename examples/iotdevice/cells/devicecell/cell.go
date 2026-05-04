@@ -20,7 +20,6 @@ import (
 	"github.com/ghbvf/gocell/kernel/clock"
 	kcommand "github.com/ghbvf/gocell/kernel/command"
 	"github.com/ghbvf/gocell/kernel/command/commandtest"
-	"github.com/ghbvf/gocell/kernel/metadata"
 	"github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/errcode"
@@ -37,8 +36,7 @@ const (
 	RoleDevice   = dto.RoleDevice
 )
 
-// Compile-time interface check.
-var _ cell.Cell = (*DeviceCell)(nil)
+// Compile-time interface check lives in cell_gen.go (DO NOT EDIT).
 
 type commandQueueStore interface {
 	kcommand.Queue
@@ -81,22 +79,32 @@ func WithClock(clk clock.Clock) Option {
 }
 
 // DeviceCell is the devicecell Cell implementation.
+// +cell:listener:ref=cell.PrimaryListener,prefix=
+// +cell:listener:ref=cell.InternalListener,prefix=
 type DeviceCell struct {
 	*cell.BaseCell
 	deviceRepo      domain.DeviceRepository
 	publisher       outbox.Publisher
-	emitter         outbox.Emitter // set during Init; retained for Probes
+	emitter         outbox.Emitter // set during initInternal; retained for Probes
 	cursorCodec     *query.CursorCodec
 	logger          *slog.Logger
 	metricsProvider metrics.Provider
 	commandQueue    commandQueueStore
 	commandSweeper  *commandruntime.SweeperLifecycle
-	clk             clock.Clock // injected from reg.Config during Init
+	clk             clock.Clock // injected from reg.Config during initInternal
 
+	// +slice:route:slice=deviceregister,subPath=/api/v1/devices
 	registerHandler *deviceregister.Handler
-	commandHandler  *devicecommand.Handler
-	statusHandler   *devicestatus.Handler
-	listHandler     *devicelist.Handler
+
+	// +slice:route:slice=devicecommand,subPath=/api/v1/devices
+	// +slice:route:slice=devicecommand,listener=cell.InternalListener,subPath=,method=RegisterInternalRoutes
+	commandHandler *devicecommand.Handler
+
+	// +slice:route:slice=devicestatus,subPath=/api/v1/devices
+	statusHandler *devicestatus.Handler
+
+	// +slice:route:slice=devicelist,subPath=/api/v1/devices
+	listHandler *devicelist.Handler
 }
 
 // RegisterCommandQueue implements kernel/command.QueueRegistrar. The supplied
@@ -114,16 +122,8 @@ func (c *DeviceCell) RegisterCommandQueue(q kcommand.Queue) {
 // NewDeviceCell creates a new DeviceCell with the given options.
 func NewDeviceCell(opts ...Option) *DeviceCell {
 	c := &DeviceCell{
-		BaseCell: cell.MustNewBaseCell(&metadata.CellMeta{
-			ID:               "devicecell",
-			Type:             "edge",
-			ConsistencyLevel: "L4",
-			DurabilityMode:   "durable",
-			Owner:            metadata.OwnerMeta{Team: "examples", Role: "device-owner"},
-			Schema:           metadata.SchemaMeta{Primary: "devices"},
-			Verify:           metadata.CellVerifyMeta{Smoke: []string{"devicecell/smoke"}},
-		}),
-		logger: slog.Default(),
+		BaseCell: cell.MustNewBaseCell(loadCellMetadata()),
+		logger:   slog.Default(),
 	}
 	for _, o := range opts {
 		o(c)
@@ -142,19 +142,22 @@ func (c *DeviceCell) buildEmitter() (*outbox.DirectEmitter, error) {
 	return outbox.NewDirectEmitter(c.publisher, outbox.DirectPublishFailOpen, mp, c.clk, "devicecell", outbox.WithLogger(c.logger))
 }
 
-// Init sets up repositories, slice services, handlers, and registers routes,
-// lifecycle hooks, and health probes into reg.
+// initInternal is the K#04 codegen escape hatch: business init that cannot
+// be generated (emitter resolve, slice service construction, lifecycle hooks).
+// cell_gen.go::Init calls it after BaseCell.Init and before mounting the
+// generated route-group blocks. This is a permanent convention, not a
+// transitional shim — slice/handler instantiation and adapter wiring stay
+// hand-written.
+//
 // L4 Cells do not use outboxWriter (KG-07 decision). The Cell boundary
 // adapts the publisher to a direct emitter for event publishing.
-func (c *DeviceCell) Init(ctx context.Context, reg cell.Registry) error {
-	if err := c.BaseCell.Init(ctx, reg); err != nil {
-		return err
-	}
-
+//
+//nolint:unparam // ctx is part of the K#04 initInternal contract; unused here, used by other cells (configcore)
+func (c *DeviceCell) initInternal(ctx context.Context, reg cell.Registry) error {
 	durabilityMode := reg.DurabilityMode()
 
 	// Clock must be injected via WithClock before Init.
-	clock.MustHaveClock(c.clk, "devicecell.Init: clock required; use WithClock(clock.Real()) in assembly")
+	clock.MustHaveClock(c.clk, "devicecell.initInternal: clock required; use WithClock(clock.Real()) in assembly")
 
 	if err := c.initDeps(durabilityMode); err != nil {
 		return err
@@ -163,7 +166,7 @@ func (c *DeviceCell) Init(ctx context.Context, reg cell.Registry) error {
 		return err
 	}
 
-	c.registerRouteGroups(reg)
+	// Route groups removed: cell_gen.go owns Init and renders them.
 	c.registerHealthAndLifecycle(reg)
 
 	return nil
@@ -273,41 +276,6 @@ func (c *DeviceCell) initSlices(durabilityMode cell.DurabilityMode) error {
 	c.listHandler = devicelist.NewHandler(listSvc)
 	c.AddSlice(cell.NewBaseSlice("devicelist", "devicecell", cell.L0))
 	return nil
-}
-
-// registerRouteGroups registers primary and internal HTTP route groups.
-func (c *DeviceCell) registerRouteGroups(reg cell.Registry) {
-	reg.RouteGroup(cell.RouteGroup{
-		Listener: cell.PrimaryListener,
-		// Empty prefix: contract specs already carry absolute /api/v1/...
-		// paths, so we mount routes directly on the root mux without an
-		// outer Route("/api/v1") wrapper that would double-prefix.
-		Prefix: "",
-		Register: func(mux cell.RouteMux) error {
-			var firstErr error
-			captureErr := func(err error) {
-				if err != nil && firstErr == nil {
-					firstErr = err
-				}
-			}
-			mux.Route("/api/v1/devices", func(devices cell.RouteMux) {
-				captureErr(c.registerHandler.RegisterRoutes(devices))
-				captureErr(c.listHandler.RegisterRoutes(devices))
-				captureErr(c.statusHandler.RegisterRoutes(devices))
-				// device-command public routes (enqueue, dequeue, report, ack,
-				// extend-lease) live under /api/v1/devices/{id}/commands.
-				captureErr(c.commandHandler.RegisterRoutes(devices))
-			})
-			return firstErr
-		},
-	})
-	reg.RouteGroup(cell.RouteGroup{
-		Listener: cell.InternalListener,
-		Prefix:   "",
-		Register: func(mux cell.RouteMux) error {
-			return c.commandHandler.RegisterInternalRoutes(mux)
-		},
-	})
 }
 
 // registerHealthAndLifecycle registers health probes and the sweeper lifecycle hook.

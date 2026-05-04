@@ -24,7 +24,7 @@ func TestRunScaffoldCell_Success(t *testing.T) {
 		[]byte("module example.com/test\n"), 0o644))
 
 	err := runScaffoldWithRoot(dir,
-		[]string{"cell", "--id=test-cell", "--team=squad"})
+		[]string{"cell", "--id=test-cell", "--team=squad", "--role=cell-owner"})
 	require.NoError(t, err)
 
 	_, statErr := os.Stat(filepath.Join(dir, "cells", "test-cell", "cell.yaml"))

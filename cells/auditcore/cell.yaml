@@ -10,4 +10,5 @@ schema:
 verify:
   smoke:
     - smoke.auditcore.startup
+goStructName: AuditCore
 l0Dependencies: []

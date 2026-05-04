@@ -5,8 +5,10 @@ import (
 	"fmt"
 	"path/filepath"
 	"strings"
+	"unicode"
 
 	"github.com/ghbvf/gocell/kernel/scaffold"
+	"github.com/ghbvf/gocell/tools/codegen/cellgen"
 )
 
 // Shared flag name + usage for scaffold sub-commands. Constants avoid the
@@ -20,13 +22,14 @@ const (
 
 // runScaffold implements:
 //
-//	gocell scaffold cell --id=<id> [--type=core] [--level=L2] [--team=<team>] [--dry-run]
+//	gocell scaffold cell --id=<id> --team=<team> --role=<role> [--type=core] [--level=L2] [--dry-run]
 //	gocell scaffold slice --id=<id> --cell=<cellID> [--dry-run]
 //	gocell scaffold contract --id=<id> --kind=<kind> --owner=<cellID> [--dry-run]
 //	gocell scaffold journey --id=<id> --goal=<goal> [--team=<team>] [--cells=<a,b>] [--dry-run]
 //
-// --dry-run validates opts and detects path conflicts without writing files;
-// CI pre-commit hooks can use it to fail fast on bad inputs.
+// --dry-run renders templates (validating their output) and detects path
+// conflicts without writing files; CI pre-commit hooks can use it to fail fast
+// on bad inputs.
 func runScaffold(args []string) error {
 	// Check args shape before resolving project root — lets callers
 	// (and tests) hit the usage error path without a valid cwd/go.mod.
@@ -93,9 +96,11 @@ func reportScaffold(r scaffoldReport) {
 func scaffoldCell(root string, args []string) error {
 	fs := flag.NewFlagSet("scaffold cell", flag.ContinueOnError)
 	id := fs.String("id", "", "cell ID (required)")
-	cellType := fs.String("type", "core", "cell type")
-	level := fs.String("level", "L2", "consistency level")
+	cellType := fs.String("type", "core", "cell type: one of [core edge support]")
+	level := fs.String("level", "L2", "consistency level: one of [L0 L1 L2 L3 L4]")
 	team := fs.String("team", "", "owner team (required)")
+	role := fs.String("role", "", "owner role, e.g. cell-owner (required)")
+	structName := fs.String("struct", "", "Go struct name (default: PascalCase of --id)")
 	dryRun := fs.Bool(dryRunFlag, false, dryRunUsage)
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -107,24 +112,83 @@ func scaffoldCell(root string, args []string) error {
 	if *team == "" {
 		return fmt.Errorf("--team is required")
 	}
+	if *role == "" {
+		return fmt.Errorf("--role is required")
+	}
 
-	s := scaffold.New(root).WithDryRun(*dryRun)
-	if err := s.CreateCell(scaffold.CellOpts{
-		ID:               *id,
+	// Resolve Go identifiers shared by both dry-run and live paths.
+	resolvedStruct := *structName
+	if resolvedStruct == "" {
+		resolvedStruct = cellIDToPascalCase(*id)
+	}
+	pkg := strings.ReplaceAll(*id, "-", "")
+
+	mod, err := readModule(root)
+	if err != nil {
+		return fmt.Errorf("scaffold cell: read module path: %w", err)
+	}
+
+	// Both dry-run and live paths delegate to cellgen.ScaffoldCell; DryRun=true
+	// renders templates (validating output with go/format.Source for cell.go)
+	// and performs conflict detection without writing any files. This unifies
+	// path-computation logic so dry-run and live runs always agree on output paths
+	// and both catch template/input errors.
+	if err := cellgen.ScaffoldCell(root, filepath.Join("cells", *id), cellgen.ScaffoldSpec{
+		CellID:           *id,
+		StructName:       resolvedStruct,
+		Package:          pkg,
+		ModulePath:       mod,
+		OwnerTeam:        *team,
+		OwnerRole:        *role,
 		Type:             *cellType,
 		ConsistencyLevel: *level,
-		OwnerTeam:        *team,
+		DryRun:           *dryRun,
 	}); err != nil {
 		return err
 	}
 
+	if *dryRun {
+		// Report each file that would be written so callers can see paths.
+		yamlPath := filepath.Join("cells", *id, "cell.yaml")
+		goPath := filepath.Join("cells", *id, "cell.go")
+		fmt.Printf("(dry-run) Would create %s\n", filepath.ToSlash(yamlPath))
+		fmt.Printf("(dry-run) Would create %s\n", filepath.ToSlash(goPath))
+		return nil
+	}
+
 	reportScaffold(scaffoldReport{
-		DryRun: *dryRun,
+		DryRun: false,
 		Kind:   "cell",
 		ID:     *id,
-		Target: filepath.Join("cells", *id, "cell.yaml"),
+		Target: filepath.Join("cells", *id),
 	})
 	return nil
+}
+
+// cellIDToPascalCase converts a cell ID (possibly hyphenated or underscored)
+// to a PascalCase Go struct name. Examples:
+//
+//	"foocell"   → "Foocell"
+//	"foo-cell"  → "FooCell"
+//	"my_core"   → "MyCore"
+func cellIDToPascalCase(id string) string {
+	if id == "" {
+		return ""
+	}
+	var sb strings.Builder
+	capitalizeNext := true
+	for _, r := range id {
+		switch {
+		case r == '-' || r == '_':
+			capitalizeNext = true
+		case capitalizeNext:
+			sb.WriteRune(unicode.ToUpper(r))
+			capitalizeNext = false
+		default:
+			sb.WriteRune(r)
+		}
+	}
+	return sb.String()
 }
 
 func scaffoldSlice(root string, args []string) error {

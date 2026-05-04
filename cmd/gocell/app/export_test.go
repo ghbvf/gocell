@@ -422,6 +422,146 @@ func TestDispatch_UsageContainsExport(t *testing.T) {
 	assert.Contains(t, stdout, "export")
 }
 
+// TestRunExport_WireSummaryInjected verifies that the default export path
+// populates the wireSummary field on Cell entities. The fixture has no cell.go
+// so the wireSummary is injected with empty Listeners/Routes/Subscribes.
+func TestRunExport_WireSummaryInjected(t *testing.T) {
+	root := copyFixtureToTempDir(t)
+	outPath := filepath.Join(t.TempDir(), "out.json")
+
+	err := runExport([]string{
+		"catalog", "--root=" + root,
+		"--include=", // skip deps for speed
+		"--out=" + outPath,
+	})
+	require.NoError(t, err)
+
+	data, readErr := os.ReadFile(outPath) //nolint:gosec // test output file
+	require.NoError(t, readErr)
+
+	// Parse as generic JSON to find the Cell entity spec.
+	var doc struct {
+		Entities []struct {
+			Kind string `json:"kind"`
+			Spec struct {
+				// wireSummary is present when InjectWireSummaries ran.
+				WireSummary *struct {
+					CellID     string `json:"cellId"`
+					Listeners  []any  `json:"listeners"`
+					Routes     []any  `json:"routes"`
+					Subscribes []any  `json:"subscribes"`
+				} `json:"wireSummary"`
+			} `json:"spec"`
+		} `json:"entities"`
+	}
+	require.NoError(t, json.Unmarshal(data, &doc))
+
+	var cellEntities []struct {
+		WireSummary *struct {
+			CellID     string `json:"cellId"`
+			Listeners  []any  `json:"listeners"`
+			Routes     []any  `json:"routes"`
+			Subscribes []any  `json:"subscribes"`
+		}
+	}
+	for _, e := range doc.Entities {
+		if e.Kind == "Cell" {
+			cellEntities = append(cellEntities, struct {
+				WireSummary *struct {
+					CellID     string `json:"cellId"`
+					Listeners  []any  `json:"listeners"`
+					Routes     []any  `json:"routes"`
+					Subscribes []any  `json:"subscribes"`
+				}
+			}{WireSummary: e.Spec.WireSummary})
+		}
+	}
+
+	require.NotEmpty(t, cellEntities, "fixture must have at least one Cell entity")
+	for _, ce := range cellEntities {
+		require.NotNil(t, ce.WireSummary,
+			"Cell entity must have wireSummary field injected (even if empty)")
+		assert.NotEmpty(t, ce.WireSummary.CellID, "wireSummary.cellId must be set")
+	}
+}
+
+// TestAttachWireSummaries_ScanErrorGraceDegrade verifies that attachWireSummaries
+// does not populate opts.WireSummaries when markergen fails (e.g. broken fixture),
+// and the export still completes successfully with wireSummary absent from all Cell
+// entities. This covers the graceful-degrade path in attachWireSummaries.
+func TestAttachWireSummaries_ScanErrorGraceDegrade(t *testing.T) {
+	// Build a fixture that has valid cell metadata but an unreadable cell.go
+	// (a directory in place of a file) to force markergen.Merge to error.
+	root := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(root, "go.mod"),
+		[]byte("module example.com/wirescan\n"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(root, "actors.yaml"),
+		[]byte("# no actors\n"), 0o644))
+	require.NoError(t, os.MkdirAll(filepath.Join(root, "journeys"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(root, "journeys", "status-board.yaml"),
+		[]byte("# no entries\n"), 0o644))
+
+	cellDir := filepath.Join(root, "cells", "badcell")
+	sliceDir := filepath.Join(cellDir, "slices", "badslice")
+	require.NoError(t, os.MkdirAll(sliceDir, 0o755))
+
+	cellYAML := `id: badcell
+type: platform
+consistencyLevel: L1
+owner:
+  team: test
+  role: owner
+schema:
+  primary: badcell
+verify:
+  smoke: []
+`
+	require.NoError(t, os.WriteFile(filepath.Join(cellDir, "cell.yaml"), []byte(cellYAML), 0o600))
+	sliceYAML := `id: badslice
+belongsToCell: badcell
+consistencyLevel: L1
+contractUsages: []
+verify:
+  unit: []
+  contract: []
+allowedFiles:
+  - "*.go"
+`
+	require.NoError(t, os.WriteFile(filepath.Join(sliceDir, "slice.yaml"), []byte(sliceYAML), 0o600))
+
+	// Put a directory where cell.go would be to make markergen fail to read it.
+	require.NoError(t, os.MkdirAll(filepath.Join(cellDir, "cell.go"), 0o755))
+
+	outPath := filepath.Join(t.TempDir(), "out.json")
+	err := runExport([]string{
+		"catalog", "--root=" + root,
+		"--include=",
+		"--out=" + outPath,
+	})
+	// Graceful degrade: exit 0 even when wire summary scan fails.
+	require.NoError(t, err, "CLI must exit 0 even when wire summary scan fails")
+
+	data, readErr := os.ReadFile(outPath) //nolint:gosec // test output file
+	require.NoError(t, readErr)
+
+	var doc struct {
+		Entities []struct {
+			Kind string `json:"kind"`
+			Spec struct {
+				WireSummary *struct{} `json:"wireSummary"`
+			} `json:"spec"`
+		} `json:"entities"`
+	}
+	require.NoError(t, json.Unmarshal(data, &doc))
+
+	for _, e := range doc.Entities {
+		if e.Kind == "Cell" {
+			assert.Nil(t, e.Spec.WireSummary,
+				"wireSummary must be absent on Cell entities when scan fails")
+		}
+	}
+}
+
 // TestRunExport_DefaultPackageDepsLoadError verifies that the default export
 // path degrades when depgraph.Load fails instead of failing the whole document.
 func TestRunExport_DefaultPackageDepsLoadError(t *testing.T) {

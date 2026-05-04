@@ -10,3 +10,5 @@ schema:
 verify:
   smoke:
     - smoke.devicecell.startup
+goStructName: DeviceCell
+l0Dependencies: []

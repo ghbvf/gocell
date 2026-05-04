@@ -15,62 +15,14 @@ import (
 	"github.com/ghbvf/gocell/cells/auditcore/slices/auditverify"
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/clock"
-	"github.com/ghbvf/gocell/kernel/metadata"
 	"github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/persistence"
-	"github.com/ghbvf/gocell/kernel/wrapper"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/query"
 )
 
-// Topic constants — one per consumed event. FMT-18 resolves const string
-// references at scan time so contract IDs can be written once here and
-// reused as both map key and EventSpec argument without Sonar flagging
-// duplicate literals.
-const (
-	topicUserCreated     = "event.user.created.v1"
-	topicUserLocked      = "event.user.locked.v1"
-	topicUserUpdated     = "event.user.updated.v1"
-	topicUserDeleted     = "event.user.deleted.v1"
-	topicUserUnlocked    = "event.user.unlocked.v1"
-	topicSessionCreated  = "event.session.created.v1"
-	topicSessionRevoked  = "event.session.revoked.v1"
-	topicConfigUpserted  = "event.config.entry-upserted.v1"
-	topicConfigDeleted   = "event.config.entry-deleted.v1"
-	topicConfigPublished = "event.config.version-published.v1"
-	topicConfigRollback  = "event.config.rollback.v1"
-	topicRoleAssigned    = "event.role.assigned.v1"
-	topicRoleRevoked     = "event.role.revoked.v1"
-)
-
-// auditAppendSpecs maps each consumed topic to its wrapper.ContractSpec.
-// Each value is a wrapper.EventSpec call so FMT-18's governance scan can
-// resolve the contract id (via const reference) and cross-check it against
-// contracts/event/**/contract.yaml.
-//
-// Adding or removing a topic MUST be mirrored in auditappend.Topics;
-// RegisterSubscriptions fails at startup if the two drift.
-var auditAppendSpecs = map[string]wrapper.ContractSpec{
-	topicUserCreated:     wrapper.EventSpec(topicUserCreated, "amqp"),
-	topicUserLocked:      wrapper.EventSpec(topicUserLocked, "amqp"),
-	topicUserUpdated:     wrapper.EventSpec(topicUserUpdated, "amqp"),
-	topicUserDeleted:     wrapper.EventSpec(topicUserDeleted, "amqp"),
-	topicUserUnlocked:    wrapper.EventSpec(topicUserUnlocked, "amqp"),
-	topicSessionCreated:  wrapper.EventSpec(topicSessionCreated, "amqp"),
-	topicSessionRevoked:  wrapper.EventSpec(topicSessionRevoked, "amqp"),
-	topicConfigUpserted:  wrapper.EventSpec(topicConfigUpserted, "amqp"),
-	topicConfigDeleted:   wrapper.EventSpec(topicConfigDeleted, "amqp"),
-	topicConfigPublished: wrapper.EventSpec(topicConfigPublished, "amqp"),
-	topicConfigRollback:  wrapper.EventSpec(topicConfigRollback, "amqp"),
-	topicRoleAssigned:    wrapper.EventSpec(topicRoleAssigned, "amqp"),
-	topicRoleRevoked:     wrapper.EventSpec(topicRoleRevoked, "amqp"),
-}
-
-// Compile-time interface checks.
-var (
-	_ cell.Cell = (*AuditCore)(nil)
-)
+// Compile-time interface check lives in cell_gen.go (DO NOT EDIT).
 
 // Option configures an AuditCore Cell.
 type Option func(*AuditCore)
@@ -163,6 +115,7 @@ func WithInMemoryDefaults() Option {
 }
 
 // AuditCore is the auditcore Cell implementation.
+// +cell:listener:ref=cell.PrimaryListener,prefix=/api/v1/audit
 type AuditCore struct {
 	*cell.BaseCell
 	auditRepo    ports.AuditRepository
@@ -181,28 +134,33 @@ type AuditCore struct {
 	metricsProvider metrics.Provider
 	clk             clock.Clock
 
-	// Slice services.
-	appendSvc    *auditappend.Service
-	verifySvc    *auditverify.Service
-	archiveSvc   *auditarchive.Service
+	// +slice:subscribe:slice=auditappend,topic=event.user.created.v1,handler=HandleEvent,group=auditcore
+	// +slice:subscribe:slice=auditappend,topic=event.user.locked.v1,handler=HandleEvent,group=auditcore
+	// +slice:subscribe:slice=auditappend,topic=event.user.updated.v1,handler=HandleEvent,group=auditcore
+	// +slice:subscribe:slice=auditappend,topic=event.user.deleted.v1,handler=HandleEvent,group=auditcore
+	// +slice:subscribe:slice=auditappend,topic=event.user.unlocked.v1,handler=HandleEvent,group=auditcore
+	// +slice:subscribe:slice=auditappend,topic=event.session.created.v1,handler=HandleEvent,group=auditcore
+	// +slice:subscribe:slice=auditappend,topic=event.session.revoked.v1,handler=HandleEvent,group=auditcore
+	// +slice:subscribe:slice=auditappend,topic=event.config.entry-upserted.v1,handler=HandleEvent,group=auditcore
+	// +slice:subscribe:slice=auditappend,topic=event.config.entry-deleted.v1,handler=HandleEvent,group=auditcore
+	// +slice:subscribe:slice=auditappend,topic=event.config.version-published.v1,handler=HandleEvent,group=auditcore
+	// +slice:subscribe:slice=auditappend,topic=event.config.rollback.v1,handler=HandleEvent,group=auditcore
+	// +slice:subscribe:slice=auditappend,topic=event.role.assigned.v1,handler=HandleEvent,group=auditcore
+	// +slice:subscribe:slice=auditappend,topic=event.role.revoked.v1,handler=HandleEvent,group=auditcore
+	appendSvc *auditappend.Service
+
+	verifySvc  *auditverify.Service
+	archiveSvc *auditarchive.Service
+
+	// +slice:route:slice=auditquery,subPath=
 	queryHandler *auditquery.Handler
 }
 
 // NewAuditCore creates a new AuditCore Cell.
 func NewAuditCore(opts ...Option) *AuditCore {
 	c := &AuditCore{
-		BaseCell: cell.MustNewBaseCell(&metadata.CellMeta{
-			ID:   "auditcore",
-			Type: "core",
-			// L2: 对外 contract (audit.appended, integrity-verified) 都是本地事务 + outbox 发布。
-			// 订阅跨 cell 事件是 slice 级行为 (audit-append L3)，不升 cell 级别 — 同 configcore 模式。
-			ConsistencyLevel: "L2",
-			DurabilityMode:   "durable",
-			Owner:            metadata.OwnerMeta{Team: "platform", Role: "audit-owner"},
-			Schema:           metadata.SchemaMeta{Primary: "audit_entries"},
-			Verify:           metadata.CellVerifyMeta{Smoke: []string{"auditcore/smoke"}},
-		}),
-		logger: slog.Default(),
+		BaseCell: cell.MustNewBaseCell(loadCellMetadata()),
+		logger:   slog.Default(),
 	}
 	for _, o := range opts {
 		o(c)
@@ -210,12 +168,16 @@ func NewAuditCore(opts ...Option) *AuditCore {
 	return c
 }
 
-func (c *AuditCore) Init(ctx context.Context, reg cell.Registry) error {
-	clock.MustHaveClock(c.clk, "auditcore.Init")
+// initInternal is the K#04 codegen escape hatch: business init that cannot
+// be generated (emitter resolve, slice service construction, health probes).
+// cell_gen.go::Init calls it after BaseCell.Init and before mounting the
+// generated route-group and subscribe blocks. This is a permanent convention,
+// not a transitional shim.
+//
+//nolint:unparam // ctx is a contract parameter; unused here, used by other cells
+func (c *AuditCore) initInternal(ctx context.Context, reg cell.Registry) error {
+	clock.MustHaveClock(c.clk, "auditcore.initInternal")
 	if err := c.resolveHMACKey(reg.Config()); err != nil {
-		return err
-	}
-	if err := c.BaseCell.Init(ctx, reg); err != nil {
 		return err
 	}
 
@@ -252,18 +214,7 @@ func (c *AuditCore) Init(ctx context.Context, reg cell.Registry) error {
 		return err
 	}
 
-	// Register HTTP route group.
-	reg.RouteGroup(cell.RouteGroup{
-		Listener: cell.PrimaryListener,
-		Prefix:   "/api/v1/audit",
-		Register: func(mux cell.RouteMux) error {
-			return c.queryHandler.RegisterRoutes(mux)
-		},
-	})
-
-	if err := c.registerAuditAppendSubscriptions(reg); err != nil {
-		return err
-	}
+	// Route groups and subscriptions removed: cell_gen.go owns Init and renders them.
 
 	// Register health probes (emitter fail-open rate checker).
 	if hc, ok := c.emitter.(cell.HealthProber); ok {
@@ -272,22 +223,6 @@ func (c *AuditCore) Init(ctx context.Context, reg cell.Registry) error {
 		}
 	}
 
-	return nil
-}
-
-func (c *AuditCore) registerAuditAppendSubscriptions(reg cell.Registry) error {
-	handler := c.appendSvc.HandleEvent
-	for _, topic := range auditappend.Topics {
-		spec, ok := auditAppendSpecs[topic]
-		if !ok {
-			return fmt.Errorf("auditcore: missing ContractSpec for topic %q — "+
-				"auditAppendSpecs and auditappend.Topics must stay in sync", topic)
-		}
-		if err := reg.Subscribe(spec, handler, "auditcore",
-			cell.WithSubscriptionSliceID("auditappend")); err != nil {
-			return fmt.Errorf("auditcore: subscribe %s: %w", topic, err)
-		}
-	}
 	return nil
 }
 

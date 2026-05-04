@@ -83,19 +83,22 @@ func TestRegisterSubscriptions(t *testing.T) {
 
 	snap := rec.Snapshot()
 	// accesscore registers 4 topic handlers:
-	//   1. event.config.entry-upserted.v1  (config-receive, consumer group: accesscore)
-	//   2. event.config.entry-deleted.v1   (config-receive, consumer group: accesscore)
-	//   3. event.role.assigned.v1          (rbac-session-sync, consumer group: accesscore-rbac-session-sync)
-	//   4. event.role.revoked.v1           (rbac-session-sync, consumer group: accesscore-rbac-session-sync)
+	//   event.config.entry-upserted.v1  (config-receive, consumer group: accesscore)
+	//   event.config.entry-deleted.v1   (config-receive, consumer group: accesscore)
+	//   event.role.assigned.v1          (rbac-session-sync, consumer group: accesscore-rbac-session-sync)
+	//   event.role.revoked.v1           (rbac-session-sync, consumer group: accesscore-rbac-session-sync)
+	//
+	// cell_gen.go sorts subscriptions alphabetically by contract ID for diff
+	// stability, so positional assertions would be brittle. Use a map instead.
 	require.Len(t, snap.Subscriptions, 4, "accesscore should register 4 topic handlers")
-	assert.Equal(t, "event.config.entry-upserted.v1", snap.Subscriptions[0].Spec.Topic)
-	assert.Equal(t, "accesscore", snap.Subscriptions[0].ConsumerGroup)
-	assert.Equal(t, "event.config.entry-deleted.v1", snap.Subscriptions[1].Spec.Topic)
-	assert.Equal(t, "accesscore", snap.Subscriptions[1].ConsumerGroup)
-	assert.Equal(t, "event.role.assigned.v1", snap.Subscriptions[2].Spec.Topic)
-	assert.Equal(t, "accesscore-rbac-session-sync", snap.Subscriptions[2].ConsumerGroup)
-	assert.Equal(t, "event.role.revoked.v1", snap.Subscriptions[3].Spec.Topic)
-	assert.Equal(t, "accesscore-rbac-session-sync", snap.Subscriptions[3].ConsumerGroup)
+	groups := make(map[string]string, 4)
+	for _, sub := range snap.Subscriptions {
+		groups[sub.Spec.Topic] = sub.ConsumerGroup
+	}
+	assert.Equal(t, "accesscore", groups["event.config.entry-upserted.v1"])
+	assert.Equal(t, "accesscore", groups["event.config.entry-deleted.v1"])
+	assert.Equal(t, "accesscore-rbac-session-sync", groups["event.role.assigned.v1"])
+	assert.Equal(t, "accesscore-rbac-session-sync", groups["event.role.revoked.v1"])
 }
 
 func TestInit_DurableMode_MissingOutboxWriter(t *testing.T) {

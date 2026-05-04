@@ -7,7 +7,7 @@ import (
 
 var generateCellSpec = codegenSpec[cellgen.Result]{
 	Kind:            "cell",
-	GenerateUsage:   "gocell generate cell <cellID> | --all [--dry-run | --verify]",
+	GenerateUsage:   "gocell generate cell [<cellID>] [--dry-run | --verify]",
 	AllFlagDesc:     "generate for every cell with goStructName set",
 	PluralNoun:      "cell scaffolds",
 	SourceArtifacts: "cell.yaml/slice.yaml",

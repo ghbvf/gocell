@@ -7,14 +7,6 @@ import (
 	"testing"
 )
 
-func TestGenerateCell_NoArgs(t *testing.T) {
-	t.Parallel()
-	err := generateCell(nil)
-	if err == nil || !strings.Contains(err.Error(), "usage") {
-		t.Fatalf("expected usage error, got %v", err)
-	}
-}
-
 func TestGenerateCell_DryRunVerifyMutex(t *testing.T) {
 	t.Parallel()
 	err := generateCell([]string{"--dry-run", "--verify", "demo"})
@@ -23,13 +15,10 @@ func TestGenerateCell_DryRunVerifyMutex(t *testing.T) {
 	}
 }
 
-func TestGenerateCell_AllAndPositionalMutex(t *testing.T) {
-	t.Parallel()
-	err := generateCell([]string{"--all", "demo"})
-	if err == nil || !strings.Contains(err.Error(), "mutually exclusive") {
-		t.Fatalf("expected mutex error, got %v", err)
-	}
-}
+// NB: TestGenerateCell_NoArgs / _AllAndPositionalMutex deleted in K#05 W2 —
+// `--all` defaults to true (no-args is now equivalent to --all), and
+// positional ids beat the default flag (no mutex error). Coverage moved
+// to codegen_cmd_test.go's table-driven cases.
 
 func TestGenerateCell_UnknownFlag(t *testing.T) {
 	t.Parallel()

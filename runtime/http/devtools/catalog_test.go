@@ -473,6 +473,142 @@ func containsString(vals []string, want string) bool {
 	return false
 }
 
+// buildTestHandlerWithWire constructs a Handler with synthetic wireSummaries
+// injected, for testing wire summary catalog augmentation.
+func buildTestHandlerWithWire(t *testing.T) *devtools.Handler {
+	t.Helper()
+	project := &metadata.ProjectMeta{
+		Cells: map[string]*metadata.CellMeta{
+			"accesscore": {
+				ID:               "accesscore",
+				Type:             "core",
+				ConsistencyLevel: "L2",
+				Owner:            metadata.OwnerMeta{Team: "platform", Role: "owner"},
+				Schema:           metadata.SchemaMeta{Primary: "public.sessions"},
+			},
+		},
+		Slices:      map[string]*metadata.SliceMeta{},
+		Contracts:   map[string]*metadata.ContractMeta{},
+		Journeys:    map[string]*metadata.JourneyMeta{},
+		Assemblies:  map[string]*metadata.AssemblyMeta{},
+		StatusBoard: []metadata.StatusBoardEntry{},
+		Actors:      []metadata.ActorMeta{},
+	}
+	summaries := []metadata.CellWireSummary{
+		{
+			CellID: "accesscore",
+			Listeners: []metadata.WireListenerView{
+				{Ref: "cell.PrimaryListener", Prefix: "/api/v1/access"},
+			},
+			Routes: []metadata.WireRouteView{
+				{Slice: "accesscore/sessionlogin", Listener: "cell.PrimaryListener", SubPath: "/sessions/login"},
+			},
+			Subscribes: []metadata.WireSubscribeView{},
+		},
+	}
+	return devtools.NewHandler(project, nil, nil, "/test-root", clock.Real(), summaries)
+}
+
+// assertWireSummaryFields validates the wireSummary object within a Cell entity
+// spec. Extracted to keep TestCatalog_WireSummary_Injected within the
+// cognitive complexity budget (< 15).
+func assertWireSummaryFields(t *testing.T, spec map[string]any) {
+	t.Helper()
+	ws, ok := spec["wireSummary"]
+	if !ok {
+		t.Errorf("Cell entity spec missing wireSummary field")
+		return
+	}
+	wsMap, ok := ws.(map[string]any)
+	if !ok {
+		t.Errorf("wireSummary is not an object: %T", ws)
+		return
+	}
+	cellID, _ := wsMap["cellId"].(string)
+	if cellID != "accesscore" {
+		t.Errorf("wireSummary.cellId = %q, want accesscore", cellID)
+	}
+	listeners, _ := wsMap["listeners"].([]any)
+	if len(listeners) != 1 {
+		t.Errorf("wireSummary.listeners len = %d, want 1", len(listeners))
+	}
+	routes, _ := wsMap["routes"].([]any)
+	if len(routes) != 1 {
+		t.Errorf("wireSummary.routes len = %d, want 1", len(routes))
+	}
+}
+
+// TestCatalog_WireSummary_Injected verifies that when wireSummaries are
+// provided to NewHandler, each Cell entity's spec contains a wireSummary
+// object with the expected listener / route / subscribe surface.
+func TestCatalog_WireSummary_Injected(t *testing.T) {
+	t.Parallel()
+
+	h := buildTestHandlerWithWire(t)
+	rr := doAdminRequest(t, h, "/devtools/catalog?kinds=Cell")
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+
+	// Decode as a generic map to inspect the augmented spec without importing
+	// the internal cellSpecWire type.
+	var doc struct {
+		Entities []struct {
+			Kind string         `json:"kind"`
+			Spec map[string]any `json:"spec"`
+		} `json:"entities"`
+	}
+	if err := json.Unmarshal(rr.Body.Bytes(), &doc); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+
+	var found bool
+	for _, e := range doc.Entities {
+		if e.Kind != "Cell" {
+			continue
+		}
+		assertWireSummaryFields(t, e.Spec)
+		found = true
+	}
+	if !found {
+		t.Error("no Cell entities found in response")
+	}
+}
+
+// TestCatalog_WireSummary_AbsentWhenNil verifies that when wireSummaries are
+// not provided to NewHandler (nil), Cell entity specs do not contain the
+// wireSummary field (forwards-compatible nil omission).
+func TestCatalog_WireSummary_AbsentWhenNil(t *testing.T) {
+	t.Parallel()
+
+	h := buildTestHandler(t) // no wireSummaries injected
+	rr := doAdminRequest(t, h, "/devtools/catalog?kinds=Cell")
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+
+	var doc struct {
+		Entities []struct {
+			Kind string         `json:"kind"`
+			Spec map[string]any `json:"spec"`
+		} `json:"entities"`
+	}
+	if err := json.Unmarshal(rr.Body.Bytes(), &doc); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+
+	for _, e := range doc.Entities {
+		if e.Kind != "Cell" {
+			continue
+		}
+		if _, ok := e.Spec["wireSummary"]; ok {
+			t.Errorf("Cell entity spec must not contain wireSummary when wireSummaries=nil")
+		}
+	}
+}
+
 // TestCatalog_Cells_RejectsUnknownID verifies that the cells parameter is
 // allowlist-validated against the project's known cell IDs (B2 / SEC-02).
 // Without this guard, querying ?cells=arbitrary-id leaks existence info via

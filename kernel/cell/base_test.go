@@ -441,7 +441,6 @@ func TestBaseCell_Metadata_Isolation(t *testing.T) {
 		Type:             "core",
 		ConsistencyLevel: "L1",
 		Verify:           metadata.CellVerifyMeta{Smoke: []string{"smoke.iso.startup"}},
-		Listeners:        []metadata.ListenerDeclMeta{{Ref: "cell.PrimaryListener", Prefix: "/api/v1"}},
 		L0Dependencies:   []metadata.L0DepMeta{{Cell: "shared", Reason: "ok"}},
 	}
 	c := MustNewBaseCell(src)
@@ -449,21 +448,17 @@ func TestBaseCell_Metadata_Isolation(t *testing.T) {
 	// Constructor input mutation MUST NOT leak into cell.
 	src.ID = "mutated"
 	src.Verify.Smoke[0] = "tampered"
-	src.Listeners[0].Prefix = "/evil"
 	src.L0Dependencies[0].Cell = "evil"
 	assert.Equal(t, "iso", c.ID(), "constructor mutation leaked into cell ID")
 	assert.Equal(t, "smoke.iso.startup", c.Metadata().Verify.Smoke[0])
-	assert.Equal(t, "/api/v1", c.Metadata().Listeners[0].Prefix)
 	assert.Equal(t, "shared", c.Metadata().L0Dependencies[0].Cell)
 
 	// Metadata() return-value mutation MUST NOT leak into cell.
 	got := c.Metadata()
 	got.ID = "evil"
 	got.Verify.Smoke[0] = "tampered2"
-	got.Listeners[0].Prefix = "/evil2"
 	got.L0Dependencies[0].Cell = "evil2"
 	assert.Equal(t, "iso", c.ID(), "Metadata() mutation leaked into cell")
 	assert.Equal(t, "smoke.iso.startup", c.Metadata().Verify.Smoke[0])
-	assert.Equal(t, "/api/v1", c.Metadata().Listeners[0].Prefix)
 	assert.Equal(t, "shared", c.Metadata().L0Dependencies[0].Cell)
 }

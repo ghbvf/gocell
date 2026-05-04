@@ -7,7 +7,13 @@ import (
 	"strings"
 
 	"github.com/ghbvf/gocell/kernel/metadata"
+	"github.com/ghbvf/gocell/tools/codegen/markergen"
 )
+
+// stubTopicPattern matches scaffold-generated stub topic strings that look
+// like "event.foo.created.v1" or contain ".foo." — indicating the developer
+// forgot to replace the stub with a real contract id.
+var stubTopicPattern = regexp.MustCompile(`event\.foo\.|\.created\.v1`)
 
 // listenerRefPattern matches valid Go constant references for cell listeners,
 // e.g. "cell.PrimaryListener", "cell.InternalListener". Builder validates each
@@ -25,16 +31,32 @@ var listenerRefPattern = regexp.MustCompile(`^cell\.[A-Z][A-Za-z0-9_]*$`)
 // producing a stylistically broken identifier in generated source.
 var specVarNamePattern = regexp.MustCompile(`^spec[A-Z][A-Za-z0-9]*$`)
 
-// BuildCellSpec projects (cell.yaml + matching slice.yaml entries) into the
+// goExportedIdentPattern matches valid Go exported method names.
+// Used to validate marker-supplied Method (Route) and Handler (Subscribe)
+// identifiers before rendering them into cell_gen.go's
+// `c.<HandlerField>.<Method>(s)` and `c.<SliceField>.<Handler>` call sites.
+var goExportedIdentPattern = regexp.MustCompile(`^[A-Z][A-Za-z0-9_]*$`)
+
+// goLocalIdentPattern matches valid Go local (unexported) identifiers.
+// Used to validate HandlerField and SliceField, which are derived from AST
+// field names but still validated defensively to catch any unexpected input.
+var goLocalIdentPattern = regexp.MustCompile(`^[a-zA-Z_][A-Za-z0-9_]*$`)
+
+// BuildCellSpec projects (cell.yaml + markergen.WireBundle) into the
 // CellGenSpec consumed by cell.tmpl. It is the single bridge between
 // parsed metadata and the renderer.
+//
+// bundle supplies listener / route / subscribe wire declarations derived
+// from cell.go marker comments (markergen.Merge output). An empty bundle
+// produces a spec with no RouteGroups and no Subscriptions.
 //
 // Errors:
 //   - cell id not found in project
 //   - cell.GoStructName missing (codegen requires explicit Go type binding)
-//   - slice routeMount references a listener not declared in cell.Listeners
-//   - slice subscribes references a contract not declared in project
-func BuildCellSpec(p *metadata.ProjectMeta, cellID string) (*CellGenSpec, error) {
+//   - bundle listener ref does not match expected pattern
+//   - bundle route references a listener not declared in bundle.Listeners
+//   - bundle subscribe references a contract not declared in project
+func BuildCellSpec(p *metadata.ProjectMeta, cellID string, bundle markergen.WireBundle) (*CellGenSpec, error) {
 	if p == nil {
 		return nil, fmt.Errorf("cellgen build: project is nil")
 	}
@@ -52,11 +74,12 @@ func BuildCellSpec(p *metadata.ProjectMeta, cellID string) (*CellGenSpec, error)
 		CellID:               cell.ID,
 		ConsumerGroupDefault: cell.ID,
 		SourceFile:           cell.File,
+		MetadataLiteral:      buildMetadataLiteral(cell),
 	}
 
-	listenerPrefix := make(map[string]string, len(cell.Listeners))
-	listenerOrder := make([]string, 0, len(cell.Listeners))
-	for _, l := range cell.Listeners {
+	listenerPrefix := make(map[string]string, len(bundle.Listeners))
+	listenerOrder := make([]string, 0, len(bundle.Listeners))
+	for _, l := range bundle.Listeners {
 		if !listenerRefPattern.MatchString(l.Ref) {
 			return nil, fmt.Errorf("cellgen build: cell %q listener ref %q must match %s "+
 				"(e.g. cell.PrimaryListener, cell.InternalListener)",
@@ -69,16 +92,13 @@ func BuildCellSpec(p *metadata.ProjectMeta, cellID string) (*CellGenSpec, error)
 		listenerOrder = append(listenerOrder, l.Ref)
 	}
 
-	slices := slicesForCell(p, cellID)
-	for _, s := range slices {
-		if err := validateRouteMounts(cellID, s, listenerPrefix); err != nil {
-			return nil, err
-		}
+	if err := validateBundleRoutes(cellID, bundle.Routes, listenerPrefix); err != nil {
+		return nil, err
 	}
 
-	spec.RouteGroups = buildRouteGroups(slices, listenerOrder, listenerPrefix)
+	spec.RouteGroups = buildRouteGroupsFromBundle(bundle.Routes, listenerOrder, listenerPrefix)
 
-	subs, err := buildSubscriptions(p, cellID, slices)
+	subs, err := buildSubscriptionsFromBundle(p, cellID, bundle.Subscribes)
 	if err != nil {
 		return nil, err
 	}
@@ -88,9 +108,13 @@ func BuildCellSpec(p *metadata.ProjectMeta, cellID string) (*CellGenSpec, error)
 }
 
 // BuildSliceSpec returns the rendering input for slice.tmpl. Returns nil
-// (with nil error) when the slice has no subscribes — slice_gen.go is only
-// emitted when there is a typed handler interface to declare.
-func BuildSliceSpec(p *metadata.ProjectMeta, cellID, sliceID string) (*SliceGenSpec, error) {
+// (with nil error) when the bundle declares no subscribes for this slice —
+// slice_gen.go is only emitted when there is a typed handler interface to
+// declare.
+//
+// bundle is the WireBundle for the parent cell (from markergen.Merge). Only
+// the Subscribes entries whose Slice field matches sliceID are used.
+func BuildSliceSpec(p *metadata.ProjectMeta, cellID, sliceID string, bundle markergen.WireBundle) (*SliceGenSpec, error) {
 	if p == nil {
 		return nil, fmt.Errorf("cellgen build slice: project is nil")
 	}
@@ -99,7 +123,16 @@ func BuildSliceSpec(p *metadata.ProjectMeta, cellID, sliceID string) (*SliceGenS
 	if !ok {
 		return nil, fmt.Errorf("cellgen build slice: slice %q not found", key)
 	}
-	if len(s.Subscribes) == 0 {
+
+	// Collect subscribe entries for this slice from the bundle.
+	var sliceSubs []markergen.SubscribeSpec
+	for _, sub := range bundle.Subscribes {
+		if sub.Slice == sliceID {
+			sliceSubs = append(sliceSubs, sub)
+		}
+	}
+
+	if len(sliceSubs) == 0 {
 		// Intentional (nil, nil): caller (Generate) treats nil spec as
 		// "skip slice_gen.go for this slice". Sentinel error would force
 		// every call site to errors.Is-check the success path.
@@ -111,62 +144,75 @@ func BuildSliceSpec(p *metadata.ProjectMeta, cellID, sliceID string) (*SliceGenS
 		SliceID:    sliceID,
 		SourceFile: s.File,
 	}
-	for _, sub := range s.Subscribes {
+	// Deduplicate handlers by method name: when multiple topics share the same
+	// handler (e.g. HandleEvent for 13 audit topics), the interface only needs
+	// one declaration. Duplicate method names are a compile error in Go interfaces.
+	seen := make(map[string]bool, len(sliceSubs))
+	for _, sub := range sliceSubs {
+		if seen[sub.Handler] {
+			continue
+		}
+		seen[sub.Handler] = true
 		spec.Handlers = append(spec.Handlers, SliceHandlerSpec{
 			MethodName: sub.Handler,
-			ContractID: sub.Contract,
+			ContractID: sub.Topic,
 		})
 	}
 	sort.Slice(spec.Handlers, func(i, j int) bool { return spec.Handlers[i].MethodName < spec.Handlers[j].MethodName })
 	return spec, nil
 }
 
-// slicesForCell returns the slices belonging to cellID, ordered by SliceID
-// for deterministic codegen output.
-func slicesForCell(p *metadata.ProjectMeta, cellID string) []*metadata.SliceMeta {
-	var out []*metadata.SliceMeta
-	for _, s := range p.Slices {
-		if s.BelongsToCell == cellID {
-			out = append(out, s)
+// validateBundleRoutes ensures every route in the bundle:
+//   - references a listener declared in bundle.Listeners
+//   - has a Method that is either empty (defaults to RegisterRoutes) or a valid
+//     exported Go identifier (^[A-Z][A-Za-z0-9_]*$)
+//   - has a HandlerField that is a valid Go local identifier (^[a-zA-Z_][A-Za-z0-9_]*$)
+func validateBundleRoutes(cellID string, routes []markergen.RouteSpec, listeners map[string]string) error {
+	for _, r := range routes {
+		if _, ok := listeners[r.Listener]; !ok {
+			return fmt.Errorf("cellgen build: cell %q slice %q route references undeclared listener %q "+
+				"(declare with +cell:listener marker in cell.go, "+
+				"or remove the +slice:route marker if this field should not be a route handler)",
+				cellID, r.Slice, r.Listener)
 		}
-	}
-	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
-	return out
-}
-
-// validateRouteMounts ensures every routeMount references a listener
-// declared in cell.Listeners.
-func validateRouteMounts(cellID string, s *metadata.SliceMeta, listeners map[string]string) error {
-	for _, m := range s.RouteMounts {
-		if _, ok := listeners[m.Listener]; !ok {
-			return fmt.Errorf("cellgen build: cell %q slice %q references undeclared listener %q (declare in cell.yaml listeners)",
-				cellID, s.ID, m.Listener)
+		// Method is optional — empty means RegisterRoutes (applied by buildRouteGroupsFromBundle).
+		// Non-empty must be a valid exported identifier to compile as c.<HandlerField>.<Method>(s).
+		if r.Method != "" && !goExportedIdentPattern.MatchString(r.Method) {
+			return fmt.Errorf("cellgen build: cell %q slice %q route Method %q must match %s "+
+				"(exported Go identifier, e.g. RegisterRoutes, HandleHTTP) or be empty to use the default",
+				cellID, r.Slice, r.Method, goExportedIdentPattern.String())
+		}
+		// HandlerField is derived from AST field name but validated defensively.
+		if !goLocalIdentPattern.MatchString(r.HandlerField) {
+			return fmt.Errorf("cellgen build: cell %q slice %q route HandlerField %q must match %s "+
+				"(valid Go identifier, e.g. createHandler, queryH)",
+				cellID, r.Slice, r.HandlerField, goLocalIdentPattern.String())
 		}
 	}
 	return nil
 }
 
-// buildRouteGroups aggregates routeMounts across slices into one
+// buildRouteGroupsFromBundle aggregates bundle routes into one
 // RouteGroupGenSpec per declared listener (in declaration order). Inside
 // each group, mounts are grouped by SubPath in deterministic order.
-func buildRouteGroups(slices []*metadata.SliceMeta, listenerOrder []string, listenerPrefix map[string]string) []RouteGroupGenSpec {
+func buildRouteGroupsFromBundle(
+	routes []markergen.RouteSpec,
+	listenerOrder []string,
+	listenerPrefix map[string]string,
+) []RouteGroupGenSpec {
 	type subKey struct{ listener, subPath string }
 	bySub := make(map[subKey][]RouteSliceMount)
 
-	// Stable iteration: slices are already sorted by ID; routeMounts within
-	// a slice keep their declared yaml order.
-	for _, s := range slices {
-		for _, m := range s.RouteMounts {
-			method := m.Method
-			if method == "" {
-				method = "RegisterRoutes"
-			}
-			key := subKey{listener: m.Listener, subPath: m.SubPath}
-			bySub[key] = append(bySub[key], RouteSliceMount{
-				HandlerField: m.HandlerField,
-				Method:       method,
-			})
+	for _, r := range routes {
+		method := r.Method
+		if method == "" {
+			method = "RegisterRoutes"
 		}
+		key := subKey{listener: r.Listener, subPath: r.SubPath}
+		bySub[key] = append(bySub[key], RouteSliceMount{
+			HandlerField: r.HandlerField,
+			Method:       method,
+		})
 	}
 
 	if len(bySub) == 0 {
@@ -197,18 +243,16 @@ func buildRouteGroups(slices []*metadata.SliceMeta, listenerOrder []string, list
 	return out
 }
 
-// buildSubscriptions flattens all slice subscribes into deterministically
-// ordered SubscriptionGenSpecs. Order: by SliceID then by Contract.
-func buildSubscriptions(p *metadata.ProjectMeta, cellID string, slices []*metadata.SliceMeta) ([]SubscriptionGenSpec, error) {
+// buildSubscriptionsFromBundle converts bundle.Subscribes into deterministically
+// ordered SubscriptionGenSpecs. Order: by SliceID then by contract topic.
+func buildSubscriptionsFromBundle(p *metadata.ProjectMeta, cellID string, subs []markergen.SubscribeSpec) ([]SubscriptionGenSpec, error) {
 	var out []SubscriptionGenSpec
-	for _, s := range slices {
-		for _, sub := range s.Subscribes {
-			spec, err := buildSubscriptionSpec(p, cellID, s.ID, sub)
-			if err != nil {
-				return nil, err
-			}
-			out = append(out, spec)
+	for _, sub := range subs {
+		spec, err := buildSubscriptionSpecFromBundle(p, cellID, sub)
+		if err != nil {
+			return nil, err
 		}
+		out = append(out, spec)
 	}
 	sort.SliceStable(out, func(i, j int) bool {
 		if out[i].SliceID != out[j].SliceID {
@@ -219,34 +263,69 @@ func buildSubscriptions(p *metadata.ProjectMeta, cellID string, slices []*metada
 	return out, nil
 }
 
-// buildSubscriptionSpec validates one subscribe entry against its contract
-// and converts it to a SubscriptionGenSpec.
-func buildSubscriptionSpec(p *metadata.ProjectMeta, cellID, sliceID string, sub metadata.SubscribeDeclMeta) (SubscriptionGenSpec, error) {
-	contract, ok := p.Contracts[sub.Contract]
+// buildSubscriptionSpecFromBundle validates one bundle subscribe entry against
+// its contract and converts it to a SubscriptionGenSpec.
+//
+// Identifier validation:
+//   - Handler must be an exported Go identifier (^[A-Z][A-Za-z0-9_]*$) so the
+//     rendered `c.<SliceField>.<Handler>` compiles as an exported method call.
+//   - SliceField is derived from the AST field name; validated as a local Go
+//     identifier (^[a-zA-Z_][A-Za-z0-9_]*$) for defense in depth.
+func buildSubscriptionSpecFromBundle(p *metadata.ProjectMeta, cellID string, sub markergen.SubscribeSpec) (SubscriptionGenSpec, error) {
+	if !goExportedIdentPattern.MatchString(sub.Handler) {
+		return SubscriptionGenSpec{}, fmt.Errorf("cellgen build: cell %q slice %q subscribe Handler %q must match %s "+
+			"(exported Go identifier, e.g. HandleEvent, HandleOrderCreated)",
+			cellID, sub.Slice, sub.Handler, goExportedIdentPattern.String())
+	}
+	if !goLocalIdentPattern.MatchString(sub.SliceField) {
+		return SubscriptionGenSpec{}, fmt.Errorf("cellgen build: cell %q slice %q subscribe SliceField %q must match %s "+
+			"(valid Go identifier, e.g. orderSvc, eventHandler)",
+			cellID, sub.Slice, sub.SliceField, goLocalIdentPattern.String())
+	}
+	contract, ok := p.Contracts[sub.Topic]
 	if !ok {
-		return SubscriptionGenSpec{}, fmt.Errorf("cellgen build: cell %q slice %q subscribes to unknown contract %q",
-			cellID, sliceID, sub.Contract)
+		prefix := ""
+		if stubTopicPattern.MatchString(sub.Topic) {
+			prefix = "looks like a scaffold stub — replace topic with a real contract id; "
+		}
+		return SubscriptionGenSpec{}, fmt.Errorf("cellgen build: cell %q slice %q %ssubscribes to unknown contract %q",
+			cellID, sub.Slice, prefix, sub.Topic)
 	}
 	if contract.Kind != "event" {
 		return SubscriptionGenSpec{}, fmt.Errorf("cellgen build: cell %q slice %q subscribes to non-event contract %q (kind=%s)",
-			cellID, sliceID, sub.Contract, contract.Kind)
+			cellID, sub.Slice, sub.Topic, contract.Kind)
 	}
-	transport := sub.Transport
-	if transport == "" {
-		transport = "amqp"
-	}
-	specVar, err := specVarName(sub.Contract)
+	specVar, err := specVarName(sub.Topic)
 	if err != nil {
-		return SubscriptionGenSpec{}, fmt.Errorf("cellgen build: cell %q slice %q: %w", cellID, sliceID, err)
+		return SubscriptionGenSpec{}, fmt.Errorf("cellgen build: cell %q slice %q: %w", cellID, sub.Slice, err)
 	}
 	return SubscriptionGenSpec{
 		SpecVarName:   specVar,
-		ContractID:    sub.Contract,
-		Transport:     transport,
-		SliceID:       sliceID,
+		ContractID:    sub.Topic,
+		Transport:     "amqp",
+		SliceID:       sub.Slice,
 		HandlerExpr:   "c." + sub.SliceField + "." + sub.Handler,
-		ConsumerGroup: sub.ConsumerGroup,
+		ConsumerGroup: sub.Group,
 	}, nil
+}
+
+// buildMetadataLiteral projects CellMeta yaml fields into the rendering
+// shape consumed by the metadata block in cell.tmpl. The smoke list is
+// copied (not aliased) so downstream mutation cannot leak back into the
+// parsed ProjectMeta.
+func buildMetadataLiteral(cell *metadata.CellMeta) CellMetadataLiteral {
+	smoke := append([]string(nil), cell.Verify.Smoke...)
+	return CellMetadataLiteral{
+		ID:               cell.ID,
+		Type:             cell.Type,
+		ConsistencyLevel: cell.ConsistencyLevel,
+		DurabilityMode:   cell.DurabilityMode,
+		OwnerTeam:        cell.Owner.Team,
+		OwnerRole:        cell.Owner.Role,
+		SchemaPrimary:    cell.Schema.Primary,
+		VerifySmoke:      smoke,
+		GoStructName:     cell.GoStructName,
+	}
 }
 
 // specVarName converts a contract id like "event.config.entry-upserted.v1"

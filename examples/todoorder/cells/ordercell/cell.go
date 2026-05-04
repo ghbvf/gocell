@@ -17,7 +17,6 @@ import (
 	getv1 "github.com/ghbvf/gocell/generated/contracts/http/order/get/v1"
 	listv1 "github.com/ghbvf/gocell/generated/contracts/http/order/list/v1"
 	"github.com/ghbvf/gocell/kernel/cell"
-	"github.com/ghbvf/gocell/kernel/metadata"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/errcode"
@@ -63,6 +62,7 @@ func WithLogger(l *slog.Logger) Option {
 }
 
 // OrderCell is the ordercell Cell implementation.
+// +cell:listener:ref=cell.PrimaryListener,prefix=/api/v1
 type OrderCell struct {
 	*cell.BaseCell
 	repo         domain.OrderRepository
@@ -72,24 +72,21 @@ type OrderCell struct {
 	cursorCodec  *query.CursorCodec
 	logger       *slog.Logger
 
+	// +slice:route:slice=ordercreate,subPath=/orders
 	createHandler *createv1.Handler
-	getHandler    *getv1.Handler
-	listHandler   *listv1.Handler
+
+	// +slice:route:slice=orderquery,subPath=/orders
+	getHandler *getv1.Handler
+
+	// +slice:route:slice=orderquery,subPath=/orders
+	listHandler *listv1.Handler
 }
 
 // NewOrderCell creates a new OrderCell with the given options.
 func NewOrderCell(opts ...Option) *OrderCell {
 	c := &OrderCell{
-		BaseCell: cell.MustNewBaseCell(&metadata.CellMeta{
-			ID:               "ordercell",
-			Type:             "core",
-			ConsistencyLevel: "L2",
-			DurabilityMode:   "durable",
-			Owner:            metadata.OwnerMeta{Team: "examples", Role: "order-owner"},
-			Schema:           metadata.SchemaMeta{Primary: "orders"},
-			Verify:           metadata.CellVerifyMeta{Smoke: []string{"ordercell/smoke"}},
-		}),
-		logger: slog.Default(),
+		BaseCell: cell.MustNewBaseCell(loadCellMetadata()),
+		logger:   slog.Default(),
 	}
 	for _, o := range opts {
 		o(c)
@@ -100,7 +97,7 @@ func NewOrderCell(opts ...Option) *OrderCell {
 // initInternal is the K#04 codegen escape hatch: business init that cannot
 // be generated (emitter resolve, slice service construction, codec defaults).
 // cell_gen.go::Init calls it after BaseCell.Init and before mounting the
-// generated reg.RouteGroup() blocks. This is a permanent convention, not a
+// generated route-group blocks. This is a permanent convention, not a
 // transitional shim — slice/handler instantiation and adapter wiring stay
 // hand-written.
 //

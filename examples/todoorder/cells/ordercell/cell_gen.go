@@ -7,10 +7,31 @@ import (
 	"context"
 
 	"github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/kernel/metadata"
 )
 
 var _ cell.Cell = (*OrderCell)(nil)
 
+// cellMeta is the canonical metadata literal projected from cell.yaml.
+// loadCellMetadata returns the package-scope pointer; cell.go's constructor
+// passes it to cell.MustNewBaseCell which deep-copies the value so callers
+// cannot mutate the generated literal.
+var cellMeta = &metadata.CellMeta{
+	ID:               "ordercell",
+	Type:             "core",
+	ConsistencyLevel: "L2",
+	DurabilityMode:   "durable",
+	Owner:            metadata.OwnerMeta{Team: "examples", Role: "order-owner"},
+	Schema:           metadata.SchemaMeta{Primary: "orders"},
+	Verify: metadata.CellVerifyMeta{Smoke: []string{
+		"smoke.ordercell.startup",
+	}},
+	GoStructName: "OrderCell",
+}
+
+func loadCellMetadata() *metadata.CellMeta { return cellMeta }
+
+//nolint:gocognit // generated code: complexity intrinsic to cell's subscribe count
 func (c *OrderCell) Init(ctx context.Context, reg cell.Registry) error {
 	if err := c.BaseCell.Init(ctx, reg); err != nil {
 		return err

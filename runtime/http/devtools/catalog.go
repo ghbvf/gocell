@@ -35,36 +35,51 @@ var specCatalog = wrapper.ContractSpec{
 
 // Handler serves the devtools catalog HTTP endpoint.
 type Handler struct {
-	project   *metadata.ProjectMeta
-	cellGraph *catalog.CellDepGraph
-	pkgGraph  *kerneldepgraph.Graph
-	root      string
-	clock     clock.Clock
+	project       *metadata.ProjectMeta
+	cellGraph     *catalog.CellDepGraph
+	pkgGraph      *kerneldepgraph.Graph
+	root          string
+	clock         clock.Clock
+	wireSummaries []metadata.CellWireSummary // optional; nil → wireSummary omitted from all Cell entities
 }
 
 // NewHandler constructs a Handler. cellGraph may be nil (omits cell dep graph).
 // pkgGraph may be nil; when nil the package-deps block is omitted from output.
 // pkgGraph is the build-time generated graph from cmd/corebundle/catalog_gen.go.
+// wireSummaries may be nil; when nil the wireSummary field on Cell entities is
+// omitted from the response. Production callers supply summaries derived from
+// markergen.Merge via BuildCellWireSummaries; nil is safe for environments
+// where cell.go markers are absent.
 func NewHandler(
 	project *metadata.ProjectMeta,
 	cellGraph *catalog.CellDepGraph,
 	pkgGraph *kerneldepgraph.Graph,
 	root string,
 	clk clock.Clock,
+	wireSummaries ...[]metadata.CellWireSummary,
 ) *Handler {
+	var ws []metadata.CellWireSummary
+	if len(wireSummaries) > 0 {
+		ws = wireSummaries[0]
+	}
 	return &Handler{
-		project:   project,
-		cellGraph: cellGraph,
-		pkgGraph:  pkgGraph,
-		root:      root,
-		clock:     clk,
+		project:       project,
+		cellGraph:     cellGraph,
+		pkgGraph:      pkgGraph,
+		root:          root,
+		clock:         clk,
+		wireSummaries: ws,
 	}
 }
 
 // RouteGroup returns the cell.RouteGroup that bootstrap mounts on PrimaryListener.
+// CellID is set to "_devtools" so that metrics cell label for this endpoint
+// falls into the devtools sentinel bucket rather than "_runtime", enabling
+// audit attribution in dashboards and CI.
 func RouteGroup(h *Handler) cell.RouteGroup {
 	return cell.RouteGroup{
 		Listener: cell.PrimaryListener,
+		CellID:   "_devtools",
 		Register: func(mux cell.RouteMux) error {
 			return auth.Mount(mux, auth.Route{
 				Contract: specCatalog,
@@ -85,10 +100,12 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Build export options.
+	// Build export options — wireSummaries are passed via opts so that
+	// catalog.BuildDocument handles injection in a single place (shared with
+	// the CLI export path).
 	opts := buildExportOptions(h, filter)
 
-	// Build document.
+	// Build document (includes wireSummary injection via opts.WireSummaries).
 	doc, err := catalog.BuildDocument(h.project, opts)
 	if err != nil {
 		slog.Error("devtools: BuildDocument failed",
@@ -120,13 +137,20 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 // buildExportOptions assembles ExportOptions from the handler state and filter.
+//
 // Root is always set to "." for HTTP responses to avoid leaking absolute server
 // paths to clients; CLI callers retain their absolute path via h.root.
+// Root="." is a stable identifier in API responses — API consumers MUST NOT use
+// this field for filesystem operations; it is purely a stable identifier.
+//
+// Note: ?include=packageDeps triggers a build-time-heavy go/packages graph
+// load. Use sparingly; not appropriate for high-frequency polling.
 func buildExportOptions(h *Handler, filter catalog.Filter) catalog.ExportOptions {
 	opts := catalog.ExportOptions{
-		Clock:  h.clock,
-		Root:   ".",
-		Filter: filter,
+		Clock:         h.clock,
+		Root:          ".",
+		Filter:        filter,
+		WireSummaries: h.wireSummaries,
 	}
 	if filter.Include.CellDeps {
 		opts.CellDeps = h.cellGraph
