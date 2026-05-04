@@ -394,3 +394,76 @@ func TestBaseContractAllKinds(t *testing.T) {
 		})
 	}
 }
+
+// TestNewBaseCell_ErrorPaths covers all three NewBaseCell error returns.
+func TestNewBaseCell_ErrorPaths(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name       string
+		meta       *metadata.CellMeta
+		wantSubstr string
+	}{
+		{"nil meta", nil, "meta is nil"},
+		{"empty id", &metadata.CellMeta{Type: "core"}, "meta.ID is empty"},
+		{"invalid type", &metadata.CellMeta{ID: "x", Type: "wrong"}, "invalid cell type"},
+		{"invalid level", &metadata.CellMeta{ID: "x", Type: "core", ConsistencyLevel: "L9"}, "invalid consistency level"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c, err := NewBaseCell(tt.meta)
+			require.Error(t, err)
+			require.Nil(t, c)
+			require.Contains(t, err.Error(), tt.wantSubstr)
+		})
+	}
+}
+
+// TestMustNewBaseCell_PanicsOnError verifies the Must* wrapper panics
+// with a "cell.MustNewBaseCell:" prefixed message.
+func TestMustNewBaseCell_PanicsOnError(t *testing.T) {
+	t.Parallel()
+	assert.PanicsWithValue(t, "cell.MustNewBaseCell: [ERR_VALIDATION_FAILED] cell.NewBaseCell: meta is nil", func() {
+		MustNewBaseCell(nil)
+	}, "panic value should be the prefixed string from MustNewBaseCell")
+	// Also verify the prefix on a non-nil but invalid case.
+	assert.Panics(t, func() {
+		MustNewBaseCell(&metadata.CellMeta{ID: "bad", Type: "wrong"})
+	})
+}
+
+// TestBaseCell_Metadata_Isolation verifies Metadata() returns an
+// independent deep copy: caller mutation must not affect cell state,
+// and constructor input mutation must not affect the cell.
+func TestBaseCell_Metadata_Isolation(t *testing.T) {
+	t.Parallel()
+	src := &metadata.CellMeta{
+		ID:               "iso",
+		Type:             "core",
+		ConsistencyLevel: "L1",
+		Verify:           metadata.CellVerifyMeta{Smoke: []string{"smoke.iso.startup"}},
+		Listeners:        []metadata.ListenerDeclMeta{{Ref: "cell.PrimaryListener", Prefix: "/api/v1"}},
+		L0Dependencies:   []metadata.L0DepMeta{{Cell: "shared", Reason: "ok"}},
+	}
+	c := MustNewBaseCell(src)
+
+	// Constructor input mutation MUST NOT leak into cell.
+	src.ID = "mutated"
+	src.Verify.Smoke[0] = "tampered"
+	src.Listeners[0].Prefix = "/evil"
+	src.L0Dependencies[0].Cell = "evil"
+	assert.Equal(t, "iso", c.ID(), "constructor mutation leaked into cell ID")
+	assert.Equal(t, "smoke.iso.startup", c.Metadata().Verify.Smoke[0])
+	assert.Equal(t, "/api/v1", c.Metadata().Listeners[0].Prefix)
+	assert.Equal(t, "shared", c.Metadata().L0Dependencies[0].Cell)
+
+	// Metadata() return-value mutation MUST NOT leak into cell.
+	got := c.Metadata()
+	got.ID = "evil"
+	got.Verify.Smoke[0] = "tampered2"
+	got.Listeners[0].Prefix = "/evil2"
+	got.L0Dependencies[0].Cell = "evil2"
+	assert.Equal(t, "iso", c.ID(), "Metadata() mutation leaked into cell")
+	assert.Equal(t, "smoke.iso.startup", c.Metadata().Verify.Smoke[0])
+	assert.Equal(t, "/api/v1", c.Metadata().Listeners[0].Prefix)
+	assert.Equal(t, "shared", c.Metadata().L0Dependencies[0].Cell)
+}

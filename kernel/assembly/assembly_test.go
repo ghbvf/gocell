@@ -54,16 +54,19 @@ func (c *failInitCell) Init(_ context.Context, _ cell.Registry) error {
 	return errors.New("init boom")
 }
 
-// emptyIDCell returns "" as its ID.
+// emptyIDCell returns "" as its ID to test assembly.Register rejection.
+// It embeds a validly-constructed BaseCell but overrides ID() to return "".
 type emptyIDCell struct {
 	*cell.BaseCell
 }
 
 func newEmptyIDCell() *emptyIDCell {
 	return &emptyIDCell{
-		BaseCell: cell.MustNewBaseCell(&metadata.CellMeta{ID: "", Type: "core"}),
+		BaseCell: cell.MustNewBaseCell(&metadata.CellMeta{ID: "placeholder-for-empty-id-test", Type: "core"}),
 	}
 }
+
+func (c *emptyIDCell) ID() string { return "" }
 
 // failStartCell passes Init but fails on Start.
 type failStartCell struct {
