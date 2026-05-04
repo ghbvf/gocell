@@ -297,13 +297,16 @@ func withSpanErrorRecorder(ctx context.Context, span tracing.Span) context.Conte
 // recordPanicOnActiveSpan attaches a panic to the active HTTP span. The
 // panic message is hardcoded through pkg/redaction.RedactError before
 // span.RecordError; there is no caller-side opt-out (see pkg/redaction).
+//
+// The redaction call is inlined as the RecordError argument so the
+// SPAN-RECORD-ERROR-REDACT-01 archtest gate can statically verify the wrap.
 func recordPanicOnActiveSpan(ctx context.Context, rec any) {
 	r, ok := ctx.Value(spanErrorRecorderKey{}).(spanErrorRecorder)
 	if !ok || r.span == nil || rec == nil {
 		return
 	}
-	if err := redaction.RedactError(panicAsError(rec)); err != nil {
-		r.span.RecordError(err)
+	if err := panicAsError(rec); err != nil {
+		r.span.RecordError(redaction.RedactError(err))
 	}
 	tracing.SpanSetStatus(r.span, true, "panic")
 }

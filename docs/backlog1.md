@@ -43,7 +43,7 @@
 
 ### Follow-up（PR #366 reviewer registered）
 
-- **SPAN-RECORD-ERROR-REDACT-ARCHTEST-01** (Cx3, OUT_OF_SCOPE) — 静态守 `kernel/wrapper` + `runtime/http/middleware` 内 `span.RecordError(...)` 调用必须经 `redaction.RedactError(...)` 包装。当前 wiring 已删除、调用点固定为 3 处（consumer.go / lifecycle.go / tracing.go），未来新增 `RecordError` 调用绕过 redaction 不会被 CI 拦截。触发条件：第 4 处 `span.RecordError` 调用引入时同步加 archtest；或任何 reviewer 发现 redaction bypass 时立刻补。 | `tools/archtest/span_record_error_test.go`（新增）+ AST scan
+- **SPAN-RECORD-ERROR-REDACT-ARCHTEST-01** ✅ 已完成（PR #366 同 PR 增量）— `tools/archtest/span_record_error_redact_test.go` 纯 AST scan：扫 `kernel/wrapper/` + `runtime/http/middleware/` 非测试 .go 文件，断言每个 `span.RecordError(...)` 调用首参必须 inline `redaction.RedactError(...)`；附 fixture compliant/violates 自验证。在 PR fix 增量过程中即抓出 `tracing.go:306` 一处中间变量持有 redact 结果的旁路，已 inline 修复。
 
 ---
 
