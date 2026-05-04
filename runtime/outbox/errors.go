@@ -1,36 +1,23 @@
 package outbox
 
-import (
-	"regexp"
-	"unicode/utf8"
-)
+import "github.com/ghbvf/gocell/pkg/redaction"
 
 // ---------------------------------------------------------------------------
 // Error sanitization helpers
 // ---------------------------------------------------------------------------
 // Shared by runtime/outbox (relay) and adapters/postgres (outbox_store).
-// Exported so that adapters can call outbox.SanitizeError without duplicating
-// the regexp and truncation logic.
-
-// sensitivePatterns matches common sensitive substrings in error messages
-// (connection strings, hostnames, credentials) to redact before storage.
-var sensitivePatterns = regexp.MustCompile(
-	`(?i)(password|passwd|secret|token|dsn|connection[_ ]?string)=[^\s;,]+`,
-)
+// Delegates the actual scrub + truncate work to pkg/redaction so the regex
+// (sensitive key set, value-boundary handling) is single-sourced with
+// kernel/wrapper's hardcoded fail-closed redactor. ref: pkg/redaction.
 
 // TruncateError truncates an error message to maxLen runes, preserving valid
-// UTF-8 (avoids splitting multi-byte characters at byte boundaries).
+// UTF-8. Negative or zero maxLen is a no-op.
 func TruncateError(msg string, maxLen int) string {
-	if utf8.RuneCountInString(msg) <= maxLen {
-		return msg
-	}
-	runes := []rune(msg)
-	return string(runes[:maxLen])
+	return redaction.TruncateString(msg, maxLen)
 }
 
-// SanitizeError truncates and redacts sensitive patterns from an error message
-// before storing it in a last_error column.
+// SanitizeError redacts sensitive substrings then truncates to maxLen runes
+// before storing in a last_error column.
 func SanitizeError(errMsg string, maxLen int) string {
-	redacted := sensitivePatterns.ReplaceAllString(errMsg, "$1=<REDACTED>")
-	return TruncateError(redacted, maxLen)
+	return redaction.TruncateString(redaction.RedactString(errMsg), maxLen)
 }

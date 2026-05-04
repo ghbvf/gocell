@@ -7,6 +7,7 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/ctxkeys"
 	"github.com/ghbvf/gocell/kernel/outbox"
+	"github.com/ghbvf/gocell/pkg/redaction"
 )
 
 // Re-export outbox types so wrapper callers do not need to import kernel/outbox
@@ -34,37 +35,6 @@ const (
 // callers do not need to import kernel/outbox for the type.
 type ConsumerFunc = outbox.EntryHandler
 
-// ErrorRedactor transforms an error before it is recorded on a span. Return
-// the original err unchanged to disable redaction for a given error; return
-// a replacement error (with sanitized message) to strip sensitive payload
-// fragments (SQL snippets, token carriers, raw PII, ...) from observability
-// backends.
-//
-// The default redactor used by WrapConsumer / middleware.Tracing when none
-// is supplied is the identity — error text reaches the span verbatim, which
-// matches OTel's default semantic. Operators who need scrub rules either
-// (a) inject a redactor via the relevant Option or bootstrap wiring, or
-// (b) rely on the OTel collector / adapter pipeline to scrub at export
-// time.
-type ErrorRedactor func(error) error
-
-// ConsumerOption configures WrapConsumer at registration time.
-type ConsumerOption func(*consumerConfig)
-
-type consumerConfig struct {
-	redactor ErrorRedactor
-}
-
-// WithConsumerErrorRedactor installs an ErrorRedactor on this WrapConsumer
-// invocation. A nil fn is a no-op (identity redaction remains).
-func WithConsumerErrorRedactor(fn ErrorRedactor) ConsumerOption {
-	return func(c *consumerConfig) {
-		if fn != nil {
-			c.redactor = fn
-		}
-	}
-}
-
 func defaultEventSpanName(spec ContractSpec) string {
 	return "CONSUME " + spec.Topic
 }
@@ -87,14 +57,18 @@ func defaultEventSpanName(spec ContractSpec) string {
 //
 // spec must have Kind == "event" and Topic set; fn must be non-nil.
 //
-// WithConsumerErrorRedactor allows callers to scrub error text before it
-// reaches span.RecordError (F5 / round-4). Applied uniformly to the three
-// RecordError call sites below (Requeue/Reject disposition + panic path).
+// Error redaction is hardcoded to pkg/redaction.RedactError before any
+// span.RecordError call, so sensitive substrings (password=, token=,
+// Authorization: Bearer …) never reach the trace backend. There is no
+// caller-side opt-out — dev / test surfaces that need raw error text read
+// it from slog structured fields instead.
+// ref: hashicorp/vault audit/entry_formatter.go (log_raw=false default)
+// ref: golang/go src/net/url/url.go URL.Redacted()
 //
 // Returns a non-nil error when fn is nil, spec.Kind != "event", or
 // spec.Validate fails. Callers that want to fail-fast at composition time
 // should use MustWrapConsumer.
-func WrapConsumer(tr Tracer, spec ContractSpec, fn ConsumerFunc, opts ...ConsumerOption) (ConsumerFunc, error) {
+func WrapConsumer(tr Tracer, spec ContractSpec, fn ConsumerFunc) (ConsumerFunc, error) {
 	if fn == nil {
 		return nil, fmt.Errorf("wrapper.WrapConsumer: fn must not be nil")
 	}
@@ -106,11 +80,6 @@ func WrapConsumer(tr Tracer, spec ContractSpec, fn ConsumerFunc, opts ...Consume
 	}
 	if tr == nil {
 		tr = NoopTracer{}
-	}
-
-	cfg := consumerConfig{redactor: identityRedactor}
-	for _, o := range opts {
-		o(&cfg)
 	}
 
 	baseAttrs := []Attr{
@@ -125,7 +94,7 @@ func WrapConsumer(tr Tracer, spec ContractSpec, fn ConsumerFunc, opts ...Consume
 		ctx = ctxkeys.WithContractID(ctx, spec.ID)
 		ctx, span := tr.Start(ctx, defaultEventSpanName(spec))
 		span.SetAttributes(baseAttrs...)
-		defer func() { recoverAndFinishWithRedactor(span, recover(), cfg.redactor) }()
+		defer func() { recoverAndFinish(span, recover()) }()
 
 		res = fn(ctx, entry)
 
@@ -134,10 +103,10 @@ func WrapConsumer(tr Tracer, spec ContractSpec, fn ConsumerFunc, opts ...Consume
 			span.SetStatus(StatusOK, "")
 		case outbox.DispositionRequeue:
 			span.SetStatus(StatusError, "requeue")
-			recordErrRedacted(span, cfg.redactor, res.Err, "consumer returned Requeue without error")
+			recordErr(span, res.Err, "consumer returned Requeue without error")
 		case outbox.DispositionReject:
 			span.SetStatus(StatusError, "reject")
-			recordErrRedacted(span, cfg.redactor, res.Err, "consumer returned Reject without error")
+			recordErr(span, res.Err, "consumer returned Reject without error")
 		default:
 			// Invalid disposition — tested in kernel/outbox; we mark the
 			// span as error AND record an error event so ops see both the
@@ -145,7 +114,7 @@ func WrapConsumer(tr Tracer, spec ContractSpec, fn ConsumerFunc, opts ...Consume
 			// Requeue/Reject branches. Result is left untouched for
 			// downstream downgrade logic.
 			span.SetStatus(StatusError, "invalid disposition")
-			recordErrRedacted(span, cfg.redactor, res.Err,
+			recordErr(span, res.Err,
 				fmt.Sprintf("consumer returned invalid disposition %d", res.Disposition))
 		}
 		span.End()
@@ -157,24 +126,21 @@ func WrapConsumer(tr Tracer, spec ContractSpec, fn ConsumerFunc, opts ...Consume
 // It panics when WrapConsumer returns an error. Suitable for static wiring
 // where the spec is a build-time literal; use WrapConsumer directly when the
 // spec is data-driven.
-func MustWrapConsumer(tr Tracer, spec ContractSpec, fn ConsumerFunc, opts ...ConsumerOption) ConsumerFunc {
-	c, err := WrapConsumer(tr, spec, fn, opts...)
+func MustWrapConsumer(tr Tracer, spec ContractSpec, fn ConsumerFunc) ConsumerFunc {
+	c, err := WrapConsumer(tr, spec, fn)
 	if err != nil {
 		panic(err.Error())
 	}
 	return c
 }
 
-// identityRedactor is the default — passes errors through unchanged.
-func identityRedactor(err error) error { return err }
-
-// recordErrRedacted calls span.RecordError on the redacted form of err,
-// falling back to a synthetic "missing error" message (itself redacted) so
-// ops still get a recognizable event in the span even when a handler
-// misbehaves by returning a non-Ack disposition with a nil error.
-func recordErrRedacted(span Span, redact ErrorRedactor, err error, fallbackMsg string) {
+// recordErr calls span.RecordError on the redacted form of err, falling back
+// to a synthetic "missing error" message (itself redacted) so ops still get
+// a recognizable event in the span even when a handler misbehaves by
+// returning a non-Ack disposition with a nil error.
+func recordErr(span Span, err error, fallbackMsg string) {
 	if err == nil {
 		err = errors.New(fallbackMsg)
 	}
-	span.RecordError(redact(err))
+	span.RecordError(redaction.RedactError(err))
 }

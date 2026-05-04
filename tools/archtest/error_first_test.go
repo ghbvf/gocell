@@ -23,8 +23,8 @@ package archtest
 //     are by definition fatal)
 //
 // Function-level whitelist (architectural panic permitted):
-//   - kernel/wrapper/lifecycle.go::recoverAndFinishWithRedactor — middle
-//     of a `defer recover()` chain that re-panics so the outer Recovery
+//   - kernel/wrapper/lifecycle.go::recoverAndFinish — middle of a
+//     `defer recover()` chain that re-panics so the outer Recovery
 //     middleware can record + serialize the panic. Refactoring it to
 //     error would dismantle the entire recover propagation idiom. Any
 //     OTHER error-less function in lifecycle.go that contains panic() is

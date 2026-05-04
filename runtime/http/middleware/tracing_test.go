@@ -2,7 +2,6 @@ package middleware
 
 import (
 	"context"
-	"errors"
 	"net/http"
 	"net/http/httptest"
 	"sync"
@@ -451,12 +450,14 @@ func TestTracing_4xxNoErrorSpanStatus_NoCancelAttr(t *testing.T) {
 		"client.cancel.reason must be 499-only, not generic 4xx")
 }
 
-func TestTracing_RecoveryRecordsRedactedPanicError(t *testing.T) {
+// TestTracing_RecoveryRedactsPanicErrorByDefault verifies that the panic
+// path runs through pkg/redaction.RedactError without any caller-side opt-out
+// (kernel/wrapper hardcoded fail-closed). Sensitive substrings recorded on
+// the span are masked before reaching the trace backend.
+func TestTracing_RecoveryRedactsPanicErrorByDefault(t *testing.T) {
 	spy := &spyTracer{}
-	handler := Tracing(spy, WithErrorRedactor(func(error) error {
-		return errors.New("redacted panic")
-	}))(Recovery(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
-		panic("raw secret token")
+	handler := Tracing(spy)(Recovery(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		panic("upstream failed: token=hunter2-leak-sentinel-9f3")
 	})))
 
 	req := httptest.NewRequest(http.MethodGet, "/panic", nil)
@@ -466,7 +467,14 @@ func TestTracing_RecoveryRecordsRedactedPanicError(t *testing.T) {
 	assert.Equal(t, http.StatusInternalServerError, rec.Code)
 	spans := spy.Spans()
 	require.Len(t, spans, 1)
-	assert.Equal(t, "redacted panic", spans[0].Attr("_recorded_error"))
+
+	recorded, _ := spans[0].Attr("_recorded_error").(string)
+	require.NotEmpty(t, recorded, "expected _recorded_error attr on span")
+	assert.NotContains(t, recorded, "hunter2-leak-sentinel-9f3",
+		"raw panic secret leaked to span: %q", recorded)
+	assert.Contains(t, recorded, "<REDACTED>",
+		"redaction mask missing from recorded panic: %q", recorded)
+
 	assert.Equal(t, true, spans[0].Attr("_status_error"))
 	assert.Equal(t, "Internal Server Error", spans[0].Attr("_status_desc"))
 }

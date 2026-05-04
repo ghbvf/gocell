@@ -53,7 +53,7 @@ func (b *Bootstrap) buildEventRouter(sub outbox.Subscriber) *eventrouter.Router 
 	// middleware here. ContractTracingMiddleware therefore observes a
 	// ctx already populated with entry.Observability fields.
 	mws := []outbox.SubscriptionMiddleware{
-		eventrouter.ContractTracingMiddleware(b.wrapperTracer, b.errorRedactor),
+		eventrouter.ContractTracingMiddleware(b.wrapperTracer),
 	}
 	mws = append(mws, b.consumerMiddleware...)
 

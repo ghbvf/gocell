@@ -157,9 +157,10 @@ types that observe traffic:
   contract attributes to the span via `wrapper.AttrCarrier`.
 - `runtime/eventrouter.Router` stores contract identity on
   `outbox.Subscription`; it does not carry the live tracer. The
-  bootstrap-owned `ContractTracingMiddleware` receives the tracer and
-  error redactor explicitly, consumes that identity, and wraps the
-  subscription with `WrapConsumer` outside ConsumerBase.
+  bootstrap-owned `ContractTracingMiddleware` receives only the tracer
+  (error redaction is hardcoded inside `WrapConsumer` via `pkg/redaction` —
+  see §8), consumes the contract identity, and wraps the subscription with
+  `WrapConsumer` outside ConsumerBase.
 - `runtime/bootstrap` threads the `Bootstrap.wrapperTracer` (captured
   by `WithTracer`) into both `router.WithTracer` (phase7) and
   `ContractTracingMiddleware` (phase6). No process-wide `SetTracer` is
@@ -277,23 +278,70 @@ ref: open-telemetry/opentelemetry-go-contrib otelhttp — "one
 middleware one span" invariant; route metadata is bound post-routing
 via chi RouteContext.
 
-### 8. Error Redaction Hook — `WrapConsumer(...,WithConsumerErrorRedactor)` (round 4 F5)
+### 8. Error Redaction — fail-closed default, no caller wiring (revised 2026-05-04)
 
-`wrapper.ErrorRedactor` is a `func(error) error` that `WrapConsumer`
-applies to every error it records on a span (Requeue/Reject
-dispositions + handler panics). `bootstrap.WithErrorRedactor` sets
-the process-wide redactor; bootstrap passes it to
-`eventrouter.ContractTracingMiddleware`, which attaches it to every
-contract-bound `WrapConsumer` invocation. Default is the identity
-(no scrubbing), matching OTel's default; deployments in regulated
-environments plug a redactor to strip SQL fragments / token
-carriers / PII from error strings before they reach the trace
-backend.
+`WrapConsumer` and `runtime/http/middleware.Recovery` both pass every
+error reaching `span.RecordError` through `pkg/redaction.RedactError`
+unconditionally. There is **no** `ErrorRedactor` type, no
+`WithConsumerErrorRedactor` / `WithErrorRedactor` option, no
+`bootstrap.WithErrorRedactor`, and no caller-side opt-out. The default
+masks `key=value` / `key: value` substrings of the form
+`password|passwd|pwd|secret|token|api[_-]?key|authorization|bearer|`
+`private[_-]?key|signing[_-]?key|dsn|connection[_ ]?string` —
+emitting `<REDACTED>` in place of the value while preserving the key
+so operators still get a recognizable signal.
 
-Consumer-only for now — `middleware.Tracing` does not call
-`span.RecordError` today (it relies on status-code classification),
-so an HTTP-side redactor is unnecessary. Should that change, the
-same hook is easy to thread through `middleware.WithErrorRedactor`.
+Value boundary is fail-closed: every pattern consumes up to the next
+whitespace (or `\n` for `authorization`). `,` and `;` are NOT treated
+as boundaries even though doing so would preserve more co-located
+context, because fail-closed redaction cannot assume secrets are free
+of those characters (e.g. `Pwd=secret;next=...` ODBC blocks, base64url
+JWT values that happen to embed punctuation). The accepted trade-off:
+a same-line `password="abc",user="alice"` masks `user="alice"` too —
+co-located fields are typically PII or recoverable from the matching
+slog structured-field copy of the error, so over-masking is the
+cheaper failure mode than leaking the secret suffix.
+
+Why hardcoded:
+
+- **fail-closed defaults**: cell-native deployments cannot assume
+  downstream OTel collectors are configured with the
+  `redactionprocessor`; the regression cost (one secret in trace
+  backend) far outweighs the marginal flexibility of an opt-out hook.
+- **no business consumer**: prior to this revision, `grep -r
+  WithConsumerErrorRedactor` returned zero call sites. The plumbing
+  layer (5 wiring functions across kernel/runtime/bootstrap) protected
+  a pure default-path with no real overrides.
+- **observability isn't the place for raw error text**: dev / debug
+  workflows that need the unredacted message read it from the
+  structured `slog` field (the error logging convention requires that
+  every error reaches slog with full context); the trace span is for
+  ops correlation, not forensic detail.
+
+Coverage:
+
+- `kernel/wrapper.WrapConsumer` Requeue / Reject / invalid disposition
+  branches → `recordErr` → `redaction.RedactError` → `span.RecordError`
+- `kernel/wrapper.recoverAndFinish` panic path → same redaction →
+  `span.RecordError`
+- `runtime/http/middleware.recordPanicOnActiveSpan` (used by
+  `Recovery`) → same redaction → `span.RecordError`
+- `runtime/outbox.SanitizeError` (last-error column on outbox row)
+  delegates to `pkg/redaction` so the regex is single-sourced
+
+Future evolution: callers needing per-value safe markers (e.g.
+"this `error` is known free of PII, do not redact") should adopt the
+CockroachDB `SafeValue` interface pattern in a follow-up PR. That is
+type-driven (`type SafeError string`) and remains compatible with
+hardcoded default — it is opt-in safety annotation, not opt-out
+redaction.
+
+ref: hashicorp/vault audit/entry_formatter.go (`log_raw=false` default,
+operator-only opt-out via config, no caller API).
+ref: golang/go src/net/url/url.go `URL.Redacted()` (hardcoded `xxxxx`
+substitution, no opt-out — caller chooses `String()` vs `Redacted()`
+at the call site).
+ref: cockroachdb/redact (`SafeValue` marker, future direction).
 
 ### 9. Governance rules: FMT-18 + FMT-19 (round 4)
 
@@ -455,10 +503,12 @@ cleanup also closed:
   migrated to `auth.Mount(Route{Contract: ...})` and
   `AddContractHandler(spec, handler, consumerGroup)`; legacy shim APIs
   were deleted.
-- `PR-A11-SEC HTTP-SPAN-ERROR-REDACT-01` — `middleware.Tracing` now
-  accepts `WithErrorRedactor`; `Recovery` records redacted panic errors
-  on the active HTTP span, and `bootstrap.WithErrorRedactor` threads the
-  same hook to HTTP and consumer tracing.
+- `PR-A11-SEC HTTP-SPAN-ERROR-REDACT-01` — `middleware.Tracing` records
+  redacted panic errors on the active HTTP span via `Recovery`. The
+  redactor wiring (`WithErrorRedactor` / `bootstrap.WithErrorRedactor`)
+  was subsequently deleted (refactor/512); redaction is now hardcoded
+  through `pkg/redaction.RedactError` with no caller-side opt-out — see
+  §8 above.
 
 `PR-A11-B` (consumer WrapConsumer wiring) landed in round 3.
 `PR-A11-V` (FMT-17 cross-check) landed as FMT-18 in round 4.

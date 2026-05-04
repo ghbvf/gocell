@@ -27,7 +27,6 @@ import (
 	"github.com/ghbvf/gocell/kernel/metadata"
 	kernelmetrics "github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/kernel/outbox"
-	"github.com/ghbvf/gocell/kernel/wrapper"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/runtime/config"
 	"github.com/ghbvf/gocell/runtime/http/router"
@@ -84,7 +83,6 @@ type Bootstrap struct {
 	routerOpts            []router.Option
 	healthRouteGroupOpts  []HealthRouteGroupOption
 	wrapperTracer         tracing.Tracer
-	errorRedactor         wrapper.ErrorRedactor
 	circuitBreakerNil     bool
 	healthCheckers        []namedChecker
 	adapterInfo           map[string]string

@@ -4,8 +4,8 @@ package bootstrap
 // health, and middleware setup.
 //
 // Covers: WithRouterOptions, WithTracer, WithRateLimiter, WithCircuitBreaker,
-// WithSecurityHeadersOptions, WithErrorRedactor, WithHealthChecker,
-// WithReadyzDeadline, WithAdapterInfo, WithHealthRoutes.
+// WithSecurityHeadersOptions, WithHealthChecker, WithReadyzDeadline,
+// WithAdapterInfo, WithHealthRoutes.
 //
 // Note: WithRateLimiter and WithCircuitBreaker also append to b.closers (lifecycle teardown).
 //
@@ -18,7 +18,6 @@ import (
 
 	kerneldepgraph "github.com/ghbvf/gocell/kernel/depgraph"
 	"github.com/ghbvf/gocell/kernel/metadata"
-	"github.com/ghbvf/gocell/kernel/wrapper"
 	"github.com/ghbvf/gocell/runtime/http/middleware"
 	"github.com/ghbvf/gocell/runtime/http/router"
 	"github.com/ghbvf/gocell/runtime/observability/tracing"
@@ -111,22 +110,6 @@ func WithCircuitBreaker(cb middleware.Allower) Option {
 func WithSecurityHeadersOptions(opts ...middleware.SecurityHeadersOption) Option {
 	return func(b *Bootstrap) {
 		b.routerOpts = append(b.routerOpts, router.WithSecurityHeadersOptions(opts...))
-	}
-}
-
-// WithErrorRedactor installs a wrapper.ErrorRedactor that scrubs error text
-// before it reaches span.RecordError on HTTP request spans and consumer-side
-// CONSUME spans. A nil fn disables redaction (identity semantics).
-//
-// Use when strict source-side sanitisation is required (regulated
-// environments); otherwise leave unset and let the OTel span processor /
-// exporter filter handle scrubbing at export time.
-func WithErrorRedactor(fn wrapper.ErrorRedactor) Option {
-	return func(b *Bootstrap) {
-		if fn != nil {
-			b.errorRedactor = fn
-			b.routerOpts = append(b.routerOpts, router.WithTracingOptions(middleware.WithErrorRedactor(fn)))
-		}
 	}
 }
 

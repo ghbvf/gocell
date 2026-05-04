@@ -147,7 +147,7 @@ func TestContractTracingMiddleware_WrapsWithContractSpan(t *testing.T) {
 	// Drive one entry through the middleware position used by bootstrap:
 	// contract tracing sits outside the stored business handler.
 	sub := r.handlers[0].subscription()
-	wrapped := ContractTracingMiddleware(tr, nil)(sub, r.handlers[0].handler)
+	wrapped := ContractTracingMiddleware(tr)(sub, r.handlers[0].handler)
 	res := wrapped(context.Background(), outbox.Entry{EventType: "event.config.entry-upserted.v1"})
 	assert.Equal(t, outbox.DispositionAck, res.Disposition)
 	assert.True(t, inner, "inner handler must run")
@@ -186,7 +186,7 @@ func TestContractTracingMiddleware_CoversDownstreamShortCircuit(t *testing.T) {
 		}
 	}
 
-	wrapped := ContractTracingMiddleware(tr, nil)(sub, shortCircuit(sub, business))
+	wrapped := ContractTracingMiddleware(tr)(sub, shortCircuit(sub, business))
 	res := wrapped(context.Background(), outbox.Entry{EventType: "event.config.entry-upserted.v1"})
 
 	assert.Equal(t, outbox.DispositionRequeue, res.Disposition)
@@ -218,7 +218,7 @@ func TestContractTracingMiddleware_PanicsOnEmptyContractID(t *testing.T) {
 		require.NotNil(t, r, "empty ContractID must panic at middleware construction")
 	}()
 
-	_ = ContractTracingMiddleware(wrapper.NoopTracer{}, nil)(sub,
+	_ = ContractTracingMiddleware(wrapper.NoopTracer{})(sub,
 		func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
 			return outbox.HandleResult{Disposition: outbox.DispositionAck}
 		})

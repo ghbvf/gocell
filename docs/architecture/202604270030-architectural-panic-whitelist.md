@@ -70,7 +70,7 @@ explicit through a `Must*` wrapper.
 
 | # | Function | Justification |
 |---|---|---|
-| 1 | `kernel/wrapper/lifecycle.go::recoverAndFinishWithRedactor` | Middle of a `defer recover()` chain that re-panics so the outer `runtime/http/middleware.Recovery` middleware can record + serialize the panic. Refactoring it to return error would dismantle the entire recover propagation idiom and force every wrapped consumer to pre-route panics through a synthetic error path before Go's runtime gets the chance. |
+| 1 | `kernel/wrapper/lifecycle.go::recoverAndFinish` | Middle of a `defer recover()` chain that re-panics so the outer `runtime/http/middleware.Recovery` middleware can record + serialize the panic. Refactoring it to return error would dismantle the entire recover propagation idiom and force every wrapped consumer to pre-route panics through a synthetic error path before Go's runtime gets the chance. |
 | 2 | `runtime/http/middleware/circuit_breaker.go::repanicAfterBreakerFailure` | Middle of a `defer recover()` chain that first reports the handler panic as a circuit-breaker failure, then re-panics so the outer `Recovery` middleware remains the single panic-to-HTTP and panic-to-tracing boundary. Swallowing the panic here would bypass `Recovery` and lose panic span recording in the normal router chain. |
 | 3 | `adapters/postgres/tx_manager.go::repanicAfterTopLevelTxRollback` | Top-level transaction panic path must rollback the open pgx transaction before preserving the caller's original panic semantics. Returning an error would swallow programmer/runtime panics from the callback and change `RunInTx`'s transaction-safety contract. |
 | 4 | `adapters/postgres/tx_manager.go::repanicAfterSavepointRollback` | Nested transaction panic path must rollback to the savepoint before preserving the caller's original panic semantics. Returning an error would swallow programmer/runtime panics from the callback and make nested and top-level transactions diverge. |
@@ -174,7 +174,7 @@ Hardcoded in `tools/archtest/panic_registered_test.go`:
 
 ```go
 var architecturalPanicWhitelist = map[string]string{
-    "kernel/wrapper/lifecycle.go::recoverAndFinishWithRedactor": "re-panics from defer recover so outer Recovery middleware can serialize the panic",
+    "kernel/wrapper/lifecycle.go::recoverAndFinish": "re-panics from defer recover so outer Recovery middleware can serialize the panic",
     "runtime/http/middleware/circuit_breaker.go::repanicAfterBreakerFailure": "re-panics from defer recover after reporting circuit-breaker failure",
     "adapters/postgres/tx_manager.go::repanicAfterTopLevelTxRollback": "re-panics after top-level transaction rollback so caller panic semantics are preserved",
     "adapters/postgres/tx_manager.go::repanicAfterSavepointRollback": "re-panics after savepoint rollback so nested transaction panic semantics are preserved",
