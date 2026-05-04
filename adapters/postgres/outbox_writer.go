@@ -144,17 +144,22 @@ func (w *OutboxWriter) WriteBatch(ctx context.Context, entries []outbox.Entry) e
 		return errcode.New(errcode.KindInternal, ErrAdapterPGNoTx, "outbox batch write requires a transaction in context")
 	}
 
-	// Validate all entries upfront.
-	for i, e := range entries {
-		if strings.TrimSpace(e.ID) == "" {
+	// Inject observability + validate upfront. Iteration uses indices so the
+	// in-place mutation from InjectObservabilityFromContext propagates to
+	// writeBatchChunk's later loop. Inject must precede Validate so any
+	// failure path (Validate or downstream marshal) carries the request's
+	// trace/request/correlation identity in slog/span attributes (B2-A-04).
+	for i := range entries {
+		if strings.TrimSpace(entries[i].ID) == "" {
 			return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 				fmt.Sprintf("outbox entry[%d] ID must not be empty", i))
 		}
-		if e.ID == allZeroUUID {
+		if entries[i].ID == allZeroUUID {
 			return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 				fmt.Sprintf("outbox entry[%d] ID must not be all-zeros UUID (idempotency collision risk)", i))
 		}
-		if err := e.Validate(); err != nil {
+		entries[i].InjectObservabilityFromContext(ctx)
+		if err := entries[i].Validate(); err != nil {
 			return fmt.Errorf("outbox entry[%d]: %w", i, err)
 		}
 	}
@@ -184,9 +189,8 @@ func (w *OutboxWriter) writeBatchChunk(ctx context.Context, tx pgx.Tx, entries [
 	var numBuf [32]byte
 	args := make([]any, 0, len(entries)*cols)
 	for i, e := range entries {
-		// Inject observability from context right before persistence.
-		e.InjectObservabilityFromContext(ctx)
-
+		// Observability injection happened upfront in WriteBatch so failure
+		// paths there carry the request's trace identity (B2-A-04).
 		metadata, err := json.Marshal(e.Metadata)
 		if err != nil {
 			return errcode.Wrap(errcode.KindInternal, ErrAdapterPGMarshal,

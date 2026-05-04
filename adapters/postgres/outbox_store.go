@@ -325,6 +325,7 @@ func scanClaimedEntry(rows RowScanner) (outbox.ClaimedEntry, error) {
 		if err := json.Unmarshal(metadataJSON, &ce.Metadata); err != nil {
 			slog.Warn("outbox store: failed to unmarshal metadata",
 				slog.String("entry_id", ce.ID),
+				slog.String("event_type", ce.EventType),
 				slog.Any("error", err))
 		}
 	}
@@ -335,12 +336,14 @@ func scanClaimedEntry(rows RowScanner) (outbox.ClaimedEntry, error) {
 		// guard covers tampered/legacy data on the read side.
 		slog.Warn("outbox store: observability JSON exceeds max size, dropping",
 			slog.String("entry_id", ce.ID),
+			slog.String("event_type", ce.EventType),
 			slog.Int("size", len(observabilityJSON)),
 			slog.Int("max", maxObservabilityJSONBytes))
 	} else if len(observabilityJSON) > 0 {
 		if err := json.Unmarshal(observabilityJSON, &ce.Observability); err != nil {
 			slog.Warn("outbox store: failed to unmarshal observability",
 				slog.String("entry_id", ce.ID),
+				slog.String("event_type", ce.EventType),
 				slog.Any("error", err))
 		} else if validateErr := ce.Observability.Validate(); validateErr != nil {
 			// Persisted row violates field-size invariants (older row written
@@ -348,6 +351,7 @@ func scanClaimedEntry(rows RowScanner) (outbox.ClaimedEntry, error) {
 			// downstream restore must not see partially valid IDs.
 			slog.Warn("outbox store: observability fails validation, clearing",
 				slog.String("entry_id", ce.ID),
+				slog.String("event_type", ce.EventType),
 				slog.Any("error", validateErr))
 			ce.Observability = kout.ObservabilityMetadata{}
 		}

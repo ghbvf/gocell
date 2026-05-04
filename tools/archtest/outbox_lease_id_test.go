@@ -48,19 +48,20 @@ func TestOutboxLeaseIDCAS01(t *testing.T) {
 		"OUTBOX-LEASE-ID-CAS-01: markDeadQuery must fence on lease_id")
 }
 
-// TestOutboxMarkReturnsBool01 enforces OUTBOX-MARK-RETURNS-BOOL-01: the
-// runtime/outbox relay's writeBack/handleFailedEntry callers MUST bind the
-// `updated bool` return from MarkPublished/MarkRetry/MarkDead to a named
-// identifier. Discarding it via `_, err :=` would re-open B2-A-05: stale-lease
-// CAS misses get silently miscounted as successes.
+// TestOutboxMarkReturnsBool01 enforces OUTBOX-MARK-RETURNS-BOOL-01: every
+// runtime/outbox/relay*.go non-test caller of MarkPublished/MarkRetry/MarkDead
+// MUST bind the `updated bool` return to a named identifier. Discarding it via
+// `_, err :=` would re-open B2-A-05: stale-lease CAS misses get silently
+// miscounted as successes. Glob coverage so future writeBack split (e.g.
+// relay_writeback.go) cannot escape this gate by file rename.
 func TestOutboxMarkReturnsBool01(t *testing.T) {
 	root := orFindModuleRoot(t)
-	path := filepath.Join(root, "runtime", "outbox", "relay.go")
-
-	fset := token.NewFileSet()
-	f, err := parser.ParseFile(fset, path, nil, parser.SkipObjectResolution)
+	matches, err := filepath.Glob(filepath.Join(root, "runtime", "outbox", "relay*.go"))
 	if err != nil {
-		t.Fatalf("parse %s: %v", path, err)
+		t.Fatalf("glob relay*.go: %v", err)
+	}
+	if len(matches) == 0 {
+		t.Fatal("OUTBOX-MARK-RETURNS-BOOL-01: no runtime/outbox/relay*.go files found")
 	}
 
 	wantTargets := map[string]bool{
@@ -69,31 +70,43 @@ func TestOutboxMarkReturnsBool01(t *testing.T) {
 		"MarkDead":      true,
 	}
 
-	ast.Inspect(f, func(n ast.Node) bool {
-		assign, ok := n.(*ast.AssignStmt)
-		if !ok || len(assign.Rhs) != 1 || len(assign.Lhs) != 2 {
+	for _, path := range matches {
+		// Skip _test.go — they may legitimately mock the interface and
+		// the bool is checked elsewhere.
+		if strings.HasSuffix(path, "_test.go") {
+			continue
+		}
+		fset := token.NewFileSet()
+		f, perr := parser.ParseFile(fset, path, nil, parser.SkipObjectResolution)
+		if perr != nil {
+			t.Fatalf("parse %s: %v", path, perr)
+		}
+		ast.Inspect(f, func(n ast.Node) bool {
+			assign, ok := n.(*ast.AssignStmt)
+			if !ok || len(assign.Rhs) != 1 || len(assign.Lhs) != 2 {
+				return true
+			}
+			call, ok := assign.Rhs[0].(*ast.CallExpr)
+			if !ok {
+				return true
+			}
+			sel, ok := call.Fun.(*ast.SelectorExpr)
+			if !ok || sel.Sel == nil {
+				return true
+			}
+			if !wantTargets[sel.Sel.Name] {
+				return true
+			}
+			if id, ok := assign.Lhs[0].(*ast.Ident); ok && id.Name == "_" {
+				pos := fset.Position(assign.Pos())
+				t.Errorf("OUTBOX-MARK-RETURNS-BOOL-01: %s:%d: %s call discards "+
+					"the updated-bool return; bind it and skip stats counting "+
+					"on false (B2-A-05 stale-lease guard)",
+					pos.Filename, pos.Line, sel.Sel.Name)
+			}
 			return true
-		}
-		call, ok := assign.Rhs[0].(*ast.CallExpr)
-		if !ok {
-			return true
-		}
-		sel, ok := call.Fun.(*ast.SelectorExpr)
-		if !ok || sel.Sel == nil {
-			return true
-		}
-		if !wantTargets[sel.Sel.Name] {
-			return true
-		}
-		// First LHS must NOT be the blank identifier.
-		if id, ok := assign.Lhs[0].(*ast.Ident); ok && id.Name == "_" {
-			pos := fset.Position(assign.Pos())
-			t.Errorf("OUTBOX-MARK-RETURNS-BOOL-01: %s:%d: %s call discards the "+
-				"updated-bool return; bind it and skip stats counting on false "+
-				"(B2-A-05 stale-lease guard)", pos.Filename, pos.Line, sel.Sel.Name)
-		}
-		return true
-	})
+		})
+	}
 }
 
 // TestOutboxMetadataMaxBytes01 enforces OUTBOX-METADATA-MAX-BYTES-01: the

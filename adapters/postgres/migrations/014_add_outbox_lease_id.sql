@@ -1,3 +1,4 @@
+-- +goose NO TRANSACTION
 -- +goose Up
 
 -- Outbox claim fencing token (B2-A-01).
@@ -25,7 +26,10 @@ UPDATE outbox_entries SET status = 'pending', claimed_at = NULL WHERE status = '
 ALTER TABLE outbox_entries ADD COLUMN lease_id UUID;
 
 -- Partial index: only claiming rows participate in CAS lookups.
-CREATE INDEX idx_outbox_claiming_lease ON outbox_entries (lease_id) WHERE status = 'claiming';
+-- CONCURRENTLY (with `+goose NO TRANSACTION` above) so concurrent INSERTs and
+-- Mark* CAS UPDATEs are not blocked while the index builds on a populated
+-- production table. ref: go-standards.md "大表索引用 CREATE INDEX CONCURRENTLY".
+CREATE INDEX CONCURRENTLY idx_outbox_claiming_lease ON outbox_entries (lease_id) WHERE status = 'claiming';
 
 -- +goose Down
 

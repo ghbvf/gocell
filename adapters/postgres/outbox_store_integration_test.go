@@ -230,27 +230,32 @@ func TestPGOutboxStore_Fencing_ReclaimedRowSurvivesStaleMark(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 1, count)
 
-	// Wait long enough that next_retry_at (now+backoff) has elapsed and the
-	// row is claimable again. The backoff for attempts=1 + baseDelay=1ms is
-	// well under 100ms.
+	// Wait until the row becomes pending again (reclaim backoff elapsed)
+	// and ClaimPending returns it. The backoff with attempts=1 + baseDelay=1ms
+	// is well under 100ms.
+	var b []rout.ClaimedEntry
 	require.Eventually(t, func() bool {
-		b, claimErr := store.ClaimPending(ctx, 10)
-		if claimErr != nil || len(b) != 1 {
-			return false
-		}
-		leaseB := b[0].LeaseID
-		require.NotEqual(t, leaseA, leaseB,
-			"worker B must receive a fresh lease distinct from A")
-
-		// Worker A's stale MarkPublished MUST NOT win.
-		updatedA, _ := store.MarkPublished(ctx, "evt-fencing-race", leaseA)
-		assert.False(t, updatedA, "FENCING VIOLATION: stale lease A overwrote new lease B")
-
-		// Worker B's MarkPublished succeeds.
-		updatedB, _ := store.MarkPublished(ctx, "evt-fencing-race", leaseB)
-		assert.True(t, updatedB, "current lease B must own the row")
-		return true
+		var claimErr error
+		b, claimErr = store.ClaimPending(ctx, 10)
+		return claimErr == nil && len(b) == 1
 	}, testtime.D5s, testtime.D50ms, "row must become claimable after reclaim backoff")
+
+	require.Len(t, b, 1)
+	leaseB := b[0].LeaseID
+	require.NotEqual(t, leaseA, leaseB, "worker B must receive a fresh lease distinct from A")
+
+	// Worker A's stale MarkPublished MUST NOT win — `require.False` so a
+	// fencing violation halts the test cleanly with a single root-cause
+	// failure (no cascading false-positives from a subsequent re-publish
+	// against an already-published row).
+	updatedA, err := store.MarkPublished(ctx, "evt-fencing-race", leaseA)
+	require.NoError(t, err)
+	require.False(t, updatedA, "FENCING VIOLATION: stale lease A overwrote new lease B")
+
+	// Worker B's MarkPublished succeeds.
+	updatedB, err := store.MarkPublished(ctx, "evt-fencing-race", leaseB)
+	require.NoError(t, err)
+	require.True(t, updatedB, "current lease B must own the row")
 }
 
 // insertSeedRow inserts a ClaimedEntry directly into outbox_entries with
