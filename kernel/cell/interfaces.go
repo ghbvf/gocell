@@ -2,6 +2,8 @@ package cell
 
 import (
 	"context"
+
+	"github.com/ghbvf/gocell/kernel/metadata"
 )
 
 // VerifySpec describes the verification requirements for a Slice.
@@ -19,39 +21,18 @@ type Waiver struct {
 	ExpiresAt string
 }
 
-// CellMetadata carries the declarative metadata of a Cell (mirrors cell.yaml).
-type CellMetadata struct {
-	ID               string
-	Type             CellType
-	ConsistencyLevel Level
-	Owner            Owner
-	Schema           SchemaConfig
-	Verify           CellVerify
-	L0Dependencies   []L0Dep
-}
-
-// Owner identifies the team responsible for a Cell.
-type Owner struct {
-	Team string
-	Role string
-}
-
-// SchemaConfig holds the primary data schema reference for a Cell.
-type SchemaConfig struct {
-	Primary string
-}
-
-// CellVerify holds structured verify refs for a Cell.
-// Smoke refs use the format: smoke.{cellID}.{suffix}.
-type CellVerify struct {
-	Smoke []string
-}
-
-// L0Dep declares a direct dependency on an L0 (LocalOnly) Cell.
-type L0Dep struct {
-	Cell   string
-	Reason string
-}
+// Cell-level metadata types live exclusively in kernel/metadata:
+//
+//	metadata.CellMeta            (was cell.CellMetadata)
+//	metadata.OwnerMeta           (was cell.Owner)
+//	metadata.SchemaMeta          (was cell.SchemaConfig)
+//	metadata.CellVerifyMeta      (was cell.CellVerify)
+//	metadata.L0DepMeta           (was cell.L0Dep)
+//
+// metadata.CellMeta is a strict superset (adds DurabilityMode, Listeners,
+// GoStructName, Dir, File). The previous duplication had drifted 5 fields;
+// PR-A1 (K#05 prereq) consolidates the canonical source in kernel/metadata.
+// See docs/architecture/202605051300-adr-kernel-cellmeta-single-source.md.
 
 // --- Core Interfaces ---
 
@@ -90,7 +71,9 @@ type Cell interface {
 	// Ready reports whether the cell is currently serving (post-Start, pre-Stop).
 	Ready() bool
 	// Metadata returns the declarative metadata loaded from cell.yaml.
-	Metadata() CellMetadata
+	// The returned pointer aliases an internal deep-copy held by the cell;
+	// readers MUST treat it as read-only (mutation is a contract violation).
+	Metadata() *metadata.CellMeta
 	// OwnedSlices returns the slices this cell registered.
 	OwnedSlices() []Slice
 	// ProducedContracts returns contracts whose authoritative source is this cell.

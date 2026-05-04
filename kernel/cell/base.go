@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"sync"
 
+	"github.com/ghbvf/gocell/kernel/metadata"
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
@@ -35,9 +36,16 @@ const (
 // BaseCell is the default implementation of the Cell interface.
 // Embed or compose it to get a working Cell with minimal boilerplate.
 // All state-accessing methods are protected by a mutex for safe concurrent use.
+//
+// meta is owned exclusively by this BaseCell — NewBaseCell deep-copies the
+// caller's *metadata.CellMeta so subsequent mutation in the caller does not
+// leak into the running cell. cellType / level cache the typed enum view
+// computed once at construction (Type / ConsistencyLevel hot-path zero-cost).
 type BaseCell struct {
 	mu       sync.RWMutex
-	meta     CellMetadata
+	meta     *metadata.CellMeta
+	cellType CellType
+	level    Level
 	slices   []Slice
 	produced []Contract
 	consumed []Contract
@@ -51,14 +59,63 @@ type BaseCell struct {
 }
 
 // NewBaseCell creates a BaseCell from declarative metadata.
-func NewBaseCell(meta CellMetadata) *BaseCell {
-	return &BaseCell{meta: meta}
+//
+// meta is the canonical source — its Type / ConsistencyLevel string fields
+// are parsed into typed enums at construction so per-call accessors stay
+// allocation-free. Empty Type / ConsistencyLevel are accepted (zero-value
+// CellType / L0) — callers needing strict validation must feed metadata
+// already validated by gocell governance. A non-empty but unrecognized
+// value panics (fail-fast on programmer error in cell.go literals).
+//
+// The provided pointer is not retained — meta is deep-copied via deepCopyMeta
+// so mutation by the caller does not leak into the running cell.
+func NewBaseCell(meta *metadata.CellMeta) *BaseCell {
+	if meta == nil {
+		panic("cell.NewBaseCell: meta is nil")
+	}
+	cellType := CellType("")
+	if meta.Type != "" {
+		ct, err := ParseCellType(meta.Type)
+		if err != nil {
+			panic(fmt.Sprintf("cell.NewBaseCell: cell %q: %v", meta.ID, err))
+		}
+		cellType = ct
+	}
+	level := Level(0)
+	if meta.ConsistencyLevel != "" {
+		lv, err := ParseLevel(meta.ConsistencyLevel)
+		if err != nil {
+			panic(fmt.Sprintf("cell.NewBaseCell: cell %q: %v", meta.ID, err))
+		}
+		level = lv
+	}
+	return &BaseCell{
+		meta:     deepCopyMeta(meta),
+		cellType: cellType,
+		level:    level,
+	}
 }
 
-func (b *BaseCell) ID() string              { return b.meta.ID }
-func (b *BaseCell) Type() CellType          { return b.meta.Type }
-func (b *BaseCell) ConsistencyLevel() Level { return b.meta.ConsistencyLevel }
-func (b *BaseCell) Metadata() CellMetadata  { return b.meta }
+// deepCopyMeta clones every slice / nested struct so BaseCell owns an
+// independent snapshot. Adapted from kernel/registry/cell.go:deepCopyCell.
+func deepCopyMeta(src *metadata.CellMeta) *metadata.CellMeta {
+	cp := *src
+	if src.L0Dependencies != nil {
+		cp.L0Dependencies = append([]metadata.L0DepMeta(nil), src.L0Dependencies...)
+	}
+	if src.Listeners != nil {
+		cp.Listeners = append([]metadata.ListenerDeclMeta(nil), src.Listeners...)
+	}
+	if src.Verify.Smoke != nil {
+		cp.Verify.Smoke = append([]string(nil), src.Verify.Smoke...)
+	}
+	return &cp
+}
+
+func (b *BaseCell) ID() string                   { return b.meta.ID }
+func (b *BaseCell) Type() CellType               { return b.cellType }
+func (b *BaseCell) ConsistencyLevel() Level      { return b.level }
+func (b *BaseCell) Metadata() *metadata.CellMeta { return b.meta }
 
 // OwnedSlices returns a copy of the owned slice list.
 func (b *BaseCell) OwnedSlices() []Slice {
