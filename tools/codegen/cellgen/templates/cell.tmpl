@@ -1,0 +1,67 @@
+{{template "header" .}}
+
+import (
+	"context"
+{{- if .Subscriptions }}
+	"fmt"
+{{- end }}
+
+	"github.com/ghbvf/gocell/kernel/cell"
+{{- if .Subscriptions }}
+	"github.com/ghbvf/gocell/kernel/wrapper"
+{{- end }}
+)
+
+var _ cell.Cell = (*{{.StructName}})(nil)
+
+{{ if .Subscriptions -}}
+var (
+{{- range .Subscriptions }}
+	{{ .SpecVarName }} = wrapper.EventSpec({{ printf "%q" .ContractID }}, {{ printf "%q" .Transport }})
+{{- end }}
+)
+{{ end }}
+
+func (c *{{.StructName}}) Init(ctx context.Context, reg cell.Registry) error {
+	if err := c.BaseCell.Init(ctx, reg); err != nil {
+		return err
+	}
+	if err := c.initInternal(ctx, reg); err != nil {
+		return err
+	}
+{{ range .RouteGroups }}
+	reg.RouteGroup(cell.RouteGroup{
+		Listener: {{ .ListenerConst }},
+		Prefix:   {{ printf "%q" .Prefix }},
+		Register: func(mux cell.RouteMux) error {
+			var firstErr error
+			captureErr := func(err error) {
+				if err != nil && firstErr == nil {
+					firstErr = err
+				}
+			}
+{{- range .SubRoutes }}
+{{- if .SubPath }}
+			mux.Route({{ printf "%q" .SubPath }}, func(s cell.RouteMux) {
+{{- range .Mounts }}
+				captureErr(c.{{ .HandlerField }}.{{ .Method }}(s))
+{{- end }}
+			})
+{{- else }}
+{{- range .Mounts }}
+			captureErr(c.{{ .HandlerField }}.{{ .Method }}(mux))
+{{- end }}
+{{- end }}
+{{- end }}
+			return firstErr
+		},
+	})
+{{ end }}
+{{- range .Subscriptions }}
+	if err := reg.Subscribe({{ .SpecVarName }}, {{ .HandlerExpr }}, {{ if .ConsumerGroup }}{{ printf "%q" .ConsumerGroup }}{{ else }}{{ printf "%q" $.ConsumerGroupDefault }}{{ end }},
+		cell.WithSubscriptionSliceID({{ printf "%q" .SliceID }})); err != nil {
+		return fmt.Errorf({{ printf "%q" $.CellID }}+": subscribe %s: %w", {{ .SpecVarName }}.Topic, err)
+	}
+{{ end }}
+	return nil
+}

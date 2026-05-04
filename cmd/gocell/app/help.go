@@ -95,6 +95,12 @@ func printGenerateHelp() error {
 			"by walking the assembly's reachable packages with",
 			"go/types. --id=<assemblyID>",
 		}},
+		{"cell", []string{
+			"Render cell_gen.go and slice_gen.go from cell.yaml /",
+			"slice.yaml. <cellID> | --all [--dry-run | --verify].",
+			"--verify reports drift without writing; --dry-run is",
+			"a stdout preview also without write.",
+		}},
 		{"indexes", []string{"(not implemented)"}},
 	},
 		"Generated artifacts must be committed in HEAD; gocell verify generated",

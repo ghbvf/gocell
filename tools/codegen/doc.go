@@ -1,0 +1,26 @@
+// Package codegen provides the shared rendering, writing, and verification
+// pipeline for GoCell code generators.
+//
+// The framework exposes three primitives:
+//
+//   - Render: text/template → go/format → goimports.Process
+//   - Write: filesystem write with non-generated-file overwrite guard
+//     (uses governance.IsGoCellGenerated as the boundary), with DryRun and
+//     Verify modes for drift detection
+//   - VerifyInWorktree: K8s-style hack/lib/verify-generated.sh — runs the
+//     generator inside an ephemeral git worktree sharing the .git object
+//     store, then uses `git status --porcelain` to detect drift
+//
+// Subpackages adapt the framework to a specific input source:
+//
+//   - tools/codegen/cellgen — cell.yaml / slice.yaml → cell_gen.go /
+//     slice_gen.go (K#04, this PR)
+//   - tools/codegen/contractgen — contract.yaml → DTO/iface/errors
+//     (K#06, planned)
+//   - tools/codegen/markergen — cell.go marker → cell.yaml
+//     (K#05, planned)
+//
+// ref: kubernetes/kubernetes hack/lib/verify-generated.sh — git worktree
+// sandbox pattern.
+// ref: ent/ent entc/gen/template.go — text/template + goimports.Process pipeline.
+package codegen

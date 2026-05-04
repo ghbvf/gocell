@@ -16,11 +16,13 @@ import (
 // runGenerate implements:
 //
 //	gocell generate assembly --id=<id> [--module=<module>]
+//	gocell generate catalog --out=<path> --package=<pkg>
 //	gocell generate metrics-schema --id=<id>
+//	gocell generate cell <cellID> | --all [--dry-run | --verify]
 //	gocell generate indexes (placeholder)
 func runGenerate(args []string) error {
 	if len(args) < 1 {
-		return fmt.Errorf("usage: gocell generate <assembly|catalog|metrics-schema|indexes> [flags]")
+		return fmt.Errorf("usage: gocell generate <assembly|catalog|metrics-schema|cell|indexes> [flags]")
 	}
 	if isHelpFlag(args[0]) {
 		return printGenerateHelp()
@@ -36,10 +38,12 @@ func runGenerate(args []string) error {
 		return generateMetricsSchema(subArgs)
 	case "catalog":
 		return generateCatalog(subArgs)
+	case "cell":
+		return generateCell(subArgs)
 	case "indexes":
 		return fmt.Errorf("not implemented: gocell generate indexes")
 	default:
-		return fmt.Errorf("unknown generate type: %s (expected assembly, catalog, metrics-schema, or indexes)", subtype)
+		return fmt.Errorf("unknown generate type: %s (expected assembly, catalog, metrics-schema, cell, or indexes)", subtype)
 	}
 }
 

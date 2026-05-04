@@ -14,3 +14,8 @@ verify:
 
 allowedFiles:
   - examples/todoorder/cells/ordercell/slices/ordercreate/**
+
+routeMounts:
+  - listener: cell.PrimaryListener
+    subPath: /orders
+    handlerField: createHandler
