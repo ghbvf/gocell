@@ -3,6 +3,7 @@ kind: event
 ownerCell: accesscore
 consistencyLevel: L2
 lifecycle: active
+codegen: true
 endpoints:
   publisher: accesscore
   subscribers:

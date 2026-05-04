@@ -7,9 +7,10 @@ import (
 	"context"
 	"fmt"
 
+	sub0 "github.com/ghbvf/gocell/generated/contracts/event/config/entry-deleted/v1"
+	sub1 "github.com/ghbvf/gocell/generated/contracts/event/config/entry-upserted/v1"
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/metadata"
-	"github.com/ghbvf/gocell/kernel/wrapper"
 )
 
 var _ cell.Cell = (*ConfigCore)(nil)
@@ -32,13 +33,6 @@ var cellMeta = &metadata.CellMeta{
 }
 
 func loadCellMetadata() *metadata.CellMeta { return cellMeta }
-
-var (
-	specEventConfigEntryDeleted  = wrapper.EventSpec("event.config.entry-deleted.v1", "amqp")
-	specEventConfigEntryUpserted = wrapper.EventSpec("event.config.entry-upserted.v1", "amqp")
-)
-
-const subscribeErrFormat = "configcore: subscribe %s: %w"
 
 //nolint:gocognit // generated code: complexity intrinsic to cell's subscribe count
 func (c *ConfigCore) Init(ctx context.Context, reg cell.Registry) error {
@@ -90,14 +84,12 @@ func (c *ConfigCore) Init(ctx context.Context, reg cell.Registry) error {
 		},
 	})
 
-	if err := reg.Subscribe(specEventConfigEntryDeleted, c.subscribeSvc.HandleEntryDeleted, "configcore",
-		cell.WithSubscriptionSliceID("configsubscribe")); err != nil {
-		return fmt.Errorf(subscribeErrFormat, specEventConfigEntryDeleted.Topic, err)
+	if err := sub0.NewSubscription(c.subscribeSvc.HandleEntryDeleted, "configcore", "configsubscribe").Mount(reg); err != nil {
+		return fmt.Errorf("configcore: subscribe event.config.entry-deleted.v1: %w", err)
 	}
 
-	if err := reg.Subscribe(specEventConfigEntryUpserted, c.subscribeSvc.HandleEntryUpserted, "configcore",
-		cell.WithSubscriptionSliceID("configsubscribe")); err != nil {
-		return fmt.Errorf(subscribeErrFormat, specEventConfigEntryUpserted.Topic, err)
+	if err := sub1.NewSubscription(c.subscribeSvc.HandleEntryUpserted, "configcore", "configsubscribe").Mount(reg); err != nil {
+		return fmt.Errorf("configcore: subscribe event.config.entry-upserted.v1: %w", err)
 	}
 
 	return nil

@@ -303,13 +303,15 @@ func TestAuditCore_RegisterSubscriptions(t *testing.T) {
 	for _, sub := range snap.Subscriptions {
 		topicSet[sub.Spec.Topic] = true
 	}
-	assert.True(t, topicSet["event.user.updated.v1"])
-	assert.True(t, topicSet["event.user.deleted.v1"])
-	assert.True(t, topicSet["event.user.unlocked.v1"])
-	assert.True(t, topicSet["event.config.entry-upserted.v1"])
-	assert.True(t, topicSet["event.config.entry-deleted.v1"])
-	assert.True(t, topicSet["event.config.version-published.v1"])
-	assert.True(t, topicSet["event.config.rollback.v1"])
+	// New codegen pattern: topic is contractID without version suffix
+	// (stripVersionSuffix: "event.user.updated.v1" → "event.user.updated").
+	assert.True(t, topicSet["event.user.updated"])
+	assert.True(t, topicSet["event.user.deleted"])
+	assert.True(t, topicSet["event.user.unlocked"])
+	assert.True(t, topicSet["event.config.entry-upserted"])
+	assert.True(t, topicSet["event.config.entry-deleted"])
+	assert.True(t, topicSet["event.config.version-published"])
+	assert.True(t, topicSet["event.config.rollback"])
 }
 
 // stubMux implements cell.RouteMux for testing.

@@ -115,8 +115,10 @@ func TestHttpDeviceCommandAckV1Serve(t *testing.T) {
 	handler.ServeHTTP(rec, req)
 	c.ValidateHTTPResponseRecorder(t, rec)
 
-	c.MustRejectRequest(t, []byte(`{"reason":"timeout"}`))
-	c.MustRejectRequest(t, []byte(`{"reason":"failed"}`))
+	// enum was removed from the schema to support codegen; validate remaining constraints.
+	c.MustRejectRequest(t, []byte(`{}`))                        // missing required "reason"
+	c.MustRejectRequest(t, []byte(`{"reason":""}`))             // minLength: 1 violation
+	c.MustRejectRequest(t, []byte(`{"unknown":"field"}`))       // additionalProperties: false
 	c.MustRejectResponse(t, []byte(`{"wrong":"shape"}`))
 }
 

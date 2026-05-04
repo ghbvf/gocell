@@ -27,11 +27,7 @@
           "type": "string"
         },
         "type": {
-          "type": "string",
-          "enum": [
-            "boolean",
-            "percentage"
-          ]
+          "type": "string"
         },
         "enabled": {
           "type": "boolean"

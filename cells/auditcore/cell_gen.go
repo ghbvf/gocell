@@ -7,9 +7,21 @@ import (
 	"context"
 	"fmt"
 
+	sub0 "github.com/ghbvf/gocell/generated/contracts/event/config/entry-deleted/v1"
+	sub1 "github.com/ghbvf/gocell/generated/contracts/event/config/entry-upserted/v1"
+	sub2 "github.com/ghbvf/gocell/generated/contracts/event/config/rollback/v1"
+	sub3 "github.com/ghbvf/gocell/generated/contracts/event/config/version-published/v1"
+	sub4 "github.com/ghbvf/gocell/generated/contracts/event/role/assigned/v1"
+	sub5 "github.com/ghbvf/gocell/generated/contracts/event/role/revoked/v1"
+	sub6 "github.com/ghbvf/gocell/generated/contracts/event/session/created/v1"
+	sub7 "github.com/ghbvf/gocell/generated/contracts/event/session/revoked/v1"
+	sub8 "github.com/ghbvf/gocell/generated/contracts/event/user/created/v1"
+	sub9 "github.com/ghbvf/gocell/generated/contracts/event/user/deleted/v1"
+	sub10 "github.com/ghbvf/gocell/generated/contracts/event/user/locked/v1"
+	sub11 "github.com/ghbvf/gocell/generated/contracts/event/user/unlocked/v1"
+	sub12 "github.com/ghbvf/gocell/generated/contracts/event/user/updated/v1"
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/metadata"
-	"github.com/ghbvf/gocell/kernel/wrapper"
 )
 
 var _ cell.Cell = (*AuditCore)(nil)
@@ -32,24 +44,6 @@ var cellMeta = &metadata.CellMeta{
 }
 
 func loadCellMetadata() *metadata.CellMeta { return cellMeta }
-
-var (
-	specEventConfigEntryDeleted     = wrapper.EventSpec("event.config.entry-deleted.v1", "amqp")
-	specEventConfigEntryUpserted    = wrapper.EventSpec("event.config.entry-upserted.v1", "amqp")
-	specEventConfigRollback         = wrapper.EventSpec("event.config.rollback.v1", "amqp")
-	specEventConfigVersionPublished = wrapper.EventSpec("event.config.version-published.v1", "amqp")
-	specEventRoleAssigned           = wrapper.EventSpec("event.role.assigned.v1", "amqp")
-	specEventRoleRevoked            = wrapper.EventSpec("event.role.revoked.v1", "amqp")
-	specEventSessionCreated         = wrapper.EventSpec("event.session.created.v1", "amqp")
-	specEventSessionRevoked         = wrapper.EventSpec("event.session.revoked.v1", "amqp")
-	specEventUserCreated            = wrapper.EventSpec("event.user.created.v1", "amqp")
-	specEventUserDeleted            = wrapper.EventSpec("event.user.deleted.v1", "amqp")
-	specEventUserLocked             = wrapper.EventSpec("event.user.locked.v1", "amqp")
-	specEventUserUnlocked           = wrapper.EventSpec("event.user.unlocked.v1", "amqp")
-	specEventUserUpdated            = wrapper.EventSpec("event.user.updated.v1", "amqp")
-)
-
-const subscribeErrFormat = "auditcore: subscribe %s: %w"
 
 //nolint:gocognit // generated code: complexity intrinsic to cell's subscribe count
 func (c *AuditCore) Init(ctx context.Context, reg cell.Registry) error {
@@ -76,69 +70,56 @@ func (c *AuditCore) Init(ctx context.Context, reg cell.Registry) error {
 		},
 	})
 
-	if err := reg.Subscribe(specEventConfigEntryDeleted, c.appendSvc.HandleEvent, "auditcore",
-		cell.WithSubscriptionSliceID("auditappend")); err != nil {
-		return fmt.Errorf(subscribeErrFormat, specEventConfigEntryDeleted.Topic, err)
+	if err := sub0.NewSubscription(c.appendSvc.HandleEvent, "auditcore", "auditappend").Mount(reg); err != nil {
+		return fmt.Errorf("auditcore: subscribe event.config.entry-deleted.v1: %w", err)
 	}
 
-	if err := reg.Subscribe(specEventConfigEntryUpserted, c.appendSvc.HandleEvent, "auditcore",
-		cell.WithSubscriptionSliceID("auditappend")); err != nil {
-		return fmt.Errorf(subscribeErrFormat, specEventConfigEntryUpserted.Topic, err)
+	if err := sub1.NewSubscription(c.appendSvc.HandleEvent, "auditcore", "auditappend").Mount(reg); err != nil {
+		return fmt.Errorf("auditcore: subscribe event.config.entry-upserted.v1: %w", err)
 	}
 
-	if err := reg.Subscribe(specEventConfigRollback, c.appendSvc.HandleEvent, "auditcore",
-		cell.WithSubscriptionSliceID("auditappend")); err != nil {
-		return fmt.Errorf(subscribeErrFormat, specEventConfigRollback.Topic, err)
+	if err := sub2.NewSubscription(c.appendSvc.HandleEvent, "auditcore", "auditappend").Mount(reg); err != nil {
+		return fmt.Errorf("auditcore: subscribe event.config.rollback.v1: %w", err)
 	}
 
-	if err := reg.Subscribe(specEventConfigVersionPublished, c.appendSvc.HandleEvent, "auditcore",
-		cell.WithSubscriptionSliceID("auditappend")); err != nil {
-		return fmt.Errorf(subscribeErrFormat, specEventConfigVersionPublished.Topic, err)
+	if err := sub3.NewSubscription(c.appendSvc.HandleEvent, "auditcore", "auditappend").Mount(reg); err != nil {
+		return fmt.Errorf("auditcore: subscribe event.config.version-published.v1: %w", err)
 	}
 
-	if err := reg.Subscribe(specEventRoleAssigned, c.appendSvc.HandleEvent, "auditcore",
-		cell.WithSubscriptionSliceID("auditappend")); err != nil {
-		return fmt.Errorf(subscribeErrFormat, specEventRoleAssigned.Topic, err)
+	if err := sub4.NewSubscription(c.appendSvc.HandleEvent, "auditcore", "auditappend").Mount(reg); err != nil {
+		return fmt.Errorf("auditcore: subscribe event.role.assigned.v1: %w", err)
 	}
 
-	if err := reg.Subscribe(specEventRoleRevoked, c.appendSvc.HandleEvent, "auditcore",
-		cell.WithSubscriptionSliceID("auditappend")); err != nil {
-		return fmt.Errorf(subscribeErrFormat, specEventRoleRevoked.Topic, err)
+	if err := sub5.NewSubscription(c.appendSvc.HandleEvent, "auditcore", "auditappend").Mount(reg); err != nil {
+		return fmt.Errorf("auditcore: subscribe event.role.revoked.v1: %w", err)
 	}
 
-	if err := reg.Subscribe(specEventSessionCreated, c.appendSvc.HandleEvent, "auditcore",
-		cell.WithSubscriptionSliceID("auditappend")); err != nil {
-		return fmt.Errorf(subscribeErrFormat, specEventSessionCreated.Topic, err)
+	if err := sub6.NewSubscription(c.appendSvc.HandleEvent, "auditcore", "auditappend").Mount(reg); err != nil {
+		return fmt.Errorf("auditcore: subscribe event.session.created.v1: %w", err)
 	}
 
-	if err := reg.Subscribe(specEventSessionRevoked, c.appendSvc.HandleEvent, "auditcore",
-		cell.WithSubscriptionSliceID("auditappend")); err != nil {
-		return fmt.Errorf(subscribeErrFormat, specEventSessionRevoked.Topic, err)
+	if err := sub7.NewSubscription(c.appendSvc.HandleEvent, "auditcore", "auditappend").Mount(reg); err != nil {
+		return fmt.Errorf("auditcore: subscribe event.session.revoked.v1: %w", err)
 	}
 
-	if err := reg.Subscribe(specEventUserCreated, c.appendSvc.HandleEvent, "auditcore",
-		cell.WithSubscriptionSliceID("auditappend")); err != nil {
-		return fmt.Errorf(subscribeErrFormat, specEventUserCreated.Topic, err)
+	if err := sub8.NewSubscription(c.appendSvc.HandleEvent, "auditcore", "auditappend").Mount(reg); err != nil {
+		return fmt.Errorf("auditcore: subscribe event.user.created.v1: %w", err)
 	}
 
-	if err := reg.Subscribe(specEventUserDeleted, c.appendSvc.HandleEvent, "auditcore",
-		cell.WithSubscriptionSliceID("auditappend")); err != nil {
-		return fmt.Errorf(subscribeErrFormat, specEventUserDeleted.Topic, err)
+	if err := sub9.NewSubscription(c.appendSvc.HandleEvent, "auditcore", "auditappend").Mount(reg); err != nil {
+		return fmt.Errorf("auditcore: subscribe event.user.deleted.v1: %w", err)
 	}
 
-	if err := reg.Subscribe(specEventUserLocked, c.appendSvc.HandleEvent, "auditcore",
-		cell.WithSubscriptionSliceID("auditappend")); err != nil {
-		return fmt.Errorf(subscribeErrFormat, specEventUserLocked.Topic, err)
+	if err := sub10.NewSubscription(c.appendSvc.HandleEvent, "auditcore", "auditappend").Mount(reg); err != nil {
+		return fmt.Errorf("auditcore: subscribe event.user.locked.v1: %w", err)
 	}
 
-	if err := reg.Subscribe(specEventUserUnlocked, c.appendSvc.HandleEvent, "auditcore",
-		cell.WithSubscriptionSliceID("auditappend")); err != nil {
-		return fmt.Errorf(subscribeErrFormat, specEventUserUnlocked.Topic, err)
+	if err := sub11.NewSubscription(c.appendSvc.HandleEvent, "auditcore", "auditappend").Mount(reg); err != nil {
+		return fmt.Errorf("auditcore: subscribe event.user.unlocked.v1: %w", err)
 	}
 
-	if err := reg.Subscribe(specEventUserUpdated, c.appendSvc.HandleEvent, "auditcore",
-		cell.WithSubscriptionSliceID("auditappend")); err != nil {
-		return fmt.Errorf(subscribeErrFormat, specEventUserUpdated.Topic, err)
+	if err := sub12.NewSubscription(c.appendSvc.HandleEvent, "auditcore", "auditappend").Mount(reg); err != nil {
+		return fmt.Errorf("auditcore: subscribe event.user.updated.v1: %w", err)
 	}
 
 	return nil

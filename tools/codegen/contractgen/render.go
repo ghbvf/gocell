@@ -84,6 +84,42 @@ var templates = func() *template.Template {
 			}
 			return false
 		},
+		// needsErrcode reports whether the generated handler requires the errcode
+		// package. It is needed when: any path param has non-uuid validation
+		// (minLength/maxLength), any query param exists (required check / parse error),
+		// or body validation constraints exist.
+		"needsErrcode": func(spec *ContractGenSpec) bool {
+			if spec.Endpoint == nil {
+				return false
+			}
+			ep := spec.Endpoint
+			// path params: non-uuid params may have minLength/maxLength; uuid params
+			// handled by ParseUUIDPathParam (no errcode in handler).
+			for _, p := range ep.PathParams {
+				if p.Format != "uuid" && (p.MinLength != nil || p.MaxLength != nil) {
+					return true
+				}
+			}
+			// query params always need errcode (required check, parse error messages).
+			if len(ep.QueryParams) > 0 && !ep.IsPagination {
+				return true
+			}
+			// body validation constraints.
+			for _, dto := range spec.DTOs {
+				if dto.Name != "Request" {
+					continue
+				}
+				for _, f := range dto.Fields {
+					if f.Source != "" && f.Source != "body" {
+						continue
+					}
+					if f.MinLength != nil || f.MaxLength != nil || f.Minimum != nil || f.Maximum != nil {
+						return true
+					}
+				}
+			}
+			return false
+		},
 	}
 
 	t := template.Must(codegen.SharedTemplates.Clone())

@@ -3,6 +3,7 @@ kind: event
 ownerCell: auditcore
 consistencyLevel: L2
 lifecycle: active
+codegen: true
 endpoints:
   publisher: auditcore
   subscribers: [external-audit-sink]

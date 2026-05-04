@@ -1,7 +1,10 @@
 package cellgen
 
 import (
+	"bufio"
 	"fmt"
+	"os"
+	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
@@ -395,4 +398,53 @@ func capitalize(s string) string {
 		runes[0] -= 'a' - 'A'
 	}
 	return string(runes)
+}
+
+// readModulePath reads the Go module path from the go.mod file at root.
+// Returns ("", err) if go.mod is missing or malformed.
+func readModulePath(root string) (string, error) {
+	f, err := os.Open(filepath.Clean(filepath.Join(root, "go.mod"))) //nolint:gosec // root is our own project root, not user input
+	if err != nil {
+		return "", fmt.Errorf("cellgen: open go.mod: %w", err)
+	}
+	defer func() { _ = f.Close() }()
+
+	scanner := bufio.NewScanner(f)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if rest, ok := strings.CutPrefix(line, "module "); ok {
+			return strings.TrimSpace(rest), nil
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		return "", fmt.Errorf("cellgen: read go.mod: %w", err)
+	}
+	return "", fmt.Errorf("cellgen: module directive not found in go.mod")
+}
+
+// contractIDToImportPath converts a contract id to its generated package import path.
+// "event.order-created.v1" → "<module>/generated/contracts/event/order-created/v1"
+// "event.config.entry-upserted.v1" → "<module>/generated/contracts/event/config/entry-upserted/v1"
+func contractIDToImportPath(modulePath, contractID string) string {
+	parts := strings.Split(contractID, ".")
+	// Segments are: kind.domain.parts...vN
+	// Join them with "/" to form the package path.
+	pkgRelPath := strings.Join(parts, "/")
+	return modulePath + "/generated/contracts/" + pkgRelPath
+}
+
+// EnrichSubscriptionsWithModulePath populates SubscriptionPackage and
+// SubscriptionAlias on each subscription in the spec using the module path
+// derived from go.mod at root. This is a post-build step; BuildCellSpec does
+// not read the filesystem so it cannot derive the import path itself.
+//
+// SubscriptionAlias is set to "sub<index>" (0-indexed) to guarantee
+// uniqueness even when multiple contracts share the same last path segment
+// (e.g. multiple "v1" packages).
+func EnrichSubscriptionsWithModulePath(spec *CellGenSpec, modulePath string) {
+	for i := range spec.Subscriptions {
+		sub := &spec.Subscriptions[i]
+		sub.SubscriptionPackage = contractIDToImportPath(modulePath, sub.ContractID)
+		sub.SubscriptionAlias = fmt.Sprintf("sub%d", i)
+	}
 }

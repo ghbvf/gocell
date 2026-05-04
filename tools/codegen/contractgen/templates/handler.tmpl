@@ -10,7 +10,9 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/wrapper"
+{{- if needsErrcode .}}
 	"github.com/ghbvf/gocell/pkg/errcode"
+{{- end}}
 	"github.com/ghbvf/gocell/pkg/httputil"
 	"github.com/ghbvf/gocell/runtime/auth"
 )
@@ -43,10 +45,12 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 // RegisterRoutes mounts the handler on mux via auth.Mount.
+// Uses http.HandlerFunc(h.handle) so governance CH-04/CH-05 AST scans can
+// resolve the handler function body via the Contract→Handler correlation.
 func (h *Handler) RegisterRoutes(mux cell.RouteHandler) error {
 	return auth.Mount(mux, auth.Route{
 		Contract: contractSpec,
-		Handler:  h,
+		Handler:  http.HandlerFunc(h.handle),
 		Policy:   h.policy,
 	})
 }
@@ -54,6 +58,15 @@ func (h *Handler) RegisterRoutes(mux cell.RouteHandler) error {
 func (h *Handler) handle(w http.ResponseWriter, r *http.Request) {
 	req := &Request{}
 {{- range .Endpoint.PathParams}}
+{{- if eq .Format "uuid"}}
+	{
+		v, ok := httputil.ParseUUIDPathParam(w, r, "{{.Name}}")
+		if !ok {
+			return
+		}
+		req.{{.GoName}} = v
+	}
+{{- else}}
 	{
 		v := r.PathValue("{{.Name}}")
 {{- if hasMinLength .MinLength}}
@@ -70,6 +83,7 @@ func (h *Handler) handle(w http.ResponseWriter, r *http.Request) {
 {{- end}}
 		req.{{.GoName}} = v
 	}
+{{- end}}
 {{- end}}
 {{- if .Endpoint.HasBody}}
 	if err := httputil.DecodeJSONStrict(r, req, httputil.DefaultDecodeJSONLimit); err != nil {

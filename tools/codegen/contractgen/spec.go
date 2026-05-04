@@ -119,6 +119,9 @@ type ParamSpec struct {
 	Required bool
 	// Doc is an optional hint comment.
 	Doc string
+	// Format is the json-schema format for this param, e.g. "uuid", "date-time".
+	// Used by handler.tmpl to emit httputil.ParseUUIDPathParam for uuid-format path params.
+	Format string
 	// MinLength applies to string params.
 	MinLength *int
 	// MaxLength applies to string params.

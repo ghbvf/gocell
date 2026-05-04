@@ -3,6 +3,7 @@ kind: http
 ownerCell: configcore
 consistencyLevel: L1
 lifecycle: active
+codegen: true
 endpoints:
   server: configcore
   clients:
@@ -18,6 +19,9 @@ endpoints:
     successStatus: 200
     noContent: false
     responses:
+      400:
+        description: "Bad request — path parameter key is too short or too long"
+        schemaRef: "../../../../../shared/errors/error-response-v1.schema.json"
       401:
         description: "Unauthorized — missing or invalid service token"
         schemaRef: "../../../../../shared/errors/error-response-v1.schema.json"

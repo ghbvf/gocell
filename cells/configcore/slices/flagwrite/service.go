@@ -3,10 +3,6 @@
 //
 // L1 LocalTx: repo writes are wrapped in a single RunInTx per operation.
 // Failure rolls back the transaction.
-//
-// event.flag.changed.v1 was retired by PR-CFG-B (2026-04-25): the contract
-// never had a subscriber, so emitting it was dead work. The contract is now
-// lifecycle: deprecated. Flag write is downgraded to L1.
 package flagwrite
 
 import (

@@ -116,12 +116,41 @@ func buildHTTPDTOs(
 		allDTOs = append(allDTOs, respDTOs...)
 	}
 
+	// Ensure Request stub exists — handler_gen.go and iface_gen.go always reference
+	// *Request, so we must generate it even when there are no body fields or params.
+	if !hasDTONamed(allDTOs, "Request") {
+		allDTOs = append([]DTOSpec{{
+			Name: "Request",
+			Doc:  contract.ID + ".request",
+		}}, allDTOs...)
+	}
+
+	// Ensure Response stub exists for non-noContent endpoints — iface_gen.go always
+	// references *Response. noContent endpoints (204) still have a (*Response, error)
+	// return signature; the handler discards the value with _ = resp.
+	if !hasDTONamed(allDTOs, "Response") {
+		allDTOs = append(allDTOs, DTOSpec{
+			Name: "Response",
+			Doc:  contract.ID + ".response",
+		})
+	}
+
 	// Merge path and query params into Request DTO.
 	merged, mergeErr := mergeParamsIntoRequestWithID(allDTOs, http, contract.ID)
 	if mergeErr != nil {
 		return nil, fmt.Errorf("contractgen build: %q merge params: %w", contract.ID, mergeErr)
 	}
 	return merged, nil
+}
+
+// hasDTONamed reports whether dtos contains a DTOSpec with the given name.
+func hasDTONamed(dtos []DTOSpec, name string) bool {
+	for _, d := range dtos {
+		if d.Name == name {
+			return true
+		}
+	}
+	return false
 }
 
 // buildHTTPEndpointSpec constructs the HTTPEndpointSpec including pagination detection.
@@ -338,6 +367,7 @@ func buildPathParams(http *metadata.HTTPTransportMeta) []ParamSpec {
 			GoType:    paramGoType(schema.Type),
 			Required:  true, // path params are always required
 			Doc:       paramDoc(schema),
+			Format:    schema.Format,
 			MinLength: paramMinLength(schema),
 			MaxLength: paramMaxLength(schema),
 			Minimum:   paramMinimum(schema),

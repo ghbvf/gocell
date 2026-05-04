@@ -5,7 +5,6 @@
   "properties": {
     "reason": {
       "type": "string",
-      "enum": ["success", "failure", "rejected"],
       "minLength": 1,
       "maxLength": 32
     }

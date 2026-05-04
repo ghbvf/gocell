@@ -3,6 +3,7 @@ kind: event
 ownerCell: configcore
 consistencyLevel: L2
 lifecycle: active
+codegen: true
 endpoints:
   publisher: configcore
   subscribers:

@@ -95,10 +95,12 @@ func TestRegisterSubscriptions(t *testing.T) {
 	for _, sub := range snap.Subscriptions {
 		groups[sub.Spec.Topic] = sub.ConsumerGroup
 	}
-	assert.Equal(t, "accesscore", groups["event.config.entry-upserted.v1"])
-	assert.Equal(t, "accesscore", groups["event.config.entry-deleted.v1"])
-	assert.Equal(t, "accesscore-rbac-session-sync", groups["event.role.assigned.v1"])
-	assert.Equal(t, "accesscore-rbac-session-sync", groups["event.role.revoked.v1"])
+	// New codegen pattern: topic is contractID without version suffix
+	// (stripVersionSuffix: "event.config.entry-upserted.v1" → "event.config.entry-upserted").
+	assert.Equal(t, "accesscore", groups["event.config.entry-upserted"])
+	assert.Equal(t, "accesscore", groups["event.config.entry-deleted"])
+	assert.Equal(t, "accesscore-rbac-session-sync", groups["event.role.assigned"])
+	assert.Equal(t, "accesscore-rbac-session-sync", groups["event.role.revoked"])
 }
 
 func TestInit_DurableMode_MissingOutboxWriter(t *testing.T) {
