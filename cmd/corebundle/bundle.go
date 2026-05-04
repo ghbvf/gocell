@@ -15,6 +15,7 @@ import (
 	adaptervault "github.com/ghbvf/gocell/adapters/vault"
 	configcore "github.com/ghbvf/gocell/cells/configcore"
 	configpg "github.com/ghbvf/gocell/cells/configcore/postgres"
+	"github.com/ghbvf/gocell/cmd/internal/wiresummary"
 	"github.com/ghbvf/gocell/kernel/assembly"
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/clock"
@@ -491,7 +492,7 @@ func devtoolsOption(shared *SharedDeps) bootstrap.Option {
 	// error (e.g. malformed marker) disables wireSummary but does not block the
 	// catalog endpoint. See docs/architecture/202605051500-adr-k05-markergen-cellgen-unified.md
 	// Decision 6.
-	wireSummaries, wsErr := BuildCellWireSummaries(absRoot, pm)
+	wireSummaries, wsErr := wiresummary.BuildCellWireSummaries(absRoot, pm)
 	if wsErr != nil {
 		slog.Warn("devtools: wire summary scan failed; wireSummary omitted from catalog",
 			slog.String("root", absRoot),

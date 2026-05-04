@@ -1,4 +1,4 @@
-package main
+package wiresummary_test
 
 import (
 	"os"
@@ -8,8 +8,9 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/ghbvf/gocell/cmd/internal/wiresummary"
 	"github.com/ghbvf/gocell/kernel/metadata"
-	"github.com/ghbvf/gocell/tools/codegen/markergen"
+	_ "github.com/ghbvf/gocell/tools/codegen/markergen" // ensure import is resolved
 )
 
 // TestBuildCellWireSummaries_NoCellGo verifies that a project where no cell
@@ -20,7 +21,7 @@ func TestBuildCellWireSummaries_NoCellGo(t *testing.T) {
 	root := buildWireSummaryFixture(t)
 
 	pm := buildWireSummaryProjectMeta(t, root)
-	summaries, err := BuildCellWireSummaries(root, pm)
+	summaries, err := wiresummary.BuildCellWireSummaries(root, pm)
 	require.NoError(t, err)
 
 	require.Len(t, summaries, 1, "one summary per cell")
@@ -45,7 +46,7 @@ type WireCell struct{}
 	require.NoError(t, os.WriteFile(filepath.Join(cellDir, "cell.go"), []byte(cellGoContent), 0o600))
 
 	pm := buildWireSummaryProjectMeta(t, root)
-	summaries, err := BuildCellWireSummaries(root, pm)
+	summaries, err := wiresummary.BuildCellWireSummaries(root, pm)
 	require.NoError(t, err)
 
 	require.Len(t, summaries, 1)
@@ -69,7 +70,7 @@ func TestBuildCellWireSummaries_NilProject(t *testing.T) {
 				t.Errorf("BuildCellWireSummaries panicked on nil project: %v", r)
 			}
 		}()
-		summaries, err := BuildCellWireSummaries(root, nil)
+		summaries, err := wiresummary.BuildCellWireSummaries(root, nil)
 		// Either an error or empty slice is acceptable.
 		if err == nil {
 			assert.Empty(t, summaries)
@@ -77,47 +78,50 @@ func TestBuildCellWireSummaries_NilProject(t *testing.T) {
 	}()
 }
 
-// TestWireBundleToCellWireBundle_AllFields verifies the field-by-field
-// conversion from markergen.WireBundle → metadata.CellWireBundle.
-func TestWireBundleToCellWireBundle_AllFields(t *testing.T) {
-	wb := markergen.WireBundle{
-		Listeners: []markergen.ListenerSpec{
-			{Ref: "cell.PrimaryListener", Prefix: "/api/v1"},
-		},
-		Routes: []markergen.RouteSpec{
-			{Slice: "myslice", Listener: "cell.PrimaryListener", SubPath: "/sessions", Method: "RegisterRoutes"},
-		},
-		Subscribes: []markergen.SubscribeSpec{
-			{Slice: "myslice", Topic: "my.topic.v1", Handler: "HandleEvent", Group: "cg-myservice-event"},
-		},
-	}
+// TestBuildCellWireSummaries_TypeConversion verifies the field-by-field
+// conversion from markergen.WireBundle → metadata.CellWireSummary. The
+// listener marker is placed on the type declaration; route/subscribe markers
+// require named struct fields per the markergen grammar.
+func TestBuildCellWireSummaries_TypeConversion(t *testing.T) {
+	root := buildWireSummaryFixture(t)
 
-	cb := wireBundleToCellWireBundle(wb)
+	cellDir := filepath.Join(root, "cells", "wirecell")
+	// listener marker on the type; route+subscribe markers on named struct fields.
+	cellGoContent := `package wirecell
 
-	require.Len(t, cb.Listeners, 1)
-	assert.Equal(t, "cell.PrimaryListener", cb.Listeners[0].Ref)
-	assert.Equal(t, "/api/v1", cb.Listeners[0].Prefix)
+// +cell:listener:ref=cell.PrimaryListener,prefix=/api/v1
+type WireCell struct {
+	// +slice:route:slice=wireslice,subPath=/sessions,method=RegisterRoutes,listener=cell.PrimaryListener
+	CreateHandler struct{}
 
-	require.Len(t, cb.Routes, 1)
-	assert.Equal(t, "myslice", cb.Routes[0].Slice)
-	assert.Equal(t, "cell.PrimaryListener", cb.Routes[0].Listener)
-	assert.Equal(t, "/sessions", cb.Routes[0].SubPath)
-	assert.Equal(t, "RegisterRoutes", cb.Routes[0].Method)
-
-	require.Len(t, cb.Subscribes, 1)
-	assert.Equal(t, "myslice", cb.Subscribes[0].Slice)
-	assert.Equal(t, "my.topic.v1", cb.Subscribes[0].Topic)
-	assert.Equal(t, "HandleEvent", cb.Subscribes[0].Handler)
-	assert.Equal(t, "cg-myservice-event", cb.Subscribes[0].Group)
+	// +slice:subscribe:slice=wireslice,topic=my.topic.v1,handler=HandleEvent,group=cg-wirecell-event
+	EventSub struct{}
 }
+`
+	require.NoError(t, os.WriteFile(filepath.Join(cellDir, "cell.go"), []byte(cellGoContent), 0o600))
 
-// TestWireBundleToCellWireBundle_EmptyBundle verifies that an empty WireBundle
-// produces a CellWireBundle with empty (non-panic) slices.
-func TestWireBundleToCellWireBundle_EmptyBundle(t *testing.T) {
-	cb := wireBundleToCellWireBundle(markergen.WireBundle{})
-	assert.Empty(t, cb.Listeners)
-	assert.Empty(t, cb.Routes)
-	assert.Empty(t, cb.Subscribes)
+	pm := buildWireSummaryProjectMeta(t, root)
+	summaries, err := wiresummary.BuildCellWireSummaries(root, pm)
+	require.NoError(t, err)
+	require.Len(t, summaries, 1)
+
+	s := summaries[0]
+
+	require.Len(t, s.Listeners, 1)
+	assert.Equal(t, "cell.PrimaryListener", s.Listeners[0].Ref)
+	assert.Equal(t, "/api/v1", s.Listeners[0].Prefix)
+
+	require.Len(t, s.Routes, 1)
+	assert.Equal(t, "wireslice", s.Routes[0].Slice)
+	assert.Equal(t, "cell.PrimaryListener", s.Routes[0].Listener)
+	assert.Equal(t, "/sessions", s.Routes[0].SubPath)
+	assert.Equal(t, "RegisterRoutes", s.Routes[0].Method)
+
+	require.Len(t, s.Subscribes, 1)
+	assert.Equal(t, "wireslice", s.Subscribes[0].Slice)
+	assert.Equal(t, "my.topic.v1", s.Subscribes[0].Topic)
+	assert.Equal(t, "HandleEvent", s.Subscribes[0].Handler)
+	assert.Equal(t, "cg-wirecell-event", s.Subscribes[0].Group)
 }
 
 // ---------------------------------------------------------------------------
@@ -158,7 +162,11 @@ verify:
 	sliceYAML := `id: wireslice
 belongsToCell: wirecell
 consistencyLevel: L1
-contractUsages: []
+contractUsages:
+  - contract: http.wire.api.v1
+    role: serve
+  - contract: event.wire.topic.v1
+    role: subscribe
 verify:
   unit: []
   contract: []

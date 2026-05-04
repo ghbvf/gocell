@@ -1,4 +1,8 @@
-package main
+// Package wiresummary provides the shared BuildCellWireSummaries helper used by
+// both the HTTP catalog (cmd/corebundle) and the CLI export (cmd/gocell/app).
+// The two surfaces previously carried verbatim copies; this package is the
+// single source of truth (SonarCloud deduplication fix, K#05 PR-2).
+package wiresummary
 
 import (
 	"fmt"

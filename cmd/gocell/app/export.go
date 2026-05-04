@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/ghbvf/gocell/cmd/internal/wiresummary"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/governance"
 	"github.com/ghbvf/gocell/kernel/metadata"
@@ -109,7 +110,7 @@ func exportCatalog(args []string) error {
 // comments under root. Best-effort: a scan error is logged at Warn and
 // wireSummary is omitted from Cell entities (graceful degrade).
 func attachWireSummaries(opts *catalog.ExportOptions, root string, pm *metadata.ProjectMeta) {
-	summaries, err := buildCellWireSummaries(root, pm)
+	summaries, err := wiresummary.BuildCellWireSummaries(root, pm)
 	if err != nil {
 		slog.Warn("export: wire summary scan failed; wireSummary omitted from catalog",
 			slog.String("root", root),
