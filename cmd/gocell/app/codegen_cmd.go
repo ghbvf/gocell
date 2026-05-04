@@ -111,8 +111,12 @@ func parseCodegenFlags[R CodegenResult](spec codegenSpec[R], args []string) (dry
 		return false, false, "", errors.New("--dry-run (stdout preview) and --verify (CI drift check, no write) are mutually exclusive; pick one")
 	}
 	pos := fs.Args()
+	// Reject more than one positional id to avoid silent arg-drop surprises.
+	if len(pos) > 1 {
+		return false, false, "", fmt.Errorf("only one %s id allowed; got: %v", spec.Kind, pos)
+	}
 	// Positional id takes priority over --all (including the default true).
-	if len(pos) > 0 {
+	if len(pos) == 1 {
 		return *dr, *ver, pos[0], nil
 	}
 	// No positional id: honor --all flag value.

@@ -66,9 +66,9 @@ Fields and defaults:
 
 Multiple markers on the same field are legal (e.g. devicecell `commandHandler` carries both a primary `RegisterRoutes` marker and an internal `RegisterInternalRoutes` marker).
 
-## Decision 6: Catalog augment (`CellWireSummary` exposure via `/api/v1/devtools/catalog`) deferred to a follow-up PR
+## Decision 6: Catalog augment (`CellWireSummary` exposure via `/api/v1/devtools/catalog`)
 
-Originally W6 in plan v3. Wire visibility is a "good to have" operational improvement, not part of the K#05 single-source contract. The PR is already ~13 commits / ~70 files; adding `kernel/metadata/derived.go` + `runtime/http/devtools/catalog.go` extension would inflate scope and review difficulty. Wire data is already available to operators today via `gocell validate` / `metadata.NewParser(root).Parse()` reading the merged ProjectMeta. Backlog item created for the follow-up.
+Implementation: shipped in this PR — `metadata.DeriveCellWireSummaries` builds the projection; `cmd/corebundle.BuildCellWireSummaries` wires it into the bootstrap path; `cmd/gocell/app/export.attachWireSummaries` injects into CLI export. Producer-side path unified across HTTP and CLI surfaces. Fix landed in commit `251a9936` (K#05 review P1-1). Backlog item `K05-CATALOG-WIRE-SUMMARY` closed (delivered).
 
 ## Decision 7: Routes considered and rejected
 
@@ -107,7 +107,7 @@ Implementation: shipped in this PR — `gocell generate cell` defaults to `--all
 - 5 archtest gates (`NO-METADATA-LITERAL-IN-CELLGO-01`, `MARKER-WIRE-SINGLE-SOURCE-01`, `NO-WIRE-FIELDS-IN-YAML-01`, `MARKERGEN-DRIFT-VERIFY-01`, `MARKER-MISSING-FOR-WIRE-CALL-01`); 1 deleted (`CODEGEN-MARKER-NONE-01` is now reversed semantically)
 
 **Backlog spawned** (not blocking ship):
-- Wire-summary catalog augment (Decision 6)
+- Wire-summary catalog augment (Decision 6) — delivered in commit `251a9936`; backlog item closed
 
 ## References
 

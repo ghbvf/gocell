@@ -80,6 +80,10 @@ func TestParseCodegenFlags(t *testing.T) {
 		{name: "AllFalseWithVerifyNoID", args: []string{"--all=false", "--verify"}, wantErrIn: "--all"},
 		// Unknown flag: parse error
 		{name: "UnknownFlag", args: []string{"--no-such-flag"}, wantErrIn: "flag provided but not defined"},
+		// Multiple positional ids: rejected with clear error (K05-13)
+		{name: "MultiplePositionalIDs_Error", args: []string{"foo", "bar"}, wantErrIn: "only one widget id allowed"},
+		// Three positional ids: also rejected
+		{name: "ThreePositionalIDs_Error", args: []string{"a", "b", "c"}, wantErrIn: "only one widget id allowed"},
 	}
 	for _, tc := range tests {
 		tc := tc
