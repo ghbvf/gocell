@@ -138,3 +138,39 @@ func RenderHandler(spec *ContractGenSpec, filename string) ([]byte, error) {
 	}
 	return b, nil
 }
+
+// RenderSpec renders spec_gen.go content for the given spec.
+// Only valid for kind=event contracts. Returns an error for non-event contracts.
+func RenderSpec(spec *ContractGenSpec, filename string) ([]byte, error) {
+	if spec.Kind != "event" {
+		return nil, fmt.Errorf("contractgen render spec: contract %q is kind=%q, not event", spec.ContractID, spec.Kind)
+	}
+	b, err := codegen.Render(codegen.RenderOptions{
+		TemplateName: "spec.tmpl",
+		Templates:    templates,
+		Data:         spec,
+		Filename:     filename,
+	})
+	if err != nil {
+		return b, fmt.Errorf("contractgen render spec: %w", err)
+	}
+	return b, nil
+}
+
+// RenderSubscription renders subscription_gen.go content for the given spec.
+// Only valid for kind=event contracts. Returns an error for non-event contracts.
+func RenderSubscription(spec *ContractGenSpec, filename string) ([]byte, error) {
+	if spec.Kind != "event" {
+		return nil, fmt.Errorf("contractgen render subscription: contract %q is kind=%q, not event", spec.ContractID, spec.Kind)
+	}
+	b, err := codegen.Render(codegen.RenderOptions{
+		TemplateName: "subscription.tmpl",
+		Templates:    templates,
+		Data:         spec,
+		Filename:     filename,
+	})
+	if err != nil {
+		return b, fmt.Errorf("contractgen render subscription: %w", err)
+	}
+	return b, nil
+}

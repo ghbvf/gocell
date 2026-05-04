@@ -119,6 +119,21 @@ func generateOneContract(root string, p *metadata.ProjectMeta, contractID string
 		}
 	}
 
+	// spec_gen.go + subscription_gen.go — only for kind=event.
+	if spec.Kind == "event" {
+		specPath := filepath.Join(pkgDir, "spec_gen.go")
+		errPfxSpec := "contractgen generate: render spec " + contractID
+		if err := renderWriteContract(root, "spec.tmpl", spec, specPath, opts, res, errPfxSpec); err != nil {
+			return err
+		}
+
+		subPath := filepath.Join(pkgDir, "subscription_gen.go")
+		errPfxSub := "contractgen generate: render subscription " + contractID
+		if err := renderWriteContract(root, "subscription.tmpl", spec, subPath, opts, res, errPfxSub); err != nil {
+			return err
+		}
+	}
+
 	return nil
 }
 
@@ -224,6 +239,41 @@ func RenderContractArtifacts(root string, p *metadata.ProjectMeta, contractID st
 			return nil, err
 		}
 		out = append(out, CodegenArtifact{Path: handlerRel, Content: handlerContent})
+	}
+
+	// spec_gen.go + subscription_gen.go — only for kind=event.
+	if spec.Kind == "event" {
+		specPath := filepath.Join(pkgDir, "spec_gen.go")
+		specContent, err := codegen.Render(codegen.RenderOptions{
+			TemplateName: "spec.tmpl",
+			Templates:    templates,
+			Data:         spec,
+			Filename:     specPath,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("contractgen render artifacts: %q spec: %w", contractID, err)
+		}
+		specRel, err := relFromRoot(root, specPath)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, CodegenArtifact{Path: specRel, Content: specContent})
+
+		subPath := filepath.Join(pkgDir, "subscription_gen.go")
+		subContent, err := codegen.Render(codegen.RenderOptions{
+			TemplateName: "subscription.tmpl",
+			Templates:    templates,
+			Data:         spec,
+			Filename:     subPath,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("contractgen render artifacts: %q subscription: %w", contractID, err)
+		}
+		subRel, err := relFromRoot(root, subPath)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, CodegenArtifact{Path: subRel, Content: subContent})
 	}
 
 	return out, nil

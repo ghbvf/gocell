@@ -1,0 +1,14 @@
+{{template "contractHeader" .}}
+
+package {{.PackageName}}
+
+import "github.com/ghbvf/gocell/kernel/wrapper"
+
+// spec is the ContractSpec for {{.ContractID}}.
+// Private — callers must use NewSubscription.Mount(reg) to register this event.
+var spec = wrapper.ContractSpec{
+	ID:        {{printf "%q" .ContractID}},
+	Kind:      "event",
+	Transport: "amqp",
+	Topic:     {{printf "%q" .Event.Topic}},
+}
