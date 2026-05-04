@@ -51,7 +51,7 @@ func (r *CellRegistry) Get(id string) *metadata.CellMeta {
 	if c == nil {
 		return nil
 	}
-	return deepCopyCell(c)
+	return c.Clone()
 }
 
 // SlicesFor returns deep copies of all slices belonging to the given cell.
@@ -65,13 +65,6 @@ func (r *CellRegistry) SlicesFor(cellID string) []*metadata.SliceMeta {
 		out[i] = deepCopySlice(s)
 	}
 	return out
-}
-
-func deepCopyCell(c *metadata.CellMeta) *metadata.CellMeta {
-	cp := *c
-	cp.Verify.Smoke = append([]string(nil), c.Verify.Smoke...)
-	cp.L0Dependencies = append([]metadata.L0DepMeta(nil), c.L0Dependencies...)
-	return &cp
 }
 
 func deepCopySlice(s *metadata.SliceMeta) *metadata.SliceMeta {
