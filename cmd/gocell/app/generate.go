@@ -3,13 +3,11 @@ package app
 import (
 	"flag"
 	"fmt"
-	"os"
 	"path/filepath"
 
 	"github.com/ghbvf/gocell/kernel/assembly"
-	"github.com/ghbvf/gocell/kernel/governance"
 	"github.com/ghbvf/gocell/kernel/metadata"
-	"github.com/ghbvf/gocell/pkg/scaffoldfs"
+	"github.com/ghbvf/gocell/tools/codegen"
 	"github.com/ghbvf/gocell/tools/metricschema"
 )
 
@@ -156,32 +154,22 @@ func generateMetricsSchema(args []string) error {
 		fmt.Sprintf("assembly %q metrics-schema", *id))
 }
 
-// writeGeneratedFile creates parent dirs and writes content to outPath, after
-// verifying the path stays within root. label is used to identify the caller
-// in error messages (e.g. "assembly X build.entrypoint Y").
+// writeGeneratedFile is a thin wrapper over tools/codegen.Write that
+// preserves the legacy "Generated: <path>" stdout output and prefixes
+// errors with a caller label. New codegen subcommands should call
+// tools/codegen.Write directly; this shim exists so generate {assembly,
+// metrics-schema} retain their pre-codegen-framework error messages.
 func writeGeneratedFile(root, outPath string, content []byte, label string) error {
-	if !governance.IsWithinRoot(root, outPath) {
-		return fmt.Errorf("%s: path escapes project root", label)
+	res, err := codegen.Write(codegen.WriteOptions{
+		Path:     outPath,
+		Content:  content,
+		RepoRoot: root,
+	})
+	if err != nil {
+		return fmt.Errorf("%s: %w", label, err)
 	}
-
-	if existing, err := os.ReadFile(filepath.Clean(outPath)); err == nil && !isGocellGeneratedFile(existing) {
-		return fmt.Errorf("%s: refusing to overwrite non-generated file %s "+
-			"(generated files must start with the gocell header; remove the file or move "+
-			"hand-written code to a sibling like cmd/<id>/run.go and re-run generation)",
-			label, outPath)
-	} else if err != nil && !os.IsNotExist(err) {
-		return fmt.Errorf("%s: read existing file: %w", label, err)
+	if res.Action == codegen.ActionWritten {
+		fmt.Printf("Generated: %s\n", outPath)
 	}
-	if err := os.MkdirAll(filepath.Dir(outPath), scaffoldfs.DirMode); err != nil {
-		return fmt.Errorf("%s: create dir: %w", label, err)
-	}
-	if err := os.WriteFile(outPath, content, scaffoldfs.FileMode); err != nil {
-		return fmt.Errorf("%s: write file: %w", label, err)
-	}
-	fmt.Printf("Generated: %s\n", outPath)
 	return nil
-}
-
-func isGocellGeneratedFile(content []byte) bool {
-	return governance.IsGoCellGenerated(content)
 }

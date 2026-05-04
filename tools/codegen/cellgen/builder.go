@@ -2,11 +2,28 @@ package cellgen
 
 import (
 	"fmt"
+	"regexp"
 	"sort"
 	"strings"
 
 	"github.com/ghbvf/gocell/kernel/metadata"
 )
+
+// listenerRefPattern matches valid Go constant references for cell listeners,
+// e.g. "cell.PrimaryListener", "cell.InternalListener". Builder validates each
+// declared listener.Ref against this pattern so a typo in cell.yaml fails fast
+// at codegen time with a precise error rather than producing invalid Go that
+// breaks at compile time. JSON schema applies the same regex at parse time;
+// this is defense in depth (parser does not run JSON schema at runtime).
+var listenerRefPattern = regexp.MustCompile(`^cell\.[A-Z][A-Za-z0-9_]*$`)
+
+// specVarNamePattern is the canonical shape for the package-scope spec
+// variable rendered into cell_gen.go ("spec" + UpperCamelCase identifier).
+// specVarName validates its result against this pattern so a contract id
+// containing digit-leading segments (e.g. "event.123foo.v1") or other
+// non-conforming shapes is rejected with a precise error rather than
+// producing a stylistically broken identifier in generated source.
+var specVarNamePattern = regexp.MustCompile(`^spec[A-Z][A-Za-z0-9]*$`)
 
 // BuildCellSpec projects (cell.yaml + matching slice.yaml entries) into the
 // CellGenSpec consumed by cell.tmpl. It is the single bridge between
@@ -40,6 +57,11 @@ func BuildCellSpec(p *metadata.ProjectMeta, cellID string) (*CellGenSpec, error)
 	listenerPrefix := make(map[string]string, len(cell.Listeners))
 	listenerOrder := make([]string, 0, len(cell.Listeners))
 	for _, l := range cell.Listeners {
+		if !listenerRefPattern.MatchString(l.Ref) {
+			return nil, fmt.Errorf("cellgen build: cell %q listener ref %q must match %s "+
+				"(e.g. cell.PrimaryListener, cell.InternalListener)",
+				cellID, l.Ref, listenerRefPattern.String())
+		}
 		if _, exists := listenerPrefix[l.Ref]; exists {
 			return nil, fmt.Errorf("cellgen build: cell %q declares listener %q twice", cellID, l.Ref)
 		}
@@ -248,13 +270,27 @@ func specVarName(contractID string) (string, error) {
 	sb.WriteString("spec")
 	for _, p := range parts {
 		for _, sub := range strings.Split(p, "-") {
+			if sub == "" {
+				continue
+			}
+			// Each sub-segment must start with a letter so the camel-cased
+			// boundary stays at a letter position. A digit-leading sub-segment
+			// (e.g. "123foo") would emit a digit immediately after the previous
+			// segment's lowercase tail, breaking the spec<UpperCamelCase>
+			// convention even though the result remains a valid Go identifier.
+			if c := sub[0]; (c < 'a' || c > 'z') && (c < 'A' || c > 'Z') {
+				return "", fmt.Errorf("specVarName: contract id %q has non-letter-leading segment %q — "+
+					"every dot-or-dash separated segment must start with a letter; "+
+					"fix the contract id in slice.yaml", contractID, sub)
+			}
 			sb.WriteString(capitalize(sub))
 		}
 	}
 	result := sb.String()
-	if result == "spec" {
-		return "", fmt.Errorf("specVarName: degenerate contract id %q — "+
-			"all parts are version segments; fix the contract id in slice.yaml", contractID)
+	if !specVarNamePattern.MatchString(result) {
+		return "", fmt.Errorf("specVarName: contract id %q produced non-conforming spec var %q "+
+			"(expected %s); fix the contract id in slice.yaml",
+			contractID, result, specVarNamePattern.String())
 	}
 	return result, nil
 }

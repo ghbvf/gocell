@@ -22,9 +22,10 @@ import (
 //	gocell verify journey --active
 //	gocell verify targets --files=<file1,file2,...>
 //	gocell verify generated [--module=<module>]
+//	gocell verify codegen-cell [--local]
 func runVerify(args []string) error {
 	if len(args) < 1 {
-		return fmt.Errorf("usage: gocell verify <slice|cell|journey|targets|generated> [flags]")
+		return fmt.Errorf("usage: gocell verify <slice|cell|journey|targets|generated|codegen-cell> [flags]")
 	}
 	if isHelpFlag(args[0]) {
 		return printVerifyHelp()
@@ -44,8 +45,10 @@ func runVerify(args []string) error {
 		return verifyTargets(subArgs)
 	case "generated":
 		return verifyGenerated(subArgs)
+	case "codegen-cell":
+		return verifyCodegenCell(subArgs)
 	default:
-		return fmt.Errorf("unknown verify type: %s (expected slice, cell, journey, targets, or generated)", subtype)
+		return fmt.Errorf("unknown verify type: %s (expected slice, cell, journey, targets, generated, or codegen-cell)", subtype)
 	}
 }
 

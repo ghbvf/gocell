@@ -135,6 +135,12 @@ func printVerifyHelp() error {
 			"expectations and HEAD. Fails on stale, staged-only,",
 			"or unexpected committed artifacts. [--module=<module>]",
 		}},
+		{"codegen-cell", []string{
+			"Verify cell_gen.go / slice_gen.go are in sync with",
+			"cell.yaml / slice.yaml. Default mode runs in a K8s-style",
+			"git worktree sandbox; --local skips the sandbox for fast",
+			"in-place verify (CI uses sandbox, devs use --local).",
+		}},
 	})
 	return nil
 }

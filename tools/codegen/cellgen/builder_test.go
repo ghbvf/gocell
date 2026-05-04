@@ -381,10 +381,6 @@ func TestSpecVarName(t *testing.T) {
 		{"event.foo-bar.baz.v3", "specEventFooBarBaz"},
 		{"event.no.version", "specEventNoVersion"},
 		{"event.with-dash.v10", "specEventWithDash"},
-		// v1.0 — "0" is the last segment and is NOT a version segment
-		// (isVersionSegment requires the leading "v" followed by digits only).
-		// So none of the four parts ("event", "foo", "v1", "0") is stripped.
-		{"event.foo.v1.0", "specEventFooV10"},
 	}
 	for _, tc := range cases {
 		got, err := specVarName(tc.in)
@@ -398,6 +394,20 @@ func TestSpecVarName(t *testing.T) {
 	}
 }
 
+// TestSpecVarName_VersionSubMinorRejected documents the strict reading of
+// IMP-8: a contract id like "event.foo.v1.0" has segments
+// ["event", "foo", "v1", "0"]. isVersionSegment only matches "v\d+" so neither
+// "v1" nor "0" is stripped; the trailing "0" then fails the
+// digit-leading-segment guard. This shape is a malformed contract id —
+// versions in GoCell are single-token (v1, v2, v10), never v1.0.
+func TestSpecVarName_VersionSubMinorRejected(t *testing.T) {
+	t.Parallel()
+	_, err := specVarName("event.foo.v1.0")
+	if err == nil || !strings.Contains(err.Error(), "non-letter-leading segment") {
+		t.Errorf("event.foo.v1.0 should be rejected as malformed (sub-minor versions not supported); got %v", err)
+	}
+}
+
 // TestSpecVarName_DegenerateInputErrors verifies that a contract id whose
 // only segment is a version tag (e.g. "v1") returns an error rather than
 // silently producing the invalid identifier "spec". The YAML validator
@@ -408,8 +418,80 @@ func TestSpecVarName_DegenerateInputErrors(t *testing.T) {
 	if err == nil {
 		t.Fatalf("expected error for degenerate contract id, got %q", got)
 	}
-	if !strings.Contains(err.Error(), "degenerate contract id") {
-		t.Errorf("error message missing 'degenerate contract id': %v", err)
+	if !strings.Contains(err.Error(), "non-conforming spec var") {
+		t.Errorf("error message missing 'non-conforming spec var': %v", err)
+	}
+}
+
+// TestSpecVarName_DigitLeadingSegmentRejected verifies IMP-8: contract ids
+// containing a digit-leading dotted segment (e.g. "event.123foo.v1")
+// produce a non-conforming spec var ("specEvent123foo" — digit immediately
+// after camel-case boundary) and must be rejected, not silently emitted.
+func TestSpecVarName_DigitLeadingSegmentRejected(t *testing.T) {
+	t.Parallel()
+	cases := []string{
+		"event.123foo.v1",     // digit-leading middle segment
+		"123foo.bar.v1",       // digit-leading first segment
+		"event.foo.123bar.v1", // digit-leading later segment
+	}
+	for _, in := range cases {
+		_, err := specVarName(in)
+		if err == nil {
+			t.Errorf("specVarName(%q) should reject digit-leading segment", in)
+		}
+	}
+}
+
+// TestBuildCellSpec_ConsumerGroupEmptyFallsBackToCellID verifies IMP-3:
+// when slice.yaml omits subscribes[].consumerGroup, BuildCellSpec leaves the
+// SubscriptionGenSpec.ConsumerGroup empty and the template uses
+// CellGenSpec.ConsumerGroupDefault (which is the cell ID). The empty-value
+// path is the common case and must remain explicitly tested.
+func TestBuildCellSpec_ConsumerGroupEmptyFallsBackToCellID(t *testing.T) {
+	t.Parallel()
+	cell := &metadata.CellMeta{ID: "demo", Dir: "demo", File: "cells/demo/cell.yaml", GoStructName: "Demo"}
+	slc := &metadata.SliceMeta{
+		ID: "subs", BelongsToCell: "demo", Dir: "subs",
+		File: "cells/demo/slices/subs/slice.yaml",
+		Subscribes: []metadata.SubscribeDeclMeta{
+			{Contract: "event.foo.bar.v1", SliceField: "barSvc", Handler: "HandleBar"}, // no ConsumerGroup
+		},
+	}
+	p := fixtureProject(cell, []*metadata.SliceMeta{slc}, []*metadata.ContractMeta{{ID: "event.foo.bar.v1", Kind: "event"}})
+
+	spec, err := BuildCellSpec(p, "demo")
+	if err != nil {
+		t.Fatalf("BuildCellSpec: %v", err)
+	}
+	if spec.ConsumerGroupDefault != "demo" {
+		t.Errorf("ConsumerGroupDefault = %q, want %q (cell ID)", spec.ConsumerGroupDefault, "demo")
+	}
+	if len(spec.Subscriptions) != 1 || spec.Subscriptions[0].ConsumerGroup != "" {
+		t.Errorf("expected SubscriptionGenSpec.ConsumerGroup to remain empty (template falls back); got %+v", spec.Subscriptions)
+	}
+}
+
+// TestBuildCellSpec_ListenerRefRejectsTypo verifies IMP-6: a typo in
+// cell.yaml listeners[].ref (e.g. "cell.PrimaryListenerXX") is rejected at
+// BuildCellSpec time with a precise error rather than producing invalid Go.
+func TestBuildCellSpec_ListenerRefRejectsTypo(t *testing.T) {
+	t.Parallel()
+	cases := []string{
+		"cell.primaryListener",  // lowercase prefix
+		"cell.Primary-Listener", // dash in identifier
+		"primaryListener",       // missing cell. prefix
+		"cell.",                 // empty identifier
+	}
+	for _, ref := range cases {
+		cell := &metadata.CellMeta{
+			ID: "demo", Dir: "demo", File: "cells/demo/cell.yaml", GoStructName: "Demo",
+			Listeners: []metadata.ListenerDeclMeta{{Ref: ref, Prefix: "/api/v1"}},
+		}
+		p := fixtureProject(cell, nil, nil)
+		_, err := BuildCellSpec(p, "demo")
+		if err == nil || !strings.Contains(err.Error(), "must match") {
+			t.Errorf("BuildCellSpec with listener ref %q should error; got %v", ref, err)
+		}
 	}
 }
 
