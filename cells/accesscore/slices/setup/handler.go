@@ -64,7 +64,7 @@ func (h *Handler) RegisterRoutes(mux kcell.RouteHandler) error {
 func (h *Handler) HandleStatus(w http.ResponseWriter, r *http.Request) {
 	out, err := h.svc.Status(r.Context())
 	if err != nil {
-		httputil.WriteDomainError(r.Context(), w, err)
+		httputil.WriteError(r.Context(), w, err)
 		return
 	}
 	httputil.WriteJSON(w, http.StatusOK, map[string]any{"data": out})
@@ -77,8 +77,8 @@ func (h *Handler) HandleCreateAdmin(w http.ResponseWriter, r *http.Request) {
 		Email    string `json:"email"`
 		Password string `json:"password"`
 	}
-	if err := httputil.DecodeJSONStrict(r, &req); err != nil {
-		httputil.WriteDecodeError(r.Context(), w, err)
+	if err := httputil.DecodeJSONStrict(r, &req, httputil.DefaultDecodeJSONLimit); err != nil {
+		httputil.WriteError(r.Context(), w, err)
 		return
 	}
 
@@ -88,7 +88,7 @@ func (h *Handler) HandleCreateAdmin(w http.ResponseWriter, r *http.Request) {
 		Password: req.Password,
 	})
 	if err != nil {
-		httputil.WriteDomainError(r.Context(), w, err)
+		httputil.WriteError(r.Context(), w, err)
 		return
 	}
 	httputil.WriteJSON(w, http.StatusCreated, map[string]any{"data": out})

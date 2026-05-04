@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ghbvf/gocell/pkg/contracts"
+	"github.com/ghbvf/gocell/kernel/metadata"
 )
 
 // --- Naming helper tests ---
@@ -336,10 +336,10 @@ func TestMergeParamsIntoRequest_ConflictDetected(t *testing.T) {
 		},
 	}
 	ptrTrue := true
-	http := &contracts.HTTPTransport{
+	http := &metadata.HTTPTransportMeta{
 		Method: "GET",
 		Path:   "/api/v1/orders/{item}",
-		PathParams: map[string]contracts.ParamSchema{
+		PathParams: map[string]metadata.ParamSchema{
 			"item": {Type: "string"},
 		},
 	}
@@ -364,10 +364,10 @@ func TestMergeParamsIntoRequest_QueryConflictDetected(t *testing.T) {
 		},
 	}
 	ptrFalse := false
-	http := &contracts.HTTPTransport{
+	http := &metadata.HTTPTransportMeta{
 		Method: "GET",
 		Path:   "/api/v1/orders",
-		QueryParams: map[string]contracts.ParamSchema{
+		QueryParams: map[string]metadata.ParamSchema{
 			"cursor": {Type: "string", Required: &ptrFalse},
 		},
 	}
@@ -390,10 +390,10 @@ func TestMergeParamsIntoRequest_NoConflict(t *testing.T) {
 			},
 		},
 	}
-	http := &contracts.HTTPTransport{
+	http := &metadata.HTTPTransportMeta{
 		Method: "GET",
 		Path:   "/api/v1/orders/{id}",
-		PathParams: map[string]contracts.ParamSchema{
+		PathParams: map[string]metadata.ParamSchema{
 			"id": {Type: "string"},
 		},
 	}
@@ -419,10 +419,10 @@ func TestBuildQueryParams_BoundaryValues(t *testing.T) {
 	minInt64Neg := -1
 	maxInt64 := 500
 
-	http := &contracts.HTTPTransport{
+	http := &metadata.HTTPTransportMeta{
 		Method: "GET",
 		Path:   "/api/v1/items",
-		QueryParams: map[string]contracts.ParamSchema{
+		QueryParams: map[string]metadata.ParamSchema{
 			"q1": {Type: "string", MinLength: &minLenZero, MaxLength: &maxLenZero},
 			"q2": {Type: "string", MinLength: &minLenFive, MaxLength: &maxLenTen},
 			"q3": {Type: "integer", Minimum: &minInt64Zero},

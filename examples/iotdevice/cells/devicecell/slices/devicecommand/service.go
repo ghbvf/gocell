@@ -85,7 +85,7 @@ func NewService(
 	opts ...Option,
 ) (*Service, error) {
 	if codec == nil {
-		return nil, errcode.New(errcode.ErrCellMissingCodec,
+		return nil, errcode.New(errcode.KindInternal, errcode.ErrCellMissingCodec,
 			"device-command: cursor codec is required")
 	}
 	s := &Service{
@@ -123,7 +123,7 @@ func (s *Service) Enqueue(ctx context.Context, deviceID, commandType, payload st
 	// Authz check before any data access — prevents 404 vs 403 timing probing.
 	if s.authz != nil {
 		if err := s.authz(ctx); err != nil {
-			return command.Entry{}, errcode.Wrap(errcode.ErrAuthForbidden,
+			return command.Entry{}, errcode.Wrap(errcode.KindPermissionDenied, errcode.ErrAuthForbidden,
 				"device-command: enqueue authorization failed", err)
 		}
 	}
@@ -134,7 +134,7 @@ func (s *Service) Enqueue(ctx context.Context, deviceID, commandType, payload st
 	}
 
 	if payload == "" {
-		return command.Entry{}, errcode.New(errcode.ErrValidationFailed, "command payload must not be empty")
+		return command.Entry{}, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "command payload must not be empty")
 	}
 
 	// Default commandType to "default" for backward-compat demo callers.
@@ -282,7 +282,7 @@ func (s *Service) Report(ctx context.Context, deviceID, cmdID string) error {
 // Queue transition; it does not synthesize Sent/Delivered timestamps.
 func (s *Service) Ack(ctx context.Context, deviceID, cmdID string, reason command.AckReason) error {
 	if !reason.Valid() {
-		return errcode.New(errcode.ErrValidationFailed, "device-command: invalid ack reason")
+		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "device-command: invalid ack reason")
 	}
 	now := s.clock.Now()
 	if err := s.getOwnedCommand(ctx, deviceID, cmdID); err != nil {
@@ -305,10 +305,10 @@ func (s *Service) Ack(ctx context.Context, deviceID, cmdID string, reason comman
 // processing a command.
 func (s *Service) ExtendLease(ctx context.Context, deviceID, cmdID string, extension time.Duration) error {
 	if extension <= 0 {
-		return errcode.New(errcode.ErrValidationFailed, "device-command: extension must be positive")
+		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "device-command: extension must be positive")
 	}
 	if extension > MaxLeaseExtension {
-		return errcode.New(errcode.ErrValidationFailed, "device-command: extension exceeds maximum")
+		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "device-command: extension exceeds maximum")
 	}
 	if err := s.getOwnedCommand(ctx, deviceID, cmdID); err != nil {
 		return err
@@ -326,7 +326,7 @@ func (s *Service) getOwnedCommand(ctx context.Context, deviceID, cmdID string) e
 	}
 
 	if e.DeviceID != deviceID {
-		return errcode.New(errcode.ErrAuthForbidden,
+		return errcode.New(errcode.KindPermissionDenied, errcode.ErrAuthForbidden,
 			fmt.Sprintf("device-command: command %q does not belong to device %q", cmdID, deviceID))
 	}
 	return nil

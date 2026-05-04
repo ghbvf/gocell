@@ -27,7 +27,7 @@ var validRouteMethods = map[string]bool{
 
 // RequirePolicy lifts a Policy into a middleware-shaped
 // `func(http.Handler) http.Handler`. On policy failure it writes the domain
-// error via httputil.WriteDomainError and short-circuits the chain; on
+// error via httputil.WriteError and short-circuits the chain; on
 // success it delegates to next.
 //
 // ref: grpc-ecosystem/go-grpc-middleware auth.UnaryServerInterceptor —
@@ -41,7 +41,7 @@ func RequirePolicy(p Policy) (func(http.Handler) http.Handler, error) {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if err := p(r); err != nil {
-				httputil.WriteDomainError(r.Context(), w, err)
+				httputil.WriteError(r.Context(), w, err)
 				return
 			}
 			next.ServeHTTP(w, r)

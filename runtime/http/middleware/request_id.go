@@ -23,7 +23,7 @@ func RequestID(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		id, err := requestIDFromHeader(r.Header.Get(headerRequestID))
 		if err != nil {
-			httputil.WriteDomainError(r.Context(), w, err)
+			httputil.WriteError(r.Context(), w, err)
 			return
 		}
 		serveWithRequestID(w, r, next, id)
@@ -60,7 +60,7 @@ func RequestIDWithOptions(opts ...RequestIDOption) func(http.Handler) http.Handl
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			id, err := requestIDForRequest(r, cfg)
 			if err != nil {
-				httputil.WriteDomainError(r.Context(), w, err)
+				httputil.WriteError(r.Context(), w, err)
 				return
 			}
 			serveWithRequestID(w, r, next, id)
@@ -85,7 +85,7 @@ func requestIDFromHeader(id string) (string, error) {
 func newRequestID() (string, error) {
 	id, err := idutil.NewUUID()
 	if err != nil {
-		return "", errcode.Wrap(errcode.ErrInternal, "request id: generate uuid", err)
+		return "", errcode.Wrap(errcode.KindInternal, errcode.ErrInternal, "request id: generate uuid", err)
 	}
 	return id, nil
 }

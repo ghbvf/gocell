@@ -6,6 +6,7 @@ import (
 	"runtime/debug"
 
 	"github.com/ghbvf/gocell/pkg/ctxkeys"
+	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/httputil"
 )
 
@@ -56,7 +57,8 @@ func Recovery(next http.Handler) http.Handler {
 				}
 
 				slog.Error("panic recovered", attrs...)
-				httputil.WriteError(r.Context(), w, http.StatusInternalServerError, "ERR_INTERNAL", "internal server error")
+				httputil.WriteError(r.Context(), w,
+					errcode.New(errcode.KindInternal, errcode.ErrInternal, "internal server error"))
 			}
 		}()
 		next.ServeHTTP(w, r)

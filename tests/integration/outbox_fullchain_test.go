@@ -112,6 +112,7 @@ func setupRedisContainer(t *testing.T) (*redis.Client, func()) {
 
 	connStr, err := container.ConnectionString(ctx)
 	require.NoError(t, err, "get redis connection string")
+	connStr = testutil.LoopbackIPEndpoint(connStr)
 
 	// Strip "redis://" prefix and trailing "/db" suffix to get host:port.
 	addr := connStr

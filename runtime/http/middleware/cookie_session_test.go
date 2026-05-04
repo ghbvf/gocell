@@ -41,18 +41,21 @@ func newTestSessionConfigEncrypted(t *testing.T) CookieSessionConfig {
 
 func encodeCookieValue(t *testing.T, cfg CookieSessionConfig, jwt string) string {
 	t.Helper()
+	normalizeCookieSessionConfig(&cfg)
 	clk := cfg.Clock
 	if clk == nil {
 		clk = clock.Real()
 	}
-	sc, err := securecookie.New(cfg.Secret, cfg.EncryptKey, clk)
+	sc, err := securecookie.New(securecookie.Config{
+		HashKey:  cfg.Secret,
+		BlockKey: cfg.EncryptKey,
+		Clock:    clk,
+		MaxAge:   cfg.MaxAge,
+	})
 	require.NoError(t, err)
 	name := cfg.CookieName
 	if name == "" {
 		name = "session"
-	}
-	if cfg.MaxAge > 0 {
-		sc = sc.WithMaxAge(cfg.MaxAge)
 	}
 	encoded, err := sc.Encode(name, []byte(jwt))
 	require.NoError(t, err)
@@ -95,9 +98,12 @@ func TestCookieSession_ExpiredCookie_NoInjection(t *testing.T) {
 	cfg.MaxAge = 1
 	cfg.Clock = clk
 
-	sc, err := securecookie.New(cfg.Secret, nil, clk)
+	sc, err := securecookie.New(securecookie.Config{
+		HashKey: cfg.Secret,
+		Clock:   clk,
+		MaxAge:  cfg.MaxAge,
+	})
 	require.NoError(t, err)
-	sc = sc.WithMaxAge(cfg.MaxAge)
 	encoded, err := sc.Encode("session", []byte("jwt-token"))
 	require.NoError(t, err)
 
@@ -396,9 +402,12 @@ func TestCookieSession_ExpiredCookie_Returns401(t *testing.T) {
 	cfg.MaxAge = 1
 	cfg.Clock = clk
 
-	sc, err := securecookie.New(cfg.Secret, nil, clk)
+	sc, err := securecookie.New(securecookie.Config{
+		HashKey: cfg.Secret,
+		Clock:   clk,
+		MaxAge:  cfg.MaxAge,
+	})
 	require.NoError(t, err)
-	sc = sc.WithMaxAge(cfg.MaxAge)
 	encoded, err := sc.Encode("session", []byte("jwt-token"))
 	require.NoError(t, err)
 

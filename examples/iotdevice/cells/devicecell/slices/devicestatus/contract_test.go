@@ -13,7 +13,7 @@ import (
 
 	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/domain"
 	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/mem"
-	"github.com/ghbvf/gocell/pkg/contracttest"
+	"github.com/ghbvf/gocell/tests/contracttest"
 )
 
 func newContractHandler() http.Handler {

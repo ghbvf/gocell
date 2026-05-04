@@ -90,15 +90,16 @@ func Wrap(err error, op, identifier string) *errcode.Error {
 	if !Detect(err) {
 		return nil
 	}
-	code, message, reason := classify(err)
-	return &errcode.Error{
-		Code:            code,
-		Message:         message,
-		InternalMessage: fmt.Sprintf("%s ctx canceled %s", op, identifier),
-		Cause:           err,
-		Category:        errcode.CategoryInfra,
-		Details:         map[string]any{DetailsKeyReason: reason},
-	}
+	kind, code, message, reason := classify(err)
+	return errcode.Wrap(
+		kind,
+		code,
+		message,
+		err,
+		errcode.WithCategory(errcode.CategoryInfra),
+		errcode.WithInternal(fmt.Sprintf("%s ctx canceled %s", op, identifier)),
+		errcode.WithDetails(map[string]any{DetailsKeyReason: reason}),
+	)
 }
 
 // WrapOrInfra is the canonical convenience for the IO-boundary pattern:
@@ -106,7 +107,7 @@ func Wrap(err error, op, identifier string) *errcode.Error {
 //	if cancelErr := ctxcancel.Wrap(err, op, id); cancelErr != nil {
 //	    return cancelErr
 //	}
-//	return errcode.WrapInfra(fallbackCode, fallbackMsg, err)
+//	return errcode.Wrap(errcode.KindInternal, fallbackCode, fallbackMsg, err, errcode.WithCategory(errcode.CategoryInfra))
 //
 // One call replaces both branches: a context cancellation surfaces as the
 // canonical 499/504 split (Canceled→ErrClientCanceled, DeadlineExceeded→
@@ -123,7 +124,7 @@ func WrapOrInfra(err error, op, identifier string, fallbackCode errcode.Code, fa
 	if cancelErr := Wrap(err, op, identifier); cancelErr != nil {
 		return cancelErr
 	}
-	return errcode.WrapInfra(fallbackCode, fallbackMsg, err)
+	return errcode.Wrap(errcode.KindInternal, fallbackCode, fallbackMsg, err, errcode.WithCategory(errcode.CategoryInfra))
 }
 
 // classify resolves all per-variant attributes (errcode, public message,
@@ -136,11 +137,11 @@ func WrapOrInfra(err error, op, identifier string, fallbackCode errcode.Code, fa
 // ReasonDeadlineExceeded (server-direction, feeds 5xx alerting).
 // Anything else (default = context.Canceled branch) → ErrClientCanceled
 // (499) / "request canceled" / ReasonCanceled (client-direction, slog.Warn).
-func classify(err error) (errcode.Code, string, string) {
+func classify(err error) (errcode.Kind, errcode.Code, string, string) {
 	if errors.Is(err, context.DeadlineExceeded) {
-		return errcode.ErrServerTimeout, "request timed out", ReasonDeadlineExceeded
+		return errcode.KindDeadlineExceeded, errcode.ErrServerTimeout, "request timed out", ReasonDeadlineExceeded
 	}
-	return errcode.ErrClientCanceled, "request canceled", ReasonCanceled
+	return errcode.KindClientClosed, errcode.ErrClientCanceled, "request canceled", ReasonCanceled
 }
 
 // ReasonFromDetails extracts and canonicalizes the reason value from an

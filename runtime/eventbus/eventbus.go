@@ -144,7 +144,7 @@ func (b *InMemoryEventBus) Publish(_ context.Context, topic string, payload []by
 	defer b.mu.RUnlock()
 
 	if b.closed {
-		return errcode.New(errcode.ErrBusClosed, "eventbus: bus is closed")
+		return errcode.New(errcode.KindInternal, errcode.ErrBusClosed, "eventbus: bus is closed")
 	}
 
 	entry, unmarshalErr := unmarshalInboundEntry(topic, payload)
@@ -256,7 +256,7 @@ func (b *InMemoryEventBus) Subscribe(ctx context.Context, sub outbox.Subscriptio
 	if b.closed {
 		b.mu.Unlock()
 		cancel()
-		return errcode.New(errcode.ErrBusClosed, "eventbus: bus is closed")
+		return errcode.New(errcode.KindInternal, errcode.ErrBusClosed, "eventbus: bus is closed")
 	}
 	if b.groupSubs[topic] == nil {
 		b.groupSubs[topic] = make(map[string]*groupState)

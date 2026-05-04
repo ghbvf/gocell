@@ -149,20 +149,18 @@ func TestPATHIsAdditive(t *testing.T) {
 	assert.Contains(t, string(logBytes), "test ./... -v")
 }
 
-func TestGoTestEnvPreservesCallerEnvAndPrependsGoDir(t *testing.T) {
+func TestGoTestExtraEnvPrependsGoDir(t *testing.T) {
 	selectedDir := t.TempDir()
 	callerBin := filepath.Join(t.TempDir(), "caller-bin")
-	callerGoRoot := filepath.Join(t.TempDir(), "caller-goroot")
 	t.Setenv("PATH", callerBin)
-	t.Setenv("GOROOT", callerGoRoot)
 
-	env := goTestEnv(selectedDir)
+	env := goTestExtraEnv(selectedDir)
 	pathValue := envValue(env, "PATH")
 	pathParts := strings.Split(pathValue, string(os.PathListSeparator))
 	require.NotEmpty(t, pathParts)
 	assert.Equal(t, selectedDir, pathParts[0])
 	assert.Contains(t, pathValue, callerBin)
-	assert.Equal(t, callerGoRoot, envValue(env, "GOROOT"))
+	assert.Empty(t, envValue(env, "GOROOT"), "only PATH should be explicitly overridden")
 }
 
 func TestPathEnvUsesExactPATHOnUnix(t *testing.T) {

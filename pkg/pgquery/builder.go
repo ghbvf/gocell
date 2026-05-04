@@ -1,12 +1,12 @@
-// Package query provides utilities for constructing parameterized SQL queries.
-package query
+// Package pgquery provides PostgreSQL query-building helpers.
+package pgquery
 
 import (
 	"fmt"
 	"strings"
 )
 
-// Builder assists in constructing parameterized SQL queries.
+// Builder assists in constructing parameterized PostgreSQL queries.
 // It tracks positional parameters ($1, $2, ...) and their values.
 type Builder struct {
 	parts []string

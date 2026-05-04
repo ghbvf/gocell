@@ -31,9 +31,11 @@ import (
 func ParseUUIDPathParam(w http.ResponseWriter, r *http.Request, name string) (string, bool) {
 	canonical, ok := ParseCanonicalUUID(r.PathValue(name))
 	if !ok {
-		WriteError(r.Context(), w, http.StatusBadRequest,
-			string(errcode.ErrValidationInvalidUUID),
-			fmt.Sprintf("path parameter %q must be a valid UUID", name))
+		WriteError(r.Context(), w, errcode.New(
+			errcode.KindInvalid,
+			errcode.ErrValidationInvalidUUID,
+			fmt.Sprintf("path parameter %q must be a valid UUID", name),
+		))
 		return "", false
 	}
 	return canonical, true

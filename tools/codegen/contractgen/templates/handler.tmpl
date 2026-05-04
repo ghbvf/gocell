@@ -58,13 +58,13 @@ func (h *Handler) handle(w http.ResponseWriter, r *http.Request) {
 		v := r.PathValue("{{.Name}}")
 {{- if hasMinLength .MinLength}}
 		if len(v) < {{derefInt .MinLength}} {
-			httputil.WriteDomainError(r.Context(), w, errcode.New(errcode.ErrValidationFailed, "{{.Name}}: value too short"))
+			httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "{{.Name}}: value too short"))
 			return
 		}
 {{- end}}
 {{- if hasMaxLength .MaxLength}}
 		if len(v) > {{derefInt .MaxLength}} {
-			httputil.WriteDomainError(r.Context(), w, errcode.New(errcode.ErrValidationFailed, "{{.Name}}: value too long"))
+			httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "{{.Name}}: value too long"))
 			return
 		}
 {{- end}}
@@ -72,33 +72,33 @@ func (h *Handler) handle(w http.ResponseWriter, r *http.Request) {
 	}
 {{- end}}
 {{- if .Endpoint.HasBody}}
-	if err := httputil.DecodeJSONStrict(r, req); err != nil {
-		httputil.WriteDecodeError(r.Context(), w, err)
+	if err := httputil.DecodeJSONStrict(r, req, httputil.DefaultDecodeJSONLimit); err != nil {
+		httputil.WriteError(r.Context(), w, err)
 		return
 	}
 {{- if hasBodyValidation .DTOs}}
 {{- range .DTOs}}{{if eq .Name "Request"}}{{range .Fields}}{{if isBodyField .}}
 {{- if hasMinLength .MinLength}}
 	if len(req.{{.Name}}) < {{derefInt .MinLength}} {
-		httputil.WriteDomainError(r.Context(), w, errcode.New(errcode.ErrValidationFailed, "{{.JSONTag}}: value too short"))
+		httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "{{.JSONTag}}: value too short"))
 		return
 	}
 {{- end}}
 {{- if hasMaxLength .MaxLength}}
 	if len(req.{{.Name}}) > {{derefInt .MaxLength}} {
-		httputil.WriteDomainError(r.Context(), w, errcode.New(errcode.ErrValidationFailed, "{{.JSONTag}}: value too long"))
+		httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "{{.JSONTag}}: value too long"))
 		return
 	}
 {{- end}}
 {{- if hasMinimum .Minimum}}
 	if req.{{.Name}} < {{derefInt64 .Minimum}} {
-		httputil.WriteDomainError(r.Context(), w, errcode.New(errcode.ErrValidationFailed, "{{.JSONTag}}: value below minimum"))
+		httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "{{.JSONTag}}: value below minimum"))
 		return
 	}
 {{- end}}
 {{- if hasMaximum .Maximum}}
 	if req.{{.Name}} > {{derefInt64 .Maximum}} {
-		httputil.WriteDomainError(r.Context(), w, errcode.New(errcode.ErrValidationFailed, "{{.JSONTag}}: value above maximum"))
+		httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "{{.JSONTag}}: value above maximum"))
 		return
 	}
 {{- end}}
@@ -107,7 +107,7 @@ func (h *Handler) handle(w http.ResponseWriter, r *http.Request) {
 {{- else if .Endpoint.IsPagination}}
 	page, err := httputil.ParsePageParams(r)
 	if err != nil {
-		httputil.WriteDomainError(r.Context(), w, err)
+		httputil.WriteError(r.Context(), w, err)
 		return
 	}
 	req.Cursor = page.Cursor
@@ -118,19 +118,19 @@ func (h *Handler) handle(w http.ResponseWriter, r *http.Request) {
 	req.{{.GoName}} = r.URL.Query().Get("{{.Name}}")
 {{- if .Required}}
 	if req.{{.GoName}} == "" {
-		httputil.WriteDomainError(r.Context(), w, errcode.New(errcode.ErrValidationFailed, "{{.Name}} is required"))
+		httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "{{.Name}} is required"))
 		return
 	}
 {{- end}}
 {{- if hasMinLength .MinLength}}
 	if req.{{.GoName}} != "" && len(req.{{.GoName}}) < {{derefInt .MinLength}} {
-		httputil.WriteDomainError(r.Context(), w, errcode.New(errcode.ErrValidationFailed, "{{.Name}}: value too short"))
+		httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "{{.Name}}: value too short"))
 		return
 	}
 {{- end}}
 {{- if hasMaxLength .MaxLength}}
 	if req.{{.GoName}} != "" && len(req.{{.GoName}}) > {{derefInt .MaxLength}} {
-		httputil.WriteDomainError(r.Context(), w, errcode.New(errcode.ErrValidationFailed, "{{.Name}}: value too long"))
+		httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "{{.Name}}: value too long"))
 		return
 	}
 {{- end}}
@@ -139,23 +139,23 @@ func (h *Handler) handle(w http.ResponseWriter, r *http.Request) {
 	{
 		raw{{.GoName}} := r.URL.Query().Get("{{.Name}}")
 		if raw{{.GoName}} == "" {
-			httputil.WriteDomainError(r.Context(), w, errcode.New(errcode.ErrValidationFailed, "{{.Name}} is required"))
+			httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "{{.Name}} is required"))
 			return
 		}
 		v, err := strconv.ParseInt(raw{{.GoName}}, 10, 64)
 		if err != nil {
-			httputil.WriteDomainError(r.Context(), w, errcode.New(errcode.ErrValidationFailed, "{{.Name}}: must be an integer"))
+			httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "{{.Name}}: must be an integer"))
 			return
 		}
 {{- if hasMinimum .Minimum}}
 		if v < {{derefInt64 .Minimum}} {
-			httputil.WriteDomainError(r.Context(), w, errcode.New(errcode.ErrValidationFailed, "{{.Name}}: value below minimum"))
+			httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "{{.Name}}: value below minimum"))
 			return
 		}
 {{- end}}
 {{- if hasMaximum .Maximum}}
 		if v > {{derefInt64 .Maximum}} {
-			httputil.WriteDomainError(r.Context(), w, errcode.New(errcode.ErrValidationFailed, "{{.Name}}: value above maximum"))
+			httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "{{.Name}}: value above maximum"))
 			return
 		}
 {{- end}}
@@ -165,18 +165,18 @@ func (h *Handler) handle(w http.ResponseWriter, r *http.Request) {
 	if raw := r.URL.Query().Get("{{.Name}}"); raw != "" {
 		v, err := strconv.ParseInt(raw, 10, 64)
 		if err != nil {
-			httputil.WriteDomainError(r.Context(), w, errcode.New(errcode.ErrValidationFailed, "{{.Name}}: must be an integer"))
+			httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "{{.Name}}: must be an integer"))
 			return
 		}
 {{- if hasMinimum .Minimum}}
 		if v < {{derefInt64 .Minimum}} {
-			httputil.WriteDomainError(r.Context(), w, errcode.New(errcode.ErrValidationFailed, "{{.Name}}: value below minimum"))
+			httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "{{.Name}}: value below minimum"))
 			return
 		}
 {{- end}}
 {{- if hasMaximum .Maximum}}
 		if v > {{derefInt64 .Maximum}} {
-			httputil.WriteDomainError(r.Context(), w, errcode.New(errcode.ErrValidationFailed, "{{.Name}}: value above maximum"))
+			httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "{{.Name}}: value above maximum"))
 			return
 		}
 {{- end}}
@@ -187,7 +187,7 @@ func (h *Handler) handle(w http.ResponseWriter, r *http.Request) {
 	if raw := r.URL.Query().Get("{{.Name}}"); raw != "" {
 		v, err := strconv.ParseFloat(raw, 64)
 		if err != nil {
-			httputil.WriteDomainError(r.Context(), w, errcode.New(errcode.ErrValidationFailed, "{{.Name}}: must be a number"))
+			httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "{{.Name}}: must be a number"))
 			return
 		}
 		req.{{.GoName}} = v
@@ -196,7 +196,7 @@ func (h *Handler) handle(w http.ResponseWriter, r *http.Request) {
 	if raw := r.URL.Query().Get("{{.Name}}"); raw != "" {
 		v, err := strconv.ParseBool(raw)
 		if err != nil {
-			httputil.WriteDomainError(r.Context(), w, errcode.New(errcode.ErrValidationFailed, "{{.Name}}: must be a boolean"))
+			httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "{{.Name}}: must be a boolean"))
 			return
 		}
 		req.{{.GoName}} = v
@@ -206,7 +206,7 @@ func (h *Handler) handle(w http.ResponseWriter, r *http.Request) {
 {{- end}}
 	resp, err := h.svc.{{.Endpoint.HandlerMethod}}(r.Context(), req)
 	if err != nil {
-		httputil.WriteDomainError(r.Context(), w, err)
+		httputil.WriteError(r.Context(), w, err)
 		return
 	}
 {{- if .Endpoint.NoContent}}

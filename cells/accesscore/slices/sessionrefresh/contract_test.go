@@ -4,7 +4,7 @@ import (
 	"net/http"
 	"testing"
 
-	"github.com/ghbvf/gocell/pkg/contracttest"
+	"github.com/ghbvf/gocell/tests/contracttest"
 )
 
 func TestHttpAuthRefreshV1Serve(t *testing.T) {

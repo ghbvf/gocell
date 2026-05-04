@@ -103,7 +103,7 @@ func NewService(
 		o(s)
 	}
 	if s.txRunner == nil {
-		return nil, errcode.New(errcode.ErrValidationFailed,
+		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"auditappend: TxRunner required; use WithTxManager (demo callers must inject an explicit pass-through TxRunner)")
 	}
 	return s, nil

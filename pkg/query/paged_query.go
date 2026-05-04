@@ -48,7 +48,7 @@ type PagedQueryConfig[T any] struct {
 // pattern repeated across 5 service List methods.
 func ExecutePagedQuery[T any](ctx context.Context, cfg PagedQueryConfig[T]) (PageResult[T], error) {
 	if cfg.Codec == nil || cfg.Fetch == nil || cfg.Extract == nil {
-		return PageResult[T]{}, errcode.New(errcode.ErrInternal,
+		return PageResult[T]{}, errcode.New(errcode.KindInternal, errcode.ErrInternal,
 			"paged query misconfigured: Codec, Fetch, and Extract must not be nil")
 	}
 	cfg.PageParams.Normalize()

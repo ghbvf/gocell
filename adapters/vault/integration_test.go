@@ -57,6 +57,7 @@ func startVaultContainer(t *testing.T) (addr, token string, teardown func()) {
 	if !strings.HasPrefix(vaultAddr, "http://") && !strings.HasPrefix(vaultAddr, "https://") {
 		vaultAddr = "http://" + vaultAddr
 	}
+	vaultAddr = testutil.LoopbackIPEndpoint(vaultAddr)
 	return vaultAddr, "root-test-token", teardown
 }
 

@@ -1,7 +1,7 @@
 // Package cmdrun centralizes whitelisted subprocess invocation for
 // governance and verify helpers (gocell validate / gocell check /
 // golangci-lint runner / archtest tooling). Callers funnel through
-// Run / RunIn so the gosec G204 path-scoped exemption lives at a single
+// Run / RunWith so the gosec G204 path-scoped exemption lives at a single
 // audit point and tool-path validation is enforced via the ValidatedTool
 // newtype's unexported field (NewTool runs exec.LookPath + filepath.Abs +
 // filepath.Clean).
@@ -18,8 +18,11 @@ package cmdrun
 import (
 	"context"
 	"fmt"
+	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
+	"strings"
 )
 
 // ValidatedTool wraps a tool binary invocation path with two enforced
@@ -69,15 +72,25 @@ func (t ValidatedTool) Dir() string {
 }
 
 // Run executes the validated tool with args using ctx and returns combined
-// stdout+stderr. No Dir/Env customization — inherits the parent process
-// working directory and environment.
+// stdout+stderr. It inherits the parent process working directory and a
+// denylist-cleaned copy of the parent environment.
 func Run(ctx context.Context, t ValidatedTool, args ...string) ([]byte, error) {
-	return RunIn(ctx, t, "", nil, args...)
+	return RunWith(ctx, t, RunOptions{}, args...)
 }
 
-// RunIn executes the validated tool with args, optionally overriding the
-// working directory (empty dir = inherit) and environment (nil env =
-// inherit os.Environ). Combined stdout+stderr is returned.
+// RunOptions controls subprocess execution for RunWith.
+type RunOptions struct {
+	// Dir optionally sets the subprocess working directory. Empty means inherit.
+	Dir string
+	// ExtraEnv appends to, or overrides, the cleaned parent environment. Nil
+	// and empty slices do not clear the inherited environment.
+	ExtraEnv []string
+}
+
+// RunWith executes the validated tool with args. By default it inherits a
+// denylist-cleaned copy of os.Environ; ExtraEnv is then applied additively so
+// callers must explicitly opt sensitive values back in when a subprocess
+// genuinely needs them. Combined stdout+stderr is returned.
 //
 // ValidatedTool.path is exec.LookPath-resolved at NewTool construction;
 // args are caller-controlled whitelisted invocations from governance /
@@ -85,13 +98,71 @@ func Run(ctx context.Context, t ValidatedTool, args ...string) ([]byte, error) {
 // path is a false positive in this context — addressed by the
 // .golangci.yml path-scoped exemption rather than reshaping the
 // invocation. See package doc for callers that bypass cmdrun (tests).
-func RunIn(ctx context.Context, t ValidatedTool, dir string, env []string, args ...string) ([]byte, error) {
+func RunWith(ctx context.Context, t ValidatedTool, opts RunOptions, args ...string) ([]byte, error) {
 	cmd := exec.CommandContext(ctx, t.path, args...)
-	if dir != "" {
-		cmd.Dir = dir
+	if opts.Dir != "" {
+		cmd.Dir = opts.Dir
 	}
-	if env != nil {
-		cmd.Env = env
-	}
+	cmd.Env = mergeEnv(cleanEnv(os.Environ()), opts.ExtraEnv)
 	return cmd.CombinedOutput()
+}
+
+func cleanEnv(env []string) []string {
+	cleaned := make([]string, 0, len(env))
+	for _, entry := range env {
+		key, _, ok := strings.Cut(entry, "=")
+		if !ok || envKeyDenied(key) {
+			continue
+		}
+		cleaned = append(cleaned, entry)
+	}
+	return cleaned
+}
+
+func mergeEnv(base, extra []string) []string {
+	merged := append([]string(nil), base...)
+	for _, entry := range extra {
+		key, _, ok := strings.Cut(entry, "=")
+		if !ok {
+			merged = append(merged, entry)
+			continue
+		}
+		replaced := false
+		for i, existing := range merged {
+			existingKey, _, ok := strings.Cut(existing, "=")
+			if ok && sameEnvKey(existingKey, key) {
+				merged[i] = entry
+				replaced = true
+				break
+			}
+		}
+		if !replaced {
+			merged = append(merged, entry)
+		}
+	}
+	return merged
+}
+
+func envKeyDenied(key string) bool {
+	upper := strings.ToUpper(key)
+	for _, marker := range []string{
+		"PASSWORD",
+		"PASSWD",
+		"SECRET",
+		"TOKEN",
+		"PRIVATE_KEY",
+		"ACCESS_KEY",
+	} {
+		if strings.Contains(upper, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+func sameEnvKey(a, b string) bool {
+	if runtime.GOOS == "windows" {
+		return strings.EqualFold(a, b)
+	}
+	return a == b
 }

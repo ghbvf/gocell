@@ -12,11 +12,11 @@ import (
 // ErrLeaseExpired indicates the processing lease is no longer held —
 // either it expired naturally or another consumer claimed it.
 // Callers MUST stop business logic on this error and proceed to Release.
-var ErrLeaseExpired = errcode.New(errcode.ErrIdempotencyLeaseExpired, "idempotency: processing lease expired")
+var ErrLeaseExpired = errcode.New(errcode.KindConflict, errcode.ErrIdempotencyLeaseExpired, "idempotency: processing lease expired")
 
 // ErrNoClaimLease indicates Receipt methods were called for a Claim result
 // that did not acquire a processing lease.
-var ErrNoClaimLease = errcode.New(errcode.ErrIdempotencyNoClaimLease, "idempotency: no acquired claim lease")
+var ErrNoClaimLease = errcode.New(errcode.KindConflict, errcode.ErrIdempotencyNoClaimLease, "idempotency: no acquired claim lease")
 
 // DefaultTTL is the standard idempotency key TTL per the EventBus specification.
 const DefaultTTL = 24 * time.Hour

@@ -13,7 +13,7 @@ import (
 	"github.com/ghbvf/gocell/examples/todoorder/cells/ordercell/internal/mem"
 	createv1 "github.com/ghbvf/gocell/generated/contracts/http/order/create/v1"
 	"github.com/ghbvf/gocell/kernel/clock"
-	"github.com/ghbvf/gocell/pkg/contracttest"
+	"github.com/ghbvf/gocell/tests/contracttest"
 )
 
 func newContractHandler(t testing.TB) (http.Handler, *recordingWriter) {

@@ -158,7 +158,7 @@ func TestOutboxWriter_Write_ZeroCreatedAt(t *testing.T) {
 
 func TestOutboxWriter_Write_TxExecError(t *testing.T) {
 	w := NewOutboxWriter(clock.Real())
-	tx := &mockOutboxTx{execErr: errcode.New(ErrAdapterPGQuery, "exec failed")}
+	tx := &mockOutboxTx{execErr: errcode.New(errcode.KindInternal, ErrAdapterPGQuery, "exec failed")}
 
 	ctx := CtxWithTx(context.Background(), tx)
 	entry := outbox.Entry{
@@ -453,7 +453,7 @@ func TestOutboxWriter_WriteBatch_InvalidEntry(t *testing.T) {
 
 func TestOutboxWriter_WriteBatch_ExecError(t *testing.T) {
 	w := NewOutboxWriter(clock.Real())
-	tx := &mockOutboxTx{execErr: errcode.New(ErrAdapterPGQuery, "batch exec failed")}
+	tx := &mockOutboxTx{execErr: errcode.New(errcode.KindInternal, ErrAdapterPGQuery, "batch exec failed")}
 	ctx := CtxWithTx(context.Background(), tx)
 
 	entries := []outbox.Entry{

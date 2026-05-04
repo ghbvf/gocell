@@ -24,7 +24,7 @@ func F(name, value string) NamedValue {
 	return NamedValue{Name: name, Value: value}
 }
 
-// RequireNotBlank returns nil when every field's value is non-empty. On
+// RequireNotEmpty returns nil when every field's value is non-empty. On
 // the first empty value it returns errcode.New(code, "<field> is required").
 //
 // Empty means value == ""; whitespace-only strings are NOT trimmed, matching
@@ -34,23 +34,23 @@ func F(name, value string) NamedValue {
 //
 // Usage:
 //
-//	if err := validation.RequireNotBlank(errcode.ErrAuthIdentityInvalidInput,
+//	if err := validation.RequireNotEmpty(errcode.ErrAuthIdentityInvalidInput,
 //	    validation.F("id", req.ID),
 //	); err != nil {
 //	    return err
 //	}
 //
-//	if err := validation.RequireNotBlank(errcode.ErrAuthLoginInvalidInput,
+//	if err := validation.RequireNotEmpty(errcode.ErrAuthLoginInvalidInput,
 //	    validation.F("userId", req.UserID),
 //	    validation.F("oldPassword", req.OldPassword),
 //	    validation.F("newPassword", req.NewPassword),
 //	); err != nil {
 //	    return err
 //	}
-func RequireNotBlank(code errcode.Code, fields ...NamedValue) error {
+func RequireNotEmpty(code errcode.Code, fields ...NamedValue) error {
 	for _, f := range fields {
 		if f.Value == "" {
-			return errcode.New(code, fmt.Sprintf("%s is required", f.Name))
+			return errcode.New(errcode.KindInvalid, code, fmt.Sprintf("%s is required", f.Name))
 		}
 	}
 	return nil

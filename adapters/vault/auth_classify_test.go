@@ -104,7 +104,7 @@ func TestClassifyAuthLoginError_Table(t *testing.T) {
 		},
 		{
 			name: "vault 400/403/404 via errcode.Wrap → auth_invalid (errors.As unwraps)",
-			err: errcode.Wrap(errcode.ErrVaultAuthFailed, "login",
+			err: errcode.Wrap(errcode.KindUnavailable, errcode.ErrVaultAuthFailed, "login",
 				&vaultapi.ResponseError{StatusCode: 400, Errors: []string{"invalid role_id"}}),
 			want: reasonAuthInvalid,
 		},

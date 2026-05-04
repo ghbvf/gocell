@@ -190,20 +190,20 @@ func (a *CoreAssembly) Register(c cell.Cell) error {
 	defer a.mu.Unlock()
 
 	if a.state != stateStopped {
-		return errcode.New(errcode.ErrValidationFailed,
+		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			fmt.Sprintf("assembly %q: cannot register in state %d", a.id, a.state))
 	}
 
 	if c == nil {
-		return errcode.New(errcode.ErrValidationFailed, "cell must not be nil")
+		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "cell must not be nil")
 	}
 
 	id := c.ID()
 	if id == "" {
-		return errcode.New(errcode.ErrValidationFailed, "cell ID must not be empty")
+		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "cell ID must not be empty")
 	}
 	if _, exists := a.cellMap[id]; exists {
-		return errcode.New(errcode.ErrValidationFailed,
+		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			fmt.Sprintf("duplicate cell ID: %q", id))
 	}
 	a.cells = append(a.cells, c)
@@ -301,21 +301,21 @@ func (a *CoreAssembly) stopCellWithHooks(ctx context.Context, c cell.Cell) []err
 		if err := a.invokeHook(ctx, c.ID(), cell.HookBeforeStop, bs.BeforeStop); err != nil {
 			slog.Warn("lifecycle: BeforeStop failed",
 				slog.String("cell", c.ID()), slog.Any("error", err))
-			errs = append(errs, errcode.Wrap(errcode.ErrLifecycleInvalid,
+			errs = append(errs, errcode.Wrap(errcode.KindInvalid, errcode.ErrLifecycleInvalid,
 				fmt.Sprintf("assembly: BeforeStop cell %q", c.ID()), err))
 		}
 	}
 	if err := c.Stop(ctx); err != nil {
 		slog.Warn("lifecycle: Stop failed",
 			slog.String("cell", c.ID()), slog.Any("error", err))
-		errs = append(errs, errcode.Wrap(errcode.ErrLifecycleInvalid,
+		errs = append(errs, errcode.Wrap(errcode.KindInvalid, errcode.ErrLifecycleInvalid,
 			fmt.Sprintf("assembly: stop cell %q", c.ID()), err))
 	}
 	if as, ok := c.(cell.AfterStopper); ok {
 		if err := a.invokeHook(ctx, c.ID(), cell.HookAfterStop, as.AfterStop); err != nil {
 			slog.Warn("lifecycle: AfterStop failed",
 				slog.String("cell", c.ID()), slog.Any("error", err))
-			errs = append(errs, errcode.Wrap(errcode.ErrLifecycleInvalid,
+			errs = append(errs, errcode.Wrap(errcode.KindInvalid, errcode.ErrLifecycleInvalid,
 				fmt.Sprintf("assembly: AfterStop cell %q", c.ID()), err))
 		}
 	}
@@ -359,7 +359,7 @@ func (a *CoreAssembly) startInternal(ctx context.Context, cfgMap map[string]any)
 		// Stop()/Start() goroutine writes after we release a.mu.
 		observedState := a.state
 		a.mu.Unlock()
-		return errcode.New(errcode.ErrValidationFailed,
+		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			fmt.Sprintf("assembly %q: cannot start in state %d", a.id, observedState))
 	}
 	a.state = stateStarting
@@ -373,7 +373,7 @@ func (a *CoreAssembly) startInternal(ctx context.Context, cfgMap map[string]any)
 		a.mu.Lock()
 		a.state = stateStopped
 		a.mu.Unlock()
-		return errcode.Wrap(errcode.ErrValidationFailed,
+		return errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed,
 			fmt.Sprintf("assembly %q", a.id), err)
 	}
 
@@ -402,7 +402,7 @@ func (a *CoreAssembly) startInternal(ctx context.Context, cfgMap map[string]any)
 			a.mu.Lock()
 			a.state = stateStopped
 			a.mu.Unlock()
-			return errcode.Wrap(errcode.ErrValidationFailed,
+			return errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed,
 				fmt.Sprintf("assembly: init cell %q", c.ID()), err)
 		}
 		localSnaps[c.ID()] = recorder.Snapshot()
@@ -474,7 +474,7 @@ func (a *CoreAssembly) failStart(cellID, phase string, err error) error {
 	a.state = stateStopped
 	a.snapshots = make(map[string]cell.RegistrySnapshot)
 	a.mu.Unlock()
-	return errcode.Wrap(errcode.ErrLifecycleInvalid,
+	return errcode.Wrap(errcode.KindInvalid, errcode.ErrLifecycleInvalid,
 		fmt.Sprintf("assembly: %s cell %q", phase, cellID), err)
 }
 

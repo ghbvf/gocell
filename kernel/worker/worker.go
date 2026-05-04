@@ -24,7 +24,8 @@ import (
 // firstErr unset) masked the abnormal state from operators. Modeling it as
 // a typed error lets the group propagate the failure and lets callers
 // errors.Is-check for it during shutdown reasoning.
-var ErrWorkerExitedEarly = errcode.New(errcode.ErrWorkerExitedEarly, "worker: exited early without error before context cancellation")
+var ErrWorkerExitedEarly = errcode.New(errcode.KindInternal, errcode.ErrWorkerExitedEarly,
+	"worker: exited early without error before context cancellation")
 
 // Worker represents a long-running background task.
 //

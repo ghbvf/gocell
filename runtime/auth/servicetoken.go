@@ -116,14 +116,14 @@ type HMACKeyRing struct {
 // meet the minimum length.
 func NewHMACKeyRing(current []byte, previous []byte) (*HMACKeyRing, error) {
 	if len(current) == 0 {
-		return nil, errcode.New(errcode.ErrAuthKeyMissing, "current HMAC secret must not be empty")
+		return nil, errcode.New(errcode.KindInternal, errcode.ErrAuthKeyMissing, "current HMAC secret must not be empty")
 	}
 	if len(current) < MinHMACKeyBytes {
-		return nil, errcode.New(errcode.ErrAuthKeyInvalid,
+		return nil, errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthKeyInvalid,
 			fmt.Sprintf("current HMAC secret is %d bytes, minimum is %d", len(current), MinHMACKeyBytes))
 	}
 	if len(previous) > 0 && len(previous) < MinHMACKeyBytes {
-		return nil, errcode.New(errcode.ErrAuthKeyInvalid,
+		return nil, errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthKeyInvalid,
 			fmt.Sprintf("previous HMAC secret is %d bytes, minimum is %d", len(previous), MinHMACKeyBytes))
 	}
 	return &HMACKeyRing{
@@ -169,7 +169,7 @@ const (
 func LoadHMACKeyRingFromEnv() (*HMACKeyRing, error) {
 	current := os.Getenv(EnvServiceSecret)
 	if current == "" {
-		return nil, errcode.New(errcode.ErrAuthKeyMissing,
+		return nil, errcode.New(errcode.KindInternal, errcode.ErrAuthKeyMissing,
 			fmt.Sprintf("environment variable %s is not set", EnvServiceSecret))
 	}
 
@@ -262,7 +262,8 @@ func errorMiddlewareInternal(cfg serviceTokenConfig, reason string) func(http.Ha
 			cfg.logger.Error("service token middleware misconfigured",
 				slog.String("reason", reason),
 				slog.String("path", r.URL.Path))
-			httputil.WriteError(r.Context(), w, http.StatusInternalServerError, "ERR_INTERNAL", msgInternalServerError)
+			httputil.WriteError(r.Context(), w,
+				errcode.New(errcode.KindInternal, errcode.ErrInternal, msgInternalServerError))
 		})
 	}
 }
@@ -277,7 +278,8 @@ func handleServiceToken(cfg serviceTokenConfig, auth Authenticator, next http.Ha
 	token := extractServiceToken(r)
 	if token == "" {
 		cfg.metrics.recordServiceVerify("failure", "missing")
-		httputil.WriteError(r.Context(), w, http.StatusUnauthorized, "ERR_AUTH_UNAUTHORIZED", "missing service token")
+		httputil.WriteError(r.Context(), w,
+			errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthUnauthorized, "missing service token"))
 		return
 	}
 
@@ -297,7 +299,8 @@ func handleServiceToken(cfg serviceTokenConfig, auth Authenticator, next http.Ha
 		// Absent: no ServiceToken header (already handled by extractServiceToken
 		// above, so this branch is a safety net for unexpected absent outcomes).
 		cfg.metrics.recordServiceVerify("failure", "missing")
-		httputil.WriteError(r.Context(), w, http.StatusUnauthorized, "ERR_AUTH_UNAUTHORIZED", "missing service token")
+		httputil.WriteError(r.Context(), w,
+			errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthUnauthorized, "missing service token"))
 		return
 	}
 
@@ -334,8 +337,8 @@ func writeServiceTokenError(cfg serviceTokenConfig, err error, callerCell string
 			slog.String("remote", r.RemoteAddr),
 			slog.String("caller_cell", callerCell),
 		)
-		httputil.WriteError(r.Context(), w, http.StatusUnauthorized,
-			string(errcode.ErrAuthReplayDetected), "service token replay detected")
+		httputil.WriteError(r.Context(), w,
+			errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthReplayDetected, "service token replay detected"))
 		return
 	}
 
@@ -345,7 +348,8 @@ func writeServiceTokenError(cfg serviceTokenConfig, err error, callerCell string
 		cfg.metrics.recordServiceVerify("failure", "nonce_store_full")
 		cfg.logger.Error("nonce store full; rejecting request",
 			slog.String("path", r.URL.Path))
-		httputil.WriteError(r.Context(), w, http.StatusServiceUnavailable, string(errcode.ErrNonceStoreFull), "service temporarily unavailable")
+		httputil.WriteError(r.Context(), w,
+			errcode.New(errcode.KindUnavailable, errcode.ErrNonceStoreFull, "service temporarily unavailable"))
 		return
 	}
 
@@ -356,7 +360,8 @@ func writeServiceTokenError(cfg serviceTokenConfig, err error, callerCell string
 	if errors.As(err, &ec) && ec.Cause != nil {
 		cfg.metrics.recordServiceVerify("failure", "nonce_store_error")
 		cfg.logger.Error("nonce store check failed", slog.Any("error", ec.Cause))
-		httputil.WriteError(r.Context(), w, http.StatusInternalServerError, "ERR_INTERNAL", msgInternalServerError)
+		httputil.WriteError(r.Context(), w,
+			errcode.New(errcode.KindInternal, errcode.ErrInternal, msgInternalServerError))
 		return
 	}
 
@@ -388,7 +393,8 @@ func writeServiceTokenError(cfg serviceTokenConfig, err error, callerCell string
 		)
 	}
 	cfg.metrics.recordServiceVerify("failure", reason)
-	httputil.WriteError(r.Context(), w, http.StatusUnauthorized, "ERR_AUTH_UNAUTHORIZED", "invalid service token")
+	httputil.WriteError(r.Context(), w,
+		errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthUnauthorized, "invalid service token"))
 }
 
 // classifyServiceTokenVerifyError maps a verifyServiceTokenPayload error to a

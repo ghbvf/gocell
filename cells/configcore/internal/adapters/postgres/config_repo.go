@@ -18,6 +18,7 @@ import (
 	kcrypto "github.com/ghbvf/gocell/kernel/crypto"
 	"github.com/ghbvf/gocell/pkg/ctxcancel"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/pgquery"
 	"github.com/ghbvf/gocell/pkg/query"
 )
 
@@ -41,9 +42,9 @@ import (
 //
 // Public Message stays a generic descriptor; InternalMessage embeds the
 // identifier (config key or configID) for internal triage only. The HTTP
-// status mapping is driven independently by codeToStatus
-// (ErrConfigEncryptFailed → 500, ErrConfigDecryptFailed → 500,
-// ErrConfigRepoQuery → 500, ErrClientCanceled → 499); only the in-process classifier shifts.
+// status is explicit: context cancellation is handled by ctxcancel, transient
+// key-provider faults are unavailable, and all other crypto failures are
+// internal.
 //
 // ref: google/tink aead/subtle/aes_gcm.go — symmetric crypto errors do not
 // carry key identifiers in Error() strings.
@@ -53,16 +54,15 @@ func (r *ConfigRepository) cryptoOpError(code errcode.Code, op, identifier strin
 		return cancelErr
 	}
 	category := errcode.CategoryAuth
+	kind := errcode.KindInternal
 	if errcode.IsTransient(cause) {
 		category = errcode.CategoryInfra
+		kind = errcode.KindUnavailable
 	}
-	return &errcode.Error{
-		Code:            code,
-		Message:         fmt.Sprintf("config repo: %s failed", op),
-		InternalMessage: fmt.Sprintf("config repo: %s failed (%s)", op, identifier),
-		Cause:           cause,
-		Category:        category,
-	}
+	return errcode.Wrap(kind, code, fmt.Sprintf("config repo: %s failed", op), cause,
+		errcode.WithInternal(fmt.Sprintf("config repo: %s failed (%s)", op, identifier)),
+		errcode.WithCategory(category),
+	)
 }
 
 // DBTX abstracts the database operations needed by ConfigRepository.
@@ -93,6 +93,8 @@ type Row interface {
 // so encryptValue / decryptValue / plaintext_migration all derive AAD
 // identically.
 const cellID = "configcore"
+
+const configRepoQueryFailedMessage = "config repo query failed"
 
 // Compile-time interface check.
 var _ ports.ConfigRepository = (*ConfigRepository)(nil)
@@ -179,7 +181,7 @@ func (r *ConfigRepository) resolveWriteDB(ctx context.Context) (DBTX, error) {
 // Returns (ciphertext, keyID, nonce, edk) or error.
 func (r *ConfigRepository) encryptValue(ctx context.Context, key, value string) (ct []byte, keyID string, nonce, edk []byte, err error) {
 	if r.transformer == nil {
-		return nil, "", nil, nil, errcode.New(errcode.ErrConfigKeyMissing,
+		return nil, "", nil, nil, errcode.New(errcode.KindInternal, errcode.ErrConfigKeyMissing,
 			"config repo: no ValueTransformer configured for sensitive entry")
 	}
 	aad := configcrypto.AADForConfig(cellID, key)
@@ -194,7 +196,7 @@ func (r *ConfigRepository) encryptValue(ctx context.Context, key, value string) 
 // Fail-closed: returns ErrConfigDecryptFailed on any error.
 func (r *ConfigRepository) decryptValue(ctx context.Context, key string, ct []byte, keyID string, nonce, edk []byte) (string, error) {
 	if r.transformer == nil {
-		return "", errcode.New(errcode.ErrConfigDecryptFailed,
+		return "", errcode.New(errcode.KindInternal, errcode.ErrConfigDecryptFailed,
 			"config repo: no ValueTransformer configured, cannot decrypt sensitive value")
 	}
 	aad := configcrypto.AADForConfig(cellID, key)
@@ -213,7 +215,7 @@ func (r *ConfigRepository) encryptVersionValue(
 	ctx context.Context, configID, value string,
 ) (ct []byte, keyID string, nonce, edk []byte, err error) {
 	if r.transformer == nil {
-		return nil, "", nil, nil, errcode.New(errcode.ErrConfigKeyMissing,
+		return nil, "", nil, nil, errcode.New(errcode.KindInternal, errcode.ErrConfigKeyMissing,
 			"config repo: no ValueTransformer configured for sensitive version")
 	}
 	aad := configcrypto.AADForVersion(cellID, configID)
@@ -231,7 +233,7 @@ func (r *ConfigRepository) decryptVersionValue(
 	ctx context.Context, configID string, ct []byte, keyID string, nonce, edk []byte,
 ) (string, error) {
 	if r.transformer == nil {
-		return "", errcode.New(errcode.ErrConfigDecryptFailed,
+		return "", errcode.New(errcode.KindInternal, errcode.ErrConfigDecryptFailed,
 			"config repo: no ValueTransformer configured, cannot decrypt sensitive version")
 	}
 	aad := configcrypto.AADForVersion(cellID, configID)
@@ -288,13 +290,10 @@ func (r *ConfigRepository) Create(ctx context.Context, entry *domain.ConfigEntry
 		if cancelErr := ctxcancel.Wrap(err, "Create", "key="+entry.Key); cancelErr != nil {
 			return cancelErr
 		}
-		return &errcode.Error{
-			Code:            errcode.ErrConfigRepoQuery,
-			Message:         "config repo: create failed",
-			InternalMessage: fmt.Sprintf("config repo: Create failed (key=%s)", entry.Key),
-			Cause:           err,
-			Category:        errcode.CategoryInfra,
-		}
+		return errcode.Wrap(errcode.KindInternal, errcode.ErrConfigRepoQuery, "config repo: create failed", err,
+			errcode.WithInternal(fmt.Sprintf("config repo: Create failed (key=%s)", entry.Key)),
+			errcode.WithCategory(errcode.CategoryInfra),
+		)
 	}
 	return nil
 }
@@ -353,21 +352,17 @@ func (r *ConfigRepository) scanConfigOrMapError(
 		return nil, nil, nil, nil, nil, infraErr
 	}
 	if errors.Is(err, pgx.ErrNoRows) {
-		return nil, nil, nil, nil, nil, &errcode.Error{
-			Code:            errcode.ErrConfigRepoNotFound,
-			Message:         "config not found",
-			InternalMessage: fmt.Sprintf("config repo: %s miss key=%s", op, key),
-			Cause:           err,
-			Category:        errcode.CategoryDomain,
-		}
+		return nil, nil, nil, nil, nil, errcode.Wrap(errcode.KindNotFound, errcode.ErrConfigRepoNotFound,
+			"config not found", err,
+			errcode.WithInternal(fmt.Sprintf("config repo: %s miss key=%s", op, key)),
+			errcode.WithCategory(errcode.CategoryDomain),
+		)
 	}
-	return nil, nil, nil, nil, nil, &errcode.Error{
-		Code:            errcode.ErrConfigRepoQuery,
-		Message:         "config repo query failed",
-		InternalMessage: fmt.Sprintf("config repo: %s scan error key=%s", op, key),
-		Cause:           err,
-		Category:        errcode.CategoryInfra,
-	}
+	return nil, nil, nil, nil, nil, errcode.Wrap(errcode.KindInternal, errcode.ErrConfigRepoQuery,
+		configRepoQueryFailedMessage, err,
+		errcode.WithInternal(fmt.Sprintf("config repo: %s scan error key=%s", op, key)),
+		errcode.WithCategory(errcode.CategoryInfra),
+	)
 }
 
 // decryptScannedEntry applies fail-closed sensitive-value decryption and stale-key
@@ -382,7 +377,7 @@ func (r *ConfigRepository) decryptScannedEntry(
 	}
 	if len(ct) == 0 || keyID == nil || *keyID == "" {
 		// Legacy plaintext row: sensitive=true but value_cipher IS NULL.
-		return errcode.New(errcode.ErrConfigDecryptFailed,
+		return errcode.New(errcode.KindInternal, errcode.ErrConfigDecryptFailed,
 			"sensitive value is in legacy plaintext format; run plaintext_migration tool before reading")
 	}
 	plain, err := r.decryptValue(ctx, e.Key, ct, *keyID, nonce, edk)
@@ -468,21 +463,17 @@ func (r *ConfigRepository) Update(ctx context.Context, key string, value string)
 			return nil, infraErr
 		}
 		if errors.Is(scanErr, pgx.ErrNoRows) {
-			return nil, &errcode.Error{
-				Code:            errcode.ErrConfigRepoNotFound,
-				Message:         "config not found",
-				InternalMessage: fmt.Sprintf("config repo: Update miss key=%s", key),
-				Cause:           scanErr,
-				Category:        errcode.CategoryDomain,
-			}
+			return nil, errcode.Wrap(errcode.KindNotFound, errcode.ErrConfigRepoNotFound,
+				"config not found", scanErr,
+				errcode.WithInternal(fmt.Sprintf("config repo: Update miss key=%s", key)),
+				errcode.WithCategory(errcode.CategoryDomain),
+			)
 		}
-		return nil, &errcode.Error{
-			Code:            errcode.ErrConfigRepoQuery,
-			Message:         "config repo query failed",
-			InternalMessage: fmt.Sprintf("config repo: Update select-for-update error key=%s", key),
-			Cause:           scanErr,
-			Category:        errcode.CategoryInfra,
-		}
+		return nil, errcode.Wrap(errcode.KindInternal, errcode.ErrConfigRepoQuery,
+			configRepoQueryFailedMessage, scanErr,
+			errcode.WithInternal(fmt.Sprintf("config repo: Update select-for-update error key=%s", key)),
+			errcode.WithCategory(errcode.CategoryInfra),
+		)
 	}
 
 	return r.doUpdate(ctx, db, "Update", key, value, sensitive)
@@ -617,11 +608,11 @@ func (r *ConfigRepository) applySensitiveListSentinel(
 // This design avoids bulk decryption on list operations and prevents accidental
 // exposure of sensitive values in list responses.
 func (r *ConfigRepository) List(ctx context.Context, params query.ListParams) ([]*domain.ConfigEntry, error) {
-	b := query.NewBuilder()
+	b := pgquery.NewBuilder()
 	b.Append("SELECT " + listEntryColumns + " FROM config_entries WHERE 1=1")
 
-	if err := query.AppendKeyset(b, params); err != nil {
-		return nil, errcode.WrapInfra(errcode.ErrConfigRepoQuery, "config repo: keyset build failed", err)
+	if err := pgquery.AppendKeyset(b, params); err != nil {
+		return nil, errcode.Wrap(errcode.KindInternal, errcode.ErrConfigRepoQuery, "config repo: keyset build failed", err)
 	}
 
 	sql, args := b.Build()
@@ -720,28 +711,24 @@ func (r *ConfigRepository) GetVersion(ctx context.Context, configID string, vers
 			return nil, infraErr
 		}
 		if errors.Is(err, pgx.ErrNoRows) {
-			return nil, &errcode.Error{
-				Code:            errcode.ErrConfigRepoNotFound,
-				Message:         "config version not found",
-				InternalMessage: fmt.Sprintf("config repo: GetVersion miss config_id=%s version=%d", configID, version),
-				Cause:           err,
-				Category:        errcode.CategoryDomain,
-			}
+			return nil, errcode.Wrap(errcode.KindNotFound, errcode.ErrConfigRepoNotFound,
+				"config version not found", err,
+				errcode.WithInternal(fmt.Sprintf("config repo: GetVersion miss config_id=%s version=%d", configID, version)),
+				errcode.WithCategory(errcode.CategoryDomain),
+			)
 		}
-		return nil, &errcode.Error{
-			Code:            errcode.ErrConfigRepoQuery,
-			Message:         "config repo query failed",
-			InternalMessage: fmt.Sprintf("config repo: GetVersion scan error config_id=%s version=%d", configID, version),
-			Cause:           err,
-			Category:        errcode.CategoryInfra,
-		}
+		return nil, errcode.Wrap(errcode.KindInternal, errcode.ErrConfigRepoQuery,
+			configRepoQueryFailedMessage, err,
+			errcode.WithInternal(fmt.Sprintf("config repo: GetVersion scan error config_id=%s version=%d", configID, version)),
+			errcode.WithCategory(errcode.CategoryInfra),
+		)
 	}
 
 	// Fail-closed enforcement for sensitive versions.
 	if v.Sensitive {
 		if len(valueCipher) == 0 || valueKeyID == nil || *valueKeyID == "" {
 			// Legacy plaintext version row: block read until plaintext_migration completes.
-			return nil, errcode.New(errcode.ErrConfigDecryptFailed,
+			return nil, errcode.New(errcode.KindInternal, errcode.ErrConfigDecryptFailed,
 				"sensitive version is in legacy plaintext format; run plaintext_migration tool before reading")
 		}
 		plain, err := r.decryptVersionValue(ctx, v.ConfigID, valueCipher, *valueKeyID, valueNonce, valueEDK)

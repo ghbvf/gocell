@@ -16,8 +16,8 @@ import (
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/cell/celltest"
 	"github.com/ghbvf/gocell/kernel/clock"
-	"github.com/ghbvf/gocell/pkg/contracttest"
 	"github.com/ghbvf/gocell/runtime/auth"
+	"github.com/ghbvf/gocell/tests/contracttest"
 )
 
 const testAdminSubject = "admin-test"

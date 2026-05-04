@@ -77,7 +77,7 @@ func (tm *TxManager) RunInTx(ctx context.Context, fn func(ctx context.Context) e
 	// Start a new top-level transaction.
 	tx, err := tm.pool.Begin(ctx)
 	if err != nil {
-		return errcode.Wrap(ErrAdapterPGConnect, "postgres: begin tx", err)
+		return errcode.Wrap(errcode.KindInternal, ErrAdapterPGConnect, "postgres: begin tx", err)
 	}
 
 	txCtx := CtxWithTx(ctx, tx)
@@ -112,7 +112,7 @@ func (tm *TxManager) RunInTx(ctx context.Context, fn func(ctx context.Context) e
 	}
 
 	if err := tx.Commit(ctx); err != nil {
-		return errcode.Wrap(ErrAdapterPGConnect, "postgres: commit tx", err)
+		return errcode.Wrap(errcode.KindInternal, ErrAdapterPGConnect, "postgres: commit tx", err)
 	}
 	return nil
 }
@@ -123,7 +123,7 @@ func (tm *TxManager) runInSavepoint(ctx context.Context, tx pgx.Tx, fn func(ctx 
 	spName := fmt.Sprintf("sp_%d", depth)
 
 	if _, err := tx.Exec(ctx, fmt.Sprintf("SAVEPOINT %s", spName)); err != nil {
-		return errcode.Wrap(ErrAdapterPGQuery, fmt.Sprintf("postgres: create savepoint %s", spName), err)
+		return errcode.Wrap(errcode.KindInternal, ErrAdapterPGQuery, fmt.Sprintf("postgres: create savepoint %s", spName), err)
 	}
 
 	nestedCtx := withSavepointDepth(ctx, depth+1)
@@ -157,7 +157,7 @@ func (tm *TxManager) runInSavepoint(ctx context.Context, tx pgx.Tx, fn func(ctx 
 	}
 
 	if _, err := tx.Exec(ctx, fmt.Sprintf("RELEASE SAVEPOINT %s", spName)); err != nil {
-		return errcode.Wrap(ErrAdapterPGQuery, fmt.Sprintf("postgres: release savepoint %s", spName), err)
+		return errcode.Wrap(errcode.KindInternal, ErrAdapterPGQuery, fmt.Sprintf("postgres: release savepoint %s", spName), err)
 	}
 	return nil
 }

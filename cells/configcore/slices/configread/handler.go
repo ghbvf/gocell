@@ -94,7 +94,7 @@ func (h *Handler) HandleGet(w http.ResponseWriter, r *http.Request) {
 
 	entry, err := h.svc.GetByKey(r.Context(), key)
 	if err != nil {
-		httputil.WriteDomainError(r.Context(), w, err)
+		httputil.WriteError(r.Context(), w, err)
 		return
 	}
 
@@ -103,7 +103,7 @@ func (h *Handler) HandleGet(w http.ResponseWriter, r *http.Request) {
 
 // HandleList handles GET /?limit=N&cursor=TOKEN — returns paginated config entries.
 func (h *Handler) HandleList(w http.ResponseWriter, r *http.Request) {
-	r = r.WithContext(httputil.WithListErrorLogSampling(r.Context(), specConfigList.ID))
+	r = r.WithContext(httputil.WithClientErrorLogSampling(r.Context(), specConfigList.ID))
 
 	pageReq, ok := httputil.ParsePageParamsOrWrite(w, r)
 	if !ok {
@@ -112,7 +112,7 @@ func (h *Handler) HandleList(w http.ResponseWriter, r *http.Request) {
 
 	result, err := h.svc.List(r.Context(), pageReq)
 	if err != nil {
-		httputil.WritePageDomainError(r.Context(), w, err)
+		httputil.WriteError(r.Context(), w, err)
 		return
 	}
 

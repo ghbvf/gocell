@@ -106,10 +106,10 @@ type Sweeper struct {
 // Start begins the sweep loop, blocking until ctx is canceled.
 func (s *Sweeper) Start(ctx context.Context) error {
 	if s.Scanner == nil {
-		return errcode.New(errcode.ErrValidationFailed, "command: Sweeper.Scanner must be non-nil")
+		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "command: Sweeper.Scanner must be non-nil")
 	}
 	if s.Queue == nil {
-		return errcode.New(errcode.ErrValidationFailed, "command: Sweeper.Queue must be non-nil")
+		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "command: Sweeper.Queue must be non-nil")
 	}
 	clock.MustHaveClock(s.Clk, "command.Sweeper.Start")
 

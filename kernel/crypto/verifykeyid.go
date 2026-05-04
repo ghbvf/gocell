@@ -22,7 +22,7 @@ import (
 // or non-numeric version strings.
 func ParseKeyID(keyID string) (provider string, version int, err error) {
 	if keyID == "" {
-		return "", 0, errcode.New(errcode.ErrKeyProviderDecryptFailed,
+		return "", 0, errcode.New(errcode.KindInternal, errcode.ErrKeyProviderDecryptFailed,
 			"invalid keyID: empty string")
 	}
 
@@ -35,7 +35,7 @@ func ParseKeyID(keyID string) (provider string, version int, err error) {
 		return p, v, err
 	}
 
-	return "", 0, errcode.New(errcode.ErrKeyProviderDecryptFailed,
+	return "", 0, errcode.New(errcode.KindInternal, errcode.ErrKeyProviderDecryptFailed,
 		fmt.Sprintf("invalid keyID %q: must end with '-v{N}' or ':v{N}'", keyID))
 }
 
@@ -54,16 +54,16 @@ func tryParseVersionSuffix(keyID, sep string) (provider string, version int, fou
 	provider = keyID[:idx]
 	versionStr := keyID[idx+len(sep):]
 	if provider == "" {
-		return "", 0, true, errcode.New(errcode.ErrKeyProviderDecryptFailed,
+		return "", 0, true, errcode.New(errcode.KindInternal, errcode.ErrKeyProviderDecryptFailed,
 			fmt.Sprintf("invalid keyID %q: empty provider before %q", keyID, sep))
 	}
 	v, parseErr := strconv.Atoi(versionStr)
 	if parseErr != nil {
-		return "", 0, true, errcode.New(errcode.ErrKeyProviderDecryptFailed,
+		return "", 0, true, errcode.New(errcode.KindInternal, errcode.ErrKeyProviderDecryptFailed,
 			fmt.Sprintf("invalid keyID %q: non-numeric version %q", keyID, versionStr))
 	}
 	if v < 0 {
-		return "", 0, true, errcode.New(errcode.ErrKeyProviderDecryptFailed,
+		return "", 0, true, errcode.New(errcode.KindInternal, errcode.ErrKeyProviderDecryptFailed,
 			fmt.Sprintf("invalid keyID %q: negative version %d", keyID, v))
 	}
 	return provider, v, true, nil
@@ -90,7 +90,7 @@ func MatchKeyID(handleID, edkKeyID string) error {
 	}
 
 	if hp != ep || hv != ev {
-		return errcode.New(errcode.ErrKeyProviderDecryptFailed,
+		return errcode.New(errcode.KindInternal, errcode.ErrKeyProviderDecryptFailed,
 			fmt.Sprintf("keyID mismatch: handle %q does not match edk %q", handleID, edkKeyID))
 	}
 	return nil

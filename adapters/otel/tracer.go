@@ -28,15 +28,15 @@ type Tracer struct {
 // The shutdown function flushes pending spans and releases resources.
 func NewTracer(ctx context.Context, cfg TracerConfig) (*Tracer, func(context.Context) error, error) {
 	if err := cfg.validate(); err != nil {
-		return nil, nil, errcode.Wrap(ErrAdapterOTelConfig, err.Error(), err)
+		return nil, nil, errcode.Wrap(errcode.KindInternal, ErrAdapterOTelConfig, err.Error(), err)
 	}
 	cfg.defaults()
 
 	if cfg.ServiceName == "" {
-		return nil, nil, errcode.New(ErrAdapterOTelConfig, "otel: ServiceName is required")
+		return nil, nil, errcode.New(errcode.KindInternal, ErrAdapterOTelConfig, "otel: ServiceName is required")
 	}
 	if cfg.ExporterEndpoint == "" {
-		return nil, nil, errcode.New(ErrAdapterOTelConfig, "otel: ExporterEndpoint is required")
+		return nil, nil, errcode.New(errcode.KindInternal, ErrAdapterOTelConfig, "otel: ExporterEndpoint is required")
 	}
 
 	opts := []otlptracegrpc.Option{
@@ -48,14 +48,14 @@ func NewTracer(ctx context.Context, cfg TracerConfig) (*Tracer, func(context.Con
 
 	exporter, err := otlptracegrpc.New(ctx, opts...)
 	if err != nil {
-		return nil, nil, errcode.Wrap(ErrAdapterOTelInit, "otel: create OTLP exporter", err)
+		return nil, nil, errcode.Wrap(errcode.KindInternal, ErrAdapterOTelInit, "otel: create OTLP exporter", err)
 	}
 
 	res, err := resource.New(ctx,
 		resource.WithAttributes(semconv.ServiceName(cfg.ServiceName)),
 	)
 	if err != nil {
-		return nil, nil, errcode.Wrap(ErrAdapterOTelInit, "otel: create resource", err)
+		return nil, nil, errcode.Wrap(errcode.KindInternal, ErrAdapterOTelInit, "otel: create resource", err)
 	}
 
 	tp := sdktrace.NewTracerProvider(
@@ -66,7 +66,7 @@ func NewTracer(ctx context.Context, cfg TracerConfig) (*Tracer, func(context.Con
 
 	shutdown := func(shutdownCtx context.Context) error {
 		if shutdownErr := tp.Shutdown(shutdownCtx); shutdownErr != nil {
-			return errcode.Wrap(ErrAdapterOTelShutdown, "otel: shutdown tracer provider", shutdownErr)
+			return errcode.Wrap(errcode.KindInternal, ErrAdapterOTelShutdown, "otel: shutdown tracer provider", shutdownErr)
 		}
 		return nil
 	}
@@ -88,10 +88,10 @@ func NewTracer(ctx context.Context, cfg TracerConfig) (*Tracer, func(context.Con
 // for the same reason.
 func NewTracerFromTracerProvider(tp oteltrace.TracerProvider, serviceName string) (*Tracer, error) {
 	if tp == nil {
-		return nil, errcode.New(ErrAdapterOTelConfig, "otel: TracerProvider is required")
+		return nil, errcode.New(errcode.KindInternal, ErrAdapterOTelConfig, "otel: TracerProvider is required")
 	}
 	if serviceName == "" {
-		return nil, errcode.New(ErrAdapterOTelConfig, "otel: serviceName is required")
+		return nil, errcode.New(errcode.KindInternal, ErrAdapterOTelConfig, "otel: serviceName is required")
 	}
 	return &Tracer{inner: tp.Tracer(serviceName)}, nil
 }

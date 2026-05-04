@@ -45,14 +45,15 @@ func NewOutboxWriter(clk clock.Clock) *OutboxWriter {
 func (w *OutboxWriter) Write(ctx context.Context, entry outbox.Entry) error {
 	tx, ok := TxFromContext(ctx)
 	if !ok {
-		return errcode.New(ErrAdapterPGNoTx, "outbox write requires a transaction in context")
+		return errcode.New(errcode.KindInternal, ErrAdapterPGNoTx, "outbox write requires a transaction in context")
 	}
 
 	if strings.TrimSpace(entry.ID) == "" {
-		return errcode.New(errcode.ErrValidationFailed, "outbox entry ID must not be empty")
+		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "outbox entry ID must not be empty")
 	}
 	if entry.ID == allZeroUUID {
-		return errcode.New(errcode.ErrValidationFailed, "outbox entry ID must not be all-zeros UUID (idempotency collision risk)")
+		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"outbox entry ID must not be all-zeros UUID (idempotency collision risk)")
 	}
 
 	if err := entry.Validate(); err != nil {
@@ -66,12 +67,12 @@ func (w *OutboxWriter) Write(ctx context.Context, entry outbox.Entry) error {
 
 	metadata, err := json.Marshal(entry.Metadata)
 	if err != nil {
-		return errcode.Wrap(ErrAdapterPGMarshal, "outbox: failed to marshal metadata", err)
+		return errcode.Wrap(errcode.KindInternal, ErrAdapterPGMarshal, "outbox: failed to marshal metadata", err)
 	}
 
 	observabilityJSON, err := marshalObservability(entry.Observability)
 	if err != nil {
-		return errcode.Wrap(ErrAdapterPGMarshal, "outbox: failed to marshal observability", err)
+		return errcode.Wrap(errcode.KindInternal, ErrAdapterPGMarshal, "outbox: failed to marshal observability", err)
 	}
 
 	createdAt := entry.CreatedAt
@@ -95,7 +96,7 @@ func (w *OutboxWriter) Write(ctx context.Context, entry outbox.Entry) error {
 		observabilityJSON,
 	)
 	if err != nil {
-		return errcode.Wrap(ErrAdapterPGQuery,
+		return errcode.Wrap(errcode.KindInternal, ErrAdapterPGQuery,
 			fmt.Sprintf("outbox: failed to insert entry %s", entry.ID), err)
 	}
 
@@ -124,17 +125,17 @@ func (w *OutboxWriter) WriteBatch(ctx context.Context, entries []outbox.Entry) e
 
 	tx, ok := TxFromContext(ctx)
 	if !ok {
-		return errcode.New(ErrAdapterPGNoTx, "outbox batch write requires a transaction in context")
+		return errcode.New(errcode.KindInternal, ErrAdapterPGNoTx, "outbox batch write requires a transaction in context")
 	}
 
 	// Validate all entries upfront.
 	for i, e := range entries {
 		if strings.TrimSpace(e.ID) == "" {
-			return errcode.New(errcode.ErrValidationFailed,
+			return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 				fmt.Sprintf("outbox entry[%d] ID must not be empty", i))
 		}
 		if e.ID == allZeroUUID {
-			return errcode.New(errcode.ErrValidationFailed,
+			return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 				fmt.Sprintf("outbox entry[%d] ID must not be all-zeros UUID (idempotency collision risk)", i))
 		}
 		if err := e.Validate(); err != nil {
@@ -172,13 +173,13 @@ func (w *OutboxWriter) writeBatchChunk(ctx context.Context, tx pgx.Tx, entries [
 
 		metadata, err := json.Marshal(e.Metadata)
 		if err != nil {
-			return errcode.Wrap(ErrAdapterPGMarshal,
+			return errcode.Wrap(errcode.KindInternal, ErrAdapterPGMarshal,
 				fmt.Sprintf("outbox entry[%d]: failed to marshal metadata", globalOffset+i), err)
 		}
 
 		observabilityJSON, err := marshalObservability(e.Observability)
 		if err != nil {
-			return errcode.Wrap(ErrAdapterPGMarshal,
+			return errcode.Wrap(errcode.KindInternal, ErrAdapterPGMarshal,
 				fmt.Sprintf("outbox entry[%d]: failed to marshal observability", globalOffset+i), err)
 		}
 
@@ -208,7 +209,7 @@ func (w *OutboxWriter) writeBatchChunk(ctx context.Context, tx pgx.Tx, entries [
 
 	_, err := tx.Exec(ctx, sb.String(), args...)
 	if err != nil {
-		return errcode.Wrap(ErrAdapterPGQuery,
+		return errcode.Wrap(errcode.KindInternal, ErrAdapterPGQuery,
 			fmt.Sprintf("outbox: failed to batch insert %d entries", len(entries)), err)
 	}
 	return nil

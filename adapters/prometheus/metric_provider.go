@@ -51,7 +51,7 @@ var _ metrics.Provider = (*MetricProvider)(nil)
 //   - ErrAdapterPromConfig if Registry is nil (required).
 func NewMetricProvider(cfg MetricProviderConfig) (*MetricProvider, error) {
 	if cfg.Registry == nil {
-		return nil, errcode.New(ErrAdapterPromConfig, "prometheus metric provider: Registry is required")
+		return nil, errcode.New(errcode.KindInternal, ErrAdapterPromConfig, "prometheus metric provider: Registry is required")
 	}
 	return &MetricProvider{
 		cfg:  cfg,
@@ -108,17 +108,17 @@ func registerOrReuse[T prom.Collector](
 	} else {
 		var are prom.AlreadyRegisteredError
 		if !errors.As(err, &are) {
-			return zero, errcode.Wrap(ErrAdapterPromRegister,
+			return zero, errcode.Wrap(errcode.KindInternal, ErrAdapterPromRegister,
 				"prometheus metric provider: register "+kindLabel+" "+name, err)
 		}
 		existing, castOK := are.ExistingCollector.(T)
 		if !castOK {
-			return zero, errcode.Wrap(ErrAdapterPromRegister,
+			return zero, errcode.Wrap(errcode.KindInternal, ErrAdapterPromRegister,
 				"prometheus metric provider: existing collector type mismatch for "+kindLabel+" "+name, err)
 		}
 		if existingLabels := lookupLabels(existing); existingLabels != nil {
 			if !slices.Equal(existingLabels, requestedLabels) {
-				return zero, errcode.New(ErrAdapterPromRegister,
+				return zero, errcode.New(errcode.KindInternal, ErrAdapterPromRegister,
 					"prometheus metric provider: label name mismatch for "+kindLabel+" "+name+
 						": existing="+join(existingLabels)+" requested="+join(requestedLabels))
 			}

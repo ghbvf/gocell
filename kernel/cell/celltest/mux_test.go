@@ -179,13 +179,13 @@ func TestTestMux_Route_DuplicateMethodPatternPanics(t *testing.T) {
 func kernelLocalRequireAuthenticated(r *http.Request) error {
 	p, ok := auth.FromContext(r.Context())
 	if !ok {
-		return errcode.New(errcode.ErrAuthUnauthorized, "authentication required")
+		return errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthUnauthorized, "authentication required")
 	}
 	switch {
 	case p.Kind == auth.PrincipalAnonymous:
-		return errcode.New(errcode.ErrAuthUnauthorized, "anonymous principal not permitted")
+		return errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthUnauthorized, "anonymous principal not permitted")
 	case p.Kind == auth.PrincipalUser && p.Subject == "":
-		return errcode.New(errcode.ErrAuthUnauthorized, "principal subject missing")
+		return errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthUnauthorized, "principal subject missing")
 	}
 	return nil
 }

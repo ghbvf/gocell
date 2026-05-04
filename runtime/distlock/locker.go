@@ -103,7 +103,7 @@ type lockerImpl struct {
 // ref: plan "共享 manager goroutine" section
 func New(driver Driver, clk clock.Clock, opts ...Option) (Locker, error) {
 	if validation.IsNilInterface(driver) {
-		return nil, errcode.New(errcode.ErrValidationFailed, "distlock.New: driver must not be nil")
+		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "distlock.New: driver must not be nil")
 	}
 	clock.MustHaveClock(clk, "distlock.New")
 	cfg := defaultConfig()
@@ -134,22 +134,23 @@ func MustNew(driver Driver, clk clock.Clock, opts ...Option) Locker {
 // defaults are in effect before validation runs.
 func validateConfig(cfg config) error {
 	if cfg.renewFraction <= 0 || cfg.renewFraction >= 1 || math.IsNaN(cfg.renewFraction) {
-		return errcode.New(errcode.ErrValidationFailed, "distlock.New: invalid configuration: renewFraction must be in (0, 1), got "+
-			fmt.Sprintf("%v", cfg.renewFraction))
+		return invalidDistlockConfig("renewFraction must be in (0, 1)", cfg.renewFraction)
 	}
 	if cfg.driftFactor < 0 || cfg.driftFactor >= 1 || math.IsNaN(cfg.driftFactor) {
-		return errcode.New(errcode.ErrValidationFailed, "distlock.New: invalid configuration: driftFactor must be in [0, 1), got "+
-			fmt.Sprintf("%v", cfg.driftFactor))
+		return invalidDistlockConfig("driftFactor must be in [0, 1)", cfg.driftFactor)
 	}
 	if cfg.releaseTimeout <= 0 {
-		return errcode.New(errcode.ErrValidationFailed, "distlock.New: invalid configuration: releaseTimeout must be > 0, got "+
-			fmt.Sprintf("%v", cfg.releaseTimeout))
+		return invalidDistlockConfig("releaseTimeout must be > 0", cfg.releaseTimeout)
 	}
 	if cfg.maxRenewAttempts < 1 {
-		return errcode.New(errcode.ErrValidationFailed, "distlock.New: invalid configuration: maxRenewAttempts must be ≥ 1, got "+
-			fmt.Sprintf("%v", cfg.maxRenewAttempts))
+		return invalidDistlockConfig("maxRenewAttempts must be >= 1", cfg.maxRenewAttempts)
 	}
 	return nil
+}
+
+func invalidDistlockConfig(reason string, got any) error {
+	return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+		fmt.Sprintf("distlock.New: invalid configuration: %s, got %v", reason, got))
 }
 
 // Acquire implements Locker.
@@ -163,7 +164,7 @@ func (l *lockerImpl) Acquire(ctx context.Context, key string, ttl time.Duration)
 	// (string_commands.go SetNX). Enforce a 1ms minimum so a misconfigured
 	// caller cannot create a permanent lock that survives process death.
 	if ttl < time.Millisecond {
-		return nil, nil, errcode.New(errcode.ErrValidationFailed,
+		return nil, nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			fmt.Sprintf("distlock: ttl must be ≥ 1ms (got %s); sub-millisecond TTLs would truncate to 0 in Redis and create a permanent lock", ttl))
 	}
 
@@ -178,7 +179,7 @@ func (l *lockerImpl) Acquire(ctx context.Context, key string, ttl time.Duration)
 		return nil, nil, fmt.Errorf("distlock: acquire failed: %w", err)
 	}
 	if !acquired {
-		return nil, nil, errcode.New(ErrLockTimeout,
+		return nil, nil, errcode.New(errcode.KindConflict, ErrLockTimeout,
 			"distlock: lock already held by another holder")
 	}
 

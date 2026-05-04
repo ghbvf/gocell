@@ -20,4 +20,9 @@ import "github.com/ghbvf/gocell/pkg/errcode"
 // expired | revoked | rotated_beyond_grace | reuse_detected).
 //
 // CategoryAuth — the HTTP 401 mapping is enforced by pkg/errcode/classify.go.
-var ErrRejected = errcode.NewAuth(errcode.ErrRefreshTokenRejected, "refresh token rejected")
+var ErrRejected = errcode.New(
+	errcode.KindUnauthenticated,
+	errcode.ErrRefreshTokenRejected,
+	"refresh token rejected",
+	errcode.WithCategory(errcode.CategoryAuth),
+)

@@ -564,19 +564,50 @@ const (
 	ErrMetricsSchemaUnresolved Code = "ERR_METRICS_SCHEMA_UNRESOLVED"
 )
 
+// Option customizes an Error at construction time.
+type Option func(*Error)
+
+// WithCategory sets the origin category used by classifiers. Constructors
+// default to CategoryUnspecified, which IsInfraError treats as infra.
+func WithCategory(category Category) Option {
+	return func(e *Error) {
+		e.Category = category
+	}
+}
+
+// WithInternal sets diagnostic detail that must never be exposed to clients.
+func WithInternal(message string) Option {
+	return func(e *Error) {
+		e.InternalMessage = message
+	}
+}
+
+// WithDetails attaches structured, client-visible details. Response writers
+// strip details from 5xx errors.
+func WithDetails(details map[string]any) Option {
+	return func(e *Error) {
+		if len(details) == 0 {
+			return
+		}
+		if e.Details == nil {
+			e.Details = make(map[string]any, len(details))
+		}
+		maps.Copy(e.Details, details)
+	}
+}
+
 // Error is a structured error that carries a machine-readable Code, a
-// human-readable Message, optional Details, and an optional wrapped Cause.
+// Kind-derived HTTP status, a human-readable Message, optional Details, and an
+// optional wrapped Cause.
 //
 // InternalMessage holds diagnostic detail that must never be exposed to
 // API consumers. When present, Error() uses it (for logs/traces); HTTP
 // response writers use Message (safe for clients).
 //
-// Category classifies the error origin for log-level routing and infra/domain
-// triage. The zero value CategoryUnspecified is treated as infra (fail-closed).
-// Use NewInfra / NewDomain constructors to set the appropriate category; the
-// legacy New / Wrap / Safe constructors leave Category at its zero value to
-// preserve backward compatibility.
+// Category classifies the error origin for infra/domain triage. The zero value
+// CategoryUnspecified is treated as infra (fail-closed).
 type Error struct {
+	Kind            Kind
 	Code            Code
 	Message         string
 	InternalMessage string
@@ -605,50 +636,43 @@ func (e *Error) Unwrap() error {
 	return e.Cause
 }
 
-// New creates an *Error with the given code and message.
-func New(code Code, message string) *Error {
-	return &Error{
+// Status returns the HTTP status derived from e.Kind.
+func (e *Error) Status() int {
+	if e == nil {
+		return KindInternal.Status()
+	}
+	return e.Kind.Status()
+}
+
+// PublicCode returns the wire-safe code for e.
+func (e *Error) PublicCode() Code {
+	if e == nil {
+		return ErrInternal
+	}
+	if e.Kind.IsClient() {
+		return e.Code
+	}
+	return e.Kind.PublicCode()
+}
+
+// New creates an *Error with an explicit transport kind.
+func New(kind Kind, code Code, message string, opts ...Option) *Error {
+	e := &Error{
+		Kind:    kind,
 		Code:    code,
 		Message: message,
 	}
+	for _, opt := range opts {
+		if opt != nil {
+			opt(e)
+		}
+	}
+	return e
 }
 
-// Safe creates an *Error with separate public and internal messages.
-// publicMsg is returned to API clients; internalMsg is used in logs/traces
-// via Error() and must never be exposed over the wire.
-func Safe(code Code, publicMsg, internalMsg string) *Error {
-	return &Error{
-		Code:            code,
-		Message:         publicMsg,
-		InternalMessage: internalMsg,
-	}
-}
-
-// Wrap creates an *Error that wraps an existing error as its Cause.
-func Wrap(code Code, message string, cause error) *Error {
-	return &Error{
-		Code:    code,
-		Message: message,
-		Cause:   cause,
-	}
-}
-
-// WithDetails returns a shallow copy of err with the provided details merged in.
-// If err.Details is nil a new map is allocated; existing keys are preserved
-// unless overwritten by the supplied details.
-func WithDetails(err *Error, details map[string]any) (*Error, error) {
-	if err == nil {
-		return nil, New(ErrInternal, "errcode: WithDetails called with nil *Error")
-	}
-	merged := make(map[string]any, len(err.Details)+len(details))
-	maps.Copy(merged, err.Details)
-	maps.Copy(merged, details)
-	return &Error{
-		Code:            err.Code,
-		Message:         err.Message,
-		InternalMessage: err.InternalMessage,
-		Details:         merged,
-		Cause:           err.Cause,
-		Category:        err.Category,
-	}, nil
+// Wrap creates an *Error with an explicit transport kind and wrapped cause.
+func Wrap(kind Kind, code Code, message string, cause error, opts ...Option) *Error {
+	e := New(kind, code, message, opts...)
+	e.Cause = cause
+	return e
 }

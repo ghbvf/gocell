@@ -261,7 +261,7 @@ func TestValueTransformer_Encrypt_CurrentKeyError(t *testing.T) {
 // handle.Encrypt returns an error, Encrypt surfaces it.
 func TestValueTransformer_Encrypt_HandleEncryptError(t *testing.T) {
 	ctx := context.Background()
-	encErr := &errcode.Error{Code: errcode.ErrKeyProviderEncryptFailed, Message: "cipher error"}
+	encErr := errcode.New(errcode.KindInternal, errcode.ErrKeyProviderEncryptFailed, "cipher error")
 	p := &singleHandleProvider{handle: &errorKeyHandle{encryptErr: encErr}}
 	tr := crypto.NewValueTransformer(p)
 
@@ -328,7 +328,7 @@ func (h *transientErrorHandle) ID() string { return "transient-key" }
 // Encrypt returns ErrKeyProviderTransient — simulating a Vault 503 or network timeout.
 // Implements kernel/crypto.KeyHandle with the Phase 0-b 5-return-value signature.
 func (h *transientErrorHandle) Encrypt(_ context.Context, _, _ []byte) ([]byte, []byte, []byte, string, error) {
-	return nil, nil, nil, "", errcode.New(errcode.ErrKeyProviderTransient,
+	return nil, nil, nil, "", errcode.New(errcode.KindUnavailable, errcode.ErrKeyProviderTransient,
 		"vault: service unavailable (503)")
 }
 
@@ -347,7 +347,7 @@ func (p *fixedHandleProvider) Current(_ context.Context) (crypto.KeyHandle, erro
 }
 
 func (p *fixedHandleProvider) ByID(_ context.Context, _ string) (crypto.KeyHandle, error) {
-	return nil, errcode.New(errcode.ErrKeyProviderKeyNotFound, "ByID not needed in this test")
+	return nil, errcode.New(errcode.KindInternal, errcode.ErrKeyProviderKeyNotFound, "ByID not needed in this test")
 }
 
 func (p *fixedHandleProvider) Rotate(_ context.Context) (string, error) {

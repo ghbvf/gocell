@@ -53,7 +53,7 @@ func ParseLevel(s string) (Level, error) {
 	case "L4":
 		return L4, nil
 	default:
-		return 0, errcode.New(errcode.ErrValidationFailed,
+		return 0, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			fmt.Sprintf("invalid consistency level: %q", s))
 	}
 }
@@ -108,7 +108,7 @@ func ParseCellType(s string) (CellType, error) {
 	case "support":
 		return CellTypeSupport, nil
 	default:
-		return "", errcode.New(errcode.ErrValidationFailed,
+		return "", errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			fmt.Sprintf("invalid cell type: %q", s))
 	}
 }
@@ -126,7 +126,7 @@ func ParseContractKind(s string) (ContractKind, error) {
 	case "projection":
 		return ContractProjection, nil
 	default:
-		return "", errcode.New(errcode.ErrValidationFailed,
+		return "", errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			fmt.Sprintf("invalid contract kind: %q", s))
 	}
 }
@@ -152,7 +152,7 @@ func ParseContractRole(s string) (ContractRole, error) {
 	case "read":
 		return RoleRead, nil
 	default:
-		return "", errcode.New(errcode.ErrValidationFailed,
+		return "", errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			fmt.Sprintf("invalid contract role: %q", s))
 	}
 }
@@ -168,7 +168,7 @@ func ParseLifecycle(s string) (Lifecycle, error) {
 	case "deprecated":
 		return LifecycleDeprecated, nil
 	default:
-		return "", errcode.New(errcode.ErrValidationFailed,
+		return "", errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			fmt.Sprintf("invalid lifecycle: %q", s))
 	}
 }

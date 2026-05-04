@@ -1,294 +1,108 @@
 package errcode
 
 import (
+	"context"
 	"errors"
+	"fmt"
+	"net/http"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
-func TestNew(t *testing.T) {
-	tests := []struct {
-		name    string
-		code    Code
-		message string
-		wantStr string
+func TestNewWrapAndOptions(t *testing.T) {
+	cause := errors.New("pool exhausted")
+	err := Wrap(
+		KindUnavailable,
+		ErrServiceUnavailable,
+		"service unavailable",
+		cause,
+		WithInternal("postgres pool exhausted"),
+		WithDetails(map[string]any{"retry": true}),
+		WithCategory(CategoryInfra),
+	)
+
+	assert.Equal(t, KindUnavailable, err.Kind)
+	assert.Equal(t, ErrServiceUnavailable, err.Code)
+	assert.Equal(t, "service unavailable", err.Message)
+	assert.Equal(t, "postgres pool exhausted", err.InternalMessage)
+	assert.Equal(t, map[string]any{"retry": true}, err.Details)
+	assert.ErrorIs(t, err, cause)
+	assert.Equal(t, "[ERR_SERVICE_UNAVAILABLE] postgres pool exhausted: pool exhausted", err.Error())
+}
+
+func TestKindStatusAndPublicCode(t *testing.T) {
+	cases := []struct {
+		kind       Kind
+		status     int
+		publicCode Code
+		client     bool
 	}{
-		{
-			name:    "metadata invalid",
-			code:    ErrMetadataInvalid,
-			message: "cell.yaml missing required field",
-			wantStr: "[ERR_METADATA_INVALID] cell.yaml missing required field",
-		},
-		{
-			name:    "cell not found",
-			code:    ErrCellNotFound,
-			message: "cell accesscore does not exist",
-			wantStr: "[ERR_CELL_NOT_FOUND] cell accesscore does not exist",
-		},
-		{
-			name:    "dependency cycle",
-			code:    ErrDependencyCycle,
-			message: "a -> b -> a",
-			wantStr: "[ERR_DEPENDENCY_CYCLE] a -> b -> a",
-		},
+		{KindInvalid, http.StatusBadRequest, ErrInternal, true},
+		{KindUnauthenticated, http.StatusUnauthorized, ErrInternal, true},
+		{KindPermissionDenied, http.StatusForbidden, ErrInternal, true},
+		{KindNotFound, http.StatusNotFound, ErrInternal, true},
+		{KindConflict, http.StatusConflict, ErrInternal, true},
+		{KindGone, http.StatusGone, ErrInternal, true},
+		{KindPayloadTooLarge, http.StatusRequestEntityTooLarge, ErrInternal, true},
+		{KindRateLimited, http.StatusTooManyRequests, ErrInternal, true},
+		{KindClientClosed, StatusClientClosedRequest, ErrInternal, true},
+		{KindUnavailable, http.StatusServiceUnavailable, ErrServiceUnavailable, false},
+		{KindDeadlineExceeded, http.StatusGatewayTimeout, ErrServerTimeout, false},
+		{KindInternal, http.StatusInternalServerError, ErrInternal, false},
+		{KindNotImplemented, http.StatusNotImplemented, ErrInternal, false},
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			err := New(tt.code, tt.message)
-			assert.Equal(t, tt.code, err.Code)
-			assert.Equal(t, tt.message, err.Message)
-			assert.Nil(t, err.Details)
-			assert.Nil(t, err.Cause)
-			assert.Equal(t, tt.wantStr, err.Error())
+	for _, tc := range cases {
+		t.Run(fmt.Sprintf("%d", tc.status), func(t *testing.T) {
+			assert.Equal(t, tc.status, tc.kind.Status())
+			assert.Equal(t, tc.publicCode, tc.kind.PublicCode())
+			assert.Equal(t, tc.client, tc.kind.IsClient())
 		})
 	}
 }
 
-func TestWrap(t *testing.T) {
-	tests := []struct {
-		name    string
-		code    Code
-		message string
-		cause   error
-		wantStr string
-	}{
-		{
-			name:    "wrap stdlib error",
-			code:    ErrValidationFailed,
-			message: "schema check failed",
-			cause:   errors.New("missing field 'id'"),
-			wantStr: "[ERR_VALIDATION_FAILED] schema check failed: missing field 'id'",
-		},
-		{
-			name:    "wrap errcode error",
-			code:    ErrReferenceBroken,
-			message: "contract ref invalid",
-			cause:   New(ErrContractNotFound, "contract query/v1 not found"),
-			wantStr: "[ERR_REFERENCE_BROKEN] contract ref invalid: [ERR_CONTRACT_NOT_FOUND] contract query/v1 not found",
-		},
-	}
+func TestErrorStatusAndPublicCode(t *testing.T) {
+	clientErr := New(KindNotFound, ErrCellNotFound, "cell not found")
+	assert.Equal(t, http.StatusNotFound, clientErr.Status())
+	assert.Equal(t, ErrCellNotFound, clientErr.PublicCode())
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			err := Wrap(tt.code, tt.message, tt.cause)
-			assert.Equal(t, tt.code, err.Code)
-			assert.Equal(t, tt.message, err.Message)
-			assert.Equal(t, tt.cause, err.Cause)
-			assert.Equal(t, tt.wantStr, err.Error())
-
-			// Unwrap chain
-			assert.Equal(t, tt.cause, err.Unwrap())
-			assert.ErrorIs(t, err, tt.cause)
-		})
-	}
+	serverErr := New(KindUnavailable, ErrKeyProviderTransient, "vault sealed")
+	assert.Equal(t, http.StatusServiceUnavailable, serverErr.Status())
+	assert.Equal(t, ErrServiceUnavailable, serverErr.PublicCode())
 }
 
-func TestUnwrapNil(t *testing.T) {
-	err := New(ErrCellNotFound, "no cause")
-	assert.Nil(t, err.Unwrap())
+func TestIsInfraError(t *testing.T) {
+	assert.False(t, IsInfraError(nil))
+	assert.True(t, IsInfraError(context.Canceled))
+	assert.True(t, IsInfraError(context.DeadlineExceeded))
+	assert.True(t, IsInfraError(errors.New("plain")))
+	assert.True(t, IsInfraError(New(KindInternal, ErrInternal, "db", WithCategory(CategoryInfra))))
+	assert.True(t, IsInfraError(New(KindInternal, ErrInternal, "unknown")))
+	assert.False(t, IsInfraError(New(KindNotFound, ErrSessionNotFound, "missing", WithCategory(CategoryDomain))))
+	assert.False(t, IsInfraError(New(KindInvalid, ErrValidationFailed, "bad", WithCategory(CategoryValidation))))
+	assert.False(t, IsInfraError(New(KindUnauthenticated, ErrAuthUnauthorized, "no", WithCategory(CategoryAuth))))
 }
 
-func TestWithDetails(t *testing.T) {
-	tests := []struct {
-		name        string
-		base        *Error
-		details     map[string]any
-		wantDetails map[string]any
-	}{
-		{
-			name: "add details to error without existing details",
-			base: New(ErrSliceNotFound, "slice not found"),
-			details: map[string]any{
-				"sliceId": "auth-login",
-				"cellId":  "accesscore",
-			},
-			wantDetails: map[string]any{
-				"sliceId": "auth-login",
-				"cellId":  "accesscore",
-			},
-		},
-		{
-			name: "merge details preserving and overwriting",
-			base: withDetailsForTest(t,
-				New(ErrMetadataInvalid, "invalid"),
-				map[string]any{"field": "owner", "line": 10},
-			),
-			details: map[string]any{
-				"line":       42,
-				"suggestion": "add owner field",
-			},
-			wantDetails: map[string]any{
-				"field":      "owner",
-				"line":       42,
-				"suggestion": "add owner field",
-			},
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result, err := WithDetails(tt.base, tt.details)
-			require.NoError(t, err)
-
-			// WithDetails returns a new Error; original is unmodified.
-			assert.NotSame(t, tt.base, result)
-			assert.Equal(t, tt.base.Code, result.Code)
-			assert.Equal(t, tt.base.Message, result.Message)
-			assert.Equal(t, tt.wantDetails, result.Details)
-		})
-	}
+func TestIsDomainNotFound(t *testing.T) {
+	domain := New(KindNotFound, ErrSessionNotFound, "missing", WithCategory(CategoryDomain))
+	assert.True(t, IsDomainNotFound(domain, ErrSessionNotFound))
+	assert.False(t, IsDomainNotFound(domain, ErrOrderNotFound))
+	assert.False(t, IsDomainNotFound(New(KindNotFound, ErrSessionNotFound, "missing"), ErrSessionNotFound))
 }
 
-func TestWithDetails_NilError(t *testing.T) {
-	result, err := WithDetails(nil, map[string]any{"key": "val"})
-	require.Error(t, err)
-	assert.Nil(t, result)
-	var ec *Error
-	require.ErrorAs(t, err, &ec)
-	assert.Equal(t, ErrInternal, ec.Code)
+func TestIsTransientAndExpected4xx(t *testing.T) {
+	assert.True(t, IsTransient(New(KindUnavailable, ErrKeyProviderTransient, "vault sealed")))
+	assert.True(t, IsTransient(fmt.Errorf("wrap: %w", New(KindUnavailable, ErrKeyProviderTransient, "vault sealed"))))
+	assert.False(t, IsTransient(New(KindInternal, ErrKeyProviderEncryptFailed, "encrypt failed")))
+
+	assert.True(t, IsExpected4xx(New(KindInvalid, ErrValidationFailed, "bad")))
+	assert.True(t, IsExpected4xx(New(KindUnauthenticated, ErrAuthUnauthorized, "no")))
+	assert.False(t, IsExpected4xx(New(KindInternal, ErrInternal, "boom")))
 }
 
-func TestWithDetailsDDoesNotMutateOriginal(t *testing.T) {
-	original := withDetailsForTest(t, New(ErrAssemblyNotFound, "not found"), map[string]any{"key": "val"})
-	_, err := WithDetails(original, map[string]any{"extra": "data"})
-	require.NoError(t, err)
-
-	// Original must be unchanged.
-	assert.Equal(t, map[string]any{"key": "val"}, original.Details)
-}
-
-func TestErrorFormat(t *testing.T) {
-	tests := []struct {
-		name    string
-		err     *Error
-		wantStr string
-	}{
-		{
-			name:    "without cause",
-			err:     New(ErrLifecycleInvalid, "invalid transition"),
-			wantStr: "[ERR_LIFECYCLE_INVALID] invalid transition",
-		},
-		{
-			name:    "with cause",
-			err:     Wrap(ErrValidationFailed, "field check", errors.New("name is empty")),
-			wantStr: "[ERR_VALIDATION_FAILED] field check: name is empty",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			assert.Equal(t, tt.wantStr, tt.err.Error())
-		})
-	}
-}
-
-func TestErrorsAsChain(t *testing.T) {
-	inner := New(ErrContractNotFound, "missing contract")
-	outer := Wrap(ErrReferenceBroken, "broken ref", inner)
-
-	var target *Error
-	assert.True(t, errors.As(outer, &target))
-	assert.Equal(t, ErrReferenceBroken, target.Code)
-
-	// Can also unwrap to the inner error.
-	var inner2 *Error
-	assert.True(t, errors.As(errors.Unwrap(outer), &inner2))
-	assert.Equal(t, ErrContractNotFound, inner2.Code)
-}
-
-func TestSafe(t *testing.T) {
-	tests := []struct {
-		name            string
-		code            Code
-		publicMsg       string
-		internalMsg     string
-		wantMessage     string
-		wantInternal    string
-		wantErrorString string
-	}{
-		{
-			name:            "both messages set",
-			code:            ErrInternal,
-			publicMsg:       "internal server error",
-			internalMsg:     "postgres connection pool exhausted",
-			wantMessage:     "internal server error",
-			wantInternal:    "postgres connection pool exhausted",
-			wantErrorString: "[ERR_INTERNAL] postgres connection pool exhausted",
-		},
-		{
-			name:            "empty internal message",
-			code:            ErrValidationFailed,
-			publicMsg:       "invalid input",
-			internalMsg:     "",
-			wantMessage:     "invalid input",
-			wantInternal:    "",
-			wantErrorString: "[ERR_VALIDATION_FAILED] invalid input",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			err := Safe(tt.code, tt.publicMsg, tt.internalMsg)
-			assert.Equal(t, tt.code, err.Code)
-			assert.Equal(t, tt.wantMessage, err.Message)
-			assert.Equal(t, tt.wantInternal, err.InternalMessage)
-			assert.Equal(t, tt.wantErrorString, err.Error())
-		})
-	}
-}
-
-func TestNew_InternalMessageEmpty(t *testing.T) {
-	err := New(ErrCellNotFound, "cell not found")
-	assert.Empty(t, err.InternalMessage, "New() should leave InternalMessage empty")
-}
-
-func TestWrap_InternalMessageEmpty(t *testing.T) {
-	cause := errors.New("connection refused")
-	err := Wrap(ErrInternal, "db failed", cause)
-	assert.Empty(t, err.InternalMessage, "Wrap() should leave InternalMessage empty")
-}
-
-func TestWithDetails_PreservesInternalMessage(t *testing.T) {
-	original := Safe(ErrInternal, "internal server error", "pool exhausted")
-	result, err := WithDetails(original, map[string]any{"host": "db-1"})
-	require.NoError(t, err)
-
-	assert.Equal(t, "pool exhausted", result.InternalMessage,
-		"WithDetails must preserve InternalMessage")
-	assert.Equal(t, "internal server error", result.Message)
-	assert.Equal(t, map[string]any{"host": "db-1"}, result.Details)
-}
-
-func withDetailsForTest(t testing.TB, base *Error, details map[string]any) *Error {
-	t.Helper()
-	detailed, err := WithDetails(base, details)
-	require.NoError(t, err)
-	return detailed
-}
-
-func TestSentinelCodes(t *testing.T) {
-	codes := []Code{
-		ErrMetadataInvalid,
-		ErrMetadataNotFound,
-		ErrCellNotFound,
-		ErrSliceNotFound,
-		ErrContractNotFound,
-		ErrAssemblyNotFound,
-		ErrLifecycleInvalid,
-		ErrDependencyCycle,
-		ErrValidationFailed,
-		ErrReferenceBroken,
-		ErrAuthReplayDetected,
-		ErrNonceStoreFull,
-		ErrCellPlatformUnsupported,
-	}
-	seen := make(map[Code]bool, len(codes))
-	for _, c := range codes {
-		assert.NotEmpty(t, string(c), "code must not be empty")
-		assert.False(t, seen[c], "duplicate code: %s", c)
-		seen[c] = true
-	}
+func TestPublicCodeForStatus(t *testing.T) {
+	assert.Equal(t, ErrInternal, PublicCodeForStatus(http.StatusInternalServerError))
+	assert.Equal(t, ErrServiceUnavailable, PublicCodeForStatus(http.StatusServiceUnavailable))
+	assert.Equal(t, ErrServerTimeout, PublicCodeForStatus(http.StatusGatewayTimeout))
 }

@@ -64,14 +64,14 @@ func (h *Handler) HandleLogout(w http.ResponseWriter, r *http.Request) {
 		// Auth middleware guarantees subject presence on protected routes.
 		// Reaching this branch means the route was misconfigured as public —
 		// fail closed rather than leak a revoke op to an unauthenticated caller.
-		httputil.WriteDomainError(r.Context(), w,
-			errcode.New(errcode.ErrAuthInvalidToken, "missing subject"))
+		httputil.WriteError(r.Context(), w,
+			errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthInvalidToken, "missing subject"))
 		return
 	}
 	callerUserID := p.Subject
 
 	if err := h.svc.Logout(r.Context(), sessionID, callerUserID); err != nil {
-		httputil.WriteDomainError(r.Context(), w, err)
+		httputil.WriteError(r.Context(), w, err)
 		return
 	}
 

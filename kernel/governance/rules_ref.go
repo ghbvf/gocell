@@ -123,7 +123,7 @@ func (v *Validator) validateREF06() []ValidationResult {
 	return results
 }
 
-// validateREF07 checks that journey.contracts[] references existing contracts.
+// validateREF07 checks that journey.contracts[] references existing metadata.
 func (v *Validator) validateREF07() []ValidationResult {
 	var results []ValidationResult
 	for _, j := range v.project.Journeys {

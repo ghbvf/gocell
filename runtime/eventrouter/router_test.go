@@ -160,7 +160,7 @@ func TestRouter_Run_StartsAllSubscriptions(t *testing.T) {
 // the runtime error is detected in Phase 4 and returned from Run.
 // For Setup-level failures (before any subscription starts), see TestRouter_SetupErrorAborts.
 func TestRouter_Run_SubscribeError_ReturnsError(t *testing.T) {
-	subscribeErr := errcode.New(errcode.ErrBusClosed, "bus closed")
+	subscribeErr := errcode.New(errcode.KindInternal, errcode.ErrBusClosed, "bus closed")
 	sub := &failingSubscriber{err: subscribeErr}
 	r := New(sub, clock.Real())
 
@@ -590,7 +590,7 @@ func (b *testBus) Publish(_ context.Context, topic string, payload []byte) error
 	b.mu.RLock()
 	defer b.mu.RUnlock()
 	if b.closed {
-		return errcode.New(errcode.ErrBusClosed, "closed")
+		return errcode.New(errcode.KindInternal, errcode.ErrBusClosed, "closed")
 	}
 	entry := outbox.Entry{ID: "evt-test", EventType: topic, Payload: payload}
 	for _, s := range b.subs[topic] {
@@ -630,7 +630,7 @@ func (b *testBus) Subscribe(ctx context.Context, sub outbox.Subscription, handle
 	if b.closed {
 		b.mu.Unlock()
 		cancel()
-		return errcode.New(errcode.ErrBusClosed, "closed")
+		return errcode.New(errcode.KindInternal, errcode.ErrBusClosed, "closed")
 	}
 	b.subs[sub.Topic] = append(b.subs[sub.Topic], s)
 	b.mu.Unlock()

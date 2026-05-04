@@ -19,13 +19,13 @@ func RequireAuthenticated() auth.Policy {
 	return func(r *http.Request) error {
 		p, ok := auth.FromContext(r.Context())
 		if !ok {
-			return errcode.New(errcode.ErrAuthUnauthorized, "authentication required")
+			return errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthUnauthorized, "authentication required")
 		}
 		if p.Kind == auth.PrincipalAnonymous {
-			return errcode.New(errcode.ErrAuthUnauthorized, "anonymous principal not permitted")
+			return errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthUnauthorized, "anonymous principal not permitted")
 		}
 		if p.Kind == auth.PrincipalUser && p.Subject == "" {
-			return errcode.New(errcode.ErrAuthUnauthorized, "principal subject missing")
+			return errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthUnauthorized, "principal subject missing")
 		}
 		return nil
 	}

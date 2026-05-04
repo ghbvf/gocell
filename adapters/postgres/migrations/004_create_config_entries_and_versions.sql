@@ -29,7 +29,7 @@ CREATE TABLE IF NOT EXISTS config_versions (
 );
 
 -- Keyset pagination index on (key, id) for config_entries LIST queries.
--- Matches query.AppendKeyset sort columns used by config_repo.go List().
+-- Matches pgquery.AppendKeyset sort columns used by config_repo.go List().
 CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_config_entries_key_id
     ON config_entries (key ASC, id ASC);
 

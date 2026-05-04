@@ -17,7 +17,6 @@ import (
 	"github.com/ghbvf/gocell/kernel/clock/clockmock"
 	"github.com/ghbvf/gocell/kernel/metadata"
 	"github.com/ghbvf/gocell/kernel/verify"
-	"github.com/ghbvf/gocell/pkg/contracts"
 )
 
 // --- helpers ---
@@ -3659,7 +3658,7 @@ func TestFMT13(t *testing.T) {
 					Path:          "/api/v1/auth/users/{userId}",
 					SuccessStatus: 204,
 					NoContent:     true,
-					PathParams: map[string]contracts.ParamSchema{
+					PathParams: map[string]metadata.ParamSchema{
 						"userId": {Type: "string"},
 					},
 				}
@@ -3676,7 +3675,7 @@ func TestFMT13(t *testing.T) {
 					Path:          "/api/v1/auth/users/{userId}",
 					SuccessStatus: 200,
 					NoContent:     true,
-					PathParams: map[string]contracts.ParamSchema{
+					PathParams: map[string]metadata.ParamSchema{
 						"userId": {Type: "string"},
 					},
 				}
@@ -3693,7 +3692,7 @@ func TestFMT13(t *testing.T) {
 					Path:          "/api/v1/auth/users/{userId}",
 					SuccessStatus: 204,
 					NoContent:     false,
-					PathParams: map[string]contracts.ParamSchema{
+					PathParams: map[string]metadata.ParamSchema{
 						"userId": {Type: "string"},
 					},
 				}
@@ -3777,7 +3776,7 @@ func TestFMT13(t *testing.T) {
 					Method:        "GET",
 					Path:          "/api/v1/auth/users",
 					SuccessStatus: 200,
-					PathParams: map[string]contracts.ParamSchema{
+					PathParams: map[string]metadata.ParamSchema{
 						"ghost": {Type: "string"},
 					},
 				}
@@ -3793,7 +3792,7 @@ func TestFMT13(t *testing.T) {
 					Method:        "GET",
 					Path:          "/api/v1/auth/users/{id}",
 					SuccessStatus: 200,
-					PathParams: map[string]contracts.ParamSchema{
+					PathParams: map[string]metadata.ParamSchema{
 						"id": {Type: "bigint"},
 					},
 				}
@@ -3810,7 +3809,7 @@ func TestFMT13(t *testing.T) {
 					Method:        "GET",
 					Path:          "/api/v1/auth/users/{id}",
 					SuccessStatus: 200,
-					PathParams: map[string]contracts.ParamSchema{
+					PathParams: map[string]metadata.ParamSchema{
 						"id": {Type: "string", Required: &optional},
 					},
 				}
@@ -3826,7 +3825,7 @@ func TestFMT13(t *testing.T) {
 					Method:        "GET",
 					Path:          "/api/v1/access/roles/{userID}/{roleName}",
 					SuccessStatus: 200,
-					PathParams: map[string]contracts.ParamSchema{
+					PathParams: map[string]metadata.ParamSchema{
 						"userID":   {Type: "string", Format: "uuid"},
 						"roleName": {Type: "string"},
 					},
@@ -3843,7 +3842,7 @@ func TestFMT13(t *testing.T) {
 					Method:        "GET",
 					Path:          "/api/v1/auth/users",
 					SuccessStatus: 200,
-					QueryParams: map[string]contracts.ParamSchema{
+					QueryParams: map[string]metadata.ParamSchema{
 						"cursor": {Type: "blob"},
 					},
 				}
@@ -3860,7 +3859,7 @@ func TestFMT13(t *testing.T) {
 					Method:        "GET",
 					Path:          "/api/v1/auth/users",
 					SuccessStatus: 200,
-					QueryParams: map[string]contracts.ParamSchema{
+					QueryParams: map[string]metadata.ParamSchema{
 						"cursor": {Type: "string", Required: &falsy},
 						"limit":  {Type: "integer"},
 					},
@@ -3877,7 +3876,7 @@ func TestFMT13(t *testing.T) {
 					Method:        "GET",
 					Path:          "/api/v1/things/{id}/children/{id}",
 					SuccessStatus: 200,
-					PathParams: map[string]contracts.ParamSchema{
+					PathParams: map[string]metadata.ParamSchema{
 						"id": {Type: "string"},
 					},
 				}
@@ -3894,10 +3893,10 @@ func TestFMT13(t *testing.T) {
 					Method:        "GET",
 					Path:          "/api/v1/users/{id}/roles",
 					SuccessStatus: 200,
-					PathParams: map[string]contracts.ParamSchema{
+					PathParams: map[string]metadata.ParamSchema{
 						"id": {Type: "string", Format: "uuid"},
 					},
-					QueryParams: map[string]contracts.ParamSchema{
+					QueryParams: map[string]metadata.ParamSchema{
 						"cursor": {Type: "string", Required: &falsy},
 					},
 				}
@@ -3913,7 +3912,7 @@ func TestFMT13(t *testing.T) {
 					Method:        "GET",
 					Path:          "",
 					SuccessStatus: 200,
-					PathParams: map[string]contracts.ParamSchema{
+					PathParams: map[string]metadata.ParamSchema{
 						"id": {Type: "string"},
 					},
 				}
@@ -3932,7 +3931,7 @@ func TestFMT13(t *testing.T) {
 					Method:        "GET",
 					Path:          "",
 					SuccessStatus: 200,
-					QueryParams: map[string]contracts.ParamSchema{
+					QueryParams: map[string]metadata.ParamSchema{
 						"cursor": {Type: "blob"},
 					},
 				}

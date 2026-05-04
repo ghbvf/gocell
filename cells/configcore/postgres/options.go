@@ -60,7 +60,7 @@ func WithOnStaleCipher(fn func(key, storedKeyID, currentKeyID string)) Option {
 // separately when the cell itself should use the same logger.
 func WithPool(pool *pgxpool.Pool, clk clock.Clock, opts ...Option) (configcore.Option, error) {
 	if pool == nil {
-		return nil, errcode.New(errcode.ErrCellInvalidConfig,
+		return nil, errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
 			"configcore/postgres: WithPool requires a non-nil *pgxpool.Pool")
 	}
 	clock.MustHaveClock(clk, "configcore/postgres.WithPool")

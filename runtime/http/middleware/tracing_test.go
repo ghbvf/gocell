@@ -345,8 +345,8 @@ func TestTracing_499_AttrAndUnsetStatus(t *testing.T) {
 //
 // Wiring path under test for 499:
 //
-//	ctxcancel.Wrap(context.Canceled) → *errcode.Error{Code: ErrClientCanceled,
-//	                                                  Details["reason"]: "canceled"}
+//	ctxcancel.Wrap(context.Canceled) → errcode error with ErrClientCanceled,
+//	                                  KindClientClosed, and reason detail
 //	    ↓
 //	httputil.writeErrcodeError (499 branch) → setCancelReason(ctx, "canceled")
 //	    ↓
@@ -355,7 +355,8 @@ func TestTracing_499_AttrAndUnsetStatus(t *testing.T) {
 //
 // Wiring path under test for 504:
 //
-//	ctxcancel.Wrap(context.DeadlineExceeded) → *errcode.Error{Code: ErrServerTimeout, ...}
+//	ctxcancel.Wrap(context.DeadlineExceeded) → errcode error with ErrServerTimeout
+//	                                          and KindDeadlineExceeded
 //	    ↓
 //	httputil.writeErrcodeError (5xx branch) → log5xx + sanitized response
 //	    ↓
@@ -367,7 +368,7 @@ func TestTracing_499_ReasonFromCanceled(t *testing.T) {
 	handler := Tracing(spy)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		ecErr := ctxcancel.Wrap(context.Canceled, "Insert", "id=x")
 		require.NotNil(t, ecErr, "ctxcancel.Wrap must produce *errcode.Error for context.Canceled")
-		httputil.WriteDomainError(r.Context(), w, ecErr)
+		httputil.WriteError(r.Context(), w, ecErr)
 	}))
 
 	req := httptest.NewRequest(http.MethodGet, "/canceled-flow", nil)
@@ -389,7 +390,7 @@ func TestTracing_504_FromDeadline(t *testing.T) {
 	handler := Tracing(spy)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		ecErr := ctxcancel.Wrap(context.DeadlineExceeded, "Query", "id=x")
 		require.NotNil(t, ecErr, "ctxcancel.Wrap must produce *errcode.Error for context.DeadlineExceeded")
-		httputil.WriteDomainError(r.Context(), w, ecErr)
+		httputil.WriteError(r.Context(), w, ecErr)
 	}))
 
 	req := httptest.NewRequest(http.MethodGet, "/deadline-flow", nil)
@@ -409,21 +410,20 @@ func TestTracing_504_FromDeadline(t *testing.T) {
 			"signal in its status code and must not piggyback on the 499 attribute")
 }
 
-// TestTracing_499_ReasonViaWriteDecodeError pins the slot transit through
-// the WriteDecodeError path (PR275 P2-2). WriteDecodeError shares the same
-// writeErrcodeError pipeline as WriteDomainError, so in principle the slot
+// TestTracing_499_ReasonViaWriteError pins the slot transit through
+// the WriteError path (PR275 P2-2). WriteError shares the same
+// writeErrcodeError pipeline as WriteError, so in principle the slot
 // flows through automatically — but without a test, a future split where
-// WriteDecodeError takes a fast path could silently drop reason without
+// WriteError takes a fast path could silently drop reason without
 // breaking anything else. This test forces the contract: any 499 emitted
-// via writeErrcodeError surface (WriteDomainError, WriteDecodeError, or
-// future writers) must populate the slot.
-func TestTracing_499_ReasonViaWriteDecodeError(t *testing.T) {
+// through WriteError must populate the slot.
+func TestTracing_499_ReasonViaWriteError(t *testing.T) {
 	spy := &spyTracer{}
 
 	handler := Tracing(spy)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		ecErr := ctxcancel.Wrap(context.Canceled, "Decode", "id=x")
 		require.NotNil(t, ecErr)
-		httputil.WriteDecodeError(r.Context(), w, ecErr)
+		httputil.WriteError(r.Context(), w, ecErr)
 	}))
 
 	req := httptest.NewRequest(http.MethodGet, "/decode-canceled", nil)
@@ -434,7 +434,7 @@ func TestTracing_499_ReasonViaWriteDecodeError(t *testing.T) {
 	spans := spy.Spans()
 	require.Len(t, spans, 1)
 	assert.Equal(t, "canceled", spans[0].Attr("client.cancel.reason"),
-		"WriteDecodeError must transit reason through the same slot as WriteDomainError")
+		"WriteError must transit reason through the cancel-reason slot")
 }
 
 // TestTracing_4xxNoErrorSpanStatus_NoCancelAttr ensures plain 4xx (e.g.
@@ -465,7 +465,7 @@ func TestTracing_4xxNoErrorSpanStatus_NoCancelAttr(t *testing.T) {
 func TestTracing_RecoveryRedactsPanicErrorByDefault(t *testing.T) {
 	spy := &spyTracer{}
 	handler := Tracing(spy)(Recovery(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
-		panic("upstream failed: token=hunter2-leak-sentinel-9f3")
+		panic(`upstream failed: {"token":"hunter2-leak-sentinel-9f3","user":"alice"}`)
 	})))
 
 	req := httptest.NewRequest(http.MethodGet, "/panic", nil)

@@ -14,8 +14,8 @@ import (
 	"github.com/ghbvf/gocell/examples/todoorder/cells/ordercell/internal/mem"
 	getv1 "github.com/ghbvf/gocell/generated/contracts/http/order/get/v1"
 	listv1 "github.com/ghbvf/gocell/generated/contracts/http/order/list/v1"
-	"github.com/ghbvf/gocell/pkg/contracttest"
 	"github.com/ghbvf/gocell/pkg/query"
+	"github.com/ghbvf/gocell/tests/contracttest"
 )
 
 func newContractQuerySvc(orders ...*domain.Order) *Service {
@@ -51,6 +51,25 @@ func TestHttpOrderGetV1Serve(t *testing.T) {
 	req := httptest.NewRequest(c.HTTP.Method, strings.Replace(c.HTTP.Path, "{id}", "ord-contract-get", 1), nil)
 	mux.ServeHTTP(rec, req)
 	c.ValidateHTTPResponseRecorder(t, rec)
+}
+
+func TestHttpOrderGetV1Serve_NotFound(t *testing.T) {
+	root := contracttest.ExampleContractsRoot(t, "todoorder")
+	c := contracttest.LoadByID(t, root, "http.order.get.v1")
+	svc := newContractQuerySvc()
+	h := getv1.NewHandler(svc, nil)
+
+	mux := http.NewServeMux()
+	mux.Handle(c.HTTP.Method+" "+c.HTTP.Path, h)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(c.HTTP.Method, strings.Replace(c.HTTP.Path, "{id}", "missing-order", 1), nil)
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("expected 404, got %d: %s", rec.Code, rec.Body.String())
+	}
+	c.ValidateErrorResponse(t, http.StatusNotFound, rec.Body.Bytes())
 }
 
 func TestHttpOrderListV1Serve(t *testing.T) {

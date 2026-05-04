@@ -165,7 +165,7 @@ func (s *PGRefreshStore) execCtx(ctx context.Context, sql string, args ...any) (
 func (s *PGRefreshStore) generatePair() (selector []byte, verifier []byte, err error) {
 	sel, ver, err := refresh.GeneratePair(s.rand)
 	if err != nil {
-		return nil, nil, errcode.Wrap(ErrAdapterPGQuery, "refresh store: rng", err)
+		return nil, nil, errcode.Wrap(errcode.KindInternal, ErrAdapterPGQuery, "refresh store: rng", err)
 	}
 	return sel, ver, nil
 }
@@ -184,7 +184,7 @@ func (s *PGRefreshStore) Issue(ctx context.Context, sessionID, subjectID string)
 	if _, err := s.execCtx(ctx, insertRowSQL,
 		id, uuid.NullUUID{}, sessionID, subjectID, sel, verHash[:], now, expiresAt,
 	); err != nil {
-		return "", nil, errcode.Wrap(ErrAdapterPGQuery, "refresh store: issue", err)
+		return "", nil, errcode.Wrap(errcode.KindInternal, ErrAdapterPGQuery, "refresh store: issue", err)
 	}
 
 	return refresh.EncodeOpaque(sel, ver), &refresh.Token{
@@ -205,7 +205,7 @@ func (s *PGRefreshStore) Peek(ctx context.Context, presented string) (*refresh.T
 
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
-		return nil, errcode.Wrap(ErrAdapterPGConnect, "refresh store: peek begin", err)
+		return nil, errcode.Wrap(errcode.KindInternal, ErrAdapterPGConnect, "refresh store: peek begin", err)
 	}
 	committed := false
 	defer func() {
@@ -219,7 +219,7 @@ func (s *PGRefreshStore) Peek(ctx context.Context, presented string) (*refresh.T
 		return nil, err
 	}
 	if cErr := tx.Commit(ctx); cErr != nil {
-		return nil, errcode.Wrap(ErrAdapterPGConnect, "refresh store: peek commit", cErr)
+		return nil, errcode.Wrap(errcode.KindInternal, ErrAdapterPGConnect, "refresh store: peek commit", cErr)
 	}
 	committed = true
 	if err != nil {
@@ -242,7 +242,7 @@ func (s *PGRefreshStore) Rotate(ctx context.Context, presented string) (string, 
 
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
-		return "", nil, errcode.Wrap(ErrAdapterPGConnect, "refresh store: rotate begin", err)
+		return "", nil, errcode.Wrap(errcode.KindInternal, ErrAdapterPGConnect, "refresh store: rotate begin", err)
 	}
 	committed := false
 	defer func() {
@@ -261,7 +261,7 @@ func (s *PGRefreshStore) Rotate(ctx context.Context, presented string) (string, 
 	// branches the commit is a no-op; for reuse_detected it persists the
 	// cascade revoke.
 	if cErr := tx.Commit(ctx); cErr != nil {
-		return "", nil, errcode.Wrap(ErrAdapterPGConnect, "refresh store: rotate commit", cErr)
+		return "", nil, errcode.Wrap(errcode.KindInternal, ErrAdapterPGConnect, "refresh store: rotate commit", cErr)
 	}
 	committed = true
 	return wire, tok, err
@@ -290,12 +290,12 @@ func (s *PGRefreshStore) rotateInTx(ctx context.Context, tx pgx.Tx, sel, ver []b
 		newID, uuid.NullUUID{UUID: row.id, Valid: true},
 		row.sessionID, row.subjectID, newSel, newHash[:], now, newExpires,
 	); err != nil {
-		return "", nil, errcode.Wrap(ErrAdapterPGQuery, "refresh store: rotate insert child", err)
+		return "", nil, errcode.Wrap(errcode.KindInternal, ErrAdapterPGQuery, "refresh store: rotate insert child", err)
 	}
 
 	if row.rotatedAt == nil {
 		if _, err := tx.Exec(ctx, markRotatedSQL, now, row.id); err != nil {
-			return "", nil, errcode.Wrap(ErrAdapterPGQuery, "refresh store: mark parent rotated", err)
+			return "", nil, errcode.Wrap(errcode.KindInternal, ErrAdapterPGQuery, "refresh store: mark parent rotated", err)
 		}
 	}
 
@@ -338,14 +338,14 @@ func (s *PGRefreshStore) selectBySelectorInTx(ctx context.Context, tx pgx.Tx, se
 		return refreshRow{}, rejectWithReason("selector_miss", "")
 	}
 	if err != nil {
-		return refreshRow{}, errcode.Wrap(ErrAdapterPGQuery, "refresh store: token select", err)
+		return refreshRow{}, errcode.Wrap(errcode.KindInternal, ErrAdapterPGQuery, "refresh store: token select", err)
 	}
 	return row, nil
 }
 
 func (s *PGRefreshStore) lockSessionInTx(ctx context.Context, tx pgx.Tx, sessionID string) error {
 	if _, err := tx.Exec(ctx, lockSessionSQL, sessionID); err != nil {
-		return errcode.Wrap(ErrAdapterPGQuery, "refresh store: session lock", err)
+		return errcode.Wrap(errcode.KindInternal, ErrAdapterPGQuery, "refresh store: session lock", err)
 	}
 	return nil
 }
@@ -366,7 +366,7 @@ func (s *PGRefreshStore) validateRow(ctx context.Context, tx pgx.Tx, row refresh
 
 	if row.rotatedAt != nil && now.Sub(*row.rotatedAt) > s.policy.ReuseInterval {
 		if _, execErr := tx.Exec(ctx, revokeSessionSQL, now, row.sessionID); execErr != nil {
-			return refreshRow{}, errcode.Wrap(ErrAdapterPGQuery, "refresh store: reuse cascade", execErr)
+			return refreshRow{}, errcode.Wrap(errcode.KindInternal, ErrAdapterPGQuery, "refresh store: reuse cascade", execErr)
 		}
 		slog.Error("refresh token reuse detected",
 			slog.String("session_id", row.sessionID),
@@ -383,7 +383,7 @@ func (s *PGRefreshStore) validateRow(ctx context.Context, tx pgx.Tx, row refresh
 func (s *PGRefreshStore) RevokeSession(ctx context.Context, sessionID string) error {
 	now := s.clock.Now()
 	if _, err := s.execCtx(ctx, revokeSessionSQL, now, sessionID); err != nil {
-		return errcode.Wrap(ErrAdapterPGQuery, "refresh store: revoke session", err)
+		return errcode.Wrap(errcode.KindInternal, ErrAdapterPGQuery, "refresh store: revoke session", err)
 	}
 	return nil
 }
@@ -393,7 +393,7 @@ func (s *PGRefreshStore) RevokeSession(ctx context.Context, sessionID string) er
 func (s *PGRefreshStore) RevokeUser(ctx context.Context, subjectID string) error {
 	now := s.clock.Now()
 	if _, err := s.execCtx(ctx, revokeUserSQL, now, subjectID); err != nil {
-		return errcode.Wrap(ErrAdapterPGQuery, "refresh store: revoke user", err)
+		return errcode.Wrap(errcode.KindInternal, ErrAdapterPGQuery, "refresh store: revoke user", err)
 	}
 	return nil
 }
@@ -405,7 +405,7 @@ func (s *PGRefreshStore) GC(ctx context.Context, olderThan time.Time) (int, erro
 	for {
 		ct, err := s.execCtx(ctx, gcBatchSQL, olderThan, gcBatchSize)
 		if err != nil {
-			return total, errcode.Wrap(ErrAdapterPGQuery, "refresh store: gc batch", err)
+			return total, errcode.Wrap(errcode.KindInternal, ErrAdapterPGQuery, "refresh store: gc batch", err)
 		}
 		deleted := int(ct.RowsAffected())
 		total += deleted

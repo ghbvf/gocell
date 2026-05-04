@@ -12,6 +12,6 @@ import "github.com/ghbvf/gocell/pkg/errcode"
 // WithInitialAdminBootstrap is active so the failure surfaces at process
 // startup rather than during phase3b OnStart.
 func PlatformSupported() error {
-	return errcode.New(errcode.ErrCellPlatformUnsupported,
+	return errcode.New(errcode.KindInternal, errcode.ErrCellPlatformUnsupported,
 		"initialadmin: bootstrap requires linux, darwin, or windows; remove WithInitialAdminBootstrap() or build for a supported GOOS")
 }

@@ -1,4 +1,4 @@
-package contracts
+package metadata
 
 import (
 	"testing"
@@ -8,8 +8,8 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// roundTrip marshals v to YAML, unmarshals into a new T, and returns both.
-func roundTrip[T any](t *testing.T, v T) ([]byte, T) {
+// schemaRoundTrip marshals v to YAML, unmarshals into a new T, and returns both.
+func schemaRoundTrip[T any](t *testing.T, v T) ([]byte, T) {
 	t.Helper()
 	data, err := yaml.Marshal(v)
 	require.NoError(t, err, "marshal should succeed")
@@ -21,17 +21,17 @@ func roundTrip[T any](t *testing.T, v T) ([]byte, T) {
 }
 
 func TestHTTPTransportYAMLRoundTrip(t *testing.T) {
-	orig := HTTPTransport{
+	orig := HTTPTransportMeta{
 		Method:        "POST",
 		Path:          "/api/v1/test",
 		SuccessStatus: 200,
 		NoContent:     false,
-		Responses: map[int]HTTPResponse{
+		Responses: map[int]HTTPResponseMeta{
 			401: {Description: "Unauthorized", SchemaRef: "error.json"},
 			403: {Description: "Forbidden", SchemaRef: "error.json"},
 		},
 	}
-	data, got := roundTrip(t, orig)
+	data, got := schemaRoundTrip(t, orig)
 	assert.Equal(t, orig, got)
 	assert.Contains(t, string(data), "method: POST")
 	assert.Contains(t, string(data), "path: /api/v1/test")
@@ -39,25 +39,25 @@ func TestHTTPTransportYAMLRoundTrip(t *testing.T) {
 }
 
 func TestHTTPTransportYAMLRoundTrip_NoContent(t *testing.T) {
-	orig := HTTPTransport{
+	orig := HTTPTransportMeta{
 		Method:        "DELETE",
 		Path:          "/api/v1/users/{userId}",
 		SuccessStatus: 204,
 		NoContent:     true,
 	}
-	data, got := roundTrip(t, orig)
+	data, got := schemaRoundTrip(t, orig)
 	assert.Equal(t, orig, got)
 	assert.NotContains(t, string(data), "responses")
 }
 
 func TestHTTPTransportYAMLRoundTrip_PathParams(t *testing.T) {
-	orig := HTTPTransport{
+	orig := HTTPTransportMeta{
 		Method:        "GET",
 		Path:          "/api/v1/config/{key}",
 		PathParams:    map[string]ParamSchema{"key": {Type: "string"}},
 		SuccessStatus: 200,
 	}
-	data, got := roundTrip(t, orig)
+	data, got := schemaRoundTrip(t, orig)
 	assert.Equal(t, orig, got)
 	assert.Contains(t, string(data), "pathParams:")
 	assert.Contains(t, string(data), "    type: string")
@@ -67,7 +67,7 @@ func TestHTTPTransportYAMLRoundTrip_PathParams(t *testing.T) {
 func TestHTTPTransportYAMLRoundTrip_QueryParams(t *testing.T) {
 	truthy := true
 	falsy := false
-	orig := HTTPTransport{
+	orig := HTTPTransportMeta{
 		Method: "GET",
 		Path:   "/api/v1/config/",
 		QueryParams: map[string]ParamSchema{
@@ -77,7 +77,7 @@ func TestHTTPTransportYAMLRoundTrip_QueryParams(t *testing.T) {
 		},
 		SuccessStatus: 200,
 	}
-	_, got := roundTrip(t, orig)
+	_, got := schemaRoundTrip(t, orig)
 	assert.Equal(t, orig, got)
 	assert.Equal(t, "integer", got.QueryParams["limit"].Type)
 	require.NotNil(t, got.QueryParams["limit"].Required)
@@ -89,7 +89,7 @@ func TestHTTPTransportYAMLRoundTrip_QueryParams(t *testing.T) {
 
 func TestHTTPTransportYAMLRoundTrip_PathAndQueryCoexist(t *testing.T) {
 	falsy := false
-	orig := HTTPTransport{
+	orig := HTTPTransportMeta{
 		Method: "GET",
 		Path:   "/api/v1/access/roles/{userID}",
 		PathParams: map[string]ParamSchema{
@@ -100,17 +100,17 @@ func TestHTTPTransportYAMLRoundTrip_PathAndQueryCoexist(t *testing.T) {
 		},
 		SuccessStatus: 200,
 	}
-	_, got := roundTrip(t, orig)
+	_, got := schemaRoundTrip(t, orig)
 	assert.Equal(t, orig, got)
 }
 
 func TestHTTPTransportYAMLOmitEmptyPathQuery(t *testing.T) {
-	orig := HTTPTransport{
+	orig := HTTPTransportMeta{
 		Method:        "POST",
 		Path:          "/api/v1/access/sessions/login",
 		SuccessStatus: 201,
 	}
-	data, _ := roundTrip(t, orig)
+	data, _ := schemaRoundTrip(t, orig)
 	// Both maps are omitempty — they must not serialize when absent.
 	assert.NotContains(t, string(data), "pathParams")
 	assert.NotContains(t, string(data), "queryParams")
@@ -119,7 +119,7 @@ func TestHTTPTransportYAMLOmitEmptyPathQuery(t *testing.T) {
 func TestParamSchemaYAMLRoundTrip(t *testing.T) {
 	truthy := true
 	orig := ParamSchema{Type: "integer", Required: &truthy, Format: "int64"}
-	_, got := roundTrip(t, orig)
+	_, got := schemaRoundTrip(t, orig)
 	assert.Equal(t, orig, got)
 }
 
@@ -134,20 +134,20 @@ func TestParamSchemaRequiredThreeStates(t *testing.T) {
 	falsy := false
 
 	t.Run("nil required is omitted", func(t *testing.T) {
-		data, got := roundTrip(t, ParamSchema{Type: "string"})
+		data, got := schemaRoundTrip(t, ParamSchema{Type: "string"})
 		assert.Nil(t, got.Required)
 		assert.NotContains(t, string(data), "required:")
 	})
 
 	t.Run("false required is emitted and preserved", func(t *testing.T) {
-		data, got := roundTrip(t, ParamSchema{Type: "string", Required: &falsy})
+		data, got := schemaRoundTrip(t, ParamSchema{Type: "string", Required: &falsy})
 		require.NotNil(t, got.Required)
 		assert.False(t, *got.Required)
 		assert.Contains(t, string(data), "required: false")
 	})
 
 	t.Run("true required is emitted and preserved", func(t *testing.T) {
-		data, got := roundTrip(t, ParamSchema{Type: "string", Required: &truthy})
+		data, got := schemaRoundTrip(t, ParamSchema{Type: "string", Required: &truthy})
 		require.NotNil(t, got.Required)
 		assert.True(t, *got.Required)
 		assert.Contains(t, string(data), "required: true")
@@ -163,7 +163,7 @@ func TestParamSchemaConstraintsRoundTrip(t *testing.T) {
 	zero := 0
 	nonZero := 500
 	t.Run("nil constraints are omitted", func(t *testing.T) {
-		data, got := roundTrip(t, ParamSchema{Type: "string"})
+		data, got := schemaRoundTrip(t, ParamSchema{Type: "string"})
 		assert.Nil(t, got.MinLength)
 		assert.Nil(t, got.MaxLength)
 		assert.Nil(t, got.Minimum)
@@ -174,7 +174,7 @@ func TestParamSchemaConstraintsRoundTrip(t *testing.T) {
 		assert.NotContains(t, string(data), "maximum")
 	})
 	t.Run("zero values are emitted (not omitted)", func(t *testing.T) {
-		data, got := roundTrip(t, ParamSchema{
+		data, got := schemaRoundTrip(t, ParamSchema{
 			Type:      "string",
 			MinLength: &zero,
 		})
@@ -185,7 +185,7 @@ func TestParamSchemaConstraintsRoundTrip(t *testing.T) {
 	t.Run("non-zero string constraints round-trip", func(t *testing.T) {
 		one := 1
 		twoFiftySix := 256
-		data, got := roundTrip(t, ParamSchema{
+		data, got := schemaRoundTrip(t, ParamSchema{
 			Type:      "string",
 			MinLength: &one,
 			MaxLength: &twoFiftySix,
@@ -199,7 +199,7 @@ func TestParamSchemaConstraintsRoundTrip(t *testing.T) {
 	})
 	t.Run("integer constraints round-trip", func(t *testing.T) {
 		one := 1
-		data, got := roundTrip(t, ParamSchema{
+		data, got := schemaRoundTrip(t, ParamSchema{
 			Type:    "integer",
 			Minimum: &one,
 			Maximum: &nonZero,
@@ -223,58 +223,29 @@ func TestParamTypesWhitelist(t *testing.T) {
 }
 
 func TestHTTPResponseYAMLRoundTrip(t *testing.T) {
-	orig := HTTPResponse{
+	orig := HTTPResponseMeta{
 		Description: "Not Found",
 		SchemaRef:   "error.json",
 	}
-	_, got := roundTrip(t, orig)
+	_, got := schemaRoundTrip(t, orig)
 	assert.Equal(t, orig, got)
 }
 
 func TestSchemaRefsYAMLRoundTrip(t *testing.T) {
-	orig := SchemaRefs{
+	orig := SchemaRefsMeta{
 		Request:  "request.schema.json",
 		Response: "response.schema.json",
 		Payload:  "payload.schema.json",
 		Headers:  "headers.schema.json",
 		Extra:    map[string]string{"custom": "custom.schema.json"},
 	}
-	data, got := roundTrip(t, orig)
+	data, got := schemaRoundTrip(t, orig)
 	assert.Equal(t, orig, got)
 	assert.Contains(t, string(data), "custom: custom.schema.json")
 }
 
-func TestSchemaRefsInlinePrecedence(t *testing.T) {
-	raw := `request: req.json
-response: res.json
-custom: extra.json
-`
-	var sr SchemaRefs
-	require.NoError(t, yaml.Unmarshal([]byte(raw), &sr))
-
-	assert.Equal(t, "req.json", sr.Request)
-	assert.Equal(t, "res.json", sr.Response)
-	assert.Empty(t, sr.Payload)
-
-	assert.Equal(t, map[string]string{"custom": "extra.json"}, sr.Extra)
-
-	_, hasRequest := sr.Extra["request"]
-	assert.False(t, hasRequest, "named field 'request' must not leak into Extra")
-}
-
-func TestSchemaRefsExtraRoundTrip(t *testing.T) {
-	orig := SchemaRefs{
-		Request: "req.json",
-		Extra:   map[string]string{"custom": "extra.json"},
-	}
-	data, got := roundTrip(t, orig)
-	assert.Equal(t, "req.json", got.Request)
-	assert.Equal(t, "extra.json", got.Extra["custom"])
-	assert.Contains(t, string(data), "custom: extra.json")
-}
-
 func TestSchemaRefsEmpty(t *testing.T) {
-	var sr SchemaRefs
-	_, got := roundTrip(t, sr)
+	var sr SchemaRefsMeta
+	_, got := schemaRoundTrip(t, sr)
 	assert.Equal(t, sr, got, "empty SchemaRefs round-trip should preserve zero value")
 }

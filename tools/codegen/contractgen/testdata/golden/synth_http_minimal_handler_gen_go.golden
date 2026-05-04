@@ -50,13 +50,13 @@ func (h *Handler) RegisterRoutes(mux cell.RouteHandler) error {
 
 func (h *Handler) handle(w http.ResponseWriter, r *http.Request) {
 	req := &Request{}
-	if err := httputil.DecodeJSONStrict(r, req); err != nil {
-		httputil.WriteDecodeError(r.Context(), w, err)
+	if err := httputil.DecodeJSONStrict(r, req, httputil.DefaultDecodeJSONLimit); err != nil {
+		httputil.WriteError(r.Context(), w, err)
 		return
 	}
 	resp, err := h.svc.Ping(r.Context(), req)
 	if err != nil {
-		httputil.WriteDomainError(r.Context(), w, err)
+		httputil.WriteError(r.Context(), w, err)
 		return
 	}
 	httputil.WriteJSON(w, 201, resp)

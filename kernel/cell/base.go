@@ -74,10 +74,10 @@ type BaseCell struct {
 // PANIC-REGISTERED-01 / ERROR-FIRST-API-01 contract.
 func NewBaseCell(meta *metadata.CellMeta) (*BaseCell, error) {
 	if meta == nil {
-		return nil, errcode.New(errcode.ErrValidationFailed, "cell.NewBaseCell: meta is nil")
+		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "cell.NewBaseCell: meta is nil")
 	}
 	if meta.ID == "" {
-		return nil, errcode.New(errcode.ErrValidationFailed, "cell.NewBaseCell: meta.ID is empty")
+		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "cell.NewBaseCell: meta.ID is empty")
 	}
 	var cellType CellType
 	if meta.Type != "" {
@@ -158,7 +158,7 @@ func (b *BaseCell) Init(_ context.Context, _ Registry) error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if b.state != cellStateNew && b.state != cellStateStopped {
-		return errcode.New(errcode.ErrLifecycleInvalid,
+		return errcode.New(errcode.KindInvalid, errcode.ErrLifecycleInvalid,
 			fmt.Sprintf("cell %q: Init requires state new or stopped, current state: %d", b.meta.ID, b.state))
 	}
 	// Reset shutdown context from previous lifecycle to avoid stale cancellation.
@@ -178,7 +178,7 @@ func (b *BaseCell) Start(ctx context.Context) error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if b.state != cellStateInitialized {
-		return errcode.New(errcode.ErrLifecycleInvalid,
+		return errcode.New(errcode.KindInvalid, errcode.ErrLifecycleInvalid,
 			fmt.Sprintf("cell %q: Start requires state initialized, current state: %d", b.meta.ID, b.state))
 	}
 	b.shutdownCtx, b.shutdownCancel = context.WithCancel(context.WithoutCancel(ctx))

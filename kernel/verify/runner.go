@@ -74,7 +74,7 @@ func (r *Runner) VerifySlice(ctx context.Context, sliceKey string) (*VerifyResul
 
 	sm := r.project.Slices[sliceKey]
 	if sm == nil {
-		return nil, errcode.New(errcode.ErrSliceNotFound,
+		return nil, errcode.New(errcode.KindNotFound, errcode.ErrSliceNotFound,
 			fmt.Sprintf("slice %q not found in project metadata", sliceKey))
 	}
 
@@ -104,7 +104,7 @@ func (r *Runner) VerifySlice(ctx context.Context, sliceKey string) (*VerifyResul
 func (r *Runner) VerifyCell(ctx context.Context, cellID string) (*VerifyResult, error) {
 	cm := r.project.Cells[cellID]
 	if cm == nil {
-		return nil, errcode.New(errcode.ErrCellNotFound,
+		return nil, errcode.New(errcode.KindNotFound, errcode.ErrCellNotFound,
 			fmt.Sprintf("cell %q not found in project metadata", cellID))
 	}
 
@@ -145,7 +145,7 @@ func (r *Runner) VerifyCell(ctx context.Context, cellID string) (*VerifyResult, 
 func (r *Runner) RunJourney(ctx context.Context, journeyID string) (*VerifyResult, error) {
 	j := r.project.Journeys[journeyID]
 	if j == nil {
-		return nil, errcode.New(errcode.ErrJourneyNotFound,
+		return nil, errcode.New(errcode.KindNotFound, errcode.ErrJourneyNotFound,
 			fmt.Sprintf("journey %q not found in project metadata", journeyID))
 	}
 
@@ -259,11 +259,11 @@ func (r *Runner) RunJourneyCheckRef(ctx context.Context, j *metadata.JourneyMeta
 		return TestResult{Name: ref, Passed: false}, []error{err}
 	}
 	if resolved.Kind != PrefixJourney {
-		return TestResult{Name: ref, Passed: false}, []error{errcode.New(errcode.ErrCheckRefInvalid,
+		return TestResult{Name: ref, Passed: false}, []error{errcode.New(errcode.KindInvalid, errcode.ErrCheckRefInvalid,
 			fmt.Sprintf("journey checkRef %q must use journey prefix", ref))}
 	}
 	if j != nil && resolved.Scope != j.ID {
-		return TestResult{Name: ref, Passed: false}, []error{errcode.New(errcode.ErrCheckRefInvalid,
+		return TestResult{Name: ref, Passed: false}, []error{errcode.New(errcode.KindInvalid, errcode.ErrCheckRefInvalid,
 			fmt.Sprintf("journey checkRef %q belongs to journey %q, not %q", ref, resolved.Scope, j.ID))}
 	}
 	pkg, extraArgs := r.resolveJourneyPkg(j, resolved)
@@ -313,7 +313,7 @@ func recordResult(result *VerifyResult, name string, res goTestResult, pkg, patt
 		if pattern != "" {
 			msg = fmt.Sprintf("pattern %q %s — check your YAML ref", pattern, msg)
 		}
-		result.Errors = append(result.Errors, errcode.New(errcode.ErrZeroTestMatch, msg))
+		result.Errors = append(result.Errors, errcode.New(errcode.KindNotFound, errcode.ErrZeroTestMatch, msg))
 	}
 	if res.SkippedOnly {
 		tr.Passed = false
@@ -321,7 +321,7 @@ func recordResult(result *VerifyResult, name string, res goTestResult, pkg, patt
 		if pattern != "" {
 			msg = fmt.Sprintf("pattern %q %s — replace stubs with executable checks", pattern, msg)
 		}
-		result.Errors = append(result.Errors, errcode.New(errcode.ErrZeroTestMatch, msg))
+		result.Errors = append(result.Errors, errcode.New(errcode.KindNotFound, errcode.ErrZeroTestMatch, msg))
 	}
 	result.Results = append(result.Results, tr)
 	if !tr.Passed {
@@ -413,14 +413,14 @@ func hasGoFiles(dir string) bool {
 func parseSliceKey(key string) (cellID, sliceID string, err error) {
 	parts := strings.SplitN(key, "/", 2)
 	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
-		return "", "", errcode.New(errcode.ErrValidationFailed,
+		return "", "", errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			fmt.Sprintf("invalid slice key %q: expected format \"cellID/sliceID\"", key))
 	}
 	if strings.Contains(parts[0], "..") || strings.ContainsAny(parts[0], `/\`) {
-		return "", "", errcode.New(errcode.ErrValidationFailed, "invalid cellID: contains path separator or traversal")
+		return "", "", errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "invalid cellID: contains path separator or traversal")
 	}
 	if strings.Contains(parts[1], "..") || strings.ContainsAny(parts[1], `/\`) {
-		return "", "", errcode.New(errcode.ErrValidationFailed, "invalid sliceID: contains path separator or traversal")
+		return "", "", errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "invalid sliceID: contains path separator or traversal")
 	}
 	return parts[0], parts[1], nil
 }

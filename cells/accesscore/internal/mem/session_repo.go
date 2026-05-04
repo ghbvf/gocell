@@ -53,7 +53,8 @@ func (r *SessionRepository) GetByID(_ context.Context, id string) (*domain.Sessi
 
 	s, ok := r.byID[id]
 	if !ok {
-		return nil, errcode.NewDomain(errcode.ErrSessionNotFound, "session not found: "+id)
+		return nil, errcode.New(errcode.KindNotFound, errcode.ErrSessionNotFound, "session not found: "+id,
+			errcode.WithCategory(errcode.CategoryDomain))
 	}
 	clone := *s
 	return &clone, nil
@@ -65,14 +66,16 @@ func (r *SessionRepository) Update(_ context.Context, session *domain.Session) e
 
 	old, ok := r.byID[session.ID]
 	if !ok {
-		return errcode.NewDomain(errcode.ErrSessionNotFound, "session not found: "+session.ID)
+		return errcode.New(errcode.KindNotFound, errcode.ErrSessionNotFound, "session not found: "+session.ID,
+			errcode.WithCategory(errcode.CategoryDomain))
 	}
 
 	// Optimistic lock: reject if version mismatch.
 	if session.Version != old.Version {
-		return errcode.Safe(errcode.ErrSessionConflict,
+		return errcode.New(errcode.KindConflict, errcode.ErrSessionConflict,
 			"session was modified by another request, please retry",
-			fmt.Sprintf("version conflict: expected %d, got %d", old.Version, session.Version))
+			errcode.WithInternal(fmt.Sprintf("version conflict: expected %d, got %d", old.Version, session.Version)),
+			errcode.WithCategory(errcode.CategoryDomain))
 	}
 
 	session.Version++
@@ -87,7 +90,8 @@ func (r *SessionRepository) RevokeByIDAndOwner(_ context.Context, id, ownerUserI
 
 	s, ok := r.byID[id]
 	if !ok || s.UserID != ownerUserID {
-		return errcode.NewDomain(errcode.ErrSessionNotFound, "session not found: "+id)
+		return errcode.New(errcode.KindNotFound, errcode.ErrSessionNotFound, "session not found: "+id,
+			errcode.WithCategory(errcode.CategoryDomain))
 	}
 	s.Revoke(r.clock.Now())
 	return nil
@@ -112,7 +116,8 @@ func (r *SessionRepository) Delete(_ context.Context, id string) error {
 
 	_, ok := r.byID[id]
 	if !ok {
-		return errcode.NewDomain(errcode.ErrSessionNotFound, "session not found: "+id)
+		return errcode.New(errcode.KindNotFound, errcode.ErrSessionNotFound, "session not found: "+id,
+			errcode.WithCategory(errcode.CategoryDomain))
 	}
 	delete(r.byID, id)
 	return nil

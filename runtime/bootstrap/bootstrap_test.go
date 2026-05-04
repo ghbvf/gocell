@@ -110,7 +110,7 @@ func waitForHealthy(t *testing.T, addr string) {
 // assertion path work whether the response was 200 or 503.
 //
 // All 401 responses on /readyz?verbose now share the canonical envelope shape
-// emitted by httputil.WritePublicError — {"error":{"code":"ERR_READYZ_VERBOSE_DENIED",
+// emitted by httputil.WritePublic — {"error":{"code":"ERR_READYZ_VERBOSE_DENIED",
 // "message":"...","details":{},"request_id":"..."}} — regardless of which layer
 // rejected (route-group middleware or handler-layer gate). Callers asserting on
 // dependencies/cells must check the response status code first; this helper

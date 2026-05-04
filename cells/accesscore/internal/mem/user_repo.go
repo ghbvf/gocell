@@ -32,7 +32,7 @@ func (r *UserRepository) Create(_ context.Context, user *domain.User) error {
 	defer r.mu.Unlock()
 
 	if _, exists := r.byName[user.Username]; exists {
-		return errcode.NewDomain(errcode.ErrAuthUserDuplicate, "username already exists: "+user.Username)
+		return errcode.New(errcode.KindConflict, errcode.ErrAuthUserDuplicate, "username already exists: "+user.Username)
 	}
 
 	c := cloneUser(user)
@@ -47,7 +47,8 @@ func (r *UserRepository) GetByID(_ context.Context, id string) (*domain.User, er
 
 	u, ok := r.byID[id]
 	if !ok {
-		return nil, errcode.NewDomain(errcode.ErrAuthUserNotFound, "user not found: "+id)
+		return nil, errcode.New(errcode.KindNotFound, errcode.ErrAuthUserNotFound, "user not found: "+id,
+			errcode.WithCategory(errcode.CategoryDomain))
 	}
 	return cloneUser(u), nil
 }
@@ -58,7 +59,8 @@ func (r *UserRepository) GetByUsername(_ context.Context, username string) (*dom
 
 	u, ok := r.byName[username]
 	if !ok {
-		return nil, errcode.NewDomain(errcode.ErrAuthUserNotFound, "user not found: "+username)
+		return nil, errcode.New(errcode.KindNotFound, errcode.ErrAuthUserNotFound, "user not found: "+username,
+			errcode.WithCategory(errcode.CategoryDomain))
 	}
 	return cloneUser(u), nil
 }
@@ -68,7 +70,8 @@ func (r *UserRepository) Update(_ context.Context, user *domain.User) error {
 	defer r.mu.Unlock()
 
 	if _, exists := r.byID[user.ID]; !exists {
-		return errcode.NewDomain(errcode.ErrAuthUserNotFound, "user not found: "+user.ID)
+		return errcode.New(errcode.KindNotFound, errcode.ErrAuthUserNotFound, "user not found: "+user.ID,
+			errcode.WithCategory(errcode.CategoryDomain))
 	}
 
 	c := cloneUser(user)
@@ -99,7 +102,8 @@ func (r *UserRepository) Delete(_ context.Context, id string) error {
 
 	u, ok := r.byID[id]
 	if !ok {
-		return errcode.NewDomain(errcode.ErrAuthUserNotFound, "user not found: "+id)
+		return errcode.New(errcode.KindNotFound, errcode.ErrAuthUserNotFound, "user not found: "+id,
+			errcode.WithCategory(errcode.CategoryDomain))
 	}
 	delete(r.byName, u.Username)
 	delete(r.byID, id)

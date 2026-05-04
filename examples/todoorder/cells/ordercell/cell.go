@@ -136,7 +136,7 @@ func (c *OrderCell) initInternal(ctx context.Context, reg cell.Registry) error {
 	// ref: zeromicro/go-zero MustSetUp — fatal on insecure default config.
 	if c.cursorCodec == nil {
 		if durabilityMode == cell.DurabilityDurable {
-			return errcode.New(errcode.ErrCellMissingCodec,
+			return errcode.New(errcode.KindInternal, errcode.ErrCellMissingCodec,
 				"ordercell durable mode requires a cursor codec; "+
 					"use WithCursorCodec(query.NewCursorCodec(secret)) — "+
 					"the built-in demo key is public in the source tree")
@@ -169,7 +169,7 @@ func (c *OrderCell) resolveOutboxDeps(mode cell.DurabilityMode) error {
 	}
 	if mode == cell.DurabilityDurable {
 		if c.outboxWriter == nil || c.txRunner == nil {
-			return errcode.New(errcode.ErrCellMissingOutbox,
+			return errcode.New(errcode.KindInternal, errcode.ErrCellMissingOutbox,
 				"ordercell durable mode requires real outboxWriter and txRunner")
 		}
 		emitter, err := outbox.NewWriterEmitter(c.outboxWriter)
@@ -180,7 +180,7 @@ func (c *OrderCell) resolveOutboxDeps(mode cell.DurabilityMode) error {
 		return nil
 	}
 	if c.outboxWriter == nil || c.txRunner == nil {
-		return errcode.New(errcode.ErrCellMissingOutbox,
+		return errcode.New(errcode.KindInternal, errcode.ErrCellMissingOutbox,
 			"ordercell demo mode requires outboxWriter and txRunner together; inject both explicitly")
 	}
 	emitter, err := outbox.NewWriterEmitter(c.outboxWriter)

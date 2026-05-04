@@ -138,7 +138,7 @@ func WithExpectedIssuer(iss string) JWTVerifierOption {
 func NewJWTVerifier(keys VerificationKeyStore, clk clock.Clock, opts ...JWTVerifierOption) (*JWTVerifier, error) {
 	clock.MustHaveClock(clk, "auth.NewJWTVerifier")
 	if isNilInterfaceValue(keys) {
-		return nil, errcode.New(errcode.ErrAuthKeyInvalid, "verification key store must not be nil")
+		return nil, errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthKeyInvalid, "verification key store must not be nil")
 	}
 	v := &JWTVerifier{keys: keys}
 	v.parserOpts = append(v.parserOpts, jwt.WithTimeFunc(clk.Now))
@@ -146,7 +146,7 @@ func NewJWTVerifier(keys VerificationKeyStore, clk clock.Clock, opts ...JWTVerif
 		o(v)
 	}
 	if len(v.expectedAudiences) == 0 {
-		return nil, errcode.New(errcode.ErrAuthVerifierConfig,
+		return nil, errcode.New(errcode.KindInternal, errcode.ErrAuthVerifierConfig,
 			"JWT verifier requires at least one expected audience (WithExpectedAudiences); RFC 8725 §3.3")
 	}
 	return v, nil
@@ -165,44 +165,50 @@ func NewJWTVerifier(keys VerificationKeyStore, clk clock.Clock, opts ...JWTVerif
 // refresh tokens; they pass opaque wire tokens to refresh.Store.
 func (v *JWTVerifier) VerifyIntent(ctx context.Context, tokenStr string, expected TokenIntent) (Claims, error) {
 	if !expected.IsValid() {
-		return Claims{}, errcode.Safe(errcode.ErrAuthInvalidTokenIntent,
+		return Claims{}, errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthInvalidTokenIntent,
 			"token intent validation failed",
-			fmt.Sprintf("unknown expected intent %q", string(expected)))
+			errcode.WithInternal(fmt.Sprintf("unknown expected intent %q", string(expected))),
+			errcode.WithCategory(errcode.CategoryAuth))
 	}
 	claims, header, err := v.parseAndVerify(ctx, tokenStr)
 	if err != nil {
 		return Claims{}, err
 	}
 	if !claims.TokenUse.IsValid() {
-		return Claims{}, errcode.Safe(errcode.ErrAuthInvalidTokenIntent,
+		return Claims{}, errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthInvalidTokenIntent,
 			"token intent validation failed",
-			"token_use claim missing or unknown")
+			errcode.WithInternal("token_use claim missing or unknown"),
+			errcode.WithCategory(errcode.CategoryAuth))
 	}
 	headerIntent, ok := intentForJWTTyp(stringFromHeader(header, "typ"))
 	if !ok {
-		return Claims{}, errcode.Safe(errcode.ErrAuthInvalidTokenIntent,
+		return Claims{}, errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthInvalidTokenIntent,
 			"token intent validation failed",
-			"typ header missing or unknown")
+			errcode.WithInternal("typ header missing or unknown"),
+			errcode.WithCategory(errcode.CategoryAuth))
 	}
 	if headerIntent != claims.TokenUse {
-		return Claims{}, errcode.Safe(errcode.ErrAuthInvalidTokenIntent,
+		return Claims{}, errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthInvalidTokenIntent,
 			"token intent validation failed",
-			"typ header and token_use claim disagree")
+			errcode.WithInternal("typ header and token_use claim disagree"),
+			errcode.WithCategory(errcode.CategoryAuth))
 	}
 	if claims.TokenUse != expected {
-		return Claims{}, errcode.Safe(errcode.ErrAuthInvalidTokenIntent,
+		return Claims{}, errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthInvalidTokenIntent,
 			"token intent validation failed",
-			fmt.Sprintf("token_use=%q does not match expected %q",
-				string(claims.TokenUse), string(expected)))
+			errcode.WithInternal(fmt.Sprintf("token_use=%q does not match expected %q",
+				string(claims.TokenUse), string(expected))),
+			errcode.WithCategory(errcode.CategoryAuth))
 	}
 	// Audience validation (RFC 8725 §3.3): when expectedAudiences is configured,
 	// at least one must appear in the token's aud claim. The check is intentionally
 	// placed after intent validation so intent-mismatch errors remain distinguishable
 	// in structured logs (ops signal) even when audience would also fail.
 	if len(v.expectedAudiences) > 0 && !audContainsAny(claims.Audience, v.expectedAudiences) {
-		return Claims{}, errcode.Safe(errcode.ErrAuthInvalidTokenIntent,
+		return Claims{}, errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthInvalidTokenIntent,
 			"token audience validation failed",
-			fmt.Sprintf("aud %v does not satisfy any configured expected audience", claims.Audience))
+			errcode.WithInternal(fmt.Sprintf("aud %v does not satisfy any configured expected audience", claims.Audience)),
+			errcode.WithCategory(errcode.CategoryAuth))
 	}
 	// Issuer validation: when expectedIssuer is configured, the token's iss claim
 	// must match exactly. Placed after audience check so each failure type remains
@@ -228,9 +234,10 @@ func (v *JWTVerifier) checkIssuer(claims Claims) error {
 		return nil
 	}
 	if claims.Issuer != v.expectedIssuer {
-		return errcode.Safe(errcode.ErrAuthInvalidTokenIntent,
+		return errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthInvalidTokenIntent,
 			"token issuer validation failed",
-			fmt.Sprintf("iss %q does not match expected %q", claims.Issuer, v.expectedIssuer))
+			errcode.WithInternal(fmt.Sprintf("iss %q does not match expected %q", claims.Issuer, v.expectedIssuer)),
+			errcode.WithCategory(errcode.CategoryAuth))
 	}
 	return nil
 }
@@ -286,15 +293,15 @@ func (v *JWTVerifier) parseAndVerify(_ context.Context, tokenStr string) (Claims
 		return pub, nil
 	}, v.parserOpts...)
 	if err != nil {
-		return Claims{}, nil, errcode.Wrap(errcode.ErrAuthUnauthorized, "token verification failed", err)
+		return Claims{}, nil, errcode.Wrap(errcode.KindUnauthenticated, errcode.ErrAuthUnauthorized, "token verification failed", err)
 	}
 	if !token.Valid {
-		return Claims{}, nil, errcode.New(errcode.ErrAuthUnauthorized, "invalid token")
+		return Claims{}, nil, errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthUnauthorized, "invalid token")
 	}
 
 	mapClaims, ok := token.Claims.(jwt.MapClaims)
 	if !ok {
-		return Claims{}, nil, errcode.New(errcode.ErrAuthUnauthorized, "invalid token claims")
+		return Claims{}, nil, errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthUnauthorized, "invalid token claims")
 	}
 
 	return mapClaimsToClaims(mapClaims), token.Header, nil
@@ -340,7 +347,7 @@ func WithIssuerAudiencesFromSlice(auds []string) JWTIssuerOption {
 func NewJWTIssuer(keys SigningKeyProvider, issuer string, ttl time.Duration, clk clock.Clock, opts ...JWTIssuerOption) (*JWTIssuer, error) {
 	clock.MustHaveClock(clk, "auth.NewJWTIssuer")
 	if isNilInterfaceValue(keys) {
-		return nil, errcode.New(errcode.ErrAuthKeyInvalid, "signing key provider must not be nil")
+		return nil, errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthKeyInvalid, "signing key provider must not be nil")
 	}
 	i := &JWTIssuer{
 		keys:   keys,
@@ -385,12 +392,13 @@ type IssueOptions struct {
 // omitted entirely for backward compatibility and to minimize token size.
 func (i *JWTIssuer) Issue(intent TokenIntent, subject string, opts IssueOptions) (string, error) {
 	if !intent.IsValid() {
-		return "", errcode.Safe(errcode.ErrAuthInvalidTokenIntent,
+		return "", errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthInvalidTokenIntent,
 			"token intent validation failed",
-			fmt.Sprintf("unknown token intent %q", string(intent)))
+			errcode.WithInternal(fmt.Sprintf("unknown token intent %q", string(intent))),
+			errcode.WithCategory(errcode.CategoryAuth))
 	}
 	if i.keys.SigningKey() == nil {
-		return "", errcode.New(errcode.ErrAuthKeyInvalid, "signing key is nil")
+		return "", errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthKeyInvalid, "signing key is nil")
 	}
 	now := i.clk.Now()
 	expiry := i.ttl

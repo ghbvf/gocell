@@ -70,7 +70,7 @@ func (c *Catalog) Validate(cellIDs, contractIDs map[string]struct{}) error {
 	for _, m := range msgs[1:] {
 		combined.WriteString("; " + m)
 	}
-	return errcode.New(errcode.ErrReferenceBroken, combined.String())
+	return errcode.New(errcode.KindInvalid, errcode.ErrReferenceBroken, combined.String())
 }
 
 // Get returns a deep copy of a journey by ID, or nil if not found.

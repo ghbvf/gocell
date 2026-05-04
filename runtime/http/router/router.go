@@ -130,6 +130,14 @@ func WithBodyLimit(maxBytes int64) Option {
 	}
 }
 
+// WithClientErrorLogSampling sets the deterministic sample rate for 4xx logs on
+// contract-bound requests. Values less than one log every 4xx.
+func WithClientErrorLogSampling(every int) Option {
+	return func(r *Router) {
+		r.clientErrorLogSamplingEvery = every
+	}
+}
+
 // WithTracer enables distributed tracing middleware using the given Tracer.
 // When provided, each request gets a trace span with trace_id and span_id
 // propagated through context. Inbound W3C `traceparent` headers are extracted
@@ -377,19 +385,20 @@ type Router struct {
 	muxHandlers map[string]bool
 
 	// configuration fields (read during build)
-	metricsCollector    metrics.Collector
-	tracer              tracing.Tracer
-	tracingOpts         []middleware.TracingOption
-	requestIDOpts       []middleware.RequestIDOption
-	rateLimiter         middleware.RateLimiter
-	circuitBreaker      middleware.Allower
-	circuitBreakerNil   bool
-	authVerifier        auth.IntentTokenVerifier
-	authVerifierNil     bool
-	authMetrics         *auth.AuthMetrics
-	securityHeadersOpts []middleware.SecurityHeadersOption
-	bodyLimit           int64
-	trustedProxies      []string
+	metricsCollector            metrics.Collector
+	tracer                      tracing.Tracer
+	tracingOpts                 []middleware.TracingOption
+	requestIDOpts               []middleware.RequestIDOption
+	rateLimiter                 middleware.RateLimiter
+	circuitBreaker              middleware.Allower
+	circuitBreakerNil           bool
+	authVerifier                auth.IntentTokenVerifier
+	authVerifierNil             bool
+	authMetrics                 *auth.AuthMetrics
+	securityHeadersOpts         []middleware.SecurityHeadersOption
+	bodyLimit                   int64
+	clientErrorLogSamplingEvery int
+	trustedProxies              []string
 	// defaultMiddleware are installed AFTER early-responders and BEFORE
 	// rate-limiter / circuit-breaker / auth. Bootstrap populates this by
 	// converting the listener's AuthPlan chain (mTLS, ServiceToken, etc.)
@@ -517,9 +526,10 @@ func MustNew(opts ...Option) *Router {
 // ref: kubernetes/kubernetes apiserver/server/genericapiserver.go (rejected single-listener)
 func NewForListener(ref kcell.ListenerRef, opts ...Option) (*Router, error) {
 	r := &Router{
-		ref:       ref,
-		mux:       http.NewServeMux(),
-		bodyLimit: middleware.DefaultBodyLimit,
+		ref:                         ref,
+		mux:                         http.NewServeMux(),
+		bodyLimit:                   middleware.DefaultBodyLimit,
+		clientErrorLogSamplingEvery: httputil.DefaultClientErrorLogSamplingEvery,
 	}
 	for _, o := range opts {
 		o(r)
@@ -578,8 +588,8 @@ func (r *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	if len(r.declaredAuthMetas) > 0 && !r.authFinalized {
 		slog.ErrorContext(req.Context(), "router: FinalizeAuth must be called before ServeHTTP",
 			slog.Int("declared_auth_routes", len(r.declaredAuthMetas)))
-		httputil.WriteError(req.Context(), w, http.StatusInternalServerError,
-			string(errcode.ErrInternal), "internal server error")
+		httputil.WriteError(req.Context(), w,
+			errcode.New(errcode.KindInternal, errcode.ErrInternal, "internal server error"))
 		return
 	}
 	r.Handler().ServeHTTP(w, req)
@@ -651,6 +661,7 @@ func (r *Router) buildMux(realIPMW func(http.Handler) http.Handler) error {
 	r.use(
 		middleware.Recovery,
 		middleware.SecurityHeadersWithOptions(r.securityHeadersOpts...),
+		r.clientErrorLogSamplingMiddleware(),
 	)
 
 	// --- Early responders (PR-258 RES-5 narrowing) ---
@@ -727,6 +738,18 @@ func (r *Router) buildAuthOpts() []auth.AuthOption {
 		opts = append(opts, auth.WithMetrics(r.authMetrics))
 	}
 	return opts
+}
+
+func (r *Router) clientErrorLogSamplingMiddleware() func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+			if contractID, ok := r.resolveHTTPContractID(req.Method, req.URL.Path); ok {
+				ctx := httputil.WithClientErrorLogSamplingEvery(req.Context(), contractID, r.clientErrorLogSamplingEvery)
+				req = req.WithContext(ctx)
+			}
+			next.ServeHTTP(w, req)
+		})
+	}
 }
 
 // Handle registers a handler for the given pattern, implementing cell.RouteMux.
@@ -1257,6 +1280,19 @@ func (r *Router) resolveHTTPContractAttrs(method, urlPath string) ([]wrapper.Att
 		return httpContractAttrs(spec), true
 	}
 	return nil, false
+}
+
+func (r *Router) resolveHTTPContractID(method, urlPath string) (string, bool) {
+	for _, spec := range r.declaredHTTPContracts {
+		if !contractMethodMatches(spec.Method, method) {
+			continue
+		}
+		if !contractPathMatches(spec.Path, urlPath) {
+			continue
+		}
+		return spec.ID, spec.ID != ""
+	}
+	return "", false
 }
 
 func (r *Router) resolveCellID(_, urlPath string) (string, bool) {

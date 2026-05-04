@@ -271,7 +271,7 @@ func (c *AuditCore) resolveHMACKey(cfg map[string]any) error {
 		}
 	}
 	if len(c.hmacKey) == 0 {
-		return errcode.New(errcode.ErrValidationFailed,
+		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"auditcore: HMAC key is required (set via WithHMACKey or config audit.hmac_key)")
 	}
 	return nil
@@ -328,7 +328,7 @@ func (c *AuditCore) initCursorCodec(mode cell.DurabilityMode) error {
 		return nil
 	}
 	if mode == cell.DurabilityDurable {
-		return errcode.New(errcode.ErrCellMissingCodec,
+		return errcode.New(errcode.KindInternal, errcode.ErrCellMissingCodec,
 			"auditcore durable mode requires a cursor codec;"+
 				" use WithCursorCodec(query.NewCursorCodec(secret))"+
 				" — the built-in demo key is public in the source tree")

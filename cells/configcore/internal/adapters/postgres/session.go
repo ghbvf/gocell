@@ -48,7 +48,7 @@ func (s *Session) resolveWrite(ctx context.Context) (DBTX, error) {
 	if tx, ok := ctx.Value(persistence.TxCtxKey).(pgx.Tx); ok {
 		return &dbtxAdapter{tx: tx}, nil
 	}
-	return nil, errcode.New(errcode.ErrAdapterPGNoTx,
+	return nil, errcode.New(errcode.KindInternal, errcode.ErrAdapterPGNoTx,
 		"config repo: write requires a transaction in context")
 }
 

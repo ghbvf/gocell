@@ -630,7 +630,7 @@ func TestRelay_SanitizesError_InLastError(t *testing.T) {
 	store.Seed(entry)
 
 	pub := newFakePublisher()
-	pub.WithError(errors.New("dial failed: password=secret123 host=db.internal"))
+	pub.WithError(errors.New(`dial failed: {"password":"secret123","host":"db.internal"}`))
 	relay := outbox.NewRelay(store, pub, fastCfg())
 
 	stop := startRelay(t, relay)

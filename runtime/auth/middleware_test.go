@@ -265,10 +265,10 @@ func TestAuthMiddleware_LogLevel_Expected4xx_Warn(t *testing.T) {
 		name string
 		err  error
 	}{
-		{"ErrAuthTokenInvalid", errcode.New(errcode.ErrAuthTokenInvalid, "invalid token")},
-		{"ErrAuthTokenExpired", errcode.New(errcode.ErrAuthTokenExpired, "token expired")},
-		{"ErrAuthUnauthorized", errcode.New(errcode.ErrAuthUnauthorized, "unauthorized")},
-		{"ErrAuthInvalidToken", errcode.New(errcode.ErrAuthInvalidToken, "invalid")},
+		{"ErrAuthTokenInvalid", errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthTokenInvalid, "invalid token")},
+		{"ErrAuthTokenExpired", errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthTokenExpired, "token expired")},
+		{"ErrAuthUnauthorized", errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthUnauthorized, "unauthorized")},
+		{"ErrAuthInvalidToken", errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthInvalidToken, "invalid")},
 	}
 
 	for _, tc := range expected4xxErrs {
@@ -303,17 +303,17 @@ func TestAuthMiddleware_LogLevel_Expected4xx_Warn(t *testing.T) {
 // TestAuthMiddleware_LogLevel_InfraError_Error verifies S43: infra errors
 // (verifier init failure, key load failure) must log at Error, not Warn.
 //
-// P1-1: ErrAuthKeyMissing maps to HTTP 500 in codeToStatus (infra), so it must
-// NOT appear in expected4xxCodes. This test confirms it logs at Error level.
+// P1-1: ErrAuthKeyMissing is constructed with KindInternal (infra), so it must
+// log at Error level rather than the sampled 4xx Warn path.
 func TestAuthMiddleware_LogLevel_InfraError_Error(t *testing.T) {
 	infraErrs := []struct {
 		name string
 		err  error
 	}{
 		{"plain verifier error", fmt.Errorf("key loading failed: connection refused")},
-		{"CategoryInfra errcode", errcode.NewInfra(errcode.ErrInternal, "key set unavailable")},
+		{"CategoryInfra errcode", errcode.New(errcode.KindInternal, errcode.ErrInternal, "key set unavailable")},
 		// P1-1: ErrAuthKeyMissing is HTTP 500 (infra misconfiguration); must log Error.
-		{"ErrAuthKeyMissing is infra 500", errcode.New(errcode.ErrAuthKeyMissing, "no signing key configured")},
+		{"ErrAuthKeyMissing is infra 500", errcode.New(errcode.KindInternal, errcode.ErrAuthKeyMissing, "no signing key configured")},
 	}
 
 	for _, tc := range infraErrs {

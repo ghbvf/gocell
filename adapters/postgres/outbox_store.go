@@ -122,7 +122,7 @@ const cleanupDeadQuery = `DELETE FROM outbox_entries WHERE id IN (
 func (s *PGOutboxStore) ClaimPending(ctx context.Context, batchSize int) ([]outbox.ClaimedEntry, error) {
 	tx, err := s.db.Begin(ctx)
 	if err != nil {
-		return nil, errcode.Wrap(ErrAdapterPGConnect, "outbox store: ClaimPending begin tx", err)
+		return nil, errcode.Wrap(errcode.KindInternal, ErrAdapterPGConnect, "outbox store: ClaimPending begin tx", err)
 	}
 
 	committed := false
@@ -134,7 +134,7 @@ func (s *PGOutboxStore) ClaimPending(ctx context.Context, batchSize int) ([]outb
 
 	rows, err := tx.Query(ctx, claimPendingQuery, statusClaiming, statusPending, batchSize)
 	if err != nil {
-		return nil, errcode.Wrap(ErrAdapterPGQuery, "outbox store: ClaimPending query failed", err)
+		return nil, errcode.Wrap(errcode.KindInternal, ErrAdapterPGQuery, "outbox store: ClaimPending query failed", err)
 	}
 	defer rows.Close()
 
@@ -142,16 +142,16 @@ func (s *PGOutboxStore) ClaimPending(ctx context.Context, batchSize int) ([]outb
 	for rows.Next() {
 		ce, scanErr := scanClaimedEntry(rows)
 		if scanErr != nil {
-			return nil, errcode.Wrap(ErrAdapterPGQuery, "outbox store: ClaimPending scan failed", scanErr)
+			return nil, errcode.Wrap(errcode.KindInternal, ErrAdapterPGQuery, "outbox store: ClaimPending scan failed", scanErr)
 		}
 		entries = append(entries, ce)
 	}
 	if rows.Err() != nil {
-		return nil, errcode.Wrap(ErrAdapterPGQuery, "outbox store: ClaimPending rows iteration failed", rows.Err())
+		return nil, errcode.Wrap(errcode.KindInternal, ErrAdapterPGQuery, "outbox store: ClaimPending rows iteration failed", rows.Err())
 	}
 
 	if err := tx.Commit(ctx); err != nil {
-		return nil, errcode.Wrap(ErrAdapterPGConnect, "outbox store: ClaimPending commit failed", err)
+		return nil, errcode.Wrap(errcode.KindInternal, ErrAdapterPGConnect, "outbox store: ClaimPending commit failed", err)
 	}
 	committed = true
 
@@ -163,7 +163,7 @@ func (s *PGOutboxStore) ClaimPending(ctx context.Context, batchSize int) ([]outb
 func (s *PGOutboxStore) MarkPublished(ctx context.Context, id string) (bool, error) {
 	ct, err := s.db.Exec(ctx, markPublishedQuery, statusPublished, id, statusClaiming)
 	if err != nil {
-		return false, errcode.Wrap(ErrAdapterPGQuery, "outbox store: MarkPublished failed", err)
+		return false, errcode.Wrap(errcode.KindInternal, ErrAdapterPGQuery, "outbox store: MarkPublished failed", err)
 	}
 	return ct.RowsAffected() == 1, nil
 }
@@ -185,7 +185,7 @@ func (s *PGOutboxStore) MarkRetry(ctx context.Context, id string, attempts int, 
 	ct, err := s.db.Exec(ctx, markRetryQuery,
 		statusPending, attempts, delayInterval, errMsg, id, statusClaiming)
 	if err != nil {
-		return false, errcode.Wrap(ErrAdapterPGQuery, "outbox store: MarkRetry failed", err)
+		return false, errcode.Wrap(errcode.KindInternal, ErrAdapterPGQuery, "outbox store: MarkRetry failed", err)
 	}
 	return ct.RowsAffected() == 1, nil
 }
@@ -198,7 +198,7 @@ func (s *PGOutboxStore) MarkDead(ctx context.Context, id string, attempts int, l
 	ct, err := s.db.Exec(ctx, markDeadQuery,
 		statusDead, attempts, errMsg, id, statusClaiming)
 	if err != nil {
-		return false, errcode.Wrap(ErrAdapterPGQuery, "outbox store: MarkDead failed", err)
+		return false, errcode.Wrap(errcode.KindInternal, ErrAdapterPGQuery, "outbox store: MarkDead failed", err)
 	}
 	return ct.RowsAffected() == 1, nil
 }
@@ -220,7 +220,7 @@ func (s *PGOutboxStore) ReclaimStale(
 		baseDelay.Microseconds(), statusClaiming,
 		maxDelay.Microseconds())
 	if err != nil {
-		return 0, errcode.Wrap(ErrAdapterPGQuery, "outbox store: ReclaimStale failed", err)
+		return 0, errcode.Wrap(errcode.KindInternal, ErrAdapterPGQuery, "outbox store: ReclaimStale failed", err)
 	}
 	return int(ct.RowsAffected()), nil
 }
@@ -230,7 +230,7 @@ func (s *PGOutboxStore) ReclaimStale(
 func (s *PGOutboxStore) CleanupPublished(ctx context.Context, cutoff time.Time, batchSize int) (int, error) {
 	ct, err := s.db.Exec(ctx, cleanupPublishedQuery, statusPublished, cutoff, batchSize)
 	if err != nil {
-		return 0, errcode.Wrap(ErrAdapterPGQuery, "outbox store: CleanupPublished failed", err)
+		return 0, errcode.Wrap(errcode.KindInternal, ErrAdapterPGQuery, "outbox store: CleanupPublished failed", err)
 	}
 	return int(ct.RowsAffected()), nil
 }
@@ -240,7 +240,7 @@ func (s *PGOutboxStore) CleanupPublished(ctx context.Context, cutoff time.Time, 
 func (s *PGOutboxStore) CleanupDead(ctx context.Context, cutoff time.Time, batchSize int) (int, error) {
 	ct, err := s.db.Exec(ctx, cleanupDeadQuery, statusDead, cutoff, batchSize)
 	if err != nil {
-		return 0, errcode.Wrap(ErrAdapterPGQuery, "outbox store: CleanupDead failed", err)
+		return 0, errcode.Wrap(errcode.KindInternal, ErrAdapterPGQuery, "outbox store: CleanupDead failed", err)
 	}
 	return int(ct.RowsAffected()), nil
 }
@@ -317,7 +317,7 @@ func (s *PGOutboxStore) OldestEligibleAt(ctx context.Context, status string) (ti
 	case statusDead:
 		col = "dead_at"
 	default:
-		return time.Time{}, false, errcode.New(ErrAdapterPGQuery,
+		return time.Time{}, false, errcode.New(errcode.KindInternal, ErrAdapterPGQuery,
 			fmt.Sprintf("OldestEligibleAt: invalid status %q (want published or dead)", status))
 	}
 
@@ -326,7 +326,7 @@ func (s *PGOutboxStore) OldestEligibleAt(ctx context.Context, status string) (ti
 	query := fmt.Sprintf("SELECT MIN(%s) FROM outbox_entries WHERE status = $1", col)
 	var oldest *time.Time
 	if err := s.db.QueryRow(ctx, query, status).Scan(&oldest); err != nil {
-		return time.Time{}, false, errcode.Wrap(ErrAdapterPGQuery, "outbox store: OldestEligibleAt failed", err)
+		return time.Time{}, false, errcode.Wrap(errcode.KindInternal, ErrAdapterPGQuery, "outbox store: OldestEligibleAt failed", err)
 	}
 	if oldest == nil {
 		return time.Time{}, false, nil

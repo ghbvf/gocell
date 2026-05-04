@@ -13,7 +13,6 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/ghbvf/gocell/kernel/metadata"
-	"github.com/ghbvf/gocell/pkg/contracts"
 )
 
 // fingerprintProject builds a richer ProjectMeta than buildTestProject so that
@@ -300,7 +299,7 @@ func TestSourceFingerprint_SchemaFileContentChange(t *testing.T) {
 	p := fingerprintProject()
 	// Set Dir so the generator resolves the schema path correctly.
 	p.Contracts["http.auth.login.v1"].Dir = filepath.ToSlash(filepath.Join("contracts", "http", "auth", "login", "v1"))
-	p.Contracts["http.auth.login.v1"].SchemaRefs = contracts.SchemaRefs{Request: "request.schema.json"}
+	p.Contracts["http.auth.login.v1"].SchemaRefs = metadata.SchemaRefsMeta{Request: "request.schema.json"}
 
 	baseline := computeFingerprintWithRoot(t, p, root)
 
@@ -365,7 +364,7 @@ func TestSourceFingerprint_ResponseSchemaPathEscapeFailsClosed(t *testing.T) {
 func TestSourceFingerprint_SchemaRefsRequireProjectRootWhenRefsExist(t *testing.T) {
 	p := fingerprintProject()
 	p.Contracts["http.auth.login.v1"].Dir = "contracts/http/auth/login/v1"
-	p.Contracts["http.auth.login.v1"].SchemaRefs = contracts.SchemaRefs{Request: "request.schema.json"}
+	p.Contracts["http.auth.login.v1"].SchemaRefs = metadata.SchemaRefsMeta{Request: "request.schema.json"}
 
 	gen := NewGenerator(p, "github.com/ghbvf/gocell", "")
 	_, err := gen.GenerateBoundary("ssobff")
@@ -379,7 +378,7 @@ func TestSourceFingerprint_PathParamsChange(t *testing.T) {
 	baseline := computeFingerprint(t, fingerprintProject())
 
 	p := fingerprintProject()
-	p.Contracts["http.auth.login.v1"].Endpoints.HTTP.PathParams = map[string]contracts.ParamSchema{
+	p.Contracts["http.auth.login.v1"].Endpoints.HTTP.PathParams = map[string]metadata.ParamSchema{
 		"userId": {Type: "string", Format: "uuid"},
 	}
 	got := computeFingerprint(t, p)
@@ -392,7 +391,7 @@ func TestSourceFingerprint_QueryParamsChange(t *testing.T) {
 	baseline := computeFingerprint(t, fingerprintProject())
 
 	p := fingerprintProject()
-	p.Contracts["http.auth.login.v1"].Endpoints.HTTP.QueryParams = map[string]contracts.ParamSchema{
+	p.Contracts["http.auth.login.v1"].Endpoints.HTTP.QueryParams = map[string]metadata.ParamSchema{
 		"redirect": {Type: "string"},
 	}
 	got := computeFingerprint(t, p)
@@ -465,7 +464,7 @@ func TestWriteSchemaFileContents_PropagatesContentWriteError(t *testing.T) {
 		ID:   "http.auth.login.v1",
 		Dir:  filepath.ToSlash(filepath.Join("contracts", "http", "auth", "login", "v1")),
 		Kind: "http",
-		SchemaRefs: contracts.SchemaRefs{
+		SchemaRefs: metadata.SchemaRefsMeta{
 			Request: "request.schema.json",
 		},
 	}
@@ -640,7 +639,7 @@ func mutateContractStructField(v reflect.Value, fieldName string) {
 		ep.Subscribers = append(ep.Subscribers, "mutated-cell")
 		v.Set(reflect.ValueOf(ep))
 	case "SchemaRefs":
-		sr := v.Interface().(contracts.SchemaRefs)
+		sr := v.Interface().(metadata.SchemaRefsMeta)
 		sr.Request = "mutated.schema.json"
 		v.Set(reflect.ValueOf(sr))
 	}
@@ -658,7 +657,7 @@ func TestSourceFingerprint_SchemaExtraContentChange(t *testing.T) {
 
 	p := fingerprintProject()
 	p.Contracts["http.auth.login.v1"].Dir = filepath.ToSlash(filepath.Join("contracts", "http", "auth", "login", "v1"))
-	p.Contracts["http.auth.login.v1"].SchemaRefs = contracts.SchemaRefs{
+	p.Contracts["http.auth.login.v1"].SchemaRefs = metadata.SchemaRefsMeta{
 		Extra: map[string]string{"audit": "extra.schema.json"},
 	}
 
@@ -678,7 +677,7 @@ func TestSourceFingerprint_SchemaMissingFileFailsLoudly(t *testing.T) {
 
 	p := fingerprintProject()
 	p.Contracts["http.auth.login.v1"].Dir = "contracts/http/auth/login/v1"
-	p.Contracts["http.auth.login.v1"].SchemaRefs = contracts.SchemaRefs{
+	p.Contracts["http.auth.login.v1"].SchemaRefs = metadata.SchemaRefsMeta{
 		Request: "does-not-exist.schema.json",
 	}
 
@@ -695,7 +694,7 @@ func TestSourceFingerprint_SchemaExtraMissingFileFailsLoudly(t *testing.T) {
 
 	p := fingerprintProject()
 	p.Contracts["http.auth.login.v1"].Dir = "contracts/http/auth/login/v1"
-	p.Contracts["http.auth.login.v1"].SchemaRefs = contracts.SchemaRefs{
+	p.Contracts["http.auth.login.v1"].SchemaRefs = metadata.SchemaRefsMeta{
 		Extra: map[string]string{"audit": "missing.schema.json"},
 	}
 
@@ -713,7 +712,7 @@ func TestSourceFingerprint_SchemaExtraEmptyPathSkipped(t *testing.T) {
 
 	p := fingerprintProject()
 	p.Contracts["http.auth.login.v1"].Dir = "contracts/http/auth/login/v1"
-	p.Contracts["http.auth.login.v1"].SchemaRefs = contracts.SchemaRefs{
+	p.Contracts["http.auth.login.v1"].SchemaRefs = metadata.SchemaRefsMeta{
 		Extra: map[string]string{"audit": ""},
 	}
 

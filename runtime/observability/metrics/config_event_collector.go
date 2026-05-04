@@ -50,7 +50,7 @@ var _ ConfigEventCollector = (*providerConfigEventCollector)(nil)
 // The Prometheus provider namespace supplies the "gocell_" fqName prefix.
 func NewProviderConfigEventCollector(p kernelmetrics.Provider) (ConfigEventCollector, error) {
 	if p == nil {
-		return nil, errcode.New(errcode.ErrObservabilityConfigInvalid,
+		return nil, errcode.New(errcode.KindInternal, errcode.ErrObservabilityConfigInvalid,
 			"runtime/observability/metrics: config event Provider is required")
 	}
 	process, err := p.CounterVec(kernelmetrics.CounterOpts{

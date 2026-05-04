@@ -28,7 +28,7 @@ type Session struct {
 // now is the wall-clock instant provided by the caller's clock.Clock.
 // Returns an errcode.Error if any required field is empty.
 func NewSession(userID, accessToken string, expiresAt time.Time, now time.Time) (*Session, error) {
-	if err := validation.RequireNotBlank(errcode.ErrAuthSessionInvalidInput,
+	if err := validation.RequireNotEmpty(errcode.ErrAuthSessionInvalidInput,
 		validation.F("userID", userID),
 		validation.F("accessToken", accessToken),
 	); err != nil {

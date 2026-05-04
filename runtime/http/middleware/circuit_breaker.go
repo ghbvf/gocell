@@ -90,7 +90,7 @@ func IsTypedNilAllower(cb Allower) bool {
 // ref: go-kit/kit circuitbreaker — middleware wrapping pattern
 func CircuitBreaker(cb Allower) (func(http.Handler) http.Handler, error) {
 	if cb == nil || IsTypedNilAllower(cb) {
-		return nil, errcode.New(errcode.ErrValidationFailed, "middleware: Allower must not be nil")
+		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "middleware: Allower must not be nil")
 	}
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -174,7 +174,7 @@ func ensureRecorder(w http.ResponseWriter, r *http.Request) (*RecorderState, htt
 }
 
 // writeCircuitOpenError writes a 503 response with a public service-unavailable code.
-// Uses httputil.WritePublicError so the message "service unavailable" is
+// Uses httputil.WritePublic so the message "service unavailable" is
 // preserved (not masked to "internal server error"), the original circuit-open
 // code stays in server logs, and the response inherits the canonical error
 // envelope format.
@@ -183,7 +183,7 @@ func ensureRecorder(w http.ResponseWriter, r *http.Request) (*RecorderState, htt
 // is set per RFC 7231 Section 7.1.3.
 func writeCircuitOpenError(w http.ResponseWriter, r *http.Request, cb Allower) {
 	// Set Retry-After if the policy provides it. Must be set before
-	// WritePublicError calls w.WriteHeader.
+	// WritePublic calls w.WriteHeader.
 	if ra, ok := cb.(CircuitBreakerRetryAfter); ok {
 		if d := ra.RetryAfter(); d > 0 {
 			secs := int(math.Ceil(d.Seconds()))
@@ -191,6 +191,6 @@ func writeCircuitOpenError(w http.ResponseWriter, r *http.Request, cb Allower) {
 		}
 	}
 
-	httputil.WritePublicError(r.Context(), w, http.StatusServiceUnavailable,
-		string(errcode.ErrCircuitOpen), "service unavailable")
+	httputil.WritePublic(r.Context(), w, errcode.KindUnavailable,
+		errcode.ErrCircuitOpen, "service unavailable")
 }

@@ -29,7 +29,7 @@ func TestIsTestCodeAndIsProductionCode_Disjoint(t *testing.T) {
 		{"locktest helper", "runtime/distlock/locktest/fake_clock.go"},
 		{"locktest conformance", "runtime/distlock/locktest/conformance.go"},
 		{"commandtest helper", "kernel/command/commandtest/inmem.go"},
-		{"contracttest helper", "pkg/contracttest/fixture.go"},
+		{"contracttest helper", "tests/contracttest/fixture.go"},
 		{"examples production", "examples/ssobff/main.go"},
 		{"examples test", "examples/ssobff/walkthrough_test.go"},
 		{"vendor test", "vendor/github.com/x/y/y_test.go"},
@@ -66,7 +66,7 @@ func TestIsTestCode(t *testing.T) {
 		{"outboxtest harness", "runtime/storage/outboxtest/harness.go", true},
 		{"storetest suite", "runtime/auth/refresh/storetest/suite.go", true},
 		{"healthtest probe", "runtime/http/health/healthtest/healthtest.go", true},
-		{"contracttest fixture", "pkg/contracttest/fixture.go", true},
+		{"contracttest fixture", "tests/contracttest/fixture.go", true},
 		{"commandtest inmem", "kernel/command/commandtest/inmem.go", true},
 
 		{"production main", "cmd/corebundle/main.go", false},

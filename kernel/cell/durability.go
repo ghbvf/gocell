@@ -54,7 +54,7 @@ func ValidateMode(mode DurabilityMode) error {
 	case DurabilityDemo, DurabilityDurable:
 		return nil
 	default:
-		return errcode.New(errcode.ErrValidationFailed,
+		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			fmt.Sprintf("invalid DurabilityMode %d; explicitly choose DurabilityDemo or DurabilityDurable", int(mode)))
 	}
 }
@@ -64,7 +64,7 @@ func ValidateMode(mode DurabilityMode) error {
 // accepted. nil deps are silently skipped (nil checks belong in the caller).
 func CheckNotNoop(mode DurabilityMode, cellID string, deps ...any) error {
 	if err := ValidateMode(mode); err != nil {
-		return errcode.Wrap(errcode.ErrValidationFailed,
+		return errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed,
 			fmt.Sprintf("%s: DurabilityMode check", cellID), err)
 	}
 	if mode == DurabilityDemo {
@@ -75,7 +75,7 @@ func CheckNotNoop(mode DurabilityMode, cellID string, deps ...any) error {
 			continue
 		}
 		if n, ok := dep.(Nooper); ok && n.Noop() {
-			return errcode.New(errcode.ErrCellMissingOutbox,
+			return errcode.New(errcode.KindInternal, errcode.ErrCellMissingOutbox,
 				fmt.Sprintf("%s: durable mode rejects %T; inject a real implementation", cellID, dep))
 		}
 	}

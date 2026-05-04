@@ -9,6 +9,6 @@ import "github.com/ghbvf/gocell/pkg/errcode"
 // ErrCellPlatformUnsupported so the failure surfaces with the same code as
 // PlatformSupported() / newBootstrapper() on non-unix non-windows builds.
 func defaultStateDir() (string, error) {
-	return "", errcode.New(errcode.ErrCellPlatformUnsupported,
+	return "", errcode.New(errcode.KindInternal, errcode.ErrCellPlatformUnsupported,
 		"initialadmin: no default state directory on this platform; set GOCELL_STATE_DIR")
 }

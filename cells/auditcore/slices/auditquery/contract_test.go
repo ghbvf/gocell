@@ -12,9 +12,9 @@ import (
 	"github.com/ghbvf/gocell/cells/auditcore/internal/mem"
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/cell/celltest"
-	"github.com/ghbvf/gocell/pkg/contracttest"
 	"github.com/ghbvf/gocell/pkg/query"
 	"github.com/ghbvf/gocell/runtime/auth"
+	"github.com/ghbvf/gocell/tests/contracttest"
 )
 
 // newContractQueryHandler builds an http.Handler that registers auditquery

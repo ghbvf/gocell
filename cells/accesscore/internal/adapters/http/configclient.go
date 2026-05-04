@@ -88,7 +88,7 @@ func (c *HTTPConfigGetter) GetEntry(ctx context.Context, key string) (ports.Conf
 	// callerCell="accesscore" mirrors contract.yaml endpoints.clients[0].
 	token := auth.GenerateServiceToken(c.ring, "accesscore", http.MethodGet, path, "", c.clock.Now())
 	if token == "" {
-		return ports.ConfigEntry{}, errcode.New(errcode.ErrInternal, "configclient: service token generation failed")
+		return ports.ConfigEntry{}, errcode.New(errcode.KindInternal, errcode.ErrInternal, "configclient: service token generation failed")
 	}
 	req.Header.Set("Authorization", "ServiceToken "+token)
 
@@ -106,18 +106,19 @@ func (c *HTTPConfigGetter) GetEntry(ctx context.Context, key string) (ports.Conf
 	case http.StatusOK:
 		// fall through to decode
 	case http.StatusNotFound:
-		return ports.ConfigEntry{}, errcode.New(errcode.ErrConfigNotFound,
-			fmt.Sprintf("config key %q not found", key))
+		return ports.ConfigEntry{}, errcode.New(errcode.KindNotFound, errcode.ErrConfigNotFound,
+			fmt.Sprintf("config key %q not found", key),
+			errcode.WithCategory(errcode.CategoryDomain))
 	case http.StatusUnauthorized:
 		// Permanent: invalid/missing/tampered service token. Retrying with the
 		// same credentials cannot recover; consumers must Reject (DLQ) rather
 		// than treat as transient.
-		return ports.ConfigEntry{}, errcode.New(errcode.ErrAuthUnauthorized,
+		return ports.ConfigEntry{}, errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthUnauthorized,
 			fmt.Sprintf("configclient: 401 from configcore for key %q (service token rejected)", key))
 	case http.StatusForbidden:
 		// Permanent: caller_cell not in contract.clients allowlist. Retrying
 		// with the same caller cannot recover; consumers must Reject (DLQ).
-		return ports.ConfigEntry{}, errcode.New(errcode.ErrAuthForbidden,
+		return ports.ConfigEntry{}, errcode.New(errcode.KindPermissionDenied, errcode.ErrAuthForbidden,
 			fmt.Sprintf("configclient: 403 from configcore for key %q (caller_cell not in allowlist)", key))
 	default:
 		return ports.ConfigEntry{}, fmt.Errorf("configclient: unexpected status %d for key %q", resp.StatusCode, key)

@@ -56,7 +56,7 @@ func (b *Bootstrap) applyListenerAuthChain(
 			v := p.ResolvedVerifier()
 			if v == nil {
 				// phase4 must have run before phase5; this is a programmer error.
-				return nil, nil, "", errcode.New(errcode.ErrCellInvalidConfig,
+				return nil, nil, "", errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
 					fmt.Sprintf("listener %q: AuthJWTFromAssembly verifier not resolved; "+
 						"phase ordering violation: phase4 must complete before applyListenerAuthChain",
 						ref.String()))
@@ -79,7 +79,7 @@ func (b *Bootstrap) applyListenerAuthChain(
 
 		default:
 			// Sealed interface: this branch is theoretically unreachable.
-			return nil, nil, "", errcode.New(errcode.ErrCellInvalidConfig,
+			return nil, nil, "", errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
 				fmt.Sprintf("listener %q: unknown AuthPlan type %T (sealed interface violation)",
 					ref.String(), plan))
 		}
@@ -123,7 +123,7 @@ func (b *Bootstrap) runAuthPlanValidateHooks() error {
 // Moved from policy_jwt_from_assembly.go; kept bootstrap-private.
 func discoverAuthVerifierFromAssembly(asm cell.AssemblyRef) (auth.IntentTokenVerifier, error) {
 	if asm == nil {
-		return nil, errcode.New(errcode.ErrCellInvalidConfig,
+		return nil, errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
 			"bootstrap: AuthJWTFromAssembly.Assembly is nil; use cell.NewAuthJWTFromAssembly(asm)")
 	}
 	var (
@@ -194,8 +194,8 @@ func mtlsMiddleware() func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if r.TLS == nil || len(r.TLS.PeerCertificates) == 0 {
-				httputil.WriteError(r.Context(), w, http.StatusUnauthorized,
-					"ERR_AUTH_MTLS_REQUIRED", "mTLS client certificate required")
+				httputil.WriteError(r.Context(), w,
+					errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthUnauthorized, "mTLS client certificate required"))
 				return
 			}
 			next.ServeHTTP(w, r)

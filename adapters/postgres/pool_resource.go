@@ -49,7 +49,7 @@ type PGResource struct {
 // registration does no nil-substitution; bad inputs surface immediately.
 func NewPGResource(pool *Pool) (*PGResource, error) {
 	if pool == nil {
-		return nil, errcode.New(errcode.ErrValidationFailed,
+		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"NewPGResource: pool must not be nil (Checkers() and Close() dereference pool)")
 	}
 	return &PGResource{

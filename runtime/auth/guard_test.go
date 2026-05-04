@@ -23,13 +23,13 @@ func requireAuthenticatedPolicy() Policy {
 	return func(r *http.Request) error {
 		p, ok := FromContext(r.Context())
 		if !ok {
-			return errcode.New(errcode.ErrAuthUnauthorized, "authentication required")
+			return errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthUnauthorized, "authentication required")
 		}
 		if p.Kind == PrincipalAnonymous {
-			return errcode.New(errcode.ErrAuthUnauthorized, "anonymous principal not permitted")
+			return errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthUnauthorized, "anonymous principal not permitted")
 		}
 		if p.Kind == PrincipalUser && p.Subject == "" {
-			return errcode.New(errcode.ErrAuthUnauthorized, "principal subject missing")
+			return errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthUnauthorized, "principal subject missing")
 		}
 		return nil
 	}
@@ -74,7 +74,7 @@ func TestRequirePolicy_LegacySecuredBehavior(t *testing.T) {
 		{
 			name: "policy ErrAuthUnauthorized — short-circuits, 401",
 			policy: func(_ *http.Request) error {
-				return errcode.New(errcode.ErrAuthUnauthorized, "authentication required")
+				return errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthUnauthorized, "authentication required")
 			},
 			wantStatus: http.StatusUnauthorized,
 			wantCode:   "ERR_AUTH_UNAUTHORIZED",
@@ -82,7 +82,7 @@ func TestRequirePolicy_LegacySecuredBehavior(t *testing.T) {
 		{
 			name: "policy ErrAuthForbidden — short-circuits, 403",
 			policy: func(_ *http.Request) error {
-				return errcode.New(errcode.ErrAuthForbidden, "access denied")
+				return errcode.New(errcode.KindPermissionDenied, errcode.ErrAuthForbidden, "access denied")
 			},
 			wantStatus: http.StatusForbidden,
 			wantCode:   "ERR_AUTH_FORBIDDEN",

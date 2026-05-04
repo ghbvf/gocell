@@ -79,7 +79,7 @@ func TestWrapConsumer_DefaultRedactsSensitiveValueOnSpan(t *testing.T) {
 	inner := func(ctx context.Context, e outbox.Entry) outbox.HandleResult {
 		return outbox.HandleResult{
 			Disposition: outbox.DispositionRequeue,
-			Err:         errors.New("upstream rejected: token=hunter2-leak-sentinel-9f3"),
+			Err:         errors.New(`upstream rejected: {"token":"hunter2-leak-sentinel-9f3","user":"alice"}`),
 		}
 	}
 	w := wrapper.MustWrapConsumer(tr, eventSpec(), inner)

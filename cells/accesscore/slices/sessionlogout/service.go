@@ -56,10 +56,10 @@ func NewService(
 	opts ...Option,
 ) (*Service, error) {
 	if validation.IsNilInterface(sessionRepo) {
-		return nil, errcode.New(errcode.ErrCellInvalidConfig, "sessionlogout.NewService: sessionRepo must not be nil")
+		return nil, errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig, "sessionlogout.NewService: sessionRepo must not be nil")
 	}
 	if validation.IsNilInterface(refreshStore) {
-		return nil, errcode.New(errcode.ErrCellInvalidConfig, "sessionlogout.NewService: refreshStore must not be nil")
+		return nil, errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig, "sessionlogout.NewService: refreshStore must not be nil")
 	}
 	if logger == nil {
 		logger = slog.Default()
@@ -74,7 +74,7 @@ func NewService(
 		o(s)
 	}
 	if s.txRunner == nil {
-		return nil, errcode.New(errcode.ErrValidationFailed, "sessionlogout: TxRunner required; use WithTxManager")
+		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "sessionlogout: TxRunner required; use WithTxManager")
 	}
 	return s, nil
 }
@@ -107,7 +107,7 @@ func (s *Service) persistRevoke(ctx context.Context, fn func(context.Context) er
 // preventing cross-user session enumeration (IDOR). A session that does not
 // exist OR does not belong to the caller yields the same ErrSessionNotFound.
 func (s *Service) Logout(ctx context.Context, sessionID, callerUserID string) error {
-	if err := validation.RequireNotBlank(errcode.ErrAuthLogoutInvalidInput,
+	if err := validation.RequireNotEmpty(errcode.ErrAuthLogoutInvalidInput,
 		validation.F("id", sessionID),
 	); err != nil {
 		return err
@@ -116,7 +116,7 @@ func (s *Service) Logout(ctx context.Context, sessionID, callerUserID string) er
 		// callerUserID is derived from JWT claims by the auth middleware, not from
 		// client input. A blank value indicates a server-side auth misconfiguration,
 		// not a missing request field — expose a generic message to the client.
-		return errcode.New(errcode.ErrAuthLogoutInvalidInput, "logout requires authenticated caller")
+		return errcode.New(errcode.KindInvalid, errcode.ErrAuthLogoutInvalidInput, "logout requires authenticated caller")
 	}
 
 	// Wrap the owner-scoped revoke + refresh cascade + outbox write in a transaction for L2 atomicity.
@@ -147,7 +147,7 @@ func (s *Service) Logout(ctx context.Context, sessionID, callerUserID string) er
 // not leave refresh chains live while sessions are revoked or vice-versa.
 func (s *Service) LogoutUser(ctx context.Context, userID string) error {
 	if userID == "" {
-		return errcode.New(errcode.ErrAuthLogoutInvalidInput, "logout requires a valid user identifier")
+		return errcode.New(errcode.KindInvalid, errcode.ErrAuthLogoutInvalidInput, "logout requires a valid user identifier")
 	}
 
 	if err := s.txRunner.RunInTx(ctx, func(txCtx context.Context) error {

@@ -18,9 +18,9 @@ import (
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/command"
 	"github.com/ghbvf/gocell/kernel/command/commandtest"
-	"github.com/ghbvf/gocell/pkg/contracttest"
 	"github.com/ghbvf/gocell/pkg/query"
 	"github.com/ghbvf/gocell/runtime/auth"
+	"github.com/ghbvf/gocell/tests/contracttest"
 )
 
 // newContractCommandHandler wires h.RegisterRoutes as the single source of

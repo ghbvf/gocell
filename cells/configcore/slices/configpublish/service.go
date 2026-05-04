@@ -71,7 +71,7 @@ func NewService(repo ports.ConfigRepository, logger *slog.Logger, clk clock.Cloc
 		o(s)
 	}
 	if s.txRunner == nil {
-		return nil, errcode.New(errcode.ErrValidationFailed,
+		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"configpublish: TxRunner required; use WithTxManager")
 	}
 	return s, nil
@@ -82,7 +82,8 @@ func NewService(repo ports.ConfigRepository, logger *slog.Logger, clk clock.Cloc
 func actorFromContext(ctx context.Context) (string, error) {
 	p, ok := auth.FromContext(ctx)
 	if !ok || p.Subject == "" {
-		return "", errcode.New(errcode.ErrAuthUnauthorized, "config-publish: actor required — admin auth must be present")
+		return "", errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthUnauthorized,
+			"config-publish: actor required — admin auth must be present")
 	}
 	return p.Subject, nil
 }
@@ -90,7 +91,7 @@ func actorFromContext(ctx context.Context) (string, error) {
 // Publish creates a versioned snapshot of a config entry.
 // All reads happen inside runInTx so the snapshot is consistent with the write.
 func (s *Service) Publish(ctx context.Context, key string) (*domain.ConfigVersion, error) {
-	if err := validation.RequireNotBlank(errcode.ErrConfigPublishInvalidInput,
+	if err := validation.RequireNotEmpty(errcode.ErrConfigPublishInvalidInput,
 		validation.F("key", key),
 	); err != nil {
 		return nil, err
@@ -141,13 +142,13 @@ func (s *Service) Publish(ctx context.Context, key string) (*domain.ConfigVersio
 // to eliminate the TOCTOU stale-read race where a concurrent write could change
 // the entry between the reads and the update.
 func (s *Service) Rollback(ctx context.Context, key string, targetVersion int) (*domain.ConfigEntry, error) {
-	if err := validation.RequireNotBlank(errcode.ErrConfigPublishInvalidInput,
+	if err := validation.RequireNotEmpty(errcode.ErrConfigPublishInvalidInput,
 		validation.F("key", key),
 	); err != nil {
 		return nil, err
 	}
 	if targetVersion < 1 {
-		return nil, errcode.New(errcode.ErrConfigPublishInvalidInput,
+		return nil, errcode.New(errcode.KindInvalid, errcode.ErrConfigPublishInvalidInput,
 			"rollback target version must be >= 1")
 	}
 

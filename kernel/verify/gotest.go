@@ -29,7 +29,7 @@ type goTestRunner struct {
 func newGoTestRunner() (goTestRunner, error) {
 	tool, err := cmdrun.NewTool(goToolName())
 	if err != nil {
-		return goTestRunner{}, errcode.Wrap(errcode.ErrTestExecution, "resolve go tool", err)
+		return goTestRunner{}, errcode.Wrap(errcode.KindInternal, errcode.ErrTestExecution, "resolve go tool", err)
 	}
 	return goTestRunner{goTool: tool}, nil
 }
@@ -47,7 +47,10 @@ func runGoTest(ctx context.Context, dir string, args []string) goTestResult {
 
 func (r goTestRunner) run(ctx context.Context, dir string, args []string) goTestResult {
 	fullArgs := append([]string{"test"}, args...)
-	output, runErr := cmdrun.RunIn(ctx, r.goTool, filepath.Clean(dir), goTestEnv(r.goTool.Dir()), fullArgs...)
+	output, runErr := cmdrun.RunWith(ctx, r.goTool, cmdrun.RunOptions{
+		Dir:      filepath.Clean(dir),
+		ExtraEnv: goTestExtraEnv(r.goTool.Dir()),
+	}, fullArgs...)
 	out := string(output)
 
 	if runErr == nil {
@@ -62,7 +65,7 @@ func (r goTestRunner) run(ctx context.Context, dir string, args []string) goTest
 
 	return goTestResult{
 		Output: out,
-		Err:    errcode.Wrap(errcode.ErrTestExecution, "go test execution failed", runErr),
+		Err:    errcode.Wrap(errcode.KindInternal, errcode.ErrTestExecution, "go test execution failed", runErr),
 	}
 }
 
@@ -73,15 +76,14 @@ func goToolName() string {
 	return "go"
 }
 
-// goTestEnv returns os.Environ with PATH rewritten to put goToolDir first,
+// goTestExtraEnv returns an additive PATH override that puts goToolDir first,
 // so go-toolchain-internal helpers (compile, link, vet) resolve to the
 // toolchain that owns the go binary rather than any other version that
-// might happen to be earlier on PATH.
-func goTestEnv(goToolDir string) []string {
-	env := os.Environ()
-	pathKey, pathValue := pathEnv(env)
-	env = withoutPathEnv(env)
-	return append(env, pathKey+"="+prependPath(goToolDir, pathValue))
+// might happen to be earlier on PATH. cmdrun.RunWith supplies the cleaned
+// inherited environment; this function only describes the explicit override.
+func goTestExtraEnv(goToolDir string) []string {
+	pathKey, pathValue := pathEnv(os.Environ())
+	return []string{pathKey + "=" + prependPath(goToolDir, pathValue)}
 }
 
 func withoutPathEnv(env []string) []string {

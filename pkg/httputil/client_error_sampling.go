@@ -13,31 +13,52 @@ type clientErrorLogSampling struct {
 	counter *atomic.Uint64
 }
 
-type listErrorLogSampler struct {
+type clientErrorLogSampler struct {
 	every    uint64
 	counters sync.Map
 }
 
-var defaultListErrorLogSampler = newListErrorLogSampler(100)
+const fallbackClientErrorRouteKey = "__missing_client_error_sampling_context__"
 
-// WithListErrorLogSampling marks list-route client-error logs written through
-// this context for deterministic route-keyed one-in-100 sampling.
-func WithListErrorLogSampling(ctx context.Context, routeKey string) context.Context {
-	return defaultListErrorLogSampler.withContext(ctx, routeKey)
+// DefaultClientErrorLogSamplingEvery is the default deterministic sample rate
+// for 4xx logs when no router-level override is configured.
+const DefaultClientErrorLogSamplingEvery = 100
+
+var (
+	defaultClientErrorLogSampler = newClientErrorLogSampler(DefaultClientErrorLogSamplingEvery)
+	clientErrorLogSamplers       sync.Map
+)
+
+// WithClientErrorLogSampling installs deterministic route-keyed sampling for
+// client-error logs produced through WriteError.
+func WithClientErrorLogSampling(ctx context.Context, routeKey string) context.Context {
+	if _, ok := ctx.Value(clientErrorLogSamplingKey{}).(clientErrorLogSampling); ok {
+		return ctx
+	}
+	return defaultClientErrorLogSampler.withContext(ctx, routeKey)
 }
 
-func newListErrorLogSampler(every int) *listErrorLogSampler {
+// WithClientErrorLogSamplingEvery installs deterministic route-keyed sampling
+// using the supplied sampling rate. Values less than one are treated as one.
+func WithClientErrorLogSamplingEvery(ctx context.Context, routeKey string, every int) context.Context {
+	return clientErrorLogSamplerForEvery(every).withContext(ctx, routeKey)
+}
+
+func withClientErrorLogSamplingEvery(ctx context.Context, routeKey string, every int) context.Context {
+	return WithClientErrorLogSamplingEvery(ctx, routeKey, every)
+}
+
+func newClientErrorLogSampler(every int) *clientErrorLogSampler {
 	if every < 1 {
 		every = 1
 	}
-	return &listErrorLogSampler{every: uint64(every)}
+	return &clientErrorLogSampler{every: uint64(every)}
 }
 
-func withClientErrorLogSampling(ctx context.Context, routeKey string, every int) context.Context {
-	return newListErrorLogSampler(every).withContext(ctx, routeKey)
-}
-
-func (s *listErrorLogSampler) withContext(ctx context.Context, routeKey string) context.Context {
+func (s *clientErrorLogSampler) withContext(ctx context.Context, routeKey string) context.Context {
+	if routeKey == "" {
+		routeKey = fallbackClientErrorRouteKey
+	}
 	if s.every <= 1 {
 		return context.WithValue(ctx, clientErrorLogSamplingKey{}, clientErrorLogSampling{every: 1})
 	}
@@ -47,14 +68,28 @@ func (s *listErrorLogSampler) withContext(ctx context.Context, routeKey string) 
 	})
 }
 
-func (s *listErrorLogSampler) counter(routeKey string) *atomic.Uint64 {
+func (s *clientErrorLogSampler) counter(routeKey string) *atomic.Uint64 {
 	actual, _ := s.counters.LoadOrStore(routeKey, &atomic.Uint64{})
 	return actual.(*atomic.Uint64)
 }
 
+func clientErrorLogSamplerForEvery(every int) *clientErrorLogSampler {
+	if every < 1 {
+		every = 1
+	}
+	actual, _ := clientErrorLogSamplers.LoadOrStore(uint64(every), newClientErrorLogSampler(every))
+	return actual.(*clientErrorLogSampler)
+}
+
 func shouldLogClientError(ctx context.Context) bool {
 	cfg, ok := ctx.Value(clientErrorLogSamplingKey{}).(clientErrorLogSampling)
-	if !ok || cfg.every <= 1 {
+	if !ok {
+		cfg = clientErrorLogSampling{
+			every:   defaultClientErrorLogSampler.every,
+			counter: defaultClientErrorLogSampler.counter(fallbackClientErrorRouteKey),
+		}
+	}
+	if cfg.every <= 1 {
 		return true
 	}
 	return cfg.counter.Add(1)%cfg.every == 0

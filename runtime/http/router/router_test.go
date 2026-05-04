@@ -21,6 +21,8 @@ import (
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/metadata"
 	"github.com/ghbvf/gocell/pkg/ctxkeys"
+	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/httputil"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/auth/authtest"
@@ -56,10 +58,62 @@ func routerRequestKey(cellID, method, route string, status int) metrics.RequestK
 	return metrics.RequestKey{Cell: cellID, Method: method, Route: route, Status: status}
 }
 
+func countWarnEntries(logs []byte, msg string) int {
+	count := 0
+	for line := range bytes.SplitSeq(logs, []byte("\n")) {
+		if len(line) == 0 {
+			continue
+		}
+		var entry map[string]any
+		if err := json.Unmarshal(line, &entry); err != nil {
+			continue
+		}
+		if entry["level"] == "WARN" && entry["msg"] == msg {
+			count++
+		}
+	}
+	return count
+}
+
 func TestRouterImplementsRouteMux(t *testing.T) {
 	r := MustNew(WithRouterClock(clock.Real()))
 	var mux cell.RouteMux = r
 	assert.NotNil(t, mux)
+}
+
+func TestRouterClientErrorLogSamplingOption(t *testing.T) {
+	var logs bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&logs, &slog.HandlerOptions{Level: slog.LevelWarn}))
+	original := slog.Default()
+	slog.SetDefault(logger)
+	defer slog.SetDefault(original)
+
+	r, err := NewForListener(
+		cell.PrimaryListener,
+		WithRouterClock(clock.Real()),
+		WithClientErrorLogSampling(2),
+	)
+	require.NoError(t, err)
+
+	handler := http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		httputil.WriteError(req.Context(), w,
+			errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "invalid sample"))
+	})
+	auth.MustMount(r, auth.Route{
+		Contract: testHTTPContract(http.MethodGet, "/api/v1/sample/{id}"),
+		Handler:  handler,
+		Public:   true,
+	})
+	require.NoError(t, r.FinalizeAuth())
+
+	for range 4 {
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/sample/123", nil)
+		r.Handler().ServeHTTP(rec, req)
+		assert.Equal(t, http.StatusBadRequest, rec.Code)
+	}
+
+	assert.Equal(t, 2, countWarnEntries(logs.Bytes(), "error (4xx)"))
 }
 
 func TestHealthEndpoints(t *testing.T) {

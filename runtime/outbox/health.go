@@ -133,7 +133,7 @@ func (b *FailureBudget) Checker() func(context.Context) error {
 		if !b.tripped.Load() {
 			return nil
 		}
-		return errcode.New(errcode.ErrRelayBudgetExhausted,
+		return errcode.New(errcode.KindUnavailable, errcode.ErrRelayBudgetExhausted,
 			fmt.Sprintf("relay failure budget %q exhausted: %d consecutive failures reached threshold %d",
 				b.name, b.consec.Load(), b.threshold))
 	}

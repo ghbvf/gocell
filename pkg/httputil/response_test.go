@@ -17,1116 +17,96 @@ import (
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
-func TestMapCodeToStatus_ExplicitMapping(t *testing.T) {
-	tests := []struct {
-		code       errcode.Code
-		wantStatus int
-	}{
-		// NOT_FOUND group -> 404
-		{errcode.ErrMetadataNotFound, http.StatusNotFound},
-		{errcode.ErrCellNotFound, http.StatusNotFound},
-		{errcode.ErrSliceNotFound, http.StatusNotFound},
-		{errcode.ErrContractNotFound, http.StatusNotFound},
-		{errcode.ErrAssemblyNotFound, http.StatusNotFound},
-		{errcode.ErrJourneyNotFound, http.StatusNotFound},
-		{errcode.ErrSessionNotFound, http.StatusNotFound},
-		{errcode.ErrOrderNotFound, http.StatusNotFound},
-		{errcode.ErrDeviceNotFound, http.StatusNotFound},
-		{errcode.ErrCommandNotFound, http.StatusNotFound},
-
-		// Validation group -> 400
-		{errcode.ErrValidationFailed, http.StatusBadRequest},
-		{errcode.ErrMetadataInvalid, http.StatusBadRequest},
-		{errcode.ErrLifecycleInvalid, http.StatusBadRequest},
-		{errcode.ErrReferenceBroken, http.StatusBadRequest},
-
-		// Auth group -> 401
-		{errcode.ErrAuthUnauthorized, http.StatusUnauthorized},
-		{errcode.ErrAuthKeyInvalid, http.StatusUnauthorized},
-		{errcode.ErrAuthTokenInvalid, http.StatusUnauthorized},
-		{errcode.ErrAuthTokenExpired, http.StatusUnauthorized},
-
-		// Forbidden -> 403
-		{errcode.ErrAuthForbidden, http.StatusForbidden},
-
-		// Rate limited -> 429
-		{errcode.ErrRateLimited, http.StatusTooManyRequests},
-
-		// Body too large -> 413
-		{errcode.ErrBodyTooLarge, http.StatusRequestEntityTooLarge},
-
-		// Cell-local NOT_FOUND codes -> 404
-		{errcode.ErrAuthUserNotFound, http.StatusNotFound},
-		{errcode.ErrConfigNotFound, http.StatusNotFound},
-		{errcode.ErrFlagNotFound, http.StatusNotFound},
-		{errcode.ErrAuthRoleNotFound, http.StatusNotFound},
-		{errcode.ErrConfigRepoNotFound, http.StatusNotFound},
-		{errcode.ErrWSConnNotFound, http.StatusNotFound},
-		{errcode.ErrAuditRepoNotFound, http.StatusNotFound},
-
-		// Cell-local validation codes -> 400
-		{errcode.ErrAuthLoginInvalidInput, http.StatusBadRequest},
-		{errcode.ErrConfigInvalidInput, http.StatusBadRequest},
-		{errcode.ErrAuthInvalidInput, http.StatusBadRequest},
-		{errcode.ErrAuthIdentityInvalidInput, http.StatusBadRequest},
-		{errcode.ErrAuthRefreshInvalidInput, http.StatusBadRequest},
-		{errcode.ErrAuthSessionInvalidInput, http.StatusBadRequest},
-		{errcode.ErrAuthLogoutInvalidInput, http.StatusBadRequest},
-		{errcode.ErrAuthRBACInvalidInput, http.StatusBadRequest},
-		{errcode.ErrConfigPublishInvalidInput, http.StatusBadRequest},
-		{errcode.ErrFlagInvalidInput, http.StatusBadRequest},
-
-		// Cell-local auth failure codes -> 401
-		{errcode.ErrAuthLoginFailed, http.StatusUnauthorized},
-		{errcode.ErrAuthRefreshFailed, http.StatusUnauthorized},
-		{errcode.ErrRefreshTokenRejected, http.StatusUnauthorized},
-		{errcode.ErrAuthInvalidToken, http.StatusUnauthorized},
-
-		// Cell-local locked -> 403
-		{errcode.ErrAuthUserLocked, http.StatusForbidden},
-
-		// CSRF -> 403
-		{errcode.ErrCSRFOriginDenied, http.StatusForbidden},
-
-		// Cell-local duplicate -> 409
-		{errcode.ErrAuthUserDuplicate, http.StatusConflict},
-		{errcode.ErrConfigDuplicate, http.StatusConflict},
-		{errcode.ErrConfigRepoDuplicate, http.StatusConflict},
-		{errcode.ErrFlagDuplicate, http.StatusConflict},
-
-		// One-shot lifecycle retired -> 410
-		{errcode.ErrSetupAlreadyInitialized, http.StatusGone},
-
-		// 499 Client Closed Request (nginx-style — client cancellation)
-		{errcode.ErrClientCanceled, StatusClientClosedRequest},
-
-		// 504 Gateway Timeout (server-side / inherited deadline) — distinct
-		// from 499 since the failure is server-direction and should feed 5xx
-		// alerting + retry-on-504 SDK policies (PR275 P2-3 split).
-		{errcode.ErrServerTimeout, http.StatusGatewayTimeout},
-
-		// Verify/kernel codes
-		{errcode.ErrCheckRefInvalid, http.StatusBadRequest},
-		{errcode.ErrZeroTestMatch, http.StatusNotFound},
-
-		// 500 Internal Server Error (explicit, not fallback)
-		{errcode.ErrInternal, http.StatusInternalServerError},
-		{errcode.ErrDependencyCycle, http.StatusInternalServerError},
-		{errcode.ErrBusClosed, http.StatusInternalServerError},
-		{errcode.ErrAdapterPGNoTx, http.StatusInternalServerError},
-		{errcode.ErrTestExecution, http.StatusInternalServerError},
-		{errcode.ErrCellMissingOutbox, http.StatusInternalServerError},
-		{errcode.ErrCellMissingCodec, http.StatusInternalServerError},
-
-		// 503 Service Unavailable
-		{errcode.ErrCircuitOpen, http.StatusServiceUnavailable},
-		{errcode.ErrWSHubStopping, http.StatusServiceUnavailable},
-		{errcode.ErrWSHubNotRunning, http.StatusServiceUnavailable},
-		{errcode.ErrWSMaxConns, http.StatusServiceUnavailable},
-		{errcode.ErrAuthRefreshUnavailable, http.StatusServiceUnavailable},
-
-		// 501 Not Implemented
-		{errcode.ErrNotImplemented, http.StatusNotImplemented},
-	}
-
-	for _, tt := range tests {
-		t.Run(string(tt.code), func(t *testing.T) {
-			got := MapCodeToStatus(tt.code)
-			assert.Equal(t, tt.wantStatus, got)
-		})
-	}
-}
-
-func TestMapCodeToStatus_UnknownCode(t *testing.T) {
-	handler := &captureHandler{}
-	orig := slog.Default()
-	slog.SetDefault(slog.New(handler))
-	t.Cleanup(func() { slog.SetDefault(orig) })
-
-	rec := httptest.NewRecorder()
-	WriteDomainError(context.Background(), rec, errcode.New("ERR_TOTALLY_NEW", "test"))
-	assert.Equal(t, http.StatusInternalServerError, rec.Code)
-
-	var body map[string]any
-	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
-
-	errObj := body["error"].(map[string]any)
-	assert.Equal(t, string(errcode.ErrInternal), errObj["code"])
-
-	errRec := findErrorRecord(handler)
-	require.NotNil(t, errRec, "unknown 5xx code must be retained in slog")
-	assertStringAttr(t, *errRec, "code", "ERR_TOTALLY_NEW")
-}
-
-func TestWriteError(t *testing.T) {
-	rec := httptest.NewRecorder()
-	WriteError(context.Background(), rec, http.StatusBadRequest, "ERR_VALIDATION_REQUIRED_FIELD", "field is required")
-
-	assert.Equal(t, http.StatusBadRequest, rec.Code)
-	assert.Equal(t, "application/json", rec.Header().Get("Content-Type"))
-
-	var body map[string]any
-	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
-
-	errObj, ok := body["error"].(map[string]any)
-	require.True(t, ok, "response must contain 'error' key")
-	assert.Equal(t, "ERR_VALIDATION_REQUIRED_FIELD", errObj["code"])
-	assert.Equal(t, "field is required", errObj["message"])
-	assert.Equal(t, map[string]any{}, errObj["details"], "canonical envelope must include empty details object")
-}
-
-func TestWriteError_5xx_MasksMessage(t *testing.T) {
-	rec := httptest.NewRecorder()
-	WriteError(context.Background(), rec, http.StatusInternalServerError, "ERR_INTERNAL", "db connection pool exhausted")
-
-	assert.Equal(t, http.StatusInternalServerError, rec.Code)
-
-	var body map[string]any
-	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
-
-	errObj := body["error"].(map[string]any)
-	assert.Equal(t, "internal server error", errObj["message"],
-		"WriteError must mask 5xx messages to prevent information leakage")
-}
-
-func TestWriteError_5xx_MasksPublicCodeAndLogsOriginal(t *testing.T) {
-	tests := []struct {
-		name       string
-		status     int
-		code       string
-		message    string
-		wantCode   string
-		wantMsg    string
-		wantLogged bool
-	}{
-		{
-			name:       "500 masks infra code to internal",
-			status:     http.StatusInternalServerError,
-			code:       string(errcode.ErrConfigDecryptFailed),
-			message:    "database host leaked",
-			wantCode:   string(errcode.ErrInternal),
-			wantMsg:    msgInternalServerError,
-			wantLogged: true,
-		},
-		{
-			name:       "503 masks infra code to service unavailable",
-			status:     http.StatusServiceUnavailable,
-			code:       string(errcode.ErrKeyProviderTransient),
-			message:    "vault sealed",
-			wantCode:   "ERR_SERVICE_UNAVAILABLE",
-			wantMsg:    "service unavailable",
-			wantLogged: true,
-		},
-		{
-			name:       "504 keeps public timeout code",
-			status:     http.StatusGatewayTimeout,
-			code:       string(errcode.ErrServerTimeout),
-			message:    "downstream deadline exceeded",
-			wantCode:   string(errcode.ErrServerTimeout),
-			wantMsg:    "gateway timeout",
-			wantLogged: true,
-		},
-		{
-			name:       "500 already generic",
-			status:     http.StatusInternalServerError,
-			code:       string(errcode.ErrInternal),
-			message:    msgInternalServerError,
-			wantCode:   string(errcode.ErrInternal),
-			wantMsg:    msgInternalServerError,
-			wantLogged: false,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			handler := &captureHandler{}
-			orig := slog.Default()
-			slog.SetDefault(slog.New(handler))
-			t.Cleanup(func() { slog.SetDefault(orig) })
-
-			rec := httptest.NewRecorder()
-			WriteError(context.Background(), rec, tt.status, tt.code, tt.message)
-
-			assert.Equal(t, tt.status, rec.Code)
-
-			var body map[string]any
-			require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
-
-			errObj := body["error"].(map[string]any)
-			assert.Equal(t, tt.wantCode, errObj["code"])
-			assert.Equal(t, tt.wantMsg, errObj["message"])
-
-			errRec := findErrorRecord(handler)
-			if !tt.wantLogged {
-				assert.Nil(t, errRec, "generic pre-masked 500 should not double-log")
-				return
-			}
-			require.NotNil(t, errRec, "5xx code masking must retain the original code in slog")
-			assertStringAttr(t, *errRec, "code", tt.code)
-		})
-	}
-}
-
-func TestWritePublicError_5xx_MasksCodeKeepsMessageAndLogsOriginal(t *testing.T) {
-	handler := &captureHandler{}
-	orig := slog.Default()
-	slog.SetDefault(slog.New(handler))
-	t.Cleanup(func() { slog.SetDefault(orig) })
-
-	rec := httptest.NewRecorder()
-	WritePublicError(context.Background(), rec, http.StatusServiceUnavailable,
-		string(errcode.ErrCircuitOpen), "service unavailable")
-
-	assert.Equal(t, http.StatusServiceUnavailable, rec.Code)
-
-	var body map[string]any
-	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
-
-	errObj := body["error"].(map[string]any)
-	assert.Equal(t, "ERR_SERVICE_UNAVAILABLE", errObj["code"])
-	assert.Equal(t, "service unavailable", errObj["message"],
-		"WritePublicError keeps deliberately public 5xx messages")
-
-	errRec := findErrorRecord(handler)
-	require.NotNil(t, errRec, "5xx code masking must retain the original public-error code in slog")
-	assertStringAttr(t, *errRec, "code", string(errcode.ErrCircuitOpen))
-}
-
 func TestWriteJSON(t *testing.T) {
-	payload := map[string]string{"hello": "world"}
 	rec := httptest.NewRecorder()
-	WriteJSON(rec, http.StatusCreated, payload)
+
+	WriteJSON(rec, http.StatusCreated, map[string]string{"ok": "true"})
 
 	assert.Equal(t, http.StatusCreated, rec.Code)
 	assert.Equal(t, "application/json", rec.Header().Get("Content-Type"))
-
-	var body map[string]string
-	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
-	assert.Equal(t, "world", body["hello"])
+	assert.JSONEq(t, `{"ok":"true"}`, rec.Body.String())
 }
 
-func TestWriteDomainError_ErrcodeError(t *testing.T) {
-	tests := []struct {
-		name       string
-		err        error
-		wantStatus int
-		wantCode   string
-		wantMsg    string
-	}{
-		{
-			name:       "not found",
-			err:        errcode.New(errcode.ErrCellNotFound, "cell not found"),
-			wantStatus: http.StatusNotFound,
-			wantCode:   string(errcode.ErrCellNotFound),
-			wantMsg:    "cell not found",
-		},
-		{
-			name:       "validation",
-			err:        errcode.New(errcode.ErrValidationFailed, "field missing"),
-			wantStatus: http.StatusBadRequest,
-			wantCode:   string(errcode.ErrValidationFailed),
-			wantMsg:    "field missing",
-		},
-		{
-			name:       "unauthorized",
-			err:        errcode.New(errcode.ErrAuthUnauthorized, "bad creds"),
-			wantStatus: http.StatusUnauthorized,
-			wantCode:   string(errcode.ErrAuthUnauthorized),
-			wantMsg:    "bad creds",
-		},
-		{
-			name:       "forbidden",
-			err:        errcode.New(errcode.ErrAuthForbidden, "no access"),
-			wantStatus: http.StatusForbidden,
-			wantCode:   string(errcode.ErrAuthForbidden),
-			wantMsg:    "no access",
-		},
-	}
+func TestWritePublic_5xxMasksCodeKeepsFrameworkMessageAndLogsOriginal(t *testing.T) {
+	handler, restore := installCaptureHandler()
+	defer restore()
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			rec := httptest.NewRecorder()
-			WriteDomainError(context.Background(), rec, tt.err)
-
-			assert.Equal(t, tt.wantStatus, rec.Code)
-			assert.Equal(t, "application/json", rec.Header().Get("Content-Type"))
-
-			var body map[string]any
-			require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
-
-			errObj, ok := body["error"].(map[string]any)
-			require.True(t, ok)
-			assert.Equal(t, tt.wantCode, errObj["code"])
-			assert.Equal(t, tt.wantMsg, errObj["message"])
-			assert.Equal(t, map[string]any{}, errObj["details"], "canonical envelope must include empty details object")
-		})
-	}
-}
-
-func TestWriteDomainError_PlainError(t *testing.T) {
 	rec := httptest.NewRecorder()
-	WriteDomainError(context.Background(), rec, errors.New("something went wrong"))
+	ctx := ctxkeys.WithRequestID(context.Background(), "req-public")
 
-	assert.Equal(t, http.StatusInternalServerError, rec.Code)
-	assert.Equal(t, "application/json", rec.Header().Get("Content-Type"))
+	WritePublic(ctx, rec, errcode.KindUnavailable, "ERR_CIRCUIT_OPEN", "service unavailable")
 
-	var body map[string]any
-	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
+	assert.Equal(t, http.StatusServiceUnavailable, rec.Code)
+	errObj := decodeErrorBody(t, rec)
+	assert.Equal(t, string(errcode.ErrServiceUnavailable), errObj["code"])
+	assert.Equal(t, "service unavailable", errObj["message"])
+	assert.Equal(t, map[string]any{}, errObj["details"])
 
-	errObj, ok := body["error"].(map[string]any)
-	require.True(t, ok)
-	assert.Equal(t, "ERR_INTERNAL", errObj["code"])
-	assert.Equal(t, "internal server error", errObj["message"])
-	assert.Equal(t, map[string]any{}, errObj["details"], "canonical envelope must include empty details object")
+	errRec := findRecord(handler, slog.LevelError)
+	require.NotNil(t, errRec)
+	assertStringAttr(t, *errRec, "code", "ERR_CIRCUIT_OPEN")
+	assertStringAttr(t, *errRec, "public_code", string(errcode.ErrServiceUnavailable))
+	assertStringAttr(t, *errRec, "status", "503")
+	assertStringAttr(t, *errRec, "request_id", "req-public")
+	assertAttrAbsent(t, *errRec, "message")
 }
 
-func TestWriteDomainError_WithDetails(t *testing.T) {
-	ecErr := errWithDetails(t,
-		errcode.New(errcode.ErrValidationFailed, "field missing"),
-		map[string]any{"field": "email"},
+func TestWriteError_ClientErrorShowsMessageDetailsAndSamplesWarn(t *testing.T) {
+	handler, restore := installCaptureHandler()
+	defer restore()
+
+	ctx := withClientErrorLogSamplingEvery(context.Background(), t.Name(), 1)
+	ctx = ctxkeys.WithRequestID(ctx, "req-4xx")
+	ctx = ctxkeys.WithTraceID(ctx, "trace-4xx")
+	ctx = ctxkeys.WithSpanID(ctx, "span-4xx")
+	err := errcode.New(
+		errcode.KindInvalid,
+		errcode.ErrValidationFailed,
+		"invalid cursor",
+		errcode.WithInternal("cursor token failed signature check"),
+		errcode.WithDetails(map[string]any{"reason": "signature"}),
 	)
 
 	rec := httptest.NewRecorder()
-	WriteDomainError(context.Background(), rec, ecErr)
+	WriteError(ctx, rec, err)
 
 	assert.Equal(t, http.StatusBadRequest, rec.Code)
+	errObj := decodeErrorBody(t, rec)
+	assert.Equal(t, string(errcode.ErrValidationFailed), errObj["code"])
+	assert.Equal(t, "invalid cursor", errObj["message"])
+	assert.Equal(t, map[string]any{"reason": "signature"}, errObj["details"])
+	assert.Equal(t, "req-4xx", errObj["request_id"])
 
-	var body map[string]any
-	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
-
-	errObj := body["error"].(map[string]any)
-	details := errObj["details"].(map[string]any)
-	assert.Equal(t, "email", details["field"])
+	warnRec := findRecord(handler, slog.LevelWarn)
+	require.NotNil(t, warnRec)
+	assertStringAttr(t, *warnRec, "code", string(errcode.ErrValidationFailed))
+	assertStringAttr(t, *warnRec, "status", "400")
+	assertStringAttr(t, *warnRec, "internal", "cursor token failed signature check")
+	assertStringAttr(t, *warnRec, "request_id", "req-4xx")
+	assertStringAttr(t, *warnRec, "trace_id", "trace-4xx")
+	assertStringAttr(t, *warnRec, "span_id", "span-4xx")
+	assertAttrAbsent(t, *warnRec, "message")
 }
 
-func TestWriteDomainError_5xx_HidesMessage(t *testing.T) {
-	tests := []struct {
-		name     string
-		err      error
-		wantCode string
-		wantMsg  string
-	}{
-		{
-			name:     "Safe error with InternalMessage - 500 hides both",
-			err:      errcode.Safe(errcode.ErrInternal, "something broke", "postgres pool exhausted"),
-			wantCode: string(errcode.ErrInternal),
-			wantMsg:  "internal server error",
-		},
-		{
-			name:     "New error - 500 hides original Message and code",
-			err:      errcode.New(errcode.ErrDependencyCycle, "a -> b -> a cycle detected"),
-			wantCode: string(errcode.ErrInternal),
-			wantMsg:  "internal server error",
-		},
-		{
-			name:     "500 with Details - still hides message and code",
-			err:      errWithDetails(t, errcode.New(errcode.ErrBusClosed, "bus is closed"), map[string]any{"bus": "main"}),
-			wantCode: string(errcode.ErrInternal),
-			wantMsg:  "internal server error",
-		},
-		{
-			name:     "503 circuit open masks code to service unavailable",
-			err:      errcode.New(errcode.ErrCircuitOpen, "circuit breaker open"),
-			wantCode: "ERR_SERVICE_UNAVAILABLE",
-			wantMsg:  "service unavailable",
-		},
-		{
-			name:     "503 vault auth failed masks code to service unavailable",
-			err:      errcode.New(errcode.ErrVaultAuthFailed, "vault token rejected"),
-			wantCode: "ERR_SERVICE_UNAVAILABLE",
-			wantMsg:  "service unavailable",
-		},
-		{
-			name:     "503 key provider transient masks code to service unavailable",
-			err:      errcode.New(errcode.ErrKeyProviderTransient, "vault sealed"),
-			wantCode: "ERR_SERVICE_UNAVAILABLE",
-			wantMsg:  "service unavailable",
-		},
-	}
+func TestWriteError_ClientErrorMissingContextUsesFallbackSampler(t *testing.T) {
+	handler, restore := installCaptureHandler()
+	defer restore()
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			rec := httptest.NewRecorder()
-			WriteDomainError(context.Background(), rec, tt.err)
-
-			assert.True(t, rec.Code >= 500, "expected 5xx status, got %d", rec.Code)
-
-			var body map[string]any
-			require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
-
-			errObj := body["error"].(map[string]any)
-			assert.Equal(t, tt.wantCode, errObj["code"],
-				"5xx response must expose only status-level public codes")
-			assert.Equal(t, tt.wantMsg, errObj["message"],
-				"5xx response must not leak internal details")
-			assert.Equal(t, map[string]any{}, errObj["details"],
-				"5xx response must strip details to empty object")
-		})
-	}
-}
-
-func TestWriteDomainError_4xx_ShowsMessage(t *testing.T) {
-	tests := []struct {
-		name    string
-		err     error
-		wantMsg string
-	}{
-		{
-			name:    "400 shows original message",
-			err:     errcode.New(errcode.ErrValidationFailed, "email is required"),
-			wantMsg: "email is required",
-		},
-		{
-			name:    "404 shows original message",
-			err:     errcode.New(errcode.ErrCellNotFound, "cell accesscore not found"),
-			wantMsg: "cell accesscore not found",
-		},
-		{
-			name:    "Safe error 400 — shows public Message not InternalMessage",
-			err:     errcode.Safe(errcode.ErrValidationFailed, "invalid input", "field X has regex mismatch"),
-			wantMsg: "invalid input",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			rec := httptest.NewRecorder()
-			WriteDomainError(context.Background(), rec, tt.err)
-
-			assert.True(t, rec.Code >= 400 && rec.Code < 500, "expected 4xx status, got %d", rec.Code)
-
-			var body map[string]any
-			require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
-
-			errObj := body["error"].(map[string]any)
-			assert.Equal(t, tt.wantMsg, errObj["message"],
-				"4xx response should show public message")
-		})
-	}
-}
-
-func TestWriteError_WithRequestID(t *testing.T) {
-	ctx := ctxkeys.WithRequestID(context.Background(), "req-abc-123")
-	rec := httptest.NewRecorder()
-	WriteError(ctx, rec, http.StatusBadRequest, "ERR_VALIDATION_FAILED", "field is required")
-
-	var body map[string]any
-	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
-
-	errObj := body["error"].(map[string]any)
-	assert.Equal(t, "req-abc-123", errObj["request_id"],
-		"response should include request_id from context")
-	assert.Equal(t, "ERR_VALIDATION_FAILED", errObj["code"])
-	assert.Equal(t, "field is required", errObj["message"])
-}
-
-func TestWriteError_WithoutRequestID(t *testing.T) {
-	ctx := context.Background()
-	rec := httptest.NewRecorder()
-	WriteError(ctx, rec, http.StatusBadRequest, "ERR_VALIDATION_FAILED", "field is required")
-
-	var body map[string]any
-	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
-
-	errObj := body["error"].(map[string]any)
-	_, hasRequestID := errObj["request_id"]
-	assert.False(t, hasRequestID,
-		"response should not include request_id when not in context")
-}
-
-func TestWriteDecodeError_Contract(t *testing.T) {
-	tests := []struct {
-		name       string
-		err        error
-		wantStatus int
-		wantCode   string
-		wantMsg    string
-	}{
-		{
-			name:       "errcode ErrValidationFailed → 400",
-			err:        errcode.New(errcode.ErrValidationFailed, "bad json"),
-			wantStatus: http.StatusBadRequest,
-			wantCode:   "ERR_VALIDATION_FAILED",
-			wantMsg:    "bad json",
-		},
-		{
-			name:       "errcode ErrBodyTooLarge → 413",
-			err:        errcode.New(errcode.ErrBodyTooLarge, "payload exceeded limit"),
-			wantStatus: http.StatusRequestEntityTooLarge,
-			wantCode:   "ERR_BODY_TOO_LARGE",
-			wantMsg:    "payload exceeded limit",
-		},
-		{
-			name:       "errcode ErrInternal → 500 (message masked)",
-			err:        errcode.New(errcode.ErrInternal, "db pool exhausted"),
-			wantStatus: http.StatusInternalServerError,
-			wantCode:   "ERR_INTERNAL",
-			wantMsg:    "internal server error",
-		},
-		{
-			name:       "errcode ErrKeyProviderTransient → 503 (code and message masked)",
-			err:        errcode.New(errcode.ErrKeyProviderTransient, "vault sealed"),
-			wantStatus: http.StatusServiceUnavailable,
-			wantCode:   "ERR_SERVICE_UNAVAILABLE",
-			wantMsg:    "service unavailable",
-		},
-		{
-			name:       "non-errcode error → 400 fallback",
-			err:        errors.New("some decode error"),
-			wantStatus: http.StatusBadRequest,
-			wantCode:   "ERR_VALIDATION_FAILED",
-			wantMsg:    "invalid request body",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			rec := httptest.NewRecorder()
-			WriteDecodeError(context.Background(), rec, tt.err)
-
-			assert.Equal(t, tt.wantStatus, rec.Code)
-
-			var body map[string]any
-			require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
-
-			errObj := body["error"].(map[string]any)
-			assert.Equal(t, tt.wantCode, errObj["code"])
-			assert.Equal(t, tt.wantMsg, errObj["message"])
-		})
-	}
-}
-
-func TestWriteDecodeError_Details(t *testing.T) {
-	tests := []struct {
-		name        string
-		err         error
-		wantStatus  int
-		wantCode    string
-		wantDetails map[string]any
-	}{
-		{
-			name: "4xx with details passes through",
-			err: errWithDetails(t,
-				errcode.New(errcode.ErrValidationFailed, "invalid request body"),
-				map[string]any{"reason": "empty body"},
-			),
-			wantStatus:  http.StatusBadRequest,
-			wantCode:    "ERR_VALIDATION_FAILED",
-			wantDetails: map[string]any{"reason": "empty body"},
-		},
-		{
-			name:        "4xx without details returns empty object",
-			err:         errcode.New(errcode.ErrValidationFailed, "bad json"),
-			wantStatus:  http.StatusBadRequest,
-			wantCode:    "ERR_VALIDATION_FAILED",
-			wantDetails: map[string]any{},
-		},
-		{
-			name: "unknown field includes field name",
-			err: errWithDetails(t,
-				errcode.New(errcode.ErrValidationFailed, "invalid request body"),
-				map[string]any{"reason": "unknown field", "field": "foo"},
-			),
-			wantStatus:  http.StatusBadRequest,
-			wantCode:    "ERR_VALIDATION_FAILED",
-			wantDetails: map[string]any{"reason": "unknown field", "field": "foo"},
-		},
-		{
-			name: "413 with details passes through",
-			err: errWithDetails(t,
-				errcode.New(errcode.ErrBodyTooLarge, "request body too large"),
-				map[string]any{"maxBytes": float64(1048576)},
-			),
-			wantStatus:  http.StatusRequestEntityTooLarge,
-			wantCode:    "ERR_BODY_TOO_LARGE",
-			wantDetails: map[string]any{"maxBytes": float64(1048576)},
-		},
-		{
-			name: "5xx details masked",
-			err: errWithDetails(t,
-				errcode.New(errcode.ErrConfigDecryptFailed, "decrypt failed"),
-				map[string]any{"host": "db-3"},
-			),
-			wantStatus:  http.StatusInternalServerError,
-			wantCode:    "ERR_INTERNAL",
-			wantDetails: map[string]any{},
-		},
-		{
-			name:        "non-errcode error returns empty details",
-			err:         errors.New("some decode error"),
-			wantStatus:  http.StatusBadRequest,
-			wantCode:    "ERR_VALIDATION_FAILED",
-			wantDetails: map[string]any{},
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			rec := httptest.NewRecorder()
-			WriteDecodeError(context.Background(), rec, tt.err)
-
-			assert.Equal(t, tt.wantStatus, rec.Code)
-
-			var body map[string]any
-			require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
-
-			errObj := body["error"].(map[string]any)
-			assert.Equal(t, tt.wantCode, errObj["code"])
-
-			details, ok := errObj["details"].(map[string]any)
-			if !ok {
-				details = map[string]any{}
-			}
-			assert.Equal(t, tt.wantDetails, details)
-		})
-	}
-}
-
-func TestWriteDecodeError_PassesCtx(t *testing.T) {
-	ctx := ctxkeys.WithRequestID(context.Background(), "req-decode-456")
-	rec := httptest.NewRecorder()
-	WriteDecodeError(ctx, rec, errcode.New(errcode.ErrValidationFailed, "bad json"))
-
-	var body map[string]any
-	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
-
-	errObj := body["error"].(map[string]any)
-	assert.Equal(t, "req-decode-456", errObj["request_id"])
-}
-
-func TestWriteDomainError_PassesCtx(t *testing.T) {
-	ctx := ctxkeys.WithRequestID(context.Background(), "req-domain-789")
-	rec := httptest.NewRecorder()
-	WriteDomainError(ctx, rec, errcode.New(errcode.ErrCellNotFound, "cell not found"))
-
-	var body map[string]any
-	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
-
-	errObj := body["error"].(map[string]any)
-	assert.Equal(t, "req-domain-789", errObj["request_id"])
-}
-
-func TestWriteDomainError_5xx_LogsCorrelation(t *testing.T) {
-	// Exercise all ctx correlation branches in the 5xx log path.
-	ctx := context.Background()
-	ctx = ctxkeys.WithRequestID(ctx, "req-5xx-001")
-	ctx = ctxkeys.WithTraceID(ctx, "trace-5xx-001")
-	ctx = ctxkeys.WithSpanID(ctx, "span-5xx-001")
-
-	rec := httptest.NewRecorder()
-	err := errcode.Safe(errcode.ErrInternal, "something broke", "pool exhausted on host db-3")
-	WriteDomainError(ctx, rec, err)
-
-	assert.Equal(t, http.StatusInternalServerError, rec.Code)
-
-	var body map[string]any
-	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
-
-	errObj := body["error"].(map[string]any)
-	assert.Equal(t, "ERR_INTERNAL", errObj["code"])
-	assert.Equal(t, "internal server error", errObj["message"])
-	assert.Equal(t, "req-5xx-001", errObj["request_id"])
-}
-
-func TestWriteDomainError_5xx_WithCause(t *testing.T) {
-	// Cover the ecErr.Cause branch in 5xx logging.
-	inner := errors.New("connection refused")
-	err := errcode.Wrap(errcode.ErrInternal, "db failed", inner)
-
-	rec := httptest.NewRecorder()
-	WriteDomainError(context.Background(), rec, err)
-
-	assert.Equal(t, http.StatusInternalServerError, rec.Code)
-
-	var body map[string]any
-	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
-
-	errObj := body["error"].(map[string]any)
-	assert.Equal(t, "ERR_INTERNAL", errObj["code"])
-	assert.Equal(t, "internal server error", errObj["message"])
-}
-
-func TestWriteDomainError_PlainError_WithCorrelation(t *testing.T) {
-	// Cover the non-errcode 500 path with ctx correlation.
-	ctx := ctxkeys.WithRequestID(context.Background(), "req-plain-500")
-	ctx = ctxkeys.WithTraceID(ctx, "trace-plain-500")
-
-	rec := httptest.NewRecorder()
-	WriteDomainError(ctx, rec, errors.New("unexpected nil pointer"))
-
-	assert.Equal(t, http.StatusInternalServerError, rec.Code)
-
-	var body map[string]any
-	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
-
-	errObj := body["error"].(map[string]any)
-	assert.Equal(t, "internal server error", errObj["message"])
-	assert.Equal(t, "req-plain-500", errObj["request_id"])
-}
-
-func TestWriteError_5xx_AlreadyMasked(t *testing.T) {
-	// When message is already "internal server error", WriteError should not
-	// double-log — just pass through.
-	rec := httptest.NewRecorder()
-	WriteError(context.Background(), rec, http.StatusInternalServerError, "ERR_INTERNAL", "internal server error")
-
-	var body map[string]any
-	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
-
-	errObj := body["error"].(map[string]any)
-	assert.Equal(t, "ERR_INTERNAL", errObj["code"])
-	assert.Equal(t, "internal server error", errObj["message"])
-}
-
-func TestIsClientError(t *testing.T) {
-	tests := []struct {
-		code errcode.Code
-		want bool
-	}{
-		// 4xx → true
-		{errcode.ErrValidationFailed, true},
-		{errcode.ErrCellNotFound, true},
-		{errcode.ErrAuthUnauthorized, true},
-		{errcode.ErrAuthForbidden, true},
-		{errcode.ErrRateLimited, true},
-		{errcode.ErrBodyTooLarge, true},
-		{errcode.ErrAuthUserDuplicate, true},
-
-		// 5xx → false
-		{errcode.ErrInternal, false},
-		{errcode.ErrDependencyCycle, false},
-		{errcode.ErrBusClosed, false},
-
-		// 503 → false
-		{errcode.ErrWSHubStopping, false},
-
-		// 501 → false
-		{errcode.ErrNotImplemented, false},
-
-		// unknown → false
-		{errcode.Code("ERR_UNKNOWN_CODE"), false},
-	}
-
-	for _, tt := range tests {
-		t.Run(string(tt.code), func(t *testing.T) {
-			got := IsClientError(tt.code)
-			assert.Equal(t, tt.want, got)
-		})
-	}
-}
-
-func TestMapCodeToStatus_Exported(t *testing.T) {
-	// Verify exported MapCodeToStatus matches internal behavior.
-	assert.Equal(t, http.StatusNotFound, MapCodeToStatus(errcode.ErrCellNotFound))
-	assert.Equal(t, http.StatusBadRequest, MapCodeToStatus(errcode.ErrValidationFailed))
-	assert.Equal(t, http.StatusInternalServerError, MapCodeToStatus(errcode.ErrInternal))
-	assert.Equal(t, http.StatusInternalServerError, MapCodeToStatus("ERR_UNKNOWN"))
-}
-
-// TestMapCodeToStatus_EncryptionCodes asserts that every KeyProvider / config
-// encryption error code maps to 500 Internal Server Error. All four codes
-// represent infrastructure-level crypto failures; exposing them as anything
-// other than 500 would risk leaking key state to clients or fooling callers
-// into treating them as retriable client errors.
-//
-// The exhaustive guard test (TestCodeToStatus_Exhaustive) enforces presence
-// in the map; this test enforces the specific HTTP status semantics so that
-// accidental reassignment (e.g. mapping ErrKeyProviderDecryptFailed to 400)
-// is caught in CI.
-func TestMapCodeToStatus_EncryptionCodes(t *testing.T) {
-	tests := []struct {
-		name     string
-		code     errcode.Code
-		expected int
-	}{
-		{"KeyProviderKeyNotFound", errcode.ErrKeyProviderKeyNotFound, http.StatusInternalServerError},
-		{"KeyProviderEncryptFailed", errcode.ErrKeyProviderEncryptFailed, http.StatusInternalServerError},
-		{"KeyProviderDecryptFailed", errcode.ErrKeyProviderDecryptFailed, http.StatusInternalServerError},
-		{"KeyProviderRotateFailed", errcode.ErrKeyProviderRotateFailed, http.StatusInternalServerError},
-		{"ConfigDecryptFailed", errcode.ErrConfigDecryptFailed, http.StatusInternalServerError},
-		{"ConfigEncryptFailed", errcode.ErrConfigEncryptFailed, http.StatusInternalServerError},
-		{"ConfigKeyMissing", errcode.ErrConfigKeyMissing, http.StatusInternalServerError},
-	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			assert.Equal(t, tc.expected, MapCodeToStatus(tc.code),
-				"encryption errcode %q must map to 500 — crypto failures must be sanitized to generic 5xx, never leak to 4xx", tc.code)
-			assert.False(t, IsClientError(tc.code),
-				"encryption errcode %q must NOT classify as client (4xx) error", tc.code)
-		})
-	}
-}
-
-// brokenWriter is an http.ResponseWriter whose Write always fails,
-// used to exercise json.Encode error branches.
-type brokenWriter struct {
-	header http.Header
-	code   int
-}
-
-func newBrokenWriter() *brokenWriter         { return &brokenWriter{header: http.Header{}} }
-func (w *brokenWriter) Header() http.Header  { return w.header }
-func (w *brokenWriter) WriteHeader(code int) { w.code = code }
-func (w *brokenWriter) Write([]byte) (int, error) {
-	return 0, errors.New("broken pipe")
-}
-
-func TestWriteJSON_EncodeFail(t *testing.T) {
-	w := newBrokenWriter()
-	// Should not panic — error is logged via slog.
-	assert.NotPanics(t, func() {
-		WriteJSON(w, http.StatusOK, map[string]string{"k": "v"})
-	})
-}
-
-func TestWriteError_EncodeFail(t *testing.T) {
-	w := newBrokenWriter()
-	assert.NotPanics(t, func() {
-		WriteError(context.Background(), w, http.StatusBadRequest, "ERR_TEST", "test")
-	})
-}
-
-func TestWriteDomainError_EncodeFail(t *testing.T) {
-	w := newBrokenWriter()
-	assert.NotPanics(t, func() {
-		WriteDomainError(context.Background(), w, errcode.New(errcode.ErrCellNotFound, "not found"))
-	})
-}
-
-func TestWriteDecodeError_EncodeFail(t *testing.T) {
-	w := newBrokenWriter()
-	// errcode path → writeErrcodeError → broken encoder
-	assert.NotPanics(t, func() {
-		WriteDecodeError(context.Background(), w, errcode.New(errcode.ErrValidationFailed, "bad"))
-	})
-	// non-errcode path → WriteError → broken encoder
-	w2 := newBrokenWriter()
-	assert.NotPanics(t, func() {
-		WriteDecodeError(context.Background(), w2, errors.New("raw error"))
-	})
-}
-
-// captureHandler is an slog.Handler that captures all log records for inspection.
-type captureHandler struct {
-	records []slog.Record
-}
-
-func (h *captureHandler) Enabled(_ context.Context, _ slog.Level) bool { return true }
-func (h *captureHandler) Handle(_ context.Context, r slog.Record) error {
-	h.records = append(h.records, r)
-	return nil
-}
-func (h *captureHandler) WithAttrs(attrs []slog.Attr) slog.Handler { return h }
-func (h *captureHandler) WithGroup(name string) slog.Handler       { return h }
-
-// attrValue searches a slog.Record for an attribute by key and returns its string value.
-func attrValue(r slog.Record, key string) (string, bool) {
-	var result string
-	var found bool
-	r.Attrs(func(a slog.Attr) bool {
-		if a.Key == key {
-			result = a.Value.String()
-			found = true
-			return false
-		}
-		return true
-	})
-	return result, found
-}
-
-// findWarnRecord returns the first slog.Record at Warn level captured by h,
-// or nil if none was recorded.
-func findWarnRecord(h *captureHandler) *slog.Record {
-	for i := range h.records {
-		if h.records[i].Level == slog.LevelWarn {
-			return &h.records[i]
-		}
-	}
-	return nil
-}
-
-func countWarnRecords(h *captureHandler) int {
-	count := 0
-	for i := range h.records {
-		if h.records[i].Level == slog.LevelWarn {
-			count++
-		}
-	}
-	return count
-}
-
-// findErrorRecord returns the first slog.Record at Error level captured by h,
-// or nil if none was recorded. Symmetric with findWarnRecord for 5xx tests.
-func findErrorRecord(h *captureHandler) *slog.Record {
-	for i := range h.records {
-		if h.records[i].Level == slog.LevelError {
-			return &h.records[i]
-		}
-	}
-	return nil
-}
-
-// assertStringAttr asserts that the named attr is present on the record and
-// equals want.
-func assertStringAttr(t *testing.T, rec slog.Record, key, want string) {
-	t.Helper()
-	got, ok := attrValue(rec, key)
-	assert.True(t, ok, "log record must contain %q attr", key)
-	assert.Equal(t, want, got)
-}
-
-// assertAttrAbsent asserts that the named attr is NOT present on the record.
-func assertAttrAbsent(t *testing.T, rec slog.Record, key, reason string) {
-	t.Helper()
-	_, has := attrValue(rec, key)
-	assert.False(t, has, reason)
-}
-
-// assertInternalAttr asserts either the 'internal' attr matches internalMessage
-// (when non-empty) or is absent (when empty).
-func assertInternalAttr(t *testing.T, rec slog.Record, internalMessage string) {
-	t.Helper()
-	if internalMessage != "" {
-		assertStringAttr(t, rec, "internal", internalMessage)
-		return
-	}
-	assertAttrAbsent(t, rec, "internal", "log record must NOT contain 'internal' attr when InternalMessage is empty")
-}
-
-func TestWriteDomainError_4xx_LogsWarn(t *testing.T) {
-	tests := []struct {
-		name            string
-		code            errcode.Code
-		wantStatus      int
-		internalMessage string // non-empty → expect 'internal' attr in log
-	}{
-		{name: string(errcode.ErrValidationFailed), code: errcode.ErrValidationFailed, wantStatus: http.StatusBadRequest},
-		{name: string(errcode.ErrAuthUnauthorized), code: errcode.ErrAuthUnauthorized, wantStatus: http.StatusUnauthorized},
-		{name: string(errcode.ErrAuthForbidden), code: errcode.ErrAuthForbidden, wantStatus: http.StatusForbidden},
-		{name: string(errcode.ErrMetadataNotFound), code: errcode.ErrMetadataNotFound, wantStatus: http.StatusNotFound},
-		{name: string(errcode.ErrConfigDuplicate), code: errcode.ErrConfigDuplicate, wantStatus: http.StatusConflict},
-		{name: string(errcode.ErrBodyTooLarge), code: errcode.ErrBodyTooLarge, wantStatus: http.StatusRequestEntityTooLarge},
-		{name: string(errcode.ErrRateLimited), code: errcode.ErrRateLimited, wantStatus: http.StatusTooManyRequests},
-		// With InternalMessage: 'internal' attr must be emitted; client 'message' still absent.
-		{
-			name:            "with_internal_message",
-			code:            errcode.ErrAuthUnauthorized,
-			wantStatus:      http.StatusUnauthorized,
-			internalMessage: "subject missing from ctx — auth middleware did not run",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			handler := &captureHandler{}
-			orig := slog.Default()
-			slog.SetDefault(slog.New(handler))
-			t.Cleanup(func() { slog.SetDefault(orig) })
-
-			ctx := context.Background()
-			ctx = ctxkeys.WithRequestID(ctx, "req-4xx-001")
-			ctx = ctxkeys.WithTraceID(ctx, "trace-4xx-001")
-			ctx = ctxkeys.WithSpanID(ctx, "span-4xx-001")
-
-			err := errcode.New(tt.code, "test message")
-			if tt.internalMessage != "" {
-				err = errcode.Safe(tt.code, "client-facing message", tt.internalMessage)
-			}
-
-			rec := httptest.NewRecorder()
-			WriteDomainError(ctx, rec, err)
-			assert.Equal(t, tt.wantStatus, rec.Code)
-
-			warnRec := findWarnRecord(handler)
-			require.NotNil(t, warnRec, "expected a slog.Warn record for 4xx response")
-
-			assertStringAttr(t, *warnRec, "code", string(tt.code))
-			assertStringAttr(t, *warnRec, "status", slog.IntValue(tt.wantStatus).String())
-			// Client-facing 'message' must NOT appear in server logs — it may
-			// contain user identifiers interpolated by the caller into errcode.New.
-			assertAttrAbsent(t, *warnRec, "message", "log record must NOT contain 'message' attr — use InternalMessage for diagnostics")
-			assertInternalAttr(t, *warnRec, tt.internalMessage)
-			assertStringAttr(t, *warnRec, "request_id", "req-4xx-001")
-			assertStringAttr(t, *warnRec, "trace_id", "trace-4xx-001")
-			assertStringAttr(t, *warnRec, "span_id", "span-4xx-001")
-		})
-	}
-}
-
-// TestWriteDomainError_4xx_LogsWarn_NoCorrelation verifies that the slog.Warn
-// record is emitted even when the context carries no request_id/trace_id/span_id,
-// and that those attrs are absent in that case. The client-facing 'message' attr
-// must also be absent (F3: log4xx omits Message to prevent identifier leakage).
-func TestWriteDomainError_4xx_LogsWarn_NoCorrelation(t *testing.T) {
-	handler := &captureHandler{}
-	orig := slog.Default()
-	slog.SetDefault(slog.New(handler))
-	t.Cleanup(func() { slog.SetDefault(orig) })
-
-	ctx := context.Background() // no correlation IDs
-	rec := httptest.NewRecorder()
-	WriteDomainError(ctx, rec, errcode.New(errcode.ErrAuthUnauthorized, "no ctx"))
-
-	assert.Equal(t, http.StatusUnauthorized, rec.Code)
-
-	var warnRec *slog.Record
-	for i := range handler.records {
-		if handler.records[i].Level == slog.LevelWarn {
-			warnRec = &handler.records[i]
-			break
-		}
-	}
-	require.NotNil(t, warnRec, "expected a slog.Warn record for 4xx response")
-
-	_, hasCode := attrValue(*warnRec, "code")
-	assert.True(t, hasCode, "log record must contain 'code' attr")
-
-	_, hasStatus := attrValue(*warnRec, "status")
-	assert.True(t, hasStatus, "log record must contain 'status' attr")
-
-	// Client-facing message must NOT appear in server WARN logs.
-	_, hasMsg := attrValue(*warnRec, "message")
-	assert.False(t, hasMsg, "log record must NOT contain 'message' attr")
-
-	_, hasReqID := attrValue(*warnRec, "request_id")
-	assert.False(t, hasReqID, "log record must NOT contain 'request_id' attr when not set in ctx")
-
-	_, hasTraceID := attrValue(*warnRec, "trace_id")
-	assert.False(t, hasTraceID, "log record must NOT contain 'trace_id' attr when not set in ctx")
-
-	_, hasSpanID := attrValue(*warnRec, "span_id")
-	assert.False(t, hasSpanID, "log record must NOT contain 'span_id' attr when not set in ctx")
-}
-
-func TestWriteDomainError_4xx_LogSampling(t *testing.T) {
-	handler := &captureHandler{}
-	orig := slog.Default()
-	slog.SetDefault(slog.New(handler))
-	t.Cleanup(func() { slog.SetDefault(orig) })
-
-	ctx := WithListErrorLogSampling(context.Background(), t.Name())
 	for range 200 {
 		rec := httptest.NewRecorder()
-		WriteDomainError(ctx, rec, errcode.New(errcode.ErrValidationFailed, "invalid cursor"))
+		WriteError(context.Background(), rec, errcode.New(
+			errcode.KindInvalid,
+			errcode.ErrValidationFailed,
+			"invalid input",
+		))
 		assert.Equal(t, http.StatusBadRequest, rec.Code)
 	}
 
-	assert.Equal(t, 2, countWarnRecords(handler), "1%% sampling should log two records for 200 client errors")
+	assert.Equal(t, 2, countRecords(handler, slog.LevelWarn))
 }
 
-func TestWithListErrorLogSampling_EveryOneLogsAll(t *testing.T) {
-	ctx := withClientErrorLogSampling(context.Background(), t.Name(), 1)
-
-	assert.True(t, shouldLogClientError(ctx))
-	assert.True(t, shouldLogClientError(ctx))
-
-	ctxZero := withClientErrorLogSampling(context.Background(), t.Name()+"/zero", 0)
-	assert.True(t, shouldLogClientError(ctxZero))
-	assert.True(t, shouldLogClientError(ctxZero))
-}
-
-func TestWithListErrorLogSampling_RouteKeyedCounters(t *testing.T) {
-	sampler := newListErrorLogSampler(2)
+func TestWithClientErrorLogSampling_RouteKeyedCounters(t *testing.T) {
+	sampler := newClientErrorLogSampler(2)
 	ctxA := sampler.withContext(context.Background(), t.Name()+"/a")
 	ctxB := sampler.withContext(context.Background(), t.Name()+"/b")
 
@@ -1136,114 +116,259 @@ func TestWithListErrorLogSampling_RouteKeyedCounters(t *testing.T) {
 	assert.True(t, shouldLogClientError(ctxB))
 }
 
-// TestWriteDomainError_499_LogsWarn locks the PR-A50+A51 + PR275 contract:
-// ErrClientCanceled (HTTP 499 client closed request) must route through the
-// 4xx writer path — message preserved (4xx does not mask), slog level Warn
-// (so 5xx Error rate SLOs stay clean), code surfaced verbatim, and the
-// cancel_reason slog field carrying the originating ctx error variant
-// ("canceled") for dashboard aggregation.
-//
-// Constructed via ctxcancel.Wrap (the canonical producer) instead of a raw
-// errcode.NewInfra so the full Details["reason"] → ReasonFromDetails →
-// log4xx slog field pipeline is end-to-end validated.
-func TestWriteDomainError_499_LogsWarn(t *testing.T) {
-	handler := &captureHandler{}
-	orig := slog.Default()
-	slog.SetDefault(slog.New(handler))
-	t.Cleanup(func() { slog.SetDefault(orig) })
+func TestWithClientErrorLogSampling_PreservesExistingConfig(t *testing.T) {
+	ctx := WithClientErrorLogSamplingEvery(context.Background(), t.Name(), 1)
+	ctx = WithClientErrorLogSampling(ctx, t.Name())
 
-	ctx := context.Background()
+	assert.True(t, shouldLogClientError(ctx))
+	assert.True(t, shouldLogClientError(ctx))
+}
+
+func TestWithClientErrorLogSampling_EveryOneLogsAll(t *testing.T) {
+	ctx := withClientErrorLogSamplingEvery(context.Background(), t.Name(), 1)
+
+	assert.True(t, shouldLogClientError(ctx))
+	assert.True(t, shouldLogClientError(ctx))
+
+	ctxZero := withClientErrorLogSamplingEvery(context.Background(), t.Name()+"/zero", 0)
+	assert.True(t, shouldLogClientError(ctxZero))
+	assert.True(t, shouldLogClientError(ctxZero))
+}
+
+func TestWriteError_5xxMasksMessageCodeDetailsAndLogsDiagnostics(t *testing.T) {
+	handler, restore := installCaptureHandler()
+	defer restore()
+
+	cause := errors.New("postgres pool exhausted")
+	err := errcode.Wrap(
+		errcode.KindInternal,
+		errcode.ErrConfigRepoQuery,
+		"config query failed for tenant admin@example.com",
+		cause,
+		errcode.WithInternal("select config_entries failed"),
+		errcode.WithDetails(map[string]any{"tenant": "admin@example.com"}),
+	)
+	ctx := ctxkeys.WithRequestID(context.Background(), "req-5xx")
+
+	rec := httptest.NewRecorder()
+	WriteError(ctx, rec, err)
+
+	assert.Equal(t, http.StatusInternalServerError, rec.Code)
+	errObj := decodeErrorBody(t, rec)
+	assert.Equal(t, string(errcode.ErrInternal), errObj["code"])
+	assert.Equal(t, "internal server error", errObj["message"])
+	assert.Equal(t, map[string]any{}, errObj["details"])
+	assert.Equal(t, "req-5xx", errObj["request_id"])
+
+	errRec := findRecord(handler, slog.LevelError)
+	require.NotNil(t, errRec)
+	assertStringAttr(t, *errRec, "code", string(errcode.ErrConfigRepoQuery))
+	assertStringAttr(t, *errRec, "public_code", string(errcode.ErrInternal))
+	assertStringAttr(t, *errRec, "status", "500")
+	assertStringAttr(t, *errRec, "internal", "select config_entries failed")
+	assertStringAttr(t, *errRec, "cause", cause.Error())
+	assertStringAttr(t, *errRec, "request_id", "req-5xx")
+	assertAttrAbsent(t, *errRec, "message")
+}
+
+func TestWriteError_PlainErrorMasksResponseAndLogsUnhandled(t *testing.T) {
+	handler, restore := installCaptureHandler()
+	defer restore()
+
+	rec := httptest.NewRecorder()
+	WriteError(context.Background(), rec, errors.New("nil pointer at auth handler"))
+
+	assert.Equal(t, http.StatusInternalServerError, rec.Code)
+	errObj := decodeErrorBody(t, rec)
+	assert.Equal(t, string(errcode.ErrInternal), errObj["code"])
+	assert.Equal(t, "internal server error", errObj["message"])
+	assert.Equal(t, map[string]any{}, errObj["details"])
+
+	assert.NotNil(t, findRecord(handler, slog.LevelError), "plain errors must be logged")
+}
+
+func TestWriteError_ClientClosedSetsCancelReasonAndWarns(t *testing.T) {
+	handler, restore := installCaptureHandler()
+	defer restore()
+
+	ctx := WithCancelReasonSlot(context.Background())
+	ctx = withClientErrorLogSamplingEvery(ctx, t.Name(), 1)
 	ctx = ctxkeys.WithRequestID(ctx, "req-499")
+	err := ctxcancel.Wrap(context.Canceled, "Insert", "key=foo")
+	require.NotNil(t, err)
 
 	rec := httptest.NewRecorder()
-	ecErr := ctxcancel.Wrap(context.Canceled, "Insert", "key=foo")
-	require.NotNil(t, ecErr, "ctxcancel.Wrap must produce *errcode.Error for context.Canceled")
-	WriteDomainError(ctx, rec, ecErr)
+	WriteError(ctx, rec, err)
 
-	assert.Equal(t, StatusClientClosedRequest, rec.Code,
-		"ctx-cancel must produce HTTP 499")
+	assert.Equal(t, StatusClientClosedRequest, rec.Code)
+	assert.Equal(t, ctxcancel.ReasonCanceled, CancelReason(ctx))
+	errObj := decodeErrorBody(t, rec)
+	assert.Equal(t, string(errcode.ErrClientCanceled), errObj["code"])
+	assert.Equal(t, "request canceled", errObj["message"])
 
-	var body map[string]any
-	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
-	errObj := body["error"].(map[string]any)
-	assert.Equal(t, "ERR_CLIENT_CANCELED", errObj["code"])
-	assert.Equal(t, "request canceled", errObj["message"],
-		"4xx response must NOT mask message — 5xx-only safety guard does not apply")
-
-	warnRec := findWarnRecord(handler)
-	require.NotNil(t, warnRec, "499 must emit slog.Warn (not Error)")
-	for i := range handler.records {
-		assert.NotEqual(t, slog.LevelError, handler.records[i].Level,
-			"499 must NOT emit any slog.Error record (would pollute 5xx SLO)")
-	}
-	assertStringAttr(t, *warnRec, "code", "ERR_CLIENT_CANCELED")
+	warnRec := findRecord(handler, slog.LevelWarn)
+	require.NotNil(t, warnRec)
+	assertStringAttr(t, *warnRec, "code", string(errcode.ErrClientCanceled))
+	assertStringAttr(t, *warnRec, "status", "499")
+	assertStringAttr(t, *warnRec, "cancel_reason", ctxcancel.ReasonCanceled)
 	assertStringAttr(t, *warnRec, "request_id", "req-499")
-	assertStringAttr(t, *warnRec, "cancel_reason", "canceled")
+	assert.Nil(t, findRecord(handler, slog.LevelError), "499 must not emit 5xx error logs")
 }
 
-// TestWriteDomainError_504_LogsError locks the PR275 P2-3 split contract:
-// ErrServerTimeout (HTTP 504 Gateway Timeout) must route through the 5xx
-// writer path, with status-level public message/code for clients, slog level
-// Error for alerting, and the cancel_reason slog field carrying
-// "deadline_exceeded" (PR275 P1: log5xx parity with log4xx) so dashboards can
-// aggregate cancel_reason across both 499 and 504 streams.
-func TestWriteDomainError_504_LogsError(t *testing.T) {
+func TestWriteError_DeadlineExceededMasksAsGatewayTimeoutAndLogsReason(t *testing.T) {
+	handler, restore := installCaptureHandler()
+	defer restore()
+
+	ctx := ctxkeys.WithRequestID(context.Background(), "req-504")
+	err := ctxcancel.Wrap(context.DeadlineExceeded, "Query", "id=x")
+	require.NotNil(t, err)
+
+	rec := httptest.NewRecorder()
+	WriteError(ctx, rec, err)
+
+	assert.Equal(t, http.StatusGatewayTimeout, rec.Code)
+	errObj := decodeErrorBody(t, rec)
+	assert.Equal(t, string(errcode.ErrServerTimeout), errObj["code"])
+	assert.Equal(t, "gateway timeout", errObj["message"])
+	assert.Equal(t, map[string]any{}, errObj["details"])
+
+	errRec := findRecord(handler, slog.LevelError)
+	require.NotNil(t, errRec)
+	assertStringAttr(t, *errRec, "code", string(errcode.ErrServerTimeout))
+	assertStringAttr(t, *errRec, "public_code", string(errcode.ErrServerTimeout))
+	assertStringAttr(t, *errRec, "status", "504")
+	assertStringAttr(t, *errRec, "cancel_reason", ctxcancel.ReasonDeadlineExceeded)
+	assertStringAttr(t, *errRec, "request_id", "req-504")
+}
+
+func TestWriteJSON_EncodeFail(t *testing.T) {
+	handler, restore := installCaptureHandler()
+	defer restore()
+
+	WriteJSON(erroringResponseWriter{}, http.StatusOK, map[string]any{"ch": make(chan int)})
+
+	assert.NotNil(t, findRecord(handler, slog.LevelError))
+}
+
+func TestWriteError_EncodeFail(t *testing.T) {
+	handler, restore := installCaptureHandler()
+	defer restore()
+
+	WriteError(context.Background(), erroringResponseWriter{}, errcode.New(
+		errcode.KindNotFound,
+		errcode.ErrCellNotFound,
+		"cell not found",
+	))
+
+	assert.NotNil(t, findRecord(handler, slog.LevelError))
+}
+
+type captureHandler struct {
+	records []slog.Record
+}
+
+func (h *captureHandler) Enabled(context.Context, slog.Level) bool {
+	return true
+}
+
+func (h *captureHandler) Handle(_ context.Context, r slog.Record) error {
+	h.records = append(h.records, r.Clone())
+	return nil
+}
+
+func (h *captureHandler) WithAttrs([]slog.Attr) slog.Handler {
+	return h
+}
+
+func (h *captureHandler) WithGroup(string) slog.Handler {
+	return h
+}
+
+func installCaptureHandler() (*captureHandler, func()) {
 	handler := &captureHandler{}
 	orig := slog.Default()
 	slog.SetDefault(slog.New(handler))
-	t.Cleanup(func() { slog.SetDefault(orig) })
+	return handler, func() { slog.SetDefault(orig) }
+}
 
-	ctx := context.Background()
-	ctx = ctxkeys.WithRequestID(ctx, "req-504")
-
-	rec := httptest.NewRecorder()
-	ecErr := ctxcancel.Wrap(context.DeadlineExceeded, "Query", "id=x")
-	require.NotNil(t, ecErr, "ctxcancel.Wrap must produce *errcode.Error for context.DeadlineExceeded")
-	WriteDomainError(ctx, rec, ecErr)
-
-	assert.Equal(t, http.StatusGatewayTimeout, rec.Code,
-		"server-side timeout must produce HTTP 504, not 499")
+func decodeErrorBody(t *testing.T, rec *httptest.ResponseRecorder) map[string]any {
+	t.Helper()
 
 	var body map[string]any
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
-	errObj := body["error"].(map[string]any)
-	assert.Equal(t, "ERR_SERVER_TIMEOUT", errObj["code"])
-	assert.Equal(t, "gateway timeout", errObj["message"],
-		"504 response must keep public timeout semantics without leaking cause details")
 
-	errRec := findErrorRecord(handler)
-	require.NotNil(t, errRec, "504 must emit slog.Error (not Warn)")
-	assertStringAttr(t, *errRec, "code", "ERR_SERVER_TIMEOUT")
-	assertStringAttr(t, *errRec, "request_id", "req-504")
-	assertStringAttr(t, *errRec, "cancel_reason", "deadline_exceeded")
+	errObj, ok := body["error"].(map[string]any)
+	require.True(t, ok, "response must contain error object")
+	return errObj
 }
 
-// TestCodeToStatus_Exhaustive delegates to pkg/errcode/status_test.go which
-// owns the canonical codeToStatus map. This stub is kept for historical
-// reference; the authoritative exhaustive check runs as part of:
-//
-//	go test ./pkg/errcode/...
-func TestCodeToStatus_Exhaustive(t *testing.T) {
-	// Spot-check a handful of codes via the exported wrapper to confirm the
-	// delegation in httputil.MapCodeToStatus works end-to-end.
-	cases := []struct {
-		code errcode.Code
-		want int
-	}{
-		{errcode.ErrCellNotFound, http.StatusNotFound},
-		{errcode.ErrValidationFailed, http.StatusBadRequest},
-		{errcode.ErrAuthForbidden, http.StatusForbidden},
-		{errcode.ErrInternal, http.StatusInternalServerError},
+func findRecord(h *captureHandler, level slog.Level) *slog.Record {
+	for i := range h.records {
+		if h.records[i].Level == level {
+			return &h.records[i]
+		}
 	}
-	for _, tc := range cases {
-		got := MapCodeToStatus(tc.code)
-		assert.Equal(t, tc.want, got, "MapCodeToStatus(%q)", tc.code)
-	}
+	return nil
 }
 
-func errWithDetails(t testing.TB, base *errcode.Error, details map[string]any) error {
+func countRecords(h *captureHandler, level slog.Level) int {
+	count := 0
+	for i := range h.records {
+		if h.records[i].Level == level {
+			count++
+		}
+	}
+	return count
+}
+
+func attrValue(r slog.Record, key string) (string, bool) {
+	var result string
+	var found bool
+	r.Attrs(func(a slog.Attr) bool {
+		if a.Key != key {
+			return true
+		}
+		found = true
+		switch a.Value.Kind() {
+		case slog.KindString:
+			result = a.Value.String()
+		case slog.KindInt64:
+			result = a.Value.String()
+		case slog.KindAny:
+			if err, ok := a.Value.Any().(error); ok {
+				result = err.Error()
+				return false
+			}
+			result = a.Value.String()
+		default:
+			result = a.Value.String()
+		}
+		return false
+	})
+	return result, found
+}
+
+func assertStringAttr(t *testing.T, rec slog.Record, key, want string) {
 	t.Helper()
-	detailed, err := errcode.WithDetails(base, details)
-	require.NoError(t, err)
-	return detailed
+	got, ok := attrValue(rec, key)
+	require.True(t, ok, "log record must contain %q attr", key)
+	assert.Equal(t, want, got)
 }
+
+func assertAttrAbsent(t *testing.T, rec slog.Record, key string) {
+	t.Helper()
+	_, ok := attrValue(rec, key)
+	assert.False(t, ok, "log record must not contain %q attr", key)
+}
+
+type erroringResponseWriter struct{}
+
+func (erroringResponseWriter) Header() http.Header {
+	return make(http.Header)
+}
+
+func (erroringResponseWriter) Write([]byte) (int, error) {
+	return 0, errors.New("write failed")
+}
+
+func (erroringResponseWriter) WriteHeader(int) {}

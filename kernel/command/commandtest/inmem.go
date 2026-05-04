@@ -183,7 +183,7 @@ func (q *InMemQueue) Report(_ context.Context, commandID string, now time.Time) 
 
 	e, ok := q.entries[commandID]
 	if !ok {
-		return errcode.New(errcode.ErrCommandNotFound, "commandtest: command not found: "+commandID)
+		return errcode.New(errcode.KindNotFound, errcode.ErrCommandNotFound, "commandtest: command not found: "+commandID)
 	}
 	if e.Status == command.StatusDelivered {
 		return nil // idempotent
@@ -208,7 +208,7 @@ func (q *InMemQueue) Report(_ context.Context, commandID string, now time.Time) 
 // to the existing terminal status. A different terminal target is rejected.
 func (q *InMemQueue) Ack(_ context.Context, commandID string, reason command.AckReason, now time.Time) error {
 	if !reason.Valid() {
-		return errcode.New(errcode.ErrValidationFailed, "commandtest: invalid AckReason")
+		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "commandtest: invalid AckReason")
 	}
 
 	q.mu.Lock()
@@ -216,7 +216,7 @@ func (q *InMemQueue) Ack(_ context.Context, commandID string, reason command.Ack
 
 	e, ok := q.entries[commandID]
 	if !ok {
-		return errcode.New(errcode.ErrCommandNotFound, "commandtest: command not found: "+commandID)
+		return errcode.New(errcode.KindNotFound, errcode.ErrCommandNotFound, "commandtest: command not found: "+commandID)
 	}
 
 	target := reason.TargetStatus()
@@ -224,7 +224,7 @@ func (q *InMemQueue) Ack(_ context.Context, commandID string, reason command.Ack
 		if e.Status == target {
 			return nil
 		}
-		return errcode.New(errcode.ErrValidationFailed,
+		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			fmt.Sprintf("commandtest: command already terminal with status %s; cannot ack as %s", e.Status, target))
 	}
 
@@ -244,12 +244,12 @@ func (q *InMemQueue) ExtendLease(_ context.Context, commandID string, extension 
 	defer q.mu.Unlock()
 
 	if _, ok := q.entries[commandID]; !ok {
-		return errcode.New(errcode.ErrCommandNotFound, "commandtest: command not found: "+commandID)
+		return errcode.New(errcode.KindNotFound, errcode.ErrCommandNotFound, "commandtest: command not found: "+commandID)
 	}
 
 	expiry, hasLease := q.leases[commandID]
 	if !hasLease || now.After(expiry) {
-		return errcode.New(errcode.ErrValidationFailed,
+		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"commandtest: lease expired or not acquired for command: "+commandID)
 	}
 	q.leases[commandID] = now.Add(extension)
@@ -263,7 +263,7 @@ func (q *InMemQueue) Cancel(_ context.Context, commandID string, now time.Time) 
 
 	e, ok := q.entries[commandID]
 	if !ok {
-		return errcode.New(errcode.ErrCommandNotFound, "commandtest: command not found: "+commandID)
+		return errcode.New(errcode.KindNotFound, errcode.ErrCommandNotFound, "commandtest: command not found: "+commandID)
 	}
 	if err := command.AdvanceCommand(e, command.StatusCanceled, now); err != nil {
 		return fmt.Errorf("commandtest: cancel: %w", err)
@@ -339,7 +339,7 @@ func (q *InMemQueue) GetCommand(_ context.Context, id string) (*command.Entry, e
 
 	e, ok := q.entries[id]
 	if !ok {
-		return nil, errcode.NewDomain(errcode.ErrCommandNotFound, "commandtest: command not found: "+id)
+		return nil, errcode.New(errcode.KindNotFound, errcode.ErrCommandNotFound, "commandtest: command not found: "+id)
 	}
 	cp := *e
 	return &cp, nil

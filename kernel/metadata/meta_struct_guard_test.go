@@ -6,7 +6,6 @@ import (
 	"testing"
 
 	"github.com/ghbvf/gocell/kernel/metadata"
-	"github.com/ghbvf/gocell/pkg/contracts"
 	"github.com/ghbvf/gocell/runtime/devtools/catalog"
 )
 
@@ -17,14 +16,15 @@ import (
 //
 // Key format: "TypeName.FieldName".
 var allowedInlineFields = map[string]bool{
-	// SchemaRefs.Extra uses yaml:",inline" with map[string]string (not any),
+	// SchemaRefsMeta.Extra uses yaml:",inline" with map[string]string (not any),
 	// so it cannot smuggle arbitrary YAML keys past the decoder; all values
 	// are typed strings.  It is allowed here because KnownFields(true) is
-	// not applied to SchemaRefs directly—it is embedded inside ContractMeta
+	// not applied to SchemaRefsMeta directly; it is embedded inside ContractMeta
 	// which has its own decoder, and the parser uses yaml.Decoder with
 	// KnownFields(true) only at the ContractMeta level.  Extra captures only
 	// string-valued additional schema ref keys beyond the four known ones.
-	"SchemaRefs.Extra": true,
+	"SchemaRefs.Extra":     true,
+	"SchemaRefsMeta.Extra": true,
 }
 
 // TestMetaStructs_NoMapCatchall asserts that none of the core metadata structs
@@ -54,15 +54,13 @@ func TestMetaStructs_NoMapCatchall(t *testing.T) {
 	}
 }
 
-// TestContracts_NoMapCatchall covers the contracts package types that are
-// embedded as type aliases in kernel/metadata (HTTPTransportMeta,
-// HTTPResponseMeta, SchemaRefsMeta).  They participate in the same parse-time
-// strictness guarantee.
-func TestContracts_NoMapCatchall(t *testing.T) {
+// TestSchemaMetaTypes_NoMapCatchall covers schema-related metadata types that
+// participate in the same parse-time strictness guarantee as ContractMeta.
+func TestSchemaMetaTypes_NoMapCatchall(t *testing.T) {
 	roots := []any{
-		contracts.HTTPTransport{},
-		contracts.HTTPResponse{},
-		contracts.SchemaRefs{},
+		metadata.HTTPTransportMeta{},
+		metadata.HTTPResponseMeta{},
+		metadata.SchemaRefsMeta{},
 	}
 	for _, root := range roots {
 		typ := reflect.TypeOf(root)

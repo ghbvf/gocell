@@ -182,7 +182,7 @@ func (c *DeviceCell) initDeps(durabilityMode cell.DurabilityMode) error {
 
 	// Publisher is required (NIL-PUB-P1). Use &DiscardPublisher{} for demo mode.
 	if c.publisher == nil {
-		return errcode.New(errcode.ErrCellMissingOutbox,
+		return errcode.New(errcode.KindInternal, errcode.ErrCellMissingOutbox,
 			"devicecell requires publisher; use WithPublisher(&outbox.DiscardPublisher{}) for demo mode")
 	}
 
@@ -206,7 +206,7 @@ func (c *DeviceCell) initDeps(durabilityMode cell.DurabilityMode) error {
 	// ref: zeromicro/go-zero MustSetUp — fatal on insecure default config.
 	if c.cursorCodec == nil {
 		if durabilityMode == cell.DurabilityDurable {
-			return errcode.New(errcode.ErrCellMissingCodec,
+			return errcode.New(errcode.KindInternal, errcode.ErrCellMissingCodec,
 				"devicecell durable mode requires a cursor codec; "+
 					"use WithCursorCodec(query.NewCursorCodec(secret)) — "+
 					"the built-in demo key is public in the source tree")

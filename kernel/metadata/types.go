@@ -6,8 +6,6 @@ import (
 	"fmt"
 
 	"gopkg.in/yaml.v3"
-
-	"github.com/ghbvf/gocell/pkg/contracts"
 )
 
 // CellMeta maps to cells/{id}/cell.yaml.
@@ -184,18 +182,6 @@ type EndpointsMeta struct {
 	Provider string   `yaml:"provider,omitempty"`
 	Readers  []string `yaml:"readers,omitempty"`
 }
-
-// HTTPResponseMeta is a type alias for contracts.HTTPResponse.
-// It describes an expected error response for a specific HTTP status code.
-type HTTPResponseMeta = contracts.HTTPResponse
-
-// HTTPTransportMeta is a type alias for contracts.HTTPTransport.
-// It holds transport-level details for migrated HTTP contracts.
-type HTTPTransportMeta = contracts.HTTPTransport
-
-// SchemaRefsMeta is a type alias for contracts.SchemaRefs.
-// It holds JSON Schema file references relative to the contract directory.
-type SchemaRefsMeta = contracts.SchemaRefs
 
 // JourneyMeta maps to journeys/J-*.yaml.
 type JourneyMeta struct {

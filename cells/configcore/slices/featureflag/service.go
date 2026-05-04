@@ -43,7 +43,7 @@ type Service struct {
 // so the cell Init() can propagate a structured error instead of a runtime panic.
 func NewService(repo ports.FlagRepository, codec *query.CursorCodec, logger *slog.Logger, runMode query.RunMode) (*Service, error) {
 	if codec == nil {
-		return nil, errcode.New(errcode.ErrCellMissingCodec,
+		return nil, errcode.New(errcode.KindInternal, errcode.ErrCellMissingCodec,
 			"featureflag: cursor codec is required")
 	}
 	return &Service{
@@ -88,7 +88,7 @@ func (s *Service) List(ctx context.Context, pageReq query.PageParams) (query.Pag
 
 // Evaluate checks if a flag is enabled for the given subject.
 func (s *Service) Evaluate(ctx context.Context, key, subject string) (*EvaluateResult, error) {
-	if err := validation.RequireNotBlank(errcode.ErrFlagInvalidInput,
+	if err := validation.RequireNotEmpty(errcode.ErrFlagInvalidInput,
 		validation.F("key", key),
 		validation.F("subject", subject),
 	); err != nil {

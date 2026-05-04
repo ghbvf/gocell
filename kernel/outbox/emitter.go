@@ -38,7 +38,7 @@ type WriterEmitter struct {
 // NewWriterEmitter adapts an outbox Writer into an Emitter.
 func NewWriterEmitter(w Writer) (*WriterEmitter, error) {
 	if isNilEmitterDependency(w) {
-		return nil, errcode.New(errcode.ErrCellMissingOutbox,
+		return nil, errcode.New(errcode.KindInternal, errcode.ErrCellMissingOutbox,
 			"outbox: nil writer for WriterEmitter")
 	}
 	return &WriterEmitter{writer: w}, nil
@@ -55,7 +55,7 @@ func NewNoopEmitter() Emitter {
 // nil — a programmer error that should surface at construction time.
 func (e *WriterEmitter) Emit(ctx context.Context, entry Entry) error {
 	if e == nil || isNilEmitterDependency(e.writer) {
-		return errcode.New(errcode.ErrCellMissingOutbox,
+		return errcode.New(errcode.KindInternal, errcode.ErrCellMissingOutbox,
 			"outbox: nil writer for WriterEmitter")
 	}
 	return e.writer.Write(ctx, entry)
@@ -123,16 +123,16 @@ func NewDirectEmitter(
 	p Publisher, mode DirectPublishFailureMode, mp metrics.Provider, clk clock.Clock, cellID string, opts ...DirectEmitterOption,
 ) (*DirectEmitter, error) {
 	if isNilEmitterDependency(p) {
-		return nil, errcode.New(errcode.ErrCellMissingOutbox,
+		return nil, errcode.New(errcode.KindInternal, errcode.ErrCellMissingOutbox,
 			"outbox: nil publisher for DirectEmitter")
 	}
 	if mp == nil {
-		return nil, errcode.New(errcode.ErrCellMissingOutbox,
+		return nil, errcode.New(errcode.KindInternal, errcode.ErrCellMissingOutbox,
 			"outbox: nil metrics provider for DirectEmitter")
 	}
 	clock.MustHaveClock(clk, "outbox.NewDirectEmitter")
 	if cellID == "" {
-		return nil, errcode.New(errcode.ErrValidationFailed,
+		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"outbox: cellID must not be empty for DirectEmitter")
 	}
 	cv, err := mp.CounterVec(metrics.CounterOpts{
@@ -172,7 +172,7 @@ func NewDirectEmitter(
 // caller's request path is not blocked on broker availability).
 func (e *DirectEmitter) Emit(ctx context.Context, entry Entry) error {
 	if e == nil || isNilEmitterDependency(e.publisher) {
-		return errcode.New(errcode.ErrCellMissingOutbox,
+		return errcode.New(errcode.KindInternal, errcode.ErrCellMissingOutbox,
 			"outbox: nil publisher for DirectEmitter")
 	}
 	if err := entry.Validate(); err != nil {
@@ -233,7 +233,7 @@ var _ Emitter = (*DirectEmitter)(nil)
 // ref: envoyproxy/envoy admin /ready — DEGRADED returns 200, distinguishing
 // "soft failure, do not evict" from "hard failure, drain traffic".
 // ref: kernel/cell/health.go — cell-layer alias to this sentinel.
-var ErrDegraded = errcode.New(errcode.ErrOutboxDegraded, "degraded")
+var ErrDegraded = errcode.New(errcode.KindUnavailable, errcode.ErrOutboxDegraded, "degraded")
 
 // Probes returns a probe map for cells to register via reg.Health(...). The
 // probe name is scoped by cellID to avoid collisions when multiple cells own a

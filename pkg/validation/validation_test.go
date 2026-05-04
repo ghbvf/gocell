@@ -17,7 +17,7 @@ type nilInterfaceImpl struct{}
 func (*nilInterfaceImpl) Marker() {}
 
 // assertValidationResult is a t.Helper that validates the outcome of a
-// RequireNotBlank call. When wantMessage is empty it asserts nil error;
+// RequireNotEmpty call. When wantMessage is empty it asserts nil error;
 // otherwise it asserts a *errcode.Error with the expected code and message.
 func assertValidationResult(t *testing.T, err error, wantCode errcode.Code, wantMessage string) {
 	t.Helper()
@@ -79,11 +79,11 @@ func TestIsNilInterface(t *testing.T) {
 	}
 }
 
-// All fields in a single RequireNotBlank call share one errcode by design —
+// All fields in a single RequireNotEmpty call share one errcode by design —
 // each slice domain has one validation code (ErrAuthIdentityInvalidInput,
 // ErrConfigInvalidInput, etc.), and the helper preserves that classification.
-// TestRequireNotBlank_PreservesCallerCode covers the multi-code dimension.
-func TestRequireNotBlank(t *testing.T) {
+// TestRequireNotEmpty_PreservesCallerCode covers the multi-code dimension.
+func TestRequireNotEmpty(t *testing.T) {
 	t.Parallel()
 
 	const code = errcode.ErrAuthIdentityInvalidInput
@@ -143,13 +143,13 @@ func TestRequireNotBlank(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			err := validation.RequireNotBlank(code, tt.fields...)
+			err := validation.RequireNotEmpty(code, tt.fields...)
 			assertValidationResult(t, err, tt.wantCode, tt.wantMessage)
 		})
 	}
 }
 
-func TestRequireNotBlank_PreservesCallerCode(t *testing.T) {
+func TestRequireNotEmpty_PreservesCallerCode(t *testing.T) {
 	t.Parallel()
 
 	cases := []errcode.Code{
@@ -163,7 +163,7 @@ func TestRequireNotBlank_PreservesCallerCode(t *testing.T) {
 	for _, code := range cases {
 		t.Run(string(code), func(t *testing.T) {
 			t.Parallel()
-			err := validation.RequireNotBlank(code, validation.F("x", ""))
+			err := validation.RequireNotEmpty(code, validation.F("x", ""))
 			var ec *errcode.Error
 			if !errors.As(err, &ec) {
 				t.Fatalf("expected *errcode.Error, got %T", err)

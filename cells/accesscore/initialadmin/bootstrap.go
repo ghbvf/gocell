@@ -77,16 +77,16 @@ type bootstrapper struct {
 // values are invalid.
 func newBootstrapper(deps BootstrapDeps, cfg bootstrapConfig) (*bootstrapper, error) {
 	if deps.UserRepo == nil {
-		return nil, errcode.New(errcode.ErrCellInvalidConfig, "initialadmin: bootstrapper requires UserRepo")
+		return nil, errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig, "initialadmin: bootstrapper requires UserRepo")
 	}
 	if deps.RoleRepo == nil {
-		return nil, errcode.New(errcode.ErrCellInvalidConfig, "initialadmin: bootstrapper requires RoleRepo")
+		return nil, errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig, "initialadmin: bootstrapper requires RoleRepo")
 	}
 	if deps.Logger == nil {
-		return nil, errcode.New(errcode.ErrCellInvalidConfig, "initialadmin: bootstrapper requires Logger")
+		return nil, errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig, "initialadmin: bootstrapper requires Logger")
 	}
 	if cfg.TTL < 0 {
-		return nil, errcode.New(errcode.ErrCellInvalidConfig,
+		return nil, errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
 			fmt.Sprintf("initialadmin: bootstrapper TTL must be non-negative, got %s", cfg.TTL))
 	}
 
@@ -97,7 +97,7 @@ func newBootstrapper(deps BootstrapDeps, cfg bootstrapConfig) (*bootstrapper, er
 	if cfg.CredentialPath == "" {
 		resolved, resolveErr := ResolveCredentialPath("")
 		if resolveErr != nil {
-			return nil, errcode.Wrap(errcode.ErrCellInvalidConfig,
+			return nil, errcode.Wrap(errcode.KindInternal, errcode.ErrCellInvalidConfig,
 				"initialadmin: resolve credential path", resolveErr)
 		}
 		cfg.CredentialPath = resolved

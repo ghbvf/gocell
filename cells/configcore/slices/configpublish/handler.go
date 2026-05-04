@@ -91,7 +91,7 @@ func (h *Handler) HandlePublish(w http.ResponseWriter, r *http.Request) {
 
 	version, err := h.svc.Publish(r.Context(), key)
 	if err != nil {
-		httputil.WriteDomainError(r.Context(), w, err)
+		httputil.WriteError(r.Context(), w, err)
 		return
 	}
 
@@ -107,14 +107,14 @@ func (h *Handler) HandleRollback(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Version int `json:"version"`
 	}
-	if err := httputil.DecodeJSONStrict(r, &req); err != nil {
-		httputil.WriteDecodeError(r.Context(), w, err)
+	if err := httputil.DecodeJSONStrict(r, &req, httputil.DefaultDecodeJSONLimit); err != nil {
+		httputil.WriteError(r.Context(), w, err)
 		return
 	}
 
 	entry, err := h.svc.Rollback(r.Context(), key, req.Version)
 	if err != nil {
-		httputil.WriteDomainError(r.Context(), w, err)
+		httputil.WriteError(r.Context(), w, err)
 		return
 	}
 

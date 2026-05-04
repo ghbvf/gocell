@@ -11,7 +11,7 @@ import (
 )
 
 // buildConsistencyProject creates a minimal ProjectMeta for CONTRACT-CONSISTENCY-EMIT-01 tests.
-// ownerCell: the cell that owns the contracts.
+// ownerCell: the cell that owns the metadata.
 // contracts: list of (id, consistencyLevel, triggers...) tuples.
 func buildConsistencyProject(ownerCell string, contracts []*metadata.ContractMeta) *metadata.ProjectMeta {
 	contractMap := map[string]*metadata.ContractMeta{}

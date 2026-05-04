@@ -59,7 +59,7 @@ func NewService(repo ports.FlagRepository, logger *slog.Logger, clk clock.Clock,
 		o(s)
 	}
 	if s.txRunner == nil {
-		return nil, errcode.New(errcode.ErrValidationFailed,
+		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"flagwrite: TxRunner required; use WithTxManager")
 	}
 	return s, nil
@@ -83,7 +83,7 @@ type UpdateInput struct {
 
 // Create creates a new feature flag (L1 LocalTx).
 func (s *Service) Create(ctx context.Context, input CreateInput) (*domain.FeatureFlag, error) {
-	if err := validation.RequireNotBlank(errcode.ErrFlagInvalidInput,
+	if err := validation.RequireNotEmpty(errcode.ErrFlagInvalidInput,
 		validation.F("key", input.Key),
 	); err != nil {
 		return nil, err
@@ -118,7 +118,7 @@ func (s *Service) Create(ctx context.Context, input CreateInput) (*domain.Featur
 // The repo UPDATE uses version=version+1 RETURNING to eliminate the read-modify-write
 // TOCTOU race: two concurrent Updates both see the same DB-authoritative version.
 func (s *Service) Update(ctx context.Context, input UpdateInput) (*domain.FeatureFlag, error) {
-	if err := validation.RequireNotBlank(errcode.ErrFlagInvalidInput,
+	if err := validation.RequireNotEmpty(errcode.ErrFlagInvalidInput,
 		validation.F("key", input.Key),
 	); err != nil {
 		return nil, err
@@ -146,7 +146,7 @@ func (s *Service) Update(ctx context.Context, input UpdateInput) (*domain.Featur
 // Toggle toggles the enabled state of a feature flag (L1 LocalTx).
 // Toggle does not overwrite rollout_percentage or description.
 func (s *Service) Toggle(ctx context.Context, key string, enabled bool) (*domain.FeatureFlag, error) {
-	if err := validation.RequireNotBlank(errcode.ErrFlagInvalidInput,
+	if err := validation.RequireNotEmpty(errcode.ErrFlagInvalidInput,
 		validation.F("key", key),
 	); err != nil {
 		return nil, err
@@ -176,7 +176,7 @@ func (s *Service) Toggle(ctx context.Context, key string, enabled bool) (*domain
 // the read-before-delete TOCTOU race where a concurrent Update could change the
 // flag between GetByKey and DELETE.
 func (s *Service) Delete(ctx context.Context, key string) error {
-	if err := validation.RequireNotBlank(errcode.ErrFlagInvalidInput,
+	if err := validation.RequireNotEmpty(errcode.ErrFlagInvalidInput,
 		validation.F("key", key),
 	); err != nil {
 		return err

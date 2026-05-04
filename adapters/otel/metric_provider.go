@@ -34,7 +34,7 @@ var _ metrics.Provider = (*MetricProvider)(nil)
 //   - ErrAdapterOTelConfig when meter is nil.
 func NewMetricProvider(meter otelmetric.Meter) (*MetricProvider, error) {
 	if meter == nil {
-		return nil, errcode.New(ErrAdapterOTelConfig, "otel metric provider: Meter is required")
+		return nil, errcode.New(errcode.KindInternal, ErrAdapterOTelConfig, "otel metric provider: Meter is required")
 	}
 	return &MetricProvider{meter: meter}, nil
 }
@@ -45,7 +45,7 @@ func NewMetricProvider(meter otelmetric.Meter) (*MetricProvider, error) {
 func (p *MetricProvider) CounterVec(opts metrics.CounterOpts) (metrics.CounterVec, error) {
 	c, err := p.meter.Float64Counter(opts.Name, otelmetric.WithDescription(opts.Help))
 	if err != nil {
-		return nil, errcode.Wrap(ErrAdapterOTelInit,
+		return nil, errcode.Wrap(errcode.KindInternal, ErrAdapterOTelInit,
 			"otel metric provider: create counter "+opts.Name, err)
 	}
 	return &otelCounterVec{
@@ -74,7 +74,7 @@ func (p *MetricProvider) HistogramVec(opts metrics.HistogramOpts) (metrics.Histo
 	}
 	h, err := p.meter.Float64Histogram(opts.Name, hOpts...)
 	if err != nil {
-		return nil, errcode.Wrap(ErrAdapterOTelInit,
+		return nil, errcode.Wrap(errcode.KindInternal, ErrAdapterOTelInit,
 			"otel metric provider: create histogram "+opts.Name, err)
 	}
 	return &otelHistogramVec{

@@ -66,7 +66,7 @@ func NewService(repo ports.ConfigRepository, logger *slog.Logger, clk clock.Cloc
 		o(s)
 	}
 	if s.txRunner == nil {
-		return nil, errcode.New(errcode.ErrValidationFailed,
+		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"configwrite: TxRunner required; use WithTxManager")
 	}
 	return s, nil
@@ -81,7 +81,7 @@ type CreateInput struct {
 
 // Create creates a new config entry and publishes a change event.
 func (s *Service) Create(ctx context.Context, input CreateInput) (*domain.ConfigEntry, error) {
-	if err := validation.RequireNotBlank(errcode.ErrConfigInvalidInput,
+	if err := validation.RequireNotEmpty(errcode.ErrConfigInvalidInput,
 		validation.F("key", input.Key),
 	); err != nil {
 		return nil, err
@@ -127,7 +127,7 @@ type UpdateInput struct {
 // pre-read is needed here. The entire update and outbox write are wrapped in
 // a single transaction for L2 atomicity.
 func (s *Service) Update(ctx context.Context, input UpdateInput) (*domain.ConfigEntry, error) {
-	if err := validation.RequireNotBlank(errcode.ErrConfigInvalidInput,
+	if err := validation.RequireNotEmpty(errcode.ErrConfigInvalidInput,
 		validation.F("key", input.Key),
 	); err != nil {
 		return nil, err
@@ -156,7 +156,7 @@ func (s *Service) Update(ctx context.Context, input UpdateInput) (*domain.Config
 
 // Delete removes a config entry by key and publishes a change event.
 func (s *Service) Delete(ctx context.Context, key string) error {
-	if err := validation.RequireNotBlank(errcode.ErrConfigInvalidInput,
+	if err := validation.RequireNotEmpty(errcode.ErrConfigInvalidInput,
 		validation.F("key", key),
 	); err != nil {
 		return err
@@ -193,7 +193,8 @@ func (s *Service) runInTx(ctx context.Context, fn func(ctx context.Context) erro
 func actorFromContext(ctx context.Context) (string, error) {
 	p, ok := auth.FromContext(ctx)
 	if !ok || p.Subject == "" {
-		return "", errcode.New(errcode.ErrAuthUnauthorized, "config-write: actor required — admin auth must be present")
+		return "", errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthUnauthorized,
+			"config-write: actor required — admin auth must be present")
 	}
 	return p.Subject, nil
 }

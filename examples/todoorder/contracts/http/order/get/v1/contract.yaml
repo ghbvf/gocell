@@ -22,6 +22,9 @@ endpoints:
       400:
         description: "Bad request — invalid pagination parameter"
         schemaRef: "../../../../shared/errors/error-response-v1.schema.json"
+      404:
+        description: "Not found — order with given id does not exist"
+        schemaRef: "../../../../shared/errors/error-response-v1.schema.json"
 schemaRefs:
   request: request.schema.json
   response: response.schema.json

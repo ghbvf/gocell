@@ -92,7 +92,7 @@ func sweep(ctx context.Context, cfg sweepConfig) (sweepResult, error) {
 			slog.String("event", "initial_admin_credential_sweep_error"),
 			slog.String("file_path", credPath),
 			slog.String("failure_kind", failureKind),
-			slog.Any("error", errcode.WrapInfra(errcode.ErrInternal, "sweep: read cred file", err)),
+			slog.Any("error", errcode.Wrap(errcode.KindInternal, errcode.ErrInternal, "sweep: read cred file", err)),
 		)
 		return sweepResult{}, nil
 	}
@@ -104,7 +104,7 @@ func sweep(ctx context.Context, cfg sweepConfig) (sweepResult, error) {
 			cfg.Logger.ErrorContext(ctx, "sweep: failed to remove expired credential file",
 				slog.String("event", "initial_admin_credential_sweep_error"),
 				slog.String("file_path", credPath),
-				slog.Any("error", errcode.WrapInfra(errcode.ErrInternal, "sweep: remove cred file", removeErr)),
+				slog.Any("error", errcode.Wrap(errcode.KindInternal, errcode.ErrInternal, "sweep: remove cred file", removeErr)),
 			)
 			return sweepResult{}, nil
 		}
@@ -152,14 +152,14 @@ func resolveSweepCredentialPath(credentialPath string) (string, error) {
 	if credentialPath == "" {
 		resolved, err := ResolveCredentialPath("")
 		if err != nil {
-			return "", errcode.Wrap(errcode.ErrCellInvalidConfig,
+			return "", errcode.Wrap(errcode.KindInternal, errcode.ErrCellInvalidConfig,
 				"initialadmin: resolve credential path", err)
 		}
 		return resolved, nil
 	}
 	cleaned := filepath.Clean(credentialPath)
 	if !filepath.IsAbs(cleaned) {
-		return "", errcode.New(errcode.ErrCellInvalidConfig,
+		return "", errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
 			"initialadmin: credential path must be absolute")
 	}
 	return cleaned, nil

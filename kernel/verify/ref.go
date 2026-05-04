@@ -32,7 +32,7 @@ type resolvedRef struct {
 func resolveRef(ref string) (resolvedRef, error) {
 	parts := strings.SplitN(ref, ".", 3)
 	if len(parts) < 3 || parts[0] == "" || parts[1] == "" || parts[2] == "" {
-		return resolvedRef{}, errcode.New(errcode.ErrCheckRefInvalid,
+		return resolvedRef{}, errcode.New(errcode.KindInvalid, errcode.ErrCheckRefInvalid,
 			fmt.Sprintf("ref %q must have at least 3 non-empty dot-separated segments", ref))
 	}
 
@@ -90,7 +90,7 @@ func resolveRef(ref string) (resolvedRef, error) {
 		}, nil
 
 	default:
-		return resolvedRef{}, errcode.New(errcode.ErrCheckRefInvalid,
+		return resolvedRef{}, errcode.New(errcode.KindInvalid, errcode.ErrCheckRefInvalid,
 			fmt.Sprintf("ref %q has unknown prefix %q (expected journey, smoke, unit, or contract)", ref, prefix))
 	}
 }
@@ -102,7 +102,7 @@ func JourneyRefScope(ref string) (string, error) {
 		return "", err
 	}
 	if resolved.Kind != PrefixJourney {
-		return "", errcode.New(errcode.ErrCheckRefInvalid,
+		return "", errcode.New(errcode.KindInvalid, errcode.ErrCheckRefInvalid,
 			fmt.Sprintf("journey checkRef %q must use journey prefix", ref))
 	}
 	return resolved.Scope, nil
@@ -111,7 +111,7 @@ func JourneyRefScope(ref string) (string, error) {
 // validateSegment rejects path segments that could cause directory traversal.
 func validateSegment(s, field string) error {
 	if s == "" || s == "." || strings.Contains(s, "..") || strings.ContainsAny(s, `/\`) {
-		return errcode.New(errcode.ErrCheckRefInvalid,
+		return errcode.New(errcode.KindInvalid, errcode.ErrCheckRefInvalid,
 			fmt.Sprintf("%s %q contains path traversal or separator", field, s))
 	}
 	return nil

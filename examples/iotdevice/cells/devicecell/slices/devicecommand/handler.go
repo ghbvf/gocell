@@ -166,14 +166,14 @@ func (h *Handler) HandleEnqueue(w http.ResponseWriter, r *http.Request) {
 	deviceID := r.PathValue("id")
 
 	var req enqueueRequest
-	if err := httputil.DecodeJSONStrict(r, &req); err != nil {
-		httputil.WriteDecodeError(r.Context(), w, err)
+	if err := httputil.DecodeJSONStrict(r, &req, httputil.DefaultDecodeJSONLimit); err != nil {
+		httputil.WriteError(r.Context(), w, err)
 		return
 	}
 
 	entry, err := h.svc.Enqueue(r.Context(), deviceID, req.CommandType, req.Payload)
 	if err != nil {
-		httputil.WriteDomainError(r.Context(), w, err)
+		httputil.WriteError(r.Context(), w, err)
 		return
 	}
 
@@ -197,7 +197,7 @@ func (h *Handler) HandleDequeue(w http.ResponseWriter, r *http.Request) {
 
 	entries, err := h.svc.Dequeue(r.Context(), deviceID, pageReq.Limit, command.DefaultLeaseDuration)
 	if err != nil {
-		httputil.WriteDomainError(r.Context(), w, err)
+		httputil.WriteError(r.Context(), w, err)
 		return
 	}
 
@@ -217,7 +217,7 @@ func (h *Handler) HandleReport(w http.ResponseWriter, r *http.Request) {
 	cmdID := r.PathValue("cmdId")
 
 	if err := h.svc.Report(r.Context(), deviceID, cmdID); err != nil {
-		httputil.WriteDomainError(r.Context(), w, err)
+		httputil.WriteError(r.Context(), w, err)
 		return
 	}
 	h.writeCommand(w, r, cmdID)
@@ -232,18 +232,18 @@ func (h *Handler) HandleAck(w http.ResponseWriter, r *http.Request) {
 	cmdID := r.PathValue("cmdId")
 
 	var req ackRequest
-	if err := httputil.DecodeJSONStrict(r, &req); err != nil {
-		httputil.WriteDecodeError(r.Context(), w, err)
+	if err := httputil.DecodeJSONStrict(r, &req, httputil.DefaultDecodeJSONLimit); err != nil {
+		httputil.WriteError(r.Context(), w, err)
 		return
 	}
 	reason, err := parseAckReason(req.Reason)
 	if err != nil {
-		httputil.WriteDomainError(r.Context(), w, err)
+		httputil.WriteError(r.Context(), w, err)
 		return
 	}
 
 	if err := h.svc.Ack(r.Context(), deviceID, cmdID, reason); err != nil {
-		httputil.WriteDomainError(r.Context(), w, err)
+		httputil.WriteError(r.Context(), w, err)
 		return
 	}
 	h.writeCommand(w, r, cmdID)
@@ -258,12 +258,12 @@ func (h *Handler) HandleExtendLease(w http.ResponseWriter, r *http.Request) {
 	cmdID := r.PathValue("cmdId")
 
 	var req extendLeaseRequest
-	if err := httputil.DecodeJSONStrict(r, &req); err != nil {
-		httputil.WriteDecodeError(r.Context(), w, err)
+	if err := httputil.DecodeJSONStrict(r, &req, httputil.DefaultDecodeJSONLimit); err != nil {
+		httputil.WriteError(r.Context(), w, err)
 		return
 	}
 	if err := h.svc.ExtendLease(r.Context(), deviceID, cmdID, time.Duration(req.ExtensionSeconds)*time.Second); err != nil {
-		httputil.WriteDomainError(r.Context(), w, err)
+		httputil.WriteError(r.Context(), w, err)
 		return
 	}
 	h.writeCommand(w, r, cmdID)
@@ -272,7 +272,7 @@ func (h *Handler) HandleExtendLease(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) HandleScanActive(w http.ResponseWriter, r *http.Request) {
 	statuses, err := parseStatusFilter(r.URL.Query().Get("statuses"))
 	if err != nil {
-		httputil.WriteDomainError(r.Context(), w, err)
+		httputil.WriteError(r.Context(), w, err)
 		return
 	}
 	pageReq, ok := httputil.ParsePageParamsOrWrite(w, r)
@@ -284,7 +284,7 @@ func (h *Handler) HandleScanActive(w http.ResponseWriter, r *http.Request) {
 		Statuses: statuses,
 	}, pageReq)
 	if err != nil {
-		httputil.WriteDomainError(r.Context(), w, err)
+		httputil.WriteError(r.Context(), w, err)
 		return
 	}
 	httputil.WriteJSON(w, http.StatusOK, query.MapPageResult(result, toCommandResponse))
@@ -293,7 +293,7 @@ func (h *Handler) HandleScanActive(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) writeCommand(w http.ResponseWriter, r *http.Request, cmdID string) {
 	entry, err := h.svc.queue.GetCommand(r.Context(), cmdID)
 	if err != nil {
-		httputil.WriteDomainError(r.Context(), w, err)
+		httputil.WriteError(r.Context(), w, err)
 		return
 	}
 
@@ -309,7 +309,7 @@ func parseAckReason(raw string) (command.AckReason, error) {
 	case "rejected":
 		return command.AckRejected, nil
 	default:
-		return 0, errcode.New(errcode.ErrValidationFailed, "devicecommand: invalid ack reason")
+		return 0, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "devicecommand: invalid ack reason")
 	}
 }
 
@@ -330,7 +330,7 @@ func parseStatusFilter(raw string) ([]command.Status, error) {
 		case "delivered":
 			statuses = append(statuses, command.StatusDelivered)
 		default:
-			return nil, errcode.New(errcode.ErrValidationFailed, "devicecommand: invalid status filter")
+			return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "devicecommand: invalid status filter")
 		}
 	}
 	return statuses, nil

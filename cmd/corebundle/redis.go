@@ -55,7 +55,7 @@ func loadRedisConfigFromEnv(topo bootstrap.Topology) (adapterredis.Config, bool,
 	addr := os.Getenv(envRedisAddr)
 	if addr == "" {
 		if requiresDistributedReplay(topo) {
-			return adapterredis.Config{}, false, errcode.New(errcode.ErrValidationFailed,
+			return adapterredis.Config{}, false, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 				envRedisAddr+" must be set in adapter mode \"real\" unless GOCELL_SINGLE_POD=1; "+
 					"multi-pod deployments require Redis-backed nonce and idempotency stores")
 		}
@@ -66,7 +66,7 @@ func loadRedisConfigFromEnv(topo bootstrap.Topology) (adapterredis.Config, bool,
 	if raw := os.Getenv(envRedisDB); raw != "" {
 		parsed, err := strconv.Atoi(raw)
 		if err != nil || parsed < 0 {
-			return adapterredis.Config{}, false, errcode.New(errcode.ErrValidationFailed,
+			return adapterredis.Config{}, false, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 				fmt.Sprintf("%s must be a non-negative integer, got %q", envRedisDB, raw))
 		}
 		db = parsed
@@ -97,7 +97,7 @@ func buildRedisClient(ctx context.Context, topo bootstrap.Topology) (redisClient
 func buildServiceNonceStore(topo bootstrap.Topology, client *adapterredis.Client, clk clock.Clock) (auth.NonceStore, error) {
 	if requiresDistributedReplay(topo) {
 		if client == nil {
-			return nil, errcode.New(errcode.ErrControlplaneNonceStoreMissing,
+			return nil, errcode.New(errcode.KindInternal, errcode.ErrControlplaneNonceStoreMissing,
 				envRedisAddr+" must be set for distributed service-token nonce protection")
 		}
 		store, err := newRedisNonceStore(client, auth.ServiceTokenNonceTTL)
@@ -118,7 +118,7 @@ func buildConsumerClaimer(
 ) (idempotency.Claimer, consumerClaimerKind, error) {
 	if requiresDistributedReplay(topo) {
 		if client == nil {
-			return nil, consumerClaimerKindUnknown, errcode.New(errcode.ErrControlplaneClaimerNotDistributed,
+			return nil, consumerClaimerKindUnknown, errcode.New(errcode.KindInternal, errcode.ErrControlplaneClaimerNotDistributed,
 				envRedisAddr+" must be set for distributed outbox idempotency in real multi-pod deployments")
 		}
 		return newRedisIdempotencyClaimer(client), consumerClaimerKindDistributed, nil

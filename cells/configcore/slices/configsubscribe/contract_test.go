@@ -3,7 +3,7 @@ package configsubscribe
 import (
 	"testing"
 
-	"github.com/ghbvf/gocell/pkg/contracttest"
+	"github.com/ghbvf/gocell/tests/contracttest"
 )
 
 func TestEventConfigEntryUpsertedV1Subscribe(t *testing.T) {

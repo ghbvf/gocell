@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/ghbvf/gocell/pkg/ctxkeys"
+	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/httputil"
 )
 
@@ -225,8 +226,8 @@ func rejectCSRF(w http.ResponseWriter, r *http.Request, reason string) {
 	}
 	slog.Warn("csrf: request rejected", attrs...)
 
-	httputil.WriteError(r.Context(), w, http.StatusForbidden,
-		"ERR_CSRF_ORIGIN_DENIED", "cross-origin request denied")
+	httputil.WriteError(r.Context(), w,
+		errcode.New(errcode.KindPermissionDenied, errcode.ErrCSRFOriginDenied, "cross-origin request denied"))
 }
 
 // matchOrigin checks if origin matches any exact or wildcard pattern.

@@ -11,6 +11,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/ctxcancel"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/pgquery"
 	"github.com/ghbvf/gocell/pkg/query"
 )
 
@@ -114,15 +115,15 @@ func (r *AuditRepository) GetRange(ctx context.Context, from, to int) ([]*domain
 // Query retrieves audit entries matching the given filters with keyset pagination.
 // Requires composite index: CREATE INDEX idx_audit_entries_ts_id ON audit_entries (timestamp DESC, id ASC).
 func (r *AuditRepository) Query(ctx context.Context, filters ports.AuditFilters, params query.ListParams) ([]*domain.AuditEntry, error) {
-	b := query.NewBuilder()
+	b := pgquery.NewBuilder()
 	b.Append("SELECT id, event_id, event_type, actor_id, timestamp, payload, prev_hash, hash FROM audit_entries WHERE 1=1")
 	b.AppendIf(filters.EventType != "", "AND event_type = ", filters.EventType)
 	b.AppendIf(filters.ActorID != "", "AND actor_id = ", filters.ActorID)
 	b.AppendIf(!filters.From.IsZero(), "AND timestamp >= ", filters.From)
 	b.AppendIf(!filters.To.IsZero(), "AND timestamp <= ", filters.To)
 
-	if err := query.AppendKeyset(b, params); err != nil {
-		return nil, errcode.Wrap(errcode.ErrAuditRepoQuery, "audit repo: keyset failed", err)
+	if err := pgquery.AppendKeyset(b, params); err != nil {
+		return nil, errcode.Wrap(errcode.KindInternal, errcode.ErrAuditRepoQuery, "audit repo: keyset failed", err)
 	}
 
 	sql, args := b.Build()

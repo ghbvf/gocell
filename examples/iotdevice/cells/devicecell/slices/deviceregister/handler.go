@@ -68,14 +68,14 @@ type registerRequest struct {
 // HandleRegister handles POST /api/v1/devices.
 func (h *Handler) HandleRegister(w http.ResponseWriter, r *http.Request) {
 	var req registerRequest
-	if err := httputil.DecodeJSONStrict(r, &req); err != nil {
-		httputil.WriteDecodeError(r.Context(), w, err)
+	if err := httputil.DecodeJSONStrict(r, &req, httputil.DefaultDecodeJSONLimit); err != nil {
+		httputil.WriteError(r.Context(), w, err)
 		return
 	}
 
 	device, err := h.svc.Register(r.Context(), req.Name)
 	if err != nil {
-		httputil.WriteDomainError(r.Context(), w, err)
+		httputil.WriteError(r.Context(), w, err)
 		return
 	}
 

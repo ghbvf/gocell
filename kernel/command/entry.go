@@ -130,52 +130,53 @@ func (e *Entry) ValidateNew() error {
 
 func (e *Entry) validateBaseFields() error {
 	if e.ID == "" {
-		return errcode.New(errcode.ErrValidationFailed, "command: entry missing ID")
+		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "command: entry missing ID")
 	}
 	if e.DeviceID == "" {
-		return errcode.New(errcode.ErrValidationFailed, "command: entry missing DeviceID")
+		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "command: entry missing DeviceID")
 	}
 	if e.CommandType == "" {
-		return errcode.New(errcode.ErrValidationFailed, "command: entry missing CommandType")
+		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "command: entry missing CommandType")
 	}
 	if len(e.Payload) == 0 {
-		return errcode.New(errcode.ErrValidationFailed, "command: entry missing Payload")
+		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "command: entry missing Payload")
 	}
 	return nil
 }
 
 func (e *Entry) validateStatus() error {
 	if !e.Status.Valid() {
-		return errcode.New(errcode.ErrValidationFailed, "command: entry has invalid Status")
+		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "command: entry has invalid Status")
 	}
 	if e.Status != StatusPending {
-		return errcode.New(errcode.ErrValidationFailed, "command: new entry must have Pending status")
+		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "command: new entry must have Pending status")
 	}
 	return nil
 }
 
 func (e *Entry) validateTimestamps() error {
 	if e.CreatedAt.IsZero() {
-		return errcode.New(errcode.ErrValidationFailed, "command: entry missing CreatedAt")
+		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "command: entry missing CreatedAt")
 	}
 	if e.SentAt != nil || e.DeliveredAt != nil || e.CompletedAt != nil {
-		return errcode.New(errcode.ErrValidationFailed, "command: new entry must not have phase timestamps (SentAt/DeliveredAt/CompletedAt)")
+		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"command: new entry must not have phase timestamps (SentAt/DeliveredAt/CompletedAt)")
 	}
 	if e.Attempt != 0 {
-		return errcode.New(errcode.ErrValidationFailed, "command: new entry must have Attempt=0")
+		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "command: new entry must have Attempt=0")
 	}
 	return nil
 }
 
 func (e *Entry) validateTimeouts() error {
 	if e.Timeouts.ScheduleToSend < 0 {
-		return errcode.New(errcode.ErrValidationFailed, "command: ScheduleToSend timeout must be non-negative")
+		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "command: ScheduleToSend timeout must be non-negative")
 	}
 	if e.Timeouts.SendToComplete < 0 {
-		return errcode.New(errcode.ErrValidationFailed, "command: SendToComplete timeout must be non-negative")
+		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "command: SendToComplete timeout must be non-negative")
 	}
 	if e.Timeouts.OverallDeadline < 0 {
-		return errcode.New(errcode.ErrValidationFailed, "command: OverallDeadline timeout must be non-negative")
+		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "command: OverallDeadline timeout must be non-negative")
 	}
 	return nil
 }

@@ -87,7 +87,7 @@ func NewService(provisioner *adminprovision.Provisioner, logger *slog.Logger, op
 		o(s)
 	}
 	if s.txRunner == nil {
-		return nil, errcode.New(errcode.ErrValidationFailed, "setup: TxRunner required; use WithTxManager")
+		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "setup: TxRunner required; use WithTxManager")
 	}
 	return s, nil
 }
@@ -187,7 +187,7 @@ func (s *Service) CreateAdmin(ctx context.Context, in CreateAdminInput) (*Create
 // persistence or CPU-expensive work happens. Pulled out of CreateAdmin to keep
 // its cognitive complexity within 15 (gocognit CLAUDE.md limit).
 func validateCreateAdminInput(in CreateAdminInput) error {
-	if err := validation.RequireNotBlank(errcode.ErrAuthIdentityInvalidInput,
+	if err := validation.RequireNotEmpty(errcode.ErrAuthIdentityInvalidInput,
 		validation.F("username", in.Username),
 		validation.F("email", in.Email),
 		validation.F("password", in.Password),
@@ -195,25 +195,25 @@ func validateCreateAdminInput(in CreateAdminInput) error {
 		return err
 	}
 	if utf8.RuneCountInString(in.Username) > MaxUsernameLen {
-		return errcode.New(errcode.ErrAuthIdentityInvalidInput,
+		return errcode.New(errcode.KindInvalid, errcode.ErrAuthIdentityInvalidInput,
 			fmt.Sprintf("username length must be at most %d characters", MaxUsernameLen))
 	}
 	if utf8.RuneCountInString(in.Email) > MaxEmailLen {
-		return errcode.New(errcode.ErrAuthIdentityInvalidInput,
+		return errcode.New(errcode.KindInvalid, errcode.ErrAuthIdentityInvalidInput,
 			fmt.Sprintf("email length must be at most %d characters", MaxEmailLen))
 	}
 	passwordBytes := len(in.Password)
 	if passwordBytes < MinPasswordBytes || passwordBytes > MaxPasswordBytes {
-		return errcode.New(errcode.ErrAuthIdentityInvalidInput,
+		return errcode.New(errcode.KindInvalid, errcode.ErrAuthIdentityInvalidInput,
 			fmt.Sprintf("password length must be %d to %d printable ASCII bytes",
 				MinPasswordBytes, MaxPasswordBytes))
 	}
 	if !isPrintableASCII(in.Password) {
-		return errcode.New(errcode.ErrAuthIdentityInvalidInput,
+		return errcode.New(errcode.KindInvalid, errcode.ErrAuthIdentityInvalidInput,
 			"password must contain only printable ASCII characters")
 	}
 	if strings.ContainsAny(in.Email, "\r\n\t\x00") || strings.ContainsAny(in.Username, "\r\n\t\x00") {
-		return errcode.New(errcode.ErrAuthIdentityInvalidInput,
+		return errcode.New(errcode.KindInvalid, errcode.ErrAuthIdentityInvalidInput,
 			"username and email must not contain control characters")
 	}
 	return nil
@@ -271,15 +271,12 @@ func (s *Service) provisionAndMaybeEmit(ctx context.Context, in CreateAdminInput
 // not embedded on the wire — contract is the single source of truth for
 // endpoint paths.
 func setupRetiredError() error {
-	detailed, err := errcode.WithDetails(
-		errcode.New(errcode.ErrSetupAlreadyInitialized,
-			"first-run admin already provisioned; this endpoint is retired"),
-		map[string]any{"nextAction": "login"},
+	return errcode.New(
+		errcode.KindGone,
+		errcode.ErrSetupAlreadyInitialized,
+		"first-run admin already provisioned; this endpoint is retired",
+		errcode.WithDetails(map[string]any{"nextAction": "login"}),
 	)
-	if err != nil {
-		return err
-	}
-	return detailed
 }
 
 func (s *Service) publishUserCreated(ctx context.Context, user *domain.User) error {

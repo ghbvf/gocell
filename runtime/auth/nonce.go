@@ -20,7 +20,7 @@ import (
 // (any other Cause → 500) via errors.Is on this exact sentinel; see
 // writeServiceTokenError in servicetoken.go. The HTTP error envelope is
 // constructed at the middleware layer.
-var ErrNonceReused = errcode.New(errcode.ErrAuthNonceReused, "auth: nonce already used")
+var ErrNonceReused = errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthNonceReused, "auth: nonce already used")
 
 // defaultMaxNonceEntries is the maximum number of live nonce entries before a
 // forced prune is triggered in InMemoryNonceStore.CheckAndMark.
@@ -142,7 +142,8 @@ func (s *InMemoryNonceStore) MaxAge() time.Duration { return s.maxAge }
 // nonce map has reached maxEntries and a forced prune found no expired entries
 // to reclaim. Callers should treat this as a transient infrastructure failure
 // (503 / Requeue) rather than a replay signal.
-var ErrNonceStoreFull = errcode.New(errcode.ErrNonceStoreFull, "auth: nonce store is full; no expired entries to reclaim")
+var ErrNonceStoreFull = errcode.New(errcode.KindUnavailable, errcode.ErrNonceStoreFull,
+	"auth: nonce store is full; no expired entries to reclaim")
 
 // CheckAndMark checks whether nonce has been seen within its TTL window. If
 // not, it records the nonce and returns nil. If the nonce is still live,

@@ -23,7 +23,7 @@ var tlsSchemes = map[string]bool{
 }
 
 // nonTLSSchemes is the set of URL schemes that are plaintext but may be
-// accepted for loopback hosts (dev/CI testcontainer exception).
+// accepted for loopback IP literals (dev/CI testcontainer exception).
 var nonTLSSchemes = map[string]bool{
 	"http":  true,
 	"redis": true,
@@ -32,14 +32,11 @@ var nonTLSSchemes = map[string]bool{
 	"vault": true,
 }
 
-// isLoopbackHost reports whether host (port already stripped) is a loopback
-// address. It uses net.ParseIP so 127.0.0.2, ::ffff:127.0.0.1, and other
-// loopback IP literals are handled correctly in addition to the "localhost"
-// string alias.
-func isLoopbackHost(host string) bool {
-	if host == "localhost" {
-		return true
-	}
+// isLoopbackIPLiteral reports whether host (port already stripped) is a
+// loopback IP literal. DNS names, including "localhost", are intentionally
+// rejected for non-TLS schemes so the dev/CI exception cannot be widened by
+// resolver behavior or host-file changes.
+func isLoopbackIPLiteral(host string) bool {
 	ip := net.ParseIP(host)
 	return ip != nil && ip.IsLoopback()
 }
@@ -67,20 +64,21 @@ func extractHost(hostport string) string {
 }
 
 // ValidateTLSEndpoint validates that a remote endpoint addr enforces TLS, with
-// a loopback exception for dev/CI testcontainers. Accepts:
+// a loopback-IP-literal exception for dev/CI testcontainers. Accepts:
 //
 //   - URL form (scheme://host[:port][/path]): scheme must be one of
 //     {https, rediss, tls, wss, vault+https}; or unix:// with an empty host
 //     (local socket path only).
-//   - Bare host:port form: host must be a loopback address (127.x.x.x, ::1,
-//     IPv4-mapped IPv6, or "localhost"), OR fail-closed.
+//   - Bare host:port form: host must be a loopback IP literal (127.x.x.x,
+//     ::1, or IPv4-mapped IPv6), OR fail-closed. The string "localhost" is
+//     not accepted for non-TLS endpoints.
 //
 // Returns errcode.ErrAdapterEndpointNotTLS-tagged error otherwise.
 //
 // ref: docs/plans/202604270020-1-2-ci-3-claude-ship-reactive-bachman.md PR-MODE-1
 func ValidateTLSEndpoint(raw string) error {
 	if raw == "" {
-		return errcode.New(errcode.ErrAdapterEndpointNotTLS,
+		return errcode.New(errcode.KindInternal, errcode.ErrAdapterEndpointNotTLS,
 			"adapter endpoint: empty endpoint is not TLS-secured")
 	}
 
@@ -96,7 +94,7 @@ func validateURLForm(raw string) error {
 	if err != nil {
 		// url.Parse rarely errors; use a fixed redacted placeholder to avoid
 		// emitting the raw string (which may carry userinfo credentials).
-		return errcode.Wrap(errcode.ErrAdapterEndpointNotTLS,
+		return errcode.Wrap(errcode.KindInternal, errcode.ErrAdapterEndpointNotTLS,
 			"adapter endpoint: cannot parse URL (redacted: may contain credentials)", err)
 	}
 
@@ -107,7 +105,7 @@ func validateURLForm(raw string) error {
 	// it is rejected. unix:///var/run/redis.sock (host="") is accepted.
 	if scheme == "unix" {
 		if u.Host != "" {
-			return errcode.New(errcode.ErrAdapterEndpointNotTLS,
+			return errcode.New(errcode.KindInternal, errcode.ErrAdapterEndpointNotTLS,
 				fmt.Sprintf("adapter endpoint: unix:// scheme requires an empty host (local socket only); got host %q", u.Host))
 		}
 		return nil
@@ -118,19 +116,19 @@ func validateURLForm(raw string) error {
 		return nil
 	}
 
-	// Non-TLS schemes are accepted only for loopback hosts.
+	// Non-TLS schemes are accepted only for loopback IP literals.
 	if nonTLSSchemes[scheme] {
 		host := extractHost(u.Host)
-		if isLoopbackHost(host) {
+		if isLoopbackIPLiteral(host) {
 			return nil
 		}
-		return errcode.New(errcode.ErrAdapterEndpointNotTLS,
-			fmt.Sprintf("adapter endpoint: %s uses non-TLS scheme %q for remote host %q; use a TLS scheme or a loopback address",
+		return errcode.New(errcode.KindInternal, errcode.ErrAdapterEndpointNotTLS,
+			fmt.Sprintf("adapter endpoint: %s uses non-TLS scheme %q for remote host %q; use a TLS scheme or a loopback IP literal",
 				u.Redacted(), scheme, host))
 	}
 
 	// Unknown scheme — fail closed.
-	return errcode.New(errcode.ErrAdapterEndpointNotTLS,
+	return errcode.New(errcode.KindInternal, errcode.ErrAdapterEndpointNotTLS,
 		fmt.Sprintf("adapter endpoint: %s has unrecognized scheme %q;"+
 			" expected one of: https, rediss, tls, vault+https, wss, unix (empty host only)",
 			u.Redacted(), scheme))
@@ -139,9 +137,9 @@ func validateURLForm(raw string) error {
 // validateBareHostPort handles strings without "://" (bare host:port or host).
 func validateBareHostPort(raw string) error {
 	host := extractHost(raw)
-	if isLoopbackHost(host) {
+	if isLoopbackIPLiteral(host) {
 		return nil
 	}
-	return errcode.New(errcode.ErrAdapterEndpointNotTLS,
-		fmt.Sprintf("adapter endpoint: bare host:port %q is not a loopback address and has no TLS scheme", raw))
+	return errcode.New(errcode.KindInternal, errcode.ErrAdapterEndpointNotTLS,
+		fmt.Sprintf("adapter endpoint: bare host:port %q is not a loopback IP literal and has no TLS scheme", raw))
 }

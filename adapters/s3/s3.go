@@ -62,23 +62,23 @@ func envWithFallback(primary, legacy string) string {
 // uses a TLS scheme for remote hosts (loopback exempt for dev/CI).
 func (c Config) Validate() error {
 	if c.Endpoint == "" {
-		return errcode.New(ErrAdapterS3Config, "s3: endpoint is required")
+		return errcode.New(errcode.KindInternal, ErrAdapterS3Config, "s3: endpoint is required")
 	}
 	// SEC-FAIL-CLOSED: reject non-TLS endpoints before any network operation.
 	if err := secutil.ValidateTLSEndpoint(c.Endpoint); err != nil {
 		return err
 	}
 	if c.Region == "" {
-		return errcode.New(ErrAdapterS3Config, "s3: region is required")
+		return errcode.New(errcode.KindInternal, ErrAdapterS3Config, "s3: region is required")
 	}
 	if c.Bucket == "" {
-		return errcode.New(ErrAdapterS3Config, "s3: bucket is required")
+		return errcode.New(errcode.KindInternal, ErrAdapterS3Config, "s3: bucket is required")
 	}
 	if c.AccessKeyID == "" {
-		return errcode.New(ErrAdapterS3Config, "s3: access key ID is required")
+		return errcode.New(errcode.KindInternal, ErrAdapterS3Config, "s3: access key ID is required")
 	}
 	if c.SecretAccessKey == "" {
-		return errcode.New(ErrAdapterS3Config, "s3: secret access key is required")
+		return errcode.New(errcode.KindInternal, ErrAdapterS3Config, "s3: secret access key is required")
 	}
 	return nil
 }
@@ -134,7 +134,7 @@ func (c *Client) Upload(ctx context.Context, key string, data []byte, contentTyp
 		ContentType: aws.String(contentType),
 	})
 	if err != nil {
-		return errcode.Wrap(ErrAdapterS3Upload,
+		return errcode.Wrap(errcode.KindInternal, ErrAdapterS3Upload,
 			fmt.Sprintf("s3: upload failed for key %s", key), err)
 	}
 	slog.Debug("s3: object uploaded", slog.String("key", key), slog.Int("size", len(data)))
@@ -147,7 +147,7 @@ func (c *Client) Health(ctx context.Context) error {
 		Bucket: aws.String(c.config.Bucket),
 	})
 	if err != nil {
-		return errcode.Wrap(ErrAdapterS3Health,
+		return errcode.Wrap(errcode.KindInternal, ErrAdapterS3Health,
 			fmt.Sprintf("s3: health check failed for bucket %s", c.config.Bucket), err)
 	}
 	return nil

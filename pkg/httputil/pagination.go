@@ -1,7 +1,6 @@
 package httputil
 
 import (
-	"context"
 	"net/http"
 
 	"github.com/ghbvf/gocell/pkg/query"
@@ -14,15 +13,8 @@ import (
 func ParsePageParamsOrWrite(w http.ResponseWriter, r *http.Request) (query.PageParams, bool) {
 	params, err := ParsePageParams(r)
 	if err != nil {
-		WritePageDomainError(r.Context(), w, err)
+		WriteError(r.Context(), w, err)
 		return query.PageParams{}, false
 	}
 	return params, true
-}
-
-// WritePageDomainError writes a pagination/list-domain error. List handlers
-// apply sampling at the request boundary with WithListErrorLogSampling; response
-// shape and status mapping stay identical to WriteDomainError.
-func WritePageDomainError(ctx context.Context, w http.ResponseWriter, err error) {
-	WriteDomainError(ctx, w, err)
 }

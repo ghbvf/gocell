@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 
+	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/httputil"
 )
 
@@ -30,5 +31,6 @@ func BodyLimit(maxBytes int64) func(http.Handler) http.Handler {
 }
 
 func writeBodyTooLarge(ctx context.Context, w http.ResponseWriter) {
-	httputil.WriteError(ctx, w, http.StatusRequestEntityTooLarge, "ERR_BODY_TOO_LARGE", "request body too large")
+	httputil.WriteError(ctx, w,
+		errcode.New(errcode.KindPayloadTooLarge, errcode.ErrBodyTooLarge, "request body too large"))
 }

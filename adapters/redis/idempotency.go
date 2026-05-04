@@ -128,7 +128,7 @@ func (c *IdempotencyClaimer) Claim(
 
 	token, err := claimToken()
 	if err != nil {
-		return 0, nil, errcode.Wrap(ErrAdapterRedisSet,
+		return 0, nil, errcode.Wrap(errcode.KindInternal, ErrAdapterRedisSet,
 			fmt.Sprintf("redis: idempotency claim token generation failed (key=%s)", key), err)
 	}
 
@@ -138,13 +138,13 @@ func (c *IdempotencyClaimer) Claim(
 
 	res, err := c.rdb.Eval(ctx, claimScript, []string{doneKey, leaseKey}, token, leaseSec).Result()
 	if err != nil {
-		return 0, nil, errcode.Wrap(ErrAdapterRedisSet,
+		return 0, nil, errcode.Wrap(errcode.KindInternal, ErrAdapterRedisSet,
 			fmt.Sprintf("redis: idempotency claim failed (key=%s)", key), err)
 	}
 
 	code, ok := res.(int64)
 	if !ok {
-		return 0, nil, errcode.New(ErrAdapterRedisGet,
+		return 0, nil, errcode.New(errcode.KindInternal, ErrAdapterRedisGet,
 			fmt.Sprintf("redis: idempotency claim unexpected result type (key=%s)", key))
 	}
 
@@ -196,13 +196,13 @@ func (r *redisReceipt) Commit(ctx context.Context) error {
 	doneSec := max(int64(r.doneTTL.Seconds()), 1)
 	res, err := r.rdb.Eval(ctx, commitScript, []string{r.leaseKey, r.doneKey}, r.token, doneSec).Result()
 	if err != nil {
-		r.commitErr = errcode.Wrap(ErrAdapterRedisSet,
+		r.commitErr = errcode.Wrap(errcode.KindInternal, ErrAdapterRedisSet,
 			fmt.Sprintf("redis: idempotency commit failed (lease=%s)", r.leaseKey), err)
 		return r.commitErr
 	}
 	code, ok := res.(int64)
 	if !ok || code == 0 {
-		r.commitErr = errcode.New(ErrAdapterRedisSet,
+		r.commitErr = errcode.New(errcode.KindInternal, ErrAdapterRedisSet,
 			fmt.Sprintf("redis: idempotency commit token mismatch (stale lease, key=%s)", r.leaseKey))
 		r.committed = true // stale lease is permanent, don't retry
 		return r.commitErr
@@ -224,13 +224,13 @@ func (r *redisReceipt) Release(ctx context.Context) error {
 	}
 	res, err := r.rdb.Eval(ctx, releaseScript, []string{r.leaseKey}, r.token).Result()
 	if err != nil {
-		r.releaseErr = errcode.Wrap(ErrAdapterRedisDelete,
+		r.releaseErr = errcode.Wrap(errcode.KindInternal, ErrAdapterRedisDelete,
 			fmt.Sprintf("redis: idempotency release failed (lease=%s)", r.leaseKey), err)
 		return r.releaseErr
 	}
 	code, ok := res.(int64)
 	if !ok || code == 0 {
-		r.releaseErr = errcode.New(ErrAdapterRedisDelete,
+		r.releaseErr = errcode.New(errcode.KindInternal, ErrAdapterRedisDelete,
 			fmt.Sprintf("redis: idempotency release token mismatch (stale lease, key=%s)", r.leaseKey))
 		r.released = true // stale lease is permanent, don't retry
 		return r.releaseErr
@@ -249,7 +249,7 @@ func (r *redisReceipt) Extend(ctx context.Context, ttl time.Duration) error {
 	ttlMs := max(ttl.Milliseconds(), 1)
 	res, err := r.rdb.Eval(ctx, extendScript, []string{r.leaseKey}, r.token, ttlMs).Result()
 	if err != nil {
-		return errcode.Wrap(ErrAdapterRedisSet, "redis claimer: extend lease", err)
+		return errcode.Wrap(errcode.KindInternal, ErrAdapterRedisSet, "redis claimer: extend lease", err)
 	}
 	code, ok := res.(int64)
 	if !ok || code == 0 {

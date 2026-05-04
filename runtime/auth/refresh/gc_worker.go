@@ -34,14 +34,14 @@ type GCWorker struct {
 
 func NewGCWorker(cfg GCWorkerConfig) (*GCWorker, error) {
 	if cfg.Store == nil {
-		return nil, errcode.New(errcode.ErrCellInvalidConfig, "refresh gc: store is required")
+		return nil, errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig, "refresh gc: store is required")
 	}
 	clock.MustHaveClock(cfg.Clock, "auth/refresh.NewGCWorker")
 	if cfg.Interval <= 0 {
-		return nil, errcode.New(errcode.ErrCellInvalidConfig, "refresh gc: interval must be positive")
+		return nil, errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig, "refresh gc: interval must be positive")
 	}
 	if cfg.Retention <= 0 {
-		return nil, errcode.New(errcode.ErrCellInvalidConfig, "refresh gc: retention must be positive")
+		return nil, errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig, "refresh gc: retention must be positive")
 	}
 	if cfg.Logger == nil {
 		cfg.Logger = slog.Default()

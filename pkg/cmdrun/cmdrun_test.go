@@ -101,18 +101,18 @@ func TestRun(t *testing.T) {
 	})
 }
 
-func TestRunIn(t *testing.T) {
+func TestRunWith(t *testing.T) {
 	tool, err := NewTool(goName())
 	require.NoError(t, err)
 
 	t.Run("inherits parent env when env nil", func(t *testing.T) {
-		out, err := RunIn(context.Background(), tool, "", nil, "version")
+		out, err := RunWith(context.Background(), tool, RunOptions{}, "version")
 		require.NoError(t, err)
 		assert.Contains(t, string(out), "go version")
 	})
 
 	t.Run("inherits parent dir when dir empty", func(t *testing.T) {
-		out, err := RunIn(context.Background(), tool, "", nil, "version")
+		out, err := RunWith(context.Background(), tool, RunOptions{}, "version")
 		require.NoError(t, err)
 		assert.NotEmpty(t, out)
 	})
@@ -121,9 +121,90 @@ func TestRunIn(t *testing.T) {
 		// Pre-expired deadline forces abort before fork.
 		ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
 		defer cancel()
-		_, err := RunIn(ctx, tool, "", nil, "env")
+		_, err := RunWith(ctx, tool, RunOptions{}, "env")
 		require.Error(t, err)
 	})
+}
+
+func TestRunWith_CleansParentEnvAndAppliesExtraEnv(t *testing.T) {
+	t.Setenv("CMDRUN_KEEP", "parent")
+	t.Setenv("CMDRUN_SECRET_TOKEN", "parent-secret")
+
+	tool := testBinaryTool(t)
+
+	out, err := RunWith(context.Background(), tool, RunOptions{
+		ExtraEnv: []string{
+			"CMDRUN_KEEP=override",
+			"CMDRUN_EXTRA=added",
+			"CMDRUN_SECRET_TOKEN=explicit-secret",
+		},
+	}, "-test.run=^TestCmdrunEnvHelper$", "cmdrun-env-helper")
+	require.NoError(t, err)
+	got := string(out)
+	assert.Contains(t, got, "CMDRUN_KEEP=override")
+	assert.Contains(t, got, "CMDRUN_EXTRA=added")
+	assert.Contains(t, got, "CMDRUN_SECRET_TOKEN=explicit-secret")
+}
+
+func TestRunWith_NilAndEmptyExtraEnvDoNotClearInheritedEnv(t *testing.T) {
+	t.Setenv("CMDRUN_KEEP", "parent")
+
+	tool := testBinaryTool(t)
+
+	for _, tc := range []struct {
+		name     string
+		extraEnv []string
+	}{
+		{name: "nil", extraEnv: nil},
+		{name: "empty", extraEnv: []string{}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			out, err := RunWith(context.Background(), tool, RunOptions{
+				ExtraEnv: tc.extraEnv,
+			}, "-test.run=^TestCmdrunEnvHelper$", "cmdrun-env-helper")
+			require.NoError(t, err)
+			assert.Contains(t, string(out), "CMDRUN_KEEP=parent")
+		})
+	}
+}
+
+func TestRunWith_DefaultEnvStripsDeniedKeys(t *testing.T) {
+	t.Setenv("CMDRUN_SECRET_TOKEN", "parent-secret")
+
+	tool := testBinaryTool(t)
+
+	out, err := RunWith(context.Background(), tool, RunOptions{}, "-test.run=^TestCmdrunEnvHelper$", "cmdrun-env-helper")
+	require.NoError(t, err)
+	assert.Contains(t, string(out), "CMDRUN_SECRET_TOKEN=")
+	assert.NotContains(t, string(out), "parent-secret")
+}
+
+func TestCmdrunEnvHelper(t *testing.T) {
+	if !hasArg("cmdrun-env-helper") {
+		return
+	}
+	_, _ = os.Stdout.WriteString("CMDRUN_KEEP=" + os.Getenv("CMDRUN_KEEP") + "\n")
+	_, _ = os.Stdout.WriteString("CMDRUN_EXTRA=" + os.Getenv("CMDRUN_EXTRA") + "\n")
+	_, _ = os.Stdout.WriteString("CMDRUN_SECRET_TOKEN=" + os.Getenv("CMDRUN_SECRET_TOKEN") + "\n")
+	os.Exit(0)
+}
+
+func testBinaryTool(t *testing.T) ValidatedTool {
+	t.Helper()
+	path, err := filepath.Abs(os.Args[0])
+	require.NoError(t, err)
+	tool, err := NewTool(path)
+	require.NoError(t, err)
+	return tool
+}
+
+func hasArg(want string) bool {
+	for _, arg := range os.Args {
+		if arg == want {
+			return true
+		}
+	}
+	return false
 }
 
 func goName() string {

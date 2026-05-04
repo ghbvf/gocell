@@ -64,7 +64,7 @@ type unavailableRefreshStore struct {
 }
 
 func (s unavailableRefreshStore) Peek(context.Context, string) (*refresh.Token, error) {
-	return nil, errcode.NewInfra(errcode.ErrInternal, "refresh db unavailable")
+	return nil, errcode.New(errcode.KindInternal, errcode.ErrInternal, "refresh db unavailable")
 }
 
 func assertErrorBody(t *testing.T, body []byte, code, message string) {

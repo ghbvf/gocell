@@ -48,7 +48,7 @@ const (
 // would read directly during collection).
 func RegisterPoolMetrics(meter otelmetric.Meter, statters []poolstats.Statter) (unregister func() error, err error) {
 	if meter == nil {
-		return nil, errcode.New(ErrAdapterOTelConfig,
+		return nil, errcode.New(errcode.KindInternal, ErrAdapterOTelConfig,
 			"otel pool collector: Meter is required")
 	}
 	if len(statters) == 0 {
@@ -63,7 +63,7 @@ func RegisterPoolMetrics(meter otelmetric.Meter, statters []poolstats.Statter) (
 		otelmetric.WithUnit("{connection}"),
 	)
 	if err != nil {
-		return nil, errcode.Wrap(ErrAdapterOTelInit,
+		return nil, errcode.Wrap(errcode.KindInternal, ErrAdapterOTelInit,
 			"otel pool collector: create "+metricNameConnCount, err)
 	}
 
@@ -73,7 +73,7 @@ func RegisterPoolMetrics(meter otelmetric.Meter, statters []poolstats.Statter) (
 		otelmetric.WithUnit("{connection}"),
 	)
 	if err != nil {
-		return nil, errcode.Wrap(ErrAdapterOTelInit,
+		return nil, errcode.Wrap(errcode.KindInternal, ErrAdapterOTelInit,
 			"otel pool collector: create "+metricNameConnMax, err)
 	}
 
@@ -88,7 +88,7 @@ func RegisterPoolMetrics(meter otelmetric.Meter, statters []poolstats.Statter) (
 		otelmetric.WithUnit("{timeout}"),
 	)
 	if err != nil {
-		return nil, errcode.Wrap(ErrAdapterOTelInit,
+		return nil, errcode.Wrap(errcode.KindInternal, ErrAdapterOTelInit,
 			"otel pool collector: create "+metricNameConnTimeouts, err)
 	}
 
@@ -116,7 +116,7 @@ func RegisterPoolMetrics(meter otelmetric.Meter, statters []poolstats.Statter) (
 		connTimeouts,
 	)
 	if err != nil {
-		return nil, errcode.Wrap(ErrAdapterOTelInit,
+		return nil, errcode.Wrap(errcode.KindInternal, ErrAdapterOTelInit,
 			"otel pool collector: register callback", err)
 	}
 

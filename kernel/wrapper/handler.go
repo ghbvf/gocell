@@ -5,6 +5,7 @@ import (
 	"net/http"
 
 	"github.com/ghbvf/gocell/kernel/ctxkeys"
+	"github.com/ghbvf/gocell/pkg/httputil"
 )
 
 // HTTPHandler wraps next with contract-id propagation and contract-derived
@@ -47,6 +48,7 @@ func HTTPHandler(spec ContractSpec, next http.Handler) (http.Handler, error) {
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		ctx := ctxkeys.WithContractID(r.Context(), spec.ID)
+		ctx = httputil.WithClientErrorLogSampling(ctx, spec.ID)
 		if carrier, ok := AttrCarrierFrom(ctx); ok {
 			carrier.Attrs = append(carrier.Attrs, baseAttrs...)
 		}

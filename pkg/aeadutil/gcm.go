@@ -4,6 +4,7 @@ import (
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/rand"
+	"errors"
 	"fmt"
 	"io"
 )
@@ -15,7 +16,17 @@ import (
 const (
 	errMsgNewCipher = "aes-gcm: new cipher: %w"
 	errMsgNewGCM    = "aes-gcm: new GCM: %w"
+	errMsgBadKey    = "aes-gcm: invalid AES key length"
 )
+
+func validateKey(key []byte) error {
+	switch len(key) {
+	case 16, 24, 32:
+		return nil
+	default:
+		return errors.New(errMsgBadKey)
+	}
+}
 
 // EncryptGCM encrypts plaintext with key and aad using AES-GCM.
 // Returns (ciphertext, nonce, error). The nonce is NOT prepended to the
@@ -29,6 +40,9 @@ const (
 // ref: google/tink-go aead/subtle/aes_gcm.go — AEAD function signature
 // ref: aws/aws-sdk-go s3crypto — split nonce/ciphertext storage
 func EncryptGCM(key, plaintext, aad []byte) (ciphertext, nonce []byte, err error) {
+	if err := validateKey(key); err != nil {
+		return nil, nil, err
+	}
 	block, err := aes.NewCipher(key)
 	if err != nil {
 		return nil, nil, fmt.Errorf(errMsgNewCipher, err)
@@ -53,6 +67,9 @@ func EncryptGCM(key, plaintext, aad []byte) (ciphertext, nonce []byte, err error
 // ref: google/tink-go aead/subtle/aes_gcm.go
 // ref: kubernetes/kubernetes kmsv2/envelope.go — Transformer.TransformFromStorage
 func DecryptGCM(key, ciphertext, nonce, aad []byte) (plaintext []byte, err error) {
+	if err := validateKey(key); err != nil {
+		return nil, err
+	}
 	block, err := aes.NewCipher(key)
 	if err != nil {
 		return nil, fmt.Errorf(errMsgNewCipher, err)
@@ -99,6 +116,9 @@ func EncryptGCMSelfContained(key, plaintext, aad []byte) (blob []byte, err error
 // ref: google/tink-go aead/subtle/aes_gcm.go
 func DecryptGCMSelfContained(key, blob, aad []byte) (plaintext []byte, err error) {
 	// Use a temporary cipher to determine the nonce size before splitting.
+	if err := validateKey(key); err != nil {
+		return nil, err
+	}
 	block, err := aes.NewCipher(key)
 	if err != nil {
 		return nil, fmt.Errorf(errMsgNewCipher, err)

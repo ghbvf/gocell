@@ -54,18 +54,18 @@ func (h *Handler) handle(w http.ResponseWriter, r *http.Request) {
 	{
 		v := r.PathValue("id")
 		if len(v) < 1 {
-			httputil.WriteDomainError(r.Context(), w, errcode.New(errcode.ErrValidationFailed, "id: value too short"))
+			httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "id: value too short"))
 			return
 		}
 		if len(v) > 256 {
-			httputil.WriteDomainError(r.Context(), w, errcode.New(errcode.ErrValidationFailed, "id: value too long"))
+			httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "id: value too long"))
 			return
 		}
 		req.ID = v
 	}
 	resp, err := h.svc.Get(r.Context(), req)
 	if err != nil {
-		httputil.WriteDomainError(r.Context(), w, err)
+		httputil.WriteError(r.Context(), w, err)
 		return
 	}
 	httputil.WriteJSON(w, 200, resp)

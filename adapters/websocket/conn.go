@@ -48,7 +48,7 @@ func (c *Conn) Read(ctx context.Context) ([]byte, error) {
 
 func (c *Conn) Write(ctx context.Context, data []byte) error {
 	if c.closed.Load() {
-		return errcode.New(ErrAdapterWSClosed, "websocket: connection is closed")
+		return errcode.New(errcode.KindInternal, ErrAdapterWSClosed, "websocket: connection is closed")
 	}
 
 	c.mu.Lock()
@@ -57,14 +57,14 @@ func (c *Conn) Write(ctx context.Context, data []byte) error {
 	// Double-check after acquiring mu (Close may have fired between the
 	// fast-path check and the lock acquisition).
 	if c.closed.Load() {
-		return errcode.New(ErrAdapterWSClosed, "websocket: connection is closed")
+		return errcode.New(errcode.KindInternal, ErrAdapterWSClosed, "websocket: connection is closed")
 	}
 
 	writeCtx, cancel := context.WithTimeout(ctx, defaultWriteTimeout)
 	defer cancel()
 
 	if err := c.conn.Write(writeCtx, websocket.MessageText, data); err != nil {
-		return errcode.Wrap(ErrAdapterWSWrite, "websocket: write failed", err)
+		return errcode.Wrap(errcode.KindInternal, ErrAdapterWSWrite, "websocket: write failed", err)
 	}
 	return nil
 }

@@ -55,7 +55,7 @@ func (g *internalGuard) NonceStore() auth.NonceStore { return g.nonceStore }
 func internalGuardFromEnv(adapterMode string, store auth.NonceStore, clk clock.Clock) (*internalGuard, error) {
 	secret := os.Getenv(auth.EnvServiceSecret)
 	if secret == "" {
-		return nil, errcode.New(errcode.ErrControlplaneServiceSecretMissing,
+		return nil, errcode.New(errcode.KindInternal, errcode.ErrControlplaneServiceSecretMissing,
 			"GOCELL_SERVICE_SECRET must be set in all adapter modes to protect /internal/v1/*")
 	}
 	if err := rejectDemoKey(adapterMode, auth.EnvServiceSecret, []byte(secret)); err != nil {

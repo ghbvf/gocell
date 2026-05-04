@@ -208,7 +208,7 @@ func (f *fakeVaultClient) unwrapDEK(vaultCipher string) ([]byte, error) {
 	// vault:vN:<base64>
 	parts := strings.SplitN(vaultCipher, ":", 3)
 	if len(parts) != 3 || parts[0] != "vault" {
-		return nil, errcode.New(errcode.ErrKeyProviderDecryptFailed,
+		return nil, errcode.New(errcode.KindInternal, errcode.ErrKeyProviderDecryptFailed,
 			"fake vault: malformed vault cipher: "+vaultCipher)
 	}
 	wrapped, err := base64.StdEncoding.DecodeString(parts[2])
@@ -499,15 +499,15 @@ func TestVaultTransitHandle_VaultServerError_ClassifiedTransient(t *testing.T) {
 	}{
 		{
 			name:     "503 Service Unavailable",
-			vaultErr: errcode.New(errcode.ErrKeyProviderTransient, "vault: 503 service unavailable"),
+			vaultErr: errcode.New(errcode.KindUnavailable, errcode.ErrKeyProviderTransient, "vault: 503 service unavailable"),
 		},
 		{
 			name:     "429 Too Many Requests",
-			vaultErr: errcode.New(errcode.ErrKeyProviderTransient, "vault: 429 rate limited"),
+			vaultErr: errcode.New(errcode.KindUnavailable, errcode.ErrKeyProviderTransient, "vault: 429 rate limited"),
 		},
 		{
 			name:     "408 Request Timeout",
-			vaultErr: errcode.New(errcode.ErrKeyProviderTransient, "vault: 408 request timeout"),
+			vaultErr: errcode.New(errcode.KindUnavailable, errcode.ErrKeyProviderTransient, "vault: 408 request timeout"),
 		},
 	}
 	for _, tc := range transientCases {
@@ -523,17 +523,17 @@ func TestVaultTransitHandle_VaultServerError_ClassifiedTransient(t *testing.T) {
 	}{
 		{
 			name:     "400 Bad Request → encrypt failed",
-			vaultErr: errcode.New(errcode.ErrKeyProviderEncryptFailed, "vault: 400 bad request"),
+			vaultErr: errcode.New(errcode.KindInternal, errcode.ErrKeyProviderEncryptFailed, "vault: 400 bad request"),
 			wantCode: errcode.ErrKeyProviderEncryptFailed,
 		},
 		{
 			name:     "403 Forbidden → encrypt failed",
-			vaultErr: errcode.New(errcode.ErrKeyProviderEncryptFailed, "vault: 403 forbidden"),
+			vaultErr: errcode.New(errcode.KindInternal, errcode.ErrKeyProviderEncryptFailed, "vault: 403 forbidden"),
 			wantCode: errcode.ErrKeyProviderEncryptFailed,
 		},
 		{
 			name:     "404 Not Found → encrypt failed",
-			vaultErr: errcode.New(errcode.ErrKeyProviderEncryptFailed, "vault: 404 not found"),
+			vaultErr: errcode.New(errcode.KindInternal, errcode.ErrKeyProviderEncryptFailed, "vault: 404 not found"),
 			wantCode: errcode.ErrKeyProviderEncryptFailed,
 		},
 	}
@@ -819,19 +819,19 @@ func TestIsTransientVaultError_ContextError(t *testing.T) {
 		},
 		{
 			name: "errcode.ErrKeyProviderEncryptFailed → permanent",
-			err: errcode.New(errcode.ErrKeyProviderEncryptFailed,
+			err: errcode.New(errcode.KindInternal, errcode.ErrKeyProviderEncryptFailed,
 				"permanent encrypt error"),
 			wantTrans: false,
 		},
 		{
 			name: "errcode.ErrKeyProviderDecryptFailed → permanent",
-			err: errcode.New(errcode.ErrKeyProviderDecryptFailed,
+			err: errcode.New(errcode.KindInternal, errcode.ErrKeyProviderDecryptFailed,
 				"permanent decrypt error"),
 			wantTrans: false,
 		},
 		{
 			name:      "errcode.ErrKeyProviderTransient → transient",
-			err:       errcode.New(errcode.ErrKeyProviderTransient, "rate limited"),
+			err:       errcode.New(errcode.KindUnavailable, errcode.ErrKeyProviderTransient, "rate limited"),
 			wantTrans: true,
 		},
 	}
@@ -1196,7 +1196,7 @@ func TestTokenRenewalWorker_Start_HandlesDone(t *testing.T) {
 	// fakeAuth returns a cancellable error — blocked on ctx.
 	fakeAuth := &fakeAuthMethod{
 		method: MethodAppRole,
-		errs:   []error{errcode.New(errcode.ErrVaultAuthFailed, "test auth failure")},
+		errs:   []error{errcode.New(errcode.KindUnavailable, errcode.ErrVaultAuthFailed, "test auth failure")},
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 
@@ -1236,7 +1236,7 @@ func TestTokenRenewalWorker_Start_HandlesDoneWithError(t *testing.T) {
 	fw := newFakeTokenWatcher()
 	fakeAuth := &fakeAuthMethod{
 		method: MethodAppRole,
-		errs:   []error{errcode.New(errcode.ErrVaultAuthFailed, "test auth failure")},
+		errs:   []error{errcode.New(errcode.KindUnavailable, errcode.ErrVaultAuthFailed, "test auth failure")},
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 
@@ -1252,7 +1252,7 @@ func TestTokenRenewalWorker_Start_HandlesDoneWithError(t *testing.T) {
 		done <- w.Start(ctx)
 	}()
 
-	injectedErr := errcode.New(errcode.ErrKeyProviderTransient, "vault: token renewal failed")
+	injectedErr := errcode.New(errcode.KindUnavailable, errcode.ErrKeyProviderTransient, "vault: token renewal failed")
 	fw.doneCh <- injectedErr
 
 	time.Sleep(testtime.MediumPoll) //archtest:allow:test-sleep wait for goroutine to enter blocking re-auth; no started observable

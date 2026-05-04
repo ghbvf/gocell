@@ -139,7 +139,7 @@ func (l *Lifecycle) start(ctx context.Context) error {
 	l.mu.Lock()
 	if !l.bound {
 		l.mu.Unlock()
-		return errcode.New(errcode.ErrCellInvalidConfig,
+		return errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
 			"initialadmin: Lifecycle.Bind must be called before Hook.OnStart runs")
 	}
 	deps := l.deps

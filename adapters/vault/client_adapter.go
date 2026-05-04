@@ -48,7 +48,7 @@ func (a *vaultAPIClient) Read(ctx context.Context, path string) (map[string]any,
 		return nil, fmt.Errorf("vault api: read %s: %w", path, err)
 	}
 	if resp == nil {
-		return nil, errcode.New(errcode.ErrKeyProviderKeyNotFound,
+		return nil, errcode.New(errcode.KindInternal, errcode.ErrKeyProviderKeyNotFound,
 			"vault api: read returned nil response for path: "+path)
 	}
 	return resp.Data, nil
@@ -62,7 +62,7 @@ func (a *vaultAPIClient) Read(ctx context.Context, path string) (map[string]any,
 func (a *vaultAPIClient) LookupSelfToken(ctx context.Context) (*vaultapi.Secret, error) {
 	secret, err := a.client.Auth().Token().LookupSelfWithContext(ctx)
 	if err != nil {
-		return nil, errcode.Wrap(errcode.ErrKeyProviderAuthFailed,
+		return nil, errcode.Wrap(errcode.KindInternal, errcode.ErrKeyProviderAuthFailed,
 			"vault api: lookup self token", err)
 	}
 	return secret, nil
@@ -75,7 +75,7 @@ func (a *vaultAPIClient) LookupSelfToken(ctx context.Context) (*vaultapi.Secret,
 func (a *vaultAPIClient) NewLifetimeWatcher(i *vaultapi.LifetimeWatcherInput) (*vaultapi.LifetimeWatcher, error) {
 	w, err := a.client.NewLifetimeWatcher(i)
 	if err != nil {
-		return nil, errcode.Wrap(errcode.ErrKeyProviderAuthFailed,
+		return nil, errcode.Wrap(errcode.KindInternal, errcode.ErrKeyProviderAuthFailed,
 			"vault api: create lifetime watcher", err)
 	}
 	return w, nil

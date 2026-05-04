@@ -109,7 +109,7 @@ func TestMount_AutoEnforceClients_ComposeWithPolicy(t *testing.T) {
 
 	// A Policy that always returns forbidden (simulating an extra layer guard).
 	alwaysForbiddenPolicy := Policy(func(r *http.Request) error {
-		return errcode.New(errcode.ErrAuthForbidden, "extra policy denied")
+		return errcode.New(errcode.KindPermissionDenied, errcode.ErrAuthForbidden, "extra policy denied")
 	})
 
 	mux := http.NewServeMux()

@@ -246,23 +246,25 @@ func TestLogSessionLookupError_LogLevel(t *testing.T) {
 			wantLogLevel: slog.LevelError,
 		},
 		{
-			name:         "errcode ErrSessionNotFound (domain, whitelist) logs at Warn",
-			repoErr:      errcode.NewDomain(errcode.ErrSessionNotFound, "session not found"),
+			name: "errcode ErrSessionNotFound (domain, whitelist) logs at Warn",
+			repoErr: errcode.New(errcode.KindNotFound, errcode.ErrSessionNotFound, "session not found",
+				errcode.WithCategory(errcode.CategoryDomain)),
 			wantLogLevel: slog.LevelWarn,
 		},
 		{
-			name:         "non-whitelisted errcode domain logs at Error",
-			repoErr:      errcode.NewDomain(errcode.ErrOrderNotFound, "order not found"),
+			name: "non-whitelisted errcode domain logs at Error",
+			repoErr: errcode.New(errcode.KindNotFound, errcode.ErrOrderNotFound, "order not found",
+				errcode.WithCategory(errcode.CategoryDomain)),
 			wantLogLevel: slog.LevelError,
 		},
 		{
 			name:         "errcode with CategoryInfra logs at Error",
-			repoErr:      errcode.NewInfra(errcode.ErrInternal, "db down"),
+			repoErr:      errcode.New(errcode.KindInternal, errcode.ErrInternal, "db down"),
 			wantLogLevel: slog.LevelError,
 		},
 		{
 			name:         "errcode with CategoryUnspecified (zero) logs at Error (fail-closed)",
-			repoErr:      errcode.New(errcode.ErrSessionNotFound, "not found"),
+			repoErr:      errcode.New(errcode.KindNotFound, errcode.ErrSessionNotFound, "not found"),
 			wantLogLevel: slog.LevelError,
 		},
 	}

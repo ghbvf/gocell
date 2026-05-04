@@ -14,7 +14,7 @@ import (
 // installed — CancelReason returns "" and setCancelReason silently drops
 // the write. This is the path raw-499 unit tests / non-tracing handlers
 // rely on; a panic here would crash any handler that calls
-// httputil.WriteDomainError outside of the tracing middleware chain.
+// httputil.WriteError outside of the tracing middleware chain.
 func TestCancelReason_NoSlot(t *testing.T) {
 	ctx := context.Background()
 	assert.Equal(t, "", CancelReason(ctx),

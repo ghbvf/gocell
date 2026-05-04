@@ -37,7 +37,7 @@ type Service struct {
 // so the cell Init() can propagate a structured error instead of a runtime panic.
 func NewService(repo ports.AuditRepository, codec *query.CursorCodec, logger *slog.Logger, runMode query.RunMode) (*Service, error) {
 	if codec == nil {
-		return nil, errcode.New(errcode.ErrCellMissingCodec,
+		return nil, errcode.New(errcode.KindInternal, errcode.ErrCellMissingCodec,
 			"auditquery: cursor codec is required")
 	}
 	return &Service{repo: repo, codec: codec, logger: logger, runMode: runMode}, nil

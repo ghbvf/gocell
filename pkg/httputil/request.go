@@ -26,13 +26,13 @@ func ParsePageParams(r *http.Request) (query.PageParams, error) {
 	if s := r.URL.Query().Get("limit"); s != "" {
 		n, err := strconv.Atoi(s)
 		if err != nil {
-			return pr, errcode.New(errcode.ErrValidationFailed, "invalid limit parameter")
+			return pr, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "invalid limit parameter")
 		}
 		if n < 1 {
-			return pr, errcode.New(errcode.ErrValidationFailed, "limit must be at least 1")
+			return pr, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "limit must be at least 1")
 		}
 		if n > query.MaxPageSize {
-			return pr, errcode.New(errcode.ErrPageSizeExceeded,
+			return pr, errcode.New(errcode.KindInvalid, errcode.ErrPageSizeExceeded,
 				fmt.Sprintf("limit %d exceeds maximum %d", n, query.MaxPageSize))
 		}
 		pr.Limit = n
@@ -40,7 +40,7 @@ func ParsePageParams(r *http.Request) (query.PageParams, error) {
 
 	cursor := r.URL.Query().Get("cursor")
 	if len(cursor) > query.MaxCursorTokenBytes {
-		return pr, errcode.New(errcode.ErrCursorInvalid,
+		return pr, errcode.New(errcode.KindInvalid, errcode.ErrCursorInvalid,
 			"cursor token exceeds maximum length")
 	}
 	pr.Cursor = cursor

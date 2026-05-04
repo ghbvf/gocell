@@ -257,7 +257,8 @@ func TestHandleEntryUpserted_WithConfigGetter_FetchError(t *testing.T) {
 // since retrying cannot help when the entry no longer exists.
 func TestHandleEntryUpserted_WithConfigGetter_FetchNotFound(t *testing.T) {
 	stub := &stubConfigGetter{
-		err: errcode.NewDomain(errcode.ErrConfigNotFound, "config entry not found"),
+		err: errcode.New(errcode.KindNotFound, errcode.ErrConfigNotFound, "config entry not found",
+			errcode.WithCategory(errcode.CategoryDomain)),
 	}
 	svc := NewService(slog.Default(), WithConfigGetter(stub))
 
@@ -313,8 +314,9 @@ func TestHandleEntryUpserted_ConfigEventMetricsOutcomes(t *testing.T) {
 			}},
 		},
 		{
-			name:            "getter not found records stale",
-			getter:          &stubConfigGetter{err: errcode.NewDomain(errcode.ErrConfigNotFound, "missing")},
+			name: "getter not found records stale",
+			getter: &stubConfigGetter{err: errcode.New(errcode.KindNotFound, errcode.ErrConfigNotFound, "missing",
+				errcode.WithCategory(errcode.CategoryDomain))},
 			payload:         []byte(`{"key":"jwt.ttl","version":1,"actorId":"adm-1"}`),
 			wantDisposition: outbox.DispositionAck,
 			wantRecords: []configEventRecord{{
@@ -364,10 +366,12 @@ func TestIsPermanentAuthFailure(t *testing.T) {
 	}{
 		{"nil error", nil, false},
 		{"plain error", errors.New("some error"), false},
-		{"errcode ErrAuthUnauthorized", errcode.New(errcode.ErrAuthUnauthorized, "401"), true},
-		{"errcode ErrAuthForbidden", errcode.New(errcode.ErrAuthForbidden, "403"), true},
-		{"errcode other code", errcode.New(errcode.ErrConfigNotFound, "not found"), false},
-		{"wrapped ErrAuthUnauthorized", fmt.Errorf("wrap: %w", errcode.New(errcode.ErrAuthUnauthorized, "401")), true},
+		{"errcode ErrAuthUnauthorized", errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthUnauthorized, "401"), true},
+		{"errcode ErrAuthForbidden", errcode.New(errcode.KindPermissionDenied, errcode.ErrAuthForbidden, "403"), true},
+		{"errcode other code", errcode.New(errcode.KindNotFound, errcode.ErrConfigNotFound, "not found",
+			errcode.WithCategory(errcode.CategoryDomain)), false},
+		{"wrapped ErrAuthUnauthorized", fmt.Errorf("wrap: %w",
+			errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthUnauthorized, "401")), true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -380,7 +384,7 @@ func TestIsPermanentAuthFailure(t *testing.T) {
 // from ConfigGetter causes DispositionReject + PermanentError.
 func TestHandleEntryUpserted_WithConfigGetter_PermanentAuth401(t *testing.T) {
 	stub := &stubConfigGetter{
-		err: errcode.New(errcode.ErrAuthUnauthorized, "service token rejected"),
+		err: errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthUnauthorized, "service token rejected"),
 	}
 	svc := NewService(slog.Default(), WithConfigGetter(stub))
 
@@ -401,7 +405,7 @@ func TestHandleEntryUpserted_WithConfigGetter_PermanentAuth401(t *testing.T) {
 // from ConfigGetter causes DispositionReject + PermanentError.
 func TestHandleEntryUpserted_WithConfigGetter_PermanentAuth403(t *testing.T) {
 	stub := &stubConfigGetter{
-		err: errcode.New(errcode.ErrAuthForbidden, "caller_cell not in allowlist"),
+		err: errcode.New(errcode.KindPermissionDenied, errcode.ErrAuthForbidden, "caller_cell not in allowlist"),
 	}
 	svc := NewService(slog.Default(), WithConfigGetter(stub))
 

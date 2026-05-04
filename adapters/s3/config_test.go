@@ -20,7 +20,7 @@ func TestEnvWithFallback_NoVars(t *testing.T) {
 
 func TestNew_DefaultTimeout(t *testing.T) {
 	cfg := Config{
-		Endpoint: "http://localhost:9000", Region: "us-east-1",
+		Endpoint: "http://127.0.0.1:9000", Region: "us-east-1",
 		Bucket: "b", AccessKeyID: "k", SecretAccessKey: "s",
 		// HTTPTimeout is 0 — should use default.
 	}
@@ -35,7 +35,7 @@ func TestNew_InvalidConfig(t *testing.T) {
 }
 
 func TestConfigFromEnv_UsePathStyle_False(t *testing.T) {
-	t.Setenv("GOCELL_S3_ENDPOINT", "http://localhost:9000")
+	t.Setenv("GOCELL_S3_ENDPOINT", "http://127.0.0.1:9000")
 	t.Setenv("GOCELL_S3_REGION", "us-east-1")
 	t.Setenv("GOCELL_S3_BUCKET", "b")
 	t.Setenv("GOCELL_S3_ACCESS_KEY", "k")
