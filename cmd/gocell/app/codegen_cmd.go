@@ -82,6 +82,8 @@ func runCodegenGenerate[R CodegenResult](spec codegenSpec[R], args []string) err
 		for _, f := range drift {
 			fmt.Fprintf(os.Stderr, "drift: %s\n", f)
 		}
+		fmt.Fprintln(os.Stderr, "FIX: run locally and commit:")
+		fmt.Fprintf(os.Stderr, "    gocell generate %s --all\n", spec.Kind)
 		return fmt.Errorf("codegen drift in %d files; run `gocell generate %s --all` to refresh", len(drift), spec.Kind)
 	}
 	for _, f := range res.GeneratedFiles() {

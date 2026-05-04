@@ -26,6 +26,12 @@ import (
 // (wire.go) remains import-free of kernel/metadata wire conversion helpers.
 type cellSpecWire struct {
 	catalog.CellSpec
+	// WireSummary carries the aggregated wire surface for a Cell derived from
+	// K#05 marker comments (listeners, route mounts, event subscriptions).
+	//
+	// Stability: experimental — field shape may change between minor versions.
+	// Consumers (dashboards / CI) should treat this as a non-stable contract
+	// until promoted via ADR.
 	WireSummary *metadata.CellWireSummary `json:"wireSummary,omitempty" yaml:"wireSummary,omitempty"`
 }
 
@@ -85,9 +91,13 @@ func NewHandler(
 }
 
 // RouteGroup returns the cell.RouteGroup that bootstrap mounts on PrimaryListener.
+// CellID is set to "_devtools" so that metrics cell label for this endpoint
+// falls into the devtools sentinel bucket rather than "_runtime", enabling
+// audit attribution in dashboards and CI.
 func RouteGroup(h *Handler) cell.RouteGroup {
 	return cell.RouteGroup{
 		Listener: cell.PrimaryListener,
+		CellID:   "_devtools",
 		Register: func(mux cell.RouteMux) error {
 			return auth.Mount(mux, auth.Route{
 				Contract: specCatalog,
@@ -148,8 +158,14 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 // buildExportOptions assembles ExportOptions from the handler state and filter.
+//
 // Root is always set to "." for HTTP responses to avoid leaking absolute server
 // paths to clients; CLI callers retain their absolute path via h.root.
+// Root="." is a stable identifier in API responses — API consumers MUST NOT use
+// this field for filesystem operations; it is purely a stable identifier.
+//
+// Note: ?include=packageDeps triggers a build-time-heavy go/packages graph
+// load. Use sparingly; not appropriate for high-frequency polling.
 func buildExportOptions(h *Handler, filter catalog.Filter) catalog.ExportOptions {
 	opts := catalog.ExportOptions{
 		Clock:  h.clock,

@@ -275,30 +275,66 @@ func hasYAMLTopKey(content []byte, key string) bool {
 	return false
 }
 
+// forbiddenWireCall reports whether the Go source file at path contains a
+// call expression of the form reg.RouteGroup(...) or reg.Subscribe(...).
+// It uses AST scanning rather than byte-level search to avoid false positives
+// from comments that contain the string literal "reg.RouteGroup(" or
+// "reg.Subscribe(".
+func forbiddenWireCall(path string) (found string, line int, err error) {
+	fset := token.NewFileSet()
+	f, err := parser.ParseFile(fset, path, nil, parser.SkipObjectResolution)
+	if err != nil {
+		return "", 0, err
+	}
+	ast.Inspect(f, func(n ast.Node) bool {
+		if found != "" {
+			return false
+		}
+		call, ok := n.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		sel, ok := call.Fun.(*ast.SelectorExpr)
+		if !ok {
+			return true
+		}
+		recv, ok := sel.X.(*ast.Ident)
+		if !ok {
+			return true
+		}
+		if recv.Name != "reg" {
+			return true
+		}
+		if sel.Sel.Name == "RouteGroup" || sel.Sel.Name == "Subscribe" {
+			found = "reg." + sel.Sel.Name + "("
+			line = fset.Position(call.Pos()).Line
+		}
+		return true
+	})
+	return found, line, nil
+}
+
 // TestMarkerMissingForWireCall01 verifies MARKER-MISSING-FOR-WIRE-CALL-01.
 // cell.go / cell_init.go / cell_routes.go MUST NOT call `reg.RouteGroup(`
 // or `reg.Subscribe(` — these calls are owned by cell_gen.go's generated
 // Init after K#04 opt-in. New routes/subscribes are declared via marker
 // comments and rendered into cell_gen.go.
+//
+// AST-based scanning is used (not byte-level grep) to avoid false positives
+// from comments containing the string "reg.RouteGroup(" or "reg.Subscribe(".
 func TestMarkerMissingForWireCall01(t *testing.T) {
 	t.Parallel()
 	root := findModuleRoot(t)
-	forbidden := [][]byte{
-		[]byte("reg.RouteGroup("),
-		[]byte("reg.Subscribe("),
-	}
 	for _, path := range findAllCellInitFiles(root) {
-		content, err := os.ReadFile(path) //nolint:gosec // archtest scans repo paths it discovered
+		sym, line, err := forbiddenWireCall(path)
 		if err != nil {
 			continue
 		}
-		for _, sym := range forbidden {
-			if bytes.Contains(content, sym) {
-				rel, _ := filepath.Rel(root, path)
-				t.Errorf("MARKER-MISSING-FOR-WIRE-CALL-01: %s contains %q — wire is owned by cell_gen.go after K#04 opt-in. "+
-					"Add `// +cell:listener` / `// +slice:route` / `// +slice:subscribe` markers and run `gocell generate cell %s`",
-					filepath.ToSlash(rel), string(sym), deriveCellID(path))
-			}
+		if sym != "" {
+			rel, _ := filepath.Rel(root, path)
+			t.Errorf("MARKER-MISSING-FOR-WIRE-CALL-01: %s:%d contains %q — wire is owned by cell_gen.go after K#04 opt-in. "+
+				"Add `// +cell:listener` / `// +slice:route` / `// +slice:subscribe` markers and run `gocell generate cell %s`",
+				filepath.ToSlash(rel), line, sym, deriveCellID(path))
 		}
 	}
 }
@@ -319,11 +355,49 @@ func TestMarkergenDriftVerify01(t *testing.T) {
 	}
 }
 
+// cellGenHasRouteGroup reports whether the given cell_gen.go file contains a
+// reg.RouteGroup(...) call expression (AST-based, not byte-level grep).
+// Returns false when the file cannot be parsed.
+func cellGenHasRouteGroup(genPath string) bool {
+	fset := token.NewFileSet()
+	f, err := parser.ParseFile(fset, genPath, nil, parser.SkipObjectResolution)
+	if err != nil {
+		return false
+	}
+	found := false
+	ast.Inspect(f, func(n ast.Node) bool {
+		if found {
+			return false
+		}
+		call, ok := n.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		sel, ok := call.Fun.(*ast.SelectorExpr)
+		if !ok {
+			return true
+		}
+		recv, ok := sel.X.(*ast.Ident)
+		if !ok {
+			return true
+		}
+		if recv.Name == "reg" && sel.Sel.Name == "RouteGroup" {
+			found = true
+		}
+		return true
+	})
+	return found
+}
+
 // TestMarkerWireSingleSource01 verifies MARKER-WIRE-SINGLE-SOURCE-01.
-// For every K#04-opted-in cell (GoStructName != "" and cell_gen.go exists),
-// cell.go MUST declare at least one `// +cell:listener` marker. The
-// marker is the wire-layer source of truth that drives cell_gen.go's
-// generated reg.RouteGroup blocks.
+// For every K#04-opted-in cell (GoStructName != "" and cell_gen.go exists)
+// where cell_gen.go declares a reg.RouteGroup(...) call, cell.go MUST
+// declare at least one `// +cell:listener` marker. Pure-subscribe cells
+// (cell_gen.go has no reg.RouteGroup call) are exempt from this requirement.
+//
+// The check uses AST scanning for cell_gen.go to avoid false positives from
+// comments, and bytes.Contains for the cell.go marker prefix scan (markers
+// are structured comment annotations, not code).
 func TestMarkerWireSingleSource01(t *testing.T) {
 	t.Parallel()
 	root := findModuleRoot(t)
@@ -340,6 +414,11 @@ func TestMarkerWireSingleSource01(t *testing.T) {
 		if _, err := os.Stat(genPath); err != nil {
 			continue // CODEGEN-CELL-GEN-01 already catches missing cell_gen.go
 		}
+		// Only require listener marker when cell_gen.go actually mounts routes.
+		// Pure-subscribe cells have no reg.RouteGroup call and are exempt.
+		if !cellGenHasRouteGroup(genPath) {
+			continue
+		}
 		cellGoPath := filepath.Join(dir, "cell.go")
 		content, err := os.ReadFile(cellGoPath) //nolint:gosec // archtest scans paths it discovered
 		if err != nil {
@@ -349,7 +428,7 @@ func TestMarkerWireSingleSource01(t *testing.T) {
 		if !bytes.Contains(content, []byte("// +cell:listener:")) {
 			rel, _ := filepath.Rel(root, cellGoPath)
 			t.Errorf(
-				"MARKER-WIRE-SINGLE-SOURCE-01: %s (cell %q) is K#04 opted-in but declares no "+
+				"MARKER-WIRE-SINGLE-SOURCE-01: %s (cell %q) is K#04 opted-in with reg.RouteGroup in cell_gen.go but declares no "+
 					"`// +cell:listener` marker — wire is single-sourced via markers after K#05",
 				filepath.ToSlash(rel), c.ID)
 		}
