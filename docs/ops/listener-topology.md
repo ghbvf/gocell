@@ -206,7 +206,7 @@ func (c *MyCell) RouteGroups() []cell.RouteGroup {
                 spec := wrapper.ContractSpec{
                     ID: "http.my-domain.admin-action.v1", Kind: "http", Transport: "http",
                     Method: "POST", Path: "/internal/v1/my-domain/action",
-                    Clients: []string{"my-cell"}, // mirrors contract.yaml endpoints.clients
+                    Clients: []string{"mycell"}, // mirrors contract.yaml endpoints.clients
                 }
                 return auth.Mount(mux, auth.Route{
                     Contract: spec,

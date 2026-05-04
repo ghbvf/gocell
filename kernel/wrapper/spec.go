@@ -2,15 +2,8 @@ package wrapper
 
 import (
 	"fmt"
-	"regexp"
 	"strings"
 )
-
-// clientCellPattern validates a caller cell id in ContractSpec.Clients:
-// must start with a lowercase letter and contain only lowercase letters,
-// digits, and hyphens. This mirrors the runtime/auth.callerCellPattern
-// but lives in kernel/wrapper to avoid a kernel → runtime dependency.
-var clientCellPattern = regexp.MustCompile(`^[a-z][a-z0-9-]*$`)
 
 // ContractSpec is the minimal subset of a contract definition that wrapper
 // needs to emit observability annotations. Cells construct the literal
@@ -109,12 +102,37 @@ func (s ContractSpec) validateHTTP() error {
 		return fmt.Errorf("ContractSpec[%s]: non-internal path must not declare Clients", s.ID)
 	}
 	for i, c := range s.Clients {
-		if !clientCellPattern.MatchString(strings.ToLower(c)) {
+		if !isCellIDLike(strings.ToLower(c)) {
 			return fmt.Errorf("ContractSpec[%s]: Clients[%d] %q does not match cell ID pattern ^[a-z][a-z0-9-]*$",
 				s.ID, i, c)
 		}
 	}
 	return nil
+}
+
+// isCellIDLike reports whether s matches the cell-ID pattern
+// `^[a-z][a-z0-9-]*$`. Implemented byte-wise so that kernel/wrapper avoids a
+// package-level regexp var (FMT-19 forbids initializer state in kernel/).
+// Mirrors runtime/auth.callerCellPattern semantics but adds no runtime
+// dependency.
+func isCellIDLike(s string) bool {
+	if s == "" {
+		return false
+	}
+	if s[0] < 'a' || s[0] > 'z' {
+		return false
+	}
+	for i := 1; i < len(s); i++ {
+		c := s[i]
+		switch {
+		case c >= 'a' && c <= 'z':
+		case c >= '0' && c <= '9':
+		case c == '-':
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 func (s ContractSpec) validateEvent() error {
