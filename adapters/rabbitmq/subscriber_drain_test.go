@@ -56,12 +56,12 @@ func TestSubscriber_StopIntakeCancelsConsumerButDrainsInflight(t *testing.T) {
 	wgHandlers.Add(numDeliveries)
 	released := make(chan struct{})
 
-	handler := func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+	handler := entryToSubHandler(func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
 		wgHandlers.Done() // signal arrival
 		<-released        // wait for test to release
 		handlerCount.Add(1)
 		return outbox.HandleResult{Disposition: outbox.DispositionAck}
-	}
+	})
 
 	sub := NewSubscriber(conn, SubscriberConfig{
 		QueueName:   "drain-test-queue",
@@ -166,9 +166,10 @@ func TestSubscriber_ConsumerTagTruncation(t *testing.T) {
 
 	subDone := make(chan error, 1)
 	go func() {
-		subDone <- sub.Subscribe(ctx, outbox.Subscription{Topic: longTopic}, func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
-			return outbox.HandleResult{Disposition: outbox.DispositionAck}
-		})
+		subDone <- sub.Subscribe(ctx, outbox.Subscription{Topic: longTopic},
+			entryToSubHandler(func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+				return outbox.HandleResult{Disposition: outbox.DispositionAck}
+			}))
 	}()
 
 	// Wait until Consume() has been called (consumerTag recorded in mockChannel).
@@ -229,9 +230,9 @@ func TestSubscriber_IntakeStoppedThenCloseNoTimeout(t *testing.T) {
 	mockConn.nextCh = ch
 	mockConn.mu.Unlock()
 
-	handler := func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+	handler := entryToSubHandler(func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
 		return outbox.HandleResult{Disposition: outbox.DispositionAck}
-	}
+	})
 
 	sub := NewSubscriber(conn, SubscriberConfig{
 		QueueName:   "close-fast-queue",
@@ -302,10 +303,10 @@ func TestSubscriber_HardCloseForcesTimeout(t *testing.T) {
 	// does not leak into subsequent tests (e.g. goroutine-leak detectors).
 	t.Cleanup(func() { close(neverClose) })
 
-	handler := func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+	handler := entryToSubHandler(func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
 		<-neverClose // block until test cleanup
 		return outbox.HandleResult{Disposition: outbox.DispositionAck}
-	}
+	})
 
 	sub := NewSubscriber(conn, SubscriberConfig{
 		QueueName:   "timeout-queue",
@@ -393,9 +394,10 @@ func TestSubscriber_StopIntake_RespectsCtx(t *testing.T) {
 	defer subCancel()
 	subDone := make(chan error, 1)
 	go func() {
-		subDone <- sub.Subscribe(subCtx, outbox.Subscription{Topic: "ctx.topic"}, func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
-			return outbox.HandleResult{Disposition: outbox.DispositionAck}
-		})
+		subDone <- sub.Subscribe(subCtx, outbox.Subscription{Topic: "ctx.topic"},
+			entryToSubHandler(func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+				return outbox.HandleResult{Disposition: outbox.DispositionAck}
+			}))
 	}()
 
 	// Wait for Subscribe to register its subscriptionRun.
@@ -456,9 +458,9 @@ func TestSubscriber_StopIntake_PerCallTimeout(t *testing.T) {
 	subDone := make(chan error, 1)
 	go func() {
 		subDone <- sub.Subscribe(subCtx, outbox.Subscription{Topic: "per-call.topic"},
-			func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+			entryToSubHandler(func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
 				return outbox.HandleResult{Disposition: outbox.DispositionAck}
-			})
+			}))
 	}()
 
 	require.Eventually(t, func() bool {
@@ -519,9 +521,10 @@ func TestSubscriber_StopIntake_DoesNotHoldLockAcrossBrokerIO(t *testing.T) {
 	defer subCancel()
 	subDone := make(chan error, 1)
 	go func() {
-		subDone <- sub.Subscribe(subCtx, outbox.Subscription{Topic: "lock.topic"}, func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
-			return outbox.HandleResult{Disposition: outbox.DispositionAck}
-		})
+		subDone <- sub.Subscribe(subCtx, outbox.Subscription{Topic: "lock.topic"},
+			entryToSubHandler(func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+				return outbox.HandleResult{Disposition: outbox.DispositionAck}
+			}))
 	}()
 
 	require.Eventually(t, func() bool {

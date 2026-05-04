@@ -6,24 +6,28 @@ import (
 )
 
 // ContractTracingMiddleware wraps contract-bound subscriptions with
-// wrapper.WrapConsumer. SubscriberWithMiddleware.Subscribe restores
+// wrapper.WrapConsumer tracing. SubscriberWithMiddleware.SubscribeEntry restores
 // entry.Observability into ctx as the OUTERMOST step before any user
 // middleware runs, so this middleware's span sees the originating
-// trace/request metadata. ContractTracingMiddleware sits before
-// ConsumerBase and covers idempotency, retries, skips, and final
-// disposition downgrades.
+// trace/request metadata.
 //
-// Router.AddContractHandler is the only registration entry point, and it
-// validates the ContractSpec at registration time — no subscription reaches
-// this middleware without a populated ContractID. wrapper.MustWrapConsumer's
-// spec.Validate() is the second line of defense: if any caller ever bypasses
-// AddContractHandler and still threads an empty-ID subscription through,
-// WrapConsumer panics at construction time. The outbox.SubscriptionMiddleware
-// closure has no error-return path; MustWrapConsumer matches the contract
-// while keeping the spec-validation defense in depth.
+// The contract span covers idempotency, retries, skips, and final disposition
+// downgrades (ConsumerBase is wired inside SubscriberWithMiddleware.SubscribeEntry,
+// after the business middleware chain — so the span wraps everything).
+//
+// wrapper.MustWrapConsumer is called ONCE at per-subscription registration time
+// (not per delivery). spec.Validate() panic therefore fires when the middleware
+// closure is first evaluated for a given subscription, not at first delivery.
+// Router.AddContractHandler validates the ContractSpec before reaching this
+// middleware, providing defense in depth.
 //
 // Error redaction is hardcoded inside wrapper.WrapConsumer (pkg/redaction);
 // this middleware does not pipe a redactor — there is no caller-side opt-out.
+//
+// ref: ThreeDotsLabs/watermill message/router.go — middleware wraps handler
+// at registration time, not per message.
+// ref: go-kratos/kratos middleware/tracing — span created in middleware
+// constructor; per-request span started inside the returned handler.
 func ContractTracingMiddleware(tr wrapper.Tracer) outbox.SubscriptionMiddleware {
 	return func(sub outbox.Subscription, next outbox.EntryHandler) outbox.EntryHandler {
 		spec := wrapper.ContractSpec{
@@ -32,6 +36,9 @@ func ContractTracingMiddleware(tr wrapper.Tracer) outbox.SubscriptionMiddleware 
 			Transport: sub.ContractTransport,
 			Topic:     sub.Topic,
 		}
+		// spec.Validate() panic fires here at middleware construction (registration
+		// time), not at first delivery. Router.AddContractHandler's spec.Validate()
+		// is the primary guard; MustWrapConsumer is the second line of defense.
 		return wrapper.MustWrapConsumer(tr, spec, next)
 	}
 }

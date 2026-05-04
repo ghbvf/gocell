@@ -16,6 +16,12 @@ import (
 	"github.com/ghbvf/gocell/kernel/outbox"
 )
 
+// errSubscribeUnexpectedFmt is the format string used by helpers that report
+// unexpected Subscribe errors to t.Errorf. Extracted as a constant because it
+// appears in three distinct test helpers (startCollecting, subscribe,
+// subscribeWithHandler) — deduplication follows the three-occurrences rule.
+const errSubscribeUnexpectedFmt = "unexpected Subscribe error: %v"
+
 // waitForSubscription waits until the subscriber is ready to receive messages
 // for the given topic. It calls Setup to declare topology, then waits for the
 // Ready channel to close. For persistent brokers, Setup pre-declares queues so
@@ -125,7 +131,8 @@ func CollectN(
 	subCtx, cancel := context.WithCancel(ctx)
 	t.Cleanup(cancel)
 
-	handler := func(_ context.Context, entry outbox.Entry) outbox.HandleResult {
+	//nolint:unparam // Settlement always nil: adapter tests bypass ConsumerBase by design
+	handler := func(_ context.Context, entry outbox.Entry) (outbox.HandleResult, outbox.Settlement) {
 		mu.Lock()
 		collected = append(collected, entry)
 		count := len(collected)
@@ -134,7 +141,7 @@ func CollectN(
 		if count >= n {
 			closeOnce.Do(func() { close(done) })
 		}
-		return outbox.HandleResult{Disposition: outbox.DispositionAck}
+		return outbox.HandleResult{Disposition: outbox.DispositionAck}, nil
 	}
 
 	// Subscribe blocks -- run in goroutine.
@@ -207,18 +214,19 @@ func startCollecting(t *testing.T, ctx context.Context, sub outbox.Subscriber, t
 	go func() {
 		defer close(c.subDone)
 		close(ready) // signal: goroutine is running, Subscribe call is imminent
-		err := sub.Subscribe(subCtx, outbox.Subscription{Topic: topic}, func(_ context.Context, entry outbox.Entry) outbox.HandleResult {
-			c.mu.Lock()
-			c.collected = append(c.collected, entry)
-			count := len(c.collected)
-			c.mu.Unlock()
-			if count >= c.n {
-				c.closeOnce.Do(func() { close(c.done) })
-			}
-			return outbox.HandleResult{Disposition: outbox.DispositionAck}
-		})
+		err := sub.Subscribe(subCtx, outbox.Subscription{Topic: topic},
+			func(_ context.Context, entry outbox.Entry) (outbox.HandleResult, outbox.Settlement) {
+				c.mu.Lock()
+				c.collected = append(c.collected, entry)
+				count := len(c.collected)
+				c.mu.Unlock()
+				if count >= c.n {
+					c.closeOnce.Do(func() { close(c.done) })
+				}
+				return outbox.HandleResult{Disposition: outbox.DispositionAck}, nil
+			})
 		if err != nil && !errors.Is(err, context.Canceled) {
-			c.t.Errorf("unexpected Subscribe error: %v", err)
+			c.t.Errorf(errSubscribeUnexpectedFmt, err)
 		}
 	}()
 	<-ready
@@ -304,17 +312,15 @@ func newHarness(t *testing.T, constructor PubSubConstructor) *pubSubHarness {
 	}
 }
 
-// subscribe launches a Subscribe goroutine with the given handler.
-// Waits for the goroutine to start and Subscribe to be called.
-// Every handler invocation emits a non-blocking send on deliveryEvents so that
-// negative-assertion helpers can detect redeliveries via select+timeout.
-// Subscribe errors (other than context.Canceled) are surfaced via t.Errorf.
-func (h *pubSubHarness) subscribe(handler outbox.EntryHandler) {
+// subscribeWithHandler launches a Subscribe goroutine with the given SubscriberHandler.
+// Used for receipt-lifecycle tests that need to control the Settlement return value.
+// Every handler invocation emits a non-blocking send on deliveryEvents.
+func (h *pubSubHarness) subscribeWithHandler(handler outbox.SubscriberHandler) {
 	h.T.Helper()
 	ctx, cancel := context.WithCancel(h.T.Context())
 	h.cancel = cancel
 	h.T.Cleanup(cancel)
-	wrapped := func(hctx context.Context, entry outbox.Entry) outbox.HandleResult {
+	wrapped := func(hctx context.Context, entry outbox.Entry) (outbox.HandleResult, outbox.Settlement) {
 		select {
 		case h.deliveryEvents <- struct{}{}:
 		default:
@@ -327,7 +333,41 @@ func (h *pubSubHarness) subscribe(handler outbox.EntryHandler) {
 		close(ready)
 		err := h.Sub.Subscribe(ctx, outbox.Subscription{Topic: h.Topic}, wrapped)
 		if err != nil && !errors.Is(err, context.Canceled) {
-			h.T.Errorf("unexpected Subscribe error: %v", err)
+			h.T.Errorf(errSubscribeUnexpectedFmt, err)
+		}
+	}()
+	<-ready
+	waitForSubscription(h.T, ctx, h.Sub, h.Topic, "")
+}
+
+// subscribe launches a Subscribe goroutine with the given handler.
+// Waits for the goroutine to start and Subscribe to be called.
+// Every handler invocation emits a non-blocking send on deliveryEvents so that
+// negative-assertion helpers can detect redeliveries via select+timeout.
+// Subscribe errors (other than context.Canceled) are surfaced via t.Errorf.
+//
+// handler is EntryHandler (business signature); it is wrapped inline as a
+// SubscriberHandler (nil Settlement) before passing to Subscriber.Subscribe.
+func (h *pubSubHarness) subscribe(handler outbox.EntryHandler) {
+	h.T.Helper()
+	ctx, cancel := context.WithCancel(h.T.Context())
+	h.cancel = cancel
+	h.T.Cleanup(cancel)
+	//nolint:unparam // Settlement always nil: adapter tests bypass ConsumerBase by design
+	wrapped := func(hctx context.Context, entry outbox.Entry) (outbox.HandleResult, outbox.Settlement) {
+		select {
+		case h.deliveryEvents <- struct{}{}:
+		default:
+		}
+		return handler(hctx, entry), nil
+	}
+	ready := make(chan struct{})
+	go func() {
+		defer close(h.subDone)
+		close(ready)
+		err := h.Sub.Subscribe(ctx, outbox.Subscription{Topic: h.Topic}, wrapped)
+		if err != nil && !errors.Is(err, context.Canceled) {
+			h.T.Errorf(errSubscribeUnexpectedFmt, err)
 		}
 	}()
 	<-ready

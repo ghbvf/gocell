@@ -74,12 +74,12 @@ func TestPublish_EnvelopePayload_UnwrappedBeforeDelivery(t *testing.T) {
 	done := make(chan error, 1)
 	go func() {
 		done <- bus.Subscribe(ctx, outbox.Subscription{Topic: "test.envelope.topic"},
-			func(_ context.Context, e outbox.Entry) outbox.HandleResult {
+			entryToSubHandler(func(_ context.Context, e outbox.Entry) outbox.HandleResult {
 				mu.Lock()
 				got = e
 				mu.Unlock()
 				return outbox.HandleResult{Disposition: outbox.DispositionAck}
-			})
+			}))
 	}()
 
 	<-bus.Ready(outbox.Subscription{Topic: "test.envelope.topic"})
@@ -139,10 +139,10 @@ func TestPublish_InvalidEnvelope_Rejected(t *testing.T) {
 	done := make(chan error, 1)
 	go func() {
 		done <- bus.Subscribe(ctx, outbox.Subscription{Topic: "test.invalid.topic"},
-			func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+			entryToSubHandler(func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
 				handlerCalled.Store(true)
 				return outbox.HandleResult{Disposition: outbox.DispositionAck}
-			})
+			}))
 	}()
 
 	<-bus.Ready(outbox.Subscription{Topic: "test.invalid.topic"})
@@ -181,12 +181,13 @@ func TestPublishSubscribe(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() {
-		done <- bus.Subscribe(ctx, outbox.Subscription{Topic: "test.topic"}, func(_ context.Context, e outbox.Entry) outbox.HandleResult {
-			mu.Lock()
-			received = append(received, e)
-			mu.Unlock()
-			return outbox.HandleResult{Disposition: outbox.DispositionAck}
-		})
+		done <- bus.Subscribe(ctx, outbox.Subscription{Topic: "test.topic"},
+			entryToSubHandler(func(_ context.Context, e outbox.Entry) outbox.HandleResult {
+				mu.Lock()
+				received = append(received, e)
+				mu.Unlock()
+				return outbox.HandleResult{Disposition: outbox.DispositionAck}
+			}))
 	}()
 
 	// Wait for subscriber to register.
@@ -235,10 +236,11 @@ func TestSubscribe_RetryAndDeadLetter(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() {
-		done <- bus.Subscribe(ctx, outbox.Subscription{Topic: "retry.topic"}, func(_ context.Context, e outbox.Entry) outbox.HandleResult {
-			attempts.Add(1)
-			return outbox.HandleResult{Disposition: outbox.DispositionRequeue, Err: testErr}
-		})
+		done <- bus.Subscribe(ctx, outbox.Subscription{Topic: "retry.topic"},
+			entryToSubHandler(func(_ context.Context, e outbox.Entry) outbox.HandleResult {
+				attempts.Add(1)
+				return outbox.HandleResult{Disposition: outbox.DispositionRequeue, Err: testErr}
+			}))
 	}()
 
 	<-bus.Ready(outbox.Subscription{Topic: "retry.topic"})
@@ -278,10 +280,11 @@ func TestSubscribe_RejectGoesDirectlyToDeadLetter(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() {
-		done <- bus.Subscribe(ctx, outbox.Subscription{Topic: "reject.topic"}, func(_ context.Context, e outbox.Entry) outbox.HandleResult {
-			attempts.Add(1)
-			return outbox.HandleResult{Disposition: outbox.DispositionReject, Err: testErr}
-		})
+		done <- bus.Subscribe(ctx, outbox.Subscription{Topic: "reject.topic"},
+			entryToSubHandler(func(_ context.Context, e outbox.Entry) outbox.HandleResult {
+				attempts.Add(1)
+				return outbox.HandleResult{Disposition: outbox.DispositionReject, Err: testErr}
+			}))
 	}()
 
 	<-bus.Ready(outbox.Subscription{Topic: "reject.topic"})
@@ -318,13 +321,14 @@ func TestSubscribe_PermanentErrorInRequeue_WalksRetryBudget(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() {
-		done <- bus.Subscribe(ctx, outbox.Subscription{Topic: "perm.requeue"}, func(_ context.Context, e outbox.Entry) outbox.HandleResult {
-			attempts.Add(1)
-			return outbox.HandleResult{
-				Disposition: outbox.DispositionRequeue,
-				Err:         outbox.NewPermanentError(errors.New("unmarshal failed")),
-			}
-		})
+		done <- bus.Subscribe(ctx, outbox.Subscription{Topic: "perm.requeue"},
+			entryToSubHandler(func(_ context.Context, e outbox.Entry) outbox.HandleResult {
+				attempts.Add(1)
+				return outbox.HandleResult{
+					Disposition: outbox.DispositionRequeue,
+					Err:         outbox.NewPermanentError(errors.New("unmarshal failed")),
+				}
+			}))
 	}()
 
 	<-bus.Ready(outbox.Subscription{Topic: "perm.requeue"})
@@ -371,9 +375,10 @@ func TestClose_ConcurrentPublishDoesNotPanic(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() {
-		done <- bus.Subscribe(ctx, outbox.Subscription{Topic: "race.topic"}, func(_ context.Context, e outbox.Entry) outbox.HandleResult {
-			return outbox.HandleResult{Disposition: outbox.DispositionAck}
-		})
+		done <- bus.Subscribe(ctx, outbox.Subscription{Topic: "race.topic"},
+			entryToSubHandler(func(_ context.Context, e outbox.Entry) outbox.HandleResult {
+				return outbox.HandleResult{Disposition: outbox.DispositionAck}
+			}))
 	}()
 
 	<-bus.Ready(outbox.Subscription{Topic: "race.topic"})
@@ -427,9 +432,9 @@ func TestSubscribe_ClosedBus(t *testing.T) {
 
 	err := bus.Subscribe(context.Background(),
 		outbox.Subscription{Topic: "topic"},
-		func(_ context.Context, e outbox.Entry) outbox.HandleResult {
+		entryToSubHandler(func(_ context.Context, e outbox.Entry) outbox.HandleResult {
 			return outbox.HandleResult{Disposition: outbox.DispositionAck}
-		})
+		}))
 	assert.Error(t, err)
 }
 
@@ -445,17 +450,19 @@ func TestMultipleSubscribers(t *testing.T) {
 	wg.Add(2)
 	go func() {
 		defer wg.Done()
-		_ = bus.Subscribe(ctx, outbox.Subscription{Topic: "multi.topic"}, func(_ context.Context, e outbox.Entry) outbox.HandleResult {
-			count1.Add(1)
-			return outbox.HandleResult{Disposition: outbox.DispositionAck}
-		})
+		_ = bus.Subscribe(ctx, outbox.Subscription{Topic: "multi.topic"},
+			entryToSubHandler(func(_ context.Context, e outbox.Entry) outbox.HandleResult {
+				count1.Add(1)
+				return outbox.HandleResult{Disposition: outbox.DispositionAck}
+			}))
 	}()
 	go func() {
 		defer wg.Done()
-		_ = bus.Subscribe(ctx, outbox.Subscription{Topic: "multi.topic"}, func(_ context.Context, e outbox.Entry) outbox.HandleResult {
-			count2.Add(1)
-			return outbox.HandleResult{Disposition: outbox.DispositionAck}
-		})
+		_ = bus.Subscribe(ctx, outbox.Subscription{Topic: "multi.topic"},
+			entryToSubHandler(func(_ context.Context, e outbox.Entry) outbox.HandleResult {
+				count2.Add(1)
+				return outbox.HandleResult{Disposition: outbox.DispositionAck}
+			}))
 	}()
 
 	// Wait for both broadcast subscribers to be registered before publishing.
@@ -486,13 +493,14 @@ func TestSubscribe_SuccessAfterRetry(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() {
-		done <- bus.Subscribe(ctx, outbox.Subscription{Topic: "partial.fail"}, func(_ context.Context, e outbox.Entry) outbox.HandleResult {
-			n := attempts.Add(1)
-			if n < 3 {
-				return outbox.HandleResult{Disposition: outbox.DispositionRequeue, Err: errors.New("not yet")}
-			}
-			return outbox.HandleResult{Disposition: outbox.DispositionAck}
-		})
+		done <- bus.Subscribe(ctx, outbox.Subscription{Topic: "partial.fail"},
+			entryToSubHandler(func(_ context.Context, e outbox.Entry) outbox.HandleResult {
+				n := attempts.Add(1)
+				if n < 3 {
+					return outbox.HandleResult{Disposition: outbox.DispositionRequeue, Err: errors.New("not yet")}
+				}
+				return outbox.HandleResult{Disposition: outbox.DispositionAck}
+			}))
 	}()
 
 	<-bus.Ready(outbox.Subscription{Topic: "partial.fail"})
@@ -526,9 +534,10 @@ func TestSubscribe_CleansUpOnExit(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() {
-		done <- bus.Subscribe(ctx, outbox.Subscription{Topic: "cleanup.topic"}, func(_ context.Context, e outbox.Entry) outbox.HandleResult {
-			return outbox.HandleResult{Disposition: outbox.DispositionAck}
-		})
+		done <- bus.Subscribe(ctx, outbox.Subscription{Topic: "cleanup.topic"},
+			entryToSubHandler(func(_ context.Context, e outbox.Entry) outbox.HandleResult {
+				return outbox.HandleResult{Disposition: outbox.DispositionAck}
+			}))
 	}()
 
 	// Wait for subscriber to register.
@@ -587,12 +596,10 @@ func TestSubscribe_ReceiptCommittedOnAck(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() {
-		done <- bus.Subscribe(ctx, outbox.Subscription{Topic: "receipt.ack"}, func(_ context.Context, e outbox.Entry) outbox.HandleResult {
-			return outbox.HandleResult{
-				Disposition: outbox.DispositionAck,
-				Receipt:     receipt,
-			}
-		})
+		done <- bus.Subscribe(ctx, outbox.Subscription{Topic: "receipt.ack"},
+			func(_ context.Context, e outbox.Entry) (outbox.HandleResult, outbox.Settlement) {
+				return outbox.HandleResult{Disposition: outbox.DispositionAck}, receipt
+			})
 	}()
 
 	<-bus.Ready(outbox.Subscription{Topic: "receipt.ack"})
@@ -619,13 +626,10 @@ func TestSubscribe_ReceiptReleasedOnReject(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() {
-		done <- bus.Subscribe(ctx, outbox.Subscription{Topic: "receipt.reject"}, func(_ context.Context, e outbox.Entry) outbox.HandleResult {
-			return outbox.HandleResult{
-				Disposition: outbox.DispositionReject,
-				Err:         errors.New("permanent"),
-				Receipt:     receipt,
-			}
-		})
+		done <- bus.Subscribe(ctx, outbox.Subscription{Topic: "receipt.reject"},
+			func(_ context.Context, e outbox.Entry) (outbox.HandleResult, outbox.Settlement) {
+				return outbox.HandleResult{Disposition: outbox.DispositionReject, Err: errors.New("permanent")}, receipt
+			})
 	}()
 
 	<-bus.Ready(outbox.Subscription{Topic: "receipt.reject"})
@@ -653,17 +657,14 @@ func TestSubscribe_ReceiptReleasedOnRequeue(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() {
-		done <- bus.Subscribe(ctx, outbox.Subscription{Topic: "receipt.requeue"}, func(_ context.Context, e outbox.Entry) outbox.HandleResult {
-			r := &mockReceipt{}
-			receiptsMu.Lock()
-			receipts = append(receipts, r)
-			receiptsMu.Unlock()
-			return outbox.HandleResult{
-				Disposition: outbox.DispositionRequeue,
-				Err:         errors.New("transient"),
-				Receipt:     r,
-			}
-		})
+		done <- bus.Subscribe(ctx, outbox.Subscription{Topic: "receipt.requeue"},
+			func(_ context.Context, e outbox.Entry) (outbox.HandleResult, outbox.Settlement) {
+				r := &mockReceipt{}
+				receiptsMu.Lock()
+				receipts = append(receipts, r)
+				receiptsMu.Unlock()
+				return outbox.HandleResult{Disposition: outbox.DispositionRequeue, Err: errors.New("transient")}, r
+			})
 	}()
 
 	<-bus.Ready(outbox.Subscription{Topic: "receipt.requeue"})
@@ -704,17 +705,14 @@ func TestSubscribe_ReceiptReleasedOnRetryExhaustion(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() {
-		done <- bus.Subscribe(ctx, outbox.Subscription{Topic: "receipt.exhaust"}, func(_ context.Context, e outbox.Entry) outbox.HandleResult {
-			r := &mockReceipt{}
-			receiptsMu.Lock()
-			receipts = append(receipts, r)
-			receiptsMu.Unlock()
-			return outbox.HandleResult{
-				Disposition: outbox.DispositionRequeue,
-				Err:         testErr,
-				Receipt:     r,
-			}
-		})
+		done <- bus.Subscribe(ctx, outbox.Subscription{Topic: "receipt.exhaust"},
+			func(_ context.Context, e outbox.Entry) (outbox.HandleResult, outbox.Settlement) {
+				r := &mockReceipt{}
+				receiptsMu.Lock()
+				receipts = append(receipts, r)
+				receiptsMu.Unlock()
+				return outbox.HandleResult{Disposition: outbox.DispositionRequeue, Err: testErr}, r
+			})
 	}()
 
 	<-bus.Ready(outbox.Subscription{Topic: "receipt.exhaust"})
@@ -758,18 +756,16 @@ func TestSubscribe_ZeroValueDisposition_TreatedAsRequeue(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() {
-		done <- bus.Subscribe(ctx, outbox.Subscription{Topic: "zero.disp"}, func(_ context.Context, e outbox.Entry) outbox.HandleResult {
-			attempts.Add(1)
-			r := &mockReceipt{}
-			receiptsMu.Lock()
-			receipts = append(receipts, r)
-			receiptsMu.Unlock()
-			// Zero-value HandleResult — Disposition is 0 (invalid).
-			return outbox.HandleResult{
-				Err:     errors.New("forgot disposition"),
-				Receipt: r,
-			}
-		})
+		done <- bus.Subscribe(ctx, outbox.Subscription{Topic: "zero.disp"},
+			func(_ context.Context, e outbox.Entry) (outbox.HandleResult, outbox.Settlement) {
+				attempts.Add(1)
+				r := &mockReceipt{}
+				receiptsMu.Lock()
+				receipts = append(receipts, r)
+				receiptsMu.Unlock()
+				// Zero-value HandleResult — Disposition is 0 (invalid).
+				return outbox.HandleResult{Err: errors.New("forgot disposition")}, r
+			})
 	}()
 
 	<-bus.Ready(outbox.Subscription{Topic: "zero.disp"})
@@ -821,13 +817,14 @@ func TestSubscribe_UnknownDisposition_TreatedAsRequeue(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() {
-		done <- bus.Subscribe(ctx, outbox.Subscription{Topic: "unknown.disp"}, func(_ context.Context, e outbox.Entry) outbox.HandleResult {
-			attempts.Add(1)
-			return outbox.HandleResult{
-				Disposition: outbox.Disposition(99), // not a valid Disposition
-				Err:         testErr,
-			}
-		})
+		done <- bus.Subscribe(ctx, outbox.Subscription{Topic: "unknown.disp"},
+			entryToSubHandler(func(_ context.Context, e outbox.Entry) outbox.HandleResult {
+				attempts.Add(1)
+				return outbox.HandleResult{
+					Disposition: outbox.Disposition(99), // not a valid Disposition
+					Err:         testErr,
+				}
+			}))
 	}()
 
 	<-bus.Ready(outbox.Subscription{Topic: "unknown.disp"})
@@ -864,18 +861,19 @@ func TestSubscribe_InvalidDisposition_RespectsCtxCancel(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() {
-		done <- bus.Subscribe(ctx, outbox.Subscription{Topic: "cancel.disp"}, func(_ context.Context, e outbox.Entry) outbox.HandleResult {
-			n := attempts.Add(1)
-			if n == 1 {
-				// After first attempt with invalid disposition, cancel ctx
-				// during backoff to verify early exit.
-				go func() {
-					time.Sleep(testtime.D10ms) //archtest:allow:test-sleep goroutine timing fixture: controls cancel order
-					cancel()
-				}()
-			}
-			return outbox.HandleResult{} // zero-value
-		})
+		done <- bus.Subscribe(ctx, outbox.Subscription{Topic: "cancel.disp"},
+			entryToSubHandler(func(_ context.Context, e outbox.Entry) outbox.HandleResult {
+				n := attempts.Add(1)
+				if n == 1 {
+					// After first attempt with invalid disposition, cancel ctx
+					// during backoff to verify early exit.
+					go func() {
+						time.Sleep(testtime.D10ms) //archtest:allow:test-sleep goroutine timing fixture: controls cancel order
+						cancel()
+					}()
+				}
+				return outbox.HandleResult{} // zero-value
+			}))
 	}()
 
 	<-bus.Ready(outbox.Subscription{Topic: "cancel.disp"})
@@ -920,18 +918,18 @@ func TestConsumerGroup_SameGroup_CompetingConsumption(t *testing.T) {
 	go func() {
 		defer wg.Done()
 		_ = bus.Subscribe(ctx, outbox.Subscription{Topic: "session.created", ConsumerGroup: "auditcore"},
-			func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+			entryToSubHandler(func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
 				sub1Count.Add(1)
 				return outbox.HandleResult{Disposition: outbox.DispositionAck}
-			})
+			}))
 	}()
 	go func() {
 		defer wg.Done()
 		_ = bus.Subscribe(ctx, outbox.Subscription{Topic: "session.created", ConsumerGroup: "auditcore"},
-			func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+			entryToSubHandler(func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
 				sub2Count.Add(1)
 				return outbox.HandleResult{Disposition: outbox.DispositionAck}
-			})
+			}))
 	}()
 
 	require.Eventually(t, func() bool {
@@ -984,18 +982,18 @@ func TestConsumerGroup_DifferentGroups_Fanout(t *testing.T) {
 	go func() {
 		defer wg.Done()
 		_ = bus.Subscribe(ctx, outbox.Subscription{Topic: "session.created", ConsumerGroup: "auditcore"},
-			func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+			entryToSubHandler(func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
 				auditCount.Add(1)
 				return outbox.HandleResult{Disposition: outbox.DispositionAck}
-			})
+			}))
 	}()
 	go func() {
 		defer wg.Done()
 		_ = bus.Subscribe(ctx, outbox.Subscription{Topic: "session.created", ConsumerGroup: "configcore"},
-			func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+			entryToSubHandler(func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
 				configCount.Add(1)
 				return outbox.HandleResult{Disposition: outbox.DispositionAck}
-			})
+			}))
 	}()
 
 	require.Eventually(t, func() bool {
@@ -1044,17 +1042,19 @@ func TestConsumerGroup_EmptyGroup_BackwardCompatible(t *testing.T) {
 	wg.Add(2)
 	go func() {
 		defer wg.Done()
-		_ = bus.Subscribe(ctx, outbox.Subscription{Topic: "events.v1"}, func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
-			sub1Count.Add(1)
-			return outbox.HandleResult{Disposition: outbox.DispositionAck}
-		})
+		_ = bus.Subscribe(ctx, outbox.Subscription{Topic: "events.v1"},
+			entryToSubHandler(func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+				sub1Count.Add(1)
+				return outbox.HandleResult{Disposition: outbox.DispositionAck}
+			}))
 	}()
 	go func() {
 		defer wg.Done()
-		_ = bus.Subscribe(ctx, outbox.Subscription{Topic: "events.v1"}, func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
-			sub2Count.Add(1)
-			return outbox.HandleResult{Disposition: outbox.DispositionAck}
-		})
+		_ = bus.Subscribe(ctx, outbox.Subscription{Topic: "events.v1"},
+			entryToSubHandler(func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+				sub2Count.Add(1)
+				return outbox.HandleResult{Disposition: outbox.DispositionAck}
+			}))
 	}()
 
 	require.Eventually(t, func() bool {
@@ -1104,10 +1104,10 @@ func TestConsumerGroup_ConcurrentPublish_NoRace(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			_ = bus.Subscribe(ctx, outbox.Subscription{Topic: "race.topic", ConsumerGroup: "race-group"},
-				func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+				entryToSubHandler(func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
 					totalReceived.Add(1)
 					return outbox.HandleResult{Disposition: outbox.DispositionAck}
-				})
+				}))
 		}()
 	}
 
@@ -1189,10 +1189,10 @@ func TestInMemoryEventBus_StopIntake_NoOp(t *testing.T) {
 			<-ready
 			close(subscribed)
 		}()
-		_ = b.Subscribe(subCtx, sub, func(_ context.Context, e outbox.Entry) outbox.HandleResult {
+		_ = b.Subscribe(subCtx, sub, entryToSubHandler(func(_ context.Context, e outbox.Entry) outbox.HandleResult {
 			received <- e
 			return outbox.HandleResult{Disposition: outbox.DispositionAck}
-		})
+		}))
 	}()
 
 	// Wait for subscription to register.
@@ -1228,13 +1228,10 @@ func TestReleaseReceipt_FailedRelease_LogsError(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() {
-		done <- bus.Subscribe(ctx, outbox.Subscription{Topic: "release.fail"}, func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
-			return outbox.HandleResult{
-				Disposition: outbox.DispositionReject,
-				Err:         errors.New("permanent handler error"),
-				Receipt:     receipt,
-			}
-		})
+		done <- bus.Subscribe(ctx, outbox.Subscription{Topic: "release.fail"},
+			func(_ context.Context, _ outbox.Entry) (outbox.HandleResult, outbox.Settlement) {
+				return outbox.HandleResult{Disposition: outbox.DispositionReject, Err: errors.New("permanent handler error")}, receipt
+			})
 	}()
 
 	<-bus.Ready(outbox.Subscription{Topic: "release.fail"})
@@ -1314,14 +1311,14 @@ func TestSubscribe_CommitFailure_NotifiesCommitFailed(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() {
-		done <- bus.Subscribe(ctx, outbox.Subscription{Topic: "spy.commitfail"}, func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
-			attempts.Add(1)
-			return outbox.HandleResult{
-				Disposition:         outbox.DispositionAck,
-				Receipt:             &failingCommitReceipt{commitErr: commitErr},
-				SettlementObservers: []outbox.SettlementObserver{spy},
-			}
-		})
+		done <- bus.Subscribe(ctx, outbox.Subscription{Topic: "spy.commitfail"},
+			func(_ context.Context, _ outbox.Entry) (outbox.HandleResult, outbox.Settlement) {
+				attempts.Add(1)
+				return outbox.HandleResult{
+					Disposition:         outbox.DispositionAck,
+					SettlementObservers: []outbox.SettlementObserver{spy},
+				}, &failingCommitReceipt{commitErr: commitErr}
+			})
 	}()
 
 	<-bus.Ready(outbox.Subscription{Topic: "spy.commitfail"})
@@ -1354,13 +1351,14 @@ func TestSubscribe_RetryExhausted_NotifiesRetryExhausted(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() {
-		done <- bus.Subscribe(ctx, outbox.Subscription{Topic: "spy.retryexhausted"}, func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
-			return outbox.HandleResult{
-				Disposition:         outbox.DispositionRequeue,
-				Err:                 transientErr,
-				SettlementObservers: []outbox.SettlementObserver{spy},
-			}
-		})
+		done <- bus.Subscribe(ctx, outbox.Subscription{Topic: "spy.retryexhausted"},
+			entryToSubHandler(func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+				return outbox.HandleResult{
+					Disposition:         outbox.DispositionRequeue,
+					Err:                 transientErr,
+					SettlementObservers: []outbox.SettlementObserver{spy},
+				}
+			}))
 	}()
 
 	<-bus.Ready(outbox.Subscription{Topic: "spy.retryexhausted"})

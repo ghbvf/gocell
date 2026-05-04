@@ -164,14 +164,14 @@ func TestOutboxE2E_PGMode_WriteToSubscribe(t *testing.T) {
 	subCtx, subCancel := context.WithCancel(ctx)
 	defer subCancel()
 	go func() {
-		_ = eb.Subscribe(subCtx, outbox.Subscription{Topic: topic, ConsumerGroup: "e2e-test"}, func(_ context.Context, e outbox.Entry) outbox.HandleResult {
+		_ = eb.Subscribe(subCtx, outbox.Subscription{Topic: topic, ConsumerGroup: "e2e-test"}, entryToSubHandler(func(_ context.Context, e outbox.Entry) outbox.HandleResult {
 			var p configEntryUpsertedBusinessPayload
 			err := json.Unmarshal(e.Payload, &p)
 			recvMu.Lock()
 			recvs = append(recvs, received{entry: e, payload: p, parsed: err == nil})
 			recvMu.Unlock()
 			return outbox.HandleResult{Disposition: outbox.DispositionAck}
-		})
+		}))
 	}()
 	// Give subscriber goroutine a moment to register before first publish.
 	time.Sleep(testtime.MediumPoll) //archtest:allow:test-sleep wait for goroutine to enter blocking Subscribe; no started observable

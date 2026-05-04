@@ -110,11 +110,11 @@ func (c *MyCell) Init(ctx context.Context, reg cell.Registry) error {
 
 ## 幂等模型
 
-- ConsumerBase 内部使用 `kernel/idempotency.Claimer`（两阶段 Claim/Commit/Release）实现幂等；handler 作者**不需要** import `kernel/idempotency`，也不需要在 `HandleResult` 中读写 `Receipt` 字段（029 #03 ADR Decision 3 删除了 outbox.Receipt type alias；HandleResult.Receipt
-字段保留为 Subscriber 内部 hand-off，handler 不读不写，由 HANDLER-RECEIPT-WRITE-01
-archtest 守卫；详见 K#12 PR-V1-OUTBOX-RECEIPT-EXTRACT follow-up）
-- Claim 获取处理租约 → handler 执行 → broker Ack 后 Commit / 失败时 Release（由 Subscriber delivery loop 完成）
-- 默认 fail-closed：Claimer 故障时 Requeue，不丢弃幂等保护
+- ConsumerBase 内部使用 `kernel/idempotency.Claimer`（两阶段 Claim/Commit/Release）实现幂等；handler 作者**不需要** import `kernel/idempotency`，也不需要读写任何 Settlement 字段。
+- 业务 handler 实现 `EntryHandler = func(ctx, Entry) HandleResult`；`Settlement` 由 `SubscriberWithMiddleware` 在 `SubscribeEntry` 内部独立注入（业务 middleware chain → `ConsumerBase.Wrap` 转换为 `SubscriberHandler` → `Inner.Subscribe`），handler 不接触 Settlement（`OUTBOX-HANDLERESULT-NO-RECEIPT-FIELD-01` archtest 守卫，Wave 1 upgrade from 旧 HANDLER-RECEIPT-WRITE-01）。
+- 业务 middleware 签名为 `func(sub Subscription, next EntryHandler) EntryHandler`（不接触 Settlement）——对齐 Watermill router/Kratos transport/sarama session 业界共识：settle 由 transport 层独立决策（K#12 二轮深度修复，删 `AsMiddleware`）。
+- Claim 获取处理租约 → handler 执行 → broker Ack 后 Settlement.Commit / 失败时 Settlement.Release（由 Subscriber delivery loop 完成）。
+- 默认 fail-closed：Claimer 故障时 Requeue，不丢弃幂等保护。
 
 ## Stream 命名
 

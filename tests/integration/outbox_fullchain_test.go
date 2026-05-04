@@ -310,7 +310,7 @@ func TestIntegration_OutboxFullChain(t *testing.T) {
 
 	subErrCh := make(chan error, 1)
 	go func() {
-		subErrCh <- wrappedSub.Subscribe(subCtx, outbox.Subscription{Topic: topic, ConsumerGroup: "fullchain-test"}, func(handlerCtx context.Context, e outbox.Entry) outbox.HandleResult {
+		subErrCh <- wrappedSub.SubscribeEntry(subCtx, outbox.Subscription{Topic: topic, ConsumerGroup: "fullchain-test"}, func(handlerCtx context.Context, e outbox.Entry) outbox.HandleResult {
 			requestID, _ := ctxkeys.RequestIDFrom(handlerCtx)
 			correlationID, _ := ctxkeys.CorrelationIDFrom(handlerCtx)
 			traceID, _ := ctxkeys.TraceIDFrom(handlerCtx)
@@ -557,7 +557,7 @@ func TestIntegration_OutboxFullChain_NoTrace(t *testing.T) {
 
 	subErrCh := make(chan error, 1)
 	go func() {
-		subErrCh <- wrappedSub.Subscribe(subCtx, outbox.Subscription{Topic: topic, ConsumerGroup: "fullchain-notrace-test"}, func(handlerCtx context.Context, e outbox.Entry) outbox.HandleResult {
+		subErrCh <- wrappedSub.SubscribeEntry(subCtx, outbox.Subscription{Topic: topic, ConsumerGroup: "fullchain-notrace-test"}, func(handlerCtx context.Context, e outbox.Entry) outbox.HandleResult {
 			requestID, _ := ctxkeys.RequestIDFrom(handlerCtx)
 			correlationID, _ := ctxkeys.CorrelationIDFrom(handlerCtx)
 			traceID, traceOK := ctxkeys.TraceIDFrom(handlerCtx)

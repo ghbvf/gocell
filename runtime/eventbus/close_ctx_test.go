@@ -50,9 +50,9 @@ func TestInMemoryEventBus_Close_CancelledCtxStillClosesChannels(t *testing.T) {
 		_ = bus.Subscribe(context.Background(), outbox.Subscription{
 			Topic:         topic,
 			ConsumerGroup: "cg-test",
-		}, func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+		}, entryToSubHandler(func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
 			return outbox.HandleResult{Disposition: outbox.DispositionAck}
-		})
+		}))
 	}()
 
 	// Wait for subscription to be registered.

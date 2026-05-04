@@ -75,8 +75,19 @@ type handlerConfig struct {
 // Run/Close for the execution phase.
 //
 // Run MUST be called at most once. Calling Run a second time returns an error.
+//
+// The subscriber field is *outbox.SubscriberWithMiddleware so that runSubscribe
+// can call SubscribeEntry (EntryHandler → business middleware chain →
+// ConsumerBase.Wrap → Inner.Subscribe). The EntryToSubscriberHandler lift
+// function has been deleted; SubscribeEntry is the only public entry point,
+// which is the structural guarantee that ConsumerBase is the explicit
+// conversion boundary between business (EntryHandler) and broker
+// (SubscriberHandler) layers.
+//
+// ref: ThreeDotsLabs/watermill message/router.go — router holds *Router.handlers,
+// not a generic middleware list: the router owns the composition.
 type Router struct {
-	subscriber   outbox.Subscriber
+	subscriber   *outbox.SubscriberWithMiddleware
 	handlers     []handlerConfig
 	validators   []cell.SubscriptionValidator
 	mu           sync.Mutex
@@ -96,11 +107,14 @@ type Router struct {
 // Compile-time interface checks.
 var _ cell.SubscriptionValidatorAdder = (*Router)(nil)
 
-// New creates a Router that will use the given Subscriber for all subscriptions.
+// New creates a Router that will use the given SubscriberWithMiddleware for all
+// subscriptions. The subscriber field is typed as *outbox.SubscriberWithMiddleware
+// so that runSubscribe can call SubscribeEntry and get the full business pipeline:
+// business middleware chain → ConsumerBase.Wrap → Inner.Subscribe.
 //
 // clk is required; pass clock.Real() at the composition root or
 // clockmock.New(...) in tests. Panics on nil or typed-nil clock.
-func New(sub outbox.Subscriber, clk clock.Clock, opts ...Option) *Router {
+func New(sub *outbox.SubscriberWithMiddleware, clk clock.Clock, opts ...Option) *Router {
 	clock.MustHaveClock(clk, "eventrouter.New")
 	r := &Router{
 		subscriber:   sub,
@@ -321,8 +335,14 @@ func (r *Router) runSetup(ctx context.Context, cancel context.CancelFunc, handle
 	return nil
 }
 
-// runSubscribe starts one goroutine per handler that calls Subscriber.Subscribe
+// runSubscribe starts one goroutine per handler that calls SubscribeEntry
 // (Phase 2). Errors are sent to setupErr.
+//
+// r.subscriber.SubscribeEntry orchestrates the full business pipeline:
+// business middleware chain → ConsumerBase.Wrap (EntryHandler→SubscriberHandler
+// conversion) → observability restore → Inner.Subscribe. The business handler
+// stored in handlerConfig.handler is an EntryHandler and flows directly into
+// this pipeline without any lifting ceremony.
 func (r *Router) runSubscribe(ctx context.Context, handlers []handlerConfig, setupErr chan<- error) {
 	for _, h := range handlers {
 		sub := h.subscription()
@@ -335,7 +355,7 @@ func (r *Router) runSubscribe(ctx context.Context, handlers []handlerConfig, set
 			slog.Info("eventrouter: starting subscription",
 				slog.String("topic", sub.Topic),
 				slog.String("consumer_group", sub.ConsumerGroup))
-			err := r.subscriber.Subscribe(ctx, sub, h.handler)
+			err := r.subscriber.SubscribeEntry(ctx, sub, h.handler)
 			if err != nil && ctx.Err() == nil {
 				setupErr <- fmt.Errorf("eventrouter: topic %s: %w", sub.Topic, err)
 			}
@@ -522,17 +542,19 @@ func (r *Router) Close(ctx context.Context) error {
 	start := r.clock.Now()
 
 	// Phase 1: StopIntake — optional graceful degradation.
-	// Subscribers implementing SubscriberIntakeStopper stop accepting new
-	// deliveries but continue processing in-flight ones, enabling a
-	// two-phase drain: broker basic.cancel → handler drain → runCtx cancel.
+	// SubscriberWithMiddleware.StopIntake forwards to Inner if Inner implements
+	// SubscriberIntakeStopper, or returns nil gracefully otherwise.
+	// Subscribers implementing StopIntake stop accepting new deliveries while
+	// in-flight handlers continue, enabling a two-phase drain:
+	// broker basic.cancel → handler drain → runCtx cancel.
 	//
 	// F1b: StopIntake runs in a dedicated goroutine and the wait is gated by
 	// ctx. A misbehaving adapter that ignores its ctx cannot stall the whole
 	// Close chain — once ctx expires we log Warn and advance to Phase 2/3
 	// regardless, honoring the caller's shutdown budget.
-	if st, ok := r.subscriber.(outbox.SubscriberIntakeStopper); ok {
+	{
 		stopDone := make(chan error, 1)
-		go func() { stopDone <- st.StopIntake(ctx) }()
+		go func() { stopDone <- r.subscriber.StopIntake(ctx) }()
 		select {
 		case err := <-stopDone:
 			if err != nil {

@@ -429,7 +429,7 @@ func (s *invokeOnceSubscriber) Ready(_ outbox.Subscription) <-chan struct{} {
 	close(ch)
 	return ch
 }
-func (s *invokeOnceSubscriber) Subscribe(ctx context.Context, _ outbox.Subscription, handler outbox.EntryHandler) error {
+func (s *invokeOnceSubscriber) Subscribe(ctx context.Context, _ outbox.Subscription, handler outbox.SubscriberHandler) error {
 	s.once.Do(func() {
 		handler(ctx, s.entry)
 	})

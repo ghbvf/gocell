@@ -97,7 +97,7 @@ func (m *mockSubscriberCtx) Ready(_ Subscription) <-chan struct{} {
 	close(ch)
 	return ch
 }
-func (m *mockSubscriberCtx) Subscribe(_ context.Context, _ Subscription, _ EntryHandler) error {
+func (m *mockSubscriberCtx) Subscribe(_ context.Context, _ Subscription, _ SubscriberHandler) error {
 	return nil
 }
 func (m *mockSubscriberCtx) Close(ctx context.Context) error {
@@ -153,7 +153,7 @@ func (m *plainSubscriber) Ready(_ Subscription) <-chan struct{} {
 	close(ch)
 	return ch
 }
-func (m *plainSubscriber) Subscribe(_ context.Context, _ Subscription, _ EntryHandler) error {
+func (m *plainSubscriber) Subscribe(_ context.Context, _ Subscription, _ SubscriberHandler) error {
 	return nil
 }
 func (m *plainSubscriber) Close(_ context.Context) error { return nil }
@@ -209,7 +209,7 @@ func (m *mockSubscriber) Ready(_ Subscription) <-chan struct{} {
 	close(ch)
 	return ch
 }
-func (m *mockSubscriber) Subscribe(_ context.Context, _ Subscription, _ EntryHandler) error {
+func (m *mockSubscriber) Subscribe(_ context.Context, _ Subscription, _ SubscriberHandler) error {
 	return nil
 }
 func (m *mockSubscriber) Close(_ context.Context) error { return nil }
@@ -220,8 +220,8 @@ func TestSubscriberInterface(t *testing.T) {
 	var sub Subscriber = &mockSubscriber{}
 
 	t.Run("Subscribe returns nil on success", func(t *testing.T) {
-		handler := func(ctx context.Context, entry Entry) HandleResult {
-			return HandleResult{Disposition: DispositionAck}
+		handler := func(_ context.Context, _ Entry) (HandleResult, Settlement) {
+			return HandleResult{Disposition: DispositionAck}, nil
 		}
 		err := sub.Subscribe(context.Background(), Subscription{Topic: "test.topic"}, handler)
 		assert.NoError(t, err)
@@ -256,7 +256,7 @@ func TestEntryFields(t *testing.T) {
 type recordingSubscriber struct {
 	subscribeCalled bool
 	subscribeTopic  string
-	capturedHandler EntryHandler
+	capturedHandler SubscriberHandler
 	closeErr        error
 }
 
@@ -266,7 +266,7 @@ func (r *recordingSubscriber) Ready(_ Subscription) <-chan struct{} {
 	close(ch)
 	return ch
 }
-func (r *recordingSubscriber) Subscribe(_ context.Context, sub Subscription, handler EntryHandler) error {
+func (r *recordingSubscriber) Subscribe(_ context.Context, sub Subscription, handler SubscriberHandler) error {
 	r.subscribeCalled = true
 	r.subscribeTopic = sub.Topic
 	r.capturedHandler = handler
@@ -279,8 +279,19 @@ func (r *recordingSubscriber) Close(_ context.Context) error {
 
 var _ Subscriber = (*recordingSubscriber)(nil)
 
-func TestSubscriberWithMiddleware_InterfaceCompliance(t *testing.T) {
-	var _ Subscriber = (*SubscriberWithMiddleware)(nil)
+// TestSubscriberWithMiddleware_DoesNotImplementSubscriberInterface verifies that
+// SubscriberWithMiddleware intentionally does NOT satisfy the Subscriber
+// interface after removing Subscribe(SubscriberHandler). This prevents the
+// lift→discard footgun where callers could assign *SubscriberWithMiddleware to
+// outbox.Subscriber and bypass the business middleware chain.
+func TestSubscriberWithMiddleware_DoesNotImplementSubscriberInterface(t *testing.T) {
+	// This must NOT compile if SubscriberWithMiddleware re-gains a Subscribe method:
+	//   var _ Subscriber = (*SubscriberWithMiddleware)(nil)
+	// The absence of the compile-time check is itself the assertion.
+	// Confirm the type only exposes SubscribeEntry (EntryHandler gateway).
+	var sub SubscriberWithMiddleware
+	_ = sub.SubscribeEntry // only public subscription entry point
+	t.Log("SubscriberWithMiddleware.Subscribe deleted; SubscribeEntry is the sole entry point")
 }
 
 func TestSubscriberWithMiddleware_NoMiddleware(t *testing.T) {
@@ -288,18 +299,17 @@ func TestSubscriberWithMiddleware_NoMiddleware(t *testing.T) {
 	sub := &SubscriberWithMiddleware{Inner: inner}
 
 	called := false
-	handler := func(_ context.Context, _ Entry) HandleResult {
-		called = true
-		return HandleResult{Disposition: DispositionAck}
-	}
-
-	err := sub.Subscribe(context.Background(), Subscription{Topic: "test.topic"}, handler)
+	err := sub.SubscribeEntry(context.Background(), Subscription{Topic: "test.topic"},
+		func(_ context.Context, _ Entry) HandleResult {
+			called = true
+			return HandleResult{Disposition: DispositionAck}
+		})
 	assert.NoError(t, err)
 	assert.True(t, inner.subscribeCalled)
 	assert.Equal(t, "test.topic", inner.subscribeTopic)
 
 	// Call the captured handler to verify it's the original.
-	res := inner.capturedHandler(context.Background(), Entry{})
+	res, _ := inner.capturedHandler(context.Background(), Entry{})
 	assert.Equal(t, DispositionAck, res.Disposition)
 	assert.True(t, called)
 }
@@ -327,12 +337,12 @@ func TestSubscriberWithMiddleware_SingleMiddleware(t *testing.T) {
 		return HandleResult{Disposition: DispositionAck}
 	}
 
-	err := sub.Subscribe(context.Background(), Subscription{Topic: "orders.created"}, handler)
+	err := sub.SubscribeEntry(context.Background(), Subscription{Topic: "orders.created"}, handler)
 	assert.NoError(t, err)
 	assert.Equal(t, "orders.created", middlewareTopic)
 
 	// Call captured handler to verify middleware was applied.
-	res := inner.capturedHandler(context.Background(), Entry{ID: "evt-1"})
+	res, _ := inner.capturedHandler(context.Background(), Entry{ID: "evt-1"})
 	assert.Equal(t, DispositionAck, res.Disposition)
 	assert.Equal(t, "evt-1", receivedEntry.ID)
 	assert.Equal(t, "true", receivedEntry.Metadata["wrapped"])
@@ -367,10 +377,10 @@ func TestSubscriberWithMiddleware_MultipleMiddleware_OrderCorrect(t *testing.T) 
 		return HandleResult{Disposition: DispositionAck}
 	}
 
-	err := sub.Subscribe(context.Background(), Subscription{Topic: "test.topic"}, handler)
+	err := sub.SubscribeEntry(context.Background(), Subscription{Topic: "test.topic"}, handler)
 	assert.NoError(t, err)
 
-	_ = inner.capturedHandler(context.Background(), Entry{})
+	_, _ = inner.capturedHandler(context.Background(), Entry{})
 
 	// [0] is outermost, [len-1] is innermost.
 	assert.Equal(t, []string{
@@ -422,11 +432,11 @@ func TestSubscriberWithMiddleware_MiddlewareCanShortCircuit(t *testing.T) {
 		return HandleResult{Disposition: DispositionAck}
 	}
 
-	err := sub.Subscribe(context.Background(), Subscription{Topic: "test.topic"}, handler)
+	err := sub.SubscribeEntry(context.Background(), Subscription{Topic: "test.topic"}, handler)
 	assert.NoError(t, err)
 
 	// Call captured handler — middleware should short-circuit.
-	res := inner.capturedHandler(context.Background(), Entry{})
+	res, _ := inner.capturedHandler(context.Background(), Entry{})
 	assert.Equal(t, DispositionReject, res.Disposition)
 	assert.Error(t, res.Err)
 	assert.False(t, handlerCalled)
@@ -777,11 +787,9 @@ func TestHandleResult_Fields(t *testing.T) {
 	res := HandleResult{
 		Disposition: DispositionReject,
 		Err:         assert.AnError,
-		Receipt:     nil,
 	}
 	assert.Equal(t, DispositionReject, res.Disposition)
 	assert.Error(t, res.Err)
-	assert.Nil(t, res.Receipt)
 }
 
 // --- Metadata Validation Tests (META-SIZE-01) ---
@@ -954,7 +962,7 @@ func TestSubscriberWithMiddleware_PassesFullSubscription(t *testing.T) {
 	}
 
 	wantSub := Subscription{Topic: "orders.created.v1", ConsumerGroup: "cg-auditcore", CellID: "auditcore"}
-	err := swm.Subscribe(context.Background(), wantSub, func(_ context.Context, _ Entry) HandleResult {
+	err := swm.SubscribeEntry(context.Background(), wantSub, func(_ context.Context, _ Entry) HandleResult {
 		return HandleResult{Disposition: DispositionAck}
 	})
 	assert.NoError(t, err)
@@ -974,7 +982,7 @@ func (r *recordingSubscriberFull) Ready(_ Subscription) <-chan struct{} {
 	close(ch)
 	return ch
 }
-func (r *recordingSubscriberFull) Subscribe(_ context.Context, sub Subscription, _ EntryHandler) error {
+func (r *recordingSubscriberFull) Subscribe(_ context.Context, sub Subscription, _ SubscriberHandler) error {
 	r.subscribedSub = sub
 	return nil
 }

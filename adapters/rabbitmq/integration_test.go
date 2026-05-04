@@ -186,10 +186,10 @@ func TestIntegration_PublishConsume(t *testing.T) {
 	// Run subscriber in a goroutine since Subscribe blocks.
 	subErrCh := make(chan error, 1)
 	go func() {
-		subErrCh <- sub.Subscribe(subCtx, outbox.Subscription{Topic: topic, ConsumerGroup: "integration-test"}, func(_ context.Context, e outbox.Entry) outbox.HandleResult {
+		subErrCh <- sub.Subscribe(subCtx, outbox.Subscription{Topic: topic, ConsumerGroup: "integration-test"}, entryToSubHandler(func(_ context.Context, e outbox.Entry) outbox.HandleResult {
 			received <- e
 			return outbox.HandleResult{Disposition: outbox.DispositionAck}
-		})
+		}))
 	}()
 
 	// Wait until Subscribe has declared, bound, and started consuming from the queue.
@@ -493,14 +493,14 @@ func TestIntegration_DLXBrokerNative(t *testing.T) {
 	handlerCalled := make(chan struct{}, 1)
 	subErrCh := make(chan error, 1)
 	go func() {
-		subErrCh <- sub.Subscribe(subCtx, outbox.Subscription{Topic: topic, ConsumerGroup: "integration-test-dlx"}, func(_ context.Context, e outbox.Entry) outbox.HandleResult {
+		subErrCh <- sub.Subscribe(subCtx, outbox.Subscription{Topic: topic, ConsumerGroup: "integration-test-dlx"}, entryToSubHandler(func(_ context.Context, e outbox.Entry) outbox.HandleResult {
 			handlerCalled <- struct{}{}
 			// Permanent rejection — broker should route to DLX.
 			return outbox.HandleResult{
 				Disposition: outbox.DispositionReject,
 				Err:         assert.AnError,
 			}
-		})
+		}))
 	}()
 
 	waitForSubscriberReady(t, conn, mainQueue, subErrCh, testtime.EventuallyLong)

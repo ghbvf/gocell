@@ -122,6 +122,11 @@ func RecordConfigEventProcess(ctx context.Context, collector ConfigEventCollecto
 // without instrumentation. Config subscriptions missing owner metadata are
 // intercepted at registration time by ConfigEventOwnerValidator and never
 // reach this middleware.
+//
+// Settlement is not visible here — it flows inside the Subscriber layer
+// (ConsumerBase.Wrap → Inner.Subscribe). Settlement observation is achieved
+// by appending a SettlementObserver to HandleResult.SettlementObservers;
+// the Subscriber layer calls NotifySettlement after final broker settlement.
 func ConfigEventMiddleware(collector ConfigEventCollector) outbox.SubscriptionMiddleware {
 	if collector == nil {
 		collector = NoopConfigEventCollector{}

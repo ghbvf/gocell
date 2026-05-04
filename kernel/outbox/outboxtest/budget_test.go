@@ -38,7 +38,7 @@ func (hangingCloseSubscriber) Ready(_ outbox.Subscription) <-chan struct{} {
 	return ch
 }
 
-func (hangingCloseSubscriber) Subscribe(_ context.Context, _ outbox.Subscription, _ outbox.EntryHandler) error {
+func (hangingCloseSubscriber) Subscribe(_ context.Context, _ outbox.Subscription, _ outbox.SubscriberHandler) error {
 	return nil
 }
 

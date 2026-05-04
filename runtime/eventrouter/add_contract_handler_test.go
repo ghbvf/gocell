@@ -93,7 +93,7 @@ func okHandler() outbox.EntryHandler {
 
 func TestAddContractHandler_NilHandler_ReturnsError(t *testing.T) {
 	t.Parallel()
-	r := New(&blockingSubscriber{}, clock.Real())
+	r := New(wrap(&blockingSubscriber{}), clock.Real())
 	err := r.AddContractHandler(configEntryUpsertedSpec(), nil, "accesscore", "accesscore")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "nil handler")
@@ -101,7 +101,7 @@ func TestAddContractHandler_NilHandler_ReturnsError(t *testing.T) {
 
 func TestAddContractHandler_EmptyConsumerGroup_ReturnsError(t *testing.T) {
 	t.Parallel()
-	r := New(&blockingSubscriber{}, clock.Real())
+	r := New(wrap(&blockingSubscriber{}), clock.Real())
 	err := r.AddContractHandler(configEntryUpsertedSpec(), okHandler(), "", "test")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "empty consumerGroup")
@@ -114,7 +114,7 @@ func TestAddContractHandler_NonEventSpec_ReturnsError(t *testing.T) {
 		ID: "http.x.v1", Kind: "http", Transport: "http",
 		Method: "POST", Path: "/x",
 	}
-	r := New(&blockingSubscriber{}, clock.Real())
+	r := New(wrap(&blockingSubscriber{}), clock.Real())
 	err := r.AddContractHandler(httpSpec, okHandler(), "mycell", "mycell")
 	require.Error(t, err)
 }
@@ -123,7 +123,7 @@ func TestAddContractHandler_NonEventSpec_ReturnsError(t *testing.T) {
 
 func TestAddContractHandler_RegistersBusinessHandler(t *testing.T) {
 	t.Parallel()
-	r := New(&blockingSubscriber{}, clock.Real())
+	r := New(wrap(&blockingSubscriber{}), clock.Real())
 	require.NoError(t, r.AddContractHandler(configEntryUpsertedSpec(), okHandler(), "accesscore", "accesscore"))
 	assert.Equal(t, 1, r.HandlerCount())
 
@@ -135,7 +135,7 @@ func TestAddContractHandler_RegistersBusinessHandler(t *testing.T) {
 func TestContractTracingMiddleware_WrapsWithContractSpan(t *testing.T) {
 	t.Parallel()
 	tr := &contractSpyTracer{}
-	r := New(&blockingSubscriber{}, clock.Real())
+	r := New(wrap(&blockingSubscriber{}), clock.Real())
 
 	var inner bool
 	require.NoError(t, r.AddContractHandler(configEntryUpsertedSpec(), func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
@@ -176,12 +176,13 @@ func TestContractTracingMiddleware_CoversDownstreamShortCircuit(t *testing.T) {
 	}
 
 	var businessCalled bool
-	business := func(context.Context, outbox.Entry) outbox.HandleResult {
+	business := func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
 		businessCalled = true
 		return outbox.HandleResult{Disposition: outbox.DispositionAck}
 	}
+	// shortCircuit is a SubscriptionMiddleware that skips business handler.
 	shortCircuit := func(_ outbox.Subscription, _ outbox.EntryHandler) outbox.EntryHandler {
-		return func(context.Context, outbox.Entry) outbox.HandleResult {
+		return func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
 			return outbox.HandleResult{Disposition: outbox.DispositionRequeue}
 		}
 	}
@@ -199,25 +200,31 @@ func TestContractTracingMiddleware_CoversDownstreamShortCircuit(t *testing.T) {
 }
 
 // TestContractTracingMiddleware_PanicsOnEmptyContractID documents the F4
-// fail-fast: once the ContractID==""  early-return was removed, a
-// subscription that somehow reaches the middleware without a ContractID
-// must panic via wrapper.WrapConsumer's spec.Validate() rather than
-// silently skip tracing. Router.AddContractHandler prevents this today;
-// this test is the backstop that catches any future regression.
+// fail-fast: a subscription that somehow reaches the middleware without a
+// ContractID must panic via wrapper.MustWrapConsumer's spec.Validate() at
+// middleware construction time (not at first delivery).
+//
+// K#12 first-pass moved MustWrapConsumer to per-delivery, delaying the panic to
+// first delivery (P1 regression). K#12 second-pass restores once-at-construction:
+// MustWrapConsumer is called when the middleware closure is invoked (at
+// registration), so the panic fires before any message is delivered.
+//
+// Router.AddContractHandler is the primary guard; MustWrapConsumer is the
+// second line of defense for any future bypass.
 func TestContractTracingMiddleware_PanicsOnEmptyContractID(t *testing.T) {
 	t.Parallel()
 	sub := outbox.Subscription{
 		Topic:         "event.legacy.v1",
 		ConsumerGroup: "legacy",
-		// ContractID intentionally empty — simulates a legacy registration
-		// path sneaking back in. wrapper.WrapConsumer.spec.Validate() must
-		// panic at construction time so the regression is loud.
+		// ContractID intentionally empty — simulates a bypass of AddContractHandler.
+		// MustWrapConsumer must panic at middleware construction (not first delivery).
 	}
 	defer func() {
 		r := recover()
-		require.NotNil(t, r, "empty ContractID must panic at middleware construction")
+		require.NotNil(t, r, "empty ContractID must panic at middleware construction time")
 	}()
 
+	// Panic fires here — MustWrapConsumer is called at construction, not delivery.
 	_ = ContractTracingMiddleware(wrapper.NoopTracer{})(sub,
 		func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
 			return outbox.HandleResult{Disposition: outbox.DispositionAck}
@@ -226,7 +233,7 @@ func TestContractTracingMiddleware_PanicsOnEmptyContractID(t *testing.T) {
 
 func TestAddContractHandler_MultipleRegistrations_HandlersGrow(t *testing.T) {
 	t.Parallel()
-	r := New(&blockingSubscriber{}, clock.Real())
+	r := New(wrap(&blockingSubscriber{}), clock.Real())
 	for i := range 3 {
 		spec := configEntryUpsertedSpec()
 		spec.Topic = spec.Topic + "." + string(rune('a'+i))
@@ -240,7 +247,7 @@ func TestAddContractHandler_MultipleRegistrations_HandlersGrow(t *testing.T) {
 // is preserved.
 func TestAddContractHandler_HandlerConfigShape(t *testing.T) {
 	t.Parallel()
-	r := New(&blockingSubscriber{}, clock.Real())
+	r := New(wrap(&blockingSubscriber{}), clock.Real())
 	require.NoError(t, r.AddContractHandler(configEntryUpsertedSpec(), okHandler(), "accesscore", "accesscore"))
 	require.Equal(t, 1, len(r.handlers))
 	cfg := r.handlers[0]
@@ -263,7 +270,7 @@ func TestAddContractHandler_HandlerConfigShape(t *testing.T) {
 // ref: ThreeDotsLabs/watermill router.AddHandler handlerName / NATS subscription metadata.
 func TestAddContractHandler_OwnerCellIDDistinctFromConsumerGroup(t *testing.T) {
 	t.Parallel()
-	r := New(&blockingSubscriber{}, clock.Real())
+	r := New(wrap(&blockingSubscriber{}), clock.Real())
 	const consumerGroup = "accesscore-rbac-session-sync"
 	const ownerCellID = "accesscore"
 	require.NoError(t, r.AddContractHandler(configEntryUpsertedSpec(), okHandler(), consumerGroup, ownerCellID))

@@ -18,7 +18,6 @@ import (
 	"time"
 
 	"github.com/ghbvf/gocell/kernel/clock"
-	"github.com/ghbvf/gocell/kernel/idempotency"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
@@ -27,8 +26,8 @@ const (
 	maxRetries     = 3
 	baseRetryDelay = 100 * time.Millisecond
 	maxRetryDelay  = 30 * time.Second
-	// detached-context timeout for commitReceipt and releaseReceipt; must
-	// outlive a graceful-shutdown ctx so receipt Commit/Release always
+	// detached-context timeout for commitSettlement and releaseSettlement; must
+	// outlive a graceful-shutdown ctx so Settlement.Commit/Release always
 	// complete instead of leaking lease state.
 	defaultEventbusReceiptOpTimeout = 5 * time.Second
 )
@@ -240,7 +239,7 @@ func (b *InMemoryEventBus) Ready(sub outbox.Subscription) <-chan struct{} {
 // sub.ConsumerGroup selects the dispatch mode:
 //   - non-empty: messages are load-balanced among subscribers in the same group
 //   - empty: each subscriber receives every message (broadcast / fanout)
-func (b *InMemoryEventBus) Subscribe(ctx context.Context, sub outbox.Subscription, handler outbox.EntryHandler) error {
+func (b *InMemoryEventBus) Subscribe(ctx context.Context, sub outbox.Subscription, handler outbox.SubscriberHandler) error {
 	topic := sub.Topic
 	consumerGroup := sub.ConsumerGroup
 
@@ -413,13 +412,13 @@ func (b *InMemoryEventBus) removeSub(topic, consumerGroup string, target *subscr
 	}
 }
 
-func (b *InMemoryEventBus) handleWithRetry(ctx context.Context, topic string, entry outbox.Entry, handler outbox.EntryHandler) {
+func (b *InMemoryEventBus) handleWithRetry(ctx context.Context, topic string, entry outbox.Entry, handler outbox.SubscriberHandler) {
 	var lastErr error
 	var lastResult outbox.HandleResult
 	for attempt := range maxRetries {
-		res := handler(ctx, entry)
+		res, settlement := handler(ctx, entry)
 		lastResult = res
-		done, err := b.processResult(ctx, topic, entry, res, attempt)
+		done, err := b.processResult(ctx, topic, entry, res, settlement, attempt)
 		if done {
 			return
 		}
@@ -442,16 +441,16 @@ func (b *InMemoryEventBus) handleWithRetry(ctx context.Context, topic string, en
 // no further retry is needed (Ack, Reject, or permanent error in Requeue).
 // Returns the error to propagate as lastErr when done=false.
 func (b *InMemoryEventBus) processResult(
-	ctx context.Context, topic string, entry outbox.Entry, res outbox.HandleResult, attempt int,
+	ctx context.Context, topic string, entry outbox.Entry, res outbox.HandleResult, settlement outbox.Settlement, attempt int,
 ) (done bool, lastErr error) {
 	switch res.Disposition {
 	case outbox.DispositionAck:
-		if res.Receipt != nil {
-			if commitErr := commitReceipt(ctx, res.Receipt, topic, entry.ID); commitErr != nil {
+		if settlement != nil {
+			if commitErr := commitSettlement(ctx, settlement, topic, entry.ID); commitErr != nil {
 				// Mirror rabbitmq.dispatchAck: Commit failure (lease lost,
 				// token mismatch, backend error) MUST NOT be silently
 				// promoted to success. Treat as transient → retry path.
-				slog.Warn("eventbus: receipt commit failed, downgrading Ack to Requeue",
+				slog.Warn("eventbus: settlement commit failed, downgrading Ack to Requeue",
 					slog.String("topic", topic),
 					slog.String("entry_id", entry.ID),
 					slog.Any("error", commitErr))
@@ -462,8 +461,8 @@ func (b *InMemoryEventBus) processResult(
 		outbox.NotifySettlement(ctx, res, entry, outbox.DispositionAck, outbox.SettlementResultSuccess, nil)
 		return true, nil
 	case outbox.DispositionReject:
-		if res.Receipt != nil {
-			releaseReceipt(ctx, res.Receipt, topic, entry.ID)
+		if settlement != nil {
+			releaseSettlement(ctx, settlement, topic, entry.ID)
 		}
 		slog.Warn("eventbus: handler rejected message, routing to dead letter",
 			slog.String("topic", topic),
@@ -474,9 +473,9 @@ func (b *InMemoryEventBus) processResult(
 		outbox.NotifySettlement(ctx, res, entry, outbox.DispositionReject, outbox.SettlementResultSuccess, nil)
 		return true, nil
 	case outbox.DispositionRequeue:
-		return b.handleRequeue(ctx, topic, entry, res, attempt)
+		return b.handleRequeue(ctx, topic, entry, res, settlement, attempt)
 	default:
-		return b.handleInvalidDisposition(ctx, topic, entry, res, attempt)
+		return b.handleInvalidDisposition(ctx, topic, entry, res, settlement, attempt)
 	}
 }
 
@@ -486,10 +485,10 @@ func (b *InMemoryEventBus) processResult(
 // DispositionReject 才会立刻路由 DLX；Requeue 一律走 retry budget，预算耗尽
 // 后落到 handleWithRetry 的 retries-exhausted DLX 路径。
 func (b *InMemoryEventBus) handleRequeue(
-	ctx context.Context, topic string, entry outbox.Entry, res outbox.HandleResult, attempt int,
+	ctx context.Context, topic string, entry outbox.Entry, res outbox.HandleResult, settlement outbox.Settlement, attempt int,
 ) (done bool, lastErr error) {
-	if res.Receipt != nil {
-		releaseReceipt(ctx, res.Receipt, topic, entry.ID)
+	if settlement != nil {
+		releaseSettlement(ctx, settlement, topic, entry.ID)
 	}
 	delay := retryDelay(attempt)
 	slog.Warn("eventbus: handler requested requeue, retrying",
@@ -505,10 +504,10 @@ func (b *InMemoryEventBus) handleRequeue(
 // handleInvalidDisposition treats zero-value or unknown Disposition as Requeue
 // with an Error-level log so the programming mistake is surfaced.
 func (b *InMemoryEventBus) handleInvalidDisposition(
-	ctx context.Context, topic string, entry outbox.Entry, res outbox.HandleResult, attempt int,
+	ctx context.Context, topic string, entry outbox.Entry, res outbox.HandleResult, settlement outbox.Settlement, attempt int,
 ) (done bool, lastErr error) {
-	if res.Receipt != nil {
-		releaseReceipt(ctx, res.Receipt, topic, entry.ID)
+	if settlement != nil {
+		releaseSettlement(ctx, settlement, topic, entry.ID)
 	}
 	delay := retryDelay(attempt)
 	slog.Error("eventbus: invalid disposition, treating as requeue",
@@ -556,17 +555,17 @@ func (b *InMemoryEventBus) appendDeadLetter(topic string, entry outbox.Entry, er
 	b.deadLettersMu.Unlock()
 }
 
-// commitReceipt calls Receipt.Commit with a detached 5s-timeout context,
+// commitSettlement calls Settlement.Commit with a detached 5s-timeout context,
 // consistent with the RabbitMQ subscriber path. Returns the Commit error so
 // the caller can downgrade Ack to Requeue on lease-loss / token-mismatch /
 // backend failure (matches rabbitmq.dispatchAck Commit→Ack ordering — Commit
 // failure must NOT be silently swallowed, otherwise stale holders could
 // "succeed" after losing the lease).
-func commitReceipt(ctx context.Context, r idempotency.Receipt, topic, entryID string) error {
+func commitSettlement(ctx context.Context, s outbox.Settlement, topic, entryID string) error {
 	rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), defaultEventbusReceiptOpTimeout)
 	defer cancel()
-	if err := r.Commit(rctx); err != nil {
-		slog.Error("eventbus: receipt commit failed",
+	if err := s.Commit(rctx); err != nil {
+		slog.Error("eventbus: settlement commit failed",
 			slog.String("topic", topic),
 			slog.String("entry_id", entryID),
 			slog.Any("error", err))
@@ -575,12 +574,12 @@ func commitReceipt(ctx context.Context, r idempotency.Receipt, topic, entryID st
 	return nil
 }
 
-// releaseReceipt calls Receipt.Release with a detached 5s-timeout context.
-func releaseReceipt(ctx context.Context, r idempotency.Receipt, topic, entryID string) {
+// releaseSettlement calls Settlement.Release with a detached 5s-timeout context.
+func releaseSettlement(ctx context.Context, s outbox.Settlement, topic, entryID string) {
 	rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), defaultEventbusReceiptOpTimeout)
 	defer cancel()
-	if err := r.Release(rctx); err != nil {
-		slog.Error("eventbus: receipt release failed",
+	if err := s.Release(rctx); err != nil {
+		slog.Error("eventbus: settlement release failed",
 			slog.String("topic", topic),
 			slog.String("entry_id", entryID),
 			slog.Any("error", err))

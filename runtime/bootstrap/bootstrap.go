@@ -92,6 +92,7 @@ type Bootstrap struct {
 	workers                []worker.Worker
 	publisher              outbox.Publisher
 	subscriber             outbox.Subscriber
+	consumerBase           *outbox.ConsumerBase // field-injected into SubscriberWithMiddleware for idempotency
 	consumerMiddleware     []outbox.SubscriptionMiddleware
 	routerReadyTimeout     time.Duration
 	routerReadyTimeoutSet  bool

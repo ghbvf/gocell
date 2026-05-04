@@ -14,7 +14,6 @@ import (
 
 	"github.com/ghbvf/gocell/adapters/adapterutil"
 	"github.com/ghbvf/gocell/kernel/clock"
-	"github.com/ghbvf/gocell/kernel/idempotency"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
@@ -36,7 +35,7 @@ const (
 	// deadline. Bounded so a stuck consumer cannot block Close() indefinitely.
 	defaultRMQReconnectWaitTimeout = 30 * time.Second
 	// defaultRMQReceiptOpTimeout is the detached-context timeout for dispatchAck
-	// Receipt.Commit and releaseReceipt Receipt.Release; outlives caller
+	// Settlement.Commit and releaseSettlement Settlement.Release; outlives caller
 	// cancellation so the broker never stays in an inconsistent ack state if the
 	// parent ctx is already done.
 	defaultRMQReceiptOpTimeout = 5 * time.Second
@@ -133,12 +132,12 @@ func (sc *SubscriberConfig) setDefaults() {
 //
 // Observability context restoration:
 // The bare Subscriber.Subscribe does NOT restore entry.Observability into
-// the handler context — that responsibility lives in
-// outbox.SubscriberWithMiddleware.Subscribe as a built-in OUTERMOST step.
+// the handler context — that responsibility lives inside
+// outbox.SubscriberWithMiddleware.SubscribeEntry as a built-in OUTERMOST step.
 // runtime/bootstrap always composes the rabbitmq subscriber inside that
-// wrapper, so trace_id / traceparent / request_id / correlation_id arrive
-// in handler ctx automatically. Tests that exercise the bare subscriber
-// (without the wrapper) intentionally observe a non-restored ctx.
+// wrapper via SubscribeEntry, so trace_id / traceparent / request_id /
+// correlation_id arrive in handler ctx automatically. Tests that exercise the
+// bare subscriber (without the wrapper) intentionally observe a non-restored ctx.
 //
 // ref: Watermill watermill-amqp subscriber.go — reconnect loop + ACK/NACK pattern
 // Adopted: per-subscription channel, QoS prefetch, graceful shutdown with WaitGroup.
@@ -297,7 +296,7 @@ func (s *Subscriber) Ready(_ outbox.Subscription) <-chan struct{} {
 // Idempotency key: handled by ConsumerBase middleware (not in Subscriber)
 // ACK timing: after handler returns DispositionAck
 // Retry: DispositionRequeue -> NACK+requeue / DispositionReject -> NACK(no-requeue) -> DLX.
-func (s *Subscriber) Subscribe(ctx context.Context, sub outbox.Subscription, handler outbox.EntryHandler) error {
+func (s *Subscriber) Subscribe(ctx context.Context, sub outbox.Subscription, handler outbox.SubscriberHandler) error {
 	topic := sub.Topic
 	consumerGroup := sub.ConsumerGroup
 	if s.closed.Load() {
@@ -402,7 +401,7 @@ func (s *Subscriber) awaitReconnect(ctx context.Context, topic, queueName string
 func (s *Subscriber) subscribeOnce(
 	ctx context.Context,
 	topic, queueName string,
-	handler outbox.EntryHandler,
+	handler outbox.SubscriberHandler,
 ) error {
 	ch, err := s.conn.AcquireChannel()
 	if err != nil {
@@ -548,10 +547,10 @@ func (s *Subscriber) snapshotActiveRuns() []*subscriptionRun {
 //   - ch.Ack/Nack: guarded by amqp091-go's internal channel mutex; safe to call
 //     from multiple goroutines simultaneously.
 //     ref: rabbitmq/amqp091-go channel.go (sendMethod holds ch.m.Lock).
-//   - Receipt: per-delivery local variable passed into processDelivery — no
+//   - Settlement: per-delivery local variable returned by SubscriberHandler — no
 //     sharing across goroutines.
-//   - dispatchAck/releaseReceipt/dispatchDisposition: use only the per-delivery
-//     ch, tag, and Receipt; no Subscriber-level mutable state.
+//   - dispatchAck/releaseSettlement/dispatchDisposition: use only the per-delivery
+//     ch, tag, and Settlement; no Subscriber-level mutable state.
 //   - s.wg + run.localWg: sync.WaitGroup — concurrency-safe by design.
 //   - topic/handler: immutable after Subscribe call.
 //
@@ -561,7 +560,7 @@ func (s *Subscriber) consumeLoop(
 	run *subscriptionRun,
 	deliveries <-chan amqp.Delivery,
 	topic string,
-	handler outbox.EntryHandler,
+	handler outbox.SubscriberHandler,
 ) error {
 	ch := run.ch
 	for {
@@ -658,7 +657,7 @@ func (s *Subscriber) drainRemaining(
 	run *subscriptionRun,
 	deliveries <-chan amqp.Delivery,
 	topic string,
-	handler outbox.EntryHandler,
+	handler outbox.SubscriberHandler,
 ) error {
 	ch := run.ch
 	timer := s.clock.NewTimerAt(s.clock.Now().Add(currentDrainDeadline()))
@@ -714,7 +713,7 @@ func (s *Subscriber) processDelivery(
 	ch AMQPChannel,
 	delivery amqp.Delivery,
 	topic string,
-	handler outbox.EntryHandler,
+	handler outbox.SubscriberHandler,
 ) {
 	entry, err := unmarshalDelivery(delivery.Body)
 	if err != nil {
@@ -759,13 +758,15 @@ func (s *Subscriber) processDelivery(
 	entry.Metadata["topic"] = topic
 
 	// Observability metadata (request_id, correlation_id, trace_id) is restored
-	// into the handler context by SubscriberWithMiddleware.Subscribe (built-in
+	// into the handler context by SubscriberWithMiddleware.SubscribeEntry (built-in
 	// outermost wrapper), not here. This separation keeps the subscriber
 	// adapter transport-only.
 	deliveryCtx := ctx
 
-	// Solution B: handler returns HandleResult with explicit Disposition + Receipt.
-	res := handler(deliveryCtx, entry)
+	// SubscriberHandler returns (HandleResult, Settlement). Settlement is the
+	// idempotency commit/release handle from ConsumerBase.Wrap (nil when no
+	// idempotency state is present — ClaimDone, ClaimBusy, fail-open errors).
+	res, settlement := handler(deliveryCtx, entry)
 
 	// Log handler-level error if present (separate from broker disposition).
 	if res.Err != nil {
@@ -776,7 +777,7 @@ func (s *Subscriber) processDelivery(
 			slog.Any("error", res.Err))
 	}
 
-	s.dispatchDisposition(deliveryCtx, ch, delivery.DeliveryTag, res, topic, entry)
+	s.dispatchDisposition(deliveryCtx, ch, delivery.DeliveryTag, res, settlement, topic, entry)
 }
 
 // dispatchDisposition executes the broker-level disposition and settles the
@@ -796,13 +797,14 @@ func (s *Subscriber) dispatchDisposition(
 	ch AMQPChannel,
 	tag uint64,
 	res outbox.HandleResult,
+	settlement outbox.Settlement,
 	topic string,
 	entry outbox.Entry,
 ) {
 	eventID := entry.ID
 	switch res.Disposition {
 	case outbox.DispositionAck:
-		s.dispatchAck(ctx, ch, tag, res, topic, entry)
+		s.dispatchAck(ctx, ch, tag, res, settlement, topic, entry)
 	case outbox.DispositionReject:
 		rejectResult := outbox.SettlementResultSuccess
 		if res.ProcessReason == "retry_exhausted" {
@@ -813,11 +815,11 @@ func (s *Subscriber) dispatchDisposition(
 				slog.String(logKeyTopic, topic),
 				slog.String(logKeyEventID, eventID),
 				slog.Any("error", nackErr))
-			releaseReceipt(ctx, res.Receipt, topic, eventID, "reject")
+			releaseSettlement(ctx, settlement, topic, eventID, "reject")
 			outbox.NotifySettlement(ctx, res, entry, outbox.DispositionReject, outbox.SettlementResultNackFailed, nackErr)
 			return
 		}
-		releaseReceipt(ctx, res.Receipt, topic, eventID, "reject")
+		releaseSettlement(ctx, settlement, topic, eventID, "reject")
 		outbox.NotifySettlement(ctx, res, entry, outbox.DispositionReject, rejectResult, nil)
 	case outbox.DispositionRequeue:
 		if nackErr := ch.Nack(tag, false, true); nackErr != nil {
@@ -825,11 +827,11 @@ func (s *Subscriber) dispatchDisposition(
 				slog.String(logKeyTopic, topic),
 				slog.String(logKeyEventID, eventID),
 				slog.Any("error", nackErr))
-			releaseReceipt(ctx, res.Receipt, topic, eventID, "requeue")
+			releaseSettlement(ctx, settlement, topic, eventID, "requeue")
 			outbox.NotifySettlement(ctx, res, entry, outbox.DispositionRequeue, outbox.SettlementResultNackFailed, nackErr)
 			return
 		}
-		releaseReceipt(ctx, res.Receipt, topic, eventID, "requeue")
+		releaseSettlement(ctx, settlement, topic, eventID, "requeue")
 		outbox.NotifySettlement(ctx, res, entry, outbox.DispositionRequeue, outbox.SettlementResultSuccess, nil)
 	default:
 		slog.LogAttrs(ctx, slog.LevelError, "rabbitmq: unknown disposition, nacking with requeue",
@@ -841,32 +843,33 @@ func (s *Subscriber) dispatchDisposition(
 				slog.String(logKeyTopic, topic),
 				slog.String(logKeyEventID, eventID),
 				slog.Any("error", nackErr))
-			releaseReceipt(ctx, res.Receipt, topic, eventID, "unknown")
+			releaseSettlement(ctx, settlement, topic, eventID, "unknown")
 			outbox.NotifySettlement(ctx, res, entry, outbox.DispositionRequeue, outbox.SettlementResultNackFailed, nackErr)
 			return
 		}
-		releaseReceipt(ctx, res.Receipt, topic, eventID, "unknown")
+		releaseSettlement(ctx, settlement, topic, eventID, "unknown")
 		outbox.NotifySettlement(ctx, res, entry, outbox.DispositionRequeue, outbox.SettlementResultSuccess, nil)
 	}
 }
 
 // dispatchAck handles the Commit→Ack path for DispositionAck.
-// If Commit fails, Nack(requeue=true) is issued instead of Ack.
+// If Settlement.Commit fails, Nack(requeue=true) is issued instead of Ack.
 func (s *Subscriber) dispatchAck(
 	ctx context.Context,
 	ch AMQPChannel,
 	tag uint64,
 	res outbox.HandleResult,
+	settlement outbox.Settlement,
 	topic string,
 	entry outbox.Entry,
 ) {
 	eventID := entry.ID
-	if res.Receipt != nil {
+	if settlement != nil {
 		rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), defaultRMQReceiptOpTimeout)
-		commitErr := res.Receipt.Commit(rctx)
+		commitErr := settlement.Commit(rctx)
 		cancel()
 		if commitErr != nil {
-			slog.LogAttrs(ctx, slog.LevelWarn, "rabbitmq: receipt commit failed (lease may have expired); requeuing instead of acking",
+			slog.LogAttrs(ctx, slog.LevelWarn, "rabbitmq: settlement commit failed (lease may have expired); requeuing instead of acking",
 				slog.String(logKeyTopic, topic),
 				slog.String(logKeyEventID, eventID),
 				slog.Any("error", commitErr))
@@ -887,7 +890,7 @@ func (s *Subscriber) dispatchAck(
 			slog.String(logKeyTopic, topic),
 			slog.String(logKeyEventID, eventID),
 			slog.Any("error", ackErr))
-		// Receipt already committed; broker ack failure means the message will
+		// Settlement already committed; broker ack failure means the message will
 		// be redelivered, but the idempotency key (ClaimDone) prevents double
 		// processing on the next delivery.
 		outbox.NotifySettlement(ctx, res, entry, outbox.DispositionAck, outbox.SettlementResultAckFailed, ackErr)
@@ -896,18 +899,18 @@ func (s *Subscriber) dispatchAck(
 	outbox.NotifySettlement(ctx, res, entry, outbox.DispositionAck, outbox.SettlementResultSuccess, nil)
 }
 
-// releaseReceipt releases the idempotency receipt bounded by
+// releaseSettlement releases the idempotency settlement bounded by
 // defaultRMQReceiptOpTimeout. Uses context.WithoutCancel so the operation
 // completes even during graceful shutdown. reason is used for structured log
 // fields.
-func releaseReceipt(ctx context.Context, receipt idempotency.Receipt, topic, eventID, reason string) {
-	if receipt == nil {
+func releaseSettlement(ctx context.Context, settlement outbox.Settlement, topic, eventID, reason string) {
+	if settlement == nil {
 		return
 	}
 	rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), defaultRMQReceiptOpTimeout)
 	defer cancel()
-	if relErr := receipt.Release(rctx); relErr != nil {
-		slog.LogAttrs(rctx, slog.LevelError, "rabbitmq: receipt release failed",
+	if relErr := settlement.Release(rctx); relErr != nil {
+		slog.LogAttrs(rctx, slog.LevelError, "rabbitmq: settlement release failed",
 			slog.String(logKeyTopic, topic),
 			slog.String(logKeyEventID, eventID),
 			slog.String("reason", reason),

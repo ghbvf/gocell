@@ -203,8 +203,10 @@ func ExponentialDelay(base, maxDelay time.Duration, attempt int) time.Duration {
 // (Claim/Commit/Release) and exponential backoff retry. DLQ routing is
 // handled by the broker via DLX (DispositionReject triggers Nack requeue=false).
 //
-// The Receipt is threaded through HandleResult so the subscriber's delivery
-// loop can Commit/Release after broker Ack/Nack succeeds.
+// Settlement flows to the Subscriber delivery loop via the second return value
+// of SubscriberHandler: ConsumerBase.Wrap returns (HandleResult, Settlement)
+// so that Commit/Release can be called after broker Ack/Nack without leaking
+// idempotency types into business code. Business handlers only return HandleResult.
 //
 // Lives in kernel/outbox rather than adapters/rabbitmq because the logic is
 // broker-agnostic — it only depends on kernel/idempotency + outbox types —
@@ -228,7 +230,7 @@ type ConsumerBase struct {
 
 // logWithContext delegates to slog.LogAttrs with the given context, ensuring
 // any ContextHandler extracts observability fields (request_id, correlation_id,
-// trace_id) restored by SubscriberWithMiddleware.Subscribe on the consumer
+// trace_id) restored by SubscriberWithMiddleware.SubscribeEntry on the consumer
 // path (built-in outermost wrapper, no separate middleware to install).
 func logWithContext(ctx context.Context, level slog.Level, msg string, attrs ...slog.Attr) {
 	slog.LogAttrs(ctx, level, msg, attrs...)
@@ -258,16 +260,6 @@ func NewConsumerBase(claimer idempotency.Claimer, config ConsumerBaseConfig, clk
 	}, nil
 }
 
-// AsMiddleware returns a SubscriptionMiddleware that applies this
-// ConsumerBase's idempotency/retry wrapping to any EntryHandler.
-// It can be used with SubscriberWithMiddleware to transparently inject
-// ConsumerBase behavior into a raw Subscriber pipeline.
-func (cb *ConsumerBase) AsMiddleware() SubscriptionMiddleware {
-	return func(sub Subscription, next EntryHandler) EntryHandler {
-		return cb.Wrap(sub, next)
-	}
-}
-
 // Wrap returns an EntryHandler that wraps the given business handler with
 // two-phase Claim/Commit/Release idempotency and retry with exponential backoff.
 //
@@ -295,10 +287,20 @@ func (cb *ConsumerBase) AsMiddleware() SubscriptionMiddleware {
 //   - DispositionReject (handler-explicit) -> Reject (broker routes to DLX)
 //   - retry budget exhausted -> Reject
 //   - ctx canceled / shutdown -> Requeue
-func (cb *ConsumerBase) Wrap(sub Subscription, handler EntryHandler) EntryHandler {
+//
+// Wrap lifts a business EntryHandler into a SubscriberHandler that includes
+// idempotency claim/release and retry logic. The returned SubscriberHandler
+// is passed to Subscriber.Subscribe (not EntryHandler) so Settlement can
+// be delivered to the Subscriber without leaking idempotency types into
+// business code.
+//
+// Settlement is nil when ConsumerBase has no idempotency state: fail-open
+// claim error, ClaimDone (already processed), or ClaimBusy (in progress).
+// Subscribers MUST nil-check Settlement before calling Commit/Release.
+func (cb *ConsumerBase) Wrap(sub Subscription, handler EntryHandler) SubscriberHandler {
 	topic := sub.Topic
 	consumerGroup := sub.ConsumerGroup
-	return func(ctx context.Context, entry Entry) HandleResult {
+	return func(ctx context.Context, entry Entry) (HandleResult, Settlement) {
 		idempotencyKey := fmt.Sprintf("%s:%s", consumerGroup, entry.ID)
 
 		// Fail-open: single Claim attempt, proceed without idempotency on error.
@@ -310,7 +312,7 @@ func (cb *ConsumerBase) Wrap(sub Subscription, handler EntryHandler) EntryHandle
 					slog.String(logKeyTopic, topic),
 					slog.String(logKeyConsumerGroup, consumerGroup),
 					slog.Any("error", err))
-				return cb.retryLoop(ctx, consumerGroup, topic, entry, handler, nil)
+				return cb.retryLoop(ctx, consumerGroup, topic, entry, handler), nil
 			}
 			return cb.handleClaimState(ctx, consumerGroup, topic, entry, handler, state, receipt)
 		}
@@ -324,7 +326,7 @@ func (cb *ConsumerBase) Wrap(sub Subscription, handler EntryHandler) EntryHandle
 				slog.String(logKeyConsumerGroup, consumerGroup),
 				slog.Int("claim_retry_count", cb.config.ClaimRetryCount),
 				slog.Any("error", err))
-			return HandleResult{Disposition: DispositionRequeue, Err: err}
+			return HandleResult{Disposition: DispositionRequeue, Err: err}, nil
 		}
 		return cb.handleClaimState(ctx, consumerGroup, topic, entry, handler, state, receipt)
 	}
@@ -363,6 +365,7 @@ func (cb *ConsumerBase) claimWithRetry(
 		lastErr = err
 
 		if ctx.Err() != nil {
+			// claim failed — no receipt acquired
 			return 0, zeroReceipt, ctx.Err()
 		}
 		if attempt < cb.config.ClaimRetryCount-1 {
@@ -386,7 +389,8 @@ func (cb *ConsumerBase) claimWithRetry(
 				t.Stop()
 			case <-ctx.Done():
 				t.Stop()
-				return 0, nil, ctx.Err()
+				// claim failed — no receipt acquired
+				return 0, zeroReceipt, ctx.Err()
 			}
 		}
 	}
@@ -396,6 +400,8 @@ func (cb *ConsumerBase) claimWithRetry(
 
 // handleClaimState dispatches on the Claim result state. Both fail-open and
 // fail-closed paths share the same ClaimDone / ClaimBusy / ClaimAcquired logic.
+// Returns (HandleResult, Settlement) so Settlement flows to the Subscriber.
+// Settlement is nil for ClaimDone and ClaimBusy (no idempotency state to settle).
 func (cb *ConsumerBase) handleClaimState(
 	ctx context.Context,
 	consumerGroup string,
@@ -404,13 +410,13 @@ func (cb *ConsumerBase) handleClaimState(
 	handler EntryHandler,
 	state idempotency.ClaimState,
 	receipt idempotency.Receipt,
-) HandleResult {
+) (HandleResult, Settlement) {
 	switch state {
 	case idempotency.ClaimDone:
 		logWithContext(ctx, slog.LevelDebug, "outbox: event already processed, skipping",
 			slog.String(logKeyEventID, entry.ID),
 			slog.String(logKeyTopic, topic))
-		return HandleResult{Disposition: DispositionAck}
+		return HandleResult{Disposition: DispositionAck}, nil
 	case idempotency.ClaimBusy:
 		delay := cb.config.RetryBaseDelay
 		logWithContext(ctx, slog.LevelDebug, "outbox: event being processed by another consumer, requeuing after backoff",
@@ -424,19 +430,24 @@ func (cb *ConsumerBase) handleClaimState(
 		case <-ctx.Done():
 			t.Stop()
 		}
-		return HandleResult{Disposition: DispositionRequeue}
+		return HandleResult{Disposition: DispositionRequeue}, nil
 	default:
 		// ClaimAcquired -- start lease-renewal goroutine before invoking handler.
-		return cb.runWithRenewal(ctx, consumerGroup, topic, entry, handler, receipt)
+		result := cb.runWithRenewal(ctx, consumerGroup, topic, entry, handler, receipt)
+		return result, receipt
 	}
 }
 
-// requeueResult constructs a Requeue HandleResult with the given error and receipt.
-func requeueResult(err error, receipt idempotency.Receipt) HandleResult {
+// requeueResult constructs a Requeue HandleResult with the given error and
+// SettlementObservers. Observers from the last handler invocation are
+// propagated so business-middleware observers are notified on ctx-cancel abort
+// and other early-exit paths.
+// Settlement is returned separately by the Wrap closure.
+func requeueResult(err error, observers []SettlementObserver) HandleResult {
 	return HandleResult{
-		Disposition: DispositionRequeue,
-		Err:         err,
-		Receipt:     receipt,
+		Disposition:         DispositionRequeue,
+		Err:                 err,
+		SettlementObservers: observers,
 	}
 }
 
@@ -477,24 +488,28 @@ func (cb *ConsumerBase) waitBackoff(ctx context.Context, topic string, entry Ent
 }
 
 // retryLoop executes the handler with exponential backoff retries.
-// Receipt is threaded through HandleResult for the subscriber's delivery loop
-// to Commit/Release after broker Ack/Nack.
+// Settlement is no longer threaded through HandleResult — it is returned
+// by the Wrap closure alongside HandleResult via SubscriberHandler.
+//
+// SettlementObservers from the last handler invocation are propagated to the
+// final returned HandleResult so that business-middleware observers (e.g.
+// ConfigEventMiddleware) are notified after ConsumerBase resolves the final
+// broker disposition.
 func (cb *ConsumerBase) retryLoop(
 	ctx context.Context,
 	consumerGroup string,
 	topic string,
 	entry Entry,
 	handler EntryHandler,
-	receipt idempotency.Receipt,
 ) HandleResult {
 	var lastResult HandleResult
 	for attempt := range cb.config.RetryCount {
 		lastResult = handler(ctx, entry)
 		if lastResult.Disposition == DispositionAck {
 			return HandleResult{
-				Disposition:   DispositionAck,
-				Receipt:       receipt,
-				ProcessReason: lastResult.ProcessReason,
+				Disposition:         DispositionAck,
+				ProcessReason:       lastResult.ProcessReason,
+				SettlementObservers: lastResult.SettlementObservers,
 			}
 		}
 
@@ -505,18 +520,18 @@ func (cb *ConsumerBase) retryLoop(
 				slog.String(logKeyConsumerGroup, consumerGroup),
 				slog.Any("error", lastResult.Err))
 			return HandleResult{
-				Disposition:   DispositionReject,
-				Err:           lastResult.Err,
-				Receipt:       receipt,
-				ProcessReason: lastResult.ProcessReason,
+				Disposition:         DispositionReject,
+				Err:                 lastResult.Err,
+				ProcessReason:       lastResult.ProcessReason,
+				SettlementObservers: lastResult.SettlementObservers,
 			}
 		}
 
 		// Transient error — backoff before retry (skipped on the final attempt).
 		if attempt < cb.config.RetryCount-1 {
 			if cb.waitBackoff(ctx, topic, entry, attempt, lastResult.Err) {
-				// Receipt.Release is deferred to the delivery loop after broker Ack/Nack.
-				return requeueResult(ctx.Err(), receipt)
+				// Settlement.Release is called by the Subscriber after broker Nack.
+				return requeueResult(ctx.Err(), lastResult.SettlementObservers)
 			}
 		}
 	}
@@ -525,7 +540,7 @@ func (cb *ConsumerBase) retryLoop(
 	// rather than routing to DLX. This ensures graceful shutdown does not
 	// permanently discard in-flight messages.
 	if ctx.Err() != nil {
-		return requeueResult(ctx.Err(), receipt)
+		return requeueResult(ctx.Err(), lastResult.SettlementObservers)
 	}
 
 	// Exhausted all retries -- reject so broker routes to DLX.
@@ -537,10 +552,10 @@ func (cb *ConsumerBase) retryLoop(
 		slog.String("process_reason", "retry_exhausted"),
 		slog.Any("error", lastResult.Err))
 	return HandleResult{
-		Disposition:   DispositionReject,
-		Err:           lastResult.Err,
-		Receipt:       receipt,
-		ProcessReason: "retry_exhausted",
+		Disposition:         DispositionReject,
+		Err:                 lastResult.Err,
+		ProcessReason:       "retry_exhausted",
+		SettlementObservers: lastResult.SettlementObservers,
 	}
 }
 
@@ -570,7 +585,7 @@ func (cb *ConsumerBase) runWithRenewal(
 	interval := cb.config.LeaseRenewalInterval
 	// Skip renewal when disabled (negative) or receipt is nil.
 	if interval <= 0 || receipt == nil {
-		return cb.retryLoop(ctx, consumerGroup, topic, entry, handler, receipt)
+		return cb.retryLoop(ctx, consumerGroup, topic, entry, handler)
 	}
 
 	var leaseLost atomic.Bool
@@ -587,7 +602,7 @@ func (cb *ConsumerBase) runWithRenewal(
 		})
 	}()
 
-	result := cb.retryLoop(renewCtx, consumerGroup, topic, entry, handler, receipt)
+	result := cb.retryLoop(renewCtx, consumerGroup, topic, entry, handler)
 
 	// Signal the renewal goroutine to stop and wait for it.
 	cancelRenew()
@@ -596,15 +611,17 @@ func (cb *ConsumerBase) runWithRenewal(
 	// Hard fence: if the lease was lost during processing and the handler
 	// still returned Ack (e.g., it ignored ctx.Done()), force-downgrade to
 	// Requeue so a stale holder cannot commit a dead lease.
+	// Settlement (receipt) is returned by handleClaimState alongside this result;
+	// Subscriber will call Settlement.Release on Requeue disposition.
 	if leaseLost.Load() && result.Disposition == DispositionAck {
 		logWithContext(ctx, slog.LevelWarn, "outbox: lease lost during processing, downgrading Ack to Requeue (hard fence)",
 			slog.String(logKeyEventID, entry.ID),
 			slog.String(logKeyTopic, topic))
 		return HandleResult{
-			Disposition:   DispositionRequeue,
-			Receipt:       receipt,
-			Err:           idempotency.ErrLeaseExpired,
-			ProcessReason: result.ProcessReason,
+			Disposition:         DispositionRequeue,
+			Err:                 idempotency.ErrLeaseExpired,
+			ProcessReason:       result.ProcessReason,
+			SettlementObservers: result.SettlementObservers,
 		}
 	}
 

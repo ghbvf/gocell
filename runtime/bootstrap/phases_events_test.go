@@ -126,7 +126,7 @@ func (neverReadySubscriber) Ready(_ outbox.Subscription) <-chan struct{} {
 	return make(chan struct{})
 }
 
-func (neverReadySubscriber) Subscribe(ctx context.Context, _ outbox.Subscription, _ outbox.EntryHandler) error {
+func (neverReadySubscriber) Subscribe(ctx context.Context, _ outbox.Subscription, _ outbox.SubscriberHandler) error {
 	<-ctx.Done()
 	return ctx.Err()
 }

@@ -76,7 +76,9 @@ func TestProcessDelivery_LegacyEnvelopeFormat_RejectsToDLX(t *testing.T) {
 	ch.consumeDeliveries <- amqp.Delivery{DeliveryTag: 7, Body: body}
 
 	subDone := make(chan error, 1)
-	go func() { subDone <- sub.Subscribe(ctx, outbox.Subscription{Topic: "test.topic"}, handler) }()
+	go func() {
+		subDone <- sub.Subscribe(ctx, outbox.Subscription{Topic: "test.topic"}, entryToSubHandler(handler))
+	}()
 
 	require.Eventually(t, func() bool {
 		ch.mu.Lock()
@@ -130,7 +132,9 @@ func TestProcessDelivery_TooLongEntryID_RejectsToDLX(t *testing.T) {
 	ch.consumeDeliveries <- amqp.Delivery{DeliveryTag: 8, Body: body}
 
 	subDone := make(chan error, 1)
-	go func() { subDone <- sub.Subscribe(ctx, outbox.Subscription{Topic: "test.topic"}, handler) }()
+	go func() {
+		subDone <- sub.Subscribe(ctx, outbox.Subscription{Topic: "test.topic"}, entryToSubHandler(handler))
+	}()
 
 	require.Eventually(t, func() bool {
 		ch.mu.Lock()
@@ -174,11 +178,8 @@ func TestProcessDelivery_CommitFailsAfterLeaseLost_NacksRequeue(t *testing.T) {
 
 	receipt := &mockReceipt{commitErr: errors.New("lease expired: token mismatch")}
 
-	handler := func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
-		return outbox.HandleResult{
-			Disposition: outbox.DispositionAck,
-			Receipt:     receipt,
-		}
+	handler := func(_ context.Context, _ outbox.Entry) (outbox.HandleResult, outbox.Settlement) {
+		return outbox.HandleResult{Disposition: outbox.DispositionAck}, receipt
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -238,11 +239,8 @@ func TestProcessDelivery_CommitSuccess_AcksAndDoesNotRelease(t *testing.T) {
 
 	receipt := &mockReceipt{} // commitErr = nil → success
 
-	handler := func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
-		return outbox.HandleResult{
-			Disposition: outbox.DispositionAck,
-			Receipt:     receipt,
-		}
+	handler := func(_ context.Context, _ outbox.Entry) (outbox.HandleResult, outbox.Settlement) {
+		return outbox.HandleResult{Disposition: outbox.DispositionAck}, receipt
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -340,7 +338,7 @@ func TestSubscriber_PrefetchCount10_RealConcurrency(t *testing.T) {
 			DLXExchange:   "test.dlx",
 			PrefetchCount: numDeliveries,
 			Clock:         clock.Real(),
-		}).Subscribe(ctx, outbox.Subscription{Topic: "test.topic"}, handler)
+		}).Subscribe(ctx, outbox.Subscription{Topic: "test.topic"}, entryToSubHandler(handler))
 	}()
 
 	// If concurrent: all 10 handlers reach the barrier within barrierTimeout.
@@ -382,12 +380,9 @@ func TestSubscriber_ConcurrentReceiptCommitSafety(t *testing.T) {
 	mockConn.nextCh = ch
 	mockConn.mu.Unlock()
 
-	handler := func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+	handler := func(_ context.Context, _ outbox.Entry) (outbox.HandleResult, outbox.Settlement) {
 		receipt := &countingReceipt{counter: &commitCount}
-		return outbox.HandleResult{
-			Disposition: outbox.DispositionAck,
-			Receipt:     receipt,
-		}
+		return outbox.HandleResult{Disposition: outbox.DispositionAck}, receipt
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -475,7 +470,7 @@ func TestSubscriber_GoroutineLeakOnClose(t *testing.T) {
 
 	subDone := make(chan error, 1)
 	go func() {
-		subDone <- sub.Subscribe(ctx, outbox.Subscription{Topic: "test.topic"}, handler)
+		subDone <- sub.Subscribe(ctx, outbox.Subscription{Topic: "test.topic"}, entryToSubHandler(handler))
 	}()
 
 	// Enqueue a delivery so at least one goroutine runs.
@@ -568,7 +563,9 @@ func TestSubscribeOnce_ReconnectWaitCtx_InheritsParentCancel(t *testing.T) {
 	})
 
 	subDone := make(chan error, 1)
-	go func() { subDone <- sub.Subscribe(ctx, outbox.Subscription{Topic: "f3.cancel.topic"}, handler) }()
+	go func() {
+		subDone <- sub.Subscribe(ctx, outbox.Subscription{Topic: "f3.cancel.topic"}, entryToSubHandler(handler))
+	}()
 
 	// Wait until the handler is in-flight (it will block on neverClose).
 	time.Sleep(subscriberD40ms) //archtest:allow:test-sleep wait for goroutine to enter blocking handler; no started observable
@@ -653,7 +650,9 @@ func TestSubscribeOnce_ReconnectWaitCtx_NoDeadlineFallsBackTo30s(t *testing.T) {
 	})
 
 	subDone := make(chan error, 1)
-	go func() { subDone <- sub.Subscribe(ctx, outbox.Subscription{Topic: "f3.nodeadline.topic"}, handler) }()
+	go func() {
+		subDone <- sub.Subscribe(ctx, outbox.Subscription{Topic: "f3.nodeadline.topic"}, entryToSubHandler(handler))
+	}()
 
 	// Wait for delivery to be acked (handler finished).
 	require.Eventually(t, func() bool {
@@ -709,7 +708,9 @@ func TestProcessDelivery_ValidEntryID_PassesToHandler(t *testing.T) {
 	ch.consumeDeliveries <- amqp.Delivery{DeliveryTag: 9, Body: body}
 
 	subDone := make(chan error, 1)
-	go func() { subDone <- sub.Subscribe(ctx, outbox.Subscription{Topic: "test.topic"}, handler) }()
+	go func() {
+		subDone <- sub.Subscribe(ctx, outbox.Subscription{Topic: "test.topic"}, entryToSubHandler(handler))
+	}()
 
 	require.Eventually(t, func() bool {
 		ch.mu.Lock()
@@ -759,11 +760,8 @@ func TestDispatchAck_CommitFail_NackFail(t *testing.T) {
 	commitErr := errors.New("lease expired")
 	receipt := &mockReceipt{commitErr: commitErr}
 
-	handler := func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
-		return outbox.HandleResult{
-			Disposition: outbox.DispositionAck,
-			Receipt:     receipt,
-		}
+	handler := func(_ context.Context, _ outbox.Entry) (outbox.HandleResult, outbox.Settlement) {
+		return outbox.HandleResult{Disposition: outbox.DispositionAck}, receipt
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -817,11 +815,8 @@ func TestDispatchAck_AckFail(t *testing.T) {
 	})
 
 	receipt := &mockReceipt{} // commitErr nil → Commit succeeds
-	handler := func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
-		return outbox.HandleResult{
-			Disposition: outbox.DispositionAck,
-			Receipt:     receipt,
-		}
+	handler := func(_ context.Context, _ outbox.Entry) (outbox.HandleResult, outbox.Settlement) {
+		return outbox.HandleResult{Disposition: outbox.DispositionAck}, receipt
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -899,7 +894,9 @@ func TestProcessDelivery_InvalidEntry_ValidateFailure_NacksPermanent(t *testing.
 	ch.consumeDeliveries <- amqp.Delivery{DeliveryTag: 50, Body: body}
 
 	subDone := make(chan error, 1)
-	go func() { subDone <- sub.Subscribe(ctx, outbox.Subscription{Topic: "test.topic"}, handler) }()
+	go func() {
+		subDone <- sub.Subscribe(ctx, outbox.Subscription{Topic: "test.topic"}, entryToSubHandler(handler))
+	}()
 
 	// Nack is called (and fails due to nackErr) — nackCalled is still set true.
 	require.Eventually(t, func() bool {
@@ -956,7 +953,9 @@ func TestDispatchDisposition_RejectNackFail_LogsError(t *testing.T) {
 	ch.consumeDeliveries <- amqp.Delivery{DeliveryTag: 51, Body: body}
 
 	subDone := make(chan error, 1)
-	go func() { subDone <- sub.Subscribe(ctx, outbox.Subscription{Topic: "test.topic"}, handler) }()
+	go func() {
+		subDone <- sub.Subscribe(ctx, outbox.Subscription{Topic: "test.topic"}, entryToSubHandler(handler))
+	}()
 
 	// Nack is attempted (fails) — nackCalled is still true.
 	require.Eventually(t, func() bool {
@@ -1012,7 +1011,9 @@ func TestDispatchDisposition_UnknownDispositionNackFail_LogsError(t *testing.T) 
 	ch.consumeDeliveries <- amqp.Delivery{DeliveryTag: 52, Body: body}
 
 	subDone := make(chan error, 1)
-	go func() { subDone <- sub.Subscribe(ctx, outbox.Subscription{Topic: "test.topic"}, handler) }()
+	go func() {
+		subDone <- sub.Subscribe(ctx, outbox.Subscription{Topic: "test.topic"}, entryToSubHandler(handler))
+	}()
 
 	// Nack(requeue=true) is attempted (fails) — nackCalled is still true.
 	require.Eventually(t, func() bool {
@@ -1053,11 +1054,10 @@ func TestReleaseReceipt_ReleaseFail(t *testing.T) {
 
 	receipt := &mockReceipt{releaseErr: errors.New("release store unavailable")}
 
-	handler := func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+	handler := func(_ context.Context, _ outbox.Entry) (outbox.HandleResult, outbox.Settlement) {
 		return outbox.HandleResult{
 			Disposition: outbox.DispositionReject,
-			Receipt:     receipt,
-		}
+		}, receipt
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -1158,7 +1158,9 @@ func TestDispatchAck_AckErr_NotifiesAckFailed(t *testing.T) {
 	ch.consumeDeliveries <- amqp.Delivery{DeliveryTag: 30, Body: body}
 
 	subDone := make(chan error, 1)
-	go func() { subDone <- sub.Subscribe(ctx, outbox.Subscription{Topic: "test.topic"}, handler) }()
+	go func() {
+		subDone <- sub.Subscribe(ctx, outbox.Subscription{Topic: "test.topic"}, entryToSubHandler(handler))
+	}()
 
 	require.Eventually(t, func() bool {
 		return spy.len() > 0
@@ -1217,7 +1219,9 @@ func TestDispatchDisposition_RejectNackErr_NotifiesNackFailed(t *testing.T) {
 	ch.consumeDeliveries <- amqp.Delivery{DeliveryTag: 31, Body: body}
 
 	subDone := make(chan error, 1)
-	go func() { subDone <- sub.Subscribe(ctx, outbox.Subscription{Topic: "test.topic"}, handler) }()
+	go func() {
+		subDone <- sub.Subscribe(ctx, outbox.Subscription{Topic: "test.topic"}, entryToSubHandler(handler))
+	}()
 
 	require.Eventually(t, func() bool {
 		return spy.len() > 0
@@ -1278,7 +1282,9 @@ func TestDispatchDisposition_RequeueNackErr_NotifiesNackFailed(t *testing.T) {
 	ch.consumeDeliveries <- amqp.Delivery{DeliveryTag: 32, Body: body}
 
 	subDone := make(chan error, 1)
-	go func() { subDone <- sub.Subscribe(ctx, outbox.Subscription{Topic: "test.topic"}, handler) }()
+	go func() {
+		subDone <- sub.Subscribe(ctx, outbox.Subscription{Topic: "test.topic"}, entryToSubHandler(handler))
+	}()
 
 	require.Eventually(t, func() bool {
 		return spy.len() > 0

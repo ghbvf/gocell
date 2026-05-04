@@ -12,7 +12,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/ghbvf/gocell/kernel/idempotency"
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
@@ -519,19 +518,11 @@ func (f SettlementObserverFunc) ObserveSettlement(ctx context.Context, obs Settl
 
 // HandleResult carries the business handler's processing outcome.
 // The Subscriber inspects Disposition to decide Ack/Nack, then calls
-// Receipt.Commit or Receipt.Release based on the broker outcome.
+// Settlement.Commit or Settlement.Release (received via SubscriberHandler
+// return value) based on the broker outcome.
 type HandleResult struct {
 	Disposition Disposition
 	Err         error // optional: logged/observed; nil for success
-
-	// Receipt is the Subscriber-implementer-internal channel for delivery loop
-	// Commit/Release after broker Ack/Nack. Business handlers MUST NOT read or
-	// write this field — reading observes an unspecified intermediate state,
-	// writing silently overwrites the ConsumerBase-set value and breaks
-	// idempotency Commit/Release. The HANDLER-RECEIPT-WRITE-01 archtest rule
-	// statically enforces the no-write half. See 029 #12 (PR-V1-OUTBOX-RECEIPT-EXTRACT)
-	// for v2 extraction roadmap.
-	Receipt idempotency.Receipt
 
 	// ProcessReason is a low-cardinality handler/process classification, such
 	// as "ack", "stale", or "permanent_error". It is not a broker outcome.
@@ -577,10 +568,31 @@ func NotifySettlement(
 	}
 }
 
-// EntryHandler is the Solution B handler signature. Business handlers return
-// a HandleResult that declares the intended broker disposition. The Receipt
-// field is a Subscriber-implementer hand-off; see HandleResult godoc.
+// EntryHandler is the business handler signature. Business handlers return a
+// HandleResult that declares the intended broker disposition. Settlement is
+// not visible to business handlers — it is delivered via SubscriberHandler,
+// which is the Subscriber-layer interface (not business layer).
 type EntryHandler func(context.Context, Entry) HandleResult
+
+// SubscriberHandler is the Subscriber-layer handler type that ConsumerBase.Wrap
+// returns and Subscriber.Subscribe accepts. It extends EntryHandler with a
+// Settlement return value so Subscriber implementations can call
+// Settlement.Commit before broker Ack and Settlement.Release after broker Nack
+// without any idempotency types leaking into business code.
+//
+// Settlement may be nil when ConsumerBase has no idempotency state (fail-open
+// claim error, ClaimDone, ClaimBusy short-circuit). Subscribers MUST nil-check
+// before calling Commit/Release.
+//
+// Business handlers use EntryHandler — they never see Settlement. The type
+// separation provides compile-time enforcement without archtest gates.
+//
+// ref: IBM/sarama consumer_group.go ConsumeClaim(session ConsumerGroupSession,
+//
+//	claim ConsumerGroupClaim) — settle handle as explicit method parameter
+//
+// ref: nats-io/nats.go jetstream/message.go Msg interface (Ack/Nak/Term)
+type SubscriberHandler func(ctx context.Context, entry Entry) (HandleResult, Settlement)
 
 // ---------------------------------------------------------------------------
 // PermanentError -- error classification (domain concept)
@@ -647,7 +659,13 @@ type Subscriber interface {
 	// Subscription.ConsumerGroup identifies the logical consumer group.
 	// Subscribers sharing the same group compete for messages (load-balanced);
 	// different groups each receive a full copy (fanout).
-	Subscribe(ctx context.Context, sub Subscription, handler EntryHandler) error
+	//
+	// handler is SubscriberHandler so the Subscriber can receive Settlement
+	// alongside HandleResult without idempotency types leaking into business
+	// code. Callers that hold an EntryHandler and want the full business
+	// pipeline (middleware chain + ConsumerBase idempotency) should use
+	// SubscriberWithMiddleware.SubscribeEntry instead of lifting manually.
+	Subscribe(ctx context.Context, sub Subscription, handler SubscriberHandler) error
 
 	// Close terminates all active subscriptions and releases resources.
 	// The ctx parameter allows callers to share a shutdown budget.
@@ -681,27 +699,48 @@ type SubscriberIntakeStopper interface {
 	StopIntake(ctx context.Context) error
 }
 
-// SubscriberWithMiddleware wraps a Subscriber so that every handler passed to
-// Subscribe is first wrapped by the SubscriptionMiddleware chain.
-// Middleware is applied in order: [0] is outermost, [len-1] is innermost.
+// SubscriberWithMiddleware wraps a Subscriber with a business middleware chain
+// and an optional ConsumerBase for idempotency/retry.
 //
-// Observability context restoration (entry.Observability →
-// ctxkeys.Trace*/Request*/CorrelationID) is built into Subscribe as the
-// OUTERMOST wrapper — it always runs before any user middleware so the
-// rest of the chain sees a context populated with the originating
-// trace/request identity. There is no kill-switch: the producer-side
-// Entry.InjectObservabilityFromContext and the consumer-side restoration
-// here are paired invariants. If a caller intentionally needs raw delivery
-// without restore (rare, integration testing only), they construct
-// SubscriberWithMiddleware directly is not the right tool — they should
-// invoke Subscriber.Subscribe on the inner subscriber.
+// The SubscribeEntry method is the primary entry point for callers that hold
+// an EntryHandler (e.g., eventrouter.Router). It orchestrates:
+//
+//  1. Business middleware chain (EntryHandler → EntryHandler): applied via
+//     slices.Backward(s.Middleware) — [0] is outermost (first to see each
+//     delivery, last to return), [len-1] is innermost (adjacent to
+//     ConsumerBase). This is the opposite of chi/Kratos forward composition
+//     where [0] is applied last.
+//  2. ConsumerBase.Wrap (EntryHandler → SubscriberHandler): injects
+//     idempotency Claim/Commit/Release and retry logic. Skipped when
+//     ConsumerBase is nil (fallback: nil Settlement).
+//  3. Observability restore (entry.Observability → ctx): built-in OUTERMOST
+//     wrapper applied inside Inner.Subscribe so every layer sees a ctx
+//     populated with trace_id/request_id/correlation_id.
+//  4. Inner.Subscribe: the actual broker subscription.
+//
+// Observability restoration is a paired invariant with Entry.InjectObservability
+// FromContext on the producer side — there is no kill-switch. Raw delivery
+// without restore (integration testing only) should invoke Inner.Subscribe
+// directly.
+//
+// SubscriberWithMiddleware does NOT implement the Subscriber interface: it
+// exposes only SubscribeEntry (EntryHandler) as the single public entry point.
+// This prevents the lift→discard footgun where callers could assign
+// *SubscriberWithMiddleware to outbox.Subscriber and bypass the business
+// middleware chain. Adapter-layer tests that need raw SubscriberHandler delivery
+// must call Inner.Subscribe directly.
+//
+// ref: ThreeDotsLabs/watermill message/router.go — handleMessage applies
+// middleware then calls handler; Ack/Nack monopoly stays in router.
+// ref: go-kratos/kratos — middleware chain on business Request/Reply;
+// transport/grpc monopolizes gRPC status.
+// ref: IBM/sarama consumer_group.go — ConsumeClaim owns MarkMessage;
+// business handler in ConsumeClaim body never calls MarkMessage directly.
 type SubscriberWithMiddleware struct {
-	Inner      Subscriber
-	Middleware []SubscriptionMiddleware
+	Inner        Subscriber
+	Middleware   []SubscriptionMiddleware
+	ConsumerBase *ConsumerBase // nil-safe: degrades to nil-Settlement pass-through
 }
-
-// Compile-time interface check.
-var _ Subscriber = (*SubscriberWithMiddleware)(nil)
 
 // Setup delegates topology pre-declaration to Inner.
 func (s *SubscriberWithMiddleware) Setup(ctx context.Context, sub Subscription) error {
@@ -713,19 +752,42 @@ func (s *SubscriberWithMiddleware) Ready(sub Subscription) <-chan struct{} {
 	return s.Inner.Ready(sub)
 }
 
-// Subscribe wraps the handler with the middleware chain (Subscription is
-// passed to each middleware), then delegates to Inner. Observability
-// context restoration is the OUTERMOST wrapper — entry.Observability is
-// applied to ctx before any user middleware sees it. Restoration is
-// idempotent (existing non-empty ctx values win) and zero-struct safe
-// (no fields set ⇒ no-op).
-func (s *SubscriberWithMiddleware) Subscribe(ctx context.Context, sub Subscription, handler EntryHandler) error {
-	wrapped := handler
-	for _, v := range slices.Backward(s.Middleware) {
-		wrapped = v(sub, wrapped)
+// SubscribeEntry is the entry point for callers that hold an EntryHandler
+// (e.g. eventrouter.Router). It applies the full pipeline:
+// business middleware chain → ConsumerBase.Wrap → observability restore → Inner.Subscribe.
+//
+// The business middleware chain is applied via slices.Backward(s.Middleware):
+// Middleware[0] is the outermost layer (first to wrap, last to return) and
+// Middleware[len-1] is the innermost layer (adjacent to ConsumerBase). This is
+// the opposite of chi/Kratos forward composition where index 0 is applied last.
+// Example with Middleware = [A, B, C]: execution order is A → B → C → handler.
+//
+// This method is intentionally not part of the Subscriber interface: it accepts
+// the business-layer EntryHandler rather than the framework-layer SubscriberHandler,
+// enforcing the boundary at the type level. eventrouter.Router calls SubscribeEntry
+// directly; Subscriber adapters (rabbitmq, eventbus) call Inner.Subscribe.
+func (s *SubscriberWithMiddleware) SubscribeEntry(ctx context.Context, sub Subscription, h EntryHandler) error {
+	// Step 1: apply business middleware chain (EntryHandler → EntryHandler).
+	wrapped := h
+	for _, mw := range slices.Backward(s.Middleware) {
+		wrapped = mw(sub, wrapped)
 	}
-	withRestore := func(reqCtx context.Context, entry Entry) HandleResult {
-		return wrapped(entry.Observability.RestoreToContext(reqCtx), entry)
+
+	// Step 2: ConsumerBase converts EntryHandler → SubscriberHandler, injecting
+	// idempotency Settlement. Falls back to nil-Settlement when ConsumerBase is nil.
+	var subHandler SubscriberHandler
+	if s.ConsumerBase != nil {
+		subHandler = s.ConsumerBase.Wrap(sub, wrapped)
+	} else {
+		subHandler = func(ctx context.Context, entry Entry) (HandleResult, Settlement) {
+			return wrapped(ctx, entry), nil
+		}
+	}
+
+	// Step 3: observability restore — built-in OUTERMOST wrapper so all layers
+	// (business middleware, ConsumerBase, Inner.Subscribe) see a populated ctx.
+	withRestore := func(reqCtx context.Context, entry Entry) (HandleResult, Settlement) {
+		return subHandler(entry.Observability.RestoreToContext(reqCtx), entry)
 	}
 	return s.Inner.Subscribe(ctx, sub, withRestore)
 }

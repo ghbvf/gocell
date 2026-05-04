@@ -54,13 +54,39 @@ real `TxRunner` (via testcontainers) or a locally-defined no-op stub
 implementing `kernel/cell.Nooper`. Production callers can no longer silently
 run "as if there were no transaction".
 
-### Decision 3 — Delete `outbox.Receipt` type alias
+### Decision 3 — Delete `outbox.Receipt` type alias; extract `Settlement` interface
 
-`HandleResult.Receipt` keeps its position as the Subscriber-implementer
-delivery-loop hand-off, but its type is now `idempotency.Receipt` directly.
-The alias was the last `kernel/idempotency` symbol leaking into the handler
-vocabulary; deleting it makes the layering explicit and steers handler
-authors away from touching the field at all (see Trade-off Q1 below).
+`HandleResult.Receipt` field is fully removed (K#12 PR-V1-OUTBOX-RECEIPT-EXTRACT).
+Settlement is now carried as a second return value of `SubscriberHandler`, separate
+from the business `HandleResult`. `outbox.Settlement` is a new interface with
+`Commit(ctx) error` and `Release(ctx) error`; `idempotency.Receipt` satisfies it
+via duck typing. Business handlers implement `EntryHandler` (returning only
+`HandleResult`) and never touch `Settlement`. `EntryToSubscriberHandler` lifts
+an `EntryHandler` to a `SubscriberHandler` with nil settlement for adapter-layer
+tests that call `Subscriber.Subscribe` directly. See Trade-off Q1 (closed).
+
+**K#12 二轮深度修复补充（Codex 独立审查）**：K#12 一轮首次实施时将
+`SubscriptionMiddleware` 升级为 `func(sub, next SubscriberHandler) SubscriberHandler`，
+引入了 lift→discard 范式（`AsMiddleware` 把 ConsumerBase 注入为 middleware entry，
+业务 middleware 被迫透传 Settlement boilerplate，且 AsMiddleware 内 silent discard
+inner settlement）。二轮深度修复消除这一根因：
+
+- `SubscriptionMiddleware` 回退为 `func(sub Subscription, next EntryHandler) EntryHandler`
+  （业务签名，不接触 Settlement）
+- 删除 `ConsumerBase.AsMiddleware()` — 业务/幂等分离现由结构强制而非顺序约定
+- `SubscriberWithMiddleware` field-inject `*ConsumerBase` 为显式 EntryHandler→SubscriberHandler
+  转换点；新增 `SubscribeEntry` 方法编排：业务 middleware chain → ConsumerBase.Wrap
+  → observability restore → Inner.Subscribe
+- `ContractTracingMiddleware` 恢复 once-at-construction `MustWrapConsumer` 调用；
+  spec.Validate() panic 在注册期触发（P1 修复）
+
+对齐业界共识（Watermill router 独占 Ack/Nack 决策 / Kratos transport 独占 gRPC
+status / sarama session.MarkMessage 在 ConsumeClaim 内而非 middleware）：业务
+middleware 操作业务签名，settle/idempotency 层是独立边界。
+
+ref: ThreeDotsLabs/watermill message/router.go handleMessage Ack/Nack monopoly
+ref: go-kratos/kratos middleware vs transport/grpc/server.go layering
+ref: IBM/sarama consumer_group.go ConsumerGroupSession.MarkMessage
 
 ### Decision 4 — Delete the implicit `PermanentError → Reject` upgrade
 
@@ -81,26 +107,16 @@ must return `DispositionReject` explicitly. This restores the "explicit
 three-state vocabulary" the public API was supposed to provide and is
 locked by `TestConsumerBase_Wrap_WrappedPermanentErrorInRequeue_NotEscalated`.
 
-## Trade-off Q1 — `HandleResult.Receipt` field retained (not deleted)
+## Trade-off Q1 — `HandleResult.Receipt` field — CLOSED by K#12
 
-The `Receipt` field is *not* part of the handler-author vocabulary — it is
-a `Subscriber → ConsumerBase → Subscriber-delivery-loop` internal hand-off
-threaded through the same struct. Eliminating it requires a structural
-redesign of the Subscriber-Handler boundary (e.g., a side-channel
-`ReleaseAfterSettlement(entryID, disposition)` API on `ConsumerBase`, or a
-`sync.Map` keyed by entry ID maintained inside ConsumerBase). That work is
-~12h dev + 6h review, which exceeds this PR's scope.
-
-For now the field stays, with godoc explicitly marking it as a
-Subscriber-implementer field that business handlers MUST NOT write. The
-follow-up is tracked as **029 #12 PR-V1-OUTBOX-RECEIPT-EXTRACT** in the
-master roadmap (single source of truth — `docs/backlog.md` does not get a
-duplicate entry).
-
-This is an explicitly accepted, time-bounded architecture compromise that
-ends with K#12 (PR-V1-OUTBOX-RECEIPT-EXTRACT). The adapters/rabbitmq
-dependency on kernel/idempotency that surfaces from this design is part
-of the same compromise envelope and resolves at the same time.
+Resolved in K#12 PR-V1-OUTBOX-RECEIPT-EXTRACT. `HandleResult.Receipt` is
+deleted. Settlement is now a second return value of `SubscriberHandler`
+(`outbox.SubscriberHandler = func(ctx, Entry) (HandleResult, Settlement)`).
+Business handlers still implement `EntryHandler` — no change to the
+handler-author vocabulary. The `adapters/rabbitmq` dependency on
+`kernel/idempotency` is also removed (rabbitmq now depends only on
+`outbox.Settlement` interface). This closes the time-bounded compromise
+that was explicitly accepted in K#03.
 
 ## Trade-off Q5 — actorID system fallback in auditappend
 
@@ -142,10 +158,9 @@ The fallback is fail-safe, not a routine path; do not rely on it.
 
 ## Future Work
 
-- **029 #12 PR-V1-OUTBOX-RECEIPT-EXTRACT** — restructure
-  Subscriber-Handler boundary so `HandleResult.Receipt` can be deleted
-  outright, completing the "handler-author cannot touch idempotency types"
-  goal. Dependency: this ADR (#03). Estimate: 12h dev + 6h review.
+- **029 #12 PR-V1-OUTBOX-RECEIPT-EXTRACT** — COMPLETED. `HandleResult.Receipt`
+  deleted; `SubscriberHandler` now returns `(HandleResult, Settlement)` as
+  second value; `adapters/rabbitmq` no longer imports `kernel/idempotency`.
 
 ## References
 
