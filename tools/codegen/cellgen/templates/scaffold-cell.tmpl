@@ -1,0 +1,45 @@
+// Package {{.Package}} implements the {{.CellID}} cell.
+//
+// TODO: write a one-paragraph description of the cell's responsibility.
+package {{.Package}}
+
+import (
+	"context"
+
+	"{{.ModulePath}}/kernel/cell"
+)
+
+// +cell:listener:ref=cell.PrimaryListener,prefix=/api/v1
+// TODO: declare additional listeners (e.g. cell.InternalListener) by
+// adding more // +cell:listener: markers above this struct, or remove
+// the marker if this cell has no HTTP routes.
+type {{.StructName}} struct {
+	*cell.BaseCell
+
+	// TODO: add handler/service fields with // +slice:route or
+	// // +slice:subscribe markers. Examples:
+	//
+	//   // +slice:route:slice=foo,subPath=/foo
+	//   fooHandler *foo.Handler
+	//
+	//   // +slice:subscribe:slice=foo,topic=event.foo.created.v1,handler=HandleCreated,group={{.CellID}}
+	//   fooSvc *foo.Service
+}
+
+// New{{.StructName}} creates a new {{.StructName}}.
+func New{{.StructName}}() *{{.StructName}} {
+	return &{{.StructName}}{
+		BaseCell: cell.MustNewBaseCell(loadCellMetadata()),
+	}
+}
+
+// initInternal is the K#04 codegen escape hatch for business init that
+// cell_gen.go cannot generate. cell_gen.go::Init invokes this hook
+// after BaseCell.Init and before mounting generated route groups.
+//
+//nolint:unparam // ctx is part of the K#04 initInternal contract
+func (c *{{.StructName}}) initInternal(ctx context.Context, reg cell.Registry) error {
+	// TODO: construct services and handlers, c.AddSlice(...), register
+	// health probes via reg.Health, lifecycle hooks via reg.Lifecycle.
+	return nil
+}
