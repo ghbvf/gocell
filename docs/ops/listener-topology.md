@@ -203,16 +203,35 @@ func (c *MyCell) RouteGroups() []cell.RouteGroup {
             Listener: cell.InternalListener,
             Prefix:   "/internal/v1/my-domain",
             Register: func(mux cell.RouteMux) error {
+                spec := wrapper.ContractSpec{
+                    ID: "http.my-domain.admin-action.v1", Kind: "http", Transport: "http",
+                    Method: "POST", Path: "/internal/v1/my-domain/action",
+                    Clients: []string{"my-cell"}, // mirrors contract.yaml endpoints.clients
+                }
                 return auth.Mount(mux, auth.Route{
-                    Contract: specAdminAction,
+                    Contract: spec,
                     Handler:  http.HandlerFunc(c.handleAdminAction),
-                    Policy:   auth.AnyRole(auth.RoleInternalAdmin),
+                    // No explicit Policy — auth.Mount auto-applies RequireCallerCell
+                    // when Contract.Clients is non-empty.
                 })
             },
         },
     }
 }
 ```
+
+### Internal Endpoint Caller-Cell Allowlist (A5)
+
+Internal listener routes use service token caller-cell identity for access control
+rather than role-based policies:
+
+- Service tokens carry a 4-part format `ts:nonce:callerCell:mac`; the `callerCell`
+  segment identifies the originating cell.
+- `ContractSpec.Clients` declares the allowlist of permitted callerCell values,
+  mirroring `contract.yaml endpoints.clients`. FMT-18 validates the two are in sync.
+- When `Clients` is non-empty, `auth.Mount` automatically injects `RequireCallerCell`;
+  callers not in the allowlist receive 403 — no explicit `Policy` field is needed.
+- In tests, inject a service principal with `auth.TestServiceContext(callerCell)`.
 
 The `health` listener is reserved for framework-owned endpoints (`/healthz`,
 `/readyz`, `/metrics`). Cells must not declare routes on `cell.HealthListener`.

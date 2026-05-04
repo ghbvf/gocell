@@ -9,11 +9,7 @@ import (
 	"github.com/ghbvf/gocell/runtime/auth"
 )
 
-// Contract spec literals — awaiting real caller cell registration at the
-// InternalListener RouteGroup level (see B2-T-07-FU-1 in docs/backlog2.md).
-// Clients declares "accesscore" as the only allowed caller; auth.Mount
-// auto-enforces RequireCallerCell when Clients is non-empty. Contract.yaml
-// endpoints.clients is [] pending re-wiring at the route-group layer.
+// Contract spec literals — RequireCallerCell auto-applied by auth.Mount when Clients is non-empty (see runtime/auth/route.go).
 var (
 	specRoleAssign = wrapper.ContractSpec{
 		ID: "http.auth.role.assign.v1", Kind: "http", Transport: "http",

@@ -38,10 +38,17 @@ var (
 		ID: "http.device.command.extend-lease.v1", Kind: "http", Transport: "http",
 		Method: "POST", Path: "/api/v1/devices/{id}/commands/{cmdId}/extend-lease",
 	}
+	// specInternalCommandScanActive is a self-call endpoint: devicecell calls itself
+	// via the InternalListener for periodic scan-active operations. This pattern is
+	// intentionally simplified for the demo — in production, an internal worker
+	// typically invokes an internal endpoint on the same cell via InternalListener,
+	// avoiding the overhead of going through the primary listener. For cross-cell
+	// scenarios (caller != server), this pattern serves as the canonical template:
+	// Clients declares the allowed callerCell(s), and auth.Mount auto-enforces
+	// RequireCallerCell when Clients is non-empty.
 	specInternalCommandScanActive = wrapper.ContractSpec{
 		ID: "http.internal.devicecommands.list.v1", Kind: "http", Transport: "http",
 		Method: "GET", Path: "/internal/v1/devicecommands",
-		// devicecell calls itself via the internal listener for scan-active ops.
 		Clients: []string{"devicecell"},
 	}
 )

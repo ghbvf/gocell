@@ -176,7 +176,7 @@ bootstrap.WithListener(WebhookListener, ":8090",
 |------|------|------|
 | `Contract` | `wrapper.ContractSpec`（Method + Path + Kind="http"） | 必填，drives 注册 pattern + span attrs |
 | `Handler` | `http.Handler` | 必填，非 nil |
-| `Policy` | `auth.Policy` — 路由级策略 | 可选；`Public=true` 时必须为 nil |
+| `Policy` | `auth.Policy` — 路由级策略。当 `Contract.Clients` 非空时，`auth.Mount` 自动注入 `RequireCallerCell` 守卫，handler 无需显式 Policy；显式 Policy 与自动 caller_cell 守卫复合（外层 caller-cell guard → 内层 Policy） | 可选；`Public=true` 时必须为 nil |
 | `Public` | JWT 豁免 | 与 `Policy` / `PasswordResetExempt` 互斥 |
 | `PasswordResetExempt` | 允许 password-reset token | 与 `Public` 互斥；handler 内做细粒度校验 |
 
@@ -230,3 +230,11 @@ internal listener 的 `ServiceTokenMiddleware` 必须带一个 replay-safe `auth
 - 禁止在 `cmd/*` / `examples/*/main.go` 硬编码业务路径字面量（`grep '"POST /api/v1/"'` 必须为空）
 - Cell 禁止直接 import `runtime/http/router`；通过 `cell.RouteMux` / `cell.RouteGroup` 声明路由（LAYER-07）
 - Cell 禁止构造 AuthPlan 值（`cell.NewAuthJWT` / `cell.MustNewAuthJWT` / `cell.NewAuthServiceToken` / `cell.MustNewAuthServiceToken` 等所有变体）；认证计划由 composition root（`cmd/`）组装后通过 `WithListener` 注入（LAYER-09 / AUTH-PLAN-04）
+
+### Internal endpoint caller-cell allowlist (A5)
+
+Service token 采用 4-part 格式 `ts:nonce:callerCell:mac`，`callerCell` 段携带调用方 cell ID。
+
+- `ContractSpec.Clients` 声明允许的 callerCell 列表，对应 `contract.yaml endpoints.clients`；FMT-18 双向校验两者一致性。
+- 当 `Clients` 非空时，`auth.Mount` 自动注入 `RequireCallerCell` 守卫；不在 allowlist 的 caller 返回 403，handler 无需显式 `Policy`。
+- 测试用 `auth.TestServiceContext(callerCell)` 注入 service principal。
