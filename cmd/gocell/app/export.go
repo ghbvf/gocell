@@ -90,6 +90,8 @@ func exportCatalog(args []string) error {
 		return err
 	}
 
+	attachWireSummaries(&opts, rootDir, pm)
+
 	doc, err := catalog.BuildDocument(pm, opts)
 	if err != nil {
 		return err
@@ -101,6 +103,20 @@ func exportCatalog(args []string) error {
 	}
 
 	return writeOut(*out, body)
+}
+
+// attachWireSummaries populates opts.WireSummaries by scanning cell.go marker
+// comments under root. Best-effort: a scan error is logged at Warn and
+// wireSummary is omitted from Cell entities (graceful degrade).
+func attachWireSummaries(opts *catalog.ExportOptions, root string, pm *metadata.ProjectMeta) {
+	summaries, err := buildCellWireSummaries(root, pm)
+	if err != nil {
+		slog.Warn("export: wire summary scan failed; wireSummary omitted from catalog",
+			slog.String("root", root),
+			slog.Any("error", err))
+		return
+	}
+	opts.WireSummaries = summaries
 }
 
 // attachCellDeps populates opts.CellDeps when CellDeps is set in the filter.

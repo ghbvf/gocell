@@ -486,8 +486,21 @@ func devtoolsOption(shared *SharedDeps) bootstrap.Option {
 	if err != nil {
 		return bootstrap.WithDevtoolsCatalog(nil, "", nil)
 	}
+
+	// Derive wire summaries from cell.go marker comments. Best-effort: a scan
+	// error (e.g. malformed marker) disables wireSummary but does not block the
+	// catalog endpoint. See docs/architecture/202605051500-adr-k05-markergen-cellgen-unified.md
+	// Decision 6.
+	wireSummaries, wsErr := BuildCellWireSummaries(absRoot, pm)
+	if wsErr != nil {
+		slog.Warn("devtools: wire summary scan failed; wireSummary omitted from catalog",
+			slog.String("root", absRoot),
+			slog.Any("error", wsErr))
+		wireSummaries = nil
+	}
+
 	slog.Info("devtools: catalog endpoint enabled", slog.String("root", absRoot))
-	return bootstrap.WithDevtoolsCatalog(pm, absRoot, generatedPackageGraph)
+	return bootstrap.WithDevtoolsCatalog(pm, absRoot, generatedPackageGraph, wireSummaries)
 }
 
 // parseProjectWithTimeout runs metadata.NewParser(absRoot).Parse() in a

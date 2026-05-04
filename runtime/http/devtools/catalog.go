@@ -17,24 +17,6 @@ import (
 	"github.com/ghbvf/gocell/runtime/devtools/catalog"
 )
 
-// cellSpecWire extends catalog.CellSpec with an optional wire surface summary
-// injected by the Handler when wireSummaries are available. The embedded
-// CellSpec ensures JSON/YAML serialization is identical to the base type;
-// WireSummary is an optional additive field (v1 response only-adds policy).
-//
-// This type lives in the devtools package so that runtime/devtools/catalog
-// (wire.go) remains import-free of kernel/metadata wire conversion helpers.
-type cellSpecWire struct {
-	catalog.CellSpec
-	// WireSummary carries the aggregated wire surface for a Cell derived from
-	// K#05 marker comments (listeners, route mounts, event subscriptions).
-	//
-	// Stability: experimental — field shape may change between minor versions.
-	// Consumers (dashboards / CI) should treat this as a non-stable contract
-	// until promoted via ADR.
-	WireSummary *metadata.CellWireSummary `json:"wireSummary,omitempty" yaml:"wireSummary,omitempty"`
-}
-
 // specCatalog is the framework-internal ContractSpec for the devtools catalog
 // endpoint. The "http.framework.devtools." prefix exempts it from FMT-18
 // contract-yaml presence validation because it lives in runtime/, not cells/.
@@ -58,7 +40,7 @@ type Handler struct {
 	pkgGraph      *kerneldepgraph.Graph
 	root          string
 	clock         clock.Clock
-	wireSummaries []metadata.CellWireSummary // optional; nil → empty wireSummary on all Cell entities
+	wireSummaries []metadata.CellWireSummary // optional; nil → wireSummary omitted from all Cell entities
 }
 
 // NewHandler constructs a Handler. cellGraph may be nil (omits cell dep graph).
@@ -66,8 +48,8 @@ type Handler struct {
 // pkgGraph is the build-time generated graph from cmd/corebundle/catalog_gen.go.
 // wireSummaries may be nil; when nil the wireSummary field on Cell entities is
 // omitted from the response. Production callers supply summaries derived from
-// markergen.Merge; nil is safe for environments where cell.go markers are
-// absent (deferred wiring — see follow-up backlog item).
+// markergen.Merge via BuildCellWireSummaries; nil is safe for environments
+// where cell.go markers are absent.
 func NewHandler(
 	project *metadata.ProjectMeta,
 	cellGraph *catalog.CellDepGraph,
@@ -118,10 +100,12 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Build export options.
+	// Build export options — wireSummaries are passed via opts so that
+	// catalog.BuildDocument handles injection in a single place (shared with
+	// the CLI export path).
 	opts := buildExportOptions(h, filter)
 
-	// Build document.
+	// Build document (includes wireSummary injection via opts.WireSummaries).
 	doc, err := catalog.BuildDocument(h.project, opts)
 	if err != nil {
 		slog.Error("devtools: BuildDocument failed",
@@ -131,11 +115,6 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		httputil.WritePublicError(ctx, w, http.StatusInternalServerError,
 			string(errcode.ErrInternal), "internal server error")
 		return
-	}
-
-	// Augment Cell entities with wire summary when available.
-	if len(h.wireSummaries) > 0 {
-		injectWireSummaries(doc.Entities, h.wireSummaries)
 	}
 
 	// Marshal document.
@@ -168,9 +147,10 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // load. Use sparingly; not appropriate for high-frequency polling.
 func buildExportOptions(h *Handler, filter catalog.Filter) catalog.ExportOptions {
 	opts := catalog.ExportOptions{
-		Clock:  h.clock,
-		Root:   ".",
-		Filter: filter,
+		Clock:         h.clock,
+		Root:          ".",
+		Filter:        filter,
+		WireSummaries: h.wireSummaries,
 	}
 	if filter.Include.CellDeps {
 		opts.CellDeps = h.cellGraph
@@ -290,38 +270,4 @@ func writeBody(w http.ResponseWriter, body []byte) {
 	if _, err := w.Write(body); err != nil { //nolint:gosec // body is serialized catalog metadata, admin-only endpoint
 		slog.Error("devtools: write response body", slog.Any("error", err))
 	}
-}
-
-// injectWireSummaries replaces the Spec of each Cell entity in-place with a
-// cellSpecWire that embeds the original CellSpec plus the matching
-// CellWireSummary (keyed by CellID == Entity.Metadata.Name). Entities whose
-// cell ID has no matching summary get a cellSpecWire with WireSummary == nil
-// (omitted from JSON/YAML output — forward-compatible).
-//
-// Non-Cell entities are left unchanged.
-func injectWireSummaries(entities []catalog.Entity, summaries []metadata.CellWireSummary) {
-	idx := buildWireSummaryIndex(summaries)
-	for i := range entities {
-		if entities[i].Kind != "Cell" {
-			continue
-		}
-		base, ok := entities[i].Spec.(catalog.CellSpec)
-		if !ok {
-			continue
-		}
-		ws := idx[entities[i].Metadata.Name]
-		entities[i].Spec = cellSpecWire{CellSpec: base, WireSummary: ws}
-	}
-}
-
-// buildWireSummaryIndex returns a map from CellID to *CellWireSummary for
-// O(1) lookup during entity augmentation. Pointer semantics allow nil-check
-// at the call site to drive omitempty serialization.
-func buildWireSummaryIndex(summaries []metadata.CellWireSummary) map[string]*metadata.CellWireSummary {
-	idx := make(map[string]*metadata.CellWireSummary, len(summaries))
-	for i := range summaries {
-		s := summaries[i]
-		idx[s.CellID] = &s
-	}
-	return idx
 }

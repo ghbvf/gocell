@@ -29,6 +29,60 @@ type ExportOptions struct {
 	// synchronous loading share one shape. Callers signal readiness via
 	// Graph != nil and errors via Error != "".
 	Packages *PackageDepsView
+	// WireSummaries, when non-nil, augments each Cell entity's Spec with a
+	// wireSummary block derived from cell.go marker comments (K#05). Nil means
+	// the wireSummary field is omitted from all Cell entities.
+	// HTTP catalog and CLI export both supply this to produce a consistent view.
+	WireSummaries []metadata.CellWireSummary
+}
+
+// CellSpecWire extends CellSpec with an optional wire surface summary injected
+// when WireSummaries are present in ExportOptions. The embedded CellSpec
+// ensures JSON/YAML serialization is identical to the base type; WireSummary
+// is an additive optional field (v1 response only-adds policy).
+type CellSpecWire struct {
+	CellSpec
+	// WireSummary carries the aggregated wire surface for a Cell derived from
+	// K#05 marker comments (listeners, route mounts, event subscriptions).
+	//
+	// Stability: experimental — field shape may change between minor versions.
+	// Consumers (dashboards / CI) should treat this as a non-stable contract
+	// until promoted via ADR.
+	WireSummary *metadata.CellWireSummary `json:"wireSummary,omitempty" yaml:"wireSummary,omitempty"`
+}
+
+// InjectWireSummaries replaces the Spec of each Cell entity in-place with a
+// CellSpecWire that embeds the original CellSpec plus the matching
+// CellWireSummary (keyed by CellID == Entity.Metadata.Name). Entities whose
+// cell ID has no matching summary get a CellSpecWire with WireSummary == nil
+// (omitted from JSON/YAML output — forward-compatible).
+//
+// Non-Cell entities are left unchanged. Exported so CLI export and HTTP
+// catalog share the same augmentation path.
+func InjectWireSummaries(entities []Entity, summaries []metadata.CellWireSummary) {
+	idx := buildWireSummaryIndex(summaries)
+	for i := range entities {
+		if entities[i].Kind != "Cell" {
+			continue
+		}
+		base, ok := entities[i].Spec.(CellSpec)
+		if !ok {
+			continue
+		}
+		ws := idx[entities[i].Metadata.Name]
+		entities[i].Spec = CellSpecWire{CellSpec: base, WireSummary: ws}
+	}
+}
+
+// buildWireSummaryIndex returns a map from CellID to *CellWireSummary for
+// O(1) lookup during entity augmentation.
+func buildWireSummaryIndex(summaries []metadata.CellWireSummary) map[string]*metadata.CellWireSummary {
+	idx := make(map[string]*metadata.CellWireSummary, len(summaries))
+	for i := range summaries {
+		s := summaries[i]
+		idx[s.CellID] = &s
+	}
+	return idx
 }
 
 // BuildDocument projects pm into a Document according to opts. Pure function:
@@ -56,6 +110,11 @@ func BuildDocument(pm *metadata.ProjectMeta, opts ExportOptions) (Document, erro
 
 	entities = applyFilter(entities, filter)
 	sortEntities(entities)
+
+	// Augment Cell entities with wire summary when available.
+	if len(opts.WireSummaries) > 0 {
+		InjectWireSummaries(entities, opts.WireSummaries)
+	}
 
 	doc := Document{
 		SchemaVersion: SchemaVersionV1,

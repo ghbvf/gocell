@@ -119,9 +119,10 @@ type Bootstrap struct {
 
 	// --- devtools catalog endpoint (J1 PR-A37) ---
 	// All zero/nil = endpoint not registered.
-	devtoolsMeta     *metadata.ProjectMeta // parsed catalog source
-	devtoolsRoot     string                // displayed in Document.Root
-	devtoolsPkgGraph *kerneldepgraph.Graph // build-time generated package dep graph (nil = omit packageDeps block)
+	devtoolsMeta          *metadata.ProjectMeta      // parsed catalog source
+	devtoolsRoot          string                     // displayed in Document.Root
+	devtoolsPkgGraph      *kerneldepgraph.Graph      // build-time generated package dep graph (nil = omit packageDeps block)
+	devtoolsWireSummaries []metadata.CellWireSummary // optional; nil → wireSummary omitted from all Cell entities
 
 	// --- runtime guard ---
 	runOnce sync.Once // Run() single-execution guard

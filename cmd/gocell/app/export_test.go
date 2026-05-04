@@ -422,6 +422,69 @@ func TestDispatch_UsageContainsExport(t *testing.T) {
 	assert.Contains(t, stdout, "export")
 }
 
+// TestRunExport_WireSummaryInjected verifies that the default export path
+// populates the wireSummary field on Cell entities. The fixture has no cell.go
+// so the wireSummary is injected with empty Listeners/Routes/Subscribes.
+func TestRunExport_WireSummaryInjected(t *testing.T) {
+	root := copyFixtureToTempDir(t)
+	outPath := filepath.Join(t.TempDir(), "out.json")
+
+	err := runExport([]string{
+		"catalog", "--root=" + root,
+		"--include=", // skip deps for speed
+		"--out=" + outPath,
+	})
+	require.NoError(t, err)
+
+	data, readErr := os.ReadFile(outPath) //nolint:gosec // test output file
+	require.NoError(t, readErr)
+
+	// Parse as generic JSON to find the Cell entity spec.
+	var doc struct {
+		Entities []struct {
+			Kind string `json:"kind"`
+			Spec struct {
+				// wireSummary is present when InjectWireSummaries ran.
+				WireSummary *struct {
+					CellID     string `json:"cellId"`
+					Listeners  []any  `json:"listeners"`
+					Routes     []any  `json:"routes"`
+					Subscribes []any  `json:"subscribes"`
+				} `json:"wireSummary"`
+			} `json:"spec"`
+		} `json:"entities"`
+	}
+	require.NoError(t, json.Unmarshal(data, &doc))
+
+	var cellEntities []struct {
+		WireSummary *struct {
+			CellID     string `json:"cellId"`
+			Listeners  []any  `json:"listeners"`
+			Routes     []any  `json:"routes"`
+			Subscribes []any  `json:"subscribes"`
+		}
+	}
+	for _, e := range doc.Entities {
+		if e.Kind == "Cell" {
+			cellEntities = append(cellEntities, struct {
+				WireSummary *struct {
+					CellID     string `json:"cellId"`
+					Listeners  []any  `json:"listeners"`
+					Routes     []any  `json:"routes"`
+					Subscribes []any  `json:"subscribes"`
+				}
+			}{WireSummary: e.Spec.WireSummary})
+		}
+	}
+
+	require.NotEmpty(t, cellEntities, "fixture must have at least one Cell entity")
+	for _, ce := range cellEntities {
+		require.NotNil(t, ce.WireSummary,
+			"Cell entity must have wireSummary field injected (even if empty)")
+		assert.NotEmpty(t, ce.WireSummary.CellID, "wireSummary.cellId must be set")
+	}
+}
+
 // TestRunExport_DefaultPackageDepsLoadError verifies that the default export
 // path degrades when depgraph.Load fails instead of failing the whole document.
 func TestRunExport_DefaultPackageDepsLoadError(t *testing.T) {
