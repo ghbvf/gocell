@@ -41,6 +41,8 @@ var (
 	specInternalCommandScanActive = wrapper.ContractSpec{
 		ID: "http.internal.devicecommands.list.v1", Kind: "http", Transport: "http",
 		Method: "GET", Path: "/internal/v1/devicecommands",
+		// devicecell calls itself via the internal listener for scan-active ops.
+		Clients: []string{"devicecell"},
 	}
 )
 
@@ -125,15 +127,16 @@ func (h *Handler) RegisterRoutes(mux kcell.RouteHandler) error {
 }
 
 // RegisterInternalRoutes registers device-command ops routes on the internal
-// listener. The bootstrap internal middleware authenticates service tokens;
-// the route policy then requires the built-in internal admin role.
+// listener. Authentication is provided by the InternalListener ServiceToken
+// middleware; route-level caller-cell restriction uses RequireCallerCell
+// for identity-based access control.
 func (h *Handler) RegisterInternalRoutes(mux kcell.RouteHandler) error {
 	if err := auth.Mount(mux, auth.Route{
 		Contract: specInternalCommandScanActive,
 		Handler:  http.HandlerFunc(h.HandleScanActive),
-		Policy:   auth.AnyRole(auth.RoleInternalAdmin),
 		// Route lives on InternalListener (/internal/v1/*); internal affinity
 		// is derived from the path prefix via AuthRouteMeta.IsInternal().
+		// Caller-cell identity enforced by InternalListener ServiceToken middleware.
 	}); err != nil {
 		return err
 	}

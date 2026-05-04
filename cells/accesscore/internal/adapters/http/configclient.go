@@ -85,7 +85,8 @@ func (c *HTTPConfigGetter) GetEntry(ctx context.Context, key string) (ports.Conf
 	}
 
 	// Sign the request with a service token so the InternalListener middleware accepts it.
-	token := auth.GenerateServiceToken(c.ring, http.MethodGet, path, "", c.clock.Now())
+	// callerCell="accesscore" mirrors contract.yaml endpoints.clients[0].
+	token := auth.GenerateServiceToken(c.ring, "accesscore", http.MethodGet, path, "", c.clock.Now())
 	req.Header.Set("Authorization", "ServiceToken "+token)
 
 	resp, err := c.client.Do(req)

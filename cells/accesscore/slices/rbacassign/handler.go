@@ -9,16 +9,21 @@ import (
 	"github.com/ghbvf/gocell/runtime/auth"
 )
 
-// Contract spec literals — cross-checked against contracts/http/auth/role/
-// {assign,revoke}/v1/contract.yaml by FMT-18.
+// Contract spec literals — awaiting real caller cell registration at the
+// InternalListener RouteGroup level (see B2-T-07-FU-1 in docs/backlog2.md).
+// Clients declares "accesscore" as the only allowed caller; auth.Mount
+// auto-enforces RequireCallerCell when Clients is non-empty. Contract.yaml
+// endpoints.clients is [] pending re-wiring at the route-group layer.
 var (
 	specRoleAssign = wrapper.ContractSpec{
 		ID: "http.auth.role.assign.v1", Kind: "http", Transport: "http",
 		Method: "POST", Path: "/internal/v1/access/roles/assign",
+		Clients: []string{"accesscore"},
 	}
 	specRoleRevoke = wrapper.ContractSpec{
 		ID: "http.auth.role.revoke.v1", Kind: "http", Transport: "http",
 		Method: "POST", Path: "/internal/v1/access/roles/revoke",
+		Clients: []string{"accesscore"},
 	}
 )
 
@@ -61,14 +66,13 @@ type RevokeRequest struct {
 }
 
 // RegisterRoutes registers rbac-assign routes on the given mux.
-// Policy is declared at registration time; handler bodies contain only
-// business logic (no inline guard calls).
+// Caller-cell identity (Clients in ContractSpec) is enforced by auth.Mount's
+// auto-applied RequireCallerCell guard — no explicit role-based Policy needed.
+// Route group wiring at InternalListener level is deferred; see B2-T-07-FU-1.
 func (h *Handler) RegisterRoutes(mux kcell.RouteMux) error {
-	internalAdminPolicy := auth.AnyRole(auth.RoleInternalAdmin)
 	if err := auth.Mount(mux, auth.Route{
 		Contract: specRoleAssign,
 		Handler:  http.HandlerFunc(h.handleAssign),
-		Policy:   internalAdminPolicy,
 		// Route lives on InternalListener (/internal/v1/*); internal affinity
 		// is derived from the path prefix via AuthRouteMeta.IsInternal().
 	}); err != nil {
@@ -77,7 +81,6 @@ func (h *Handler) RegisterRoutes(mux kcell.RouteMux) error {
 	if err := auth.Mount(mux, auth.Route{
 		Contract: specRoleRevoke,
 		Handler:  http.HandlerFunc(h.handleRevoke),
-		Policy:   internalAdminPolicy,
 	}); err != nil {
 		return err
 	}
