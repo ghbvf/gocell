@@ -8,6 +8,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/ghbvf/gocell/kernel/metadata"
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
@@ -16,16 +17,16 @@ import (
 // ---------------------------------------------------------------------------
 
 func TestBaseCellLifecycle(t *testing.T) {
-	meta := CellMetadata{
+	meta := &metadata.CellMeta{
 		ID:               "auth-core",
-		Type:             CellTypeCore,
-		ConsistencyLevel: L2,
-		Owner:            Owner{Team: "platform", Role: "owner"},
-		Schema:           SchemaConfig{Primary: "auth"},
-		Verify:           CellVerify{Smoke: []string{"smoke_auth"}},
+		Type:             "core",
+		ConsistencyLevel: "L2",
+		Owner:            metadata.OwnerMeta{Team: "platform", Role: "owner"},
+		Schema:           metadata.SchemaMeta{Primary: "auth"},
+		Verify:           metadata.CellVerifyMeta{Smoke: []string{"smoke_auth"}},
 	}
 
-	c := NewBaseCell(meta)
+	c := MustNewBaseCell(meta)
 
 	// Before Init: not ready, unhealthy.
 	assert.False(t, c.Ready())
@@ -48,22 +49,25 @@ func TestBaseCellLifecycle(t *testing.T) {
 }
 
 func TestBaseCellAccessors(t *testing.T) {
-	meta := CellMetadata{
+	meta := &metadata.CellMeta{
 		ID:               "configcore",
-		Type:             CellTypeSupport,
-		ConsistencyLevel: L1,
-		Owner:            Owner{Team: "infra", Role: "maintainer"},
+		Type:             "support",
+		ConsistencyLevel: "L1",
+		Owner:            metadata.OwnerMeta{Team: "infra", Role: "maintainer"},
 	}
-	c := NewBaseCell(meta)
+	c := MustNewBaseCell(meta)
 
 	assert.Equal(t, "configcore", c.ID())
 	assert.Equal(t, CellTypeSupport, c.Type())
 	assert.Equal(t, L1, c.ConsistencyLevel())
+	// Metadata() returns a pointer to the deep-copied internal snapshot;
+	// compare by value (reflect.DeepEqual through assert.Equal handles
+	// pointer-target comparison automatically).
 	assert.Equal(t, meta, c.Metadata())
 }
 
 func TestBaseCellSlicesAndContracts(t *testing.T) {
-	c := NewBaseCell(CellMetadata{ID: "test-cell"})
+	c := MustNewBaseCell(&metadata.CellMeta{ID: "test-cell"})
 
 	// Initially empty.
 	assert.Empty(t, c.OwnedSlices())
@@ -90,7 +94,7 @@ func TestBaseCellSlicesAndContracts(t *testing.T) {
 }
 
 func TestBaseCellSlicesAndContractsReturnCopy(t *testing.T) {
-	c := NewBaseCell(CellMetadata{ID: "copy-test"})
+	c := MustNewBaseCell(&metadata.CellMeta{ID: "copy-test"})
 	s := NewBaseSlice("s1", "copy-test", L0)
 	c.AddSlice(s)
 	pc := NewBaseContract("pc1", ContractHTTP, "copy-test", L1)
@@ -113,7 +117,7 @@ func TestBaseCellSlicesAndContractsReturnCopy(t *testing.T) {
 }
 
 func TestBaseCellReadyStates(t *testing.T) {
-	c := NewBaseCell(CellMetadata{ID: "r"})
+	c := MustNewBaseCell(&metadata.CellMeta{ID: "r"})
 
 	// New: not ready.
 	assert.False(t, c.Ready())
@@ -136,7 +140,7 @@ func TestBaseCellReadyStates(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestBaseCellDoubleInit(t *testing.T) {
-	c := NewBaseCell(CellMetadata{ID: "dbl-init"})
+	c := MustNewBaseCell(&metadata.CellMeta{ID: "dbl-init"})
 	require.NoError(t, c.Init(context.Background(), NewRegistryRecorder(nil, DurabilityDurable)))
 
 	err := c.Init(context.Background(), NewRegistryRecorder(nil, DurabilityDurable))
@@ -147,7 +151,7 @@ func TestBaseCellDoubleInit(t *testing.T) {
 }
 
 func TestBaseCellStartWithoutInit(t *testing.T) {
-	c := NewBaseCell(CellMetadata{ID: "no-init"})
+	c := MustNewBaseCell(&metadata.CellMeta{ID: "no-init"})
 
 	err := c.Start(context.Background())
 	require.Error(t, err)
@@ -157,7 +161,7 @@ func TestBaseCellStartWithoutInit(t *testing.T) {
 }
 
 func TestBaseCellDoubleStart(t *testing.T) {
-	c := NewBaseCell(CellMetadata{ID: "dbl-start"})
+	c := MustNewBaseCell(&metadata.CellMeta{ID: "dbl-start"})
 	require.NoError(t, c.Init(context.Background(), NewRegistryRecorder(nil, DurabilityDurable)))
 	require.NoError(t, c.Start(context.Background()))
 
@@ -169,14 +173,14 @@ func TestBaseCellDoubleStart(t *testing.T) {
 }
 
 func TestBaseCellStopWithoutStart(t *testing.T) {
-	c := NewBaseCell(CellMetadata{ID: "no-start"})
+	c := MustNewBaseCell(&metadata.CellMeta{ID: "no-start"})
 
 	// Stop on a brand-new cell is a no-op.
 	require.NoError(t, c.Stop(context.Background()))
 }
 
 func TestBaseCellInitThenStopSkipStart(t *testing.T) {
-	c := NewBaseCell(CellMetadata{ID: "init-stop"})
+	c := MustNewBaseCell(&metadata.CellMeta{ID: "init-stop"})
 	require.NoError(t, c.Init(context.Background(), NewRegistryRecorder(nil, DurabilityDurable)))
 
 	// Stop from initialized is a no-op.
@@ -184,7 +188,7 @@ func TestBaseCellInitThenStopSkipStart(t *testing.T) {
 }
 
 func TestBaseCellRestart(t *testing.T) {
-	c := NewBaseCell(CellMetadata{ID: "restart"})
+	c := MustNewBaseCell(&metadata.CellMeta{ID: "restart"})
 
 	// Full lifecycle.
 	require.NoError(t, c.Init(context.Background(), NewRegistryRecorder(nil, DurabilityDurable)))
@@ -202,7 +206,7 @@ func TestBaseCellRestart(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestBaseCellShutdownCtx(t *testing.T) {
-	c := NewBaseCell(CellMetadata{ID: "ctx-test"})
+	c := MustNewBaseCell(&metadata.CellMeta{ID: "ctx-test"})
 
 	// Before Start, ShutdownCtx should return context.Background().
 	ctx := c.ShutdownCtx()
@@ -223,7 +227,7 @@ func TestBaseCellShutdownCtx(t *testing.T) {
 }
 
 func TestBaseCellConcurrentHealthReady(t *testing.T) {
-	c := NewBaseCell(CellMetadata{ID: "concurrent"})
+	c := MustNewBaseCell(&metadata.CellMeta{ID: "concurrent"})
 	require.NoError(t, c.Init(context.Background(), NewRegistryRecorder(nil, DurabilityDurable)))
 	require.NoError(t, c.Start(context.Background()))
 
@@ -247,7 +251,7 @@ func TestBaseCellConcurrentHealthReady(t *testing.T) {
 }
 
 func TestBaseCellConcurrentAddAndRead(t *testing.T) {
-	c := NewBaseCell(CellMetadata{ID: "race-add"})
+	c := MustNewBaseCell(&metadata.CellMeta{ID: "race-add"})
 
 	const n = 100
 	done := make(chan struct{})

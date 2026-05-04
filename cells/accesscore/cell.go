@@ -274,7 +274,7 @@ type AccessCore struct {
 // NewAccessCore creates a new AccessCore Cell.
 func NewAccessCore(opts ...Option) *AccessCore {
 	c := &AccessCore{
-		BaseCell: cell.NewBaseCell(&metadata.CellMeta{
+		BaseCell: cell.MustNewBaseCell(&metadata.CellMeta{
 			ID:               "accesscore",
 			Type:             "core",
 			ConsistencyLevel: "L2",

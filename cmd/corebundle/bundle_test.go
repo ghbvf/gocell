@@ -76,8 +76,8 @@ func TestBuildAssembly_RegisterError(t *testing.T) {
 	require.NoError(t, err)
 
 	// Two cells with the same ID causes asm.Register to fail on the second call.
-	c1 := cell.NewBaseCell(&metadata.CellMeta{ID: "dup-cell", Type: "core"})
-	c2 := cell.NewBaseCell(&metadata.CellMeta{ID: "dup-cell", Type: "core"})
+	c1 := cell.MustNewBaseCell(&metadata.CellMeta{ID: "dup-cell", Type: "core"})
+	c2 := cell.MustNewBaseCell(&metadata.CellMeta{ID: "dup-cell", Type: "core"})
 
 	_, err = buildAssembly(ps, "corebundle", cell.DurabilityDemo, clock.Real(), c1, c2)
 	require.Error(t, err, "duplicate cell ID must cause buildAssembly to return an error")

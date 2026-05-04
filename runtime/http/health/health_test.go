@@ -28,7 +28,7 @@ type stubCell struct {
 
 func newStubCell(id string) *stubCell {
 	return &stubCell{
-		BaseCell: cell.NewBaseCell(&metadata.CellMeta{
+		BaseCell: cell.MustNewBaseCell(&metadata.CellMeta{
 			ID:   id,
 			Type: "core",
 		}),
@@ -1231,7 +1231,7 @@ type stubDegradedCell struct {
 
 func newStubDegradedCell(id string) *stubDegradedCell {
 	return &stubDegradedCell{
-		BaseCell: cell.NewBaseCell(&metadata.CellMeta{
+		BaseCell: cell.MustNewBaseCell(&metadata.CellMeta{
 			ID:   id,
 			Type: "core",
 		}),
@@ -1250,7 +1250,7 @@ type stubPanickingHealthCell struct {
 
 func newStubPanickingHealthCell(id string) *stubPanickingHealthCell {
 	return &stubPanickingHealthCell{
-		BaseCell: cell.NewBaseCell(&metadata.CellMeta{
+		BaseCell: cell.MustNewBaseCell(&metadata.CellMeta{
 			ID:   id,
 			Type: "core",
 		}),

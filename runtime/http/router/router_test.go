@@ -34,7 +34,7 @@ import (
 type stubCell struct{ *cell.BaseCell }
 
 func newStubCell() *stubCell {
-	return &stubCell{BaseCell: cell.NewBaseCell(&metadata.CellMeta{ID: "cell-1", Type: "core"})}
+	return &stubCell{BaseCell: cell.MustNewBaseCell(&metadata.CellMeta{ID: "cell-1", Type: "core"})}
 }
 
 func findAccessLogEntry(logs []byte, wantPath string) (map[string]any, bool) {

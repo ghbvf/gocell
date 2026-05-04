@@ -152,7 +152,7 @@ type ConfigCore struct {
 // NewConfigCore creates a new ConfigCore Cell.
 func NewConfigCore(opts ...Option) *ConfigCore {
 	c := &ConfigCore{
-		BaseCell: cell.NewBaseCell(&metadata.CellMeta{
+		BaseCell: cell.MustNewBaseCell(&metadata.CellMeta{
 			ID:               "configcore",
 			Type:             "core",
 			ConsistencyLevel: "L2",

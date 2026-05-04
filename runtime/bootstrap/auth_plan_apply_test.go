@@ -227,7 +227,7 @@ type fakeAuthProviderCell struct {
 }
 
 func newFakeAuthCell(id string, v auth.IntentTokenVerifier) *fakeAuthProviderCell {
-	base := cell.NewBaseCell(&metadata.CellMeta{
+	base := cell.MustNewBaseCell(&metadata.CellMeta{
 		ID:               id,
 		Type:             "core",
 		ConsistencyLevel: "L1",

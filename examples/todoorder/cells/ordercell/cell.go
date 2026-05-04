@@ -80,7 +80,7 @@ type OrderCell struct {
 // NewOrderCell creates a new OrderCell with the given options.
 func NewOrderCell(opts ...Option) *OrderCell {
 	c := &OrderCell{
-		BaseCell: cell.NewBaseCell(&metadata.CellMeta{
+		BaseCell: cell.MustNewBaseCell(&metadata.CellMeta{
 			ID:               "ordercell",
 			Type:             "core",
 			ConsistencyLevel: "L2",

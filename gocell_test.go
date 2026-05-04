@@ -13,7 +13,7 @@ import (
 
 func TestPhase0Gate(t *testing.T) {
 	app := gocell.NewAssembly("test-bundle")
-	myCell := cell.NewBaseCell(&metadata.CellMeta{
+	myCell := cell.MustNewBaseCell(&metadata.CellMeta{
 		ID:               "test-cell",
 		Type:             "core",
 		ConsistencyLevel: "L1",

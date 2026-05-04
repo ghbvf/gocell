@@ -125,7 +125,7 @@ func TestBootstrap_DefaultAssembly_NoProviderUsesNop(t *testing.T) {
 // is exercised indirectly through existing rollback tests, and directly
 // here at the kernel layer which is the source of the goroutine.
 func TestAssembly_FailedStartDrainsDispatcher(t *testing.T) {
-	failing := &startFailCell{BaseCell: cell.NewBaseCell(&metadata.CellMeta{
+	failing := &startFailCell{BaseCell: cell.MustNewBaseCell(&metadata.CellMeta{
 		ID:   "fail-start",
 		Type: "core",
 	})}

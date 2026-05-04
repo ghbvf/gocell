@@ -23,8 +23,8 @@ func (c *queueRegistrarCell) RegisterCommandQueue(q kcommand.Queue) {
 
 func TestDiscoverQueueRegistrars(t *testing.T) {
 	q := commandtest.NewInMemQueue()
-	registrar := &queueRegistrarCell{BaseCell: cell.NewBaseCell(&metadata.CellMeta{ID: "withqueue"})}
-	plain := cell.NewBaseCell(&metadata.CellMeta{ID: "plain"})
+	registrar := &queueRegistrarCell{BaseCell: cell.MustNewBaseCell(&metadata.CellMeta{ID: "withqueue"})}
+	plain := cell.MustNewBaseCell(&metadata.CellMeta{ID: "plain"})
 
 	count, err := DiscoverQueueRegistrars([]cell.Cell{registrar, plain}, q)
 	require.NoError(t, err)

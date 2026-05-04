@@ -114,7 +114,7 @@ func (c *DeviceCell) RegisterCommandQueue(q kcommand.Queue) {
 // NewDeviceCell creates a new DeviceCell with the given options.
 func NewDeviceCell(opts ...Option) *DeviceCell {
 	c := &DeviceCell{
-		BaseCell: cell.NewBaseCell(&metadata.CellMeta{
+		BaseCell: cell.MustNewBaseCell(&metadata.CellMeta{
 			ID:               "devicecell",
 			Type:             "edge",
 			ConsistencyLevel: "L4",

@@ -23,7 +23,7 @@ type okCellModule struct{ name string }
 func (m okCellModule) ID() string { return m.name }
 
 func (m okCellModule) Provide(_ context.Context, _ *SharedDeps) (cell.Cell, []bootstrap.Option, []kernellifecycle.ManagedResource, error) {
-	c := cell.NewBaseCell(&metadata.CellMeta{ID: m.name})
+	c := cell.MustNewBaseCell(&metadata.CellMeta{ID: m.name})
 	return c, nil, nil, nil
 }
 
@@ -55,7 +55,7 @@ func (m resourceCellModule) ID() string { return m.name }
 func (m resourceCellModule) Provide(
 	_ context.Context, _ *SharedDeps,
 ) (cell.Cell, []bootstrap.Option, []kernellifecycle.ManagedResource, error) {
-	c := cell.NewBaseCell(&metadata.CellMeta{ID: m.name})
+	c := cell.MustNewBaseCell(&metadata.CellMeta{ID: m.name})
 	var res []kernellifecycle.ManagedResource
 	if m.res != nil {
 		res = append(res, m.res)

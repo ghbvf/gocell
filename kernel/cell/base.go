@@ -65,19 +65,22 @@ type BaseCell struct {
 // allocation-free. Empty Type / ConsistencyLevel are accepted (zero-value
 // CellType / L0) — callers needing strict validation must feed metadata
 // already validated by gocell governance. A non-empty but unrecognized
-// value panics (fail-fast on programmer error in cell.go literals).
+// value returns ErrValidationFailed (caller decides: fall back, surface to
+// readyz, etc.). The provided pointer is not retained — meta is deep-copied
+// via deepCopyMeta so mutation by the caller does not leak into the cell.
 //
-// The provided pointer is not retained — meta is deep-copied via deepCopyMeta
-// so mutation by the caller does not leak into the running cell.
-func NewBaseCell(meta *metadata.CellMeta) *BaseCell {
+// Static wiring (cell.go literals, table-driven tests) should use
+// MustNewBaseCell, which panics on construction error per the
+// PANIC-REGISTERED-01 / ERROR-FIRST-API-01 contract.
+func NewBaseCell(meta *metadata.CellMeta) (*BaseCell, error) {
 	if meta == nil {
-		panic("cell.NewBaseCell: meta is nil")
+		return nil, errcode.New(errcode.ErrValidationFailed, "cell.NewBaseCell: meta is nil")
 	}
 	cellType := CellType("")
 	if meta.Type != "" {
 		ct, err := ParseCellType(meta.Type)
 		if err != nil {
-			panic(fmt.Sprintf("cell.NewBaseCell: cell %q: %v", meta.ID, err))
+			return nil, fmt.Errorf("cell.NewBaseCell: cell %q: %w", meta.ID, err)
 		}
 		cellType = ct
 	}
@@ -85,7 +88,7 @@ func NewBaseCell(meta *metadata.CellMeta) *BaseCell {
 	if meta.ConsistencyLevel != "" {
 		lv, err := ParseLevel(meta.ConsistencyLevel)
 		if err != nil {
-			panic(fmt.Sprintf("cell.NewBaseCell: cell %q: %v", meta.ID, err))
+			return nil, fmt.Errorf("cell.NewBaseCell: cell %q: %w", meta.ID, err)
 		}
 		level = lv
 	}
@@ -93,7 +96,21 @@ func NewBaseCell(meta *metadata.CellMeta) *BaseCell {
 		meta:     deepCopyMeta(meta),
 		cellType: cellType,
 		level:    level,
+	}, nil
+}
+
+// MustNewBaseCell is the panic-on-error twin of NewBaseCell, intended for
+// composition-root and test sites that build cells from static literals
+// where a construction failure is a programmer error and must abort startup.
+// Runtime / config-driven callers should use NewBaseCell and propagate the
+// error to /readyz or a structured 5xx response. See ADR
+// docs/architecture/202604270030-architectural-panic-whitelist.md §5.
+func MustNewBaseCell(meta *metadata.CellMeta) *BaseCell {
+	c, err := NewBaseCell(meta)
+	if err != nil {
+		panic(err)
 	}
+	return c
 }
 
 // deepCopyMeta clones every slice / nested struct so BaseCell owns an

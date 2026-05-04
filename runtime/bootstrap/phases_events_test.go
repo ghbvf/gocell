@@ -44,7 +44,7 @@ type stubEventCell struct {
 
 func newStubEventCell(id, topic string) *stubEventCell {
 	return &stubEventCell{
-		BaseCell: cell.NewBaseCell(&metadata.CellMeta{ID: id, Type: "core"}),
+		BaseCell: cell.MustNewBaseCell(&metadata.CellMeta{ID: id, Type: "core"}),
 		spec: wrapper.ContractSpec{
 			ID:        topic,
 			Kind:      "event",

@@ -118,7 +118,7 @@ func TestBootstrap_ConsumerTracingIntegration(t *testing.T) {
 		Topic: "event.integration.test.v1",
 	}
 	cellImpl := &consumerSpyCell{
-		BaseCell: *cell.NewBaseCell(&metadata.CellMeta{ID: "consumerspy"}),
+		BaseCell: *cell.MustNewBaseCell(&metadata.CellMeta{ID: "consumerspy"}),
 		spec:     spec,
 		calls:    make(chan outbox.Entry, 1),
 	}

@@ -28,7 +28,7 @@ type configSubscriberWithoutOwner struct {
 
 func newConfigSubscriberWithoutOwner() *configSubscriberWithoutOwner {
 	return &configSubscriberWithoutOwner{
-		BaseCell: cell.NewBaseCell(&metadata.CellMeta{
+		BaseCell: cell.MustNewBaseCell(&metadata.CellMeta{
 			ID:   "testcellnoowner",
 			Type: "core",
 		}),

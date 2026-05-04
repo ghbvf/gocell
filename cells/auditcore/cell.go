@@ -191,7 +191,7 @@ type AuditCore struct {
 // NewAuditCore creates a new AuditCore Cell.
 func NewAuditCore(opts ...Option) *AuditCore {
 	c := &AuditCore{
-		BaseCell: cell.NewBaseCell(&metadata.CellMeta{
+		BaseCell: cell.MustNewBaseCell(&metadata.CellMeta{
 			ID:   "auditcore",
 			Type: "core",
 			// L2: 对外 contract (audit.appended, integrity-verified) 都是本地事务 + outbox 发布。

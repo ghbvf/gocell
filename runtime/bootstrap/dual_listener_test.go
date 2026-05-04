@@ -38,7 +38,7 @@ type dualListenerCell struct {
 
 func newDualListenerCell(onPublic, onInternal func(http.ResponseWriter, *http.Request)) *dualListenerCell {
 	return &dualListenerCell{
-		BaseCell: cell.NewBaseCell(&metadata.CellMeta{
+		BaseCell: cell.MustNewBaseCell(&metadata.CellMeta{
 			ID:   "dual-listener-cell",
 			Type: "core",
 		}),
@@ -655,7 +655,7 @@ func (c *duplicateMetaCell) Init(ctx context.Context, reg cell.Registry) error {
 func TestDualListener_FinalizeAuth_DuplicateMeta_Errors(t *testing.T) {
 	asm := assembly.New(assembly.Config{ID: "dup-meta-test", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
 	c := &duplicateMetaCell{
-		BaseCell: cell.NewBaseCell(&metadata.CellMeta{ID: "dup-meta-cell", Type: "core"}),
+		BaseCell: cell.MustNewBaseCell(&metadata.CellMeta{ID: "dup-meta-cell", Type: "core"}),
 	}
 	require.NoError(t, asm.Register(c))
 
@@ -974,7 +974,7 @@ func (c *middlewareOrderCell) Init(ctx context.Context, reg cell.Registry) error
 func TestRouteGroup_Middleware_OrderPreserved(t *testing.T) {
 	var order []string
 	c := &middlewareOrderCell{
-		BaseCell: cell.NewBaseCell(&metadata.CellMeta{ID: "mw-order-cell", Type: "core"}),
+		BaseCell: cell.MustNewBaseCell(&metadata.CellMeta{ID: "mw-order-cell", Type: "core"}),
 		order:    &order,
 	}
 	asm := assembly.New(assembly.Config{ID: "mw-order-test", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
