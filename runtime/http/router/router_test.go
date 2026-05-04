@@ -1808,3 +1808,61 @@ func TestRouter_ServeHTTP_NoFinalizeAuth_FailsClosed(t *testing.T) {
 	require.NotPanics(t, func() { r.ServeHTTP(rec, req) })
 	assert.Equal(t, http.StatusInternalServerError, rec.Code)
 }
+
+// TestRouter_DispatchPopulatesPathValue asserts that stdlib ServeMux path
+// parameters are still accessible via req.PathValue inside the leaf handler
+// after patternRecordingMux double-dispatch.
+func TestRouter_DispatchPopulatesPathValue(t *testing.T) {
+	r := MustNew(
+		WithRouterClock(clock.Real()),
+		WithPolicyCoverageWhitelist([]string{"/api/v1/users/*"}),
+	)
+
+	var capturedID string
+	r.Handle("GET /api/v1/users/{id}", http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		capturedID = req.PathValue("id")
+		w.WriteHeader(http.StatusOK)
+	}))
+	require.NoError(t, r.FinalizeAuth())
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/users/42", nil)
+	r.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.Equal(t, "42", capturedID, "patternRecordingMux must propagate PathValue to leaf handler")
+}
+
+// TestMountRouteGroup_NonServeMuxHandler_RouteLabelDegrades asserts that
+// mounting a plain http.HandlerFunc (not *http.ServeMux) records the mount
+// prefix as the route label instead of falling back to "unmatched".
+func TestMountRouteGroup_NonServeMuxHandler_RouteLabelDegrades(t *testing.T) {
+	mc := metrics.NewInMemoryCollector()
+	r := MustNew(WithRouterClock(clock.Real()), WithMetricsCollector(mc))
+
+	require.NoError(t, r.MountRouteGroup(cell.RouteGroup{
+		Listener: cell.PrimaryListener,
+		CellID:   "legacycell",
+		Register: func(mux cell.RouteMux) error {
+			mux.Mount("/legacy", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(http.StatusOK)
+			}))
+			return nil
+		},
+	}))
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/legacy/anything", nil)
+	r.ServeHTTP(rec, req)
+	assert.Equal(t, http.StatusOK, rec.Code)
+
+	snap := mc.Snapshot()
+	// Route label must be the mount prefix form, not "unmatched", and must not
+	// be a sub-path-granularity pattern (non-ServeMux internal routing is opaque).
+	key := routerRequestKey("legacycell", http.MethodGet, "/legacy/", http.StatusOK)
+	assert.Equal(t, int64(1), snap.RequestCounts[key],
+		"non-ServeMux mount must degrade to mount-prefix route label, not 'unmatched'")
+	unmatchedKey := routerRequestKey("legacycell", http.MethodGet, "unmatched", http.StatusOK)
+	assert.Equal(t, int64(0), snap.RequestCounts[unmatchedKey],
+		"route label must not be 'unmatched' for a mounted non-ServeMux handler")
+}

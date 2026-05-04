@@ -36,7 +36,7 @@ import (
 // router, and finalizes auth on the primary router.
 //
 // PR-A14b: replaces the single-router phase5BuildHTTPRouter. Each listener
-// now gets its own chi.Mux root with a policy applied at build time.
+// now gets its own stdlib *http.ServeMux root with a policy applied at build time.
 //
 // ref: go-kratos/kratos app.go — per-server middleware at build time.
 func (b *Bootstrap) phase5BuildRouters(ctx context.Context, s *phaseState) error {

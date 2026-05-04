@@ -742,6 +742,10 @@ func (r *Router) markMuxHandler(method, routePath string) bool {
 		r.muxHandlers = make(map[string]bool)
 	}
 	if r.muxHandlers[key] {
+		slog.Warn("router: duplicate ServeMux registration skipped",
+			"method", strings.ToUpper(method),
+			"path", cleanRoutePath(routePath),
+		)
 		return false
 	}
 	r.muxHandlers[key] = true
@@ -812,7 +816,13 @@ func mountBareHandler(handler http.Handler) http.Handler {
 func mountPatternRecorder(prefix string, handler http.Handler) http.Handler {
 	subMux, ok := handler.(*http.ServeMux)
 	if !ok {
-		return handler
+		// Non-ServeMux handlers have opaque internal routing; record the mount
+		// prefix as the best available route label so metrics do not fall back
+		// to "unmatched".
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			middleware.RecordRoutePattern(r.Context(), prefix+"/")
+			handler.ServeHTTP(w, r)
+		})
 	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, inner := subMux.Handler(r)
