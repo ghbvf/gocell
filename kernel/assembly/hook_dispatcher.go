@@ -1,13 +1,16 @@
 package assembly
 
 import (
+	"fmt"
 	"log/slog"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/observability/metrics"
+	"github.com/ghbvf/gocell/pkg/redaction"
 )
 
 // Default queue / timeout settings for hookDispatcher. Tuned for GoCell's
@@ -19,6 +22,8 @@ const (
 	DefaultHookObserverSinkTimeout  = 5 * time.Second
 	DefaultHookObserverDrainTimeout = 5 * time.Second
 )
+
+const maxHookObserverPanicLogBytes = 256
 
 // Drop reason label values emitted on hook_observer_dropped_total (bare name;
 // the Provider's Namespace field adds the "gocell_" prefix to produce the
@@ -41,10 +46,10 @@ const (
 //     reported via `hook_observer_dropped_total{reason="queue_full"}`.
 //   - **Per-sink timeout** via goroutine+channel race (mirroring
 //     go.uber.org/fx app.go withTimeout); a slow sink is abandoned to its
-//     own goroutine and counted `reason="sink_timeout"`. A broken observer
-//     that blocks forever leaks one goroutine per emission; that is the
-//     observer's bug, not ours, and is materially safer than blocking the
-//     assembly.
+//     own tracked goroutine and counted `reason="sink_timeout"`. Stop()
+//     waits for timed-out sinks within the existing drain budget so normal
+//     shutdowns do not leave observer goroutines behind, while permanently
+//     stuck observers still cannot block assembly shutdown forever.
 //   - **Eager lifecycle**: `newHookDispatcher` starts the worker
 //     immediately; `stop(timeout)` closes the channel, waits for drain up
 //     to timeout, then returns. `sync.Once` protects idempotent stop.
@@ -69,7 +74,12 @@ type hookDispatcher struct {
 	dropped     metrics.CounterVec // labeled by reason
 	clock       clock.Clock
 	wg          sync.WaitGroup
+	sinkWg      sync.WaitGroup
+	sinkMu      sync.Mutex
+	sinkActive  int
+	sinkIdle    chan struct{}
 	stopOnce    sync.Once
+	queueWarn   sync.Once
 	done        chan struct{} // closed when the worker loop exits
 }
 
@@ -134,6 +144,7 @@ func newHookDispatcher(cfg dispatcherConfig) *hookDispatcher {
 		sinkTimeout: cfg.SinkTimeout,
 		dropped:     dropped,
 		clock:       cfg.Clock,
+		sinkIdle:    closedChannel(),
 		done:        make(chan struct{}),
 	}
 	d.wg.Add(1)
@@ -158,14 +169,14 @@ func (d *hookDispatcher) emit(e cell.HookEvent) {
 			// Send on closed channel after stop(). Count as queue_full
 			// because from the emitter's perspective the queue is
 			// unavailable.
-			d.dropped.With(metrics.Labels{"reason": DropReasonQueueFull}).Inc()
+			d.dropQueueFull(e)
 		}
 	}()
 	evt := e
 	select {
 	case d.ch <- hookItem{evt: &evt}:
 	default:
-		d.dropped.With(metrics.Labels{"reason": DropReasonQueueFull}).Inc()
+		d.dropQueueFull(e)
 	}
 }
 
@@ -238,14 +249,16 @@ func (d *hookDispatcher) run() {
 // advances to the next event so a stuck observer cannot halt delivery.
 func (d *hookDispatcher) dispatchOne(e cell.HookEvent) {
 	result := make(chan struct{}, 1)
+	d.beginSink()
 	go func() {
 		defer func() {
+			defer d.finishSink()
 			if r := recover(); r != nil {
 				d.dropped.With(metrics.Labels{"reason": DropReasonObserverPanic}).Inc()
 				slog.Error("lifecycle: hook observer panicked",
 					slog.String("cell", e.CellID),
 					slog.String("hook", string(e.Hook)),
-					slog.Any("panic", r))
+					slog.String("panic", sanitizeHookObserverPanicValue(r)))
 			}
 			select {
 			case result <- struct{}{}:
@@ -285,14 +298,82 @@ func (d *hookDispatcher) stop(drainTimeout time.Duration) {
 			drainTimeout = DefaultHookObserverDrainTimeout
 		}
 		t := d.clock.NewTimerAt(d.clock.Now().Add(drainTimeout))
+		defer t.Stop()
 		select {
 		case <-d.done:
-			// Drained cleanly.
-			t.Stop()
+			// Worker drained cleanly; no future sinkWg.Add calls can occur.
 		case <-t.C():
-			t.Stop()
 			slog.Warn("assembly: hook dispatcher drain timed out; abandoning worker",
+				slog.Duration("timeout", drainTimeout))
+			return
+		}
+
+		select {
+		case <-d.currentSinkIdle():
+			d.sinkWg.Wait()
+		case <-t.C():
+			slog.Warn("assembly: hook dispatcher sink drain timed out; abandoning observer sinks",
 				slog.Duration("timeout", drainTimeout))
 		}
 	})
+}
+
+func (d *hookDispatcher) dropQueueFull(e cell.HookEvent) {
+	d.dropped.With(metrics.Labels{"reason": DropReasonQueueFull}).Inc()
+	d.queueWarn.Do(func() {
+		slog.Warn("assembly: hook dispatcher queue full; dropping hook event",
+			slog.String("reason", DropReasonQueueFull),
+			slog.String("cell", e.CellID),
+			slog.String("hook", string(e.Hook)))
+	})
+}
+
+func (d *hookDispatcher) beginSink() {
+	d.sinkWg.Add(1)
+	d.sinkMu.Lock()
+	if d.sinkActive == 0 {
+		d.sinkIdle = make(chan struct{})
+	}
+	d.sinkActive++
+	d.sinkMu.Unlock()
+}
+
+func (d *hookDispatcher) finishSink() {
+	d.sinkMu.Lock()
+	d.sinkActive--
+	if d.sinkActive == 0 {
+		close(d.sinkIdle)
+	}
+	d.sinkMu.Unlock()
+	d.sinkWg.Done()
+}
+
+func (d *hookDispatcher) currentSinkIdle() <-chan struct{} {
+	d.sinkMu.Lock()
+	defer d.sinkMu.Unlock()
+	return d.sinkIdle
+}
+
+func closedChannel() chan struct{} {
+	ch := make(chan struct{})
+	close(ch)
+	return ch
+}
+
+func sanitizeHookObserverPanicValue(r any) string {
+	return truncateUTF8Bytes(redaction.RedactString(fmt.Sprintf("%v", r)), maxHookObserverPanicLogBytes)
+}
+
+func truncateUTF8Bytes(s string, maxBytes int) string {
+	if maxBytes <= 0 {
+		return ""
+	}
+	if len(s) <= maxBytes {
+		return s
+	}
+	truncated := s[:maxBytes]
+	for len(truncated) > 0 && !utf8.ValidString(truncated) {
+		truncated = truncated[:len(truncated)-1]
+	}
+	return truncated
 }

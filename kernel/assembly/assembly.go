@@ -577,16 +577,10 @@ func (a *CoreAssembly) emitHookEvent(e cell.HookEvent) {
 	// Defensive fallback — should not happen when New() is used.
 	defer func() {
 		if r := recover(); r != nil {
-			var recoveredErr error
-			if asErr, ok := r.(error); ok {
-				recoveredErr = asErr
-			} else {
-				recoveredErr = fmt.Errorf("observer panicked: %v", r)
-			}
 			slog.Error("lifecycle: hook observer panicked",
 				slog.String("cell", e.CellID),
 				slog.String("hook", string(e.Hook)),
-				slog.Any("error", recoveredErr))
+				slog.String("panic", sanitizeHookObserverPanicValue(r)))
 		}
 	}()
 	a.cfg.HookObserver.OnHookEvent(e)
