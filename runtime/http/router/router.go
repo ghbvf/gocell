@@ -1508,7 +1508,7 @@ func (a *nativeMuxAdapter) Handle(pattern string, handler http.Handler) {
 	}
 	method, routePath := splitHandlePattern(pattern)
 	if routePath != "" {
-		if ok := a.registerRoutePath(method, routePath); !ok {
+		if !a.registerRoutePath(method, routePath) {
 			return
 		}
 	}
