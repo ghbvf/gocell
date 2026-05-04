@@ -8,6 +8,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	tcpostgres "github.com/testcontainers/testcontainers-go/modules/postgres"
+
 	adapterpg "github.com/ghbvf/gocell/adapters/postgres"
 	"github.com/ghbvf/gocell/cells/configcore/internal/domain"
 	"github.com/ghbvf/gocell/kernel/clock"
@@ -16,11 +22,6 @@ import (
 	"github.com/ghbvf/gocell/pkg/query"
 	"github.com/ghbvf/gocell/runtime/crypto"
 	"github.com/ghbvf/gocell/tests/testutil"
-	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
-	tcpostgres "github.com/testcontainers/testcontainers-go/modules/postgres"
 )
 
 // setupConfigPG spins up a PostgreSQL container, applies all migrations

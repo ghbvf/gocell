@@ -419,8 +419,10 @@ func TestJWTVerifier_AcceptsVerificationOnlyKey(t *testing.T) {
 // --- Interface abstraction tests (WM-2-F1) ---
 
 // Compile-time checks: *KeySet satisfies both interfaces.
-var _ SigningKeyProvider = (*KeySet)(nil)
-var _ VerificationKeyStore = (*KeySet)(nil)
+var (
+	_ SigningKeyProvider   = (*KeySet)(nil)
+	_ VerificationKeyStore = (*KeySet)(nil)
+)
 
 // stubSigningKeyProvider is a minimal test double for SigningKeyProvider.
 type stubSigningKeyProvider struct {

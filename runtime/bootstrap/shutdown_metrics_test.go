@@ -40,6 +40,7 @@ func (v *fakeCounterVec) With(l kernelmetrics.Labels) kernelmetrics.Counter {
 	kernelmetrics.MustValidateLabels(v.labels, l)
 	return &fakeCounter{vec: v, labels: l}
 }
+
 func (v *fakeCounterVec) totalForLabel(key, value string) float64 {
 	v.mu.Lock()
 	defer v.mu.Unlock()
@@ -81,6 +82,7 @@ func (v *fakeHistogramVec) With(l kernelmetrics.Labels) kernelmetrics.Histogram 
 	kernelmetrics.MustValidateLabels(v.labels, l)
 	return &fakeHistogram{vec: v, labels: l}
 }
+
 func (v *fakeHistogramVec) observationsForLabel(key, value string) []float64 {
 	v.mu.Lock()
 	defer v.mu.Unlock()

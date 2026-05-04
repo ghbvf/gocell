@@ -428,9 +428,11 @@ type duplicateUserRepo struct{}
 func (r *duplicateUserRepo) Create(ctx context.Context, u *domain.User) error {
 	return errcode.New(errcode.KindConflict, errcode.ErrAuthUserDuplicate, "duplicate")
 }
+
 func (r *duplicateUserRepo) GetByID(ctx context.Context, id string) (*domain.User, error) {
 	return nil, errors.New("not expected on race path")
 }
+
 func (r *duplicateUserRepo) GetByUsername(ctx context.Context, username string) (*domain.User, error) {
 	u, _ := domain.NewUser(username, username+"@x", "$2a$10$hashold", time.Now())
 	u.ID = "usr-orphan"
@@ -452,6 +454,7 @@ func (r *scriptedRoleRepo) AssignToUser(ctx context.Context, userID, roleID stri
 	r.assignCalled = true
 	return true, nil
 }
+
 func (r *scriptedRoleRepo) CountByRole(ctx context.Context, roleID string) (int, error) {
 	if r.i >= len(r.counts) {
 		return r.counts[len(r.counts)-1], nil
@@ -460,18 +463,23 @@ func (r *scriptedRoleRepo) CountByRole(ctx context.Context, roleID string) (int,
 	r.i++
 	return v, nil
 }
+
 func (r *scriptedRoleRepo) GetByUserID(ctx context.Context, userID string) ([]*domain.Role, error) {
 	return nil, nil
 }
+
 func (r *scriptedRoleRepo) RemoveFromUser(ctx context.Context, userID, roleID string) error {
 	return nil
 }
+
 func (r *scriptedRoleRepo) RemoveFromUserIfNotLast(ctx context.Context, userID, roleID string) (bool, error) {
 	return true, nil
 }
+
 func (r *scriptedRoleRepo) GetByID(ctx context.Context, id string) (*domain.Role, error) {
 	return &domain.Role{ID: id}, nil
 }
+
 func (r *scriptedRoleRepo) ListByUserID(ctx context.Context, userID string, params query.ListParams) ([]*domain.Role, error) {
 	return nil, nil
 }
@@ -488,21 +496,27 @@ func (r *errRoleRepo) Create(ctx context.Context, role *domain.Role) error { ret
 func (r *errRoleRepo) AssignToUser(ctx context.Context, userID, roleID string) (bool, error) {
 	return false, r.assignErr
 }
+
 func (r *errRoleRepo) CountByRole(ctx context.Context, roleID string) (int, error) {
 	return 0, r.countErr
 }
+
 func (r *errRoleRepo) GetByUserID(ctx context.Context, userID string) ([]*domain.Role, error) {
 	return nil, nil
 }
+
 func (r *errRoleRepo) RemoveFromUser(ctx context.Context, userID, roleID string) error {
 	return r.removeErr
 }
+
 func (r *errRoleRepo) RemoveFromUserIfNotLast(ctx context.Context, userID, roleID string) (bool, error) {
 	return true, nil
 }
+
 func (r *errRoleRepo) GetByID(ctx context.Context, id string) (*domain.Role, error) {
 	return &domain.Role{ID: id}, nil
 }
+
 func (r *errRoleRepo) ListByUserID(ctx context.Context, userID string, params query.ListParams) ([]*domain.Role, error) {
 	return nil, nil
 }
@@ -516,9 +530,11 @@ type updateFailUserRepo struct {
 func (r *updateFailUserRepo) Create(ctx context.Context, u *domain.User) error {
 	return errcode.New(errcode.KindConflict, errcode.ErrAuthUserDuplicate, "duplicate")
 }
+
 func (r *updateFailUserRepo) GetByID(ctx context.Context, id string) (*domain.User, error) {
 	return r.inner.GetByID(ctx, id)
 }
+
 func (r *updateFailUserRepo) GetByUsername(ctx context.Context, username string) (*domain.User, error) {
 	return r.inner.GetByUsername(ctx, username)
 }
@@ -561,6 +577,7 @@ func (r *errUserRepo) Create(ctx context.Context, u *domain.User) error { return
 func (r *errUserRepo) GetByID(ctx context.Context, id string) (*domain.User, error) {
 	return nil, errors.New("not seeded")
 }
+
 func (r *errUserRepo) GetByUsername(ctx context.Context, username string) (*domain.User, error) {
 	return nil, errors.New("not seeded")
 }

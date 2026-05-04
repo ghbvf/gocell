@@ -544,7 +544,7 @@ func copyFile(t *testing.T, src, dst string) {
 	if err != nil {
 		t.Fatalf("copyFile: read %s: %v", src, err)
 	}
-	if err := os.WriteFile(dst, data, 0600); err != nil { //nolint:gosec // test helper writes to t.TempDir()
+	if err := os.WriteFile(dst, data, 0o600); err != nil { //nolint:gosec // test helper writes to t.TempDir()
 		t.Fatalf("copyFile: write %s: %v", dst, err)
 	}
 }

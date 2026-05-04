@@ -168,8 +168,7 @@ func TestSourceFingerprint_StructuralChangesDetected(t *testing.T) {
 			p.Contracts["http.auth.login.v1"].Endpoints.HTTP.SuccessStatus = 201
 		}},
 		{"http response keys add", func(p *metadata.ProjectMeta) {
-			p.Contracts["http.auth.login.v1"].Endpoints.HTTP.Responses[413] =
-				metadata.HTTPResponseMeta{Description: "too big"}
+			p.Contracts["http.auth.login.v1"].Endpoints.HTTP.Responses[413] = metadata.HTTPResponseMeta{Description: "too big"}
 		}},
 		{"http response keys remove", func(p *metadata.ProjectMeta) {
 			delete(p.Contracts["http.auth.login.v1"].Endpoints.HTTP.Responses, 400)
@@ -319,8 +318,10 @@ func TestSourceFingerprint_ResponseSchemaFileContentChange(t *testing.T) {
 
 	p := fingerprintProject()
 	p.Contracts["http.auth.login.v1"].Dir = filepath.ToSlash(filepath.Join("contracts", "http", "auth", "login", "v1"))
-	p.Contracts["http.auth.login.v1"].Endpoints.HTTP.Responses[400] =
-		metadata.HTTPResponseMeta{Description: "bad", SchemaRef: "error.schema.json"}
+	p.Contracts["http.auth.login.v1"].Endpoints.HTTP.Responses[400] = metadata.HTTPResponseMeta{
+		Description: "bad",
+		SchemaRef:   "error.schema.json",
+	}
 
 	baseline := computeFingerprintWithRoot(t, p, root)
 	require.NoError(t, os.WriteFile(schemaPath, []byte(`{"version":2}`), 0o644))
@@ -333,8 +334,10 @@ func TestSourceFingerprint_ResponseSchemaMissingFileFailsLoudly(t *testing.T) {
 	root := t.TempDir()
 	p := fingerprintProject()
 	p.Contracts["http.auth.login.v1"].Dir = "contracts/http/auth/login/v1"
-	p.Contracts["http.auth.login.v1"].Endpoints.HTTP.Responses[400] =
-		metadata.HTTPResponseMeta{Description: "bad", SchemaRef: "missing-error.schema.json"}
+	p.Contracts["http.auth.login.v1"].Endpoints.HTTP.Responses[400] = metadata.HTTPResponseMeta{
+		Description: "bad",
+		SchemaRef:   "missing-error.schema.json",
+	}
 
 	gen := NewGenerator(p, "github.com/ghbvf/gocell", root)
 	_, err := gen.GenerateBoundary("ssobff")
@@ -352,8 +355,10 @@ func TestSourceFingerprint_ResponseSchemaPathEscapeFailsClosed(t *testing.T) {
 
 	p := fingerprintProject()
 	p.Contracts["http.auth.login.v1"].Dir = "contracts/http/auth/login/v1"
-	p.Contracts["http.auth.login.v1"].Endpoints.HTTP.Responses[400] =
-		metadata.HTTPResponseMeta{Description: "bad", SchemaRef: "../../../../../../outside.schema.json"}
+	p.Contracts["http.auth.login.v1"].Endpoints.HTTP.Responses[400] = metadata.HTTPResponseMeta{
+		Description: "bad",
+		SchemaRef:   "../../../../../../outside.schema.json",
+	}
 
 	gen := NewGenerator(p, "github.com/ghbvf/gocell", root)
 	_, err := gen.GenerateBoundary("ssobff")
@@ -402,8 +407,7 @@ func TestSourceFingerprint_ResponseDescriptionIgnored(t *testing.T) {
 	baseline := computeFingerprint(t, fingerprintProject())
 
 	p := fingerprintProject()
-	p.Contracts["http.auth.login.v1"].Endpoints.HTTP.Responses[400] =
-		metadata.HTTPResponseMeta{Description: "changed description"}
+	p.Contracts["http.auth.login.v1"].Endpoints.HTTP.Responses[400] = metadata.HTTPResponseMeta{Description: "changed description"}
 	got := computeFingerprint(t, p)
 	assert.Equal(t, baseline, got, "changing response description must not change fingerprint")
 }
@@ -418,8 +422,10 @@ func TestSourceFingerprint_ResponseSchemaRefChange(t *testing.T) {
 	p.Contracts["http.auth.login.v1"].Dir = filepath.ToSlash(filepath.Join("contracts", "http", "auth", "login", "v1"))
 	baseline := computeFingerprintWithRoot(t, p, root)
 
-	p.Contracts["http.auth.login.v1"].Endpoints.HTTP.Responses[400] =
-		metadata.HTTPResponseMeta{Description: "bad", SchemaRef: "error.schema.json"}
+	p.Contracts["http.auth.login.v1"].Endpoints.HTTP.Responses[400] = metadata.HTTPResponseMeta{
+		Description: "bad",
+		SchemaRef:   "error.schema.json",
+	}
 	got := computeFingerprintWithRoot(t, p, root)
 	assert.NotEqual(t, baseline, got, "adding response schemaRef must change fingerprint")
 }

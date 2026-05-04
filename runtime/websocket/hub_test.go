@@ -795,6 +795,7 @@ func (s *stuckConn) Ping(_ context.Context) error {
 	}
 	return nil
 }
+
 func (s *stuckConn) Read(_ context.Context) ([]byte, error) {
 	<-s.closeCh
 	return nil, errors.New("closed")
@@ -1001,5 +1002,7 @@ func TestHub_IsRunning_Contract(t *testing.T) {
 }
 
 // Compile-time interface checks.
-var _ Conn = (*fakeConn)(nil)
-var _ Conn = (*stuckConn)(nil)
+var (
+	_ Conn = (*fakeConn)(nil)
+	_ Conn = (*stuckConn)(nil)
+)

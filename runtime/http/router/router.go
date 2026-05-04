@@ -108,9 +108,11 @@ func (r *Router) patternRecorderMiddleware(next http.Handler) http.Handler {
 }
 
 // Compile-time checks.
-var _ kcell.RouteMux = (*Router)(nil)
-var _ kcell.AuthRouteDeclarer = (*Router)(nil)
-var _ kcell.HTTPContractDeclarer = (*Router)(nil)
+var (
+	_ kcell.RouteMux             = (*Router)(nil)
+	_ kcell.AuthRouteDeclarer    = (*Router)(nil)
+	_ kcell.HTTPContractDeclarer = (*Router)(nil)
+)
 
 // Option configures a Router.
 type Option func(*Router)
@@ -1529,9 +1531,11 @@ type nativeMuxAdapter struct {
 // Compile-time checks: nativeMuxAdapter forwards AuthRouteMeta + declares its
 // mount prefix so auth.Mount can derive ServeMux-relative registration paths
 // from fully-qualified Contract.Path literals.
-var _ kcell.AuthRouteDeclarer = (*nativeMuxAdapter)(nil)
-var _ kcell.Prefixer = (*nativeMuxAdapter)(nil)
-var _ kcell.HTTPContractDeclarer = (*nativeMuxAdapter)(nil)
+var (
+	_ kcell.AuthRouteDeclarer    = (*nativeMuxAdapter)(nil)
+	_ kcell.Prefixer             = (*nativeMuxAdapter)(nil)
+	_ kcell.HTTPContractDeclarer = (*nativeMuxAdapter)(nil)
+)
 
 // Prefix returns the sub-route mount prefix this adapter inherited from its
 // parent Route. An empty prefix means the adapter sits directly under the

@@ -19,9 +19,11 @@ import (
 )
 
 // Compile-time interface checks.
-var _ kout.Relay = (*Relay)(nil)
-var _ worker.Worker = (*Relay)(nil)
-var _ kernellifecycle.ManagedResource = (*Relay)(nil)
+var (
+	_ kout.Relay                      = (*Relay)(nil)
+	_ worker.Worker                   = (*Relay)(nil)
+	_ kernellifecycle.ManagedResource = (*Relay)(nil)
+)
 
 // ---------------------------------------------------------------------------
 // Relay lifecycle state machine

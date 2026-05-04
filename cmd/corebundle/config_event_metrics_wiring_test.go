@@ -157,6 +157,7 @@ func (c *captureSubscriberHandler) Ready(_ outbox.Subscription) <-chan struct{} 
 	close(ch)
 	return ch
 }
+
 func (c *captureSubscriberHandler) Subscribe(_ context.Context, _ outbox.Subscription, h outbox.SubscriberHandler) error {
 	if c.onSubscribe != nil {
 		c.onSubscribe(h)

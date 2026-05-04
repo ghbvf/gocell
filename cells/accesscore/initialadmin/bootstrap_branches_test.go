@@ -42,24 +42,31 @@ func (r *errRoleRepo) CountByRole(ctx context.Context, roleID string) (int, erro
 	}
 	return r.inner.CountByRole(ctx, roleID)
 }
+
 func (r *errRoleRepo) Create(ctx context.Context, role *domain.Role) error {
 	return r.inner.Create(ctx, role)
 }
+
 func (r *errRoleRepo) AssignToUser(ctx context.Context, userID, roleID string) (bool, error) {
 	return r.inner.AssignToUser(ctx, userID, roleID)
 }
+
 func (r *errRoleRepo) GetByID(ctx context.Context, id string) (*domain.Role, error) {
 	return r.inner.GetByID(ctx, id)
 }
+
 func (r *errRoleRepo) GetByUserID(ctx context.Context, userID string) ([]*domain.Role, error) {
 	return r.inner.GetByUserID(ctx, userID)
 }
+
 func (r *errRoleRepo) RemoveFromUser(_ context.Context, _, _ string) error {
 	return r.removeFromUserErr
 }
+
 func (r *errRoleRepo) RemoveFromUserIfNotLast(ctx context.Context, userID, roleID string) (bool, error) {
 	return r.inner.RemoveFromUserIfNotLast(ctx, userID, roleID)
 }
+
 func (r *errRoleRepo) ListByUserID(ctx context.Context, userID string, params query.ListParams) ([]*domain.Role, error) {
 	return r.inner.GetByUserID(ctx, userID)
 }
@@ -76,18 +83,22 @@ type errUserRepo struct {
 func (r *errUserRepo) Create(ctx context.Context, user *domain.User) error {
 	return r.inner.Create(ctx, user)
 }
+
 func (r *errUserRepo) GetByID(ctx context.Context, id string) (*domain.User, error) {
 	return r.inner.GetByID(ctx, id)
 }
+
 func (r *errUserRepo) GetByUsername(_ context.Context, _ string) (*domain.User, error) {
 	if r.getByUsernameErr != nil {
 		return nil, r.getByUsernameErr
 	}
 	return nil, fmt.Errorf("not configured")
 }
+
 func (r *errUserRepo) Update(ctx context.Context, user *domain.User) error {
 	return r.inner.Update(ctx, user)
 }
+
 func (r *errUserRepo) Delete(_ context.Context, _ string) error {
 	return r.deleteErr
 }
@@ -103,15 +114,19 @@ type errOnUpdateUserRepo struct {
 func (r *errOnUpdateUserRepo) Create(ctx context.Context, user *domain.User) error {
 	return r.inner.Create(ctx, user)
 }
+
 func (r *errOnUpdateUserRepo) GetByID(ctx context.Context, id string) (*domain.User, error) {
 	return r.inner.GetByID(ctx, id)
 }
+
 func (r *errOnUpdateUserRepo) GetByUsername(ctx context.Context, u string) (*domain.User, error) {
 	return r.inner.GetByUsername(ctx, u)
 }
+
 func (r *errOnUpdateUserRepo) Update(_ context.Context, _ *domain.User) error {
 	return r.updateErr
 }
+
 func (r *errOnUpdateUserRepo) Delete(ctx context.Context, id string) error {
 	return r.inner.Delete(ctx, id)
 }

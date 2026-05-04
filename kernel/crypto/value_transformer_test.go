@@ -18,6 +18,7 @@ type fakeTransformer struct{}
 func (fakeTransformer) Encrypt(_ context.Context, plaintext, _ []byte) ([]byte, string, []byte, []byte, error) {
 	return plaintext, "fake-key-v1", nil, nil, nil
 }
+
 func (fakeTransformer) Decrypt(_ context.Context, ciphertext []byte, _ string, _, _, _ []byte) ([]byte, error) {
 	return ciphertext, nil
 }
@@ -29,8 +30,10 @@ func (fakeCurrentKeyIDProvider) CurrentKeyID(_ context.Context) (string, error) 
 	return "fake-key-v1", nil
 }
 
-var _ kcrypto.ValueTransformer = fakeTransformer{}
-var _ kcrypto.CurrentKeyIDProvider = fakeCurrentKeyIDProvider{}
+var (
+	_ kcrypto.ValueTransformer     = fakeTransformer{}
+	_ kcrypto.CurrentKeyIDProvider = fakeCurrentKeyIDProvider{}
+)
 
 // ---------------------------------------------------------------------------
 // ValueTransformer interface method tests

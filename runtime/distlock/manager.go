@@ -41,11 +41,13 @@ func (h renewHeap) Swap(i, j int) {
 	h[i].index = i
 	h[j].index = j
 }
+
 func (h *renewHeap) Push(x any) {
 	item := x.(*heapItem)
 	item.index = len(*h)
 	*h = append(*h, item)
 }
+
 func (h *renewHeap) Pop() any {
 	old := *h
 	n := len(old)

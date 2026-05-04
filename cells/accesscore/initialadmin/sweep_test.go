@@ -30,12 +30,15 @@ func (c fixedClock) Until(t time.Time) time.Duration { return t.Sub(c.now) }
 func (c fixedClock) NewTimerAt(_ time.Time) kernelclock.Timer {
 	panic("fixedClock.NewTimerAt not implemented")
 }
+
 func (c fixedClock) NewTicker(_ time.Duration) kernelclock.Ticker {
 	panic("fixedClock.NewTicker not implemented")
 }
+
 func (c fixedClock) AfterFunc(_ time.Time, _ func()) kernelclock.Timer {
 	panic("fixedClock.AfterFunc not implemented")
 }
+
 func (c fixedClock) Sleep(_ context.Context, _ time.Time) error {
 	panic("fixedClock.Sleep not implemented")
 }

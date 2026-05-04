@@ -139,9 +139,11 @@ func (t *mockRelayTx) LargeObjects() pgx.LargeObjects                           
 func (t *mockRelayTx) Prepare(_ context.Context, _ string, _ string) (*pgconn.StatementDescription, error) {
 	return &pgconn.StatementDescription{}, nil
 }
+
 func (t *mockRelayTx) Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error) {
 	return t.db.Exec(ctx, sql, args...)
 }
+
 func (t *mockRelayTx) Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error) {
 	return t.db.Query(ctx, sql, args...)
 }
@@ -260,9 +262,11 @@ func (t *mockRelayTxIterErr) LargeObjects() pgx.LargeObjects                    
 func (t *mockRelayTxIterErr) Prepare(_ context.Context, _ string, _ string) (*pgconn.StatementDescription, error) {
 	return &pgconn.StatementDescription{}, nil
 }
+
 func (t *mockRelayTxIterErr) Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error) {
 	return t.db.Exec(ctx, sql, args...)
 }
+
 func (t *mockRelayTxIterErr) Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error) {
 	return t.db.Query(ctx, sql, args...)
 }

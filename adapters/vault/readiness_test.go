@@ -11,12 +11,13 @@ import (
 
 	vaultapi "github.com/hashicorp/vault/api"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
 	vaultadapter "github.com/ghbvf/gocell/adapters/vault"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
 const vaultReadinessCtxTimeout = 600 * time.Millisecond

@@ -531,9 +531,11 @@ func (r *countErrRoleRepo) RemoveFromUser(_ context.Context, _, _ string) error 
 func (r *countErrRoleRepo) RemoveFromUserIfNotLast(_ context.Context, _, _ string) (bool, error) {
 	return true, nil
 }
+
 func (r *countErrRoleRepo) GetByID(_ context.Context, _ string) (*domain.Role, error) {
 	return &domain.Role{ID: auth.RoleAdmin}, nil
 }
+
 func (r *countErrRoleRepo) ListByUserID(_ context.Context, _ string, _ query.ListParams) ([]*domain.Role, error) {
 	return nil, nil
 }

@@ -429,6 +429,7 @@ func (c *captureSubscriber) Ready(Subscription) <-chan struct{} {
 	close(ch)
 	return ch
 }
+
 func (c *captureSubscriber) Subscribe(_ context.Context, _ Subscription, h SubscriberHandler) error {
 	c.handler = h
 	return nil

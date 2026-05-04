@@ -10,14 +10,15 @@ import (
 	"testing"
 	"time"
 
-	gcotel "github.com/ghbvf/gocell/adapters/otel"
-	"github.com/ghbvf/gocell/pkg/testutil/testtime"
-	"github.com/ghbvf/gocell/tests/testutil"
 	dockercontainer "github.com/moby/moby/api/types/container"
 	"github.com/moby/moby/api/types/network"
 	"github.com/stretchr/testify/require"
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/wait"
+
+	gcotel "github.com/ghbvf/gocell/adapters/otel"
+	"github.com/ghbvf/gocell/pkg/testutil/testtime"
+	"github.com/ghbvf/gocell/tests/testutil"
 )
 
 const collectorConfig = `

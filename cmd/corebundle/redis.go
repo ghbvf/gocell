@@ -21,9 +21,11 @@ const (
 	envRedisDB       = "GOCELL_REDIS_DB"
 )
 
-type redisNonceStoreFactory func(*adapterredis.Client, time.Duration) (auth.NonceStore, error)
-type redisConsumerClaimerFactory func(*adapterredis.Client) idempotency.Claimer
-type redisClientFactory func(context.Context, adapterredis.Config) (*adapterredis.Client, error)
+type (
+	redisNonceStoreFactory      func(*adapterredis.Client, time.Duration) (auth.NonceStore, error)
+	redisConsumerClaimerFactory func(*adapterredis.Client) idempotency.Claimer
+	redisClientFactory          func(context.Context, adapterredis.Config) (*adapterredis.Client, error)
+)
 
 type redisClientResult struct {
 	Client *adapterredis.Client

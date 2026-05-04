@@ -34,6 +34,7 @@ func (m *mockCollector) RecordBatchSize(size int) { m.batchSizes = append(m.batc
 func (m *mockCollector) RecordReclaim(count int64) {
 	m.reclaimCounts = append(m.reclaimCounts, count)
 }
+
 func (m *mockCollector) RecordCleanup(p, d int64) {
 	m.cleanupCalls = append(m.cleanupCalls, mockCleanupEntry{p, d})
 }

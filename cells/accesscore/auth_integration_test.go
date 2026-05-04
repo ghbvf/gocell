@@ -25,6 +25,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	"golang.org/x/crypto/bcrypt"
+
 	"github.com/ghbvf/gocell/cells/accesscore/internal/domain"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/mem"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/testutil"
@@ -45,9 +49,6 @@ import (
 	refreshmem "github.com/ghbvf/gocell/runtime/auth/refresh/memstore"
 	"github.com/ghbvf/gocell/runtime/auth/refresh/storetest"
 	"github.com/ghbvf/gocell/runtime/http/router"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
-	"golang.org/x/crypto/bcrypt"
 )
 
 // seedAdminPasswordHash caches the bcrypt hash for the seed admin password

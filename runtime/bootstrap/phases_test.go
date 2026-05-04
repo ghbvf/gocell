@@ -957,6 +957,7 @@ func (s *phaseTestSubscriber) Ready(_ outbox.Subscription) <-chan struct{} {
 	close(ch)
 	return ch
 }
+
 func (s *phaseTestSubscriber) Subscribe(_ context.Context, _ outbox.Subscription, _ outbox.SubscriberHandler) error {
 	return nil
 }
@@ -971,14 +972,17 @@ type phaseTestSubscriberCloser struct {
 func (s *phaseTestSubscriberCloser) Setup(_ context.Context, _ outbox.Subscription) error {
 	return nil
 }
+
 func (s *phaseTestSubscriberCloser) Ready(_ outbox.Subscription) <-chan struct{} {
 	ch := make(chan struct{})
 	close(ch)
 	return ch
 }
+
 func (s *phaseTestSubscriberCloser) Subscribe(_ context.Context, _ outbox.Subscription, _ outbox.SubscriberHandler) error {
 	return nil
 }
+
 func (s *phaseTestSubscriberCloser) Close(_ context.Context) error {
 	*s.log = append(*s.log, s.name)
 	return nil
@@ -997,9 +1001,11 @@ func (b *phaseTestSharedBus) Ready(_ outbox.Subscription) <-chan struct{} {
 	close(ch)
 	return ch
 }
+
 func (b *phaseTestSharedBus) Subscribe(_ context.Context, _ outbox.Subscription, _ outbox.SubscriberHandler) error {
 	return nil
 }
+
 func (b *phaseTestSharedBus) Close(_ context.Context) error {
 	*b.closeCount++
 	return nil
@@ -1023,9 +1029,11 @@ func (s *pubSubCtxSpy) Ready(_ outbox.Subscription) <-chan struct{} {
 	close(ch)
 	return ch
 }
+
 func (s *pubSubCtxSpy) Subscribe(_ context.Context, _ outbox.Subscription, _ outbox.SubscriberHandler) error {
 	return nil
 }
+
 func (s *pubSubCtxSpy) Close(ctx context.Context) error {
 	return s.closeFn(ctx)
 }
@@ -1038,11 +1046,13 @@ func (b nonComparablePubSub) Publish(_ context.Context, _ string, _ []byte) erro
 func (b nonComparablePubSub) Setup(_ context.Context, _ outbox.Subscription) error {
 	return nil
 }
+
 func (b nonComparablePubSub) Ready(_ outbox.Subscription) <-chan struct{} {
 	ch := make(chan struct{})
 	close(ch)
 	return ch
 }
+
 func (b nonComparablePubSub) Subscribe(_ context.Context, _ outbox.Subscription, _ outbox.SubscriberHandler) error {
 	return nil
 }

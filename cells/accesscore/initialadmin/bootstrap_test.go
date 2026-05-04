@@ -95,15 +95,19 @@ type duplicateUserRepo struct {
 func (r *duplicateUserRepo) Create(_ context.Context, _ *domain.User) error {
 	return errcode.New(errcode.KindConflict, errcode.ErrAuthUserDuplicate, "username already exists")
 }
+
 func (r *duplicateUserRepo) GetByID(ctx context.Context, id string) (*domain.User, error) {
 	return r.inner.GetByID(ctx, id)
 }
+
 func (r *duplicateUserRepo) GetByUsername(ctx context.Context, u string) (*domain.User, error) {
 	return r.inner.GetByUsername(ctx, u)
 }
+
 func (r *duplicateUserRepo) Update(ctx context.Context, user *domain.User) error {
 	return r.inner.Update(ctx, user)
 }
+
 func (r *duplicateUserRepo) Delete(ctx context.Context, id string) error {
 	return r.inner.Delete(ctx, id)
 }
@@ -125,24 +129,31 @@ func (r *countingRoleRepo) CountByRole(ctx context.Context, roleID string) (int,
 	}
 	return r.inner.CountByRole(ctx, roleID)
 }
+
 func (r *countingRoleRepo) Create(ctx context.Context, role *domain.Role) error {
 	return r.inner.Create(ctx, role)
 }
+
 func (r *countingRoleRepo) AssignToUser(ctx context.Context, userID, roleID string) (bool, error) {
 	return r.inner.AssignToUser(ctx, userID, roleID)
 }
+
 func (r *countingRoleRepo) GetByID(ctx context.Context, id string) (*domain.Role, error) {
 	return r.inner.GetByID(ctx, id)
 }
+
 func (r *countingRoleRepo) GetByUserID(ctx context.Context, userID string) ([]*domain.Role, error) {
 	return r.inner.GetByUserID(ctx, userID)
 }
+
 func (r *countingRoleRepo) RemoveFromUser(ctx context.Context, userID, roleID string) error {
 	return r.inner.RemoveFromUser(ctx, userID, roleID)
 }
+
 func (r *countingRoleRepo) RemoveFromUserIfNotLast(ctx context.Context, userID, roleID string) (bool, error) {
 	return r.inner.RemoveFromUserIfNotLast(ctx, userID, roleID)
 }
+
 func (r *countingRoleRepo) ListByUserID(ctx context.Context, userID string, params query.ListParams) ([]*domain.Role, error) {
 	return r.inner.GetByUserID(ctx, userID)
 }

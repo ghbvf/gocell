@@ -14,8 +14,10 @@ import (
 )
 
 // Compile-time checks: Adapter implements Allower and CircuitBreakerRetryAfter.
-var _ middleware.Allower = (*Adapter)(nil)
-var _ middleware.CircuitBreakerRetryAfter = (*Adapter)(nil)
+var (
+	_ middleware.Allower                  = (*Adapter)(nil)
+	_ middleware.CircuitBreakerRetryAfter = (*Adapter)(nil)
+)
 
 // mustNew creates an Adapter, failing the test on error.
 func mustNew(t *testing.T, cfg Config) *Adapter {

@@ -16,10 +16,12 @@ import (
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 )
 
-const routerCloseHandlerDuration = testtime.D200ms
-const routerCloseDrainLong = testtime.D5s
-const routerCloseElapsedMax = 600 * time.Millisecond
-const routerCloseDeadlineExtraLong = 6 * time.Second
+const (
+	routerCloseHandlerDuration   = testtime.D200ms
+	routerCloseDrainLong         = testtime.D5s
+	routerCloseElapsedMax        = 600 * time.Millisecond
+	routerCloseDeadlineExtraLong = 6 * time.Second
+)
 
 // ---------------------------------------------------------------------------
 // Three-phase Close tests (Phase 2: drain barrier)
@@ -75,9 +77,11 @@ func newCancelTimeRecorder(inner outbox.Subscriber) *cancelTimeRecorder {
 func (r *cancelTimeRecorder) Setup(ctx context.Context, sub outbox.Subscription) error {
 	return r.inner.Setup(ctx, sub)
 }
+
 func (r *cancelTimeRecorder) Ready(sub outbox.Subscription) <-chan struct{} {
 	return r.inner.Ready(sub)
 }
+
 func (r *cancelTimeRecorder) Subscribe(ctx context.Context, sub outbox.Subscription, handler outbox.SubscriberHandler) error {
 	// Signal that we are inside Subscribe.
 	select {
@@ -129,15 +133,19 @@ func newCompositeStopIntakeSubscriber() *compositeStopIntakeSubscriber {
 func (c *compositeStopIntakeSubscriber) Setup(ctx context.Context, sub outbox.Subscription) error {
 	return c.cancelRec.Setup(ctx, sub)
 }
+
 func (c *compositeStopIntakeSubscriber) Ready(sub outbox.Subscription) <-chan struct{} {
 	return c.cancelRec.Ready(sub)
 }
+
 func (c *compositeStopIntakeSubscriber) Subscribe(ctx context.Context, sub outbox.Subscription, handler outbox.SubscriberHandler) error {
 	return c.cancelRec.Subscribe(ctx, sub, handler)
 }
+
 func (c *compositeStopIntakeSubscriber) Close(ctx context.Context) error {
 	return c.cancelRec.Close(ctx)
 }
+
 func (c *compositeStopIntakeSubscriber) StopIntake(ctx context.Context) error {
 	return c.stopRecorder.StopIntake(ctx)
 }

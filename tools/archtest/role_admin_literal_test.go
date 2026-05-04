@@ -33,8 +33,10 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-const ruleRoleAdminLiteral01 = "ROLE-ADMIN-LITERAL-01"
-const ruleRoleAdminLiteral02 = "ROLE-ADMIN-LITERAL-02"
+const (
+	ruleRoleAdminLiteral01 = "ROLE-ADMIN-LITERAL-01"
+	ruleRoleAdminLiteral02 = "ROLE-ADMIN-LITERAL-02"
+)
 
 // roleAdminAllowlist contains the files that are explicitly permitted to declare
 // a const whose name contains "Admin"/"admin" with the value "admin".

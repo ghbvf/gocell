@@ -31,15 +31,16 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	tcrabbitmq "github.com/testcontainers/testcontainers-go/modules/rabbitmq"
+
 	"github.com/ghbvf/gocell/adapters/rabbitmq"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/tests/testutil"
-	"github.com/google/uuid"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
-	tcrabbitmq "github.com/testcontainers/testcontainers-go/modules/rabbitmq"
 )
 
 const (

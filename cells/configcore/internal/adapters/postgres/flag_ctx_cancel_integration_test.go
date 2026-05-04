@@ -8,11 +8,12 @@ import (
 	"testing"
 	"time"
 
-	adapterpg "github.com/ghbvf/gocell/adapters/postgres"
-	"github.com/ghbvf/gocell/cells/configcore/internal/domain"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	adapterpg "github.com/ghbvf/gocell/adapters/postgres"
+	"github.com/ghbvf/gocell/cells/configcore/internal/domain"
 )
 
 // TestFlagWrite_CtxCancel_PGTxRollback verifies that when the context is

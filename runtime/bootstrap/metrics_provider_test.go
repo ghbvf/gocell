@@ -41,6 +41,7 @@ type recordingProvider struct{}
 func (recordingProvider) CounterVec(_ kernelmetrics.CounterOpts) (kernelmetrics.CounterVec, error) {
 	return kernelmetrics.NopProvider{}.CounterVec(kernelmetrics.CounterOpts{})
 }
+
 func (recordingProvider) HistogramVec(_ kernelmetrics.HistogramOpts) (kernelmetrics.HistogramVec, error) {
 	return kernelmetrics.NopProvider{}.HistogramVec(kernelmetrics.HistogramOpts{})
 }

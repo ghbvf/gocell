@@ -242,6 +242,7 @@ func (a *mockAckQueue) Ack(_ context.Context, id string, reason command.AckReaso
 func (a *mockAckQueue) Enqueue(context.Context, command.Entry, command.EnqueueOptions) error {
 	return errors.New("unused")
 }
+
 func (a *mockAckQueue) Dequeue(context.Context, string, int, time.Duration) ([]command.Entry, error) {
 	return nil, errors.New("unused")
 }
@@ -249,6 +250,7 @@ func (a *mockAckQueue) Report(context.Context, string, time.Time) error { return
 func (a *mockAckQueue) ExtendLease(context.Context, string, time.Duration, time.Time) error {
 	return errors.New("unused")
 }
+
 func (a *mockAckQueue) Cancel(context.Context, string, time.Time) error {
 	return errors.New("unused")
 }

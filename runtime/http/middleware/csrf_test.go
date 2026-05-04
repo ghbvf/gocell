@@ -116,12 +116,21 @@ func TestCSRF_SecFetchSite(t *testing.T) {
 		{"bogus value rejects", "unknown-value", true, nil, "", 403},
 		{"same-site rejects when not allowed", "same-site", false, nil, "", 403},
 		// P0 fix: same-site + AllowSameSite=true falls through to Origin check.
-		{"same-site with trusted origin allowed", "same-site", true,
-			[]string{"https://example.com"}, "https://example.com", 200},
-		{"same-site with untrusted origin rejected", "same-site", true,
-			[]string{"https://example.com"}, "https://evil.example.com", 403},
-		{"same-site without origin signal rejected (fail-closed)", "same-site", true,
-			[]string{"https://example.com"}, "", 403},
+		{
+			"same-site with trusted origin allowed", "same-site", true,
+			[]string{"https://example.com"},
+			"https://example.com", 200,
+		},
+		{
+			"same-site with untrusted origin rejected", "same-site", true,
+			[]string{"https://example.com"},
+			"https://evil.example.com", 403,
+		},
+		{
+			"same-site without origin signal rejected (fail-closed)", "same-site", true,
+			[]string{"https://example.com"},
+			"", 403,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

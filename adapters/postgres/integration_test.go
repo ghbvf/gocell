@@ -9,14 +9,15 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ghbvf/gocell/kernel/clock"
-	"github.com/ghbvf/gocell/kernel/outbox"
-	"github.com/ghbvf/gocell/pkg/errcode"
-	"github.com/ghbvf/gocell/tests/testutil"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	tcpostgres "github.com/testcontainers/testcontainers-go/modules/postgres"
+
+	"github.com/ghbvf/gocell/kernel/clock"
+	"github.com/ghbvf/gocell/kernel/outbox"
+	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/tests/testutil"
 )
 
 // setupPostgres starts a PostgreSQL container via testcontainers and returns a

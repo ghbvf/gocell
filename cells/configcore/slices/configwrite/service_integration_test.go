@@ -5,9 +5,15 @@ package configwrite
 import (
 	"context"
 	"errors"
-	"github.com/ghbvf/gocell/cells/internal/testoutbox"
 	"log/slog"
 	"testing"
+
+	"github.com/ghbvf/gocell/cells/internal/testoutbox"
+
+	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	tcpostgres "github.com/testcontainers/testcontainers-go/modules/postgres"
 
 	adapterpg "github.com/ghbvf/gocell/adapters/postgres"
 	cellpg "github.com/ghbvf/gocell/cells/configcore/internal/adapters/postgres"
@@ -18,10 +24,6 @@ import (
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/crypto"
 	"github.com/ghbvf/gocell/tests/testutil"
-	"github.com/jackc/pgx/v5/pgxpool"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
-	tcpostgres "github.com/testcontainers/testcontainers-go/modules/postgres"
 )
 
 // adminIntegCtx returns a context carrying an admin principal for integration

@@ -145,9 +145,11 @@ type capturingDB struct {
 func (d *capturingDB) Exec(_ context.Context, _ string, _ ...any) (int64, error) {
 	return 1, nil
 }
+
 func (d *capturingDB) Query(_ context.Context, _ string, _ ...any) (Rows, error) {
 	return &mockRowSet{}, nil
 }
+
 func (d *capturingDB) QueryRow(_ context.Context, sql string, _ ...any) Row {
 	d.queryRowSQL = sql
 	if d.queryRowResult == nil {
