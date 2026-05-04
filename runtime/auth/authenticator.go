@@ -11,6 +11,7 @@ package auth
 
 import (
 	"encoding/hex"
+	"fmt"
 	"net/http"
 	"regexp"
 	"strconv"
@@ -268,7 +269,8 @@ func validateCallerCell(callerCell string) error {
 		return errcode.NewAuth(errcode.ErrAuthUnauthorized, "caller cell missing")
 	}
 	if !callerCellPattern.MatchString(callerCell) {
-		return errcode.NewAuth(errcode.ErrAuthUnauthorized, "caller cell id invalid")
+		return errcode.NewAuth(errcode.ErrAuthUnauthorized,
+			fmt.Sprintf("caller cell id %q invalid (must match ^[a-z][a-z0-9-]*$)", callerCell))
 	}
 	return nil
 }

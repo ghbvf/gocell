@@ -139,8 +139,8 @@ func MustMount(mux cell.RouteHandler, r Route) {
 // route-level Policy (when set) → caller-cell guard (when Contract.Clients is
 // non-empty) → wrapper.HTTPHandler ctx contributor.
 //
-// Execution order is outer→inner: caller_cell guard wraps Policy wraps Handler,
-// so caller identity is verified before any business authz check.
+// Execution order (outer → inner): wrapper.HTTPHandler → CallerCell guard →
+// Policy → Handler — caller identity verified before any business authz check.
 func wrapMountGuards(r Route) (http.Handler, error) {
 	handler := r.Handler
 	if r.Policy != nil {

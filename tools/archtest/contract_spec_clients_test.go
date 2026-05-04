@@ -34,10 +34,7 @@ const ruleInternalContractClients01 = "INTERNAL-CONTRACT-CLIENTS-REQUIRED-01"
 // awaitingRealCallerAllowlist holds spec IDs that are in transition:
 // the Clients field has not yet been set because Wave 3 has not landed.
 // Each entry MUST be removed when the real Clients are wired in.
-var awaitingRealCallerAllowlist = map[string]bool{
-	"http.auth.role.assign.v1": true,
-	"http.auth.role.revoke.v1": true,
-}
+var awaitingRealCallerAllowlist = map[string]bool{}
 
 // TestINTERNAL_CONTRACT_CLIENTS_REQUIRED_01 enforces that every
 // wrapper.ContractSpec composite literal with an /internal/v1/* Path
@@ -93,7 +90,7 @@ func TestINTERNAL_CONTRACT_CLIENTS_REQUIRED_01(t *testing.T) {
 	if len(violations) > 0 {
 		t.Errorf("%s: %d /internal/v1/* ContractSpec literals missing Clients field.\n"+
 			"All internal contract specs must declare Clients to enforce caller-cell identity.\n"+
-			"Add spec.Clients = []string{\"callerCellID\"} or add to awaitingRealCallerAllowlist.",
+			"Add spec.Clients: []string{\"callerCellID\"} or add to awaitingRealCallerAllowlist.",
 			ruleInternalContractClients01, len(violations))
 	}
 }

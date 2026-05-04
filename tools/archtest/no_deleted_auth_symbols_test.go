@@ -44,12 +44,9 @@ var deletedAuthSymbols = map[string]bool{
 }
 
 // deletedAuthSymbolsAllowlist contains module-relative paths that are exempt
-// from NO-DELETED-AUTH-SYMBOLS-01. During Wave 1 the definition file is
-// allowed; once Wave 2 removes the definitions, this allowlist becomes empty.
-var deletedAuthSymbolsAllowlist = map[string]bool{
-	// Wave 1: principal.go still defines these symbols — allow the definition site.
-	"runtime/auth/principal.go": true,
-}
+// from NO-DELETED-AUTH-SYMBOLS-01. Wave 2 removed the symbols from principal.go,
+// so this allowlist is now empty.
+var deletedAuthSymbolsAllowlist = map[string]bool{}
 
 // TestNO_DELETED_AUTH_SYMBOLS_01 enforces that the deprecated
 // auth.RoleInternalAdmin / auth.ServiceNameInternal / auth.BuiltinServiceRoles
@@ -104,7 +101,7 @@ func TestNO_DELETED_AUTH_SYMBOLS_01(t *testing.T) {
 		t.Errorf("%s: %d references to deprecated auth symbols found.\n"+
 			"auth.RoleInternalAdmin / auth.ServiceNameInternal / auth.BuiltinServiceRoles\n"+
 			"are being deleted in Wave 2. Replace with auth.RequireCallerCell or\n"+
-			"auth.TestServiceContext. See PR A5 SVCTOKEN-CALLER-IDENTITY.",
+			"auth.TestServiceContext. See A5 PR #362 SVCTOKEN-CALLER-IDENTITY.",
 			ruleNoDeletedAuthSymbols01, len(violations))
 	}
 }

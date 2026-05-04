@@ -15,6 +15,8 @@ import (
 // given callerCell for use in handler/mount tests. Follows the net/http/httptest
 // naming pattern. Use this instead of TestContext for tests that exercise
 // internal endpoints protected by RequireCallerCell.
+//
+// See also: TestContext for user-principal tests.
 func TestServiceContext(callerCell string) context.Context {
 	return WithPrincipal(context.Background(), &Principal{
 		Kind:         PrincipalService,

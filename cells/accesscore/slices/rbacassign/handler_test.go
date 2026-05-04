@@ -195,6 +195,12 @@ func TestHandler_Revoke(t *testing.T) {
 			wantStatus: http.StatusForbidden,
 		},
 		{
+			name:       "non-allowlisted caller returns 403",
+			body:       `{"userId":"usr-1","roleId":"admin"}`,
+			ctx:        func() context.Context { return auth.TestServiceContext("configcore") },
+			wantStatus: http.StatusForbidden,
+		},
+		{
 			name:       "no auth returns 401",
 			body:       `{"userId":"usr-1","roleId":"admin"}`,
 			ctx:        nil, // no auth

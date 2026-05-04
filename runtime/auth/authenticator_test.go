@@ -7,6 +7,7 @@ import (
 	"math"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -847,5 +848,79 @@ func TestServiceTokenAuthenticator_PastTimestampAtMaxAge_Error(t *testing.T) {
 	}
 	if p != nil {
 		t.Fatalf("expected nil principal, got %v", p)
+	}
+}
+
+// TestValidateCallerCell tests the validateCallerCell function directly with
+// a table-driven set of cases covering empty, uppercase, valid, and invalid IDs.
+func TestValidateCallerCell(t *testing.T) {
+	tests := []struct {
+		name       string
+		callerCell string
+		wantErr    bool
+		wantCode   errcode.Code
+		wantMsg    string // partial substring expected in error message
+	}{
+		{
+			name:       "empty string — missing",
+			callerCell: "",
+			wantErr:    true,
+			wantCode:   errcode.ErrAuthUnauthorized,
+			wantMsg:    "caller cell missing",
+		},
+		{
+			name:       "uppercase Accesscore — invalid (must be lowercase)",
+			callerCell: "Accesscore",
+			wantErr:    true,
+			wantCode:   errcode.ErrAuthUnauthorized,
+			wantMsg:    "caller cell id",
+		},
+		{
+			name:       "lowercase access-core — valid",
+			callerCell: "access-core",
+			wantErr:    false,
+		},
+		{
+			name:       "starts with digit — invalid",
+			callerCell: "123abc",
+			wantErr:    true,
+			wantCode:   errcode.ErrAuthUnauthorized,
+			wantMsg:    "caller cell id",
+		},
+		{
+			name:       "single letter — valid",
+			callerCell: "a",
+			wantErr:    false,
+		},
+		{
+			name:       "alphanumeric with hyphens — valid",
+			callerCell: "a-b-c-123",
+			wantErr:    false,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			err := validateCallerCell(tc.callerCell)
+			if !tc.wantErr {
+				if err != nil {
+					t.Errorf("unexpected error: %v", err)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatal("expected error, got nil")
+			}
+			var ecErr *errcode.Error
+			if !errors.As(err, &ecErr) {
+				t.Fatalf("expected *errcode.Error, got %T: %v", err, err)
+			}
+			if ecErr.Code != tc.wantCode {
+				t.Errorf("expected code %v, got %v", tc.wantCode, ecErr.Code)
+			}
+			if tc.wantMsg != "" && !strings.Contains(err.Error(), tc.wantMsg) {
+				t.Errorf("expected error message to contain %q, got %q", tc.wantMsg, err.Error())
+			}
+		})
 	}
 }

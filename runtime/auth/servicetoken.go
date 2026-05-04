@@ -281,9 +281,16 @@ func handleServiceToken(cfg serviceTokenConfig, auth Authenticator, next http.Ha
 		return
 	}
 
+	// Extract callerCell from the 4-part payload for logging purposes.
+	// parts: [ts, nonce, callerCell, mac]; safe to read index 2 when len>=3.
+	callerCell := ""
+	if parts := strings.SplitN(token, ":", 4); len(parts) >= 3 {
+		callerCell = parts[2]
+	}
+
 	p, ok, err := auth.Authenticate(r)
 	if err != nil {
-		writeServiceTokenError(cfg, err, w, r)
+		writeServiceTokenError(cfg, err, callerCell, w, r)
 		return
 	}
 	if !ok {
@@ -305,12 +312,15 @@ func handleServiceToken(cfg serviceTokenConfig, auth Authenticator, next http.Ha
 // full), and 500 (nonce store infrastructure failures) by inspecting the
 // wrapped Cause.
 //
+// callerCell is extracted from the raw token payload for structured logging;
+// it may be empty for legacy-format or malformed tokens.
+//
 // Branch order is load-bearing: the ErrNonceReused check MUST precede the
 // generic Cause check. Both replay and store-infra errors are wrapped via
 // WrapAuth and therefore carry a non-nil Cause; swapping the checks would
 // classify every replay as an infrastructure failure (500) instead of an
 // auth failure (401), downgrading a security signal to a server error.
-func writeServiceTokenError(cfg serviceTokenConfig, err error, w http.ResponseWriter, r *http.Request) {
+func writeServiceTokenError(cfg serviceTokenConfig, err error, callerCell string, w http.ResponseWriter, r *http.Request) {
 	// errors.Is traverses the full chain, so ErrNonceReused in the Cause matches.
 	if errors.Is(err, ErrNonceReused) {
 		cfg.metrics.recordServiceVerify("failure", "replay")
@@ -322,6 +332,7 @@ func writeServiceTokenError(cfg serviceTokenConfig, err error, w http.ResponseWr
 			slog.String("code", string(errcode.ErrAuthReplayDetected)),
 			slog.String("path", r.URL.Path),
 			slog.String("remote", r.RemoteAddr),
+			slog.String("caller_cell", callerCell),
 		)
 		httputil.WriteError(r.Context(), w, http.StatusUnauthorized,
 			string(errcode.ErrAuthReplayDetected), "service token replay detected")
@@ -350,13 +361,30 @@ func writeServiceTokenError(cfg serviceTokenConfig, err error, w http.ResponseWr
 	}
 
 	// Classify remaining auth errors by their message for metric granularity.
-	// Legacy 2-part format produces a "legacy_format" reason — emit a warn log
-	// so ops can observe the traffic without a second split in the hot path.
 	reason := classifyServiceTokenVerifyError(err)
-	if reason == "legacy_format" {
+	switch reason {
+	case "legacy_format":
 		cfg.logger.WarnContext(r.Context(), "legacy service token format rejected",
 			slog.String("path", r.URL.Path),
 			slog.String("format", "2-part"),
+		)
+	case "missing_caller_cell":
+		cfg.logger.WarnContext(r.Context(), "service token missing caller cell",
+			slog.String("path", r.URL.Path),
+			slog.String("remote", r.RemoteAddr),
+			slog.String("caller_cell", callerCell),
+		)
+	case "invalid_caller_cell":
+		cfg.logger.WarnContext(r.Context(), "service token invalid caller cell",
+			slog.String("path", r.URL.Path),
+			slog.String("remote", r.RemoteAddr),
+			slog.String("caller_cell", callerCell),
+		)
+	case "invalid_format":
+		cfg.logger.WarnContext(r.Context(), "service token invalid format",
+			slog.String("path", r.URL.Path),
+			slog.String("remote", r.RemoteAddr),
+			slog.String("caller_cell", callerCell),
 		)
 	}
 	cfg.metrics.recordServiceVerify("failure", reason)
@@ -366,6 +394,10 @@ func writeServiceTokenError(cfg serviceTokenConfig, err error, w http.ResponseWr
 // classifyServiceTokenVerifyError maps a verifyServiceTokenPayload error to a
 // metric reason label. This mirrors the legacy per-branch labels from the
 // original handleServiceToken implementation.
+//
+// The error message from errcode includes a bracket-prefixed code, e.g.
+// "[ERR_AUTH_UNAUTHORIZED] caller cell missing", so strings.Contains is used
+// to match the classification substring regardless of leading code prefix.
 func classifyServiceTokenVerifyError(err error) string {
 	if err == nil {
 		return "ok"
@@ -380,7 +412,7 @@ func classifyServiceTokenVerifyError(err error) string {
 		return "invalid_mac"
 	case strings.Contains(msg, "caller cell missing"):
 		return "missing_caller_cell"
-	case strings.Contains(msg, "caller cell id invalid"):
+	case strings.Contains(msg, "caller cell id"):
 		return "invalid_caller_cell"
 	default:
 		return "invalid_format"
@@ -433,6 +465,9 @@ func canonicalQuery(rawQuery string) string {
 //   - ring is nil
 //   - callerCell is empty (mandatory — identifies the originating cell)
 //   - callerCell contains ':' (would corrupt the 4-part token structure)
+//
+// rawQuery is canonicalized separately from path so the HMAC message remains stable
+// across query parameter ordering. Pass "" when the request has no query parameters.
 func GenerateServiceToken(ring *HMACKeyRing, callerCell, method, path, rawQuery string, ts time.Time) string {
 	if ring == nil {
 		return ""

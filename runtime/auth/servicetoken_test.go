@@ -965,6 +965,126 @@ func TestServiceTokenMiddleware_EmptyCallerCell_Rejected(t *testing.T) {
 		"GenerateServiceToken must return empty string when callerCell is empty")
 }
 
+// TestClassifyServiceTokenVerifyError verifies that classifyServiceTokenVerifyError
+// maps errors to the correct metric reason label for all classified cases.
+func TestClassifyServiceTokenVerifyError(t *testing.T) {
+	tests := []struct {
+		name       string
+		err        error
+		wantReason string
+	}{
+		{
+			name:       "nil error — ok",
+			err:        nil,
+			wantReason: "ok",
+		},
+		{
+			name:       "legacy 2-part format",
+			err:        errcode.NewAuth(errcode.ErrAuthUnauthorized, "legacy 2-part service token format rejected"),
+			wantReason: "legacy_format",
+		},
+		{
+			name:       "legacy 3-part format",
+			err:        errcode.NewAuth(errcode.ErrAuthUnauthorized, "legacy 3-part service token format rejected"),
+			wantReason: "legacy_format",
+		},
+		{
+			name:       "expired token",
+			err:        errcode.NewAuth(errcode.ErrAuthTokenExpired, "service token expired"),
+			wantReason: "expired",
+		},
+		{
+			name:       "invalid MAC",
+			err:        errcode.NewAuth(errcode.ErrAuthUnauthorized, "invalid service token MAC"),
+			wantReason: "invalid_mac",
+		},
+		{
+			name:       "missing caller cell",
+			err:        errcode.NewAuth(errcode.ErrAuthUnauthorized, "caller cell missing"),
+			wantReason: "missing_caller_cell",
+		},
+		{
+			name:       "invalid caller cell — with actual value in message",
+			err:        errcode.NewAuth(errcode.ErrAuthUnauthorized, `caller cell id "Bad-Cell" invalid (must match ^[a-z][a-z0-9-]*$)`),
+			wantReason: "invalid_caller_cell",
+		},
+		{
+			name:       "other invalid format",
+			err:        errcode.NewAuth(errcode.ErrAuthUnauthorized, msgInvalidServiceTokenFormat),
+			wantReason: "invalid_format",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := classifyServiceTokenVerifyError(tc.err)
+			assert.Equal(t, tc.wantReason, got)
+		})
+	}
+}
+
+// TestServiceToken_EmptyCallerCell_MetricLabel verifies that a 4-part token
+// with an empty caller_cell segment is rejected with HTTP 401 AND records the
+// metric label "missing_caller_cell".
+func TestServiceToken_EmptyCallerCell_MetricLabel(t *testing.T) {
+	ring := mustTestRing(t, testHMACKey, "")
+	now := time.Unix(1700000000, 0)
+
+	spy := newSpyProvider()
+	am, err := NewAuthMetrics(spy)
+	require.NoError(t, err)
+
+	// Craft a 4-part token with an empty callerCell: ts:nonce::deadbeef...
+	ts := fmt.Sprintf("%d", now.Unix())
+	crafted := ts + ":somenonce16bytes::deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef"
+
+	handler := ServiceTokenMiddleware(ring, clockmock.New(now),
+		WithServiceTokenNonceStore(mustNewInMemoryNonceStore(t)),
+		WithServiceTokenMetrics(am),
+	)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Fatal("should not be called: empty caller cell must be rejected")
+	}))
+
+	req := httptest.NewRequest(http.MethodGet, "/internal/v1/test", nil)
+	req.Header.Set("Authorization", "ServiceToken "+crafted)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusUnauthorized, rec.Code)
+	spy.assertServiceVerify(t, "failure", "missing_caller_cell")
+}
+
+// TestServiceToken_InvalidCallerCellPattern_MetricLabel verifies that a 4-part
+// token with a caller_cell not matching ^[a-z][a-z0-9-]*$ is rejected with 401
+// AND records the metric label "invalid_caller_cell".
+func TestServiceToken_InvalidCallerCellPattern_MetricLabel(t *testing.T) {
+	ring := mustTestRing(t, testHMACKey, "")
+	now := time.Unix(1700000000, 0)
+
+	spy := newSpyProvider()
+	am, err := NewAuthMetrics(spy)
+	require.NoError(t, err)
+
+	// Craft a 4-part token with an invalid callerCell "Bad-Cell" (uppercase B).
+	ts := fmt.Sprintf("%d", now.Unix())
+	crafted := ts + ":somenonce16bytes:Bad-Cell:deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef"
+
+	handler := ServiceTokenMiddleware(ring, clockmock.New(now),
+		WithServiceTokenNonceStore(mustNewInMemoryNonceStore(t)),
+		WithServiceTokenMetrics(am),
+	)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Fatal("should not be called: invalid caller cell must be rejected")
+	}))
+
+	req := httptest.NewRequest(http.MethodGet, "/internal/v1/test", nil)
+	req.Header.Set("Authorization", "ServiceToken "+crafted)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusUnauthorized, rec.Code)
+	spy.assertServiceVerify(t, "failure", "invalid_caller_cell")
+}
+
 // TestServiceTokenMiddleware_LegacyThreePart_Rejected verifies that the old
 // 3-part token format {ts}:{nonce}:{hex_hmac} (without caller_cell) is rejected.
 //

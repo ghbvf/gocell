@@ -95,12 +95,14 @@ func TestSVCTOKEN_CALLER_CELL_REQUIRED_01(t *testing.T) {
 }
 
 // discoverKnownCells returns the set of valid caller cell IDs by listing
-// subdirectories of cells/ (first-level only: accesscore, auditcore, etc.)
-// plus any actor IDs from actors.yaml.
+// subdirectories of cells/ (first-level only: accesscore, auditcore, etc.),
+// scanning examples/{*}/cells/*/cell.yaml for id fields, and reading
+// actor IDs from actors.yaml.
 func discoverKnownCells(t *testing.T, root string) map[string]bool {
 	t.Helper()
 	known := map[string]bool{}
 
+	// Collect platform cells from cells/ directory names.
 	cellsDir := filepath.Join(root, "cells")
 	entries, err := os.ReadDir(cellsDir)
 	if err == nil {
@@ -110,6 +112,35 @@ func discoverKnownCells(t *testing.T, root string) map[string]bool {
 			}
 		}
 	}
+
+	// Collect example cell IDs from examples/{*}/cells/*/cell.yaml.
+	examplesDir := filepath.Join(root, "examples")
+	_ = filepath.WalkDir(examplesDir, func(path string, d os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if d.IsDir() {
+			return nil
+		}
+		if d.Name() != "cell.yaml" {
+			return nil
+		}
+		data, readErr := os.ReadFile(filepath.Clean(path))
+		if readErr != nil {
+			return nil //nolint:nilerr // soft-skip on unreadable cell.yaml: archtest collects as many cells as possible
+		}
+		for _, line := range strings.Split(string(data), "\n") {
+			line = strings.TrimSpace(line)
+			if strings.HasPrefix(line, "id:") {
+				id := strings.TrimSpace(strings.TrimPrefix(line, "id:"))
+				id = strings.Trim(id, "\"'")
+				if cellIDRegex.MatchString(id) {
+					known[id] = true
+				}
+			}
+		}
+		return nil
+	})
 
 	// Also allow actor IDs from actors.yaml (simple grep for "id:" lines).
 	actorsFile := filepath.Join(root, "actors.yaml")
@@ -127,8 +158,6 @@ func discoverKnownCells(t *testing.T, root string) map[string]bool {
 		}
 	}
 
-	// Always allow the test/example cell IDs used in examples/.
-	known["example-cell"] = true
 	return known
 }
 

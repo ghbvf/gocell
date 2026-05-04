@@ -21,7 +21,9 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"strings"
@@ -203,13 +205,13 @@ func startCallerCellApp(t *testing.T) *callerCellApp {
 	}
 }
 
-// TestInternalRPC_AccessCoreCallsConfigRead_Allowed_200 verifies that a service
-// token carrying callerCell="accesscore" (which is declared in
+// TestInternalRPC_AccessCoreCallsConfigRead_GuardPassed_404KeyNotFound verifies
+// that a service token carrying callerCell="accesscore" (which is declared in
 // ContractSpec.Clients for GET /internal/v1/config/{key}) passes the
 // ServiceTokenMiddleware guard and RequireCallerCell policy, reaching the
 // handler. The handler returns 404 (key not seeded) which proves both guards
 // passed — neither short-circuited to 401 or 403.
-func TestInternalRPC_AccessCoreCallsConfigRead_Allowed_200(t *testing.T) {
+func TestInternalRPC_AccessCoreCallsConfigRead_GuardPassed_404KeyNotFound(t *testing.T) {
 	app := startCallerCellApp(t)
 
 	token := auth.GenerateServiceToken(app.ring, "accesscore",
@@ -253,6 +255,34 @@ func TestInternalRPC_ConfigCoreCallsConfigRead_Denied_403(t *testing.T) {
 	// 403 = HMAC valid, but RequireCallerCell rejects "configcore" not in allowlist.
 	assert.Equal(t, http.StatusForbidden, resp.StatusCode,
 		"configcore is not in contract.clients=[accesscore]; RequireCallerCell must return 403")
+	assertErrCode(t, resp, "ERR_AUTH_FORBIDDEN")
+}
+
+// TestInternalRPC_WrongEndpointForCaller_403 verifies that a caller with a
+// valid HMAC service token (callerCell="auditcore") is rejected by
+// RequireCallerCell with 403 because "auditcore" is not in
+// contract.clients=["accesscore"] for GET /internal/v1/config/{key}.
+func TestInternalRPC_WrongEndpointForCaller_403(t *testing.T) {
+	app := startCallerCellApp(t)
+
+	// auditcore is a valid cell ID and passes HMAC + format checks,
+	// but it is not in the configread contract.clients allowlist.
+	token := auth.GenerateServiceToken(app.ring, "auditcore",
+		http.MethodGet, "/internal/v1/config/any-key", "", time.Now())
+	require.NotEmpty(t, token)
+
+	req, err := http.NewRequest(http.MethodGet,
+		fmt.Sprintf("http://%s/internal/v1/config/any-key", app.internalAddr), nil)
+	require.NoError(t, err)
+	req.Header.Set("Authorization", "ServiceToken "+token)
+
+	resp, err := callerCellHTTPClient.Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+
+	assert.Equal(t, http.StatusForbidden, resp.StatusCode,
+		"auditcore is not in configread contract.clients; RequireCallerCell must return 403")
+	assertErrCode(t, resp, "ERR_AUTH_FORBIDDEN")
 }
 
 // TestInternalRPC_EmptyCallerCellRejected verifies that a 4-part token with an
@@ -287,6 +317,7 @@ func TestInternalRPC_EmptyCallerCellRejected(t *testing.T) {
 
 	assert.Equal(t, http.StatusUnauthorized, resp.StatusCode,
 		"token with empty callerCell segment must be rejected with 401")
+	assertErrCode(t, resp, "ERR_AUTH_UNAUTHORIZED")
 }
 
 // TestInternalRPC_TamperedCallerCellRejected verifies that a valid token for
@@ -325,4 +356,21 @@ func TestInternalRPC_TamperedCallerCellRejected(t *testing.T) {
 
 	assert.Equal(t, http.StatusUnauthorized, resp.StatusCode,
 		"tampered callerCell segment invalidates the HMAC; ServiceTokenMiddleware must return 401")
+}
+
+// assertErrCode reads the response body and asserts that the JSON error
+// envelope contains the expected errcode value in error.code.
+func assertErrCode(t *testing.T, resp *http.Response, wantCode string) {
+	t.Helper()
+	body, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	var envelope struct {
+		Error struct {
+			Code string `json:"code"`
+		} `json:"error"`
+	}
+	require.NoError(t, json.Unmarshal(body, &envelope),
+		"response body must be JSON error envelope: %s", string(body))
+	assert.Equal(t, wantCode, envelope.Error.Code,
+		"error.code mismatch in response body: %s", string(body))
 }

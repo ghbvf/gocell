@@ -459,7 +459,7 @@ func TestRequireCallerCell(t *testing.T) {
 			wantErr:   false,
 		},
 		{
-			name:      "(g) multiple caller allowlist — second matches",
+			name:      "(g2) multiple caller allowlist — second matches",
 			ctx:       withServicePrincipalCtx("auditcore"),
 			allowlist: []string{"configcore", "accesscore", "auditcore"},
 			wantErr:   false,

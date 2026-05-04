@@ -2,8 +2,15 @@ package wrapper
 
 import (
 	"fmt"
+	"regexp"
 	"strings"
 )
+
+// clientCellPattern validates a caller cell id in ContractSpec.Clients:
+// must start with a lowercase letter and contain only lowercase letters,
+// digits, and hyphens. This mirrors the runtime/auth.callerCellPattern
+// but lives in kernel/wrapper to avoid a kernel → runtime dependency.
+var clientCellPattern = regexp.MustCompile(`^[a-z][a-z0-9-]*$`)
 
 // ContractSpec is the minimal subset of a contract definition that wrapper
 // needs to emit observability annotations. Cells construct the literal
@@ -90,14 +97,22 @@ func (s ContractSpec) validateHTTP() error {
 	if s.Topic != "" {
 		return fmt.Errorf("wrapper.ContractSpec[%s]: http kind must not carry Topic", s.ID)
 	}
-	if strings.HasPrefix(s.Path, "/internal/v1/") && len(s.Clients) == 0 {
+	isInternalPath := strings.HasPrefix(s.Path, "/internal/v1/") || s.Path == "/internal/v1"
+	if isInternalPath && len(s.Clients) == 0 {
 		return fmt.Errorf(
 			"ContractSpec[%s]: internal path requires non-empty Clients "+
-				"(declare in contract.yaml endpoints.clients and mirror in literal)",
+				"(declare in contract.yaml endpoints.clients and mirror in literal) "+
+				"(see contracts/http/config/internal/get/v1/contract.yaml for an example)",
 			s.ID)
 	}
-	if !strings.HasPrefix(s.Path, "/internal/v1/") && len(s.Clients) > 0 {
+	if !isInternalPath && len(s.Clients) > 0 {
 		return fmt.Errorf("ContractSpec[%s]: non-internal path must not declare Clients", s.ID)
+	}
+	for i, c := range s.Clients {
+		if !clientCellPattern.MatchString(strings.ToLower(c)) {
+			return fmt.Errorf("ContractSpec[%s]: Clients[%d] %q does not match cell ID pattern ^[a-z][a-z0-9-]*$",
+				s.ID, i, c)
+		}
 	}
 	return nil
 }
