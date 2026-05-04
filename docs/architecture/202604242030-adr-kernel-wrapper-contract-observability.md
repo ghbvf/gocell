@@ -291,6 +291,17 @@ masks `key=value` / `key: value` substrings of the form
 emitting `<REDACTED>` in place of the value while preserving the key
 so operators still get a recognizable signal.
 
+Value boundary is fail-closed: every pattern consumes up to the next
+whitespace (or `\n` for `authorization`). `,` and `;` are NOT treated
+as boundaries even though doing so would preserve more co-located
+context, because fail-closed redaction cannot assume secrets are free
+of those characters (e.g. `Pwd=secret;next=...` ODBC blocks, base64url
+JWT values that happen to embed punctuation). The accepted trade-off:
+a same-line `password="abc",user="alice"` masks `user="alice"` too —
+co-located fields are typically PII or recoverable from the matching
+slog structured-field copy of the error, so over-masking is the
+cheaper failure mode than leaking the secret suffix.
+
 Why hardcoded:
 
 - **fail-closed defaults**: cell-native deployments cannot assume

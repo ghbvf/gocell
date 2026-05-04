@@ -21,21 +21,37 @@ import (
 // Mask is the literal substituted in place of redacted values.
 const Mask = "<REDACTED>"
 
+// Value-boundary policy across all three patterns: consume up to the next
+// whitespace (or newline for authorization). NEVER stop at `,` or `;` even
+// though doing so would preserve more context — fail-closed cannot assume
+// secrets are free of those characters. A base64url JWT plus padding, an
+// ODBC `Pwd=a;b;c` block embedded inside a larger DSN, or a comma-separated
+// secret value would otherwise leak the suffix.
+//
+// Trade-off: a JSON-style error like
+// `{"password":"abc","user":"alice"}` masks the entire trailing slice
+// (`"abc","user":"alice"}`) instead of just the secret. Co-located
+// fields — usernames, timestamps, surrounding JSON — are typically PII or
+// recoverable from the slog structured-field copy of the same error, so
+// the over-mask is the cheaper failure mode.
+
 // authorizationPattern handles HTTP `Authorization` header form where the
 // value is `Bearer <token>` / `Basic <b64>` (whitespace-separated). value
-// extends to end of line / `;` so the trailing token is not leaked. Order
-// matters: authorization is applied before defaultPattern so the latter does
-// not partially eat `Authorization: Bearer` and leave the real token bare.
+// extends to end of line so a trailing `;`-suffixed token (rare but not
+// impossible inside an opaque bearer) is not leaked. Order matters:
+// authorization is applied before defaultPattern so the latter does not
+// partially eat `Authorization: Bearer` and leave the real token bare.
 var authorizationPattern = regexp.MustCompile(
-	`(?i)(authorization)\s*[:=]\s*[^\r\n;]+`,
+	`(?i)(authorization)\s*[:=]\s*[^\r\n]+`,
 )
 
 // connectionStringPattern handles ODBC / SQL Server connection strings where
 // `;` separates fields (e.g. `Server=foo;Pwd=bar;Database=baz`). value
-// extends to whitespace / comma so the entire embedded credential block is
-// scrubbed at once.
+// extends to whitespace so the entire embedded credential block is
+// scrubbed at once even when the string itself contains `,` (e.g. SQL
+// Server `Server=host,1433;Pwd=secret`).
 var connectionStringPattern = regexp.MustCompile(
-	`(?i)(connection[_ ]?string)\s*[:=]\s*[^\s,]+`,
+	`(?i)(connection[_ ]?string)\s*[:=]\s*\S+`,
 )
 
 // defaultPattern matches single-token `key=value` / `key: value` forms.
@@ -45,14 +61,14 @@ var connectionStringPattern = regexp.MustCompile(
 // (SQL Server / ODBC 连接字符串 password 缩写).
 //
 // dsn 保留：PG 连接错误 message 常含完整 DSN（含明文密码 postgres://u:pwd@host），
-// 是真实泄漏面。dsn 的 value 在 PG 风格里是单 URL（无 `;`），保持单词边界足够。
+// 是真实泄漏面。
 //
 // pwd false-positive 已知：日志里出现 `pwd=/home/user` 形式（如打印工作目录）
 // 会被 mask。这是 fail-closed 的代价 — 取舍偏向「宁可掩盖目录也不泄漏 SQL
 // Server `Pwd=secret`」。dev 调试需要原始 working directory 时走 slog 结构化字段
 // (e.g. `slog.String("workdir", v)`)，不靠 trace span。
 var defaultPattern = regexp.MustCompile(
-	`(?i)(password|passwd|pwd|secret|token|api[_-]?key|bearer|private[_-]?key|signing[_-]?key|dsn)\s*[:=]\s*[^\s;,]+`,
+	`(?i)(password|passwd|pwd|secret|token|api[_-]?key|bearer|private[_-]?key|signing[_-]?key|dsn)\s*[:=]\s*\S+`,
 )
 
 // allPatterns runs in order. ORDER IS A CORRECTNESS CONSTRAINT, not a

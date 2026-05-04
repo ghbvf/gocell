@@ -48,12 +48,20 @@ func TestRedactString(t *testing.T) {
 			want: "Authorization: <REDACTED>",
 		},
 		{
-			// authorizationPattern stops at `;` so trailing context after a
-			// semicolon survives — verifies the pattern's value-boundary
-			// invariant (3-pattern split correctness).
-			name: "authorization_semicolonBoundary",
+			// authorizationPattern stops at end-of-line, NOT at `;`. A `;`
+			// inside an opaque bearer token must not leak the suffix —
+			// over-masking the same-line `trace_id=1` is the accepted
+			// fail-closed cost.
+			name: "authorization_semicolonInValue_noLeak",
 			in:   "Authorization: Bearer abc.def.ghi; trace_id=1",
-			want: "Authorization: <REDACTED>; trace_id=1",
+			want: "Authorization: <REDACTED>",
+		},
+		{
+			// Multi-line: only the Authorization line is masked; the next
+			// header line survives because the boundary is `\n`.
+			name: "authorization_newlineBoundary",
+			in:   "Authorization: Bearer abc.def.ghi\nContent-Type: json",
+			want: "Authorization: <REDACTED>\nContent-Type: json",
 		},
 		{
 			name: "bearer_keyEqValue",
@@ -135,6 +143,32 @@ func TestRedactString(t *testing.T) {
 			name: "multipleKeys",
 			in:   "password=a token=b",
 			want: "password=<REDACTED> token=<REDACTED>",
+		},
+		{
+			// fail-closed: a `,` inside the secret value must NOT terminate
+			// the redacted span — otherwise `def` (the suffix of the
+			// original secret) would leak past the mask.
+			name: "password_commaInValue_noLeak",
+			in:   "password=abc,def next=ok",
+			want: "password=<REDACTED> next=ok",
+		},
+		{
+			// fail-closed: same for `;` inside the value.
+			name: "token_semicolonInValue_noLeak",
+			in:   "token=abc;def next=ok",
+			want: "token=<REDACTED> next=ok",
+		},
+		{
+			// Documents the over-mask trade-off: when a key=value field is
+			// followed by `,key2=value2` with no whitespace between, the
+			// fail-closed `\S+` boundary swallows both fields. This is the
+			// accepted cost — losing user="alice" context here is cheaper
+			// than risking a `,`-suffixed secret leaking past the mask.
+			// Callers needing the trailing field intact must emit a space
+			// between fields, or use slog structured fields instead.
+			name: "commaSeparatedFields_overMask_documented",
+			in:   `password="abc",user="alice"`,
+			want: `password=<REDACTED>`,
 		},
 		{
 			name: "noMatch_passthrough",
