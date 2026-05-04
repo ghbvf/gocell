@@ -98,4 +98,3 @@ func MustFromContext(ctx context.Context) *Principal {
 	}
 	return p
 }
-

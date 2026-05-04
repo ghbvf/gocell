@@ -133,4 +133,3 @@ func TestMount_AutoEnforceClients_ComposeWithPolicy(t *testing.T) {
 	assert.Equal(t, http.StatusForbidden, rec.Code,
 		"extra Policy layer must be enforced after Clients guard passes")
 }
-

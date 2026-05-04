@@ -29,6 +29,9 @@ import (
 	"testing"
 )
 
+// ruleSvctokenCallerCellRequired01 is the archtest rule identifier; not a credential.
+//
+//nolint:gosec // G101 false positive: archtest rule identifier, not a credential
 const ruleSvctokenCallerCellRequired01 = "SVCTOKEN-CALLER-CELL-REQUIRED-01"
 
 // cellIDRegex is the canonical cell-ID pattern: lowercase letter + lowercase
@@ -110,7 +113,7 @@ func discoverKnownCells(t *testing.T, root string) map[string]bool {
 
 	// Also allow actor IDs from actors.yaml (simple grep for "id:" lines).
 	actorsFile := filepath.Join(root, "actors.yaml")
-	data, err := os.ReadFile(actorsFile) //nolint:gosec
+	data, err := os.ReadFile(actorsFile) //nolint:gosec // G304 false positive: actorsFile path is constant within repo
 	if err == nil {
 		for _, line := range strings.Split(string(data), "\n") {
 			line = strings.TrimSpace(line)
@@ -140,7 +143,7 @@ func scanGenerateServiceTokenCallSites(path, rel string, knownCells map[string]b
 	fset := token.NewFileSet()
 	f, err := parser.ParseFile(fset, path, data, parser.SkipObjectResolution)
 	if err != nil {
-		return nil, nil //nolint:nilerr
+		return nil, nil //nolint:nilerr // soft-skip on read error: archtest fixture allows missing/unreadable files (caller will scan rest)
 	}
 
 	var violations []string

@@ -133,7 +133,7 @@ func TestContractSpec_Validate_NonInternalRejectsClients(t *testing.T) {
 // TestContractSpec_Validate_InternalWithClientsOK verifies that an internal
 // ContractSpec with Clients declared passes validation.
 //
-// Spec: Path=/internal/v1/foo + Clients=["accesscore"] → nil
+// Spec: Path=/internal/v1/foo + Clients=["accesscore"] → nil.
 func TestContractSpec_Validate_InternalWithClientsOK(t *testing.T) {
 	t.Parallel()
 	spec := wrapper.ContractSpec{

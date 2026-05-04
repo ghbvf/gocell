@@ -91,7 +91,10 @@ func (s ContractSpec) validateHTTP() error {
 		return fmt.Errorf("wrapper.ContractSpec[%s]: http kind must not carry Topic", s.ID)
 	}
 	if strings.HasPrefix(s.Path, "/internal/v1/") && len(s.Clients) == 0 {
-		return fmt.Errorf("ContractSpec[%s]: internal path requires non-empty Clients (declare in contract.yaml endpoints.clients and mirror in literal)", s.ID)
+		return fmt.Errorf(
+			"ContractSpec[%s]: internal path requires non-empty Clients "+
+				"(declare in contract.yaml endpoints.clients and mirror in literal)",
+			s.ID)
 	}
 	if !strings.HasPrefix(s.Path, "/internal/v1/") && len(s.Clients) > 0 {
 		return fmt.Errorf("ContractSpec[%s]: non-internal path must not declare Clients", s.ID)

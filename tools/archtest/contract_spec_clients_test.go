@@ -35,8 +35,8 @@ const ruleInternalContractClients01 = "INTERNAL-CONTRACT-CLIENTS-REQUIRED-01"
 // the Clients field has not yet been set because Wave 3 has not landed.
 // Each entry MUST be removed when the real Clients are wired in.
 var awaitingRealCallerAllowlist = map[string]bool{
-	"http.auth.role.assign.v1":  true,
-	"http.auth.role.revoke.v1":  true,
+	"http.auth.role.assign.v1": true,
+	"http.auth.role.revoke.v1": true,
 }
 
 // TestINTERNAL_CONTRACT_CLIENTS_REQUIRED_01 enforces that every
@@ -114,7 +114,7 @@ func scanContractSpecMissingClients(path, rel string) ([]string, error) {
 	if err != nil {
 		// Files with build tags or syntax errors that only compile under
 		// specific constraints — skip silently.
-		return nil, nil //nolint:nilerr
+		return nil, nil //nolint:nilerr // soft-skip on read error: archtest fixture allows missing/unreadable files (caller will scan rest)
 	}
 
 	var violations []string

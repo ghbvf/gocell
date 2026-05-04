@@ -409,21 +409,28 @@ func parseContractSpecClientsField(expr *ast.CompositeLit) []string {
 		if !ok {
 			return nil
 		}
-		clients := make([]string, 0, len(compLit.Elts))
-		for _, elem := range compLit.Elts {
-			lit, ok := elem.(*ast.BasicLit)
-			if !ok || lit.Kind != token.STRING {
-				return nil // non-literal element — cannot resolve
-			}
-			s, err := strconv.Unquote(lit.Value)
-			if err != nil {
-				return nil
-			}
-			clients = append(clients, s)
-		}
-		return clients
+		return extractStringLiterals(compLit.Elts)
 	}
 	return nil
+}
+
+// extractStringLiterals returns the Go-decoded values of every element in
+// elts when each element is a string BasicLit. Returns nil on the first
+// non-string-literal element so the caller can treat the slice as unresolvable.
+func extractStringLiterals(elts []ast.Expr) []string {
+	out := make([]string, 0, len(elts))
+	for _, elem := range elts {
+		lit, ok := elem.(*ast.BasicLit)
+		if !ok || lit.Kind != token.STRING {
+			return nil
+		}
+		s, err := strconv.Unquote(lit.Value)
+		if err != nil {
+			return nil
+		}
+		out = append(out, s)
+	}
+	return out
 }
 
 // parseEventSpecCallExpr extracts a contractSpecLiteral from a

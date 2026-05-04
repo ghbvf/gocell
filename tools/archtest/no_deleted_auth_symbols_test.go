@@ -38,7 +38,7 @@ const ruleNoDeletedAuthSymbols01 = "NO-DELETED-AUTH-SYMBOLS-01"
 // deletedAuthSymbols is the set of selector names that must not appear in
 // any file outside the whitelist.
 var deletedAuthSymbols = map[string]bool{
-	"RoleInternalAdmin":  true,
+	"RoleInternalAdmin":   true,
 	"ServiceNameInternal": true,
 	"BuiltinServiceRoles": true,
 }
@@ -120,7 +120,7 @@ func scanDeletedAuthSymbols(path, rel string) ([]string, error) {
 	fset := token.NewFileSet()
 	f, err := parser.ParseFile(fset, path, data, parser.SkipObjectResolution)
 	if err != nil {
-		return nil, nil //nolint:nilerr
+		return nil, nil //nolint:nilerr // soft-skip on read error: archtest fixture allows missing/unreadable files (caller will scan rest)
 	}
 
 	var violations []string
