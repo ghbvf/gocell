@@ -15,6 +15,7 @@ import (
 	"github.com/ghbvf/gocell/cells/auditcore/slices/auditverify"
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/clock"
+	"github.com/ghbvf/gocell/kernel/metadata"
 	"github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/persistence"
@@ -190,15 +191,16 @@ type AuditCore struct {
 // NewAuditCore creates a new AuditCore Cell.
 func NewAuditCore(opts ...Option) *AuditCore {
 	c := &AuditCore{
-		BaseCell: cell.NewBaseCell(cell.CellMetadata{
+		BaseCell: cell.NewBaseCell(&metadata.CellMeta{
 			ID:   "auditcore",
-			Type: cell.CellTypeCore,
+			Type: "core",
 			// L2: 对外 contract (audit.appended, integrity-verified) 都是本地事务 + outbox 发布。
 			// 订阅跨 cell 事件是 slice 级行为 (audit-append L3)，不升 cell 级别 — 同 configcore 模式。
-			ConsistencyLevel: cell.L2,
-			Owner:            cell.Owner{Team: "platform", Role: "audit-owner"},
-			Schema:           cell.SchemaConfig{Primary: "audit_entries"},
-			Verify:           cell.CellVerify{Smoke: []string{"auditcore/smoke"}},
+			ConsistencyLevel: "L2",
+			DurabilityMode:   "durable",
+			Owner:            metadata.OwnerMeta{Team: "platform", Role: "audit-owner"},
+			Schema:           metadata.SchemaMeta{Primary: "audit_entries"},
+			Verify:           metadata.CellVerifyMeta{Smoke: []string{"auditcore/smoke"}},
 		}),
 		logger: slog.Default(),
 	}

@@ -19,6 +19,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/clock"
 	kcommand "github.com/ghbvf/gocell/kernel/command"
+	"github.com/ghbvf/gocell/kernel/metadata"
 	"github.com/ghbvf/gocell/kernel/command/commandtest"
 	"github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/kernel/outbox"
@@ -113,13 +114,14 @@ func (c *DeviceCell) RegisterCommandQueue(q kcommand.Queue) {
 // NewDeviceCell creates a new DeviceCell with the given options.
 func NewDeviceCell(opts ...Option) *DeviceCell {
 	c := &DeviceCell{
-		BaseCell: cell.NewBaseCell(cell.CellMetadata{
+		BaseCell: cell.NewBaseCell(&metadata.CellMeta{
 			ID:               "devicecell",
-			Type:             cell.CellTypeEdge,
-			ConsistencyLevel: cell.L4,
-			Owner:            cell.Owner{Team: "examples", Role: "device-owner"},
-			Schema:           cell.SchemaConfig{Primary: "devices"},
-			Verify:           cell.CellVerify{Smoke: []string{"devicecell/smoke"}},
+			Type:             "edge",
+			ConsistencyLevel: "L4",
+			DurabilityMode:   "durable",
+			Owner:            metadata.OwnerMeta{Team: "examples", Role: "device-owner"},
+			Schema:           metadata.SchemaMeta{Primary: "devices"},
+			Verify:           metadata.CellVerifyMeta{Smoke: []string{"devicecell/smoke"}},
 		}),
 		logger: slog.Default(),
 	}
