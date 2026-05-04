@@ -15,11 +15,15 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/ghbvf/gocell/examples/todoorder/cells/ordercell/internal/domain"
+	createv1 "github.com/ghbvf/gocell/generated/contracts/http/order/create/v1"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
+
+// Compile-time assertion: Service implements the generated interface.
+var _ createv1.Service = (*Service)(nil)
 
 // TopicOrderCreated is the canonical event topic for order creation events.
 const TopicOrderCreated = "event.order-created.v1"
@@ -95,8 +99,19 @@ func NewService(repo domain.OrderRepository, logger *slog.Logger, opts ...Option
 	return s, nil
 }
 
-// Create creates a new order and writes an outbox entry atomically.
-func (s *Service) Create(ctx context.Context, item string) (*domain.Order, error) {
+// Create creates a new order and publishes an outbox event.
+// It implements createv1.Service.
+func (s *Service) Create(ctx context.Context, req *createv1.Request) (*createv1.Response, error) {
+	order, err := s.createInternal(ctx, req.Item)
+	if err != nil {
+		return nil, err
+	}
+	return toCreateResponse(order), nil
+}
+
+// createInternal is the business logic core: creates an order and writes
+// an outbox entry atomically.
+func (s *Service) createInternal(ctx context.Context, item string) (*domain.Order, error) {
 	if item == "" {
 		return nil, errcode.New(errcode.ErrValidationFailed, "item must not be empty")
 	}
@@ -131,6 +146,19 @@ func (s *Service) Create(ctx context.Context, item string) (*domain.Order, error
 		slog.String("topic", entry.RoutingTopic()),
 	)
 	return order, nil
+}
+
+func toCreateResponse(o *domain.Order) *createv1.Response {
+	if o == nil {
+		return nil
+	}
+	return &createv1.Response{
+		Data: &createv1.ResponseData{
+			Id:     o.ID,
+			Item:   o.Item,
+			Status: o.Status,
+		},
+	}
 }
 
 func (s *Service) buildOrderCreatedEntry(order *domain.Order) (outbox.Entry, error) {

@@ -1,0 +1,149 @@
+{{template "contractHeader" .}}
+
+package {{.PackageName}}
+
+import (
+	"net/http"
+{{- if hasQueryNumeric .Endpoint.QueryParams}}
+	"strconv"
+{{- end}}
+{{- if hasPathParams .Endpoint}}
+
+	"github.com/go-chi/chi/v5"
+{{- end}}
+
+	"github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/kernel/wrapper"
+	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/httputil"
+	"github.com/ghbvf/gocell/runtime/auth"
+)
+
+var contractSpec = wrapper.ContractSpec{
+	ID:        "{{.ContractID}}",
+	Kind:      "http",
+	Transport: "http",
+	Method:    "{{.Endpoint.Method}}",
+	Path:      "{{.Endpoint.Path}}",
+}
+
+// HTTPHandler wires HTTP decode/encode + auth.Mount for {{.ContractID}}.
+type HTTPHandler struct {
+	svc    Service
+	policy auth.Policy
+}
+
+// NewHTTPHandler creates an HTTPHandler for {{.ContractID}}.
+func NewHTTPHandler(svc Service, policy auth.Policy) *HTTPHandler {
+	return &HTTPHandler{svc: svc, policy: policy}
+}
+
+// ServeHTTP implements http.Handler so *HTTPHandler can be used directly in tests
+// and as an http.Handler argument without wrapping.
+func (h *HTTPHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	h.handle(w, r)
+}
+
+// RegisterRoutes mounts the handler on mux via auth.Mount.
+func (h *HTTPHandler) RegisterRoutes(mux cell.RouteHandler) error {
+	return auth.Mount(mux, auth.Route{
+		Contract: contractSpec,
+		Handler:  h,
+		Policy:   h.policy,
+	})
+}
+
+func (h *HTTPHandler) handle(w http.ResponseWriter, r *http.Request) {
+	req := &Request{}
+{{- range .Endpoint.PathParams}}
+	{
+		v := chi.URLParam(r, "{{.Name}}")
+{{- if hasMinLength .MinLength}}
+		if len(v) < {{derefInt .MinLength}} {
+			httputil.WriteDomainError(r.Context(), w, errcode.New(errcode.ErrValidationFailed, "{{.Name}}: value too short"))
+			return
+		}
+{{- end}}
+{{- if hasMaxLength .MaxLength}}
+		if len(v) > {{derefInt .MaxLength}} {
+			httputil.WriteDomainError(r.Context(), w, errcode.New(errcode.ErrValidationFailed, "{{.Name}}: value too long"))
+			return
+		}
+{{- end}}
+		req.{{.GoName}} = v
+	}
+{{- end}}
+{{- if .Endpoint.HasBody}}
+	if err := httputil.DecodeJSONStrict(r, req); err != nil {
+		httputil.WriteDecodeError(r.Context(), w, err)
+		return
+	}
+{{- end}}
+{{- range .Endpoint.QueryParams}}
+{{- if eq .GoType "string"}}
+	req.{{.GoName}} = r.URL.Query().Get("{{.Name}}")
+{{- if hasMinLength .MinLength}}
+	if req.{{.GoName}} != "" && len(req.{{.GoName}}) < {{derefInt .MinLength}} {
+		httputil.WriteDomainError(r.Context(), w, errcode.New(errcode.ErrValidationFailed, "{{.Name}}: value too short"))
+		return
+	}
+{{- end}}
+{{- if hasMaxLength .MaxLength}}
+	if len(req.{{.GoName}}) > {{derefInt .MaxLength}} {
+		httputil.WriteDomainError(r.Context(), w, errcode.New(errcode.ErrValidationFailed, "{{.Name}}: value too long"))
+		return
+	}
+{{- end}}
+{{- else if eq .GoType "int64"}}
+	if raw := r.URL.Query().Get("{{.Name}}"); raw != "" {
+		v, err := strconv.ParseInt(raw, 10, 64)
+		if err != nil {
+			httputil.WriteDomainError(r.Context(), w, errcode.New(errcode.ErrValidationFailed, "{{.Name}}: must be an integer"))
+			return
+		}
+{{- if hasMinimum .Minimum}}
+		if v < {{derefInt64 .Minimum}} {
+			httputil.WriteDomainError(r.Context(), w, errcode.New(errcode.ErrValidationFailed, "{{.Name}}: value below minimum"))
+			return
+		}
+{{- end}}
+{{- if hasMaximum .Maximum}}
+		if v > {{derefInt64 .Maximum}} {
+			httputil.WriteDomainError(r.Context(), w, errcode.New(errcode.ErrValidationFailed, "{{.Name}}: value above maximum"))
+			return
+		}
+{{- end}}
+		req.{{.GoName}} = v
+	}
+{{- else if eq .GoType "float64"}}
+	if raw := r.URL.Query().Get("{{.Name}}"); raw != "" {
+		v, err := strconv.ParseFloat(raw, 64)
+		if err != nil {
+			httputil.WriteDomainError(r.Context(), w, errcode.New(errcode.ErrValidationFailed, "{{.Name}}: must be a number"))
+			return
+		}
+		req.{{.GoName}} = v
+	}
+{{- else if eq .GoType "bool"}}
+	if raw := r.URL.Query().Get("{{.Name}}"); raw != "" {
+		v, err := strconv.ParseBool(raw)
+		if err != nil {
+			httputil.WriteDomainError(r.Context(), w, errcode.New(errcode.ErrValidationFailed, "{{.Name}}: must be a boolean"))
+			return
+		}
+		req.{{.GoName}} = v
+	}
+{{- end}}
+{{- end}}
+	resp, err := h.svc.{{.Endpoint.HandlerMethod}}(r.Context(), req)
+	if err != nil {
+		httputil.WriteDomainError(r.Context(), w, err)
+		return
+	}
+{{- if .Endpoint.NoContent}}
+	w.WriteHeader(http.StatusNoContent)
+	_ = resp
+{{- else}}
+	httputil.WriteJSON(w, {{.Endpoint.SuccessCode}}, resp)
+{{- end}}
+}

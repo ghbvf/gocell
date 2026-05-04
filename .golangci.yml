@@ -272,7 +272,9 @@ linters:
             - github.com/ghbvf/gocell/pkg
             - github.com/ghbvf/gocell/runtime
             - github.com/ghbvf/gocell/examples/todoorder
+            - github.com/ghbvf/gocell/generated/contracts
             - github.com/google/uuid
+            - github.com/go-chi/chi/v5
         clockmock-test-only:
           # PROD-CLOCKMOCK-IMPORT-01: kernel/clock/clockmock is a test-only
           # package. Production code (non-_test.go) must use clock.Clock via
@@ -381,6 +383,16 @@ linters:
       # public APIs (per-action audit trail). Source comment documents the
       # decision; dupl flags the duplication structurally.
       - path: ^cells/accesscore/slices/rbacassign/service\.go
+        linters:
+          - dupl
+      # generate_contract.go / verify_codegen_contract.go are intentional
+      # mirror implementations of generate_cell.go / verify_codegen_cell.go
+      # (K#06 contract DTO codegen, mirroring K#04 cell codegen). The structural
+      # similarity is by design; dupl flags it without adding signal.
+      - path: ^cmd/gocell/app/generate_(cell|contract)\.go
+        linters:
+          - dupl
+      - path: ^cmd/gocell/app/verify_codegen_(cell|contract)\.go
         linters:
           - dupl
       # token_pair.go: ToTokenPairResponse uses an explicit struct literal to

@@ -32,7 +32,8 @@ func (c *OrderCell) Init(ctx context.Context, reg cell.Registry) error {
 			}
 			mux.Route("/orders", func(s cell.RouteMux) {
 				captureErr(c.createHandler.RegisterRoutes(s))
-				captureErr(c.queryHandler.RegisterRoutes(s))
+				captureErr(c.getHandler.RegisterRoutes(s))
+				captureErr(c.listHandler.RegisterRoutes(s))
 			})
 			return firstErr
 		},

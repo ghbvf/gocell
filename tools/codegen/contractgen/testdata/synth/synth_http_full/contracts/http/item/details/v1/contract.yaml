@@ -1,0 +1,27 @@
+id: http.item.details.v1
+kind: http
+ownerCell: itemcell
+consistencyLevel: L1
+lifecycle: active
+endpoints:
+  server: itemcell
+  http:
+    method: GET
+    path: /api/v1/items/{id}
+    pathParams:
+      id:
+        type: string
+        minLength: 1
+        maxLength: 64
+    queryParams:
+      page:
+        type: integer
+        required: false
+        minimum: 1
+        maximum: 1000
+    successStatus: 200
+    noContent: false
+schemaRefs:
+  request: request.schema.json
+  response: response.schema.json
+codegen: true

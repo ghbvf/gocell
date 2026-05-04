@@ -1,0 +1,554 @@
+package contractgen
+
+import (
+	"bytes"
+	"flag"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/ghbvf/gocell/kernel/metadata"
+)
+
+// update flag: run with -update to regenerate golden files.
+var updateGolden = flag.Bool("update", false, "update golden files")
+
+// repoRoot returns the absolute path to the worktree root.
+func repoRoot(t *testing.T) string {
+	t.Helper()
+	// Navigate up from testdata to find the repo root (go.mod).
+	dir, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	// Walk up until we find go.mod.
+	for {
+		if _, err := os.Stat(filepath.Join(dir, "go.mod")); err == nil {
+			return dir
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			t.Fatal("could not find go.mod walking up from cwd")
+		}
+		dir = parent
+	}
+}
+
+// goldenDir is the path to the golden files relative to the package.
+const goldenDir = "testdata/golden"
+
+// TestBuildContractSpec_HTTP_OrderCreate tests BuildContractSpec for the
+// todoorder ordercreate HTTP contract (POST, body, no path/query params).
+func TestBuildContractSpec_HTTP_OrderCreate(t *testing.T) {
+	root := repoRoot(t)
+	p := loadTodoorderProject(t, root)
+	// Set codegen=true for this contract.
+	p.Contracts["http.order.create.v1"].Codegen = true
+
+	spec, err := BuildContractSpec(root, p, "http.order.create.v1")
+	if err != nil {
+		t.Fatalf("BuildContractSpec: %v", err)
+	}
+	if spec.Kind != "http" {
+		t.Errorf("Kind = %q, want http", spec.Kind)
+	}
+	if spec.PackageName != "v1" {
+		t.Errorf("PackageName = %q, want v1", spec.PackageName)
+	}
+	if spec.Endpoint == nil {
+		t.Fatal("Endpoint is nil")
+	}
+	if spec.Endpoint.Method != "POST" {
+		t.Errorf("Method = %q, want POST", spec.Endpoint.Method)
+	}
+	if !spec.Endpoint.HasBody {
+		t.Error("HasBody should be true for POST")
+	}
+	if spec.Endpoint.HandlerMethod != "Create" {
+		t.Errorf("HandlerMethod = %q, want Create", spec.Endpoint.HandlerMethod)
+	}
+	if len(spec.Endpoint.PathParams) != 0 {
+		t.Errorf("PathParams should be empty, got %v", spec.Endpoint.PathParams)
+	}
+	if len(spec.Endpoint.QueryParams) != 0 {
+		t.Errorf("QueryParams should be empty, got %v", spec.Endpoint.QueryParams)
+	}
+	// DTOs: Request + Response + ResponseData (nested).
+	if len(spec.DTOs) < 2 {
+		t.Errorf("expected at least 2 DTOs, got %d: %v", len(spec.DTOs), dtoNames(spec.DTOs))
+	}
+}
+
+// TestBuildContractSpec_HTTP_OrderGet tests GET with path param.
+func TestBuildContractSpec_HTTP_OrderGet(t *testing.T) {
+	root := repoRoot(t)
+	p := loadTodoorderProject(t, root)
+	p.Contracts["http.order.get.v1"].Codegen = true
+
+	spec, err := BuildContractSpec(root, p, "http.order.get.v1")
+	if err != nil {
+		t.Fatalf("BuildContractSpec: %v", err)
+	}
+	if spec.Endpoint.Method != "GET" {
+		t.Errorf("Method = %q, want GET", spec.Endpoint.Method)
+	}
+	if spec.Endpoint.HasBody {
+		t.Error("HasBody should be false for GET")
+	}
+	if spec.Endpoint.HandlerMethod != "Get" {
+		t.Errorf("HandlerMethod = %q, want Get", spec.Endpoint.HandlerMethod)
+	}
+	if len(spec.Endpoint.PathParams) != 1 {
+		t.Fatalf("expected 1 path param, got %d", len(spec.Endpoint.PathParams))
+	}
+	if spec.Endpoint.PathParams[0].Name != "id" {
+		t.Errorf("PathParams[0].Name = %q, want id", spec.Endpoint.PathParams[0].Name)
+	}
+	// Request DTO should have Id field from path param.
+	reqDTO := findDTO(spec.DTOs, "Request")
+	if reqDTO == nil {
+		t.Fatal("Request DTO not found")
+	}
+	if findField(reqDTO, "Id") == nil {
+		t.Error("Request DTO should have Id field from path param")
+	}
+}
+
+// TestBuildContractSpec_HTTP_OrderList tests GET with query params.
+func TestBuildContractSpec_HTTP_OrderList(t *testing.T) {
+	root := repoRoot(t)
+	p := loadTodoorderProject(t, root)
+	p.Contracts["http.order.list.v1"].Codegen = true
+
+	spec, err := BuildContractSpec(root, p, "http.order.list.v1")
+	if err != nil {
+		t.Fatalf("BuildContractSpec: %v", err)
+	}
+	if spec.Endpoint.HandlerMethod != "List" {
+		t.Errorf("HandlerMethod = %q, want List", spec.Endpoint.HandlerMethod)
+	}
+	if len(spec.Endpoint.QueryParams) != 2 {
+		t.Fatalf("expected 2 query params, got %d: %v", len(spec.Endpoint.QueryParams), spec.Endpoint.QueryParams)
+	}
+	// cursor (string) and limit (integer) — sorted alphabetically.
+	cursorIdx, limitIdx := -1, -1
+	for i, q := range spec.Endpoint.QueryParams {
+		switch q.Name {
+		case "cursor":
+			cursorIdx = i
+		case "limit":
+			limitIdx = i
+		}
+	}
+	if cursorIdx == -1 {
+		t.Error("cursor query param not found")
+	}
+	if limitIdx == -1 {
+		t.Error("limit query param not found")
+	}
+	if cursorIdx != -1 && spec.Endpoint.QueryParams[cursorIdx].GoType != "string" {
+		t.Errorf("cursor GoType = %q, want string", spec.Endpoint.QueryParams[cursorIdx].GoType)
+	}
+	if limitIdx != -1 && spec.Endpoint.QueryParams[limitIdx].GoType != "int64" {
+		t.Errorf("limit GoType = %q, want int64", spec.Endpoint.QueryParams[limitIdx].GoType)
+	}
+}
+
+// TestBuildContractSpec_Event_OrderCreated tests event contract.
+func TestBuildContractSpec_Event_OrderCreated(t *testing.T) {
+	root := repoRoot(t)
+	p := loadTodoorderProject(t, root)
+	p.Contracts["event.order-created.v1"].Codegen = true
+
+	spec, err := BuildContractSpec(root, p, "event.order-created.v1")
+	if err != nil {
+		t.Fatalf("BuildContractSpec: %v", err)
+	}
+	if spec.Kind != "event" {
+		t.Errorf("Kind = %q, want event", spec.Kind)
+	}
+	if spec.Endpoint != nil {
+		t.Error("Endpoint should be nil for event")
+	}
+	if spec.Event == nil {
+		t.Fatal("Event is nil")
+	}
+	if spec.Event.HandlerMethod != "HandleOrderCreated" {
+		t.Errorf("HandlerMethod = %q, want HandleOrderCreated", spec.Event.HandlerMethod)
+	}
+	if spec.Event.Topic != "event.order-created" {
+		t.Errorf("Topic = %q, want event.order-created", spec.Event.Topic)
+	}
+	if !spec.Event.Replayable {
+		t.Error("Replayable should be true")
+	}
+	// Should have Payload DTO + Headers DTO.
+	if findDTO(spec.DTOs, "Payload") == nil {
+		t.Error("Payload DTO not found")
+	}
+	if findDTO(spec.DTOs, "Headers") == nil {
+		t.Error("Headers DTO not found")
+	}
+}
+
+// TestBuildContractSpec_ContractNotFound tests error on missing contract.
+func TestBuildContractSpec_ContractNotFound(t *testing.T) {
+	root := repoRoot(t)
+	p := loadTodoorderProject(t, root)
+	_, err := BuildContractSpec(root, p, "http.does.not.exist.v1")
+	if err == nil {
+		t.Fatal("expected error for missing contract")
+	}
+	if !strings.Contains(err.Error(), "not found") {
+		t.Errorf("error should mention 'not found', got: %v", err)
+	}
+}
+
+// TestBuildContractSpec_CodegenFalse tests error when Codegen=false.
+func TestBuildContractSpec_CodegenFalse(t *testing.T) {
+	// Use a synthetic project with codegen explicitly false.
+	p := &metadata.ProjectMeta{
+		Contracts: map[string]*metadata.ContractMeta{
+			"http.synth.nocodegen.v1": {
+				ID:      "http.synth.nocodegen.v1",
+				Kind:    "http",
+				Codegen: false,
+			},
+		},
+	}
+	root := findRepoRoot()
+	_, err := BuildContractSpec(root, p, "http.synth.nocodegen.v1")
+	if err == nil {
+		t.Fatal("expected error for codegen=false")
+	}
+	if !strings.Contains(err.Error(), "codegen=false") {
+		t.Errorf("error should mention 'codegen=false', got: %v", err)
+	}
+}
+
+// TestBuildContractSpec_MissingHTTPEndpoint tests error when http endpoint is missing.
+func TestBuildContractSpec_MissingHTTPEndpoint(t *testing.T) {
+	p := &metadata.ProjectMeta{
+		Contracts: map[string]*metadata.ContractMeta{
+			"http.foo.bar.v1": {
+				ID:      "http.foo.bar.v1",
+				Kind:    "http",
+				Codegen: true,
+				// No HTTP endpoint.
+			},
+		},
+	}
+	root := findRepoRoot()
+	_, err := BuildContractSpec(root, p, "http.foo.bar.v1")
+	if err == nil {
+		t.Fatal("expected error for missing http endpoint")
+	}
+}
+
+// TestBuildContractSpec_MissingPayloadRef tests error when event has no payload.
+func TestBuildContractSpec_MissingPayloadRef(t *testing.T) {
+	p := &metadata.ProjectMeta{
+		Contracts: map[string]*metadata.ContractMeta{
+			"event.foo.bar.v1": {
+				ID:      "event.foo.bar.v1",
+				Kind:    "event",
+				Codegen: true,
+				// No schemaRefs.
+			},
+		},
+	}
+	root := findRepoRoot()
+	_, err := BuildContractSpec(root, p, "event.foo.bar.v1")
+	if err == nil {
+		t.Fatal("expected error for missing payload schemaRef")
+	}
+}
+
+// TestBuildContractSpec_UnsupportedKind tests error for unsupported kind.
+func TestBuildContractSpec_UnsupportedKind(t *testing.T) {
+	p := &metadata.ProjectMeta{
+		Contracts: map[string]*metadata.ContractMeta{
+			"command.foo.bar.v1": {
+				ID:      "command.foo.bar.v1",
+				Kind:    "command",
+				Codegen: true,
+			},
+		},
+	}
+	root := findRepoRoot()
+	_, err := BuildContractSpec(root, p, "command.foo.bar.v1")
+	if err == nil {
+		t.Fatal("expected error for unsupported kind")
+	}
+}
+
+// --- Golden file tests ---
+
+// TestRender_Golden runs BuildContractSpec + render for the 4 real todoorder
+// contracts and compares the output to golden files.
+// Run with -update to regenerate golden files.
+func TestRender_Golden(t *testing.T) {
+	root := repoRoot(t)
+	p := loadTodoorderProject(t, root)
+
+	cases := []struct {
+		contractID string
+		kind       string
+		outputs    []string
+	}{
+		{"http.order.create.v1", "http", []string{"types_gen.go", "iface_gen.go", "handler_gen.go"}},
+		{"http.order.get.v1", "http", []string{"types_gen.go", "iface_gen.go", "handler_gen.go"}},
+		{"http.order.list.v1", "http", []string{"types_gen.go", "iface_gen.go", "handler_gen.go"}},
+		{"event.order-created.v1", "event", []string{"types_gen.go", "iface_gen.go"}},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.contractID, func(t *testing.T) {
+			// Enable codegen for this contract.
+			contract := p.Contracts[tc.contractID]
+			if contract == nil {
+				t.Fatalf("contract %q not found in project", tc.contractID)
+			}
+			contract.Codegen = true
+			defer func() { contract.Codegen = false }()
+
+			spec, err := BuildContractSpec(root, p, tc.contractID)
+			if err != nil {
+				t.Fatalf("BuildContractSpec(%q): %v", tc.contractID, err)
+			}
+
+			for _, outFile := range tc.outputs {
+				t.Run(outFile, func(t *testing.T) {
+					content := renderFile(t, spec, outFile)
+					goldenFile := goldenFilePath(tc.contractID, outFile)
+
+					if *updateGolden {
+						writeGolden(t, goldenFile, content)
+						return
+					}
+					assertGolden(t, goldenFile, content)
+				})
+			}
+		})
+	}
+}
+
+// TestRender_Golden_Synth_HTTPMinimal tests the minimal HTTP synth fixture.
+func TestRender_Golden_Synth_HTTPMinimal(t *testing.T) {
+	testDir := filepath.Join("testdata", "synth", "synth_http_minimal")
+	absTestDir, err := filepath.Abs(testDir)
+	if err != nil {
+		t.Fatalf("abs path: %v", err)
+	}
+
+	parser := metadata.NewParser(absTestDir)
+	p, err := parser.Parse()
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	contract := p.Contracts["http.order.ping.v1"]
+	if contract == nil {
+		t.Fatal("http.order.ping.v1 not found in synth fixture")
+	}
+
+	outputs := []string{"types_gen.go", "iface_gen.go", "handler_gen.go"}
+	for _, outFile := range outputs {
+		t.Run(outFile, func(t *testing.T) {
+			spec, err := BuildContractSpec(absTestDir, p, "http.order.ping.v1")
+			if err != nil {
+				t.Fatalf("BuildContractSpec: %v", err)
+			}
+			content := renderFile(t, spec, outFile)
+			goldenFile := goldenFilePath("synth_http_minimal", outFile)
+
+			if *updateGolden {
+				writeGolden(t, goldenFile, content)
+				return
+			}
+			assertGolden(t, goldenFile, content)
+		})
+	}
+}
+
+// TestRender_Golden_Synth_HTTPFull tests the full HTTP synth fixture with path+query params.
+func TestRender_Golden_Synth_HTTPFull(t *testing.T) {
+	testDir := filepath.Join("testdata", "synth", "synth_http_full")
+	absTestDir, err := filepath.Abs(testDir)
+	if err != nil {
+		t.Fatalf("abs path: %v", err)
+	}
+
+	parser := metadata.NewParser(absTestDir)
+	p, err := parser.Parse()
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	contract := p.Contracts["http.item.details.v1"]
+	if contract == nil {
+		t.Fatal("http.item.details.v1 not found in synth fixture")
+	}
+
+	outputs := []string{"types_gen.go", "iface_gen.go", "handler_gen.go"}
+	for _, outFile := range outputs {
+		t.Run(outFile, func(t *testing.T) {
+			spec, err := BuildContractSpec(absTestDir, p, "http.item.details.v1")
+			if err != nil {
+				t.Fatalf("BuildContractSpec: %v", err)
+			}
+			content := renderFile(t, spec, outFile)
+			goldenFile := goldenFilePath("synth_http_full", outFile)
+
+			if *updateGolden {
+				writeGolden(t, goldenFile, content)
+				return
+			}
+			assertGolden(t, goldenFile, content)
+		})
+	}
+}
+
+// TestRender_Golden_Synth_Event tests the event synth fixture.
+func TestRender_Golden_Synth_Event(t *testing.T) {
+	testDir := filepath.Join("testdata", "synth", "synth_event")
+	absTestDir, err := filepath.Abs(testDir)
+	if err != nil {
+		t.Fatalf("abs path: %v", err)
+	}
+
+	parser := metadata.NewParser(absTestDir)
+	p, err := parser.Parse()
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	contract := p.Contracts["event.item-created.v1"]
+	if contract == nil {
+		t.Fatal("event.item-created.v1 not found in synth fixture")
+	}
+
+	outputs := []string{"types_gen.go", "iface_gen.go"}
+	for _, outFile := range outputs {
+		t.Run(outFile, func(t *testing.T) {
+			spec, err := BuildContractSpec(absTestDir, p, "event.item-created.v1")
+			if err != nil {
+				t.Fatalf("BuildContractSpec: %v", err)
+			}
+			content := renderFile(t, spec, outFile)
+			goldenFile := goldenFilePath("synth_event", outFile)
+
+			if *updateGolden {
+				writeGolden(t, goldenFile, content)
+				return
+			}
+			assertGolden(t, goldenFile, content)
+		})
+	}
+}
+
+// --- helpers ---
+
+// loadTodoorderProject parses the todoorder example project metadata.
+func loadTodoorderProject(t *testing.T, root string) *metadata.ProjectMeta {
+	t.Helper()
+	parser := metadata.NewParser(root)
+	p, err := parser.Parse()
+	if err != nil {
+		t.Fatalf("parse project: %v", err)
+	}
+	return p
+}
+
+// findRepoRoot walks up from cwd to find the go.mod root.
+func findRepoRoot() string {
+	dir, err := os.Getwd()
+	if err != nil {
+		panic(fmt.Sprintf("getwd: %v", err))
+	}
+	for {
+		if _, err := os.Stat(filepath.Join(dir, "go.mod")); err == nil {
+			return dir
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			panic("could not find go.mod walking up from cwd")
+		}
+		dir = parent
+	}
+}
+
+// renderFile invokes the appropriate render function based on the file name.
+func renderFile(t *testing.T, spec *ContractGenSpec, outFile string) []byte {
+	t.Helper()
+	var (
+		content []byte
+		err     error
+	)
+	switch outFile {
+	case "types_gen.go":
+		content, err = RenderTypes(spec, "/dev/null")
+	case "iface_gen.go":
+		content, err = RenderIface(spec, "/dev/null")
+	case "handler_gen.go":
+		content, err = RenderHandler(spec, "/dev/null")
+	default:
+		t.Fatalf("unknown output file: %s", outFile)
+	}
+	if err != nil {
+		t.Fatalf("render %s: %v", outFile, err)
+	}
+	return content
+}
+
+// goldenFilePath returns the path to the golden file for a given contract and output file.
+func goldenFilePath(contractKey, outFile string) string {
+	safeKey := strings.ReplaceAll(contractKey, ".", "_")
+	safeKey = strings.ReplaceAll(safeKey, "-", "_")
+	name := safeKey + "_" + strings.ReplaceAll(outFile, ".", "_")
+	return filepath.Join(goldenDir, name+".golden")
+}
+
+func writeGolden(t *testing.T, path string, content []byte) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("mkdir %s: %v", filepath.Dir(path), err)
+	}
+	if err := os.WriteFile(path, content, 0o644); err != nil {
+		t.Fatalf("write golden %s: %v", path, err)
+	}
+	t.Logf("updated golden file: %s", path)
+}
+
+func assertGolden(t *testing.T, path string, got []byte) {
+	t.Helper()
+	want, err := os.ReadFile(path) // #nosec G304 — path is test-internal, not user input
+	if err != nil {
+		if os.IsNotExist(err) {
+			t.Fatalf("golden file %s does not exist; run with -update to create it", path)
+		}
+		t.Fatalf("read golden %s: %v", path, err)
+	}
+	if !bytes.Equal(got, want) {
+		t.Errorf("output does not match golden file %s\n\ngot:\n%s\n\nwant:\n%s", path, got, want)
+	}
+}
+
+// findDTO finds a DTOSpec by name in a slice.
+func findDTO(dtos []DTOSpec, name string) *DTOSpec {
+	for i := range dtos {
+		if dtos[i].Name == name {
+			return &dtos[i]
+		}
+	}
+	return nil
+}
+
+// findField finds a DTOField by name in a DTOSpec.
+func findField(dto *DTOSpec, name string) *DTOField {
+	for i := range dto.Fields {
+		if dto.Fields[i].Name == name {
+			return &dto.Fields[i]
+		}
+	}
+	return nil
+}

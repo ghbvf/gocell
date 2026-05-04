@@ -1352,3 +1352,84 @@ belongsToCell: x
 		})
 	}
 }
+
+// TestParseFS_ContractCodegen verifies that the codegen opt-in field is parsed
+// correctly: present→true, absent→false (default), and non-bool→parse error.
+func TestParseFS_ContractCodegen(t *testing.T) {
+	tests := []struct {
+		name       string
+		yaml       string
+		wantErr    bool
+		wantErrMsg string
+		check      func(t *testing.T, c *ContractMeta)
+	}{
+		{
+			name: "contract with codegen=true",
+			yaml: `id: http.test.example.v1
+kind: http
+ownerCell: testcell
+consistencyLevel: L2
+lifecycle: active
+codegen: true
+endpoints:
+  server: testcell
+  clients:
+    - other
+`,
+			check: func(t *testing.T, c *ContractMeta) {
+				assert.True(t, c.Codegen)
+			},
+		},
+		{
+			name: "contract without codegen defaults false",
+			yaml: `id: http.test.example.v1
+kind: http
+ownerCell: testcell
+consistencyLevel: L2
+lifecycle: active
+endpoints:
+  server: testcell
+  clients:
+    - other
+`,
+			check: func(t *testing.T, c *ContractMeta) {
+				assert.False(t, c.Codegen)
+			},
+		},
+		{
+			name: "codegen=false is accepted",
+			yaml: `id: http.test.example.v1
+kind: http
+ownerCell: testcell
+consistencyLevel: L2
+lifecycle: active
+codegen: false
+endpoints:
+  server: testcell
+  clients:
+    - other
+`,
+			check: func(t *testing.T, c *ContractMeta) {
+				assert.False(t, c.Codegen)
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fsys := fstest.MapFS{
+				"contracts/http/test/example/v1/contract.yaml": &fstest.MapFile{Data: []byte(tt.yaml)},
+			}
+			p := NewParser("")
+			pm, err := p.ParseFS(fsys)
+			if tt.wantErr {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tt.wantErrMsg)
+				return
+			}
+			require.NoError(t, err)
+			c := pm.Contracts["http.test.example.v1"]
+			require.NotNil(t, c)
+			tt.check(t, c)
+		})
+	}
+}

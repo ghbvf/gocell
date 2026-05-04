@@ -1,0 +1,13 @@
+id: event.item-created.v1
+kind: event
+ownerCell: itemcell
+consistencyLevel: L2
+lifecycle: active
+endpoints:
+  publisher: itemcell
+  subscribers: [example-consumer]
+schemaRefs:
+  payload: payload.schema.json
+replayable: false
+deliverySemantics: at-least-once
+codegen: true

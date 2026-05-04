@@ -13,11 +13,15 @@ import (
 	"github.com/ghbvf/gocell/examples/todoorder/cells/ordercell/internal/mem"
 	ordercreate "github.com/ghbvf/gocell/examples/todoorder/cells/ordercell/slices/ordercreate"
 	orderquery "github.com/ghbvf/gocell/examples/todoorder/cells/ordercell/slices/orderquery"
+	createv1 "github.com/ghbvf/gocell/generated/contracts/http/order/create/v1"
+	getv1 "github.com/ghbvf/gocell/generated/contracts/http/order/get/v1"
+	listv1 "github.com/ghbvf/gocell/generated/contracts/http/order/list/v1"
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/query"
+	"github.com/ghbvf/gocell/runtime/auth"
 )
 
 // Role constants re-exported from internal/dto for use by the assembly root
@@ -67,8 +71,9 @@ type OrderCell struct {
 	cursorCodec  *query.CursorCodec
 	logger       *slog.Logger
 
-	createHandler *ordercreate.Handler
-	queryHandler  *orderquery.Handler
+	createHandler *createv1.HTTPHandler
+	getHandler    *getv1.HTTPHandler
+	listHandler   *listv1.HTTPHandler
 }
 
 // NewOrderCell creates a new OrderCell with the given options.
@@ -122,7 +127,7 @@ func (c *OrderCell) initInternal(ctx context.Context, reg cell.Registry) error {
 	if err != nil {
 		return fmt.Errorf("ordercreate: %w", err)
 	}
-	c.createHandler = ordercreate.NewHandler(createSvc)
+	c.createHandler = createv1.NewHTTPHandler(createSvc, auth.AnyRole(dto.RoleCustomer))
 	c.AddSlice(cell.NewBaseSlice("ordercreate", "ordercell", cell.L2))
 
 	// Default cursor codec for pagination if not injected. Durable mode
@@ -152,7 +157,8 @@ func (c *OrderCell) initInternal(ctx context.Context, reg cell.Registry) error {
 	if err != nil {
 		return fmt.Errorf("order-query: %w", err)
 	}
-	c.queryHandler = orderquery.NewHandler(querySvc)
+	c.getHandler = getv1.NewHTTPHandler(querySvc, auth.AnyRole(dto.RoleCustomer))
+	c.listHandler = listv1.NewHTTPHandler(querySvc, auth.AnyRole(dto.RoleCustomer))
 	c.AddSlice(cell.NewBaseSlice("orderquery", "ordercell", cell.L0))
 
 	return nil
