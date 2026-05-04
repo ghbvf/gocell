@@ -1453,7 +1453,7 @@ func TestSubscriber_Subscribe_ProcessesDelivery(t *testing.T) {
 
 	subDone := make(chan error, 1)
 	go func() {
-		subDone <- sub.Subscribe(ctx, outbox.Subscription{Topic: "test.topic"}, outbox.EntryToSubscriberHandler(handler))
+		subDone <- sub.Subscribe(ctx, outbox.Subscription{Topic: "test.topic"}, entryToSubHandler(handler))
 	}()
 
 	// Deterministic wait: poll until Ack is recorded instead of time.Sleep.
@@ -1509,7 +1509,7 @@ func TestSubscriber_Subscribe_UnmarshalFailure_Nack(t *testing.T) {
 
 	subDone := make(chan error, 1)
 	go func() {
-		subDone <- sub.Subscribe(ctx, outbox.Subscription{Topic: "test.topic"}, outbox.EntryToSubscriberHandler(handler))
+		subDone <- sub.Subscribe(ctx, outbox.Subscription{Topic: "test.topic"}, entryToSubHandler(handler))
 	}()
 
 	require.Eventually(t, func() bool {
@@ -1607,7 +1607,7 @@ func TestSubscriber_Subscribe_HandlerError_NackWithRequeue(t *testing.T) {
 
 	subDone := make(chan error, 1)
 	go func() {
-		subDone <- sub.Subscribe(ctx, outbox.Subscription{Topic: "test.topic"}, outbox.EntryToSubscriberHandler(handler))
+		subDone <- sub.Subscribe(ctx, outbox.Subscription{Topic: "test.topic"}, entryToSubHandler(handler))
 	}()
 
 	require.Eventually(t, func() bool {
@@ -1644,7 +1644,7 @@ func TestSubscriber_Subscribe_DefaultQueueName(t *testing.T) {
 	cancel() // Cancel immediately so Subscribe exits.
 
 	err := sub.Subscribe(ctx, outbox.Subscription{Topic: "my.topic"},
-		outbox.EntryToSubscriberHandler(func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+		entryToSubHandler(func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
 			return outbox.HandleResult{Disposition: outbox.DispositionAck}
 		}))
 	assert.NoError(t, err)
@@ -1669,7 +1669,7 @@ func TestSubscriber_Subscribe_AfterClose(t *testing.T) {
 	assert.NoError(t, sub.Close(context.Background()))
 
 	err := sub.Subscribe(context.Background(), outbox.Subscription{Topic: "test.topic"},
-		outbox.EntryToSubscriberHandler(func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+		entryToSubHandler(func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
 			return outbox.HandleResult{Disposition: outbox.DispositionAck}
 		}))
 	assert.Error(t, err)
@@ -1714,7 +1714,7 @@ func TestSubscriber_DeliveryChannelClosed_TriggersReconnect(t *testing.T) {
 	// from the main test goroutine (t.FailNow must not be called from a helper goroutine).
 	subscribeDone := make(chan error, 1)
 	go func() {
-		subscribeDone <- sub.Subscribe(ctx, outbox.Subscription{Topic: "test.topic"}, outbox.EntryToSubscriberHandler(handler))
+		subscribeDone <- sub.Subscribe(ctx, outbox.Subscription{Topic: "test.topic"}, entryToSubHandler(handler))
 	}()
 
 	// Drive the reconnect sequence from the main goroutine (safe for require).
@@ -1794,7 +1794,7 @@ func TestSubscriber_ReconnectLoop_CtxCancelledDuringWait(t *testing.T) {
 	}()
 
 	err := sub.Subscribe(ctx, outbox.Subscription{Topic: "test.topic"},
-		outbox.EntryToSubscriberHandler(func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+		entryToSubHandler(func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
 			return outbox.HandleResult{Disposition: outbox.DispositionAck}
 		}))
 	assert.NoError(t, err) // Clean exit via ctx cancel during WaitConnected.
@@ -1924,7 +1924,7 @@ func TestSubscriber_SubscribeOnce_AcquireChannelFails(t *testing.T) {
 
 	// subscribeOnce should return an error (channel acquisition failure).
 	err = sub.subscribeOnce(context.Background(), "test.topic", "test-queue",
-		outbox.EntryToSubscriberHandler(func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+		entryToSubHandler(func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
 			return outbox.HandleResult{Disposition: outbox.DispositionAck}
 		}))
 	assert.Error(t, err)
@@ -1980,7 +1980,7 @@ func TestSubscriber_Subscribe_ClosedDuringReconnect(t *testing.T) {
 	subscribeDone := make(chan error, 1)
 	go func() {
 		subscribeDone <- sub.Subscribe(context.Background(), outbox.Subscription{Topic: "test.topic"},
-			outbox.EntryToSubscriberHandler(func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+			entryToSubHandler(func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
 				return outbox.HandleResult{Disposition: outbox.DispositionAck}
 			}))
 	}()
@@ -2029,7 +2029,7 @@ func TestSubscriber_Subscribe_ConsumerGroupQueueName(t *testing.T) {
 	cancel() // Cancel immediately so Subscribe exits after setup.
 
 	err := sub.Subscribe(ctx, outbox.Subscription{Topic: "session.created"},
-		outbox.EntryToSubscriberHandler(func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+		entryToSubHandler(func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
 			return outbox.HandleResult{Disposition: outbox.DispositionAck}
 		}))
 	assert.NoError(t, err)
@@ -2061,7 +2061,7 @@ func TestSubscriber_Subscribe_ExplicitQueueName_OverridesConsumerGroup(t *testin
 	cancel()
 
 	err := sub.Subscribe(ctx, outbox.Subscription{Topic: "session.created"},
-		outbox.EntryToSubscriberHandler(func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+		entryToSubHandler(func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
 			return outbox.HandleResult{Disposition: outbox.DispositionAck}
 		}))
 	assert.NoError(t, err)
@@ -2091,7 +2091,7 @@ func TestSubscriber_Subscribe_NoConsumerGroup_FallsBackToTopic(t *testing.T) {
 	cancel()
 
 	err := sub.Subscribe(ctx, outbox.Subscription{Topic: "my.topic"},
-		outbox.EntryToSubscriberHandler(func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+		entryToSubHandler(func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
 			return outbox.HandleResult{Disposition: outbox.DispositionAck}
 		}))
 	assert.NoError(t, err)
@@ -2121,7 +2121,7 @@ func TestSubscriber_Subscribe_DLXExchange_SetsQueueArgs(t *testing.T) {
 	cancel()
 
 	err := sub.Subscribe(ctx, outbox.Subscription{Topic: "test.topic"},
-		outbox.EntryToSubscriberHandler(func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+		entryToSubHandler(func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
 			return outbox.HandleResult{Disposition: outbox.DispositionAck}
 		}))
 	assert.NoError(t, err)
@@ -2154,7 +2154,7 @@ func TestSubscriber_Subscribe_DLXExchangeWithRoutingKey(t *testing.T) {
 	cancel()
 
 	err := sub.Subscribe(ctx, outbox.Subscription{Topic: "test.topic"},
-		outbox.EntryToSubscriberHandler(func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+		entryToSubHandler(func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
 			return outbox.HandleResult{Disposition: outbox.DispositionAck}
 		}))
 	assert.NoError(t, err)
@@ -2177,7 +2177,7 @@ func TestSubscriber_Subscribe_NoDLX_ReturnsError(t *testing.T) {
 	})
 
 	err := sub.Subscribe(context.Background(), outbox.Subscription{Topic: "test.topic"},
-		outbox.EntryToSubscriberHandler(func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+		entryToSubHandler(func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
 			return outbox.HandleResult{Disposition: outbox.DispositionAck}
 		}))
 	require.Error(t, err)
@@ -2246,7 +2246,7 @@ func TestSubscriber_ProcessDelivery_CtxCancelled_NackWithRequeue(t *testing.T) {
 
 	subDone := make(chan error, 1)
 	go func() {
-		subDone <- sub.Subscribe(ctx, outbox.Subscription{Topic: "test.topic"}, outbox.EntryToSubscriberHandler(handler))
+		subDone <- sub.Subscribe(ctx, outbox.Subscription{Topic: "test.topic"}, entryToSubHandler(handler))
 	}()
 
 	// Deterministic wait for NACK instead of fixed sleep — handler cancels
@@ -2870,7 +2870,7 @@ func TestProcessDelivery_NilReceipt_NoPanic(t *testing.T) {
 	entry := outbox.Entry{ID: "evt-nil-receipt", EventType: "test.nil"}
 	entryBytes := makeDeliveryBody(t, entry)
 
-	handler := outbox.EntryToSubscriberHandler(func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+	handler := entryToSubHandler(func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
 		return outbox.HandleResult{Disposition: outbox.DispositionAck}
 	})
 
@@ -2922,7 +2922,7 @@ func TestProcessDelivery_PassesThroughContextWithoutRestore(t *testing.T) {
 	observed := make(map[string]string)
 	var observedSentinel string
 	var observedErr error
-	handler := outbox.EntryToSubscriberHandler(func(ctx context.Context, _ outbox.Entry) outbox.HandleResult {
+	handler := entryToSubHandler(func(ctx context.Context, _ outbox.Entry) outbox.HandleResult {
 		observed["request_id"], _ = ctxkeys.RequestIDFrom(ctx)
 		observed["correlation_id"], _ = ctxkeys.CorrelationIDFrom(ctx)
 		observed["trace_id"], _ = ctxkeys.TraceIDFrom(ctx)
@@ -2980,7 +2980,7 @@ func TestProcessDelivery_DoesNotRestoreObservabilityContext(t *testing.T) {
 	entryBytes := makeDeliveryBody(t, entry)
 
 	var capturedRequestID, capturedTraceID string
-	handler := outbox.EntryToSubscriberHandler(func(ctx context.Context, _ outbox.Entry) outbox.HandleResult {
+	handler := entryToSubHandler(func(ctx context.Context, _ outbox.Entry) outbox.HandleResult {
 		capturedRequestID, _ = ctxkeys.RequestIDFrom(ctx)
 		capturedTraceID, _ = ctxkeys.TraceIDFrom(ctx)
 		return outbox.HandleResult{Disposition: outbox.DispositionAck}
@@ -3087,7 +3087,7 @@ func TestProcessDelivery_Reject_NoDLX_SubscribeReturnsError(t *testing.T) {
 	})
 
 	err := sub.Subscribe(context.Background(), outbox.Subscription{Topic: "test.topic"},
-		outbox.EntryToSubscriberHandler(func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+		entryToSubHandler(func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
 			return outbox.HandleResult{Disposition: outbox.DispositionAck}
 		}))
 	require.Error(t, err)
@@ -3303,7 +3303,7 @@ func TestProcessDelivery_HandlerError_Logged(t *testing.T) {
 	entryBytes := makeDeliveryBody(t, entry)
 
 	// Handler returns DispositionAck but also an error (e.g., a warning).
-	handler := outbox.EntryToSubscriberHandler(func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+	handler := entryToSubHandler(func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
 		return outbox.HandleResult{
 			Disposition: outbox.DispositionAck,
 			Err:         errors.New("warning: partial data"),

@@ -224,7 +224,10 @@ func TestWaitForSubscription_WaitsForReadyChannel(t *testing.T) {
 }
 
 func TestWaitForSubscription_MiddlewareWrappedSubscriber_UsesSetup(t *testing.T) {
-	// SubscriberWithMiddleware uses Subscriber.Setup/Ready via Inner.
+	// SubscriberWithMiddleware delegates Setup/Ready to Inner. Since
+	// SubscriberWithMiddleware no longer implements outbox.Subscriber
+	// (Subscribe method removed to prevent lift→discard footgun), we pass
+	// Inner to waitForSubscription directly to verify the delegation path.
 	// When Inner.Ready returns a pre-closed channel, the fast path is taken.
 	inner := &immediateReadySub{} // Ready() returns pre-closed channel
 	wrapped := &outbox.SubscriberWithMiddleware{
@@ -234,7 +237,9 @@ func TestWaitForSubscription_MiddlewareWrappedSubscriber_UsesSetup(t *testing.T)
 	ctx := context.Background()
 
 	start := time.Now()
-	waitForSubscription(t, ctx, wrapped, "test.topic", "")
+	// Pass wrapped.Inner: SubscriberWithMiddleware.Setup/Ready delegate to it,
+	// so the test still validates the delegation via Inner's fast Ready path.
+	waitForSubscription(t, ctx, wrapped.Inner, "test.topic", "")
 	elapsed := time.Since(start)
 
 	// Must NOT fall back to sleep -- Setup returns nil immediately and

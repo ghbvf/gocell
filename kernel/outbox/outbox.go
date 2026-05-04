@@ -705,8 +705,11 @@ type SubscriberIntakeStopper interface {
 // The SubscribeEntry method is the primary entry point for callers that hold
 // an EntryHandler (e.g., eventrouter.Router). It orchestrates:
 //
-//  1. Business middleware chain (EntryHandler → EntryHandler): applied in
-//     Middleware order — [0] is outermost, [len-1] is innermost.
+//  1. Business middleware chain (EntryHandler → EntryHandler): applied via
+//     slices.Backward(s.Middleware) — [0] is outermost (first to see each
+//     delivery, last to return), [len-1] is innermost (adjacent to
+//     ConsumerBase). This is the opposite of chi/Kratos forward composition
+//     where [0] is applied last.
 //  2. ConsumerBase.Wrap (EntryHandler → SubscriberHandler): injects
 //     idempotency Claim/Commit/Release and retry logic. Skipped when
 //     ConsumerBase is nil (fallback: nil Settlement).
@@ -717,13 +720,15 @@ type SubscriberIntakeStopper interface {
 //
 // Observability restoration is a paired invariant with Entry.InjectObservability
 // FromContext on the producer side — there is no kill-switch. Raw delivery
-// without restore (rare, integration testing only) should invoke
-// Inner.Subscribe directly.
+// without restore (integration testing only) should invoke Inner.Subscribe
+// directly.
 //
-// Subscribe implements outbox.Subscriber for callers that hold a
-// SubscriberHandler directly (e.g., adapter-layer tests). It bypasses the
-// business middleware chain and ConsumerBase — it applies only the
-// observability restore wrapper.
+// SubscriberWithMiddleware does NOT implement the Subscriber interface: it
+// exposes only SubscribeEntry (EntryHandler) as the single public entry point.
+// This prevents the lift→discard footgun where callers could assign
+// *SubscriberWithMiddleware to outbox.Subscriber and bypass the business
+// middleware chain. Adapter-layer tests that need raw SubscriberHandler delivery
+// must call Inner.Subscribe directly.
 //
 // ref: ThreeDotsLabs/watermill message/router.go — handleMessage applies
 // middleware then calls handler; Ack/Nack monopoly stays in router.
@@ -736,9 +741,6 @@ type SubscriberWithMiddleware struct {
 	Middleware   []SubscriptionMiddleware
 	ConsumerBase *ConsumerBase // nil-safe: degrades to nil-Settlement pass-through
 }
-
-// Compile-time interface check.
-var _ Subscriber = (*SubscriberWithMiddleware)(nil)
 
 // Setup delegates topology pre-declaration to Inner.
 func (s *SubscriberWithMiddleware) Setup(ctx context.Context, sub Subscription) error {
@@ -753,6 +755,12 @@ func (s *SubscriberWithMiddleware) Ready(sub Subscription) <-chan struct{} {
 // SubscribeEntry is the entry point for callers that hold an EntryHandler
 // (e.g. eventrouter.Router). It applies the full pipeline:
 // business middleware chain → ConsumerBase.Wrap → observability restore → Inner.Subscribe.
+//
+// The business middleware chain is applied via slices.Backward(s.Middleware):
+// Middleware[0] is the outermost layer (first to wrap, last to return) and
+// Middleware[len-1] is the innermost layer (adjacent to ConsumerBase). This is
+// the opposite of chi/Kratos forward composition where index 0 is applied last.
+// Example with Middleware = [A, B, C]: execution order is A → B → C → handler.
 //
 // This method is intentionally not part of the Subscriber interface: it accepts
 // the business-layer EntryHandler rather than the framework-layer SubscriberHandler,
@@ -784,20 +792,6 @@ func (s *SubscriberWithMiddleware) SubscribeEntry(ctx context.Context, sub Subsc
 	return s.Inner.Subscribe(ctx, sub, withRestore)
 }
 
-// Subscribe implements outbox.Subscriber. It applies only the observability
-// restore wrapper (bypassing business middleware chain and ConsumerBase) and
-// delegates to Inner.Subscribe. Use SubscribeEntry when you hold an EntryHandler
-// and want the full business pipeline.
-//
-// This method exists so SubscriberWithMiddleware satisfies the Subscriber interface
-// for contexts where the full pipeline is not needed (e.g. direct adapter tests).
-func (s *SubscriberWithMiddleware) Subscribe(ctx context.Context, sub Subscription, handler SubscriberHandler) error {
-	withRestore := func(reqCtx context.Context, entry Entry) (HandleResult, Settlement) {
-		return handler(entry.Observability.RestoreToContext(reqCtx), entry)
-	}
-	return s.Inner.Subscribe(ctx, sub, withRestore)
-}
-
 // Close delegates to the inner subscriber, forwarding the ctx unchanged so
 // the inner implementation can honor the shutdown budget.
 func (s *SubscriberWithMiddleware) Close(ctx context.Context) error {
@@ -813,20 +807,4 @@ func (s *SubscriberWithMiddleware) StopIntake(ctx context.Context) error {
 		return nil
 	}
 	return stopper.StopIntake(ctx)
-}
-
-// EntryToSubscriberHandler lifts a business EntryHandler into a SubscriberHandler
-// with a nil Settlement. Use this when calling Subscriber.Subscribe directly
-// (e.g. in adapter-layer tests or outboxtest helpers) without ConsumerBase
-// idempotency. The nil Settlement is safe — Subscriber implementations
-// nil-check Settlement before calling Commit/Release.
-//
-// For the full business pipeline (business middleware chain + ConsumerBase
-// idempotency + observability restore), use SubscriberWithMiddleware.SubscribeEntry
-// instead. eventrouter.Router uses SubscribeEntry; this function is a low-level
-// bridge for callers that operate directly on the Subscriber interface.
-func EntryToSubscriberHandler(h EntryHandler) SubscriberHandler {
-	return func(ctx context.Context, entry Entry) (HandleResult, Settlement) {
-		return h(ctx, entry), nil
-	}
 }

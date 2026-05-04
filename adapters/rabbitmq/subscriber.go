@@ -132,12 +132,12 @@ func (sc *SubscriberConfig) setDefaults() {
 //
 // Observability context restoration:
 // The bare Subscriber.Subscribe does NOT restore entry.Observability into
-// the handler context — that responsibility lives in
-// outbox.SubscriberWithMiddleware.Subscribe as a built-in OUTERMOST step.
+// the handler context — that responsibility lives inside
+// outbox.SubscriberWithMiddleware.SubscribeEntry as a built-in OUTERMOST step.
 // runtime/bootstrap always composes the rabbitmq subscriber inside that
-// wrapper, so trace_id / traceparent / request_id / correlation_id arrive
-// in handler ctx automatically. Tests that exercise the bare subscriber
-// (without the wrapper) intentionally observe a non-restored ctx.
+// wrapper via SubscribeEntry, so trace_id / traceparent / request_id /
+// correlation_id arrive in handler ctx automatically. Tests that exercise the
+// bare subscriber (without the wrapper) intentionally observe a non-restored ctx.
 //
 // ref: Watermill watermill-amqp subscriber.go — reconnect loop + ACK/NACK pattern
 // Adopted: per-subscription channel, QoS prefetch, graceful shutdown with WaitGroup.
@@ -758,7 +758,7 @@ func (s *Subscriber) processDelivery(
 	entry.Metadata["topic"] = topic
 
 	// Observability metadata (request_id, correlation_id, trace_id) is restored
-	// into the handler context by SubscriberWithMiddleware.Subscribe (built-in
+	// into the handler context by SubscriberWithMiddleware.SubscribeEntry (built-in
 	// outermost wrapper), not here. This separation keeps the subscriber
 	// adapter transport-only.
 	deliveryCtx := ctx

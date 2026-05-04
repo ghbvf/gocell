@@ -77,7 +77,7 @@ func TestProcessDelivery_LegacyEnvelopeFormat_RejectsToDLX(t *testing.T) {
 
 	subDone := make(chan error, 1)
 	go func() {
-		subDone <- sub.Subscribe(ctx, outbox.Subscription{Topic: "test.topic"}, outbox.EntryToSubscriberHandler(handler))
+		subDone <- sub.Subscribe(ctx, outbox.Subscription{Topic: "test.topic"}, entryToSubHandler(handler))
 	}()
 
 	require.Eventually(t, func() bool {
@@ -133,7 +133,7 @@ func TestProcessDelivery_TooLongEntryID_RejectsToDLX(t *testing.T) {
 
 	subDone := make(chan error, 1)
 	go func() {
-		subDone <- sub.Subscribe(ctx, outbox.Subscription{Topic: "test.topic"}, outbox.EntryToSubscriberHandler(handler))
+		subDone <- sub.Subscribe(ctx, outbox.Subscription{Topic: "test.topic"}, entryToSubHandler(handler))
 	}()
 
 	require.Eventually(t, func() bool {
@@ -338,7 +338,7 @@ func TestSubscriber_PrefetchCount10_RealConcurrency(t *testing.T) {
 			DLXExchange:   "test.dlx",
 			PrefetchCount: numDeliveries,
 			Clock:         clock.Real(),
-		}).Subscribe(ctx, outbox.Subscription{Topic: "test.topic"}, outbox.EntryToSubscriberHandler(handler))
+		}).Subscribe(ctx, outbox.Subscription{Topic: "test.topic"}, entryToSubHandler(handler))
 	}()
 
 	// If concurrent: all 10 handlers reach the barrier within barrierTimeout.
@@ -470,7 +470,7 @@ func TestSubscriber_GoroutineLeakOnClose(t *testing.T) {
 
 	subDone := make(chan error, 1)
 	go func() {
-		subDone <- sub.Subscribe(ctx, outbox.Subscription{Topic: "test.topic"}, outbox.EntryToSubscriberHandler(handler))
+		subDone <- sub.Subscribe(ctx, outbox.Subscription{Topic: "test.topic"}, entryToSubHandler(handler))
 	}()
 
 	// Enqueue a delivery so at least one goroutine runs.
@@ -564,7 +564,7 @@ func TestSubscribeOnce_ReconnectWaitCtx_InheritsParentCancel(t *testing.T) {
 
 	subDone := make(chan error, 1)
 	go func() {
-		subDone <- sub.Subscribe(ctx, outbox.Subscription{Topic: "f3.cancel.topic"}, outbox.EntryToSubscriberHandler(handler))
+		subDone <- sub.Subscribe(ctx, outbox.Subscription{Topic: "f3.cancel.topic"}, entryToSubHandler(handler))
 	}()
 
 	// Wait until the handler is in-flight (it will block on neverClose).
@@ -651,7 +651,7 @@ func TestSubscribeOnce_ReconnectWaitCtx_NoDeadlineFallsBackTo30s(t *testing.T) {
 
 	subDone := make(chan error, 1)
 	go func() {
-		subDone <- sub.Subscribe(ctx, outbox.Subscription{Topic: "f3.nodeadline.topic"}, outbox.EntryToSubscriberHandler(handler))
+		subDone <- sub.Subscribe(ctx, outbox.Subscription{Topic: "f3.nodeadline.topic"}, entryToSubHandler(handler))
 	}()
 
 	// Wait for delivery to be acked (handler finished).
@@ -709,7 +709,7 @@ func TestProcessDelivery_ValidEntryID_PassesToHandler(t *testing.T) {
 
 	subDone := make(chan error, 1)
 	go func() {
-		subDone <- sub.Subscribe(ctx, outbox.Subscription{Topic: "test.topic"}, outbox.EntryToSubscriberHandler(handler))
+		subDone <- sub.Subscribe(ctx, outbox.Subscription{Topic: "test.topic"}, entryToSubHandler(handler))
 	}()
 
 	require.Eventually(t, func() bool {
@@ -895,7 +895,7 @@ func TestProcessDelivery_InvalidEntry_ValidateFailure_NacksPermanent(t *testing.
 
 	subDone := make(chan error, 1)
 	go func() {
-		subDone <- sub.Subscribe(ctx, outbox.Subscription{Topic: "test.topic"}, outbox.EntryToSubscriberHandler(handler))
+		subDone <- sub.Subscribe(ctx, outbox.Subscription{Topic: "test.topic"}, entryToSubHandler(handler))
 	}()
 
 	// Nack is called (and fails due to nackErr) — nackCalled is still set true.
@@ -954,7 +954,7 @@ func TestDispatchDisposition_RejectNackFail_LogsError(t *testing.T) {
 
 	subDone := make(chan error, 1)
 	go func() {
-		subDone <- sub.Subscribe(ctx, outbox.Subscription{Topic: "test.topic"}, outbox.EntryToSubscriberHandler(handler))
+		subDone <- sub.Subscribe(ctx, outbox.Subscription{Topic: "test.topic"}, entryToSubHandler(handler))
 	}()
 
 	// Nack is attempted (fails) — nackCalled is still true.
@@ -1012,7 +1012,7 @@ func TestDispatchDisposition_UnknownDispositionNackFail_LogsError(t *testing.T) 
 
 	subDone := make(chan error, 1)
 	go func() {
-		subDone <- sub.Subscribe(ctx, outbox.Subscription{Topic: "test.topic"}, outbox.EntryToSubscriberHandler(handler))
+		subDone <- sub.Subscribe(ctx, outbox.Subscription{Topic: "test.topic"}, entryToSubHandler(handler))
 	}()
 
 	// Nack(requeue=true) is attempted (fails) — nackCalled is still true.
@@ -1159,7 +1159,7 @@ func TestDispatchAck_AckErr_NotifiesAckFailed(t *testing.T) {
 
 	subDone := make(chan error, 1)
 	go func() {
-		subDone <- sub.Subscribe(ctx, outbox.Subscription{Topic: "test.topic"}, outbox.EntryToSubscriberHandler(handler))
+		subDone <- sub.Subscribe(ctx, outbox.Subscription{Topic: "test.topic"}, entryToSubHandler(handler))
 	}()
 
 	require.Eventually(t, func() bool {
@@ -1220,7 +1220,7 @@ func TestDispatchDisposition_RejectNackErr_NotifiesNackFailed(t *testing.T) {
 
 	subDone := make(chan error, 1)
 	go func() {
-		subDone <- sub.Subscribe(ctx, outbox.Subscription{Topic: "test.topic"}, outbox.EntryToSubscriberHandler(handler))
+		subDone <- sub.Subscribe(ctx, outbox.Subscription{Topic: "test.topic"}, entryToSubHandler(handler))
 	}()
 
 	require.Eventually(t, func() bool {
@@ -1283,7 +1283,7 @@ func TestDispatchDisposition_RequeueNackErr_NotifiesNackFailed(t *testing.T) {
 
 	subDone := make(chan error, 1)
 	go func() {
-		subDone <- sub.Subscribe(ctx, outbox.Subscription{Topic: "test.topic"}, outbox.EntryToSubscriberHandler(handler))
+		subDone <- sub.Subscribe(ctx, outbox.Subscription{Topic: "test.topic"}, entryToSubHandler(handler))
 	}()
 
 	require.Eventually(t, func() bool {

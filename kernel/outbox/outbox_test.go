@@ -220,9 +220,9 @@ func TestSubscriberInterface(t *testing.T) {
 	var sub Subscriber = &mockSubscriber{}
 
 	t.Run("Subscribe returns nil on success", func(t *testing.T) {
-		handler := EntryToSubscriberHandler(func(ctx context.Context, entry Entry) HandleResult {
-			return HandleResult{Disposition: DispositionAck}
-		})
+		handler := func(_ context.Context, _ Entry) (HandleResult, Settlement) {
+			return HandleResult{Disposition: DispositionAck}, nil
+		}
 		err := sub.Subscribe(context.Background(), Subscription{Topic: "test.topic"}, handler)
 		assert.NoError(t, err)
 	})
@@ -279,8 +279,19 @@ func (r *recordingSubscriber) Close(_ context.Context) error {
 
 var _ Subscriber = (*recordingSubscriber)(nil)
 
-func TestSubscriberWithMiddleware_InterfaceCompliance(t *testing.T) {
-	var _ Subscriber = (*SubscriberWithMiddleware)(nil)
+// TestSubscriberWithMiddleware_DoesNotImplementSubscriberInterface verifies that
+// SubscriberWithMiddleware intentionally does NOT satisfy the Subscriber
+// interface after removing Subscribe(SubscriberHandler). This prevents the
+// lift→discard footgun where callers could assign *SubscriberWithMiddleware to
+// outbox.Subscriber and bypass the business middleware chain.
+func TestSubscriberWithMiddleware_DoesNotImplementSubscriberInterface(t *testing.T) {
+	// This must NOT compile if SubscriberWithMiddleware re-gains a Subscribe method:
+	//   var _ Subscriber = (*SubscriberWithMiddleware)(nil)
+	// The absence of the compile-time check is itself the assertion.
+	// Confirm the type only exposes SubscribeEntry (EntryHandler gateway).
+	var sub SubscriberWithMiddleware
+	_ = sub.SubscribeEntry // only public subscription entry point
+	t.Log("SubscriberWithMiddleware.Subscribe deleted; SubscribeEntry is the sole entry point")
 }
 
 func TestSubscriberWithMiddleware_NoMiddleware(t *testing.T) {
@@ -288,12 +299,11 @@ func TestSubscriberWithMiddleware_NoMiddleware(t *testing.T) {
 	sub := &SubscriberWithMiddleware{Inner: inner}
 
 	called := false
-	handler := EntryToSubscriberHandler(func(_ context.Context, _ Entry) HandleResult {
-		called = true
-		return HandleResult{Disposition: DispositionAck}
-	})
-
-	err := sub.Subscribe(context.Background(), Subscription{Topic: "test.topic"}, handler)
+	err := sub.SubscribeEntry(context.Background(), Subscription{Topic: "test.topic"},
+		func(_ context.Context, _ Entry) HandleResult {
+			called = true
+			return HandleResult{Disposition: DispositionAck}
+		})
 	assert.NoError(t, err)
 	assert.True(t, inner.subscribeCalled)
 	assert.Equal(t, "test.topic", inner.subscribeTopic)

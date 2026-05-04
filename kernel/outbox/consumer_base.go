@@ -230,7 +230,7 @@ type ConsumerBase struct {
 
 // logWithContext delegates to slog.LogAttrs with the given context, ensuring
 // any ContextHandler extracts observability fields (request_id, correlation_id,
-// trace_id) restored by SubscriberWithMiddleware.Subscribe on the consumer
+// trace_id) restored by SubscriberWithMiddleware.SubscribeEntry on the consumer
 // path (built-in outermost wrapper, no separate middleware to install).
 func logWithContext(ctx context.Context, level slog.Level, msg string, attrs ...slog.Attr) {
 	slog.LogAttrs(ctx, level, msg, attrs...)
@@ -438,12 +438,16 @@ func (cb *ConsumerBase) handleClaimState(
 	}
 }
 
-// requeueResult constructs a Requeue HandleResult with the given error.
+// requeueResult constructs a Requeue HandleResult with the given error and
+// SettlementObservers. Observers from the last handler invocation are
+// propagated so business-middleware observers are notified on ctx-cancel abort
+// and other early-exit paths.
 // Settlement is returned separately by the Wrap closure.
-func requeueResult(err error) HandleResult {
+func requeueResult(err error, observers []SettlementObserver) HandleResult {
 	return HandleResult{
-		Disposition: DispositionRequeue,
-		Err:         err,
+		Disposition:         DispositionRequeue,
+		Err:                 err,
+		SettlementObservers: observers,
 	}
 }
 
@@ -527,7 +531,7 @@ func (cb *ConsumerBase) retryLoop(
 		if attempt < cb.config.RetryCount-1 {
 			if cb.waitBackoff(ctx, topic, entry, attempt, lastResult.Err) {
 				// Settlement.Release is called by the Subscriber after broker Nack.
-				return requeueResult(ctx.Err())
+				return requeueResult(ctx.Err(), lastResult.SettlementObservers)
 			}
 		}
 	}
@@ -536,7 +540,7 @@ func (cb *ConsumerBase) retryLoop(
 	// rather than routing to DLX. This ensures graceful shutdown does not
 	// permanently discard in-flight messages.
 	if ctx.Err() != nil {
-		return requeueResult(ctx.Err())
+		return requeueResult(ctx.Err(), lastResult.SettlementObservers)
 	}
 
 	// Exhausted all retries -- reject so broker routes to DLX.
@@ -614,9 +618,10 @@ func (cb *ConsumerBase) runWithRenewal(
 			slog.String(logKeyEventID, entry.ID),
 			slog.String(logKeyTopic, topic))
 		return HandleResult{
-			Disposition:   DispositionRequeue,
-			Err:           idempotency.ErrLeaseExpired,
-			ProcessReason: result.ProcessReason,
+			Disposition:         DispositionRequeue,
+			Err:                 idempotency.ErrLeaseExpired,
+			ProcessReason:       result.ProcessReason,
+			SettlementObservers: result.SettlementObservers,
 		}
 	}
 

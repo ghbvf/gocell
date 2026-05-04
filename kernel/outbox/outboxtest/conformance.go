@@ -261,7 +261,7 @@ func testTopicIsolation(t *testing.T, _ Features, constructor PubSubConstructor)
 	go func() {
 		defer close(subDone)
 		_ = sub.Subscribe(subCtx, outbox.Subscription{Topic: topicA},
-			outbox.EntryToSubscriberHandler(func(_ context.Context, entry outbox.Entry) outbox.HandleResult {
+			func(_ context.Context, entry outbox.Entry) (outbox.HandleResult, outbox.Settlement) {
 				select {
 				case deliveryA <- struct{}{}:
 				default:
@@ -272,8 +272,8 @@ func testTopicIsolation(t *testing.T, _ Features, constructor PubSubConstructor)
 					closeOnceA.Do(func() { close(doneA) })
 				}
 				mu.Unlock()
-				return outbox.HandleResult{Disposition: outbox.DispositionAck}
-			}))
+				return outbox.HandleResult{Disposition: outbox.DispositionAck}, nil
+			})
 	}()
 	waitForSubscription(t, ctx, sub, topicA, "")
 
@@ -334,17 +334,17 @@ func testMultipleSubscribers(t *testing.T, _ Features, constructor PubSubConstru
 	sub2Spec := outbox.Subscription{Topic: topic, ConsumerGroup: "broadcast-2"}
 
 	wg.Go(func() {
-		_ = sub.Subscribe(subCtx, sub1Spec, outbox.EntryToSubscriberHandler(func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+		_ = sub.Subscribe(subCtx, sub1Spec, func(_ context.Context, _ outbox.Entry) (outbox.HandleResult, outbox.Settlement) {
 			sub1Received.Add(1)
-			return outbox.HandleResult{Disposition: outbox.DispositionAck}
-		}))
+			return outbox.HandleResult{Disposition: outbox.DispositionAck}, nil
+		})
 	})
 
 	wg.Go(func() {
-		_ = sub.Subscribe(subCtx, sub2Spec, outbox.EntryToSubscriberHandler(func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+		_ = sub.Subscribe(subCtx, sub2Spec, func(_ context.Context, _ outbox.Entry) (outbox.HandleResult, outbox.Settlement) {
 			sub2Received.Add(1)
-			return outbox.HandleResult{Disposition: outbox.DispositionAck}
-		}))
+			return outbox.HandleResult{Disposition: outbox.DispositionAck}, nil
+		})
 	})
 
 	waitForSubscription(t, ctx, sub, topic, "broadcast-1")
@@ -387,14 +387,14 @@ func testCompetingConsumers(t *testing.T, _ Features, constructor PubSubConstruc
 	for range 2 {
 		wg.Go(func() {
 			_ = sub.Subscribe(subCtx, outbox.Subscription{Topic: topic},
-				outbox.EntryToSubscriberHandler(func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+				func(_ context.Context, _ outbox.Entry) (outbox.HandleResult, outbox.Settlement) {
 					select {
 					case delivery <- struct{}{}:
 					default:
 					}
 					totalReceived.Add(1)
-					return outbox.HandleResult{Disposition: outbox.DispositionAck}
-				}))
+					return outbox.HandleResult{Disposition: outbox.DispositionAck}, nil
+				})
 		})
 	}
 
@@ -697,9 +697,9 @@ func testSubscribeBlocksUntilCancel(t *testing.T, features Features, constructor
 	subscribeReturned := make(chan error, 1)
 	go func() {
 		err := sub.Subscribe(ctx, outbox.Subscription{Topic: TestTopic(t)},
-			outbox.EntryToSubscriberHandler(func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
-				return outbox.HandleResult{Disposition: outbox.DispositionAck}
-			}))
+			func(_ context.Context, _ outbox.Entry) (outbox.HandleResult, outbox.Settlement) {
+				return outbox.HandleResult{Disposition: outbox.DispositionAck}, nil
+			})
 		subscribeReturned <- err
 	}()
 
@@ -730,9 +730,9 @@ func testCloseTerminatesSubscribers(t *testing.T, _ Features, constructor PubSub
 	go func() {
 		defer close(subscribeReturned)
 		_ = sub.Subscribe(ctx, outbox.Subscription{Topic: topic},
-			outbox.EntryToSubscriberHandler(func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
-				return outbox.HandleResult{Disposition: outbox.DispositionAck}
-			}))
+			func(_ context.Context, _ outbox.Entry) (outbox.HandleResult, outbox.Settlement) {
+				return outbox.HandleResult{Disposition: outbox.DispositionAck}, nil
+			})
 	}()
 	waitForSubscription(t, ctx, sub, topic, "")
 

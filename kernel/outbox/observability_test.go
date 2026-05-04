@@ -439,9 +439,9 @@ func TestSubscriberWithMiddleware_BuiltInRestore_RestoresAllFields(t *testing.T)
 	cap := &captureSubscriber{}
 	wrapped := &SubscriberWithMiddleware{Inner: cap}
 
-	require.NoError(t, wrapped.Subscribe(context.Background(),
+	require.NoError(t, wrapped.SubscribeEntry(context.Background(),
 		Subscription{Topic: "event.test.v1"},
-		EntryToSubscriberHandler(func(ctx context.Context, _ Entry) HandleResult {
+		func(ctx context.Context, _ Entry) HandleResult {
 			requestID, ok := ctxkeys.RequestIDFrom(ctx)
 			require.True(t, ok)
 			assert.Equal(t, "req-789", requestID)
@@ -459,7 +459,7 @@ func TestSubscriberWithMiddleware_BuiltInRestore_RestoresAllFields(t *testing.T)
 			assert.Equal(t, "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01", traceParent)
 
 			return HandleResult{Disposition: DispositionAck}
-		})))
+		}))
 
 	require.NotNil(t, cap.handler)
 	res, _ := cap.handler(context.Background(), Entry{
@@ -479,14 +479,14 @@ func TestSubscriberWithMiddleware_BuiltInRestore_ZeroObservabilityIsNoOp(t *test
 	wrapped := &SubscriberWithMiddleware{Inner: cap}
 
 	called := false
-	require.NoError(t, wrapped.Subscribe(context.Background(),
+	require.NoError(t, wrapped.SubscribeEntry(context.Background(),
 		Subscription{Topic: "test.v1"},
-		EntryToSubscriberHandler(func(ctx context.Context, _ Entry) HandleResult {
+		func(ctx context.Context, _ Entry) HandleResult {
 			called = true
 			_, ok := ctxkeys.RequestIDFrom(ctx)
 			assert.False(t, ok, "no request_id should be set from zero ObservabilityMetadata")
 			return HandleResult{Disposition: DispositionAck}
-		})))
+		}))
 
 	require.NotNil(t, cap.handler)
 	res, _ := cap.handler(context.Background(), Entry{ID: "e1", Observability: ObservabilityMetadata{}})

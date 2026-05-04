@@ -96,7 +96,7 @@ func TestSubscriber_Reconnect_E2E_ChannelCloseAfterAllAcks(t *testing.T) {
 	// handlers are truly done before ctx cancel).
 	var handlerCount atomic.Int64
 
-	handler := outbox.EntryToSubscriberHandler(func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+	handler := entryToSubHandler(func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
 		time.Sleep(testtime.MediumPoll) //archtest:allow:test-sleep slow handler fixture; sleep IS the test parameter
 		handlerCount.Add(1)
 		return outbox.HandleResult{Disposition: outbox.DispositionAck}
@@ -205,7 +205,7 @@ func TestSubscriber_Close_RespectsCtxDeadline(t *testing.T) {
 	neverDone := make(chan struct{})
 	t.Cleanup(func() { close(neverDone) })
 
-	handler := outbox.EntryToSubscriberHandler(func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+	handler := entryToSubHandler(func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
 		<-neverDone
 		return outbox.HandleResult{Disposition: outbox.DispositionAck}
 	})
@@ -309,7 +309,7 @@ func TestSubscriber_Close_GracefulWithAmpleBudget(t *testing.T) {
 	mockConn.nextCh = ch
 	mockConn.mu.Unlock()
 
-	handler := outbox.EntryToSubscriberHandler(func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+	handler := entryToSubHandler(func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
 		time.Sleep(drainD30ms) //archtest:allow:test-sleep slow handler fixture; sleep IS the test parameter
 		return outbox.HandleResult{Disposition: outbox.DispositionAck}
 	})
@@ -371,7 +371,7 @@ func TestSubscriber_Close_InFlightHandlerCompletesBeforeDeadline(t *testing.T) {
 	mockConn.nextCh = ch
 	mockConn.mu.Unlock()
 
-	handler := outbox.EntryToSubscriberHandler(func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+	handler := entryToSubHandler(func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
 		time.Sleep(testtime.D80ms) //archtest:allow:test-sleep slow handler fixture; sleep IS the test parameter
 		return outbox.HandleResult{Disposition: outbox.DispositionAck}
 	})
@@ -419,7 +419,7 @@ func TestSubscriber_Close_NoDeadlineCtx_WaitsUntilWg(t *testing.T) {
 	mockConn.nextCh = ch
 	mockConn.mu.Unlock()
 
-	handler := outbox.EntryToSubscriberHandler(func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+	handler := entryToSubHandler(func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
 		time.Sleep(testtime.D150ms) //archtest:allow:test-sleep slow handler fixture; sleep IS the test parameter
 		return outbox.HandleResult{Disposition: outbox.DispositionAck}
 	})

@@ -15,10 +15,11 @@ import (
 // downgrades (ConsumerBase is wired inside SubscriberWithMiddleware.SubscribeEntry,
 // after the business middleware chain — so the span wraps everything).
 //
-// wrapper.MustWrapConsumer is called ONCE at middleware construction (not per
-// delivery). spec.Validate() panic therefore fires at subscription registration
-// time, not at first delivery. Router.AddContractHandler validates the
-// ContractSpec before reaching this middleware, providing defense in depth.
+// wrapper.MustWrapConsumer is called ONCE at per-subscription registration time
+// (not per delivery). spec.Validate() panic therefore fires when the middleware
+// closure is first evaluated for a given subscription, not at first delivery.
+// Router.AddContractHandler validates the ContractSpec before reaching this
+// middleware, providing defense in depth.
 //
 // Error redaction is hardcoded inside wrapper.WrapConsumer (pkg/redaction);
 // this middleware does not pipe a redactor — there is no caller-side opt-out.

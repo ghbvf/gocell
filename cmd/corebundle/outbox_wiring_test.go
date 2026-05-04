@@ -172,7 +172,7 @@ func TestOutboxE2E_CrossCellFanout(t *testing.T) {
 	// Subscribe with ConsumerGroup "accesscore" (simulates cells/accesscore).
 	accessSub := outbox.Subscription{Topic: topic, ConsumerGroup: "accesscore"}
 	go func() {
-		_ = eb.Subscribe(ctx, accessSub, outbox.EntryToSubscriberHandler(func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+		_ = eb.Subscribe(ctx, accessSub, entryToSubHandler(func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
 			accessCalls.Add(1)
 			return outbox.HandleResult{Disposition: outbox.DispositionAck}
 		}))
@@ -181,7 +181,7 @@ func TestOutboxE2E_CrossCellFanout(t *testing.T) {
 	// Subscribe with ConsumerGroup "auditcore" (simulates cells/auditcore).
 	auditSub := outbox.Subscription{Topic: topic, ConsumerGroup: "auditcore"}
 	go func() {
-		_ = eb.Subscribe(ctx, auditSub, outbox.EntryToSubscriberHandler(func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+		_ = eb.Subscribe(ctx, auditSub, entryToSubHandler(func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
 			auditCalls.Add(1)
 			return outbox.HandleResult{Disposition: outbox.DispositionAck}
 		}))

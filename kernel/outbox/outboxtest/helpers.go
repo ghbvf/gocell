@@ -131,7 +131,8 @@ func CollectN(
 	subCtx, cancel := context.WithCancel(ctx)
 	t.Cleanup(cancel)
 
-	handler := outbox.EntryToSubscriberHandler(func(_ context.Context, entry outbox.Entry) outbox.HandleResult {
+	//nolint:unparam // Settlement always nil: adapter tests bypass ConsumerBase by design
+	handler := func(_ context.Context, entry outbox.Entry) (outbox.HandleResult, outbox.Settlement) {
 		mu.Lock()
 		collected = append(collected, entry)
 		count := len(collected)
@@ -140,8 +141,8 @@ func CollectN(
 		if count >= n {
 			closeOnce.Do(func() { close(done) })
 		}
-		return outbox.HandleResult{Disposition: outbox.DispositionAck}
-	})
+		return outbox.HandleResult{Disposition: outbox.DispositionAck}, nil
+	}
 
 	// Subscribe blocks -- run in goroutine.
 	subDone := make(chan struct{})
@@ -214,7 +215,7 @@ func startCollecting(t *testing.T, ctx context.Context, sub outbox.Subscriber, t
 		defer close(c.subDone)
 		close(ready) // signal: goroutine is running, Subscribe call is imminent
 		err := sub.Subscribe(subCtx, outbox.Subscription{Topic: topic},
-			outbox.EntryToSubscriberHandler(func(_ context.Context, entry outbox.Entry) outbox.HandleResult {
+			func(_ context.Context, entry outbox.Entry) (outbox.HandleResult, outbox.Settlement) {
 				c.mu.Lock()
 				c.collected = append(c.collected, entry)
 				count := len(c.collected)
@@ -222,8 +223,8 @@ func startCollecting(t *testing.T, ctx context.Context, sub outbox.Subscriber, t
 				if count >= c.n {
 					c.closeOnce.Do(func() { close(c.done) })
 				}
-				return outbox.HandleResult{Disposition: outbox.DispositionAck}
-			}))
+				return outbox.HandleResult{Disposition: outbox.DispositionAck}, nil
+			})
 		if err != nil && !errors.Is(err, context.Canceled) {
 			c.t.Errorf(errSubscribeUnexpectedFmt, err)
 		}
@@ -345,20 +346,21 @@ func (h *pubSubHarness) subscribeWithHandler(handler outbox.SubscriberHandler) {
 // negative-assertion helpers can detect redeliveries via select+timeout.
 // Subscribe errors (other than context.Canceled) are surfaced via t.Errorf.
 //
-// handler is EntryHandler (business signature); it is lifted to SubscriberHandler
-// via EntryToSubscriberHandler before passing to Subscriber.Subscribe.
+// handler is EntryHandler (business signature); it is wrapped inline as a
+// SubscriberHandler (nil Settlement) before passing to Subscriber.Subscribe.
 func (h *pubSubHarness) subscribe(handler outbox.EntryHandler) {
 	h.T.Helper()
 	ctx, cancel := context.WithCancel(h.T.Context())
 	h.cancel = cancel
 	h.T.Cleanup(cancel)
-	wrapped := outbox.EntryToSubscriberHandler(func(hctx context.Context, entry outbox.Entry) outbox.HandleResult {
+	//nolint:unparam // Settlement always nil: adapter tests bypass ConsumerBase by design
+	wrapped := func(hctx context.Context, entry outbox.Entry) (outbox.HandleResult, outbox.Settlement) {
 		select {
 		case h.deliveryEvents <- struct{}{}:
 		default:
 		}
-		return handler(hctx, entry)
-	})
+		return handler(hctx, entry), nil
+	}
 	ready := make(chan struct{})
 	go func() {
 		defer close(h.subDone)

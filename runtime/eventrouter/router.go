@@ -78,10 +78,11 @@ type handlerConfig struct {
 //
 // The subscriber field is *outbox.SubscriberWithMiddleware so that runSubscribe
 // can call SubscribeEntry (EntryHandler → business middleware chain →
-// ConsumerBase.Wrap → Inner.Subscribe) rather than lifting handlers via
-// EntryToSubscriberHandler. This is the structural guarantee that ConsumerBase
-// is the explicit conversion boundary between business (EntryHandler) and
-// broker (SubscriberHandler) layers.
+// ConsumerBase.Wrap → Inner.Subscribe). The EntryToSubscriberHandler lift
+// function has been deleted; SubscribeEntry is the only public entry point,
+// which is the structural guarantee that ConsumerBase is the explicit
+// conversion boundary between business (EntryHandler) and broker
+// (SubscriberHandler) layers.
 //
 // ref: ThreeDotsLabs/watermill message/router.go — router holds *Router.handlers,
 // not a generic middleware list: the router owns the composition.
