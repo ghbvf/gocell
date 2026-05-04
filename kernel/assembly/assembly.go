@@ -357,10 +357,10 @@ func (a *CoreAssembly) startInternal(ctx context.Context, cfgMap map[string]any)
 		// Snapshot the offending state inside the lock so the error message
 		// reflects the value we observed at the guard, not whatever a racing
 		// Stop()/Start() goroutine writes after we release a.mu.
-		s := a.state
+		observedState := a.state
 		a.mu.Unlock()
 		return errcode.New(errcode.ErrValidationFailed,
-			fmt.Sprintf("assembly %q: cannot start in state %d", a.id, s))
+			fmt.Sprintf("assembly %q: cannot start in state %d", a.id, observedState))
 	}
 	a.state = stateStarting
 	a.mu.Unlock()
@@ -396,9 +396,11 @@ func (a *CoreAssembly) startInternal(ctx context.Context, cfgMap map[string]any)
 	for _, c := range a.cells {
 		recorder := cell.NewRegistryRecorder(cloneConfigMap(cfgMap), a.cfg.DurabilityMode)
 		if err := c.Init(ctx, recorder); err != nil {
+			// a.snapshots is untouched until the post-loop publish below, so
+			// the failure path only needs to roll the state back. localSnaps
+			// goes out of scope and is reclaimed.
 			a.mu.Lock()
 			a.state = stateStopped
-			a.snapshots = make(map[string]cell.RegistrySnapshot)
 			a.mu.Unlock()
 			return errcode.Wrap(errcode.ErrValidationFailed,
 				fmt.Sprintf("assembly: init cell %q", c.ID()), err)

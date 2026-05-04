@@ -7,11 +7,14 @@
 // 20260504): Phase 1 of startInternal previously wrote a.snapshots[c.ID()]
 // without holding a.mu, racing against Snapshots() readers that hold a.mu.
 //
-// Detection model: walk every FuncDecl/FuncLit body in kernel/assembly/*.go
-// (production only) maintaining a `lockDepth` counter. Lock() increments,
+// Detection model: walk every FuncDecl and FuncLit body in kernel/assembly/
+// production .go files maintaining a `lockDepth` counter. Lock() increments,
 // Unlock() decrements; `defer Unlock()` does NOT decrement (the lock is held
-// until function exit). Composite literal initializers (`&CoreAssembly{...
-// snapshots: make(...)}`) are NOT writes — single-threaded constructor-time
+// until function exit). Each FuncLit (closure / goroutine literal) gets a
+// fresh `lockDepth=0` because it has its own lock-scope at runtime — a write
+// inside a `go func() { ... }()` does not inherit the caller's locked
+// section. Composite literal initializers (`&CoreAssembly{...snapshots:
+// make(...)}`) are NOT writes — single-threaded constructor-time
 // initialization is exempt by construction.
 //
 // Flagged statements (when lockDepth == 0):
@@ -21,6 +24,15 @@
 //
 // Reads of a.snapshots (range, len, indexed read) are not flagged — readers
 // already hold the lock in Snapshots(); only racy writers cause map races.
+//
+// Known limitation: the lockDepth model is approximate. Pathological mixes of
+// `defer Unlock()` followed by an explicit `Unlock()` later in the same
+// function (double-unlock — undefined runtime behavior anyway) leave the
+// counter at 1 and admit a subsequent write as compliant. Production code in
+// kernel/assembly/ avoids that pattern; if it ever appears, prefer fixing the
+// double-unlock over expanding this detector. The kernel rule is "balanced
+// Lock/Unlock pairs"; this gate is a best-effort static surface against
+// regression of the K-01 race, not a full mutex-state interpreter.
 //
 // Allow-list: none. New() initializes via composite literal which is not an
 // AssignStmt; the gate naturally exempts it without an explicit allow-list.
@@ -188,6 +200,55 @@ func New() *A {
 	}
 }
 
+// TestAssemblySnapshotsLocked_DetectsViolationInGoroutineFuncLit verifies
+// the FuncLit walk: a goroutine whose body writes a.snapshots without
+// holding the lock must be flagged, even though the surrounding outer
+// function may itself hold the lock — the goroutine runs in an independent
+// scheduling context where the caller's mutex is not held.
+func TestAssemblySnapshotsLocked_DetectsViolationInGoroutineFuncLit(t *testing.T) {
+	src := `package x
+import "sync"
+type A struct {
+    mu        sync.Mutex
+    snapshots map[string]int
+}
+func (a *A) outer() {
+    a.mu.Lock()
+    defer a.mu.Unlock()
+    go func() {
+        a.snapshots["k"] = 1
+    }()
+}`
+	vs, err := asnCheckSource("<fixture-funclit>", src)
+	if err != nil {
+		t.Fatalf("asnCheckSource: %v", err)
+	}
+	if len(vs) == 0 {
+		t.Error("detector did not flag unlocked write inside goroutine FuncLit")
+	}
+}
+
+// TestAssemblySnapshotsLocked_DetectsViolationInIfInit verifies the Init
+// clause of an IfStmt is scanned. `if a.snapshots = ...; cond {}` is a
+// rare-but-legal pattern, and a write hidden there must not be a blind
+// spot.
+func TestAssemblySnapshotsLocked_DetectsViolationInIfInit(t *testing.T) {
+	src := `package x
+type A struct { snapshots map[string]int }
+func (a *A) bug(m map[string]int) {
+    if a.snapshots = m; len(a.snapshots) > 0 {
+        return
+    }
+}`
+	vs, err := asnCheckSource("<fixture-ifinit>", src)
+	if err != nil {
+		t.Fatalf("asnCheckSource: %v", err)
+	}
+	if len(vs) == 0 {
+		t.Error("detector did not flag unlocked write hidden in IfStmt.Init")
+	}
+}
+
 // TestAssemblySnapshotsLocked_AllowsLockedWriteInsideIf verifies that locks
 // taken inside a nested block (e.g. an if-error path) are tracked correctly.
 func TestAssemblySnapshotsLocked_AllowsLockedWriteInsideIf(t *testing.T) {
@@ -245,6 +306,19 @@ func asnCheckAST(fset *token.FileSet, f *ast.File, label string) []string {
 		}
 		violations = append(violations, asnScanStmts(fset, fn.Body.List, 0, label)...)
 	}
+	// Independently inspect every FuncLit (closure / goroutine body / inline
+	// callback). A FuncLit owns its lock scope: writes inside a closure do
+	// not inherit the caller's lockDepth, so each starts fresh at 0. The
+	// outer ast.Walk catches FuncLits anywhere in the file (top-level decls,
+	// nested calls, struct field initializers, ...).
+	ast.Inspect(f, func(n ast.Node) bool {
+		fl, ok := n.(*ast.FuncLit)
+		if !ok || fl.Body == nil {
+			return true
+		}
+		violations = append(violations, asnScanStmts(fset, fl.Body.List, 0, label)...)
+		return true
+	})
 	return violations
 }
 
@@ -276,6 +350,12 @@ func asnScanStmts(fset *token.FileSet, stmts []ast.Stmt, lockDepth int, label st
 				violations = append(violations, asnViolation(label, line))
 			}
 		case *ast.IfStmt:
+			// IfStmt.Init carries `if x := f(); ...` declarations or the
+			// rare `if x = ...; ...` assignment. Scan it so writes hidden
+			// in the init clause aren't a blind spot.
+			if s.Init != nil {
+				violations = append(violations, asnScanStmts(fset, []ast.Stmt{s.Init}, lockDepth, label)...)
+			}
 			if s.Body != nil {
 				violations = append(violations, asnScanStmts(fset, s.Body.List, lockDepth, label)...)
 			}
@@ -283,6 +363,12 @@ func asnScanStmts(fset *token.FileSet, stmts []ast.Stmt, lockDepth int, label st
 				violations = append(violations, asnScanStmts(fset, []ast.Stmt{s.Else}, lockDepth, label)...)
 			}
 		case *ast.ForStmt:
+			if s.Init != nil {
+				violations = append(violations, asnScanStmts(fset, []ast.Stmt{s.Init}, lockDepth, label)...)
+			}
+			if s.Post != nil {
+				violations = append(violations, asnScanStmts(fset, []ast.Stmt{s.Post}, lockDepth, label)...)
+			}
 			if s.Body != nil {
 				violations = append(violations, asnScanStmts(fset, s.Body.List, lockDepth, label)...)
 			}
@@ -293,10 +379,16 @@ func asnScanStmts(fset *token.FileSet, stmts []ast.Stmt, lockDepth int, label st
 		case *ast.BlockStmt:
 			violations = append(violations, asnScanStmts(fset, s.List, lockDepth, label)...)
 		case *ast.SwitchStmt:
+			if s.Init != nil {
+				violations = append(violations, asnScanStmts(fset, []ast.Stmt{s.Init}, lockDepth, label)...)
+			}
 			if s.Body != nil {
 				violations = append(violations, asnScanStmts(fset, s.Body.List, lockDepth, label)...)
 			}
 		case *ast.TypeSwitchStmt:
+			if s.Init != nil {
+				violations = append(violations, asnScanStmts(fset, []ast.Stmt{s.Init}, lockDepth, label)...)
+			}
 			if s.Body != nil {
 				violations = append(violations, asnScanStmts(fset, s.Body.List, lockDepth, label)...)
 			}

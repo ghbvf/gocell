@@ -69,14 +69,20 @@ func TestAssembly_StartConcurrentSnapshots_RaceDetector(t *testing.T) {
 	}()
 
 	// Spin up readers that bash Snapshots() while Phase 1 is mid-flight.
+	// Each reader signals on `ready` once it has called Snapshots() at least
+	// once; the main goroutine waits for all readers to confirm before
+	// unblocking Phase 1. This guarantees the race window deterministically,
+	// independent of CI runner scheduling latency (no timing-based sleep).
 	const readers = 8
 	const reads = 20
+	ready := make(chan struct{}, readers)
+	stop := make(chan struct{})
 	var wg sync.WaitGroup
 	wg.Add(readers)
-	stop := make(chan struct{})
 	for r := 0; r < readers; r++ {
 		go func() {
 			defer wg.Done()
+			firstDone := false
 			for i := 0; i < reads; i++ {
 				select {
 				case <-stop:
@@ -84,14 +90,22 @@ func TestAssembly_StartConcurrentSnapshots_RaceDetector(t *testing.T) {
 				default:
 				}
 				_ = a.Snapshots()
+				if !firstDone {
+					ready <- struct{}{}
+					firstDone = true
+				}
 				time.Sleep(testtime.D1ms) //archtest:allow:test-sleep yield between Snapshots() reads to widen the race window vs. Phase 1 writer
 			}
 		}()
 	}
 
-	// Hold readers in a hot loop briefly so Phase 1 has time to write at least
-	// one cell snapshot before unblocking.
-	time.Sleep(testtime.D30ms) //archtest:allow:test-sleep let reader goroutines reach Snapshots() before Phase 1 unblocks
+	// Wait until every reader has invoked Snapshots() at least once. After
+	// this point Phase 1 has either already raced (under -race) or is poised
+	// to race the moment cell.Init returns and the original buggy code path
+	// would have written a.snapshots without the lock.
+	for r := 0; r < readers; r++ {
+		<-ready
+	}
 	close(initGate)
 
 	startErr := <-startDone
