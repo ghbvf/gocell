@@ -2,7 +2,6 @@ package accesscore
 
 import (
 	"context"
-	"fmt"
 	"log/slog"
 
 	"github.com/google/uuid"
@@ -289,13 +288,13 @@ func (c *AccessCore) initRbacAssign() error {
 	return nil
 }
 
-// Init constructs all 9 slices and registers routes, subscriptions, health
-// probes, and lifecycle hooks into reg.
-func (c *AccessCore) Init(ctx context.Context, reg cell.Registry) error {
-	clock.MustHaveClock(c.clk, "accesscore.Init")
-	if err := c.BaseCell.Init(ctx, reg); err != nil {
-		return err
-	}
+// initInternal is the K#04 codegen escape hatch: business init that cannot
+// be generated (emitter resolve, slice service construction, health probes,
+// lifecycle hooks). cell_gen.go::Init calls it after BaseCell.Init and before
+// mounting the generated route-group and subscribe blocks. This is a permanent
+// convention, not a transitional shim.
+func (c *AccessCore) initInternal(ctx context.Context, reg cell.Registry) error {
+	clock.MustHaveClock(c.clk, "accesscore.initInternal")
 
 	// WithInMemoryDefaults defers sessionRepo and refreshStore construction
 	// to here so that c.clk is available.
@@ -318,10 +317,7 @@ func (c *AccessCore) Init(ctx context.Context, reg cell.Registry) error {
 		return err
 	}
 
-	c.registerRouteGroups(reg)
-	if err := c.registerSubscriptions(reg); err != nil {
-		return err
-	}
+	// Route groups and subscriptions removed: cell_gen.go owns Init and renders them.
 	c.registerHealthAndLifecycle(reg)
 
 	return nil
@@ -343,71 +339,6 @@ func (c *AccessCore) bindInitialAdmin() error {
 		Logger:   c.logger,
 		Clock:    c.clk,
 	}, c.logger)
-	return nil
-}
-
-// registerRouteGroups registers HTTP route groups for primary and internal listeners.
-func (c *AccessCore) registerRouteGroups(reg cell.Registry) {
-	reg.RouteGroup(cell.RouteGroup{
-		Listener: cell.PrimaryListener,
-		Prefix:   "/api/v1/access",
-		Register: func(mux cell.RouteMux) error {
-			var firstErr error
-			captureErr := func(err error) {
-				if err != nil && firstErr == nil {
-					firstErr = err
-				}
-			}
-			mux.Route("/setup", func(s cell.RouteMux) {
-				captureErr(c.setupHandler.RegisterRoutes(s))
-			})
-			mux.Route("/users", func(s cell.RouteMux) {
-				captureErr(c.identityHandler.RegisterRoutes(s))
-			})
-			mux.Route("/sessions", func(s cell.RouteMux) {
-				captureErr(c.loginHandler.RegisterRoutes(s))
-				captureErr(c.refreshHandler.RegisterRoutes(s))
-				captureErr(c.logoutHandler.RegisterRoutes(s))
-			})
-			mux.Route("/roles", func(s cell.RouteMux) {
-				captureErr(c.rbacHandler.RegisterRoutes(s))
-			})
-			return firstErr
-		},
-	})
-	reg.RouteGroup(cell.RouteGroup{
-		Listener: cell.InternalListener,
-		Prefix:   "/internal/v1/access",
-		Register: func(mux cell.RouteMux) error {
-			var firstErr error
-			mux.Route("/roles", func(s cell.RouteMux) {
-				if err := c.rbacAssignHandler.RegisterRoutes(s); err != nil {
-					firstErr = err
-				}
-			})
-			return firstErr
-		},
-	})
-}
-
-// registerSubscriptions registers config and role-change event handlers into reg.
-func (c *AccessCore) registerSubscriptions(reg cell.Registry) error {
-	if err := reg.Subscribe(
-		specEventConfigEntryUpserted, c.configReceiveSvc.HandleEntryUpserted, "accesscore",
-		cell.WithSubscriptionSliceID("configreceive")); err != nil {
-		return fmt.Errorf(errFmtSubscribe, specEventConfigEntryUpserted.Topic, err)
-	}
-	if err := reg.Subscribe(
-		specEventConfigEntryDeleted, c.configReceiveSvc.HandleEntryDeleted, "accesscore",
-		cell.WithSubscriptionSliceID("configreceive")); err != nil {
-		return fmt.Errorf(errFmtSubscribe, specEventConfigEntryDeleted.Topic, err)
-	}
-	if err := reg.Subscribe(specEventRoleAssigned, c.rbacSessionConsumer.HandleRoleChanged, "accesscore-rbac-session-sync"); err != nil {
-		return fmt.Errorf(errFmtSubscribe, specEventRoleAssigned.Topic, err)
-	}
-	if err := reg.Subscribe(specEventRoleRevoked, c.rbacSessionConsumer.HandleRoleChanged, "accesscore-rbac-session-sync"); err != nil {
-		return fmt.Errorf(errFmtSubscribe, specEventRoleRevoked.Topic, err)
-	}
 	return nil
 }
 

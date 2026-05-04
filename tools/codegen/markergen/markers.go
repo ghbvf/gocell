@@ -31,15 +31,18 @@ type ListenerSpec struct {
 	Prefix string
 }
 
-// RouteSpec mirrors a `// +slice:route:slice=...,listener=...,subPath=...`
+// RouteSpec mirrors a `// +slice:route:slice=...,listener=...,subPath=...,method=...`
 // marker declared on a handler field. Listener defaults to
-// "cell.PrimaryListener" when omitted (covers the 90% single-listener case).
-// HandlerField is auto-derived from the AST field name on which the marker
-// is declared — cellgen renders `c.<HandlerField>.RegisterRoutes(s)`.
+// "cell.PrimaryListener" when omitted (covers the 90% single-listener case);
+// Method defaults to "RegisterRoutes". HandlerField is auto-derived from the
+// AST field name on which the marker is declared — cellgen renders
+// `c.<HandlerField>.<Method>(s)`. Multiple route markers on the same field
+// are allowed (e.g. one for primary + one for internal listener).
 type RouteSpec struct {
 	Slice        string
 	Listener     string
 	SubPath      string
+	Method       string
 	HandlerField string
 }
 

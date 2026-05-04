@@ -22,7 +22,6 @@ import (
 	"github.com/ghbvf/gocell/cells/accesscore/slices/setup"
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/clock"
-	"github.com/ghbvf/gocell/kernel/metadata"
 	"github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/persistence"
@@ -48,10 +47,7 @@ var defaultRefreshPolicy = refresh.Policy{
 	MaxAge:        defaultAccessCoreRefreshMaxAge,
 }
 
-// Compile-time interface checks.
-var (
-	_ cell.Cell = (*AccessCore)(nil)
-)
+// Compile-time interface check lives in cell_gen.go (DO NOT EDIT).
 
 // Option configures an AccessCore Cell.
 type Option func(*AccessCore)
@@ -208,6 +204,8 @@ func WithConfigGetter(c ports.ConfigGetter) Option {
 }
 
 // AccessCore is the accesscore Cell implementation.
+// +cell:listener:ref=cell.PrimaryListener,prefix=/api/v1/access
+// +cell:listener:ref=cell.InternalListener,prefix=/internal/v1/access
 type AccessCore struct {
 	*cell.BaseCell
 	clk          clock.Clock
@@ -254,36 +252,47 @@ type AccessCore struct {
 	configGetter ports.ConfigGetter
 
 	// Slice handlers.
+	// +slice:route:slice=identitymanage,subPath=/users
 	identityHandler *identitymanage.Handler
-	loginHandler    *sessionlogin.Handler
-	refreshHandler  *sessionrefresh.Handler
-	logoutHandler   *sessionlogout.Handler
-	setupHandler    *setup.Handler
+
+	// +slice:route:slice=sessionlogin,subPath=/sessions
+	loginHandler *sessionlogin.Handler
+
+	// +slice:route:slice=sessionrefresh,subPath=/sessions
+	refreshHandler *sessionrefresh.Handler
+
+	// +slice:route:slice=sessionlogout,subPath=/sessions
+	logoutHandler *sessionlogout.Handler
+
+	// +slice:route:slice=setup,subPath=/setup
+	setupHandler *setup.Handler
 
 	// Services exposed for composition (e.g. TokenVerifier, Authorizer).
-	validateSvc         *sessionvalidate.Service
-	authzSvc            *authorizationdecide.Service
-	rbacHandler         *rbaccheck.Handler
-	rbacRunMode         query.RunMode
-	rbacEmitterMode     bool
-	rbacAssignHandler   *rbacassign.Handler
-	configReceiveSvc    *configreceive.Service
+	validateSvc *sessionvalidate.Service
+	authzSvc    *authorizationdecide.Service
+
+	// +slice:route:slice=rbaccheck,subPath=/roles
+	rbacHandler     *rbaccheck.Handler
+	rbacRunMode     query.RunMode
+	rbacEmitterMode bool
+
+	// +slice:route:slice=rbacassign,listener=cell.InternalListener,subPath=/roles
+	rbacAssignHandler *rbacassign.Handler
+
+	// +slice:subscribe:slice=configreceive,topic=event.config.entry-upserted.v1,handler=HandleEntryUpserted,group=accesscore
+	// +slice:subscribe:slice=configreceive,topic=event.config.entry-deleted.v1,handler=HandleEntryDeleted,group=accesscore
+	configReceiveSvc *configreceive.Service
+
+	// +slice:subscribe:slice=sessionlogout,topic=event.role.assigned.v1,handler=HandleRoleChanged,group=accesscore-rbac-session-sync
+	// +slice:subscribe:slice=sessionlogout,topic=event.role.revoked.v1,handler=HandleRoleChanged,group=accesscore-rbac-session-sync
 	rbacSessionConsumer *sessionlogout.Consumer
 }
 
 // NewAccessCore creates a new AccessCore Cell.
 func NewAccessCore(opts ...Option) *AccessCore {
 	c := &AccessCore{
-		BaseCell: cell.MustNewBaseCell(&metadata.CellMeta{
-			ID:               "accesscore",
-			Type:             "core",
-			ConsistencyLevel: "L2",
-			DurabilityMode:   "durable",
-			Owner:            metadata.OwnerMeta{Team: "platform", Role: "access-owner"},
-			Schema:           metadata.SchemaMeta{Primary: "users"},
-			Verify:           metadata.CellVerifyMeta{Smoke: []string{"accesscore/smoke"}},
-		}),
-		logger: slog.Default(),
+		BaseCell: cell.MustNewBaseCell(loadCellMetadata()),
+		logger:   slog.Default(),
 	}
 	for _, o := range opts {
 		o(c)

@@ -10,4 +10,5 @@ schema:
 verify:
   smoke:
     - smoke.accesscore.startup
+goStructName: AccessCore
 l0Dependencies: []

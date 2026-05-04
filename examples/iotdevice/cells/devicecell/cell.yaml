@@ -11,9 +11,4 @@ verify:
   smoke:
     - smoke.devicecell.startup
 goStructName: DeviceCell
-listeners:
-  - ref: cell.PrimaryListener
-    prefix: ""
-  - ref: cell.InternalListener
-    prefix: ""
 l0Dependencies: []

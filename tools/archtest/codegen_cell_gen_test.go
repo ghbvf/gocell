@@ -9,10 +9,9 @@
 // Gate IDs:
 //
 //	CODEGEN-CELL-GEN-01               Enabled cell (GoStructName != "") directory
-//	                                   has cell_gen.go and cell.yaml declares
-//	                                   listeners + each child slice declares
-//	                                   routeMounts (or has empty mounts but at
-//	                                   least one of {routeMounts, subscribes}).
+//	                                   has cell_gen.go; each child slice that
+//	                                   participates in wiring must declare markers
+//	                                   in the parent cell.go (K#05 convention).
 //	CODEGEN-CELL-GEN-02               cell_gen.go starts with the canonical gocell
 //	                                   generated header.
 //	CODEGEN-INIT-INTERNAL-01          Every opted-in cell package must declare
@@ -24,12 +23,12 @@
 //	CODEGEN-USER-FILE-OVERLAP-01      cell.go in the same package must NOT define
 //	                                   func (c *<StructName>) Init — Init is owned
 //	                                   by cell_gen.go after migration.
-//	CODEGEN-MARKER-NONE-01            No "// +cell:" / "// +slice:" marker comments
-//	                                   in the source tree (K#05 reserves marker
-//	                                   syntax; staging marker code under K#04 would
-//	                                   split the path into a yaml + marker dual mode).
 //
-// ref: docs/plans/202605011500-029-master-roadmap.md K#04
+// Note: CODEGEN-MARKER-NONE-01 was a K#04 transitional gate forbidding
+// marker comments. It was removed when K#05 W4 landed (markers are now
+// the single source of route/subscribe wire declarations).
+//
+// ref: docs/plans/202605011500-029-master-roadmap.md K#04 / K#05
 package archtest
 
 import (
@@ -167,17 +166,6 @@ func TestCodegenInitInternal01(t *testing.T) {
 		for _, v := range violations {
 			t.Errorf("CODEGEN-INIT-INTERNAL-01: %s", v)
 		}
-	}
-}
-
-// TestCodegenMarkerNone01 verifies CODEGEN-MARKER-NONE-01. The K#04 PR-1
-// stage forbids marker comments — they are reserved for K#05.
-func TestCodegenMarkerNone01(t *testing.T) {
-	t.Parallel()
-	root := findModuleRoot(t)
-	violations := scanForMarkerComments(t, root)
-	for _, v := range violations {
-		t.Errorf("CODEGEN-MARKER-NONE-01: marker comment found at %s — K#04 stage forbids // +cell: / // +slice: markers (reserved for K#05)", v)
 	}
 }
 
@@ -510,53 +498,3 @@ func exprString(expr ast.Expr) string {
 	return fmt.Sprintf("%T", expr)
 }
 
-// scanForMarkerComments walks the source tree and reports any line whose
-// trimmed text starts with codegenMarkerCellPrefix or codegenMarkerSlicePrefix.
-// Excludes vendor / worktrees / .git / node_modules / testdata / archtest fixtures
-// (the archtest fixtures are deliberate ground-truth cases for other gates).
-func scanForMarkerComments(t *testing.T, root string) []string {
-	t.Helper()
-	var hits []string
-	skipDirs := map[string]bool{
-		"vendor": true, "worktrees": true, "testdata": true,
-		".git": true, "node_modules": true,
-	}
-	_ = filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
-		if err != nil {
-			// Skip unreadable entry; gate is best-effort and the build/test
-			// step will surface real permission issues.
-			return nil //nolint:nilerr // walk continues past unreadable entries by design
-		}
-		if d.IsDir() {
-			if skipDirs[d.Name()] {
-				return filepath.SkipDir
-			}
-			return nil
-		}
-		if !strings.HasSuffix(path, ".go") {
-			return nil
-		}
-		// Skip this archtest file itself — its constants reference the
-		// marker prefixes but as string literals, not comments.
-		// Use a path-suffix check (not basename) to avoid exempting any
-		// other file that happens to share the same basename.
-		if strings.HasSuffix(filepath.ToSlash(path), "tools/archtest/codegen_cell_gen_test.go") {
-			return nil
-		}
-		content, err := os.ReadFile(path) //nolint:gosec // archtest scans repo paths it discovered itself
-		if err != nil {
-			// Same best-effort policy: unreadable file does not fail the gate.
-			return nil //nolint:nilerr // walk continues past unreadable entries by design
-		}
-		for i, line := range strings.Split(string(content), "\n") {
-			trim := strings.TrimSpace(line)
-			if strings.HasPrefix(trim, codegenMarkerCellPrefix) ||
-				strings.HasPrefix(trim, codegenMarkerSlicePrefix) {
-				hits = append(hits, filepath.ToSlash(path)+":"+strconv.Itoa(i+1))
-			}
-		}
-		return nil
-	})
-	sort.Strings(hits)
-	return hits
-}

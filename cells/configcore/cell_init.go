@@ -25,8 +25,8 @@ import (
 // initInternal is the K#04 codegen escape hatch: business init that cannot
 // be generated (emitter resolve, slice service construction, health probes).
 // cell_gen.go::Init calls it after BaseCell.Init and before mounting the
-// generated reg.RouteGroup() and reg.Subscribe() blocks. This is a permanent
-// convention, not a transitional shim.
+// generated route-group and subscribe blocks. This is a permanent convention,
+// not a transitional shim.
 //
 //nolint:unparam // ctx is a contract parameter; unused here, used by other cells
 func (c *ConfigCore) initInternal(ctx context.Context, reg cell.Registry) error {
@@ -68,7 +68,7 @@ func (c *ConfigCore) initInternal(ctx context.Context, reg cell.Registry) error 
 		return err
 	}
 
-	// reg.RouteGroup and reg.Subscribe removed: cell_gen.go owns Init and renders them.
+	// Route groups and subscriptions removed: cell_gen.go owns Init and renders them.
 
 	// Register health probes (emitter fail-open rate checker).
 	if hc, ok := c.emitter.(cell.HealthProber); ok {

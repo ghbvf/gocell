@@ -282,6 +282,7 @@ func injectSliceWires(slice *metadata.SliceMeta, routes []markergen.RouteSpec, s
 				Listener:     r.Listener,
 				SubPath:      r.SubPath,
 				HandlerField: r.HandlerField,
+				Method:       r.Method,
 			})
 		}
 	}

@@ -143,11 +143,9 @@ func parseRoute(m collectedMarker) (RouteSpec, error) {
 		return RouteSpec{}, fmt.Errorf("cell.go:%d: marker %q: %w", m.Line, m.Name, err)
 	}
 	var errs errList
-	checkUnknownFields(m, kv, []string{"slice", "listener", "subPath"}, &errs)
-	for _, f := range []string{"slice", "subPath"} {
-		if strings.TrimSpace(kv[f]) == "" {
-			errs.Append(fmt.Errorf("cell.go:%d: marker %q missing required field %q", m.Line, m.Name, f))
-		}
+	checkUnknownFields(m, kv, []string{"slice", "listener", "subPath", "method"}, &errs)
+	if strings.TrimSpace(kv["slice"]) == "" {
+		errs.Append(fmt.Errorf("cell.go:%d: marker %q missing required field %q", m.Line, m.Name, "slice"))
 	}
 	if err := errs.AsError(); err != nil {
 		return RouteSpec{}, err
@@ -160,6 +158,7 @@ func parseRoute(m collectedMarker) (RouteSpec, error) {
 		Slice:        kv["slice"],
 		Listener:     listener,
 		SubPath:      kv["subPath"],
+		Method:       kv["method"],
 		HandlerField: m.FieldName,
 	}, nil
 }
@@ -223,6 +222,7 @@ func fallbackBundle(cellID string, cell *metadata.CellMeta, project *metadata.Pr
 				Slice:        slice.ID,
 				Listener:     rm.Listener,
 				SubPath:      rm.SubPath,
+				Method:       rm.Method,
 				HandlerField: rm.HandlerField,
 			})
 		}

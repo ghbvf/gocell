@@ -15,10 +15,3 @@ verify:
 allowedFiles:
   - examples/todoorder/cells/ordercell/slices/orderquery/**
 
-routeMounts:
-  - listener: cell.PrimaryListener
-    subPath: /orders
-    handlerField: getHandler
-  - listener: cell.PrimaryListener
-    subPath: /orders
-    handlerField: listHandler

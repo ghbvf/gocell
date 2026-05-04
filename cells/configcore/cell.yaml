@@ -11,9 +11,4 @@ verify:
   smoke:
     - smoke.configcore.startup
 goStructName: ConfigCore
-listeners:
-  - ref: cell.PrimaryListener
-    prefix: /api/v1
-  - ref: cell.InternalListener
-    prefix: /internal/v1
 l0Dependencies: []

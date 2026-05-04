@@ -145,7 +145,7 @@ func (c *DeviceCell) buildEmitter() (*outbox.DirectEmitter, error) {
 // initInternal is the K#04 codegen escape hatch: business init that cannot
 // be generated (emitter resolve, slice service construction, lifecycle hooks).
 // cell_gen.go::Init calls it after BaseCell.Init and before mounting the
-// generated reg.RouteGroup() blocks. This is a permanent convention, not a
+// generated route-group blocks. This is a permanent convention, not a
 // transitional shim — slice/handler instantiation and adapter wiring stay
 // hand-written.
 //
@@ -164,7 +164,7 @@ func (c *DeviceCell) initInternal(ctx context.Context, reg cell.Registry) error 
 		return err
 	}
 
-	// registerRouteGroups removed: cell_gen.go owns Init and renders reg.RouteGroup calls.
+	// Route groups removed: cell_gen.go owns Init and renders them.
 	c.registerHealthAndLifecycle(reg)
 
 	return nil
