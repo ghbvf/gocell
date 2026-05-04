@@ -53,9 +53,10 @@ func TestHttpAuthRoleAssignV1Serve(t *testing.T) {
 	c.MustRejectRequest(t, []byte(`{"userId":"usr-2","roleId":"admin","extra":"bad"}`))
 
 	// Execute real handler.
+	// Spec: use TestServiceContext("accesscore") — caller-cell identity replaces role-based auth.
 	req := httptest.NewRequest(c.HTTP.Method, c.HTTP.Path, strings.NewReader(`{"userId":"usr-2","roleId":"admin"}`))
 	req.Header.Set("Content-Type", "application/json")
-	req = req.WithContext(auth.TestContext("usr-seed", []string{auth.RoleInternalAdmin}))
+	req = req.WithContext(auth.TestServiceContext("accesscore"))
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 
@@ -77,9 +78,10 @@ func TestHttpAuthRoleRevokeV1Serve(t *testing.T) {
 	c.MustRejectRequest(t, []byte(`{"userId":"usr-seed","roleId":"admin","extra":"bad"}`))
 
 	// Execute real handler.
+	// Spec: use TestServiceContext("accesscore") — caller-cell identity replaces role-based auth.
 	req := httptest.NewRequest(c.HTTP.Method, c.HTTP.Path, strings.NewReader(`{"userId":"usr-seed","roleId":"admin"}`))
 	req.Header.Set("Content-Type", "application/json")
-	req = req.WithContext(auth.TestContext("usr-seed", []string{auth.RoleInternalAdmin}))
+	req = req.WithContext(auth.TestServiceContext("accesscore"))
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 

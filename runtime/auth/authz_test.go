@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"net/http/httptest"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -190,13 +191,14 @@ func TestRequireSelfOrRole_EmptyTargetID_LogsWarning(t *testing.T) {
 
 // TestRequireAnyRole_ServicePrincipalAlsoWorks verifies that a service Principal
 // (Kind=PrincipalService) is accepted by RequireAnyRole when its role matches.
+// Note: uses string literal instead of deprecated constants (Wave 1 cleanup).
 func TestRequireAnyRole_ServicePrincipalAlsoWorks(t *testing.T) {
+	const roleInternal = "role:internal-admin"
 	ctx := WithPrincipal(context.Background(), &Principal{
-		Kind:    PrincipalService,
-		Subject: ServiceNameInternal,
-		Roles:   []string{RoleInternalAdmin},
+		Kind:  PrincipalService,
+		Roles: []string{roleInternal},
 	})
-	err := RequireAnyRole(ctx, RoleInternalAdmin)
+	err := RequireAnyRole(ctx, roleInternal)
 	assert.NoError(t, err)
 }
 
@@ -372,4 +374,120 @@ func withPrincipalCtx(subject string, roles []string) context.Context {
 		Subject: subject,
 		Roles:   append([]string(nil), roles...),
 	})
+}
+
+// withServicePrincipalCtx builds a context carrying a PrincipalService with
+// the given callerCellID, used by RequireCallerCell tests.
+func withServicePrincipalCtx(callerCellID string) context.Context {
+	return WithPrincipal(context.Background(), &Principal{
+		Kind:         PrincipalService,
+		CallerCellID: callerCellID,
+		AuthMethod:   "service_token",
+	})
+}
+
+// TestRequireCallerCell verifies the new RequireCallerCell policy constructor.
+//
+// Spec: RequireCallerCell(allowlist ...string) auth.Policy
+//   - PrincipalService + caller in allowlist → nil
+//   - PrincipalService + caller not in allowlist → ErrAuthForbidden
+//   - PrincipalUser → ErrAuthForbidden
+//   - PrincipalAnonymous → ErrAuthForbidden
+//   - no Principal → ErrAuthUnauthorized
+//   - caller empty string → ErrAuthForbidden
+//   - multiple caller allowlist → matches any in list
+//   - empty allowlist → any caller rejected
+func TestRequireCallerCell(t *testing.T) {
+	tests := []struct {
+		name      string
+		ctx       context.Context
+		allowlist []string
+		wantErr   bool
+		wantCode  errcode.Code
+	}{
+		{
+			name:      "(a) PrincipalService + caller in allowlist → nil",
+			ctx:       withServicePrincipalCtx("accesscore"),
+			allowlist: []string{"accesscore"},
+			wantErr:   false,
+		},
+		{
+			name:      "(b) PrincipalService + caller not in allowlist → ErrAuthForbidden",
+			ctx:       withServicePrincipalCtx("configcore"),
+			allowlist: []string{"accesscore"},
+			wantErr:   true,
+			wantCode:  errcode.ErrAuthForbidden,
+		},
+		{
+			name: "(c) PrincipalUser → ErrAuthForbidden",
+			ctx: WithPrincipal(context.Background(), &Principal{
+				Kind:    PrincipalUser,
+				Subject: "user-1",
+				Roles:   []string{"admin"},
+			}),
+			allowlist: []string{"accesscore"},
+			wantErr:   true,
+			wantCode:  errcode.ErrAuthForbidden,
+		},
+		{
+			name: "(d) PrincipalAnonymous → ErrAuthForbidden",
+			ctx: WithPrincipal(context.Background(), &Principal{
+				Kind: PrincipalAnonymous,
+			}),
+			allowlist: []string{"accesscore"},
+			wantErr:   true,
+			wantCode:  errcode.ErrAuthForbidden,
+		},
+		{
+			name:      "(e) no Principal → ErrAuthUnauthorized",
+			ctx:       context.Background(),
+			allowlist: []string{"accesscore"},
+			wantErr:   true,
+			wantCode:  errcode.ErrAuthUnauthorized,
+		},
+		{
+			name:      "(f) caller empty string → ErrAuthForbidden",
+			ctx:       withServicePrincipalCtx(""),
+			allowlist: []string{"accesscore"},
+			wantErr:   true,
+			wantCode:  errcode.ErrAuthForbidden,
+		},
+		{
+			name:      "(g) multiple caller allowlist — first matches",
+			ctx:       withServicePrincipalCtx("accesscore"),
+			allowlist: []string{"configcore", "accesscore", "auditcore"},
+			wantErr:   false,
+		},
+		{
+			name:      "(g) multiple caller allowlist — second matches",
+			ctx:       withServicePrincipalCtx("auditcore"),
+			allowlist: []string{"configcore", "accesscore", "auditcore"},
+			wantErr:   false,
+		},
+		{
+			name:      "(h) empty allowlist → any caller rejected",
+			ctx:       withServicePrincipalCtx("accesscore"),
+			allowlist: []string{},
+			wantErr:   true,
+			wantCode:  errcode.ErrAuthForbidden,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			// Spec: RequireCallerCell returns a Policy (func(*http.Request) error).
+			// Build a request carrying the test context to invoke the policy.
+			policy := RequireCallerCell(tc.allowlist...)
+			req := httptest.NewRequest("GET", "/internal/v1/test", nil).WithContext(tc.ctx)
+			err := policy(req)
+			if !tc.wantErr {
+				assert.NoError(t, err)
+				return
+			}
+			require.Error(t, err)
+			var ecErr *errcode.Error
+			require.True(t, errors.As(err, &ecErr))
+			assert.Equal(t, tc.wantCode, ecErr.Code)
+		})
+	}
 }

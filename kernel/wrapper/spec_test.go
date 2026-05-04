@@ -85,3 +85,67 @@ func TestContractSpec_EventSpec_Validate(t *testing.T) {
 		})
 	}
 }
+
+// TestContractSpec_Validate_InternalRequiresClients verifies that an http ContractSpec
+// with a /internal/v1/* path and nil Clients fails validation.
+//
+// Spec: all internal endpoints must declare Clients (the allowed callers);
+// a nil/empty Clients on an internal path is a misconfiguration.
+func TestContractSpec_Validate_InternalRequiresClients(t *testing.T) {
+	t.Parallel()
+	// Spec: Path=/internal/v1/foo + Clients=nil → error
+	spec := wrapper.ContractSpec{
+		ID:        "http.test.internal.v1",
+		Kind:      "http",
+		Transport: "http",
+		Method:    "POST",
+		Path:      "/internal/v1/foo",
+		Clients:   nil, // missing required caller allowlist for internal endpoints
+	}
+	err := spec.Validate()
+	if err == nil {
+		t.Fatal("expected error: /internal/v1/* path without Clients must be rejected")
+	}
+}
+
+// TestContractSpec_Validate_NonInternalRejectsClients verifies that a non-internal
+// path with Clients set fails validation.
+//
+// Spec: only /internal/v1/* endpoints should declare Clients; public API endpoints
+// must not carry a Clients allowlist (the allowlist has no meaning for public routes).
+func TestContractSpec_Validate_NonInternalRejectsClients(t *testing.T) {
+	t.Parallel()
+	// Spec: Path=/api/v1/foo + Clients=["x"] → error
+	spec := wrapper.ContractSpec{
+		ID:        "http.test.api.v1",
+		Kind:      "http",
+		Transport: "http",
+		Method:    "GET",
+		Path:      "/api/v1/foo",
+		Clients:   []string{"x"}, // Clients on non-internal path → rejected
+	}
+	err := spec.Validate()
+	if err == nil {
+		t.Fatal("expected error: Clients must not be set on non-internal paths")
+	}
+}
+
+// TestContractSpec_Validate_InternalWithClientsOK verifies that an internal
+// ContractSpec with Clients declared passes validation.
+//
+// Spec: Path=/internal/v1/foo + Clients=["accesscore"] → nil
+func TestContractSpec_Validate_InternalWithClientsOK(t *testing.T) {
+	t.Parallel()
+	spec := wrapper.ContractSpec{
+		ID:        "http.test.internal.v1",
+		Kind:      "http",
+		Transport: "http",
+		Method:    "POST",
+		Path:      "/internal/v1/foo",
+		Clients:   []string{"accesscore"}, // valid: internal path with declared caller
+	}
+	err := spec.Validate()
+	if err != nil {
+		t.Fatalf("expected no error for valid internal spec with Clients, got: %v", err)
+	}
+}

@@ -44,16 +44,15 @@ func TestHandler_Assign(t *testing.T) {
 	tests := []struct {
 		name       string
 		body       string
-		subject    string
-		roles      []string
+		ctx        func() context.Context // nil = no auth
 		wantStatus int
 		checkBody  func(t *testing.T, body []byte)
 	}{
 		{
-			name:       "internal-admin caller assigns role returns 201",
+			// Spec: accesscore caller (PrincipalService, CallerCellID=accesscore) → 201
+			name:       "accesscore caller assigns role returns 201",
 			body:       `{"userId":"usr-2","roleId":"admin"}`,
-			subject:    "usr-1",
-			roles:      []string{auth.RoleInternalAdmin},
+			ctx:        func() context.Context { return auth.TestServiceContext("accesscore") },
 			wantStatus: http.StatusCreated,
 			checkBody: func(t *testing.T, body []byte) {
 				var resp struct {
@@ -72,36 +71,46 @@ func TestHandler_Assign(t *testing.T) {
 		{
 			name:       "non-admin returns 403",
 			body:       `{"userId":"usr-2","roleId":"admin"}`,
-			subject:    "usr-2",
-			roles:      []string{"viewer"},
+			ctx:        func() context.Context { return auth.TestContext("usr-2", []string{"viewer"}) },
 			wantStatus: http.StatusForbidden,
 		},
 		{
 			name:       "no auth returns 401",
 			body:       `{"userId":"usr-2","roleId":"admin"}`,
-			subject:    "",
+			ctx:        nil, // no auth
 			wantStatus: http.StatusUnauthorized,
 		},
 		{
 			name:       "invalid body returns 400",
 			body:       `{bad json`,
-			subject:    "usr-1",
-			roles:      []string{auth.RoleInternalAdmin},
+			ctx:        func() context.Context { return auth.TestServiceContext("accesscore") },
 			wantStatus: http.StatusBadRequest,
 		},
 		{
 			name:       "empty userId returns 400",
 			body:       `{"userId":"","roleId":"admin"}`,
-			subject:    "usr-1",
-			roles:      []string{auth.RoleInternalAdmin},
+			ctx:        func() context.Context { return auth.TestServiceContext("accesscore") },
 			wantStatus: http.StatusBadRequest,
 		},
 		{
 			name:       "role not found returns 404",
 			body:       `{"userId":"usr-2","roleId":"nonexistent"}`,
-			subject:    "usr-1",
-			roles:      []string{auth.RoleInternalAdmin},
+			ctx:        func() context.Context { return auth.TestServiceContext("accesscore") },
 			wantStatus: http.StatusNotFound,
+		},
+		{
+			// Spec: caller='configcore' not in allowlist → 403
+			name:       "configcore caller not in allowlist returns 403",
+			body:       `{"userId":"usr-2","roleId":"admin"}`,
+			ctx:        func() context.Context { return auth.TestServiceContext("configcore") },
+			wantStatus: http.StatusForbidden,
+		},
+		{
+			// Spec: empty callerCellID → 403
+			name:       "empty caller returns 403",
+			body:       `{"userId":"usr-2","roleId":"admin"}`,
+			ctx:        func() context.Context { return auth.TestServiceContext("") },
+			wantStatus: http.StatusForbidden,
 		},
 	}
 
@@ -110,8 +119,8 @@ func TestHandler_Assign(t *testing.T) {
 			h, _ := setupHandler(t)
 			req := httptest.NewRequest(http.MethodPost, "/internal/v1/access/roles/assign", strings.NewReader(tc.body))
 			req.Header.Set("Content-Type", "application/json")
-			if tc.subject != "" {
-				req = req.WithContext(auth.TestContext(tc.subject, tc.roles))
+			if tc.ctx != nil {
+				req = req.WithContext(tc.ctx())
 			}
 			w := httptest.NewRecorder()
 			h.ServeHTTP(w, req)
@@ -128,20 +137,18 @@ func TestHandler_Revoke(t *testing.T) {
 		name       string
 		setup      func(*mem.RoleRepository) // extra setup before request
 		body       string
-		subject    string
-		roles      []string
+		ctx        func() context.Context // nil = no auth
 		wantStatus int
 		checkBody  func(t *testing.T, body []byte)
 	}{
 		{
-			name: "internal-admin caller revokes role returns 200 (multiple holders)",
+			name: "accesscore caller revokes role returns 200 (multiple holders)",
 			setup: func(r *mem.RoleRepository) {
 				// Ensure 2 admins so last-admin guard doesn't block.
 				_, _ = r.AssignToUser(context.Background(), "usr-2", "admin")
 			},
 			body:       `{"userId":"usr-1","roleId":"admin"}`,
-			subject:    "usr-1",
-			roles:      []string{auth.RoleInternalAdmin},
+			ctx:        func() context.Context { return auth.TestServiceContext("accesscore") },
 			wantStatus: http.StatusOK,
 			checkBody: func(t *testing.T, body []byte) {
 				var resp struct {
@@ -160,42 +167,37 @@ func TestHandler_Revoke(t *testing.T) {
 		{
 			name:       "revoke last admin returns 403",
 			body:       `{"userId":"usr-1","roleId":"admin"}`,
-			subject:    "usr-1",
-			roles:      []string{auth.RoleInternalAdmin},
+			ctx:        func() context.Context { return auth.TestServiceContext("accesscore") },
 			wantStatus: http.StatusForbidden,
 		},
 		{
 			name:       "invalid body returns 400",
 			body:       `{bad json`,
-			subject:    "usr-1",
-			roles:      []string{auth.RoleInternalAdmin},
+			ctx:        func() context.Context { return auth.TestServiceContext("accesscore") },
 			wantStatus: http.StatusBadRequest,
 		},
 		{
 			name:       "empty userId returns 400",
 			body:       `{"userId":"","roleId":"admin"}`,
-			subject:    "usr-1",
-			roles:      []string{auth.RoleInternalAdmin},
+			ctx:        func() context.Context { return auth.TestServiceContext("accesscore") },
 			wantStatus: http.StatusBadRequest,
 		},
 		{
 			name:       "empty roleId returns 400",
 			body:       `{"userId":"usr-1","roleId":""}`,
-			subject:    "usr-1",
-			roles:      []string{auth.RoleInternalAdmin},
+			ctx:        func() context.Context { return auth.TestServiceContext("accesscore") },
 			wantStatus: http.StatusBadRequest,
 		},
 		{
 			name:       "non-admin returns 403",
 			body:       `{"userId":"usr-1","roleId":"admin"}`,
-			subject:    "usr-2",
-			roles:      []string{"viewer"},
+			ctx:        func() context.Context { return auth.TestContext("usr-2", []string{"viewer"}) },
 			wantStatus: http.StatusForbidden,
 		},
 		{
 			name:       "no auth returns 401",
 			body:       `{"userId":"usr-1","roleId":"admin"}`,
-			subject:    "",
+			ctx:        nil, // no auth
 			wantStatus: http.StatusUnauthorized,
 		},
 	}
@@ -208,8 +210,8 @@ func TestHandler_Revoke(t *testing.T) {
 			}
 			req := httptest.NewRequest(http.MethodPost, "/internal/v1/access/roles/revoke", strings.NewReader(tc.body))
 			req.Header.Set("Content-Type", "application/json")
-			if tc.subject != "" {
-				req = req.WithContext(auth.TestContext(tc.subject, tc.roles))
+			if tc.ctx != nil {
+				req = req.WithContext(tc.ctx())
 			}
 			w := httptest.NewRecorder()
 			h.ServeHTTP(w, req)

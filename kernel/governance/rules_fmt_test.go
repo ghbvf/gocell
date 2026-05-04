@@ -101,6 +101,83 @@ func TestFMT13_NonHTTPContractSkipped(t *testing.T) {
 	}
 }
 
+// TestFMT18_ContractClientsLiteralMatchesYAML verifies that FMT-18 produces
+// a SeverityError when the Clients set declared in a wrapper.ContractSpec
+// literal (Go source) disagrees with the endpoints.clients list in the
+// authoritative contract.yaml. This is the RED anchor for Wave 2: the
+// contractSpecLiteral.clients field and the corresponding YAML cross-check
+// in validateContractSpecLiteral do not exist yet — this test will fail to
+// compile until Wave 2 adds the field and the check.
+func TestFMT18_ContractClientsLiteralMatchesYAML(t *testing.T) {
+	project := &metadata.ProjectMeta{
+		Cells:  map[string]*metadata.CellMeta{},
+		Slices: map[string]*metadata.SliceMeta{},
+		Contracts: map[string]*metadata.ContractMeta{
+			"http.auth.role.assign.v1": {
+				ID:               "http.auth.role.assign.v1",
+				Kind:             "http",
+				OwnerCell:        "accesscore",
+				ConsistencyLevel: "L1",
+				Lifecycle:        "active",
+				Endpoints: metadata.EndpointsMeta{
+					Server:  "accesscore",
+					Clients: []string{"configcore"}, // YAML declares configcore
+					HTTP: &metadata.HTTPTransportMeta{
+						Method:        "POST",
+						Path:          "/internal/v1/access/roles/assign",
+						SuccessStatus: 200,
+					},
+				},
+				Dir:  "contracts/http/auth/role/assign/v1",
+				File: "contracts/http/auth/role/assign/v1/contract.yaml",
+			},
+		},
+		Journeys:   map[string]*metadata.JourneyMeta{},
+		Assemblies: map[string]*metadata.AssemblyMeta{},
+	}
+	v := NewValidator(project, t.TempDir(), clock.Real())
+
+	// Go source declares "accesscore" as the only caller, but YAML says "configcore".
+	// FMT-18 must detect the mismatch and surface a SeverityError.
+	//
+	// Wave-2 RED: contractSpecLiteral.clients field does not exist yet — this
+	// literal will fail to compile until Wave 2 adds the field.
+	lit := contractSpecLiteral{
+		file:    "cells/accesscore/slices/rbacassign/routes.go",
+		line:    12,
+		id:      "http.auth.role.assign.v1",
+		kind:    "http",
+		method:  "POST",
+		path:    "/internal/v1/access/roles/assign",
+		clients: []string{"accesscore"}, // Go literal: accesscore — YAML says configcore
+	}
+
+	results := v.validateContractSpecLiteral(lit)
+
+	var fmt18Errors []ValidationResult
+	for _, r := range results {
+		if r.Code == codeFMT18 && r.Severity == SeverityError {
+			fmt18Errors = append(fmt18Errors, r)
+		}
+	}
+	if len(fmt18Errors) == 0 {
+		t.Fatal("FMT-18: expected SeverityError for clients mismatch between Go literal and YAML, got none")
+	}
+	found := false
+	for _, r := range fmt18Errors {
+		if strings.Contains(r.Message, "clients") || strings.Contains(r.Message, "Clients") {
+			found = true
+			if !strings.Contains(r.Message, "http.auth.role.assign.v1") {
+				t.Errorf("FMT-18 clients error must name the contract ID, got: %s", r.Message)
+			}
+			break
+		}
+	}
+	if !found {
+		t.Errorf("FMT-18: expected error message to mention 'clients', got: %v", fmt18Errors)
+	}
+}
+
 // TestFMT13_HTTPContractWithEndpoints verifies that an HTTP contract with
 // a valid endpoints.http block produces no FMT-13 error.
 func TestFMT13_HTTPContractWithEndpoints(t *testing.T) {

@@ -378,7 +378,8 @@ func TestAuthWiring_InternalGuard_RequiresServiceToken(t *testing.T) {
 	// handler returns 404 ERR_AUTH_ROLE_NOT_FOUND (role not seeded).
 	t.Run("internal_assign_service_token_policy_passes_to_handler", func(t *testing.T) {
 		body := strings.NewReader(`{"userId":"usr-2","roleId":"nonexistent"}`)
-		token := auth.GenerateServiceToken(ring,
+		// Spec: 4-part token — callerCell="accesscore" is the identity claim.
+		token := auth.GenerateServiceToken(ring, "accesscore",
 			http.MethodPost, "/internal/v1/access/roles/assign", "", time.Now())
 		require.NotEmpty(t, token)
 
@@ -403,7 +404,8 @@ func TestAuthWiring_InternalGuard_RequiresServiceToken(t *testing.T) {
 	// handler returns 200 (idempotent revoke of unassigned role).
 	t.Run("internal_revoke_service_token_policy_passes_to_handler", func(t *testing.T) {
 		body := strings.NewReader(`{"userId":"usr-2","roleId":"nonexistent"}`)
-		token := auth.GenerateServiceToken(ring,
+		// Spec: 4-part token — callerCell="accesscore".
+		token := auth.GenerateServiceToken(ring, "accesscore",
 			http.MethodPost, "/internal/v1/access/roles/revoke", "", time.Now())
 		require.NotEmpty(t, token)
 
@@ -429,7 +431,8 @@ func TestAuthWiring_InternalGuard_RequiresServiceToken(t *testing.T) {
 	// the S-nonce P1 closure across the full HTTP stack: token signing, HMAC
 	// verification, nonce CheckAndMark, JSON error envelope formatting.
 	t.Run("internal_replay_same_nonce_401", func(t *testing.T) {
-		token := auth.GenerateServiceToken(ring,
+		// Spec: 4-part token — callerCell="accesscore".
+		token := auth.GenerateServiceToken(ring, "accesscore",
 			http.MethodPost, "/internal/v1/access/roles/revoke", "", time.Now())
 		require.NotEmpty(t, token)
 

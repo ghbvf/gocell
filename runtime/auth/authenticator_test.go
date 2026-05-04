@@ -570,10 +570,6 @@ func TestServiceTokenAuthenticator_Success_PrincipalShape(t *testing.T) {
 	if p.Kind != PrincipalService {
 		t.Errorf("expected Kind=PrincipalService, got %v", p.Kind)
 	}
-	// Subject must be ServiceNameInternal.
-	if p.Subject != ServiceNameInternal {
-		t.Errorf("expected Subject=%q, got %q", ServiceNameInternal, p.Subject)
-	}
 	// AuthMethod must be "service_token".
 	if p.AuthMethod != "service_token" {
 		t.Errorf("expected AuthMethod=%q, got %q", "service_token", p.AuthMethod)
@@ -582,25 +578,10 @@ func TestServiceTokenAuthenticator_Success_PrincipalShape(t *testing.T) {
 	if p.PasswordResetRequired {
 		t.Error("expected PasswordResetRequired=false for service principal")
 	}
-	// Roles must match BuiltinServiceRoles(ServiceNameInternal).
-	expectedRoles := BuiltinServiceRoles(ServiceNameInternal)
-	if len(p.Roles) != len(expectedRoles) {
-		t.Fatalf("expected %d roles, got %d", len(expectedRoles), len(p.Roles))
-	}
-	for i, r := range expectedRoles {
-		if p.Roles[i] != r {
-			t.Errorf("role[%d]: expected %q, got %q", i, r, p.Roles[i])
-		}
-	}
-	// Roles must be a copy — mutating Principal.Roles must not affect BuiltinServiceRoles.
-	if len(p.Roles) > 0 {
-		original := p.Roles[0]
-		p.Roles[0] = "mutated"
-		fresh := BuiltinServiceRoles(ServiceNameInternal)
-		if fresh[0] != original {
-			t.Error("Principal.Roles must be a defensive copy")
-		}
-	}
+	// Wave 2 target: Subject="" and Roles=nil (caller identity via CallerCellID).
+	// The old assertions on Subject=ServiceNameInternal and Roles=BuiltinServiceRoles(...)
+	// are removed here; TestNewServiceTokenAuthenticator_PrincipalCallerCell (below)
+	// pins the Wave 2 CallerCellID shape and will be RED until Wave 2 ships.
 }
 
 // TestJWTAuthenticator_EmptySubject_Error verifies that a JWT token with an
@@ -799,6 +780,49 @@ func TestServiceTokenAuthenticator_FutureTimestampWithinSkew_Accepted(t *testing
 	}
 	if p == nil {
 		t.Fatal("expected principal for token within future skew")
+	}
+}
+
+// TestNewServiceTokenAuthenticator_PrincipalCallerCell verifies that after Wave 2
+// implements the 4-part token, the Principal carries CallerCellID='accesscore',
+// empty Subject, and nil Roles.
+//
+// Spec: 4-part token GenerateServiceToken(ring, callerCell, method, path, query, ts)
+// → after successful auth → Principal.CallerCellID == callerCell, Subject == "", Roles == nil.
+func TestNewServiceTokenAuthenticator_PrincipalCallerCell(t *testing.T) {
+	ring := mustTestRing(t, testHMACKey, "")
+	now := time.Now()
+	// Spec: 4-part signature: GenerateServiceToken(ring, callerCell, method, path, query, ts)
+	token := GenerateServiceToken(ring, "accesscore", http.MethodGet, "/internal/v1/resource", "", now)
+
+	a := mustNewServiceTokenAuthenticator(t, ring,
+		WithServiceTokenClock(clockmock.New(now)),
+		WithServiceTokenNonceStore(mustNewInMemoryNonceStore(t)))
+
+	req := httptest.NewRequest(http.MethodGet, "/internal/v1/resource", nil)
+	req.Header.Set("Authorization", "ServiceToken "+token)
+
+	p, ok, err := a.Authenticate(req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !ok {
+		t.Fatal("expected ok=true for valid 4-part token")
+	}
+	if p == nil {
+		t.Fatal("expected non-nil principal")
+	}
+	// Spec: CallerCellID must be propagated from the token.
+	if p.CallerCellID != "accesscore" {
+		t.Errorf("expected CallerCellID=%q, got %q", "accesscore", p.CallerCellID)
+	}
+	// Spec: Subject must be empty for service principal (identity via CallerCellID).
+	if p.Subject != "" {
+		t.Errorf("expected empty Subject, got %q", p.Subject)
+	}
+	// Spec: Roles must be nil for service principal.
+	if p.Roles != nil {
+		t.Errorf("expected nil Roles, got %v", p.Roles)
 	}
 }
 

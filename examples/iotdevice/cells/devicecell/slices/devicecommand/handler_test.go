@@ -357,7 +357,7 @@ func TestHandleScanActive_InvalidCursor(t *testing.T) {
 			h, _ := setupCommandHandler()
 			w := httptest.NewRecorder()
 			req := httptest.NewRequest(http.MethodGet, "/internal/v1/devicecommands?deviceId=dev-1&cursor="+tc.cursor, nil)
-			req = req.WithContext(auth.TestContext(auth.ServiceNameInternal, []string{auth.RoleInternalAdmin}))
+			req = req.WithContext(auth.TestServiceContext("devicecell"))
 			h.HandleScanActive(w, req)
 
 			assert.Equal(t, http.StatusBadRequest, w.Code)
