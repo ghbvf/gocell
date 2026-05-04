@@ -148,17 +148,18 @@ func TestPhase5CollectRouteGroups_AppendsDevtools(t *testing.T) {
 	// Find the devtools route group.
 	var found bool
 	for _, rg := range groups {
-		if rg.Listener == cell.PrimaryListener && rg.CellID == "" {
-			// Devtools group: Register != nil, Listener == PrimaryListener, CellID == ""
-			// (framework-injected, not from a cell snapshot).
+		if rg.Listener == cell.PrimaryListener && rg.CellID == "_devtools" {
+			// Devtools group: Register != nil, Listener == PrimaryListener,
+			// CellID == "_devtools" sentinel (framework-injected; SEC-01 fix
+			// gives metrics audit attribution to the devtools surface).
 			if rg.Register != nil {
 				found = true
 			}
 		}
 	}
 	// At least one non-health PrimaryListener group with Register != nil must exist.
-	// The devtools RouteGroup targets PrimaryListener.
-	require.True(t, found, "devtools RouteGroup targeting PrimaryListener must be present in collected groups")
+	// The devtools RouteGroup targets PrimaryListener with the "_devtools" sentinel cell ID.
+	require.True(t, found, "devtools RouteGroup targeting PrimaryListener with CellID=_devtools must be present")
 }
 
 // TestPhase5CollectRouteGroups_NoDevtools verifies that when devtoolsHandler

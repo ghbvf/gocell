@@ -176,11 +176,11 @@ func TestScaffoldCell_TableDriven(t *testing.T) {
 // ConsistencyLevel values are rendered into cell.yaml (DX-02).
 func TestScaffoldCell_TypeAndLevelRendered(t *testing.T) {
 	tests := []struct {
-		name              string
-		cellType          string
-		level             string
-		wantType          string
-		wantLevel         string
+		name      string
+		cellType  string
+		level     string
+		wantType  string
+		wantLevel string
 	}{
 		{
 			name:      "explicit edge L0",
