@@ -16,6 +16,8 @@ func TestScaffoldCell_GeneratesFiles(t *testing.T) {
 		StructName: "FooCell",
 		Package:    "foocell",
 		ModulePath: "github.com/example/myproject",
+		OwnerTeam:  "platform",
+		OwnerRole:  "cell-owner",
 	}
 
 	err := ScaffoldCell(dir, "cells/foocell", spec)
@@ -43,6 +45,8 @@ func TestScaffoldCell_CellGoContainsListenerMarker(t *testing.T) {
 		StructName: "BarCell",
 		Package:    "barcell",
 		ModulePath: "github.com/example/myproject",
+		OwnerTeam:  "platform",
+		OwnerRole:  "cell-owner",
 	}
 
 	if err := ScaffoldCell(dir, "cells/barcell", spec); err != nil {
@@ -68,6 +72,8 @@ func TestScaffoldCell_CellYAMLContainsGoStructName(t *testing.T) {
 		StructName: "BazCore",
 		Package:    "bazcore",
 		ModulePath: "github.com/example/myproject",
+		OwnerTeam:  "platform",
+		OwnerRole:  "cell-owner",
 	}
 
 	if err := ScaffoldCell(dir, "cells/bazcore", spec); err != nil {
@@ -87,6 +93,36 @@ func TestScaffoldCell_CellYAMLContainsGoStructName(t *testing.T) {
 	}
 }
 
+// TestScaffoldCell_CellYAMLContainsOwnerRole verifies the scaffolded cell.yaml
+// includes the owner.role field from OwnerRole (K05-11: no TODO placeholder).
+func TestScaffoldCell_CellYAMLContainsOwnerRole(t *testing.T) {
+	dir := t.TempDir()
+	spec := ScaffoldSpec{
+		CellID:     "rolecell",
+		StructName: "RoleCell",
+		Package:    "rolecell",
+		ModulePath: "github.com/example/myproject",
+		OwnerTeam:  "platform",
+		OwnerRole:  "cell-owner",
+	}
+
+	if err := ScaffoldCell(dir, "cells/rolecell", spec); err != nil {
+		t.Fatalf("ScaffoldCell() error = %v", err)
+	}
+
+	content, err := os.ReadFile(filepath.Join(dir, "cells", "rolecell", "cell.yaml")) //nolint:gosec // test reads files it just wrote
+	if err != nil {
+		t.Fatalf("read cell.yaml: %v", err)
+	}
+
+	if !strings.Contains(string(content), "role: cell-owner") {
+		t.Errorf("cell.yaml should contain 'role: cell-owner', got:\n%s", content)
+	}
+	if strings.Contains(string(content), "role: TODO") {
+		t.Error("cell.yaml must not contain 'role: TODO' placeholder")
+	}
+}
+
 // TestScaffoldCell_TableDriven exercises multiple CellID/StructName combinations
 // to verify template rendering correctness.
 func TestScaffoldCell_TableDriven(t *testing.T) {
@@ -103,6 +139,8 @@ func TestScaffoldCell_TableDriven(t *testing.T) {
 				StructName: "MyCore",
 				Package:    "mycore",
 				ModulePath: "github.com/example/app",
+				OwnerTeam:  "platform",
+				OwnerRole:  "cell-owner",
 			},
 			wantInCellGo: []string{
 				"package mycore",
@@ -117,6 +155,7 @@ func TestScaffoldCell_TableDriven(t *testing.T) {
 				"id: mycore",
 				"goStructName: MyCore",
 				"smoke.mycore.startup",
+				"role: cell-owner",
 			},
 		},
 		{
@@ -126,6 +165,8 @@ func TestScaffoldCell_TableDriven(t *testing.T) {
 				StructName: "IoTDevice",
 				Package:    "iotdevice",
 				ModulePath: "github.com/acme/iot",
+				OwnerTeam:  "iot-team",
+				OwnerRole:  "cell-owner",
 			},
 			wantInCellGo: []string{
 				"package iotdevice",
@@ -136,6 +177,7 @@ func TestScaffoldCell_TableDriven(t *testing.T) {
 			wantInCellYAML: []string{
 				"id: iotdevice",
 				"goStructName: IoTDevice",
+				"team: iot-team",
 			},
 		},
 	}
@@ -213,6 +255,8 @@ func TestScaffoldCell_TypeAndLevelRendered(t *testing.T) {
 				StructName:       "TypeCell",
 				Package:          "typecell",
 				ModulePath:       "github.com/example/app",
+				OwnerTeam:        "platform",
+				OwnerRole:        "cell-owner",
 				Type:             tc.cellType,
 				ConsistencyLevel: tc.level,
 			}
@@ -233,6 +277,79 @@ func TestScaffoldCell_TypeAndLevelRendered(t *testing.T) {
 	}
 }
 
+// TestScaffoldCell_TypeWhitelistRejected verifies that invalid --type values
+// are rejected with a "must be one of" error (K05-05).
+func TestScaffoldCell_TypeWhitelistRejected(t *testing.T) {
+	tests := []struct {
+		name     string
+		cellType string
+	}{
+		{"unknown type processor", "processor"},
+		{"unknown type gateway", "gateway"},
+		{"unknown type fabric", "fabric"},
+		{"empty-like invalid type CORE", "CORE"},
+		{"injection attempt", "core\ninjected: true"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			spec := ScaffoldSpec{
+				CellID:     "typecell",
+				StructName: "TypeCell",
+				Package:    "typecell",
+				ModulePath: "github.com/example/app",
+				OwnerTeam:  "platform",
+				OwnerRole:  "cell-owner",
+				Type:       tc.cellType,
+			}
+			err := ScaffoldCell(dir, "cells/typecell", spec)
+			if err == nil {
+				t.Fatalf("expected error for type %q, got nil", tc.cellType)
+			}
+			if !strings.Contains(err.Error(), "must be one of") {
+				t.Errorf("expected 'must be one of' in error, got: %v", err)
+			}
+		})
+	}
+}
+
+// TestScaffoldCell_LevelWhitelistRejected verifies that invalid --level values
+// are rejected with a "must be one of" error (K05-05).
+func TestScaffoldCell_LevelWhitelistRejected(t *testing.T) {
+	tests := []struct {
+		name  string
+		level string
+	}{
+		{"unknown level L5", "L5"},
+		{"unknown level L-1", "L-1"},
+		{"lowercase l0", "l0"},
+		{"plain number 1", "1"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			spec := ScaffoldSpec{
+				CellID:           "levelcell",
+				StructName:       "LevelCell",
+				Package:          "levelcell",
+				ModulePath:       "github.com/example/app",
+				OwnerTeam:        "platform",
+				OwnerRole:        "cell-owner",
+				ConsistencyLevel: tc.level,
+			}
+			err := ScaffoldCell(dir, "cells/levelcell", spec)
+			if err == nil {
+				t.Fatalf("expected error for level %q, got nil", tc.level)
+			}
+			if !strings.Contains(err.Error(), "must be one of") {
+				t.Errorf("expected 'must be one of' in error, got: %v", err)
+			}
+		})
+	}
+}
+
 // TestScaffoldCell_ConflictError verifies that ScaffoldCell returns an error
 // when output files already exist (skip-on-conflict).
 func TestScaffoldCell_ConflictError(t *testing.T) {
@@ -242,6 +359,8 @@ func TestScaffoldCell_ConflictError(t *testing.T) {
 		StructName: "Existing",
 		Package:    "existing",
 		ModulePath: "github.com/example/app",
+		OwnerTeam:  "platform",
+		OwnerRole:  "cell-owner",
 	}
 
 	// First call succeeds.
@@ -259,8 +378,8 @@ func TestScaffoldCell_ConflictError(t *testing.T) {
 	}
 }
 
-// TestScaffoldCell_DryRun verifies that ScaffoldCell with DryRun=true performs
-// conflict detection but does not write any files.
+// TestScaffoldCell_DryRun verifies that ScaffoldCell with DryRun=true renders
+// templates (catching template/input errors) but does not write any files.
 func TestScaffoldCell_DryRun(t *testing.T) {
 	t.Run("no files written when no conflict", func(t *testing.T) {
 		dir := t.TempDir()
@@ -269,6 +388,8 @@ func TestScaffoldCell_DryRun(t *testing.T) {
 			StructName: "DryCell",
 			Package:    "drycell",
 			ModulePath: "github.com/example/app",
+			OwnerTeam:  "platform",
+			OwnerRole:  "cell-owner",
 			DryRun:     true,
 		}
 		if err := ScaffoldCell(dir, "cells/drycell", spec); err != nil {
@@ -287,6 +408,8 @@ func TestScaffoldCell_DryRun(t *testing.T) {
 			StructName: "ConflictCell",
 			Package:    "conflictcell",
 			ModulePath: "github.com/example/app",
+			OwnerTeam:  "platform",
+			OwnerRole:  "cell-owner",
 		}
 		// First live call creates files.
 		if err := ScaffoldCell(dir, "cells/conflictcell", spec); err != nil {
@@ -300,6 +423,30 @@ func TestScaffoldCell_DryRun(t *testing.T) {
 		}
 		if !strings.Contains(err.Error(), "already exists") {
 			t.Errorf("expected 'already exists' in error, got: %v", err)
+		}
+	})
+
+	t.Run("dry-run renders templates and validates cell.go syntax", func(t *testing.T) {
+		dir := t.TempDir()
+		spec := ScaffoldSpec{
+			CellID:     "rendercell",
+			StructName: "RenderCell",
+			Package:    "rendercell",
+			ModulePath: "github.com/example/app",
+			OwnerTeam:  "platform",
+			OwnerRole:  "cell-owner",
+			DryRun:     true,
+		}
+		// Dry-run must succeed (templates are valid).
+		if err := ScaffoldCell(dir, "cells/rendercell", spec); err != nil {
+			t.Fatalf("DryRun render validation failed: %v", err)
+		}
+		// No files must be written.
+		if _, err := os.Stat(filepath.Join(dir, "cells", "rendercell", "cell.go")); err == nil {
+			t.Error("DryRun=true must not write cell.go")
+		}
+		if _, err := os.Stat(filepath.Join(dir, "cells", "rendercell", "cell.yaml")); err == nil {
+			t.Error("DryRun=true must not write cell.yaml")
 		}
 	})
 }
@@ -325,6 +472,7 @@ func TestScaffoldCell_RejectsSymlinkBreakout(t *testing.T) {
 		Package:    "evil",
 		ModulePath: "example.com/test",
 		OwnerTeam:  "test",
+		OwnerRole:  "cell-owner",
 	})
 
 	if err == nil {
@@ -358,6 +506,8 @@ func TestScaffoldCell_ValidationErrors(t *testing.T) {
 				StructName: "Foo",
 				Package:    "foo",
 				ModulePath: "github.com/example/app",
+				OwnerTeam:  "platform",
+				OwnerRole:  "cell-owner",
 			},
 			wantErr: "CellID is required",
 		},
@@ -367,6 +517,8 @@ func TestScaffoldCell_ValidationErrors(t *testing.T) {
 				CellID:     "foo",
 				Package:    "foo",
 				ModulePath: "github.com/example/app",
+				OwnerTeam:  "platform",
+				OwnerRole:  "cell-owner",
 			},
 			wantErr: "StructName is required",
 		},
@@ -376,6 +528,8 @@ func TestScaffoldCell_ValidationErrors(t *testing.T) {
 				CellID:     "foo",
 				StructName: "Foo",
 				ModulePath: "github.com/example/app",
+				OwnerTeam:  "platform",
+				OwnerRole:  "cell-owner",
 			},
 			wantErr: "Package is required",
 		},
@@ -385,8 +539,32 @@ func TestScaffoldCell_ValidationErrors(t *testing.T) {
 				CellID:     "foo",
 				StructName: "Foo",
 				Package:    "foo",
+				OwnerTeam:  "platform",
+				OwnerRole:  "cell-owner",
 			},
 			wantErr: "ModulePath is required",
+		},
+		{
+			name: "missing OwnerTeam",
+			spec: ScaffoldSpec{
+				CellID:     "foo",
+				StructName: "Foo",
+				Package:    "foo",
+				ModulePath: "github.com/example/app",
+				OwnerRole:  "cell-owner",
+			},
+			wantErr: "OwnerTeam is required",
+		},
+		{
+			name: "missing OwnerRole",
+			spec: ScaffoldSpec{
+				CellID:     "foo",
+				StructName: "Foo",
+				Package:    "foo",
+				ModulePath: "github.com/example/app",
+				OwnerTeam:  "platform",
+			},
+			wantErr: "OwnerRole is required",
 		},
 		{
 			name: "OwnerTeam with newline (YAML injection)",
@@ -396,6 +574,7 @@ func TestScaffoldCell_ValidationErrors(t *testing.T) {
 				Package:    "foo",
 				ModulePath: "github.com/example/app",
 				OwnerTeam:  "platform\ninjected: true",
+				OwnerRole:  "cell-owner",
 			},
 			wantErr: "OwnerTeam",
 		},
@@ -407,6 +586,7 @@ func TestScaffoldCell_ValidationErrors(t *testing.T) {
 				Package:    "foo",
 				ModulePath: "github.com/example/app",
 				OwnerTeam:  "platform: injected",
+				OwnerRole:  "cell-owner",
 			},
 			wantErr: "OwnerTeam",
 		},
@@ -418,6 +598,7 @@ func TestScaffoldCell_ValidationErrors(t *testing.T) {
 				Package:    "foo",
 				ModulePath: "github.com/example/app",
 				OwnerTeam:  "{injected: true}",
+				OwnerRole:  "cell-owner",
 			},
 			wantErr: "OwnerTeam",
 		},
@@ -429,8 +610,45 @@ func TestScaffoldCell_ValidationErrors(t *testing.T) {
 				Package:    "foo",
 				ModulePath: "github.com/example/app",
 				OwnerTeam:  "../etc/passwd",
+				OwnerRole:  "cell-owner",
 			},
 			wantErr: "OwnerTeam",
+		},
+		{
+			name: "OwnerRole with YAML injection",
+			spec: ScaffoldSpec{
+				CellID:     "foo",
+				StructName: "Foo",
+				Package:    "foo",
+				ModulePath: "github.com/example/app",
+				OwnerTeam:  "platform",
+				OwnerRole:  "cell-owner\ninjected: true",
+			},
+			wantErr: "OwnerRole",
+		},
+		{
+			name: "invalid ModulePath with backslash",
+			spec: ScaffoldSpec{
+				CellID:     "foo",
+				StructName: "Foo",
+				Package:    "foo",
+				ModulePath: `github.com\example\app`,
+				OwnerTeam:  "platform",
+				OwnerRole:  "cell-owner",
+			},
+			wantErr: "ModulePath",
+		},
+		{
+			name: "invalid ModulePath with dotdot",
+			spec: ScaffoldSpec{
+				CellID:     "foo",
+				StructName: "Foo",
+				Package:    "foo",
+				ModulePath: "github.com/../evil",
+				OwnerTeam:  "platform",
+				OwnerRole:  "cell-owner",
+			},
+			wantErr: "ModulePath",
 		},
 	}
 

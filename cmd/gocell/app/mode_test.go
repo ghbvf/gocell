@@ -536,7 +536,7 @@ func TestRunScaffoldCell_DryRun_NoFileWritten(t *testing.T) {
 
 	out := captureStdout(t, func() {
 		err := runScaffoldWithRoot(dir,
-			[]string{"cell", "--id=dry-cell", "--team=squad", "--dry-run"})
+			[]string{"cell", "--id=dry-cell", "--team=squad", "--role=cell-owner", "--dry-run"})
 		require.NoError(t, err)
 	})
 
@@ -757,7 +757,7 @@ func TestRunScaffoldCell_DryRun_DetectsConflict(t *testing.T) {
 		[]byte("id: conflict-cell\n"), 0o644))
 
 	err := runScaffoldWithRoot(dir, []string{"cell",
-		"--id=conflict-cell", "--team=squad", "--dry-run"})
+		"--id=conflict-cell", "--team=squad", "--role=cell-owner", "--dry-run"})
 	require.Error(t, err, "dry-run must still surface conflicts")
 }
 

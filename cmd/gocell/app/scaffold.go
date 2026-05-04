@@ -22,13 +22,14 @@ const (
 
 // runScaffold implements:
 //
-//	gocell scaffold cell --id=<id> [--type=core] [--level=L2] [--team=<team>] [--dry-run]
+//	gocell scaffold cell --id=<id> --team=<team> --role=<role> [--type=core] [--level=L2] [--dry-run]
 //	gocell scaffold slice --id=<id> --cell=<cellID> [--dry-run]
 //	gocell scaffold contract --id=<id> --kind=<kind> --owner=<cellID> [--dry-run]
 //	gocell scaffold journey --id=<id> --goal=<goal> [--team=<team>] [--cells=<a,b>] [--dry-run]
 //
-// --dry-run validates opts and detects path conflicts without writing files;
-// CI pre-commit hooks can use it to fail fast on bad inputs.
+// --dry-run renders templates (validating their output) and detects path
+// conflicts without writing files; CI pre-commit hooks can use it to fail fast
+// on bad inputs.
 func runScaffold(args []string) error {
 	// Check args shape before resolving project root — lets callers
 	// (and tests) hit the usage error path without a valid cwd/go.mod.
@@ -95,9 +96,10 @@ func reportScaffold(r scaffoldReport) {
 func scaffoldCell(root string, args []string) error {
 	fs := flag.NewFlagSet("scaffold cell", flag.ContinueOnError)
 	id := fs.String("id", "", "cell ID (required)")
-	cellType := fs.String("type", "core", "cell type")
-	level := fs.String("level", "L2", "consistency level")
+	cellType := fs.String("type", "core", "cell type: one of [core edge support]")
+	level := fs.String("level", "L2", "consistency level: one of [L0 L1 L2 L3 L4]")
 	team := fs.String("team", "", "owner team (required)")
+	role := fs.String("role", "", "owner role, e.g. cell-owner (required)")
 	structName := fs.String("struct", "", "Go struct name (default: PascalCase of --id)")
 	dryRun := fs.Bool(dryRunFlag, false, dryRunUsage)
 	if err := fs.Parse(args); err != nil {
@@ -109,6 +111,9 @@ func scaffoldCell(root string, args []string) error {
 	}
 	if *team == "" {
 		return fmt.Errorf("--team is required")
+	}
+	if *role == "" {
+		return fmt.Errorf("--role is required")
 	}
 
 	// Resolve Go identifiers shared by both dry-run and live paths.
@@ -124,14 +129,17 @@ func scaffoldCell(root string, args []string) error {
 	}
 
 	// Both dry-run and live paths delegate to cellgen.ScaffoldCell; DryRun=true
-	// performs conflict detection only without writing any files. This unifies
-	// path-computation logic so dry-run and live runs always agree on output paths.
+	// renders templates (validating output with go/format.Source for cell.go)
+	// and performs conflict detection without writing any files. This unifies
+	// path-computation logic so dry-run and live runs always agree on output paths
+	// and both catch template/input errors.
 	if err := cellgen.ScaffoldCell(root, filepath.Join("cells", *id), cellgen.ScaffoldSpec{
 		CellID:           *id,
 		StructName:       resolvedStruct,
 		Package:          pkg,
 		ModulePath:       mod,
 		OwnerTeam:        *team,
+		OwnerRole:        *role,
 		Type:             *cellType,
 		ConsistencyLevel: *level,
 		DryRun:           *dryRun,
