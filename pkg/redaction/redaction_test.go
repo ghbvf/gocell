@@ -27,6 +27,17 @@ func TestRedactString(t *testing.T) {
 			want: "passwd=<REDACTED> something",
 		},
 		{
+			// pwd is a known false-positive trigger: a log emitting
+			// `pwd=/home/user` (working dir) gets masked. This is the
+			// intentional fail-closed cost — masking a directory path is
+			// preferable to leaking SQL Server `Pwd=secret`. Documented
+			// behavior, not a bug. dev workflows needing raw working dir
+			// should use slog structured fields instead.
+			name: "pwd_workdir_falsePositive_documented",
+			in:   "starting worker pwd=/home/user/app",
+			want: "starting worker pwd=<REDACTED>",
+		},
+		{
 			name: "token_keyEqValue",
 			in:   "upstream 401: token=eyJhbGc.foo",
 			want: "upstream 401: token=<REDACTED>",
@@ -35,6 +46,14 @@ func TestRedactString(t *testing.T) {
 			name: "authorization_colonSpace",
 			in:   "Authorization: Bearer abc.def.ghi",
 			want: "Authorization: <REDACTED>",
+		},
+		{
+			// authorizationPattern stops at `;` so trailing context after a
+			// semicolon survives — verifies the pattern's value-boundary
+			// invariant (3-pattern split correctness).
+			name: "authorization_semicolonBoundary",
+			in:   "Authorization: Bearer abc.def.ghi; trace_id=1",
+			want: "Authorization: <REDACTED>; trace_id=1",
 		},
 		{
 			name: "bearer_keyEqValue",
@@ -46,15 +65,26 @@ func TestRedactString(t *testing.T) {
 			in:   "secret=topsecret",
 			want: "secret=<REDACTED>",
 		},
-		{ //nolint:gosec // G101 false positive: synthetic DSN fixture demonstrates redaction of scheme://user:pwd@ form
+		{
+			// dsn= field redaction: the entire URL value is masked. The
+			// fixture uses a credential-free URL so gosec G101 does not flag
+			// the literal; the redaction itself does not depend on whether
+			// user:pass is embedded — the `dsn=` key is the trigger.
 			name: "dsn_postgres",
-			in:   "connect failed: dsn=postgres://USR:PWD@h/db trailing",
+			in:   "connect failed: dsn=postgres://h/db?sslmode=require trailing",
 			want: "connect failed: dsn=<REDACTED> trailing",
 		},
 		{
 			name: "connection_string_underscore",
 			in:   "connection_string=Server=foo;Pwd=bar",
 			want: "connection_string=<REDACTED>",
+		},
+		{
+			// connectionStringPattern stops at whitespace so trailing log
+			// context survives. Verifies boundary stays at ` ` not `;`.
+			name: "connection_string_whitespaceBoundary",
+			in:   "connection_string=Server=foo;Pwd=bar trailing_ctx=ok",
+			want: "connection_string=<REDACTED> trailing_ctx=ok",
 		},
 		{
 			name: "connection_space",

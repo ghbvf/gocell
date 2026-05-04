@@ -37,9 +37,13 @@
 | **SEC-TLS-REAL-MODE-01** | ✅ 已完成（PR #297/#301） | `adapters/redis/client.go:175` + `adapters/vault/transit_provider.go:756` + `adapters/s3/s3.go:55` | real mode 强制 TLS/HTTPS；非加密 endpoint startup fail-fast；写新 errcode `ERR_ADAPTER_INSECURE_TRANSPORT` |
 | **SEC-WEBSOCKET-DEFAULT-01** | ✅ 已完成（PR #297/#301） | `adapters/websocket/handler.go:37,57` | origins 默认拒绝 + 显式 dev opt-in；注册失败分支主动 `conn.Close()` |
 | **SEC-CONTROLPLANE-ADDRBOUND-01** | ✅ 已完成（PR #297） | `cmd/corebundle/controlplane.go:58` + `cmd/corebundle/bundle.go:117` | 安全强约束改地址驱动（非回环 → 必须 auth chain），不再绑 adapter mode；mode dev + 0.0.0.0 监听亦必须 fail-fast |
-| **SEC-WRAPPER-REDACTOR-DEFAULT-01** | ⬜ 待处理 | `kernel/wrapper/consumer.go:43` + `kernel/wrapper/lifecycle.go:34` | wrapper redactor 默认改最小脱敏（不再 identity）；关闭脱敏改受控 option `WithRedactorDisabled(devOnly)` |
+| **SEC-WRAPPER-REDACTOR-DEFAULT-01** | ✅ 已完成（PR #366 refactor/512） | `kernel/wrapper/consumer.go` + `kernel/wrapper/lifecycle.go` + `pkg/redaction/` | 默认改 fail-closed `pkg/redaction.RedactError` 硬编；删整条 opt-out wiring（`ErrorRedactor` type / `WithConsumerErrorRedactor` / `bootstrap.WithErrorRedactor` / `middleware.WithErrorRedactor` / `Bootstrap.errorRedactor` / `ContractTracingMiddleware` 第二参）— 比原方案更激进（比 `WithRedactorDisabled(devOnly)` 走得更远），对齐 Vault `log_raw=false` + Go stdlib `URL.Redacted()` 哲学 |
 
-**对标**：Vault server `tls_disable` 显式拒绝 production；Envoy `route.config.virtual_hosts[].typed_per_filter_config` 默认拒绝；K8s `--insecure-port=0` 默认行为
+**对标**：Vault server `tls_disable` 显式拒绝 production；Envoy `route.config.virtual_hosts[].typed_per_filter_config` 默认拒绝；K8s `--insecure-port=0` 默认行为；Vault `audit log_raw=false` 默认硬编 + Go stdlib `URL.Redacted()` 无 opt-out（PR #366 实施版）
+
+### Follow-up（PR #366 reviewer registered）
+
+- **SPAN-RECORD-ERROR-REDACT-ARCHTEST-01** (Cx3, OUT_OF_SCOPE) — 静态守 `kernel/wrapper` + `runtime/http/middleware` 内 `span.RecordError(...)` 调用必须经 `redaction.RedactError(...)` 包装。当前 wiring 已删除、调用点固定为 3 处（consumer.go / lifecycle.go / tracing.go），未来新增 `RecordError` 调用绕过 redaction 不会被 CI 拦截。触发条件：第 4 处 `span.RecordError` 调用引入时同步加 archtest；或任何 reviewer 发现 redaction bypass 时立刻补。 | `tools/archtest/span_record_error_test.go`（新增）+ AST scan
 
 ---
 

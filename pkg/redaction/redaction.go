@@ -46,13 +46,22 @@ var connectionStringPattern = regexp.MustCompile(
 //
 // dsn 保留：PG 连接错误 message 常含完整 DSN（含明文密码 postgres://u:pwd@host），
 // 是真实泄漏面。dsn 的 value 在 PG 风格里是单 URL（无 `;`），保持单词边界足够。
+//
+// pwd false-positive 已知：日志里出现 `pwd=/home/user` 形式（如打印工作目录）
+// 会被 mask。这是 fail-closed 的代价 — 取舍偏向「宁可掩盖目录也不泄漏 SQL
+// Server `Pwd=secret`」。dev 调试需要原始 working directory 时走 slog 结构化字段
+// (e.g. `slog.String("workdir", v)`)，不靠 trace span。
 var defaultPattern = regexp.MustCompile(
 	`(?i)(password|passwd|pwd|secret|token|api[_-]?key|bearer|private[_-]?key|signing[_-]?key|dsn)\s*[:=]\s*[^\s;,]+`,
 )
 
-// allPatterns runs in order; earlier patterns get first crack at overlapping
-// keywords (e.g. `authorization` consumes its full HTTP value before
-// `defaultPattern` runs).
+// allPatterns runs in order. ORDER IS A CORRECTNESS CONSTRAINT, not a
+// performance optimization: `authorizationPattern` must consume the full
+// `Authorization: Bearer <token>` line before `defaultPattern` runs,
+// otherwise `defaultPattern` would match `bearer=` and stop after the
+// `Bearer` literal — leaving the real token bare. Likewise
+// `connectionStringPattern` consumes the entire ODBC `Server=...;Pwd=...`
+// block before `defaultPattern` walks the residue.
 var allPatterns = []*regexp.Regexp{
 	authorizationPattern,
 	connectionStringPattern,
@@ -71,6 +80,12 @@ func RedactString(s string) string {
 
 // maskAfterSeparator returns the prefix up to and including the `=` or `:`
 // separator (and any trailing whitespace) followed by Mask.
+//
+// Byte-level traversal is safe: every key in the patterns above is ASCII,
+// and the separators (`=` 0x3D, `:` 0x3A, ` ` 0x20, `\t` 0x09) are all
+// single-byte ASCII characters that cannot appear as UTF-8 continuation
+// bytes (0x80–0xBF). If the keyword set is ever extended to include
+// non-ASCII letters, switch to a rune-aware scan.
 func maskAfterSeparator(match string) string {
 	for i := 0; i < len(match); i++ {
 		r := match[i]
