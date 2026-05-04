@@ -1,13 +1,14 @@
-// Package router provides a chi-based HTTP router that implements
-// kernel/cell.RouteMux with default observability middleware. Each Router
-// instance wraps a single chi.Mux root for ONE physical listener. Bootstrap
-// builds one Router per declared listener (primary / internal / health) and
-// applies the listener's default Policy before any routes are registered.
+// Package router provides an HTTP router that implements kernel/cell.RouteMux
+// with default observability middleware. Each Router instance wraps a single
+// stdlib *http.ServeMux for ONE physical listener. Bootstrap builds one Router
+// per declared listener (primary / internal / health) and applies the
+// listener's default Policy before any routes are registered.
 //
-// ref: go-chi/chi/v5 — Mux pattern (Group, Mount, Route, Use)
-// Adopted: chi.NewRouter as the underlying multiplexer, one per listener.
-// Deviated: wrapped behind kernel/cell.RouteMux interface so Cells remain
-// decoupled from any specific router library.
+// ref: net/http.ServeMux (Go 1.22+) — method+pattern routing, automatic 405,
+// automatic HEAD-from-GET, r.PathValue for path params.
+// Adopted: stdlib ServeMux as the underlying multiplexer, one per listener.
+// Wrapped behind kernel/cell.RouteMux interface so Cells remain decoupled from
+// the multiplexer choice.
 //
 // ref: go-kratos/kratos transport/http/server.go — per-server middleware
 // Adopted: policy applied at server build time; observability baked in.
@@ -21,8 +22,6 @@ import (
 	"reflect"
 	"strings"
 
-	"github.com/go-chi/chi/v5"
-
 	kcell "github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/wrapper"
@@ -34,6 +33,48 @@ import (
 	"github.com/ghbvf/gocell/runtime/observability/metrics"
 	"github.com/ghbvf/gocell/runtime/observability/tracing"
 )
+
+// Middleware is the standard net/http middleware shape used throughout the
+// router and its adapters.
+type Middleware = func(http.Handler) http.Handler
+
+// chain composes mws around h so the first mw runs outermost. An empty mws
+// returns h unchanged.
+func chain(h http.Handler, mws ...Middleware) http.Handler {
+	for i := len(mws) - 1; i >= 0; i-- {
+		h = mws[i](h)
+	}
+	return h
+}
+
+// patternRecordingMux is the innermost dispatch wrapper. It calls
+// (*http.ServeMux).Handler explicitly to recover the matched pattern, writes
+// it into the request-scoped recorder installed by patternRecorderMiddleware,
+// then dispatches. Stdlib's ServeMux only stores the pattern on the
+// *http.Request after dispatch; using Handler(req) lifts the pattern up to
+// every middleware in the chain via the shared *patternRecorder.
+type patternRecordingMux struct {
+	mux *http.ServeMux
+}
+
+func (p *patternRecordingMux) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	h, pattern := p.mux.Handler(r)
+	if pattern != "" {
+		middleware.RecordRoutePattern(r.Context(), pattern)
+	}
+	h.ServeHTTP(w, r)
+}
+
+// patternRecorderMiddleware installs an empty *patternRecorder into ctx so
+// the dispatch wrapper has somewhere to write the matched pattern. Must be
+// the outermost middleware so all observability layers can read the result
+// after next.ServeHTTP returns.
+func patternRecorderMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ctx := middleware.WithRoutePatternRecorder(r.Context())
+		next.ServeHTTP(w, r.WithContext(ctx))
+	})
+}
 
 // Compile-time checks.
 var _ kcell.RouteMux = (*Router)(nil)
@@ -271,7 +312,7 @@ func WithDefaultMiddleware(mws ...func(http.Handler) http.Handler) Option {
 	}
 }
 
-// Router wraps a single chi.Mux root for ONE physical listener.
+// Router wraps a single *http.ServeMux root for ONE physical listener.
 // The observability middleware chain is baked in at construction time, and
 // the listener's default Policy is applied as an inner layer before any
 // cell routes are registered.
@@ -281,10 +322,20 @@ func WithDefaultMiddleware(mws ...func(http.Handler) http.Handler) Option {
 // by this per-listener model.
 //
 // ref: go-kratos/kratos transport/http/server.go — per-server middleware
-// ref: go-chi/chi mux.go — one chi.Mux root per listener
+// ref: net/http.ServeMux — one ServeMux root per listener; method+pattern
+//      routing (Go 1.22+).
 type Router struct {
 	ref kcell.ListenerRef // which listener this router serves
-	mux *chi.Mux          // single chi.Mux root; observability + auth already applied
+	mux *http.ServeMux    // single ServeMux root; observability + auth wrap it
+
+	// middlewares is the listener-root chain wrapping mux. Order matches
+	// declaration order: the first entry is outermost. buildMux populates it
+	// via r.use(...) so archtest can statically assert ordering.
+	middlewares []Middleware
+	// handler is the lazily-built composition of middlewares around the
+	// pattern-recording dispatch wrapper. Reset only when the chain changes
+	// (currently only during NewForListener).
+	handler http.Handler
 
 	// configuration fields (read during build)
 	metricsCollector    metrics.Collector
@@ -369,7 +420,7 @@ type routeMatchRank struct {
 	length         int
 }
 
-// earlyResponderMiddleware turns an earlyResponder into a chi middleware that
+// earlyResponderMiddleware turns an earlyResponder into a middleware that
 // short-circuits when the predicate matches.
 func earlyResponderMiddleware(er earlyResponder) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
@@ -423,12 +474,12 @@ func MustNew(opts ...Option) *Router {
 //	→ [RateLimit] → [CircuitBreaker] → [Auth] → BodyLimit → handlers
 //
 // ref: go-kratos/kratos app.go WithServer + errgroup (adopted)
-// ref: go-chi/chi mux.go (one chi.Mux per listener)
+// ref: net/http.ServeMux (one ServeMux per listener)
 // ref: kubernetes/kubernetes apiserver/server/genericapiserver.go (rejected single-listener)
 func NewForListener(ref kcell.ListenerRef, opts ...Option) (*Router, error) {
 	r := &Router{
 		ref:       ref,
-		mux:       chi.NewRouter(),
+		mux:       http.NewServeMux(),
 		bodyLimit: middleware.DefaultBodyLimit,
 	}
 	for _, o := range opts {
@@ -461,12 +512,31 @@ func NewForListener(ref kcell.ListenerRef, opts ...Option) (*Router, error) {
 // Handler returns the http.Handler for this listener's router. This is the
 // handler to pass to http.Server. Unlike the legacy PublicHandler()/
 // InternalHandler(), each listener now has exactly one Handler().
-func (r *Router) Handler() http.Handler { return r.mux }
+//
+// The composition (outer → inner) is:
+//
+//	patternRecorderMiddleware → r.middlewares (in declaration order) →
+//	  patternRecordingMux → *http.ServeMux → leaf handler
+//
+// patternRecorderMiddleware installs the *patternRecorder so observability
+// layers can read the matched route pattern after next.ServeHTTP returns.
+// patternRecordingMux fills the recorder by asking ServeMux.Handler for the
+// matched pattern before dispatching the leaf handler.
+func (r *Router) Handler() http.Handler {
+	if r.handler == nil {
+		dispatcher := &patternRecordingMux{mux: r.mux}
+		all := make([]Middleware, 0, len(r.middlewares)+1)
+		all = append(all, patternRecorderMiddleware)
+		all = append(all, r.middlewares...)
+		r.handler = chain(http.Handler(dispatcher), all...)
+	}
+	return r.handler
+}
 
-// ServeHTTP delegates to the router's mux, making Router drop-in compatible
-// with http.Handler. If auth route metadata was declared but FinalizeAuth was
-// not called, ServeHTTP fails closed with 500 instead of serving routes with
-// incomplete auth state.
+// ServeHTTP delegates to the router's composed handler, making Router drop-in
+// compatible with http.Handler. If auth route metadata was declared but
+// FinalizeAuth was not called, ServeHTTP fails closed with 500 instead of
+// serving routes with incomplete auth state.
 func (r *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	if len(r.declaredAuthMetas) > 0 && !r.authFinalized {
 		slog.ErrorContext(req.Context(), "router: FinalizeAuth must be called before ServeHTTP",
@@ -475,7 +545,14 @@ func (r *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 			string(errcode.ErrInternal), "internal server error")
 		return
 	}
-	r.mux.ServeHTTP(w, req)
+	r.Handler().ServeHTTP(w, req)
+}
+
+// use appends middlewares to the router-root chain. Each call appends in
+// declaration order; the first registered middleware ends up outermost (after
+// patternRecorderMiddleware, which is always installed first by Handler).
+func (r *Router) use(mws ...Middleware) {
+	r.middlewares = append(r.middlewares, mws...)
 }
 
 // buildRealIPMiddleware constructs the RealIP middleware, validating trusted
@@ -520,7 +597,7 @@ func (r *Router) buildMux(realIPMW func(http.Handler) http.Handler) error {
 	r.requestIDOpts = append([]middleware.RequestIDOption{middleware.WithReqIDPublicEndpointFn(lazyPublic)}, r.requestIDOpts...)
 
 	// --- Observability layer ---
-	r.mux.Use(
+	r.use(
 		middleware.ListenerContext(r.ref.String()),
 		middleware.RequestIDWithOptions(r.requestIDOpts...),
 		realIPMW,
@@ -528,17 +605,17 @@ func (r *Router) buildMux(realIPMW func(http.Handler) http.Handler) error {
 		middleware.CellAttribution(r.resolveCellID),
 	)
 	if r.tracer != nil {
-		r.mux.Use(middleware.Tracing(r.tracer, r.tracingOpts...))
+		r.use(middleware.Tracing(r.tracer, r.tracingOpts...))
 	}
-	r.mux.Use(middleware.AccessLog(r.clock))
+	r.use(middleware.AccessLog(r.clock))
 	if r.metricsCollector != nil {
-		r.mux.Use(middleware.Metrics(
+		r.use(middleware.Metrics(
 			r.metricsCollector,
 			r.clock,
 			middleware.WithRoutePatternResolver(r.resolveHTTPRoutePattern),
 		))
 	}
-	r.mux.Use(
+	r.use(
 		middleware.Recovery,
 		middleware.SecurityHeadersWithOptions(r.securityHeadersOpts...),
 	)
@@ -551,7 +628,7 @@ func (r *Router) buildMux(realIPMW func(http.Handler) http.Handler) error {
 	// registering routes under that prefix. The predicate is the only
 	// surface that can match — no per-route policy is consulted.
 	for _, er := range r.earlyResponders {
-		r.mux.Use(earlyResponderMiddleware(er))
+		r.use(earlyResponderMiddleware(er))
 	}
 
 	// --- Default middleware layer (listener-level auth guards from AuthPlan chain) ---
@@ -560,24 +637,24 @@ func (r *Router) buildMux(realIPMW func(http.Handler) http.Handler) error {
 	// applyListenerAuthChain. Applied AFTER early-responders so framework
 	// isolation contracts fire before the auth gate.
 	if len(r.defaultMiddleware) > 0 {
-		r.mux.Use(r.defaultMiddleware...)
+		r.use(r.defaultMiddleware...)
 	}
 
 	// --- Protection chain (per-router options) ---
 	if r.rateLimiter != nil {
-		r.mux.Use(middleware.RateLimit(r.rateLimiter))
+		r.use(middleware.RateLimit(r.rateLimiter))
 	}
 	if r.circuitBreaker != nil {
 		cb, err := middleware.CircuitBreaker(r.circuitBreaker)
 		if err != nil {
 			return fmt.Errorf("router: circuit breaker middleware: %w", err)
 		}
-		r.mux.Use(cb)
+		r.use(cb)
 	}
 	if r.authVerifier != nil {
-		r.mux.Use(auth.AuthMiddleware(r.authVerifier, r.buildAuthOpts()...))
+		r.use(auth.AuthMiddleware(r.authVerifier, r.buildAuthOpts()...))
 	}
-	r.mux.Use(middleware.BodyLimit(r.bodyLimit))
+	r.use(middleware.BodyLimit(r.bodyLimit))
 	return nil
 }
 
@@ -608,44 +685,75 @@ func (r *Router) buildAuthOpts() []auth.AuthOption {
 }
 
 // Handle registers a handler for the given pattern, implementing cell.RouteMux.
+// pattern follows the stdlib ServeMux 1.22 form ("METHOD /path/{param}" or
+// "/path"). The handler is registered directly on the underlying ServeMux
+// without any extra middleware wrap; root-level middleware (observability,
+// auth, body-limit, etc.) is composed by Router.Handler.
 func (r *Router) Handle(pattern string, handler http.Handler) {
 	r.mux.Handle(pattern, handler)
 }
 
-// Group creates a sub-scope, implementing cell.RouteMux.
+// Group creates a sub-scope, implementing cell.RouteMux. The returned adapter
+// shares the same underlying ServeMux as the parent. Group is a structural
+// helper for clustering related route registrations; it does not introduce
+// its own middleware scope (use With for that).
 func (r *Router) Group(fn func(kcell.RouteMux)) {
-	r.mux.Group(func(cr chi.Router) {
-		sub := &chiRouterAdapter{cr: cr, declarer: r}
-		fn(sub)
-	})
+	sub := r.newAdapter("", nil)
+	fn(sub)
 }
 
-// Route mounts a sub-router under the given pattern. The adapter carries
-// both the chi sub-router and a reference to the Router-rooted declarer so
-// that auth.Mount called on a nested sub-mux composes the mount prefix
-// with the declared path and forwards AuthRouteMeta to the top-level Router.
+// Route mounts a sub-router under the given prefix. The adapter carries both
+// the prefix and a reference to the Router-rooted declarer so that auth.Mount
+// called on a nested sub-mux composes the mount prefix with the declared path
+// and forwards AuthRouteMeta to the top-level Router.
 func (r *Router) Route(pattern string, fn func(kcell.RouteMux)) {
-	r.mux.Route(pattern, func(cr chi.Router) {
-		sub := &chiRouterAdapter{cr: cr, prefix: pattern, declarer: r}
-		fn(sub)
-	})
+	sub := r.newAdapter(pattern, nil)
+	fn(sub)
 }
 
-// Mount attaches an http.Handler under the given prefix.
+// Mount attaches an http.Handler under the given prefix. Stdlib ServeMux
+// requires sub-tree patterns to end in "/"; the trailing slash is added
+// implicitly. The handler sees the request path with the prefix stripped.
 func (r *Router) Mount(prefix string, handler http.Handler) {
-	r.mux.Mount(prefix, handler)
+	canonical := strings.TrimSuffix(prefix, "/")
+	if canonical == "" {
+		// Mount at root: ServeMux dispatches everything to the handler.
+		r.mux.Handle("/", handler)
+		return
+	}
+	r.mux.Handle(canonical+"/", http.StripPrefix(canonical, handler))
 }
 
 // With returns a new RouteMux that applies the given middleware to routes
-// registered through it, without modifying the receiver.
+// registered through it, without modifying the receiver. Each subsequent
+// Handle on the returned adapter wraps the handler with the captured chain
+// before registering on the shared ServeMux.
 func (r *Router) With(mw ...func(http.Handler) http.Handler) kcell.RouteMux {
-	return &chiRouterAdapter{cr: r.mux.With(mw...), declarer: r}
+	return r.newAdapter("", mw)
+}
+
+// newAdapter builds a fresh nativeMuxAdapter rooted at this Router. prefix
+// composes with auth.Mount paths declared inside the adapter; mws is the
+// per-adapter middleware chain that wraps each Handle/Mount registration.
+func (r *Router) newAdapter(prefix string, mws []Middleware) *nativeMuxAdapter {
+	var mwsCopy []Middleware
+	if len(mws) > 0 {
+		mwsCopy = append([]Middleware(nil), mws...)
+	}
+	return &nativeMuxAdapter{
+		mux:         r.mux,
+		prefix:      prefix,
+		middlewares: mwsCopy,
+		declarer:    r,
+		owner:       r,
+	}
 }
 
 // MountRouteGroup mounts a cell RouteGroup and records its HTTP namespace
 // ownership for root-level observability. Cell ownership is resolved before
 // protection middleware, so auth/rate-limit/circuit-breaker/body-limit rejects
-// and chi 405s receive the same cell label as successful handler executions.
+// and ServeMux 405 responses all receive the same cell label as successful
+// handler executions.
 func (r *Router) MountRouteGroup(rg kcell.RouteGroup) error {
 	if rg.Register == nil {
 		return fmt.Errorf("router: RouteGroup for listener %q has nil Register function", rg.Listener.String())
@@ -656,42 +764,18 @@ func (r *Router) MountRouteGroup(rg kcell.RouteGroup) error {
 		}
 	}
 
-	var registerErr error
 	var adapterErr error
-	if rg.Prefix != "" {
-		r.mux.Route(rg.Prefix, func(cr chi.Router) {
-			if len(rg.Middleware) > 0 {
-				cr = cr.With(rg.Middleware...)
-			}
-			sub := &chiRouterAdapter{
-				cr:       cr,
-				prefix:   rg.Prefix,
-				declarer: r,
-				owner:    r,
-				cellID:   rg.CellID,
-				err:      &adapterErr,
-			}
-			registerErr = rg.Register(sub)
-		})
-		if registerErr != nil {
-			return registerErr
-		}
-		return adapterErr
+	sub := &nativeMuxAdapter{
+		mux:         r.mux,
+		prefix:      rg.Prefix,
+		middlewares: append([]Middleware(nil), rg.Middleware...),
+		declarer:    r,
+		owner:       r,
+		cellID:      rg.CellID,
+		err:         &adapterErr,
 	}
-
-	cr := chi.Router(r.mux)
-	if len(rg.Middleware) > 0 {
-		cr = r.mux.With(rg.Middleware...)
-	}
-	registerErr = rg.Register(&chiRouterAdapter{
-		cr:       cr,
-		declarer: r,
-		owner:    r,
-		cellID:   rg.CellID,
-		err:      &adapterErr,
-	})
-	if registerErr != nil {
-		return registerErr
+	if err := rg.Register(sub); err != nil {
+		return err
 	}
 	return adapterErr
 }
@@ -826,15 +910,19 @@ func (r *Router) verifyInternalRouteAffinity() error {
 	return nil
 }
 
-// enumerateRoutes walks the single mux and returns all registered (method, path) pairs.
+// enumerateRoutes returns all registered (method, path) pairs collected via
+// recordRoutePattern during route registration. This replaces the prior
+// chi.Walk traversal: stdlib ServeMux exposes no public route-iteration API,
+// so the router is the sole source of truth for registered patterns.
 func (r *Router) enumerateRoutes() []routeKey {
-	var routes []routeKey
-	collect := func(method, route string, _ http.Handler, _ ...func(http.Handler) http.Handler) error {
-		routes = append(routes, routeKey{Method: method, Path: route})
+	if len(r.routePatterns) == 0 {
 		return nil
 	}
-	_ = chi.Walk(r.mux, collect)
-	return routes
+	out := make([]routeKey, 0, len(r.routePatterns))
+	for _, p := range r.routePatterns {
+		out = append(out, routeKey{Method: p.method, Path: p.path})
+	}
+	return out
 }
 
 // authMetaPartition holds the categorized results of partitionAuthMetas.
@@ -987,9 +1075,9 @@ func not404Handler(w http.ResponseWriter, r *http.Request) {
 // contract — primary listener never reveals that /internal/v1/* routes
 // exist — does not depend on a JWT public-matcher exemption.
 //
-// PR-258 RES-5 narrowing: replaces the prior chi.Handle("/internal/v1/*",
-// 404) + WithPublicPathPrefix("/internal/v1/") + frameworkPrimaryWhitelist
-// triple-mechanism. The new model has a single surface: the predicate.
+// PR-258 RES-5 narrowing: replaces the prior listener-mux Handle 404 +
+// WithPublicPathPrefix("/internal/v1/") + frameworkPrimaryWhitelist triple-
+// mechanism. The new model has a single surface: the predicate.
 func InternalPrefixIsolationResponder() Option {
 	bare := strings.TrimSuffix(internalPathPrefix, "/")
 	predicate := func(r *http.Request) bool {
@@ -1231,45 +1319,52 @@ func orMergeMethodPath(a, b func(method, urlPath string) bool) func(string, stri
 	}
 }
 
-// chiRouterAdapter wraps chi.Router to implement cell.RouteMux. prefix is the
-// mount prefix the adapter inherited from its parent Route; declarer points to
-// the Router-rooted AuthRouteDeclarer so nested auth.Mount calls propagate
-// metadata with the fully-composed path.
-type chiRouterAdapter struct {
-	cr       chi.Router
-	prefix   string
-	declarer kcell.AuthRouteDeclarer
-	owner    *Router
-	cellID   string
-	err      *error
+// nativeMuxAdapter implements cell.RouteMux on top of stdlib *http.ServeMux.
+//
+// All adapters under the same Router share a single ServeMux pointer; prefix
+// composition and middleware chains are tracked per adapter and applied at
+// Handle time. declarer points to the Router-rooted AuthRouteDeclarer so
+// nested auth.Mount calls propagate metadata with the fully-composed path.
+type nativeMuxAdapter struct {
+	mux         *http.ServeMux
+	prefix      string
+	middlewares []Middleware
+	declarer    kcell.AuthRouteDeclarer
+	owner       *Router
+	cellID      string
+	err         *error
 }
 
-// Compile-time checks: chiRouterAdapter forwards AuthRouteMeta + declares
-// its mount prefix so auth.Mount can derive chi-relative registration paths
+// Compile-time checks: nativeMuxAdapter forwards AuthRouteMeta + declares its
+// mount prefix so auth.Mount can derive ServeMux-relative registration paths
 // from fully-qualified Contract.Path literals.
-var _ kcell.AuthRouteDeclarer = (*chiRouterAdapter)(nil)
-var _ kcell.Prefixer = (*chiRouterAdapter)(nil)
-var _ kcell.HTTPContractDeclarer = (*chiRouterAdapter)(nil)
+var _ kcell.AuthRouteDeclarer = (*nativeMuxAdapter)(nil)
+var _ kcell.Prefixer = (*nativeMuxAdapter)(nil)
+var _ kcell.HTTPContractDeclarer = (*nativeMuxAdapter)(nil)
 
-// Prefix returns the sub-route mount prefix this adapter inherited from
-// its parent Route. An empty prefix means the adapter sits directly under
-// the Router (Group / top-level) and contributes no path composition.
-func (a *chiRouterAdapter) Prefix() string { return a.prefix }
+// Prefix returns the sub-route mount prefix this adapter inherited from its
+// parent Route. An empty prefix means the adapter sits directly under the
+// Router (Group / top-level) and contributes no path composition.
+func (a *nativeMuxAdapter) Prefix() string { return a.prefix }
 
-func (a *chiRouterAdapter) Handle(pattern string, handler http.Handler) {
+func (a *nativeMuxAdapter) Handle(pattern string, handler http.Handler) {
 	if a.hasRegistrationErr() {
 		return
 	}
-	if method, routePath := splitHandlePattern(pattern); routePath != "" {
+	method, routePath := splitHandlePattern(pattern)
+	if routePath != "" {
 		if err := a.recordOwnedRoute(method, routePath); err != nil {
 			a.setRegistrationErr(err)
 			return
 		}
 	}
-	a.cr.Handle(pattern, handler)
+	if len(a.middlewares) > 0 {
+		handler = chain(handler, a.middlewares...)
+	}
+	a.mux.Handle(combineHandlePattern(a.prefix, pattern), handler)
 }
 
-func (a *chiRouterAdapter) Route(pattern string, fn func(kcell.RouteMux)) {
+func (a *nativeMuxAdapter) Route(pattern string, fn func(kcell.RouteMux)) {
 	if a.hasRegistrationErr() {
 		return
 	}
@@ -1278,47 +1373,72 @@ func (a *chiRouterAdapter) Route(pattern string, fn func(kcell.RouteMux)) {
 		a.setRegistrationErr(err)
 		return
 	}
-	a.cr.Route(pattern, func(cr chi.Router) {
-		sub := &chiRouterAdapter{
-			cr:       cr,
-			prefix:   fullPrefix,
-			declarer: a.declarer,
-			owner:    a.owner,
-			cellID:   a.cellID,
-			err:      a.err,
-		}
-		fn(sub)
-	})
+	sub := &nativeMuxAdapter{
+		mux:         a.mux,
+		prefix:      fullPrefix,
+		middlewares: append([]Middleware(nil), a.middlewares...),
+		declarer:    a.declarer,
+		owner:       a.owner,
+		cellID:      a.cellID,
+		err:         a.err,
+	}
+	fn(sub)
 }
 
-func (a *chiRouterAdapter) Mount(pattern string, handler http.Handler) {
+func (a *nativeMuxAdapter) Mount(pattern string, handler http.Handler) {
 	if a.hasRegistrationErr() {
 		return
 	}
-	if err := a.recordOwnedPrefix(joinPrefix(a.prefix, pattern)); err != nil {
+	fullPrefix := joinPrefix(a.prefix, pattern)
+	if err := a.recordOwnedPrefix(fullPrefix); err != nil {
 		a.setRegistrationErr(err)
 		return
 	}
-	a.cr.Mount(pattern, handler)
+	canonical := strings.TrimSuffix(fullPrefix, "/")
+	if len(a.middlewares) > 0 {
+		handler = chain(handler, a.middlewares...)
+	}
+	if canonical == "" {
+		a.mux.Handle("/", handler)
+		return
+	}
+	a.mux.Handle(canonical+"/", http.StripPrefix(canonical, handler))
 }
 
-func (a *chiRouterAdapter) Group(fn func(kcell.RouteMux)) {
+func (a *nativeMuxAdapter) Group(fn func(kcell.RouteMux)) {
 	if a.hasRegistrationErr() {
 		return
 	}
-	a.cr.Group(func(cr chi.Router) {
-		sub := &chiRouterAdapter{cr: cr, prefix: a.prefix, declarer: a.declarer, owner: a.owner, cellID: a.cellID, err: a.err}
-		fn(sub)
-	})
+	sub := &nativeMuxAdapter{
+		mux:         a.mux,
+		prefix:      a.prefix,
+		middlewares: append([]Middleware(nil), a.middlewares...),
+		declarer:    a.declarer,
+		owner:       a.owner,
+		cellID:      a.cellID,
+		err:         a.err,
+	}
+	fn(sub)
 }
 
-func (a *chiRouterAdapter) With(mw ...func(http.Handler) http.Handler) kcell.RouteMux {
-	return &chiRouterAdapter{cr: a.cr.With(mw...), prefix: a.prefix, declarer: a.declarer, owner: a.owner, cellID: a.cellID, err: a.err}
+func (a *nativeMuxAdapter) With(mw ...func(http.Handler) http.Handler) kcell.RouteMux {
+	merged := make([]Middleware, 0, len(a.middlewares)+len(mw))
+	merged = append(merged, a.middlewares...)
+	merged = append(merged, mw...)
+	return &nativeMuxAdapter{
+		mux:         a.mux,
+		prefix:      a.prefix,
+		middlewares: merged,
+		declarer:    a.declarer,
+		owner:       a.owner,
+		cellID:      a.cellID,
+		err:         a.err,
+	}
 }
 
 // DeclareAuthMeta composes the adapter's mount prefix with the declared path
 // before handing the metadata off to the Router.
-func (a *chiRouterAdapter) DeclareAuthMeta(m kcell.AuthRouteMeta) error {
+func (a *nativeMuxAdapter) DeclareAuthMeta(m kcell.AuthRouteMeta) error {
 	if a.declarer == nil {
 		return nil
 	}
@@ -1330,8 +1450,8 @@ func (a *chiRouterAdapter) DeclareAuthMeta(m kcell.AuthRouteMeta) error {
 
 // DeclareHTTPContract forwards the route's full ContractSpec to the
 // Router-rooted declarer. ContractSpec.Path is already the canonical full
-// path, so unlike AuthRouteMeta it is not composed with the chi prefix.
-func (a *chiRouterAdapter) DeclareHTTPContract(spec wrapper.ContractSpec) error {
+// path, so unlike AuthRouteMeta it is not composed with the adapter prefix.
+func (a *nativeMuxAdapter) DeclareHTTPContract(spec wrapper.ContractSpec) error {
 	if a.owner != nil {
 		a.owner.recordRoutePattern(spec.Method, spec.Path)
 		if a.cellID != "" {
@@ -1350,14 +1470,14 @@ func (a *chiRouterAdapter) DeclareHTTPContract(spec wrapper.ContractSpec) error 
 	return nil
 }
 
-func (a *chiRouterAdapter) recordOwnedPrefix(prefix string) error {
+func (a *nativeMuxAdapter) recordOwnedPrefix(prefix string) error {
 	if a.owner == nil || a.cellID == "" {
 		return nil
 	}
 	return a.owner.recordOwnedPrefix(a.cellID, prefix)
 }
 
-func (a *chiRouterAdapter) recordOwnedRoute(method, routePath string) error {
+func (a *nativeMuxAdapter) recordOwnedRoute(method, routePath string) error {
 	if a.owner == nil {
 		return nil
 	}
@@ -1372,15 +1492,31 @@ func (a *chiRouterAdapter) recordOwnedRoute(method, routePath string) error {
 	return nil
 }
 
-func (a *chiRouterAdapter) setRegistrationErr(err error) {
+func (a *nativeMuxAdapter) setRegistrationErr(err error) {
 	if err == nil || a.err == nil || *a.err != nil {
 		return
 	}
 	*a.err = err
 }
 
-func (a *chiRouterAdapter) hasRegistrationErr() bool {
+func (a *nativeMuxAdapter) hasRegistrationErr() bool {
 	return a.err != nil && *a.err != nil
+}
+
+// combineHandlePattern composes the adapter's prefix into a stdlib ServeMux
+// pattern. Input pattern follows the "[METHOD ]/path" form; the prefix is
+// applied to the path component only, and the optional method is preserved
+// verbatim. Empty prefix returns the original pattern.
+func combineHandlePattern(prefix, pattern string) string {
+	if prefix == "" {
+		return pattern
+	}
+	method, routePath := splitHandlePattern(pattern)
+	full := joinPrefix(prefix, routePath)
+	if method == "" {
+		return full
+	}
+	return method + " " + full
 }
 
 // joinPrefix composes a parent mount prefix with a child pattern/path,
