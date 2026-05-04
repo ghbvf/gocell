@@ -1,8 +1,8 @@
 # GoCell Three-Listener Topology (PR-A14b / PR262)
 
 GoCell runs three independent HTTP listeners. Each listener has a dedicated
-`chi.Mux` root and a typed `[]cell.ListenerAuth` chain — no route leaks between
-ports, no string-based auth dispatch.
+stdlib `*http.ServeMux` root and a typed `[]cell.ListenerAuth` chain — no
+route leaks between ports, no string-based auth dispatch.
 
 ## Topology Diagram
 

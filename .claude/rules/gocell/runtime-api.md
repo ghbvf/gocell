@@ -12,9 +12,9 @@ paths:
 
 每个 Cell 在 `Init(ctx, reg)` 中通过 `reg.RouteGroup(...)` 声明路由组。
 每个路由组指定目标 listener、URL 前缀、以及注册回调（`Register func(mux cell.RouteMux) error` — PR-MODE-6: error-first 链路，phase5 把 Register 的错误连同 cell+listener+prefix 上下文 wrap 后冒泡到 `Bootstrap.Run`）。
-Bootstrap 在 phase5 drain 所有 `RegistrySnapshot.RouteGroups` 并挂载到对应 listener 的 chi.Mux 上。
+Bootstrap 在 phase5 drain 所有 `RegistrySnapshot.RouteGroups` 并挂载到对应 listener 的 stdlib `*http.ServeMux` 上。
 
-每条业务路由通过 `auth.Mount(mux, auth.Route{...})` 注册（**不是** `auth.Declare`/`auth.RouteDecl` —— 这两个旧符号已删除）。`auth.Route.Contract` 是 `wrapper.ContractSpec`，承载 method+path+contract id；Mount 自动 strip listener prefix、注册 chi handler、转发 AuthRouteMeta 给 FinalizeAuth。Mount 返回 `error`（PR-MODE-6 ERROR-FIRST-API）；`auth.MustMount` 是 composition-root fail-fast 包装，但 **slice handler 内部应直接用 `auth.Mount` + 错误传播**，让错误一路冒泡到 phase5。
+每条业务路由通过 `auth.Mount(mux, auth.Route{...})` 注册（**不是** `auth.Declare`/`auth.RouteDecl` —— 这两个旧符号已删除）。`auth.Route.Contract` 是 `wrapper.ContractSpec`，承载 method+path+contract id；Mount 自动 strip listener prefix、注册 ServeMux handler（`METHOD /path` 形式）、转发 AuthRouteMeta 给 FinalizeAuth。Mount 返回 `error`（PR-MODE-6 ERROR-FIRST-API）；`auth.MustMount` 是 composition-root fail-fast 包装，但 **slice handler 内部应直接用 `auth.Mount` + 错误传播**，让错误一路冒泡到 phase5。
 
 ```go
 // Slice handler — RegisterRoutes 返回 error，使用 auth.Mount + 错误传播
@@ -182,7 +182,7 @@ bootstrap.WithListener(WebhookListener, ":8090",
 
 ### 三 listener 分流（PR-A14b）
 
-Bootstrap 为每个声明的 listener 构建独立的 `*router.Router`（内含独立 chi.Mux）：
+Bootstrap 为每个声明的 listener 构建独立的 `*router.Router`（内含独立 `*http.ServeMux`）：
 
 - **primary**：挂 `/api/v1/*` 业务路由；JWT AuthMiddleware（来自 `[]cell.ListenerAuth` 中的 AuthJWT/AuthJWTFromAssembly）。primary listener 显式 404 所有 `/internal/v1/*` 请求，实现端口级物理隔离。
 - **internal**：仅挂 `/internal/v1/*` 路由；AuthServiceToken / AuthMTLS 策略，无 JWT 中间件。

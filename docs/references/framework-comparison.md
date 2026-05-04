@@ -60,7 +60,7 @@ goal:      slice.yaml 归属/职责/约束声明参考 Container spec；gocell v
 ```
 primary:   go-kratos/kratos    → middleware/（链式组合、transport 抽象）
 secondary: zeromicro/go-zero   → rest/handler/（内置中间件集）
-goal:      chi-based，但参考 Kratos 的 middleware.Handler 签名设计
+goal:      stdlib net/http.ServeMux + 自实现 chain helper，参考 Kratos 的 middleware.Handler 签名设计
 ```
 
 ### runtime/config/ — 配置加载 + 热更新
@@ -156,7 +156,7 @@ ref PR: PR-A20（AL-02 DISTLOCK-RUNTIME-ABSTRACT-01，refactor/531）；
 | adapters/postgres | `jackc/pgx/v5` | `jackc/pgx` | 连接池、事务隔离、pgxpool 生命周期 |
 | adapters/redis | `redis/go-redis/v9` | `redis/go-redis` | Pipeline/Tx、Pub/Sub 重连 |
 | adapters/rabbitmq | `rabbitmq/amqp091-go` | `rabbitmq/amqp091-go` | Channel 不跨 goroutine、重连、Confirm |
-| runtime/http | `go-chi/chi/v5` | `go-chi/chi` | 中间件顺序、RouteContext |
+| runtime/http | stdlib `net/http.ServeMux` (Go 1.22+) | — (no third-party router) | 中间件顺序、route-pattern recorder（mux.Handler + ServeHTTP 双 pass） |
 | runtime/auth/jwt | `golang-jwt/jwt/v5` | `golang-jwt/jwt` | SigningMethod、Claims、kid |
 | adapters/oidc | `coreos/go-oidc/v3` | `coreos/go-oidc` | Provider 缓存、JWKS 刷新 |
 | adapters/s3 | `aws/aws-sdk-go-v2` | `aws/aws-sdk-go-v2` | Retry、Context 超时 |
