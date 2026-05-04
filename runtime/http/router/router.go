@@ -1494,6 +1494,14 @@ func (a *nativeMuxAdapter) Handle(pattern string, handler http.Handler) {
 		handler = chain(handler, a.middlewares...)
 	}
 	a.mux.Handle(combineHandlePattern(a.prefix, pattern), handler)
+	// When the child path is the bare slash, also register the trailing-
+	// slash variant via the "{$}" no-subtree end-slash form (Go 1.22+) so
+	// callers that send "/prefix/" still match the same handler without
+	// introducing a subtree pattern that would conflict with sibling
+	// "/prefix/{id}" wildcards.
+	if a.prefix != "" && routePath == "/" {
+		a.mux.Handle(combineEndSlashPattern(a.prefix, method), handler)
+	}
 }
 
 func (a *nativeMuxAdapter) Route(pattern string, fn func(kcell.RouteMux)) {
@@ -1642,19 +1650,32 @@ func (a *nativeMuxAdapter) hasRegistrationErr() bool {
 // applied to the path component only, and the optional method is preserved
 // verbatim. Empty prefix returns the original pattern.
 //
-// When the child path is the bare slash ("/"), the result is registered as
-// the subtree of the parent prefix (trailing slash) so requests to the
-// prefix and any deeper path still hit the registered handler — chi's
-// "Route(prefix) + Handle('/', h)" semantics.
+// When the child path is the bare slash ("/"), the result is the parent
+// prefix exact (no trailing slash). Registering as a subtree ("/users/")
+// would conflict with sibling wildcard patterns like "/users/{id}" — stdlib
+// panics during the second registration because both could match the same
+// request and neither is strictly more specific. Contract.Path is the
+// canonical wire path (no trailing slash), so the exact form is what every
+// HTTP client targets in practice.
 func combineHandlePattern(prefix, pattern string) string {
 	if prefix == "" {
 		return pattern
 	}
 	method, routePath := splitHandlePattern(pattern)
 	full := joinPrefix(prefix, routePath)
-	if routePath == "/" {
-		full = strings.TrimSuffix(full, "/") + "/"
+	if method == "" {
+		return full
 	}
+	return method + " " + full
+}
+
+// combineEndSlashPattern returns the "/prefix/{$}" pattern used to match the
+// trailing-slash form of the bare prefix without the subtree side-effects of
+// "/prefix/" (which would conflict with sibling "/prefix/{id}" wildcards).
+// Stdlib's "{$}" wildcard (Go 1.22+) matches only the empty trailing
+// segment, so it does not collide with single-segment wildcards like "{id}".
+func combineEndSlashPattern(prefix, method string) string {
+	full := strings.TrimSuffix(prefix, "/") + "/{$}"
 	if method == "" {
 		return full
 	}
