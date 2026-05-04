@@ -17,6 +17,7 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/clock"
+	"github.com/ghbvf/gocell/kernel/metadata"
 	"github.com/ghbvf/gocell/runtime/auth"
 	routerpkg "github.com/ghbvf/gocell/runtime/http/router"
 )
@@ -226,10 +227,10 @@ type fakeAuthProviderCell struct {
 }
 
 func newFakeAuthCell(id string, v auth.IntentTokenVerifier) *fakeAuthProviderCell {
-	base := cell.NewBaseCell(cell.CellMetadata{
+	base := cell.NewBaseCell(&metadata.CellMeta{
 		ID:               id,
-		Type:             cell.CellTypeCore,
-		ConsistencyLevel: cell.L1,
+		Type:             "core",
+		ConsistencyLevel: "L1",
 	})
 	return &fakeAuthProviderCell{BaseCell: base, verifier: v}
 }

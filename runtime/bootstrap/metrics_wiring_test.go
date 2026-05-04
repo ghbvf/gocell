@@ -14,6 +14,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/assembly"
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/clock"
+	"github.com/ghbvf/gocell/kernel/metadata"
 	kernelmetrics "github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/runtime/http/router"
 )
@@ -124,9 +125,9 @@ func TestBootstrap_DefaultAssembly_NoProviderUsesNop(t *testing.T) {
 // is exercised indirectly through existing rollback tests, and directly
 // here at the kernel layer which is the source of the goroutine.
 func TestAssembly_FailedStartDrainsDispatcher(t *testing.T) {
-	failing := &startFailCell{BaseCell: cell.NewBaseCell(cell.CellMetadata{
+	failing := &startFailCell{BaseCell: cell.NewBaseCell(&metadata.CellMeta{
 		ID:   "fail-start",
-		Type: cell.CellTypeCore,
+		Type: "core",
 	})}
 	asm := assembly.New(assembly.Config{
 		ID:             "t-fail",

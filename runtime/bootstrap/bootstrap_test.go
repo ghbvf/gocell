@@ -26,6 +26,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/assembly"
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/clock"
+	"github.com/ghbvf/gocell/kernel/metadata"
 	kernelmetrics "github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/ctxkeys"
@@ -150,9 +151,9 @@ type testCell struct {
 
 func newTestCell(id string) *testCell {
 	return &testCell{
-		BaseCell: cell.NewBaseCell(cell.CellMetadata{
+		BaseCell: cell.NewBaseCell(&metadata.CellMeta{
 			ID:   id,
-			Type: cell.CellTypeCore,
+			Type: "core",
 		}),
 	}
 }
@@ -392,9 +393,9 @@ type contextCaptureCell struct {
 
 func newContextCaptureCell(id string, got chan map[string]string) *contextCaptureCell {
 	return &contextCaptureCell{
-		BaseCell: cell.NewBaseCell(cell.CellMetadata{
+		BaseCell: cell.NewBaseCell(&metadata.CellMeta{
 			ID:   id,
-			Type: cell.CellTypeCore,
+			Type: "core",
 		}),
 		got: got,
 	}
@@ -440,9 +441,9 @@ func (s *invokeOnceSubscriber) Close(_ context.Context) error { return nil }
 
 func newEventCell(id string, subErr error) *eventCell {
 	return &eventCell{
-		BaseCell: cell.NewBaseCell(cell.CellMetadata{
+		BaseCell: cell.NewBaseCell(&metadata.CellMeta{
 			ID:   id,
-			Type: cell.CellTypeCore,
+			Type: "core",
 		}),
 		subErr: subErr,
 	}
@@ -829,7 +830,7 @@ type healthContribCell struct {
 
 func newHealthContribCell(id string, checkers map[string]func(context.Context) error) *healthContribCell {
 	return &healthContribCell{
-		BaseCell: cell.NewBaseCell(cell.CellMetadata{ID: id, Type: cell.CellTypeCore}),
+		BaseCell: cell.NewBaseCell(&metadata.CellMeta{ID: id, Type: "core"}),
 		checkers: checkers,
 	}
 }
@@ -1573,9 +1574,9 @@ type reloaderCell struct {
 
 func newReloaderCell(id string) *reloaderCell {
 	return &reloaderCell{
-		BaseCell: cell.NewBaseCell(cell.CellMetadata{
+		BaseCell: cell.NewBaseCell(&metadata.CellMeta{
 			ID:   id,
-			Type: cell.CellTypeCore,
+			Type: "core",
 		}),
 	}
 }
@@ -1654,7 +1655,7 @@ func (w *blockingStopWorker) Stop(_ context.Context) error {
 
 func newSlowReloaderCell(id string, delay time.Duration) *slowReloaderCell {
 	return &slowReloaderCell{
-		BaseCell: cell.NewBaseCell(cell.CellMetadata{ID: id, Type: cell.CellTypeCore}),
+		BaseCell: cell.NewBaseCell(&metadata.CellMeta{ID: id, Type: "core"}),
 		delay:    delay,
 	}
 }
@@ -2106,7 +2107,7 @@ type mutatingReloaderCell struct {
 
 func newMutatingReloaderCell(id string) *mutatingReloaderCell {
 	return &mutatingReloaderCell{
-		BaseCell: cell.NewBaseCell(cell.CellMetadata{ID: id, Type: cell.CellTypeCore}),
+		BaseCell: cell.NewBaseCell(&metadata.CellMeta{ID: id, Type: "core"}),
 	}
 }
 
@@ -2430,7 +2431,7 @@ type httpCell struct {
 
 func newHTTPCell(id string) *httpCell {
 	return &httpCell{
-		BaseCell: cell.NewBaseCell(cell.CellMetadata{ID: id, Type: cell.CellTypeCore}),
+		BaseCell: cell.NewBaseCell(&metadata.CellMeta{ID: id, Type: "core"}),
 	}
 }
 
@@ -2545,7 +2546,7 @@ type publicHTTPCell struct {
 
 func newPublicHTTPCell(id string) *publicHTTPCell {
 	return &publicHTTPCell{
-		BaseCell: cell.NewBaseCell(cell.CellMetadata{ID: id, Type: cell.CellTypeCore}),
+		BaseCell: cell.NewBaseCell(&metadata.CellMeta{ID: id, Type: "core"}),
 	}
 }
 
@@ -2739,9 +2740,9 @@ type tracingTestCell struct {
 
 func newTracingTestCell(id string, fn func(mux cell.RouteMux) error) *tracingTestCell {
 	return &tracingTestCell{
-		BaseCell: cell.NewBaseCell(cell.CellMetadata{
+		BaseCell: cell.NewBaseCell(&metadata.CellMeta{
 			ID:   id,
-			Type: cell.CellTypeCore,
+			Type: "core",
 		}),
 		registerFn: fn,
 	}
@@ -2950,7 +2951,7 @@ type authProviderCell struct {
 
 func newAuthProviderCell(id string, verifier auth.IntentTokenVerifier) *authProviderCell {
 	return &authProviderCell{
-		BaseCell: cell.NewBaseCell(cell.CellMetadata{ID: id, Type: cell.CellTypeCore}),
+		BaseCell: cell.NewBaseCell(&metadata.CellMeta{ID: id, Type: "core"}),
 		verifier: verifier,
 	}
 }
@@ -3348,9 +3349,9 @@ type keyFilterReloaderCell struct {
 
 func newKeyFilterReloaderCell(id string, prefixes []string) *keyFilterReloaderCell {
 	return &keyFilterReloaderCell{
-		BaseCell: cell.NewBaseCell(cell.CellMetadata{
+		BaseCell: cell.NewBaseCell(&metadata.CellMeta{
 			ID:   id,
-			Type: cell.CellTypeCore,
+			Type: "core",
 		}),
 		prefixes: prefixes,
 		reloaded: make(chan cell.ConfigChangeEvent, 4),
@@ -3535,7 +3536,7 @@ type traceCapturingCell struct {
 
 func newTraceCapturingCell(id string, verifier auth.IntentTokenVerifier) *traceCapturingCell {
 	return &traceCapturingCell{
-		BaseCell:     cell.NewBaseCell(cell.CellMetadata{ID: id, Type: cell.CellTypeCore}),
+		BaseCell:     cell.NewBaseCell(&metadata.CellMeta{ID: id, Type: "core"}),
 		verifier:     verifier,
 		gotPublic:    make(chan string, 4),
 		gotProtected: make(chan string, 4),
@@ -3703,7 +3704,7 @@ type publicPingAuthCell struct {
 
 func newPublicPingAuthCell(id string, verifier auth.IntentTokenVerifier) *publicPingAuthCell {
 	return &publicPingAuthCell{
-		BaseCell: cell.NewBaseCell(cell.CellMetadata{ID: id, Type: cell.CellTypeCore}),
+		BaseCell: cell.NewBaseCell(&metadata.CellMeta{ID: id, Type: "core"}),
 		verifier: verifier,
 	}
 }
@@ -3921,9 +3922,9 @@ type duplicateAuthCell struct {
 
 func newDuplicateAuthCell(id string) *duplicateAuthCell {
 	return &duplicateAuthCell{
-		BaseCell: cell.NewBaseCell(cell.CellMetadata{
+		BaseCell: cell.NewBaseCell(&metadata.CellMeta{
 			ID:   id,
-			Type: cell.CellTypeCore,
+			Type: "core",
 		}),
 	}
 }
@@ -3954,9 +3955,9 @@ type protectedAuthCell struct {
 
 func newProtectedAuthCell(id string) *protectedAuthCell {
 	return &protectedAuthCell{
-		BaseCell: cell.NewBaseCell(cell.CellMetadata{
+		BaseCell: cell.NewBaseCell(&metadata.CellMeta{
 			ID:   id,
-			Type: cell.CellTypeCore,
+			Type: "core",
 		}),
 	}
 }
@@ -4094,9 +4095,9 @@ type duplicateInternalCell struct {
 
 func newDuplicateInternalCell(id string) *duplicateInternalCell {
 	return &duplicateInternalCell{
-		BaseCell: cell.NewBaseCell(cell.CellMetadata{
+		BaseCell: cell.NewBaseCell(&metadata.CellMeta{
 			ID:   id,
-			Type: cell.CellTypeCore,
+			Type: "core",
 		}),
 	}
 }
@@ -4170,9 +4171,9 @@ type duplicateHealthCell struct {
 
 func newDuplicateHealthCell(id string) *duplicateHealthCell {
 	return &duplicateHealthCell{
-		BaseCell: cell.NewBaseCell(cell.CellMetadata{
+		BaseCell: cell.NewBaseCell(&metadata.CellMeta{
 			ID:   id,
-			Type: cell.CellTypeCore,
+			Type: "core",
 		}),
 	}
 }
@@ -4244,9 +4245,9 @@ type unknownListenerCell struct {
 
 func newUnknownListenerCell() *unknownListenerCell {
 	return &unknownListenerCell{
-		BaseCell: cell.NewBaseCell(cell.CellMetadata{
+		BaseCell: cell.NewBaseCell(&metadata.CellMeta{
 			ID:   "unknown-listener-cell",
-			Type: cell.CellTypeCore,
+			Type: "core",
 		}),
 	}
 }

@@ -22,6 +22,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/assembly"
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/clock"
+	"github.com/ghbvf/gocell/kernel/metadata"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/wrapper"
 	"github.com/ghbvf/gocell/runtime/http/health"
@@ -39,7 +40,7 @@ type snapshotCheckCell struct {
 
 func newSnapshotCheckCell(id string) *snapshotCheckCell {
 	return &snapshotCheckCell{
-		BaseCell: *cell.NewBaseCell(cell.CellMetadata{ID: id, Type: cell.CellTypeCore, ConsistencyLevel: cell.L0}),
+		BaseCell: *cell.NewBaseCell(&metadata.CellMeta{ID: id, Type: "core", ConsistencyLevel: "L0"}),
 	}
 }
 
@@ -59,7 +60,7 @@ type initFailCell struct {
 
 func newInitFailCell(id string, err error) *initFailCell {
 	return &initFailCell{
-		BaseCell: *cell.NewBaseCell(cell.CellMetadata{ID: id, Type: cell.CellTypeCore, ConsistencyLevel: cell.L0}),
+		BaseCell: *cell.NewBaseCell(&metadata.CellMeta{ID: id, Type: "core", ConsistencyLevel: "L0"}),
 		err:      err,
 	}
 }
@@ -76,7 +77,7 @@ type lifecycleRegisterCell struct {
 
 func newLifecycleRegisterCell(id, hookName string) *lifecycleRegisterCell {
 	return &lifecycleRegisterCell{
-		BaseCell: *cell.NewBaseCell(cell.CellMetadata{ID: id, Type: cell.CellTypeCore, ConsistencyLevel: cell.L0}),
+		BaseCell: *cell.NewBaseCell(&metadata.CellMeta{ID: id, Type: "core", ConsistencyLevel: "L0"}),
 		hookName: hookName,
 	}
 }
@@ -99,7 +100,7 @@ type routeRegisterCell struct {
 
 func newRouteRegisterCell(id string) *routeRegisterCell {
 	return &routeRegisterCell{
-		BaseCell: *cell.NewBaseCell(cell.CellMetadata{ID: id, Type: cell.CellTypeCore, ConsistencyLevel: cell.L0}),
+		BaseCell: *cell.NewBaseCell(&metadata.CellMeta{ID: id, Type: "core", ConsistencyLevel: "L0"}),
 	}
 }
 
@@ -123,7 +124,7 @@ type subscribeRegisterCell struct {
 
 func newSubscribeRegisterCell(id, topic string) *subscribeRegisterCell {
 	return &subscribeRegisterCell{
-		BaseCell: *cell.NewBaseCell(cell.CellMetadata{ID: id, Type: cell.CellTypeCore, ConsistencyLevel: cell.L0}),
+		BaseCell: *cell.NewBaseCell(&metadata.CellMeta{ID: id, Type: "core", ConsistencyLevel: "L0"}),
 		topic:    topic,
 	}
 }
@@ -284,7 +285,7 @@ func TestPhase6_SubscriptionsDrainedFromSnapshots(t *testing.T) {
 // TestBootstrap_NoSubscriptionsAndNoSubscriber_Succeeds verifies that a bootstrap
 // with no cells registering subscriptions and no WithSubscriber starts cleanly.
 func TestBootstrap_NoSubscriptionsAndNoSubscriber_Succeeds(t *testing.T) {
-	plain := cell.NewBaseCell(cell.CellMetadata{ID: "plain", Type: cell.CellTypeCore})
+	plain := cell.NewBaseCell(&metadata.CellMeta{ID: "plain", Type: "core"})
 	asm := buildStartedAsm(t, plain)
 
 	b := New(WithClock(clock.Real()))
