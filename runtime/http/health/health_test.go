@@ -16,6 +16,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/assembly"
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/clock"
+	"github.com/ghbvf/gocell/kernel/metadata"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 )
@@ -27,9 +28,9 @@ type stubCell struct {
 
 func newStubCell(id string) *stubCell {
 	return &stubCell{
-		BaseCell: cell.NewBaseCell(cell.CellMetadata{
+		BaseCell: cell.NewBaseCell(&metadata.CellMeta{
 			ID:   id,
-			Type: cell.CellTypeCore,
+			Type: "core",
 		}),
 	}
 }
@@ -1230,9 +1231,9 @@ type stubDegradedCell struct {
 
 func newStubDegradedCell(id string) *stubDegradedCell {
 	return &stubDegradedCell{
-		BaseCell: cell.NewBaseCell(cell.CellMetadata{
+		BaseCell: cell.NewBaseCell(&metadata.CellMeta{
 			ID:   id,
-			Type: cell.CellTypeCore,
+			Type: "core",
 		}),
 	}
 }
@@ -1249,9 +1250,9 @@ type stubPanickingHealthCell struct {
 
 func newStubPanickingHealthCell(id string) *stubPanickingHealthCell {
 	return &stubPanickingHealthCell{
-		BaseCell: cell.NewBaseCell(cell.CellMetadata{
+		BaseCell: cell.NewBaseCell(&metadata.CellMeta{
 			ID:   id,
-			Type: cell.CellTypeCore,
+			Type: "core",
 		}),
 	}
 }
