@@ -5,6 +5,7 @@ package configreceive
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 
@@ -106,6 +107,22 @@ func (s *Service) HandleEntryUpserted(ctx context.Context, entry outbox.Entry) o
 				s.recordConfigEventProcess(ctx, obmetrics.ConfigEventProcessReasonStale)
 				return outbox.HandleResult{Disposition: outbox.DispositionAck}
 			}
+			// 401/403 are permanent auth/authz failures (invalid token,
+			// caller_cell not in contract.clients allowlist). Retrying with
+			// the same credentials cannot recover; route to DLQ via Reject +
+			// PermanentError so operators can investigate the configuration
+			// drift instead of silently consuming retry budget.
+			if isPermanentAuthFailure(fetchErr) {
+				s.logger.Error("config-receive: permanent auth failure fetching config entry, routing to DLQ",
+					slog.Any("error", fetchErr),
+					slog.String("key", event.Key),
+					slog.Int("version", event.Version))
+				s.recordConfigEventProcess(ctx, obmetrics.ConfigEventProcessReasonPermanentError)
+				return outbox.HandleResult{
+					Disposition: outbox.DispositionReject,
+					Err:         outbox.NewPermanentError(fetchErr),
+				}
+			}
 			// Transient failure — Requeue so the consumer pipeline retries.
 			s.logger.Error("config-receive: failed to fetch config entry after upsert",
 				slog.Any("error", fetchErr),
@@ -141,6 +158,21 @@ func (s *Service) HandleEntryDeleted(ctx context.Context, entry outbox.Entry) ou
 		slog.Int("version", event.Version))
 	s.recordConfigEventProcess(ctx, obmetrics.ConfigEventProcessReasonAck)
 	return outbox.HandleResult{Disposition: outbox.DispositionAck}
+}
+
+// isPermanentAuthFailure reports whether err is an *errcode.Error with
+// code ErrAuthUnauthorized or ErrAuthForbidden — i.e. a 401/403 response
+// from configcore that retrying with the same credentials cannot recover.
+// Such failures must Reject (DLQ) instead of Requeue.
+func isPermanentAuthFailure(err error) bool {
+	if err == nil {
+		return false
+	}
+	var ec *errcode.Error
+	if !errors.As(err, &ec) {
+		return false
+	}
+	return ec.Code == errcode.ErrAuthUnauthorized || ec.Code == errcode.ErrAuthForbidden
 }
 
 func (s *Service) recordConfigEventProcess(ctx context.Context, reason obmetrics.ConfigEventProcessReason) {
