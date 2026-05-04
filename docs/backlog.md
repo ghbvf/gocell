@@ -135,6 +135,7 @@
 | F2 | **SYSTEM-TOPOLOGY-API** (🟡 可延后): `GET /internal/v1/system/topology` 返回 cell/slice/contract 拓扑 JSON；基于 `kernel/registry` | 4h | 新 slice 或 `runtime/bootstrap/` | 历史 Batch 8 |
 | F3 | **P2-T-02 audit e2e 测试**: Journey 级验收 | 2h | `journeys/` + integration test | 历史 Batch 8 |
 | NOLINT-AUDIT-01 | **NOLINT-EXCEPTION-AUDIT-01** (P2, Cx2, v1.0 发布前门控): 全仓 101 处 `//nolint` 分布 62 文件（gosec G101/G304/G706/G118、errcheck、dupl、cyclop/gocognit、staticcheck、noctx 等）。nolintlint（G8）启用后仅保证理由存在，不保证理由正确。**人工逐条审查**：① false-positive 类（G101 常量名 / G304 受控路径 / G706 slog.String 非字符串拼接）确认保留；② `//nolint:errcheck` + `defer close` 无 context 类统一评估用 `errors.Join` 或保留理由；③ dupl / cyclop / gocognit 豁免评估是否可消除；④ 不合理例外升为 Finding 纳入对应 PR。**前置**：G8 nolintlint 启用后一并 fix。 | 4h | 全仓 `*.go`（grep `//nolint`） | 2026-05-01 登记 |
+| ADR-INDEX-01 | **ARCHITECTURE-ADR-INDEX-01** (Cx1, P2, 🟡 可延后): `docs/architecture/` 现有 5 篇 ADR + overview + 多份参考文档，但无 `index.md` / `adr-list.md` 罗列；新 ADR（如 `202605031600-adr-v1-schema-evolution.md`）不被任何索引文件反向引用，新人 / 审查者只能 `ls` 目录看时间戳推断主题。**修复**：建 `docs/architecture/index.md` 按时间 + 主题双索引列出所有 ADR；`overview.md` 加 "Architecture Decisions" 段链接到 index。**对标**：MADR / Nygard ADR template 都建议 ADR 集合维护索引（README + numbered listing）。 | 0.5h | `docs/architecture/index.md`（新）+ `docs/architecture/overview.md` | PR #353 review MAINT-5 (discovered via /fix) |
 | F4 | Review cells/ | 4h | — | Wave 4 |
 | F5 | Review examples/ | 2h | — | Wave 4 |
 | F6 | Review 报告汇总 | 2h | — | Wave 4 |
@@ -165,6 +166,34 @@
 | X12 | **REFRESH-IDLE-EXPIRE-01** (Cx2, 🟠 条件延后，PR-A29 已合可启动): `idle_expires_at` 滑动窗口列 + Policy.MaxIdle。长时间未使用的 token 提前过期 | 3h | `runtime/auth/refresh/types.go` + `adapters/postgres/` + migration | 开源对标 Zitadel 双过期列 |
 | X13 | **REFRESH-PARTITION-01** (Cx2, 🟠 条件延后，生产流量达阈值后): `expires_at` range 分区，用 DROP PARTITION 替代批量 DELETE 进行 GC | 3h | migration + DBA ops runbook | 通用 PG 高吞吐模式 |
 | X14 | **REFRESH-GRACE-COUNTER-01** (Cx2, 🟠 条件延后，PR-A29 已合可启动): `first_used_at` + `used_times` 列，grace 窗口内限制重用次数上限 | 2h | `adapters/postgres/refresh_store.go` + migration | 开源对标 Hydra COALESCE 模式 |
+
+---
+
+## 架构演进里程碑（M0-M4，源自 ADR-202605041430）
+
+> **ADR**: [`docs/architecture/202605041430-adr-architecture-optimization-via-engineering-thinking.md`](architecture/202605041430-adr-architecture-optimization-via-engineering-thinking.md)
+>
+> 三种工程思想（系统工程 + 软件工程 + 第一性原理）推导出 13 条原则 + 6 个里程碑。
+> M5-HARVEST（仓库收敛 / CI bot + AI Agent / 双层 harvest 域）暂不入 backlog，待 M3-M4 完成后单独开设计 ADR。
+> 决策准则 #0（编译期前移优先）适用于本组所有里程碑实施。
+
+| 里程碑 | 时间维度 | 满足原则 | 前置 | 工时估算 | 关键修复 |
+|---|---|---|---|---|---|
+| **M0-FOUNDATION** | 编译期 + 启动期 | P-D1/D2/D3 + P-B3 | — | ~3-5d | adapters→runtime/observability 反向依赖（poolstats 接口下沉到 `kernel/observability/`）+ Noop 集中 `runtime/testutil/` 加 `NOOP-PROD-IMPORT-01` archtest 守护 + `metadata.CellMeta` 与 `cell.CellMetadata` 合一 + adapters 公开 API 包装 amqp.* / *sql.DB / *amqp.Error 等 SDK 类型 |
+| **M1-OBSERVED** | 编译期 schema + 运行时接口 | P-A1/A2/A3 | M0 | ~5-8d | 新建 `kernel/healthz` 接口包（`Aggregator` / `Probe` / `Snapshot`）+ codegen 从 cell.yaml 生成状态 schema + 默认 `runtime/observability/healthz/inmemory` 实现 + 可选 adapter（postgres/otel）+ `HEALTHZ-WRITE-01` archtest + 38 处分散 Health 收口。**不持久化 yaml**（持久化交宿主） |
+| **M2-LIFECYCLE** | 编译期声明 + 运行时接口 | P-A1 | M0（M1 已就绪后接入更顺）| ~2-3d | `cell.yaml` / `slice.yaml` 加 `lifecycle: experimental \| candidate \| asset \| maintenance \| retired` + governance 校验状态转移合法性 + 运行时通过 Aggregator 接口暴露当前相位（与 desired 对比的差距由消费方计算） |
+| **M3-RULE-ENGINE** | CI 期 | P-B2 + P-C2 + P-C3 | M0 | ~8-12d | `kernel/governance/engine.go` 唯一执行体 + `kernel/governance/rules/*.yaml` 64 规则数据化（5 槽位：detect / evidence / next / level / harvest）+ `next-action` 五级（autofix / suggest / advisory / block / escalate）+ 规则带 `metric` 距离函数 + 修 ADV-05 SeverityError 错分 |
+| **M4-COVERAGE** | CI 期 archtest | P-B1 | M3 | ~3-5d | 5 条反向追溯规则：`IMPL-DECL-COVER-01`（**cell 间** Go import 必须经 contract，非 slice 间）/ `HANDLER-DECL-COVER-01`（http handler 必须出现在某 contract.yaml）/ `EMIT-DECL-COVER-01`（outbox emit 必须出现在 contract.triggers）/ `DEAD-CONTRACT-01`（active contract 必须有 handler 入口）/ `DEAD-CODE-01`（deprecated contract 引用代码不能在 main 分支）。**不含 SLICE-DECOUPLE**，slice 同 cell 内不需隔离 |
+
+**演进顺序**（M5 不依赖 M1，CI 分支与运行时分支可并行推进）：
+
+```
+M0-FOUNDATION ──┬─→ M1-OBSERVED ─→ M2-LIFECYCLE      （运行时分支）
+                │
+                └─→ M3-RULE-ENGINE ─→ M4-COVERAGE    （CI 分支）
+```
+
+**进度跟踪**：每个里程碑对应一组 PR；PR 标题含里程碑标识（如 `[M0-FOUNDATION] poolstats interface descend to kernel`），commit message / ADR 引用同标识。
 
 ---
 
