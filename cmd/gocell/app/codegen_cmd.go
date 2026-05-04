@@ -10,6 +10,25 @@ import (
 	"github.com/ghbvf/gocell/tools/codegen"
 )
 
+// fixHintHeader and fixHintCommand format the standard drift-fix instructions
+// emitted on stderr by every verify path. Centralized so the wording stays
+// consistent across runCodegenGenerate / runCodegenVerifyInPlace /
+// runCodegenVerifySandbox and Sonar's duplicate-literal smell stays quiet.
+const (
+	fixHintHeader      = "FIX: run locally and commit:"
+	fixHintCommandLine = "    gocell generate %s --all\n"
+	driftErrorTemplate = "codegen drift in %d files; run `gocell generate %s --all` to refresh"
+)
+
+// writeDriftFixHint emits the standard two-line "FIX" stderr block for the
+// given codegen kind (e.g. "cell", "contract"). Callers should invoke this
+// before returning a drift error so users see the same actionable hint
+// regardless of which verify entry point detected the drift.
+func writeDriftFixHint(kind string) {
+	fmt.Fprintln(os.Stderr, fixHintHeader)
+	fmt.Fprintf(os.Stderr, fixHintCommandLine, kind)
+}
+
 // CodegenResult is the contract every <X>gen.Result type implements so
 // codegen-cmd dispatchers can treat them uniformly. Both cellgen.Result
 // and contractgen.Result expose Generated / Drifted as []string fields;
@@ -82,9 +101,8 @@ func runCodegenGenerate[R CodegenResult](spec codegenSpec[R], args []string) err
 		for _, f := range drift {
 			fmt.Fprintf(os.Stderr, "drift: %s\n", f)
 		}
-		fmt.Fprintln(os.Stderr, "FIX: run locally and commit:")
-		fmt.Fprintf(os.Stderr, "    gocell generate %s --all\n", spec.Kind)
-		return fmt.Errorf("codegen drift in %d files; run `gocell generate %s --all` to refresh", len(drift), spec.Kind)
+		writeDriftFixHint(spec.Kind)
+		return fmt.Errorf(driftErrorTemplate, len(drift), spec.Kind)
 	}
 	for _, f := range res.GeneratedFiles() {
 		fmt.Printf("Generated: %s\n", f)
@@ -166,9 +184,8 @@ func runCodegenVerifyInPlace[R CodegenResult](spec codegenSpec[R], root string) 
 		for _, f := range drift {
 			fmt.Fprintf(os.Stderr, "drift: %s\n", f)
 		}
-		fmt.Fprintln(os.Stderr, "FIX: run locally and commit:")
-		fmt.Fprintf(os.Stderr, "    gocell generate %s --all\n", spec.Kind)
-		return fmt.Errorf("codegen drift in %d files; run `gocell generate %s --all` to refresh", len(drift), spec.Kind)
+		writeDriftFixHint(spec.Kind)
+		return fmt.Errorf(driftErrorTemplate, len(drift), spec.Kind)
 	}
 	fmt.Printf("Generated %s OK (--local).\n", spec.PluralNoun)
 	return nil
@@ -195,8 +212,7 @@ func runCodegenVerifySandbox[R CodegenResult](spec codegenSpec[R], root string) 
 		fmt.Fprintln(os.Stderr)
 		fmt.Fprintln(os.Stderr, "Per-file diff (truncated to 200 lines per file):")
 		fmt.Fprintln(os.Stderr, res.DiffSummary)
-		fmt.Fprintln(os.Stderr, "FIX: run locally and commit:")
-		fmt.Fprintf(os.Stderr, "    gocell generate %s --all\n", spec.Kind)
+		writeDriftFixHint(spec.Kind)
 		return fmt.Errorf("codegen drift in %d files", len(res.Drifted))
 	}
 	fmt.Printf("Generated %s OK.\n", spec.PluralNoun)
