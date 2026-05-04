@@ -7,6 +7,7 @@ triggers:
   - event.role.assigned.v1
 endpoints:
   server: accesscore
+  # clients: awaiting real caller cell registration (route not mounted at runtime — see B2-T-07-FU-1 in docs/backlog2.md)
   clients: []
   http:
     method: POST
@@ -17,10 +18,10 @@ endpoints:
         description: "Bad request — request body decode failure or userId/roleId blank (ErrAuthRBACInvalidInput)"
         schemaRef: "../../../../../shared/errors/error-response-v1.schema.json"
       401:
-        description: "Unauthorized — missing or invalid bearer token"
+        description: "Unauthorized — missing or invalid service token"
         schemaRef: "../../../../../shared/errors/error-response-v1.schema.json"
       403:
-        description: "Forbidden — authenticated but lacks admin role"
+        description: "Forbidden — caller_cell not in contract.clients allowlist (currently empty — endpoint not mounted)"
         schemaRef: "../../../../../shared/errors/error-response-v1.schema.json"
       404:
         description: "Not found — role with given id does not exist (ErrAuthRoleNotFound)"

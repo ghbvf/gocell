@@ -5,6 +5,7 @@ consistencyLevel: L4
 lifecycle: active
 endpoints:
   server: devicecell
+  # clients: awaiting real caller cell registration (no internal consumer declared yet)
   clients: []
   http:
     method: GET

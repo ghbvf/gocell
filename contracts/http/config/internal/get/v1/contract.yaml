@@ -22,7 +22,7 @@ endpoints:
         description: "Unauthorized — missing or invalid service token"
         schemaRef: "../../../../../shared/errors/error-response-v1.schema.json"
       403:
-        description: "Forbidden — service token lacks required permission"
+        description: "Forbidden — caller_cell not in contract.clients allowlist"
         schemaRef: "../../../../../shared/errors/error-response-v1.schema.json"
       404:
         description: "Config key not found"
