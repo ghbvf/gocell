@@ -7,6 +7,7 @@ import (
 	"go/token"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -55,6 +56,7 @@ type contractSpecLiteral struct {
 	method     string
 	path       string
 	topic      string
+	clients    []string
 	unresolved bool
 }
 
@@ -115,7 +117,62 @@ func (v *Validator) validateContractSpecLiteral(lit contractSpecLiteral) []Valid
 				lit.file, lit.line, lit.kind, contract.Kind, lit.id)))
 	}
 	out = append(out, v.validateHTTPContractSpecLiteral(lit, contract)...)
+	out = append(out, v.validateContractSpecClientsLiteral(lit, contract)...)
 	return out
+}
+
+// validateContractSpecClientsLiteral cross-checks the Clients []string declared
+// in a Go ContractSpec literal against the endpoints.clients list in the
+// authoritative contract.yaml. The comparison is set-equal (order-insensitive).
+// When the literal has no Clients field (nil), the check is skipped — the
+// INTERNAL-CONTRACT-CLIENTS-REQUIRED-01 archtest gate handles the missing-Clients case.
+func (v *Validator) validateContractSpecClientsLiteral(
+	lit contractSpecLiteral,
+	contract *metadata.ContractMeta,
+) []ValidationResult {
+	if lit.clients == nil {
+		return nil
+	}
+	yamlClients := contract.Endpoints.Clients
+
+	literalSet := make(map[string]bool, len(lit.clients))
+	for _, c := range lit.clients {
+		literalSet[c] = true
+	}
+	yamlSet := make(map[string]bool, len(yamlClients))
+	for _, c := range yamlClients {
+		yamlSet[c] = true
+	}
+
+	if clientSetsEqual(literalSet, yamlSet) {
+		return nil
+	}
+
+	litFormatted := formatStringSlice(lit.clients)
+	yamlFormatted := formatStringSlice(yamlClients)
+	return []ValidationResult{v.newResult(codeFMT18, SeverityError, IssueInvalid,
+		lit.file, "",
+		fmt.Sprintf("FMT-18: contract %s Clients literal {%s} differs from contract.yaml endpoints.clients {%s} (file:%s:%d)",
+			lit.id, litFormatted, yamlFormatted, lit.file, lit.line))}
+}
+
+func clientSetsEqual(a, b map[string]bool) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for k := range a {
+		if !b[k] {
+			return false
+		}
+	}
+	return true
+}
+
+func formatStringSlice(ss []string) string {
+	cp := make([]string, len(ss))
+	copy(cp, ss)
+	sort.Strings(cp)
+	return strings.Join(cp, ",")
 }
 
 func (v *Validator) validateHTTPContractSpecLiteral(
@@ -330,7 +387,43 @@ func parseContractSpecCompositeLit(
 			// Transport has no YAML cross-check yet — recorded for future use.
 		}
 	}
+	// Parse Clients []string field separately (slice literal, not a single string).
+	lit.clients = parseContractSpecClientsField(expr)
 	return lit, true
+}
+
+// parseContractSpecClientsField extracts the Clients []string slice from a
+// ContractSpec composite literal. Returns nil when the field is absent or
+// contains any non-string-literal element.
+func parseContractSpecClientsField(expr *ast.CompositeLit) []string {
+	for _, elt := range expr.Elts {
+		kv, ok := elt.(*ast.KeyValueExpr)
+		if !ok {
+			continue
+		}
+		keyIdent, ok := kv.Key.(*ast.Ident)
+		if !ok || keyIdent.Name != "Clients" {
+			continue
+		}
+		compLit, ok := kv.Value.(*ast.CompositeLit)
+		if !ok {
+			return nil
+		}
+		clients := make([]string, 0, len(compLit.Elts))
+		for _, elem := range compLit.Elts {
+			lit, ok := elem.(*ast.BasicLit)
+			if !ok || lit.Kind != token.STRING {
+				return nil // non-literal element — cannot resolve
+			}
+			s, err := strconv.Unquote(lit.Value)
+			if err != nil {
+				return nil
+			}
+			clients = append(clients, s)
+		}
+		return clients
+	}
+	return nil
 }
 
 // parseEventSpecCallExpr extracts a contractSpecLiteral from a

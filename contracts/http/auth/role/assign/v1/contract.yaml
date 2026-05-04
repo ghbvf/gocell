@@ -7,8 +7,8 @@ triggers:
   - event.role.assigned.v1
 endpoints:
   server: accesscore
-  # clients: awaiting real caller cell registration (route not mounted at runtime — see B2-T-07-FU-1 in docs/backlog2.md)
-  clients: []
+  clients:
+    - accesscore
   http:
     method: POST
     path: /internal/v1/access/roles/assign
@@ -21,7 +21,7 @@ endpoints:
         description: "Unauthorized — missing or invalid service token"
         schemaRef: "../../../../../shared/errors/error-response-v1.schema.json"
       403:
-        description: "Forbidden — caller_cell not in contract.clients allowlist (currently empty — endpoint not mounted)"
+        description: "Forbidden — caller_cell not in contract.clients allowlist"
         schemaRef: "../../../../../shared/errors/error-response-v1.schema.json"
       404:
         description: "Not found — role with given id does not exist (ErrAuthRoleNotFound)"
