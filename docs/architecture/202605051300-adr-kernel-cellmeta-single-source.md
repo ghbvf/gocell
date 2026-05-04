@@ -11,6 +11,8 @@ K#05 markergen 范围审查发现 cell metadata 在 kernel/ 内部存在**类型
 
 `kernel/cell.CellMetadata`（kernel/cell/interfaces.go:23）与 `kernel/metadata.CellMeta`（kernel/metadata/types.go:19）两个类型并存且**字段已漂移 5 项**：
 
+> 表分两节：第 1-2 行是字段存在性差异；第 6 行是同名字段的类型差异（Type）。
+
 | 字段 | metadata.CellMeta | cell.CellMetadata |
 |---|---|---|
 | ID / Type / ConsistencyLevel / Owner / Schema / Verify / L0Dependencies | ✅ | ✅ |
@@ -79,11 +81,11 @@ NewBaseCell 在三种情况返回 `errcode.ErrValidationFailed`：
 // kernel/cell/interfaces.go (after)
 type Cell interface {
     // ...
-    Metadata() *metadata.CellMeta  // 指针；指向 BaseCell 内部 deep-copy；只读
+    Metadata() *metadata.CellMeta  // 指针；指向独立 deep copy；caller 可读可改不污染 cell 内部
 }
 ```
 
-返回指针避免大 struct 拷贝；契约要求 caller 视为 read-only（mutation 是合同违例）。由 `CELLMETA-SINGLE-SOURCE-03` 守卫。
+返回指针避免大 struct 拷贝；每次调用返回独立 deep copy，caller mutation 不影响 cell 内部状态。由 `CELLMETA-SINGLE-SOURCE-03` 守卫。
 
 ## Rationale
 
@@ -118,15 +120,15 @@ type Cell interface {
 
 许多测试用 `MustNewBaseCell(&metadata.CellMeta{ID: "foo"})` 简化构造，依赖 zero-value Type/ConsistencyLevel 通过。强制非空字段会破坏 ~50 处测试构造，且 zero value 在 governance 链条（gocell validate 校验 cell.yaml）已被拦截，构造期 strict 是冗余。
 
-### 为什么 Metadata() 返回指针不返回值
+### 为什么 Metadata() 返回独立 deep copy
 
-CellMeta 含 ~12 字段（slice + nested struct），值返回每次复制 ~200 字节。Cell.Metadata() 调用方多为 read-only 投影（catalog 导出 / governance 校验 / debug log），返回指针 + 契约要求 read-only 是优雅简洁的折中。BaseCell 内部已 deepCopyMeta 一次，外部 mutation 不污染——但 caller 的 mutation 仍是 contract violation（依赖 reviewer / 未来 archtest 守卫，目前未加）。
+CellMeta 含 ~12 字段（slice + nested struct），值返回每次复制 ~200 字节。先前方案是返回指针 + read-only 契约，但 6 角色 review 指出该契约无机制保障——caller 可静默修改 `b.meta` 字段，破坏 cellType / level 缓存与 meta 字段的一致性。最终采纳 deep copy fail-closed：每次调用 `Metadata()` 返回独立 clone（`metadata.CellMeta.Clone()`），分配开销可忽略（cell.Metadata() 不在 hot path——主要消费方是 catalog 导出 / debug log / governance 校验）。
 
 ### Trade-offs
 
 - **API 表面增长**：新增 1 个 `MustNewBaseCell` wrapper（与 `MustNewAuthJWT` 等其他 ~12 个 Must* 形态一致）
 - **caller 改动量**：~95 处 `cell.NewBaseCell(cell.CellMetadata{...})` → `cell.MustNewBaseCell(&metadata.CellMeta{...})`，可机器化批改（W3 sub-agent 完成）
-- **测试 mutation 风险**：BaseCell.deepCopyMeta 防护测试 mutation 污染生产；`Metadata()` 返回指针仍允许 caller-side mutation，但这是 documented contract violation
+- **测试 mutation 风险**：BaseCell.Clone 防护构造期 mutation 污染；`Metadata()` 返回独立 deep copy（每次调用一次 ~200 字节分配），caller 任意 mutation 不影响 cell 状态。fail-closed 替代不可强制的 read-only 契约。
 - **一次性突破**：所有 caller 一次改完，无 deprecation 周期、无 typealias 兼容层
 
 ## Alternatives considered
