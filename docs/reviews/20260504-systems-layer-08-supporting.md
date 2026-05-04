@@ -1,0 +1,103 @@
+# GoCell 系统工程逐层审查 — 支撑层（pkg + cmd + tools + CI）
+
+| 项 | 值 |
+|---|---|
+| 日期 | 2026-05-04 |
+| Commit | 11600a4f (`develop`) |
+| 选定维度 | ② 职责与内聚 / ③ 依赖（leaf）/ ⑧ 守卫与治理 / ⑨ 可演进性 |
+| 审查范围 | `pkg/` 18 包 + `cmd/{gocell,corebundle}` + `tools/` 11 子目录 + `.github/workflows/` 9 个 + `Makefile` 13 target + `.golangci.yml` |
+
+---
+
+## 0. 摘要
+
+支撑层是 GoCell 的"治理灵魂"：158 条 archtest 规则 + 8 条 depguard 隔离规则 + 9 个 workflow + 13 条 Makefile target，构成了一个相当成熟的工具链与守卫矩阵。整体评级 **⚠️ 部分具备**——主轴（layering / leaf / lint / test / coverage / vuln / SAST / e2e gate）都健全，且分工清晰（depguard 管单纯 import allow-list，archtest 管类型级 + 跨 cell + 文本级语义守卫；二者通过 `tools/archtest/doc.go` 中 LAYER-01..04 的 `[moved to depguard]` 注释明确互补关系，无重复执行）。但**外围治理基础设施缺失明显**：`.github/CODEOWNERS` 与 `pull_request_template.md` 不存在（PR 路由与模板治理缺失），Makefile 缺 `lint` / `archtest` / `verify-codegen-cell` 等可单独触发的 target（CI 可调用但本地必须 `cd` 跑 shell 脚本），`pkg/contracts` vs `contracts/` 顶层、`cmd/gocell` vs `cmd/corebundle` 的职责边界缺一份 README 锚定文档。这些都属于 Cx1–Cx2 的可演进性"易腐化"信号。
+
+---
+
+## 1. 评级表
+
+| 维度 | 评级 | 关键证据 |
+|---|---|---|
+| ② 职责与内聚 | ⚠️ 部分具备 | `pkg/ctxkeys` (通用 correlation/trace) vs `kernel/ctxkeys` (cell/slice/journey/contract) 边界清晰且文件注释互不重叠（`pkg/ctxkeys/keys.go:8-16` 限定"Generic observability and networking"，`kernel/ctxkeys/keys.go:8-15` 限定"Cell-model"）；`cmd/gocell` (CLI dispatch, `app/dispatch.go:20-28` 注册 7 子命令) vs `cmd/corebundle` (生成的编译单元 `main.go:1` `Code generated`) 职责本身清晰但**未落入任何 README 或 docs/ 锚定**。`pkg/` 18 个包未提供顶层 `pkg/doc.go` 总索引。 |
+| ③ 依赖（leaf） | ✅ 已具备 | `.golangci.yml:145-159` `pkg-isolation` 严格 list-mode + 仅放行 `$gostd` + `pkg/` 自身 + `google/uuid` + `santhosh-tekuri/jsonschema` + `yaml.v3`；`!**/pkg/**/*_test.go` 排除测试，**生产代码 leaf 性强约束**。已通过 archtest 与 depguard 双轨保障。 |
+| ⑧ 守卫与治理 | ⚠️ 部分具备 | 158 个 archtest Test 函数（覆盖 LAYER-05..10 / AUTH-PLAN-04 / OUTBOX-SERVICE-01 / HANDLER-RECEIPT-WRITE-01 / CTXSOURCE / RUNTIME-SENTINEL / EXPORTED-ERROR-NEW-01 / PROD-CLOCKMOCK-IMPORT-01 / CLOCK-INJECTION-TEST-CALLSITE-01 等，覆盖度高），depguard 8 条与 archtest 通过 `[moved to depguard]` 注释明确分工不重复。CI 工作流 9 个角色齐全。**缺口**：Makefile 13 target 与 CI 调用之间存在缝隙——`make verify` 在 `governance.yml:40-41` 通过 `VERIFY_SKIP=archtest` 调用，但 `make` 自身不暴露独立 `lint` / `race` / `archtest` target；`.github/CODEOWNERS` 缺失导致 reviewer 路由全靠分支保护手动指派。 |
+| ⑨ 可演进性 | ⚠️ 部分具备 | 加 archtest 规则路径明确（`tools/archtest/<name>_test.go` + `Test*` 函数即生效），9 个 workflow 通过 `_build-lint.yml` reusable workflow 实现 DRY；但**新增 lint / 新增 verify 脚本** 没有"标准动作"文档（hack/verify-*.sh 自动 discover 是良好模式，但未在任何 onboarding 文档中说明）。腐化迹象：`.golangci.yml:343-480` 累积了 13 处 `exclusions.rules` 路径白名单，未来一年若不做盘点可能成为"破窗"温床。 |
+
+---
+
+## 2. 问题清单
+
+### [P1] CODEOWNERS 与 PR 模板缺失，PR 路由与基线检查无外壳
+
+- **维度**：⑧ 守卫与治理
+- **位置**：`.github/CODEOWNERS`（不存在）、`.github/pull_request_template.md`（不存在）
+- **复杂度**：Cx1
+- **现象**：9 个 workflow 均到位，但 GitHub 原生的两个治理基础设施缺失。CODEOWNERS 缺失意味着 `kernel/` / `runtime/` / `adapters/` / `cells/` 跨层 PR 没有自动 reviewer 指派，本次审查事实清单也明确标"已知缺失"。pull_request_template.md 缺失则 PR 描述无法强制包含 `ref:` 标记 / 一致性级别声明 / journey 影响面等 CLAUDE.md 必须项。
+- **建议方向**：新增 `.github/CODEOWNERS`（按 `/kernel/ @owner-kernel`、`/cells/accesscore/ @owner-access` 等粒度划分），新增 `.github/pull_request_template.md`（含 `ref:` / 一致性级别 / 影响 journey / archtest 规则增量 4 个 checklist）。
+
+### [P1] Makefile 缺 `lint` / `archtest` / `race` 等独立 target，CI 与本地落差
+
+- **维度**：⑧ 守卫与治理 / ⑨ 可演进性
+- **位置**：`Makefile:1-91` 全文 13 个 target；`.github/workflows/_build-lint.yml:103-122`（CI 跑 golangci-lint）、`test-race.yml:47-57`（CI 跑 race）
+- **复杂度**：Cx1
+- **现象**：CI 端对 lint / race / archtest 单独跑了三个工序，但本地开发者要等价复现需手动拼 `golangci-lint run --new-from-merge-base=...` / `go test -race ./kernel/... ./runtime/... ./pkg/... ./tools/archtest/internal/typeseval/...` / `go test ./tools/archtest/...`。Makefile 只暴露 `make test`（全跑）和 `make verify`（hack/verify-*.sh，不含 lint / race）。新成员 onboarding 时本地无法快速 lint-fix，只能 push 触发 CI 反馈循环。
+- **建议方向**：补充 `make lint`（直接调 `golangci-lint run`）、`make race`（镜像 `test-race.yml` 包列表）、`make archtest`（单跑 `go test ./tools/archtest/...`）三个 target；同时把 CI yaml 中的命令换成调 Makefile target（消除 CI/本地命令漂移点）。
+
+### [P1] `pkg/contracts` vs 顶层 `contracts/` 职责边界无文档
+
+- **维度**：② 职责与内聚 / ⑨ 可演进性
+- **位置**：`pkg/contracts/`（目录存在但未读到 `doc.go` / `README.md`）、顶层 `contracts/`（权威 yaml 定义）
+- **复杂度**：Cx1
+- **现象**：CLAUDE.md 明确顶层 `contracts/` 是"平台跨 Cell 边界契约（按 {kind}/{domain-path}/{version}/ 组织）"权威 yaml 来源，但 `pkg/contracts` 在 18 个 pkg 中的角色（应是共享 Go 类型 / Schema 反序列化 helper）未在任何 README / doc.go 中说明。一旦未来有人在 `pkg/contracts` 下放业务领域类型（耦合 cell），泄漏会让 pkg leaf 性破坏，但当前 archtest 不会立即报错（`pkg-isolation` 只防外向依赖）。
+- **建议方向**：新增 `pkg/contracts/doc.go` 包级 godoc，明确"仅承载 contracts/*.yaml 的 Go 类型镜像 + Schema 加载 helper，禁止任何业务领域类型"，并配套在 `tools/archtest/` 增加一条 `PKG-CONTRACTS-NO-BUSINESS-TYPE` archtest（扫描 `pkg/contracts/**` 的 typed 包不含 cell-domain 命名前缀）。
+
+### [P2] `cmd/gocell` vs `cmd/corebundle` 的语义对照表未沉淀
+
+- **维度**：② 职责与内聚
+- **位置**：`cmd/gocell/main.go:1-15`、`cmd/corebundle/main.go:1-29`
+- **复杂度**：Cx1
+- **现象**：`cmd/gocell` 是 CLI dispatcher（7 子命令），`cmd/corebundle` 是 `gocell generate assembly` 的产物（`main.go:1` `Code generated by gocell generate assembly. DO NOT EDIT.`）。两者形态完全不同（一个手写、一个生成），但 `cmd/CLAUDE.md` 主题是 corebundle 三层组装模式，对 `cmd/gocell` 在 Composition Root 中的地位完全没着墨。新人易把 `cmd/gocell` 误读成"另一个 main"。
+- **建议方向**：在 `cmd/CLAUDE.md` 文首加一段对照——`cmd/gocell` = 治理 / 元数据 / 生成器 CLI（开发期 + CI 工具），`cmd/corebundle` = `assemblies/corebundle/` 的运行时组装产物（生产 main）。
+
+### [P2] `.golangci.yml` exclusions.rules 13 条白名单缺周期复盘机制
+
+- **维度**：⑨ 可演进性
+- **位置**：`.golangci.yml:343-480`
+- **复杂度**：Cx2
+- **现象**：累积 13 条 path-scoped exclusions（`pkg/cmdrun` G204 / `pkg/errcode` G101 / `runtime/http/health` G706 / `runtime/http/middleware/{recovery,csrf}` G706 等），每条都有详尽 source comment 解释豁免依据。但**缺一个治理动作**：定期复审豁免是否仍成立、是否能用更精准的 line-level `//nolint:gosec // R2-approved: ...` 替代（CLAUDE.md 已约定 R2-approved 前缀）。当前 file-level 豁免会"沉默化"该文件未来新增的同类问题。
+- **建议方向**：新增 `hack/verify-lint-exclusions.sh`（每条 exclusion 必须含 `# R2-DECIDED: yyyy-mm` 时间戳 + 复审周期），按 commit 日期推导超过 12 个月需开 issue 重审。
+
+### [P2] Qodana workflow 与现有 SAST 双重覆盖、增量价值未标注
+
+- **维度**：⑧ 守卫与治理
+- **位置**：`.github/workflows/qodana_code_quality.yml:1-23`
+- **复杂度**：Cx1
+- **现象**：已有 CodeQL（`security-static.yml:40-86`，security-extended Go queries）+ Semgrep（同文件 87-151，3 个社区 ruleset）+ govulncheck + golangci-lint 21 linters；Qodana 在此栈中的**增量价值未在 yaml 注释中说明**（其他 8 个 workflow 头部都有"做什么 / 为什么 / 阻断语义"三段式注释，唯 qodana 是空的）。同时 `pr-mode: false` 意味着仅 push:develop 才跑，不阻断 PR——是否值得占一个 secret slot 不明。
+- **建议方向**：要么补 yaml 头部注释明确 Qodana 在 SAST 矩阵中的差异化覆盖（如 IDE 集成体验、JetBrains 系特有规则），要么 retire 该 workflow + 删除 `QODANA_TOKEN_1820249425` secret。
+
+---
+
+## 3. 跨层观察
+
+**支撑层 ↔ 主层守卫覆盖度**：
+
+- **kernel/runtime/adapters/cells 四层**：depguard 4 条 isolation 规则 + archtest LAYER-05..10 双层覆盖，**完全到位**；尤其 archtest 注释明确标注 LAYER-01..04 已 `[moved to depguard]`，无重复执行。
+- **examples/{demo,iotdevice,todoorder}**：每个 example 单独一条 `example-cells-isolation-<name>` depguard 规则（`.golangci.yml:241-275`），跨 example import 默认拒绝。**但缺 `example-cells-isolation-ssobff`**——若 ssobff 没有 cells/ 子目录则可豁免，否则规则缺失（潜在 P1）。
+- **clockmock test-only**：`.golangci.yml:276-298` `clockmock-test-only` 配合 archtest `PROD-CLOCKMOCK-IMPORT-01` + `CLOCK-INJECTION-TEST-CALLSITE-01` 形成完整守卫链，模式可复制到其他 test-only helper。
+- **HTTP metrics cell label**：`observability.md` 描述的 5 条 archtest 守卫（CTXSOURCE / ROUTER-ATTRIBUTION / NO-ASSEMBLY-DERIVE / NO-CONFIG-CELLID / RUNTIME-SENTINEL）已落地在 `tools/archtest/http_metrics_label_test.go`，与运行时口径完全一致。
+
+**pkg leaf 性验证**：
+
+- depguard `pkg-isolation`（`.golangci.yml:145-159`）仅放行 4 个外部依赖；**真正 leaf**。
+- 但 archtest 没有针对 `pkg/` 的额外类型级守卫（如 `pkg/ctxkeys` 不得引入 cell-model 字段），完全靠人审。考虑到 `pkg/ctxkeys` 与 `kernel/ctxkeys` 边界微妙，建议补一条 archtest 锁定 `pkg/ctxkeys.ctxKey` 的常量集合不漂移到 cell 维度。
+
+**CI / Makefile 命令一致性**：
+
+- `_build-lint.yml:140` 直接 `go test -covermode=atomic -coverprofile=...`，未走 `make test`；`governance.yml:41` 走 `make verify`；`test-race.yml:52-57` 直接 `go test -race`。**结论**：约 3 处命令在 yaml 中硬编码、未通过 Makefile 抽象——属于 Cx1 的"小漂移"，单点修改成本低但累积后会让"本地可复现"变弱。
+
+---
+
+## 4. 一句话结论
+
+支撑层主轴（archtest 158 + depguard 8 + 9 workflow + 21 linter）已是项目同规模 Go 工程的**第一梯队水平**，但需补齐 CODEOWNERS / PR 模板 / Makefile 缺失 target / `pkg/contracts` 边界 doc 4 个 Cx1 缺口，并对 lint exclusions 累积建立年度复盘机制，以阻断未来 12 个月可能出现的"破窗式腐化"。
