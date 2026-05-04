@@ -18,53 +18,9 @@ import (
 	"github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/persistence"
-	"github.com/ghbvf/gocell/kernel/wrapper"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/query"
 )
-
-// Topic constants — one per consumed event. FMT-18 resolves const string
-// references at scan time so contract IDs can be written once here and
-// reused as both map key and EventSpec argument without Sonar flagging
-// duplicate literals.
-const (
-	topicUserCreated     = "event.user.created.v1"
-	topicUserLocked      = "event.user.locked.v1"
-	topicUserUpdated     = "event.user.updated.v1"
-	topicUserDeleted     = "event.user.deleted.v1"
-	topicUserUnlocked    = "event.user.unlocked.v1"
-	topicSessionCreated  = "event.session.created.v1"
-	topicSessionRevoked  = "event.session.revoked.v1"
-	topicConfigUpserted  = "event.config.entry-upserted.v1"
-	topicConfigDeleted   = "event.config.entry-deleted.v1"
-	topicConfigPublished = "event.config.version-published.v1"
-	topicConfigRollback  = "event.config.rollback.v1"
-	topicRoleAssigned    = "event.role.assigned.v1"
-	topicRoleRevoked     = "event.role.revoked.v1"
-)
-
-// auditAppendSpecs maps each consumed topic to its wrapper.ContractSpec.
-// Each value is a wrapper.EventSpec call so FMT-18's governance scan can
-// resolve the contract id (via const reference) and cross-check it against
-// contracts/event/**/contract.yaml.
-//
-// Adding or removing a topic MUST be mirrored in auditappend.Topics;
-// RegisterSubscriptions fails at startup if the two drift.
-var auditAppendSpecs = map[string]wrapper.ContractSpec{
-	topicUserCreated:     wrapper.EventSpec(topicUserCreated, "amqp"),
-	topicUserLocked:      wrapper.EventSpec(topicUserLocked, "amqp"),
-	topicUserUpdated:     wrapper.EventSpec(topicUserUpdated, "amqp"),
-	topicUserDeleted:     wrapper.EventSpec(topicUserDeleted, "amqp"),
-	topicUserUnlocked:    wrapper.EventSpec(topicUserUnlocked, "amqp"),
-	topicSessionCreated:  wrapper.EventSpec(topicSessionCreated, "amqp"),
-	topicSessionRevoked:  wrapper.EventSpec(topicSessionRevoked, "amqp"),
-	topicConfigUpserted:  wrapper.EventSpec(topicConfigUpserted, "amqp"),
-	topicConfigDeleted:   wrapper.EventSpec(topicConfigDeleted, "amqp"),
-	topicConfigPublished: wrapper.EventSpec(topicConfigPublished, "amqp"),
-	topicConfigRollback:  wrapper.EventSpec(topicConfigRollback, "amqp"),
-	topicRoleAssigned:    wrapper.EventSpec(topicRoleAssigned, "amqp"),
-	topicRoleRevoked:     wrapper.EventSpec(topicRoleRevoked, "amqp"),
-}
 
 // Compile-time interface check lives in cell_gen.go (DO NOT EDIT).
 
@@ -193,8 +149,8 @@ type AuditCore struct {
 	// +slice:subscribe:slice=auditappend,topic=event.role.revoked.v1,handler=HandleEvent,group=auditcore
 	appendSvc *auditappend.Service
 
-	verifySvc    *auditverify.Service
-	archiveSvc   *auditarchive.Service
+	verifySvc  *auditverify.Service
+	archiveSvc *auditarchive.Service
 
 	// +slice:route:slice=auditquery,subPath=
 	queryHandler *auditquery.Handler

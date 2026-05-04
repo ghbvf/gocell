@@ -151,6 +151,8 @@ func (c *DeviceCell) buildEmitter() (*outbox.DirectEmitter, error) {
 //
 // L4 Cells do not use outboxWriter (KG-07 decision). The Cell boundary
 // adapts the publisher to a direct emitter for event publishing.
+//
+//nolint:unparam // ctx is part of the K#04 initInternal contract; unused here, used by other cells (configcore)
 func (c *DeviceCell) initInternal(ctx context.Context, reg cell.Registry) error {
 	durabilityMode := reg.DurabilityMode()
 

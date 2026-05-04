@@ -293,6 +293,8 @@ func (c *AccessCore) initRbacAssign() error {
 // lifecycle hooks). cell_gen.go::Init calls it after BaseCell.Init and before
 // mounting the generated route-group and subscribe blocks. This is a permanent
 // convention, not a transitional shim.
+//
+//nolint:unparam // ctx is part of the K#04 initInternal contract; unused here, used by other cells (devicecell)
 func (c *AccessCore) initInternal(ctx context.Context, reg cell.Registry) error {
 	clock.MustHaveClock(c.clk, "accesscore.initInternal")
 
