@@ -3,7 +3,6 @@ package router
 import (
 	"net/http"
 	"net/http/httptest"
-	"reflect"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -50,14 +49,12 @@ func TestRouter_Handler(t *testing.T) {
 	// The composed handler wraps the ServeMux with the listener-root middleware
 	// chain, so it is not pointer-equal to r.mux — but it must be non-nil and
 	// reused across calls so http.Server hands the same handler to every
-	// connection (cached lazily on first call).
+	// connection (built eagerly by composeHandler during NewForListener).
 	r := MustNew(WithRouterClock(clock.Real()))
 	first := r.Handler()
 	assert.NotNil(t, first)
 	assert.NotNil(t, r.mux)
-	assert.Equal(t,
-		reflect.ValueOf(first).Pointer(),
-		reflect.ValueOf(r.Handler()).Pointer(),
+	assert.True(t, first == r.Handler(),
 		"Handler() must return the same composed handler on each call")
 }
 

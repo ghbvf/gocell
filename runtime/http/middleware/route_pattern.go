@@ -1,3 +1,20 @@
+// route_pattern.go shares a request-scoped *patternRecorder between
+// runtime/http/router (which writes the matched ServeMux pattern via
+// RecordRoutePattern in the dispatch wrapper) and observability middleware
+// (which reads it through RoutePatternFromCtx after next.ServeHTTP returns).
+//
+// The recorder lives in this package — not in router/ — for two reasons:
+//  1. Tracing / AccessLog / Metrics already live here and read the value;
+//     keeping the accessor next to the readers avoids an import cycle that
+//     would otherwise force router → middleware → router.
+//  2. The mutable-container-via-context shape is local to the observability
+//     contract; router only owns the writer (the dispatch wrapper) and is
+//     free to evolve independently.
+//
+// Recorder writes happen exactly once per request inside the router's
+// patternRecordingMux; reads happen many times (one per observing
+// middleware) but always after dispatch has returned, so no synchronization
+// is required.
 package middleware
 
 import "context"

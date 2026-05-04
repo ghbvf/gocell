@@ -47,6 +47,17 @@ func chain(h http.Handler, mws ...Middleware) http.Handler {
 	return h
 }
 
+// composedHandler wraps the listener-root chain as a struct pointer so that
+// the http.Handler interface value stored in Router.handler has a comparable
+// (pointer) dynamic type. This allows Handler() callers to use == to confirm
+// they receive the same instance across multiple calls — which http.HandlerFunc
+// (the type returned by chain) does not support.
+type composedHandler struct{ h http.Handler }
+
+func (c *composedHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	c.h.ServeHTTP(w, r)
+}
+
 // patternRecordingMux is the innermost dispatch wrapper. It calls
 // (*http.ServeMux).Handler explicitly to recover the matched pattern, writes
 // it into the request-scoped recorder installed by patternRecorderMiddleware,
@@ -350,9 +361,9 @@ type Router struct {
 	// declaration order: the first entry is outermost. buildMux populates it
 	// via r.use(...) so archtest can statically assert ordering.
 	middlewares []Middleware
-	// handler is the lazily-built composition of middlewares around the
-	// pattern-recording dispatch wrapper. Reset only when the chain changes
-	// (currently only during NewForListener).
+	// handler is the eagerly-built composition of middlewares around the
+	// pattern-recording dispatch wrapper. Set once by composeHandler at the
+	// end of buildMux; immutable afterwards.
 	handler http.Handler
 	// muxHandlers tracks (method, path) pairs that have been registered on
 	// the underlying ServeMux. Stdlib panics on a second registration of the
@@ -547,16 +558,13 @@ func NewForListener(ref kcell.ListenerRef, opts ...Option) (*Router, error) {
 // layers can read the matched route pattern after next.ServeHTTP returns.
 // patternRecordingMux fills the recorder by asking ServeMux.Handler for the
 // matched pattern before dispatching the leaf handler.
-func (r *Router) Handler() http.Handler {
-	if r.handler == nil {
-		dispatcher := &patternRecordingMux{mux: r.mux}
-		all := make([]Middleware, 0, len(r.middlewares)+1)
-		all = append(all, patternRecorderMiddleware)
-		all = append(all, r.middlewares...)
-		r.handler = chain(http.Handler(dispatcher), all...)
-	}
-	return r.handler
-}
+//
+// The handler is built eagerly by composeHandler at the end of buildMux
+// (called from NewForListener), so Handler() is a plain getter and safe to
+// call concurrently after construction.
+// Handler returns the listener's composed http.Handler. Built once at
+// construction by composeHandler; safe to call concurrently afterwards.
+func (r *Router) Handler() http.Handler { return r.handler }
 
 // ServeHTTP delegates to the router's composed handler, making Router drop-in
 // compatible with http.Handler. If auth route metadata was declared but
@@ -680,7 +688,19 @@ func (r *Router) buildMux(realIPMW func(http.Handler) http.Handler) error {
 		r.use(auth.AuthMiddleware(r.authVerifier, r.buildAuthOpts()...))
 	}
 	r.use(middleware.BodyLimit(r.bodyLimit))
+	r.composeHandler()
 	return nil
+}
+
+// composeHandler builds the listener-root chain handler once buildMux has
+// settled the middleware stack. NewForListener calls it after the final
+// r.use(...); Handler() is then a plain getter.
+func (r *Router) composeHandler() {
+	dispatcher := &patternRecordingMux{mux: r.mux}
+	all := make([]Middleware, 0, len(r.middlewares)+1)
+	all = append(all, patternRecorderMiddleware)
+	all = append(all, r.middlewares...)
+	r.handler = &composedHandler{h: chain(http.Handler(dispatcher), all...)}
 }
 
 // buildAuthOpts constructs the AuthOption slice for the auth middleware.
@@ -770,6 +790,22 @@ func (r *Router) Route(pattern string, fn func(kcell.RouteMux)) {
 	fn(sub)
 }
 
+// registerMount installs handler under prefix on mux with chi-equivalent
+// no-redirect semantics: the bare path matches via mountBareHandler (path
+// rewritten to "/") and the subtree pattern carries the rest. mountPatternRecorder
+// upgrades *http.ServeMux handlers so the recorded route stays
+// "prefix + inner pattern" instead of just the subtree prefix.
+func registerMount(mux *http.ServeMux, prefix string, handler http.Handler) {
+	canonical := strings.TrimSuffix(prefix, "/")
+	if canonical == "" {
+		mux.Handle("/", handler)
+		return
+	}
+	recorded := mountPatternRecorder(canonical, handler)
+	mux.Handle(canonical+"/", http.StripPrefix(canonical, recorded))
+	mux.Handle(canonical, mountBareHandler(recorded))
+}
+
 // Mount attaches an http.Handler under the given prefix. Stdlib ServeMux
 // requires sub-tree patterns to end in "/"; the trailing slash is added
 // implicitly. The handler sees the request path with the prefix stripped.
@@ -778,14 +814,7 @@ func (r *Router) Route(pattern string, fn func(kcell.RouteMux)) {
 // so requests that hit the mount root without a trailing slash still reach
 // the inner handler's "/" registration instead of stdlib's 301 redirect.
 func (r *Router) Mount(prefix string, handler http.Handler) {
-	canonical := strings.TrimSuffix(prefix, "/")
-	if canonical == "" {
-		r.mux.Handle("/", handler)
-		return
-	}
-	recorded := mountPatternRecorder(canonical, handler)
-	r.mux.Handle(canonical+"/", http.StripPrefix(canonical, recorded))
-	r.mux.Handle(canonical, mountBareHandler(recorded))
+	registerMount(r.mux, prefix, handler)
 }
 
 // mountBareHandler rewrites the request path to "/" before dispatching to the
@@ -1534,17 +1563,10 @@ func (a *nativeMuxAdapter) Mount(pattern string, handler http.Handler) {
 		a.setRegistrationErr(err)
 		return
 	}
-	canonical := strings.TrimSuffix(fullPrefix, "/")
 	if len(a.middlewares) > 0 {
 		handler = chain(handler, a.middlewares...)
 	}
-	if canonical == "" {
-		a.mux.Handle("/", handler)
-		return
-	}
-	recorded := mountPatternRecorder(canonical, handler)
-	a.mux.Handle(canonical+"/", http.StripPrefix(canonical, recorded))
-	a.mux.Handle(canonical, mountBareHandler(recorded))
+	registerMount(a.mux, fullPrefix, handler)
 }
 
 func (a *nativeMuxAdapter) Group(fn func(kcell.RouteMux)) {
