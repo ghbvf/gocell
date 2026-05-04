@@ -288,3 +288,121 @@ func TestBuildBundle_Dispatch(t *testing.T) {
 		}
 	})
 }
+
+// ---- K05-04 target level enforcement tests ----------------------------------
+
+func TestDispatchMarker_TargetEnforcement(t *testing.T) {
+	t.Parallel()
+
+	t.Run("cell:listener on field is rejected", func(t *testing.T) {
+		t.Parallel()
+		// cell:listener placed on a field (fieldLevel) — must fail.
+		m := collectedMarker{
+			Name:      "cell:listener",
+			KVLine:    "ref=cell.PrimaryListener",
+			Line:      5,
+			Target:    fieldLevel,
+			FieldName: "MyField",
+		}
+		var bundle WireBundle
+		err := dispatchMarker(m, &bundle)
+		if err == nil {
+			t.Fatal("expected error for cell:listener on field, got nil")
+		}
+		if !strings.Contains(err.Error(), "cell:listener marker must be on a type declaration") {
+			t.Errorf("unexpected error message: %v", err)
+		}
+		if !strings.Contains(err.Error(), "MyField") {
+			t.Errorf("error should name the field, got: %v", err)
+		}
+	})
+
+	t.Run("cell:listener on type is accepted", func(t *testing.T) {
+		t.Parallel()
+		m := makeMarker("cell:listener", "ref=cell.PrimaryListener")
+		var bundle WireBundle
+		if err := dispatchMarker(m, &bundle); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(bundle.Listeners) != 1 {
+			t.Errorf("expected 1 listener, got %d", len(bundle.Listeners))
+		}
+	})
+
+	t.Run("slice:route on type declaration is rejected", func(t *testing.T) {
+		t.Parallel()
+		m := makeMarker("slice:route", "slice=ordercreate,subPath=/orders")
+		// makeMarker sets Target=typeLevel, FieldName=""
+		var bundle WireBundle
+		err := dispatchMarker(m, &bundle)
+		if err == nil {
+			t.Fatal("expected error for slice:route on type, got nil")
+		}
+		if !strings.Contains(err.Error(), "slice:route marker must be on a named struct field") {
+			t.Errorf("unexpected error message: %v", err)
+		}
+		if !strings.Contains(err.Error(), "type declaration") {
+			t.Errorf("error should mention type declaration, got: %v", err)
+		}
+	})
+
+	t.Run("slice:route on anonymous field is rejected", func(t *testing.T) {
+		t.Parallel()
+		// fieldLevel but FieldName=="" (anonymous/embedded field)
+		m := collectedMarker{
+			Name:      "slice:route",
+			KVLine:    "slice=ordercreate,subPath=/orders",
+			Line:      7,
+			Target:    fieldLevel,
+			FieldName: "",
+		}
+		var bundle WireBundle
+		err := dispatchMarker(m, &bundle)
+		if err == nil {
+			t.Fatal("expected error for slice:route on anonymous field, got nil")
+		}
+		if !strings.Contains(err.Error(), "slice:route marker must be on a named struct field") {
+			t.Errorf("unexpected error message: %v", err)
+		}
+		if !strings.Contains(err.Error(), "anonymous field") {
+			t.Errorf("error should mention anonymous field, got: %v", err)
+		}
+	})
+
+	t.Run("slice:route on named field is accepted", func(t *testing.T) {
+		t.Parallel()
+		m := makeFieldMarker("slice:route", "slice=ordercreate,subPath=/orders", "CreateHandler")
+		var bundle WireBundle
+		if err := dispatchMarker(m, &bundle); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(bundle.Routes) != 1 {
+			t.Errorf("expected 1 route, got %d", len(bundle.Routes))
+		}
+	})
+
+	t.Run("slice:subscribe on type declaration is rejected", func(t *testing.T) {
+		t.Parallel()
+		m := makeMarker("slice:subscribe", "slice=s,topic=t,handler=H,group=g")
+		var bundle WireBundle
+		err := dispatchMarker(m, &bundle)
+		if err == nil {
+			t.Fatal("expected error for slice:subscribe on type, got nil")
+		}
+		if !strings.Contains(err.Error(), "slice:subscribe marker must be on a named struct field") {
+			t.Errorf("unexpected error message: %v", err)
+		}
+	})
+
+	t.Run("slice:subscribe on named field is accepted", func(t *testing.T) {
+		t.Parallel()
+		m := makeFieldMarker("slice:subscribe", "slice=s,topic=t,handler=H,group=g", "SubField")
+		var bundle WireBundle
+		if err := dispatchMarker(m, &bundle); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(bundle.Subscribes) != 1 {
+			t.Errorf("expected 1 subscribe, got %d", len(bundle.Subscribes))
+		}
+	})
+}

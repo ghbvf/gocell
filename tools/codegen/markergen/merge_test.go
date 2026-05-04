@@ -48,8 +48,18 @@ func TestMerge_MarkerPath(t *testing.T) {
 			},
 		},
 		map[string]*metadata.SliceMeta{
-			"markercell/sliceA": {ID: "sliceA"},
-			"markercell/sliceB": {ID: "sliceB"},
+			"markercell/sliceA": {
+				ID: "sliceA",
+				ContractUsages: []metadata.ContractUsage{
+					{Contract: "api.items.v1", Role: "serve"},
+				},
+			},
+			"markercell/sliceB": {
+				ID: "sliceB",
+				ContractUsages: []metadata.ContractUsage{
+					{Contract: "event.foo.v1", Role: "subscribe"},
+				},
+			},
 		},
 	)
 
@@ -280,14 +290,250 @@ func TestMerge_ValidSliceOwnership(t *testing.T) {
 			},
 		},
 		map[string]*metadata.SliceMeta{
-			"markercell2/sliceA": {ID: "sliceA"},
-			"markercell2/sliceB": {ID: "sliceB"},
+			"markercell2/sliceA": {
+				ID: "sliceA",
+				ContractUsages: []metadata.ContractUsage{
+					{Contract: "api.items.v1", Role: "serve"},
+				},
+			},
+			"markercell2/sliceB": {
+				ID: "sliceB",
+				ContractUsages: []metadata.ContractUsage{
+					{Contract: "event.foo.v1", Role: "subscribe"},
+				},
+			},
 		},
 	)
 
 	_, err := Merge(tmp, project)
 	if err != nil {
 		t.Fatalf("expected no error for valid slice ownership, got: %v", err)
+	}
+}
+
+// TestMerge_ListenerOnField tests that placing a cell:listener marker on a
+// struct field (instead of the type declaration) produces an error (K05-04).
+func TestMerge_ListenerOnField(t *testing.T) {
+	t.Parallel()
+	td := testdataDir(t)
+	tmp := t.TempDir()
+	cellDir := filepath.Join(tmp, "cells", "badlistener")
+	if err := os.MkdirAll(cellDir, 0o750); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	copyFile(t, filepath.Join(td, "cell_listener_on_field.go"), filepath.Join(cellDir, "cell.go"))
+
+	project := buildProjectMeta(
+		map[string]*metadata.CellMeta{
+			"badlistener": {
+				ID:   "badlistener",
+				File: "cells/badlistener/cell.yaml",
+			},
+		},
+		map[string]*metadata.SliceMeta{},
+	)
+
+	_, err := Merge(tmp, project)
+	if err == nil {
+		t.Fatal("expected error for cell:listener on field, got nil")
+	}
+	if !strings.Contains(err.Error(), "cell:listener marker must be on a type declaration") {
+		t.Errorf("error should mention type declaration, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "BadField") {
+		t.Errorf("error should mention field name BadField, got: %v", err)
+	}
+}
+
+// TestMerge_RouteOnType tests that placing a slice:route marker on a type
+// declaration (instead of a named struct field) produces an error (K05-04).
+func TestMerge_RouteOnType(t *testing.T) {
+	t.Parallel()
+	td := testdataDir(t)
+	tmp := t.TempDir()
+	cellDir := filepath.Join(tmp, "cells", "routeontype")
+	if err := os.MkdirAll(cellDir, 0o750); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	copyFile(t, filepath.Join(td, "cell_route_on_type.go"), filepath.Join(cellDir, "cell.go"))
+
+	project := buildProjectMeta(
+		map[string]*metadata.CellMeta{
+			"routeontype": {
+				ID:   "routeontype",
+				File: "cells/routeontype/cell.yaml",
+			},
+		},
+		map[string]*metadata.SliceMeta{},
+	)
+
+	_, err := Merge(tmp, project)
+	if err == nil {
+		t.Fatal("expected error for slice:route on type declaration, got nil")
+	}
+	if !strings.Contains(err.Error(), "slice:route marker must be on a named struct field") {
+		t.Errorf("error should mention named struct field, got: %v", err)
+	}
+}
+
+// TestMerge_ContractUsageRoleServe tests that a route marker slice missing
+// role=serve in contractUsages produces an error (K05-01a).
+func TestMerge_ContractUsageRoleServe(t *testing.T) {
+	t.Parallel()
+	td := testdataDir(t)
+	tmp := t.TempDir()
+	cellDir := filepath.Join(tmp, "cells", "missingserve")
+	if err := os.MkdirAll(cellDir, 0o750); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	copyFile(t, filepath.Join(td, "cell_missing_serve_role.go"), filepath.Join(cellDir, "cell.go"))
+
+	project := buildProjectMeta(
+		map[string]*metadata.CellMeta{
+			"missingserve": {
+				ID:   "missingserve",
+				File: "cells/missingserve/cell.yaml",
+			},
+		},
+		map[string]*metadata.SliceMeta{
+			// sliceA exists but only has role=call, not role=serve.
+			"missingserve/sliceA": {
+				ID: "sliceA",
+				ContractUsages: []metadata.ContractUsage{
+					{Contract: "api.items.v1", Role: "call"},
+				},
+			},
+		},
+	)
+
+	_, err := Merge(tmp, project)
+	if err == nil {
+		t.Fatal("expected error for missing role=serve, got nil")
+	}
+	if !strings.Contains(err.Error(), `missing contractUsages role "serve"`) {
+		t.Errorf("error should mention missing role serve, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "declared roles:") {
+		t.Errorf("error should list declared roles, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "call") {
+		t.Errorf("error should mention the declared role 'call', got: %v", err)
+	}
+}
+
+// TestMerge_ContractUsageRoleSubscribe tests that a subscribe marker slice
+// missing role=subscribe in contractUsages produces an error (K05-01a).
+func TestMerge_ContractUsageRoleSubscribe(t *testing.T) {
+	t.Parallel()
+	td := testdataDir(t)
+	tmp := t.TempDir()
+	cellDir := filepath.Join(tmp, "cells", "missingsubscribe")
+	if err := os.MkdirAll(cellDir, 0o750); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	copyFile(t, filepath.Join(td, "cell_missing_subscribe_role.go"), filepath.Join(cellDir, "cell.go"))
+
+	project := buildProjectMeta(
+		map[string]*metadata.CellMeta{
+			"missingsubscribe": {
+				ID:   "missingsubscribe",
+				File: "cells/missingsubscribe/cell.yaml",
+			},
+		},
+		map[string]*metadata.SliceMeta{
+			// sliceB exists but only has role=publish, not role=subscribe.
+			"missingsubscribe/sliceB": {
+				ID: "sliceB",
+				ContractUsages: []metadata.ContractUsage{
+					{Contract: "event.foo.v1", Role: "publish"},
+				},
+			},
+		},
+	)
+
+	_, err := Merge(tmp, project)
+	if err == nil {
+		t.Fatal("expected error for missing role=subscribe, got nil")
+	}
+	if !strings.Contains(err.Error(), `missing contractUsages role "subscribe"`) {
+		t.Errorf("error should mention missing role subscribe, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "publish") {
+		t.Errorf("error should mention the declared role 'publish', got: %v", err)
+	}
+}
+
+// TestMerge_ContractUsageRoleValid tests that when slices correctly declare the
+// required roles, Merge succeeds (K05-01a green path).
+func TestMerge_ContractUsageRoleValid(t *testing.T) {
+	t.Parallel()
+	td := testdataDir(t)
+	tmp := t.TempDir()
+	cellDir := filepath.Join(tmp, "cells", "validroles")
+	if err := os.MkdirAll(cellDir, 0o750); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	copyFile(t, filepath.Join(td, "cell_withmarkers.go"), filepath.Join(cellDir, "cell.go"))
+
+	project := buildProjectMeta(
+		map[string]*metadata.CellMeta{
+			"validroles": {
+				ID:   "validroles",
+				File: "cells/validroles/cell.yaml",
+			},
+		},
+		map[string]*metadata.SliceMeta{
+			"validroles/sliceA": {
+				ID: "sliceA",
+				ContractUsages: []metadata.ContractUsage{
+					{Contract: "api.items.v1", Role: "serve"},
+				},
+			},
+			"validroles/sliceB": {
+				ID: "sliceB",
+				ContractUsages: []metadata.ContractUsage{
+					{Contract: "event.foo.v1", Role: "subscribe"},
+				},
+			},
+		},
+	)
+
+	_, err := Merge(tmp, project)
+	if err != nil {
+		t.Fatalf("expected no error for valid roles, got: %v", err)
+	}
+}
+
+// TestMerge_ContractUsageRoleSkippedWhenNilMeta tests that when sliceMeta is
+// nil (not yet in project), the role check is skipped (K05-01a nil guard).
+func TestMerge_ContractUsageRoleSkippedWhenNilMeta(t *testing.T) {
+	t.Parallel()
+	td := testdataDir(t)
+	tmp := t.TempDir()
+	cellDir := filepath.Join(tmp, "cells", "nilmeta")
+	if err := os.MkdirAll(cellDir, 0o750); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	copyFile(t, filepath.Join(td, "cell_withmarkers.go"), filepath.Join(cellDir, "cell.go"))
+
+	project := buildProjectMeta(
+		map[string]*metadata.CellMeta{
+			"nilmeta": {
+				ID:   "nilmeta",
+				File: "cells/nilmeta/cell.yaml",
+			},
+		},
+		// Slices exist in the set but their metadata pointers are nil.
+		map[string]*metadata.SliceMeta{
+			"nilmeta/sliceA": nil,
+			"nilmeta/sliceB": nil,
+		},
+	)
+
+	// Should not panic; nil sliceMeta skips role check.
+	_, err := Merge(tmp, project)
+	if err != nil {
+		t.Fatalf("expected no error when sliceMeta is nil, got: %v", err)
 	}
 }
 

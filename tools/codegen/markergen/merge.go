@@ -1,7 +1,9 @@
 package markergen
 
 import (
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
@@ -29,8 +31,15 @@ func Merge(projectRoot string, project *metadata.ProjectMeta) (map[string]WireBu
 		cellGoPath := filepath.Join(projectRoot, filepath.Dir(cell.File), "cell.go")
 
 		if _, err := os.Stat(cellGoPath); err != nil {
-			// cell.go absent — empty WireBundle.
-			result[cellID] = WireBundle{}
+			if errors.Is(err, fs.ErrNotExist) {
+				// cell.go absent — empty WireBundle (expected case).
+				result[cellID] = WireBundle{}
+				continue
+			}
+			// Unexpected IO error (permission denied, broken symlink, etc.) —
+			// surface instead of silently falling back to empty WireBundle.
+			// K05-10: classify os.Stat errors instead of treating all failures as absent.
+			allErrs.Append(fmt.Errorf("cell %s: stat %s: %w", cellID, cellGoPath, err))
 			continue
 		}
 
@@ -62,9 +71,14 @@ func Merge(projectRoot string, project *metadata.ProjectMeta) (map[string]WireBu
 		result[cellID] = bundle
 	}
 
-	// Cross-check: every RouteSpec.Slice and SubscribeSpec.Slice must exist in
+	// Cross-check 1: every RouteSpec.Slice and SubscribeSpec.Slice must exist in
 	// project.Slices[cellID/<sliceID>]. Unknown slice names surface actionable
 	// errors listing the full declared-slice set.
+	//
+	// Cross-check 2 (K05-01a): the referenced slice must declare the expected
+	// contractUsages role — RouteSpec.Slice must have role "serve", and
+	// SubscribeSpec.Slice must have role "subscribe". Errors carry the actual
+	// declared roles for fast triage.
 	for cellID, bundle := range result {
 		cell := project.Cells[cellID]
 		if cell == nil {
@@ -82,12 +96,26 @@ func Merge(projectRoot string, project *metadata.ProjectMeta) (map[string]WireBu
 			if _, ok := sliceSet[r.Slice]; !ok {
 				allErrs.Append(fmt.Errorf("cell %s: route marker references unknown slice %q (declared slices: %v)",
 					cellID, r.Slice, sortedSliceIDs(sliceSet)))
+				continue
+			}
+			// K05-01a: slice must declare role=serve in contractUsages.
+			sliceMeta := project.Slices[cellID+"/"+r.Slice]
+			if sliceMeta != nil && !hasContractUsageRole(sliceMeta, "serve") {
+				allErrs.Append(fmt.Errorf("cell %s: route marker slice %q missing contractUsages role %q (declared roles: %v)",
+					cellID, r.Slice, "serve", declaredRoles(sliceMeta)))
 			}
 		}
 		for _, s := range bundle.Subscribes {
 			if _, ok := sliceSet[s.Slice]; !ok {
 				allErrs.Append(fmt.Errorf("cell %s: subscribe marker references unknown slice %q (declared slices: %v)",
 					cellID, s.Slice, sortedSliceIDs(sliceSet)))
+				continue
+			}
+			// K05-01a: slice must declare role=subscribe in contractUsages.
+			sliceMeta := project.Slices[cellID+"/"+s.Slice]
+			if sliceMeta != nil && !hasContractUsageRole(sliceMeta, "subscribe") {
+				allErrs.Append(fmt.Errorf("cell %s: subscribe marker slice %q missing contractUsages role %q (declared roles: %v)",
+					cellID, s.Slice, "subscribe", declaredRoles(sliceMeta)))
 			}
 		}
 	}
@@ -105,6 +133,32 @@ func sortedSliceIDs(set map[string]struct{}) []string {
 	return ids
 }
 
+// hasContractUsageRole reports whether the slice declares at least one
+// contractUsage entry with the given role.
+func hasContractUsageRole(s *metadata.SliceMeta, role string) bool {
+	for _, cu := range s.ContractUsages {
+		if cu.Role == role {
+			return true
+		}
+	}
+	return false
+}
+
+// declaredRoles returns the sorted list of distinct roles declared in the
+// slice's contractUsages, for inclusion in diagnostic error messages.
+func declaredRoles(s *metadata.SliceMeta) []string {
+	seen := make(map[string]struct{}, len(s.ContractUsages))
+	for _, cu := range s.ContractUsages {
+		seen[cu.Role] = struct{}{}
+	}
+	roles := make([]string, 0, len(seen))
+	for r := range seen {
+		roles = append(roles, r)
+	}
+	sort.Strings(roles)
+	return roles
+}
+
 // buildBundle interprets a slice of collectedMarkers and returns the resulting
 // WireBundle plus any parse/validation errors.
 func buildBundle(markers []collectedMarker) (WireBundle, []error) {
@@ -120,22 +174,42 @@ func buildBundle(markers []collectedMarker) (WireBundle, []error) {
 
 // dispatchMarker routes one marker to the appropriate parse function and
 // appends the result to bundle. Returns a non-nil error when the marker is
-// unknown or malformed.
+// unknown, placed on the wrong target level, or otherwise malformed.
 func dispatchMarker(m collectedMarker, bundle *WireBundle) error {
 	switch m.Name {
 	case "cell:listener":
+		// K05-04: cell:listener must be on a type declaration, not a struct field.
+		if m.Target != typeLevel {
+			return fmt.Errorf("cell.go:%d: cell:listener marker must be on a type declaration, found on field %s", m.Line, m.FieldName)
+		}
 		ls, err := parseListener(m)
 		if err != nil {
 			return err
 		}
 		bundle.Listeners = append(bundle.Listeners, ls)
 	case "slice:route":
+		// K05-04: slice:route must be on a named struct field, not a type declaration.
+		if m.Target != fieldLevel || m.FieldName == "" {
+			target := "type declaration"
+			if m.Target == fieldLevel {
+				target = "anonymous field"
+			}
+			return fmt.Errorf("cell.go:%d: slice:route marker must be on a named struct field, found on %s", m.Line, target)
+		}
 		rs, err := parseRoute(m)
 		if err != nil {
 			return err
 		}
 		bundle.Routes = append(bundle.Routes, rs)
 	case "slice:subscribe":
+		// K05-04: slice:subscribe must be on a named struct field, not a type declaration.
+		if m.Target != fieldLevel || m.FieldName == "" {
+			target := "type declaration"
+			if m.Target == fieldLevel {
+				target = "anonymous field"
+			}
+			return fmt.Errorf("cell.go:%d: slice:subscribe marker must be on a named struct field, found on %s", m.Line, target)
+		}
 		ss, err := parseSubscribe(m)
 		if err != nil {
 			return err
