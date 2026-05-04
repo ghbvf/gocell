@@ -538,6 +538,7 @@ type singletonCounter struct{ val float64 }
 func (s singletonCounter) Describe(ch chan<- *prom.Desc) {
 	ch <- prom.NewDesc("singleton", "test helper", nil, nil)
 }
+
 func (s singletonCounter) Collect(ch chan<- prom.Metric) {
 	ch <- prom.MustNewConstMetric(prom.NewDesc("singleton", "test helper", nil, nil), prom.CounterValue, s.val)
 }

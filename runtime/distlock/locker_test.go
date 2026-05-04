@@ -28,8 +28,10 @@ const lockerSmallTTL = testtime.D500ms
 
 // lockerExpiredTTLFrac is the fractional nanosecond below 1ms used to verify
 // boundary conditions in expiry tests.
-const lockerExpiredTTL500us = 500 * time.Microsecond
-const lockerExpiredTTL999us = 999_999 * time.Nanosecond
+const (
+	lockerExpiredTTL500us = 500 * time.Microsecond
+	lockerExpiredTTL999us = 999_999 * time.Nanosecond
+)
 
 // lockerTTLHalf is exactly half of the default 10s test TTL, used when
 // computing the renewal trigger point (ttl * 0.5 = 5s) without introducing

@@ -16,8 +16,10 @@ import (
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
-var _ Emitter = (*WriterEmitter)(nil)
-var _ Emitter = (*DirectEmitter)(nil)
+var (
+	_ Emitter = (*WriterEmitter)(nil)
+	_ Emitter = (*DirectEmitter)(nil)
+)
 
 func TestWriterEmitter_ConstructRejectsNilWriter(t *testing.T) {
 	_, err := NewWriterEmitter(nil)

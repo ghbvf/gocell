@@ -11,19 +11,23 @@ import (
 // ─── Compile-time interface assertions ────────────────────────────────────────
 
 // AuthPlan sealed interface assertions.
-var _ cell.AuthPlan = cell.AuthNone{}
-var _ cell.AuthPlan = cell.AuthJWT{}
-var _ cell.AuthPlan = cell.AuthJWTFromAssembly{}
-var _ cell.AuthPlan = cell.AuthMTLS{}
-var _ cell.AuthPlan = cell.AuthServiceToken{}
+var (
+	_ cell.AuthPlan = cell.AuthNone{}
+	_ cell.AuthPlan = cell.AuthJWT{}
+	_ cell.AuthPlan = cell.AuthJWTFromAssembly{}
+	_ cell.AuthPlan = cell.AuthMTLS{}
+	_ cell.AuthPlan = cell.AuthServiceToken{}
+)
 
 // ListenerAuth assertions: every AuthPlan in the closed enumeration must
 // satisfy ListenerAuth. Auth scheme is a listener-scope concern.
-var _ cell.ListenerAuth = cell.AuthNone{}
-var _ cell.ListenerAuth = cell.AuthJWT{}
-var _ cell.ListenerAuth = cell.AuthJWTFromAssembly{}
-var _ cell.ListenerAuth = cell.AuthMTLS{}
-var _ cell.ListenerAuth = cell.AuthServiceToken{}
+var (
+	_ cell.ListenerAuth = cell.AuthNone{}
+	_ cell.ListenerAuth = cell.AuthJWT{}
+	_ cell.ListenerAuth = cell.AuthJWTFromAssembly{}
+	_ cell.ListenerAuth = cell.AuthMTLS{}
+	_ cell.ListenerAuth = cell.AuthServiceToken{}
+)
 
 // ─── Describe() golden values ─────────────────────────────────────────────────
 

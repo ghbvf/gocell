@@ -7,14 +7,15 @@ import (
 	"testing"
 	"time"
 
-	adapterpg "github.com/ghbvf/gocell/adapters/postgres"
-	"github.com/ghbvf/gocell/cells/configcore/internal/domain"
-	"github.com/ghbvf/gocell/kernel/clock"
-	"github.com/ghbvf/gocell/tests/testutil"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	tcpostgres "github.com/testcontainers/testcontainers-go/modules/postgres"
+
+	adapterpg "github.com/ghbvf/gocell/adapters/postgres"
+	"github.com/ghbvf/gocell/cells/configcore/internal/domain"
+	"github.com/ghbvf/gocell/kernel/clock"
+	"github.com/ghbvf/gocell/tests/testutil"
 )
 
 // setupFlagPG spins up a PostgreSQL container, applies all migrations

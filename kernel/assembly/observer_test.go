@@ -239,6 +239,8 @@ func (errorPanicObserver) OnHookEvent(cell.HookEvent) {
 }
 
 // Compile-time interface conformance check.
-var _ cell.LifecycleHookObserver = (*captureObserver)(nil)
-var _ cell.LifecycleHookObserver = badObserver{}
-var _ cell.LifecycleHookObserver = errorPanicObserver{}
+var (
+	_ cell.LifecycleHookObserver = (*captureObserver)(nil)
+	_ cell.LifecycleHookObserver = badObserver{}
+	_ cell.LifecycleHookObserver = errorPanicObserver{}
+)

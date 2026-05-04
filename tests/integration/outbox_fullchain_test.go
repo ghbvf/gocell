@@ -8,6 +8,15 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+	amqp "github.com/rabbitmq/amqp091-go"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	"github.com/testcontainers/testcontainers-go"
+	tcpostgres "github.com/testcontainers/testcontainers-go/modules/postgres"
+	tcredis "github.com/testcontainers/testcontainers-go/modules/redis"
+	"github.com/testcontainers/testcontainers-go/wait"
+
 	"github.com/ghbvf/gocell/adapters/postgres"
 	"github.com/ghbvf/gocell/adapters/rabbitmq"
 	"github.com/ghbvf/gocell/adapters/redis"
@@ -18,14 +27,6 @@ import (
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	outboxruntime "github.com/ghbvf/gocell/runtime/outbox"
 	"github.com/ghbvf/gocell/tests/testutil"
-	"github.com/google/uuid"
-	amqp "github.com/rabbitmq/amqp091-go"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
-	"github.com/testcontainers/testcontainers-go"
-	tcpostgres "github.com/testcontainers/testcontainers-go/modules/postgres"
-	tcredis "github.com/testcontainers/testcontainers-go/modules/redis"
-	"github.com/testcontainers/testcontainers-go/wait"
 )
 
 const (

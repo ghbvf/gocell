@@ -45,6 +45,7 @@ type stubRoleRepo struct {
 func (s *stubRoleRepo) GetByID(_ context.Context, _ string) (*domain.Role, error) {
 	panic("unused")
 }
+
 func (s *stubRoleRepo) GetByUserID(_ context.Context, _ string) ([]*domain.Role, error) {
 	return s.roles, s.err
 }

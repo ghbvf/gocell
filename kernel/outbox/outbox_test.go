@@ -97,9 +97,11 @@ func (m *mockSubscriberCtx) Ready(_ Subscription) <-chan struct{} {
 	close(ch)
 	return ch
 }
+
 func (m *mockSubscriberCtx) Subscribe(_ context.Context, _ Subscription, _ SubscriberHandler) error {
 	return nil
 }
+
 func (m *mockSubscriberCtx) Close(ctx context.Context) error {
 	if m.closeFn != nil {
 		return m.closeFn(ctx)
@@ -153,6 +155,7 @@ func (m *plainSubscriber) Ready(_ Subscription) <-chan struct{} {
 	close(ch)
 	return ch
 }
+
 func (m *plainSubscriber) Subscribe(_ context.Context, _ Subscription, _ SubscriberHandler) error {
 	return nil
 }
@@ -209,6 +212,7 @@ func (m *mockSubscriber) Ready(_ Subscription) <-chan struct{} {
 	close(ch)
 	return ch
 }
+
 func (m *mockSubscriber) Subscribe(_ context.Context, _ Subscription, _ SubscriberHandler) error {
 	return nil
 }
@@ -266,6 +270,7 @@ func (r *recordingSubscriber) Ready(_ Subscription) <-chan struct{} {
 	close(ch)
 	return ch
 }
+
 func (r *recordingSubscriber) Subscribe(_ context.Context, sub Subscription, handler SubscriberHandler) error {
 	r.subscribeCalled = true
 	r.subscribeTopic = sub.Topic
@@ -982,6 +987,7 @@ func (r *recordingSubscriberFull) Ready(_ Subscription) <-chan struct{} {
 	close(ch)
 	return ch
 }
+
 func (r *recordingSubscriberFull) Subscribe(_ context.Context, sub Subscription, _ SubscriberHandler) error {
 	r.subscribedSub = sub
 	return nil
@@ -1001,8 +1007,10 @@ func (s *intakeStopperSubscriber) StopIntake(_ context.Context) error {
 	return nil
 }
 
-var _ Subscriber = (*intakeStopperSubscriber)(nil)
-var _ SubscriberIntakeStopper = (*intakeStopperSubscriber)(nil)
+var (
+	_ Subscriber              = (*intakeStopperSubscriber)(nil)
+	_ SubscriberIntakeStopper = (*intakeStopperSubscriber)(nil)
+)
 
 func TestSubscriberWithMiddleware_ForwardsStopIntake(t *testing.T) {
 	inner := &intakeStopperSubscriber{}

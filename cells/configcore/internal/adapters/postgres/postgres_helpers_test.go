@@ -6,8 +6,9 @@ import (
 	"io/fs"
 	"testing"
 
-	adapterpg "github.com/ghbvf/gocell/adapters/postgres"
 	"github.com/stretchr/testify/require"
+
+	adapterpg "github.com/ghbvf/gocell/adapters/postgres"
 )
 
 func testAdapterMigrationsFS(t testing.TB) fs.FS {

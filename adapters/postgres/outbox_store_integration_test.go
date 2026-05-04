@@ -9,13 +9,14 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
 	"github.com/ghbvf/gocell/kernel/clock"
 	kout "github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	rout "github.com/ghbvf/gocell/runtime/outbox"
 	"github.com/ghbvf/gocell/runtime/outbox/outboxtest"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
 // TestPGOutboxStore_ConformanceSuite verifies that PGOutboxStore satisfies the

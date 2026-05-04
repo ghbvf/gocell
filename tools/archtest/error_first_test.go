@@ -71,8 +71,10 @@ import (
 	"github.com/ghbvf/gocell/tools/archtest/internal/typeseval"
 )
 
-const ruleErrorFirstAPI01 = "ERROR-FIRST-API-01"
-const ruleErrorFirstTypedNil01 = "ERROR-FIRST-TYPED-NIL-01"
+const (
+	ruleErrorFirstAPI01      = "ERROR-FIRST-API-01"
+	ruleErrorFirstTypedNil01 = "ERROR-FIRST-TYPED-NIL-01"
+)
 
 // errorFirstEnforcedFiles are the relative paths (from module root) of files
 // whose declarations must satisfy ERROR-FIRST-API-01. Slash-separated for

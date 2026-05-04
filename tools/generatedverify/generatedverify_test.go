@@ -6,9 +6,10 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/ghbvf/gocell/kernel/metadata"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/ghbvf/gocell/kernel/metadata"
 )
 
 const fixtureModule = "example.com/generatedfixture"

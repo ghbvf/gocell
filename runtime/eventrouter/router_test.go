@@ -43,6 +43,7 @@ func (s *blockingSubscriber) Ready(_ outbox.Subscription) <-chan struct{} {
 	close(ch)
 	return ch
 }
+
 func (s *blockingSubscriber) Subscribe(ctx context.Context, sub outbox.Subscription, _ outbox.SubscriberHandler) error {
 	s.mu.Lock()
 	s.topics = append(s.topics, sub.Topic)
@@ -72,6 +73,7 @@ func (s *failingSubscriber) Ready(_ outbox.Subscription) <-chan struct{} {
 	close(ch)
 	return ch
 }
+
 func (s *failingSubscriber) Subscribe(_ context.Context, _ outbox.Subscription, _ outbox.SubscriberHandler) error {
 	return s.err
 }
@@ -90,6 +92,7 @@ func (s *delayedFailSubscriber) Ready(_ outbox.Subscription) <-chan struct{} {
 	close(ch)
 	return ch
 }
+
 func (s *delayedFailSubscriber) Subscribe(ctx context.Context, _ outbox.Subscription, _ outbox.SubscriberHandler) error {
 	select {
 	case <-time.After(s.delay):
@@ -487,6 +490,7 @@ func (s *stuckSubscriber) Ready(_ outbox.Subscription) <-chan struct{} {
 	close(ch)
 	return ch
 }
+
 func (s *stuckSubscriber) Subscribe(_ context.Context, _ outbox.Subscription, _ outbox.SubscriberHandler) error {
 	<-s.block // ignores ctx -- simulates unresponsive subscriber
 	return nil
@@ -502,6 +506,7 @@ func (s *panickingSubscriber) Ready(_ outbox.Subscription) <-chan struct{} {
 	close(ch)
 	return ch
 }
+
 func (s *panickingSubscriber) Subscribe(_ context.Context, _ outbox.Subscription, _ outbox.SubscriberHandler) error {
 	panic("boom")
 }
@@ -691,6 +696,7 @@ func (s *recordingGroupSubscriber) Ready(_ outbox.Subscription) <-chan struct{} 
 	close(ch)
 	return ch
 }
+
 func (s *recordingGroupSubscriber) Subscribe(ctx context.Context, sub outbox.Subscription, _ outbox.SubscriberHandler) error {
 	s.mu.Lock()
 	s.calls = append(s.calls, groupSubscribeCall{
@@ -864,6 +870,7 @@ func (s *setupFailSubscriber) Ready(_ outbox.Subscription) <-chan struct{} {
 	close(ch)
 	return ch
 }
+
 func (s *setupFailSubscriber) Subscribe(_ context.Context, _ outbox.Subscription, _ outbox.SubscriberHandler) error {
 	s.subscribeCnt.Add(1)
 	return nil

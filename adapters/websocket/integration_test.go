@@ -4,6 +4,9 @@ package websocket_test
 
 import (
 	"context"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -17,10 +20,6 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-
-	"net/http"
-	"net/http/httptest"
-	"strings"
 )
 
 // setupIntegrationHub creates a running Hub + httptest server for integration tests.

@@ -8,9 +8,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 )
 
 // TestSignalsToWatch_Windows asserts the Windows signal set is exactly

@@ -9,15 +9,16 @@ import (
 	"testing"
 	"time"
 
+	goredis "github.com/redis/go-redis/v9"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	tcredis "github.com/testcontainers/testcontainers-go/modules/redis"
+
 	"github.com/ghbvf/gocell/kernel/idempotency"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/runtime/distlock"
 	"github.com/ghbvf/gocell/runtime/distlock/locktest"
 	"github.com/ghbvf/gocell/tests/testutil"
-	goredis "github.com/redis/go-redis/v9"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
-	tcredis "github.com/testcontainers/testcontainers-go/modules/redis"
 )
 
 // startRedis launches a testcontainers Redis instance and returns a

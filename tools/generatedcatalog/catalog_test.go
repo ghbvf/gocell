@@ -5,9 +5,10 @@ import (
 	"strings"
 	"testing"
 
-	kerneldepgraph "github.com/ghbvf/gocell/kernel/depgraph"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	kerneldepgraph "github.com/ghbvf/gocell/kernel/depgraph"
 )
 
 func TestEmitFileDeterministicGo(t *testing.T) {

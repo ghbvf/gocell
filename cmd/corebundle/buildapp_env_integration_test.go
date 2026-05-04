@@ -6,13 +6,14 @@ import (
 	"context"
 	"testing"
 
+	prom "github.com/prometheus/client_golang/prometheus"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
 	adapterpg "github.com/ghbvf/gocell/adapters/postgres"
 	kernellifecycle "github.com/ghbvf/gocell/kernel/lifecycle"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/runtime/auth"
-	prom "github.com/prometheus/client_golang/prometheus"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
 // applyMigrationsForMain applies all schema migrations to the given DSN using

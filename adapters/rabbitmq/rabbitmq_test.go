@@ -649,19 +649,31 @@ func TestConnection_BackoffDelay(t *testing.T) {
 		minDelay time.Duration
 		maxDelay time.Duration // hard cap: never exceeds ReconnectMaxBackoff (30s)
 	}{
-		{name: "attempt 0", attempt: 0,
-			minDelay: testtime.D750ms, maxDelay: rabbitmqD1250ms},
-		{name: "attempt 1", attempt: 1,
-			minDelay: rabbitmqD1500ms, maxDelay: rabbitmqD2500ms},
-		{name: "attempt 2", attempt: 2,
-			minDelay: testtime.D3s, maxDelay: testtime.EventuallyLong},
+		{
+			name: "attempt 0", attempt: 0,
+			minDelay: testtime.D750ms, maxDelay: rabbitmqD1250ms,
+		},
+		{
+			name: "attempt 1", attempt: 1,
+			minDelay: rabbitmqD1500ms, maxDelay: rabbitmqD2500ms,
+		},
+		{
+			name: "attempt 2", attempt: 2,
+			minDelay: testtime.D3s, maxDelay: testtime.EventuallyLong,
+		},
 		// Capped region: jitter on MaxBackoff → [0.75*30s, 30s] = [22.5s, 30s].
-		{name: "attempt 10 (capped)", attempt: 10,
-			minDelay: rabbitmqD22500ms, maxDelay: testtime.D30s},
-		{name: "attempt 34 (overflow guard)", attempt: 34,
-			minDelay: rabbitmqD22500ms, maxDelay: testtime.D30s},
-		{name: "attempt 100 (far overflow)", attempt: 100,
-			minDelay: rabbitmqD22500ms, maxDelay: testtime.D30s},
+		{
+			name: "attempt 10 (capped)", attempt: 10,
+			minDelay: rabbitmqD22500ms, maxDelay: testtime.D30s,
+		},
+		{
+			name: "attempt 34 (overflow guard)", attempt: 34,
+			minDelay: rabbitmqD22500ms, maxDelay: testtime.D30s,
+		},
+		{
+			name: "attempt 100 (far overflow)", attempt: 100,
+			minDelay: rabbitmqD22500ms, maxDelay: testtime.D30s,
+		},
 	}
 
 	for _, tt := range tests {
@@ -2289,6 +2301,7 @@ func (s *stubSubscriber) Ready(_ outbox.Subscription) <-chan struct{} {
 	close(ch)
 	return ch
 }
+
 func (s *stubSubscriber) Subscribe(ctx context.Context, sub outbox.Subscription, handler outbox.SubscriberHandler) error {
 	if s.onSubscribe != nil {
 		return s.onSubscribe(ctx, sub.Topic, handler)

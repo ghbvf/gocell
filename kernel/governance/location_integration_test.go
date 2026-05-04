@@ -3,14 +3,16 @@
 package governance_test
 
 import (
-	"github.com/ghbvf/gocell/kernel/clock"
 	"testing"
 	"testing/fstest"
 
-	"github.com/ghbvf/gocell/kernel/governance"
-	"github.com/ghbvf/gocell/kernel/metadata"
+	"github.com/ghbvf/gocell/kernel/clock"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/ghbvf/gocell/kernel/governance"
+	"github.com/ghbvf/gocell/kernel/metadata"
 )
 
 // TestLocation_REF01_SliceBelongsToCell verifies that a REF-01 finding
@@ -226,10 +228,14 @@ func TestLocation_DEP02_ScopeNotFile(t *testing.T) {
 			}},
 		},
 		Contracts: map[string]*metadata.ContractMeta{
-			"http.ab.v1": {ID: "http.ab.v1", Kind: "http", OwnerCell: "a",
-				Endpoints: metadata.EndpointsMeta{Server: "a", Clients: []string{"b"}}},
-			"http.ba.v1": {ID: "http.ba.v1", Kind: "http", OwnerCell: "b",
-				Endpoints: metadata.EndpointsMeta{Server: "b", Clients: []string{"a"}}},
+			"http.ab.v1": {
+				ID: "http.ab.v1", Kind: "http", OwnerCell: "a",
+				Endpoints: metadata.EndpointsMeta{Server: "a", Clients: []string{"b"}},
+			},
+			"http.ba.v1": {
+				ID: "http.ba.v1", Kind: "http", OwnerCell: "b",
+				Endpoints: metadata.EndpointsMeta{Server: "b", Clients: []string{"a"}},
+			},
 		},
 	}
 

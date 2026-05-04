@@ -570,8 +570,10 @@ func TestRunScaffoldContract_DryRun_NoFileWritten(t *testing.T) {
 	dir := setupProject(t, "contracts")
 
 	out := captureStdout(t, func() {
-		err := runScaffoldWithRoot(dir, []string{"contract",
-			"--id=http.dry.test.v1", "--kind=http", "--owner=some-cell", "--dry-run"})
+		err := runScaffoldWithRoot(dir, []string{
+			"contract",
+			"--id=http.dry.test.v1", "--kind=http", "--owner=some-cell", "--dry-run",
+		})
 		require.NoError(t, err)
 	})
 
@@ -585,8 +587,10 @@ func TestRunScaffoldJourney_DryRun_NoFileWritten(t *testing.T) {
 	dir := setupProject(t, "journeys")
 
 	out := captureStdout(t, func() {
-		err := runScaffoldWithRoot(dir, []string{"journey",
-			"--id=J-dry", "--goal=test goal", "--team=squad", "--cells=a,b", "--dry-run"})
+		err := runScaffoldWithRoot(dir, []string{
+			"journey",
+			"--id=J-dry", "--goal=test goal", "--team=squad", "--cells=a,b", "--dry-run",
+		})
 		require.NoError(t, err)
 	})
 
@@ -756,8 +760,10 @@ func TestRunScaffoldCell_DryRun_DetectsConflict(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(target, "cell.yaml"),
 		[]byte("id: conflict-cell\n"), 0o644))
 
-	err := runScaffoldWithRoot(dir, []string{"cell",
-		"--id=conflict-cell", "--team=squad", "--role=cell-owner", "--dry-run"})
+	err := runScaffoldWithRoot(dir, []string{
+		"cell",
+		"--id=conflict-cell", "--team=squad", "--role=cell-owner", "--dry-run",
+	})
 	require.Error(t, err, "dry-run must still surface conflicts")
 }
 
@@ -770,8 +776,10 @@ func TestRunScaffoldSlice_DryRun_DetectsConflict(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(sliceDir, "slice.yaml"),
 		[]byte("id: conflict-slice\n"), 0o644))
 
-	err := runScaffoldWithRoot(dir, []string{"slice",
-		"--id=conflict-slice", "--cell=my-cell", "--dry-run"})
+	err := runScaffoldWithRoot(dir, []string{
+		"slice",
+		"--id=conflict-slice", "--cell=my-cell", "--dry-run",
+	})
 	require.Error(t, err, "dry-run must still surface slice conflicts")
 }
 
@@ -782,8 +790,10 @@ func TestRunScaffoldContract_DryRun_DetectsConflict(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(contractDir, "contract.yaml"),
 		[]byte("id: http.conflict.api.v1\n"), 0o644))
 
-	err := runScaffoldWithRoot(dir, []string{"contract",
-		"--id=http.conflict.api.v1", "--kind=http", "--owner=some-cell", "--dry-run"})
+	err := runScaffoldWithRoot(dir, []string{
+		"contract",
+		"--id=http.conflict.api.v1", "--kind=http", "--owner=some-cell", "--dry-run",
+	})
 	require.Error(t, err, "dry-run must still surface contract conflicts")
 }
 
@@ -792,7 +802,9 @@ func TestRunScaffoldJourney_DryRun_DetectsConflict(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "journeys", "J-conflict.yaml"),
 		[]byte("id: J-conflict\n"), 0o644))
 
-	err := runScaffoldWithRoot(dir, []string{"journey",
-		"--id=conflict", "--goal=test goal", "--team=squad", "--cells=a", "--dry-run"})
+	err := runScaffoldWithRoot(dir, []string{
+		"journey",
+		"--id=conflict", "--goal=test goal", "--team=squad", "--cells=a", "--dry-run",
+	})
 	require.Error(t, err, "dry-run must still surface journey conflicts")
 }

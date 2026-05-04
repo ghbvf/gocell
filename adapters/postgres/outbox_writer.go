@@ -19,8 +19,10 @@ import (
 const allZeroUUID = "00000000-0000-0000-0000-000000000000"
 
 // Compile-time interface checks.
-var _ outbox.Writer = (*OutboxWriter)(nil)
-var _ outbox.BatchWriter = (*OutboxWriter)(nil)
+var (
+	_ outbox.Writer      = (*OutboxWriter)(nil)
+	_ outbox.BatchWriter = (*OutboxWriter)(nil)
+)
 
 // OutboxWriter writes outbox entries within a PostgreSQL transaction.
 // It relies on TxFromContext to obtain the current transaction, ensuring

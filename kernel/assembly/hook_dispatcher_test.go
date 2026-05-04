@@ -122,7 +122,8 @@ func TestHookDispatcher_SlowSinkDoesNotBlockEmit(t *testing.T) {
 	// The dispatcher must return immediately; only the observer goroutine
 	// is blocked.
 	bo := newBlockingObserver()
-	d := newHookDispatcher(dispatcherConfig{Observer: bo, QueueSize: 8, SinkTimeout: testtime.D10ms,
+	d := newHookDispatcher(dispatcherConfig{
+		Observer: bo, QueueSize: 8, SinkTimeout: testtime.D10ms,
 		Clock: clock.Real(),
 	})
 	t.Cleanup(func() {
@@ -145,7 +146,8 @@ func TestHookDispatcher_OverflowDropsAndCounts(t *testing.T) {
 	// one DropReasonQueueFull is certain regardless of scheduler jitter.
 	bo := newBlockingObserver()
 	cv := newSpyCounterVec()
-	d := newHookDispatcher(dispatcherConfig{Observer: bo, QueueSize: 2, SinkTimeout: testtime.D1s, Provider: &spyProvider{cv: cv},
+	d := newHookDispatcher(dispatcherConfig{
+		Observer: bo, QueueSize: 2, SinkTimeout: testtime.D1s, Provider: &spyProvider{cv: cv},
 		Clock: clock.Real(),
 	})
 	t.Cleanup(func() {
@@ -173,7 +175,8 @@ func TestHookDispatcher_OverflowDropsAndCounts(t *testing.T) {
 func TestHookDispatcher_PerSinkTimeoutCountsAndContinues(t *testing.T) {
 	bo := newBlockingObserver()
 	cv := newSpyCounterVec()
-	d := newHookDispatcher(dispatcherConfig{Observer: bo, QueueSize: 8, SinkTimeout: testtime.D20ms, Provider: &spyProvider{cv: cv},
+	d := newHookDispatcher(dispatcherConfig{
+		Observer: bo, QueueSize: 8, SinkTimeout: testtime.D20ms, Provider: &spyProvider{cv: cv},
 		Clock: clock.Real(),
 	})
 	t.Cleanup(func() {
@@ -238,7 +241,8 @@ func (c *collectObserver) len() int {
 
 func TestHookDispatcher_StopDrainsPending(t *testing.T) {
 	obs := &collectObserver{}
-	d := newHookDispatcher(dispatcherConfig{Observer: obs, QueueSize: 32, SinkTimeout: testtime.D1s,
+	d := newHookDispatcher(dispatcherConfig{
+		Observer: obs, QueueSize: 32, SinkTimeout: testtime.D1s,
 		Clock: clock.Real(),
 	})
 
@@ -251,7 +255,8 @@ func TestHookDispatcher_StopDrainsPending(t *testing.T) {
 }
 
 func TestHookDispatcher_StopIsIdempotent(t *testing.T) {
-	d := newHookDispatcher(dispatcherConfig{Observer: cell.NopHookObserver{}, QueueSize: 4, SinkTimeout: testtime.D1s,
+	d := newHookDispatcher(dispatcherConfig{
+		Observer: cell.NopHookObserver{}, QueueSize: 4, SinkTimeout: testtime.D1s,
 		Clock: clock.Real(),
 	})
 	d.stop(testtime.D200ms)
@@ -259,7 +264,8 @@ func TestHookDispatcher_StopIsIdempotent(t *testing.T) {
 }
 
 func TestHookDispatcher_FlushOnIdleReturnsTrue(t *testing.T) {
-	d := newHookDispatcher(dispatcherConfig{Observer: cell.NopHookObserver{}, QueueSize: 8, SinkTimeout: testtime.D1s,
+	d := newHookDispatcher(dispatcherConfig{
+		Observer: cell.NopHookObserver{}, QueueSize: 8, SinkTimeout: testtime.D1s,
 		Clock: clock.Real(),
 	})
 	t.Cleanup(func() { d.stop(testtime.D200ms) })
@@ -296,7 +302,8 @@ func TestHookDispatcher_EmitAfterStopCountsQueueFull(t *testing.T) {
 // for). Returning false here would make clean-shutdown callers block or
 // retry for no gain.
 func TestHookDispatcher_FlushAfterStopReturnsTrue(t *testing.T) {
-	d := newHookDispatcher(dispatcherConfig{Observer: cell.NopHookObserver{}, QueueSize: 4, SinkTimeout: testtime.D1s,
+	d := newHookDispatcher(dispatcherConfig{
+		Observer: cell.NopHookObserver{}, QueueSize: 4, SinkTimeout: testtime.D1s,
 		Clock: clock.Real(),
 	})
 	d.stop(testtime.D200ms)
@@ -311,7 +318,8 @@ func TestHookDispatcher_FlushAfterStopReturnsTrue(t *testing.T) {
 // shared-timer behavior documented in flush().
 func TestHookDispatcher_FlushTimeoutThenSuccess(t *testing.T) {
 	bo := newBlockingObserver()
-	d := newHookDispatcher(dispatcherConfig{Observer: bo, QueueSize: 2, SinkTimeout: testtime.D1s,
+	d := newHookDispatcher(dispatcherConfig{
+		Observer: bo, QueueSize: 2, SinkTimeout: testtime.D1s,
 		Clock: clock.Real(),
 	})
 	t.Cleanup(func() {

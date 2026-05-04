@@ -31,8 +31,10 @@ func (fakeHandle) Decrypt(_ context.Context, _, _, _, _ []byte) ([]byte, error) 
 
 // Compile-time contract checks — these fail at build time if the interfaces
 // are not satisfied, mirroring the kernel/lifecycle and kernel/worker pattern.
-var _ kcrypto.KeyProvider = fakeProvider{}
-var _ kcrypto.KeyHandle = fakeHandle{}
+var (
+	_ kcrypto.KeyProvider = fakeProvider{}
+	_ kcrypto.KeyHandle   = fakeHandle{}
+)
 
 // ---------------------------------------------------------------------------
 // Method-call tests (verifying interface shape at runtime)

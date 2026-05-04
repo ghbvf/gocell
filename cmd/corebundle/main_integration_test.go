@@ -13,6 +13,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	tcpostgres "github.com/testcontainers/testcontainers-go/modules/postgres"
+
 	adapterpg "github.com/ghbvf/gocell/adapters/postgres"
 	"github.com/ghbvf/gocell/kernel/clock"
 	kernelmetrics "github.com/ghbvf/gocell/kernel/observability/metrics"
@@ -20,9 +24,6 @@ import (
 	"github.com/ghbvf/gocell/runtime/bootstrap"
 	"github.com/ghbvf/gocell/runtime/crypto"
 	"github.com/ghbvf/gocell/tests/testutil"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
-	tcpostgres "github.com/testcontainers/testcontainers-go/modules/postgres"
 )
 
 // setupPostgresForMain starts a PostgreSQL container and returns the DSN

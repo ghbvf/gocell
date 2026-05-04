@@ -26,12 +26,15 @@ func (c staticClock) Until(t time.Time) time.Duration { return t.Sub(c.now) }
 func (c staticClock) NewTimerAt(_ time.Time) clock.Timer {
 	panic("staticClock.NewTimerAt not implemented")
 }
+
 func (c staticClock) NewTicker(d time.Duration) clock.Ticker {
 	return clock.Real().NewTicker(d)
 }
+
 func (c staticClock) AfterFunc(_ time.Time, _ func()) clock.Timer {
 	panic("staticClock.AfterFunc not implemented")
 }
+
 func (c staticClock) Sleep(_ context.Context, _ time.Time) error {
 	panic("staticClock.Sleep not implemented")
 }

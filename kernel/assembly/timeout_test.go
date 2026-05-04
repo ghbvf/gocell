@@ -44,12 +44,15 @@ func (c *slowHookCell) block(ctx context.Context, phase string) error {
 func (c *slowHookCell) BeforeStart(ctx context.Context) error {
 	return c.block(ctx, "BeforeStart")
 }
+
 func (c *slowHookCell) AfterStart(ctx context.Context) error {
 	return c.block(ctx, "AfterStart")
 }
+
 func (c *slowHookCell) BeforeStop(ctx context.Context) error {
 	return c.block(ctx, "BeforeStop")
 }
+
 func (c *slowHookCell) AfterStop(ctx context.Context) error {
 	return c.block(ctx, "AfterStop")
 }

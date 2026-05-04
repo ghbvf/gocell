@@ -23,9 +23,11 @@ import (
 )
 
 // Compile-time checks.
-var _ cell.RouteMux = (*TestMux)(nil)
-var _ cell.AuthRouteDeclarer = (*TestMux)(nil)
-var _ cell.Prefixer = (*TestMux)(nil)
+var (
+	_ cell.RouteMux          = (*TestMux)(nil)
+	_ cell.AuthRouteDeclarer = (*TestMux)(nil)
+	_ cell.Prefixer          = (*TestMux)(nil)
+)
 
 // TestMux adapts http.ServeMux to cell.RouteMux for testing.
 // It uses Go 1.22+ ServeMux pattern matching ("GET /path/{param}").

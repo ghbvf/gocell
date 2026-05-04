@@ -74,9 +74,11 @@ func (r *recordingObserver) OnHookEvent(e HookEvent) {
 }
 
 // compile-time interface check.
-var _ LifecycleHookObserver = (*recordingObserver)(nil)
-var _ LifecycleHookObserver = (*NopHookObserver)(nil)
-var _ LifecycleHookObserver = NopHookObserver{}
+var (
+	_ LifecycleHookObserver = (*recordingObserver)(nil)
+	_ LifecycleHookObserver = (*NopHookObserver)(nil)
+	_ LifecycleHookObserver = NopHookObserver{}
+)
 
 func TestNopHookObserver_DoesNotPanic(t *testing.T) {
 	// NopHookObserver must accept any HookEvent without panicking or doing work.

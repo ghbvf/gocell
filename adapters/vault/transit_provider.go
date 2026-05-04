@@ -443,8 +443,10 @@ func (w *tokenRenewalWorker) Stop(_ context.Context) error {
 
 // Compile-time interface assertions — fail at build time if the scaffold drifts
 // from the kernel/crypto contracts.
-var _ kcrypto.KeyProvider = (*TransitKeyProvider)(nil)
-var _ kcrypto.KeyHandle = (*vaultTransitHandle)(nil)
+var (
+	_ kcrypto.KeyProvider = (*TransitKeyProvider)(nil)
+	_ kcrypto.KeyHandle   = (*vaultTransitHandle)(nil)
+)
 
 // ---------------------------------------------------------------------------
 // vaultTransitHandle

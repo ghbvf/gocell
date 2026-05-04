@@ -20,6 +20,7 @@ type mockActiveScanner struct{}
 func (m *mockActiveScanner) ScanActive(_ context.Context, _ ScanFilter) ([]Entry, error) {
 	return nil, nil
 }
+
 func (m *mockActiveScanner) GetCommand(_ context.Context, _ string) (*Entry, error) {
 	return &Entry{}, nil
 }

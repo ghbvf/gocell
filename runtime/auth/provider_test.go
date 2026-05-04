@@ -15,8 +15,10 @@ import (
 )
 
 // Compile-time interface checks.
-var _ KeyProvider = (*EnvKeyProvider)(nil)
-var _ KeyProvider = (*StaticKeyProvider)(nil)
+var (
+	_ KeyProvider = (*EnvKeyProvider)(nil)
+	_ KeyProvider = (*StaticKeyProvider)(nil)
+)
 
 // --- EnvKeyProvider tests ---
 

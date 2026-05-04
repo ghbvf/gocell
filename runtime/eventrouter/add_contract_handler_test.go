@@ -34,11 +34,13 @@ func (s *contractSpySpan) SetStatus(code wrapper.StatusCode, _ string) {
 	defer s.mu.Unlock()
 	s.status = code
 }
+
 func (s *contractSpySpan) End() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.ended = true
 }
+
 func (s *contractSpySpan) attrMap() map[string]any {
 	s.mu.Lock()
 	defer s.mu.Unlock()

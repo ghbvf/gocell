@@ -189,8 +189,10 @@ func TestEncrypt_GetByKey_SensitiveDecryptsValue(t *testing.T) {
 		queryRowResult: &mockRow{
 			// Row columns: id, key, value, sensitive, version, created_at, updated_at,
 			//             value_cipher, value_key_id, value_edk, value_nonce
-			values: []any{"cfg-1", "db_password", "", true, 1, now, now,
-				ct, keyID, edk, nonce},
+			values: []any{
+				"cfg-1", "db_password", "", true, 1, now, now,
+				ct, keyID, edk, nonce,
+			},
 		},
 	}
 	repo := newEncryptedRepoFromDBTX(db, tr)
@@ -210,8 +212,10 @@ func TestEncrypt_GetByKey_SensitiveDecryptFailed_FailClosed(t *testing.T) {
 	now := time.Now()
 	db := &mockDB{
 		queryRowResult: &mockRow{
-			values: []any{"cfg-1", "db_password", "", true, 1, now, now,
-				[]byte("someciphertext"), "local-aes-v1", []byte("edk"), []byte("nonce")},
+			values: []any{
+				"cfg-1", "db_password", "", true, 1, now, now,
+				[]byte("someciphertext"), "local-aes-v1", []byte("edk"), []byte("nonce"),
+			},
 		},
 	}
 	repo := newEncryptedRepoFromDBTX(db, tr)
@@ -242,8 +246,10 @@ func TestEncrypt_GetByKey_SensitiveStaleKey(t *testing.T) {
 	now := time.Now()
 	db := &mockDB{
 		queryRowResult: &mockRow{
-			values: []any{"cfg-1", "old_key", "", true, 1, now, now,
-				ct, oldKeyID, edk, nonce},
+			values: []any{
+				"cfg-1", "old_key", "", true, 1, now, now,
+				ct, oldKeyID, edk, nonce,
+			},
 		},
 	}
 	repo := newEncryptedRepoFromDBTX(db, tr)
@@ -265,8 +271,10 @@ func TestEncrypt_GetByKey_NonSensitive_NoDecryption(t *testing.T) {
 	db := &mockDB{
 		queryRowResult: &mockRow{
 			// value_cipher is nil → non-sensitive path
-			values: []any{"cfg-1", "app.name", "GoCell", false, 1, now, now,
-				nil, nil, nil, nil},
+			values: []any{
+				"cfg-1", "app.name", "GoCell", false, 1, now, now,
+				nil, nil, nil, nil,
+			},
 		},
 	}
 	repo := newEncryptedRepoFromDBTX(db, tr)
@@ -347,8 +355,10 @@ func TestEncrypt_GetVersion_SensitiveDecryptsValue(t *testing.T) {
 		queryRowResult: &mockRow{
 			// id, config_id, version, value, sensitive, published_at,
 			// value_cipher, value_key_id, value_edk, value_nonce
-			values: []any{"cv-1", "cfg-1", 1, "", true, &now,
-				ct, keyID, edk, nonce},
+			values: []any{
+				"cv-1", "cfg-1", 1, "", true, &now,
+				ct, keyID, edk, nonce,
+			},
 		},
 	}
 	repo := newEncryptedRepoFromDBTX(db, tr)
@@ -369,8 +379,10 @@ func TestConfigRepo_GetByKey_Sensitive_LegacyPlaintext_ReturnsErr(t *testing.T) 
 	db := &mockDB{
 		queryRowResult: &mockRow{
 			// Simulate legacy row: sensitive=true, value_cipher=nil, value_key_id=nil
-			values: []any{"cfg-1", "db_password", "legacy-plaintext", true, 1, now, now,
-				nil, nil, nil, nil},
+			values: []any{
+				"cfg-1", "db_password", "legacy-plaintext", true, 1, now, now,
+				nil, nil, nil, nil,
+			},
 		},
 	}
 	repo := newEncryptedRepoFromDBTX(db, tr)
@@ -407,8 +419,10 @@ func TestConfigRepo_Decrypt_AADMismatch_FailsClosed(t *testing.T) {
 	now := time.Now()
 	db := &mockDB{
 		queryRowResult: &mockRow{
-			values: []any{"cfg-1", "db_password", "", true, 1, now, now,
-				ct, keyID, wrongEDK, nonce},
+			values: []any{
+				"cfg-1", "db_password", "", true, 1, now, now,
+				ct, keyID, wrongEDK, nonce,
+			},
 		},
 	}
 	repo := newEncryptedRepoFromDBTX(db, tr)
@@ -437,8 +451,10 @@ func TestGetByKey_Sensitive_EmptyValueCipher_LegacyPlaintext(t *testing.T) {
 	// value_cipher is nil, value_key_id is nil → legacy plaintext path.
 	db := &mockDB{
 		queryRowResult: &mockRow{
-			values: []any{"cfg-1", "secret_key", "plaintext-not-encrypted", true, 1, now, now,
-				nil, nil, nil, nil},
+			values: []any{
+				"cfg-1", "secret_key", "plaintext-not-encrypted", true, 1, now, now,
+				nil, nil, nil, nil,
+			},
 		},
 	}
 	repo := newEncryptedRepoFromDBTX(db, tr)
@@ -477,8 +493,10 @@ func TestCurrentKeyID_ProviderReturnsError(t *testing.T) {
 	now := time.Now()
 	db := &mockDB{
 		queryRowResult: &mockRow{
-			values: []any{"cfg-1", "my_key", "", true, 1, now, now,
-				ct, keyID, edk, nonce},
+			values: []any{
+				"cfg-1", "my_key", "", true, 1, now, now,
+				ct, keyID, edk, nonce,
+			},
 		},
 	}
 	repo := newEncryptedRepoFromDBTX(db, tr)
@@ -507,8 +525,10 @@ func TestGetByKey_Sensitive_StaleKey_DifferentStoredAndCurrentKeyID(t *testing.T
 	now := time.Now()
 	db := &mockDB{
 		queryRowResult: &mockRow{
-			values: []any{"cfg-1", "cfg_key", "", true, 1, now, now,
-				ct, storedKeyID, edk, nonce},
+			values: []any{
+				"cfg-1", "cfg_key", "", true, 1, now, now,
+				ct, storedKeyID, edk, nonce,
+			},
 		},
 	}
 	repo := newEncryptedRepoFromDBTX(db, tr)
@@ -563,8 +583,10 @@ func TestGetByKey_StaleKey_EmitsWarn(t *testing.T) {
 	now := time.Now()
 	db := &mockDB{
 		queryRowResult: &mockRow{
-			values: []any{"cfg-1", "api_secret", "", true, 1, now, now,
-				ct, storedKeyID, edk, nonce},
+			values: []any{
+				"cfg-1", "api_secret", "", true, 1, now, now,
+				ct, storedKeyID, edk, nonce,
+			},
 		},
 	}
 
@@ -603,8 +625,10 @@ func TestGetByKey_FreshKey_NoWarn(t *testing.T) {
 	now := time.Now()
 	db := &mockDB{
 		queryRowResult: &mockRow{
-			values: []any{"cfg-1", "fresh_key", "", true, 1, now, now,
-				ct, keyID, edk, nonce},
+			values: []any{
+				"cfg-1", "fresh_key", "", true, 1, now, now,
+				ct, keyID, edk, nonce,
+			},
 		},
 	}
 
@@ -681,8 +705,10 @@ func TestGetByKey_StaleKey_OnStaleCipherCallback(t *testing.T) {
 	now := time.Now()
 	db := &mockDB{
 		queryRowResult: &mockRow{
-			values: []any{"cfg-1", "cb_key", "", true, 1, now, now,
-				ct, storedKeyID, edk, nonce},
+			values: []any{
+				"cfg-1", "cb_key", "", true, 1, now, now,
+				ct, storedKeyID, edk, nonce,
+			},
 		},
 	}
 
@@ -879,8 +905,10 @@ func TestWithOnStaleCipher_Option(t *testing.T) {
 	now := time.Now()
 	db := &mockDB{
 		queryRowResult: &mockRow{
-			values: []any{"cfg-1", "opt_key", "", true, 1, now, now,
-				ct, storedKeyID, edk, nonce},
+			values: []any{
+				"cfg-1", "opt_key", "", true, 1, now, now,
+				ct, storedKeyID, edk, nonce,
+			},
 		},
 	}
 
@@ -1034,8 +1062,10 @@ func TestGetByKey_FreshKey_OnStaleCipherCallback_NotCalled(t *testing.T) {
 	now := time.Now()
 	db := &mockDB{
 		queryRowResult: &mockRow{
-			values: []any{"cfg-1", "fresh_cb_key", "", true, 1, now, now,
-				ct, keyID, edk, nonce},
+			values: []any{
+				"cfg-1", "fresh_cb_key", "", true, 1, now, now,
+				ct, keyID, edk, nonce,
+			},
 		},
 	}
 

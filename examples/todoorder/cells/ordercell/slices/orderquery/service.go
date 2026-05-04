@@ -14,8 +14,10 @@ import (
 )
 
 // Compile-time assertions: Service implements both generated interfaces.
-var _ getv1.Service = (*Service)(nil)
-var _ listv1.Service = (*Service)(nil)
+var (
+	_ getv1.Service  = (*Service)(nil)
+	_ listv1.Service = (*Service)(nil)
+)
 
 // orderSort defines the default sort for order listings.
 var orderSort = []query.SortColumn{
