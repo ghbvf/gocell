@@ -19,6 +19,18 @@ type CodegenResult interface {
 	DriftedFiles() []string
 }
 
+// parseProject loads project metadata under root with the canonical error
+// wrap used by every codegen sub-command (`metadata parse: %w`).
+// Centralized so the wrap message stays consistent across dispatchers and
+// is the single place to extend (e.g. with structured logging) later.
+func parseProject(root string) (*metadata.ProjectMeta, error) {
+	project, err := metadata.NewParser(root).Parse()
+	if err != nil {
+		return nil, fmt.Errorf("metadata parse: %w", err)
+	}
+	return project, nil
+}
+
 // codegenSpec parameterizes a `gocell generate <kind>` + `gocell verify codegen-<kind>`
 // command pair (cell, contract, marker).
 type codegenSpec[R CodegenResult] struct {
@@ -56,9 +68,9 @@ func runCodegenGenerate[R CodegenResult](spec codegenSpec[R], args []string) err
 	if err != nil {
 		return fmt.Errorf("cannot find project root: %w", err)
 	}
-	project, err := metadata.NewParser(root).Parse()
+	project, err := parseProject(root)
 	if err != nil {
-		return fmt.Errorf("metadata parse: %w", err)
+		return err
 	}
 	res, err := spec.Generate(root, project, dryRun, verify, only)
 	if err != nil {
@@ -124,9 +136,9 @@ func runCodegenVerify[R CodegenResult](spec codegenSpec[R], args []string) error
 }
 
 func runCodegenVerifyInPlace[R CodegenResult](spec codegenSpec[R], root string) error {
-	project, err := metadata.NewParser(root).Parse()
+	project, err := parseProject(root)
 	if err != nil {
-		return fmt.Errorf("metadata parse: %w", err)
+		return err
 	}
 	res, err := spec.Generate(root, project, false, true, "")
 	if err != nil {
@@ -147,9 +159,9 @@ func runCodegenVerifyInPlace[R CodegenResult](spec codegenSpec[R], root string) 
 
 func runCodegenVerifySandbox[R CodegenResult](spec codegenSpec[R], root string) error {
 	res, err := codegen.VerifyInWorktree(root, func(workdir string) error {
-		project, perr := metadata.NewParser(workdir).Parse()
+		project, perr := parseProject(workdir)
 		if perr != nil {
-			return fmt.Errorf("metadata parse: %w", perr)
+			return perr
 		}
 		_, gerr := spec.Generate(workdir, project, false, false, "")
 		return gerr
