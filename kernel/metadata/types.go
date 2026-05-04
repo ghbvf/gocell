@@ -17,15 +17,14 @@ import (
 // governance rules (REF-04) can compare filesystem truth against cell.id
 // without being fooled by a path/id split.
 type CellMeta struct {
-	ID               string             `yaml:"id"`
-	Type             string             `yaml:"type"`             // "core"|"edge"|"support"
-	ConsistencyLevel string             `yaml:"consistencyLevel"` // "L0"-"L4"
-	DurabilityMode   string             `yaml:"durabilityMode"`   // "demo"|"durable" (advisory for L2+)
-	Owner            OwnerMeta          `yaml:"owner"`
-	Schema           SchemaMeta         `yaml:"schema"`
-	Verify           CellVerifyMeta     `yaml:"verify"`
-	L0Dependencies   []L0DepMeta        `yaml:"l0Dependencies"`
-	Listeners        []ListenerDeclMeta `yaml:"listeners,omitempty"`
+	ID               string         `yaml:"id"`
+	Type             string         `yaml:"type"`             // "core"|"edge"|"support"
+	ConsistencyLevel string         `yaml:"consistencyLevel"` // "L0"-"L4"
+	DurabilityMode   string         `yaml:"durabilityMode"`   // "demo"|"durable" (advisory for L2+)
+	Owner            OwnerMeta      `yaml:"owner"`
+	Schema           SchemaMeta     `yaml:"schema"`
+	Verify           CellVerifyMeta `yaml:"verify"`
+	L0Dependencies   []L0DepMeta    `yaml:"l0Dependencies"`
 	// GoStructName is a schema extension consumed by tools/codegen — kernel
 	// itself does not interpret its value. Cells that opt into K#04 codegen
 	// MUST set this; non-codegen cells leave it empty. There is no reliable
@@ -49,7 +48,6 @@ func (c *CellMeta) Clone() *CellMeta {
 	}
 	cp := *c
 	cp.L0Dependencies = append([]L0DepMeta(nil), c.L0Dependencies...)
-	cp.Listeners = append([]ListenerDeclMeta(nil), c.Listeners...)
 	cp.Verify.Smoke = append([]string(nil), c.Verify.Smoke...)
 	return &cp
 }
@@ -101,15 +99,13 @@ type SliceMeta struct {
 	ID            string `yaml:"id"`
 	BelongsToCell string `yaml:"belongsToCell"`
 	// ConsistencyLevel: "L0"-"L4"; if empty, inherits cell.ConsistencyLevel; if set, MUST be ≤ cell.ConsistencyLevel
-	ConsistencyLevel string              `yaml:"consistencyLevel,omitempty"`
-	ContractUsages   []ContractUsage     `yaml:"contractUsages"`
-	Verify           SliceVerifyMeta     `yaml:"verify"`
-	AllowedFiles     []string            `yaml:"allowedFiles,omitempty"`
-	RouteMounts      []RouteMountMeta    `yaml:"routeMounts,omitempty"`
-	Subscribes       []SubscribeDeclMeta `yaml:"subscribes,omitempty"`
-	Dir              string              `yaml:"-"` // slice directory segment, set by parser
-	CellDir          string              `yaml:"-"` // parent cell directory segment, set by parser
-	File             string              `yaml:"-"` // parsed slice.yaml path relative to project root
+	ConsistencyLevel string          `yaml:"consistencyLevel,omitempty"`
+	ContractUsages   []ContractUsage `yaml:"contractUsages"`
+	Verify           SliceVerifyMeta `yaml:"verify"`
+	AllowedFiles     []string        `yaml:"allowedFiles,omitempty"`
+	Dir              string          `yaml:"-"` // slice directory segment, set by parser
+	CellDir          string          `yaml:"-"` // parent cell directory segment, set by parser
+	File             string          `yaml:"-"` // parsed slice.yaml path relative to project root
 }
 
 // RouteMountMeta declares a single HTTP route mount: this slice's handler
