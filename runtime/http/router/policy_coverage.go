@@ -8,7 +8,7 @@ import (
 	kcell "github.com/ghbvf/gocell/kernel/cell"
 )
 
-// routeKey is a (method, path) pair from the chi router tree.
+// routeKey is a (method, path) pair from the router's routePatterns table.
 type routeKey struct {
 	Method string
 	Path   string

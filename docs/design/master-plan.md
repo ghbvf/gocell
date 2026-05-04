@@ -292,7 +292,7 @@ runtime/
 │   ├── middleware/         # request_id / real_ip / recovery / access_log /
 │   │                      # security_headers / body_limit / rate_limit
 │   ├── health/            # liveness + readiness
-│   └── router/            # chi-based
+│   └── router/            # stdlib net/http.ServeMux-based
 ├── auth/
 │   ├── jwt/               # RS256 钉扎
 │   ├── servicetoken/      # 服务间认证

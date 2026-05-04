@@ -7,10 +7,6 @@ import (
 {{- if and (not .Endpoint.IsPagination) (hasQueryNumeric .Endpoint.QueryParams)}}
 	"strconv"
 {{- end}}
-{{- if hasPathParams .Endpoint}}
-
-	"github.com/go-chi/chi/v5"
-{{- end}}
 
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/wrapper"
@@ -59,7 +55,7 @@ func (h *Handler) handle(w http.ResponseWriter, r *http.Request) {
 	req := &Request{}
 {{- range .Endpoint.PathParams}}
 	{
-		v := chi.URLParam(r, "{{.Name}}")
+		v := r.PathValue("{{.Name}}")
 {{- if hasMinLength .MinLength}}
 		if len(v) < {{derefInt .MinLength}} {
 			httputil.WriteDomainError(r.Context(), w, errcode.New(errcode.ErrValidationFailed, "{{.Name}}: value too short"))

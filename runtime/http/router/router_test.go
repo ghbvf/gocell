@@ -12,7 +12,6 @@ import (
 	"testing"
 
 	"github.com/coder/websocket"
-	"github.com/go-chi/chi/v5"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -486,10 +485,10 @@ func TestMountRouteGroup_CellAttribution_RawMountPrefix(t *testing.T) {
 		Listener: cell.PrimaryListener,
 		CellID:   "mountcell",
 		Register: func(mux cell.RouteMux) error {
-			sub := chi.NewRouter()
-			sub.Get("/ok", func(w http.ResponseWriter, _ *http.Request) {
+			sub := http.NewServeMux()
+			sub.Handle("GET /ok", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 				w.WriteHeader(http.StatusNoContent)
-			})
+			}))
 			mux.Mount("/mounted", sub)
 			return nil
 		},
@@ -522,11 +521,11 @@ func TestGroup(t *testing.T) {
 
 func TestMount(t *testing.T) {
 	r := MustNew(WithRouterClock(clock.Real()))
-	subRouter := chi.NewRouter()
-	subRouter.Get("/hello", func(w http.ResponseWriter, _ *http.Request) {
+	subMux := http.NewServeMux()
+	subMux.Handle("GET /hello", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
-	})
-	r.Mount("/sub", subRouter)
+	}))
+	r.Mount("/sub", subMux)
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/sub/hello", nil)
@@ -1808,4 +1807,170 @@ func TestRouter_ServeHTTP_NoFinalizeAuth_FailsClosed(t *testing.T) {
 
 	require.NotPanics(t, func() { r.ServeHTTP(rec, req) })
 	assert.Equal(t, http.StatusInternalServerError, rec.Code)
+}
+
+// TestRouter_DispatchPopulatesPathValue asserts that stdlib ServeMux path
+// parameters are still accessible via req.PathValue inside the leaf handler
+// after patternRecordingMux double-dispatch.
+func TestRouter_DispatchPopulatesPathValue(t *testing.T) {
+	r := MustNew(
+		WithRouterClock(clock.Real()),
+		WithPolicyCoverageWhitelist([]string{"/api/v1/users/*"}),
+	)
+
+	var capturedID string
+	r.Handle("GET /api/v1/users/{id}", http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		capturedID = req.PathValue("id")
+		w.WriteHeader(http.StatusOK)
+	}))
+	require.NoError(t, r.FinalizeAuth())
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/users/42", nil)
+	r.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.Equal(t, "42", capturedID, "patternRecordingMux must propagate PathValue to leaf handler")
+}
+
+// TestRouter_RawHandle_DuplicateAcrossCells_FailsFast verifies the P1 fix:
+// nativeMuxAdapter.Handle must run the cross-cell ownership check BEFORE the
+// ServeMux dedup (markMuxHandler). Without this ordering, the second cell's
+// duplicate registration is silently swallowed instead of failing fast.
+func TestRouter_RawHandle_DuplicateAcrossCells_FailsFast(t *testing.T) {
+	r := MustNew(WithRouterClock(clock.Real()))
+
+	// cell-a registers GET /api/v1/shared/foo
+	err := r.MountRouteGroup(cell.RouteGroup{
+		Listener: cell.PrimaryListener,
+		Prefix:   "/api/v1/shared",
+		CellID:   "cell-a",
+		Register: func(mux cell.RouteMux) error {
+			mux.Handle("GET /foo", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(http.StatusOK)
+			}))
+			return nil
+		},
+	})
+	require.NoError(t, err, "first RouteGroup registration must succeed")
+
+	// cell-b tries to register the same path — must be rejected.
+	err = r.MountRouteGroup(cell.RouteGroup{
+		Listener: cell.PrimaryListener,
+		Prefix:   "/api/v1/shared",
+		CellID:   "cell-b",
+		Register: func(mux cell.RouteMux) error {
+			mux.Handle("GET /foo", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(http.StatusOK)
+			}))
+			return nil
+		},
+	})
+	require.Error(t, err, "second RouteGroup with duplicate path from a different cell must fail")
+	assert.Contains(t, err.Error(), "duplicate route ownership",
+		"error must mention duplicate route ownership")
+}
+
+// TestRouter_RejectPath_RouteLabelConsistent verifies the P2 fix: all three
+// observability layers (metrics, access log, tracing) report the same
+// low-cardinality route pattern even when the request is rejected before
+// dispatch (e.g. 401 from JWT auth middleware).
+func TestRouter_RejectPath_RouteLabelConsistent(t *testing.T) {
+	mc := metrics.NewInMemoryCollector()
+	spy := &routerSpyTracer{}
+	var logBuf bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&logBuf, nil))
+	original := slog.Default()
+	slog.SetDefault(logger)
+	defer slog.SetDefault(original)
+
+	verifier := &routerTestVerifier{
+		claims: auth.Claims{Subject: "user-1"},
+	}
+	r := MustNew(
+		WithRouterClock(clock.Real()),
+		WithMetricsCollector(mc),
+		WithTracer(spy),
+		WithAuthMiddleware(verifier),
+	)
+
+	require.NoError(t, r.MountRouteGroup(cell.RouteGroup{
+		Listener: cell.PrimaryListener,
+		Prefix:   "/api/v1/reject",
+		CellID:   "rejectcell",
+		Register: func(mux cell.RouteMux) error {
+			return auth.Mount(mux, auth.Route{
+				Contract: testHTTPContract(http.MethodGet, "/api/v1/reject/items/{id}"),
+				Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+					t.Fatal("handler must not run when auth rejects")
+				}),
+			})
+		},
+	}))
+	require.NoError(t, r.FinalizeAuth())
+
+	// Request without a token — auth rejects before dispatch, so the
+	// dispatch-time recorder never fires.
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/reject/items/99", nil)
+	r.ServeHTTP(rec, req)
+	assert.Equal(t, http.StatusUnauthorized, rec.Code)
+
+	wantRoute := "/api/v1/reject/items/{id}"
+
+	// 1) Metrics route label must be the template, not "unmatched".
+	snap := mc.Snapshot()
+	assert.Equal(t, int64(1), snap.RequestCounts[routerRequestKey(
+		"rejectcell", http.MethodGet, wantRoute, http.StatusUnauthorized,
+	)], "metrics route label must be the template on auth-reject path")
+	assert.Equal(t, int64(0), snap.RequestCounts[routerRequestKey(
+		"rejectcell", http.MethodGet, "unmatched", http.StatusUnauthorized,
+	)], "metrics route label must NOT be 'unmatched' on a registered path")
+
+	// 2) Access log route field must be the template, not "unmatched".
+	entry, found := findAccessLogEntry(logBuf.Bytes(), "/api/v1/reject/items/99")
+	require.True(t, found, "access log entry must exist for the rejected request")
+	assert.Equal(t, wantRoute, entry["route"],
+		"access log route field must be the template on auth-reject path")
+
+	// 3) Tracing span http.route attribute must be the template.
+	// The spy tracer collects spans; the Tracing middleware emits one per request.
+	spans := spy.spans
+	require.NotEmpty(t, spans, "tracing span must be emitted")
+	assert.Equal(t, wantRoute, spans[0].Attr("http.route"),
+		"tracing http.route attribute must be the template on auth-reject path")
+}
+
+// TestMountRouteGroup_NonServeMuxHandler_RouteLabelDegrades asserts that
+// mounting a plain http.HandlerFunc (not *http.ServeMux) records the mount
+// prefix as the route label instead of falling back to "unmatched".
+func TestMountRouteGroup_NonServeMuxHandler_RouteLabelDegrades(t *testing.T) {
+	mc := metrics.NewInMemoryCollector()
+	r := MustNew(WithRouterClock(clock.Real()), WithMetricsCollector(mc))
+
+	require.NoError(t, r.MountRouteGroup(cell.RouteGroup{
+		Listener: cell.PrimaryListener,
+		CellID:   "legacycell",
+		Register: func(mux cell.RouteMux) error {
+			mux.Mount("/legacy", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(http.StatusOK)
+			}))
+			return nil
+		},
+	}))
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/legacy/anything", nil)
+	r.ServeHTTP(rec, req)
+	assert.Equal(t, http.StatusOK, rec.Code)
+
+	snap := mc.Snapshot()
+	// Route label must be the mount prefix form, not "unmatched", and must not
+	// be a sub-path-granularity pattern (non-ServeMux internal routing is opaque).
+	key := routerRequestKey("legacycell", http.MethodGet, "/legacy/", http.StatusOK)
+	assert.Equal(t, int64(1), snap.RequestCounts[key],
+		"non-ServeMux mount must degrade to mount-prefix route label, not 'unmatched'")
+	unmatchedKey := routerRequestKey("legacycell", http.MethodGet, "unmatched", http.StatusOK)
+	assert.Equal(t, int64(0), snap.RequestCounts[unmatchedKey],
+		"route label must not be 'unmatched' for a mounted non-ServeMux handler")
 }

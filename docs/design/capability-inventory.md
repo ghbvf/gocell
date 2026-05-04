@@ -112,7 +112,7 @@
 - 实现 `outbox.Publisher` + `outbox.Subscriber`
 
 ### 3.5 http/router — HTTP 路由
-- chi-based `Router` — Handle/Route/Mount/Group
+- stdlib `net/http.ServeMux`-based `Router` — Handle/Route/Mount/Group
 - 实现 `cell.RouteMux` 接口
 
 ### 3.6 http/health — 健康检查
@@ -321,7 +321,6 @@ Adapters: internal/mem + internal/adapters/postgres (ConfigRepository PG)
 ### 外部依赖（直接）
 | 依赖 | 用途 |
 |------|------|
-| go-chi/chi/v5 | HTTP 路由 |
 | golang-jwt/jwt/v5 | JWT 签发/验证 |
 | jackc/pgx/v5 | PostgreSQL 驱动 |
 | redis/go-redis/v9 | Redis 客户端 |

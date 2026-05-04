@@ -12,7 +12,7 @@ import (
 func TestVerifyPolicyCoverage(t *testing.T) {
 	tests := []struct {
 		name        string
-		routes      []routeKey            // registered routes from chi.Walk
+		routes      []routeKey            // registered routes from router.routePatterns
 		metas       []kcell.AuthRouteMeta // declared auth metas
 		whitelist   []string              // whitelist patterns
 		wantErr     bool

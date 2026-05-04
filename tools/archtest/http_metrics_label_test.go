@@ -146,7 +146,7 @@ func TestHTTPMetricsLabelRouterAttribution01(t *testing.T) {
 			rememberFirstPos(&authPos, call.Pos())
 		case isSelectorCall(call, "middleware", "BodyLimit"):
 			rememberFirstPos(&bodyLimitPos, call.Pos())
-		case isMuxUseWithDefaultMiddleware(call):
+		case isRouterUseWithDefaultMiddleware(call):
 			rememberFirstPos(&defaultMWPos, call.Pos())
 		}
 		return true
@@ -347,8 +347,8 @@ func selectorQualifier(expr ast.Expr) string {
 	}
 }
 
-func isMuxUseWithDefaultMiddleware(call *ast.CallExpr) bool {
-	if !isSelectorCall(call, "r.mux", "Use") {
+func isRouterUseWithDefaultMiddleware(call *ast.CallExpr) bool {
+	if !isSelectorCall(call, "r", "use") {
 		return false
 	}
 	for _, arg := range call.Args {

@@ -5,7 +5,6 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/go-chi/chi/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -17,9 +16,9 @@ import (
 // ---------------------------------------------------------------------------
 // Contract tests for Mount / Route / Group behavior.
 //
-// These tests document the routing contract that any future router
-// implementation must satisfy.  They exercise chi-backed behavior today and
-// serve as a regression safety net for router replacement.
+// These tests document the routing contract that the router must satisfy on
+// top of stdlib net/http.ServeMux. They exercise the prefix/strip semantics
+// of Mount and the method+pattern matching guarantees of stdlib 1.22+.
 // ---------------------------------------------------------------------------
 
 // --- Mount Prefix Stripping ------------------------------------------------
@@ -74,12 +73,12 @@ func TestMount_PrefixStripping(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			r := MustNew(WithRouterClock(clock.Real()))
 
-			sub := chi.NewRouter()
+			sub := http.NewServeMux()
 			body := tt.wantBody
-			sub.Get(tt.subPattern, func(w http.ResponseWriter, _ *http.Request) {
+			sub.Handle("GET "+tt.subPattern, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 				w.WriteHeader(http.StatusOK)
 				_, _ = w.Write([]byte(body))
-			})
+			}))
 			r.Mount(tt.mountPrefix, sub)
 
 			rec := httptest.NewRecorder()
@@ -99,10 +98,10 @@ func TestMount_PrefixStripping(t *testing.T) {
 func TestMount_MiddlewareInheritance(t *testing.T) {
 	r := MustNew(WithRouterClock(clock.Real())) // New() applies default middleware (RequestID, SecurityHeaders, etc.)
 
-	sub := chi.NewRouter()
-	sub.Get("/resource", func(w http.ResponseWriter, _ *http.Request) {
+	sub := http.NewServeMux()
+	sub.Handle("GET /resource", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
-	})
+	}))
 	r.Mount("/api", sub)
 
 	rec := httptest.NewRecorder()
@@ -353,10 +352,10 @@ func TestRoute_NotFoundAndMethodNotAllowed(t *testing.T) {
 
 func TestMount_NotFoundAndMethodNotAllowed(t *testing.T) {
 	r := MustNew(WithRouterClock(clock.Real()))
-	sub := chi.NewRouter()
-	sub.Get("/items", func(w http.ResponseWriter, _ *http.Request) {
+	sub := http.NewServeMux()
+	sub.Handle("GET /items", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
-	})
+	}))
 	r.Mount("/store", sub)
 
 	tests := []struct {
@@ -391,20 +390,26 @@ func TestMount_NotFoundAndMethodNotAllowed(t *testing.T) {
 func TestMount_Nested(t *testing.T) {
 	r := MustNew(WithRouterClock(clock.Real()))
 
-	// Inner sub-router mounted at /v1 inside the outer sub-router at /api.
-	// The handler's pattern is relative to the innermost mount point.
-	inner := chi.NewRouter()
-	inner.Get("/resource", func(w http.ResponseWriter, _ *http.Request) {
+	// Inner sub-mux is mounted at /v1 inside an outer sub-mux at /api. The
+	// inner handler patterns are relative to the innermost mount point — once
+	// outer's StripPrefix peels /api and inner's StripPrefix peels /v1, a
+	// request to /api/v1/resource lands at /resource on the inner mux.
+	inner := http.NewServeMux()
+	inner.Handle("GET /resource", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("inner-resource"))
-	})
-	inner.Get("/", func(w http.ResponseWriter, _ *http.Request) {
+	}))
+	inner.Handle("GET /", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("inner-root"))
-	})
+	}))
 
-	outer := chi.NewRouter()
-	outer.Mount("/v1", inner)
+	outer := http.NewServeMux()
+	// Same Mount semantics as Router.Mount, applied to a stdlib outer mux:
+	// register the subtree (/v1/) and the bare prefix (/v1) with the inner
+	// path rewritten to "/" so inner.GET / matches /api/v1.
+	outer.Handle("/v1/", http.StripPrefix("/v1", inner))
+	outer.Handle("/v1", mountBareHandler(inner))
 
 	r.Mount("/api", outer)
 
@@ -438,12 +443,12 @@ func TestMount_Nested(t *testing.T) {
 func TestMount_WithRouteParams(t *testing.T) {
 	r := MustNew(WithRouterClock(clock.Real()))
 
-	sub := chi.NewRouter()
-	sub.Get("/{id}", func(w http.ResponseWriter, req *http.Request) {
-		id := chi.URLParam(req, "id")
+	sub := http.NewServeMux()
+	sub.Handle("GET /{id}", http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		id := req.PathValue("id")
 		w.Header().Set("X-Param-ID", id)
 		w.WriteHeader(http.StatusOK)
-	})
+	}))
 	r.Mount("/users", sub)
 
 	tests := []struct {

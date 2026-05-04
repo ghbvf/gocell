@@ -4,12 +4,11 @@ import (
 	"bytes"
 	"context"
 	"log/slog"
+	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
-
-	"github.com/go-chi/chi/v5"
 
 	"github.com/ghbvf/gocell/examples/todoorder/cells/ordercell/internal/domain"
 	"github.com/ghbvf/gocell/examples/todoorder/cells/ordercell/internal/mem"
@@ -43,13 +42,14 @@ func TestHttpOrderGetV1Serve(t *testing.T) {
 	})
 	h := getv1.NewHandler(svc, nil)
 
-	// chi.URLParam relies on chi route context; tests must mount through chi.NewRouter().
-	r := chi.NewRouter()
-	r.Get("/api/v1/orders/{id}", h.ServeHTTP)
+	// r.PathValue relies on stdlib ServeMux pattern routing; mount through
+	// http.NewServeMux so the {id} placeholder is populated.
+	mux := http.NewServeMux()
+	mux.Handle(c.HTTP.Method+" "+c.HTTP.Path, h)
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(c.HTTP.Method, strings.Replace(c.HTTP.Path, "{id}", "ord-contract-get", 1), nil)
-	r.ServeHTTP(rec, req)
+	mux.ServeHTTP(rec, req)
 	c.ValidateHTTPResponseRecorder(t, rec)
 }
 

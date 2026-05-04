@@ -46,9 +46,16 @@ func TestWithTrustedProxies_Integration(t *testing.T) {
 
 func TestRouter_Handler(t *testing.T) {
 	// PR-A14b: each Router has a single Handler() serving its listener's mux.
+	// The composed handler wraps the ServeMux with the listener-root middleware
+	// chain, so it is not pointer-equal to r.mux — but it must be non-nil and
+	// reused across calls so http.Server hands the same handler to every
+	// connection (built eagerly by composeHandler during NewForListener).
 	r := MustNew(WithRouterClock(clock.Real()))
-	assert.NotNil(t, r.Handler())
-	assert.Equal(t, r.mux, r.Handler())
+	first := r.Handler()
+	assert.NotNil(t, first)
+	assert.NotNil(t, r.mux)
+	assert.True(t, first == r.Handler(),
+		"Handler() must return the same composed handler on each call")
 }
 
 func TestRouteGroup_Route(t *testing.T) {
