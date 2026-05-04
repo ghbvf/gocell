@@ -21,18 +21,8 @@ type Waiver struct {
 	ExpiresAt string
 }
 
-// Cell-level metadata types live exclusively in kernel/metadata:
-//
-//	metadata.CellMeta            (was cell.CellMetadata)
-//	metadata.OwnerMeta           (was cell.Owner)
-//	metadata.SchemaMeta          (was cell.SchemaConfig)
-//	metadata.CellVerifyMeta      (was cell.CellVerify)
-//	metadata.L0DepMeta           (was cell.L0Dep)
-//
-// metadata.CellMeta is a strict superset (adds DurabilityMode, Listeners,
-// GoStructName, Dir, File). The previous duplication had drifted 5 fields;
-// PR-A1 (K#05 prereq) consolidates the canonical source in kernel/metadata.
-// See docs/architecture/202605051300-adr-kernel-cellmeta-single-source.md.
+// Cell-level metadata types live exclusively in kernel/metadata.
+// See ADR docs/architecture/202605051300-adr-kernel-cellmeta-single-source.md.
 
 // --- Core Interfaces ---
 
@@ -70,9 +60,8 @@ type Cell interface {
 	Health() HealthStatus
 	// Ready reports whether the cell is currently serving (post-Start, pre-Stop).
 	Ready() bool
-	// Metadata returns the declarative metadata loaded from cell.yaml.
-	// The returned pointer aliases an internal deep-copy held by the cell;
-	// readers MUST treat it as read-only (mutation is a contract violation).
+	// Metadata returns an independent deep copy of the cell's declarative
+	// metadata; callers may freely read and modify the returned value.
 	Metadata() *metadata.CellMeta
 	// OwnedSlices returns the slices this cell registered.
 	OwnedSlices() []Slice

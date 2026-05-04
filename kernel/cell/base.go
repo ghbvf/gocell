@@ -76,7 +76,10 @@ func NewBaseCell(meta *metadata.CellMeta) (*BaseCell, error) {
 	if meta == nil {
 		return nil, errcode.New(errcode.ErrValidationFailed, "cell.NewBaseCell: meta is nil")
 	}
-	cellType := CellType("")
+	if meta.ID == "" {
+		return nil, errcode.New(errcode.ErrValidationFailed, "cell.NewBaseCell: meta.ID is empty")
+	}
+	var cellType CellType
 	if meta.Type != "" {
 		ct, err := ParseCellType(meta.Type)
 		if err != nil {
@@ -93,7 +96,7 @@ func NewBaseCell(meta *metadata.CellMeta) (*BaseCell, error) {
 		level = lv
 	}
 	return &BaseCell{
-		meta:     deepCopyMeta(meta),
+		meta:     meta.Clone(),
 		cellType: cellType,
 		level:    level,
 	}, nil
@@ -102,37 +105,26 @@ func NewBaseCell(meta *metadata.CellMeta) (*BaseCell, error) {
 // MustNewBaseCell is the panic-on-error twin of NewBaseCell, intended for
 // composition-root and test sites that build cells from static literals
 // where a construction failure is a programmer error and must abort startup.
-// Runtime / config-driven callers should use NewBaseCell and propagate the
-// error to /readyz or a structured 5xx response. See ADR
-// docs/architecture/202604270030-architectural-panic-whitelist.md §5.
+// Do not call from request handlers, hot paths, or config-reload callbacks —
+// use NewBaseCell and propagate the error to /readyz or a 5xx response.
+// See ADR docs/architecture/202604270030-architectural-panic-whitelist.md §5.
 func MustNewBaseCell(meta *metadata.CellMeta) *BaseCell {
 	c, err := NewBaseCell(meta)
 	if err != nil {
-		panic(err)
+		panic(fmt.Sprintf("cell.MustNewBaseCell: %v", err))
 	}
 	return c
 }
 
-// deepCopyMeta clones every slice / nested struct so BaseCell owns an
-// independent snapshot. Adapted from kernel/registry/cell.go:deepCopyCell.
-func deepCopyMeta(src *metadata.CellMeta) *metadata.CellMeta {
-	cp := *src
-	if src.L0Dependencies != nil {
-		cp.L0Dependencies = append([]metadata.L0DepMeta(nil), src.L0Dependencies...)
-	}
-	if src.Listeners != nil {
-		cp.Listeners = append([]metadata.ListenerDeclMeta(nil), src.Listeners...)
-	}
-	if src.Verify.Smoke != nil {
-		cp.Verify.Smoke = append([]string(nil), src.Verify.Smoke...)
-	}
-	return &cp
-}
+func (b *BaseCell) ID() string              { return b.meta.ID }
+func (b *BaseCell) Type() CellType          { return b.cellType }
+func (b *BaseCell) ConsistencyLevel() Level { return b.level }
 
-func (b *BaseCell) ID() string                   { return b.meta.ID }
-func (b *BaseCell) Type() CellType               { return b.cellType }
-func (b *BaseCell) ConsistencyLevel() Level      { return b.level }
-func (b *BaseCell) Metadata() *metadata.CellMeta { return b.meta }
+// Metadata returns an independent deep copy of the cell's declarative
+// metadata. Callers may freely mutate the returned value without
+// affecting the cell's internal state (fail-closed isolation, since the
+// previous read-only contract on a shared pointer was unenforceable).
+func (b *BaseCell) Metadata() *metadata.CellMeta { return b.meta.Clone() }
 
 // OwnedSlices returns a copy of the owned slice list.
 func (b *BaseCell) OwnedSlices() []Slice {
