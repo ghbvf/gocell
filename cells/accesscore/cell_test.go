@@ -641,7 +641,8 @@ func TestAccessCore_RouteRoleAssign(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/internal/v1/access/roles/assign",
 		strings.NewReader(`{"userId":"usr-1","roleId":"admin"}`))
 	req.Header.Set("Content-Type", "application/json")
-	req = req.WithContext(auth.TestContext("admin-user", []string{auth.RoleInternalAdmin}))
+	// Spec: use TestServiceContext("accesscore") — caller-cell identity propagation.
+	req = req.WithContext(auth.TestServiceContext("accesscore"))
 	r.ServeHTTP(rec, req)
 
 	assert.Equal(t, http.StatusNotFound, rec.Code)
@@ -684,7 +685,8 @@ func TestAccessCore_RouteRoleRevoke(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/internal/v1/access/roles/revoke",
 		strings.NewReader(`{"userId":"usr-1","roleId":"admin"}`))
 	req.Header.Set("Content-Type", "application/json")
-	req = req.WithContext(auth.TestContext("admin-user", []string{auth.RoleInternalAdmin}))
+	// Spec: use TestServiceContext("accesscore") — caller-cell identity propagation.
+	req = req.WithContext(auth.TestServiceContext("accesscore"))
 	r.ServeHTTP(rec, req)
 
 	assert.Equal(t, http.StatusOK, rec.Code)

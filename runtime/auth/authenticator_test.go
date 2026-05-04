@@ -7,6 +7,7 @@ import (
 	"math"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -465,7 +466,7 @@ func TestServiceTokenAuthenticator_InvalidMAC_Error(t *testing.T) {
 		WithServiceTokenNonceStore(mustNewInMemoryNonceStore(t)))
 	req := httptest.NewRequest(http.MethodGet, "/internal/v1/resource", nil)
 	// Construct a token with wrong HMAC (last byte flipped).
-	goodToken := GenerateServiceToken(ring, http.MethodGet, "/internal/v1/resource", "", now)
+	goodToken := GenerateServiceToken(ring, "gocell", http.MethodGet, "/internal/v1/resource", "", now)
 	badToken := goodToken[:len(goodToken)-2] + "ff"
 	req.Header.Set("Authorization", "ServiceToken "+badToken)
 	p, ok, err := a.Authenticate(req)
@@ -485,7 +486,7 @@ func TestServiceTokenAuthenticator_Expired_Error(t *testing.T) {
 	now := time.Now()
 	oldTime := now.Add(authnDNeg6min)
 	// Token is signed for 6 minutes ago — exceeds ServiceTokenMaxAge.
-	token := GenerateServiceToken(ring, http.MethodGet, "/internal/v1/resource", "", oldTime)
+	token := GenerateServiceToken(ring, "gocell", http.MethodGet, "/internal/v1/resource", "", oldTime)
 	a := mustNewServiceTokenAuthenticator(t, ring,
 		WithServiceTokenClock(clockmock.New(now)),
 		WithServiceTokenNonceStore(mustNewInMemoryNonceStore(t)))
@@ -513,7 +514,7 @@ func TestServiceTokenAuthenticator_NonceReplay_Error(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewServiceTokenAuthenticator: %v", err)
 	}
-	token := GenerateServiceToken(ring, http.MethodGet, "/internal/v1/resource", "", now)
+	token := GenerateServiceToken(ring, "gocell", http.MethodGet, "/internal/v1/resource", "", now)
 
 	// First use — must succeed.
 	req1 := httptest.NewRequest(http.MethodGet, "/internal/v1/resource", nil)
@@ -551,7 +552,7 @@ func TestServiceTokenAuthenticator_Success_PrincipalShape(t *testing.T) {
 		WithServiceTokenClock(clockmock.New(now)),
 		WithServiceTokenNonceStore(mustNewInMemoryNonceStore(t)))
 
-	token := GenerateServiceToken(ring, http.MethodGet, "/internal/v1/resource", "", now)
+	token := GenerateServiceToken(ring, "gocell", http.MethodGet, "/internal/v1/resource", "", now)
 	req := httptest.NewRequest(http.MethodGet, "/internal/v1/resource", nil)
 	req.Header.Set("Authorization", "ServiceToken "+token)
 
@@ -570,10 +571,6 @@ func TestServiceTokenAuthenticator_Success_PrincipalShape(t *testing.T) {
 	if p.Kind != PrincipalService {
 		t.Errorf("expected Kind=PrincipalService, got %v", p.Kind)
 	}
-	// Subject must be ServiceNameInternal.
-	if p.Subject != ServiceNameInternal {
-		t.Errorf("expected Subject=%q, got %q", ServiceNameInternal, p.Subject)
-	}
 	// AuthMethod must be "service_token".
 	if p.AuthMethod != "service_token" {
 		t.Errorf("expected AuthMethod=%q, got %q", "service_token", p.AuthMethod)
@@ -582,25 +579,10 @@ func TestServiceTokenAuthenticator_Success_PrincipalShape(t *testing.T) {
 	if p.PasswordResetRequired {
 		t.Error("expected PasswordResetRequired=false for service principal")
 	}
-	// Roles must match BuiltinServiceRoles(ServiceNameInternal).
-	expectedRoles := BuiltinServiceRoles(ServiceNameInternal)
-	if len(p.Roles) != len(expectedRoles) {
-		t.Fatalf("expected %d roles, got %d", len(expectedRoles), len(p.Roles))
-	}
-	for i, r := range expectedRoles {
-		if p.Roles[i] != r {
-			t.Errorf("role[%d]: expected %q, got %q", i, r, p.Roles[i])
-		}
-	}
-	// Roles must be a copy — mutating Principal.Roles must not affect BuiltinServiceRoles.
-	if len(p.Roles) > 0 {
-		original := p.Roles[0]
-		p.Roles[0] = "mutated"
-		fresh := BuiltinServiceRoles(ServiceNameInternal)
-		if fresh[0] != original {
-			t.Error("Principal.Roles must be a defensive copy")
-		}
-	}
+	// Wave 2 target: Subject="" and Roles=nil (caller identity via CallerCellID).
+	// The old assertions on Subject=ServiceNameInternal and Roles=BuiltinServiceRoles(...)
+	// are removed here; TestNewServiceTokenAuthenticator_PrincipalCallerCell (below)
+	// pins the Wave 2 CallerCellID shape and will be RED until Wave 2 ships.
 }
 
 // TestJWTAuthenticator_EmptySubject_Error verifies that a JWT token with an
@@ -661,7 +643,7 @@ func TestUnionAuthenticator_BearerAndServiceToken_NoCrossBleed(t *testing.T) {
 		WithServiceTokenNonceStore(mustNewInMemoryNonceStore(t)))
 	union := NewUnionAuthenticator(jwtAuth, svcAuth)
 
-	token := GenerateServiceToken(ring, http.MethodGet, "/internal/v1/resource", "", now)
+	token := GenerateServiceToken(ring, "gocell", http.MethodGet, "/internal/v1/resource", "", now)
 	req := httptest.NewRequest(http.MethodGet, "/internal/v1/resource", nil)
 	req.Header.Set("Authorization", "ServiceToken "+token)
 
@@ -734,7 +716,7 @@ func TestServiceTokenAuthenticator_FutureTimestamp_Error(t *testing.T) {
 	now := time.Now()
 	// Token is signed just beyond the explicit future-skew window.
 	futureTime := now.Add(ServiceTokenClockSkew + time.Second)
-	token := GenerateServiceToken(ring, http.MethodGet, "/internal/v1/resource", "", futureTime)
+	token := GenerateServiceToken(ring, "gocell", http.MethodGet, "/internal/v1/resource", "", futureTime)
 
 	a := mustNewServiceTokenAuthenticator(t, ring,
 		WithServiceTokenClock(clockmock.New(now)),
@@ -758,7 +740,7 @@ func TestServiceTokenAuthenticator_FarFutureTimestampOverflow_Error(t *testing.T
 	ring := mustTestRing(t, testHMACKey, "")
 	now := time.Unix(1_700_000_000, 0)
 	farFuture := time.Unix(math.MaxInt64/2, 0)
-	token := GenerateServiceToken(ring, http.MethodGet, "/internal/v1/resource", "", farFuture)
+	token := GenerateServiceToken(ring, "gocell", http.MethodGet, "/internal/v1/resource", "", farFuture)
 
 	a := mustNewServiceTokenAuthenticator(t, ring,
 		WithServiceTokenClock(clockmock.New(now)),
@@ -782,7 +764,7 @@ func TestServiceTokenAuthenticator_FutureTimestampWithinSkew_Accepted(t *testing
 	ring := mustTestRing(t, testHMACKey, "")
 	now := time.Now()
 	futureTime := now.Add(ServiceTokenClockSkew)
-	token := GenerateServiceToken(ring, http.MethodGet, "/internal/v1/resource", "", futureTime)
+	token := GenerateServiceToken(ring, "gocell", http.MethodGet, "/internal/v1/resource", "", futureTime)
 
 	a := mustNewServiceTokenAuthenticator(t, ring,
 		WithServiceTokenClock(clockmock.New(now)),
@@ -802,11 +784,54 @@ func TestServiceTokenAuthenticator_FutureTimestampWithinSkew_Accepted(t *testing
 	}
 }
 
+// TestNewServiceTokenAuthenticator_PrincipalCallerCell verifies that after Wave 2
+// implements the 4-part token, the Principal carries CallerCellID='accesscore',
+// empty Subject, and nil Roles.
+//
+// Spec: 4-part token GenerateServiceToken(ring, callerCell, method, path, query, ts)
+// → after successful auth → Principal.CallerCellID == callerCell, Subject == "", Roles == nil.
+func TestNewServiceTokenAuthenticator_PrincipalCallerCell(t *testing.T) {
+	ring := mustTestRing(t, testHMACKey, "")
+	now := time.Now()
+	// Spec: 4-part signature: GenerateServiceToken(ring, callerCell, method, path, query, ts)
+	token := GenerateServiceToken(ring, "accesscore", http.MethodGet, "/internal/v1/resource", "", now)
+
+	a := mustNewServiceTokenAuthenticator(t, ring,
+		WithServiceTokenClock(clockmock.New(now)),
+		WithServiceTokenNonceStore(mustNewInMemoryNonceStore(t)))
+
+	req := httptest.NewRequest(http.MethodGet, "/internal/v1/resource", nil)
+	req.Header.Set("Authorization", "ServiceToken "+token)
+
+	p, ok, err := a.Authenticate(req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !ok {
+		t.Fatal("expected ok=true for valid 4-part token")
+	}
+	if p == nil {
+		t.Fatal("expected non-nil principal")
+	}
+	// Spec: CallerCellID must be propagated from the token.
+	if p.CallerCellID != "accesscore" {
+		t.Errorf("expected CallerCellID=%q, got %q", "accesscore", p.CallerCellID)
+	}
+	// Spec: Subject must be empty for service principal (identity via CallerCellID).
+	if p.Subject != "" {
+		t.Errorf("expected empty Subject, got %q", p.Subject)
+	}
+	// Spec: Roles must be nil for service principal.
+	if p.Roles != nil {
+		t.Errorf("expected nil Roles, got %v", p.Roles)
+	}
+}
+
 func TestServiceTokenAuthenticator_PastTimestampAtMaxAge_Error(t *testing.T) {
 	ring := mustTestRing(t, testHMACKey, "")
 	now := time.Now()
 	oldTime := now.Add(-ServiceTokenMaxAge)
-	token := GenerateServiceToken(ring, http.MethodGet, "/internal/v1/resource", "", oldTime)
+	token := GenerateServiceToken(ring, "gocell", http.MethodGet, "/internal/v1/resource", "", oldTime)
 
 	a := mustNewServiceTokenAuthenticator(t, ring,
 		WithServiceTokenClock(clockmock.New(now)),
@@ -823,5 +848,79 @@ func TestServiceTokenAuthenticator_PastTimestampAtMaxAge_Error(t *testing.T) {
 	}
 	if p != nil {
 		t.Fatalf("expected nil principal, got %v", p)
+	}
+}
+
+// TestValidateCallerCell tests the validateCallerCell function directly with
+// a table-driven set of cases covering empty, uppercase, valid, and invalid IDs.
+func TestValidateCallerCell(t *testing.T) {
+	tests := []struct {
+		name       string
+		callerCell string
+		wantErr    bool
+		wantCode   errcode.Code
+		wantMsg    string // partial substring expected in error message
+	}{
+		{
+			name:       "empty string — missing",
+			callerCell: "",
+			wantErr:    true,
+			wantCode:   errcode.ErrAuthUnauthorized,
+			wantMsg:    "caller cell missing",
+		},
+		{
+			name:       "uppercase Accesscore — invalid (must be lowercase)",
+			callerCell: "Accesscore",
+			wantErr:    true,
+			wantCode:   errcode.ErrAuthUnauthorized,
+			wantMsg:    "caller cell id",
+		},
+		{
+			name:       "lowercase access-core — valid",
+			callerCell: "access-core",
+			wantErr:    false,
+		},
+		{
+			name:       "starts with digit — invalid",
+			callerCell: "123abc",
+			wantErr:    true,
+			wantCode:   errcode.ErrAuthUnauthorized,
+			wantMsg:    "caller cell id",
+		},
+		{
+			name:       "single letter — valid",
+			callerCell: "a",
+			wantErr:    false,
+		},
+		{
+			name:       "alphanumeric with hyphens — valid",
+			callerCell: "a-b-c-123",
+			wantErr:    false,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			err := validateCallerCell(tc.callerCell)
+			if !tc.wantErr {
+				if err != nil {
+					t.Errorf("unexpected error: %v", err)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatal("expected error, got nil")
+			}
+			var ecErr *errcode.Error
+			if !errors.As(err, &ecErr) {
+				t.Fatalf("expected *errcode.Error, got %T: %v", err, err)
+			}
+			if ecErr.Code != tc.wantCode {
+				t.Errorf("expected code %v, got %v", tc.wantCode, ecErr.Code)
+			}
+			if tc.wantMsg != "" && !strings.Contains(err.Error(), tc.wantMsg) {
+				t.Errorf("expected error message to contain %q, got %q", tc.wantMsg, err.Error())
+			}
+		})
 	}
 }

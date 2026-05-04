@@ -85,7 +85,7 @@ func TestHMACKeyRing_Current_ReturnsCopy(t *testing.T) {
 func TestHMACKeyRing_SignWithCurrent(t *testing.T) {
 	ring := mustTestRing(t, testHMACKeyNew, testHMACKeyOld)
 	now := time.Now()
-	token := GenerateServiceToken(ring, http.MethodGet, "/api", "", now)
+	token := GenerateServiceToken(ring, "gocell", http.MethodGet, "/api", "", now)
 
 	singleRing := mustTestRing(t, testHMACKeyNew, "")
 	handler := mustTestServiceHandler(t, singleRing, clockmock.New(now))
@@ -102,7 +102,7 @@ func TestHMACKeyRing_VerifyWithPrevious(t *testing.T) {
 	now := time.Now()
 
 	oldRing := mustTestRing(t, testHMACKeyOld, "")
-	token := GenerateServiceToken(oldRing, http.MethodGet, "/api", "", now)
+	token := GenerateServiceToken(oldRing, "gocell", http.MethodGet, "/api", "", now)
 
 	newRing := mustTestRing(t, testHMACKeyNew, testHMACKeyOld)
 	handler := mustTestServiceHandler(t, newRing, clockmock.New(now))
@@ -119,7 +119,7 @@ func TestHMACKeyRing_RejectUnknownSecret(t *testing.T) {
 	now := time.Now()
 
 	unknownRing := mustTestRing(t, testHMACKeyUnk, "")
-	token := GenerateServiceToken(unknownRing, http.MethodGet, "/api", "", now)
+	token := GenerateServiceToken(unknownRing, "gocell", http.MethodGet, "/api", "", now)
 
 	ring := mustTestRing(t, testHMACKeyNew, testHMACKeyOld)
 	handler := mustTestServiceHandlerFatal(t, ring, clockmock.New(now))
@@ -136,7 +136,7 @@ func TestHMACKeyRing_SingleSecretMode(t *testing.T) {
 	now := time.Now()
 
 	ring := mustTestRing(t, testHMACKeyOne, "")
-	token := GenerateServiceToken(ring, http.MethodGet, "/api", "", now)
+	token := GenerateServiceToken(ring, "gocell", http.MethodGet, "/api", "", now)
 	handler := mustTestServiceHandler(t, ring, clockmock.New(now))
 
 	req := httptest.NewRequest(http.MethodGet, "/api", nil)
@@ -151,7 +151,7 @@ func TestHMACKeyRing_SameSecretBothPositions(t *testing.T) {
 	now := time.Now()
 
 	ring := mustTestRing(t, testHMACKeySam, testHMACKeySam)
-	token := GenerateServiceToken(ring, http.MethodGet, "/api", "", now)
+	token := GenerateServiceToken(ring, "gocell", http.MethodGet, "/api", "", now)
 	handler := mustTestServiceHandler(t, ring, clockmock.New(now))
 
 	req := httptest.NewRequest(http.MethodGet, "/api", nil)
@@ -184,7 +184,7 @@ func TestNewHMACKeyRing_ShortPreviousFails(t *testing.T) {
 }
 
 func TestGenerateServiceToken_NilRing(t *testing.T) {
-	token := GenerateServiceToken(nil, "GET", "/api", "", time.Now())
+	token := GenerateServiceToken(nil, "gocell", "GET", "/api", "", time.Now())
 	assert.Empty(t, token)
 }
 
@@ -238,7 +238,7 @@ func TestLoadHMACKeyRingFromEnv_MissingCurrentFails(t *testing.T) {
 func TestServiceTokenMiddleware_ValidToken(t *testing.T) {
 	ring := mustTestRing(t, testHMACKey, "")
 	now := time.Now()
-	token := GenerateServiceToken(ring, http.MethodGet, "/internal/v1/health", "", now)
+	token := GenerateServiceToken(ring, "gocell", http.MethodGet, "/internal/v1/health", "", now)
 	handler := mustTestServiceHandler(t, ring, clockmock.New(now))
 
 	req := httptest.NewRequest(http.MethodGet, "/internal/v1/health", nil)
@@ -289,7 +289,7 @@ func TestServiceTokenMiddleware_DifferentPath(t *testing.T) {
 	ring := mustTestRing(t, testHMACKey, "")
 	now := time.Now()
 
-	token := GenerateServiceToken(ring, http.MethodGet, "/other", "", now)
+	token := GenerateServiceToken(ring, "gocell", http.MethodGet, "/other", "", now)
 	handler := mustTestServiceHandlerFatal(t, ring, clockmock.New(now))
 
 	req := httptest.NewRequest(http.MethodGet, "/internal/v1/health", nil)
@@ -354,7 +354,7 @@ func TestServiceTokenMiddleware_ExpiredTimestamp(t *testing.T) {
 	handler := mustTestServiceHandlerFatal(t, ring, clockmock.New(now))
 
 	oldTime := now.Add(svcTokenDNeg6min)
-	token := GenerateServiceToken(ring, http.MethodGet, "/internal/v1/health", "", oldTime)
+	token := GenerateServiceToken(ring, "gocell", http.MethodGet, "/internal/v1/health", "", oldTime)
 	req := httptest.NewRequest(http.MethodGet, "/internal/v1/health", nil)
 	req.Header.Set("Authorization", "ServiceToken "+token)
 	rec := httptest.NewRecorder()
@@ -369,7 +369,7 @@ func TestServiceTokenMiddleware_ExactBoundary_Rejected(t *testing.T) {
 	handler := mustTestServiceHandlerFatal(t, ring, clockmock.New(now))
 
 	boundaryTime := now.Add(-ServiceTokenMaxAge)
-	token := GenerateServiceToken(ring, http.MethodGet, "/internal/v1/health", "", boundaryTime)
+	token := GenerateServiceToken(ring, "gocell", http.MethodGet, "/internal/v1/health", "", boundaryTime)
 	req := httptest.NewRequest(http.MethodGet, "/internal/v1/health", nil)
 	req.Header.Set("Authorization", "ServiceToken "+token)
 	rec := httptest.NewRecorder()
@@ -384,7 +384,7 @@ func TestServiceTokenMiddleware_JustWithinWindow(t *testing.T) {
 	handler := mustTestServiceHandler(t, ring, clockmock.New(now))
 
 	recentTime := now.Add(svcTokenDNeg4min59s)
-	token := GenerateServiceToken(ring, http.MethodGet, "/internal/v1/health", "", recentTime)
+	token := GenerateServiceToken(ring, "gocell", http.MethodGet, "/internal/v1/health", "", recentTime)
 	req := httptest.NewRequest(http.MethodGet, "/internal/v1/health", nil)
 	req.Header.Set("Authorization", "ServiceToken "+token)
 	rec := httptest.NewRecorder()
@@ -399,7 +399,7 @@ func TestServiceTokenMiddleware_FutureTimestamp_Rejected(t *testing.T) {
 	handler := mustTestServiceHandlerFatal(t, ring, clockmock.New(now))
 
 	futureTime := now.Add(svcTokenD6min)
-	token := GenerateServiceToken(ring, http.MethodGet, "/internal/v1/health", "", futureTime)
+	token := GenerateServiceToken(ring, "gocell", http.MethodGet, "/internal/v1/health", "", futureTime)
 	req := httptest.NewRequest(http.MethodGet, "/internal/v1/health", nil)
 	req.Header.Set("Authorization", "ServiceToken "+token)
 	rec := httptest.NewRecorder()
@@ -425,49 +425,55 @@ func TestServiceTokenMiddleware_InvalidFormat_NoColon(t *testing.T) {
 }
 
 func TestGenerateServiceToken_Deterministic(t *testing.T) {
-	// GenerateServiceToken now includes a random nonce, so two calls with the
-	// same parameters produce different tokens. We verify structure instead.
+	// Spec: GenerateServiceToken 4-part format {ts}:{nonce}:{caller_cell}:{hex_hmac}.
+	// Two calls with the same parameters produce different tokens (random nonce).
 	ring := mustTestRing(t, testHMACKey, "")
 	ts := time.Unix(1700000000, 0)
 
-	t1 := GenerateServiceToken(ring, http.MethodPost, "/api", "", ts)
-	t2 := GenerateServiceToken(ring, http.MethodPost, "/api", "", ts)
+	t1 := GenerateServiceToken(ring, "accesscore", http.MethodPost, "/api", "", ts)
+	t2 := GenerateServiceToken(ring, "accesscore", http.MethodPost, "/api", "", ts)
 
-	parts1 := strings.SplitN(t1, ":", 3)
-	parts2 := strings.SplitN(t2, ":", 3)
-	require.Len(t, parts1, 3, "token must have 3 colon-separated parts")
-	require.Len(t, parts2, 3, "token must have 3 colon-separated parts")
+	parts1 := strings.SplitN(t1, ":", 4)
+	parts2 := strings.SplitN(t2, ":", 4)
+	require.Len(t, parts1, 4, "token must have 4 colon-separated parts: {ts}:{nonce}:{caller_cell}:{hex_hmac}")
+	require.Len(t, parts2, 4, "token must have 4 colon-separated parts: {ts}:{nonce}:{caller_cell}:{hex_hmac}")
+
+	// caller_cell segment (parts[2]) must be the provided callerCell value.
+	assert.Equal(t, "accesscore", parts1[2], "caller_cell segment must match callerCell arg")
 
 	// Nonces differ between calls.
 	assert.NotEqual(t, parts1[1], parts2[1], "nonces must differ between calls")
 
 	// Different method produces a different HMAC (nonces also differ).
-	t3 := GenerateServiceToken(ring, http.MethodGet, "/api", "", ts)
+	t3 := GenerateServiceToken(ring, "accesscore", http.MethodGet, "/api", "", ts)
 	assert.NotEqual(t, t1, t3)
 }
 
 func TestGenerateServiceToken_IncludesNonce(t *testing.T) {
+	// Spec: 4-part format {ts}:{nonce}:{caller_cell}:{hex_hmac}
 	ring := mustTestRing(t, testHMACKey, "")
 	ts := time.Unix(1700000000, 0)
-	token := GenerateServiceToken(ring, http.MethodGet, "/api", "", ts)
+	token := GenerateServiceToken(ring, "configcore", http.MethodGet, "/api", "", ts)
 
-	parts := strings.SplitN(token, ":", 3)
-	require.Len(t, parts, 3, "token must have 3 colon-separated parts")
+	parts := strings.SplitN(token, ":", 4)
+	require.Len(t, parts, 4, "token must have 4 colon-separated parts: {ts}:{nonce}:{caller_cell}:{hex_hmac}")
 	assert.NotEmpty(t, parts[1], "nonce must not be empty")
 	assert.Len(t, parts[1], 32, "nonce must be 32 hex chars (16 bytes)")
+	assert.Equal(t, "configcore", parts[2], "caller_cell must appear in part[2]")
 }
 
 func TestGenerateServiceToken_NonceUniqueness(t *testing.T) {
+	// Spec: 4-part format, consecutive calls produce different nonces.
 	ring := mustTestRing(t, testHMACKey, "")
 	ts := time.Unix(1700000000, 0)
 
-	t1 := GenerateServiceToken(ring, http.MethodGet, "/api", "", ts)
-	t2 := GenerateServiceToken(ring, http.MethodGet, "/api", "", ts)
+	t1 := GenerateServiceToken(ring, "auditcore", http.MethodGet, "/api", "", ts)
+	t2 := GenerateServiceToken(ring, "auditcore", http.MethodGet, "/api", "", ts)
 
-	parts1 := strings.SplitN(t1, ":", 3)
-	parts2 := strings.SplitN(t2, ":", 3)
-	require.Len(t, parts1, 3)
-	require.Len(t, parts2, 3)
+	parts1 := strings.SplitN(t1, ":", 4)
+	parts2 := strings.SplitN(t2, ":", 4)
+	require.Len(t, parts1, 4)
+	require.Len(t, parts2, 4)
 
 	assert.NotEqual(t, parts1[1], parts2[1], "consecutive calls must produce different nonces")
 	assert.NotEqual(t, t1, t2, "tokens with different nonces must differ")
@@ -484,7 +490,7 @@ func TestServiceTokenMiddleware_WithNonceStore_ReplayRejected(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 	}))
 
-	token := GenerateServiceToken(ring, http.MethodGet, "/api/v1/resource", "", now)
+	token := GenerateServiceToken(ring, "gocell", http.MethodGet, "/api/v1/resource", "", now)
 
 	// First use — accepted.
 	req1 := httptest.NewRequest(http.MethodGet, "/api/v1/resource", nil)
@@ -512,8 +518,8 @@ func TestServiceTokenMiddleware_WithNonceStore_UniqueTokensAccepted(t *testing.T
 		w.WriteHeader(http.StatusOK)
 	}))
 
-	token1 := GenerateServiceToken(ring, http.MethodGet, "/api/v1/resource", "", now)
-	token2 := GenerateServiceToken(ring, http.MethodGet, "/api/v1/resource", "", now)
+	token1 := GenerateServiceToken(ring, "gocell", http.MethodGet, "/api/v1/resource", "", now)
+	token2 := GenerateServiceToken(ring, "gocell", http.MethodGet, "/api/v1/resource", "", now)
 
 	req1 := httptest.NewRequest(http.MethodGet, "/api/v1/resource", nil)
 	req1.Header.Set("Authorization", "ServiceToken "+token1)
@@ -540,7 +546,7 @@ func TestServiceTokenMiddleware_DefaultNoNonceStore_ReturnsErrorMiddleware(t *te
 		t.Fatal("handler must not be called when NonceStore is missing")
 	}))
 
-	token := GenerateServiceToken(ring, http.MethodGet, "/internal/v1/resource", "", now)
+	token := GenerateServiceToken(ring, "gocell", http.MethodGet, "/internal/v1/resource", "", now)
 	req := httptest.NewRequest(http.MethodGet, "/internal/v1/resource", nil)
 	req.Header.Set("Authorization", "ServiceToken "+token)
 	rec := httptest.NewRecorder()
@@ -563,7 +569,7 @@ func TestServiceTokenMiddleware_NoopNonceStoreSupplied_ReturnsErrorMiddleware(t 
 		t.Fatal("handler must not be called when NonceStore is Noop")
 	}))
 
-	token := GenerateServiceToken(ring, http.MethodGet, "/internal/v1/resource", "", now)
+	token := GenerateServiceToken(ring, "gocell", http.MethodGet, "/internal/v1/resource", "", now)
 	req := httptest.NewRequest(http.MethodGet, "/internal/v1/resource", nil)
 	req.Header.Set("Authorization", "ServiceToken "+token)
 	rec := httptest.NewRecorder()
@@ -672,7 +678,7 @@ func TestServiceTokenMiddleware_WithMetrics_NoPanic(t *testing.T) {
 
 	ring := mustTestRing(t, testHMACKey, "")
 	now := time.Now()
-	token := GenerateServiceToken(ring, http.MethodGet, "/api", "", now)
+	token := GenerateServiceToken(ring, "gocell", http.MethodGet, "/api", "", now)
 
 	handler := ServiceTokenMiddleware(ring, clockmock.New(now),
 		WithServiceTokenNonceStore(mustNewInMemoryNonceStore(t)),
@@ -700,7 +706,7 @@ func TestServiceTokenMiddleware_QueryBoundInSignature(t *testing.T) {
 	now := time.Now()
 
 	// Sign with query=foo=bar
-	token := GenerateServiceToken(ring, http.MethodGet, "/api", "foo=bar", now)
+	token := GenerateServiceToken(ring, "gocell", http.MethodGet, "/api", "foo=bar", now)
 	handler := mustTestServiceHandler(t, ring, clockmock.New(now))
 
 	// Same path+query should succeed.
@@ -726,7 +732,7 @@ func TestServiceTokenMiddleware_QueryBoundInSignature(t *testing.T) {
 func TestServiceTokenMiddleware_InjectsServicePrincipal(t *testing.T) {
 	ring := mustTestRing(t, testHMACKey, "")
 	now := time.Now()
-	token := GenerateServiceToken(ring, http.MethodGet, "/internal/v1/resource", "", now)
+	token := GenerateServiceToken(ring, "gocell", http.MethodGet, "/internal/v1/resource", "", now)
 
 	var gotPrincipal *Principal
 	handler := ServiceTokenMiddleware(ring, clockmock.New(now),
@@ -748,8 +754,12 @@ func TestServiceTokenMiddleware_InjectsServicePrincipal(t *testing.T) {
 	require.Equal(t, http.StatusOK, rec.Code)
 	require.NotNil(t, gotPrincipal)
 	assert.Equal(t, PrincipalService, gotPrincipal.Kind)
-	assert.Equal(t, ServiceNameInternal, gotPrincipal.Subject)
-	assert.Contains(t, gotPrincipal.Roles, RoleInternalAdmin)
+	// Spec: Subject empty — identity via CallerCellID, not Subject.
+	assert.Empty(t, gotPrincipal.Subject,
+		"service principal Subject should be empty after CallerCellID migration")
+	// Spec: Roles nil — caller-cell identity replaces role-based internal authz.
+	assert.Nil(t, gotPrincipal.Roles,
+		"service principal Roles should be nil after CallerCellID migration")
 	assert.Equal(t, "service_token", gotPrincipal.AuthMethod)
 	assert.False(t, gotPrincipal.PasswordResetRequired)
 }
@@ -851,4 +861,261 @@ func TestServiceToken_LegacyTwoPart_MetricLabel(t *testing.T) {
 	assert.Equal(t, http.StatusUnauthorized, rec.Code)
 	assertErrorCode(t, rec, "ERR_AUTH_UNAUTHORIZED")
 	spy.assertServiceVerify(t, "failure", "legacy_format")
+}
+
+// --- Wave 1 RED tests: 4-part token + CallerCellID propagation ---
+
+// TestServiceTokenMiddleware_CallerCellPropagated verifies that the 4-part token
+// propagates CallerCellID into Principal after successful validation.
+//
+// Spec: GenerateServiceToken(ring, callerCell, method, path, query, ts) produces a
+// 4-part token {ts}:{nonce}:{caller_cell}:{hex_hmac}; the middleware must extract
+// caller_cell and set Principal.CallerCellID = callerCell.
+func TestServiceTokenMiddleware_CallerCellPropagated(t *testing.T) {
+	ring := mustTestRing(t, testHMACKey, "")
+	now := time.Now()
+	// Spec: 4-part signature with explicit callerCell
+	token := GenerateServiceToken(ring, "accesscore", http.MethodGet, "/internal/v1/resource", "", now)
+
+	var gotPrincipal *Principal
+	handler := ServiceTokenMiddleware(ring, clockmock.New(now),
+		WithServiceTokenNonceStore(mustNewInMemoryNonceStore(t)),
+	)(
+		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			p, ok := FromContext(r.Context())
+			require.True(t, ok, "Principal must be present after valid service token")
+			gotPrincipal = p
+			w.WriteHeader(http.StatusOK)
+		}),
+	)
+
+	req := httptest.NewRequest(http.MethodGet, "/internal/v1/resource", nil)
+	req.Header.Set("Authorization", "ServiceToken "+token)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusOK, rec.Code)
+	require.NotNil(t, gotPrincipal)
+	// Spec: CallerCellID must equal the callerCell argument passed to GenerateServiceToken.
+	assert.Equal(t, "accesscore", gotPrincipal.CallerCellID,
+		"Principal.CallerCellID must be propagated from the 4-part token caller_cell segment")
+}
+
+// TestServiceTokenMiddleware_TamperedCallerCell_Rejected verifies that tampering
+// with the caller_cell segment in the 4-part token causes MAC verification failure.
+//
+// Spec: the HMAC is computed over all 4 parts including caller_cell; replacing
+// caller_cell with a different value after signing → MAC mismatch → 401.
+func TestServiceTokenMiddleware_TamperedCallerCell_Rejected(t *testing.T) {
+	ring := mustTestRing(t, testHMACKey, "")
+	now := time.Now()
+
+	// Sign with "accesscore" as caller_cell.
+	goodToken := GenerateServiceToken(ring, "accesscore", http.MethodGet, "/internal/v1/resource", "", now)
+
+	// Tamper: replace the caller_cell segment (parts[2]) with "configcore".
+	parts := strings.SplitN(goodToken, ":", 4)
+	require.Len(t, parts, 4, "GenerateServiceToken must produce a 4-part token")
+	tamperedToken := parts[0] + ":" + parts[1] + ":configcore:" + parts[3]
+
+	handler := ServiceTokenMiddleware(ring, clockmock.New(now),
+		WithServiceTokenNonceStore(mustNewInMemoryNonceStore(t)),
+	)(
+		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			t.Fatal("handler must not be called: tampered caller_cell must cause MAC failure")
+		}),
+	)
+
+	req := httptest.NewRequest(http.MethodGet, "/internal/v1/resource", nil)
+	req.Header.Set("Authorization", "ServiceToken "+tamperedToken)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	// Spec: tampered caller_cell → MAC mismatch → 401.
+	assert.Equal(t, http.StatusUnauthorized, rec.Code,
+		"tampered caller_cell must be rejected with 401")
+}
+
+// TestServiceTokenMiddleware_CallerCellWithColon_Rejected verifies that a
+// callerCell containing ':' is rejected at generation time (fail-closed).
+//
+// Spec: caller_cell is a path component separated by ':'; a value containing ':'
+// would corrupt the 4-part structure and is forbidden.
+func TestServiceTokenMiddleware_CallerCellWithColon_Rejected(t *testing.T) {
+	ring := mustTestRing(t, testHMACKey, "")
+	now := time.Now()
+
+	// Spec: GenerateServiceToken must return "" when callerCell contains ':'
+	token := GenerateServiceToken(ring, "bad:cell", http.MethodGet, "/internal/v1/resource", "", now)
+	assert.Empty(t, token,
+		"GenerateServiceToken must return empty string when callerCell contains ':'")
+}
+
+// TestServiceTokenMiddleware_EmptyCallerCell_Rejected verifies that an empty
+// callerCell causes GenerateServiceToken to return "".
+//
+// Spec: callerCell is mandatory — an empty value means the caller forgot to set it.
+func TestServiceTokenMiddleware_EmptyCallerCell_Rejected(t *testing.T) {
+	ring := mustTestRing(t, testHMACKey, "")
+	now := time.Now()
+
+	// Spec: GenerateServiceToken must return "" when callerCell is empty.
+	token := GenerateServiceToken(ring, "", http.MethodGet, "/internal/v1/resource", "", now)
+	assert.Empty(t, token,
+		"GenerateServiceToken must return empty string when callerCell is empty")
+}
+
+// TestClassifyServiceTokenVerifyError verifies that classifyServiceTokenVerifyError
+// maps errors to the correct metric reason label for all classified cases.
+func TestClassifyServiceTokenVerifyError(t *testing.T) {
+	tests := []struct {
+		name       string
+		err        error
+		wantReason string
+	}{
+		{
+			name:       "nil error — ok",
+			err:        nil,
+			wantReason: "ok",
+		},
+		{
+			name:       "legacy 2-part format",
+			err:        errcode.NewAuth(errcode.ErrAuthUnauthorized, "legacy 2-part service token format rejected"),
+			wantReason: "legacy_format",
+		},
+		{
+			name:       "legacy 3-part format",
+			err:        errcode.NewAuth(errcode.ErrAuthUnauthorized, "legacy 3-part service token format rejected"),
+			wantReason: "legacy_format",
+		},
+		{
+			name:       "expired token",
+			err:        errcode.NewAuth(errcode.ErrAuthTokenExpired, "service token expired"),
+			wantReason: "expired",
+		},
+		{
+			name:       "invalid MAC",
+			err:        errcode.NewAuth(errcode.ErrAuthUnauthorized, "invalid service token MAC"),
+			wantReason: "invalid_mac",
+		},
+		{
+			name:       "missing caller cell",
+			err:        errcode.NewAuth(errcode.ErrAuthUnauthorized, "caller cell missing"),
+			wantReason: "missing_caller_cell",
+		},
+		{
+			name:       "invalid caller cell — with actual value in message",
+			err:        errcode.NewAuth(errcode.ErrAuthUnauthorized, `caller cell id "Bad-Cell" invalid (must match ^[a-z][a-z0-9-]*$)`),
+			wantReason: "invalid_caller_cell",
+		},
+		{
+			name:       "other invalid format",
+			err:        errcode.NewAuth(errcode.ErrAuthUnauthorized, msgInvalidServiceTokenFormat),
+			wantReason: "invalid_format",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := classifyServiceTokenVerifyError(tc.err)
+			assert.Equal(t, tc.wantReason, got)
+		})
+	}
+}
+
+// TestServiceToken_EmptyCallerCell_MetricLabel verifies that a 4-part token
+// with an empty caller_cell segment is rejected with HTTP 401 AND records the
+// metric label "missing_caller_cell".
+func TestServiceToken_EmptyCallerCell_MetricLabel(t *testing.T) {
+	ring := mustTestRing(t, testHMACKey, "")
+	now := time.Unix(1700000000, 0)
+
+	spy := newSpyProvider()
+	am, err := NewAuthMetrics(spy)
+	require.NoError(t, err)
+
+	// Craft a 4-part token with an empty callerCell: ts:nonce::deadbeef...
+	ts := fmt.Sprintf("%d", now.Unix())
+	crafted := ts + ":somenonce16bytes::deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef"
+
+	handler := ServiceTokenMiddleware(ring, clockmock.New(now),
+		WithServiceTokenNonceStore(mustNewInMemoryNonceStore(t)),
+		WithServiceTokenMetrics(am),
+	)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Fatal("should not be called: empty caller cell must be rejected")
+	}))
+
+	req := httptest.NewRequest(http.MethodGet, "/internal/v1/test", nil)
+	req.Header.Set("Authorization", "ServiceToken "+crafted)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusUnauthorized, rec.Code)
+	spy.assertServiceVerify(t, "failure", "missing_caller_cell")
+}
+
+// TestServiceToken_InvalidCallerCellPattern_MetricLabel verifies that a 4-part
+// token with a caller_cell not matching ^[a-z][a-z0-9-]*$ is rejected with 401
+// AND records the metric label "invalid_caller_cell".
+func TestServiceToken_InvalidCallerCellPattern_MetricLabel(t *testing.T) {
+	ring := mustTestRing(t, testHMACKey, "")
+	now := time.Unix(1700000000, 0)
+
+	spy := newSpyProvider()
+	am, err := NewAuthMetrics(spy)
+	require.NoError(t, err)
+
+	// Craft a 4-part token with an invalid callerCell "Bad-Cell" (uppercase B).
+	ts := fmt.Sprintf("%d", now.Unix())
+	crafted := ts + ":somenonce16bytes:Bad-Cell:deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef"
+
+	handler := ServiceTokenMiddleware(ring, clockmock.New(now),
+		WithServiceTokenNonceStore(mustNewInMemoryNonceStore(t)),
+		WithServiceTokenMetrics(am),
+	)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Fatal("should not be called: invalid caller cell must be rejected")
+	}))
+
+	req := httptest.NewRequest(http.MethodGet, "/internal/v1/test", nil)
+	req.Header.Set("Authorization", "ServiceToken "+crafted)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusUnauthorized, rec.Code)
+	spy.assertServiceVerify(t, "failure", "invalid_caller_cell")
+}
+
+// TestServiceTokenMiddleware_LegacyThreePart_Rejected verifies that the old
+// 3-part token format {ts}:{nonce}:{hex_hmac} (without caller_cell) is rejected.
+//
+// Spec: the new 4-part format is {ts}:{nonce}:{caller_cell}:{hex_hmac}; a
+// 3-part token no longer has a caller_cell and must be rejected as legacy.
+func TestServiceTokenMiddleware_LegacyThreePart_Rejected(t *testing.T) {
+	ring := mustTestRing(t, testHMACKey, "")
+	now := time.Unix(1700000000, 0)
+
+	// Construct a 3-part token manually (pre-4-part format, without callerCell).
+	legacyToken := legacyTwoPartToken(testHMACKey, http.MethodGet, "/internal/v1/resource", now)
+	// legacyTwoPartToken produces "{ts}:{hex_hmac}" (2-part), so we simulate the
+	// old 3-part by inserting a nonce: "{ts}:{nonce}:{hex_hmac}".
+	oldThreePart := strings.SplitN(legacyToken, ":", 2)
+	require.Len(t, oldThreePart, 2)
+	simulatedThreePart := oldThreePart[0] + ":aaabbbccc000111222333" + ":" + oldThreePart[1]
+
+	handler := ServiceTokenMiddleware(ring, clockmock.New(now),
+		WithServiceTokenNonceStore(mustNewInMemoryNonceStore(t)),
+	)(
+		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			t.Fatal("handler must not be called: 3-part legacy token must be rejected")
+		}),
+	)
+
+	req := httptest.NewRequest(http.MethodGet, "/internal/v1/resource", nil)
+	req.Header.Set("Authorization", "ServiceToken "+simulatedThreePart)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	// Spec: 3-part format (no caller_cell) must be rejected.
+	assert.Equal(t, http.StatusUnauthorized, rec.Code,
+		"3-part legacy token (no caller_cell) must be rejected with 401")
 }

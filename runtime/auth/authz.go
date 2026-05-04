@@ -2,7 +2,10 @@ package auth
 
 import (
 	"context"
+	"fmt"
+	"net/http"
 	"slices"
+	"strings"
 
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/httputil"
@@ -11,9 +14,9 @@ import (
 // RequireSelfOrRole checks that the authenticated subject matches targetID
 // or holds one of the specified bypass roles. Returns nil on success.
 //
-// Deprecated: use auth.SelfOr inside auth.Route.Policy instead. This
-// internal function backs the SelfOr Policy constructor and should not be
-// called directly from handlers.
+// Deprecated: prefer constructing auth.AnyRole(...) / auth.SelfOr(...) Policy
+// and passing it via auth.Route.Policy. The internal Require* helpers below are
+// retained only as the implementation backbone.
 //
 // ref: go-kratos/kratos middleware/auth/auth.go — adopted: subject-from-context
 // pattern; deviated: combined self+role check instead of separate authz middleware.
@@ -28,8 +31,8 @@ func RequireSelfOrRole(ctx context.Context, targetID string, bypassRoles ...stri
 	}
 	// G1.B: Defense-in-depth. PrincipalUser must always carry a non-empty Subject;
 	// an empty Subject indicates the primary authenticator allowed a malformed token
-	// through. PrincipalService Subject is always ServiceNameInternal (non-empty);
-	// PrincipalAnonymous Subject is intentionally empty by design.
+	// through. PrincipalAnonymous Subject is intentionally empty by design.
+	// PrincipalService identity is expressed via CallerCellID, not Subject.
 	if p.Kind == PrincipalUser && p.Subject == "" {
 		return errcode.New(errcode.ErrAuthUnauthorized, "principal subject missing")
 	}
@@ -79,9 +82,9 @@ func principalHasAnyRole(p *Principal, roles []string) bool {
 // RequireAnyRole checks that the authenticated subject holds at least one of
 // the specified roles. Returns nil on success.
 //
-// Deprecated: use auth.AnyRole inside auth.Route.Policy instead. This
-// internal function backs the AnyRole Policy constructor and should not be
-// called directly from handlers.
+// Deprecated: prefer constructing auth.AnyRole(...) / auth.SelfOr(...) Policy
+// and passing it via auth.Route.Policy. The internal Require* helpers below are
+// retained only as the implementation backbone.
 //
 // Use this instead of RequireSelfOrRole for admin-only endpoints where there
 // is no target resource owner to compare against.
@@ -98,8 +101,8 @@ func RequireAnyRole(ctx context.Context, roles ...string) error {
 	}
 	// G1.B: Defense-in-depth. PrincipalUser must always carry a non-empty Subject;
 	// an empty Subject indicates the primary authenticator allowed a malformed token
-	// through. PrincipalService Subject is always ServiceNameInternal (non-empty);
-	// PrincipalAnonymous Subject is intentionally empty by design.
+	// through. PrincipalAnonymous Subject is intentionally empty by design.
+	// PrincipalService identity is expressed via CallerCellID, not Subject.
 	if p.Kind == PrincipalUser && p.Subject == "" {
 		return errcode.New(errcode.ErrAuthUnauthorized, "principal subject missing")
 	}
@@ -116,6 +119,8 @@ func RequireAnyRole(ctx context.Context, roles ...string) error {
 //
 // This helper is NOT deprecated; it is the recommended way to inject a
 // Principal in handler tests.
+//
+// For service-principal tests, use TestServiceContext.
 func TestContext(subject string, roles []string) context.Context {
 	p := &Principal{
 		Kind:       PrincipalUser,
@@ -124,4 +129,39 @@ func TestContext(subject string, roles []string) context.Context {
 		AuthMethod: "test",
 	}
 	return WithPrincipal(context.Background(), p)
+}
+
+// RequireCallerCell returns a Policy that enforces the request is made by a
+// service principal (PrincipalService) whose CallerCellID is in the allowlist.
+//
+// Use in auth.Route.Policy for internal endpoints that declare Clients in their
+// ContractSpec; auth.Mount auto-applies this guard when spec.Clients is non-empty.
+//
+// Errors:
+//   - ErrAuthUnauthorized: no Principal in context
+//   - ErrAuthForbidden: Principal is not PrincipalService, or CallerCellID is
+//     empty, or CallerCellID not in allowlist
+func RequireCallerCell(allowlist ...string) Policy {
+	set := make(map[string]bool, len(allowlist))
+	sortedAllowlist := make([]string, len(allowlist))
+	for i, c := range allowlist {
+		lc := strings.ToLower(c)
+		set[lc] = true
+		sortedAllowlist[i] = lc
+	}
+	slices.Sort(sortedAllowlist)
+	return func(r *http.Request) error {
+		p, ok := FromContext(r.Context())
+		if !ok {
+			return errcode.New(errcode.ErrAuthUnauthorized, "authentication required")
+		}
+		if p.Kind != PrincipalService {
+			return errcode.New(errcode.ErrAuthForbidden, "internal endpoint requires service token")
+		}
+		if p.CallerCellID == "" || !set[strings.ToLower(p.CallerCellID)] {
+			return errcode.New(errcode.ErrAuthForbidden,
+				fmt.Sprintf("caller_cell %q not in allowlist %v", p.CallerCellID, sortedAllowlist))
+		}
+		return nil
+	}
 }

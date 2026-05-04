@@ -14,6 +14,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/clock"
 	kctxkeys "github.com/ghbvf/gocell/kernel/ctxkeys"
 	pkgctxkeys "github.com/ghbvf/gocell/pkg/ctxkeys"
+	"github.com/ghbvf/gocell/runtime/auth"
 )
 
 func TestAccessLog_LogsFields(t *testing.T) {
@@ -208,4 +209,102 @@ func TestAccessLog_NoTraceID_WhenNotSet(t *testing.T) {
 	var logEntry map[string]any
 	require.NoError(t, json.Unmarshal(buf.Bytes(), &logEntry))
 	assert.Nil(t, logEntry["trace_id"], "trace_id must not appear when no tracer is configured")
+}
+
+func TestAccessLog_CallerCell_ServicePrincipal(t *testing.T) {
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&buf, nil))
+	original := slog.Default()
+	slog.SetDefault(logger)
+	defer slog.SetDefault(original)
+
+	inner := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+	handler := Recorder(AccessLog(clock.Real())(inner))
+
+	req := httptest.NewRequest(http.MethodGet, "/internal/v1/access/roles", nil)
+	req = req.WithContext(auth.TestServiceContext("accesscore"))
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	var logEntry map[string]any
+	require.NoError(t, json.Unmarshal(buf.Bytes(), &logEntry))
+	assert.Equal(t, "accesscore", logEntry["caller_cell"])
+	assert.Nil(t, logEntry["subject"], "subject must not appear for service principals")
+}
+
+func TestAccessLog_Subject_UserPrincipal(t *testing.T) {
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&buf, nil))
+	original := slog.Default()
+	slog.SetDefault(logger)
+	defer slog.SetDefault(original)
+
+	inner := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+	handler := Recorder(AccessLog(clock.Real())(inner))
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/users/me", nil)
+	ctx := auth.WithPrincipal(req.Context(), &auth.Principal{
+		Kind:    auth.PrincipalUser,
+		Subject: "user-abc123",
+	})
+	req = req.WithContext(ctx)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	var logEntry map[string]any
+	require.NoError(t, json.Unmarshal(buf.Bytes(), &logEntry))
+	assert.Equal(t, "user-abc123", logEntry["subject"])
+	assert.Nil(t, logEntry["caller_cell"], "caller_cell must not appear for user principals")
+}
+
+func TestAccessLog_NoPrincipalAttrs_WhenNoPrincipal(t *testing.T) {
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&buf, nil))
+	original := slog.Default()
+	slog.SetDefault(logger)
+	defer slog.SetDefault(original)
+
+	inner := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+	handler := Recorder(AccessLog(clock.Real())(inner))
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/public", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	var logEntry map[string]any
+	require.NoError(t, json.Unmarshal(buf.Bytes(), &logEntry))
+	assert.Nil(t, logEntry["caller_cell"], "caller_cell must not appear without principal")
+	assert.Nil(t, logEntry["subject"], "subject must not appear without principal")
+}
+
+func TestAccessLog_NoCallerCell_ServicePrincipalEmptyCallerCellID(t *testing.T) {
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&buf, nil))
+	original := slog.Default()
+	slog.SetDefault(logger)
+	defer slog.SetDefault(original)
+
+	inner := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+	handler := Recorder(AccessLog(clock.Real())(inner))
+
+	req := httptest.NewRequest(http.MethodGet, "/internal/v1/some", nil)
+	ctx := auth.WithPrincipal(req.Context(), &auth.Principal{
+		Kind:         auth.PrincipalService,
+		CallerCellID: "", // empty — must not emit field
+	})
+	req = req.WithContext(ctx)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	var logEntry map[string]any
+	require.NoError(t, json.Unmarshal(buf.Bytes(), &logEntry))
+	assert.Nil(t, logEntry["caller_cell"], "caller_cell must not appear when CallerCellID is empty")
 }

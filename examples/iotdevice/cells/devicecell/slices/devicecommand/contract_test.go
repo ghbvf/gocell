@@ -184,7 +184,7 @@ func TestHttpInternalDeviceCommandsListV1Serve(t *testing.T) {
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(c.HTTP.Method, c.HTTP.Path+"?deviceId=dev-1&statuses=pending", nil)
-	req = req.WithContext(auth.TestContext(auth.ServiceNameInternal, []string{auth.RoleInternalAdmin}))
+	req = req.WithContext(auth.TestServiceContext("devicecell"))
 	handler.ServeHTTP(rec, req)
 	c.ValidateHTTPResponseRecorder(t, rec)
 }

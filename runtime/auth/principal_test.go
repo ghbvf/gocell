@@ -123,28 +123,24 @@ func TestPrincipal_PasswordResetRequired_RoundTrip(t *testing.T) {
 	}
 }
 
-func TestBuiltinServiceRoles(t *testing.T) {
-	tests := []struct {
-		name    string
-		service string
-		want    []string
-	}{
-		{"known service", ServiceNameInternal, []string{RoleInternalAdmin}},
-		{"unknown service", "some-other-service", nil},
-		{"empty string", "", nil},
+// Spec: PrincipalService (service token auth) must carry CallerCellID (non-empty),
+// empty Subject, and nil Roles. The old BuiltinServiceRoles / ServiceNameInternal /
+// RoleInternalAdmin pattern is being replaced by caller-cell identity propagation.
+func TestPrincipal_ServiceKindCallerCellID(t *testing.T) {
+	// Spec: service kind Subject should be empty (identity expressed via CallerCellID)
+	p := &Principal{
+		Kind:         PrincipalService,
+		CallerCellID: "accesscore",
 	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			got := BuiltinServiceRoles(tc.service)
-			if len(got) != len(tc.want) {
-				t.Errorf("BuiltinServiceRoles(%q) = %v, want %v", tc.service, got, tc.want)
-				return
-			}
-			for i := range got {
-				if got[i] != tc.want[i] {
-					t.Errorf("BuiltinServiceRoles(%q)[%d] = %q, want %q", tc.service, i, got[i], tc.want[i])
-				}
-			}
-		})
+	if p.Subject != "" {
+		t.Errorf("service kind Subject should be empty, got %q", p.Subject)
+	}
+	// Spec: CallerCellID must be non-empty for a service principal
+	if p.CallerCellID == "" {
+		t.Error("service kind CallerCellID must be non-empty")
+	}
+	// Spec: Roles must be nil for a service principal (no role-based authz for services)
+	if p.Roles != nil {
+		t.Errorf("service kind Roles must be nil, got %v", p.Roles)
 	}
 }

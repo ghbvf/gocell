@@ -38,9 +38,18 @@ var (
 		ID: "http.device.command.extend-lease.v1", Kind: "http", Transport: "http",
 		Method: "POST", Path: "/api/v1/devices/{id}/commands/{cmdId}/extend-lease",
 	}
+	// specInternalCommandScanActive is a self-call endpoint: devicecell calls itself
+	// via the InternalListener for periodic scan-active operations. This pattern is
+	// intentionally simplified for the demo — in production, an internal worker
+	// typically invokes an internal endpoint on the same cell via InternalListener,
+	// avoiding the overhead of going through the primary listener. For cross-cell
+	// scenarios (caller != server), this pattern serves as the canonical template:
+	// Clients declares the allowed callerCell(s), and auth.Mount auto-enforces
+	// RequireCallerCell when Clients is non-empty.
 	specInternalCommandScanActive = wrapper.ContractSpec{
 		ID: "http.internal.devicecommands.list.v1", Kind: "http", Transport: "http",
 		Method: "GET", Path: "/internal/v1/devicecommands",
+		Clients: []string{"devicecell"},
 	}
 )
 
@@ -125,15 +134,16 @@ func (h *Handler) RegisterRoutes(mux kcell.RouteHandler) error {
 }
 
 // RegisterInternalRoutes registers device-command ops routes on the internal
-// listener. The bootstrap internal middleware authenticates service tokens;
-// the route policy then requires the built-in internal admin role.
+// listener. Authentication is provided by the InternalListener ServiceToken
+// middleware; route-level caller-cell restriction uses RequireCallerCell
+// for identity-based access control.
 func (h *Handler) RegisterInternalRoutes(mux kcell.RouteHandler) error {
 	if err := auth.Mount(mux, auth.Route{
 		Contract: specInternalCommandScanActive,
 		Handler:  http.HandlerFunc(h.HandleScanActive),
-		Policy:   auth.AnyRole(auth.RoleInternalAdmin),
 		// Route lives on InternalListener (/internal/v1/*); internal affinity
 		// is derived from the path prefix via AuthRouteMeta.IsInternal().
+		// Caller-cell identity enforced by InternalListener ServiceToken middleware.
 	}); err != nil {
 		return err
 	}

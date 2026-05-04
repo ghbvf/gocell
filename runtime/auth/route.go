@@ -95,22 +95,10 @@ func Mount(mux cell.RouteHandler, r Route) error {
 	}
 	relPath := stripMountPrefix(r.Contract.Path, prefix)
 
-	handler := r.Handler
-	if r.Policy != nil {
-		middleware, err := RequirePolicy(r.Policy)
-		if err != nil {
-			return fmt.Errorf("auth.Mount: %w", err)
-		}
-		handler = middleware(handler)
-	}
-	// wrapper.HTTPHandler is a pure ctx contributor (round-4) — it writes
-	// ContractID + contract attrs into ctx so the outer middleware.Tracing
-	// span late-binds them. No inner span is created.
-	wrapped, err := wrapper.HTTPHandler(r.Contract, handler)
+	handler, err := wrapMountGuards(r)
 	if err != nil {
-		return fmt.Errorf("auth.Mount: %w", err)
+		return err
 	}
-	handler = wrapped
 
 	cleanedRel := path.Clean(relPath)
 
@@ -145,6 +133,35 @@ func MustMount(mux cell.RouteHandler, r Route) {
 	if err := Mount(mux, r); err != nil {
 		panic(err.Error())
 	}
+}
+
+// wrapMountGuards composes the Mount-time middleware chain around r.Handler:
+// route-level Policy (when set) → caller-cell guard (when Contract.Clients is
+// non-empty) → wrapper.HTTPHandler ctx contributor.
+//
+// Execution order (outer → inner): wrapper.HTTPHandler → CallerCell guard →
+// Policy → Handler — caller identity verified before any business authz check.
+func wrapMountGuards(r Route) (http.Handler, error) {
+	handler := r.Handler
+	if r.Policy != nil {
+		middleware, err := RequirePolicy(r.Policy)
+		if err != nil {
+			return nil, fmt.Errorf("auth.Mount: %w", err)
+		}
+		handler = middleware(handler)
+	}
+	if len(r.Contract.Clients) > 0 {
+		callerGuard, err := RequirePolicy(RequireCallerCell(r.Contract.Clients...))
+		if err != nil {
+			return nil, fmt.Errorf("auth.Mount: %w", err)
+		}
+		handler = callerGuard(handler)
+	}
+	wrapped, err := wrapper.HTTPHandler(r.Contract, handler)
+	if err != nil {
+		return nil, fmt.Errorf("auth.Mount: %w", err)
+	}
+	return wrapped, nil
 }
 
 // isPathSegmentPrefix reports whether prefix is a path-segment prefix of

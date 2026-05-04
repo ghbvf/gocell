@@ -38,6 +38,12 @@ type ContractSpec struct {
 	// Event-specific fields; required when Kind == "event", rejected
 	// otherwise. Topic is the broker destination name.
 	Topic string
+
+	// Clients is the allowlist of caller cell IDs for internal HTTP endpoints.
+	// Required when Kind=="http" and Path has prefix "/internal/v1/"; must be
+	// empty for non-internal paths. The list is mirrored in contract.yaml
+	// endpoints.clients and enforced at runtime by auth.RequireCallerCell.
+	Clients []string
 }
 
 // Validate returns an error if the spec is malformed. Validation is separate
@@ -84,7 +90,49 @@ func (s ContractSpec) validateHTTP() error {
 	if s.Topic != "" {
 		return fmt.Errorf("wrapper.ContractSpec[%s]: http kind must not carry Topic", s.ID)
 	}
+	isInternalPath := strings.HasPrefix(s.Path, "/internal/v1/") || s.Path == "/internal/v1"
+	if isInternalPath && len(s.Clients) == 0 {
+		return fmt.Errorf(
+			"ContractSpec[%s]: internal path requires non-empty Clients "+
+				"(declare in contract.yaml endpoints.clients and mirror in literal) "+
+				"(see contracts/http/config/internal/get/v1/contract.yaml for an example)",
+			s.ID)
+	}
+	if !isInternalPath && len(s.Clients) > 0 {
+		return fmt.Errorf("ContractSpec[%s]: non-internal path must not declare Clients", s.ID)
+	}
+	for i, c := range s.Clients {
+		if !isCellIDLike(strings.ToLower(c)) {
+			return fmt.Errorf("ContractSpec[%s]: Clients[%d] %q does not match cell ID pattern ^[a-z][a-z0-9-]*$",
+				s.ID, i, c)
+		}
+	}
 	return nil
+}
+
+// isCellIDLike reports whether s matches the cell-ID pattern
+// `^[a-z][a-z0-9-]*$`. Implemented byte-wise so that kernel/wrapper avoids a
+// package-level regexp var (FMT-19 forbids initializer state in kernel/).
+// Mirrors runtime/auth.callerCellPattern semantics but adds no runtime
+// dependency.
+func isCellIDLike(s string) bool {
+	if s == "" {
+		return false
+	}
+	if s[0] < 'a' || s[0] > 'z' {
+		return false
+	}
+	for i := 1; i < len(s); i++ {
+		c := s[i]
+		switch {
+		case c >= 'a' && c <= 'z':
+		case c >= '0' && c <= '9':
+		case c == '-':
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 func (s ContractSpec) validateEvent() error {

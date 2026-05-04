@@ -26,9 +26,12 @@ var (
 	// lets accesscore configreceive fetch the current value after receiving
 	// an entry-upserted event. Mounted on InternalListener via
 	// RegisterInternalRoutes; service-token auth is on the listener chain.
+	// Clients mirrors contract.yaml endpoints.clients; auth.Mount auto-enforces
+	// the caller-cell allowlist guard (RequireCallerCell) when Clients is set.
 	specConfigInternalGet = wrapper.ContractSpec{
 		ID: "http.config.internal.get.v1", Kind: "http", Transport: "http",
 		Method: "GET", Path: "/internal/v1/config/{key}",
+		Clients: []string{"accesscore"},
 	}
 )
 
@@ -76,7 +79,9 @@ func (h *Handler) RegisterInternalRoutes(mux kcell.RouteHandler) error {
 	if err := auth.Mount(mux, auth.Route{
 		Contract: specConfigInternalGet,
 		Handler:  http.HandlerFunc(h.HandleGet),
-		Policy:   auth.AnyRole(auth.RoleInternalAdmin),
+		// No explicit Policy: Clients in ContractSpec drives RequireCallerCell
+		// guard automatically via auth.Mount; caller identity (accesscore) is
+		// enforced at the contract level, not via role-based policy.
 	}); err != nil {
 		return err
 	}

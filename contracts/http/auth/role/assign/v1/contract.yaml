@@ -7,7 +7,8 @@ triggers:
   - event.role.assigned.v1
 endpoints:
   server: accesscore
-  clients: []
+  clients:
+    - accesscore
   http:
     method: POST
     path: /internal/v1/access/roles/assign
@@ -17,10 +18,10 @@ endpoints:
         description: "Bad request — request body decode failure or userId/roleId blank (ErrAuthRBACInvalidInput)"
         schemaRef: "../../../../../shared/errors/error-response-v1.schema.json"
       401:
-        description: "Unauthorized — missing or invalid bearer token"
+        description: "Unauthorized — missing or invalid service token"
         schemaRef: "../../../../../shared/errors/error-response-v1.schema.json"
       403:
-        description: "Forbidden — authenticated but lacks admin role"
+        description: "Forbidden — caller_cell not in contract.clients allowlist"
         schemaRef: "../../../../../shared/errors/error-response-v1.schema.json"
       404:
         description: "Not found — role with given id does not exist (ErrAuthRoleNotFound)"

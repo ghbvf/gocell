@@ -10,6 +10,7 @@ import (
 	kctxkeys "github.com/ghbvf/gocell/kernel/ctxkeys"
 	pkgctxkeys "github.com/ghbvf/gocell/pkg/ctxkeys"
 	"github.com/ghbvf/gocell/pkg/logutil"
+	"github.com/ghbvf/gocell/runtime/auth"
 )
 
 // AccessLog returns an HTTP middleware that logs structured request/response
@@ -18,6 +19,8 @@ import (
 // Fields: method, path, route, status, duration_ms, listener, cell_id,
 // request_id, correlation_id, trace_id, real_ip. The listener field is emitted only when
 // the router annotated the request with a non-empty physical listener name.
+// When a service principal is present (Kind==PrincipalService), caller_cell is
+// emitted. When a user principal is present (Kind==PrincipalUser), subject is emitted.
 //
 // ref: go-zero rest/handler/loghandler.go — structured request logging with trace context
 //
@@ -83,6 +86,28 @@ func appendAccessLogContextAttrs(attrs []any, ctx context.Context) []any {
 	attrs = appendAccessLogAttrFrom(ctx, attrs, "correlation_id", pkgctxkeys.CorrelationIDFrom)
 	attrs = appendAccessLogAttrFrom(ctx, attrs, "trace_id", pkgctxkeys.TraceIDFrom)
 	attrs = appendAccessLogAttrFrom(ctx, attrs, "real_ip", pkgctxkeys.RealIPFrom)
+	attrs = appendPrincipalAttrs(ctx, attrs)
+	return attrs
+}
+
+// appendPrincipalAttrs adds caller identity fields from the auth.Principal:
+//   - service principal: caller_cell (non-empty CallerCellID only)
+//   - user principal: subject
+func appendPrincipalAttrs(ctx context.Context, attrs []any) []any {
+	p, ok := auth.FromContext(ctx)
+	if !ok {
+		return attrs
+	}
+	switch p.Kind {
+	case auth.PrincipalService:
+		if p.CallerCellID != "" {
+			attrs = append(attrs, slog.String("caller_cell", p.CallerCellID))
+		}
+	case auth.PrincipalUser:
+		if p.Subject != "" {
+			attrs = append(attrs, slog.String("subject", p.Subject))
+		}
+	}
 	return attrs
 }
 

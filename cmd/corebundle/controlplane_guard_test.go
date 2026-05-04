@@ -124,7 +124,8 @@ func TestInternalGuardFromEnv_DefaultStoreRejectsReplay(t *testing.T) {
 	guarded := guard.Middleware()(inner)
 
 	const path = "/internal/v1/access/roles"
-	token := auth.GenerateServiceToken(ring, http.MethodGet, path, "", time.Now())
+	// Spec: 4-part token — callerCell="accesscore".
+	token := auth.GenerateServiceToken(ring, "accesscore", http.MethodGet, path, "", time.Now())
 	require.NotEmpty(t, token, "token generation must succeed")
 
 	req1 := httptest.NewRequest(http.MethodGet, path, nil)

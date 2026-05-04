@@ -72,9 +72,9 @@ func chainContainsAuthMTLS(chain []cell.ListenerAuth) bool {
 
 // chainContainsInternalGuard reports whether the listener chain has the
 // service-token guard required for /internal/v1/* routes. JWT is intentionally
-// excluded: internal routes use service-token auth so RoleInternalAdmin can be
-// injected for route policies. AuthMTLS may be layered with service-token, but
-// mTLS alone does not currently establish an internal admin principal.
+// excluded: internal routes use caller_cell allowlist via contract.clients
+// (enforced by auth.RequireCallerCell). AuthMTLS may be layered with
+// service-token, but mTLS alone does not currently establish caller identity.
 func chainContainsInternalGuard(chain []cell.ListenerAuth) bool {
 	for _, p := range chain {
 		if _, ok := p.(cell.AuthServiceToken); ok {

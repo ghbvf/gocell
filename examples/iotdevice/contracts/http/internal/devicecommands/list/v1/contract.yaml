@@ -5,7 +5,12 @@ consistencyLevel: L4
 lifecycle: active
 endpoints:
   server: devicecell
-  clients: []
+  # devicecell self-call: an internal worker on the same cell invokes this
+  # endpoint via InternalListener for periodic scan-active operations. See
+  # examples/iotdevice/cells/devicecell/slices/devicecommand/handler.go for
+  # rationale; cross-cell consumers should declare themselves here when wired.
+  clients:
+    - devicecell
   http:
     method: GET
     path: /internal/v1/devicecommands

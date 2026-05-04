@@ -115,3 +115,72 @@ func TestHTTPConfigGetter_GetEntry_UnexpectedStatus(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "unexpected status 500")
 }
+
+func TestHTTPConfigGetter_GetEntry_Unauthorized(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+	}))
+	defer srv.Close()
+
+	ring := newTestRing(t)
+	client := NewHTTPConfigGetterWithHTTPClient(srv.URL, ring, srv.Client(), clock.Real())
+	_, err := client.GetEntry(context.Background(), "some.key")
+	require.Error(t, err)
+
+	var ec *errcode.Error
+	require.ErrorAs(t, err, &ec)
+	assert.Equal(t, errcode.ErrAuthUnauthorized, ec.Code)
+}
+
+func TestHTTPConfigGetter_GetEntry_Forbidden(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusForbidden)
+	}))
+	defer srv.Close()
+
+	ring := newTestRing(t)
+	client := NewHTTPConfigGetterWithHTTPClient(srv.URL, ring, srv.Client(), clock.Real())
+	_, err := client.GetEntry(context.Background(), "some.key")
+	require.Error(t, err)
+
+	var ec *errcode.Error
+	require.ErrorAs(t, err, &ec)
+	assert.Equal(t, errcode.ErrAuthForbidden, ec.Code)
+}
+
+func TestNewHTTPConfigGetter_Constructor(t *testing.T) {
+	ring := newTestRing(t)
+	g := NewHTTPConfigGetter("http://localhost:9090", ring, clock.Real())
+	require.NotNil(t, g)
+	assert.Equal(t, "http://localhost:9090", g.baseURL)
+}
+
+// TestHTTPConfigGetter_GetEntry_EmptyToken covers the token=="" branch in
+// GetEntry: when the ring is nil, GenerateServiceToken returns "" and GetEntry
+// returns ErrInternal without making an HTTP call.
+func TestHTTPConfigGetter_GetEntry_EmptyToken(t *testing.T) {
+	// nil ring causes GenerateServiceToken to return "".
+	client := NewHTTPConfigGetterWithHTTPClient("http://localhost:19090", nil, http.DefaultClient, clock.Real())
+	_, err := client.GetEntry(context.Background(), "any.key")
+	require.Error(t, err)
+
+	var ec *errcode.Error
+	require.ErrorAs(t, err, &ec)
+	assert.Equal(t, errcode.ErrInternal, ec.Code)
+}
+
+// TestHTTPConfigGetter_GetEntry_BadResponseBody covers the json decode error path.
+func TestHTTPConfigGetter_GetEntry_BadResponseBody(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("not-json-at-all"))
+	}))
+	defer srv.Close()
+
+	ring := newTestRing(t)
+	client := NewHTTPConfigGetterWithHTTPClient(srv.URL, ring, srv.Client(), clock.Real())
+	_, err := client.GetEntry(context.Background(), "any.key")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "decode response")
+}

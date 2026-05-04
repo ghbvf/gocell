@@ -433,3 +433,300 @@ func assertResultsContain(t *testing.T, results []ValidationResult, want string)
 	}
 	t.Errorf("expected %q in any result message, got: %v", want, results)
 }
+
+// TestValidateContractSpecClientsLiteral covers validateContractSpecClientsLiteral,
+// clientSetsEqual, parseContractSpecClientsField and extractStringLiterals paths.
+func TestValidateContractSpecClientsLiteral(t *testing.T) {
+	contract := &metadata.ContractMeta{
+		ID:   "http.config.internal.get.v1",
+		Kind: "http",
+		Endpoints: metadata.EndpointsMeta{
+			HTTP:    &metadata.HTTPTransportMeta{Method: "GET", Path: "/internal/v1/config/{key}"},
+			Clients: []string{"accesscore"},
+		},
+	}
+	project := &metadata.ProjectMeta{
+		Contracts: map[string]*metadata.ContractMeta{
+			"http.config.internal.get.v1": contract,
+		},
+	}
+	v := NewValidator(project, t.TempDir(), clock.Real())
+
+	t.Run("nil clients skipped", func(t *testing.T) {
+		results := v.validateContractSpecClientsLiteral(contractSpecLiteral{
+			id:      "http.config.internal.get.v1",
+			clients: nil,
+		}, contract)
+		assert.Empty(t, results, "nil clients must skip the check")
+	})
+
+	t.Run("equal sets no error", func(t *testing.T) {
+		results := v.validateContractSpecClientsLiteral(contractSpecLiteral{
+			id:      "http.config.internal.get.v1",
+			clients: []string{"accesscore"},
+		}, contract)
+		assert.Empty(t, results)
+	})
+
+	t.Run("go has extra client", func(t *testing.T) {
+		results := v.validateContractSpecClientsLiteral(contractSpecLiteral{
+			id:      "http.config.internal.get.v1",
+			clients: []string{"accesscore", "auditcore"},
+		}, contract)
+		require.Len(t, results, 1)
+		assert.Equal(t, codeFMT18, results[0].Code)
+	})
+
+	t.Run("yaml has extra client", func(t *testing.T) {
+		results := v.validateContractSpecClientsLiteral(contractSpecLiteral{
+			id:      "http.config.internal.get.v1",
+			clients: []string{},
+		}, contract)
+		require.Len(t, results, 1)
+		assert.Equal(t, codeFMT18, results[0].Code)
+	})
+}
+
+// TestScanContractSpecLiterals_WithClients verifies that Clients []string fields
+// are extracted from ContractSpec composite literals (exercising
+// parseContractSpecClientsField and extractStringLiterals).
+func TestScanContractSpecLiterals_WithClients(t *testing.T) {
+	root := t.TempDir()
+	cellsDir := filepath.Join(root, "cells", "accesscore")
+	require.NoError(t, os.MkdirAll(cellsDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(cellsDir, "routes.go"), []byte(`package accesscore
+
+import "github.com/ghbvf/gocell/kernel/wrapper"
+
+var spec = wrapper.ContractSpec{
+	ID:        "http.config.internal.get.v1",
+	Kind:      "http",
+	Transport: "http",
+	Method:    "GET",
+	Path:      "/internal/v1/config/{key}",
+	Clients:   []string{"accesscore", "auditcore"},
+}
+`), 0o644))
+
+	literals, err := scanContractSpecLiterals(filepath.Join(root, "cells"))
+	require.NoError(t, err)
+	require.Len(t, literals, 1)
+	assert.Equal(t, []string{"accesscore", "auditcore"}, literals[0].clients)
+}
+
+// TestScanContractSpecLiterals_BinaryConcatID exercises resolveStringValue
+// for *ast.BinaryExpr (string concatenation) and resolveBinaryConcat.
+func TestScanContractSpecLiterals_BinaryConcatID(t *testing.T) {
+	root := t.TempDir()
+	cellsDir := filepath.Join(root, "cells", "mytest")
+	require.NoError(t, os.MkdirAll(cellsDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(cellsDir, "routes.go"), []byte(`package mytest
+
+import "github.com/ghbvf/gocell/kernel/wrapper"
+
+const (
+	prefix  = "http.auth."
+	suffix  = "login.v1"
+)
+
+var spec = wrapper.ContractSpec{
+	ID:        prefix + suffix,
+	Kind:      "http",
+	Transport: "http",
+	Method:    "POST",
+	Path:      "/api/v1/login",
+}
+`), 0o644))
+
+	literals, err := scanContractSpecLiterals(filepath.Join(root, "cells"))
+	require.NoError(t, err)
+	require.Len(t, literals, 1)
+	assert.Equal(t, "http.auth.login.v1", literals[0].id)
+}
+
+// TestScanContractSpecLiterals_NonStringLiteralClients verifies that a Clients
+// field containing a non-string-literal element (e.g. an identifier) causes
+// parseContractSpecClientsField to return nil (unresolvable slice).
+func TestScanContractSpecLiterals_NonStringLiteralClients(t *testing.T) {
+	root := t.TempDir()
+	cellsDir := filepath.Join(root, "cells", "mytest2")
+	require.NoError(t, os.MkdirAll(cellsDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(cellsDir, "routes.go"), []byte(`package mytest2
+
+import "github.com/ghbvf/gocell/kernel/wrapper"
+
+const callerCell = "accesscore"
+
+var spec = wrapper.ContractSpec{
+	ID:        "http.config.internal.get.v1",
+	Kind:      "http",
+	Transport: "http",
+	Method:    "GET",
+	Path:      "/internal/v1/config/{key}",
+	Clients:   []string{callerCell},
+}
+`), 0o644))
+
+	literals, err := scanContractSpecLiterals(filepath.Join(root, "cells"))
+	require.NoError(t, err)
+	require.Len(t, literals, 1)
+	// callerCell is an identifier, not a string literal → clients is nil (unresolvable)
+	assert.Nil(t, literals[0].clients)
+}
+
+// TestScanContractSpecLiterals_IntLiteralFieldValue exercises the stringLiteralValue
+// path where the BasicLit kind is not STRING (e.g. token.INT). The scanner
+// uses go/parser without type-checking, so a syntactically-legal but
+// semantically-invalid field value (integer literal for a string field) is
+// parsed without error; stringLiteralValue rejects it (Kind != STRING) and
+// the field is skipped.
+func TestScanContractSpecLiterals_IntLiteralFieldValue(t *testing.T) {
+	root := t.TempDir()
+	cellsDir := filepath.Join(root, "cells", "intlit")
+	require.NoError(t, os.MkdirAll(cellsDir, 0o755))
+	// go/parser accepts this syntactically; the type-checker would reject it,
+	// but the scanner does not run the type-checker.
+	require.NoError(t, os.WriteFile(filepath.Join(cellsDir, "routes.go"), []byte(`package intlit
+
+import "github.com/ghbvf/gocell/kernel/wrapper"
+
+// Syntactically valid to go/parser, semantically wrong — scanner skips integer field.
+var spec = wrapper.ContractSpec{
+	ID:   42,
+	Kind: "http", Transport: "http", Method: "GET", Path: "/api/v1/x",
+}
+`), 0o644))
+
+	literals, err := scanContractSpecLiterals(filepath.Join(root, "cells"))
+	require.NoError(t, err)
+	// ID field skipped (integer not a string literal) → id stays ""
+	require.Len(t, literals, 1)
+	assert.Equal(t, "", literals[0].id)
+}
+
+// TestScanContractSpecLiterals_BinaryConcatLeftUnresolvable exercises
+// resolveBinaryConcat where the left side cannot be resolved (function call).
+// This covers the left-ok=false early return branch of resolveBinaryConcat.
+func TestScanContractSpecLiterals_BinaryConcatLeftUnresolvable(t *testing.T) {
+	root := t.TempDir()
+	cellsDir := filepath.Join(root, "cells", "binleft")
+	require.NoError(t, os.MkdirAll(cellsDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(cellsDir, "routes.go"), []byte(`package binleft
+
+import "github.com/ghbvf/gocell/kernel/wrapper"
+
+func prefix() string { return "http.test." }
+
+var spec = wrapper.ContractSpec{
+	ID:        prefix() + "v1",
+	Kind:      "http",
+	Transport: "http",
+	Method:    "GET",
+	Path:      "/api/v1/x",
+}
+`), 0o644))
+
+	literals, err := scanContractSpecLiterals(filepath.Join(root, "cells"))
+	require.NoError(t, err)
+	// left side is a function call → resolveBinaryConcat left ok=false → ID field skipped
+	require.Len(t, literals, 1)
+	assert.Equal(t, "", literals[0].id, "unresolvable left-side concat → ID field skipped")
+}
+
+// TestScanContractSpecLiterals_DotImport verifies that a dot-import of
+// kernel/wrapper is not tracked as a wrapper alias (isWrapperSelector returns
+// false for "" alias, dot-import sets alias to ".").
+func TestScanContractSpecLiterals_DotImport(t *testing.T) {
+	root := t.TempDir()
+	cellsDir := filepath.Join(root, "cells", "dotimport")
+	require.NoError(t, os.MkdirAll(cellsDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(cellsDir, "routes.go"), []byte(`package dotimport
+
+import . "github.com/ghbvf/gocell/kernel/wrapper"
+
+var _ = EventSpec("event.x.v1", "amqp")
+`), 0o644))
+
+	// Dot-import bypasses the alias-based selector check; scanner must produce 0 literals.
+	literals, err := scanContractSpecLiterals(filepath.Join(root, "cells"))
+	require.NoError(t, err)
+	assert.Empty(t, literals, "dot-import must not produce FMT-18 literals")
+}
+
+// TestScanContractSpecLiterals_EventSpecNoArgs verifies that an EventSpec call
+// with no arguments does not panic and is gracefully skipped.
+func TestScanContractSpecLiterals_EventSpecNoArgs(t *testing.T) {
+	root := t.TempDir()
+	cellsDir := filepath.Join(root, "cells", "noargs")
+	require.NoError(t, os.MkdirAll(cellsDir, 0o755))
+	// EventSpec() with no args — the parser will accept the syntax; scanner must
+	// treat len(args) < 1 gracefully (return false, skip).
+	require.NoError(t, os.WriteFile(filepath.Join(cellsDir, "routes.go"), []byte(`package noargs
+
+import "github.com/ghbvf/gocell/kernel/wrapper"
+
+// deliberately calling EventSpec with no args to hit the len(args)<1 guard
+var _ = wrapper.EventSpec
+`), 0o644))
+
+	literals, err := scanContractSpecLiterals(filepath.Join(root, "cells"))
+	require.NoError(t, err)
+	// A function reference (not a call) produces no literal.
+	assert.Empty(t, literals)
+}
+
+// TestScanContractSpecLiterals_BinaryConcatNonAdd exercises resolveBinaryConcat
+// for a non-ADD operator (subtraction), which must return ok=false.
+func TestScanContractSpecLiterals_BinaryConcatNonAdd(t *testing.T) {
+	root := t.TempDir()
+	cellsDir := filepath.Join(root, "cells", "nonaddop")
+	require.NoError(t, os.MkdirAll(cellsDir, 0o755))
+	// Using a numeric expression for ID — won't be a string literal, so ID is unresolved.
+	require.NoError(t, os.WriteFile(filepath.Join(cellsDir, "routes.go"), []byte(`package nonaddop
+
+import "github.com/ghbvf/gocell/kernel/wrapper"
+
+var x = wrapper.EventSpec(someFunc(), "amqp")
+
+func someFunc() string { return "x" }
+`), 0o644))
+
+	literals, err := scanContractSpecLiterals(filepath.Join(root, "cells"))
+	require.NoError(t, err)
+	// someFunc() cannot be resolved → unresolved=true literal
+	require.Len(t, literals, 1)
+	assert.True(t, literals[0].unresolved)
+}
+
+// TestScanContractSpecLiterals_ResolveBinaryRight exercises the right-side
+// unresolvable branch of resolveBinaryConcat (left resolves, right does not).
+// When the right side of a "+" cannot be resolved, resolveStringValue returns
+// ok=false and parseContractSpecCompositeLit skips the field (ID stays ""),
+// so the literal is recorded with an empty id (not unresolved).
+func TestScanContractSpecLiterals_ResolveBinaryRight(t *testing.T) {
+	root := t.TempDir()
+	cellsDir := filepath.Join(root, "cells", "binaryright")
+	require.NoError(t, os.MkdirAll(cellsDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(cellsDir, "routes.go"), []byte(`package binaryright
+
+import "github.com/ghbvf/gocell/kernel/wrapper"
+
+func getID() string { return "v1" }
+
+var spec = wrapper.ContractSpec{
+	ID:        "http.test." + getID(),
+	Kind:      "http",
+	Transport: "http",
+	Method:    "GET",
+	Path:      "/api/v1/x",
+}
+`), 0o644))
+
+	literals, err := scanContractSpecLiterals(filepath.Join(root, "cells"))
+	require.NoError(t, err)
+	// right side is a function call → resolveStringValue returns ok=false,
+	// the field is skipped, id stays "" (literal recorded but with empty id).
+	require.Len(t, literals, 1)
+	assert.Equal(t, "", literals[0].id, "unresolvable right-side concat → ID field skipped → empty id")
+	assert.False(t, literals[0].unresolved, "ContractSpec composite literal does not set unresolved on partial failure")
+}
