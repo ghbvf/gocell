@@ -37,6 +37,23 @@ type CellMeta struct {
 	File         string `yaml:"-"` // parsed cell.yaml path relative to project root
 }
 
+// Clone returns a deep copy of c, independently owning every slice and
+// nested struct. Used by kernel/cell.BaseCell construction and by
+// kernel/registry.CellRegistry.Get to prevent caller mutation from
+// leaking into shared state.
+//
+// nil receiver returns nil.
+func (c *CellMeta) Clone() *CellMeta {
+	if c == nil {
+		return nil
+	}
+	cp := *c
+	cp.L0Dependencies = append([]L0DepMeta(nil), c.L0Dependencies...)
+	cp.Listeners = append([]ListenerDeclMeta(nil), c.Listeners...)
+	cp.Verify.Smoke = append([]string(nil), c.Verify.Smoke...)
+	return &cp
+}
+
 // ListenerDeclMeta declares a (listener, prefix) pair used by a Cell to host
 // HTTP routes. Codegen aggregates this with each slice's RouteMounts to emit
 // reg.RouteGroup() calls in cell_gen.go.

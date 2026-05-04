@@ -8,14 +8,15 @@ import (
 
 	gocell "github.com/ghbvf/gocell"
 	"github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/kernel/metadata"
 )
 
 func TestPhase0Gate(t *testing.T) {
 	app := gocell.NewAssembly("test-bundle")
-	myCell := cell.NewBaseCell(cell.CellMetadata{
+	myCell := cell.MustNewBaseCell(&metadata.CellMeta{
 		ID:               "test-cell",
-		Type:             cell.CellTypeCore,
-		ConsistencyLevel: cell.L1,
+		Type:             "core",
+		ConsistencyLevel: "L1",
 	})
 	require.NoError(t, app.Register(myCell))
 	require.NoError(t, app.Start(context.Background()))

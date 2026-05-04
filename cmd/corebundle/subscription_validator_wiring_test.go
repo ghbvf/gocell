@@ -11,6 +11,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/assembly"
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/clock"
+	"github.com/ghbvf/gocell/kernel/metadata"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/wrapper"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
@@ -27,9 +28,9 @@ type configSubscriberWithoutOwner struct {
 
 func newConfigSubscriberWithoutOwner() *configSubscriberWithoutOwner {
 	return &configSubscriberWithoutOwner{
-		BaseCell: cell.NewBaseCell(cell.CellMetadata{
+		BaseCell: cell.MustNewBaseCell(&metadata.CellMeta{
 			ID:   "testcellnoowner",
-			Type: cell.CellTypeCore,
+			Type: "core",
 		}),
 	}
 }

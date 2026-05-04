@@ -11,6 +11,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/assembly"
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/clock"
+	"github.com/ghbvf/gocell/kernel/metadata"
 )
 
 // Ensure time is used by nilClockCarrier methods below.
@@ -84,8 +85,8 @@ func TestAssemblyStart_SnapshotsPopulatedAfterStart(t *testing.T) {
 	})
 	t.Cleanup(a.Shutdown)
 
-	require.NoError(t, a.Register(cell.NewBaseCell(cell.CellMetadata{ID: "c1", Type: cell.CellTypeCore, ConsistencyLevel: cell.L0})))
-	require.NoError(t, a.Register(cell.NewBaseCell(cell.CellMetadata{ID: "c2", Type: cell.CellTypeCore, ConsistencyLevel: cell.L0})))
+	require.NoError(t, a.Register(cell.MustNewBaseCell(&metadata.CellMeta{ID: "c1", Type: "core", ConsistencyLevel: "L0"})))
+	require.NoError(t, a.Register(cell.MustNewBaseCell(&metadata.CellMeta{ID: "c2", Type: "core", ConsistencyLevel: "L0"})))
 	require.NoError(t, a.Start(context.Background()))
 	t.Cleanup(func() { _ = a.Stop(context.Background()) })
 
@@ -110,7 +111,7 @@ func TestAssemblyStart_SnapshotsCopy(t *testing.T) {
 	})
 	t.Cleanup(a.Shutdown)
 
-	require.NoError(t, a.Register(cell.NewBaseCell(cell.CellMetadata{ID: "c1", Type: cell.CellTypeCore, ConsistencyLevel: cell.L0})))
+	require.NoError(t, a.Register(cell.MustNewBaseCell(&metadata.CellMeta{ID: "c1", Type: "core", ConsistencyLevel: "L0"})))
 	require.NoError(t, a.Start(context.Background()))
 	t.Cleanup(func() { _ = a.Stop(context.Background()) })
 

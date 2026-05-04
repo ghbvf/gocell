@@ -12,6 +12,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/assembly"
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/clock"
+	"github.com/ghbvf/gocell/kernel/metadata"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/wrapper"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
@@ -117,7 +118,7 @@ func TestBootstrap_ConsumerTracingIntegration(t *testing.T) {
 		Topic: "event.integration.test.v1",
 	}
 	cellImpl := &consumerSpyCell{
-		BaseCell: *cell.NewBaseCell(cell.CellMetadata{ID: "consumerspy"}),
+		BaseCell: *cell.MustNewBaseCell(&metadata.CellMeta{ID: "consumerspy"}),
 		spec:     spec,
 		calls:    make(chan outbox.Entry, 1),
 	}

@@ -12,6 +12,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/assembly"
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/clock"
+	"github.com/ghbvf/gocell/kernel/metadata"
 )
 
 // runtimeOnlyHookFields are fields present on bootstrap.Hook that are
@@ -159,7 +160,7 @@ func (m *mockLifecycle) Stop(_ context.Context) error  { return nil }
 // TestPhase3b_NoCellRegistersHooks verifies no hooks are appended when
 // no cell calls reg.Lifecycle in Init.
 func TestPhase3b_NoCellImplementsContributor(t *testing.T) {
-	plain := &plainCellForLC{BaseCell: *cell.NewBaseCell(cell.CellMetadata{ID: "plain"})}
+	plain := &plainCellForLC{BaseCell: *cell.MustNewBaseCell(&metadata.CellMeta{ID: "plain"})}
 	asm := buildAsmStarted(t, plain)
 
 	ml := &mockLifecycle{}
@@ -177,7 +178,7 @@ func TestPhase3b_NoCellImplementsContributor(t *testing.T) {
 // (empty slice in Init) is a legal opt-out.
 func TestPhase3b_EmptySliceContributor(t *testing.T) {
 	lc := &lcCell{
-		BaseCell: *cell.NewBaseCell(cell.CellMetadata{ID: "mycell"}),
+		BaseCell: *cell.MustNewBaseCell(&metadata.CellMeta{ID: "mycell"}),
 		hooks:    []cell.LifecycleHook{}, // non-nil empty
 	}
 	asm := buildAsmStarted(t, lc)
@@ -201,13 +202,13 @@ func TestPhase3b_EmptySliceContributor(t *testing.T) {
 // wraps the error with cellID/hookName context.
 func TestPhase3b_DuplicateHookName_FailFast(t *testing.T) {
 	cellA := &lcCell{
-		BaseCell: *cell.NewBaseCell(cell.CellMetadata{ID: "cellA"}),
+		BaseCell: *cell.MustNewBaseCell(&metadata.CellMeta{ID: "cellA"}),
 		hooks: []cell.LifecycleHook{
 			{Name: "shared.hook", OnStart: func(_ context.Context) error { return nil }},
 		},
 	}
 	cellB := &lcCell{
-		BaseCell: *cell.NewBaseCell(cell.CellMetadata{ID: "cellB"}),
+		BaseCell: *cell.MustNewBaseCell(&metadata.CellMeta{ID: "cellB"}),
 		hooks: []cell.LifecycleHook{
 			{Name: "shared.hook", OnStart: func(_ context.Context) error { return nil }},
 		},
@@ -253,7 +254,7 @@ func TestLifecycle_AppendRejectsDuplicateName(t *testing.T) {
 // in Init is a legal opt-out.
 func TestPhase3b_NilSliceContributor(t *testing.T) {
 	lc := &lcCell{
-		BaseCell: *cell.NewBaseCell(cell.CellMetadata{ID: "mycell"}),
+		BaseCell: *cell.MustNewBaseCell(&metadata.CellMeta{ID: "mycell"}),
 		hooks:    nil,
 	}
 	asm := buildAsmStarted(t, lc)
@@ -276,7 +277,7 @@ func TestPhase3b_OneCellTwoHooks(t *testing.T) {
 		{Name: "start-cache", OnStart: func(_ context.Context) error { return nil }, OnStop: func(_ context.Context) error { return nil }},
 	}
 	lc := &lcCell{
-		BaseCell: *cell.NewBaseCell(cell.CellMetadata{ID: "mycore"}),
+		BaseCell: *cell.MustNewBaseCell(&metadata.CellMeta{ID: "mycore"}),
 		hooks:    hooks,
 	}
 	asm := buildAsmStarted(t, lc)
@@ -298,11 +299,11 @@ func TestPhase3b_OneCellTwoHooks(t *testing.T) {
 // determines Append order across cells.
 func TestPhase3b_TwoCellsOrderPreserved(t *testing.T) {
 	lcA := &lcCell{
-		BaseCell: *cell.NewBaseCell(cell.CellMetadata{ID: "alpha"}),
+		BaseCell: *cell.MustNewBaseCell(&metadata.CellMeta{ID: "alpha"}),
 		hooks:    []cell.LifecycleHook{{Name: "alpha-hook", OnStart: func(_ context.Context) error { return nil }}},
 	}
 	lcB := &lcCell{
-		BaseCell: *cell.NewBaseCell(cell.CellMetadata{ID: "beta"}),
+		BaseCell: *cell.MustNewBaseCell(&metadata.CellMeta{ID: "beta"}),
 		hooks:    []cell.LifecycleHook{{Name: "beta-hook", OnStop: func(_ context.Context) error { return nil }}},
 	}
 	// Register alpha first, then beta — order must be preserved.
@@ -330,14 +331,14 @@ func TestPhase3b_TwoCellsOrderPreserved(t *testing.T) {
 // Append time by the framework, not trusted from the hook author.
 func TestPhase3b_StampsCellIDOnAppendedHook(t *testing.T) {
 	lcA := &lcCell{
-		BaseCell: *cell.NewBaseCell(cell.CellMetadata{ID: "alpha"}),
+		BaseCell: *cell.MustNewBaseCell(&metadata.CellMeta{ID: "alpha"}),
 		hooks: []cell.LifecycleHook{
 			{Name: "alpha-hook-1", OnStart: func(_ context.Context) error { return nil }},
 			{Name: "alpha-hook-2", OnStop: func(_ context.Context) error { return nil }},
 		},
 	}
 	lcB := &lcCell{
-		BaseCell: *cell.NewBaseCell(cell.CellMetadata{ID: "beta"}),
+		BaseCell: *cell.MustNewBaseCell(&metadata.CellMeta{ID: "beta"}),
 		hooks: []cell.LifecycleHook{
 			{Name: "beta-hook", OnStart: func(_ context.Context) error { return nil }},
 		},
@@ -362,7 +363,7 @@ func TestPhase3b_StampsCellIDOnAppendedHook(t *testing.T) {
 // is silently skipped (not appended).
 func TestPhase3b_BothNilSkipped(t *testing.T) {
 	lc := &lcCell{
-		BaseCell: *cell.NewBaseCell(cell.CellMetadata{ID: "mycore"}),
+		BaseCell: *cell.MustNewBaseCell(&metadata.CellMeta{ID: "mycore"}),
 		hooks: []cell.LifecycleHook{
 			{Name: "no-ops", OnStart: nil, OnStop: nil},
 		},
@@ -385,7 +386,7 @@ func TestPhase3b_BothNilSkipped(t *testing.T) {
 // both the cell id and hook name.
 func TestPhase3b_AppendError_PropagatesWithCellAndHookName(t *testing.T) {
 	lc := &lcCell{
-		BaseCell: *cell.NewBaseCell(cell.CellMetadata{ID: "mycore"}),
+		BaseCell: *cell.MustNewBaseCell(&metadata.CellMeta{ID: "mycore"}),
 		hooks: []cell.LifecycleHook{
 			{Name: "my-hook", OnStart: func(_ context.Context) error { return nil }},
 		},

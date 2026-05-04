@@ -22,6 +22,7 @@ import (
 	"github.com/ghbvf/gocell/cells/accesscore/slices/setup"
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/clock"
+	"github.com/ghbvf/gocell/kernel/metadata"
 	"github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/persistence"
@@ -273,13 +274,14 @@ type AccessCore struct {
 // NewAccessCore creates a new AccessCore Cell.
 func NewAccessCore(opts ...Option) *AccessCore {
 	c := &AccessCore{
-		BaseCell: cell.NewBaseCell(cell.CellMetadata{
+		BaseCell: cell.MustNewBaseCell(&metadata.CellMeta{
 			ID:               "accesscore",
-			Type:             cell.CellTypeCore,
-			ConsistencyLevel: cell.L2,
-			Owner:            cell.Owner{Team: "platform", Role: "access-owner"},
-			Schema:           cell.SchemaConfig{Primary: "users"},
-			Verify:           cell.CellVerify{Smoke: []string{"accesscore/smoke"}},
+			Type:             "core",
+			ConsistencyLevel: "L2",
+			DurabilityMode:   "durable",
+			Owner:            metadata.OwnerMeta{Team: "platform", Role: "access-owner"},
+			Schema:           metadata.SchemaMeta{Primary: "users"},
+			Verify:           metadata.CellVerifyMeta{Smoke: []string{"accesscore/smoke"}},
 		}),
 		logger: slog.Default(),
 	}

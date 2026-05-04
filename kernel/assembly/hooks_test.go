@@ -10,6 +10,7 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/clock"
+	"github.com/ghbvf/gocell/kernel/metadata"
 )
 
 // ---------------------------------------------------------------------------
@@ -26,7 +27,7 @@ type hookOrderCell struct {
 
 func newHookOrderCell(id string, calls *[]string, failOn string) *hookOrderCell {
 	return &hookOrderCell{
-		BaseCell: cell.NewBaseCell(cell.CellMetadata{ID: id, Type: cell.CellTypeCore}),
+		BaseCell: cell.MustNewBaseCell(&metadata.CellMeta{ID: id, Type: "core"}),
 		calls:    calls,
 		failOn:   failOn,
 	}
@@ -82,7 +83,7 @@ type panicHookCell struct {
 
 func newPanicHookCell(id string, calls *[]string, panicOn string) *panicHookCell {
 	return &panicHookCell{
-		BaseCell: cell.NewBaseCell(cell.CellMetadata{ID: id, Type: cell.CellTypeCore}),
+		BaseCell: cell.MustNewBaseCell(&metadata.CellMeta{ID: id, Type: "core"}),
 		calls:    calls,
 		panicOn:  panicOn,
 	}
@@ -151,7 +152,7 @@ type onlyBeforeStartCell struct {
 
 func newOnlyBeforeStartCell(id string, calls *[]string) *onlyBeforeStartCell {
 	return &onlyBeforeStartCell{
-		BaseCell: cell.NewBaseCell(cell.CellMetadata{ID: id, Type: cell.CellTypeCore}),
+		BaseCell: cell.MustNewBaseCell(&metadata.CellMeta{ID: id, Type: "core"}),
 		calls:    calls,
 	}
 }
@@ -298,7 +299,7 @@ func TestAssemblyHooks_MixedCells(t *testing.T) {
 	var calls []string
 
 	hooked1 := newHookOrderCell("H1", &calls, "")
-	plain := cell.NewBaseCell(cell.CellMetadata{ID: "P", Type: cell.CellTypeCore})
+	plain := cell.MustNewBaseCell(&metadata.CellMeta{ID: "P", Type: "core"})
 	hooked2 := newHookOrderCell("H2", &calls, "")
 
 	require.NoError(t, a.Register(hooked1))

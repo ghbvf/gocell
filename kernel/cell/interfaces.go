@@ -2,6 +2,8 @@ package cell
 
 import (
 	"context"
+
+	"github.com/ghbvf/gocell/kernel/metadata"
 )
 
 // VerifySpec describes the verification requirements for a Slice.
@@ -19,39 +21,8 @@ type Waiver struct {
 	ExpiresAt string
 }
 
-// CellMetadata carries the declarative metadata of a Cell (mirrors cell.yaml).
-type CellMetadata struct {
-	ID               string
-	Type             CellType
-	ConsistencyLevel Level
-	Owner            Owner
-	Schema           SchemaConfig
-	Verify           CellVerify
-	L0Dependencies   []L0Dep
-}
-
-// Owner identifies the team responsible for a Cell.
-type Owner struct {
-	Team string
-	Role string
-}
-
-// SchemaConfig holds the primary data schema reference for a Cell.
-type SchemaConfig struct {
-	Primary string
-}
-
-// CellVerify holds structured verify refs for a Cell.
-// Smoke refs use the format: smoke.{cellID}.{suffix}.
-type CellVerify struct {
-	Smoke []string
-}
-
-// L0Dep declares a direct dependency on an L0 (LocalOnly) Cell.
-type L0Dep struct {
-	Cell   string
-	Reason string
-}
+// Cell-level metadata types live exclusively in kernel/metadata.
+// See ADR docs/architecture/202605051300-adr-kernel-cellmeta-single-source.md.
 
 // --- Core Interfaces ---
 
@@ -89,8 +60,9 @@ type Cell interface {
 	Health() HealthStatus
 	// Ready reports whether the cell is currently serving (post-Start, pre-Stop).
 	Ready() bool
-	// Metadata returns the declarative metadata loaded from cell.yaml.
-	Metadata() CellMetadata
+	// Metadata returns an independent deep copy of the cell's declarative
+	// metadata; callers may freely read and modify the returned value.
+	Metadata() *metadata.CellMeta
 	// OwnedSlices returns the slices this cell registered.
 	OwnedSlices() []Slice
 	// ProducedContracts returns contracts whose authoritative source is this cell.

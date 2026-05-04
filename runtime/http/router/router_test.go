@@ -20,6 +20,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/assembly"
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/clock"
+	"github.com/ghbvf/gocell/kernel/metadata"
 	"github.com/ghbvf/gocell/pkg/ctxkeys"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/runtime/auth"
@@ -33,7 +34,7 @@ import (
 type stubCell struct{ *cell.BaseCell }
 
 func newStubCell() *stubCell {
-	return &stubCell{BaseCell: cell.NewBaseCell(cell.CellMetadata{ID: "cell-1", Type: cell.CellTypeCore})}
+	return &stubCell{BaseCell: cell.MustNewBaseCell(&metadata.CellMeta{ID: "cell-1", Type: "core"})}
 }
 
 func findAccessLogEntry(logs []byte, wantPath string) (map[string]any, bool) {

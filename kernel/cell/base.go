@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"sync"
 
+	"github.com/ghbvf/gocell/kernel/metadata"
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
@@ -35,9 +36,16 @@ const (
 // BaseCell is the default implementation of the Cell interface.
 // Embed or compose it to get a working Cell with minimal boilerplate.
 // All state-accessing methods are protected by a mutex for safe concurrent use.
+//
+// meta is owned exclusively by this BaseCell — NewBaseCell deep-copies the
+// caller's *metadata.CellMeta so subsequent mutation in the caller does not
+// leak into the running cell. cellType / level cache the typed enum view
+// computed once at construction (Type / ConsistencyLevel hot-path zero-cost).
 type BaseCell struct {
 	mu       sync.RWMutex
-	meta     CellMetadata
+	meta     *metadata.CellMeta
+	cellType CellType
+	level    Level
 	slices   []Slice
 	produced []Contract
 	consumed []Contract
@@ -51,14 +59,72 @@ type BaseCell struct {
 }
 
 // NewBaseCell creates a BaseCell from declarative metadata.
-func NewBaseCell(meta CellMetadata) *BaseCell {
-	return &BaseCell{meta: meta}
+//
+// meta is the canonical source — its Type / ConsistencyLevel string fields
+// are parsed into typed enums at construction so per-call accessors stay
+// allocation-free. Empty Type / ConsistencyLevel are accepted (zero-value
+// CellType / L0) — callers needing strict validation must feed metadata
+// already validated by gocell governance. A non-empty but unrecognized
+// value returns ErrValidationFailed (caller decides: fall back, surface to
+// readyz, etc.). The provided pointer is not retained — meta is deep-copied
+// via deepCopyMeta so mutation by the caller does not leak into the cell.
+//
+// Static wiring (cell.go literals, table-driven tests) should use
+// MustNewBaseCell, which panics on construction error per the
+// PANIC-REGISTERED-01 / ERROR-FIRST-API-01 contract.
+func NewBaseCell(meta *metadata.CellMeta) (*BaseCell, error) {
+	if meta == nil {
+		return nil, errcode.New(errcode.ErrValidationFailed, "cell.NewBaseCell: meta is nil")
+	}
+	if meta.ID == "" {
+		return nil, errcode.New(errcode.ErrValidationFailed, "cell.NewBaseCell: meta.ID is empty")
+	}
+	var cellType CellType
+	if meta.Type != "" {
+		ct, err := ParseCellType(meta.Type)
+		if err != nil {
+			return nil, fmt.Errorf("cell.NewBaseCell: cell %q: %w", meta.ID, err)
+		}
+		cellType = ct
+	}
+	level := Level(0)
+	if meta.ConsistencyLevel != "" {
+		lv, err := ParseLevel(meta.ConsistencyLevel)
+		if err != nil {
+			return nil, fmt.Errorf("cell.NewBaseCell: cell %q: %w", meta.ID, err)
+		}
+		level = lv
+	}
+	return &BaseCell{
+		meta:     meta.Clone(),
+		cellType: cellType,
+		level:    level,
+	}, nil
+}
+
+// MustNewBaseCell is the panic-on-error twin of NewBaseCell, intended for
+// composition-root and test sites that build cells from static literals
+// where a construction failure is a programmer error and must abort startup.
+// Do not call from request handlers, hot paths, or config-reload callbacks —
+// use NewBaseCell and propagate the error to /readyz or a 5xx response.
+// See ADR docs/architecture/202604270030-architectural-panic-whitelist.md §5.
+func MustNewBaseCell(meta *metadata.CellMeta) *BaseCell {
+	c, err := NewBaseCell(meta)
+	if err != nil {
+		panic(fmt.Sprintf("cell.MustNewBaseCell: %v", err))
+	}
+	return c
 }
 
 func (b *BaseCell) ID() string              { return b.meta.ID }
-func (b *BaseCell) Type() CellType          { return b.meta.Type }
-func (b *BaseCell) ConsistencyLevel() Level { return b.meta.ConsistencyLevel }
-func (b *BaseCell) Metadata() CellMetadata  { return b.meta }
+func (b *BaseCell) Type() CellType          { return b.cellType }
+func (b *BaseCell) ConsistencyLevel() Level { return b.level }
+
+// Metadata returns an independent deep copy of the cell's declarative
+// metadata. Callers may freely mutate the returned value without
+// affecting the cell's internal state (fail-closed isolation, since the
+// previous read-only contract on a shared pointer was unenforceable).
+func (b *BaseCell) Metadata() *metadata.CellMeta { return b.meta.Clone() }
 
 // OwnedSlices returns a copy of the owned slice list.
 func (b *BaseCell) OwnedSlices() []Slice {

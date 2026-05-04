@@ -14,6 +14,7 @@ import (
 	"github.com/ghbvf/gocell/cells/configcore/slices/flagwrite"
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/clock"
+	"github.com/ghbvf/gocell/kernel/metadata"
 	"github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/persistence"
@@ -151,13 +152,14 @@ type ConfigCore struct {
 // NewConfigCore creates a new ConfigCore Cell.
 func NewConfigCore(opts ...Option) *ConfigCore {
 	c := &ConfigCore{
-		BaseCell: cell.NewBaseCell(cell.CellMetadata{
+		BaseCell: cell.MustNewBaseCell(&metadata.CellMeta{
 			ID:               "configcore",
-			Type:             cell.CellTypeCore,
-			ConsistencyLevel: cell.L2,
-			Owner:            cell.Owner{Team: "platform", Role: "config-owner"},
-			Schema:           cell.SchemaConfig{Primary: "config_entries"},
-			Verify:           cell.CellVerify{Smoke: []string{"configcore/smoke"}},
+			Type:             "core",
+			ConsistencyLevel: "L2",
+			DurabilityMode:   "durable",
+			Owner:            metadata.OwnerMeta{Team: "platform", Role: "config-owner"},
+			Schema:           metadata.SchemaMeta{Primary: "config_entries"},
+			Verify:           metadata.CellVerifyMeta{Smoke: []string{"configcore/smoke"}},
 		}),
 		logger: slog.Default(),
 	}

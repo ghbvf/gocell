@@ -9,6 +9,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/cell"
 	kcommand "github.com/ghbvf/gocell/kernel/command"
 	"github.com/ghbvf/gocell/kernel/command/commandtest"
+	"github.com/ghbvf/gocell/kernel/metadata"
 )
 
 type queueRegistrarCell struct {
@@ -22,8 +23,8 @@ func (c *queueRegistrarCell) RegisterCommandQueue(q kcommand.Queue) {
 
 func TestDiscoverQueueRegistrars(t *testing.T) {
 	q := commandtest.NewInMemQueue()
-	registrar := &queueRegistrarCell{BaseCell: cell.NewBaseCell(cell.CellMetadata{ID: "withqueue"})}
-	plain := cell.NewBaseCell(cell.CellMetadata{ID: "plain"})
+	registrar := &queueRegistrarCell{BaseCell: cell.MustNewBaseCell(&metadata.CellMeta{ID: "withqueue"})}
+	plain := cell.MustNewBaseCell(&metadata.CellMeta{ID: "plain"})
 
 	count, err := DiscoverQueueRegistrars([]cell.Cell{registrar, plain}, q)
 	require.NoError(t, err)

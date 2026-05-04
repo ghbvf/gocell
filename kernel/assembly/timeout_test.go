@@ -11,6 +11,7 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/clock"
+	"github.com/ghbvf/gocell/kernel/metadata"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 )
 
@@ -27,7 +28,7 @@ type slowHookCell struct {
 
 func newSlowHookCell(id, slowOn string) *slowHookCell {
 	return &slowHookCell{
-		BaseCell: cell.NewBaseCell(cell.CellMetadata{ID: id, Type: cell.CellTypeCore}),
+		BaseCell: cell.MustNewBaseCell(&metadata.CellMeta{ID: id, Type: "core"}),
 		slowOn:   slowOn,
 	}
 }
@@ -150,7 +151,7 @@ type wrappedCtxCell struct {
 
 func newWrappedCtxCell(id string) *wrappedCtxCell {
 	return &wrappedCtxCell{
-		BaseCell: cell.NewBaseCell(cell.CellMetadata{ID: id, Type: cell.CellTypeCore}),
+		BaseCell: cell.MustNewBaseCell(&metadata.CellMeta{ID: id, Type: "core"}),
 	}
 }
 
@@ -175,7 +176,7 @@ type deadlineCheckCell struct {
 
 func newDeadlineCheckCell(id string) *deadlineCheckCell {
 	return &deadlineCheckCell{
-		BaseCell: cell.NewBaseCell(cell.CellMetadata{ID: id, Type: cell.CellTypeCore}),
+		BaseCell: cell.MustNewBaseCell(&metadata.CellMeta{ID: id, Type: "core"}),
 	}
 }
 
