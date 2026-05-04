@@ -31,6 +31,17 @@ var listenerRefPattern = regexp.MustCompile(`^cell\.[A-Z][A-Za-z0-9_]*$`)
 // producing a stylistically broken identifier in generated source.
 var specVarNamePattern = regexp.MustCompile(`^spec[A-Z][A-Za-z0-9]*$`)
 
+// goExportedIdentPattern matches valid Go exported method names.
+// Used to validate marker-supplied Method (Route) and Handler (Subscribe)
+// identifiers before rendering them into cell_gen.go's
+// `c.<HandlerField>.<Method>(s)` and `c.<SliceField>.<Handler>` call sites.
+var goExportedIdentPattern = regexp.MustCompile(`^[A-Z][A-Za-z0-9_]*$`)
+
+// goLocalIdentPattern matches valid Go local (unexported) identifiers.
+// Used to validate HandlerField and SliceField, which are derived from AST
+// field names but still validated defensively to catch any unexpected input.
+var goLocalIdentPattern = regexp.MustCompile(`^[a-zA-Z_][A-Za-z0-9_]*$`)
+
 // BuildCellSpec projects (cell.yaml + markergen.WireBundle) into the
 // CellGenSpec consumed by cell.tmpl. It is the single bridge between
 // parsed metadata and the renderer.
@@ -151,8 +162,11 @@ func BuildSliceSpec(p *metadata.ProjectMeta, cellID, sliceID string, bundle mark
 	return spec, nil
 }
 
-// validateBundleRoutes ensures every route in the bundle references a listener
-// declared in bundle.Listeners.
+// validateBundleRoutes ensures every route in the bundle:
+//   - references a listener declared in bundle.Listeners
+//   - has a Method that is either empty (defaults to RegisterRoutes) or a valid
+//     exported Go identifier (^[A-Z][A-Za-z0-9_]*$)
+//   - has a HandlerField that is a valid Go local identifier (^[a-zA-Z_][A-Za-z0-9_]*$)
 func validateBundleRoutes(cellID string, routes []markergen.RouteSpec, listeners map[string]string) error {
 	for _, r := range routes {
 		if _, ok := listeners[r.Listener]; !ok {
@@ -160,6 +174,19 @@ func validateBundleRoutes(cellID string, routes []markergen.RouteSpec, listeners
 				"(declare with +cell:listener marker in cell.go, "+
 				"or remove the +slice:route marker if this field should not be a route handler)",
 				cellID, r.Slice, r.Listener)
+		}
+		// Method is optional — empty means RegisterRoutes (applied by buildRouteGroupsFromBundle).
+		// Non-empty must be a valid exported identifier to compile as c.<HandlerField>.<Method>(s).
+		if r.Method != "" && !goExportedIdentPattern.MatchString(r.Method) {
+			return fmt.Errorf("cellgen build: cell %q slice %q route Method %q must match %s "+
+				"(exported Go identifier, e.g. RegisterRoutes, HandleHTTP) or be empty to use the default",
+				cellID, r.Slice, r.Method, goExportedIdentPattern.String())
+		}
+		// HandlerField is derived from AST field name but validated defensively.
+		if !goLocalIdentPattern.MatchString(r.HandlerField) {
+			return fmt.Errorf("cellgen build: cell %q slice %q route HandlerField %q must match %s "+
+				"(valid Go identifier, e.g. createHandler, queryH)",
+				cellID, r.Slice, r.HandlerField, goLocalIdentPattern.String())
 		}
 	}
 	return nil
@@ -238,7 +265,23 @@ func buildSubscriptionsFromBundle(p *metadata.ProjectMeta, cellID string, subs [
 
 // buildSubscriptionSpecFromBundle validates one bundle subscribe entry against
 // its contract and converts it to a SubscriptionGenSpec.
+//
+// Identifier validation:
+//   - Handler must be an exported Go identifier (^[A-Z][A-Za-z0-9_]*$) so the
+//     rendered `c.<SliceField>.<Handler>` compiles as an exported method call.
+//   - SliceField is derived from the AST field name; validated as a local Go
+//     identifier (^[a-zA-Z_][A-Za-z0-9_]*$) for defense in depth.
 func buildSubscriptionSpecFromBundle(p *metadata.ProjectMeta, cellID string, sub markergen.SubscribeSpec) (SubscriptionGenSpec, error) {
+	if !goExportedIdentPattern.MatchString(sub.Handler) {
+		return SubscriptionGenSpec{}, fmt.Errorf("cellgen build: cell %q slice %q subscribe Handler %q must match %s "+
+			"(exported Go identifier, e.g. HandleEvent, HandleOrderCreated)",
+			cellID, sub.Slice, sub.Handler, goExportedIdentPattern.String())
+	}
+	if !goLocalIdentPattern.MatchString(sub.SliceField) {
+		return SubscriptionGenSpec{}, fmt.Errorf("cellgen build: cell %q slice %q subscribe SliceField %q must match %s "+
+			"(valid Go identifier, e.g. orderSvc, eventHandler)",
+			cellID, sub.Slice, sub.SliceField, goLocalIdentPattern.String())
+	}
 	contract, ok := p.Contracts[sub.Topic]
 	if !ok {
 		prefix := ""

@@ -520,3 +520,159 @@ func TestBuildCellSpec_TransportAlwaysAMQP(t *testing.T) {
 		}
 	}
 }
+
+// TestBuildCellSpec_RouteMethodInvalidIdentRejected verifies K05-02: a
+// non-empty Method that is not a valid exported Go identifier is rejected at
+// BuildCellSpec time so the rendered `c.<HandlerField>.<Method>(s)` always
+// compiles.
+func TestBuildCellSpec_RouteMethodInvalidIdentRejected(t *testing.T) {
+	t.Parallel()
+	cases := []string{
+		"registerRoutes", // lowercase first letter — unexported
+		"123Method",      // digit-leading
+		"My-Method",      // dash in identifier
+		" BadMethod",     // leading space
+	}
+	for _, method := range cases {
+		cell := &metadata.CellMeta{ID: "demo", Dir: "demo", File: "cells/demo/cell.yaml", GoStructName: "Demo"}
+		slc := &metadata.SliceMeta{ID: "alpha", BelongsToCell: "demo", Dir: "alpha", File: "cells/demo/slices/alpha/slice.yaml"}
+		p := fixtureProject(cell, []*metadata.SliceMeta{slc}, nil)
+		bundle := markergen.WireBundle{
+			Listeners: []markergen.ListenerSpec{{Ref: "cell.PrimaryListener", Prefix: "/api/v1"}},
+			Routes: []markergen.RouteSpec{
+				{Slice: "alpha", Listener: "cell.PrimaryListener", SubPath: "/x", HandlerField: "alphaH", Method: method},
+			},
+		}
+		_, err := BuildCellSpec(p, "demo", bundle)
+		if err == nil || !strings.Contains(err.Error(), "Method") {
+			t.Errorf("BuildCellSpec with Method=%q should error with 'Method'; got %v", method, err)
+		}
+	}
+}
+
+// TestBuildCellSpec_RouteMethodEmptyAccepted verifies K05-02: an empty Method
+// is valid (defaults to RegisterRoutes) and must not cause a validation error.
+func TestBuildCellSpec_RouteMethodEmptyAccepted(t *testing.T) {
+	t.Parallel()
+	cell := &metadata.CellMeta{ID: "demo", Dir: "demo", File: "cells/demo/cell.yaml", GoStructName: "Demo"}
+	slc := &metadata.SliceMeta{ID: "alpha", BelongsToCell: "demo", Dir: "alpha", File: "cells/demo/slices/alpha/slice.yaml"}
+	p := fixtureProject(cell, []*metadata.SliceMeta{slc}, nil)
+	bundle := markergen.WireBundle{
+		Listeners: []markergen.ListenerSpec{{Ref: "cell.PrimaryListener", Prefix: "/api/v1"}},
+		Routes: []markergen.RouteSpec{
+			// Method intentionally empty — should default to RegisterRoutes without error.
+			{Slice: "alpha", Listener: "cell.PrimaryListener", SubPath: "/x", HandlerField: "alphaH", Method: ""},
+		},
+	}
+	_, err := BuildCellSpec(p, "demo", bundle)
+	if err != nil {
+		t.Fatalf("empty Method should be accepted; BuildCellSpec: %v", err)
+	}
+}
+
+// TestBuildCellSpec_RouteHandlerFieldInvalidRejected verifies K05-02: a
+// HandlerField that is not a valid Go identifier is rejected defensively.
+func TestBuildCellSpec_RouteHandlerFieldInvalidRejected(t *testing.T) {
+	t.Parallel()
+	cases := []string{
+		"123handler",  // digit-leading
+		"bad-handler", // dash
+		"",            // empty
+	}
+	for _, field := range cases {
+		cell := &metadata.CellMeta{ID: "demo", Dir: "demo", File: "cells/demo/cell.yaml", GoStructName: "Demo"}
+		slc := &metadata.SliceMeta{ID: "alpha", BelongsToCell: "demo", Dir: "alpha", File: "cells/demo/slices/alpha/slice.yaml"}
+		p := fixtureProject(cell, []*metadata.SliceMeta{slc}, nil)
+		bundle := markergen.WireBundle{
+			Listeners: []markergen.ListenerSpec{{Ref: "cell.PrimaryListener", Prefix: "/api/v1"}},
+			Routes: []markergen.RouteSpec{
+				{Slice: "alpha", Listener: "cell.PrimaryListener", SubPath: "/x", HandlerField: field},
+			},
+		}
+		_, err := BuildCellSpec(p, "demo", bundle)
+		if err == nil || !strings.Contains(err.Error(), "HandlerField") {
+			t.Errorf("BuildCellSpec with HandlerField=%q should error with 'HandlerField'; got %v", field, err)
+		}
+	}
+}
+
+// TestBuildCellSpec_SubscribeHandlerInvalidRejected verifies K05-02: a
+// Handler in a subscribe spec that is not an exported Go identifier is rejected
+// so the rendered `c.<SliceField>.<Handler>` always compiles.
+func TestBuildCellSpec_SubscribeHandlerInvalidRejected(t *testing.T) {
+	t.Parallel()
+	cases := []string{
+		"handleEvent", // lowercase first letter
+		"123Handle",   // digit-leading
+		"Handle-Bar",  // dash
+		"",            // empty
+	}
+	for _, handler := range cases {
+		cell := &metadata.CellMeta{ID: "demo", Dir: "demo", File: "cells/demo/cell.yaml", GoStructName: "Demo"}
+		slc := &metadata.SliceMeta{ID: "subs", BelongsToCell: "demo", Dir: "subs", File: "cells/demo/slices/subs/slice.yaml"}
+		p := fixtureProject(cell, []*metadata.SliceMeta{slc}, []*metadata.ContractMeta{{ID: "event.foo.bar.v1", Kind: "event"}})
+		bundle := markergen.WireBundle{
+			Subscribes: []markergen.SubscribeSpec{
+				{Slice: "subs", Topic: "event.foo.bar.v1", SliceField: "barSvc", Handler: handler, Group: "demo"},
+			},
+		}
+		_, err := BuildCellSpec(p, "demo", bundle)
+		if err == nil || !strings.Contains(err.Error(), "Handler") {
+			t.Errorf("BuildCellSpec with Handler=%q should error with 'Handler'; got %v", handler, err)
+		}
+	}
+}
+
+// TestBuildCellSpec_SubscribeSliceFieldInvalidRejected verifies K05-02: a
+// SliceField that is not a valid Go identifier is rejected defensively.
+func TestBuildCellSpec_SubscribeSliceFieldInvalidRejected(t *testing.T) {
+	t.Parallel()
+	cases := []string{
+		"123svc",  // digit-leading
+		"bad-svc", // dash
+		"",        // empty
+	}
+	for _, field := range cases {
+		cell := &metadata.CellMeta{ID: "demo", Dir: "demo", File: "cells/demo/cell.yaml", GoStructName: "Demo"}
+		slc := &metadata.SliceMeta{ID: "subs", BelongsToCell: "demo", Dir: "subs", File: "cells/demo/slices/subs/slice.yaml"}
+		p := fixtureProject(cell, []*metadata.SliceMeta{slc}, []*metadata.ContractMeta{{ID: "event.foo.bar.v1", Kind: "event"}})
+		bundle := markergen.WireBundle{
+			Subscribes: []markergen.SubscribeSpec{
+				{Slice: "subs", Topic: "event.foo.bar.v1", SliceField: field, Handler: "HandleBar", Group: "demo"},
+			},
+		}
+		_, err := BuildCellSpec(p, "demo", bundle)
+		if err == nil || !strings.Contains(err.Error(), "SliceField") {
+			t.Errorf("BuildCellSpec with SliceField=%q should error with 'SliceField'; got %v", field, err)
+		}
+	}
+}
+
+// TestBuildCellSpec_SubscribeValidExportedIdentAccepted verifies K05-02:
+// well-formed exported identifiers pass validation without error.
+func TestBuildCellSpec_SubscribeValidExportedIdentAccepted(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		handler    string
+		sliceField string
+	}{
+		{"HandleBar", "barSvc"},
+		{"HandleOrderCreated", "orderSvc"},
+		{"H", "s"},                    // minimal valid
+		{"Handle_Event", "svc_field"}, // underscores valid
+	}
+	for _, tc := range cases {
+		cell := &metadata.CellMeta{ID: "demo", Dir: "demo", File: "cells/demo/cell.yaml", GoStructName: "Demo"}
+		slc := &metadata.SliceMeta{ID: "subs", BelongsToCell: "demo", Dir: "subs", File: "cells/demo/slices/subs/slice.yaml"}
+		p := fixtureProject(cell, []*metadata.SliceMeta{slc}, []*metadata.ContractMeta{{ID: "event.foo.bar.v1", Kind: "event"}})
+		bundle := markergen.WireBundle{
+			Subscribes: []markergen.SubscribeSpec{
+				{Slice: "subs", Topic: "event.foo.bar.v1", SliceField: tc.sliceField, Handler: tc.handler, Group: "demo"},
+			},
+		}
+		_, err := BuildCellSpec(p, "demo", bundle)
+		if err != nil {
+			t.Errorf("BuildCellSpec with Handler=%q SliceField=%q should be accepted; got %v", tc.handler, tc.sliceField, err)
+		}
+	}
+}

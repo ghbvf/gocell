@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"path/filepath"
 	"sort"
+	"strings"
 	"text/template"
 
 	"github.com/ghbvf/gocell/kernel/metadata"
@@ -76,16 +77,23 @@ func Generate(root string, project *metadata.ProjectMeta, opts Options) (Result,
 		return res, fmt.Errorf("cellgen generate: project is nil")
 	}
 
-	// K#05 W2: read wire declarations directly from cell.go marker comments
-	// via markergen.Merge. Builder receives WireBundle per cell.
-	bundles, err := markergen.Merge(root, project)
-	if err != nil {
-		return res, fmt.Errorf("cellgen generate: markergen merge: %w", err)
-	}
-
 	cellIDs := selectCellIDs(project, opts.OnlyCell)
 	if opts.OnlyCell != "" && len(cellIDs) == 0 {
 		return res, fmt.Errorf("cellgen generate: cell %q not found", opts.OnlyCell)
+	}
+
+	// K#05 W2: read wire declarations directly from cell.go marker comments
+	// via markergen.Merge. Builder receives WireBundle per cell.
+	//
+	// K05-09: When OnlyCell is set, filter the project view to the target cell
+	// so unrelated cells' marker errors don't block single-cell generation.
+	mergeProject := project
+	if opts.OnlyCell != "" {
+		mergeProject = projectFilteredToCell(project, opts.OnlyCell)
+	}
+	bundles, err := markergen.Merge(root, mergeProject)
+	if err != nil {
+		return res, fmt.Errorf("cellgen generate: markergen merge: %w", err)
 	}
 
 	for _, id := range cellIDs {
@@ -315,4 +323,29 @@ func recordResult(res *Result, w codegen.WriteResult) {
 	default:
 		res.Generated = append(res.Generated, w.Path)
 	}
+}
+
+// projectFilteredToCell returns a shallow copy of project containing only the
+// target cell and its slices. This is used by Generate when OnlyCell is set so
+// that markergen.Merge only parses the target cell's cell.go, preventing
+// unrelated cells' marker errors from blocking single-cell generation.
+//
+// The returned ProjectMeta shares the same Contracts map (read-only in this
+// context) and shallow-copies Cells and Slices to the filtered set.
+func projectFilteredToCell(project *metadata.ProjectMeta, cellID string) *metadata.ProjectMeta {
+	filtered := &metadata.ProjectMeta{
+		Cells:     make(map[string]*metadata.CellMeta, 1),
+		Slices:    make(map[string]*metadata.SliceMeta),
+		Contracts: project.Contracts,
+	}
+	if cell, ok := project.Cells[cellID]; ok {
+		filtered.Cells[cellID] = cell
+	}
+	prefix := cellID + "/"
+	for key, s := range project.Slices {
+		if strings.HasPrefix(key, prefix) {
+			filtered.Slices[key] = s
+		}
+	}
+	return filtered
 }

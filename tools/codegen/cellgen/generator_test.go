@@ -333,6 +333,59 @@ func TestGenerate_VerifyDriftAfterManualEdit(t *testing.T) {
 	}
 }
 
+// TestProjectFilteredToCell_OnlyTargetCellAndSlices verifies K05-09: the
+// helper returns a ProjectMeta containing only the target cell and its slices,
+// sharing the contracts map from the original project.
+func TestProjectFilteredToCell_OnlyTargetCellAndSlices(t *testing.T) {
+	t.Parallel()
+	cellA := &metadata.CellMeta{ID: "a", Dir: "a", File: "cells/a/cell.yaml", GoStructName: "A"}
+	cellB := &metadata.CellMeta{ID: "b", Dir: "b", File: "cells/b/cell.yaml", GoStructName: "B"}
+	sliceA1 := &metadata.SliceMeta{ID: "s1", BelongsToCell: "a", Dir: "s1", File: "cells/a/slices/s1/slice.yaml"}
+	sliceB1 := &metadata.SliceMeta{ID: "s1", BelongsToCell: "b", Dir: "s1", File: "cells/b/slices/s1/slice.yaml"}
+	contract := &metadata.ContractMeta{ID: "event.foo.v1", Kind: "event"}
+
+	project := &metadata.ProjectMeta{
+		Cells:     map[string]*metadata.CellMeta{"a": cellA, "b": cellB},
+		Slices:    map[string]*metadata.SliceMeta{"a/s1": sliceA1, "b/s1": sliceB1},
+		Contracts: map[string]*metadata.ContractMeta{"event.foo.v1": contract},
+	}
+
+	filtered := projectFilteredToCell(project, "a")
+
+	if len(filtered.Cells) != 1 || filtered.Cells["a"] == nil {
+		t.Errorf("Cells = %v, want only {a}", filtered.Cells)
+	}
+	if len(filtered.Slices) != 1 || filtered.Slices["a/s1"] == nil {
+		t.Errorf("Slices = %v, want only {a/s1}", filtered.Slices)
+	}
+	// Contracts map must be the exact same map reference (shared, not deep-copied).
+	// Maps cannot be compared with != but we can verify the pointer to a known
+	// entry matches.
+	if filtered.Contracts["event.foo.v1"] != contract {
+		t.Errorf("Contracts should share the same map reference as the original project")
+	}
+	// Original project must not be mutated.
+	if len(project.Cells) != 2 || len(project.Slices) != 2 {
+		t.Errorf("original project was mutated")
+	}
+}
+
+// TestProjectFilteredToCell_UnknownCellReturnsEmpty verifies K05-09:
+// filtering to a cell not present in project returns an empty (but valid)
+// ProjectMeta rather than panicking.
+func TestProjectFilteredToCell_UnknownCellReturnsEmpty(t *testing.T) {
+	t.Parallel()
+	project := &metadata.ProjectMeta{
+		Cells:     map[string]*metadata.CellMeta{},
+		Slices:    map[string]*metadata.SliceMeta{},
+		Contracts: map[string]*metadata.ContractMeta{},
+	}
+	filtered := projectFilteredToCell(project, "ghost")
+	if len(filtered.Cells) != 0 || len(filtered.Slices) != 0 {
+		t.Errorf("expected empty filter for unknown cell, got cells=%v slices=%v", filtered.Cells, filtered.Slices)
+	}
+}
+
 // --- helpers ---------------------------------------------------------------
 
 // initSyntheticRepo creates a tmp directory with a minimal project layout
