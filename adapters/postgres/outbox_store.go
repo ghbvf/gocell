@@ -7,6 +7,8 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/ghbvf/gocell/kernel/clock"
 	kout "github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/errcode"
@@ -19,6 +21,13 @@ import (
 // have headroom while still capping unbounded allocations from a corrupted
 // or maliciously-crafted row at ~4 KB.
 const maxObservabilityJSONBytes = 4 * kout.MaxObservabilityTotalSize
+
+// reclaimBatchSize caps reclaimStaleQuery so a backlog of stale claiming rows
+// cannot create a multi-second UPDATE that holds locks blocking VACUUM and
+// streaming replication. The relay's reclaim loop wakes on its own schedule —
+// a single LIMITed batch per tick is sufficient; backlog drains over a few
+// ticks. Mirrors graphile/worker's get_job LIMIT 1 + repeat-on-tick model.
+const reclaimBatchSize = 1000
 
 // PGOutboxStore implements runtime/outbox.Store over PostgreSQL using pgx.
 //
@@ -50,12 +59,18 @@ func NewOutboxStore(db relayDB, clk clock.Clock) *PGOutboxStore {
 // ---------------------------------------------------------------------------
 
 // claimPendingQuery first materializes the rows selected for this claim, then
-// updates them, then returns the updated entries ordered by the materialized
-// selection keys. UPDATE ... RETURNING does not guarantee row order by itself,
-// so the final ORDER BY is required for durable delivery order.
+// updates them with a fresh lease_id (the fencing token), then returns the
+// updated entries ordered by the materialized selection keys. UPDATE ...
+// RETURNING does not guarantee row order by itself, so the final ORDER BY is
+// required for durable delivery order.
 //
-// ORDER BY matches idx_outbox_pending_v2 (next_retry_at NULLS FIRST, created_at)
+// ORDER BY matches idx_outbox_pending (next_retry_at NULLS FIRST, created_at)
 // with id as a stable tie-breaker for rows with identical timestamps.
+//
+// $1 statusClaiming, $2 statusPending, $3 batchSize, $4 leaseID (UUID).
+//
+// ref: graphile/worker sql/000001.sql get_job — locked_by SET on claim
+// ref: jackc/pgxjob pgxjob.go — worker_id UUID via CTE
 const claimPendingQuery = `WITH picked AS MATERIALIZED (
 	SELECT id, next_retry_at, created_at
 	FROM outbox_entries
@@ -67,43 +82,61 @@ const claimPendingQuery = `WITH picked AS MATERIALIZED (
 ),
 updated AS (
 	UPDATE outbox_entries AS e
-	SET status = $1, claimed_at = now()
+	SET status = $1, claimed_at = now(), lease_id = $4::uuid
 	FROM picked
 	WHERE e.id = picked.id
 	RETURNING e.id, e.aggregate_id, e.aggregate_type, e.event_type,
 		e.topic, e.payload, e.metadata, e.created_at, e.attempts, e.observability,
+		e.lease_id,
 		picked.next_retry_at AS picked_next_retry_at,
 		picked.created_at AS picked_created_at
 )
 SELECT id, aggregate_id, aggregate_type, event_type,
-	topic, payload, metadata, created_at, attempts, observability
+	topic, payload, metadata, created_at, attempts, observability, lease_id
 FROM updated
 ORDER BY picked_next_retry_at NULLS FIRST, picked_created_at, id`
 
-// markPublishedQuery is identical to writeBackMarkPublished in outbox_relay.go.
+// markPublishedQuery transitions claiming → published with fencing CAS:
+// row matches only when the stored lease_id equals the lease the caller was
+// granted at Claim time. A reclaimed (lease_id NULL) or re-leased row will
+// miss; caller observes RowsAffected==0 and silently drops.
 const markPublishedQuery = `UPDATE outbox_entries SET status = $1, published_at = now()
-	WHERE id = $2 AND status = $3`
+	WHERE id = $2 AND status = $3 AND lease_id = $4::uuid`
 
-// markRetryQuery is identical to writeBackMarkRetry in outbox_relay.go.
+// markRetryQuery transitions claiming → pending with fencing CAS. lease_id is
+// cleared (set to NULL) so the next ClaimPending must mint a fresh lease.
 const markRetryQuery = `UPDATE outbox_entries SET status = $1, attempts = $2,
-	next_retry_at = now() + $3, last_error = $4
-	WHERE id = $5 AND status = $6`
+	next_retry_at = now() + $3, last_error = $4, lease_id = NULL
+	WHERE id = $5 AND status = $6 AND lease_id = $7::uuid`
 
-// markDeadQuery is identical to writeBackMarkDead in outbox_relay.go.
-const markDeadQuery = `UPDATE outbox_entries SET status = $1, attempts = $2, last_error = $3, dead_at = now()
-	WHERE id = $4 AND status = $5`
+// markDeadQuery transitions claiming → dead with fencing CAS.
+const markDeadQuery = `UPDATE outbox_entries SET status = $1, attempts = $2,
+	last_error = $3, dead_at = now()
+	WHERE id = $4 AND status = $5 AND lease_id = $6::uuid`
 
-// reclaimStaleQuery is identical to the SQL in OutboxRelay.reclaimStale.
+// reclaimStaleQuery sweeps claiming rows whose lease has expired. lease_id is
+// cleared on the back-to-pending branch so the next ClaimPending mints a fresh
+// lease; the dead branch keeps the value as audit trail.
+//
+// LIMIT (reclaimBatchSize) caps a single sweep so a backlog of stale rows
+// cannot produce a multi-second UPDATE that blocks VACUUM/replication; the
+// relay's reclaim loop tick re-runs to drain residual.
+//
 // $1 claimTTL interval text, $2 maxAttempts, $3 statusDead, $4 statusPending,
-// $5 baseDelayMicros, $6 statusClaiming, $7 maxDelayMicros.
+// $5 baseDelayMicros, $6 statusClaiming, $7 maxDelayMicros, $8 reclaimBatchSize.
 const reclaimStaleQuery = `UPDATE outbox_entries
 	SET status = CASE WHEN attempts + 1 >= $2 THEN $3 ELSE $4 END,
 		attempts = attempts + 1,
 		claimed_at = NULL,
+		lease_id = CASE WHEN attempts + 1 >= $2 THEN lease_id ELSE NULL END,
 		dead_at = CASE WHEN attempts + 1 >= $2 THEN now() ELSE NULL END,
 		next_retry_at = CASE WHEN attempts + 1 >= $2 THEN NULL
 			ELSE now() + LEAST($5 * power(2, attempts + 1), $7) * interval '1 microsecond' END
-	WHERE status = $6 AND claimed_at < now() - $1::interval`
+	WHERE id IN (
+		SELECT id FROM outbox_entries
+		WHERE status = $6 AND claimed_at < now() - $1::interval
+		LIMIT $8
+	)`
 
 // cleanupPublishedQuery is identical to publishedQuery in OutboxRelay.deletePublishedBefore.
 const cleanupPublishedQuery = `DELETE FROM outbox_entries WHERE id IN (
@@ -118,7 +151,11 @@ const cleanupDeadQuery = `DELETE FROM outbox_entries WHERE id IN (
 // ---------------------------------------------------------------------------
 
 // ClaimPending atomically transitions up to batchSize rows from pending to
-// claiming status. Returns empty slice + nil when nothing is claimable.
+// claiming status, stamping each with a fresh lease_id (UUID). The lease is
+// the fencing token that callers MUST echo through subsequent Mark* calls;
+// without it, an in-flight worker whose claim was already reclaimed cannot
+// overwrite a new owner's outcome. Returns empty slice + nil when nothing is
+// claimable.
 func (s *PGOutboxStore) ClaimPending(ctx context.Context, batchSize int) ([]outbox.ClaimedEntry, error) {
 	tx, err := s.db.Begin(ctx)
 	if err != nil {
@@ -132,7 +169,8 @@ func (s *PGOutboxStore) ClaimPending(ctx context.Context, batchSize int) ([]outb
 		}
 	}()
 
-	rows, err := tx.Query(ctx, claimPendingQuery, statusClaiming, statusPending, batchSize)
+	leaseID := uuid.NewString()
+	rows, err := tx.Query(ctx, claimPendingQuery, statusClaiming, statusPending, batchSize, leaseID)
 	if err != nil {
 		return nil, errcode.Wrap(errcode.KindInternal, ErrAdapterPGQuery, "outbox store: ClaimPending query failed", err)
 	}
@@ -158,10 +196,12 @@ func (s *PGOutboxStore) ClaimPending(ctx context.Context, batchSize int) ([]outb
 	return entries, nil
 }
 
-// MarkPublished transitions an entry from claiming to published.
-// updated=false means the entry was reclaimed by ReclaimStale (not an error).
-func (s *PGOutboxStore) MarkPublished(ctx context.Context, id string) (bool, error) {
-	ct, err := s.db.Exec(ctx, markPublishedQuery, statusPublished, id, statusClaiming)
+// MarkPublished transitions an entry from claiming to published, fencing on
+// leaseID. updated=false means the lease was lost (ReclaimStale + re-Claim, or
+// row already in a terminal state) — silent at-least-once OK; callers must
+// not treat it as error.
+func (s *PGOutboxStore) MarkPublished(ctx context.Context, id, leaseID string) (bool, error) {
+	ct, err := s.db.Exec(ctx, markPublishedQuery, statusPublished, id, statusClaiming, leaseID)
 	if err != nil {
 		return false, errcode.Wrap(errcode.KindInternal, ErrAdapterPGQuery, "outbox store: MarkPublished failed", err)
 	}
@@ -169,8 +209,12 @@ func (s *PGOutboxStore) MarkPublished(ctx context.Context, id string) (bool, err
 }
 
 // MarkRetry transitions a failing entry back to pending with the supplied
-// nextRetryAt and attempts count. updated=false when entry no longer in claiming.
-func (s *PGOutboxStore) MarkRetry(ctx context.Context, id string, attempts int, nextRetryAt time.Time, lastError string) (bool, error) {
+// nextRetryAt and attempts count, fencing on leaseID. updated=false same as
+// MarkPublished.
+func (s *PGOutboxStore) MarkRetry(
+	ctx context.Context, id, leaseID string,
+	attempts int, nextRetryAt time.Time, lastError string,
+) (bool, error) {
 	// Convert time.Time to a PG interval offset from now().
 	// We use an absolute timestamp approach: compute delay from now, then
 	// express as "N microseconds" interval added to now() in SQL.
@@ -183,29 +227,31 @@ func (s *PGOutboxStore) MarkRetry(ctx context.Context, id string, attempts int, 
 	errMsg := sanitizeError(lastError, 1000)
 
 	ct, err := s.db.Exec(ctx, markRetryQuery,
-		statusPending, attempts, delayInterval, errMsg, id, statusClaiming)
+		statusPending, attempts, delayInterval, errMsg, id, statusClaiming, leaseID)
 	if err != nil {
 		return false, errcode.Wrap(errcode.KindInternal, ErrAdapterPGQuery, "outbox store: MarkRetry failed", err)
 	}
 	return ct.RowsAffected() == 1, nil
 }
 
-// MarkDead transitions a failing entry to dead status.
-// updated=false when entry no longer in claiming.
-func (s *PGOutboxStore) MarkDead(ctx context.Context, id string, attempts int, lastError string) (bool, error) {
+// MarkDead transitions a failing entry to dead status, fencing on leaseID.
+// updated=false when the lease was lost.
+func (s *PGOutboxStore) MarkDead(ctx context.Context, id, leaseID string, attempts int, lastError string) (bool, error) {
 	errMsg := sanitizeError(lastError, 1000)
 
 	ct, err := s.db.Exec(ctx, markDeadQuery,
-		statusDead, attempts, errMsg, id, statusClaiming)
+		statusDead, attempts, errMsg, id, statusClaiming, leaseID)
 	if err != nil {
 		return false, errcode.Wrap(errcode.KindInternal, ErrAdapterPGQuery, "outbox store: MarkDead failed", err)
 	}
 	return ct.RowsAffected() == 1, nil
 }
 
-// ReclaimStale transitions claiming rows whose claimed_at is older than claimTTL
-// back to pending (with attempts+1 and next_retry_at = backoff) or to dead
-// (when attempts+1 >= maxAttempts). Returns count of rows recovered.
+// ReclaimStale transitions up to reclaimBatchSize claiming rows whose
+// claimed_at is older than claimTTL back to pending (with attempts+1 and
+// next_retry_at = backoff) or to dead (when attempts+1 >= maxAttempts).
+// Returns count of rows recovered. The relay's reclaim loop re-runs on its
+// own tick to drain residual when the backlog exceeds reclaimBatchSize.
 func (s *PGOutboxStore) ReclaimStale(
 	ctx context.Context, claimTTL time.Duration, maxAttempts int, baseDelay, maxDelay time.Duration,
 ) (int, error) {
@@ -218,7 +264,7 @@ func (s *PGOutboxStore) ReclaimStale(
 		claimTTLInterval, maxAttempts,
 		statusDead, statusPending,
 		baseDelay.Microseconds(), statusClaiming,
-		maxDelay.Microseconds())
+		maxDelay.Microseconds(), reclaimBatchSize)
 	if err != nil {
 		return 0, errcode.Wrap(errcode.KindInternal, ErrAdapterPGQuery, "outbox store: ReclaimStale failed", err)
 	}
@@ -253,24 +299,28 @@ func (s *PGOutboxStore) CleanupDead(ctx context.Context, cutoff time.Time, batch
 // ClaimedEntry. Column order:
 //
 //	id, aggregate_id, aggregate_type, event_type, topic, payload,
-//	metadata, created_at, attempts, observability
+//	metadata, created_at, attempts, observability, lease_id
 //
 // Both metadata and observability are JSONB; NULL is valid for both and is
 // treated as an empty map / zero struct respectively. A JSON parse failure
 // is logged as Warn (data integrity) and the entry is still returned.
+// lease_id is returned by claim as a non-NULL UUID and surfaced as a string
+// fencing token to the runtime layer.
 func scanClaimedEntry(rows RowScanner) (outbox.ClaimedEntry, error) {
 	var (
 		ce                outbox.ClaimedEntry
 		metadataJSON      []byte
 		observabilityJSON []byte
+		leaseID           uuid.UUID
 	)
 	if err := rows.Scan(
 		&ce.ID, &ce.AggregateID, &ce.AggregateType, &ce.EventType,
 		&ce.Topic, &ce.Payload, &metadataJSON, &ce.CreatedAt, &ce.Attempts,
-		&observabilityJSON,
+		&observabilityJSON, &leaseID,
 	); err != nil {
 		return outbox.ClaimedEntry{}, err
 	}
+	ce.LeaseID = leaseID.String()
 	if len(metadataJSON) > 0 {
 		if err := json.Unmarshal(metadataJSON, &ce.Metadata); err != nil {
 			slog.Warn("outbox store: failed to unmarshal metadata",

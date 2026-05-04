@@ -470,7 +470,7 @@ func TestRelay_StoreCleanup_DirectCall(t *testing.T) {
 	claimed, err := store.ClaimPending(ctx, 10)
 	require.NoError(t, err)
 	require.Len(t, claimed, 1)
-	_, err = store.MarkPublished(ctx, claimed[0].ID)
+	_, err = store.MarkPublished(ctx, claimed[0].ID, claimed[0].LeaseID)
 	require.NoError(t, err)
 
 	// Verify it is published.
@@ -501,7 +501,7 @@ func TestRelay_CleanupLoop_RunsImmediatelyAtStart(t *testing.T) {
 	claimed, err := store.ClaimPending(ctx, 10)
 	require.NoError(t, err)
 	require.Len(t, claimed, 1)
-	_, err = store.MarkPublished(ctx, claimed[0].ID)
+	_, err = store.MarkPublished(ctx, claimed[0].ID, claimed[0].LeaseID)
 	require.NoError(t, err)
 
 	// retention=1ns so the just-published entry is immediately past cutoff

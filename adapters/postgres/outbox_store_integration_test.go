@@ -5,6 +5,7 @@ package postgres
 import (
 	"context"
 	"encoding/json"
+	"strconv"
 	"sync"
 	"testing"
 	"time"
@@ -135,6 +136,121 @@ func (p *recordingPublisher) Topics() []string {
 	out := make([]string, len(p.topics))
 	copy(out, p.topics)
 	return out
+}
+
+// TestPGOutboxStore_ReclaimStale_RespectsBatchLimit verifies B2-A-06: a
+// backlog of stale claiming rows must not produce a single multi-second
+// UPDATE that holds locks blocking VACUUM and replication. ReclaimStale caps
+// at reclaimBatchSize per call; relay's tick loop drains residual.
+func TestPGOutboxStore_ReclaimStale_RespectsBatchLimit(t *testing.T) {
+	pool, cleanup := setupPostgres(t)
+	t.Cleanup(cleanup)
+
+	ctx := context.Background()
+	migrator, err := NewMigrator(pool, testMigrationsFS(t), "schema_migrations_reclaim_limit")
+	require.NoError(t, err)
+	require.NoError(t, migrator.Up(ctx), "migrations must apply")
+
+	const seedCount = reclaimBatchSize + 500 // 1500 stale claiming rows
+
+	// Seed `seedCount` rows in claiming state with claimed_at far in the past.
+	// Batched INSERT keeps the test under a couple seconds even at 1500 rows.
+	tx, err := pool.DB().Begin(ctx)
+	require.NoError(t, err)
+	for i := 0; i < seedCount; i++ {
+		_, execErr := tx.Exec(ctx,
+			`INSERT INTO outbox_entries
+			(id, aggregate_id, aggregate_type, event_type, topic, payload, metadata, created_at, status, claimed_at, lease_id)
+			VALUES ($1, 'agg-stale', 'test', 'ev', 't', $2, NULL, $3, 'claiming', $3, gen_random_uuid())`,
+			"e-stale-"+strconv.Itoa(i), []byte(`{"i":`+strconv.Itoa(i)+`}`),
+			time.Now().Add(-time.Hour))
+		require.NoError(t, execErr)
+	}
+	require.NoError(t, tx.Commit(ctx))
+
+	store := NewOutboxStore(pool.DB(), clock.Real())
+
+	// First ReclaimStale must reclaim exactly reclaimBatchSize.
+	count, err := store.ReclaimStale(ctx, time.Minute, 99, time.Millisecond, time.Second)
+	require.NoError(t, err)
+	assert.Equal(t, reclaimBatchSize, count,
+		"first reclaim must cap at reclaimBatchSize, not full backlog")
+
+	// Second call drains the residual.
+	count2, err := store.ReclaimStale(ctx, time.Minute, 99, time.Millisecond, time.Second)
+	require.NoError(t, err)
+	assert.Equal(t, seedCount-reclaimBatchSize, count2,
+		"second reclaim drains residual")
+
+	// Third call is a no-op.
+	count3, err := store.ReclaimStale(ctx, time.Minute, 99, time.Millisecond, time.Second)
+	require.NoError(t, err)
+	assert.Zero(t, count3, "third call has nothing to reclaim")
+}
+
+// TestPGOutboxStore_Fencing_ReclaimedRowSurvivesStaleMark exercises the PG
+// fencing CAS end-to-end: worker A claims, reclaim fires, worker A's stale
+// MarkPublished must miss while worker B's lease is preserved. (B2-A-01)
+func TestPGOutboxStore_Fencing_ReclaimedRowSurvivesStaleMark(t *testing.T) {
+	pool, cleanup := setupPostgres(t)
+	t.Cleanup(cleanup)
+
+	ctx := context.Background()
+	migrator, err := NewMigrator(pool, testMigrationsFS(t), "schema_migrations_fencing")
+	require.NoError(t, err)
+	require.NoError(t, migrator.Up(ctx), "migrations must apply")
+
+	insertSeedRow(t, pool, rout.ClaimedEntry{Entry: kout.Entry{
+		ID:            "evt-fencing-race",
+		AggregateID:   "agg-1",
+		AggregateType: "test",
+		EventType:     "test.v1",
+		Topic:         "test.v1",
+		Payload:       []byte(`{"x":1}`),
+		CreatedAt:     time.Now().UTC(),
+	}})
+
+	store := NewOutboxStore(pool.DB(), clock.Real())
+
+	// Worker A claims.
+	a, err := store.ClaimPending(ctx, 10)
+	require.NoError(t, err)
+	require.Len(t, a, 1)
+	leaseA := a[0].LeaseID
+
+	// Force claimed_at into the past so ReclaimStale catches it.
+	_, err = pool.DB().Exec(ctx,
+		"UPDATE outbox_entries SET claimed_at = $1 WHERE id = 'evt-fencing-race'",
+		time.Now().Add(-time.Hour))
+	require.NoError(t, err)
+
+	// Reclaim sweep: TTL=1s vs claimed_at 1h ago → stale → back to pending,
+	// lease cleared.
+	count, err := store.ReclaimStale(ctx, time.Second, 99, time.Millisecond, time.Second)
+	require.NoError(t, err)
+	require.Equal(t, 1, count)
+
+	// Wait long enough that next_retry_at (now+backoff) has elapsed and the
+	// row is claimable again. The backoff for attempts=1 + baseDelay=1ms is
+	// well under 100ms.
+	require.Eventually(t, func() bool {
+		b, claimErr := store.ClaimPending(ctx, 10)
+		if claimErr != nil || len(b) != 1 {
+			return false
+		}
+		leaseB := b[0].LeaseID
+		require.NotEqual(t, leaseA, leaseB,
+			"worker B must receive a fresh lease distinct from A")
+
+		// Worker A's stale MarkPublished MUST NOT win.
+		updatedA, _ := store.MarkPublished(ctx, "evt-fencing-race", leaseA)
+		assert.False(t, updatedA, "FENCING VIOLATION: stale lease A overwrote new lease B")
+
+		// Worker B's MarkPublished succeeds.
+		updatedB, _ := store.MarkPublished(ctx, "evt-fencing-race", leaseB)
+		assert.True(t, updatedB, "current lease B must own the row")
+		return true
+	}, testtime.D5s, testtime.D50ms, "row must become claimable after reclaim backoff")
 }
 
 // insertSeedRow inserts a ClaimedEntry directly into outbox_entries with

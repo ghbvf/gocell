@@ -18,6 +18,14 @@ import (
 // idempotency key collisions across unrelated entries.
 const allZeroUUID = "00000000-0000-0000-0000-000000000000"
 
+// MaxMetadataBytes caps the JSON-encoded size of an outbox entry's metadata
+// column. A bug or malicious producer could otherwise stuff multi-MB JSON into
+// the column, amplifying relay memory pressure and PG replication delay.
+// 64 KiB is comfortably above any legitimate envelope use (request id,
+// correlation id, trace context, a handful of business labels) while
+// preventing a single entry from dominating a relay batch.
+const MaxMetadataBytes = 64 << 10
+
 // Compile-time interface checks.
 var (
 	_ outbox.Writer      = (*OutboxWriter)(nil)
@@ -58,18 +66,24 @@ func (w *OutboxWriter) Write(ctx context.Context, entry outbox.Entry) error {
 			"outbox entry ID must not be all-zeros UUID (idempotency collision risk)")
 	}
 
+	// Inject observability BEFORE Validate so any failure path (Validate or
+	// downstream marshal) carries the originating request's trace/request/
+	// correlation identity in slog/span attributes — without this ordering,
+	// validate-rejected writes appear in error metrics with empty trace IDs
+	// and break post-mortem correlation.
+	entry.InjectObservabilityFromContext(ctx)
+
 	if err := entry.Validate(); err != nil {
 		return err
 	}
 
-	// Inject observability from context right before persistence so the entry
-	// carries the originating request's trace/request/correlation identity
-	// across the async boundary.
-	entry.InjectObservabilityFromContext(ctx)
-
 	metadata, err := json.Marshal(entry.Metadata)
 	if err != nil {
 		return errcode.Wrap(errcode.KindInternal, ErrAdapterPGMarshal, "outbox: failed to marshal metadata", err)
+	}
+	if len(metadata) > MaxMetadataBytes {
+		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			fmt.Sprintf("outbox: metadata exceeds %d bytes (got %d)", MaxMetadataBytes, len(metadata)))
 	}
 
 	observabilityJSON, err := marshalObservability(entry.Observability)
@@ -177,6 +191,10 @@ func (w *OutboxWriter) writeBatchChunk(ctx context.Context, tx pgx.Tx, entries [
 		if err != nil {
 			return errcode.Wrap(errcode.KindInternal, ErrAdapterPGMarshal,
 				fmt.Sprintf("outbox entry[%d]: failed to marshal metadata", globalOffset+i), err)
+		}
+		if len(metadata) > MaxMetadataBytes {
+			return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+				fmt.Sprintf("outbox entry[%d]: metadata exceeds %d bytes (got %d)", globalOffset+i, MaxMetadataBytes, len(metadata)))
 		}
 
 		observabilityJSON, err := marshalObservability(e.Observability)

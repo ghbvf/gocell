@@ -517,7 +517,7 @@ func (r *Relay) writeBackResults(ctx context.Context, results []publishResult) (
 	var stats pollStats
 	for i, res := range results {
 		if res.err == nil {
-			updated, err := r.store.MarkPublished(ctx, res.entry.ID)
+			updated, err := r.store.MarkPublished(ctx, res.entry.ID, res.entry.LeaseID)
 			if err != nil {
 				remaining := len(results) - i
 				slog.Error("outbox relay: writeBack failed mid-batch, remaining entries stay in claiming",
@@ -527,7 +527,9 @@ func (r *Relay) writeBackResults(ctx context.Context, results []publishResult) (
 				return stats, err
 			}
 			if !updated {
-				// Entry was reclaimed by ReclaimStale — skip (at-least-once OK).
+				// Lease lost — entry was reclaimed (or its row vanished). At-least-
+				// once delivery means the broker may already have the message;
+				// silently skip and let the new lease owner re-issue if needed.
 				stats.skipped++
 			} else {
 				stats.published++
@@ -548,14 +550,28 @@ func (r *Relay) writeBackResults(ctx context.Context, results []publishResult) (
 
 // handleFailedEntry handles a single failed publish result, updating stats.
 // Extracted to keep writeBackResults below cognitive-complexity ceiling.
+//
+// Mark{Dead,Retry} return updated=false when the lease was lost (ReclaimStale
+// already moved the row, or another worker re-claimed). In that case we MUST
+// NOT count the failure into stats — the new lease owner will observe the
+// canonical outcome — and we emit a Warn so operators can correlate stats
+// drift with real reclaim activity. ref: graphile/worker complete_job pattern.
 func (r *Relay) handleFailedEntry(ctx context.Context, res publishResult, stats *pollStats) error {
 	newAttempts := res.entry.Attempts + 1
 	errMsg := SanitizeError(res.err.Error(), 1000)
 
 	if newAttempts >= r.cfg.MaxAttempts {
-		_, err := r.store.MarkDead(ctx, res.entry.ID, newAttempts, errMsg)
+		updated, err := r.store.MarkDead(ctx, res.entry.ID, res.entry.LeaseID, newAttempts, errMsg)
 		if err != nil {
 			return err
+		}
+		if !updated {
+			slog.Warn("outbox relay: stale lease lost fail-write",
+				slog.String("entry_id", res.entry.ID),
+				slog.String("lease_id", res.entry.LeaseID),
+				slog.String("outcome", "dead"),
+			)
+			return nil
 		}
 		stats.dead++
 		slog.Error("outbox relay: entry dead-lettered",
@@ -565,17 +581,26 @@ func (r *Relay) handleFailedEntry(ctx context.Context, res publishResult, stats 
 			slog.Int("attempts", newAttempts),
 			slog.String("last_error", errMsg),
 		)
-	} else {
-		// Retry: back to pending with exponential backoff + jitter,
-		// preventing thundering herd in multi-relay-instance deployments.
-		delay := r.retryDelay(newAttempts)
-		nextRetryAt := r.clk().Now().Add(delay)
-		_, err := r.store.MarkRetry(ctx, res.entry.ID, newAttempts, nextRetryAt, errMsg)
-		if err != nil {
-			return err
-		}
-		stats.retried++
+		return nil
 	}
+
+	// Retry: back to pending with exponential backoff + jitter,
+	// preventing thundering herd in multi-relay-instance deployments.
+	delay := r.retryDelay(newAttempts)
+	nextRetryAt := r.clk().Now().Add(delay)
+	updated, err := r.store.MarkRetry(ctx, res.entry.ID, res.entry.LeaseID, newAttempts, nextRetryAt, errMsg)
+	if err != nil {
+		return err
+	}
+	if !updated {
+		slog.Warn("outbox relay: stale lease lost fail-write",
+			slog.String("entry_id", res.entry.ID),
+			slog.String("lease_id", res.entry.LeaseID),
+			slog.String("outcome", "retry"),
+		)
+		return nil
+	}
+	stats.retried++
 	return nil
 }
 

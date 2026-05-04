@@ -37,7 +37,7 @@
 
 | # | 标题 | 文件:行 | 描述 | Cx | 来源 |
 |---|---|---|---|---|---|
-| **B2-A-01** | **POSTGRES-OUTBOX-CLAIM-FENCING-MISSING** | `adapters/postgres/outbox_store.go:81-206` | `markPublishedQuery` 仅对比 `status=claiming`，无 lease version / fencing token；旧 worker 的 in-flight publish 完成时可覆盖新 worker 的 claim 结果，破坏幂等保证。**修复**：claim 表加 `lease_id`/`claimed_at` + WHERE 条件 CAS，或迁 advisory lock。 | Cx3 | MD-01 |
+| ~~**B2-A-01**~~ | ~~POSTGRES-OUTBOX-CLAIM-FENCING-MISSING~~ | ✅ **closed fix/221-pg-outbox-fencing** — `lease_id UUID` 列 + 五个 CAS SQL 全部 `AND lease_id = $N`；ClaimedEntry.LeaseID 透传；archtest OUTBOX-LEASE-ID-CAS-01 静态守卫；ADR `docs/architecture/202605051600-adr-pg-outbox-fencing.md` | — | — |
 | **B2-C-01** | **AUDITCORE-HASHCHAIN-RESTART-RECOVERY-MISSING** | `cells/auditcore/internal/domain/hashchain.go:31` + `cells/auditcore/cell.go` | `NewHashChain` 启动从空链开始，`initSlices` 未从 repo 恢复尾节点；多实例或重启后尾哈希不连续，链完整性无法验证；合规审计致命。**修复**：cell 启动时从 repo `SELECT last hash` 注入；考虑 leader 单写或全局 advisory lock。 | Cx4 | MD-02 |
 | **B2-W-01** | **WEBSOCKET-UPGRADE-NO-AUTH-FAIL-OPEN** | `adapters/websocket/handler.go:51-65` | `UpgradeHandler` 升级后无 token / credential 校验，任意客户端可建立 WS 连接 → hub。**修复**：升级前必填 `auth.AuthMiddleware` 等价校验；构造期注入 Authenticator 接口；空 Authenticator fail-fast。 | Cx4 | MD-03 |
 | **B2-W-02** | **WEBSOCKET-BROADCAST-NO-ACL** | `runtime/websocket/hub.go:405-420` | `Broadcast` 无 filter 参数；所有连接均可收到广播；多租户场景下信息越界。**修复**：Broadcast 接受 `func(conn) bool` filter 或 topic-scoped Send；hub 维护 `principal -> conn[]` 映射。 | Cx4 | MD-04 |
@@ -102,15 +102,15 @@
 
 | # | 标题 | 严重度 | 文件:行 | 描述 | Cx |
 |---|---|---|---|---|---|
-| **B2-A-04** | PG-OBSERVABILITY-INJECT-AFTER-VALIDATE | P1 | `adapters/postgres/outbox_writer.go:54` | observability collector 注入在 `Validate` 之后；validate 阶段未持有 collector，错误路径 metric 漏记；语义不一致。**修复**：collector 设为构造期必填（error-first）；或在 Validate 内显式说明仅校验非 obs 字段。 | Cx1 |
-| **B2-A-05** | PG-RELAY-FAIL-WRITE-UNHANDLED-ROWS | P1 | `runtime/outbox/relay.go:534,551` | 失败回写后未检查 `RowsAffected==0`（updated=false）；retry/dead-letter 计数虚高。**修复**：分支 `updated bool`，false 时 log + emit `relay_publish_lost` metric，不再重复退避。 | Cx2 |
-| **B2-A-06** | PG-RECLAIM-STALE-NO-LIMIT-LONG-TX | P1 | `adapters/postgres/outbox_store.go:192,206` | `reclaimStaleQuery` 全量 UPDATE 无 LIMIT；积压时单事务行数大、长事务持有 lock；vacuum/replication 受影响。**修复**：加 `LIMIT $batchSize`（默认 1000）+ 循环直到无更多；或 chunked CTE。 | Cx3 |
-| **B2-A-07** | PG-OUTBOX-METADATA-NO-BYTE-LIMIT | P1 | `adapters/postgres/outbox_writer.go:61,163` | metadata 列写入无字节上限；恶意 / bug producer 可写 MB 级 JSON；relay 内存压力放大 + replication 延迟。**修复**：构造期 `MaxMetadataBytes`（默认 64KB）；超长 reject + permanent error。 | Cx2 |
+| ~~**B2-A-04**~~ | ~~PG-OBSERVABILITY-INJECT-AFTER-VALIDATE~~ | ✅ closed fix/221-pg-outbox-fencing — outbox_writer.go 把 InjectObservabilityFromContext 移到 Validate 之前；TestOutboxWriter_Write_ObservabilityInjectedBeforeValidate 锁回归 | — | — |
+| ~~**B2-A-05**~~ | ~~PG-RELAY-FAIL-WRITE-UNHANDLED-ROWS~~ | ✅ closed fix/221-pg-outbox-fencing — handleFailedEntry 观察 MarkRetry/MarkDead 的 updated bool；stale-lease 路径 slog.Warn + 不增 stats；archtest OUTBOX-MARK-RETURNS-BOOL-01 + 2 个 white-box 单测锁回归 | — | — |
+| ~~**B2-A-06**~~ | ~~PG-RECLAIM-STALE-NO-LIMIT-LONG-TX~~ | ✅ closed fix/221-pg-outbox-fencing — reclaimStaleQuery 加 LIMIT 1000（reclaimBatchSize 包级常量）；relay 调度循环自然消化残余；TestPGOutboxStore_ReclaimStale_RespectsBatchLimit 集成回归 | — | — |
+| ~~**B2-A-07**~~ | ~~PG-OUTBOX-METADATA-NO-BYTE-LIMIT~~ | ✅ closed fix/221-pg-outbox-fencing — outbox_writer.go MaxMetadataBytes=64<<10 包级常量；Write/writeBatchChunk marshal 后 size check；archtest OUTBOX-METADATA-MAX-BYTES-01 + TestOutboxWriter_Write_MetadataExceedsLimit 锁回归 | — | — |
 | **B2-A-08** | PG-REFRESH-STORE-AMBIENT-AND-STANDALONE-TX-MIXED | P1 | `adapters/postgres/refresh_store.go:141,190,227` | 同一接口混合 ambient tx（依赖 `RunInTx`）和独立提交路径；事务契约对调用方不可见；潜在双写风险。**修复**：拆两接口（`RotateInTx` / `RotateStandalone`），或文档化所有方法均要求 ambient tx，archtest 锁定。 | Cx3 |
 | **B2-A-09** | PG-REFRESH-REJECT-TIMING-SIDECHANNEL | P1 | `adapters/postgres/refresh_store.go:221,295,330` | 不同拒绝路径耗时 / 日志特征不一致；可被时序攻击区分"token 不存在"vs"token 已用过"。**修复**：所有拒绝路径走同一 fixed-time 比较 + 同一 slog 字段；增加 timing test。 | Cx3 |
 | **B2-A-10** | PG-READYZ-NO-SCHEMA-COMPATIBILITY | P1 | `adapters/postgres/pool_resource.go:69` | `Checkers()` 调用 `pool.Health`（Ping）；schema_guard 检测到 invalid index 时未并入 readyz；migration 不兼容时 readyz 仍 OK。**修复**：`Checkers()` 聚合 Ping + schema_guard 结果；schema 不一致返回 503。 | Cx3 |
 | **B2-A-11** | PG-CONSTRUCTOR-ERROR-MODEL-MIXED | P1 | `adapters/postgres/refresh_store.go:114` 等 | postgres 包对外暴露混杂 error / panic / nil deref / `MustNew` / 多 DB handle 并存；调用方判断成本高。**修复**：审计 New*/MustNew*；New* 全 error-first；MustNew 仅作 cmd 顶层 wrapper；archtest 锁定。 | Cx3 |
-| **B2-A-12** | PG-SCHEMA-GUARD-QUALIFIED-NAME-DRIFT | P2 | `adapters/postgres/schema_guard.go:105,125,141` | `DetectInvalidIndexes` 注释承诺返回 qualified name（schema.table.idx），SQL 实际只返回裸 relname；多 schema 部署时同名误判。**修复**：SQL JOIN `pg_namespace` 拼 qualified name；或注释改"unqualified, single-schema only"。 | Cx1 |
+| ~~**B2-A-12**~~ | ~~PG-SCHEMA-GUARD-QUALIFIED-NAME-DRIFT~~ | ✅ closed fix/221-pg-outbox-fencing — schema_guard SQL JOIN pg_namespace 双侧（index + table），SELECT 拼 `n.nspname \|\| '.' \|\| c.relname`；TestDetectInvalidIndexes_WithInjectedInvalid 集成断言 `public.idx_outbox_pending_v2` 形态 | — | — |
 | **B2-A-13** | PG-POOL-TX-ROLLBACK-LOG-LEAKS-DRIVER-ERROR | P2 | `adapters/postgres/pool.go:87,113` | 基础设施日志透出原始 driver error；脱敏边界与 errcode 公共消息不一致；可能泄露 query / param 片段。**修复**：rollback 日志只记 wrapped errcode + slog `internal_error` attribute；driver error 仅放 debug 级。 | Cx2 |
 
 ### 5.2 RabbitMQ

@@ -6,6 +6,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+
 	kout "github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/runtime/outbox"
@@ -84,6 +86,8 @@ func RunStoreConformanceSuite(t *testing.T, factory StoreFactory) {
 	t.Run("ClaimPending_ConcurrentNoDuplicate", func(t *testing.T) { conformClaimPendingConcurrent(t, factory) })
 	t.Run("MarkPublished_TransitionsClaimingToPublished", func(t *testing.T) { conformMarkPublished(t, factory) })
 	t.Run("MarkPublished_AlreadyReclaimed_UpdatedFalse", func(t *testing.T) { conformMarkPublishedReclaimed(t, factory) })
+	t.Run("MarkPublished_StaleLease_UpdatedFalse", func(t *testing.T) { conformMarkPublishedStaleLease(t, factory) })
+	t.Run("Fencing_OldWorkerCannotOverwriteNewClaim", func(t *testing.T) { conformFencingRace(t, factory) })
 	t.Run("MarkRetry_TransitionsClaimingToPending", func(t *testing.T) { conformMarkRetry(t, factory) })
 	t.Run("MarkRetry_SetsAttemptsAndNextRetryAt", func(t *testing.T) { conformMarkRetryFields(t) })
 	t.Run("MarkRetry_NonExistentEntry_ReturnsFalseNoError", func(t *testing.T) { conformMarkRetryNotExist(t, factory) })
@@ -212,7 +216,7 @@ func conformMarkPublished(t *testing.T, factory StoreFactory) {
 	if err != nil || len(claimed) != 1 {
 		t.Fatalf(msgClaimPendingWithLen, err, len(claimed))
 	}
-	updated, err := store.MarkPublished(ctx, "e1")
+	updated, err := store.MarkPublished(ctx, "e1", claimed[0].LeaseID)
 	if err != nil {
 		t.Fatalf("MarkPublished: %v", err)
 	}
@@ -225,16 +229,113 @@ func conformMarkPublished(t *testing.T, factory StoreFactory) {
 	}
 }
 
+// conformMarkPublishedStaleLease verifies the fencing token contract: a
+// MarkPublished call carrying the wrong leaseID must return updated=false
+// even when the row is still in claiming state. Without lease fencing the
+// status='claiming' check alone would let a stale worker overwrite a fresh
+// claim (B2-A-01).
+func conformMarkPublishedStaleLease(t *testing.T, factory StoreFactory) {
+	t.Helper()
+	ctx := t.Context()
+	store := factory(t, []outbox.ClaimedEntry{newEntry("e1", 0)})
+
+	claimed, err := store.ClaimPending(ctx, 10)
+	if err != nil || len(claimed) != 1 {
+		t.Fatalf(msgClaimPendingWithLen, err, len(claimed))
+	}
+
+	// Fresh UUID — guaranteed not to match the lease ClaimPending issued.
+	updated, err := store.MarkPublished(ctx, "e1", uuid.NewString())
+	if err != nil {
+		t.Fatalf("MarkPublished: %v", err)
+	}
+	if updated {
+		t.Error("expected updated=false when leaseID does not match (fencing CAS must miss)")
+	}
+
+	// Real lease must still succeed — proves the row was untouched by the
+	// stale-lease attempt.
+	updatedReal, err := store.MarkPublished(ctx, "e1", claimed[0].LeaseID)
+	if err != nil {
+		t.Fatalf("MarkPublished (real lease): %v", err)
+	}
+	if !updatedReal {
+		t.Error("expected updated=true when leaseID matches")
+	}
+}
+
+// conformFencingRace simulates the production race: worker A claims, the
+// reclaim sweep recovers the row (lease lost), worker B re-claims with a
+// fresh lease, then worker A's publisher finally completes and tries to
+// MarkPublished. With fencing, A's CAS must miss; without it, A would
+// overwrite B's authoritative status (B2-A-01).
+func conformFencingRace(t *testing.T, factory StoreFactory) {
+	t.Helper()
+	ctx := t.Context()
+	store := factory(t, []outbox.ClaimedEntry{newEntry("e-race", 0)})
+
+	// Worker A claims.
+	a, err := store.ClaimPending(ctx, 10)
+	if err != nil || len(a) != 1 {
+		t.Fatalf(msgClaimPendingWithLen, err, len(a))
+	}
+	leaseA := a[0].LeaseID
+
+	// Reclaim sweep: TTL = -1h so the just-set claim is "expired" and the
+	// row goes back to pending with lease cleared. Zero baseDelay so the
+	// recovered row is immediately claimable.
+	count, err := store.ReclaimStale(ctx, -time.Hour, 99, 0, 0)
+	if err != nil {
+		t.Fatalf(msgReclaimStale, err)
+	}
+	if count != 1 {
+		t.Fatalf("ReclaimStale: expected 1, got %d", count)
+	}
+
+	// Worker B claims the recovered row with a fresh lease.
+	b, err := store.ClaimPending(ctx, 10)
+	if err != nil || len(b) != 1 {
+		t.Fatalf(msgClaimPendingWithLen, err, len(b))
+	}
+	leaseB := b[0].LeaseID
+	if leaseB == leaseA {
+		t.Fatalf("expected B lease distinct from A lease (got %q)", leaseA)
+	}
+
+	// Worker A's stale publisher completes and tries to MarkPublished.
+	// MUST fail the CAS — leaseA no longer owns the row.
+	updatedA, err := store.MarkPublished(ctx, "e-race", leaseA)
+	if err != nil {
+		t.Fatalf("MarkPublished (stale): %v", err)
+	}
+	if updatedA {
+		t.Fatal("FENCING VIOLATION: stale lease A overwrote new lease B's row")
+	}
+
+	// Worker B's lease still owns the row → MarkPublished succeeds.
+	updatedB, err := store.MarkPublished(ctx, "e-race", leaseB)
+	if err != nil {
+		t.Fatalf("MarkPublished (current): %v", err)
+	}
+	if !updatedB {
+		t.Error("expected updated=true for current lease")
+	}
+}
+
 func conformMarkPublishedReclaimed(t *testing.T, factory StoreFactory) {
 	t.Helper()
 	ctx := t.Context()
 	seed := []outbox.ClaimedEntry{newEntry("e1", 0)}
 	store := factory(t, seed)
 
-	_, _ = store.ClaimPending(ctx, 10)
-	_, _ = store.MarkRetry(ctx, "e1", 1, time.Now().Add(time.Minute), "transient error")
+	claimed, _ := store.ClaimPending(ctx, 10)
+	if len(claimed) != 1 {
+		t.Fatalf("expected 1 claimed, got %d", len(claimed))
+	}
+	leaseID := claimed[0].LeaseID
+	_, _ = store.MarkRetry(ctx, "e1", leaseID, 1, time.Now().Add(time.Minute), "transient error")
 
-	updated, err := store.MarkPublished(ctx, "e1")
+	updated, err := store.MarkPublished(ctx, "e1", leaseID)
 	if err != nil {
 		t.Fatalf("MarkPublished: %v", err)
 	}
@@ -249,10 +350,13 @@ func conformMarkRetry(t *testing.T, factory StoreFactory) {
 	seed := []outbox.ClaimedEntry{newEntry("e1", 0)}
 	store := factory(t, seed)
 
-	_, _ = store.ClaimPending(ctx, 10)
+	claimed, _ := store.ClaimPending(ctx, 10)
+	if len(claimed) != 1 {
+		t.Fatalf("expected 1 claimed, got %d", len(claimed))
+	}
 
 	nextRetry := time.Now().Add(conformMarkRetryDelay)
-	updated, err := store.MarkRetry(ctx, "e1", 1, nextRetry, "transient")
+	updated, err := store.MarkRetry(ctx, "e1", claimed[0].LeaseID, 1, nextRetry, "transient")
 	if err != nil {
 		t.Fatalf("MarkRetry: %v", err)
 	}
@@ -277,10 +381,13 @@ func conformMarkRetryFields(t *testing.T) {
 	fs := NewFakeStore()
 	fs.Seed(seed...)
 
-	_, _ = fs.ClaimPending(ctx, 10)
+	claimed, _ := fs.ClaimPending(ctx, 10)
+	if len(claimed) != 1 {
+		t.Fatalf("expected 1 claimed, got %d", len(claimed))
+	}
 
 	nextRetry := time.Now().Add(conformMarkRetryFieldsDelay)
-	_, _ = fs.MarkRetry(ctx, "e1", 2, nextRetry, errSome)
+	_, _ = fs.MarkRetry(ctx, "e1", claimed[0].LeaseID, 2, nextRetry, errSome)
 
 	snap := fs.Snapshot()
 	if len(snap) != 1 {
@@ -308,7 +415,8 @@ func conformMarkRetryNotExist(t *testing.T, factory StoreFactory) {
 	ctx := t.Context()
 	store := factory(t, nil)
 
-	updated, err := store.MarkRetry(ctx, "does-not-exist", 1, time.Now().Add(time.Second), "transient")
+	// Lease value irrelevant — row does not exist; CAS necessarily fails.
+	updated, err := store.MarkRetry(ctx, "does-not-exist", uuid.NewString(), 1, time.Now().Add(time.Second), "transient")
 	if err != nil {
 		t.Fatalf("MarkRetry on missing entry should not error, got: %v", err)
 	}
@@ -323,9 +431,12 @@ func conformMarkDead(t *testing.T, factory StoreFactory) {
 	seed := []outbox.ClaimedEntry{newEntry("e1", 4)}
 	store := factory(t, seed)
 
-	_, _ = store.ClaimPending(ctx, 10)
+	claimed, _ := store.ClaimPending(ctx, 10)
+	if len(claimed) != 1 {
+		t.Fatalf("expected 1 claimed, got %d", len(claimed))
+	}
 
-	updated, err := store.MarkDead(ctx, "e1", 5, "permanent failure")
+	updated, err := store.MarkDead(ctx, "e1", claimed[0].LeaseID, 5, "permanent failure")
 	if err != nil {
 		t.Fatalf("MarkDead: %v", err)
 	}
@@ -345,7 +456,7 @@ func conformMarkDeadNotExist(t *testing.T, factory StoreFactory) {
 	ctx := t.Context()
 	store := factory(t, nil)
 
-	updated, err := store.MarkDead(ctx, "does-not-exist", 5, "permanent")
+	updated, err := store.MarkDead(ctx, "does-not-exist", uuid.NewString(), 5, "permanent")
 	if err != nil {
 		t.Fatalf("MarkDead on missing entry should not error, got: %v", err)
 	}
@@ -476,8 +587,11 @@ func conformCleanupPublished(t *testing.T, factory StoreFactory) {
 	ctx := t.Context()
 	store := factory(t, []outbox.ClaimedEntry{newEntry("e1", 0)})
 
-	_, _ = store.ClaimPending(ctx, 10)
-	_, _ = store.MarkPublished(ctx, "e1")
+	claimed, _ := store.ClaimPending(ctx, 10)
+	if len(claimed) != 1 {
+		t.Fatalf("expected 1 claimed, got %d", len(claimed))
+	}
+	_, _ = store.MarkPublished(ctx, "e1", claimed[0].LeaseID)
 
 	// cutoff 1 hour in the future covers the just-set published_at.
 	cutoff := time.Now().Add(time.Hour)
@@ -509,8 +623,11 @@ func conformCleanupPublishedBatch(t *testing.T, factory StoreFactory) {
 	store := factory(t, seed)
 
 	for _, ce := range seed {
-		_, _ = store.ClaimPending(ctx, 1)
-		_, _ = store.MarkPublished(ctx, ce.ID)
+		claimed, _ := store.ClaimPending(ctx, 1)
+		if len(claimed) != 1 {
+			t.Fatalf("ClaimPending(1): expected 1 entry, got %d", len(claimed))
+		}
+		_, _ = store.MarkPublished(ctx, ce.ID, claimed[0].LeaseID)
 	}
 
 	cutoff := time.Now().Add(time.Hour)
@@ -530,8 +647,11 @@ func conformCleanupDead(t *testing.T, factory StoreFactory) {
 	ctx := t.Context()
 	store := factory(t, []outbox.ClaimedEntry{newEntry("e1", 4)})
 
-	_, _ = store.ClaimPending(ctx, 10)
-	_, _ = store.MarkDead(ctx, "e1", 5, "perm error")
+	claimed, _ := store.ClaimPending(ctx, 10)
+	if len(claimed) != 1 {
+		t.Fatalf("expected 1 claimed, got %d", len(claimed))
+	}
+	_, _ = store.MarkDead(ctx, "e1", claimed[0].LeaseID, 5, "perm error")
 
 	cutoff := time.Now().Add(time.Hour)
 	deleted, err := store.CleanupDead(ctx, cutoff, 100)
@@ -581,11 +701,19 @@ func conformOldestEligibleAtPublished(t *testing.T, factory StoreFactory) {
 	}
 	store := factory(t, seed)
 
-	for _, ce := range seed {
-		if _, err := store.ClaimPending(ctx, 10); err != nil {
-			t.Fatalf("ClaimPending: %v", err)
-		}
-		if _, err := store.MarkPublished(ctx, ce.ID); err != nil {
+	// All eligible rows are claimed in a single batch (PG ClaimPending uses
+	// MATERIALIZED with ORDER BY); per-iteration ClaimPending would return
+	// empty after the first call. Claim once, then publish each entry with
+	// the lease the batch carried.
+	claimed, err := store.ClaimPending(ctx, 10)
+	if err != nil {
+		t.Fatalf("ClaimPending: %v", err)
+	}
+	if len(claimed) != len(seed) {
+		t.Fatalf("ClaimPending: expected %d, got %d", len(seed), len(claimed))
+	}
+	for _, ce := range claimed {
+		if _, err := store.MarkPublished(ctx, ce.ID, ce.LeaseID); err != nil {
 			t.Fatalf("MarkPublished(%s): %v", ce.ID, err)
 		}
 	}
@@ -612,10 +740,14 @@ func conformOldestEligibleAtDead(t *testing.T, factory StoreFactory) {
 	ctx := t.Context()
 	store := factory(t, []outbox.ClaimedEntry{newEntry("e1", 4)})
 
-	if _, err := store.ClaimPending(ctx, 10); err != nil {
+	claimed, err := store.ClaimPending(ctx, 10)
+	if err != nil {
 		t.Fatalf("ClaimPending: %v", err)
 	}
-	if _, err := store.MarkDead(ctx, "e1", 5, "perm"); err != nil {
+	if len(claimed) != 1 {
+		t.Fatalf("expected 1 claimed, got %d", len(claimed))
+	}
+	if _, err := store.MarkDead(ctx, "e1", claimed[0].LeaseID, 5, "perm"); err != nil {
 		t.Fatalf("MarkDead: %v", err)
 	}
 

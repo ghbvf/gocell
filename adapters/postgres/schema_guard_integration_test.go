@@ -55,19 +55,23 @@ func TestDetectInvalidIndexes_WithInjectedInvalid(t *testing.T) {
 		 WHERE indexrelid = 'idx_outbox_pending_v2'::regclass`)
 	require.NoError(t, execErr, "injecting invalid index must succeed (requires superuser)")
 
-	// DetectInvalidIndexes should now report it.
+	// DetectInvalidIndexes should now report it. Names are schema-qualified
+	// ("public.idx_foo") per the contract — multi-schema deployments rely on
+	// this to avoid same-name false positives across schemas (B2-A-12).
 	after, err := DetectInvalidIndexes(ctx, pool)
 	require.NoError(t, err)
 	assert.NotEmpty(t, after, "should detect the injected invalid index")
 	var found bool
 	for _, idx := range after {
-		if idx.Index == "idx_outbox_pending_v2" {
+		if idx.Index == "public.idx_outbox_pending_v2" {
 			found = true
-			assert.NotEmpty(t, idx.Table, "invalid index should include table name")
+			assert.Equal(t, "public.outbox_entries", idx.Table,
+				"invalid index Table must be schema-qualified")
 			break
 		}
 	}
-	assert.True(t, found, "invalid index list should contain the injected index")
+	assert.True(t, found,
+		"invalid index list should contain schema-qualified public.idx_outbox_pending_v2; got %v", after)
 
 	// Restore the index to valid state so container cleanup is clean.
 	_, _ = pool.DB().Exec(ctx,
