@@ -182,6 +182,14 @@
 | **B2-T-07** | INTERNAL-SERVICE-TOKEN-CALLER-IDENTITY-COLLAPSE | P1 | `runtime/auth/principal.go:108` + `runtime/auth/authenticator.go:160` | `BuiltinServiceRoles(ServiceNameInternal)` 返回固定 `[RoleInternalAdmin]`；所有 service token 调用方共享同一 principal；最小权限缺失。backlog `PR-CFG-I-DRAIN X1` 只解决 NonceStore fail-closed，未拆分 caller identity。**修复**：service token claims 加 `caller_cell` / `caller_service`，principal 注入对应 scope 角色；configread internal endpoint 校验 `caller_cell ∈ contract.clients`。 | Cx4 |
 | **B2-T-08** | CONFIG-PUBLISH-CONTRACT-FAILURE-CODES-INCOMPLETE | P2 | `contracts/http/config/publish/v1/contract.yaml` | publish 失败语义（404 / 409）未完整声明在 contract.responses；client SDK 不知道处理这些路径。**修复**：补 404 ERR_CONFIG_NOT_FOUND / 409 ERR_CONFIG_VERSION_MISMATCH 到 contract.yaml。 | Cx1 |
 
+### A5 Follow-ups (PR-V1-SVCTOKEN-CALLER-IDENTITY 衍生)
+
+| # | Item | 复杂度 | 触发条件 / 修复方案 |
+|---|------|--------|---------------------|
+| **B2-T-07-FU-1** | RBACASSIGN-CALLER-CELL-PRODUCTION-VERIFY | Cx2 | 当前 contract.yaml 与 spec literal 都声明 `clients: [accesscore]`，但生产代码无 accesscore→rbacassign 实际调用路径（"accesscore" 字面量目前仅为 Wave 1 spec 测试占位）。**触发条件**：v1.0 GA 前明确 rbacassign 真实生产调用方（候选：accesscore setup 流程初始化 admin role / 外部 admin tool）。**修复方案**：(a) 若 accesscore 确为真实 caller，加 caller-side configclient 风格的 RPC 路径 + 集成测试覆盖；(b) 若 accesscore 是占位，改 contract.yaml + spec literal 为真实 caller (e.g., 注册 actors.yaml `external-admin-tool`)；(c) 若无真实 caller，删 RouteGroup + 改 spec.Clients 走 awaitingRealCallerAllowlist 路径 |
+| **B2-T-07-FU-2** | BUILTIN-SERVICE-ROLES-REMOVED-FOLLOWUP | Cx3 | A5 PR 删除 `BuiltinServiceRoles`/`RoleInternalAdmin`/`ServiceNameInternal` 三常量，service principal `Roles=nil`、`Subject=""`。**触发条件**：未来若需要 service principal 基于 caller 派生不同 scope（如同一 caller 在不同 endpoint 走不同权限），方案候选：(a) 恢复 `BuiltinServiceRoles(callerCell)` 按 cell 派生 `role:internal:<callerCell>`；(b) 走 `auth.Route.Policy` 路径写自定义 Policy。当前 caller_cell + contract.clients 模型已足；不预先实现 |
+| **B2-T-07-FU-3** | K04-CELLGEN-CONTRACTSPEC-CLIENTS-FIELD | Cx2 | A5 PR 给 `wrapper.ContractSpec` 加 `Clients []string` 字段。K#04 cellgen framework (PR#360) 当前模板不生成此字段，未来用 `gocell generate cell` 创建的 internal endpoint cell 可能漏写 Clients 导致 `ContractSpec.Validate()` fail。**触发条件**：K#06 contractgen PR 启动时一并处理；或 K#04 模板下次更新时同步。**修复方案**：cellgen `tools/codegen/cellgen` 模板对 `routeMounts` 中 path 以 `/internal/v1/` 开头的 entry 自动生成 `Clients: []string{...}`（来源 cell.yaml 元数据扩展或注释 marker） |
+
 ---
 
 ## §9 工时与 PR 拆分建议
