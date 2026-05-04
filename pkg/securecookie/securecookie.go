@@ -27,9 +27,22 @@ import (
 // cookies and check expiry. It is intentionally local: pkg/ may not import
 // kernel/, so SecureCookie defines the minimal Now() interface that any
 // kernel/clock.Clock satisfies structurally. Callers in higher layers pass
-// their injected clock.Clock directly to [New].
+// their injected clock.Clock through [Config].
 type Clock interface {
 	Now() time.Time
+}
+
+// Config contains all required SecureCookie construction inputs.
+type Config struct {
+	// HashKey is the HMAC-SHA256 signing key. It must be at least 32 bytes.
+	HashKey []byte
+	// BlockKey optionally enables AES-GCM encryption. nil means signing only;
+	// non-nil values must be 16, 24, or 32 bytes.
+	BlockKey []byte
+	// Clock is required for timestamps and expiry checks.
+	Clock Clock
+	// MaxAge is required and must be greater than zero.
+	MaxAge int
 }
 
 // SecureCookie encodes and decodes cookie values with HMAC-SHA256 signing
@@ -37,7 +50,7 @@ type Clock interface {
 type SecureCookie struct {
 	hashKey []byte      // HMAC-SHA256 signing key (required, ≥32 bytes)
 	aead    cipher.AEAD // AES-GCM AEAD (nil if no encryption)
-	maxAge  int         // max cookie age in seconds (0 = no expiry check)
+	maxAge  int         // max cookie age in seconds (required, > 0)
 	clock   Clock       // clock used for encoding timestamps and expiry checks (always non-nil after New)
 }
 
@@ -49,50 +62,67 @@ const (
 )
 
 var (
-	ErrHashKeyTooShort  = errcode.New(errcode.ErrSecureCookieHashKeyTooShort, "securecookie: hashKey must be at least 32 bytes")
-	ErrInvalidBlockKey  = errcode.New(errcode.ErrSecureCookieInvalidBlockKey, "securecookie: blockKey must be 16, 24, or 32 bytes (or nil)")
-	ErrEncodingTooShort = errcode.New(errcode.ErrSecureCookieEncodingTooShort, "securecookie: encoded value too short")
-	ErrHMACInvalid      = errcode.New(errcode.ErrSecureCookieHMACInvalid, "securecookie: HMAC verification failed")
-	ErrExpired          = errcode.New(errcode.ErrSecureCookieExpired, "securecookie: cookie has expired")
-	ErrDecryptFailed    = errcode.New(errcode.ErrSecureCookieDecryptFailed, "securecookie: decryption failed")
-	ErrClockRequired    = errcode.New(errcode.ErrValidationFailed, "securecookie: clock is required (nil or typed-nil rejected)")
+	ErrHashKeyTooShort = errcode.New(errcode.KindInvalid, errcode.ErrSecureCookieHashKeyTooShort,
+		"securecookie: hashKey must be at least 32 bytes")
+	ErrInvalidBlockKey = errcode.New(errcode.KindInvalid, errcode.ErrSecureCookieInvalidBlockKey,
+		"securecookie: blockKey must be 16, 24, or 32 bytes (or nil)")
+	ErrEncodingTooShort = errcode.New(errcode.KindInvalid, errcode.ErrSecureCookieEncodingTooShort,
+		"securecookie: encoded value too short")
+	ErrHMACInvalid = errcode.New(errcode.KindInvalid, errcode.ErrSecureCookieHMACInvalid,
+		"securecookie: HMAC verification failed")
+	ErrExpired = errcode.New(errcode.KindInvalid, errcode.ErrSecureCookieExpired,
+		"securecookie: cookie has expired")
+	ErrDecryptFailed = errcode.New(errcode.KindInvalid, errcode.ErrSecureCookieDecryptFailed,
+		"securecookie: decryption failed")
+	ErrClockRequired = errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+		"securecookie: clock is required (nil or typed-nil rejected)")
+	ErrMaxAgeRequired = errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+		"securecookie: MaxAge must be greater than zero")
 )
 
-// New creates a SecureCookie with the given hash key, optional block key, and
-// required Clock. Returns ErrClockRequired if clk is nil or a typed-nil
-// (interface wrapping a nil pointer) — making this the single, error-style
-// fail-fast point for clock injection (no panic anywhere in the package).
+// New creates a SecureCookie from cfg. Returns ErrClockRequired if cfg.Clock is
+// nil or a typed-nil (interface wrapping a nil pointer) — making this the
+// single, error-style fail-fast point for clock injection (no panic anywhere in
+// the package).
 //
-// hashKey is required (min 32 bytes). blockKey may be nil (signing only)
-// or 16/24/32 bytes (AES-128/192/256-GCM). clk is required: pass the
-// caller's injected clock.Clock at the composition root, or a
-// clockmock.FakeClock in tests.
-func New(hashKey, blockKey []byte, clk Clock) (*SecureCookie, error) {
-	if len(hashKey) < minHashKey {
+// HashKey is required (min 32 bytes). BlockKey may be nil (signing only) or
+// 16/24/32 bytes (AES-128/192/256-GCM). Clock is required: pass the caller's
+// injected clock.Clock at the composition root, or a clockmock.FakeClock in
+// tests. MaxAge is required and must be greater than zero.
+func New(cfg Config) (*SecureCookie, error) {
+	if len(cfg.HashKey) < minHashKey {
 		return nil, ErrHashKeyTooShort
 	}
-	if err := validateClock(clk); err != nil {
+	if err := validateClock(cfg.Clock); err != nil {
+		return nil, err
+	}
+	if cfg.MaxAge <= 0 {
+		return nil, ErrMaxAgeRequired
+	}
+	if err := validateBlockKey(cfg.BlockKey); err != nil {
 		return nil, err
 	}
 
 	// Deep copy hashKey to prevent caller mutation.
-	hk := make([]byte, len(hashKey))
-	copy(hk, hashKey)
+	hk := make([]byte, len(cfg.HashKey))
+	copy(hk, cfg.HashKey)
 
 	sc := &SecureCookie{
 		hashKey: hk,
-		maxAge:  86400, // default 24h
-		clock:   clk,
+		maxAge:  cfg.MaxAge,
+		clock:   cfg.Clock,
 	}
 
-	if blockKey != nil {
-		block, err := aes.NewCipher(blockKey)
+	if cfg.BlockKey != nil {
+		block, err := aes.NewCipher(cfg.BlockKey)
 		if err != nil {
-			return nil, fmt.Errorf("%w: %v", ErrInvalidBlockKey, err)
+			return nil, errcode.Wrap(errcode.KindInternal, errcode.ErrSecureCookieInvalidBlockKey,
+				"securecookie: AES init failed", err)
 		}
 		aead, err := cipher.NewGCM(block)
 		if err != nil {
-			return nil, fmt.Errorf("securecookie: GCM init: %w", err)
+			return nil, errcode.Wrap(errcode.KindInternal, errcode.ErrSecureCookieInvalidBlockKey,
+				"securecookie: GCM init failed", err)
 		}
 		sc.aead = aead
 	}
@@ -116,16 +146,15 @@ func validateClock(clk Clock) error {
 	return nil
 }
 
-// WithMaxAge returns a copy of sc with the given max age in seconds.
-// 0 means no expiry check. Key material is deep-copied; the clock is shared.
-func (sc *SecureCookie) WithMaxAge(seconds int) *SecureCookie {
-	hk := make([]byte, len(sc.hashKey))
-	copy(hk, sc.hashKey)
-	return &SecureCookie{
-		hashKey: hk,
-		aead:    sc.aead, // cipher.AEAD is safe to share (immutable after init)
-		maxAge:  seconds,
-		clock:   sc.clock,
+func validateBlockKey(blockKey []byte) error {
+	if blockKey == nil {
+		return nil
+	}
+	switch len(blockKey) {
+	case 16, 24, 32:
+		return nil
+	default:
+		return ErrInvalidBlockKey
 	}
 }
 
@@ -173,7 +202,8 @@ func (sc *SecureCookie) Encode(name string, value []byte) (string, error) {
 func (sc *SecureCookie) Decode(name string, encoded string) ([]byte, error) {
 	raw, err := base64.RawURLEncoding.DecodeString(encoded)
 	if err != nil {
-		return nil, fmt.Errorf("securecookie: base64: %w", err)
+		return nil, errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"securecookie: invalid encoded value", err)
 	}
 
 	// Minimum length: timestamp + mac (no nonce, no payload for sign-only empty value)
@@ -206,15 +236,13 @@ func (sc *SecureCookie) Decode(name string, encoded string) ([]byte, error) {
 	}
 
 	// 2. Check freshness
-	if sc.maxAge > 0 {
-		raw := binary.BigEndian.Uint64(ts)
-		if raw > uint64(math.MaxInt64) {
-			return nil, ErrExpired
-		}
-		created := int64(raw)
-		if sc.clock.Now().Unix()-created >= int64(sc.maxAge) {
-			return nil, ErrExpired
-		}
+	rawTS := binary.BigEndian.Uint64(ts)
+	if rawTS > uint64(math.MaxInt64) {
+		return nil, ErrExpired
+	}
+	created := int64(rawTS)
+	if sc.clock.Now().Unix()-created >= int64(sc.maxAge) {
+		return nil, ErrExpired
 	}
 
 	// 3. Decrypt (if encrypted)

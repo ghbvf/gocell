@@ -33,4 +33,7 @@
 //	LAYER-09T: cells/A must not transitively import cells/B/events
 //	LAYER-10:  cells/<cell> root package exported APIs must not expose concrete
 //	           adapter/driver types
+//	PGQUERY-01: PostgreSQL SQL builder/keyset helpers must live in pkg/pgquery;
+//	            pkg/query remains limited to generic pagination, cursor,
+//	            runmode, and in-memory pagination helpers
 package archtest

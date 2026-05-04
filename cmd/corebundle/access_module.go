@@ -182,7 +182,7 @@ func resolveAdminProvisionMode(raw string, forceBootstrap bool) (adminProvisionM
 	case string(adminProvisionModeBootstrap):
 		return adminProvisionModeBootstrap, nil
 	default:
-		return "", errcode.NewInfra(errcode.ErrCellInvalidConfig,
+		return "", errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
 			fmt.Sprintf("%s must be one of: interactive, bootstrap; got %q", AdminProvisionModeEnv, raw))
 	}
 }

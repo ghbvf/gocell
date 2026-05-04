@@ -412,7 +412,7 @@ func TestService_IssueForUser_RefreshStoreUnavailableReturnsInfraAndNoOrphanSess
 	require.Equal(t, sessionRepo.created, sessionRepo.deleted)
 }
 
-// TestService_Login_BlankFieldsRejected verifies that RequireNotBlank is
+// TestService_Login_BlankFieldsRejected verifies that RequireNotEmpty is
 // wired correctly: blank username and blank password each return
 // ErrAuthLoginInvalidInput with an "is required" message.
 func TestService_Login_BlankFieldsRejected(t *testing.T) {
@@ -661,5 +661,6 @@ type notFoundOnDeleteSessionRepo struct {
 }
 
 func (r *notFoundOnDeleteSessionRepo) Delete(_ context.Context, _ string) error {
-	return errcode.NewDomain(errcode.ErrSessionNotFound, "session not found")
+	return errcode.New(errcode.KindNotFound, errcode.ErrSessionNotFound, "session not found",
+		errcode.WithCategory(errcode.CategoryDomain))
 }

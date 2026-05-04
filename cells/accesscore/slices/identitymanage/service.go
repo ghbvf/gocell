@@ -52,7 +52,8 @@ const (
 func actorFromContext(ctx context.Context) (string, error) {
 	p, ok := auth.FromContext(ctx)
 	if !ok || p.Subject == "" {
-		return "", errcode.New(errcode.ErrAuthUnauthorized, "identity-manage: actor required — admin auth must be present")
+		return "", errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthUnauthorized,
+			"identity-manage: actor required — admin auth must be present")
 	}
 	return p.Subject, nil
 }
@@ -118,13 +119,13 @@ func NewService(
 	opts ...Option,
 ) (*Service, error) {
 	if repo == nil {
-		return nil, errcode.New(errcode.ErrCellInvalidConfig, "identity-manage: user repository is required")
+		return nil, errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig, "identity-manage: user repository is required")
 	}
 	if sessionRepo == nil {
-		return nil, errcode.New(errcode.ErrCellInvalidConfig, "identity-manage: session repository is required")
+		return nil, errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig, "identity-manage: session repository is required")
 	}
 	if refreshStore == nil {
-		return nil, errcode.New(errcode.ErrCellInvalidConfig, "identity-manage: refresh store is required")
+		return nil, errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig, "identity-manage: refresh store is required")
 	}
 	if logger == nil {
 		logger = slog.Default()
@@ -140,10 +141,10 @@ func NewService(
 		o(s)
 	}
 	if s.txRunner == nil {
-		return nil, errcode.New(errcode.ErrValidationFailed, "identitymanage: TxRunner required; use WithTxManager")
+		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "identitymanage: TxRunner required; use WithTxManager")
 	}
 	if s.tokenIssuer == nil {
-		return nil, errcode.New(errcode.ErrCellMissingTokenIssuer,
+		return nil, errcode.New(errcode.KindInternal, errcode.ErrCellMissingTokenIssuer,
 			"identity-manage: tokenIssuer is required; wire via WithTokenIssuer")
 	}
 	clock.MustHaveClock(s.clock, "identitymanage.NewService: clock required — use WithClock(c.clk)")
@@ -165,7 +166,7 @@ type CreateInput struct {
 // both code paths reject the same blank input with the same field message,
 // avoiding domain-layer error-class drift (audit S-4).
 func (s *Service) Create(ctx context.Context, input CreateInput) (*domain.User, error) {
-	if err := validation.RequireNotBlank(errcode.ErrAuthIdentityInvalidInput,
+	if err := validation.RequireNotEmpty(errcode.ErrAuthIdentityInvalidInput,
 		validation.F("username", input.Username),
 		validation.F("email", input.Email),
 		validation.F("password", input.Password),
@@ -245,7 +246,7 @@ type UpdateInput struct {
 // check and rejecting invalid values upfront avoids opening a tx that will
 // only roll back.
 func (s *Service) Update(ctx context.Context, input UpdateInput) (*domain.User, error) {
-	if err := validation.RequireNotBlank(errcode.ErrAuthIdentityInvalidInput,
+	if err := validation.RequireNotEmpty(errcode.ErrAuthIdentityInvalidInput,
 		validation.F("id", input.ID),
 	); err != nil {
 		return nil, err
@@ -253,7 +254,7 @@ func (s *Service) Update(ctx context.Context, input UpdateInput) (*domain.User, 
 	if input.Status != nil &&
 		*input.Status != string(domain.StatusActive) &&
 		*input.Status != string(domain.StatusSuspended) {
-		return nil, errcode.New(errcode.ErrAuthIdentityInvalidInput, "status must be 'active' or 'suspended'")
+		return nil, errcode.New(errcode.KindInvalid, errcode.ErrAuthIdentityInvalidInput, "status must be 'active' or 'suspended'")
 	}
 
 	actor, err := actorFromContext(ctx)
@@ -312,7 +313,7 @@ func applyUpdateFields(u *domain.User, input UpdateInput, now time.Time) {
 // refresh-token chains owned by the user are revoked atomically so any
 // in-flight access/refresh tokens cannot survive the delete.
 func (s *Service) Delete(ctx context.Context, id string) error {
-	if err := validation.RequireNotBlank(errcode.ErrAuthIdentityInvalidInput,
+	if err := validation.RequireNotEmpty(errcode.ErrAuthIdentityInvalidInput,
 		validation.F("id", id),
 	); err != nil {
 		return err
@@ -357,7 +358,7 @@ func (s *Service) Delete(ctx context.Context, id string) error {
 // the 5-step closure would otherwise blow past (mirrors the
 // updatePasswordAndRevokeSessions split used by ChangePassword).
 func (s *Service) Lock(ctx context.Context, id string) error {
-	if err := validation.RequireNotBlank(errcode.ErrAuthIdentityInvalidInput,
+	if err := validation.RequireNotEmpty(errcode.ErrAuthIdentityInvalidInput,
 		validation.F("id", id),
 	); err != nil {
 		return err
@@ -407,7 +408,7 @@ func (s *Service) lockUserAndRevokeSessions(ctx context.Context, id, actor strin
 // RunInTx closure so a concurrent mutation between the read and the write
 // cannot be silently lost (audit S-3, mirrors Lock).
 func (s *Service) Unlock(ctx context.Context, id string) error {
-	if err := validation.RequireNotBlank(errcode.ErrAuthIdentityInvalidInput,
+	if err := validation.RequireNotEmpty(errcode.ErrAuthIdentityInvalidInput,
 		validation.F("id", id),
 	); err != nil {
 		return err
@@ -472,7 +473,7 @@ type ChangePasswordInput struct {
 // because signing failed), and consistent with the principle that credential
 // rotation should not be undone by a transient signing-key unavailability.
 func (s *Service) ChangePassword(ctx context.Context, input ChangePasswordInput) (dto.TokenPair, error) {
-	if err := validation.RequireNotBlank(errcode.ErrAuthIdentityInvalidInput,
+	if err := validation.RequireNotEmpty(errcode.ErrAuthIdentityInvalidInput,
 		validation.F("id", input.UserID),
 		validation.F("oldPassword", input.OldPassword),
 		validation.F("newPassword", input.NewPassword),
@@ -484,7 +485,7 @@ func (s *Service) ChangePassword(ctx context.Context, input ChangePasswordInput)
 	// An authenticated user submitting new==old is a client error regardless of
 	// whether the old password is correct; no bcrypt cost is warranted.
 	if input.NewPassword == input.OldPassword {
-		return dto.TokenPair{}, errcode.New(errcode.ErrAuthLoginInvalidInput, "new password must differ from old password")
+		return dto.TokenPair{}, errcode.New(errcode.KindInvalid, errcode.ErrAuthLoginInvalidInput, "new password must differ from old password")
 	}
 
 	user, err := s.repo.GetByID(ctx, input.UserID)
@@ -494,7 +495,7 @@ func (s *Service) ChangePassword(ctx context.Context, input ChangePasswordInput)
 
 	// Step 3: Verify old password (expensive).
 	if err := bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(input.OldPassword)); err != nil {
-		return dto.TokenPair{}, errcode.New(errcode.ErrAuthLoginFailed, "old password incorrect")
+		return dto.TokenPair{}, errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthLoginFailed, "old password incorrect")
 	}
 
 	newHash, err := bcrypt.GenerateFromPassword([]byte(input.NewPassword), domain.BcryptCost)

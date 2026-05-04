@@ -133,13 +133,15 @@ type Histogram interface {
 // MustValidateLabels when the supplied Labels do not exactly cover the
 // registered LabelNames. Callers can errors.Is against this sentinel when
 // converting label-validation errors into structured diagnostics.
-var ErrLabelMismatch = errcode.New(errcode.ErrMetricsLabelMismatch, "metrics: label keys do not match registered LabelNames")
+var ErrLabelMismatch = errcode.New(errcode.KindInvalid, errcode.ErrMetricsLabelMismatch,
+	"metrics: label keys do not match registered LabelNames")
 
 // ErrLabelValueIllegal is returned when a label value contains a separator
 // reserved by the OTel-provider cache key (`|` or `=`). A collision here
 // causes silently-misattributed data points — we prefer a panic at
 // registration time over a wrong-but-present time-series in production.
-var ErrLabelValueIllegal = errcode.New(errcode.ErrMetricsLabelValueIllegal, "metrics: label value contains reserved separator")
+var ErrLabelValueIllegal = errcode.New(errcode.KindInvalid, errcode.ErrMetricsLabelValueIllegal,
+	"metrics: label value contains reserved separator")
 
 // labelSeparators are characters reserved for the label cache key
 // encoding used by the OTel adapter (adapters/otel/metric_provider.go).

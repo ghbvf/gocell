@@ -182,8 +182,8 @@ func (h *Handler) handleCreate(w http.ResponseWriter, r *http.Request) {
 		Password             string `json:"password"`
 		RequirePasswordReset bool   `json:"requirePasswordReset"`
 	}
-	if err := httputil.DecodeJSONStrict(r, &req); err != nil {
-		httputil.WriteDecodeError(r.Context(), w, err)
+	if err := httputil.DecodeJSONStrict(r, &req, httputil.DefaultDecodeJSONLimit); err != nil {
+		httputil.WriteError(r.Context(), w, err)
 		return
 	}
 
@@ -194,7 +194,7 @@ func (h *Handler) handleCreate(w http.ResponseWriter, r *http.Request) {
 		RequirePasswordReset: req.RequirePasswordReset,
 	})
 	if err != nil {
-		httputil.WriteDomainError(r.Context(), w, err)
+		httputil.WriteError(r.Context(), w, err)
 		return
 	}
 
@@ -208,7 +208,7 @@ func (h *Handler) handleGet(w http.ResponseWriter, r *http.Request) {
 	}
 	user, err := h.svc.GetByID(r.Context(), id)
 	if err != nil {
-		httputil.WriteDomainError(r.Context(), w, err)
+		httputil.WriteError(r.Context(), w, err)
 		return
 	}
 	httputil.WriteJSON(w, http.StatusOK, map[string]any{"data": toUserResponse(user)})
@@ -222,8 +222,8 @@ func (h *Handler) handleUpdate(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Email string `json:"email"`
 	}
-	if err := httputil.DecodeJSONStrict(r, &req); err != nil {
-		httputil.WriteDecodeError(r.Context(), w, err)
+	if err := httputil.DecodeJSONStrict(r, &req, httputil.DefaultDecodeJSONLimit); err != nil {
+		httputil.WriteError(r.Context(), w, err)
 		return
 	}
 
@@ -233,7 +233,7 @@ func (h *Handler) handleUpdate(w http.ResponseWriter, r *http.Request) {
 	}
 	user, err := h.svc.Update(r.Context(), input)
 	if err != nil {
-		httputil.WriteDomainError(r.Context(), w, err)
+		httputil.WriteError(r.Context(), w, err)
 		return
 	}
 	httputil.WriteJSON(w, http.StatusOK, map[string]any{"data": toUserResponse(user)})
@@ -250,16 +250,16 @@ func (h *Handler) handlePatch(w http.ResponseWriter, r *http.Request) {
 		Status               json.RawMessage `json:"status"`
 		RequirePasswordReset json.RawMessage `json:"requirePasswordReset"`
 	}
-	if err := httputil.DecodeJSONStrict(r, &req); err != nil {
-		httputil.WriteDecodeError(r.Context(), w, err)
+	if err := httputil.DecodeJSONStrict(r, &req, httputil.DefaultDecodeJSONLimit); err != nil {
+		httputil.WriteError(r.Context(), w, err)
 		return
 	}
 
 	input := UpdateInput{ID: id}
 	name, hasName, err := decodePatchString(req.Name, "name")
 	if err != nil {
-		httputil.WriteError(r.Context(), w, http.StatusBadRequest,
-			string(errcode.ErrValidationFailed), err.Error())
+		httputil.WriteError(r.Context(), w,
+			errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, err.Error()))
 		return
 	}
 	if hasName {
@@ -267,8 +267,8 @@ func (h *Handler) handlePatch(w http.ResponseWriter, r *http.Request) {
 	}
 	email, hasEmail, err := decodePatchString(req.Email, "email")
 	if err != nil {
-		httputil.WriteError(r.Context(), w, http.StatusBadRequest,
-			string(errcode.ErrValidationFailed), err.Error())
+		httputil.WriteError(r.Context(), w,
+			errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, err.Error()))
 		return
 	}
 	if hasEmail {
@@ -276,8 +276,8 @@ func (h *Handler) handlePatch(w http.ResponseWriter, r *http.Request) {
 	}
 	status, hasStatus, err := decodePatchString(req.Status, "status")
 	if err != nil {
-		httputil.WriteError(r.Context(), w, http.StatusBadRequest,
-			string(errcode.ErrValidationFailed), err.Error())
+		httputil.WriteError(r.Context(), w,
+			errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, err.Error()))
 		return
 	}
 	if hasStatus {
@@ -285,8 +285,8 @@ func (h *Handler) handlePatch(w http.ResponseWriter, r *http.Request) {
 	}
 	requirePasswordReset, hasRequirePasswordReset, err := decodePatchBool(req.RequirePasswordReset, "requirePasswordReset")
 	if err != nil {
-		httputil.WriteError(r.Context(), w, http.StatusBadRequest,
-			string(errcode.ErrValidationFailed), err.Error())
+		httputil.WriteError(r.Context(), w,
+			errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, err.Error()))
 		return
 	}
 	if hasRequirePasswordReset {
@@ -295,7 +295,7 @@ func (h *Handler) handlePatch(w http.ResponseWriter, r *http.Request) {
 
 	user, err := h.svc.Update(r.Context(), input)
 	if err != nil {
-		httputil.WriteDomainError(r.Context(), w, err)
+		httputil.WriteError(r.Context(), w, err)
 		return
 	}
 	httputil.WriteJSON(w, http.StatusOK, map[string]any{"data": toUserResponse(user)})
@@ -338,13 +338,13 @@ func (h *Handler) handleDelete(w http.ResponseWriter, r *http.Request) {
 	// Prevent admin self-deletion — removing own account would lock out the
 	// operator with no recovery path if this is the last admin.
 	if p, ok := auth.FromContext(r.Context()); ok && p.Subject == id {
-		httputil.WriteDomainError(r.Context(), w,
-			errcode.New(errcode.ErrAuthSelfDelete, "cannot delete own account"))
+		httputil.WriteError(r.Context(), w,
+			errcode.New(errcode.KindConflict, errcode.ErrAuthSelfDelete, "cannot delete own account"))
 		return
 	}
 
 	if err := h.svc.Delete(r.Context(), id); err != nil {
-		httputil.WriteDomainError(r.Context(), w, err)
+		httputil.WriteError(r.Context(), w, err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -356,7 +356,7 @@ func (h *Handler) handleLock(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := h.svc.Lock(r.Context(), id); err != nil {
-		httputil.WriteDomainError(r.Context(), w, err)
+		httputil.WriteError(r.Context(), w, err)
 		return
 	}
 	httputil.WriteJSON(w, http.StatusOK, map[string]any{"data": StatusResponse{Status: "locked"}})
@@ -368,7 +368,7 @@ func (h *Handler) handleUnlock(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := h.svc.Unlock(r.Context(), id); err != nil {
-		httputil.WriteDomainError(r.Context(), w, err)
+		httputil.WriteError(r.Context(), w, err)
 		return
 	}
 	httputil.WriteJSON(w, http.StatusOK, map[string]any{"data": StatusResponse{Status: "active"}})
@@ -383,8 +383,8 @@ func (h *Handler) handleChangePassword(w http.ResponseWriter, r *http.Request) {
 		OldPassword string `json:"oldPassword"`
 		NewPassword string `json:"newPassword"`
 	}
-	if err := httputil.DecodeJSONStrict(r, &req); err != nil {
-		httputil.WriteDecodeError(r.Context(), w, err)
+	if err := httputil.DecodeJSONStrict(r, &req, httputil.DefaultDecodeJSONLimit); err != nil {
+		httputil.WriteError(r.Context(), w, err)
 		return
 	}
 
@@ -394,7 +394,7 @@ func (h *Handler) handleChangePassword(w http.ResponseWriter, r *http.Request) {
 		NewPassword: req.NewPassword,
 	})
 	if err != nil {
-		httputil.WriteDomainError(r.Context(), w, err)
+		httputil.WriteError(r.Context(), w, err)
 		return
 	}
 

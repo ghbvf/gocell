@@ -79,7 +79,7 @@ func ResolveEmitter(cfg EmitterConfig) (EmitterOutcome, error) {
 // CheckNotNoop has already rejected nooper deps; we only need nil checks here.
 func resolveDurableEmitter(cfg EmitterConfig) (EmitterOutcome, error) {
 	if cfg.OutboxWriter == nil || cfg.TxRunner == nil {
-		return EmitterOutcome{}, errcode.New(errcode.ErrCellMissingOutbox,
+		return EmitterOutcome{}, errcode.New(errcode.KindInternal, errcode.ErrCellMissingOutbox,
 			cfg.CellID+" durable mode requires real outboxWriter and txRunner")
 	}
 	emitter, err := outbox.NewWriterEmitter(cfg.OutboxWriter)
@@ -96,20 +96,20 @@ func resolveDemoEmitter(cfg EmitterConfig, logger *slog.Logger) (EmitterOutcome,
 	writerAbsent := cfg.OutboxWriter == nil
 	txAbsent := cfg.TxRunner == nil
 	if writerAbsent != txAbsent {
-		return EmitterOutcome{}, errcode.New(errcode.ErrCellMissingOutbox,
+		return EmitterOutcome{}, errcode.New(errcode.KindInternal, errcode.ErrCellMissingOutbox,
 			cfg.CellID+" demo mode requires outboxWriter and txRunner together; inject both explicitly")
 	}
 
 	// No sink at all.
 	if cfg.Publisher == nil && cfg.OutboxWriter == nil {
-		return EmitterOutcome{}, errcode.New(errcode.ErrCellMissingOutbox,
+		return EmitterOutcome{}, errcode.New(errcode.KindInternal, errcode.ErrCellMissingOutbox,
 			cfg.CellID+" demo mode requires an explicit event sink; provide publisher or outboxWriter+txRunner")
 	}
 
 	// Publisher-preferred path: publisher present and writer absent or noop.
 	if cfg.Publisher != nil && (cfg.OutboxWriter == nil || isNooperDep(cfg.OutboxWriter)) {
 		if cfg.MetricsProvider == nil {
-			return EmitterOutcome{}, errcode.New(errcode.ErrCellMissingOutbox,
+			return EmitterOutcome{}, errcode.New(errcode.KindInternal, errcode.ErrCellMissingOutbox,
 				cfg.CellID+" demo mode with direct publisher requires MetricsProvider;"+
 					" pass kernel/observability/metrics.NopProvider{} explicitly in tests"+
 					" (e.g. via cells/{accesscore,auditcore,configcore}.WithMetricsProvider(...))")
@@ -133,7 +133,7 @@ func resolveDemoEmitter(cfg EmitterConfig, logger *slog.Logger) (EmitterOutcome,
 		return EmitterOutcome{Emitter: emitter, Durable: !isNooperDep(cfg.OutboxWriter)}, nil
 	}
 
-	return EmitterOutcome{}, errcode.New(errcode.ErrCellMissingOutbox,
+	return EmitterOutcome{}, errcode.New(errcode.KindInternal, errcode.ErrCellMissingOutbox,
 		cfg.CellID+" demo mode requires an explicit event sink")
 }
 
@@ -179,7 +179,7 @@ func ResolveCellEmitter(in CellEmitterInputs) (EmitterOutcome, error) {
 	hasEmitter := in.PreResolved != nil
 	hasPending := in.Publisher != nil || in.OutboxWriter != nil
 	if hasEmitter && hasPending {
-		return EmitterOutcome{}, errcode.New(errcode.ErrCellInvalidConfig,
+		return EmitterOutcome{}, errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
 			in.CellID+": WithEmitter and WithOutboxDeps are mutually exclusive; pick exactly one")
 	}
 
@@ -187,7 +187,7 @@ func ResolveCellEmitter(in CellEmitterInputs) (EmitterOutcome, error) {
 	if hasEmitter {
 		durable := outbox.ReportDurable(in.PreResolved)
 		if in.Mode == DurabilityDurable && !durable {
-			return EmitterOutcome{}, errcode.New(errcode.ErrCellMissingOutbox,
+			return EmitterOutcome{}, errcode.New(errcode.KindInternal, errcode.ErrCellMissingOutbox,
 				in.CellID+": WithEmitter in durable mode requires a durable outbox.Emitter (WriterEmitter over real writer); got non-durable emitter")
 		}
 		outcome = EmitterOutcome{Emitter: in.PreResolved, Durable: durable}

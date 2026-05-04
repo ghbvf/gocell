@@ -11,7 +11,7 @@ import (
 
 func TestConfig_Validate(t *testing.T) {
 	valid := Config{
-		Endpoint: "http://localhost:9000", Region: "us-east-1",
+		Endpoint: "http://127.0.0.1:9000", Region: "us-east-1",
 		Bucket: "b", AccessKeyID: "k", SecretAccessKey: "s",
 	}
 	require.NoError(t, valid.Validate())
@@ -24,10 +24,10 @@ func TestConfig_Validate(t *testing.T) {
 		// Use a loopback endpoint so TLS validation passes and the test exercises
 		// the field-missing checks that follow. "e" was a bare non-loopback host
 		// that now fails TLS validation first (SEC-FAIL-CLOSED, phase 2).
-		{"missing region", Config{Endpoint: "http://localhost:9000", Bucket: "b", AccessKeyID: "k", SecretAccessKey: "s"}},
-		{"missing bucket", Config{Endpoint: "http://localhost:9000", Region: "r", AccessKeyID: "k", SecretAccessKey: "s"}},
-		{"missing access key", Config{Endpoint: "http://localhost:9000", Region: "r", Bucket: "b", SecretAccessKey: "s"}},
-		{"missing secret key", Config{Endpoint: "http://localhost:9000", Region: "r", Bucket: "b", AccessKeyID: "k"}},
+		{"missing region", Config{Endpoint: "http://127.0.0.1:9000", Bucket: "b", AccessKeyID: "k", SecretAccessKey: "s"}},
+		{"missing bucket", Config{Endpoint: "http://127.0.0.1:9000", Region: "r", AccessKeyID: "k", SecretAccessKey: "s"}},
+		{"missing access key", Config{Endpoint: "http://127.0.0.1:9000", Region: "r", Bucket: "b", SecretAccessKey: "s"}},
+		{"missing secret key", Config{Endpoint: "http://127.0.0.1:9000", Region: "r", Bucket: "b", AccessKeyID: "k"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			err := tc.config.Validate()
@@ -40,7 +40,7 @@ func TestConfig_Validate(t *testing.T) {
 }
 
 func TestConfigFromEnv(t *testing.T) {
-	t.Setenv("GOCELL_S3_ENDPOINT", "http://localhost:9000")
+	t.Setenv("GOCELL_S3_ENDPOINT", "http://127.0.0.1:9000")
 	t.Setenv("GOCELL_S3_REGION", "eu-west-1")
 	t.Setenv("GOCELL_S3_BUCKET", "my-bucket")
 	t.Setenv("GOCELL_S3_ACCESS_KEY", "key123")
@@ -48,7 +48,7 @@ func TestConfigFromEnv(t *testing.T) {
 	t.Setenv("GOCELL_S3_USE_PATH_STYLE", "true")
 
 	cfg := ConfigFromEnv()
-	assert.Equal(t, "http://localhost:9000", cfg.Endpoint)
+	assert.Equal(t, "http://127.0.0.1:9000", cfg.Endpoint)
 	assert.Equal(t, "eu-west-1", cfg.Region)
 	assert.Equal(t, "my-bucket", cfg.Bucket)
 	assert.Equal(t, "key123", cfg.AccessKeyID)
@@ -58,7 +58,7 @@ func TestConfigFromEnv(t *testing.T) {
 
 func TestNew_ValidConfig(t *testing.T) {
 	cfg := Config{
-		Endpoint: "http://localhost:9000", Region: "us-east-1",
+		Endpoint: "http://127.0.0.1:9000", Region: "us-east-1",
 		Bucket: "b", AccessKeyID: "k", SecretAccessKey: "s",
 	}
 	client, err := New(cfg)

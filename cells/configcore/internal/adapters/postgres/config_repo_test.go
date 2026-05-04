@@ -277,7 +277,7 @@ func TestConfigRepo_CryptoOpError_CauseAwareClassification(t *testing.T) {
 	})
 
 	t.Run("transient KeyProvider cause preserves CategoryInfra", func(t *testing.T) {
-		transient := errcode.NewInfra(errcode.ErrKeyProviderTransient, "vault sealed")
+		transient := errcode.New(errcode.KindUnavailable, errcode.ErrKeyProviderTransient, "vault sealed")
 		for _, tc := range ops {
 			t.Run(tc.name, func(t *testing.T) {
 				ec := repo.cryptoOpError(tc.code, tc.op, "key=foo", transient)

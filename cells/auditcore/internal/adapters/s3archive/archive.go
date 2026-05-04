@@ -51,7 +51,7 @@ func (s *ArchiveStore) Archive(ctx context.Context, entries []*domain.AuditEntry
 
 	data, err := json.Marshal(entries)
 	if err != nil {
-		return errcode.Wrap(errcode.ErrArchiveMarshal, "s3archive: failed to marshal entries", err)
+		return errcode.Wrap(errcode.KindInternal, errcode.ErrArchiveMarshal, "s3archive: failed to marshal entries", err)
 	}
 
 	key := fmt.Sprintf("%s%s-%d.json",
@@ -61,7 +61,7 @@ func (s *ArchiveStore) Archive(ctx context.Context, entries []*domain.AuditEntry
 	)
 
 	if err := s.uploader.Upload(ctx, key, data, "application/json"); err != nil {
-		return errcode.Wrap(errcode.ErrArchiveUpload,
+		return errcode.Wrap(errcode.KindInternal, errcode.ErrArchiveUpload,
 			fmt.Sprintf("s3archive: upload failed for key %s", key), err)
 	}
 

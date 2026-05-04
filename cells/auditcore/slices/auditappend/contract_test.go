@@ -3,7 +3,7 @@ package auditappend
 import (
 	"testing"
 
-	"github.com/ghbvf/gocell/pkg/contracttest"
+	"github.com/ghbvf/gocell/tests/contracttest"
 )
 
 func TestEventAuditAppendedV1Publish(t *testing.T) {

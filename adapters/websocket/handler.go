@@ -44,18 +44,18 @@ type UpgradeConfig struct {
 // to the caller's local cfg copy inside UpgradeHandler.
 func (c *UpgradeConfig) Validate() error {
 	if len(c.AllowedOrigins) == 0 {
-		return errcode.New(errcode.ErrWebsocketOriginsMissing,
+		return errcode.New(errcode.KindInternal, errcode.ErrWebsocketOriginsMissing,
 			"websocket: UpgradeConfig.AllowedOrigins must be non-empty (fail-closed)")
 	}
 	normalized := make([]string, 0, len(c.AllowedOrigins))
 	for _, origin := range c.AllowedOrigins {
 		pattern := strings.TrimSpace(origin)
 		if pattern == "" || pattern == "*" {
-			return errcode.New(errcode.ErrWebsocketOriginsInvalid,
+			return errcode.New(errcode.KindInternal, errcode.ErrWebsocketOriginsInvalid,
 				"websocket: UpgradeConfig.AllowedOrigins must use explicit origin patterns (scheme://host); wildcard * is forbidden")
 		}
 		if !strings.Contains(pattern, "://") {
-			return errcode.New(errcode.ErrWebsocketOriginsInvalid,
+			return errcode.New(errcode.KindInternal, errcode.ErrWebsocketOriginsInvalid,
 				"websocket: UpgradeConfig.AllowedOrigins entry "+strconv.Quote(pattern)+
 					" must be an origin pattern with scheme (e.g. https://example.com, https://*.example.com, http://*); "+
 					"bare host is rejected because coder/websocket OriginPatterns matches against the Origin header, which always carries a scheme")
@@ -74,7 +74,7 @@ func (c *UpgradeConfig) Validate() error {
 // InsecureSkipVerify=true for empty origins is removed.
 func UpgradeHandler(hub *rtws.Hub, cfg UpgradeConfig) (http.Handler, error) {
 	if hub == nil {
-		return nil, errcode.New(errcode.ErrWebsocketHubMissing,
+		return nil, errcode.New(errcode.KindInternal, errcode.ErrWebsocketHubMissing,
 			"websocket: UpgradeHandler hub must not be nil (fail-fast at wire time)")
 	}
 	if err := cfg.Validate(); err != nil {
@@ -91,7 +91,7 @@ func UpgradeHandler(hub *rtws.Hub, cfg UpgradeConfig) (http.Handler, error) {
 		}
 
 		if _, ok := w.(http.Hijacker); !ok {
-			logUpgradeFailure(r, errcode.New(ErrAdapterWSUpgrade,
+			logUpgradeFailure(r, errcode.New(errcode.KindInternal, ErrAdapterWSUpgrade,
 				"websocket: response writer does not support hijack"))
 			http.Error(w, "websocket upgrade failed", http.StatusBadRequest)
 			return
@@ -178,7 +178,7 @@ func (w *upgradeAcceptWriter) Write(p []byte) (int, error) {
 func (w *upgradeAcceptWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
 	hijacker, ok := w.ResponseWriter.(http.Hijacker)
 	if !ok {
-		return nil, nil, errcode.New(ErrAdapterWSUpgrade,
+		return nil, nil, errcode.New(errcode.KindInternal, ErrAdapterWSUpgrade,
 			"websocket: response writer does not support hijack")
 	}
 	copyHeaders(w.ResponseWriter.Header(), w.header)

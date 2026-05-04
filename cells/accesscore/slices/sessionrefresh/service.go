@@ -64,19 +64,19 @@ func NewService(
 	opts ...Option,
 ) (*Service, error) {
 	if validation.IsNilInterface(sessionRepo) {
-		return nil, errcode.New(errcode.ErrCellInvalidConfig, "sessionrefresh.NewService: sessionRepo must not be nil")
+		return nil, errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig, "sessionrefresh.NewService: sessionRepo must not be nil")
 	}
 	if validation.IsNilInterface(roleRepo) {
-		return nil, errcode.New(errcode.ErrCellInvalidConfig, "sessionrefresh.NewService: roleRepo must not be nil")
+		return nil, errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig, "sessionrefresh.NewService: roleRepo must not be nil")
 	}
 	if validation.IsNilInterface(userRepo) {
-		return nil, errcode.New(errcode.ErrCellInvalidConfig, "sessionrefresh.NewService: userRepo must not be nil")
+		return nil, errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig, "sessionrefresh.NewService: userRepo must not be nil")
 	}
 	if validation.IsNilInterface(refreshStore) {
-		return nil, errcode.New(errcode.ErrCellInvalidConfig, "sessionrefresh.NewService: refreshStore must not be nil")
+		return nil, errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig, "sessionrefresh.NewService: refreshStore must not be nil")
 	}
 	if issuer == nil {
-		return nil, errcode.New(errcode.ErrCellInvalidConfig, "sessionrefresh.NewService: issuer must not be nil")
+		return nil, errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig, "sessionrefresh.NewService: issuer must not be nil")
 	}
 	if logger == nil {
 		logger = slog.Default()
@@ -124,7 +124,7 @@ func MustNewService(
 // returns refresh.ErrRejected — the same fail-closed behavior as
 // before (TestAuthIntent_AccessTokenBlockedAtRefreshPath).
 func (s *Service) Refresh(ctx context.Context, refreshToken string) (dto.TokenPair, error) {
-	if err := validation.RequireNotBlank(errcode.ErrAuthRefreshInvalidInput,
+	if err := validation.RequireNotEmpty(errcode.ErrAuthRefreshInvalidInput,
 		validation.F("refreshToken", refreshToken),
 	); err != nil {
 		return dto.TokenPair{}, err
@@ -207,11 +207,11 @@ func (s *Service) refreshStoreError(logMessage string, err error) error {
 		return authRefreshRejected()
 	}
 	s.logger.Error(logMessage, slog.Any("error", err))
-	return errcode.WrapInfra(errcode.ErrAuthRefreshUnavailable, "refresh store unavailable", err)
+	return errcode.Wrap(errcode.KindUnavailable, errcode.ErrAuthRefreshUnavailable, "refresh store unavailable", err)
 }
 
 func authRefreshRejected() *errcode.Error {
-	return errcode.NewAuth(errcode.ErrAuthRefreshFailed, errMsgInvalidRefreshToken)
+	return errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthRefreshFailed, errMsgInvalidRefreshToken)
 }
 
 func (s *Service) persistRefreshedSession(ctx context.Context, session *domain.Session, accessToken string, expiresAt time.Time) error {
@@ -229,7 +229,7 @@ func (s *Service) persistRefreshedSession(ctx context.Context, session *domain.S
 			slog.Any("error", err),
 			slog.String("session_id", session.ID),
 			slog.String("user_id", session.UserID))
-		return errcode.WrapInfra(errcode.ErrAuthRefreshUnavailable, "session update unavailable", err)
+		return errcode.Wrap(errcode.KindUnavailable, errcode.ErrAuthRefreshUnavailable, "session update unavailable", err)
 	}
 	*session = refreshed
 	return nil
@@ -244,7 +244,7 @@ func (s *Service) verifySession(ctx context.Context, sessionID string) (*domain.
 		if errcode.IsInfraError(err) {
 			s.logger.Error("session-refresh: infra error on session lookup",
 				slog.Any("error", err), slog.String("session_id", sessionID))
-			return nil, errcode.WrapInfra(errcode.ErrAuthRefreshUnavailable, "session lookup unavailable", err)
+			return nil, errcode.Wrap(errcode.KindUnavailable, errcode.ErrAuthRefreshUnavailable, "session lookup unavailable", err)
 		}
 		// F4: cascade-revoke on not-found; log the revoke error if it fails.
 		if err := s.cascadeRevoke(ctx, sessionID, "session-not-found"); err != nil {
@@ -270,7 +270,7 @@ func (s *Service) cascadeRevoke(ctx context.Context, sessionID, reason string) e
 			slog.String("reason", reason),
 			slog.Any("error", err),
 			slog.String("session_id", sessionID))
-		return errcode.WrapInfra(errcode.ErrAuthRefreshUnavailable, "refresh store unavailable", err)
+		return errcode.Wrap(errcode.KindUnavailable, errcode.ErrAuthRefreshUnavailable, "refresh store unavailable", err)
 	}
 	s.logger.Warn("session-refresh: cascade revoked refresh chain",
 		slog.String("reason", reason),
@@ -288,7 +288,7 @@ func (s *Service) fetchPasswordResetRequired(ctx context.Context, sessionID, use
 		s.logger.Error("session-refresh: failed to fetch user for reset flag (fail-closed)",
 			slog.Any("error", err), slog.String("user_id", userID))
 		if errcode.IsInfraError(err) {
-			return false, errcode.WrapInfra(errcode.ErrAuthRefreshUnavailable, "session user unavailable", err)
+			return false, errcode.Wrap(errcode.KindUnavailable, errcode.ErrAuthRefreshUnavailable, "session user unavailable", err)
 		}
 		if err := s.cascadeRevoke(ctx, sessionID, "user-not-found"); err != nil {
 			return false, err

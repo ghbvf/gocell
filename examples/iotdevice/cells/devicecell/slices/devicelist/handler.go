@@ -65,7 +65,7 @@ func (h *Handler) HandleList(w http.ResponseWriter, r *http.Request) {
 
 	result, err := h.svc.List(r.Context(), pageReq)
 	if err != nil {
-		httputil.WriteDomainError(r.Context(), w, err)
+		httputil.WriteError(r.Context(), w, err)
 		return
 	}
 

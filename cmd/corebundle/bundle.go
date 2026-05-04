@@ -215,7 +215,7 @@ func buildKeyProvider(
 ) (kcrypto.KeyProvider, error) {
 	if providerName == "" {
 		if storageBackend == "postgres" {
-			return nil, errcode.New(errcode.ErrConfigKeyMissing,
+			return nil, errcode.New(errcode.KindInternal, errcode.ErrConfigKeyMissing,
 				"configcore: GOCELL_CONFIGCORE_KEY_PROVIDER must be set when StorageBackend=postgres "+
 					"(known values: \"local-aes\" for dev/CI, \"vault-transit\" for production). "+
 					"Silent NoopTransformer fallback is disabled because it would persist "+
@@ -251,7 +251,7 @@ func buildKeyProvider(
 		slog.Info("configcore: key provider initialized", slog.String("provider", "vault-transit"))
 		return kp, nil
 	default:
-		return nil, errcode.New(errcode.ErrValidationFailed,
+		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			fmt.Sprintf("unknown GOCELL_CONFIGCORE_KEY_PROVIDER %q; known values: \"local-aes\", \"vault-transit\"", providerName))
 	}
 }
@@ -271,15 +271,15 @@ type noKeyProvider struct{}
 const noKeyProviderConfiguredMessage = "configcore: no key provider configured"
 
 func (noKeyProvider) Current(context.Context) (kcrypto.KeyHandle, error) {
-	return nil, errcode.New(errcode.ErrConfigKeyMissing, noKeyProviderConfiguredMessage)
+	return nil, errcode.New(errcode.KindInternal, errcode.ErrConfigKeyMissing, noKeyProviderConfiguredMessage)
 }
 
 func (noKeyProvider) ByID(context.Context, string) (kcrypto.KeyHandle, error) {
-	return nil, errcode.New(errcode.ErrConfigKeyMissing, noKeyProviderConfiguredMessage)
+	return nil, errcode.New(errcode.KindInternal, errcode.ErrConfigKeyMissing, noKeyProviderConfiguredMessage)
 }
 
 func (noKeyProvider) Rotate(context.Context) (string, error) {
-	return "", errcode.New(errcode.ErrConfigKeyMissing, noKeyProviderConfiguredMessage)
+	return "", errcode.New(errcode.KindInternal, errcode.ErrConfigKeyMissing, noKeyProviderConfiguredMessage)
 }
 
 func isNoKeyProvider(kp kcrypto.KeyProvider) bool {
@@ -410,7 +410,7 @@ func buildConfigCoreOpts(ctx context.Context, cfg ConfigCoreModuleConfig) (Confi
 	default:
 		// Unreachable: TopologyFromEnv validation already rejects unknown
 		// StorageBackend values. Keep as defense-in-depth only.
-		return ConfigCoreModuleResult{}, errcode.New(errcode.ErrValidationFailed,
+		return ConfigCoreModuleResult{}, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			fmt.Sprintf("buildConfigCoreOpts: unexpected StorageBackend %q (topology validation bypass)", cfg.Topology.StorageBackend))
 	}
 }

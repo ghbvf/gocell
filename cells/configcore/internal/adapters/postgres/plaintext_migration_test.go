@@ -365,7 +365,7 @@ func (t *aadAwareTransformer) Decrypt(_ context.Context, ct []byte, _ string, _,
 	}
 	storedAAD := ct[4 : 4+aadLen]
 	if !bytes.Equal(storedAAD, aad) {
-		return nil, errcode.New(errcode.ErrKeyProviderDecryptFailed, "aad mismatch")
+		return nil, errcode.New(errcode.KindInternal, errcode.ErrKeyProviderDecryptFailed, "aad mismatch")
 	}
 	return ct[4+aadLen:], nil
 }

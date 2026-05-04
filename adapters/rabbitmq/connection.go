@@ -49,9 +49,9 @@ const (
 
 // Pre-allocated Health() errors to avoid per-call allocation.
 var (
-	errHealthReconnecting   = errcode.New(ErrAdapterAMQPReconnecting, "rabbitmq: connection lost, reconnecting")
-	errHealthNeverConnected = errcode.New(ErrAdapterAMQPConnect, "rabbitmq: never connected")
-	errHealthClosed         = errcode.New(ErrAdapterAMQPConnect, "rabbitmq: connection is closed")
+	errHealthReconnecting   = errcode.New(errcode.KindInternal, ErrAdapterAMQPReconnecting, "rabbitmq: connection lost, reconnecting")
+	errHealthNeverConnected = errcode.New(errcode.KindInternal, ErrAdapterAMQPConnect, "rabbitmq: never connected")
+	errHealthClosed         = errcode.New(errcode.KindInternal, ErrAdapterAMQPConnect, "rabbitmq: connection is closed")
 )
 
 // ConnectionPhase represents the lifecycle state of a Connection.
@@ -369,9 +369,10 @@ func NewConnection(config Config, opts ...ConnectionOption) (*Connection, error)
 			dialErr = ecErr.Unwrap()
 		}
 		if isPermanentDialError(dialErr) {
-			return nil, errcode.Wrap(ErrAdapterAMQPConnectPermanent, "rabbitmq: initial connection failed (permanent)", c.sanitizeDialError(err))
+			return nil, errcode.Wrap(errcode.KindInternal, ErrAdapterAMQPConnectPermanent,
+				"rabbitmq: initial connection failed (permanent)", c.sanitizeDialError(err))
 		}
-		return nil, errcode.Wrap(ErrAdapterAMQPConnect, "rabbitmq: initial connection failed", c.sanitizeDialError(err))
+		return nil, errcode.Wrap(errcode.KindInternal, ErrAdapterAMQPConnect, "rabbitmq: initial connection failed", c.sanitizeDialError(err))
 	}
 
 	c.mu.Lock()
@@ -405,7 +406,7 @@ func WithConnectionClock(clk clock.Clock) ConnectionOption {
 func (c *Connection) connect() error {
 	conn, err := c.dial(c.config.URL)
 	if err != nil {
-		return errcode.Wrap(ErrAdapterAMQPConnect, "rabbitmq: dial", err)
+		return errcode.Wrap(errcode.KindInternal, ErrAdapterAMQPConnect, "rabbitmq: dial", err)
 	}
 
 	c.mu.Lock()
@@ -627,12 +628,12 @@ func (c *Connection) AcquireChannel() (AMQPChannel, error) {
 	}
 
 	if conn == nil || conn.IsClosed() {
-		return nil, errcode.New(ErrAdapterAMQPConnect, "rabbitmq: connection not available")
+		return nil, errcode.New(errcode.KindInternal, ErrAdapterAMQPConnect, "rabbitmq: connection not available")
 	}
 
 	ch, err := conn.Channel()
 	if err != nil {
-		return nil, errcode.Wrap(ErrAdapterAMQPConnect, "rabbitmq: open channel", err)
+		return nil, errcode.Wrap(errcode.KindInternal, ErrAdapterAMQPConnect, "rabbitmq: open channel", err)
 	}
 
 	return ch, nil
@@ -687,7 +688,7 @@ func (c *Connection) Health(ctx context.Context) error {
 	case StateTerminal:
 		// Defensive: permErr should be non-nil for terminal state (checked above).
 		// If we reach here, it's an internal invariant violation.
-		return errcode.New(ErrAdapterAMQPConnect, "rabbitmq: terminal state without permanent error")
+		return errcode.New(errcode.KindInternal, ErrAdapterAMQPConnect, "rabbitmq: terminal state without permanent error")
 	case StateConnected:
 		// Fall through to conn.IsClosed() check below.
 	}
@@ -848,7 +849,7 @@ func (c *Connection) Close(ctx context.Context) error {
 			return nil
 		}
 		if err := conn.Close(); err != nil {
-			return errcode.Wrap(ErrAdapterAMQPConnect, "rabbitmq: close connection", err)
+			return errcode.Wrap(errcode.KindInternal, ErrAdapterAMQPConnect, "rabbitmq: close connection", err)
 		}
 		return nil
 	})
@@ -900,7 +901,7 @@ func (c *Connection) WaitConnected(ctx context.Context) error {
 			c.mu.RUnlock()
 			return err
 		case <-ctx.Done():
-			return errcode.Wrap(ErrAdapterAMQPConnect, "rabbitmq: wait for connection canceled", ctx.Err())
+			return errcode.Wrap(errcode.KindInternal, ErrAdapterAMQPConnect, "rabbitmq: wait for connection canceled", ctx.Err())
 		}
 	}
 }

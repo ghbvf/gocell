@@ -71,12 +71,12 @@ func NewPool(ctx context.Context, cfg Config) (*Pool, error) {
 	cfg.applyDefaults()
 
 	if cfg.DSN == "" {
-		return nil, errcode.New(ErrAdapterPGConnect, "postgres DSN is empty")
+		return nil, errcode.New(errcode.KindInternal, ErrAdapterPGConnect, "postgres DSN is empty")
 	}
 
 	poolCfg, err := pgxpool.ParseConfig(cfg.DSN)
 	if err != nil {
-		return nil, errcode.Wrap(ErrAdapterPGConnect, "postgres: parse DSN", err)
+		return nil, errcode.Wrap(errcode.KindInternal, ErrAdapterPGConnect, "postgres: parse DSN", err)
 	}
 
 	poolCfg.MaxConns = cfg.MaxConns
@@ -85,12 +85,12 @@ func NewPool(ctx context.Context, cfg Config) (*Pool, error) {
 
 	pool, err := pgxpool.NewWithConfig(ctx, poolCfg)
 	if err != nil {
-		return nil, errcode.Wrap(ErrAdapterPGConnect, "postgres: create pool", err)
+		return nil, errcode.Wrap(errcode.KindInternal, ErrAdapterPGConnect, "postgres: create pool", err)
 	}
 
 	if err := pool.Ping(ctx); err != nil {
 		pool.Close()
-		return nil, errcode.Wrap(ErrAdapterPGConnect, "postgres: initial ping", err)
+		return nil, errcode.Wrap(errcode.KindInternal, ErrAdapterPGConnect, "postgres: initial ping", err)
 	}
 
 	slog.Info("postgres pool connected",
@@ -112,7 +112,7 @@ func (p *Pool) Health(ctx context.Context) error {
 	defer cancel()
 
 	if err := p.inner.Ping(ctx); err != nil {
-		return errcode.Wrap(ErrAdapterPGConnect, "postgres: health check failed", err)
+		return errcode.Wrap(errcode.KindInternal, ErrAdapterPGConnect, "postgres: health check failed", err)
 	}
 	return nil
 }

@@ -157,9 +157,9 @@ func (h *Hub) Start(ctx context.Context) error {
 		cancel()
 		s := h.state.Load()
 		if s == stateRunning {
-			return errcode.New(ErrWSAlreadyStarted, "websocket: hub already started")
+			return errcode.New(errcode.KindInternal, ErrWSAlreadyStarted, "websocket: hub already started")
 		}
-		return errcode.New(ErrWSAlreadyStopped, "websocket: hub already stopped")
+		return errcode.New(errcode.KindInternal, ErrWSAlreadyStopped, "websocket: hub already stopped")
 	}
 	h.runCancel = cancel
 	h.wg.Add(1)
@@ -223,7 +223,7 @@ func (h *Hub) shutdown(ctx context.Context) error {
 			}
 		}
 		// Already stopped.
-		return errcode.New(ErrWSAlreadyStopped, "websocket: hub already stopped")
+		return errcode.New(errcode.KindInternal, ErrWSAlreadyStopped, "websocket: hub already stopped")
 	}
 
 	// We won the CAS — we own the shutdown.
@@ -302,18 +302,18 @@ func (h *Hub) Register(ctx context.Context, conn Conn) error {
 	if s == stateStopping {
 		h.connMu.Unlock()
 		_ = conn.Close()
-		return errcode.New(ErrWSHubStopping, "websocket: hub is stopping, connection rejected")
+		return errcode.New(errcode.KindUnavailable, ErrWSHubStopping, "websocket: hub is stopping, connection rejected")
 	}
 	if s != stateRunning {
 		h.connMu.Unlock()
 		_ = conn.Close()
-		return errcode.New(ErrWSHubNotRunning, "websocket: hub is not running, connection rejected")
+		return errcode.New(errcode.KindUnavailable, ErrWSHubNotRunning, "websocket: hub is not running, connection rejected")
 	}
 
 	if h.config.MaxConnections > 0 && len(h.conns) >= h.config.MaxConnections {
 		h.connMu.Unlock()
 		_ = conn.Close()
-		return errcode.New(ErrWSMaxConns, "websocket: max connections reached")
+		return errcode.New(errcode.KindUnavailable, ErrWSMaxConns, "websocket: max connections reached")
 	}
 
 	// Evict existing entry with same ID to prevent context leak.
@@ -440,7 +440,7 @@ func (h *Hub) Send(ctx context.Context, connID string, data []byte) error {
 	h.connMu.Unlock()
 
 	if !ok {
-		return errcode.New(ErrWSConnNotFound,
+		return errcode.New(errcode.KindNotFound, ErrWSConnNotFound,
 			"websocket: connection not found: "+connID)
 	}
 

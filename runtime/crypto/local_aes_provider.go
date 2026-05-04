@@ -53,7 +53,7 @@ func (h *localAESHandle) Encrypt(_ context.Context, plaintext, aad []byte) (ciph
 	// 1. Generate a fresh 32-byte DEK.
 	dek := make([]byte, 32)
 	if _, err = io.ReadFull(rand.Reader, dek); err != nil {
-		return nil, nil, nil, "", errcode.Wrap(errcode.ErrKeyProviderEncryptFailed,
+		return nil, nil, nil, "", errcode.Wrap(errcode.KindInternal, errcode.ErrKeyProviderEncryptFailed,
 			"local-aes: generate DEK", err)
 	}
 	defer clear(dek) // zeroize DEK on function exit; defense-in-depth over Go GC
@@ -61,14 +61,14 @@ func (h *localAESHandle) Encrypt(_ context.Context, plaintext, aad []byte) (ciph
 	// 2. Encrypt plaintext with DEK. Returns raw ciphertext + nonce separately.
 	ciphertext, nonce, err = aeadutil.EncryptGCM(dek, plaintext, aad)
 	if err != nil {
-		return nil, nil, nil, "", errcode.Wrap(errcode.ErrKeyProviderEncryptFailed,
+		return nil, nil, nil, "", errcode.Wrap(errcode.KindInternal, errcode.ErrKeyProviderEncryptFailed,
 			"local-aes: encrypt value", err)
 	}
 
 	// 3. Encrypt DEK with KEK (no AAD). edk is a self-contained nonce-prefixed blob.
 	edk, err = aeadutil.EncryptGCMSelfContained(h.kek, dek, nil)
 	if err != nil {
-		return nil, nil, nil, "", errcode.Wrap(errcode.ErrKeyProviderEncryptFailed,
+		return nil, nil, nil, "", errcode.Wrap(errcode.KindInternal, errcode.ErrKeyProviderEncryptFailed,
 			"local-aes: wrap DEK", err)
 	}
 
@@ -78,20 +78,21 @@ func (h *localAESHandle) Encrypt(_ context.Context, plaintext, aad []byte) (ciph
 // Decrypt reverses AES-GCM envelope encryption.
 func (h *localAESHandle) Decrypt(_ context.Context, ciphertext, nonce, edk, aad []byte) (plaintext []byte, err error) {
 	if len(nonce) == 0 || len(edk) == 0 {
-		return nil, errcode.New(errcode.ErrKeyProviderDecryptFailed, "local-aes: missing nonce or edk")
+		return nil, errcode.New(errcode.KindInternal, errcode.ErrKeyProviderDecryptFailed, "local-aes: missing nonce or edk")
 	}
 
 	// 1. Unwrap DEK using KEK. edk is a self-contained nonce-prefixed blob.
 	dek, err := aeadutil.DecryptGCMSelfContained(h.kek, edk, nil)
 	if err != nil {
-		return nil, errcode.Wrap(errcode.ErrKeyProviderDecryptFailed, "local-aes: unwrap DEK", err)
+		return nil, errcode.Wrap(errcode.KindInternal, errcode.ErrKeyProviderDecryptFailed, "local-aes: unwrap DEK", err)
 	}
 	defer clear(dek) // zeroize DEK on function exit; defense-in-depth over Go GC
 
 	// 2. Decrypt value using DEK + stored nonce.
 	plaintext, err = aeadutil.DecryptGCM(dek, ciphertext, nonce, aad)
 	if err != nil {
-		return nil, errcode.Wrap(errcode.ErrKeyProviderDecryptFailed, "local-aes: decrypt value (AAD mismatch or tampered)", err)
+		return nil, errcode.Wrap(errcode.KindInternal, errcode.ErrKeyProviderDecryptFailed,
+			"local-aes: decrypt value (AAD mismatch or tampered)", err)
 	}
 
 	return plaintext, nil
@@ -126,7 +127,7 @@ type LocalAESKeyProvider struct {
 // (supports rotation); may be empty for single-key mode.
 func NewLocalAESKeyProviderFromKeys(currentKey, prevKey string) (*LocalAESKeyProvider, error) {
 	if currentKey == "" {
-		return nil, errcode.New(errcode.ErrConfigKeyMissing,
+		return nil, errcode.New(errcode.KindInternal, errcode.ErrConfigKeyMissing,
 			"local-aes: master key is required for encryption (set a 32-byte hex/base64 key)")
 	}
 
@@ -159,7 +160,7 @@ func (p *LocalAESKeyProvider) Current(_ context.Context) (KeyHandle, error) {
 
 	h, ok := p.keyring[p.current]
 	if !ok {
-		return nil, errcode.New(errcode.ErrKeyProviderKeyNotFound, "local-aes: current key not found in keyring")
+		return nil, errcode.New(errcode.KindInternal, errcode.ErrKeyProviderKeyNotFound, "local-aes: current key not found in keyring")
 	}
 	return h, nil
 }
@@ -172,7 +173,7 @@ func (p *LocalAESKeyProvider) ByID(_ context.Context, keyID string) (KeyHandle, 
 
 	h, ok := p.keyring[keyID]
 	if !ok {
-		return nil, errcode.New(errcode.ErrKeyProviderKeyNotFound, "local-aes: key not found: "+keyID)
+		return nil, errcode.New(errcode.KindInternal, errcode.ErrKeyProviderKeyNotFound, "local-aes: key not found: "+keyID)
 	}
 	return h, nil
 }
@@ -192,7 +193,7 @@ func (p *LocalAESKeyProvider) ByID(_ context.Context, keyID string) (KeyHandle, 
 // Testing rotation scenarios: use adapters/vault.TransitKeyProvider with a fake VaultClient
 // (see adapters/vault/transit_provider_test.go).
 func (p *LocalAESKeyProvider) Rotate(_ context.Context) (string, error) {
-	return "", errcode.New(errcode.ErrNotImplemented,
+	return "", errcode.New(errcode.KindNotImplemented, errcode.ErrNotImplemented,
 		"LocalAES rotation is not persistent; use adapters/vault.TransitKeyProvider for production key rotation (S14a)")
 }
 

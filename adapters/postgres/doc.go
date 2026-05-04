@@ -8,7 +8,7 @@
 //     schema_migrations tracking table.
 //   - RowScanner helper for reducing boilerplate in repository implementations.
 //
-// For parameterized SQL query construction, see pkg/query.Builder.
+// For parameterized PostgreSQL query construction, see pkg/pgquery.Builder.
 //
 // Error codes use the ERR_ADAPTER_PG_* prefix (see errcode.go in this package).
 //

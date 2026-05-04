@@ -105,7 +105,7 @@ func newPlaintextMigrator(
 	cfg PlaintextMigrationConfig, clk clock.Clock,
 ) (*plaintextMigrator, error) {
 	if transformer == nil {
-		return nil, errcode.New(errcode.ErrConfigKeyMissing,
+		return nil, errcode.New(errcode.KindInternal, errcode.ErrConfigKeyMissing,
 			"plaintext-migrator: transformer must not be nil")
 	}
 	clock.MustHaveClock(clk, "configcore.newPlaintextMigrator")
@@ -167,7 +167,7 @@ func (m *plaintextMigrator) migrateTable(ctx context.Context, table string) (Pla
 func (m *plaintextMigrator) fetchBatch(ctx context.Context, selectQ, table string) ([]pendingRow, error) {
 	rows, err := m.db.Query(ctx, selectQ, m.cfg.BatchSize)
 	if err != nil {
-		return nil, errcode.Wrap(errcode.ErrConfigRepoQuery,
+		return nil, errcode.Wrap(errcode.KindInternal, errcode.ErrConfigRepoQuery,
 			fmt.Sprintf("plaintext-migrator: query %s", table), err)
 	}
 	defer rows.Close()
@@ -176,13 +176,13 @@ func (m *plaintextMigrator) fetchBatch(ctx context.Context, selectQ, table strin
 	for rows.Next() {
 		var r pendingRow
 		if scanErr := rows.Scan(&r.id, &r.aadIdentity, &r.value); scanErr != nil {
-			return nil, errcode.Wrap(errcode.ErrConfigRepoQuery,
+			return nil, errcode.Wrap(errcode.KindInternal, errcode.ErrConfigRepoQuery,
 				fmt.Sprintf("plaintext-migrator: scan %s", table), scanErr)
 		}
 		batch = append(batch, r)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, errcode.Wrap(errcode.ErrConfigRepoQuery,
+		return nil, errcode.Wrap(errcode.KindInternal, errcode.ErrConfigRepoQuery,
 			fmt.Sprintf("plaintext-migrator: rows err %s", table), err)
 	}
 	return batch, nil

@@ -44,10 +44,10 @@ type Subscription struct {
 // Validate returns an error when required fields are missing.
 func (s Subscription) Validate() error {
 	if s.Topic == "" {
-		return errcode.New(errcode.ErrValidationFailed, "outbox: subscription Topic must not be empty")
+		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "outbox: subscription Topic must not be empty")
 	}
 	if s.ConsumerGroup == "" {
-		return errcode.New(errcode.ErrValidationFailed, "outbox: subscription ConsumerGroup must not be empty")
+		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "outbox: subscription ConsumerGroup must not be empty")
 	}
 	return nil
 }

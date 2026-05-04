@@ -39,7 +39,7 @@ func WithAttrCarrier(ctx context.Context, c *AttrCarrier) context.Context {
 	if c == nil {
 		return ctx
 	}
-	return context.WithValue(ctx, ctxkeys.ContractAttrs, c)
+	return ctxkeys.WithContractAttrs(ctx, c)
 }
 
 // AttrCarrierFrom returns the attribute carrier from ctx. Reports false when
@@ -47,8 +47,8 @@ func WithAttrCarrier(ctx context.Context, c *AttrCarrier) context.Context {
 // contribution (e.g. unit tests exercise HTTPHandler directly without the
 // Tracing middleware chain, producing no span and no carrier).
 func AttrCarrierFrom(ctx context.Context) (*AttrCarrier, bool) {
-	v := ctx.Value(ctxkeys.ContractAttrs)
-	if v == nil {
+	v, ok := ctxkeys.ContractAttrsFrom(ctx)
+	if !ok {
 		return nil, false
 	}
 	c, ok := v.(*AttrCarrier)

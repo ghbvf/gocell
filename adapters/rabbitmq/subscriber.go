@@ -259,7 +259,7 @@ func (s *Subscriber) declareTopology(ch AMQPChannel, topic, queueName string) er
 // ref: Watermill message.SubscribeInitializer -- synchronous topology pre-creation.
 func (s *Subscriber) Setup(ctx context.Context, sub outbox.Subscription) error {
 	if s.config.DLXExchange == "" {
-		return errcode.New(ErrAdapterAMQPSubscribe,
+		return errcode.New(errcode.KindInternal, ErrAdapterAMQPSubscribe,
 			"rabbitmq: DLXExchange is required for Setup")
 	}
 
@@ -301,10 +301,10 @@ func (s *Subscriber) Subscribe(ctx context.Context, sub outbox.Subscription, han
 	topic := sub.Topic
 	consumerGroup := sub.ConsumerGroup
 	if s.closed.Load() {
-		return errcode.New(ErrAdapterAMQPSubscribe, "rabbitmq: subscriber is closed")
+		return errcode.New(errcode.KindInternal, ErrAdapterAMQPSubscribe, "rabbitmq: subscriber is closed")
 	}
 	if s.config.DLXExchange == "" {
-		return errcode.New(ErrAdapterAMQPSubscribe,
+		return errcode.New(errcode.KindInternal, ErrAdapterAMQPSubscribe,
 			"rabbitmq: DLXExchange is required — without a dead-letter exchange, "+
 				"Nack(requeue=false) silently discards messages. "+
 				"Set SubscriberConfig.DLXExchange to a valid DLX name")
@@ -424,7 +424,7 @@ func (s *Subscriber) subscribeOnce(
 		if isRecoverableAMQPError(err) {
 			return fmt.Errorf("%w: %s: %v", errSubscriptionLost, msg, err)
 		}
-		return errcode.Wrap(code, msg, err)
+		return errcode.Wrap(errcode.KindInternal, code, msg, err)
 	}
 
 	// Set QoS.
@@ -512,7 +512,7 @@ func classifyAcquireChannelError(err error) error {
 	if isRecoverableAMQPError(err) {
 		return fmt.Errorf("%w: acquire channel: %v", errSubscriptionLost, err)
 	}
-	return errcode.Wrap(ErrAdapterAMQPSubscribe, "rabbitmq: acquire channel for subscribe", err)
+	return errcode.Wrap(errcode.KindInternal, ErrAdapterAMQPSubscribe, "rabbitmq: acquire channel for subscribe", err)
 }
 
 // addRun registers a subscriptionRun in the active runs map.
@@ -957,7 +957,7 @@ func (s *Subscriber) Close(ctx context.Context) error {
 		slog.Warn("rabbitmq: subscriber shutdown remaining runs",
 			slog.Int("remaining_runs", remaining),
 			slog.Any("error", err))
-		return errcode.New(ErrAdapterAMQPCloseTimeout,
+		return errcode.New(errcode.KindInternal, ErrAdapterAMQPCloseTimeout,
 			fmt.Sprintf("rabbitmq: subscriber Close timed out with %d run(s) still active",
 				remaining))
 	}

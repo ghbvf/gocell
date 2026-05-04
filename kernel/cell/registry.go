@@ -359,19 +359,19 @@ func (r *RegistryRecorder) Subscribe(
 	r.mustNotBeFinalized("Subscribe")
 
 	if handler == nil {
-		return errcode.New(errcode.ErrValidationFailed,
+		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"registry Subscribe: handler must not be nil")
 	}
 	if consumerGroup == "" {
-		return errcode.New(errcode.ErrValidationFailed,
+		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"registry Subscribe: consumerGroup must not be empty")
 	}
 	if spec.Kind != "event" {
-		return errcode.New(errcode.ErrValidationFailed,
+		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"registry Subscribe: spec.Kind must be \"event\", got \""+spec.Kind+"\"")
 	}
 	if spec.Topic == "" {
-		return errcode.New(errcode.ErrValidationFailed,
+		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"registry Subscribe: spec.Topic must not be empty")
 	}
 

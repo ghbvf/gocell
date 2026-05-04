@@ -181,15 +181,15 @@ func NewClient(ctx context.Context, cfg Config) (*Client, error) {
 	cfg.defaults()
 
 	if cfg.Mode == ModeStandalone && cfg.Addr == "" {
-		return nil, errcode.New(ErrAdapterRedisConnect,
+		return nil, errcode.New(errcode.KindInternal, ErrAdapterRedisConnect,
 			"redis: Config.Addr is required for standalone mode")
 	}
 	if cfg.Mode == ModeSentinel && len(cfg.SentinelAddrs) == 0 {
-		return nil, errcode.New(ErrAdapterRedisConnect,
+		return nil, errcode.New(errcode.KindInternal, ErrAdapterRedisConnect,
 			"redis: Config.SentinelAddrs is required for sentinel mode")
 	}
 	if cfg.Mode == ModeSentinel && cfg.SentinelMaster == "" {
-		return nil, errcode.New(ErrAdapterRedisConnect,
+		return nil, errcode.New(errcode.KindInternal, ErrAdapterRedisConnect,
 			"redis: Config.SentinelMaster is required for sentinel mode")
 	}
 
@@ -275,7 +275,7 @@ func buildStandaloneOptions(cfg Config) (*goredis.Options, error) {
 	}
 	parsed, err := goredis.ParseURL(cfg.Addr)
 	if err != nil {
-		return nil, errcode.Wrap(ErrAdapterRedisConnect,
+		return nil, errcode.Wrap(errcode.KindInternal, ErrAdapterRedisConnect,
 			fmt.Sprintf("redis: invalid Addr URL %q", cfg.Addr), err)
 	}
 	base.Addr = parsed.Addr
@@ -310,7 +310,7 @@ func buildFailoverOptions(cfg Config) (*goredis.FailoverOptions, error) {
 
 	hasURL, hasPlain := sentinelAddressForms(cfg.SentinelAddrs)
 	if hasURL && hasPlain {
-		return nil, errcode.New(ErrAdapterRedisConnect,
+		return nil, errcode.New(errcode.KindInternal, ErrAdapterRedisConnect,
 			"redis: sentinel addresses cannot mix URL and host:port forms")
 	}
 	if !hasURL {
@@ -344,11 +344,11 @@ func buildFailoverURLOptions(base *goredis.FailoverOptions, addrs []string) (*go
 func appendFailoverURL(base *goredis.FailoverOptions, addr string) error {
 	parsed, err := goredis.ParseFailoverURL(addr)
 	if err != nil {
-		return errcode.Wrap(ErrAdapterRedisConnect,
+		return errcode.Wrap(errcode.KindInternal, ErrAdapterRedisConnect,
 			fmt.Sprintf("redis: invalid SentinelAddrs URL %q", addr), err)
 	}
 	if len(base.SentinelAddrs) > 0 && ((base.TLSConfig == nil) != (parsed.TLSConfig == nil)) {
-		return errcode.New(ErrAdapterRedisConnect,
+		return errcode.New(errcode.KindInternal, ErrAdapterRedisConnect,
 			"redis: sentinel URL addresses must use the same TLS scheme")
 	}
 	if len(base.SentinelAddrs) == 0 {
@@ -360,7 +360,7 @@ func appendFailoverURL(base *goredis.FailoverOptions, addr string) error {
 		return err
 	}
 	if len(parsed.SentinelAddrs) != 1 {
-		return errcode.New(ErrAdapterRedisConnect,
+		return errcode.New(errcode.KindInternal, ErrAdapterRedisConnect,
 			fmt.Sprintf("redis: invalid SentinelAddrs URL %q", addr))
 	}
 	base.SentinelAddrs = append(base.SentinelAddrs, parsed.SentinelAddrs[0])
@@ -371,7 +371,7 @@ func checkFailoverTLSConfigCompatible(base, parsed *tls.Config) error {
 	if base == nil || parsed == nil || base.InsecureSkipVerify == parsed.InsecureSkipVerify {
 		return nil
 	}
-	return errcode.New(ErrAdapterRedisConnect,
+	return errcode.New(errcode.KindInternal, ErrAdapterRedisConnect,
 		"redis: sentinel URL addresses must use the same TLS verification settings")
 }
 
@@ -399,7 +399,7 @@ func mergeFailoverStringField(dst *string, incoming, name string) error {
 		return nil
 	}
 	if *dst != "" {
-		return errcode.New(ErrAdapterRedisConnect,
+		return errcode.New(errcode.KindInternal, ErrAdapterRedisConnect,
 			fmt.Sprintf("redis: conflicting Sentinel URL %s values", name))
 	}
 	*dst = incoming
@@ -411,7 +411,7 @@ func mergeFailoverIntField(dst *int, incoming int, name string) error {
 		return nil
 	}
 	if *dst != 0 {
-		return errcode.New(ErrAdapterRedisConnect,
+		return errcode.New(errcode.KindInternal, ErrAdapterRedisConnect,
 			fmt.Sprintf("redis: conflicting Sentinel URL %s values", name))
 	}
 	*dst = incoming
@@ -434,7 +434,7 @@ func failoverTLSConfig(parsed *tls.Config) *tls.Config {
 // Health pings the Redis server and returns an error if it is unreachable.
 func (c *Client) Health(ctx context.Context) error {
 	if err := c.rdb.Ping(ctx).Err(); err != nil {
-		return errcode.Wrap(ErrAdapterRedisConnect,
+		return errcode.Wrap(errcode.KindInternal, ErrAdapterRedisConnect,
 			fmt.Sprintf("redis: health check failed (addr=%s)", c.config.Addr), err)
 	}
 	return nil
@@ -451,7 +451,7 @@ func (c *Client) Health(ctx context.Context) error {
 func (c *Client) Close(ctx context.Context) error {
 	return adapterutil.CloseWithDeadline(ctx, "redis", func() error {
 		if err := c.rdb.Close(); err != nil {
-			return errcode.Wrap(ErrAdapterRedisConnect, "redis: close failed", err)
+			return errcode.Wrap(errcode.KindInternal, ErrAdapterRedisConnect, "redis: close failed", err)
 		}
 		return nil
 	})

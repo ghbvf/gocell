@@ -980,37 +980,38 @@ func TestClassifyServiceTokenVerifyError(t *testing.T) {
 		},
 		{
 			name:       "legacy 2-part format",
-			err:        errcode.NewAuth(errcode.ErrAuthUnauthorized, "legacy 2-part service token format rejected"),
+			err:        errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthUnauthorized, "legacy 2-part service token format rejected"),
 			wantReason: "legacy_format",
 		},
 		{
 			name:       "legacy 3-part format",
-			err:        errcode.NewAuth(errcode.ErrAuthUnauthorized, "legacy 3-part service token format rejected"),
+			err:        errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthUnauthorized, "legacy 3-part service token format rejected"),
 			wantReason: "legacy_format",
 		},
 		{
 			name:       "expired token",
-			err:        errcode.NewAuth(errcode.ErrAuthTokenExpired, "service token expired"),
+			err:        errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthTokenExpired, "service token expired"),
 			wantReason: "expired",
 		},
 		{
 			name:       "invalid MAC",
-			err:        errcode.NewAuth(errcode.ErrAuthUnauthorized, "invalid service token MAC"),
+			err:        errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthUnauthorized, "invalid service token MAC"),
 			wantReason: "invalid_mac",
 		},
 		{
 			name:       "missing caller cell",
-			err:        errcode.NewAuth(errcode.ErrAuthUnauthorized, "caller cell missing"),
+			err:        errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthUnauthorized, "caller cell missing"),
 			wantReason: "missing_caller_cell",
 		},
 		{
-			name:       "invalid caller cell — with actual value in message",
-			err:        errcode.NewAuth(errcode.ErrAuthUnauthorized, `caller cell id "Bad-Cell" invalid (must match ^[a-z][a-z0-9-]*$)`),
+			name: "invalid caller cell — with actual value in message",
+			err: errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthUnauthorized,
+				`caller cell id "Bad-Cell" invalid (must match ^[a-z][a-z0-9-]*$)`),
 			wantReason: "invalid_caller_cell",
 		},
 		{
 			name:       "other invalid format",
-			err:        errcode.NewAuth(errcode.ErrAuthUnauthorized, msgInvalidServiceTokenFormat),
+			err:        errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthUnauthorized, msgInvalidServiceTokenFormat),
 			wantReason: "invalid_format",
 		},
 	}

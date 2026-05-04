@@ -31,7 +31,7 @@ type ProviderGCCollector struct {
 
 func NewProviderGCCollector(p metrics.Provider) (*ProviderGCCollector, error) {
 	if p == nil {
-		return nil, errcode.New(errcode.ErrObservabilityConfigInvalid, "refresh gc metrics provider must not be nil")
+		return nil, errcode.New(errcode.KindInternal, errcode.ErrObservabilityConfigInvalid, "refresh gc metrics provider must not be nil")
 	}
 	var registered []metrics.Collector
 	cleanup := func() {

@@ -187,7 +187,7 @@ func checkSliceServiceOutboxFile(root, modPath, path string) ([]outboxServiceVio
 					Message: "service layer must not branch on txRunner nil mode" +
 						" (allowed only in NewService constructor as fail-fast validation returning error)." +
 						" To opt in, change NewXxx to NewXxx(...) (*T, error) and add a top-level:" +
-						" if txRunner == nil { return nil, errcode.New(errcode.ErrValidationFailed, ...) }",
+						" if txRunner == nil { return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, ...) }",
 				})
 			}
 		case *ast.CallExpr:

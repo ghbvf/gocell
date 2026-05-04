@@ -42,7 +42,7 @@ const reauthTwoBackoffInitial = 2 * reauthBackoffInitial
 // with heavy CPU contention still passes as long as interruption happened
 // before the full backoff could elapse.
 func TestReauthenticate_BackoffInterruptedByCtxCancel(t *testing.T) {
-	permErr := errcode.New(errcode.ErrVaultAuthFailed, "always fails")
+	permErr := errcode.New(errcode.KindUnavailable, errcode.ErrVaultAuthFailed, "always fails")
 	fakeAuth := &fakeAuthMethod{
 		method:       MethodAppRole,
 		permanentErr: permErr,
@@ -102,7 +102,7 @@ func TestDoReauth_InfiniteRetry_UntilCtxCancel(t *testing.T) {
 	}
 
 	// Renewer that always fails NewLifetimeWatcher.
-	watcherErr := errcode.New(errcode.ErrKeyProviderAuthFailed, "watcher build failed")
+	watcherErr := errcode.New(errcode.KindInternal, errcode.ErrKeyProviderAuthFailed, "watcher build failed")
 	var watcherCallsMu sync.Mutex
 	var watcherCalls int
 	renewer := &alwaysFailWatcherRenewer{
@@ -163,7 +163,7 @@ func TestDoReauth_SucceedsAfterNFailures(t *testing.T) {
 		method: MethodAppRole,
 	}
 
-	watcherErr := errcode.New(errcode.ErrKeyProviderAuthFailed, "watcher build failed")
+	watcherErr := errcode.New(errcode.KindInternal, errcode.ErrKeyProviderAuthFailed, "watcher build failed")
 	var callMu sync.Mutex
 	var callCount int
 	renewer := &nthSuccessWatcherRenewer{
@@ -294,7 +294,7 @@ func TestDoReauth_BuildWatcherFailureBackoff(t *testing.T) {
 		// No errs → default: returns non-renewable token each call.
 	}
 
-	watcherErr := errcode.New(errcode.ErrKeyProviderAuthFailed, "watcher fail")
+	watcherErr := errcode.New(errcode.KindInternal, errcode.ErrKeyProviderAuthFailed, "watcher fail")
 	var callMu sync.Mutex
 	var callCount int
 	renewer := &nthSuccessWatcherRenewer{

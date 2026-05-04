@@ -81,23 +81,23 @@ func (c *AccessCore) initValidate(durabilityMode cell.DurabilityMode) error {
 	}
 
 	if c.jwtIssuer == nil || c.jwtVerifier == nil {
-		return errcode.New(errcode.ErrAuthKeyInvalid,
+		return errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthKeyInvalid,
 			"RS256 key pair required: use WithJWTIssuer and WithJWTVerifier")
 	}
 	if c.userRepo == nil {
-		return errcode.New(errcode.ErrCellInvalidConfig,
+		return errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
 			"accesscore requires a user repository: use WithUserRepository or WithInMemoryDefaults")
 	}
 	if c.sessionRepo == nil {
-		return errcode.New(errcode.ErrCellInvalidConfig,
+		return errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
 			"accesscore requires a session repository: use WithSessionRepository or WithInMemoryDefaults")
 	}
 	if c.roleRepo == nil {
-		return errcode.New(errcode.ErrCellInvalidConfig,
+		return errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
 			"accesscore requires a role repository: use WithRoleRepository or WithInMemoryDefaults")
 	}
 	if c.refreshStore == nil {
-		return errcode.New(errcode.ErrCellMissingTokenIssuer,
+		return errcode.New(errcode.KindInternal, errcode.ErrCellMissingTokenIssuer,
 			"refresh.Store required: use WithRefreshStore (durable) or WithInMemoryDefaults (demo)")
 	}
 	if err := c.initRefreshGC(); err != nil {
@@ -105,7 +105,7 @@ func (c *AccessCore) initValidate(durabilityMode cell.DurabilityMode) error {
 	}
 	if c.cursorCodec == nil {
 		if durabilityMode == cell.DurabilityDurable {
-			return errcode.New(errcode.ErrCellMissingCodec,
+			return errcode.New(errcode.KindInternal, errcode.ErrCellMissingCodec,
 				"accesscore durable mode requires a cursor codec;"+
 					" use WithCursorCodec(query.NewCursorCodec(secret))"+
 					" — the built-in demo key is public in the source tree")
@@ -140,10 +140,10 @@ func (c *AccessCore) initRefreshGC() error {
 		return nil
 	}
 	if c.refreshGCInterval <= 0 {
-		return errcode.New(errcode.ErrCellInvalidConfig, "accesscore refresh GC interval must be positive")
+		return errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig, "accesscore refresh GC interval must be positive")
 	}
 	if c.refreshGCRetention <= 0 {
-		return errcode.New(errcode.ErrCellInvalidConfig, "accesscore refresh GC retention must be positive")
+		return errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig, "accesscore refresh GC retention must be positive")
 	}
 	provider := c.metricsProvider
 	if provider == nil {

@@ -111,7 +111,7 @@ func VerifyExpectedVersion(ctx context.Context, pool *Pool, fsys fs.FS, tableNam
 	}
 
 	if actual != expected {
-		return errcode.New(ErrAdapterPGSchemaMismatch,
+		return errcode.New(errcode.KindInternal, ErrAdapterPGSchemaMismatch,
 			fmt.Sprintf("schema version mismatch: db=%d binary=%d", actual, expected))
 	}
 
@@ -151,7 +151,7 @@ func DetectInvalidIndexes(ctx context.Context, pool *Pool) ([]InvalidIndex, erro
 
 	rows, err := pool.inner.Query(ctx, q)
 	if err != nil {
-		return nil, errcode.Wrap(ErrAdapterPGQuery,
+		return nil, errcode.Wrap(errcode.KindInternal, ErrAdapterPGQuery,
 			"schema_guard: query invalid indexes", err)
 	}
 	defer rows.Close()
@@ -160,13 +160,13 @@ func DetectInvalidIndexes(ctx context.Context, pool *Pool) ([]InvalidIndex, erro
 	for rows.Next() {
 		var idx InvalidIndex
 		if scanErr := rows.Scan(&idx.Index, &idx.Table); scanErr != nil {
-			return nil, errcode.Wrap(ErrAdapterPGQuery,
+			return nil, errcode.Wrap(errcode.KindInternal, ErrAdapterPGQuery,
 				"schema_guard: scan invalid index", scanErr)
 		}
 		results = append(results, idx)
 	}
 	if rows.Err() != nil {
-		return nil, errcode.Wrap(ErrAdapterPGQuery,
+		return nil, errcode.Wrap(errcode.KindInternal, ErrAdapterPGQuery,
 			"schema_guard: iterate invalid indexes", rows.Err())
 	}
 

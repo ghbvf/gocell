@@ -187,7 +187,7 @@ func (p *Parser) parseCell(fsys fs.FS, path string, pm *ProjectMeta) error {
 		pm.fileNodes[path] = node
 	}
 	if m.ID == "" {
-		return errcode.New(errcode.ErrMetadataInvalid,
+		return errcode.New(errcode.KindInvalid, errcode.ErrMetadataInvalid,
 			fmt.Sprintf("cell id is empty in %s", path))
 	}
 	// Record the real filesystem directory so strict rules (REF-04) can
@@ -199,7 +199,7 @@ func (p *Parser) parseCell(fsys fs.FS, path string, pm *ProjectMeta) error {
 	m.Dir = cellDir
 	m.File = filepath.ToSlash(path)
 	if _, exists := pm.Cells[m.ID]; exists {
-		return errcode.New(errcode.ErrMetadataInvalid,
+		return errcode.New(errcode.KindInvalid, errcode.ErrMetadataInvalid,
 			fmt.Sprintf("duplicate cell ID %q: %s and previous", m.ID, path))
 	}
 	pm.Cells[m.ID] = &m
@@ -220,7 +220,7 @@ func (p *Parser) parseSlice(fsys fs.FS, path string, pm *ProjectMeta) error {
 		pm.fileNodes[path] = node
 	}
 	if m.ID == "" {
-		return errcode.New(errcode.ErrMetadataInvalid,
+		return errcode.New(errcode.KindInvalid, errcode.ErrMetadataInvalid,
 			fmt.Sprintf("slice id is empty in %s", path))
 	}
 
@@ -230,7 +230,7 @@ func (p *Parser) parseSlice(fsys fs.FS, path string, pm *ProjectMeta) error {
 	if m.BelongsToCell == "" {
 		m.BelongsToCell = cellID
 	} else if m.BelongsToCell != cellID {
-		return errcode.New(errcode.ErrMetadataInvalid,
+		return errcode.New(errcode.KindInvalid, errcode.ErrMetadataInvalid,
 			fmt.Sprintf("slice %q: belongsToCell %q does not match directory cell %q in %s",
 				m.ID, m.BelongsToCell, cellID, path))
 	}
@@ -246,7 +246,7 @@ func (p *Parser) parseSlice(fsys fs.FS, path string, pm *ProjectMeta) error {
 
 	key := cellID + "/" + m.ID
 	if _, exists := pm.Slices[key]; exists {
-		return errcode.New(errcode.ErrMetadataInvalid,
+		return errcode.New(errcode.KindInvalid, errcode.ErrMetadataInvalid,
 			fmt.Sprintf("duplicate slice ID %q: %s and previous", key, path))
 	}
 	pm.Slices[key] = &m
@@ -268,7 +268,7 @@ func (p *Parser) parseContract(fsys fs.FS, path string, pm *ProjectMeta) error {
 		pm.fileNodes[path] = node
 	}
 	if m.ID == "" {
-		return errcode.New(errcode.ErrMetadataInvalid,
+		return errcode.New(errcode.KindInvalid, errcode.ErrMetadataInvalid,
 			fmt.Sprintf("contract id is empty in %s", path))
 	}
 	// G-7: auto-derive ownerCell from provider endpoint if omitted (per contract.schema.json).
@@ -279,7 +279,7 @@ func (p *Parser) parseContract(fsys fs.FS, path string, pm *ProjectMeta) error {
 	m.File = filepath.ToSlash(path)
 
 	if _, exists := pm.Contracts[m.ID]; exists {
-		return errcode.New(errcode.ErrMetadataInvalid,
+		return errcode.New(errcode.KindInvalid, errcode.ErrMetadataInvalid,
 			fmt.Sprintf("duplicate contract ID %q: %s and previous", m.ID, path))
 	}
 	pm.Contracts[m.ID] = &m
@@ -296,12 +296,12 @@ func (p *Parser) parseJourney(fsys fs.FS, path string, pm *ProjectMeta) error {
 		pm.fileNodes[path] = node
 	}
 	if m.ID == "" {
-		return errcode.New(errcode.ErrMetadataInvalid,
+		return errcode.New(errcode.KindInvalid, errcode.ErrMetadataInvalid,
 			fmt.Sprintf("journey id is empty in %s", path))
 	}
 	m.File = filepath.ToSlash(path)
 	if _, exists := pm.Journeys[m.ID]; exists {
-		return errcode.New(errcode.ErrMetadataInvalid,
+		return errcode.New(errcode.KindInvalid, errcode.ErrMetadataInvalid,
 			fmt.Sprintf("duplicate journey ID %q: %s and previous", m.ID, path))
 	}
 	pm.Journeys[m.ID] = &m
@@ -318,7 +318,7 @@ func (p *Parser) parseAssembly(fsys fs.FS, path string, pm *ProjectMeta) error {
 		pm.fileNodes[path] = node
 	}
 	if m.ID == "" {
-		return errcode.New(errcode.ErrMetadataInvalid,
+		return errcode.New(errcode.KindInvalid, errcode.ErrMetadataInvalid,
 			fmt.Sprintf("assembly id is empty in %s", path))
 	}
 	// Record filesystem truth so strict rules (FMT-16) can compare the directory
@@ -328,7 +328,7 @@ func (p *Parser) parseAssembly(fsys fs.FS, path string, pm *ProjectMeta) error {
 	m.Dir = parts[1]
 	m.File = filepath.ToSlash(path)
 	if _, exists := pm.Assemblies[m.ID]; exists {
-		return errcode.New(errcode.ErrMetadataInvalid,
+		return errcode.New(errcode.KindInvalid, errcode.ErrMetadataInvalid,
 			fmt.Sprintf("duplicate assembly ID %q: %s and previous", m.ID, path))
 	}
 	pm.Assemblies[m.ID] = &m
@@ -387,11 +387,11 @@ const maxMetadataFileSize = 1 << 20 // 1 MiB
 func unmarshalFile(fsys fs.FS, path string, out any) (*yaml.Node, error) {
 	data, err := fs.ReadFile(fsys, path)
 	if err != nil {
-		return nil, errcode.Wrap(errcode.ErrMetadataInvalid,
+		return nil, errcode.Wrap(errcode.KindInvalid, errcode.ErrMetadataInvalid,
 			fmt.Sprintf("read %s", path), err)
 	}
 	if len(data) > maxMetadataFileSize {
-		return nil, errcode.New(errcode.ErrMetadataInvalid,
+		return nil, errcode.New(errcode.KindInvalid, errcode.ErrMetadataInvalid,
 			fmt.Sprintf("parse %s: file size %d bytes exceeds limit %d", path, len(data), maxMetadataFileSize))
 	}
 
@@ -402,14 +402,14 @@ func unmarshalFile(fsys fs.FS, path string, out any) (*yaml.Node, error) {
 		if err == io.EOF {
 			return emptyYAMLDocumentNode(), nil
 		}
-		return nil, errcode.Wrap(errcode.ErrMetadataInvalid,
+		return nil, errcode.Wrap(errcode.KindInvalid, errcode.ErrMetadataInvalid,
 			fmt.Sprintf("parse %s", path), err)
 	}
 	// Reject multi-document YAML files. Metadata files must contain exactly
 	// one document; a second document after "---" would be silently ignored
 	// by a single Decode call.
 	if dec1.Decode(new(yaml.Node)) != io.EOF {
-		return nil, errcode.New(errcode.ErrMetadataInvalid,
+		return nil, errcode.New(errcode.KindInvalid, errcode.ErrMetadataInvalid,
 			fmt.Sprintf("parse %s: unexpected multiple YAML documents", path))
 	}
 
@@ -424,7 +424,7 @@ func unmarshalFile(fsys fs.FS, path string, out any) (*yaml.Node, error) {
 			// be empty. Kept defensively to mirror the original behavior.
 			return &root, nil
 		}
-		return nil, errcode.Wrap(errcode.ErrMetadataInvalid,
+		return nil, errcode.Wrap(errcode.KindInvalid, errcode.ErrMetadataInvalid,
 			fmt.Sprintf("parse %s", path), err)
 	}
 

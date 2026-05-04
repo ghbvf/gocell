@@ -44,14 +44,14 @@ func (h *Handler) HandleCreate(w http.ResponseWriter, r *http.Request) {
 		Value     string `json:"value"`
 		Sensitive bool   `json:"sensitive"`
 	}
-	if err := httputil.DecodeJSONStrict(r, &req); err != nil {
-		httputil.WriteDecodeError(r.Context(), w, err)
+	if err := httputil.DecodeJSONStrict(r, &req, httputil.DefaultDecodeJSONLimit); err != nil {
+		httputil.WriteError(r.Context(), w, err)
 		return
 	}
 
 	entry, err := h.svc.Create(r.Context(), CreateInput{Key: req.Key, Value: req.Value, Sensitive: req.Sensitive})
 	if err != nil {
-		httputil.WriteDomainError(r.Context(), w, err)
+		httputil.WriteError(r.Context(), w, err)
 		return
 	}
 
@@ -65,14 +65,14 @@ func (h *Handler) HandleUpdate(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Value string `json:"value"`
 	}
-	if err := httputil.DecodeJSONStrict(r, &req); err != nil {
-		httputil.WriteDecodeError(r.Context(), w, err)
+	if err := httputil.DecodeJSONStrict(r, &req, httputil.DefaultDecodeJSONLimit); err != nil {
+		httputil.WriteError(r.Context(), w, err)
 		return
 	}
 
 	entry, err := h.svc.Update(r.Context(), UpdateInput{Key: key, Value: req.Value})
 	if err != nil {
-		httputil.WriteDomainError(r.Context(), w, err)
+		httputil.WriteError(r.Context(), w, err)
 		return
 	}
 
@@ -84,7 +84,7 @@ func (h *Handler) HandleDelete(w http.ResponseWriter, r *http.Request) {
 	key := r.PathValue("key")
 
 	if err := h.svc.Delete(r.Context(), key); err != nil {
-		httputil.WriteDomainError(r.Context(), w, err)
+		httputil.WriteError(r.Context(), w, err)
 		return
 	}
 

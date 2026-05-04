@@ -30,8 +30,8 @@ import (
 	"github.com/santhosh-tekuri/jsonschema/v6"
 	"gopkg.in/yaml.v3"
 
-	"github.com/ghbvf/gocell/pkg/contracts"
-	"github.com/ghbvf/gocell/pkg/contracttest/internal/fixtureload"
+	"github.com/ghbvf/gocell/kernel/metadata"
+	"github.com/ghbvf/gocell/tests/contracttest/internal/fixtureload"
 )
 
 // Contract holds a loaded contract with compiled JSON schemas.
@@ -51,26 +51,26 @@ type Contract struct {
 }
 
 // HTTPTransport holds optional transport metadata for migrated HTTP contracts.
-// It is an alias of contracts.HTTPTransport to preserve the public API.
-type HTTPTransport = contracts.HTTPTransport
+// It is an alias of metadata.HTTPTransportMeta to preserve the public API.
+type HTTPTransport = metadata.HTTPTransportMeta
 
 // HTTPResponseEntry describes a declared error response for a specific HTTP status code.
-// It is an alias of contracts.HTTPResponse to preserve the public API.
-type HTTPResponseEntry = contracts.HTTPResponse
+// It is an alias of metadata.HTTPResponseMeta to preserve the public API.
+type HTTPResponseEntry = metadata.HTTPResponseMeta
 
-// contractYAML is a local struct for parsing contract.yaml without
-// importing kernel/metadata (avoids coupling).
+// contractYAML is a local struct for parsing contract.yaml without depending
+// on the full metadata.ProjectMeta parser.
 type contractYAML struct {
-	ID               string               `yaml:"id"`
-	Kind             string               `yaml:"kind"`
-	OwnerCell        string               `yaml:"ownerCell"`
-	ConsistencyLevel string               `yaml:"consistencyLevel"`
-	Endpoints        endpointsYAML        `yaml:"endpoints"`
-	SchemaRefs       contracts.SchemaRefs `yaml:"schemaRefs"`
+	ID               string                  `yaml:"id"`
+	Kind             string                  `yaml:"kind"`
+	OwnerCell        string                  `yaml:"ownerCell"`
+	ConsistencyLevel string                  `yaml:"consistencyLevel"`
+	Endpoints        endpointsYAML           `yaml:"endpoints"`
+	SchemaRefs       metadata.SchemaRefsMeta `yaml:"schemaRefs"`
 }
 
 type endpointsYAML struct {
-	HTTP *contracts.HTTPTransport `yaml:"http,omitempty"`
+	HTTP *metadata.HTTPTransportMeta `yaml:"http,omitempty"`
 }
 
 // ContractsRoot returns the absolute path to the contracts/ directory,
@@ -93,7 +93,7 @@ func projectRoot(t testing.TB) string {
 	if !ok {
 		t.Fatalf("contracttest: runtime.Caller failed")
 	}
-	// thisFile = .../pkg/contracttest/contracttest.go
+	// thisFile = .../tests/contracttest/contracttest.go
 	return filepath.Dir(filepath.Dir(filepath.Dir(thisFile)))
 }
 
@@ -507,7 +507,7 @@ func formatValidationErrorDetail(ve *jsonschema.ValidationError, indent string) 
 	return sb.String()
 }
 
-func newHTTPTransport(meta *contracts.HTTPTransport) *HTTPTransport {
+func newHTTPTransport(meta *metadata.HTTPTransportMeta) *HTTPTransport {
 	return meta
 }
 

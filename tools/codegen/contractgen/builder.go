@@ -8,7 +8,6 @@ import (
 	"unicode"
 
 	"github.com/ghbvf/gocell/kernel/metadata"
-	"github.com/ghbvf/gocell/pkg/contracts"
 )
 
 // BuildContractSpec projects a single contract.yaml + its schemaRefs into a
@@ -81,7 +80,12 @@ func buildHTTPSpec(spec *ContractGenSpec, rootDir string, contract *metadata.Con
 
 // buildHTTPDTOs loads request/response schemas, converts them to DTOSpecs, and
 // merges path/query params into the Request DTO.
-func buildHTTPDTOs(rootDir string, contract *metadata.ContractMeta, contractDir string, http *contracts.HTTPTransport) ([]DTOSpec, error) {
+func buildHTTPDTOs(
+	rootDir string,
+	contract *metadata.ContractMeta,
+	contractDir string,
+	http *metadata.HTTPTransportMeta,
+) ([]DTOSpec, error) {
 	var allDTOs []DTOSpec
 
 	// Request DTO — may be an empty object (GET without body).
@@ -121,7 +125,7 @@ func buildHTTPDTOs(rootDir string, contract *metadata.ContractMeta, contractDir 
 }
 
 // buildHTTPEndpointSpec constructs the HTTPEndpointSpec including pagination detection.
-func buildHTTPEndpointSpec(contract *metadata.ContractMeta, http *contracts.HTTPTransport) (*HTTPEndpointSpec, error) {
+func buildHTTPEndpointSpec(contract *metadata.ContractMeta, http *metadata.HTTPTransportMeta) (*HTTPEndpointSpec, error) {
 	handlerMethod := goPascalCase(domainLastSegment(contract.ID))
 	hasBody := http.Method == "POST" || http.Method == "PUT" || http.Method == "PATCH"
 
@@ -234,7 +238,7 @@ func buildEventSpec(spec *ContractGenSpec, rootDir string, contract *metadata.Co
 // Returns error when a path or query param name (as Go field name) conflicts
 // with an existing body schema field (which would produce a duplicate struct field).
 // contractID is optional context for error messages.
-func mergeParamsIntoRequestWithID(dtos []DTOSpec, http *contracts.HTTPTransport, contractID string) ([]DTOSpec, error) {
+func mergeParamsIntoRequestWithID(dtos []DTOSpec, http *metadata.HTTPTransportMeta, contractID string) ([]DTOSpec, error) {
 	pathParams := buildPathParams(http)
 	queryParams := buildQueryParams(http)
 
@@ -316,7 +320,7 @@ func paramToField(p ParamSpec, source string) DTOField {
 }
 
 // buildPathParams extracts path parameters from HTTPTransport in path-template order.
-func buildPathParams(http *contracts.HTTPTransport) []ParamSpec {
+func buildPathParams(http *metadata.HTTPTransportMeta) []ParamSpec {
 	if len(http.PathParams) == 0 {
 		return nil
 	}
@@ -346,7 +350,7 @@ func buildPathParams(http *contracts.HTTPTransport) []ParamSpec {
 // buildQueryParams extracts query parameters from HTTPTransport in map key-sorted order.
 // Note: contract.yaml queryParams comes from a YAML map (unordered); we sort alphabetically
 // to guarantee deterministic output. This is intentional, not a bug.
-func buildQueryParams(http *contracts.HTTPTransport) []ParamSpec {
+func buildQueryParams(http *metadata.HTTPTransportMeta) []ParamSpec {
 	if len(http.QueryParams) == 0 {
 		return nil
 	}
@@ -715,22 +719,22 @@ func paramGoType(t string) string {
 }
 
 // paramDoc builds a doc hint for a param schema.
-func paramDoc(s contracts.ParamSchema) string {
+func paramDoc(s metadata.ParamSchema) string {
 	if s.Format != "" {
 		return "format: " + s.Format
 	}
 	return ""
 }
 
-func paramMinLength(s contracts.ParamSchema) *int {
+func paramMinLength(s metadata.ParamSchema) *int {
 	return s.MinLength
 }
 
-func paramMaxLength(s contracts.ParamSchema) *int {
+func paramMaxLength(s metadata.ParamSchema) *int {
 	return s.MaxLength
 }
 
-func paramMinimum(s contracts.ParamSchema) *int64 {
+func paramMinimum(s metadata.ParamSchema) *int64 {
 	if s.Minimum == nil {
 		return nil
 	}
@@ -738,7 +742,7 @@ func paramMinimum(s contracts.ParamSchema) *int64 {
 	return &v
 }
 
-func paramMaximum(s contracts.ParamSchema) *int64 {
+func paramMaximum(s metadata.ParamSchema) *int64 {
 	if s.Maximum == nil {
 		return nil
 	}

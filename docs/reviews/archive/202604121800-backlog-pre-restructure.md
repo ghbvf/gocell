@@ -407,7 +407,7 @@
 | WM-18 | 延迟消息原语 — outbox Entry 标记延迟时间 | 3/6 | 架构/安全/产品 Accept，但 DX/测试/运维 Defer。InMemoryEventBus 无法支持延迟投递（需 timer heap），RabbitMQ 需 x-delayed-message 插件增加运维复杂度。等 0-B2 Outbox Relay 三阶段重写稳定后再评估 |
 | WM-32 | mTLS 中间件 — TLS 客户端证书提取+验证 | 4/6 | 安全席认为 MDM 场景安全阻塞项，但架构/DX 认为 mTLS 通常由反向代理/service mesh 处理，非框架核心。v1.1 做通用 `runtime/tls` 配置构建器 + mTLS 验证中间件 |
 | WM-4 | Webhook 出站 adapter — HMAC 签名/重试/健康检查 | 4/6 | 通用能力，但依赖 outbox relay 稳定作为投递基础。安全注意 SSRF 防护（URL 白名单/禁内网 IP）。backlog 已列 kernel/webhook 为 P2 |
-| WM-5 | 查询过滤语言 (OData $filter) — pkg/query 过滤 DSL | 2/6 | OData 是微软/MDM 生态偏好，大多数 Go 微服务用简单 query parameter。当前 `pkg/query/builder.go` 已提供参数化 SQL builder。如需过滤语言，建议用成熟 OData 库包装而非自建解析器 |
+| WM-5 | 查询过滤语言 (OData $filter) — pkg/query 过滤 DSL | 2/6 | OData 是微软/MDM 生态偏好，大多数 Go 微服务用简单 query parameter。当前 `pkg/pgquery/builder.go` 已提供参数化 SQL builder。如需过滤语言，建议用成熟 OData 库包装而非自建解析器 |
 | WM-22 | Visibility Query API — 统一查询异步任务状态 | 1/6 | `/healthz` + `/readyz` + logs + traces 已覆盖运维需求。依赖 WM-17 生命周期钩子和 HR-02 路由元数据先稳定。运维/诊断能力，v1.1 diagnostics 范畴 |
 | WM-23 | 模块化单体→微服务 — Assembly API 对等验证 | 2/6 | Assembly 已天然支持多 Cell 单进程部署。拆分为独立二进制需要服务发现（WM-28）、分布式追踪等基础设施。当前优先验证 + 文档，而非新建 |
 | WM-16 | 投影按需重算 — RecalcTrigger + debounce + checkpoint | 1/6 | backlog 已列 kernel/replay 为 P3，标注"无实际需求验证"。需先稳定 outbox relay + consumer middleware，投影重算建立在这之上 |

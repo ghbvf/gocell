@@ -1289,7 +1289,7 @@ func TestPublisher_Publish_TerminalState_ReturnsPermanentError(t *testing.T) {
 		connected:    make(chan struct{}),
 		terminalCh:   make(chan struct{}),
 		clock:        clock.Real(),
-		permanentErr: errcode.New(ErrAdapterAMQPConnectPermanent, "access refused"),
+		permanentErr: errcode.New(errcode.KindInternal, ErrAdapterAMQPConnectPermanent, "access refused"),
 	}
 	close(conn.terminalCh)
 
@@ -3662,12 +3662,12 @@ func TestIsRecoverableAMQPError(t *testing.T) {
 		},
 		{
 			name: "ErrAdapterAMQPConnect errcode",
-			err:  errcode.New(ErrAdapterAMQPConnect, "connection not available"),
+			err:  errcode.New(errcode.KindInternal, ErrAdapterAMQPConnect, "connection not available"),
 			want: true,
 		},
 		{
 			name: "ErrAdapterAMQPReconnecting errcode",
-			err:  errcode.New(ErrAdapterAMQPReconnecting, "reconnecting"),
+			err:  errcode.New(errcode.KindInternal, ErrAdapterAMQPReconnecting, "reconnecting"),
 			want: true,
 		},
 	}
@@ -3855,10 +3855,10 @@ func TestIsTerminalConnectionError(t *testing.T) {
 		err      error
 		terminal bool
 	}{
-		{"permanent", errcode.New(ErrAdapterAMQPConnectPermanent, "bad creds"), true},
-		{"exhausted", errcode.New(ErrAdapterAMQPReconnectExhausted, "max attempts"), true},
-		{"transient", errcode.New(ErrAdapterAMQPConnect, "timeout"), false},
-		{"publish", errcode.New(ErrAdapterAMQPPublish, "channel error"), false},
+		{"permanent", errcode.New(errcode.KindInternal, ErrAdapterAMQPConnectPermanent, "bad creds"), true},
+		{"exhausted", errcode.New(errcode.KindInternal, ErrAdapterAMQPReconnectExhausted, "max attempts"), true},
+		{"transient", errcode.New(errcode.KindInternal, ErrAdapterAMQPConnect, "timeout"), false},
+		{"publish", errcode.New(errcode.KindInternal, ErrAdapterAMQPPublish, "channel error"), false},
 		{"nil", nil, false},
 		{"plain error", fmt.Errorf("oops"), false},
 	}
@@ -3883,7 +3883,7 @@ func TestPublisher_Publish_ReconnectExhausted_ReturnsPermanentError(t *testing.T
 		connected:    make(chan struct{}),
 		terminalCh:   make(chan struct{}),
 		clock:        clock.Real(),
-		permanentErr: errcode.New(ErrAdapterAMQPReconnectExhausted, "max attempts exceeded"),
+		permanentErr: errcode.New(errcode.KindInternal, ErrAdapterAMQPReconnectExhausted, "max attempts exceeded"),
 	}
 	close(conn.terminalCh)
 
@@ -4255,7 +4255,7 @@ func TestConnection_Health_StateDistinction(t *testing.T) {
 			name:     "StateTerminal permanent error",
 			state:    StateTerminal,
 			conn:     nil,
-			permErr:  errcode.New(ErrAdapterAMQPConnectPermanent, "bad creds"),
+			permErr:  errcode.New(errcode.KindInternal, ErrAdapterAMQPConnectPermanent, "bad creds"),
 			wantCode: ErrAdapterAMQPConnectPermanent,
 		},
 	}

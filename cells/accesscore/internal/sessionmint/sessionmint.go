@@ -70,8 +70,9 @@ type Result struct {
 func MintAccess(ctx context.Context, deps Deps, req Request) (Result, error) {
 	roles, err := fetchRoleNames(ctx, deps.RoleRepo, req.UserID)
 	if err != nil {
-		return Result{}, errcode.WrapInfra(errcode.ErrAuthRoleFetchFailed,
-			"sessionmint: fetch roles", err)
+		return Result{}, errcode.Wrap(errcode.KindInternal, errcode.ErrAuthRoleFetchFailed,
+			"sessionmint: fetch roles", err,
+			errcode.WithCategory(errcode.CategoryInfra))
 	}
 
 	clk := deps.Clk

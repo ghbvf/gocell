@@ -19,7 +19,7 @@ type Options struct {
 	// is harmless — Verify dominates (no write either way).
 	Verify bool
 	// OnlyContract, when non-empty, restricts generation to a single contract id.
-	// The contract must have Codegen=true; empty means all opted-in contracts.
+	// The contract must have Codegen=true; empty means all opted-in metadata.
 	OnlyContract string
 }
 
@@ -49,7 +49,7 @@ type CodegenArtifact struct {
 }
 
 // Generate orchestrates BuildContractSpec → render → write for one or all
-// opted-in contracts.
+// opted-in metadata.
 // root is the repository root (absolute path; from which go.mod is read for
 // module path).
 func Generate(root string, p *metadata.ProjectMeta, opts Options) (Result, error) {

@@ -50,15 +50,15 @@ func (h *fakeKeyHandle) Encrypt(_ context.Context, plaintext, aad []byte) (ciphe
 // embedded AAD does not match.
 func (h *fakeKeyHandle) Decrypt(_ context.Context, ciphertext, _, _, aad []byte) (plaintext []byte, err error) {
 	if len(ciphertext) < 1 {
-		return nil, errcode.New(errcode.ErrKeyProviderDecryptFailed, "ciphertext too short")
+		return nil, errcode.New(errcode.KindInternal, errcode.ErrKeyProviderDecryptFailed, "ciphertext too short")
 	}
 	aadLen := int(ciphertext[0])
 	if len(ciphertext) < 1+aadLen {
-		return nil, errcode.New(errcode.ErrKeyProviderDecryptFailed, "ciphertext truncated")
+		return nil, errcode.New(errcode.KindInternal, errcode.ErrKeyProviderDecryptFailed, "ciphertext truncated")
 	}
 	storedAAD := ciphertext[1 : 1+aadLen]
 	if !bytes.Equal(storedAAD, aad) {
-		return nil, errcode.New(errcode.ErrKeyProviderDecryptFailed, "AAD mismatch")
+		return nil, errcode.New(errcode.KindInternal, errcode.ErrKeyProviderDecryptFailed, "AAD mismatch")
 	}
 	ct := ciphertext[1+aadLen:]
 	pt := make([]byte, len(ct))
@@ -90,7 +90,7 @@ func newFakeKeyProvider() *fakeKeyProvider {
 func (p *fakeKeyProvider) Current(_ context.Context) (crypto.KeyHandle, error) {
 	h, ok := p.keys[p.current]
 	if !ok {
-		return nil, errcode.New(errcode.ErrKeyProviderKeyNotFound, "current key not found")
+		return nil, errcode.New(errcode.KindInternal, errcode.ErrKeyProviderKeyNotFound, "current key not found")
 	}
 	return h, nil
 }
@@ -98,7 +98,7 @@ func (p *fakeKeyProvider) Current(_ context.Context) (crypto.KeyHandle, error) {
 func (p *fakeKeyProvider) ByID(_ context.Context, keyID string) (crypto.KeyHandle, error) {
 	h, ok := p.keys[keyID]
 	if !ok {
-		return nil, errcode.New(errcode.ErrKeyProviderKeyNotFound, "key not found: "+keyID)
+		return nil, errcode.New(errcode.KindInternal, errcode.ErrKeyProviderKeyNotFound, "key not found: "+keyID)
 	}
 	return h, nil
 }

@@ -83,7 +83,7 @@ func (h *Handler) RegisterRoutes(mux kcell.RouteMux) error {
 }
 
 func (h *Handler) handleListRoles(w http.ResponseWriter, r *http.Request) {
-	r = r.WithContext(httputil.WithListErrorLogSampling(r.Context(), specRoleList.ID))
+	r = r.WithContext(httputil.WithClientErrorLogSampling(r.Context(), specRoleList.ID))
 
 	userID, ok := httputil.ParseUUIDPathParam(w, r, "userID")
 	if !ok {
@@ -97,7 +97,7 @@ func (h *Handler) handleListRoles(w http.ResponseWriter, r *http.Request) {
 
 	result, err := h.svc.ListRoles(r.Context(), userID, pageReq)
 	if err != nil {
-		httputil.WritePageDomainError(r.Context(), w, err)
+		httputil.WriteError(r.Context(), w, err)
 		return
 	}
 
@@ -113,7 +113,7 @@ func (h *Handler) handleHasRole(w http.ResponseWriter, r *http.Request) {
 
 	has, err := h.svc.HasRole(r.Context(), userID, roleName)
 	if err != nil {
-		httputil.WriteDomainError(r.Context(), w, err)
+		httputil.WriteError(r.Context(), w, err)
 		return
 	}
 

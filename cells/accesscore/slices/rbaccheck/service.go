@@ -31,14 +31,14 @@ type Service struct {
 // codec must be non-nil; cursor pagination cannot be served without it.
 func NewService(roleRepo ports.RoleRepository, codec *query.CursorCodec, logger *slog.Logger, runMode query.RunMode) (*Service, error) {
 	if codec == nil {
-		return nil, errcode.New(errcode.ErrCellMissingCodec, "rbac-check: cursor codec is required")
+		return nil, errcode.New(errcode.KindInternal, errcode.ErrCellMissingCodec, "rbac-check: cursor codec is required")
 	}
 	return &Service{roleRepo: roleRepo, codec: codec, logger: logger, runMode: runMode}, nil
 }
 
 // HasRole checks if a user has the specified role.
 func (s *Service) HasRole(ctx context.Context, userID, roleName string) (bool, error) {
-	if err := validation.RequireNotBlank(errcode.ErrAuthRBACInvalidInput,
+	if err := validation.RequireNotEmpty(errcode.ErrAuthRBACInvalidInput,
 		validation.F("userID", userID),
 		validation.F("roleName", roleName),
 	); err != nil {
@@ -60,7 +60,7 @@ func (s *Service) HasRole(ctx context.Context, userID, roleName string) (bool, e
 
 // ListRoles returns a paginated page of roles assigned to userID.
 func (s *Service) ListRoles(ctx context.Context, userID string, pageReq query.PageParams) (query.PageResult[*domain.Role], error) {
-	if err := validation.RequireNotBlank(errcode.ErrAuthRBACInvalidInput,
+	if err := validation.RequireNotEmpty(errcode.ErrAuthRBACInvalidInput,
 		validation.F("userID", userID),
 	); err != nil {
 		return query.PageResult[*domain.Role]{}, err

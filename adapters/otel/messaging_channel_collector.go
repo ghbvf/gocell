@@ -58,7 +58,7 @@ type MessagingChannelStatter struct {
 // semantic-convention metadata (db vs messaging).
 func RegisterMessagingChannelMetrics(meter otelmetric.Meter, statters []MessagingChannelStatter) (unregister func() error, err error) {
 	if meter == nil {
-		return nil, errcode.New(ErrAdapterOTelConfig,
+		return nil, errcode.New(errcode.KindInternal, ErrAdapterOTelConfig,
 			"otel messaging channel collector: Meter is required")
 	}
 	if len(statters) == 0 {
@@ -66,7 +66,7 @@ func RegisterMessagingChannelMetrics(meter otelmetric.Meter, statters []Messagin
 	}
 	for i, s := range statters {
 		if s.Statter == nil || s.System == "" {
-			return nil, errcode.New(ErrAdapterOTelConfig,
+			return nil, errcode.New(errcode.KindInternal, ErrAdapterOTelConfig,
 				"otel messaging channel collector: statters[%d] missing System or Statter")
 		}
 		_ = i
@@ -78,7 +78,7 @@ func RegisterMessagingChannelMetrics(meter otelmetric.Meter, statters []Messagin
 		otelmetric.WithUnit("{channel}"),
 	)
 	if err != nil {
-		return nil, errcode.Wrap(ErrAdapterOTelInit,
+		return nil, errcode.Wrap(errcode.KindInternal, ErrAdapterOTelInit,
 			"otel messaging channel collector: create "+metricNameChannelCount, err)
 	}
 	chanMax, err := meter.Int64ObservableUpDownCounter(
@@ -87,7 +87,7 @@ func RegisterMessagingChannelMetrics(meter otelmetric.Meter, statters []Messagin
 		otelmetric.WithUnit("{channel}"),
 	)
 	if err != nil {
-		return nil, errcode.Wrap(ErrAdapterOTelInit,
+		return nil, errcode.Wrap(errcode.KindInternal, ErrAdapterOTelInit,
 			"otel messaging channel collector: create "+metricNameChannelMax, err)
 	}
 
@@ -113,7 +113,7 @@ func RegisterMessagingChannelMetrics(meter otelmetric.Meter, statters []Messagin
 		chanMax,
 	)
 	if err != nil {
-		return nil, errcode.Wrap(ErrAdapterOTelInit,
+		return nil, errcode.Wrap(errcode.KindInternal, ErrAdapterOTelInit,
 			"otel messaging channel collector: register callback", err)
 	}
 

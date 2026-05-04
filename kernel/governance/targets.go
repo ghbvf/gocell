@@ -417,7 +417,7 @@ func (ts *TargetSelector) expandFromSlices(sliceSet map[string]struct{}) *Affect
 	contractSet := make(map[string]struct{})
 	journeySet := make(map[string]struct{})
 
-	// Expand slices -> cells + contracts.
+	// Expand slices -> cells + metadata.
 	for key := range sliceSet {
 		s, ok := ts.project.Slices[key]
 		if !ok {

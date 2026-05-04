@@ -17,7 +17,7 @@ import (
 // where writeCredentialFile is unavailable. Carries ErrCellPlatformUnsupported
 // so operators can distinguish "wrong build for this platform" from generic
 // configuration errors.
-var errUnsupportedPlatform = errcode.New(errcode.ErrCellPlatformUnsupported,
+var errUnsupportedPlatform = errcode.New(errcode.KindInternal, errcode.ErrCellPlatformUnsupported,
 	"initialadmin: bootstrap not supported on this platform")
 
 // BootstrapDeps holds the injected repository and utility dependencies.

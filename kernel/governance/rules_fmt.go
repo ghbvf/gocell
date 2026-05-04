@@ -12,7 +12,6 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/metadata"
-	"github.com/ghbvf/gocell/pkg/contracts"
 )
 
 // pathPlaceholderRe extracts every `{name}` placeholder from an HTTP path
@@ -168,7 +167,7 @@ func (v *Validator) validateFMT02() []ValidationResult {
 	return results
 }
 
-// validateFMT03 checks that consistencyLevel is valid (L0-L4) for both cells and contracts.
+// validateFMT03 checks that consistencyLevel is valid (L0-L4) for both cells and metadata.
 func (v *Validator) validateFMT03() []ValidationResult {
 	var results []ValidationResult
 	for _, c := range v.project.Cells {
@@ -457,13 +456,13 @@ const (
 	fieldSchemaRefsResponse = "schemaRefs.response"
 )
 
-// validateFMT13 checks HTTP transport metadata on contracts.
+// validateFMT13 checks HTTP transport metadata on metadata.
 //
 // Two cases are checked:
 //   - kind=http with nil endpoints.http → Error: required block missing (FMT-13 必填化)
 //   - any kind with non-nil endpoints.http → delegate to validateFMT13ForContract,
 //     which rejects non-http contracts declaring endpoints.http and validates the
-//     block's internal consistency for http contracts.
+//     block's internal consistency for http metadata.
 func (v *Validator) validateFMT13() []ValidationResult {
 	var results []ValidationResult
 	for _, c := range v.project.Contracts {
@@ -545,7 +544,7 @@ func extractPathPlaceholders(path string) []string {
 }
 
 // sortedParamKeys returns the map keys in stable order for deterministic diagnostics.
-func sortedParamKeys(m map[string]contracts.ParamSchema) []string {
+func sortedParamKeys(m map[string]metadata.ParamSchema) []string {
 	keys := make([]string, 0, len(m))
 	for k := range m {
 		keys = append(keys, k)
@@ -625,7 +624,7 @@ func (v *Validator) validateFMT13QueryParams(c *metadata.ContractMeta, h *metada
 // definition) and is rejected.
 func (v *Validator) validateFMT13ParamSchema(
 	c *metadata.ContractMeta, file, kind, name string,
-	p contracts.ParamSchema, isPath bool,
+	p metadata.ParamSchema, isPath bool,
 ) []ValidationResult {
 	var results []ValidationResult
 	fieldBase := fmt.Sprintf("endpoints.http.%s.%s", kind, name)
@@ -637,7 +636,7 @@ func (v *Validator) validateFMT13ParamSchema(
 			fieldBase+".type",
 			fmt.Sprintf("http contract %q %s.%s must specify type", c.ID, kind, name),
 		))
-	} else if !contracts.ParamTypes[p.Type] {
+	} else if !metadata.ParamTypes[p.Type] {
 		results = append(results, v.newResult(
 			codeFMT13, SeverityError, IssueInvalid,
 			file,

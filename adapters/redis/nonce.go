@@ -24,21 +24,21 @@ var _ auth.NonceStore = (*NonceStore)(nil)
 // NewNonceStore creates a Redis-backed service-token nonce store.
 func NewNonceStore(client *Client, ttl time.Duration) (*NonceStore, error) {
 	if client == nil {
-		return nil, errcode.New(ErrAdapterRedisConnect, "redis nonce store: client is nil")
+		return nil, errcode.New(errcode.KindInternal, ErrAdapterRedisConnect, "redis nonce store: client is nil")
 	}
 	return newNonceStoreFromCmdable(client.cmdable(), ttl)
 }
 
 func newNonceStoreFromCmdable(rdb cmdable, ttl time.Duration) (*NonceStore, error) {
 	if rdb == nil {
-		return nil, errcode.New(ErrAdapterRedisConnect, "redis nonce store: cmdable is nil")
+		return nil, errcode.New(errcode.KindInternal, ErrAdapterRedisConnect, "redis nonce store: cmdable is nil")
 	}
 	if ttl <= 0 {
-		return nil, errcode.New(ErrAdapterRedisSet,
+		return nil, errcode.New(errcode.KindInternal, ErrAdapterRedisSet,
 			fmt.Sprintf("redis nonce store: ttl must be positive, got %v", ttl))
 	}
 	if ttl < auth.ServiceTokenNonceTTL {
-		return nil, errcode.New(ErrAdapterRedisSet,
+		return nil, errcode.New(errcode.KindInternal, ErrAdapterRedisSet,
 			fmt.Sprintf("redis nonce store: ttl %v is shorter than ServiceTokenNonceTTL %v; a shorter TTL reintroduces the replay window",
 				ttl, auth.ServiceTokenNonceTTL))
 	}
@@ -58,7 +58,7 @@ func (s *NonceStore) CheckAndMark(ctx context.Context, nonce string) error {
 	key := serviceTokenNoncePrefix + nonce
 	ok, err := s.rdb.SetNX(ctx, key, "1", s.ttl).Result()
 	if err != nil {
-		return errcode.Wrap(ErrAdapterRedisSet,
+		return errcode.Wrap(errcode.KindInternal, ErrAdapterRedisSet,
 			fmt.Sprintf("redis nonce store: SET NX failed (key=%s)", key), err)
 	}
 	if !ok {

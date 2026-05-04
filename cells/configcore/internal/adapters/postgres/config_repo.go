@@ -18,6 +18,7 @@ import (
 	kcrypto "github.com/ghbvf/gocell/kernel/crypto"
 	"github.com/ghbvf/gocell/pkg/ctxcancel"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/pgquery"
 	"github.com/ghbvf/gocell/pkg/query"
 )
 
@@ -179,7 +180,7 @@ func (r *ConfigRepository) resolveWriteDB(ctx context.Context) (DBTX, error) {
 // Returns (ciphertext, keyID, nonce, edk) or error.
 func (r *ConfigRepository) encryptValue(ctx context.Context, key, value string) (ct []byte, keyID string, nonce, edk []byte, err error) {
 	if r.transformer == nil {
-		return nil, "", nil, nil, errcode.New(errcode.ErrConfigKeyMissing,
+		return nil, "", nil, nil, errcode.New(errcode.KindInternal, errcode.ErrConfigKeyMissing,
 			"config repo: no ValueTransformer configured for sensitive entry")
 	}
 	aad := configcrypto.AADForConfig(cellID, key)
@@ -194,7 +195,7 @@ func (r *ConfigRepository) encryptValue(ctx context.Context, key, value string) 
 // Fail-closed: returns ErrConfigDecryptFailed on any error.
 func (r *ConfigRepository) decryptValue(ctx context.Context, key string, ct []byte, keyID string, nonce, edk []byte) (string, error) {
 	if r.transformer == nil {
-		return "", errcode.New(errcode.ErrConfigDecryptFailed,
+		return "", errcode.New(errcode.KindInternal, errcode.ErrConfigDecryptFailed,
 			"config repo: no ValueTransformer configured, cannot decrypt sensitive value")
 	}
 	aad := configcrypto.AADForConfig(cellID, key)
@@ -213,7 +214,7 @@ func (r *ConfigRepository) encryptVersionValue(
 	ctx context.Context, configID, value string,
 ) (ct []byte, keyID string, nonce, edk []byte, err error) {
 	if r.transformer == nil {
-		return nil, "", nil, nil, errcode.New(errcode.ErrConfigKeyMissing,
+		return nil, "", nil, nil, errcode.New(errcode.KindInternal, errcode.ErrConfigKeyMissing,
 			"config repo: no ValueTransformer configured for sensitive version")
 	}
 	aad := configcrypto.AADForVersion(cellID, configID)
@@ -231,7 +232,7 @@ func (r *ConfigRepository) decryptVersionValue(
 	ctx context.Context, configID string, ct []byte, keyID string, nonce, edk []byte,
 ) (string, error) {
 	if r.transformer == nil {
-		return "", errcode.New(errcode.ErrConfigDecryptFailed,
+		return "", errcode.New(errcode.KindInternal, errcode.ErrConfigDecryptFailed,
 			"config repo: no ValueTransformer configured, cannot decrypt sensitive version")
 	}
 	aad := configcrypto.AADForVersion(cellID, configID)
@@ -382,7 +383,7 @@ func (r *ConfigRepository) decryptScannedEntry(
 	}
 	if len(ct) == 0 || keyID == nil || *keyID == "" {
 		// Legacy plaintext row: sensitive=true but value_cipher IS NULL.
-		return errcode.New(errcode.ErrConfigDecryptFailed,
+		return errcode.New(errcode.KindInternal, errcode.ErrConfigDecryptFailed,
 			"sensitive value is in legacy plaintext format; run plaintext_migration tool before reading")
 	}
 	plain, err := r.decryptValue(ctx, e.Key, ct, *keyID, nonce, edk)
@@ -617,11 +618,11 @@ func (r *ConfigRepository) applySensitiveListSentinel(
 // This design avoids bulk decryption on list operations and prevents accidental
 // exposure of sensitive values in list responses.
 func (r *ConfigRepository) List(ctx context.Context, params query.ListParams) ([]*domain.ConfigEntry, error) {
-	b := query.NewBuilder()
+	b := pgquery.NewBuilder()
 	b.Append("SELECT " + listEntryColumns + " FROM config_entries WHERE 1=1")
 
-	if err := query.AppendKeyset(b, params); err != nil {
-		return nil, errcode.WrapInfra(errcode.ErrConfigRepoQuery, "config repo: keyset build failed", err)
+	if err := pgquery.AppendKeyset(b, params); err != nil {
+		return nil, errcode.Wrap(errcode.KindInternal, errcode.ErrConfigRepoQuery, "config repo: keyset build failed", err)
 	}
 
 	sql, args := b.Build()
@@ -741,7 +742,7 @@ func (r *ConfigRepository) GetVersion(ctx context.Context, configID string, vers
 	if v.Sensitive {
 		if len(valueCipher) == 0 || valueKeyID == nil || *valueKeyID == "" {
 			// Legacy plaintext version row: block read until plaintext_migration completes.
-			return nil, errcode.New(errcode.ErrConfigDecryptFailed,
+			return nil, errcode.New(errcode.KindInternal, errcode.ErrConfigDecryptFailed,
 				"sensitive version is in legacy plaintext format; run plaintext_migration tool before reading")
 		}
 		plain, err := r.decryptVersionValue(ctx, v.ConfigID, valueCipher, *valueKeyID, valueNonce, valueEDK)

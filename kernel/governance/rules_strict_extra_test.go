@@ -13,7 +13,6 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/metadata"
-	"github.com/ghbvf/gocell/pkg/contracts"
 )
 
 // --- FMT-20 ---
@@ -539,7 +538,7 @@ func fmt25WriteSchema(t *testing.T, dir, body string) {
 // fmt25Project builds a ProjectMeta containing one HTTP contract with the
 // given request schema reference. queryParams / pathParams are optional —
 // pass nil to omit. Used by every FMT-25 schema-driven test below.
-func fmt25Project(queryParams, pathParams map[string]contracts.ParamSchema) *metadata.ProjectMeta {
+func fmt25Project(queryParams, pathParams map[string]metadata.ParamSchema) *metadata.ProjectMeta {
 	const contractDir = "contracts/http/test/v1"
 	const contractID = "http.test.v1"
 	cm := &metadata.ContractMeta{
@@ -949,7 +948,7 @@ func TestFMT25_QueryParamsStringMissingConstraints(t *testing.T) {
 	fmt25WriteSchema(t, dir,
 		`{"type": "object", "additionalProperties": false}`)
 	pm := fmt25Project(
-		map[string]contracts.ParamSchema{
+		map[string]metadata.ParamSchema{
 			"cursor": {Type: "string"}, // missing minLength + maxLength
 		}, nil)
 
@@ -967,7 +966,7 @@ func TestFMT25_QueryParamsIntegerMissingConstraints(t *testing.T) {
 	fmt25WriteSchema(t, dir,
 		`{"type": "object", "additionalProperties": false}`)
 	pm := fmt25Project(
-		map[string]contracts.ParamSchema{
+		map[string]metadata.ParamSchema{
 			"limit": {Type: "integer"}, // missing minimum + maximum
 		}, nil)
 
@@ -985,7 +984,7 @@ func TestFMT25_QueryParamsNumberMissingConstraints(t *testing.T) {
 	fmt25WriteSchema(t, dir,
 		`{"type": "object", "additionalProperties": false}`)
 	pm := fmt25Project(
-		map[string]contracts.ParamSchema{
+		map[string]metadata.ParamSchema{
 			"ratio": {Type: "number"},
 		}, nil)
 
@@ -1003,7 +1002,7 @@ func TestFMT25_QueryParamsInvalidBounds(t *testing.T) {
 	one := 1
 	ten := 10
 	pm := fmt25Project(
-		map[string]contracts.ParamSchema{
+		map[string]metadata.ParamSchema{
 			"page": {Type: "integer", Minimum: &ten, Maximum: &one},
 		}, nil)
 
@@ -1022,7 +1021,7 @@ func TestFMT25_PathParamsStringMissingConstraints(t *testing.T) {
 	fmt25WriteSchema(t, dir,
 		`{"type": "object", "additionalProperties": false}`)
 	pm := fmt25Project(nil,
-		map[string]contracts.ParamSchema{
+		map[string]metadata.ParamSchema{
 			"key": {Type: "string"}, // plain string, no format → must be checked
 		})
 
@@ -1087,19 +1086,19 @@ func TestFMT25_SkipsInvalidPathParams(t *testing.T) {
 	tests := []struct {
 		name       string
 		path       string
-		pathParams map[string]contracts.ParamSchema
+		pathParams map[string]metadata.ParamSchema
 	}{
 		{
 			name: "declaration without placeholder",
 			path: "/x",
-			pathParams: map[string]contracts.ParamSchema{
+			pathParams: map[string]metadata.ParamSchema{
 				"ghost": {Type: "string"},
 			},
 		},
 		{
 			name: "unsupported path param type",
 			path: "/x/{id}",
-			pathParams: map[string]contracts.ParamSchema{
+			pathParams: map[string]metadata.ParamSchema{
 				"id": {Type: "unsupported"},
 			},
 		},
@@ -1124,7 +1123,7 @@ func TestFMT25_PathParamsUUIDFormatExempt(t *testing.T) {
 	fmt25WriteSchema(t, dir,
 		`{"type": "object", "additionalProperties": false}`)
 	pm := fmt25Project(nil,
-		map[string]contracts.ParamSchema{
+		map[string]metadata.ParamSchema{
 			"id": {Type: "string", Format: "uuid"}, // exempt
 		})
 
@@ -1150,12 +1149,12 @@ func TestFMT25_CleanSchemaProducesNoViolations(t *testing.T) {
 	twoFiftySix := 256
 	fiveHundred := 500
 	pm := fmt25Project(
-		map[string]contracts.ParamSchema{
+		map[string]metadata.ParamSchema{
 			"cursor": {Type: "string", MinLength: &one, MaxLength: &twoFiftySix},
 			"limit":  {Type: "integer", Minimum: &one, Maximum: &fiveHundred},
 			"ratio":  {Type: "number", Minimum: &one, Maximum: &fiveHundred},
 		},
-		map[string]contracts.ParamSchema{
+		map[string]metadata.ParamSchema{
 			"id":  {Type: "string", Format: "uuid"},                           // uuid exempt
 			"key": {Type: "string", MinLength: &one, MaxLength: &twoFiftySix}, // plain string with constraints
 		})

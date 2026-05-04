@@ -26,7 +26,7 @@ type AuthMetrics struct {
 // NewAuthMetrics registers auth metric instruments with the given provider.
 func NewAuthMetrics(p metrics.Provider) (*AuthMetrics, error) {
 	if p == nil {
-		return nil, errcode.New(errcode.ErrValidationFailed, "auth: metrics provider must not be nil")
+		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "auth: metrics provider must not be nil")
 	}
 
 	tvt, err := p.CounterVec(metrics.CounterOpts{

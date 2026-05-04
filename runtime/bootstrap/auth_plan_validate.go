@@ -44,7 +44,7 @@ func (b *Bootstrap) validateAuthPlanAssemblyMatch() error {
 			}
 			// Identity check: same pointer, not just same ID.
 			if p.Assembly != b.assemblyCore {
-				return errcode.New(errcode.ErrCellInvalidConfig,
+				return errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
 					fmt.Sprintf(
 						"bootstrap: listener %q AuthJWTFromAssembly carries assembly %q but WithAssembly registered %q; "+
 							"the composition root must wire the same *assembly.CoreAssembly instance everywhere",
@@ -80,7 +80,7 @@ func (b *Bootstrap) validateAuthPlanMTLSBindings() error {
 // VerifyClientCertIfGiven, and has a non-nil ClientCAs pool.
 func validateMTLSTLSConfig(source string, tlsCfg *tls.Config) error {
 	if tlsCfg == nil {
-		return errcode.New(errcode.ErrCellInvalidConfig,
+		return errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
 			fmt.Sprintf(
 				"bootstrap: %s uses AuthMTLS without WithListenerTLS; "+
 					"set tls.Config.ClientAuth=RequireAndVerifyClientCert and ClientCAs=<pool> "+
@@ -88,14 +88,14 @@ func validateMTLSTLSConfig(source string, tlsCfg *tls.Config) error {
 				source))
 	}
 	if tlsCfg.ClientAuth < tls.VerifyClientCertIfGiven {
-		return errcode.New(errcode.ErrCellInvalidConfig,
+		return errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
 			fmt.Sprintf(
 				"bootstrap: %s uses AuthMTLS but tls.Config.ClientAuth=%v; "+
 					"set ClientAuth >= tls.VerifyClientCertIfGiven (RequireAndVerifyClientCert recommended)",
 				source, tlsCfg.ClientAuth))
 	}
 	if tlsCfg.ClientCAs == nil {
-		return errcode.New(errcode.ErrCellInvalidConfig,
+		return errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
 			fmt.Sprintf(
 				"bootstrap: %s uses AuthMTLS but tls.Config.ClientCAs is nil; "+
 					"set ClientCAs to the CA pool the handshake should accept",
@@ -134,7 +134,7 @@ func (b *Bootstrap) validateAuthNoneExclusive() error {
 			hasGuard = true
 		}
 		if hasNone && hasGuard {
-			return errcode.New(errcode.ErrCellInvalidConfig,
+			return errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
 				fmt.Sprintf("listener %q: AuthNone cannot be mixed with other ListenerAuth plans; "+
 					"use []cell.ListenerAuth{cell.AuthNone{}} only for no-auth listeners or remove AuthNone from protected chains",
 					ref.String()))
@@ -157,7 +157,7 @@ func (b *Bootstrap) validateAuthServiceTokenPlans() error {
 			}
 			seen++
 			if seen > 1 {
-				return errcode.New(errcode.ErrCellInvalidConfig,
+				return errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
 					fmt.Sprintf("listener %q: at most one AuthServiceToken plan allowed in authChain",
 						ref.String()))
 			}
@@ -171,25 +171,25 @@ func (b *Bootstrap) validateAuthServiceTokenPlans() error {
 
 func validateAuthServiceTokenPlan(listener string, position int, p cell.AuthServiceToken) error {
 	if validation.IsNilInterface(p.Store) {
-		return errcode.New(errcode.ErrCellInvalidConfig,
+		return errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
 			fmt.Sprintf("listener %q: AuthServiceToken at position %d Store must not be nil; "+
 				"construct it with cell.MustNewAuthServiceToken(store, ring)",
 				listener, position))
 	}
 	if validation.IsNilInterface(p.Ring) {
-		return errcode.New(errcode.ErrCellInvalidConfig,
+		return errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
 			fmt.Sprintf("listener %q: AuthServiceToken at position %d Ring must not be nil; "+
 				"construct it with cell.MustNewAuthServiceToken(store, ring)",
 				listener, position))
 	}
 	if p.Store.Kind() == cell.NonceStoreKindNoop {
-		return errcode.New(errcode.ErrCellInvalidConfig,
+		return errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
 			fmt.Sprintf("listener %q: AuthServiceToken at position %d Store must not be NonceStoreKindNoop; "+
 				"service-token guards require replay protection",
 				listener, position))
 	}
 	if got := len(p.Ring.Current()); got < cell.MinHMACKeyBytes {
-		return errcode.New(errcode.ErrCellInvalidConfig,
+		return errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
 			fmt.Sprintf("listener %q: AuthServiceToken at position %d Ring.Current() returned %d bytes, minimum is %d",
 				listener, position, got, cell.MinHMACKeyBytes))
 	}
@@ -214,13 +214,13 @@ func checkJWTSingleton(listenerDesc string, chain []cell.ListenerAuth) error {
 		return nil
 	}
 	if jwtCount > 1 {
-		return errcode.New(errcode.ErrCellInvalidConfig,
+		return errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
 			fmt.Sprintf("listener %q: at most one AuthJWT/AuthJWTFromAssembly plan allowed in chain, found %d",
 				listenerDesc, jwtCount))
 	}
 	// Exactly one JWT plan — it must be at position 0.
 	if jwtPos != 0 {
-		return errcode.New(errcode.ErrCellInvalidConfig,
+		return errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
 			fmt.Sprintf("listener %q: AuthJWT/AuthJWTFromAssembly must be sole/first plan in chain (found at position %d)",
 				listenerDesc, jwtPos))
 	}

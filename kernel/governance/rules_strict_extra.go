@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/ghbvf/gocell/kernel/metadata"
-	"github.com/ghbvf/gocell/pkg/contracts"
 )
 
 // Rule ID constants for FMT-20..FMT-25. Extracted so that each rule ID string
@@ -561,7 +560,7 @@ func pathParamsReadyForInputConstraints(h *metadata.HTTPTransportMeta) bool {
 			return false
 		}
 		p := h.PathParams[name]
-		if p.Type == "" || !contracts.ParamTypes[p.Type] {
+		if p.Type == "" || !metadata.ParamTypes[p.Type] {
 			return false
 		}
 		if p.Required != nil && !*p.Required {
@@ -798,7 +797,7 @@ func walkSchemaInputArrayChildren(
 // constraints are redundant. The exemption applies only to length checks;
 // integer constraints still apply unconditionally.
 func (v *Validator) checkParamSchemaConstraints(
-	c *metadata.ContractMeta, params map[string]contracts.ParamSchema, paramKind string,
+	c *metadata.ContractMeta, params map[string]metadata.ParamSchema, paramKind string,
 ) []ValidationResult {
 	if len(params) == 0 {
 		return nil
@@ -821,7 +820,7 @@ func (v *Validator) checkParamSchemaConstraints(
 // checkSingleParamConstraints checks one ParamSchema for missing min/max
 // declarations. Branches on Type (string vs integer/number); other types are
 // untouched. Format == "uuid" exempts string params from length checks.
-func (v *Validator) checkSingleParamConstraints(c *metadata.ContractMeta, p contracts.ParamSchema, field string) []ValidationResult {
+func (v *Validator) checkSingleParamConstraints(c *metadata.ContractMeta, p metadata.ParamSchema, field string) []ValidationResult {
 	switch p.Type {
 	case "string":
 		if p.Format == "uuid" {

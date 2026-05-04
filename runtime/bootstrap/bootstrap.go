@@ -177,7 +177,7 @@ func (b *Bootstrap) validateHTTPListenerConfigs() error {
 // would push the outer function beyond the limit of 15.
 func validateListenerConfig(ref cell.ListenerRef, cfg listenerConfig) error {
 	if ref.IsZero() {
-		return errcode.New(errcode.ErrCellInvalidConfig,
+		return errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
 			"bootstrap: zero listener ref is invalid; use cell.PrimaryListener, cell.InternalListener, or cell.HealthListener")
 	}
 	// SEC-FAIL-CLOSED: nil OR empty authChain is rejected at phase0. Empty
@@ -187,7 +187,7 @@ func validateListenerConfig(ref cell.ListenerRef, cfg listenerConfig) error {
 	// keeps the explicit no-auth marker visible to grep, archtest SEC-02, and
 	// future reviewers.
 	if len(cfg.authChain) == 0 {
-		return errcode.New(errcode.ErrListenerAuthChainMissing,
+		return errcode.New(errcode.KindInternal, errcode.ErrListenerAuthChainMissing,
 			fmt.Sprintf("bootstrap: listener %q requires non-empty authChain "+
 				"(use []cell.ListenerAuth{cell.AuthNone{}} for no-auth listeners)", ref.String()))
 	}

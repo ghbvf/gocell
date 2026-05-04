@@ -81,19 +81,19 @@ func NewService(
 	opts ...Option,
 ) (*Service, error) {
 	if validation.IsNilInterface(userRepo) {
-		return nil, errcode.New(errcode.ErrCellInvalidConfig, "sessionlogin.NewService: userRepo must not be nil")
+		return nil, errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig, "sessionlogin.NewService: userRepo must not be nil")
 	}
 	if validation.IsNilInterface(sessionRepo) {
-		return nil, errcode.New(errcode.ErrCellInvalidConfig, "sessionlogin.NewService: sessionRepo must not be nil")
+		return nil, errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig, "sessionlogin.NewService: sessionRepo must not be nil")
 	}
 	if validation.IsNilInterface(roleRepo) {
-		return nil, errcode.New(errcode.ErrCellInvalidConfig, "sessionlogin.NewService: roleRepo must not be nil")
+		return nil, errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig, "sessionlogin.NewService: roleRepo must not be nil")
 	}
 	if validation.IsNilInterface(refreshStore) {
-		return nil, errcode.New(errcode.ErrCellInvalidConfig, "sessionlogin.NewService: refreshStore must not be nil")
+		return nil, errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig, "sessionlogin.NewService: refreshStore must not be nil")
 	}
 	if issuer == nil {
-		return nil, errcode.New(errcode.ErrCellInvalidConfig, "sessionlogin.NewService: issuer must not be nil")
+		return nil, errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig, "sessionlogin.NewService: issuer must not be nil")
 	}
 	if logger == nil {
 		logger = slog.Default()
@@ -111,7 +111,7 @@ func NewService(
 		o(s)
 	}
 	if s.txRunner == nil {
-		return nil, errcode.New(errcode.ErrValidationFailed, "sessionlogin: TxRunner required; use WithTxManager")
+		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "sessionlogin: TxRunner required; use WithTxManager")
 	}
 	clock.MustHaveClock(s.clock, "sessionlogin.NewService: clock required — use WithClock(c.clk)")
 	return s, nil
@@ -142,7 +142,7 @@ type LoginInput struct {
 
 // Login authenticates a user and returns a JWT token pair.
 func (s *Service) Login(ctx context.Context, input LoginInput) (dto.TokenPair, error) {
-	if err := validation.RequireNotBlank(errcode.ErrAuthLoginInvalidInput,
+	if err := validation.RequireNotEmpty(errcode.ErrAuthLoginInvalidInput,
 		validation.F("username", input.Username),
 		validation.F("password", input.Password),
 	); err != nil {
@@ -151,15 +151,15 @@ func (s *Service) Login(ctx context.Context, input LoginInput) (dto.TokenPair, e
 
 	user, err := s.userRepo.GetByUsername(ctx, input.Username)
 	if err != nil {
-		return dto.TokenPair{}, errcode.New(errcode.ErrAuthLoginFailed, "invalid credentials")
+		return dto.TokenPair{}, errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthLoginFailed, "invalid credentials")
 	}
 
 	if user.IsLocked() {
-		return dto.TokenPair{}, errcode.New(errcode.ErrAuthUserLocked, "account is locked")
+		return dto.TokenPair{}, errcode.New(errcode.KindPermissionDenied, errcode.ErrAuthUserLocked, "account is locked")
 	}
 
 	if err := bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(input.Password)); err != nil {
-		return dto.TokenPair{}, errcode.New(errcode.ErrAuthLoginFailed, "invalid credentials")
+		return dto.TokenPair{}, errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthLoginFailed, "invalid credentials")
 	}
 
 	sessionID := uuid.NewString()
@@ -225,7 +225,7 @@ func (s *Service) persistSessionWithRefresh(ctx context.Context, session *domain
 			if isNoopTx(s.txRunner) {
 				_ = s.sessionRepo.Delete(context.WithoutCancel(txCtx), session.ID)
 			}
-			return errcode.WrapInfra(errcode.ErrAuthRefreshUnavailable, "refresh store unavailable", err)
+			return errcode.Wrap(errcode.KindUnavailable, errcode.ErrAuthRefreshUnavailable, "refresh store unavailable", err)
 		}
 		refreshWire = wire
 		if err := outbox.Emit(txCtx, s.emitter, dto.TopicSessionCreated, dto.SessionCreatedEvent{

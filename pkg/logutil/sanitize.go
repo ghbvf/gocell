@@ -18,14 +18,15 @@ import (
 )
 
 // Sanitize returns s with ASCII control characters (codepoint < 0x20 or
-// equal to 0x7f) removed. Non-ASCII characters (including printable
-// Unicode like emoji) are preserved.
+// equal to 0x7f), Unicode C1 controls (U+0080 through U+009F), and Unicode
+// line/paragraph separators (U+2028, U+2029) removed. Printable Unicode
+// characters like letters and emoji are preserved.
 //
 // Use this on every user-controlled string that flows into a slog attribute,
 // e.g. r.Method, r.URL.Path, r.Header.Get(...), env values.
 func Sanitize(s string) string {
 	return strings.Map(func(r rune) rune {
-		if r < 0x20 || r == 0x7f {
+		if r < 0x20 || r == 0x7f || (r >= 0x80 && r <= 0x9f) || r == '\u2028' || r == '\u2029' {
 			return -1
 		}
 		return r

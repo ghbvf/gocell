@@ -26,7 +26,7 @@ const MinRSAKeyBits = 2048
 // validateRSAKeySize checks that the RSA key modulus is at least MinRSAKeyBits.
 func validateRSAKeySize(n int, keyKind string) error {
 	if n < MinRSAKeyBits {
-		return errcode.New(errcode.ErrAuthKeyInvalid,
+		return errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthKeyInvalid,
 			fmt.Sprintf("RSA %s key size %d bits is below the minimum %d bits", keyKind, n, MinRSAKeyBits))
 	}
 	return nil
@@ -96,7 +96,7 @@ func WithKeySetLogger(l *slog.Logger) KeySetOption {
 func NewKeySet(priv *rsa.PrivateKey, pub *rsa.PublicKey, clk clock.Clock, opts ...KeySetOption) (*KeySet, error) {
 	clock.MustHaveClock(clk, "auth.NewKeySet")
 	if priv == nil || pub == nil {
-		return nil, errcode.New(errcode.ErrAuthKeyInvalid, "signing key pair must not be nil")
+		return nil, errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthKeyInvalid, "signing key pair must not be nil")
 	}
 	if err := validateRSAKeySize(pub.N.BitLen(), "public"); err != nil {
 		return nil, err
@@ -107,7 +107,7 @@ func NewKeySet(priv *rsa.PrivateKey, pub *rsa.PublicKey, clk clock.Clock, opts .
 	// tokens that can never be verified — violating the fail-fast invariant.
 	derivedPub := &priv.PublicKey
 	if derivedPub.N.Cmp(pub.N) != 0 || derivedPub.E != pub.E {
-		return nil, errcode.New(errcode.ErrAuthKeyInvalid,
+		return nil, errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthKeyInvalid,
 			"private and public keys do not form a valid pair")
 	}
 
@@ -147,10 +147,10 @@ func NewKeySetWithVerificationKeys(
 	now := ks.clk.Now()
 	for _, vk := range vkeys {
 		if vk.PublicKey == nil {
-			return nil, errcode.New(errcode.ErrAuthKeyInvalid, "verification key public key must not be nil")
+			return nil, errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthKeyInvalid, "verification key public key must not be nil")
 		}
 		if vk.KeyID == "" {
-			return nil, errcode.New(errcode.ErrAuthKeyInvalid, "verification key ID must not be empty")
+			return nil, errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthKeyInvalid, "verification key ID must not be empty")
 		}
 		if err := validateRSAKeySize(vk.PublicKey.N.BitLen(), "verification"); err != nil {
 			return nil, err
@@ -202,14 +202,14 @@ func (ks *KeySet) PublicKeyByKID(kid string) (*rsa.PublicKey, error) {
 
 	pub, ok := ks.keyIndex[kid]
 	if !ok {
-		return nil, errcode.New(errcode.ErrAuthKeyInvalid, fmt.Sprintf("unknown kid: %s", kid))
+		return nil, errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthKeyInvalid, fmt.Sprintf("unknown kid: %s", kid))
 	}
 
 	// Signing key has no entry in keyExpiry — it never expires.
 	// Verification keys are checked against their expiry.
 	if exp, isVerification := ks.keyExpiry[kid]; isVerification {
 		if !ks.clk.Now().Before(exp) {
-			return nil, errcode.New(errcode.ErrAuthKeyInvalid, fmt.Sprintf("kid %s has expired", kid))
+			return nil, errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthKeyInvalid, fmt.Sprintf("kid %s has expired", kid))
 		}
 	}
 
@@ -301,25 +301,25 @@ var ErrKeyMissing = errcode.ErrAuthKeyMissing
 func LoadKeysFromEnv() (privateKey *rsa.PrivateKey, publicKey *rsa.PublicKey, err error) {
 	privPEM := os.Getenv(EnvJWTPrivateKey)
 	if privPEM == "" {
-		return nil, nil, errcode.New(ErrKeyMissing,
+		return nil, nil, errcode.New(errcode.KindInternal, ErrKeyMissing,
 			fmt.Sprintf("environment variable %s is not set", EnvJWTPrivateKey))
 	}
 
 	pubPEM := os.Getenv(EnvJWTPublicKey)
 	if pubPEM == "" {
-		return nil, nil, errcode.New(ErrKeyMissing,
+		return nil, nil, errcode.New(errcode.KindInternal, ErrKeyMissing,
 			fmt.Sprintf("environment variable %s is not set", EnvJWTPublicKey))
 	}
 
 	privateKey, err = parseRSAPrivateKey([]byte(privPEM))
 	if err != nil {
-		return nil, nil, errcode.Wrap(ErrKeyMissing,
+		return nil, nil, errcode.Wrap(errcode.KindInternal, ErrKeyMissing,
 			fmt.Sprintf("failed to parse %s", EnvJWTPrivateKey), err)
 	}
 
 	publicKey, err = parseRSAPublicKey([]byte(pubPEM))
 	if err != nil {
-		return nil, nil, errcode.Wrap(ErrKeyMissing,
+		return nil, nil, errcode.Wrap(errcode.KindInternal, ErrKeyMissing,
 			fmt.Sprintf("failed to parse %s", EnvJWTPublicKey), err)
 	}
 
@@ -344,19 +344,19 @@ func LoadKeySetFromEnv(clk clock.Clock) (*KeySet, error) {
 
 	prevPub, err := parseRSAPublicKey([]byte(prevPubPEM))
 	if err != nil {
-		return nil, errcode.Wrap(errcode.ErrAuthKeyInvalid,
+		return nil, errcode.Wrap(errcode.KindUnauthenticated, errcode.ErrAuthKeyInvalid,
 			fmt.Sprintf("failed to parse %s", EnvJWTPrevPublicKey), err)
 	}
 
 	expiresStr := os.Getenv(EnvJWTPrevKeyExpires)
 	if expiresStr == "" {
-		return nil, errcode.New(errcode.ErrAuthKeyInvalid,
+		return nil, errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthKeyInvalid,
 			fmt.Sprintf("%s is set but %s is missing", EnvJWTPrevPublicKey, EnvJWTPrevKeyExpires))
 	}
 
 	expiresAt, err := time.Parse(time.RFC3339, expiresStr)
 	if err != nil {
-		return nil, errcode.Wrap(errcode.ErrAuthKeyInvalid,
+		return nil, errcode.Wrap(errcode.KindUnauthenticated, errcode.ErrAuthKeyInvalid,
 			fmt.Sprintf("failed to parse %s as RFC 3339 (example: 2026-04-12T00:00:00Z)", EnvJWTPrevKeyExpires), err)
 	}
 
@@ -370,59 +370,69 @@ func LoadKeySetFromEnv(clk clock.Clock) (*KeySet, error) {
 }
 
 func parseRSAPrivateKey(pemData []byte) (*rsa.PrivateKey, error) {
-	block, _ := pem.Decode(pemData)
-	if block == nil {
-		return nil, errcode.New(errcode.ErrAuthKeyInvalid, "no PEM block found in private key data")
-	}
-
-	// Try PKCS#8 first, then PKCS#1.
-	key, err := x509.ParsePKCS8PrivateKey(block.Bytes)
-	if err == nil {
-		rsaKey, ok := key.(*rsa.PrivateKey)
-		if !ok {
-			return nil, errcode.New(errcode.ErrAuthKeyInvalid, "PKCS#8 key is not RSA")
-		}
-		if err := validateRSAKeySize(rsaKey.N.BitLen(), "private"); err != nil {
-			return nil, err
-		}
-		return rsaKey, nil
-	}
-
-	rsaKey, err := x509.ParsePKCS1PrivateKey(block.Bytes)
-	if err != nil {
-		return nil, errcode.Wrap(errcode.ErrAuthKeyInvalid, "failed to parse RSA private key", err)
-	}
-	if err := validateRSAKeySize(rsaKey.N.BitLen(), "private"); err != nil {
-		return nil, err
-	}
-	return rsaKey, nil
+	return parseRSAKeyPEM(pemData, "private key data", "private", parseRSAPrivateBlock)
 }
 
 func parseRSAPublicKey(pemData []byte) (*rsa.PublicKey, error) {
+	return parseRSAKeyPEM(pemData, "public key data", "public", parseRSAPublicBlock)
+}
+
+func parseRSAKeyPEM[T any](pemData []byte, missingLabel, usage string, parse func([]byte) (T, int, error)) (T, error) {
 	block, _ := pem.Decode(pemData)
 	if block == nil {
-		return nil, errcode.New(errcode.ErrAuthKeyInvalid, "no PEM block found in public key data")
+		var zero T
+		return zero, errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthKeyInvalid,
+			"no PEM block found in "+missingLabel)
 	}
 
+	key, bitLen, err := parse(block.Bytes)
+	if err != nil {
+		var zero T
+		return zero, err
+	}
+	if err := validateRSAKeySize(bitLen, usage); err != nil {
+		var zero T
+		return zero, err
+	}
+	return key, nil
+}
+
+func parseRSAPrivateBlock(der []byte) (*rsa.PrivateKey, int, error) {
+	// Try PKCS#8 first, then PKCS#1.
+	key, err := x509.ParsePKCS8PrivateKey(der)
+	if err == nil {
+		rsaKey, ok := key.(*rsa.PrivateKey)
+		if !ok {
+			return nil, 0, errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthKeyInvalid,
+				"PKCS#8 key is not RSA")
+		}
+		return rsaKey, rsaKey.N.BitLen(), nil
+	}
+
+	rsaKey, err := x509.ParsePKCS1PrivateKey(der)
+	if err != nil {
+		return nil, 0, errcode.Wrap(errcode.KindUnauthenticated, errcode.ErrAuthKeyInvalid,
+			"failed to parse RSA private key", err)
+	}
+	return rsaKey, rsaKey.N.BitLen(), nil
+}
+
+func parseRSAPublicBlock(der []byte) (*rsa.PublicKey, int, error) {
 	// Try PKIX first, then PKCS#1.
-	pub, err := x509.ParsePKIXPublicKey(block.Bytes)
+	pub, err := x509.ParsePKIXPublicKey(der)
 	if err == nil {
 		rsaKey, ok := pub.(*rsa.PublicKey)
 		if !ok {
-			return nil, errcode.New(errcode.ErrAuthKeyInvalid, "PKIX key is not RSA")
+			return nil, 0, errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthKeyInvalid,
+				"PKIX key is not RSA")
 		}
-		if err := validateRSAKeySize(rsaKey.N.BitLen(), "public"); err != nil {
-			return nil, err
-		}
-		return rsaKey, nil
+		return rsaKey, rsaKey.N.BitLen(), nil
 	}
 
-	rsaKey, err := x509.ParsePKCS1PublicKey(block.Bytes)
+	rsaKey, err := x509.ParsePKCS1PublicKey(der)
 	if err != nil {
-		return nil, errcode.Wrap(errcode.ErrAuthKeyInvalid, "failed to parse RSA public key", err)
+		return nil, 0, errcode.Wrap(errcode.KindUnauthenticated, errcode.ErrAuthKeyInvalid,
+			"failed to parse RSA public key", err)
 	}
-	if err := validateRSAKeySize(rsaKey.N.BitLen(), "public"); err != nil {
-		return nil, err
-	}
-	return rsaKey, nil
+	return rsaKey, rsaKey.N.BitLen(), nil
 }

@@ -20,7 +20,7 @@ import (
 // First-call failure is cached so subsequent calls fail-fast with the same
 // error rather than silently degrading. Internal queries use a Background
 // context — these are sub-second diagnostic invocations with no real
-// cancellation surface; cmdrun.Run still receives a ctx because subprocess
+// cancellation surface; cmdrun.RunWith still receives a ctx because subprocess
 // cancellation is the cmdrun contract.
 var gitTool = sync.OnceValues(func() (cmdrun.ValidatedTool, error) {
 	return cmdrun.NewTool("git")
@@ -31,7 +31,7 @@ func runGit(args ...string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	return cmdrun.Run(context.Background(), tool, args...)
+	return cmdrun.RunWith(context.Background(), tool, cmdrun.RunOptions{}, args...)
 }
 
 // HasGitMetadata reports whether root looks like a git work tree (has a .git

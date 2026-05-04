@@ -25,7 +25,7 @@ var identifierRe = regexp.MustCompile(`^[a-zA-Z_][a-zA-Z0-9_]*$`)
 // parameterised).
 func validateIdentifier(name string) error {
 	if !identifierRe.MatchString(name) {
-		return errcode.New(errcode.ErrValidationFailed,
+		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			fmt.Sprintf("invalid SQL identifier: %q", name))
 	}
 	return nil
@@ -88,7 +88,7 @@ func NewMigrator(p *Pool, migrations fs.FS, tableName string) (*Migrator, error)
 	)
 	if err != nil {
 		_ = db.Close()
-		return nil, errcode.Wrap(ErrAdapterPGMigrate, "postgres: create goose provider", err)
+		return nil, errcode.Wrap(errcode.KindInternal, ErrAdapterPGMigrate, "postgres: create goose provider", err)
 	}
 
 	return &Migrator{
@@ -111,19 +111,19 @@ func NewMigrator(p *Pool, migrations fs.FS, tableName string) (*Migrator, error)
 func (m *Migrator) Up(ctx context.Context) error {
 	invalid, err := DetectInvalidIndexes(ctx, m.pool)
 	if err != nil {
-		return errcode.Wrap(ErrAdapterPGMigrate, "postgres: pre-check invalid indexes", err)
+		return errcode.Wrap(errcode.KindInternal, ErrAdapterPGMigrate, "postgres: pre-check invalid indexes", err)
 	}
 	if len(invalid) > 0 {
 		names := make([]string, len(invalid))
 		for i, idx := range invalid {
 			names[i] = idx.Index
 		}
-		return errcode.New(ErrAdapterPGMigrate,
+		return errcode.New(errcode.KindInternal, ErrAdapterPGMigrate,
 			fmt.Sprintf("postgres: refusing to migrate: %d invalid index(es) detected: %v;"+
 				" manual cleanup required before proceeding", len(invalid), names))
 	}
 	if _, err := m.provider.Up(ctx); err != nil {
-		return errcode.Wrap(ErrAdapterPGMigrate, "postgres: apply migrations", err)
+		return errcode.Wrap(errcode.KindInternal, ErrAdapterPGMigrate, "postgres: apply migrations", err)
 	}
 	return nil
 }
@@ -135,7 +135,7 @@ func (m *Migrator) Down(ctx context.Context) error {
 		if errors.Is(err, goose.ErrNoCurrentVersion) || errors.Is(err, goose.ErrNoNextVersion) {
 			return nil // already at version 0, idempotent no-op
 		}
-		return errcode.Wrap(ErrAdapterPGMigrate, "postgres: rollback migration", err)
+		return errcode.Wrap(errcode.KindInternal, ErrAdapterPGMigrate, "postgres: rollback migration", err)
 	}
 	return nil
 }
@@ -144,7 +144,7 @@ func (m *Migrator) Down(ctx context.Context) error {
 func (m *Migrator) Status(ctx context.Context) ([]MigrationStatus, error) {
 	results, err := m.provider.Status(ctx)
 	if err != nil {
-		return nil, errcode.Wrap(ErrAdapterPGMigrate, "postgres: query migration status", err)
+		return nil, errcode.Wrap(errcode.KindInternal, ErrAdapterPGMigrate, "postgres: query migration status", err)
 	}
 
 	statuses := make([]MigrationStatus, 0, len(results))
@@ -178,7 +178,7 @@ func migrationName(path string, version int64) string {
 // Close releases the underlying *sql.DB created for goose.
 func (m *Migrator) Close() error {
 	if err := m.db.Close(); err != nil {
-		return errcode.Wrap(ErrAdapterPGMigrate, "postgres: close migrator db", err)
+		return errcode.Wrap(errcode.KindInternal, ErrAdapterPGMigrate, "postgres: close migrator db", err)
 	}
 	return nil
 }

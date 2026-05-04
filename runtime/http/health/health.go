@@ -618,16 +618,16 @@ func (h *Handler) verboseDecision(r *http.Request) (verbose, denied bool) {
 }
 
 // sendVerboseDenied writes the 401 response for a rejected verbose request.
-// Uses httputil.WritePublicError so the response carries request_id (when
+// Uses httputil.WritePublic so the response carries request_id (when
 // set by middleware) in the canonical envelope shape shared with business
 // 4xx responses. Machine-side monitoring can therefore correlate denied
 // verbose probes with other request-level signals via the same field.
 func (h *Handler) sendVerboseDenied(w http.ResponseWriter, r *http.Request) {
-	httputil.WritePublicError(
+	httputil.WritePublic(
 		r.Context(),
 		w,
-		http.StatusUnauthorized,
-		string(errcode.ErrReadyzVerboseDenied),
+		errcode.KindUnauthenticated,
+		errcode.ErrReadyzVerboseDenied,
 		"verbose output requires a matching X-Readyz-Token header",
 	)
 }

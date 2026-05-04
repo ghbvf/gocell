@@ -68,13 +68,13 @@ type boundaryContext struct {
 func (g *Generator) GenerateEntrypoint(assemblyID string) ([]byte, error) {
 	asm := g.project.Assemblies[assemblyID]
 	if asm == nil {
-		return nil, errcode.New(errcode.ErrAssemblyNotFound,
+		return nil, errcode.New(errcode.KindNotFound, errcode.ErrAssemblyNotFound,
 			fmt.Sprintf("assembly %q not found", assemblyID))
 	}
 
 	helperName, err := assemblyRunHelperName(assemblyID)
 	if err != nil {
-		return nil, errcode.Wrap(errcode.ErrMetadataInvalid,
+		return nil, errcode.Wrap(errcode.KindInvalid, errcode.ErrMetadataInvalid,
 			fmt.Sprintf("invalid assembly %q for generated run helper", assemblyID), err)
 	}
 
@@ -99,7 +99,7 @@ func (g *Generator) GenerateEntrypoint(assemblyID string) ([]byte, error) {
 func (g *Generator) GenerateBoundary(assemblyID string) ([]byte, error) {
 	asm := g.project.Assemblies[assemblyID]
 	if asm == nil {
-		return nil, errcode.New(errcode.ErrAssemblyNotFound,
+		return nil, errcode.New(errcode.KindNotFound, errcode.ErrAssemblyNotFound,
 			fmt.Sprintf("assembly %q not found", assemblyID))
 	}
 
@@ -137,12 +137,12 @@ func (g *Generator) computeBoundaryContracts(cellSet map[string]bool) (exported,
 	for _, contractID := range g.contracts.AllIDs() {
 		provider, provErr := g.contracts.Provider(contractID)
 		if provErr != nil {
-			return nil, nil, errcode.Wrap(errcode.ErrValidationFailed,
+			return nil, nil, errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed,
 				fmt.Sprintf("boundary: resolve provider for %q", contractID), provErr)
 		}
 		consumers, consErr := g.contracts.Consumers(contractID)
 		if consErr != nil {
-			return nil, nil, errcode.Wrap(errcode.ErrValidationFailed,
+			return nil, nil, errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed,
 				fmt.Sprintf("boundary: resolve consumers for %q", contractID), consErr)
 		}
 		classifyBoundary(contractID, provider, consumers, cellSet, exportedSet, importedSet)
@@ -405,19 +405,19 @@ func assemblyRunHelperName(assemblyID string) (string, error) {
 func (g *Generator) executeTemplate(name string, ctx any) ([]byte, error) {
 	content, err := gentpl.FS.ReadFile(name)
 	if err != nil {
-		return nil, errcode.Wrap(errcode.ErrMetadataInvalid,
+		return nil, errcode.Wrap(errcode.KindInvalid, errcode.ErrMetadataInvalid,
 			fmt.Sprintf("failed to read template %q", name), err)
 	}
 
 	tmpl, err := template.New(name).Parse(string(content))
 	if err != nil {
-		return nil, errcode.Wrap(errcode.ErrMetadataInvalid,
+		return nil, errcode.Wrap(errcode.KindInvalid, errcode.ErrMetadataInvalid,
 			fmt.Sprintf("failed to parse template %q", name), err)
 	}
 
 	var buf bytes.Buffer
 	if err := tmpl.Execute(&buf, ctx); err != nil {
-		return nil, errcode.Wrap(errcode.ErrMetadataInvalid,
+		return nil, errcode.Wrap(errcode.KindInvalid, errcode.ErrMetadataInvalid,
 			fmt.Sprintf("failed to execute template %q", name), err)
 	}
 

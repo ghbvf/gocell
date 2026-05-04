@@ -70,7 +70,7 @@ func (h *Handler) HandleGetStatus(w http.ResponseWriter, r *http.Request) {
 
 	device, err := h.svc.GetStatus(r.Context(), id)
 	if err != nil {
-		httputil.WriteDomainError(r.Context(), w, err)
+		httputil.WriteError(r.Context(), w, err)
 		return
 	}
 

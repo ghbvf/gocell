@@ -42,7 +42,7 @@ func TestErrorCodes_Unique(t *testing.T) {
 }
 
 func TestErrorCodes_CanCreateErrors(t *testing.T) {
-	err := errcode.New(ErrAdapterPGConnect, "connection failed")
+	err := errcode.New(errcode.KindInternal, ErrAdapterPGConnect, "connection failed")
 	assert.Equal(t, ErrAdapterPGConnect, err.Code)
 	assert.Contains(t, err.Error(), "ERR_ADAPTER_PG_CONNECT")
 }

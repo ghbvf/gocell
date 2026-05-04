@@ -81,7 +81,8 @@ type Diagnostic struct {
 // has an unresolved identity field. Names, labels, namespaces, const-label keys,
 // and buckets are part of the generated schema contract, so the generator fails
 // instead of emitting an empty or placeholder value.
-var ErrUnresolvedMetricSchema = errcode.New(errcode.ErrMetricsSchemaUnresolved, "metrics schema: unresolved metric schema")
+var ErrUnresolvedMetricSchema = errcode.New(errcode.KindInternal, errcode.ErrMetricsSchemaUnresolved,
+	"metrics schema: unresolved metric schema")
 
 // Deprecated: use ErrUnresolvedMetricSchema; this alias exists for historical
 // callers and may be removed once all references migrate.

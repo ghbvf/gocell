@@ -45,18 +45,18 @@ type CursorCodec struct {
 // no-op and is therefore rejected at construction time.
 func NewCursorCodec(current []byte, previous ...[]byte) (*CursorCodec, error) {
 	if len(current) < minCursorKeyBytes {
-		return nil, errcode.New(errcode.ErrCursorInvalid,
+		return nil, errcode.New(errcode.KindInvalid, errcode.ErrCursorInvalid,
 			fmt.Sprintf("cursor HMAC key is %d bytes, minimum is %d", len(current), minCursorKeyBytes))
 	}
 	var prev []byte
 	if len(previous) > 0 && len(previous[0]) > 0 {
 		prev = previous[0]
 		if len(prev) < minCursorKeyBytes {
-			return nil, errcode.New(errcode.ErrCursorInvalid,
+			return nil, errcode.New(errcode.KindInvalid, errcode.ErrCursorInvalid,
 				fmt.Sprintf("previous cursor HMAC key is %d bytes, minimum is %d", len(prev), minCursorKeyBytes))
 		}
 		if bytes.Equal(current, prev) {
-			return nil, errcode.New(errcode.ErrCursorInvalid,
+			return nil, errcode.New(errcode.KindInvalid, errcode.ErrCursorInvalid,
 				"previous cursor key must differ from current")
 		}
 	}
@@ -71,7 +71,7 @@ func (c *CursorCodec) Encode(cur Cursor) (string, error) {
 		// Marshal failure is a server-side programming error (un-serializable
 		// values in Cursor.Values), not a client-provided bad cursor. Use
 		// ErrInternal so it maps to HTTP 500, not 400.
-		return "", errcode.Wrap(errcode.ErrInternal, "cursor: marshal failed", err)
+		return "", errcode.Wrap(errcode.KindInternal, errcode.ErrInternal, "cursor: marshal failed", err)
 	}
 
 	sig := c.signWith(c.current, payload)
@@ -180,13 +180,13 @@ const cursorInvalidMsg = "invalid cursor; restart from first page (client should
 // message and diagnostic reason in the details field. The reason is also set as
 // InternalMessage so it appears in server-side logs via Error().
 func cursorInvalid(reason string) error {
-	detailed, err := errcode.WithDetails(
-		errcode.Safe(errcode.ErrCursorInvalid, cursorInvalidMsg, reason),
-		map[string]any{"reason": reason})
-	if err != nil {
-		return err
-	}
-	return detailed
+	return errcode.New(
+		errcode.KindInvalid,
+		errcode.ErrCursorInvalid,
+		cursorInvalidMsg,
+		errcode.WithInternal(reason),
+		errcode.WithDetails(map[string]any{"reason": reason}),
+	)
 }
 
 // cursorInvalidExtra returns a standardized cursor error with extra diagnostic
@@ -197,13 +197,13 @@ func cursorInvalidExtra(reason string, extra map[string]any) error {
 	details := make(map[string]any, len(extra)+1)
 	maps.Copy(details, extra)
 	details["reason"] = reason // set last — cannot be overwritten by extra
-	detailed, err := errcode.WithDetails(
-		errcode.Safe(errcode.ErrCursorInvalid, cursorInvalidMsg, reason),
-		details)
-	if err != nil {
-		return err
-	}
-	return detailed
+	return errcode.New(
+		errcode.KindInvalid,
+		errcode.ErrCursorInvalid,
+		cursorInvalidMsg,
+		errcode.WithInternal(reason),
+		errcode.WithDetails(details),
+	)
 }
 
 // ValidateCursorScope checks that the decoded cursor carries the expected sort

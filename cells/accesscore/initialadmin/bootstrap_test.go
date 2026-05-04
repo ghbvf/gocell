@@ -93,7 +93,7 @@ type duplicateUserRepo struct {
 }
 
 func (r *duplicateUserRepo) Create(_ context.Context, _ *domain.User) error {
-	return errcode.New(errcode.ErrAuthUserDuplicate, "username already exists")
+	return errcode.New(errcode.KindConflict, errcode.ErrAuthUserDuplicate, "username already exists")
 }
 func (r *duplicateUserRepo) GetByID(ctx context.Context, id string) (*domain.User, error) {
 	return r.inner.GetByID(ctx, id)

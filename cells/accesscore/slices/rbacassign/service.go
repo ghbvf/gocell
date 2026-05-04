@@ -80,7 +80,7 @@ func NewService(
 		o(s)
 	}
 	if s.txRunner == nil {
-		return nil, errcode.New(errcode.ErrValidationFailed, "rbacassign: TxRunner required; use WithTxManager")
+		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "rbacassign: TxRunner required; use WithTxManager")
 	}
 	return s, nil
 }
@@ -151,7 +151,7 @@ func (s *Service) persistChange(
 //
 
 func (s *Service) Assign(ctx context.Context, userID, roleID string) error {
-	if err := validation.RequireNotBlank(errcode.ErrAuthRBACInvalidInput,
+	if err := validation.RequireNotEmpty(errcode.ErrAuthRBACInvalidInput,
 		validation.F("userId", userID),
 		validation.F("roleId", roleID),
 	); err != nil {
@@ -190,7 +190,7 @@ func (s *Service) Assign(ctx context.Context, userID, roleID string) error {
 //
 
 func (s *Service) Revoke(ctx context.Context, userID, roleID string) error {
-	if err := validation.RequireNotBlank(errcode.ErrAuthRBACInvalidInput,
+	if err := validation.RequireNotEmpty(errcode.ErrAuthRBACInvalidInput,
 		validation.F("userId", userID),
 		validation.F("roleId", roleID),
 	); err != nil {

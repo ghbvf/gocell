@@ -32,7 +32,7 @@ func (v *intentMockVerifier) VerifyIntent(_ context.Context, _ string, expected 
 	case TokenIntentAccess:
 		return v.accessClaims, v.accessErr
 	default:
-		return Claims{}, errcode.New(errcode.ErrAuthInvalidTokenIntent, "unknown intent")
+		return Claims{}, errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthInvalidTokenIntent, "unknown intent")
 	}
 }
 
@@ -59,7 +59,7 @@ func TestAuthMiddleware_CallsVerifyIntentWithAccessExpectation(t *testing.T) {
 func TestAuthMiddleware_RejectsRefreshIntentToken_401(t *testing.T) {
 	// VerifyIntent(access) returns ErrAuthInvalidTokenIntent for a refresh token.
 	verifier := &intentMockVerifier{
-		accessErr: errcode.New(errcode.ErrAuthInvalidTokenIntent, "refresh token used at business endpoint"),
+		accessErr: errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthInvalidTokenIntent, "refresh token used at business endpoint"),
 	}
 	handler := AuthMiddleware(verifier, WithAuthClock(clock.Real()))(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		t.Fatal("handler must not be called when intent mismatches")
@@ -82,11 +82,11 @@ func TestAuthMiddleware_RejectsRefreshIntentToken_401(t *testing.T) {
 func TestAuthMiddleware_RefreshAndInvalidToken_SameResponse(t *testing.T) {
 	// Case 1: refresh intent mismatch
 	intentErrVerifier := &intentMockVerifier{
-		accessErr: errcode.New(errcode.ErrAuthInvalidTokenIntent, "refresh token at business endpoint"),
+		accessErr: errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthInvalidTokenIntent, "refresh token at business endpoint"),
 	}
 	// Case 2: some other invalid token error
 	otherErrVerifier := &intentMockVerifier{
-		accessErr: errcode.New(errcode.ErrAuthUnauthorized, "token expired"),
+		accessErr: errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthUnauthorized, "token expired"),
 	}
 
 	makeHandler := func(v IntentTokenVerifier) http.Handler {
@@ -122,7 +122,7 @@ func TestAuthMiddleware_IntentMismatch_LogsInvalidIntentError(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
 
 	verifier := &intentMockVerifier{
-		accessErr: errcode.New(errcode.ErrAuthInvalidTokenIntent, "refresh token at business endpoint"),
+		accessErr: errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthInvalidTokenIntent, "refresh token at business endpoint"),
 	}
 	handler := AuthMiddleware(verifier, WithAuthClock(clock.Real()), WithLogger(logger))(
 		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

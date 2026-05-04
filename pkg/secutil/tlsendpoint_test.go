@@ -11,7 +11,8 @@ import (
 // TestValidateTLSEndpoint verifies the TLS-endpoint validation helper across
 // the canonical cases defined by the SEC-FAIL-CLOSED loopback exception rule:
 //   - Remote endpoints require a TLS scheme (https, rediss, tls-aware bare host is rejected).
-//   - Loopback hosts (127.x.x.x, ::1, IPv4-mapped IPv6, localhost) are exempt regardless of scheme.
+//   - Loopback IP literals (127.x.x.x, ::1, IPv4-mapped IPv6) are exempt regardless of scheme.
+//   - DNS names, including localhost, are rejected for non-TLS endpoints.
 //   - Empty endpoint is always rejected.
 //   - unix:// with empty host is accepted; unix://host/path is rejected.
 func TestValidateTLSEndpoint(t *testing.T) {
@@ -33,8 +34,13 @@ func TestValidateTLSEndpoint(t *testing.T) {
 			wantErr: true,
 		},
 		{
-			name:    "redis loopback — ok",
+			name:    "redis localhost — reject",
 			input:   "redis://localhost:6379",
+			wantErr: true,
+		},
+		{
+			name:    "redis loopback IP — ok",
+			input:   "redis://127.0.0.1:6379",
 			wantErr: false,
 		},
 		{
@@ -58,9 +64,9 @@ func TestValidateTLSEndpoint(t *testing.T) {
 			wantErr: false,
 		},
 		{
-			name:    "bare localhost:port — ok (loopback exception)",
+			name:    "bare localhost:port — reject",
 			input:   "localhost:8200",
-			wantErr: false,
+			wantErr: true,
 		},
 		{
 			name:    "bare non-loopback host:port — reject",

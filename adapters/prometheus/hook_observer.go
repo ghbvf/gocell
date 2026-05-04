@@ -72,7 +72,7 @@ var _ cell.LifecycleHookObserver = (*HookObserver)(nil)
 // registration on the same registry).
 func NewHookObserver(cfg HookObserverConfig) (*HookObserver, error) {
 	if cfg.Registry == nil {
-		return nil, errcode.New(ErrAdapterPromConfig, "prometheus hook observer: Registry is required")
+		return nil, errcode.New(errcode.KindInternal, ErrAdapterPromConfig, "prometheus hook observer: Registry is required")
 	}
 	cfg.defaults()
 
@@ -90,7 +90,7 @@ func NewHookObserver(cfg HookObserverConfig) (*HookObserver, error) {
 	}, []string{"cell_id", "hook"})
 
 	if err := cfg.Registry.Register(hookTotal); err != nil {
-		return nil, errcode.Wrap(ErrAdapterPromRegister,
+		return nil, errcode.Wrap(errcode.KindInternal, ErrAdapterPromRegister,
 			"prometheus hook observer: register cell_hook_total", err)
 	}
 	if err := cfg.Registry.Register(hookDuration); err != nil {
@@ -98,7 +98,7 @@ func NewHookObserver(cfg HookObserverConfig) (*HookObserver, error) {
 		// a retry with the same registry would fail with "already registered"
 		// on hookTotal and leak a dangling half-registered observer.
 		cfg.Registry.Unregister(hookTotal)
-		return nil, errcode.Wrap(ErrAdapterPromRegister,
+		return nil, errcode.Wrap(errcode.KindInternal, ErrAdapterPromRegister,
 			"prometheus hook observer: register cell_hook_duration_seconds", err)
 	}
 

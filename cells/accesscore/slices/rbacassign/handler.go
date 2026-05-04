@@ -85,13 +85,13 @@ func (h *Handler) RegisterRoutes(mux kcell.RouteMux) error {
 
 func (h *Handler) handleAssign(w http.ResponseWriter, r *http.Request) {
 	var req AssignRequest
-	if err := httputil.DecodeJSONStrict(r, &req); err != nil {
-		httputil.WriteDecodeError(r.Context(), w, err)
+	if err := httputil.DecodeJSONStrict(r, &req, httputil.DefaultDecodeJSONLimit); err != nil {
+		httputil.WriteError(r.Context(), w, err)
 		return
 	}
 
 	if err := h.svc.Assign(r.Context(), req.UserID, req.RoleID); err != nil {
-		httputil.WriteDomainError(r.Context(), w, err)
+		httputil.WriteError(r.Context(), w, err)
 		return
 	}
 
@@ -106,13 +106,13 @@ func (h *Handler) handleAssign(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) handleRevoke(w http.ResponseWriter, r *http.Request) {
 	var req RevokeRequest
-	if err := httputil.DecodeJSONStrict(r, &req); err != nil {
-		httputil.WriteDecodeError(r.Context(), w, err)
+	if err := httputil.DecodeJSONStrict(r, &req, httputil.DefaultDecodeJSONLimit); err != nil {
+		httputil.WriteError(r.Context(), w, err)
 		return
 	}
 
 	if err := h.svc.Revoke(r.Context(), req.UserID, req.RoleID); err != nil {
-		httputil.WriteDomainError(r.Context(), w, err)
+		httputil.WriteError(r.Context(), w, err)
 		return
 	}
 

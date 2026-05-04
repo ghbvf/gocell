@@ -87,27 +87,27 @@ func validateMetadata(m map[string]string) error {
 		return nil
 	}
 	if len(m) > MaxMetadataKeys {
-		return errcode.New(errcode.ErrValidationFailed,
+		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			fmt.Sprintf("outbox: metadata key count %d exceeds max %d", len(m), MaxMetadataKeys))
 	}
 	var total int
 	for k, v := range m {
 		if _, reserved := reservedMetadataKeySet[k]; reserved {
-			return errcode.New(errcode.ErrValidationFailed,
+			return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 				fmt.Sprintf("outbox: metadata key %q is reserved for the observability bridge — use Entry.Observability instead", k))
 		}
 		if len(k) > MaxMetadataKeyLen {
-			return errcode.New(errcode.ErrValidationFailed,
+			return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 				fmt.Sprintf("outbox: metadata key length %d exceeds max %d (key=%q)", len(k), MaxMetadataKeyLen, truncate(k, 64)))
 		}
 		if len(v) > MaxMetadataValueLen {
-			return errcode.New(errcode.ErrValidationFailed,
+			return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 				fmt.Sprintf("outbox: metadata value length %d exceeds max %d (key=%q)", len(v), MaxMetadataValueLen, truncate(k, 64)))
 		}
 		total += len(k) + len(v)
 	}
 	if total > MaxMetadataTotalSize {
-		return errcode.New(errcode.ErrValidationFailed,
+		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			fmt.Sprintf("outbox: metadata total size %d exceeds max %d", total, MaxMetadataTotalSize))
 	}
 	return nil
@@ -222,13 +222,13 @@ func (e Entry) RoutingTopic() string {
 // (F-OB-03, META-SIZE-01, PR246-FU1 reserved-key invariant).
 func (e Entry) Validate() error {
 	if e.ID == "" {
-		return errcode.New(errcode.ErrValidationFailed, "outbox: entry missing ID")
+		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "outbox: entry missing ID")
 	}
 	if e.RoutingTopic() == "" {
-		return errcode.New(errcode.ErrValidationFailed, "outbox: entry missing topic (Topic and EventType are both empty)")
+		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "outbox: entry missing topic (Topic and EventType are both empty)")
 	}
 	if len(e.Payload) == 0 {
-		return errcode.New(errcode.ErrValidationFailed, "outbox: entry missing payload")
+		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "outbox: entry missing payload")
 	}
 	if err := validateMetadata(e.Metadata); err != nil {
 		return err

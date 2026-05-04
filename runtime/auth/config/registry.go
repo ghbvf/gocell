@@ -87,11 +87,11 @@ func New(cfg Config) (*Registry, error) {
 
 	if cfg.RealMode {
 		if issuer == "" {
-			return nil, errcode.New(errcode.ErrAuthVerifierConfig,
+			return nil, errcode.New(errcode.KindInternal, errcode.ErrAuthVerifierConfig,
 				"JWT registry: Issuer is required in real mode (set GOCELL_JWT_ISSUER)")
 		}
 		if len(auds) == 0 {
-			return nil, errcode.New(errcode.ErrAuthVerifierConfig,
+			return nil, errcode.New(errcode.KindInternal, errcode.ErrAuthVerifierConfig,
 				"JWT registry: Audiences must not be empty in real mode (set GOCELL_JWT_AUDIENCE)")
 		}
 	}
@@ -237,10 +237,10 @@ func FromEnv(opts ...EnvOption) (*Registry, error) {
 // ref: Hydra internal/driver/config.DefaultProvider — configuration through registry
 func NewJWTIssuerFromRegistry(reg *Registry, ttl time.Duration, opts ...auth.JWTIssuerOption) (*auth.JWTIssuer, error) {
 	if reg == nil {
-		return nil, errcode.New(errcode.ErrAuthVerifierConfig, "JWT registry must not be nil")
+		return nil, errcode.New(errcode.KindInternal, errcode.ErrAuthVerifierConfig, "JWT registry must not be nil")
 	}
 	if isNilInterfaceValue(reg.keyProv) {
-		return nil, errcode.New(errcode.ErrAuthKeyInvalid, "JWT registry: SigningKeyProvider is nil")
+		return nil, errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthKeyInvalid, "JWT registry: SigningKeyProvider is nil")
 	}
 
 	// Merge registry-derived settings first, then apply caller opts so tests
@@ -258,14 +258,14 @@ func NewJWTIssuerFromRegistry(reg *Registry, ttl time.Duration, opts ...auth.JWT
 // ref: Hydra internal/driver/config.DefaultProvider — configuration through registry
 func NewJWTVerifierFromRegistry(reg *Registry, opts ...auth.JWTVerifierOption) (*auth.JWTVerifier, error) {
 	if reg == nil {
-		return nil, errcode.New(errcode.ErrAuthVerifierConfig, "JWT registry must not be nil")
+		return nil, errcode.New(errcode.KindInternal, errcode.ErrAuthVerifierConfig, "JWT registry must not be nil")
 	}
 	if isNilInterfaceValue(reg.keyStore) {
-		return nil, errcode.New(errcode.ErrAuthKeyInvalid, "JWT registry: VerificationKeyStore is nil")
+		return nil, errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthKeyInvalid, "JWT registry: VerificationKeyStore is nil")
 	}
 	auds := reg.Audiences()
 	if len(auds) == 0 {
-		return nil, errcode.New(errcode.ErrAuthVerifierConfig,
+		return nil, errcode.New(errcode.KindInternal, errcode.ErrAuthVerifierConfig,
 			"JWT registry: Audiences must not be empty for verifier construction")
 	}
 

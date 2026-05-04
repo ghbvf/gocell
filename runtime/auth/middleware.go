@@ -69,7 +69,8 @@ func handleAuthRequest(w http.ResponseWriter, r *http.Request, next http.Handler
 	token, reason := extractBearerTokenWithReason(r)
 	if token == "" {
 		cfg.metrics.recordTokenVerifyCounter("failure", reason)
-		httputil.WriteError(r.Context(), w, http.StatusUnauthorized, "ERR_AUTH_UNAUTHORIZED", "missing or invalid authorization header")
+		httputil.WriteError(r.Context(), w,
+			errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthUnauthorized, "missing or invalid authorization header"))
 		return
 	}
 
@@ -92,7 +93,8 @@ func handleAuthRequest(w http.ResponseWriter, r *http.Request, next http.Handler
 				slog.String("remote_addr", r.RemoteAddr),
 			)
 		}
-		httputil.WriteError(r.Context(), w, http.StatusUnauthorized, "ERR_AUTH_UNAUTHORIZED", "invalid token")
+		httputil.WriteError(r.Context(), w,
+			errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthUnauthorized, "invalid token"))
 		return
 	}
 	cfg.metrics.recordTokenVerify("success", "ok", cfg.clock.Since(start))
@@ -234,7 +236,8 @@ func handleRequireRole(
 ) {
 	p, ok := FromContext(r.Context())
 	if !ok {
-		httputil.WriteError(r.Context(), w, http.StatusUnauthorized, "ERR_AUTH_UNAUTHORIZED", "authentication required")
+		httputil.WriteError(r.Context(), w,
+			errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthUnauthorized, "authentication required"))
 		return
 	}
 
@@ -250,7 +253,8 @@ func handleRequireRole(
 				slog.Any("error", err),
 				slog.String("subject", p.Subject),
 			)
-			httputil.WriteError(r.Context(), w, http.StatusInternalServerError, "ERR_INTERNAL", "internal server error")
+			httputil.WriteError(r.Context(), w,
+				errcode.New(errcode.KindInternal, errcode.ErrInternal, "internal server error"))
 			return
 		}
 		if allowed {
@@ -264,7 +268,8 @@ func handleRequireRole(
 		slog.String("path", r.URL.Path),
 		slog.Any("required_roles", roles),
 	)
-	httputil.WriteError(r.Context(), w, http.StatusForbidden, "ERR_AUTH_FORBIDDEN", "insufficient permissions")
+	httputil.WriteError(r.Context(), w,
+		errcode.New(errcode.KindPermissionDenied, errcode.ErrAuthForbidden, "insufficient permissions"))
 }
 
 func hasMatchingRoleList(roleList []string, roleSet map[string]bool) bool {

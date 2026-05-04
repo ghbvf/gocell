@@ -164,7 +164,7 @@
 - `Migrator` — pressly/goose v3 wrapper + embed.FS + up/down/status (PR#42)
 - `OutboxWriter` — 实现 outbox.Writer + fail-fast ERR_ADAPTER_NO_TX
 - `PGOutboxStore` — 实现 `runtime/outbox.Store`（FOR UPDATE SKIP LOCKED claim + 数据驱动 cleanup via OldestEligibleAt）。relay 调度循环搬到 `runtime/outbox.Relay`，本适配器只承担 SQL 边界
-- `RowScanner` — pgx Row/Rows 抽象（QueryBuilder 已迁至 `pkg/query.Builder`）
+- `RowScanner` — pgx Row/Rows 抽象（QueryBuilder 已迁至 `pkg/pgquery.Builder`）
 - migrations/001_create_outbox_entries.sql
 
 ### 4.2 redis — Redis (go-redis/v9)

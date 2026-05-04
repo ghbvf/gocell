@@ -18,5 +18,5 @@ func NewService() *Service {
 
 // Archive is not available in Phase 2.
 func (s *Service) Archive(_ context.Context) error {
-	return errcode.New(errcode.ErrNotImplemented, "audit archive not available in Phase 2")
+	return errcode.New(errcode.KindNotImplemented, errcode.ErrNotImplemented, "audit archive not available in Phase 2")
 }

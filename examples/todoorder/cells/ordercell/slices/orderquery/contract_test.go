@@ -14,8 +14,8 @@ import (
 	"github.com/ghbvf/gocell/examples/todoorder/cells/ordercell/internal/mem"
 	getv1 "github.com/ghbvf/gocell/generated/contracts/http/order/get/v1"
 	listv1 "github.com/ghbvf/gocell/generated/contracts/http/order/list/v1"
-	"github.com/ghbvf/gocell/pkg/contracttest"
 	"github.com/ghbvf/gocell/pkg/query"
+	"github.com/ghbvf/gocell/tests/contracttest"
 )
 
 func newContractQuerySvc(orders ...*domain.Order) *Service {

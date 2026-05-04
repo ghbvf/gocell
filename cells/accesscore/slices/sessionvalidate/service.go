@@ -45,7 +45,7 @@ func (s *Service) VerifyIntent(ctx context.Context, tokenStr string, expected au
 	if expected != auth.TokenIntentAccess {
 		s.logger.Warn("session-validate: unsupported intent",
 			slog.String("expected", string(expected)))
-		return auth.Claims{}, errcode.New(errcode.ErrAuthInvalidTokenIntent, errMsgAuthFailed)
+		return auth.Claims{}, errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthInvalidTokenIntent, errMsgAuthFailed)
 	}
 	claims, err := s.verifyJWTWithIntent(ctx, tokenStr)
 	if err != nil {
@@ -65,7 +65,7 @@ func (s *Service) verifyJWTWithIntent(ctx context.Context, tokenStr string) (aut
 	if err != nil {
 		s.logger.Warn("session-validate: JWT verification failed",
 			slog.Any("error", err))
-		return auth.Claims{}, errcode.Wrap(errcode.ErrAuthInvalidToken, errMsgAuthFailed, err)
+		return auth.Claims{}, errcode.Wrap(errcode.KindUnauthenticated, errcode.ErrAuthInvalidToken, errMsgAuthFailed, err)
 	}
 	return claims, nil
 }
@@ -78,24 +78,24 @@ func (s *Service) enforceSessionState(ctx context.Context, claims auth.Claims) (
 	if sid == "" {
 		s.logger.Warn("session-validate: token missing sid",
 			slog.String("subject", claims.Subject))
-		return auth.Claims{}, errcode.New(errcode.ErrAuthInvalidToken, errMsgAuthFailed)
+		return auth.Claims{}, errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthInvalidToken, errMsgAuthFailed)
 	}
 	session, err := s.sessionRepo.GetByID(ctx, sid)
 	if err != nil {
 		s.logSessionLookupError(sid, claims.Subject, err)
-		return auth.Claims{}, errcode.New(errcode.ErrAuthInvalidToken, errMsgAuthFailed)
+		return auth.Claims{}, errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthInvalidToken, errMsgAuthFailed)
 	}
 	if session.IsRevoked() {
 		s.logger.Warn("session-validate: revoked session used",
 			slog.String("sid", sid),
 			slog.String("subject", claims.Subject))
-		return auth.Claims{}, errcode.New(errcode.ErrAuthInvalidToken, errMsgAuthFailed)
+		return auth.Claims{}, errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthInvalidToken, errMsgAuthFailed)
 	}
 	if session.IsExpired(s.clock.Now()) {
 		s.logger.Warn("session-validate: expired session used",
 			slog.String("sid", sid),
 			slog.String("subject", claims.Subject))
-		return auth.Claims{}, errcode.New(errcode.ErrAuthInvalidToken, errMsgAuthFailed)
+		return auth.Claims{}, errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthInvalidToken, errMsgAuthFailed)
 	}
 	return claims, nil
 }

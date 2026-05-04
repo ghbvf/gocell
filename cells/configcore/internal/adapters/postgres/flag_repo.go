@@ -13,6 +13,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/ctxcancel"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/pgquery"
 	"github.com/ghbvf/gocell/pkg/query"
 )
 
@@ -189,11 +190,11 @@ func (r *FlagRepository) Update(
 // List retrieves feature flags with keyset cursor pagination.
 // Requires composite index: CREATE INDEX idx_feature_flags_key_id ON feature_flags (key ASC, id ASC).
 func (r *FlagRepository) List(ctx context.Context, params query.ListParams) ([]*domain.FeatureFlag, error) {
-	b := query.NewBuilder()
+	b := pgquery.NewBuilder()
 	b.Append("SELECT " + flagColumns + " FROM feature_flags WHERE 1=1")
 
-	if err := query.AppendKeyset(b, params); err != nil {
-		return nil, errcode.Wrap(errcode.ErrFlagRepoQuery, "flag repo: keyset build failed", err)
+	if err := pgquery.AppendKeyset(b, params); err != nil {
+		return nil, errcode.Wrap(errcode.KindInternal, errcode.ErrFlagRepoQuery, "flag repo: keyset build failed", err)
 	}
 
 	sqlStr, args := b.Build()

@@ -32,7 +32,7 @@ func (r *DeviceRepository) Create(_ context.Context, device *domain.Device) erro
 	defer r.mu.Unlock()
 
 	if _, exists := r.devices[device.ID]; exists {
-		return errcode.New(errcode.ErrValidationFailed,
+		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			fmt.Sprintf("device %q already exists", device.ID))
 	}
 	stored := *device
@@ -47,7 +47,7 @@ func (r *DeviceRepository) GetByID(_ context.Context, id string) (*domain.Device
 
 	d, ok := r.devices[id]
 	if !ok {
-		return nil, errcode.New(errcode.ErrDeviceNotFound,
+		return nil, errcode.New(errcode.KindNotFound, errcode.ErrDeviceNotFound,
 			fmt.Sprintf("device %q not found", id))
 	}
 	out := *d

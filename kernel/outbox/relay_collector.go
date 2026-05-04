@@ -58,10 +58,11 @@ type ProviderRelayCollectorConfig struct {
 // duplicate metric names).
 func NewProviderRelayCollector(p metrics.Provider, cellID string, opts ...ProviderRelayCollectorConfig) (RelayCollector, error) {
 	if cellID == "" {
-		return nil, errcode.New(errcode.ErrObservabilityConfigInvalid, "outbox: cellID is required for provider relay collector")
+		return nil, errcode.New(errcode.KindInternal, errcode.ErrObservabilityConfigInvalid,
+			"outbox: cellID is required for provider relay collector")
 	}
 	if p == nil {
-		return nil, errcode.New(errcode.ErrObservabilityConfigInvalid, "outbox: metrics.Provider is required")
+		return nil, errcode.New(errcode.KindInternal, errcode.ErrObservabilityConfigInvalid, "outbox: metrics.Provider is required")
 	}
 	cfg := ProviderRelayCollectorConfig{}
 	if len(opts) > 0 {

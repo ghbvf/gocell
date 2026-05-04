@@ -578,8 +578,8 @@ func (r *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	if len(r.declaredAuthMetas) > 0 && !r.authFinalized {
 		slog.ErrorContext(req.Context(), "router: FinalizeAuth must be called before ServeHTTP",
 			slog.Int("declared_auth_routes", len(r.declaredAuthMetas)))
-		httputil.WriteError(req.Context(), w, http.StatusInternalServerError,
-			string(errcode.ErrInternal), "internal server error")
+		httputil.WriteError(req.Context(), w,
+			errcode.New(errcode.KindInternal, errcode.ErrInternal, "internal server error"))
 		return
 	}
 	r.Handler().ServeHTTP(w, req)

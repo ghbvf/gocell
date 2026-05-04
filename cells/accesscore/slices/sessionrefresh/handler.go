@@ -47,14 +47,14 @@ func (h *Handler) HandleRefresh(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		RefreshToken string `json:"refreshToken"`
 	}
-	if err := httputil.DecodeJSONStrict(r, &req); err != nil {
-		httputil.WriteDecodeError(r.Context(), w, err)
+	if err := httputil.DecodeJSONStrict(r, &req, httputil.DefaultDecodeJSONLimit); err != nil {
+		httputil.WriteError(r.Context(), w, err)
 		return
 	}
 
 	pair, err := h.svc.Refresh(r.Context(), req.RefreshToken)
 	if err != nil {
-		httputil.WriteDomainError(r.Context(), w, err)
+		httputil.WriteError(r.Context(), w, err)
 		return
 	}
 

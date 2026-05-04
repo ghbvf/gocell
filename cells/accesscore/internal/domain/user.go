@@ -92,7 +92,7 @@ type User struct {
 // now is the wall-clock instant provided by the caller's clock.Clock.
 // Returns an errcode.Error if any required field is empty.
 func NewUser(username, email, passwordHash string, now time.Time) (*User, error) {
-	if err := validation.RequireNotBlank(errcode.ErrAuthInvalidInput,
+	if err := validation.RequireNotEmpty(errcode.ErrAuthInvalidInput,
 		validation.F("username", username),
 		validation.F("email", email),
 		validation.F("passwordHash", passwordHash),

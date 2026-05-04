@@ -682,7 +682,7 @@ func TestUnwrapSecretID_NonStringSecretID_ReturnsErrVaultAuthFailed(t *testing.T
 		t.Errorf("expected ok=false for int secret_id, got ok=true, secretID=%q", secretID)
 	}
 	// Produce the errcode that unwrapSecretID would return in this case.
-	gotErr := errcode.New(errcode.ErrVaultAuthFailed,
+	gotErr := errcode.New(errcode.KindUnavailable, errcode.ErrVaultAuthFailed,
 		"vault-auth: unwrapped data missing string 'secret_id' field")
 	if !errChainHasCode(gotErr, errcode.ErrVaultAuthFailed) {
 		t.Errorf("expected ErrVaultAuthFailed in error chain, got: %v", gotErr)
@@ -695,7 +695,7 @@ func TestUnwrapSecretID_NonStringSecretID_ReturnsErrVaultAuthFailed(t *testing.T
 func TestUnwrapSecretID_NilSecret_ReturnsErrVaultAuthFailed(t *testing.T) {
 	// The guard in unwrapSecretID: if secret == nil || secret.Data == nil → error.
 	// Verify the errcode matches.
-	gotErr := errcode.New(errcode.ErrVaultAuthFailed, "vault-auth: unwrap returned nil or empty data")
+	gotErr := errcode.New(errcode.KindUnavailable, errcode.ErrVaultAuthFailed, "vault-auth: unwrap returned nil or empty data")
 	if !errChainHasCode(gotErr, errcode.ErrVaultAuthFailed) {
 		t.Errorf("nil secret guard must produce ErrVaultAuthFailed, got: %v", gotErr)
 	}
@@ -779,8 +779,8 @@ func TestSecretIDFromEnv_Direct_ReturnsSameValue(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestIsErrVaultAuthFailed_TruthTable(t *testing.T) {
-	authErr := errcode.New(errcode.ErrVaultAuthFailed, "auth failed")
-	otherErr := errcode.New(errcode.ErrKeyProviderAuthFailed, "other")
+	authErr := errcode.New(errcode.KindUnavailable, errcode.ErrVaultAuthFailed, "auth failed")
+	otherErr := errcode.New(errcode.KindInternal, errcode.ErrKeyProviderAuthFailed, "other")
 
 	tests := []struct {
 		name string

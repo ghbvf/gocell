@@ -27,14 +27,14 @@ import (
 func RequireSelfOrRole(ctx context.Context, targetID string, bypassRoles ...string) error {
 	p, ok := FromContext(ctx)
 	if !ok {
-		return errcode.New(errcode.ErrAuthUnauthorized, "authentication required")
+		return errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthUnauthorized, "authentication required")
 	}
 	// G1.B: Defense-in-depth. PrincipalUser must always carry a non-empty Subject;
 	// an empty Subject indicates the primary authenticator allowed a malformed token
 	// through. PrincipalAnonymous Subject is intentionally empty by design.
 	// PrincipalService identity is expressed via CallerCellID, not Subject.
 	if p.Kind == PrincipalUser && p.Subject == "" {
-		return errcode.New(errcode.ErrAuthUnauthorized, "principal subject missing")
+		return errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthUnauthorized, "principal subject missing")
 	}
 
 	if targetID == "" {
@@ -67,7 +67,7 @@ func RequireSelfOrRole(ctx context.Context, targetID string, bypassRoles ...stri
 		return nil
 	}
 
-	return errcode.New(errcode.ErrAuthForbidden, "access denied")
+	return errcode.New(errcode.KindPermissionDenied, errcode.ErrAuthForbidden, "access denied")
 }
 
 // principalHasAnyRole checks whether p holds at least one of the given roles.
@@ -97,21 +97,21 @@ func principalHasAnyRole(p *Principal, roles []string) bool {
 func RequireAnyRole(ctx context.Context, roles ...string) error {
 	p, ok := FromContext(ctx)
 	if !ok {
-		return errcode.New(errcode.ErrAuthUnauthorized, "authentication required")
+		return errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthUnauthorized, "authentication required")
 	}
 	// G1.B: Defense-in-depth. PrincipalUser must always carry a non-empty Subject;
 	// an empty Subject indicates the primary authenticator allowed a malformed token
 	// through. PrincipalAnonymous Subject is intentionally empty by design.
 	// PrincipalService identity is expressed via CallerCellID, not Subject.
 	if p.Kind == PrincipalUser && p.Subject == "" {
-		return errcode.New(errcode.ErrAuthUnauthorized, "principal subject missing")
+		return errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthUnauthorized, "principal subject missing")
 	}
 
 	if principalHasAnyRole(p, roles) {
 		return nil
 	}
 
-	return errcode.New(errcode.ErrAuthForbidden, "access denied")
+	return errcode.New(errcode.KindPermissionDenied, errcode.ErrAuthForbidden, "access denied")
 }
 
 // TestContext creates a context carrying the given subject and roles for use
@@ -153,13 +153,13 @@ func RequireCallerCell(allowlist ...string) Policy {
 	return func(r *http.Request) error {
 		p, ok := FromContext(r.Context())
 		if !ok {
-			return errcode.New(errcode.ErrAuthUnauthorized, "authentication required")
+			return errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthUnauthorized, "authentication required")
 		}
 		if p.Kind != PrincipalService {
-			return errcode.New(errcode.ErrAuthForbidden, "internal endpoint requires service token")
+			return errcode.New(errcode.KindPermissionDenied, errcode.ErrAuthForbidden, "internal endpoint requires service token")
 		}
 		if p.CallerCellID == "" || !set[strings.ToLower(p.CallerCellID)] {
-			return errcode.New(errcode.ErrAuthForbidden,
+			return errcode.New(errcode.KindPermissionDenied, errcode.ErrAuthForbidden,
 				fmt.Sprintf("caller_cell %q not in allowlist %v", p.CallerCellID, sortedAllowlist))
 		}
 		return nil

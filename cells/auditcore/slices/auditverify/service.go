@@ -71,7 +71,7 @@ func NewService(
 		o(s)
 	}
 	if s.txRunner == nil {
-		return nil, errcode.New(errcode.ErrValidationFailed,
+		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"auditverify: TxRunner required; use WithTxManager")
 	}
 	return s, nil

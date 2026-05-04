@@ -642,7 +642,7 @@ func (s revokeFailingRefreshStore) RevokeSession(context.Context, string) error 
 // Refresh returns ErrAuthRefreshFailed AND calls RevokeSession on the rotated
 // token so the newly-issued child cannot be used by an attacker (F14).
 func TestService_Refresh_SessionNotFound_CascadeRevokes(t *testing.T) {
-	notFoundErr := errcode.NewDomain(errcode.ErrSessionNotFound, "session not found")
+	notFoundErr := domainSessionNotFoundError()
 	roleRepo := mem.NewRoleRepository()
 	userRepo := mem.NewUserRepository()
 
@@ -666,14 +666,14 @@ func TestService_Refresh_SessionNotFound_CascadeRevokes(t *testing.T) {
 }
 
 func TestService_Refresh_CascadeRevokeFailure_ReturnsRefreshUnavailable(t *testing.T) {
-	notFoundErr := errcode.NewDomain(errcode.ErrSessionNotFound, "session not found")
+	notFoundErr := domainSessionNotFoundError()
 	roleRepo := mem.NewRoleRepository()
 	userRepo := mem.NewUserRepository()
 	_, _, innerStore, wireToken := issueTestWireToken(t, "usr-revoke-fail", "sess-revoke-fail")
 
 	refreshStore := revokeFailingRefreshStore{
 		Store: innerStore,
-		err:   errcode.NewInfra(errcode.ErrInternal, "refresh store down"),
+		err:   errcode.New(errcode.KindInternal, errcode.ErrInternal, "refresh store down"),
 	}
 	sessionRepo := &sessionNotFoundRepo{notFoundErr: notFoundErr}
 	svc := MustNewService(sessionRepo, roleRepo, userRepo, refreshStore, testIssuer, slog.Default(), WithClock(clock.Real()))
@@ -698,7 +698,7 @@ func (r *updateFailingSessionRepo) Update(context.Context, *domain.Session) erro
 func TestService_Refresh_SessionUpdateInfraFailure_DoesNotRotate(t *testing.T) {
 	sessionRepo := &updateFailingSessionRepo{
 		SessionRepository: testutil.RealSessionRepo(t),
-		err:               errcode.NewInfra(errcode.ErrInternal, "session update unavailable"),
+		err:               errcode.New(errcode.KindInternal, errcode.ErrInternal, "session update unavailable"),
 	}
 	roleRepo := mem.NewRoleRepository()
 	userRepo := mem.NewUserRepository()
@@ -730,7 +730,7 @@ func TestService_Refresh_SessionUpdateInfraFailure_DoesNotRotate(t *testing.T) {
 func TestService_Refresh_SessionUpdateNotFound_CascadeRevokesAndRejects(t *testing.T) {
 	sessionRepo := &updateFailingSessionRepo{
 		SessionRepository: testutil.RealSessionRepo(t),
-		err:               errcode.NewDomain(errcode.ErrSessionNotFound, "session not found"),
+		err:               domainSessionNotFoundError(),
 	}
 	roleRepo := mem.NewRoleRepository()
 	userRepo := mem.NewUserRepository()
@@ -774,7 +774,7 @@ func TestService_Refresh_RejectionMessagesAreUniform(t *testing.T) {
 				t.Helper()
 				_, _, innerStore, wireToken := issueTestWireToken(t, "usr-uniform-notfound", "sess-uniform-notfound")
 				svc := MustNewService(
-					&sessionNotFoundRepo{notFoundErr: errcode.NewDomain(errcode.ErrSessionNotFound, "session not found")},
+					&sessionNotFoundRepo{notFoundErr: domainSessionNotFoundError()},
 					mem.NewRoleRepository(),
 					mem.NewUserRepository(),
 					innerStore,
@@ -846,7 +846,7 @@ func TestService_Refresh_CascadeRejectionReasonIsLogged(t *testing.T) {
 				t.Helper()
 				_, _, innerStore, wireToken := issueTestWireToken(t, "usr-log-notfound", "sess-log-notfound")
 				svc := MustNewService(
-					&sessionNotFoundRepo{notFoundErr: errcode.NewDomain(errcode.ErrSessionNotFound, "session not found")},
+					&sessionNotFoundRepo{notFoundErr: domainSessionNotFoundError()},
 					mem.NewRoleRepository(),
 					mem.NewUserRepository(),
 					innerStore,
@@ -898,6 +898,11 @@ func TestService_Refresh_CascadeRejectionReasonIsLogged(t *testing.T) {
 type sessionNotFoundRepo struct {
 	mem.SessionRepository
 	notFoundErr error
+}
+
+func domainSessionNotFoundError() error {
+	return errcode.New(errcode.KindNotFound, errcode.ErrSessionNotFound, "session not found",
+		errcode.WithCategory(errcode.CategoryDomain))
 }
 
 func (r *sessionNotFoundRepo) GetByID(_ context.Context, _ string) (*domain.Session, error) {
@@ -952,7 +957,7 @@ func TestRefresh_RotateFailure_ReturnsRefreshUnavailable(t *testing.T) {
 
 	failStore := rotateFailingRefreshStore{
 		Store: innerStore,
-		err:   errcode.NewInfra(errcode.ErrInternal, "rotate store down"),
+		err:   errcode.New(errcode.KindInternal, errcode.ErrInternal, "rotate store down"),
 	}
 	svc2 := MustNewService(sessionRepo, roleRepo, userRepo, failStore, testIssuer, slog.Default(), WithClock(clock.Real()))
 
@@ -1023,7 +1028,7 @@ func TestRefresh_RotateMismatch_CascadeRevokeFails_PropagatesErr(t *testing.T) {
 	// cascadeRevoke calls through to a RevokeSession that errors.
 	revokeErrStore := revokeFailingRefreshStore{
 		Store: innerStore,
-		err:   errcode.NewInfra(errcode.ErrInternal, "revoke store down"),
+		err:   errcode.New(errcode.KindInternal, errcode.ErrInternal, "revoke store down"),
 	}
 	// rotateMismatchRefreshStore wraps revokeErrStore so Rotate returns mismatch
 	// but RevokeSession delegates to revokeErrStore and fails.

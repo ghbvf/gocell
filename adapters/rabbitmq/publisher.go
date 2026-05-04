@@ -94,7 +94,7 @@ func (p *Publisher) Publish(ctx context.Context, topic string, payload []byte) e
 	p.mu.Lock()
 	if p.closed.Load() {
 		p.mu.Unlock()
-		return errcode.New(ErrAdapterAMQPPublish, "rabbitmq: publisher is closed")
+		return errcode.New(errcode.KindInternal, ErrAdapterAMQPPublish, "rabbitmq: publisher is closed")
 	}
 	p.wg.Add(1)
 	p.mu.Unlock()
@@ -107,7 +107,7 @@ func (p *Publisher) Publish(ctx context.Context, topic string, payload []byte) e
 		if isTerminalConnectionError(err) {
 			return err
 		}
-		return errcode.Wrap(ErrAdapterAMQPPublish, "rabbitmq: acquire channel for publish", err)
+		return errcode.Wrap(errcode.KindInternal, ErrAdapterAMQPPublish, "rabbitmq: acquire channel for publish", err)
 	}
 	// Close the channel after use instead of returning it to the shared pool.
 	// Confirm-mode channels pollute the pool: amqp091-go's connection reader
@@ -125,12 +125,12 @@ func (p *Publisher) Publish(ctx context.Context, topic string, payload []byte) e
 
 	// Declare exchange idempotently.
 	if err := ch.ExchangeDeclare(topic, "fanout", true, false, false, false, nil); err != nil {
-		return errcode.Wrap(ErrAdapterAMQPPublish, "rabbitmq: declare exchange", err)
+		return errcode.Wrap(errcode.KindInternal, ErrAdapterAMQPPublish, "rabbitmq: declare exchange", err)
 	}
 
 	// Enable confirm mode.
 	if err := ch.Confirm(false); err != nil {
-		return errcode.Wrap(ErrAdapterAMQPPublish, "rabbitmq: enable confirm mode", err)
+		return errcode.Wrap(errcode.KindInternal, ErrAdapterAMQPPublish, "rabbitmq: enable confirm mode", err)
 	}
 
 	confirmCh := ch.NotifyPublish(make(chan amqp.Confirmation, 1))
@@ -143,7 +143,7 @@ func (p *Publisher) Publish(ctx context.Context, topic string, payload []byte) e
 	}
 
 	if err := ch.PublishWithContext(ctx, topic, "", false, false, msg); err != nil {
-		return errcode.Wrap(ErrAdapterAMQPPublish, "rabbitmq: publish message", err)
+		return errcode.Wrap(errcode.KindInternal, ErrAdapterAMQPPublish, "rabbitmq: publish message", err)
 	}
 
 	// Wait for broker confirmation.
@@ -152,19 +152,19 @@ func (p *Publisher) Publish(ctx context.Context, topic string, payload []byte) e
 	select {
 	case confirm, ok := <-confirmCh:
 		if !ok {
-			return errcode.New(ErrAdapterAMQPConfirmTimeout, "rabbitmq: confirm channel closed")
+			return errcode.New(errcode.KindInternal, ErrAdapterAMQPConfirmTimeout, "rabbitmq: confirm channel closed")
 		}
 		if !confirm.Ack {
-			return errcode.New(ErrAdapterAMQPConfirmTimeout, "rabbitmq: broker nacked message")
+			return errcode.New(errcode.KindInternal, ErrAdapterAMQPConfirmTimeout, "rabbitmq: broker nacked message")
 		}
 		slog.Debug("rabbitmq: message published and confirmed",
 			slog.String("topic", topic))
 		return nil
 
 	case <-confirmTimer.C():
-		return errcode.New(ErrAdapterAMQPConfirmTimeout, "rabbitmq: publish confirm timed out")
+		return errcode.New(errcode.KindInternal, ErrAdapterAMQPConfirmTimeout, "rabbitmq: publish confirm timed out")
 
 	case <-ctx.Done():
-		return errcode.Wrap(ErrAdapterAMQPPublish, "rabbitmq: publish context canceled", ctx.Err())
+		return errcode.Wrap(errcode.KindInternal, ErrAdapterAMQPPublish, "rabbitmq: publish context canceled", ctx.Err())
 	}
 }

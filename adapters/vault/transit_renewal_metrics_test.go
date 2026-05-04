@@ -201,7 +201,7 @@ func TestTokenRenewalWorker_HandleRenewal_MultipleRenewals_AccumulatesSuccessCou
 func TestTokenRenewalWorker_HandleDone_NilError_IncrementsFailureCounter(t *testing.T) {
 	fw := newFakeTokenWatcher()
 	successCtr, failureCtr := newRenewalCounters()
-	permErr := errcode.New(errcode.ErrVaultAuthFailed, "test re-auth failure")
+	permErr := errcode.New(errcode.KindUnavailable, errcode.ErrVaultAuthFailed, "test re-auth failure")
 	fakeAuth := &fakeAuthMethod{
 		method:       MethodAppRole,
 		permanentErr: permErr, // always fail → never calls buildWatcher on nil client
@@ -254,7 +254,7 @@ func TestTokenRenewalWorker_HandleDone_NilError_IncrementsFailureCounter(t *test
 func TestTokenRenewalWorker_HandleDone_NonNilError_IncrementsFailureCounter(t *testing.T) {
 	fw := newFakeTokenWatcher()
 	successCtr, failureCtr := newRenewalCounters()
-	permErr := errcode.New(errcode.ErrVaultAuthFailed, "test re-auth failure")
+	permErr := errcode.New(errcode.KindUnavailable, errcode.ErrVaultAuthFailed, "test re-auth failure")
 	fakeAuth := &fakeAuthMethod{
 		method:       MethodAppRole,
 		permanentErr: permErr, // always fail → never calls buildWatcher on nil client
@@ -360,7 +360,7 @@ func TestTokenRenewalWorker_NilCounters_NoopOnRenewal(t *testing.T) {
 func TestTokenRenewalWorker_NilCounters_NoopOnDone(t *testing.T) {
 	fw := newFakeTokenWatcher()
 	// fakeAuth with a permanent failure so re-auth keeps retrying; ctx cancel exits.
-	permErr := errcode.New(errcode.ErrVaultAuthFailed, "test failure")
+	permErr := errcode.New(errcode.KindUnavailable, errcode.ErrVaultAuthFailed, "test failure")
 	fakeAuth := &fakeAuthMethod{
 		method:       MethodAppRole,
 		permanentErr: permErr,
@@ -420,7 +420,7 @@ func TestRenewalWorker_DoneChError_TriggersReauth(t *testing.T) {
 	fw := newFakeTokenWatcher()
 	loginOutcome := newLoginOutcomeCounter()
 
-	permErr := errcode.New(errcode.ErrVaultAuthFailed, "always fails")
+	permErr := errcode.New(errcode.KindUnavailable, errcode.ErrVaultAuthFailed, "always fails")
 	fakeAuth := &fakeAuthMethod{
 		method:       MethodAppRole,
 		permanentErr: permErr, // never succeeds → never calls buildWatcher on nil client
@@ -480,7 +480,7 @@ func TestRenewalWorker_ReauthBackoff_RetriesUntilCancelled(t *testing.T) {
 	authHealthy.Set(1)
 
 	// All Login calls fail permanently so we stay in the retry loop.
-	permErr := errcode.New(errcode.ErrVaultAuthFailed, "always fails")
+	permErr := errcode.New(errcode.KindUnavailable, errcode.ErrVaultAuthFailed, "always fails")
 	fakeAuth := &fakeAuthMethod{
 		method:       MethodAppRole,
 		permanentErr: permErr,
@@ -541,7 +541,7 @@ func TestRenewalWorker_CtxCancelDuringReauth_ReturnsCleanly(t *testing.T) {
 	fw := newFakeTokenWatcher()
 
 	// Auth method always fails so re-auth keeps sleeping; ctx cancel must wake it.
-	permErr := errcode.New(errcode.ErrVaultAuthFailed, "fail")
+	permErr := errcode.New(errcode.KindUnavailable, errcode.ErrVaultAuthFailed, "fail")
 	fakeAuth := &fakeAuthMethod{
 		method:       MethodAppRole,
 		permanentErr: permErr,
@@ -597,7 +597,7 @@ func TestRenewalWorker_AuthHealthyGauge_TransitionsOnStates(t *testing.T) {
 	})
 	authHealthy.Set(1)
 
-	permErr := errcode.New(errcode.ErrVaultAuthFailed, "always fails")
+	permErr := errcode.New(errcode.KindUnavailable, errcode.ErrVaultAuthFailed, "always fails")
 	fakeAuth := &fakeAuthMethod{
 		method:       MethodAppRole,
 		permanentErr: permErr,
@@ -648,7 +648,7 @@ func TestRenewalWorker_LoginOutcomeCounter_LabelsSet(t *testing.T) {
 	loginOutcome := newLoginOutcomeCounter()
 
 	// Two timeout failures, then permanently fail to prevent buildWatcher on nil client.
-	permErr := errcode.New(errcode.ErrVaultAuthFailed, "permanent other")
+	permErr := errcode.New(errcode.KindUnavailable, errcode.ErrVaultAuthFailed, "permanent other")
 	fakeAuth := &fakeAuthMethod{
 		method: MethodAppRole,
 		errs: []error{

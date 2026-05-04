@@ -154,7 +154,7 @@ func (c *ConfigCore) ensureCursorCodec(reg cell.Registry) error {
 		return nil
 	}
 	if reg.DurabilityMode() == cell.DurabilityDurable {
-		return errcode.New(errcode.ErrCellMissingCodec,
+		return errcode.New(errcode.KindInternal, errcode.ErrCellMissingCodec,
 			"configcore durable mode requires a cursor codec;"+
 				" use WithCursorCodec(query.NewCursorCodec(secret))"+
 				" — the built-in demo key is public in the source tree")

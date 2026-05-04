@@ -47,23 +47,23 @@ func validateMetadata(m map[string]string) error {
 		return nil
 	}
 	if len(m) > MaxMetadataKeys {
-		return errcode.New(errcode.ErrValidationFailed,
+		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			fmt.Sprintf("command: metadata key count %d exceeds max %d", len(m), MaxMetadataKeys))
 	}
 	var total int
 	for k, v := range m {
 		if len(k) > MaxMetadataKeyLen {
-			return errcode.New(errcode.ErrValidationFailed,
+			return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 				fmt.Sprintf("command: metadata key length %d exceeds max %d (key=%q)", len(k), MaxMetadataKeyLen, truncate(k, 64)))
 		}
 		if len(v) > MaxMetadataValueLen {
-			return errcode.New(errcode.ErrValidationFailed,
+			return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 				fmt.Sprintf("command: metadata value length %d exceeds max %d (key=%q)", len(v), MaxMetadataValueLen, truncate(k, 64)))
 		}
 		total += len(k) + len(v)
 	}
 	if total > MaxMetadataTotalSize {
-		return errcode.New(errcode.ErrValidationFailed,
+		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			fmt.Sprintf("command: metadata total size %d exceeds max %d", total, MaxMetadataTotalSize))
 	}
 	return nil

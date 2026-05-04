@@ -62,7 +62,7 @@ func (o ObservabilityMetadata) Validate() error {
 		return err
 	}
 	if o.TraceParent != "" && !validTraceParent(o.TraceParent) {
-		return errcode.New(errcode.ErrValidationFailed,
+		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			fmt.Sprintf("outbox: observability.traceParent is not a valid W3C traceparent (length=%d)", len(o.TraceParent)))
 	}
 	if err := validateObservabilityID("requestId", o.RequestID); err != nil {
@@ -73,7 +73,7 @@ func (o ObservabilityMetadata) Validate() error {
 	}
 	total := len(o.TraceID) + len(o.TraceParent) + len(o.RequestID) + len(o.CorrelationID)
 	if total > MaxObservabilityTotalSize {
-		return errcode.New(errcode.ErrValidationFailed,
+		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			fmt.Sprintf("outbox: observability total size %d exceeds max %d", total, MaxObservabilityTotalSize))
 	}
 	return nil
@@ -87,11 +87,11 @@ func validateObservabilityID(name, value string) error {
 		return nil
 	}
 	if len(value) > idutil.MaxMetadataIDLen {
-		return errcode.New(errcode.ErrValidationFailed,
+		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			fmt.Sprintf("outbox: observability.%s length %d exceeds max %d", name, len(value), idutil.MaxMetadataIDLen))
 	}
 	if !idutil.IsSafeID(value) {
-		return errcode.New(errcode.ErrValidationFailed,
+		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			fmt.Sprintf("outbox: observability.%s contains unsafe characters", name))
 	}
 	return nil

@@ -112,8 +112,8 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			slog.Any("error", err),
 			slog.String("root", h.root),
 		)
-		httputil.WritePublicError(ctx, w, http.StatusInternalServerError,
-			string(errcode.ErrInternal), "internal server error")
+		httputil.WritePublic(ctx, w, errcode.KindInternal,
+			errcode.ErrInternal, "internal server error")
 		return
 	}
 
@@ -125,8 +125,8 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			slog.String("format", format),
 			slog.Any("error", err),
 		)
-		httputil.WritePublicError(ctx, w, http.StatusInternalServerError,
-			string(errcode.ErrInternal), "internal server error")
+		httputil.WritePublic(ctx, w, errcode.KindInternal,
+			errcode.ErrInternal, "internal server error")
 		return
 	}
 
@@ -250,8 +250,8 @@ func parseInclude(ctx context.Context, w http.ResponseWriter, raw string, presen
 }
 
 func writeValidationError(ctx context.Context, w http.ResponseWriter, message string) {
-	httputil.WritePublicError(ctx, w, http.StatusBadRequest,
-		string(errcode.ErrValidationFailed), message)
+	httputil.WritePublic(ctx, w, errcode.KindInvalid,
+		errcode.ErrValidationFailed, message)
 }
 
 // contentType returns the Content-Type header value for the given format.

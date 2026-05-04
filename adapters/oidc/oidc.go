@@ -33,10 +33,10 @@ type Config struct {
 // Validate checks required fields.
 func (c Config) Validate() error {
 	if c.IssuerURL == "" {
-		return errcode.New(ErrAdapterOIDCConfig, "oidc: issuer URL is required")
+		return errcode.New(errcode.KindInternal, ErrAdapterOIDCConfig, "oidc: issuer URL is required")
 	}
 	if c.ClientID == "" {
-		return errcode.New(ErrAdapterOIDCConfig, "oidc: client ID is required")
+		return errcode.New(errcode.KindInternal, ErrAdapterOIDCConfig, "oidc: client ID is required")
 	}
 	return nil
 }
@@ -108,7 +108,7 @@ func (a *Adapter) discover(ctx context.Context, force bool) (*gooidc.Provider, e
 
 	p, err := gooidc.NewProvider(a.oidcCtx(ctx), a.config.IssuerURL)
 	if err != nil {
-		return nil, errcode.Wrap(ErrAdapterOIDCDiscovery,
+		return nil, errcode.Wrap(errcode.KindInternal, ErrAdapterOIDCDiscovery,
 			fmt.Sprintf("oidc: discovery failed for %s", a.config.IssuerURL), err)
 	}
 	a.provider = p

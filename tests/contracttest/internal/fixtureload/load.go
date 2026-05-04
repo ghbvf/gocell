@@ -1,5 +1,5 @@
 // Package fixtureload encapsulates contract schema/fixture file reads. All
-// path inputs are validated by callers in pkg/contracttest against an
+// path inputs are validated by callers in tests/contracttest against an
 // allow-list (in-dir or <contractsRoot>/shared/) before this helper is
 // invoked.
 package fixtureload
@@ -10,7 +10,7 @@ import (
 )
 
 // LoadFixture reads a contract schema or fixture file. The path is
-// caller-validated (see pkg/contracttest.compileSchemaFile for the
+// caller-validated (see tests/contracttest.compileSchemaFile for the
 // allow-list) — both real contracts/ trees and testdata/contracts/ trees
 // flow through here.
 func LoadFixture(path string) ([]byte, error) {

@@ -1,4 +1,4 @@
-package query
+package pgquery
 
 import (
 	"fmt"
@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/query"
 )
 
 // validColumnName matches safe SQL column identifiers.
@@ -25,18 +26,19 @@ var validColumnName = regexp.MustCompile(`^[a-z_][a-z0-9_]*$`)
 // specified directions (e.g. CREATE INDEX idx ON table (col1 DESC, col2 ASC))
 // for efficient keyset pagination. Without such an index, the database will
 // perform a full table sort on every page request.
-func AppendKeyset(b *Builder, params ListParams) error {
+func AppendKeyset(b *Builder, params query.ListParams) error {
 	if len(params.Sort) == 0 {
-		return errcode.New(errcode.ErrValidationFailed, "keyset: at least one sort column is required")
+		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"keyset: at least one sort column is required")
 	}
 
 	for _, col := range params.Sort {
 		if !validColumnName.MatchString(col.Name) {
-			return errcode.New(errcode.ErrValidationFailed,
+			return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 				fmt.Sprintf("keyset: invalid column name %q", col.Name))
 		}
-		if col.Direction != SortASC && col.Direction != SortDESC {
-			return errcode.New(errcode.ErrValidationFailed,
+		if col.Direction != query.SortASC && col.Direction != query.SortDESC {
+			return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 				fmt.Sprintf("keyset: invalid direction %q, must be ASC or DESC", col.Direction))
 		}
 	}
@@ -58,7 +60,7 @@ func AppendKeyset(b *Builder, params ListParams) error {
 }
 
 // sameDirection returns true if all sort columns share the same direction.
-func sameDirection(cols []SortColumn) bool {
+func sameDirection(cols []query.SortColumn) bool {
 	if len(cols) <= 1 {
 		return true
 	}
@@ -72,15 +74,15 @@ func sameDirection(cols []SortColumn) bool {
 }
 
 // directionOp returns ">" for ASC, "<" for DESC.
-func directionOp(dir SortDir) string {
-	if dir == SortDESC {
+func directionOp(dir query.SortDir) string {
+	if dir == query.SortDESC {
 		return "<"
 	}
 	return ">"
 }
 
 // appendKeysetWhere generates the keyset WHERE clause.
-func appendKeysetWhere(b *Builder, cols []SortColumn, values []any) error {
+func appendKeysetWhere(b *Builder, cols []query.SortColumn, values []any) error {
 	if len(cols) == 1 {
 		op := directionOp(cols[0].Direction)
 		b.AppendParam(fmt.Sprintf("AND %s %s ", cols[0].Name, op), values[0])
@@ -94,7 +96,7 @@ func appendKeysetWhere(b *Builder, cols []SortColumn, values []any) error {
 }
 
 // appendTupleComparison generates: AND (col1, col2) > ($1, $2).
-func appendTupleComparison(b *Builder, cols []SortColumn, values []any) error {
+func appendTupleComparison(b *Builder, cols []query.SortColumn, values []any) error {
 	op := directionOp(cols[0].Direction)
 
 	names := make([]string, len(cols))
@@ -113,7 +115,7 @@ func appendTupleComparison(b *Builder, cols []SortColumn, values []any) error {
 }
 
 // appendCompoundOR generates: AND (col1 < $1 OR (col1 = $2 AND col2 > $3) OR ...)
-func appendCompoundOR(b *Builder, cols []SortColumn, values []any) error {
+func appendCompoundOR(b *Builder, cols []query.SortColumn, values []any) error {
 	var parts []string
 
 	for level := range cols {
@@ -140,10 +142,18 @@ func appendCompoundOR(b *Builder, cols []SortColumn, values []any) error {
 }
 
 // appendOrderBy generates: ORDER BY col1 DIR1, col2 DIR2.
-func appendOrderBy(b *Builder, cols []SortColumn) {
+func appendOrderBy(b *Builder, cols []query.SortColumn) {
 	parts := make([]string, len(cols))
 	for i, c := range cols {
 		parts[i] = c.Name + " " + string(c.Direction)
 	}
 	b.Append("ORDER BY " + strings.Join(parts, ", "))
+}
+
+func cursorInvalid(reason string) error {
+	return errcode.New(errcode.KindInvalid, errcode.ErrCursorInvalid,
+		"invalid cursor; restart from first page (client should discard stored cursor)",
+		errcode.WithInternal(reason),
+		errcode.WithDetails(map[string]any{"reason": reason}),
+	)
 }

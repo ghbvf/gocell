@@ -426,7 +426,7 @@ func (c *countingUserRepo) Create(ctx context.Context, u *domain.User) error {
 type duplicateUserRepo struct{}
 
 func (r *duplicateUserRepo) Create(ctx context.Context, u *domain.User) error {
-	return errcode.New(errcode.ErrAuthUserDuplicate, "duplicate")
+	return errcode.New(errcode.KindConflict, errcode.ErrAuthUserDuplicate, "duplicate")
 }
 func (r *duplicateUserRepo) GetByID(ctx context.Context, id string) (*domain.User, error) {
 	return nil, errors.New("not expected on race path")
@@ -514,7 +514,7 @@ type updateFailUserRepo struct {
 }
 
 func (r *updateFailUserRepo) Create(ctx context.Context, u *domain.User) error {
-	return errcode.New(errcode.ErrAuthUserDuplicate, "duplicate")
+	return errcode.New(errcode.KindConflict, errcode.ErrAuthUserDuplicate, "duplicate")
 }
 func (r *updateFailUserRepo) GetByID(ctx context.Context, id string) (*domain.User, error) {
 	return r.inner.GetByID(ctx, id)

@@ -279,7 +279,7 @@ func (p *Provisioner) createUserOrRecover(ctx context.Context, in ProvisionInput
 			slog.String("event", "admin_provision_duplicate_rejected"),
 			slog.String("user_id", existing.ID),
 			slog.String("source", string(existing.CreationSource)))
-		return ProvisionResult{Outcome: OutcomeUnknown}, errcode.NewDomain(errcode.ErrAuthUserDuplicate,
+		return ProvisionResult{Outcome: OutcomeUnknown}, errcode.New(errcode.KindConflict, errcode.ErrAuthUserDuplicate,
 			"admin provisioning username already exists")
 	}
 	// Orphan recovery must fully reassert the caller's RequireReset intent,

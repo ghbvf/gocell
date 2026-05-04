@@ -82,7 +82,7 @@ func NewService(repo domain.DeviceRepository, logger *slog.Logger, opts ...Optio
 // Register creates a new device and publishes a device.registered event.
 func (s *Service) Register(ctx context.Context, name string) (*domain.Device, error) {
 	if name == "" {
-		return nil, errcode.New(errcode.ErrValidationFailed, "device name must not be empty")
+		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "device name must not be empty")
 	}
 
 	device := &domain.Device{

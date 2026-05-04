@@ -129,7 +129,7 @@ func (a *staticTokenAuth) Method() Method { return MethodToken }
 // Static tokens have no explicit lease and are not renewable via LifetimeWatcher.
 func (a *staticTokenAuth) Login(_ context.Context) (AuthResult, error) {
 	if a.token == "" {
-		return AuthResult{}, errcode.New(errcode.ErrVaultAuthFailed,
+		return AuthResult{}, errcode.New(errcode.KindUnavailable, errcode.ErrVaultAuthFailed,
 			"vault-auth: static token (VAULT_TOKEN) is empty")
 	}
 	if a.client != nil {
@@ -173,15 +173,15 @@ type appRoleAuth struct {
 // ref: hashicorp/vault api/auth/approle/approle.go#NewAppRoleAuth
 func NewAppRoleAuth(client *vaultapi.Client, roleID string, secretIDSource SecretIDProvider) (AuthMethod, error) {
 	if client == nil {
-		return nil, errcode.New(errcode.ErrVaultAuthFailed,
+		return nil, errcode.New(errcode.KindUnavailable, errcode.ErrVaultAuthFailed,
 			"vault-auth: AppRole auth requires a non-nil Vault client")
 	}
 	if roleID == "" {
-		return nil, errcode.New(errcode.ErrVaultAuthFailed,
+		return nil, errcode.New(errcode.KindUnavailable, errcode.ErrVaultAuthFailed,
 			"vault-auth: AppRole auth requires VAULT_ROLE_ID")
 	}
 	if secretIDSource == nil {
-		return nil, errcode.New(errcode.ErrVaultAuthFailed,
+		return nil, errcode.New(errcode.KindUnavailable, errcode.ErrVaultAuthFailed,
 			"vault-auth: AppRole auth requires a non-nil SecretIDProvider")
 	}
 	return &appRoleAuth{
@@ -212,7 +212,7 @@ func (a *appRoleAuth) Login(ctx context.Context) (AuthResult, error) {
 		"secret_id": secretID,
 	})
 	if err != nil {
-		return AuthResult{}, errcode.Wrap(errcode.ErrVaultAuthFailed,
+		return AuthResult{}, errcode.Wrap(errcode.KindUnavailable, errcode.ErrVaultAuthFailed,
 			"vault-auth: AppRole login failed", err)
 	}
 	return extractAuthResult(a.client, secret)
@@ -246,11 +246,11 @@ type kubernetesAuth struct {
 // ref: hashicorp/vault api/auth/kubernetes/kubernetes.go#NewKubernetesAuth
 func NewKubernetesAuth(client *vaultapi.Client, role, jwtPath, mountPath string) (AuthMethod, error) {
 	if client == nil {
-		return nil, errcode.New(errcode.ErrVaultAuthFailed,
+		return nil, errcode.New(errcode.KindUnavailable, errcode.ErrVaultAuthFailed,
 			"vault-auth: Kubernetes auth requires a non-nil Vault client")
 	}
 	if role == "" {
-		return nil, errcode.New(errcode.ErrVaultAuthFailed,
+		return nil, errcode.New(errcode.KindUnavailable, errcode.ErrVaultAuthFailed,
 			"vault-auth: Kubernetes auth requires VAULT_K8S_ROLE")
 	}
 	if jwtPath == "" {
@@ -275,11 +275,11 @@ func (a *kubernetesAuth) Method() Method { return MethodKubernetes }
 func (a *kubernetesAuth) Login(ctx context.Context) (AuthResult, error) {
 	jwtBytes, err := os.ReadFile(a.jwtPath)
 	if err != nil {
-		return AuthResult{}, errcode.Wrap(errcode.ErrVaultAuthFailed,
+		return AuthResult{}, errcode.Wrap(errcode.KindUnavailable, errcode.ErrVaultAuthFailed,
 			fmt.Sprintf("vault-auth: Kubernetes auth: read JWT from %s", a.jwtPath), err)
 	}
 	if len(jwtBytes) == 0 {
-		return AuthResult{}, errcode.New(errcode.ErrVaultAuthFailed,
+		return AuthResult{}, errcode.New(errcode.KindUnavailable, errcode.ErrVaultAuthFailed,
 			fmt.Sprintf("vault-auth: Kubernetes auth: JWT file is empty: %s", a.jwtPath))
 	}
 
@@ -289,7 +289,7 @@ func (a *kubernetesAuth) Login(ctx context.Context) (AuthResult, error) {
 		"jwt":  string(jwtBytes),
 	})
 	if err != nil {
-		return AuthResult{}, errcode.Wrap(errcode.ErrVaultAuthFailed,
+		return AuthResult{}, errcode.Wrap(errcode.KindUnavailable, errcode.ErrVaultAuthFailed,
 			"vault-auth: Kubernetes login failed", err)
 	}
 	return extractAuthResult(a.client, secret)
@@ -303,12 +303,12 @@ func (a *kubernetesAuth) Login(ctx context.Context) (AuthResult, error) {
 // and sets the token on the client. Used by AppRole and Kubernetes Login.
 func extractAuthResult(client *vaultapi.Client, secret *vaultapi.Secret) (AuthResult, error) {
 	if secret == nil || secret.Auth == nil {
-		return AuthResult{}, errcode.New(errcode.ErrVaultAuthFailed,
+		return AuthResult{}, errcode.New(errcode.KindUnavailable, errcode.ErrVaultAuthFailed,
 			"vault-auth: login response missing auth data")
 	}
 	token := secret.Auth.ClientToken
 	if token == "" {
-		return AuthResult{}, errcode.New(errcode.ErrVaultAuthFailed,
+		return AuthResult{}, errcode.New(errcode.KindUnavailable, errcode.ErrVaultAuthFailed,
 			"vault-auth: login response has empty client_token")
 	}
 	client.SetToken(token)
@@ -351,7 +351,7 @@ func NewAuthMethodFromEnv(ctx context.Context, client *vaultapi.Client) (AuthMet
 	case string(MethodToken):
 		token := os.Getenv("VAULT_TOKEN")
 		if token == "" {
-			return nil, errcode.New(errcode.ErrVaultAuthFailed,
+			return nil, errcode.New(errcode.KindUnavailable, errcode.ErrVaultAuthFailed,
 				"vault-auth: VAULT_AUTH_METHOD=token requires VAULT_TOKEN to be set")
 		}
 		return NewStaticTokenAuth(client, token), nil
@@ -359,7 +359,7 @@ func NewAuthMethodFromEnv(ctx context.Context, client *vaultapi.Client) (AuthMet
 	case string(MethodAppRole):
 		roleID := os.Getenv("VAULT_ROLE_ID")
 		if roleID == "" {
-			return nil, errcode.New(errcode.ErrVaultAuthFailed,
+			return nil, errcode.New(errcode.KindUnavailable, errcode.ErrVaultAuthFailed,
 				"vault-auth: VAULT_AUTH_METHOD=approle requires VAULT_ROLE_ID to be set")
 		}
 		secretIDSource, err := secretIDFromEnv(ctx, client)
@@ -375,11 +375,11 @@ func NewAuthMethodFromEnv(ctx context.Context, client *vaultapi.Client) (AuthMet
 		return NewKubernetesAuth(client, role, jwtPath, mountPath)
 
 	case "":
-		return nil, errcode.New(errcode.ErrVaultAuthFailed,
+		return nil, errcode.New(errcode.KindUnavailable, errcode.ErrVaultAuthFailed,
 			"vault-auth: VAULT_AUTH_METHOD is required (known values: token, approle, kubernetes)")
 
 	default:
-		return nil, errcode.New(errcode.ErrVaultAuthFailed,
+		return nil, errcode.New(errcode.KindUnavailable, errcode.ErrVaultAuthFailed,
 			fmt.Sprintf("vault-auth: unknown VAULT_AUTH_METHOD %q (known values: token, approle, kubernetes)", method))
 	}
 }
@@ -407,7 +407,7 @@ func secretIDFromEnv(ctx context.Context, client *vaultapi.Client) (SecretIDProv
 	case "direct":
 		s := os.Getenv("VAULT_SECRET_ID")
 		if s == "" {
-			return nil, errcode.New(errcode.ErrVaultAuthFailed,
+			return nil, errcode.New(errcode.KindUnavailable, errcode.ErrVaultAuthFailed,
 				"vault-auth: VAULT_SECRET_ID_TYPE=direct requires VAULT_SECRET_ID to be set")
 		}
 		return func(_ context.Context) (string, error) { return s, nil }, nil
@@ -425,7 +425,7 @@ func secretIDFromEnv(ctx context.Context, client *vaultapi.Client) (SecretIDProv
 	case "file":
 		filePath := os.Getenv("VAULT_SECRET_ID_FILE")
 		if filePath == "" {
-			return nil, errcode.New(errcode.ErrVaultAuthFailed,
+			return nil, errcode.New(errcode.KindUnavailable, errcode.ErrVaultAuthFailed,
 				"vault-auth: VAULT_SECRET_ID_TYPE=file requires VAULT_SECRET_ID_FILE to be set")
 		}
 		// Re-read on every Login call so orchestrator-rotated projected volumes
@@ -434,19 +434,19 @@ func secretIDFromEnv(ctx context.Context, client *vaultapi.Client) (SecretIDProv
 		return func(_ context.Context) (string, error) {
 			data, err := os.ReadFile(cleanPath)
 			if err != nil {
-				return "", errcode.Wrap(errcode.ErrVaultAuthFailed,
+				return "", errcode.Wrap(errcode.KindUnavailable, errcode.ErrVaultAuthFailed,
 					fmt.Sprintf("vault-auth: read secret_id from file %s", cleanPath), err)
 			}
 			s := strings.TrimSpace(string(data))
 			if s == "" {
-				return "", errcode.New(errcode.ErrVaultAuthFailed,
+				return "", errcode.New(errcode.KindUnavailable, errcode.ErrVaultAuthFailed,
 					"vault-auth: secret_id file is empty: "+cleanPath)
 			}
 			return s, nil
 		}, nil
 
 	default:
-		return nil, errcode.New(errcode.ErrVaultAuthFailed,
+		return nil, errcode.New(errcode.KindUnavailable, errcode.ErrVaultAuthFailed,
 			fmt.Sprintf("vault-auth: unknown VAULT_SECRET_ID_TYPE %q (known values: direct, wrapped, file)", secretIDType))
 	}
 }
@@ -470,7 +470,7 @@ func secretIDFromEnv(ctx context.Context, client *vaultapi.Client) (SecretIDProv
 func unwrapSecretID(ctx context.Context, client *vaultapi.Client) (string, error) {
 	wrapToken := os.Getenv("VAULT_SECRET_ID_WRAPPING_TOKEN")
 	if wrapToken == "" {
-		return "", errcode.New(errcode.ErrVaultAuthFailed,
+		return "", errcode.New(errcode.KindUnavailable, errcode.ErrVaultAuthFailed,
 			"vault-auth: VAULT_SECRET_ID_TYPE=wrapped requires VAULT_SECRET_ID_WRAPPING_TOKEN to be set")
 	}
 
@@ -479,7 +479,7 @@ func unwrapSecretID(ctx context.Context, client *vaultapi.Client) (string, error
 	// client would briefly see the wrapping token instead of the app token.
 	clone, err := client.Clone()
 	if err != nil {
-		return "", errcode.Wrap(errcode.ErrVaultAuthFailed,
+		return "", errcode.Wrap(errcode.KindUnavailable, errcode.ErrVaultAuthFailed,
 			"vault-auth: clone client for unwrap", err)
 	}
 	// Vault SDK contract: Logical().UnwrapWithContext reads the client token
@@ -493,16 +493,16 @@ func unwrapSecretID(ctx context.Context, client *vaultapi.Client) (string, error
 
 	secret, err := clone.Logical().UnwrapWithContext(ctx, "")
 	if err != nil {
-		return "", errcode.Wrap(errcode.ErrVaultAuthFailed,
+		return "", errcode.Wrap(errcode.KindUnavailable, errcode.ErrVaultAuthFailed,
 			"vault-auth: unwrap AppRole secret_id (wrapping token may be expired or already consumed)", err)
 	}
 	if secret == nil || secret.Data == nil {
-		return "", errcode.New(errcode.ErrVaultAuthFailed,
+		return "", errcode.New(errcode.KindUnavailable, errcode.ErrVaultAuthFailed,
 			"vault-auth: unwrap returned nil or empty data")
 	}
 	secretID, ok := secret.Data["secret_id"].(string)
 	if !ok || secretID == "" {
-		return "", errcode.New(errcode.ErrVaultAuthFailed,
+		return "", errcode.New(errcode.KindUnavailable, errcode.ErrVaultAuthFailed,
 			"vault-auth: unwrapped data missing string 'secret_id' field")
 	}
 	return secretID, nil
@@ -529,11 +529,11 @@ func unwrapSecretID(ctx context.Context, client *vaultapi.Client) (string, error
 // ref: hashicorp/vault security best practices — avoid long-lived static tokens in prod
 func AssertForRealMode(auth AuthMethod) error {
 	if auth == nil {
-		return errcode.New(errcode.ErrVaultAuthFailed,
+		return errcode.New(errcode.KindUnavailable, errcode.ErrVaultAuthFailed,
 			"vault-auth: AssertForRealMode called with nil AuthMethod")
 	}
 	if auth.Method() == MethodToken {
-		return errcode.New(errcode.ErrVaultAuthFailed,
+		return errcode.New(errcode.KindUnavailable, errcode.ErrVaultAuthFailed,
 			"vault-transit: static VAULT_TOKEN is not allowed in real mode; "+
 				"use VAULT_AUTH_METHOD=approle or VAULT_AUTH_METHOD=kubernetes")
 	}

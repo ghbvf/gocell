@@ -94,7 +94,7 @@ func NewService(repo domain.OrderRepository, logger *slog.Logger, opts ...Option
 		o(s)
 	}
 	if s.txRunner == nil {
-		return nil, errcode.New(errcode.ErrValidationFailed, "ordercreate: TxRunner required")
+		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "ordercreate: TxRunner required")
 	}
 	return s, nil
 }
@@ -113,7 +113,7 @@ func (s *Service) Create(ctx context.Context, req *createv1.Request) (*createv1.
 // an outbox entry atomically.
 func (s *Service) createInternal(ctx context.Context, item string) (*domain.Order, error) {
 	if item == "" {
-		return nil, errcode.New(errcode.ErrValidationFailed, "item must not be empty")
+		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "item must not be empty")
 	}
 
 	order := &domain.Order{

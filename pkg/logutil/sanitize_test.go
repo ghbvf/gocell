@@ -14,6 +14,9 @@ func TestSanitize(t *testing.T) {
 		{"strip bell", "a\x07b", "ab"},
 		{"strip esc", "a\x1bb", "ab"},
 		{"strip del", "a\x7fb", "ab"},
+		{"strip c1 control", "a\u0085b", "ab"},
+		{"strip unicode line separator", "a\u2028b", "ab"},
+		{"strip unicode paragraph separator", "a\u2029b", "ab"},
 		{"keep unicode", "héllo 🚀", "héllo 🚀"},
 		{"empty", "", ""},
 	}

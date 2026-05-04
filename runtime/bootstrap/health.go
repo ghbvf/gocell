@@ -83,7 +83,7 @@ func WithMetricsHandler(h http.Handler) HealthRouteGroupOption {
 // health.Handler's strict-gate path. Requests with ?verbose=true must carry a
 // matching X-Readyz-Token header; mismatches receive 401 ErrReadyzVerboseDenied
 // from health.Handler.SetVerboseToken / sendVerboseDenied (canonical envelope
-// via httputil.WritePublicError).
+// via httputil.WritePublic).
 //
 // Note: verbose-token is a disclosure gate, not an authentication scheme — it
 // only controls whether the verbose body is rendered. Listener-level auth

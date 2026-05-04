@@ -106,7 +106,7 @@ func NewStaticKeyProvider(ks *KeySet, ring *HMACKeyRing) *StaticKeyProvider {
 // RSAKeySet returns the pre-loaded KeySet or an error if nil.
 func (p *StaticKeyProvider) RSAKeySet() (*KeySet, error) {
 	if p.rsaKeySet == nil {
-		return nil, errcode.New(errcode.ErrAuthKeyMissing, "RSA key set not configured")
+		return nil, errcode.New(errcode.KindInternal, errcode.ErrAuthKeyMissing, "RSA key set not configured")
 	}
 	return p.rsaKeySet, nil
 }
@@ -114,7 +114,7 @@ func (p *StaticKeyProvider) RSAKeySet() (*KeySet, error) {
 // HMACKeyRing returns the pre-loaded HMACKeyRing or an error if nil.
 func (p *StaticKeyProvider) HMACKeyRing() (*HMACKeyRing, error) {
 	if p.hmacRing == nil {
-		return nil, errcode.New(errcode.ErrAuthKeyMissing, "HMAC key ring not configured")
+		return nil, errcode.New(errcode.KindInternal, errcode.ErrAuthKeyMissing, "HMAC key ring not configured")
 	}
 	return p.hmacRing, nil
 }

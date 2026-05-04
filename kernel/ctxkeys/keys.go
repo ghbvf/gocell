@@ -5,51 +5,50 @@ import "context"
 // ctxKey is an unexported type to prevent key collisions with other packages.
 type ctxKey string
 
-// Cell-model context keys propagated through context.Context.
 const (
-	CellID        ctxKey = "cell_id"
-	SliceID       ctxKey = "slice_id"
-	JourneyID     ctxKey = "journey_id"
-	ContractID    ctxKey = "contract_id"
-	ContractAttrs ctxKey = "contract_attrs"
+	cellID        ctxKey = "cell_id"
+	sliceID       ctxKey = "slice_id"
+	journeyID     ctxKey = "journey_id"
+	contractID    ctxKey = "contract_id"
+	contractAttrs ctxKey = "contract_attrs"
 )
 
 // WithCellID returns a new context carrying the given cell ID.
 func WithCellID(ctx context.Context, id string) context.Context {
-	return context.WithValue(ctx, CellID, id)
+	return context.WithValue(ctx, cellID, id)
 }
 
 // CellIDFrom extracts the cell ID from ctx. The boolean reports whether the
 // key was present; it can be true with an empty value, so callers that treat
 // "" as invalid must check both ok and v != "".
 func CellIDFrom(ctx context.Context) (string, bool) {
-	v, ok := ctx.Value(CellID).(string)
+	v, ok := ctx.Value(cellID).(string)
 	return v, ok
 }
 
 // WithSliceID returns a new context carrying the given slice ID.
 func WithSliceID(ctx context.Context, id string) context.Context {
-	return context.WithValue(ctx, SliceID, id)
+	return context.WithValue(ctx, sliceID, id)
 }
 
 // SliceIDFrom extracts the slice ID from ctx. The boolean reports whether the
 // key was present; it can be true with an empty value, so callers that treat
 // "" as invalid must check both ok and v != "".
 func SliceIDFrom(ctx context.Context) (string, bool) {
-	v, ok := ctx.Value(SliceID).(string)
+	v, ok := ctx.Value(sliceID).(string)
 	return v, ok
 }
 
 // WithJourneyID returns a new context carrying the given journey ID.
 func WithJourneyID(ctx context.Context, id string) context.Context {
-	return context.WithValue(ctx, JourneyID, id)
+	return context.WithValue(ctx, journeyID, id)
 }
 
 // JourneyIDFrom extracts the journey ID from ctx. The boolean reports whether
 // the key was present; it can be true with an empty value, so callers that
 // treat "" as invalid must check both ok and v != "".
 func JourneyIDFrom(ctx context.Context) (string, bool) {
-	v, ok := ctx.Value(JourneyID).(string)
+	v, ok := ctx.Value(journeyID).(string)
 	return v, ok
 }
 
@@ -59,14 +58,14 @@ func JourneyIDFrom(ctx context.Context) (string, bool) {
 // handlers, and event consumers can tag logs and metrics with the same
 // identifier that the span carries in the gocell.contract.id attribute.
 func WithContractID(ctx context.Context, id string) context.Context {
-	return context.WithValue(ctx, ContractID, id)
+	return context.WithValue(ctx, contractID, id)
 }
 
 // ContractIDFrom extracts the contract ID from ctx. The boolean reports
 // whether the key was present; callers that treat "" as invalid must check
 // both ok and v != "".
 func ContractIDFrom(ctx context.Context) (string, bool) {
-	v, ok := ctx.Value(ContractID).(string)
+	v, ok := ctx.Value(contractID).(string)
 	return v, ok
 }
 
@@ -88,14 +87,14 @@ func WithContractAttrs(ctx context.Context, attrs any) context.Context {
 	if attrs == nil {
 		return ctx
 	}
-	return context.WithValue(ctx, ContractAttrs, attrs)
+	return context.WithValue(ctx, contractAttrs, attrs)
 }
 
 // ContractAttrsFrom extracts the contract attribute slice from ctx as an any.
 // Callers type-assert to []wrapper.Attr / []tracing.Attr. Reports false when
 // the key is absent.
 func ContractAttrsFrom(ctx context.Context) (any, bool) {
-	v := ctx.Value(ContractAttrs)
+	v := ctx.Value(contractAttrs)
 	if v == nil {
 		return nil, false
 	}

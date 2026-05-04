@@ -41,7 +41,7 @@ var _ Collector = (*providerCollector)(nil)
 // labels preserved so operators do not need to re-write their dashboards.
 func NewProviderCollector(p kernelmetrics.Provider, cfg ProviderCollectorConfig) (Collector, error) {
 	if p == nil {
-		return nil, errcode.New(errcode.ErrObservabilityConfigInvalid,
+		return nil, errcode.New(errcode.KindInternal, errcode.ErrObservabilityConfigInvalid,
 			"runtime/observability/metrics: Provider is required")
 	}
 	if len(cfg.DurationBuckets) == 0 {

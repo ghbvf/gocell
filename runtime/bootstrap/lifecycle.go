@@ -23,7 +23,7 @@ import (
 //
 // Callers may use errors.Is(err, ErrLifecycleAlreadyStarted) for sentinel
 // checks; the pointer identity is stable for the lifetime of the process.
-var ErrLifecycleAlreadyStarted = errcode.New(errcode.ErrBootstrapLifecycle, "lifecycle already started")
+var ErrLifecycleAlreadyStarted = errcode.New(errcode.KindInternal, errcode.ErrBootstrapLifecycle, "lifecycle already started")
 
 // ErrDuplicateHookName is returned by Append when a non-empty Hook.Name has
 // already been registered. The single source of truth for duplicate-name
@@ -33,7 +33,7 @@ var ErrLifecycleAlreadyStarted = errcode.New(errcode.ErrBootstrapLifecycle, "lif
 //
 // Empty Name bypasses the check — callers that deliberately register nameless
 // hooks accept the risk of duplicates (diagnostic cost, not correctness).
-var ErrDuplicateHookName = errcode.New(errcode.ErrBootstrapLifecycle, "duplicate lifecycle hook name")
+var ErrDuplicateHookName = errcode.New(errcode.KindInternal, errcode.ErrBootstrapLifecycle, "duplicate lifecycle hook name")
 
 const (
 	// DefaultStartTimeout is the default per-hook start deadline.

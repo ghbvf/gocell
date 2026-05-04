@@ -51,21 +51,21 @@ func (h *Handler) RegisterRoutes(mux cell.RouteHandler) error {
 
 func (h *Handler) handle(w http.ResponseWriter, r *http.Request) {
 	req := &Request{}
-	if err := httputil.DecodeJSONStrict(r, req); err != nil {
-		httputil.WriteDecodeError(r.Context(), w, err)
+	if err := httputil.DecodeJSONStrict(r, req, httputil.DefaultDecodeJSONLimit); err != nil {
+		httputil.WriteError(r.Context(), w, err)
 		return
 	}
 	if len(req.Item) < 1 {
-		httputil.WriteDomainError(r.Context(), w, errcode.New(errcode.ErrValidationFailed, "item: value too short"))
+		httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "item: value too short"))
 		return
 	}
 	if len(req.Item) > 256 {
-		httputil.WriteDomainError(r.Context(), w, errcode.New(errcode.ErrValidationFailed, "item: value too long"))
+		httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "item: value too long"))
 		return
 	}
 	resp, err := h.svc.Create(r.Context(), req)
 	if err != nil {
-		httputil.WriteDomainError(r.Context(), w, err)
+		httputil.WriteError(r.Context(), w, err)
 		return
 	}
 	httputil.WriteJSON(w, 201, resp)

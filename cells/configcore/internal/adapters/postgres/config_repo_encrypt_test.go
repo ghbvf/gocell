@@ -61,7 +61,7 @@ const fakeNonce = "FAKENC123456" // 12 bytes
 
 func (f *fakeValueTransformer) Encrypt(_ context.Context, plaintext, aad []byte) ([]byte, string, []byte, []byte, error) {
 	if f.failEncrypt {
-		return nil, "", nil, nil, errcode.New(errcode.ErrKeyProviderTransient, "fake: forced encrypt failure")
+		return nil, "", nil, nil, errcode.New(errcode.KindUnavailable, errcode.ErrKeyProviderTransient, "fake: forced encrypt failure")
 	}
 	// Fake cipher: XOR each byte with 0x55.
 	ct := make([]byte, len(plaintext))
@@ -75,15 +75,15 @@ func (f *fakeValueTransformer) Encrypt(_ context.Context, plaintext, aad []byte)
 
 func (f *fakeValueTransformer) Decrypt(_ context.Context, ciphertext []byte, keyID string, _, edk, aad []byte) ([]byte, error) {
 	if f.failDecrypt {
-		return nil, errcode.New(errcode.ErrKeyProviderDecryptFailed, "fake: forced decrypt failure")
+		return nil, errcode.New(errcode.KindInternal, errcode.ErrKeyProviderDecryptFailed, "fake: forced decrypt failure")
 	}
 	if keyID == "" {
-		return nil, errcode.New(errcode.ErrKeyProviderDecryptFailed, "fake: empty keyID")
+		return nil, errcode.New(errcode.KindInternal, errcode.ErrKeyProviderDecryptFailed, "fake: empty keyID")
 	}
 	// Verify AAD binding via edk-embedded AAD (stateless check).
 	expectedEDK := append([]byte("edk-"+keyID+":aad:"), aad...)
 	if !bytes.Equal(edk, expectedEDK) {
-		return nil, errcode.New(errcode.ErrConfigDecryptFailed,
+		return nil, errcode.New(errcode.KindInternal, errcode.ErrConfigDecryptFailed,
 			"fake: AAD mismatch (edk does not match expected AAD binding)")
 	}
 	// Reverse XOR.
@@ -993,7 +993,7 @@ func TestEncrypt_FailEncrypt_RoutesToErrConfigEncryptFailed(t *testing.T) {
 
 	t.Run("cryptoOpError direct — ErrConfigEncryptFailed transient", func(t *testing.T) {
 		repo := newConfigRepositoryFromDBTX(&mockDB{})
-		transient := errcode.NewInfra(errcode.ErrKeyProviderTransient, "vault sealed")
+		transient := errcode.New(errcode.KindUnavailable, errcode.ErrKeyProviderTransient, "vault sealed")
 		ec := repo.cryptoOpError(errcode.ErrConfigEncryptFailed, "Encrypt", "key=foo", transient)
 		require.NotNil(t, ec)
 		assert.Equal(t, errcode.ErrConfigEncryptFailed, ec.Code)

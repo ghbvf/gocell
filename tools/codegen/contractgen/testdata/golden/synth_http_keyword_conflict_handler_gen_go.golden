@@ -54,18 +54,18 @@ func (h *Handler) handle(w http.ResponseWriter, r *http.Request) {
 	{
 		v := r.PathValue("key")
 		if len(v) < 1 {
-			httputil.WriteDomainError(r.Context(), w, errcode.New(errcode.ErrValidationFailed, "key: value too short"))
+			httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "key: value too short"))
 			return
 		}
 		if len(v) > 128 {
-			httputil.WriteDomainError(r.Context(), w, errcode.New(errcode.ErrValidationFailed, "key: value too long"))
+			httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "key: value too long"))
 			return
 		}
 		req.Key = v
 	}
 	resp, err := h.svc.Delete(r.Context(), req)
 	if err != nil {
-		httputil.WriteDomainError(r.Context(), w, err)
+		httputil.WriteError(r.Context(), w, err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)

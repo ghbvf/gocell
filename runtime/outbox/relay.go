@@ -171,7 +171,7 @@ func NewRelay(store Store, pub kout.Publisher, cfg RelayConfig) *Relay {
 // It blocks until ctx is canceled or Stop is called.
 func (r *Relay) Start(ctx context.Context) error {
 	if !r.state.CompareAndSwap(int32(relayStopped), int32(relayStarting)) {
-		return errcode.New(errRelayOp, "outbox relay already started")
+		return errcode.New(errcode.KindConflict, errRelayOp, "outbox relay already started")
 	}
 
 	ctx, cancel := context.WithCancel(ctx)
@@ -261,7 +261,7 @@ func (r *Relay) Stop(ctx context.Context) error {
 	select {
 	case <-ready:
 	case <-ctx.Done():
-		return errcode.Wrap(errRelayOp, "relay stop: timed out waiting for start", ctx.Err())
+		return errcode.Wrap(errcode.KindDeadlineExceeded, errRelayOp, "relay stop: timed out waiting for start", ctx.Err())
 	}
 
 	r.state.Store(int32(relayStopping))
@@ -284,7 +284,7 @@ func (r *Relay) Stop(ctx context.Context) error {
 		slog.Info("outbox relay: stopped")
 		return nil
 	case <-ctx.Done():
-		return errcode.Wrap(errRelayOp, "relay stop timeout", ctx.Err())
+		return errcode.Wrap(errcode.KindDeadlineExceeded, errRelayOp, "relay stop timeout", ctx.Err())
 	}
 }
 

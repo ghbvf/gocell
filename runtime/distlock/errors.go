@@ -21,11 +21,11 @@ import (
 var (
 	// ErrLockLost is set as the context cause when the manager fails to renew
 	// the lock or the backend reports ownership has been taken by another holder.
-	ErrLockLost = errcode.New(errcode.ErrDistlockLockLost, "distlock: lock lost")
+	ErrLockLost = errcode.New(errcode.KindConflict, errcode.ErrDistlockLockLost, "distlock: lock lost")
 
 	// ErrLockReleased is set as the context cause when release() is called
 	// by the application (normal end-of-critical-section).
-	ErrLockReleased = errcode.New(errcode.ErrDistlockLockReleased, "distlock: lock released")
+	ErrLockReleased = errcode.New(errcode.KindConflict, errcode.ErrDistlockLockReleased, "distlock: lock released")
 )
 
 // ErrLockTimeout is a package-level alias for errcode.ErrDistlockTimeout.

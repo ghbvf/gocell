@@ -32,7 +32,7 @@ func (r *OrderRepository) Create(_ context.Context, order *domain.Order) error {
 	defer r.mu.Unlock()
 
 	if _, exists := r.orders[order.ID]; exists {
-		return errcode.New(errcode.ErrValidationFailed,
+		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			fmt.Sprintf("order %q already exists", order.ID))
 	}
 	// Store a copy to avoid external mutation.
@@ -48,7 +48,7 @@ func (r *OrderRepository) GetByID(_ context.Context, id string) (*domain.Order, 
 
 	o, ok := r.orders[id]
 	if !ok {
-		return nil, errcode.New(errcode.ErrOrderNotFound,
+		return nil, errcode.New(errcode.KindNotFound, errcode.ErrOrderNotFound,
 			fmt.Sprintf("order %q not found", id))
 	}
 	// Return a copy.

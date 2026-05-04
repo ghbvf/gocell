@@ -12,7 +12,7 @@ const EnvelopeSchemaV1 = "v1"
 
 // ErrUnknownEnvelopeVersion is returned when a wire message carries an
 // unrecognized or absent schemaVersion field.
-var ErrUnknownEnvelopeVersion = errcode.New(errcode.ErrEnvelopeSchema,
+var ErrUnknownEnvelopeVersion = errcode.New(errcode.KindInvalid, errcode.ErrEnvelopeSchema,
 	"outbox: unknown envelope schema version")
 
 // WireMessage is the canonical wire envelope used by outbox relay and direct
@@ -52,7 +52,7 @@ func MarshalEnvelope(entry Entry) ([]byte, error) {
 	}
 	b, err := json.Marshal(msg)
 	if err != nil {
-		return nil, errcode.Wrap(errcode.ErrEnvelopeSchema, "outbox: marshal envelope", err)
+		return nil, errcode.Wrap(errcode.KindInvalid, errcode.ErrEnvelopeSchema, "outbox: marshal envelope", err)
 	}
 	return b, nil
 }
@@ -61,18 +61,18 @@ func MarshalEnvelope(entry Entry) ([]byte, error) {
 func UnmarshalEnvelope(topic string, raw []byte) (Entry, error) {
 	var msg WireMessage
 	if err := json.Unmarshal(raw, &msg); err != nil {
-		return Entry{}, errcode.Wrap(errcode.ErrEnvelopeSchema,
+		return Entry{}, errcode.Wrap(errcode.KindInvalid, errcode.ErrEnvelopeSchema,
 			"outbox: unmarshal envelope", err)
 	}
 	if msg.SchemaVersion != EnvelopeSchemaV1 {
 		return Entry{}, ErrUnknownEnvelopeVersion
 	}
 	if msg.ID == "" {
-		return Entry{}, errcode.New(errcode.ErrEnvelopeSchema,
+		return Entry{}, errcode.New(errcode.KindInvalid, errcode.ErrEnvelopeSchema,
 			"outbox: envelope missing required field: id")
 	}
 	if msg.EventType == "" {
-		return Entry{}, errcode.New(errcode.ErrEnvelopeSchema,
+		return Entry{}, errcode.New(errcode.KindInvalid, errcode.ErrEnvelopeSchema,
 			"outbox: envelope missing required field: eventType")
 	}
 	entryTopic := msg.Topic

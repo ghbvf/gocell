@@ -11,7 +11,6 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/metadata"
-	"github.com/ghbvf/gocell/pkg/contracts"
 )
 
 // writeHandlerFile writes Go source as handler.go inside dir and returns the
@@ -69,7 +68,7 @@ func setup(mux http.Handler) {
 
 // makeContract builds a minimal ContractMeta for CH-04 tests. contractFile is
 // relative to projectRoot (e.g. "contracts/http/foo/v1/contract.yaml").
-func makeContract(id, contractFile string, responses map[int]contracts.HTTPResponse) *metadata.ContractMeta {
+func makeContract(id, contractFile string, responses map[int]metadata.HTTPResponseMeta) *metadata.ContractMeta {
 	return &metadata.ContractMeta{
 		ID:        id,
 		Kind:      "http",
@@ -114,7 +113,7 @@ func TestCheckHTTPResponseAlignment(t *testing.T) {
 	tests := []struct {
 		name        string
 		handlerSrc  string
-		responses   map[int]contracts.HTTPResponse
+		responses   map[int]metadata.HTTPResponseMeta
 		wantErrors  []string // substrings of SeverityError messages
 		noHandler   bool     // skip handler file creation → no findings expected
 		noAuthMount bool     // write handler src without auth.Mount boilerplate
@@ -128,7 +127,7 @@ func h(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNotFound)
 }
 `,
-			responses: map[int]contracts.HTTPResponse{
+			responses: map[int]metadata.HTTPResponseMeta{
 				400: {Description: "bad request", SchemaRef: "err.json"},
 				404: {Description: "not found", SchemaRef: "err.json"},
 			},
@@ -140,7 +139,7 @@ func h(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusBadRequest)
 }
 `,
-			responses: map[int]contracts.HTTPResponse{
+			responses: map[int]metadata.HTTPResponseMeta{
 				401: {Description: "unauthorized", SchemaRef: "err.json"},
 			},
 			wantErrors: []string{"handler returns 400 but contract does not declare it"},
@@ -152,7 +151,7 @@ func h(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusUnauthorized)
 }
 `,
-			responses: map[int]contracts.HTTPResponse{
+			responses: map[int]metadata.HTTPResponseMeta{
 				400: {Description: "bad request", SchemaRef: "err.json"},
 				401: {Description: "unauthorized", SchemaRef: "err.json"},
 			},
@@ -164,7 +163,7 @@ func h(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusInternalServerError)
 }
 `,
-			responses: map[int]contracts.HTTPResponse{
+			responses: map[int]metadata.HTTPResponseMeta{
 				400: {Description: "bad request", SchemaRef: "err.json"},
 			},
 			wantErrors: []string{"handler returns 500 but contract does not declare it"},
@@ -173,10 +172,10 @@ func h(w http.ResponseWriter, r *http.Request) {
 			name: "errcode indirect: ErrAuthUserNotFound maps to 404",
 			handlerSrc: `
 func h(w http.ResponseWriter, r *http.Request) {
-	_ = errcode.New(errcode.ErrAuthUserNotFound, "not found")
+	_ = errcode.New(errcode.KindNotFound, errcode.ErrAuthUserNotFound, "not found")
 }
 `,
-			responses: map[int]contracts.HTTPResponse{
+			responses: map[int]metadata.HTTPResponseMeta{
 				401: {Description: "unauthorized", SchemaRef: "err.json"},
 			},
 			wantErrors: []string{"handler returns 404 but contract does not declare it"},
@@ -185,17 +184,17 @@ func h(w http.ResponseWriter, r *http.Request) {
 			name: "errcode indirect happy: ErrValidationFailed→400 declared",
 			handlerSrc: `
 func h(w http.ResponseWriter, r *http.Request) {
-	_ = errcode.New(errcode.ErrValidationFailed, "bad input")
+	_ = errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "bad input")
 }
 `,
-			responses: map[int]contracts.HTTPResponse{
+			responses: map[int]metadata.HTTPResponseMeta{
 				400: {Description: "bad request", SchemaRef: "err.json"},
 			},
 		},
 		{
 			name:       "skip: contract has no matching slice",
 			handlerSrc: "", // irrelevant — noHandler suppresses file creation
-			responses: map[int]contracts.HTTPResponse{
+			responses: map[int]metadata.HTTPResponseMeta{
 				400: {Description: "bad request", SchemaRef: "err.json"},
 			},
 			noHandler: true,
@@ -207,7 +206,7 @@ func h(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusBadRequest)
 }
 `,
-			responses: map[int]contracts.HTTPResponse{},
+			responses: map[int]metadata.HTTPResponseMeta{},
 		},
 		{
 			// Finding 9: errcode.WithDetails wraps an inner errcode.New call;
@@ -215,10 +214,10 @@ func h(w http.ResponseWriter, r *http.Request) {
 			name: "errcode.WithDetails wrapping inner New: inner code is found",
 			handlerSrc: `
 func h(w http.ResponseWriter, r *http.Request) {
-	_, _ = errcode.WithDetails(errcode.New(errcode.ErrAuthUserNotFound, "x"), nil)
+	_ = errcode.New(errcode.KindNotFound, errcode.ErrAuthUserNotFound, "x", errcode.WithDetails(nil))
 }
 `,
-			responses: map[int]contracts.HTTPResponse{
+			responses: map[int]metadata.HTTPResponseMeta{
 				404: {Description: "not found", SchemaRef: "err.json"},
 			},
 		},
@@ -227,10 +226,10 @@ func h(w http.ResponseWriter, r *http.Request) {
 			name: "errcode.WithDetails inner code missing from contract",
 			handlerSrc: `
 func h(w http.ResponseWriter, r *http.Request) {
-	_, _ = errcode.WithDetails(errcode.New(errcode.ErrAuthUserNotFound, "x"), nil)
+	_ = errcode.New(errcode.KindNotFound, errcode.ErrAuthUserNotFound, "x", errcode.WithDetails(nil))
 }
 `,
-			responses: map[int]contracts.HTTPResponse{
+			responses: map[int]metadata.HTTPResponseMeta{
 				400: {Description: "bad request", SchemaRef: "err.json"},
 			},
 			wantErrors: []string{"handler returns 404 but contract does not declare it"},
@@ -242,7 +241,7 @@ func handleSomething(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusBadRequest)
 }
 `,
-			responses: map[int]contracts.HTTPResponse{
+			responses: map[int]metadata.HTTPResponseMeta{
 				400: {Description: "bad request", SchemaRef: "err.json"},
 			},
 			// No auth.Mount for the test contractID → correlation fails → fail-closed error.
@@ -397,7 +396,7 @@ func TestCheckHTTPResponseAlignment_GeneratedHandler(t *testing.T) {
 	tests := []struct {
 		name       string
 		statusBody string
-		responses  map[int]contracts.HTTPResponse
+		responses  map[int]metadata.HTTPResponseMeta
 		wantErrors []string
 	}{
 		{
@@ -405,7 +404,7 @@ func TestCheckHTTPResponseAlignment_GeneratedHandler(t *testing.T) {
 			name: "mismatch: generated handler returns 400 contract missing it",
 			statusBody: `	httputil.WriteJSON(w, http.StatusBadRequest, nil)
 `,
-			responses: map[int]contracts.HTTPResponse{
+			responses: map[int]metadata.HTTPResponseMeta{
 				404: {Description: "not found", SchemaRef: "err.json"},
 			},
 			wantErrors: []string{"handler returns 400 but contract does not declare it"},
@@ -415,26 +414,34 @@ func TestCheckHTTPResponseAlignment_GeneratedHandler(t *testing.T) {
 			name: "aligned: generated handler returns 400 contract declares it",
 			statusBody: `	httputil.WriteJSON(w, http.StatusBadRequest, nil)
 `,
-			responses: map[int]contracts.HTTPResponse{
+			responses: map[int]metadata.HTTPResponseMeta{
 				400: {Description: "bad request", SchemaRef: "err.json"},
 			},
 		},
 		{
-			// Generated handler using WriteDecodeError (400 + 413) — both declared.
-			name: "aligned: generated handler WriteDecodeError 400+413 both declared",
-			statusBody: `	httputil.WriteDecodeError(r.Context(), w, nil)
+			// Generated handler using DecodeJSONStrict (400 + 413) — both declared.
+			name: "aligned: generated handler DecodeJSONStrict 400+413 both declared",
+			statusBody: `	var req struct{ Name string }
+	if err := httputil.DecodeJSONStrict(r, &req, httputil.DefaultDecodeJSONLimit); err != nil {
+		httputil.WriteError(r.Context(), w, err)
+		return
+	}
 `,
-			responses: map[int]contracts.HTTPResponse{
+			responses: map[int]metadata.HTTPResponseMeta{
 				400: {Description: "bad request", SchemaRef: "err.json"},
 				413: {Description: "too large", SchemaRef: "err.json"},
 			},
 		},
 		{
-			// Generated handler WriteDecodeError but contract missing 413.
-			name: "mismatch: generated handler WriteDecodeError missing 413",
-			statusBody: `	httputil.WriteDecodeError(r.Context(), w, nil)
+			// Generated handler DecodeJSONStrict but contract missing 413.
+			name: "mismatch: generated handler DecodeJSONStrict missing 413",
+			statusBody: `	var req struct{ Name string }
+	if err := httputil.DecodeJSONStrict(r, &req, httputil.DefaultDecodeJSONLimit); err != nil {
+		httputil.WriteError(r.Context(), w, err)
+		return
+	}
 `,
-			responses: map[int]contracts.HTTPResponse{
+			responses: map[int]metadata.HTTPResponseMeta{
 				400: {Description: "bad request", SchemaRef: "err.json"},
 			},
 			wantErrors: []string{"handler returns 413 but contract does not declare it"},
@@ -444,7 +451,7 @@ func TestCheckHTTPResponseAlignment_GeneratedHandler(t *testing.T) {
 			name: "aligned: generated handler only writes 201 success",
 			statusBody: `	httputil.WriteJSON(w, 201, nil)
 `,
-			responses: map[int]contracts.HTTPResponse{},
+			responses: map[int]metadata.HTTPResponseMeta{},
 		},
 	}
 
@@ -502,7 +509,7 @@ func h(w http.ResponseWriter, r *http.Request) {
 	}
 
 	c := makeContract(contractID, "contracts/http/test/legacy/v1/contract.yaml",
-		map[int]contracts.HTTPResponse{
+		map[int]metadata.HTTPResponseMeta{
 			400: {Description: "bad request"},
 		},
 	)
@@ -523,12 +530,12 @@ func h(w http.ResponseWriter, r *http.Request) {
 
 // TestCheckHTTPResponseAlignment_HelperWriteStatuses verifies Finding 10:
 // CH-04 must detect 4xx/5xx status codes written internally by pkg/httputil
-// helpers (ParseUUIDPathParam, WriteDecodeError, ParsePageParamsOrWrite).
+// helpers (ParseUUIDPathParam, DecodeJSONStrict, ParsePageParamsOrWrite).
 func TestCheckHTTPResponseAlignment_HelperWriteStatuses(t *testing.T) {
 	tests := []struct {
 		name       string
 		handlerSrc string
-		responses  map[int]contracts.HTTPResponse
+		responses  map[int]metadata.HTTPResponseMeta
 		wantErrors []string
 	}{
 		{
@@ -539,31 +546,37 @@ func h(w http.ResponseWriter, r *http.Request) {
 	_ = id; _ = ok
 }
 `,
-			responses: map[int]contracts.HTTPResponse{
+			responses: map[int]metadata.HTTPResponseMeta{
 				404: {Description: "not found", SchemaRef: "err.json"},
 			},
 			wantErrors: []string{"handler returns 400 but contract does not declare it"},
 		},
 		{
-			name: "WriteDecodeError: handler declares both 400 and 413, no finding",
+			name: "DecodeJSONStrict: handler declares both 400 and 413, no finding",
 			handlerSrc: `
 func h(w http.ResponseWriter, r *http.Request) {
-	httputil.WriteDecodeError(r.Context(), w, errcode.New(errcode.ErrValidationFailed, "x"))
+	var req struct{ Name string }
+	if err := httputil.DecodeJSONStrict(r, &req, httputil.DefaultDecodeJSONLimit); err != nil {
+		httputil.WriteError(r.Context(), w, err)
+	}
 }
 `,
-			responses: map[int]contracts.HTTPResponse{
+			responses: map[int]metadata.HTTPResponseMeta{
 				400: {Description: "bad request", SchemaRef: "err.json"},
 				413: {Description: "too large", SchemaRef: "err.json"},
 			},
 		},
 		{
-			name: "WriteDecodeError: contract declares 400 but missing 413",
+			name: "DecodeJSONStrict: contract declares 400 but missing 413",
 			handlerSrc: `
 func h(w http.ResponseWriter, r *http.Request) {
-	httputil.WriteDecodeError(r.Context(), w, errcode.New(errcode.ErrValidationFailed, "x"))
+	var req struct{ Name string }
+	if err := httputil.DecodeJSONStrict(r, &req, httputil.DefaultDecodeJSONLimit); err != nil {
+		httputil.WriteError(r.Context(), w, err)
+	}
 }
 `,
-			responses: map[int]contracts.HTTPResponse{
+			responses: map[int]metadata.HTTPResponseMeta{
 				400: {Description: "bad request", SchemaRef: "err.json"},
 			},
 			wantErrors: []string{"handler returns 413 but contract does not declare it"},
@@ -576,7 +589,7 @@ func h(w http.ResponseWriter, r *http.Request) {
 	_ = ok
 }
 `,
-			responses: map[int]contracts.HTTPResponse{
+			responses: map[int]metadata.HTTPResponseMeta{
 				200: {},
 			},
 			wantErrors: []string{"handler returns 400 but contract does not declare it"},

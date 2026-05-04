@@ -10,7 +10,6 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/metadata"
-	"github.com/ghbvf/gocell/pkg/contracts"
 )
 
 // writeUUIDHandlerFile writes a minimal Go source file (valid package + imports)
@@ -42,9 +41,9 @@ func setup(mux http.Handler) {
 
 // makeUUIDContract builds a ContractMeta with specified UUID path params.
 func makeUUIDContract(id, contractFile string, uuidParams []string) *metadata.ContractMeta {
-	pp := make(map[string]contracts.ParamSchema, len(uuidParams))
+	pp := make(map[string]metadata.ParamSchema, len(uuidParams))
 	for _, name := range uuidParams {
-		pp[name] = contracts.ParamSchema{Type: "string", Format: "uuid"}
+		pp[name] = metadata.ParamSchema{Type: "string", Format: "uuid"}
 	}
 	return &metadata.ContractMeta{
 		ID:        id,
@@ -202,7 +201,7 @@ func handleSomething(w http.ResponseWriter, r *http.Request) {
 							Method:        "GET",
 							Path:          "/api/v1/config/{key}",
 							SuccessStatus: 200,
-							PathParams: map[string]contracts.ParamSchema{
+							PathParams: map[string]metadata.ParamSchema{
 								"key": {Type: "string"}, // no format:uuid
 							},
 						},

@@ -23,11 +23,11 @@ import (
 // a required prerequisite timestamp is missing (e.g., Sent→Delivered without SentAt).
 func AdvanceCommand(entry *Entry, to Status, now time.Time) error {
 	if entry == nil {
-		return errcode.New(errcode.ErrValidationFailed, "command: nil Entry")
+		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "command: nil Entry")
 	}
 	// AdvanceCommand does not handle → Pending; ResetForRetry does.
 	if to == StatusPending {
-		return errcode.New(errcode.ErrValidationFailed,
+		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"command: AdvanceCommand does not support transitions to Pending; use ResetForRetry")
 	}
 	if err := Transition(entry.Status, to); err != nil {
@@ -40,14 +40,14 @@ func AdvanceCommand(entry *Entry, to Status, now time.Time) error {
 		// transition (ResetForRetry clears it). If SentAt is somehow set already,
 		// ensure now does not precede it to prevent backwards timestamps.
 		if entry.SentAt != nil && now.Before(*entry.SentAt) {
-			return errcode.New(errcode.ErrValidationFailed,
+			return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 				"command: advance now precedes previous SentAt (clock skew?)")
 		}
 		entry.SentAt = &now
 		entry.Attempt++
 	case StatusDelivered:
 		if entry.SentAt == nil {
-			return errcode.New(errcode.ErrValidationFailed,
+			return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 				"command: cannot transition to Delivered without SentAt")
 		}
 		entry.DeliveredAt = &now
@@ -84,13 +84,13 @@ func AdvanceCommand(entry *Entry, to Status, now time.Time) error {
 //   - All other fields (ID, DeviceID, Payload, Timeouts, Metadata, CreatedAt) preserved
 func ResetForRetry(entry *Entry) error {
 	if entry == nil {
-		return errcode.New(errcode.ErrValidationFailed, "command: nil Entry")
+		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "command: nil Entry")
 	}
 	switch entry.Status {
 	case StatusSent, StatusFailed:
 		// allowed
 	default:
-		return errcode.New(errcode.ErrValidationFailed,
+		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			fmt.Sprintf("command: cannot reset for retry from status %s (allowed: sent, failed)", entry.Status))
 	}
 

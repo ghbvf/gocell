@@ -791,7 +791,7 @@ func TestService_Unlock_UpdateErrorPropagatesAndAbortsBeforeLog(t *testing.T) {
 }
 
 // TestService_Create_BlankUsername_RejectsBeforeRepoCreate asserts that a
-// blank username is caught by validation.RequireNotBlank with the typed
+// blank username is caught by validation.RequireNotEmpty with the typed
 // invalid-input code, and that no expensive work (bcrypt, repo.Create) runs
 // (audit S-4).
 func TestService_Create_BlankUsername_RejectsBeforeRepoCreate(t *testing.T) {
@@ -840,7 +840,7 @@ func TestService_Create_BlankEmail_RejectsBeforeRepoCreate(t *testing.T) {
 }
 
 // TestService_Create_BlankPassword_RoutesIdentityInvalidInputCode covers the
-// third RequireNotBlank field. Pre-fix this path was already wired
+// third RequireNotEmpty field. Pre-fix this path was already wired
 // (password was the sole field), so the case is a regression guard ensuring
 // the error code stays bound to the service boundary
 // (ErrAuthIdentityInvalidInput) and never leaks domain.NewUser's
@@ -866,13 +866,13 @@ func TestService_Create_BlankPassword_RoutesIdentityInvalidInputCode(t *testing.
 	assert.Equal(t, 0, runner.runs)
 }
 
-// TestService_Create_RequireNotBlankShortCircuitsOnFirstField asserts the
+// TestService_Create_RequireNotEmptyShortCircuitsOnFirstField asserts the
 // validator returns on the FIRST blank field in declaration order
 // (username → email → password), matching setup.CreateAdmin's order so the
 // two paths produce identical messages for identical inputs. Asserts both
 // the typed error code (stable contract) and the field-name message
 // (debuggability).
-func TestService_Create_RequireNotBlankShortCircuitsOnFirstField(t *testing.T) {
+func TestService_Create_RequireNotEmptyShortCircuitsOnFirstField(t *testing.T) {
 	svc := newTestService(t)
 	_, err := svc.Create(adminCtxForService(), CreateInput{
 		Username: "", Email: "", Password: "",

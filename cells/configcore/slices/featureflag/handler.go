@@ -109,7 +109,7 @@ func (h *Handler) RegisterRoutes(mux kcell.RouteHandler) error {
 
 // HandleList handles GET / — returns paginated feature flags.
 func (h *Handler) HandleList(w http.ResponseWriter, r *http.Request) {
-	r = r.WithContext(httputil.WithListErrorLogSampling(r.Context(), specFlagsList.ID))
+	r = r.WithContext(httputil.WithClientErrorLogSampling(r.Context(), specFlagsList.ID))
 
 	pageReq, ok := httputil.ParsePageParamsOrWrite(w, r)
 	if !ok {
@@ -118,7 +118,7 @@ func (h *Handler) HandleList(w http.ResponseWriter, r *http.Request) {
 
 	result, err := h.svc.List(r.Context(), pageReq)
 	if err != nil {
-		httputil.WritePageDomainError(r.Context(), w, err)
+		httputil.WriteError(r.Context(), w, err)
 		return
 	}
 
@@ -131,7 +131,7 @@ func (h *Handler) HandleGet(w http.ResponseWriter, r *http.Request) {
 
 	flag, err := h.svc.GetByKey(r.Context(), key)
 	if err != nil {
-		httputil.WriteDomainError(r.Context(), w, err)
+		httputil.WriteError(r.Context(), w, err)
 		return
 	}
 
@@ -145,14 +145,14 @@ func (h *Handler) HandleEvaluate(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Subject string `json:"subject"`
 	}
-	if err := httputil.DecodeJSONStrict(r, &req); err != nil {
-		httputil.WriteDecodeError(r.Context(), w, err)
+	if err := httputil.DecodeJSONStrict(r, &req, httputil.DefaultDecodeJSONLimit); err != nil {
+		httputil.WriteError(r.Context(), w, err)
 		return
 	}
 
 	result, err := h.svc.Evaluate(r.Context(), key, req.Subject)
 	if err != nil {
-		httputil.WriteDomainError(r.Context(), w, err)
+		httputil.WriteError(r.Context(), w, err)
 		return
 	}
 

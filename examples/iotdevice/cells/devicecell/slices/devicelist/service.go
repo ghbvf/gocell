@@ -33,7 +33,7 @@ func NewService(
 	logger *slog.Logger, runMode query.RunMode,
 ) (*Service, error) {
 	if codec == nil {
-		return nil, errcode.New(errcode.ErrCellMissingCodec,
+		return nil, errcode.New(errcode.KindInternal, errcode.ErrCellMissingCodec,
 			"device-list: cursor codec is required")
 	}
 	return &Service{deviceRepo: deviceRepo, codec: codec, logger: logger, runMode: runMode}, nil

@@ -2,7 +2,6 @@ package aeadutil_test
 
 import (
 	"bytes"
-	"crypto/aes"
 	"strings"
 	"testing"
 
@@ -41,6 +40,22 @@ func assertGCMRoundTrip(t *testing.T, key, plaintext, aad []byte) {
 	}
 	if !bytes.Equal(got, plaintext) {
 		t.Errorf("round-trip mismatch: got %q, want %q", got, plaintext)
+	}
+}
+
+func assertBadKeyErrorSanitized(t *testing.T, err error) {
+	t.Helper()
+	if err == nil {
+		t.Fatal("expected error with invalid key length, got nil")
+	}
+	errMsg := err.Error()
+	if strings.Contains(errMsg, "invalid key size") {
+		t.Fatalf("error exposes aes.KeySizeError details: %v", err)
+	}
+	for _, leaked := range []string{"7", "15", "17"} {
+		if strings.Contains(errMsg, leaked) {
+			t.Fatalf("error exposes supplied key length %s: %v", leaked, err)
+		}
 	}
 }
 
@@ -147,18 +162,25 @@ func TestDecryptGCM_WrongNonceLength(t *testing.T) {
 	}
 }
 
-// TestEncryptGCM_InvalidKeyLength verifies aes.NewCipher returns KeySizeError.
+// TestEncryptGCM_InvalidKeyLength verifies invalid AES key lengths fail before
+// aes.NewCipher can expose the supplied byte count.
 func TestEncryptGCM_InvalidKeyLength(t *testing.T) {
 	t.Parallel()
 	badKey := bytes.Repeat([]byte{0x01}, 17) // 17 bytes is not valid for AES
 	_, _, err := aeadutil.EncryptGCM(badKey, []byte("data"), nil)
-	if err == nil {
-		t.Fatal("expected error with invalid key length, got nil")
-	}
-	var keySizeErr aes.KeySizeError
-	// The error should wrap KeySizeError or at least not be nil.
-	// We can't always errors.As through the fmt.Errorf wrapper, so just check non-nil.
-	_ = keySizeErr
+	assertBadKeyErrorSanitized(t, err)
+}
+
+func TestDecryptGCM_InvalidKeyLength(t *testing.T) {
+	t.Parallel()
+	_, err := aeadutil.DecryptGCM(bytes.Repeat([]byte{0x01}, 15), []byte("ct"), make([]byte, 12), nil)
+	assertBadKeyErrorSanitized(t, err)
+}
+
+func TestDecryptGCMSelfContained_InvalidKeyLength(t *testing.T) {
+	t.Parallel()
+	_, err := aeadutil.DecryptGCMSelfContained(bytes.Repeat([]byte{0x01}, 7), []byte("blob"), nil)
+	assertBadKeyErrorSanitized(t, err)
 }
 
 // TestEncryptDecryptGCMSelfContained_RoundTrip tests self-contained round-trips.

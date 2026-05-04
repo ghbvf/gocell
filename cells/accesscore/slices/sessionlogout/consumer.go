@@ -65,7 +65,7 @@ func (c *Consumer) HandleRoleChanged(ctx context.Context, entry outbox.Entry) ou
 		return outbox.HandleResult{
 			Disposition: outbox.DispositionReject,
 			Err: outbox.NewPermanentError(
-				errcode.New(errcode.ErrAuthRBACInvalidInput, "sessionlogout: role-changed payload missing userId"),
+				errcode.New(errcode.KindInvalid, errcode.ErrAuthRBACInvalidInput, "sessionlogout: role-changed payload missing userId"),
 			),
 		}
 	}

@@ -52,14 +52,14 @@ func (h *Handler) handle(w http.ResponseWriter, r *http.Request) {
 	req := &Request{}
 	page, err := httputil.ParsePageParams(r)
 	if err != nil {
-		httputil.WriteDomainError(r.Context(), w, err)
+		httputil.WriteError(r.Context(), w, err)
 		return
 	}
 	req.Cursor = page.Cursor
 	req.Limit = int64(page.Limit)
 	resp, err := h.svc.List(r.Context(), req)
 	if err != nil {
-		httputil.WriteDomainError(r.Context(), w, err)
+		httputil.WriteError(r.Context(), w, err)
 		return
 	}
 	httputil.WriteJSON(w, 200, resp)

@@ -122,7 +122,7 @@ func RenderIface(spec *ContractGenSpec, filename string) ([]byte, error) {
 }
 
 // RenderHandler renders handler_gen.go content for the given spec.
-// Only valid for kind=http contracts. Returns an error for event contracts.
+// Only valid for kind=http metadata. Returns an error for event metadata.
 func RenderHandler(spec *ContractGenSpec, filename string) ([]byte, error) {
 	if spec.Kind != "http" {
 		return nil, fmt.Errorf("contractgen render handler: contract %q is kind=%q, not http", spec.ContractID, spec.Kind)

@@ -63,12 +63,12 @@ func toFlagWriteResponse(f *domain.FeatureFlag) FlagWriteResponse {
 
 // writeFlagResult is the shared tail of Create/Update/Toggle: on success
 // emit the canonical {"data": toFlagWriteResponse(flag)} body with the
-// supplied status; on error route through httputil.WriteDomainError. Keeps
+// supplied status; on error route through httputil.WriteError. Keeps
 // the three success-path handlers identical without three copies of the
 // same five lines.
 func writeFlagResult(w http.ResponseWriter, r *http.Request, status int, flag *domain.FeatureFlag, err error) {
 	if err != nil {
-		httputil.WriteDomainError(r.Context(), w, err)
+		httputil.WriteError(r.Context(), w, err)
 		return
 	}
 	httputil.WriteJSON(w, status, map[string]any{"data": toFlagWriteResponse(flag)})
@@ -92,12 +92,12 @@ func (h *Handler) HandleCreate(w http.ResponseWriter, r *http.Request) {
 		RolloutPercentage int    `json:"rolloutPercentage"`
 		Description       string `json:"description"`
 	}
-	if err := httputil.DecodeJSONStrict(r, &req); err != nil {
-		httputil.WriteDecodeError(r.Context(), w, err)
+	if err := httputil.DecodeJSONStrict(r, &req, httputil.DefaultDecodeJSONLimit); err != nil {
+		httputil.WriteError(r.Context(), w, err)
 		return
 	}
 	if err := validateRolloutPercentage(req.RolloutPercentage); err != nil {
-		httputil.WriteDomainError(r.Context(), w, err)
+		httputil.WriteError(r.Context(), w, err)
 		return
 	}
 
@@ -129,16 +129,16 @@ func (h *Handler) HandleUpdate(w http.ResponseWriter, r *http.Request) {
 		RolloutPercentage *int    `json:"rolloutPercentage"`
 		Description       *string `json:"description"`
 	}
-	if err := httputil.DecodeJSONStrict(r, &req); err != nil {
-		httputil.WriteDecodeError(r.Context(), w, err)
+	if err := httputil.DecodeJSONStrict(r, &req, httputil.DefaultDecodeJSONLimit); err != nil {
+		httputil.WriteError(r.Context(), w, err)
 		return
 	}
 	if err := validateUpdateRequest(req.Enabled, req.RolloutPercentage, req.Description); err != nil {
-		httputil.WriteDomainError(r.Context(), w, err)
+		httputil.WriteError(r.Context(), w, err)
 		return
 	}
 	if err := validateRolloutPercentage(*req.RolloutPercentage); err != nil {
-		httputil.WriteDomainError(r.Context(), w, err)
+		httputil.WriteError(r.Context(), w, err)
 		return
 	}
 
@@ -159,7 +159,7 @@ func (h *Handler) HandleUpdate(w http.ResponseWriter, r *http.Request) {
 // gate; the schema is documentation-and-contract-test defense.
 func validateRolloutPercentage(rolloutPercentage int) error {
 	if rolloutPercentage < 0 || rolloutPercentage > 100 {
-		return errcode.New(errcode.ErrFlagInvalidInput,
+		return errcode.New(errcode.KindInvalid, errcode.ErrFlagInvalidInput,
 			fmt.Sprintf("rolloutPercentage must be in [0, 100]; got %d", rolloutPercentage))
 	}
 	return nil
@@ -183,7 +183,7 @@ func validateUpdateRequest(enabled *bool, rolloutPercentage *int, description *s
 	if len(missing) == 0 {
 		return nil
 	}
-	return errcode.New(errcode.ErrFlagInvalidInput,
+	return errcode.New(errcode.KindInvalid, errcode.ErrFlagInvalidInput,
 		"PUT /flags/{key} requires all fields; missing: "+strings.Join(missing, ", ")+
 			" — use POST /flags/{key}/toggle for partial updates")
 }
@@ -195,8 +195,8 @@ func (h *Handler) HandleToggle(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Enabled bool `json:"enabled"`
 	}
-	if err := httputil.DecodeJSONStrict(r, &req); err != nil {
-		httputil.WriteDecodeError(r.Context(), w, err)
+	if err := httputil.DecodeJSONStrict(r, &req, httputil.DefaultDecodeJSONLimit); err != nil {
+		httputil.WriteError(r.Context(), w, err)
 		return
 	}
 
@@ -209,7 +209,7 @@ func (h *Handler) HandleDelete(w http.ResponseWriter, r *http.Request) {
 	key := r.PathValue("key")
 
 	if err := h.svc.Delete(r.Context(), key); err != nil {
-		httputil.WriteDomainError(r.Context(), w, err)
+		httputil.WriteError(r.Context(), w, err)
 		return
 	}
 

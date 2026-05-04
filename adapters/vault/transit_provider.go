@@ -72,11 +72,11 @@ func resolveStartupTimeout() (time.Duration, error) {
 	}
 	d, err := time.ParseDuration(raw)
 	if err != nil {
-		return 0, errcode.Wrap(errcode.ErrVaultAuthFailed,
+		return 0, errcode.Wrap(errcode.KindUnavailable, errcode.ErrVaultAuthFailed,
 			fmt.Sprintf("vault-transit: invalid %s=%q (expected time.ParseDuration format, e.g. 45s)", startupTimeoutEnvVar, raw), err)
 	}
 	if d <= 0 {
-		return 0, errcode.New(errcode.ErrVaultAuthFailed,
+		return 0, errcode.New(errcode.KindUnavailable, errcode.ErrVaultAuthFailed,
 			fmt.Sprintf("vault-transit: %s=%q must be positive", startupTimeoutEnvVar, raw))
 	}
 	return d, nil
@@ -223,7 +223,7 @@ func (w *tokenRenewalWorker) Start(ctx context.Context) error {
 	// here indicates a programming error (e.g. Start called on a worker that
 	// skipped initialization) and must not be silently swallowed.
 	if watcher == nil {
-		return errcode.New(errcode.ErrVaultAuthFailed,
+		return errcode.New(errcode.KindUnavailable, errcode.ErrVaultAuthFailed,
 			"vault-transit: renewal worker started with nil watcher (initTokenRenewal skipped?)")
 	}
 
@@ -393,7 +393,7 @@ func (w *tokenRenewalWorker) reauthenticate(ctx context.Context) error {
 		select {
 		case <-ctx.Done():
 			retryTimer.Stop()
-			return errcode.New(errcode.ErrVaultAuthFailed,
+			return errcode.New(errcode.KindUnavailable, errcode.ErrVaultAuthFailed,
 				"vault-transit: re-authentication loop canceled by context")
 		case <-retryTimer.C():
 		}
@@ -409,16 +409,16 @@ func (w *tokenRenewalWorker) reauthenticate(ctx context.Context) error {
 func (w *tokenRenewalWorker) buildWatcher(ctx context.Context) (tokenWatcher, error) {
 	secret, err := w.client.LookupSelfToken(ctx)
 	if err != nil {
-		return nil, errcode.Wrap(errcode.ErrKeyProviderAuthFailed,
+		return nil, errcode.Wrap(errcode.KindInternal, errcode.ErrKeyProviderAuthFailed,
 			"vault-transit: lookup self token after re-auth", err)
 	}
 	raw, err := w.client.NewLifetimeWatcher(&vaultapi.LifetimeWatcherInput{Secret: secret})
 	if err != nil {
-		return nil, errcode.Wrap(errcode.ErrKeyProviderAuthFailed,
+		return nil, errcode.Wrap(errcode.KindInternal, errcode.ErrKeyProviderAuthFailed,
 			"vault-transit: create new LifetimeWatcher after re-auth", err)
 	}
 	if raw == nil {
-		return nil, errcode.New(errcode.ErrKeyProviderAuthFailed,
+		return nil, errcode.New(errcode.KindInternal, errcode.ErrKeyProviderAuthFailed,
 			"vault-transit: NewLifetimeWatcher returned nil after re-auth")
 	}
 	return &vaultLifetimeWatcherAdapter{w: raw}, nil
@@ -505,19 +505,19 @@ func (h *vaultTransitHandle) Encrypt(ctx context.Context, plaintext, aad []byte)
 
 	plaintextB64, ok := result["plaintext"].(string)
 	if !ok {
-		return nil, nil, nil, "", errcode.New(errcode.ErrKeyProviderEncryptFailed,
+		return nil, nil, nil, "", errcode.New(errcode.KindInternal, errcode.ErrKeyProviderEncryptFailed,
 			"vault-transit: datakey response missing string 'plaintext' field")
 	}
 	dek, err := base64.StdEncoding.DecodeString(plaintextB64)
 	if err != nil {
-		return nil, nil, nil, "", errcode.Wrap(errcode.ErrKeyProviderEncryptFailed,
+		return nil, nil, nil, "", errcode.Wrap(errcode.KindInternal, errcode.ErrKeyProviderEncryptFailed,
 			"vault-transit: base64 decode DEK from datakey response", err)
 	}
 	defer clear(dek)
 
 	ciphertextStr, ok := result["ciphertext"].(string)
 	if !ok {
-		return nil, nil, nil, "", errcode.New(errcode.ErrKeyProviderEncryptFailed,
+		return nil, nil, nil, "", errcode.New(errcode.KindInternal, errcode.ErrKeyProviderEncryptFailed,
 			"vault-transit: datakey response missing string 'ciphertext' field")
 	}
 	keyID, err = parseVaultKeyID(ciphertextStr, errcode.ErrKeyProviderEncryptFailed)
@@ -527,7 +527,7 @@ func (h *vaultTransitHandle) Encrypt(ctx context.Context, plaintext, aad []byte)
 
 	ciphertext, nonce, err = aeadutil.EncryptGCM(dek, plaintext, aad)
 	if err != nil {
-		return nil, nil, nil, "", errcode.Wrap(errcode.ErrKeyProviderEncryptFailed,
+		return nil, nil, nil, "", errcode.Wrap(errcode.KindInternal, errcode.ErrKeyProviderEncryptFailed,
 			"vault-transit: local AES-GCM encrypt", err)
 	}
 
@@ -555,7 +555,7 @@ func (h *vaultTransitHandle) Decrypt(ctx context.Context, ciphertext, nonce, edk
 		return nil, parseErr
 	}
 	if err := kcrypto.MatchKeyID(h.id, edkVersion); err != nil {
-		return nil, errcode.Wrap(errcode.ErrKeyProviderDecryptFailed, "vault-transit: keyID mismatch", err)
+		return nil, errcode.Wrap(errcode.KindInternal, errcode.ErrKeyProviderDecryptFailed, "vault-transit: keyID mismatch", err)
 	}
 
 	// 1. Unwrap DEK via Vault Transit.
@@ -568,7 +568,7 @@ func (h *vaultTransitHandle) Decrypt(ctx context.Context, ciphertext, nonce, edk
 	// 2. Local AES-GCM Open. AAD is verified here — mismatch → authentication error.
 	plaintext, err = aeadutil.DecryptGCM(dek, ciphertext, nonce, aad)
 	if err != nil {
-		return nil, errcode.Wrap(errcode.ErrKeyProviderDecryptFailed,
+		return nil, errcode.Wrap(errcode.KindInternal, errcode.ErrKeyProviderDecryptFailed,
 			"vault-transit: local AES-GCM decrypt (AAD mismatch or tampered ciphertext)", err)
 	}
 
@@ -595,13 +595,13 @@ func (h *vaultTransitHandle) unwrapDEKWithVault(ctx context.Context, edk []byte)
 
 	plaintextB64, ok := result["plaintext"].(string)
 	if !ok {
-		return nil, errcode.New(errcode.ErrKeyProviderDecryptFailed,
+		return nil, errcode.New(errcode.KindInternal, errcode.ErrKeyProviderDecryptFailed,
 			"vault-transit: decrypt response missing string 'plaintext' field")
 	}
 
 	dek, err = base64.StdEncoding.DecodeString(plaintextB64)
 	if err != nil {
-		return nil, errcode.Wrap(errcode.ErrKeyProviderDecryptFailed,
+		return nil, errcode.Wrap(errcode.KindInternal, errcode.ErrKeyProviderDecryptFailed,
 			"vault-transit: base64 decode DEK from decrypt response", err)
 	}
 
@@ -694,7 +694,7 @@ func NewTransitKeyProvider(
 ) (*TransitKeyProvider, error) {
 	clock.MustHaveClock(clk, "vault.NewTransitKeyProvider")
 	if auth == nil {
-		return nil, errcode.New(errcode.ErrVaultAuthFailed,
+		return nil, errcode.New(errcode.KindUnavailable, errcode.ErrVaultAuthFailed,
 			"vault-transit: auth method is required (pass NewStaticTokenAuth in tests)")
 	}
 	if mountPath == "" {
@@ -742,7 +742,7 @@ func NewTransitKeyProvider(
 func (p *TransitKeyProvider) authenticate(ctx context.Context) (AuthResult, error) {
 	result, err := p.authMethod.Login(ctx)
 	if err != nil {
-		return AuthResult{}, errcode.Wrap(errcode.ErrVaultAuthFailed,
+		return AuthResult{}, errcode.Wrap(errcode.KindUnavailable, errcode.ErrVaultAuthFailed,
 			"vault-transit: initial authentication failed", err)
 	}
 	return result, nil
@@ -776,7 +776,7 @@ func NewTransitKeyProviderFromEnv(realMode bool, clk clock.Clock) (*TransitKeyPr
 	// that mark VAULT_ADDR as required and hides misconfigurations.
 	addr := os.Getenv("VAULT_ADDR")
 	if addr == "" {
-		return nil, errcode.New(errcode.ErrVaultAuthFailed,
+		return nil, errcode.New(errcode.KindUnavailable, errcode.ErrVaultAuthFailed,
 			"vault-transit: VAULT_ADDR is required (known values: Vault server address, e.g. https://vault.example.internal:8200)")
 	}
 	// SEC-FAIL-CLOSED: reject non-TLS Vault addresses before any SDK or network
@@ -790,7 +790,7 @@ func NewTransitKeyProviderFromEnv(realMode bool, clk clock.Clock) (*TransitKeyPr
 	// Fail-fast: construction failure is a configuration error, not an encrypt error.
 	raw, err := vaultapi.NewClient(cfg)
 	if err != nil {
-		return nil, errcode.Wrap(errcode.ErrConfigKeyMissing,
+		return nil, errcode.Wrap(errcode.KindInternal, errcode.ErrConfigKeyMissing,
 			"vault-transit: create vault api client (check VAULT_ADDR)", err)
 	}
 
@@ -845,7 +845,7 @@ func NewTransitKeyProviderFromEnv(realMode bool, clk clock.Clock) (*TransitKeyPr
 	// renewable=true).
 	if realMode && !p.Renewable() {
 		_ = p.Close(context.Background())
-		return nil, errcode.New(errcode.ErrVaultAuthFailed,
+		return nil, errcode.New(errcode.KindUnavailable, errcode.ErrVaultAuthFailed,
 			"vault-transit: non-renewable token rejected in real mode —"+
 				" configure the Vault role to issue renewable tokens"+
 				" (token_type=default or service with renewable=true)")
@@ -874,7 +874,7 @@ func (p *TransitKeyProvider) Current(ctx context.Context) (kcrypto.KeyHandle, er
 // Lock-free: handle fields are immutable after construction.
 func (p *TransitKeyProvider) ByID(_ context.Context, keyID string) (kcrypto.KeyHandle, error) {
 	if !strings.HasPrefix(keyID, vaultKeyIDPrefix) {
-		return nil, errcode.New(errcode.ErrKeyProviderKeyNotFound,
+		return nil, errcode.New(errcode.KindInternal, errcode.ErrKeyProviderKeyNotFound,
 			fmt.Sprintf("vault-transit: key ID %q does not have expected prefix %q", keyID, vaultKeyIDPrefix))
 	}
 	return &vaultTransitHandle{
@@ -905,14 +905,14 @@ func (p *TransitKeyProvider) Rotate(ctx context.Context) (string, error) {
 
 	rotatePath := p.mountPath + "/keys/" + p.keyName + "/rotate"
 	if _, err := p.client.Write(ctx, rotatePath, nil); err != nil {
-		return "", errcode.Wrap(errcode.ErrKeyProviderRotateFailed,
+		return "", errcode.Wrap(errcode.KindInternal, errcode.ErrKeyProviderRotateFailed,
 			"vault-transit: rotate key", err)
 	}
 
 	p.cachedLatestVersion.Store(0) // invalidate so the refresh below repopulates
 	version, err := p.readLatestVersion(ctx)
 	if err != nil {
-		return "", errcode.Wrap(errcode.ErrKeyProviderRotateFailed,
+		return "", errcode.Wrap(errcode.KindInternal, errcode.ErrKeyProviderRotateFailed,
 			"vault-transit: read key version after rotate", err)
 	}
 	p.cachedLatestVersion.Store(int64(version))
@@ -944,7 +944,7 @@ func (p *TransitKeyProvider) readLatestVersion(ctx context.Context) (int, error)
 
 	versionRaw, ok := data["latest_version"]
 	if !ok {
-		return 0, errcode.New(errcode.ErrKeyProviderKeyNotFound,
+		return 0, errcode.New(errcode.KindInternal, errcode.ErrKeyProviderKeyNotFound,
 			"vault-transit: key metadata missing 'latest_version' field")
 	}
 
@@ -960,12 +960,12 @@ func (p *TransitKeyProvider) readLatestVersion(ctx context.Context) (int, error)
 	case json.Number:
 		n, err := v.Int64()
 		if err != nil {
-			return 0, errcode.New(errcode.ErrKeyProviderKeyNotFound,
+			return 0, errcode.New(errcode.KindInternal, errcode.ErrKeyProviderKeyNotFound,
 				fmt.Sprintf("vault-transit: latest_version json.Number parse error: %v", err))
 		}
 		return int(n), nil
 	default:
-		return 0, errcode.New(errcode.ErrKeyProviderKeyNotFound,
+		return 0, errcode.New(errcode.KindInternal, errcode.ErrKeyProviderKeyNotFound,
 			fmt.Sprintf("vault-transit: unexpected latest_version type %T", versionRaw))
 	}
 }
@@ -985,10 +985,10 @@ func (p *TransitKeyProvider) readLatestVersion(ctx context.Context) (int, error)
 // ref: hashicorp/vault api/logical.go — *vaultapi.ResponseError status codes
 func classifyVaultError(err error, permanentCode errcode.Code, permanentMsg string) error {
 	if isTransientVaultError(err) {
-		return errcode.WrapInfra(errcode.ErrKeyProviderTransient,
+		return errcode.Wrap(errcode.KindUnavailable, errcode.ErrKeyProviderTransient,
 			"vault-transit: transient "+permanentMsg, err)
 	}
-	return errcode.Wrap(permanentCode,
+	return errcode.Wrap(errcode.KindInternal, permanentCode,
 		"vault-transit: "+permanentMsg, err)
 }
 
@@ -1013,7 +1013,7 @@ func classifyVaultDecryptError(err error) error {
 func classifyVaultReadError(err error) error {
 	var respErr *vaultapi.ResponseError
 	if errors.As(err, &respErr) && respErr.StatusCode == 403 {
-		return errcode.Wrap(errcode.ErrKeyProviderAuthFailed,
+		return errcode.Wrap(errcode.KindInternal, errcode.ErrKeyProviderAuthFailed,
 			"vault-transit: read key metadata (Vault HTTP 403 — token revoked or permission denied)", err)
 	}
 	return classifyVaultError(err, errcode.ErrKeyProviderKeyNotFound, "read key metadata")
@@ -1091,8 +1091,9 @@ func parseVaultKeyID(ciphertext string, errCode errcode.Code) (string, error) {
 		if len(prefix) > 12 {
 			prefix = prefix[:12] + "..."
 		}
-		return "", errcode.New(errCode,
-			fmt.Sprintf("vault-transit: unexpected ciphertext prefix (want 'vault:vN:...'): %q", prefix))
+		return "", errcode.New(errcode.KindInternal, errCode,
+			fmt.Sprintf("vault-transit: unexpected ciphertext prefix (want 'vault:vN:...'): %q", prefix),
+			errcode.WithCategory(errcode.CategoryInfra))
 	}
 	return vaultKeyIDPrefix + parts[1], nil
 }
@@ -1263,7 +1264,7 @@ func (p *TransitKeyProvider) initTokenRenewal(ctx context.Context, result AuthRe
 	// Look up the current token to seed the LifetimeWatcher with accurate TTL.
 	secret, err := renewer.LookupSelfToken(ctx)
 	if err != nil {
-		return errcode.Wrap(errcode.ErrKeyProviderAuthFailed,
+		return errcode.Wrap(errcode.KindInternal, errcode.ErrKeyProviderAuthFailed,
 			"vault-transit: lookup self token for renewal initialisation", err)
 	}
 
@@ -1271,11 +1272,11 @@ func (p *TransitKeyProvider) initTokenRenewal(ctx context.Context, result AuthRe
 		Secret: secret,
 	})
 	if err != nil {
-		return errcode.Wrap(errcode.ErrKeyProviderAuthFailed,
+		return errcode.Wrap(errcode.KindInternal, errcode.ErrKeyProviderAuthFailed,
 			"vault-transit: create lifetime watcher", err)
 	}
 	if raw == nil {
-		return errcode.New(errcode.ErrKeyProviderAuthFailed,
+		return errcode.New(errcode.KindInternal, errcode.ErrKeyProviderAuthFailed,
 			"vault-transit: NewLifetimeWatcher returned nil without error")
 	}
 

@@ -3,7 +3,7 @@ package auditverify
 import (
 	"testing"
 
-	"github.com/ghbvf/gocell/pkg/contracttest"
+	"github.com/ghbvf/gocell/tests/contracttest"
 )
 
 func TestEventAuditIntegrityVerifiedV1Publish(t *testing.T) {
