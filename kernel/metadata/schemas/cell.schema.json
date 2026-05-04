@@ -90,28 +90,6 @@
         }
       }
     },
-    "listeners": {
-      "type": "array",
-      "description": "HTTP listeners hosted by this cell. Codegen aggregates listeners with each slice's routeMounts to emit reg.RouteGroup() calls in cell_gen.go. Required only when the cell has slices that declare routeMounts; ignored otherwise.",
-      "default": [],
-      "items": {
-        "type": "object",
-        "required": ["ref", "prefix"],
-        "additionalProperties": false,
-        "properties": {
-          "ref": {
-            "type": "string",
-            "description": "Go constant reference for the listener (e.g. cell.PrimaryListener, cell.InternalListener). Rendered verbatim into generated source.",
-            "pattern": "^cell\\.[A-Z][A-Za-z0-9_]*$"
-          },
-          "prefix": {
-            "type": "string",
-            "description": "URL path prefix mounted on the listener (e.g. /api/v1).",
-            "pattern": "^/[A-Za-z0-9._/-]*$"
-          }
-        }
-      }
-    },
     "goStructName": {
       "type": "string",
       "description": "Go receiver type backing this cell (e.g. OrderCell). Required when codegen renders cell_gen.go for this cell. There is no automatic mapping from a lowercased id to its conventional CamelCase Go type.",
