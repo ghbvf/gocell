@@ -17,7 +17,6 @@ import (
 	getv1 "github.com/ghbvf/gocell/generated/contracts/http/order/get/v1"
 	listv1 "github.com/ghbvf/gocell/generated/contracts/http/order/list/v1"
 	"github.com/ghbvf/gocell/kernel/cell"
-	"github.com/ghbvf/gocell/kernel/metadata"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/errcode"
@@ -80,16 +79,8 @@ type OrderCell struct {
 // NewOrderCell creates a new OrderCell with the given options.
 func NewOrderCell(opts ...Option) *OrderCell {
 	c := &OrderCell{
-		BaseCell: cell.MustNewBaseCell(&metadata.CellMeta{
-			ID:               "ordercell",
-			Type:             "core",
-			ConsistencyLevel: "L2",
-			DurabilityMode:   "durable",
-			Owner:            metadata.OwnerMeta{Team: "examples", Role: "order-owner"},
-			Schema:           metadata.SchemaMeta{Primary: "orders"},
-			Verify:           metadata.CellVerifyMeta{Smoke: []string{"ordercell/smoke"}},
-		}),
-		logger: slog.Default(),
+		BaseCell: cell.MustNewBaseCell(loadCellMetadata()),
+		logger:   slog.Default(),
 	}
 	for _, o := range opts {
 		o(c)
