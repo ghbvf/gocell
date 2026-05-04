@@ -34,18 +34,24 @@ type ListenerSpec struct {
 // RouteSpec mirrors a `// +slice:route:slice=...,listener=...,subPath=...`
 // marker declared on a handler field. Listener defaults to
 // "cell.PrimaryListener" when omitted (covers the 90% single-listener case).
+// HandlerField is auto-derived from the AST field name on which the marker
+// is declared — cellgen renders `c.<HandlerField>.RegisterRoutes(s)`.
 type RouteSpec struct {
-	Slice    string
-	Listener string
-	SubPath  string
+	Slice        string
+	Listener     string
+	SubPath      string
+	HandlerField string
 }
 
 // SubscribeSpec mirrors a
 // `// +slice:subscribe:slice=...,topic=...,handler=...,group=...` marker
-// declared on a service/consumer field.
+// declared on a service/consumer field. SliceField is auto-derived from the
+// AST field name — cellgen renders `c.<SliceField>.<Handler>` as the
+// reg.Subscribe handler expression.
 type SubscribeSpec struct {
-	Slice   string
-	Topic   string
-	Handler string
-	Group   string
+	Slice      string
+	Topic      string
+	Handler    string
+	Group      string
+	SliceField string
 }

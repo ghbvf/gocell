@@ -32,12 +32,33 @@ type CellGenSpec struct {
 	// Rendered into the file header as "// Source: <SourceFile>" so that
 	// readers of the generated file can locate the authoritative YAML.
 	SourceFile string
+	// MetadataLiteral renders into cell_gen.go as a package-scope
+	// `var cellMeta = &metadata.CellMeta{...}` plus a
+	// `func loadCellMetadata() *metadata.CellMeta` accessor. cell.go
+	// constructors call loadCellMetadata() — the K#05 single source for
+	// metadata literal (was hand-written in cell.go pre-K#05).
+	MetadataLiteral CellMetadataLiteral
 	// RouteGroups holds the listener-aggregated route mounts. Each entry
 	// emits one reg.RouteGroup() call.
 	RouteGroups []RouteGroupGenSpec
 	// Subscriptions holds the per-slice event subscriptions. Each entry
 	// emits one reg.Subscribe() call (and one specEvent... var declaration).
 	Subscriptions []SubscriptionGenSpec
+}
+
+// CellMetadataLiteral projects CellMeta yaml fields into the rendering
+// shape consumed by the metadata block in cell.tmpl. All slice fields are
+// pre-sorted upstream (BuildCellSpec) for diff stability.
+type CellMetadataLiteral struct {
+	ID               string
+	Type             string
+	ConsistencyLevel string
+	DurabilityMode   string
+	OwnerTeam        string
+	OwnerRole        string
+	SchemaPrimary    string
+	VerifySmoke      []string
+	GoStructName     string
 }
 
 // RouteGroupGenSpec describes one reg.RouteGroup() call.

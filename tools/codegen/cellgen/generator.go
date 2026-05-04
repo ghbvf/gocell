@@ -10,6 +10,7 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/metadata"
 	"github.com/ghbvf/gocell/tools/codegen"
+	"github.com/ghbvf/gocell/tools/codegen/markergen"
 )
 
 //go:embed templates/*.tmpl
@@ -74,6 +75,18 @@ func Generate(root string, project *metadata.ProjectMeta, opts Options) (Result,
 	if project == nil {
 		return res, fmt.Errorf("cellgen generate: project is nil")
 	}
+
+	// K#05: project markers from cell.go marker comments into ProjectMeta wire
+	// fields (CellMeta.Listeners + SliceMeta.RouteMounts/Subscribes) before
+	// builder consumes them. markergen.Merge falls back to the existing yaml
+	// fields when a cell.go declares no markers (W2→W5 transition); after W7
+	// cleanup CellMeta.Listeners is removed and builder reads WireBundle
+	// directly.
+	bundles, err := markergen.Merge(root, project)
+	if err != nil {
+		return res, fmt.Errorf("cellgen generate: markergen merge: %w", err)
+	}
+	injectBundlesIntoProject(project, bundles)
 
 	cellIDs := selectCellIDs(project, opts.OnlyCell)
 	if opts.OnlyCell != "" && len(cellIDs) == 0 {
@@ -209,6 +222,80 @@ func RenderCellArtifacts(root string, project *metadata.ProjectMeta, cellID stri
 		out = append(out, CellArtifact{Kind: "slice-gen", RelPath: sliceRel, Content: sliceContent})
 	}
 	return out, nil
+}
+
+// injectBundlesIntoProject overlays markergen.WireBundle output onto the
+// in-memory ProjectMeta, so downstream cellgen builder logic continues to
+// read CellMeta.Listeners + SliceMeta.{RouteMounts,Subscribes} unchanged.
+// This is a transitional bridge: in W2 the ProjectMeta already carries
+// these fields from yaml; in W4/W5 the yaml fields are emptied and markers
+// supply the values; in W7 cleanup the CellMeta wire fields are removed
+// and builder switches to direct WireBundle consumption (this function is
+// then deleted).
+func injectBundlesIntoProject(project *metadata.ProjectMeta, bundles map[string]markergen.WireBundle) {
+	for cellID, bundle := range bundles {
+		cell, ok := project.Cells[cellID]
+		if !ok {
+			continue
+		}
+		injectListeners(cell, bundle.Listeners)
+		routesBySlice, subsBySlice := groupBundleBySlice(bundle)
+		for _, slice := range project.Slices {
+			if slice.BelongsToCell != cellID {
+				continue
+			}
+			injectSliceWires(slice, routesBySlice[slice.ID], subsBySlice[slice.ID])
+		}
+	}
+}
+
+func injectListeners(cell *metadata.CellMeta, listeners []markergen.ListenerSpec) {
+	cell.Listeners = cell.Listeners[:0]
+	for _, l := range listeners {
+		cell.Listeners = append(cell.Listeners, metadata.ListenerDeclMeta{
+			Ref:    l.Ref,
+			Prefix: l.Prefix,
+		})
+	}
+}
+
+func groupBundleBySlice(bundle markergen.WireBundle) (
+	map[string][]markergen.RouteSpec,
+	map[string][]markergen.SubscribeSpec,
+) {
+	routes := make(map[string][]markergen.RouteSpec)
+	for _, r := range bundle.Routes {
+		routes[r.Slice] = append(routes[r.Slice], r)
+	}
+	subs := make(map[string][]markergen.SubscribeSpec)
+	for _, s := range bundle.Subscribes {
+		subs[s.Slice] = append(subs[s.Slice], s)
+	}
+	return routes, subs
+}
+
+func injectSliceWires(slice *metadata.SliceMeta, routes []markergen.RouteSpec, subs []markergen.SubscribeSpec) {
+	if routes != nil {
+		slice.RouteMounts = slice.RouteMounts[:0]
+		for _, r := range routes {
+			slice.RouteMounts = append(slice.RouteMounts, metadata.RouteMountMeta{
+				Listener:     r.Listener,
+				SubPath:      r.SubPath,
+				HandlerField: r.HandlerField,
+			})
+		}
+	}
+	if subs != nil {
+		slice.Subscribes = slice.Subscribes[:0]
+		for _, s := range subs {
+			slice.Subscribes = append(slice.Subscribes, metadata.SubscribeDeclMeta{
+				Contract:      s.Topic,
+				SliceField:    s.SliceField,
+				Handler:       s.Handler,
+				ConsumerGroup: s.Group,
+			})
+		}
+	}
 }
 
 // relFromRoot converts an absolute path under root into a slash-separated

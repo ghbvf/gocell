@@ -157,9 +157,10 @@ func parseRoute(m collectedMarker) (RouteSpec, error) {
 		listener = "cell.PrimaryListener"
 	}
 	return RouteSpec{
-		Slice:    kv["slice"],
-		Listener: listener,
-		SubPath:  kv["subPath"],
+		Slice:        kv["slice"],
+		Listener:     listener,
+		SubPath:      kv["subPath"],
+		HandlerField: m.FieldName,
 	}, nil
 }
 
@@ -181,10 +182,11 @@ func parseSubscribe(m collectedMarker) (SubscribeSpec, error) {
 		return SubscribeSpec{}, err
 	}
 	return SubscribeSpec{
-		Slice:   kv["slice"],
-		Topic:   kv["topic"],
-		Handler: kv["handler"],
-		Group:   kv["group"],
+		Slice:      kv["slice"],
+		Topic:      kv["topic"],
+		Handler:    kv["handler"],
+		Group:      kv["group"],
+		SliceField: m.FieldName,
 	}, nil
 }
 
@@ -218,17 +220,19 @@ func fallbackBundle(cellID string, cell *metadata.CellMeta, project *metadata.Pr
 		}
 		for _, rm := range slice.RouteMounts {
 			bundle.Routes = append(bundle.Routes, RouteSpec{
-				Slice:    slice.ID,
-				Listener: rm.Listener,
-				SubPath:  rm.SubPath,
+				Slice:        slice.ID,
+				Listener:     rm.Listener,
+				SubPath:      rm.SubPath,
+				HandlerField: rm.HandlerField,
 			})
 		}
 		for _, sub := range slice.Subscribes {
 			bundle.Subscribes = append(bundle.Subscribes, SubscribeSpec{
-				Slice:   slice.ID,
-				Topic:   sub.Contract,
-				Handler: sub.Handler,
-				Group:   sub.ConsumerGroup,
+				Slice:      slice.ID,
+				Topic:      sub.Contract,
+				Handler:    sub.Handler,
+				Group:      sub.ConsumerGroup,
+				SliceField: sub.SliceField,
 			})
 		}
 	}

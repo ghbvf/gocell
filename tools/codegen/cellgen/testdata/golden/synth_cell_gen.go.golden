@@ -7,9 +7,27 @@ import (
 	"context"
 
 	"github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/kernel/metadata"
 )
 
 var _ cell.Cell = (*Demo)(nil)
+
+// cellMeta is the canonical metadata literal projected from cell.yaml.
+// loadCellMetadata returns the package-scope pointer; cell.go's constructor
+// passes it to cell.MustNewBaseCell which deep-copies the value so callers
+// cannot mutate the generated literal.
+var cellMeta = &metadata.CellMeta{
+	ID:               "demo",
+	Type:             "",
+	ConsistencyLevel: "",
+	DurabilityMode:   "",
+	Owner:            metadata.OwnerMeta{Team: "", Role: ""},
+	Schema:           metadata.SchemaMeta{Primary: ""},
+	Verify:           metadata.CellVerifyMeta{Smoke: []string{}},
+	GoStructName:     "Demo",
+}
+
+func loadCellMetadata() *metadata.CellMeta { return cellMeta }
 
 func (c *Demo) Init(ctx context.Context, reg cell.Registry) error {
 	if err := c.BaseCell.Init(ctx, reg); err != nil {

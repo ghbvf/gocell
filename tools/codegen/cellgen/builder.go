@@ -52,6 +52,7 @@ func BuildCellSpec(p *metadata.ProjectMeta, cellID string) (*CellGenSpec, error)
 		CellID:               cell.ID,
 		ConsumerGroupDefault: cell.ID,
 		SourceFile:           cell.File,
+		MetadataLiteral:      buildMetadataLiteral(cell),
 	}
 
 	listenerPrefix := make(map[string]string, len(cell.Listeners))
@@ -247,6 +248,25 @@ func buildSubscriptionSpec(p *metadata.ProjectMeta, cellID, sliceID string, sub 
 		HandlerExpr:   "c." + sub.SliceField + "." + sub.Handler,
 		ConsumerGroup: sub.ConsumerGroup,
 	}, nil
+}
+
+// buildMetadataLiteral projects CellMeta yaml fields into the rendering
+// shape consumed by the metadata block in cell.tmpl. The smoke list is
+// copied (not aliased) so downstream mutation cannot leak back into the
+// parsed ProjectMeta.
+func buildMetadataLiteral(cell *metadata.CellMeta) CellMetadataLiteral {
+	smoke := append([]string(nil), cell.Verify.Smoke...)
+	return CellMetadataLiteral{
+		ID:               cell.ID,
+		Type:             cell.Type,
+		ConsistencyLevel: cell.ConsistencyLevel,
+		DurabilityMode:   cell.DurabilityMode,
+		OwnerTeam:        cell.Owner.Team,
+		OwnerRole:        cell.Owner.Role,
+		SchemaPrimary:    cell.Schema.Primary,
+		VerifySmoke:      smoke,
+		GoStructName:     cell.GoStructName,
+	}
 }
 
 // specVarName converts a contract id like "event.config.entry-upserted.v1"
