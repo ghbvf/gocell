@@ -348,7 +348,7 @@ func selectorQualifier(expr ast.Expr) string {
 }
 
 func isMuxUseWithDefaultMiddleware(call *ast.CallExpr) bool {
-	if !isSelectorCall(call, "r.mux", "Use") {
+	if !isSelectorCall(call, "r", "use") {
 		return false
 	}
 	for _, arg := range call.Args {
