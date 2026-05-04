@@ -34,6 +34,7 @@ func TestHttpOrderCreateV1Serve(t *testing.T) {
 	c.ValidateRequest(t, []byte(`{"item":"widget"}`))
 	c.MustRejectRequest(t, []byte(`{"item":"x","extra":"bad"}`))
 
+	// No path params — direct ServeHTTP works without a chi router context.
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(c.HTTP.Method, c.HTTP.Path, strings.NewReader(`{"item":"widget"}`))
 	req.Header.Set("Content-Type", "application/json")

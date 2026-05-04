@@ -154,7 +154,7 @@ func toCreateResponse(o *domain.Order) *createv1.Response {
 	}
 	return &createv1.Response{
 		Data: &createv1.ResponseData{
-			Id:     o.ID,
+			ID:     o.ID,
 			Item:   o.Item,
 			Status: o.Status,
 		},

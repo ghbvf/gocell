@@ -73,6 +73,9 @@ func parseGenerateContractFlags(args []string) (dryRunFlag, verifyFlag bool, onl
 	}
 	pos := fs.Args()
 	if !*all && len(pos) == 0 {
+		if *dryRun || *verify {
+			return false, false, "", fmt.Errorf("specify a contract id or --all when using --dry-run/--verify")
+		}
 		return false, false, "", fmt.Errorf("usage: gocell generate contract <contractID> | --all [--dry-run | --verify]")
 	}
 	if *all && len(pos) > 0 {

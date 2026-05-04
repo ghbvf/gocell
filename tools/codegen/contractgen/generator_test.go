@@ -566,3 +566,98 @@ func TestGenerate_DryRun_DoesNotCreateDirectory(t *testing.T) {
 		t.Errorf("DryRun should not create generated/ directory, but found it at %s", genDir)
 	}
 }
+
+// --- A.8: generator tests for synth_http_full and synth_unsupported_oneof ---
+
+// setupHTTPFullRoot copies the synth_http_full fixture into a fresh t.TempDir()
+// and parses it. Returns (root, project).
+func setupHTTPFullRoot(t *testing.T) (string, *metadata.ProjectMeta) {
+	t.Helper()
+	abs, err := filepath.Abs(filepath.Join("testdata", "synth", "synth_http_full"))
+	if err != nil {
+		t.Fatalf("abs path synth_http_full: %v", err)
+	}
+	root := t.TempDir()
+	copyDirIntoTemp(t, abs, root)
+	goMod := "module github.com/ghbvf/gocell\n\ngo 1.22\n"
+	if err := os.WriteFile(filepath.Join(root, "go.mod"), []byte(goMod), 0o644); err != nil {
+		t.Fatalf("write go.mod: %v", err)
+	}
+	p, err := metadata.NewParser(root).Parse()
+	if err != nil {
+		t.Fatalf("parse synth_http_full from tmp: %v", err)
+	}
+	return root, p
+}
+
+// setupOneOfRoot copies the synth_unsupported_oneof fixture into a fresh t.TempDir()
+// and parses it. Returns (root, project).
+func setupOneOfRoot(t *testing.T) (string, *metadata.ProjectMeta) {
+	t.Helper()
+	abs, err := filepath.Abs(filepath.Join("testdata", "synth", "synth_unsupported_oneof"))
+	if err != nil {
+		t.Fatalf("abs path synth_unsupported_oneof: %v", err)
+	}
+	root := t.TempDir()
+	copyDirIntoTemp(t, abs, root)
+	goMod := "module github.com/ghbvf/gocell\n\ngo 1.22\n"
+	if err := os.WriteFile(filepath.Join(root, "go.mod"), []byte(goMod), 0o644); err != nil {
+		t.Fatalf("write go.mod: %v", err)
+	}
+	p, err := metadata.NewParser(root).Parse()
+	if err != nil {
+		t.Fatalf("parse synth_unsupported_oneof from tmp: %v", err)
+	}
+	return root, p
+}
+
+// TestGenerate_WriteMode_HTTPFull verifies that the full HTTP fixture with path+query params
+// produces 3 generated files.
+func TestGenerate_WriteMode_HTTPFull(t *testing.T) {
+	t.Parallel()
+	root, p := setupHTTPFullRoot(t)
+
+	res := mustGenerate(t, root, p, Options{})
+
+	// HTTP contract → 3 files: types_gen.go, iface_gen.go, handler_gen.go.
+	if len(res.Generated) != 3 {
+		t.Errorf("expected 3 generated files for HTTPFull, got %d: %v", len(res.Generated), res.Generated)
+	}
+	for _, path := range res.Generated {
+		content, err := os.ReadFile(path) //nolint:gosec // test reads its own tmp file
+		if err != nil {
+			t.Errorf("ReadFile %s: %v", path, err)
+			continue
+		}
+		if len(content) == 0 {
+			t.Errorf("generated file is empty: %s", path)
+		}
+		// Verify package name is "details" (from http.item.details.v1)
+		if strings.Contains(string(content), "package details") {
+			continue // correct
+		}
+		if strings.Contains(string(content), "package ") {
+			// Wrong package name
+			for _, line := range strings.Split(string(content), "\n") {
+				if strings.HasPrefix(line, "package ") && !strings.Contains(line, "details") {
+					t.Errorf("generated file %s has wrong package: %q", path, line)
+				}
+			}
+		}
+	}
+}
+
+// TestGenerate_BuildSpecError_OneOf verifies that a contract whose request schema
+// contains an unsupported "oneOf" keyword causes Generate to return an error.
+func TestGenerate_BuildSpecError_OneOf(t *testing.T) {
+	t.Parallel()
+	root, p := setupOneOfRoot(t)
+
+	_, err := Generate(root, p, Options{})
+	if err == nil {
+		t.Fatal("expected error for contract with oneOf in request schema")
+	}
+	if !strings.Contains(err.Error(), "oneOf") {
+		t.Errorf("error should mention 'oneOf', got: %v", err)
+	}
+}

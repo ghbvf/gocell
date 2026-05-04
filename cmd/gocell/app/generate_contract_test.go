@@ -45,21 +45,22 @@ func TestGenerateContract_UnknownFlag(t *testing.T) {
 }
 
 // TestGenerateContract_DryRunOnlyFlag verifies --dry-run alone (no positional, no --all)
-// still returns a usage error.
+// returns a diagnostic error asking for a contract id or --all.
 func TestGenerateContract_DryRunOnlyFlag(t *testing.T) {
 	t.Parallel()
 	err := generateContract([]string{"--dry-run"})
-	if err == nil || !strings.Contains(err.Error(), "usage") {
-		t.Fatalf("expected usage error when --dry-run given without id or --all, got %v", err)
+	if err == nil || !strings.Contains(err.Error(), "--all") {
+		t.Fatalf("expected diagnostic error when --dry-run given without id or --all, got %v", err)
 	}
 }
 
-// TestGenerateContract_VerifyOnlyFlag verifies --verify alone returns a usage error.
+// TestGenerateContract_VerifyOnlyFlag verifies --verify alone returns a diagnostic
+// error asking for a contract id or --all.
 func TestGenerateContract_VerifyOnlyFlag(t *testing.T) {
 	t.Parallel()
 	err := generateContract([]string{"--verify"})
-	if err == nil || !strings.Contains(err.Error(), "usage") {
-		t.Fatalf("expected usage error when --verify given without id or --all, got %v", err)
+	if err == nil || !strings.Contains(err.Error(), "--all") {
+		t.Fatalf("expected diagnostic error when --verify given without id or --all, got %v", err)
 	}
 }
 
@@ -130,6 +131,7 @@ schemaRefs:
 // and invokes generateContract(["--all"]), asserting the generated files are written.
 func TestGenerateContract_SuccessAll(t *testing.T) {
 	// Not parallel: uses os.Chdir which is process-global.
+	// K#04 uses the same pattern (see TestGenerateCell_SuccessPath in generate_cell_test.go).
 	root, _ := minimalCodegenContractProject(t)
 
 	orig, err := os.Getwd()

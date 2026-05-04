@@ -34,6 +34,8 @@ type HTTPHandler struct {
 }
 
 // NewHTTPHandler creates an HTTPHandler for {{.ContractID}}.
+// policy may be nil — auth.Mount treats nil as "no per-route authorization guard";
+// use auth.PublicPolicy for unauthenticated public endpoints or supply a real policy.
 func NewHTTPHandler(svc Service, policy auth.Policy) *HTTPHandler {
 	return &HTTPHandler{svc: svc, policy: policy}
 }
@@ -82,6 +84,12 @@ func (h *HTTPHandler) handle(w http.ResponseWriter, r *http.Request) {
 {{- range .Endpoint.QueryParams}}
 {{- if eq .GoType "string"}}
 	req.{{.GoName}} = r.URL.Query().Get("{{.Name}}")
+{{- if .Required}}
+	if req.{{.GoName}} == "" {
+		httputil.WriteDomainError(r.Context(), w, errcode.New(errcode.ErrValidationFailed, "{{.Name}} is required"))
+		return
+	}
+{{- end}}
 {{- if hasMinLength .MinLength}}
 	if req.{{.GoName}} != "" && len(req.{{.GoName}}) < {{derefInt .MinLength}} {
 		httputil.WriteDomainError(r.Context(), w, errcode.New(errcode.ErrValidationFailed, "{{.Name}}: value too short"))
@@ -89,12 +97,39 @@ func (h *HTTPHandler) handle(w http.ResponseWriter, r *http.Request) {
 	}
 {{- end}}
 {{- if hasMaxLength .MaxLength}}
-	if len(req.{{.GoName}}) > {{derefInt .MaxLength}} {
+	if req.{{.GoName}} != "" && len(req.{{.GoName}}) > {{derefInt .MaxLength}} {
 		httputil.WriteDomainError(r.Context(), w, errcode.New(errcode.ErrValidationFailed, "{{.Name}}: value too long"))
 		return
 	}
 {{- end}}
 {{- else if eq .GoType "int64"}}
+{{- if .Required}}
+	{
+		raw{{.GoName}} := r.URL.Query().Get("{{.Name}}")
+		if raw{{.GoName}} == "" {
+			httputil.WriteDomainError(r.Context(), w, errcode.New(errcode.ErrValidationFailed, "{{.Name}} is required"))
+			return
+		}
+		v, err := strconv.ParseInt(raw{{.GoName}}, 10, 64)
+		if err != nil {
+			httputil.WriteDomainError(r.Context(), w, errcode.New(errcode.ErrValidationFailed, "{{.Name}}: must be an integer"))
+			return
+		}
+{{- if hasMinimum .Minimum}}
+		if v < {{derefInt64 .Minimum}} {
+			httputil.WriteDomainError(r.Context(), w, errcode.New(errcode.ErrValidationFailed, "{{.Name}}: value below minimum"))
+			return
+		}
+{{- end}}
+{{- if hasMaximum .Maximum}}
+		if v > {{derefInt64 .Maximum}} {
+			httputil.WriteDomainError(r.Context(), w, errcode.New(errcode.ErrValidationFailed, "{{.Name}}: value above maximum"))
+			return
+		}
+{{- end}}
+		req.{{.GoName}} = v
+	}
+{{- else}}
 	if raw := r.URL.Query().Get("{{.Name}}"); raw != "" {
 		v, err := strconv.ParseInt(raw, 10, 64)
 		if err != nil {
@@ -115,6 +150,7 @@ func (h *HTTPHandler) handle(w http.ResponseWriter, r *http.Request) {
 {{- end}}
 		req.{{.GoName}} = v
 	}
+{{- end}}
 {{- else if eq .GoType "float64"}}
 	if raw := r.URL.Query().Get("{{.Name}}"); raw != "" {
 		v, err := strconv.ParseFloat(raw, 64)

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"sort"
+	"strings"
 
 	"github.com/ghbvf/gocell/kernel/metadata"
 	"github.com/ghbvf/gocell/tools/codegen"
@@ -70,9 +71,21 @@ func Generate(root string, p *metadata.ProjectMeta, opts Options) (Result, error
 // generateOneContract renders all artifacts for a single contract and writes
 // (or dry-runs / verifies) them to disk, appending outcomes to res.
 func generateOneContract(root string, p *metadata.ProjectMeta, contractID string, opts Options, res *Result) error {
+	// B.5: contract ID sanity — must not contain path separators or traversal sequences.
+	if strings.Contains(contractID, "..") || strings.ContainsAny(contractID, `/\`) {
+		return fmt.Errorf("contract %q: id contains illegal path characters", contractID)
+	}
+
 	spec, err := BuildContractSpec(root, p, contractID)
 	if err != nil {
-		return err
+		// B.6: wrap error with contract ID context.
+		return fmt.Errorf("contract %q: %w", contractID, err)
+	}
+
+	// B.5: package path must be within the generated/contracts/ subtree.
+	relPath := filepath.ToSlash(spec.PackagePath)
+	if !strings.HasPrefix(relPath, "generated/contracts/") {
+		return fmt.Errorf("contract %q: package path %q does not start with generated/contracts/", contractID, relPath)
 	}
 
 	pkgDir := filepath.Join(root, filepath.FromSlash(spec.PackagePath))

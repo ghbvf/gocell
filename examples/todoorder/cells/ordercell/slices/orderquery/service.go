@@ -77,7 +77,7 @@ func (s *Service) list(ctx context.Context, pageReq query.PageParams) (query.Pag
 
 // Get implements getv1.Service.
 func (s *Service) Get(ctx context.Context, req *getv1.Request) (*getv1.Response, error) {
-	order, err := s.GetByID(ctx, req.Id)
+	order, err := s.GetByID(ctx, req.ID)
 	if err != nil {
 		return nil, err
 	}
@@ -103,7 +103,7 @@ func toGetResponse(o *domain.Order) *getv1.Response {
 	}
 	return &getv1.Response{
 		Data: &getv1.ResponseData{
-			Id:        o.ID,
+			ID:        o.ID,
 			Item:      o.Item,
 			Status:    o.Status,
 			CreatedAt: o.CreatedAt.Format(time.RFC3339),
@@ -115,7 +115,7 @@ func toListResponse(result query.PageResult[*domain.Order]) *listv1.Response {
 	items := make([]*listv1.ResponseDataItem, 0, len(result.Items))
 	for _, o := range result.Items {
 		items = append(items, &listv1.ResponseDataItem{
-			Id:        o.ID,
+			ID:        o.ID,
 			Item:      o.Item,
 			Status:    o.Status,
 			CreatedAt: o.CreatedAt.Format(time.RFC3339),

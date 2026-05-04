@@ -7,6 +7,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/ghbvf/gocell/kernel/governance"
 )
 
 // Schema represents the minimal subset of JSON Schema draft 2020-12 used by contractgen.
@@ -30,7 +32,8 @@ type Schema struct {
 
 // Parse loads and parses a single JSON Schema file, recursively resolving $ref.
 //
-//   - rootDir: absolute path to the project root
+//   - rootDir: absolute path to the project root; all resolved $ref paths must
+//     remain within this directory (path traversal guard).
 //   - refPath: path relative to rootDir
 //     (e.g. "examples/todoorder/contracts/.../request.schema.json")
 //
@@ -42,11 +45,12 @@ type Schema struct {
 func Parse(rootDir, refPath string) (*Schema, error) {
 	absPath := filepath.Join(rootDir, refPath)
 	visited := make(map[string]*Schema)
-	return parseFile(absPath, visited)
+	return parseFile(rootDir, absPath, visited)
 }
 
 // parseFile reads the file at absPath and parses it as a JSON Schema.
-func parseFile(absPath string, visited map[string]*Schema) (*Schema, error) {
+// rootDir is the project root used for path-traversal guard and relative error paths.
+func parseFile(rootDir, absPath string, visited map[string]*Schema) (*Schema, error) {
 	absPath = filepath.Clean(absPath)
 
 	if s, ok := visited[absPath]; ok {
@@ -62,23 +66,31 @@ func parseFile(absPath string, visited map[string]*Schema) (*Schema, error) {
 	// Register before recursing to break cycles.
 	visited[absPath] = schema
 
-	if err := parseSchemaFromBytes(schema, data, absPath, visited); err != nil {
+	if err := parseSchemaFromBytes(rootDir, schema, data, absPath, visited); err != nil {
 		return nil, err
 	}
 	return schema, nil
 }
 
 // parseSchemaFromBytes parses raw JSON bytes into s.
+// rootDir is the project root for path-traversal guard and relative error paths.
 // absFile is the absolute path of the file being parsed.
-func parseSchemaFromBytes(s *Schema, data []byte, absFile string, visited map[string]*Schema) error {
+func parseSchemaFromBytes(rootDir string, s *Schema, data []byte, absFile string, visited map[string]*Schema) error {
 	var raw map[string]any
 	if err := json.Unmarshal(data, &raw); err != nil {
 		return fmt.Errorf("contractgen/jsonschema: cannot parse %s: %w", absFile, err)
 	}
 
 	var defs map[string]any
-	if defsRaw, ok := raw["$defs"].(map[string]any); ok {
-		defs = defsRaw
+	var defsRawBytes []byte
+	if _, ok := raw["$defs"]; ok {
+		if defsRaw, ok2 := raw["$defs"].(map[string]any); ok2 {
+			defs = defsRaw
+			// Extract raw bytes for $defs to preserve source property order.
+			if b, err := extractRawSubValue(data, "$defs"); err == nil {
+				defsRawBytes = b
+			}
+		}
 	}
 
 	propOrder, err := tokenPropertyOrder(data)
@@ -86,19 +98,22 @@ func parseSchemaFromBytes(s *Schema, data []byte, absFile string, visited map[st
 		return fmt.Errorf("contractgen/jsonschema: cannot extract property order at %s: %w", absFile, err)
 	}
 
-	return fillSchema(s, raw, propOrder, data, absFile, "#", defs, absFile, visited)
+	return fillSchema(rootDir, s, raw, propOrder, data, absFile, "#", defs, defsRawBytes, absFile, visited)
 }
 
 // schemaContext holds the shared parameters passed through the recursive fill calls.
 type schemaContext struct {
-	currentFile string
-	defs        map[string]any
-	rootFile    string
-	visited     map[string]*Schema
+	rootDir      string // project root; used for path-traversal guard
+	currentFile  string
+	defs         map[string]any
+	defsRawBytes []byte // raw JSON bytes of the $defs object; preserves source key order
+	rootFile     string
+	visited      map[string]*Schema
 }
 
 // fillSchema populates s from the decoded rawNode.
 func fillSchema(
+	rootDir string,
 	s *Schema,
 	rawNode map[string]any,
 	propOrder []string,
@@ -106,10 +121,18 @@ func fillSchema(
 	currentFile string,
 	jsonPtr string,
 	defs map[string]any,
+	defsRawBytes []byte,
 	rootFile string,
 	visited map[string]*Schema,
 ) error {
-	ctx := schemaContext{currentFile: currentFile, defs: defs, rootFile: rootFile, visited: visited}
+	ctx := schemaContext{
+		rootDir:      rootDir,
+		currentFile:  currentFile,
+		defs:         defs,
+		defsRawBytes: defsRawBytes,
+		rootFile:     rootFile,
+		visited:      visited,
+	}
 	return fillSchemaWithCtx(s, rawNode, propOrder, rawBytes, jsonPtr, ctx)
 }
 
@@ -122,7 +145,14 @@ func fillSchemaWithCtx(
 	jsonPtr string,
 	ctx schemaContext,
 ) error {
-	loc := ctx.currentFile + jsonPtr
+	// B.4: use repo-relative path in error messages to avoid leaking sandbox paths.
+	fileForErrors := ctx.currentFile
+	if ctx.rootDir != "" {
+		if rel, err := filepath.Rel(ctx.rootDir, ctx.currentFile); err == nil && !strings.HasPrefix(rel, "..") {
+			fileForErrors = rel
+		}
+	}
+	loc := fileForErrors + jsonPtr
 
 	if err := checkUnsupportedKeywords(rawNode, loc); err != nil {
 		return err
@@ -165,7 +195,7 @@ func fillRef(s *Schema, rawNode map[string]any, jsonPtr string, ctx schemaContex
 		return fmt.Errorf("contractgen/jsonschema: $ref must be a string at %s", loc)
 	}
 	s.Ref = refStr
-	resolved, err := resolveRef(refStr, ctx.currentFile, ctx.defs, ctx.rootFile, jsonPtr, ctx.visited)
+	resolved, err := resolveRef(refStr, ctx.currentFile, ctx.defs, ctx.defsRawBytes, ctx.rootFile, ctx.rootDir, jsonPtr, ctx.visited)
 	if err != nil {
 		return err
 	}
@@ -334,11 +364,15 @@ func fillProperties(s *Schema, rawNode map[string]any, propOrder []string, rawBy
 
 // resolveRef resolves a $ref string.
 // defs is the $defs map of the root file for same-file #/$defs references.
+// defsRawBytes are the raw JSON bytes of the $defs object (preserves source key order).
+// rootDir is the project root used for path-traversal guard.
 func resolveRef(
 	ref string,
 	currentFile string,
 	defs map[string]any,
+	defsRawBytes []byte,
 	rootFile string,
+	rootDir string,
 	jsonPtr string,
 	visited map[string]*Schema,
 ) (*Schema, error) {
@@ -349,7 +383,7 @@ func resolveRef(
 	}
 
 	if strings.HasPrefix(ref, "#/$defs/") {
-		return resolveDefsRef(ref, currentFile, defs, rootFile, jsonPtr, visited)
+		return resolveDefsRef(ref, currentFile, defs, defsRawBytes, rootFile, rootDir, jsonPtr, visited)
 	}
 
 	if strings.HasPrefix(ref, "#") {
@@ -357,7 +391,13 @@ func resolveRef(
 	}
 
 	targetAbs := filepath.Clean(filepath.Join(filepath.Dir(currentFile), ref))
-	resolved, err := parseFile(targetAbs, visited)
+
+	// B.1: path-traversal guard — resolved target must remain within rootDir.
+	if rootDir != "" && !governance.IsWithinRoot(rootDir, targetAbs) {
+		return nil, fmt.Errorf("contractgen/jsonschema: $ref %q at %s resolves to %s which is outside root %s", ref, loc, targetAbs, rootDir)
+	}
+
+	resolved, err := parseFile(rootDir, targetAbs, visited)
 	if err != nil {
 		return nil, fmt.Errorf("contractgen/jsonschema: cannot resolve $ref %q at %s: %w", ref, loc, err)
 	}
@@ -365,11 +405,15 @@ func resolveRef(
 }
 
 // resolveDefsRef resolves a "#/$defs/<name>" reference.
+// defsRawBytes are the raw JSON bytes of the $defs object; when non-nil they are
+// used to derive property order so that source order is preserved (B.3).
 func resolveDefsRef(
 	ref string,
 	currentFile string,
 	defs map[string]any,
+	defsRawBytes []byte,
 	rootFile string,
+	rootDir string,
 	jsonPtr string,
 	visited map[string]*Schema,
 ) (*Schema, error) {
@@ -379,12 +423,30 @@ func resolveDefsRef(
 	if !ok {
 		return nil, fmt.Errorf("contractgen/jsonschema: $ref %q: definition not found in $defs at %s", ref, loc)
 	}
-	// json.Marshal on map[string]any from Unmarshal always succeeds.
-	defBytes, _ := json.Marshal(defRaw)
-	// tokenPropertyOrder on Marshal output always succeeds.
+
+	// B.3: preserve source property order by tokenizing from defsRawBytes rather
+	// than re-marshaling the decoded map (which loses key insertion order).
+	var defBytes []byte
+	if len(defsRawBytes) > 0 {
+		if raw, err := extractRawSubValue(defsRawBytes, name); err == nil {
+			defBytes = raw
+		}
+	}
+	if defBytes == nil {
+		// Fallback: re-marshal (alphabetical order — only reached if raw bytes unavailable).
+		defBytes, _ = json.Marshal(defRaw)
+	}
+
 	defOrder, _ := tokenPropertyOrder(defBytes)
 	defSchema := &Schema{SourcePath: fmt.Sprintf("%s#/$defs/%s", rootFile, name)}
-	ctx := schemaContext{currentFile: currentFile, defs: defs, rootFile: rootFile, visited: visited}
+	ctx := schemaContext{
+		rootDir:      rootDir,
+		currentFile:  currentFile,
+		defs:         defs,
+		defsRawBytes: defsRawBytes,
+		rootFile:     rootFile,
+		visited:      visited,
+	}
 	if err := fillSchemaWithCtx(defSchema, defRaw, defOrder, defBytes, "/$defs/"+name, ctx); err != nil {
 		return nil, err
 	}

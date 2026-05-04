@@ -95,7 +95,7 @@ func TestService_Create(t *testing.T) {
 				require.NotNil(t, resp.Data)
 				assert.Equal(t, tt.item, resp.Data.Item)
 				assert.Equal(t, "pending", resp.Data.Status)
-				assert.NotEmpty(t, resp.Data.Id)
+				assert.NotEmpty(t, resp.Data.ID)
 			}
 		})
 	}
@@ -115,11 +115,11 @@ func TestService_Create_WritesOutboxEntry(t *testing.T) {
 	require.Len(t, writer.entries, 1, "should write exactly one outbox entry")
 	assert.Equal(t, 1, txRunner.calls, "should run inside txRunner")
 	assert.NotEmpty(t, writer.entries[0].ID)
-	assert.Equal(t, resp.Data.Id, writer.entries[0].AggregateID)
+	assert.Equal(t, resp.Data.ID, writer.entries[0].AggregateID)
 	assert.Equal(t, "order", writer.entries[0].AggregateType)
 	assert.Equal(t, TopicOrderCreated, writer.entries[0].EventType)
 	assert.Equal(t, TopicOrderCreated, writer.entries[0].RoutingTopic())
-	assert.Contains(t, string(writer.entries[0].Payload), resp.Data.Id)
+	assert.Contains(t, string(writer.entries[0].Payload), resp.Data.ID)
 }
 
 func TestService_Create_OutboxWriterFailureReturnsError(t *testing.T) {
@@ -175,9 +175,9 @@ func TestService_Create_PersistsOrder(t *testing.T) {
 	require.NotNil(t, resp)
 	require.NotNil(t, resp.Data)
 
-	got, err := repo.GetByID(context.Background(), resp.Data.Id)
+	got, err := repo.GetByID(context.Background(), resp.Data.ID)
 	require.NoError(t, err)
-	assert.Equal(t, resp.Data.Id, got.ID)
+	assert.Equal(t, resp.Data.ID, got.ID)
 	assert.Equal(t, "persisted", got.Item)
 }
 

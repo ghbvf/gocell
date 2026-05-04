@@ -3,6 +3,7 @@ package contractgen
 import (
 	"fmt"
 	"path/filepath"
+	"sort"
 	"strings"
 	"unicode"
 
@@ -30,7 +31,7 @@ func BuildContractSpec(rootDir string, p *metadata.ProjectMeta, contractID strin
 	}
 
 	pkgPath := contractIDToPackagePath(contractID)
-	pkgName := goPackageName(lastSegment(pkgPath))
+	pkgName := pkgNameFromContractID(contractID)
 
 	spec := &ContractGenSpec{
 		PackageName: pkgName,
@@ -96,7 +97,11 @@ func buildHTTPSpec(spec *ContractGenSpec, rootDir string, contract *metadata.Con
 	}
 
 	// Merge path and query params into Request DTO.
-	allDTOs = mergeParamsIntoRequest(allDTOs, http)
+	var mergeErr error
+	allDTOs, mergeErr = mergeParamsIntoRequestWithID(allDTOs, http, contract.ID)
+	if mergeErr != nil {
+		return fmt.Errorf("contractgen build: %q merge params: %w", contract.ID, mergeErr)
+	}
 
 	spec.DTOs = allDTOs
 
@@ -176,61 +181,85 @@ func buildEventSpec(spec *ContractGenSpec, rootDir string, contract *metadata.Co
 	return nil
 }
 
-// mergeParamsIntoRequest injects path and query params as fields into the
+// mergeParamsIntoRequestWithID injects path and query params as fields into the
 // Request DTO. If no Request DTO exists, one is created. Field order:
 // path params first, query params second, then body schema fields.
-func mergeParamsIntoRequest(dtos []DTOSpec, http *contracts.HTTPTransport) []DTOSpec {
+// Returns error when a path or query param name (as Go field name) conflicts
+// with an existing body schema field (which would produce a duplicate struct field).
+// contractID is optional context for error messages.
+func mergeParamsIntoRequestWithID(dtos []DTOSpec, http *contracts.HTTPTransport, contractID string) ([]DTOSpec, error) {
 	pathParams := buildPathParams(http)
 	queryParams := buildQueryParams(http)
 
 	if len(pathParams) == 0 && len(queryParams) == 0 {
-		return dtos
+		return dtos, nil
 	}
 
 	// Find or create Request DTO.
-	reqIdx := -1
-	for i, d := range dtos {
-		if d.Name == "Request" {
-			reqIdx = i
-			break
-		}
-	}
-	if reqIdx == -1 {
-		dtos = append([]DTOSpec{{Name: "Request", Doc: "Request holds the HTTP request parameters."}}, dtos...)
-		reqIdx = 0
+	reqIdx := findOrCreateRequestDTO(&dtos)
+
+	// Check for name conflicts between path/query param Go names and existing body fields.
+	existing := make(map[string]bool, len(dtos[reqIdx].Fields))
+	for _, f := range dtos[reqIdx].Fields {
+		existing[f.Name] = true
 	}
 
-	// Prepend path param fields, then query param fields, before any body fields.
-	var prefixFields []DTOField
-	for _, p := range pathParams {
-		field := DTOField{
-			Name:     p.GoName,
-			JSONTag:  p.Name + ",omitempty",
-			GoType:   p.GoType,
-			Required: p.Required,
-			Doc:      p.Doc,
-		}
-		if p.Required {
-			field.JSONTag = p.Name
-		}
-		prefixFields = append(prefixFields, field)
-	}
-	for _, q := range queryParams {
-		field := DTOField{
-			Name:     q.GoName,
-			JSONTag:  q.Name + ",omitempty",
-			GoType:   q.GoType,
-			Required: q.Required,
-			Doc:      q.Doc,
-		}
-		if q.Required {
-			field.JSONTag = q.Name
-		}
-		prefixFields = append(prefixFields, field)
+	// Build prefix fields from path and query params, checking for conflicts.
+	prefixFields, err := buildParamFields(pathParams, queryParams, existing, contractID)
+	if err != nil {
+		return nil, err
 	}
 
 	dtos[reqIdx].Fields = append(prefixFields, dtos[reqIdx].Fields...)
-	return dtos
+	return dtos, nil
+}
+
+// findOrCreateRequestDTO locates the Request DTO in dtos, creating it if absent.
+// Returns the index of the Request DTO in the (possibly modified) slice.
+func findOrCreateRequestDTO(dtos *[]DTOSpec) int {
+	for i, d := range *dtos {
+		if d.Name == "Request" {
+			return i
+		}
+	}
+	*dtos = append([]DTOSpec{{Name: "Request", Doc: "Request holds the HTTP request parameters."}}, *dtos...)
+	return 0
+}
+
+// buildParamFields converts ParamSpec slices to DTOFields, checking for name
+// conflicts against existing body fields. Returns error on conflict.
+func buildParamFields(pathParams, queryParams []ParamSpec, existing map[string]bool, contractID string) ([]DTOField, error) {
+	var fields []DTOField
+	for _, p := range pathParams {
+		if existing[p.GoName] {
+			return nil, fmt.Errorf("contractgen: contract %q field %q conflict between path param and request body schema",
+				contractID, p.Name)
+		}
+		fields = append(fields, paramToField(p))
+	}
+	for _, q := range queryParams {
+		if existing[q.GoName] {
+			return nil, fmt.Errorf("contractgen: contract %q field %q conflict between query param and request body schema",
+				contractID, q.Name)
+		}
+		fields = append(fields, paramToField(q))
+	}
+	return fields, nil
+}
+
+// paramToField converts a ParamSpec to a DTOField.
+func paramToField(p ParamSpec) DTOField {
+	tag := p.Name + ",omitempty"
+	if p.Required {
+		tag = p.Name
+	}
+	return DTOField{
+		Name:     p.GoName,
+		JSONTag:  tag,
+		GoType:   p.GoType,
+		Required: p.Required,
+		Doc:      p.Doc,
+	}
 }
 
 // buildPathParams extracts path parameters from HTTPTransport in path-template order.
@@ -262,8 +291,8 @@ func buildPathParams(http *contracts.HTTPTransport) []ParamSpec {
 }
 
 // buildQueryParams extracts query parameters from HTTPTransport in map key-sorted order.
-// Note: contract.yaml queryParams is a map, so we use a deterministic iteration order
-// by scanning all keys alphabetically.
+// Note: contract.yaml queryParams comes from a YAML map (unordered); we sort alphabetically
+// to guarantee deterministic output. This is intentional, not a bug.
 func buildQueryParams(http *contracts.HTTPTransport) []ParamSpec {
 	if len(http.QueryParams) == 0 {
 		return nil
@@ -273,7 +302,7 @@ func buildQueryParams(http *contracts.HTTPTransport) []ParamSpec {
 	for name := range http.QueryParams {
 		names = append(names, name)
 	}
-	sortStrings(names)
+	sort.Strings(names)
 
 	var out []ParamSpec
 	for _, name := range names {
@@ -418,13 +447,16 @@ func contractIDToPackagePath(id string) string {
 	return "generated/contracts/" + strings.Join(segments, "/")
 }
 
-// lastSegment returns the last "/" separated segment of a path.
-func lastSegment(path string) string {
-	parts := strings.Split(path, "/")
-	if len(parts) == 0 {
-		return path
-	}
-	return parts[len(parts)-1]
+// pkgNameFromContractID derives the Go package name from a contract id.
+// The package name is the segment immediately before the version segment,
+// lowercased and with "-" and "_" stripped.
+// Examples:
+//
+//	"http.order.create.v1"   -> "create"
+//	"event.order-created.v1" -> "ordercreated"
+//	"http.audit.list.v1"     -> "list"
+func pkgNameFromContractID(id string) string {
+	return goPackageName(domainLastSegment(id))
 }
 
 // domainLastSegment returns the second-to-last dot-separated segment,
@@ -466,9 +498,53 @@ func isVersionSegment(s string) bool {
 	return true
 }
 
+// commonInitialisms is the set of well-known initialisms from golang.org/x/lint/golint
+// that should be uppercased entirely rather than just capitalised first-letter.
+// Examples: "id" → "ID", "url" → "URL", "api" → "API".
+var commonInitialisms = map[string]bool{
+	"API":   true,
+	"ASCII": true,
+	"CPU":   true,
+	"CSS":   true,
+	"DNS":   true,
+	"EOF":   true,
+	"GUID":  true,
+	"HTML":  true,
+	"HTTP":  true,
+	"HTTPS": true,
+	"ID":    true,
+	"IP":    true,
+	"JSON":  true,
+	"LHS":   true,
+	"QPS":   true,
+	"RAM":   true,
+	"RHS":   true,
+	"RPC":   true,
+	"SLA":   true,
+	"SMTP":  true,
+	"SQL":   true,
+	"SSH":   true,
+	"TCP":   true,
+	"TLS":   true,
+	"TTL":   true,
+	"UDP":   true,
+	"UI":    true,
+	"UID":   true,
+	"UUID":  true,
+	"URI":   true,
+	"URL":   true,
+	"UTF8":  true,
+	"VM":    true,
+	"XML":   true,
+	"XMPP":  true,
+	"XSRF":  true,
+	"XSS":   true,
+}
+
 // goPascalCase converts a kebab-case or camelCase or snake_case identifier
 // to PascalCase. Handles delimiters "-" and "_".
-// "order-created" → "OrderCreated", "userId" → "UserId", "user_id" → "UserId".
+// Applies commonInitialisms: "id" → "ID", "user_id" → "UserID", "api_key" → "APIKey".
+// "order-created" → "OrderCreated", "user_id" → "UserID".
 func goPascalCase(s string) string {
 	if s == "" {
 		return s
@@ -476,7 +552,12 @@ func goPascalCase(s string) string {
 	parts := splitOnDelimiters(s)
 	var sb strings.Builder
 	for _, p := range parts {
-		sb.WriteString(capitalizeFirst(p))
+		upper := strings.ToUpper(p)
+		if commonInitialisms[upper] {
+			sb.WriteString(upper)
+		} else {
+			sb.WriteString(capitalizeFirst(p))
+		}
 	}
 	return sb.String()
 }
@@ -575,13 +656,4 @@ func paramMaximum(s contracts.ParamSchema) *int64 {
 	}
 	v := int64(*s.Maximum)
 	return &v
-}
-
-// sortStrings sorts a string slice in-place.
-func sortStrings(ss []string) {
-	for i := 1; i < len(ss); i++ {
-		for j := i; j > 0 && ss[j] < ss[j-1]; j-- {
-			ss[j], ss[j-1] = ss[j-1], ss[j]
-		}
-	}
 }

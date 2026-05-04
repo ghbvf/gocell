@@ -43,7 +43,7 @@ func TestHttpOrderGetV1Serve(t *testing.T) {
 	})
 	h := getv1.NewHTTPHandler(svc, nil)
 
-	// Use chi router so chi.URLParam works for path params.
+	// chi.URLParam relies on chi route context; tests must mount through chi.NewRouter().
 	r := chi.NewRouter()
 	r.Get("/api/v1/orders/{id}", h.ServeHTTP)
 

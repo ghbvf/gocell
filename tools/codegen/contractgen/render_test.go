@@ -54,8 +54,8 @@ func TestBuildContractSpec_HTTP_OrderCreate(t *testing.T) {
 	if spec.Kind != "http" {
 		t.Errorf("Kind = %q, want http", spec.Kind)
 	}
-	if spec.PackageName != "v1" {
-		t.Errorf("PackageName = %q, want v1", spec.PackageName)
+	if spec.PackageName != "create" {
+		t.Errorf("PackageName = %q, want create", spec.PackageName)
 	}
 	if spec.Endpoint == nil {
 		t.Fatal("Endpoint is nil")
@@ -106,13 +106,13 @@ func TestBuildContractSpec_HTTP_OrderGet(t *testing.T) {
 	if spec.Endpoint.PathParams[0].Name != "id" {
 		t.Errorf("PathParams[0].Name = %q, want id", spec.Endpoint.PathParams[0].Name)
 	}
-	// Request DTO should have Id field from path param.
+	// Request DTO should have ID field from path param (initialism: id → ID).
 	reqDTO := findDTO(spec.DTOs, "Request")
 	if reqDTO == nil {
 		t.Fatal("Request DTO not found")
 	}
-	if findField(reqDTO, "Id") == nil {
-		t.Error("Request DTO should have Id field from path param")
+	if findField(reqDTO, "ID") == nil {
+		t.Error("Request DTO should have ID field from path param")
 	}
 }
 
@@ -530,6 +530,84 @@ func assertGolden(t *testing.T, path string, got []byte) {
 	}
 	if !bytes.Equal(got, want) {
 		t.Errorf("output does not match golden file %s\n\ngot:\n%s\n\nwant:\n%s", path, got, want)
+	}
+}
+
+// --- A.9: BuildContractSpec integration tests using synth fixtures ---
+
+// TestBuildContractSpec_HTTP uses the synth_http_full fixture to verify
+// Endpoint.Method, SuccessCode, path params, and DTOs.
+func TestBuildContractSpec_HTTP(t *testing.T) {
+	testDir := filepath.Join("testdata", "synth", "synth_http_full")
+	absTestDir, err := filepath.Abs(testDir)
+	if err != nil {
+		t.Fatalf("abs path: %v", err)
+	}
+	parser := metadata.NewParser(absTestDir)
+	p, err := parser.Parse()
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+
+	spec, err := BuildContractSpec(absTestDir, p, "http.item.details.v1")
+	if err != nil {
+		t.Fatalf("BuildContractSpec: %v", err)
+	}
+	if spec.Endpoint == nil {
+		t.Fatal("Endpoint is nil")
+	}
+	if spec.Endpoint.Method != "GET" {
+		t.Errorf("Method = %q, want GET", spec.Endpoint.Method)
+	}
+	if spec.Endpoint.SuccessCode != 200 {
+		t.Errorf("SuccessCode = %d, want 200", spec.Endpoint.SuccessCode)
+	}
+	if len(spec.Endpoint.PathParams) != 1 {
+		t.Fatalf("expected 1 path param, got %d", len(spec.Endpoint.PathParams))
+	}
+	if spec.Endpoint.PathParams[0].Name != "id" {
+		t.Errorf("PathParams[0].Name = %q, want id", spec.Endpoint.PathParams[0].Name)
+	}
+	if spec.Endpoint.PathParams[0].GoName != "ID" {
+		t.Errorf("PathParams[0].GoName = %q, want ID", spec.Endpoint.PathParams[0].GoName)
+	}
+	if spec.PackageName != "details" {
+		t.Errorf("PackageName = %q, want details", spec.PackageName)
+	}
+	if len(spec.DTOs) == 0 {
+		t.Error("expected non-empty DTOs")
+	}
+}
+
+// TestBuildContractSpec_Event uses the synth_event fixture to verify
+// Event.Topic, HandlerMethod, and Payload DTO presence.
+func TestBuildContractSpec_Event(t *testing.T) {
+	testDir := filepath.Join("testdata", "synth", "synth_event")
+	absTestDir, err := filepath.Abs(testDir)
+	if err != nil {
+		t.Fatalf("abs path: %v", err)
+	}
+	parser := metadata.NewParser(absTestDir)
+	p, err := parser.Parse()
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+
+	spec, err := BuildContractSpec(absTestDir, p, "event.item-created.v1")
+	if err != nil {
+		t.Fatalf("BuildContractSpec: %v", err)
+	}
+	if spec.Event == nil {
+		t.Fatal("Event is nil")
+	}
+	if spec.Event.Topic != "event.item-created" {
+		t.Errorf("Topic = %q, want event.item-created", spec.Event.Topic)
+	}
+	if spec.PackageName != "itemcreated" {
+		t.Errorf("PackageName = %q, want itemcreated", spec.PackageName)
+	}
+	if findDTO(spec.DTOs, "Payload") == nil {
+		t.Error("Payload DTO not found")
 	}
 }
 

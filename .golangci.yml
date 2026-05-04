@@ -275,6 +275,23 @@ linters:
             - github.com/ghbvf/gocell/generated/contracts
             - github.com/google/uuid
             - github.com/go-chi/chi/v5
+        generated-contracts-isolation:
+          # LAYER-GENERATED-CONTRACTS: generated/contracts/**/*_gen.go files may
+          # only import stdlib + kernel/{cell,wrapper,outbox} + pkg/{httputil,errcode}
+          # + runtime/auth + chi/v5. This rule prevents template regressions from
+          # accidentally pulling cells/ or adapters/ into the generated layer.
+          list-mode: strict
+          files:
+            - "**/generated/contracts/**"
+          allow:
+            - $gostd
+            - github.com/ghbvf/gocell/kernel/cell
+            - github.com/ghbvf/gocell/kernel/wrapper
+            - github.com/ghbvf/gocell/kernel/outbox
+            - github.com/ghbvf/gocell/pkg/httputil
+            - github.com/ghbvf/gocell/pkg/errcode
+            - github.com/ghbvf/gocell/runtime/auth
+            - github.com/go-chi/chi/v5
         clockmock-test-only:
           # PROD-CLOCKMOCK-IMPORT-01: kernel/clock/clockmock is a test-only
           # package. Production code (non-_test.go) must use clock.Clock via

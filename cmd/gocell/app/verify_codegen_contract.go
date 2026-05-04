@@ -49,6 +49,8 @@ func verifyCodegenContractInPlace(root string) error {
 		for _, f := range res.Drifted {
 			fmt.Fprintf(os.Stderr, "drift: %s\n", f)
 		}
+		fmt.Fprintln(os.Stderr, "FIX: run locally and commit:")
+		fmt.Fprintln(os.Stderr, "    gocell generate contract --all")
 		return fmt.Errorf("codegen drift in %d files; run `gocell generate contract --all` to refresh", len(res.Drifted))
 	}
 	fmt.Println("Generated contract DTOs OK (--local).")

@@ -9,6 +9,27 @@ import (
 	"testing"
 )
 
+// findModuleRoot walks up from the directory of this test file until it finds
+// a go.mod, returning the directory that contains it. This lets tests locate
+// the repo root without hard-coding an absolute path.
+func findModuleRoot(t *testing.T) string {
+	t.Helper()
+	dir, err := filepath.Abs(".")
+	if err != nil {
+		t.Fatalf("findModuleRoot: filepath.Abs: %v", err)
+	}
+	for {
+		if _, err := os.Stat(filepath.Join(dir, "go.mod")); err == nil {
+			return dir
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			t.Fatal("findModuleRoot: go.mod not found")
+		}
+		dir = parent
+	}
+}
+
 // writeSchema writes content to dir/name.
 func writeSchema(t *testing.T, dir, name, content string) {
 	t.Helper()
@@ -406,7 +427,7 @@ func TestParse_PropertyOrderPreserved(t *testing.T) {
 
 func TestParse_RealRequestSchema(t *testing.T) {
 	// Smoke test against the actual todoorder create request schema.
-	root := "/Users/shengming/Documents/code/gocell/worktrees/166-codegen-contract-gen"
+	root := findModuleRoot(t)
 	refPath := "examples/todoorder/contracts/http/order/create/v1/request.schema.json"
 	s, err := Parse(root, refPath)
 	if err != nil {
@@ -1075,7 +1096,7 @@ func TestSkipValue_NestedObjectBeforeProperties(t *testing.T) {
 func TestParseSchemaBytes_InvalidJSON(t *testing.T) {
 	s := &Schema{}
 	visited := make(map[string]*Schema)
-	err := parseSchemaFromBytes(s, []byte(`not json`), "/fake.json", visited)
+	err := parseSchemaFromBytes("", s, []byte(`not json`), "/fake.json", visited)
 	if err == nil {
 		t.Fatal("expected error for invalid JSON")
 	}
@@ -1138,7 +1159,7 @@ func TestSkipValue_ObjectBranch(t *testing.T) {
 func TestParseSchemaFromBytes_RefNonString(t *testing.T) {
 	s := &Schema{}
 	visited := make(map[string]*Schema)
-	err := parseSchemaFromBytes(s, []byte(`{"$ref": 42}`), "/fake.json", visited)
+	err := parseSchemaFromBytes("", s, []byte(`{"$ref": 42}`), "/fake.json", visited)
 	if err == nil {
 		t.Fatal("expected error for non-string $ref")
 	}
@@ -1152,7 +1173,7 @@ func TestParseSchemaFromBytes_RefNonString(t *testing.T) {
 func TestParseSchemaFromBytes_AdditionalPropertiesUnexpected(t *testing.T) {
 	s := &Schema{}
 	visited := make(map[string]*Schema)
-	err := parseSchemaFromBytes(s, []byte(`{"additionalProperties": 42}`), "/fake.json", visited)
+	err := parseSchemaFromBytes("", s, []byte(`{"additionalProperties": 42}`), "/fake.json", visited)
 	if err == nil {
 		t.Fatal("expected error for unexpected additionalProperties type")
 	}
@@ -1166,7 +1187,7 @@ func TestParseSchemaFromBytes_TypeUnexpected(t *testing.T) {
 	// JSON number for "type" decodes as float64, hitting the default case.
 	s := &Schema{}
 	visited := make(map[string]*Schema)
-	err := parseSchemaFromBytes(s, []byte(`{"type": 42}`), "/fake.json", visited)
+	err := parseSchemaFromBytes("", s, []byte(`{"type": 42}`), "/fake.json", visited)
 	if err == nil {
 		t.Fatal("expected error for unexpected type value")
 	}
@@ -1241,5 +1262,102 @@ func TestResolveRef_HttpRef(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "absolute URL") {
 		t.Errorf("error should mention absolute URL, got: %v", err)
+	}
+}
+
+// TestParse_RefPathTraversal_Rejected verifies that a $ref attempting to escape
+// the rootDir via path traversal (e.g. "../../../../etc/passwd") is rejected with
+// an error that mentions "outside root".
+func TestParse_RefPathTraversal_Rejected(t *testing.T) {
+	rootDir := t.TempDir()
+
+	// Write an entry schema that tries to traverse outside rootDir.
+	writeSchema(t, rootDir, "entry.json", `{
+		"type": "object",
+		"properties": {
+			"val": {"$ref": "../../../../etc/passwd"}
+		}
+	}`)
+
+	_, err := Parse(rootDir, "entry.json")
+	if err == nil {
+		t.Fatal("expected error for path-traversal $ref, got nil")
+	}
+	if !strings.Contains(err.Error(), "outside root") {
+		t.Errorf("error should mention 'outside root', got: %v", err)
+	}
+	// Error message should include the attempted traversal path.
+	if !strings.Contains(err.Error(), "../../../../etc/passwd") {
+		t.Errorf("error should include the traversal ref path, got: %v", err)
+	}
+}
+
+// TestParse_DefsPropertyOrderPreservedSourceOrder verifies that properties within
+// a $defs definition retain their source document order rather than being
+// re-sorted alphabetically (B.3: $defs order loss fix).
+func TestParse_DefsPropertyOrderPreservedSourceOrder(t *testing.T) {
+	dir := t.TempDir()
+	// Properties z_field, a_field, m_field are intentionally non-alphabetical to
+	// detect if json.Marshal re-sort would silently reorder them.
+	writeSchema(t, dir, "s.json", `{
+		"type": "object",
+		"$defs": {
+			"Item": {
+				"type": "object",
+				"properties": {
+					"z_field": {"type": "string"},
+					"a_field": {"type": "integer"},
+					"m_field": {"type": "boolean"}
+				}
+			}
+		},
+		"properties": {
+			"item": {"$ref": "#/$defs/Item"}
+		}
+	}`)
+	s, err := parseFromDir(t, dir, "s.json")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	item := s.Properties["item"]
+	if item == nil {
+		t.Fatal("item property missing")
+	}
+	if item.Type != "object" {
+		t.Errorf("item.type: got %q, want object", item.Type)
+	}
+	want := []string{"z_field", "a_field", "m_field"}
+	if len(item.PropertyOrder) != len(want) {
+		t.Fatalf("PropertyOrder len: got %d (%v), want %d", len(item.PropertyOrder), item.PropertyOrder, len(want))
+	}
+	for i, w := range want {
+		if item.PropertyOrder[i] != w {
+			t.Errorf("PropertyOrder[%d]: got %q, want %q (full order: %v)", i, item.PropertyOrder[i], w, item.PropertyOrder)
+		}
+	}
+}
+
+// TestParse_UnsupportedKeywordUsesRelativePath verifies that error messages for
+// unsupported keywords use a repo-relative path rather than the full absolute
+// sandbox path (B.4: relPath error messages).
+func TestParse_UnsupportedKeywordUsesRelativePath(t *testing.T) {
+	rootDir := t.TempDir()
+	writeSchema(t, rootDir, "sub/request.schema.json", `{
+		"type": "object",
+		"properties": {
+			"foo": {"oneOf": [{"type": "string"}, {"type": "integer"}]}
+		}
+	}`)
+	_, err := Parse(rootDir, "sub/request.schema.json")
+	if err == nil {
+		t.Fatal("expected error for oneOf keyword")
+	}
+	// Error must not contain the absolute rootDir prefix.
+	if strings.Contains(err.Error(), rootDir) {
+		t.Errorf("error should not contain absolute rootDir %q, got: %v", rootDir, err)
+	}
+	// Error must contain the repo-relative path.
+	if !strings.Contains(err.Error(), "sub/request.schema.json") {
+		t.Errorf("error should contain repo-relative path, got: %v", err)
 	}
 }
