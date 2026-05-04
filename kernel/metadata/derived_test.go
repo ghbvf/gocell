@@ -235,6 +235,67 @@ func TestDeriveCellWireSummaries_EmptyBundleYieldsEmptySlices(t *testing.T) {
 	}
 }
 
+func TestDeriveCellWireSummaries_SortStable(t *testing.T) {
+	t.Parallel()
+
+	// Run 100 times to defend against map iteration non-determinism leaking
+	// through a missing or broken sort.Slice call.
+	project := makeProject("zzz", "aaa", "mmm", "bbb", "nnn")
+	bundles := map[string]metadata.CellWireBundle{
+		"zzz": {},
+		"aaa": {},
+		"mmm": {},
+		"bbb": {},
+		"nnn": {},
+	}
+
+	var first []string
+	for i := 0; i < 100; i++ {
+		got := metadata.DeriveCellWireSummaries(project, bundles)
+		if len(got) != 5 {
+			t.Fatalf("iteration %d: expected 5, got %d", i, len(got))
+		}
+		ids := make([]string, len(got))
+		for j, s := range got {
+			ids[j] = s.CellID
+		}
+		if i == 0 {
+			first = ids
+			continue
+		}
+		for j, id := range ids {
+			if id != first[j] {
+				t.Fatalf("iteration %d: sort unstable at position %d: got %q, want %q (first run order: %v)", i, j, id, first[j], first)
+			}
+		}
+	}
+}
+
+func TestDeriveCellWireSummaries_OrphanCellID(t *testing.T) {
+	t.Parallel()
+
+	// bundles contains a cellID that is not present in project.Cells.
+	// DeriveCellWireSummaries must skip it without panicking.
+	project := makeProject("accesscore")
+	bundles := map[string]metadata.CellWireBundle{
+		"accesscore": {
+			Listeners: []metadata.WireBundleListener{{Ref: "cell.PrimaryListener", Prefix: "/api/v1/access"}},
+		},
+		"orphan-cell": {
+			// not in project.Cells — must be silently skipped
+			Listeners: []metadata.WireBundleListener{{Ref: "cell.PrimaryListener", Prefix: "/api/v1/orphan"}},
+		},
+	}
+
+	got := metadata.DeriveCellWireSummaries(project, bundles)
+	if len(got) != 1 {
+		t.Fatalf("expected 1 result (orphan skipped), got %d: %+v", len(got), got)
+	}
+	if got[0].CellID != "accesscore" {
+		t.Errorf("expected cellId=accesscore, got %q", got[0].CellID)
+	}
+}
+
 func TestDeriveCellWireSummaries_MultiCell_FullBundle(t *testing.T) {
 	t.Parallel()
 

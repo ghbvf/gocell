@@ -455,20 +455,32 @@ func TestAccessCore_RouteGroups(t *testing.T) {
 	groups := snap.RouteGroups
 	require.Len(t, groups, 2, "accesscore should declare 2 route groups")
 
-	// First group: PrimaryListener at /api/v1/access.
-	assert.Equal(t, cell.PrimaryListener, groups[0].Listener)
-	assert.Equal(t, "/api/v1/access", groups[0].Prefix)
-	assert.NotNil(t, groups[0].Register)
+	// Locate groups by listener type — resilient to codegen ordering changes.
+	var primary, internal *cell.RouteGroup
+	for i := range groups {
+		g := &groups[i]
+		if g.Listener == cell.PrimaryListener {
+			primary = g
+		}
+		if g.Listener == cell.InternalListener {
+			internal = g
+		}
+	}
+	require.NotNil(t, primary, "expected primary listener route group")
+	require.NotNil(t, internal, "expected internal listener route group")
+
+	// Primary group: PrimaryListener at /api/v1/access.
+	assert.Equal(t, "/api/v1/access", primary.Prefix)
+	assert.NotNil(t, primary.Register)
 	primaryMux := &stubMux{}
-	require.NoError(t, groups[0].Register(primaryMux))
+	require.NoError(t, primary.Register(primaryMux))
 	assert.GreaterOrEqual(t, primaryMux.handleCount, 3, "primary group should register at least 3 routes")
 
-	// Second group: InternalListener at /internal/v1/access.
-	assert.Equal(t, cell.InternalListener, groups[1].Listener)
-	assert.Equal(t, "/internal/v1/access", groups[1].Prefix)
-	assert.NotNil(t, groups[1].Register)
+	// Internal group: InternalListener at /internal/v1/access.
+	assert.Equal(t, "/internal/v1/access", internal.Prefix)
+	assert.NotNil(t, internal.Register)
 	internalMux := &stubMux{}
-	require.NoError(t, groups[1].Register(internalMux))
+	require.NoError(t, internal.Register(internalMux))
 	assert.GreaterOrEqual(t, internalMux.handleCount, 1, "internal group should register at least 1 route")
 }
 
