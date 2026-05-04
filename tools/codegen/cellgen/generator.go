@@ -125,6 +125,96 @@ func generateOneCell(root string, project *metadata.ProjectMeta, cell *metadata.
 	return nil
 }
 
+// CellArtifact is a (RelPath, Kind, Content) triple describing one rendered
+// cellgen output for a single cell. Returned by RenderCellArtifacts so other
+// tools (notably tools/generatedverify) can build a project-derived expected
+// manifest without going through the filesystem-mutating Generate path.
+type CellArtifact struct {
+	// Kind is "cell-gen" or "slice-gen".
+	Kind string
+	// RelPath is the project-relative path the file would be written to,
+	// e.g. "examples/todoorder/cells/ordercell/cell_gen.go".
+	RelPath string
+	// Content is the rendered, formatted, goimports-processed bytes.
+	Content []byte
+}
+
+// RenderCellArtifacts renders the cellgen output for a single cell to memory
+// without touching disk. Returns one CellArtifact per produced file (one
+// cell_gen.go plus one slice_gen.go per slice with subscribes). Cells
+// without GoStructName return (nil, nil) — same opt-in semantics as Generate.
+func RenderCellArtifacts(root string, project *metadata.ProjectMeta, cellID string) ([]CellArtifact, error) {
+	if project == nil {
+		return nil, fmt.Errorf("cellgen render artifacts: project is nil")
+	}
+	cell, ok := project.Cells[cellID]
+	if !ok {
+		return nil, fmt.Errorf("cellgen render artifacts: cell %q not found", cellID)
+	}
+	if cell.GoStructName == "" {
+		return nil, nil
+	}
+
+	var out []CellArtifact
+
+	cellSpec, err := BuildCellSpec(project, cellID)
+	if err != nil {
+		return nil, err
+	}
+	cellAbs := cellGenPath(root, cell)
+	cellContent, err := codegen.Render(codegen.RenderOptions{
+		TemplateName: "cell.tmpl",
+		Templates:    templates,
+		Data:         cellSpec,
+		Filename:     cellAbs,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("cellgen render artifacts: cell %q: %w", cellID, err)
+	}
+	cellRel, err := relFromRoot(root, cellAbs)
+	if err != nil {
+		return nil, err
+	}
+	out = append(out, CellArtifact{Kind: "cell-gen", RelPath: cellRel, Content: cellContent})
+
+	for _, sid := range slicesForCellSorted(project, cellID) {
+		sliceSpec, err := BuildSliceSpec(project, cellID, sid)
+		if err != nil {
+			return nil, err
+		}
+		if sliceSpec == nil {
+			continue
+		}
+		slice := project.Slices[cellID+"/"+sid]
+		sliceAbs := sliceGenPath(root, slice)
+		sliceContent, err := codegen.Render(codegen.RenderOptions{
+			TemplateName: "slice.tmpl",
+			Templates:    templates,
+			Data:         sliceSpec,
+			Filename:     sliceAbs,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("cellgen render artifacts: slice %s/%s: %w", cellID, sid, err)
+		}
+		sliceRel, err := relFromRoot(root, sliceAbs)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, CellArtifact{Kind: "slice-gen", RelPath: sliceRel, Content: sliceContent})
+	}
+	return out, nil
+}
+
+// relFromRoot converts an absolute path under root into a slash-separated
+// relative path. Returns an error if the path escapes root.
+func relFromRoot(root, abs string) (string, error) {
+	rel, err := filepath.Rel(root, abs)
+	if err != nil {
+		return "", fmt.Errorf("relpath %s vs %s: %w", abs, root, err)
+	}
+	return filepath.ToSlash(rel), nil
+}
+
 // renderAndWrite is the shared (render → write → record) tail used by both
 // the cell and slice render paths.
 func renderAndWrite(root, tmpl string, data any, path string, opts Options, res *Result, errPrefix string) error {

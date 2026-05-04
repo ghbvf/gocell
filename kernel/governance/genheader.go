@@ -90,7 +90,28 @@ func ListGeneratedInHEAD(root string) ([]string, error) {
 		if i := strings.Index(s, ":"); i >= 0 {
 			s = s[i+1:]
 		}
+		// Skip Go testdata directories (`testdata/` is the canonical
+		// `go test` convention for files that look like real source but
+		// are static test inputs). Archtest fixtures legitimately carry
+		// the gocell-generated header so the gates can be tested against
+		// negative cases; reverse-enumerating them as drift would force
+		// every fixture into a per-file allowlist.
+		if isInTestdata(s) {
+			continue
+		}
 		paths = append(paths, s)
 	}
 	return paths, nil
+}
+
+// isInTestdata reports whether the slash-separated path has a "testdata"
+// segment. Matches Go's own `go build` / `go test` convention of skipping
+// `testdata/` subtrees.
+func isInTestdata(slashPath string) bool {
+	for _, seg := range strings.Split(slashPath, "/") {
+		if seg == "testdata" {
+			return true
+		}
+	}
+	return false
 }
