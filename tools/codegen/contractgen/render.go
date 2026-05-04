@@ -16,6 +16,8 @@ var templateFS embed.FS
 // Template functions are registered for conditional rendering in handler.tmpl.
 var templates = func() *template.Template {
 	funcMap := template.FuncMap{
+		// not negates a boolean value.
+		"not": func(b bool) bool { return !b },
 		// hasPathParams reports whether the endpoint has path parameters.
 		"hasPathParams": func(ep *HTTPEndpointSpec) bool {
 			return ep != nil && len(ep.PathParams) > 0
@@ -58,6 +60,29 @@ var templates = func() *template.Template {
 		// hasMaximum reports whether the param has a declared maximum value.
 		"hasMaximum": func(p *int64) bool {
 			return p != nil
+		},
+		// isBodyField reports whether a DTOField originates from the request body
+		// (Source == "body" or empty — legacy default). Used to gate body validation.
+		"isBodyField": func(f DTOField) bool {
+			return f.Source == "" || f.Source == "body"
+		},
+		// hasBodyValidation reports whether any DTO field in the Request struct
+		// requires body-level schema validation (minLength/maxLength/minimum/maximum).
+		"hasBodyValidation": func(dtos []DTOSpec) bool {
+			for _, dto := range dtos {
+				if dto.Name != "Request" {
+					continue
+				}
+				for _, f := range dto.Fields {
+					if f.Source != "" && f.Source != "body" {
+						continue
+					}
+					if f.MinLength != nil || f.MaxLength != nil || f.Minimum != nil || f.Maximum != nil {
+						return true
+					}
+				}
+			}
+			return false
 		},
 	}
 

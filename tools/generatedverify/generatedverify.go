@@ -14,6 +14,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/governance"
 	"github.com/ghbvf/gocell/kernel/metadata"
 	"github.com/ghbvf/gocell/tools/codegen/cellgen"
+	"github.com/ghbvf/gocell/tools/codegen/contractgen"
 	"github.com/ghbvf/gocell/tools/metricschema"
 )
 
@@ -224,6 +225,18 @@ func ExpectedArtifacts(root, module string, project *metadata.ProjectMeta) ([]Ar
 	}
 	artifacts = append(artifacts, cellgenArtifacts...)
 
+	// K#06 contractgen outputs: types_gen.go / iface_gen.go (always) +
+	// handler_gen.go (kind=http only) under generated/contracts/<kind>/<...>/v<N>/
+	// for every contract that opted into codegen by setting `codegen: true`
+	// in contract.yaml. Reuse contractgen.RenderContractArtifacts so the
+	// manifest stays byte-identical to what `gocell generate contract --all`
+	// would write.
+	contractgenArtifacts, err := expectedContractgenArtifacts(root, project)
+	if err != nil {
+		return nil, fmt.Errorf("expected contractgen artifacts: %w", err)
+	}
+	artifacts = append(artifacts, contractgenArtifacts...)
+
 	if err := validateArtifactPaths(root, artifacts); err != nil {
 		return nil, err
 	}
@@ -258,6 +271,39 @@ func expectedCellgenArtifacts(root string, project *metadata.ProjectMeta) ([]Art
 				Kind:       ca.Kind,
 				Path:       filepath.ToSlash(ca.RelPath),
 				Content:    ca.Content,
+			})
+		}
+	}
+	return artifacts, nil
+}
+
+// expectedContractgenArtifacts derives the manifest entries for K#06
+// contractgen-owned files. For each contract with `codegen: true`, it
+// renders the would-be content via contractgen and emits one Artifact per
+// produced file. Contracts with codegen=false are not opted in and
+// contribute nothing — matching the contractgen.Generate() skip semantics.
+func expectedContractgenArtifacts(root string, project *metadata.ProjectMeta) ([]Artifact, error) {
+	contractIDs := make([]string, 0, len(project.Contracts))
+	for id, c := range project.Contracts {
+		if !c.Codegen {
+			continue
+		}
+		contractIDs = append(contractIDs, id)
+	}
+	sort.Strings(contractIDs)
+
+	artifacts := make([]Artifact, 0, len(contractIDs)*3)
+	for _, id := range contractIDs {
+		ca, err := contractgen.RenderContractArtifacts(root, project, id)
+		if err != nil {
+			return nil, fmt.Errorf("contractgen artifacts for %q: %w", id, err)
+		}
+		for _, art := range ca {
+			artifacts = append(artifacts, Artifact{
+				AssemblyID: "",
+				Kind:       "contract-gen",
+				Path:       filepath.ToSlash(art.Path),
+				Content:    art.Content,
 			})
 		}
 	}

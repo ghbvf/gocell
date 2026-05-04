@@ -23,27 +23,27 @@ var contractSpec = wrapper.ContractSpec{
 	Path:      "/api/v1/orders/{id}",
 }
 
-// HTTPHandler wires HTTP decode/encode + auth.Mount for http.order.get.v1.
-type HTTPHandler struct {
+// Handler wires HTTP decode/encode + auth.Mount for http.order.get.v1.
+type Handler struct {
 	svc    Service
 	policy auth.Policy
 }
 
-// NewHTTPHandler creates an HTTPHandler for http.order.get.v1.
+// NewHandler creates a Handler for http.order.get.v1.
 // policy may be nil — auth.Mount treats nil as "no per-route authorization guard";
 // use auth.PublicPolicy for unauthenticated public endpoints or supply a real policy.
-func NewHTTPHandler(svc Service, policy auth.Policy) *HTTPHandler {
-	return &HTTPHandler{svc: svc, policy: policy}
+func NewHandler(svc Service, policy auth.Policy) *Handler {
+	return &Handler{svc: svc, policy: policy}
 }
 
-// ServeHTTP implements http.Handler so *HTTPHandler can be used directly in tests
+// ServeHTTP implements http.Handler so *Handler can be used directly in tests
 // and as an http.Handler argument without wrapping.
-func (h *HTTPHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	h.handle(w, r)
 }
 
 // RegisterRoutes mounts the handler on mux via auth.Mount.
-func (h *HTTPHandler) RegisterRoutes(mux cell.RouteHandler) error {
+func (h *Handler) RegisterRoutes(mux cell.RouteHandler) error {
 	return auth.Mount(mux, auth.Route{
 		Contract: contractSpec,
 		Handler:  h,
@@ -51,7 +51,7 @@ func (h *HTTPHandler) RegisterRoutes(mux cell.RouteHandler) error {
 	})
 }
 
-func (h *HTTPHandler) handle(w http.ResponseWriter, r *http.Request) {
+func (h *Handler) handle(w http.ResponseWriter, r *http.Request) {
 	req := &Request{}
 	{
 		v := chi.URLParam(r, "id")

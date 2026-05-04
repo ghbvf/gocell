@@ -308,6 +308,12 @@ func TestPkgNameFromContractID(t *testing.T) {
 		{"event.order-created.v1", "ordercreated"},
 		{"event.item-created.v1", "itemcreated"},
 		{"http.audit.list.v2", "list"},
+		// D1: keyword / builtin collision → prepend previous domain segment
+		{"http.config.delete.v1", "configdelete"},
+		{"http.user.range.v1", "userrange"},
+		{"event.foo-bar.delete.v1", "foobardelete"},
+		// D1: http stdlib collision
+		{"http.gateway.http.v1", "gatewayhttp"},
 	}
 	for _, c := range cases {
 		got := pkgNameFromContractID(c.in)

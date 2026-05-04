@@ -71,9 +71,9 @@ type OrderCell struct {
 	cursorCodec  *query.CursorCodec
 	logger       *slog.Logger
 
-	createHandler *createv1.HTTPHandler
-	getHandler    *getv1.HTTPHandler
-	listHandler   *listv1.HTTPHandler
+	createHandler *createv1.Handler
+	getHandler    *getv1.Handler
+	listHandler   *listv1.Handler
 }
 
 // NewOrderCell creates a new OrderCell with the given options.
@@ -127,7 +127,7 @@ func (c *OrderCell) initInternal(ctx context.Context, reg cell.Registry) error {
 	if err != nil {
 		return fmt.Errorf("ordercreate: %w", err)
 	}
-	c.createHandler = createv1.NewHTTPHandler(createSvc, auth.AnyRole(dto.RoleCustomer))
+	c.createHandler = createv1.NewHandler(createSvc, auth.AnyRole(dto.RoleCustomer))
 	c.AddSlice(cell.NewBaseSlice("ordercreate", "ordercell", cell.L2))
 
 	// Default cursor codec for pagination if not injected. Durable mode
@@ -157,8 +157,8 @@ func (c *OrderCell) initInternal(ctx context.Context, reg cell.Registry) error {
 	if err != nil {
 		return fmt.Errorf("order-query: %w", err)
 	}
-	c.getHandler = getv1.NewHTTPHandler(querySvc, auth.AnyRole(dto.RoleCustomer))
-	c.listHandler = listv1.NewHTTPHandler(querySvc, auth.AnyRole(dto.RoleCustomer))
+	c.getHandler = getv1.NewHandler(querySvc, auth.AnyRole(dto.RoleCustomer))
+	c.listHandler = listv1.NewHandler(querySvc, auth.AnyRole(dto.RoleCustomer))
 	c.AddSlice(cell.NewBaseSlice("orderquery", "ordercell", cell.L0))
 
 	return nil

@@ -18,8 +18,8 @@ import (
 	"github.com/ghbvf/gocell/kernel/outbox"
 )
 
-// Handler is the business interface that subscribers of {{.ContractID}} must implement.
-type Handler interface {
+// EventHandler is the business interface that subscribers of {{.ContractID}} must implement.
+type EventHandler interface {
 	{{.Event.HandlerMethod}}(ctx context.Context, entry outbox.Entry, payload *Payload) outbox.HandleResult
 }
 {{- end}}

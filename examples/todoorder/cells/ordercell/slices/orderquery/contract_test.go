@@ -41,7 +41,7 @@ func TestHttpOrderGetV1Serve(t *testing.T) {
 		Status:    "pending",
 		CreatedAt: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
 	})
-	h := getv1.NewHTTPHandler(svc, nil)
+	h := getv1.NewHandler(svc, nil)
 
 	// chi.URLParam relies on chi route context; tests must mount through chi.NewRouter().
 	r := chi.NewRouter()
@@ -60,7 +60,7 @@ func TestHttpOrderListV1Serve(t *testing.T) {
 		&domain.Order{ID: "ord-a", Item: "widget", Status: "pending", CreatedAt: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)},
 		&domain.Order{ID: "ord-b", Item: "gizmo", Status: "pending", CreatedAt: time.Date(2026, 1, 1, 1, 0, 0, 0, time.UTC)},
 	)
-	h := listv1.NewHTTPHandler(svc, nil)
+	h := listv1.NewHandler(svc, nil)
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(c.HTTP.Method, c.HTTP.Path+"?limit=2", nil)

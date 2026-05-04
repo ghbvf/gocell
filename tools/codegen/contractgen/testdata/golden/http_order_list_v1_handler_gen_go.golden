@@ -5,11 +5,9 @@ package list
 
 import (
 	"net/http"
-	"strconv"
 
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/wrapper"
-	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/httputil"
 	"github.com/ghbvf/gocell/runtime/auth"
 )
@@ -22,27 +20,27 @@ var contractSpec = wrapper.ContractSpec{
 	Path:      "/api/v1/orders/",
 }
 
-// HTTPHandler wires HTTP decode/encode + auth.Mount for http.order.list.v1.
-type HTTPHandler struct {
+// Handler wires HTTP decode/encode + auth.Mount for http.order.list.v1.
+type Handler struct {
 	svc    Service
 	policy auth.Policy
 }
 
-// NewHTTPHandler creates an HTTPHandler for http.order.list.v1.
+// NewHandler creates a Handler for http.order.list.v1.
 // policy may be nil — auth.Mount treats nil as "no per-route authorization guard";
 // use auth.PublicPolicy for unauthenticated public endpoints or supply a real policy.
-func NewHTTPHandler(svc Service, policy auth.Policy) *HTTPHandler {
-	return &HTTPHandler{svc: svc, policy: policy}
+func NewHandler(svc Service, policy auth.Policy) *Handler {
+	return &Handler{svc: svc, policy: policy}
 }
 
-// ServeHTTP implements http.Handler so *HTTPHandler can be used directly in tests
+// ServeHTTP implements http.Handler so *Handler can be used directly in tests
 // and as an http.Handler argument without wrapping.
-func (h *HTTPHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	h.handle(w, r)
 }
 
 // RegisterRoutes mounts the handler on mux via auth.Mount.
-func (h *HTTPHandler) RegisterRoutes(mux cell.RouteHandler) error {
+func (h *Handler) RegisterRoutes(mux cell.RouteHandler) error {
 	return auth.Mount(mux, auth.Route{
 		Contract: contractSpec,
 		Handler:  h,
@@ -50,29 +48,15 @@ func (h *HTTPHandler) RegisterRoutes(mux cell.RouteHandler) error {
 	})
 }
 
-func (h *HTTPHandler) handle(w http.ResponseWriter, r *http.Request) {
+func (h *Handler) handle(w http.ResponseWriter, r *http.Request) {
 	req := &Request{}
-	req.Cursor = r.URL.Query().Get("cursor")
-	if req.Cursor != "" && len(req.Cursor) > 4096 {
-		httputil.WriteDomainError(r.Context(), w, errcode.New(errcode.ErrValidationFailed, "cursor: value too long"))
+	page, err := httputil.ParsePageParams(r)
+	if err != nil {
+		httputil.WriteDomainError(r.Context(), w, err)
 		return
 	}
-	if raw := r.URL.Query().Get("limit"); raw != "" {
-		v, err := strconv.ParseInt(raw, 10, 64)
-		if err != nil {
-			httputil.WriteDomainError(r.Context(), w, errcode.New(errcode.ErrValidationFailed, "limit: must be an integer"))
-			return
-		}
-		if v < 1 {
-			httputil.WriteDomainError(r.Context(), w, errcode.New(errcode.ErrValidationFailed, "limit: value below minimum"))
-			return
-		}
-		if v > 500 {
-			httputil.WriteDomainError(r.Context(), w, errcode.New(errcode.ErrValidationFailed, "limit: value above maximum"))
-			return
-		}
-		req.Limit = v
-	}
+	req.Cursor = page.Cursor
+	req.Limit = int64(page.Limit)
 	resp, err := h.svc.List(r.Context(), req)
 	if err != nil {
 		httputil.WriteDomainError(r.Context(), w, err)

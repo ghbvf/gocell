@@ -65,7 +65,23 @@ func buildHTTPSpec(spec *ContractGenSpec, rootDir string, contract *metadata.Con
 		return fmt.Errorf("contractgen build: contract %q is kind=http but has no http endpoint", contract.ID)
 	}
 
-	// Build DTOs from schema refs.
+	allDTOs, err := buildHTTPDTOs(rootDir, contract, contractDir, http)
+	if err != nil {
+		return err
+	}
+	spec.DTOs = allDTOs
+
+	endpointSpec, err := buildHTTPEndpointSpec(contract, http)
+	if err != nil {
+		return err
+	}
+	spec.Endpoint = endpointSpec
+	return nil
+}
+
+// buildHTTPDTOs loads request/response schemas, converts them to DTOSpecs, and
+// merges path/query params into the Request DTO.
+func buildHTTPDTOs(rootDir string, contract *metadata.ContractMeta, contractDir string, http *contracts.HTTPTransport) ([]DTOSpec, error) {
 	var allDTOs []DTOSpec
 
 	// Request DTO — may be an empty object (GET without body).
@@ -73,11 +89,11 @@ func buildHTTPSpec(spec *ContractGenSpec, rootDir string, contract *metadata.Con
 		reqPath := filepath.Join(contractDir, contract.SchemaRefs.Request)
 		reqSchema, err := Parse(rootDir, reqPath)
 		if err != nil {
-			return fmt.Errorf("contractgen build: %q request schema: %w", contract.ID, err)
+			return nil, fmt.Errorf("contractgen build: %q request schema: %w", contract.ID, err)
 		}
 		reqDTOs, err := schemaToDTOs("Request", reqSchema)
 		if err != nil {
-			return fmt.Errorf("contractgen build: %q request DTOs: %w", contract.ID, err)
+			return nil, fmt.Errorf("contractgen build: %q request DTOs: %w", contract.ID, err)
 		}
 		allDTOs = append(allDTOs, reqDTOs...)
 	}
@@ -87,29 +103,29 @@ func buildHTTPSpec(spec *ContractGenSpec, rootDir string, contract *metadata.Con
 		respPath := filepath.Join(contractDir, contract.SchemaRefs.Response)
 		respSchema, err := Parse(rootDir, respPath)
 		if err != nil {
-			return fmt.Errorf("contractgen build: %q response schema: %w", contract.ID, err)
+			return nil, fmt.Errorf("contractgen build: %q response schema: %w", contract.ID, err)
 		}
 		respDTOs, err := schemaToDTOs("Response", respSchema)
 		if err != nil {
-			return fmt.Errorf("contractgen build: %q response DTOs: %w", contract.ID, err)
+			return nil, fmt.Errorf("contractgen build: %q response DTOs: %w", contract.ID, err)
 		}
 		allDTOs = append(allDTOs, respDTOs...)
 	}
 
 	// Merge path and query params into Request DTO.
-	var mergeErr error
-	allDTOs, mergeErr = mergeParamsIntoRequestWithID(allDTOs, http, contract.ID)
+	merged, mergeErr := mergeParamsIntoRequestWithID(allDTOs, http, contract.ID)
 	if mergeErr != nil {
-		return fmt.Errorf("contractgen build: %q merge params: %w", contract.ID, mergeErr)
+		return nil, fmt.Errorf("contractgen build: %q merge params: %w", contract.ID, mergeErr)
 	}
+	return merged, nil
+}
 
-	spec.DTOs = allDTOs
-
-	// Build HTTPEndpointSpec.
+// buildHTTPEndpointSpec constructs the HTTPEndpointSpec including pagination detection.
+func buildHTTPEndpointSpec(contract *metadata.ContractMeta, http *contracts.HTTPTransport) (*HTTPEndpointSpec, error) {
 	handlerMethod := goPascalCase(domainLastSegment(contract.ID))
 	hasBody := http.Method == "POST" || http.Method == "PUT" || http.Method == "PATCH"
 
-	endpointSpec := &HTTPEndpointSpec{
+	spec := &HTTPEndpointSpec{
 		Method:        http.Method,
 		Path:          http.Path,
 		SuccessCode:   http.SuccessStatus,
@@ -117,13 +133,44 @@ func buildHTTPSpec(spec *ContractGenSpec, rootDir string, contract *metadata.Con
 		HandlerMethod: handlerMethod,
 		HasBody:       hasBody,
 	}
+	spec.PathParams = buildPathParams(http)
+	spec.QueryParams = buildQueryParams(http)
 
-	// Path params — maintain declaration order using path extraction.
-	endpointSpec.PathParams = buildPathParams(http)
-	// Query params.
-	endpointSpec.QueryParams = buildQueryParams(http)
+	// Pagination detection: cursor (string) + limit (integer) with no path params
+	// and GET method signals a canonical paginated list endpoint.
+	if http.Method == "GET" && len(spec.PathParams) == 0 && len(spec.QueryParams) == 2 {
+		if err := detectPagination(spec); err != nil {
+			return nil, fmt.Errorf("contractgen build: %q pagination: %w", contract.ID, err)
+		}
+	}
+	return spec, nil
+}
 
-	spec.Endpoint = endpointSpec
+// detectPagination checks whether the query params are exactly cursor (string)
+// and limit (integer), setting IsPagination=true if so. Fails fast if the params
+// look like a mixed pagination+filter pattern.
+func detectPagination(spec *HTTPEndpointSpec) error {
+	hasCursor, hasLimit := false, false
+	for _, q := range spec.QueryParams {
+		switch q.Name {
+		case "cursor":
+			if q.GoType != "string" {
+				return fmt.Errorf("cursor param must be string type")
+			}
+			hasCursor = true
+		case "limit":
+			if q.GoType != "int64" {
+				return fmt.Errorf("limit param must be integer type")
+			}
+			hasLimit = true
+		default:
+			// Extra query param mixed with cursor/limit → not a pure pagination endpoint.
+			return nil
+		}
+	}
+	if hasCursor && hasLimit {
+		spec.IsPagination = true
+	}
 	return nil
 }
 
@@ -235,20 +282,22 @@ func buildParamFields(pathParams, queryParams []ParamSpec, existing map[string]b
 			return nil, fmt.Errorf("contractgen: contract %q field %q conflict between path param and request body schema",
 				contractID, p.Name)
 		}
-		fields = append(fields, paramToField(p))
+		fields = append(fields, paramToField(p, "path"))
 	}
 	for _, q := range queryParams {
 		if existing[q.GoName] {
 			return nil, fmt.Errorf("contractgen: contract %q field %q conflict between query param and request body schema",
 				contractID, q.Name)
 		}
-		fields = append(fields, paramToField(q))
+		fields = append(fields, paramToField(q, "query"))
 	}
 	return fields, nil
 }
 
-// paramToField converts a ParamSpec to a DTOField.
-func paramToField(p ParamSpec) DTOField {
+// paramToField converts a ParamSpec to a DTOField with the given source tag.
+// Path and query fields carry Source="path"/"query" so the handler template
+// does not re-validate them in the body validation block.
+func paramToField(p ParamSpec, source string) DTOField {
 	tag := p.Name + ",omitempty"
 	if p.Required {
 		tag = p.Name
@@ -259,6 +308,10 @@ func paramToField(p ParamSpec) DTOField {
 		GoType:   p.GoType,
 		Required: p.Required,
 		Doc:      p.Doc,
+		Source:   source,
+		// MinLength/MaxLength/Minimum/Maximum are intentionally left nil for
+		// path/query fields — they are validated at query parse time in the
+		// generated handler, not in the body validation block.
 	}
 }
 
@@ -366,13 +419,7 @@ func collectDTOs(name string, s *Schema, out *[]DTOSpec) {
 			doc = "format: " + prop.Format
 		}
 
-		dto.Fields = append(dto.Fields, DTOField{
-			Name:     fieldName,
-			JSONTag:  jsonTag,
-			GoType:   goType,
-			Required: required,
-			Doc:      doc,
-		})
+		dto.Fields = append(dto.Fields, bodyFieldFromSchema(fieldName, jsonTag, goType, required, doc, prop))
 
 		// Track nested objects for recursive collection after the parent is appended.
 		if nestedName != "" {
@@ -449,14 +496,35 @@ func contractIDToPackagePath(id string) string {
 
 // pkgNameFromContractID derives the Go package name from a contract id.
 // The package name is the segment immediately before the version segment,
-// lowercased and with "-" and "_" stripped.
+// lowercased and with "-" and "_" stripped. When the candidate collides with
+// a Go keyword, builtin, or stdlib package name, the preceding domain segment
+// is prepended to disambiguate.
 // Examples:
 //
-//	"http.order.create.v1"   -> "create"
-//	"event.order-created.v1" -> "ordercreated"
-//	"http.audit.list.v1"     -> "list"
+//	"http.order.create.v1"        -> "create"
+//	"event.order-created.v1"      -> "ordercreated"
+//	"http.audit.list.v1"          -> "list"
+//	"http.config.delete.v1"       -> "configdelete"  (delete is a builtin)
+//	"http.user.range.v1"          -> "userrange"     (range is a keyword)
 func pkgNameFromContractID(id string) string {
-	return goPackageName(domainLastSegment(id))
+	parts := strings.Split(id, ".")
+	// contract id format: <kind>.<domain-path>....<vN>
+	// Take penultimate segment as primary candidate.
+	if len(parts) < 3 {
+		// Pathological — return raw package name (caller already validates format).
+		return goPackageName(parts[len(parts)-1])
+	}
+	last := goPackageName(parts[len(parts)-2])
+	if !goReservedNames[last] {
+		return last
+	}
+	// Collision: join with previous domain segment.
+	if len(parts) >= 4 {
+		prev := goPackageName(parts[len(parts)-3])
+		return prev + last // e.g. "config" + "delete" = "configdelete"
+	}
+	// Fallback when no previous segment is available.
+	return last + "pkg"
 }
 
 // domainLastSegment returns the second-to-last dot-separated segment,
@@ -562,11 +630,31 @@ func goPascalCase(s string) string {
 	return sb.String()
 }
 
+// goReservedNames lists Go keywords + builtin identifiers that must not
+// appear as a package name (or would shadow stdlib at use sites).
+var goReservedNames = map[string]bool{
+	// keywords (Go spec)
+	"break": true, "case": true, "chan": true, "const": true, "continue": true,
+	"default": true, "defer": true, "else": true, "fallthrough": true, "for": true,
+	"func": true, "go": true, "goto": true, "if": true, "import": true,
+	"interface": true, "map": true, "package": true, "range": true, "return": true,
+	"select": true, "struct": true, "switch": true, "type": true, "var": true,
+	// predeclared / builtin identifiers (subset that occurs as contract action verbs)
+	"append": true, "cap": true, "clear": true, "copy": true, "delete": true,
+	"len": true, "make": true, "max": true, "min": true, "new": true,
+	"panic": true, "print": true, "println": true, "recover": true,
+	// stdlib package names that would collide as a generated package
+	"context": true, "errors": true, "fmt": true, "http": true, "io": true,
+	"json": true, "log": true, "net": true, "os": true, "path": true,
+	"sort": true, "strconv": true, "strings": true, "sync": true, "time": true,
+}
+
 // goPackageName converts a path segment to a valid Go package name.
-// Strips dashes, lowercases the result.
+// Strips dashes and underscores, lowercases the result.
 // "order-created" → "ordercreated"
 // "create" → "create"
-// Returns error on Go reserved words.
+// Note: callers must check goReservedNames separately; this function does not
+// sanitize keyword conflicts on its own.
 func goPackageName(s string) string {
 	s = strings.ReplaceAll(s, "-", "")
 	s = strings.ReplaceAll(s, "_", "")
@@ -656,4 +744,35 @@ func paramMaximum(s contracts.ParamSchema) *int64 {
 	}
 	v := int64(*s.Maximum)
 	return &v
+}
+
+// bodyFieldFromSchema constructs a DTOField for a body (schema-derived) property,
+// extracting schema constraints (minLength/maxLength/minimum/maximum) for
+// runtime validation in the generated handler.
+func bodyFieldFromSchema(name, jsonTag, goType string, required bool, doc string, prop *Schema) DTOField {
+	f := DTOField{
+		Name:     name,
+		JSONTag:  jsonTag,
+		GoType:   goType,
+		Required: required,
+		Doc:      doc,
+		Source:   "body",
+	}
+	if prop.MinLength != nil {
+		v := *prop.MinLength
+		f.MinLength = &v
+	}
+	if prop.MaxLength != nil {
+		v := *prop.MaxLength
+		f.MaxLength = &v
+	}
+	if prop.Minimum != nil {
+		v := *prop.Minimum
+		f.Minimum = &v
+	}
+	if prop.Maximum != nil {
+		v := *prop.Maximum
+		f.Maximum = &v
+	}
+	return f
 }

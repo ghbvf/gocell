@@ -4,7 +4,7 @@ package {{.PackageName}}
 
 import (
 	"net/http"
-{{- if hasQueryNumeric .Endpoint.QueryParams}}
+{{- if and (not .Endpoint.IsPagination) (hasQueryNumeric .Endpoint.QueryParams)}}
 	"strconv"
 {{- end}}
 {{- if hasPathParams .Endpoint}}
@@ -27,27 +27,27 @@ var contractSpec = wrapper.ContractSpec{
 	Path:      "{{.Endpoint.Path}}",
 }
 
-// HTTPHandler wires HTTP decode/encode + auth.Mount for {{.ContractID}}.
-type HTTPHandler struct {
+// Handler wires HTTP decode/encode + auth.Mount for {{.ContractID}}.
+type Handler struct {
 	svc    Service
 	policy auth.Policy
 }
 
-// NewHTTPHandler creates an HTTPHandler for {{.ContractID}}.
+// NewHandler creates a Handler for {{.ContractID}}.
 // policy may be nil — auth.Mount treats nil as "no per-route authorization guard";
 // use auth.PublicPolicy for unauthenticated public endpoints or supply a real policy.
-func NewHTTPHandler(svc Service, policy auth.Policy) *HTTPHandler {
-	return &HTTPHandler{svc: svc, policy: policy}
+func NewHandler(svc Service, policy auth.Policy) *Handler {
+	return &Handler{svc: svc, policy: policy}
 }
 
-// ServeHTTP implements http.Handler so *HTTPHandler can be used directly in tests
+// ServeHTTP implements http.Handler so *Handler can be used directly in tests
 // and as an http.Handler argument without wrapping.
-func (h *HTTPHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	h.handle(w, r)
 }
 
 // RegisterRoutes mounts the handler on mux via auth.Mount.
-func (h *HTTPHandler) RegisterRoutes(mux cell.RouteHandler) error {
+func (h *Handler) RegisterRoutes(mux cell.RouteHandler) error {
 	return auth.Mount(mux, auth.Route{
 		Contract: contractSpec,
 		Handler:  h,
@@ -55,7 +55,7 @@ func (h *HTTPHandler) RegisterRoutes(mux cell.RouteHandler) error {
 	})
 }
 
-func (h *HTTPHandler) handle(w http.ResponseWriter, r *http.Request) {
+func (h *Handler) handle(w http.ResponseWriter, r *http.Request) {
 	req := &Request{}
 {{- range .Endpoint.PathParams}}
 	{
@@ -80,7 +80,43 @@ func (h *HTTPHandler) handle(w http.ResponseWriter, r *http.Request) {
 		httputil.WriteDecodeError(r.Context(), w, err)
 		return
 	}
+{{- if hasBodyValidation .DTOs}}
+{{- range .DTOs}}{{if eq .Name "Request"}}{{range .Fields}}{{if isBodyField .}}
+{{- if hasMinLength .MinLength}}
+	if len(req.{{.Name}}) < {{derefInt .MinLength}} {
+		httputil.WriteDomainError(r.Context(), w, errcode.New(errcode.ErrValidationFailed, "{{.JSONTag}}: value too short"))
+		return
+	}
 {{- end}}
+{{- if hasMaxLength .MaxLength}}
+	if len(req.{{.Name}}) > {{derefInt .MaxLength}} {
+		httputil.WriteDomainError(r.Context(), w, errcode.New(errcode.ErrValidationFailed, "{{.JSONTag}}: value too long"))
+		return
+	}
+{{- end}}
+{{- if hasMinimum .Minimum}}
+	if req.{{.Name}} < {{derefInt64 .Minimum}} {
+		httputil.WriteDomainError(r.Context(), w, errcode.New(errcode.ErrValidationFailed, "{{.JSONTag}}: value below minimum"))
+		return
+	}
+{{- end}}
+{{- if hasMaximum .Maximum}}
+	if req.{{.Name}} > {{derefInt64 .Maximum}} {
+		httputil.WriteDomainError(r.Context(), w, errcode.New(errcode.ErrValidationFailed, "{{.JSONTag}}: value above maximum"))
+		return
+	}
+{{- end}}
+{{- end}}{{end}}{{end}}{{end}}
+{{- end}}
+{{- else if .Endpoint.IsPagination}}
+	page, err := httputil.ParsePageParams(r)
+	if err != nil {
+		httputil.WriteDomainError(r.Context(), w, err)
+		return
+	}
+	req.Cursor = page.Cursor
+	req.Limit = int64(page.Limit)
+{{- else}}
 {{- range .Endpoint.QueryParams}}
 {{- if eq .GoType "string"}}
 	req.{{.GoName}} = r.URL.Query().Get("{{.Name}}")
@@ -169,6 +205,7 @@ func (h *HTTPHandler) handle(w http.ResponseWriter, r *http.Request) {
 		}
 		req.{{.GoName}} = v
 	}
+{{- end}}
 {{- end}}
 {{- end}}
 	resp, err := h.svc.{{.Endpoint.HandlerMethod}}(r.Context(), req)

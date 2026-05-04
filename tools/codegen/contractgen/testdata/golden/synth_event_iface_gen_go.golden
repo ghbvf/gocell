@@ -9,7 +9,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/outbox"
 )
 
-// Handler is the business interface that subscribers of event.item-created.v1 must implement.
-type Handler interface {
+// EventHandler is the business interface that subscribers of event.item-created.v1 must implement.
+type EventHandler interface {
 	HandleItemCreated(ctx context.Context, entry outbox.Entry, payload *Payload) outbox.HandleResult
 }

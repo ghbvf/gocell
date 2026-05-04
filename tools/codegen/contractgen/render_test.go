@@ -533,6 +533,48 @@ func assertGolden(t *testing.T, path string, got []byte) {
 	}
 }
 
+// TestRender_Golden_Synth_KeywordConflict tests that a contract whose action segment
+// collides with a Go keyword (delete) generates package name "configdelete".
+func TestRender_Golden_Synth_KeywordConflict(t *testing.T) {
+	testDir := filepath.Join("testdata", "synth", "synth_http_keyword_conflict")
+	absTestDir, err := filepath.Abs(testDir)
+	if err != nil {
+		t.Fatalf("abs path: %v", err)
+	}
+
+	parser := metadata.NewParser(absTestDir)
+	p, err := parser.Parse()
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	contract := p.Contracts["http.config.delete.v1"]
+	if contract == nil {
+		t.Fatal("http.config.delete.v1 not found in synth fixture")
+	}
+
+	outputs := []string{"types_gen.go", "iface_gen.go", "handler_gen.go"}
+	for _, outFile := range outputs {
+		t.Run(outFile, func(t *testing.T) {
+			spec, err := BuildContractSpec(absTestDir, p, "http.config.delete.v1")
+			if err != nil {
+				t.Fatalf("BuildContractSpec: %v", err)
+			}
+			// Verify keyword sanitization.
+			if spec.PackageName != "configdelete" {
+				t.Errorf("PackageName = %q, want configdelete", spec.PackageName)
+			}
+			content := renderFile(t, spec, outFile)
+			goldenFile := goldenFilePath("synth_http_keyword_conflict", outFile)
+
+			if *updateGolden {
+				writeGolden(t, goldenFile, content)
+				return
+			}
+			assertGolden(t, goldenFile, content)
+		})
+	}
+}
+
 // --- A.9: BuildContractSpec integration tests using synth fixtures ---
 
 // TestBuildContractSpec_HTTP uses the synth_http_full fixture to verify

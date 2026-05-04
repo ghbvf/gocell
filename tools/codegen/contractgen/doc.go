@@ -14,4 +14,17 @@
 //
 // User code implements the generated interface. The generated handler wires
 // HTTP decode/encode + auth.Mount with a user-provided auth.Policy.
+//
+// # Cell attribution constraint
+//
+// Generated *Handler MUST be mounted from a cell-owned RouteGroup
+// (typically via the cellgen-generated cell_gen.go reg.RouteGroup wiring).
+// http_requests_total `cell` label depends on this:
+//
+//   - Mounted via reg.RouteGroup → CellAttribution middleware injects
+//     kernel/ctxkeys.CellID = <cellID>; metrics labeled cell=<cellID>.
+//   - Mounted standalone (e.g. http.Handle) → no CellID context, metrics
+//     fall back to the "_runtime" sentinel — silent observability bug.
+//
+// Reference: .claude/rules/gocell/observability.md "HTTP Metrics `cell` Label".
 package contractgen

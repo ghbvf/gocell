@@ -22,7 +22,7 @@ func newContractHandler(t testing.TB) (http.Handler, *recordingWriter) {
 	writer := &recordingWriter{}
 	svc, err := NewService(repo, slog.Default(), WithEmitter(mustEmitter(t, writer)), WithTxManager(&stubTxRunner{}), WithClock(clock.Real()))
 	require.NoError(t, err)
-	h := createv1.NewHTTPHandler(svc, nil)
+	h := createv1.NewHandler(svc, nil)
 	return h, writer
 }
 

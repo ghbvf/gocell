@@ -53,6 +53,18 @@ type DTOField struct {
 	Required bool
 	// Doc is an optional comment, used for format hints (uuid, date-time).
 	Doc string
+	// Source identifies where this field originates: "body", "path", or "query".
+	// Empty means body (legacy/default). Only body fields receive schema validation
+	// in the generated handler; path/query fields are validated at parse time.
+	Source string
+	// MinLength constrains string body fields (minimum character length).
+	MinLength *int
+	// MaxLength constrains string body fields (maximum character length).
+	MaxLength *int
+	// Minimum constrains integer body fields (inclusive lower bound).
+	Minimum *int64
+	// Maximum constrains integer body fields (inclusive upper bound).
+	Maximum *int64
 }
 
 // HTTPEndpointSpec holds HTTP-specific endpoint information.
@@ -74,6 +86,11 @@ type HTTPEndpointSpec struct {
 	HandlerMethod string
 	// HasBody is true when Method is POST, PUT, or PATCH.
 	HasBody bool
+	// IsPagination is true when the endpoint's query params are exactly
+	// cursor (string) + limit (integer) — the canonical pagination pattern.
+	// When true, the generated handler uses httputil.ParsePageParams instead
+	// of inline query param parsing.
+	IsPagination bool
 }
 
 // EventEndpointSpec holds event-specific endpoint information.

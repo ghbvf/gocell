@@ -647,6 +647,64 @@ func TestGenerate_WriteMode_HTTPFull(t *testing.T) {
 	}
 }
 
+// setupKeywordConflictRoot copies the synth_http_keyword_conflict fixture into a fresh
+// t.TempDir() and parses it. Returns (root, project).
+func setupKeywordConflictRoot(t *testing.T) (string, *metadata.ProjectMeta) {
+	t.Helper()
+	abs, err := filepath.Abs(filepath.Join("testdata", "synth", "synth_http_keyword_conflict"))
+	if err != nil {
+		t.Fatalf("abs path synth_http_keyword_conflict: %v", err)
+	}
+	root := t.TempDir()
+	copyDirIntoTemp(t, abs, root)
+	goMod := "module github.com/ghbvf/gocell\n\ngo 1.22\n"
+	if err := os.WriteFile(filepath.Join(root, "go.mod"), []byte(goMod), 0o644); err != nil {
+		t.Fatalf("write go.mod: %v", err)
+	}
+	p, err := metadata.NewParser(root).Parse()
+	if err != nil {
+		t.Fatalf("parse synth_http_keyword_conflict from tmp: %v", err)
+	}
+	return root, p
+}
+
+// TestGenerate_PackageNameKeywordSanitize verifies that a contract whose action segment
+// collides with a Go keyword (delete) is given a non-colliding package name via
+// the prev+keyword fallback rule.
+func TestGenerate_PackageNameKeywordSanitize(t *testing.T) {
+	t.Parallel()
+	root, p := setupKeywordConflictRoot(t)
+
+	// Verify the package name is "configdelete" and not the keyword "delete".
+	spec, err := BuildContractSpec(root, p, "http.config.delete.v1")
+	if err != nil {
+		t.Fatalf("BuildContractSpec: %v", err)
+	}
+	if spec.PackageName != "configdelete" {
+		t.Errorf("PackageName = %q, want configdelete", spec.PackageName)
+	}
+
+	res := mustGenerate(t, root, p, Options{})
+	// DELETE contract → 3 files (types, iface, handler).
+	if len(res.Generated) != 3 {
+		t.Errorf("expected 3 generated files for keyword-conflict contract, got %d: %v", len(res.Generated), res.Generated)
+	}
+	// Verify no generated file contains `package delete` (the colliding keyword).
+	for _, path := range res.Generated {
+		content, err := os.ReadFile(path) //nolint:gosec // test reads its own tmp file
+		if err != nil {
+			t.Errorf("ReadFile %s: %v", path, err)
+			continue
+		}
+		if strings.Contains(string(content), "package delete") {
+			t.Errorf("generated file %s contains banned package name 'delete': found in content", path)
+		}
+		if strings.Contains(string(content), "package configdelete") {
+			continue // correct
+		}
+	}
+}
+
 // TestGenerate_BuildSpecError_OneOf verifies that a contract whose request schema
 // contains an unsupported "oneOf" keyword causes Generate to return an error.
 func TestGenerate_BuildSpecError_OneOf(t *testing.T) {
