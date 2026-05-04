@@ -97,7 +97,12 @@ func runtimeBaseOptions(
 		bootstrap.WithAssembly(asm),
 		bootstrap.WithPublisher(shared.EventBus),
 		bootstrap.WithSubscriber(shared.EventBus),
-		bootstrap.WithConsumerMiddleware(consumerMiddlewares(shared, consumerBase)...),
+		// ConsumerBase is field-injected into SubscriberWithMiddleware (not a
+		// middleware list entry). It is the explicit EntryHandler→SubscriberHandler
+		// conversion boundary: idempotency Claim/Commit/Release + retry live here,
+		// after the business middleware chain.
+		bootstrap.WithConsumerBase(consumerBase),
+		bootstrap.WithConsumerMiddleware(consumerMiddlewares(shared)...),
 		bootstrap.WithSubscriptionValidator(obmetrics.ConfigEventOwnerValidator),
 		bootstrap.WithAdapterInfo(adapterInfo),
 		bootstrap.WithHealthRoutes(healthRouteOpts...),
@@ -112,10 +117,9 @@ func runtimeBaseOptions(
 	return opts
 }
 
-func consumerMiddlewares(shared *SharedDeps, consumerBase *outbox.ConsumerBase) []outbox.SubscriptionMiddleware {
+func consumerMiddlewares(shared *SharedDeps) []outbox.SubscriptionMiddleware {
 	return []outbox.SubscriptionMiddleware{
 		configEventConsumerMiddleware(shared.ConfigEventCollector),
-		consumerBase.AsMiddleware(),
 	}
 }
 

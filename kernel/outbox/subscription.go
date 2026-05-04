@@ -73,10 +73,15 @@ func (s Subscription) ObservabilityID() string {
 //
 // Apply in order: [0] is outermost, [len-1] is innermost.
 //
-// The next handler is SubscriberHandler (not EntryHandler) so that Settlement
-// flows through the middleware chain. Middleware that only observes metrics or
-// tracing can forward Settlement transparently: result, settlement := next(ctx, entry).
-// Business handlers (EntryHandler) never appear in the middleware chain —
-// they are lifted to SubscriberHandler by ConsumerBase.Wrap or EntryToSubscriberHandler
-// before being passed to SubscriberWithMiddleware.Subscribe.
-type SubscriptionMiddleware func(sub Subscription, next SubscriberHandler) SubscriberHandler
+// The next handler is EntryHandler (business signature). Middleware authors work
+// entirely in the business domain and do not see Settlement — it is an internal
+// concern of the Subscriber layer (adapters/rabbitmq, runtime/eventbus).
+// ConsumerBase is field-injected into SubscriberWithMiddleware and applied as
+// an explicit EntryHandler→SubscriberHandler conversion boundary after the
+// business middleware chain, not as a SubscriptionMiddleware entry.
+//
+// ref: ThreeDotsLabs/watermill message/router.go — HandlerMiddleware operates on
+// Message→Message; Ack/Nack is the router's exclusive responsibility.
+// ref: go-kratos/kratos middleware — middleware operates on Request→Reply;
+// gRPC status (settle equivalent) is the transport's exclusive responsibility.
+type SubscriptionMiddleware func(sub Subscription, next EntryHandler) EntryHandler

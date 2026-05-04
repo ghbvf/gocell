@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"errors"
-	"slices"
 	"testing"
 	"time"
 
@@ -36,11 +35,11 @@ func TestConfigEventConsumerMiddlewareUsesSubscriptionOwnerMetadata(t *testing.T
 		SliceID:       "configreceive",
 	}
 	entry := outbox.Entry{ID: "evt-target"}
-	wrapped := mw(sub, outbox.EntryToSubscriberHandler(func(context.Context, outbox.Entry) outbox.HandleResult {
+	wrapped := mw(sub, func(context.Context, outbox.Entry) outbox.HandleResult {
 		return outbox.HandleResult{Disposition: outbox.DispositionAck}
-	}))
+	})
 
-	result, _ := wrapped(context.Background(), entry)
+	result := wrapped(context.Background(), entry)
 	outbox.NotifySettlement(context.Background(), result, entry, outbox.DispositionAck, outbox.SettlementResultSuccess, nil)
 
 	require.Equal(t, []coreConfigEventSettlementRecord{{
@@ -73,17 +72,29 @@ func TestConsumerMiddlewares_ConfigEventSettlementRunsOutsideConsumerBase(t *tes
 	}, clock.Real())
 	require.NoError(t, err)
 
+	var capturedHandler outbox.SubscriberHandler
+	inner := &captureSubscriberHandler{onSubscribe: func(h outbox.SubscriberHandler) { capturedHandler = h }}
+
+	sub := outbox.Subscription{
+		Topic: "event.config.entry-upserted.v1", ConsumerGroup: "accesscore",
+		CellID: "accesscore", SliceID: "configreceive",
+	}
+
 	attempts := 0
-	entry := outbox.Entry{ID: "evt-retry-exhausted"}
-	wrapped := composeConsumerMiddleware(consumerMiddlewares(shared, consumerBase),
-		outbox.Subscription{Topic: "event.config.entry-upserted.v1", ConsumerGroup: "accesscore", CellID: "accesscore", SliceID: "configreceive"},
-		outbox.EntryToSubscriberHandler(func(context.Context, outbox.Entry) outbox.HandleResult {
+	wrappedSub := &outbox.SubscriberWithMiddleware{
+		Inner:        inner,
+		Middleware:   consumerMiddlewares(shared),
+		ConsumerBase: consumerBase,
+	}
+	require.NoError(t, wrappedSub.SubscribeEntry(context.Background(), sub,
+		func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
 			attempts++
 			return outbox.HandleResult{Disposition: outbox.DispositionRequeue, Err: errors.New("transient")}
-		}),
-	)
+		}))
+	require.NotNil(t, capturedHandler)
 
-	result, _ := wrapped(context.Background(), entry)
+	entry := outbox.Entry{ID: "evt-retry-exhausted"}
+	result, _ := capturedHandler(context.Background(), entry)
 	outbox.NotifySettlement(context.Background(), result, entry, result.Disposition, outbox.SettlementResultRetryExhausted, nil)
 
 	assert.Equal(t, 2, attempts)
@@ -103,18 +114,30 @@ func TestConsumerMiddlewares_PermanentErrorRecordedAsFinalRejectSettlement(t *te
 	}, clock.Real())
 	require.NoError(t, err)
 
-	entry := outbox.Entry{ID: "evt-permanent"}
-	wrapped := composeConsumerMiddleware(consumerMiddlewares(shared, consumerBase),
-		outbox.Subscription{Topic: "event.config.entry-upserted.v1", ConsumerGroup: "accesscore", CellID: "accesscore", SliceID: "configreceive"},
-		outbox.EntryToSubscriberHandler(func(context.Context, outbox.Entry) outbox.HandleResult {
+	var capturedHandler outbox.SubscriberHandler
+	inner := &captureSubscriberHandler{onSubscribe: func(h outbox.SubscriberHandler) { capturedHandler = h }}
+
+	sub := outbox.Subscription{
+		Topic: "event.config.entry-upserted.v1", ConsumerGroup: "accesscore",
+		CellID: "accesscore", SliceID: "configreceive",
+	}
+
+	wrappedSub := &outbox.SubscriberWithMiddleware{
+		Inner:        inner,
+		Middleware:   consumerMiddlewares(shared),
+		ConsumerBase: consumerBase,
+	}
+	require.NoError(t, wrappedSub.SubscribeEntry(context.Background(), sub,
+		func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
 			return outbox.HandleResult{
 				Disposition: outbox.DispositionReject,
 				Err:         outbox.NewPermanentError(errors.New("bad payload")),
 			}
-		}),
-	)
+		}))
+	require.NotNil(t, capturedHandler)
 
-	result, _ := wrapped(context.Background(), entry)
+	entry := outbox.Entry{ID: "evt-permanent"}
+	result, _ := capturedHandler(context.Background(), entry)
 	outbox.NotifySettlement(context.Background(), result, entry, result.Disposition, outbox.SettlementResultSuccess, nil)
 
 	assert.Equal(t, outbox.DispositionReject, result.Disposition)
@@ -123,17 +146,24 @@ func TestConsumerMiddlewares_PermanentErrorRecordedAsFinalRejectSettlement(t *te
 	}}, collector.settlementRecords)
 }
 
-func composeConsumerMiddleware(
-	mws []outbox.SubscriptionMiddleware,
-	sub outbox.Subscription,
-	handler outbox.SubscriberHandler,
-) outbox.SubscriberHandler {
-	wrapped := handler
-	for _, v := range slices.Backward(mws) {
-		wrapped = v(sub, wrapped)
-	}
-	return wrapped
+// captureSubscriberHandler is a minimal Subscriber that captures the handler passed to Subscribe.
+type captureSubscriberHandler struct {
+	onSubscribe func(outbox.SubscriberHandler)
 }
+
+func (c *captureSubscriberHandler) Setup(_ context.Context, _ outbox.Subscription) error { return nil }
+func (c *captureSubscriberHandler) Ready(_ outbox.Subscription) <-chan struct{} {
+	ch := make(chan struct{})
+	close(ch)
+	return ch
+}
+func (c *captureSubscriberHandler) Subscribe(_ context.Context, _ outbox.Subscription, h outbox.SubscriberHandler) error {
+	if c.onSubscribe != nil {
+		c.onSubscribe(h)
+	}
+	return nil
+}
+func (c *captureSubscriberHandler) Close(_ context.Context) error { return nil }
 
 type recordingCoreConfigEventCollector struct {
 	processRecords    []coreConfigEventProcessRecord

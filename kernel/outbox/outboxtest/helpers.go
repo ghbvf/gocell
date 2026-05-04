@@ -16,6 +16,12 @@ import (
 	"github.com/ghbvf/gocell/kernel/outbox"
 )
 
+// errSubscribeUnexpectedFmt is the format string used by helpers that report
+// unexpected Subscribe errors to t.Errorf. Extracted as a constant because it
+// appears in three distinct test helpers (startCollecting, subscribe,
+// subscribeWithHandler) — deduplication follows the three-occurrences rule.
+const errSubscribeUnexpectedFmt = "unexpected Subscribe error: %v"
+
 // waitForSubscription waits until the subscriber is ready to receive messages
 // for the given topic. It calls Setup to declare topology, then waits for the
 // Ready channel to close. For persistent brokers, Setup pre-declares queues so
@@ -219,7 +225,7 @@ func startCollecting(t *testing.T, ctx context.Context, sub outbox.Subscriber, t
 				return outbox.HandleResult{Disposition: outbox.DispositionAck}
 			}))
 		if err != nil && !errors.Is(err, context.Canceled) {
-			c.t.Errorf("unexpected Subscribe error: %v", err)
+			c.t.Errorf(errSubscribeUnexpectedFmt, err)
 		}
 	}()
 	<-ready
@@ -326,7 +332,7 @@ func (h *pubSubHarness) subscribeWithHandler(handler outbox.SubscriberHandler) {
 		close(ready)
 		err := h.Sub.Subscribe(ctx, outbox.Subscription{Topic: h.Topic}, wrapped)
 		if err != nil && !errors.Is(err, context.Canceled) {
-			h.T.Errorf("unexpected Subscribe error: %v", err)
+			h.T.Errorf(errSubscribeUnexpectedFmt, err)
 		}
 	}()
 	<-ready
@@ -359,7 +365,7 @@ func (h *pubSubHarness) subscribe(handler outbox.EntryHandler) {
 		close(ready)
 		err := h.Sub.Subscribe(ctx, outbox.Subscription{Topic: h.Topic}, wrapped)
 		if err != nil && !errors.Is(err, context.Canceled) {
-			h.T.Errorf("unexpected Subscribe error: %v", err)
+			h.T.Errorf(errSubscribeUnexpectedFmt, err)
 		}
 	}()
 	<-ready

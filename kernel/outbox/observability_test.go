@@ -500,18 +500,18 @@ func TestSubscriberWithMiddleware_BuiltInRestore_ZeroObservabilityIsNoOp(t *test
 func TestSubscriberWithMiddleware_RestoreIsOutermost(t *testing.T) {
 	cap := &captureSubscriber{}
 	var seenInMiddleware string
-	userMW := func(_ Subscription, next SubscriberHandler) SubscriberHandler {
-		return func(ctx context.Context, entry Entry) (HandleResult, Settlement) {
+	userMW := func(_ Subscription, next EntryHandler) EntryHandler {
+		return func(ctx context.Context, entry Entry) HandleResult {
 			seenInMiddleware, _ = ctxkeys.RequestIDFrom(ctx)
 			return next(ctx, entry)
 		}
 	}
 	wrapped := &SubscriberWithMiddleware{Inner: cap, Middleware: []SubscriptionMiddleware{userMW}}
 
-	require.NoError(t, wrapped.Subscribe(context.Background(), Subscription{Topic: "test.v1"},
-		EntryToSubscriberHandler(func(_ context.Context, _ Entry) HandleResult {
+	require.NoError(t, wrapped.SubscribeEntry(context.Background(), Subscription{Topic: "test.v1"},
+		func(_ context.Context, _ Entry) HandleResult {
 			return HandleResult{Disposition: DispositionAck}
-		})))
+		}))
 	require.NotNil(t, cap.handler)
 	_, _ = cap.handler(context.Background(), Entry{
 		ID:            "e1",

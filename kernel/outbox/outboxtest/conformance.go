@@ -814,23 +814,43 @@ func testSubscriberWithMiddleware(t *testing.T, _ Features, constructor PubSubCo
 	h := newHarness(t, constructor)
 
 	var middlewareCalled atomic.Bool
-	middleware := func(_ outbox.Subscription, next outbox.SubscriberHandler) outbox.SubscriberHandler {
-		return func(ctx context.Context, entry outbox.Entry) (outbox.HandleResult, outbox.Settlement) {
+	middleware := func(_ outbox.Subscription, next outbox.EntryHandler) outbox.EntryHandler {
+		return func(ctx context.Context, entry outbox.Entry) outbox.HandleResult {
 			middlewareCalled.Store(true)
 			return next(ctx, entry)
 		}
 	}
 
-	// Wrap inner subscriber with middleware.
-	h.Sub = &outbox.SubscriberWithMiddleware{
+	// SubscriberWithMiddleware.SubscribeEntry is the entry point for the business
+	// middleware pipeline. Use subscribeWithHandler to drive the inner subscriber
+	// directly; subscribe via SubscribeEntry in a goroutine, then signal the
+	// harness done channel so publishAndWait can proceed.
+	wrappedSub := &outbox.SubscriberWithMiddleware{
 		Inner:      h.Sub,
 		Middleware: []outbox.SubscriptionMiddleware{middleware},
 	}
 
-	h.subscribe(func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
-		h.signalDone()
-		return outbox.HandleResult{Disposition: outbox.DispositionAck}
-	})
+	ctx, cancel := context.WithCancel(t.Context())
+	h.cancel = cancel
+	t.Cleanup(cancel)
+
+	ready := make(chan struct{})
+	go func() {
+		defer close(h.subDone)
+		close(ready)
+		err := wrappedSub.SubscribeEntry(ctx,
+			outbox.Subscription{Topic: h.Topic},
+			func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+				h.signalDone()
+				return outbox.HandleResult{Disposition: outbox.DispositionAck}
+			},
+		)
+		if err != nil && !errors.Is(err, context.Canceled) {
+			t.Errorf(errSubscribeUnexpectedFmt, err)
+		}
+	}()
+	<-ready
+	waitForSubscription(t, ctx, h.Sub, h.Topic, "")
 
 	h.publishAndWait([]byte(`{"test":"middleware"}`))
 	assertTrue(t, middlewareCalled.Load(), "middleware should have been called")

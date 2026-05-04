@@ -47,11 +47,25 @@ func (b *Bootstrap) phase6StartEventRouter(runCtx context.Context, s *phaseState
 }
 
 // buildEventRouter creates the event router with middleware and validators.
+//
+// The SubscriberWithMiddleware wires three layers in order (innermost to outermost
+// within SubscribeEntry):
+//  1. Business middleware chain: ContractTracingMiddleware (outermost)
+//     followed by b.consumerMiddleware (caller-supplied business middleware).
+//     All operate on EntryHandler — they do not see Settlement.
+//  2. ConsumerBase: the explicit EntryHandler→SubscriberHandler conversion
+//     boundary. Field-injected via b.consumerBase (set by WithConsumerBase).
+//  3. Observability restore: built-in OUTERMOST step in SubscribeEntry — always
+//     applied after Inner.Subscribe is reached so every layer sees a populated ctx.
+//
+// ContractTracingMiddleware is outermost in the business middleware chain so the
+// contract span covers idempotency retries, skips, and lease-lost downgrades.
+// spec.Validate() panic fires at ContractTracingMiddleware construction (registration
+// time), not at first delivery — restored from K#12 first-pass regression (P1 fix).
 func (b *Bootstrap) buildEventRouter(sub outbox.Subscriber) *eventrouter.Router {
-	// Observability context restoration is the OUTERMOST step inside
-	// SubscriberWithMiddleware.Subscribe — built-in invariant, not a
-	// middleware here. ContractTracingMiddleware therefore observes a
-	// ctx already populated with entry.Observability fields.
+	// Business middleware chain: ContractTracingMiddleware is outermost so its
+	// span covers everything inside (ConsumerBase retry, idempotency skips).
+	// Caller-supplied middleware (b.consumerMiddleware) follows.
 	mws := []outbox.SubscriptionMiddleware{
 		eventrouter.ContractTracingMiddleware(b.wrapperTracer),
 	}
@@ -62,8 +76,9 @@ func (b *Bootstrap) buildEventRouter(sub outbox.Subscriber) *eventrouter.Router 
 		evtRouterOpts = append(evtRouterOpts, eventrouter.WithReadyTimeout(b.routerReadyTimeout))
 	}
 	evtRouter := eventrouter.New(&outbox.SubscriberWithMiddleware{
-		Inner:      sub,
-		Middleware: mws,
+		Inner:        sub,
+		Middleware:   mws,
+		ConsumerBase: b.consumerBase, // nil-safe: degrades to nil-Settlement pass-through
 	}, b.clock, evtRouterOpts...)
 
 	for _, v := range b.subscriptionValidators {

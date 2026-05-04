@@ -260,41 +260,6 @@ func NewConsumerBase(claimer idempotency.Claimer, config ConsumerBaseConfig, clk
 	}, nil
 }
 
-// AsMiddleware returns a SubscriptionMiddleware that applies this
-// ConsumerBase's idempotency/retry wrapping to any SubscriberHandler.
-// It can be used with SubscriberWithMiddleware to transparently inject
-// ConsumerBase behavior into a raw Subscriber pipeline.
-//
-// The middleware wraps the business EntryHandler (extracted from next via
-// the EntryHandler-typed closure that next was lifted from) — but since
-// SubscriberHandler is the common currency in the middleware chain, this
-// middleware calls Wrap on the inner EntryHandler and returns a SubscriberHandler
-// that includes Settlement in the return value.
-//
-// Precondition: `next` MUST originate from EntryToSubscriberHandler (i.e., its
-// Settlement return is always nil). If `next` already carries a real Settlement,
-// the innerEntry closure here discards it — callers should use cb.Wrap directly
-// to preserve an existing Settlement.
-//
-// Note: AsMiddleware wraps `next` which is already a SubscriberHandler.
-// When ConsumerBase is the innermost middleware, `next` is the business
-// handler lifted via EntryToSubscriberHandler. AsMiddleware extracts the
-// EntryHandler by invoking next and ignoring the (always nil) settlement, then
-// passes it to Wrap which re-adds idempotency and returns a proper Settlement.
-func (cb *ConsumerBase) AsMiddleware() SubscriptionMiddleware {
-	return func(sub Subscription, next SubscriberHandler) SubscriberHandler {
-		// Lift next SubscriberHandler back to EntryHandler for Wrap.
-		// The settlement returned by next (the inner lifted business handler) is
-		// always nil (from EntryToSubscriberHandler) — Wrap replaces it with a
-		// real Settlement from the Claimer.
-		innerEntry := func(ctx context.Context, entry Entry) HandleResult {
-			result, _ := next(ctx, entry)
-			return result
-		}
-		return cb.Wrap(sub, innerEntry)
-	}
-}
-
 // Wrap returns an EntryHandler that wraps the given business handler with
 // two-phase Claim/Commit/Release idempotency and retry with exponential backoff.
 //
@@ -521,6 +486,11 @@ func (cb *ConsumerBase) waitBackoff(ctx context.Context, topic string, entry Ent
 // retryLoop executes the handler with exponential backoff retries.
 // Settlement is no longer threaded through HandleResult — it is returned
 // by the Wrap closure alongside HandleResult via SubscriberHandler.
+//
+// SettlementObservers from the last handler invocation are propagated to the
+// final returned HandleResult so that business-middleware observers (e.g.
+// ConfigEventMiddleware) are notified after ConsumerBase resolves the final
+// broker disposition.
 func (cb *ConsumerBase) retryLoop(
 	ctx context.Context,
 	consumerGroup string,
@@ -533,8 +503,9 @@ func (cb *ConsumerBase) retryLoop(
 		lastResult = handler(ctx, entry)
 		if lastResult.Disposition == DispositionAck {
 			return HandleResult{
-				Disposition:   DispositionAck,
-				ProcessReason: lastResult.ProcessReason,
+				Disposition:         DispositionAck,
+				ProcessReason:       lastResult.ProcessReason,
+				SettlementObservers: lastResult.SettlementObservers,
 			}
 		}
 
@@ -545,9 +516,10 @@ func (cb *ConsumerBase) retryLoop(
 				slog.String(logKeyConsumerGroup, consumerGroup),
 				slog.Any("error", lastResult.Err))
 			return HandleResult{
-				Disposition:   DispositionReject,
-				Err:           lastResult.Err,
-				ProcessReason: lastResult.ProcessReason,
+				Disposition:         DispositionReject,
+				Err:                 lastResult.Err,
+				ProcessReason:       lastResult.ProcessReason,
+				SettlementObservers: lastResult.SettlementObservers,
 			}
 		}
 
@@ -576,9 +548,10 @@ func (cb *ConsumerBase) retryLoop(
 		slog.String("process_reason", "retry_exhausted"),
 		slog.Any("error", lastResult.Err))
 	return HandleResult{
-		Disposition:   DispositionReject,
-		Err:           lastResult.Err,
-		ProcessReason: "retry_exhausted",
+		Disposition:         DispositionReject,
+		Err:                 lastResult.Err,
+		ProcessReason:       "retry_exhausted",
+		SettlementObservers: lastResult.SettlementObservers,
 	}
 }
 
