@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+# pre-push: run hack/verify-generated.sh to catch SoT/generated drift before CI.
+#
+# Enable:    git config core.hooksPath .githooks
+# Disable:   git config --unset core.hooksPath
+# Bypass:    VERIFY_SKIP=generated git push
+#
+# Bypass envvar mirrors hack/make-rules/verify.sh — same convention as `make verify`.
+set -euo pipefail
+
+if [[ ",${VERIFY_SKIP:-}," == *",generated,"* ]]; then
+    echo "pre-push: VERIFY_SKIP=generated set, skipping" >&2
+    exit 0
+fi
+
+cd "$(git rev-parse --show-toplevel)"
+exec bash hack/verify-generated.sh
