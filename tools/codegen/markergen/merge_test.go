@@ -75,53 +75,39 @@ func TestMerge_MarkerPath(t *testing.T) {
 	}
 }
 
-// TestMerge_FallbackWhenNoCellGo tests that when cell.go is absent, Merge
-// falls back to yaml-derived bundle.
-func TestMerge_FallbackWhenNoCellGo(t *testing.T) {
+// TestMerge_EmptyBundleWhenNoCellGo tests that when cell.go is absent,
+// Merge returns an empty WireBundle (no fallback to yaml).
+func TestMerge_EmptyBundleWhenNoCellGo(t *testing.T) {
 	t.Parallel()
 	// cell.File references a dir that has no cell.go sibling.
 	project := buildProjectMeta(
 		map[string]*metadata.CellMeta{
-			"yamlcell": {
-				ID:   "yamlcell",
-				File: "cells/yamlcell/cell.yaml",
-				Listeners: []metadata.ListenerDeclMeta{
-					{Ref: "cell.PrimaryListener", Prefix: "/api/v1"},
-				},
+			"nocellgo": {
+				ID:   "nocellgo",
+				File: "cells/nocellgo/cell.yaml",
 			},
 		},
-		map[string]*metadata.SliceMeta{
-			"yamlcell/sliceX": {
-				ID:            "sliceX",
-				BelongsToCell: "yamlcell",
-				RouteMounts: []metadata.RouteMountMeta{
-					{Listener: "cell.PrimaryListener", SubPath: "/items", HandlerField: "h"},
-				},
-			},
-		},
+		map[string]*metadata.SliceMeta{},
 	)
 
-	// Use an empty temp dir as projectRoot — cells/yamlcell/cell.go won't exist.
+	// Use an empty temp dir as projectRoot — cells/nocellgo/cell.go won't exist.
 	tmp := t.TempDir()
 	bundles, err := Merge(tmp, project)
 	if err != nil {
-		t.Fatalf("Merge fallback: %v", err)
+		t.Fatalf("Merge: %v", err)
 	}
-	bundle, ok := bundles["yamlcell"]
+	bundle, ok := bundles["nocellgo"]
 	if !ok {
-		t.Fatal("bundle for yamlcell not found")
+		t.Fatal("bundle for nocellgo not found")
 	}
-	if len(bundle.Listeners) != 1 || bundle.Listeners[0].Ref != "cell.PrimaryListener" {
-		t.Errorf("fallback listeners=%v", bundle.Listeners)
-	}
-	if len(bundle.Routes) != 1 || bundle.Routes[0].SubPath != "/items" {
-		t.Errorf("fallback routes=%v", bundle.Routes)
+	if len(bundle.Listeners) != 0 || len(bundle.Routes) != 0 || len(bundle.Subscribes) != 0 {
+		t.Errorf("expected empty bundle when cell.go absent, got %+v", bundle)
 	}
 }
 
-// TestMerge_FallbackWhenNoMarkers tests that a cell.go with zero markers
-// triggers the yaml fallback.
-func TestMerge_FallbackWhenNoMarkers(t *testing.T) {
+// TestMerge_EmptyBundleWhenNoMarkers tests that a cell.go with zero markers
+// yields an empty WireBundle (no fallback to yaml).
+func TestMerge_EmptyBundleWhenNoMarkers(t *testing.T) {
 	t.Parallel()
 	td := testdataDir(t)
 	tmp := t.TempDir()
@@ -132,9 +118,6 @@ func TestMerge_FallbackWhenNoMarkers(t *testing.T) {
 		map[string]*metadata.CellMeta{
 			"emptycell": {
 				ID: "emptycell",
-				Listeners: []metadata.ListenerDeclMeta{
-					{Ref: "cell.InternalListener", Prefix: "/internal/v1"},
-				},
 			},
 		},
 		map[string]*metadata.SliceMeta{},
@@ -148,8 +131,8 @@ func TestMerge_FallbackWhenNoMarkers(t *testing.T) {
 		t.Fatalf("Merge: %v", err)
 	}
 	bundle := bundles["emptycell"]
-	if len(bundle.Listeners) != 1 || bundle.Listeners[0].Ref != "cell.InternalListener" {
-		t.Errorf("expected fallback listener, got %v", bundle.Listeners)
+	if len(bundle.Listeners) != 0 || len(bundle.Routes) != 0 || len(bundle.Subscribes) != 0 {
+		t.Errorf("expected empty bundle when no markers, got %+v", bundle)
 	}
 }
 

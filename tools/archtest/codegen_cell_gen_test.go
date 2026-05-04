@@ -54,9 +54,10 @@ const (
 
 // TestCodegenCellGen01_EnabledCellHasGen verifies CODEGEN-CELL-GEN-01.
 // A cell opts into codegen by setting goStructName in cell.yaml
-// (cell.GoStructName != ""). For every opted-in cell: the cell directory
-// must contain cell_gen.go, and each child slice with routeMounts must
-// reference a declared listener.
+// (cell.GoStructName != ""). For every opted-in cell the cell directory
+// must contain cell_gen.go. Wire declarations (listeners / routes / subscribes)
+// are now sourced exclusively from cell.go marker comments (K#05 W2);
+// the yaml-side listener/routeMount/subscribe fields have been removed.
 func TestCodegenCellGen01_EnabledCellHasGen(t *testing.T) {
 	t.Parallel()
 	root := findModuleRoot(t)
@@ -71,13 +72,6 @@ func TestCodegenCellGen01_EnabledCellHasGen(t *testing.T) {
 		if _, err := os.Stat(genPath); err != nil {
 			t.Errorf("CODEGEN-CELL-GEN-01: cell %q has goStructName set but missing %s; run `gocell generate cell %s`",
 				cell.ID, genPath, cell.ID)
-			continue
-		}
-		if len(cell.Listeners) == 0 {
-			// allow zero listeners only when no slice declares routeMounts
-			if hasAnyRouteMount(project, cell.ID) {
-				t.Errorf("CODEGEN-CELL-GEN-01: cell %q has slice routeMounts but cell.yaml declares no listeners", cell.ID)
-			}
 		}
 	}
 }
@@ -257,18 +251,6 @@ func mustParseProject(t *testing.T, root string) *metadata.ProjectMeta {
 		t.Fatalf("metadata parse failed: %v", err)
 	}
 	return p
-}
-
-func hasAnyRouteMount(p *metadata.ProjectMeta, cellID string) bool {
-	for _, s := range p.Slices {
-		if s.BelongsToCell != cellID {
-			continue
-		}
-		if len(s.RouteMounts) > 0 {
-			return true
-		}
-	}
-	return false
 }
 
 // findGeneratedCellFiles walks cells/ and examples/*/cells/ collecting
@@ -497,4 +479,3 @@ func exprString(expr ast.Expr) string {
 	}
 	return fmt.Sprintf("%T", expr)
 }
-

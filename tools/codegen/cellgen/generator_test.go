@@ -10,6 +10,7 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/metadata"
 	"github.com/ghbvf/gocell/tools/codegen"
+	"github.com/ghbvf/gocell/tools/codegen/markergen"
 )
 
 // updateGolden, when true, causes TestRenderCell_GoldenSynth to regenerate
@@ -271,7 +272,7 @@ func TestGenerate_RefuseOverwriteUserFile(t *testing.T) {
 // shared header template changes again after this golden was written.
 func TestRenderCell_GoldenSynth(t *testing.T) {
 	t.Parallel()
-	spec, err := BuildCellSpec(buildSyntheticProject(), "demo")
+	spec, err := BuildCellSpec(buildSyntheticProject(), "demo", syntheticBundle())
 	if err != nil {
 		t.Fatalf("BuildCellSpec: %v", err)
 	}
@@ -346,18 +347,27 @@ func initSyntheticRepo(t *testing.T) string {
 }
 
 // buildSyntheticProject mirrors what metadata.Parser would produce for a
-// minimal project with one cell + one slice.
+// minimal project with one cell + one slice (no wire fields in yaml).
 func buildSyntheticProject() *metadata.ProjectMeta {
 	cell := &metadata.CellMeta{
 		ID: "demo", Dir: "demo", File: "cells/demo/cell.yaml", GoStructName: "Demo",
-		Listeners: []metadata.ListenerDeclMeta{{Ref: "cell.PrimaryListener", Prefix: "/api/v1"}},
 	}
 	slc := &metadata.SliceMeta{
 		ID: "alpha", BelongsToCell: "demo", Dir: "alpha",
-		File:        "cells/demo/slices/alpha/slice.yaml",
-		RouteMounts: []metadata.RouteMountMeta{{Listener: "cell.PrimaryListener", SubPath: "/widgets", HandlerField: "alphaHandler"}},
+		File: "cells/demo/slices/alpha/slice.yaml",
 	}
 	return fixtureProject(cell, []*metadata.SliceMeta{slc}, nil)
+}
+
+// syntheticBundle returns the WireBundle for the synthetic project's "demo" cell.
+// Mirrors the marker declarations that would appear in a real cell.go.
+func syntheticBundle() markergen.WireBundle {
+	return markergen.WireBundle{
+		Listeners: []markergen.ListenerSpec{{Ref: "cell.PrimaryListener", Prefix: "/api/v1"}},
+		Routes: []markergen.RouteSpec{
+			{Slice: "alpha", Listener: "cell.PrimaryListener", SubPath: "/widgets", HandlerField: "alphaHandler"},
+		},
+	}
 }
 
 // mustContain fails the test (with truncated output) when needle is not in haystack.

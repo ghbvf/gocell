@@ -16,14 +16,10 @@ var knownMarkers = []string{"cell:listener", "slice:route", "slice:subscribe"}
 // listener / route / subscribe declarations, and projects them into a
 // per-cell WireBundle map keyed by cell ID.
 //
-// Transitional fallback: when a cell.go exists but declares no markers
-// (or when cell.go is absent), Merge derives a WireBundle from
-// ProjectMeta.Cells[*].Listeners + SliceMeta.{RouteMounts,Subscribes}.
-// This preserves cellgen output during the W2→W5 wave migration.
-// NO-WIRE-FIELDS-IN-YAML-01 archtest enforces yaml-side absence at ship.
-//
-// Drift detection (marker ↔ yaml double-declaration) is intentionally NOT
-// done here — NO-WIRE-FIELDS-IN-YAML-01 archtest handles that statically.
+// Cells whose cell.go is absent or declares no markers yield an empty
+// WireBundle — the yaml fallback path has been removed (W2 cleanup).
+// All five platform cells now declare markers; NO-WIRE-FIELDS-IN-YAML-01
+// archtest enforces yaml-side absence statically.
 func Merge(projectRoot string, project *metadata.ProjectMeta) (map[string]WireBundle, error) {
 	result := make(map[string]WireBundle, len(project.Cells))
 	var allErrs errList
@@ -32,8 +28,8 @@ func Merge(projectRoot string, project *metadata.ProjectMeta) (map[string]WireBu
 		cellGoPath := filepath.Join(projectRoot, filepath.Dir(cell.File), "cell.go")
 
 		if _, err := os.Stat(cellGoPath); err != nil {
-			// cell.go absent — use yaml fallback.
-			result[cellID] = fallbackBundle(cellID, cell, project)
+			// cell.go absent — empty WireBundle.
+			result[cellID] = WireBundle{}
 			continue
 		}
 
@@ -44,10 +40,8 @@ func Merge(projectRoot string, project *metadata.ProjectMeta) (map[string]WireBu
 		}
 
 		if len(markers) == 0 {
-			// cell.go exists but no markers — use yaml fallback (transition period).
-			// 过渡期 fallback；W4/W5 完成后 cell.yaml/slice.yaml 全无 wire 字段，
-			// markergen 必走 marker 路径；ship 时 NO-WIRE-FIELDS-IN-YAML-01 archtest 兜底。
-			result[cellID] = fallbackBundle(cellID, cell, project)
+			// cell.go exists but no markers — empty WireBundle.
+			result[cellID] = WireBundle{}
 			continue
 		}
 
@@ -202,39 +196,3 @@ func checkUnknownFields(m collectedMarker, kv map[string]string, allowed []strin
 	}
 }
 
-// fallbackBundle derives a WireBundle from ProjectMeta yaml fields.
-// Used during the W2→W5 transition when cell.go has no markers yet.
-func fallbackBundle(cellID string, cell *metadata.CellMeta, project *metadata.ProjectMeta) WireBundle {
-	var bundle WireBundle
-	for _, l := range cell.Listeners {
-		bundle.Listeners = append(bundle.Listeners, ListenerSpec{
-			Ref:    l.Ref,
-			Prefix: l.Prefix,
-		})
-	}
-	prefix := cellID + "/"
-	for sliceKey, slice := range project.Slices {
-		if !strings.HasPrefix(sliceKey, prefix) {
-			continue
-		}
-		for _, rm := range slice.RouteMounts {
-			bundle.Routes = append(bundle.Routes, RouteSpec{
-				Slice:        slice.ID,
-				Listener:     rm.Listener,
-				SubPath:      rm.SubPath,
-				Method:       rm.Method,
-				HandlerField: rm.HandlerField,
-			})
-		}
-		for _, sub := range slice.Subscribes {
-			bundle.Subscribes = append(bundle.Subscribes, SubscribeSpec{
-				Slice:      slice.ID,
-				Topic:      sub.Contract,
-				Handler:    sub.Handler,
-				Group:      sub.ConsumerGroup,
-				SliceField: sub.SliceField,
-			})
-		}
-	}
-	return bundle
-}
