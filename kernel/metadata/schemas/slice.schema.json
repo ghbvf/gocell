@@ -85,6 +85,83 @@
           }
         }
       }
+    },
+    "allowedFiles": {
+      "type": "array",
+      "description": "Optional whitelist of files allowed in this slice directory. Enforced by FMT-17.",
+      "items": { "type": "string" }
+    },
+    "consistencyLevel": {
+      "type": "string",
+      "description": "Optional override; defaults to the parent cell's consistencyLevel. Must be ≤ cell.consistencyLevel when set.",
+      "enum": ["L0", "L1", "L2", "L3", "L4"]
+    },
+    "routeMounts": {
+      "type": "array",
+      "description": "HTTP route mounts driven by codegen. Each entry mounts the slice handler on a parent-cell listener. Codegen aggregates routeMounts across all slices to emit reg.RouteGroup() calls.",
+      "default": [],
+      "items": {
+        "type": "object",
+        "required": ["listener", "subPath", "handlerField"],
+        "additionalProperties": false,
+        "properties": {
+          "listener": {
+            "type": "string",
+            "description": "Listener Go constant reference; must match a cell.yaml listeners[].ref entry.",
+            "pattern": "^cell\\.[A-Z][A-Za-z0-9_]*$"
+          },
+          "subPath": {
+            "type": "string",
+            "description": "Path relative to the listener prefix (e.g. /orders).",
+            "pattern": "^/[A-Za-z0-9._/{}-]*$"
+          },
+          "handlerField": {
+            "type": "string",
+            "description": "Field name on the parent cell struct holding the slice handler.",
+            "pattern": "^[a-z][A-Za-z0-9]*$"
+          },
+          "method": {
+            "type": "string",
+            "description": "Method name to call on the handler. Defaults to RegisterRoutes.",
+            "pattern": "^[A-Z][A-Za-z0-9]*$"
+          }
+        }
+      }
+    },
+    "subscribes": {
+      "type": "array",
+      "description": "Event subscriptions driven by codegen. Each entry produces one reg.Subscribe call in cell_gen.go.",
+      "default": [],
+      "items": {
+        "type": "object",
+        "required": ["contract", "sliceField", "handler"],
+        "additionalProperties": false,
+        "properties": {
+          "contract": {
+            "type": "string",
+            "description": "Event contract id."
+          },
+          "sliceField": {
+            "type": "string",
+            "description": "Field name on the parent cell struct holding the slice service.",
+            "pattern": "^[a-z][A-Za-z0-9]*$"
+          },
+          "handler": {
+            "type": "string",
+            "description": "Method name on the slice service.",
+            "pattern": "^[A-Z][A-Za-z0-9]*$"
+          },
+          "consumerGroup": {
+            "type": "string",
+            "description": "Consumer group identifier. Defaults to the parent cell id when empty."
+          },
+          "transport": {
+            "type": "string",
+            "description": "Event transport protocol. Defaults to \"amqp\" when empty. Override for non-AMQP transports.",
+            "pattern": "^[a-z][a-z0-9-]*$"
+          }
+        }
+      }
     }
   }
 }

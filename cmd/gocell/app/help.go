@@ -95,6 +95,13 @@ func printGenerateHelp() error {
 			"by walking the assembly's reachable packages with",
 			"go/types. --id=<assemblyID>",
 		}},
+		{"cell", []string{
+			"Render cell_gen.go and slice_gen.go from cell.yaml /",
+			"slice.yaml. <cellID> | --all [--dry-run | --verify].",
+			"--verify reports drift without writing; --dry-run prints",
+			"would-write file paths without writing.",
+			"CI: commit cell_gen.go and run with --verify to detect stale artifacts.",
+		}},
 		{"indexes", []string{"(not implemented)"}},
 	},
 		"Generated artifacts must be committed in HEAD; gocell verify generated",
@@ -127,6 +134,12 @@ func printVerifyHelp() error {
 			"metrics-schema.yaml against metadata-derived",
 			"expectations and HEAD. Fails on stale, staged-only,",
 			"or unexpected committed artifacts. [--module=<module>]",
+		}},
+		{"codegen-cell", []string{
+			"Verify cell_gen.go / slice_gen.go are in sync with",
+			"cell.yaml / slice.yaml. Default mode runs in a K8s-style",
+			"git worktree sandbox; --local skips the sandbox for fast",
+			"in-place verify (CI uses sandbox, devs use --local).",
 		}},
 	})
 	return nil

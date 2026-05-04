@@ -165,6 +165,15 @@ jobs:
         if: matrix.static_checks
         run: go run ./cmd/gocell verify generated
 
+      # K#04 codegen-cell gate: cell_gen.go / slice_gen.go must be in sync
+      # with cell.yaml / slice.yaml. Sandbox mode runs the generator inside
+      # an ephemeral git worktree at HEAD and uses `git status --porcelain`
+      # for drift detection, mirroring kubernetes/kubernetes
+      # hack/lib/verify-generated.sh.
+      - name: Verify cell codegen (K#04)
+        if: matrix.static_checks
+        run: ./hack/verify-codegen-cell.sh
+
       # NOTE: Kernel coverage gate re-runs `go test -cover ./kernel/...`
       # deliberately — it is not a duplicate of the Test step. The gate requires
       # in-package kernel coverage (each package's tests of itself), while the

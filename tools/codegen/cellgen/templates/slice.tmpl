@@ -1,0 +1,18 @@
+{{template "header" .}}
+
+import (
+	"context"
+
+	"github.com/ghbvf/gocell/kernel/outbox"
+)
+
+// Service is the interface {{ .SliceID }} must implement.
+// Concrete implementation lives in service.go (hand-written); this interface
+// keeps the cell-side reference typed so cell_gen.go's reg.Subscribe call
+// fails the build if the slice loses or renames a handler method.
+type Service interface {
+{{- range .Handlers }}
+	// {{ .MethodName }} handles {{ .ContractID }}.
+	{{ .MethodName }}(ctx context.Context, e outbox.Entry) outbox.HandleResult
+{{- end }}
+}

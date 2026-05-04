@@ -13,6 +13,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/assembly"
 	"github.com/ghbvf/gocell/kernel/governance"
 	"github.com/ghbvf/gocell/kernel/metadata"
+	"github.com/ghbvf/gocell/tools/codegen/cellgen"
 	"github.com/ghbvf/gocell/tools/metricschema"
 )
 
@@ -209,8 +210,56 @@ func ExpectedArtifacts(root, module string, project *metadata.ProjectMeta) ([]Ar
 	// macOS and Linux due to a known internal-test-import quirk, so any
 	// committed copy would deterministically drift cross-platform. See
 	// docs/guides/devtools-catalog.md (Build-tag stub design).
+
+	// K#04 cellgen outputs: cell_gen.go (and slice_gen.go for slices that
+	// declare event subscribes) for every cell that opted into codegen by
+	// setting goStructName in cell.yaml. Reuse cellgen.BuildCellSpec and
+	// the cellgen render path so the manifest contents stay byte-identical
+	// to what `gocell generate cell --all` would write — drift detection
+	// then works as a stale-content check + missing-file check + reverse
+	// enumeration check, all from the same single source of truth.
+	cellgenArtifacts, err := expectedCellgenArtifacts(root, project)
+	if err != nil {
+		return nil, fmt.Errorf("expected cellgen artifacts: %w", err)
+	}
+	artifacts = append(artifacts, cellgenArtifacts...)
+
 	if err := validateArtifactPaths(root, artifacts); err != nil {
 		return nil, err
+	}
+	return artifacts, nil
+}
+
+// expectedCellgenArtifacts derives the manifest entries for K#04
+// cellgen-owned files (cell_gen.go and slice_gen.go). For each cell with
+// GoStructName set, it renders the would-be content via cellgen and emits
+// one Artifact per produced file. Cells without GoStructName are not
+// opted into codegen and contribute nothing to the manifest — matching
+// the cellgen.Generate() skip semantics.
+func expectedCellgenArtifacts(root string, project *metadata.ProjectMeta) ([]Artifact, error) {
+	cellIDs := make([]string, 0, len(project.Cells))
+	for id, c := range project.Cells {
+		if c.GoStructName == "" {
+			continue
+		}
+		cellIDs = append(cellIDs, id)
+	}
+	sort.Strings(cellIDs)
+
+	artifacts := make([]Artifact, 0, len(cellIDs)*2)
+	for _, id := range cellIDs {
+		cellPaths, err := cellgen.RenderCellArtifacts(root, project, id)
+		if err != nil {
+			return nil, fmt.Errorf("cellgen artifacts for %q: %w", id, err)
+		}
+		for _, ca := range cellPaths {
+			artifacts = append(artifacts, Artifact{
+				AssemblyID: "",
+				Kind:       ca.Kind,
+				Path:       filepath.ToSlash(ca.RelPath),
+				Content:    ca.Content,
+			})
+		}
 	}
 	return artifacts, nil
 }

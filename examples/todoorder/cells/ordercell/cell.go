@@ -27,8 +27,7 @@ const (
 	RoleCustomer = dto.RoleCustomer
 )
 
-// Compile-time interface check.
-var _ cell.Cell = (*OrderCell)(nil)
+// Compile-time interface check lives in cell_gen.go (DO NOT EDIT).
 
 // WithCursorCodec sets the cursor codec for pagination.
 func WithCursorCodec(c *query.CursorCodec) Option {
@@ -91,13 +90,18 @@ func NewOrderCell(opts ...Option) *OrderCell {
 	return c
 }
 
-// Init sets up repositories, slice services, handlers, and registers routes
-// into reg.
-func (c *OrderCell) Init(ctx context.Context, reg cell.Registry) error {
-	if err := c.BaseCell.Init(ctx, reg); err != nil {
-		return err
-	}
-
+// initInternal is the K#04 codegen escape hatch: business init that cannot
+// be generated (emitter resolve, slice service construction, codec defaults).
+// cell_gen.go::Init calls it after BaseCell.Init and before mounting the
+// generated reg.RouteGroup() blocks. This is a permanent convention, not a
+// transitional shim — slice/handler instantiation and adapter wiring stay
+// hand-written.
+//
+// ctx is part of the contract because cells that ping adapters (postgres,
+// vault) at init time need it; ordercell currently does not.
+//
+//nolint:unparam // ctx is a contract parameter; unused here, used by other cells
+func (c *OrderCell) initInternal(ctx context.Context, reg cell.Registry) error {
 	durabilityMode := reg.DurabilityMode()
 
 	if err := c.resolveOutboxDeps(durabilityMode); err != nil {
@@ -150,29 +154,6 @@ func (c *OrderCell) Init(ctx context.Context, reg cell.Registry) error {
 	}
 	c.queryHandler = orderquery.NewHandler(querySvc)
 	c.AddSlice(cell.NewBaseSlice("orderquery", "ordercell", cell.L0))
-
-	// Register route groups.
-	//
-	// ref: kubernetes/kubernetes pkg/endpoints/installer.go — one installer per
-	// resource owns its own route + authz declaration.
-	// ref: go-zero rest/server.go AddRoutes — per-listener route declaration.
-	reg.RouteGroup(cell.RouteGroup{
-		Listener: cell.PrimaryListener,
-		Prefix:   "/api/v1",
-		Register: func(mux cell.RouteMux) error {
-			var firstErr error
-			captureErr := func(err error) {
-				if err != nil && firstErr == nil {
-					firstErr = err
-				}
-			}
-			mux.Route("/orders", func(orders cell.RouteMux) {
-				captureErr(c.createHandler.RegisterRoutes(orders))
-				captureErr(c.queryHandler.RegisterRoutes(orders))
-			})
-			return firstErr
-		},
-	})
 
 	return nil
 }

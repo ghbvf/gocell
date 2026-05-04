@@ -17,16 +17,37 @@ import (
 // governance rules (REF-04) can compare filesystem truth against cell.id
 // without being fooled by a path/id split.
 type CellMeta struct {
-	ID               string         `yaml:"id"`
-	Type             string         `yaml:"type"`             // "core"|"edge"|"support"
-	ConsistencyLevel string         `yaml:"consistencyLevel"` // "L0"-"L4"
-	DurabilityMode   string         `yaml:"durabilityMode"`   // "demo"|"durable" (advisory for L2+)
-	Owner            OwnerMeta      `yaml:"owner"`
-	Schema           SchemaMeta     `yaml:"schema"`
-	Verify           CellVerifyMeta `yaml:"verify"`
-	L0Dependencies   []L0DepMeta    `yaml:"l0Dependencies"`
-	Dir              string         `yaml:"-"` // directory segment under cells/, set by parser
-	File             string         `yaml:"-"` // parsed cell.yaml path relative to project root
+	ID               string             `yaml:"id"`
+	Type             string             `yaml:"type"`             // "core"|"edge"|"support"
+	ConsistencyLevel string             `yaml:"consistencyLevel"` // "L0"-"L4"
+	DurabilityMode   string             `yaml:"durabilityMode"`   // "demo"|"durable" (advisory for L2+)
+	Owner            OwnerMeta          `yaml:"owner"`
+	Schema           SchemaMeta         `yaml:"schema"`
+	Verify           CellVerifyMeta     `yaml:"verify"`
+	L0Dependencies   []L0DepMeta        `yaml:"l0Dependencies"`
+	Listeners        []ListenerDeclMeta `yaml:"listeners,omitempty"`
+	// GoStructName is a schema extension consumed by tools/codegen — kernel
+	// itself does not interpret its value. Cells that opt into K#04 codegen
+	// MUST set this; non-codegen cells leave it empty. There is no reliable
+	// automatic mapping from a lowercased cell id to its conventional CamelCase
+	// Go type (e.g. "ordercell" → "OrderCell"), which is why explicit
+	// declaration is required.
+	GoStructName string `yaml:"goStructName,omitempty"`
+	Dir          string `yaml:"-"` // directory segment under cells/, set by parser
+	File         string `yaml:"-"` // parsed cell.yaml path relative to project root
+}
+
+// ListenerDeclMeta declares a (listener, prefix) pair used by a Cell to host
+// HTTP routes. Codegen aggregates this with each slice's RouteMounts to emit
+// reg.RouteGroup() calls in cell_gen.go.
+//
+// Ref is a Go constant reference rendered verbatim into the generated source.
+// Valid values: cell.PrimaryListener, cell.InternalListener, cell.HealthListener
+// (see kernel/cell package for the full ListenerRef enum).
+// Prefix is the URL path mounted on the listener, e.g. "/api/v1".
+type ListenerDeclMeta struct {
+	Ref    string `yaml:"ref"`
+	Prefix string `yaml:"prefix"`
 }
 
 // OwnerMeta identifies the team responsible for a Cell or Journey.
@@ -63,13 +84,47 @@ type SliceMeta struct {
 	ID            string `yaml:"id"`
 	BelongsToCell string `yaml:"belongsToCell"`
 	// ConsistencyLevel: "L0"-"L4"; if empty, inherits cell.ConsistencyLevel; if set, MUST be ≤ cell.ConsistencyLevel
-	ConsistencyLevel string          `yaml:"consistencyLevel,omitempty"`
-	ContractUsages   []ContractUsage `yaml:"contractUsages"`
-	Verify           SliceVerifyMeta `yaml:"verify"`
-	AllowedFiles     []string        `yaml:"allowedFiles,omitempty"`
-	Dir              string          `yaml:"-"` // slice directory segment, set by parser
-	CellDir          string          `yaml:"-"` // parent cell directory segment, set by parser
-	File             string          `yaml:"-"` // parsed slice.yaml path relative to project root
+	ConsistencyLevel string              `yaml:"consistencyLevel,omitempty"`
+	ContractUsages   []ContractUsage     `yaml:"contractUsages"`
+	Verify           SliceVerifyMeta     `yaml:"verify"`
+	AllowedFiles     []string            `yaml:"allowedFiles,omitempty"`
+	RouteMounts      []RouteMountMeta    `yaml:"routeMounts,omitempty"`
+	Subscribes       []SubscribeDeclMeta `yaml:"subscribes,omitempty"`
+	Dir              string              `yaml:"-"` // slice directory segment, set by parser
+	CellDir          string              `yaml:"-"` // parent cell directory segment, set by parser
+	File             string              `yaml:"-"` // parsed slice.yaml path relative to project root
+}
+
+// RouteMountMeta declares a single HTTP route mount: this slice's handler
+// (HandlerField on the parent cell struct) is mounted at SubPath under the
+// listener identified by Listener (which must match a CellMeta.Listeners ref).
+//
+// Codegen aggregates RouteMounts across all slices in a cell to emit
+// reg.RouteGroup() calls in cell_gen.go.
+//
+// Method names the registration method on the handler. When empty the codegen
+// defaults to "RegisterRoutes". Example: RegisterRoutes (default),
+// RegisterInternalRoutes.
+type RouteMountMeta struct {
+	Listener     string `yaml:"listener"`
+	SubPath      string `yaml:"subPath"`
+	HandlerField string `yaml:"handlerField"`
+	Method       string `yaml:"method,omitempty"`
+}
+
+// SubscribeDeclMeta declares an event subscription owned by this slice.
+//
+// Codegen renders one reg.Subscribe(spec, c.<SliceField>.<Handler>, ...) call
+// per Subscribes entry in cell_gen.go. ConsumerGroup defaults to the parent
+// cell ID when empty. Transport defaults to "amqp" when empty.
+type SubscribeDeclMeta struct {
+	Contract      string `yaml:"contract"`
+	SliceField    string `yaml:"sliceField"`
+	Handler       string `yaml:"handler"`
+	ConsumerGroup string `yaml:"consumerGroup,omitempty"`
+	// Transport is the event transport protocol. When empty, codegen defaults
+	// to "amqp" (the current GoCell convention). Override for non-AMQP transports.
+	Transport string `yaml:"transport,omitempty"`
 }
 
 // ContractUsage declares a Slice's participation in a Contract.
