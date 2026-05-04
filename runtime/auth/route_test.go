@@ -413,6 +413,48 @@ func TestMount_ReturnsErrorOnPartialSegmentPrefix(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestMount_ReturnsErrorOnUnrecognizedMethod(t *testing.T) {
+	// "FETCH" is uppercase (passes the ToUpper check) but not in validRouteMethods.
+	err := Mount(newCaptureMux(), Route{
+		Contract: wrapper.ContractSpec{
+			ID: "http.x.v1", Kind: "http", Transport: "http",
+			Method: "FETCH", Path: "/x",
+		},
+		Handler: noopHandler,
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "not recognized")
+}
+
+func TestMount_ReturnsErrorOnPublicWithPasswordResetExempt(t *testing.T) {
+	err := Mount(newCaptureMux(), Route{
+		Contract:            loginContractSpec(),
+		Handler:             noopHandler,
+		Public:              true,
+		PasswordResetExempt: true,
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "PasswordResetExempt")
+}
+
+func TestMount_ReturnsErrorOnEmptyPath(t *testing.T) {
+	err := Mount(newCaptureMux(), Route{
+		Contract: wrapper.ContractSpec{
+			ID:   "http.x.v1",
+			Kind: "http", Transport: "http",
+			Method: "GET",
+			Path:   "",
+		},
+		Handler: noopHandler,
+	})
+	require.Error(t, err)
+}
+
+func TestIsPathSegmentPrefix_LenEqual(t *testing.T) {
+	// fullPath == prefix → true; and when len(fullPath) < len(prefix) → false.
+	assert.False(t, isPathSegmentPrefix("/api", "/api/v1"))
+}
+
 func TestMount_AcceptsValidSegmentPrefix(t *testing.T) {
 	mux := newPrefixedCaptureMux("/api/v1/access")
 	require.NotPanics(t, func() {

@@ -3,6 +3,7 @@ package configreceive
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"testing"
 
@@ -352,6 +353,99 @@ func TestHandleEntryUpserted_ConfigEventMetricsOutcomes(t *testing.T) {
 			assert.Equal(t, tt.wantRecords, collector.records)
 		})
 	}
+}
+
+// TestIsPermanentAuthFailure tests the isPermanentAuthFailure helper directly.
+func TestIsPermanentAuthFailure(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"nil error", nil, false},
+		{"plain error", errors.New("some error"), false},
+		{"errcode ErrAuthUnauthorized", errcode.New(errcode.ErrAuthUnauthorized, "401"), true},
+		{"errcode ErrAuthForbidden", errcode.New(errcode.ErrAuthForbidden, "403"), true},
+		{"errcode other code", errcode.New(errcode.ErrConfigNotFound, "not found"), false},
+		{"wrapped ErrAuthUnauthorized", fmt.Errorf("wrap: %w", errcode.New(errcode.ErrAuthUnauthorized, "401")), true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, isPermanentAuthFailure(tt.err))
+		})
+	}
+}
+
+// TestHandleEntryUpserted_WithConfigGetter_PermanentAuth401 asserts that a 401
+// from ConfigGetter causes DispositionReject + PermanentError.
+func TestHandleEntryUpserted_WithConfigGetter_PermanentAuth401(t *testing.T) {
+	stub := &stubConfigGetter{
+		err: errcode.New(errcode.ErrAuthUnauthorized, "service token rejected"),
+	}
+	svc := NewService(slog.Default(), WithConfigGetter(stub))
+
+	entry := outbox.Entry{
+		ID:      "evt-auth-401",
+		Topic:   TopicConfigEntryUpserted,
+		Payload: []byte(`{"key":"jwt.ttl","version":1,"actorId":"adm-1"}`),
+	}
+	result := svc.HandleEntryUpserted(context.Background(), entry)
+	assert.Equal(t, outbox.DispositionReject, result.Disposition, "401 must Reject (permanent)")
+	require.Error(t, result.Err)
+
+	var permErr *outbox.PermanentError
+	assert.True(t, errors.As(result.Err, &permErr), "must wrap PermanentError")
+}
+
+// TestHandleEntryUpserted_WithConfigGetter_PermanentAuth403 asserts that a 403
+// from ConfigGetter causes DispositionReject + PermanentError.
+func TestHandleEntryUpserted_WithConfigGetter_PermanentAuth403(t *testing.T) {
+	stub := &stubConfigGetter{
+		err: errcode.New(errcode.ErrAuthForbidden, "caller_cell not in allowlist"),
+	}
+	svc := NewService(slog.Default(), WithConfigGetter(stub))
+
+	entry := outbox.Entry{
+		ID:      "evt-auth-403",
+		Topic:   TopicConfigEntryUpserted,
+		Payload: []byte(`{"key":"jwt.ttl","version":1,"actorId":"adm-1"}`),
+	}
+	result := svc.HandleEntryUpserted(context.Background(), entry)
+	assert.Equal(t, outbox.DispositionReject, result.Disposition, "403 must Reject (permanent)")
+	require.Error(t, result.Err)
+
+	var permErr *outbox.PermanentError
+	assert.True(t, errors.As(result.Err, &permErr), "must wrap PermanentError")
+}
+
+// TestWithConfigEventCollector_NilCollector verifies that passing nil to
+// WithConfigEventCollector sets the noop collector (branch coverage).
+func TestWithConfigEventCollector_NilCollector(t *testing.T) {
+	svc := NewService(slog.Default(), WithConfigEventCollector(nil))
+	require.NotNil(t, svc)
+	// Calling through the service must not panic (noop collector is set).
+	entry := outbox.Entry{
+		ID:      "evt-noop",
+		Topic:   TopicConfigEntryUpserted,
+		Payload: []byte(`{"key":"jwt.ttl","version":1,"actorId":"adm-1"}`),
+	}
+	result := svc.HandleEntryUpserted(context.Background(), entry)
+	assert.Equal(t, outbox.DispositionAck, result.Disposition)
+}
+
+// TestRecordConfigEventProcess_NilCollector covers the nil-collector guard
+// in recordConfigEventProcess (defensive branch that is not reachable through
+// the public constructor but is reachable from the same-package test).
+func TestRecordConfigEventProcess_NilCollector(t *testing.T) {
+	// Construct a Service with a nil configEventCollector directly (bypassing
+	// NewService which always installs the noop fallback). This is the only
+	// way to exercise the nil-guard in recordConfigEventProcess.
+	svc := &Service{
+		logger:               slog.Default(),
+		configEventCollector: nil, // intentionally nil — exercises nil guard
+	}
+	// Must not panic.
+	svc.recordConfigEventProcess(context.Background(), obmetrics.ConfigEventProcessReasonAck)
 }
 
 func TestHandleEntryDeleted_ConfigEventMetricsOutcomes(t *testing.T) {

@@ -149,3 +149,46 @@ func TestContractSpec_Validate_InternalWithClientsOK(t *testing.T) {
 		t.Fatalf("expected no error for valid internal spec with Clients, got: %v", err)
 	}
 }
+
+// TestContractSpec_Validate_InvalidClientID tests that Clients containing
+// invalid cell-ID strings are rejected by validateHTTP → isCellIDLike.
+// Note: validateHTTP applies strings.ToLower before calling isCellIDLike, so
+// uppercase-only violations (e.g. "Abc") are normalised and pass. Only
+// characters that remain illegal after lowercasing (digits-first, hyphens-first,
+// underscores, punctuation, empty) trigger the error.
+func TestContractSpec_Validate_InvalidClientID(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name    string
+		clients []string
+		wantErr bool
+	}{
+		{"empty string client", []string{""}, true},
+		{"starts with digit", []string{"1abc"}, true},
+		{"starts with hyphen", []string{"-abc"}, true},
+		{"contains underscore", []string{"ab_c"}, true},
+		{"contains exclamation", []string{"ab!c"}, true},
+		{"valid single letter", []string{"a"}, false},
+		{"valid lowercase with digits and hyphens", []string{"ab-1-cd"}, false},
+		{"valid uppercase normalised to lowercase", []string{"Accesscore"}, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			spec := wrapper.ContractSpec{
+				ID:        "http.test.internal.v1",
+				Kind:      "http",
+				Transport: "http",
+				Method:    "GET",
+				Path:      "/internal/v1/foo",
+				Clients:   tc.clients,
+			}
+			err := spec.Validate()
+			if tc.wantErr && err == nil {
+				t.Fatalf("expected error for Clients=%v, got nil", tc.clients)
+			}
+			if !tc.wantErr && err != nil {
+				t.Fatalf("unexpected error for Clients=%v: %v", tc.clients, err)
+			}
+		})
+	}
+}
