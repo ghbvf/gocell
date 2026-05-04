@@ -6,13 +6,27 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/ghbvf/gocell/kernel/metadata"
+	"github.com/ghbvf/gocell/tools/codegen/cellgen"
 )
+
+// preRenderCell generates all cell scaffolds for the project at root.
+// Used by tests to set up a "verify clean" state before running verify commands.
+func preRenderCell(t *testing.T, root string) {
+	t.Helper()
+	project, err := metadata.NewParser(root).Parse()
+	if err != nil {
+		t.Fatalf("pre-render metadata parse: %v", err)
+	}
+	if _, err := cellgen.Generate(root, project, cellgen.Options{Verify: false}); err != nil {
+		t.Fatalf("pre-render generateAll: %v", err)
+	}
+}
 
 // minimalCodegenProject creates a fake project at root with one cell that has
 // goStructName set (opted into codegen), and writes the matching cell_gen.go
-// in advance via `gocell generate cell`. Returns once the project is at a
-// "verify clean" state. Used by --local + sandbox verify tests as the
-// happy-path baseline.
+// in advance. Returns once the project is at a "verify clean" state.
 func minimalCodegenProject(t *testing.T) string {
 	t.Helper()
 	root := t.TempDir()
@@ -46,9 +60,7 @@ func minimalCodegenProject(t *testing.T) string {
 	}
 
 	// Pre-render cell_gen.go so the verify test starts in a clean state.
-	if _, err := generateAll(root, false); err != nil {
-		t.Fatalf("pre-render generateAll: %v", err)
-	}
+	preRenderCell(t, root)
 	return root
 }
 

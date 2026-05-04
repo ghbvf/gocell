@@ -6,7 +6,22 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/ghbvf/gocell/kernel/metadata"
+	"github.com/ghbvf/gocell/tools/codegen/contractgen"
 )
+
+// preRenderContracts generates all opted-in contracts for the project at root.
+func preRenderContracts(t *testing.T, root string) {
+	t.Helper()
+	project, err := metadata.NewParser(root).Parse()
+	if err != nil {
+		t.Fatalf("pre-render metadata parse: %v", err)
+	}
+	if _, err := contractgen.Generate(root, project, contractgen.Options{Verify: false}); err != nil {
+		t.Fatalf("pre-render generateAllContracts: %v", err)
+	}
+}
 
 // minimalCodegenContractProjectClean creates a minimal project with one
 // Codegen=true contract and pre-renders the generated files, leaving the
@@ -16,9 +31,7 @@ func minimalCodegenContractProjectClean(t *testing.T) string {
 	root, _ := minimalCodegenContractProject(t)
 
 	// Pre-render to produce up-to-date generated files.
-	if _, err := generateAllContracts(root, false); err != nil {
-		t.Fatalf("pre-render generateAllContracts: %v", err)
-	}
+	preRenderContracts(t, root)
 	return root
 }
 

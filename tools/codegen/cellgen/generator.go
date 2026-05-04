@@ -50,6 +50,12 @@ type Result struct {
 	Drifted []string
 }
 
+// GeneratedFiles satisfies the cmd/gocell/app.CodegenResult interface.
+func (r Result) GeneratedFiles() []string { return r.Generated }
+
+// DriftedFiles satisfies the cmd/gocell/app.CodegenResult interface.
+func (r Result) DriftedFiles() []string { return r.Drifted }
+
 // Generate runs the cellgen pipeline against the parsed project.
 //
 //   - Selects cells: OnlyCell or all in project.Cells (deterministically ordered).
