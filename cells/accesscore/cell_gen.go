@@ -64,8 +64,8 @@ func (c *AccessCore) Init(ctx context.Context, reg cell.Registry) error {
 			})
 			mux.Route("/sessions", func(s cell.RouteMux) {
 				captureErr(c.loginHandler.RegisterRoutes(s))
-				captureErr(c.logoutHandler.RegisterRoutes(s))
 				captureErr(c.refreshHandler.RegisterRoutes(s))
+				captureErr(c.logoutHandler.RegisterRoutes(s))
 			})
 			mux.Route("/setup", func(s cell.RouteMux) {
 				captureErr(c.setupHandler.RegisterRoutes(s))

@@ -114,7 +114,14 @@ func Generate(root string, project *metadata.ProjectMeta, opts Options) (Result,
 
 // generateOneCell renders cell_gen.go and per-slice slice_gen.go for the
 // given cell, appending outcomes to res.
-func generateOneCell(root string, project *metadata.ProjectMeta, cell *metadata.CellMeta, bundle markergen.WireBundle, opts Options, res *Result) error {
+func generateOneCell(
+	root string,
+	project *metadata.ProjectMeta,
+	cell *metadata.CellMeta,
+	bundle markergen.WireBundle,
+	opts Options,
+	res *Result,
+) error {
 	spec, err := BuildCellSpec(project, cell.ID, bundle)
 	if err != nil {
 		return err
@@ -157,6 +164,8 @@ type CellArtifact struct {
 // without touching disk. Returns one CellArtifact per produced file (one
 // cell_gen.go plus one slice_gen.go per slice with subscribes). Cells
 // without GoStructName return (nil, nil) — same opt-in semantics as Generate.
+//
+//nolint:gocognit // sequential render-cell + per-slice render loop; complexity is the price of single-pass artifact emission
 func RenderCellArtifacts(root string, project *metadata.ProjectMeta, cellID string) ([]CellArtifact, error) {
 	if project == nil {
 		return nil, fmt.Errorf("cellgen render artifacts: project is nil")
@@ -224,7 +233,6 @@ func RenderCellArtifacts(root string, project *metadata.ProjectMeta, cellID stri
 	}
 	return out, nil
 }
-
 
 // relFromRoot converts an absolute path under root into a slash-separated
 // relative path. Returns an error if the path escapes root.

@@ -51,10 +51,10 @@ func (c *DeviceCell) Init(ctx context.Context, reg cell.Registry) error {
 				}
 			}
 			mux.Route("/api/v1/devices", func(s cell.RouteMux) {
-				captureErr(c.commandHandler.RegisterRoutes(s))
-				captureErr(c.listHandler.RegisterRoutes(s))
 				captureErr(c.registerHandler.RegisterRoutes(s))
+				captureErr(c.commandHandler.RegisterRoutes(s))
 				captureErr(c.statusHandler.RegisterRoutes(s))
+				captureErr(c.listHandler.RegisterRoutes(s))
 			})
 			return firstErr
 		},

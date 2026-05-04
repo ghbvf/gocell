@@ -162,7 +162,11 @@ func validateBundleRoutes(cellID string, routes []markergen.RouteSpec, listeners
 // buildRouteGroupsFromBundle aggregates bundle routes into one
 // RouteGroupGenSpec per declared listener (in declaration order). Inside
 // each group, mounts are grouped by SubPath in deterministic order.
-func buildRouteGroupsFromBundle(routes []markergen.RouteSpec, listenerOrder []string, listenerPrefix map[string]string) []RouteGroupGenSpec {
+func buildRouteGroupsFromBundle(
+	routes []markergen.RouteSpec,
+	listenerOrder []string,
+	listenerPrefix map[string]string,
+) []RouteGroupGenSpec {
 	type subKey struct{ listener, subPath string }
 	bySub := make(map[subKey][]RouteSliceMount)
 

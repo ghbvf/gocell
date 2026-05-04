@@ -58,9 +58,9 @@ func (c *ConfigCore) Init(ctx context.Context, reg cell.Registry) error {
 				}
 			}
 			mux.Route("/config", func(s cell.RouteMux) {
-				captureErr(c.publishHandler.RegisterRoutes(s))
-				captureErr(c.readHandler.RegisterRoutes(s))
 				captureErr(c.writeHandler.RegisterRoutes(s))
+				captureErr(c.readHandler.RegisterRoutes(s))
+				captureErr(c.publishHandler.RegisterRoutes(s))
 			})
 			mux.Route("/flags", func(s cell.RouteMux) {
 				captureErr(c.flagHandler.RegisterRoutes(s))

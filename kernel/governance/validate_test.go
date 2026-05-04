@@ -4803,4 +4803,3 @@ func TestProjectWalksExamples(t *testing.T) {
 	assert.True(t, strings.HasPrefix(cell.File, "examples/demo/"),
 		"cell.File should start with examples/demo/, got %q", cell.File)
 }
-

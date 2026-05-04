@@ -29,13 +29,6 @@ func fixtureProject(cell *metadata.CellMeta, slices []*metadata.SliceMeta, contr
 	return p
 }
 
-// bundleWithListener returns a WireBundle with a single listener declaration.
-func bundleWithListener(ref, prefix string) markergen.WireBundle {
-	return markergen.WireBundle{
-		Listeners: []markergen.ListenerSpec{{Ref: ref, Prefix: prefix}},
-	}
-}
-
 func TestBuildCellSpec_HappyPath_OneListenerOneSubRoute(t *testing.T) {
 	t.Parallel()
 	cell := &metadata.CellMeta{
