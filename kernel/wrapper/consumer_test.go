@@ -3,6 +3,7 @@ package wrapper_test
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/ghbvf/gocell/kernel/outbox"
@@ -70,38 +71,48 @@ func TestWrapConsumer_MarksErrorOnRequeue(t *testing.T) {
 	}
 }
 
-func TestWrapConsumer_RedactsDispositionErrors(t *testing.T) {
+// TestWrapConsumer_DefaultRedactsSensitiveValueOnSpan verifies that error
+// text reaching span.RecordError is hardcoded through pkg/redaction.RedactError;
+// no caller-side opt-out exists. ref: hashicorp/vault audit log_raw=false.
+func TestWrapConsumer_DefaultRedactsSensitiveValueOnSpan(t *testing.T) {
 	tr := &spyTracer{}
 	inner := func(ctx context.Context, e outbox.Entry) outbox.HandleResult {
-		return outbox.HandleResult{Disposition: outbox.DispositionRequeue, Err: errors.New("raw token")}
+		return outbox.HandleResult{
+			Disposition: outbox.DispositionRequeue,
+			Err:         errors.New("upstream rejected: token=hunter2-leak-sentinel-9f3"),
+		}
 	}
-	w := wrapper.MustWrapConsumer(tr, eventSpec(), inner, wrapper.WithConsumerErrorRedactor(func(error) error {
-		return errors.New("redacted")
-	}))
-	res := w(context.Background(), outbox.Entry{})
+	w := wrapper.MustWrapConsumer(tr, eventSpec(), inner)
+	_ = w(context.Background(), outbox.Entry{})
 
-	if res.Disposition != outbox.DispositionRequeue {
-		t.Errorf("want Requeue, got %v", res.Disposition)
-	}
 	span := tr.only(t)
-	if len(span.errs) != 1 || span.errs[0].Error() != "redacted" {
-		t.Errorf("redacted error not recorded, got %v", span.errs)
+	if len(span.errs) != 1 {
+		t.Fatalf("want 1 RecordError, got %d", len(span.errs))
+	}
+	got := span.errs[0].Error()
+	if strings.Contains(got, "hunter2-leak-sentinel-9f3") {
+		t.Errorf("span recorded raw secret value: %q", got)
+	}
+	if !strings.Contains(got, "<REDACTED>") {
+		t.Errorf("span recorded msg missing <REDACTED> mask: %q", got)
 	}
 }
 
-func TestWrapConsumer_RedactsMissingDispositionErrorFallback(t *testing.T) {
+// TestWrapConsumer_RecordsFallbackOnNilDispositionError verifies the
+// synthetic fallback message used when a non-Ack disposition arrives with
+// nil Err. The fallback itself goes through redaction (its content has no
+// sensitive substring, so redaction is a no-op).
+func TestWrapConsumer_RecordsFallbackOnNilDispositionError(t *testing.T) {
 	tr := &spyTracer{}
 	inner := func(ctx context.Context, e outbox.Entry) outbox.HandleResult {
 		return outbox.HandleResult{Disposition: outbox.DispositionReject}
 	}
-	w := wrapper.MustWrapConsumer(tr, eventSpec(), inner, wrapper.WithConsumerErrorRedactor(func(err error) error {
-		return errors.New("safe: " + err.Error())
-	}))
+	w := wrapper.MustWrapConsumer(tr, eventSpec(), inner)
 	_ = w(context.Background(), outbox.Entry{})
 
 	span := tr.only(t)
-	if len(span.errs) != 1 || span.errs[0].Error() != "safe: consumer returned Reject without error" {
-		t.Errorf("redacted fallback error not recorded, got %v", span.errs)
+	if len(span.errs) != 1 || span.errs[0].Error() != "consumer returned Reject without error" {
+		t.Errorf("want fallback message, got %v", span.errs)
 	}
 }
 

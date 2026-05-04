@@ -21,7 +21,10 @@ import (
 // WrapConsumer panics at construction time. The outbox.SubscriptionMiddleware
 // closure has no error-return path; MustWrapConsumer matches the contract
 // while keeping the spec-validation defense in depth.
-func ContractTracingMiddleware(tr wrapper.Tracer, redactor wrapper.ErrorRedactor) outbox.SubscriptionMiddleware {
+//
+// Error redaction is hardcoded inside wrapper.WrapConsumer (pkg/redaction);
+// this middleware does not pipe a redactor — there is no caller-side opt-out.
+func ContractTracingMiddleware(tr wrapper.Tracer) outbox.SubscriptionMiddleware {
 	return func(sub outbox.Subscription, next outbox.EntryHandler) outbox.EntryHandler {
 		spec := wrapper.ContractSpec{
 			ID:        sub.ContractID,
@@ -29,10 +32,6 @@ func ContractTracingMiddleware(tr wrapper.Tracer, redactor wrapper.ErrorRedactor
 			Transport: sub.ContractTransport,
 			Topic:     sub.Topic,
 		}
-		var opts []wrapper.ConsumerOption
-		if redactor != nil {
-			opts = append(opts, wrapper.WithConsumerErrorRedactor(redactor))
-		}
-		return wrapper.MustWrapConsumer(tr, spec, next, opts...)
+		return wrapper.MustWrapConsumer(tr, spec, next)
 	}
 }

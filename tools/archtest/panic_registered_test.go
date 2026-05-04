@@ -21,7 +21,7 @@ const rulePanicRegistered01 = "PANIC-REGISTERED-01"
 // "<rel-path>::<Receiver>.<methodName>" to an ADR-pinned justification. Keep
 // this map exactly aligned with docs/architecture/202604270030-architectural-panic-whitelist.md.
 var architecturalPanicWhitelist = map[string]string{
-	"kernel/wrapper/lifecycle.go::recoverAndFinishWithRedactor": "re-panics from defer recover" +
+	"kernel/wrapper/lifecycle.go::recoverAndFinish": "re-panics from defer recover" +
 		" so outer Recovery middleware can serialize the panic",
 	"runtime/http/middleware/circuit_breaker.go::repanicAfterBreakerFailure": "re-panics from defer recover" +
 		" after reporting circuit-breaker failure",

@@ -10,6 +10,7 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/wrapper"
 	"github.com/ghbvf/gocell/pkg/httputil"
+	"github.com/ghbvf/gocell/pkg/redaction"
 	"github.com/ghbvf/gocell/runtime/observability/tracing"
 )
 
@@ -25,7 +26,6 @@ type ContractAttrsResolver func(method, path string) ([]wrapper.Attr, bool)
 type tracingConfig struct {
 	publicEndpointFn func(*http.Request) bool
 	skipFn           func(*http.Request) bool
-	errorRedactor    wrapper.ErrorRedactor
 	contractAttrs    ContractAttrsResolver
 }
 
@@ -53,17 +53,6 @@ func WithProbeFilter(pred func(*http.Request) bool) TracingOption {
 	return func(c *tracingConfig) {
 		if pred != nil {
 			c.skipFn = pred
-		}
-	}
-}
-
-// WithErrorRedactor installs a redactor for errors recorded on the active
-// HTTP span. Recovery uses the recorder installed by Tracing to attach panic
-// errors to the span without leaking raw panic text into the tracing backend.
-func WithErrorRedactor(fn wrapper.ErrorRedactor) TracingOption {
-	return func(c *tracingConfig) {
-		if fn != nil {
-			c.errorRedactor = fn
 		}
 	}
 }
@@ -180,7 +169,7 @@ func serveSpanned(tracer tracing.Tracer, cfg tracingConfig, next http.Handler, w
 	// Start span with tentative name using raw path.
 	// After routing, the span is renamed to use the route pattern.
 	ctx, span := tracer.Start(ctx, r.Method+" "+r.URL.Path)
-	ctx = withSpanErrorRecorder(ctx, span, cfg.errorRedactor)
+	ctx = withSpanErrorRecorder(ctx, span)
 	defer span.End()
 
 	// Record linked remote context for public endpoints.
@@ -296,26 +285,24 @@ func attrString(attrs []wrapper.Attr, key string) string {
 }
 
 type spanErrorRecorder struct {
-	span     tracing.Span
-	redactor wrapper.ErrorRedactor
+	span tracing.Span
 }
 
 type spanErrorRecorderKey struct{}
 
-func withSpanErrorRecorder(ctx context.Context, span tracing.Span, redactor wrapper.ErrorRedactor) context.Context {
-	return context.WithValue(ctx, spanErrorRecorderKey{}, spanErrorRecorder{span: span, redactor: redactor})
+func withSpanErrorRecorder(ctx context.Context, span tracing.Span) context.Context {
+	return context.WithValue(ctx, spanErrorRecorderKey{}, spanErrorRecorder{span: span})
 }
 
+// recordPanicOnActiveSpan attaches a panic to the active HTTP span. The
+// panic message is hardcoded through pkg/redaction.RedactError before
+// span.RecordError; there is no caller-side opt-out (see pkg/redaction).
 func recordPanicOnActiveSpan(ctx context.Context, rec any) {
 	r, ok := ctx.Value(spanErrorRecorderKey{}).(spanErrorRecorder)
 	if !ok || r.span == nil || rec == nil {
 		return
 	}
-	err := panicAsError(rec)
-	if r.redactor != nil {
-		err = r.redactor(err)
-	}
-	if err != nil {
+	if err := redaction.RedactError(panicAsError(rec)); err != nil {
 		r.span.RecordError(err)
 	}
 	tracing.SpanSetStatus(r.span, true, "panic")
