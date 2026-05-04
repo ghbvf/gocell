@@ -12,6 +12,15 @@
 //	CELLMETA-SINGLE-SOURCE-02    kernel/cell.NewBaseCell 接收单一 *metadata.CellMeta
 //	CELLMETA-SINGLE-SOURCE-03    Cell interface 的 Metadata() 返回 *metadata.CellMeta
 //
+// Known limits (documented for future maintainers, not blocking current contract):
+//
+//   - Gate-01 forbidden list is a closed set of historical type names; a
+//     "rename and re-introduce" pattern (e.g. type LegacyCellMeta = metadata.CellMeta)
+//     in kernel/cell would not be caught. Reviewers must catch such aliases.
+//   - Gate-03 walks Cell interface methods by direct declaration only; if
+//     Metadata() is moved to an embedded sub-interface (type Cell interface { MetadataReader; ... }),
+//     this gate would falsely report "method not found". Refactor with care.
+//
 // ref: docs/plans/202605011500-029-master-roadmap.md K#05 PR-A1
 // ref: docs/architecture/202605051300-adr-kernel-cellmeta-single-source.md
 package archtest
@@ -102,7 +111,7 @@ func TestCellmetaSingleSource02_NewBaseCellSignature(t *testing.T) {
 	if found == nil {
 		t.Fatal("CELLMETA-SINGLE-SOURCE-02: NewBaseCell not found in kernel/cell/base.go")
 	}
-	if found.Type.Params == nil || len(found.Type.Params.List) != 1 {
+	if found.Type.Params == nil || cellmetaParamCount(found.Type.Params) != 1 {
 		t.Fatalf("CELLMETA-SINGLE-SOURCE-02: NewBaseCell must take exactly 1 parameter, got %d",
 			cellmetaParamCount(found.Type.Params))
 	}
