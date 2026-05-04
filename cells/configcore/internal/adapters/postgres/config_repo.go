@@ -94,6 +94,8 @@ type Row interface {
 // identically.
 const cellID = "configcore"
 
+const configRepoQueryFailedMessage = "config repo query failed"
+
 // Compile-time interface check.
 var _ ports.ConfigRepository = (*ConfigRepository)(nil)
 
@@ -357,7 +359,7 @@ func (r *ConfigRepository) scanConfigOrMapError(
 		)
 	}
 	return nil, nil, nil, nil, nil, errcode.Wrap(errcode.KindInternal, errcode.ErrConfigRepoQuery,
-		"config repo query failed", err,
+		configRepoQueryFailedMessage, err,
 		errcode.WithInternal(fmt.Sprintf("config repo: %s scan error key=%s", op, key)),
 		errcode.WithCategory(errcode.CategoryInfra),
 	)
@@ -468,7 +470,7 @@ func (r *ConfigRepository) Update(ctx context.Context, key string, value string)
 			)
 		}
 		return nil, errcode.Wrap(errcode.KindInternal, errcode.ErrConfigRepoQuery,
-			"config repo query failed", scanErr,
+			configRepoQueryFailedMessage, scanErr,
 			errcode.WithInternal(fmt.Sprintf("config repo: Update select-for-update error key=%s", key)),
 			errcode.WithCategory(errcode.CategoryInfra),
 		)
@@ -716,7 +718,7 @@ func (r *ConfigRepository) GetVersion(ctx context.Context, configID string, vers
 			)
 		}
 		return nil, errcode.Wrap(errcode.KindInternal, errcode.ErrConfigRepoQuery,
-			"config repo query failed", err,
+			configRepoQueryFailedMessage, err,
 			errcode.WithInternal(fmt.Sprintf("config repo: GetVersion scan error config_id=%s version=%d", configID, version)),
 			errcode.WithCategory(errcode.CategoryInfra),
 		)
