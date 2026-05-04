@@ -116,6 +116,14 @@ func TestWithClientErrorLogSampling_RouteKeyedCounters(t *testing.T) {
 	assert.True(t, shouldLogClientError(ctxB))
 }
 
+func TestWithClientErrorLogSampling_PreservesExistingConfig(t *testing.T) {
+	ctx := WithClientErrorLogSamplingEvery(context.Background(), t.Name(), 1)
+	ctx = WithClientErrorLogSampling(ctx, t.Name())
+
+	assert.True(t, shouldLogClientError(ctx))
+	assert.True(t, shouldLogClientError(ctx))
+}
+
 func TestWithClientErrorLogSampling_EveryOneLogsAll(t *testing.T) {
 	ctx := withClientErrorLogSamplingEvery(context.Background(), t.Name(), 1)
 

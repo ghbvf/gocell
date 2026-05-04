@@ -842,12 +842,13 @@ func collectHelperWriteStatuses(call *ast.CallExpr, out map[int]struct{}) {
 		// Presence in the map (regardless of value) suppresses the warning;
 		// absence means a genuinely unknown helper that may write status.
 		knownNonWriters := map[string]struct{}{
-			"WriteJSON":                  {}, // writes, but caller supplies the status — already caught by collectHTTPStatusSelectors
-			"DecodeJSON":                 {},
-			"DecodeJSONStrict":           {}, // strict variant; same semantics as DecodeJSON
-			"ParsePageParams":            {}, // returns (PageParams, error); caller invokes WriteError on err
-			"ParseUUIDPathParam":         {}, // writes 400 on invalid; status visible in writer call site
-			"WithClientErrorLogSampling": {}, // logging decorator — no status write
+			"WriteJSON":                       {}, // writes, but caller supplies the status — already caught by collectHTTPStatusSelectors
+			"DecodeJSON":                      {},
+			"DecodeJSONStrict":                {}, // strict variant; same semantics as DecodeJSON
+			"ParsePageParams":                 {}, // returns (PageParams, error); caller invokes WriteError on err
+			"ParseUUIDPathParam":              {}, // writes 400 on invalid; status visible in writer call site
+			"WithClientErrorLogSampling":      {}, // logging decorator — no status write
+			"WithClientErrorLogSamplingEvery": {}, // logging decorator — no status write
 		}
 		if _, suppressed := knownNonWriters[helperName]; !suppressed {
 			slog.Warn("CH-04: unknown httputil helper call, skipping helper-status inference",
