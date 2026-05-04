@@ -64,10 +64,10 @@ func callWithConfigEventOwner(
 	var result outbox.HandleResult
 	wrapped := obmetrics.ConfigEventMiddleware(collector)(
 		outbox.Subscription{Topic: entry.Topic, ConsumerGroup: "configcore", CellID: "configcore", SliceID: "configsubscribe"},
-		outbox.EntryToSubscriberHandler(func(ctx context.Context, entry outbox.Entry) outbox.HandleResult {
+		func(ctx context.Context, entry outbox.Entry) outbox.HandleResult {
 			result = fn(ctx, entry)
 			return result
-		}),
+		},
 	)
 	wrapped(context.Background(), entry)
 	return result

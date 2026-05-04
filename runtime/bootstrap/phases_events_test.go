@@ -75,7 +75,7 @@ func TestPhase6_ConsumerMiddleware_AppliedInChain(t *testing.T) {
 	bus := eventbus.New(eventbus.WithClock(clock.Real()))
 
 	var mwInvocations atomic.Int32
-	spyMW := func(_ outbox.Subscription, next outbox.SubscriberHandler) outbox.SubscriberHandler {
+	spyMW := func(_ outbox.Subscription, next outbox.EntryHandler) outbox.EntryHandler {
 		mwInvocations.Add(1) // counted at wrap time, once per Subscribe.
 		return next
 	}

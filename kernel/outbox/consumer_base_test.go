@@ -650,28 +650,10 @@ func TestConsumerBase_Wrap_MaxRetryDelay_CapsClaimBackoff(t *testing.T) {
 	assert.Less(t, elapsed, testtime.D300ms, "MaxRetryDelay must cap claim backoff")
 }
 
-// --- AsMiddleware ---------------------------------------------------------
-
-func TestConsumerBase_AsMiddleware_AppliesWrap(t *testing.T) {
-	receipt := &fakeReceipt{}
-	claimer := &fakeClaimer{state: idempotency.ClaimDone, receipt: receipt}
-
-	cb, err := NewConsumerBase(claimer, ConsumerBaseConfig{}, clock.Real())
-	require.NoError(t, err)
-
-	mw := cb.AsMiddleware()
-	require.NotNil(t, mw)
-
-	called := false
-	wrapped := mw(Subscription{Topic: "topic", ConsumerGroup: "cg"}, EntryToSubscriberHandler(func(_ context.Context, _ Entry) HandleResult {
-		called = true
-		return HandleResult{Disposition: DispositionAck}
-	}))
-
-	res, _ := wrapped(context.Background(), Entry{ID: "evt-mw"})
-	assert.False(t, called, "ClaimDone should short-circuit the wrapped handler")
-	assert.Equal(t, DispositionAck, res.Disposition)
-}
+// AsMiddleware was removed in K#12 PR-V1-OUTBOX-RECEIPT-EXTRACT second pass.
+// The equivalent behavior is now provided by ConsumerBase.Wrap, which is tested
+// in the Wrap tests above, and by SubscriberWithMiddleware.SubscribeEntry with a
+// non-nil ConsumerBase field, which is tested in conformance.go.
 
 // =============================================================================
 // Lease renewal tests (Task X6)

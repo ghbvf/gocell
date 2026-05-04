@@ -62,8 +62,31 @@ from the business `HandleResult`. `outbox.Settlement` is a new interface with
 `Commit(ctx) error` and `Release(ctx) error`; `idempotency.Receipt` satisfies it
 via duck typing. Business handlers implement `EntryHandler` (returning only
 `HandleResult`) and never touch `Settlement`. `EntryToSubscriberHandler` lifts
-an `EntryHandler` to a `SubscriberHandler` with nil settlement for tests and
-bootstrap drain. See Trade-off Q1 (closed).
+an `EntryHandler` to a `SubscriberHandler` with nil settlement for adapter-layer
+tests that call `Subscriber.Subscribe` directly. See Trade-off Q1 (closed).
+
+**K#12 二轮深度修复补充（Codex 独立审查）**：K#12 一轮首次实施时将
+`SubscriptionMiddleware` 升级为 `func(sub, next SubscriberHandler) SubscriberHandler`，
+引入了 lift→discard 范式（`AsMiddleware` 把 ConsumerBase 注入为 middleware entry，
+业务 middleware 被迫透传 Settlement boilerplate，且 AsMiddleware 内 silent discard
+inner settlement）。二轮深度修复消除这一根因：
+
+- `SubscriptionMiddleware` 回退为 `func(sub Subscription, next EntryHandler) EntryHandler`
+  （业务签名，不接触 Settlement）
+- 删除 `ConsumerBase.AsMiddleware()` — 业务/幂等分离现由结构强制而非顺序约定
+- `SubscriberWithMiddleware` field-inject `*ConsumerBase` 为显式 EntryHandler→SubscriberHandler
+  转换点；新增 `SubscribeEntry` 方法编排：业务 middleware chain → ConsumerBase.Wrap
+  → observability restore → Inner.Subscribe
+- `ContractTracingMiddleware` 恢复 once-at-construction `MustWrapConsumer` 调用；
+  spec.Validate() panic 在注册期触发（P1 修复）
+
+对齐业界共识（Watermill router 独占 Ack/Nack 决策 / Kratos transport 独占 gRPC
+status / sarama session.MarkMessage 在 ConsumeClaim 内而非 middleware）：业务
+middleware 操作业务签名，settle/idempotency 层是独立边界。
+
+ref: ThreeDotsLabs/watermill message/router.go handleMessage Ack/Nack monopoly
+ref: go-kratos/kratos middleware vs transport/grpc/server.go layering
+ref: IBM/sarama consumer_group.go ConsumerGroupSession.MarkMessage
 
 ### Decision 4 — Delete the implicit `PermanentError → Reject` upgrade
 

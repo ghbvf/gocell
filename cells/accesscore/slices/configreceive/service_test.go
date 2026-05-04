@@ -54,9 +54,9 @@ func callWithConfigEventOwner(
 ) (outbox.Disposition, error) {
 	wrapped := obmetrics.ConfigEventMiddleware(collector)(
 		outbox.Subscription{Topic: entry.Topic, ConsumerGroup: "accesscore", CellID: "accesscore", SliceID: "configreceive"},
-		outbox.EntryToSubscriberHandler(fn),
+		fn,
 	)
-	result, _ := wrapped(context.Background(), entry)
+	result := wrapped(context.Background(), entry)
 	return result.Disposition, result.Err
 }
 
