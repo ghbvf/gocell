@@ -974,7 +974,7 @@ func TestInjectWireSummaries_CellSpecWire(t *testing.T) {
 	// accesscore must have CellSpecWire with populated WireSummary.
 	spec0, ok0 := entities[0].Spec.(catalog.CellSpecWire)
 	require.True(t, ok0, "accesscore spec must be CellSpecWire after injection")
-	assert.Equal(t, "core", spec0.CellSpec.Type)
+	assert.Equal(t, "core", spec0.Type)
 	require.NotNil(t, spec0.WireSummary)
 	assert.Equal(t, "accesscore", spec0.WireSummary.CellID)
 	require.Len(t, spec0.WireSummary.Listeners, 1)
