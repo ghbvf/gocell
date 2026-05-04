@@ -377,9 +377,10 @@ func TestConsumerBase_Wrap_ClaimBusy_Requeues(t *testing.T) {
 		return HandleResult{Disposition: DispositionAck}
 	})
 
-	res, _ := handler(context.Background(), Entry{ID: "evt-busy"})
+	res, settlement := handler(context.Background(), Entry{ID: "evt-busy"})
 	assert.False(t, called)
 	assert.Equal(t, DispositionRequeue, res.Disposition)
+	assert.Nil(t, settlement, "ClaimBusy must return nil settlement")
 }
 
 // --- Wrap: retry loop ------------------------------------------------------
@@ -566,10 +567,11 @@ func TestConsumerBase_Wrap_ClaimError_FailClosed_ExhaustedRequeues(t *testing.T)
 		return HandleResult{Disposition: DispositionAck}
 	})
 
-	res, _ := handler(context.Background(), Entry{ID: "evt-claim-fail"})
+	res, settlement := handler(context.Background(), Entry{ID: "evt-claim-fail"})
 	assert.False(t, called, "handler must not run when claim is exhausted")
 	assert.Equal(t, DispositionRequeue, res.Disposition)
 	assert.Error(t, res.Err)
+	assert.Nil(t, settlement, "fail-closed claim exhausted must return nil settlement")
 }
 
 func TestConsumerBase_Wrap_ClaimError_FailClosed_CtxCancel(t *testing.T) {
@@ -598,11 +600,12 @@ func TestConsumerBase_Wrap_ClaimError_FailClosed_CtxCancel(t *testing.T) {
 	}()
 
 	start := time.Now()
-	res, _ := handler(ctx, Entry{ID: "evt-claim-ctx"})
+	res, settlement := handler(ctx, Entry{ID: "evt-claim-ctx"})
 	elapsed := time.Since(start)
 
 	assert.Equal(t, DispositionRequeue, res.Disposition)
 	assert.Less(t, elapsed, time.Second, "ctx cancel must short-circuit claim backoff")
+	assert.Nil(t, settlement, "ctx-canceled claim must return nil settlement")
 }
 
 func TestConsumerBase_Wrap_ClaimError_FailOpen_ProceedsWithoutReceipt(t *testing.T) {

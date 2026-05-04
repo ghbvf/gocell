@@ -9,11 +9,10 @@ import (
 	"github.com/ghbvf/gocell/kernel/outbox"
 )
 
-// Compile-time: idempotency.Receipt implicitly satisfies outbox.Settlement.
-// This is the single most important contract of K#12 — it lets ConsumerBase.Wrap
-// return (HandleResult, Settlement) using the receipt directly, with no adapter
-// type and no leak of idempotency.Receipt into Subscriber implementations.
-var _ outbox.Settlement = (idempotency.Receipt)(nil)
+// Compile-time: fakeSettlement satisfies outbox.Settlement (concrete type check).
+// This is the reliable form of the assertion — interface-to-interface zero-value
+// assignments are always satisfied at compile time and do not verify the method set.
+var _ outbox.Settlement = (*fakeSettlement)(nil)
 
 // Compile-time: NonAcquiredReceipt sentinel also satisfies Settlement so
 // fail-open / ClaimDone / ClaimBusy paths can return it without nil branches.

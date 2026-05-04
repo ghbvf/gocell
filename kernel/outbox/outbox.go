@@ -663,7 +663,7 @@ type Subscriber interface {
 	// handler is SubscriberHandler (not EntryHandler) so the Subscriber can
 	// receive Settlement alongside HandleResult without idempotency types
 	// leaking into business code. Callers that hold an EntryHandler (e.g.,
-	// bootstrap drain from cells/Init) MUST lift it via entryToSubscriberHandler.
+	// bootstrap drain from cells/Init) MUST lift it via EntryToSubscriberHandler.
 	Subscribe(ctx context.Context, sub Subscription, handler SubscriberHandler) error
 
 	// Close terminates all active subscriptions and releases resources.
@@ -768,15 +768,10 @@ func (s *SubscriberWithMiddleware) StopIntake(ctx context.Context) error {
 	return stopper.StopIntake(ctx)
 }
 
-// EntryToSubscriberHandler lifts a business EntryHandler into a SubscriberHandler
-// by returning a nil Settlement. Business handlers (cells/Init registrations)
-// do not produce Settlement — ConsumerBase.Wrap is the source of Settlement.
-// Bootstrap drain calls this when it needs to pass a raw EntryHandler to
-// Subscriber.Subscribe, which now accepts SubscriberHandler.
-//
-// The returned Settlement is always nil: business code is not responsible for
-// idempotency settlement. ConsumerBase.AsMiddleware() wraps the handler before
-// Subscribe is called, replacing this nil settlement with a real one.
+// EntryToSubscriberHandler lifts a business EntryHandler into a SubscriberHandler.
+// The returned Settlement is always nil — ConsumerBase.AsMiddleware injects the
+// real Settlement after claiming the idempotency lease. See SubscriberHandler for
+// the Settlement contract.
 func EntryToSubscriberHandler(h EntryHandler) SubscriberHandler {
 	return func(ctx context.Context, entry Entry) (HandleResult, Settlement) {
 		return h(ctx, entry), nil

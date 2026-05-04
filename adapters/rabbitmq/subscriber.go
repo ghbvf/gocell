@@ -35,7 +35,7 @@ const (
 	// deadline. Bounded so a stuck consumer cannot block Close() indefinitely.
 	defaultRMQReconnectWaitTimeout = 30 * time.Second
 	// defaultRMQReceiptOpTimeout is the detached-context timeout for dispatchAck
-	// Receipt.Commit and releaseReceipt Receipt.Release; outlives caller
+	// Settlement.Commit and releaseSettlement Settlement.Release; outlives caller
 	// cancellation so the broker never stays in an inconsistent ack state if the
 	// parent ctx is already done.
 	defaultRMQReceiptOpTimeout = 5 * time.Second

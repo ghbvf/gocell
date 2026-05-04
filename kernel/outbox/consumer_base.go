@@ -203,8 +203,10 @@ func ExponentialDelay(base, maxDelay time.Duration, attempt int) time.Duration {
 // (Claim/Commit/Release) and exponential backoff retry. DLQ routing is
 // handled by the broker via DLX (DispositionReject triggers Nack requeue=false).
 //
-// The Receipt is threaded through HandleResult so the subscriber's delivery
-// loop can Commit/Release after broker Ack/Nack succeeds.
+// Settlement flows to the Subscriber delivery loop via the second return value
+// of SubscriberHandler: ConsumerBase.Wrap returns (HandleResult, Settlement)
+// so that Commit/Release can be called after broker Ack/Nack without leaking
+// idempotency types into business code. Business handlers only return HandleResult.
 //
 // Lives in kernel/outbox rather than adapters/rabbitmq because the logic is
 // broker-agnostic — it only depends on kernel/idempotency + outbox types —
@@ -268,6 +270,11 @@ func NewConsumerBase(claimer idempotency.Claimer, config ConsumerBaseConfig, clk
 // SubscriberHandler is the common currency in the middleware chain, this
 // middleware calls Wrap on the inner EntryHandler and returns a SubscriberHandler
 // that includes Settlement in the return value.
+//
+// Precondition: `next` MUST originate from EntryToSubscriberHandler (i.e., its
+// Settlement return is always nil). If `next` already carries a real Settlement,
+// the innerEntry closure here discards it — callers should use cb.Wrap directly
+// to preserve an existing Settlement.
 //
 // Note: AsMiddleware wraps `next` which is already a SubscriberHandler.
 // When ConsumerBase is the innermost middleware, `next` is the business
@@ -393,6 +400,7 @@ func (cb *ConsumerBase) claimWithRetry(
 		lastErr = err
 
 		if ctx.Err() != nil {
+			// claim failed — no receipt acquired
 			return 0, zeroReceipt, ctx.Err()
 		}
 		if attempt < cb.config.ClaimRetryCount-1 {
@@ -416,7 +424,8 @@ func (cb *ConsumerBase) claimWithRetry(
 				t.Stop()
 			case <-ctx.Done():
 				t.Stop()
-				return 0, nil, ctx.Err()
+				// claim failed — no receipt acquired
+				return 0, zeroReceipt, ctx.Err()
 			}
 		}
 	}

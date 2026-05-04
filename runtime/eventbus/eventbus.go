@@ -26,8 +26,8 @@ const (
 	maxRetries     = 3
 	baseRetryDelay = 100 * time.Millisecond
 	maxRetryDelay  = 30 * time.Second
-	// detached-context timeout for commitReceipt and releaseReceipt; must
-	// outlive a graceful-shutdown ctx so receipt Commit/Release always
+	// detached-context timeout for commitSettlement and releaseSettlement; must
+	// outlive a graceful-shutdown ctx so Settlement.Commit/Release always
 	// complete instead of leaking lease state.
 	defaultEventbusReceiptOpTimeout = 5 * time.Second
 )
