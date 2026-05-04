@@ -33,6 +33,7 @@ func startRedis(t *testing.T) (*Client, func()) {
 
 	connStr, err := container.ConnectionString(ctx)
 	require.NoError(t, err, "get redis connection string")
+	connStr = testutil.LoopbackIPEndpoint(connStr)
 
 	// ConnectionString returns "redis://host:port/0" — parse to addr.
 	// go-redis NewClient expects "host:port", but we can also use the
