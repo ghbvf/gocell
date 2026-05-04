@@ -228,6 +228,64 @@ func TestSuggestMarkerName(t *testing.T) {
 	}
 }
 
+// TestParseRoute_SubPathPresence tests that subPath must be explicitly declared.
+// An absent subPath key is rejected; an explicit empty value (subPath=) is accepted.
+func TestParseRoute_SubPathPresence(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name        string
+		kvLine      string
+		wantErr     bool
+		wantErrSub  string
+		wantSubPath string
+	}{
+		{
+			name:        "subPath present with value",
+			kvLine:      "slice=ordercreate,subPath=/orders",
+			wantSubPath: "/orders",
+		},
+		{
+			name:        "subPath explicit empty (mount on prefix root)",
+			kvLine:      "slice=ordercreate,subPath=",
+			wantSubPath: "",
+		},
+		{
+			name:       "subPath absent — rejected",
+			kvLine:     "slice=ordercreate",
+			wantErr:    true,
+			wantErrSub: `missing required field "subPath"`,
+		},
+		{
+			name:       "typo subPth= — unknown field + missing subPath",
+			kvLine:     "slice=ordercreate,subPth=/orders",
+			wantErr:    true,
+			wantErrSub: `missing required field "subPath"`,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			m := collectedMarker{Name: "slice:route", KVLine: tc.kvLine, Line: 1}
+			got, err := parseRoute(m)
+			if tc.wantErr {
+				if err == nil {
+					t.Fatal("expected error, got nil")
+				}
+				if tc.wantErrSub != "" && !strings.Contains(err.Error(), tc.wantErrSub) {
+					t.Errorf("error %q missing expected substring %q", err.Error(), tc.wantErrSub)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if got.SubPath != tc.wantSubPath {
+				t.Errorf("SubPath=%q, want %q", got.SubPath, tc.wantSubPath)
+			}
+		})
+	}
+}
+
 func TestErrList(t *testing.T) {
 	t.Parallel()
 	t.Run("empty returns nil", func(t *testing.T) {

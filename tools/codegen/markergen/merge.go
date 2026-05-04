@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/ghbvf/gocell/kernel/metadata"
@@ -61,7 +62,47 @@ func Merge(projectRoot string, project *metadata.ProjectMeta) (map[string]WireBu
 		result[cellID] = bundle
 	}
 
+	// Cross-check: every RouteSpec.Slice and SubscribeSpec.Slice must exist in
+	// project.Slices[cellID/<sliceID>]. Unknown slice names surface actionable
+	// errors listing the full declared-slice set.
+	for cellID, bundle := range result {
+		cell := project.Cells[cellID]
+		if cell == nil {
+			continue
+		}
+		sliceSet := make(map[string]struct{})
+		for sliceKey := range project.Slices {
+			if !strings.HasPrefix(sliceKey, cellID+"/") {
+				continue
+			}
+			sliceID := strings.TrimPrefix(sliceKey, cellID+"/")
+			sliceSet[sliceID] = struct{}{}
+		}
+		for _, r := range bundle.Routes {
+			if _, ok := sliceSet[r.Slice]; !ok {
+				allErrs.Append(fmt.Errorf("cell %s: route marker references unknown slice %q (declared slices: %v)",
+					cellID, r.Slice, sortedSliceIDs(sliceSet)))
+			}
+		}
+		for _, s := range bundle.Subscribes {
+			if _, ok := sliceSet[s.Slice]; !ok {
+				allErrs.Append(fmt.Errorf("cell %s: subscribe marker references unknown slice %q (declared slices: %v)",
+					cellID, s.Slice, sortedSliceIDs(sliceSet)))
+			}
+		}
+	}
+
 	return result, allErrs.AsError()
+}
+
+// sortedSliceIDs returns a deterministically sorted slice of IDs from the set.
+func sortedSliceIDs(set map[string]struct{}) []string {
+	ids := make([]string, 0, len(set))
+	for id := range set {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	return ids
 }
 
 // buildBundle interprets a slice of collectedMarkers and returns the resulting
@@ -140,6 +181,8 @@ func parseListener(m collectedMarker) (ListenerSpec, error) {
 
 // parseRoute converts a "slice:route" collectedMarker into a RouteSpec.
 // Required fields: slice, subPath. Optional: listener (defaults to "cell.PrimaryListener").
+// subPath must be explicitly declared; absence (typo like "subPth=") is rejected.
+// An explicit empty value (subPath=) is valid and means "mount on prefix root".
 func parseRoute(m collectedMarker) (RouteSpec, error) {
 	kv, err := parseKV(m.KVLine)
 	if err != nil {
@@ -149,6 +192,9 @@ func parseRoute(m collectedMarker) (RouteSpec, error) {
 	checkUnknownFields(m, kv, []string{"slice", "listener", "subPath", "method"}, &errs)
 	if strings.TrimSpace(kv["slice"]) == "" {
 		errs.Append(fmt.Errorf("cell.go:%d: marker %q missing required field %q", m.Line, m.Name, "slice"))
+	}
+	if _, ok := kv["subPath"]; !ok {
+		errs.Append(fmt.Errorf("cell.go:%d: marker %q missing required field %q", m.Line, m.Name, "subPath"))
 	}
 	if err := errs.AsError(); err != nil {
 		return RouteSpec{}, err

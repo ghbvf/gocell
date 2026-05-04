@@ -47,7 +47,10 @@ func TestMerge_MarkerPath(t *testing.T) {
 				File: "cells/markercell/cell.yaml",
 			},
 		},
-		map[string]*metadata.SliceMeta{},
+		map[string]*metadata.SliceMeta{
+			"markercell/sliceA": {ID: "sliceA"},
+			"markercell/sliceB": {ID: "sliceB"},
+		},
 	)
 
 	// projectRoot = tmp; Merge will look for tmp/cells/markercell/cell.go.
@@ -177,6 +180,114 @@ func TestMerge_EmptyProject(t *testing.T) {
 	}
 	if len(bundles) != 0 {
 		t.Errorf("expected empty map, got %v", bundles)
+	}
+}
+
+// TestMerge_GhostSliceRoute tests that a route marker referencing a slice not
+// present in ProjectMeta.Slices produces an "unknown slice" error.
+func TestMerge_GhostSliceRoute(t *testing.T) {
+	t.Parallel()
+	td := testdataDir(t)
+	tmp := t.TempDir()
+	cellDir := filepath.Join(tmp, "cells", "ghostcell")
+	if err := os.MkdirAll(cellDir, 0o750); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	copyFile(t, filepath.Join(td, "cell_ghostslice.go"), filepath.Join(cellDir, "cell.go"))
+
+	project := buildProjectMeta(
+		map[string]*metadata.CellMeta{
+			"ghostcell": {
+				ID:   "ghostcell",
+				File: "cells/ghostcell/cell.yaml",
+			},
+		},
+		// Only "real" is declared; "ghost" and "phantomslice" are missing.
+		map[string]*metadata.SliceMeta{
+			"ghostcell/real": {ID: "real"},
+		},
+	)
+
+	_, err := Merge(tmp, project)
+	if err == nil {
+		t.Fatal("expected error for unknown slice reference, got nil")
+	}
+	if !strings.Contains(err.Error(), `unknown slice "ghost"`) {
+		t.Errorf("error should contain 'unknown slice \"ghost\"', got: %v", err)
+	}
+	if !strings.Contains(err.Error(), `unknown slice "phantomslice"`) {
+		t.Errorf("error should contain 'unknown slice \"phantomslice\"', got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "declared slices:") {
+		t.Errorf("error should list declared slices, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "real") {
+		t.Errorf("error should mention the real slice name, got: %v", err)
+	}
+}
+
+// TestMerge_SliceTypoFieldSuggestion tests that a typo "slcie=" produces an
+// "unknown field" error with a Levenshtein "did you mean" suggestion.
+func TestMerge_SliceTypoFieldSuggestion(t *testing.T) {
+	t.Parallel()
+	td := testdataDir(t)
+	tmp := t.TempDir()
+	cellDir := filepath.Join(tmp, "cells", "typocell")
+	if err := os.MkdirAll(cellDir, 0o750); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	copyFile(t, filepath.Join(td, "cell_slicetypo.go"), filepath.Join(cellDir, "cell.go"))
+
+	project := buildProjectMeta(
+		map[string]*metadata.CellMeta{
+			"typocell": {
+				ID:   "typocell",
+				File: "cells/typocell/cell.yaml",
+			},
+		},
+		map[string]*metadata.SliceMeta{},
+	)
+
+	_, err := Merge(tmp, project)
+	if err == nil {
+		t.Fatal("expected error for typo field, got nil")
+	}
+	if !strings.Contains(err.Error(), `unknown field "slcie"`) {
+		t.Errorf("error should contain 'unknown field \"slcie\"', got: %v", err)
+	}
+	if !strings.Contains(err.Error(), `did you mean "slice"`) {
+		t.Errorf("error should suggest 'slice', got: %v", err)
+	}
+}
+
+// TestMerge_ValidSliceOwnership tests that when all marker slice references
+// exist in ProjectMeta.Slices, Merge succeeds without error.
+func TestMerge_ValidSliceOwnership(t *testing.T) {
+	t.Parallel()
+	td := testdataDir(t)
+	tmp := t.TempDir()
+	cellDir := filepath.Join(tmp, "cells", "markercell2")
+	if err := os.MkdirAll(cellDir, 0o750); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	copyFile(t, filepath.Join(td, "cell_withmarkers.go"), filepath.Join(cellDir, "cell.go"))
+
+	project := buildProjectMeta(
+		map[string]*metadata.CellMeta{
+			"markercell2": {
+				ID:   "markercell2",
+				File: "cells/markercell2/cell.yaml",
+			},
+		},
+		map[string]*metadata.SliceMeta{
+			"markercell2/sliceA": {ID: "sliceA"},
+			"markercell2/sliceB": {ID: "sliceB"},
+		},
+	)
+
+	_, err := Merge(tmp, project)
+	if err != nil {
+		t.Fatalf("expected no error for valid slice ownership, got: %v", err)
 	}
 }
 
