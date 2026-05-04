@@ -12,6 +12,7 @@ package auth
 import (
 	"encoding/hex"
 	"net/http"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -21,6 +22,10 @@ import (
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/validation"
 )
+
+// callerCellPattern validates the caller cell id: must start with a lowercase
+// letter and contain only lowercase letters, digits, and hyphens.
+var callerCellPattern = regexp.MustCompile(`^[a-z][a-z0-9-]*$`)
 
 // Authenticator inspects an HTTP request and resolves the caller's identity.
 type Authenticator interface {
@@ -175,66 +180,75 @@ func NewServiceTokenAuthenticator(ring cell.HMACKeyring, clk clock.Clock, opts .
 			return absentPrincipal(), false, nil
 		}
 		payload = strings.TrimSpace(payload)
-		if err := verifyServiceTokenPayload(ring, payload, cfg, r); err != nil {
+		callerCell, err := verifyServiceTokenPayload(ring, payload, cfg, r)
+		if err != nil {
 			return nil, false, err
 		}
-		roles := append([]string(nil), BuiltinServiceRoles(ServiceNameInternal)...)
 		return &Principal{
-			Kind:       PrincipalService,
-			Subject:    ServiceNameInternal,
-			Roles:      roles,
-			AuthMethod: "service_token",
+			Kind:         PrincipalService,
+			CallerCellID: callerCell,
+			AuthMethod:   "service_token",
 		}, true, nil
 	}), nil
 }
 
 // verifyServiceTokenPayload validates the raw payload portion of a ServiceToken
 // header (everything after "ServiceToken "). It enforces:
-//   - 3-part format: {timestamp}:{nonce}:{hex_hmac}
+//   - 4-part format: {timestamp}:{nonce}:{callerCell}:{hex_hmac}
+//   - 3-part format explicitly rejected: "legacy 3-part service token format rejected"
 //   - timestamp within ServiceTokenMaxAge
+//   - callerCell non-empty and matching [a-z][a-z0-9-]*
 //   - HMAC valid for any key in ring
 //   - nonce not replayed via NonceStore.CheckAndMark (Noop/nil stores are
 //     rejected at construction time by NewServiceTokenAuthenticator)
 //
-// Nonce replay errors preserve the original NonceStore error as the Cause so
-// callers can inspect it with errors.Is (e.g. to distinguish ErrNonceReused
-// from a store failure and map to the correct HTTP status code).
+// Returns the callerCell on success. Nonce replay errors preserve the original
+// NonceStore error as the Cause so callers can inspect it with errors.Is (e.g.
+// to distinguish ErrNonceReused from a store failure and map to the correct
+// HTTP status code).
 //
 // This helper is intentionally package-private.
-func verifyServiceTokenPayload(ring cell.HMACKeyring, payload string, cfg serviceTokenConfig, r *http.Request) error {
-	parts := strings.SplitN(payload, ":", 3)
-	if len(parts) == 2 {
-		return errcode.NewAuth(errcode.ErrAuthUnauthorized, "legacy 2-part service token format rejected")
+func verifyServiceTokenPayload(ring cell.HMACKeyring, payload string, cfg serviceTokenConfig, r *http.Request) (string, error) {
+	parts := strings.SplitN(payload, ":", 4)
+	switch len(parts) {
+	case 2:
+		return "", errcode.NewAuth(errcode.ErrAuthUnauthorized, "legacy 2-part service token format rejected")
+	case 3:
+		return "", errcode.NewAuth(errcode.ErrAuthUnauthorized, "legacy 3-part service token format rejected")
 	}
-	if len(parts) != 3 {
-		return errcode.NewAuth(errcode.ErrAuthUnauthorized, msgInvalidServiceTokenFormat)
+	if len(parts) != 4 {
+		return "", errcode.NewAuth(errcode.ErrAuthUnauthorized, msgInvalidServiceTokenFormat)
 	}
 
 	tsStr := parts[0]
 	ts, err := strconv.ParseInt(tsStr, 10, 64)
 	if err != nil {
-		return errcode.NewAuth(errcode.ErrAuthUnauthorized, "invalid service token timestamp")
+		return "", errcode.NewAuth(errcode.ErrAuthUnauthorized, "invalid service token timestamp")
 	}
 
 	now := cfg.clk.Now()
 	tokenTime := time.Unix(ts, 0)
 	if tokenTime.After(now.Add(ServiceTokenClockSkew)) {
-		return errcode.NewAuth(errcode.ErrAuthTokenExpired, "service token timestamp is too far in the future")
+		return "", errcode.NewAuth(errcode.ErrAuthTokenExpired, "service token timestamp is too far in the future")
 	}
 	age := now.Sub(tokenTime)
 	if age >= ServiceTokenMaxAge {
-		return errcode.NewAuth(errcode.ErrAuthTokenExpired, "service token expired")
+		return "", errcode.NewAuth(errcode.ErrAuthTokenExpired, "service token expired")
 	}
 
-	nonce, sigHex := parts[1], parts[2]
-	message := buildServiceTokenMessage(r.Method, r.URL.Path, r.URL.RawQuery, tsStr, nonce)
+	nonce, callerCell, sigHex := parts[1], parts[2], parts[3]
+	if err := validateCallerCell(callerCell); err != nil {
+		return "", err
+	}
+
+	message := buildServiceTokenMessage(r.Method, r.URL.Path, r.URL.RawQuery, tsStr, nonce, callerCell)
 
 	providedMAC, err := hex.DecodeString(sigHex)
 	if err != nil {
-		return errcode.NewAuth(errcode.ErrAuthUnauthorized, msgInvalidServiceTokenFormat)
+		return "", errcode.NewAuth(errcode.ErrAuthUnauthorized, msgInvalidServiceTokenFormat)
 	}
 	if !verifyServiceTokenMAC(ring, message, providedMAC) {
-		return errcode.NewAuth(errcode.ErrAuthUnauthorized, "invalid service token MAC")
+		return "", errcode.NewAuth(errcode.ErrAuthUnauthorized, "invalid service token MAC")
 	}
 
 	// NonceStore.CheckAndMark is always a real replay-safe store (Noop rejected
@@ -242,7 +256,19 @@ func verifyServiceTokenPayload(ring cell.HMACKeyring, payload string, cfg servic
 	// NonceStore error as Cause so callers can distinguish ErrNonceReused
 	// (replay → 401) from store failures (→ 500).
 	if err := cfg.nonceStore.CheckAndMark(r.Context(), nonce); err != nil {
-		return errcode.WrapAuth(errcode.ErrAuthUnauthorized, "service token nonce check failed", err)
+		return "", errcode.WrapAuth(errcode.ErrAuthUnauthorized, "service token nonce check failed", err)
+	}
+	return callerCell, nil
+}
+
+// validateCallerCell validates the caller cell id extracted from the 4-part
+// service token. The cell id must be non-empty and match [a-z][a-z0-9-]*.
+func validateCallerCell(callerCell string) error {
+	if callerCell == "" {
+		return errcode.NewAuth(errcode.ErrAuthUnauthorized, "caller cell missing")
+	}
+	if !callerCellPattern.MatchString(callerCell) {
+		return errcode.NewAuth(errcode.ErrAuthUnauthorized, "caller cell id invalid")
 	}
 	return nil
 }

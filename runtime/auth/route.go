@@ -103,6 +103,17 @@ func Mount(mux cell.RouteHandler, r Route) error {
 		}
 		handler = middleware(handler)
 	}
+	// Auto-enforce caller-cell allowlist when the contract declares Clients.
+	// The guard runs before the route-level Policy so that caller identity is
+	// verified before any business authz check. Execution order (outer → inner):
+	// caller_cell guard → Policy → wrapper.HTTPHandler → Handler.
+	if len(r.Contract.Clients) > 0 {
+		callerGuard, err := RequirePolicy(RequireCallerCell(r.Contract.Clients...))
+		if err != nil {
+			return fmt.Errorf("auth.Mount: %w", err)
+		}
+		handler = callerGuard(handler)
+	}
 	// wrapper.HTTPHandler is a pure ctx contributor (round-4) — it writes
 	// ContractID + contract attrs into ctx so the outer middleware.Tracing
 	// span late-binds them. No inner span is created.

@@ -36,12 +36,22 @@ func (k PrincipalKind) String() string {
 // successful authentication. AuthMiddleware and ServiceTokenMiddleware both
 // populate Principal via WithPrincipal; handlers consume it via FromContext.
 // Principal is the authoritative authn context for all business routes (F1/F7).
+//
+// For service principals (Kind==PrincipalService): identity is expressed via
+// CallerCellID (the originating cell id extracted from the 4-part service
+// token). Subject is always empty; Roles is always nil. Use RequireCallerCell
+// to authorize internal endpoints by caller allowlist.
 type Principal struct {
 	Kind                  PrincipalKind
 	Subject               string
 	Roles                 []string
 	AuthMethod            string
 	PasswordResetRequired bool
+	// CallerCellID is the originating cell id for service principals. It is
+	// extracted from the 4-part service token (ts:nonce:callerCell:mac) and
+	// checked against ContractSpec.Clients by RequireCallerCell. Empty for
+	// user and anonymous principals.
+	CallerCellID string
 	// Claims is a read-only snapshot of supplementary JWT claims (e.g. "sid",
 	// "iss", "token_use"). Callers must treat Claims as a read-only snapshot;
 	// mutating it has no effect on authentication decisions and may corrupt
@@ -89,24 +99,3 @@ func MustFromContext(ctx context.Context) *Principal {
 	return p
 }
 
-const (
-	// ServiceNameInternal is the well-known name of the internal service principal
-	// used by /internal/v1/* delegated auth (F4 RouteGroup will reference this).
-	ServiceNameInternal = "gocell-internal"
-
-	// RoleInternalAdmin grants admin access on internal control-plane endpoints.
-	RoleInternalAdmin = "role:internal-admin"
-)
-
-// BuiltinServiceRoles returns the compile-time hard-coded role set for
-// well-known internal services. Dynamic, configurable service roles are
-// resolved via config.Registry (F1, PR#197); the compile-time set here covers
-// bootstrap and test scenarios where the registry is not available.
-func BuiltinServiceRoles(name string) []string {
-	switch name {
-	case ServiceNameInternal:
-		return []string{RoleInternalAdmin}
-	default:
-		return nil
-	}
-}

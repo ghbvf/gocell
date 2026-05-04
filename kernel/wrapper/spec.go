@@ -38,6 +38,12 @@ type ContractSpec struct {
 	// Event-specific fields; required when Kind == "event", rejected
 	// otherwise. Topic is the broker destination name.
 	Topic string
+
+	// Clients is the allowlist of caller cell IDs for internal HTTP endpoints.
+	// Required when Kind=="http" and Path has prefix "/internal/v1/"; must be
+	// empty for non-internal paths. The list is mirrored in contract.yaml
+	// endpoints.clients and enforced at runtime by auth.RequireCallerCell.
+	Clients []string
 }
 
 // Validate returns an error if the spec is malformed. Validation is separate
@@ -83,6 +89,12 @@ func (s ContractSpec) validateHTTP() error {
 	}
 	if s.Topic != "" {
 		return fmt.Errorf("wrapper.ContractSpec[%s]: http kind must not carry Topic", s.ID)
+	}
+	if strings.HasPrefix(s.Path, "/internal/v1/") && len(s.Clients) == 0 {
+		return fmt.Errorf("ContractSpec[%s]: internal path requires non-empty Clients (declare in contract.yaml endpoints.clients and mirror in literal)", s.ID)
+	}
+	if !strings.HasPrefix(s.Path, "/internal/v1/") && len(s.Clients) > 0 {
+		return fmt.Errorf("ContractSpec[%s]: non-internal path must not declare Clients", s.ID)
 	}
 	return nil
 }

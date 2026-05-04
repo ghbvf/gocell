@@ -11,6 +11,18 @@ import (
 	"github.com/ghbvf/gocell/kernel/cell"
 )
 
+// TestServiceContext creates a context carrying a service Principal with the
+// given callerCell for use in handler/mount tests. Follows the net/http/httptest
+// naming pattern. Use this instead of TestContext for tests that exercise
+// internal endpoints protected by RequireCallerCell.
+func TestServiceContext(callerCell string) context.Context {
+	return WithPrincipal(context.Background(), &Principal{
+		Kind:         PrincipalService,
+		CallerCellID: callerCell,
+		AuthMethod:   "test_service",
+	})
+}
+
 // TokenIntent is a type alias of cell.TokenIntent so that runtime/auth and
 // kernel/cell share a single canonical type without conversion at package
 // boundaries. All existing code that references auth.TokenIntent continues

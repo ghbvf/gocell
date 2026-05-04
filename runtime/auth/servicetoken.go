@@ -372,12 +372,16 @@ func classifyServiceTokenVerifyError(err error) string {
 	}
 	msg := err.Error()
 	switch {
-	case strings.Contains(msg, "legacy 2-part"):
+	case strings.Contains(msg, "legacy 2-part") || strings.Contains(msg, "legacy 3-part"):
 		return "legacy_format"
 	case strings.Contains(msg, "expired"):
 		return "expired"
 	case strings.Contains(msg, "invalid service token MAC"):
 		return "invalid_mac"
+	case strings.Contains(msg, "caller cell missing"):
+		return "missing_caller_cell"
+	case strings.Contains(msg, "caller cell id invalid"):
+		return "invalid_caller_cell"
 	default:
 		return "invalid_format"
 	}
@@ -396,15 +400,16 @@ func verifyServiceTokenMAC(ring cell.HMACKeyring, message string, providedMAC []
 	return false
 }
 
-// buildServiceTokenMessage constructs the canonical HMAC message for the new
-// 3-part token format. The query string is canonicalized (keys sorted) and
-// appended to the path when non-empty.
-func buildServiceTokenMessage(method, path, rawQuery, tsStr, nonce string) string {
+// buildServiceTokenMessage constructs the canonical HMAC message for the
+// 4-part token format. The query string is canonicalized (keys sorted) and
+// appended to the path when non-empty. callerCell is included as the final
+// segment so tampering with the caller identity invalidates the MAC.
+func buildServiceTokenMessage(method, path, rawQuery, tsStr, nonce, callerCell string) string {
 	cq := canonicalQuery(rawQuery)
 	if cq != "" {
-		return fmt.Sprintf("%s %s?%s %s %s", method, path, cq, tsStr, nonce)
+		return fmt.Sprintf("%s %s?%s %s %s %s", method, path, cq, tsStr, nonce, callerCell)
 	}
-	return fmt.Sprintf("%s %s %s %s", method, path, tsStr, nonce)
+	return fmt.Sprintf("%s %s %s %s %s", method, path, tsStr, nonce, callerCell)
 }
 
 // canonicalQuery returns a deterministic encoding of rawQuery with keys sorted.
@@ -421,15 +426,24 @@ func canonicalQuery(rawQuery string) string {
 	return params.Encode() // url.Values.Encode() sorts keys alphabetically
 }
 
-// GenerateServiceToken creates a service token for the given method, path,
-// optional rawQuery, and timestamp using the current secret from the key ring.
-// The token format is "{timestamp}:{nonce}:{hex_hmac}" where nonce is 16
-// cryptographically random bytes, hex-encoded. It returns an empty string if
-// ring is nil.
-func GenerateServiceToken(ring *HMACKeyRing, method, path, rawQuery string, ts time.Time) string {
+// GenerateServiceToken creates a service token for the given callerCell, method,
+// path, optional rawQuery, and timestamp using the current secret from the key ring.
+// The token format is "{timestamp}:{nonce}:{callerCell}:{hex_hmac}" where nonce is
+// 16 cryptographically random bytes, hex-encoded. It returns an empty string if:
+//   - ring is nil
+//   - callerCell is empty (mandatory — identifies the originating cell)
+//   - callerCell contains ':' (would corrupt the 4-part token structure)
+func GenerateServiceToken(ring *HMACKeyRing, callerCell, method, path, rawQuery string, ts time.Time) string {
 	if ring == nil {
 		return ""
 	}
+	if callerCell == "" {
+		return ""
+	}
+	if strings.Contains(callerCell, ":") {
+		return ""
+	}
+
 	tsStr := strconv.FormatInt(ts.Unix(), 10)
 
 	nonceBytes := make([]byte, 16)
@@ -439,10 +453,10 @@ func GenerateServiceToken(ring *HMACKeyRing, method, path, rawQuery string, ts t
 	}
 	nonce := hex.EncodeToString(nonceBytes)
 
-	message := buildServiceTokenMessage(method, path, rawQuery, tsStr, nonce)
+	message := buildServiceTokenMessage(method, path, rawQuery, tsStr, nonce, callerCell)
 	mac := hmac.New(sha256.New, ring.Current())
 	_, _ = mac.Write([]byte(message))
-	return tsStr + ":" + nonce + ":" + hex.EncodeToString(mac.Sum(nil))
+	return tsStr + ":" + nonce + ":" + callerCell + ":" + hex.EncodeToString(mac.Sum(nil))
 }
 
 func extractServiceToken(r *http.Request) string {
