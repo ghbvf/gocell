@@ -165,7 +165,7 @@ func TestGenerate_DryRunDoesNotWriteFile(t *testing.T) {
 	if len(res.Generated) != 1 {
 		t.Errorf("Generated = %v, want 1 entry", res.Generated)
 	}
-	if _, err := os.Stat(filepath.Join(root, "cells/demo/cell_gen.go")); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(root, "cells", "demo", "cell_gen.go")); !os.IsNotExist(err) {
 		t.Errorf("DryRun should not write file; err = %v", err)
 	}
 }
@@ -241,7 +241,7 @@ func TestGenerate_SkipsCellsWithoutGoStructName(t *testing.T) {
 func TestGenerate_RefuseOverwriteUserFile(t *testing.T) {
 	root := initSyntheticRepo(t)
 	// Pre-create a user-edited cell_gen.go path with no generated header.
-	path := filepath.Join(root, "cells/demo/cell_gen.go")
+	path := filepath.Join(root, "cells", "demo", "cell_gen.go")
 	if err := os.WriteFile(path, []byte("// hand-written\npackage demo\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -258,7 +258,7 @@ func TestGenerate_RefuseOverwriteUserFile(t *testing.T) {
 func initSyntheticRepo(t *testing.T) string {
 	t.Helper()
 	root := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(root, "cells/demo"), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Join(root, "cells", "demo"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	return root
@@ -286,4 +286,3 @@ func mustContain(t *testing.T, haystack, needle string) {
 		t.Errorf("missing %q in:\n%s", needle, haystack)
 	}
 }
-

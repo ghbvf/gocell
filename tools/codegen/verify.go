@@ -58,14 +58,11 @@ func VerifyInWorktree(repoRoot string, generateFn func(workdir string) error) (V
 	// Defer cleanup before issuing the worktree-add so a partial failure
 	// still releases the temp directory.
 	defer func() {
-		// Best-effort cleanup; log via fmt.Fprintln if needed but never
-		// shadow the function's primary error.
-		_ = exec.Command("git", "-C", repoRoot, "worktree", "remove", "--force", tmp).Run()
+		_ = gitRun(repoRoot, "worktree", "remove", "--force", tmp)
 		_ = os.RemoveAll(tmp)
 	}()
 
-	add := exec.Command("git", "-C", repoRoot, "worktree", "add", "--detach", tmp, "HEAD")
-	if out, err := add.CombinedOutput(); err != nil {
+	if out, err := gitOutput(repoRoot, "worktree", "add", "--detach", tmp, "HEAD"); err != nil {
 		return res, fmt.Errorf("verify: git worktree add %s: %w; output: %s", tmp, err, out)
 	}
 
@@ -73,7 +70,7 @@ func VerifyInWorktree(repoRoot string, generateFn func(workdir string) error) (V
 		return res, fmt.Errorf("verify: generateFn: %w", err)
 	}
 
-	statusOut, err := exec.Command("git", "-C", tmp, "status", "--porcelain").CombinedOutput()
+	statusOut, err := gitOutput(tmp, "status", "--porcelain")
 	if err != nil {
 		return res, fmt.Errorf("verify: git status: %w; output: %s", err, statusOut)
 	}
@@ -115,16 +112,31 @@ func parseStatusFiles(porcelain []byte) []string {
 func buildDiffSummary(workdir string, files []string) string {
 	var sb strings.Builder
 
-	stat, _ := exec.Command("git", "-C", workdir, "diff", "--stat").CombinedOutput()
+	stat, _ := gitOutput(workdir, "diff", "--stat")
 	sb.Write(stat)
 	sb.WriteString("\n")
 
 	for _, f := range files {
 		sb.WriteString("===== " + f + " =====\n")
-		perOut, _ := exec.Command("git", "-C", workdir, "diff", "--", f).CombinedOutput()
+		perOut, _ := gitOutput(workdir, "diff", "--", f)
 		writeTruncatedLines(&sb, perOut, maxDiffLinesPerFile)
 	}
 	return sb.String()
+}
+
+// gitRun runs `git -C dir args...` and returns the run error (output is
+// discarded; use gitOutput when output is needed). All git calls in this
+// package go through gitRun/gitOutput so the gosec G204 acknowledgement
+// lives in one place.
+func gitRun(dir string, args ...string) error {
+	//nolint:gosec // caller-supplied dir path, not user-tainted
+	return exec.Command("git", append([]string{"-C", dir}, args...)...).Run()
+}
+
+// gitOutput runs `git -C dir args...` and returns combined output + error.
+func gitOutput(dir string, args ...string) ([]byte, error) {
+	//nolint:gosec // caller-supplied dir path, not user-tainted
+	return exec.Command("git", append([]string{"-C", dir}, args...)...).CombinedOutput()
 }
 
 // writeTruncatedLines copies up to maxLines lines from src into dst,

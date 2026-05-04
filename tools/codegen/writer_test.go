@@ -26,7 +26,7 @@ func TestWrite_NewFile(t *testing.T) {
 	if res.Action != codegen.ActionWritten {
 		t.Errorf("Action = %q, want %q", res.Action, codegen.ActionWritten)
 	}
-	got, _ := os.ReadFile(path)
+	got, _ := os.ReadFile(path) //nolint:gosec // test-only assertion read, path constructed by test
 	if string(got) != generatedHeader {
 		t.Errorf("file contents mismatch")
 	}
@@ -196,7 +196,7 @@ func TestWrite_CreatesParentDirs(t *testing.T) {
 	if res.Action != codegen.ActionWritten {
 		t.Errorf("Action = %q, want %q", res.Action, codegen.ActionWritten)
 	}
-	got, _ := os.ReadFile(path)
+	got, _ := os.ReadFile(path) //nolint:gosec // test-only assertion read, path constructed by test
 	if string(got) != generatedHeader {
 		t.Errorf("file contents mismatch after parent-dir creation")
 	}

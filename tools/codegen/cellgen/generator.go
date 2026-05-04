@@ -75,69 +75,64 @@ func Generate(root string, project *metadata.ProjectMeta, opts Options) (Result,
 		if cell.GoStructName == "" {
 			continue
 		}
-
-		spec, err := BuildCellSpec(project, id)
-		if err != nil {
+		if err := generateOneCell(root, project, cell, opts, &res); err != nil {
 			return res, err
-		}
-
-		cellPath := cellGenPath(root, cell)
-		content, err := codegen.Render(codegen.RenderOptions{
-			TemplateName: "cell.tmpl",
-			Templates:    templates,
-			Data:         spec,
-			Filename:     cellPath,
-		})
-		if err != nil {
-			return res, fmt.Errorf("cellgen generate: render %s: %w", id, err)
-		}
-		writeRes, err := codegen.Write(codegen.WriteOptions{
-			Path:     cellPath,
-			Content:  content,
-			RepoRoot: root,
-			DryRun:   opts.DryRun,
-			Verify:   opts.Verify,
-		})
-		if err != nil {
-			return res, err
-		}
-		recordResult(&res, writeRes)
-
-		// Slice gen
-		sliceIDs := slicesForCellSorted(project, id)
-		for _, sid := range sliceIDs {
-			sliceSpec, err := BuildSliceSpec(project, id, sid)
-			if err != nil {
-				return res, err
-			}
-			if sliceSpec == nil {
-				continue
-			}
-			slice := project.Slices[id+"/"+sid]
-			slicePath := sliceGenPath(root, slice)
-			content, err := codegen.Render(codegen.RenderOptions{
-				TemplateName: "slice.tmpl",
-				Templates:    templates,
-				Data:         sliceSpec,
-				Filename:     slicePath,
-			})
-			if err != nil {
-				return res, fmt.Errorf("cellgen generate: render slice %s/%s: %w", id, sid, err)
-			}
-			writeRes, err := codegen.Write(codegen.WriteOptions{
-				Path:     slicePath,
-				Content:  content,
-				RepoRoot: root,
-				DryRun:   opts.DryRun,
-				Verify:   opts.Verify,
-			})
-			if err != nil {
-				return res, err
-			}
-			recordResult(&res, writeRes)
 		}
 	}
 	return res, nil
+}
+
+// generateOneCell renders cell_gen.go and per-slice slice_gen.go for the
+// given cell, appending outcomes to res.
+func generateOneCell(root string, project *metadata.ProjectMeta, cell *metadata.CellMeta, opts Options, res *Result) error {
+	spec, err := BuildCellSpec(project, cell.ID)
+	if err != nil {
+		return err
+	}
+	if err := renderAndWrite(root, "cell.tmpl", spec, cellGenPath(root, cell), opts, res, "cellgen generate: render "+cell.ID); err != nil {
+		return err
+	}
+	for _, sid := range slicesForCellSorted(project, cell.ID) {
+		sliceSpec, err := BuildSliceSpec(project, cell.ID, sid)
+		if err != nil {
+			return err
+		}
+		if sliceSpec == nil {
+			continue
+		}
+		slice := project.Slices[cell.ID+"/"+sid]
+		errPrefix := "cellgen generate: render slice " + cell.ID + "/" + sid
+		if err := renderAndWrite(root, "slice.tmpl", sliceSpec, sliceGenPath(root, slice), opts, res, errPrefix); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// renderAndWrite is the shared (render → write → record) tail used by both
+// the cell and slice render paths.
+func renderAndWrite(root, tmpl string, data any, path string, opts Options, res *Result, errPrefix string) error {
+	content, err := codegen.Render(codegen.RenderOptions{
+		TemplateName: tmpl,
+		Templates:    templates,
+		Data:         data,
+		Filename:     path,
+	})
+	if err != nil {
+		return fmt.Errorf("%s: %w", errPrefix, err)
+	}
+	writeRes, err := codegen.Write(codegen.WriteOptions{
+		Path:     path,
+		Content:  content,
+		RepoRoot: root,
+		DryRun:   opts.DryRun,
+		Verify:   opts.Verify,
+	})
+	if err != nil {
+		return err
+	}
+	recordResult(res, writeRes)
+	return nil
 }
 
 // selectCellIDs returns the deterministic ordered list of cell ids to process.

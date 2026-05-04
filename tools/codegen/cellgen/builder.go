@@ -77,7 +77,10 @@ func BuildSliceSpec(p *metadata.ProjectMeta, cellID, sliceID string) (*SliceGenS
 		return nil, fmt.Errorf("cellgen build slice: slice %q not found", key)
 	}
 	if len(s.Subscribes) == 0 {
-		return nil, nil
+		// Intentional (nil, nil): caller (Generate) treats nil spec as
+		// "skip slice_gen.go for this slice". Sentinel error would force
+		// every call site to errors.Is-check the success path.
+		return nil, nil //nolint:nilnil // intentional API: nil spec means "no slice_gen.go for this slice"
 	}
 	spec := &SliceGenSpec{
 		Package: s.Dir,
@@ -207,10 +210,10 @@ func buildSubscriptions(p *metadata.ProjectMeta, cellID string, slices []*metada
 // specVarName converts a contract id like "event.config.entry-upserted.v1"
 // into a canonical Go identifier like "specEventConfigEntryUpserted":
 //
-//	1. drop a trailing version segment matching ^v\d+$
-//	2. split remainder on "."
-//	3. for each piece, split on "-" and CamelCase
-//	4. prepend "spec" and concat
+//  1. drop a trailing version segment matching ^v\d+$
+//  2. split remainder on "."
+//  3. for each piece, split on "-" and CamelCase
+//  4. prepend "spec" and concat
 func specVarName(contractID string) string {
 	parts := strings.Split(contractID, ".")
 	if n := len(parts); n > 0 && isVersionSegment(parts[n-1]) {

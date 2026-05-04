@@ -96,6 +96,11 @@ func NewOrderCell(opts ...Option) *OrderCell {
 // generated reg.RouteGroup() blocks. This is a permanent convention, not a
 // transitional shim — slice/handler instantiation and adapter wiring stay
 // hand-written.
+//
+// ctx is part of the contract because cells that ping adapters (postgres,
+// vault) at init time need it; ordercell currently does not.
+//
+//nolint:unparam // ctx is a contract parameter; unused here, used by other cells
 func (c *OrderCell) initInternal(ctx context.Context, reg cell.Registry) error {
 	durabilityMode := reg.DurabilityMode()
 

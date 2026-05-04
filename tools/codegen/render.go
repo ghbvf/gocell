@@ -55,9 +55,9 @@ func Render(opts RenderOptions) ([]byte, error) {
 	}
 
 	final, impErr := imports.Process(opts.Filename, formatted, &imports.Options{
-		TabIndent: true,
-		TabWidth:  8,
-		Comments:  true,
+		TabIndent:  true,
+		TabWidth:   8,
+		Comments:   true,
 		FormatOnly: false,
 	})
 	if impErr != nil {
