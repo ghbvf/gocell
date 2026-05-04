@@ -6,8 +6,6 @@ package get
 import (
 	"net/http"
 
-	"github.com/go-chi/chi/v5"
-
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/wrapper"
 	"github.com/ghbvf/gocell/pkg/errcode"
@@ -54,7 +52,7 @@ func (h *Handler) RegisterRoutes(mux cell.RouteHandler) error {
 func (h *Handler) handle(w http.ResponseWriter, r *http.Request) {
 	req := &Request{}
 	{
-		v := chi.URLParam(r, "id")
+		v := r.PathValue("id")
 		if len(v) < 1 {
 			httputil.WriteDomainError(r.Context(), w, errcode.New(errcode.ErrValidationFailed, "id: value too short"))
 			return

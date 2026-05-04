@@ -12,7 +12,6 @@ import (
 	"testing"
 
 	"github.com/coder/websocket"
-	"github.com/go-chi/chi/v5"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -486,10 +485,10 @@ func TestMountRouteGroup_CellAttribution_RawMountPrefix(t *testing.T) {
 		Listener: cell.PrimaryListener,
 		CellID:   "mountcell",
 		Register: func(mux cell.RouteMux) error {
-			sub := chi.NewRouter()
-			sub.Get("/ok", func(w http.ResponseWriter, _ *http.Request) {
+			sub := http.NewServeMux()
+			sub.Handle("GET /ok", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 				w.WriteHeader(http.StatusNoContent)
-			})
+			}))
 			mux.Mount("/mounted", sub)
 			return nil
 		},
@@ -522,11 +521,11 @@ func TestGroup(t *testing.T) {
 
 func TestMount(t *testing.T) {
 	r := MustNew(WithRouterClock(clock.Real()))
-	subRouter := chi.NewRouter()
-	subRouter.Get("/hello", func(w http.ResponseWriter, _ *http.Request) {
+	subMux := http.NewServeMux()
+	subMux.Handle("GET /hello", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
-	})
-	r.Mount("/sub", subRouter)
+	}))
+	r.Mount("/sub", subMux)
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/sub/hello", nil)

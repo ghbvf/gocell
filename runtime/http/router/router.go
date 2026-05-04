@@ -58,11 +58,28 @@ type patternRecordingMux struct {
 }
 
 func (p *patternRecordingMux) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	h, pattern := p.mux.Handler(r)
-	if pattern != "" {
-		middleware.RecordRoutePattern(r.Context(), pattern)
+	// Two-pass dispatch: (*ServeMux).Handler returns the matched pattern but
+	// does NOT populate the request's {param} PathValues — those are written
+	// by (*ServeMux).ServeHTTP when it constructs the dispatched request.
+	// Read the pattern first for the observability recorder, then let
+	// ServeHTTP perform the actual dispatch so r.PathValue keeps working
+	// inside leaf handlers.
+	if _, pattern := p.mux.Handler(r); pattern != "" {
+		middleware.RecordRoutePattern(r.Context(), stripPatternMethod(pattern))
 	}
-	h.ServeHTTP(w, r)
+	p.mux.ServeHTTP(w, r)
+}
+
+// stripPatternMethod drops the leading "METHOD " prefix from a ServeMux 1.22+
+// pattern so the recorded route stays method-agnostic. Tracing, AccessLog,
+// and Metrics compose the method with the route as they emit, so keeping the
+// recorded value path-only avoids double-prefixing in span names like
+// "GET GET /api/v1/users/{id}".
+func stripPatternMethod(pattern string) string {
+	if idx := strings.IndexByte(pattern, ' '); idx >= 0 {
+		return pattern[idx+1:]
+	}
+	return pattern
 }
 
 // patternRecorderMiddleware installs an empty *patternRecorder into ctx so
@@ -323,7 +340,8 @@ func WithDefaultMiddleware(mws ...func(http.Handler) http.Handler) Option {
 //
 // ref: go-kratos/kratos transport/http/server.go — per-server middleware
 // ref: net/http.ServeMux — one ServeMux root per listener; method+pattern
-//      routing (Go 1.22+).
+//
+//	routing (Go 1.22+).
 type Router struct {
 	ref kcell.ListenerRef // which listener this router serves
 	mux *http.ServeMux    // single ServeMux root; observability + auth wrap it
@@ -336,6 +354,13 @@ type Router struct {
 	// pattern-recording dispatch wrapper. Reset only when the chain changes
 	// (currently only during NewForListener).
 	handler http.Handler
+	// muxHandlers tracks (method, path) pairs that have been registered on
+	// the underlying ServeMux. Stdlib panics on a second registration of the
+	// same pattern, so duplicate Handle calls are silently dropped here so
+	// FinalizeAuth's structured duplicate-route error remains the canonical
+	// signal — preserving the chi-era contract where duplicate auth.Mount
+	// surfaces as a metadata error during phase5.
+	muxHandlers map[string]bool
 
 	// configuration fields (read during build)
 	metricsCollector    metrics.Collector
@@ -689,8 +714,38 @@ func (r *Router) buildAuthOpts() []auth.AuthOption {
 // "/path"). The handler is registered directly on the underlying ServeMux
 // without any extra middleware wrap; root-level middleware (observability,
 // auth, body-limit, etc.) is composed by Router.Handler.
+//
+// Each registration is mirrored into routePatterns so policy coverage and
+// route-pattern resolution see the same routes that ServeMux dispatches to.
+// Duplicate registrations are tracked separately (muxHandlers) so the second
+// call drops at the mux layer — FinalizeAuth's structured error is the
+// canonical user-visible signal for duplicate auth.Mount.
 func (r *Router) Handle(pattern string, handler http.Handler) {
-	r.mux.Handle(pattern, handler)
+	method, routePath := splitHandlePattern(pattern)
+	if routePath == "" {
+		r.mux.Handle(pattern, handler)
+		return
+	}
+	if r.markMuxHandler(method, routePath) {
+		r.recordRoutePattern(method, routePath)
+		r.mux.Handle(pattern, handler)
+	}
+}
+
+// markMuxHandler records that (method, path) was passed to the underlying
+// ServeMux and returns true on the first registration. Subsequent calls for
+// the same key return false so the caller can skip mux.Handle and avoid
+// stdlib's duplicate-pattern panic.
+func (r *Router) markMuxHandler(method, routePath string) bool {
+	key := strings.ToUpper(method) + "\x00" + cleanRoutePath(routePath)
+	if r.muxHandlers == nil {
+		r.muxHandlers = make(map[string]bool)
+	}
+	if r.muxHandlers[key] {
+		return false
+	}
+	r.muxHandlers[key] = true
+	return true
 }
 
 // Group creates a sub-scope, implementing cell.RouteMux. The returned adapter
@@ -714,14 +769,61 @@ func (r *Router) Route(pattern string, fn func(kcell.RouteMux)) {
 // Mount attaches an http.Handler under the given prefix. Stdlib ServeMux
 // requires sub-tree patterns to end in "/"; the trailing slash is added
 // implicitly. The handler sees the request path with the prefix stripped.
+//
+// Both the bare prefix ("/api") and the sub-tree ("/api/...") are registered
+// so requests that hit the mount root without a trailing slash still reach
+// the inner handler's "/" registration instead of stdlib's 301 redirect.
 func (r *Router) Mount(prefix string, handler http.Handler) {
 	canonical := strings.TrimSuffix(prefix, "/")
 	if canonical == "" {
-		// Mount at root: ServeMux dispatches everything to the handler.
 		r.mux.Handle("/", handler)
 		return
 	}
-	r.mux.Handle(canonical+"/", http.StripPrefix(canonical, handler))
+	recorded := mountPatternRecorder(canonical, handler)
+	r.mux.Handle(canonical+"/", http.StripPrefix(canonical, recorded))
+	r.mux.Handle(canonical, mountBareHandler(recorded))
+}
+
+// mountBareHandler rewrites the request path to "/" before dispatching to the
+// inner mount handler so a "GET /" registration inside the inner handler
+// still matches when the outer request path equals the mount prefix exactly
+// (e.g. "/api" with mount prefix "/api"). Without this rewrite stdlib
+// ServeMux issues a 301 redirect to "/api/".
+func mountBareHandler(handler http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		req2 := req.Clone(req.Context())
+		req2.URL.Path = "/"
+		if req.URL.RawPath != "" {
+			req2.URL.RawPath = "/"
+		}
+		handler.ServeHTTP(w, req2)
+	})
+}
+
+// mountPatternRecorder upgrades a *http.ServeMux mount handler so it writes
+// the matched-inner pattern composed with the mount prefix into the
+// request-scoped *patternRecorder. This recovers chi's "Mount + sub-route =
+// composed full pattern" semantics for observability — without this wrap
+// the outer dispatch only records the mount subtree pattern (e.g. "/api/")
+// and metrics/tracing/access-log lose route granularity for mounted cells.
+//
+// Non-ServeMux handlers are returned unchanged: their internal routing is
+// opaque, so the outer mount-subtree pattern is the best label available.
+func mountPatternRecorder(prefix string, handler http.Handler) http.Handler {
+	subMux, ok := handler.(*http.ServeMux)
+	if !ok {
+		return handler
+	}
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, inner := subMux.Handler(r)
+		if inner != "" {
+			if idx := strings.IndexByte(inner, ' '); idx >= 0 {
+				inner = inner[idx+1:]
+			}
+			middleware.RecordRoutePattern(r.Context(), prefix+inner)
+		}
+		subMux.ServeHTTP(w, r)
+	})
 }
 
 // With returns a new RouteMux that applies the given middleware to routes
@@ -1049,10 +1151,24 @@ func (r *Router) recordRoutePattern(method, routePath string) {
 	if routePath == "" {
 		return
 	}
-	r.routePatterns = append(r.routePatterns, registeredRoutePattern{
-		method: strings.ToUpper(method),
-		path:   routePath,
-	})
+	method = strings.ToUpper(method)
+	if method != "" {
+		r.routePatterns = append(r.routePatterns, registeredRoutePattern{
+			method: method,
+			path:   routePath,
+		})
+		return
+	}
+	// stdlib ServeMux treats method-less patterns as matching every HTTP
+	// method. Mirror chi.Walk semantics: emit one entry per business method
+	// so policy coverage and route-pattern resolution can reason about each
+	// (method, path) pair independently.
+	for m := range businessMethods {
+		r.routePatterns = append(r.routePatterns, registeredRoutePattern{
+			method: m,
+			path:   routePath,
+		})
+	}
 }
 
 // not404Handler writes a 404 JSON body. Used when a primary-listener router
@@ -1353,6 +1469,12 @@ func (a *nativeMuxAdapter) Handle(pattern string, handler http.Handler) {
 	}
 	method, routePath := splitHandlePattern(pattern)
 	if routePath != "" {
+		fullPath := joinPrefix(a.prefix, routePath)
+		if a.owner != nil && !a.owner.markMuxHandler(method, fullPath) {
+			// Duplicate registration — defer to FinalizeAuth for the
+			// user-visible error. See Router.Handle for context.
+			return
+		}
 		if err := a.recordOwnedRoute(method, routePath); err != nil {
 			a.setRegistrationErr(err)
 			return
@@ -1402,7 +1524,9 @@ func (a *nativeMuxAdapter) Mount(pattern string, handler http.Handler) {
 		a.mux.Handle("/", handler)
 		return
 	}
-	a.mux.Handle(canonical+"/", http.StripPrefix(canonical, handler))
+	recorded := mountPatternRecorder(canonical, handler)
+	a.mux.Handle(canonical+"/", http.StripPrefix(canonical, recorded))
+	a.mux.Handle(canonical, mountBareHandler(recorded))
 }
 
 func (a *nativeMuxAdapter) Group(fn func(kcell.RouteMux)) {
@@ -1507,12 +1631,20 @@ func (a *nativeMuxAdapter) hasRegistrationErr() bool {
 // pattern. Input pattern follows the "[METHOD ]/path" form; the prefix is
 // applied to the path component only, and the optional method is preserved
 // verbatim. Empty prefix returns the original pattern.
+//
+// When the child path is the bare slash ("/"), the result is registered as
+// the subtree of the parent prefix (trailing slash) so requests to the
+// prefix and any deeper path still hit the registered handler — chi's
+// "Route(prefix) + Handle('/', h)" semantics.
 func combineHandlePattern(prefix, pattern string) string {
 	if prefix == "" {
 		return pattern
 	}
 	method, routePath := splitHandlePattern(pattern)
 	full := joinPrefix(prefix, routePath)
+	if routePath == "/" {
+		full = strings.TrimSuffix(full, "/") + "/"
+	}
 	if method == "" {
 		return full
 	}

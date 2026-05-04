@@ -8,7 +8,6 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/go-chi/chi/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -212,17 +211,20 @@ func (st *spyTracer) Spans() []*spySpan {
 func TestTracing_SpanRenamedToRoutePattern(t *testing.T) {
 	spy := &spyTracer{}
 
-	r := chi.NewRouter()
-	r.Use(Tracing(spy))
-	r.Get("/api/v1/users/{id}", func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusOK)
-	})
+	handler := buildTestServer(
+		[]func(http.Handler) http.Handler{Tracing(spy)},
+		func(mux *http.ServeMux) {
+			mux.Handle("GET /api/v1/users/{id}", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(http.StatusOK)
+			}))
+		},
+	)
 
 	// Hit with different IDs — all spans should be renamed to the route pattern.
 	for _, id := range []string{"1", "42", "abc"} {
 		req := httptest.NewRequest(http.MethodGet, "/api/v1/users/"+id, nil)
 		rec := httptest.NewRecorder()
-		r.ServeHTTP(rec, req)
+		handler.ServeHTTP(rec, req)
 		assert.Equal(t, http.StatusOK, rec.Code)
 	}
 
@@ -239,15 +241,18 @@ func TestTracing_SpanRenamedToRoutePattern(t *testing.T) {
 func TestTracing_UnmatchedRouteSpanName(t *testing.T) {
 	spy := &spyTracer{}
 
-	r := chi.NewRouter()
-	r.Use(Tracing(spy))
-	r.Get("/exists", func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusOK)
-	})
+	handler := buildTestServer(
+		[]func(http.Handler) http.Handler{Tracing(spy)},
+		func(mux *http.ServeMux) {
+			mux.Handle("GET /exists", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(http.StatusOK)
+			}))
+		},
+	)
 
 	req := httptest.NewRequest(http.MethodGet, "/random-404-path", nil)
 	rec := httptest.NewRecorder()
-	r.ServeHTTP(rec, req)
+	handler.ServeHTTP(rec, req)
 
 	spans := spy.Spans()
 	require.Len(t, spans, 1)
@@ -259,15 +264,18 @@ func TestTracing_UnmatchedRouteSpanName(t *testing.T) {
 func TestTracing_HttpRouteAttribute(t *testing.T) {
 	spy := &spyTracer{}
 
-	r := chi.NewRouter()
-	r.Use(Tracing(spy))
-	r.Get("/api/v1/orders/{orderID}", func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusCreated)
-	})
+	handler := buildTestServer(
+		[]func(http.Handler) http.Handler{Tracing(spy)},
+		func(mux *http.ServeMux) {
+			mux.Handle("GET /api/v1/orders/{orderID}", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(http.StatusCreated)
+			}))
+		},
+	)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/orders/999", nil)
 	rec := httptest.NewRecorder()
-	r.ServeHTTP(rec, req)
+	handler.ServeHTTP(rec, req)
 
 	spans := spy.Spans()
 	require.Len(t, spans, 1)

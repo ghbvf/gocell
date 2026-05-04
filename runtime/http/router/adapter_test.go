@@ -3,6 +3,7 @@ package router
 import (
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -46,9 +47,18 @@ func TestWithTrustedProxies_Integration(t *testing.T) {
 
 func TestRouter_Handler(t *testing.T) {
 	// PR-A14b: each Router has a single Handler() serving its listener's mux.
+	// The composed handler wraps the ServeMux with the listener-root middleware
+	// chain, so it is not pointer-equal to r.mux — but it must be non-nil and
+	// reused across calls so http.Server hands the same handler to every
+	// connection (cached lazily on first call).
 	r := MustNew(WithRouterClock(clock.Real()))
-	assert.NotNil(t, r.Handler())
-	assert.Equal(t, r.mux, r.Handler())
+	first := r.Handler()
+	assert.NotNil(t, first)
+	assert.NotNil(t, r.mux)
+	assert.Equal(t,
+		reflect.ValueOf(first).Pointer(),
+		reflect.ValueOf(r.Handler()).Pointer(),
+		"Handler() must return the same composed handler on each call")
 }
 
 func TestRouteGroup_Route(t *testing.T) {
