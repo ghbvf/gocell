@@ -11,6 +11,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/metadata"
+	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 )
 
 // TestAssembly_StartConcurrentSnapshots_RaceDetector exercises the path that
@@ -83,14 +84,14 @@ func TestAssembly_StartConcurrentSnapshots_RaceDetector(t *testing.T) {
 				default:
 				}
 				_ = a.Snapshots()
-				time.Sleep(time.Millisecond)
+				time.Sleep(testtime.D1ms) //archtest:allow:test-sleep yield between Snapshots() reads to widen the race window vs. Phase 1 writer
 			}
 		}()
 	}
 
 	// Hold readers in a hot loop briefly so Phase 1 has time to write at least
 	// one cell snapshot before unblocking.
-	time.Sleep(30 * time.Millisecond)
+	time.Sleep(testtime.D30ms) //archtest:allow:test-sleep let reader goroutines reach Snapshots() before Phase 1 unblocks
 	close(initGate)
 
 	startErr := <-startDone

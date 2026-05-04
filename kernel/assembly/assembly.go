@@ -354,9 +354,13 @@ func (a *CoreAssembly) StartWithConfig(ctx context.Context, cfgMap map[string]an
 func (a *CoreAssembly) startInternal(ctx context.Context, cfgMap map[string]any) error {
 	a.mu.Lock()
 	if a.state != stateStopped {
+		// Snapshot the offending state inside the lock so the error message
+		// reflects the value we observed at the guard, not whatever a racing
+		// Stop()/Start() goroutine writes after we release a.mu.
+		s := a.state
 		a.mu.Unlock()
 		return errcode.New(errcode.ErrValidationFailed,
-			fmt.Sprintf("assembly %q: cannot start in state %d", a.id, a.state))
+			fmt.Sprintf("assembly %q: cannot start in state %d", a.id, s))
 	}
 	a.state = stateStarting
 	a.mu.Unlock()
@@ -382,6 +386,13 @@ func (a *CoreAssembly) startInternal(ctx context.Context, cfgMap map[string]any)
 	// Init or Start path cannot mutate the config seen by another cell.
 	// ref: spf13/viper AllSettings() returns a deep copy for the same reason;
 	//      k8s client-go DeepCopyObject — each consumer owns its own value.
+	//
+	// Snapshots are accumulated into a local map and published to a.snapshots
+	// under a.mu only after every cell.Init succeeds. Writing the shared map
+	// inside the loop without the lock would race with concurrent Snapshots()
+	// readers — Go runtime treats concurrent map read/write as fatal.
+	// ref: PR-V1-030-K01 (review G1-01).
+	localSnaps := make(map[string]cell.RegistrySnapshot, len(a.cells))
 	for _, c := range a.cells {
 		recorder := cell.NewRegistryRecorder(cloneConfigMap(cfgMap), a.cfg.DurabilityMode)
 		if err := c.Init(ctx, recorder); err != nil {
@@ -392,8 +403,11 @@ func (a *CoreAssembly) startInternal(ctx context.Context, cfgMap map[string]any)
 			return errcode.Wrap(errcode.ErrValidationFailed,
 				fmt.Sprintf("assembly: init cell %q", c.ID()), err)
 		}
-		a.snapshots[c.ID()] = recorder.Snapshot()
+		localSnaps[c.ID()] = recorder.Snapshot()
 	}
+	a.mu.Lock()
+	a.snapshots = localSnaps
+	a.mu.Unlock()
 
 	// Phase 2: Start cells in order with lifecycle hooks.
 	// For each cell: BeforeStart → Start → AfterStart.
