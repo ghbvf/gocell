@@ -112,7 +112,16 @@ func BuildSliceSpec(p *metadata.ProjectMeta, cellID, sliceID string) (*SliceGenS
 		SliceID:    sliceID,
 		SourceFile: s.File,
 	}
+	// Deduplicate handlers by method name: when multiple topics share the same
+	// handler (e.g. HandleEvent for 13 audit topics), the interface only needs
+	// one declaration. Duplicate method names are a compile error in Go interfaces.
+	seen := make(map[string]bool, len(s.Subscribes))
 	for _, sub := range s.Subscribes {
+		if seen[sub.Handler] {
+			continue
+		}
+		seen[sub.Handler] = true
+		// For deduplicated methods list all handled contracts in the comment.
 		spec.Handlers = append(spec.Handlers, SliceHandlerSpec{
 			MethodName: sub.Handler,
 			ContractID: sub.Contract,

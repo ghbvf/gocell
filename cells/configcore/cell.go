@@ -14,7 +14,6 @@ import (
 	"github.com/ghbvf/gocell/cells/configcore/slices/flagwrite"
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/clock"
-	"github.com/ghbvf/gocell/kernel/metadata"
 	"github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/persistence"
@@ -22,10 +21,7 @@ import (
 	obmetrics "github.com/ghbvf/gocell/runtime/observability/metrics"
 )
 
-// Compile-time interface checks.
-var (
-	_ cell.Cell = (*ConfigCore)(nil)
-)
+// Compile-time interface check lives in cell_gen.go (DO NOT EDIT).
 
 // Option configures a ConfigCore Cell.
 type Option func(*ConfigCore)
@@ -117,6 +113,8 @@ func WithInMemoryDefaults() Option {
 }
 
 // ConfigCore is the configcore Cell implementation.
+// +cell:listener:ref=cell.PrimaryListener,prefix=/api/v1
+// +cell:listener:ref=cell.InternalListener,prefix=/internal/v1
 type ConfigCore struct {
 	*cell.BaseCell
 	clk        clock.Clock
@@ -141,27 +139,32 @@ type ConfigCore struct {
 	configEventCollector obmetrics.ConfigEventCollector
 
 	// Slice services and handlers.
-	writeHandler     *configwrite.Handler
-	readHandler      *configread.Handler
-	publishHandler   *configpublish.Handler
-	flagHandler      *featureflag.Handler
+	// +slice:route:slice=configwrite,subPath=/config
+	writeHandler *configwrite.Handler
+
+	// +slice:route:slice=configread,subPath=/config
+	// +slice:route:slice=configread,listener=cell.InternalListener,subPath=/config,method=RegisterInternalRoutes
+	readHandler *configread.Handler
+
+	// +slice:route:slice=configpublish,subPath=/config
+	publishHandler *configpublish.Handler
+
+	// +slice:route:slice=featureflag,subPath=/flags
+	flagHandler *featureflag.Handler
+
+	// +slice:route:slice=flagwrite,subPath=/flags
 	flagWriteHandler *flagwrite.Handler
-	subscribeSvc     *configsubscribe.Service
+
+	// +slice:subscribe:slice=configsubscribe,topic=event.config.entry-upserted.v1,handler=HandleEntryUpserted,group=configcore
+	// +slice:subscribe:slice=configsubscribe,topic=event.config.entry-deleted.v1,handler=HandleEntryDeleted,group=configcore
+	subscribeSvc *configsubscribe.Service
 }
 
 // NewConfigCore creates a new ConfigCore Cell.
 func NewConfigCore(opts ...Option) *ConfigCore {
 	c := &ConfigCore{
-		BaseCell: cell.MustNewBaseCell(&metadata.CellMeta{
-			ID:               "configcore",
-			Type:             "core",
-			ConsistencyLevel: "L2",
-			DurabilityMode:   "durable",
-			Owner:            metadata.OwnerMeta{Team: "platform", Role: "config-owner"},
-			Schema:           metadata.SchemaMeta{Primary: "config_entries"},
-			Verify:           metadata.CellVerifyMeta{Smoke: []string{"configcore/smoke"}},
-		}),
-		logger: slog.Default(),
+		BaseCell: cell.MustNewBaseCell(loadCellMetadata()),
+		logger:   slog.Default(),
 	}
 	for _, o := range opts {
 		o(c)

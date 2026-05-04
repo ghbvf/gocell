@@ -1,6 +1,6 @@
-// cell_init.go hosts ConfigCore.Init() and the initXxxSlice helpers that
+// cell_init.go hosts ConfigCore.initInternal() and the initXxxSlice helpers that
 // construct the six slices during cell initialization. Constructor + options
-// live in cell.go.
+// live in cell.go; Init() is generated in cell_gen.go.
 package configcore
 
 import (
@@ -18,30 +18,19 @@ import (
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/outbox"
-	"github.com/ghbvf/gocell/kernel/wrapper"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/query"
 )
 
-// Event spec variables for configcore subscriptions. EventSpec id==topic so
-// FMT-18's literal-vs-YAML cross-check sees the ID literal in the call.
-var (
-	specEventConfigEntryUpserted = wrapper.EventSpec("event.config.entry-upserted.v1", "amqp")
-	specEventConfigEntryDeleted  = wrapper.EventSpec("event.config.entry-deleted.v1", "amqp")
-)
-
-// Init constructs all slices and registers routes, subscriptions, and health
-// probes into reg. Storage adapters are resolved by composition roots before
-// NewConfigCore receives its repository options.
-func (c *ConfigCore) Init(ctx context.Context, reg cell.Registry) error {
-	clock.MustHaveClock(c.clk, "configcore.Init")
-	if err := c.BaseCell.Init(ctx, reg); err != nil {
-		return err
-	}
-
-	// BaseCell does not expose a Clock accessor; configcore carries its own
-	// clock field validated via MustHaveClock above (set via WithClock option
-	// from composition root or test). reg has no Config clock; use c.clk.
+// initInternal is the K#04 codegen escape hatch: business init that cannot
+// be generated (emitter resolve, slice service construction, health probes).
+// cell_gen.go::Init calls it after BaseCell.Init and before mounting the
+// generated reg.RouteGroup() and reg.Subscribe() blocks. This is a permanent
+// convention, not a transitional shim.
+//
+//nolint:unparam // ctx is a contract parameter; unused here, used by other cells
+func (c *ConfigCore) initInternal(ctx context.Context, reg cell.Registry) error {
+	clock.MustHaveClock(c.clk, "configcore.initInternal")
 
 	// WithInMemoryDefaults defers repo construction to here so c.clk is available.
 	if c.useInMemoryDefaults {
@@ -79,10 +68,7 @@ func (c *ConfigCore) Init(ctx context.Context, reg cell.Registry) error {
 		return err
 	}
 
-	c.registerRouteGroups(reg)
-	if err := c.registerSubscriptions(reg); err != nil {
-		return err
-	}
+	// reg.RouteGroup and reg.Subscribe removed: cell_gen.go owns Init and renders them.
 
 	// Register health probes (emitter fail-open rate checker).
 	if hc, ok := c.emitter.(cell.HealthProber); ok {
@@ -110,60 +96,6 @@ func (c *ConfigCore) initAllSlices(runMode query.RunMode) error {
 		return err
 	}
 	return c.initFlagWriteSlice()
-}
-
-// registerRouteGroups registers HTTP route groups for primary and internal listeners.
-func (c *ConfigCore) registerRouteGroups(reg cell.Registry) {
-	reg.RouteGroup(cell.RouteGroup{
-		Listener: cell.PrimaryListener,
-		Prefix:   "/api/v1",
-		Register: func(mux cell.RouteMux) error {
-			var firstErr error
-			captureErr := func(err error) {
-				if err != nil && firstErr == nil {
-					firstErr = err
-				}
-			}
-			mux.Route("/config", func(cfg cell.RouteMux) {
-				captureErr(c.readHandler.RegisterRoutes(cfg))
-				captureErr(c.writeHandler.RegisterRoutes(cfg))
-				captureErr(c.publishHandler.RegisterRoutes(cfg))
-			})
-			mux.Route("/flags", func(f cell.RouteMux) {
-				captureErr(c.flagHandler.RegisterRoutes(f))
-				captureErr(c.flagWriteHandler.RegisterRoutes(f))
-			})
-			return firstErr
-		},
-	})
-	reg.RouteGroup(cell.RouteGroup{
-		Listener: cell.InternalListener,
-		Prefix:   "/internal/v1",
-		Register: func(mux cell.RouteMux) error {
-			var firstErr error
-			mux.Route("/config", func(cfg cell.RouteMux) {
-				if err := c.readHandler.RegisterInternalRoutes(cfg); err != nil {
-					firstErr = err
-				}
-			})
-			return firstErr
-		},
-	})
-}
-
-// registerSubscriptions registers configsubscribe event handlers into reg.
-func (c *ConfigCore) registerSubscriptions(reg cell.Registry) error {
-	if err := reg.Subscribe(
-		specEventConfigEntryUpserted, c.subscribeSvc.HandleEntryUpserted, "configcore",
-		cell.WithSubscriptionSliceID("configsubscribe")); err != nil {
-		return fmt.Errorf("configcore: subscribe %s: %w", specEventConfigEntryUpserted.Topic, err)
-	}
-	if err := reg.Subscribe(
-		specEventConfigEntryDeleted, c.subscribeSvc.HandleEntryDeleted, "configcore",
-		cell.WithSubscriptionSliceID("configsubscribe")); err != nil {
-		return fmt.Errorf("configcore: subscribe %s: %w", specEventConfigEntryDeleted.Topic, err)
-	}
-	return nil
 }
 
 // resolveEmitter delegates to cell.ResolveCellEmitter (mutual exclusion +

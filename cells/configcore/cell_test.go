@@ -238,10 +238,17 @@ func TestConfigCore_RegisterSubscriptions(t *testing.T) {
 	snap := recorder.Snapshot()
 	require.Len(t, snap.Subscriptions, 2,
 		"configcore registers entry-upserted + entry-deleted state-sync handlers")
-	assert.Equal(t, "event.config.entry-upserted.v1", snap.Subscriptions[0].Spec.Topic)
-	assert.Equal(t, "configcore", snap.Subscriptions[0].ConsumerGroup)
-	assert.Equal(t, "event.config.entry-deleted.v1", snap.Subscriptions[1].Spec.Topic)
-	assert.Equal(t, "configcore", snap.Subscriptions[1].ConsumerGroup)
+
+	// Collect topics as a set — cell_gen.go sorts alphabetically, so positional
+	// assertions would be brittle. Verify both topics and their consumer groups.
+	topics := make(map[string]string, 2)
+	for _, sub := range snap.Subscriptions {
+		topics[sub.Spec.Topic] = sub.ConsumerGroup
+	}
+	assert.Equal(t, "configcore", topics["event.config.entry-upserted.v1"],
+		"entry-upserted subscription must be registered with configcore consumer group")
+	assert.Equal(t, "configcore", topics["event.config.entry-deleted.v1"],
+		"entry-deleted subscription must be registered with configcore consumer group")
 }
 
 // stubMux implements cell.RouteMux for testing.
