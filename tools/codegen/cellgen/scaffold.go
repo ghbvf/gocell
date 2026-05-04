@@ -107,6 +107,45 @@ func ScaffoldCell(root, targetDir string, spec ScaffoldSpec) error {
 		return nil
 	}
 
+	// Symlink guard: resolve the true on-disk root and verify that the target
+	// directory stays inside it even if intermediate components are symlinks.
+	// This prevents a pre-placed symlink (e.g. cells/foo → /tmp/evil) from
+	// redirecting scaffold writes outside the repository.
+	realRoot, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		return fmt.Errorf("scaffold cell: resolve root %q: %w", root, err)
+	}
+	cleanTarget := filepath.Clean(filepath.Join(realRoot, targetDir))
+	if !strings.HasPrefix(cleanTarget, realRoot+string(filepath.Separator)) {
+		return fmt.Errorf("scaffold cell: target %q escapes root %q", targetDir, realRoot)
+	}
+	// Walk existing parent components and verify each symlink resolves inside root.
+	parent := filepath.Dir(cleanTarget)
+	for parent != realRoot && parent != "/" && parent != "." {
+		info, statErr := os.Lstat(parent)
+		if statErr != nil {
+			if os.IsNotExist(statErr) {
+				parent = filepath.Dir(parent)
+				continue
+			}
+			return fmt.Errorf("scaffold cell: stat parent %q: %w", parent, statErr)
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			resolved, resolveErr := filepath.EvalSymlinks(parent)
+			if resolveErr != nil {
+				return fmt.Errorf("scaffold cell: resolve symlink %q: %w", parent, resolveErr)
+			}
+			if !strings.HasPrefix(resolved, realRoot+string(filepath.Separator)) && resolved != realRoot {
+				return fmt.Errorf("scaffold cell: parent path %q resolves outside root via symlink (resolved to %q)", parent, resolved)
+			}
+		}
+		parent = filepath.Dir(parent)
+	}
+	// Use the realRoot-based dir so subsequent writes go to the true path.
+	dir = cleanTarget
+	cellGoPath = filepath.Join(dir, "cell.go")
+	cellYAMLPath = filepath.Join(dir, "cell.yaml")
+
 	cellGoContent, err := renderTemplate(cellGoTemplate, spec, true)
 	if err != nil {
 		return fmt.Errorf("scaffold cell: render cell.go: %w", err)

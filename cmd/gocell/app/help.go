@@ -97,7 +97,8 @@ func printGenerateHelp() error {
 		}},
 		{"cell", []string{
 			"Render cell_gen.go and slice_gen.go from cell.yaml /",
-			"slice.yaml. <cellID> | --all [--dry-run | --verify].",
+			"slice.yaml. Default: all opted-in cells (goStructName set).",
+			"Optional: [<cellID>] scopes to a single cell.",
 			"--verify reports drift without writing; --dry-run prints",
 			"would-write file paths without writing.",
 			"CI: commit cell_gen.go and run with --verify to detect stale artifacts.",
@@ -145,15 +146,15 @@ func printVerifyHelp() error {
 		}},
 		{"codegen-cell", []string{
 			"Verify cell_gen.go / slice_gen.go are in sync with",
-			"cell.yaml / slice.yaml. Default mode runs in a K8s-style",
-			"git worktree sandbox; --local skips the sandbox for fast",
-			"in-place verify (CI uses sandbox, devs use --local).",
+			"cell.yaml / slice.yaml. Default: --local in-place verify",
+			"(fast, no sandbox). CI: pass --local=false to use the",
+			"K8s-style git worktree sandbox mode.",
 		}},
 		{"codegen-contract", []string{
 			"Verify generated/contracts/**/*_gen.go are in sync with",
-			"contract.yaml / schema files. Default mode runs in a",
-			"git worktree sandbox; --local skips sandbox for fast",
-			"in-place verify (CI uses sandbox, devs use --local).",
+			"contract.yaml / schema files. Default: --local in-place",
+			"verify (fast, no sandbox). CI: pass --local=false for",
+			"git worktree sandbox mode.",
 		}},
 	})
 	return nil

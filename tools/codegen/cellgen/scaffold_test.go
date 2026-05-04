@@ -304,6 +304,46 @@ func TestScaffoldCell_DryRun(t *testing.T) {
 	})
 }
 
+// TestScaffoldCell_RejectsSymlinkBreakout verifies that ScaffoldCell refuses
+// to write files when an intermediate path component is a symlink pointing
+// outside the repository root.
+func TestScaffoldCell_RejectsSymlinkBreakout(t *testing.T) {
+	root := t.TempDir()
+	// outsideDir simulates an attacker-controlled directory outside the repo root.
+	outsideDir := t.TempDir()
+
+	// Place a symlink cells/ → outsideDir inside the repo root, mimicking a
+	// pre-committed malicious symlink.
+	symlinkPath := filepath.Join(root, "cells")
+	if err := os.Symlink(outsideDir, symlinkPath); err != nil {
+		t.Fatalf("create symlink: %v", err)
+	}
+
+	err := ScaffoldCell(root, "cells/evil", ScaffoldSpec{
+		CellID:     "evil",
+		StructName: "Evil",
+		Package:    "evil",
+		ModulePath: "example.com/test",
+		OwnerTeam:  "test",
+	})
+
+	if err == nil {
+		t.Fatal("expected symlink breakout to be rejected, got nil error")
+	}
+	if !strings.Contains(err.Error(), "escapes root") && !strings.Contains(err.Error(), "resolves outside root") {
+		t.Errorf("expected error about escaping root, got: %v", err)
+	}
+
+	// Verify nothing was written to the external directory.
+	entries, readErr := os.ReadDir(outsideDir)
+	if readErr != nil {
+		t.Fatalf("read outsideDir: %v", readErr)
+	}
+	if len(entries) > 0 {
+		t.Errorf("scaffold wrote %d entries to outsideDir via symlink; expected 0", len(entries))
+	}
+}
+
 // TestScaffoldCell_ValidationErrors verifies that missing required fields
 // are rejected before any filesystem operation.
 func TestScaffoldCell_ValidationErrors(t *testing.T) {

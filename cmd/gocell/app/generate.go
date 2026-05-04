@@ -16,8 +16,8 @@ import (
 //	gocell generate assembly --id=<id> [--module=<module>]
 //	gocell generate catalog --out=<path> --package=<pkg>
 //	gocell generate metrics-schema --id=<id>
-//	gocell generate cell <cellID> | --all [--dry-run | --verify]
-//	gocell generate contract <contractID> | --all [--dry-run | --verify]
+//	gocell generate cell [<cellID>] [--dry-run | --verify]
+//	gocell generate contract [<contractID>] [--dry-run | --verify]
 //	gocell generate indexes (placeholder)
 func runGenerate(args []string) error {
 	if len(args) < 1 {

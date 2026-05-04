@@ -83,7 +83,7 @@ func PrintUsage() {
 	fmt.Println("  scaffold    Generate new cell/slice/contract/journey [--dry-run]")
 	fmt.Println("  generate    Generate assembly code and derived files [--id, --module]")
 	fmt.Println("    assembly --id=<assemblyID> [--module=<module>]")
-	fmt.Println("    cell <cellID> | --all [--dry-run | --verify]")
+	fmt.Println("    cell [<cellID>] [--dry-run | --verify]")
 	fmt.Println("    metrics-schema --id=<assemblyID>")
 	fmt.Println("    indexes")
 	fmt.Println("  check       Run targeted architecture analysis")
