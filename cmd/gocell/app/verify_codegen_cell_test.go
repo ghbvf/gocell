@@ -123,7 +123,7 @@ func TestVerifyCodegenCell_LocalNoProjectFails(t *testing.T) {
 
 // --- sandbox mode -----------------------------------------------------------
 
-// TestVerifyCodegenCell_SandboxNoDrift exercises the default (sandbox) mode
+// TestVerifyCodegenCell_SandboxNoDrift exercises sandbox mode (--local=false)
 // against a tmp git repo whose HEAD already contains a clean cell_gen.go.
 // The sandbox path requires git; skip if the binary is unavailable.
 func TestVerifyCodegenCell_SandboxNoDrift(t *testing.T) {
@@ -134,7 +134,7 @@ func TestVerifyCodegenCell_SandboxNoDrift(t *testing.T) {
 	gitInit(t, root)
 	chdirToRoot(t, root)
 
-	if err := verifyCodegenCell(nil); err != nil {
+	if err := verifyCodegenCell([]string{"--local=false"}); err != nil {
 		t.Fatalf("verifyCodegenCell sandbox on clean repo: %v", err)
 	}
 }
@@ -162,7 +162,7 @@ func TestVerifyCodegenCell_SandboxDriftWhenStaleCommit(t *testing.T) {
 	mustGitCmd(t, root, "commit", "-q", "-m", "stale yaml change without regen")
 
 	chdirToRoot(t, root)
-	err = verifyCodegenCell(nil)
+	err = verifyCodegenCell([]string{"--local=false"})
 	if err == nil || !strings.Contains(err.Error(), "drift") {
 		t.Fatalf("expected sandbox drift error, got %v", err)
 	}
@@ -171,7 +171,7 @@ func TestVerifyCodegenCell_SandboxDriftWhenStaleCommit(t *testing.T) {
 func TestVerifyCodegenCell_SandboxNoProjectFails(t *testing.T) {
 	root := t.TempDir()
 	chdirToRoot(t, root)
-	if err := verifyCodegenCell(nil); err == nil {
+	if err := verifyCodegenCell([]string{"--local=false"}); err == nil {
 		t.Fatal("expected error when no project root")
 	}
 }

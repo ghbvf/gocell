@@ -7,29 +7,10 @@ import (
 	"testing"
 )
 
-// TestGenerateContract_NoArgs asserts that calling with no flags and no positional
-// args returns a usage error.
-func TestGenerateContract_NoArgs(t *testing.T) {
-	t.Parallel()
-	err := generateContract(nil)
-	if err == nil || !strings.Contains(err.Error(), "usage") {
-		t.Fatalf("expected usage error, got %v", err)
-	}
-}
-
 // TestGenerateContract_DryRunVerifyMutex verifies --dry-run + --verify are mutually exclusive.
 func TestGenerateContract_DryRunVerifyMutex(t *testing.T) {
 	t.Parallel()
 	err := generateContract([]string{"--dry-run", "--verify", "some.contract.v1"})
-	if err == nil || !strings.Contains(err.Error(), "mutually exclusive") {
-		t.Fatalf("expected mutex error, got %v", err)
-	}
-}
-
-// TestGenerateContract_AllAndPositionalMutex verifies --all + positional id are mutually exclusive.
-func TestGenerateContract_AllAndPositionalMutex(t *testing.T) {
-	t.Parallel()
-	err := generateContract([]string{"--all", "some.contract.v1"})
 	if err == nil || !strings.Contains(err.Error(), "mutually exclusive") {
 		t.Fatalf("expected mutex error, got %v", err)
 	}
@@ -44,25 +25,11 @@ func TestGenerateContract_UnknownFlag(t *testing.T) {
 	}
 }
 
-// TestGenerateContract_DryRunOnlyFlag verifies --dry-run alone (no positional, no --all)
-// returns a diagnostic error asking for a contract id or --all.
-func TestGenerateContract_DryRunOnlyFlag(t *testing.T) {
-	t.Parallel()
-	err := generateContract([]string{"--dry-run"})
-	if err == nil || !strings.Contains(err.Error(), "--all") {
-		t.Fatalf("expected diagnostic error when --dry-run given without id or --all, got %v", err)
-	}
-}
-
-// TestGenerateContract_VerifyOnlyFlag verifies --verify alone returns a diagnostic
-// error asking for a contract id or --all.
-func TestGenerateContract_VerifyOnlyFlag(t *testing.T) {
-	t.Parallel()
-	err := generateContract([]string{"--verify"})
-	if err == nil || !strings.Contains(err.Error(), "--all") {
-		t.Fatalf("expected diagnostic error when --verify given without id or --all, got %v", err)
-	}
-}
+// NB: TestGenerateContract_NoArgs / _AllAndPositionalMutex / _DryRunOnlyFlag /
+// _VerifyOnlyFlag deleted in K#05 W2 — `--all` now defaults to true and
+// positional ids beat the default flag (no mutex error). The new flag
+// semantics are covered by codegen_cmd_test.go's table-driven cases for
+// both `cell` and `contract` (parseCodegenFlags is shared).
 
 // minimalCodegenContractProject creates a minimal project with one contract
 // that has codegen=true. Returns root and the contract id.

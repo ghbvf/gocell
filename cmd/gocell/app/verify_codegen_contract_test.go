@@ -84,7 +84,7 @@ func TestVerifyCodegenContract_LocalNoProjectFails(t *testing.T) {
 
 // --- sandbox mode (requires git) ---------------------------------------------
 
-// TestVerifyCodegenContract_SandboxNoDrift exercises the default (sandbox) mode
+// TestVerifyCodegenContract_SandboxNoDrift exercises sandbox mode (--local=false)
 // against a tmp git repo whose HEAD already contains clean generated files.
 // Requires git in PATH.
 //
@@ -99,7 +99,7 @@ func TestVerifyCodegenContract_SandboxNoDrift(t *testing.T) {
 	gitInit(t, root)
 	chdirToRoot(t, root)
 
-	if err := verifyCodegenContract(nil); err != nil {
+	if err := verifyCodegenContract([]string{"--local=false"}); err != nil {
 		t.Fatalf("verifyCodegenContract sandbox on clean repo: %v", err)
 	}
 }
