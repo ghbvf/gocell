@@ -52,19 +52,6 @@ func (c *CellMeta) Clone() *CellMeta {
 	return &cp
 }
 
-// ListenerDeclMeta declares a (listener, prefix) pair used by a Cell to host
-// HTTP routes. Codegen aggregates this with each slice's RouteMounts to emit
-// reg.RouteGroup() calls in cell_gen.go.
-//
-// Ref is a Go constant reference rendered verbatim into the generated source.
-// Valid values: cell.PrimaryListener, cell.InternalListener, cell.HealthListener
-// (see kernel/cell package for the full ListenerRef enum).
-// Prefix is the URL path mounted on the listener, e.g. "/api/v1".
-type ListenerDeclMeta struct {
-	Ref    string `yaml:"ref"`
-	Prefix string `yaml:"prefix"`
-}
-
 // OwnerMeta identifies the team responsible for a Cell or Journey.
 type OwnerMeta struct {
 	Team string `yaml:"team"`
@@ -106,38 +93,6 @@ type SliceMeta struct {
 	Dir              string          `yaml:"-"` // slice directory segment, set by parser
 	CellDir          string          `yaml:"-"` // parent cell directory segment, set by parser
 	File             string          `yaml:"-"` // parsed slice.yaml path relative to project root
-}
-
-// RouteMountMeta declares a single HTTP route mount: this slice's handler
-// (HandlerField on the parent cell struct) is mounted at SubPath under the
-// listener identified by Listener (which must match a CellMeta.Listeners ref).
-//
-// Codegen aggregates RouteMounts across all slices in a cell to emit
-// reg.RouteGroup() calls in cell_gen.go.
-//
-// Method names the registration method on the handler. When empty the codegen
-// defaults to "RegisterRoutes". Example: RegisterRoutes (default),
-// RegisterInternalRoutes.
-type RouteMountMeta struct {
-	Listener     string `yaml:"listener"`
-	SubPath      string `yaml:"subPath"`
-	HandlerField string `yaml:"handlerField"`
-	Method       string `yaml:"method,omitempty"`
-}
-
-// SubscribeDeclMeta declares an event subscription owned by this slice.
-//
-// Codegen renders one reg.Subscribe(spec, c.<SliceField>.<Handler>, ...) call
-// per Subscribes entry in cell_gen.go. ConsumerGroup defaults to the parent
-// cell ID when empty. Transport defaults to "amqp" when empty.
-type SubscribeDeclMeta struct {
-	Contract      string `yaml:"contract"`
-	SliceField    string `yaml:"sliceField"`
-	Handler       string `yaml:"handler"`
-	ConsumerGroup string `yaml:"consumerGroup,omitempty"`
-	// Transport is the event transport protocol. When empty, codegen defaults
-	// to "amqp" (the current GoCell convention). Override for non-AMQP transports.
-	Transport string `yaml:"transport,omitempty"`
 }
 
 // ContractUsage declares a Slice's participation in a Contract.

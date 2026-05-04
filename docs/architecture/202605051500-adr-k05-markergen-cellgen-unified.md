@@ -41,11 +41,11 @@ Why: controller-tools is built for kubebuilder's plugin ecosystem with 50+ marke
 
 Saving: ~350 LOC, ~4h W2 dev. Trade-off: adding a 4th marker type costs ~10 LOC of switch + parse function; if GoCell ever needs ~10+ marker types we can introduce Registry then. Per CLAUDE.md「规则不超前于代码库现状」.
 
-## Decision 4: Keep `metadata.CellMeta.Listeners` (and `SliceMeta.{RouteMounts,Subscribes}`) as transitional bridge through W7
+## Decision 4: Drop `metadata.CellMeta.Listeners` / `RouteMountMeta` / `SubscribeDeclMeta` / `ListenerDeclMeta` backing types
 
 Plan v3 originally proposed deleting `CellMeta.Listeners` immediately to make "wire single source = marker" hold at the type layer. Implementation revealed that markergen's fallback path (yaml→bundle when cell.go has no markers yet) needs those fields during the W2→W5 wave migration. After W4 + W5 the yaml fields are empty (NO-WIRE-FIELDS-IN-YAML-01 archtest enforces this) so the markergen→cellgen pipeline runs marker-only at ship; the CellMeta wire fields exist but always carry marker-derived values.
 
-Decision: defer `CellMeta.Listeners`/`SliceMeta.RouteMounts`/`Subscribes` field removal to a follow-up cleanup PR (separate from this K#05 ship) once we're confident the marker-only path is stable in production. The static archtest already enforces "wire never appears in yaml" — the type-layer cleanup is a soft win, not a correctness requirement.
+Implementation: shipped in this PR — `CellMeta.Listeners`, `SliceMeta.RouteMounts`, and `SliceMeta.Subscribes` fields were removed during the W2 cleanup wave. `markergen.Merge` no longer falls back to ProjectMeta yaml fields. The 3 backing types (`ListenerDeclMeta`, `RouteMountMeta`, `SubscribeDeclMeta`) are also removed in this PR's cleanup commit (Cx1 review finding ARCH-02/06). Marker-only wire path is now the exclusive code path at both the runtime and type layers.
 
 ## Decision 5: Marker syntax — minimal field set + smart defaults
 
@@ -84,13 +84,13 @@ The 3-role cross-review (architect / product-manager / open-source explorer) con
 | Drop `slice.yaml` entirely (move governance to markers) | architect review: slice.yaml carries `contractUsages`/`verify.*`/`allowedFiles` which are governance SoR — moving to markers requires rewriting ADV-06 / VERIFY-01 / SCOPE-01 (~30-50h, out of scope) |
 | Derive `goStructName` via AST heuristics | architect review: `goStructName` is a no-cost dual source (one string, archtest-validated O(1)); heuristic is harder to reason about |
 
-## Decision 8: CLI flag defaults and scaffold template (deferred to a follow-up small PR)
+## Decision 8: CLI flag defaults and scaffold template
 
 Product review suggested:
 - Default `--all` + `--local` for `gocell generate cell` (covers 99% of dev workflow)
 - Scaffold template emits stub markers when scaffolding a new cell
 
-Not implemented in this PR to keep the scope focused on the single-source contract. Backlog items created.
+Implementation: shipped in this PR — `gocell generate cell` defaults to `--all`; `gocell verify` defaults to `--local`; `gocell scaffold cell` template emits stub markers (`// +cell:listener:` + `// +slice:route:` + `// +slice:subscribe:`). The `--type` and `--level` flags now flow through to `cell.yaml` (previously ignored; the YAML hardcoded `type: core` / `consistencyLevel: L1`). Backlog item `K05-CLI-FLAG-DEFAULT-AND-SCAFFOLD` closed.
 
 ## Consequences
 
@@ -108,8 +108,6 @@ Not implemented in this PR to keep the scope focused on the single-source contra
 
 **Backlog spawned** (not blocking ship):
 - Wire-summary catalog augment (Decision 6)
-- CLI flag default + scaffold stub markers (Decision 8)
-- `CellMeta.Listeners` field removal once marker-only path is proven stable (Decision 4)
 
 ## References
 

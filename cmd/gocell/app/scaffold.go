@@ -146,11 +146,13 @@ func scaffoldCell(root string, args []string) error {
 	}
 
 	if err := cellgen.ScaffoldCell(root, filepath.Join("cells", *id), cellgen.ScaffoldSpec{
-		CellID:     *id,
-		StructName: resolvedStruct,
-		Package:    pkg,
-		ModulePath: mod,
-		OwnerTeam:  *team,
+		CellID:           *id,
+		StructName:       resolvedStruct,
+		Package:          pkg,
+		ModulePath:       mod,
+		OwnerTeam:        *team,
+		Type:             *cellType,
+		ConsistencyLevel: *level,
 	}); err != nil {
 		return err
 	}

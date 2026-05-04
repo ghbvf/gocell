@@ -162,6 +162,13 @@ func TestMerge_ErrorAccumulation(t *testing.T) {
 	if !strings.Contains(err.Error(), "ref") {
 		t.Errorf("error should mention missing 'ref' field, got: %v", err)
 	}
+	// SEC-03/OPS-04: error must carry cellID and must NOT contain absolute path.
+	if !strings.Contains(err.Error(), "badcell") {
+		t.Errorf("error should contain cellID 'badcell', got: %v", err)
+	}
+	if strings.HasPrefix(err.Error(), "/") || strings.Contains(err.Error(), projectRoot) {
+		t.Errorf("error should use relative path, not absolute: %v", err)
+	}
 }
 
 // TestMerge_EmptyProject tests that an empty ProjectMeta returns empty map and no error.

@@ -172,6 +172,67 @@ func TestScaffoldCell_TableDriven(t *testing.T) {
 	}
 }
 
+// TestScaffoldCell_TypeAndLevelRendered verifies that non-default Type and
+// ConsistencyLevel values are rendered into cell.yaml (DX-02).
+func TestScaffoldCell_TypeAndLevelRendered(t *testing.T) {
+	tests := []struct {
+		name              string
+		cellType          string
+		level             string
+		wantType          string
+		wantLevel         string
+	}{
+		{
+			name:      "explicit edge L0",
+			cellType:  "edge",
+			level:     "L0",
+			wantType:  "type: edge",
+			wantLevel: "consistencyLevel: L0",
+		},
+		{
+			name:      "explicit support L4",
+			cellType:  "support",
+			level:     "L4",
+			wantType:  "type: support",
+			wantLevel: "consistencyLevel: L4",
+		},
+		{
+			name:      "defaults when empty",
+			cellType:  "",
+			level:     "",
+			wantType:  "type: core",
+			wantLevel: "consistencyLevel: L1",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			spec := ScaffoldSpec{
+				CellID:           "typecell",
+				StructName:       "TypeCell",
+				Package:          "typecell",
+				ModulePath:       "github.com/example/app",
+				Type:             tc.cellType,
+				ConsistencyLevel: tc.level,
+			}
+			if err := ScaffoldCell(dir, "cells/typecell", spec); err != nil {
+				t.Fatalf("ScaffoldCell() error = %v", err)
+			}
+			content, err := os.ReadFile(filepath.Join(dir, "cells", "typecell", "cell.yaml")) //nolint:gosec // test reads files it just wrote
+			if err != nil {
+				t.Fatalf("read cell.yaml: %v", err)
+			}
+			if !strings.Contains(string(content), tc.wantType) {
+				t.Errorf("cell.yaml missing %q, got:\n%s", tc.wantType, content)
+			}
+			if !strings.Contains(string(content), tc.wantLevel) {
+				t.Errorf("cell.yaml missing %q, got:\n%s", tc.wantLevel, content)
+			}
+		})
+	}
+}
+
 // TestScaffoldCell_ConflictError verifies that ScaffoldCell returns an error
 // when output files already exist (skip-on-conflict).
 func TestScaffoldCell_ConflictError(t *testing.T) {
@@ -241,6 +302,50 @@ func TestScaffoldCell_ValidationErrors(t *testing.T) {
 				Package:    "foo",
 			},
 			wantErr: "ModulePath is required",
+		},
+		{
+			name: "OwnerTeam with newline (YAML injection)",
+			spec: ScaffoldSpec{
+				CellID:     "foo",
+				StructName: "Foo",
+				Package:    "foo",
+				ModulePath: "github.com/example/app",
+				OwnerTeam:  "platform\ninjected: true",
+			},
+			wantErr: "OwnerTeam",
+		},
+		{
+			name: "OwnerTeam with colon-space (YAML injection)",
+			spec: ScaffoldSpec{
+				CellID:     "foo",
+				StructName: "Foo",
+				Package:    "foo",
+				ModulePath: "github.com/example/app",
+				OwnerTeam:  "platform: injected",
+			},
+			wantErr: "OwnerTeam",
+		},
+		{
+			name: "OwnerTeam with braces (YAML flow mapping injection)",
+			spec: ScaffoldSpec{
+				CellID:     "foo",
+				StructName: "Foo",
+				Package:    "foo",
+				ModulePath: "github.com/example/app",
+				OwnerTeam:  "{injected: true}",
+			},
+			wantErr: "OwnerTeam",
+		},
+		{
+			name: "OwnerTeam with path traversal",
+			spec: ScaffoldSpec{
+				CellID:     "foo",
+				StructName: "Foo",
+				Package:    "foo",
+				ModulePath: "github.com/example/app",
+				OwnerTeam:  "../etc/passwd",
+			},
+			wantErr: "OwnerTeam",
 		},
 	}
 

@@ -5,9 +5,16 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"text/template"
 )
+
+// ownerTeamPattern is the whitelist regex for OwnerTeam values written into
+// cell.yaml owner.team. Restricts to alphanumerics, hyphens, and underscores
+// to prevent YAML injection via newline, colon-space, braces, or path
+// traversal sequences.
+var ownerTeamPattern = regexp.MustCompile(`^[a-zA-Z0-9_-]+$`)
 
 // ScaffoldSpec holds the inputs required to render a new cell skeleton.
 type ScaffoldSpec struct {
@@ -22,6 +29,12 @@ type ScaffoldSpec struct {
 	// OwnerTeam is the team responsible for this cell (e.g. "platform").
 	// Written as-is to cell.yaml owner.team.
 	OwnerTeam string
+	// Type is the cell type (e.g. "core", "edge", "support").
+	// Defaults to "core" when empty.
+	Type string
+	// ConsistencyLevel is the cell consistency level (e.g. "L0"-"L4").
+	// Defaults to "L1" when empty.
+	ConsistencyLevel string
 }
 
 // cellGoTemplate is parsed once from the shared templateFS. Uses
@@ -32,9 +45,10 @@ var cellGoTemplate = template.Must(template.New("scaffold-cell.tmpl").ParseFS(te
 
 // cellYAMLTemplate renders the cell.yaml skeleton with goStructName pre-set.
 // OwnerTeam is written to owner.team; role is left as TODO for the developer.
+// Type and ConsistencyLevel are rendered from the spec (defaults: "core" / "L1").
 var cellYAMLTemplate = template.Must(template.New("cell-yaml").Parse(`id: {{.CellID}}
-type: core
-consistencyLevel: L1
+type: {{.Type}}
+consistencyLevel: {{.ConsistencyLevel}}
 durabilityMode: durable
 owner:
   team: {{.OwnerTeam}}
@@ -58,6 +72,14 @@ l0Dependencies: []
 func ScaffoldCell(root, targetDir string, spec ScaffoldSpec) error {
 	if err := validateScaffoldSpec(spec); err != nil {
 		return err
+	}
+
+	// Apply defaults for optional fields.
+	if spec.Type == "" {
+		spec.Type = "core"
+	}
+	if spec.ConsistencyLevel == "" {
+		spec.ConsistencyLevel = "L1"
 	}
 
 	dir := filepath.Join(root, targetDir)
@@ -123,6 +145,9 @@ func validateScaffoldSpec(spec ScaffoldSpec) error {
 	}
 	if strings.Contains(spec.ModulePath, "..") || strings.Contains(spec.ModulePath, `\`) {
 		return fmt.Errorf("scaffold cell: ModulePath contains path traversal or backslash")
+	}
+	if spec.OwnerTeam != "" && !ownerTeamPattern.MatchString(spec.OwnerTeam) {
+		return fmt.Errorf("scaffold cell: OwnerTeam %q contains invalid characters (allowed: [a-zA-Z0-9_-])", spec.OwnerTeam)
 	}
 	return nil
 }

@@ -33,9 +33,14 @@ func Merge(projectRoot string, project *metadata.ProjectMeta) (map[string]WireBu
 			continue
 		}
 
+		relPath := cellGoPath
+		if rel, err := filepath.Rel(projectRoot, cellGoPath); err == nil {
+			relPath = rel
+		}
+
 		markers, err := CollectFromCellFile(cellGoPath)
 		if err != nil {
-			allErrs.Append(fmt.Errorf("cell %s: collect %s: %w", cellID, cellGoPath, err))
+			allErrs.Append(fmt.Errorf("cell %s: collect %s: %w", cellID, relPath, err))
 			continue
 		}
 
@@ -47,7 +52,7 @@ func Merge(projectRoot string, project *metadata.ProjectMeta) (map[string]WireBu
 
 		bundle, errs := buildBundle(markers)
 		for _, e := range errs {
-			allErrs.Append(e)
+			allErrs.Append(fmt.Errorf("cell %s: %w", cellID, e))
 		}
 		result[cellID] = bundle
 	}
