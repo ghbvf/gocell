@@ -2,8 +2,14 @@
 // slice.yaml metadata. It plugs into the tools/codegen framework: yaml →
 // CellGenSpec / SliceGenSpec → text/template → goimports → disk.
 //
-// Subpackage of tools/codegen. Other adapters (contractgen, markergen) live
-// alongside under tools/codegen/.
+// It is the first codegen adapter; future adapters (contract DTO,
+// marker reverse-gen) will live alongside under tools/codegen/.
+//
+// # Usage
+//
+// Entry point: cellgen.Generate. BuildCellSpec and BuildSliceSpec are exposed
+// for unit testing the spec-building logic in isolation; production callers
+// should use Generate.
 package cellgen
 
 // CellGenSpec is the rendering input for cell.tmpl. It is the projection of
@@ -21,6 +27,11 @@ type CellGenSpec struct {
 	// ConsumerGroupDefault is the cell ID, used when a SubscriptionGenSpec
 	// omits its ConsumerGroup.
 	ConsumerGroupDefault string
+	// SourceFile is the project-relative path of the cell.yaml that drove
+	// generation (e.g. "examples/todoorder/cells/ordercell/cell.yaml").
+	// Rendered into the file header as "// Source: <SourceFile>" so that
+	// readers of the generated file can locate the authoritative YAML.
+	SourceFile string
 	// RouteGroups holds the listener-aggregated route mounts. Each entry
 	// emits one reg.RouteGroup() call.
 	RouteGroups []RouteGroupGenSpec
@@ -56,7 +67,10 @@ type RouteSubGroup struct {
 // closure: c.<HandlerField>.<Method>(s).
 type RouteSliceMount struct {
 	HandlerField string
-	Method       string // defaults to "RegisterRoutes"
+	// Method is the registration method on the handler. Zero value is unsafe —
+	// populate via BuildCellSpec which substitutes "RegisterRoutes" when the
+	// YAML omits it.
+	Method string
 }
 
 // SubscriptionGenSpec describes one reg.Subscribe() call.
@@ -89,6 +103,10 @@ type SliceGenSpec struct {
 	CellID string
 	// SliceID identifies this slice (used in interface comment).
 	SliceID string
+	// SourceFile is the project-relative path of the slice.yaml that drove
+	// generation (e.g. "examples/todoorder/cells/ordercell/slices/ordercreate/slice.yaml").
+	// Rendered into the file header as "// Source: <SourceFile>".
+	SourceFile string
 	// Handlers lists the handler methods the slice's service must provide.
 	// Order is deterministic to keep generated diff stable.
 	Handlers []SliceHandlerSpec

@@ -1,6 +1,8 @@
 package cellgen
 
 import (
+	"bytes"
+	"flag"
 	"os"
 	"path/filepath"
 	"strings"
@@ -9,6 +11,12 @@ import (
 	"github.com/ghbvf/gocell/kernel/metadata"
 	"github.com/ghbvf/gocell/tools/codegen"
 )
+
+// updateGolden, when true, causes TestRenderCell_GoldenSynth to regenerate
+// the golden file instead of comparing against it. Usage:
+//
+//	go test ./tools/codegen/cellgen/ -run TestRenderCell_GoldenSynth -update
+var updateGolden = flag.Bool("update", false, "regenerate golden files")
 
 // TestRenderCell_HappyPath_OneListenerOneSubRoute exercises the cell.tmpl
 // template via codegen.Render and asserts the rendered Go source contains
@@ -156,6 +164,7 @@ func TestRenderSlice_ProducesServiceInterface(t *testing.T) {
 }
 
 func TestGenerate_DryRunDoesNotWriteFile(t *testing.T) {
+	t.Parallel()
 	root := initSyntheticRepo(t)
 	project := buildSyntheticProject()
 	res, err := Generate(root, project, Options{OnlyCell: "demo", DryRun: true})
@@ -171,6 +180,7 @@ func TestGenerate_DryRunDoesNotWriteFile(t *testing.T) {
 }
 
 func TestGenerate_VerifyDriftWhenFileMissing(t *testing.T) {
+	t.Parallel()
 	root := initSyntheticRepo(t)
 	project := buildSyntheticProject()
 	res, err := Generate(root, project, Options{OnlyCell: "demo", Verify: true})
@@ -183,6 +193,7 @@ func TestGenerate_VerifyDriftWhenFileMissing(t *testing.T) {
 }
 
 func TestGenerate_WriteThenVerifyClean(t *testing.T) {
+	t.Parallel()
 	root := initSyntheticRepo(t)
 	project := buildSyntheticProject()
 	if _, err := Generate(root, project, Options{OnlyCell: "demo"}); err != nil {
@@ -239,6 +250,7 @@ func TestGenerate_SkipsCellsWithoutGoStructName(t *testing.T) {
 }
 
 func TestGenerate_RefuseOverwriteUserFile(t *testing.T) {
+	t.Parallel()
 	root := initSyntheticRepo(t)
 	// Pre-create a user-edited cell_gen.go path with no generated header.
 	path := filepath.Join(root, "cells", "demo", "cell_gen.go")
@@ -248,6 +260,75 @@ func TestGenerate_RefuseOverwriteUserFile(t *testing.T) {
 	_, err := Generate(root, buildSyntheticProject(), Options{OnlyCell: "demo"})
 	if err == nil {
 		t.Fatal("expected refusal to overwrite user file")
+	}
+}
+
+// TestRenderCell_GoldenSynth renders the synthetic project's CellGenSpec
+// through cell.tmpl and compares the result against a committed golden file.
+// When run with -update it regenerates the golden file instead.
+//
+// TODO: regenerate golden after template ARCH-02/OPS-06 fixes if the
+// shared header template changes again after this golden was written.
+func TestRenderCell_GoldenSynth(t *testing.T) {
+	t.Parallel()
+	spec, err := BuildCellSpec(buildSyntheticProject(), "demo")
+	if err != nil {
+		t.Fatalf("BuildCellSpec: %v", err)
+	}
+	out, err := codegen.Render(codegen.RenderOptions{
+		TemplateName: "cell.tmpl",
+		Templates:    templates,
+		Data:         spec,
+		Filename:     "demo/cell_gen.go",
+	})
+	if err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+
+	goldenPath := filepath.Join("testdata", "golden", "synth_cell_gen.go.golden")
+	if *updateGolden {
+		if err := os.WriteFile(goldenPath, out, 0o644); err != nil {
+			t.Fatalf("write golden: %v", err)
+		}
+		t.Logf("golden file updated: %s", goldenPath)
+		return
+	}
+
+	golden, err := os.ReadFile(goldenPath) //nolint:gosec // test reads its own committed fixture path
+	if err != nil {
+		t.Fatalf("read golden %s: %v (run with -update to generate)", goldenPath, err)
+	}
+	if !bytes.Equal(out, golden) {
+		t.Errorf("rendered output diverges from golden:\n--- got ---\n%s\n--- want ---\n%s", out, golden)
+	}
+}
+
+// TestGenerate_VerifyDriftAfterManualEdit writes cell_gen.go, tampers with
+// it by substituting one symbol, then runs Generate in Verify mode. It must
+// detect exactly one drifted file. Exercises the write→tamper→verify path
+// (TEST-03 / CORRECT-02).
+func TestGenerate_VerifyDriftAfterManualEdit(t *testing.T) {
+	t.Parallel()
+	root := initSyntheticRepo(t)
+	project := buildSyntheticProject()
+	if _, err := Generate(root, project, Options{OnlyCell: "demo"}); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(root, "cells", "demo", "cell_gen.go")
+	content, err := os.ReadFile(path) //nolint:gosec // test reads its own freshly-written tmp file
+	if err != nil {
+		t.Fatal(err)
+	}
+	tampered := strings.Replace(string(content), "Init", "InitX", 1)
+	if err := os.WriteFile(path, []byte(tampered), 0o644); err != nil { //nolint:gosec // G306: test writes to its own tmp file with mode 0644
+		t.Fatal(err)
+	}
+	res, err := Generate(root, project, Options{OnlyCell: "demo", Verify: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Drifted) != 1 {
+		t.Errorf("expected drift after manual edit, got %v", res.Drifted)
 	}
 }
 

@@ -26,10 +26,12 @@ type CellMeta struct {
 	Verify           CellVerifyMeta     `yaml:"verify"`
 	L0Dependencies   []L0DepMeta        `yaml:"l0Dependencies"`
 	Listeners        []ListenerDeclMeta `yaml:"listeners,omitempty"`
-	// GoStructName is the Go receiver type backing this cell (e.g. "OrderCell"
-	// for cell id "ordercell"). Required when codegen.cellgen renders
-	// cell_gen.go for this cell — there is no reliable automatic mapping
-	// from a lowercased id to its conventional CamelCase Go type.
+	// GoStructName is a schema extension consumed by tools/codegen — kernel
+	// itself does not interpret its value. Cells that opt into K#04 codegen
+	// MUST set this; non-codegen cells leave it empty. There is no reliable
+	// automatic mapping from a lowercased cell id to its conventional CamelCase
+	// Go type (e.g. "ordercell" → "OrderCell"), which is why explicit
+	// declaration is required.
 	GoStructName string `yaml:"goStructName,omitempty"`
 	Dir          string `yaml:"-"` // directory segment under cells/, set by parser
 	File         string `yaml:"-"` // parsed cell.yaml path relative to project root
@@ -39,8 +41,9 @@ type CellMeta struct {
 // HTTP routes. Codegen aggregates this with each slice's RouteMounts to emit
 // reg.RouteGroup() calls in cell_gen.go.
 //
-// Ref is a Go constant reference such as "cell.PrimaryListener" or
-// "cell.InternalListener" — it is rendered verbatim into the generated source.
+// Ref is a Go constant reference rendered verbatim into the generated source.
+// Valid values: cell.PrimaryListener, cell.InternalListener, cell.HealthListener
+// (see kernel/cell package for the full ListenerRef enum).
 // Prefix is the URL path mounted on the listener, e.g. "/api/v1".
 type ListenerDeclMeta struct {
 	Ref    string `yaml:"ref"`
@@ -100,7 +103,8 @@ type SliceMeta struct {
 // reg.RouteGroup() calls in cell_gen.go.
 //
 // Method names the registration method on the handler. When empty the codegen
-// defaults to "RegisterRoutes".
+// defaults to "RegisterRoutes". Example: RegisterRoutes (default),
+// RegisterInternalRoutes.
 type RouteMountMeta struct {
 	Listener     string `yaml:"listener"`
 	SubPath      string `yaml:"subPath"`
@@ -112,12 +116,15 @@ type RouteMountMeta struct {
 //
 // Codegen renders one reg.Subscribe(spec, c.<SliceField>.<Handler>, ...) call
 // per Subscribes entry in cell_gen.go. ConsumerGroup defaults to the parent
-// cell ID when empty.
+// cell ID when empty. Transport defaults to "amqp" when empty.
 type SubscribeDeclMeta struct {
 	Contract      string `yaml:"contract"`
 	SliceField    string `yaml:"sliceField"`
 	Handler       string `yaml:"handler"`
 	ConsumerGroup string `yaml:"consumerGroup,omitempty"`
+	// Transport is the event transport protocol. When empty, codegen defaults
+	// to "amqp" (the current GoCell convention). Override for non-AMQP transports.
+	Transport string `yaml:"transport,omitempty"`
 }
 
 // ContractUsage declares a Slice's participation in a Contract.

@@ -1,36 +1,39 @@
 // CODEGEN-CELL-GEN-01..04 — invariant gates for K#04 codegen output.
 //
 // These gates protect the generator's contract on cells that have opted
-// into codegen (the "enabled" set). Until K#04 PR-4 finishes the rollout,
-// the enabled set is a small whitelist; uncodegenned cells are skipped to
-// keep the build green during the staged migration.
-//
-// Whitelist policy: the whitelist below is the explicit, code-checked
-// technical debt for K#04. PR-4 (the migration PR that flips every
-// remaining cell) MUST replace the slice with a wildcard policy
-// ("every cell with goStructName set is enabled"); this comment exists
-// so the cleanup is impossible to forget.
+// into codegen. A cell opts into codegen by setting `goStructName` in
+// cell.yaml. The gates below all key off this field — a non-empty
+// GoStructName is the single source of truth for "is this cell enabled
+// for codegen".
 //
 // Gate IDs:
 //
-//	CODEGEN-CELL-GEN-01           Enabled cell directory has cell_gen.go and
-//	                               cell.yaml declares listeners + each child slice
-//	                               declares routeMounts (or has empty mounts but
-//	                               at least one of {routeMounts, subscribes}).
-//	CODEGEN-CELL-GEN-02           cell_gen.go starts with the canonical gocell
-//	                               generated header.
-//	CODEGEN-USER-FILE-OVERLAP-01   cell.go in the same package must NOT define
-//	                               func (c *<StructName>) Init — Init is owned
-//	                               by cell_gen.go after migration.
-//	CODEGEN-MARKER-NONE-01         No "// +cell:" / "// +slice:" marker comments
-//	                               in the source tree (K#05 reserves marker
-//	                               syntax; staging marker code under K#04 would
-//	                               split the path into a yaml + marker dual mode).
+//	CODEGEN-CELL-GEN-01               Enabled cell (GoStructName != "") directory
+//	                                   has cell_gen.go and cell.yaml declares
+//	                                   listeners + each child slice declares
+//	                                   routeMounts (or has empty mounts but at
+//	                                   least one of {routeMounts, subscribes}).
+//	CODEGEN-CELL-GEN-02               cell_gen.go starts with the canonical gocell
+//	                                   generated header.
+//	CODEGEN-INIT-INTERNAL-01          Every opted-in cell package must declare
+//	                                   func (c *<GoStructName>) initInternal(ctx
+//	                                   context.Context, reg cell.Registry) error
+//	                                   in a non-generated .go file (cell_gen.go
+//	                                   calls this hook; the hand-written cell.go
+//	                                   must provide it).
+//	CODEGEN-USER-FILE-OVERLAP-01      cell.go in the same package must NOT define
+//	                                   func (c *<StructName>) Init — Init is owned
+//	                                   by cell_gen.go after migration.
+//	CODEGEN-MARKER-NONE-01            No "// +cell:" / "// +slice:" marker comments
+//	                                   in the source tree (K#05 reserves marker
+//	                                   syntax; staging marker code under K#04 would
+//	                                   split the path into a yaml + marker dual mode).
 //
 // ref: docs/plans/202605011500-029-master-roadmap.md K#04
 package archtest
 
 import (
+	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -50,40 +53,26 @@ const (
 	codegenMarkerSlicePrefix = "// +slice:"
 )
 
-// codegenEnabledCells is the explicit whitelist of cells that have opted
-// into K#04 codegen for PR-1. Each entry is the value of
-// CellMeta.Dir (the directory segment, e.g. "ordercell") so the gate
-// matches against parsed metadata, not filesystem paths.
-//
-// PR-4 of the K#04 path will replace this with a wildcard policy. Until
-// then, the whitelist is the load-bearing record of which cells the gate
-// enforces.
-var codegenEnabledCells = map[string]bool{
-	"ordercell": true,
-}
-
 // TestCodegenCellGen01_EnabledCellHasGen verifies CODEGEN-CELL-GEN-01.
-// For every enabled cell: the cell directory must contain cell_gen.go,
-// cell.yaml must declare goStructName + at least one listener, and each
-// child slice with routeMounts must reference a declared listener.
+// A cell opts into codegen by setting goStructName in cell.yaml
+// (cell.GoStructName != ""). For every opted-in cell: the cell directory
+// must contain cell_gen.go, and each child slice with routeMounts must
+// reference a declared listener.
 func TestCodegenCellGen01_EnabledCellHasGen(t *testing.T) {
 	t.Parallel()
 	root := findModuleRoot(t)
 	project := mustParseProject(t, root)
 
 	for _, cell := range project.Cells {
-		if !codegenEnabledCells[cell.Dir] {
-			continue
+		if cell.GoStructName == "" {
+			continue // not opted into codegen
 		}
 		dir := filepath.Join(root, filepath.Dir(cell.File))
 		genPath := filepath.Join(dir, "cell_gen.go")
 		if _, err := os.Stat(genPath); err != nil {
-			t.Errorf("CODEGEN-CELL-GEN-01: cell %q is enabled but missing %s; run `gocell generate cell %s`",
+			t.Errorf("CODEGEN-CELL-GEN-01: cell %q has goStructName set but missing %s; run `gocell generate cell %s`",
 				cell.ID, genPath, cell.ID)
 			continue
-		}
-		if cell.GoStructName == "" {
-			t.Errorf("CODEGEN-CELL-GEN-01: cell %q is enabled but cell.yaml lacks goStructName", cell.ID)
 		}
 		if len(cell.Listeners) == 0 {
 			// allow zero listeners only when no slice declares routeMounts
@@ -151,6 +140,36 @@ func TestCodegenUserFileOverlap01(t *testing.T) {
 	}
 }
 
+// TestCodegenInitInternal01 verifies CODEGEN-INIT-INTERNAL-01. For every
+// opted-in cell (GoStructName != "") that has a cell_gen.go, the cell
+// package must also declare:
+//
+//	func (c *<GoStructName>) initInternal(ctx context.Context, reg cell.Registry) error
+//
+// in a hand-written file (i.e. a .go file that is neither cell_gen.go nor a
+// _test.go). cell_gen.go calls this hook so the user's Init logic can be
+// separated from the generated scaffold.
+func TestCodegenInitInternal01(t *testing.T) {
+	t.Parallel()
+	root := findModuleRoot(t)
+	project := mustParseProject(t, root)
+
+	for _, cell := range project.Cells {
+		if cell.GoStructName == "" {
+			continue
+		}
+		dir := filepath.Join(root, filepath.Dir(cell.File))
+		genPath := filepath.Join(dir, "cell_gen.go")
+		if _, err := os.Stat(genPath); err != nil {
+			continue // CODEGEN-CELL-GEN-01 already catches missing cell_gen.go
+		}
+		violations := checkInitInternalHook(t, dir, cell.GoStructName)
+		for _, v := range violations {
+			t.Errorf("CODEGEN-INIT-INTERNAL-01: %s", v)
+		}
+	}
+}
+
 // TestCodegenMarkerNone01 verifies CODEGEN-MARKER-NONE-01. The K#04 PR-1
 // stage forbids marker comments — they are reserved for K#05.
 func TestCodegenMarkerNone01(t *testing.T) {
@@ -160,6 +179,85 @@ func TestCodegenMarkerNone01(t *testing.T) {
 	for _, v := range violations {
 		t.Errorf("CODEGEN-MARKER-NONE-01: marker comment found at %s — K#04 stage forbids // +cell: / // +slice: markers (reserved for K#05)", v)
 	}
+}
+
+// TestCodegenGates_NegativeFixtures runs the gate scanners against
+// known-bad fixture directories and asserts each scanner reports at
+// least one violation. This ensures the scanners catch the exact
+// patterns they claim to catch.
+func TestCodegenGates_NegativeFixtures(t *testing.T) {
+	t.Parallel()
+	archDir := findArchTestDir(t)
+	fixtureBase := filepath.Join(archDir, "testdata", "codegen_cell_gen_fixtures")
+
+	t.Run("missing_header", func(t *testing.T) {
+		t.Parallel()
+		dir := filepath.Join(fixtureBase, "missing_header")
+		files := findGeneratedCellFilesIn([]string{dir})
+		for _, f := range files {
+			content, err := os.ReadFile(f) //nolint:gosec // test reads fixture paths discovered by the scanner itself
+			if err != nil {
+				t.Fatalf("read fixture %s: %v", f, err)
+			}
+			first := firstLine(content)
+			if strings.HasPrefix(first, codegenGenHeader) {
+				t.Errorf("fixture %s unexpectedly has the correct header — fixture is broken", f)
+			}
+		}
+		if len(files) == 0 {
+			t.Error("no cell_gen.go found in missing_header fixture dir — fixture is broken")
+		}
+	})
+
+	t.Run("has_init_method", func(t *testing.T) {
+		t.Parallel()
+		dir := filepath.Join(fixtureBase, "has_init_method")
+		cellFile := filepath.Join(dir, "cell.go")
+		structName := "Demo"
+		found := hasInitMethod(t, cellFile, structName)
+		if !found {
+			t.Errorf("has_init_method fixture: cell.go does not declare Init on *%s — fixture is broken", structName)
+		}
+	})
+
+	t.Run("marker_present", func(t *testing.T) {
+		t.Parallel()
+		dir := filepath.Join(fixtureBase, "marker_present")
+		var hits []string
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			t.Fatalf("read fixture dir %s: %v", dir, err)
+		}
+		for _, e := range entries {
+			if e.IsDir() || !strings.HasSuffix(e.Name(), ".go") {
+				continue
+			}
+			path := filepath.Join(dir, e.Name())
+			content, err := os.ReadFile(path) //nolint:gosec // test reads fixture paths it discovered itself
+			if err != nil {
+				continue
+			}
+			for i, line := range strings.Split(string(content), "\n") {
+				trim := strings.TrimSpace(line)
+				if strings.HasPrefix(trim, codegenMarkerCellPrefix) ||
+					strings.HasPrefix(trim, codegenMarkerSlicePrefix) {
+					hits = append(hits, filepath.ToSlash(path)+":"+strconv.Itoa(i+1))
+				}
+			}
+		}
+		if len(hits) == 0 {
+			t.Error("marker_present fixture: no marker comments detected — fixture is broken")
+		}
+	})
+
+	t.Run("missing_init_internal", func(t *testing.T) {
+		t.Parallel()
+		dir := filepath.Join(fixtureBase, "missing_init_internal")
+		violations := checkInitInternalHook(t, dir, "Demo")
+		if len(violations) == 0 {
+			t.Error("missing_init_internal fixture: no violation detected — fixture is broken")
+		}
+	})
 }
 
 // --- helpers ---------------------------------------------------------------
@@ -252,6 +350,166 @@ func hasInitMethod(t *testing.T, path string, structName string) bool {
 	return false
 }
 
+// findGeneratedCellFilesIn is the parameterized variant of
+// findGeneratedCellFiles that accepts an explicit list of root directories
+// instead of always scanning the repo. It allows negative-fixture tests to
+// scope the scan to a small fixture subtree without breaking the production
+// scanner.
+func findGeneratedCellFilesIn(roots []string) []string {
+	var found []string
+	for _, scanRoot := range roots {
+		_ = filepath.WalkDir(scanRoot, func(path string, d os.DirEntry, err error) error {
+			if err != nil {
+				return nil //nolint:nilerr // walk continues past unreadable entries by design
+			}
+			if d.IsDir() {
+				return nil
+			}
+			if d.Name() == "cell_gen.go" {
+				found = append(found, path)
+			}
+			return nil
+		})
+	}
+	sort.Strings(found)
+	return found
+}
+
+// checkInitInternalHook AST-scans the .go files in dir (excluding cell_gen.go
+// and _test.go) and returns violation messages when:
+//   - no file declares func (c *<structName>) initInternal(...)
+//   - a declaration exists but has the wrong parameter or return types
+//
+// Expected signature: func (c *<structName>) initInternal(ctx context.Context, reg cell.Registry) error.
+func checkInitInternalHook(t *testing.T, dir string, structName string) []string {
+	t.Helper()
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil // unreadable dir is surfaced by CODEGEN-CELL-GEN-01
+	}
+
+	found := false
+	var violations []string
+
+	for _, e := range entries {
+		name := e.Name()
+		if e.IsDir() || !strings.HasSuffix(name, ".go") {
+			continue
+		}
+		if name == "cell_gen.go" || strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		path := filepath.Join(dir, name)
+		fset := token.NewFileSet()
+		f, parseErr := parser.ParseFile(fset, path, nil, 0)
+		if parseErr != nil {
+			continue // build-test will catch parse errors
+		}
+		for _, decl := range f.Decls {
+			fd, ok := decl.(*ast.FuncDecl)
+			if !ok || fd.Recv == nil || len(fd.Recv.List) == 0 || fd.Name == nil {
+				continue
+			}
+			if fd.Name.Name != "initInternal" {
+				continue
+			}
+			if receiverTypeName(fd.Recv.List[0].Type) != structName {
+				continue
+			}
+			// Found initInternal on the right receiver — validate signature.
+			found = true
+			if sig := initInternalSignatureViolation(fd, structName, path); sig != "" {
+				violations = append(violations, sig)
+			}
+		}
+	}
+
+	if !found && len(violations) == 0 {
+		violations = append(violations, fmt.Sprintf(
+			"cell %q (struct *%s) is missing required initInternal hook; "+
+				"implement func (c *%s) initInternal(ctx context.Context, reg cell.Registry) error in cell.go",
+			filepath.Base(dir), structName, structName,
+		))
+	}
+	return violations
+}
+
+// initInternalSignatureViolation returns a non-empty string when fd's
+// parameter or return types do not match:
+//
+//	(ctx context.Context, reg cell.Registry) error
+//
+// Returns "" when the signature is correct.
+func initInternalSignatureViolation(fd *ast.FuncDecl, structName, path string) string {
+	params := fd.Type.Params
+	results := fd.Type.Results
+
+	// Expect exactly two parameters.
+	if params == nil || params.NumFields() != 2 {
+		return fmt.Sprintf(
+			"%s: func (c *%s) initInternal has wrong parameter count (want 2, got %d); "+
+				"expected (ctx context.Context, reg cell.Registry)",
+			path, structName, params.NumFields(),
+		)
+	}
+
+	// Expect exactly one return value.
+	if results == nil || results.NumFields() != 1 {
+		cnt := 0
+		if results != nil {
+			cnt = results.NumFields()
+		}
+		return fmt.Sprintf(
+			"%s: func (c *%s) initInternal has wrong return count (want 1 'error', got %d)",
+			path, structName, cnt,
+		)
+	}
+
+	// Check param[0] type contains "Context".
+	p0 := exprString(params.List[0].Type)
+	if !strings.Contains(p0, "Context") {
+		return fmt.Sprintf(
+			"%s: func (c *%s) initInternal param[0] type = %q, want context.Context",
+			path, structName, p0,
+		)
+	}
+
+	// Check param[1] type contains "Registry".
+	p1 := exprString(params.List[1].Type)
+	if !strings.Contains(p1, "Registry") {
+		return fmt.Sprintf(
+			"%s: func (c *%s) initInternal param[1] type = %q, want cell.Registry",
+			path, structName, p1,
+		)
+	}
+
+	// Check return type is "error".
+	ret := exprString(results.List[0].Type)
+	if ret != "error" {
+		return fmt.Sprintf(
+			"%s: func (c *%s) initInternal return type = %q, want error",
+			path, structName, ret,
+		)
+	}
+
+	return ""
+}
+
+// exprString returns a compact string representation of an AST expression,
+// used only for human-readable violation messages (not for equality checks
+// in security-sensitive paths).
+func exprString(expr ast.Expr) string {
+	switch e := expr.(type) {
+	case *ast.Ident:
+		return e.Name
+	case *ast.SelectorExpr:
+		return exprString(e.X) + "." + e.Sel.Name
+	case *ast.StarExpr:
+		return "*" + exprString(e.X)
+	}
+	return fmt.Sprintf("%T", expr)
+}
+
 // scanForMarkerComments walks the source tree and reports any line whose
 // trimmed text starts with codegenMarkerCellPrefix or codegenMarkerSlicePrefix.
 // Excludes vendor / worktrees / .git / node_modules / testdata / archtest fixtures
@@ -280,7 +538,9 @@ func scanForMarkerComments(t *testing.T, root string) []string {
 		}
 		// Skip this archtest file itself — its constants reference the
 		// marker prefixes but as string literals, not comments.
-		if filepath.Base(path) == "codegen_cell_gen_test.go" {
+		// Use a path-suffix check (not basename) to avoid exempting any
+		// other file that happens to share the same basename.
+		if strings.HasSuffix(filepath.ToSlash(path), "tools/archtest/codegen_cell_gen_test.go") {
 			return nil
 		}
 		content, err := os.ReadFile(path) //nolint:gosec // archtest scans repo paths it discovered itself

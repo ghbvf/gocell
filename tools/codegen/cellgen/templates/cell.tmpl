@@ -26,6 +26,7 @@ func (c *{{.StructName}}) Init(ctx context.Context, reg cell.Registry) error {
 	if err := c.BaseCell.Init(ctx, reg); err != nil {
 		return err
 	}
+	// initInternal: hand-written init hook (permanent K#04 convention; implement in cell.go)
 	if err := c.initInternal(ctx, reg); err != nil {
 		return err
 	}

@@ -129,3 +129,47 @@ func TestVerifyInWorktree_EmptyRepoRoot(t *testing.T) {
 		t.Fatal("expected error for empty repoRoot")
 	}
 }
+
+// TestVerifyInWorktree_DetectsRenamedFile verifies that renaming a tracked
+// file appears as drift. git status --porcelain reports renames as "R old ->
+// new"; parseStatusFiles extracts the new path so Drifted is non-empty.
+func TestVerifyInWorktree_DetectsRenamedFile(t *testing.T) {
+	root := initRepo(t)
+
+	res, err := codegen.VerifyInWorktree(root, func(workdir string) error {
+		old := filepath.Join(workdir, fixtureFilePath)
+		newPath := filepath.Join(workdir, "src", "renamed.txt")
+		return os.Rename(old, newPath)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Drifted) == 0 {
+		t.Error("expected rename to appear as drift")
+	}
+}
+
+// TestVerifyInWorktree_SpaceInPath verifies that git porcelain quoted paths
+// (paths containing spaces are wrapped in double-quotes by git) are correctly
+// unquoted so that Drifted contains the real filesystem path, not a
+// literal-quoted string. See CORRECT-01.
+func TestVerifyInWorktree_SpaceInPath(t *testing.T) {
+	root := initRepo(t)
+
+	const spacedPath = "src/with space.txt"
+	res, err := codegen.VerifyInWorktree(root, func(workdir string) error {
+		return os.WriteFile(filepath.Join(workdir, spacedPath), []byte("generated\n"), 0o644)
+	})
+	if err != nil {
+		t.Fatalf("VerifyInWorktree returned error: %v", err)
+	}
+	if len(res.Drifted) != 1 {
+		t.Fatalf("expected one drifted file, got %v", res.Drifted)
+	}
+	if res.Drifted[0] != spacedPath {
+		t.Errorf("Drifted[0] = %q, want %q (unquoted path)", res.Drifted[0], spacedPath)
+	}
+	if strings.Contains(res.Drifted[0], `"`) {
+		t.Errorf("Drifted[0] still contains literal quotes: %q", res.Drifted[0])
+	}
+}

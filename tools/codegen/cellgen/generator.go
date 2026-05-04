@@ -3,6 +3,7 @@ package cellgen
 import (
 	"embed"
 	"fmt"
+	"os"
 	"path/filepath"
 	"sort"
 	"text/template"
@@ -14,9 +15,17 @@ import (
 //go:embed templates/*.tmpl
 var templateFS embed.FS
 
-// templates is parsed once at package init; the renderer reuses it for
-// every cell to avoid re-parsing identical text on every call.
-var templates = template.Must(template.ParseFS(templateFS, "templates/*.tmpl"))
+// templates is parsed once at package init by cloning the shared header
+// template set (codegen.SharedTemplates) and layering cellgen-local
+// templates (cell.tmpl, slice.tmpl) on top. This gives cell.tmpl and
+// slice.tmpl access to the "header" template definition from
+// tools/codegen/templates/header.tmpl without embedding it in the
+// cellgen subpackage (which would break future sibling subpackages
+// contractgen / markergen that also need the shared header).
+var templates = func() *template.Template {
+	t := template.Must(codegen.SharedTemplates.Clone())
+	return template.Must(t.ParseFS(templateFS, "templates/*.tmpl"))
+}()
 
 // Options controls a Generate run.
 type Options struct {
@@ -69,10 +78,17 @@ func Generate(root string, project *metadata.ProjectMeta, opts Options) (Result,
 		cell := project.Cells[id]
 		// Skip cells without GoStructName — they have not opted into codegen
 		// yet. The K#04 PR-1 enables only the whitelisted cells (currently
-		// examples/todoorder/cells/ordercell). Other cells are skipped here
-		// silently; archtest enforces that any cell matching the codegen
-		// whitelist must declare GoStructName.
+		// examples/todoorder/cells/ordercell). Other cells are skipped here;
+		// archtest enforces that any cell matching the codegen whitelist must
+		// declare GoStructName. Emit a warning to stderr (unless in verify
+		// mode, which is silent on opt-out cells by design).
 		if cell.GoStructName == "" {
+			if !opts.Verify {
+				fmt.Fprintf(os.Stderr,
+					"cellgen: skipping cell %q (no goStructName in cell.yaml;"+
+						" add goStructName: <YourStructName> to opt in)\n",
+					cell.ID)
+			}
 			continue
 		}
 		if err := generateOneCell(root, project, cell, opts, &res); err != nil {

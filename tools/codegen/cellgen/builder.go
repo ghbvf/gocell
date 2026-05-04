@@ -34,6 +34,7 @@ func BuildCellSpec(p *metadata.ProjectMeta, cellID string) (*CellGenSpec, error)
 		StructName:           cell.GoStructName,
 		CellID:               cell.ID,
 		ConsumerGroupDefault: cell.ID,
+		SourceFile:           cell.File,
 	}
 
 	listenerPrefix := make(map[string]string, len(cell.Listeners))
@@ -83,9 +84,10 @@ func BuildSliceSpec(p *metadata.ProjectMeta, cellID, sliceID string) (*SliceGenS
 		return nil, nil //nolint:nilnil // intentional API: nil spec means "no slice_gen.go for this slice"
 	}
 	spec := &SliceGenSpec{
-		Package: s.Dir,
-		CellID:  cellID,
-		SliceID: sliceID,
+		Package:    s.Dir,
+		CellID:     cellID,
+		SliceID:    sliceID,
+		SourceFile: s.File,
 	}
 	for _, sub := range s.Subscribes {
 		spec.Handlers = append(spec.Handlers, SliceHandlerSpec{
@@ -179,23 +181,11 @@ func buildSubscriptions(p *metadata.ProjectMeta, cellID string, slices []*metada
 	var out []SubscriptionGenSpec
 	for _, s := range slices {
 		for _, sub := range s.Subscribes {
-			contract, ok := p.Contracts[sub.Contract]
-			if !ok {
-				return nil, fmt.Errorf("cellgen build: cell %q slice %q subscribes to unknown contract %q",
-					cellID, s.ID, sub.Contract)
+			spec, err := buildSubscriptionSpec(p, cellID, s.ID, sub)
+			if err != nil {
+				return nil, err
 			}
-			if contract.Kind != "event" {
-				return nil, fmt.Errorf("cellgen build: cell %q slice %q subscribes to non-event contract %q (kind=%s)",
-					cellID, s.ID, sub.Contract, contract.Kind)
-			}
-			out = append(out, SubscriptionGenSpec{
-				SpecVarName:   specVarName(sub.Contract),
-				ContractID:    sub.Contract,
-				Transport:     "amqp",
-				SliceID:       s.ID,
-				HandlerExpr:   "c." + sub.SliceField + "." + sub.Handler,
-				ConsumerGroup: sub.ConsumerGroup,
-			})
+			out = append(out, spec)
 		}
 	}
 	sort.SliceStable(out, func(i, j int) bool {
@@ -207,6 +197,36 @@ func buildSubscriptions(p *metadata.ProjectMeta, cellID string, slices []*metada
 	return out, nil
 }
 
+// buildSubscriptionSpec validates one subscribe entry against its contract
+// and converts it to a SubscriptionGenSpec.
+func buildSubscriptionSpec(p *metadata.ProjectMeta, cellID, sliceID string, sub metadata.SubscribeDeclMeta) (SubscriptionGenSpec, error) {
+	contract, ok := p.Contracts[sub.Contract]
+	if !ok {
+		return SubscriptionGenSpec{}, fmt.Errorf("cellgen build: cell %q slice %q subscribes to unknown contract %q",
+			cellID, sliceID, sub.Contract)
+	}
+	if contract.Kind != "event" {
+		return SubscriptionGenSpec{}, fmt.Errorf("cellgen build: cell %q slice %q subscribes to non-event contract %q (kind=%s)",
+			cellID, sliceID, sub.Contract, contract.Kind)
+	}
+	transport := sub.Transport
+	if transport == "" {
+		transport = "amqp"
+	}
+	specVar, err := specVarName(sub.Contract)
+	if err != nil {
+		return SubscriptionGenSpec{}, fmt.Errorf("cellgen build: cell %q slice %q: %w", cellID, sliceID, err)
+	}
+	return SubscriptionGenSpec{
+		SpecVarName:   specVar,
+		ContractID:    sub.Contract,
+		Transport:     transport,
+		SliceID:       sliceID,
+		HandlerExpr:   "c." + sub.SliceField + "." + sub.Handler,
+		ConsumerGroup: sub.ConsumerGroup,
+	}, nil
+}
+
 // specVarName converts a contract id like "event.config.entry-upserted.v1"
 // into a canonical Go identifier like "specEventConfigEntryUpserted":
 //
@@ -214,7 +234,12 @@ func buildSubscriptions(p *metadata.ProjectMeta, cellID string, slices []*metada
 //  2. split remainder on "."
 //  3. for each piece, split on "-" and CamelCase
 //  4. prepend "spec" and concat
-func specVarName(contractID string) string {
+//
+// Returns an error when the input is degenerate (e.g. "v1" alone — all parts
+// are version-stripped, yielding only the "spec" prefix). The YAML validator
+// rejects such ids before builder is called; the error here is defense in
+// depth and propagates as a normal cellgen build failure.
+func specVarName(contractID string) (string, error) {
 	parts := strings.Split(contractID, ".")
 	if n := len(parts); n > 0 && isVersionSegment(parts[n-1]) {
 		parts = parts[:n-1]
@@ -226,7 +251,12 @@ func specVarName(contractID string) string {
 			sb.WriteString(capitalize(sub))
 		}
 	}
-	return sb.String()
+	result := sb.String()
+	if result == "spec" {
+		return "", fmt.Errorf("specVarName: degenerate contract id %q — "+
+			"all parts are version segments; fix the contract id in slice.yaml", contractID)
+	}
+	return result, nil
 }
 
 func isVersionSegment(s string) bool {

@@ -154,6 +154,11 @@
           "consumerGroup": {
             "type": "string",
             "description": "Consumer group identifier. Defaults to the parent cell id when empty."
+          },
+          "transport": {
+            "type": "string",
+            "description": "Event transport protocol. Defaults to \"amqp\" when empty. Override for non-AMQP transports.",
+            "pattern": "^[a-z][a-z0-9-]*$"
           }
         }
       }

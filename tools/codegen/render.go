@@ -34,6 +34,12 @@ type RenderOptions struct {
 //     source for template debugging
 //  3. golang.org/x/tools/imports.Process tidies and orders imports
 //
+// # Returns
+//
+// Returns rendered bytes on success. When go/format or goimports fails, the
+// returned bytes contain the raw template output for debugging — callers
+// MUST NOT write them to disk.
+//
 // ref: ent/ent entc/gen/template.go — same pipeline ordering.
 func Render(opts RenderOptions) ([]byte, error) {
 	if opts.Templates == nil {

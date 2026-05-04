@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 )
 
@@ -102,6 +103,14 @@ func parseStatusFiles(porcelain []byte) []string {
 		if idx := strings.LastIndex(raw, " -> "); idx >= 0 {
 			raw = raw[idx+len(" -> "):]
 		}
+		// Git porcelain v1 wraps paths with special characters (e.g. spaces)
+		// in double-quotes using C-style backslash escapes. Unquote them so
+		// that downstream git diff calls receive the real filesystem path.
+		if len(raw) >= 2 && raw[0] == '"' && raw[len(raw)-1] == '"' {
+			if unquoted, err := strconv.Unquote(raw); err == nil {
+				raw = unquoted
+			}
+		}
 		out = append(out, filepath.Clean(raw))
 	}
 	return out
@@ -141,8 +150,15 @@ func gitOutput(dir string, args ...string) ([]byte, error) {
 
 // writeTruncatedLines copies up to maxLines lines from src into dst,
 // appending a truncation marker when src exceeds the budget.
+// bytes.Split on a newline-terminated input always yields a trailing empty
+// element; that element is stripped before the length check so a diff with
+// exactly maxLines of content is not spuriously truncated.
 func writeTruncatedLines(dst *strings.Builder, src []byte, maxLines int) {
 	lines := bytes.Split(src, []byte("\n"))
+	// Trim the trailing empty element produced by a newline-terminated src.
+	if n := len(lines); n > 0 && len(lines[n-1]) == 0 {
+		lines = lines[:n-1]
+	}
 	if len(lines) <= maxLines {
 		dst.Write(src)
 		return

@@ -48,7 +48,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-git worktree add --detach "${TMP_WT}" HEAD >/dev/null
+git worktree add --detach "${TMP_WT}" HEAD
 
 (
   cd "${TMP_WT}"
@@ -58,19 +58,19 @@ git worktree add --detach "${TMP_WT}" HEAD >/dev/null
   fi
 
   if [[ -n "$(git status --porcelain)" ]]; then
-    echo "ERROR: generated cell files are out of sync with cell.yaml/slice.yaml."
-    echo
-    echo "Drifted files:"
-    git status --porcelain
-    echo
-    echo "Per-file diff (truncated to 200 lines per file):"
-    git status --porcelain | awk '{print $2}' | while read -r f; do
-      echo "===== ${f} ====="
-      git diff -- "${f}" | head -200
+    echo "ERROR: generated cell files are out of sync with cell.yaml/slice.yaml." >&2
+    echo >&2
+    echo "Drifted files:" >&2
+    git status --porcelain >&2
+    echo >&2
+    echo "Per-file diff (truncated to 200 lines per file):" >&2
+    git status --porcelain | cut -c4- | while read -r f; do
+      echo "===== ${f} =====" >&2
+      git diff -- "${f}" | head -200 >&2 || true
     done
-    echo
-    echo "FIX: run locally and commit:"
-    echo "    go run ./cmd/gocell generate cell --all"
+    echo >&2
+    echo "FIX: run locally and commit:" >&2
+    echo "    go run ./cmd/gocell generate cell --all" >&2
     exit 1
   fi
 )

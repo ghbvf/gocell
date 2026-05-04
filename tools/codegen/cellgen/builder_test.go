@@ -301,6 +301,23 @@ func TestBuildCellSpec_NonEventContractRejected(t *testing.T) {
 	}
 }
 
+func TestBuildCellSpec_NoListenersWithRouteMountFails(t *testing.T) {
+	t.Parallel()
+	cell := &metadata.CellMeta{ID: "demo", Dir: "demo", File: "cells/demo/cell.yaml", GoStructName: "Demo"}
+	slc := &metadata.SliceMeta{
+		ID:            "alpha",
+		BelongsToCell: "demo",
+		RouteMounts: []metadata.RouteMountMeta{
+			{Listener: "cell.PrimaryListener", SubPath: "/x", HandlerField: "h"},
+		},
+	}
+	p := fixtureProject(cell, []*metadata.SliceMeta{slc}, nil)
+	_, err := BuildCellSpec(p, "demo")
+	if err == nil || !strings.Contains(err.Error(), "undeclared listener") {
+		t.Fatalf("expected undeclared-listener error, got %v", err)
+	}
+}
+
 func TestBuildSliceSpec_NoSubscribesReturnsNil(t *testing.T) {
 	t.Parallel()
 	cell := &metadata.CellMeta{ID: "demo", Dir: "demo", File: "cells/demo/cell.yaml", GoStructName: "Demo"}
@@ -364,11 +381,78 @@ func TestSpecVarName(t *testing.T) {
 		{"event.foo-bar.baz.v3", "specEventFooBarBaz"},
 		{"event.no.version", "specEventNoVersion"},
 		{"event.with-dash.v10", "specEventWithDash"},
+		// v1.0 — "0" is the last segment and is NOT a version segment
+		// (isVersionSegment requires the leading "v" followed by digits only).
+		// So none of the four parts ("event", "foo", "v1", "0") is stripped.
+		{"event.foo.v1.0", "specEventFooV10"},
 	}
 	for _, tc := range cases {
-		got := specVarName(tc.in)
+		got, err := specVarName(tc.in)
+		if err != nil {
+			t.Errorf("specVarName(%q) returned unexpected error: %v", tc.in, err)
+			continue
+		}
 		if got != tc.want {
 			t.Errorf("specVarName(%q) = %q, want %q", tc.in, got, tc.want)
 		}
+	}
+}
+
+// TestSpecVarName_DegenerateInputErrors verifies that a contract id whose
+// only segment is a version tag (e.g. "v1") returns an error rather than
+// silently producing the invalid identifier "spec". The YAML validator
+// already rejects such ids; this is defense in depth.
+func TestSpecVarName_DegenerateInputErrors(t *testing.T) {
+	t.Parallel()
+	got, err := specVarName("v1")
+	if err == nil {
+		t.Fatalf("expected error for degenerate contract id, got %q", got)
+	}
+	if !strings.Contains(err.Error(), "degenerate contract id") {
+		t.Errorf("error message missing 'degenerate contract id': %v", err)
+	}
+}
+
+// TestBuildCellSpec_TransportDefaultAndOverride verifies that the "amqp"
+// default is applied when transport is omitted in the YAML, and that an
+// explicit transport value is propagated to SubscriptionGenSpec.Transport.
+func TestBuildCellSpec_TransportDefaultAndOverride(t *testing.T) {
+	t.Parallel()
+	cell := &metadata.CellMeta{ID: "demo", Dir: "demo", File: "cells/demo/cell.yaml", GoStructName: "Demo"}
+	slcDefault := &metadata.SliceMeta{
+		ID: "sub1", BelongsToCell: "demo", Dir: "sub1",
+		File: "cells/demo/slices/sub1/slice.yaml",
+		Subscribes: []metadata.SubscribeDeclMeta{
+			{Contract: "event.foo.created.v1", SliceField: "fooSvc", Handler: "HandleFooCreated"},
+		},
+	}
+	slcOverride := &metadata.SliceMeta{
+		ID: "sub2", BelongsToCell: "demo", Dir: "sub2",
+		File: "cells/demo/slices/sub2/slice.yaml",
+		Subscribes: []metadata.SubscribeDeclMeta{
+			{Contract: "event.bar.updated.v1", SliceField: "barSvc", Handler: "HandleBarUpdated", Transport: "kafka"},
+		},
+	}
+	contracts := []*metadata.ContractMeta{
+		{ID: "event.foo.created.v1", Kind: "event"},
+		{ID: "event.bar.updated.v1", Kind: "event"},
+	}
+	p := fixtureProject(cell, []*metadata.SliceMeta{slcDefault, slcOverride}, contracts)
+
+	spec, err := BuildCellSpec(p, "demo")
+	if err != nil {
+		t.Fatalf("BuildCellSpec: %v", err)
+	}
+	if len(spec.Subscriptions) != 2 {
+		t.Fatalf("expected 2 subscriptions, got %d", len(spec.Subscriptions))
+	}
+	// Subscriptions are sorted by SliceID then ContractID: sub1 < sub2.
+	defaultSub := spec.Subscriptions[0]
+	overrideSub := spec.Subscriptions[1]
+	if defaultSub.Transport != "amqp" {
+		t.Errorf("default transport = %q, want %q", defaultSub.Transport, "amqp")
+	}
+	if overrideSub.Transport != "kafka" {
+		t.Errorf("override transport = %q, want %q", overrideSub.Transport, "kafka")
 	}
 }

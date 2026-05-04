@@ -170,7 +170,7 @@ jobs:
       # an ephemeral git worktree at HEAD and uses `git status --porcelain`
       # for drift detection, mirroring kubernetes/kubernetes
       # hack/lib/verify-generated.sh.
-      - name: Verify codegen cell
+      - name: Verify cell codegen (K#04)
         if: matrix.static_checks
         run: ./hack/verify-codegen-cell.sh
 

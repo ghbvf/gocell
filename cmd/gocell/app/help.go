@@ -98,8 +98,9 @@ func printGenerateHelp() error {
 		{"cell", []string{
 			"Render cell_gen.go and slice_gen.go from cell.yaml /",
 			"slice.yaml. <cellID> | --all [--dry-run | --verify].",
-			"--verify reports drift without writing; --dry-run is",
-			"a stdout preview also without write.",
+			"--verify reports drift without writing; --dry-run prints",
+			"would-write file paths without writing.",
+			"CI: commit cell_gen.go and run with --verify to detect stale artifacts.",
 		}},
 		{"indexes", []string{"(not implemented)"}},
 	},
