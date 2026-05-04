@@ -98,6 +98,8 @@ l0Dependencies: []
 // Generated files:
 //   - <root>/<targetDir>/cell.go  — struct + stub markers + initInternal hook
 //   - <root>/<targetDir>/cell.yaml — metadata with goStructName set
+//
+//nolint:gocognit,cyclop,funlen // sequential validation + symlink guard + dual-template render path; complexity intrinsic
 func ScaffoldCell(root, targetDir string, spec ScaffoldSpec) error {
 	if err := validateScaffoldSpec(spec); err != nil {
 		return err
@@ -208,6 +210,8 @@ func ScaffoldCell(root, targetDir string, spec ScaffoldSpec) error {
 // ConsistencyLevel must be one of validConsistencyLevels (schema-authoritative enum).
 // Empty Type and ConsistencyLevel are allowed here; defaults are applied by ScaffoldCell.
 // OwnerTeam and OwnerRole are required and must match their respective patterns.
+//
+//nolint:gocognit,cyclop // sequential per-field validation; complexity intrinsic
 func validateScaffoldSpec(spec ScaffoldSpec) error {
 	idents := []struct {
 		name  string

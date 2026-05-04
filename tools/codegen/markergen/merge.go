@@ -23,6 +23,8 @@ var knownMarkers = []string{"cell:listener", "slice:route", "slice:subscribe"}
 // WireBundle — the yaml fallback path has been removed (W2 cleanup).
 // All five platform cells now declare markers; NO-WIRE-FIELDS-IN-YAML-01
 // archtest enforces yaml-side absence statically.
+//
+//nolint:gocognit,cyclop,funlen // sequential markergen pipeline (collect + merge + ownership cross-check); complexity intrinsic
 func Merge(projectRoot string, project *metadata.ProjectMeta) (map[string]WireBundle, error) {
 	result := make(map[string]WireBundle, len(project.Cells))
 	var allErrs errList
@@ -175,6 +177,8 @@ func buildBundle(markers []collectedMarker) (WireBundle, []error) {
 // dispatchMarker routes one marker to the appropriate parse function and
 // appends the result to bundle. Returns a non-nil error when the marker is
 // unknown, placed on the wrong target level, or otherwise malformed.
+//
+//nolint:gocognit // closed-set switch + target-level enforcement; complexity intrinsic
 func dispatchMarker(m collectedMarker, bundle *WireBundle) error {
 	switch m.Name {
 	case "cell:listener":
