@@ -159,7 +159,7 @@ func TestHookDispatcher_SlowSinkDoesNotBlockEmit(t *testing.T) {
 	})
 	t.Cleanup(func() {
 		bo.release()
-		d.stop(testtime.D500ms)
+		d.stop(context.Background(), testtime.D500ms)
 	})
 
 	start := time.Now()
@@ -183,7 +183,7 @@ func TestHookDispatcher_OverflowDropsAndCounts(t *testing.T) {
 	})
 	t.Cleanup(func() {
 		bo.release()
-		d.stop(testtime.D2s)
+		d.stop(context.Background(), testtime.D2s)
 	})
 
 	// Prime the pipeline: emit one event and wait until the worker has
@@ -212,7 +212,7 @@ func TestHookDispatcher_QueueFullDropLogsWarnFallback(t *testing.T) {
 	})
 	t.Cleanup(func() {
 		bo.release()
-		d.stop(testtime.D2s)
+		d.stop(context.Background(), testtime.D2s)
 	})
 
 	d.emit(cell.HookEvent{CellID: "prime", Hook: cell.HookBeforeStart})
@@ -241,7 +241,7 @@ func TestHookDispatcher_PerSinkTimeoutCountsAndContinues(t *testing.T) {
 	})
 	t.Cleanup(func() {
 		bo.release()
-		d.stop(testtime.D500ms)
+		d.stop(context.Background(), testtime.D500ms)
 	})
 
 	d.emit(cell.HookEvent{CellID: "slow-sink", Hook: cell.HookBeforeStart})
@@ -271,7 +271,7 @@ func TestHookDispatcher_PanicIsCountedAndIsolated(t *testing.T) {
 
 		Clock: clock.Real(),
 	})
-	t.Cleanup(func() { d.stop(testtime.D500ms) })
+	t.Cleanup(func() { d.stop(context.Background(), testtime.D500ms) })
 
 	d.emit(cell.HookEvent{CellID: "crash", Hook: cell.HookBeforeStart})
 	require.True(t, d.flush(testtime.D500ms), "flush should succeed even after sink panic")
@@ -301,7 +301,7 @@ func TestHookDispatcher_ObserverPanicLogValueIsRedactedAndTruncated(t *testing.T
 
 		Clock: clock.Real(),
 	})
-	t.Cleanup(func() { d.stop(testtime.D500ms) })
+	t.Cleanup(func() { d.stop(context.Background(), testtime.D500ms) })
 
 	d.emit(cell.HookEvent{CellID: "panic-redaction", Hook: cell.HookAfterStop})
 	require.True(t, d.flush(testtime.D500ms), "flush should succeed after sink panic")
@@ -345,7 +345,7 @@ func TestHookDispatcher_StopDrainsPending(t *testing.T) {
 	for i := range 10 {
 		d.emit(cell.HookEvent{CellID: "drain", Hook: cell.HookBeforeStart, Duration: time.Duration(i)})
 	}
-	d.stop(testtime.D2s)
+	d.stop(context.Background(), testtime.D2s)
 
 	assert.Equal(t, 10, obs.len(), "stop(drainTimeout) must drain all in-flight events")
 }
@@ -359,7 +359,7 @@ func TestHookDispatcher_StopWaitsForTimedOutSinkBeforeReturning(t *testing.T) {
 	})
 	t.Cleanup(func() {
 		bo.release()
-		d.stop(testtime.D10s)
+		d.stop(context.Background(), testtime.D10s)
 	})
 
 	d.emit(cell.HookEvent{CellID: "slow-drain", Hook: cell.HookBeforeStart})
@@ -371,7 +371,7 @@ func TestHookDispatcher_StopWaitsForTimedOutSinkBeforeReturning(t *testing.T) {
 
 	stopDone := make(chan struct{})
 	go func() {
-		d.stop(testtime.D10s)
+		d.stop(context.Background(), testtime.D10s)
 		close(stopDone)
 	}()
 	require.Eventually(t, func() bool {
@@ -415,7 +415,7 @@ func TestHookDispatcher_StopDoesNotHangForeverOnStuckSink(t *testing.T) {
 
 	stopDone := make(chan struct{})
 	go func() {
-		d.stop(testtime.D2s)
+		d.stop(context.Background(), testtime.D2s)
 		close(stopDone)
 	}()
 	require.Eventually(t, func() bool { return clk.PendingTimers() >= 1 },
@@ -435,13 +435,67 @@ func TestHookDispatcher_StopDoesNotHangForeverOnStuckSink(t *testing.T) {
 	bo.release()
 }
 
+func TestHookDispatcher_StopReturnsWhenContextCanceledDuringSinkDrain(t *testing.T) {
+	clk := clockmock.New(time.Time{})
+	bo := newBlockingObserver()
+	cv := newSpyCounterVec()
+	d := newHookDispatcher(dispatcherConfig{Observer: bo, QueueSize: 8, SinkTimeout: testtime.D1s, Provider: &spyProvider{cv: cv},
+		Clock: clk,
+	})
+	t.Cleanup(bo.release)
+
+	d.emit(cell.HookEvent{CellID: "ctx-drain", Hook: cell.HookBeforeStart})
+	require.Eventually(t, func() bool { return bo.received.Load() >= 1 },
+		testtime.EventuallyDefault, testtime.FastPoll, "event should reach observer")
+	clk.Advance(testtime.D1s)
+	require.Eventually(t, func() bool { return cv.count(DropReasonSinkTimeout) >= 1 },
+		testtime.EventuallyDefault, testtime.FastPoll, "sink timeout must be counted")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	stopDone := make(chan struct{})
+	go func() {
+		d.stop(ctx, testtime.D10s)
+		close(stopDone)
+	}()
+	require.Eventually(t, func() bool {
+		select {
+		case <-d.done:
+			return true
+		default:
+			return false
+		}
+	}, testtime.EventuallyDefault, testtime.FastPoll, "worker should drain before sink wait assertion")
+
+	select {
+	case <-stopDone:
+		t.Fatal("stop returned before sink completion or context cancellation")
+	default:
+	}
+	cancel()
+	select {
+	case <-stopDone:
+	case <-time.After(testtime.SelectShutdown):
+		t.Fatal("stop did not return after context cancellation")
+	}
+
+	bo.release()
+	require.Eventually(t, func() bool {
+		select {
+		case <-d.currentSinkIdle():
+			return true
+		default:
+			return false
+		}
+	}, testtime.EventuallyDefault, testtime.FastPoll, "observer sink should exit after release")
+}
+
 func TestHookDispatcher_StopIsIdempotent(t *testing.T) {
 	d := newHookDispatcher(dispatcherConfig{
 		Observer: cell.NopHookObserver{}, QueueSize: 4, SinkTimeout: testtime.D1s,
 		Clock: clock.Real(),
 	})
-	d.stop(testtime.D200ms)
-	d.stop(testtime.D200ms) // second call must be a no-op, no panic
+	d.stop(context.Background(), testtime.D200ms)
+	d.stop(context.Background(), testtime.D200ms) // second call must be a no-op, no panic
 }
 
 func TestHookDispatcher_FlushOnIdleReturnsTrue(t *testing.T) {
@@ -449,7 +503,7 @@ func TestHookDispatcher_FlushOnIdleReturnsTrue(t *testing.T) {
 		Observer: cell.NopHookObserver{}, QueueSize: 8, SinkTimeout: testtime.D1s,
 		Clock: clock.Real(),
 	})
-	t.Cleanup(func() { d.stop(testtime.D200ms) })
+	t.Cleanup(func() { d.stop(context.Background(), testtime.D200ms) })
 
 	require.True(t, d.flush(testtime.D500ms), "flush on idle dispatcher must succeed")
 }
@@ -469,7 +523,7 @@ func TestHookDispatcher_EmitAfterStopCountsQueueFull(t *testing.T) {
 		Clock: clock.Real(),
 	})
 
-	d.stop(testtime.D200ms)
+	d.stop(context.Background(), testtime.D200ms)
 	// At least one emit after stop must still not panic; drop is counted.
 	d.emit(cell.HookEvent{CellID: "after-stop", Hook: cell.HookBeforeStart})
 
@@ -493,7 +547,7 @@ func TestHookDispatcher_FlushAfterStopReturnsTrue(t *testing.T) {
 		Observer: cell.NopHookObserver{}, QueueSize: 4, SinkTimeout: testtime.D1s,
 		Clock: clock.Real(),
 	})
-	d.stop(testtime.D200ms)
+	d.stop(context.Background(), testtime.D200ms)
 
 	require.True(t, d.flush(testtime.D200ms),
 		"flush after stop must return true (channel drained, fence is trivially satisfied)")
@@ -511,7 +565,7 @@ func TestHookDispatcher_FlushTimeoutThenSuccess(t *testing.T) {
 	})
 	t.Cleanup(func() {
 		bo.release()
-		d.stop(testtime.D500ms)
+		d.stop(context.Background(), testtime.D500ms)
 	})
 
 	d.emit(cell.HookEvent{CellID: "slow", Hook: cell.HookBeforeStart})
@@ -548,4 +602,45 @@ func TestCoreAssembly_StopDrainsDispatcher(t *testing.T) {
 	// No extra flush needed: Stop() must drain internally.
 	assert.GreaterOrEqual(t, obs.len(), 4,
 		"Stop must drain before returning (4 hook events minimum: BeforeStart, AfterStart, BeforeStop, AfterStop)")
+}
+
+func TestCoreAssembly_StopContextCancelsDispatcherDrain(t *testing.T) {
+	clk := clockmock.New(time.Time{})
+	obs := newBlockingObserver()
+	a := newTestAssembly(t, Config{
+		ID:                       "ctx-drain-test",
+		DurabilityMode:           cell.DurabilityDemo,
+		HookObserver:             obs,
+		HookObserverSinkTimeout:  testtime.D10s,
+		HookObserverDrainTimeout: testtime.D10s,
+		Clock:                    clk,
+	})
+	var calls []string
+	require.NoError(t, a.Register(newHookOrderCell("A", &calls, "")))
+	require.NoError(t, a.Start(context.Background()))
+	require.Eventually(t, func() bool { return obs.received.Load() >= 1 },
+		testtime.EventuallyDefault, testtime.FastPoll, "start hook event should reach observer")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	stopDone := make(chan error, 1)
+	go func() {
+		stopDone <- a.Stop(ctx)
+	}()
+	select {
+	case err := <-stopDone:
+		require.NoError(t, err)
+	case <-time.After(testtime.SelectShutdown):
+		t.Fatal("Stop(ctx) waited for HookObserverDrainTimeout despite canceled context")
+	}
+
+	obs.release()
+	require.Eventually(t, func() bool {
+		select {
+		case <-a.dispatcher.done:
+			return true
+		default:
+			return false
+		}
+	}, testtime.EventuallyDefault, testtime.FastPoll, "dispatcher worker should exit after observer release")
 }

@@ -254,10 +254,10 @@ func (a *CoreAssembly) Stop(ctx context.Context) error {
 
 	// Drain the async hook dispatcher after all cells have reported their
 	// AfterStop events so shutdown telemetry lands before the process
-	// exits. The drain is bounded by HookObserverDrainTimeout; a broken
-	// observer does not indefinitely block Stop().
+	// exits. The drain is bounded by ctx and HookObserverDrainTimeout; a
+	// broken observer does not indefinitely block Stop().
 	if a.dispatcher != nil {
-		a.dispatcher.stop(a.cfg.HookObserverDrainTimeout)
+		a.dispatcher.stop(ctx, a.cfg.HookObserverDrainTimeout)
 	}
 	return errors.Join(errs...)
 }
@@ -271,7 +271,7 @@ func (a *CoreAssembly) Stop(ctx context.Context) error {
 // as the final step of Stop().
 func (a *CoreAssembly) Shutdown() {
 	if a.dispatcher != nil {
-		a.dispatcher.stop(a.cfg.HookObserverDrainTimeout)
+		a.dispatcher.stop(context.Background(), a.cfg.HookObserverDrainTimeout)
 	}
 }
 

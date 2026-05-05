@@ -1,6 +1,7 @@
 package assembly
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"sync"
@@ -284,15 +285,18 @@ func (d *hookDispatcher) dispatchOne(e cell.HookEvent) {
 }
 
 // stop closes the channel, then waits for the worker to drain remaining
-// events or for drainTimeout to elapse — whichever comes first. After stop
-// returns, the dispatcher is no longer usable; emit() will see a full
-// (actually closed) channel via the default branch and count the event as
+// events, drainTimeout to elapse, or ctx cancellation — whichever comes first.
+// After stop returns, the dispatcher is no longer usable; emit() will see a
+// full (actually closed) channel via the default branch and count the event as
 // queue_full.
 //
 // stop is safe to call multiple times; only the first invocation closes the
 // channel.
-func (d *hookDispatcher) stop(drainTimeout time.Duration) {
+func (d *hookDispatcher) stop(ctx context.Context, drainTimeout time.Duration) {
 	d.stopOnce.Do(func() {
+		if ctx == nil {
+			ctx = context.Background()
+		}
 		close(d.ch)
 		if drainTimeout <= 0 {
 			drainTimeout = DefaultHookObserverDrainTimeout
@@ -306,6 +310,10 @@ func (d *hookDispatcher) stop(drainTimeout time.Duration) {
 			slog.Warn("assembly: hook dispatcher drain timed out; abandoning worker",
 				slog.Duration("timeout", drainTimeout))
 			return
+		case <-ctx.Done():
+			slog.Warn("assembly: hook dispatcher drain canceled; abandoning worker",
+				slog.Any("error", ctx.Err()))
+			return
 		}
 
 		select {
@@ -314,6 +322,9 @@ func (d *hookDispatcher) stop(drainTimeout time.Duration) {
 		case <-t.C():
 			slog.Warn("assembly: hook dispatcher sink drain timed out; abandoning observer sinks",
 				slog.Duration("timeout", drainTimeout))
+		case <-ctx.Done():
+			slog.Warn("assembly: hook dispatcher sink drain canceled; abandoning observer sinks",
+				slog.Any("error", ctx.Err()))
 		}
 	})
 }
