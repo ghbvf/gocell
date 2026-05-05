@@ -1,6 +1,7 @@
 package archtest
 
 import (
+	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -55,7 +56,7 @@ func TestProvisionStateAndUserSourceBootstrapRemoved(t *testing.T) {
 			}
 			f, parseErr := parser.ParseFile(fset, path, nil, 0)
 			if parseErr != nil {
-				return nil
+				return fmt.Errorf("archtest parse %s: %w", path, parseErr)
 			}
 			ast.Inspect(f, func(n ast.Node) bool {
 				ident, ok := n.(*ast.Ident)

@@ -183,7 +183,6 @@ func TestService_CreateAdmin_FreshSystem_Creates_EmitsEvent(t *testing.T) {
 	assert.NoError(t, bcrypt.CompareHashAndPassword([]byte(persisted.PasswordHash), []byte("SecretPass!23")))
 }
 
-
 func TestService_CreateAdmin_AlreadyExists_Returns410_NoEmit(t *testing.T) {
 	userRepo := mem.NewUserRepository()
 	roleRepo := mem.NewRoleRepository()

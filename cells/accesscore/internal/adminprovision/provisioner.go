@@ -256,12 +256,3 @@ func (p *Provisioner) createAdminUser(ctx context.Context, in ProvisionInput) (P
 	return ProvisionResult{Outcome: OutcomeUnknown}, errcode.New(errcode.KindConflict, errcode.ErrAuthUserDuplicate,
 		"admin provisioning username already exists")
 }
-
-func (p *Provisioner) rollbackAssignedAdmin(ctx context.Context, userID string) {
-	if err := p.roleRepo.RemoveFromUser(ctx, userID, auth.RoleAdmin); err != nil {
-		p.logger.Error("admin provision: rollback assigned role failed",
-			slog.String("event", "admin_provision_rollback"),
-			slog.String("user_id", userID),
-			slog.Any("error", err))
-	}
-}

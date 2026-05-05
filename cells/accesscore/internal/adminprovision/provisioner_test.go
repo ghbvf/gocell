@@ -237,8 +237,6 @@ func TestProvisioner_Ensure_RaceSkipped_NoCreatedUserReturned(t *testing.T) {
 	assert.False(t, roleRepo.assignCalled, "AssignToUser must NOT run on race path")
 }
 
-
-
 func TestProvisioner_Ensure_RecountAfterDuplicateFails_Surfaced(t *testing.T) {
 	// Duplicate Create, but the recount itself errors.
 	userRepo := &duplicateUserRepo{}
@@ -475,7 +473,6 @@ func (r *errRoleRepo) GetByID(ctx context.Context, id string) (*domain.Role, err
 func (r *errRoleRepo) ListByUserID(ctx context.Context, userID string, params query.ListParams) ([]*domain.Role, error) {
 	return nil, nil
 }
-
 
 // recountErrRoleRepo returns firstCount then recountErr on subsequent CountByRole.
 type recountErrRoleRepo struct {

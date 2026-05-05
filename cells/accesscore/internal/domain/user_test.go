@@ -174,4 +174,3 @@ func TestUser_ClearPasswordResetRequiredUnsets(t *testing.T) {
 	assert.False(t, user.PasswordResetRequired, "ClearPasswordResetRequired must set flag to false")
 	assert.True(t, !user.UpdatedAt.Before(before), "ClearPasswordResetRequired must advance UpdatedAt")
 }
-

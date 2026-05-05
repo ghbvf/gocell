@@ -117,7 +117,12 @@ func newBootstrapMiddleware(
 // envelope on rejection. Returns true when the request should proceed.
 // On rejection, onAuthFail (if non-nil) is called with reason="rate_limited"
 // so audit observers can record the blocked attempt.
-func allowBootstrapRequest(w http.ResponseWriter, r *http.Request, limiter BootstrapRateLimiter, onAuthFail BootstrapAuthFailObserver) bool {
+func allowBootstrapRequest(
+	w http.ResponseWriter,
+	r *http.Request,
+	limiter BootstrapRateLimiter,
+	onAuthFail BootstrapAuthFailObserver,
+) bool {
 	if limiter.Allow(bootstrapClientIP(r)) {
 		return true
 	}
