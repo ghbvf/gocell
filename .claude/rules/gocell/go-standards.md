@@ -96,4 +96,4 @@ paths:
 - 资源命名复数名词（users, sessions），操作用 HTTP method 表达
 - 状态码：200 GET/PUT/PATCH | 201 POST | 202 异步 | 204 DELETE
 - 统一列表响应：`{"data": [...], "nextCursor": "...", "hasMore": bool}`
-- 统一错误响应：`{"error": {"code": "ERR_...", "message": "...", "details": {...}}}`
+- 统一错误响应：`{"error": {"code": "ERR_...", "message": "...", "details": [{"key": "...", "value": ...}]}}` （`details` 是 `array<{key,value}>`，5xx 强制空数组——共享 envelope `contracts/shared/errors/error-response-v1.schema.json` + ADR `docs/architecture/202605051730-adr-errcode-message-pii-safety.md`）

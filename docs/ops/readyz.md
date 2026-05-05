@@ -44,10 +44,14 @@ Public `/readyz` 503 reasons are intentionally low-cardinality. Operators
 read them from the structured `slog` record (the wire body carries an empty
 details array):
 
-| slog `status` | slog `reason` | Meaning |
-|---------------|---------------|---------|
-| `unhealthy` | `readiness_failed` | One or more cells/probes failed, or the readiness aggregator failed closed. Internal computation failures are logged server-side and do not create a separate public reason. |
-| `shutting_down` | `graceful_shutdown` | The process is draining and should be removed from load balancer traffic. |
+| slog level | slog `status` | slog `reason` | Meaning |
+|------------|---------------|---------------|---------|
+| `Warn` (msg=`readyz unhealthy`) | `unhealthy` | `readiness_failed` | One or more cells/probes failed, or the readiness aggregator failed closed. Internal computation failures are logged server-side and do not create a separate public reason. |
+| `Info` (msg=`readyz: shutting down (graceful_shutdown)`) | `shutting_down` | `graceful_shutdown` | The process is draining and should be removed from load balancer traffic. |
+
+On-call dashboards / alert rules that filter by level alone will miss the
+`shutting_down` path; query both `level=Warn AND msg="readyz unhealthy"`
+and `level=Info AND status="shutting_down"` to capture every 503.
 
 ## Kubernetes probes — MUST NOT use `?verbose`
 
@@ -127,7 +131,17 @@ the `X-Readyz-Token` header.
 
 Even with `?verbose=true`, the 503 wire body always carries an empty
 `details` array (K#08 5xx strip — public clients never see runtime
-context). The verbose breakdown is emitted to server-side `slog` instead:
+context). The breakdown depth in the slog record depends on whether the
+triggering request was verbose:
+
+- **Non-verbose 503** (kubelet probe / unauthenticated `/readyz` hit):
+  slog record carries only `status` + `reason`. cells / dependencies /
+  adapters fields are not appended.
+- **Verbose 503** (request carries a matching `X-Readyz-Token` and
+  `?verbose=true`): slog record additionally carries cells +
+  dependencies + adapters maps.
+
+Verbose 503 slog example:
 
 ```
 level=WARN msg="readyz unhealthy"
@@ -139,12 +153,15 @@ level=WARN msg="readyz unhealthy"
   adapters={storage=postgres, eventbus=rabbitmq}
 ```
 
-Operators correlate 503s with the structured slog record via the standard
-log pipeline. Probe `error` strings written into `dependencies[*].error`
-are run through `pkg/redaction.RedactString` (so DSNs / tokens / passwords
-are masked) and truncated to 512 bytes before the slog record is emitted.
-Probe implementations should still avoid putting secrets in their error
-messages as a defense-in-depth measure.
+Operators who need the full breakdown for an outage correlate 503s with
+the structured slog record via the standard log pipeline; if the triggering
+probes were non-verbose, hit `/readyz?verbose=true` manually with the
+operator token to elicit a verbose record. Probe `error` strings written
+into `dependencies[*].error` are run through `pkg/redaction.RedactString`
+(so DSNs / tokens / passwords are masked) and truncated to 512 bytes
+before the slog record is emitted. Probe implementations should still
+avoid putting secrets in their error messages as a defense-in-depth
+measure.
 
 ### Waiving the verbose endpoint
 
