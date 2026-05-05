@@ -28,6 +28,13 @@ const errSubscribeUnexpectedFmt = "unexpected Subscribe error: %v"
 // messages are durably queued before Subscribe starts consuming. For in-memory
 // implementations, Ready blocks until the goroutine calls Subscribe.
 //
+// Contract: consumerGroup MUST equal the ConsumerGroup field of the Subscription
+// passed to the eventual Subscribe / SubscribeEntry call. RabbitMQ derives the
+// queue name from (topic, consumerGroup) via resolveQueueName, so a mismatch
+// declares two queues bound to the same exchange — the consumer registers on
+// one, the pre-declared queue stays empty, and messages may be routed to the
+// wrong queue under broker scheduling, producing flaky timeouts.
+//
 // ref: Watermill message.SubscribeInitializer — synchronous topology pre-creation.
 func waitForSubscription(t *testing.T, ctx context.Context, sub outbox.Subscriber, topic, consumerGroup string) {
 	t.Helper()

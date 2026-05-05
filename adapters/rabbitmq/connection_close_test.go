@@ -161,7 +161,9 @@ func TestConnection_Close_RespectsCtxDeadline(t *testing.T) {
 	// fallback that an unresponsive Close would hit. 5×budget is intentionally
 	// loose to absorb GH Actions runner GC pause / scheduler preemption /
 	// testcontainers parallelism noise without sacrificing regression power
-	// against an "ignored ctx, slow Close" degradation.
+	// against an "ignored ctx, slow Close" degradation: an unresponsive Close
+	// would block until close(gate) at D2s, so the regression detection window
+	// [400ms, 2s] is wide enough to flag any meaningful degradation.
 	assert.Less(t, elapsed, 5*budget,
 		"Close must return promptly after ctx expiry (got %s, budget %s)", elapsed, budget)
 
