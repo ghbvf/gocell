@@ -2,11 +2,12 @@
 
 > 本文档面向**应用层 / 客户端开发者**，回答：
 >
-> - 部署 GoCell 时该选 `interactive` 还是 `bootstrap` 模式？
+> - 部署 GoCell 时该选 `bootstrap` 还是 `interactive` 模式？
 > - 客户端收到 setup 端点的 `410 Gone` 时该如何处理？
-> - 日常如何区分 setup 端点的 `400` / `409` / `410`？
+> - 日常如何区分 setup 端点的 `400` / `401` / `409` / `410`？
 >
-> 运维侧的部署细节（凭据文件路径、Docker / K8s 配置、密码重置流程）见 [`docs/operations/first-run-setup.md`](../operations/first-run-setup.md)。
+> 运维侧的部署细节（env 变量、Docker / K8s 配置、密码重置流程）见 [`docs/operations/first-run-setup.md`](../operations/first-run-setup.md)。
+> 安全边界 ADR 见 [`docs/architecture/202605061600-adr-bootstrap-admin-boundary.md`](../architecture/202605061600-adr-bootstrap-admin-boundary.md)。
 
 ---
 
@@ -16,92 +17,84 @@
 
 | 路径 | 触发者 | admin 身份来源 |
 |---|---|---|
-| **Interactive** | 运维通过 HTTP 端点 `POST /api/v1/access/setup/admin` 主动提供 | 运维自选用户名 / 邮箱 / 密码 |
-| **Bootstrap** | `accesscore` lifecycle 在启动时自动检测并创建 | 框架生成随机密码（用户名默认 `admin`，可通过 `initialadmin.WithUsername` 在 lifecycle 装配时覆盖），写凭据文件，运维读文件登录后强制改密 |
+| **Bootstrap** | `accesscore` lifecycle 在启动时自动检测并创建 | env `GOCELL_BOOTSTRAP_ADMIN_USERNAME` / `GOCELL_BOOTSTRAP_ADMIN_PASSWORD`（运维注入） |
+| **Interactive** | 运维通过 HTTP 端点 `POST /api/v1/access/setup/admin` 手工触发 | body 中的 `username` / `email` / `password`（运维自选业务身份） |
 
-`cmd/corebundle` 通过环境变量 `GOCELL_ACCESSCORE_ADMIN_PROVISION_MODE` 选择，仅接受空值 / `interactive` / `bootstrap`，其他值启动 fail-fast。
+两种模式都通过 `GOCELL_SETUP_MODE` 选择（空值 = `bootstrap`）。
 
-> 这是 **deployment-time** 决策，不是运行时开关。同一部署不能同时启用两条路径——`interactive` 模式下 lifecycle 不写凭据文件；`bootstrap` 模式下 setup 端点在启动后立即返回 410。
+`POST /api/v1/access/setup/admin` 的密码必须是 8-72 个可打印 ASCII 字节，与 bcrypt 72-byte 输入上限一致。
+
+> 这是 **deployment-time** 决策，不是运行时开关。同一部署不能同时启用两条路径。
 
 ---
 
 ## 2. 选型矩阵
 
-| 维度 | Interactive | Bootstrap |
+| 维度 | Bootstrap | Interactive |
 |---|---|---|
-| **典型部署形态** | VM / 单机 / 半人工 stage | 容器 / K8s / 无人值守自动化 |
-| **首次启动是否需要人在场** | 是（运维 POST） | 否（启动即就绪） |
-| **admin 凭据所在介质** | 运维自带（密钥管理 / 密码本） | 凭据文件（OS 默认路径，0600 权限） |
-| **首登后是否强制改密** | 否（密码由运维自定） | 是（middleware 拦截直到改密完成） |
-| **多副本兼容** | 一次性、需要外部锁（PG `adminprovision` 加 advisory lock） | 一次性、`adminprovision` 内置锁；副本自动收敛 |
-| **公网暴露风险** | setup 端点必须放在 ingress 后或限速，否则有暴力枚举风险 | setup 端点开机即 410，公网零暴露 |
-| **成功后 setup 端点状态** | 410 Gone（永久） | 410 Gone（永久；从启动那一刻开始就是 410） |
-| **推荐场景** | 内部工具、开发环境、需要明确署名首位 admin 时 | 生产 K8s / Docker、CI sandbox、希望部署即就绪时 |
-
-> ⚠️ **多副本部署的 interactive 模式当前不安全**：`adminprovision` 仅用 `sync.Mutex` 保护单进程内竞争，跨进程锁（backlog `ADMINPROVISION-DIST-LOCK-01` / 026 plan PR-A56）尚未落地。当 deployment replicas ≥ 2 时，并发的 `POST /setup/admin` 可能在两个 pod 各自 `Status()` 看到 `hasAdmin=false` 后双双进入 `Ensure()` 并各创建一份 admin。**replicas ≥ 2 部署请使用 bootstrap 模式**，待 PG advisory lock 落地后再启用 interactive。
-
-> 已经决定哪条路径后，运维侧细节请跳转 [`docs/operations/first-run-setup.md`](../operations/first-run-setup.md)。
+| **典型部署形态** | 容器 / K8s / 无人值守自动化 | VM / 单机 / 半人工 stage |
+| **首次启动是否需要人在场** | 否（启动即就绪） | 是（运维发送 HTTP 请求） |
+| **admin 凭据所在介质** | env（K8s Secret / Vault / CI secret） | 运维自选（密钥管理 / 密码本） |
+| **setup/admin endpoint 认证** | endpoint 从 lifecycle 完成后即返回 410 | HTTP Basic Auth（env 操作员凭据） |
+| **env 凭据角色** | 直接成为 admin 的 username / password | 操作员身份（验证谁可以发起 setup） |
+| **setup 后 endpoint 状态** | 410 Gone（永久；lifecycle 完成即 410） | 410 Gone（永久；admin 创建成功后） |
+| **multi-pod 兼容** | 是（lifecycle 幂等：admin 已存在则 slog.Warn 跳过） | 否（`GOCELL_REPLICA_COUNT > 1` 时 fail-fast） |
+| **推荐场景** | 生产 K8s / Docker、CI sandbox、希望部署即就绪 | 内部工具、需要显式署名首位 admin、开发环境 |
 
 ---
 
-## 3. Interactive 路径完整流
+## 3. Bootstrap 路径完整流
 
 ```
-[client]                              [accesscore]
-  │  GET  /api/v1/access/setup/status
-  ├────────────────────────────────────►   data.hasAdmin = false
-  │
-  │  POST /api/v1/access/setup/admin
-  │  { "username":"root","email":"...","password":"..." }
-  ├────────────────────────────────────►   201 Created
-  │  (admin 唯一性 = adminprovision 锁；多副本同时 POST 仅一笔成功)
-  │
-  │  POST /api/v1/access/setup/admin (再次)
-  ├────────────────────────────────────►   410 Gone
-  │
-  │  POST /api/v1/access/sessions/login
-  ├────────────────────────────────────►   201 Created + access/refresh tokens
-```
+[startup]
+  GOCELL_SETUP_MODE=bootstrap（默认）
+  GOCELL_BOOTSTRAP_ADMIN_USERNAME=ops
+  GOCELL_BOOTSTRAP_ADMIN_PASSWORD=OpsPass123!
+  start gocell
 
-要点：
-- `GET /status` 仅作 hint；并发 setup 时仍由 410 断言一次性
-- 创建成功后 setup 端点对**该部署生命周期内的所有后续请求**都返回 410（不是临时冲突 409）
-- 客户端不应把 410 当作 retry 信号；进入 login 流即可
-- `GET /status` 在 provisioner 故障时返回 500：这是 infra 故障类，客户端按自身 HTTP retry middleware 处理（沿用应用全局退避策略；若响应携带 `Retry-After` header 则遵循其值），不需要为 setup 端点单独写一份 retry 表
-- `/setup/status` 是业务端点，**不是** liveness / readiness probe — K8s probe 应指向 `/healthz` / `/readyz`，那两条路径独立于业务故障域
+[accesscore lifecycle]
+  → 校验 env 凭据（空则 fail-fast）
+  → 检测 admin role 是否有 user
+    → 无：以 env username/password 创建 admin（写入 accesscore DB）
+    → 有：slog.Warn 提示可清理 env（不阻止启动）
+  → setup/admin endpoint 从此返回 410 Gone
+
+[client]
+  POST /api/v1/access/sessions/login
+  { "username": "ops", "password": "OpsPass123!" }
+  → 201 Created + access/refresh tokens
+```
 
 ---
 
-## 4. Bootstrap 路径完整流
+## 4. Interactive 路径完整流
+
+**凭据关系**：env `GOCELL_BOOTSTRAP_ADMIN_USERNAME` / `GOCELL_BOOTSTRAP_ADMIN_PASSWORD` 是 **操作员身份**（HTTP Basic Auth），body 是**业务 admin 身份**（要创建的用户）。两者解耦，对标 Keycloak temp-admin 退化版。
 
 ```
-[startup]                             [accesscore lifecycle]
-  │  set GOCELL_ACCESSCORE_ADMIN_PROVISION_MODE=bootstrap
-  │  start gocell
-  ├────────────────────────────────────►   detects admin role empty
-  │                                        generates random password (username
-  │                                          defaults to "admin")
-  │                                        writes credential file (0600)
-  │                                        starts 24h TTL purge worker
+[startup]
+  GOCELL_SETUP_MODE=interactive
+  GOCELL_BOOTSTRAP_ADMIN_USERNAME=ops
+  GOCELL_BOOTSTRAP_ADMIN_PASSWORD=OpsPass123!
+  start gocell
 
-[client]                              [accesscore]
-  │  read credential file              (运维带外动作；文件含 username + password)
-  │
-  │  POST /api/v1/access/sessions/login
-  │  { "username":"admin","password":"<from-cred-file>" }
-  ├────────────────────────────────────►   201 Created + reset-required token
-  │
-  │  POST /api/v1/access/users/{userId}/password
-  │  { "old":"...", "new":"..." }
-  ├────────────────────────────────────►   200 OK
-  │  (middleware 在改密完成前会拒绝任何业务端点)
+[accesscore]
+  → setup/admin endpoint 以 HTTP Basic Auth 保护（env 操作员凭据）
 
-[and any time]
-  │  POST /api/v1/access/setup/admin
-  ├────────────────────────────────────►   410 Gone
+[client — 运维操作]
+  POST /api/v1/access/setup/admin
+  Authorization: Basic <base64(ops:OpsPass123!)>
+  { "username":"admin","email":"admin@corp.example","password":"AdminPass456!" }
+  → 201 Created
+
+[client — 再次调用 setup/admin]
+  → 410 Gone（永久）
+
+[client — 用业务凭据登录]
+  POST /api/v1/access/sessions/login
+  { "username": "admin", "password": "AdminPass456!" }
+  → 201 Created + access/refresh tokens
 ```
-
-凭据文件路径与权限规范见 [`docs/operations/first-run-setup.md`](../operations/first-run-setup.md)。
 
 ---
 
@@ -133,20 +126,18 @@ setup 端点退休后，所有 `POST /api/v1/access/setup/admin` 请求得到统
 
 ### 6.1 curl 示意
 
-> curl 块为人工调试用途；**生产客户端请参考 §6.2 Go 伪代码** — 通过 contract registry 解析 path，不要把 curl 字面量复制到代码中（与 §5 设计原则一致）。
-
 ```bash
-# 1. 尝试 setup（部署后任何时刻都可能拿到 410）
+# Bootstrap 模式（默认）：setup/admin 从 lifecycle 完成后即 410，直接 login
 $ curl -sS -X POST https://gocell.example/api/v1/access/setup/admin \
     -H 'content-type: application/json' \
     -d '{"username":"root","email":"root@local","password":"SecretPass!23"}'
-
 {"error":{"code":"ERR_SETUP_ALREADY_INITIALIZED","message":"first-run admin already provisioned; this endpoint is retired","details":{"nextAction":"login"}}}
 
-# 2. 客户端读 details.nextAction → 进入 login 流（路径来自客户端自己的 contract / OpenAPI）
-$ curl -sS -X POST https://gocell.example/api/v1/access/sessions/login \
+# Interactive 模式：需要 Basic Auth
+$ curl -sS -X POST https://gocell.example/api/v1/access/setup/admin \
+    -u "ops:OpsPass123!" \
     -H 'content-type: application/json' \
-    -d '{"username":"<known-admin>","password":"<...>"}'
+    -d '{"username":"admin","email":"admin@corp.example","password":"AdminPass456!"}'
 ```
 
 ### 6.2 Go 客户端伪代码
@@ -186,49 +177,54 @@ func provisionOrLogin(ctx context.Context, c *Client, in AdminSeed) error {
 }
 ```
 
-要点：
-- 客户端**不**在代码中硬编码 `/api/v1/access/sessions/login`；用 contract id 反查
-- `nextAction` 用作语义路标——未来若框架增加新路径（例如 SSO redirect），再扩 `nextAction` 取值
-
 ---
 
-## 7. `400` / `409` / `410` 区分
+## 7. `400` / `401` / `409` / `410` 区分
 
 | 状态 | errcode | 触发条件 | 客户端建议处理 |
 |---|---|---|---|
 | **400** | `ERR_AUTH_IDENTITY_INVALID_INPUT` | 请求体字段缺失、超长、非可打印 ASCII 密码、控制字符 | 校验输入 → 提示用户 → 重发 |
-| **400** | `ERR_VALIDATION_FAILED` | JSON malformed、未知字段、Content-Type 错误（含 `DecodeJSONStrict` 触发的所有校验失败） | 修请求体格式 → 重发 |
-| **409** | `ERR_AUTH_USER_DUPLICATE` | 请求 username 已被其他 user（identity 路径或 bootstrap pending 行）占用，但**还没成为 admin** | 换 username → 重试；不要静默 retry 同名 |
-| **410** | `ERR_SETUP_ALREADY_INITIALIZED` | admin role 已有 user（来自 interactive 或 bootstrap） | 进入 login 流；**不要重试 setup**；视为终态 |
+| **400** | `ERR_VALIDATION_FAILED` | JSON malformed、未知字段、Content-Type 错误 | 修请求体格式 → 重发 |
+| **401** | `ERR_AUTH_BOOTSTRAP_FAILED` | Interactive 模式，Basic Auth 凭据错误；或 rate limit 触发 | 核对 env 操作员凭据；不要自动重试（防枚举） |
+| **409** | `ERR_AUTH_USER_DUPLICATE` | 请求 username 已被其他 user 占用，但还没成为 admin | 换 username → 重试；不要静默 retry 同名 |
+| **410** | `ERR_SETUP_ALREADY_INITIALIZED` | admin role 已有 user（来自 bootstrap 或 interactive） | 进入 login 流；**不要重试 setup**；视为终态 |
+| **429** | `ERR_AUTH_BOOTSTRAP_FAILED` | per-IP rate limit 触发 | 等待 rate limit 窗口；检查请求来源 |
 
-判定顺序与语义：
+判定顺序（interactive 模式）：
 
 ```
-        ┌────────────────────────┐
-        │ POST /access/setup/admin│
-        └──────────┬─────────────┘
+        ┌────────────────────────────┐
+        │ POST /access/setup/admin   │
+        └──────────┬─────────────────┘
                    │
        ┌───────────┴────────────┐
-       │ admin 已存在?          │
+       │ Basic Auth 通过?        │
        └────┬──────────────┬────┘
             │ 否            │ 是
             ▼              ▼
-   ┌────────────────┐    410 Gone (终态)
-   │ 输入合法?      │
-   └─┬──────────┬───┘
-     │ 否        │ 是
-     ▼          ▼
-   400 Bad    ┌─────────────────┐
-   Request    │ username 已占? │
-              └─┬───────────┬───┘
-                │ 是         │ 否
-                ▼           ▼
-             409 Conflict  201 Created
+         401 Unauthorized  ┌────────────────────┐
+                           │ admin 已存在?       │
+                           └────┬──────────┬────┘
+                                │ 否        │ 是
+                                ▼          ▼
+                       ┌────────────────┐  410 Gone（终态）
+                       │ 输入合法?      │
+                       └─┬──────────┬───┘
+                         │ 否        │ 是
+                         ▼          ▼
+                       400 Bad    ┌─────────────────┐
+                       Request    │ username 已占?   │
+                                  └─┬───────────┬───┘
+                                    │ 是         │ 否
+                                    ▼           ▼
+                                 409 Conflict  201 Created
 ```
+
+---
 
 ## 8. 相关文档
 
-- [`docs/operations/first-run-setup.md`](../operations/first-run-setup.md) — 凭据文件路径、Docker / K8s / macOS / Windows 部署细节、密码重置流程
-- [`docs/architecture/202604181900-adr-auth-setup-first-run.md`](../architecture/202604181900-adr-auth-setup-first-run.md) — 双模式 ADR
-- [`contracts/http/auth/setup/admin/v1/contract.yaml`](../../contracts/http/auth/setup/admin/v1/contract.yaml) — setup admin 端点契约（含 400 / 409 / 410 声明）
+- [`docs/operations/first-run-setup.md`](../operations/first-run-setup.md) — 环境变量配置、Docker / K8s 部署细节、密码重置流程
+- [`docs/architecture/202605061600-adr-bootstrap-admin-boundary.md`](../architecture/202605061600-adr-bootstrap-admin-boundary.md) — 安全边界 ADR（8 项决策）
+- [`contracts/http/auth/setup/admin/v1/contract.yaml`](../../contracts/http/auth/setup/admin/v1/contract.yaml) — setup admin 端点契约（含 400 / 401 / 409 / 410 声明）
 - [`contracts/http/auth/setup/status/v1/contract.yaml`](../../contracts/http/auth/setup/status/v1/contract.yaml) — setup status 端点契约

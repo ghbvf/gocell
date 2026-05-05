@@ -67,9 +67,14 @@ Each Cell reads its own env variables. The naming pattern is `GOCELL_<CELLID>_<R
 
 ### accesscore first-admin provisioning
 
-| Variable | Purpose | Default | Accepted Values |
+All three variables are required in both modes. Empty values cause fail-fast at startup with `ERR_AUTH_BOOTSTRAP_CREDENTIALS_MISSING`. See `docs/operations/first-run-setup.md` for deployment examples and `docs/architecture/202605061600-adr-bootstrap-admin-boundary.md` for the security boundary ADR.
+
+| Variable | Purpose | Default | Notes |
 |---|---|---|---|
-| `GOCELL_ACCESSCORE_ADMIN_PROVISION_MODE` | Selects first-admin ownership in `cmd/corebundle`. `interactive` leaves `/api/v1/access/setup/admin` as the one-shot owner; `bootstrap` enables the lifecycle that creates a random initial admin password and writes the credential file under `GOCELL_STATE_DIR`. Unknown non-empty values fail fast at startup. | `interactive` | `""`, `"interactive"`, `"bootstrap"` |
+| `GOCELL_SETUP_MODE` | Selects first-admin mode. `bootstrap` (default): accesscore lifecycle creates admin from env credentials at startup. `interactive`: admin is created by POSTing to `/api/v1/access/setup/admin` (HTTP Basic Auth protected by env credentials). Unknown non-empty values fail fast. | `""` (= `bootstrap`) | `""`, `"bootstrap"`, `"interactive"` |
+| `GOCELL_BOOTSTRAP_ADMIN_USERNAME` | Username for HTTP Basic Auth protecting the setup/admin endpoint (both modes), and the admin username created at startup (bootstrap mode). Must be non-empty; empty value fails fast. | — | **Required, both modes** |
+| `GOCELL_BOOTSTRAP_ADMIN_PASSWORD` | Password for HTTP Basic Auth protecting the setup/admin endpoint (both modes), and the admin password created at startup (bootstrap mode). Minimum 8 bytes after TrimSpace (handles K8s secret trailing newlines). Control characters fail fast. | — | **Required, both modes** |
+| `GOCELL_REPLICA_COUNT` | Number of running replicas. When `> 1`, interactive mode fails fast at startup to prevent multi-pod race conditions. Bootstrap mode is unaffected (lifecycle is idempotent). | — | Optional; set to `1` for single-pod interactive deployments |
 
 ## Encryption Key Provider (required when GOCELL_CELL_ADAPTER_MODE=postgres)
 
@@ -162,7 +167,7 @@ Note: the per-cell `GOCELL_<CELLID>_DATABASE_URL` variables (e.g. `GOCELL_CONFIG
 
 | Variable | Purpose | Default |
 |---|---|---|
-| `GOCELL_STATE_DIR` | Directory for stateful files (e.g. initial admin credential on first run) | Platform-specific (see below) |
+| `GOCELL_STATE_DIR` | Directory for stateful files | Platform-specific (see below) |
 
 ### Per-OS defaults for `GOCELL_STATE_DIR`
 
