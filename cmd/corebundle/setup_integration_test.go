@@ -276,3 +276,148 @@ func TestSetupEndpoints_FirstRunFlow(t *testing.T) {
 		assert.NotEmpty(t, body.Data.RefreshToken)
 	})
 }
+
+// setupTestBlockAfterNLimiter is a rate limiter that allows the first N requests
+// and blocks all subsequent ones. Used to test 429 behavior without long waits.
+type setupTestBlockAfterNLimiter struct {
+	remaining int
+}
+
+func (l *setupTestBlockAfterNLimiter) Allow(string) bool {
+	if l.remaining > 0 {
+		l.remaining--
+		return true
+	}
+	return false
+}
+
+// TestSetupAdminBootstrap_RateLimited_Returns429 verifies that when the
+// bootstrap rate limiter is exhausted, POST /api/v1/access/setup/admin returns
+// 429 with a Retry-After header. Uses a capacity=2 limiter so the test is fast.
+// F7 RED until Wave 1 (F1: onAuthFail rate_limited) and assembly wiring are complete.
+func TestSetupAdminBootstrap_RateLimited_Returns429(t *testing.T) {
+	const capacity = 2
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+
+	privKey, pubKey := auth.MustGenerateTestKeyPair()
+	keySet, err := auth.NewKeySet(privKey, pubKey, clock.Real())
+	require.NoError(t, err)
+	jwtIssuer, err := auth.NewJWTIssuer(keySet, "test", testtime.D15min, clock.Real(),
+		auth.WithIssuerAudiencesFromSlice([]string{"gocell"}))
+	require.NoError(t, err)
+	jwtVerifier, err := auth.NewJWTVerifier(keySet, clock.Real(), auth.WithExpectedAudiences("gocell"))
+	require.NoError(t, err)
+
+	eb := eventbus.New(eventbus.WithClock(clock.Real()))
+	var nw outbox.Writer = outbox.NoopWriter{}
+
+	auditCursorCodec, err := query.NewCursorCodec([]byte("test-audit-cursor-key-32-bytes!!"))
+	require.NoError(t, err)
+	configCursorCodec, err := query.NewCursorCodec([]byte("test-config-cursor-key-32bytes!!"))
+	require.NoError(t, err)
+
+	limiter := &setupTestBlockAfterNLimiter{remaining: capacity}
+	bootstrapMW := auth.NewBootstrapMiddleware(
+		auth.BootstrapCredentials{
+			Username: []byte(setupTestBootstrapUsername),
+			Password: []byte(setupTestBootstrapPassword),
+		},
+		limiter,
+		nil,
+	)
+
+	ac := accesscore.NewAccessCore(
+		accesscore.WithClock(clock.Real()),
+		accesscore.WithInMemoryDefaults(),
+		accesscore.WithOutboxDeps(eb, nw),
+		accesscore.WithJWTIssuer(jwtIssuer),
+		accesscore.WithJWTVerifier(jwtVerifier),
+		accesscore.WithTxManager(noopTxRunner{}),
+		accesscore.WithMetricsProvider(metrics.NopProvider{}),
+		accesscore.WithBootstrapAuth(bootstrapMW),
+	)
+	cc := configcore.NewConfigCore(
+		configcore.WithClock(clock.Real()),
+		configcore.WithInMemoryDefaults(),
+		configcore.WithOutboxDeps(eb, nw),
+		configcore.WithTxManager(noopTxRunner{}),
+		configcore.WithCursorCodec(configCursorCodec),
+		configcore.WithMetricsProvider(metrics.NopProvider{}),
+	)
+	auc := auditcore.NewAuditCore(
+		auditcore.WithClock(clock.Real()),
+		auditcore.WithInMemoryDefaults(),
+		auditcore.WithOutboxDeps(eb, nw),
+		auditcore.WithHMACKey([]byte("test-hmac-key-32-bytes-long!!!!")),
+		auditcore.WithTxManager(noopTxRunner{}),
+		auditcore.WithCursorCodec(auditCursorCodec),
+		auditcore.WithMetricsProvider(metrics.NopProvider{}),
+	)
+
+	asm := assembly.New(assembly.Config{ID: "ratelimit-test", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
+	require.NoError(t, asm.Register(ac))
+	require.NoError(t, asm.Register(cc))
+	require.NoError(t, asm.Register(auc))
+
+	app := bootstrap.New(
+		bootstrap.WithClock(clock.Real()),
+		bootstrap.WithAssembly(asm),
+		bootstrap.WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{cell.MustNewAuthJWTFromAssembly(asm)}, bootstrap.WithListenerNet(ln)),
+		withCorebundleTestInternalListener(t, newCorebundleLocalListener(t)),
+		bootstrap.WithPublisher(eb), bootstrap.WithSubscriber(eb),
+		bootstrap.WithConsumerBase(newCorebundleTestConsumerBase(t, clock.Real())),
+		bootstrap.WithShutdownTimeout(testtime.D2s),
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- app.Run(ctx) }()
+	defer func() {
+		cancel()
+		select {
+		case runErr := <-done:
+			assert.NoError(t, runErr)
+		case <-time.After(testtime.SelectShutdown):
+			t.Fatal("bootstrap did not shut down in time")
+		}
+	}()
+
+	addr := ln.Addr().String()
+	require.Eventually(t, func() bool {
+		resp, err := setupHTTPClient.Get(fmt.Sprintf("http://%s/healthz", addr))
+		if err != nil {
+			return false
+		}
+		resp.Body.Close()
+		return resp.StatusCode == http.StatusOK
+	}, testtime.EventuallyDefault, testtime.MediumPoll, "HTTP server did not become ready")
+
+	base := "http://" + addr
+
+	// Exhaust the capacity (2 allowed requests).
+	for i := 0; i < capacity; i++ {
+		req, err := http.NewRequestWithContext(context.Background(), http.MethodPost,
+			base+"/api/v1/access/setup/admin", strings.NewReader(`{"username":"op","email":"op@x","password":"Pass!1234"}`))
+		require.NoError(t, err)
+		req.Header.Set("Content-Type", "application/json")
+		req.SetBasicAuth(setupTestBootstrapUsername, setupTestBootstrapPassword)
+		resp, err := setupHTTPClient.Do(req)
+		require.NoError(t, err)
+		resp.Body.Close()
+	}
+
+	// Next request must be rate-limited.
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost,
+		base+"/api/v1/access/setup/admin", strings.NewReader(`{"username":"op","email":"op@x","password":"Pass!1234"}`))
+	require.NoError(t, err)
+	req.Header.Set("Content-Type", "application/json")
+	req.SetBasicAuth(setupTestBootstrapUsername, setupTestBootstrapPassword)
+	resp, err := setupHTTPClient.Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+
+	assert.Equal(t, http.StatusTooManyRequests, resp.StatusCode, "exhausted limiter must return 429")
+	assert.NotEmpty(t, resp.Header.Get("Retry-After"), "429 response must carry Retry-After header")
+}

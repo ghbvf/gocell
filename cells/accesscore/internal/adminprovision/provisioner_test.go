@@ -56,6 +56,88 @@ func ensureForTest(
 
 // --- NewProvisioner -------------------------------------------------------
 
+// TestNewProvisioner_NilDeps_ReturnsErrcode is the F3 RED test (table-driven):
+// all four nil deps must return errcode.Error (KindInvalid+ErrValidationFailed),
+// not bare fmt.Errorf. Will fail until provisioner.go nil checks use errcode.New.
+func TestNewProvisioner_NilDeps_ReturnsErrcode(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name string
+		user ports.UserRepository
+		role ports.RoleRepository
+		log  *slog.Logger
+		id   adminprovision.UUIDGenerator
+	}{
+		{name: "nil user repo", user: nil, role: mem.NewRoleRepository(), log: discardLogger(), id: fixedUUID("x")},
+		{name: "nil role repo", user: mem.NewUserRepository(), role: nil, log: discardLogger(), id: fixedUUID("x")},
+		{name: "nil logger", user: mem.NewUserRepository(), role: mem.NewRoleRepository(), log: nil, id: fixedUUID("x")},
+		{name: "nil uuid gen", user: mem.NewUserRepository(), role: mem.NewRoleRepository(), log: discardLogger(), id: nil},
+	}
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			_, err := adminprovision.NewProvisioner(tc.user, tc.role, tc.log, tc.id, clock.Real())
+			require.Error(t, err)
+			var ec *errcode.Error
+			require.ErrorAs(t, err, &ec, "nil dep must return errcode.Error, got: %T: %v", err, err)
+			assert.Equal(t, errcode.ErrValidationFailed, ec.Code)
+		})
+	}
+}
+
+// TestEnsure_DuplicateUsername_Returns409 is the Wave 2 RED test:
+// after orphan recovery is removed, a duplicate username (non-race, no admin yet)
+// must return 409 ErrAuthUserDuplicate without any recovery attempt.
+func TestEnsure_DuplicateUsername_Returns409(t *testing.T) {
+	t.Parallel()
+	userRepo := mem.NewUserRepository()
+	existing, err := domain.NewUser("admin", "admin@local", "$2a$10$identityhash", time.Now())
+	require.NoError(t, err)
+	existing.ID = "usr-existing"
+	require.NoError(t, userRepo.Create(context.Background(), existing))
+
+	roleRepo := mem.NewRoleRepository()
+	p := newProvisioner(t, userRepo, roleRepo, fixedUUID("y"))
+
+	// Use setup source (no bootstrap source), no admin role yet.
+	in := adminprovision.ProvisionInput{
+		Username:     "admin",
+		Email:        "admin@local",
+		PasswordHash: []byte("$2a$10$newhash000000000000000000000000000000000000000000"),
+	}
+	result, err := p.Ensure(context.Background(), in)
+	require.Error(t, err)
+	assert.Equal(t, adminprovision.OutcomeUnknown, result.Outcome)
+	var ec *errcode.Error
+	require.ErrorAs(t, err, &ec)
+	assert.Equal(t, errcode.ErrAuthUserDuplicate, ec.Code)
+	// Existing user must be untouched.
+	refreshed, getErr := userRepo.GetByID(context.Background(), "usr-existing")
+	require.NoError(t, getErr)
+	assert.Equal(t, "$2a$10$identityhash", refreshed.PasswordHash, "existing user hash must not change")
+}
+
+// TestEnsure_RaceDetected_ReturnsRaceSkipped verifies race detection still works
+// after orphan recovery is removed. The duplicate Create + recount>0 path must
+// return OutcomeRaceSkipped without error.
+func TestEnsure_RaceDetected_ReturnsRaceSkipped(t *testing.T) {
+	t.Parallel()
+	userRepo := &duplicateUserRepo{}
+	roleRepo := &scriptedRoleRepo{counts: []int{0, 1}}
+	p := newProvisioner(t, userRepo, roleRepo, fixedUUID("z"))
+
+	in := adminprovision.ProvisionInput{
+		Username:     "admin",
+		Email:        "admin@local",
+		PasswordHash: []byte("$2a$10$hash"),
+	}
+	result, err := p.Ensure(context.Background(), in)
+	require.NoError(t, err)
+	assert.Equal(t, adminprovision.OutcomeRaceSkipped, result.Outcome)
+	assert.Nil(t, result.User)
+}
+
 func TestNewProvisioner_NilDependency_ReturnsError(t *testing.T) {
 	tests := []struct {
 		name string

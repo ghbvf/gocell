@@ -78,11 +78,36 @@ func TestNewService_NilProvisioner_Error(t *testing.T) {
 	require.Error(t, err)
 }
 
+// TestNewService_NilProvisioner_ReturnsErrcode is the F3 RED test:
+// provisioner nil check must return errcode (KindInvalid+ErrValidationFailed),
+// not a bare fmt.Errorf.
+func TestNewService_NilProvisioner_ReturnsErrcode(t *testing.T) {
+	_, err := setup.NewService(nil, discardLogger())
+	require.Error(t, err)
+	var ec *errcode.Error
+	require.ErrorAs(t, err, &ec, "provisioner nil check must return errcode.Error")
+	assert.Equal(t, errcode.ErrValidationFailed, ec.Code)
+}
+
 func TestNewService_NilLogger_Error(t *testing.T) {
 	prov, _ := adminprovision.NewProvisioner(mem.NewUserRepository(), mem.NewRoleRepository(),
 		discardLogger(), func() string { return "x" }, clock.Real())
 	_, err := setup.NewService(prov, nil)
 	require.Error(t, err)
+}
+
+// TestNewService_NilLogger_ReturnsErrcode is the F3 RED test:
+// logger nil check must return errcode (KindInvalid+ErrValidationFailed),
+// not a bare fmt.Errorf.
+func TestNewService_NilLogger_ReturnsErrcode(t *testing.T) {
+	prov, err := adminprovision.NewProvisioner(mem.NewUserRepository(), mem.NewRoleRepository(),
+		discardLogger(), func() string { return "x" }, clock.Real())
+	require.NoError(t, err)
+	_, err = setup.NewService(prov, nil)
+	require.Error(t, err)
+	var ec *errcode.Error
+	require.ErrorAs(t, err, &ec, "logger nil check must return errcode.Error")
+	assert.Equal(t, errcode.ErrValidationFailed, ec.Code)
 }
 
 func TestNewService_TxRunnerRequired(t *testing.T) {

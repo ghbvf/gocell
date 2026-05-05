@@ -1,10 +1,16 @@
 package main
 
 import (
+	"bytes"
+	"context"
+	"log/slog"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/ghbvf/gocell/pkg/ctxkeys"
 )
 
 func TestInternalAddrToBaseURL(t *testing.T) {
@@ -50,6 +56,30 @@ func TestInternalAddrToBaseURL(t *testing.T) {
 			assert.Equal(t, tt.want, got)
 		})
 	}
+}
+
+// TestBootstrapAuthFailLogger_RecordsClientIP verifies that bootstrapAuthFailLogger
+// writes a slog record containing the "client_ip" field when the context carries
+// a real IP. This is the F2 RED test — it fails until the observer calls
+// ctxkeys.RealIPFrom and logs slog.String("client_ip", ip).
+func TestBootstrapAuthFailLogger_RecordsClientIP(t *testing.T) {
+	t.Parallel()
+
+	var buf bytes.Buffer
+	handler := slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelError})
+	// Replace the default slog logger for this test.
+	// bootstrapAuthFailLogger uses slog.ErrorContext which goes through the default logger.
+	orig := slog.Default()
+	slog.SetDefault(slog.New(handler))
+	t.Cleanup(func() { slog.SetDefault(orig) })
+
+	observer := bootstrapAuthFailLogger()
+	ctx := ctxkeys.WithRealIP(context.Background(), "192.0.2.1")
+	observer(ctx, "rate_limited")
+
+	logged := buf.String()
+	assert.True(t, strings.Contains(logged, "client_ip=192.0.2.1"),
+		"bootstrapAuthFailLogger must log client_ip field; got: %q", logged)
 }
 
 // TestAccessCoreModule_BootstrapMissingCredentials_FailsFast verifies that
