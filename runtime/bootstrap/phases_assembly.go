@@ -140,9 +140,9 @@ func (b *Bootstrap) phase1LoadConfig(s *phaseState) error {
 	}
 
 	// Tracer wiring: b.wrapperTracer is threaded into router.WithTracer
-	// (phase7, HTTP side) and ContractTracingMiddleware (phase6, consumer side)
-	// at the construction call sites. When WithTracer was not supplied,
-	// HTTP tracing is disabled and wrapper.WrapConsumer falls back to
+	// (phase7, HTTP side) and NewContractTracingSubscriber (phase6, consumer
+	// side) at the construction call sites. When WithTracer was not supplied,
+	// HTTP tracing is disabled and wrapper.WrapSubscriber falls back to
 	// NoopTracer so spans degrade silently — no package-level setup needed.
 	if b.wrapperTracer == nil {
 		slog.Warn("bootstrap: no tracer provided, HTTP tracing is disabled and consumer spans will be no-op",

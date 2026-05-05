@@ -454,6 +454,7 @@ func (b *InMemoryEventBus) processResult(
 					slog.String("topic", topic),
 					slog.String("entry_id", entry.ID),
 					slog.Any("error", commitErr))
+				releaseSettlement(ctx, settlement, topic, entry.ID)
 				outbox.NotifySettlement(ctx, res, entry, outbox.DispositionRequeue, outbox.SettlementResultCommitFailed, commitErr)
 				return false, commitErr
 			}

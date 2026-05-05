@@ -9,6 +9,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ghbvf/gocell/kernel/clock"
+	"github.com/ghbvf/gocell/kernel/idempotency"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 )
@@ -678,6 +680,9 @@ func testReceiptCommitFailureDoesNotAck(t *testing.T, features Features, constru
 		return receipt.CommitCount() >= 2 || deliveries.Load() >= 2
 	}, testtime.D5s, testtime.D20ms,
 		"adapter must NOT promote Commit failure to success — expected retry/redelivery")
+	assertEventually(t, func() bool { return receipt.Released() },
+		testtime.D5s, testtime.D20ms,
+		"adapter must Release the failed settlement before retry/redelivery")
 	h.teardown()
 }
 
@@ -825,9 +830,16 @@ func testSubscriberWithMiddleware(t *testing.T, _ Features, constructor PubSubCo
 	// middleware pipeline. Use subscribeWithHandler to drive the inner subscriber
 	// directly; subscribe via SubscribeEntry in a goroutine, then signal the
 	// harness done channel so publishAndWait can proceed.
+	cb, err := outbox.NewConsumerBase(
+		idempotency.NewInMemClaimer(clock.Real()),
+		outbox.ConsumerBaseConfig{},
+		clock.Real(),
+	)
+	assertNoError(t, err)
 	wrappedSub := &outbox.SubscriberWithMiddleware{
-		Inner:      h.Sub,
-		Middleware: []outbox.SubscriptionMiddleware{middleware},
+		Inner:        h.Sub,
+		Middleware:   []outbox.SubscriptionMiddleware{middleware},
+		ConsumerBase: cb,
 	}
 
 	ctx, cancel := context.WithCancel(t.Context())

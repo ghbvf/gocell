@@ -95,13 +95,14 @@ declaration. That removes the old method/path duplication and makes
 missing contract metadata fail during registration instead of silently
 producing untagged spans.
 
-### 4. `wrapper.WrapConsumer` for outbox event consumers
+### 4. `wrapper.WrapSubscriber` for outbox delivery attempts
 
-`wrapper.WrapConsumer(spec, fn)` returns a contract-tagged
-`outbox.EntryHandler`. Span name `"CONSUME {topic}"`, attrs
+`wrapper.WrapSubscriber(spec, fn)` returns a contract-tagged
+`outbox.SubscriberHandler`. Span name `"CONSUME {topic}"`, attrs
 `gocell.contract.id` + `messaging.system` + `messaging.destination`.
-Ack / Requeue / Reject dispositions flow through unchanged; the
-wrapper only records status/error info on the span.
+Ack / Requeue / Reject dispositions and `Settlement` flow through unchanged;
+the wrapper appends a `SettlementObserver` and records status/error info only
+after final broker settlement (`Commit`, `Ack`/`Nack`, and `Release` decisions).
 
 Panic safety (review round 2): the closure installs a `defer` that
 recovers any handler panic, marks the span `StatusError` + `RecordError`,
@@ -110,26 +111,23 @@ recover still sees it. HTTPHandler shares the same `recoverAndFinish`
 primitive in `kernel/wrapper/lifecycle.go`, eliminating the pre-review
 asymmetry where HTTP recovered panics but consumers leaked spans.
 
-Consumer wire-up (review round 4): `runtime/eventrouter.Router` gains
-`AddContractHandler(spec, handler, consumerGroup)` — the symmetric
-mirror of `auth.Mount(Route{Contract, ...})`. It stores the raw
-business handler plus primitive contract identity on `outbox.Subscription`;
-`bootstrap.phase6StartEventRouter` builds the subscriber middleware
-chain as:
+Consumer wire-up (K#12 follow-up): `runtime/eventrouter.Router` stores the raw
+business handler plus primitive contract identity on `outbox.Subscription`.
+`bootstrap.phase6StartEventRouter` wires:
 
-1. `outbox.ObservabilityContextMiddleware()` restores async metadata.
-2. `eventrouter.ContractTracingMiddleware(...)` wraps the subscription
-   with `wrapper.WrapConsumer`.
-3. `ConsumerBase.AsMiddleware()` and any user consumer middleware run
-   inside the contract span.
+1. caller-supplied business middleware (`EntryHandler -> EntryHandler`);
+2. field-injected `ConsumerBase` (`EntryHandler -> SubscriberHandler`);
+3. built-in observability restore from `entry.Observability`;
+4. `eventrouter.NewContractTracingSubscriber(...)`, which wraps
+   `Subscribe` handlers with `wrapper.WrapSubscriber`.
 
 This ordering is deliberate: ConsumerBase can short-circuit duplicates,
-retry claims, or downgrade final disposition. If `WrapConsumer` sits
-inside ConsumerBase, those paths either miss the contract span or report
-pre-final status. With contract tracing outside ConsumerBase, every
-consumed entry has one contract span that covers idempotency/retry and
-final disposition while still receiving trace/request metadata restored
-from the entry before the span starts.
+retry claims, or downgrade final disposition after `Settlement.Commit` fails.
+A business-level `WrapConsumer` reports only the pre-settlement handler result.
+Subscriber-level tracing observes the final `outbox.NotifySettlement` event, so
+every consumed entry has one contract span covering idempotency/retry and final
+broker settlement while still receiving trace/request metadata restored from the
+entry before the span starts.
 
 The legacy topic-only event registration API has been removed. Production
 and test subscriptions now call `AddContractHandler(spec, handler,
@@ -140,7 +138,7 @@ consumerGroup)`.
 `kernel/wrapper` stays **stateless** — no package-level `var`, no
 `SetTracer`. `HTTPHandler(spec, next)` does not accept a tracer and does
 not create spans; it only contributes contract context/attributes to the
-outer request span. `WrapConsumer(tr, spec, fn)` accepts the `Tracer` as
+outer request span. `WrapSubscriber(tr, spec, fn)` accepts the `Tracer` as
 a positional parameter; a nil `tr` falls back to `NoopTracer{}` at the
 call site (fail-open). The `Tracer` + `Span` interfaces and the
 `NoopTracer` value live in `kernel/wrapper`; nothing in that package is
@@ -157,13 +155,12 @@ types that observe traffic:
   contract attributes to the span via `wrapper.AttrCarrier`.
 - `runtime/eventrouter.Router` stores contract identity on
   `outbox.Subscription`; it does not carry the live tracer. The
-  bootstrap-owned `ContractTracingMiddleware` receives only the tracer
-  (error redaction is hardcoded inside `WrapConsumer` via `pkg/redaction` —
-  see §8), consumes the contract identity, and wraps the subscription with
-  `WrapConsumer` outside ConsumerBase.
+  bootstrap-owned `NewContractTracingSubscriber` receives the tracer,
+  consumes the contract identity from each subscription, and wraps
+  `SubscriberHandler` with `WrapSubscriber`.
 - `runtime/bootstrap` threads the `Bootstrap.wrapperTracer` (captured
   by `WithTracer`) into both `router.WithTracer` (phase7) and
-  `ContractTracingMiddleware` (phase6). No process-wide `SetTracer` is
+  `NewContractTracingSubscriber` (phase6). No process-wide `SetTracer` is
   needed — the construction calls that receive the tracer are both
   compile-checked, so a new bootstrap entry point cannot accidentally
   drop the wiring and panic at first request.
@@ -190,9 +187,9 @@ rejecting a similar "explicit option + noop default" approach:
    `WithTracer` as a functional option on HTTPHandler, where Cells —
    not bootstrap — would have had to pass it through. Under §5,
    bootstrap is the only caller of `router.WithTracer` /
-   `ContractTracingMiddleware`, and both APIs are pre-existing.
+   `NewContractTracingSubscriber`, and both APIs are pre-existing.
 3. **Test ergonomics**: spy tracers inject through `router.WithTracer`
-   (integration harness) or directly into `WrapConsumer(tr, …)` (unit
+   (integration harness) or directly into `WrapSubscriber(tr, …)` (unit
    tests). HTTP handler tests assert `AttrCarrier` contribution rather
    than span creation. No `SetTracer` / `ResetTracer` setup/teardown
    dance, no race conditions on a shared package variable, no
@@ -320,7 +317,7 @@ Why hardcoded:
 
 Coverage:
 
-- `kernel/wrapper.WrapConsumer` Requeue / Reject / invalid disposition
+- `kernel/wrapper.WrapConsumer` and `WrapSubscriber` Requeue / Reject / invalid disposition
   branches → `recordErr` → `redaction.RedactError` → `span.RecordError`
 - `kernel/wrapper.recoverAndFinish` panic path → same redaction →
   `span.RecordError`

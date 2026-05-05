@@ -387,14 +387,12 @@ direct publisher paths both marshal the same `kernel/outbox` v1 wire envelope.
 
 For HTTP flows that publish through the transactional outbox, GoCell now bridges
 `request_id`, `correlation_id`, and optional `trace_id` from handler context
-into `outbox.Entry.Metadata` on the PostgreSQL write path. When the event is
-consumed, `ObservabilityContextMiddleware` (registered by bootstrap by default)
-restores those keys into the consumer handler context before business code runs.
+into `outbox.Entry.Observability` on the write path. When the event is
+consumed, `SubscriberWithMiddleware.SubscribeEntry` restores those keys into the
+consumer handler context before business code runs.
 
-For non-bootstrap usage, compose `ObservabilityContextMiddleware` via
-`SubscriberWithMiddleware` manually. To disable **consume-side restore**, pass
-`WithDisableObservabilityRestore()` to bootstrap — the publish-side metadata
-injection in the outbox writer remains active. When HTTP tracing is enabled,
+For non-bootstrap usage, call `SubscriberWithMiddleware.SubscribeEntry` rather
+than the raw subscriber when consuming business handlers. When HTTP tracing is enabled,
 GoCell now extracts inbound `traceparent` and `b3` headers before starting the
 server span so synchronous service hops preserve the same `trace_id`. Note:
 `span_id` is intentionally excluded across async boundaries — spans do not

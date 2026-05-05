@@ -13,6 +13,7 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/clock"
+	"github.com/ghbvf/gocell/kernel/idempotency"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
@@ -519,12 +520,32 @@ var noopHandler = func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
 }
 
 // wrap wraps an outbox.Subscriber in a *outbox.SubscriberWithMiddleware with
-// no middleware and no ConsumerBase — the minimal wrapper required by New.
-// Tests that need middleware or ConsumerBase construct SubscriberWithMiddleware
-// directly.
+// the minimal ConsumerBase required by SubscribeEntry.
 func wrap(sub outbox.Subscriber) *outbox.SubscriberWithMiddleware {
-	return &outbox.SubscriberWithMiddleware{Inner: sub}
+	cb, err := outbox.NewConsumerBase(
+		routerTestClaimer{},
+		outbox.ConsumerBaseConfig{},
+		clock.Real(),
+	)
+	if err != nil {
+		panic(err)
+	}
+	return &outbox.SubscriberWithMiddleware{Inner: sub, ConsumerBase: cb}
 }
+
+type routerTestClaimer struct{}
+
+func (routerTestClaimer) Claim(
+	context.Context, string, time.Duration, time.Duration,
+) (idempotency.ClaimState, idempotency.Receipt, error) {
+	return idempotency.ClaimAcquired, routerTestReceipt{}, nil
+}
+
+type routerTestReceipt struct{}
+
+func (routerTestReceipt) Commit(context.Context) error                { return nil }
+func (routerTestReceipt) Release(context.Context) error               { return nil }
+func (routerTestReceipt) Extend(context.Context, time.Duration) error { return nil }
 
 // ---------------------------------------------------------------------------
 // SubscriptionValidator tests (Finding 2 — registration-time validation)

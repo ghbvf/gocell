@@ -712,7 +712,7 @@ type SubscriberIntakeStopper interface {
 //     where [0] is applied last.
 //  2. ConsumerBase.Wrap (EntryHandler → SubscriberHandler): injects
 //     idempotency Claim/Commit/Release and retry logic. Skipped when
-//     ConsumerBase is nil (fallback: nil Settlement).
+//     ConsumerBase must be present; SubscribeEntry fails fast without it.
 //  3. Observability restore (entry.Observability → ctx): built-in OUTERMOST
 //     wrapper applied inside Inner.Subscribe so every layer sees a ctx
 //     populated with trace_id/request_id/correlation_id.
@@ -739,7 +739,7 @@ type SubscriberIntakeStopper interface {
 type SubscriberWithMiddleware struct {
 	Inner        Subscriber
 	Middleware   []SubscriptionMiddleware
-	ConsumerBase *ConsumerBase // nil-safe: degrades to nil-Settlement pass-through
+	ConsumerBase *ConsumerBase
 }
 
 // Setup delegates topology pre-declaration to Inner.
@@ -767,6 +767,10 @@ func (s *SubscriberWithMiddleware) Ready(sub Subscription) <-chan struct{} {
 // enforcing the boundary at the type level. eventrouter.Router calls SubscribeEntry
 // directly; Subscriber adapters (rabbitmq, eventbus) call Inner.Subscribe.
 func (s *SubscriberWithMiddleware) SubscribeEntry(ctx context.Context, sub Subscription, h EntryHandler) error {
+	if s.ConsumerBase == nil {
+		return fmt.Errorf("outbox: SubscriberWithMiddleware requires ConsumerBase for subscription %q", sub.Topic)
+	}
+
 	// Step 1: apply business middleware chain (EntryHandler → EntryHandler).
 	wrapped := h
 	for _, mw := range slices.Backward(s.Middleware) {
@@ -774,15 +778,8 @@ func (s *SubscriberWithMiddleware) SubscribeEntry(ctx context.Context, sub Subsc
 	}
 
 	// Step 2: ConsumerBase converts EntryHandler → SubscriberHandler, injecting
-	// idempotency Settlement. Falls back to nil-Settlement when ConsumerBase is nil.
-	var subHandler SubscriberHandler
-	if s.ConsumerBase != nil {
-		subHandler = s.ConsumerBase.Wrap(sub, wrapped)
-	} else {
-		subHandler = func(ctx context.Context, entry Entry) (HandleResult, Settlement) {
-			return wrapped(ctx, entry), nil
-		}
-	}
+	// idempotency Settlement.
+	subHandler := s.ConsumerBase.Wrap(sub, wrapped)
 
 	// Step 3: observability restore — built-in OUTERMOST wrapper so all layers
 	// (business middleware, ConsumerBase, Inner.Subscribe) see a populated ctx.

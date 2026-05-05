@@ -1289,12 +1289,18 @@ func (s *spySettlementObserver) last() outbox.SettlementObservation {
 // failingCommitReceipt is a Receipt whose Commit always returns an error.
 type failingCommitReceipt struct {
 	commitErr error
+	released  atomic.Bool
 }
 
 func (r *failingCommitReceipt) Commit(_ context.Context) error {
 	return r.commitErr
 }
-func (r *failingCommitReceipt) Release(_ context.Context) error                 { return nil }
+
+func (r *failingCommitReceipt) Release(_ context.Context) error {
+	r.released.Store(true)
+	return nil
+}
+
 func (r *failingCommitReceipt) Extend(_ context.Context, _ time.Duration) error { return nil }
 
 // TestSubscribe_CommitFailure_NotifiesCommitFailed verifies that when
@@ -1306,6 +1312,7 @@ func TestSubscribe_CommitFailure_NotifiesCommitFailed(t *testing.T) {
 
 	spy := &spySettlementObserver{}
 	commitErr := errors.New("lease expired")
+	receipt := &failingCommitReceipt{commitErr: commitErr}
 
 	attempts := atomic.Int32{}
 	ctx, cancel := context.WithCancel(context.Background())
@@ -1317,7 +1324,7 @@ func TestSubscribe_CommitFailure_NotifiesCommitFailed(t *testing.T) {
 				return outbox.HandleResult{
 					Disposition:         outbox.DispositionAck,
 					SettlementObservers: []outbox.SettlementObserver{spy},
-				}, &failingCommitReceipt{commitErr: commitErr}
+				}, receipt
 			})
 	}()
 
@@ -1336,6 +1343,7 @@ func TestSubscribe_CommitFailure_NotifiesCommitFailed(t *testing.T) {
 	assert.Equal(t, outbox.DispositionRequeue, last.Disposition)
 	assert.Equal(t, outbox.SettlementResultCommitFailed, last.Result)
 	assert.Equal(t, commitErr, last.Err)
+	assert.True(t, receipt.released.Load(), "Commit failure downgraded to Requeue must Release the settlement")
 }
 
 // TestSubscribe_RetryExhausted_NotifiesRetryExhausted verifies that when a

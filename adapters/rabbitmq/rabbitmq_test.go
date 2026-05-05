@@ -3171,6 +3171,83 @@ func TestProcessDelivery_BrokerAckFails_CommitAlreadyDone(t *testing.T) {
 	receipt.mu.Unlock()
 }
 
+func TestProcessDelivery_CommitFails_NackRequeueSuccess_ReleasesReceipt(t *testing.T) {
+	conn, mockConn := newTestConnection(t)
+	ch := newMockChannel()
+	mockConn.mu.Lock()
+	mockConn.nextCh = ch
+	mockConn.mu.Unlock()
+
+	sub := NewSubscriber(conn, SubscriberConfig{
+		DLXExchange: "test.dlx",
+		Clock:       clock.Real(),
+	})
+
+	receipt := &mockReceipt{commitErr: errors.New("lease expired")}
+	entry := outbox.Entry{ID: "evt-commit-fail-release", EventType: "test.commitfail"}
+	entryBytes := makeDeliveryBody(t, entry)
+
+	handler := func(_ context.Context, _ outbox.Entry) (outbox.HandleResult, outbox.Settlement) {
+		return outbox.HandleResult{Disposition: outbox.DispositionAck}, receipt
+	}
+
+	sub.wg.Add(1)
+	sub.processDelivery(context.Background(), ch, amqp.Delivery{
+		DeliveryTag: 41,
+		Body:        entryBytes,
+	}, "test.topic", handler)
+
+	ch.mu.Lock()
+	assert.False(t, ch.ackCalled, "Commit failure must not Ack")
+	assert.True(t, ch.nackCalled, "Commit failure must Nack")
+	assert.True(t, ch.nackRequeue, "Commit failure must Nack with requeue=true")
+	ch.mu.Unlock()
+
+	receipt.mu.Lock()
+	assert.True(t, receipt.commitCalled, "Commit must be attempted")
+	assert.True(t, receipt.releaseCalled, "Commit-failed Requeue must Release receipt before redelivery")
+	receipt.mu.Unlock()
+}
+
+func TestProcessDelivery_CommitFails_NackRequeueFails_ReleasesReceipt(t *testing.T) {
+	conn, mockConn := newTestConnection(t)
+	ch := newMockChannel()
+	ch.nackErr = errors.New("channel closed")
+	mockConn.mu.Lock()
+	mockConn.nextCh = ch
+	mockConn.mu.Unlock()
+
+	sub := NewSubscriber(conn, SubscriberConfig{
+		DLXExchange: "test.dlx",
+		Clock:       clock.Real(),
+	})
+
+	receipt := &mockReceipt{commitErr: errors.New("lease expired")}
+	entry := outbox.Entry{ID: "evt-commit-fail-nack-fail-release", EventType: "test.commitfail.nackfail"}
+	entryBytes := makeDeliveryBody(t, entry)
+
+	handler := func(_ context.Context, _ outbox.Entry) (outbox.HandleResult, outbox.Settlement) {
+		return outbox.HandleResult{Disposition: outbox.DispositionAck}, receipt
+	}
+
+	sub.wg.Add(1)
+	sub.processDelivery(context.Background(), ch, amqp.Delivery{
+		DeliveryTag: 42,
+		Body:        entryBytes,
+	}, "test.topic", handler)
+
+	ch.mu.Lock()
+	assert.False(t, ch.ackCalled, "Commit failure must not Ack even if Nack fails")
+	assert.True(t, ch.nackCalled, "Commit failure must attempt Nack")
+	assert.True(t, ch.nackRequeue, "Commit failure must attempt requeue")
+	ch.mu.Unlock()
+
+	receipt.mu.Lock()
+	assert.True(t, receipt.commitCalled, "Commit must be attempted")
+	assert.True(t, receipt.releaseCalled, "Commit-failed Requeue must Release receipt even when broker Nack fails")
+	receipt.mu.Unlock()
+}
+
 // =============================================================================
 // ClaimPolicy config tests
 // =============================================================================

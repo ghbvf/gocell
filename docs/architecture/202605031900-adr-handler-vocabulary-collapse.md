@@ -77,8 +77,9 @@ inner settlement）。二轮深度修复消除这一根因：
 - `SubscriberWithMiddleware` field-inject `*ConsumerBase` 为显式 EntryHandler→SubscriberHandler
   转换点；新增 `SubscribeEntry` 方法编排：业务 middleware chain → ConsumerBase.Wrap
   → observability restore → Inner.Subscribe
-- `ContractTracingMiddleware` 恢复 once-at-construction `MustWrapConsumer` 调用；
-  spec.Validate() panic 在注册期触发（P1 修复）
+- `ContractTracingMiddleware` 替换为 `NewContractTracingSubscriber` +
+  `wrapper.WrapSubscriber`；span 在 subscriber 层等待最终 settlement observer，
+  能覆盖 `commit_failed` / broker nack failure 等业务 middleware 看不到的状态
 
 对齐业界共识（Watermill router 独占 Ack/Nack 决策 / Kratos transport 独占 gRPC
 status / sarama session.MarkMessage 在 ConsumeClaim 内而非 middleware）：业务

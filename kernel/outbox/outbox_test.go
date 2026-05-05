@@ -301,7 +301,7 @@ func TestSubscriberWithMiddleware_DoesNotImplementSubscriberInterface(t *testing
 
 func TestSubscriberWithMiddleware_NoMiddleware(t *testing.T) {
 	inner := &recordingSubscriber{}
-	sub := &SubscriberWithMiddleware{Inner: inner}
+	sub := &SubscriberWithMiddleware{Inner: inner, ConsumerBase: testConsumerBase(t)}
 
 	called := false
 	err := sub.SubscribeEntry(context.Background(), Subscription{Topic: "test.topic"},
@@ -319,6 +319,20 @@ func TestSubscriberWithMiddleware_NoMiddleware(t *testing.T) {
 	assert.True(t, called)
 }
 
+func TestSubscriberWithMiddleware_RequiresConsumerBase(t *testing.T) {
+	inner := &recordingSubscriber{}
+	sub := &SubscriberWithMiddleware{Inner: inner}
+
+	err := sub.SubscribeEntry(context.Background(), Subscription{Topic: "test.topic"},
+		func(_ context.Context, _ Entry) HandleResult {
+			return HandleResult{Disposition: DispositionAck}
+		})
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "ConsumerBase")
+	assert.False(t, inner.subscribeCalled, "inner subscriber must not start without ConsumerBase")
+}
+
 func TestSubscriberWithMiddleware_SingleMiddleware(t *testing.T) {
 	inner := &recordingSubscriber{}
 
@@ -332,8 +346,9 @@ func TestSubscriberWithMiddleware_SingleMiddleware(t *testing.T) {
 	}
 
 	sub := &SubscriberWithMiddleware{
-		Inner:      inner,
-		Middleware: []SubscriptionMiddleware{middleware},
+		Inner:        inner,
+		Middleware:   []SubscriptionMiddleware{middleware},
+		ConsumerBase: testConsumerBase(t),
 	}
 
 	var receivedEntry Entry
@@ -375,6 +390,7 @@ func TestSubscriberWithMiddleware_MultipleMiddleware_OrderCorrect(t *testing.T) 
 			makeMiddleware("outer"),
 			makeMiddleware("inner"),
 		},
+		ConsumerBase: testConsumerBase(t),
 	}
 
 	handler := func(_ context.Context, _ Entry) HandleResult {
@@ -427,8 +443,9 @@ func TestSubscriberWithMiddleware_MiddlewareCanShortCircuit(t *testing.T) {
 	}
 
 	sub := &SubscriberWithMiddleware{
-		Inner:      inner,
-		Middleware: []SubscriptionMiddleware{shortCircuit},
+		Inner:        inner,
+		Middleware:   []SubscriptionMiddleware{shortCircuit},
+		ConsumerBase: testConsumerBase(t),
 	}
 
 	handlerCalled := false
@@ -962,8 +979,9 @@ func TestSubscriberWithMiddleware_PassesFullSubscription(t *testing.T) {
 	}
 
 	swm := &SubscriberWithMiddleware{
-		Inner:      inner,
-		Middleware: []SubscriptionMiddleware{mw},
+		Inner:        inner,
+		Middleware:   []SubscriptionMiddleware{mw},
+		ConsumerBase: testConsumerBase(t),
 	}
 
 	wantSub := Subscription{Topic: "orders.created.v1", ConsumerGroup: "cg-auditcore", CellID: "auditcore"}

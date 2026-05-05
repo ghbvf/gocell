@@ -129,9 +129,9 @@ func New(sub *outbox.SubscriberWithMiddleware, clk clock.Clock, opts ...Option) 
 }
 
 // AddContractHandler registers a contract-first subscription intent. The
-// Router stores the contract metadata on the Subscription; the runtime
-// subscription middleware pipeline owns wrapper.WrapConsumer so the span sits
-// outside ConsumerBase (and after observability metadata restore).
+// Router stores the contract metadata on the Subscription; bootstrap decorates
+// the concrete Subscriber with NewContractTracingSubscriber so delivery spans
+// close after final broker settlement.
 //
 // spec.Kind MUST be "event" and spec.Topic MUST be set. topic used for the
 // Subscriber.Setup / Subscribe lifecycle is derived from spec.Topic — callers
