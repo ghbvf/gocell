@@ -933,6 +933,34 @@ func (s rotateMismatchRefreshStore) Rotate(_ context.Context, _ string) (string,
 	return "dummy-wire", &refresh.Token{SessionID: s.rotatedSessionID, SubjectID: s.rotatedSubjectID}, nil
 }
 
+// TestRefresh_EmptyToken_AuthErrorCode verifies that presenting an empty
+// refresh token returns ErrAuthRefreshInvalidInput (not ErrValidationFailed).
+// This is the service-level auth-domain error code contract guard.
+func TestRefresh_EmptyToken_AuthErrorCode(t *testing.T) {
+	t.Parallel()
+	svc, _ := newTestService(t)
+	_, err := svc.Refresh(context.Background(), "")
+	require.Error(t, err)
+	var ec *errcode.Error
+	require.ErrorAs(t, err, &ec, "expected *errcode.Error")
+	assert.Equal(t, errcode.ErrAuthRefreshInvalidInput, ec.Code,
+		"empty refresh token must yield ErrAuthRefreshInvalidInput, not ErrValidationFailed")
+}
+
+// TestRefresh_EmptyToken_NoLengthOracle verifies that an empty refresh token
+// does not produce an error message containing internal length hints.
+func TestRefresh_EmptyToken_NoLengthOracle(t *testing.T) {
+	t.Parallel()
+	svc, _ := newTestService(t)
+	_, err := svc.Refresh(context.Background(), "")
+	require.Error(t, err)
+	msg := err.Error()
+	assert.NotContains(t, msg, "value too short",
+		"error message must not reveal length oracle")
+	assert.NotContains(t, msg, "value too long",
+		"error message must not reveal length oracle")
+}
+
 // TestRefresh_RotateFailure_ReturnsRefreshUnavailable verifies that when
 // refreshStore.Rotate returns a non-rejected infra error, Refresh returns
 // ErrAuthRefreshUnavailable (not ErrAuthRefreshFailed) so clients can

@@ -664,3 +664,63 @@ func (r *notFoundOnDeleteSessionRepo) Delete(_ context.Context, _ string) error 
 	return errcode.New(errcode.KindNotFound, errcode.ErrSessionNotFound, "session not found",
 		errcode.WithCategory(errcode.CategoryDomain))
 }
+
+// TestLogin_EmptyCredentials_AuthErrorCode verifies that the service returns
+// ErrAuthLoginInvalidInput (not ErrValidationFailed) for blank username or
+// password. This locks the auth-domain error code contract at the service
+// boundary so that if a transport layer swaps the code (B4 regression guard),
+// this test will catch it.
+func TestLogin_EmptyCredentials_AuthErrorCode(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name  string
+		input LoginInput
+	}{
+		{"empty_password", LoginInput{Username: "user@example.com", Password: ""}},
+		{"empty_email", LoginInput{Username: "", Password: "secret"}},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			svc, _ := newTestService(t)
+			_, err := svc.Login(context.Background(), tc.input)
+			require.Error(t, err)
+			var ec *errcode.Error
+			require.ErrorAs(t, err, &ec, "expected *errcode.Error")
+			assert.Equal(t, errcode.ErrAuthLoginInvalidInput, ec.Code,
+				"empty credential must yield ErrAuthLoginInvalidInput, not ErrValidationFailed")
+		})
+	}
+}
+
+// TestLogin_NoLengthOracle verifies that the error message returned for a
+// blank credential does not reveal internal length constraints such as
+// "value too short" or "value too long". Leaking length information
+// facilitates oracle attacks against the authentication endpoint.
+func TestLogin_NoLengthOracle(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name  string
+		input LoginInput
+	}{
+		{"empty_password", LoginInput{Username: "user@example.com", Password: ""}},
+		{"empty_email", LoginInput{Username: "", Password: "secret"}},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			svc, _ := newTestService(t)
+			_, err := svc.Login(context.Background(), tc.input)
+			require.Error(t, err)
+			msg := err.Error()
+			assert.NotContains(t, msg, "value too short",
+				"error message must not reveal length oracle")
+			assert.NotContains(t, msg, "value too long",
+				"error message must not reveal length oracle")
+		})
+	}
+}
