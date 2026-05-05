@@ -717,6 +717,46 @@ func TestUpgradeHandler_InvalidCredential_Returns401(t *testing.T) {
 	assert.Equal(t, 0, hub.ConnCount())
 }
 
+// stubForbiddenAuth returns a credential whose errcode.Kind is PermissionDenied,
+// representing "credential present and valid but caller is not authorized" —
+// must surface as 403, not 401 (RFC 9110 §15.5.4).
+type stubForbiddenAuth struct{}
+
+func (stubForbiddenAuth) Authenticate(_ *http.Request) (*authpkg.Principal, bool, error) {
+	return nil, false, errcode.New(errcode.KindPermissionDenied, errcode.ErrAuthForbidden,
+		"caller cell not in allowlist")
+}
+
+// TestUpgradeHandler_ForbiddenCredential_Returns403 locks the kind-driven
+// status: an Authenticator returning errcode.KindPermissionDenied must surface
+// as 403, distinct from the 401 path used for absent or invalid credentials.
+// Status is derived via errcode.Kind.Status() — single source.
+func TestUpgradeHandler_ForbiddenCredential_Returns403(t *testing.T) {
+	hub := rtws.NewHub(rtws.DefaultHubConfig(clock.Real()), nil)
+	startErr := make(chan error, 1)
+	go func() { startErr <- hub.Start(context.Background()) }()
+	require.Eventually(t, hub.IsRunning, testtime.D2s, time.Millisecond)
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), testtime.CtxDefault)
+		defer cancel()
+		_ = hub.Stop(ctx)
+		<-startErr
+	})
+
+	handler, err := adapterws.UpgradeHandler(hub, adapterws.UpgradeConfig{
+		AllowedOrigins: []string{"http://*"},
+		Authenticator:  stubForbiddenAuth{},
+	})
+	require.NoError(t, err)
+
+	req := httptest.NewRequest(http.MethodGet, "/ws", nil)
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, req)
+
+	assert.Equal(t, http.StatusForbidden, rr.Code)
+	assert.Equal(t, 0, hub.ConnCount())
+}
+
 // 401 response body should be plain text (browser WS API can't read body anyway).
 func TestUpgradeHandler_401_ResponseIsPlainText(t *testing.T) {
 	hub := rtws.NewHub(rtws.DefaultHubConfig(clock.Real()), nil)

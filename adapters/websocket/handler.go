@@ -2,6 +2,7 @@ package websocket
 
 import (
 	"bufio"
+	"errors"
 	"log/slog"
 	"net"
 	"net/http"
@@ -121,21 +122,38 @@ func UpgradeHandler(hub *rtws.Hub, cfg UpgradeConfig) (http.Handler, error) {
 	}), nil
 }
 
-// authenticateForUpgrade runs cfg.Authenticator on the request. On absent or
-// invalid credentials it writes a plain-text 401 response and returns false;
-// the caller (UpgradeHandler) then short-circuits without calling
-// websocket.Accept. cf. coder/websocket accept.go: HTTP errors are returned
-// before Accept consumes the handshake bytes.
+// authenticateForUpgrade runs cfg.Authenticator on the request. On rejection
+// it writes a plain-text HTTP error and returns false; the caller
+// (UpgradeHandler) then short-circuits without calling websocket.Accept. cf.
+// coder/websocket accept.go: HTTP errors are returned before Accept consumes
+// the handshake bytes.
+//
+// Status code derivation (RFC 9110):
+//
+//   - absent credential (ok=false, err=nil)                              → 401
+//   - invalid credential, errcode.Kind=Unauthenticated (default for auth) → 401
+//   - invalid credential, errcode.Kind=PermissionDenied                  → 403
+//   - other errcode.Kind                                                  → derived via Kind.Status()
+//
+// errcode.Kind is the single source for HTTP status (Kind.Status()); body is
+// always plain text because browser WebSocket APIs cannot read the response
+// body, so envelope JSON would be unobservable to clients.
 func authenticateForUpgrade(w http.ResponseWriter, r *http.Request, a auth.Authenticator) (*auth.Principal, bool) {
 	principal, ok, err := a.Authenticate(r)
 	if err != nil {
+		status := http.StatusUnauthorized
+		var ec *errcode.Error
+		if errors.As(err, &ec) {
+			status = ec.Kind.Status()
+		}
 		slog.Warn("websocket: upgrade rejected — invalid credential",
 			slog.Any("error", err),
 			slog.String("remote_addr", logutil.SafeAddr(r.RemoteAddr)),
 			slog.String("path", r.URL.Path),
 			slog.String("error_code", string(errcode.ErrWebsocketUpgradeUnauthenticated)),
+			slog.Int("status", status),
 		)
-		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		http.Error(w, http.StatusText(status), status)
 		return nil, false
 	}
 	if !ok || principal == nil {
@@ -144,7 +162,7 @@ func authenticateForUpgrade(w http.ResponseWriter, r *http.Request, a auth.Authe
 			slog.String("path", r.URL.Path),
 			slog.String("error_code", string(errcode.ErrWebsocketUpgradeUnauthenticated)),
 		)
-		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		http.Error(w, http.StatusText(http.StatusUnauthorized), http.StatusUnauthorized)
 		return nil, false
 	}
 	return principal, true

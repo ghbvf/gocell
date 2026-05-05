@@ -1088,6 +1088,39 @@ func TestHub_TokenExpiry_EvictsOnPing(t *testing.T) {
 	}, testtime.D2s, testtime.D10ms)
 }
 
+// TestHub_TokenExpiry_AtBoundaryEvicts locks RFC 7519 §4.1.4 boundary: the
+// token MUST NOT be accepted on or after the exp instant. Setup advances
+// the clock to *exactly* expiresAt — Before(now) would return false (still
+// alive); !After(now) returns true (evicted). This is the bug-or-not edge.
+func TestHub_TokenExpiry_AtBoundaryEvicts(t *testing.T) {
+	start := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	fc := clockmock.New(start)
+
+	cfg := DefaultHubConfig(fc)
+	cfg.PingInterval = testtime.D10ms
+	cfg.PingTimeout = testtime.FastPoll
+
+	hub := startHub(t, cfg, nil)
+
+	// Register at clock=start with ExpiresAt = start + 10ms.
+	exp := start.Add(testtime.D10ms)
+	p := &auth.Principal{Kind: auth.PrincipalUser, Subject: "boundary", ExpiresAt: exp}
+	conn := newFakeConnWithPrincipal("boundary", p)
+	require.NoError(t, hub.Register(context.Background(), conn))
+	<-conn.readyCh
+	require.Equal(t, 1, hub.ConnCount())
+
+	// Advance clock to *exactly* ExpiresAt — boundary case.
+	// Before(exp) at exp: false (not strictly before). !After(exp) at exp: true.
+	// pingLoop fires at this tick because PingInterval == 10ms == advance.
+	fc.Advance(testtime.D10ms)
+
+	require.Eventually(t, func() bool {
+		return hub.ConnCount() == 0 && conn.isClosed()
+	}, testtime.D2s, testtime.D10ms,
+		"ExpiresAt == clock.Now() must evict (RFC 7519: on-or-after exp = expired)")
+}
+
 func TestHub_TokenExpiry_ZeroExpiryNeverEvicts(t *testing.T) {
 	fc := clockmock.New(time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC))
 

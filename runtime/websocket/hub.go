@@ -746,11 +746,16 @@ func (h *Hub) pingAll(ctx context.Context) {
 
 // isExpired reports whether the entry's principal token has expired.
 // Uses the expiresAt snapshot captured at Register time.
+//
+// Boundary semantics: expiresAt == now is treated as expired (RFC 7519 §4.1.4:
+// "the current date/time MUST be before the expiration date/time listed in the
+// exp claim"; on-or-after exp means rejection). Implementation uses
+// !After(now) rather than Before(now) so the exact-tick case evicts.
 func (h *Hub) isExpired(entry *connEntry, now time.Time) bool {
 	if entry.expiresAt.IsZero() {
 		return false
 	}
-	return entry.expiresAt.Before(now)
+	return !entry.expiresAt.After(now)
 }
 
 // evictWith removes an entry from conns + subjectIdx and tears down its
