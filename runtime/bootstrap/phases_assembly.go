@@ -36,7 +36,7 @@ func (b *Bootstrap) phase0ValidateOptions() error {
 	if b.managedResourceNil {
 		return fmt.Errorf("bootstrap: managed resource must not be nil in WithManagedResource")
 	}
-	if err := b.validateAuthPlanAssemblyMatch(); err != nil {
+	if err := b.validateAuthJWTFromAssemblyPlans(); err != nil {
 		return err
 	}
 	if err := b.validateAuthPlanMTLSBindings(); err != nil {

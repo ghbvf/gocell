@@ -81,11 +81,36 @@ func newMinimalBootstrap() *Bootstrap {
 	}
 }
 
-// hasAuthMiddlewareOpt returns true if opts contains ≥1 router option.
-// applyListenerAuthChain only populates routerOpts for JWT plans (AuthJWT/AuthJWTFromAssembly);
-// non-JWT plans add to mws instead. A non-empty routerOpts slice signals a JWT plan.
-func hasAuthMiddlewareOpt(opts []routerpkg.Option) bool {
-	return len(opts) > 0
+// routerInstallsAuthMiddleware applies router options to a real Router and
+// observes request behavior. A protected route returns 401 without an
+// Authorization header only when router.WithAuthMiddleware is actually wired.
+func routerInstallsAuthMiddleware(t *testing.T, opts []routerpkg.Option) bool {
+	t.Helper()
+
+	allOpts := append([]routerpkg.Option{routerpkg.WithRouterClock(clock.Real())}, opts...)
+	rtr, err := routerpkg.NewForListener(cell.PrimaryListener, allOpts...)
+	require.NoError(t, err)
+
+	auth.MustMount(rtr, auth.Route{
+		Contract: testHTTPContract(http.MethodGet, "/auth-plan/protected"),
+		Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusOK)
+		}),
+	})
+	require.NoError(t, rtr.FinalizeAuth())
+
+	rec := httptest.NewRecorder()
+	rtr.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/auth-plan/protected", nil))
+
+	switch rec.Code {
+	case http.StatusUnauthorized:
+		return true
+	case http.StatusOK:
+		return false
+	default:
+		t.Fatalf("protected route returned status %d, want 401 with auth middleware or 200 without it", rec.Code)
+		return false
+	}
 }
 
 // ─── TestApplyListenerAuthChain_EachKind ──────────────────────────────────────
@@ -104,33 +129,33 @@ func TestApplyListenerAuthChain_EachKind(t *testing.T) {
 	ref := cell.PrimaryListener
 
 	tests := []struct {
-		name          string
-		chain         []cell.ListenerAuth
-		wantMWCount   int
-		wantRouterOpt bool // whether a WithAuthMiddleware router option is included
-		wantDescribe  string
-		wantErr       bool
+		name              string
+		chain             []cell.ListenerAuth
+		wantMWCount       int
+		wantAuthInstalled bool
+		wantDescribe      string
+		wantErr           bool
 	}{
 		{
-			name:          "AuthNone",
-			chain:         []cell.ListenerAuth{cell.AuthNone{}},
-			wantMWCount:   0,
-			wantRouterOpt: false,
-			wantDescribe:  "none",
+			name:              "AuthNone",
+			chain:             []cell.ListenerAuth{cell.AuthNone{}},
+			wantMWCount:       0,
+			wantAuthInstalled: false,
+			wantDescribe:      "none",
 		},
 		{
-			name:          "AuthJWT",
-			chain:         []cell.ListenerAuth{cell.MustNewAuthJWT(verifier)},
-			wantMWCount:   0,
-			wantRouterOpt: true,
-			wantDescribe:  "jwt",
+			name:              "AuthJWT",
+			chain:             []cell.ListenerAuth{cell.MustNewAuthJWT(verifier)},
+			wantMWCount:       0,
+			wantAuthInstalled: true,
+			wantDescribe:      "jwt",
 		},
 		{
-			name:          "AuthJWTFromAssembly_resolved",
-			chain:         []cell.ListenerAuth{resolvedPlan},
-			wantMWCount:   0,
-			wantRouterOpt: true,
-			wantDescribe:  "jwt",
+			name:              "AuthJWTFromAssembly_resolved",
+			chain:             []cell.ListenerAuth{resolvedPlan},
+			wantMWCount:       0,
+			wantAuthInstalled: true,
+			wantDescribe:      "jwt",
 		},
 		{
 			name: "AuthJWTFromAssembly_unresolved",
@@ -140,18 +165,18 @@ func TestApplyListenerAuthChain_EachKind(t *testing.T) {
 			wantErr: true,
 		},
 		{
-			name:          "AuthMTLS",
-			chain:         []cell.ListenerAuth{cell.AuthMTLS{}},
-			wantMWCount:   1,
-			wantRouterOpt: false,
-			wantDescribe:  "mtls",
+			name:              "AuthMTLS",
+			chain:             []cell.ListenerAuth{cell.AuthMTLS{}},
+			wantMWCount:       1,
+			wantAuthInstalled: false,
+			wantDescribe:      "mtls",
 		},
 		{
-			name:          "AuthServiceToken",
-			chain:         []cell.ListenerAuth{cell.MustNewAuthServiceToken(store, ring)},
-			wantMWCount:   1,
-			wantRouterOpt: false,
-			wantDescribe:  "service-token",
+			name:              "AuthServiceToken",
+			chain:             []cell.ListenerAuth{cell.MustNewAuthServiceToken(store, ring)},
+			wantMWCount:       1,
+			wantAuthInstalled: false,
+			wantDescribe:      "service-token",
 		},
 		{
 			name: "MultiPlan_MTLSAndServiceToken",
@@ -159,9 +184,9 @@ func TestApplyListenerAuthChain_EachKind(t *testing.T) {
 				cell.AuthMTLS{},
 				cell.MustNewAuthServiceToken(store, ring),
 			},
-			wantMWCount:   2,
-			wantRouterOpt: false,
-			wantDescribe:  "mtls+service-token",
+			wantMWCount:       2,
+			wantAuthInstalled: false,
+			wantDescribe:      "mtls+service-token",
 		},
 	}
 
@@ -177,13 +202,8 @@ func TestApplyListenerAuthChain_EachKind(t *testing.T) {
 			require.NoError(t, err)
 			assert.Len(t, mws, tc.wantMWCount, "middleware count")
 			assert.Equal(t, tc.wantDescribe, describe, "describe")
-			if tc.wantRouterOpt {
-				assert.True(t, hasAuthMiddlewareOpt(routerOpts),
-					"expected WithAuthMiddleware router option but none found")
-			} else {
-				assert.False(t, hasAuthMiddlewareOpt(routerOpts),
-					"expected no WithAuthMiddleware router option but found one")
-			}
+			assert.Equal(t, tc.wantAuthInstalled, routerInstallsAuthMiddleware(t, routerOpts),
+				"auth middleware installation")
 		})
 	}
 }
@@ -278,6 +298,18 @@ func TestRunAuthPlanValidateHooks_DiscoverScenarios(t *testing.T) {
 	t.Parallel()
 
 	verifier := &applyStubVerifier{}
+
+	t.Run("typed_nil_assembly_returns_error", func(t *testing.T) {
+		t.Parallel()
+		var asm *applyStubAssemblyRef
+		var err error
+
+		require.NotPanics(t, func() {
+			_, err = discoverAuthVerifierFromAssembly(asm)
+		})
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "Assembly is nil")
+	})
 
 	t.Run("zero_providers_returns_error", func(t *testing.T) {
 		t.Parallel()

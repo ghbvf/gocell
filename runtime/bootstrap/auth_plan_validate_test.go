@@ -1,7 +1,7 @@
 package bootstrap
 
 // auth_plan_validate_test.go — white-box table-driven tests for
-// validateAuthChainJWTSingleton, validateAuthPlanAssemblyMatch, and
+// validateAuthChainJWTSingleton, validateAuthJWTFromAssemblyPlans, and
 // validateAuthPlanMTLSBindings. Uses package bootstrap for white-box access.
 
 import (
@@ -117,9 +117,9 @@ func TestValidateAuthChainJWTSingleton(t *testing.T) {
 	}
 }
 
-// ─── TestValidateAuthPlanAssemblyMatch ────────────────────────────────────────
+// ─── TestValidateAuthJWTFromAssemblyPlans ─────────────────────────────────────
 
-func TestValidateAuthPlanAssemblyMatch(t *testing.T) {
+func TestValidateAuthJWTFromAssemblyPlans(t *testing.T) {
 	t.Parallel()
 
 	asmA := assembly.New(assembly.Config{ID: "asm-match-a", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
@@ -133,7 +133,7 @@ func TestValidateAuthPlanAssemblyMatch(t *testing.T) {
 			WithListener(cell.PrimaryListener, "127.0.0.1:0",
 				[]cell.ListenerAuth{cell.MustNewAuthJWTFromAssembly(asmA)}),
 		)
-		err := b.validateAuthPlanAssemblyMatch()
+		err := b.validateAuthJWTFromAssemblyPlans()
 		require.NoError(t, err)
 	})
 
@@ -145,7 +145,7 @@ func TestValidateAuthPlanAssemblyMatch(t *testing.T) {
 			WithListener(cell.PrimaryListener, "127.0.0.1:0",
 				[]cell.ListenerAuth{cell.MustNewAuthJWTFromAssembly(asmB)}),
 		)
-		err := b.validateAuthPlanAssemblyMatch()
+		err := b.validateAuthJWTFromAssemblyPlans()
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "AuthJWTFromAssembly")
 		assert.Contains(t, err.Error(), "asm-match-a")
@@ -155,7 +155,7 @@ func TestValidateAuthPlanAssemblyMatch(t *testing.T) {
 
 	t.Run("NilAssembly_NoError", func(t *testing.T) {
 		t.Parallel()
-		// No WithAssembly — b.assembly is nil; validateAuthPlanAssemblyMatch
+		// No WithAssembly — b.assembly is nil; validateAuthJWTFromAssemblyPlans
 		// should return nil immediately.
 		b := &Bootstrap{
 			listenerConfigs: map[cell.ListenerRef]listenerConfig{
@@ -164,8 +164,68 @@ func TestValidateAuthPlanAssemblyMatch(t *testing.T) {
 				},
 			},
 		}
-		require.NoError(t, b.validateAuthPlanAssemblyMatch())
+		require.NoError(t, b.validateAuthJWTFromAssemblyPlans())
 	})
+
+	t.Run("ConstructedPlanWithoutWithAssembly_NoError", func(t *testing.T) {
+		t.Parallel()
+		asm := &applyStubAssemblyRef{id: "valid-no-withassembly"}
+		b := bootstrapWithListener(
+			cell.PrimaryListener,
+			[]cell.ListenerAuth{cell.MustNewAuthJWTFromAssembly(asm)},
+			nil,
+		)
+		require.NoError(t, b.validateAuthJWTFromAssemblyPlans())
+	})
+}
+
+func TestValidateAuthJWTFromAssemblyPlans_RejectsConstructorBypass(t *testing.T) {
+	t.Parallel()
+
+	asm := &applyStubAssemblyRef{id: "literal-asm"}
+	var typedNil *applyStubAssemblyRef
+
+	tests := []struct {
+		name    string
+		plan    cell.AuthJWTFromAssembly
+		wantErr string
+	}{
+		{
+			name:    "zero literal",
+			plan:    cell.AuthJWTFromAssembly{},
+			wantErr: "Assembly must not be nil",
+		},
+		{
+			name:    "nil Assembly literal",
+			plan:    cell.AuthJWTFromAssembly{Assembly: nil},
+			wantErr: "Assembly must not be nil",
+		},
+		{
+			name:    "typed nil Assembly literal",
+			plan:    cell.AuthJWTFromAssembly{Assembly: typedNil},
+			wantErr: "Assembly must not be nil",
+		},
+		{
+			name:    "real Assembly literal without resolver",
+			plan:    cell.AuthJWTFromAssembly{Assembly: asm},
+			wantErr: "constructed as a struct literal",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			b := bootstrapWithListener(cell.PrimaryListener, []cell.ListenerAuth{tc.plan}, nil)
+
+			var err error
+			require.NotPanics(t, func() {
+				err = b.validateAuthJWTFromAssemblyPlans()
+			})
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tc.wantErr)
+			assert.Contains(t, err.Error(), cell.PrimaryListener.String())
+		})
+	}
 }
 
 // ─── TestValidateAuthPlanMTLSBindings ─────────────────────────────────────────

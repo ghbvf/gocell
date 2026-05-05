@@ -123,7 +123,7 @@ func (b *Bootstrap) runAuthPlanValidateHooks() error {
 //
 // Moved from policy_jwt_from_assembly.go; kept bootstrap-private.
 func discoverAuthVerifierFromAssembly(asm cell.AssemblyRef) (auth.IntentTokenVerifier, error) {
-	if asm == nil {
+	if validation.IsNilInterface(asm) {
 		return nil, errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
 			"bootstrap: AuthJWTFromAssembly.Assembly is nil; use cell.NewAuthJWTFromAssembly(asm)")
 	}

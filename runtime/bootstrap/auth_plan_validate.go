@@ -4,8 +4,9 @@ package bootstrap
 //
 // Four validation functions are used by bootstrap_phases.go:
 //
-//   validateAuthPlanAssemblyMatch  — phase0: AuthJWTFromAssembly.Assembly must be
-//                                    the same instance as WithAssembly's assembly.
+//   validateAuthJWTFromAssemblyPlans — phase0: AuthJWTFromAssembly must be
+//                                      constructor-built with a non-nil Assembly
+//                                      matching WithAssembly when registered.
 //   validateAuthPlanMTLSBindings   — phase0: any listener with AuthMTLS must
 //                                    have ClientAuth + ClientCAs set on tls.Config.
 //   validateAuthChainJWTSingleton  — phase0: at most 1 JWT plan in a listener chain,
@@ -25,32 +26,54 @@ import (
 	"github.com/ghbvf/gocell/pkg/validation"
 )
 
-// validateAuthPlanAssemblyMatch enforces the single-assembly invariant:
-// any AuthJWTFromAssembly in a listener chain must carry the same AssemblyRef
-// instance that was passed to WithAssembly. This prevents the silent bug where
-// PolicyJWTFromAssembly(asmA) + WithAssembly(asmB) would discover auth in asmA
-// while running the rest of bootstrap against asmB.
-//
-// Replaces: validateListenerPolicyAssemblyMatch (bootstrap_phases.go).
-func (b *Bootstrap) validateAuthPlanAssemblyMatch() error {
-	if b.assemblyCore == nil {
-		return nil
-	}
+// validateAuthJWTFromAssemblyPlans catches malformed AuthJWTFromAssembly
+// literals at phase0, then enforces the single-assembly invariant when
+// WithAssembly is present. This prevents nil/typed-nil panics, rejected
+// constructor bypass, and the silent bug where AuthJWTFromAssembly(asmA) +
+// WithAssembly(asmB) would discover auth in asmA while running the rest of
+// bootstrap against asmB.
+func (b *Bootstrap) validateAuthJWTFromAssemblyPlans() error {
 	for ref, cfg := range b.listenerConfigs {
-		for _, plan := range cfg.authChain {
+		for i, plan := range cfg.authChain {
 			p, ok := plan.(cell.AuthJWTFromAssembly)
 			if !ok {
 				continue
 			}
-			// Identity check: same pointer, not just same ID.
-			if p.Assembly != b.assemblyCore {
-				return errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
-					fmt.Sprintf(
-						"bootstrap: listener %q AuthJWTFromAssembly carries assembly %q but WithAssembly registered %q; "+
-							"the composition root must wire the same *assembly.CoreAssembly instance everywhere",
-						ref.String(), p.Assembly.ID(), b.assemblyCore.ID()))
+			if err := b.validateAuthJWTFromAssemblyPlan(ref.String(), i, p); err != nil {
+				return err
 			}
 		}
+	}
+	return nil
+}
+
+func (b *Bootstrap) validateAuthJWTFromAssemblyPlan(
+	listener string,
+	position int,
+	p cell.AuthJWTFromAssembly,
+) error {
+	if validation.IsNilInterface(p.Assembly) {
+		return errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
+			fmt.Sprintf("listener %q: AuthJWTFromAssembly at position %d Assembly must not be nil; "+
+				"construct it with cell.MustNewAuthJWTFromAssembly(asm)",
+				listener, position))
+	}
+	if !p.IsConstructed() {
+		return errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
+			fmt.Sprintf("listener %q: AuthJWTFromAssembly at position %d was constructed as a struct literal; "+
+				"use cell.NewAuthJWTFromAssembly(asm) or cell.MustNewAuthJWTFromAssembly(asm) "+
+				"so the resolver pointer is initialized",
+				listener, position))
+	}
+	if b.assemblyCore == nil {
+		return nil
+	}
+	if p.Assembly != b.assemblyCore {
+		return errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
+			fmt.Sprintf(
+				"bootstrap: listener %q AuthJWTFromAssembly carries assembly %q but WithAssembly registered %q; "+
+					"the composition root must wire the same *assembly.CoreAssembly instance everywhere",
+				listener, p.Assembly.ID(), b.assemblyCore.ID()))
 	}
 	return nil
 }

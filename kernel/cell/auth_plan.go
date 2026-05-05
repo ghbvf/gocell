@@ -170,10 +170,10 @@ type AssemblyRef interface {
 //
 // Lifecycle constraint: the Assembly value must be the same instance later
 // passed to bootstrap.WithAssembly. Bootstrap phase0
-// (validateAuthPlanAssemblyMatch in runtime/bootstrap/auth_plan_validate.go)
-// performs a same-pointer identity check and rejects wrappers, copies, or
-// fakes — even when they share the same ID. Construct AuthJWTFromAssembly
-// from the canonical *assembly.CoreAssembly.
+// (validateAuthJWTFromAssemblyPlans in runtime/bootstrap/auth_plan_validate.go)
+// rejects direct struct literals, nil assemblies, wrappers, copies, or fakes
+// even when they share the same ID. Construct AuthJWTFromAssembly from the
+// canonical *assembly.CoreAssembly.
 type AuthJWTFromAssembly struct {
 	// Assembly must be the same *assembly.CoreAssembly instance later
 	// supplied to bootstrap.WithAssembly. Constructors only reject
@@ -210,6 +210,14 @@ func MustNewAuthJWTFromAssembly(asm AssemblyRef) AuthJWTFromAssembly {
 		panic(err.Error())
 	}
 	return plan
+}
+
+// IsConstructed reports whether the plan was built through
+// NewAuthJWTFromAssembly or MustNewAuthJWTFromAssembly. Direct struct literals
+// do not initialize the shared resolver pointer and are rejected by bootstrap
+// phase0 before phase4 can silently skip SetResolved.
+func (p AuthJWTFromAssembly) IsConstructed() bool {
+	return p.resolved != nil
 }
 
 func (AuthJWTFromAssembly) authPlanKind() AuthKind { return AuthKindJWTFromAssembly }
