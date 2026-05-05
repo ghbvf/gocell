@@ -2,7 +2,7 @@
 
 > 日期：2026-05-05
 > 来源：`docs/reviews/20260504-*.md`（16 份，约 120 条 finding 去重后 ≈ 80）+ `docs/reviews/202605041800-systems-engineering-gap-assessment.md`
-> 形态：架构边界仲裁前置 + 高杠杆主轴串行 + 防腐与工程基线并行
+> 形态：高杠杆主轴串行 + 防腐与工程基线并行（**2026-05-05 修订**：K-04 决「不迁移」+ K-05 决「不做」，原"架构边界仲裁前置"取消，详见 §6 决议）
 > 不依赖 029 在飞 PR；与 029 共用 reviewer 容量需在飞 PR 总数 ≤ 4
 
 ---
@@ -21,28 +21,83 @@
 **总并发**：6 lane 上限；与 029 在飞合计 ≤ 4。
 
 **冲突避让**：
-- **K-06 cell.yaml 单源** vs **C lane**：触全 cell `cell.yaml` + `cell.go`，C lane 期间须暂停；K-06 合入后 C lane 解封
-- **K-04/05 ADR 仲裁** vs **A/R lane**：仲裁结果会改动 contract kind 列表与 ContractMeta 形状，影响 R/A 中 metrics 命名与 collector 接口；ADR 落 develop 之前 R 不动 outbox/event metric 命名
+- **K-06 cell.yaml 单源** vs **C lane**：~~触全 cell `cell.yaml` + `cell.go`，C lane 期间须暂停~~ — **2026-05-05 修订**：K-06 (a) 已被 029 K#05 PR-A2+B 物理消除 Go literal 取代，残余仅 configcore consistencyLevel + scaffold 模板（合入 06.PR4），不再触全 cell，C lane 不需暂停
+- ~~**K-04/05 ADR 仲裁** vs **A/R lane**~~ — **2026-05-05 修订**：K-04 决「不迁移」+ K-05 决「不做」（见 §6），R/A lane 不再被 ADR 阻塞
 - **G-11 scaffold 自由文本注入** vs **K-06 scaffold 模板升级**：两者改 `scaffold/scaffold.go` 与模板，须串行
 - **F-01 CODEOWNERS / F-02 Makefile target** 与所有 lane 文件域 0 重叠，可全程并行
 
 ---
 
-## 1. 优先实施路径（Phase）
+## 1. 优先实施路径（Phase；2026-05-05 N6/N7 won't-do 后修订）
 
-| Phase | 目标 | Lane K | Lane G | 并行 | 估时 |
-|:-:|---|---|---|---|---|
-| **0** | P0 race + ADR 仲裁前置 | K-01 / K-02 / K-03 / **K-04 + K-05 ADR 起草** | — | — | ~3 天 |
-| **1** | 架构边界仲裁定稿 | K-04 / K-05 ADR 落 develop | — | F-01（CODEOWNERS/PR 模板）+ F-02（Makefile target）独立 | ~1 周 |
-| **2** | cell 单源 + 概念收敛实施 | K-06 / K-07 / K-08 | — | A-01..A-04（adapters 不触 cells/）| ~2 周 |
-| **3** | 事件可观测性 + cells 收敛 | — | R-01..R-03 + C-01..C-05 | G-01..G-04（kernel 防腐）+ A-05..A-08 | ~3 周 |
-| **4** | governance ctx + 装备类 + 路线图扩展 | — | G-05..G-15 | J-01..J-04 + F-03..F-10（按 reviewer 容量）| ~3 周 |
+| Phase | 目标 | 主轴 | 并行 | 估时 |
+|:-:|---|---|---|---|
+| **0** | 决议 ADR / 备忘 + 包文档 | K-04 决议 ADR（"不迁移"，1-2h）+ K-05 决议备忘录（"不做"）+ K-03 observability pkgdoc | 与 Phase 1 完全并发，不阻塞任何实施项 | ~半天 |
+| **1** | P0 race + lifecycle + governance ctx + 06.PR4 全量迁移（**所有项文件域 0 重叠，最多 6 worktree 并发**）| K-01（assembly race）/ G-01（hook dispatcher）/ G-02（rollback ctx）/ G-03（validate ctx）+ 029 06.PR4（吸收 K-06 残余 + K-05a + K-05c）| K-02 / R-03 / A-01..A-04 / F-01 / F-02 | ~2 周 |
+| **2** | 事件可观测性 + cells 收敛 + K-07/K-08 | R-01..R-03 + C-01..C-05 + C-08/C-09（搭车 K-07）| G-04（kernel DAG）+ A-05..A-08 + 029 K#07/K#08 | ~3 周 |
+| **3** | governance 后续 + 装备类 + 路线图扩展 | G-05..G-17（含触发条件型 G-16/G-17）| J-01..J-04 + F-03..F-10（按 reviewer 容量）| ~3 周 |
 
-**累计**：~9 周单线 / ~5-6 周双 lane（K + G 并行 + F 异步穿插）。
+**累计**：~6-7 周单线 / ~3-4 周满并发（依赖 reviewer 容量 ≤ 4 在飞）；N6/N7 won't-do + 06.PR4 与 N1-N5 并发节省 ~1.5 周。
 
-**为什么 Phase 0 必须先做 ADR**：
-- K-04（platform cells 边界）+ K-05（ContractMeta SRP / 4-kind 必然性）的决定结果会决定 K-06 触多少 cell、改多少 contract 字段；先实施再 ADR 会双重返工
-- K-01 race 修复 5 行成本，与 ADR 无关，可同 PR 起草
+**为什么不再需要"Phase 0 ADR 仲裁"前置**（2026-05-05）：
+- K-04 决「不迁移」— accesscore/auditcore/configcore 留 framework，产品定位 = 框架自带认证/配置/审计能力（与 v1.1 product roadmap 对齐），落 ADR 锁定决策（1-2h）
+- K-05 决「不做」— (a) 保留 4-kind 含 projection（v1.1 CQRS 后端会用，删了重做）；(b) `EndpointsMeta` 10 字段森林 cost > benefit（K#06 contractgen 已让消费侧类型隔离）；(c) ContractSpec 双定义由 029 06.PR4 完成时自动闭环
+- K-04/K-05 决议落 ADR/备忘是文档动作（半天）而非实施 PR，与 Phase 1 任何实施项并发
+- 029 06.PR4 与 N1-N5 文件域 0 重叠（cells/`slice_gen.go` + contract.yaml + generated/contracts vs kernel/{assembly,governance,observability}/* + runtime/bootstrap/options.go），可立即并发，无前置等待
+
+---
+
+### 1.A 「双重实现 / 接口字段过多 / 重复代码」K + G 专题索引（2026-05-05 增补）
+
+> 来源：`docs/backlog.md` + `docs/reviews/20260504-systems-layer-{01-kernel,04-cells,05-contracts}.md` + Top 8 §3 + §3.1 第一性原理反证
+> 目的：把分散在 §2 关键路径 / §3 Track A/C/G 的"概念重复 / SRP 嫌疑 / 复制粘贴"问题串成主题视图，供 reviewer 跨 PR 横向对比；**所有条目都映射到既有 K/R/A/C/G 编号或新增 C-08/C-09/G-16/G-17，不另开 lane**
+
+#### A. 双重实现 / 双定义类（11 条）
+
+| 主题 | 位置 | PR | Phase | 处置 |
+|---|---|---|:-:|---|
+| status-board state ↔ J-*.yaml lifecycle 双轨状态机 | J | J-01 | 3 | `todo→doing→done` ↔ `experimental→active→stable` 强映射 + validate 双向校验 |
+| outbox/command `MaxMetadataKeys` 校验完全重复 | G | G-07 (b) | 3 | 提取 `kernel/metautil` |
+| `cmd/{id}` 1:1 镜像 cell 列表（手工映射表）| K | K-08 (c) | 2 | `gocell generate assembly` 派生 `modules_gen.go`，run.go 只留环境加载 |
+| `configcore/cell_routes.go` 退化为占位文件 | C | C-05 | 2 | 直接删除 |
+| `cell_routes.go` 命名与 `RegisterSubscriptions` 不对齐（accesscore + configcore）| C | **新增 C-09** | 2 | 搭车 K-07 拆 auditappend 时引入 `cell_lifecycle.go` 命名惯例，反向迁移 2 cell |
+| event subscriber 重复 decode/validate（accesscore/configreceive + configcore/configsubscribe）| — | Won't-do（触发条件 ≥5 cell consumer）| — | backlog T6 `CONTRACT-EVENT-PAYLOAD-CODEGEN-01` 触发条件型 |
+| DUAL-LISTENER 测试与运维文档双套缺口（PR-A14a）| — | backlog 行 120/121/126 | — | 🟡 独立轨道，本计划不收 |
+
+#### B. 接口字段过多 / SRP 嫌疑（7 条）
+
+| 主题 | 位置 | PR | Phase | 处置 |
+|---|---|---|:-:|---|
+| 单 slice 多 verb：`auditappend` × 14 contractUsages / `configread` 跨两个 listener 端口面 | K | K-07 | 2 | 按事件域拆 `auditappend-{session,user,config,role}` + 拆 `configread-internal`，共享 service.HandleEvent dispatch |
+| `Cell` 接口 11 方法混合生命周期与元数据自省（god-package）| G | G-10 | 3 | 拆 `CellLifecycle` + `CellDescriptor` 嵌入 |
+| Cell 消费 hardcoded topic specs（auditcore × 1 / accesscore × 4 / configcore × 2）无扩展 Option | C | **新增 C-08** | 3 | `WithExtraTopics` / `WithExtraEventSubscriptions` cell-owned Option，按 handler 语义区分（issue #303，4-6h）|
+| PR-A22 Cell ISP 拆分残余：`AccessCore.txRunner` 等 raw dep 仍在 | G | **新增 G-17** | 3 | archtest `CELL-RAW-DEPS-01` 扩到所有 raw-dep Option（PR245-F10 触发条件，2h）|
+| `AssemblyMeta` 字段欠定义 + `l0Dependencies` 三 cell 全空（schema 死代码）| K + C | K-08 + C-06 | 2 | schema 加 owner/maxConsistencyLevel/deployTemplate enum + 文档化 L0 cell 是未来扩展点 |
+
+#### C. 跨多处重复代码（10 条）
+
+| 主题 | 位置 | PR | Phase | 处置 |
+|---|---|---|:-:|---|
+| 4 adapter 缺 `ManagedResource.Checkers`（postgres/redis/s3/oidc）| A | A-01..A-04 | 1 | 统一 `{name}_ready` + archtest `MANAGED-RESOURCE-COMPLETENESS-01` |
+| adapter `Health → Checkers map` / `Status → metric` 转换在多 adapter 重复 | A | A-08 | 2 | 下沉 `adapters/adapterutil/`，对偶 `CloseWithDeadline` |
+| `cell.HealthProber` 类型断言在 3 cell 重复 4 次 | C | C-07 | 2 | 抽 `cell.RegisterEmitterHealthProbes(reg, emitter)` helper |
+| 3 cell Init 切分各异（accesscore 7 / auditcore 5 / configcore 6 helper）| C | C-04 | 2 | `BaseCell.RegisterStandard(reg, StandardInit{...})` 模板 + scaffold 五目录预生成 |
+| outbox/command `MaxMetadataKeys` 校验重复 | G | G-07 (b) | 3 | 提取 `kernel/metautil`（与 A 类同根，索引重复一次以便横向对比）|
+| `kernel/cell` god-package（auth_plan + outbox emitter + health alias）| G | G-10 | 3 | `auth_plan.go → kernel/auth/` + `mode_resolver.go → kernel/outbox/emitter_resolver.go` + 删 `health.go` 单行 alias |
+| event subscriber 重复 decode/validate | — | Won't-do（T6 触发条件）| — | 当前 2 cell consumer 不启动 codegen |
+| cmd/{id} 1:1 镜像 cell 列表 | K | K-08 (c) | 2 | 同 A 类 cmd 镜像（索引重复以便横向对比）|
+| bootstrap `options_http.go` 直写 `b.closers`（RL/CB 跨 concern 注册）| G | **新增 G-16** | 3 | 触发条件型：第 3 个含 closer 的 HTTP 注入项出现时一次重构 RL+CB+新增项（PR333 自审残债，1.5-2h）|
+| `circuitbreaker.New` 用 `fmt.Errorf` 与 errcode 规范不一致 | A | A-05 | 2 | 统一 `ErrAdapterCircuitBreakerConfig` + `errcode.New` |
+
+---
+
+**主题汇总**：28 条 = 已覆盖 23 条（既有 K/R/A/C/G/J/F 编号）+ 新增 4 条（C-08/C-09/G-16/G-17）+ Won't-do 触发条件 1 条（T6）。
+
+**新增条目工时**：~12-13h dev + 6-7h review，全部归入 Phase 2/3，不影响 Phase 0/1 关键路径与既有总工时口径。
+
+**Phase 分布**（新增条目）：
+- Phase 2：C-09（搭车 K-07）+ C-08（issue #303，独立）≈ 7-9h dev
+- Phase 3：G-16（PR333 触发条件）+ G-17（PR-A22 触发条件）≈ 4h dev
 
 ---
 
@@ -52,13 +107,13 @@
 |---|---|---|---|---|:-:|---|---|
 | K-01 | KERNEL-ASSEMBLY-SNAPSHOTS-RACE-FIX | kernel-group1 G1-01（P0）| `assembly.startInternal` Phase1 在 Init 循环内裸写 `a.snapshots`，与 `Snapshots()` 持锁读形成 fatal map race，进程不可 recover | Init 循环写局部 `localSnaps`，全部成功后在 `a.mu` 锁内一次性赋值；新增 `TestAssembly_StartConcurrentSnapshots_RaceDetector` 锁定 | L1 | 4h + 2h | - |
 | K-02 | JOURNEY-LIFECYCLE-CI-CLOSE | journeys-06 P0 + summary #1/#8 | 8 条 J-*.yaml 全部 `lifecycle: experimental`，`gocell verify journey --active` 静默跳过；J-confighotreload 引用未声明的 `event.config.entry-deleted.v1` | (a) 升 J-ssologin 为 active；(b) `runner.RunActiveJourneys` active 集为空时 fail；(c) `gocell validate` 增 `journey.contracts ↔ contracts/` 双向存在性校验（对偶 ADV-06） | L1 | 6h + 3h | - |
-| K-03 | KERNEL-OBSERVABILITY-PKGDOC | kernel-01 P1#2 | `kernel/observability/` 无包级 doc.go，与 `runtime/observability/` 职责切分不明 | 30-50 行 `doc.go` 明确"kernel/observability 只定义 provider-neutral 抽象，导出器在 adapters/runtime"；同时为 K-04/05 ADR 编辑前提 | L1 | 2h + 1h | - |
-| K-04 | ADR-PLATFORM-CELLS-BOUNDARY | software-review §3.1（最大违例）| `cells/{accesscore,auditcore,configcore}` 是否应留在 framework 仓 — 客户做 IoT/order/BFF 用不到却必须 vendor；`corebundle` 默认带这 3 个让"框架"和"v1 平台"边界模糊 | architect 仲裁 ADR：(a) 留下 + 明确 corebundle 是「参考 assembly」非框架契约；或 (b) 物理迁 `examples/platform-cells/` 或独立仓；ADR 必须给出 archtest 守卫方案与 examples/ssobff 影响面评估 | L2 ADR-only | 12h + 6h | K-03 |
-| K-05 | ADR-CONTRACT-CONCEPT-COLLAPSE | kernel-01 P1#3 + contracts-05 P1#1+P1#2 + summary #3 + software-review §2.1 | 同一 contract 概念 3 处分散：`metadata.ContractMeta`（治理）+ `wrapper.ContractSpec`（运行时）+ `EndpointsMeta` 10 字段 omitempty 森林；4 类 kind 中 command/projection 在平台层 0 实例（F1×F2 推 2 类即覆盖） | architect 仲裁 ADR：(a) 4-kind 必然性论证 — 保留 4 / 收敛到 (Sync, Persistent) 二维 / 把 command+projection 标 reserved；(b) ContractMeta 拆为 sealed `oneof HTTPEndpoints / EventEndpoints / ...`；(c) ContractSpec 派生自 ContractMeta（runtime 投影）。**K-05a** ✅ CONTRACT-KINDS-CLOSED-SET-01 archtest landed in PR-V1-CODEGEN-FULL-MIGRATION W3.0. **K-05c** ✅ 3 archtest gates GREEN (CELLS-NO-WRAPPER-CONTRACTSPEC-IMPORT-01 / NO-MANUAL-CONTRACTSPEC-LITERAL-01 / EVENT-SUBSCRIPTION-CONTRACTGEN-COVERAGE-01). | L2 ADR-only | 16h + 8h | K-03 |
-| K-06 | ✅ CELL-METADATA-SINGLE-SOURCE (残余 PR-V1-CODEGEN-FULL-MIGRATION W4) | cells-04 P0 + summary #2 | accesscore/auditcore/configcore 的 cell.yaml `Owner.Role/Schema/Smoke` 与 `NewBaseCell(CellMetadata{...})` 字面量四处漂移；configcore 顶层缺 `consistencyLevel` | `NewXxxCore` 改为接受外部加载的 `CellMetadata`（`//go:embed cell.yaml` 自填）；scaffold 模板同步升级；新增 archtest `CELL-YAML-GO-PARITY-01` 双向校验；3 cell 全量迁 + corebundle 适配。**PR-V1-CODEGEN-FULL-MIGRATION W4 残余已完成**：configcore.cell.yaml `consistencyLevel: L2` 已锁定 + scaffold golden test 已加入 `cmd/gocell/app/scaffold_golden_test.go` (2 table cases: GoldenCellGo + GoldenCellYAML). | ✅ | 24h + 12h | K-04 K-05 |
-| K-07 | CELLS-SLICE-MULTI-VERB-DECOMPOSE | cells-04 P1 + summary #7 | `auditappend` 单 slice 订阅 13 + publish 1 = 14 contractUsages；`configread` 单 slice 同时挂 PrimaryListener + InternalListener 两个端口面 | 按事件域拆 `auditappend-{session,user,config,role}`，共享 service.HandleEvent dispatch；`configread` 拆 `configread-internal`；slice.yaml `verify.contract` 各自承担；不留兼容包装 | L3 | 20h + 10h | K-06 |
-| K-08 | ASSEMBLY-SCHEMA-SCAFFOLD-EXPAND | assemblies-07 P1 + summary #6 | (a) `AssemblyMeta` 缺 owner / maxConsistencyLevel / deployTemplate enum；(b) `gocell scaffold` 不支持 assembly；(c) `cmd/corebundle/run.go` corebundleModules switch 是 yaml 平行的手工映射表 | (1) schema 加 `owner`(必填) + `maxConsistencyLevel`(派生校验) + `validDeployTemplates={k8s,compose,binary}` enum；(2) `gocell scaffold assembly --id=... --cells=... --deploy=k8s`；(3) `gocell generate assembly` 派生 `cmd/{id}/modules_gen.go`（cell ID → CellModule 工厂），run.go 只留环境加载 | L3 | 20h + 10h | K-04 |
-| R-01 | EVENT-OBSERVABILITY-METRIC-PACK | runtime-02 P1×4 + kernel-group2 G2-01/G2-02 + kernel-group3 G3-11 + R-04 | (a) `outbox.RelayCollector` 不被 bootstrap 自动注入；(b) `eventrouter.Router` 完全无 collector；(c) `InMemoryEventBus` drop 仅 Warn 无 counter；(d) `runtime/observability/metrics` 缺 outbox/event 命名空间；(e) `kernel/observability/metrics.Provider` 无 `GaugeVec`；(f) relay pending depth 无 Gauge；(g) consumer reject 无 counter | (1) `Provider` 加 `GaugeVec` + NopProvider 实现；(2) shutdown/outbox/event 三套 collector 工厂收口到 `runtime/observability/metrics/{shutdown,outbox,event}.go`；(3) bootstrap phase 5/6 用 `metricsProvider` 自动 wire；(4) 新增 `event_router_{subscriptions_active,setup_errors_total,ready_wait_seconds}` + `outbox_pending_depth` + `outbox_consumer_rejected_total{cell,topic,reason}` + `eventbus_dropped_total{reason}`；(5) consumer reject 日志升 Error 级 | L3 | 20h + 10h | K-05 |
+| K-03 | KERNEL-OBSERVABILITY-PKGDOC | kernel-01 P1#2 | `kernel/observability/` 无包级 doc.go，与 `runtime/observability/` 职责切分不明 | 30-50 行 `doc.go` 明确"kernel/observability 只定义 provider-neutral 抽象，导出器在 adapters/runtime" | L1 | 2h + 1h | - |
+| ~~K-04~~ | ~~ADR-PLATFORM-CELLS-BOUNDARY~~ | software-review §3.1 | **决议 不迁移**（2026-05-05）：accesscore / auditcore / configcore 留 framework 仓；产品定位 = 框架自带认证/配置/审计能力（与 v1.1 product roadmap `202605042330-001-v1.1能力路线-零信任mdm基础.md` 对齐）；不需 architect 仲裁会议 | 落 ADR `docs/architecture/202605051700-adr-k04-platform-cells-keep-in-framework.md` 锁定决策 | L0 | ~~12h+6h~~ → 1-2h | - |
+| ~~K-05~~ | ~~ADR-CONTRACT-CONCEPT-COLLAPSE~~ | kernel-01 P1#3 + contracts-05 P1#1+P1#2 | **决议 不做**（2026-05-05）：(a) 保留 4-kind 含 projection — v1.1 CQRS 后端会用 projection 端点，删了 1.1 重做；(b) `EndpointsMeta` 10 字段森林**不拆 sealed oneof** — Cell 业务代码不直接构造，K#06 contractgen 已让消费侧类型隔离，重构 cost > benefit；(c) ContractSpec 双定义由 029 06.PR4 完成时自动闭环（contractgen 已让其派生自 ContractMeta，76 contract opt-in 后手写字面量降为 0 + archtest 守卫）| 决议备忘录 `docs/architecture/202605051800-adr-k05-contract-concept-decision.md`；拆出 K-05a（保留 4-kind 闭集 archtest +1h）+ K-05c（NO-MANUAL-CONTRACTSPEC-LITERAL archtest +2h）并入 029 06.PR4 | L0 | ~~16h+8h~~ → 1h | - |
+| K-06 | CELL-METADATA-SINGLE-SOURCE（残余）| cells-04 P0 + summary #2 | **2026-05-05 修订**：(a) Go literal vs yaml 双源由 029 K#05 PR-A2+B 物理消除（`cell_gen.go` 中的 `cellMeta` var 单源 + archtest `NO-METADATA-LITERAL-IN-CELLGO-01`）；残余 = (b) configcore 顶层补 `consistencyLevel` 字段 + (c) scaffold cell 模板同步 `loadCellMetadata()` pattern | 并入 029 06.PR4：configcore consistencyLevel + scaffold 模板升级 | L1 | ~~24h+12h~~ → 2h+1h（含在 06.PR4 范围内）| - |
+| K-07 | CELLS-SLICE-MULTI-VERB-DECOMPOSE | cells-04 P1 + summary #7 | `auditappend` 单 slice 订阅 13 + publish 1 = 14 contractUsages；`configread` 单 slice 同时挂 PrimaryListener + InternalListener 两个端口面 | 按事件域拆 `auditappend-{session,user,config,role}`，共享 service.HandleEvent dispatch；`configread` 拆 `configread-internal`；slice.yaml `verify.contract` 各自承担；不留兼容包装 | L3 | 20h + 10h | K-06（残余）|
+| K-08 | ASSEMBLY-SCHEMA-SCAFFOLD-EXPAND | assemblies-07 P1 + summary #6 | (a) `AssemblyMeta` 缺 owner / maxConsistencyLevel / deployTemplate enum；(b) `gocell scaffold` 不支持 assembly；(c) `cmd/corebundle/run.go` corebundleModules switch 是 yaml 平行的手工映射表 | (1) schema 加 `owner`(必填) + `maxConsistencyLevel`(派生校验) + `validDeployTemplates={k8s,compose,binary}` enum；(2) `gocell scaffold assembly --id=... --cells=... --deploy=k8s`；(3) `gocell generate assembly` 派生 `cmd/{id}/modules_gen.go`（cell ID → CellModule 工厂），run.go 只留环境加载 | L3 | 20h + 10h | - |
+| R-01 | EVENT-OBSERVABILITY-METRIC-PACK | runtime-02 P1×4 + kernel-group2 G2-01/G2-02 + kernel-group3 G3-11 + R-04 | (a) `outbox.RelayCollector` 不被 bootstrap 自动注入；(b) `eventrouter.Router` 完全无 collector；(c) `InMemoryEventBus` drop 仅 Warn 无 counter；(d) `runtime/observability/metrics` 缺 outbox/event 命名空间；(e) `kernel/observability/metrics.Provider` 无 `GaugeVec`；(f) relay pending depth 无 Gauge；(g) consumer reject 无 counter | (1) `Provider` 加 `GaugeVec` + NopProvider 实现；(2) shutdown/outbox/event 三套 collector 工厂收口到 `runtime/observability/metrics/{shutdown,outbox,event}.go`；(3) bootstrap phase 5/6 用 `metricsProvider` 自动 wire；(4) 新增 `event_router_{subscriptions_active,setup_errors_total,ready_wait_seconds}` + `outbox_pending_depth` + `outbox_consumer_rejected_total{cell,topic,reason}` + `eventbus_dropped_total{reason}`；(5) consumer reject 日志升 Error 级 | L3 | 20h + 10h | - |
 | R-02 | EVENTBUS-DROP-CONTEXTUAL-LOG | runtime-02 P2 | `InMemoryEventBus.broadcast/roundRobin` drop 路径 slog.Warn 缺 entry_id/aggregate_id/event_type；违反 observability.md「错误日志必须含结构化关联字段」 | 升 Error 级 + 三字段；与 R-01 counter 对应 | L1 | 2h + 1h | R-01 |
 | R-03 | BOOTSTRAP-NIL-OPTION-CONSISTENCY | runtime-02 P2 | `WithManagedCloser(nil)` 静默接受，`WithManagedResource(nil)` phase0 fail-fast — 相邻 API 风格冲突 | 两者均改 fail-fast；option 函数记录 nil 标志，phase0 拒绝 | L1 | 2h + 1h | - |
 | A-01 | OIDC-FAILFAST-MR-COMPLETENESS | adapters-03 P0 + summary #4 | (a) `oidc.New` 不连 issuer，discovery 推迟到首请求；(b) postgres/redis/s3/oidc 未实现 `lifecycle.ManagedResource.Checkers`，readyz 缺位；(c) s3.Health 是 HeadBucket（每次探针打 S3）| (1) OIDC `New(ctx, cfg)` 期同步执行 `discover(ctx, true)`；(2) 4 adapter 实现 `Checkers()` 返回 `{name}_ready`；(3) s3 改"状态机 + 后台 health-check goroutine"，probe 只读最新结果；(4) 新增 archtest `MANAGED-RESOURCE-COMPLETENESS-01` 守卫所有外部依赖 adapter 必实现 ManagedResource | L3 | 24h + 12h | - |
@@ -88,14 +143,16 @@
 | A-07 | POSTGRES-POOL-MANAGED-RESOURCE | adapters-03 P2 | `postgres.Pool` 仅满足 `ContextCloser`，与 outbox relay 后台需求一致性差 | 升级 `Pool` 到 `ManagedResource(Checkers + Worker=nil)` 或在 doc.go 写明"Pool 是 ContextCloser，无需 Worker" | L1 | 4h + 2h |
 | A-08 | ADAPTERUTIL-HEALTH-WRAPPER | adapters-03 §3 跨层观察 | `Health → Checkers map`、`Status → metric` 转换在多 adapter 重复 | 下沉到 `adapters/adapterutil/`，对偶 `CloseWithDeadline` | L1 | 4h + 2h |
 
-### Track C · Cells 后续（2 PR / 6h + 3h）
+### Track C · Cells 后续（4 PR / 13-15h + 7-8h）
 
 | # | PR | 来源 | 问题 | 方案 | ship | 工时 |
 |---|---|---|---|---|:-:|---|
 | C-06 | L0-CELL-DECISION | cells-04 P2 | `l0Dependencies: []` 在 3 cell 全空，无任何 `type: l0` 实例，schema 字段是死代码路径 | scaffold 命令对外承诺 vs 现实二选一：(a) 升 `pkg/query.CursorCodec` 等共享逻辑为示例 L0 cell 验证通路；(b) 文档明确"L0 cell 是未来扩展点，当前无实例" | L1 | 2h + 1h |
 | C-07 | EMITTER-HEALTH-PROBE-HELPER | cells-04 §3 跨层观察 | `cell.HealthProber` 在 3 cell 重复 4 次（`if hc, ok := c.emitter.(cell.HealthProber); ok`） | 抽 `cell.RegisterEmitterHealthProbes(reg, emitter)` helper | L1 | 4h + 2h |
+| C-08 | CELL-CONSUMER-EXTRA-TOPICS-OPTION | backlog `CELL-CONSUMER-EXTRA-TOPICS-OPTION-01` (issue #303) | auditcore `auditAppendSpecs` + accesscore 4 `specEvent*` + configcore 2 `specEvent*` 编译期 hardcoded，无扩展 Option；外部组合 cell 想加新 topic 必须 fork 源码 | 为 3 个消费型 cell 设计 cell-owned `WithExtraTopics` / `WithExtraEventSubscriptions`：按 handler 语义区分（audit generic append / config upsert-delete / rbac role-change），不接受无 handler 归属的裸 string；补 RegisterSubscriptions 单测覆盖默认 topic 不漂移 + extra topic 注册 + spec 缺失 fail-fast | L3 | 4-6h | — |
+| C-09 | CELL-SPLIT-LAYOUT-NORMALIZE | backlog `CELL-SPLIT-LAYOUT-NORMALIZE-01` (PR238-FU5) | accesscore + configcore 三文件范式中 (a) `configDirectPublishMode` / `ensureCursorCodec` 放 `cell_init.go` 但是 pure helper；(b) `RegisterSubscriptions` 放 `cell_routes.go` 与文件名 "routes" 不一致，两 cell 均如此 | 搭车 K-07 拆 auditappend 时统一规范：引入 `cell_lifecycle.go`（订阅注册）+ `cell_helpers.go`（pure helper）命名惯例；反向迁移 accesscore/configcore；scaffold 模板同步 | L2 | 2-3h | K-07 |
 
-### Track G · Kernel 三组防腐与质量后续（11 PR / 50h + 24h）
+### Track G · Kernel 三组防腐与质量后续（13 PR / 53.5h + 26h）
 
 | # | PR | 来源 | 问题 | 方案 | ship | 工时 |
 |---|---|---|---|---|:-:|---|
@@ -110,6 +167,8 @@
 | G-13 | GOVERNANCE-RULES-REGISTRATION-GUARD | kernel-group3 G3-05/G3-06/G3-15/G3-20 | (a) `Validator.rules()` 手工 slice，漏注册零反馈；(b) `ValidateStrict` / `ValidateStrictFailFast` 双列表漂移；(c) error 规则无修复指导；(d) rule code 字面量散落 | (1) archtest 反射枚举 `Validator` 上 `func() []ValidationResult` 方法 vs `rules()` 长度对比；(2) 统一 `ValidateStrict(strict, failFast bool)` 单入口；(3) error 规则参照 ADV-06 追加 `; fix: ...`；(4) 提取 `rulecodes.go` 常量文件 | L2 | 12h + 6h |
 | G-14 | VERIFY-PRINTER-ZEROMATCH-WARN | kernel-group3 G3-16 | text printer 对 `TestResult.ZeroMatch=true` 无警告，与 `[PASS]` + 实际跑 N 个测试输出完全相同 | `printTestResults` 检测 `tr.ZeroMatch` 输出 `[WARN] %s — no tests matched -run pattern` | L1 | 1h + 1h |
 | G-15 | KERNEL-METADATA-CODEGEN-OVERLAY | kernel-01 P2 | `kernel/metadata` 既是被 governance 校验的"被动数据结构"，又承载 `goStructName` 等 codegen-only 字段，破坏"kernel 不知道 codegen"公理 | 把 codegen-only 字段挪到 `tools/codegen` schema overlay；或在 `metadata/doc.go` 注明 metadata 包是"YAML schema 总账本"故意承载多消费方所需字段 | L2 | 4h + 2h |
+| G-16 | BOOTSTRAP-OPTION-CROSS-CONCERN-NORMALIZE | backlog `BOOTSTRAP-OPTION-FILE-DECOMPOSE-CROSS-CONCERN-01` (PR333 自审残债) | `runtime/bootstrap/options_http.go:75 WithRateLimiter` + `:100 WithCircuitBreaker` 直写 `b.closers = append(...)`，把 lifecycle 状态从 HTTP 文件 mutate；与 PR-A66 按 concern 拆 option 的封口意图相左 | 触发条件型：第 3 个含 closer 的 HTTP 注入项（如 connection pool / metrics exporter 自带 closer）出现时一次重构——option 返回 `ContextCloser`，bootstrap.New 内统一组合 + 显式 `WithManagedCloser`；在此之前显式注册成本高于收益 | L1 | 1.5-2h + 1h | — |
+| G-17 | CELL-RAW-DEPS-ARCHTEST-EXPAND | backlog `CELL-RAW-DEPS-ARCHTEST-EXPAND-01` (PR245-F10，PR-A22 触发) | PR-A5c `OUTBOX-CELL-01` 只 ban `WithPublisher` / `WithOutboxWriter` raw Option；`AccessCore.txRunner` 等 raw dep 仍保留可被新 PR 重新打开口子 | 触发条件型：PR-A22 Cell ISP 拆分落地时对等扩展 archtest `CELL-RAW-DEPS-01` 禁止新引入任何 raw-dep Option；与 G-10 包级解构同 PR 落 | L1 | 2h + 1h | G-10 |
 
 ### Track J · Journeys & Contracts 收敛（4 PR / 18h + 9h）
 
@@ -146,7 +205,7 @@
 | summary §5 | 微服务化拆分 / 服务网格集成 | 形态层冲突，N=每个客户不同部署形态 |
 | summary §5 | journey 改 Gherkin | passCriteria + checkRef 比 Gherkin 更工程化（直接驱动 go test，不需 step definition 翻译层）|
 | summary §5 | K8s CRD / etcd / informer / controller-runtime | K8s 是同范式参照而非同形态搬运 |
-| summary §5 | 业务正确性审查 | accesscore/auditcore/configcore 是参考实现（K-04 ADR 决定其归属）|
+| summary §5 | 业务正确性审查 | accesscore/auditcore/configcore 是框架自带能力（K-04 决「不迁移」，归 framework 仓）|
 | gap-assessment §7.4 | runtime topology API（实际请求 trace 拓扑） | 由 OTel + Jaeger/Tempo 生态承接 |
 | gap-assessment §6 R-10 | examples 多 cell 协作样例 | `examples/ssobff` 已示范，触发条件 = 客户反馈"现有 ssobff 不足以演示 L2/L3 跨 cell 协作"|
 | kernel-group1 G1-16/G1-17/G1-19/G1-20 | AfterStop 超时测试 / 并发 race detector / Level 注释 / Worker 命名 Run/Shutdown | P3 测试与命名调整，搭车 G-10 / G-01 同 PR 修；不单独立 PR |
@@ -155,21 +214,23 @@
 | supporting-08 §3 cross-layer | `example-cells-isolation-ssobff` depguard 规则 | 触发条件：ssobff/ 出现 cells/ 子目录；当前无该子目录则规则缺失合理 |
 | kernel-group3 G3-01 | YAML anchor bomb (HIGH 已降级 LOW) | yaml.v3 内置 `allowedAliasRatio()` Phase 2 已激活 + 1 MiB 文件大小限制 = 与 K8s CVE 修复等价；GoCell 是 CLI 工具非网络暴露 API server，可选加固（节点数 ≤10000）触发条件 = 出现 anchor bomb 实际报告 |
 | 0504 综合 | 真冗余清零后所有"伪冗余" | software-review §2.2 已论证 6 项表面冗余实为分层意图（runtime 同名 alias / depgraph 双层 / pkg vs 顶层 contracts / pkg vs kernel ctxkeys / runtime/eventbus vs adapter / auth 三种 token），永不消除 |
+| backlog T6 | `CONTRACT-EVENT-PAYLOAD-CODEGEN-01` event subscriber decode/validate codegen | 当前 2 cell consumer（accesscore/configreceive + configcore/configsubscribe），触发条件 = ≥5 cell consumer；规模未到 codegen 收益不及手写成本，对标 oapi-codegen 模式；1-2d |
 
 ---
 
-## 5. 工时与排期
+## 5. 工时与排期（2026-05-05 N6/N7 won't-do 后修订）
 
 | 类别 | dev | review |
 |---|---|---|
-| Phase 0（K-01 + K-02 + K-03 + ADR 起草）| 24h | 12h |
-| Phase 1（K-04 + K-05 ADR 落地 + F-01 + F-02）| 40h | 20h |
-| Phase 2（K-06 + K-07 + K-08 + A-01..A-04）| 116h | 56h |
-| Phase 3（R-01..R-03 + C-01..C-05 + G-01..G-04 + A-05..A-08 + Track G P2 子集）| 124h | 60h |
-| Phase 4（G-05..G-15 + J-01..J-04 + F-03..F-10）| 142h | 70h |
-| **合计** | **446h** | **218h** |
+| Phase 0（K-04 决议 ADR + K-05 决议备忘 + K-03 pkgdoc）| 5h | 2h |
+| Phase 1（K-01 + K-02 + 029 06.PR4 含 K-06 残余 + K-05a + K-05c + A-01..A-04 + F-01 + F-02）| 80h | 40h |
+| Phase 2（R-01..R-03 + C-01..C-09 + G-01..G-04 + A-05..A-08 + K-07 + K-08 + Track G P2 子集）| 152h | 73-74h |
+| Phase 3（G-05..G-17 + J-01..J-04 + F-03..F-10）| 145.5h | 71h |
+| **合计** | **382.5h** | **186-187h** |
 
-单线 ~16 周；K + G 双 lane 并行 ~9 周；K + G + F 三 lane 并行 ~7 周（F lane 异步穿插，不进 critical path）。
+原 446h+218h → 382.5h+186h；N6/N7 won't-do（决议替代仲裁实施）+ K-06 K#05 吸收 节省 ~75h+36h；2026-05-05 增补「双重实现/SRP/重复代码」专题（C-08/C-09/G-16/G-17）+11.5h dev/+4h review。
+
+单线 ~13 周；满并发（≤4 worktree）~6-7 周；F lane 异步穿插不进 critical path。
 
 ---
 
@@ -184,10 +245,11 @@
 
 ## 7. 验收清单
 
-- ✅ 16 份 0504 报告 finding 全部映射到 11 关键路径 + 21 并行轨道（合 32 PR）；P0 5 条全部进 Phase 0-1
+- ✅ 16 份 0504 报告 finding 全部映射到 11 关键路径 + 25 并行轨道（合 36 PR）；P0 5 条全部进 Phase 0-1
 - ✅ Top 8（summary §3）逐条覆盖：#1→K-02 / #2→K-06 / #3→K-05 / #4→A-01..A-04 / #5→R-01 / #6→K-08 / #7→K-07 / #8→K-02
 - ✅ R-01..R-10 路线图条目：R-01→F-06 / R-02→K-05 / R-03→J-02 / R-04→R-01 / R-05→F-07 / R-06→F-08 / R-07→F-09 / R-08→F-01 / R-09→F-10 / R-10→Won't-do（触发条件型）
-- ✅ Won't-do 区列出 7 大类边界 + 25 条 P2/P3 搭车项，避免单独 PR 噪声
+- ✅ §1.A 「双重实现/SRP/重复代码」28 条主题逐条映射：23 条已覆盖 + 4 条新增（C-08/C-09/G-16/G-17）+ 1 条触发条件 Won't-do（T6）
+- ✅ Won't-do 区列出 7 大类边界 + 26 条 P2/P3 搭车项（含 T6），避免单独 PR 噪声
 
 ---
 
