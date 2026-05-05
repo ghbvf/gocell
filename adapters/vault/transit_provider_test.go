@@ -304,7 +304,8 @@ func callByID(t *testing.T, p *TransitKeyProvider, ctx context.Context, id strin
 // complexity of the TC-4, TC-4b, and TC-7 tests (SonarCloud CC>15).
 func errChainHasCode(err error, want errcode.Code) bool {
 	for e := err; e != nil; {
-		if ecErr, ok := e.(*errcode.Error); ok && ecErr.Code == want {
+		var ecErr *errcode.Error
+		if errors.As(e, &ecErr) && ecErr.Code == want {
 			return true
 		}
 		unwrapper, ok := e.(interface{ Unwrap() error })

@@ -489,7 +489,8 @@ func mustRejectJSON(t testing.TB, schema *jsonschema.Schema, data []byte, label 
 
 // formatValidationError formats a jsonschema validation error into a readable string.
 func formatValidationError(err error) string {
-	if ve, ok := err.(*jsonschema.ValidationError); ok {
+	var ve *jsonschema.ValidationError
+	if errors.As(err, &ve) {
 		return formatValidationErrorDetail(ve, "")
 	}
 	return err.Error()

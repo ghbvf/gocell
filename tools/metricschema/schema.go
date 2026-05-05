@@ -220,7 +220,7 @@ func loadPackagesWithMode(ctx context.Context, root string, includeDeps bool, pa
 		}
 	})
 	if len(loadErrs) > 0 {
-		return nil, fmt.Errorf("packages.Load: %d error(s): first=%v", len(loadErrs), loadErrs[0])
+		return nil, fmt.Errorf("packages.Load: %d error(s): first=%w", len(loadErrs), loadErrs[0])
 	}
 	return out, nil
 }

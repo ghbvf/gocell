@@ -12,6 +12,7 @@ package metadata
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -417,7 +418,7 @@ func unmarshalFile(fsys fs.FS, path string, out any) (*yaml.Node, error) {
 	var root yaml.Node
 	dec1 := yaml.NewDecoder(bytes.NewReader(data))
 	if err := dec1.Decode(&root); err != nil {
-		if err == io.EOF {
+		if errors.Is(err, io.EOF) {
 			return emptyYAMLDocumentNode(), nil
 		}
 		return nil, errcode.Wrap(errcode.KindInvalid, errcode.ErrMetadataInvalid,
@@ -427,7 +428,8 @@ func unmarshalFile(fsys fs.FS, path string, out any) (*yaml.Node, error) {
 	// Reject multi-document YAML files. Metadata files must contain exactly
 	// one document; a second document after "---" would be silently ignored
 	// by a single Decode call.
-	if dec1.Decode(new(yaml.Node)) != io.EOF {
+	tmpErr := dec1.Decode(new(yaml.Node))
+	if !errors.Is(tmpErr, io.EOF) {
 		return nil, errcode.New(errcode.KindInvalid, errcode.ErrMetadataInvalid,
 			"unexpected multiple YAML documents in metadata file",
 			errcode.WithInternal(fmt.Sprintf(internalPathFmt, path)))
@@ -439,7 +441,7 @@ func unmarshalFile(fsys fs.FS, path string, out any) (*yaml.Node, error) {
 	dec2 := yaml.NewDecoder(bytes.NewReader(data))
 	dec2.KnownFields(true)
 	if err := dec2.Decode(out); err != nil {
-		if err == io.EOF {
+		if errors.Is(err, io.EOF) {
 			// Unreachable: phase 1 already saw a document, so phase 2 cannot
 			// be empty. Kept defensively to mirror the original behavior.
 			return &root, nil

@@ -141,7 +141,7 @@ func SharedResolver(modRoot string, tests bool, tags []string, patterns ...strin
 			return nil, err
 		}
 		if len(errs) > 0 {
-			return nil, fmt.Errorf("packages.Load: %d error(s): first=%v", len(errs), errs[0])
+			return nil, fmt.Errorf("packages.Load: %d error(s): first=%w", len(errs), errs[0])
 		}
 		r := &Resolver{pkgs: pkgs}
 
