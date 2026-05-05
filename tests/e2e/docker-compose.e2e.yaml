@@ -116,14 +116,13 @@ services:
       GOCELL_HTTP_HEALTH_ADDR: "0.0.0.0:9091"
 
       # Admin provisioning: interactive (operator calls POST /setup/admin protected
-      # by HTTP Basic Auth using the bootstrap credentials below).
+      # by HTTP Basic Auth using the bootstrap credentials in env_file below).
       # The bootstrap-admin.sh step calls that endpoint immediately after
-      # corebundle's healthcheck passes.
+      # corebundle's healthcheck passes; both sides read GOCELL_BOOTSTRAP_ADMIN_*
+      # from tests/e2e/scripts/bootstrap-credentials.env (single source of truth).
       GOCELL_SETUP_MODE: interactive
-      # Bootstrap credentials used to authenticate the POST /setup/admin call.
-      # These are ephemeral e2e-only values; not production secrets.
-      GOCELL_BOOTSTRAP_ADMIN_USERNAME: e2e-bootstrap-admin
-      GOCELL_BOOTSTRAP_ADMIN_PASSWORD: e2e-bootstrap-password-32!!
+    env_file:
+      - ./scripts/bootstrap-credentials.env
     depends_on:
       migrate:
         condition: service_completed_successfully

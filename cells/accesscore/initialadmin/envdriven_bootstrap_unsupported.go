@@ -23,14 +23,6 @@ type BootstrapDeps struct {
 // errUnsupportedPlatform is returned on platforms that are neither unix nor windows.
 var errUnsupportedPlatform = errors.New("initialadmin: platform not supported")
 
-// envDrivenOutcome classifies the result of envDrivenBootstrapper.ensureAdminFromCreds.
-type envDrivenOutcome int
-
-const (
-	envDrivenOutcomeCreated      envDrivenOutcome = iota // admin was created
-	envDrivenOutcomeAlreadyExists                        // admin already existed (no-op)
-)
-
 // envDrivenBootstrapper is a stub on unsupported platforms.
 type envDrivenBootstrapper struct{}
 
@@ -39,7 +31,8 @@ func newEnvDrivenBootstrapper(_ BootstrapDeps, _ PasswordHasher) (*envDrivenBoot
 	return nil, errUnsupportedPlatform
 }
 
-// ensureAdminFromCreds always returns errUnsupportedPlatform on unsupported platforms.
-func (b *envDrivenBootstrapper) ensureAdminFromCreds(_ context.Context, _ *BootstrapCredentials) (envDrivenOutcome, error) {
-	return 0, errUnsupportedPlatform
+// ensureAdminFromCreds always returns errUnsupportedPlatform on unsupported
+// platforms. Signature mirrors the unix/windows version: (created bool, err error).
+func (b *envDrivenBootstrapper) ensureAdminFromCreds(_ context.Context, _ BootstrapCredentials) (bool, error) {
+	return false, errUnsupportedPlatform
 }

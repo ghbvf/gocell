@@ -140,7 +140,10 @@ func (l *Lifecycle) start(ctx context.Context) error {
 // startup credential model (ADR §D9) means already-exists is the lifecycle's
 // steady state on every subsequent start — broadcasting it on every restart is
 // noise.
-func (l *Lifecycle) envDrivenProvision(ctx context.Context, deps BootstrapDeps, cfg config, creds BootstrapCredentials, logger *slog.Logger) error {
+func (l *Lifecycle) envDrivenProvision(
+	ctx context.Context, deps BootstrapDeps, cfg config,
+	creds BootstrapCredentials, logger *slog.Logger,
+) error {
 	bsDeps := BootstrapDeps{
 		UserRepo: deps.UserRepo,
 		RoleRepo: deps.RoleRepo,

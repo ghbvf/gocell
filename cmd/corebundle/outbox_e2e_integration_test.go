@@ -32,11 +32,9 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
-	"fmt"
 	"net"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -196,8 +194,6 @@ func TestOutboxE2E_PGMode_WriteToSubscribe(t *testing.T) {
 	require.NoError(t, err)
 
 	// Use a temp dir for the bootstrap credential file so the test is isolated.
-	e2eStateDir := t.TempDir()
-	t.Setenv("GOCELL_STATE_DIR", e2eStateDir)
 
 	// cellAdapterOpts already includes WithOutboxDeps(eb, pgWriter) from
 	// buildConfigCoreOpts — no separate publisher wiring needed.
@@ -210,16 +206,29 @@ func TestOutboxE2E_PGMode_WriteToSubscribe(t *testing.T) {
 	}, cellAdapterOpts...)
 	configCell := configcore.NewConfigCore(cellAdapterOpts...) //archtest:allow:clock-injection:via-slice options slice starts with WithClock(clock.Real()) prepended above; Go prevents mixing positional + spread
 
-	// Wire accesscore with WithInitialAdminBootstrap.
+	// Wire accesscore with WithInitialAdminBootstrap (bootstrap mode: the
+	// lifecycle hook creates the admin from the env-driven credentials below
+	// at startup; same creds protect the setup endpoint via WithBootstrapAuth
+	// per ADR §D9 persistent startup credential model).
 	// Bootstrap phase3b auto-discovers LifecycleHooks() — no worker.Lazy sink needed.
+	e2eBootstrapCreds := initialadmin.BootstrapCredentials{
+		Username: []byte(e2eAdminUsername),
+		Password: []byte(e2eAdminBootstrapPassword),
+	}
+	e2eBootstrapMW := auth.NewBootstrapMiddleware(
+		auth.BootstrapCredentials{Username: e2eBootstrapCreds.Username, Password: e2eBootstrapCreds.Password},
+		setupTestAllowAllLimiter{},
+		nil,
+	)
 	accessCell := accesscore.NewAccessCore(
 		accesscore.WithClock(clock.Real()),
 		accesscore.WithInMemoryDefaults(),
 		accesscore.WithOutboxDeps(eb, nil),
 		accesscore.WithJWTIssuer(jwtIssuer),
 		accesscore.WithJWTVerifier(jwtVerifier),
-		accesscore.WithInitialAdminBootstrap(initialadmin.BootstrapCredentials{Username: []byte("e2e-admin"), Password: []byte("e2e-admin-pass-1!")}),
+		accesscore.WithInitialAdminBootstrap(e2eBootstrapCreds),
 		accesscore.WithMetricsProvider(kernelmetrics.NopProvider{}),
+		accesscore.WithBootstrapAuth(e2eBootstrapMW),
 	)
 	auditCell := auditcore.NewAuditCore(
 		auditcore.WithClock(clock.Real()),
@@ -266,23 +275,14 @@ func TestOutboxE2E_PGMode_WriteToSubscribe(t *testing.T) {
 	waitForHealthy(t, addr)
 
 	// --- Step 7: Drive HTTP requests ---
-	// Read bootstrap credentials from the credential file, then change password
-	// so subsequent requests are not blocked by password-reset enforcement.
-	e2eCredPath := e2eStateDir + "/initial_admin_password"
-	require.Eventually(t, func() bool {
-		_, statErr := os.Stat(e2eCredPath)
-		return statErr == nil
-	}, testtime.EventuallyLong, testtime.MediumPoll, "e2e credential file must exist")
-
-	e2eUsername, e2eBootstrapPass, err := readE2ECredentials(e2eCredPath)
-	require.NoError(t, err, "must read e2e credentials from file")
-
-	// Login with bootstrap credentials (passwordResetRequired=true).
-	bootstrapToken := loginAdminBootstrap(t, baseURL, e2eUsername, e2eBootstrapPass)
-	// Change password to obtain a token without passwordResetRequired.
+	// PR #392 deleted the credfile path; the lifecycle hook creates the admin
+	// from the env-driven credentials (e2eAdminUsername / e2eAdminBootstrapPassword
+	// constants) with PasswordResetRequired=true. Login with those, then
+	// change-password to obtain a token without the reset gate.
+	bootstrapToken := loginAdminBootstrap(t, baseURL, e2eAdminUsername, e2eAdminBootstrapPassword)
 	adminUserID := extractE2ESubFromJWT(t, bootstrapToken)
 	const e2eAdminNewPass = "E2eTest@Pass9876!"
-	token := changeE2EPassword(t, baseURL, bootstrapToken, adminUserID, e2eBootstrapPass, e2eAdminNewPass)
+	token := changeE2EPassword(t, baseURL, bootstrapToken, adminUserID, e2eAdminBootstrapPassword, e2eAdminNewPass)
 
 	createConfig(t, baseURL, token, "e2e.test.key", "e2e-value")
 	publishConfig(t, baseURL, token, "e2e.test.key")
@@ -353,25 +353,14 @@ func loginAdminBootstrap(t *testing.T, baseURL, user, pass string) string {
 	return loginAdmin(t, baseURL, user, pass)
 }
 
-// readE2ECredentials reads username and password from the credential file written
-// by the initial-admin bootstrap.
-func readE2ECredentials(path string) (username, password string, err error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return "", "", fmt.Errorf("read e2e credential file: %w", err)
-	}
-	for _, line := range strings.Split(string(data), "\n") {
-		if strings.HasPrefix(line, "username=") {
-			username = strings.TrimPrefix(line, "username=")
-		} else if strings.HasPrefix(line, "password=") {
-			password = strings.TrimPrefix(line, "password=")
-		}
-	}
-	if username == "" || password == "" {
-		return "", "", fmt.Errorf("credential file missing username or password: %s", path)
-	}
-	return username, password, nil
-}
+// e2eAdminUsername / e2eAdminBootstrapPassword are the env-driven bootstrap
+// credentials wired into both InitialAdminBootstrap (lifecycle creates the
+// admin) and BootstrapAuth (per-route Basic Auth on /setup/admin). PR #392
+// deleted the credfile path; these constants replace the file-based handoff.
+const (
+	e2eAdminUsername          = "e2e-admin"
+	e2eAdminBootstrapPassword = "e2e-admin-pass-1!"
+)
 
 // extractE2ESubFromJWT extracts the "sub" claim from a JWT without verifying
 // the signature. Used by the e2e test to obtain the user ID for change-password.
@@ -564,9 +553,6 @@ func TestOutboxE2E_RefetchLoop_AccessCoreCallsInternalGet(t *testing.T) {
 	auditCursorCodec, err := query.NewCursorCodec([]byte("test-audit-cursor-key-32-bytes!!"))
 	require.NoError(t, err)
 
-	e2eStateDir := t.TempDir()
-	t.Setenv("GOCELL_STATE_DIR", e2eStateDir)
-
 	// Go prevents mixing positional args and slice spread, so WithClock is
 	// prepended into the slice; the allow-marker below documents this.
 	cellAdapterOpts = append([]configcore.Option{
@@ -579,14 +565,24 @@ func TestOutboxE2E_RefetchLoop_AccessCoreCallsInternalGet(t *testing.T) {
 	// Wire accesscore with the HTTPConfigGetter pointing at the stub server.
 	// After receiving an entry-upserted event, configreceive will call
 	// internalSrv.URL + /internal/v1/config/{key}, and the stub records it.
+	refetchBootstrapCreds := initialadmin.BootstrapCredentials{
+		Username: []byte(e2eAdminUsername),
+		Password: []byte(e2eAdminBootstrapPassword),
+	}
+	refetchBootstrapMW := auth.NewBootstrapMiddleware(
+		auth.BootstrapCredentials{Username: refetchBootstrapCreds.Username, Password: refetchBootstrapCreds.Password},
+		setupTestAllowAllLimiter{},
+		nil,
+	)
 	accessCell := accesscore.NewAccessCore(
 		accesscore.WithClock(clock.Real()),
 		accesscore.WithInMemoryDefaults(),
 		accesscore.WithOutboxDeps(eb, nil),
 		accesscore.WithJWTIssuer(jwtIssuer),
 		accesscore.WithJWTVerifier(jwtVerifier),
-		accesscore.WithInitialAdminBootstrap(initialadmin.BootstrapCredentials{Username: []byte("e2e-admin"), Password: []byte("e2e-admin-pass-1!")}),
+		accesscore.WithInitialAdminBootstrap(refetchBootstrapCreds),
 		accesscore.WithMetricsProvider(kernelmetrics.NopProvider{}),
+		accesscore.WithBootstrapAuth(refetchBootstrapMW),
 		configgetter.WithHTTP(internalSrv.URL, testRing, clock.Real()),
 	)
 	auditCell := auditcore.NewAuditCore(
@@ -627,19 +623,12 @@ func TestOutboxE2E_RefetchLoop_AccessCoreCallsInternalGet(t *testing.T) {
 	waitForHealthy(t, addr)
 
 	// --- Step 7: Authenticate as admin ---
-	e2eCredPath := e2eStateDir + "/initial_admin_password"
-	require.Eventually(t, func() bool {
-		_, statErr := os.Stat(e2eCredPath)
-		return statErr == nil
-	}, testtime.EventuallyLong, testtime.MediumPoll, "e2e credential file must exist")
-
-	e2eUsername, e2eBootstrapPass, err := readE2ECredentials(e2eCredPath)
-	require.NoError(t, err)
-
-	bootstrapToken := loginAdminBootstrap(t, baseURL, e2eUsername, e2eBootstrapPass)
+	// PR #392 deleted the credfile path; the lifecycle hook creates the admin
+	// from the e2eAdmin* constants. Login → change-password → bearer token.
+	bootstrapToken := loginAdminBootstrap(t, baseURL, e2eAdminUsername, e2eAdminBootstrapPassword)
 	adminUserID := extractE2ESubFromJWT(t, bootstrapToken)
 	const refetchTestAdminPass = "RefetchTest@Pass9876!"
-	token := changeE2EPassword(t, baseURL, bootstrapToken, adminUserID, e2eBootstrapPass, refetchTestAdminPass)
+	token := changeE2EPassword(t, baseURL, bootstrapToken, adminUserID, e2eAdminBootstrapPassword, refetchTestAdminPass)
 
 	// --- Step 8: Publish a config entry — triggers the refetch closed loop ---
 	const refetchKey = "refetch.test.key"

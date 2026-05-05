@@ -20,6 +20,16 @@ import (
 	"github.com/ghbvf/gocell/runtime/auth"
 )
 
+// testAllowAllLimiter satisfies auth.BootstrapRateLimiter for tests that
+// focus on Basic Auth semantics. AUTH-AUTHTEST-B archtest forbids cells/ from
+// importing runtime/auth/authtest, so this fake stays file-local; the
+// equivalent fake also lives in cmd/corebundle/setup_integration_test.go and
+// cmd/corebundle/outbox_e2e_integration_test.go (per-package duplication is
+// the accepted cost of the layering boundary).
+type testAllowAllLimiter struct{}
+
+func (testAllowAllLimiter) Allow(string) bool { return true }
+
 const (
 	setupStatusPath = "/api/v1/access/setup/status"
 	setupAdminPath  = "/api/v1/access/setup/admin"
@@ -238,19 +248,15 @@ func seedIdentityUser(t *testing.T, userRepo *mem.UserRepository, username, emai
 	require.NoError(t, userRepo.Create(context.Background(), u))
 }
 
-// testAllowAllLimiter is a fakeRateLimiter local to setup tests — it satisfies
-// auth.BootstrapRateLimiter without rate-limiting (every Allow returns true).
-// Real production wiring uses adapters/ratelimit; this unit-level helper keeps
-// the test focus on Basic Auth semantics.
-type testAllowAllLimiter struct{}
-
-func (testAllowAllLimiter) Allow(string) bool { return true }
-
 // newHandlerWithBootstrapCreds creates a handler mux whose admin endpoint is
 // protected by the real bootstrap middleware (runtime/auth.NewBootstrapMiddleware).
 // Both NoCreds and WrongUsername/Password tests use this helper; the production
 // wiring in cmd/corebundle/access_module.go follows the same WithBootstrapAuth +
 // bootstrap middleware path.
+//
+// The rate limiter is authtest.AllowAllLimiter — the focus is Basic Auth
+// semantics, not throttling. The 429 path is covered by runtime/auth's own
+// bootstrap_test.go via a configurable fake limiter.
 func newHandlerWithBootstrapCreds(t *testing.T, svc *setup.Service, envUsername, envPassword string) http.Handler {
 	t.Helper()
 	creds := auth.BootstrapCredentials{

@@ -37,68 +37,46 @@ export GOCELL_EXAMPLE_RABBITMQ_PASSWORD="$(openssl rand -base64 24)"
 docker compose up -d
 ```
 
-## Seed User
+## First Admin Provisioning
 
-On first startup, when no admin user exists, the bootstrap process creates
-an initial admin account and writes the credentials to a file. Read the file:
+PR #392 introduced the closed `auth.bootstrap` contract: the demo's first
+admin is created interactively via `POST /api/v1/access/setup/admin`, which
+is protected by HTTP Basic Auth using the bootstrap operator credentials
+hardcoded in `examples/ssobff/app.go`:
+
+```go
+// examples/ssobff/app.go (package main, demo-only)
+const (
+    ssobffBootstrapUsername = "ssobff-ops"
+    ssobffBootstrapPassword = "ssobff-bootstrap-pass-1!"
+)
+```
+
+These constants live in this demo binary only — production deployments
+inject `GOCELL_BOOTSTRAP_ADMIN_USERNAME` / `GOCELL_BOOTSTRAP_ADMIN_PASSWORD`
+via env (see `docs/architecture/202605061600-adr-bootstrap-admin-boundary.md`
+§D9 + `docs/operations/first-run-setup.md`).
 
 ```bash
-cat $TMPDIR/gocell/initial_admin_password
-```
-
-The file contains:
-
-```
-# GoCell initial admin credential
-# Generated at: 2026-04-18T19:00:00Z
-# Expires at:   2026-04-19T19:00:00Z
-# This file is auto-deleted by the cleanup worker.
-username=admin
-password=<random base64 password>
-expires_at=<unix timestamp>
-```
-
-Export `GOCELL_STATE_DIR` before starting so the file is written to a
-macOS-accessible path:
-
-```bash
-export GOCELL_STATE_DIR=$TMPDIR/gocell
-go run ./examples/ssobff
-```
-
-See [docs/operations/first-run-setup.md](../../docs/operations/first-run-setup.md) for full
-deployment details (Docker, Kubernetes, troubleshooting).
-
-## First Login & Password Reset
-
-After reading the credential file, the admin token will carry
-`passwordResetRequired=true`. All business endpoints return 403 until the
-password is changed. Follow these steps:
-
-```bash
-# 1. Read the initial password
-INIT_PASS=$(grep '^password=' $TMPDIR/gocell/initial_admin_password | cut -d= -f2)
-ADMIN_USER=$(grep '^username=' $TMPDIR/gocell/initial_admin_password | cut -d= -f2)
-
-# 2. Login (passwordResetRequired=true in response) — userId is in the response directly.
-TOKEN_RESP=$(curl -s -X POST http://localhost:8081/api/v1/access/sessions/login \
+# Provision the admin (operator authenticates with ssobffBootstrap* creds;
+# request body defines the admin identity — D5 separation).
+curl -s -X POST http://localhost:8081/api/v1/access/setup/admin \
+  -u 'ssobff-ops:ssobff-bootstrap-pass-1!' \
   -H 'Content-Type: application/json' \
-  -d "{\"username\":\"${ADMIN_USER}\",\"password\":\"${INIT_PASS}\"}")
-echo "$TOKEN_RESP" | jq .
-# {"data":{"accessToken":"...","userId":"...","passwordResetRequired":true,...}}
+  -d '{"username":"admin","email":"admin@local","password":"MyStr0ngP@ss!"}'
+# 201 Created (subsequent calls return 410 Gone — one-shot)
+```
 
-BOOTSTRAP_TOKEN=$(echo "$TOKEN_RESP" | jq -r '.data.accessToken')
-USER_ID=$(echo "$TOKEN_RESP"        | jq -r '.data.userId')
+The admin you just created uses the password from the request body —
+operator-set passwords are not "initial randoms", so `passwordResetRequired`
+is `false` from the start. The reset flow is exercised by the dedicated
+`identity-manage` change-password endpoint (`POST /api/v1/access/users/{id}/password`),
+not by the setup path.
 
-# 3. Change password (returns new token with passwordResetRequired=false)
-NEW_TOKEN_RESP=$(curl -s -X POST "http://localhost:8081/api/v1/access/users/${USER_ID}/password" \
-  -H "Authorization: Bearer $BOOTSTRAP_TOKEN" \
+```bash
+export ADMIN_TOKEN=$(curl -s -X POST http://localhost:8081/api/v1/access/sessions/login \
   -H 'Content-Type: application/json' \
-  -d "{\"oldPassword\":\"${INIT_PASS}\",\"newPassword\":\"MyStr0ngP@ss!\"}")
-echo "$NEW_TOKEN_RESP" | jq .
-# {"data":{"accessToken":"...","passwordResetRequired":false,...}}
-
-export ADMIN_TOKEN=$(echo "$NEW_TOKEN_RESP" | jq -r '.data.accessToken')
+  -d '{"username":"admin","password":"MyStr0ngP@ss!"}' | jq -r '.data.accessToken')
 ```
 
 After this the `ADMIN_TOKEN` works for all business endpoints.

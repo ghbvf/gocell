@@ -32,6 +32,24 @@ import (
 	"github.com/ghbvf/gocell/runtime/eventbus"
 )
 
+// setupTestBootstrapUsername / Password are the operator credentials wired
+// into accesscore.WithBootstrapAuth for this integration test. They are also
+// the credentials the test sends in the Basic Auth header on POST
+// /setup/admin requests — ADR §D5: env creds authenticate the operator,
+// request body defines the admin identity.
+const (
+	setupTestBootstrapUsername = "setup-test-op"
+	setupTestBootstrapPassword = "setup-test-pass-1!"
+)
+
+// setupTestAllowAllLimiter satisfies auth.BootstrapRateLimiter without
+// throttling. AUTH-AUTHTEST-B archtest forbids cells/examples from importing
+// runtime/auth/authtest, so we keep an equivalent fake in each test file
+// rather than introducing a shared helper.
+type setupTestAllowAllLimiter struct{}
+
+func (setupTestAllowAllLimiter) Allow(string) bool { return true }
+
 // setupHTTPClient uses a longer timeout than the shared testHTTPClient because
 // bcrypt at domain.BcryptCost=12 takes ~1-2s per password hash, which exceeds
 // the 2s client-default when the CPU is contended by parallel test packages.
@@ -69,6 +87,14 @@ func TestSetupEndpoints_FirstRunFlow(t *testing.T) {
 	configCursorCodec, err := query.NewCursorCodec([]byte("test-config-cursor-key-32bytes!!"))
 	require.NoError(t, err)
 
+	bootstrapMW := auth.NewBootstrapMiddleware(
+		auth.BootstrapCredentials{
+			Username: []byte(setupTestBootstrapUsername),
+			Password: []byte(setupTestBootstrapPassword),
+		},
+		setupTestAllowAllLimiter{},
+		nil,
+	)
 	ac := accesscore.NewAccessCore(
 		accesscore.WithClock(clock.Real()),
 		accesscore.WithInMemoryDefaults(),
@@ -77,6 +103,7 @@ func TestSetupEndpoints_FirstRunFlow(t *testing.T) {
 		accesscore.WithJWTVerifier(jwtVerifier),
 		accesscore.WithTxManager(noopTxRunner{}),
 		accesscore.WithMetricsProvider(metrics.NopProvider{}),
+		accesscore.WithBootstrapAuth(bootstrapMW),
 	)
 	cc := configcore.NewConfigCore(
 		configcore.WithClock(clock.Real()),
@@ -151,11 +178,36 @@ func TestSetupEndpoints_FirstRunFlow(t *testing.T) {
 		assert.False(t, body.Data.HasAdmin)
 	})
 
-	// 2. Create first admin.
+	// 2a. POST without Basic Auth must 401 — proves the closed contract: the
+	//     bootstrap middleware is wired in front of the generated handler, and
+	//     ERR_AUTH_BOOTSTRAP_FAILED is the canonical envelope (no oracle).
+	t.Run("create_admin_no_auth_returns_401", func(t *testing.T) {
+		payload := `{"username":"root","email":"root@local","password":"SecretPass!23"}`
+		req, err := http.NewRequestWithContext(context.Background(), http.MethodPost,
+			base+"/api/v1/access/setup/admin", strings.NewReader(payload))
+		require.NoError(t, err)
+		req.Header.Set("Content-Type", "application/json")
+		// Intentionally no SetBasicAuth.
+		resp, err := setupHTTPClient.Do(req)
+		require.NoError(t, err)
+		defer resp.Body.Close()
+		assert.Equal(t, http.StatusUnauthorized, resp.StatusCode,
+			"setup/admin without Basic Auth must 401 (ADR §D1 closed contract)")
+		raw, err := io.ReadAll(resp.Body)
+		require.NoError(t, err)
+		assert.Contains(t, string(raw), "ERR_AUTH_BOOTSTRAP_FAILED")
+	})
+
+	// 2b. Create first admin (with Basic Auth).
 	password := "SecretPass!23"
 	t.Run("create_admin_returns_201", func(t *testing.T) {
 		payload := `{"username":"root","email":"root@local","password":"` + password + `"}`
-		resp, err := setupHTTPClient.Post(base+"/api/v1/access/setup/admin", "application/json", strings.NewReader(payload))
+		req, err := http.NewRequestWithContext(context.Background(), http.MethodPost,
+			base+"/api/v1/access/setup/admin", strings.NewReader(payload))
+		require.NoError(t, err)
+		req.Header.Set("Content-Type", "application/json")
+		req.SetBasicAuth(setupTestBootstrapUsername, setupTestBootstrapPassword)
+		resp, err := setupHTTPClient.Do(req)
 		require.NoError(t, err)
 		defer resp.Body.Close()
 		assert.Equal(t, http.StatusCreated, resp.StatusCode, "first setup/admin POST must return 201")
@@ -171,10 +223,16 @@ func TestSetupEndpoints_FirstRunFlow(t *testing.T) {
 		assert.NoError(t, idErr, "user id must be a canonical UUID (PR-A45)")
 	})
 
-	// 3. Second POST must 410 Gone (one-shot lifecycle).
+	// 3. Second POST (with Basic Auth) must 410 Gone — one-shot lifecycle. The
+	//    Basic Auth still needs to pass; 401 short-circuits before 410.
 	t.Run("second_create_returns_410", func(t *testing.T) {
 		payload := `{"username":"root2","email":"other@local","password":"AnotherPass!99"}`
-		resp, err := setupHTTPClient.Post(base+"/api/v1/access/setup/admin", "application/json", strings.NewReader(payload))
+		req, err := http.NewRequestWithContext(context.Background(), http.MethodPost,
+			base+"/api/v1/access/setup/admin", strings.NewReader(payload))
+		require.NoError(t, err)
+		req.Header.Set("Content-Type", "application/json")
+		req.SetBasicAuth(setupTestBootstrapUsername, setupTestBootstrapPassword)
+		resp, err := setupHTTPClient.Do(req)
 		require.NoError(t, err)
 		defer resp.Body.Close()
 		assert.Equal(t, http.StatusGone, resp.StatusCode)

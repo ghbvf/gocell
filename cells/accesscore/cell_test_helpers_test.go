@@ -10,6 +10,6 @@ import "net/http"
 func testPassthroughBootstrapAuth(next http.Handler) http.Handler { return next }
 
 // withTestBootstrapAuth returns the standard WithBootstrapAuth option used by
-// all cell-level tests; centralised so a future change to the closed-contract
+// all cell-level tests; centralized so a future change to the closed-contract
 // surface (e.g. swapping Option for a struct field) only touches one site.
 func withTestBootstrapAuth() Option { return WithBootstrapAuth(testPassthroughBootstrapAuth) }

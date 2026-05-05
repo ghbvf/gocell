@@ -182,9 +182,6 @@ func TestRun_DevMode_StartsAndCancels(t *testing.T) {
 	t.Setenv(SetupModeEnv, "bootstrap")
 	t.Setenv("GOCELL_BOOTSTRAP_ADMIN_USERNAME", "testadmin")
 	t.Setenv("GOCELL_BOOTSTRAP_ADMIN_PASSWORD", "testpassword123")
-	// STATE_DIR is needed for compatibility with credfile path resolution
-	// on legacy code paths; kept for safety during transition.
-	t.Setenv("GOCELL_STATE_DIR", t.TempDir())
 	// GOCELL_JWT_ISSUER and GOCELL_JWT_AUDIENCE are required in all modes (C5).
 	t.Setenv("GOCELL_JWT_ISSUER", "gocell-dev-test")
 	t.Setenv("GOCELL_JWT_AUDIENCE", "gocell")

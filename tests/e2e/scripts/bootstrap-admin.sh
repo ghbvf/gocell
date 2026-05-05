@@ -10,13 +10,17 @@
 #
 # Requires jq for token extraction (preinstalled on ubuntu-latest runners).
 #
-# !!! THE DEFAULT PASSWORD IS A CI/E2E FIXTURE — NOT A PRODUCTION SECRET !!!
-# `E2E-Bootstrap-Pwd-1!` is hardcoded only as a fallback for the throwaway
-# corebundle container brought up by docker-compose.e2e.yaml. The container
-# (and its postgres volume) are destroyed by `docker compose down -v` after
-# each run; the password is never reused across runs or environments.
-# Override via $E2E_ADMIN_PASSWORD if you need a different value.
+# After PR #392 (auth.bootstrap closed contract, ADR §D1 + §D9) the
+# /setup/admin endpoint is protected by HTTP Basic Auth using the bootstrap
+# operator credentials shared with the corebundle container. Both this
+# script and tests/e2e/docker-compose.e2e.yaml pull the credentials from
+# tests/e2e/scripts/bootstrap-credentials.env (single source of truth) so a
+# future rotation only touches one file.
 set -euo pipefail
+
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=./bootstrap-credentials.env
+source "${script_dir}/bootstrap-credentials.env"
 
 base="${BASE_URL:-http://localhost:8080}"
 username="${E2E_ADMIN_USERNAME:-admin}"
@@ -26,6 +30,7 @@ password="${E2E_ADMIN_PASSWORD:-E2E-Bootstrap-Pwd-1!}"
 setup_body=$(jq -n --arg u "$username" --arg e "$email" --arg p "$password" \
     '{username:$u, email:$e, password:$p}')
 curl -fsS -X POST "$base/api/v1/access/setup/admin" \
+    -u "${GOCELL_BOOTSTRAP_ADMIN_USERNAME}:${GOCELL_BOOTSTRAP_ADMIN_PASSWORD}" \
     -H "Content-Type: application/json" \
     -d "$setup_body" \
     >/dev/null

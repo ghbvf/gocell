@@ -32,6 +32,21 @@ const (
 	ssobffBootstrapRateLimitBurst  = 10
 )
 
+// ssobffBootstrapUsername / Password are the demo operator credentials
+// protecting POST /api/v1/access/setup/admin in the ssobff example.
+//
+// examples/ssobff is a demo binary, not platform code, so these constants
+// are package-local and are reused by walkthrough_test.go (same package
+// main) as the single source of truth for the demo Basic Auth header.
+// Production deployments inject credentials via GOCELL_BOOTSTRAP_ADMIN_*
+// env (see cmd/corebundle/access_module.go); the demo path never reads
+// the env in order to keep `go run ./examples/ssobff` self-contained.
+const (
+	ssobffBootstrapUsername = "ssobff-ops"
+	// #nosec G101 -- demo fixture in examples/ssobff binary; production is env-driven (cmd/corebundle).
+	ssobffBootstrapPassword = "ssobff-bootstrap-pass-1!"
+)
+
 // ssobffBootstrapAuthFailLogger returns the onAuthFail observer wired into the
 // demo bootstrap middleware.
 func ssobffBootstrapAuthFailLogger(logger *slog.Logger) auth.BootstrapAuthFailObserver {
@@ -181,11 +196,11 @@ func NewSSOBFFApp(opts ...SSOBFFAppOption) (*SSOBFFApp, error) {
 	// wired (the operator POSTs to /api/v1/access/setup/admin to create the
 	// first admin). Bootstrap credentials are still mandatory — they protect
 	// the setup endpoint via Basic Auth (ADR §D9 persistent startup credential
-	// model). The demo uses static "ssobff-ops" creds; production deployments
-	// inject from K8s Secret / Vault.
+	// model). The demo uses the package-local ssobffBootstrap* constants;
+	// production deployments inject from K8s Secret / Vault.
 	ssobffBootstrapCreds := auth.BootstrapCredentials{
-		Username: []byte("ssobff-ops"),
-		Password: []byte("ssobff-bootstrap-pass-1!"),
+		Username: []byte(ssobffBootstrapUsername),
+		Password: []byte(ssobffBootstrapPassword),
 	}
 	rlLimiter := ratelimit.New(ratelimit.Config{
 		Rate:  ssobffBootstrapRateLimitPerSec,

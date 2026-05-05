@@ -67,6 +67,7 @@ func TestCellsNoRouteMuxWrapper(t *testing.T) {
 		if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
 			return nil
 		}
+		// #nosec G304 -- path comes from filepath.Walk under findModuleRoot, not user input.
 		src, readErr := os.ReadFile(path)
 		if readErr != nil {
 			return readErr
@@ -133,7 +134,7 @@ func TestAuthRouteBootstrapFlagRemoved(t *testing.T) {
 	root := findModuleRoot(t)
 	routeFile := filepath.Join(root, "runtime", "auth", "route.go")
 
-	src, err := os.ReadFile(routeFile)
+	src, err := os.ReadFile(routeFile) // #nosec G304 -- module-rooted file path joined from findModuleRoot, not user input
 	require.NoError(t, err, "read runtime/auth/route.go")
 
 	fset := token.NewFileSet()
@@ -193,7 +194,7 @@ func TestSetupAdminCodegenBootstrapAuthWired(t *testing.T) {
 	root := findModuleRoot(t)
 	genFile := filepath.Join(root, "generated", "contracts", "http", "auth", "setup", "admin", "v1", "handler_gen.go")
 
-	src, err := os.ReadFile(genFile)
+	src, err := os.ReadFile(genFile) // #nosec G304 -- module-rooted file path joined from findModuleRoot, not user input
 	require.NoError(t, err, "read generated setup/admin handler_gen.go (run `go run ./cmd/gocell generate contract --all` first)")
 
 	fset := token.NewFileSet()
