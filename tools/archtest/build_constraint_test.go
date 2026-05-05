@@ -67,6 +67,91 @@ func findIntegrationTagViolations(rootDir string) ([]string, error) {
 	return violations, nil
 }
 
+// findRealTagViolations walks rootDir and returns paths of every
+// *_real_test.go file that does NOT carry a //go:build constraint requiring
+// strictly more than just the "integration" tag.
+//
+// Why a separate gate from *_integration_test.go: real-cluster /
+// real-broker / real-vault style tests need stricter isolation than the
+// default `integration` opt-in (e.g. cluster tests demand a pre-launched
+// 6-node cluster which a developer running `go test -tags=integration` has
+// not booted). The convention is to use a more specific tag like
+// `integration_cluster`. This gate enforces that every *_real_test.go file
+// uses such a tag and crucially does NOT pass under `-tags=integration`
+// alone — otherwise the file is just an integration test by another name
+// and would be better off as *_integration_test.go.
+func findRealTagViolations(rootDir string) ([]string, error) {
+	var violations []string
+
+	err := filepath.WalkDir(rootDir, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			if skipDirs[d.Name()] {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if !strings.HasSuffix(d.Name(), "_real_test.go") {
+			return nil
+		}
+
+		rel, relErr := filepath.Rel(rootDir, path)
+		if relErr != nil {
+			rel = path
+		}
+
+		ok, checkErr := fileHasStricterThanIntegrationTag(path)
+		if checkErr != nil || !ok {
+			violations = append(violations, rel)
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return violations, nil
+}
+
+// fileHasStricterThanIntegrationTag returns true iff the file's //go:build
+// expression evaluates to false when ONLY the "integration" tag is active
+// (i.e. it requires something more specific) AND evaluates to true under
+// some specific tag set. Files matching `_real_test.go` without any
+// //go:build constraint, or with one that admits `integration` alone, are
+// violations.
+func fileHasStricterThanIntegrationTag(path string) (bool, error) {
+	f, err := os.Open(filepath.Clean(path))
+	if err != nil {
+		return false, err
+	}
+	defer func() { _ = f.Close() }()
+
+	scanner := bufio.NewScanner(f)
+	for scanner.Scan() {
+		line := scanner.Text()
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" || strings.HasPrefix(trimmed, "//") || strings.HasPrefix(trimmed, "/*") {
+			if !constraint.IsGoBuild(line) {
+				continue
+			}
+			expr, parseErr := constraint.Parse(line)
+			if parseErr != nil {
+				return false, parseErr
+			}
+			withIntegrationOnly := expr.Eval(func(tag string) bool { return tag == "integration" })
+			withoutAny := expr.Eval(func(_ string) bool { return false })
+			// Strict: must NOT pass under integration alone, must NOT pass under empty tag set.
+			return !withIntegrationOnly && !withoutAny, nil
+		}
+		break
+	}
+	if err := scanner.Err(); err != nil {
+		return false, err
+	}
+	return false, nil
+}
+
 // fileHasIntegrationTag returns true iff the file carries, in its header
 // section (before the package clause and following only blank lines and other
 // comments — the only zone the Go toolchain recognizes for build constraints),
@@ -140,6 +225,31 @@ func TestArchtest_AllIntegrationTestFiles_HaveIntegrationBuildTag(t *testing.T) 
 	assert.Empty(t, violations,
 		"all *_integration_test.go files must carry '//go:build integration'; "+
 			"add the constraint at the top of each listed file")
+}
+
+// TestArchtest_AllRealTestFiles_HaveStricterTag walks the repository and
+// asserts every *_real_test.go file uses a //go:build constraint that does
+// NOT pass under `-tags=integration` alone (i.e. requires a strictly more
+// specific tag like `integration_cluster`). Without this gate, naming a file
+// `*_real_test.go` would be a silent escape hatch around the
+// *_integration_test.go gate, blurring the convention.
+func TestArchtest_AllRealTestFiles_HaveStricterTag(t *testing.T) {
+	root := findModuleRoot(t)
+
+	violations, err := findRealTagViolations(root)
+	require.NoError(t, err, "error walking module root")
+
+	if len(violations) > 0 {
+		t.Logf("Found %d *_real_test.go file(s) missing a stricter-than-integration build tag:", len(violations))
+		for _, v := range violations {
+			t.Logf("  %s", v)
+		}
+	}
+
+	assert.Empty(t, violations,
+		"all *_real_test.go files must carry a '//go:build' constraint that does NOT pass "+
+			"under '-tags=integration' alone (e.g. 'integration_cluster'); add or tighten "+
+			"the constraint at the top of each listed file")
 }
 
 // TestArchtest_BuildConstraint_Violation_Fixture is the "test the test" meta-test.

@@ -30,7 +30,6 @@ import (
 	"go/parser"
 	"go/token"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -85,18 +84,16 @@ func TestIdempotency_LuaHashtag(t *testing.T) {
 			"hashtag pattern (Redis Cluster slot colocation)")
 }
 
-// isHashtagConcat checks whether expr is a string concatenation of the
+// isHashtagConcat checks whether expr is a string concatenation of the exact
 // shape `"{" + <ident> + "}<suffix>"` where suffix is the role suffix.
 // Accepts associativity in either direction (Go parser builds left-leaning
-// trees but we tolerate either).
+// trees but we tolerate either). Tail literal must match `"}" + wantSuffix`
+// exactly so a regression like `"}:done_v2"` is caught.
 func isHashtagConcat(expr ast.Expr, wantSuffix string) bool {
 	parts := flattenAdd(expr)
 	if len(parts) < 3 {
 		return false
 	}
-	// Find a literal "{" followed (eventually) by a literal that ends in
-	// "}" + wantSuffix. Anything in between must be either ident or further
-	// concat — but we just need to confirm the shape's outer brackets.
 	first, ok := stringLit(parts[0])
 	if !ok || first != "{" {
 		return false
@@ -105,8 +102,7 @@ func isHashtagConcat(expr ast.Expr, wantSuffix string) bool {
 	if !ok {
 		return false
 	}
-	want := "}" + wantSuffix
-	return strings.HasPrefix(last, want)
+	return last == "}"+wantSuffix
 }
 
 func flattenAdd(expr ast.Expr) []ast.Expr {

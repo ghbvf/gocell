@@ -509,18 +509,18 @@ func failoverTLSConfig(parsed *tls.Config) *tls.Config {
 // ref: redis/go-redis osscluster.go ParseClusterURL — ClusterOptions carries a
 // single TLSConfig that enables TLS dials for every cluster node.
 func buildClusterOptions(cfg Config) (*goredis.ClusterOptions, error) {
+	// Username left empty by default; populated from URL by
+	// mergeClusterURLFields when credentials appear in rediss:// addresses.
+	// Username and Password are independent ACL fields — Password without
+	// Username is the legacy AUTH password (server matches against
+	// `requirepass`), Username + Password is ACL.
 	base := &goredis.ClusterOptions{
-		Username:     cfg.Password, // overridden below if URL provides credentials
 		Password:     cfg.Password,
 		DialTimeout:  cfg.DialTimeout,
 		ReadTimeout:  cfg.ReadTimeout,
 		WriteTimeout: cfg.WriteTimeout,
 		PoolSize:     cfg.PoolSize,
 	}
-	// Username defaults to empty unless a URL provides one. Reset the
-	// over-eager initializer above (it duplicated Password to keep the field
-	// ordering clear) — Username and Password are independent ACL fields.
-	base.Username = ""
 
 	hasURL, hasPlain := clusterAddressForms(cfg.ClusterAddrs)
 	if hasURL && hasPlain {

@@ -3,6 +3,7 @@ package redis
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"time"
@@ -158,6 +159,15 @@ func (m *mockCmdable) Eval(_ context.Context, script string, keys []string, args
 	m.evalCallCount++
 	if m.evalErr != nil {
 		cmd.SetErr(m.evalErr)
+		return cmd
+	}
+	if len(keys) >= 2 {
+		// Defense in depth: this base mock only knows distlock's
+		// single-key release/renew Lua. Two-key scripts (claim/commit)
+		// belong to claimerMockCmdable. If a test routes them to the
+		// base mock by mistake the silent zero return would mimic a
+		// successful no-op; surface the misroute as a hard error.
+		cmd.SetErr(fmt.Errorf("mockCmdable.Eval: refused 2-key Lua script (use claimerMockCmdable for IdempotencyClaimer)"))
 		return cmd
 	}
 	cmd.SetVal(m.simulateScript(script, keys, args))
