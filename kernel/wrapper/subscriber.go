@@ -58,16 +58,6 @@ func WrapSubscriber(tr Tracer, spec ContractSpec, fn outbox.SubscriberHandler) (
 	}, nil
 }
 
-// MustWrapSubscriber is the composition-root fail-fast variant of
-// WrapSubscriber. It panics when WrapSubscriber returns an error.
-func MustWrapSubscriber(tr Tracer, spec ContractSpec, fn outbox.SubscriberHandler) outbox.SubscriberHandler {
-	c, err := WrapSubscriber(tr, spec, fn)
-	if err != nil {
-		panic(err.Error())
-	}
-	return c
-}
-
 func finishSubscriberSpan(span Span, obs outbox.SettlementObservation) {
 	span.SetAttributes(
 		Attr{Key: "gocell.outbox.disposition", Value: obs.Disposition.String()},

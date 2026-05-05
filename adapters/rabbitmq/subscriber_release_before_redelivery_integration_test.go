@@ -18,6 +18,22 @@ import (
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 )
 
+const (
+	// releaseBeforeRedeliveryLeaseTTL is the processing-lease TTL passed to
+	// ConsumerBase. Long enough that a Nack-first path would wait the full
+	// duration before retrying — which is exactly what the test gates on
+	// (handler must be invoked at least twice within testtime.D10s).
+	releaseBeforeRedeliveryLeaseTTL = 5 * time.Minute
+
+	// releaseBeforeRedeliveryDoneTTL is the idempotency-done TTL passed to
+	// ConsumerBase; standard 24h matches the production default.
+	releaseBeforeRedeliveryDoneTTL = 24 * time.Hour
+
+	// releaseBeforeRedeliveryNoRenewal disables the lease-renewal goroutine
+	// so the test deterministically observes one Commit attempt per delivery.
+	releaseBeforeRedeliveryNoRenewal = -1 * time.Second
+)
+
 // TestIntegration_CommitFailedAllowsRedeliveryToSameProcess covers the N8 K#12
 // release-first invariant end-to-end against a real RabbitMQ broker:
 //
@@ -54,11 +70,11 @@ func TestIntegration_CommitFailedAllowsRedeliveryToSameProcess(t *testing.T) {
 	claimer := &flakyCommitOnceClaimer{inner: inner}
 
 	cb, err := outbox.NewConsumerBase(claimer, outbox.ConsumerBaseConfig{
-		ClaimRetryCount:    2,
-		RetryCount:         2,
-		LeaseTTL:           5 * time.Minute,
-		IdempotencyTTL:     24 * time.Hour,
-		LeaseRenewalInterval: -1, // disable renewal for determinism
+		ClaimRetryCount:      2,
+		RetryCount:           2,
+		LeaseTTL:             releaseBeforeRedeliveryLeaseTTL,
+		IdempotencyTTL:       releaseBeforeRedeliveryDoneTTL,
+		LeaseRenewalInterval: releaseBeforeRedeliveryNoRenewal,
 	}, clock.Real())
 	require.NoError(t, err)
 

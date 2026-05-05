@@ -11,7 +11,12 @@ import (
 // NewContractTracingSubscriber decorates an outbox.Subscriber so every
 // contract-bound delivery attempt gets one span that ends after final broker
 // settlement. It delegates lifecycle methods unchanged and wraps Subscribe
-// handlers with wrapper.MustWrapSubscriber at subscription registration time.
+// handlers with wrapper.WrapSubscriber at subscription registration time.
+//
+// Subscribe-time invalid Subscription metadata surfaces as an error from the
+// returned Subscriber.Subscribe call (single-source validation via
+// outbox.Subscription.Validate); previous behavior was a panic from the
+// removed wrapper.MustWrapSubscriber helper.
 func NewContractTracingSubscriber(inner outbox.Subscriber, tr wrapper.Tracer) outbox.Subscriber {
 	return &contractTracingSubscriber{inner: inner, tracer: tr}
 }
@@ -43,13 +48,19 @@ func (s *contractTracingSubscriber) Subscribe(
 	if s.inner == nil {
 		return fmt.Errorf("eventrouter: contract tracing subscriber has nil inner subscriber")
 	}
+	if err := sub.Validate(); err != nil {
+		return fmt.Errorf("eventrouter: contract tracing subscriber: %w", err)
+	}
 	spec := wrapper.ContractSpec{
 		ID:        sub.ContractID,
 		Kind:      sub.ContractKind,
 		Transport: sub.ContractTransport,
 		Topic:     sub.Topic,
 	}
-	wrapped := wrapper.MustWrapSubscriber(s.tracer, spec, handler)
+	wrapped, err := wrapper.WrapSubscriber(s.tracer, spec, handler)
+	if err != nil {
+		return fmt.Errorf("eventrouter: contract tracing subscriber: %w", err)
+	}
 	return s.inner.Subscribe(ctx, sub, wrapped)
 }
 

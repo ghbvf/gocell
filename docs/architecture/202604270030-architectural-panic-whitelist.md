@@ -36,7 +36,7 @@ panic on error):
   `NewAuthServiceToken` → `(plan, error)` + `MustNewAuth*` wrappers
 - `kernel/wrapper/handler.go::HTTPHandler` → `(handler, error)` + `MustHTTPHandler`
 - `kernel/wrapper/consumer.go::WrapConsumer` → `(consumer, error)` + `MustWrapConsumer`
-- `kernel/wrapper/subscriber.go::WrapSubscriber` → `(handler, error)` + `MustWrapSubscriber`
+- `kernel/wrapper/subscriber.go::WrapSubscriber` → `(handler, error)` (sole API after N8 — the `MustWrapSubscriber` panic helper was removed; manual callers handle the error explicitly via `runtime/eventrouter.NewContractTracingSubscriber.Subscribe`)
 - `runtime/eventrouter/router.go::AddContractHandler` → `error`
   (`kernel/cell.EventRouter` interface signature updated; cells'
   `RegisterSubscriptions` propagate the error)
@@ -80,7 +80,7 @@ explicit through a `Must*` wrapper.
 
 - **`Must*` prefix**: Go community convention for the panic-on-misuse
   twin of an error-returning constructor. Examples in this PR:
-  `MustNewAuthJWT`, `MustHTTPHandler`, `MustWrapConsumer`, `MustWrapSubscriber`,
+  `MustNewAuthJWT`, `MustHTTPHandler`, `MustWrapConsumer`,
   `MustMount`, `MustNewRefreshStore`, `MustNewEntryID`,
   `MustMarshalDirectEnvelope` (renamed from non-Must form), plus
   pre-existing `MustValidateLabels`, `MustRegister`, `MustNewTestKeyProvider`,

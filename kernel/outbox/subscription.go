@@ -42,12 +42,26 @@ type Subscription struct {
 }
 
 // Validate returns an error when required fields are missing.
+//
+// Subscription.Validate is the SINGLE source of truth for subscription-shape
+// invariants. Subscribe-time decorators (e.g. ContractTracingSubscriber) call
+// it once at the entry point instead of duplicating the checks downstream
+// (N8 (c) — collapsed the previous parallel check inside MustWrapSubscriber).
 func (s Subscription) Validate() error {
 	if s.Topic == "" {
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "outbox: subscription Topic must not be empty")
 	}
 	if s.ConsumerGroup == "" {
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "outbox: subscription ConsumerGroup must not be empty")
+	}
+	if s.ContractID == "" {
+		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "outbox: subscription ContractID must not be empty")
+	}
+	if s.ContractKind == "" {
+		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "outbox: subscription ContractKind must not be empty")
+	}
+	if s.ContractTransport == "" {
+		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "outbox: subscription ContractTransport must not be empty")
 	}
 	return nil
 }
