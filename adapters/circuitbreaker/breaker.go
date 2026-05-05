@@ -63,7 +63,12 @@ type Counts struct {
 	ConsecutiveFailures  uint32
 }
 
-// Config holds settings for the circuit breaker adapter.
+// Config holds settings for the circuitbreaker adapter.
+//
+// Name is the only required field; all other fields use built-in defaults
+// when zero (see each field's doc). New() returns ErrAdapterCircuitBreakerConfig
+// when Name is empty; other invalid values are silently coerced to defaults
+// to keep ad-hoc constructions ergonomic.
 type Config struct {
 	// Name identifies the circuit breaker instance (required, used in logs/metrics).
 	Name string
@@ -286,9 +291,12 @@ func New(cfg Config, clk clock.Clock) (*Adapter, error) {
 }
 
 // Allow checks if the request should proceed. Returns allowed=true and a done
-// callback when the circuit is closed or half-open. The done callback MUST be
-// called exactly once with nil (success) or a non-nil error (failure). Returns
-// allowed=false and a nil done when the circuit is open.
+// callback when the circuit is closed or has free probe slots in half-open.
+// The done callback MUST be called exactly once with nil (success) or a non-nil
+// error (failure). Returns allowed=false and a nil done when the circuit is
+// open OR when half-open has reached MaxRequests in-flight probes — both
+// rejection causes are indistinguishable to the caller; use State() to
+// observe the current circuit state for diagnostics.
 func (a *Adapter) Allow() (allowed bool, done func(err error)) {
 	gen, err := a.cb.beforeRequest()
 	if err != nil {
