@@ -23,11 +23,11 @@ const DefaultDecodeJSONLimit int64 = 1 << 20
 // Unknown fields are silently ignored to maintain backward compatibility.
 //
 // Errors are returned as *errcode.Error:
-//   - empty body           -> ErrValidationFailed, details: {"reason": "empty body"}
-//   - truncated JSON       -> ErrValidationFailed, details: {"reason": "malformed JSON"}
-//   - syntax error         -> ErrValidationFailed, details: {"reason": "malformed JSON", ...}
-//   - type mismatch        -> ErrValidationFailed, details: {"reason": "type mismatch", "field": ...}
-//   - trailing content     -> ErrValidationFailed, details: {"reason": "trailing content after JSON value"}
+//   - empty body           -> ErrValidationFailed, details: [{"key":"reason","value":"empty body"}]
+//   - truncated JSON       -> ErrValidationFailed, details: [{"key":"reason","value":"malformed JSON"}]
+//   - syntax error         -> ErrValidationFailed, details: [{"key":"reason","value":"malformed JSON"},{"key":"offset","value":N}]
+//   - type mismatch        -> ErrValidationFailed, details: [{"key":"reason","value":"type mismatch"},{"key":"field","value":"..."}]
+//   - trailing content     -> ErrValidationFailed, details: [{"key":"reason","value":"trailing content after JSON value"}]
 //   - body too large       -> ErrBodyTooLarge
 //   - other                -> ErrInternal (details not exposed)
 func DecodeJSON(r *http.Request, dst any, maxBytes int64) error {
@@ -37,7 +37,7 @@ func DecodeJSON(r *http.Request, dst any, maxBytes int64) error {
 // DecodeJSONStrict is like DecodeJSON but rejects unknown fields.
 // All errors documented on DecodeJSON apply, plus the unknown field error:
 //
-//   - unknown field → ErrValidationFailed, details: {"reason": "unknown field", "field": ...}
+//   - unknown field → ErrValidationFailed, details: [{"key":"reason","value":"unknown field"},{"key":"field","value":"..."}]
 //
 // When the destination is a struct, any JSON key that does not match
 // a non-ignored exported field causes a 400 error.

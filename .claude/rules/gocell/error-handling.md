@@ -44,7 +44,7 @@
 - **B 类（参数约定违反，编程错误）**：同 A 类，用 `errcode.Assertion`。
 - **C 类（显式 re-throw，框架生命周期）**：保留 bare `panic`，共 6 处明确豁免：`lifecycle.go` 启动超时、`circuit_breaker` recover re-throw、`tx_manager` 嵌套事务 re-throw、`websocket handler` protocol error、`metrics` 注册冲突、`kernel/cell` bootstrap fatal。
 
-新增 panic 必须在代码注释中声明属于哪一类，C 类需额外说明豁免理由。archtest `ASSERTION-CTOR-01` 拦截在非豁免列表文件里出现的 bare panic（去掉 recover 块内的 re-throw）。
+新增 panic 必须在代码注释中声明属于哪一类，C 类需额外说明豁免理由。archtest `PANIC-REGISTERED-01` 拦截在非豁免列表文件里出现的 bare panic（recover 块内 re-throw 需在 `architecturalPanicWhitelist` 中显式注册）。
 
 ## Details 类型安全：slog.Attr
 

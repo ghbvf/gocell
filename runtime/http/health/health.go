@@ -439,6 +439,10 @@ func (h *Handler) aggregateProbeResults(results map[string]ProbeResult, verbose 
 //	503 → {"error": {"code":"ERR_SERVICE_UNAVAILABLE", "message":"service unavailable",
 //	                  "details": {"status":"unhealthy","reason":"readiness_failed", ...verbose fields}}}
 //
+// Note: the 503 "details" here is a health-diagnostic object, not the errcode
+// array<{key,value}> form (this endpoint builds its own envelope via envelopeError,
+// not via pkg/httputil.WriteError).
+//
 // degraded maps to HTTP 200 — a degraded service (fail-open) should NOT
 // trigger pod eviction; operators monitor degraded via the response body
 // status field or the underlying Prometheus counter.

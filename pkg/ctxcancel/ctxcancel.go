@@ -130,6 +130,12 @@ func Wrap(err error, op, identifier string) *errcode.Error {
 // PascalCase InternalMessage template, a non-Infra Category), keep the
 // inline pattern — this helper deliberately omits those degrees of freedom
 // to avoid a six-parameter signature.
+//
+// fallbackMsg MUST be a compile-time const literal (not fmt.Sprintf output,
+// not string concatenation, not a runtime variable). The struct-literal
+// escape from MESSAGE-CONST-LITERAL-01 is a static-only carve-out —
+// runtime PII at this argument would silently leak into the wire Message
+// field at 4xx status codes.
 func WrapOrInfra(err error, op, identifier string, fallbackCode errcode.Code, fallbackMsg string) error {
 	if cancelErr := Wrap(err, op, identifier); cancelErr != nil {
 		return cancelErr

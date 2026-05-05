@@ -121,6 +121,9 @@ func log5xx(ctx context.Context, label string, ecErr *errcode.Error, status int,
 	if ecErr.Cause != nil {
 		logAttrs = append(logAttrs, slog.Any("cause", ecErr.Cause))
 	}
+	for _, attr := range ecErr.Details {
+		logAttrs = append(logAttrs, attr)
+	}
 	if ecErr.Kind == errcode.KindDeadlineExceeded {
 		if reason := ctxcancel.ReasonFromDetails(ecErr); reason != "" {
 			logAttrs = append(logAttrs, slog.String("cancel_reason", reason))
@@ -162,7 +165,14 @@ func writeErrcodeError(ctx context.Context, w http.ResponseWriter, label string,
 		// Replace internal code/message with public sentinel before serialising;
 		// Error.MarshalJSON also strips Details for 5xx, so the resulting wire
 		// body never carries runtime context out of the process.
-		out = &errcode.Error{Kind: ecErr.Kind, Code: publicCode, Message: public5xxMessage(status)}
+		switch status {
+		case http.StatusServiceUnavailable:
+			out = errcode.New(ecErr.Kind, publicCode, msgServiceUnavailable)
+		case http.StatusGatewayTimeout:
+			out = errcode.New(ecErr.Kind, publicCode, msgGatewayTimeout)
+		default:
+			out = errcode.New(ecErr.Kind, publicCode, msgInternalServerError)
+		}
 	}
 
 	writeErrorBody(ctx, w, status, out)
@@ -195,16 +205,5 @@ func writeErrorBody(ctx context.Context, w http.ResponseWriter, status int, ecEr
 		"error": inner,
 	}); encErr != nil {
 		slog.Error("httputil: encode error response", slog.Any("error", encErr))
-	}
-}
-
-func public5xxMessage(status int) string {
-	switch status {
-	case http.StatusServiceUnavailable:
-		return msgServiceUnavailable
-	case http.StatusGatewayTimeout:
-		return msgGatewayTimeout
-	default:
-		return msgInternalServerError
 	}
 }

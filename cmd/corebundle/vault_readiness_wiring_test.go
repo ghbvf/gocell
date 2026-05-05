@@ -190,7 +190,8 @@ func TestA19_ConfigCoreModule_RegistersKeyProviderReadiness(t *testing.T) {
 	})
 
 	// PR-A35 envelope: 503 /readyz responses carry the dependency breakdown
-	// inside {"error": {"code":"ERR_SERVICE_UNAVAILABLE", "details": {...}}}.
+	// inside {"error": {"code":"ERR_SERVICE_UNAVAILABLE", "details": {...}}}
+	// where "details" is the health-diagnostic object (not errcode array<{key,value}>).
 	var envelope struct {
 		Error struct {
 			Code    string `json:"code"`

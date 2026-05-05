@@ -33,18 +33,19 @@ func TestErrcodeLiteralConstructionBanned(t *testing.T) {
 		if strings.HasPrefix(rel, "pkg/errcode/") {
 			continue
 		}
-		// pkg/ctxcancel is a thin bridge helper that constructs errors from
-		// dynamic parameters passed in by callers. Its WrapOrInfra signature
-		// must accept a variable fallbackMsg; exempting the package from the
-		// struct-literal ban is narrower than a full exemption from MESSAGE-CONST.
-		if strings.HasPrefix(rel, "pkg/ctxcancel/") {
+		// pkg/ctxcancel/ctxcancel.go is a thin bridge helper: WrapOrInfra accepts
+		// a caller-supplied fallbackMsg param; struct literal is the only way to
+		// splice a runtime-supplied Message without violating
+		// MESSAGE-CONST-LITERAL-01 at every call site. File-level allowlist —
+		// new files in pkg/ctxcancel/ are NOT exempt automatically.
+		if rel == "pkg/ctxcancel/ctxcancel.go" {
 			continue
 		}
-		// pkg/httputil response.go constructs ephemeral errcode.Error views for
-		// HTTP serialisation: WritePublicError takes a caller-supplied message
-		// string, and writeErrcodeError builds a sanitised 5xx sentinel.
-		// Neither escapes beyond the response body; MESSAGE-CONST does not apply.
-		if strings.HasPrefix(rel, "pkg/httputil/") {
+		// pkg/httputil/response.go is the HTTP serialisation boundary:
+		// WritePublic accepts a framework-selected message string, and
+		// writeErrcodeError builds a sanitised 5xx sentinel. File-level
+		// allowlist — other files in pkg/httputil/ are NOT exempt.
+		if rel == "pkg/httputil/response.go" {
 			continue
 		}
 		hits, err := findErrcodeErrorLiterals(file)

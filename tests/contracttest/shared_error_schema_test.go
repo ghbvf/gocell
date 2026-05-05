@@ -88,6 +88,10 @@ func TestSharedErrorSchema_InvalidSamples(t *testing.T) {
 			name: "missing details",
 			body: `{"error":{"code":"ERR_INTERNAL","message":"oops"}}`,
 		},
+		{
+			name: "details as object (legacy form, must be rejected)",
+			body: `{"error":{"code":"ERR_INTERNAL","message":"oops","details":{"key":"value"}}}`,
+		},
 	}
 
 	for _, tt := range tests {

@@ -118,12 +118,13 @@ func waitForHealthy(t *testing.T, addr string) {
 // readyzPayload extracts the readyz inner payload regardless of envelope.
 // PR-A35 wraps /readyz in {"data": {...}} on 200 and
 // {"error": {"details": {...}}} on 503; both shapes carry the same fields
-// (status, cells, dependencies, adapters). The helper lets a single
-// assertion path work whether the response was 200 or 503.
+// (status, cells, dependencies, adapters). The 503 "details" is the health
+// diagnostic object (not the errcode array<{key,value}> form). The helper
+// lets a single assertion path work whether the response was 200 or 503.
 //
 // All 401 responses on /readyz?verbose now share the canonical envelope shape
 // emitted by httputil.WritePublic — {"error":{"code":"ERR_READYZ_VERBOSE_DENIED",
-// "message":"...","details":{},"request_id":"..."}} — regardless of which layer
+// "message":"...","details":[],"request_id":"..."}} — regardless of which layer
 // rejected (route-group middleware or handler-layer gate). Callers asserting on
 // dependencies/cells must check the response status code first; this helper
 // only normalises the body shape.

@@ -169,6 +169,9 @@ func TestWriteError_5xxMasksMessageCodeDetailsAndLogsDiagnostics(t *testing.T) {
 	assertStringAttr(t, *errRec, "internal", "select config_entries failed")
 	assertStringAttr(t, *errRec, "cause", cause.Error())
 	assertStringAttr(t, *errRec, "request_id", "req-5xx")
+	// Details must be logged server-side even for 5xx (framework strips them
+	// from the wire response but preserves them in slog for diagnostics).
+	assertStringAttr(t, *errRec, "tenant", "admin@example.com")
 	assertAttrAbsent(t, *errRec, "message")
 }
 

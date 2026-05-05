@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://gocell.dev/schemas/errors/error-response-v1.schema.json",
   "title": "GoCell HTTP error response",
-  "description": "Canonical envelope produced by pkg/httputil.WriteDomainError / WriteError / WritePublicError.",
+  "description": "Canonical envelope produced by pkg/httputil.WriteError and pkg/httputil.WritePublic.",
   "type": "object",
   "required": ["error"],
   "additionalProperties": false,
