@@ -60,7 +60,6 @@ This document lists every adapter shipped with GoCell and its configuration surf
 | `ReconnectBaseDelay` | duration | no | 1s | Initial delay for exponential backoff |
 | `ChannelPoolSize` | int | no | 10 | Maximum number of channels in the pool |
 | `ConfirmTimeout` | duration | no | 5s | Timeout for publisher confirm mode |
-| `MaxReconnectAttempts` | int | no | 0 | Maximum reconnection attempts (0 = unlimited). When exceeded, connection enters terminal state |
 
 ### ConsumerBase Config (`ConsumerBaseConfig`)
 

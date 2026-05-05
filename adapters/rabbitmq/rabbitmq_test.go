@@ -417,8 +417,10 @@ func TestNewConnection_DialFails(t *testing.T) {
 
 func TestNewConnection_PermanentDialError(t *testing.T) {
 	// Initial connection with permanent error should return ErrAdapterAMQPConnectPermanent.
+	// Real-world broker handshake rejection sets Server=true; the local-synthesis
+	// 501 carve-out (Server=false) is covered by the transient retry tests.
 	dialFunc := func(url string) (AMQPConnection, error) {
-		return nil, &amqp.Error{Code: 403, Reason: "ACCESS_REFUSED", Recover: false}
+		return nil, &amqp.Error{Code: 403, Reason: "ACCESS_REFUSED", Server: true, Recover: false}
 	}
 
 	_, err := NewConnection(Config{
@@ -818,18 +820,10 @@ func TestConnection_ReconnectLoop_DisconnectAndReconnect(t *testing.T) {
 	}, testtime.D2s, testtime.D10ms, "reconnectLoop should have reconnected")
 }
 
-// NOTE: TestConnection_ReconnectLoop_PermanentError_ExitsLoop deleted (A.1).
-// Runtime reconnect never exits on permanent classification; permanent errors
-// surface only at NewConnection time (see TestNewConnection_PermanentDialError).
-//
-// NOTE: TestConnection_MaxReconnectAttempts_Exceeded deleted (A.1).
-// MaxReconnectAttempts is now a retained-but-ignored field; reconnect is
-// always unbounded until closeCh fires. The successor test is
-// TestConnection_ReconnectWithBackoff_TransientError_ContinuesIndefinitely.
-
 func TestConnection_ReconnectLoop_RetriesIndefinitelyUntilRecovery(t *testing.T) {
-	// A.1 behavior: after disconnect, reconnectLoop keeps retrying transient
-	// errors indefinitely and eventually recovers without any attempt cap.
+	// After disconnect, reconnectLoop keeps retrying transient errors indefinitely
+	// and eventually recovers without any attempt cap. Permanent errors transition
+	// to StateTerminal (covered by TestReconnectLoop_PermanentError_ExitsLoop).
 	var mu sync.Mutex
 	dialCount := 0
 	mocks := []*mockConnection{newMockConnection(), newMockConnection()}
@@ -1041,11 +1035,6 @@ func TestSanitizeURL(t *testing.T) {
 	}
 }
 
-// NOTE: TestConnection_ReconnectWithBackoff_PermanentError deleted (A.1 semantics).
-// Runtime reconnect no longer classifies errors as permanent; permanent dial
-// errors surface only at NewConnection time. See
-// TestNewConnection_PermanentDialError for startup-path permanent classification.
-
 func TestConnection_ReconnectWithBackoff_RecoverableError_ThenSuccess(t *testing.T) {
 	var mu sync.Mutex
 	dialCount := 0
@@ -1112,10 +1101,11 @@ func TestConnection_ReconnectWithBackoff_CloseCh(t *testing.T) {
 }
 
 // TestConnection_ReconnectWithBackoff_TransientError_ContinuesIndefinitely
-// verifies A.1 semantics: once established, reconnect keeps retrying through
-// transient dial errors (including those that the amqp091-go library wraps as
+// verifies that once established, reconnect keeps retrying through transient
+// dial errors (including those that the amqp091-go library wraps as
 // *amqp.Error with Recover=false such as AMQP 501 from mid-handshake TCP
-// resets during a broker restart). Only closeCh stops the loop.
+// resets during a broker restart) until closeCh fires or a broker-classified
+// permanent error is encountered (see TestReconnectWithBackoff_PermanentError_*).
 func TestConnection_ReconnectWithBackoff_TransientError_ContinuesIndefinitely(t *testing.T) {
 	var mu sync.Mutex
 	dialCount := 0
@@ -3585,10 +3575,6 @@ func TestConsumerBase_WrapWithClaimer_ExplicitReject_NoRetry(t *testing.T) {
 // longer detects-and-upgrades a wrapped PermanentError. Coverage moved to
 // kernel/outbox.TestConsumerBase_Wrap_WrappedPermanentErrorInRequeue_NotEscalated.
 
-// NOTE: TestConnection_MaxReconnectAttempts_One deleted (A.1 semantics).
-// Reconnect has no attempt cap; successor behavior is covered by
-// TestConnection_ReconnectWithBackoff_TransientError_ContinuesIndefinitely.
-
 // =============================================================================
 // ExponentialDelay boundary tests (S3 P2)
 // =============================================================================
@@ -3620,7 +3606,6 @@ func TestIsTerminalConnectionError(t *testing.T) {
 		terminal bool
 	}{
 		{"permanent", errcode.New(errcode.KindInternal, ErrAdapterAMQPConnectPermanent, "bad creds"), true},
-		{"exhausted", errcode.New(errcode.KindInternal, ErrAdapterAMQPReconnectExhausted, "max attempts"), true},
 		{"transient", errcode.New(errcode.KindInternal, ErrAdapterAMQPConnect, "timeout"), false},
 		{"publish", errcode.New(errcode.KindInternal, ErrAdapterAMQPPublish, "channel error"), false},
 		{"nil", nil, false},
@@ -3631,34 +3616,6 @@ func TestIsTerminalConnectionError(t *testing.T) {
 			assert.Equal(t, tt.terminal, isTerminalConnectionError(tt.err))
 		})
 	}
-}
-
-func TestPublisher_Publish_ReconnectExhausted_ReturnsPermanentError(t *testing.T) {
-	// When Connection is in terminal state with ReconnectExhausted,
-	// Publish should return ErrAdapterAMQPReconnectExhausted (not generic publish error).
-	conn := &Connection{
-		config: Config{
-			URL:             testAMQPURL,
-			ChannelPoolSize: 2,
-			ConfirmTimeout:  testtime.EventuallyLong,
-		},
-		channelPool:  make(chan AMQPChannel, 2),
-		closeCh:      make(chan struct{}),
-		connected:    make(chan struct{}),
-		terminalCh:   make(chan struct{}),
-		clock:        clock.Real(),
-		permanentErr: errcode.New(errcode.KindInternal, ErrAdapterAMQPReconnectExhausted, "max attempts exceeded"),
-	}
-	close(conn.terminalCh)
-
-	pub := NewPublisher(conn, WithPublisherClock(clock.Real()))
-	err := pub.Publish(context.Background(), "test.topic", []byte("payload"))
-
-	require.Error(t, err)
-	var ecErr *errcode.Error
-	require.True(t, errors.As(err, &ecErr))
-	assert.Equal(t, ErrAdapterAMQPReconnectExhausted, ecErr.Code,
-		"Publish in terminal state (reconnect exhausted) should return ReconnectExhausted error, not generic publish error")
 }
 
 // =============================================================================
@@ -3779,11 +3736,6 @@ func TestConnection_Health_DuringReconnect(t *testing.T) {
 		return conn.Health(context.Background()) == nil
 	}, testtime.D2s, time.Millisecond, "Health() should return nil after successful reconnect")
 }
-
-// NOTE: TestConnection_MaxReconnectAttempts_PermanentOverridesExhaustion deleted (A.1).
-// Runtime reconnect no longer distinguishes permanent vs transient; all errors
-// are retried indefinitely. Startup-time permanent classification is covered
-// by TestNewConnection_PermanentDialError.
 
 // =============================================================================
 // RMQ-RACE-01: WaitConnected stale channel re-validation
