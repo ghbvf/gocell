@@ -1074,7 +1074,7 @@ func TestHub_TokenExpiry_EvictsOnPing(t *testing.T) {
 	p := &auth.Principal{
 		Kind:      auth.PrincipalUser,
 		Subject:   "expiring",
-		ExpiresAt: fc.Now().Add(time.Hour), // 1h from now
+		ExpiresAt: fc.Now().Add(testtime.D1h),
 	}
 	conn := newFakeConnWithPrincipal("expiring", p)
 	require.NoError(t, hub.Register(context.Background(), conn))
@@ -1082,7 +1082,7 @@ func TestHub_TokenExpiry_EvictsOnPing(t *testing.T) {
 	require.Equal(t, 1, hub.ConnCount())
 
 	// Advance clock past expiry; next ping tick must evict.
-	fc.Advance(2 * time.Hour)
+	fc.Advance(testtime.D2h)
 
 	require.Eventually(t, func() bool {
 		return hub.ConnCount() == 0 && conn.isClosed()
@@ -1108,7 +1108,7 @@ func TestHub_TokenExpiry_ZeroExpiryNeverEvicts(t *testing.T) {
 	// ExpiresAt is zero ("no expiry"). Use a bounded advance that clockmock can
 	// replay without exhausting the test timeout (avoids O(advance/interval)
 	// ticker iterations in clockmock).
-	fc.Advance(2 * time.Hour)
+	fc.Advance(testtime.D2h)
 
 	time.Sleep(testtime.D50ms) //archtest:allow:test-sleep negative test: must NOT evict
 	assert.Equal(t, 1, hub.ConnCount())
@@ -1194,12 +1194,12 @@ func TestHub_SubjectIdx_EmptyAfterTokenExpiry(t *testing.T) {
 	cfg.PingTimeout = testtime.FastPoll
 	hub := startHub(t, cfg, nil)
 
-	p := &auth.Principal{Kind: auth.PrincipalUser, Subject: "alice", ExpiresAt: fc.Now().Add(time.Hour)}
+	p := &auth.Principal{Kind: auth.PrincipalUser, Subject: "alice", ExpiresAt: fc.Now().Add(testtime.D1h)}
 	conn := newFakeConnWithPrincipal("a", p)
 	require.NoError(t, hub.Register(context.Background(), conn))
 	<-conn.readyCh
 
-	fc.Advance(2 * time.Hour)
+	fc.Advance(testtime.D2h)
 
 	require.Eventually(t, func() bool { return hub.ConnCount() == 0 }, testtime.D2s, testtime.D10ms)
 
