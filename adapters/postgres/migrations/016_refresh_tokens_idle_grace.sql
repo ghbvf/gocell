@@ -32,8 +32,8 @@
 
 -- ADD COLUMN statements run outside a transaction (NO TRANSACTION mode) so
 -- they can be paired with CREATE INDEX CONCURRENTLY below. CREATE INDEX
--- CONCURRENTLY cannot run inside a transaction block; the +goose NO
--- TRANSACTION directive lifts that constraint for the whole migration.
+-- CONCURRENTLY cannot run inside a transaction block; the goose NO TRANSACTION
+-- directive at the top of this file lifts that constraint for the whole migration.
 -- idle_expires_at is NOT NULL with no DEFAULT (PR#528 dropped the
 -- migration-time DEFAULT) — this only succeeds against an empty table.
 -- See DEV NOTE at the top of this file for upgrade flow.
