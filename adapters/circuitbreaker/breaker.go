@@ -244,6 +244,14 @@ func (b *breaker) setState(target State, now time.Time, ts *[]stateTransition) {
 // fireTransitions invokes the user OnStateChange callback and emits a slog
 // Info event for each collected transition. Called after b.mu is released to
 // avoid reentrant deadlock when the callback calls Allow() or State().
+//
+// Each callback is wrapped in defer-recover via invokeStateChange to prevent
+// a panicking callback from corrupting the state machine — fireTransitions
+// runs after counts.Requests++ in beforeRequest, so an unrecovered panic
+// would strand the half-open probe slot and permanently reject all subsequent
+// requests (half-open has no expiry).
+//
+// ref: net/http.Server — per-handler recover prevents server crash
 func (b *breaker) fireTransitions(ts []stateTransition) {
 	for _, t := range ts {
 		slog.Info("circuitbreaker: state transition",
@@ -251,9 +259,26 @@ func (b *breaker) fireTransitions(ts []stateTransition) {
 			"from", t.prev.String(),
 			"to", t.next.String())
 		if b.onStateChange != nil {
-			b.onStateChange(t.name, t.prev, t.next)
+			b.invokeStateChange(t)
 		}
 	}
+}
+
+// invokeStateChange calls the user OnStateChange callback for one transition,
+// recovering from any panic so the state machine continues to function.
+// The panic is logged at Error level (per .claude/rules/gocell/observability.md —
+// "状态机违规" qualifies for Error level).
+func (b *breaker) invokeStateChange(t stateTransition) {
+	defer func() {
+		if r := recover(); r != nil {
+			slog.Error("circuitbreaker: OnStateChange callback panicked",
+				"name", t.name,
+				"from", t.prev.String(),
+				"to", t.next.String(),
+				"panic", r)
+		}
+	}()
+	b.onStateChange(t.name, t.prev, t.next)
 }
 
 // toNewGeneration bumps the generation counter, resets counts, and sets

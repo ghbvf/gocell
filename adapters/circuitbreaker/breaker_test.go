@@ -449,6 +449,54 @@ func TestAdapter_IsSuccessful_CustomClassifier(t *testing.T) {
 		"custom IsSuccessful must classify sentinel error as success, not failure")
 }
 
+// TestAdapter_OnStateChange_PanicDoesNotStrandHalfOpenSlot verifies that a
+// panicking OnStateChange callback fired during the open→half-open transition
+// does not leave the probe slot consumed forever. Without recovery the
+// callback panic would propagate out of Allow(), the done callback would never
+// be returned to the caller, counts.Requests would stay at 1, and half-open
+// (which has no expiry) would reject all subsequent requests permanently.
+//
+// Regression: PR#385 review FIND (post-FIND-001 reordering placed the callback
+// after counts.Requests++).
+func TestAdapter_OnStateChange_PanicDoesNotStrandHalfOpenSlot(t *testing.T) {
+	t.Parallel()
+
+	var fireCount atomic.Int32
+	a, fc := mustNewWithClock(t, Config{
+		Name:        "panic-strand",
+		MaxRequests: 1,
+		Timeout:     testtime.D100ms,
+		OnStateChange: func(name string, from, to State) {
+			if from == StateOpen && to == StateHalfOpen {
+				fireCount.Add(1)
+				panic("test: simulated callback panic")
+			}
+		},
+	})
+
+	// Trip the breaker (closed → open).
+	for range 6 {
+		_, done := a.Allow()
+		done(errors.New("failure"))
+	}
+	require.Equal(t, StateOpen, a.State())
+
+	// Advance past Timeout so the next Allow triggers open → half-open.
+	fc.Advance(testtime.D100ms + smallDelta)
+
+	// First Allow after timeout: triggers transition + panics in callback.
+	// With recovery, Allow returns (true, done) cleanly. Without recovery,
+	// the panic would propagate and strand counts.Requests=1.
+	allowed, done := a.Allow()
+	require.True(t, allowed, "first half-open probe must succeed even when callback panics")
+	require.NotNil(t, done, "done must be returned so caller can release the slot")
+	require.Equal(t, int32(1), fireCount.Load(), "callback fired exactly once")
+
+	// Caller releases the slot with a successful probe → close.
+	done(nil)
+	require.Equal(t, StateClosed, a.State(), "successful probe must close the breaker")
+}
+
 // TestAdapter_OnStateChange_NotCalledConcurrently verifies that the
 // closed→open transition is recorded exactly once even under concurrent load.
 func TestAdapter_OnStateChange_NotCalledConcurrently(t *testing.T) {
