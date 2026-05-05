@@ -605,7 +605,6 @@ func TestConnection_WaitConnected_Timeout(t *testing.T) {
 		channelPool: make(chan AMQPChannel, 5),
 		closeCh:     make(chan struct{}),
 		connected:   make(chan struct{}), // Never closed = never connected.
-		terminalCh:  make(chan struct{}),
 		clock:       clock.Real(),
 	}
 
@@ -822,8 +821,9 @@ func TestConnection_ReconnectLoop_DisconnectAndReconnect(t *testing.T) {
 
 func TestConnection_ReconnectLoop_RetriesIndefinitelyUntilRecovery(t *testing.T) {
 	// After disconnect, reconnectLoop keeps retrying transient errors indefinitely
-	// and eventually recovers without any attempt cap. Permanent errors transition
-	// to StateTerminal (covered by TestReconnectLoop_PermanentError_ExitsLoop).
+	// and eventually recovers without any attempt cap. Permanent classifications
+	// stay inside the same retry loop (permanentErr surfaced via Health/WaitConnected,
+	// reconnect goroutine alive); see TestReconnectWithBackoff_PermanentError_*.
 	var mu sync.Mutex
 	dialCount := 0
 	mocks := []*mockConnection{newMockConnection(), newMockConnection()}
@@ -1106,10 +1106,9 @@ func TestConnection_ReconnectWithBackoff_RecoverableError_ThenSuccess(t *testing
 			}
 			return newMockConnection(), nil
 		},
-		closeCh:    make(chan struct{}),
-		connected:  make(chan struct{}),
-		terminalCh: make(chan struct{}),
-		clock:      clock.Real(),
+		closeCh:   make(chan struct{}),
+		connected: make(chan struct{}),
+		clock:     clock.Real(),
 	}
 
 	assert.True(t, conn.reconnectWithBackoff(), "must return true after successful reconnect")
@@ -1130,10 +1129,9 @@ func TestConnection_ReconnectWithBackoff_CloseCh(t *testing.T) {
 		dial: func(url string) (AMQPConnection, error) {
 			return nil, &net.OpError{Op: "dial", Err: errors.New("connection refused")}
 		},
-		closeCh:    closeCh,
-		connected:  make(chan struct{}),
-		terminalCh: make(chan struct{}),
-		clock:      clock.Real(),
+		closeCh:   closeCh,
+		connected: make(chan struct{}),
+		clock:     clock.Real(),
 	}
 
 	done := make(chan bool, 1)
@@ -1178,10 +1176,9 @@ func TestConnection_ReconnectWithBackoff_TransientError_ContinuesIndefinitely(t 
 			mu.Unlock()
 			return nil, transientAMQP501
 		},
-		closeCh:    closeCh,
-		connected:  make(chan struct{}),
-		terminalCh: make(chan struct{}),
-		clock:      clock.Real(),
+		closeCh:   closeCh,
+		connected: make(chan struct{}),
+		clock:     clock.Real(),
 	}
 
 	done := make(chan bool, 1)
@@ -1340,12 +1337,9 @@ func TestPublisher_Publish_TerminalState_ReturnsPermanentError(t *testing.T) {
 		channelPool:  make(chan AMQPChannel, 2),
 		closeCh:      make(chan struct{}),
 		connected:    make(chan struct{}),
-		terminalCh:   make(chan struct{}),
 		clock:        clock.Real(),
 		permanentErr: errcode.New(errcode.KindInternal, ErrAdapterAMQPConnectPermanent, "access refused"),
 	}
-	close(conn.terminalCh)
-
 	pub := NewPublisher(conn, WithPublisherClock(clock.Real()))
 	err := pub.Publish(context.Background(), "test.topic", []byte("payload"))
 
@@ -1824,7 +1818,6 @@ func TestSubscriber_ReconnectLoop_CtxCancelledDuringWait(t *testing.T) {
 		channelPool: make(chan AMQPChannel, 5),
 		closeCh:     make(chan struct{}),
 		connected:   make(chan struct{}), // Never closed = never connected.
-		terminalCh:  make(chan struct{}),
 		clock:       clock.Real(),
 	}
 
@@ -2005,7 +1998,6 @@ func TestSubscriber_Subscribe_ClosedDuringReconnect(t *testing.T) {
 		channelPool: make(chan AMQPChannel, 5),
 		closeCh:     make(chan struct{}),
 		connected:   make(chan struct{}),
-		terminalCh:  make(chan struct{}),
 		clock:       clock.Real(),
 	}
 	// Mark as initially connected.
@@ -3807,7 +3799,6 @@ func TestConnection_WaitConnected_StaleChannelRetry(t *testing.T) {
 		channelPool: make(chan AMQPChannel, 5),
 		closeCh:     make(chan struct{}),
 		connected:   make(chan struct{}),
-		terminalCh:  make(chan struct{}),
 		clock:       clock.Real(),
 		state:       StateConnected,
 	}
@@ -3858,7 +3849,6 @@ func TestConnection_WaitConnected_RaceRevalidation(t *testing.T) {
 		channelPool: make(chan AMQPChannel, 5),
 		closeCh:     make(chan struct{}),
 		connected:   oldConnected,
-		terminalCh:  make(chan struct{}),
 		clock:       clock.Real(),
 		conn:        mockConn,
 		state:       StateConnected,
@@ -3914,7 +3904,6 @@ func TestConnection_WaitConnected_ConcurrentDisconnectReconnect(t *testing.T) {
 		channelPool: make(chan AMQPChannel, 5),
 		closeCh:     make(chan struct{}),
 		connected:   initialConnected,
-		terminalCh:  make(chan struct{}),
 		clock:       clock.Real(),
 		conn:        mockConn,
 		state:       StateConnecting, // not yet connected
@@ -4020,8 +4009,8 @@ func TestConnection_Health_StateDistinction(t *testing.T) {
 			wantCode: ErrAdapterAMQPReconnecting,
 		},
 		{
-			name:     "StateTerminal permanent error",
-			state:    StateTerminal,
+			name:     "permanentErr supersedes phase (runtime classification)",
+			state:    StateDisconnected,
 			conn:     nil,
 			permErr:  errcode.New(errcode.KindInternal, ErrAdapterAMQPConnectPermanent, "bad creds"),
 			wantCode: ErrAdapterAMQPConnectPermanent,
@@ -4035,7 +4024,6 @@ func TestConnection_Health_StateDistinction(t *testing.T) {
 				channelPool:  make(chan AMQPChannel, 1),
 				closeCh:      make(chan struct{}),
 				connected:    make(chan struct{}),
-				terminalCh:   make(chan struct{}),
 				clock:        clock.Real(),
 				state:        tt.state,
 				conn:         tt.conn,
@@ -4064,18 +4052,16 @@ func TestConnection_ConnectionStatus(t *testing.T) {
 		{"connecting", StateConnecting, StateConnecting},
 		{"connected", StateConnected, StateConnected},
 		{"disconnected", StateDisconnected, StateDisconnected},
-		{"terminal", StateTerminal, StateTerminal},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			c := &Connection{
-				config:     Config{URL: "amqp://test@localhost/"},
-				closeCh:    make(chan struct{}),
-				connected:  make(chan struct{}),
-				terminalCh: make(chan struct{}),
-				clock:      clock.Real(),
-				state:      tt.state,
+				config:    Config{URL: "amqp://test@localhost/"},
+				closeCh:   make(chan struct{}),
+				connected: make(chan struct{}),
+				clock:     clock.Real(),
+				state:     tt.state,
 			}
 			assert.Equal(t, tt.want, c.ConnectionStatus().State)
 		})
@@ -4089,7 +4075,6 @@ func TestConnection_ConnectionStatus_StructuredDiagnosticSanitizesError(t *testi
 		config:            Config{URL: rawURL},
 		closeCh:           make(chan struct{}),
 		connected:         make(chan struct{}),
-		terminalCh:        make(chan struct{}),
 		clock:             clock.Real(),
 		state:             StateDisconnected,
 		lastError:         sanitizeErrorURL("read "+rawURL+": EOF", rawURL),
@@ -4126,7 +4111,6 @@ func TestConnection_Close_LogsStructuredDiagnostic(t *testing.T) {
 		conn:              mockConn,
 		closeCh:           make(chan struct{}),
 		connected:         make(chan struct{}),
-		terminalCh:        make(chan struct{}),
 		clock:             clock.Real(),
 		channelPool:       make(chan AMQPChannel, 3),
 		state:             StateDisconnected,
@@ -4228,7 +4212,6 @@ func TestConnectionPhase_String(t *testing.T) {
 		{StateConnecting, "connecting"},
 		{StateConnected, "connected"},
 		{StateDisconnected, "disconnected"},
-		{StateTerminal, "terminal"},
 		{ConnectionPhase(99), "unknown(99)"},
 	}
 	for _, tt := range tests {
@@ -4256,7 +4239,8 @@ func TestConsumerBase_RetryExhaustion(t *testing.T) {
 			RetryBaseDelay: testtime.D10ms,
 			IdempotencyTTL: testtime.D1h,
 		},
-		clock.Real())
+		clock.Real(),
+	)
 	require.NoError(t, cbErr)
 
 	callCount := 0
@@ -4297,7 +4281,6 @@ func TestPublisher_Publish_ClosesChannel(t *testing.T) {
 		channelPool: make(chan AMQPChannel, 5),
 		closeCh:     make(chan struct{}),
 		connected:   make(chan struct{}),
-		terminalCh:  make(chan struct{}),
 		clock:       clock.Real(),
 		state:       StateConnected,
 		conn:        mc,
@@ -4333,7 +4316,6 @@ func TestPublisher_Publish_CloseError_DoesNotMaskResult(t *testing.T) {
 		channelPool: make(chan AMQPChannel, 5),
 		closeCh:     make(chan struct{}),
 		connected:   make(chan struct{}),
-		terminalCh:  make(chan struct{}),
 		clock:       clock.Real(),
 		state:       StateConnected,
 		conn:        mc,

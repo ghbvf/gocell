@@ -61,6 +61,24 @@ This document lists every adapter shipped with GoCell and its configuration surf
 | `ChannelPoolSize` | int | no | 10 | Maximum number of channels in the pool |
 | `ConfirmTimeout` | duration | no | 5s | Timeout for publisher confirm mode |
 
+#### Migration note: `MaxReconnectAttempts` removed (PR-V1-RMQ-TERMINAL, 029 A4)
+
+The `MaxReconnectAttempts` field was removed. It had been silently ignored
+since PR#173 (A.1) made runtime reconnect unbounded. PR-V1-RMQ-TERMINAL
+keeps that unbounded retry but adds **soft permanent classification**: when
+the broker rejects the handshake (revoked credentials, deleted vhost, hard
+protocol error), `Connection.Health()` and `WaitConnected()` return
+`ErrAdapterAMQPConnectPermanent` while the reconnect goroutine keeps trying
+in the background. `/readyz` flips to 503 (status code only — the
+`rabbitmq_ready` probe text is exposed only on `/readyz?verbose=true`,
+see `docs/ops/readyz.md`); a successful dial after operator remediation
+clears the classification automatically (no pod restart required).
+
+There is no replacement field — the design intentionally has no per-config
+attempt cap. Behavior is now uniform across all `Config` instances:
+`ReconnectMaxBackoff` caps the backoff delay; the reconnect loop runs until
+`Close` is called.
+
 ### ConsumerBase Config (`ConsumerBaseConfig`)
 
 | Field | Type | Required | Default | Description |
