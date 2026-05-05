@@ -194,7 +194,6 @@
 - **`golang.org/x/tools`**（archtest / codegen 仅编译期）
 - **`golang.org/x/crypto`**（auth + securecookie）
 - **`golang-jwt/jwt/v5`**（runtime/auth）
-- **`go-chi/chi/v5`**（HTTP 路由，可替换见 §2）
 - **`pgx/v5`** + **`goose/v3`**（postgres adapter）
 - **`go-redis/v9`**（redis adapter）
 - **`hashicorp/vault/api`**（vault adapter，链巨大）
@@ -202,7 +201,7 @@
 - **`google/uuid`**（idutil）
 - **`felixge/httpsnoop`**（HTTP middleware，可替换见 §2）
 
-约 11 个非 stdlib 直接依赖即可跑 corebundle 默认平台。
+约 10 个非 stdlib 直接依赖即可跑 corebundle 默认平台。（`go-chi/chi/v5` 已随 PR#367 D8 删除；`sony/gobreaker/v2` 已随 PR-V1-CIRCUITBREAKER-INHOUSE-ERRCODE 删除）
 
 ---
 
@@ -225,12 +224,12 @@
 
 | 项 | 内容 |
 |---|---|
-| **现状** | 仅 `adapters/circuitbreaker/` 一处使用 |
-| **自实现复杂度** | 小（状态机 closed/open/half-open + counter，~150 LOC） |
-| **下沉位置** | `pkg/circuitbreaker/`（leaf 包） |
-| **影响面** | 1 个 adapter 文件 + 几个 cell 注入点 |
-| **建议时机** | 任意 PR 路过该 adapter 时搭车修 |
-| **风险** | 低（业务弹性逻辑，无安全敏感） |
+| **现状** | ✅ 已 ship（PR 待补 URL）— sony/gobreaker/v2 已从 go.mod 删除 |
+| **自实现复杂度** | 小（状态机 closed/open/half-open + counter，~200 LOC，含 clock 注入） |
+| **下沉位置** | `adapters/circuitbreaker/`（与 ratelimit 同层，不下沉 pkg/） |
+| **影响面** | 仅 `adapters/circuitbreaker/breaker.go`（0 production caller 变更） |
+| **建议时机** | ✅ 已 ship（PR 待补 URL） |
+| **风险** | 低（业务弹性逻辑，无安全敏感）— sony/gobreaker 已删除，不再存在依赖风险 |
 
 ### 2.3 `felixge/httpsnoop` → 自写
 
