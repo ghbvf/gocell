@@ -134,3 +134,155 @@ func TestWrapSubscriber_PanicEndsSpan(t *testing.T) {
 
 	_, _ = wrapped(context.Background(), outbox.Entry{ID: "evt-panic", Topic: eventSpec().Topic})
 }
+
+func TestWrapSubscriber_ReturnsErrorsForInvalidInputs(t *testing.T) {
+	t.Parallel()
+
+	ackHandler := func(context.Context, outbox.Entry) (outbox.HandleResult, outbox.Settlement) {
+		return outbox.HandleResult{Disposition: outbox.DispositionAck}, nil
+	}
+
+	if _, err := wrapper.WrapSubscriber(wrapper.NoopTracer{}, eventSpec(), nil); err == nil {
+		t.Fatal("expected error on nil subscriber handler")
+	}
+	if _, err := wrapper.WrapSubscriber(wrapper.NoopTracer{}, loginSpec(), ackHandler); err == nil {
+		t.Fatal("expected error on non-event spec")
+	}
+
+	invalid := eventSpec()
+	invalid.ID = ""
+	if _, err := wrapper.WrapSubscriber(wrapper.NoopTracer{}, invalid, ackHandler); err == nil {
+		t.Fatal("expected error on invalid event spec")
+	}
+}
+
+func TestMustWrapSubscriber_PanicsOnInvalidInput(t *testing.T) {
+	t.Parallel()
+
+	defer func() {
+		if recover() == nil {
+			t.Fatal("expected panic on nil subscriber handler")
+		}
+	}()
+	_ = wrapper.MustWrapSubscriber(wrapper.NoopTracer{}, eventSpec(), nil)
+}
+
+func TestWrapSubscriber_NilTracerFallsBackToNoop(t *testing.T) {
+	t.Parallel()
+
+	wrapped := wrapper.MustWrapSubscriber(nil, eventSpec(),
+		func(context.Context, outbox.Entry) (outbox.HandleResult, outbox.Settlement) {
+			return outbox.HandleResult{Disposition: outbox.DispositionAck}, nil
+		})
+	res, settlement := wrapped(context.Background(), outbox.Entry{ID: "evt-noop", Topic: eventSpec().Topic})
+	if settlement != nil {
+		t.Fatalf("want nil settlement, got %T", settlement)
+	}
+	outbox.NotifySettlement(context.Background(), res, outbox.Entry{ID: "evt-noop", Topic: eventSpec().Topic},
+		outbox.DispositionAck, outbox.SettlementResultSuccess, nil)
+}
+
+func TestWrapSubscriber_SettlementStatusBranches(t *testing.T) {
+	tests := []struct {
+		name        string
+		disposition outbox.Disposition
+		result      outbox.SettlementResult
+		err         error
+		wantDesc    string
+	}{
+		{
+			name:        "reject_success",
+			disposition: outbox.DispositionReject,
+			result:      outbox.SettlementResultSuccess,
+			wantDesc:    "reject",
+		},
+		{
+			name:        "invalid_success",
+			disposition: outbox.Disposition(99),
+			result:      outbox.SettlementResultSuccess,
+			wantDesc:    "invalid disposition",
+		},
+		{
+			name:        "retry_exhausted",
+			disposition: outbox.DispositionReject,
+			result:      outbox.SettlementResultRetryExhausted,
+			err:         errors.New("retry budget exhausted"),
+			wantDesc:    "retry_exhausted",
+		},
+		{
+			name:        "ack_failed",
+			disposition: outbox.DispositionAck,
+			result:      outbox.SettlementResultAckFailed,
+			err:         errors.New("broker ack failed"),
+			wantDesc:    "ack_failed",
+		},
+		{
+			name:        "nack_failed",
+			disposition: outbox.DispositionRequeue,
+			result:      outbox.SettlementResultNackFailed,
+			err:         errors.New("broker nack failed"),
+			wantDesc:    "nack_failed",
+		},
+		{
+			name:        "unknown_result",
+			disposition: outbox.DispositionAck,
+			result:      outbox.SettlementResult("unexpected"),
+			err:         errors.New("unexpected settlement"),
+			wantDesc:    "unexpected",
+		},
+		{
+			name:        "empty_unknown_result",
+			disposition: outbox.DispositionAck,
+			result:      outbox.SettlementResult(""),
+			wantDesc:    "unknown settlement result",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tr := &spyTracer{}
+			wrapped := wrapper.MustWrapSubscriber(tr, eventSpec(),
+				func(context.Context, outbox.Entry) (outbox.HandleResult, outbox.Settlement) {
+					return outbox.HandleResult{Disposition: outbox.DispositionAck}, nil
+				})
+
+			entry := outbox.Entry{ID: "evt-" + tt.name, Topic: eventSpec().Topic}
+			res, _ := wrapped(context.Background(), entry)
+			outbox.NotifySettlement(context.Background(), res, entry, tt.disposition, tt.result, tt.err)
+
+			span := tr.only(t)
+			if !span.ended {
+				t.Fatal("span must end after settlement notification")
+			}
+			if span.status != wrapper.StatusError || span.stDesc != tt.wantDesc {
+				t.Fatalf("want error status %q, got %v/%q", tt.wantDesc, span.status, span.stDesc)
+			}
+			if len(span.errs) != 1 {
+				t.Fatalf("want exactly one recorded settlement error, got %d", len(span.errs))
+			}
+		})
+	}
+}
+
+func TestWrapSubscriber_SettlementObserverEndsSpanOnce(t *testing.T) {
+	tr := &spyTracer{}
+	wrapped := wrapper.MustWrapSubscriber(tr, eventSpec(),
+		func(context.Context, outbox.Entry) (outbox.HandleResult, outbox.Settlement) {
+			return outbox.HandleResult{Disposition: outbox.DispositionAck}, nil
+		})
+
+	entry := outbox.Entry{ID: "evt-once", Topic: eventSpec().Topic}
+	res, _ := wrapped(context.Background(), entry)
+	outbox.NotifySettlement(context.Background(), res, entry,
+		outbox.DispositionAck, outbox.SettlementResultSuccess, nil)
+	outbox.NotifySettlement(context.Background(), res, entry,
+		outbox.DispositionRequeue, outbox.SettlementResultNackFailed, errors.New("late duplicate"))
+
+	span := tr.only(t)
+	if span.status != wrapper.StatusOK || span.stDesc != "" {
+		t.Fatalf("span must keep first settlement status, got %v/%q", span.status, span.stDesc)
+	}
+	if len(span.errs) != 0 {
+		t.Fatalf("duplicate settlement must not record a second error, got %v", span.errs)
+	}
+}
