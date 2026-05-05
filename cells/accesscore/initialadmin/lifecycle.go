@@ -18,9 +18,9 @@ const hookName = "accesscore.initial-admin-bootstrap"
 // config mirrors the old initialAdminConfig from cells/accesscore/cell.go.
 // It is internal to the initialadmin package; exposed only through LifecycleOption.
 type config struct {
-	Username       string
-	Clock          clock.Clock
-	Hasher         PasswordHasher
+	Username string
+	Clock    clock.Clock
+	Hasher   PasswordHasher
 	// bootstrapCreds holds the env-driven credentials for the initial admin.
 	// Required: NewLifecycle is a no-op if nil when start() is called.
 	bootstrapCreds *BootstrapCredentials

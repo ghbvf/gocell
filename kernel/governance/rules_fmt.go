@@ -989,8 +989,10 @@ func hasNextCursorInRequired(info responseSchemaInfo) bool {
 	return slices.Contains(info.Required, "nextCursor")
 }
 
-const codeFMT27 = "FMT-27"
-const codeFMT28 = "FMT-28"
+const (
+	codeFMT27 = "FMT-27"
+	codeFMT28 = "FMT-28"
+)
 
 // validateFMT27 checks that auth.public, auth.bootstrap, and auth.passwordResetExempt
 // are three-way mutually exclusive on HTTP contract auth metadata.

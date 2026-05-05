@@ -1,7 +1,6 @@
 package auth
 
 import (
-	"context"
 	"net/http"
 )
 
@@ -13,6 +12,10 @@ func ExportedNewBootstrapMiddleware(creds BootstrapCredentials, limiter Bootstra
 
 // ExportedNewBootstrapMiddlewareWithHook exposes NewBootstrapMiddleware with
 // an onAuthFail observer for black-box tests.
-func ExportedNewBootstrapMiddlewareWithHook(creds BootstrapCredentials, limiter BootstrapRateLimiter, onAuthFail func(ctx context.Context, reason string)) func(http.Handler) http.Handler {
+func ExportedNewBootstrapMiddlewareWithHook(
+	creds BootstrapCredentials,
+	limiter BootstrapRateLimiter,
+	onAuthFail BootstrapAuthFailObserver,
+) func(http.Handler) http.Handler {
 	return NewBootstrapMiddleware(creds, limiter, onAuthFail)
 }

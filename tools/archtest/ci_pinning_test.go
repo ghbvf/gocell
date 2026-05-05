@@ -575,7 +575,6 @@ func findWorkflowStep(steps []workflowStep, name string) (workflowStep, bool) {
 	return workflowStep{}, false
 }
 
-
 // --- SEC-SETUP-CLOSURE RED tests (Batch 0, tests 17-18) ---
 // These tests verify that the three codegen verify steps move from build-test
 // into a new independent verify-codegen job (no needs: build-test).

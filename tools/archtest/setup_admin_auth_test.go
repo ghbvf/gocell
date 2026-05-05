@@ -4,7 +4,7 @@
 // Any deployment where the first-admin endpoint is JWT-exempt with no other
 // authentication gate is a product-level security vulnerability.
 //
-// AUTH-BOOTSTRAP-PATH-RESTRICTED-01
+// # AUTH-BOOTSTRAP-PATH-RESTRICTED-01
 //
 // Invariant: auth.bootstrap:true is only allowed on contracts whose path
 // contains "setup/admin". This flag enables HTTP Basic Auth using env
@@ -165,7 +165,7 @@ func TestFMT27_PublicBootstrapMutuallyExclusive(t *testing.T) {
 	}
 
 	if len(violations) == 0 {
-		t.Errorf("FMT27: expected 1 violation for public+bootstrap coexistence, got 0 — "+
+		t.Errorf("FMT27: expected 1 violation for public+bootstrap coexistence, got 0 — " +
 			"governance rule validateFMT27 not yet implemented (Batch 1 Agent-B)")
 	}
 }
@@ -222,7 +222,7 @@ func TestFMT28_BootstrapRestrictedToSetupAdminPath(t *testing.T) {
 	}
 
 	if len(violations) == 0 {
-		t.Errorf("FMT28: expected 1 violation for bootstrap on non-setup/admin path, got 0 — "+
+		t.Errorf("FMT28: expected 1 violation for bootstrap on non-setup/admin path, got 0 — " +
 			"governance rule validateFMT28 not yet implemented (Batch 1 Agent-B)")
 	}
 }

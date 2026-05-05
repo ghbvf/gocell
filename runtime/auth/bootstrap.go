@@ -49,6 +49,12 @@ type BootstrapAllowAllLimiter struct{}
 // Allow always returns true.
 func (BootstrapAllowAllLimiter) Allow(_ string) bool { return true }
 
+// BootstrapAuthFailObserver is invoked after a 401 response is written. The
+// reason string is one of: "missing_header", "wrong_credentials". Wiring an
+// observer is how callers route bootstrap auth failures to audit logs without
+// importing cells/ from runtime/auth.
+type BootstrapAuthFailObserver = func(ctx context.Context, reason string)
+
 // NewBootstrapMiddleware constructs the HTTP middleware chain for bootstrap
 // authentication. The chain is: RateLimit (per-IP) → Basic Auth header parse →
 // constant-time username/password comparison → uniform 401 envelope on any
@@ -62,7 +68,11 @@ func (BootstrapAllowAllLimiter) Allow(_ string) bool { return true }
 // Wire this middleware around the setup/admin handler to enforce D5 semantics:
 // env credentials authenticate the operator; body credentials define the admin
 // identity.
-func NewBootstrapMiddleware(creds BootstrapCredentials, limiter BootstrapRateLimiter, onAuthFail func(ctx context.Context, reason string)) func(http.Handler) http.Handler {
+func NewBootstrapMiddleware(
+	creds BootstrapCredentials,
+	limiter BootstrapRateLimiter,
+	onAuthFail BootstrapAuthFailObserver,
+) func(http.Handler) http.Handler {
 	return newBootstrapMiddleware(creds, limiter, onAuthFail)
 }
 
@@ -88,42 +98,56 @@ type bootstrapWindowedLimiter interface {
 // onAuthFail is called after writing the 401 response. nil → no-op.
 //
 // ref: Go stdlib crypto/subtle.ConstantTimeCompare (timing-safe equality)
-func newBootstrapMiddleware(creds BootstrapCredentials, limiter bootstrapRateLimiter, onAuthFail func(ctx context.Context, reason string)) func(http.Handler) http.Handler {
+func newBootstrapMiddleware(
+	creds BootstrapCredentials,
+	limiter bootstrapRateLimiter,
+	onAuthFail BootstrapAuthFailObserver,
+) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			ip := bootstrapClientIP(r)
-			if !limiter.Allow(ip) {
-				retryAfter := bootstrapRetryAfter(limiter)
-				w.Header().Set("Retry-After", strconv.Itoa(retryAfter))
-				httputil.WriteError(r.Context(), w,
-					errcode.New(errcode.KindRateLimited, errcode.ErrRateLimited, "too many requests"))
+			if !allowBootstrapRequest(w, r, limiter) {
 				return
 			}
-
-			user, pass, ok := r.BasicAuth()
-			if !ok {
+			if reason, ok := authenticateBootstrap(r, creds); !ok {
 				writeBootstrapAuthFailed(r.Context(), w)
 				if onAuthFail != nil {
-					onAuthFail(r.Context(), "missing_header")
-				}
-				return
-			}
-			// ConstantTimeCompare returns 1 only if both slices are equal AND same
-			// length. Combine via & (bitwise AND on int) so the boolean check is
-			// constant-time across both comparisons — no early return on the first
-			// mismatch.
-			userOK := subtle.ConstantTimeCompare([]byte(user), creds.Username)
-			passOK := subtle.ConstantTimeCompare([]byte(pass), creds.Password)
-			if userOK&passOK != 1 {
-				writeBootstrapAuthFailed(r.Context(), w)
-				if onAuthFail != nil {
-					onAuthFail(r.Context(), "wrong_credentials")
+					onAuthFail(r.Context(), reason)
 				}
 				return
 			}
 			next.ServeHTTP(w, r)
 		})
 	}
+}
+
+// allowBootstrapRequest enforces the per-IP rate limit and writes the 429
+// envelope on rejection. Returns true when the request should proceed.
+func allowBootstrapRequest(w http.ResponseWriter, r *http.Request, limiter bootstrapRateLimiter) bool {
+	if limiter.Allow(bootstrapClientIP(r)) {
+		return true
+	}
+	w.Header().Set("Retry-After", strconv.Itoa(bootstrapRetryAfter(limiter)))
+	httputil.WriteError(r.Context(), w,
+		errcode.New(errcode.KindRateLimited, errcode.ErrRateLimited, "too many requests"))
+	return false
+}
+
+// authenticateBootstrap parses Basic Auth and constant-time-compares the
+// supplied credentials against creds. Returns ("", true) on match;
+// ("missing_header"|"wrong_credentials", false) on failure. ConstantTimeCompare
+// returns 1 only when the slices are equal AND same length; AND-ing the two
+// results bitwise keeps the check constant-time across both comparisons.
+func authenticateBootstrap(r *http.Request, creds BootstrapCredentials) (string, bool) {
+	user, pass, ok := r.BasicAuth()
+	if !ok {
+		return "missing_header", false
+	}
+	userOK := subtle.ConstantTimeCompare([]byte(user), creds.Username)
+	passOK := subtle.ConstantTimeCompare([]byte(pass), creds.Password)
+	if userOK&passOK != 1 {
+		return "wrong_credentials", false
+	}
+	return "", true
 }
 
 func writeBootstrapAuthFailed(ctx context.Context, w http.ResponseWriter) {
