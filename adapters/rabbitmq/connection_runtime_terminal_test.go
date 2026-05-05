@@ -275,7 +275,10 @@ func TestReconnectLoop_PermanentError_ExitsLoop(t *testing.T) {
 		"Health() must surface ErrAdapterAMQPConnectPermanent so /readyz returns 503")
 
 	// WaitConnected returns the permanent error (so subscriber/publisher exit cleanly).
-	ctx, cancel := context.WithTimeout(context.Background(), testtime.D2s)
+	// EventuallyLong gives loaded CI runners enough headroom: terminalCh has already
+	// fired by the time we get here, so this should be near-instantaneous, but the
+	// budget shields against scheduling jitter.
+	ctx, cancel := context.WithTimeout(context.Background(), testtime.EventuallyLong)
 	defer cancel()
 	waitErr := conn.WaitConnected(ctx)
 	require.Error(t, waitErr, "WaitConnected must return permanent error in terminal state")

@@ -929,6 +929,15 @@ func TestIsPermanentDialError(t *testing.T) {
 			want: false,
 		},
 		{
+			// Locks the Server=true gate for permanent classification.
+			// amqp091-go locally synthesizes Server=false / Recover=false for
+			// mid-handshake TCP resets; these must remain transient so broker
+			// restarts do not flip the connection to terminal.
+			name: "AMQP 501 Server=false Recover=false (amqp091-go local synthesis) — recoverable",
+			err:  &amqp.Error{Code: 501, Reason: "read: connection reset by peer", Server: false, Recover: false},
+			want: false,
+		},
+		{
 			name: "net.OpError (connection refused) — recoverable",
 			err:  &net.OpError{Op: "dial", Net: "tcp", Err: errors.New("connection refused")},
 			want: false,

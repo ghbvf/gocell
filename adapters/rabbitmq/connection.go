@@ -105,6 +105,18 @@ type ConnectionState struct {
 	ReconnectAttempts int             `json:"reconnectAttempts"`
 }
 
+// unwrapDialErr peels one layer of *errcode.Error wrapping (applied by
+// connect()) so callers can pass the underlying transport/AMQP error to
+// isPermanentDialError. Returns err unchanged when it is not an *errcode.Error
+// or when the wrapped Cause is nil.
+func unwrapDialErr(err error) error {
+	var ecErr *errcode.Error
+	if errors.As(err, &ecErr) && ecErr.Unwrap() != nil {
+		return ecErr.Unwrap()
+	}
+	return err
+}
+
 // isPermanentDialError returns true if the error from Dial indicates a
 // permanent condition that will not resolve by retrying.
 //
@@ -350,12 +362,7 @@ func NewConnection(config Config, opts ...ConnectionOption) (*Connection, error)
 	if err := c.connect(); err != nil {
 		// Classify initial connection failure: permanent errors get a distinct code
 		// so callers can fail-fast on bad credentials, bad URI, TLS misconfiguration.
-		var ecErr *errcode.Error
-		dialErr := err
-		if errors.As(err, &ecErr) && ecErr.Unwrap() != nil {
-			dialErr = ecErr.Unwrap()
-		}
-		if isPermanentDialError(dialErr) {
+		if isPermanentDialError(unwrapDialErr(err)) {
 			return nil, errcode.Wrap(errcode.KindInternal, ErrAdapterAMQPConnectPermanent,
 				"rabbitmq: initial connection failed (permanent)", c.sanitizeDialError(err))
 		}
@@ -500,6 +507,11 @@ func (c *Connection) reconnectWithBackoff() bool {
 		}
 
 		delay := c.backoffDelay(attempt)
+		// Pre-increment semantics: reconnectAttempts reflects "about to attempt
+		// reconnect #N" once written, so observers reading ConnectionStatus during
+		// the backoff wait already see the upcoming attempt count. This is
+		// intentional — operators want "next attempt N due in <delay>" visibility,
+		// not "N-1 done and a new one is brewing in the dark".
 		c.mu.Lock()
 		c.reconnectAttempts = attempt + 1
 		c.mu.Unlock()
@@ -518,15 +530,7 @@ func (c *Connection) reconnectWithBackoff() bool {
 		if err := c.connect(); err != nil {
 			sanitizedErr := sanitizeErrorURL(err.Error(), c.config.URL)
 
-			// Unwrap any errcode wrapping applied by connect() so isPermanentDialError
-			// inspects the underlying dial error (mirrors NewConnection L367-370).
-			var ecErr *errcode.Error
-			dialErr := err
-			if errors.As(err, &ecErr) && ecErr.Unwrap() != nil {
-				dialErr = ecErr.Unwrap()
-			}
-
-			if isPermanentDialError(dialErr) {
+			if isPermanentDialError(unwrapDialErr(err)) {
 				permErr := errcode.Wrap(errcode.KindInternal, ErrAdapterAMQPConnectPermanent,
 					"rabbitmq: runtime reconnect failed (permanent)", c.sanitizeDialError(err))
 				c.mu.Lock()
@@ -534,8 +538,12 @@ func (c *Connection) reconnectWithBackoff() bool {
 				c.permanentErr = permErr
 				c.lastError = sanitizedErr
 				c.mu.Unlock()
+				// Unlock before close: terminalCh is the wakeup signal; permanentErr
+				// is already visible to readers via the happens-before from Unlock.
 				close(c.terminalCh)
 				slog.Error("rabbitmq: runtime reconnect hit permanent error, transitioning to terminal",
+					slog.String("state", StateTerminal.String()),
+					slog.String("errCode", string(ErrAdapterAMQPConnectPermanent)),
 					slog.Int("attempt", attempt+1),
 					slog.String("error", sanitizedErr))
 				return false
