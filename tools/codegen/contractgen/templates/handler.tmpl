@@ -50,6 +50,9 @@ type Handler struct {
 {{- if and (not .Endpoint.AuthPublic) (not .Endpoint.AuthBootstrap)}}
 	policy auth.Policy
 {{- end}}
+{{- if .Endpoint.AuthBootstrap}}
+	bootstrapAuth func(http.Handler) http.Handler
+{{- end}}
 {{- if .RequestSchemaJSON}}
 	requestValidator schemavalidate.Validator
 {{- end}}
@@ -73,12 +76,24 @@ func NewHandler(svc Service) *Handler {
 }
 {{- else if .Endpoint.AuthBootstrap}}
 // NewHandler creates a Handler for {{.ContractID}}.
-// This endpoint is Bootstrap (HTTP Basic Auth via GOCELL_BOOTSTRAP_ADMIN_* env);
-// no policy argument is accepted. auth.Route{Bootstrap: true} is emitted by
-// RegisterRoutes so the listener auth middleware skips JWT verification for this route.
-// FMT-28 restricts auth.bootstrap:true to setup/admin contracts only.
-func NewHandler(svc Service) *Handler {
-	h := &Handler{svc: svc}
+//
+// This endpoint is Bootstrap (HTTP Basic Auth via GOCELL_BOOTSTRAP_ADMIN_* env).
+// bootstrapAuth is REQUIRED — it is the per-route replacement authentication
+// middleware (typically runtime/auth.NewBootstrapMiddleware wired by the
+// composition root). auth.Route{BootstrapAuth: bootstrapAuth} is emitted by
+// RegisterRoutes; the listener auth middleware skips JWT verification for this
+// route while bootstrapAuth runs in its place.
+//
+// Passing a nil bootstrapAuth panics at construction time — there is no
+// "declared bootstrap but no auth wired" intermediate state. FMT-28 restricts
+// auth.bootstrap:true to setup/admin contracts only.
+func NewHandler(svc Service, bootstrapAuth func(http.Handler) http.Handler) *Handler {
+	if bootstrapAuth == nil {
+		panic("generated handler {{.ContractID}}: bootstrapAuth must not be nil " +
+			"(auth.bootstrap:true contracts require a per-route replacement authenticator; " +
+			"composition root must inject runtime/auth.NewBootstrapMiddleware)")
+	}
+	h := &Handler{svc: svc, bootstrapAuth: bootstrapAuth}
 {{- if .RequestSchemaJSON}}
 	v, err := schemavalidate.NewValidator(requestSchemaJSON)
 	if err != nil {
@@ -121,7 +136,7 @@ func (h *Handler) RegisterRoutes(mux cell.RouteHandler) error {
 {{- if .Endpoint.AuthPublic}}
 		Public: true,
 {{- else if .Endpoint.AuthBootstrap}}
-		Bootstrap: true,
+		BootstrapAuth: h.bootstrapAuth,
 {{- else if .Endpoint.AuthPasswordResetExempt}}
 		Policy:              h.policy,
 		PasswordResetExempt: true,

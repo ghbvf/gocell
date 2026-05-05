@@ -37,7 +37,7 @@ func newHandlerMux(t *testing.T, h *setup.Handler) http.Handler {
 func newHandlerFresh(t *testing.T) http.Handler {
 	t.Helper()
 	svc := newService(t, mem.NewUserRepository(), mem.NewRoleRepository(), &stubWriter{})
-	return newHandlerMux(t, setup.NewHandler(svc))
+	return newHandlerMux(t, setup.NewHandler(svc, testPassthroughAuth))
 }
 
 // --- HandleStatus ---------------------------------------------------------
@@ -62,7 +62,7 @@ func TestHandler_Status_WithAdmin_ReturnsTrue(t *testing.T) {
 	roleRepo := mem.NewRoleRepository()
 	seedAdmin(t, userRepo, roleRepo)
 	svc := newService(t, userRepo, roleRepo, nil)
-	h := newHandlerMux(t, setup.NewHandler(svc))
+	h := newHandlerMux(t, setup.NewHandler(svc, testPassthroughAuth))
 
 	w := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, setupStatusPath, nil)
@@ -105,7 +105,7 @@ func TestHandler_CreateAdmin_AlreadyExists_Returns410(t *testing.T) {
 	roleRepo := mem.NewRoleRepository()
 	seedAdmin(t, userRepo, roleRepo)
 	svc := newService(t, userRepo, roleRepo, &stubWriter{})
-	h := newHandlerMux(t, setup.NewHandler(svc))
+	h := newHandlerMux(t, setup.NewHandler(svc, testPassthroughAuth))
 
 	body := `{"username":"root","email":"root@local","password":"SecretPass!23"}`
 	req := httptest.NewRequest(http.MethodPost, setupAdminPath, strings.NewReader(body))
@@ -217,7 +217,7 @@ func TestHandler_CreateAdmin_DuplicateIdentityUser_Returns409(t *testing.T) {
 	roleRepo := mem.NewRoleRepository()
 	seedIdentityUser(t, userRepo, "root", "root@local")
 	svc := newService(t, userRepo, roleRepo, &stubWriter{})
-	h := newHandlerMux(t, setup.NewHandler(svc))
+	h := newHandlerMux(t, setup.NewHandler(svc, testPassthroughAuth))
 
 	body := `{"username":"root","email":"root@local","password":"SecretPass!23"}`
 	req := httptest.NewRequest(http.MethodPost, setupAdminPath, strings.NewReader(body))
@@ -238,50 +238,30 @@ func seedIdentityUser(t *testing.T, userRepo *mem.UserRepository, username, emai
 	require.NoError(t, userRepo.Create(context.Background(), u))
 }
 
+// testAllowAllLimiter is a fakeRateLimiter local to setup tests — it satisfies
+// auth.BootstrapRateLimiter without rate-limiting (every Allow returns true).
+// Real production wiring uses adapters/ratelimit; this unit-level helper keeps
+// the test focus on Basic Auth semantics.
+type testAllowAllLimiter struct{}
+
+func (testAllowAllLimiter) Allow(string) bool { return true }
+
 // newHandlerWithBootstrapCreds creates a handler mux whose admin endpoint is
 // protected by the real bootstrap middleware (runtime/auth.NewBootstrapMiddleware).
 // Both NoCreds and WrongUsername/Password tests use this helper; the production
-// wiring in cell_init.go follows the same WithAdminMiddleware + bootstrap
-// middleware path.
+// wiring in cmd/corebundle/access_module.go follows the same WithBootstrapAuth +
+// bootstrap middleware path.
 func newHandlerWithBootstrapCreds(t *testing.T, svc *setup.Service, envUsername, envPassword string) http.Handler {
 	t.Helper()
 	creds := auth.BootstrapCredentials{
 		Username: []byte(envUsername),
 		Password: []byte(envPassword),
 	}
-	mw := auth.NewBootstrapMiddleware(creds, auth.BootstrapAllowAllLimiter{}, nil)
-	h := setup.NewHandler(svc, setup.WithAdminMiddleware(mw))
+	mw := auth.NewBootstrapMiddleware(creds, testAllowAllLimiter{}, nil)
+	h := setup.NewHandler(svc, mw)
 	mux := celltest.NewTestMux()
 	require.NoError(t, h.RegisterRoutes(mux))
 	return mux
-}
-
-// newHandlerWithBootstrapAuth creates a handler mux that wraps the admin
-// endpoint with mock Basic Auth (simulating bootstrap middleware). Used by
-// TestHandler_CreateAdmin_ValidCreds_BodyDifferentFromEnv_Returns201 which
-// documents D5 semantics with a mock wrapper.
-func newHandlerWithBootstrapAuth(t *testing.T, svc *setup.Handler, envUsername, envPassword string) http.Handler {
-	t.Helper()
-	mux := celltest.NewTestMux()
-	require.NoError(t, svc.RegisterRoutes(mux))
-
-	// Wrap the mux with a simple Basic Auth middleware that mirrors the
-	// BootstrapMiddleware contract: correct creds → pass; wrong/missing → 401
-	// with ERR_AUTH_BOOTSTRAP_FAILED.
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != setupAdminPath || r.Method != http.MethodPost {
-			mux.ServeHTTP(w, r)
-			return
-		}
-		user, pass, ok := r.BasicAuth()
-		if !ok || user != envUsername || pass != envPassword {
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusUnauthorized)
-			_, _ = w.Write([]byte(`{"error":{"code":"ERR_AUTH_BOOTSTRAP_FAILED","message":"authentication required","details":{}}}`))
-			return
-		}
-		mux.ServeHTTP(w, r)
-	})
 }
 
 // TestHandler_CreateAdmin_NoCreds_Returns401 verifies that when the handler is
@@ -326,15 +306,17 @@ func TestHandler_CreateAdmin_WrongUsername_Returns401(t *testing.T) {
 // TestHandler_CreateAdmin_ValidCreds_BodyDifferentFromEnv_Returns201 verifies
 // D5 semantics: env credentials authenticate the operator; body credentials
 // define the admin user. Env=op:opSecret123, body creates alice.
-// RED: currently the endpoint is Public and does not require env credentials.
+//
+// Uses the real runtime/auth.NewBootstrapMiddleware via newHandlerWithBootstrapCreds —
+// the production path of cmd/corebundle.access_module.go. The "closed contract"
+// codified in PR #392 review: NewHandler accepts bootstrapAuth as a required
+// parameter; there is no separate "JWT-exempt + no auth" intermediate state.
 func TestHandler_CreateAdmin_ValidCreds_BodyDifferentFromEnv_Returns201(t *testing.T) {
 	svc := newService(t, mem.NewUserRepository(), mem.NewRoleRepository(), &stubWriter{})
 
-	// In the target state, NewHandler accepts bootstrap credentials and enforces
-	// Basic Auth. Here we use the mock wrapper to simulate that behavior.
 	const envUser = "op"
 	const envPass = "opSecret123"
-	handler := newHandlerWithBootstrapAuth(t, setup.NewHandler(svc), envUser, envPass)
+	handler := newHandlerWithBootstrapCreds(t, svc, envUser, envPass)
 
 	// The body creates 'alice' — completely different from the env credentials.
 	body := `{"username":"alice","email":"alice@example.com","password":"AlicePass!99"}`
@@ -346,17 +328,8 @@ func TestHandler_CreateAdmin_ValidCreds_BodyDifferentFromEnv_Returns201(t *testi
 
 	handler.ServeHTTP(w, req)
 
-	// With the mock wrapper, this should succeed (201) because env creds are correct
-	// and the body is valid. This test documents D5: env=gate, body=identity.
-	// RED aspect: the real bootstrap middleware is not wired, so this mock-based
-	// test may PASS with the wrapper but the production path will be RED until Batch 2.
-	if w.Code != http.StatusCreated {
-		t.Errorf("TestHandler_CreateAdmin_ValidCreds_BodyDifferentFromEnv_Returns201: "+
-			"expected 201 with valid env creds + valid body creating alice, got %d — "+
-			"RED: bootstrap auth not wired in production handler yet (Batch 1+2)",
-			w.Code)
-		return
-	}
+	require.Equal(t, http.StatusCreated, w.Code,
+		"valid env creds + valid body must create alice (D5 separation)")
 
 	var resp struct {
 		Data setup.CreateAdminOutput `json:"data"`

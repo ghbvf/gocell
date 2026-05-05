@@ -30,24 +30,13 @@ type BootstrapCredentials struct {
 // cycle). Callers wire a concrete middleware.RateLimiter or an
 // adapters/ratelimit.TokenBucket which satisfies this interface structurally.
 //
-// BootstrapAllowAllLimiter can be used in tests or interactive-mode scenarios
-// where rate limiting is handled upstream (e.g. nginx/ingress).
+// There is no built-in "allow all" implementation — bootstrap routes must
+// always carry a real per-IP limiter to defeat brute-force enumeration of
+// operator credentials. Tests construct fakes locally if they need to bypass
+// rate limiting (see runtime/auth/bootstrap_test.go fakeRateLimiter).
 type BootstrapRateLimiter interface {
 	Allow(key string) bool
 }
-
-// bootstrapRateLimiter is an alias kept for internal use so callers that
-// already implement the unexported type continue to compile.
-type bootstrapRateLimiter = BootstrapRateLimiter
-
-// BootstrapAllowAllLimiter is a no-op rate limiter that permits every request.
-// Suitable for unit tests and deployments where rate limiting is enforced
-// upstream (e.g. ingress / nginx). Do not use in production without an upstream
-// rate limiter.
-type BootstrapAllowAllLimiter struct{}
-
-// Allow always returns true.
-func (BootstrapAllowAllLimiter) Allow(_ string) bool { return true }
 
 // BootstrapAuthFailObserver is invoked after a 401 response is written. The
 // reason string is one of: "missing_header", "wrong_credentials". Wiring an
@@ -76,10 +65,10 @@ func NewBootstrapMiddleware(
 	return newBootstrapMiddleware(creds, limiter, onAuthFail)
 }
 
-// bootstrapWindowedLimiter extends bootstrapRateLimiter with window metadata for
+// bootstrapWindowedLimiter extends BootstrapRateLimiter with window metadata for
 // Retry-After calculation — mirrors middleware.WindowedRateLimiter.
 type bootstrapWindowedLimiter interface {
-	bootstrapRateLimiter
+	BootstrapRateLimiter
 	Window() (window time.Duration, limit int)
 }
 
@@ -100,7 +89,7 @@ type bootstrapWindowedLimiter interface {
 // ref: Go stdlib crypto/subtle.ConstantTimeCompare (timing-safe equality)
 func newBootstrapMiddleware(
 	creds BootstrapCredentials,
-	limiter bootstrapRateLimiter,
+	limiter BootstrapRateLimiter,
 	onAuthFail BootstrapAuthFailObserver,
 ) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
@@ -122,7 +111,7 @@ func newBootstrapMiddleware(
 
 // allowBootstrapRequest enforces the per-IP rate limit and writes the 429
 // envelope on rejection. Returns true when the request should proceed.
-func allowBootstrapRequest(w http.ResponseWriter, r *http.Request, limiter bootstrapRateLimiter) bool {
+func allowBootstrapRequest(w http.ResponseWriter, r *http.Request, limiter BootstrapRateLimiter) bool {
 	if limiter.Allow(bootstrapClientIP(r)) {
 		return true
 	}
@@ -173,7 +162,7 @@ func bootstrapClientIP(r *http.Request) string {
 
 // bootstrapRetryAfter computes the Retry-After value in seconds.
 // Mirrors middleware.computeRetryAfter to avoid cross-package dependency.
-func bootstrapRetryAfter(limiter bootstrapRateLimiter) int {
+func bootstrapRetryAfter(limiter BootstrapRateLimiter) int {
 	if wl, ok := limiter.(bootstrapWindowedLimiter); ok {
 		window, limit := wl.Window()
 		if limit > 0 && window > 0 {

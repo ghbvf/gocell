@@ -49,6 +49,7 @@ import (
 	adapterpg "github.com/ghbvf/gocell/adapters/postgres"
 	accesscore "github.com/ghbvf/gocell/cells/accesscore"
 	"github.com/ghbvf/gocell/cells/accesscore/configgetter"
+	"github.com/ghbvf/gocell/cells/accesscore/initialadmin"
 	auditcore "github.com/ghbvf/gocell/cells/auditcore"
 	configcore "github.com/ghbvf/gocell/cells/configcore"
 	"github.com/ghbvf/gocell/kernel/assembly"
@@ -217,7 +218,7 @@ func TestOutboxE2E_PGMode_WriteToSubscribe(t *testing.T) {
 		accesscore.WithOutboxDeps(eb, nil),
 		accesscore.WithJWTIssuer(jwtIssuer),
 		accesscore.WithJWTVerifier(jwtVerifier),
-		accesscore.WithInitialAdminBootstrap(),
+		accesscore.WithInitialAdminBootstrap(initialadmin.BootstrapCredentials{Username: []byte("e2e-admin"), Password: []byte("e2e-admin-pass-1!")}),
 		accesscore.WithMetricsProvider(kernelmetrics.NopProvider{}),
 	)
 	auditCell := auditcore.NewAuditCore(
@@ -584,7 +585,7 @@ func TestOutboxE2E_RefetchLoop_AccessCoreCallsInternalGet(t *testing.T) {
 		accesscore.WithOutboxDeps(eb, nil),
 		accesscore.WithJWTIssuer(jwtIssuer),
 		accesscore.WithJWTVerifier(jwtVerifier),
-		accesscore.WithInitialAdminBootstrap(),
+		accesscore.WithInitialAdminBootstrap(initialadmin.BootstrapCredentials{Username: []byte("e2e-admin"), Password: []byte("e2e-admin-pass-1!")}),
 		accesscore.WithMetricsProvider(kernelmetrics.NopProvider{}),
 		configgetter.WithHTTP(internalSrv.URL, testRing, clock.Real()),
 	)

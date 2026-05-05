@@ -13,18 +13,9 @@ import (
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
-// envDrivenOutcome classifies the result of envDrivenBootstrapper.ensureAdminFromCreds.
-type envDrivenOutcome int
-
-const (
-	envDrivenOutcomeCreated       envDrivenOutcome = iota // admin was created
-	envDrivenOutcomeAlreadyExists                         // admin already existed (no-op)
-)
-
 // envDrivenBootstrapper provisions the initial admin user from injected
 // env credentials — no random password generation, no credential file.
 //
-// ref: keycloak/keycloak KC_BOOTSTRAP_ADMIN_USERNAME (one-shot env, no credfile)
 // ref: minio/minio internal/auth/credentials.go (startup length fail-fast)
 type envDrivenBootstrapper struct {
 	deps        BootstrapDeps
@@ -57,15 +48,21 @@ func newEnvDrivenBootstrapper(deps BootstrapDeps, hasher PasswordHasher) (*envDr
 }
 
 // ensureAdminFromCreds provisions the admin using the supplied credentials.
-// It is idempotent: if admin already exists, returns envDrivenOutcomeAlreadyExists.
-func (b *envDrivenBootstrapper) ensureAdminFromCreds(ctx context.Context, creds *BootstrapCredentials) (envDrivenOutcome, error) {
+// Returns created==true exactly when this call wrote the admin row; an
+// already-existing admin returns created==false with no error.
+//
+// The created bool is enough for the lifecycle to decide whether to log
+// "initial admin created" — the persistent startup credential model (ADR §D9)
+// does not warn on already-exists, since the env credentials remain mandatory
+// for setup endpoint protection regardless of admin presence.
+func (b *envDrivenBootstrapper) ensureAdminFromCreds(ctx context.Context, creds BootstrapCredentials) (created bool, err error) {
 	// Fast-path: if admin already exists, no work needed.
 	exists, err := b.provisioner.Status(ctx)
 	if err != nil {
-		return 0, fmt.Errorf("initialadmin: env-driven status: %w", err)
+		return false, fmt.Errorf("initialadmin: env-driven status: %w", err)
 	}
 	if exists {
-		return envDrivenOutcomeAlreadyExists, nil
+		return false, nil
 	}
 
 	// Hash the injected password. The plaintext byte slice is zeroed after hashing.
@@ -76,7 +73,7 @@ func (b *envDrivenBootstrapper) ensureAdminFromCreds(ctx context.Context, creds 
 		passwordBytes[i] = 0
 	}
 	if err != nil {
-		return 0, fmt.Errorf("initialadmin: env-driven hash password: %w", err)
+		return false, fmt.Errorf("initialadmin: env-driven hash password: %w", err)
 	}
 
 	username := string(creds.Username)
@@ -88,14 +85,14 @@ func (b *envDrivenBootstrapper) ensureAdminFromCreds(ctx context.Context, creds 
 		Source:       domain.UserSourceBootstrap,
 	})
 	if err != nil {
-		return 0, fmt.Errorf("initialadmin: env-driven ensure: %w", err)
+		return false, fmt.Errorf("initialadmin: env-driven ensure: %w", err)
 	}
 	switch result.Outcome {
 	case adminprovision.OutcomeAlreadyExists, adminprovision.OutcomeRaceSkipped:
-		return envDrivenOutcomeAlreadyExists, nil
+		return false, nil
 	case adminprovision.OutcomeCreated, adminprovision.OutcomeOrphanRecovered:
-		return envDrivenOutcomeCreated, nil
+		return true, nil
 	default:
-		return 0, fmt.Errorf("initialadmin: env-driven: unexpected provision outcome %d", result.Outcome)
+		return false, fmt.Errorf("initialadmin: env-driven: unexpected provision outcome %d", result.Outcome)
 	}
 }

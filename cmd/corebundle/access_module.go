@@ -5,43 +5,40 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	adapterpg "github.com/ghbvf/gocell/adapters/postgres"
+	"github.com/ghbvf/gocell/adapters/ratelimit"
 	accesscore "github.com/ghbvf/gocell/cells/accesscore"
 	"github.com/ghbvf/gocell/cells/accesscore/configgetter"
 	"github.com/ghbvf/gocell/cells/accesscore/initialadmin"
 	"github.com/ghbvf/gocell/kernel/cell"
 	kernellifecycle "github.com/ghbvf/gocell/kernel/lifecycle"
+	"github.com/ghbvf/gocell/kernel/worker"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/bootstrap"
 )
 
-// AdminProvisionModeEnv selects how the first admin is provisioned.
+// SetupModeEnv selects how the first admin is provisioned.
 //
-//	"interactive" (default) — no admin created at startup; operator must POST
-//	                          to /api/v1/access/setup/admin to create one.
-//	                          setup GET returns {"hasAdmin":false} until done.
-//	"bootstrap"             — initialadmin Lifecycle runs at startup, generates
-//	                          a random password, writes it to the credential
-//	                          file for out-of-band retrieval. setup POST is
-//	                          effectively 410 for the lifetime of the deployment.
+//	"interactive" — no admin created at startup; operator must POST to
+//	                /api/v1/access/setup/admin to create one. The endpoint
+//	                is protected by HTTP Basic Auth using the bootstrap
+//	                credentials from GOCELL_BOOTSTRAP_ADMIN_USERNAME/PASSWORD.
+//	                setup GET returns {"hasAdmin":false} until done.
+//	"bootstrap"   — initialadmin Lifecycle runs at startup, uses env credentials
+//	                to create admin. setup POST is effectively 410 for the
+//	                lifetime of the deployment.
 //
-// Two modes are mutually exclusive by construction: "bootstrap" enables the
-// Lifecycle that creates the admin; "interactive" leaves the provisioning job
-// to the HTTP endpoint. This removes the "double-owner" ambiguity where both
-// were wired simultaneously and whichever raced first won.
+// Empty config is a fail-fast: operators must explicitly choose a mode.
+// Two modes are mutually exclusive by construction.
 //
-// Deprecated: replaced by SetupModeEnv in SEC-SETUP-CLOSURE (Batch 2).
-const AdminProvisionModeEnv = "GOCELL_ACCESSCORE_ADMIN_PROVISION_MODE"
-
-// SetupModeEnv is the canonical env var for admin provisioning mode, replacing
-// AdminProvisionModeEnv in SEC-SETUP-CLOSURE. Currently a stub pointing to the
-// old name. Batch 2 / Agent-D will rename the env var, delete AdminProvisionModeEnv,
-// and update resolveAdminProvisionMode to use this constant exclusively.
-//
-// TODO(SEC-SETUP-CLOSURE Batch 2): rename to GOCELL_SETUP_MODE and remove AdminProvisionModeEnv.
+// ref: keycloak/keycloak KC_BOOTSTRAP_ADMIN_USERNAME (env-driven first admin)
+// ref: minio/minio internal/auth/credentials.go (startup length fail-fast)
 const SetupModeEnv = "GOCELL_SETUP_MODE"
 
 const defaultRefreshGCRetention = 24 * time.Hour
@@ -55,22 +52,16 @@ const (
 
 // AccessCoreModule wires accesscore: JWT issuer/verifier + EventBus + cursor
 // codec, and conditionally the initial-admin bootstrap Lifecycle when the
-// GOCELL_ACCESSCORE_ADMIN_PROVISION_MODE environment variable selects it.
+// GOCELL_SETUP_MODE environment variable selects it.
 //
 // ref: uber-go/fx fx.Module("accesscore", ...) — self-contained module.
 // backlog: S29 CORE-BUNDLE-APP-BUILDER-01
 type AccessCoreModule struct {
 	// InitialAdminOpts are additional options passed to the initial-admin
-	// bootstrap Lifecycle when GOCELL_ACCESSCORE_ADMIN_PROVISION_MODE=bootstrap.
+	// bootstrap Lifecycle when GOCELL_SETUP_MODE=bootstrap.
 	// Production leaves this nil so default bcrypt cost=12 is used; tests
 	// inject a low-cost hasher to avoid blocking CI.
 	InitialAdminOpts []initialadmin.LifecycleOption
-
-	// ForceBootstrap, when true, enables the initial-admin Lifecycle regardless
-	// of the environment variable. Used by integration tests that want to
-	// exercise the bootstrap path without setting the env var in the test
-	// process. Production code must not set this; go through the env var.
-	ForceBootstrap bool
 }
 
 // ID returns the stable identifier used in error messages.
@@ -80,18 +71,47 @@ func (AccessCoreModule) ID() string { return "accesscore" }
 // constructed cell, the lazy admin bootstrap worker option, and nil
 // provisional resources (accesscore is in-memory only).
 //
-// Reads GOCELL_ACCESSCORE_CURSOR_KEY and GOCELL_ACCESSCORE_CURSOR_PREVIOUS_KEY
-// from the environment.
+// Reads GOCELL_SETUP_MODE, GOCELL_BOOTSTRAP_ADMIN_USERNAME,
+// GOCELL_BOOTSTRAP_ADMIN_PASSWORD, GOCELL_ACCESSCORE_CURSOR_KEY,
+// GOCELL_ACCESSCORE_CURSOR_PREVIOUS_KEY from the environment.
 func (m AccessCoreModule) Provide(
 	_ context.Context, shared *SharedDeps,
 ) (cell.Cell, []bootstrap.Option, []kernellifecycle.ManagedResource, error) {
-	mode, err := resolveAdminProvisionMode(os.Getenv(AdminProvisionModeEnv), m.ForceBootstrap)
+	mode, err := resolveAdminProvisionMode(os.Getenv(SetupModeEnv))
 	if err != nil {
 		return nil, nil, nil, err
 	}
+
+	creds, err := loadBootstrapCredentials(
+		os.Getenv("GOCELL_BOOTSTRAP_ADMIN_USERNAME"),
+		os.Getenv("GOCELL_BOOTSTRAP_ADMIN_PASSWORD"),
+	)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+
+	// Both modes require credentials.
+	if creds.Username == nil {
+		return nil, nil, nil, errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
+			fmt.Sprintf("GOCELL_BOOTSTRAP_ADMIN_USERNAME and GOCELL_BOOTSTRAP_ADMIN_PASSWORD "+
+				"are required when %s=%s", SetupModeEnv, string(mode)))
+	}
+
+	// D8: interactive mode + real adapter + multi-pod → fail-fast.
+	// Only GOCELL_REPLICA_COUNT > 1 signal used (hostname heuristic is
+	// too fragile and risks false positives on single-pod deployments).
+	// Backlog: hostname statefulset heuristic as secondary signal once validated.
+	if mode == adminProvisionModeInteractive &&
+		shared.Topology.AdapterMode == "real" &&
+		isMultiPod() {
+		return nil, nil, nil, errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
+			"GOCELL_SETUP_MODE=interactive is not safe in multi-pod deployments "+
+				"(GOCELL_REPLICA_COUNT > 1); use bootstrap mode or a distributed lock")
+	}
+
 	slog.Info("accesscore: admin provision mode resolved",
 		slog.String("mode", string(mode)),
-		slog.Bool("force_bootstrap", m.ForceBootstrap))
+		slog.String("env", SetupModeEnv))
 
 	// Cursor codec for accesscore: read env via LoadCursorKeys then build.
 	accessPrimary, accessPrevious := LoadCursorKeys("ACCESSCORE")
@@ -150,12 +170,73 @@ func (m AccessCoreModule) Provide(
 			)
 		}
 	}
+	// Bootstrap credential auth + per-IP token bucket rate limiter is wired
+	// in BOTH modes — the persistent startup credential model (ADR §D9) makes
+	// the setup/admin endpoint Basic Auth a permanent protection regardless
+	// of whether the initialadmin lifecycle creates the admin at boot.
+	//
+	// Rate parameters (5 req/min sustained, burst 10) mirror nginx limit_req
+	// defaults for credential endpoints: tight enough to defeat brute-force
+	// enumeration, loose enough not to block legitimate operator retries.
+	// Multi-pod deployments share the in-memory bucket per replica; a future
+	// distributed limiter (Redis-backed) is logged as backlog
+	// BOOTSTRAP-RATELIMIT-DISTRIBUTED-01.
+	rlLimiter := ratelimit.New(ratelimit.Config{
+		Rate:  bootstrapRateLimitPerSec, // 5 req/min ≈ 0.0833/sec
+		Burst: bootstrapRateLimitBurst,
+	}, shared.Clock)
+	bootstrapMW := auth.NewBootstrapMiddleware(
+		auth.BootstrapCredentials{Username: creds.Username, Password: creds.Password},
+		rlLimiter,
+		bootstrapAuthFailLogger(),
+	)
+	accessOpts = append(accessOpts, accesscore.WithBootstrapAuth(bootstrapMW))
+
 	if mode == adminProvisionModeBootstrap {
-		accessOpts = append(accessOpts, accesscore.WithInitialAdminBootstrap(m.InitialAdminOpts...))
+		bootstrapCreds := initialadmin.BootstrapCredentials{
+			Username: creds.Username,
+			Password: creds.Password,
+		}
+		accessOpts = append(accessOpts, accesscore.WithInitialAdminBootstrap(bootstrapCreds, m.InitialAdminOpts...))
 	}
+
 	c := accesscore.NewAccessCore(accessOpts...) //archtest:allow:clock-injection:via-slice WithClock prepended to accessOpts above
 	// Bootstrap phase3b auto-discovers c.LifecycleHooks() — no WithWorkers needed.
-	return c, nil, nil, nil
+	// rlLimiter owns a cleanup goroutine that exits on Close(); bind it to a
+	// ManagedResource so phase10 LIFO teardown stops the goroutine cleanly.
+	return c, nil, []kernellifecycle.ManagedResource{bootstrapLimiterResource{lim: rlLimiter}}, nil
+}
+
+// bootstrapRateLimitPerSec is 5 req/min expressed in per-second tokens — the
+// nginx limit_req default for credential-bearing endpoints.
+const bootstrapRateLimitPerSec = 5.0 / 60.0
+
+// bootstrapRateLimitBurst allows short legitimate retries (operator typo
+// followed by correction) without immediately tripping the limiter.
+const bootstrapRateLimitBurst = 10
+
+// bootstrapAuthFailLogger returns the onAuthFail observer wired into the
+// bootstrap middleware. It logs slog.Error with the structured "reason" field
+// from runtime/auth so dashboards / SIEM integrations can alert on failures.
+// Audit cell integration is tracked as backlog BOOTSTRAP-AUDIT-CHAIN-WIRING-01.
+func bootstrapAuthFailLogger() auth.BootstrapAuthFailObserver {
+	return func(ctx context.Context, reason string) {
+		slog.ErrorContext(ctx, "bootstrap_auth_failed",
+			slog.String("event", "bootstrap_auth_failed"),
+			slog.String("reason", reason))
+	}
+}
+
+// bootstrapLimiterResource adapts the rate limiter to the ManagedResource
+// contract so phase10 shutdown stops the cleanup goroutine.
+type bootstrapLimiterResource struct{ lim *ratelimit.Limiter }
+
+func (bootstrapLimiterResource) Checkers() map[string]func(context.Context) error {
+	return nil
+}
+func (bootstrapLimiterResource) Worker() worker.Worker { return nil }
+func (r bootstrapLimiterResource) Close(ctx context.Context) error {
+	return r.lim.Close(ctx)
 }
 
 var _ CellModule = AccessCoreModule{}
@@ -183,7 +264,7 @@ func internalAddrToBaseURL(addr string) string {
 }
 
 // BootstrapAdminCredentials holds the env-driven credentials for the initial
-// admin setup endpoint. To be wired in Batch 2 / Agent-D.
+// admin setup endpoint.
 type BootstrapAdminCredentials struct {
 	Username []byte
 	Password []byte
@@ -196,23 +277,84 @@ type BootstrapAdminCredentials struct {
 //   - username non-empty after trim + no control chars
 //   - password ≥ 8 bytes after trim
 //
-// To be implemented in Batch 2 / Agent-D. Currently a stub that panics.
+// Returns BootstrapAdminCredentials with nil fields when both are empty
+// (indicating credentials were not configured).
+//
+// ref: keycloak/keycloak KC_BOOTSTRAP_ADMIN_USERNAME (one-shot env)
+// ref: minio/minio internal/auth/credentials.go (length fail-fast)
 func loadBootstrapCredentials(username, password string) (BootstrapAdminCredentials, error) {
-	panic("loadBootstrapCredentials: not implemented; see Batch 2 / Agent-D")
+	username = strings.TrimSpace(username)
+	password = strings.TrimSpace(password)
+
+	usernameSet := username != ""
+	passwordSet := password != ""
+
+	// XOR: both must be set or both must be empty.
+	if usernameSet != passwordSet {
+		return BootstrapAdminCredentials{}, errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
+			"GOCELL_BOOTSTRAP_ADMIN_USERNAME and GOCELL_BOOTSTRAP_ADMIN_PASSWORD "+
+				"must both be set or both be empty")
+	}
+
+	// Both empty — credentials not configured.
+	if !usernameSet {
+		return BootstrapAdminCredentials{}, nil
+	}
+
+	// Validate username: no control characters.
+	for _, r := range username {
+		if unicode.IsControl(r) {
+			return BootstrapAdminCredentials{}, errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
+				"GOCELL_BOOTSTRAP_ADMIN_USERNAME must not contain control characters")
+		}
+	}
+
+	// Validate password: minimum 8 bytes.
+	if len(password) < 8 {
+		return BootstrapAdminCredentials{}, errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
+			"GOCELL_BOOTSTRAP_ADMIN_PASSWORD must be at least 8 bytes")
+	}
+
+	return BootstrapAdminCredentials{
+		Username: []byte(username),
+		Password: []byte(password),
+	}, nil
 }
 
-func resolveAdminProvisionMode(raw string, forceBootstrap bool) (adminProvisionMode, error) {
+// resolveAdminProvisionMode parses raw into one of the known adminProvisionMode
+// values. Empty raw is a fail-fast: operators must explicitly choose a mode.
+//
+// ref: grafana/grafana pkg/setting/setting.go (env override with fail-fast)
+func resolveAdminProvisionMode(raw string) (adminProvisionMode, error) {
 	switch strings.TrimSpace(raw) {
-	case "", string(adminProvisionModeInteractive):
-		if forceBootstrap {
-			return adminProvisionModeBootstrap, nil
-		}
+	case "":
+		return "", errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
+			fmt.Sprintf("%s is required; set to one of: interactive, bootstrap", SetupModeEnv))
+	case string(adminProvisionModeInteractive):
 		return adminProvisionModeInteractive, nil
 	case string(adminProvisionModeBootstrap):
 		return adminProvisionModeBootstrap, nil
 	default:
 		return "", errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
-			"GOCELL_ACCESSCORE_ADMIN_PROVISION_MODE must be one of: interactive, bootstrap",
-			errcode.WithDetails(slog.String("got", raw)))
+			fmt.Sprintf("%s must be one of: interactive, bootstrap; got %q", SetupModeEnv, raw))
 	}
+}
+
+// isMultiPod returns true when GOCELL_REPLICA_COUNT is set and > 1.
+// Used for interactive-mode multi-pod fail-fast (D8).
+//
+// Hostname heuristic (e.g. matching statefulset pod-index suffix "*-[0-9]+$")
+// is intentionally omitted — too fragile, risks false positives on legitimate
+// single-pod names. Backlog: evaluate hostname signal once production naming
+// patterns are established.
+func isMultiPod() bool {
+	raw := strings.TrimSpace(os.Getenv("GOCELL_REPLICA_COUNT"))
+	if raw == "" {
+		return false
+	}
+	count, err := strconv.Atoi(raw)
+	if err != nil {
+		return false
+	}
+	return count > 1
 }

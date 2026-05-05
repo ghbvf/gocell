@@ -56,13 +56,22 @@ func spinLifecycle(t *testing.T, ctx context.Context, hooks []cell.LifecycleHook
 }
 
 // newTestCellWithBootstrap constructs a fully wired AccessCore using mem repos
-// and the provided bootstrap options.
+// and the provided bootstrap credentials + lifecycle options.
+//
+// Pass an empty BootstrapCredentials{} to skip wiring WithInitialAdminBootstrap
+// (the bootstrap-disabled scenario); WithBootstrapAuth is always wired because
+// the closed contract requires it regardless of whether the lifecycle hook is
+// active.
+//
+// Two literal NewAccessCore call sites avoid the splat path that
+// CLOCK-INJECTION-TEST-CALLSITE-01 archtest cannot statically resolve.
 func newTestCellWithBootstrap(
 	t *testing.T,
+	creds initialadmin.BootstrapCredentials,
 	bootstrapOpts []initialadmin.LifecycleOption,
 ) *AccessCore {
 	t.Helper()
-	if len(bootstrapOpts) > 0 {
+	if len(creds.Username) > 0 {
 		return NewAccessCore(
 			WithClock(clock.Real()),
 			WithUserRepository(mem.NewUserRepository()),
@@ -74,7 +83,8 @@ func newTestCellWithBootstrap(
 			WithRefreshStore(newTestRefreshStore()),
 			WithTxManager(durableTxRunner{}),
 			WithMetricsProvider(metrics.NopProvider{}),
-			WithInitialAdminBootstrap(bootstrapOpts...),
+			WithBootstrapAuth(testPassthroughBootstrapAuth),
+			WithInitialAdminBootstrap(creds, bootstrapOpts...),
 		)
 	}
 	return NewAccessCore(
@@ -88,16 +98,21 @@ func newTestCellWithBootstrap(
 		WithRefreshStore(newTestRefreshStore()),
 		WithTxManager(durableTxRunner{}),
 		WithMetricsProvider(metrics.NopProvider{}),
+		WithBootstrapAuth(testPassthroughBootstrapAuth),
 	)
+}
+
+// defaultBootstrapCreds returns env-driven BootstrapCredentials for cell-level tests.
+func defaultBootstrapCreds() initialadmin.BootstrapCredentials {
+	return initialadmin.BootstrapCredentials{
+		Username: []byte("admin"),
+		Password: []byte("cellTestPass1"),
+	}
 }
 
 // defaultBootstrapOpts returns env-driven LifecycleOptions for cell-level tests.
 func defaultBootstrapOpts() []initialadmin.LifecycleOption {
 	return []initialadmin.LifecycleOption{
-		initialadmin.WithBootstrapCredentials(initialadmin.BootstrapCredentials{
-			Username: []byte("admin"),
-			Password: []byte("cellTestPass1"),
-		}),
 		initialadmin.WithPasswordHasher(initialadmin.BcryptHasher{Cost: 4}),
 	}
 }
@@ -106,7 +121,7 @@ func defaultBootstrapOpts() []initialadmin.LifecycleOption {
 // no admin exists, bootstrap runs successfully via spinLifecycle and the hook
 // name matches the expected constant.
 func TestInit_WithInitialAdminBootstrap_LifecycleHookRegistered(t *testing.T) {
-	ac := newTestCellWithBootstrap(t, defaultBootstrapOpts())
+	ac := newTestCellWithBootstrap(t, defaultBootstrapCreds(), defaultBootstrapOpts())
 	rec := newTestReg()
 	require.NoError(t, ac.Init(context.Background(), rec))
 
@@ -122,6 +137,9 @@ func TestInit_WithInitialAdminBootstrap_LifecycleHookRegistered(t *testing.T) {
 // TestInit_BootstrapDefaultBehaviorIsNoop verifies that when
 // WithInitialAdminBootstrap is NOT set, Init succeeds without creating any
 // user and LifecycleHooks returns nil.
+//
+// WithBootstrapAuth is still required (closed contract) and is wired with a
+// passthrough middleware here.
 func TestInit_BootstrapDefaultBehaviorIsNoop(t *testing.T) {
 	userRepo := mem.NewUserRepository()
 
@@ -136,6 +154,7 @@ func TestInit_BootstrapDefaultBehaviorIsNoop(t *testing.T) {
 		WithRefreshStore(newTestRefreshStore()),
 		WithTxManager(durableTxRunner{}),
 		WithMetricsProvider(metrics.NopProvider{}),
+		WithBootstrapAuth(testPassthroughBootstrapAuth),
 	)
 	rec := newTestReg()
 	require.NoError(t, ac.Init(context.Background(), rec))
@@ -173,9 +192,10 @@ func TestInit_BootstrapAlreadyHasAdmin_NoOp(t *testing.T) {
 		WithJWTIssuer(testIssuer),
 		WithJWTVerifier(testVerifier),
 		WithRefreshStore(newTestRefreshStore()),
-		WithInitialAdminBootstrap(defaultBootstrapOpts()...),
+		WithInitialAdminBootstrap(defaultBootstrapCreds(), defaultBootstrapOpts()...),
 		WithTxManager(durableTxRunner{}),
 		WithMetricsProvider(metrics.NopProvider{}),
+		WithBootstrapAuth(testPassthroughBootstrapAuth),
 	)
 	rec := newTestReg()
 	require.NoError(t, ac.Init(context.Background(), rec))
@@ -200,9 +220,10 @@ func TestInit_BootstrapUser_HasPasswordResetRequired(t *testing.T) {
 		WithJWTIssuer(testIssuer),
 		WithJWTVerifier(testVerifier),
 		WithRefreshStore(newTestRefreshStore()),
-		WithInitialAdminBootstrap(defaultBootstrapOpts()...),
+		WithInitialAdminBootstrap(defaultBootstrapCreds(), defaultBootstrapOpts()...),
 		WithTxManager(durableTxRunner{}),
 		WithMetricsProvider(metrics.NopProvider{}),
+		WithBootstrapAuth(testPassthroughBootstrapAuth),
 	)
 	rec := newTestReg()
 	require.NoError(t, ac.Init(context.Background(), rec))

@@ -24,9 +24,6 @@ type LifecycleOption func(*Lifecycle)
 func WithUsername(string) LifecycleOption               { return func(*Lifecycle) {} }
 func WithPasswordHasher(PasswordHasher) LifecycleOption { return func(*Lifecycle) {} }
 func WithClock(clock.Clock) LifecycleOption             { return func(*Lifecycle) {} }
-func WithBootstrapCredentials(BootstrapCredentials) LifecycleOption {
-	return func(*Lifecycle) {}
-}
 
 // BootstrapCredentials is the unsupported-platform stub of the same type in lifecycle.go.
 type BootstrapCredentials struct {
@@ -36,7 +33,7 @@ type BootstrapCredentials struct {
 
 // NewLifecycle returns a stub Lifecycle. cell.Init's PlatformSupported() check
 // surfaces the unsupported-platform failure before any method runs.
-func NewLifecycle(_ ...LifecycleOption) *Lifecycle { return &Lifecycle{} }
+func NewLifecycle(_ BootstrapCredentials, _ ...LifecycleOption) *Lifecycle { return &Lifecycle{} }
 
 // Bind is a stub; never reached in practice on unsupported platforms because
 // cell.Init returns ErrCellPlatformUnsupported earlier.

@@ -184,12 +184,18 @@ func WithInMemoryDefaults() Option {
 }
 
 // WithInitialAdminBootstrap enables first-run admin bootstrap (scheme H).
+//
+// creds is REQUIRED — the persistent startup credential model (ADR §D9) makes
+// bootstrap credentials mandatory whenever the lifecycle hook is wired; an
+// empty Username or Password causes the hook's OnStart to fail fast.
+//
 // The lifecycle hook is registered via reg.Lifecycle in Init so the bootstrap
 // phase wires OnStart/OnStop — no composition-root plumbing required.
 //
+// ref: docs/architecture/202605061600-adr-bootstrap-admin-boundary.md §D2 + §D9
 // ref: docs/architecture/202604181900-adr-auth-setup-first-run.md (scheme H)
-func WithInitialAdminBootstrap(opts ...initialadmin.LifecycleOption) Option {
-	return func(c *AccessCore) { c.initialAdmin = initialadmin.NewLifecycle(opts...) }
+func WithInitialAdminBootstrap(creds initialadmin.BootstrapCredentials, opts ...initialadmin.LifecycleOption) Option {
+	return func(c *AccessCore) { c.initialAdmin = initialadmin.NewLifecycle(creds, opts...) }
 }
 
 // WithConfigGetter injects the ConfigGetter used by the configreceive slice to
@@ -204,14 +210,21 @@ func WithConfigGetter(c ports.ConfigGetter) Option {
 	return func(ac *AccessCore) { ac.configGetter = c }
 }
 
-// WithSetupAdminMiddleware injects an HTTP middleware that wraps the admin
-// setup endpoint (POST /api/v1/access/setup/admin). In interactive bootstrap
-// mode the composition root passes runtime/auth.NewBootstrapMiddleware so that
-// the endpoint is gated by Basic Auth credentials from the GOCELL_BOOTSTRAP_*
+// WithBootstrapAuth injects the per-route replacement authentication
+// middleware for the admin setup endpoint (POST /api/v1/access/setup/admin).
+//
+// The composition root passes runtime/auth.NewBootstrapMiddleware so that the
+// endpoint is gated by Basic Auth credentials from GOCELL_BOOTSTRAP_ADMIN_*
 // env vars (D5: env creds authenticate the operator; request body defines the
-// admin identity).
-func WithSetupAdminMiddleware(mw func(http.Handler) http.Handler) Option {
-	return func(c *AccessCore) { c.setupAdminMiddleware = mw }
+// admin identity). This applies in both bootstrap and interactive modes — the
+// persistent startup credential model (ADR §D9) makes the protection a
+// permanent requirement, not an interactive-only feature.
+//
+// REQUIRED: Init() returns ErrCellInvalidConfig when nil. The closed contract
+// established by codegen + runtime/auth.Route.BootstrapAuth requires this to
+// be wired by the composition root before slice initialisation.
+func WithBootstrapAuth(mw func(http.Handler) http.Handler) Option {
+	return func(c *AccessCore) { c.bootstrapAuth = mw }
 }
 
 // AccessCore is the accesscore Cell implementation.
@@ -262,11 +275,12 @@ type AccessCore struct {
 	// values from configcore after an upsert event. nil = log-only mode.
 	configGetter ports.ConfigGetter
 
-	// setupAdminMiddleware wraps the POST /setup/admin endpoint when set.
-	// Nil means the endpoint is Public (no auth gate beyond JWT bypass).
-	// In interactive bootstrap mode the composition root injects the bootstrap
-	// Basic Auth middleware via WithSetupAdminMiddleware.
-	setupAdminMiddleware func(http.Handler) http.Handler
+	// bootstrapAuth is the per-route replacement authentication middleware
+	// for the POST /setup/admin endpoint. The composition root injects
+	// runtime/auth.NewBootstrapMiddleware here; Init() rejects a nil value
+	// because the closed contract (auth.Route.BootstrapAuth) requires it.
+	// Persistent across both bootstrap and interactive modes (ADR §D9).
+	bootstrapAuth func(http.Handler) http.Handler
 
 	// Slice handlers.
 	// +slice:route:slice=identitymanage,subPath=/users

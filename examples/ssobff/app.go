@@ -8,6 +8,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/ghbvf/gocell/adapters/ratelimit"
 	accesscore "github.com/ghbvf/gocell/cells/accesscore"
 	auditcore "github.com/ghbvf/gocell/cells/auditcore"
 	configcore "github.com/ghbvf/gocell/cells/configcore"
@@ -22,6 +23,24 @@ import (
 	"github.com/ghbvf/gocell/runtime/bootstrap"
 	"github.com/ghbvf/gocell/runtime/eventbus"
 )
+
+// ssobffBootstrapRateLimitPerSec / Burst mirror cmd/corebundle defaults
+// (5 req/min sustained, burst 10). The demo path keeps the same posture so
+// integration tests can exercise the 429 path against the same parameters.
+const (
+	ssobffBootstrapRateLimitPerSec = 5.0 / 60.0
+	ssobffBootstrapRateLimitBurst  = 10
+)
+
+// ssobffBootstrapAuthFailLogger returns the onAuthFail observer wired into the
+// demo bootstrap middleware.
+func ssobffBootstrapAuthFailLogger(logger *slog.Logger) auth.BootstrapAuthFailObserver {
+	return func(ctx context.Context, reason string) {
+		logger.ErrorContext(ctx, "bootstrap_auth_failed",
+			slog.String("event", "bootstrap_auth_failed"),
+			slog.String("reason", reason))
+	}
+}
 
 // demoTxRunner is a pass-through TxRunner used in demo mode. It executes fn
 // directly without a database transaction — no L2 atomicity guarantees.
@@ -158,10 +177,29 @@ func NewSSOBFFApp(opts ...SSOBFFAppOption) (*SSOBFFApp, error) {
 	}
 
 	var nw outbox.Writer = outbox.NoopWriter{}
+	// Demo deployment runs in interactive mode: no initialadmin lifecycle is
+	// wired (the operator POSTs to /api/v1/access/setup/admin to create the
+	// first admin). Bootstrap credentials are still mandatory — they protect
+	// the setup endpoint via Basic Auth (ADR §D9 persistent startup credential
+	// model). The demo uses static "ssobff-ops" creds; production deployments
+	// inject from K8s Secret / Vault.
+	ssobffBootstrapCreds := auth.BootstrapCredentials{
+		Username: []byte("ssobff-ops"),
+		Password: []byte("ssobff-bootstrap-pass-1!"),
+	}
+	rlLimiter := ratelimit.New(ratelimit.Config{
+		Rate:  ssobffBootstrapRateLimitPerSec,
+		Burst: ssobffBootstrapRateLimitBurst,
+	}, clock.Real())
+	bootstrapMW := auth.NewBootstrapMiddleware(
+		ssobffBootstrapCreds,
+		rlLimiter,
+		ssobffBootstrapAuthFailLogger(cfg.logger),
+	)
 	ac := accesscore.NewAccessCore(
 		accesscore.WithClock(clock.Real()),
 		accesscore.WithInMemoryDefaults(),
-		accesscore.WithInitialAdminBootstrap(),
+		accesscore.WithBootstrapAuth(bootstrapMW),
 		accesscore.WithOutboxDeps(eb, nw),
 		accesscore.WithJWTIssuer(jwtIssuer),
 		accesscore.WithJWTVerifier(jwtVerifier),

@@ -20,11 +20,12 @@
 | **Bootstrap** | `accesscore` lifecycle 在启动时自动检测并创建 | env `GOCELL_BOOTSTRAP_ADMIN_USERNAME` / `GOCELL_BOOTSTRAP_ADMIN_PASSWORD`（运维注入） |
 | **Interactive** | 运维通过 HTTP 端点 `POST /api/v1/access/setup/admin` 手工触发 | body 中的 `username` / `email` / `password`（运维自选业务身份） |
 
-两种模式都通过 `GOCELL_SETUP_MODE` 选择（空值 = `bootstrap`）。
+两种模式都通过 `GOCELL_SETUP_MODE` 选择（**必填，无默认值**；空值或未知值 fail-fast）。
 
 `POST /api/v1/access/setup/admin` 的密码必须是 8-72 个可打印 ASCII 字节，与 bcrypt 72-byte 输入上限一致。
 
 > 这是 **deployment-time** 决策，不是运行时开关。同一部署不能同时启用两条路径。
+> bootstrap 凭据 env 是**持久 startup credential**——admin 创建后 env 不可删除，是 setup endpoint 的常驻 Basic Auth 保护。详见 ADR §D9 + `docs/operations/first-run-setup.md` §凭据轮换。
 
 ---
 
@@ -35,10 +36,10 @@
 | **典型部署形态** | 容器 / K8s / 无人值守自动化 | VM / 单机 / 半人工 stage |
 | **首次启动是否需要人在场** | 否（启动即就绪） | 是（运维发送 HTTP 请求） |
 | **admin 凭据所在介质** | env（K8s Secret / Vault / CI secret） | 运维自选（密钥管理 / 密码本） |
-| **setup/admin endpoint 认证** | endpoint 从 lifecycle 完成后即返回 410 | HTTP Basic Auth（env 操作员凭据） |
-| **env 凭据角色** | 直接成为 admin 的 username / password | 操作员身份（验证谁可以发起 setup） |
-| **setup 后 endpoint 状态** | 410 Gone（永久；lifecycle 完成即 410） | 410 Gone（永久；admin 创建成功后） |
-| **multi-pod 兼容** | 是（lifecycle 幂等：admin 已存在则 slog.Warn 跳过） | 否（`GOCELL_REPLICA_COUNT > 1` 时 fail-fast） |
+| **setup/admin endpoint 认证** | HTTP Basic Auth（env 凭据，持久）；admin 创建后 endpoint 返回 410，但 401 优先 | HTTP Basic Auth（env 操作员凭据，持久） |
+| **env 凭据角色** | 同时是 admin 的 username/password + 持久 Basic Auth 保护 | 操作员身份（验证谁可以发起 setup）+ 持久 Basic Auth 保护 |
+| **setup 后 endpoint 状态** | 410 Gone（Basic Auth 通过后；未通过 401） | 410 Gone（Basic Auth 通过后；未通过 401） |
+| **multi-pod 兼容** | 是（lifecycle 幂等：admin 已存在则跳过创建，env 仍持续保护） | 否（`GOCELL_REPLICA_COUNT > 1` 时 fail-fast） |
 | **推荐场景** | 生产 K8s / Docker、CI sandbox、希望部署即就绪 | 内部工具、需要显式署名首位 admin、开发环境 |
 
 ---
@@ -47,7 +48,7 @@
 
 ```
 [startup]
-  GOCELL_SETUP_MODE=bootstrap（默认）
+  GOCELL_SETUP_MODE=bootstrap        # 必填，无默认值
   GOCELL_BOOTSTRAP_ADMIN_USERNAME=ops
   GOCELL_BOOTSTRAP_ADMIN_PASSWORD=OpsPass123!
   start gocell
@@ -56,8 +57,8 @@
   → 校验 env 凭据（空则 fail-fast）
   → 检测 admin role 是否有 user
     → 无：以 env username/password 创建 admin（写入 accesscore DB）
-    → 有：slog.Warn 提示可清理 env（不阻止启动）
-  → setup/admin endpoint 从此返回 410 Gone
+    → 有：跳过创建（env 仍作为 setup endpoint 的 Basic Auth 常驻保护，禁止删除）
+  → setup/admin endpoint：Basic Auth 通过后返回 410 Gone；未通过 401（401 优先于 410）
 
 [client]
   POST /api/v1/access/sessions/login
@@ -127,8 +128,9 @@ setup 端点退休后，所有 `POST /api/v1/access/setup/admin` 请求得到统
 ### 6.1 curl 示意
 
 ```bash
-# Bootstrap 模式（默认）：setup/admin 从 lifecycle 完成后即 410，直接 login
+# Bootstrap 模式（admin 已创建）：必须传 Basic Auth 才能拿到 410；未通过 401
 $ curl -sS -X POST https://gocell.example/api/v1/access/setup/admin \
+    -u "ops:OpsPass123!" \
     -H 'content-type: application/json' \
     -d '{"username":"root","email":"root@local","password":"SecretPass!23"}'
 {"error":{"code":"ERR_SETUP_ALREADY_INITIALIZED","message":"first-run admin already provisioned; this endpoint is retired","details":{"nextAction":"login"}}}
@@ -185,12 +187,12 @@ func provisionOrLogin(ctx context.Context, c *Client, in AdminSeed) error {
 |---|---|---|---|
 | **400** | `ERR_AUTH_IDENTITY_INVALID_INPUT` | 请求体字段缺失、超长、非可打印 ASCII 密码、控制字符 | 校验输入 → 提示用户 → 重发 |
 | **400** | `ERR_VALIDATION_FAILED` | JSON malformed、未知字段、Content-Type 错误 | 修请求体格式 → 重发 |
-| **401** | `ERR_AUTH_BOOTSTRAP_FAILED` | Interactive 模式，Basic Auth 凭据错误；或 rate limit 触发 | 核对 env 操作员凭据；不要自动重试（防枚举） |
+| **401** | `ERR_AUTH_BOOTSTRAP_FAILED` | Basic Auth 凭据错误（两种模式都先经 Basic Auth） | 核对 env 操作员凭据；不要自动重试（防枚举） |
 | **409** | `ERR_AUTH_USER_DUPLICATE` | 请求 username 已被其他 user 占用，但还没成为 admin | 换 username → 重试；不要静默 retry 同名 |
-| **410** | `ERR_SETUP_ALREADY_INITIALIZED` | admin role 已有 user（来自 bootstrap 或 interactive） | 进入 login 流；**不要重试 setup**；视为终态 |
-| **429** | `ERR_AUTH_BOOTSTRAP_FAILED` | per-IP rate limit 触发 | 等待 rate limit 窗口；检查请求来源 |
+| **410** | `ERR_SETUP_ALREADY_INITIALIZED` | Basic Auth 通过 + admin role 已有 user（来自 bootstrap 或 interactive） | 进入 login 流；**不要重试 setup**；视为终态 |
+| **429** | `ERR_RATE_LIMITED` | per-IP rate limit 触发（默认 5 req/min, burst 10） | 等待 rate limit 窗口；检查请求来源 |
 
-判定顺序（interactive 模式）：
+判定顺序（两种模式统一）：
 
 ```
         ┌────────────────────────────┐
@@ -198,26 +200,31 @@ func provisionOrLogin(ctx context.Context, c *Client, in AdminSeed) error {
         └──────────┬─────────────────┘
                    │
        ┌───────────┴────────────┐
-       │ Basic Auth 通过?        │
+       │ rate limit 通过?       │
        └────┬──────────────┬────┘
             │ 否            │ 是
             ▼              ▼
-         401 Unauthorized  ┌────────────────────┐
-                           │ admin 已存在?       │
-                           └────┬──────────┬────┘
-                                │ 否        │ 是
-                                ▼          ▼
-                       ┌────────────────┐  410 Gone（终态）
-                       │ 输入合法?      │
-                       └─┬──────────┬───┘
-                         │ 否        │ 是
-                         ▼          ▼
-                       400 Bad    ┌─────────────────┐
-                       Request    │ username 已占?   │
-                                  └─┬───────────┬───┘
-                                    │ 是         │ 否
-                                    ▼           ▼
-                                 409 Conflict  201 Created
+         429 Too Many     ┌──────────────────┐
+         Requests         │ Basic Auth 通过? │
+                          └────┬──────────┬──┘
+                               │ 否        │ 是
+                               ▼          ▼
+                          401 Unauthorized ┌────────────────────┐
+                                           │ admin 已存在?       │
+                                           └────┬──────────┬────┘
+                                                │ 否        │ 是
+                                                ▼          ▼
+                                       ┌────────────────┐  410 Gone（终态）
+                                       │ 输入合法?      │
+                                       └─┬──────────┬───┘
+                                         │ 否        │ 是
+                                         ▼          ▼
+                                       400 Bad    ┌─────────────────┐
+                                       Request    │ username 已占?   │
+                                                  └─┬───────────┬───┘
+                                                    │ 是         │ 否
+                                                    ▼           ▼
+                                                 409 Conflict  201 Created
 ```
 
 ---

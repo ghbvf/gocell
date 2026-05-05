@@ -32,9 +32,9 @@ func TestLifecycle_EnvDriven_CreatesAdmin(t *testing.T) {
 	}
 
 	l := NewLifecycle(
+		creds,
 		WithClock(kernelclock.Real()),
 		WithPasswordHasher(BcryptHasher{Cost: 4}),
-		WithBootstrapCredentials(creds),
 	)
 	l.Bind(deps, deps.Logger)
 
@@ -66,9 +66,9 @@ func TestLifecycle_EnvDriven_AlreadyProvisioned_NoOp(t *testing.T) {
 	}
 
 	l := NewLifecycle(
+		creds,
 		WithClock(kernelclock.Real()),
 		WithPasswordHasher(BcryptHasher{Cost: 4}),
-		WithBootstrapCredentials(creds),
 	)
 	l.Bind(deps, deps.Logger)
 
@@ -87,12 +87,12 @@ func TestLifecycle_EnvDriven_AlreadyProvisioned_NoOp(t *testing.T) {
 func seedAdminForLifecycleTest(t *testing.T, deps BootstrapDeps) {
 	t.Helper()
 	l := NewLifecycle(
-		WithClock(kernelclock.Real()),
-		WithPasswordHasher(BcryptHasher{Cost: 4}),
-		WithBootstrapCredentials(BootstrapCredentials{
+		BootstrapCredentials{
 			Username: []byte("admin"),
 			Password: []byte("seedPassword1"),
-		}),
+		},
+		WithClock(kernelclock.Real()),
+		WithPasswordHasher(BcryptHasher{Cost: 4}),
 	)
 	l.Bind(deps, deps.Logger)
 	hook := l.Hook()

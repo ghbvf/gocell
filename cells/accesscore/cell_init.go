@@ -252,6 +252,13 @@ func (c *AccessCore) initSlices() error {
 
 	// setup: first-run admin provisioning.
 	// Uses shared adminprovision.Provisioner so semantics match initialadmin.
+	if c.bootstrapAuth == nil {
+		return errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
+			"accesscore: WithBootstrapAuth is required (auth.bootstrap:true contracts "+
+				"need a per-route replacement authenticator; composition root must wire "+
+				"runtime/auth.NewBootstrapMiddleware via WithBootstrapAuth). "+
+				"See docs/architecture/202605061600-adr-bootstrap-admin-boundary.md §D1.")
+	}
 	setupProv, err := adminprovision.NewProvisioner(c.userRepo, c.roleRepo, c.logger, uuid.NewString, c.clk)
 	if err != nil {
 		return err
@@ -263,14 +270,7 @@ func (c *AccessCore) initSlices() error {
 	if err != nil {
 		return err
 	}
-	var setupOpts []setup.HandlerOption
-	if c.setupAdminMiddleware != nil {
-		// Interactive mode: protect the admin endpoint with bootstrap Basic Auth.
-		// D5: env credentials authenticate the operator; request body defines
-		// the admin identity.
-		setupOpts = append(setupOpts, setup.WithAdminMiddleware(c.setupAdminMiddleware))
-	}
-	c.setupHandler = setup.NewHandler(setupSvc, setupOpts...)
+	c.setupHandler = setup.NewHandler(setupSvc, c.bootstrapAuth)
 	c.AddSlice(cell.NewBaseSlice("setup", "accesscore", cell.L2))
 	return nil
 }

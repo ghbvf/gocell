@@ -35,7 +35,7 @@ func TestHttpAuthSetupStatusV1Serve(t *testing.T) {
 	// Also exercise the real handler and feed its recorded output through the
 	// contract validator so serialization bugs would surface.
 	svc := newService(t, mem.NewUserRepository(), mem.NewRoleRepository(), nil)
-	h := setup.NewHandler(svc)
+	h := setup.NewHandler(svc, testPassthroughAuth)
 	req := httptest.NewRequest(http.MethodGet, c.HTTP.Path, nil)
 	rec := httptest.NewRecorder()
 	newHandlerMux(t, h).ServeHTTP(rec, req)
@@ -49,7 +49,7 @@ func TestHttpAuthSetupStatusV1Serve(t *testing.T) {
 		// (service_test.go)，避免 contract 层依赖 service-internal 的 repo 选型。
 		svc := newServiceWithProvisionerError(t,
 			errors.New("provisioner status: pg unreachable"))
-		h := setup.NewHandler(svc)
+		h := setup.NewHandler(svc, testPassthroughAuth)
 
 		req := httptest.NewRequest(http.MethodGet, c.HTTP.Path, nil)
 		rec := httptest.NewRecorder()
@@ -91,7 +91,7 @@ func TestHttpAuthSetupAdminV1Serve(t *testing.T) {
 
 	// Real-handler produced 201 payload must satisfy the response schema.
 	svc := newService(t, mem.NewUserRepository(), mem.NewRoleRepository(), &stubWriter{})
-	h := setup.NewHandler(svc)
+	h := setup.NewHandler(svc, testPassthroughAuth)
 	body := `{"username":"root","email":"root@local","password":"SecretPass!23"}`
 	req := httptest.NewRequest(c.HTTP.Method, c.HTTP.Path, strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
@@ -109,7 +109,7 @@ func TestHttpAuthSetupAdminV1Serve(t *testing.T) {
 		`{"username":"root","email":"root@local","password":"` + strings.Repeat("界", 8) + `"}`,
 	} {
 		svc := newService(t, mem.NewUserRepository(), mem.NewRoleRepository(), &stubWriter{})
-		h := setup.NewHandler(svc)
+		h := setup.NewHandler(svc, testPassthroughAuth)
 		req := httptest.NewRequest(c.HTTP.Method, c.HTTP.Path, strings.NewReader(badBody))
 		req.Header.Set("Content-Type", "application/json")
 		rec := httptest.NewRecorder()
@@ -122,7 +122,7 @@ func TestHttpAuthSetupAdminV1Serve(t *testing.T) {
 		roleRepo := mem.NewRoleRepository()
 		seedContractIdentityUser(t, userRepo, "root", "root@local")
 		svc := newService(t, userRepo, roleRepo, &stubWriter{})
-		h := setup.NewHandler(svc)
+		h := setup.NewHandler(svc, testPassthroughAuth)
 
 		req := httptest.NewRequest(c.HTTP.Method, c.HTTP.Path, strings.NewReader(body))
 		req.Header.Set("Content-Type", "application/json")
@@ -143,7 +143,7 @@ func TestHttpAuthSetupAdminV1Serve(t *testing.T) {
 		orphan.MarkProvisionPending(domain.UserSourceBootstrap, time.Now())
 		require.NoError(t, userRepo.Create(context.Background(), orphan))
 		svc := newService(t, userRepo, roleRepo, &stubWriter{})
-		h := setup.NewHandler(svc)
+		h := setup.NewHandler(svc, testPassthroughAuth)
 
 		req := httptest.NewRequest(c.HTTP.Method, c.HTTP.Path, strings.NewReader(body))
 		req.Header.Set("Content-Type", "application/json")
@@ -163,7 +163,7 @@ func TestHttpAuthSetupAdminV1Serve(t *testing.T) {
 		roleRepo := mem.NewRoleRepository()
 		seedAdmin(t, userRepo, roleRepo)
 		svc := newService(t, userRepo, roleRepo, &stubWriter{})
-		h := setup.NewHandler(svc)
+		h := setup.NewHandler(svc, testPassthroughAuth)
 
 		req := httptest.NewRequest(c.HTTP.Method, c.HTTP.Path, strings.NewReader(body))
 		req.Header.Set("Content-Type", "application/json")

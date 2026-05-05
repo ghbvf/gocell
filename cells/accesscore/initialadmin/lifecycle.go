@@ -21,24 +21,23 @@ type config struct {
 	Username string
 	Clock    clock.Clock
 	Hasher   PasswordHasher
-	// bootstrapCreds holds the env-driven credentials for the initial admin.
-	// Required: NewLifecycle is a no-op if nil when start() is called.
-	bootstrapCreds *BootstrapCredentials
 }
 
 // Lifecycle orchestrates first-run admin bootstrap as a single
 // cell.LifecycleHook contributor. Construction is two-phase so composition
 // and Cell.Init can wire orthogonal concerns:
 //
-//  1. NewLifecycle(opts...) — collects config via Options
-//  2. Bind(deps, logger)   — injected by Cell.Init once repos are ready
+//  1. NewLifecycle(creds, opts...) — collects credentials + config via Options
+//  2. Bind(deps, logger)           — injected by Cell.Init once repos are ready
 //
 // Hook() is safe to call before Bind; the OnStart closure reads Bind state
 // at invocation time.
 //
-// OnStart creates the admin using the injected bootstrap credentials and
-// returns immediately — no background cleaner goroutine is needed.
+// OnStart creates the admin using the bootstrap credentials supplied at
+// construction and returns immediately — no background cleaner goroutine is
+// needed.
 type Lifecycle struct {
+	creds   BootstrapCredentials
 	cfg     config
 	deps    BootstrapDeps
 	logger  *slog.Logger
@@ -50,7 +49,8 @@ type Lifecycle struct {
 // LifecycleOption configures a Lifecycle instance.
 type LifecycleOption func(*Lifecycle)
 
-// WithUsername overrides the admin username (default: "admin").
+// WithUsername overrides the admin username (default: derived from
+// BootstrapCredentials.Username).
 func WithUsername(u string) LifecycleOption { return func(l *Lifecycle) { l.cfg.Username = u } }
 
 // WithPasswordHasher overrides the bcrypt hasher. Tests inject low-cost hashers.
@@ -70,23 +70,16 @@ type BootstrapCredentials struct {
 	Password []byte
 }
 
-// WithBootstrapCredentials injects env-driven credentials for the initial admin.
-// When set, the Lifecycle uses the provided username/password directly: username
-// defines the admin identity, password is hashed and stored. No credential file
-// is written and no TTL cleaner is registered — the operator manages credential
-// hygiene via the env vars.
+// NewLifecycle constructs a Lifecycle with the supplied credentials and options.
 //
-// ref: keycloak/keycloak KC_BOOTSTRAP_ADMIN_USERNAME (one-shot env, no credfile)
-func WithBootstrapCredentials(creds BootstrapCredentials) LifecycleOption {
-	return func(l *Lifecycle) {
-		l.cfg.bootstrapCreds = &creds
-	}
-}
-
-// NewLifecycle constructs a Lifecycle with the given options.
-// WithBootstrapCredentials is required; start() will fail-fast if it is absent.
-func NewLifecycle(opts ...LifecycleOption) *Lifecycle {
-	l := &Lifecycle{}
+// creds is REQUIRED — the persistent startup credential model (ADR §D9) makes
+// bootstrap credentials mandatory for the lifetime of the deployment, so a
+// Lifecycle without credentials is meaningless. Empty Username or Password
+// fields cause the OnStart hook to fail fast.
+//
+// ref: docs/architecture/202605061600-adr-bootstrap-admin-boundary.md §D2 + §D9
+func NewLifecycle(creds BootstrapCredentials, opts ...LifecycleOption) *Lifecycle {
+	l := &Lifecycle{creds: creds}
 	for _, o := range opts {
 		o(l)
 	}
@@ -122,6 +115,7 @@ func (l *Lifecycle) start(ctx context.Context) error {
 	}
 	deps := l.deps
 	cfg := l.cfg
+	creds := l.creds
 	// Propagate the injected clock from deps when no explicit WithClock option was set.
 	if cfg.Clock == nil {
 		cfg.Clock = deps.Clock
@@ -130,18 +124,23 @@ func (l *Lifecycle) start(ctx context.Context) error {
 	logger := l.logger
 	l.mu.Unlock()
 
-	if cfg.bootstrapCreds == nil {
+	if len(creds.Username) == 0 || len(creds.Password) == 0 {
 		return errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
-			"initialadmin: WithBootstrapCredentials is required; no credfile path is supported")
+			"initialadmin: NewLifecycle requires non-empty BootstrapCredentials "+
+				"(Username and Password); see ADR §D2 + §D9")
 	}
 
-	return l.envDrivenProvision(ctx, deps, cfg, logger)
+	return l.envDrivenProvision(ctx, deps, cfg, creds, logger)
 }
 
 // envDrivenProvision uses injected username/password to create the initial admin.
 // No credfile write, no cleaner worker.
-func (l *Lifecycle) envDrivenProvision(ctx context.Context, deps BootstrapDeps, cfg config, logger *slog.Logger) error {
-	creds := cfg.bootstrapCreds
+//
+// Logging policy: only the "created" outcome emits a log line. The persistent
+// startup credential model (ADR §D9) means already-exists is the lifecycle's
+// steady state on every subsequent start — broadcasting it on every restart is
+// noise.
+func (l *Lifecycle) envDrivenProvision(ctx context.Context, deps BootstrapDeps, cfg config, creds BootstrapCredentials, logger *slog.Logger) error {
 	bsDeps := BootstrapDeps{
 		UserRepo: deps.UserRepo,
 		RoleRepo: deps.RoleRepo,
@@ -152,21 +151,13 @@ func (l *Lifecycle) envDrivenProvision(ctx context.Context, deps BootstrapDeps, 
 	if err != nil {
 		return fmt.Errorf("initialadmin: env-driven: %w", err)
 	}
-	outcome, err := prov.ensureAdminFromCreds(ctx, creds)
+	created, err := prov.ensureAdminFromCreds(ctx, creds)
 	if err != nil {
 		return fmt.Errorf("initialadmin: env-driven ensure: %w", err)
 	}
-	switch outcome {
-	case envDrivenOutcomeCreated:
+	if created {
 		logger.InfoContext(ctx, "initialadmin: initial admin created from env credentials",
 			slog.String("event", "initial_admin_env_driven_created"),
-			slog.String("username", string(creds.Username)))
-	case envDrivenOutcomeAlreadyExists:
-		// Admin already exists. Warn if bootstrap creds are still set — operator
-		// should remove the env vars once the admin has been provisioned.
-		logger.Warn("bootstrap credentials present after admin provisioned; "+
-			"consider removing GOCELL_BOOTSTRAP_ADMIN_* env for hygiene",
-			slog.String("event", "bootstrap_creds_hygiene_warn"),
 			slog.String("username", string(creds.Username)))
 	}
 	return nil

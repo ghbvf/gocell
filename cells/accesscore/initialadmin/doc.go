@@ -14,20 +14,21 @@
 //
 // # Usage
 //
-// Wire via accesscore.WithInitialAdminBootstrap + WithBootstrapCredentials:
+// Wire via accesscore.WithInitialAdminBootstrap with required BootstrapCredentials:
 //
 //	accessCore := accesscore.NewAccessCore(
-//	    accesscore.WithInitialAdminBootstrap(
-//	        initialadmin.WithBootstrapCredentials(initialadmin.BootstrapCredentials{
-//	            Username: []byte("admin"),
-//	            Password: []byte("secret"),
-//	        }),
-//	    ),
+//	    accesscore.WithInitialAdminBootstrap(initialadmin.BootstrapCredentials{
+//	        Username: []byte("admin"),
+//	        Password: []byte("secret"),
+//	    }),
 //	)
 //	// bootstrap.New auto-wires the returned Hook at phase3b.
 //
 // Omit [accesscore.WithInitialAdminBootstrap] entirely (e.g., interactive mode)
-// and no Hook is registered — Init does not call reg.Lifecycle.
+// and no Hook is registered — Init does not call reg.Lifecycle. The persistent
+// startup credential model (ADR §D9) means the env credentials remain mandatory
+// regardless of whether the lifecycle hook is wired — they protect the
+// setup/admin endpoint via runtime/auth.NewBootstrapMiddleware.
 //
 // # Build tag
 //

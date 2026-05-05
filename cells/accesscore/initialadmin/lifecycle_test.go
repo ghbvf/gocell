@@ -41,26 +41,30 @@ func TestNewLifecycle_Options(t *testing.T) {
 	}
 
 	l := NewLifecycle(
+		creds,
 		WithUsername("superadmin"),
 		WithPasswordHasher(h),
 		WithClock(clk),
-		WithBootstrapCredentials(creds),
 	)
 
 	assert.Equal(t, "superadmin", l.cfg.Username)
 	assert.Equal(t, h, l.cfg.Hasher)
 	assert.Equal(t, clk, l.cfg.Clock)
-	require.NotNil(t, l.cfg.bootstrapCreds)
-	assert.Equal(t, creds.Username, l.cfg.bootstrapCreds.Username)
+	assert.Equal(t, creds.Username, l.creds.Username)
 }
 
 func TestNewLifecycle_Defaults(t *testing.T) {
-	l := NewLifecycle()
+	creds := BootstrapCredentials{
+		Username: []byte("admin"),
+		Password: []byte("password123"),
+	}
+	clk := kernelclock.Real()
+	l := NewLifecycle(creds, WithClock(clk))
 
 	assert.Empty(t, l.cfg.Username)
 	assert.Nil(t, l.cfg.Hasher)
-	assert.Nil(t, l.cfg.Clock)
-	assert.Nil(t, l.cfg.bootstrapCreds)
+	assert.Equal(t, clk, l.cfg.Clock)
+	assert.Equal(t, creds.Username, l.creds.Username)
 	assert.False(t, l.bound)
 }
 
@@ -69,7 +73,10 @@ func TestNewLifecycle_Defaults(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestLifecycle_Hook_Fields(t *testing.T) {
-	l := NewLifecycle()
+	l := NewLifecycle(
+		BootstrapCredentials{Username: []byte("a"), Password: []byte("password1")},
+		WithClock(kernelclock.Real()),
+	)
 	hook := l.Hook()
 
 	assert.Equal(t, hookName, hook.Name)
@@ -82,7 +89,10 @@ func TestLifecycle_Hook_Fields(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestLifecycle_StartWithoutBind_ReturnsInvalidConfigError(t *testing.T) {
-	l := NewLifecycle()
+	l := NewLifecycle(
+		BootstrapCredentials{Username: []byte("a"), Password: []byte("password1")},
+		WithClock(kernelclock.Real()),
+	)
 	hook := l.Hook()
 
 	err := hook.OnStart(context.Background())
@@ -94,14 +104,15 @@ func TestLifecycle_StartWithoutBind_ReturnsInvalidConfigError(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// 4. start without WithBootstrapCredentials fails fast
+// 4. start with empty BootstrapCredentials fails fast
 // ---------------------------------------------------------------------------
 
 func TestLifecycle_StartWithoutCredentials_ReturnsInvalidConfigError(t *testing.T) {
+	// Empty credentials — must fail fast at OnStart.
 	l := NewLifecycle(
+		BootstrapCredentials{},
 		WithClock(kernelclock.Real()),
 		WithPasswordHasher(BcryptHasher{Cost: 4}),
-		// No WithBootstrapCredentials — must fail fast.
 	)
 	deps := makeLifecycleDeps(t)
 	l.Bind(deps, deps.Logger)
@@ -127,9 +138,9 @@ func TestLifecycle_EnvDriven_FirstRun_CreatesAdmin(t *testing.T) {
 	}
 
 	l := NewLifecycle(
+		creds,
 		WithClock(kernelclock.Real()),
 		WithPasswordHasher(BcryptHasher{Cost: 4}),
-		WithBootstrapCredentials(creds),
 	)
 	l.Bind(deps, deps.Logger)
 
@@ -155,18 +166,18 @@ func TestLifecycle_EnvDriven_RepeatRun_NoOp(t *testing.T) {
 
 	// First run: creates admin.
 	l1 := NewLifecycle(
+		creds,
 		WithClock(kernelclock.Real()),
 		WithPasswordHasher(BcryptHasher{Cost: 4}),
-		WithBootstrapCredentials(creds),
 	)
 	l1.Bind(deps, deps.Logger)
 	require.NoError(t, l1.Hook().OnStart(context.Background()))
 
 	// Second run: should not error.
 	l2 := NewLifecycle(
+		creds,
 		WithClock(kernelclock.Real()),
 		WithPasswordHasher(BcryptHasher{Cost: 4}),
-		WithBootstrapCredentials(creds),
 	)
 	l2.Bind(deps, deps.Logger)
 	err := l2.Hook().OnStart(context.Background())
@@ -183,7 +194,10 @@ func TestLifecycle_EnvDriven_RepeatRun_NoOp(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestLifecycle_Stop_Idempotent(t *testing.T) {
-	l := NewLifecycle()
+	l := NewLifecycle(
+		BootstrapCredentials{Username: []byte("a"), Password: []byte("password1")},
+		WithClock(kernelclock.Real()),
+	)
 	hook := l.Hook()
 	assert.NoError(t, hook.OnStop(context.Background()))
 	assert.NoError(t, hook.OnStop(context.Background()))
@@ -196,9 +210,9 @@ func TestLifecycle_Stop_AfterStart_Idempotent(t *testing.T) {
 		Password: []byte("adminPassword1"),
 	}
 	l := NewLifecycle(
+		creds,
 		WithClock(kernelclock.Real()),
 		WithPasswordHasher(BcryptHasher{Cost: 4}),
-		WithBootstrapCredentials(creds),
 	)
 	l.Bind(deps, deps.Logger)
 	hook := l.Hook()
