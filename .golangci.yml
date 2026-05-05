@@ -175,6 +175,7 @@ linters:
             - github.com/go-chi/chi
             - github.com/golang-jwt/jwt
             - github.com/google/uuid
+            - github.com/santhosh-tekuri/jsonschema  # runtime/http/schemavalidate body validator
             - github.com/stretchr/testify  # storetest/ test-helper packages
             - go.opentelemetry.io/contrib
             - go.opentelemetry.io/otel

@@ -13,32 +13,6 @@ import (
 	"github.com/ghbvf/gocell/runtime/auth"
 )
 
-// FlagWriteResponse is the public DTO for a feature flag write response, retained
-// for unit tests that verify the conversion function directly (toFlagWriteResponse).
-type FlagWriteResponse struct {
-	ID                string    `json:"id"`
-	Key               string    `json:"key"`
-	Enabled           bool      `json:"enabled"`
-	RolloutPercentage int       `json:"rolloutPercentage"`
-	Description       string    `json:"description"`
-	Version           int       `json:"version"`
-	CreatedAt         time.Time `json:"createdAt"`
-	UpdatedAt         time.Time `json:"updatedAt"`
-}
-
-func toFlagWriteResponse(f *domain.FeatureFlag) FlagWriteResponse {
-	return FlagWriteResponse{
-		ID:                f.ID,
-		Key:               f.Key,
-		Enabled:           f.Enabled,
-		RolloutPercentage: f.RolloutPercentage,
-		Description:       f.Description,
-		Version:           f.Version,
-		CreatedAt:         f.CreatedAt,
-		UpdatedAt:         f.UpdatedAt,
-	}
-}
-
 // CreateAdapter wraps Service to implement create.Service for http.config.flags.create.v1.
 type CreateAdapter struct{ S *Service }
 

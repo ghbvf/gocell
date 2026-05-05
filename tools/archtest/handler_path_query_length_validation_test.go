@@ -29,12 +29,12 @@ func TestHANDLER_PATH_QUERY_LENGTH_VALIDATION_01(t *testing.T) {
 	contractsDir := filepath.Join(root, "contracts")
 
 	type expectation struct {
-		yamlRel    string
-		paramName  string
-		isPath     bool
-		minLen     *int
-		maxLen     *int
-		generated  string
+		yamlRel   string
+		paramName string
+		isPath    bool
+		minLen    *int
+		maxLen    *int
+		generated string
 	}
 
 	var expects []expectation
@@ -45,7 +45,7 @@ func TestHANDLER_PATH_QUERY_LENGTH_VALIDATION_01(t *testing.T) {
 		if info.IsDir() || filepath.Base(path) != "contract.yaml" {
 			return nil
 		}
-		data, readErr := os.ReadFile(path)
+		data, readErr := os.ReadFile(path) //nolint:gosec // archtest scans repo paths it discovered itself
 		if readErr != nil {
 			return readErr
 		}
@@ -60,8 +60,9 @@ func TestHANDLER_PATH_QUERY_LENGTH_VALIDATION_01(t *testing.T) {
 				} `yaml:"http"`
 			} `yaml:"endpoints"`
 		}
+		//nolint:nilerr // unstructured/non-contract YAMLs in tree are skipped silently
 		if err := yaml.Unmarshal(data, &doc); err != nil {
-			return nil // not a structured contract
+			return nil
 		}
 		if !doc.Codegen || doc.Kind != "http" || doc.Endpoints.HTTP == nil {
 			return nil
@@ -99,7 +100,9 @@ func TestHANDLER_PATH_QUERY_LENGTH_VALIDATION_01(t *testing.T) {
 		t.Fatalf("walk contracts: %v", walkErr)
 	}
 	if len(expects) == 0 {
-		t.Fatal("HANDLER-PATH-QUERY-LENGTH-VALIDATION-01: no contract with path/query length constraint found — survey expected ~22 contracts with pathParams.minLength/maxLength; check survey logic")
+		t.Fatal("HANDLER-PATH-QUERY-LENGTH-VALIDATION-01: no contract with " +
+			"path/query length constraint found — survey expected ~22 contracts " +
+			"with pathParams.minLength/maxLength; check survey logic")
 	}
 
 	for _, e := range expects {
@@ -116,7 +119,9 @@ func TestHANDLER_PATH_QUERY_LENGTH_VALIDATION_01(t *testing.T) {
 		}
 		if e.minLen != nil || e.maxLen != nil {
 			if !strings.Contains(text, e.paramName+`: invalid`) {
-				t.Errorf("%s param %q: contract declares min/maxLength but handler %s lacks `%s: invalid` validation message", e.yamlRel, e.paramName, e.generated, e.paramName)
+				t.Errorf("%s param %q: contract declares min/maxLength but handler %s "+
+					"lacks `%s: invalid` validation message",
+					e.yamlRel, e.paramName, e.generated, e.paramName)
 			}
 		}
 	}

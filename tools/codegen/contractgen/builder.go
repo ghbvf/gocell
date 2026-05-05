@@ -81,7 +81,7 @@ func buildHTTPSpec(spec *ContractGenSpec, rootDir string, contract *metadata.Con
 	pathParams := buildPathParams(http)
 	queryParams := buildQueryParams(http)
 
-	allDTOs, err := buildHTTPDTOs(rootDir, contract, contractDir, http, pathParams, queryParams)
+	allDTOs, err := buildHTTPDTOs(rootDir, contract, contractDir, pathParams, queryParams)
 	if err != nil {
 		return err
 	}
@@ -98,7 +98,7 @@ func buildHTTPSpec(spec *ContractGenSpec, rootDir string, contract *metadata.Con
 	// without bodies have no schema and no validator.
 	if contract.SchemaRefs.Request != "" {
 		reqPath := filepath.Join(rootDir, contractDir, contract.SchemaRefs.Request)
-		schemaBytes, err := os.ReadFile(reqPath)
+		schemaBytes, err := os.ReadFile(reqPath) //nolint:gosec // schema path resolved from contract.yaml metadata
 		if err != nil {
 			return fmt.Errorf("contractgen build: %q read request schema for embed: %w", contract.ID, err)
 		}
@@ -120,7 +120,6 @@ func buildHTTPDTOs(
 	rootDir string,
 	contract *metadata.ContractMeta,
 	contractDir string,
-	http *metadata.HTTPTransportMeta,
 	pathParams, queryParams []ParamSpec,
 ) ([]DTOSpec, error) {
 	var allDTOs []DTOSpec

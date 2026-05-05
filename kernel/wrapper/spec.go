@@ -156,4 +156,3 @@ func (s ContractSpec) validateEvent() error {
 	}
 	return nil
 }
-

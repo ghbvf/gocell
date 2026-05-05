@@ -147,4 +147,3 @@ func TestSPEC_GEN_VALUE_PARITY_01(t *testing.T) {
 		})
 	}
 }
-

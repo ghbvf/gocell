@@ -32,7 +32,6 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
-	"strings"
 	"testing"
 )
 
@@ -173,29 +172,4 @@ func parseContractSpecFields(t *testing.T, path string) (id, topic string, ok bo
 		return "", "", false
 	}
 	return foundID, foundTopic, true
-}
-
-// specGenIsVersionSegmentLocal reports whether s matches the pattern vN
-// (letter 'v' followed by one or more decimal digits). Used only within this
-// file; does not import the contractgen tool package to avoid a tools/ cycle.
-func specGenIsVersionSegmentLocal(s string) bool {
-	if len(s) < 2 || s[0] != 'v' {
-		return false
-	}
-	for _, r := range s[1:] {
-		if r < '0' || r > '9' {
-			return false
-		}
-	}
-	return true
-}
-
-// contractIDHasVersionSuffix returns true if the last dot-segment of id
-// matches the vN pattern. Used only in documentation tests below.
-func contractIDHasVersionSuffix(id string) bool {
-	parts := strings.Split(id, ".")
-	if len(parts) < 2 {
-		return false
-	}
-	return specGenIsVersionSegmentLocal(parts[len(parts)-1])
 }

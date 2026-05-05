@@ -98,7 +98,6 @@ func TestDomainLastSegment(t *testing.T) {
 	}
 }
 
-
 func TestPathParamNamesFromPath(t *testing.T) {
 	cases := []struct {
 		in   string

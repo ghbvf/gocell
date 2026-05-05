@@ -16,6 +16,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -24,13 +25,20 @@ import (
 	logingen "github.com/ghbvf/gocell/generated/contracts/http/auth/login/v1"
 )
 
+// errOracleStubInvoked is returned by the stub Service when the handler
+// unexpectedly forwards a request body that should have been rejected by
+// schema validation upstream. Surfacing this as a sentinel error makes the
+// regression visible (the handler skipped validation) instead of returning
+// (nil, nil) which masks the failure.
+var errOracleStubInvoked = errors.New("oracle stub: handler reached service layer; schema validation did not reject invalid input")
+
 // stubLoginService satisfies the generated Service interface for oracle
 // tests. It should never be called — the handler must reject invalid input
 // before reaching service code.
 type stubLoginService struct{}
 
 func (s *stubLoginService) Login(_ context.Context, _ *logingen.Request) (*logingen.Response, error) {
-	return nil, nil
+	return nil, errOracleStubInvoked
 }
 
 // oracleErrorBody decodes a 400 response body and returns the error message.

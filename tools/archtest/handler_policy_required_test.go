@@ -38,7 +38,6 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
-	"strings"
 	"testing"
 )
 
@@ -110,6 +109,7 @@ func collectCellGoFiles(t *testing.T, root string) []string {
 
 	walk := func(dir string) {
 		_ = filepath.Walk(filepath.Join(root, dir), func(path string, info os.FileInfo, err error) error {
+			//nolint:nilerr // archtest walk skips unreadable nodes silently
 			if err != nil || info == nil || info.IsDir() {
 				return nil
 			}
@@ -189,9 +189,3 @@ func isPublicExemptPkg(alias string) bool {
 // Also flag the unlabelled form "NewHandler(<svc>, nil)" where the package part
 // is inferred from a dot-import or local redeclaration. This is unusual but
 // handled by checking sel.X type.
-
-// isHandlerPolicyFile returns true when rel is under tools/archtest/testdata
-// (used to exclude fixture files from the production scan).
-func isHandlerPolicyFixtureFile(rel string) bool {
-	return strings.Contains(rel, "tools/archtest/testdata")
-}

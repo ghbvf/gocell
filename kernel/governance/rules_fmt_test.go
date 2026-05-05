@@ -101,7 +101,6 @@ func TestFMT13_NonHTTPContractSkipped(t *testing.T) {
 	}
 }
 
-
 // TestFMT13_HTTPContractWithEndpoints verifies that an HTTP contract with
 // a valid endpoints.http block produces no FMT-13 error.
 func TestFMT13_HTTPContractWithEndpoints(t *testing.T) {

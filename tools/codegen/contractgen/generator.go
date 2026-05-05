@@ -77,6 +77,12 @@ func Generate(root string, p *metadata.ProjectMeta, opts Options) (Result, error
 
 // generateOneContract renders all artifacts for a single contract and writes
 // (or dry-runs / verifies) them to disk, appending outcomes to res.
+//
+// Cognitive complexity is intrinsic to the orchestrator: 5 contract kinds ×
+// dry-run/write/verify branches × per-artifact emit (types / iface / handler /
+// spec / subscription). Splitting would only push the same matrix into helpers.
+//
+//nolint:gocognit // structural orchestration; see godoc above.
 func generateOneContract(root string, p *metadata.ProjectMeta, contractID string, opts Options, res *Result) error {
 	// B.5: contract ID sanity — must not contain path separators or traversal sequences.
 	if strings.Contains(contractID, "..") || strings.ContainsAny(contractID, `/\`) {
@@ -176,6 +182,11 @@ func renderWriteContract(root, tmplName string, spec *ContractGenSpec, path stri
 // RenderContractArtifacts renders a single contract to in-memory artifacts.
 // Used by manifest projection / verify pipelines (mirrors cellgen.RenderCellArtifacts).
 // Returns (nil, nil) when the contract is not opted in (Codegen=false).
+//
+// Mirrors generateOneContract on the same kind × artifact matrix; the high
+// cognitive complexity is structural orchestration, not nested business logic.
+//
+//nolint:gocognit,cyclop,funlen // structural orchestration; see godoc above.
 func RenderContractArtifacts(root string, p *metadata.ProjectMeta, contractID string) ([]CodegenArtifact, error) {
 	if p == nil {
 		return nil, fmt.Errorf("contractgen render artifacts: project is nil")
