@@ -480,7 +480,11 @@ func (s *PGRefreshStore) handleRotatedRow(ctx context.Context, row refreshRow) e
 			slog.String("reason", "reuse_detected"),
 			slog.Int("used_times", row.usedTimes),
 		)
-		if _, execErr := s.execCtx(ctx, revokeSessionSQL, now, row.sessionID); execErr != nil {
+		// Bypass the ambient transaction for the cascade revoke: a reuse-attack
+		// response MUST persist even when the caller's tx rolls back. We use the
+		// underlying pool directly, not execCtx, so the revoke commits on its
+		// own connection regardless of the outer RunInTx outcome.
+		if _, execErr := s.pool.Exec(ctx, revokeSessionSQL, now, row.sessionID); execErr != nil {
 			return errcode.Wrap(errcode.KindInternal, ErrAdapterPGQuery, "refresh store: grace exhausted cascade", execErr)
 		}
 		return rejectWithReason("reuse_detected", row.sessionID)
@@ -498,7 +502,10 @@ func (s *PGRefreshStore) handleRotatedRow(ctx context.Context, row refreshRow) e
 			slog.String("subject_id", row.subjectID),
 			slog.String("reason", "reuse_detected"),
 		)
-		if _, execErr := s.execCtx(ctx, revokeSessionSQL, now, row.sessionID); execErr != nil {
+		// Bypass the ambient transaction (see grace-exhausted branch above): the
+		// cascade revoke must commit on its own connection so that an outer
+		// caller rollback does not undo the attack response.
+		if _, execErr := s.pool.Exec(ctx, revokeSessionSQL, now, row.sessionID); execErr != nil {
 			return errcode.Wrap(errcode.KindInternal, ErrAdapterPGQuery, "refresh store: reuse cascade", execErr)
 		}
 		return rejectWithReason("reuse_detected", row.sessionID)

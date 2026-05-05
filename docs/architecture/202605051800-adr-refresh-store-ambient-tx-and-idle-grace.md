@@ -44,6 +44,26 @@ constructor. Cell-level callers (cell_init.go) propagate the error through `Init
 
 **Archtest**: `REFRESH-AMBIENT-TX-01` (AST scan for `.Begin()` in refresh_store.go).
 
+### Reuse cascade revoke bypasses the ambient tx
+
+Reuse detection (`rotated_at + reuseInterval < now`) and grace exhaustion
+(`used_times >= GraceMaxReuses`) trigger a cascade revoke that wipes every row
+in the offending session. This SQL **must not** participate in the caller's
+ambient transaction: it is a security response to a confirmed attack, and a
+business-level rollback by the caller (e.g. an unrelated handler error after
+the refresh check) would undo the revocation and leave the stolen chain live.
+
+Implementation: `handleRotatedRow` runs the cascade `revokeSessionSQL`
+through `s.pool.Exec(ctx, ...)` directly, bypassing `execCtx`. The revoke
+commits on its own connection regardless of the surrounding `RunInTx`
+outcome. The reject error itself is still captured via the outer `rejectErr`
+variable so that `RunInTx` commits cleanly (timing oracle defense intact).
+
+**Test**: `TestPGRefreshStore_ReuseCascadeSurvivesAmbientRollback` —
+caller `RunInTx(ctx, fn)` where `fn` triggers reuse Peek then returns an
+error; after the outer rollback, a subsequent `Rotate(child)` must still
+return `ErrRejected`.
+
 ### Accepted timing leak: malformed wire format
 
 `Peek` and `Rotate` call `refresh.ParseOpaque` before entering `txRunner.RunInTx`.
