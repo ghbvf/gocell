@@ -46,13 +46,15 @@ import (
 // drifted from the design.
 var _ func(string, *metadata.ProjectMeta) (map[string]markergen.WireBundle, error) = markergen.Merge
 
-// projectFromMetadata parses ProjectMeta from root for the helpers below.
-// Returns nil on parse error so callers can fall back to empty results without
-// failing the test (callers are best-effort enumerators).
-func projectFromMetadata(root string) *metadata.ProjectMeta {
+// mustProjectFromMetadata parses ProjectMeta from root and t.Fatals on error.
+// Governance gates must fail closed when the source-of-truth metadata is
+// unusable — silently returning an empty project would let downstream
+// enumerators yield zero-iteration vacuous-pass tests.
+func mustProjectFromMetadata(t *testing.T, root string) *metadata.ProjectMeta {
+	t.Helper()
 	p, err := metadata.NewParser(root).Parse()
 	if err != nil {
-		return nil
+		t.Fatalf("metadata.NewParser failed; governance gates require a valid project: %v", err)
 	}
 	return p
 }
@@ -60,11 +62,9 @@ func projectFromMetadata(root string) *metadata.ProjectMeta {
 // findAllCellFiles enumerates cell.go for every cell registered in
 // ProjectMeta.Cells (covers both top-level cells/ and examples/*/cells/ via
 // path-pattern matching in kernel/metadata/parser.go).
-func findAllCellFiles(root string) []string {
-	project := projectFromMetadata(root)
-	if project == nil {
-		return nil
-	}
+func findAllCellFiles(t *testing.T, root string) []string {
+	t.Helper()
+	project := mustProjectFromMetadata(t, root)
 	var files []string
 	for _, c := range project.Cells {
 		path := filepath.Join(root, filepath.Dir(c.File), "cell.go")
@@ -79,11 +79,9 @@ func findAllCellFiles(root string) []string {
 // findAllCellInitFiles enumerates cell.go / cell_init.go / cell_routes.go /
 // cell_providers.go for every cell registered in ProjectMeta.Cells. Excludes
 // cell_gen.go (generated owns wire calls) and *_test.go.
-func findAllCellInitFiles(root string) []string {
-	project := projectFromMetadata(root)
-	if project == nil {
-		return nil
-	}
+func findAllCellInitFiles(t *testing.T, root string) []string {
+	t.Helper()
+	project := mustProjectFromMetadata(t, root)
 	var files []string
 	for _, c := range project.Cells {
 		cellDir := filepath.Join(root, filepath.Dir(c.File))
@@ -113,11 +111,9 @@ func findAllCellInitFiles(root string) []string {
 
 // findAllCellYAMLs enumerates cell.yaml for every cell registered in
 // ProjectMeta.Cells.
-func findAllCellYAMLs(root string) []string {
-	project := projectFromMetadata(root)
-	if project == nil {
-		return nil
-	}
+func findAllCellYAMLs(t *testing.T, root string) []string {
+	t.Helper()
+	project := mustProjectFromMetadata(t, root)
 	var files []string
 	for _, c := range project.Cells {
 		files = append(files, filepath.Join(root, c.File))
@@ -128,11 +124,9 @@ func findAllCellYAMLs(root string) []string {
 
 // findAllSliceYAMLs enumerates slice.yaml for every slice registered in
 // ProjectMeta.Slices.
-func findAllSliceYAMLs(root string) []string {
-	project := projectFromMetadata(root)
-	if project == nil {
-		return nil
-	}
+func findAllSliceYAMLs(t *testing.T, root string) []string {
+	t.Helper()
+	project := mustProjectFromMetadata(t, root)
 	var files []string
 	for _, s := range project.Slices {
 		files = append(files, filepath.Join(root, s.File))
@@ -157,7 +151,7 @@ func deriveCellID(path string) string {
 func TestNoMetadataLiteralInCellGo01(t *testing.T) {
 	t.Parallel()
 	root := findModuleRoot(t)
-	for _, path := range findAllCellFiles(root) {
+	for _, path := range findAllCellFiles(t, root) {
 		fset := token.NewFileSet()
 		f, err := parser.ParseFile(fset, path, nil, parser.SkipObjectResolution)
 		if err != nil {
@@ -196,7 +190,7 @@ func TestNoWireFieldsInYaml01(t *testing.T) {
 	t.Parallel()
 	root := findModuleRoot(t)
 
-	for _, path := range findAllCellYAMLs(root) {
+	for _, path := range findAllCellYAMLs(t, root) {
 		content, err := os.ReadFile(path) //nolint:gosec // archtest scans repo paths it discovered
 		if err != nil {
 			continue
@@ -207,7 +201,7 @@ func TestNoWireFieldsInYaml01(t *testing.T) {
 				filepath.ToSlash(rel))
 		}
 	}
-	for _, path := range findAllSliceYAMLs(root) {
+	for _, path := range findAllSliceYAMLs(t, root) {
 		content, err := os.ReadFile(path) //nolint:gosec // archtest scans repo paths it discovered
 		if err != nil {
 			continue
@@ -290,7 +284,7 @@ func forbiddenWireCall(path string) (found string, line int, err error) {
 func TestMarkerMissingForWireCall01(t *testing.T) {
 	t.Parallel()
 	root := findModuleRoot(t)
-	for _, path := range findAllCellInitFiles(root) {
+	for _, path := range findAllCellInitFiles(t, root) {
 		sym, line, err := forbiddenWireCall(path)
 		if err != nil {
 			continue

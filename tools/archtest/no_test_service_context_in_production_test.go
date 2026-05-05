@@ -32,52 +32,48 @@ func TestNO_TEST_SERVICE_CONTEXT_IN_PRODUCTION_01(t *testing.T) {
 
 	root := findModuleRoot(t)
 
-	// Non-cell roots — walked directly because they are not cell-managed.
-	nonCellDirs := []string{
+	// All production roots — non-test code anywhere in the repo must not
+	// call auth.TestServiceContext. Direct walk is correct here because the
+	// rule scope is wider than cell-managed code (e.g., examples/ssobff/
+	// is non-cell example code, examples/iotdevice/{auth.go,main.go} are
+	// non-cell wiring code). The scanner skips _test.go in-line so test
+	// helpers can call TestServiceContext freely.
+	searchDirs := []string{
 		filepath.Join(root, "runtime"),
+		filepath.Join(root, "cells"),
 		filepath.Join(root, "cmd"),
 		filepath.Join(root, "kernel"),
 		filepath.Join(root, "adapters"),
+		filepath.Join(root, "examples"),
 		filepath.Join(root, "tests"),
 	}
 
-	var allFiles []string
-	for _, dir := range nonCellDirs {
-		ff, err := findAllGoFilesInDir(dir)
+	var violations []string
+	for _, dir := range searchDirs {
+		allFiles, err := findAllGoFilesInDir(dir)
 		if os.IsNotExist(err) {
 			continue
 		}
 		if err != nil {
 			t.Fatalf("walking %s: %v", dir, err)
 		}
-		allFiles = append(allFiles, ff...)
-	}
+		for _, f := range allFiles {
+			base := filepath.Base(f)
+			// Skip _test.go files and test helper files.
+			if strings.HasSuffix(base, "_test.go") || strings.Contains(base, "_test_") {
+				continue
+			}
 
-	// Cell roots — discovered via metadata.NewParser (covers top-level
-	// cells/ and examples/*/cells/).
-	cellFiles, err := findCellProductionGoFiles(root)
-	if err != nil {
-		t.Fatalf("metadata.NewParser: %v", err)
-	}
-	allFiles = append(allFiles, cellFiles...)
+			rel, _ := filepath.Rel(root, f)
+			rel = filepath.ToSlash(rel)
 
-	var violations []string
-	for _, f := range allFiles {
-		base := filepath.Base(f)
-		// Skip _test.go files and test helper files.
-		if strings.HasSuffix(base, "_test.go") || strings.Contains(base, "_test_") {
-			continue
+			hits, scanErr := scanTestServiceContextCalls(f, rel)
+			if scanErr != nil {
+				t.Logf("scan error %s: %v", rel, scanErr)
+				continue
+			}
+			violations = append(violations, hits...)
 		}
-
-		rel, _ := filepath.Rel(root, f)
-		rel = filepath.ToSlash(rel)
-
-		hits, scanErr := scanTestServiceContextCalls(f, rel)
-		if scanErr != nil {
-			t.Logf("scan error %s: %v", rel, scanErr)
-			continue
-		}
-		violations = append(violations, hits...)
 	}
 
 	sort.Strings(violations)

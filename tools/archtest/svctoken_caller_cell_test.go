@@ -52,15 +52,20 @@ func TestSVCTOKEN_CALLER_CELL_REQUIRED_01(t *testing.T) {
 	root := findModuleRoot(t)
 	knownCells := discoverKnownCells(t, root)
 
-	// Non-cell roots — walked directly (not cell-managed).
-	nonCellDirs := []string{
+	// Scan all production roots (cells/, runtime/, cmd/, examples/, tests/),
+	// including _test.go since test helpers also call GenerateServiceToken
+	// and must declare a known callerCell. Direct walk is correct here:
+	// the rule scope is wider than cell-managed code (e.g.,
+	// examples/ssobff/walkthrough_test.go is non-cell example code).
+	searchDirs := []string{
 		filepath.Join(root, "runtime"),
+		filepath.Join(root, "cells"),
 		filepath.Join(root, "cmd"),
+		filepath.Join(root, "examples"),
 		filepath.Join(root, "tests"),
 	}
 	var allFiles []string
-	for _, dir := range nonCellDirs {
-		// Include _test.go files too — test helpers can also use GenerateServiceToken.
+	for _, dir := range searchDirs {
 		ff, err := findAllGoFilesInDir(dir)
 		if os.IsNotExist(err) {
 			continue
@@ -70,14 +75,6 @@ func TestSVCTOKEN_CALLER_CELL_REQUIRED_01(t *testing.T) {
 		}
 		allFiles = append(allFiles, ff...)
 	}
-	// Cell roots via metadata.NewParser, including _test.go (this gate also
-	// wants test helpers). Walk each cell dir directly to pick up both
-	// production and *_test.go files.
-	cellGoFiles, err := walkCellDirs(root)
-	if err != nil {
-		t.Fatalf("walkCellDirs: %v", err)
-	}
-	allFiles = append(allFiles, cellGoFiles...)
 
 	var violations []string
 	for _, f := range allFiles {
@@ -128,41 +125,6 @@ func discoverKnownCells(t *testing.T, root string) map[string]bool {
 	return known
 }
 
-// walkCellDirs returns all .go files (including *_test.go) under every cell
-// directory registered in ProjectMeta.Cells. Used by gates that need to
-// scan both production and test helpers.
-func walkCellDirs(root string) ([]string, error) {
-	project, err := metadata.NewParser(root).Parse()
-	if err != nil {
-		return nil, err
-	}
-	var files []string
-	for _, c := range project.Cells {
-		cellDir := filepath.Join(root, filepath.Dir(c.File))
-		walkErr := filepath.WalkDir(cellDir, func(path string, d os.DirEntry, werr error) error {
-			if werr != nil {
-				return werr
-			}
-			if d.IsDir() {
-				switch d.Name() {
-				case "vendor", "worktrees", "testdata", "generated", ".git":
-					return filepath.SkipDir
-				}
-				return nil
-			}
-			if strings.HasSuffix(path, ".go") {
-				files = append(files, path)
-			}
-			return nil
-		})
-		if walkErr != nil {
-			return nil, walkErr
-		}
-	}
-	sort.Strings(files)
-	return files, nil
-}
-
 // scanGenerateServiceTokenCallSites parses a .go file and returns violation
 // strings for any auth.GenerateServiceToken call where the second argument
 // (callerCell) is not a valid known cell-ID string literal.
@@ -177,13 +139,18 @@ func scanGenerateServiceTokenCallSites(path, rel string, knownCells map[string]b
 		return nil, nil //nolint:nilerr // soft-skip on read error: archtest fixture allows missing/unreadable files (caller will scan rest)
 	}
 
+	authAliases := authPackageAliases(f)
+	if len(authAliases) == 0 {
+		return nil, nil // file does not import runtime/auth
+	}
+
 	var violations []string
 	ast.Inspect(f, func(n ast.Node) bool {
 		call, ok := n.(*ast.CallExpr)
 		if !ok {
 			return true
 		}
-		if !isAuthGenerateServiceTokenCall(call) {
+		if !isAuthGenerateServiceTokenCall(call, authAliases) {
 			return true
 		}
 		pos := fset.Position(call.Pos())
@@ -238,8 +205,11 @@ func scanGenerateServiceTokenCallSites(path, rel string, knownCells map[string]b
 }
 
 // isAuthGenerateServiceTokenCall reports whether call is a call expression
-// of the form auth.GenerateServiceToken(...).
-func isAuthGenerateServiceTokenCall(call *ast.CallExpr) bool {
+// of the form <alias>.GenerateServiceToken(...) where <alias> is one of the
+// resolved local names for runtime/auth in the current file. This is
+// import-aware so renamed imports (`import authpkg "…/runtime/auth"`) are
+// still detected.
+func isAuthGenerateServiceTokenCall(call *ast.CallExpr, authAliases map[string]struct{}) bool {
 	sel, ok := call.Fun.(*ast.SelectorExpr)
 	if !ok {
 		return false
@@ -247,9 +217,36 @@ func isAuthGenerateServiceTokenCall(call *ast.CallExpr) bool {
 	if sel.Sel.Name != "GenerateServiceToken" {
 		return false
 	}
-	// Accept any receiver whose Name is "auth" (package alias or direct reference).
 	id, ok := sel.X.(*ast.Ident)
-	return ok && id.Name == "auth"
+	if !ok {
+		return false
+	}
+	_, hit := authAliases[id.Name]
+	return hit
+}
+
+// authPackageAliases returns the set of local package names by which f
+// imports github.com/ghbvf/gocell/runtime/auth. Default name is "auth"
+// when no rename is given; explicit aliases (`import x "…"`) are honored;
+// dot-imports ("." alias) and blank imports ("_") are excluded because
+// neither produces an AST `<name>.GenerateServiceToken` call expression.
+func authPackageAliases(f *ast.File) map[string]struct{} {
+	const target = `"github.com/ghbvf/gocell/runtime/auth"`
+	out := map[string]struct{}{}
+	for _, imp := range f.Imports {
+		if imp.Path == nil || imp.Path.Value != target {
+			continue
+		}
+		name := "auth"
+		if imp.Name != nil {
+			if imp.Name.Name == "_" || imp.Name.Name == "." {
+				continue
+			}
+			name = imp.Name.Name
+		}
+		out[name] = struct{}{}
+	}
+	return out
 }
 
 // findAllGoFilesInDir walks dir and returns all .go files (including _test.go).
