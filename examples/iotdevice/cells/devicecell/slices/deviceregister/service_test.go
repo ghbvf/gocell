@@ -93,7 +93,8 @@ func TestService_Register_PublishFails_StillReturnsDevice(t *testing.T) {
 	repo := mem.NewDeviceRepository()
 	emitter, err := outbox.NewDirectEmitter(
 		failPublisher{}, outbox.DirectPublishFailOpen,
-		metrics.NopProvider{}, clock.Real(), "devicecell", outbox.WithLogger(slog.Default()))
+		metrics.NopProvider{}, clock.Real(), "devicecell", outbox.WithLogger(slog.Default()),
+	)
 	require.NoError(t, err)
 	svc := NewService(repo, slog.Default(), WithEmitter(emitter), WithClock(clock.Real()))
 
@@ -108,7 +109,8 @@ func TestService_Register_PublishFails_FailClosedReturnsError(t *testing.T) {
 	repo := mem.NewDeviceRepository()
 	emitter, err := outbox.NewDirectEmitter(
 		failPublisher{}, outbox.DirectPublishFailClosed,
-		metrics.NopProvider{}, clock.Real(), "devicecell", outbox.WithLogger(slog.Default()))
+		metrics.NopProvider{}, clock.Real(), "devicecell", outbox.WithLogger(slog.Default()),
+	)
 	require.NoError(t, err)
 	svc := NewService(repo, slog.Default(), WithEmitter(emitter), WithClock(clock.Real()))
 
@@ -125,7 +127,8 @@ func TestService_Register_FailOpenDoesNotLogPublished(t *testing.T) {
 	logger := slog.New(slog.NewJSONHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	emitter, err := outbox.NewDirectEmitter(
 		failPublisher{}, outbox.DirectPublishFailOpen,
-		metrics.NopProvider{}, clock.Real(), "devicecell", outbox.WithLogger(logger))
+		metrics.NopProvider{}, clock.Real(), "devicecell", outbox.WithLogger(logger),
+	)
 	require.NoError(t, err)
 	svc := NewService(repo, logger, WithEmitter(emitter), WithClock(clock.Real()))
 

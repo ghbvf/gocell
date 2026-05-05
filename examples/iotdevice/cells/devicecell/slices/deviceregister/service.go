@@ -11,8 +11,8 @@ import (
 
 	"github.com/google/uuid"
 
-	registercontract "github.com/ghbvf/gocell/generated/contracts/http/device/register/v1"
 	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/domain"
+	registercontract "github.com/ghbvf/gocell/generated/contracts/http/device/register/v1"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/errcode"
@@ -124,7 +124,8 @@ func (s *Service) registerInternal(ctx context.Context, name string) (*domain.De
 		Payload:   payload,
 	}
 	if err := s.emitter.Emit(ctx, entry); err != nil {
-		s.logger.Error("device-register: publish event failed",
+		s.logger.Error(
+			"device-register: publish event failed",
 			slog.String("device_id", device.ID),
 			slog.Any("error", err),
 		)

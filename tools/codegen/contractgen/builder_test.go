@@ -320,7 +320,7 @@ func TestPkgNameFromContractID(t *testing.T) {
 		// D1: http stdlib collision
 		{"http.gateway.http.v1", "gatewayhttp"},
 		// 2-segment edge case (<3 parts): fallback uses raw last segment regardless of keyword.
-		{"http.v1", "v1"},     // <3 parts → goPackageName(last) = "v1"
+		{"http.v1", "v1"}, // <3 parts → goPackageName(last) = "v1"
 		// 3-segment with reserved penultimate and no preceding domain: appends "pkg".
 		{"http.delete.v1", "deletepkg"}, // len=3, parts[-2]="delete" reserved, len<4 → "deletepkg"
 	}

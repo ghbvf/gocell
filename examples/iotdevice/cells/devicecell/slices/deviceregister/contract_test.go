@@ -19,9 +19,11 @@ import (
 )
 
 // contractSpecID mirrors the generated contractSpec.ID for test assertions.
-var contractSpecID = "http.device.register.v1"
-var contractSpecMethod = "POST"
-var contractSpecPath = "/api/v1/devices"
+var (
+	contractSpecID     = "http.device.register.v1"
+	contractSpecMethod = "POST"
+	contractSpecPath   = "/api/v1/devices"
+)
 
 // --- contract test doubles ---
 
@@ -47,7 +49,8 @@ func newContractHandler() (http.Handler, *recordingPublisher) {
 	pub := &recordingPublisher{}
 	emitter, err := outbox.NewDirectEmitter(
 		pub, outbox.DirectPublishFailOpen, metrics.NopProvider{}, clock.Real(), "devicecell",
-		outbox.WithLogger(slog.Default()))
+		outbox.WithLogger(slog.Default()),
+	)
 	if err != nil {
 		panic(err)
 	}

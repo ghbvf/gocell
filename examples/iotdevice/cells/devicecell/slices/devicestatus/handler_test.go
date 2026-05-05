@@ -12,9 +12,9 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	statuscontract "github.com/ghbvf/gocell/generated/contracts/http/device/status/v1"
 	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/domain"
 	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/mem"
+	statuscontract "github.com/ghbvf/gocell/generated/contracts/http/device/status/v1"
 )
 
 func setupStatusHandler() (*statuscontract.Handler, *mem.DeviceRepository) {

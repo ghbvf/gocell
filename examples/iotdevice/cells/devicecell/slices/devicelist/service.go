@@ -8,8 +8,8 @@ import (
 	"log/slog"
 	"time"
 
-	listcontract "github.com/ghbvf/gocell/generated/contracts/http/device/list/v1"
 	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/domain"
+	listcontract "github.com/ghbvf/gocell/generated/contracts/http/device/list/v1"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/query"
 )

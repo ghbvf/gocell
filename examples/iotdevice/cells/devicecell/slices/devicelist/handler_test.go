@@ -9,9 +9,9 @@ import (
 	"testing"
 	"time"
 
-	listcontract "github.com/ghbvf/gocell/generated/contracts/http/device/list/v1"
 	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/domain"
 	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/mem"
+	listcontract "github.com/ghbvf/gocell/generated/contracts/http/device/list/v1"
 	"github.com/ghbvf/gocell/pkg/query"
 	"github.com/ghbvf/gocell/runtime/auth"
 )

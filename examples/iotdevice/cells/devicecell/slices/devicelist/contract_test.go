@@ -12,9 +12,9 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	listcontract "github.com/ghbvf/gocell/generated/contracts/http/device/list/v1"
 	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/domain"
 	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/mem"
+	listcontract "github.com/ghbvf/gocell/generated/contracts/http/device/list/v1"
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/cell/celltest"
 	"github.com/ghbvf/gocell/pkg/query"
@@ -24,9 +24,11 @@ import (
 
 // contractSpec exposes the generated contract spec for contract-test assertions.
 // The generated handler_gen.go uses a private var; we replicate the key fields here.
-var contractSpecID = "http.device.list.v1"
-var contractSpecMethod = "GET"
-var contractSpecPath = "/api/v1/devices/"
+var (
+	contractSpecID     = "http.device.list.v1"
+	contractSpecMethod = "GET"
+	contractSpecPath   = "/api/v1/devices/"
+)
 
 func newContractDeviceListHandler(t *testing.T) http.Handler {
 	t.Helper()

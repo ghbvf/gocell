@@ -6,8 +6,8 @@ import (
 	"log/slog"
 	"time"
 
-	statuscontract "github.com/ghbvf/gocell/generated/contracts/http/device/status/v1"
 	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/domain"
+	statuscontract "github.com/ghbvf/gocell/generated/contracts/http/device/status/v1"
 )
 
 // Service handles device status query business logic.

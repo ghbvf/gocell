@@ -375,7 +375,7 @@ func TestGenerate_AllCodegenTrue_MultipleContracts(t *testing.T) {
 
 	// http.order.ping.v1 → types_gen + iface_gen + handler_gen = 3 files.
 	// event.item-created.v1 → types_gen + iface_gen + spec_gen + subscription_gen = 4 files.
-	httpFiles := 3 // types_gen, iface_gen, handler_gen
+	httpFiles := 3  // types_gen, iface_gen, handler_gen
 	eventFiles := 4 // types_gen, iface_gen, spec_gen, subscription_gen
 	wantTotal := httpFiles + eventFiles
 	if len(res.Generated) != wantTotal {

@@ -13,13 +13,13 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/domain"
 	ackcontract "github.com/ghbvf/gocell/generated/contracts/http/device/command/ack/v1"
 	dequeuecontract "github.com/ghbvf/gocell/generated/contracts/http/device/command/dequeue/v1"
 	enqueuecontract "github.com/ghbvf/gocell/generated/contracts/http/device/command/enqueue/v1"
 	extendleasecontract "github.com/ghbvf/gocell/generated/contracts/http/device/command/extend-lease/v1"
 	reportcontract "github.com/ghbvf/gocell/generated/contracts/http/device/command/report/v1"
 	listcontract "github.com/ghbvf/gocell/generated/contracts/http/internalapi/devicecommands/list/v1"
-	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/domain"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/command"
 	"github.com/ghbvf/gocell/pkg/errcode"
@@ -159,7 +159,8 @@ func (s *Service) enqueueInternal(ctx context.Context, deviceID, commandType, pa
 		return command.Entry{}, fmt.Errorf("device-command: enqueue: %w", err)
 	}
 
-	s.logger.Info("device-command: command enqueued",
+	s.logger.Info(
+		"device-command: command enqueued",
 		slog.String("command_id", entry.ID),
 		slog.String("device_id", deviceID),
 		slog.String("command_type", commandType),
@@ -183,7 +184,8 @@ func (s *Service) dequeueInternal(ctx context.Context, deviceID string, limit in
 	if err != nil {
 		return nil, fmt.Errorf("device-command: dequeue: %w", err)
 	}
-	s.logger.Info("device-command: commands dequeued",
+	s.logger.Info(
+		"device-command: commands dequeued",
 		slog.String("device_id", deviceID),
 		slog.Int("count", len(entries)),
 	)
@@ -473,12 +475,14 @@ func (s *Service) ExtendLease(ctx context.Context, req *extendleasecontract.Requ
 }
 
 // Compile-time interface checks.
-var _ enqueuecontract.Service = (*Service)(nil)
-var _ dequeuecontract.Service = (*Service)(nil)
-var _ reportcontract.Service = (*Service)(nil)
-var _ ackcontract.Service = (*Service)(nil)
-var _ extendleasecontract.Service = (*Service)(nil)
-var _ listcontract.Service = (*Service)(nil)
+var (
+	_ enqueuecontract.Service     = (*Service)(nil)
+	_ dequeuecontract.Service     = (*Service)(nil)
+	_ reportcontract.Service      = (*Service)(nil)
+	_ ackcontract.Service         = (*Service)(nil)
+	_ extendleasecontract.Service = (*Service)(nil)
+	_ listcontract.Service        = (*Service)(nil)
+)
 
 // reportInternal records that the device has received the command and started work.
 func (s *Service) reportInternal(ctx context.Context, deviceID, cmdID string) error {
@@ -489,7 +493,8 @@ func (s *Service) reportInternal(ctx context.Context, deviceID, cmdID string) er
 	if err := s.queue.Report(ctx, cmdID, now); err != nil {
 		return fmt.Errorf("device-command: report: %w", err)
 	}
-	s.logger.Info("device-command: command reported delivered",
+	s.logger.Info(
+		"device-command: command reported delivered",
 		slog.String("command_id", cmdID),
 		slog.String("device_id", deviceID),
 	)
@@ -511,7 +516,8 @@ func (s *Service) ackInternal(ctx context.Context, deviceID, cmdID string, reaso
 		return fmt.Errorf("device-command: ack: %w", err)
 	}
 
-	s.logger.Info("device-command: command acknowledged",
+	s.logger.Info(
+		"device-command: command acknowledged",
 		slog.String("command_id", cmdID),
 		slog.String("device_id", deviceID),
 		slog.String("reason", reason.String()),

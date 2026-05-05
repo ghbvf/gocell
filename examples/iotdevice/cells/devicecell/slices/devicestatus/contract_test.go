@@ -11,16 +11,18 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	statuscontract "github.com/ghbvf/gocell/generated/contracts/http/device/status/v1"
 	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/domain"
 	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/mem"
+	statuscontract "github.com/ghbvf/gocell/generated/contracts/http/device/status/v1"
 	"github.com/ghbvf/gocell/tests/contracttest"
 )
 
 // contractSpecID mirrors the generated contractSpec for test assertions.
-var contractSpecID = "http.device.status.v1"
-var contractSpecMethod = "GET"
-var contractSpecPath = "/api/v1/devices/{id}/status"
+var (
+	contractSpecID     = "http.device.status.v1"
+	contractSpecMethod = "GET"
+	contractSpecPath   = "/api/v1/devices/{id}/status"
+)
 
 func newContractHandler() http.Handler {
 	repo := mem.NewDeviceRepository()

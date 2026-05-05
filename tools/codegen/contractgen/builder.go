@@ -58,7 +58,9 @@ func BuildContractSpec(rootDir string, p *metadata.ProjectMeta, contractID strin
 		// without hard-failing. No spec/handler/subscription file is emitted.
 		// When a full generator is added, add the corresponding case here.
 	default:
-		return nil, fmt.Errorf("contractgen build: contract %q has unsupported kind %q (http|event|command|projection only)", contractID, contract.Kind)
+		return nil, fmt.Errorf(
+			"contractgen build: contract %q has unsupported kind %q (http|event|command|projection only)",
+			contractID, contract.Kind)
 	}
 
 	return spec, nil
@@ -171,7 +173,11 @@ func hasDTONamed(dtos []DTOSpec, name string) bool {
 // a schemaRefs.request — POST/PATCH endpoints that accept only path params (no request
 // body schema) must not call DecodeJSONStrict (an empty body would be rejected).
 // pathParams and queryParams are pre-computed by buildHTTPSpec (F-09: avoid re-computing).
-func buildHTTPEndpointSpec(contract *metadata.ContractMeta, http *metadata.HTTPTransportMeta, pathParams, queryParams []ParamSpec) (*HTTPEndpointSpec, error) {
+func buildHTTPEndpointSpec(
+	contract *metadata.ContractMeta,
+	http *metadata.HTTPTransportMeta,
+	pathParams, queryParams []ParamSpec,
+) (*HTTPEndpointSpec, error) {
 	handlerMethod := goPascalCase(domainLastSegment(contract.ID))
 	methodHasBody := http.Method == "POST" || http.Method == "PUT" || http.Method == "PATCH"
 	hasBody := methodHasBody && contract.SchemaRefs.Request != ""

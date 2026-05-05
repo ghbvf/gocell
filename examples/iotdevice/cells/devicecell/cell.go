@@ -9,6 +9,13 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/domain"
+	dto "github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/dto"
+	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/mem"
+	devicecommand "github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/slices/devicecommand"
+	devicelist "github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/slices/devicelist"
+	deviceregister "github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/slices/deviceregister"
+	devicestatus "github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/slices/devicestatus"
 	ackcontract "github.com/ghbvf/gocell/generated/contracts/http/device/command/ack/v1"
 	dequeuecontract "github.com/ghbvf/gocell/generated/contracts/http/device/command/dequeue/v1"
 	enqueuecontract "github.com/ghbvf/gocell/generated/contracts/http/device/command/enqueue/v1"
@@ -18,13 +25,6 @@ import (
 	registercontract "github.com/ghbvf/gocell/generated/contracts/http/device/register/v1"
 	statuscontract "github.com/ghbvf/gocell/generated/contracts/http/device/status/v1"
 	internallistcontract "github.com/ghbvf/gocell/generated/contracts/http/internalapi/devicecommands/list/v1"
-	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/domain"
-	dto "github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/dto"
-	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/mem"
-	devicecommand "github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/slices/devicecommand"
-	devicelist "github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/slices/devicelist"
-	deviceregister "github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/slices/deviceregister"
-	devicestatus "github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/slices/devicestatus"
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/clock"
 	kcommand "github.com/ghbvf/gocell/kernel/command"
@@ -244,7 +244,8 @@ func (c *DeviceCell) initDeps(durabilityMode cell.DurabilityMode) error {
 // initSlices constructs all 4 device slices and the command sweeper.
 func (c *DeviceCell) initSlices(durabilityMode cell.DurabilityMode) error {
 	// device-register slice
-	registerSvc := deviceregister.NewService(c.deviceRepo, c.logger,
+	registerSvc := deviceregister.NewService(
+		c.deviceRepo, c.logger,
 		deviceregister.WithEmitter(c.emitter),
 		deviceregister.WithClock(c.clk),
 	)
@@ -262,7 +263,8 @@ func (c *DeviceCell) initSlices(durabilityMode cell.DurabilityMode) error {
 		c.commandQueue = commandtest.NewInMemQueue()
 	}
 	cmdQueue := c.commandQueue
-	commandSvc, err := devicecommand.NewService(cmdQueue, c.deviceRepo, c.cursorCodec, c.logger,
+	commandSvc, err := devicecommand.NewService(
+		cmdQueue, c.deviceRepo, c.cursorCodec, c.logger,
 		query.RunModeForDemo(durabilityMode == cell.DurabilityDemo),
 		devicecommand.WithClock(c.clk),
 	)

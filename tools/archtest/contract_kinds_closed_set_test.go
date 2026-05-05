@@ -75,9 +75,9 @@ func TestCONTRACT_KINDS_CLOSED_SET_01_NegativeFixture(t *testing.T) {
 		kind string
 	}
 	contracts := []fakeContract{
-		{"workflow.device.enroll.v1", "workflow"},   // unknown — must be caught
-		{"http.device.list.v1", "http"},             // known — must pass
-		{"event.device.enrolled.v1", "event"},       // known — must pass
+		{"workflow.device.enroll.v1", "workflow"}, // unknown — must be caught
+		{"http.device.list.v1", "http"},           // known — must pass
+		{"event.device.enrolled.v1", "event"},     // known — must pass
 	}
 
 	var violations []string
