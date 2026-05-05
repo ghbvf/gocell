@@ -60,14 +60,6 @@ var defaultPolicy = refresh.Policy{
 	GraceMaxReuses: refresh.DefaultGraceMaxReuses,
 }
 
-// disabledIdleGracePolicy documents the intent of inline Policy literals that
-// omit MaxIdle and GraceMaxReuses throughout this suite.  Zero MaxIdle disables
-// idle expiry; zero GraceMaxReuses disables the grace counter cap.  Tests that
-// inline Policy{ReuseInterval, MaxAge} are exercising only the core reuse-window
-// and lifetime logic — not X12 idle-expiry (T19) or X14 grace counter (T20),
-// which have dedicated integration tests.  Using zero values here keeps the
-// test setup minimal and avoids coupling unrelated tests to migration 016 state.
-
 const (
 	t15TargetSubject = "user-A"
 	t15OtherSubject  = "user-B"
