@@ -11,12 +11,16 @@ import (
 //
 //   - FMT-16: slice / cell / assembly directory contains '-' (kebab-case disallowed)
 //   - FMT-17: slice.yaml allowedFiles first entry does not match the slice directory
-//   - FMT-18: wrapper.ContractSpec literals in cells/** disagree with contracts/**/contract.yaml
 //   - FMT-19: kernel/wrapper/*.go contains forbidden mutable package-level state
 //   - VERIFY-06: active journeys have at least one auto passCriteria checkRef
 //   - FMT-C1: cell.yaml id contains '-' (kebab-case cell id disallowed)
 //   - FMT-A1: assembly.yaml id contains '-' (kebab-case assembly id disallowed)
 //   - DOC-NAME-01: active docs contain a forbidden legacy naming literal
+//
+// FMT-18 (wrapper.ContractSpec literals in cells/** cross-check) was removed in
+// PR-V1-CODEGEN-FULL-MIGRATION: after W3 cells/** has 0 ContractSpec literals,
+// enforced by archtest CELLS-NO-WRAPPER-CONTRACTSPEC-IMPORT-01 /
+// NO-MANUAL-CONTRACTSPEC-LITERAL-01 / EVENT-SUBSCRIPTION-CONTRACTGEN-COVERAGE-01.
 //
 // When strict is false the method is equivalent to Validate(ctx) —
 // strict-only rules emit nothing (they are strict-only by design, there is
@@ -82,7 +86,8 @@ func (v *Validator) strictRules(ctx context.Context, strict bool) []func() []Val
 		func() []ValidationResult { return v.validateVERIFY06(ctx, strict) },
 		func() []ValidationResult { return v.validateFMT16(strict) },
 		func() []ValidationResult { return v.validateFMT17(strict) },
-		func() []ValidationResult { return v.validateFMT18(strict) },
+		// FMT-18 deleted in PR-V1-CODEGEN-FULL-MIGRATION W4 (replaced by archtest
+		// CELLS-NO-WRAPPER-CONTRACTSPEC-IMPORT-01 / NO-MANUAL-CONTRACTSPEC-LITERAL-01).
 		func() []ValidationResult { return v.validateFMT19(strict) },
 		func() []ValidationResult { return v.validateFMTC1(strict) },
 		func() []ValidationResult { return v.validateFMTA1(strict) },

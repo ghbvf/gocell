@@ -116,3 +116,39 @@ Implementation: shipped in this PR — `gocell generate cell` defaults to `--all
 - `ref: kubernetes-sigs/controller-tools pkg/markers/parse.go@main` (L530-L551 Registry/Definition — rejected)
 - `ref: google/wire internal/wire/parse.go@main` (function-call markers — rejected)
 - `ref: ent/ent entc/load/load.go@master` (schema-as-code — rejected)
+
+---
+
+## K-05c GREEN 锁定 (PR-V1-CODEGEN-FULL-MIGRATION)
+
+**Date locked**: 2026-05-05
+**PR**: PR-V1-CODEGEN-FULL-MIGRATION (feat/167-codegen-full-migration, 4 waves W1-W4)
+
+### 三 archtest gates 正式 GREEN（空 allowlist + 空 exceptions）
+
+After W3 cell-by-cell migration completed, all three archtest gates are GREEN with empty allowlists:
+
+| Gate ID | Scope | Enforcement |
+|---|---|---|
+| `CELLS-NO-WRAPPER-CONTRACTSPEC-IMPORT-01` | cells/** + examples/**/cells/** | Import-graph level: any file importing kernel/wrapper from cells/** is a compile-time violation |
+| `NO-MANUAL-CONTRACTSPEC-LITERAL-01` | Repo-wide non-generated .go | AST composite-literal scan: `wrapper.ContractSpec{...}` outside generated/contracts/** is forbidden |
+| `EVENT-SUBSCRIPTION-CONTRACTGEN-COVERAGE-01` | generated/contracts/**/subscription_gen.go | Verifies every active event contract with `codegen: true` has a corresponding subscription_gen.go |
+
+### `kernel/wrapper.EventSpec` 删除
+
+The `EventSpec(id, transport string) ContractSpec` helper function was deleted in W4. All prior callers were migrated in W1-W3 to use the generated `NewSubscription` adapter in `generated/contracts/event/**`. The deletion is enforced retroactively by `CELLS-NO-WRAPPER-CONTRACTSPEC-IMPORT-01` (cells can no longer import kernel/wrapper at all) and `NO-MANUAL-CONTRACTSPEC-LITERAL-01` (even if imported, a manual literal would be caught).
+
+### FMT-18 削除
+
+`kernel/governance/validateFMT18` (FMT-18 SPEC-CONTRACT-SYNC, AST scanner for `wrapper.ContractSpec` literals and `wrapper.EventSpec(...)` calls in `cells/**`) was deleted in W4. Rationale:
+
+1. **No-op after W3**: FMT-18 scanned `cells/**` which is now always empty by archtest enforcement. The rule had zero scan targets.
+2. **Stronger replacement**: The three archtest gates above enforce the invariant at import-graph + AST level for the whole repo, not just cells/**.
+3. **No regression risk**: `validateFMT19` (kernel/wrapper package-state check) is unaffected and still runs under `ValidateStrict`.
+
+`rules_wrapper.go` retains only `validateFMT19` and its helpers. `ValidateStrict` / `ValidateStrictFailFast` no longer call `validateFMT18`.
+
+### 030 K-06 残余完成
+
+- `cells/configcore/cell.yaml` `consistencyLevel: L2` confirmed locked.
+- `cmd/gocell/app/scaffold_golden_test.go` (new): anti-drift gate for scaffold output — `TestScaffoldCell_GoldenCellGo` + `TestScaffoldCell_GoldenCellYAML` assert `loadCellMetadata()` pattern, `// +cell:listener:` marker, `initInternal` hook, and cell.yaml `consistencyLevel: L2` / `goStructName` fields.
