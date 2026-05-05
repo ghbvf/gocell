@@ -1081,3 +1081,74 @@ func TestRefresh_RotateMismatch_CascadeRevokeFails_PropagatesErr(t *testing.T) {
 	require.ErrorAs(t, err, &ec)
 	assert.Equal(t, errcode.ErrAuthRefreshUnavailable, ec.Code)
 }
+
+// ---------------------------------------------------------------------------
+// Detached ctx tests (Wave 0 RED baseline)
+// ---------------------------------------------------------------------------
+
+// detachSpyRefreshStore wraps a real refresh.Store and records whether the
+// ctx passed to RevokeSession is already done (cancelled/deadline exceeded)
+// at the time of the call. After Wave 2 lands ctxutil.WithDetachedTimeout,
+// the ctx must NOT be done at entry; before Wave 2 it will be done because
+// the caller ctx is passed directly.
+type detachSpyRefreshStore struct {
+	refresh.Store
+	mu             sync.Mutex
+	revokeCalledN  int
+	ctxErrAtRevoke error // ctx.Err() captured inside RevokeSession
+}
+
+func (s *detachSpyRefreshStore) RevokeSession(ctx context.Context, sessionID string) error {
+	s.mu.Lock()
+	s.revokeCalledN++
+	s.ctxErrAtRevoke = ctx.Err()
+	s.mu.Unlock()
+	return s.Store.RevokeSession(ctx, sessionID)
+}
+
+// TestService_CascadeRevoke_DetachesFromCallerCtx verifies that when
+// cascadeRevoke is triggered by a session-not-found condition, the ctx
+// forwarded to RevokeSession is NOT the caller's already-cancelled ctx.
+//
+// Mechanism: cancel the caller ctx before calling Refresh; a triggered
+// cascade should still deliver a live (non-done) ctx to RevokeSession
+// because service.cascadeRevoke must use ctxutil.WithDetachedTimeout.
+//
+// RED in Wave 0: cascadeRevoke currently passes the caller ctx directly;
+// ctx.Err() will be non-nil (context.Canceled) inside RevokeSession.
+// Wave 2 fixes cascadeRevoke to use detached ctx; test turns GREEN.
+func TestService_CascadeRevoke_DetachesFromCallerCtx(t *testing.T) {
+	notFoundErr := domainSessionNotFoundError()
+	roleRepo := mem.NewRoleRepository()
+	userRepo := mem.NewUserRepository()
+
+	_, _, innerStore, wireToken := issueTestWireToken(t, "usr-detach-cancel", "sess-detach-cancel")
+
+	spy := &detachSpyRefreshStore{Store: innerStore}
+	sessionRepo := &sessionNotFoundRepo{notFoundErr: notFoundErr}
+	svc := MustNewService(sessionRepo, roleRepo, userRepo, spy, testIssuer, slog.Default(), WithClock(clock.Real()))
+
+	// Cancel the caller ctx before calling Refresh. This simulates an HTTP
+	// request that times out or is cancelled by the client while the server
+	// is processing.
+	callerCtx, callerCancel := context.WithCancel(context.Background())
+	callerCancel() // cancel immediately
+
+	_, _ = svc.Refresh(callerCtx, wireToken)
+
+	spy.mu.Lock()
+	calledN := spy.revokeCalledN
+	ctxErrAtCall := spy.ctxErrAtRevoke
+	spy.mu.Unlock()
+
+	require.Equal(t, 1, calledN, "RevokeSession must be called exactly once on session-not-found")
+
+	// After Wave 2: ctxErrAtCall must be nil (detached ctx is still live).
+	// In Wave 0 (RED): ctxErrAtCall will be context.Canceled because the
+	// current code passes the caller ctx directly — this assertion fails.
+	if ctxErrAtCall != nil {
+		t.Errorf("RevokeSession received a done ctx (ctx.Err() = %v); "+
+			"cascadeRevoke must use ctxutil.WithDetachedTimeout to detach from caller cancel",
+			ctxErrAtCall)
+	}
+}

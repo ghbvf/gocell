@@ -580,3 +580,43 @@ func runT21PeekDoesNotConsumeGraceBudget(t *testing.T, factory Factory) {
 
 // Silence unused-imports guard when errcode isn't needed (defensive).
 var _ = errors.Is
+
+// RunIdleExpireContractSuite runs the idle-expiry sub-test against the given
+// factory. It is separate from RunContractSuite so backends can opt in once they
+// support the MaxIdle field (Wave 2 policy enforcement). Both memstore and PG
+// must pass this suite after Wave 2.
+//
+// Test identifiers Tn_IdleExpire_* are the contract for MaxIdle enforcement:
+// a token that has not been rotated within MaxIdle of creation must be rejected
+// with ErrRejected; the rejection reason is idle_expired.
+func RunIdleExpireContractSuite(t *testing.T, factory Factory) {
+	t.Helper()
+	t.Run("Tn_IdleExpire_RejectsAfterMaxIdle", func(t *testing.T) {
+		t.Parallel()
+		runTnIdleExpireRejectsAfterMaxIdle(t, factory)
+	})
+}
+
+// runTnIdleExpireRejectsAfterMaxIdle constructs a store with MaxIdle=1h, issues
+// a token, advances the clock past 1 hour, then calls Rotate and asserts
+// ErrRejected is returned (idle_expired path).
+func runTnIdleExpireRejectsAfterMaxIdle(t *testing.T, factory Factory) {
+	policy := refresh.Policy{
+		ReuseInterval:  testtime.D2s,
+		MaxAge:         storeMaxAge7d,
+		MaxIdle:        1 * time.Hour,
+		GraceMaxReuses: refresh.DefaultGraceMaxReuses,
+	}
+	store, clock := factory(t, policy)
+	ctx := context.Background()
+
+	wire, _ := mustIssue(t, store, "sess-idle", "user-idle")
+
+	// Advance past MaxIdle (1 hour + 1 second).
+	clock.Advance(1*time.Hour + time.Second)
+
+	_, _, err := store.Rotate(ctx, wire)
+	if !errors.Is(err, refresh.ErrRejected) {
+		t.Errorf("Rotate after MaxIdle exceeded: got %v, want ErrRejected (idle_expired)", err)
+	}
+}

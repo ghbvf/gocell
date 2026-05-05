@@ -2,6 +2,7 @@ package redaction_test
 
 import (
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -334,4 +335,67 @@ func TestMask_ConstantValue(t *testing.T) {
 	if redaction.Mask != "<REDACTED>" {
 		t.Errorf("Mask = %q, want %q", redaction.Mask, "<REDACTED>")
 	}
+}
+
+func TestRedactAny(t *testing.T) {
+	t.Parallel()
+
+	t.Run("nil_in_nil_out", func(t *testing.T) {
+		t.Parallel()
+		got := redaction.RedactAny(nil)
+		if got != nil {
+			t.Errorf("RedactAny(nil) = %v, want nil", got)
+		}
+	})
+
+	t.Run("error_branch_redacts", func(t *testing.T) {
+		t.Parallel()
+		err := errors.New("password=hunter2")
+		got := redaction.RedactAny(err)
+		gotErr, ok := got.(error)
+		if !ok {
+			t.Fatalf("RedactAny(error) returned %T, want error", got)
+		}
+		if gotErr.Error() != "password=<REDACTED>" {
+			t.Errorf("RedactAny(error).Error() = %q, want %q", gotErr.Error(), "password=<REDACTED>")
+		}
+	})
+
+	t.Run("string_branch_redacts", func(t *testing.T) {
+		t.Parallel()
+		got := redaction.RedactAny("token=abc.def")
+		gotStr, ok := got.(string)
+		if !ok {
+			t.Fatalf("RedactAny(string) returned %T, want string", got)
+		}
+		if gotStr != "token=<REDACTED>" {
+			t.Errorf("RedactAny(string) = %q, want %q", gotStr, "token=<REDACTED>")
+		}
+	})
+
+	t.Run("panic_value_struct_stringified_redacts", func(t *testing.T) {
+		t.Parallel()
+		type panicVal struct{ msg string }
+		v := panicVal{msg: "secret=hunter2"}
+		got := redaction.RedactAny(v)
+		s := fmt.Sprint(got)
+		if strings.Contains(s, "hunter2") {
+			t.Errorf("RedactAny(struct) still contains sensitive value in %q", s)
+		}
+		if !strings.Contains(s, "<REDACTED>") {
+			t.Errorf("RedactAny(struct) = %q, want it to contain <REDACTED>", s)
+		}
+	})
+
+	t.Run("int_passthrough_no_secret", func(t *testing.T) {
+		t.Parallel()
+		got := redaction.RedactAny(42)
+		s := fmt.Sprint(got)
+		if strings.Contains(s, "<REDACTED>") {
+			t.Errorf("RedactAny(42) = %q, unexpectedly contains <REDACTED>", s)
+		}
+		if s != "42" {
+			t.Errorf("RedactAny(42) = %q, want %q", s, "42")
+		}
+	})
 }

@@ -669,3 +669,126 @@ func TestPGRefreshStore_T23_AmbientTxRollback(t *testing.T) {
 	require.Equal(t, countBefore, countAfter,
 		"ambient tx rollback must revert Rotate INSERT: no new row should persist")
 }
+
+// ---------------------------------------------------------------------------
+// T24: reuse cascade survives caller context cancel
+// ---------------------------------------------------------------------------
+
+// TestPGRefreshStore_ReuseCascadeSurvivesCallerCancel verifies that when a
+// reuse_detected cascade revoke is triggered, the revoke SQL commits to the
+// database even if the caller's context is already cancelled at the time
+// Rotate returns. This is the integration-level gate for the detached ctx
+// fix (adapters/postgres/refresh_store.go cascade revoke uses
+// ctxutil.WithDetachedTimeout instead of the caller ctx).
+//
+// RED in Wave 0: cascade revoke still uses caller ctx; this test will fail
+// because the revoked rows may not be committed when the caller ctx is already
+// cancelled. Wave 2 implements detached ctx; test turns GREEN.
+func TestPGRefreshStore_ReuseCascadeSurvivesCallerCancel(t *testing.T) {
+	base, cleanup := setupPostgres(t)
+	t.Cleanup(cleanup)
+
+	ctx := context.Background()
+	p := isolatedSchemaPool(t, ctx, base)
+	migrator, err := NewMigrator(p, testMigrationsFS(t), "schema_migrations_cascade_cancel")
+	require.NoError(t, err)
+	require.NoError(t, migrator.Up(ctx))
+
+	clock := storetest.NewFakeClock(time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC))
+	txm := NewTxManager(p)
+	policy := refresh.Policy{
+		ReuseInterval:  testtime.D2s,
+		MaxAge:         time.Hour,
+		MaxIdle:        refreshTest30Days,
+		GraceMaxReuses: 2,
+	}
+	store, err := NewRefreshStore(p.DB(), txm, policy, clock, nil)
+	require.NoError(t, err)
+
+	// Issue parent and Rotate once to open the grace window.
+	parentWire, _, err := store.Issue(ctx, "sess-cascade-cancel", "usr-cascade-cancel")
+	require.NoError(t, err)
+	childWire, _, err := store.Rotate(ctx, parentWire)
+	require.NoError(t, err)
+
+	// Advance past ReuseInterval so the next parentWire Rotate triggers reuse_detected.
+	clock.Advance(testtime.D3s)
+
+	// Cancel the caller context before issuing the reuse-detected Rotate.
+	callerCtx, callerCancel := context.WithCancel(ctx)
+	callerCancel() // immediately cancel
+
+	// Rotate with an already-cancelled ctx: the store should detect reuse and
+	// attempt cascade revoke. The cascade revoke must commit even with a
+	// cancelled caller ctx (detached ctx path).
+	_, _, rotErr := store.Rotate(callerCtx, parentWire)
+	require.ErrorIs(t, rotErr, refresh.ErrRejected,
+		"reuse_detected must return ErrRejected regardless of caller ctx cancel")
+
+	// Verify cascade: attempt to Rotate the child with a fresh context.
+	// If cascade committed, child should also be rejected.
+	freshCtx := context.Background()
+	_, _, childErr := store.Rotate(freshCtx, childWire)
+	require.ErrorIs(t, childErr, refresh.ErrRejected,
+		"cascade revoke must have committed; child token must be rejected with ErrRejected")
+}
+
+// ---------------------------------------------------------------------------
+// T25: grace-exhausted cascade survives caller context cancel
+// ---------------------------------------------------------------------------
+
+// TestPGRefreshStore_GraceExhaustedCascadeSurvivesCallerCancel verifies that
+// when GraceMaxReuses is exhausted, the cascade revoke commits even if the
+// caller's context is already cancelled at the time the exhausting Rotate call
+// is made.
+//
+// RED in Wave 0: same root cause as T24. Wave 2 turns GREEN.
+func TestPGRefreshStore_GraceExhaustedCascadeSurvivesCallerCancel(t *testing.T) {
+	base, cleanup := setupPostgres(t)
+	t.Cleanup(cleanup)
+
+	ctx := context.Background()
+	p := isolatedSchemaPool(t, ctx, base)
+	migrator, err := NewMigrator(p, testMigrationsFS(t), "schema_migrations_grace_exhaust_cancel")
+	require.NoError(t, err)
+	require.NoError(t, migrator.Up(ctx))
+
+	clock := storetest.NewFakeClock(time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC))
+	txm := NewTxManager(p)
+	policy := refresh.Policy{
+		ReuseInterval:  testtime.D5s,
+		MaxAge:         time.Hour,
+		MaxIdle:        refreshTest30Days,
+		GraceMaxReuses: 2,
+	}
+	store, err := NewRefreshStore(p.DB(), txm, policy, clock, nil)
+	require.NoError(t, err)
+
+	// Issue and do the first Rotate to open the grace window.
+	parentWire, _, err := store.Issue(ctx, "sess-grace-exhaust-cancel", "usr-grace-exhaust-cancel")
+	require.NoError(t, err)
+	childWire, _, err := store.Rotate(ctx, parentWire)
+	require.NoError(t, err)
+
+	// Drain GraceMaxReuses-1 grace slots (each is within ReuseInterval).
+	// After this, used_times == GraceMaxReuses-1 == 1.
+	for i := 0; i < policy.GraceMaxReuses-1; i++ {
+		_, _, graceErr := store.Rotate(ctx, parentWire)
+		require.NoError(t, graceErr, "grace Rotate %d must succeed", i+1)
+	}
+
+	// The next Rotate of parentWire exhausts GraceMaxReuses and triggers cascade revoke.
+	// Cancel the caller ctx before making this call.
+	callerCtx, callerCancel := context.WithCancel(ctx)
+	callerCancel() // immediately cancel
+
+	_, _, exhaustErr := store.Rotate(callerCtx, parentWire)
+	require.ErrorIs(t, exhaustErr, refresh.ErrRejected,
+		"grace exhausted must return ErrRejected regardless of caller ctx cancel")
+
+	// Verify cascade: the child token must be rejected with a fresh ctx.
+	freshCtx := context.Background()
+	_, _, childErr := store.Rotate(freshCtx, childWire)
+	require.ErrorIs(t, childErr, refresh.ErrRejected,
+		"cascade from grace exhausted must have committed; child token must be rejected")
+}
