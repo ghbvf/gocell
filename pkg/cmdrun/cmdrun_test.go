@@ -228,12 +228,12 @@ const (
 
 // TestRunWith_KillsProcessTree verifies that canceling ctx kills not only the
 // direct child but all grandchild processes spawned by it. The test is
-// Unix-only because the shell one-liner used to produce grandchildren relies on
-// POSIX semantics; on Windows the fallback is the direct-child kill (see
-// cmdrun_windows.go TODO(B2-X-08)).
+// Unix-only because the shell one-liner used to produce grandchildren relies
+// on POSIX process-group semantics; the Windows fallback in cmdrun_windows.go
+// only kills the direct child.
 func TestRunWith_KillsProcessTree(t *testing.T) {
 	if runtime.GOOS == "windows" {
-		t.Skip("process-group kill not yet implemented on Windows (TODO B2-X-08)")
+		t.Skip("process-group kill is Unix-only; Windows path uses direct-child kill")
 	}
 
 	sh, err := exec.LookPath("sh")

@@ -64,13 +64,12 @@ func runValidate(args []string) error {
 	validator := governance.NewValidator(project, rootDir, clock.Real())
 	depChecker := governance.NewDependencyChecker(project)
 
-	// Boundary: gocell sub-commands are dispatched via plain func(args). The
-	// CLI does not yet plumb a signal-aware ctx through Dispatch; declaring
-	// Background here is the only allowed cancellation surface for now and
-	// is honored all the way down to runGit / verifyJourneyRef subprocesses.
-	// Backlog: B2-X-07 GOCELL-DISPATCH-SIGNAL-AWARE-CTX (docs/backlog2.md §7)
-	// will replace this with a signal.NotifyContext-bound ctx threaded
-	// through Dispatch + every sub-command.
+	// Boundary: the gocell sub-command dispatcher passes args, not ctx, so
+	// each sub-command owns its own ctx lifetime. Declaring Background here
+	// is the cancellation source the entire validate path honors — runGit
+	// subprocesses and verifyJourneyRef both consume it. A future signal-
+	// aware ctx (signal.NotifyContext at process entry) would replace this
+	// declaration without touching the rest of the file.
 	ctx := context.Background()
 	if *failFast {
 		return runValidateFailFast(ctx, printer, *format, validator, depChecker, *strict)

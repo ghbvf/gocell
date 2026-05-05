@@ -143,8 +143,10 @@ func generateMetricsSchema(args []string) error {
 		return fmt.Errorf("metadata parse: %w", err)
 	}
 
-	// TODO(B2-X-07): replace context.Background() with signal-aware ctx once
-	// Dispatch propagates cancellation through generate subcommands.
+	// Boundary: the gocell sub-command dispatcher passes args, not ctx, so
+	// metricschema.Build receives Background here. Same pattern as the
+	// validate sub-command; replacing both at once requires plumbing a
+	// signal-aware ctx through the dispatcher.
 	schema, err := metricschema.Build(context.Background(), root, project, *id)
 	if err != nil {
 		return fmt.Errorf("scan metrics: %w", err)
