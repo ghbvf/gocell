@@ -23,6 +23,7 @@ package archtest
 // ref: tools/archtest/auth_authtest_boundary_test.go — 4 sub-test pattern
 
 import (
+	"bytes"
 	"fmt"
 	"go/ast"
 	"go/parser"
@@ -666,17 +667,229 @@ func isRequiredComposeEnvInterpolation(value string) bool {
 	return true
 }
 
-func testSEC07WebsocketAuthenticatorRequired(t *testing.T, _ string) {
+func testSEC07WebsocketAuthenticatorRequired(t *testing.T, root string) {
 	t.Helper()
-	t.Fatalf("%s: not yet implemented (Wave 1 D)", secFailClosed07)
+	files, err := findAllProductionGoFiles(root)
+	require.NoError(t, err)
+
+	var violations []string
+	for _, f := range files {
+		hits, err := findUpgradeConfigWithoutAuthenticator(f)
+		require.NoErrorf(t, err, "scanning %s", f)
+		rel, _ := filepath.Rel(root, f)
+		rel = filepath.ToSlash(rel)
+		for _, line := range hits {
+			violations = append(violations, fmt.Sprintf("%s:%d: UpgradeConfig literal missing Authenticator field (%s)",
+				rel, line, secFailClosed07))
+		}
+	}
+	if len(violations) > 0 {
+		for _, v := range violations {
+			t.Logf("%s violation: %s", secFailClosed07, v)
+		}
+	}
+	assert.Empty(t, violations,
+		"adapters/websocket UpgradeConfig literals must explicitly set Authenticator "+
+			"(use auth.NewAnonymousAuthenticator() for explicit unauthenticated channels)")
 }
 
-func testSEC08NoLegacyBroadcastCall(t *testing.T, _ string) {
-	t.Helper()
-	t.Fatalf("%s: not yet implemented (Wave 1 D)", secFailClosed08)
+func findUpgradeConfigWithoutAuthenticator(path string) ([]int, error) {
+	data, err := os.ReadFile(filepath.Clean(path))
+	if err != nil {
+		return nil, err
+	}
+	fset := token.NewFileSet()
+	f, err := parser.ParseFile(fset, path, data, parser.SkipObjectResolution)
+	if err != nil {
+		return nil, err
+	}
+	var lines []int
+	ast.Inspect(f, func(n ast.Node) bool {
+		cl, ok := n.(*ast.CompositeLit)
+		if !ok {
+			return true
+		}
+		if !isUpgradeConfigType(cl.Type) {
+			return true
+		}
+		if hasKey(cl, "Authenticator") {
+			return true
+		}
+		lines = append(lines, fset.Position(cl.Pos()).Line)
+		return true
+	})
+	return lines, nil
 }
 
-func testSEC09HubSubjectIdxSync(t *testing.T, _ string) {
+func isUpgradeConfigType(expr ast.Expr) bool {
+	switch t := expr.(type) {
+	case *ast.Ident:
+		return t.Name == "UpgradeConfig"
+	case *ast.SelectorExpr:
+		return t.Sel != nil && t.Sel.Name == "UpgradeConfig"
+	}
+	return false
+}
+
+func hasKey(cl *ast.CompositeLit, key string) bool {
+	for _, el := range cl.Elts {
+		kv, ok := el.(*ast.KeyValueExpr)
+		if !ok {
+			continue
+		}
+		ident, ok := kv.Key.(*ast.Ident)
+		if !ok {
+			continue
+		}
+		if ident.Name == key {
+			return true
+		}
+	}
+	return false
+}
+
+func testSEC08NoLegacyBroadcastCall(t *testing.T, root string) {
 	t.Helper()
-	t.Fatalf("%s: not yet implemented (Wave 1 D)", secFailClosed09)
+	files, err := findAllProductionGoFiles(root)
+	require.NoError(t, err)
+
+	var violations []string
+	for _, f := range files {
+		hits, err := findLegacyBroadcastCalls(f)
+		require.NoErrorf(t, err, "scanning %s", f)
+		rel, _ := filepath.Rel(root, f)
+		rel = filepath.ToSlash(rel)
+		for _, line := range hits {
+			violations = append(violations, fmt.Sprintf("%s:%d: legacy Hub.Broadcast call (use BroadcastFilter or BroadcastToSubject; %s)",
+				rel, line, secFailClosed08))
+		}
+	}
+	if len(violations) > 0 {
+		for _, v := range violations {
+			t.Logf("%s violation: %s", secFailClosed08, v)
+		}
+	}
+	assert.Empty(t, violations,
+		"runtime/websocket.Hub.Broadcast was deleted by PR-V1-SEC-WS-AUTH-ACL; "+
+			"use BroadcastFilter (filter required) or BroadcastToSubject (O(1) subject index)")
+}
+
+func findLegacyBroadcastCalls(path string) ([]int, error) {
+	data, err := os.ReadFile(filepath.Clean(path))
+	if err != nil {
+		return nil, err
+	}
+	// Skip files that don't import runtime/websocket (no chance of a Hub.Broadcast call).
+	if !bytes.Contains(data, []byte(`"github.com/ghbvf/gocell/runtime/websocket"`)) {
+		return nil, nil
+	}
+	fset := token.NewFileSet()
+	f, err := parser.ParseFile(fset, path, data, parser.SkipObjectResolution)
+	if err != nil {
+		return nil, err
+	}
+	var lines []int
+	ast.Inspect(f, func(n ast.Node) bool {
+		call, ok := n.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		sel, ok := call.Fun.(*ast.SelectorExpr)
+		if !ok {
+			return true
+		}
+		if sel.Sel == nil || sel.Sel.Name != "Broadcast" {
+			return true
+		}
+		// BroadcastFilter / BroadcastToSubject have different Sel.Name, so they pass.
+		lines = append(lines, fset.Position(call.Pos()).Line)
+		return true
+	})
+	return lines, nil
+}
+
+func testSEC09HubSubjectIdxSync(t *testing.T, root string) {
+	t.Helper()
+	path := filepath.Join(root, "runtime", "websocket", "hub.go")
+
+	data, err := os.ReadFile(filepath.Clean(path))
+	require.NoError(t, err)
+
+	fset := token.NewFileSet()
+	f, err := parser.ParseFile(fset, path, data, parser.SkipObjectResolution)
+	require.NoError(t, err)
+
+	var violations []string
+	ast.Inspect(f, func(n ast.Node) bool {
+		fn, ok := n.(*ast.FuncDecl)
+		if !ok || fn.Body == nil {
+			return true
+		}
+		if !funcBodyDeletesConns(fn.Body) {
+			return true
+		}
+		if funcBodyTouchesSubjectIdx(fn.Body) {
+			return true
+		}
+		line := fset.Position(fn.Pos()).Line
+		violations = append(violations, fmt.Sprintf("hub.go:%d: %s deletes h.conns without touching h.subjectIdx (%s)",
+			line, fn.Name.Name, secFailClosed09))
+		return true
+	})
+
+	if len(violations) > 0 {
+		for _, v := range violations {
+			t.Logf("%s violation: %s", secFailClosed09, v)
+		}
+	}
+	assert.Empty(t, violations,
+		"every site that removes from h.conns must also remove from h.subjectIdx "+
+			"(or clear it). 5-write-point invariant: Register evict-dup / unregisterEntry / "+
+			"Unregister / handlePingResult miss-evict / evictSlow / evictExpired / shutdown drain")
+}
+
+func funcBodyDeletesConns(body *ast.BlockStmt) bool {
+	found := false
+	ast.Inspect(body, func(n ast.Node) bool {
+		call, ok := n.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		ident, ok := call.Fun.(*ast.Ident)
+		if !ok || ident.Name != "delete" {
+			return true
+		}
+		if len(call.Args) < 1 {
+			return true
+		}
+		// First arg should look like h.conns or similar selector.
+		sel, ok := call.Args[0].(*ast.SelectorExpr)
+		if !ok || sel.Sel == nil || sel.Sel.Name != "conns" {
+			return true
+		}
+		found = true
+		return false
+	})
+	return found
+}
+
+func funcBodyTouchesSubjectIdx(body *ast.BlockStmt) bool {
+	found := false
+	ast.Inspect(body, func(n ast.Node) bool {
+		// Match any reference to subjectIdx (delete / clear / removeFromSubjectIdxLocked).
+		switch v := n.(type) {
+		case *ast.SelectorExpr:
+			if v.Sel != nil && v.Sel.Name == "subjectIdx" {
+				found = true
+				return false
+			}
+		case *ast.Ident:
+			if v.Name == "removeFromSubjectIdxLocked" {
+				found = true
+				return false
+			}
+		}
+		return true
+	})
+	return found
 }

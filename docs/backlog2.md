@@ -39,8 +39,8 @@
 |---|---|---|---|---|---|
 | ~~**B2-A-01**~~ | ~~POSTGRES-OUTBOX-CLAIM-FENCING-MISSING~~ | ✅ **closed fix/221-pg-outbox-fencing** — `lease_id UUID` 列 + 五个 CAS SQL 全部 `AND lease_id = $N`；ClaimedEntry.LeaseID 透传；archtest OUTBOX-LEASE-ID-CAS-01 静态守卫；ADR `docs/architecture/202605051600-adr-pg-outbox-fencing.md` | — | — |
 | **B2-C-01** | **AUDITCORE-HASHCHAIN-RESTART-RECOVERY-MISSING** | `cells/auditcore/internal/domain/hashchain.go:31` + `cells/auditcore/cell.go` | `NewHashChain` 启动从空链开始，`initSlices` 未从 repo 恢复尾节点；多实例或重启后尾哈希不连续，链完整性无法验证；合规审计致命。**修复**：cell 启动时从 repo `SELECT last hash` 注入；考虑 leader 单写或全局 advisory lock。 | Cx4 | MD-02 |
-| **B2-W-01** | **WEBSOCKET-UPGRADE-NO-AUTH-FAIL-OPEN** | `adapters/websocket/handler.go:51-65` | `UpgradeHandler` 升级后无 token / credential 校验，任意客户端可建立 WS 连接 → hub。**修复**：升级前必填 `auth.AuthMiddleware` 等价校验；构造期注入 Authenticator 接口；空 Authenticator fail-fast。 | Cx4 | MD-03 |
-| **B2-W-02** | **WEBSOCKET-BROADCAST-NO-ACL** | `runtime/websocket/hub.go:405-420` | `Broadcast` 无 filter 参数；所有连接均可收到广播；多租户场景下信息越界。**修复**：Broadcast 接受 `func(conn) bool` filter 或 topic-scoped Send；hub 维护 `principal -> conn[]` 映射。 | Cx4 | MD-04 |
+| ~~**B2-W-01**~~ | ~~WEBSOCKET-UPGRADE-NO-AUTH-FAIL-OPEN~~ | ✅ **closed PR-V1-SEC-WS-AUTH-ACL** — UpgradeConfig.Authenticator 必填（nil → ErrWebsocketAuthenticatorMissing）；构造期 fail-fast；archtest SEC-07 静态守卫所有 UpgradeConfig 字面量必须声明 Authenticator | — | — |
+| ~~**B2-W-02**~~ | ~~WEBSOCKET-BROADCAST-NO-ACL~~ | ✅ **closed PR-V1-SEC-WS-AUTH-ACL** — 删除无参 Broadcast；新增 BroadcastFilter（filter 必填，O(N)）+ BroadcastToSubject（O(1) subject index）；Hub 维护 subjectIdx；archtest SEC-08/09 静态守卫 | — | — |
 | **B2-A-02** | **RMQ-RECONNECT-PERMANENT-ERROR-NO-TERMINAL** | `adapters/rabbitmq/connection.go:436-670` | `reconnectLoop` 注释承认"keep trying"，认证失败 / Vhost not found 等永久错误也无限重试，readiness 持续挂起；凭证撤销后 pod 永不退出。**修复**：分类 amqp.Error code（403/404/530 等永久），permanent 时关 conn → readyz 503 → 容器重启拉新凭证。 | Cx4 | MD-05 |
 | **B2-A-03** | **REDIS-CLUSTER-MODE-MISSING** | `adapters/redis/client.go:30-45` | `Config.Mode` 只支持 `standalone` / `sentinel`，无法接入 AWS ElastiCache Cluster / Azure Cache Cluster；生产部署受限。**修复**：新增 `ModeCluster`，使用 `redis.NewClusterClient`；DistLock / Idempotency 算法需重新评估 cluster slot 影响（hashtag）。 | Cx4 | MD-37 |
 | **B2-C-02** | **SETUP-ADMIN-PUBLIC-ROUTE-PERMANENT** | `cells/accesscore/cell_routes.go:73` + `slices/setup/handler.go:46-58` + `contracts/http/auth/setup/admin/v1/contract.yaml:5` | setup 端点常驻 `Public: true`；contract 标 `lifecycle: active`；410 Gone 仅在 admin 已存在时返回，未初始化窗口仍可被匿名首管抢注；多视角共识根因。**修复**：移到 `/internal/v1/setup/`（service-token only）+ contract `lifecycle: bootstrap`，或一次性 bootstrap token（env 注入消费）。`A26-R2` 限速只是缓解。 | Cx3 | CL-06 / LY-06 / PR-01 / PR-02 / PR-07 |
@@ -148,12 +148,12 @@
 
 | # | 标题 | 严重度 | 文件:行 | 描述 | Cx |
 |---|---|---|---|---|---|
-| **B2-W-01** | (P0) UPGRADE-NO-AUTH | — | — | 见 §1 B2-W-01 | — |
-| **B2-W-02** | (P0) BROADCAST-NO-ACL | — | — | 见 §1 B2-W-02 | — |
+| ~~**B2-W-01**~~ | ~~(P0) UPGRADE-NO-AUTH~~ | — | ✅ closed PR-V1-SEC-WS-AUTH-ACL — 见 §1 B2-W-01 | — | — |
+| ~~**B2-W-02**~~ | ~~(P0) BROADCAST-NO-ACL~~ | — | ✅ closed PR-V1-SEC-WS-AUTH-ACL — 见 §1 B2-W-02 | — | — |
 | **B2-W-03** | WS-OBSERVABILITY-MISSING | P1 | `runtime/websocket/hub.go` | 无 Prometheus 指标 / 连接生命周期追踪；连接数 / 消息率 / 错误 / 慢 client 全黑盒。**修复**：注入 metrics provider，暴露 `ws_connections{cell}` `ws_messages_total{direction,outcome}` `ws_send_duration_seconds`。 | Cx2 |
 | **B2-W-04** | WS-MESSAGE-BUFFER-UNBOUNDED | P1 | `runtime/websocket/hub.go:510` | 慢连接导致 Broadcast 发送端 channel 缓冲无上限；OOM 风险。**修复**：每连接 sendCh 加 cap（默认 64），满则 drop oldest 或断连接 + slog.Warn。 | Cx2 |
 | **B2-W-05** | WS-STOP-SYNC-CLOSE-ALL-CONNS | P1 | `runtime/websocket/hub.go:280-293` | Stop 时逐连接同步 Close；千连接场景下 Pod terminationGracePeriod 容易超时。**修复**：广播 close frame 后 fan-out goroutine 池 + 总 deadline；超时强制 conn.Close(）。 | Cx2 |
-| **B2-W-06** | WS-DOC-MISSING | P1 | `docs/guides/`（缺失） | 无入门文档 / 协议规范 / 常见陷阱（origin / 心跳 / 重连）；外部接入者全靠读源码。**修复**：`docs/guides/websocket-integration.md`，含 origin 配置 / 心跳协议 / 重连退避 / 故障注入。 | Cx2 |
+| ~~**B2-W-06**~~ | ~~WS-DOC-MISSING~~ | ✅ closed PR-V1-SEC-WS-AUTH-ACL | `docs/guides/websocket-integration.md` 新增（9节：架构/Origin配置/认证/心跳/重连/广播/驱逐/故障注入/运维参数表） | — | — |
 
 ---
 
