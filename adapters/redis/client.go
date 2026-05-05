@@ -408,7 +408,7 @@ func buildFailoverOptions(cfg Config) (*goredis.FailoverOptions, error) {
 		PoolSize:     cfg.PoolSize,
 	}
 
-	hasURL, hasPlain := sentinelAddressForms(cfg.SentinelAddrs)
+	hasURL, hasPlain := addressForms(cfg.SentinelAddrs)
 	if hasURL && hasPlain {
 		return nil, errcode.New(errcode.KindInternal, ErrAdapterRedisConnect,
 			"redis: sentinel addresses cannot mix URL and host:port forms")
@@ -421,7 +421,11 @@ func buildFailoverOptions(cfg Config) (*goredis.FailoverOptions, error) {
 	return buildFailoverURLOptions(base, cfg.SentinelAddrs)
 }
 
-func sentinelAddressForms(addrs []string) (hasURL, hasPlain bool) {
+// addressForms classifies a slice of redis addresses by form. URL form
+// (anything containing "://") and plain host:port form are mutually
+// exclusive within a single Sentinel or Cluster configuration; mixing them
+// is rejected at the call site. Shared between sentinel and cluster paths.
+func addressForms(addrs []string) (hasURL, hasPlain bool) {
 	for _, addr := range addrs {
 		if strings.Contains(addr, "://") {
 			hasURL = true
@@ -452,7 +456,7 @@ func appendFailoverURL(base *goredis.FailoverOptions, addr string) error {
 			"redis: sentinel URL addresses must use the same TLS scheme")
 	}
 	if len(base.SentinelAddrs) == 0 {
-		base.TLSConfig = failoverTLSConfig(parsed.TLSConfig)
+		base.TLSConfig = sharedNodeTLSConfig(parsed.TLSConfig)
 	} else if err := checkFailoverTLSConfigCompatible(base.TLSConfig, parsed.TLSConfig); err != nil {
 		return err
 	}
@@ -518,15 +522,17 @@ func mergeFailoverIntField(dst *int, incoming int, name string) error {
 	return nil
 }
 
-func failoverTLSConfig(parsed *tls.Config) *tls.Config {
+// sharedNodeTLSConfig clones a per-URL tls.Config and clears ServerName so
+// the resulting config can be shared across multiple node dials (Sentinel
+// resolved master, every Cluster shard) without forcing the first URL's
+// SNI onto later addresses; an empty ServerName lets crypto/tls infer the
+// host from each tls.DialWithDialer target. Returns nil when the input is
+// nil.
+func sharedNodeTLSConfig(parsed *tls.Config) *tls.Config {
 	if parsed == nil {
 		return nil
 	}
 	cfg := parsed.Clone()
-	// FailoverOptions carries a single TLSConfig shared by every Sentinel dial
-	// and by the resolved master dial. Leaving the first URL's ServerName here
-	// would force that SNI onto all later addresses; an empty ServerName lets
-	// crypto/tls infer the host from each tls.DialWithDialer target.
 	cfg.ServerName = ""
 	return cfg
 }
@@ -553,7 +559,7 @@ func buildClusterOptions(cfg Config) (*goredis.ClusterOptions, error) {
 		PoolSize:     cfg.PoolSize,
 	}
 
-	hasURL, hasPlain := clusterAddressForms(cfg.ClusterAddrs)
+	hasURL, hasPlain := addressForms(cfg.ClusterAddrs)
 	if hasURL && hasPlain {
 		return nil, errcode.New(errcode.KindInternal, ErrAdapterRedisConnect,
 			"redis: cluster addresses cannot mix URL and host:port forms")
@@ -563,17 +569,6 @@ func buildClusterOptions(cfg Config) (*goredis.ClusterOptions, error) {
 		return base, nil
 	}
 	return buildClusterURLOptions(base, cfg.ClusterAddrs)
-}
-
-func clusterAddressForms(addrs []string) (hasURL, hasPlain bool) {
-	for _, addr := range addrs {
-		if strings.Contains(addr, "://") {
-			hasURL = true
-		} else {
-			hasPlain = true
-		}
-	}
-	return hasURL, hasPlain
 }
 
 func buildClusterURLOptions(base *goredis.ClusterOptions, addrs []string) (*goredis.ClusterOptions, error) {
@@ -596,7 +591,7 @@ func appendClusterURL(base *goredis.ClusterOptions, addr string) error {
 			"redis: cluster URL addresses must use the same TLS scheme")
 	}
 	if len(base.Addrs) == 0 {
-		base.TLSConfig = clusterTLSConfig(parsed.TLSConfig)
+		base.TLSConfig = sharedNodeTLSConfig(parsed.TLSConfig)
 	}
 	// ParseClusterURL rejects unknown query params (including skip_verify),
 	// so per-URL TLS verification options cannot vary across URLs and we do
@@ -630,19 +625,6 @@ func mergeClusterStringField(dst *string, incoming, name string) error {
 	}
 	*dst = incoming
 	return nil
-}
-
-func clusterTLSConfig(parsed *tls.Config) *tls.Config {
-	if parsed == nil {
-		return nil
-	}
-	cfg := parsed.Clone()
-	// ClusterOptions carries a single TLSConfig shared by every cluster-node
-	// dial. Leaving the first URL's ServerName here would force that SNI on
-	// later nodes; an empty ServerName lets crypto/tls infer the host from
-	// each tls.DialWithDialer target.
-	cfg.ServerName = ""
-	return cfg
 }
 
 // Health pings the Redis server and returns an error if it is unreachable.

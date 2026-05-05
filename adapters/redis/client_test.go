@@ -372,29 +372,34 @@ func TestBuildClusterOptions(t *testing.T) {
 			require.NotNil(t, opts)
 			require.Len(t, opts.Addrs, len(cfg.ClusterAddrs),
 				"buildClusterOptions must populate one Addrs entry per ClusterAddrs entry")
-			hasURL := false
-			for _, a := range cfg.ClusterAddrs {
-				if strings.HasPrefix(a, "rediss://") || strings.HasPrefix(a, "redis://") {
-					hasURL = true
-					break
-				}
-			}
-			anyTLS := false
-			for _, a := range cfg.ClusterAddrs {
-				if strings.HasPrefix(a, "rediss://") {
-					anyTLS = true
-					break
-				}
-			}
-			if hasURL && anyTLS {
-				require.NotNil(t, opts.TLSConfig)
-				require.Empty(t, opts.TLSConfig.ServerName,
-					"shared cluster TLSConfig must let crypto/tls infer SNI per node")
-			} else {
-				require.Nil(t, opts.TLSConfig)
-			}
+			assertClusterTLSConfigShape(t, opts, cfg.ClusterAddrs)
 		})
 	}
+}
+
+// assertClusterTLSConfigShape pulls the TLSConfig assertions out of the
+// table-driven loop body to keep the loop's cognitive complexity below the
+// project ceiling. opts.TLSConfig must be set with empty ServerName when
+// any rediss:// URL is present (crypto/tls infers SNI per node), and nil
+// otherwise.
+func assertClusterTLSConfigShape(t *testing.T, opts *goredis.ClusterOptions, addrs []string) {
+	t.Helper()
+	if !anyHasPrefix(addrs, "rediss://") {
+		require.Nil(t, opts.TLSConfig)
+		return
+	}
+	require.NotNil(t, opts.TLSConfig)
+	require.Empty(t, opts.TLSConfig.ServerName,
+		"shared cluster TLSConfig must let crypto/tls infer SNI per node")
+}
+
+func anyHasPrefix(addrs []string, prefix string) bool {
+	for _, a := range addrs {
+		if strings.HasPrefix(a, prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 // ---------------------------------------------------------------------------
