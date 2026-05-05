@@ -2,7 +2,7 @@
 # to keep image build deterministic and prevent accidental sensitive-file
 # inclusion. The Dockerfile only needs go.mod/go.sum + Go source under
 # cmd/, kernel/, runtime/, adapters/, cells/, pkg/, contracts/, examples/,
-# tools/.
+# tools/, and generated/ (codegen-driven cells/contracts since PR-V1-CODEGEN-FULL-MIGRATION).
 .git
 .github
 .claude
@@ -10,7 +10,6 @@ docs
 node_modules
 worktrees
 bak
-generated/contracts/
 *.log
 *.env
 *.env.*
