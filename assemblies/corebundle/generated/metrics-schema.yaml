@@ -298,7 +298,7 @@ metrics:
       fqName: gocell_outbox_relayed_total
       namespace: gocell
       type: counter
-      help: Total number of outbox entries processed by the relay, by outcome.
+      help: Total number of outbox entries processed by the relay, by outcome. outcome=published|retried|dead are canonical writebacks; outcome=skipped covers MarkPublished updated=false (success path lost lease) and outcome=lost covers Mark{Retry,Dead} updated=false (failure path lost lease) — the canonical outcome for both is owned by the reclaimer (see outbox_reclaimed_total).
       labels:
         - cell
         - outcome

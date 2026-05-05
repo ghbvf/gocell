@@ -643,6 +643,20 @@ func (r *Relay) handleFailedEntry(ctx context.Context, res publishResult, stats 
 func (r *Relay) reclaimStale(ctx context.Context) error {
 	batch := r.cfg.ReclaimBatchSize
 	var total int
+	// Defer the metric/log emit so a partial-success sweep (some batches
+	// committed, then a later batch errors) still reports the rows already
+	// recovered. Reporting only on full success would silently undercount
+	// outbox_reclaimed_total during DB blips, exactly the scenario where
+	// operators correlate it against outbox_relayed_total{outcome="lost"}.
+	defer func() {
+		if total > 0 {
+			slog.Warn(
+				"outbox relay: reclaimed stale entries",
+				slog.Int("count", total),
+			)
+			r.metrics.RecordReclaim(int64(total))
+		}
+	}()
 	for i := 0; i < reclaimMaxIterations; i++ {
 		if err := ctx.Err(); err != nil {
 			break
@@ -658,13 +672,6 @@ func (r *Relay) reclaimStale(ctx context.Context) error {
 		if count < batch {
 			break
 		}
-	}
-	if total > 0 {
-		slog.Warn(
-			"outbox relay: reclaimed stale entries",
-			slog.Int("count", total),
-		)
-		r.metrics.RecordReclaim(int64(total))
 	}
 	return nil
 }
