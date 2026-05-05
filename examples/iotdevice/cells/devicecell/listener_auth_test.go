@@ -256,3 +256,85 @@ func TestDequeue_NonOwner_ShouldBe403(t *testing.T) {
 		t.Errorf("dequeue non-owner: want 403, got %d — body: %s (RED: nil policy allows all)", rec.Code, rec.Body.String())
 	}
 }
+
+// TestStatus_DeviceCrossRead_403 asserts that device-a's token cannot read
+// device-b's status. auth.AnyRole(RoleDevice) allowed this cross-device read;
+// auth.SelfOr("id", ...) binds the path {id} to the token subject, blocking it.
+//
+// RED state: AnyRole(RoleDevice) returns 200 for any device token regardless of path {id}.
+// GREEN state: SelfOr("id", RoleAdmin, RoleOperator) returns 403 when subject != path {id}.
+func TestStatus_DeviceCrossRead_403(t *testing.T) {
+	r := initCellWithRouter(t)
+
+	// Register device-b (the victim device whose status device-a should NOT read).
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/devices", strings.NewReader(`{"name":"device-b"}`))
+	req.Header.Set("Content-Type", "application/json")
+	r.ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("setup: register device-b: got %d", rec.Code)
+	}
+	deviceBID := extractData(t, rec.Body.Bytes())["id"].(string)
+
+	// device-a token (subject="device-a") reads device-b's status — must be 403.
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodGet, "/api/v1/devices/"+deviceBID+"/status", nil)
+	req = req.WithContext(auth.TestContext("device-a", []string{dto.RoleDevice}))
+	r.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Errorf("status cross-device read: want 403, got %d — body: %s (RED: AnyRole(RoleDevice) allows cross-device read)", rec.Code, rec.Body.String())
+	}
+}
+
+// TestStatus_DeviceSelf_200 asserts that a device can read its own status
+// when subject == path {id} (SelfOr self-match path).
+func TestStatus_DeviceSelf_200(t *testing.T) {
+	r := initCellWithRouter(t)
+
+	// Register the device.
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/devices", strings.NewReader(`{"name":"device-a"}`))
+	req.Header.Set("Content-Type", "application/json")
+	r.ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("setup: register device-a: got %d", rec.Code)
+	}
+	deviceAID := extractData(t, rec.Body.Bytes())["id"].(string)
+
+	// device-a reads its own status — subject == path {id}, must be 200.
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodGet, "/api/v1/devices/"+deviceAID+"/status", nil)
+	req = req.WithContext(auth.TestContext(deviceAID, []string{dto.RoleDevice}))
+	r.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("status self-read: want 200, got %d — body: %s", rec.Code, rec.Body.String())
+	}
+}
+
+// TestStatus_Admin_AnyDevice_200 asserts that RoleAdmin can read any device's
+// status regardless of path {id} (admin bypass in SelfOr).
+func TestStatus_Admin_AnyDevice_200(t *testing.T) {
+	r := initCellWithRouter(t)
+
+	// Register an arbitrary device.
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/devices", strings.NewReader(`{"name":"some-device"}`))
+	req.Header.Set("Content-Type", "application/json")
+	r.ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("setup: register device: got %d", rec.Code)
+	}
+	deviceID := extractData(t, rec.Body.Bytes())["id"].(string)
+
+	// Admin reads any device's status — must be 200 regardless of subject.
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodGet, "/api/v1/devices/"+deviceID+"/status", nil)
+	req = req.WithContext(auth.TestContext("admin-user", []string{dto.RoleAdmin}))
+	r.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("status admin-any-device: want 200, got %d — body: %s", rec.Code, rec.Body.String())
+	}
+}
