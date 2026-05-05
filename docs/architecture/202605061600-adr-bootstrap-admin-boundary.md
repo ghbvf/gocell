@@ -1,6 +1,7 @@
 # ADR — Bootstrap Admin Security Boundary
 
 - **Date**: 2026-05-06（Supersedes 2026-05-06 v1）
+- **Revised**: 2026-05-06 16:00 (postmortem-driven from v1 00:30)
 - **Status**: Accepted (revision per postmortem 202605060030)
 - **Closes**: B2-C-02 (P0) SETUP-ADMIN-PUBLIC-ROUTE-PERMANENT
 - **Roadmap**: PR-V1-SEC-SETUP-CLOSURE
@@ -75,6 +76,16 @@ env = operator identity (authenticator)；body = admin identity (subject)。
 不引入拓扑约束：删除原方案中 `GOCELL_REPLICA_COUNT` + `isMultiPod` 检查（拓扑是 hint 不是约束——postmortem P1#4 的修正）。
 
 brute-force 防护：per-IP token-bucket limiter（5 req/min sustained, burst 10，对照 nginx `limit_req`）+ slog `onAuthFail` observer。
+
+> setup HTTP 同步路径不再产生 pending row；crash 后用户重试得 409 + 运维 SQL 清理（不走自动 orphan recovery）。多 pod 跨进程幂等的最终承诺由 PG users(role=admin) UNIQUE 约束兑现（见 backlog ACCESSCORE-PG-USERS-MIGRATION-01）。
+
+## 替代方案
+
+**A — 保留 bootstrap admin provision mode（headless 路径）**：通过 credfile 物化一次性密码，容器化下传递不安全，cleaner worker 路径复杂度高。Postmortem 分析：crash 后 pending row 形成 orphan，自动 orphan recovery 需要维护 ProvisionState 状态机，复杂度超过收益。已废弃。
+
+**B — 单独 CLI seed 命令**：适合 Keycloak / Vault 模式，但要求 operator 有容器 exec 或 job 权限，与 GoCell 「HTTP-first, zero-sidecar」设计矛盾。已排除。
+
+**C — 放弃幂等，不做 409 处理**：username 冲突直接 500，依赖运维重命名。运维 UX 不可接受，对 multi-pod race 无守护。已排除。
 
 ## Consequences
 
