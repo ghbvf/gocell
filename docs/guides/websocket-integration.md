@@ -109,7 +109,13 @@ authenticator := auth.AuthenticatorFunc(func(r *http.Request) (*auth.Principal, 
     if err != nil {
         return nil, false, err
     }
-    return claims.Principal(), true, nil
+    return &auth.Principal{
+        Kind:       auth.PrincipalUser,
+        Subject:    claims.Subject,
+        Roles:      claims.Roles,
+        AuthMethod: "jwt",
+        ExpiresAt:  claims.ExpiresAt,
+    }, true, nil
 })
 ```
 
@@ -127,7 +133,13 @@ authenticator := auth.AuthenticatorFunc(func(r *http.Request) (*auth.Principal, 
     if err != nil {
         return nil, false, err
     }
-    return claims.Principal(), true, nil
+    return &auth.Principal{
+        Kind:       auth.PrincipalUser,
+        Subject:    claims.Subject,
+        Roles:      claims.Roles,
+        AuthMethod: "jwt",
+        ExpiresAt:  claims.ExpiresAt,
+    }, true, nil
 })
 ```
 
@@ -349,14 +361,14 @@ func broadcastToCell(hub *rtws.Hub, cellID string, event []byte) error {
 `runtime/websocket/hub_test.go` 提供 `fakeConn` 参考实现：
 
 ```go
-// 正常连接
-conn := newFakeConn("conn-1", &auth.Principal{Subject: "user-1"})
+// 正常连接（principal 在握手时快照到 connEntry.subject/expiresAt）
+conn := newFakeConnWithPrincipal("conn-1", &auth.Principal{Kind: auth.PrincipalUser, Subject: "user-1"})
 require.NoError(t, hub.Register(ctx, conn))
 
-// 阻塞连接（模拟慢客户端）
-conn := newBlockingFakeConn("slow-1", &auth.Principal{Subject: "slow"})
-require.NoError(t, hub.Register(ctx, conn))
-// 触发 BroadcastFilter 后，conn 的 send buffer 满 → 驱逐
+// 阻塞连接（模拟慢客户端，writeLoop 永远阻塞 → send buffer 满后驱逐）
+slow := newBlockingFakeConn("slow-1", &auth.Principal{Kind: auth.PrincipalUser, Subject: "slow"})
+require.NoError(t, hub.Register(ctx, slow))
+// 触发 BroadcastFilter 后，conn 的 send buffer 满 → 驱逐（reason="send_buffer_full"）
 ```
 
 ### clockmock 推进 token 过期
@@ -368,10 +380,11 @@ clk := clockmock.New(time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC))
 hub := rtws.NewHub(rtws.DefaultHubConfig(clk), nil)
 
 p := &auth.Principal{
+    Kind:      auth.PrincipalUser,
     Subject:   "user-1",
     ExpiresAt: clk.Now().Add(5 * time.Minute),
 }
-conn := newFakeConn("conn-1", p)
+conn := newFakeConnWithPrincipal("conn-1", p)
 require.NoError(t, hub.Register(ctx, conn))
 
 // 推进时钟，超过 token 过期时间

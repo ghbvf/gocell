@@ -82,7 +82,7 @@ type connEntry struct {
 	cancel     context.CancelFunc
 	pingMisses int
 	send       chan []byte   // buffered, sized by HubConfig.SendBufferSize
-	done       chan struct{}  // closed when entry is evicted; writeLoop exit signal
+	done       chan struct{} // closed when entry is evicted; writeLoop exit signal
 	closeOnce  sync.Once     // guards close(done) for idempotent eviction
 
 	// subject and expiresAt are frozen at Register time from conn.Principal().
