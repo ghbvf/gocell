@@ -70,7 +70,8 @@ func TestFMTContractDirIDMatch01_Mismatch(t *testing.T) {
 			}
 
 			v := NewValidator(pm, "", clock.Real())
-			results := v.Validate()
+			results, err := v.Validate(t.Context())
+			require.NoError(t, err)
 			matches := findByCode(results, "FMT-21")
 			assert.Len(t, matches, tc.wantCount,
 				"test %q: expected %d violations, got %d: %v",
@@ -135,7 +136,8 @@ func TestFMTContractDirIDMatch01_ExamplesPrefix(t *testing.T) {
 			}
 
 			v := NewValidator(pm, "", clock.Real())
-			results := v.Validate()
+			results, err := v.Validate(t.Context())
+			require.NoError(t, err)
 			matches := findByCode(results, "FMT-21")
 			assert.Len(t, matches, tc.wantCount,
 				"test %q: expected %d violations, got %d: %v",
@@ -197,7 +199,8 @@ func TestStatusBoardStateEnum01(t *testing.T) {
 			}
 
 			v := NewValidator(pm, "", clock.Real())
-			results := v.Validate()
+			results, err := v.Validate(t.Context())
+			require.NoError(t, err)
 			matches := findByCode(results, "FMT-22")
 			assert.Len(t, matches, tc.wantCount,
 				"test %q: expected %d violations, got %d: %v",
@@ -279,7 +282,8 @@ func TestContractDeprecatedCleanup01(t *testing.T) {
 			}
 
 			v := NewValidator(pm, "", clock.Real())
-			results := v.Validate()
+			results, err := v.Validate(t.Context())
+			require.NoError(t, err)
 			matches := findByCode(results, "FMT-23")
 			require.Len(t, matches, tc.wantCount,
 				"test %q: expected %d violations, got %d: %v",
@@ -308,7 +312,8 @@ func TestFMT22_EmptyStateViolation(t *testing.T) {
 	}
 
 	v := NewValidator(pm, "", clock.Real())
-	results := v.Validate()
+	results, err := v.Validate(t.Context())
+	require.NoError(t, err)
 	matches := findByCode(results, "FMT-22")
 	assert.Len(t, matches, 1,
 		"empty state must produce 1 FMT-22 violation, got %d: %v", len(matches), matches)
@@ -362,7 +367,8 @@ func TestFMT23_DeprecatedCleanup_BoundaryCheck(t *testing.T) {
 			}
 
 			v := NewValidator(pm, "", clock.Real())
-			results := v.Validate()
+			results, err := v.Validate(t.Context())
+			require.NoError(t, err)
 			matches := findByCode(results, "FMT-23")
 			// Filter to warnings only (we don't want IssueRequired or IssueInvalid counts).
 			var warnings []ValidationResult
@@ -587,7 +593,8 @@ func TestFMT25_RequestSchemaPathEscapeFailsClosed(t *testing.T) {
 	pm := fmt25Project(nil, nil)
 	pm.Contracts["http.test.v1"].SchemaRefs.Request = "../outside.schema.json"
 
-	results := NewValidator(pm, dir, clock.Real()).Validate()
+	results, err := NewValidator(pm, dir, clock.Real()).Validate(t.Context())
+	require.NoError(t, err)
 	matches := findByCode(results, "FMT-25")
 	require.Len(t, matches, 1)
 	assert.Equal(t, IssueInvalid, matches[0].IssueType)
@@ -599,7 +606,8 @@ func TestFMT25_RequestSchemaMissingFailsClosed(t *testing.T) {
 	dir := t.TempDir()
 	pm := fmt25Project(nil, nil)
 
-	results := NewValidator(pm, dir, clock.Real()).Validate()
+	results, err := NewValidator(pm, dir, clock.Real()).Validate(t.Context())
+	require.NoError(t, err)
 	matches := findByCode(results, "FMT-25")
 	require.Len(t, matches, 1)
 	assert.Equal(t, IssueRefNotFound, matches[0].IssueType)
@@ -622,7 +630,8 @@ func TestFMT25_RequestStringMissingMinLength(t *testing.T) {
 	pm := fmt25Project(nil, nil)
 
 	v := NewValidator(pm, dir, clock.Real())
-	results := v.Validate()
+	results, err := v.Validate(t.Context())
+	require.NoError(t, err)
 	matches := findByCode(results, "FMT-25")
 	require.Len(t, matches, 1, "expected 1 violation for username missing minLength, got %d: %v", len(matches), matches)
 	assert.Equal(t, "$.username", matches[0].Field)
@@ -644,7 +653,8 @@ func TestFMT25_RequestStringMissingMaxLength(t *testing.T) {
 	fmt25WriteSchema(t, dir, body)
 	pm := fmt25Project(nil, nil)
 
-	results := NewValidator(pm, dir, clock.Real()).Validate()
+	results, err := NewValidator(pm, dir, clock.Real()).Validate(t.Context())
+	require.NoError(t, err)
 	matches := findByCode(results, "FMT-25")
 	require.Len(t, matches, 1, "expected 1 violation for username missing maxLength")
 	assert.Contains(t, matches[0].Message, "maxLength")
@@ -665,7 +675,8 @@ func TestFMT25_RequestIntegerMissingMinimumMaximum(t *testing.T) {
 	fmt25WriteSchema(t, dir, body)
 	pm := fmt25Project(nil, nil)
 
-	results := NewValidator(pm, dir, clock.Real()).Validate()
+	results, err := NewValidator(pm, dir, clock.Real()).Validate(t.Context())
+	require.NoError(t, err)
 	matches := findByCode(results, "FMT-25")
 	// version: missing maximum (1 violation)
 	// page:    missing minimum + missing maximum (2 violations)
@@ -686,7 +697,8 @@ func TestFMT25_RequestNumberMissingMinimumMaximum(t *testing.T) {
 	fmt25WriteSchema(t, dir, body)
 	pm := fmt25Project(nil, nil)
 
-	results := NewValidator(pm, dir, clock.Real()).Validate()
+	results, err := NewValidator(pm, dir, clock.Real()).Validate(t.Context())
+	require.NoError(t, err)
 	matches := findByCode(results, "FMT-25")
 	require.Len(t, matches, 2, "number fields must require minimum + maximum, got: %v", matches)
 	gotMessages := []string{matches[0].Message, matches[1].Message}
@@ -715,7 +727,8 @@ func TestFMT25_RequestUnionTypeStringMissingConstraints(t *testing.T) {
 	fmt25WriteSchema(t, dir, body)
 	pm := fmt25Project(nil, nil)
 
-	results := NewValidator(pm, dir, clock.Real()).Validate()
+	results, err := NewValidator(pm, dir, clock.Real()).Validate(t.Context())
+	require.NoError(t, err)
 	matches := findByCode(results, "FMT-25")
 	require.Len(t, matches, 2, "union string|null must still require length facets, got: %v", matches)
 	for _, m := range matches {
@@ -735,7 +748,8 @@ func TestFMT25_RequestExternalRefFailsClosed(t *testing.T) {
 	fmt25WriteSchema(t, dir, body)
 	pm := fmt25Project(nil, nil)
 
-	results := NewValidator(pm, dir, clock.Real()).Validate()
+	results, err := NewValidator(pm, dir, clock.Real()).Validate(t.Context())
+	require.NoError(t, err)
 	matches := findByCode(results, "FMT-25")
 	require.Len(t, matches, 1, "non-local refs must fail closed")
 	assert.Equal(t, IssueInvalid, matches[0].IssueType)
@@ -756,7 +770,8 @@ func TestFMT25_RequestUnresolvedLocalRefFailsClosed(t *testing.T) {
 	fmt25WriteSchema(t, dir, body)
 	pm := fmt25Project(nil, nil)
 
-	results := NewValidator(pm, dir, clock.Real()).Validate()
+	results, err := NewValidator(pm, dir, clock.Real()).Validate(t.Context())
+	require.NoError(t, err)
 	matches := findByCode(results, "FMT-25")
 	require.Len(t, matches, 1, "unresolved local refs must fail closed")
 	assert.Equal(t, IssueInvalid, matches[0].IssueType)
@@ -777,7 +792,8 @@ func TestFMT25_RequestMinGreaterThanMaxInvalid(t *testing.T) {
 	fmt25WriteSchema(t, dir, body)
 	pm := fmt25Project(nil, nil)
 
-	results := NewValidator(pm, dir, clock.Real()).Validate()
+	results, err := NewValidator(pm, dir, clock.Real()).Validate(t.Context())
+	require.NoError(t, err)
 	matches := findByCode(results, "FMT-25")
 	require.Len(t, matches, 2, "inverted bounds must be invalid, got: %v", matches)
 	assert.Equal(t, IssueInvalid, matches[0].IssueType)
@@ -811,7 +827,8 @@ func TestFMT25_RequestDepthLimitFailsClosed(t *testing.T) {
 	fmt25WriteSchema(t, dir, string(raw))
 	pm := fmt25Project(nil, nil)
 
-	results := NewValidator(pm, dir, clock.Real()).Validate()
+	results, err := NewValidator(pm, dir, clock.Real()).Validate(t.Context())
+	require.NoError(t, err)
 	matches := findByCode(results, "FMT-25")
 	require.Len(t, matches, 1, "depth limit must emit an observable diagnostic")
 	assert.Equal(t, IssueInvalid, matches[0].IssueType)
@@ -838,7 +855,8 @@ func TestFMT25_RequestNestedObjectStringConstraints(t *testing.T) {
 	fmt25WriteSchema(t, dir, body)
 	pm := fmt25Project(nil, nil)
 
-	results := NewValidator(pm, dir, clock.Real()).Validate()
+	results, err := NewValidator(pm, dir, clock.Real()).Validate(t.Context())
+	require.NoError(t, err)
 	matches := findByCode(results, "FMT-25")
 	// user.name missing both → 2 violations (one per missing facet)
 	require.Len(t, matches, 2)
@@ -864,7 +882,8 @@ func TestFMT25_RequestArrayItemsStringConstraints(t *testing.T) {
 	fmt25WriteSchema(t, dir, body)
 	pm := fmt25Project(nil, nil)
 
-	results := NewValidator(pm, dir, clock.Real()).Validate()
+	results, err := NewValidator(pm, dir, clock.Real()).Validate(t.Context())
+	require.NoError(t, err)
 	matches := findByCode(results, "FMT-25")
 	// tags.items missing minLength + maxLength → 2 violations at $.tags.items
 	require.Len(t, matches, 2)
@@ -890,7 +909,8 @@ func TestFMT25_RequestLocalRefStringConstraints(t *testing.T) {
 	fmt25WriteSchema(t, dir, body)
 	pm := fmt25Project(nil, nil)
 
-	results := NewValidator(pm, dir, clock.Real()).Validate()
+	results, err := NewValidator(pm, dir, clock.Real()).Validate(t.Context())
+	require.NoError(t, err)
 	matches := findByCode(results, "FMT-25")
 	require.Len(t, matches, 2)
 	for _, m := range matches {
@@ -916,7 +936,8 @@ func TestFMT25_RequestCombinatorStringConstraints(t *testing.T) {
 	fmt25WriteSchema(t, dir, body)
 	pm := fmt25Project(nil, nil)
 
-	results := NewValidator(pm, dir, clock.Real()).Validate()
+	results, err := NewValidator(pm, dir, clock.Real()).Validate(t.Context())
+	require.NoError(t, err)
 	matches := findByCode(results, "FMT-25")
 	require.Len(t, matches, 1)
 	assert.Equal(t, "$.name.allOf[0]", matches[0].Field)
@@ -933,7 +954,8 @@ func TestFMT25_RequestUnevaluatedItemsStringConstraints(t *testing.T) {
 	fmt25WriteSchema(t, dir, body)
 	pm := fmt25Project(nil, nil)
 
-	results := NewValidator(pm, dir, clock.Real()).Validate()
+	results, err := NewValidator(pm, dir, clock.Real()).Validate(t.Context())
+	require.NoError(t, err)
 	matches := findByCode(results, "FMT-25")
 	require.Len(t, matches, 1)
 	assert.Equal(t, "$.unevaluatedItems", matches[0].Field)
@@ -952,7 +974,8 @@ func TestFMT25_QueryParamsStringMissingConstraints(t *testing.T) {
 			"cursor": {Type: "string"}, // missing minLength + maxLength
 		}, nil)
 
-	results := NewValidator(pm, dir, clock.Real()).Validate()
+	results, err := NewValidator(pm, dir, clock.Real()).Validate(t.Context())
+	require.NoError(t, err)
 	matches := findByCode(results, "FMT-25")
 	require.Len(t, matches, 2, "expected 2 violations for cursor missing both, got %d: %v", len(matches), matches)
 	assert.Equal(t, "endpoints.http.queryParams.cursor.minLength", matches[0].Field)
@@ -970,7 +993,8 @@ func TestFMT25_QueryParamsIntegerMissingConstraints(t *testing.T) {
 			"limit": {Type: "integer"}, // missing minimum + maximum
 		}, nil)
 
-	results := NewValidator(pm, dir, clock.Real()).Validate()
+	results, err := NewValidator(pm, dir, clock.Real()).Validate(t.Context())
+	require.NoError(t, err)
 	matches := findByCode(results, "FMT-25")
 	require.Len(t, matches, 2)
 	assert.Equal(t, "endpoints.http.queryParams.limit.minimum", matches[0].Field)
@@ -988,7 +1012,8 @@ func TestFMT25_QueryParamsNumberMissingConstraints(t *testing.T) {
 			"ratio": {Type: "number"},
 		}, nil)
 
-	results := NewValidator(pm, dir, clock.Real()).Validate()
+	results, err := NewValidator(pm, dir, clock.Real()).Validate(t.Context())
+	require.NoError(t, err)
 	matches := findByCode(results, "FMT-25")
 	require.Len(t, matches, 2)
 	assert.Equal(t, "endpoints.http.queryParams.ratio.minimum", matches[0].Field)
@@ -1006,7 +1031,8 @@ func TestFMT25_QueryParamsInvalidBounds(t *testing.T) {
 			"page": {Type: "integer", Minimum: &ten, Maximum: &one},
 		}, nil)
 
-	results := NewValidator(pm, dir, clock.Real()).Validate()
+	results, err := NewValidator(pm, dir, clock.Real()).Validate(t.Context())
+	require.NoError(t, err)
 	matches := findByCode(results, "FMT-25")
 	require.Len(t, matches, 1)
 	assert.Equal(t, IssueInvalid, matches[0].IssueType)
@@ -1025,7 +1051,8 @@ func TestFMT25_PathParamsStringMissingConstraints(t *testing.T) {
 			"key": {Type: "string"}, // plain string, no format → must be checked
 		})
 
-	results := NewValidator(pm, dir, clock.Real()).Validate()
+	results, err := NewValidator(pm, dir, clock.Real()).Validate(t.Context())
+	require.NoError(t, err)
 	matches := findByCode(results, "FMT-25")
 	require.Len(t, matches, 2)
 	assert.Equal(t, "endpoints.http.pathParams.key.minLength", matches[0].Field)
@@ -1064,7 +1091,8 @@ schemaRefs:
 	pm, err := metadata.NewParser(dir).Parse()
 	require.NoError(t, err)
 
-	results := NewValidator(pm, dir, clock.Real()).Validate()
+	results, err := NewValidator(pm, dir, clock.Real()).Validate(t.Context())
+	require.NoError(t, err)
 	matches := findByCode(results, "FMT-25")
 	require.Len(t, matches, 4)
 	for _, m := range matches {
@@ -1108,7 +1136,8 @@ func TestFMT25_SkipsInvalidPathParams(t *testing.T) {
 			pm := fmt25Project(nil, tc.pathParams)
 			pm.Contracts["http.test.v1"].Endpoints.HTTP.Path = tc.path
 
-			results := NewValidator(pm, dir, clock.Real()).Validate()
+			results, err := NewValidator(pm, dir, clock.Real()).Validate(t.Context())
+			require.NoError(t, err)
 			matches := findByCode(results, "FMT-25")
 			assert.Empty(t, matches)
 		})
@@ -1127,7 +1156,8 @@ func TestFMT25_PathParamsUUIDFormatExempt(t *testing.T) {
 			"id": {Type: "string", Format: "uuid"}, // exempt
 		})
 
-	results := NewValidator(pm, dir, clock.Real()).Validate()
+	results, err := NewValidator(pm, dir, clock.Real()).Validate(t.Context())
+	require.NoError(t, err)
 	matches := findByCode(results, "FMT-25")
 	assert.Empty(t, matches, "format:uuid pathParams must be exempt from FMT-25, got: %v", matches)
 }
@@ -1159,7 +1189,8 @@ func TestFMT25_CleanSchemaProducesNoViolations(t *testing.T) {
 			"key": {Type: "string", MinLength: &one, MaxLength: &twoFiftySix}, // plain string with constraints
 		})
 
-	results := NewValidator(pm, dir, clock.Real()).Validate()
+	results, err := NewValidator(pm, dir, clock.Real()).Validate(t.Context())
+	require.NoError(t, err)
 	matches := findByCode(results, "FMT-25")
 	assert.Empty(t, matches, "fully-constrained schema/params must produce no FMT-25, got: %v", matches)
 }
@@ -1189,7 +1220,8 @@ func TestFMT25_NonHTTPContractIgnored(t *testing.T) {
 	}
 
 	v := NewValidator(pm, dir, clock.Real())
-	results := v.Validate()
+	results, err := v.Validate(t.Context())
+	require.NoError(t, err)
 	matches := findByCode(results, "FMT-25")
 	assert.Empty(t, matches, "non-HTTP contract must not be scanned by FMT-25")
 }

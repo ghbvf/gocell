@@ -116,38 +116,64 @@ func NewValidator(project *metadata.ProjectMeta, root string, clk clock.Clock) *
 	return validator
 }
 
-// Validate runs all rules and returns all findings.
-func (v *Validator) Validate() []ValidationResult {
+// Validate runs all rules and returns all findings. ctx cancellation
+// short-circuits the loop between rules. Every rule in the standard
+// pipeline is pure-memory; ctx-bound work (VERIFY-06's verifyJourneyRef
+// subprocess, runGit shell-outs) happens outside this list, so rule bodies
+// keep zero-arg signatures.
+//
+// The error return is non-nil only when ctx.Err() != nil at the time the
+// loop is interrupted; it carries the partial findings collected so far
+// so callers can distinguish "clean run" from "interrupted run".
+//
+// Validator is not safe for concurrent Validate / ValidateFailFast calls.
+// Build one Validator per concurrent caller — same expectation as the
+// underlying locator and the verifyJourneyRef closure.
+func (v *Validator) Validate(ctx context.Context) ([]ValidationResult, error) {
 	var results []ValidationResult
 	for _, rule := range v.rules() {
+		if err := ctx.Err(); err != nil {
+			return results, err
+		}
 		results = append(results, rule()...)
 	}
-	return results
+	return results, nil
 }
 
 // ValidateFailFast runs the same rules as Validate but returns as soon as
 // any rule produces a SeverityError result. Warnings do not trigger the
 // bailout. This is the true short-circuit path for CI pipelines — unlike
-// a Validate() caller that filters downstream, no subsequent rule runs.
+// a Validate caller that filters downstream, no subsequent rule runs.
 //
 // When no errors are found, the return value contains every rule's warnings
-// in the same order as Validate() would.
-func (v *Validator) ValidateFailFast() []ValidationResult {
+// in the same order as Validate would. ctx cancellation also short-circuits.
+// The error return is non-nil only when ctx.Err() != nil.
+func (v *Validator) ValidateFailFast(ctx context.Context) ([]ValidationResult, error) {
 	var results []ValidationResult
 	for _, rule := range v.rules() {
+		if err := ctx.Err(); err != nil {
+			return results, err
+		}
 		r := rule()
 		results = append(results, r...)
 		if HasErrors(r) {
-			return results
+			return results, nil
 		}
 	}
-	return results
+	return results, nil
 }
 
 // rules returns the list of rule methods in the same order Validate runs
 // them. Used by both Validate (for full evaluation) and ValidateFailFast
 // (for short-circuit). Keeping this list in one place is what makes the
 // two entry points provably equivalent on the happy path.
+//
+// Every rule here is pure-memory; ctx-bound work (verifyJourneyRef in
+// VERIFY-06, runGit-using rules) lives in the strict-only path or via
+// helper packages and receives ctx through dedicated parameters, not
+// through this list. ref: kubernetes apimachinery validation/field/errors.go
+// (pure-memory rules with no ctx); opentofu internal/command/validate.go
+// (top-level aggregator threads ctx).
 func (v *Validator) rules() []func() []ValidationResult {
 	return []func() []ValidationResult{
 		v.validateREF01, v.validateREF02, v.validateREF03, v.validateREF04,

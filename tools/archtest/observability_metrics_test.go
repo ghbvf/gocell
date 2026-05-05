@@ -19,7 +19,7 @@ func TestMetricLabelErrcodeClassifiersRequireAck(t *testing.T) {
 	}
 	root := findModuleRoot(t)
 
-	diagnostics, err := metricschema.CheckOBS01(root)
+	diagnostics, err := metricschema.CheckOBS01(t.Context(), root)
 	require.NoError(t, err)
 	assert.Empty(t, diagnostics)
 }

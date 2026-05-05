@@ -1,6 +1,7 @@
 package governance
 
 import (
+	"context"
 	"fmt"
 	"strings"
 )
@@ -17,63 +18,76 @@ import (
 //   - FMT-A1: assembly.yaml id contains '-' (kebab-case assembly id disallowed)
 //   - DOC-NAME-01: active docs contain a forbidden legacy naming literal
 //
-// When strict is false the method is equivalent to Validate() — strict-only
-// rules emit nothing (they are strict-only by design, there is no warning
-// severity to "upgrade" from).
-func (v *Validator) ValidateStrict(strict bool) []ValidationResult {
-	results := v.Validate()
-	results = append(results, v.validateVERIFY06(strict)...)
-	results = append(results, v.validateFMT16(strict)...)
-	results = append(results, v.validateFMT17(strict)...)
-	results = append(results, v.validateFMT18(strict)...)
-	results = append(results, v.validateFMT19(strict)...)
-	results = append(results, v.validateFMTC1(strict)...)
-	results = append(results, v.validateFMTA1(strict)...)
-	results = append(results, v.validateDOCNAME01(strict)...)
-	return results
+// When strict is false the method is equivalent to Validate(ctx) —
+// strict-only rules emit nothing (they are strict-only by design, there is
+// no warning severity to "upgrade" from). ctx flows into VERIFY-06 because
+// it shells out via verifyJourneyRef to run journey acceptance tests; the
+// remaining strict-only rules are pure-memory.
+//
+// ctx cancellation is checked between strict-only rules so a worker that
+// aborts the validate command unwinds the strict pass too — not just the
+// base Validate pipeline.
+func (v *Validator) ValidateStrict(ctx context.Context, strict bool) ([]ValidationResult, error) {
+	results, err := v.Validate(ctx)
+	if err != nil {
+		return results, err
+	}
+	for _, rule := range v.strictRules(ctx, strict) {
+		if cerr := ctx.Err(); cerr != nil {
+			return results, cerr
+		}
+		results = append(results, rule()...)
+	}
+	return results, nil
 }
 
-// ValidateStrictFailFast is equivalent to ValidateStrict(true) but uses
+// ValidateStrictFailFast is equivalent to ValidateStrict(ctx, true) but uses
 // ValidateFailFast as its base pass instead of Validate. The base pass
 // short-circuits on the first SeverityError; strict-only rules are only
 // appended when the base pass finds no errors. Rules are appended
 // incrementally; as soon as any rule produces an error the accumulation
 // stops, matching --strict --fail-fast's single-error semantics.
-func (v *Validator) ValidateStrictFailFast() []ValidationResult {
-	results := v.ValidateFailFast()
-	if HasErrors(results) {
-		return results
+//
+// ctx cancellation is checked between strict-only rules so a CI worker that
+// aborts the validate command unwinds the strict pass too — not just the
+// base Validate pipeline.
+func (v *Validator) ValidateStrictFailFast(ctx context.Context) ([]ValidationResult, error) {
+	results, err := v.ValidateFailFast(ctx)
+	if err != nil {
+		return results, err
 	}
-	results = append(results, v.validateVERIFY06(true)...)
 	if HasErrors(results) {
-		return results
+		return results, nil
 	}
-	results = append(results, v.validateFMT16(true)...)
-	if HasErrors(results) {
-		return results
+	for _, rule := range v.strictRules(ctx, true) {
+		if cerr := ctx.Err(); cerr != nil {
+			return results, cerr
+		}
+		r := rule()
+		results = append(results, r...)
+		if HasErrors(r) {
+			return results, nil
+		}
 	}
-	results = append(results, v.validateFMT17(true)...)
-	if HasErrors(results) {
-		return results
+	return results, nil
+}
+
+// strictRules returns the strict-only rule pipeline as zero-arg closures so
+// ValidateStrict and ValidateStrictFailFast share a single ctx.Err() loop.
+// VERIFY-06 binds ctx via the closure (it shells out via verifyJourneyRef);
+// the remaining FMT / DOC rules are pure-memory and accept only the strict
+// flag, so the closures are trivial.
+func (v *Validator) strictRules(ctx context.Context, strict bool) []func() []ValidationResult {
+	return []func() []ValidationResult{
+		func() []ValidationResult { return v.validateVERIFY06(ctx, strict) },
+		func() []ValidationResult { return v.validateFMT16(strict) },
+		func() []ValidationResult { return v.validateFMT17(strict) },
+		func() []ValidationResult { return v.validateFMT18(strict) },
+		func() []ValidationResult { return v.validateFMT19(strict) },
+		func() []ValidationResult { return v.validateFMTC1(strict) },
+		func() []ValidationResult { return v.validateFMTA1(strict) },
+		func() []ValidationResult { return v.validateDOCNAME01(strict) },
 	}
-	results = append(results, v.validateFMT18(true)...)
-	if HasErrors(results) {
-		return results
-	}
-	results = append(results, v.validateFMT19(true)...)
-	if HasErrors(results) {
-		return results
-	}
-	results = append(results, v.validateFMTC1(true)...)
-	if HasErrors(results) {
-		return results
-	}
-	results = append(results, v.validateFMTA1(true)...)
-	if HasErrors(results) {
-		return results
-	}
-	results = append(results, v.validateDOCNAME01(true)...)
-	return results
 }
 
 // validateFMT16 checks that no slice, cell, or assembly directory contains

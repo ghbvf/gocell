@@ -238,7 +238,7 @@ func verifyGenerated(args []string) error {
 		}
 	}
 
-	result, err := generatedverify.Verify(root, mod, project)
+	result, err := generatedverify.Verify(context.Background(), root, mod, project)
 	if err != nil {
 		return fmt.Errorf("verify generated: %w", err)
 	}

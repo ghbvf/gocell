@@ -2,6 +2,7 @@ package governance
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"os/exec"
@@ -47,15 +48,19 @@ func IsGoCellGenerated(content []byte) bool {
 //
 // An empty repository (HEAD does not yet resolve) or "no matches" returns
 // (nil, nil) without error.
-func ListGeneratedInHEAD(root string) ([]string, error) {
-	if !hasHEAD(root) {
+func ListGeneratedInHEAD(ctx context.Context, root string) ([]string, error) {
+	has, err := hasHEAD(ctx, root)
+	if err != nil {
+		return nil, err
+	}
+	if !has {
 		return nil, nil
 	}
 	// Both prefixes contain no ERE metacharacters, so simple alternation is
 	// safe. The leading "^" anchors the match to the start of a line, and
 	// generated files emit the sentinel as the first line.
 	pattern := "^(" + GoGeneratedPrefix + "|" + YAMLGeneratedPrefix + ")"
-	out, err := runGit("-C", root, "grep",
+	out, err := runGit(ctx, "-C", root, "grep",
 		"-I",
 		"-l",
 		"-E",
@@ -65,19 +70,36 @@ func ListGeneratedInHEAD(root string) ([]string, error) {
 		"*.go", "*.yml", "*.yaml",
 	)
 	if err != nil {
-		var exitErr *exec.ExitError
-		if errors.As(err, &exitErr) {
-			if exitErr.ExitCode() == gitGrepNoMatch {
-				return nil, nil
-			}
-			return nil, fmt.Errorf("git grep HEAD: %s",
-				strings.TrimSpace(string(out)))
-		}
-		return nil, fmt.Errorf("git grep HEAD: %w", err)
+		return interpretGitGrepError(ctx, err, out)
 	}
+	return parseGeneratedPaths(out), nil
+}
+
+// interpretGitGrepError translates a git-grep failure into the right
+// (paths, err) tuple: ctx cancellation propagates, a "no match" exit is
+// the empty result, and any other ExitError carries stderr forward.
+func interpretGitGrepError(ctx context.Context, gitErr error, out []byte) ([]string, error) {
+	if cerr := ctx.Err(); cerr != nil {
+		return nil, cerr
+	}
+	var exitErr *exec.ExitError
+	if errors.As(gitErr, &exitErr) {
+		if exitErr.ExitCode() == gitGrepNoMatch {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("git grep HEAD: %s", strings.TrimSpace(string(out)))
+	}
+	return nil, fmt.Errorf("git grep HEAD: %w", gitErr)
+}
+
+// parseGeneratedPaths extracts repo-relative paths from `git grep <tree>`
+// output ("<tree>:<path>" per line) and skips testdata/ subtrees so
+// archtest fixtures bearing the generator sentinel do not appear as
+// reverse-enumeration drift.
+func parseGeneratedPaths(out []byte) []string {
 	trimmed := bytes.TrimSpace(out)
 	if len(trimmed) == 0 {
-		return nil, nil
+		return nil
 	}
 	lines := bytes.Split(trimmed, []byte("\n"))
 	paths := make([]string, 0, len(lines))
@@ -86,22 +108,15 @@ func ListGeneratedInHEAD(root string) ([]string, error) {
 		if s == "" {
 			continue
 		}
-		// `git grep <tree>` output format is "<tree>:<path>".
 		if i := strings.Index(s, ":"); i >= 0 {
 			s = s[i+1:]
 		}
-		// Skip Go testdata directories (`testdata/` is the canonical
-		// `go test` convention for files that look like real source but
-		// are static test inputs). Archtest fixtures legitimately carry
-		// the gocell-generated header so the gates can be tested against
-		// negative cases; reverse-enumerating them as drift would force
-		// every fixture into a per-file allowlist.
 		if isInTestdata(s) {
 			continue
 		}
 		paths = append(paths, s)
 	}
-	return paths, nil
+	return paths
 }
 
 // isInTestdata reports whether the slash-separated path has a "testdata"

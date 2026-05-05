@@ -23,7 +23,16 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"time"
 )
+
+// pipeDrainTimeout caps how long Wait() blocks waiting for the subprocess's
+// stdout/stderr pipes to drain after Cancel has delivered SIGKILL to the
+// process group. A grandchild that inherited the parent's stdout fd can hold
+// the pipe open past its own kill (kernel fd-release race), so without an
+// upper bound CombinedOutput would hang. Healthy systems close pipes well
+// inside this window; the cap exists for the pathological case.
+const pipeDrainTimeout = 5 * time.Second
 
 // ValidatedTool wraps a tool binary invocation path with two enforced
 // invariants:
@@ -92,6 +101,11 @@ type RunOptions struct {
 // callers must explicitly opt sensitive values back in when a subprocess
 // genuinely needs them. Combined stdout+stderr is returned.
 //
+// On Unix, RunWith starts the subprocess in its own process group (Setpgid)
+// so that ctx cancellation kills the entire process tree, not just the direct
+// child. This prevents orphaned grandchild processes (e.g. test subprocesses
+// spawned by `go test`) from continuing to run after ctx is canceled.
+//
 // ValidatedTool.path is exec.LookPath-resolved at NewTool construction;
 // args are caller-controlled whitelisted invocations from governance /
 // verify helpers, never user input. gosec G204 on the variable binary
@@ -104,6 +118,15 @@ func RunWith(ctx context.Context, t ValidatedTool, opts RunOptions, args ...stri
 		cmd.Dir = opts.Dir
 	}
 	cmd.Env = mergeEnv(cleanEnv(os.Environ()), opts.ExtraEnv)
+	// Place the subprocess in a new process group so that cancellation via
+	// cmd.Cancel kills the entire group (including grandchildren). The
+	// platform-specific Cancel func replaces exec.CommandContext's default
+	// behavior of sending SIGKILL only to the direct child.
+	cmd.SysProcAttr = newSysProcAttr()
+	cmd.Cancel = func() error {
+		return killProcessGroup(cmd.Process)
+	}
+	cmd.WaitDelay = pipeDrainTimeout
 	return cmd.CombinedOutput()
 }
 

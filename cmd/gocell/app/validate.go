@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"os"
@@ -63,10 +64,17 @@ func runValidate(args []string) error {
 	validator := governance.NewValidator(project, rootDir, clock.Real())
 	depChecker := governance.NewDependencyChecker(project)
 
+	// Boundary: the gocell sub-command dispatcher passes args, not ctx, so
+	// each sub-command owns its own ctx lifetime. Declaring Background here
+	// is the cancellation source the entire validate path honors — runGit
+	// subprocesses and verifyJourneyRef both consume it. A future signal-
+	// aware ctx (signal.NotifyContext at process entry) would replace this
+	// declaration without touching the rest of the file.
+	ctx := context.Background()
 	if *failFast {
-		return runValidateFailFast(printer, *format, validator, depChecker, *strict)
+		return runValidateFailFast(ctx, printer, *format, validator, depChecker, *strict)
 	}
-	return runValidateFull(printer, validator, depChecker, *strict)
+	return runValidateFull(ctx, printer, validator, depChecker, *strict)
 }
 
 // runValidateFailFast runs validation in short-circuit mode: the validator
@@ -91,13 +99,17 @@ func runValidate(args []string) error {
 // JSON / SARIF report is more dangerous than a missing one because CI
 // pipelines may still ingest it.
 func runValidateFailFast(
+	ctx context.Context,
 	printer printers.Printer,
 	format string,
 	validator *governance.Validator,
 	depChecker *governance.DependencyChecker,
 	strict bool,
 ) error {
-	valResults := runValidatorFailFast(validator, strict)
+	valResults, valErr := runValidatorFailFast(ctx, validator, strict)
+	if valErr != nil {
+		return fmt.Errorf("validation interrupted: %w", valErr)
+	}
 	if firstErr := firstError(valResults); firstErr != nil {
 		if err := emitFailFast(printer, format, valResults); err != nil {
 			return fmt.Errorf(errEmitResultsFmt, err)
@@ -159,23 +171,27 @@ func emitFailFast(printer printers.Printer, format string, results []governance.
 }
 
 // runValidatorFailFast selects the appropriate validator method for fail-fast mode.
-func runValidatorFailFast(validator *governance.Validator, strict bool) []governance.ValidationResult {
+func runValidatorFailFast(ctx context.Context, validator *governance.Validator, strict bool) ([]governance.ValidationResult, error) {
 	if strict {
-		return validator.ValidateStrictFailFast()
+		return validator.ValidateStrictFailFast(ctx)
 	}
-	return validator.ValidateFailFast()
+	return validator.ValidateFailFast(ctx)
 }
 
 // runValidateFull runs all validation rules and emits via the configured printer.
 // The printer owns the summary line; we only return an error when SeverityError
 // results are present so the CLI exit code reflects validation outcome.
 func runValidateFull(
+	ctx context.Context,
 	printer printers.Printer,
 	validator *governance.Validator,
 	depChecker *governance.DependencyChecker,
 	strict bool,
 ) error {
-	valResults := runValidatorFull(validator, strict)
+	valResults, valErr := runValidatorFull(ctx, validator, strict)
+	if valErr != nil {
+		return fmt.Errorf("validation interrupted: %w", valErr)
+	}
 	depResults := depChecker.Check()
 	valResults = append(valResults, depResults...)
 
@@ -196,11 +212,11 @@ func runValidateFull(
 }
 
 // runValidatorFull selects the appropriate validator method for full mode.
-func runValidatorFull(validator *governance.Validator, strict bool) []governance.ValidationResult {
+func runValidatorFull(ctx context.Context, validator *governance.Validator, strict bool) ([]governance.ValidationResult, error) {
 	if strict {
-		return validator.ValidateStrict(true)
+		return validator.ValidateStrict(ctx, true)
 	}
-	return validator.Validate()
+	return validator.Validate(ctx)
 }
 
 // firstError returns the first result whose severity is error, or nil.

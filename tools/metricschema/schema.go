@@ -4,6 +4,7 @@ package metricschema
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
@@ -127,7 +128,7 @@ type obs01MetricIdentity struct {
 
 // Build walks the package graph reachable from assemblyID's build entrypoint
 // and returns all concrete metric registrations in project-owned packages.
-func Build(projectRoot string, project *metadata.ProjectMeta, assemblyID string) (*Schema, error) {
+func Build(ctx context.Context, projectRoot string, project *metadata.ProjectMeta, assemblyID string) (*Schema, error) {
 	asm := project.Assemblies[assemblyID]
 	if asm == nil {
 		return nil, fmt.Errorf("assembly %q not found", assemblyID)
@@ -137,7 +138,7 @@ func Build(projectRoot string, project *metadata.ProjectMeta, assemblyID string)
 		entrypoint = filepath.Join("cmd", assemblyID, "main.go")
 	}
 	pattern := "./" + filepath.ToSlash(filepath.Dir(entrypoint))
-	pkgs, err := loadReachablePackages(projectRoot, pattern)
+	pkgs, err := loadReachablePackages(ctx, projectRoot, pattern)
 	if err != nil {
 		return nil, err
 	}
@@ -152,6 +153,13 @@ func Build(projectRoot string, project *metadata.ProjectMeta, assemblyID string)
 		AssemblyID: assemblyID,
 		Scope:      "assembly-reachable",
 		Entrypoint: filepath.ToSlash(entrypoint),
+	}
+	// collectInits and prometheusProviderNamespace are pure-memory passes
+	// over the already-loaded packages and do not accept ctx; the cancel
+	// check fits here, between package load (which honors ctx via
+	// packages.Config.Context) and the per-package scan loop below.
+	if err := ctx.Err(); err != nil {
+		return nil, err
 	}
 	for _, p := range pkgs {
 		sp := newScanPackage(projectRoot, p, namespace, inits, prometheusOptSinks)
@@ -182,21 +190,22 @@ func Marshal(schema *Schema) ([]byte, error) {
 	return append([]byte(header), body...), nil
 }
 
-func loadPackages(root string, patterns ...string) ([]*packages.Package, error) {
-	return loadPackagesWithMode(root, false, patterns...)
+func loadPackages(ctx context.Context, root string, patterns ...string) ([]*packages.Package, error) {
+	return loadPackagesWithMode(ctx, root, false, patterns...)
 }
 
-func loadReachablePackages(root string, patterns ...string) ([]*packages.Package, error) {
-	return loadPackagesWithMode(root, true, patterns...)
+func loadReachablePackages(ctx context.Context, root string, patterns ...string) ([]*packages.Package, error) {
+	return loadPackagesWithMode(ctx, root, true, patterns...)
 }
 
-func loadPackagesWithMode(root string, includeDeps bool, patterns ...string) ([]*packages.Package, error) {
+func loadPackagesWithMode(ctx context.Context, root string, includeDeps bool, patterns ...string) ([]*packages.Package, error) {
 	if !includeDeps && len(patterns) > 1 {
-		return loadPatternScopedPackages(root, patterns...)
+		return loadPatternScopedPackages(ctx, root, patterns...)
 	}
 	cfg := &packages.Config{
-		Mode: packageLoadMode(includeDeps),
-		Dir:  root,
+		Context: ctx,
+		Mode:    packageLoadMode(includeDeps),
+		Dir:     root,
 	}
 	roots, err := packages.Load(cfg, patterns...)
 	if err != nil {
@@ -216,11 +225,11 @@ func loadPackagesWithMode(root string, includeDeps bool, patterns ...string) ([]
 	return out, nil
 }
 
-func loadPatternScopedPackages(root string, patterns ...string) ([]*packages.Package, error) {
+func loadPatternScopedPackages(ctx context.Context, root string, patterns ...string) ([]*packages.Package, error) {
 	byPath := map[string]*packages.Package{}
 	var paths []string
 	for _, pattern := range patterns {
-		pkgs, err := loadPackagesWithMode(root, false, pattern)
+		pkgs, err := loadPackagesWithMode(ctx, root, false, pattern)
 		if err != nil {
 			return nil, err
 		}
@@ -1663,20 +1672,20 @@ func (sp *scanPackage) prometheusMetricIdentity(call *ast.CallExpr, rel string) 
 
 // CheckOBS01 reports production metric label values whose expression depends on
 // errcode.Category or errcode.IsInfraError without a checked-in acknowledgement.
-func CheckOBS01(projectRoot string) ([]Diagnostic, error) {
-	return checkOBS01WithPatterns(projectRoot, obs01ProductionPatterns(projectRoot)...)
+func CheckOBS01(ctx context.Context, projectRoot string) ([]Diagnostic, error) {
+	return checkOBS01WithPatterns(ctx, projectRoot, obs01ProductionPatterns(projectRoot)...)
 }
 
-func checkOBS01WithPatterns(projectRoot string, patterns ...string) ([]Diagnostic, error) {
+func checkOBS01WithPatterns(ctx context.Context, projectRoot string, patterns ...string) ([]Diagnostic, error) {
 	if len(patterns) == 0 {
 		patterns = obs01ProductionPatterns(projectRoot)
 	}
-	acks, err := loadOBS01Acks(projectRoot)
+	acks, err := loadOBS01Acks(ctx, projectRoot)
 	if err != nil {
 		return nil, err
 	}
 	matchedAcks := map[string]bool{}
-	pkgs, err := loadPackages(projectRoot, patterns...)
+	pkgs, err := loadPackages(ctx, projectRoot, patterns...)
 	if err != nil {
 		return nil, err
 	}
@@ -4003,7 +4012,7 @@ type obsAck struct {
 	Rationale            string   `yaml:"rationale"`
 }
 
-func loadOBS01Acks(root string) (map[string]obsAck, error) {
+func loadOBS01Acks(ctx context.Context, root string) (map[string]obsAck, error) {
 	path := filepath.Join(root, "docs", "observability", "metrics-migration-acks.yaml")
 	out := map[string]obsAck{}
 	data, err := os.ReadFile(filepath.Clean(path))
@@ -4023,7 +4032,7 @@ func loadOBS01Acks(root string) (map[string]obsAck, error) {
 		if ack.Rule != "OBS-01" {
 			return nil, fmt.Errorf("%s: acknowledgement %d has unsupported rule %q", path, i+1, ack.Rule)
 		}
-		if err := ack.validate(root, path, i+1); err != nil {
+		if err := ack.validate(ctx, root, path, i+1); err != nil {
 			return nil, err
 		}
 		if _, exists := out[ack.Fingerprint]; exists {
@@ -4034,7 +4043,7 @@ func loadOBS01Acks(root string) (map[string]obsAck, error) {
 	return out, nil
 }
 
-func (ack obsAck) validate(root, path string, idx int) error {
+func (ack obsAck) validate(ctx context.Context, root, path string, idx int) error {
 	required := map[string]string{
 		"fingerprint":  ack.Fingerprint,
 		"metric":       ack.Metric,
@@ -4063,7 +4072,7 @@ func (ack obsAck) validate(root, path string, idx int) error {
 		if strings.TrimSpace(ref) == "" {
 			return fmt.Errorf("%s: OBS-01 acknowledgement %d has empty dashboardOrAlertRefs[%d]", path, idx, i)
 		}
-		ok, gitErr := validOBS01Ref(root, ref)
+		ok, gitErr := validOBS01Ref(ctx, root, ref)
 		if gitErr != nil {
 			return fmt.Errorf("%s: OBS-01 acknowledgement %d dashboardOrAlertRefs[%d] git lookup failed: %w", path, idx, i, gitErr)
 		}
@@ -4085,7 +4094,7 @@ func (ack obsAck) validate(root, path string, idx int) error {
 // Returns (false, nil) for path-shape violations and missing files.
 // Returns (false, err) only when a git query itself fails — surfacing the
 // failure beats silently fail-closing on a broken environment.
-func validOBS01Ref(root, ref string) (bool, error) {
+func validOBS01Ref(ctx context.Context, root, ref string) (bool, error) {
 	rel, ok := normalizedOBS01RefRel(root, ref)
 	if !ok {
 		return false, nil
@@ -4093,7 +4102,7 @@ func validOBS01Ref(root, ref string) (bool, error) {
 	if !governance.HasGitMetadata(root) {
 		return true, nil
 	}
-	return governance.CommittedInHEAD(root, rel)
+	return governance.CommittedInHEAD(ctx, root, rel)
 }
 
 // normalizedOBS01RefRel resolves ref to a forward-slash repo-relative path
