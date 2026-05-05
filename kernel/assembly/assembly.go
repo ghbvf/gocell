@@ -393,7 +393,9 @@ func (a *CoreAssembly) startInternal(ctx context.Context, cfgMap map[string]any)
 	//      k8s client-go DeepCopyObject — each consumer owns its own value.
 	//
 	// Snapshots are accumulated into a local map and published to a.snapshots
-	// under a.mu only after every cell.Init succeeds. Writing the shared map
+	// under a.mu only after every cell.Start succeeds. Publishing at the same
+	// lifecycle boundary as stateStarted keeps Snapshots() from exposing
+	// startup metadata that may still be rolled back. Writing the shared map
 	// inside the loop without the lock would race with concurrent Snapshots()
 	// readers — Go runtime treats concurrent map read/write as fatal.
 	// ref: PR-V1-030-K01 (review G1-01).
@@ -412,9 +414,6 @@ func (a *CoreAssembly) startInternal(ctx context.Context, cfgMap map[string]any)
 		}
 		localSnaps[c.ID()] = recorder.Snapshot()
 	}
-	a.mu.Lock()
-	a.snapshots = localSnaps
-	a.mu.Unlock()
 
 	// Phase 2: Start cells in order with lifecycle hooks.
 	// For each cell: BeforeStart → Start → AfterStart.
@@ -429,6 +428,7 @@ func (a *CoreAssembly) startInternal(ctx context.Context, cfgMap map[string]any)
 	}
 
 	a.mu.Lock()
+	a.snapshots = localSnaps
 	a.state = stateStarted
 	a.mu.Unlock()
 	return nil
@@ -585,6 +585,7 @@ func (a *CoreAssembly) emitHookEvent(e cell.HookEvent) {
 			slog.Error("lifecycle: hook observer panicked",
 				slog.String("cell", e.CellID),
 				slog.String("hook", string(e.Hook)),
+				slog.String("panic_type", hookObserverPanicType(r)),
 				slog.String("panic", sanitizeHookObserverPanicValue(r)))
 		}
 	}()
@@ -631,7 +632,7 @@ func (a *CoreAssembly) ReloadTimeout() time.Duration {
 func (a *CoreAssembly) Snapshots() map[string]cell.RegistrySnapshot {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	if len(a.snapshots) == 0 {
+	if a.state != stateStarted || len(a.snapshots) == 0 {
 		return nil
 	}
 	cp := make(map[string]cell.RegistrySnapshot, len(a.snapshots))

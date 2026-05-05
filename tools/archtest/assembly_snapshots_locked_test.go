@@ -8,16 +8,17 @@
 // without holding a.mu, racing against Snapshots() readers that hold a.mu.
 //
 // Detection model: walk every FuncDecl and FuncLit body in kernel/assembly/
-// production .go files maintaining a `lockDepth` counter. Lock() increments,
-// Unlock() decrements; `defer Unlock()` does NOT decrement (the lock is held
-// until function exit). Each FuncLit (closure / goroutine literal) gets a
-// fresh `lockDepth=0` because it has its own lock-scope at runtime — a write
-// inside a `go func() { ... }()` does not inherit the caller's locked
+// production .go files maintaining lock depth per receiver. `<x>.mu.Lock()`
+// increments only `<x>`; `<x>.mu.Unlock()` decrements only `<x>`;
+// `defer <x>.mu.Unlock()` does NOT decrement (the lock is held until function
+// exit). Each FuncLit (closure / goroutine literal) gets a fresh lock map
+// because it has its own lock-scope at runtime — a write inside a
+// `go func() { ... }()` does not inherit the caller's locked
 // section. Composite literal initializers (`&CoreAssembly{...snapshots:
 // make(...)}`) are NOT writes — single-threaded constructor-time
 // initialization is exempt by construction.
 //
-// Flagged statements (when lockDepth == 0):
+// Flagged statements (when matching receiver lock depth == 0):
 //   - assignments where any LHS is `<x>.snapshots[...]` (per-key write)
 //   - assignments where any LHS is `<x>.snapshots`     (whole-map replace)
 //   - calls to delete(<x>.snapshots, ...)              (per-key remove)
@@ -25,14 +26,16 @@
 // Reads of a.snapshots (range, len, indexed read) are not flagged — readers
 // already hold the lock in Snapshots(); only racy writers cause map races.
 //
-// Known limitation: the lockDepth model is approximate. Pathological mixes of
-// `defer Unlock()` followed by an explicit `Unlock()` later in the same
-// function (double-unlock — undefined runtime behavior anyway) leave the
-// counter at 1 and admit a subsequent write as compliant. Production code in
-// kernel/assembly/ avoids that pattern; if it ever appears, prefer fixing the
-// double-unlock over expanding this detector. The kernel rule is "balanced
-// Lock/Unlock pairs"; this gate is a best-effort static surface against
-// regression of the K-01 race, not a full mutex-state interpreter.
+// Known limitation: the receiver-lock model is approximate and lexical.
+// Aliases are not followed: `alias := a; alias.mu.Lock(); a.snapshots = ...`
+// is intentionally rejected. Pathological mixes of `defer Unlock()` followed
+// by an explicit `Unlock()` later in the same function (double-unlock —
+// undefined runtime behavior anyway) leave the counter at 1 and admit a
+// subsequent write as compliant. Production code in kernel/assembly/ avoids
+// that pattern; if it ever appears, prefer fixing the double-unlock over
+// expanding this detector. The kernel rule is "balanced Lock/Unlock pairs";
+// this gate is a best-effort static surface against regression of the K-01
+// race, not a full mutex-state interpreter.
 //
 // Allow-list: none. New() initializes via composite literal which is not an
 // AssignStmt; the gate naturally exempts it without an explicit allow-list.
@@ -154,6 +157,94 @@ func (a *A) ok() {
 	}
 	if len(vs) != 0 {
 		t.Errorf("expected no violations for locked write, got: %v", vs)
+	}
+}
+
+func TestAssemblySnapshotsLocked_DetectsPerKeyWriteLockedByDifferentReceiver(t *testing.T) {
+	src := `package x
+import "sync"
+type A struct {
+    mu        sync.Mutex
+    snapshots map[string]int
+}
+func (a *A) bug(b *A) {
+    b.mu.Lock()
+    defer b.mu.Unlock()
+    a.snapshots["k"] = 1
+}`
+	vs, err := asnCheckSource("<fixture-wrong-mutex-key>", src)
+	if err != nil {
+		t.Fatalf("asnCheckSource: %v", err)
+	}
+	if len(vs) == 0 {
+		t.Error("detector did not flag a.snapshots[k] write protected only by b.mu")
+	}
+}
+
+func TestAssemblySnapshotsLocked_DetectsWholeMapWriteLockedByDifferentReceiver(t *testing.T) {
+	src := `package x
+import "sync"
+type A struct {
+    mu        sync.Mutex
+    snapshots map[string]int
+}
+func (a *A) bug(b *A, m map[string]int) {
+    b.mu.Lock()
+    defer b.mu.Unlock()
+    a.snapshots = m
+}`
+	vs, err := asnCheckSource("<fixture-wrong-mutex-whole>", src)
+	if err != nil {
+		t.Fatalf("asnCheckSource: %v", err)
+	}
+	if len(vs) == 0 {
+		t.Error("detector did not flag whole-map a.snapshots write protected only by b.mu")
+	}
+}
+
+func TestAssemblySnapshotsLocked_DetectsDeleteLockedByDifferentReceiver(t *testing.T) {
+	src := `package x
+import "sync"
+type A struct {
+    mu        sync.Mutex
+    snapshots map[string]int
+}
+func (a *A) bug(b *A) {
+    b.mu.Lock()
+    defer b.mu.Unlock()
+    delete(a.snapshots, "k")
+}`
+	vs, err := asnCheckSource("<fixture-wrong-mutex-delete>", src)
+	if err != nil {
+		t.Fatalf("asnCheckSource: %v", err)
+	}
+	if len(vs) == 0 {
+		t.Error("detector did not flag delete(a.snapshots, ...) protected only by b.mu")
+	}
+}
+
+func TestAssemblySnapshotsLocked_AllowsEachReceiverProtectedByOwnMutex(t *testing.T) {
+	src := `package x
+import "sync"
+type A struct {
+    mu        sync.Mutex
+    snapshots map[string]int
+}
+func (a *A) ok(b *A) {
+    a.mu.Lock()
+    b.mu.Lock()
+    a.snapshots["a"] = 1
+    b.snapshots["b"] = 2
+    delete(a.snapshots, "a")
+    b.mu.Unlock()
+    a.mu.Unlock()
+}`
+	vs, err := asnCheckSource("<fixture-each-receiver>", src)
+	if err != nil {
+		t.Fatalf("asnCheckSource: %v", err)
+	}
+	if len(vs) != 0 {
+		t.Errorf("expected no violations when each snapshots receiver has its own mutex locked, got: %v", vs)
 	}
 }
 
@@ -304,7 +395,7 @@ func asnCheckAST(fset *token.FileSet, f *ast.File, label string) []string {
 		if !ok || fn.Body == nil {
 			continue
 		}
-		violations = append(violations, asnScanStmts(fset, fn.Body.List, 0, label)...)
+		violations = append(violations, asnScanStmts(fset, fn.Body.List, asnNewLockState(), label)...)
 	}
 	// Independently inspect every FuncLit (closure / goroutine body / inline
 	// callback). A FuncLit owns its lock scope: writes inside a closure do
@@ -316,29 +407,42 @@ func asnCheckAST(fset *token.FileSet, f *ast.File, label string) []string {
 		if !ok || fl.Body == nil {
 			return true
 		}
-		violations = append(violations, asnScanStmts(fset, fl.Body.List, 0, label)...)
+		violations = append(violations, asnScanStmts(fset, fl.Body.List, asnNewLockState(), label)...)
 		return true
 	})
 	return violations
 }
 
-// asnScanStmts walks a flat list of statements with `lockDepth` counter,
+type asnLockState map[string]int
+
+func asnNewLockState() asnLockState {
+	return make(asnLockState)
+}
+
+func asnCloneLocks(locks asnLockState) asnLockState {
+	cp := make(asnLockState, len(locks))
+	for k, v := range locks {
+		cp[k] = v
+	}
+	return cp
+}
+
+// asnScanStmts walks a flat list of statements with receiver-bound lock state,
 // recursing into nested blocks while preserving the parent's lock state.
 // Lock() increments depth; Unlock() decrements; defer Unlock() does not
 // affect depth (the lock is held until the function returns, after every
 // statement in the body has executed).
-func asnScanStmts(fset *token.FileSet, stmts []ast.Stmt, lockDepth int, label string) []string {
+func asnScanStmts(fset *token.FileSet, stmts []ast.Stmt, locks asnLockState, label string) []string {
 	var violations []string
 	for _, stmt := range stmts {
 		switch s := stmt.(type) {
 		case *ast.ExprStmt:
-			switch {
-			case asnIsLockCall(s.X):
-				lockDepth++
-			case asnIsUnlockCall(s.X):
-				lockDepth--
-			default:
-				if line, ok := asnUnlockedDeleteSnapshots(s.X, fset, lockDepth); ok {
+			if recv, ok := asnMuMethodReceiver(s.X, "Lock"); ok {
+				locks[recv]++
+			} else if recv, ok := asnMuMethodReceiver(s.X, "Unlock"); ok {
+				locks[recv]--
+			} else {
+				if line, ok := asnUnlockedDeleteSnapshots(s.X, fset, locks); ok {
 					violations = append(violations, asnViolation(label, line))
 				}
 			}
@@ -346,7 +450,7 @@ func asnScanStmts(fset *token.FileSet, stmts []ast.Stmt, lockDepth int, label st
 			// `defer a.mu.Unlock()` keeps the lock held for the rest of the
 			// body; do not change lockDepth here.
 		case *ast.AssignStmt:
-			if line, ok := asnUnlockedSnapshotsWrite(s, fset, lockDepth); ok {
+			if line, ok := asnUnlockedSnapshotsWrite(s, fset, locks); ok {
 				violations = append(violations, asnViolation(label, line))
 			}
 		case *ast.IfStmt:
@@ -354,95 +458,87 @@ func asnScanStmts(fset *token.FileSet, stmts []ast.Stmt, lockDepth int, label st
 			// rare `if x = ...; ...` assignment. Scan it so writes hidden
 			// in the init clause aren't a blind spot.
 			if s.Init != nil {
-				violations = append(violations, asnScanStmts(fset, []ast.Stmt{s.Init}, lockDepth, label)...)
+				violations = append(violations, asnScanStmts(fset, []ast.Stmt{s.Init}, asnCloneLocks(locks), label)...)
 			}
 			if s.Body != nil {
-				violations = append(violations, asnScanStmts(fset, s.Body.List, lockDepth, label)...)
+				violations = append(violations, asnScanStmts(fset, s.Body.List, asnCloneLocks(locks), label)...)
 			}
 			if s.Else != nil {
-				violations = append(violations, asnScanStmts(fset, []ast.Stmt{s.Else}, lockDepth, label)...)
+				violations = append(violations, asnScanStmts(fset, []ast.Stmt{s.Else}, asnCloneLocks(locks), label)...)
 			}
 		case *ast.ForStmt:
 			if s.Init != nil {
-				violations = append(violations, asnScanStmts(fset, []ast.Stmt{s.Init}, lockDepth, label)...)
+				violations = append(violations, asnScanStmts(fset, []ast.Stmt{s.Init}, asnCloneLocks(locks), label)...)
 			}
 			if s.Post != nil {
-				violations = append(violations, asnScanStmts(fset, []ast.Stmt{s.Post}, lockDepth, label)...)
+				violations = append(violations, asnScanStmts(fset, []ast.Stmt{s.Post}, asnCloneLocks(locks), label)...)
 			}
 			if s.Body != nil {
-				violations = append(violations, asnScanStmts(fset, s.Body.List, lockDepth, label)...)
+				violations = append(violations, asnScanStmts(fset, s.Body.List, asnCloneLocks(locks), label)...)
 			}
 		case *ast.RangeStmt:
 			if s.Body != nil {
-				violations = append(violations, asnScanStmts(fset, s.Body.List, lockDepth, label)...)
+				violations = append(violations, asnScanStmts(fset, s.Body.List, asnCloneLocks(locks), label)...)
 			}
 		case *ast.BlockStmt:
-			violations = append(violations, asnScanStmts(fset, s.List, lockDepth, label)...)
+			violations = append(violations, asnScanStmts(fset, s.List, asnCloneLocks(locks), label)...)
 		case *ast.SwitchStmt:
 			if s.Init != nil {
-				violations = append(violations, asnScanStmts(fset, []ast.Stmt{s.Init}, lockDepth, label)...)
+				violations = append(violations, asnScanStmts(fset, []ast.Stmt{s.Init}, asnCloneLocks(locks), label)...)
 			}
 			if s.Body != nil {
-				violations = append(violations, asnScanStmts(fset, s.Body.List, lockDepth, label)...)
+				violations = append(violations, asnScanStmts(fset, s.Body.List, asnCloneLocks(locks), label)...)
 			}
 		case *ast.TypeSwitchStmt:
 			if s.Init != nil {
-				violations = append(violations, asnScanStmts(fset, []ast.Stmt{s.Init}, lockDepth, label)...)
+				violations = append(violations, asnScanStmts(fset, []ast.Stmt{s.Init}, asnCloneLocks(locks), label)...)
 			}
 			if s.Body != nil {
-				violations = append(violations, asnScanStmts(fset, s.Body.List, lockDepth, label)...)
+				violations = append(violations, asnScanStmts(fset, s.Body.List, asnCloneLocks(locks), label)...)
 			}
 		case *ast.CaseClause:
-			violations = append(violations, asnScanStmts(fset, s.Body, lockDepth, label)...)
+			violations = append(violations, asnScanStmts(fset, s.Body, asnCloneLocks(locks), label)...)
 		case *ast.SelectStmt:
 			if s.Body != nil {
-				violations = append(violations, asnScanStmts(fset, s.Body.List, lockDepth, label)...)
+				violations = append(violations, asnScanStmts(fset, s.Body.List, asnCloneLocks(locks), label)...)
 			}
 		case *ast.CommClause:
-			violations = append(violations, asnScanStmts(fset, s.Body, lockDepth, label)...)
+			violations = append(violations, asnScanStmts(fset, s.Body, asnCloneLocks(locks), label)...)
 		}
 	}
 	return violations
 }
 
-// asnIsLockCall returns true if expr is `<x>.mu.Lock()`.
-func asnIsLockCall(expr ast.Expr) bool {
-	return asnIsMuMethodCall(expr, "Lock")
-}
-
-// asnIsUnlockCall returns true if expr is `<x>.mu.Unlock()`.
-func asnIsUnlockCall(expr ast.Expr) bool {
-	return asnIsMuMethodCall(expr, "Unlock")
-}
-
-// asnIsMuMethodCall returns true if expr is a call of form `<x>.mu.<methodName>()`.
+// asnMuMethodReceiver returns the receiver key for a call of form
+// `<x>.mu.<methodName>()`.
 // The .mu suffix limits matches to mutex-shaped accesses; reflection-style
 // false positives on identically named methods are not a concern in
 // kernel/assembly/.
-func asnIsMuMethodCall(expr ast.Expr, methodName string) bool {
+func asnMuMethodReceiver(expr ast.Expr, methodName string) (string, bool) {
 	call, ok := expr.(*ast.CallExpr)
 	if !ok {
-		return false
+		return "", false
 	}
 	sel, ok := call.Fun.(*ast.SelectorExpr)
 	if !ok || sel.Sel.Name != methodName {
-		return false
+		return "", false
 	}
 	inner, ok := sel.X.(*ast.SelectorExpr)
 	if !ok {
-		return false
+		return "", false
 	}
-	return inner.Sel.Name == "mu"
+	if inner.Sel.Name != "mu" {
+		return "", false
+	}
+	recv := asnReceiverKey(inner.X)
+	return recv, recv != ""
 }
 
 // asnUnlockedSnapshotsWrite returns (line, true) when assign's LHS targets
-// `<x>.snapshots` or `<x>.snapshots[...]` and lockDepth == 0.
-func asnUnlockedSnapshotsWrite(assign *ast.AssignStmt, fset *token.FileSet, lockDepth int) (int, bool) {
-	if lockDepth > 0 {
-		return 0, false
-	}
+// `<x>.snapshots` or `<x>.snapshots[...]` and `<x>.mu` is not locked.
+func asnUnlockedSnapshotsWrite(assign *ast.AssignStmt, fset *token.FileSet, locks asnLockState) (int, bool) {
 	for _, lhs := range assign.Lhs {
-		if asnIsSnapshotsTarget(lhs) {
+		if recv, ok := asnSnapshotsReceiver(lhs); ok && locks[recv] <= 0 {
 			return fset.Position(assign.Pos()).Line, true
 		}
 	}
@@ -450,11 +546,8 @@ func asnUnlockedSnapshotsWrite(assign *ast.AssignStmt, fset *token.FileSet, lock
 }
 
 // asnUnlockedDeleteSnapshots returns (line, true) when expr is
-// `delete(<x>.snapshots, ...)` and lockDepth == 0.
-func asnUnlockedDeleteSnapshots(expr ast.Expr, fset *token.FileSet, lockDepth int) (int, bool) {
-	if lockDepth > 0 {
-		return 0, false
-	}
+// `delete(<x>.snapshots, ...)` and `<x>.mu` is not locked.
+func asnUnlockedDeleteSnapshots(expr ast.Expr, fset *token.FileSet, locks asnLockState) (int, bool) {
 	call, ok := expr.(*ast.CallExpr)
 	if !ok {
 		return 0, false
@@ -463,31 +556,58 @@ func asnUnlockedDeleteSnapshots(expr ast.Expr, fset *token.FileSet, lockDepth in
 	if !ok || id.Name != "delete" || len(call.Args) == 0 {
 		return 0, false
 	}
-	if asnIsSnapshotsTarget(call.Args[0]) {
+	if recv, ok := asnSnapshotsReceiver(call.Args[0]); ok && locks[recv] <= 0 {
 		return fset.Position(call.Pos()).Line, true
 	}
 	return 0, false
 }
 
-// asnIsSnapshotsTarget reports whether expr is a SelectorExpr `<x>.snapshots`
-// (whole-map) or an IndexExpr whose collection is `<x>.snapshots` (per-key).
-func asnIsSnapshotsTarget(expr ast.Expr) bool {
+// asnSnapshotsReceiver reports the receiver key for a SelectorExpr
+// `<x>.snapshots` (whole-map) or an IndexExpr whose collection is
+// `<x>.snapshots` (per-key).
+func asnSnapshotsReceiver(expr ast.Expr) (string, bool) {
 	switch e := expr.(type) {
 	case *ast.SelectorExpr:
-		return e.Sel.Name == "snapshots"
+		if e.Sel.Name != "snapshots" {
+			return "", false
+		}
+		recv := asnReceiverKey(e.X)
+		return recv, recv != ""
 	case *ast.IndexExpr:
 		if sel, ok := e.X.(*ast.SelectorExpr); ok {
-			return sel.Sel.Name == "snapshots"
+			if sel.Sel.Name != "snapshots" {
+				return "", false
+			}
+			recv := asnReceiverKey(sel.X)
+			return recv, recv != ""
 		}
 	}
-	return false
+	return "", false
+}
+
+func asnReceiverKey(expr ast.Expr) string {
+	switch e := expr.(type) {
+	case *ast.Ident:
+		return e.Name
+	case *ast.SelectorExpr:
+		prefix := asnReceiverKey(e.X)
+		if prefix == "" {
+			return ""
+		}
+		return prefix + "." + e.Sel.Name
+	case *ast.StarExpr:
+		return "*" + asnReceiverKey(e.X)
+	case *ast.ParenExpr:
+		return asnReceiverKey(e.X)
+	}
+	return ""
 }
 
 // asnViolation formats an ASSEMBLY-SNAPSHOTS-LOCKED-01 violation message.
 func asnViolation(file string, line int) string {
 	return ruleAssemblySnapshotsLocked01 + ": " + file + ":" + strconv.Itoa(line) +
-		": write to *.snapshots without holding mu.Lock(); wrap with " +
-		"a.mu.Lock()/a.mu.Unlock() (or rely on defer Unlock). " +
+		": write to *.snapshots without holding the matching receiver mu.Lock(); wrap with " +
+		"<receiver>.mu.Lock()/<receiver>.mu.Unlock() (or rely on defer Unlock). " +
 		"ref: PR-V1-030-K01-ASSEMBLY-SNAPSHOTS-RACE-FIX, G1-01"
 }
 

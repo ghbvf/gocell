@@ -261,6 +261,7 @@ func (d *hookDispatcher) dispatchOne(e cell.HookEvent) {
 				slog.Error("lifecycle: hook observer panicked",
 					slog.String("cell", e.CellID),
 					slog.String("hook", string(e.Hook)),
+					slog.String("panic_type", hookObserverPanicType(r)),
 					slog.String("panic", sanitizeHookObserverPanicValue(r)))
 			}
 			select {
@@ -375,6 +376,10 @@ func closedChannel() chan struct{} {
 
 func sanitizeHookObserverPanicValue(r any) string {
 	return truncateUTF8Bytes(redaction.RedactString(fmt.Sprintf("%v", r)), maxHookObserverPanicLogBytes)
+}
+
+func hookObserverPanicType(r any) string {
+	return fmt.Sprintf("%T", r)
 }
 
 func truncateUTF8Bytes(s string, maxBytes int) string {

@@ -2,15 +2,21 @@ package assembly
 
 import (
 	"context"
+	"errors"
+	"fmt"
+	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/metadata"
+	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 )
 
@@ -40,9 +46,9 @@ func TestAssembly_StartConcurrentSnapshots_RaceDetector(t *testing.T) {
 		Clock:          clock.Real(),
 	})
 
-	// Pre-register 3 fast cells so Phase 1 will populate a.snapshots
-	// before reaching the blocking last cell. This guarantees readers see
-	// a non-empty map mid-Init when they race against the write site.
+	// Pre-register 3 fast cells so Phase 1 will populate localSnaps before
+	// reaching the blocking last cell. This creates the same writer pressure
+	// as the original bug without making snapshots visible before stateStarted.
 	for i := 0; i < 3; i++ {
 		id := "fast-" + string(rune('a'+i))
 		require.NoError(t, a.Register(cell.MustNewBaseCell(&metadata.CellMeta{
@@ -106,6 +112,7 @@ func TestAssembly_StartConcurrentSnapshots_RaceDetector(t *testing.T) {
 	for r := 0; r < readers; r++ {
 		<-ready
 	}
+	assert.Empty(t, a.Snapshots(), "Snapshots() must stay empty while Start is blocked in Phase 1")
 	close(initGate)
 
 	startErr := <-startDone
@@ -124,8 +131,9 @@ func TestAssembly_StartConcurrentSnapshots_RaceDetector(t *testing.T) {
 // Snapshots() and Health(). G1-17 (review 20260504) noted this gap: state
 // transitions guarded by sync.Mutex were not exercised under -race.
 //
-// Expected: state guards reject re-entrant Start/Stop with errors (no fatal),
-// and there is no data race on a.snapshots or a.state.
+// Expected: state guards reject re-entrant Start attempts with validation
+// errors, Stop remains a nil no-op outside stateStarted, and there is no data
+// race on a.snapshots or a.state.
 //
 // Pre-fix: combined with the Phase 1 race, this stress test can also surface
 // the same map race when a Start collides with a concurrent Snapshots() reader.
@@ -147,9 +155,13 @@ func TestAssembly_ConcurrentStartStop_RaceDetector(t *testing.T) {
 	const writers = 4
 	const readers = 4
 	const iterations = 25
+	registeredIDs := []string{"c-a", "c-b", "c-c"}
 
 	var wg sync.WaitGroup
 	wg.Add(writers + readers)
+	startErrs := make(chan error, writers*iterations)
+	stopErrs := make(chan error, writers*iterations)
+	readerErrs := make(chan error, readers*iterations*4)
 
 	// Writers: alternate Start / Stop; the state machine must reject
 	// invalid transitions without data races.
@@ -157,8 +169,8 @@ func TestAssembly_ConcurrentStartStop_RaceDetector(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			for i := 0; i < iterations; i++ {
-				_ = a.Start(context.Background())
-				_ = a.Stop(context.Background())
+				startErrs <- a.Start(context.Background())
+				stopErrs <- a.Stop(context.Background())
 			}
 		}()
 	}
@@ -169,14 +181,50 @@ func TestAssembly_ConcurrentStartStop_RaceDetector(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			for i := 0; i < iterations*4; i++ {
-				_ = a.Snapshots()
-				_ = a.Health()
+				snaps := a.Snapshots()
+				for id := range snaps {
+					if !slices.Contains(registeredIDs, id) {
+						readerErrs <- fmt.Errorf("Snapshots() returned unregistered cell ID %q", id)
+					}
+				}
+				health := a.Health()
+				for _, id := range registeredIDs {
+					if _, ok := health[id]; !ok {
+						readerErrs <- fmt.Errorf("Health() missing registered cell ID %q", id)
+					}
+				}
 			}
 		}()
 	}
 
 	wg.Wait()
+	close(startErrs)
+	close(stopErrs)
+	close(readerErrs)
+
+	for err := range startErrs {
+		if err == nil {
+			continue
+		}
+		requireStartStateGuardError(t, err)
+	}
+	for err := range stopErrs {
+		require.NoError(t, err, "Stop must either stop stateStarted or no-op outside stateStarted")
+	}
+	for err := range readerErrs {
+		require.NoError(t, err)
+	}
 
 	// Final teardown: drive to stopped state regardless of last writer.
 	_ = a.Stop(context.Background())
+	assert.Empty(t, a.Snapshots(), "final state must not expose snapshots")
+}
+
+func requireStartStateGuardError(t *testing.T, err error) {
+	t.Helper()
+	var ec *errcode.Error
+	require.Truef(t, errors.As(err, &ec), "Start error must be errcode.Error, got %T: %v", err, err)
+	assert.Equal(t, errcode.ErrValidationFailed, ec.Code)
+	assert.Truef(t, strings.Contains(err.Error(), "cannot start in state"),
+		"Start error must describe the guarded lifecycle state, got: %v", err)
 }
