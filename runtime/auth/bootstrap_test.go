@@ -51,7 +51,7 @@ func invokeBootstrapMiddleware(
 ) (code int, body string, didPanic bool) {
 	t.Helper()
 	defer func() {
-		if r := recover(); r != nil {
+		if recover() != nil {
 			didPanic = true
 		}
 	}()

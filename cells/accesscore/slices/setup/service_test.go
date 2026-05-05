@@ -551,27 +551,19 @@ func newServiceWithProvisionerError(t *testing.T, err error) *setup.Service {
 	return newService(t, mem.NewUserRepository(), &countErrRoleRepo{err: err}, nil)
 }
 
-// --- SEC-SETUP-CLOSURE RED tests (Batch 0, test 13) ---
-
-// TestService_CreateAdmin_BootstrapMode_AlreadyProvisioned_Returns410IgnoresEnv
-// verifies that in bootstrap mode (where the admin was already provisioned),
-// CreateAdmin returns 410 ErrSetupAlreadyInitialized regardless of bootstrap
-// credentials still being present in env. The service layer does not directly
-// inspect env — it relies on the adminprovision.Provisioner state. This test
-// extends the existing 410 semantics to document that bootstrap mode doesn't
-// change the 410 outcome.
-//
-// This test is intentionally GREEN even now, because the 410 path already
-// works correctly regardless of mode. The RED aspect is the "warn log" expectation:
-// the service should log a warning when admin is already provisioned but
-// bootstrap env is still set (D3/lifecycle hygiene). That log assertion is RED
-// until Batch 2 implements the warning.
-func TestService_CreateAdmin_BootstrapMode_AlreadyProvisioned_Returns410IgnoresEnv(t *testing.T) {
+// TestService_CreateAdmin_AlreadyProvisioned_410_OperatorEnvSetIsExpected
+// verifies that CreateAdmin returns 410 ErrSetupAlreadyInitialized when the
+// admin was already provisioned, even though the operator Basic Auth env
+// (GOCELL_BOOTSTRAP_ADMIN_*) is still set. ADR §D2 specifies these env vars
+// as a persistent operator authenticator (not a one-shot seed), so their
+// continued presence after admin creation is expected, not a hygiene
+// concern. The service layer does not inspect env — 410 is driven by
+// adminprovision.Provisioner state alone.
+func TestService_CreateAdmin_AlreadyProvisioned_410_OperatorEnvSetIsExpected(t *testing.T) {
 	userRepo := mem.NewUserRepository()
 	roleRepo := mem.NewRoleRepository()
 	seedAdmin(t, userRepo, roleRepo)
 
-	// Simulate bootstrap env still present (not cleared after initial provisioning).
 	t.Setenv("GOCELL_BOOTSTRAP_ADMIN_USERNAME", "op")
 	t.Setenv("GOCELL_BOOTSTRAP_ADMIN_PASSWORD", "opSecret123")
 
@@ -588,11 +580,6 @@ func TestService_CreateAdmin_BootstrapMode_AlreadyProvisioned_Returns410IgnoresE
 	var ec *errcode.Error
 	require.ErrorAs(t, err, &ec)
 	assert.Equal(t, errcode.ErrSetupAlreadyInitialized, ec.Code,
-		"bootstrap mode + already provisioned must return 410 ErrSetupAlreadyInitialized")
+		"already provisioned must return 410 ErrSetupAlreadyInitialized")
 	assert.Empty(t, w.entries, "no event emitted on 410 path")
-
-	// RED: The service should also emit a slog.Warn that bootstrap credentials
-	// are present after admin was provisioned (hygiene notice). This assertion
-	// documents the intended behavior but the warning is not yet logged.
-	// TODO(SEC-SETUP-CLOSURE Batch 2): verify warn log "bootstrap credentials present" via log capture.
 }
