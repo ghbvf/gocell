@@ -2,6 +2,7 @@ package websocket
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"maps"
 	"sync"
@@ -9,9 +10,19 @@ import (
 	"time"
 
 	"github.com/ghbvf/gocell/kernel/clock"
+	kernellifecycle "github.com/ghbvf/gocell/kernel/lifecycle"
+	"github.com/ghbvf/gocell/kernel/worker"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/runtime/auth"
 )
+
+// Compile-time assertion: Hub implements lifecycle.ManagedResource.
+var _ kernellifecycle.ManagedResource = (*Hub)(nil)
+
+// errHubNotRunning is pre-allocated to avoid per-call allocation in Checkers.
+// Pattern: adapters/rabbitmq/connection.go:51 errHealthReconnecting.
+var errHubNotRunning = errcode.New(errcode.KindUnavailable, errcode.ErrWSHubNotRunning,
+	"websocket: hub is not running")
 
 // Hub lifecycle states (atomic.Int32 transitions).
 const (
@@ -22,12 +33,13 @@ const (
 )
 
 const (
-	defaultPingInterval    = 30 * time.Second
-	defaultPingTimeout     = 5 * time.Second
-	defaultReadLimit       = 64 * 1024 // 64KB
-	defaultPingMissMax     = 2
-	defaultShutdownTimeout = 10 * time.Second
-	defaultSendBufferSize  = 32
+	defaultPingInterval         = 30 * time.Second
+	defaultPingTimeout          = 5 * time.Second
+	defaultReadLimit            = 64 * 1024 // 64KB
+	defaultPingMissMax          = 2
+	defaultShutdownTimeout      = 10 * time.Second
+	defaultSendBufferSize       = 32
+	defaultConcurrentCloseLimit = 64
 )
 
 // HubConfig configures the Hub.
@@ -54,6 +66,16 @@ type HubConfig struct {
 	// is replaced with the default at construction time. Must be > 0 if
 	// explicitly set.
 	SendBufferSize int
+
+	// ShutdownTimeout limits the total time allowed for the external-cancel
+	// shutdown path inside Start (caller's ctx is canceled with no deadline).
+	// Stop(ctx) paths are not affected — caller's ctx governs directly.
+	// 0 → defaultShutdownTimeout (10s).
+	ShutdownTimeout time.Duration
+
+	// ConcurrentCloseLimit is the maximum number of connection Close() calls
+	// that may run in parallel during shutdown drain. 0 → 64.
+	ConcurrentCloseLimit int
 }
 
 // DefaultHubConfig returns a HubConfig with sensible defaults. A clock must be
@@ -159,6 +181,12 @@ func NewHub(cfg HubConfig, handler MessageHandler) *Hub {
 	if cfg.SendBufferSize == 0 {
 		cfg.SendBufferSize = defaultSendBufferSize
 	}
+	if cfg.ShutdownTimeout == 0 {
+		cfg.ShutdownTimeout = defaultShutdownTimeout
+	}
+	if cfg.ConcurrentCloseLimit == 0 {
+		cfg.ConcurrentCloseLimit = defaultConcurrentCloseLimit
+	}
 	if handler == nil {
 		handler = func(context.Context, string, []byte) {}
 	}
@@ -218,8 +246,10 @@ func (h *Hub) Start(ctx context.Context) error {
 	}
 
 	// External cancellation: run the single shutdown path ourselves.
+	// Use the configured ShutdownTimeout (already defaulted to defaultShutdownTimeout
+	// in NewHub) so tests can override the timeout without relying on hardcoded 10s.
 	shutdownCtx, shutdownCancel := context.WithTimeout(
-		context.WithoutCancel(ctx), defaultShutdownTimeout,
+		context.WithoutCancel(ctx), h.config.ShutdownTimeout,
 	)
 	defer shutdownCancel()
 	_ = h.shutdown(shutdownCtx)
@@ -285,25 +315,18 @@ func (h *Hub) shutdown(ctx context.Context) error {
 	clear(h.subjectIdx)
 	h.connMu.Unlock()
 
-	// Close all connections synchronously. cancel() unblocks Read via
-	// context; Close() tears down the transport (coder/websocket CloseNow is
-	// lock-free, so this never blocks behind Write). Both are belt-and-
-	// suspenders: cancel works for fakeConn, Close works for coder/websocket.
+	// Close connections with bounded concurrency (semaphore + WaitGroup).
+	// cancel() unblocks per-conn Read via context; Close() tears down the
+	// transport unconditionally. Both are belt-and-suspenders.
 	//
-	// Synchronous close ensures Stop returns only after all transport
-	// resources (including coder/websocket's internal timeoutLoop) are cleaned up.
-	// If connection counts reach thousands, replace with concurrent close
-	// + closeWg (see WS-OPS-02 in tech-debt-registry).
-	for _, e := range entries {
-		e.cancel()
-		e.closeOnce.Do(func() { close(e.done) })
-		if err := e.conn.Close(); err != nil {
-			slog.Warn("websocket hub: close connection failed",
-				slog.String("conn_id", e.conn.ID()),
-				slog.Any("error", err),
-			)
-		}
-	}
+	// Semaphore pattern: acquire slot before spawning goroutine; goroutine
+	// releases slot on exit. ctx.Done() early-exits the launch loop so
+	// callers with tight deadlines return promptly without waiting for all
+	// launches to complete. Already-launched goroutines are drained via
+	// closeWG.Wait().
+	//
+	// ref: centrifugal/centrifuge hub.go — bounded concurrent close + WaitGroup.
+	closeEntriesConcurrently(ctx, entries, h.config.ConcurrentCloseLimit)
 
 	// Wait for all goroutines (readLoops + writeLoops + pingLoop), bounded by ctx.
 	done := make(chan struct{})
@@ -323,6 +346,76 @@ func (h *Hub) shutdown(ctx context.Context) error {
 
 	h.state.Store(stateStopped)
 	return err
+}
+
+// closeEntriesConcurrently cancels and closes each entry's connection using a
+// semaphore-bounded goroutine pool of size limit.
+//
+// All entries receive cancel() + close(done) eagerly (unblocks readLoop/writeLoop
+// context-side). The transport-level conn.Close() calls are bounded by the
+// semaphore; if ctx is canceled before all Close goroutines are launched, the
+// launch loop exits early. Already-launched goroutines run to completion in
+// background; the function returns when either all launched goroutines finish
+// OR ctx expires.
+//
+// Separating cancel/close-done (eager, always) from conn.Close() (bounded) ensures
+// readLoops always see ctx.Done() and exit, preventing goroutine leaks even when
+// conn.Close() is blocked.
+//
+// Cognitive complexity kept low by extracting the per-entry close into a named
+// goroutine — semaphore acquire/release and WaitGroup bookkeeping live here,
+// keeping hub.shutdown() under the ≤15 complexity limit.
+//
+// ref: centrifugal/centrifuge hub.go — sem + WaitGroup bounded concurrent close.
+func closeEntriesConcurrently(ctx context.Context, entries []*connEntry, limit int) {
+	// Phase 1: eagerly cancel all entries (unblocks Read ctx-side + writeLoop).
+	// This must happen before the bounded launch loop so goroutines can exit
+	// even if conn.Close() never gets called due to ctx expiry.
+	for _, e := range entries {
+		e.cancel()
+		e.closeOnce.Do(func() { close(e.done) })
+	}
+
+	// Phase 2: bounded concurrent conn.Close() calls.
+	sem := make(chan struct{}, limit)
+	var closeWG sync.WaitGroup
+
+	for _, e := range entries {
+		select {
+		case sem <- struct{}{}: // acquire slot
+		case <-ctx.Done():
+			// Deadline reached while launching Close goroutines.
+			// Already-launched goroutines run to completion in background.
+			goto waitDone
+		}
+
+		closeWG.Add(1)
+		go func(e *connEntry) {
+			defer closeWG.Done()
+			defer func() { <-sem }() // release slot
+			if err := e.conn.Close(); err != nil {
+				slog.Warn("websocket hub: close connection failed",
+					slog.String("conn_id", e.conn.ID()),
+					slog.String("remote_addr", e.conn.RemoteAddr()),
+					slog.Any("error", err),
+				)
+			}
+		}(e)
+	}
+
+waitDone:
+	// Wait for already-launched Close goroutines, bounded by ctx.
+	allDone := make(chan struct{})
+	go func() {
+		closeWG.Wait()
+		close(allDone)
+	}()
+	select {
+	case <-allDone:
+	case <-ctx.Done():
+		// ctx expired; Close goroutines continue in background (their
+		// readLoops already exited via Phase 1 cancel).
+	}
 }
 
 // Register adds a connection to the Hub and starts reading from it. ctx is used
@@ -401,12 +494,14 @@ func (h *Hub) Register(ctx context.Context, conn Conn) error {
 		_ = evicted.conn.Close()
 		slog.Warn("websocket hub: evicted duplicate conn",
 			slog.String("conn_id", conn.ID()),
+			slog.String("remote_addr", evicted.conn.RemoteAddr()),
 			slog.String("reason", "duplicate_conn_id"),
 		)
 	}
 
 	slog.Info("websocket hub: connection registered",
 		slog.String("conn_id", conn.ID()),
+		slog.String("remote_addr", conn.RemoteAddr()),
 	)
 
 	go func() {
@@ -663,6 +758,60 @@ func (h *Hub) ConnCount() int {
 	return len(h.conns)
 }
 
+// ---------------------------------------------------------------------------
+// lifecycle.ManagedResource implementation
+// ---------------------------------------------------------------------------
+
+// Checkers implements lifecycle.ManagedResource. It returns a single probe
+// "websocket_hub_ready" that reports nil (healthy) only when the Hub is in
+// the running state. Any other state (idle/stopping/stopped) returns
+// errHubNotRunning.
+//
+// probe name "websocket_hub_ready" follows the observability rule:
+// snake_case + "_ready" suffix.
+//
+// ref: adapters/rabbitmq/connection.go Checkers — probe name + pre-allocated error pattern.
+func (h *Hub) Checkers() map[string]func(context.Context) error {
+	return map[string]func(context.Context) error{
+		"websocket_hub_ready": func(ctx context.Context) error {
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			if h.state.Load() == stateRunning {
+				return nil
+			}
+			return errHubNotRunning
+		},
+	}
+}
+
+// Worker implements lifecycle.ManagedResource. Returns nil because the Hub
+// self-manages its ping-loop goroutine via Start/Stop; no external worker
+// registration is needed.
+//
+// ref: adapters/rabbitmq/connection.go Worker — nil documents "no worker".
+func (h *Hub) Worker() worker.Worker { return nil }
+
+// Close implements lifecycle.ManagedResource. It delegates to Stop(ctx) and
+// is idempotent: if the Hub is already stopped, returns nil instead of the
+// ErrWSAlreadyStopped error that Stop would return.
+//
+// Bootstrap wiring: bootstrap.WithManagedResource(hub) calls Close in LIFO
+// order during phase10 shutdown.
+//
+// ref: adapters/rabbitmq/connection.go Close — idempotent + ctx-bounded.
+func (h *Hub) Close(ctx context.Context) error {
+	err := h.Stop(ctx)
+	if err == nil {
+		return nil
+	}
+	var ec *errcode.Error
+	if errors.As(err, &ec) && ec.Code == errcode.ErrWSAlreadyStopped {
+		return nil
+	}
+	return err
+}
+
 // readLoop reads messages until the per-conn context is canceled or
 // conn.Close() breaks the Read call.
 func (h *Hub) readLoop(ctx context.Context, conn Conn) {
@@ -789,6 +938,7 @@ func (h *Hub) evictWith(entry *connEntry, reason string, level slog.Level, evict
 	}
 	slog.LogAttrs(context.Background(), level, evictMsg,
 		slog.String("conn_id", connID),
+		slog.String("remote_addr", entry.conn.RemoteAddr()),
 		slog.String("subject", entry.subject),
 		slog.String("reason", reason),
 	)
