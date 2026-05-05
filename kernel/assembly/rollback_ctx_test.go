@@ -19,7 +19,13 @@ import (
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/metadata"
+	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 )
+
+// rollbackCtxExplicitHookTimeout is the explicit positive HookTimeout exercised
+// in the table-driven test row. testtime.D2s is reused so the constant is a
+// shared cross-cutting timeout, not a magic literal.
+const rollbackCtxExplicitHookTimeout = testtime.D2s
 
 // ctxRecordingCell captures ctx state observed inside BeforeStop and Stop so
 // tests can assert on ctx.Err() / ctx.Deadline() without racing the assembly.
@@ -27,7 +33,7 @@ import (
 // previously-registered cell.
 type ctxRecordingCell struct {
 	*cell.BaseCell
-	failStart            bool
+	failStart             bool
 	beforeStopCtxErr      error
 	beforeStopHasDeadline bool
 	stopCtxErr            error
@@ -60,12 +66,10 @@ func (c *ctxRecordingCell) Stop(ctx context.Context) error {
 	return c.BaseCell.Stop(ctx)
 }
 
-var (
-	_ cell.BeforeStopper = (*ctxRecordingCell)(nil)
-)
+var _ cell.BeforeStopper = (*ctxRecordingCell)(nil)
 
 // TestRollbackCells_DerivedCtx covers PR-V1-030-G02: rollback hooks on
-// already-started cells must NOT inherit a cancelled startCtx. They must run
+// already-started cells must NOT inherit a canceled startCtx. They must run
 // against a fresh ctx derived from context.Background(), with a deadline
 // derived from cfg.HookTimeout (or no deadline when HookTimeout < 0).
 func TestRollbackCells_DerivedCtx(t *testing.T) {
@@ -82,7 +86,7 @@ func TestRollbackCells_DerivedCtx(t *testing.T) {
 		wantHasDeadline   bool  // ctx.Deadline() ok inside hooks
 	}{
 		{
-			name:              "cancelled-startctx-with-default-hook-timeout",
+			name:              "canceled-startctx-with-default-hook-timeout",
 			hookTimeout:       0, // → DefaultHookTimeout
 			cancelStartCtx:    startCtxCancelled,
 			wantBeforeStopErr: nil,
@@ -90,16 +94,16 @@ func TestRollbackCells_DerivedCtx(t *testing.T) {
 			wantHasDeadline:   true,
 		},
 		{
-			name:              "cancelled-startctx-with-explicit-hook-timeout",
-			hookTimeout:       2 * time.Second,
+			name:              "canceled-startctx-with-explicit-hook-timeout",
+			hookTimeout:       rollbackCtxExplicitHookTimeout,
 			cancelStartCtx:    startCtxCancelled,
 			wantBeforeStopErr: nil,
 			wantStopErr:       nil,
 			wantHasDeadline:   true,
 		},
 		{
-			name:              "cancelled-startctx-with-negative-hook-timeout-no-deadline",
-			hookTimeout:       -1, // disables timeout — rollback ctx must have no deadline
+			name:              "canceled-startctx-with-negative-hook-timeout-no-deadline",
+			hookTimeout:       disableHookTimeout, // declared in timeout_test.go: time.Duration(-1)
 			cancelStartCtx:    startCtxCancelled,
 			wantBeforeStopErr: nil,
 			wantStopErr:       nil,

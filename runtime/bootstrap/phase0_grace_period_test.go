@@ -15,6 +15,24 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/ghbvf/gocell/pkg/testutil/testtime"
+)
+
+// File-local test-time constants (file-level package consts satisfy
+// TEST-TIME-LITERAL-01 archtest; site-specific deadlines stay close to the
+// test that owns them).
+const (
+	graceShutdownTimeout   = testtime.D20s
+	gracePreShutdownDelay  = testtime.D5s
+	graceMinThreshold      = 35 * time.Second // = shutdownTimeout + preShutdownDelay + 10s safety margin
+	graceBelowThreshold    = testtime.D30s    // 30 < 35 → must warn
+	graceAboveThreshold    = testtime.D60s    // 60 > 35 → no warn
+	graceFarBelowThreshold = testtime.D10s    // for advisory-only assertion
+	gracePersistPositive   = 45 * time.Second // setter round-trip
+	gracePersistNegative   = -1 * time.Nanosecond
+	graceLifecycleShutdown = testtime.D30s
+	graceLifecyclePreDelay = testtime.D5s
 )
 
 // TestPhase0_TerminationGracePeriodWarn covers the three branches of the
@@ -27,12 +45,6 @@ import (
 // minimum_required = 35s) is shared across cases so each row only varies the
 // declared grace period.
 func TestPhase0_TerminationGracePeriodWarn(t *testing.T) {
-	const (
-		shutdownTimeout  = 20 * time.Second
-		preShutdownDelay = 5 * time.Second
-		// minimum_required = shutdownTimeout + preShutdownDelay + 10s = 35s
-	)
-
 	cases := []struct {
 		name                string
 		terminationGrace    time.Duration
@@ -48,7 +60,7 @@ func TestPhase0_TerminationGracePeriodWarn(t *testing.T) {
 		},
 		{
 			name:             "below-threshold-warns",
-			terminationGrace: 30 * time.Second, // 30 < 35
+			terminationGrace: graceBelowThreshold, // 30 < 35
 			wantWarn:         true,
 			wantWarnSubstrings: []string{
 				"terminationGracePeriodSeconds insufficient",
@@ -61,13 +73,13 @@ func TestPhase0_TerminationGracePeriodWarn(t *testing.T) {
 		},
 		{
 			name:                "at-threshold-no-warn",
-			terminationGrace:    35 * time.Second, // exactly threshold ≥ 35 ok
+			terminationGrace:    graceMinThreshold, // exactly threshold ≥ 35 ok
 			wantWarn:            false,
 			forbidWarnSubstring: "terminationGracePeriodSeconds insufficient",
 		},
 		{
 			name:                "above-threshold-no-warn",
-			terminationGrace:    60 * time.Second,
+			terminationGrace:    graceAboveThreshold,
 			wantWarn:            false,
 			forbidWarnSubstring: "terminationGracePeriodSeconds insufficient",
 		},
@@ -82,8 +94,8 @@ func TestPhase0_TerminationGracePeriodWarn(t *testing.T) {
 			t.Cleanup(func() { slog.SetDefault(oldDefault) })
 
 			b := &Bootstrap{
-				shutdownTimeout:       shutdownTimeout,
-				preShutdownDelay:      preShutdownDelay,
+				shutdownTimeout:        graceShutdownTimeout,
+				preShutdownDelay:       gracePreShutdownDelay,
 				terminationGracePeriod: tc.terminationGrace,
 			}
 
@@ -109,11 +121,9 @@ func TestPhase0_TerminationGracePeriodWarn(t *testing.T) {
 					}
 				}
 				assert.True(t, sawWarn, "no slog level=WARN record found:\n%s", out)
-			} else {
-				if tc.forbidWarnSubstring != "" {
-					assert.NotContains(t, out, tc.forbidWarnSubstring,
-						"unexpected warn-related output for %q case:\n%s", tc.name, out)
-				}
+			} else if tc.forbidWarnSubstring != "" {
+				assert.NotContains(t, out, tc.forbidWarnSubstring,
+					"unexpected warn-related output for %q case:\n%s", tc.name, out)
 			}
 		})
 	}
@@ -132,9 +142,9 @@ func TestPhase0_TerminationGracePeriodWarn_DoesNotBlockStartup(t *testing.T) {
 	t.Cleanup(func() { slog.SetDefault(oldDefault) })
 
 	b := &Bootstrap{
-		shutdownTimeout:       30 * time.Second,
-		preShutdownDelay:      5 * time.Second,
-		terminationGracePeriod: 10 * time.Second, // far below threshold
+		shutdownTimeout:        graceLifecycleShutdown,
+		preShutdownDelay:       graceLifecyclePreDelay,
+		terminationGracePeriod: graceFarBelowThreshold, // far below threshold
 	}
 
 	require.NotPanics(t, func() {
@@ -153,8 +163,8 @@ func TestWithTerminationGracePeriod_OptionPersists(t *testing.T) {
 		want time.Duration
 	}{
 		{"zero-unset", 0, 0},
-		{"positive", 45 * time.Second, 45 * time.Second},
-		{"negative-stored-as-is", -1, -1}, // option does not normalise; phase0 treats <=0 as unset
+		{"positive", gracePersistPositive, gracePersistPositive},
+		{"negative-stored-as-is", gracePersistNegative, gracePersistNegative}, // option does not normalise; phase0 treats <=0 as unset
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

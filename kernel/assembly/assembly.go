@@ -474,31 +474,36 @@ func (a *CoreAssembly) startInternal(ctx context.Context, cfgMap map[string]any)
 // startCellWithHooks executes BeforeStart → Start → AfterStart for a single
 // cell at index i. On any failure it rolls back cells [0..i-1] (and cell i
 // itself if Start already succeeded) and transitions the assembly to stopped.
+//
+// Rollback derives its own ctx from context.Background(); it never reuses the
+// caller's startCtx. See rollbackCells for the rationale.
 func (a *CoreAssembly) startCellWithHooks(ctx context.Context, c cell.Cell, i int) error {
 	// BeforeStart hook (optional).
 	if bs, ok := c.(cell.BeforeStarter); ok {
 		slog.Info("lifecycle: BeforeStart", slog.String("cell", c.ID()))
 		if err := a.invokeHook(ctx, c.ID(), cell.HookBeforeStart, bs.BeforeStart); err != nil {
-			a.rollbackCells(ctx, i-1)
+			a.rollbackCells(i - 1)
 			return a.failStart(c.ID(), "BeforeStart", err)
 		}
 	}
 
 	// Core Start.
 	if err := c.Start(ctx); err != nil {
-		a.rollbackCells(ctx, i-1)
+		a.rollbackCells(i - 1)
 		return a.failStart(c.ID(), "start", err)
 	}
 
 	// AfterStart hook (optional).
 	// If this fails, the cell itself must be stopped because its Start
-	// already succeeded — resources may have been acquired.
+	// already succeeded — resources may have been acquired. We use the same
+	// fresh rollback ctx as rollbackCells so all teardown shares one budget.
 	if as, ok := c.(cell.AfterStarter); ok {
 		slog.Info("lifecycle: AfterStart", slog.String("cell", c.ID()))
 		if err := a.invokeHook(ctx, c.ID(), cell.HookAfterStart, as.AfterStart); err != nil {
-			// Stop this cell first — its Start already succeeded.
-			a.stopCellWithHooks(ctx, c)
-			a.rollbackCells(ctx, i-1)
+			rollbackCtx, cancel := a.newRollbackCtx()
+			a.stopCellWithHooks(rollbackCtx, c)
+			cancel()
+			a.rollbackCells(i - 1)
 			return a.failStart(c.ID(), "AfterStart", err)
 		}
 	}
@@ -522,10 +527,44 @@ func (a *CoreAssembly) failStart(cellID, phase string, err error) error {
 
 // rollbackCells stops cells [0..upTo] in reverse order using stopCellWithHooks.
 // All errors are logged inside stopCellWithHooks (best-effort, never abort).
-func (a *CoreAssembly) rollbackCells(ctx context.Context, upTo int) {
+//
+// Rollback derives its own ctx from context.Background() so a SIGTERM that
+// cancels the caller's startCtx does not also cancel teardown. fx's
+// withRollback (uber-go/fx app.go) reuses the start ctx and is broken in this
+// case — see ADR docs/architecture/202605051800-adr-rollback-ctx-decoupling.md.
+//
+// The single rollback root ctx is shared across all cells in this rollback so
+// the total wallclock budget is bounded by cfg.HookTimeout, matching K8s
+// terminationGracePeriodSeconds expectations. Per-hook deadlines further
+// shrink this budget inside invokeHook.
+func (a *CoreAssembly) rollbackCells(upTo int) {
+	ctx, cancel := a.newRollbackCtx()
+	defer cancel()
 	for j := upTo; j >= 0; j-- {
 		a.stopCellWithHooks(ctx, a.cells[j])
 	}
+}
+
+// newRollbackCtx returns a fresh ctx for rollback teardown, decoupled from any
+// caller-supplied startCtx. Deadline derivation:
+//
+//   - cfg.HookTimeout > 0    → context.WithTimeout(Background, HookTimeout)
+//   - cfg.HookTimeout == 0   → context.WithTimeout(Background, DefaultHookTimeout)
+//   - cfg.HookTimeout  < 0   → context.WithCancel(Background) (no deadline,
+//     mirrors invokeHook's "negative disables" semantic; callers still get a
+//     valid CancelFunc to release resources)
+//
+// Cancel is the caller's responsibility; pair every newRollbackCtx with a
+// matching cancel call.
+func (a *CoreAssembly) newRollbackCtx() (context.Context, context.CancelFunc) {
+	timeout := a.cfg.HookTimeout
+	if timeout == 0 {
+		timeout = DefaultHookTimeout
+	}
+	if timeout < 0 {
+		return context.WithCancel(context.Background())
+	}
+	return context.WithTimeout(context.Background(), timeout)
 }
 
 // callHookSafe invokes fn with panic recovery. Returns (err, panicked).

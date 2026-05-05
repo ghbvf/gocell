@@ -109,6 +109,7 @@ type Bootstrap struct {
 	closers                  []any // ContextCloser/io.Closer from any option (e.g. WithRateLimiter); LIFO teardown
 	shutdownTimeout          time.Duration
 	preShutdownDelay         time.Duration
+	terminationGracePeriod   time.Duration // user-declared K8s pod terminationGracePeriodSeconds (advisory only — phase0 sanity check)
 
 	// --- metrics: metrics provider + auto-wired HTTP collector + shutdown metrics ---
 	metricsProvider    kernelmetrics.Provider
