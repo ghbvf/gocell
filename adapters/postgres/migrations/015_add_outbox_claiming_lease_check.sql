@@ -17,6 +17,15 @@
 -- NO TRANSACTION (PostgreSQL ALTER TABLE ADD CONSTRAINT does not support
 -- IF NOT EXISTS until version 16; the explicit guard is portable).
 --
+-- Operational pre-requisite (see ADR cutover §):
+--   This migration MUST be applied AFTER every consumer/relay binary in
+--   the deployment has been rolled to a post-014 image. A pre-014
+--   binary writing through the post-015 schema will hit SQLSTATE 23514
+--   (`outbox_claiming_requires_lease` violation) on every ClaimPending
+--   and consumption stops until the stale binary drains. This is by
+--   design — the constraint is the rolling-deploy fence — but it means
+--   the migration is one-way: drain stale workers BEFORE applying.
+--
 -- ref: riverqueue/river riverdriver/riverpgxv5/migration/main/004_pending_and_more.up.sql
 -- ref: docs/architecture/202605051600-adr-pg-outbox-fencing.md (cutover §)
 

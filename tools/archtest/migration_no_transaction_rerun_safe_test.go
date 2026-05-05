@@ -131,6 +131,22 @@ func scanRerunSafetyViolations(body string) []rerunViolation {
 			guard:   "IF EXISTS",
 			label:   "ALTER TABLE DROP COLUMN",
 		},
+		{
+			// PostgreSQL only added IF NOT EXISTS for ADD CONSTRAINT in v16,
+			// so projects targeting older PG must wrap ADD CONSTRAINT in a DO
+			// block with a pg_constraint lookup. The DO-block strip step
+			// removes such guarded statements before this rule runs, so a hit
+			// here means a BARE `ALTER TABLE ... ADD CONSTRAINT` outside any
+			// DO block — which is not rerun-safe and is rejected.
+			pattern: regexp.MustCompile(`(?i)\bALTER\s+TABLE\s+\S+\s+ADD\s+CONSTRAINT\s+`),
+			guard:   "IF NOT EXISTS",
+			label:   "ALTER TABLE ADD CONSTRAINT (must wrap in DO block with pg_constraint guard for PG <16)",
+		},
+		{
+			pattern: regexp.MustCompile(`(?i)\bALTER\s+TABLE\s+\S+\s+DROP\s+CONSTRAINT\s+`),
+			guard:   "IF EXISTS",
+			label:   "ALTER TABLE DROP CONSTRAINT",
+		},
 	}
 
 	for _, r := range rules {
