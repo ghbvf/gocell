@@ -32,9 +32,15 @@ test:
 # fmt rewrites Go sources in place via every formatter declared under
 # .golangci.yml `formatters.enable` (currently gofmt + goimports + gofumpt).
 # Pair-mate of `make verify` (specifically hack/verify-gofumpt.sh): fmt fixes,
-# verify checks. ref: kubernetes/kubernetes hack/update-gofmt.sh.
+# verify checks.
+#
+# golangci-lint is bootstrapped from hack/lib/golangci-lint.sh at the version
+# pinned to .github/workflows/_build-lint.yml — never from $PATH — so local
+# fmt and CI lint apply identical formatter rules.
+#
+# ref: kubernetes/kubernetes hack/update-gofmt.sh + hack/verify-golangci-lint.sh.
 fmt:
-	golangci-lint fmt ./...
+	@bash -c 'source hack/lib/golangci-lint.sh && exec "$$(gocell::golangci_lint::ensure)" fmt ./...'
 
 # verify discovers and runs every hack/verify-*.sh in deterministic order,
 # accumulating failures. Single entry point for static governance gates

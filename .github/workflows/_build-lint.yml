@@ -104,12 +104,17 @@ jobs:
         if: matrix.static_checks
         uses: golangci/golangci-lint-action@1e7e51e771db61008b38414a730f564565cf7c20 # v9.2.0
         with:
+          # SYNC: this version literal is the second copy of the single
+          # source declared in hack/lib/golangci-lint.sh::GOLANGCI_LINT_VERSION.
+          # Any drift means the CI lint shard and the local `make fmt` /
+          # `hack/verify-gofumpt.sh` paths apply different formatter rules
+          # to the same diff — defeating the gofumpt producer rollout.
+          # Reviewer-enforced sync (no archtest because the upstream is yaml).
           version: v2.11.4
           # `verify: true` runs `golangci-lint config verify` before linting so a
           # broken `.golangci.yml` (v2 schema typo, unknown linter, malformed
           # exclusions) fails fast instead of silently degrading to v1 parsing
-          # where new linters are ignored. Pinned to v2.11.4 (matches local dev
-          # tool version) to keep CI and local lint behaviour identical.
+          # where new linters are ignored.
           verify: true
           # only-new-issues uses the GitHub pull-request diff API which
           # refuses diffs larger than 300 files; fall back to

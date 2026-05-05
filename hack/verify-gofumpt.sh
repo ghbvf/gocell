@@ -16,7 +16,12 @@
 # every codegen / scaffold path funnels through the same goimports → gofumpt
 # pipeline so generated files start out compliant and never trip this gate.
 #
-# Fix recipe: `make fmt` (or `golangci-lint fmt ./...`).
+# Tool source: hack/lib/golangci-lint.sh::ensure bootstraps golangci-lint
+# at the pinned version (same as the CI lint shard). The script intentionally
+# does NOT consult $PATH; ambient drift is exactly what the gofumpt rollout
+# is closing on the producer side.
+#
+# Fix recipe: `make fmt`.
 #
 # ref: kubernetes/kubernetes hack/verify-gofmt.sh — same diff-mode pattern.
 
@@ -24,17 +29,12 @@ set -euo pipefail
 
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 
-if ! command -v golangci-lint &>/dev/null; then
-  cat >&2 <<'EOF'
-verify-gofumpt: golangci-lint not in PATH.
-Install with:
-  * make fmt        (uses the project-pinned version via go run)
-  * go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest
-EOF
-  exit 1
-fi
+# shellcheck source=lib/golangci-lint.sh
+source hack/lib/golangci-lint.sh
 
-diff_output="$(golangci-lint fmt -d ./...)"
+golangci_lint="$(gocell::golangci_lint::ensure)"
+
+diff_output="$("${golangci_lint}" fmt -d ./...)"
 if [[ -n "${diff_output}" ]]; then
     echo "formatter drift detected; run 'make fmt' to fix:" >&2
     echo "${diff_output}"
