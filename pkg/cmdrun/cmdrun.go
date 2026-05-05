@@ -92,6 +92,11 @@ type RunOptions struct {
 // callers must explicitly opt sensitive values back in when a subprocess
 // genuinely needs them. Combined stdout+stderr is returned.
 //
+// On Unix, RunWith starts the subprocess in its own process group (Setpgid)
+// so that ctx cancellation kills the entire process tree, not just the direct
+// child. This prevents orphaned grandchild processes (e.g. test subprocesses
+// spawned by `go test`) from continuing to run after ctx is cancelled.
+//
 // ValidatedTool.path is exec.LookPath-resolved at NewTool construction;
 // args are caller-controlled whitelisted invocations from governance /
 // verify helpers, never user input. gosec G204 on the variable binary
@@ -104,6 +109,14 @@ func RunWith(ctx context.Context, t ValidatedTool, opts RunOptions, args ...stri
 		cmd.Dir = opts.Dir
 	}
 	cmd.Env = mergeEnv(cleanEnv(os.Environ()), opts.ExtraEnv)
+	// Place the subprocess in a new process group so that cancellation via
+	// cmd.Cancel kills the entire group (including grandchildren). The
+	// platform-specific Cancel func replaces exec.CommandContext's default
+	// behaviour of sending SIGKILL only to the direct child.
+	cmd.SysProcAttr = newSysProcAttr()
+	cmd.Cancel = func() error {
+		return killProcessGroup(cmd.Process)
+	}
 	return cmd.CombinedOutput()
 }
 
