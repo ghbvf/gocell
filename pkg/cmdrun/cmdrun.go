@@ -26,6 +26,14 @@ import (
 	"time"
 )
 
+// pipeDrainTimeout caps how long Wait() blocks waiting for the subprocess's
+// stdout/stderr pipes to drain after Cancel has delivered SIGKILL to the
+// process group. A grandchild that inherited the parent's stdout fd can hold
+// the pipe open past its own kill (kernel fd-release race), so without an
+// upper bound CombinedOutput would hang. Healthy systems close pipes well
+// inside this window; the cap exists for the pathological case.
+const pipeDrainTimeout = 5 * time.Second
+
 // ValidatedTool wraps a tool binary invocation path with two enforced
 // invariants:
 //
@@ -118,13 +126,7 @@ func RunWith(ctx context.Context, t ValidatedTool, opts RunOptions, args ...stri
 	cmd.Cancel = func() error {
 		return killProcessGroup(cmd.Process)
 	}
-	// After Cancel SIGKILLs the process group, WaitDelay caps how long Wait
-	// will block waiting for stdout/stderr pipes to drain. Without an upper
-	// bound, a grandchild that inherited the parent's stdout fd could keep
-	// the pipe open after its own SIGKILL is delivered (kernel-level fd
-	// release race), causing CombinedOutput to hang. 5s is generous enough
-	// for normal pipe close on healthy systems and bounds the worst case.
-	cmd.WaitDelay = 5 * time.Second
+	cmd.WaitDelay = pipeDrainTimeout
 	return cmd.CombinedOutput()
 }
 
