@@ -314,6 +314,20 @@ Wave G — 运行时授权深度（依赖 Wave A 决策结果，~16h）
 
 ## §12 PR #376 follow-up 登记
 
+### ARCHTEST-PROJECTMETA-HANDLERS-INDEX-01
+
+**触发条件**：`queryparam_drift` / `auth_plan` / `svctoken_caller_cell` 之外，出现第 4 个 archtest 需要从 `ContractMeta.Endpoints` + 路径模式以外的方式枚举 handler 文件时启动。
+
+**目标**：扩展 `kernel/metadata` 加 `ProjectMeta.Handlers` 索引（key=contractID → list of generated handler paths），让 archtest 不再各自从 `contractIDToExpectedPkgPath` + `os.Stat` 派生路径。
+
+**估时**：6h dev + 3h review
+
+**为什么不在 06.FU3**：当前 3 个 caller（queryparam_drift / auth_plan / svctoken_caller_cell）都已通过 `findCellProductionGoFiles` + `ContractMeta` 间接覆盖；扩 ProjectMeta API 触发面太小，过早抽象。
+
+**Cx**：Cx2
+
+---
+
 ### PR-V1-EVENT-TYPED-PAYLOAD-CODEGEN
 
 **触发条件**：当前 17 个 event consumer 各自手写 payload unmarshal + JSON Schema validate（每处 ~30 行重复），扩散到 ≥5 cell consumer 已达升级阈值。
