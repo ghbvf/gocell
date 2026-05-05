@@ -94,9 +94,11 @@ func WithPreShutdownDelay(d time.Duration) Option {
 // in the Kubernetes pod spec.
 //
 // When the declared value is positive but smaller than
-// shutdownTimeout + preShutdownDelay + 10s, phase0 emits a slog.Warn so
-// operators can spot a misalignment between the bootstrap budget and the
-// pod-spec grace window before SIGKILL truncates a real shutdown.
+// shutdownTimeout + 10s, phase0 emits a slog.Warn so operators can spot a
+// misalignment between the bootstrap budget and the pod-spec grace window
+// before SIGKILL truncates a real shutdown. preShutdownDelay does not
+// appear in the formula because it is consumed inside shutdownTimeout (see
+// WithPreShutdownDelay godoc).
 //
 // Zero value (default) skips the sanity check entirely. Callers that do not
 // run on Kubernetes can omit this option without consequence.

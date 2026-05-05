@@ -23,8 +23,8 @@ import (
 )
 
 // rollbackCtxExplicitHookTimeout is the explicit positive HookTimeout exercised
-// in the table-driven test row. testtime.D2s is reused so the constant is a
-// shared cross-cutting timeout, not a magic literal.
+// in the table-driven test row. Uses testtime.D2s to satisfy
+// TEST-TIME-LITERAL-01 — no inline duration literals in test code.
 const rollbackCtxExplicitHookTimeout = testtime.D2s
 
 // ctxRecordingCell captures ctx state observed inside BeforeStop and Stop so
@@ -67,6 +67,41 @@ func (c *ctxRecordingCell) Stop(ctx context.Context) error {
 }
 
 var _ cell.BeforeStopper = (*ctxRecordingCell)(nil)
+
+// afterStartFailingCell starts successfully but its AfterStart hook returns
+// an error, exercising startCellWithHooks' AfterStart-fail branch — which
+// derives an independent rollback ctx for the failing cell's
+// stopCellWithHooks before delegating to rollbackCells(i-1).
+type afterStartFailingCell struct {
+	*cell.BaseCell
+	beforeStopCtxErr error
+	stopCtxErr       error
+}
+
+func newAfterStartFailingCell(id string) *afterStartFailingCell {
+	return &afterStartFailingCell{
+		BaseCell: cell.MustNewBaseCell(&metadata.CellMeta{ID: id, Type: "core"}),
+	}
+}
+
+func (c *afterStartFailingCell) AfterStart(_ context.Context) error {
+	return errors.New(c.ID() + " after-start boom")
+}
+
+func (c *afterStartFailingCell) BeforeStop(ctx context.Context) error {
+	c.beforeStopCtxErr = ctx.Err()
+	return nil
+}
+
+func (c *afterStartFailingCell) Stop(ctx context.Context) error {
+	c.stopCtxErr = ctx.Err()
+	return c.BaseCell.Stop(ctx)
+}
+
+var (
+	_ cell.AfterStarter  = (*afterStartFailingCell)(nil)
+	_ cell.BeforeStopper = (*afterStartFailingCell)(nil)
+)
 
 // TestRollbackCells_DerivedCtx covers PR-V1-030-G02: rollback hooks on
 // already-started cells must NOT inherit a canceled startCtx. They must run
@@ -148,4 +183,43 @@ func TestRollbackCells_DerivedCtx(t *testing.T) {
 				"Stop ctx deadline must reflect HookTimeout config")
 		})
 	}
+}
+
+// TestRollbackCells_AfterStartFail_DerivedCtx covers the AfterStart-fail
+// branch of startCellWithHooks: cell B's Start succeeds, B.AfterStart fails,
+// the assembly first stops B with an independently-derived rollback ctx, then
+// rolls back the previously-started cell A. Both teardown paths must see a
+// fresh ctx (ctx.Err() == nil) even when the caller's startCtx was canceled
+// by a SIGTERM.
+func TestRollbackCells_AfterStartFail_DerivedCtx(t *testing.T) {
+	t.Parallel()
+
+	a := newTestAssembly(t, Config{
+		ID:             "rollback-afterstart-fail",
+		DurabilityMode: cell.DurabilityDemo,
+		Clock:          clock.Real(),
+	})
+
+	prior := newCtxRecordingCell("A", false)
+	failing := newAfterStartFailingCell("B")
+	require.NoError(t, a.Register(prior))
+	require.NoError(t, a.Register(failing))
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // SIGTERM-during-Start
+
+	err := a.Start(ctx)
+	require.Error(t, err)
+
+	// The failing cell B must see a fresh ctx during its own teardown.
+	assert.NoError(t, failing.beforeStopCtxErr,
+		"failing cell BeforeStop must run with fresh ctx (independent rollback ctx, not startCtx)")
+	assert.NoError(t, failing.stopCtxErr,
+		"failing cell Stop must run with fresh ctx — c.Stop bypasses invokeHook so the rollback root ctx must already be fresh")
+
+	// The prior cell A must also see a fresh ctx via rollbackCells(i-1).
+	assert.NoError(t, prior.beforeStopCtxErr,
+		"prior cell BeforeStop must run with fresh ctx (rollbackCells(i-1) path)")
+	assert.NoError(t, prior.stopCtxErr,
+		"prior cell Stop must run with fresh ctx (rollbackCells(i-1) path)")
 }

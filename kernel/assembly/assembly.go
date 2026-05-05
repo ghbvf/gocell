@@ -537,7 +537,13 @@ func (a *CoreAssembly) failStart(cellID, phase string, err error) error {
 // the total wallclock budget is bounded by cfg.HookTimeout, matching K8s
 // terminationGracePeriodSeconds expectations. Per-hook deadlines further
 // shrink this budget inside invokeHook.
+//
+// upTo < 0 means no cells were started yet (e.g. BeforeStart on cell index 0
+// failed) — return early to skip a no-op ctx allocation.
 func (a *CoreAssembly) rollbackCells(upTo int) {
+	if upTo < 0 {
+		return
+	}
 	ctx, cancel := a.newRollbackCtx()
 	defer cancel()
 	for j := upTo; j >= 0; j-- {

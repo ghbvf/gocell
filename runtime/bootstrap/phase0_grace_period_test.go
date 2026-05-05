@@ -22,12 +22,16 @@ import (
 // File-local test-time constants (file-level package consts satisfy
 // TEST-TIME-LITERAL-01 archtest; site-specific deadlines stay close to the
 // test that owns them).
+//
+// Threshold = shutdownTimeout + 10s safety margin (see
+// warnTerminationGracePeriodInsufficient godoc — preShutdownDelay is consumed
+// inside shutdownTimeout, not added on top of it).
 const (
 	graceShutdownTimeout   = testtime.D20s
-	gracePreShutdownDelay  = testtime.D5s
-	graceMinThreshold      = 35 * time.Second // = shutdownTimeout + preShutdownDelay + 10s safety margin
-	graceBelowThreshold    = testtime.D30s    // 30 < 35 → must warn
-	graceAboveThreshold    = testtime.D60s    // 60 > 35 → no warn
+	gracePreShutdownDelay  = testtime.D5s     // recorded in warn payload but does not affect threshold
+	graceMinThreshold      = testtime.D30s    // = shutdownTimeout (20s) + safety margin (10s)
+	graceBelowThreshold    = 25 * time.Second // 25 < 30 → must warn
+	graceAboveThreshold    = testtime.D60s    // 60 > 30 → no warn
 	graceFarBelowThreshold = testtime.D10s    // for advisory-only assertion
 	gracePersistPositive   = 45 * time.Second // setter round-trip
 	gracePersistNegative   = -1 * time.Nanosecond
@@ -38,12 +42,17 @@ const (
 // TestPhase0_TerminationGracePeriodWarn covers the three branches of the
 // terminationGracePeriod sanity check in phase0ValidateOptions:
 //   - unset (zero) → skip silently
-//   - declared and < shutdownTimeout + preShutdownDelay + 10s → warn (non-blocking)
+//   - declared and < shutdownTimeout + 10s → warn (non-blocking)
 //   - declared and ≥ threshold → no warn
 //
-// Common bootstrap scaffolding (shutdownTimeout=20s, preShutdownDelay=5s ⇒
-// minimum_required = 35s) is shared across cases so each row only varies the
-// declared grace period.
+// Common bootstrap scaffolding (shutdownTimeout=20s ⇒ minimum_required = 30s)
+// is shared across cases so each row only varies the declared grace period.
+//
+// This test intentionally does NOT call t.Parallel(): it mutates the global
+// slog.Default(), which would race with parallel tests in the same package
+// that emit slog records. The convention is established by other tests in
+// this package (bootstrap_test.go, dual_listener_test.go) that also drive
+// slog.SetDefault sequentially.
 func TestPhase0_TerminationGracePeriodWarn(t *testing.T) {
 	cases := []struct {
 		name                string
@@ -60,7 +69,7 @@ func TestPhase0_TerminationGracePeriodWarn(t *testing.T) {
 		},
 		{
 			name:             "below-threshold-warns",
-			terminationGrace: graceBelowThreshold, // 30 < 35
+			terminationGrace: graceBelowThreshold, // 25 < 30
 			wantWarn:         true,
 			wantWarnSubstrings: []string{
 				"terminationGracePeriodSeconds insufficient",
@@ -73,7 +82,7 @@ func TestPhase0_TerminationGracePeriodWarn(t *testing.T) {
 		},
 		{
 			name:                "at-threshold-no-warn",
-			terminationGrace:    graceMinThreshold, // exactly threshold ≥ 35 ok
+			terminationGrace:    graceMinThreshold, // exactly threshold ≥ 30 ok
 			wantWarn:            false,
 			forbidWarnSubstring: "terminationGracePeriodSeconds insufficient",
 		},

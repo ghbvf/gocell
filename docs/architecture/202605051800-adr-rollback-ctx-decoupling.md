@@ -43,10 +43,10 @@ ref: uber-go/fx app.go withRollback / run
 
 ## API 影响
 
-- `func (a *CoreAssembly) rollbackCells(ctx context.Context, upTo int)` → `func (a *CoreAssembly) rollbackCells(upTo int)`（unexported，包内 4 处 caller 同步改）
+- `func (a *CoreAssembly) rollbackCells(ctx context.Context, upTo int)` → `func (a *CoreAssembly) rollbackCells(upTo int)`（unexported，包内 3 处 caller 同步改）。AfterStart-fail 分支额外有一处独立的 `stopCellWithHooks(rollbackCtx, c)` 调用，使用同样由 `newRollbackCtx()` 派生的 fresh ctx——不算作 `rollbackCells` 的第 4 个 caller，但同享解耦语义。
 - 新增 unexported `func (a *CoreAssembly) newRollbackCtx() (context.Context, context.CancelFunc)`
 - 无导出 API 变更，无 deprecation 别名
 
 ## 部署配套
 
-phase0 增 `WithTerminationGracePeriod(d time.Duration)` option（advisory only，不改运行时行为）；当声明值小于 `shutdownTimeout + preShutdownDelay + 10s` 时 phase0 emit `slog.Warn`。详见 `docs/ops/graceful-shutdown-k8s.md`。
+phase0 增 `WithTerminationGracePeriod(d time.Duration)` option（advisory only，不改运行时行为）；当声明值小于 `shutdownTimeout + 10s` 时 phase0 emit `slog.Warn`。**注意**：roadmap N3 原文给的是 `>= shutdownTimeout + preShutdownDelay + 10s`，但 `phase10OrchestrateShutdown` 把 `preShutdownDelay` 嵌在同一个 `shutCtx`（受 `shutdownTimeout` 总预算约束）内消耗，preShutdownDelay 不应再叠加 — 实施时按数学正确公式落地，详见 `docs/ops/graceful-shutdown-k8s.md`。
