@@ -18,10 +18,12 @@ import (
 	"github.com/ghbvf/gocell/runtime/auth/refresh/storetest"
 )
 
-const refreshTestOneWeek = 7 * 24 * time.Hour
-const refreshTest30Days = 30 * 24 * time.Hour
-const refreshTest90Days = 90 * 24 * time.Hour
-const refreshTest2Hours = 2 * time.Hour
+const (
+	refreshTestOneWeek = 7 * 24 * time.Hour
+	refreshTest30Days  = 30 * 24 * time.Hour
+	refreshTest90Days  = 90 * 24 * time.Hour
+	refreshTest2Hours  = 2 * time.Hour
+)
 
 func TestPGRefreshStore_ContractSuite(t *testing.T) {
 	base, cleanup := setupPostgres(t)

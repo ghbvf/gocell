@@ -270,18 +270,28 @@ func (s *PGRefreshStore) Peek(ctx context.Context, presented string) (*refresh.T
 	}
 
 	var row refreshRow
+	var rejectErr error
 	err := s.txRunner.RunInTx(ctx, func(txCtx context.Context) error {
 		var innerErr error
 		row, innerErr = s.validatePresentedInTx(txCtx, sel, ver)
-		if innerErr != nil && !errors.Is(innerErr, refresh.ErrRejected) {
-			return innerErr
+		if innerErr == nil {
+			return nil
 		}
-		// ErrRejected is returned from RunInTx, not wrapped as inner error,
-		// so the commit happens unconditionally (timing oracle defense).
+		if errors.Is(innerErr, refresh.ErrRejected) {
+			// Capture reject through an outer variable so RunInTx commits the
+			// transaction. This persists the cascade-revoke SQL (reuse_detected /
+			// grace_exhausted) and keeps commit/rollback latency uniform across
+			// branches (B2-A-09 timing oracle defense).
+			rejectErr = innerErr
+			return nil
+		}
 		return innerErr
 	})
 	if err != nil {
 		return nil, err
+	}
+	if rejectErr != nil {
+		return nil, rejectErr
 	}
 	return row.toToken(), nil
 }
@@ -304,22 +314,30 @@ func (s *PGRefreshStore) Rotate(ctx context.Context, presented string) (string, 
 
 	var wire string
 	var tok *refresh.Token
+	var rejectErr error
 	err := s.txRunner.RunInTx(ctx, func(txCtx context.Context) error {
 		var innerErr error
 		wire, tok, innerErr = s.rotateInTx(txCtx, sel, ver)
-		if innerErr != nil && !errors.Is(innerErr, refresh.ErrRejected) {
-			return innerErr
+		if innerErr == nil {
+			return nil
 		}
-		// Commit unconditionally on success and on ErrRejected so commit latency
-		// does not distinguish happy paths from rejections. For read-only reject
-		// branches the commit is a no-op; for reuse_detected it persists the
-		// cascade revoke.
+		if errors.Is(innerErr, refresh.ErrRejected) {
+			// Capture reject through an outer variable so RunInTx commits the
+			// transaction. This persists the cascade-revoke SQL on reuse_detected /
+			// grace_exhausted, and keeps commit latency uniform across branches
+			// (B2-A-09 timing oracle defense).
+			rejectErr = innerErr
+			return nil
+		}
 		return innerErr
 	})
-	if err != nil && !errors.Is(err, refresh.ErrRejected) {
+	if err != nil {
 		return "", nil, err
 	}
-	return wire, tok, err
+	if rejectErr != nil {
+		return "", nil, rejectErr
+	}
+	return wire, tok, nil
 }
 
 // rotateInTx orchestrates the Rotate branches within a transaction context.
