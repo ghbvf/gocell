@@ -16,8 +16,14 @@ import (
 // projectWithEarlyAndLateError constructs a fixture that violates both REF-01
 // (slice references a non-existent cell) and ADV-05 (active event contract
 // without subscribers). REF-01 sits at the head of the rule pipeline; ADV-05
-// sits much later. Validate finds both; ValidateFailFast must surface REF-01
-// and skip ADV-05 entirely.
+// sits much later (see Validator.rules() in validate.go: REF-01 is index 0,
+// ADV-05 is among the trailing ADV/OUTGUARD/SliceConsistency block). Validate
+// finds both; ValidateFailFast must surface REF-01 and skip ADV-05 entirely.
+//
+// If a future change to rules() reorders ADV-05 before REF-01, the
+// ShortCircuit test below would still typecheck but stop covering the
+// short-circuit contract — TestValidate_RespectsCtxCancel and
+// TestValidateFailFast_RespectsCtxCancel act as the structural backstop.
 func projectWithEarlyAndLateError(t *testing.T) *metadata.ProjectMeta {
 	t.Helper()
 	pm := validProject()
