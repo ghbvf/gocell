@@ -208,7 +208,12 @@ func TestPGRefreshStore_DMLState(t *testing.T) {
 	require.NoError(t, migrator.Up(ctx))
 
 	clock := storetest.NewFakeClock(time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC))
-	policy := refresh.Policy{ReuseInterval: testtime.D2s, MaxAge: refreshTestOneWeek, MaxIdle: refreshTest2Hours}
+	policy := refresh.Policy{
+		ReuseInterval:  testtime.D2s,
+		MaxAge:         refreshTestOneWeek,
+		MaxIdle:        refreshTest2Hours,
+		GraceMaxReuses: refresh.DefaultGraceMaxReuses,
+	}
 	txm := NewTxManager(p)
 	store, err := NewRefreshStore(p.DB(), txm, policy, clock, nil)
 	require.NoError(t, err)
@@ -355,7 +360,12 @@ func TestPGRefreshStore_ReuseCascadeSurvivesAmbientRollback(t *testing.T) {
 
 	clock := storetest.NewFakeClock(time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC))
 	txm := NewTxManager(p)
-	store, err := NewRefreshStore(p.DB(), txm, refresh.Policy{ReuseInterval: testtime.D2s, MaxAge: time.Hour}, clock, nil)
+	store, err := NewRefreshStore(p.DB(), txm, refresh.Policy{
+		ReuseInterval:  testtime.D2s,
+		MaxAge:         time.Hour,
+		MaxIdle:        refresh.DefaultMaxIdle,
+		GraceMaxReuses: refresh.DefaultGraceMaxReuses,
+	}, clock, nil)
 	require.NoError(t, err)
 
 	parentWire, _, err := store.Issue(ctx, "sess-reuse-ambient", "usr-reuse-ambient")
@@ -387,7 +397,12 @@ func TestPGRefreshStore_SessionLockRejectsChildValidatedBeforeCascade(t *testing
 
 	clock := storetest.NewFakeClock(time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC))
 	txm2 := NewTxManager(p)
-	store, err := NewRefreshStore(p.DB(), txm2, refresh.Policy{ReuseInterval: testtime.D2s, MaxAge: time.Hour}, clock, nil)
+	store, err := NewRefreshStore(p.DB(), txm2, refresh.Policy{
+		ReuseInterval:  testtime.D2s,
+		MaxAge:         time.Hour,
+		MaxIdle:        refresh.DefaultMaxIdle,
+		GraceMaxReuses: refresh.DefaultGraceMaxReuses,
+	}, clock, nil)
 	require.NoError(t, err)
 
 	parentWire, _, err := store.Issue(ctx, "sess-reuse-lock", "usr-reuse-lock")

@@ -98,7 +98,12 @@ func newE2EFixture() *e2eFixture {
 	sessionRepo := mem.NewSessionRepository(clock.Real())
 	roleRepo := mem.NewRoleRepository()
 	refreshStore, err := refreshmem.New(
-		refresh.Policy{ReuseInterval: testtime.D2s, MaxAge: time.Hour},
+		refresh.Policy{
+			ReuseInterval:  testtime.D2s,
+			MaxAge:         time.Hour,
+			MaxIdle:        refresh.DefaultMaxIdle,
+			GraceMaxReuses: refresh.DefaultGraceMaxReuses,
+		},
 		clock.Real(), nil,
 	)
 	if err != nil {

@@ -5,9 +5,8 @@
 --   Policy.MaxIdle. Rotate updates the child row's idle_expires_at to
 --   now + Policy.MaxIdle (sliding window). Tokens whose idle_expires_at <
 --   now are rejected as idle-expired even if expires_at > now.
---   Zero Policy.MaxIdle (old stores before this migration is applied)
---   disables the idle check; the column default (created_at + 30d) ensures
---   pre-migration rows have a sensible idle deadline.
+--   Policy.MaxIdle is required (must be positive); the application layer
+--   writes idle_expires_at explicitly on every Issue and Rotate.
 --
 -- X14 (REFRESH-GRACE-COUNTER): first_used_at + used_times
 --   first_used_at TIMESTAMPTZ NULL: set on the first Rotate of each token.
@@ -15,10 +14,6 @@
 --   the parent token is re-presented within the grace window. When used_times
 --   reaches Policy.GraceMaxReuses, the next re-present triggers cascade revoke
 --   even if the re-present is within the ReuseInterval window.
---
--- These columns are additive and backward-compatible with pods that have not
--- yet been updated: the NOT NULL defaults ensure pre-migration rows continue
--- to be read and written by old binaries without errors.
 --
 -- ref: ory/hydra persistence/sql/persister_oauth2.go (refresh_token_rotated column pattern)
 -- ref: zitadel/zitadel internal/api/oidc/token_refresh.go (idle TTL per-request reset)
@@ -32,8 +27,7 @@
 -- with a non-volatile DEFAULT is a metadata-only change in PostgreSQL ≥ 11 and
 -- does not rewrite the table, so it completes instantly even on large tables.
 ALTER TABLE refresh_tokens
-    ADD COLUMN IF NOT EXISTS idle_expires_at TIMESTAMPTZ NOT NULL
-        DEFAULT now() + INTERVAL '30 days';
+    ADD COLUMN IF NOT EXISTS idle_expires_at TIMESTAMPTZ NOT NULL;
 
 ALTER TABLE refresh_tokens
     ADD COLUMN IF NOT EXISTS first_used_at TIMESTAMPTZ NULL;

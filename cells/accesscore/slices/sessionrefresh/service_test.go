@@ -48,7 +48,12 @@ func init() {
 
 func newTestRefreshStore() refresh.Store {
 	clk := storetest.NewFakeClock(time.Now())
-	store, err := refreshmem.New(refresh.Policy{ReuseInterval: testtime.D2s, MaxAge: time.Hour}, clk, nil)
+	store, err := refreshmem.New(refresh.Policy{
+		ReuseInterval:  testtime.D2s,
+		MaxAge:         time.Hour,
+		MaxIdle:        refresh.DefaultMaxIdle,
+		GraceMaxReuses: refresh.DefaultGraceMaxReuses,
+	}, clk, nil)
 	if err != nil {
 		panic("test setup: " + err.Error())
 	}
@@ -115,7 +120,12 @@ func newTestServiceWithClock(t testing.TB, seedUsers ...string) (*Service, ports
 		_ = userRepo.Create(context.Background(), u)
 	}
 	fakeClock := storetest.NewFakeClock(time.Now())
-	refreshStore, err := refreshmem.New(refresh.Policy{ReuseInterval: testtime.D2s, MaxAge: time.Hour}, fakeClock, nil)
+	refreshStore, err := refreshmem.New(refresh.Policy{
+		ReuseInterval:  testtime.D2s,
+		MaxAge:         time.Hour,
+		MaxIdle:        refresh.DefaultMaxIdle,
+		GraceMaxReuses: refresh.DefaultGraceMaxReuses,
+	}, fakeClock, nil)
 	if err != nil {
 		t.Fatalf("test setup: %v", err)
 	}
@@ -1087,7 +1097,7 @@ func TestRefresh_RotateMismatch_CascadeRevokeFails_PropagatesErr(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 // detachSpyRefreshStore wraps a real refresh.Store and records whether the
-// ctx passed to RevokeSession is already done (cancelled/deadline exceeded)
+// ctx passed to RevokeSession is already done (canceled/deadline exceeded)
 // at the time of the call. After Wave 2 lands ctxutil.WithDetachedTimeout,
 // the ctx must NOT be done at entry; before Wave 2 it will be done because
 // the caller ctx is passed directly.
@@ -1108,7 +1118,7 @@ func (s *detachSpyRefreshStore) RevokeSession(ctx context.Context, sessionID str
 
 // TestService_CascadeRevoke_DetachesFromCallerCtx verifies that when
 // cascadeRevoke is triggered by a session-not-found condition, the ctx
-// forwarded to RevokeSession is NOT the caller's already-cancelled ctx.
+// forwarded to RevokeSession is NOT the caller's already-canceled ctx.
 //
 // Mechanism: cancel the caller ctx before calling Refresh; a triggered
 // cascade should still deliver a live (non-done) ctx to RevokeSession
@@ -1129,7 +1139,7 @@ func TestService_CascadeRevoke_DetachesFromCallerCtx(t *testing.T) {
 	svc := MustNewService(sessionRepo, roleRepo, userRepo, spy, testIssuer, slog.Default(), WithClock(clock.Real()))
 
 	// Cancel the caller ctx before calling Refresh. This simulates an HTTP
-	// request that times out or is cancelled by the client while the server
+	// request that times out or is canceled by the client while the server
 	// is processing.
 	callerCtx, callerCancel := context.WithCancel(context.Background())
 	callerCancel() // cancel immediately

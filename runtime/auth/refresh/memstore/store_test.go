@@ -66,9 +66,14 @@ func TestNewRejectsInvalidConfig(t *testing.T) {
 		clock  clock.Clock
 	}{
 		{
-			name:   "nil clock",
-			policy: refresh.Policy{ReuseInterval: time.Second, MaxAge: time.Hour},
-			clock:  nil,
+			name: "nil clock",
+			policy: refresh.Policy{
+				ReuseInterval:  time.Second,
+				MaxAge:         time.Hour,
+				MaxIdle:        refresh.DefaultMaxIdle,
+				GraceMaxReuses: refresh.DefaultGraceMaxReuses,
+			},
+			clock: nil,
 		},
 		{
 			name:   "non-positive max age",
@@ -94,7 +99,12 @@ func TestNewRejectsInvalidConfig(t *testing.T) {
 func TestNewRejectsTypedNilClock(t *testing.T) {
 	var clock *typedNilClock
 	store, err := memstore.New(
-		refresh.Policy{ReuseInterval: time.Second, MaxAge: time.Hour},
+		refresh.Policy{
+			ReuseInterval:  time.Second,
+			MaxAge:         time.Hour,
+			MaxIdle:        refresh.DefaultMaxIdle,
+			GraceMaxReuses: refresh.DefaultGraceMaxReuses,
+		},
 		clock,
 		nil,
 	)
@@ -107,7 +117,12 @@ func TestNewDefaultsTypedNilRandReader(t *testing.T) {
 	var reader *typedNilReader
 
 	store, err := memstore.New(
-		refresh.Policy{ReuseInterval: time.Second, MaxAge: time.Hour},
+		refresh.Policy{
+			ReuseInterval:  time.Second,
+			MaxAge:         time.Hour,
+			MaxIdle:        refresh.DefaultMaxIdle,
+			GraceMaxReuses: refresh.DefaultGraceMaxReuses,
+		},
 		clock,
 		reader,
 	)

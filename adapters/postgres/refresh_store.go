@@ -17,6 +17,7 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/persistence"
+	"github.com/ghbvf/gocell/pkg/ctxutil"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/validation"
 	"github.com/ghbvf/gocell/runtime/auth/refresh"
@@ -475,21 +476,26 @@ func (s *PGRefreshStore) checkBasicValidity(row refreshRow, ver []byte) error {
 func (s *PGRefreshStore) handleRotatedRow(ctx context.Context, row refreshRow, mutate bool) error {
 	now := s.clock.Now()
 
-	// X14: grace counter cap. If the grace cap is configured and this parent
-	// has already been re-presented GraceMaxReuses times, treat this as a
-	// reuse attack regardless of ReuseInterval.
-	if s.policy.GraceMaxReuses > 0 && row.usedTimes >= s.policy.GraceMaxReuses {
+	// X14: grace counter cap. If this parent has already been re-presented
+	// GraceMaxReuses times, treat this as a reuse attack regardless of ReuseInterval.
+	// Policy.GraceMaxReuses is required (must be positive) — no zero-check needed.
+	if row.usedTimes >= s.policy.GraceMaxReuses {
 		slog.Error("refresh token grace counter exhausted",
 			slog.String("session_id", row.sessionID),
 			slog.String("subject_id", row.subjectID),
 			slog.String("reason", "reuse_detected"),
 			slog.Int("used_times", row.usedTimes),
 		)
-		// Bypass the ambient transaction for the cascade revoke: a reuse-attack
-		// response MUST persist even when the caller's tx rolls back. We use the
-		// underlying pool directly, not execCtx, so the revoke commits on its
-		// own connection regardless of the outer RunInTx outcome.
-		if _, execErr := s.pool.Exec(ctx, revokeSessionSQL, now, row.sessionID); execErr != nil {
+		// Detach from the caller's cancellation context: a reuse-attack response
+		// MUST persist even when the HTTP request is canceled or times out.
+		// The detached context gets a bounded 5-second deadline so the write does
+		// not run indefinitely. The ambient tx is bypassed via s.pool.Exec so the
+		// revoke commits on its own connection regardless of the outer RunInTx outcome.
+		// ref: golang/go context.WithoutCancel; hashicorp/vault token_store.go quitContext
+		// ref: ADR docs/architecture/202605051800-adr-refresh-store-ambient-tx-and-idle-grace.md
+		cascadeCtx, cancelCascade := ctxutil.WithDetachedTimeout(ctx, refresh.CascadeRevokeTimeout)
+		defer cancelCascade()
+		if _, execErr := s.pool.Exec(cascadeCtx, revokeSessionSQL, now, row.sessionID); execErr != nil {
 			return errcode.Wrap(errcode.KindInternal, ErrAdapterPGQuery, "refresh store: grace exhausted cascade", execErr)
 		}
 		return rejectWithReason("reuse_detected", row.sessionID)
@@ -507,10 +513,14 @@ func (s *PGRefreshStore) handleRotatedRow(ctx context.Context, row refreshRow, m
 			slog.String("subject_id", row.subjectID),
 			slog.String("reason", "reuse_detected"),
 		)
-		// Bypass the ambient transaction (see grace-exhausted branch above): the
-		// cascade revoke must commit on its own connection so that an outer
-		// caller rollback does not undo the attack response.
-		if _, execErr := s.pool.Exec(ctx, revokeSessionSQL, now, row.sessionID); execErr != nil {
+		// Detach from the caller's cancellation context (see grace-exhausted
+		// branch above): the cascade revoke must commit even when the caller's
+		// request is canceled. 5-second bounded timeout prevents indefinite wait.
+		// ref: golang/go context.WithoutCancel; hashicorp/vault token_store.go quitContext
+		// ref: ADR docs/architecture/202605051800-adr-refresh-store-ambient-tx-and-idle-grace.md
+		cascadeCtx, cancelCascade := ctxutil.WithDetachedTimeout(ctx, refresh.CascadeRevokeTimeout)
+		defer cancelCascade()
+		if _, execErr := s.pool.Exec(cascadeCtx, revokeSessionSQL, now, row.sessionID); execErr != nil {
 			return errcode.Wrap(errcode.KindInternal, ErrAdapterPGQuery, "refresh store: reuse cascade", execErr)
 		}
 		return rejectWithReason("reuse_detected", row.sessionID)

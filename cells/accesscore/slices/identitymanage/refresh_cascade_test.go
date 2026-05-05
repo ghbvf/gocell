@@ -28,7 +28,12 @@ import (
 func newCascadeStore(t *testing.T) refresh.Store {
 	t.Helper()
 	clk := storetest.NewFakeClock(time.Now())
-	policy := refresh.Policy{ReuseInterval: testtime.SlowPoll, MaxAge: time.Hour}
+	policy := refresh.Policy{
+		ReuseInterval:  testtime.SlowPoll,
+		MaxAge:         time.Hour,
+		MaxIdle:        refresh.DefaultMaxIdle,
+		GraceMaxReuses: refresh.DefaultGraceMaxReuses,
+	}
 	store, err := refreshmem.New(policy, clk, nil)
 	if err != nil {
 		panic("test setup: " + err.Error())

@@ -176,7 +176,12 @@ func runT3RotateHappyPath(t *testing.T, factory Factory) {
 // yields a distinct sibling child wire (not a replay of the first child).
 // The append-only model preserves idempotency without leaking tokens.
 func runT4GracePeriod(t *testing.T, factory Factory) {
-	policy := refresh.Policy{ReuseInterval: testtime.D5s, MaxAge: storeMaxAge7d}
+	policy := refresh.Policy{
+		ReuseInterval:  testtime.D5s,
+		MaxAge:         storeMaxAge7d,
+		MaxIdle:        refresh.DefaultMaxIdle,
+		GraceMaxReuses: refresh.DefaultGraceMaxReuses,
+	}
 	store, clock := factory(t, policy)
 
 	parentWire, _ := mustIssue(t, store, "sess-4", "user-4")
@@ -193,7 +198,12 @@ func runT4GracePeriod(t *testing.T, factory Factory) {
 // runT5ReuseDetection: parent presented beyond ReuseInterval triggers cascade
 // revocation and ErrRejected; subsequent Rotates on the chain also fail.
 func runT5ReuseDetection(t *testing.T, factory Factory) {
-	policy := refresh.Policy{ReuseInterval: testtime.D2s, MaxAge: storeMaxAge7d}
+	policy := refresh.Policy{
+		ReuseInterval:  testtime.D2s,
+		MaxAge:         storeMaxAge7d,
+		MaxIdle:        refresh.DefaultMaxIdle,
+		GraceMaxReuses: refresh.DefaultGraceMaxReuses,
+	}
 	store, clock := factory(t, policy)
 	ctx := context.Background()
 
@@ -237,7 +247,12 @@ func runT7RevokedToken(t *testing.T, factory Factory) {
 
 // runT8ExpiredToken: clock past MaxAge → ErrRejected.
 func runT8ExpiredToken(t *testing.T, factory Factory) {
-	policy := refresh.Policy{ReuseInterval: testtime.D2s, MaxAge: testtime.D1h}
+	policy := refresh.Policy{
+		ReuseInterval:  testtime.D2s,
+		MaxAge:         testtime.D1h,
+		MaxIdle:        refresh.DefaultMaxIdle,
+		GraceMaxReuses: refresh.DefaultGraceMaxReuses,
+	}
 	store, clock := factory(t, policy)
 
 	wire, _ := mustIssue(t, store, "sess-8", "user-8")
@@ -325,7 +340,12 @@ func runT10ConcurrentCAS(t *testing.T, factory Factory) {
 
 // runT11ExpiresAtCalc: ExpiresAt == now + MaxAge at Issue time.
 func runT11ExpiresAtCalc(t *testing.T, factory Factory) {
-	policy := refresh.Policy{ReuseInterval: testtime.D2s, MaxAge: storeMaxAge48h}
+	policy := refresh.Policy{
+		ReuseInterval:  testtime.D2s,
+		MaxAge:         storeMaxAge48h,
+		MaxIdle:        refresh.DefaultMaxIdle,
+		GraceMaxReuses: refresh.DefaultGraceMaxReuses,
+	}
 	store, clock := factory(t, policy)
 
 	now := clock.Now()
@@ -346,7 +366,12 @@ func runT12ErrcodeCategory(t *testing.T) {
 
 // runT13GCRemovesExpired: GC drops rows past expiresAt.
 func runT13GCRemovesExpired(t *testing.T, factory Factory) {
-	policy := refresh.Policy{ReuseInterval: testtime.D2s, MaxAge: testtime.D1h}
+	policy := refresh.Policy{
+		ReuseInterval:  testtime.D2s,
+		MaxAge:         testtime.D1h,
+		MaxIdle:        refresh.DefaultMaxIdle,
+		GraceMaxReuses: refresh.DefaultGraceMaxReuses,
+	}
 	store, clock := factory(t, policy)
 
 	activeWire, _ := mustIssue(t, store, "sess-13a", "user-13a")
@@ -417,7 +442,12 @@ func runT15AfterRevokeUser(t *testing.T, factory Factory) {
 // yield two distinct child wires (see T4 — this is a stricter assertion
 // on the append-only sibling semantics).
 func runT16GraceInside(t *testing.T, factory Factory) {
-	policy := refresh.Policy{ReuseInterval: testtime.D10s, MaxAge: storeMaxAge7d}
+	policy := refresh.Policy{
+		ReuseInterval:  testtime.D10s,
+		MaxAge:         storeMaxAge7d,
+		MaxIdle:        refresh.DefaultMaxIdle,
+		GraceMaxReuses: refresh.DefaultGraceMaxReuses,
+	}
 	store, _ := factory(t, policy)
 
 	parent, _ := mustIssue(t, store, "sess-16", "user-16")
@@ -499,7 +529,12 @@ func runT19PeekDoesNotAdvance(t *testing.T, factory Factory) {
 }
 
 func runT20PeekRejectionParityAndReuseCascade(t *testing.T, factory Factory) {
-	store, clock := factory(t, refresh.Policy{ReuseInterval: testtime.D2s, MaxAge: testtime.D1h})
+	store, clock := factory(t, refresh.Policy{
+		ReuseInterval:  testtime.D2s,
+		MaxAge:         testtime.D1h,
+		MaxIdle:        refresh.DefaultMaxIdle,
+		GraceMaxReuses: refresh.DefaultGraceMaxReuses,
+	})
 	ctx := context.Background()
 
 	_, err := store.Peek(ctx, "malformed")
@@ -515,7 +550,12 @@ func runT20PeekRejectionParityAndReuseCascade(t *testing.T, factory Factory) {
 	_, err = store.Peek(ctx, expiredWire)
 	assert.ErrorIs(t, err, refresh.ErrRejected, "expired Peek must reject like Rotate")
 
-	store, clock = factory(t, refresh.Policy{ReuseInterval: testtime.D2s, MaxAge: testtime.D1h})
+	store, clock = factory(t, refresh.Policy{
+		ReuseInterval:  testtime.D2s,
+		MaxAge:         testtime.D1h,
+		MaxIdle:        refresh.DefaultMaxIdle,
+		GraceMaxReuses: refresh.DefaultGraceMaxReuses,
+	})
 	parentWire, _ := mustIssue(t, store, "sess-20-reuse", t20Subject)
 	childWire, _ := mustRotate(t, store, parentWire)
 	clock.Advance(testtime.D3s)
