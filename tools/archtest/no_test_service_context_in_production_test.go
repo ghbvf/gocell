@@ -32,6 +32,12 @@ func TestNO_TEST_SERVICE_CONTEXT_IN_PRODUCTION_01(t *testing.T) {
 
 	root := findModuleRoot(t)
 
+	// All production roots — non-test code anywhere in the repo must not
+	// call auth.TestServiceContext. Direct walk is correct here because the
+	// rule scope is wider than cell-managed code (e.g., examples/ssobff/
+	// is non-cell example code, examples/iotdevice/{auth.go,main.go} are
+	// non-cell wiring code). The scanner skips _test.go in-line so test
+	// helpers can call TestServiceContext freely.
 	searchDirs := []string{
 		filepath.Join(root, "runtime"),
 		filepath.Join(root, "cells"),
@@ -43,7 +49,6 @@ func TestNO_TEST_SERVICE_CONTEXT_IN_PRODUCTION_01(t *testing.T) {
 	}
 
 	var violations []string
-
 	for _, dir := range searchDirs {
 		allFiles, err := findAllGoFilesInDir(dir)
 		if os.IsNotExist(err) {

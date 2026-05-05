@@ -454,7 +454,7 @@ func testSEC03AdapterTLSValidation(t *testing.T, root string) {
 			if strings.Contains(src, `"github.com/ghbvf/gocell/pkg/secutil"`) {
 				pkgImportsSecutil = true
 			}
-			if strings.Contains(src, "secutil.ValidateTLSEndpoint(") {
+			if secutilCallsValidateTLSEndpoint(src) {
 				pkgCallsValidate = true
 			}
 		}
@@ -475,6 +475,61 @@ func testSEC03AdapterTLSValidation(t *testing.T, root string) {
 	assert.Empty(t, violations,
 		"adapters/redis, adapters/vault, and adapters/s3 must each import pkg/secutil "+
 			"and call secutil.ValidateTLSEndpoint to validate remote endpoint TLS")
+}
+
+// secutilCallsValidateTLSEndpoint reports whether src contains an actual
+// *ast.CallExpr to secutil.ValidateTLSEndpoint. Comment / string-literal
+// occurrences of the bytes do not count.
+func secutilCallsValidateTLSEndpoint(src string) bool {
+	fset := token.NewFileSet()
+	f, err := parser.ParseFile(fset, "src.go", src, parser.SkipObjectResolution)
+	if err != nil {
+		return false
+	}
+	found := false
+	ast.Inspect(f, func(n ast.Node) bool {
+		if found {
+			return false
+		}
+		ce, ok := n.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		sel, ok := ce.Fun.(*ast.SelectorExpr)
+		if !ok {
+			return true
+		}
+		x, ok := sel.X.(*ast.Ident)
+		if !ok {
+			return true
+		}
+		if x.Name == "secutil" && sel.Sel.Name == "ValidateTLSEndpoint" {
+			found = true
+		}
+		return true
+	})
+	return found
+}
+
+// TestSecurityDefaultsSEC03_NegativeFixture_StringLiteralOnly asserts the
+// scanner does NOT flag a fixture that only contains "secutil.ValidateTLSEndpoint("
+// in comments and string-constant values, with no real CallExpr. Legacy
+// strings.Contains FALSE-POSITIVES; AST GREEN refactor must distinguish.
+func TestSecurityDefaultsSEC03_NegativeFixture_StringLiteralOnly(t *testing.T) {
+	t.Parallel()
+	root := findModuleRoot(t)
+	fixturePath := filepath.Join(root, "tools", "archtest", "testdata", "security_defaults_fixtures", "missing_tls_validate", "main.go")
+	body, err := os.ReadFile(fixturePath) //nolint:gosec // archtest fixture
+	if err != nil {
+		t.Fatalf("read fixture: %v", err)
+	}
+	src := string(body)
+	if secutilCallsValidateTLSEndpoint(src) {
+		t.Errorf("SEC-FAIL-CLOSED-03 negative fixture missing_tls_validate: legacy " +
+			"strings.Contains FALSE-POSITIVES on comment/string-literal occurrences of " +
+			"\"secutil.ValidateTLSEndpoint(\"; AST GREEN refactor required (scan *ast.CallExpr " +
+			"with selector secutil.ValidateTLSEndpoint)")
+	}
 }
 
 // testSEC04WebSocketOriginVerify scans adapters/websocket for the forbidden

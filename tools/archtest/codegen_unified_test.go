@@ -46,131 +46,90 @@ import (
 // drifted from the design.
 var _ func(string, *metadata.ProjectMeta) (map[string]markergen.WireBundle, error) = markergen.Merge
 
-// findAllCellFiles walks both cells/ and examples/*/cells/ collecting
-// production cell.go files (cells/<name>/cell.go and
-// examples/<project>/cells/<name>/cell.go). Excludes _test.go, vendor,
-// worktrees, testdata, slices, and internal subdirectories.
-func findAllCellFiles(root string) []string {
-	var files []string
-	roots := []string{
-		filepath.Join(root, "cells"),
-		filepath.Join(root, "examples"),
+// mustProjectFromMetadata parses ProjectMeta from root and t.Fatals on error.
+// Governance gates must fail closed when the source-of-truth metadata is
+// unusable — silently returning an empty project would let downstream
+// enumerators yield zero-iteration vacuous-pass tests.
+func mustProjectFromMetadata(t *testing.T, root string) *metadata.ProjectMeta {
+	t.Helper()
+	p, err := metadata.NewParser(root).Parse()
+	if err != nil {
+		t.Fatalf("metadata.NewParser failed; governance gates require a valid project: %v", err)
 	}
-	for _, scanRoot := range roots {
-		_ = filepath.WalkDir(scanRoot, func(path string, d os.DirEntry, err error) error {
-			if err != nil {
-				return nil //nolint:nilerr // walk continues past unreadable entries by design
-			}
-			if d.IsDir() {
-				switch d.Name() {
-				case "vendor", "worktrees", "testdata", ".git", "slices", "internal", "node_modules":
-					return filepath.SkipDir
-				}
-				return nil
-			}
-			if d.Name() == "cell.go" {
-				files = append(files, path)
-			}
-			return nil
-		})
+	return p
+}
+
+// findAllCellFiles enumerates cell.go for every cell registered in
+// ProjectMeta.Cells (covers both top-level cells/ and examples/*/cells/ via
+// path-pattern matching in kernel/metadata/parser.go).
+func findAllCellFiles(t *testing.T, root string) []string {
+	t.Helper()
+	project := mustProjectFromMetadata(t, root)
+	var files []string
+	for _, c := range project.Cells {
+		path := filepath.Join(root, filepath.Dir(c.File), "cell.go")
+		if _, err := os.Stat(path); err == nil {
+			files = append(files, path)
+		}
 	}
 	sort.Strings(files)
 	return files
 }
 
-// findAllCellInitFiles finds cells/**/cell.go, cells/**/cell_init.go, and
-// the same under examples/*/cells/. Used by MARKER-MISSING-FOR-WIRE-CALL-01
-// to scan for forbidden reg.RouteGroup / reg.Subscribe calls.
-func findAllCellInitFiles(root string) []string {
+// findAllCellInitFiles enumerates cell.go / cell_init.go / cell_routes.go /
+// cell_providers.go for every cell registered in ProjectMeta.Cells. Excludes
+// cell_gen.go (generated owns wire calls) and *_test.go.
+func findAllCellInitFiles(t *testing.T, root string) []string {
+	t.Helper()
+	project := mustProjectFromMetadata(t, root)
 	var files []string
-	roots := []string{
-		filepath.Join(root, "cells"),
-		filepath.Join(root, "examples"),
-	}
-	for _, scanRoot := range roots {
-		_ = filepath.WalkDir(scanRoot, func(path string, d os.DirEntry, err error) error {
-			if err != nil {
-				return nil //nolint:nilerr // walk continues past unreadable entries by design
+	for _, c := range project.Cells {
+		cellDir := filepath.Join(root, filepath.Dir(c.File))
+		entries, err := os.ReadDir(cellDir)
+		if err != nil {
+			continue
+		}
+		for _, e := range entries {
+			if e.IsDir() {
+				continue
 			}
-			if d.IsDir() {
-				switch d.Name() {
-				case "vendor", "worktrees", "testdata", ".git", "slices", "internal", "node_modules":
-					return filepath.SkipDir
-				}
-				return nil
-			}
-			name := d.Name()
+			name := e.Name()
 			if !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
-				return nil
+				continue
 			}
 			if name == "cell_gen.go" {
-				return nil // generated owns wire calls
+				continue
 			}
-			// Match cell.go, cell_init.go, cell_routes.go, cell_providers.go.
 			if name == "cell.go" || strings.HasPrefix(name, "cell_") {
-				files = append(files, path)
+				files = append(files, filepath.Join(cellDir, name))
 			}
-			return nil
-		})
+		}
 	}
 	sort.Strings(files)
 	return files
 }
 
-// findAllCellYAMLs walks cells/**/cell.yaml and examples/*/cells/**/cell.yaml.
-func findAllCellYAMLs(root string) []string {
+// findAllCellYAMLs enumerates cell.yaml for every cell registered in
+// ProjectMeta.Cells.
+func findAllCellYAMLs(t *testing.T, root string) []string {
+	t.Helper()
+	project := mustProjectFromMetadata(t, root)
 	var files []string
-	roots := []string{
-		filepath.Join(root, "cells"),
-		filepath.Join(root, "examples"),
-	}
-	for _, scanRoot := range roots {
-		_ = filepath.WalkDir(scanRoot, func(path string, d os.DirEntry, err error) error {
-			if err != nil {
-				return nil //nolint:nilerr // best-effort walk
-			}
-			if d.IsDir() {
-				switch d.Name() {
-				case "vendor", "worktrees", "testdata", ".git", "node_modules":
-					return filepath.SkipDir
-				}
-				return nil
-			}
-			if d.Name() == "cell.yaml" {
-				files = append(files, path)
-			}
-			return nil
-		})
+	for _, c := range project.Cells {
+		files = append(files, filepath.Join(root, c.File))
 	}
 	sort.Strings(files)
 	return files
 }
 
-// findAllSliceYAMLs walks cells/**/slices/*/slice.yaml and the examples
-// equivalent.
-func findAllSliceYAMLs(root string) []string {
+// findAllSliceYAMLs enumerates slice.yaml for every slice registered in
+// ProjectMeta.Slices.
+func findAllSliceYAMLs(t *testing.T, root string) []string {
+	t.Helper()
+	project := mustProjectFromMetadata(t, root)
 	var files []string
-	roots := []string{
-		filepath.Join(root, "cells"),
-		filepath.Join(root, "examples"),
-	}
-	for _, scanRoot := range roots {
-		_ = filepath.WalkDir(scanRoot, func(path string, d os.DirEntry, err error) error {
-			if err != nil {
-				return nil //nolint:nilerr // best-effort walk
-			}
-			if d.IsDir() {
-				switch d.Name() {
-				case "vendor", "worktrees", "testdata", ".git", "node_modules":
-					return filepath.SkipDir
-				}
-				return nil
-			}
-			if d.Name() == "slice.yaml" {
-				files = append(files, path)
-			}
-			return nil
-		})
+	for _, s := range project.Slices {
+		files = append(files, filepath.Join(root, s.File))
 	}
 	sort.Strings(files)
 	return files
@@ -192,7 +151,7 @@ func deriveCellID(path string) string {
 func TestNoMetadataLiteralInCellGo01(t *testing.T) {
 	t.Parallel()
 	root := findModuleRoot(t)
-	for _, path := range findAllCellFiles(root) {
+	for _, path := range findAllCellFiles(t, root) {
 		fset := token.NewFileSet()
 		f, err := parser.ParseFile(fset, path, nil, parser.SkipObjectResolution)
 		if err != nil {
@@ -231,7 +190,7 @@ func TestNoWireFieldsInYaml01(t *testing.T) {
 	t.Parallel()
 	root := findModuleRoot(t)
 
-	for _, path := range findAllCellYAMLs(root) {
+	for _, path := range findAllCellYAMLs(t, root) {
 		content, err := os.ReadFile(path) //nolint:gosec // archtest scans repo paths it discovered
 		if err != nil {
 			continue
@@ -242,7 +201,7 @@ func TestNoWireFieldsInYaml01(t *testing.T) {
 				filepath.ToSlash(rel))
 		}
 	}
-	for _, path := range findAllSliceYAMLs(root) {
+	for _, path := range findAllSliceYAMLs(t, root) {
 		content, err := os.ReadFile(path) //nolint:gosec // archtest scans repo paths it discovered
 		if err != nil {
 			continue
@@ -325,7 +284,7 @@ func forbiddenWireCall(path string) (found string, line int, err error) {
 func TestMarkerMissingForWireCall01(t *testing.T) {
 	t.Parallel()
 	root := findModuleRoot(t)
-	for _, path := range findAllCellInitFiles(root) {
+	for _, path := range findAllCellInitFiles(t, root) {
 		sym, line, err := forbiddenWireCall(path)
 		if err != nil {
 			continue
@@ -425,12 +384,53 @@ func TestMarkerWireSingleSource01(t *testing.T) {
 			t.Errorf("MARKER-WIRE-SINGLE-SOURCE-01: read %s: %v", cellGoPath, err)
 			continue
 		}
-		if !bytes.Contains(content, []byte("// +cell:listener:")) {
+		if !cellGoHasListenerMarker(content) {
 			rel, _ := filepath.Rel(root, cellGoPath)
 			t.Errorf(
 				"MARKER-WIRE-SINGLE-SOURCE-01: %s (cell %q) is K#04 opted-in with reg.RouteGroup in cell_gen.go but declares no "+
 					"`// +cell:listener` marker — wire is single-sourced via markers after K#05",
 				filepath.ToSlash(rel), c.ID)
 		}
+	}
+}
+
+// cellGoHasListenerMarker reports whether cell.go declares a real
+// `// +cell:listener:` annotation as an *ast.Comment node. Bytes inside
+// string literals or other AST positions do not count.
+//
+// ref: kubernetes-sigs/controller-tools pkg/markers/parse.go (markers parsed
+// from comment groups, not from source bytes).
+func cellGoHasListenerMarker(content []byte) bool {
+	fset := token.NewFileSet()
+	f, err := parser.ParseFile(fset, "cell.go", content, parser.ParseComments)
+	if err != nil {
+		return false
+	}
+	for _, cg := range f.Comments {
+		for _, c := range cg.List {
+			if strings.HasPrefix(strings.TrimSpace(c.Text), "// +cell:listener:") {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// TestMarkerWireSingleSource01_NegativeFixture_StringLiteralOnly asserts
+// scanner rejects a cell.go that contains "// +cell:listener:" only inside
+// a string-constant value, not as an actual *ast.Comment. Legacy
+// bytes.Contains FALSE-PASSes; AST GREEN refactor must inspect f.Comments.
+func TestMarkerWireSingleSource01_NegativeFixture_StringLiteralOnly(t *testing.T) {
+	t.Parallel()
+	archDir := findArchTestDir(t)
+	fixturePath := filepath.Join(archDir, "testdata", "marker_wire_single_source_fixtures", "listener_in_string_literal", "cell.go")
+	content, err := os.ReadFile(fixturePath) //nolint:gosec // archtest fixture
+	if err != nil {
+		t.Fatalf("read fixture: %v", err)
+	}
+	if cellGoHasListenerMarker(content) {
+		t.Errorf("MARKER-WIRE-SINGLE-SOURCE-01 negative fixture listener_in_string_literal: " +
+			"legacy bytes.Contains FALSE-PASSes on string-constant carrier; AST GREEN " +
+			"refactor required (parser.ParseFile(ParseComments) + f.Comments scan)")
 	}
 }

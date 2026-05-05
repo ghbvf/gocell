@@ -95,51 +95,24 @@ func isPermanentExceptionLiteral(rel string) bool {
 }
 
 // collectContractSpecScanFiles returns production .go files to scan.
-// Scope: cells/ and examples/**/cells/ only. runtime/ and kernel/ own
-// framework-internal ContractSpec usages that are intentional and not
-// subject to this migration gate.
-// Exclusions within scope:
-//   - generated/contracts/** (authorized home)
-//   - **/testdata/**, **/fixtures/**
-//   - *_test.go, *_gen.go
+// Scope: cells (top-level cells/ + examples/*/cells/) only — runtime/ and
+// kernel/ own framework-internal ContractSpec usages that are intentional
+// and not subject to this migration gate. Cells discovered via
+// findCellProductionGoFiles (metadata-driven). *_gen.go files are excluded
+// here (gate is about hand-written cell code).
 func collectContractSpecScanFiles(t *testing.T, root string) []string {
 	t.Helper()
-	scanRoots := []string{
-		filepath.Join(root, "cells"),
-		filepath.Join(root, "examples"),
+	files, err := findCellProductionGoFiles(root)
+	if err != nil {
+		t.Fatalf("metadata.NewParser: %v", err)
 	}
-
-	var files []string
-	for _, scanRoot := range scanRoots {
-		if _, err := os.Stat(scanRoot); os.IsNotExist(err) {
-			continue
+	filtered := files[:0]
+	for _, f := range files {
+		if !strings.HasSuffix(f, "_gen.go") {
+			filtered = append(filtered, f)
 		}
-		_ = filepath.WalkDir(scanRoot, func(path string, d os.DirEntry, err error) error {
-			if err != nil {
-				return nil //nolint:nilerr // walk continues past unreadable entries
-			}
-			if d.IsDir() {
-				switch d.Name() {
-				case "vendor", "worktrees", ".git", "node_modules":
-					return filepath.SkipDir
-				case "testdata", "fixtures":
-					return filepath.SkipDir
-				}
-				return nil
-			}
-			name := d.Name()
-			if !strings.HasSuffix(name, ".go") {
-				return nil
-			}
-			if strings.HasSuffix(name, "_test.go") || strings.HasSuffix(name, "_gen.go") {
-				return nil
-			}
-			files = append(files, path)
-			return nil
-		})
 	}
-	sort.Strings(files)
-	return files
+	return filtered
 }
 
 // TestNO_MANUAL_CONTRACTSPEC_LITERAL_01_NegativeFixture verifies that the

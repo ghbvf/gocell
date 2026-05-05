@@ -27,6 +27,8 @@ import (
 	"sort"
 	"strings"
 	"testing"
+
+	"github.com/ghbvf/gocell/kernel/metadata"
 )
 
 // ruleSvctokenCallerCellRequired01 is the archtest rule identifier; not a credential.
@@ -50,6 +52,11 @@ func TestSVCTOKEN_CALLER_CELL_REQUIRED_01(t *testing.T) {
 	root := findModuleRoot(t)
 	knownCells := discoverKnownCells(t, root)
 
+	// Scan all production roots (cells/, runtime/, cmd/, examples/, tests/),
+	// including _test.go since test helpers also call GenerateServiceToken
+	// and must declare a known callerCell. Direct walk is correct here:
+	// the rule scope is wider than cell-managed code (e.g.,
+	// examples/ssobff/walkthrough_test.go is non-cell example code).
 	searchDirs := []string{
 		filepath.Join(root, "runtime"),
 		filepath.Join(root, "cells"),
@@ -57,28 +64,28 @@ func TestSVCTOKEN_CALLER_CELL_REQUIRED_01(t *testing.T) {
 		filepath.Join(root, "examples"),
 		filepath.Join(root, "tests"),
 	}
-
-	var violations []string
-
+	var allFiles []string
 	for _, dir := range searchDirs {
-		// Include _test.go files too — test helpers can also use GenerateServiceToken.
-		allFiles, err := findAllGoFilesInDir(dir)
+		ff, err := findAllGoFilesInDir(dir)
 		if os.IsNotExist(err) {
 			continue
 		}
 		if err != nil {
 			t.Fatalf("walking %s: %v", dir, err)
 		}
-		for _, f := range allFiles {
-			rel, _ := filepath.Rel(root, f)
-			rel = filepath.ToSlash(rel)
-			hits, scanErr := scanGenerateServiceTokenCallSites(f, rel, knownCells)
-			if scanErr != nil {
-				t.Logf("scan error %s: %v", rel, scanErr)
-				continue
-			}
-			violations = append(violations, hits...)
+		allFiles = append(allFiles, ff...)
+	}
+
+	var violations []string
+	for _, f := range allFiles {
+		rel, _ := filepath.Rel(root, f)
+		rel = filepath.ToSlash(rel)
+		hits, scanErr := scanGenerateServiceTokenCallSites(f, rel, knownCells)
+		if scanErr != nil {
+			t.Logf("scan error %s: %v", rel, scanErr)
+			continue
 		}
+		violations = append(violations, hits...)
 	}
 
 	sort.Strings(violations)
@@ -94,70 +101,27 @@ func TestSVCTOKEN_CALLER_CELL_REQUIRED_01(t *testing.T) {
 	}
 }
 
-// discoverKnownCells returns the set of valid caller cell IDs by listing
-// subdirectories of cells/ (first-level only: accesscore, auditcore, etc.),
-// scanning examples/{*}/cells/*/cell.yaml for id fields, and reading
-// actor IDs from actors.yaml.
+// discoverKnownCells returns the set of valid caller cell IDs from
+// ProjectMeta.Cells (covers both top-level and examples cells via
+// metadata path-pattern matching) plus actor IDs from actors.yaml.
 func discoverKnownCells(t *testing.T, root string) map[string]bool {
 	t.Helper()
 	known := map[string]bool{}
 
-	// Collect platform cells from cells/ directory names.
-	cellsDir := filepath.Join(root, "cells")
-	entries, err := os.ReadDir(cellsDir)
-	if err == nil {
-		for _, e := range entries {
-			if e.IsDir() && cellIDRegex.MatchString(e.Name()) {
-				known[e.Name()] = true
-			}
+	project, err := metadata.NewParser(root).Parse()
+	if err != nil {
+		t.Fatalf("metadata.NewParser: %v", err)
+	}
+	for id := range project.Cells {
+		if cellIDRegex.MatchString(id) {
+			known[id] = true
 		}
 	}
-
-	// Collect example cell IDs from examples/{*}/cells/*/cell.yaml.
-	examplesDir := filepath.Join(root, "examples")
-	_ = filepath.WalkDir(examplesDir, func(path string, d os.DirEntry, walkErr error) error {
-		if walkErr != nil {
-			return walkErr
-		}
-		if d.IsDir() {
-			return nil
-		}
-		if d.Name() != "cell.yaml" {
-			return nil
-		}
-		data, readErr := os.ReadFile(filepath.Clean(path))
-		if readErr != nil {
-			return nil //nolint:nilerr // soft-skip on unreadable cell.yaml: archtest collects as many cells as possible
-		}
-		for _, line := range strings.Split(string(data), "\n") {
-			line = strings.TrimSpace(line)
-			if strings.HasPrefix(line, "id:") {
-				id := strings.TrimSpace(strings.TrimPrefix(line, "id:"))
-				id = strings.Trim(id, "\"'")
-				if cellIDRegex.MatchString(id) {
-					known[id] = true
-				}
-			}
-		}
-		return nil
-	})
-
-	// Also allow actor IDs from actors.yaml (simple grep for "id:" lines).
-	actorsFile := filepath.Join(root, "actors.yaml")
-	data, err := os.ReadFile(actorsFile) //nolint:gosec // G304 false positive: actorsFile path is constant within repo
-	if err == nil {
-		for _, line := range strings.Split(string(data), "\n") {
-			line = strings.TrimSpace(line)
-			if strings.HasPrefix(line, "id:") {
-				id := strings.TrimSpace(strings.TrimPrefix(line, "id:"))
-				id = strings.Trim(id, "\"'")
-				if cellIDRegex.MatchString(id) {
-					known[id] = true
-				}
-			}
+	for _, a := range project.Actors {
+		if cellIDRegex.MatchString(a.ID) {
+			known[a.ID] = true
 		}
 	}
-
 	return known
 }
 
@@ -175,13 +139,18 @@ func scanGenerateServiceTokenCallSites(path, rel string, knownCells map[string]b
 		return nil, nil //nolint:nilerr // soft-skip on read error: archtest fixture allows missing/unreadable files (caller will scan rest)
 	}
 
+	authAliases := authPackageAliases(f)
+	if len(authAliases) == 0 {
+		return nil, nil // file does not import runtime/auth
+	}
+
 	var violations []string
 	ast.Inspect(f, func(n ast.Node) bool {
 		call, ok := n.(*ast.CallExpr)
 		if !ok {
 			return true
 		}
-		if !isAuthGenerateServiceTokenCall(call) {
+		if !isAuthGenerateServiceTokenCall(call, authAliases) {
 			return true
 		}
 		pos := fset.Position(call.Pos())
@@ -236,8 +205,11 @@ func scanGenerateServiceTokenCallSites(path, rel string, knownCells map[string]b
 }
 
 // isAuthGenerateServiceTokenCall reports whether call is a call expression
-// of the form auth.GenerateServiceToken(...).
-func isAuthGenerateServiceTokenCall(call *ast.CallExpr) bool {
+// of the form <alias>.GenerateServiceToken(...) where <alias> is one of the
+// resolved local names for runtime/auth in the current file. This is
+// import-aware so renamed imports (`import authpkg "…/runtime/auth"`) are
+// still detected.
+func isAuthGenerateServiceTokenCall(call *ast.CallExpr, authAliases map[string]struct{}) bool {
 	sel, ok := call.Fun.(*ast.SelectorExpr)
 	if !ok {
 		return false
@@ -245,9 +217,36 @@ func isAuthGenerateServiceTokenCall(call *ast.CallExpr) bool {
 	if sel.Sel.Name != "GenerateServiceToken" {
 		return false
 	}
-	// Accept any receiver whose Name is "auth" (package alias or direct reference).
 	id, ok := sel.X.(*ast.Ident)
-	return ok && id.Name == "auth"
+	if !ok {
+		return false
+	}
+	_, hit := authAliases[id.Name]
+	return hit
+}
+
+// authPackageAliases returns the set of local package names by which f
+// imports github.com/ghbvf/gocell/runtime/auth. Default name is "auth"
+// when no rename is given; explicit aliases (`import x "…"`) are honored;
+// dot-imports ("." alias) and blank imports ("_") are excluded because
+// neither produces an AST `<name>.GenerateServiceToken` call expression.
+func authPackageAliases(f *ast.File) map[string]struct{} {
+	const target = `"github.com/ghbvf/gocell/runtime/auth"`
+	out := map[string]struct{}{}
+	for _, imp := range f.Imports {
+		if imp.Path == nil || imp.Path.Value != target {
+			continue
+		}
+		name := "auth"
+		if imp.Name != nil {
+			if imp.Name.Name == "_" || imp.Name.Name == "." {
+				continue
+			}
+			name = imp.Name.Name
+		}
+		out[name] = struct{}{}
+	}
+	return out
 }
 
 // findAllGoFilesInDir walks dir and returns all .go files (including _test.go).

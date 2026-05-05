@@ -92,39 +92,23 @@ func isPermanentExceptionCell(rel string) bool {
 }
 
 // collectCellProductionGoFiles returns all non-generated, non-test .go files
-// under cells/ and examples/**/cells/.
+// for every cell registered in ProjectMeta.Cells (covers top-level cells/
+// and examples/*/cells/ via metadata path-pattern matching).
 func collectCellProductionGoFiles(t *testing.T, root string) []string {
 	t.Helper()
-	var files []string
-	roots := []string{
-		filepath.Join(root, "cells"),
-		filepath.Join(root, "examples"),
+	files, err := findCellProductionGoFiles(root)
+	if err != nil {
+		t.Fatalf("metadata.NewParser: %v", err)
 	}
-	for _, scanRoot := range roots {
-		if _, err := os.Stat(scanRoot); os.IsNotExist(err) {
-			continue
+	// Drop *_gen.go which findCellProductionGoFiles keeps (it only excludes
+	// _test.go) — this gate is about hand-written cell code.
+	filtered := files[:0]
+	for _, f := range files {
+		if !strings.HasSuffix(f, "_gen.go") {
+			filtered = append(filtered, f)
 		}
-		_ = filepath.WalkDir(scanRoot, func(path string, d os.DirEntry, err error) error {
-			if err != nil {
-				return nil //nolint:nilerr // walk continues past unreadable entries
-			}
-			if d.IsDir() {
-				switch d.Name() {
-				case "vendor", "worktrees", "testdata", ".git", "node_modules":
-					return filepath.SkipDir
-				}
-				return nil
-			}
-			name := d.Name()
-			if !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") || strings.HasSuffix(name, "_gen.go") {
-				return nil
-			}
-			files = append(files, path)
-			return nil
-		})
 	}
-	sort.Strings(files)
-	return files
+	return filtered
 }
 
 // fset_new returns a fresh token.FileSet. Named to avoid shadowing the

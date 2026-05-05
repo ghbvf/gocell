@@ -11,8 +11,10 @@
 package archtest
 
 import (
-	"bytes"
 	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"os"
 	"path/filepath"
 	"testing"
@@ -68,21 +70,48 @@ func scanEventSubscriptionCoverage(contractID, subPath string) error {
 			contractID, subPath, contractID,
 		)
 	}
-	content, readErr := os.ReadFile(subPath) //nolint:gosec // archtest reads paths it discovered
-	if readErr != nil {
+	fset := token.NewFileSet()
+	f, parseErr := parser.ParseFile(fset, subPath, nil, parser.SkipObjectResolution)
+	if parseErr != nil {
 		return fmt.Errorf(
-			"EVENT-SUBSCRIPTION-CONTRACTGEN-COVERAGE-01: cannot read %s: %v",
-			subPath, readErr,
+			"EVENT-SUBSCRIPTION-CONTRACTGEN-COVERAGE-01: cannot parse %s: %v",
+			subPath, parseErr,
 		)
 	}
-	if !bytes.Contains(content, []byte("func NewSubscription")) {
-		return fmt.Errorf(
-			"EVENT-SUBSCRIPTION-CONTRACTGEN-COVERAGE-01: contract %q: %s exists but does not "+
-				"declare func NewSubscription; regenerate with `gocell generate contract %s`",
-			contractID, subPath, contractID,
-		)
+	for _, decl := range f.Decls {
+		fn, ok := decl.(*ast.FuncDecl)
+		if !ok {
+			continue
+		}
+		if fn.Recv == nil && fn.Name.Name == "NewSubscription" {
+			return nil
+		}
 	}
-	return nil
+	return fmt.Errorf(
+		"EVENT-SUBSCRIPTION-CONTRACTGEN-COVERAGE-01: contract %q: %s exists but does not "+
+			"declare func NewSubscription; regenerate with `gocell generate contract %s`",
+		contractID, subPath, contractID,
+	)
+}
+
+// TestEVENT_SUBSCRIPTION_CONTRACTGEN_COVERAGE_01_NegativeFixture_VarShadowsFunc
+// asserts the scanner rejects a subscription_gen.go that contains the bytes
+// "func NewSubscription" only inside a comment, a string literal, and a
+// `var NewSubscription = ...` declaration — no real *ast.FuncDecl.
+//
+// The legacy bytes.Contains scan FALSE-PASSes because the substring is
+// literally present three times. This Wave 1 RED test FAILS pre-refactor
+// and PASSes after the GREEN AST scan replaces bytes.Contains.
+func TestEVENT_SUBSCRIPTION_CONTRACTGEN_COVERAGE_01_NegativeFixture_VarShadowsFunc(t *testing.T) {
+	t.Parallel()
+	archDir := findArchTestDir(t)
+	fixturePath := filepath.Join(archDir, "testdata", "event_subscription_coverage_fixtures", "var_shadows_func", "subscription_gen.go")
+
+	if err := scanEventSubscriptionCoverage("event.fake.notify.v1", fixturePath); err == nil {
+		t.Errorf("EVENT-SUBSCRIPTION-CONTRACTGEN-COVERAGE-01 negative fixture var_shadows_func: " +
+			"legacy bytes.Contains FALSE-PASSes — only comment/literal/var carriers exist, no real " +
+			"FuncDecl; AST GREEN refactor required (parser.ParseFile + *ast.FuncDecl scan)")
+	}
 }
 
 // TestEVENT_SUBSCRIPTION_CONTRACTGEN_COVERAGE_01_NegativeFixture verifies that

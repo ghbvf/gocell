@@ -14,6 +14,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/ghbvf/gocell/kernel/metadata"
 )
 
 const (
@@ -90,25 +92,23 @@ func checkSliceServiceOutboxRules(t *testing.T, root, modPath string) []outboxSe
 }
 
 func findSliceServiceFiles(root string) ([]string, error) {
+	project, err := metadata.NewParser(root).Parse()
+	if err != nil {
+		return nil, err
+	}
+
 	var files []string
-	err := filepath.WalkDir(filepath.Join(root, "cells"), func(path string, d os.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if d.IsDir() {
-			switch d.Name() {
-			case "vendor", "worktrees", "testdata", "generated", ".git":
-				return filepath.SkipDir
+	for _, s := range project.Slices {
+		sliceDir := filepath.Join(root, filepath.Dir(s.File))
+		svc := filepath.Join(sliceDir, "service.go")
+		if _, statErr := os.Stat(svc); statErr == nil {
+			if isSliceServiceFile(root, svc) {
+				files = append(files, svc)
 			}
-			return nil
 		}
-		if isSliceServiceFile(root, path) {
-			files = append(files, path)
-		}
-		return nil
-	})
+	}
 	sort.Strings(files)
-	return files, err
+	return files, nil
 }
 
 func isSliceServiceFile(root, path string) bool {

@@ -59,6 +59,10 @@ func TestNO_DELETED_AUTH_SYMBOLS_01(t *testing.T) {
 
 	root := findModuleRoot(t)
 
+	// All production roots (cells, runtime, cmd, kernel, adapters,
+	// examples, tests) — direct walk so the rule covers non-cell example
+	// code (examples/ssobff/, examples/iotdevice/{auth.go,localtoken/}, …)
+	// and test files (deleted symbols must not appear in tests either).
 	searchDirs := []string{
 		filepath.Join(root, "runtime"),
 		filepath.Join(root, "cells"),
@@ -70,7 +74,6 @@ func TestNO_DELETED_AUTH_SYMBOLS_01(t *testing.T) {
 	}
 
 	var violations []string
-
 	for _, dir := range searchDirs {
 		allFiles, err := findAllGoFilesInDir(dir)
 		if err != nil {
