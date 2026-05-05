@@ -149,10 +149,14 @@ func scanWithDetailsFile(fset *token.FileSet, file *ast.File, rel string) []stri
 }
 
 // unsafeSlogAttrConstructor reports whether expr is a slog constructor whose
-// resulting Attr.Value carries a wire-unsafe kind (KindAny / KindGroup /
-// KindLogValuer). The detection is purely syntactic — selector match on
-// "slog.Any" / "slog.Group" / "slog.LogValue" — to keep this archtest free
-// of go/types loads.
+// resulting Attr.Value carries a wire-unsafe kind (KindAny / KindGroup).
+// Detection is purely syntactic — selector match on "slog.Any" / "slog.Group"
+// — to keep this archtest free of go/types loads.
+//
+// Note: KindLogValuer Attrs are constructed via slog.Any(key, logValuerImpl),
+// not via a top-level slog.LogValue function (the stdlib has no such symbol;
+// LogValue is a method on slog.Value, not a constructor). The "Any" branch
+// already covers that path.
 func unsafeSlogAttrConstructor(expr ast.Expr) (string, bool) {
 	call, ok := expr.(*ast.CallExpr)
 	if !ok {
@@ -167,7 +171,7 @@ func unsafeSlogAttrConstructor(expr ast.Expr) (string, bool) {
 		return "", false
 	}
 	switch sel.Sel.Name {
-	case "Any", "Group", "LogValue":
+	case "Any", "Group":
 		return sel.Sel.Name, true
 	}
 	return "", false

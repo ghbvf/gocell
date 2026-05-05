@@ -480,8 +480,8 @@ func TestRelay_AsManagedResource_RegistersCheckers(t *testing.T) {
 
 	var body map[string]any
 	require.NoError(t, json.NewDecoder(resp.Body).Decode(&body))
-	deps, ok := readyzPayload(t, body)["dependencies"].(map[string]any)
-	require.True(t, ok, "response must contain dependencies map")
+	deps, ok := readyzPayload200(t, body)["dependencies"].(map[string]any)
+	require.True(t, ok, "200 verbose response must contain dependencies map")
 
 	assert.Contains(t, deps, "outbox-relay-poll", "poll checker must be in /readyz?verbose")
 	assert.Contains(t, deps, "outbox-relay-reclaim", "reclaim checker must be in /readyz?verbose")
@@ -535,6 +535,8 @@ func TestRelay_AsManagedResource_TrippedBudget_Returns503(t *testing.T) {
 		WithHealthRoutes(WithReadyzVerboseToken(testVerboseToken)),
 	)
 
+	capture := withSlogCapture(t)
+
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() { done <- b.Run(ctx) }()
@@ -568,19 +570,18 @@ func TestRelay_AsManagedResource_TrippedBudget_Returns503(t *testing.T) {
 		return resp.StatusCode == http.StatusServiceUnavailable
 	}, testtime.EventuallyDefault, testtime.D20ms, "/readyz must return 503 after poll budget trips")
 
-	// Verify verbose output contains the unhealthy checker name.
+	// Verify verbose breakdown via slog (K#08 5xx redaction strips wire details).
 	verboseResp, err := verboseGet(ctx, fmt.Sprintf("http://%s", addr))
 	require.NoError(t, err)
 	defer closeBody(t, verboseResp)
 	assert.Equal(t, http.StatusServiceUnavailable, verboseResp.StatusCode)
 	var body map[string]any
 	require.NoError(t, json.NewDecoder(verboseResp.Body).Decode(&body))
-	details := assertReadyzServiceUnavailable(t, body, "unhealthy", "readiness_failed")
-	deps, ok := details["dependencies"].(map[string]any)
-	require.True(t, ok, "response must contain dependencies map")
-	require.Contains(t, deps, "outbox-relay-poll", "poll checker must appear in verbose output")
-	pollProbe, ok := deps["outbox-relay-poll"].(map[string]any)
-	require.True(t, ok, "outbox-relay-poll must be a structured ProbeResult")
+	assertReadyzServiceUnavailable(t, body)
+
+	deps := readyzUnhealthyDeps(t, capture)
+	require.Contains(t, deps, "outbox-relay-poll", "poll checker must appear in slog breakdown")
+	pollProbe := deps["outbox-relay-poll"]
 	assert.Equal(t, "unhealthy", pollProbe["status"], "outbox-relay-poll: status must be unhealthy")
 
 	// Phase 2: store recovers — budget resets — /readyz must return 200.
@@ -645,7 +646,7 @@ func TestRelay_AsManagedResource_DisabledBudget_SkipsChecker(t *testing.T) {
 
 	var body map[string]any
 	require.NoError(t, json.NewDecoder(resp.Body).Decode(&body))
-	deps, _ := readyzPayload(t, body)["dependencies"].(map[string]any)
+	deps, _ := readyzPayload200(t, body)["dependencies"].(map[string]any)
 
 	assert.NotContains(t, deps, "outbox-relay-poll",
 		"disabled poll budget must not register a checker")

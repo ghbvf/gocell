@@ -105,7 +105,9 @@ func UpgradeHandler(hub *rtws.Hub, cfg UpgradeConfig) (http.Handler, error) {
 	}
 	if cfg.Authenticator == nil {
 		return nil, errcode.New(errcode.KindInternal, errcode.ErrWebsocketAuthenticatorMissing,
-			"websocket: UpgradeHandler Authenticator must not be nil (SEC-FAIL-CLOSED); use auth.NewAnonymousAuthenticator() for explicit unauthenticated endpoints")
+			"websocket: UpgradeHandler Authenticator must not be nil "+
+				"(SEC-FAIL-CLOSED); use auth.NewAnonymousAuthenticator() for "+
+				"explicit unauthenticated endpoints")
 	}
 	if err := cfg.Validate(); err != nil {
 		return nil, err

@@ -24,7 +24,7 @@ func CallWrapWithSprintfMessage(cause error, tenant string) error {
 // CallNewWithConcatenation violates MESSAGE-CONST-LITERAL-01 via string +
 // concatenation in the message argument.
 func CallNewWithConcatenation(resource string) error {
-	return errcode.New(errcode.KindNotFound, errcode.ErrNotFound,
+	return errcode.New(errcode.KindNotFound, errcode.ErrCellNotFound,
 		"resource " + resource + " not found")
 }
 

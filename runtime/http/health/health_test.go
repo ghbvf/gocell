@@ -61,36 +61,40 @@ func withSlogCapture(t *testing.T) *captureHandler {
 }
 
 // readyzUnhealthyDeps fetches the verbose-breakdown dependencies map from
-// the captured "readyz unhealthy" slog record. Tests assert on this rather
+// the captured "readyz unhealthy" slog records. Tests assert on this rather
 // than on the 503 wire body because K#08 5xx redaction strips Details from
 // the public envelope; verbose breakdown lives only in server-side logs.
+//
+// Multiple "readyz unhealthy" records may accumulate (e.g. when a test
+// polls /readyz non-verbose before issuing the verbose request). Non-verbose
+// records carry only status/reason; verbose records add cells/dependencies/
+// adapters. We return the first record whose dependencies attr is non-nil.
 func readyzUnhealthyDeps(t *testing.T, capture *captureHandler) map[string]map[string]any {
 	t.Helper()
 	const (
 		recMsg  = "readyz unhealthy"
 		attrKey = "dependencies"
 	)
-	var rec503 slog.Record
-	var found bool
 	for _, r := range capture.snapshot() {
-		if r.Message == recMsg {
-			rec503 = r
-			found = true
-			break
+		if r.Message != recMsg {
+			continue
+		}
+		var depsAttr slog.Value
+		r.Attrs(func(a slog.Attr) bool {
+			if a.Key == attrKey {
+				depsAttr = a.Value
+				return false
+			}
+			return true
+		})
+		deps, ok := depsAttr.Any().(map[string]map[string]any)
+		if ok && deps != nil {
+			return deps
 		}
 	}
-	require.True(t, found, "verbose 503 must emit slog record %q", recMsg)
-	var depsAttr slog.Value
-	rec503.Attrs(func(a slog.Attr) bool {
-		if a.Key == attrKey {
-			depsAttr = a.Value
-			return false
-		}
-		return true
-	})
-	deps, ok := depsAttr.Any().(map[string]map[string]any)
-	require.True(t, ok, "verbose breakdown must include %q map in slog", attrKey)
-	return deps
+	t.Fatalf("no verbose %q slog record with non-nil %q map; capture had %d records",
+		recMsg, attrKey, len(capture.snapshot()))
+	return nil
 }
 
 // stubCell is a minimal Cell implementation for testing.
@@ -469,6 +473,7 @@ func TestReadyzHandler_DefaultOutput_UnhealthyAggregate(t *testing.T) {
 	h := New(asm, clock.Real())
 	require.NoError(t, h.RegisterChecker("db", func(_ context.Context) error { return fmt.Errorf("connection refused") }))
 
+	capture := withSlogCapture(t)
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/readyz", nil)
 	h.ReadyzHandler().ServeHTTP(rec, req)
@@ -477,6 +482,32 @@ func TestReadyzHandler_DefaultOutput_UnhealthyAggregate(t *testing.T) {
 
 	errObj := errorBody(t, rec)
 	assertReadyzServiceUnavailable(t, errObj)
+
+	// Non-verbose 503: status/reason ride on slog; cells/dependencies/adapters
+	// are intentionally suppressed at this level so high-frequency k8s probes
+	// don't spam log backends. logUnhealthy is the only diagnostic surface
+	// for non-verbose 503 — verify it actually emitted with the right fields.
+	const recMsg = "readyz unhealthy"
+	var found bool
+	for _, r := range capture.snapshot() {
+		if r.Message != recMsg {
+			continue
+		}
+		found = true
+		var statusVal, reasonVal slog.Value
+		r.Attrs(func(a slog.Attr) bool {
+			switch a.Key {
+			case "status":
+				statusVal = a.Value
+			case "reason":
+				reasonVal = a.Value
+			}
+			return true
+		})
+		assert.Equal(t, "unhealthy", statusVal.String(), "non-verbose 503 slog must carry status")
+		assert.Equal(t, "readiness_failed", reasonVal.String(), "non-verbose 503 slog must carry reason")
+	}
+	require.True(t, found, "non-verbose 503 must still emit %q slog record (status/reason only)", recMsg)
 	// Empty-array contract above subsumes the prior negative assertions:
 	// non-verbose unhealthy 503 cannot expose cells/dependencies because the
 	// canonical envelope mandates an empty details array regardless of

@@ -461,9 +461,18 @@ func (r readyzResult) writeTo(ctx context.Context, w http.ResponseWriter) {
 	}
 }
 
-// logUnhealthy emits the verbose breakdown to slog so operators retain the
+// logUnhealthy emits the readiness breakdown to slog so operators retain the
 // diagnostic data that previously lived in the 503 wire body. Public 503
 // responses always carry an empty details array (K#08 5xx strip).
+//
+// Level is Warn per observability.md: an unhealthy dependency is a degraded
+// run condition (the system itself isn't broken — a downstream is). Error
+// level is reserved for "影响正确性" (DB write failure, ACK loss, state
+// machine violation, security event); a failed readiness probe doesn't fit.
+//
+// Cells/dependencies/adapters maps are appended only on verbose probes so
+// that high-frequency k8s readiness probes (typically every 5s) don't spam
+// log backends with full breakdown when only status/reason are actionable.
 func (r readyzResult) logUnhealthy(reason string) {
 	attrs := []any{
 		slog.String("status", r.overall),
@@ -476,7 +485,7 @@ func (r readyzResult) logUnhealthy(reason string) {
 			slog.Any("adapters", r.adapters),
 		)
 	}
-	slog.Error("readyz unhealthy", attrs...)
+	slog.Warn("readyz unhealthy", attrs...)
 }
 
 // writeReadyz503 emits the canonical errcode 503 envelope shared with all
