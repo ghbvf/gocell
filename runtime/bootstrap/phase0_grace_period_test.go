@@ -7,9 +7,7 @@ package bootstrap
 
 import (
 	"bytes"
-	"encoding/json"
 	"log/slog"
-	"strings"
 	"testing"
 	"time"
 
@@ -96,46 +94,63 @@ func TestPhase0_TerminationGracePeriodWarn(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			var buf bytes.Buffer
-			logger := slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn}))
-			oldDefault := slog.Default()
-			slog.SetDefault(logger)
-			t.Cleanup(func() { slog.SetDefault(oldDefault) })
-
-			b := &Bootstrap{
-				shutdownTimeout:        graceShutdownTimeout,
-				preShutdownDelay:       gracePreShutdownDelay,
-				terminationGracePeriod: tc.terminationGrace,
-			}
-
-			b.warnTerminationGracePeriodInsufficient()
-
-			out := buf.String()
+			out := captureGraceWarn(t, tc.terminationGrace)
 			if tc.wantWarn {
-				require.NotEmpty(t, out, "expected warn record but log is empty")
-				for _, sub := range tc.wantWarnSubstrings {
-					assert.Contains(t, out, sub,
-						"warn record missing required substring %q in output:\n%s", sub, out)
-				}
-				// Cross-check structured field shape: at least one valid JSON record
-				// containing the level=WARN and msg field.
-				dec := json.NewDecoder(strings.NewReader(out))
-				var sawWarn bool
-				for dec.More() {
-					var rec map[string]any
-					require.NoError(t, dec.Decode(&rec))
-					if rec["level"] == "WARN" {
-						sawWarn = true
-						break
-					}
-				}
-				assert.True(t, sawWarn, "no slog level=WARN record found:\n%s", out)
-			} else if tc.forbidWarnSubstring != "" {
-				assert.NotContains(t, out, tc.forbidWarnSubstring,
-					"unexpected warn-related output for %q case:\n%s", tc.name, out)
+				assertGraceWarnEmitted(t, out, tc.wantWarnSubstrings)
+			} else {
+				assertGraceWarnAbsent(t, out, tc.forbidWarnSubstring)
 			}
 		})
 	}
+}
+
+// captureGraceWarn installs a JSON slog handler, invokes
+// warnTerminationGracePeriodInsufficient with the shared shutdown/pre-delay
+// scaffolding plus the supplied terminationGracePeriod, and returns the
+// captured log output. Cleanup restores the previous default logger.
+func captureGraceWarn(t *testing.T, terminationGrace time.Duration) string {
+	t.Helper()
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn}))
+	oldDefault := slog.Default()
+	slog.SetDefault(logger)
+	t.Cleanup(func() { slog.SetDefault(oldDefault) })
+
+	b := &Bootstrap{
+		shutdownTimeout:        graceShutdownTimeout,
+		preShutdownDelay:       gracePreShutdownDelay,
+		terminationGracePeriod: terminationGrace,
+	}
+	b.warnTerminationGracePeriodInsufficient()
+	return buf.String()
+}
+
+// assertGraceWarnEmitted asserts every required substring is present in out
+// and that the captured slog record carries level=WARN. The handler is
+// configured at LevelWarn so anything emitted IS warn-or-higher; the
+// substring check on `"level":"WARN"` confirms the level explicitly without
+// re-decoding the JSON record.
+func assertGraceWarnEmitted(t *testing.T, out string, required []string) {
+	t.Helper()
+	require.NotEmpty(t, out, "expected warn record but log is empty")
+	for _, sub := range required {
+		assert.Contains(t, out, sub,
+			"warn record missing required substring %q in output:\n%s", sub, out)
+	}
+	assert.Contains(t, out, `"level":"WARN"`,
+		"expected slog level=WARN record:\n%s", out)
+}
+
+// assertGraceWarnAbsent asserts that no warn-related output mentioning the
+// forbidden substring leaked into the captured log. Empty forbidden value
+// (no substring asserted) is a no-op.
+func assertGraceWarnAbsent(t *testing.T, out, forbidden string) {
+	t.Helper()
+	if forbidden == "" {
+		return
+	}
+	assert.NotContains(t, out, forbidden,
+		"unexpected warn-related output:\n%s", out)
 }
 
 // TestPhase0_TerminationGracePeriodWarn_DoesNotBlockStartup verifies the
