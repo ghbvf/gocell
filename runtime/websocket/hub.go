@@ -13,6 +13,7 @@ import (
 	kernellifecycle "github.com/ghbvf/gocell/kernel/lifecycle"
 	"github.com/ghbvf/gocell/kernel/worker"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/logutil"
 	"github.com/ghbvf/gocell/runtime/auth"
 )
 
@@ -56,6 +57,11 @@ type HubConfig struct {
 	PingMissMax int
 	// MaxConnections is the maximum number of concurrent connections.
 	// 0 means unlimited. Default: 0.
+	//
+	// SECURITY: Production deployments MUST set an explicit cap to prevent
+	// goroutine exhaustion (each connection runs 2 goroutines: readLoop +
+	// writeLoop). Recommended starting value: expected concurrent sessions
+	// + 20% headroom. Token-authenticated unlimited capacity is a DoS path.
 	MaxConnections int
 	// Clock is the time source. Required; NewHub panics if nil.
 	Clock clock.Clock
@@ -340,7 +346,9 @@ func (h *Hub) shutdown(ctx context.Context) error {
 	case <-done:
 		slog.Info("websocket hub: stopped")
 	case <-ctx.Done():
-		slog.Error("websocket hub: stop timed out, hub is poisoned")
+		slog.Error("websocket hub: stop timed out, hub is poisoned",
+			slog.Any("error", ctx.Err()),
+		)
 		err = ctx.Err()
 	}
 
@@ -396,7 +404,7 @@ func closeEntriesConcurrently(ctx context.Context, entries []*connEntry, limit i
 			if err := e.conn.Close(); err != nil {
 				slog.Warn("websocket hub: close connection failed",
 					slog.String("conn_id", e.conn.ID()),
-					slog.String("remote_addr", e.conn.RemoteAddr()),
+					slog.String("remote_addr", logutil.SafeAddr(e.conn.RemoteAddr())),
 					slog.Any("error", err),
 				)
 			}
@@ -494,14 +502,15 @@ func (h *Hub) Register(ctx context.Context, conn Conn) error {
 		_ = evicted.conn.Close()
 		slog.Warn("websocket hub: evicted duplicate conn",
 			slog.String("conn_id", conn.ID()),
-			slog.String("remote_addr", evicted.conn.RemoteAddr()),
+			slog.String("remote_addr", logutil.SafeAddr(evicted.conn.RemoteAddr())),
 			slog.String("reason", "duplicate_conn_id"),
 		)
 	}
 
 	slog.Info("websocket hub: connection registered",
 		slog.String("conn_id", conn.ID()),
-		slog.String("remote_addr", conn.RemoteAddr()),
+		slog.String("remote_addr", logutil.SafeAddr(conn.RemoteAddr())),
+		slog.String("subject", entry.subject),
 	)
 
 	go func() {
@@ -807,6 +816,9 @@ func (h *Hub) Close(ctx context.Context) error {
 	}
 	var ec *errcode.Error
 	if errors.As(err, &ec) && ec.Code == errcode.ErrWSAlreadyStopped {
+		slog.Debug("websocket hub: Close called on already-stopped hub",
+			slog.String("error", err.Error()),
+		)
 		return nil
 	}
 	return err
@@ -938,7 +950,7 @@ func (h *Hub) evictWith(entry *connEntry, reason string, level slog.Level, evict
 	}
 	slog.LogAttrs(context.Background(), level, evictMsg,
 		slog.String("conn_id", connID),
-		slog.String("remote_addr", entry.conn.RemoteAddr()),
+		slog.String("remote_addr", logutil.SafeAddr(entry.conn.RemoteAddr())),
 		slog.String("subject", entry.subject),
 		slog.String("reason", reason),
 	)
@@ -963,15 +975,10 @@ func (h *Hub) handlePingResult(connID string, pingErr error) {
 	}
 	current.pingMisses++
 	if current.pingMisses >= h.config.PingMissMax {
-		h.removeConnLocked(current)
 		h.connMu.Unlock()
-		slog.Warn("websocket hub: ping threshold exceeded, removing connection",
-			slog.String("conn_id", connID),
-			slog.Int("misses", current.pingMisses),
-		)
-		current.cancel()
-		current.closeOnce.Do(func() { close(current.done) })
-		_ = current.conn.Close()
+		h.evictWith(current, "ping_threshold_exceeded", slog.LevelWarn,
+			"websocket hub: ping threshold exceeded, removing connection",
+			"websocket hub: close on ping-miss evict")
 		return
 	}
 	h.connMu.Unlock()
