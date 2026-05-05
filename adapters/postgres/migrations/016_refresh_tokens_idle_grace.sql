@@ -38,19 +38,20 @@
 -- +goose StatementBegin
 DO $$
 DECLARE
+    refresh_table_name CONSTANT TEXT := 'refresh_tokens';
     row_count BIGINT;
     existing_default TEXT;
 BEGIN
-    IF to_regclass('refresh_tokens') IS NULL THEN
+    IF to_regclass(refresh_table_name) IS NULL THEN
         RETURN;
     END IF;
 
     SELECT pg_get_expr(d.adbin, d.adrelid)
       INTO existing_default
       FROM pg_attribute a
-      JOIN pg_class c ON c.oid = a.attrelid
-      LEFT JOIN pg_attrdef d ON d.adrelid = a.attrelid AND d.adnum = a.attnum
-     WHERE c.oid = to_regclass('refresh_tokens')
+     JOIN pg_class c ON c.oid = a.attrelid
+     LEFT JOIN pg_attrdef d ON d.adrelid = a.attrelid AND d.adnum = a.attnum
+     WHERE c.oid = to_regclass(refresh_table_name)
        AND a.attname = 'idle_expires_at'
        AND NOT a.attisdropped;
 
@@ -65,7 +66,7 @@ BEGIN
            SELECT 1
              FROM information_schema.columns
             WHERE table_schema = current_schema()
-              AND table_name = 'refresh_tokens'
+              AND table_name = refresh_table_name
               AND column_name = 'idle_expires_at'
        ) THEN
         SELECT count(*) INTO row_count FROM refresh_tokens;
