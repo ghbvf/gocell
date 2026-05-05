@@ -192,17 +192,22 @@
                     "properties": {
                       "public": {
                         "type": "boolean",
-                        "description": "If true, route is mounted as public (no JWT required). auth.Route{Public: true} is emitted by RegisterRoutes. Mutually exclusive with passwordResetExempt."
+                        "description": "If true, route is mounted as public (no JWT required). auth.Route{Public: true} is emitted by RegisterRoutes. Mutually exclusive with passwordResetExempt and bootstrap."
                       },
                       "passwordResetExempt": {
                         "type": "boolean",
-                        "description": "If true, route bypasses the force-password-reset gate. auth.Route{PasswordResetExempt: true} is emitted. Mutually exclusive with public."
+                        "description": "If true, route bypasses the force-password-reset gate. auth.Route{PasswordResetExempt: true} is emitted. Mutually exclusive with public and bootstrap."
+                      },
+                      "bootstrap": {
+                        "type": "boolean",
+                        "description": "If true, route is protected by HTTP Basic Auth using GOCELL_BOOTSTRAP_ADMIN_USERNAME/PASSWORD env credentials. auth.Route{Bootstrap: true} is emitted by RegisterRoutes. Mutually exclusive with public and passwordResetExempt. FMT-28 limits to setup/admin paths."
                       }
                     },
-                    "not": {
-                      "required": ["public", "passwordResetExempt"],
-                      "description": "auth.public and auth.passwordResetExempt are mutually exclusive. Declaring both simultaneously is always a configuration error: public skips JWT entirely while passwordResetExempt still requires a valid JWT. ref: JSON Schema 2020-12 §10.2.1 not/required."
-                    }
+                    "allOf": [
+                      {"not": {"required": ["public", "bootstrap"]}, "description": "auth.public and auth.bootstrap are mutually exclusive."},
+                      {"not": {"required": ["public", "passwordResetExempt"]}, "description": "auth.public and auth.passwordResetExempt are mutually exclusive."},
+                      {"not": {"required": ["bootstrap", "passwordResetExempt"]}, "description": "auth.bootstrap and auth.passwordResetExempt are mutually exclusive."}
+                    ]
                   }
                 }
               }

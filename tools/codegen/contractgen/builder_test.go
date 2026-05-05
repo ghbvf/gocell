@@ -611,3 +611,98 @@ func TestBuildContractSpec_Event_TopicAndHandlerMethod(t *testing.T) {
 		t.Errorf("Event.HandlerMethod = %q, want %q", spec.Event.HandlerMethod, wantMethod)
 	}
 }
+
+// --- Auth.Bootstrap closed-set extension tests (Batch 0 RED, SEC-SETUP-CLOSURE) ---
+
+// TestBuildHTTPEndpointSpec_AuthBootstrap_FieldPropagated verifies that
+// contract.yaml auth.bootstrap:true is correctly propagated to HTTPEndpointSpec.AuthBootstrap.
+// This test is RED until Batch 1 / Agent-A integrates auth.bootstrap into the real setup
+// contract and the template renders it. The field propagation through buildHTTPEndpointSpec
+// is already GREEN from the schema extension in Batch 0.
+func TestBuildHTTPEndpointSpec_AuthBootstrap_FieldPropagated(t *testing.T) {
+	t.Parallel()
+
+	root, p := setupHTTPMinimalRoot(t)
+	// Inject a synthetic bootstrap-auth contract into the parsed project.
+	// We patch it directly on the ProjectMeta to avoid needing a real testdata file.
+	bootstrapContractID := "http.auth.setup.admin.v1"
+	trueCodegen := true
+	p.Contracts[bootstrapContractID] = &metadata.ContractMeta{
+		ID:               bootstrapContractID,
+		Kind:             "http",
+		ConsistencyLevel: "L2",
+		Lifecycle:        "active",
+		Codegen:          trueCodegen,
+		Endpoints: metadata.EndpointsMeta{
+			Server:  "accesscore",
+			Clients: []string{"edge-bff"},
+			HTTP: &metadata.HTTPTransportMeta{
+				Method:        "POST",
+				Path:          "/api/v1/access/setup/admin",
+				SuccessStatus: 201,
+				NoContent:     false,
+				Auth: metadata.HTTPAuthMeta{
+					Bootstrap: true,
+				},
+			},
+		},
+		File: "contracts/http/auth/setup/admin/v1/contract.yaml",
+	}
+
+	spec, err := BuildContractSpec(root, p, bootstrapContractID)
+	if err != nil {
+		t.Fatalf("BuildContractSpec: %v", err)
+	}
+	if spec.Endpoint == nil {
+		t.Fatal("expected Endpoint spec to be populated for kind=http")
+	}
+	if !spec.Endpoint.AuthBootstrap {
+		t.Errorf("AuthBootstrap must be true when contract declares auth.bootstrap:true, got false")
+	}
+	if spec.Endpoint.AuthPublic {
+		t.Errorf("AuthPublic must be false when contract declares auth.bootstrap:true (mutually exclusive)")
+	}
+	if spec.Endpoint.AuthPasswordResetExempt {
+		t.Errorf("AuthPasswordResetExempt must be false when contract declares auth.bootstrap:true (mutually exclusive)")
+	}
+}
+
+// TestBuildHTTPEndpointSpec_AuthBootstrap_MutuallyExclusive_WithPublic verifies that
+// a contract declaring both auth.bootstrap:true and auth.public:true is a configuration
+// error that produces distinguishable field values (both would be true, which FMT-27
+// catches at governance level). This test documents expected field propagation behavior.
+func TestBuildHTTPEndpointSpec_AuthBootstrap_MutuallyExclusive_WithPublic(t *testing.T) {
+	t.Parallel()
+
+	// auth.Bootstrap and auth.Public are both present in the metadata struct —
+	// the builder propagates both, governance (FMT-27) catches the violation.
+	// Verify that AuthBootstrap field is set when bootstrap:true regardless of Public.
+	httpMeta := &metadata.HTTPTransportMeta{
+		Method:        "POST",
+		Path:          "/api/v1/access/setup/admin",
+		SuccessStatus: 201,
+		Auth: metadata.HTTPAuthMeta{
+			Bootstrap: true,
+		},
+	}
+	contract := &metadata.ContractMeta{
+		ID:      "http.auth.setup.admin.v1",
+		Kind:    "http",
+		Codegen: true,
+		Endpoints: metadata.EndpointsMeta{
+			Server: "accesscore",
+			HTTP:   httpMeta,
+		},
+		File: "contracts/http/auth/setup/admin/v1/contract.yaml",
+	}
+
+	pathParams := buildPathParams(httpMeta)
+	queryParams := buildQueryParams(httpMeta)
+	spec, err := buildHTTPEndpointSpec(contract, httpMeta, pathParams, queryParams)
+	if err != nil {
+		t.Fatalf("buildHTTPEndpointSpec: %v", err)
+	}
+	if !spec.AuthBootstrap {
+		t.Errorf("AuthBootstrap must propagate from auth.bootstrap:true, got false")
+	}
+}

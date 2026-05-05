@@ -581,3 +581,126 @@ func validateStaticCheckStep(step workflowStep) error {
 	}
 	return nil
 }
+
+// --- SEC-SETUP-CLOSURE RED tests (Batch 0, tests 17-18) ---
+// These tests verify that the three codegen verify steps move from build-test
+// into a new independent verify-codegen job (no needs: build-test).
+// They are RED because the workflow currently has all three steps inside
+// build-test, and no verify-codegen job exists yet.
+// After the workflow migration (Batch 1 / Agent-C), they will turn GREEN.
+
+// codegenStepNames are the three step names that must live in verify-codegen,
+// not in build-test, after the SEC-SETUP-CLOSURE workflow refactor.
+var codegenStepNames = []string{
+	"Verify generated artifacts are up-to-date",
+	"Verify cell codegen (K#04)",
+	"Verify contract codegen (K#06)",
+}
+
+// TestVerifyCodegenJobIsIndependent asserts:
+//  1. jobs.verify-codegen exists in _build-lint.yml
+//  2. jobs.verify-codegen.needs does NOT contain "build-test" (runs in parallel)
+//  3. jobs.build-test does NOT contain any of the three codegen verify steps
+//  4. jobs.verify-codegen contains all three codegen verify steps
+//
+// RED: verify-codegen job does not exist yet; all three steps are in build-test.
+func TestVerifyCodegenJobIsIndependent(t *testing.T) {
+	root := findModuleRoot(t)
+	body, err := os.ReadFile(filepath.Clean(filepath.Join(root, ".github", "workflows", "_build-lint.yml")))
+	require.NoError(t, err)
+
+	require.NoError(t, validateCodegenJobStructure(body))
+}
+
+// TestVerifyCodegenGateRejectsStepsInBuildTest is a negative-fixture unit test
+// for validateCodegenJobStructure. It verifies the checker correctly flags a
+// workflow where the three steps remain in build-test.
+// This test itself is GREEN (it validates checker logic); the real-workflow
+// assertion above (TestVerifyCodegenJobIsIndependent) is RED.
+func TestVerifyCodegenGateRejectsStepsInBuildTest(t *testing.T) {
+	// Fixture: three codegen steps are still in build-test, no verify-codegen job.
+	body := []byte(`jobs:
+  build-test:
+    steps:
+      - name: Verify generated artifacts are up-to-date
+        if: matrix.static_checks
+        run: go run ./cmd/gocell verify generated
+      - name: Verify cell codegen (K#04)
+        if: matrix.static_checks
+        run: ./hack/verify-codegen-cell.sh
+      - name: Verify contract codegen (K#06)
+        if: matrix.static_checks
+        run: ./hack/verify-codegen-contract.sh
+`)
+	require.Error(t, validateCodegenJobStructure(body),
+		"checker must reject when codegen steps are still in build-test")
+}
+
+// workflowJobWithNeeds extends workflowJob with a Needs field for the
+// verify-codegen independence check.
+type workflowJobWithNeeds struct {
+	Needs interface{}    `yaml:"needs"`
+	Steps []workflowStep `yaml:"steps"`
+}
+
+type workflowConfigWithNeeds struct {
+	Jobs map[string]workflowJobWithNeeds `yaml:"jobs"`
+}
+
+// validateCodegenJobStructure enforces the SEC-SETUP-CLOSURE CI split:
+//   - verify-codegen job must exist
+//   - verify-codegen must not depend on build-test (parallel execution)
+//   - build-test must not contain any of the three codegen verify steps
+//   - verify-codegen must contain all three codegen verify steps
+func validateCodegenJobStructure(body []byte) error {
+	var cfg workflowConfigWithNeeds
+	dec := yaml.NewDecoder(bytes.NewReader(body))
+	if err := dec.Decode(&cfg); err != nil {
+		return fmt.Errorf("parse _build-lint.yml: %w", err)
+	}
+
+	// 1. verify-codegen job must exist.
+	vcJob, ok := cfg.Jobs["verify-codegen"]
+	if !ok {
+		return fmt.Errorf("verify-codegen job missing from _build-lint.yml")
+	}
+
+	// 2. verify-codegen must not depend on build-test.
+	if jobNeeds(vcJob.Needs, "build-test") {
+		return fmt.Errorf("verify-codegen must not have needs: build-test (must run in parallel)")
+	}
+
+	// 3. build-test must not contain the three codegen steps.
+	if btJob, hasBT := cfg.Jobs["build-test"]; hasBT {
+		for _, stepName := range codegenStepNames {
+			if _, found := findWorkflowStep(btJob.Steps, stepName); found {
+				return fmt.Errorf("build-test must not contain step %q (must move to verify-codegen)", stepName)
+			}
+		}
+	}
+
+	// 4. verify-codegen must contain all three codegen steps.
+	for _, stepName := range codegenStepNames {
+		if _, found := findWorkflowStep(vcJob.Steps, stepName); !found {
+			return fmt.Errorf("verify-codegen must contain step %q", stepName)
+		}
+	}
+
+	return nil
+}
+
+// jobNeeds reports whether the given needs value (string, []interface{}, or nil)
+// contains the target job name.
+func jobNeeds(needs interface{}, target string) bool {
+	switch v := needs.(type) {
+	case string:
+		return v == target
+	case []interface{}:
+		for _, item := range v {
+			if s, ok := item.(string); ok && s == target {
+				return true
+			}
+		}
+	}
+	return false
+}

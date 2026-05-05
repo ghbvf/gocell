@@ -988,3 +988,30 @@ func hasNextCursorProperty(info responseSchemaInfo) bool {
 func hasNextCursorInRequired(info responseSchemaInfo) bool {
 	return slices.Contains(info.Required, "nextCursor")
 }
+
+const codeFMT27 = "FMT-27"
+const codeFMT28 = "FMT-28"
+
+// validateFMT27 checks that auth.public, auth.bootstrap, and auth.passwordResetExempt
+// are three-way mutually exclusive on HTTP contract auth metadata.
+//
+// Stub — not yet implemented. Returns nil. To be implemented in Batch 1 / Agent-B.
+// Tests TestFMT27_* in rules_fmt_test.go are RED until this method returns violations.
+func (v *Validator) validateFMT27() []ValidationResult {
+	// TODO(SEC-SETUP-CLOSURE Batch 1 Agent-B): implement three-way mutual exclusivity check.
+	// Violations: (public+bootstrap), (public+passwordResetExempt), (bootstrap+passwordResetExempt).
+	return nil
+}
+
+// validateFMT28 checks that auth.bootstrap:true is only allowed on HTTP contracts
+// whose path contains "setup/admin". Bootstrap credentials are exclusively for
+// the first-admin setup endpoint; enabling bootstrap auth on other paths would
+// expose env credentials in unintended contexts.
+//
+// Stub — not yet implemented. Returns nil. To be implemented in Batch 1 / Agent-B.
+// Tests TestFMT28_* in rules_fmt_test.go are RED until this method returns violations.
+func (v *Validator) validateFMT28() []ValidationResult {
+	// TODO(SEC-SETUP-CLOSURE Batch 1 Agent-B): implement path restriction check.
+	// Violation: auth.bootstrap:true on path not containing "setup/admin".
+	return nil
+}

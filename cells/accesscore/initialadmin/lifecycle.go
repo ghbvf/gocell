@@ -104,6 +104,27 @@ func WithScheduler(s Scheduler) LifecycleOption { return func(l *Lifecycle) { l.
 // WithClock overrides the clock (tests use clockmock.FakeClock).
 func WithClock(c clock.Clock) LifecycleOption { return func(l *Lifecycle) { l.cfg.Clock = c } }
 
+// BootstrapCredentials holds the env-driven credentials for the initial admin lifecycle.
+// Mirrors runtime/auth.BootstrapCredentials but defined here to avoid a circular import
+// (runtime/auth must not depend on cells/).
+// Batch 2 / Agent-D will wire the two types together at the composition root.
+type BootstrapCredentials struct {
+	Username []byte
+	Password []byte
+}
+
+// WithBootstrapCredentials injects env-driven credentials for the initial admin.
+// When set, the Lifecycle uses the provided username/password instead of generating
+// a random password and writing it to a credential file (D3: credfile → env migration).
+//
+// Stub — not yet implemented. To be implemented in Batch 2 / Agent-D.
+// Tests TestLifecycle_EnvDriven_* in envdriven_test.go are RED until implemented.
+func WithBootstrapCredentials(_ BootstrapCredentials) LifecycleOption {
+	return func(_ *Lifecycle) {
+		panic("WithBootstrapCredentials: not implemented; see Batch 2 / Agent-D")
+	}
+}
+
 // NewLifecycle constructs a Lifecycle with the given options. Defaults:
 // Username="admin", CredentialPath resolved at start-time, TTL=24h,
 // PasswordSource=crypto/rand.Reader, Hasher=bcrypt cost=12.

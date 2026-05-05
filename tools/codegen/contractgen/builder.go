@@ -235,6 +235,7 @@ func buildHTTPEndpointSpec(
 		Clients:                 clients,
 		AuthPublic:              http.Auth.Public,
 		AuthPasswordResetExempt: http.Auth.PasswordResetExempt,
+		AuthBootstrap:           http.Auth.Bootstrap,
 	}
 	spec.PathParams = pathParams
 	spec.QueryParams = queryParams

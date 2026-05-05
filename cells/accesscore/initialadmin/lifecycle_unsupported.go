@@ -30,6 +30,13 @@ func WithPasswordHasher(PasswordHasher) LifecycleOption      { return func(*Life
 func WithPasswordSourceForTesting(io.Reader) LifecycleOption { return func(*Lifecycle) {} }
 func WithScheduler(Scheduler) LifecycleOption                { return func(*Lifecycle) {} }
 func WithClock(clock.Clock) LifecycleOption                  { return func(*Lifecycle) {} }
+func WithBootstrapCredentials(BootstrapCredentials) LifecycleOption { return func(*Lifecycle) {} }
+
+// BootstrapCredentials is the unsupported-platform stub of the same type in lifecycle.go.
+type BootstrapCredentials struct {
+	Username []byte
+	Password []byte
+}
 
 // NewLifecycle returns a stub Lifecycle. cell.Init's PlatformSupported() check
 // surfaces the unsupported-platform failure before any method runs.

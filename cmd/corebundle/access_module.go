@@ -32,7 +32,17 @@ import (
 // Lifecycle that creates the admin; "interactive" leaves the provisioning job
 // to the HTTP endpoint. This removes the "double-owner" ambiguity where both
 // were wired simultaneously and whichever raced first won.
+//
+// Deprecated: replaced by SetupModeEnv in SEC-SETUP-CLOSURE (Batch 2).
 const AdminProvisionModeEnv = "GOCELL_ACCESSCORE_ADMIN_PROVISION_MODE"
+
+// SetupModeEnv is the canonical env var for admin provisioning mode, replacing
+// AdminProvisionModeEnv in SEC-SETUP-CLOSURE. Currently a stub pointing to the
+// old name. Batch 2 / Agent-D will rename the env var, delete AdminProvisionModeEnv,
+// and update resolveAdminProvisionMode to use this constant exclusively.
+//
+// TODO(SEC-SETUP-CLOSURE Batch 2): rename to GOCELL_SETUP_MODE and remove AdminProvisionModeEnv.
+const SetupModeEnv = "GOCELL_SETUP_MODE"
 
 const defaultRefreshGCRetention = 24 * time.Hour
 
@@ -170,6 +180,25 @@ func internalAddrToBaseURL(addr string) string {
 		return "http://127.0.0.1:" + after
 	}
 	return "http://" + addr
+}
+
+// BootstrapAdminCredentials holds the env-driven credentials for the initial
+// admin setup endpoint. To be wired in Batch 2 / Agent-D.
+type BootstrapAdminCredentials struct {
+	Username []byte
+	Password []byte
+}
+
+// loadBootstrapCredentials reads GOCELL_BOOTSTRAP_ADMIN_USERNAME and
+// GOCELL_BOOTSTRAP_ADMIN_PASSWORD from env, trims whitespace (K8s secret
+// files commonly append a trailing newline), and validates:
+//   - both set or both empty (XOR fail-fast)
+//   - username non-empty after trim + no control chars
+//   - password ≥ 8 bytes after trim
+//
+// To be implemented in Batch 2 / Agent-D. Currently a stub that panics.
+func loadBootstrapCredentials(username, password string) (BootstrapAdminCredentials, error) {
+	panic("loadBootstrapCredentials: not implemented; see Batch 2 / Agent-D")
 }
 
 func resolveAdminProvisionMode(raw string, forceBootstrap bool) (adminProvisionMode, error) {

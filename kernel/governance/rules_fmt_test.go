@@ -321,3 +321,204 @@ func TestFMT13_HTTPContractWithEndpoints(t *testing.T) {
 		}
 	}
 }
+
+// --- FMT-27 (auth.public/bootstrap/passwordResetExempt three-way mutually exclusive) ---
+// These tests are RED until validateFMT27 is implemented in Batch 1 / Agent-B.
+
+// TestFMT27_PublicAndBootstrapBothTrue verifies that a contract declaring both
+// auth.public:true and auth.bootstrap:true is rejected by FMT-27.
+// RED: validateFMT27 does not yet exist.
+func TestFMT27_PublicAndBootstrapBothTrue(t *testing.T) {
+	project := &metadata.ProjectMeta{
+		Cells:  map[string]*metadata.CellMeta{},
+		Slices: map[string]*metadata.SliceMeta{},
+		Contracts: map[string]*metadata.ContractMeta{
+			"http.auth.setup.admin.v1": {
+				ID:               "http.auth.setup.admin.v1",
+				Kind:             "http",
+				ConsistencyLevel: "L1",
+				Lifecycle:        "active",
+				Endpoints: metadata.EndpointsMeta{
+					Server:  "accesscore",
+					Clients: []string{"edge-bff"},
+					HTTP: &metadata.HTTPTransportMeta{
+						Method:        "POST",
+						Path:          "/api/v1/access/setup/admin",
+						SuccessStatus: 201,
+						Auth: metadata.HTTPAuthMeta{
+							Public:    true,
+							Bootstrap: true,
+						},
+					},
+				},
+				Dir:  "contracts/http/auth/setup/admin/v1",
+				File: "contracts/http/auth/setup/admin/v1/contract.yaml",
+			},
+		},
+		Journeys:   map[string]*metadata.JourneyMeta{},
+		Assemblies: map[string]*metadata.AssemblyMeta{},
+	}
+
+	v := NewValidator(project, "", clock.Real())
+
+	// validateFMT27 does not exist yet — RED: calling a method that panics
+	// or returns no results.
+	results := v.validateFMT27()
+
+	var fmt27Errors []ValidationResult
+	for _, r := range results {
+		if r.Code == "FMT-27" && r.Severity == SeverityError {
+			fmt27Errors = append(fmt27Errors, r)
+		}
+	}
+
+	if len(fmt27Errors) == 0 {
+		t.Fatal("FMT-27: expected error when both auth.public and auth.bootstrap are true, got none — " +
+			"validateFMT27 not yet implemented (Batch 1 Agent-B)")
+	}
+}
+
+// TestFMT27_BootstrapAndPasswordResetExemptBothTrue verifies that
+// auth.bootstrap:true + auth.passwordResetExempt:true is rejected by FMT-27.
+// RED: validateFMT27 does not yet exist.
+func TestFMT27_BootstrapAndPasswordResetExemptBothTrue(t *testing.T) {
+	project := &metadata.ProjectMeta{
+		Cells:  map[string]*metadata.CellMeta{},
+		Slices: map[string]*metadata.SliceMeta{},
+		Contracts: map[string]*metadata.ContractMeta{
+			"http.auth.bad.v1": {
+				ID:               "http.auth.bad.v1",
+				Kind:             "http",
+				ConsistencyLevel: "L1",
+				Lifecycle:        "active",
+				Endpoints: metadata.EndpointsMeta{
+					Server:  "accesscore",
+					Clients: []string{"edge-bff"},
+					HTTP: &metadata.HTTPTransportMeta{
+						Method:        "POST",
+						Path:          "/api/v1/access/setup/admin",
+						SuccessStatus: 201,
+						Auth: metadata.HTTPAuthMeta{
+							Bootstrap:           true,
+							PasswordResetExempt: true,
+						},
+					},
+				},
+				Dir:  "contracts/http/auth/bad/v1",
+				File: "contracts/http/auth/bad/v1/contract.yaml",
+			},
+		},
+		Journeys:   map[string]*metadata.JourneyMeta{},
+		Assemblies: map[string]*metadata.AssemblyMeta{},
+	}
+
+	v := NewValidator(project, "", clock.Real())
+	results := v.validateFMT27()
+
+	var fmt27Errors []ValidationResult
+	for _, r := range results {
+		if r.Code == "FMT-27" && r.Severity == SeverityError {
+			fmt27Errors = append(fmt27Errors, r)
+		}
+	}
+
+	if len(fmt27Errors) == 0 {
+		t.Fatal("FMT-27: expected error when both auth.bootstrap and auth.passwordResetExempt are true, got none — " +
+			"validateFMT27 not yet implemented (Batch 1 Agent-B)")
+	}
+}
+
+// --- FMT-28 (auth.bootstrap:true only allowed on setup/admin paths) ---
+// These tests are RED until validateFMT28 is implemented in Batch 1 / Agent-B.
+
+// TestFMT28_BootstrapOnNonSetupPath verifies that auth.bootstrap:true on a
+// path not containing "setup/admin" is rejected by FMT-28.
+// RED: validateFMT28 does not yet exist.
+func TestFMT28_BootstrapOnNonSetupAdminPath(t *testing.T) {
+	project := &metadata.ProjectMeta{
+		Cells:  map[string]*metadata.CellMeta{},
+		Slices: map[string]*metadata.SliceMeta{},
+		Contracts: map[string]*metadata.ContractMeta{
+			"http.some.endpoint.v1": {
+				ID:               "http.some.endpoint.v1",
+				Kind:             "http",
+				ConsistencyLevel: "L1",
+				Lifecycle:        "active",
+				Endpoints: metadata.EndpointsMeta{
+					Server:  "somecore",
+					Clients: []string{"edge-bff"},
+					HTTP: &metadata.HTTPTransportMeta{
+						Method:        "POST",
+						Path:          "/api/v1/some/other/endpoint",
+						SuccessStatus: 201,
+						Auth: metadata.HTTPAuthMeta{
+							Bootstrap: true,
+						},
+					},
+				},
+				Dir:  "contracts/http/some/endpoint/v1",
+				File: "contracts/http/some/endpoint/v1/contract.yaml",
+			},
+		},
+		Journeys:   map[string]*metadata.JourneyMeta{},
+		Assemblies: map[string]*metadata.AssemblyMeta{},
+	}
+
+	v := NewValidator(project, "", clock.Real())
+	results := v.validateFMT28()
+
+	var fmt28Errors []ValidationResult
+	for _, r := range results {
+		if r.Code == "FMT-28" && r.Severity == SeverityError {
+			fmt28Errors = append(fmt28Errors, r)
+		}
+	}
+
+	if len(fmt28Errors) == 0 {
+		t.Fatal("FMT-28: expected error when auth.bootstrap:true on non-setup/admin path, got none — " +
+			"validateFMT28 not yet implemented (Batch 1 Agent-B)")
+	}
+}
+
+// TestFMT28_BootstrapOnSetupAdminPath verifies that auth.bootstrap:true on a
+// path containing "setup/admin" is allowed by FMT-28 (no error).
+// RED: validateFMT28 does not yet exist so this will also fail to compile/run.
+func TestFMT28_BootstrapOnSetupAdminPath(t *testing.T) {
+	project := &metadata.ProjectMeta{
+		Cells:  map[string]*metadata.CellMeta{},
+		Slices: map[string]*metadata.SliceMeta{},
+		Contracts: map[string]*metadata.ContractMeta{
+			"http.auth.setup.admin.v1": {
+				ID:               "http.auth.setup.admin.v1",
+				Kind:             "http",
+				ConsistencyLevel: "L1",
+				Lifecycle:        "active",
+				Endpoints: metadata.EndpointsMeta{
+					Server:  "accesscore",
+					Clients: []string{"edge-bff"},
+					HTTP: &metadata.HTTPTransportMeta{
+						Method:        "POST",
+						Path:          "/api/v1/access/setup/admin",
+						SuccessStatus: 201,
+						Auth: metadata.HTTPAuthMeta{
+							Bootstrap: true,
+						},
+					},
+				},
+				Dir:  "contracts/http/auth/setup/admin/v1",
+				File: "contracts/http/auth/setup/admin/v1/contract.yaml",
+			},
+		},
+		Journeys:   map[string]*metadata.JourneyMeta{},
+		Assemblies: map[string]*metadata.AssemblyMeta{},
+	}
+
+	v := NewValidator(project, "", clock.Real())
+	results := v.validateFMT28()
+
+	for _, r := range results {
+		if r.Code == "FMT-28" && r.Severity == SeverityError {
+			t.Errorf("FMT-28: unexpected error for auth.bootstrap on valid setup/admin path: %v", r)
+		}
+	}
+}
