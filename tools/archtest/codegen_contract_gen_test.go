@@ -203,8 +203,8 @@ func mustParseProjectContracts(t *testing.T, root string) *metadata.ProjectMeta 
 	return p
 }
 
-// contractIDToExpectedPkgPath mirrors contractgen.contractIDToPackagePath logic
-// to convert a contract id to the expected generated package path.
+// contractIDToExpectedPkgPath converts a contract id to the expected generated
+// package path.
 // "http.order.create.v1" → "generated/contracts/http/order/create/v1".
 // "http.internal.foo.v1" → "generated/contracts/http/internalapi/foo/v1"
 // (the "internal" filesystem segment is rewritten to "internalapi" to satisfy

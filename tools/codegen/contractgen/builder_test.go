@@ -98,23 +98,6 @@ func TestDomainLastSegment(t *testing.T) {
 	}
 }
 
-func TestStripVersionSuffix(t *testing.T) {
-	cases := []struct {
-		in   string
-		want string
-	}{
-		{"event.order-created.v1", "event.order-created"},
-		{"http.order.create.v1", "http.order.create"},
-		{"event.item-created.v2", "event.item-created"},
-		{"event.order-created", "event.order-created"},
-	}
-	for _, c := range cases {
-		got := stripVersionSuffix(c.in)
-		if got != c.want {
-			t.Errorf("stripVersionSuffix(%q) = %q, want %q", c.in, got, c.want)
-		}
-	}
-}
 
 func TestPathParamNamesFromPath(t *testing.T) {
 	cases := []struct {
@@ -604,8 +587,8 @@ func TestBuildHTTPEndpointSpec_HasBody_PostWithRequestSchema(t *testing.T) {
 
 // TestBuildContractSpec_Event_TopicAndHandlerMethod verifies that BuildContractSpec
 // correctly populates the EventEndpointSpec.Topic and HandlerMethod fields for an
-// event contract. Topic is contractID with version suffix stripped
-// (stripVersionSuffix), HandlerMethod is "Handle" + PascalCase(domainLastSegment).
+// event contract. Topic == ContractID after PR-CODEGEN-FULL-MIGRATION-FU,
+// HandlerMethod is "Handle" + PascalCase(domainLastSegment).
 func TestBuildContractSpec_Event_TopicAndHandlerMethod(t *testing.T) {
 	t.Parallel()
 	root, p := setupEventRoot(t)
@@ -617,8 +600,8 @@ func TestBuildContractSpec_Event_TopicAndHandlerMethod(t *testing.T) {
 	if spec.Event == nil {
 		t.Fatal("expected Event spec to be populated for kind=event")
 	}
-	// stripVersionSuffix("event.item-created.v1") → "event.item-created"
-	wantTopic := "event.item-created"
+	// Topic == ContractID after PR-CODEGEN-FULL-MIGRATION-FU
+	wantTopic := "event.item-created.v1"
 	if spec.Event.Topic != wantTopic {
 		t.Errorf("Event.Topic = %q, want %q", spec.Event.Topic, wantTopic)
 	}

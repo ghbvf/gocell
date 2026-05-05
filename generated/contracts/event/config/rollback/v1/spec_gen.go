@@ -11,5 +11,5 @@ var spec = wrapper.ContractSpec{
 	ID:        "event.config.rollback.v1",
 	Kind:      "event",
 	Transport: "amqp",
-	Topic:     "event.config.rollback",
+	Topic:     "event.config.rollback.v1",
 }

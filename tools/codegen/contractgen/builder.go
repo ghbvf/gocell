@@ -8,6 +8,7 @@ import (
 	"unicode"
 
 	"github.com/ghbvf/gocell/kernel/metadata"
+	"github.com/ghbvf/gocell/tools/codegen/internal/pathx"
 )
 
 // BuildContractSpec projects a single contract.yaml + its schemaRefs into a
@@ -280,7 +281,7 @@ func buildEventSpec(spec *ContractGenSpec, rootDir string, contract *metadata.Co
 	spec.DTOs = allDTOs
 
 	// Build EventEndpointSpec.
-	topic := stripVersionSuffix(contract.ID)
+	topic := contract.ID
 	domainLast := domainLastSegment(contract.ID)
 	handlerMethod := "Handle" + goPascalCase(domainLast)
 
@@ -551,29 +552,10 @@ func isRequired(name string, required []string) bool {
 }
 
 // contractIDToPackagePath converts a contract id to a module-relative generated path.
-// "http.order.create.v1" → "generated/contracts/http/order/create/v1".
-// "event.order-created.v1" → "generated/contracts/event/order-created/v1".
-// "http.internal.foo.v1" → "generated/contracts/http/internalapi/foo/v1".
-//
-// The segment "internal" is rewritten to "internalapi" so that generated
-// packages under http/internal/... are importable from cells/ and examples/
-// (Go's internal package rule would otherwise block cross-directory imports).
-// Contract IDs (http.internal.X.v1) and URL prefixes (/internal/v1/...) are
-// unchanged — only the generated filesystem path segment is renamed.
-// ref: golang/go internal package rule (https://go.dev/ref/spec#Internal_packages)
+// Delegates to pathx.ContractIDToPackagePath — single source of truth shared
+// with cellgen and archtest.
 func contractIDToPackagePath(id string) string {
-	parts := strings.Split(id, ".")
-	// Rewrite any "internal" segment to "internalapi" to avoid Go's
-	// internal package restriction on generated package importers.
-	segments := make([]string, len(parts))
-	for i, p := range parts {
-		if p == "internal" {
-			segments[i] = "internalapi"
-		} else {
-			segments[i] = p
-		}
-	}
-	return "generated/contracts/" + strings.Join(segments, "/")
+	return pathx.ContractIDToPackagePath(id)
 }
 
 // pkgNameFromContractID derives the Go package name from a contract id.
@@ -620,32 +602,6 @@ func domainLastSegment(contractID string) string {
 	}
 	// Last part is version, second-to-last is the action.
 	return parts[len(parts)-2]
-}
-
-// stripVersionSuffix removes the trailing version segment from a contract id.
-// "event.order-created.v1" → "event.order-created".
-func stripVersionSuffix(id string) string {
-	parts := strings.Split(id, ".")
-	if len(parts) < 2 {
-		return id
-	}
-	last := parts[len(parts)-1]
-	if isVersionSegment(last) {
-		return strings.Join(parts[:len(parts)-1], ".")
-	}
-	return id
-}
-
-func isVersionSegment(s string) bool {
-	if len(s) < 2 || s[0] != 'v' {
-		return false
-	}
-	for _, r := range s[1:] {
-		if r < '0' || r > '9' {
-			return false
-		}
-	}
-	return true
 }
 
 // commonInitialisms is the set of well-known initialisms from golang.org/x/lint/golint

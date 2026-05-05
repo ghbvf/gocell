@@ -134,8 +134,8 @@ func TestSPEC_GEN_VALUE_PARITY_01(t *testing.T) {
 				)
 			}
 
-			// Verify Topic value: topic = stripVersionSuffix(contractID).
-			wantTopic := specGenStripVersionSuffix(contract.ID)
+			// Verify Topic value: topic == contractID (Topic == ContractID after PR-CODEGEN-FULL-MIGRATION-FU).
+			wantTopic := contract.ID
 			wantTopicLine := "Topic:     " + fmt.Sprintf("%q", wantTopic)
 			if !strings.Contains(src, wantTopicLine) {
 				t.Errorf(
@@ -148,31 +148,3 @@ func TestSPEC_GEN_VALUE_PARITY_01(t *testing.T) {
 	}
 }
 
-// specGenStripVersionSuffix removes the trailing .vN segment from a contract ID.
-// "event.session.created.v1" → "event.session.created"
-// "event.order-created.v2"   → "event.order-created"
-// Mirrors contractgen.stripVersionSuffix without importing the tool package.
-func specGenStripVersionSuffix(id string) string {
-	parts := strings.Split(id, ".")
-	if len(parts) < 2 {
-		return id
-	}
-	last := parts[len(parts)-1]
-	if specGenIsVersionSegment(last) {
-		return strings.Join(parts[:len(parts)-1], ".")
-	}
-	return id
-}
-
-// specGenIsVersionSegment reports whether s matches the pattern vN (v followed by digits).
-func specGenIsVersionSegment(s string) bool {
-	if len(s) < 2 || s[0] != 'v' {
-		return false
-	}
-	for _, r := range s[1:] {
-		if r < '0' || r > '9' {
-			return false
-		}
-	}
-	return true
-}

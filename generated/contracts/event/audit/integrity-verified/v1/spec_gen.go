@@ -11,5 +11,5 @@ var spec = wrapper.ContractSpec{
 	ID:        "event.audit.integrity-verified.v1",
 	Kind:      "event",
 	Transport: "amqp",
-	Topic:     "event.audit.integrity-verified",
+	Topic:     "event.audit.integrity-verified.v1",
 }

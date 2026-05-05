@@ -207,7 +207,7 @@ verify:
 ```
 
 Slices（6 个）：configread / configwrite / configpublish / configsubscribe / featureflag / flagwrite
-发布契约：event.config.entry-upserted.v1 / event.config.entry-deleted.v1 / event.config.version-published.v1 / event.config.rollback.v1 / event.flag.changed.v1
+发布契约：event.config.entry-upserted.v1 / event.config.entry-deleted.v1 / event.config.version-published.v1 / event.config.rollback.v1（event.flag.changed.v1 已于 PR #376 退役，lifecycle: deprecated）
 HTTP 契约：config get/write/publish/rollback + flag list/get/evaluate/create/update/toggle/delete
 消费契约：event.config.entry-upserted.v1 / event.config.entry-deleted.v1
 （契约关系由各 slice.yaml 的 contractUsages 声明，不在 cell.yaml 中）

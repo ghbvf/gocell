@@ -12,6 +12,7 @@ package archtest
 
 import (
 	"bytes"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -38,30 +39,8 @@ func TestEVENT_SUBSCRIPTION_CONTRACTGEN_COVERAGE_01(t *testing.T) {
 		pkgDir := filepath.Join(root, contractIDToExpectedPkgPath(contract.ID))
 		subPath := filepath.Join(pkgDir, subscriptionGenFilename)
 
-		info, err := os.Stat(subPath)
-		if err != nil || info.IsDir() {
-			t.Errorf(
-				"EVENT-SUBSCRIPTION-CONTRACTGEN-COVERAGE-01: contract %q (kind=event, codegen=true) "+
-					"is missing %s; run `gocell generate contract %s`",
-				contract.ID, subPath, contract.ID,
-			)
-			continue
-		}
-
-		content, readErr := os.ReadFile(subPath) //nolint:gosec // archtest reads paths it discovered
-		if readErr != nil {
-			t.Errorf(
-				"EVENT-SUBSCRIPTION-CONTRACTGEN-COVERAGE-01: cannot read %s: %v",
-				subPath, readErr,
-			)
-			continue
-		}
-		if !bytes.Contains(content, []byte("func NewSubscription")) {
-			t.Errorf(
-				"EVENT-SUBSCRIPTION-CONTRACTGEN-COVERAGE-01: contract %q: %s exists but does not "+
-					"declare func NewSubscription; regenerate with `gocell generate contract %s`",
-				contract.ID, subPath, contract.ID,
-			)
+		if err := scanEventSubscriptionCoverage(contract.ID, subPath); err != nil {
+			t.Error(err.Error())
 		}
 	}
 }
@@ -71,3 +50,82 @@ func TestEVENT_SUBSCRIPTION_CONTRACTGEN_COVERAGE_01(t *testing.T) {
 //
 //	"event.session.created.v1"        → "generated/contracts/event/session/created/v1"
 //	"event.config.entry-upserted.v1"  → "generated/contracts/event/config/entry-upserted/v1"
+
+// scanEventSubscriptionCoverage checks whether the event contract identified by
+// contractID has a valid subscription_gen.go at subPath. It returns an error when
+// the file is absent or does not declare func NewSubscription.
+//
+// This helper is the reusable core of
+// TestEVENT_SUBSCRIPTION_CONTRACTGEN_COVERAGE_01; the negative-fixture test
+// uses it to verify that the scanner catches the violation rather than hand-
+// stat-ing the fixture file.
+func scanEventSubscriptionCoverage(contractID, subPath string) error {
+	info, err := os.Stat(subPath)
+	if err != nil || info.IsDir() {
+		return fmt.Errorf(
+			"EVENT-SUBSCRIPTION-CONTRACTGEN-COVERAGE-01: contract %q (kind=event, codegen=true) "+
+				"is missing %s; run `gocell generate contract %s`",
+			contractID, subPath, contractID,
+		)
+	}
+	content, readErr := os.ReadFile(subPath) //nolint:gosec // archtest reads paths it discovered
+	if readErr != nil {
+		return fmt.Errorf(
+			"EVENT-SUBSCRIPTION-CONTRACTGEN-COVERAGE-01: cannot read %s: %v",
+			subPath, readErr,
+		)
+	}
+	if !bytes.Contains(content, []byte("func NewSubscription")) {
+		return fmt.Errorf(
+			"EVENT-SUBSCRIPTION-CONTRACTGEN-COVERAGE-01: contract %q: %s exists but does not "+
+				"declare func NewSubscription; regenerate with `gocell generate contract %s`",
+			contractID, subPath, contractID,
+		)
+	}
+	return nil
+}
+
+// TestEVENT_SUBSCRIPTION_CONTRACTGEN_COVERAGE_01_NegativeFixture verifies that
+// scanEventSubscriptionCoverage catches a contract with codegen=true that is
+// missing subscription_gen.go. The fixture is a tmpdir with a contract.yaml but
+// no generated file.
+func TestEVENT_SUBSCRIPTION_CONTRACTGEN_COVERAGE_01_NegativeFixture(t *testing.T) {
+	t.Parallel()
+
+	// Build a tmpdir that simulates the expected pkg path for a fake event contract.
+	// We deliberately do NOT create subscription_gen.go inside it.
+	tmp := t.TempDir()
+	contractID := "event.fake.notify.v1"
+	subPath := filepath.Join(tmp, subscriptionGenFilename)
+
+	// The scanner must return an error when subscription_gen.go is absent.
+	err := scanEventSubscriptionCoverage(contractID, subPath)
+	if err == nil {
+		t.Errorf(
+			"expected scanEventSubscriptionCoverage to return an error for missing subscription_gen.go, got nil",
+		)
+	}
+}
+
+// TestEVENT_SUBSCRIPTION_CONTRACTGEN_COVERAGE_01_NegativeFixture_WrongContent
+// verifies that the scanner catches a subscription_gen.go that exists but does
+// not declare func NewSubscription.
+func TestEVENT_SUBSCRIPTION_CONTRACTGEN_COVERAGE_01_NegativeFixture_WrongContent(t *testing.T) {
+	t.Parallel()
+
+	tmp := t.TempDir()
+	contractID := "event.fake.notify.v1"
+	subPath := filepath.Join(tmp, subscriptionGenFilename)
+
+	// Write a file without func NewSubscription.
+	if err := os.WriteFile(subPath, []byte("package fake\n// no NewSubscription here\n"), 0o600); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+
+	err := scanEventSubscriptionCoverage(contractID, subPath)
+	if err == nil {
+		t.Errorf(
+			"expected scanEventSubscriptionCoverage to return an error when func NewSubscription is absent, got nil",
+		)
+	}
+}

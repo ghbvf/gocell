@@ -1081,15 +1081,15 @@ func TestAccessCore_RegisterSubscriptions(t *testing.T) {
 	for _, sub := range snap.Subscriptions {
 		topicSet[sub.Spec.Topic] = true
 	}
-	// Codegen pattern: topic is contractID without version suffix.
-	assert.True(t, topicSet["event.config.entry-deleted"],
-		"must subscribe to event.config.entry-deleted")
-	assert.True(t, topicSet["event.config.entry-upserted"],
-		"must subscribe to event.config.entry-upserted")
-	assert.True(t, topicSet["event.role.assigned"],
-		"must subscribe to event.role.assigned")
-	assert.True(t, topicSet["event.role.revoked"],
-		"must subscribe to event.role.revoked")
+	// Codegen pattern: Topic == ContractID after PR-CODEGEN-FULL-MIGRATION-FU.
+	assert.True(t, topicSet["event.config.entry-deleted.v1"],
+		"must subscribe to event.config.entry-deleted.v1")
+	assert.True(t, topicSet["event.config.entry-upserted.v1"],
+		"must subscribe to event.config.entry-upserted.v1")
+	assert.True(t, topicSet["event.role.assigned.v1"],
+		"must subscribe to event.role.assigned.v1")
+	assert.True(t, topicSet["event.role.revoked.v1"],
+		"must subscribe to event.role.revoked.v1")
 }
 
 // noopPublisher implements eventbus.Publisher for tests that do not care

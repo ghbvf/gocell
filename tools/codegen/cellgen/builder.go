@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/ghbvf/gocell/kernel/metadata"
+	"github.com/ghbvf/gocell/tools/codegen/internal/pathx"
 	"github.com/ghbvf/gocell/tools/codegen/markergen"
 )
 
@@ -349,21 +350,10 @@ func readModulePath(root string) (string, error) {
 // "event.config.entry-upserted.v1" → "<module>/generated/contracts/event/config/entry-upserted/v1"
 // "http.internal.foo.v1" → "<module>/generated/contracts/http/internalapi/foo/v1"
 //
-// The segment "internal" is rewritten to "internalapi" to match the filesystem
-// layout produced by contractIDToPackagePath in contractgen — see that function
-// for the Go internal package rule rationale.
+// Delegates internal→internalapi rewriting to pathx.ContractIDToPackagePath —
+// single source of truth shared with contractgen and archtest.
 func contractIDToImportPath(modulePath, contractID string) string {
-	parts := strings.Split(contractID, ".")
-	// Segments are: kind.domain.parts...vN
-	// Rewrite "internal" segments to "internalapi" so the import path aligns
-	// with the generated filesystem path.
-	for i, p := range parts {
-		if p == "internal" {
-			parts[i] = "internalapi"
-		}
-	}
-	pkgRelPath := strings.Join(parts, "/")
-	return modulePath + "/generated/contracts/" + pkgRelPath
+	return modulePath + "/" + pathx.ContractIDToPackagePath(contractID)
 }
 
 // EnrichSubscriptionsWithModulePath populates SubscriptionPackage and

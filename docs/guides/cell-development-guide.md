@@ -194,14 +194,14 @@ func (c *MyCell) Init(ctx context.Context, reg cell.Registry) error {
     // c.svc.HandleEvent 是 outbox.EntryHandler 类型 (ctx, entry) → HandleResult
     // 由 029 #03 ADR Decision 1 起直接传入，不再需要 WrapLegacyHandler 适配。
     //
-    // EventSpec(id, transport) helper for the common case Topic == ID.
-    // FMT-18 cross-checks both ContractSpec{} literals and EventSpec(...) calls
-    // against contracts/**/contract.yaml — strict-only: the check fires under
-    // `gocell validate --strict` (and the strict CI job), not plain `validate`.
-    // The id argument must be a string literal so the AST can resolve it;
-    // computed ids surface as a FMT-18 WARNING.
-    if err := reg.Subscribe(wrapper.EventSpec("event.my.topic.v1", "amqp"), c.svc.HandleEvent, c.ID()); err != nil {
-        return err
+    // 订阅通过生成包（generated/contracts/...）的 NewSubscription 完成。
+    // wrapper.EventSpec(id, transport) 已删除（PR #376）；直接用生成的适配器：
+    //   import mytopicv1 "github.com/ghbvf/gocell/generated/contracts/event/my/topic/v1"
+    //   if err := mytopicv1.NewSubscription(c.svc.HandleEvent, "mycell", "myslice").Mount(reg); err != nil { ... }
+    // FMT-18 校验 spec_gen.go 内的 ContractSpec 与 contracts/**/contract.yaml 一致性。
+    import mytopicv1 "github.com/ghbvf/gocell/generated/contracts/event/my/topic/v1"
+    if err := mytopicv1.NewSubscription(c.svc.HandleEvent, c.ID(), "myslice").Mount(reg); err != nil {
+        return fmt.Errorf("mycell: subscribe event.my.topic.v1: %w", err)
     }
     return nil
 }

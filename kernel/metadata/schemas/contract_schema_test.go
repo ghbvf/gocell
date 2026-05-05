@@ -61,3 +61,83 @@ func TestContractSchemaAllowsParamConstraintFacets(t *testing.T) {
 
 	assert.NoError(t, schema.Validate(contractDoc))
 }
+
+func TestContractSchemaAllowsAuthPublic(t *testing.T) {
+	raw, err := FS.ReadFile("contract.schema.json")
+	require.NoError(t, err)
+
+	var schemaDoc any
+	require.NoError(t, json.Unmarshal(raw, &schemaDoc))
+
+	compiler := jsonschema.NewCompiler()
+	const schemaURL = "https://gocell.dev/schemas/contract.schema.json"
+	require.NoError(t, compiler.AddResource(schemaURL, schemaDoc))
+	schema, err := compiler.Compile(schemaURL)
+	require.NoError(t, err)
+
+	var contractDoc any
+	require.NoError(t, json.Unmarshal([]byte(`{
+		"id": "http.auth.login.v1",
+		"kind": "http",
+		"consistencyLevel": "L1",
+		"lifecycle": "active",
+		"endpoints": {
+			"server": "accesscore",
+			"clients": [],
+			"http": {
+				"method": "POST",
+				"path": "/api/v1/auth/sessions",
+				"successStatus": 201,
+				"noContent": false,
+				"auth": {
+					"public": true
+				}
+			}
+		}
+	}`), &contractDoc))
+
+	assert.NoError(t, schema.Validate(contractDoc), "contract with auth.public:true must pass strict validation")
+}
+
+func TestContractSchemaAllowsAuthPasswordResetExempt(t *testing.T) {
+	raw, err := FS.ReadFile("contract.schema.json")
+	require.NoError(t, err)
+
+	var schemaDoc any
+	require.NoError(t, json.Unmarshal(raw, &schemaDoc))
+
+	compiler := jsonschema.NewCompiler()
+	const schemaURL = "https://gocell.dev/schemas/contract.schema.json"
+	require.NoError(t, compiler.AddResource(schemaURL, schemaDoc))
+	schema, err := compiler.Compile(schemaURL)
+	require.NoError(t, err)
+
+	var contractDoc any
+	require.NoError(t, json.Unmarshal([]byte(`{
+		"id": "http.auth.session.delete.v1",
+		"kind": "http",
+		"consistencyLevel": "L1",
+		"lifecycle": "active",
+		"endpoints": {
+			"server": "accesscore",
+			"clients": [],
+			"http": {
+				"method": "DELETE",
+				"path": "/api/v1/auth/sessions/{sessionId}",
+				"pathParams": {
+					"sessionId": {
+						"type": "string",
+						"format": "uuid"
+					}
+				},
+				"successStatus": 204,
+				"noContent": true,
+				"auth": {
+					"passwordResetExempt": true
+				}
+			}
+		}
+	}`), &contractDoc))
+
+	assert.NoError(t, schema.Validate(contractDoc), "contract with auth.passwordResetExempt:true must pass strict validation")
+}

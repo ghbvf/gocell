@@ -11,5 +11,5 @@ var spec = wrapper.ContractSpec{
 	ID:        "event.user.updated.v1",
 	Kind:      "event",
 	Transport: "amqp",
-	Topic:     "event.user.updated",
+	Topic:     "event.user.updated.v1",
 }

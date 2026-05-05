@@ -184,6 +184,21 @@
                       }
                     },
                     "additionalProperties": false
+                  },
+                  "auth": {
+                    "type": "object",
+                    "description": "Route-level authentication overrides for contractgen. Omit for standard authenticated routes.",
+                    "additionalProperties": false,
+                    "properties": {
+                      "public": {
+                        "type": "boolean",
+                        "description": "If true, route is mounted as public (no JWT required). auth.Route{Public: true} is emitted by RegisterRoutes. Mutually exclusive with passwordResetExempt."
+                      },
+                      "passwordResetExempt": {
+                        "type": "boolean",
+                        "description": "If true, route bypasses the force-password-reset gate. auth.Route{PasswordResetExempt: true} is emitted. Mutually exclusive with public."
+                      }
+                    }
                   }
                 }
               }

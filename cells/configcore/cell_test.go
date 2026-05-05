@@ -258,11 +258,10 @@ func TestConfigCore_RegisterSubscriptions(t *testing.T) {
 	for _, sub := range snap.Subscriptions {
 		topics[sub.Spec.Topic] = sub.ConsumerGroup
 	}
-	// New codegen pattern: topic is contractID without version suffix
-	// (stripVersionSuffix: "event.config.entry-upserted.v1" → "event.config.entry-upserted").
-	assert.Equal(t, "configcore", topics["event.config.entry-upserted"],
+	// New codegen pattern: Topic == ContractID after PR-CODEGEN-FULL-MIGRATION-FU.
+	assert.Equal(t, "configcore", topics["event.config.entry-upserted.v1"],
 		"entry-upserted subscription must be registered with configcore consumer group")
-	assert.Equal(t, "configcore", topics["event.config.entry-deleted"],
+	assert.Equal(t, "configcore", topics["event.config.entry-deleted.v1"],
 		"entry-deleted subscription must be registered with configcore consumer group")
 }
 

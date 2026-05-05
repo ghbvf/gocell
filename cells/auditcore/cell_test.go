@@ -296,27 +296,26 @@ func TestAuditCore_RegisterSubscriptions(t *testing.T) {
 	require.NoError(t, c.Init(ctx, recorder))
 
 	snap := recorder.Snapshot()
-	// Codegen pattern: topic is contractID without version suffix
-	// (stripVersionSuffix: "event.user.updated.v1" → "event.user.updated").
+	// Codegen pattern: Topic == ContractID after PR-CODEGEN-FULL-MIGRATION-FU.
 	// All 13 topics are listed explicitly here (T-7: replace magic number with topic set).
 	expectedTopics := []string{
 		// 4 config events
-		"event.config.entry-deleted",
-		"event.config.entry-upserted",
-		"event.config.rollback",
-		"event.config.version-published",
+		"event.config.entry-deleted.v1",
+		"event.config.entry-upserted.v1",
+		"event.config.rollback.v1",
+		"event.config.version-published.v1",
 		// 2 role events
-		"event.role.assigned",
-		"event.role.revoked",
+		"event.role.assigned.v1",
+		"event.role.revoked.v1",
 		// 2 session events
-		"event.session.created",
-		"event.session.revoked",
+		"event.session.created.v1",
+		"event.session.revoked.v1",
 		// 5 user lifecycle events
-		"event.user.created",
-		"event.user.deleted",
-		"event.user.locked",
-		"event.user.unlocked",
-		"event.user.updated",
+		"event.user.created.v1",
+		"event.user.deleted.v1",
+		"event.user.locked.v1",
+		"event.user.unlocked.v1",
+		"event.user.updated.v1",
 	}
 	assert.Equal(t, len(expectedTopics), len(snap.Subscriptions),
 		"auditcore registers exactly %d topic subscriptions", len(expectedTopics))

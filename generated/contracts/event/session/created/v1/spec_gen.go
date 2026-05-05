@@ -11,5 +11,5 @@ var spec = wrapper.ContractSpec{
 	ID:        "event.session.created.v1",
 	Kind:      "event",
 	Transport: "amqp",
-	Topic:     "event.session.created",
+	Topic:     "event.session.created.v1",
 }
