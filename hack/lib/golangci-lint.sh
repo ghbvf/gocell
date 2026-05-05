@@ -41,16 +41,36 @@ GOLANGCI_LINT_VERSION="v2.11.4"
 # go to stderr so callers can `binary="$(gocell::golangci_lint::ensure)"`
 # without contaminating the path with status text.
 gocell::golangci_lint::ensure() {
-    local gopath
-    gopath="$(go env GOPATH)"
-    local binary="${gopath}/bin/golangci-lint"
+    # `go install` writes the binary to GOBIN if set, otherwise to the first
+    # entry of GOPATH's bin/ subdirectory. Probing only ${GOPATH}/bin/ misses
+    # the GOBIN case and the multi-path GOPATH case (colon-separated list);
+    # both are common on developer laptops with custom toolchains.
+    local install_dir
+    install_dir="$(go env GOBIN)"
+    if [[ -z "${install_dir}" ]]; then
+        local gopath
+        gopath="$(go env GOPATH)"
+        install_dir="${gopath%%:*}/bin"
+    fi
+    local binary="${install_dir}/golangci-lint"
     local version_no_v="${GOLANGCI_LINT_VERSION#v}"
 
     if [[ -x "${binary}" ]]; then
         # `--version` output varies between v1 ("has version v1.x.y") and v2
-        # ("has version 2.x.y built ..."). Substring-match the numeric core
-        # so both forms accept; this also tolerates the build-info suffix.
-        if "${binary}" --version 2>/dev/null | head -n1 | grep -q "${version_no_v}"; then
+        # ("has version 2.x.y built ..."). Parse the first numeric token of
+        # the form X.Y.Z and compare equal — substring-grep would accept
+        # bogus matches like 2.11.4 inside 2.11.40 or 12.11.4.
+        local got
+        got="$("${binary}" --version 2>/dev/null | head -n1 | awk '{
+            for (i = 1; i <= NF; i++) {
+                if ($i ~ /^v?[0-9]+\.[0-9]+\.[0-9]+$/) {
+                    sub(/^v/, "", $i)
+                    print $i
+                    exit
+                }
+            }
+        }')"
+        if [[ "${got}" == "${version_no_v}" ]]; then
             echo "${binary}"
             return 0
         fi

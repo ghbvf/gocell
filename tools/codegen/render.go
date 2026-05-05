@@ -9,6 +9,24 @@ import (
 	gofumpt "mvdan.cc/gofumpt/format"
 )
 
+// localPrefix is this module's import path. Sourced once and used by both
+// the goimports grouping (`imports.LocalPrefix`) and gofumpt's module
+// locality detection (`GofumptOptions.ModulePath`) so the producer mirrors
+// the CI consumer gate (`.golangci.yml goimports.local-prefixes`) from a
+// single authoritative literal.
+const localPrefix = "github.com/ghbvf/gocell"
+
+// init aligns goimports' package-level LocalPrefix with the CI formatter
+// configuration. Without this, producer output would not group local
+// imports separately from third-party imports — `golangci-lint fmt`
+// would then re-shuffle the bytes the producer emitted, defeating
+// "produced output is CI-canonical". imports.LocalPrefix is a package
+// global; setting it in init keeps it stable for the lifetime of the
+// codegen process (single-threaded build phase).
+func init() {
+	imports.LocalPrefix = localPrefix
+}
+
 // GofumptOptions are the producer-side gofumpt config. LangVersion tracks
 // the go directive in go.mod (go 1.25); ModulePath matches the module
 // declaration so gofumpt can group imports by module locality.
@@ -19,7 +37,7 @@ import (
 // tools/generatedcatalog can reference a single authoritative copy.
 var GofumptOptions = gofumpt.Options{
 	LangVersion: "go1.25",
-	ModulePath:  "github.com/ghbvf/gocell",
+	ModulePath:  localPrefix,
 }
 
 // FormatGoSource normalizes Go source bytes through goimports → gofumpt and
