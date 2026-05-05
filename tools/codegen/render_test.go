@@ -96,13 +96,13 @@ func ( bogus syntax {{.X}}
 		Data:         map[string]string{"X": "bad"},
 	})
 	if err == nil {
-		t.Fatal("expected go/format error, got nil")
+		t.Fatal("expected formatter error, got nil")
 	}
 	if len(out) == 0 {
 		t.Error("expected raw template output for debugging on format failure")
 	}
-	if !strings.Contains(err.Error(), "go/format failed") {
-		t.Errorf("expected wrapped format error, got %v", err)
+	if !strings.Contains(err.Error(), "codegen format") {
+		t.Errorf("expected wrapped formatter error, got %v", err)
 	}
 }
 

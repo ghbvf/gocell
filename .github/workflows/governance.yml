@@ -36,6 +36,14 @@ jobs:
         # points — see hack/verify-archtest.sh). Running it here as well is
         # pure duplicate work. Local `make verify` (no env) keeps the full
         # gate set so developers still get one-command coverage.
+        #
+        # gofumpt is NOT skipped: hack/verify-gofumpt.sh bootstraps
+        # golangci-lint at the pinned version via hack/lib/golangci-lint.sh
+        # (one-time go install on a cold setup-go cache), so this job does
+        # not need a separate golangci-lint install step. The CI lint shard
+        # in _build-lint.yml uses golangci-lint-action for its build cache
+        # and `config verify`; both consumers share the version literal
+        # GOLANGCI_LINT_VERSION = v2.11.4.
         env:
           VERIFY_SKIP: archtest
         run: make verify

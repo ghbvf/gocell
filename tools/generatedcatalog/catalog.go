@@ -4,11 +4,11 @@ package generatedcatalog
 import (
 	"bytes"
 	"fmt"
-	"go/format"
 	"sort"
 	"strings"
 
 	kerneldepgraph "github.com/ghbvf/gocell/kernel/depgraph"
+	"github.com/ghbvf/gocell/tools/codegen"
 )
 
 const (
@@ -64,7 +64,7 @@ func EmitFile(pkg, modulePath string, g *kerneldepgraph.Graph) ([]byte, error) {
 	fmt.Fprintf(&b, "\treturn kerneldepgraph.FromNodes(%s, nodes)\n", goString(g.Module))
 	fmt.Fprintf(&b, "}()\n")
 
-	formatted, err := format.Source(b.Bytes())
+	formatted, err := codegen.FormatGoSource(CorebundlePath, b.Bytes())
 	if err != nil {
 		return nil, fmt.Errorf("format generated source: %w (source:\n%s)", err, b.String())
 	}
