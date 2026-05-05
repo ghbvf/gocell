@@ -115,50 +115,163 @@ func TestVerifyExpectedVersion_DBAhead_Integration(t *testing.T) {
 		"error message should mention schema version mismatch")
 }
 
-// TestVerifyOutboxLeaseInvariant_CleanState verifies the invariant returns
-// nil when no claiming rows exist (post-014 baseline) — the happy path.
-func TestVerifyOutboxLeaseInvariant_CleanState(t *testing.T) {
+// TestOutboxClaimingLeaseCheckConstraint_RejectsNullLeaseInsert verifies the
+// post-N8 invariant: the DB CHECK constraint
+// `outbox_claiming_requires_lease` prevents any INSERT/UPDATE that combines
+// status='claiming' with NULL lease_id. This is the single source of truth
+// after N8 collapsed the previous startup probe into a DB-level constraint —
+// rolling-deploy with a stale pre-014 binary directly hits 23514 check_violation
+// instead of relying on a one-shot startup-time probe.
+//
+// ref: docs/architecture/202605051600-adr-pg-outbox-fencing.md cutover (N8)
+// ref: riverqueue/river migration 004_pending_and_more.up.sql — DB-level
+// invariants on state machine transitions are the canonical pattern.
+func TestOutboxClaimingLeaseCheckConstraint_RejectsNullLeaseInsert(t *testing.T) {
 	pool, cleanup := setupPostgres(t)
 	defer cleanup()
 
 	ctx := context.Background()
-	migrator, err := NewMigrator(pool, testMigrationsFS(t), "schema_migrations_lease_clean")
+	migrator, err := NewMigrator(pool, testMigrationsFS(t), "schema_migrations_lease_check")
 	require.NoError(t, err)
-	require.NoError(t, migrator.Up(ctx), "migrations must apply cleanly")
+	require.NoError(t, migrator.Up(ctx), "migrations must apply cleanly through 015")
 
-	err = VerifyOutboxLeaseInvariant(ctx, pool)
-	assert.NoError(t, err, "clean post-014 outbox table must satisfy invariant")
-}
-
-// TestVerifyOutboxLeaseInvariant_PreFourteenResidue inserts a row that mimics
-// what a pre-014 binary would write through post-014 schema (status='claiming'
-// with NULL lease_id) and asserts the invariant fails with the dedicated
-// error code so the rolling-deploy guard halts startup.
-func TestVerifyOutboxLeaseInvariant_PreFourteenResidue(t *testing.T) {
-	pool, cleanup := setupPostgres(t)
-	defer cleanup()
-
-	ctx := context.Background()
-	migrator, err := NewMigrator(pool, testMigrationsFS(t), "schema_migrations_lease_residue")
-	require.NoError(t, err)
-	require.NoError(t, migrator.Up(ctx), "migrations must apply cleanly")
-
-	// Inject a pre-014 style row: claiming + NULL lease_id. This is the
-	// exact shape an old binary's ClaimPending SQL produces when running
-	// against the new schema.
+	// Attempt to insert a pre-014 style row: claiming + NULL lease_id. The
+	// post-N8 CHECK constraint must reject this with 23514 check_violation.
 	_, execErr := pool.DB().Exec(ctx, `INSERT INTO outbox_entries
 		(id, aggregate_id, aggregate_type, event_type, topic, payload, metadata, created_at, status, claimed_at, lease_id)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, now(), 'claiming', now(), NULL)`,
 		"00000000-0000-0000-0000-000000000001", "agg-1", "demo", "demo.event", "demo.topic",
 		[]byte(`{}`), []byte(`{}`))
-	require.NoError(t, execErr, "injecting pre-014 residue row must succeed")
 
-	err = VerifyOutboxLeaseInvariant(ctx, pool)
-	require.Error(t, err, "invariant must fail when claiming rows have NULL lease_id")
-	assert.Contains(t, err.Error(), "outbox lease invariant violation",
-		"error must surface the invariant name for ops triage")
-	assert.Contains(t, err.Error(), "1 claiming rows",
-		"error must report the row count")
+	require.Error(t, execErr, "DB CHECK must reject claiming + NULL lease_id")
+	assert.Contains(t, execErr.Error(), "outbox_claiming_requires_lease",
+		"error must surface the constraint name for ops triage")
+}
+
+// TestOutboxMigration014_AbortsOnClaimingResidue verifies the rolling-deploy
+// fence built into 014_add_outbox_lease_id.sql: if any row is still in
+// status='claiming' when migration 014 starts, the migration must abort with
+// a row count rather than silently advancing the schema and leaving the
+// pre-014 worker's mark/CAS chain unfenced.
+//
+// This locks the operational pre-requisite documented in the migration body
+// and ADR `docs/architecture/202605051600-adr-pg-outbox-fencing.md` cutover §:
+// drain the relay (or manually reset crash residue) before applying 014.
+//
+// Setup:
+//   - Apply migrations through 013 (lease_id column does not yet exist).
+//   - Insert one row with status='claiming' to simulate residue.
+//   - Attempt migration 014 → must error with the residue row count.
+//
+// ref: docs/architecture/202605051600-adr-pg-outbox-fencing.md cutover §
+func TestOutboxMigration014_AbortsOnClaimingResidue(t *testing.T) {
+	pool, cleanup := setupPostgres(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	migrator, err := NewMigrator(pool, testMigrationsFS(t), "schema_migrations_014_residue")
+	require.NoError(t, err)
+
+	// Migrate up to but NOT including 014 — pre-014 schema lacks lease_id and
+	// has no CHECK constraint, so a stale 'claiming' row is plain INSERT-able.
+	const preLeaseVersion int64 = 13
+	_, upErr := migrator.provider.UpTo(ctx, preLeaseVersion)
+	require.NoError(t, upErr, "migrate to v13 must succeed")
+
+	// Inject residue: a single row stuck in 'claiming'. This mirrors a worker
+	// crash mid-publish, which the migration must refuse to silently fence over.
+	_, execErr := pool.DB().Exec(ctx, `INSERT INTO outbox_entries
+		(id, aggregate_id, aggregate_type, event_type, topic, payload, metadata, created_at, status, claimed_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, now(), 'claiming', now())`,
+		"00000000-0000-0000-0000-000000000014", "agg-residue", "demo", "demo.event", "demo.topic",
+		[]byte(`{}`), []byte(`{}`))
+	require.NoError(t, execErr, "pre-014 schema must accept claiming row")
+
+	// Attempt migration 014 — DO block must RAISE EXCEPTION with the residue count.
+	_, upErr = migrator.provider.UpTo(ctx, 14)
+	require.Error(t, upErr, "014 must abort while claiming residue exists")
+	assert.Contains(t, upErr.Error(), "outbox migration 014",
+		"error must surface the migration name for ops triage")
+	assert.Contains(t, upErr.Error(), "claiming",
+		"error must surface the offending status for ops triage")
+}
+
+// TestOutboxMigration015_RejectsExistingClaimingNullLeaseRow verifies the
+// fence built into 015_add_outbox_claiming_lease_check.sql: if any row in
+// the table has status='claiming' AND lease_id IS NULL when 015 runs,
+// adding the CHECK constraint must fail with check_violation. This locks
+// the cutover invariant — operators MUST drain stale pre-014 binaries
+// before applying 015, otherwise CAS lease fencing silently breaks.
+//
+// Setup:
+//   - Apply migrations through 014 (lease_id column exists, no constraint yet).
+//   - Insert one row with status='claiming' AND lease_id=NULL to simulate
+//     a stale pre-014 binary writing through the post-014 schema.
+//   - Attempt migration 015 → must error with check_violation on the constraint.
+func TestOutboxMigration015_RejectsExistingClaimingNullLeaseRow(t *testing.T) {
+	pool, cleanup := setupPostgres(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	migrator, err := NewMigrator(pool, testMigrationsFS(t), "schema_migrations_015_existing_bad")
+	require.NoError(t, err)
+
+	// Apply through 014: lease_id column exists, but the CHECK constraint
+	// (introduced by 015) is not yet present.
+	const preCheckVersion int64 = 14
+	_, upErr := migrator.provider.UpTo(ctx, preCheckVersion)
+	require.NoError(t, upErr, "migrate to v14 must succeed")
+
+	// Inject a row that violates the about-to-be-added constraint: the
+	// post-014 schema accepts it because no CHECK is yet present.
+	_, execErr := pool.DB().Exec(ctx, `INSERT INTO outbox_entries
+		(id, aggregate_id, aggregate_type, event_type, topic, payload, metadata, created_at, status, claimed_at, lease_id)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, now(), 'claiming', now(), NULL)`,
+		"00000000-0000-0000-0000-000000000015", "agg-stale", "demo", "demo.event", "demo.topic",
+		[]byte(`{}`), []byte(`{}`))
+	require.NoError(t, execErr, "post-014 schema (no check yet) must accept claiming + NULL lease_id")
+
+	// Attempt 015 — ALTER TABLE ADD CONSTRAINT validates existing rows and
+	// must fail with check_violation referencing the named constraint.
+	_, upErr = migrator.provider.UpTo(ctx, 15)
+	require.Error(t, upErr, "015 must fail when existing rows violate the CHECK")
+	assert.Contains(t, upErr.Error(), "outbox_claiming_requires_lease",
+		"error must surface the constraint name for ops triage")
+}
+
+// TestOutboxMigration015_RejectsUpdateIntoClaimingNullLease verifies that
+// after 015 is applied, an UPDATE that transitions a row INTO
+// (status='claiming', lease_id=NULL) is rejected by the DB constraint.
+// This complements TestOutboxClaimingLeaseCheckConstraint_RejectsNullLeaseInsert
+// (which covers the INSERT path) — both are required to lock the
+// invariant against the two write paths a pre-014 binary could exercise.
+func TestOutboxMigration015_RejectsUpdateIntoClaimingNullLease(t *testing.T) {
+	pool, cleanup := setupPostgres(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	migrator, err := NewMigrator(pool, testMigrationsFS(t), "schema_migrations_015_update_path")
+	require.NoError(t, err)
+	require.NoError(t, migrator.Up(ctx), "migrations must apply cleanly through 015")
+
+	// Insert a non-claiming row first so we have something to UPDATE. Use
+	// status='pending' which has no constraint coupling.
+	_, execErr := pool.DB().Exec(ctx, `INSERT INTO outbox_entries
+		(id, aggregate_id, aggregate_type, event_type, topic, payload, metadata, created_at, status)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, now(), 'pending')`,
+		"00000000-0000-0000-0000-000000000016", "agg-update", "demo", "demo.event", "demo.topic",
+		[]byte(`{}`), []byte(`{}`))
+	require.NoError(t, execErr, "inserting pending row must succeed")
+
+	// Attempt to UPDATE into the forbidden state. The CHECK constraint must
+	// reject this with 23514 check_violation, mirroring the INSERT path.
+	_, execErr = pool.DB().Exec(ctx,
+		`UPDATE outbox_entries SET status = 'claiming', lease_id = NULL
+		 WHERE id = $1`,
+		"00000000-0000-0000-0000-000000000016")
+	require.Error(t, execErr, "DB CHECK must reject UPDATE into claiming + NULL lease_id")
+	assert.Contains(t, execErr.Error(), "outbox_claiming_requires_lease",
+		"error must surface the constraint name for ops triage")
 }
 
 // TestVerifyExpectedVersion_DBLagged_Integration verifies that when the DB

@@ -873,16 +873,22 @@ func (s *Subscriber) dispatchAck(
 				slog.String(logKeyTopic, topic),
 				slog.String(logKeyEventID, eventID),
 				slog.Any("error", commitErr))
+			// N8 K#12 release-first: Release the in-process idempotency claim
+			// BEFORE issuing the broker Nack so the redelivery cannot race
+			// against an outstanding claim and short-circuit as ClaimBusy in
+			// any consumer (this process or another). Mirrors
+			// runtime/eventbus/eventbus.go (Release before Requeue notify) and
+			// IBM/sarama consumer_group.go release() (handler.Cleanup before
+			// offsets.Close()).
+			releaseSettlement(ctx, settlement, topic, eventID, "commit_failed")
 			if nackErr := ch.Nack(tag, false, true); nackErr != nil {
 				slog.LogAttrs(ctx, slog.LevelError, "rabbitmq: nack(requeue) failed after commit failure",
 					slog.String(logKeyTopic, topic),
 					slog.String(logKeyEventID, eventID),
 					slog.Any("error", nackErr))
-				releaseSettlement(ctx, settlement, topic, eventID, "commit_failed")
 				outbox.NotifySettlement(ctx, res, entry, outbox.DispositionRequeue, outbox.SettlementResultNackFailed, nackErr)
 				return
 			}
-			releaseSettlement(ctx, settlement, topic, eventID, "commit_failed")
 			outbox.NotifySettlement(ctx, res, entry, outbox.DispositionRequeue, outbox.SettlementResultCommitFailed, commitErr)
 			return
 		}

@@ -207,6 +207,54 @@ func TestPhase6_SubscriptionsWithSubscriberButNoConsumerBase_FailsFast(t *testin
 	assert.Contains(t, err.Error(), "stub")
 }
 
+// TestPhase6_SubscriptionsWithZeroValueConsumerBase_FailsFast locks the
+// composition-root negative path that motivated the IsConstructed sentinel
+// (PR#374 review finding (a) → N8 (b)). A literal `&outbox.ConsumerBase{}`
+// passes the bare nil check but skips outbox.NewConsumerBase, so claimer
+// and ClaimRetryCount are zero-value — silently dispatching every entry
+// through ClaimAcquired+nil receipt → DispositionReject/DLX. The phase6
+// boundary must reject this exactly like the nil case so a misconfigured
+// composition root never reaches subscription registration.
+//
+// Pre-N8 the predicate-level test (TestConsumerBase_IsConstructed*) only
+// proved IsConstructed returns false for a literal; this test wires the
+// literal into the actual phase6 startup path so a regression that
+// weakens checkConsumerBaseConfiguredForSubscriptions cannot ship even
+// if IsConstructed itself remains correct.
+func TestPhase6_SubscriptionsWithZeroValueConsumerBase_FailsFast(t *testing.T) {
+	t.Parallel()
+
+	bus := eventbus.New(eventbus.WithClock(clock.Real()))
+	asm := assembly.New(assembly.Config{ID: "phase6-zero-cb-test", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
+	t.Cleanup(asm.Shutdown)
+	require.NoError(t, asm.Register(newStubEventCell("event.phase6.zero-cb.v1")))
+	require.NoError(t, asm.Start(context.Background()))
+
+	b := New(
+		WithClock(clock.Real()),
+		WithAssembly(asm),
+		WithPublisher(bus),
+		WithSubscriber(bus),
+		WithConsumerBase(&outbox.ConsumerBase{}), // zero-value literal — must be rejected.
+	)
+
+	runCtx, s := newPhaseState()
+	defer s.runCancel()
+	s.asm = asm
+	s.cellSnapshots = asm.Snapshots()
+	s.sub = bus
+	s.hh = health.New(asm, clock.Real())
+
+	err := b.phase6StartEventRouter(runCtx, s)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "not constructed via outbox.NewConsumerBase",
+		"error must call out the zero-value literal failure mode")
+	assert.Contains(t, err.Error(), "event.phase6.zero-cb.v1",
+		"error must identify the offending subscription topic")
+	assert.Contains(t, err.Error(), "stub",
+		"error must identify the cell that registered the subscription")
+}
+
 func TestPhase6_SubscriptionsWithConsumerBase_Succeeds(t *testing.T) {
 	t.Parallel()
 

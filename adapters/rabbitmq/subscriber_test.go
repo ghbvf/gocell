@@ -796,6 +796,88 @@ func TestDispatchAck_CommitFail_NackFail(t *testing.T) {
 	assert.True(t, nackRequeue, "Nack(requeue=true) must be called after Commit failure")
 }
 
+// TestDispatchAck_CommitFailed_ReleasesBeforeNack pins the N8 K#12 release-first
+// invariant: when Settlement.Commit fails, Settlement.Release MUST run before
+// ch.Nack(requeue=true). Otherwise the broker's redelivery may arrive while the
+// in-process idempotency claim is still held, causing the consumer to short-
+// circuit redelivery as ClaimBusy/ClaimDone until lease TTL expires (observable
+// stall).
+//
+// ref: IBM/sarama consumer_group.go release() L801-L824 — handler.Cleanup
+// (local release) is called before offsets.Close() (broker advance). Same
+// principle applied to the per-message commit_failed path.
+// ref: runtime/eventbus/eventbus.go:469→473 — release-first already adopted
+// in-process; this test pins the RMQ subscriber to the same order.
+func TestDispatchAck_CommitFailed_ReleasesBeforeNack(t *testing.T) {
+	conn, mockConn := newTestConnection(t)
+
+	rec := &callOrderRecorder{}
+	ch := newMockChannel()
+	ch.recorder = rec
+	mockConn.mu.Lock()
+	mockConn.nextCh = ch
+	mockConn.mu.Unlock()
+
+	sub := NewSubscriber(conn, SubscriberConfig{
+		QueueName:   "test-queue",
+		DLXExchange: "test.dlx",
+		Clock:       clock.Real(),
+	})
+
+	receipt := &mockReceipt{
+		commitErr: errors.New("lease expired"),
+		recorder:  rec,
+	}
+	handler := func(_ context.Context, _ outbox.Entry) (outbox.HandleResult, outbox.Settlement) {
+		return outbox.HandleResult{Disposition: outbox.DispositionAck}, receipt
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	body := makeDeliveryBody(t, outbox.Entry{
+		ID:        "evt-release-before-nack",
+		EventType: "test.event",
+		Payload:   []byte(`{}`),
+	})
+	ch.consumeDeliveries <- amqp.Delivery{DeliveryTag: 30, Body: body}
+
+	subDone := make(chan error, 1)
+	go func() { subDone <- sub.Subscribe(ctx, outbox.Subscription{Topic: "test.topic"}, handler) }()
+
+	require.Eventually(t, func() bool {
+		ch.mu.Lock()
+		defer ch.mu.Unlock()
+		return ch.nackCalled
+	}, testtime.D2s, testtime.FastPoll, "Nack must be invoked after commit failure")
+
+	cancel()
+	assert.NoError(t, <-subDone)
+
+	seq := rec.snapshot()
+	require.Contains(t, seq, "commit", "Commit must have been attempted")
+	require.Contains(t, seq, "release", "Release must run on commit_failed path")
+	require.Contains(t, seq, "nack", "Nack must run after Release on commit_failed path")
+
+	releaseIdx := indexOf(seq, "release")
+	nackIdx := indexOf(seq, "nack")
+	require.NotEqual(t, -1, releaseIdx, "release must appear in call order")
+	require.NotEqual(t, -1, nackIdx, "nack must appear in call order")
+	assert.Less(t, releaseIdx, nackIdx,
+		"N8 release-first: Settlement.Release must run BEFORE broker Nack on commit_failed path "+
+			"(call order recorded: %v)", seq)
+}
+
+// indexOf returns the first index of v in seq, or -1 if absent.
+func indexOf(seq []string, v string) int {
+	for i, s := range seq {
+		if s == v {
+			return i
+		}
+	}
+	return -1
+}
+
 // TestDispatchAck_AckFail exercises the ack-failure log path in dispatchAck:
 // Receipt.Commit succeeds but ch.Ack returns an error.
 // This covers the slog.LogAttrs "ack failed" branch (subscriber.go ~line 822-825).

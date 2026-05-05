@@ -226,6 +226,23 @@ type ConsumerBase struct {
 	claimer idempotency.Claimer
 	config  ConsumerBaseConfig
 	clk     clock.Clock
+
+	// built marks the value as the product of NewConsumerBase rather than a
+	// zero-value struct literal (`&ConsumerBase{}`). It is the single source of
+	// truth consulted by IsConstructed; production wiring (runtime/bootstrap
+	// phase6) refuses to start a subscription whose ConsumerBase did not pass
+	// through the constructor, blocking the static-degradation footgun where a
+	// literal-zero ConsumerBase would silently emit ClaimAcquired+nil receipt
+	// on retryLoop attempt 0.
+	built bool
+}
+
+// IsConstructed reports whether the ConsumerBase came from NewConsumerBase
+// (true) rather than from a zero-value struct literal (false). Production
+// wiring uses this to fail fast when a literal `&ConsumerBase{}` is fed into
+// runtime/bootstrap.WithConsumerBase, preventing a silent retryLoop=0 path.
+func (cb *ConsumerBase) IsConstructed() bool {
+	return cb != nil && cb.built
 }
 
 // logWithContext delegates to slog.LogAttrs with the given context, ensuring
@@ -257,6 +274,7 @@ func NewConsumerBase(claimer idempotency.Claimer, config ConsumerBaseConfig, clk
 		claimer: claimer,
 		config:  config,
 		clk:     clk,
+		built:   true,
 	}, nil
 }
 

@@ -36,9 +36,9 @@ END
 $migration_014$;
 -- +goose StatementEnd
 
-ALTER TABLE outbox_entries ADD COLUMN lease_id UUID;
+ALTER TABLE outbox_entries ADD COLUMN IF NOT EXISTS lease_id UUID;
 
-CREATE INDEX CONCURRENTLY idx_outbox_claiming_lease ON outbox_entries (lease_id) WHERE status = 'claiming';
+CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_outbox_claiming_lease ON outbox_entries (lease_id) WHERE status = 'claiming';
 
 -- +goose Down
 

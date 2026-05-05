@@ -851,7 +851,13 @@ func testSubscriberWithMiddleware(t *testing.T, _ Features, constructor PubSubCo
 		defer close(h.subDone)
 		close(ready)
 		err := wrappedSub.SubscribeEntry(ctx,
-			outbox.Subscription{Topic: h.Topic},
+			outbox.Subscription{
+				Topic:             h.Topic,
+				ConsumerGroup:     "conformance-cg",
+				ContractID:        "event." + h.Topic + ".v1",
+				ContractKind:      "event",
+				ContractTransport: "memory",
+			},
 			func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
 				h.signalDone()
 				return outbox.HandleResult{Disposition: outbox.DispositionAck}

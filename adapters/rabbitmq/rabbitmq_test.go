@@ -66,10 +66,54 @@ var testAMQPSUserSecretURL = "amqps://user:" + "secret@secure.host:5671/"
 
 type testContextKey string
 
+// --- Call-order recorder (shared by mockChannel + mockReceipt) ---
+//
+// callOrderRecorder lets a test pin the broker-vs-application call ordering on
+// the commit_failed path (N8 K#12 release-first). Default nil = no recording so
+// existing tests are untouched.
+//
+// Three pieces work together:
+//  1. callOrderRecorder type and methods (this section).
+//  2. mockChannel.recorder field + Ack/Nack record (head of file ~L106).
+//  3. mockReceipt.recorder field + Commit/Release record (tail of file ~L2451).
+//
+// The fields are deliberately split because mockChannel and mockReceipt are
+// already separated; cross-references in their docstrings keep the wiring
+// discoverable.
+type callOrderRecorder struct {
+	mu  sync.Mutex
+	seq []string
+}
+
+func (r *callOrderRecorder) record(name string) {
+	if r == nil {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.seq = append(r.seq, name)
+}
+
+func (r *callOrderRecorder) snapshot() []string {
+	if r == nil {
+		return nil
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	out := make([]string, len(r.seq))
+	copy(out, r.seq)
+	return out
+}
+
 // --- Mock AMQP Channel ---
 
 type mockChannel struct {
 	mu sync.Mutex
+
+	// recorder, when non-nil, records "ack"/"nack" markers in call order so
+	// release-vs-broker ordering can be asserted on the commit_failed path.
+	// Pair: see mockReceipt.recorder + callOrderRecorder above.
+	recorder *callOrderRecorder
 
 	publishCalled     bool
 	publishedMessages []amqp.Publishing
@@ -235,20 +279,26 @@ func (m *mockChannel) QueueBind(name, key, exchange string, noWait bool, args am
 
 func (m *mockChannel) Ack(tag uint64, multiple bool) error {
 	m.mu.Lock()
-	defer m.mu.Unlock()
+	rec := m.recorder
 	m.ackCalled = true
 	m.ackCount++
 	m.ackTag = tag
-	return m.ackErr
+	err := m.ackErr
+	m.mu.Unlock()
+	rec.record("ack")
+	return err
 }
 
 func (m *mockChannel) Nack(tag uint64, multiple, requeue bool) error {
 	m.mu.Lock()
-	defer m.mu.Unlock()
+	rec := m.recorder
 	m.nackCalled = true
 	m.nackTag = tag
 	m.nackRequeue = requeue
-	return m.nackErr
+	err := m.nackErr
+	m.mu.Unlock()
+	rec.record("nack")
+	return err
 }
 
 func (m *mockChannel) Close() error {
@@ -2405,22 +2455,33 @@ type mockReceipt struct {
 	releaseCtx    context.Context
 	extendCalls   int
 	extendErr     error
+
+	// recorder, when non-nil, records "commit"/"release" markers in call order
+	// so release-vs-broker ordering can be asserted on the commit_failed path.
+	// Pair: see mockChannel.recorder + callOrderRecorder at the head of file.
+	recorder *callOrderRecorder
 }
 
 func (r *mockReceipt) Commit(ctx context.Context) error {
 	r.mu.Lock()
-	defer r.mu.Unlock()
+	rec := r.recorder
 	r.commitCalled = true
 	r.commitCtx = ctx
-	return r.commitErr
+	err := r.commitErr
+	r.mu.Unlock()
+	rec.record("commit")
+	return err
 }
 
 func (r *mockReceipt) Release(ctx context.Context) error {
 	r.mu.Lock()
-	defer r.mu.Unlock()
+	rec := r.recorder
 	r.releaseCalled = true
 	r.releaseCtx = ctx
-	return r.releaseErr
+	err := r.releaseErr
+	r.mu.Unlock()
+	rec.record("release")
+	return err
 }
 
 func (r *mockReceipt) Extend(_ context.Context, _ time.Duration) error {

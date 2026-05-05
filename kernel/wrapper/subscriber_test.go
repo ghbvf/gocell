@@ -11,7 +11,7 @@ import (
 
 func TestWrapSubscriber_ClaimDoneSpanEndsAfterSettlement(t *testing.T) {
 	tr := &spyTracer{}
-	wrapped := wrapper.MustWrapSubscriber(tr, eventSpec(),
+	wrapped := mustWrapSubscriberForTest(t, tr, eventSpec(),
 		func(ctx context.Context, _ outbox.Entry) (outbox.HandleResult, outbox.Settlement) {
 			if got := wrapper.ContractIDFromContext(ctx); got != eventSpec().ID {
 				t.Fatalf("contract id missing from handler context: %q", got)
@@ -42,7 +42,7 @@ func TestWrapSubscriber_ClaimDoneSpanEndsAfterSettlement(t *testing.T) {
 
 func TestWrapSubscriber_ClaimBusySpanRecordsRequeueSettlement(t *testing.T) {
 	tr := &spyTracer{}
-	wrapped := wrapper.MustWrapSubscriber(tr, eventSpec(),
+	wrapped := mustWrapSubscriberForTest(t, tr, eventSpec(),
 		func(context.Context, outbox.Entry) (outbox.HandleResult, outbox.Settlement) {
 			return outbox.HandleResult{Disposition: outbox.DispositionRequeue}, nil
 		})
@@ -75,7 +75,7 @@ func TestWrapSubscriber_CommitFailedUsesFinalSettlementAndPreservesObservers(t *
 	})
 	commitErr := errors.New("lease expired")
 
-	wrapped := wrapper.MustWrapSubscriber(tr, eventSpec(),
+	wrapped := mustWrapSubscriberForTest(t, tr, eventSpec(),
 		func(context.Context, outbox.Entry) (outbox.HandleResult, outbox.Settlement) {
 			return outbox.HandleResult{
 				Disposition:         outbox.DispositionAck,
@@ -110,7 +110,7 @@ func TestWrapSubscriber_CommitFailedUsesFinalSettlementAndPreservesObservers(t *
 func TestWrapSubscriber_PanicEndsSpan(t *testing.T) {
 	tr := &spyTracer{}
 	boom := errors.New("subscriber handler exploded")
-	wrapped := wrapper.MustWrapSubscriber(tr, eventSpec(),
+	wrapped := mustWrapSubscriberForTest(t, tr, eventSpec(),
 		func(context.Context, outbox.Entry) (outbox.HandleResult, outbox.Settlement) {
 			panic(boom)
 		})
@@ -142,6 +142,10 @@ func TestWrapSubscriber_ReturnsErrorsForInvalidInputs(t *testing.T) {
 		return outbox.HandleResult{Disposition: outbox.DispositionAck}, nil
 	}
 
+	// Structural assertions WrapSubscriber still owns: nil fn and non-event Kind
+	// catch programming errors that no upstream Subscription.Validate would have
+	// surfaced (Subscription has no Kind field — it carries primitive
+	// ContractKind strings rather than an enum).
 	if _, err := wrapper.WrapSubscriber(wrapper.NoopTracer{}, eventSpec(), nil); err == nil {
 		t.Fatal("expected error on nil subscriber handler")
 	}
@@ -149,28 +153,41 @@ func TestWrapSubscriber_ReturnsErrorsForInvalidInputs(t *testing.T) {
 		t.Fatal("expected error on non-event spec")
 	}
 
+	// Per P2 #1 (single-source validation): spec field-level validation is the
+	// caller's responsibility (eventrouter.AddContractHandler at registration
+	// time + contractTracingSubscriber at Subscribe/Setup time, both via
+	// Subscription.Validate / spec.Validate). WrapSubscriber accepts a spec
+	// with ID="" without re-validating, since doing so would be a redundant
+	// third pass.
 	invalid := eventSpec()
 	invalid.ID = ""
-	if _, err := wrapper.WrapSubscriber(wrapper.NoopTracer{}, invalid, ackHandler); err == nil {
-		t.Fatal("expected error on invalid event spec")
+	if _, err := wrapper.WrapSubscriber(wrapper.NoopTracer{}, invalid, ackHandler); err != nil {
+		t.Fatalf("WrapSubscriber: unexpected validation on caller-validated spec: %v", err)
 	}
 }
 
-func TestMustWrapSubscriber_PanicsOnInvalidInput(t *testing.T) {
-	t.Parallel()
-
-	defer func() {
-		if recover() == nil {
-			t.Fatal("expected panic on nil subscriber handler")
-		}
-	}()
-	_ = wrapper.MustWrapSubscriber(wrapper.NoopTracer{}, eventSpec(), nil)
+// mustWrapSubscriberForTest returns a SubscriberHandler from
+// wrapper.WrapSubscriber, failing the test on error. This is a test-only
+// helper that replaces the deleted wrapper.MustWrapSubscriber: production
+// callers always handle the error explicitly (N8 (c)).
+func mustWrapSubscriberForTest(
+	t *testing.T,
+	tr wrapper.Tracer,
+	spec wrapper.ContractSpec,
+	fn outbox.SubscriberHandler,
+) outbox.SubscriberHandler {
+	t.Helper()
+	wrapped, err := wrapper.WrapSubscriber(tr, spec, fn)
+	if err != nil {
+		t.Fatalf("WrapSubscriber: %v", err)
+	}
+	return wrapped
 }
 
 func TestWrapSubscriber_NilTracerFallsBackToNoop(t *testing.T) {
 	t.Parallel()
 
-	wrapped := wrapper.MustWrapSubscriber(nil, eventSpec(),
+	wrapped := mustWrapSubscriberForTest(t, nil, eventSpec(),
 		func(context.Context, outbox.Entry) (outbox.HandleResult, outbox.Settlement) {
 			return outbox.HandleResult{Disposition: outbox.DispositionAck}, nil
 		})
@@ -241,7 +258,7 @@ func TestWrapSubscriber_SettlementStatusBranches(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			tr := &spyTracer{}
-			wrapped := wrapper.MustWrapSubscriber(tr, eventSpec(),
+			wrapped := mustWrapSubscriberForTest(t, tr, eventSpec(),
 				func(context.Context, outbox.Entry) (outbox.HandleResult, outbox.Settlement) {
 					return outbox.HandleResult{Disposition: outbox.DispositionAck}, nil
 				})
@@ -266,7 +283,7 @@ func TestWrapSubscriber_SettlementStatusBranches(t *testing.T) {
 
 func TestWrapSubscriber_SettlementObserverEndsSpanOnce(t *testing.T) {
 	tr := &spyTracer{}
-	wrapped := wrapper.MustWrapSubscriber(tr, eventSpec(),
+	wrapped := mustWrapSubscriberForTest(t, tr, eventSpec(),
 		func(context.Context, outbox.Entry) (outbox.HandleResult, outbox.Settlement) {
 			return outbox.HandleResult{Disposition: outbox.DispositionAck}, nil
 		})
