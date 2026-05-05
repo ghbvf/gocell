@@ -5,7 +5,9 @@ package demo
 
 import (
 	"context"
+	"fmt"
 
+	sub0 "github.com/ghbvf/gocell/generated/contracts/event/widget/created/v1"
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/metadata"
 )
@@ -55,6 +57,10 @@ func (c *Demo) Init(ctx context.Context, reg cell.Registry) error {
 			return firstErr
 		},
 	})
+
+	if err := sub0.NewSubscription(c.alphaHandler.HandleWidgetCreated, "demo", "alpha").Mount(reg); err != nil {
+		return fmt.Errorf("demo: subscribe event.widget.created.v1: %w", err)
+	}
 
 	return nil
 }

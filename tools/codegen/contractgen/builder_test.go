@@ -601,3 +601,31 @@ func TestBuildHTTPEndpointSpec_HasBody_PostWithRequestSchema(t *testing.T) {
 		t.Errorf("HasBody should be true for POST with request schema, got false")
 	}
 }
+
+// TestBuildContractSpec_Event_TopicAndHandlerMethod verifies that BuildContractSpec
+// correctly populates the EventEndpointSpec.Topic and HandlerMethod fields for an
+// event contract. Topic is contractID with version suffix stripped
+// (stripVersionSuffix), HandlerMethod is "Handle" + PascalCase(domainLastSegment).
+func TestBuildContractSpec_Event_TopicAndHandlerMethod(t *testing.T) {
+	t.Parallel()
+	root, p := setupEventRoot(t)
+
+	spec, err := BuildContractSpec(root, p, "event.item-created.v1")
+	if err != nil {
+		t.Fatalf("BuildContractSpec: %v", err)
+	}
+	if spec.Event == nil {
+		t.Fatal("expected Event spec to be populated for kind=event")
+	}
+	// stripVersionSuffix("event.item-created.v1") → "event.item-created"
+	wantTopic := "event.item-created"
+	if spec.Event.Topic != wantTopic {
+		t.Errorf("Event.Topic = %q, want %q", spec.Event.Topic, wantTopic)
+	}
+	// domainLastSegment("event.item-created.v1") = "item-created"
+	// goPascalCase("item-created") = "ItemCreated" → "HandleItemCreated"
+	wantMethod := "HandleItemCreated"
+	if spec.Event.HandlerMethod != wantMethod {
+		t.Errorf("Event.HandlerMethod = %q, want %q", spec.Event.HandlerMethod, wantMethod)
+	}
+}

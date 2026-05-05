@@ -283,6 +283,8 @@ func TestRenderCell_GoldenSynth(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BuildCellSpec: %v", err)
 	}
+	// Enrich subscription import paths (mirrors Generate's behavior).
+	EnrichSubscriptionsWithModulePath(spec, "github.com/ghbvf/gocell")
 	out, err := codegen.Render(codegen.RenderOptions{
 		TemplateName: "cell.tmpl",
 		Templates:    templates,
@@ -407,7 +409,8 @@ func initSyntheticRepo(t *testing.T) string {
 }
 
 // buildSyntheticProject mirrors what metadata.Parser would produce for a
-// minimal project with one cell + one slice (no wire fields in yaml).
+// minimal project with one cell + one slice + one event contract.
+// The event contract is needed by syntheticBundle's Subscribes entry (T-8).
 func buildSyntheticProject() *metadata.ProjectMeta {
 	cell := &metadata.CellMeta{
 		ID: "demo", Dir: "demo", File: "cells/demo/cell.yaml", GoStructName: "Demo",
@@ -416,16 +419,24 @@ func buildSyntheticProject() *metadata.ProjectMeta {
 		ID: "alpha", BelongsToCell: "demo", Dir: "alpha",
 		File: "cells/demo/slices/alpha/slice.yaml",
 	}
-	return fixtureProject(cell, []*metadata.SliceMeta{slc}, nil)
+	contract := &metadata.ContractMeta{
+		ID:   "event.widget.created.v1",
+		Kind: "event",
+	}
+	return fixtureProject(cell, []*metadata.SliceMeta{slc}, []*metadata.ContractMeta{contract})
 }
 
 // syntheticBundle returns the WireBundle for the synthetic project's "demo" cell.
 // Mirrors the marker declarations that would appear in a real cell.go.
+// Includes a Subscribes entry (T-8) to exercise the subscription rendering path.
 func syntheticBundle() markergen.WireBundle {
 	return markergen.WireBundle{
 		Listeners: []markergen.ListenerSpec{{Ref: "cell.PrimaryListener", Prefix: "/api/v1"}},
 		Routes: []markergen.RouteSpec{
 			{Slice: "alpha", Listener: "cell.PrimaryListener", SubPath: "/widgets", HandlerField: "alphaHandler"},
+		},
+		Subscribes: []markergen.SubscribeSpec{
+			{Slice: "alpha", Topic: "event.widget.created.v1", Handler: "HandleWidgetCreated", SliceField: "alphaHandler", Group: "demo"},
 		},
 	}
 }

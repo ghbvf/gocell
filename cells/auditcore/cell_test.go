@@ -296,22 +296,38 @@ func TestAuditCore_RegisterSubscriptions(t *testing.T) {
 	require.NoError(t, c.Init(ctx, recorder))
 
 	snap := recorder.Snapshot()
-	assert.Equal(t, 13, len(snap.Subscriptions),
-		"auditcore registers 13 topic handlers (5 user lifecycle + 2 session + 4 config + 2 role events)")
+	// Codegen pattern: topic is contractID without version suffix
+	// (stripVersionSuffix: "event.user.updated.v1" → "event.user.updated").
+	// All 13 topics are listed explicitly here (T-7: replace magic number with topic set).
+	expectedTopics := []string{
+		// 4 config events
+		"event.config.entry-deleted",
+		"event.config.entry-upserted",
+		"event.config.rollback",
+		"event.config.version-published",
+		// 2 role events
+		"event.role.assigned",
+		"event.role.revoked",
+		// 2 session events
+		"event.session.created",
+		"event.session.revoked",
+		// 5 user lifecycle events
+		"event.user.created",
+		"event.user.deleted",
+		"event.user.locked",
+		"event.user.unlocked",
+		"event.user.updated",
+	}
+	assert.Equal(t, len(expectedTopics), len(snap.Subscriptions),
+		"auditcore registers exactly %d topic subscriptions", len(expectedTopics))
 
 	topicSet := make(map[string]bool, len(snap.Subscriptions))
 	for _, sub := range snap.Subscriptions {
 		topicSet[sub.Spec.Topic] = true
 	}
-	// New codegen pattern: topic is contractID without version suffix
-	// (stripVersionSuffix: "event.user.updated.v1" → "event.user.updated").
-	assert.True(t, topicSet["event.user.updated"])
-	assert.True(t, topicSet["event.user.deleted"])
-	assert.True(t, topicSet["event.user.unlocked"])
-	assert.True(t, topicSet["event.config.entry-upserted"])
-	assert.True(t, topicSet["event.config.entry-deleted"])
-	assert.True(t, topicSet["event.config.version-published"])
-	assert.True(t, topicSet["event.config.rollback"])
+	for _, topic := range expectedTopics {
+		assert.True(t, topicSet[topic], "auditcore must subscribe to %s", topic)
+	}
 }
 
 // stubMux implements cell.RouteMux for testing.

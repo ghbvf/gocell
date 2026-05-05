@@ -199,3 +199,73 @@ func wrapperLocalAlias(f *ast.File) string {
 	}
 	return ""
 }
+
+// TestCELLS_NO_WRAPPER_CONTRACTSPEC_IMPORT_01_NegativeFixture verifies that the
+// scanner correctly identifies a file that imports kernel/wrapper and references
+// wrapper.ContractSpec. The fixture in testdata/cells_no_wrapper_contractspec/
+// contains a deliberate violation.
+func TestCELLS_NO_WRAPPER_CONTRACTSPEC_IMPORT_01_NegativeFixture(t *testing.T) {
+	t.Parallel()
+	fixturePath, err := filepath.Abs(filepath.Join("testdata", "cells_no_wrapper_contractspec", "violates", "handler.go"))
+	if err != nil {
+		t.Fatalf("abs path: %v", err)
+	}
+	rel := "cells/fake/violates/handler.go"
+	violations := scanForWrapperSpecUsage(fset_new(), fixturePath, rel)
+	if len(violations) == 0 {
+		t.Errorf("expected at least 1 violation for fixture with wrapper.ContractSpec reference, got 0")
+	}
+	for _, v := range violations {
+		if !strings.Contains(v, "ContractSpec") {
+			t.Errorf("violation message should mention ContractSpec: %q", v)
+		}
+	}
+}
+
+// TestWrapperLocalAlias_TableDriven verifies the four key import patterns for
+// kernel/wrapper: (a) no import, (b) default "wrapper" name, (c) explicit alias,
+// (d) blank/underscore alias (import side effect — not used as identifier).
+func TestWrapperLocalAlias_TableDriven(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name string
+		src  string
+		want string
+	}{
+		{
+			name: "no_import",
+			src:  `package p; import "fmt"; var _ = fmt.Sprintf`,
+			want: "",
+		},
+		{
+			name: "default_name",
+			src:  `package p; import "github.com/ghbvf/gocell/kernel/wrapper"; var _ = wrapper.ContractSpec{}`,
+			want: "wrapper",
+		},
+		{
+			name: "explicit_alias_w",
+			src:  `package p; import w "github.com/ghbvf/gocell/kernel/wrapper"; var _ = w.ContractSpec{}`,
+			want: "w",
+		},
+		{
+			name: "underscore_blank",
+			src:  `package p; import _ "github.com/ghbvf/gocell/kernel/wrapper"`,
+			want: "_",
+		},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			fset := token.NewFileSet()
+			f, err := parser.ParseFile(fset, "test.go", tc.src, parser.SkipObjectResolution)
+			if err != nil {
+				t.Fatalf("parse: %v", err)
+			}
+			got := wrapperLocalAlias(f)
+			if got != tc.want {
+				t.Errorf("wrapperLocalAlias = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}

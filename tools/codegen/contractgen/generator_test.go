@@ -183,6 +183,8 @@ func TestGenerate_WriteMode_HTTP(t *testing.T) {
 
 // TestGenerate_WriteMode_Event verifies that event contracts produce 4 files
 // (types_gen.go + iface_gen.go + spec_gen.go + subscription_gen.go) but NOT handler_gen.go.
+// It also asserts key content invariants: spec_gen.go uses lowercase "var spec" (private),
+// and subscription_gen.go exposes a 3-arg NewSubscription(handler, consumerGroup, sliceID).
 func TestGenerate_WriteMode_Event(t *testing.T) {
 	t.Parallel()
 	root, p := setupEventRoot(t)
@@ -199,13 +201,35 @@ func TestGenerate_WriteMode_Event(t *testing.T) {
 		}
 	}
 	// Verify spec_gen.go and subscription_gen.go are present.
-	fileNames := make(map[string]bool)
+	filesByName := make(map[string]string) // basename → absolute path
 	for _, path := range res.Generated {
-		fileNames[filepath.Base(path)] = true
+		filesByName[filepath.Base(path)] = path
 	}
 	for _, want := range []string{"types_gen.go", "iface_gen.go", "spec_gen.go", "subscription_gen.go"} {
-		if !fileNames[want] {
+		if _, ok := filesByName[want]; !ok {
 			t.Errorf("missing expected file: %s", want)
+		}
+	}
+
+	// spec_gen.go: must declare "var spec" (lowercase — private to package).
+	if specPath, ok := filesByName["spec_gen.go"]; ok {
+		content, err := os.ReadFile(specPath) //nolint:gosec // test reads its own tmp file
+		if err != nil {
+			t.Fatalf("read spec_gen.go: %v", err)
+		}
+		if !strings.Contains(string(content), "var spec = wrapper.ContractSpec{") {
+			t.Errorf("spec_gen.go should contain 'var spec = wrapper.ContractSpec{' (private), content:\n%s", string(content))
+		}
+	}
+
+	// subscription_gen.go: must expose NewSubscription with 3 args (handler, consumerGroup, sliceID).
+	if subPath, ok := filesByName["subscription_gen.go"]; ok {
+		content, err := os.ReadFile(subPath) //nolint:gosec // test reads its own tmp file
+		if err != nil {
+			t.Fatalf("read subscription_gen.go: %v", err)
+		}
+		if !strings.Contains(string(content), "func NewSubscription(handler outbox.EntryHandler, consumerGroup, sliceID string)") {
+			t.Errorf("subscription_gen.go should contain 3-arg NewSubscription signature, content:\n%s", string(content))
 		}
 	}
 }

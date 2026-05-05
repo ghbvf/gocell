@@ -62,3 +62,37 @@ func TestCONTRACT_KINDS_CLOSED_SET_01(t *testing.T) {
 	sort.Strings(kinds)
 	t.Logf("CONTRACT-KINDS-CLOSED-SET-01: active kinds in project: %v", kinds)
 }
+
+// TestCONTRACT_KINDS_CLOSED_SET_01_NegativeFixture verifies that a project
+// containing a contract with kind="workflow" (outside the closed set) would
+// be caught by the closed-set checker. This is a unit test against the
+// checker logic using a synthetic ProjectMeta — no filesystem contract.yaml.
+func TestCONTRACT_KINDS_CLOSED_SET_01_NegativeFixture(t *testing.T) {
+	t.Parallel()
+	// Build a synthetic project with an unknown kind.
+	type fakeContract struct {
+		id   string
+		kind string
+	}
+	contracts := []fakeContract{
+		{"workflow.device.enroll.v1", "workflow"},   // unknown — must be caught
+		{"http.device.list.v1", "http"},             // known — must pass
+		{"event.device.enrolled.v1", "event"},       // known — must pass
+	}
+
+	var violations []string
+	for _, c := range contracts {
+		if !closedSetContractKinds[c.kind] {
+			violations = append(violations,
+				"contract "+c.id+": unknown kind \""+c.kind+"\" (allowed: http | event | command | projection)")
+		}
+	}
+
+	if len(violations) == 0 {
+		t.Errorf("expected at least 1 violation for kind=workflow, got 0")
+	}
+	// Only the workflow contract should violate.
+	if len(violations) != 1 {
+		t.Errorf("expected exactly 1 violation, got %d: %v", len(violations), violations)
+	}
+}

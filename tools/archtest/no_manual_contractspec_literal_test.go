@@ -142,6 +142,30 @@ func collectContractSpecScanFiles(t *testing.T, root string) []string {
 	return files
 }
 
+// TestNO_MANUAL_CONTRACTSPEC_LITERAL_01_NegativeFixture verifies that the
+// scanner correctly identifies a wrapper.ContractSpec{} literal in a
+// hand-written file. The fixture in testdata/no_manual_contractspec_literal/
+// contains a deliberate violation.
+func TestNO_MANUAL_CONTRACTSPEC_LITERAL_01_NegativeFixture(t *testing.T) {
+	t.Parallel()
+	fixturePath, err := filepath.Abs(filepath.Join("testdata", "no_manual_contractspec_literal", "violates", "handler.go"))
+	if err != nil {
+		t.Fatalf("abs path: %v", err)
+	}
+	// Simulate the relative path as it would appear under cells/.
+	rel := "cells/fake/slices/bad/handler.go"
+	violations := scanForContractSpecLiterals(token.NewFileSet(), fixturePath, rel)
+	if len(violations) == 0 {
+		t.Errorf("expected at least 1 violation for fixture with manual ContractSpec literal, got 0")
+	}
+	// Verify the violation message is informative.
+	for _, v := range violations {
+		if !strings.Contains(v, "ContractSpec") {
+			t.Errorf("violation message should mention ContractSpec: %q", v)
+		}
+	}
+}
+
 // scanForContractSpecLiterals AST-scans f for:
 //  1. wrapper.ContractSpec{…} composite literals
 //  2. wrapper.EventSpec(…) call expressions

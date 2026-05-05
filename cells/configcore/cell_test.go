@@ -212,20 +212,33 @@ func TestConfigCore_RouteGroups(t *testing.T) {
 
 	snap := recorder.Snapshot()
 	require.Len(t, snap.RouteGroups, 2, "configcore should declare 2 route groups (primary + internal)")
-	assert.Equal(t, cell.PrimaryListener, snap.RouteGroups[0].Listener)
-	assert.Equal(t, "/api/v1", snap.RouteGroups[0].Prefix)
-	assert.NotNil(t, snap.RouteGroups[0].Register)
-	assert.Equal(t, cell.InternalListener, snap.RouteGroups[1].Listener)
-	assert.Equal(t, "/internal/v1", snap.RouteGroups[1].Prefix)
-	assert.NotNil(t, snap.RouteGroups[1].Register)
+
+	// Locate groups by listener type — resilient to codegen ordering changes.
+	var primary, internal *cell.RouteGroup
+	for i := range snap.RouteGroups {
+		g := &snap.RouteGroups[i]
+		if g.Listener == cell.PrimaryListener {
+			primary = g
+		}
+		if g.Listener == cell.InternalListener {
+			internal = g
+		}
+	}
+	require.NotNil(t, primary, "expected primary listener route group")
+	require.NotNil(t, internal, "expected internal listener route group")
+
+	assert.Equal(t, "/api/v1", primary.Prefix)
+	assert.NotNil(t, primary.Register)
+	assert.Equal(t, "/internal/v1", internal.Prefix)
+	assert.NotNil(t, internal.Register)
 
 	// Verify the register function actually mounts routes.
 	mux := &stubMux{}
-	require.NoError(t, snap.RouteGroups[0].Register(mux))
+	require.NoError(t, primary.Register(mux))
 	assert.GreaterOrEqual(t, mux.handleCount, 2, "should register at least 2 route patterns")
 
 	internalMux := &stubMux{}
-	require.NoError(t, snap.RouteGroups[1].Register(internalMux))
+	require.NoError(t, internal.Register(internalMux))
 	assert.GreaterOrEqual(t, internalMux.handleCount, 1, "internal group should register at least 1 route pattern")
 }
 
