@@ -100,6 +100,66 @@ func (c *failStopCell) Stop(_ context.Context) error {
 	return errors.New("stop boom")
 }
 
+type gatedStartCell struct {
+	*cell.BaseCell
+	entered     chan struct{}
+	release     chan struct{}
+	enterOnce   sync.Once
+	releaseOnce sync.Once
+}
+
+func newGatedStartCell(id string) *gatedStartCell {
+	return &gatedStartCell{
+		BaseCell: cell.MustNewBaseCell(&metadata.CellMeta{ID: id, Type: "core", ConsistencyLevel: "L0"}),
+		entered:  make(chan struct{}),
+		release:  make(chan struct{}),
+	}
+}
+
+func (c *gatedStartCell) Start(ctx context.Context) error {
+	c.enterOnce.Do(func() { close(c.entered) })
+	select {
+	case <-c.release:
+		return c.BaseCell.Start(ctx)
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func (c *gatedStartCell) releaseStart() {
+	c.releaseOnce.Do(func() { close(c.release) })
+}
+
+type gatedStopCell struct {
+	*cell.BaseCell
+	entered     chan struct{}
+	release     chan struct{}
+	enterOnce   sync.Once
+	releaseOnce sync.Once
+}
+
+func newGatedStopCell(id string) *gatedStopCell {
+	return &gatedStopCell{
+		BaseCell: cell.MustNewBaseCell(&metadata.CellMeta{ID: id, Type: "core", ConsistencyLevel: "L0"}),
+		entered:  make(chan struct{}),
+		release:  make(chan struct{}),
+	}
+}
+
+func (c *gatedStopCell) Stop(ctx context.Context) error {
+	c.enterOnce.Do(func() { close(c.entered) })
+	select {
+	case <-c.release:
+		return c.BaseCell.Stop(ctx)
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func (c *gatedStopCell) releaseStop() {
+	c.releaseOnce.Do(func() { close(c.release) })
+}
+
 // ---------------------------------------------------------------------------
 // tests
 // ---------------------------------------------------------------------------
@@ -282,6 +342,56 @@ func TestAssemblyDoubleStartPrevented(t *testing.T) {
 	require.Error(t, err, "double start should fail")
 }
 
+func TestAssemblyStartWhileStartingRejected(t *testing.T) {
+	a := newTestAssembly(t, Config{ID: "start-while-starting", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
+	c := newGatedStartCell("c")
+	t.Cleanup(c.releaseStart)
+	require.NoError(t, a.Register(c))
+
+	startDone := make(chan error, 1)
+	go func() {
+		startDone <- a.Start(context.Background())
+	}()
+	<-c.entered
+
+	err := a.Start(context.Background())
+	require.Error(t, err, "Start while stateStarting must fail")
+	var ec *ecErr.Error
+	require.True(t, errors.As(err, &ec))
+	assert.Equal(t, ecErr.ErrValidationFailed, ec.Code)
+	assert.Contains(t, err.Error(), "cannot start in state")
+
+	c.releaseStart()
+	require.NoError(t, <-startDone)
+	require.NoError(t, a.Stop(context.Background()))
+}
+
+func TestAssemblyStartWhileStoppingRejected(t *testing.T) {
+	a := newTestAssembly(t, Config{ID: "start-while-stopping", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
+	c := newGatedStopCell("c")
+	t.Cleanup(c.releaseStop)
+	require.NoError(t, a.Register(c))
+	require.NoError(t, a.Start(context.Background()))
+
+	stopDone := make(chan error, 1)
+	go func() {
+		stopDone <- a.Stop(context.Background())
+	}()
+	<-c.entered
+
+	err := a.Start(context.Background())
+	require.Error(t, err, "Start while stateStopping must fail")
+	var ec *ecErr.Error
+	require.True(t, errors.As(err, &ec))
+	assert.Equal(t, ecErr.ErrValidationFailed, ec.Code)
+	assert.Contains(t, err.Error(), "cannot start in state")
+	require.NoError(t, a.Stop(context.Background()), "Stop while stateStopping is a no-op")
+
+	c.releaseStop()
+	require.NoError(t, <-stopDone)
+	assert.Nil(t, a.Snapshots())
+}
+
 func TestAssemblyRegisterAfterStartRejected(t *testing.T) {
 	a := newTestAssembly(t, Config{ID: "reg-after-start", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
 	c1 := cell.MustNewBaseCell(&metadata.CellMeta{ID: "c1", Type: "core"})
@@ -448,10 +558,10 @@ func TestAssemblyStart_InvalidDurabilityMode_Rejects(t *testing.T) {
 // Snapshot lifecycle tests — ref: uber-go/fx App.Done lifecycle state machine.
 // ---------------------------------------------------------------------------
 
-// TestAssembly_Snapshots_EmptyAfterInitFailure verifies that when a cell's
-// Init returns an error, Snapshots() returns an empty map (not populated data
+// TestAssembly_Snapshots_NilAfterInitFailure verifies that when a cell's
+// Init returns an error, Snapshots() returns nil (not populated data
 // from cells that succeeded Init before the failure).
-func TestAssembly_Snapshots_EmptyAfterInitFailure(t *testing.T) {
+func TestAssembly_Snapshots_NilAfterInitFailure(t *testing.T) {
 	t.Parallel()
 
 	a := newTestAssembly(t, Config{ID: "snap-init-fail", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
@@ -465,13 +575,13 @@ func TestAssembly_Snapshots_EmptyAfterInitFailure(t *testing.T) {
 	require.Error(t, err)
 
 	snaps := a.Snapshots()
-	assert.Empty(t, snaps, "Snapshots() must return empty map after Init failure")
+	assert.Nil(t, snaps, "Snapshots() must return nil after Init failure")
 }
 
-// TestAssembly_Snapshots_EmptyAfterStartFailure verifies that when a cell's
-// Start returns an error (after a successful Init), Snapshots() returns an
-// empty map (assembly did not reach the Started state).
-func TestAssembly_Snapshots_EmptyAfterStartFailure(t *testing.T) {
+// TestAssembly_Snapshots_NilAfterStartFailure verifies that when a cell's
+// Start returns an error (after a successful Init), Snapshots() returns nil
+// because assembly did not reach the Started state.
+func TestAssembly_Snapshots_NilAfterStartFailure(t *testing.T) {
 	t.Parallel()
 
 	a := newTestAssembly(t, Config{ID: "snap-start-fail", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
@@ -485,12 +595,12 @@ func TestAssembly_Snapshots_EmptyAfterStartFailure(t *testing.T) {
 	require.Error(t, err)
 
 	snaps := a.Snapshots()
-	assert.Empty(t, snaps, "Snapshots() must return empty map after Start failure")
+	assert.Nil(t, snaps, "Snapshots() must return nil after Start failure")
 }
 
-// TestAssembly_Snapshots_EmptyAfterStop verifies that after a successful
-// Start + Stop cycle, Snapshots() returns an empty map.
-func TestAssembly_Snapshots_EmptyAfterStop(t *testing.T) {
+// TestAssembly_Snapshots_NilAfterStop verifies that after a successful
+// Start + Stop cycle, Snapshots() returns nil.
+func TestAssembly_Snapshots_NilAfterStop(t *testing.T) {
 	t.Parallel()
 
 	a := newTestAssembly(t, Config{ID: "snap-after-stop", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
@@ -505,9 +615,50 @@ func TestAssembly_Snapshots_EmptyAfterStop(t *testing.T) {
 
 	require.NoError(t, a.Stop(context.Background()))
 
-	// After Stop: snapshots should be empty.
+	// After Stop: snapshots should be nil.
 	snaps = a.Snapshots()
-	assert.Empty(t, snaps, "Snapshots() must return empty map after Stop")
+	assert.Nil(t, snaps, "Snapshots() must return nil after Stop")
+}
+
+func TestAssembly_Snapshots_NilWhileStartInProgress(t *testing.T) {
+	a := newTestAssembly(t, Config{ID: "snap-while-starting", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
+	c := newGatedStartCell("c")
+	t.Cleanup(c.releaseStart)
+	require.NoError(t, a.Register(c))
+
+	startDone := make(chan error, 1)
+	go func() {
+		startDone <- a.Start(context.Background())
+	}()
+	<-c.entered
+
+	assert.Nil(t, a.Snapshots(), "Snapshots() must stay nil until Start fully succeeds")
+
+	c.releaseStart()
+	require.NoError(t, <-startDone)
+	assert.NotEmpty(t, a.Snapshots(), "Snapshots() must publish after Start reaches stateStarted")
+	require.NoError(t, a.Stop(context.Background()))
+}
+
+func TestAssembly_Snapshots_NilWhileStopInProgress(t *testing.T) {
+	a := newTestAssembly(t, Config{ID: "snap-while-stopping", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
+	c := newGatedStopCell("c")
+	t.Cleanup(c.releaseStop)
+	require.NoError(t, a.Register(c))
+	require.NoError(t, a.Start(context.Background()))
+	require.NotEmpty(t, a.Snapshots(), "precondition: snapshots are visible while started")
+
+	stopDone := make(chan error, 1)
+	go func() {
+		stopDone <- a.Stop(context.Background())
+	}()
+	<-c.entered
+
+	assert.Nil(t, a.Snapshots(), "Snapshots() must be nil once Stop moves assembly out of stateStarted")
+
+	c.releaseStop()
+	require.NoError(t, <-stopDone)
+	assert.Nil(t, a.Snapshots(), "Snapshots() must remain nil after Stop completes")
 }
 
 // TestAssembly_StartInternal_PerCellConfigIsolation verifies that each cell
