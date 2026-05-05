@@ -257,7 +257,7 @@ func isNoopTx(r persistence.TxRunner) bool {
 
 func (s *Service) cleanupIssuedSession(ctx context.Context, sessionID string) {
 	cleanupCtx := context.WithoutCancel(ctx)
-	if err := s.refreshStore.RevokeSession(cleanupCtx, sessionID); err != nil {
+	if err := s.refreshStore.RevokeSessionDetached(ctx, sessionID); err != nil {
 		s.logger.Error("session-login: cleanup refresh chain failed",
 			slog.Any("error", err), slog.String("session_id", sessionID))
 	}

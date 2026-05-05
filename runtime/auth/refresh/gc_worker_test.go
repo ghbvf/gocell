@@ -67,6 +67,10 @@ func (s *gcStoreSpy) RevokeSession(context.Context, string) error {
 	return errors.New("not implemented")
 }
 
+func (s *gcStoreSpy) RevokeSessionDetached(context.Context, string) error {
+	return errors.New("not implemented")
+}
+
 func (s *gcStoreSpy) RevokeUser(context.Context, string) error {
 	return errors.New("not implemented")
 }

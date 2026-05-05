@@ -692,6 +692,52 @@ func TestPGRefreshStore_T23_AmbientTxRollback(t *testing.T) {
 		"ambient tx rollback must revert Rotate INSERT: no new row should persist")
 }
 
+func TestPGRefreshStore_RevokeSessionDetachedSurvivesAmbientRollback(t *testing.T) {
+	base, cleanup := setupPostgres(t)
+	t.Cleanup(cleanup)
+
+	ctx := context.Background()
+	p := isolatedSchemaPool(t, ctx, base)
+	migrator, err := NewMigrator(p, testMigrationsFS(t), "schema_migrations_detached_revoke")
+	require.NoError(t, err)
+	require.NoError(t, migrator.Up(ctx))
+
+	clock := storetest.NewFakeClock(time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC))
+	txm := NewTxManager(p)
+	store, err := NewRefreshStore(p.DB(), txm, refresh.Policy{
+		ReuseInterval:  testtime.D2s,
+		MaxAge:         testtime.D1h,
+		MaxIdle:        refreshTest30Days,
+		GraceMaxReuses: refresh.DefaultGraceMaxReuses,
+	}, clock, nil)
+	require.NoError(t, err)
+
+	detachedWire, _, err := store.Issue(ctx, "sess-detached-revoke", "usr-detached-revoke")
+	require.NoError(t, err)
+	businessWire, _, err := store.Issue(ctx, "sess-business-revoke", "usr-business-revoke")
+	require.NoError(t, err)
+
+	runErr := txm.RunInTx(ctx, func(txCtx context.Context) error {
+		require.NoError(t, store.RevokeSessionDetached(txCtx, "sess-detached-revoke"))
+		return fmt.Errorf("force outer rollback")
+	})
+	require.Error(t, runErr)
+
+	_, _, err = store.Rotate(ctx, detachedWire)
+	require.ErrorIs(t, err, refresh.ErrRejected,
+		"detached session revoke must commit independently of the caller rollback")
+
+	runErr = txm.RunInTx(ctx, func(txCtx context.Context) error {
+		require.NoError(t, store.RevokeSession(txCtx, "sess-business-revoke"))
+		return fmt.Errorf("force outer rollback")
+	})
+	require.Error(t, runErr)
+
+	_, _, err = store.Rotate(ctx, businessWire)
+	require.NoError(t, err,
+		"business RevokeSession must participate in ambient tx and roll back with it")
+}
+
 // ---------------------------------------------------------------------------
 // PR#388 Finding 1 — caller-ctx-cancel cascade detach coverage
 // ---------------------------------------------------------------------------

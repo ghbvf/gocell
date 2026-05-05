@@ -252,6 +252,13 @@ func (s *store) RevokeSession(_ context.Context, sessionID string) error {
 	return nil
 }
 
+// RevokeSessionDetached marks every row in the session_id lineage as revoked.
+// Memstore has no ambient transaction/cancellation boundary, so it shares the
+// same locked critical section as RevokeSession.
+func (s *store) RevokeSessionDetached(ctx context.Context, sessionID string) error {
+	return s.RevokeSession(ctx, sessionID)
+}
+
 // RevokeUser marks every row owned by subjectID as revoked.
 func (s *store) RevokeUser(_ context.Context, subjectID string) error {
 	now := s.clock.Now()

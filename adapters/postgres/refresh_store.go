@@ -101,11 +101,13 @@ WHERE id IN (
 // Consistency: L1 LocalTx — Rotate is atomic within a single transaction;
 // Issue and revoke paths are single-statement writes.
 //
-// Transaction contract (B2-A-08): PGRefreshStore never acquires its own
-// transactions. All multi-statement operations (Peek, Rotate) delegate to the
-// injected TxRunner. When the caller already holds an ambient transaction,
-// TxManager creates a savepoint instead of a new top-level transaction, so
-// refresh operations are fully nesting-safe.
+// Transaction contract (B2-A-08): PGRefreshStore uses the ambient transaction
+// for business operations. Multi-statement operations (Peek, Rotate) delegate
+// to the injected TxRunner. When the caller already holds an ambient
+// transaction, TxManager creates a savepoint instead of a new top-level
+// transaction, so refresh operations are fully nesting-safe. The only explicit
+// bypass is RevokeSessionDetached and reuse-detection cascade revoke, which
+// commit independently as security/compensation responses.
 //
 // ref: ory/fosite token/hmac/hmacsha.go (base64url nopad + constant-time compare)
 // ref: ory/hydra persistence/sql/persister_oauth2.go (CAS chain + reuse cascade)
@@ -486,18 +488,8 @@ func (s *PGRefreshStore) handleRotatedRow(ctx context.Context, row refreshRow, m
 			slog.String("reason", "reuse_detected"),
 			slog.Int("used_times", row.usedTimes),
 		)
-		// Detach from the caller's cancellation context: a reuse-attack response
-		// MUST persist even when the HTTP request is canceled or times out.
-		// The detached context gets a bounded 5-second deadline so the write does
-		// not run indefinitely. The ambient tx is bypassed via s.pool.Exec so the
-		// revoke commits on its own connection regardless of the outer RunInTx outcome.
-		// ref: golang/go context.WithoutCancel; hashicorp/vault token_store.go quitContext
-		// ref: ADR docs/architecture/202605051800-adr-refresh-store-ambient-tx-and-idle-grace.md
-		cascadeCtx, cancelCascade := ctxutil.WithDetachedTimeout(ctx, refresh.CascadeRevokeTimeout)
-		_, execErr := s.pool.Exec(cascadeCtx, revokeSessionSQL, now, row.sessionID)
-		cancelCascade()
-		if execErr != nil {
-			return errcode.Wrap(errcode.KindInternal, ErrAdapterPGQuery, "refresh store: grace exhausted cascade", execErr)
+		if err := s.revokeSessionDetachedAt(ctx, row.sessionID, now); err != nil {
+			return errcode.Wrap(errcode.KindInternal, ErrAdapterPGQuery, "refresh store: grace exhausted cascade", err)
 		}
 		return rejectWithReason("reuse_detected", row.sessionID)
 	}
@@ -514,16 +506,8 @@ func (s *PGRefreshStore) handleRotatedRow(ctx context.Context, row refreshRow, m
 			slog.String("subject_id", row.subjectID),
 			slog.String("reason", "reuse_detected"),
 		)
-		// Detach from the caller's cancellation context (see grace-exhausted
-		// branch above): the cascade revoke must commit even when the caller's
-		// request is canceled. 5-second bounded timeout prevents indefinite wait.
-		// ref: golang/go context.WithoutCancel; hashicorp/vault token_store.go quitContext
-		// ref: ADR docs/architecture/202605051800-adr-refresh-store-ambient-tx-and-idle-grace.md
-		cascadeCtx, cancelCascade := ctxutil.WithDetachedTimeout(ctx, refresh.CascadeRevokeTimeout)
-		_, execErr := s.pool.Exec(cascadeCtx, revokeSessionSQL, now, row.sessionID)
-		cancelCascade()
-		if execErr != nil {
-			return errcode.Wrap(errcode.KindInternal, ErrAdapterPGQuery, "refresh store: reuse cascade", execErr)
+		if err := s.revokeSessionDetachedAt(ctx, row.sessionID, now); err != nil {
+			return errcode.Wrap(errcode.KindInternal, ErrAdapterPGQuery, "refresh store: reuse cascade", err)
 		}
 		return rejectWithReason("reuse_detected", row.sessionID)
 	}
@@ -550,6 +534,31 @@ func (s *PGRefreshStore) RevokeSession(ctx context.Context, sessionID string) er
 		return errcode.Wrap(errcode.KindInternal, ErrAdapterPGQuery, "refresh store: revoke session", err)
 	}
 	return nil
+}
+
+// RevokeSessionDetached marks every row in the session_id lineage as revoked,
+// bypassing any ambient transaction and caller cancellation. It is used only
+// for security cascade/compensation paths that must commit independently of
+// the surrounding business transaction.
+func (s *PGRefreshStore) RevokeSessionDetached(ctx context.Context, sessionID string) error {
+	if err := s.revokeSessionDetachedAt(ctx, sessionID, s.clock.Now()); err != nil {
+		return errcode.Wrap(errcode.KindInternal, ErrAdapterPGQuery, "refresh store: revoke session detached", err)
+	}
+	return nil
+}
+
+func (s *PGRefreshStore) revokeSessionDetachedAt(ctx context.Context, sessionID string, revokedAt time.Time) error {
+	// Detach from the caller's cancellation context: a security/compensation
+	// revoke MUST persist even when the HTTP request is canceled or times out.
+	// The detached context gets a bounded 5-second deadline so the write does
+	// not run indefinitely. The ambient tx is bypassed via s.pool.Exec so the
+	// revoke commits on its own connection regardless of the outer RunInTx outcome.
+	// ref: golang/go context.WithoutCancel; hashicorp/vault token_store.go quitContext
+	// ref: ADR docs/architecture/202605051800-adr-refresh-store-ambient-tx-and-idle-grace.md
+	cascadeCtx, cancelCascade := ctxutil.WithDetachedTimeout(ctx, refresh.CascadeRevokeTimeout)
+	defer cancelCascade()
+	_, err := s.pool.Exec(cascadeCtx, revokeSessionSQL, revokedAt, sessionID)
+	return err
 }
 
 // RevokeUser marks every row owned by subjectID as revoked.

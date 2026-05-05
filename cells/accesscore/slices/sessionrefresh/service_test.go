@@ -628,13 +628,15 @@ func (r *infraGetByIDRepo) GetByID(_ context.Context, _ string) (*domain.Session
 	return nil, r.infraErr
 }
 
-// spyRefreshStore wraps a real refresh.Store and records RevokeSession calls.
+// spyRefreshStore wraps a real refresh.Store and records revoke calls.
 // Used by F14 to assert cascade-revoke is triggered on session-not-found.
 type spyRefreshStore struct {
 	refresh.Store
-	mu             sync.Mutex
-	revokeSessionN int
-	lastSessionID  string
+	mu                     sync.Mutex
+	revokeSessionN         int
+	revokeSessionDetachedN int
+	lastSessionID          string
+	lastDetachedSessionID  string
 }
 
 func (s *spyRefreshStore) RevokeSession(ctx context.Context, sessionID string) error {
@@ -645,19 +647,27 @@ func (s *spyRefreshStore) RevokeSession(ctx context.Context, sessionID string) e
 	return s.Store.RevokeSession(ctx, sessionID)
 }
 
+func (s *spyRefreshStore) RevokeSessionDetached(ctx context.Context, sessionID string) error {
+	s.mu.Lock()
+	s.revokeSessionDetachedN++
+	s.lastDetachedSessionID = sessionID
+	s.mu.Unlock()
+	return s.Store.RevokeSessionDetached(ctx, sessionID)
+}
+
 type revokeFailingRefreshStore struct {
 	refresh.Store
 	err error
 }
 
-func (s revokeFailingRefreshStore) RevokeSession(context.Context, string) error {
+func (s revokeFailingRefreshStore) RevokeSessionDetached(context.Context, string) error {
 	return s.err
 }
 
 // TestService_Refresh_SessionNotFound_CascadeRevokes verifies that when
 // sessionRepo.GetByID returns a domain ErrSessionNotFound (not an infra error),
-// Refresh returns ErrAuthRefreshFailed AND calls RevokeSession on the rotated
-// token so the newly-issued child cannot be used by an attacker (F14).
+// Refresh returns ErrAuthRefreshFailed AND calls RevokeSessionDetached on the
+// rotated token so the newly-issued child cannot be used by an attacker (F14).
 func TestService_Refresh_SessionNotFound_CascadeRevokes(t *testing.T) {
 	notFoundErr := domainSessionNotFoundError()
 	roleRepo := mem.NewRoleRepository()
@@ -677,9 +687,11 @@ func TestService_Refresh_SessionNotFound_CascadeRevokes(t *testing.T) {
 	assert.Contains(t, err.Error(), "ERR_AUTH_REFRESH_FAILED")
 
 	spy.mu.Lock()
-	n := spy.revokeSessionN
+	detachedN := spy.revokeSessionDetachedN
+	businessN := spy.revokeSessionN
 	spy.mu.Unlock()
-	assert.Equal(t, 1, n, "RevokeSession must be called once on session-not-found")
+	assert.Equal(t, 1, detachedN, "RevokeSessionDetached must be called once on session-not-found")
+	assert.Zero(t, businessN, "session-refresh cascade must not use business RevokeSession")
 }
 
 func TestService_Refresh_CascadeRevokeFailure_ReturnsRefreshUnavailable(t *testing.T) {
@@ -775,9 +787,11 @@ func TestService_Refresh_SessionUpdateNotFound_CascadeRevokesAndRejects(t *testi
 	assert.Equal(t, "invalid refresh token", ec.Message)
 
 	spy.mu.Lock()
-	n := spy.revokeSessionN
+	detachedN := spy.revokeSessionDetachedN
+	businessN := spy.revokeSessionN
 	spy.mu.Unlock()
-	assert.Equal(t, 1, n, "session update not-found must cascade revoke the refresh chain")
+	assert.Equal(t, 1, detachedN, "session update not-found must cascade revoke the refresh chain")
+	assert.Zero(t, businessN, "session update cascade must not use business RevokeSession")
 }
 
 func TestService_Refresh_RejectionMessagesAreUniform(t *testing.T) {
@@ -1049,7 +1063,7 @@ func TestRefresh_RotateMismatch_CascadeRevoke_ReturnsRejected(t *testing.T) {
 }
 
 // TestRefresh_RotateMismatch_CascadeRevokeFails_PropagatesErr verifies that when
-// Rotate returns a mismatched token AND cascadeRevoke (RevokeSession) fails,
+// Rotate returns a mismatched token AND cascadeRevoke (RevokeSessionDetached) fails,
 // the infra error is propagated rather than swallowed.
 func TestRefresh_RotateMismatch_CascadeRevokeFails_PropagatesErr(t *testing.T) {
 	_, sessionRepo, innerStore := newTestServiceWithRefreshStore(t, "usr-mismatch-revoke-fail")
@@ -1068,15 +1082,15 @@ func TestRefresh_RotateMismatch_CascadeRevokeFails_PropagatesErr(t *testing.T) {
 	u.ID = "usr-mismatch-revoke-fail"
 	require.NoError(t, userRepo.Create(context.Background(), u))
 
-	// revokeFailingRefreshStore already covers RevokeSession failure; wrap it
+	// revokeFailingRefreshStore already covers RevokeSessionDetached failure; wrap it
 	// with rotateMismatchRefreshStore on top so Rotate returns mismatch and then
-	// cascadeRevoke calls through to a RevokeSession that errors.
+	// cascadeRevoke calls through to a detached revoke that errors.
 	revokeErrStore := revokeFailingRefreshStore{
 		Store: innerStore,
 		err:   errcode.New(errcode.KindInternal, errcode.ErrInternal, "revoke store down"),
 	}
 	// rotateMismatchRefreshStore wraps revokeErrStore so Rotate returns mismatch
-	// but RevokeSession delegates to revokeErrStore and fails.
+	// but RevokeSessionDetached delegates to revokeErrStore and fails.
 	mismatchStore := rotateMismatchRefreshStore{
 		Store:            revokeErrStore,
 		rotatedSessionID: "tampered-session",
@@ -1093,41 +1107,38 @@ func TestRefresh_RotateMismatch_CascadeRevokeFails_PropagatesErr(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Detached ctx tests (Wave 0 RED baseline)
+// Detached revoke routing tests
 // ---------------------------------------------------------------------------
 
 // detachSpyRefreshStore wraps a real refresh.Store and records whether the
-// ctx passed to RevokeSession is already done (canceled/deadline exceeded)
-// at the time of the call. After Wave 2 lands ctxutil.WithDetachedTimeout,
-// the ctx must NOT be done at entry; before Wave 2 it will be done because
-// the caller ctx is passed directly.
+// session-refresh service uses the detached revoke method for cascade paths.
+// The durable store implementation owns the actual cancellation/ambient-tx
+// detach behavior; this service-level test only locks down method routing.
 type detachSpyRefreshStore struct {
 	refresh.Store
-	mu             sync.Mutex
-	revokeCalledN  int
-	ctxErrAtRevoke error // ctx.Err() captured inside RevokeSession
+	mu              sync.Mutex
+	detachedCalledN int
+	businessCalledN int
 }
 
 func (s *detachSpyRefreshStore) RevokeSession(ctx context.Context, sessionID string) error {
 	s.mu.Lock()
-	s.revokeCalledN++
-	s.ctxErrAtRevoke = ctx.Err()
+	s.businessCalledN++
 	s.mu.Unlock()
 	return s.Store.RevokeSession(ctx, sessionID)
 }
 
-// TestService_CascadeRevoke_DetachesFromCallerCtx verifies that when
-// cascadeRevoke is triggered by a session-not-found condition, the ctx
-// forwarded to RevokeSession is NOT the caller's already-canceled ctx.
-//
-// Mechanism: cancel the caller ctx before calling Refresh; a triggered
-// cascade should still deliver a live (non-done) ctx to RevokeSession
-// because service.cascadeRevoke must use ctxutil.WithDetachedTimeout.
-//
-// RED in Wave 0: cascadeRevoke currently passes the caller ctx directly;
-// ctx.Err() will be non-nil (context.Canceled) inside RevokeSession.
-// Wave 2 fixes cascadeRevoke to use detached ctx; test turns GREEN.
-func TestService_CascadeRevoke_DetachesFromCallerCtx(t *testing.T) {
+func (s *detachSpyRefreshStore) RevokeSessionDetached(ctx context.Context, sessionID string) error {
+	s.mu.Lock()
+	s.detachedCalledN++
+	s.mu.Unlock()
+	return s.Store.RevokeSessionDetached(ctx, sessionID)
+}
+
+// TestService_CascadeRevoke_UsesDetachedStoreMethod verifies that when
+// cascadeRevoke is triggered by a session-not-found condition, sessionrefresh
+// calls the explicit detached store method instead of the business revoke.
+func TestService_CascadeRevoke_UsesDetachedStoreMethod(t *testing.T) {
 	notFoundErr := domainSessionNotFoundError()
 	roleRepo := mem.NewRoleRepository()
 	userRepo := mem.NewUserRepository()
@@ -1147,18 +1158,10 @@ func TestService_CascadeRevoke_DetachesFromCallerCtx(t *testing.T) {
 	_, _ = svc.Refresh(callerCtx, wireToken)
 
 	spy.mu.Lock()
-	calledN := spy.revokeCalledN
-	ctxErrAtCall := spy.ctxErrAtRevoke
+	detachedN := spy.detachedCalledN
+	businessN := spy.businessCalledN
 	spy.mu.Unlock()
 
-	require.Equal(t, 1, calledN, "RevokeSession must be called exactly once on session-not-found")
-
-	// After Wave 2: ctxErrAtCall must be nil (detached ctx is still live).
-	// In Wave 0 (RED): ctxErrAtCall will be context.Canceled because the
-	// current code passes the caller ctx directly — this assertion fails.
-	if ctxErrAtCall != nil {
-		t.Errorf("RevokeSession received a done ctx (ctx.Err() = %v); "+
-			"cascadeRevoke must use ctxutil.WithDetachedTimeout to detach from caller cancel",
-			ctxErrAtCall)
-	}
+	require.Equal(t, 1, detachedN, "RevokeSessionDetached must be called exactly once on session-not-found")
+	assert.Zero(t, businessN, "cascadeRevoke must not call business RevokeSession")
 }

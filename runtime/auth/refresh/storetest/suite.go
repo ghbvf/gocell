@@ -2,13 +2,14 @@
 // implementations. Backends (memstore, postgres) each run RunContractSuite
 // to prove they honor the same append-only + single-sentinel semantics.
 //
-// Test identifiers T1-T18 map to Store invariants: T1-T2 Issue, T3 Rotate
+// Test identifiers T1-T22 map to Store invariants: T1-T2 Issue, T3 Rotate
 // happy path, T4 grace window, T5 reuse-after-grace, T6-T8 fail-closed
 // rejection paths, T9 RevokeSession cascade, T10 concurrent Rotate CAS,
 // T11 ExpiresAt calculation, T12 errcode sentinel category, T13 GC cleanup,
 // T14 concurrent goroutine race model, T15 reuse-after-grace cascade,
 // T16 grace-inside-interval, T17 parse-failure uniformity, T18 RevokeUser,
-// T19-T20 Peek preflight/rejection, T21 Peek does not consume grace budget.
+// T19-T20 Peek preflight/rejection, T21 Peek does not consume grace budget,
+// T22 detached session revoke.
 package storetest
 
 import (
@@ -125,6 +126,10 @@ func RunContractSuite(t *testing.T, factory Factory) {
 	t.Run("T21_Peek_DoesNotConsumeGraceBudget", func(t *testing.T) {
 		t.Parallel()
 		runT21PeekDoesNotConsumeGraceBudget(t, factory)
+	})
+	t.Run("T22_RevokeSessionDetached_CascadeIgnoresCallerCancel", func(t *testing.T) {
+		t.Parallel()
+		runT22RevokeSessionDetachedIgnoresCallerCancel(t, factory)
 	})
 }
 
@@ -608,6 +613,19 @@ func runT21PeekDoesNotConsumeGraceBudget(t *testing.T, factory Factory) {
 	// Now used_times == GraceMaxReuses. Next Rotate trips the cap.
 	_, _, err := store.Rotate(ctx, parentWire)
 	assert.ErrorIs(t, err, refresh.ErrRejected, "Rotate at used_times == GraceMaxReuses must trigger reuse_detected")
+}
+
+func runT22RevokeSessionDetachedIgnoresCallerCancel(t *testing.T, factory Factory) {
+	store, _ := factory(t, defaultPolicy)
+
+	wire, _ := mustIssue(t, store, "sess-22", "user-22")
+	canceledCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	require.NoError(t, store.RevokeSessionDetached(canceledCtx, "sess-22"))
+
+	_, _, err := store.Rotate(context.Background(), wire)
+	assert.ErrorIs(t, err, refresh.ErrRejected, "detached revoke must kill the session chain")
 }
 
 // Silence unused-imports guard when errcode isn't needed (defensive).

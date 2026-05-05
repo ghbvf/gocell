@@ -40,6 +40,22 @@ func newOutboxRefreshStore() refresh.Store {
 	return store
 }
 
+type cleanupRefreshStoreSpy struct {
+	refresh.Store
+	revokeSessionN         int
+	revokeSessionDetachedN int
+}
+
+func (s *cleanupRefreshStoreSpy) RevokeSession(ctx context.Context, sessionID string) error {
+	s.revokeSessionN++
+	return s.Store.RevokeSession(ctx, sessionID)
+}
+
+func (s *cleanupRefreshStoreSpy) RevokeSessionDetached(ctx context.Context, sessionID string) error {
+	s.revokeSessionDetachedN++
+	return s.Store.RevokeSessionDetached(ctx, sessionID)
+}
+
 // --- stubs ---
 
 type stubOutboxWriter struct{ entries []outbox.Entry }
@@ -169,7 +185,8 @@ func TestPersistSessionWithRefresh_NoopTxRunner_EmitFails_CleanupRuns(t *testing
 	emitter := &failingEmitter{err: fmt.Errorf("broker down")}
 	// noopTxRunner implements cell.Nooper (Noop()==true) → isNoopTx returns true,
 	// so the service runs explicit session cleanup on emit failure.
-	svc := MustNewService(userRepo, sessionRepo, roleRepo, newOutboxRefreshStore(), testIssuer, slog.Default(),
+	refreshStore := &cleanupRefreshStoreSpy{Store: newOutboxRefreshStore()}
+	svc := MustNewService(userRepo, sessionRepo, roleRepo, refreshStore, testIssuer, slog.Default(),
 		WithEmitter(emitter), WithTxManager(noopTxRunner{}), WithClock(clock.Real()))
 
 	hash, _ := bcrypt.GenerateFromPassword(testCredential, bcrypt.MinCost)
@@ -181,4 +198,8 @@ func TestPersistSessionWithRefresh_NoopTxRunner_EmitFails_CleanupRuns(t *testing
 	// In noop tx mode, cleanupIssuedSession must compensate the session write.
 	assert.Len(t, sessionRepo.deleted, 1,
 		"noop tx (demo mode): explicit Delete must run to compensate the already-written session")
+	assert.Equal(t, 1, refreshStore.revokeSessionDetachedN,
+		"cleanupIssuedSession must use RevokeSessionDetached for refresh cleanup")
+	assert.Zero(t, refreshStore.revokeSessionN,
+		"cleanupIssuedSession must not use business RevokeSession")
 }

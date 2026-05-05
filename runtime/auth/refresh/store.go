@@ -64,16 +64,32 @@ type Store interface {
 	Rotate(ctx context.Context, presentedWire string) (wire string, tok *Token, err error)
 
 	// RevokeSession marks every row in the session_id lineage as revoked.
-	// Idempotent — 0 rows affected is not an error. Called by logout and
-	// reuse-detection cascade.
+	// Idempotent — 0 rows affected is not an error. Called by business flows
+	// such as logout, where refresh-chain revoke must share the caller's
+	// transaction boundary with session state and outbox writes.
 	//
 	// Consistency: L1 LocalTx — single UPDATE.
 	RevokeSession(ctx context.Context, sessionID string) error
 
+	// RevokeSessionDetached marks every row in the session_id lineage as
+	// revoked outside the caller's ambient transaction/cancellation boundary.
+	// It is reserved for security/compensation paths where the revoke must
+	// persist even if the triggering request is canceled or the surrounding
+	// business transaction rolls back.
+	//
+	// Consistency: L1 LocalTx — single UPDATE committed independently by
+	// durable implementations. In-memory implementations may share the same
+	// critical section as RevokeSession.
+	RevokeSessionDetached(ctx context.Context, sessionID string) error
+
 	// RevokeUser marks every row belonging to subjectID as revoked.
 	// Called by user-delete, user-lock, and change-password flows to
 	// invalidate every refresh chain owned by the subject in one atomic
-	// statement. Idempotent.
+	// statement. Idempotent. There is intentionally no detached RevokeUser:
+	// these user-level revokes are business state transitions that must remain
+	// atomic with user/session mutations and related outbox writes. Session-
+	// level cascade revoke is split because it also serves security responses
+	// to token reuse and compensating cleanup.
 	//
 	// Consistency: L1 LocalTx — single UPDATE.
 	RevokeUser(ctx context.Context, subjectID string) error

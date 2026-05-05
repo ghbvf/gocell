@@ -30,6 +30,54 @@
 
 -- +goose Up
 
+-- Preflight: PR#528 intentionally removed the idle_expires_at DEFAULT. That
+-- means 016 is valid only for an empty refresh_tokens table unless an operator
+-- writes an explicit backfill migration. Fail with a clear message before the
+-- NOT NULL ADD COLUMN rather than surfacing PostgreSQL's generic null-column
+-- error. Also catch manual reruns against the old PR#388 column definition.
+-- +goose StatementBegin
+DO $$
+DECLARE
+    row_count BIGINT;
+    existing_default TEXT;
+BEGIN
+    IF to_regclass('refresh_tokens') IS NULL THEN
+        RETURN;
+    END IF;
+
+    SELECT pg_get_expr(d.adbin, d.adrelid)
+      INTO existing_default
+      FROM pg_attribute a
+      JOIN pg_class c ON c.oid = a.attrelid
+      LEFT JOIN pg_attrdef d ON d.adrelid = a.attrelid AND d.adnum = a.attnum
+     WHERE c.oid = to_regclass('refresh_tokens')
+       AND a.attname = 'idle_expires_at'
+       AND NOT a.attisdropped;
+
+    IF existing_default IS NOT NULL THEN
+        RAISE EXCEPTION
+            'migration 016 refused: idle_expires_at already exists with default %; environments that applied the old PR#388 016 must goose down -count 1 then goose up, or use an explicit follow-up migration',
+            existing_default;
+    END IF;
+
+    IF existing_default IS NULL
+       AND NOT EXISTS (
+           SELECT 1
+             FROM information_schema.columns
+            WHERE table_schema = current_schema()
+              AND table_name = 'refresh_tokens'
+              AND column_name = 'idle_expires_at'
+       ) THEN
+        SELECT count(*) INTO row_count FROM refresh_tokens;
+        IF row_count > 0 THEN
+            RAISE EXCEPTION
+                'migration 016 refused: refresh_tokens has % rows; idle_expires_at is NOT NULL with no DEFAULT/backfill because the project is undeployed',
+                row_count;
+        END IF;
+    END IF;
+END $$;
+-- +goose StatementEnd
+
 -- ADD COLUMN statements run outside a transaction (NO TRANSACTION mode) so
 -- they can be paired with CREATE INDEX CONCURRENTLY below. CREATE INDEX
 -- CONCURRENTLY cannot run inside a transaction block; the goose NO TRANSACTION

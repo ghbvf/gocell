@@ -422,7 +422,7 @@ func (h *Handler) aggregateProbeResults(results map[string]ProbeResult, verbose 
 				"duration_ms": pr.Duration.Milliseconds(),
 			}
 			if pr.Err != nil {
-				entry["error"] = truncateErrMsg(pr.Err.Error(), maxVerboseErrLen)
+				entry["error"] = truncateErrMsg(redaction.RedactString(pr.Err.Error()), maxVerboseErrLen)
 			}
 			dependencies[name] = entry
 		}

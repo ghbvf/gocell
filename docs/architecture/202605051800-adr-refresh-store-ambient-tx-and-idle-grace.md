@@ -65,6 +65,32 @@ caller `RunInTx(ctx, fn)` where `fn` triggers reuse Peek then returns an
 error; after the outer rollback, a subsequent `Rotate(child)` must still
 return `ErrRejected`.
 
+### Session revoke API split
+
+The `refresh.Store` interface now names the transaction semantics explicitly:
+
+- `RevokeSession(ctx, sessionID)` is the business revoke path. It joins the
+  ambient transaction when one exists and is used by logout flows so session
+  state, refresh-chain revoke, and outbox writes commit or roll back together.
+- `RevokeSessionDetached(ctx, sessionID)` is the security/compensation path.
+  Durable implementations bypass the ambient transaction and detach from
+  caller cancellation with `ctxutil.WithDetachedTimeout(...,
+  refresh.CascadeRevokeTimeout)`.
+
+The split is intentionally **session-only**. `RevokeUser` remains unsplit
+because user-lock, user-delete, change-password, and logout-all are business
+state transitions; refresh-chain revocation must stay atomic with user/session
+mutations and related outbox writes. Adding `RevokeUserDetached` would make it
+too easy for a caller to turn a business operation into a partially committed
+cross-store side effect.
+
+**Tests**:
+- `storetest T22_RevokeSessionDetached_CascadeIgnoresCallerCancel`
+- `TestPGRefreshStore_RevokeSessionDetachedSurvivesAmbientRollback`
+- `sessionrefresh` and `sessionlogin` spy tests assert cascade/cleanup callers
+  use `RevokeSessionDetached`, while logout and identity management keep using
+  `RevokeSession` / `RevokeUser`.
+
 ### X15 — Cascade revoke detaches from caller cancellation
 
 PR#388 closed the ambient-tx boundary but left cascade revoke bound to the
@@ -211,6 +237,10 @@ not a historical backfill. PR#528 collapses the model:
 
 - The DDL DEFAULT is **removed**. `idle_expires_at` is `NOT NULL` with no
   default; every row must be written explicitly by Issue or Rotate.
+- Migration 016 now includes a preflight `DO` block that refuses to add the
+  no-default `idle_expires_at` column to a non-empty `refresh_tokens` table.
+  The project is undeployed, so the accepted migration shape is "empty table
+  only" rather than a backfill branch for historical refresh rows.
 - `Issue`: sets `idle_expires_at = now + Policy.MaxIdle`
 - `Rotate`: child row's `idle_expires_at = now + Policy.MaxIdle` (sliding
   window reset on every successful rotation)
@@ -223,6 +253,13 @@ The migration is modified in place (project undeployed; goose
 `goose_db_version` records `version_id`+`tstamp`, not file hash; CI is
 ephemeral; dev `goose reset` is acceptable). No new 017 migration is created
 to avoid carrying meaningless schema history as a permanent artifact.
+
+Limitation: environments that already applied the old PR#388 version of 016
+will not automatically receive the in-place DDL change because goose will
+consider version 016 applied. Those environments must run `goose down -count 1`
+then `goose up`, reset the dev database, or carry an explicit local follow-up
+migration. That is accepted because GoCell is not deployed to production yet;
+there are no external schemas that need a forward-only compatibility path.
 
 ### X14 — GraceMaxReuses grace counter cap (REFRESH-GRACE-COUNTER) — revised by PR#528
 

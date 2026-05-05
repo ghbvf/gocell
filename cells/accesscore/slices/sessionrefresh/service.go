@@ -13,7 +13,6 @@ import (
 	"github.com/ghbvf/gocell/cells/accesscore/internal/ports"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/sessionmint"
 	"github.com/ghbvf/gocell/kernel/clock"
-	"github.com/ghbvf/gocell/pkg/ctxutil"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/validation"
 	"github.com/ghbvf/gocell/runtime/auth"
@@ -263,19 +262,17 @@ func (s *Service) verifySession(ctx context.Context, sessionID string) (*domain.
 	return session, nil
 }
 
-// cascadeRevoke calls RevokeSession detached from the caller's cancellation
-// context. Cascade revoke is a security response (reuse-attack or subject-
-// mismatch) that MUST persist even when the HTTP request is canceled or times
-// out. A 5-second bounded timeout prevents indefinite waits.
+// cascadeRevoke calls RevokeSessionDetached. Cascade revoke is a security
+// response (reuse-attack or subject-mismatch) that MUST persist even when the
+// HTTP request is canceled or times out. The store owns the detached,
+// 5-second bounded write policy.
 //
 // reason is log-only and never exposed to callers.
 //
 // ref: golang/go context.WithoutCancel; hashicorp/vault token_store.go quitContext
 // ref: ADR docs/architecture/202605051800-adr-refresh-store-ambient-tx-and-idle-grace.md
 func (s *Service) cascadeRevoke(ctx context.Context, sessionID, reason string) error {
-	cascadeCtx, cancelCascade := ctxutil.WithDetachedTimeout(ctx, refresh.CascadeRevokeTimeout)
-	defer cancelCascade()
-	if err := s.refreshStore.RevokeSession(cascadeCtx, sessionID); err != nil {
+	if err := s.refreshStore.RevokeSessionDetached(ctx, sessionID); err != nil {
 		s.logger.Error("session-refresh: cascade revoke failed",
 			slog.String("reason", reason),
 			slog.Any("error", err),
