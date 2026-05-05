@@ -97,10 +97,13 @@ func newE2EFixture() *e2eFixture {
 	userRepo := mem.NewUserRepository()
 	sessionRepo := mem.NewSessionRepository(clock.Real())
 	roleRepo := mem.NewRoleRepository()
-	refreshStore := refreshmem.MustNew(
+	refreshStore, err := refreshmem.New(
 		refresh.Policy{ReuseInterval: testtime.D2s, MaxAge: time.Hour},
 		clock.Real(), nil,
 	)
+	if err != nil {
+		panic("test setup: " + err.Error())
+	}
 
 	// Shared no-op TxRunner — both services fail-fast on nil after 029 #03
 	// ADR Decision 2 (persistence.NoopTxRunner deletion). The e2e flow has

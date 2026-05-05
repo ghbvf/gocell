@@ -32,6 +32,22 @@ type Token struct {
 	ExpiresAt time.Time
 }
 
+// Default policy values used when the caller does not configure optional fields.
+// Zero values are rejected by NewRefreshStore and memstore.New; callers MUST
+// set positive values or use these constants.
+const (
+	// DefaultMaxIdle is the default idle-expiry window (30 days).
+	// Matches Zitadel auth-token default retention period.
+	// ref: zitadel/zitadel internal/repository/session expire.go
+	DefaultMaxIdle = 30 * 24 * time.Hour
+
+	// DefaultGraceMaxReuses is the default grace reuse counter cap (3 re-uses).
+	// Tolerates SPA double-submit + network retry within a grace window without
+	// treating them as reuse attacks. Exceeding the cap triggers cascade revoke.
+	// ref: ory/fosite handler/oauth2/refresh.go (COALESCE reuse guard)
+	DefaultGraceMaxReuses = 3
+)
+
 // Policy controls Rotate semantics and token lifetime.
 //
 // ReuseInterval is the grace window: if a parent token is presented a second
@@ -41,11 +57,55 @@ type Token struct {
 //
 // MaxAge bounds Token.ExpiresAt - Token.CreatedAt.
 //
-// Defaults (not enforced; zero values panic in constructors):
+// MaxIdle is the sliding-window idle-expiry duration. Every Rotate call
+// resets the idle clock on the parent row. A token that is not rotated within
+// MaxIdle of its last rotation (or creation) is rejected as idle-expired.
+// Zero value disables idle-expiry check (stores that have not migrated yet).
 //
-//	ReuseInterval = 2 * time.Second  (matches Ory Hydra grace_period)
-//	MaxAge        = 7 * 24 * time.Hour
+// GraceMaxReuses caps how many times a parent token may be re-presented within
+// the ReuseInterval grace window. Once the cap is reached, the next re-present
+// triggers a cascade revoke (same as an out-of-window reuse attack). Zero value
+// disables the counter cap.
+//
+// Defaults (not enforced; zero values are accepted for backward compat in
+// stores that have not yet applied migration 016):
+//
+//	ReuseInterval  = 2 * time.Second  (matches Ory Hydra grace_period)
+//	MaxAge         = 7 * 24 * time.Hour
+//	MaxIdle        = DefaultMaxIdle   (30 days)
+//	GraceMaxReuses = DefaultGraceMaxReuses (3)
+//
+// Validate() returns an error if any required field is non-positive.
 type Policy struct {
-	ReuseInterval time.Duration
-	MaxAge        time.Duration
+	ReuseInterval  time.Duration
+	MaxAge         time.Duration
+	MaxIdle        time.Duration
+	GraceMaxReuses int
 }
+
+// Validate returns an error if the Policy contains invalid field values.
+// All four fields must be positive (non-zero, non-negative).
+func (p Policy) Validate() error {
+	if p.MaxAge <= 0 {
+		return errorf("Policy.MaxAge must be positive")
+	}
+	if p.ReuseInterval < 0 {
+		return errorf("Policy.ReuseInterval must not be negative")
+	}
+	if p.MaxIdle <= 0 {
+		return errorf("Policy.MaxIdle must be positive")
+	}
+	if p.GraceMaxReuses <= 0 {
+		return errorf("Policy.GraceMaxReuses must be positive")
+	}
+	return nil
+}
+
+func errorf(msg string) error {
+	// Use a simple wrapper to avoid importing errcode from the runtime layer.
+	return &policyError{msg: msg}
+}
+
+type policyError struct{ msg string }
+
+func (e *policyError) Error() string { return "refresh.Policy: " + e.msg }

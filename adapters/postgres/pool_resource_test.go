@@ -65,21 +65,23 @@ func mustNewPGResource(t *testing.T, pool *Pool) *PGResource {
 	return res
 }
 
-// TestPGResource_CheckersReturnsNamed verifies the checker map has the correct
-// key. The actual health call requires a real PG pool, so we only check the map
+// TestPGResource_CheckersReturnsNamed verifies the checker map has both expected
+// keys. The actual health calls require a real PG pool, so we only check the map
 // structure here.
 func TestPGResource_CheckersReturnsNamed(t *testing.T) {
 	res := mustNewPGResource(t, newStubPool())
 	checkers := res.Checkers()
-	if len(checkers) != 1 {
-		t.Fatalf("expected 1 checker, got %d", len(checkers))
+	if len(checkers) != 2 {
+		t.Fatalf("expected 2 checkers (postgres_ready + postgres_indexes_valid_ready), got %d", len(checkers))
 	}
-	fn, ok := checkers["postgres_ready"]
-	if !ok {
-		t.Fatal("expected checker named 'postgres_ready'")
-	}
-	if fn == nil {
-		t.Error("checker function must not be nil")
+	for _, name := range []string{"postgres_ready", "postgres_indexes_valid_ready"} {
+		fn, ok := checkers[name]
+		if !ok {
+			t.Errorf("expected checker named %q", name)
+		}
+		if fn == nil {
+			t.Errorf("checker %q function must not be nil", name)
+		}
 	}
 }
 

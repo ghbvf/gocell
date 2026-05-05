@@ -17,6 +17,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/ghbvf/gocell/kernel/clock"
+	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/validation"
 	"github.com/ghbvf/gocell/runtime/auth/refresh"
@@ -84,13 +85,20 @@ WHERE id IN (
 // Consistency: L1 LocalTx — Rotate is atomic within a single transaction;
 // Issue and revoke paths are single-statement writes.
 //
+// Transaction contract (B2-A-08): PGRefreshStore never acquires its own
+// transactions. All multi-statement operations (Peek, Rotate) delegate to the
+// injected TxRunner. When the caller already holds an ambient transaction,
+// TxManager creates a savepoint instead of a new top-level transaction, so
+// refresh operations are fully nesting-safe.
+//
 // ref: ory/fosite token/hmac/hmacsha.go (base64url nopad + constant-time compare)
 // ref: ory/hydra persistence/sql/persister_oauth2.go (CAS chain + reuse cascade)
 type PGRefreshStore struct {
-	pool   *pgxpool.Pool
-	policy refresh.Policy
-	clock  clock.Clock
-	rand   io.Reader
+	pool     *pgxpool.Pool
+	txRunner persistence.TxRunner
+	policy   refresh.Policy
+	clock    clock.Clock
+	rand     io.Reader
 }
 
 type refreshRow struct {
@@ -114,14 +122,32 @@ func (r refreshRow) toToken() *refresh.Token {
 	}
 }
 
-// NewRefreshStore constructs a PGRefreshStore. Returns a non-nil error if
-// pool/clock are nil or policy values are out of range; callers that prefer
-// fail-fast at composition time can use MustNewRefreshStore.
-func NewRefreshStore(pool *pgxpool.Pool, policy refresh.Policy, clock clock.Clock, randReader io.Reader) (*PGRefreshStore, error) {
+// NewRefreshStore constructs a PGRefreshStore.
+//
+// Returns a non-nil error if pool, txRunner, or clock are nil, or if policy
+// values are out of range.
+//
+// pool is retained for Health probes (ping path); all SQL operations go
+// through execCtx/queryRowCtx which join the ambient transaction from context.
+//
+// txRunner is required: Peek and Rotate need a transaction boundary. Pass
+// NewTxManager(pool) for standalone callers; ambient-tx callers (e.g. session
+// login) provide a shared TxManager whose RunInTx will create a savepoint when
+// a top-level transaction is already in context.
+func NewRefreshStore(
+	pool *pgxpool.Pool,
+	txRunner persistence.TxRunner,
+	policy refresh.Policy,
+	clk clock.Clock,
+	randReader io.Reader,
+) (*PGRefreshStore, error) {
 	if pool == nil {
 		return nil, fmt.Errorf("postgres.NewRefreshStore: pool must not be nil")
 	}
-	if validation.IsNilInterface(clock) {
+	if validation.IsNilInterface(txRunner) {
+		return nil, fmt.Errorf("postgres.NewRefreshStore: txRunner must not be nil")
+	}
+	if validation.IsNilInterface(clk) {
 		return nil, fmt.Errorf("postgres.NewRefreshStore: clock must not be nil")
 	}
 	if policy.MaxAge <= 0 {
@@ -134,21 +160,12 @@ func NewRefreshStore(pool *pgxpool.Pool, policy refresh.Policy, clock clock.Cloc
 		randReader = rand.Reader
 	}
 	return &PGRefreshStore{
-		pool:   pool,
-		policy: policy,
-		clock:  clock,
-		rand:   randReader,
+		pool:     pool,
+		txRunner: txRunner,
+		policy:   policy,
+		clock:    clk,
+		rand:     randReader,
 	}, nil
-}
-
-// MustNewRefreshStore is the composition-root fail-fast variant of
-// NewRefreshStore. It panics when NewRefreshStore returns an error.
-func MustNewRefreshStore(pool *pgxpool.Pool, policy refresh.Policy, clock clock.Clock, randReader io.Reader) *PGRefreshStore {
-	store, err := NewRefreshStore(pool, policy, clock, randReader)
-	if err != nil {
-		panic(err.Error())
-	}
-	return store
 }
 
 // execCtx executes a SQL statement against the ambient transaction in ctx when
@@ -159,6 +176,15 @@ func (s *PGRefreshStore) execCtx(ctx context.Context, sql string, args ...any) (
 		return tx.Exec(ctx, sql, args...)
 	}
 	return s.pool.Exec(ctx, sql, args...)
+}
+
+// queryRowCtx queries a single row against the ambient transaction in ctx when
+// one is present. Falls back to the pool when no tx is in context.
+func (s *PGRefreshStore) queryRowCtx(ctx context.Context, sql string, args ...any) pgx.Row {
+	if tx, ok := TxFromContext(ctx); ok {
+		return tx.QueryRow(ctx, sql, args...)
+	}
+	return s.pool.QueryRow(ctx, sql, args...)
 }
 
 // generatePair delegates to the shared refresh.GeneratePair helper (F10).
@@ -197,31 +223,30 @@ func (s *PGRefreshStore) Issue(ctx context.Context, sessionID, subjectID string)
 }
 
 // Peek validates the presented wire token without advancing the lineage.
+//
+// Callers MUST call Peek (and Rotate) within an ambient transaction created by
+// the injected TxRunner. PGRefreshStore no longer acquires its own transactions
+// (B2-A-08 ambient-only model).
 func (s *PGRefreshStore) Peek(ctx context.Context, presented string) (*refresh.Token, error) {
 	sel, ver, ok := refresh.ParseOpaque(presented)
 	if !ok {
 		return nil, rejectWithReason("malformed", "")
 	}
 
-	tx, err := s.pool.Begin(ctx)
-	if err != nil {
-		return nil, errcode.Wrap(errcode.KindInternal, ErrAdapterPGConnect, "refresh store: peek begin", err)
-	}
-	committed := false
-	defer func() {
-		if !committed {
-			_ = tx.Rollback(context.WithoutCancel(ctx))
+	var row refreshRow
+	err := s.txRunner.RunInTx(ctx, func(txCtx context.Context) error {
+		var innerErr error
+		row, innerErr = s.validatePresentedInTx(txCtx, sel, ver)
+		if innerErr != nil && !errors.Is(innerErr, refresh.ErrRejected) {
+			return innerErr
 		}
-	}()
-
-	row, err := s.validatePresentedInTx(ctx, tx, sel, ver)
+		// ErrRejected is returned from RunInTx, not wrapped as inner error,
+		// so the commit happens unconditionally (timing oracle defense).
+		return innerErr
+	})
 	if err != nil && !errors.Is(err, refresh.ErrRejected) {
 		return nil, err
 	}
-	if cErr := tx.Commit(ctx); cErr != nil {
-		return nil, errcode.Wrap(errcode.KindInternal, ErrAdapterPGConnect, "refresh store: peek commit", cErr)
-	}
-	committed = true
 	if err != nil {
 		return nil, err
 	}
@@ -234,42 +259,39 @@ func (s *PGRefreshStore) Peek(ctx context.Context, presented string) (*refresh.T
 // so callers cannot enumerate cause via error shape or timing. The transaction
 // is committed uniformly on ErrRejected so that commit-vs-rollback latency is
 // not an oracle on whether a cascade-revoke happened.
+//
+// Callers MUST call Rotate within an ambient transaction or with a standalone
+// context. PGRefreshStore delegates transaction management to the injected
+// TxRunner (B2-A-08 ambient-only model).
 func (s *PGRefreshStore) Rotate(ctx context.Context, presented string) (string, *refresh.Token, error) {
 	sel, ver, ok := refresh.ParseOpaque(presented)
 	if !ok {
 		return "", nil, rejectWithReason("malformed", "")
 	}
 
-	tx, err := s.pool.Begin(ctx)
-	if err != nil {
-		return "", nil, errcode.Wrap(errcode.KindInternal, ErrAdapterPGConnect, "refresh store: rotate begin", err)
-	}
-	committed := false
-	defer func() {
-		if !committed {
-			_ = tx.Rollback(context.WithoutCancel(ctx))
+	var wire string
+	var tok *refresh.Token
+	err := s.txRunner.RunInTx(ctx, func(txCtx context.Context) error {
+		var innerErr error
+		wire, tok, innerErr = s.rotateInTx(txCtx, sel, ver)
+		if innerErr != nil && !errors.Is(innerErr, refresh.ErrRejected) {
+			return innerErr
 		}
-	}()
-
-	wire, tok, err := s.rotateInTx(ctx, tx, sel, ver)
+		// Commit unconditionally on success and on ErrRejected so commit latency
+		// does not distinguish happy paths from rejections. For read-only reject
+		// branches the commit is a no-op; for reuse_detected it persists the
+		// cascade revoke.
+		return innerErr
+	})
 	if err != nil && !errors.Is(err, refresh.ErrRejected) {
 		return "", nil, err
 	}
-
-	// Commit unconditionally on success and on ErrRejected so commit latency
-	// does not distinguish happy paths from rejections. For read-only reject
-	// branches the commit is a no-op; for reuse_detected it persists the
-	// cascade revoke.
-	if cErr := tx.Commit(ctx); cErr != nil {
-		return "", nil, errcode.Wrap(errcode.KindInternal, ErrAdapterPGConnect, "refresh store: rotate commit", cErr)
-	}
-	committed = true
 	return wire, tok, err
 }
 
-// rotateInTx orchestrates the Rotate branches within an open transaction.
-func (s *PGRefreshStore) rotateInTx(ctx context.Context, tx pgx.Tx, sel, ver []byte) (string, *refresh.Token, error) {
-	row, err := s.validatePresentedInTx(ctx, tx, sel, ver)
+// rotateInTx orchestrates the Rotate branches within a transaction context.
+func (s *PGRefreshStore) rotateInTx(ctx context.Context, sel, ver []byte) (string, *refresh.Token, error) {
+	row, err := s.validatePresentedInTx(ctx, sel, ver)
 	if err != nil {
 		return "", nil, err
 	}
@@ -286,7 +308,7 @@ func (s *PGRefreshStore) rotateInTx(ctx context.Context, tx pgx.Tx, sel, ver []b
 	newHash := sha256.Sum256(newVer)
 	newExpires := now.Add(s.policy.MaxAge)
 
-	if _, err := tx.Exec(ctx, insertRowSQL,
+	if _, err := s.execCtx(ctx, insertRowSQL,
 		newID, uuid.NullUUID{UUID: row.id, Valid: true},
 		row.sessionID, row.subjectID, newSel, newHash[:], now, newExpires,
 	); err != nil {
@@ -294,7 +316,7 @@ func (s *PGRefreshStore) rotateInTx(ctx context.Context, tx pgx.Tx, sel, ver []b
 	}
 
 	if row.rotatedAt == nil {
-		if _, err := tx.Exec(ctx, markRotatedSQL, now, row.id); err != nil {
+		if _, err := s.execCtx(ctx, markRotatedSQL, now, row.id); err != nil {
 			return "", nil, errcode.Wrap(errcode.KindInternal, ErrAdapterPGQuery, "refresh store: mark parent rotated", err)
 		}
 	}
@@ -308,12 +330,12 @@ func (s *PGRefreshStore) rotateInTx(ctx context.Context, tx pgx.Tx, sel, ver []b
 	}, nil
 }
 
-func (s *PGRefreshStore) validatePresentedInTx(ctx context.Context, tx pgx.Tx, sel, ver []byte) (refreshRow, error) {
-	row, err := s.selectBySelectorInTx(ctx, tx, sel)
+func (s *PGRefreshStore) validatePresentedInTx(ctx context.Context, sel, ver []byte) (refreshRow, error) {
+	row, err := s.selectBySelectorInTx(ctx, sel)
 	if err != nil {
 		return refreshRow{}, err
 	}
-	if err := s.lockSessionInTx(ctx, tx, row.sessionID); err != nil {
+	if err := s.lockSessionInTx(ctx, row.sessionID); err != nil {
 		return refreshRow{}, err
 	}
 
@@ -321,16 +343,16 @@ func (s *PGRefreshStore) validatePresentedInTx(ctx context.Context, tx pgx.Tx, s
 	// READ COMMITTED race where a child rotation validates before a concurrent
 	// reuse-detection transaction revokes the session, then inserts a new child
 	// after the cascade has already run.
-	row, err = s.selectBySelectorInTx(ctx, tx, sel)
+	row, err = s.selectBySelectorInTx(ctx, sel)
 	if err != nil {
 		return refreshRow{}, err
 	}
-	return s.validateRow(ctx, tx, row, ver)
+	return s.validateRow(ctx, row, ver)
 }
 
-func (s *PGRefreshStore) selectBySelectorInTx(ctx context.Context, tx pgx.Tx, sel []byte) (refreshRow, error) {
+func (s *PGRefreshStore) selectBySelectorInTx(ctx context.Context, sel []byte) (refreshRow, error) {
 	var row refreshRow
-	err := tx.QueryRow(ctx, selectBySelectorSQL, sel).Scan(
+	err := s.queryRowCtx(ctx, selectBySelectorSQL, sel).Scan(
 		&row.id, &row.sessionID, &row.subjectID,
 		&row.verifierHash, &row.createdAt, &row.expiresAt, &row.rotatedAt, &row.revokedAt,
 	)
@@ -343,14 +365,14 @@ func (s *PGRefreshStore) selectBySelectorInTx(ctx context.Context, tx pgx.Tx, se
 	return row, nil
 }
 
-func (s *PGRefreshStore) lockSessionInTx(ctx context.Context, tx pgx.Tx, sessionID string) error {
-	if _, err := tx.Exec(ctx, lockSessionSQL, sessionID); err != nil {
+func (s *PGRefreshStore) lockSessionInTx(ctx context.Context, sessionID string) error {
+	if _, err := s.execCtx(ctx, lockSessionSQL, sessionID); err != nil {
 		return errcode.Wrap(errcode.KindInternal, ErrAdapterPGQuery, "refresh store: session lock", err)
 	}
 	return nil
 }
 
-func (s *PGRefreshStore) validateRow(ctx context.Context, tx pgx.Tx, row refreshRow, ver []byte) (refreshRow, error) {
+func (s *PGRefreshStore) validateRow(ctx context.Context, row refreshRow, ver []byte) (refreshRow, error) {
 	presentedHash := sha256.Sum256(ver)
 	if subtle.ConstantTimeCompare(presentedHash[:], row.verifierHash) != 1 {
 		return refreshRow{}, rejectWithReason("verifier_miss", row.sessionID)
@@ -365,14 +387,20 @@ func (s *PGRefreshStore) validateRow(ctx context.Context, tx pgx.Tx, row refresh
 	}
 
 	if row.rotatedAt != nil && now.Sub(*row.rotatedAt) > s.policy.ReuseInterval {
-		if _, execErr := tx.Exec(ctx, revokeSessionSQL, now, row.sessionID); execErr != nil {
-			return refreshRow{}, errcode.Wrap(errcode.KindInternal, ErrAdapterPGQuery, "refresh store: reuse cascade", execErr)
-		}
+		// Reuse detected: log as security event BEFORE the cascade SQL so that
+		// the security-observable log entry is not delayed by DB latency.
+		// The cascade revoke path is slower than other reject branches due to
+		// the UPDATE SQL; we accept this timing difference (B2-A-09: string
+		// processing and log formatting are uniform across all branches; the
+		// DB write is the only unavoidable timing oracle).
 		slog.Error("refresh token reuse detected",
 			slog.String("session_id", row.sessionID),
 			slog.String("reason", "reuse_detected"),
 		)
-		return refreshRow{}, refresh.ErrRejected
+		if _, execErr := s.execCtx(ctx, revokeSessionSQL, now, row.sessionID); execErr != nil {
+			return refreshRow{}, errcode.Wrap(errcode.KindInternal, ErrAdapterPGQuery, "refresh store: reuse cascade", execErr)
+		}
+		return refreshRow{}, rejectWithReason("reuse_detected", row.sessionID)
 	}
 
 	return row, nil
@@ -417,9 +445,14 @@ func (s *PGRefreshStore) GC(ctx context.Context, olderThan time.Time) (int, erro
 }
 
 // rejectWithReason emits a Warn slog line and returns refresh.ErrRejected.
-// Every non-happy Rotate branch funnels through this helper so error shape
-// and log cadence stay uniform. session_id is empty for reasons observed
-// before the DB is consulted (malformed, selector_miss).
+// Every non-happy Rotate/Peek branch funnels through this helper so error
+// shape and log cadence stay uniform (B2-A-09 timing/log uniformity).
+//
+// reuse_detected callers additionally emit a slog.Error BEFORE calling this
+// helper (since the security event requires Error level), but the function
+// execution path is uniform: every branch calls rejectWithReason once.
+// session_id is empty for reasons observed before the DB is consulted
+// (malformed, selector_miss).
 func rejectWithReason(reason, sessionID string) error {
 	if sessionID == "" {
 		slog.Warn("refresh token rejected", slog.String("reason", reason))

@@ -47,8 +47,12 @@ func init() {
 }
 
 func newTestRefreshStore() refresh.Store {
-	clock := storetest.NewFakeClock(time.Now())
-	return refreshmem.MustNew(refresh.Policy{ReuseInterval: testtime.D2s, MaxAge: time.Hour}, clock, nil)
+	clk := storetest.NewFakeClock(time.Now())
+	store, err := refreshmem.New(refresh.Policy{ReuseInterval: testtime.D2s, MaxAge: time.Hour}, clk, nil)
+	if err != nil {
+		panic("test setup: " + err.Error())
+	}
+	return store
 }
 
 type typedNilRefreshStore struct {
@@ -111,7 +115,10 @@ func newTestServiceWithClock(t testing.TB, seedUsers ...string) (*Service, ports
 		_ = userRepo.Create(context.Background(), u)
 	}
 	fakeClock := storetest.NewFakeClock(time.Now())
-	refreshStore := refreshmem.MustNew(refresh.Policy{ReuseInterval: testtime.D2s, MaxAge: time.Hour}, fakeClock, nil)
+	refreshStore, err := refreshmem.New(refresh.Policy{ReuseInterval: testtime.D2s, MaxAge: time.Hour}, fakeClock, nil)
+	if err != nil {
+		t.Fatalf("test setup: %v", err)
+	}
 	svc := MustNewService(sessionRepo, roleRepo, userRepo, refreshStore, testIssuer, slog.Default(), WithClock(clock.Real()))
 	return svc, sessionRepo, refreshStore, fakeClock
 }

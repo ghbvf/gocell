@@ -129,6 +129,27 @@ type InvalidIndex struct {
 	Table string
 }
 
+// InvalidIndexCheck wraps DetectInvalidIndexes for use as a readyz probe
+// (func(context.Context) error signature). Returns nil when no invalid indexes
+// exist; returns an errcode error listing the invalid indexes otherwise.
+//
+// ref: kubernetes/kubernetes pkg/util/healthz — named health checkers return error.
+func InvalidIndexCheck(ctx context.Context, pool *Pool) error {
+	indexes, err := DetectInvalidIndexes(ctx, pool)
+	if err != nil {
+		return err
+	}
+	if len(indexes) == 0 {
+		return nil
+	}
+	names := make([]string, 0, len(indexes))
+	for _, idx := range indexes {
+		names = append(names, idx.Index)
+	}
+	return errcode.New(errcode.KindInternal, ErrAdapterPGQuery,
+		fmt.Sprintf("schema_guard: %d invalid index(es): %s", len(indexes), strings.Join(names, ", ")))
+}
+
 // DetectInvalidIndexes queries pg_index for any indexes marked as invalid
 // (indisvalid = false) within the current schema. These can occur when
 // CREATE INDEX CONCURRENTLY is interrupted. The caller should log a warning

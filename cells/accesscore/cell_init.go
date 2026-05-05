@@ -304,7 +304,11 @@ func (c *AccessCore) initInternal(ctx context.Context, reg cell.Registry) error 
 		c.sessionRepo = mem.NewSessionRepository(c.clk)
 	}
 	if c.useInMemoryDefaults && c.refreshStore == nil {
-		c.refreshStore = refreshmem.MustNew(defaultRefreshPolicy, c.clk, nil)
+		rstore, rstoreErr := refreshmem.New(defaultRefreshPolicy, c.clk, nil)
+		if rstoreErr != nil {
+			return errcode.Wrap(errcode.KindInternal, errcode.ErrCellInvalidConfig, "accesscore: init in-memory refresh store", rstoreErr)
+		}
+		c.refreshStore = rstore
 	}
 
 	durabilityMode := reg.DurabilityMode()

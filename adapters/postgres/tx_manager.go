@@ -10,6 +10,7 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/redaction"
 )
 
 // Compile-time check: TxManager implements persistence.TxRunner.
@@ -93,7 +94,7 @@ func (tm *TxManager) RunInTx(ctx context.Context, fn func(ctx context.Context) e
 			if rbErr != nil {
 				slog.Error("postgres: rollback after panic failed",
 					slog.Any("panic", r),
-					slog.String("rollback_error", rbErr.Error()),
+					slog.String("rollback_error", redaction.RedactError(rbErr).Error()),
 				)
 			}
 			repanicAfterTopLevelTxRollback(r)
@@ -104,8 +105,8 @@ func (tm *TxManager) RunInTx(ctx context.Context, fn func(ctx context.Context) e
 	if retErr != nil {
 		if rbErr := tx.Rollback(context.WithoutCancel(ctx)); rbErr != nil {
 			slog.Error("postgres: rollback failed",
-				slog.String("original_error", retErr.Error()),
-				slog.String("rollback_error", rbErr.Error()),
+				slog.String("original_error", redaction.RedactError(retErr).Error()),
+				slog.String("rollback_error", redaction.RedactError(rbErr).Error()),
 			)
 		}
 		return retErr
@@ -137,7 +138,7 @@ func (tm *TxManager) runInSavepoint(ctx context.Context, tx pgx.Tx, fn func(ctx 
 				slog.Error("postgres: rollback savepoint after panic failed",
 					slog.String("savepoint", spName),
 					slog.Any("panic", r),
-					slog.String("rollback_error", rbErr.Error()),
+					slog.String("rollback_error", redaction.RedactError(rbErr).Error()),
 				)
 			}
 			repanicAfterSavepointRollback(r)
@@ -149,8 +150,8 @@ func (tm *TxManager) runInSavepoint(ctx context.Context, tx pgx.Tx, fn func(ctx 
 		if _, rbErr := tx.Exec(context.WithoutCancel(ctx), fmt.Sprintf("ROLLBACK TO SAVEPOINT %s", spName)); rbErr != nil {
 			slog.Error("postgres: rollback savepoint failed",
 				slog.String("savepoint", spName),
-				slog.String("original_error", retErr.Error()),
-				slog.String("rollback_error", rbErr.Error()),
+				slog.String("original_error", redaction.RedactError(retErr).Error()),
+				slog.String("rollback_error", redaction.RedactError(rbErr).Error()),
 			)
 		}
 		return retErr

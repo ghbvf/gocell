@@ -48,6 +48,14 @@ func (*typedNilRefreshReader) Read([]byte) (int, error) {
 	return 0, errTypedNilRefreshReaderUsed
 }
 
+// dummyTxRunner is a minimal TxRunner for unit tests that do not hit the DB.
+// It delegates fn directly with the provided context (no real transaction).
+type dummyTxRunner struct{}
+
+func (dummyTxRunner) RunInTx(ctx context.Context, fn func(context.Context) error) error {
+	return fn(ctx)
+}
+
 // ---------------------------------------------------------------------------
 // NewRefreshStore constructor validation
 // ---------------------------------------------------------------------------
@@ -55,51 +63,49 @@ func (*typedNilRefreshReader) Read([]byte) (int, error) {
 func TestNewRefreshStore_ReturnsErrorOnInvalidArgs(t *testing.T) {
 	validClock := storetest.NewFakeClock(time.Now())
 	validPolicy := refresh.Policy{ReuseInterval: time.Second, MaxAge: time.Hour}
+	validTxRunner := dummyTxRunner{}
 
 	// dummyPool is a non-nil *pgxpool.Pool used only to pass the nil check
 	// in the constructor — never used for actual DB calls in these tests.
 	dummyPool := new(pgxpool.Pool)
 
 	t.Run("nil_pool", func(t *testing.T) {
-		_, err := NewRefreshStore(nil, validPolicy, validClock, nil)
+		_, err := NewRefreshStore(nil, validTxRunner, validPolicy, validClock, nil)
+		assert.Error(t, err)
+	})
+
+	t.Run("nil_txrunner", func(t *testing.T) {
+		_, err := NewRefreshStore(dummyPool, nil, validPolicy, validClock, nil)
 		assert.Error(t, err)
 	})
 
 	t.Run("nil_clock", func(t *testing.T) {
-		_, err := NewRefreshStore(dummyPool, validPolicy, nil, nil)
+		_, err := NewRefreshStore(dummyPool, validTxRunner, validPolicy, nil, nil)
 		assert.Error(t, err)
 	})
 
 	t.Run("typed_nil_clock", func(t *testing.T) {
-		var clock *typedNilRefreshClock
-		_, err := NewRefreshStore(dummyPool, validPolicy, clock, nil)
+		var clk *typedNilRefreshClock
+		_, err := NewRefreshStore(dummyPool, validTxRunner, validPolicy, clk, nil)
 		assert.Error(t, err)
 	})
 
 	t.Run("zero_MaxAge", func(t *testing.T) {
 		p := refresh.Policy{ReuseInterval: time.Second, MaxAge: 0}
-		_, err := NewRefreshStore(dummyPool, p, validClock, nil)
+		_, err := NewRefreshStore(dummyPool, validTxRunner, p, validClock, nil)
 		assert.Error(t, err)
 	})
 
 	t.Run("negative_MaxAge", func(t *testing.T) {
 		p := refresh.Policy{ReuseInterval: time.Second, MaxAge: -time.Hour}
-		_, err := NewRefreshStore(dummyPool, p, validClock, nil)
+		_, err := NewRefreshStore(dummyPool, validTxRunner, p, validClock, nil)
 		assert.Error(t, err)
 	})
 
 	t.Run("negative_ReuseInterval", func(t *testing.T) {
 		p := refresh.Policy{ReuseInterval: -time.Second, MaxAge: time.Hour}
-		_, err := NewRefreshStore(dummyPool, p, validClock, nil)
+		_, err := NewRefreshStore(dummyPool, validTxRunner, p, validClock, nil)
 		assert.Error(t, err)
-	})
-}
-
-func TestMustNewRefreshStore_PanicsOnNilPool(t *testing.T) {
-	validClock := storetest.NewFakeClock(time.Now())
-	validPolicy := refresh.Policy{ReuseInterval: time.Second, MaxAge: time.Hour}
-	assert.Panics(t, func() {
-		MustNewRefreshStore(nil, validPolicy, validClock, nil)
 	})
 }
 
@@ -107,9 +113,10 @@ func TestNewRefreshStore_NilRandReader_UsesDefault(t *testing.T) {
 	dummyPool := new(pgxpool.Pool)
 	validClock := storetest.NewFakeClock(time.Now())
 	validPolicy := refresh.Policy{ReuseInterval: time.Second, MaxAge: time.Hour}
+	validTxRunner := dummyTxRunner{}
 
 	// nil randReader must not error — constructor falls back to crypto/rand.Reader.
-	s, err := NewRefreshStore(dummyPool, validPolicy, validClock, nil)
+	s, err := NewRefreshStore(dummyPool, validTxRunner, validPolicy, validClock, nil)
 	require.NoError(t, err)
 	assert.NotNil(t, s.rand, "rand field must be non-nil after constructor")
 }
@@ -118,9 +125,10 @@ func TestNewRefreshStore_TypedNilRandReader_UsesDefault(t *testing.T) {
 	dummyPool := new(pgxpool.Pool)
 	validClock := storetest.NewFakeClock(time.Now())
 	validPolicy := refresh.Policy{ReuseInterval: time.Second, MaxAge: time.Hour}
+	validTxRunner := dummyTxRunner{}
 	var reader *typedNilRefreshReader
 
-	s, err := NewRefreshStore(dummyPool, validPolicy, validClock, reader)
+	s, err := NewRefreshStore(dummyPool, validTxRunner, validPolicy, validClock, reader)
 	require.NoError(t, err)
 	_, _, err = s.generatePair()
 	require.NoError(t, err)

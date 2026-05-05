@@ -27,8 +27,12 @@ import (
 )
 
 func newOutboxRefreshStore() refresh.Store {
-	clock := storetest.NewFakeClock(time.Now())
-	return refreshmem.MustNew(refresh.Policy{ReuseInterval: testtime.D2s, MaxAge: time.Hour}, clock, nil)
+	clk := storetest.NewFakeClock(time.Now())
+	store, err := refreshmem.New(refresh.Policy{ReuseInterval: testtime.D2s, MaxAge: time.Hour}, clk, nil)
+	if err != nil {
+		panic("test setup: " + err.Error())
+	}
+	return store
 }
 
 // --- stubs ---

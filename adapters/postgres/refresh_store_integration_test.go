@@ -19,6 +19,9 @@ import (
 )
 
 const refreshTestOneWeek = 7 * 24 * time.Hour
+const refreshTest30Days = 30 * 24 * time.Hour
+const refreshTest90Days = 90 * 24 * time.Hour
+const refreshTest2Hours = 2 * time.Hour
 
 func TestPGRefreshStore_ContractSuite(t *testing.T) {
 	base, cleanup := setupPostgres(t)
@@ -38,7 +41,9 @@ func TestPGRefreshStore_ContractSuite(t *testing.T) {
 		require.NoError(t, migrator.Up(ctx))
 
 		clock := storetest.NewFakeClock(baseTime)
-		store := MustNewRefreshStore(p.DB(), policy, clock, nil)
+		txm := NewTxManager(p)
+		store, err := NewRefreshStore(p.DB(), txm, policy, clock, nil)
+		require.NoError(t, err)
 		return store, clock
 	})
 }
@@ -191,7 +196,9 @@ func TestPGRefreshStore_DMLState(t *testing.T) {
 
 	clock := storetest.NewFakeClock(time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC))
 	policy := refresh.Policy{ReuseInterval: testtime.D2s, MaxAge: refreshTestOneWeek}
-	store := MustNewRefreshStore(p.DB(), policy, clock, nil)
+	txm := NewTxManager(p)
+	store, err := NewRefreshStore(p.DB(), txm, policy, clock, nil)
+	require.NoError(t, err)
 
 	const sessionID = "sess-dml-state"
 	const subjectID = "usr-dml-state"
@@ -271,8 +278,9 @@ func TestPGRefreshStore_ReuseCascadeSurvivesAmbientRollback(t *testing.T) {
 	require.NoError(t, migrator.Up(ctx))
 
 	clock := storetest.NewFakeClock(time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC))
-	store := MustNewRefreshStore(p.DB(), refresh.Policy{ReuseInterval: testtime.D2s, MaxAge: time.Hour}, clock, nil)
 	txm := NewTxManager(p)
+	store, err := NewRefreshStore(p.DB(), txm, refresh.Policy{ReuseInterval: testtime.D2s, MaxAge: time.Hour}, clock, nil)
+	require.NoError(t, err)
 
 	parentWire, _, err := store.Issue(ctx, "sess-reuse-ambient", "usr-reuse-ambient")
 	require.NoError(t, err)
@@ -302,7 +310,9 @@ func TestPGRefreshStore_SessionLockRejectsChildValidatedBeforeCascade(t *testing
 	require.NoError(t, migrator.Up(ctx))
 
 	clock := storetest.NewFakeClock(time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC))
-	store := MustNewRefreshStore(p.DB(), refresh.Policy{ReuseInterval: testtime.D2s, MaxAge: time.Hour}, clock, nil)
+	txm2 := NewTxManager(p)
+	store, err := NewRefreshStore(p.DB(), txm2, refresh.Policy{ReuseInterval: testtime.D2s, MaxAge: time.Hour}, clock, nil)
+	require.NoError(t, err)
 
 	parentWire, _, err := store.Issue(ctx, "sess-reuse-lock", "usr-reuse-lock")
 	require.NoError(t, err)
@@ -350,14 +360,13 @@ func TestPGRefreshStore_T19_IdleExpireBlocksRotate(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, migrator.Up(ctx))
 
-	maxIdle := 30 * 24 * time.Hour
 	clock := storetest.NewFakeClock(time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC))
 	txm := NewTxManager(p)
 	store, err := NewRefreshStore(p.DB(), txm, refresh.Policy{
-		ReuseInterval:   testtime.D2s,
-		MaxAge:          90 * 24 * time.Hour,
-		MaxIdle:         time.Duration(maxIdle),
-		GraceMaxReuses:  3,
+		ReuseInterval:  testtime.D2s,
+		MaxAge:         refreshTest90Days,
+		MaxIdle:        refreshTest30Days,
+		GraceMaxReuses: 3,
 	}, clock, nil)
 	require.NoError(t, err)
 
@@ -365,7 +374,7 @@ func TestPGRefreshStore_T19_IdleExpireBlocksRotate(t *testing.T) {
 	require.NoError(t, err)
 
 	// Advance past MaxIdle.
-	clock.Advance(time.Duration(maxIdle) + time.Second)
+	clock.Advance(refreshTest30Days + time.Second)
 
 	_, _, err = store.Rotate(ctx, wire)
 	require.ErrorIs(t, err, refresh.ErrRejected, "Rotate after MaxIdle must return ErrRejected")
@@ -393,9 +402,9 @@ func TestPGRefreshStore_T20_GraceCounterCapTriggersReuse(t *testing.T) {
 	txm := NewTxManager(p)
 	graceMax := 2
 	store, err := NewRefreshStore(p.DB(), txm, refresh.Policy{
-		ReuseInterval:  90 * 24 * time.Hour, // large grace window so reuse doesn't trigger
-		MaxAge:         90 * 24 * time.Hour,
-		MaxIdle:        30 * 24 * time.Hour,
+		ReuseInterval:  refreshTest90Days, // large grace window so reuse doesn't trigger
+		MaxAge:         refreshTest90Days,
+		MaxIdle:        refreshTest30Days,
 		GraceMaxReuses: graceMax,
 	}, clock, nil)
 	require.NoError(t, err)
@@ -445,8 +454,8 @@ func TestPGRefreshStore_T21_RejectPathsHaveUniformLogging(t *testing.T) {
 	txm := NewTxManager(p)
 	store, err := NewRefreshStore(p.DB(), txm, refresh.Policy{
 		ReuseInterval:  testtime.D2s,
-		MaxAge:         time.Hour,
-		MaxIdle:        30 * 24 * time.Hour,
+		MaxAge:         testtime.D1h,
+		MaxIdle:        refreshTest30Days,
 		GraceMaxReuses: 3,
 	}, clock, nil)
 	require.NoError(t, err)
@@ -462,7 +471,7 @@ func TestPGRefreshStore_T21_RejectPathsHaveUniformLogging(t *testing.T) {
 	// expired
 	wire, _, err := store.Issue(ctx, "sess-t21-exp", "usr-t21")
 	require.NoError(t, err)
-	clock.Advance(2 * time.Hour)
+	clock.Advance(refreshTest2Hours)
 	_, err = store.Peek(ctx, wire)
 	require.ErrorIs(t, err, refresh.ErrRejected, "expired must return ErrRejected")
 
@@ -555,8 +564,8 @@ func TestPGRefreshStore_T23_AmbientTxRollback(t *testing.T) {
 	txm := NewTxManager(p)
 	store, err := NewRefreshStore(p.DB(), txm, refresh.Policy{
 		ReuseInterval:  testtime.D2s,
-		MaxAge:         time.Hour,
-		MaxIdle:        30 * 24 * time.Hour,
+		MaxAge:         testtime.D1h,
+		MaxIdle:        refreshTest30Days,
 		GraceMaxReuses: 3,
 	}, clock, nil)
 	require.NoError(t, err)

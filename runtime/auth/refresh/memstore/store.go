@@ -90,15 +90,6 @@ func New(policy refresh.Policy, clock clock.Clock, randReader io.Reader) (refres
 	return &store{policy: policy, clock: clock, rand: randReader}, nil
 }
 
-// MustNew is the static-wiring variant of New.
-func MustNew(policy refresh.Policy, clock clock.Clock, randReader io.Reader) refresh.Store {
-	store, err := New(policy, clock, randReader)
-	if err != nil {
-		panic(err.Error())
-	}
-	return store
-}
-
 func (s *store) generatePair() (selector []byte, verifier []byte, err error) {
 	return refresh.GeneratePair(s.rand)
 }
