@@ -3,6 +3,7 @@ package auth
 import (
 	"context"
 	"slices"
+	"time"
 )
 
 type PrincipalKind int
@@ -57,6 +58,15 @@ type Principal struct {
 	// mutating it has no effect on authentication decisions and may corrupt
 	// shared state.
 	Claims map[string]string
+	// ExpiresAt is the absolute expiration time of the credential that
+	// produced this Principal. Zero value means "no expiry" (anonymous
+	// and service principals never expire). For JWT principals this is
+	// copied from Claims.ExpiresAt by jwtClaimsToPrincipal.
+	//
+	// Consumers (e.g. runtime/websocket.Hub) check ExpiresAt against the
+	// current clock to decide eviction; long-lived WebSocket connections
+	// are evicted on the next ping tick after token expiry.
+	ExpiresAt time.Time
 }
 
 // HasRole is nil-safe: a nil receiver always returns false.

@@ -125,6 +125,7 @@ func jwtClaimsToPrincipal(c Claims) *Principal {
 			"iss":       c.Issuer,
 			"token_use": string(c.TokenUse),
 		},
+		ExpiresAt: c.ExpiresAt,
 	}
 }
 
@@ -273,4 +274,44 @@ func validateCallerCell(callerCell string) error {
 			fmt.Sprintf("caller cell id %q invalid (must match ^[a-z][a-z0-9-]*$)", callerCell))
 	}
 	return nil
+}
+
+// NewContextAuthenticator returns an Authenticator that extracts a Principal
+// from the request context. It is used by adapters that mount behind an
+// already-authenticated listener (e.g. WebSocket upgrade routes mounted on a
+// JWT listener); the listener middleware writes the Principal via
+// WithPrincipal, and the adapter's Authenticator simply reads it back.
+//
+// Outcomes:
+//
+//	(p, true, nil)                 — Principal found in ctx, Kind != PrincipalUnknown.
+//	(absentPrincipal(), false, nil) — no Principal in ctx (chain may continue).
+//
+// This Authenticator never returns an error; callers that want a strict
+// fail-closed mode should compose with a guard that rejects (false, nil)
+// outcomes (the typical /api/v1/* listener already does this via JWT
+// short-circuit).
+func NewContextAuthenticator() Authenticator {
+	return AuthenticatorFunc(func(r *http.Request) (*Principal, bool, error) {
+		if p, ok := FromContext(r.Context()); ok {
+			return p, true, nil
+		}
+		return absentPrincipal(), false, nil
+	})
+}
+
+// NewAnonymousAuthenticator returns an Authenticator that always succeeds
+// with a fresh PrincipalAnonymous principal. It is the explicit, type-safe
+// way to declare "this WebSocket endpoint accepts unauthenticated traffic"
+// at the composition root — paired with UpgradeConfig.Authenticator's
+// non-nil requirement to keep fail-closed semantics intact.
+//
+// The returned Principal carries Kind=PrincipalAnonymous and zero ExpiresAt
+// (anonymous principals never expire). Subject and Roles are intentionally
+// empty; downstream authorization (auth.RequireSelfOrRole etc.) treats the
+// anonymous Principal as having no privileges.
+func NewAnonymousAuthenticator() Authenticator {
+	return AuthenticatorFunc(func(_ *http.Request) (*Principal, bool, error) {
+		return &Principal{Kind: PrincipalAnonymous}, true, nil
+	})
 }
