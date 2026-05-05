@@ -294,8 +294,9 @@ func (c *DeviceCell) initSlices(durabilityMode cell.DurabilityMode) error {
 
 	// device-status slice
 	statusSvc := devicestatus.NewService(c.deviceRepo, c.logger)
-	// status: admin, operator and the device itself may read device status.
-	c.statusHandler = statuscontract.NewHandler(statusSvc, auth.AnyRole(dto.RoleAdmin, dto.RoleOperator, dto.RoleDevice))
+	// status: admin and operator may read any device's status; a device may only
+	// read its own status (path {id} must match the token subject).
+	c.statusHandler = statuscontract.NewHandler(statusSvc, auth.SelfOr("id", dto.RoleAdmin, dto.RoleOperator))
 	c.AddSlice(cell.NewBaseSlice("devicestatus", "devicecell", cell.L0))
 
 	// device-list slice
