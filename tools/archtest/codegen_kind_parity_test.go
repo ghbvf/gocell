@@ -126,7 +126,7 @@ func TestSPEC_GEN_VALUE_PARITY_01(t *testing.T) {
 			// Verify ID value: look for the literal   ID:        "<contractID>",
 			wantID := fmt.Sprintf("%q", contract.ID)
 			wantIDLine := "ID:        " + wantID
-			if !strings.Contains(src, wantIDLine) {
+			if !specGenContainsIDLine(src, wantIDLine) {
 				t.Errorf(
 					"SPEC-GEN-VALUE-PARITY-01: contract %q: spec_gen.go ID field does not match;"+
 						" expected line containing %q; regenerate with `gocell generate contract %s`",
@@ -137,7 +137,7 @@ func TestSPEC_GEN_VALUE_PARITY_01(t *testing.T) {
 			// Verify Topic value: topic == contractID (Topic == ContractID after PR-CODEGEN-FULL-MIGRATION-FU).
 			wantTopic := contract.ID
 			wantTopicLine := "Topic:     " + fmt.Sprintf("%q", wantTopic)
-			if !strings.Contains(src, wantTopicLine) {
+			if !specGenContainsIDLine(src, wantTopicLine) {
 				t.Errorf(
 					"SPEC-GEN-VALUE-PARITY-01: contract %q: spec_gen.go Topic field does not match;"+
 						" expected line containing %q; regenerate with `gocell generate contract %s`",
@@ -145,5 +145,43 @@ func TestSPEC_GEN_VALUE_PARITY_01(t *testing.T) {
 				)
 			}
 		})
+	}
+}
+
+// specGenContainsIDLine reports whether src contains the expected ID/Topic
+// line shape. Wave 1 RED implementation uses strings.Contains and
+// FALSE-POSITIVES on the same line shape appearing in a comment block. Wave 2
+// GREEN replaces with AST extraction of the real *ast.CompositeLit value.
+func specGenContainsIDLine(src, wantLine string) bool {
+	return strings.Contains(src, wantLine)
+}
+
+// TestSPEC_GEN_VALUE_PARITY_01_NegativeFixture_WrongIDInStruct asserts the
+// scanner detects when the actual *ast.CompositeLit ID/Topic values are wrong
+// even if the EXPECTED line text appears verbatim in a documentation
+// comment. Legacy strings.Contains FALSE-POSITIVES via the comment; AST
+// GREEN refactor must extract from the struct literal.
+func TestSPEC_GEN_VALUE_PARITY_01_NegativeFixture_WrongIDInStruct(t *testing.T) {
+	t.Parallel()
+	archDir := findArchTestDir(t)
+	fixturePath := filepath.Join(archDir, "testdata", "spec_gen_value_parity_fixtures", "wrong_id", "spec_gen.go")
+	body, err := os.ReadFile(fixturePath) //nolint:gosec // archtest fixture
+	if err != nil {
+		t.Fatalf("read fixture: %v", err)
+	}
+	src := string(body)
+
+	// Expected (correct) ID line — appears in fixture's documentation comment.
+	wantIDLine := `ID:        "event.fake.notify.v1"`
+	if specGenContainsIDLine(src, wantIDLine) {
+		t.Errorf("SPEC-GEN-VALUE-PARITY-01 negative fixture wrong_id: legacy " +
+			"strings.Contains FALSE-POSITIVES via comment; AST GREEN refactor required " +
+			"(extract *ast.CompositeLit ID field, compare unquoted value)")
+	}
+	wantTopicLine := `Topic:     "event.fake.notify.v1"`
+	if specGenContainsIDLine(src, wantTopicLine) {
+		t.Errorf("SPEC-GEN-VALUE-PARITY-01 negative fixture wrong_id: legacy " +
+			"strings.Contains FALSE-POSITIVES on Topic line via comment; AST GREEN " +
+			"refactor required")
 	}
 }

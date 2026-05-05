@@ -64,3 +64,31 @@ func findArchTestDir(t *testing.T) string {
 	root := findModuleRoot(t)
 	return filepath.Join(root, "tools", "archtest")
 }
+
+// TestFindCellProductionGoFiles_IncludesExamples is a Wave 1 RED test for
+// Part B scanning-root unification. It asserts the metadata-rooted helper
+// returns at least one cell file under examples/. Pre-refactor the helper
+// only walks the top-level cells/ directory and FALSE-NEGATIVES any cell in
+// examples/{iotdevice,todoorder}/cells/...; this test FAILS pre-GREEN and
+// PASSES once findCellProductionGoFiles enumerates via metadata.NewParser.
+func TestFindCellProductionGoFiles_IncludesExamples(t *testing.T) {
+	t.Parallel()
+	root := findModuleRoot(t)
+	files, err := findCellProductionGoFiles(root)
+	if err != nil {
+		t.Fatalf("findCellProductionGoFiles: %v", err)
+	}
+	var foundExample bool
+	for _, p := range files {
+		rel, _ := filepath.Rel(root, p)
+		if strings.HasPrefix(filepath.ToSlash(rel), "examples/") {
+			foundExample = true
+			break
+		}
+	}
+	if !foundExample {
+		t.Errorf("findCellProductionGoFiles must enumerate cells under examples/ (Wave 2 GREEN " +
+			"requires metadata.NewParser-based discovery covering examples/*/cells/...); got " +
+			"only top-level cells/. Refactor: use *ProjectMeta.Cells + filepath.Dir(c.File).")
+	}
+}

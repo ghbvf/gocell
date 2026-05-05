@@ -283,6 +283,52 @@ func lenArgContainsParamRef(call *ast.CallExpr, paramName string) bool {
 	return false
 }
 
+// TestHANDLER_PATH_QUERY_LENGTH_VALIDATION_01_NegativeFixtures asserts that
+// each negative fixture below is correctly REJECTED by the param-scoped
+// scanner. The legacy file-level fallback (`hasLenCheck && hasParamRef`)
+// FALSE-PASSes them; this Wave 1 RED test FAILS pre-refactor and PASSes
+// after the GREEN param-scoped helper lands.
+func TestHANDLER_PATH_QUERY_LENGTH_VALIDATION_01_NegativeFixtures(t *testing.T) {
+	t.Parallel()
+	archDir := findArchTestDir(t)
+
+	cases := []struct {
+		name      string
+		fixture   string
+		paramName string
+	}{
+		// Two path params: "id" has full min/max checks, "cmdId" has none.
+		// Legacy fallback returns true for "cmdId" because the file-level
+		// hasLenCheck (id's len(v) compares) AND hasParamRef ("cmdId" string
+		// literal in r.PathValue) flags collide independently.
+		{"two_path_params_one_missing", "two_path_params_one_missing", "cmdId"},
+
+		// String literal carrier: "fakeparam" appears in r.PathValue but the
+		// only len() compare in the file is `len(body) > 1024` for body bytes.
+		// Legacy fallback FALSE-PASSes because both flags are set globally.
+		{"string_literal_only", "string_literal_only", "fakeparam"},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			path := filepath.Join(archDir, "testdata", "path_query_length_validation_fixtures", tc.fixture, "handler_gen.go")
+			fset := token.NewFileSet()
+			f, err := parser.ParseFile(fset, path, nil, 0)
+			if err != nil {
+				t.Fatalf("parse fixture %s: %v", path, err)
+			}
+			if handlerHasLengthCheck(f, tc.paramName) {
+				t.Errorf("HANDLER-PATH-QUERY-LENGTH-VALIDATION-01 negative fixture %q: "+
+					"legacy file-level scanner FALSE-PASSes for param %q; param-scoped GREEN "+
+					"refactor required (block-binding of len() compare to PathValue/Query.Get)",
+					tc.fixture, tc.paramName)
+			}
+		})
+	}
+}
+
 // eqFold compares two strings case-insensitively.
 func eqFold(a, b string) bool {
 	if len(a) != len(b) {

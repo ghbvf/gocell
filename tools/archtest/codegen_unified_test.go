@@ -425,12 +425,40 @@ func TestMarkerWireSingleSource01(t *testing.T) {
 			t.Errorf("MARKER-WIRE-SINGLE-SOURCE-01: read %s: %v", cellGoPath, err)
 			continue
 		}
-		if !bytes.Contains(content, []byte("// +cell:listener:")) {
+		if !cellGoHasListenerMarker(content) {
 			rel, _ := filepath.Rel(root, cellGoPath)
 			t.Errorf(
 				"MARKER-WIRE-SINGLE-SOURCE-01: %s (cell %q) is K#04 opted-in with reg.RouteGroup in cell_gen.go but declares no "+
 					"`// +cell:listener` marker — wire is single-sourced via markers after K#05",
 				filepath.ToSlash(rel), c.ID)
 		}
+	}
+}
+
+// cellGoHasListenerMarker reports whether cell.go declares a real
+// `// +cell:listener` annotation as a top-level comment. Wave 1 RED uses
+// bytes.Contains and FALSE-PASSes when the bytes appear inside a string
+// literal. Wave 2 GREEN replaces with parser.ParseFile(ParseComments) over
+// f.Comments.
+func cellGoHasListenerMarker(content []byte) bool {
+	return bytes.Contains(content, []byte("// +cell:listener:"))
+}
+
+// TestMarkerWireSingleSource01_NegativeFixture_StringLiteralOnly asserts
+// scanner rejects a cell.go that contains "// +cell:listener:" only inside
+// a string-constant value, not as an actual *ast.Comment. Legacy
+// bytes.Contains FALSE-PASSes; AST GREEN refactor must inspect f.Comments.
+func TestMarkerWireSingleSource01_NegativeFixture_StringLiteralOnly(t *testing.T) {
+	t.Parallel()
+	archDir := findArchTestDir(t)
+	fixturePath := filepath.Join(archDir, "testdata", "marker_wire_single_source_fixtures", "listener_in_string_literal", "cell.go")
+	content, err := os.ReadFile(fixturePath) //nolint:gosec // archtest fixture
+	if err != nil {
+		t.Fatalf("read fixture: %v", err)
+	}
+	if cellGoHasListenerMarker(content) {
+		t.Errorf("MARKER-WIRE-SINGLE-SOURCE-01 negative fixture listener_in_string_literal: " +
+			"legacy bytes.Contains FALSE-PASSes on string-constant carrier; AST GREEN " +
+			"refactor required (parser.ParseFile(ParseComments) + f.Comments scan)")
 	}
 }

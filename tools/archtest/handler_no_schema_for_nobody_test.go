@@ -72,15 +72,57 @@ func TestHandlerNoSchemaForNobody01(t *testing.T) {
 			continue
 		}
 		text := string(body)
-		if strings.Contains(text, "requestSchemaJSON") {
+		if handlerEmbedsSchemaLiteral(text) {
 			t.Errorf("%s: %s (method %s) handler embeds requestSchemaJSON literal — "+
 				"no-body endpoints must skip schema embed (rebuild with W4 F5 builder)",
 				handlerNoSchemaForNobodyRule, contract.ID, method)
 		}
-		if strings.Contains(text, "schemavalidate.NewValidator") {
+		if handlerWiresSchemaValidator(text) {
 			t.Errorf("%s: %s (method %s) handler wires schemavalidate.NewValidator — "+
 				"no-body endpoints must not compile a request validator",
 				handlerNoSchemaForNobodyRule, contract.ID, method)
 		}
+	}
+}
+
+// handlerEmbedsSchemaLiteral reports whether the handler source declares a
+// real var `requestSchemaJSON`. Wave 1 RED implementation falls back to
+// strings.Contains and FALSE-POSITIVES on comments / string-constant
+// occurrences. Wave 2 GREEN replaces with AST scan over *ast.GenDecl(VAR).
+func handlerEmbedsSchemaLiteral(text string) bool {
+	return strings.Contains(text, "requestSchemaJSON")
+}
+
+// handlerWiresSchemaValidator reports whether the handler source contains an
+// actual *ast.CallExpr to schemavalidate.NewValidator. Wave 1 RED falls back
+// to strings.Contains and FALSE-POSITIVES on comment text; Wave 2 GREEN
+// replaces with AST scan.
+func handlerWiresSchemaValidator(text string) bool {
+	return strings.Contains(text, "schemavalidate.NewValidator")
+}
+
+// TestHandlerNoSchemaForNobody01_NegativeFixture_StringLiteralOnly asserts the
+// scanner does NOT flag a fixture that only contains "requestSchemaJSON" /
+// "schemavalidate.NewValidator" in comments and string-constant values, with
+// no real var/CallExpr. Legacy strings.Contains FALSE-POSITIVES; AST GREEN
+// refactor must distinguish.
+func TestHandlerNoSchemaForNobody01_NegativeFixture_StringLiteralOnly(t *testing.T) {
+	t.Parallel()
+	archDir := findArchTestDir(t)
+	fixturePath := filepath.Join(archDir, "testdata", "handler_no_schema_for_nobody_fixtures", "get_with_validator", "handler_gen.go")
+	body, err := os.ReadFile(fixturePath) //nolint:gosec // archtest fixture
+	if err != nil {
+		t.Fatalf("read fixture: %v", err)
+	}
+	text := string(body)
+	if handlerEmbedsSchemaLiteral(text) {
+		t.Errorf("HANDLER-NO-SCHEMA-FOR-NOBODY-01 negative fixture get_with_validator: " +
+			"legacy strings.Contains FALSE-POSITIVES on comment/literal occurrences of " +
+			"\"requestSchemaJSON\"; AST GREEN refactor required (scan *ast.GenDecl(VAR))")
+	}
+	if handlerWiresSchemaValidator(text) {
+		t.Errorf("HANDLER-NO-SCHEMA-FOR-NOBODY-01 negative fixture get_with_validator: " +
+			"legacy strings.Contains FALSE-POSITIVES on comment occurrences of " +
+			"\"schemavalidate.NewValidator\"; AST GREEN refactor required (scan *ast.CallExpr)")
 	}
 }

@@ -85,6 +85,26 @@ func scanEventSubscriptionCoverage(contractID, subPath string) error {
 	return nil
 }
 
+// TestEVENT_SUBSCRIPTION_CONTRACTGEN_COVERAGE_01_NegativeFixture_VarShadowsFunc
+// asserts the scanner rejects a subscription_gen.go that contains the bytes
+// "func NewSubscription" only inside a comment, a string literal, and a
+// `var NewSubscription = ...` declaration — no real *ast.FuncDecl.
+//
+// The legacy bytes.Contains scan FALSE-PASSes because the substring is
+// literally present three times. This Wave 1 RED test FAILS pre-refactor
+// and PASSes after the GREEN AST scan replaces bytes.Contains.
+func TestEVENT_SUBSCRIPTION_CONTRACTGEN_COVERAGE_01_NegativeFixture_VarShadowsFunc(t *testing.T) {
+	t.Parallel()
+	archDir := findArchTestDir(t)
+	fixturePath := filepath.Join(archDir, "testdata", "event_subscription_coverage_fixtures", "var_shadows_func", "subscription_gen.go")
+
+	if err := scanEventSubscriptionCoverage("event.fake.notify.v1", fixturePath); err == nil {
+		t.Errorf("EVENT-SUBSCRIPTION-CONTRACTGEN-COVERAGE-01 negative fixture var_shadows_func: " +
+			"legacy bytes.Contains FALSE-PASSes — only comment/literal/var carriers exist, no real " +
+			"FuncDecl; AST GREEN refactor required (parser.ParseFile + *ast.FuncDecl scan)")
+	}
+}
+
 // TestEVENT_SUBSCRIPTION_CONTRACTGEN_COVERAGE_01_NegativeFixture verifies that
 // scanEventSubscriptionCoverage catches a contract with codegen=true that is
 // missing subscription_gen.go. The fixture is a tmpdir with a contract.yaml but
