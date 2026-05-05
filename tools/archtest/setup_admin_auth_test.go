@@ -7,27 +7,22 @@
 // # AUTH-BOOTSTRAP-PATH-RESTRICTED-01
 //
 // Invariant: auth.bootstrap:true is only allowed on contracts whose path
-// contains "setup/admin". This flag enables HTTP Basic Auth using env
+// matches metadata.IsBootstrapPath. This flag enables HTTP Basic Auth using env
 // credentials intended exclusively for first-run admin provisioning.
 //
 // Refs: roadmap A2 / PR#376 review F1
 package archtest
 
 import (
-	"strings"
 	"testing"
 
 	"github.com/ghbvf/gocell/kernel/metadata"
 )
 
 // TestSetupAdminNotPublic scans all contract.yaml files in the project and
-// verifies that no HTTP contract whose path contains "setup/admin" declares
+// verifies that no HTTP contract whose path matches IsBootstrapPath declares
 // auth.public:true. The setup/admin endpoint must be protected by bootstrap
 // auth (auth.bootstrap:true) rather than being fully JWT-exempt.
-//
-// Current state: contracts/http/auth/setup/admin/v1/contract.yaml has
-// auth.public:true — this test is intentionally RED until Batch 1 / Agent-A
-// changes that to auth.bootstrap:true.
 func TestSetupAdminNotPublic(t *testing.T) {
 	t.Parallel()
 	root := findModuleRoot(t)
@@ -38,7 +33,7 @@ func TestSetupAdminNotPublic(t *testing.T) {
 			continue
 		}
 		path := contract.Endpoints.HTTP.Path
-		if !strings.Contains(path, "setup/admin") {
+		if !metadata.IsBootstrapPath(path) {
 			continue
 		}
 		if contract.Endpoints.HTTP.Auth.Public {
@@ -76,7 +71,7 @@ func TestAuthBootstrapPathRestricted(t *testing.T) {
 
 		var violations []string
 		for _, c := range contracts {
-			if c.bootstrap && !strings.Contains(c.path, "setup/admin") {
+			if c.bootstrap && !metadata.IsBootstrapPath(c.path) {
 				violations = append(violations,
 					"contract "+c.id+": auth.bootstrap:true on non-setup/admin path "+c.path)
 			}
@@ -104,9 +99,9 @@ func TestAuthBootstrapPathRestricted(t *testing.T) {
 				continue
 			}
 			path := contract.Endpoints.HTTP.Path
-			if !strings.Contains(path, "setup/admin") {
+			if !metadata.IsBootstrapPath(path) {
 				t.Errorf("AUTH-BOOTSTRAP-PATH-RESTRICTED-01: contract %q path=%q has auth.bootstrap:true "+
-					"but path does not contain 'setup/admin'; bootstrap auth is only permitted on setup/admin contracts",
+					"but path does not match IsBootstrapPath; bootstrap auth is only permitted on setup/admin contracts",
 					contract.ID, path)
 			}
 		}
@@ -205,8 +200,8 @@ func TestFMT28_BootstrapRestrictedToSetupAdminPath(t *testing.T) {
 		Assemblies: map[string]*metadata.AssemblyMeta{},
 	}
 
-	// The FMT-28 rule (to be implemented in Batch 1 / Agent-B in rules_fmt.go)
-	// should catch auth.bootstrap:true on paths that don't contain "setup/admin".
+	// Verify that the FMT-28 predicate catches auth.bootstrap:true on paths
+	// that don't match IsBootstrapPath.
 	var violations []string
 	for _, c := range project.Contracts {
 		if c.Endpoints.HTTP == nil {
@@ -215,9 +210,9 @@ func TestFMT28_BootstrapRestrictedToSetupAdminPath(t *testing.T) {
 		if !c.Endpoints.HTTP.Auth.Bootstrap {
 			continue
 		}
-		if !strings.Contains(c.Endpoints.HTTP.Path, "setup/admin") {
+		if !metadata.IsBootstrapPath(c.Endpoints.HTTP.Path) {
 			violations = append(violations,
-				"contract "+c.ID+": auth.bootstrap:true only allowed on setup/admin paths")
+				"contract "+c.ID+": auth.bootstrap:true only allowed on IsBootstrapPath paths")
 		}
 	}
 

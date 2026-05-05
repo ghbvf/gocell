@@ -41,7 +41,7 @@ type HTTPAuthMeta struct {
 	// GOCELL_BOOTSTRAP_ADMIN_USERNAME/PASSWORD env credentials. Listener-level
 	// JWT middleware skips routes flagged as Bootstrap (matcher in FinalizeAuth).
 	// Mutually exclusive with Public and PasswordResetExempt. FMT-28 limits this
-	// flag to contracts whose path contains "setup/admin".
+	// flag to contracts whose path matches IsBootstrapPath.
 	Bootstrap bool `yaml:"bootstrap,omitempty" json:"bootstrap,omitempty"`
 }
 

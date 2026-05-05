@@ -428,12 +428,10 @@ func TestFMT27_BootstrapAndPasswordResetExemptBothTrue(t *testing.T) {
 	}
 }
 
-// --- FMT-28 (auth.bootstrap:true only allowed on setup/admin paths) ---
-// These tests are RED until validateFMT28 is implemented in Batch 1 / Agent-B.
+// --- FMT-28 (auth.bootstrap:true only allowed on IsBootstrapPath paths) ---
 
-// TestFMT28_BootstrapOnNonSetupPath verifies that auth.bootstrap:true on a
-// path not containing "setup/admin" is rejected by FMT-28.
-// RED: validateFMT28 does not yet exist.
+// TestFMT28_BootstrapOnNonSetupAdminPath verifies that auth.bootstrap:true on a
+// path that does not match IsBootstrapPath is rejected by FMT-28.
 func TestFMT28_BootstrapOnNonSetupAdminPath(t *testing.T) {
 	project := &metadata.ProjectMeta{
 		Cells:  map[string]*metadata.CellMeta{},
@@ -475,14 +473,61 @@ func TestFMT28_BootstrapOnNonSetupAdminPath(t *testing.T) {
 	}
 
 	if len(fmt28Errors) == 0 {
-		t.Fatal("FMT-28: expected error when auth.bootstrap:true on non-setup/admin path, got none — " +
-			"validateFMT28 not yet implemented (Batch 1 Agent-B)")
+		t.Fatal("FMT-28: expected error when auth.bootstrap:true on path not matching IsBootstrapPath, got none")
+	}
+}
+
+// TestFMT28_BootstrapOnSubstringMatchPath verifies that a path like
+// /api/v1/setup/admin/foo (substring match but not exact segment match)
+// is rejected by FMT-28. This guards against the old strings.Contains approach.
+func TestFMT28_BootstrapOnSubstringMatchPath(t *testing.T) {
+	project := &metadata.ProjectMeta{
+		Cells:  map[string]*metadata.CellMeta{},
+		Slices: map[string]*metadata.SliceMeta{},
+		Contracts: map[string]*metadata.ContractMeta{
+			"http.setup.admin.extra.v1": {
+				ID:               "http.setup.admin.extra.v1",
+				Kind:             "http",
+				ConsistencyLevel: "L1",
+				Lifecycle:        "active",
+				Endpoints: metadata.EndpointsMeta{
+					Server:  "somecore",
+					Clients: []string{"edge-bff"},
+					HTTP: &metadata.HTTPTransportMeta{
+						Method:        "POST",
+						Path:          "/api/v1/setup/admin/foo",
+						SuccessStatus: 201,
+						Auth: metadata.HTTPAuthMeta{
+							Bootstrap: true,
+						},
+					},
+				},
+				Dir:  "contracts/http/setup/admin/extra/v1",
+				File: "contracts/http/setup/admin/extra/v1/contract.yaml",
+			},
+		},
+		Journeys:   map[string]*metadata.JourneyMeta{},
+		Assemblies: map[string]*metadata.AssemblyMeta{},
+	}
+
+	v := NewValidator(project, "", clock.Real())
+	results := v.validateFMT28()
+
+	var fmt28Errors []ValidationResult
+	for _, r := range results {
+		if r.Code == "FMT-28" && r.Severity == SeverityError {
+			fmt28Errors = append(fmt28Errors, r)
+		}
+	}
+
+	if len(fmt28Errors) == 0 {
+		t.Fatal("FMT-28: expected error for path /api/v1/setup/admin/foo (substring match, not exact segment); " +
+			"IsBootstrapPath must reject paths with trailing segments")
 	}
 }
 
 // TestFMT28_BootstrapOnSetupAdminPath verifies that auth.bootstrap:true on a
-// path containing "setup/admin" is allowed by FMT-28 (no error).
-// RED: validateFMT28 does not yet exist so this will also fail to compile/run.
+// path matching IsBootstrapPath is allowed by FMT-28 (no error).
 func TestFMT28_BootstrapOnSetupAdminPath(t *testing.T) {
 	project := &metadata.ProjectMeta{
 		Cells:  map[string]*metadata.CellMeta{},
@@ -518,7 +563,7 @@ func TestFMT28_BootstrapOnSetupAdminPath(t *testing.T) {
 
 	for _, r := range results {
 		if r.Code == "FMT-28" && r.Severity == SeverityError {
-			t.Errorf("FMT-28: unexpected error for auth.bootstrap on valid setup/admin path: %v", r)
+			t.Errorf("FMT-28: unexpected error for auth.bootstrap on IsBootstrapPath-valid path: %v", r)
 		}
 	}
 }

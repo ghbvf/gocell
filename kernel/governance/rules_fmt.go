@@ -1044,12 +1044,12 @@ func (v *Validator) validateFMT27() []ValidationResult {
 }
 
 // validateFMT28 checks that auth.bootstrap:true is only allowed on HTTP contracts
-// whose path contains "setup/admin". Bootstrap credentials are exclusively for
+// whose path matches IsBootstrapPath. Bootstrap credentials are exclusively for
 // the first-admin setup endpoint; enabling bootstrap auth on other paths would
 // expose env credentials in unintended contexts.
 //
-// Path matching uses strings.Contains("setup/admin") — the bootstrap auth gate
-// is structurally tied to the first-admin provisioning endpoint.
+// Path matching uses metadata.IsBootstrapPath — the single authoritative predicate
+// for the bootstrap admin endpoint pattern /api/v{N}/{cell}/setup/admin.
 func (v *Validator) validateFMT28() []ValidationResult {
 	var results []ValidationResult
 	for _, c := range v.project.Contracts {
@@ -1060,7 +1060,7 @@ func (v *Validator) validateFMT28() []ValidationResult {
 			continue
 		}
 		path := c.Endpoints.HTTP.Path
-		if !strings.Contains(path, "setup/admin") {
+		if !metadata.IsBootstrapPath(path) {
 			results = append(results, v.newResult(
 				codeFMT28, SeverityError, IssueForbidden,
 				contractFile(c),
@@ -1068,7 +1068,7 @@ func (v *Validator) validateFMT28() []ValidationResult {
 				fmt.Sprintf(
 					"contract %q has auth.bootstrap:true on path %q; "+
 						"bootstrap auth is only permitted on setup/admin contracts "+
-						"(path must contain \"setup/admin\")",
+						"(path must match IsBootstrapPath: /api/v{N}/{cell}/setup/admin)",
 					c.ID, path,
 				),
 			))
