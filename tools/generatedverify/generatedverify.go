@@ -4,6 +4,7 @@ package generatedverify
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -76,7 +77,7 @@ const driftKindUnexpected = "unexpected"
 // expected manifest is drift, regardless of directory. This makes
 // assembly.yaml the single source of truth for what may live under any
 // generator-owned path.
-func Verify(root, module string, project *metadata.ProjectMeta) (*Result, error) {
+func Verify(ctx context.Context, root, module string, project *metadata.ProjectMeta) (*Result, error) {
 	artifacts, err := ExpectedArtifacts(root, module, project)
 	if err != nil {
 		return nil, err
@@ -104,7 +105,7 @@ func Verify(root, module string, project *metadata.ProjectMeta) (*Result, error)
 		if !gitTracked {
 			continue
 		}
-		committed, err := governance.CommittedInHEAD(root, artifact.Path)
+		committed, err := governance.CommittedInHEAD(ctx, root, artifact.Path)
 		if err != nil {
 			return nil, fmt.Errorf("check committed artifact %s: %w", artifact.Path, err)
 		}
@@ -114,7 +115,7 @@ func Verify(root, module string, project *metadata.ProjectMeta) (*Result, error)
 	}
 
 	if gitTracked {
-		generatedPaths, err := governance.ListGeneratedInHEAD(root)
+		generatedPaths, err := governance.ListGeneratedInHEAD(ctx, root)
 		if err != nil {
 			return nil, fmt.Errorf("list generator-marked files in HEAD: %w", err)
 		}

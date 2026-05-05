@@ -64,7 +64,7 @@ func TestValidateFailFast_ShortCircuitsOnFirstError(t *testing.T) {
 		"ADV-05 must NOT fire under fail-fast: short-circuit broke")
 }
 
-// TestValidate_RespectsCtxCancel proves that a cancelled context unwinds the
+// TestValidate_RespectsCtxCancel proves that a canceled context unwinds the
 // rule pipeline before any rule executes. Without ctx propagation a CI worker
 // that aborts the validate command cannot stop the running rule loop.
 func TestValidate_RespectsCtxCancel(t *testing.T) {
@@ -77,9 +77,9 @@ func TestValidate_RespectsCtxCancel(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	cancelled := val.Validate(ctx)
-	assert.Empty(t, cancelled,
-		"pre-cancelled ctx must short-circuit before any rule runs")
+	canceled := val.Validate(ctx)
+	assert.Empty(t, canceled,
+		"pre-canceled ctx must short-circuit before any rule runs")
 }
 
 // TestValidateFailFast_RespectsCtxCancel mirrors TestValidate_RespectsCtxCancel
@@ -94,12 +94,12 @@ func TestValidateFailFast_RespectsCtxCancel(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	cancelled := val.ValidateFailFast(ctx)
-	assert.Empty(t, cancelled,
-		"pre-cancelled ctx must short-circuit fail-fast before any rule runs")
+	canceled := val.ValidateFailFast(ctx)
+	assert.Empty(t, canceled,
+		"pre-canceled ctx must short-circuit fail-fast before any rule runs")
 }
 
-// TestRunGit_RespectsCtxCancel confirms the runGit subprocess wrapper honours
+// TestRunGit_RespectsCtxCancel confirms the runGit subprocess wrapper honors
 // ctx cancellation. With pre-canceled ctx the call must return an error;
 // without ctx threading runGit hardcodes context.Background() and could hang
 // indefinitely on slow filesystems (NFS / FUSE).

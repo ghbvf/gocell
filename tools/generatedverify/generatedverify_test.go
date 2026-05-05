@@ -41,7 +41,7 @@ func TestVerifyPassesWhenExpectedFilesAreCommitted(t *testing.T) {
 	artifacts := writeExpectedArtifacts(t, root, project)
 	gitInitAndCommit(t, root, artifactPaths(artifacts))
 
-	result, err := Verify(root, fixtureModule, project)
+	result, err := Verify(t.Context(), root, fixtureModule, project)
 	require.NoError(t, err)
 
 	assert.True(t, result.Passed())
@@ -58,7 +58,7 @@ func TestVerifyReportsMissingAndChangedArtifacts(t *testing.T) {
 	staleEntrypoint = append(staleEntrypoint, []byte("\n// stale generated main\n")...)
 	writeFile(t, root, artifacts[0].Path, staleEntrypoint)
 
-	result, err := Verify(root, fixtureModule, project)
+	result, err := Verify(t.Context(), root, fixtureModule, project)
 	require.NoError(t, err)
 
 	assert.False(t, result.Passed())
@@ -90,7 +90,7 @@ func TestVerifyReportsUncommittedArtifactsInsideGitRepo(t *testing.T) {
 	gitRun(t, root, "init", "-q")
 	gitConfigUser(t, root)
 
-	result, err := Verify(root, fixtureModule, project)
+	result, err := Verify(t.Context(), root, fixtureModule, project)
 	require.NoError(t, err)
 
 	assert.False(t, result.Passed())
@@ -128,7 +128,7 @@ func TestVerifyRejectsStagedButUncommittedArtifact(t *testing.T) {
 	gitConfigUser(t, root)
 	gitAdd(t, root, artifactPaths(artifacts))
 
-	result, err := Verify(root, fixtureModule, project)
+	result, err := Verify(t.Context(), root, fixtureModule, project)
 	require.NoError(t, err)
 
 	assert.False(t, result.Passed())
@@ -158,7 +158,7 @@ func TestVerifyDetectsOrphanedAssemblyGeneratedArtifact(t *testing.T) {
 	allCommitted := append(artifactPaths(artifacts), stalePath)
 	gitInitAndCommit(t, root, allCommitted)
 
-	result, err := Verify(root, fixtureModule, project)
+	result, err := Verify(t.Context(), root, fixtureModule, project)
 	require.NoError(t, err)
 
 	assert.False(t, result.Passed())
@@ -187,7 +187,7 @@ func TestVerifyDetectsOrphanedFileFromRemovedAssembly(t *testing.T) {
 	allCommitted := append(artifactPaths(artifacts), orphanPath)
 	gitInitAndCommit(t, root, allCommitted)
 
-	result, err := Verify(root, fixtureModule, project)
+	result, err := Verify(t.Context(), root, fixtureModule, project)
 	require.NoError(t, err)
 
 	assert.False(t, result.Passed())
@@ -216,7 +216,7 @@ func TestVerifyDetectsRenamedEntrypointLeftBehind(t *testing.T) {
 	allCommitted := append(artifactPaths(artifacts), orphanEntrypoint)
 	gitInitAndCommit(t, root, allCommitted)
 
-	result, err := Verify(root, fixtureModule, project)
+	result, err := Verify(t.Context(), root, fixtureModule, project)
 	require.NoError(t, err)
 
 	assert.False(t, result.Passed())
@@ -243,7 +243,7 @@ func TestVerifyIgnoresHandwrittenFileInGeneratedDir(t *testing.T) {
 	allCommitted := append(artifactPaths(artifacts), notes)
 	gitInitAndCommit(t, root, allCommitted)
 
-	result, err := Verify(root, fixtureModule, project)
+	result, err := Verify(t.Context(), root, fixtureModule, project)
 	require.NoError(t, err)
 	assert.True(t, result.Passed(),
 		"hand-written file without generator header must not surface as drift: %+v",
@@ -266,7 +266,7 @@ func TestVerifyDetectsGeneratorHeaderOutsideKnownDirs(t *testing.T) {
 	allCommitted := append(artifactPaths(artifacts), rogue)
 	gitInitAndCommit(t, root, allCommitted)
 
-	result, err := Verify(root, fixtureModule, project)
+	result, err := Verify(t.Context(), root, fixtureModule, project)
 	require.NoError(t, err)
 
 	assert.False(t, result.Passed())
@@ -291,7 +291,7 @@ func TestVerifyAllowsHandwrittenSiblingOfEntrypoint(t *testing.T) {
 	allCommitted := append(artifactPaths(artifacts), "cmd/fixture/run.go", "go.mod", "runtime/shutdown/shutdown.go")
 	gitInitAndCommit(t, root, allCommitted)
 
-	result, err := Verify(root, fixtureModule, project)
+	result, err := Verify(t.Context(), root, fixtureModule, project)
 	require.NoError(t, err)
 
 	assert.True(t, result.Passed(), "hand-written sibling under cmd/<id>/ must not be flagged: %+v", result.Drifts)

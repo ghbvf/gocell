@@ -223,7 +223,7 @@ func TestValidProject_ZeroErrors(t *testing.T) {
 	pm := validProject()
 	// Use empty root to skip filesystem checks (REF-11, REF-12).
 	val := NewValidator(pm, "", clock.Real())
-	results := val.Validate()
+	results := val.Validate(t.Context())
 	errs := FilterErrors(results)
 	assert.Empty(t, errs, "valid project should have 0 errors, got: %v", errs)
 }
@@ -1452,7 +1452,7 @@ func TestVERIFY06(t *testing.T) {
 			if tt.verifier != nil {
 				val.verifyJourneyRef = tt.verifier
 			}
-			got := findByCode(val.validateVERIFY06(true), "VERIFY-06")
+			got := findByCode(val.validateVERIFY06(t.Context(), true), "VERIFY-06")
 			assert.Len(t, got, tt.wantCount)
 		})
 	}
@@ -1944,7 +1944,7 @@ func TestValidate_AggregatesAllRules(t *testing.T) {
 	pm.StatusBoard = nil
 
 	val := NewValidator(pm, "", clock.Real())
-	results := val.Validate()
+	results := val.Validate(t.Context())
 
 	// Should have at least one REF-01, FMT-01, ADV-01
 	assert.NotEmpty(t, findByCode(results, "REF-01"))
@@ -1965,7 +1965,7 @@ func TestValidate_EmptyProject(t *testing.T) {
 		Assemblies: make(map[string]*metadata.AssemblyMeta),
 	}
 	val := NewValidator(pm, "", clock.Real())
-	results := val.Validate()
+	results := val.Validate(t.Context())
 	assert.Empty(t, results, "empty project should produce no validation results")
 }
 
@@ -3400,7 +3400,7 @@ func TestNewValidator_NilProject(t *testing.T) {
 	require.NotNil(t, val)
 
 	// Should not panic and should return empty results.
-	results := val.Validate()
+	results := val.Validate(t.Context())
 	assert.Empty(t, results)
 }
 
@@ -4260,7 +4260,7 @@ func TestTOPO08_ReplacesADV02(t *testing.T) {
 	pm.Contracts["http.auth.login.v1"].Lifecycle = "deprecated"
 
 	val := NewValidator(pm, "", clock.Real())
-	results := val.Validate()
+	results := val.Validate(t.Context())
 
 	topo08 := findByCode(results, "TOPO-08")
 	adv02 := findByCode(results, "ADV-02")
@@ -4762,7 +4762,7 @@ func TestValidate_OUTGUARD01_Registration(t *testing.T) {
 	pm.Cells["accesscore"].DurabilityMode = "" // L2, missing → error
 
 	val := NewValidator(pm, ".", clock.Real())
-	all := val.Validate()
+	all := val.Validate(t.Context())
 	got := findByCode(all, "OUTGUARD-01")
 	assert.NotEmpty(t, got, "OUTGUARD-01 must be registered in Validate() entry point")
 }

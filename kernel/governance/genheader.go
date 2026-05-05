@@ -2,6 +2,7 @@ package governance
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"os/exec"
@@ -47,15 +48,15 @@ func IsGoCellGenerated(content []byte) bool {
 //
 // An empty repository (HEAD does not yet resolve) or "no matches" returns
 // (nil, nil) without error.
-func ListGeneratedInHEAD(root string) ([]string, error) {
-	if !hasHEAD(root) {
+func ListGeneratedInHEAD(ctx context.Context, root string) ([]string, error) {
+	if !hasHEAD(ctx, root) {
 		return nil, nil
 	}
 	// Both prefixes contain no ERE metacharacters, so simple alternation is
 	// safe. The leading "^" anchors the match to the start of a line, and
 	// generated files emit the sentinel as the first line.
 	pattern := "^(" + GoGeneratedPrefix + "|" + YAMLGeneratedPrefix + ")"
-	out, err := runGit("-C", root, "grep",
+	out, err := runGit(ctx, "-C", root, "grep",
 		"-I",
 		"-l",
 		"-E",

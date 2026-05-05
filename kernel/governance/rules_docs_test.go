@@ -208,7 +208,7 @@ func TestValidateStrict_IncludesDOCNAME01(t *testing.T) {
 	writeFile(t, root, "README.md", "Use sso-bff here.\n")
 
 	v := NewValidator(emptyDocNamingProject(), root, clock.Real())
-	assertDOCNAME01Present(t, v.ValidateStrict(true))
+	assertDOCNAME01Present(t, v.ValidateStrict(t.Context(), true))
 }
 
 func TestValidateStrictFailFast_IncludesDOCNAME01(t *testing.T) {
@@ -217,7 +217,7 @@ func TestValidateStrictFailFast_IncludesDOCNAME01(t *testing.T) {
 	writeFile(t, root, "README.md", "Use sso-bff here.\n")
 
 	v := NewValidator(emptyDocNamingProject(), root, clock.Real())
-	results := v.ValidateStrictFailFast()
+	results := v.ValidateStrictFailFast(t.Context())
 
 	require.Len(t, results, 1)
 	assertDOCNAME01Present(t, results)

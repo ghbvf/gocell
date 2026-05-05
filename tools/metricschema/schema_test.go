@@ -340,7 +340,7 @@ func negative(v metrics.CounterVec, err error) {
 }
 `)
 
-	diagnostics, err := checkOBS01WithPatterns(root, "./reachable")
+	diagnostics, err := checkOBS01WithPatterns(t.Context(), root, "./reachable")
 	require.NoError(t, err)
 	require.Len(t, diagnostics, 3)
 	for _, diag := range diagnostics {
@@ -376,7 +376,7 @@ func direct(err error) {
 }
 `)
 
-	diagnostics, err := checkOBS01WithPatterns(root, "./reachable")
+	diagnostics, err := checkOBS01WithPatterns(t.Context(), root, "./reachable")
 	require.NoError(t, err)
 	require.Len(t, diagnostics, 1)
 	assert.Equal(t, "obs_total", diagnostics[0].Metric)
@@ -430,7 +430,7 @@ func useMultiFlag(err error) {
 }
 `)
 
-	diagnostics, err := checkOBS01WithPatterns(root, "./reachable")
+	diagnostics, err := checkOBS01WithPatterns(t.Context(), root, "./reachable")
 	require.NoError(t, err)
 	require.Len(t, diagnostics, 3)
 }
@@ -473,7 +473,7 @@ func useFlag(err error) {
 }
 `)
 
-	diagnostics, err := checkOBS01WithPatterns(root, "./reachable")
+	diagnostics, err := checkOBS01WithPatterns(t.Context(), root, "./reachable")
 	require.NoError(t, err)
 	require.Len(t, diagnostics, 1)
 	assert.Equal(t, "obs_total", diagnostics[0].Metric)
@@ -508,7 +508,7 @@ func branched(err error, safe bool) {
 }
 `)
 
-	diagnostics, err := checkOBS01WithPatterns(root, "./reachable")
+	diagnostics, err := checkOBS01WithPatterns(t.Context(), root, "./reachable")
 	require.NoError(t, err)
 	require.Len(t, diagnostics, 1)
 	assert.Equal(t, "obs_total", diagnostics[0].Metric)
@@ -538,7 +538,7 @@ func commaOK(err error) {
 }
 `)
 
-	diagnostics, err := checkOBS01WithPatterns(root, "./reachable")
+	diagnostics, err := checkOBS01WithPatterns(t.Context(), root, "./reachable")
 	require.NoError(t, err)
 	require.Len(t, diagnostics, 1)
 	assert.Equal(t, "obs_total", diagnostics[0].Metric)
@@ -572,7 +572,7 @@ func terminated(err error, unsafe bool) {
 }
 `)
 
-	diagnostics, err := checkOBS01WithPatterns(root, "./reachable")
+	diagnostics, err := checkOBS01WithPatterns(t.Context(), root, "./reachable")
 	require.NoError(t, err)
 	assert.Empty(t, diagnostics)
 }
@@ -606,7 +606,7 @@ func fallthroughTaint(err error, code int) {
 }
 `)
 
-	diagnostics, err := checkOBS01WithPatterns(root, "./reachable")
+	diagnostics, err := checkOBS01WithPatterns(t.Context(), root, "./reachable")
 	require.NoError(t, err)
 	require.Len(t, diagnostics, 1)
 	assert.Equal(t, "obs_total", diagnostics[0].Metric)
@@ -637,7 +637,7 @@ func rangeValue(err error) {
 }
 `)
 
-	diagnostics, err := checkOBS01WithPatterns(root, "./reachable")
+	diagnostics, err := checkOBS01WithPatterns(t.Context(), root, "./reachable")
 	require.NoError(t, err)
 	require.Len(t, diagnostics, 1)
 	assert.Equal(t, "obs_total", diagnostics[0].Metric)
@@ -669,7 +669,7 @@ func literal(err error) {
 }
 `)
 
-	diagnostics, err := checkOBS01WithPatterns(root, "./reachable")
+	diagnostics, err := checkOBS01WithPatterns(t.Context(), root, "./reachable")
 	require.NoError(t, err)
 	require.Len(t, diagnostics, 1)
 	assert.Equal(t, "obs_total", diagnostics[0].Metric)
@@ -710,7 +710,7 @@ func viaShared(err error) {
 }
 `)
 
-	diagnostics, err := checkOBS01WithPatterns(root, "./reachable", "./shared")
+	diagnostics, err := checkOBS01WithPatterns(t.Context(), root, "./reachable", "./shared")
 	require.NoError(t, err)
 	require.Len(t, diagnostics, 1)
 	assert.Equal(t, "obs_total", diagnostics[0].Metric)
@@ -749,7 +749,7 @@ func viaPkgHelper(err error) {
 }
 `)
 
-	diagnostics, err := CheckOBS01(root)
+	diagnostics, err := CheckOBS01(t.Context(), root)
 	require.NoError(t, err)
 	require.Len(t, diagnostics, 1)
 	assert.Equal(t, "fixture_obs_total", diagnostics[0].Metric)
@@ -793,7 +793,7 @@ func iife(err error) {
 }
 `)
 
-	diagnostics, err := checkOBS01WithPatterns(root, "./reachable")
+	diagnostics, err := checkOBS01WithPatterns(t.Context(), root, "./reachable")
 	require.NoError(t, err)
 	require.Len(t, diagnostics, 1)
 	assert.Equal(t, "obs_total", diagnostics[0].Metric)
@@ -825,7 +825,7 @@ func uncalled(err error) {
 }
 `)
 
-	diagnostics, err := checkOBS01WithPatterns(root, "./reachable")
+	diagnostics, err := checkOBS01WithPatterns(t.Context(), root, "./reachable")
 	require.NoError(t, err)
 	assert.Empty(t, diagnostics)
 }
@@ -856,7 +856,7 @@ func called(err error) {
 }
 `)
 
-	diagnostics, err := checkOBS01WithPatterns(root, "./reachable")
+	diagnostics, err := checkOBS01WithPatterns(t.Context(), root, "./reachable")
 	require.NoError(t, err)
 	require.Len(t, diagnostics, 1)
 	assert.Equal(t, "obs_total", diagnostics[0].Metric)
@@ -887,7 +887,7 @@ func compound(err error) {
 }
 `)
 
-	diagnostics, err := checkOBS01WithPatterns(root, "./reachable")
+	diagnostics, err := checkOBS01WithPatterns(t.Context(), root, "./reachable")
 	require.NoError(t, err)
 	require.Len(t, diagnostics, 1)
 	assert.Equal(t, "obs_total", diagnostics[0].Metric)
@@ -918,7 +918,7 @@ func rangeIndex(err error) {
 }
 `)
 
-	diagnostics, err := checkOBS01WithPatterns(root, "./reachable")
+	diagnostics, err := checkOBS01WithPatterns(t.Context(), root, "./reachable")
 	require.NoError(t, err)
 	assert.Empty(t, diagnostics)
 }
@@ -947,7 +947,7 @@ func mapMutation(err error) {
 }
 `)
 
-	diagnostics, err := checkOBS01WithPatterns(root, "./reachable")
+	diagnostics, err := checkOBS01WithPatterns(t.Context(), root, "./reachable")
 	require.NoError(t, err)
 	require.Len(t, diagnostics, 1)
 	assert.Equal(t, "obs_total", diagnostics[0].Metric)
@@ -982,7 +982,7 @@ func viaWrapper(err error) {
 }
 `)
 
-	diagnostics, err := checkOBS01WithPatterns(root, "./reachable")
+	diagnostics, err := checkOBS01WithPatterns(t.Context(), root, "./reachable")
 	require.NoError(t, err)
 	require.Len(t, diagnostics, 2)
 	for _, diag := range diagnostics {
@@ -1011,7 +1011,7 @@ func direct(err error) {
 }
 `)
 
-	diagnostics, err := checkOBS01WithPatterns(root, "./reachable")
+	diagnostics, err := checkOBS01WithPatterns(t.Context(), root, "./reachable")
 	require.NoError(t, err)
 	require.Len(t, diagnostics, 1)
 	assert.Equal(t, "obs_total", diagnostics[0].Metric)
@@ -1046,7 +1046,7 @@ func breakTaint(err error, code int) {
 }
 `)
 
-	diagnostics, err := checkOBS01WithPatterns(root, "./reachable")
+	diagnostics, err := checkOBS01WithPatterns(t.Context(), root, "./reachable")
 	require.NoError(t, err)
 	require.Len(t, diagnostics, 1)
 	assert.Equal(t, "obs_total", diagnostics[0].Metric)
@@ -1081,7 +1081,7 @@ func direct(err error) {
 }
 `)
 
-	diagnostics, err := checkOBS01WithPatterns(root, "./reachable")
+	diagnostics, err := checkOBS01WithPatterns(t.Context(), root, "./reachable")
 	require.NoError(t, err)
 	assert.Empty(t, diagnostics)
 }
@@ -1115,7 +1115,7 @@ func direct(err error) {
 }
 `)
 
-	diagnostics, err := checkOBS01WithPatterns(root, "./reachable")
+	diagnostics, err := checkOBS01WithPatterns(t.Context(), root, "./reachable")
 	require.NoError(t, err)
 	require.Len(t, diagnostics, 1)
 	assert.Equal(t, "obs_total", diagnostics[0].Metric)
@@ -1143,7 +1143,7 @@ func direct(err error) {
 }
 `)
 
-	diagnostics, err := checkOBS01WithPatterns(root, "./reachable")
+	diagnostics, err := checkOBS01WithPatterns(t.Context(), root, "./reachable")
 	require.NoError(t, err)
 	require.Len(t, diagnostics, 1)
 	assert.Equal(t, "obs_total", diagnostics[0].Metric)
@@ -1175,7 +1175,7 @@ func rangeMapKey(err error) {
 }
 `)
 
-	diagnostics, err := checkOBS01WithPatterns(root, "./reachable")
+	diagnostics, err := checkOBS01WithPatterns(t.Context(), root, "./reachable")
 	require.NoError(t, err)
 	require.Len(t, diagnostics, 1)
 	assert.Equal(t, "obs_total", diagnostics[0].Metric)
@@ -1213,7 +1213,7 @@ func branchClosure(err error, safe bool) {
 }
 `)
 
-	diagnostics, err := checkOBS01WithPatterns(root, "./reachable")
+	diagnostics, err := checkOBS01WithPatterns(t.Context(), root, "./reachable")
 	require.NoError(t, err)
 	require.Len(t, diagnostics, 1)
 	assert.Equal(t, "obs_total", diagnostics[0].Metric)
@@ -1247,7 +1247,7 @@ func clearInClosure(err error) {
 }
 `)
 
-	diagnostics, err := checkOBS01WithPatterns(root, "./reachable")
+	diagnostics, err := checkOBS01WithPatterns(t.Context(), root, "./reachable")
 	require.NoError(t, err)
 	assert.Empty(t, diagnostics)
 }
@@ -1274,7 +1274,7 @@ func iife(err error) {
 }
 `)
 
-	diagnostics, err := checkOBS01WithPatterns(root, "./reachable")
+	diagnostics, err := checkOBS01WithPatterns(t.Context(), root, "./reachable")
 	require.NoError(t, err)
 	require.Len(t, diagnostics, 1)
 	assert.Equal(t, "obs_total", diagnostics[0].Metric)
@@ -1306,7 +1306,7 @@ func viaSpread(err error) {
 }
 `)
 
-	diagnostics, err := checkOBS01WithPatterns(root, "./reachable")
+	diagnostics, err := checkOBS01WithPatterns(t.Context(), root, "./reachable")
 	require.NoError(t, err)
 	require.Len(t, diagnostics, 1)
 	assert.Equal(t, "obs_total", diagnostics[0].Metric)
@@ -1338,7 +1338,7 @@ func rangeMapValue(err error) {
 }
 `)
 
-	diagnostics, err := checkOBS01WithPatterns(root, "./reachable")
+	diagnostics, err := checkOBS01WithPatterns(t.Context(), root, "./reachable")
 	require.NoError(t, err)
 	assert.Empty(t, diagnostics)
 }
@@ -1368,7 +1368,7 @@ func literalValue(err error) {
 }
 `)
 
-	diagnostics, err := checkOBS01WithPatterns(root, "./reachable")
+	diagnostics, err := checkOBS01WithPatterns(t.Context(), root, "./reachable")
 	require.NoError(t, err)
 	assert.Empty(t, diagnostics)
 }
@@ -1471,7 +1471,7 @@ func mapKeyMutation(err error) {
 }
 `)
 
-	diagnostics, err := checkOBS01WithPatterns(root, "./reachable")
+	diagnostics, err := checkOBS01WithPatterns(t.Context(), root, "./reachable")
 	require.NoError(t, err)
 	require.Len(t, diagnostics, 6)
 	got := map[string]int{}
@@ -1517,7 +1517,7 @@ func constantCategory() {
 }
 `)
 
-	diagnostics, err := checkOBS01WithPatterns(root, "./reachable")
+	diagnostics, err := checkOBS01WithPatterns(t.Context(), root, "./reachable")
 	require.NoError(t, err)
 	assert.Empty(t, diagnostics)
 }
@@ -1542,7 +1542,7 @@ func direct(err error) {
 }
 `)
 
-	diagnostics, err := checkOBS01WithPatterns(root, "./reachable")
+	diagnostics, err := checkOBS01WithPatterns(t.Context(), root, "./reachable")
 	require.NoError(t, err)
 	require.Len(t, diagnostics, 1)
 	assert.Equal(t, "prom_obs_total", diagnostics[0].Metric)
@@ -1569,7 +1569,7 @@ func direct(v metrics.CounterVec, err error) {
     fingerprint: abc123
 `)
 
-	_, err := checkOBS01WithPatterns(root, "./reachable")
+	_, err := checkOBS01WithPatterns(t.Context(), root, "./reachable")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "missing ")
 }
@@ -1597,7 +1597,7 @@ func direct(err error) {
 }
 `)
 
-	diagnostics, err := checkOBS01WithPatterns(root, "./reachable")
+	diagnostics, err := checkOBS01WithPatterns(t.Context(), root, "./reachable")
 	require.NoError(t, err)
 	require.Len(t, diagnostics, 1)
 	writeFile(t, root, "docs/observability/metrics-migration-acks.yaml", fmt.Sprintf(`acknowledgements:
@@ -1614,7 +1614,7 @@ func direct(err error) {
     rationale: reviewed SLO bucket migration with service owner
 `, diagnostics[0].Fingerprint, diagnostics[0].Metric, diagnostics[0].Label))
 
-	diagnostics, err = checkOBS01WithPatterns(root, "./reachable")
+	diagnostics, err = checkOBS01WithPatterns(t.Context(), root, "./reachable")
 	require.NoError(t, err)
 	assert.Empty(t, diagnostics)
 }
@@ -1648,7 +1648,7 @@ func direct(err error) {
 }
 `)
 
-	diagnostics, err := checkOBS01WithPatterns(root, "./reachable")
+	diagnostics, err := checkOBS01WithPatterns(t.Context(), root, "./reachable")
 	require.NoError(t, err)
 	require.Len(t, diagnostics, 1)
 	writeFile(t, root, "docs/observability/metrics-migration-acks.yaml", fmt.Sprintf(`acknowledgements:
@@ -1665,7 +1665,7 @@ func direct(err error) {
     rationale: reviewed SLO bucket migration with service owner
 `, diagnostics[0].Fingerprint, diagnostics[0].Metric, diagnostics[0].Label))
 
-	diagnostics, err = checkOBS01WithPatterns(root, "./reachable")
+	diagnostics, err = checkOBS01WithPatterns(t.Context(), root, "./reachable")
 	require.NoError(t, err)
 	assert.Empty(t, diagnostics)
 }
@@ -1693,7 +1693,7 @@ func direct(err error) {
 }
 `)
 
-	diagnostics, err := checkOBS01WithPatterns(root, "./reachable")
+	diagnostics, err := checkOBS01WithPatterns(t.Context(), root, "./reachable")
 	require.NoError(t, err)
 	require.Len(t, diagnostics, 1)
 
@@ -1711,7 +1711,7 @@ func direct(err error) {
     rationale: reviewed SLO bucket migration with service owner
 `, diagnostics[0].Fingerprint, diagnostics[0].Label))
 
-	diagnostics, err = checkOBS01WithPatterns(root, "./reachable")
+	diagnostics, err = checkOBS01WithPatterns(t.Context(), root, "./reachable")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "unused or stale")
 	require.Len(t, diagnostics, 1)
@@ -1730,7 +1730,7 @@ func direct(err error) {
     rationale: reviewed SLO bucket migration with service owner
 `, diagnostics[0].Fingerprint, "obs_total"))
 
-	diagnostics, err = checkOBS01WithPatterns(root, "./reachable")
+	diagnostics, err = checkOBS01WithPatterns(t.Context(), root, "./reachable")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "unused or stale")
 	require.Len(t, diagnostics, 1)
@@ -1761,7 +1761,7 @@ func direct(err error) {
 }
 `)
 
-	diagnostics, err := checkOBS01WithPatterns(root, "./reachable")
+	diagnostics, err := checkOBS01WithPatterns(t.Context(), root, "./reachable")
 	require.NoError(t, err)
 	require.Len(t, diagnostics, 1)
 	writeFile(t, root, "docs/observability/metrics-migration-acks.yaml", fmt.Sprintf(`acknowledgements:
@@ -1778,7 +1778,7 @@ func direct(err error) {
     rationale: reviewed SLO bucket migration with service owner
 `, diagnostics[0].Fingerprint, diagnostics[0].Metric, diagnostics[0].Label))
 
-	diagnostics, err = checkOBS01WithPatterns(root, "./reachable")
+	diagnostics, err = checkOBS01WithPatterns(t.Context(), root, "./reachable")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "unused or stale")
 	require.Len(t, diagnostics, 1)
@@ -1813,7 +1813,7 @@ func TestCheckOBS01RejectsDuplicateAckFingerprints(t *testing.T) {
     rationale: reviewed SLO bucket migration with service owner
 `)
 
-	_, err := checkOBS01WithPatterns(root, "./reachable")
+	_, err := checkOBS01WithPatterns(t.Context(), root, "./reachable")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "duplicates fingerprint")
 }
@@ -1834,7 +1834,7 @@ func TestCheckOBS01RejectsURLDashboardRefs(t *testing.T) {
     rationale: reviewed SLO bucket migration with service owner
 `)
 
-	_, err := checkOBS01WithPatterns(root, "./reachable")
+	_, err := checkOBS01WithPatterns(t.Context(), root, "./reachable")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "committed in HEAD")
 }
@@ -1856,7 +1856,7 @@ func TestCheckOBS01RejectsUnusedAck(t *testing.T) {
     rationale: reviewed SLO bucket migration with service owner
 `)
 
-	diagnostics, err := checkOBS01WithPatterns(root, "./reachable")
+	diagnostics, err := checkOBS01WithPatterns(t.Context(), root, "./reachable")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "unused or stale")
 	assert.Empty(t, diagnostics)
@@ -1884,7 +1884,7 @@ func TestCheckOBS01RejectsSymlinkDashboardRefs(t *testing.T) {
     rationale: reviewed SLO bucket migration with service owner
 `)
 
-	_, err := checkOBS01WithPatterns(root, "./reachable")
+	_, err := checkOBS01WithPatterns(t.Context(), root, "./reachable")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "committed in HEAD")
 }
@@ -1907,7 +1907,7 @@ func TestCheckOBS01RejectsUntrackedDashboardRefsWhenGitMetadataPresent(t *testin
     rationale: reviewed SLO bucket migration with service owner
 `)
 
-	_, err := checkOBS01WithPatterns(root, "./reachable")
+	_, err := checkOBS01WithPatterns(t.Context(), root, "./reachable")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "committed in HEAD")
 }
@@ -1941,7 +1941,7 @@ func TestCheckOBS01RejectsStagedButUncommittedDashboardRef(t *testing.T) {
     rationale: reviewed SLO bucket migration with service owner
 `)
 
-	_, err := checkOBS01WithPatterns(root, "./reachable")
+	_, err := checkOBS01WithPatterns(t.Context(), root, "./reachable")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "committed in HEAD")
 }
@@ -1962,7 +1962,7 @@ func TestCheckOBS01RejectsPlaceholderDashboardRefs(t *testing.T) {
     rationale: reviewed SLO bucket migration with service owner
 `)
 
-	_, err := checkOBS01WithPatterns(root, "./reachable")
+	_, err := checkOBS01WithPatterns(t.Context(), root, "./reachable")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "dashboardOrAlertRefs")
 }
@@ -1983,7 +1983,7 @@ func TestCheckOBS01RejectsDashboardRefPathTraversal(t *testing.T) {
     rationale: reviewed SLO bucket migration with service owner
 `)
 
-	_, err := checkOBS01WithPatterns(root, "./reachable")
+	_, err := checkOBS01WithPatterns(t.Context(), root, "./reachable")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "dashboardOrAlertRefs")
 }

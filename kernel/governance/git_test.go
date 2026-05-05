@@ -17,7 +17,7 @@ func TestGitTool_ResolvesAbsolutePath(t *testing.T) {
 	// tests in pkg/cmdrun.
 	tool, err := gitTool()
 	require.NoError(t, err)
-	out, err := runGit("--version")
+	out, err := runGit(t.Context(), "--version")
 	require.NoError(t, err)
 	assert.Contains(t, string(out), "git version")
 	_ = tool // resolution is the assertion; the wrapped path is unexported.
@@ -37,26 +37,26 @@ func TestHasGitMetadata_FalseWhenMissing(t *testing.T) {
 func TestHasHEAD_FalseInEmptyRepo(t *testing.T) {
 	root := t.TempDir()
 	gitInit(t, root)
-	assert.False(t, hasHEAD(root),
+	assert.False(t, hasHEAD(t.Context(), root),
 		"freshly-initialized repo with no commits must report no HEAD")
 }
 
 func TestHasHEAD_TrueAfterCommit(t *testing.T) {
 	root := t.TempDir()
 	gitInitAndCommit(t, root, "seed.txt", "seed\n")
-	assert.True(t, hasHEAD(root))
+	assert.True(t, hasHEAD(t.Context(), root))
 }
 
 func TestHasHEAD_FalseWhenNotARepo(t *testing.T) {
 	root := t.TempDir()
-	assert.False(t, hasHEAD(root))
+	assert.False(t, hasHEAD(t.Context(), root))
 }
 
 func TestCommittedInHEAD_TrueForCommittedFile(t *testing.T) {
 	root := t.TempDir()
 	gitInitAndCommit(t, root, "docs/note.md", "tracked\n")
 
-	committed, err := CommittedInHEAD(root, "docs/note.md")
+	committed, err := CommittedInHEAD(t.Context(), root, "docs/note.md")
 	require.NoError(t, err)
 	assert.True(t, committed)
 }
@@ -72,7 +72,7 @@ func TestCommittedInHEAD_FalseForStagedOnly(t *testing.T) {
 	writeRepoFile(t, root, "docs/staged.md", "only staged, never committed\n")
 	gitRun(t, root, "add", "docs/staged.md")
 
-	committed, err := CommittedInHEAD(root, "docs/staged.md")
+	committed, err := CommittedInHEAD(t.Context(), root, "docs/staged.md")
 	require.NoError(t, err)
 	assert.False(t, committed,
 		"index-only files must not satisfy the committed-in-HEAD predicate")
@@ -82,7 +82,7 @@ func TestCommittedInHEAD_FalseForUnknownPath(t *testing.T) {
 	root := t.TempDir()
 	gitInitAndCommit(t, root, "seed.txt", "seed\n")
 
-	committed, err := CommittedInHEAD(root, "does/not/exist.md")
+	committed, err := CommittedInHEAD(t.Context(), root, "does/not/exist.md")
 	require.NoError(t, err)
 	assert.False(t, committed)
 }
@@ -91,7 +91,7 @@ func TestCommittedInHEAD_FalseInEmptyRepo(t *testing.T) {
 	root := t.TempDir()
 	gitInit(t, root)
 
-	committed, err := CommittedInHEAD(root, "anything.md")
+	committed, err := CommittedInHEAD(t.Context(), root, "anything.md")
 	require.NoError(t, err)
 	assert.False(t, committed,
 		"empty repo (no HEAD) must report no committed paths, not error")
@@ -105,7 +105,7 @@ func TestCommittedInHEAD_PropagatesNonExitErrors(t *testing.T) {
 	// permission denials starting the process) propagate. We assert the
 	// no-such-path case behaves as not-committed rather than panicking.
 	root := filepath.Join(t.TempDir(), "no-repo-here")
-	committed, err := CommittedInHEAD(root, "anything")
+	committed, err := CommittedInHEAD(t.Context(), root, "anything")
 	// Either flavor is acceptable: ExitError → (false, nil); other
 	// process error → (false, err). We only forbid the "true" answer.
 	if err == nil {
@@ -145,6 +145,6 @@ func writeRepoFile(t *testing.T, root, rel, body string) {
 
 func gitRun(t *testing.T, root string, args ...string) {
 	t.Helper()
-	out, err := runGit(append([]string{"-C", root}, args...)...)
+	out, err := runGit(t.Context(), append([]string{"-C", root}, args...)...)
 	require.NoError(t, err, "git %s failed:\n%s", strings.Join(args, " "), string(out))
 }

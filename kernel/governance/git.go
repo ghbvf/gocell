@@ -18,20 +18,21 @@ import (
 
 // gitTool resolves the git binary once via cmdrun.NewTool (exec.LookPath).
 // First-call failure is cached so subsequent calls fail-fast with the same
-// error rather than silently degrading. Internal queries use a Background
-// context — these are sub-second diagnostic invocations with no real
-// cancellation surface; cmdrun.RunWith still receives a ctx because subprocess
-// cancellation is the cmdrun contract.
+// error rather than silently degrading.
 var gitTool = sync.OnceValues(func() (cmdrun.ValidatedTool, error) {
 	return cmdrun.NewTool("git")
 })
 
-func runGit(args ...string) ([]byte, error) {
+// runGit invokes the resolved git binary with args. ctx flows directly into
+// cmdrun.RunWith so caller deadlines/cancellations propagate to the
+// subprocess (exec.CommandContext kills the child on ctx.Done()), avoiding
+// indefinite hangs on slow filesystems (NFS / FUSE).
+func runGit(ctx context.Context, args ...string) ([]byte, error) {
 	tool, err := gitTool()
 	if err != nil {
 		return nil, err
 	}
-	return cmdrun.RunWith(context.Background(), tool, cmdrun.RunOptions{}, args...)
+	return cmdrun.RunWith(ctx, tool, cmdrun.RunOptions{}, args...)
 }
 
 // HasGitMetadata reports whether root looks like a git work tree (has a .git
@@ -46,8 +47,8 @@ func HasGitMetadata(root string) bool {
 // repository (no commits yet) returns false. Used by HEAD-querying helpers
 // to short-circuit before invoking git commands that would fail with
 // "unable to resolve revision".
-func hasHEAD(root string) bool {
-	_, err := runGit("-C", root, "rev-parse", "--verify", "--quiet", "HEAD")
+func hasHEAD(ctx context.Context, root string) bool {
+	_, err := runGit(ctx, "-C", root, "rev-parse", "--verify", "--quiet", "HEAD")
 	return err == nil
 }
 
@@ -58,8 +59,8 @@ func hasHEAD(root string) bool {
 // rel must be a forward-slash repo-relative path. ExitErrors are interpreted
 // as "not committed" (cat-file -e exits non-zero for unknown refs); other
 // errors propagate so the caller fails closed.
-func CommittedInHEAD(root, rel string) (bool, error) {
-	_, err := runGit("-C", root, "cat-file", "-e", "HEAD:"+rel)
+func CommittedInHEAD(ctx context.Context, root, rel string) (bool, error) {
+	_, err := runGit(ctx, "-C", root, "cat-file", "-e", "HEAD:"+rel)
 	if err == nil {
 		return true, nil
 	}

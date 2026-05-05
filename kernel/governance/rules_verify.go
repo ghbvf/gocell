@@ -334,18 +334,22 @@ func (v *Validator) validateVERIFY05() []ValidationResult {
 // automated acceptance checks. A non-empty checkRef is only a declaration; the
 // gate is the actual test target resolving and running without zero-match or
 // skip-only results.
-func (v *Validator) validateVERIFY06(strict bool) []ValidationResult {
+//
+// ctx flows through to verifyJourneyRef so a CI worker aborting `gocell
+// validate --strict` cancels the underlying `go test` subprocess; without
+// it the rule blocks indefinitely on slow filesystems (NFS / FUSE).
+func (v *Validator) validateVERIFY06(ctx context.Context, strict bool) []ValidationResult {
 	if !strict {
 		return nil
 	}
 	var results []ValidationResult
 	for _, j := range v.project.Journeys {
-		results = append(results, v.validateVERIFY06Journey(j)...)
+		results = append(results, v.validateVERIFY06Journey(ctx, j)...)
 	}
 	return results
 }
 
-func (v *Validator) validateVERIFY06Journey(j *metadata.JourneyMeta) []ValidationResult {
+func (v *Validator) validateVERIFY06Journey(ctx context.Context, j *metadata.JourneyMeta) []ValidationResult {
 	if j.Lifecycle != "active" {
 		return nil
 	}
@@ -356,7 +360,7 @@ func (v *Validator) validateVERIFY06Journey(j *metadata.JourneyMeta) []Validatio
 			continue
 		}
 		autoCount++
-		results = append(results, v.validateVERIFY06CheckRef(j, i, pc)...)
+		results = append(results, v.validateVERIFY06CheckRef(ctx, j, i, pc)...)
 	}
 	if autoCount == 0 {
 		results = append(results, v.newResult(
@@ -370,6 +374,7 @@ func (v *Validator) validateVERIFY06Journey(j *metadata.JourneyMeta) []Validatio
 }
 
 func (v *Validator) validateVERIFY06CheckRef(
+	ctx context.Context,
 	j *metadata.JourneyMeta,
 	i int,
 	pc metadata.PassCriterion,
@@ -386,7 +391,7 @@ func (v *Validator) validateVERIFY06CheckRef(
 	if v.verifyJourneyRef == nil {
 		return nil
 	}
-	tr, errs := v.verifyJourneyRef(context.Background(), j, pc.CheckRef)
+	tr, errs := v.verifyJourneyRef(ctx, j, pc.CheckRef)
 	if tr.Passed && len(errs) == 0 && !tr.ZeroMatch && !tr.SkippedOnly {
 		return nil
 	}

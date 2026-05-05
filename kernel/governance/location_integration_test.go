@@ -43,7 +43,7 @@ func TestLocation_REF01_SliceBelongsToCell(t *testing.T) {
 	require.NoError(t, err)
 
 	v := governance.NewValidator(pm, "", clock.Real())
-	results := v.Validate()
+	results := v.Validate(t.Context())
 
 	var ref01 *governance.ValidationResult
 	for i := range results {
@@ -89,7 +89,7 @@ func TestLocation_REF02_ContractUsageIndex(t *testing.T) {
 	require.NoError(t, err)
 
 	v := governance.NewValidator(pm, "", clock.Real())
-	results := v.Validate()
+	results := v.Validate(t.Context())
 
 	var ref02 *governance.ValidationResult
 	for i := range results {
@@ -136,7 +136,7 @@ func TestLocation_REF14_ConsumerActor(t *testing.T) {
 	require.NoError(t, err)
 
 	v := governance.NewValidator(pm, "", clock.Real())
-	results := v.Validate()
+	results := v.Validate(t.Context())
 
 	var ref14 *governance.ValidationResult
 	for i := range results {
@@ -186,7 +186,7 @@ func TestLocation_ADV04_StatusBoardEntry(t *testing.T) {
 	require.NoError(t, err)
 
 	v := governance.NewValidator(pm, "", clock.Real())
-	results := v.Validate()
+	results := v.Validate(t.Context())
 
 	var adv04 *governance.ValidationResult
 	for i := range results {
@@ -268,7 +268,7 @@ func TestLocation_NoNodes_NoCrash(t *testing.T) {
 		Contracts: map[string]*metadata.ContractMeta{},
 	}
 	v := governance.NewValidator(pm, "", clock.Real())
-	results := v.Validate()
+	results := v.Validate(t.Context())
 
 	// At least the REF-01 (cell not found) should fire.
 	seenRef01 := false

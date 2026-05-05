@@ -4,6 +4,7 @@ package metricschema
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
@@ -1663,15 +1664,15 @@ func (sp *scanPackage) prometheusMetricIdentity(call *ast.CallExpr, rel string) 
 
 // CheckOBS01 reports production metric label values whose expression depends on
 // errcode.Category or errcode.IsInfraError without a checked-in acknowledgement.
-func CheckOBS01(projectRoot string) ([]Diagnostic, error) {
-	return checkOBS01WithPatterns(projectRoot, obs01ProductionPatterns(projectRoot)...)
+func CheckOBS01(ctx context.Context, projectRoot string) ([]Diagnostic, error) {
+	return checkOBS01WithPatterns(ctx, projectRoot, obs01ProductionPatterns(projectRoot)...)
 }
 
-func checkOBS01WithPatterns(projectRoot string, patterns ...string) ([]Diagnostic, error) {
+func checkOBS01WithPatterns(ctx context.Context, projectRoot string, patterns ...string) ([]Diagnostic, error) {
 	if len(patterns) == 0 {
 		patterns = obs01ProductionPatterns(projectRoot)
 	}
-	acks, err := loadOBS01Acks(projectRoot)
+	acks, err := loadOBS01Acks(ctx, projectRoot)
 	if err != nil {
 		return nil, err
 	}
@@ -4003,7 +4004,7 @@ type obsAck struct {
 	Rationale            string   `yaml:"rationale"`
 }
 
-func loadOBS01Acks(root string) (map[string]obsAck, error) {
+func loadOBS01Acks(ctx context.Context, root string) (map[string]obsAck, error) {
 	path := filepath.Join(root, "docs", "observability", "metrics-migration-acks.yaml")
 	out := map[string]obsAck{}
 	data, err := os.ReadFile(filepath.Clean(path))
@@ -4023,7 +4024,7 @@ func loadOBS01Acks(root string) (map[string]obsAck, error) {
 		if ack.Rule != "OBS-01" {
 			return nil, fmt.Errorf("%s: acknowledgement %d has unsupported rule %q", path, i+1, ack.Rule)
 		}
-		if err := ack.validate(root, path, i+1); err != nil {
+		if err := ack.validate(ctx, root, path, i+1); err != nil {
 			return nil, err
 		}
 		if _, exists := out[ack.Fingerprint]; exists {
@@ -4034,7 +4035,7 @@ func loadOBS01Acks(root string) (map[string]obsAck, error) {
 	return out, nil
 }
 
-func (ack obsAck) validate(root, path string, idx int) error {
+func (ack obsAck) validate(ctx context.Context, root, path string, idx int) error {
 	required := map[string]string{
 		"fingerprint":  ack.Fingerprint,
 		"metric":       ack.Metric,
@@ -4063,7 +4064,7 @@ func (ack obsAck) validate(root, path string, idx int) error {
 		if strings.TrimSpace(ref) == "" {
 			return fmt.Errorf("%s: OBS-01 acknowledgement %d has empty dashboardOrAlertRefs[%d]", path, idx, i)
 		}
-		ok, gitErr := validOBS01Ref(root, ref)
+		ok, gitErr := validOBS01Ref(ctx, root, ref)
 		if gitErr != nil {
 			return fmt.Errorf("%s: OBS-01 acknowledgement %d dashboardOrAlertRefs[%d] git lookup failed: %w", path, idx, i, gitErr)
 		}
@@ -4085,7 +4086,7 @@ func (ack obsAck) validate(root, path string, idx int) error {
 // Returns (false, nil) for path-shape violations and missing files.
 // Returns (false, err) only when a git query itself fails — surfacing the
 // failure beats silently fail-closing on a broken environment.
-func validOBS01Ref(root, ref string) (bool, error) {
+func validOBS01Ref(ctx context.Context, root, ref string) (bool, error) {
 	rel, ok := normalizedOBS01RefRel(root, ref)
 	if !ok {
 		return false, nil
@@ -4093,7 +4094,7 @@ func validOBS01Ref(root, ref string) (bool, error) {
 	if !governance.HasGitMetadata(root) {
 		return true, nil
 	}
-	return governance.CommittedInHEAD(root, rel)
+	return governance.CommittedInHEAD(ctx, root, rel)
 }
 
 // normalizedOBS01RefRel resolves ref to a forward-slash repo-relative path
