@@ -132,12 +132,45 @@ func scanWithDetailsFile(fset *token.FileSet, file *ast.File, rel string) []stri
 					"%s:%d: errcode.WithDetails(map[string]any{...}) — pass typed slog.Attr "+
 						"values instead. ref: docs/architecture/202605051730-adr-errcode-message-pii-safety.md",
 					rel, line))
-				break
+				continue
+			}
+			if name, ok := unsafeSlogAttrConstructor(arg); ok {
+				line := fset.Position(call.Pos()).Line
+				out = append(out, fmt.Sprintf(
+					"%s:%d: errcode.WithDetails(slog.%s(...)) — wire-unsafe kind; "+
+						"use scalar slog.String/Int/Uint64/Float64/Bool/Duration/Time. "+
+						"ref: docs/architecture/202605051730-adr-errcode-message-pii-safety.md",
+					rel, line, name))
 			}
 		}
 		return true
 	})
 	return out
+}
+
+// unsafeSlogAttrConstructor reports whether expr is a slog constructor whose
+// resulting Attr.Value carries a wire-unsafe kind (KindAny / KindGroup /
+// KindLogValuer). The detection is purely syntactic — selector match on
+// "slog.Any" / "slog.Group" / "slog.LogValue" — to keep this archtest free
+// of go/types loads.
+func unsafeSlogAttrConstructor(expr ast.Expr) (string, bool) {
+	call, ok := expr.(*ast.CallExpr)
+	if !ok {
+		return "", false
+	}
+	sel, ok := call.Fun.(*ast.SelectorExpr)
+	if !ok || sel.X == nil || sel.Sel == nil {
+		return "", false
+	}
+	pkg, ok := sel.X.(*ast.Ident)
+	if !ok || pkg.Name != "slog" {
+		return "", false
+	}
+	switch sel.Sel.Name {
+	case "Any", "Group", "LogValue":
+		return sel.Sel.Name, true
+	}
+	return "", false
 }
 
 // scanWithDetailsDir walks every non-test .go file under root/dir and
@@ -243,7 +276,7 @@ func TestDetailsSlogAttrFixtures(t *testing.T) {
 		wantViolCount int
 	}{
 		{"compliant", 0},
-		{"violates", 1},
+		{"violates", 3}, // map literal + slog.Any + slog.Group
 	}
 
 	for _, tc := range cases {

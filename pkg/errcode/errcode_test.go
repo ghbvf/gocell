@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -288,5 +289,69 @@ func TestErrorMarshalJSON(t *testing.T) {
 		// Server-side details must not leak even by accident.
 		assert.NotContains(t, string(raw), "dsn")
 		assert.NotContains(t, string(raw), "secret")
+	})
+
+	t.Run("clientErrSubstitutesUnsafeKindBypassingEntry", func(t *testing.T) {
+		// Construct an *Error directly so the wire-unsafe attr bypasses the
+		// WithDetails kind whitelist. MarshalJSON must substitute the
+		// unsafeKindMarker rather than emit a handler-dependent payload.
+		err := &Error{
+			Kind:    KindInvalid,
+			Code:    ErrValidationFailed,
+			Message: "bad",
+			Details: []slog.Attr{
+				slog.String("ok", "v"),
+				slog.Any("ch", make(chan int)), // KindAny — not wire-safe
+			},
+		}
+		raw, mErr := json.Marshal(err)
+		require.NoError(t, mErr)
+		var got map[string]any
+		require.NoError(t, json.Unmarshal(raw, &got))
+		details, ok := got["details"].([]any)
+		require.True(t, ok)
+		require.Len(t, details, 2)
+		assert.Equal(t, "v", details[0].(map[string]any)["value"])
+		assert.Equal(t, unsafeKindMarker, details[1].(map[string]any)["value"],
+			"wire-unsafe kind must be replaced by sentinel string")
+	})
+}
+
+func TestWithDetailsKindWhitelist(t *testing.T) {
+	t.Run("scalarKindsAccepted", func(t *testing.T) {
+		require.NotPanics(t, func() {
+			New(KindInvalid, ErrValidationFailed, "ok", WithDetails(
+				slog.String("s", "v"),
+				slog.Int("i", 1),
+				slog.Int64("i64", 1),
+				slog.Uint64("u64", 1),
+				slog.Float64("f", 1),
+				slog.Bool("b", true),
+				slog.Duration("d", 0),
+				slog.Time("t", time.Time{}),
+			))
+		})
+	})
+
+	t.Run("anyKindPanics", func(t *testing.T) {
+		var ec *Error
+		defer func() {
+			r := recover()
+			require.NotNil(t, r, "WithDetails(slog.Any(...)) must panic")
+			err, ok := r.(error)
+			require.True(t, ok, "panic value must be error from Assertion()")
+			require.True(t, errors.As(err, &ec), "panic must wrap *errcode.Error")
+			assert.Contains(t, ec.Message, "wire-unsafe kind")
+			assert.Contains(t, ec.Message, "Any")
+		}()
+		New(KindInvalid, ErrValidationFailed, "ok",
+			WithDetails(slog.Any("x", struct{ A int }{42})))
+	})
+
+	t.Run("groupKindPanics", func(t *testing.T) {
+		require.Panics(t, func() {
+			New(KindInvalid, ErrValidationFailed, "ok",
+				WithDetails(slog.Group("g", slog.String("inner", "v"))))
+		})
 	})
 }

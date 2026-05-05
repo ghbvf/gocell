@@ -612,9 +612,13 @@ func WithInternal(message string) Option {
 // attribute list as a JSON array of {"key","value"} objects, and strips the
 // list from 5xx errors so server-side runtime context never leaks to clients.
 //
-// Use slog.String / slog.Int / slog.Bool / slog.Group / slog.Any to construct
-// attributes — the typed signature replaces the legacy map[string]any form so
-// the compiler enforces structured logging conventions across all callers.
+// Allowed kinds (JSON-safe scalar): KindString, KindInt64, KindUint64,
+// KindFloat64, KindBool, KindDuration, KindTime. Any other kind — KindAny,
+// KindGroup, KindLogValuer — panics with errcode.Assertion: those carry
+// arbitrary Go values or nested structures whose Value.Any() output is
+// handler-dependent (per stdlib log/slog docs, slog.Attr is a logging
+// carrier, not a wire DTO). go-kratos errors.Metadata uses map<string,
+// string> for the same reason; this is the static-by-construction analog.
 //
 // Multiple WithDetails calls accumulate; attributes are appended in call order.
 //
@@ -627,7 +631,31 @@ func WithDetails(attrs ...slog.Attr) Option {
 		if len(attrs) == 0 {
 			return
 		}
+		for _, attr := range attrs {
+			if !isWireSafeAttrKind(attr.Value.Kind()) {
+				panic(Assertion(
+					"errcode.WithDetails: attr %q has wire-unsafe kind %s; "+
+						"use scalar slog.String/Int/Uint64/Float64/Bool/Duration/Time",
+					attr.Key, attr.Value.Kind()))
+			}
+		}
 		e.Details = append(e.Details, attrs...)
+	}
+}
+
+// isWireSafeAttrKind reports whether kind is a JSON-safe scalar that can
+// appear in a public Details wire payload. Scalar kinds round-trip through
+// encoding/json without invoking handler-specific behavior; composite kinds
+// (Any, Group, LogValuer) carry arbitrary or handler-dependent payloads and
+// are rejected at construction time.
+func isWireSafeAttrKind(k slog.Kind) bool {
+	switch k {
+	case slog.KindString, slog.KindInt64, slog.KindUint64,
+		slog.KindFloat64, slog.KindBool,
+		slog.KindDuration, slog.KindTime:
+		return true
+	default:
+		return false
 	}
 }
 
@@ -678,6 +706,13 @@ func (e *Error) FindAttr(key string) (slog.Attr, bool) {
 // source-of-truth strip rule for runtime context that must never reach a
 // client. InternalMessage and Cause are never marshaled because they may
 // contain sensitive runtime data.
+//
+// Defence-in-depth: WithDetails already rejects wire-unsafe kinds at
+// construction time, but a hand-built *Error (e.g. test fixture, future
+// code path that bypasses the option) might still attach KindAny / Group /
+// LogValuer. In that case we substitute the value with the unsafeKindMarker
+// sentinel so the wire payload stays JSON-safe and operators see the
+// substitution in their logs.
 func (e *Error) MarshalJSON() ([]byte, error) {
 	type kv struct {
 		Key   string `json:"key"`
@@ -695,14 +730,26 @@ func (e *Error) MarshalJSON() ([]byte, error) {
 	if e.Kind.IsClient() {
 		wire.Details = make([]kv, 0, len(e.Details))
 		for _, attr := range e.Details {
-			wire.Details = append(wire.Details, kv{
-				Key:   attr.Key,
-				Value: attr.Value.Any(),
-			})
+			value := attr.Value.Any()
+			if !isWireSafeAttrKind(attr.Value.Kind()) {
+				slog.Error(
+					"errcode: details attr bypassed WithDetails kind whitelist; substituting wire value",
+					slog.String("key", attr.Key),
+					slog.String("kind", attr.Value.Kind().String()),
+				)
+				value = unsafeKindMarker
+			}
+			wire.Details = append(wire.Details, kv{Key: attr.Key, Value: value})
 		}
 	}
 	return json.Marshal(wire)
 }
+
+// unsafeKindMarker is the sentinel value substituted in MarshalJSON when a
+// Details attribute escapes the WithDetails kind whitelist. The marker is
+// fixed (not formatted with the actual kind) so that wire payloads remain
+// stable and tests can assert on it.
+const unsafeKindMarker = "<UNSUPPORTED_KIND>"
 
 // Error returns a formatted string representation for logging/diagnostics.
 // When InternalMessage is set it is preferred over Message, because Error()
