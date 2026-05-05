@@ -129,8 +129,10 @@ func TestOutboxMarkReturnsBool01(t *testing.T) {
 
 // TestOutboxMetadataMaxBytes01 enforces OUTBOX-METADATA-MAX-BYTES-01: the
 // adapters/postgres outbox writer must reference the MaxMetadataBytes constant
-// in both Write and writeBatchChunk, gating the JSON-marshaled metadata size
-// before it reaches the INSERT statement.
+// on every code path that builds the INSERT — currently Write (single-row
+// path) and encodeBatchEntry (per-entry helper called from writeBatchChunk's
+// loop). Each must gate the JSON-marshaled metadata size before it reaches
+// the INSERT statement.
 func TestOutboxMetadataMaxBytes01(t *testing.T) {
 	root := orFindModuleRoot(t)
 	path := filepath.Join(root, "adapters", "postgres", "outbox_writer.go")
@@ -141,23 +143,32 @@ func TestOutboxMetadataMaxBytes01(t *testing.T) {
 		t.Fatalf("parse %s: %v", path, err)
 	}
 
-	required := map[string]bool{"Write": false, "writeBatchChunk": false}
+	required := map[string]bool{"Write": false, "encodeBatchEntry": false}
+	// writeBatchChunk no longer references MaxMetadataBytes directly (the
+	// per-entry check moved into encodeBatchEntry); instead verify the link
+	// is still in place so a future split cannot bypass the cap by skipping
+	// the helper call.
+	chunkCallsEncoder := false
 
 	for _, decl := range f.Decls {
 		fn, ok := decl.(*ast.FuncDecl)
 		if !ok || fn.Recv == nil || fn.Body == nil {
 			continue
 		}
-		if _, want := required[fn.Name.Name]; !want {
+		_, want := required[fn.Name.Name]
+		if !want && fn.Name.Name != "writeBatchChunk" {
 			continue
 		}
 		ast.Inspect(fn.Body, func(n ast.Node) bool {
-			id, ok := n.(*ast.Ident)
-			if !ok {
+			id, idOK := n.(*ast.Ident)
+			if !idOK {
 				return true
 			}
-			if id.Name == "MaxMetadataBytes" {
+			if want && id.Name == "MaxMetadataBytes" {
 				required[fn.Name.Name] = true
+			}
+			if fn.Name.Name == "writeBatchChunk" && id.Name == "encodeBatchEntry" {
+				chunkCallsEncoder = true
 			}
 			return true
 		})
@@ -168,6 +179,11 @@ func TestOutboxMetadataMaxBytes01(t *testing.T) {
 				"%s() must reference MaxMetadataBytes (B2-A-07)",
 				filepath.Dir(path), name)
 		}
+	}
+	if !chunkCallsEncoder {
+		t.Errorf("OUTBOX-METADATA-MAX-BYTES-01: %s/outbox_writer.go: writeBatchChunk "+
+			"must call encodeBatchEntry so the per-entry MaxMetadataBytes cap is "+
+			"reached on the batch INSERT path (B2-A-07)", filepath.Dir(path))
 	}
 }
 

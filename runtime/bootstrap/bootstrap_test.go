@@ -75,10 +75,22 @@ func verboseGet(ctx context.Context, baseURL string) (*http.Response, error) {
 }
 
 // newLocalListener creates a TCP listener on a random port, suitable for tests.
+//
+// The listener is registered with t.Cleanup so the underlying socket is
+// released exactly when the test ends, regardless of whether bootstrap
+// consumed it via WithListenerNet (Close is idempotent). Without this,
+// "port holder" callers (e.g. TestPhase7BindListeners_OwnedSocket_ClosedOnSiblingFailure)
+// rely on GC keeping the *net.TCPListener live so the FD stays bound; under
+// race-detector + CI scheduling pressure that GC ordering is not guaranteed
+// and the port can be released before bootstrap.Run hits the bind step,
+// turning a "must collide" assertion into a silent success.
 func newLocalListener(t *testing.T) net.Listener {
 	t.Helper()
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = ln.Close()
+	})
 	return ln
 }
 
