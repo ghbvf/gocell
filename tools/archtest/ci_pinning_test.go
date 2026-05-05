@@ -143,11 +143,12 @@ func TestGeneratedArtifactGatesAreStructured(t *testing.T) {
 }
 
 func TestGeneratedArtifactGateRejectsProducerDefinedScope(t *testing.T) {
+	// Fixture: verify-codegen job exists but step uses forbidden producer-defined
+	// scope pattern (git diff, generated_entrypoints, etc.).
 	body := []byte(`jobs:
-  build-test:
+  verify-codegen:
     steps:
       - name: Verify generated artifacts are up-to-date
-        if: matrix.static_checks
         run: |
           go run ./cmd/gocell verify generated
           entrypoints_file="$(mktemp)"
@@ -168,11 +169,11 @@ func TestGeneratedArtifactGateRejectsProducerDefinedScope(t *testing.T) {
 }
 
 func TestGeneratedArtifactGateRejectsLegacyEntrypointGlob(t *testing.T) {
+	// Fixture: verify-codegen job exists but step uses legacy cmd/*/main.go glob.
 	body := []byte(`jobs:
-  build-test:
+  verify-codegen:
     steps:
       - name: Verify generated artifacts are up-to-date
-        if: matrix.static_checks
         run: |
           go run ./cmd/gocell verify generated
           go run ./cmd/gocell generate assembly --id "$(basename "$d")"
@@ -531,16 +532,18 @@ func validateGeneratedArtifactGates(body []byte) error {
 	if err := dec.Decode(&cfg); err != nil {
 		return fmt.Errorf("parse _build-lint.yml: %w", err)
 	}
-	job, ok := cfg.Jobs["build-test"]
+	// After SEC-SETUP-CLOSURE F2, the generated-artifact gate lives in the
+	// independent verify-codegen job, not in build-test.
+	job, ok := cfg.Jobs["verify-codegen"]
 	if !ok {
-		return fmt.Errorf("build-test job missing")
+		return fmt.Errorf("verify-codegen job missing")
 	}
 	assemblyStep, ok := findWorkflowStep(job.Steps, "Verify generated artifacts are up-to-date")
 	if !ok {
-		return fmt.Errorf("generated artifact gate missing")
+		return fmt.Errorf("generated artifact gate missing from verify-codegen")
 	}
-	if err := validateStaticCheckStep(assemblyStep); err != nil {
-		return fmt.Errorf("generated artifact gate: %w", err)
+	if strings.TrimSpace(assemblyStep.Run) == "" {
+		return fmt.Errorf("generated artifact gate: run block missing")
 	}
 	if !strings.Contains(assemblyStep.Run, "go run ./cmd/gocell verify generated") {
 		return fmt.Errorf("generated artifact gate must call gocell verify generated")
@@ -572,15 +575,6 @@ func findWorkflowStep(steps []workflowStep, name string) (workflowStep, bool) {
 	return workflowStep{}, false
 }
 
-func validateStaticCheckStep(step workflowStep) error {
-	if step.If != "matrix.static_checks" {
-		return fmt.Errorf("if must be matrix.static_checks")
-	}
-	if strings.TrimSpace(step.Run) == "" {
-		return fmt.Errorf("run block missing")
-	}
-	return nil
-}
 
 // --- SEC-SETUP-CLOSURE RED tests (Batch 0, tests 17-18) ---
 // These tests verify that the three codegen verify steps move from build-test
