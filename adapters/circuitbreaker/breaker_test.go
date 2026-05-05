@@ -69,9 +69,9 @@ func TestAdapter_OpensAfterFailures(t *testing.T) {
 }
 
 func TestAdapter_HalfOpenAfterTimeout(t *testing.T) {
-	a := mustNew(t, Config{
+	a, fc := mustNewWithClock(t, Config{
 		Name:    "test-halfopen",
-		Timeout: testtime.D100ms, // short timeout for test
+		Timeout: testtime.D100ms,
 	})
 
 	// Trip the breaker.
@@ -82,19 +82,16 @@ func TestAdapter_HalfOpenAfterTimeout(t *testing.T) {
 	allowed, _ := a.Allow()
 	require.False(t, allowed, "breaker must be open")
 
-	// Poll until the breaker transitions to half-open (generous timeout for slow CI).
-	require.Eventually(t, func() bool {
-		allowed, done := a.Allow()
-		if !allowed {
-			return false
-		}
-		done(nil) // successful probe
-		return true
-	}, testtime.D2s, testtime.D25ms, "breaker must transition to half-open after timeout")
+	// Advance clock past the timeout to trigger half-open transition.
+	fc.Advance(testtime.D100ms + time.Nanosecond)
+
+	allowed, done := a.Allow()
+	require.True(t, allowed, "must transition to half-open after Timeout")
+	done(nil) // successful probe
 }
 
 func TestAdapter_ClosesAfterHalfOpenSuccess(t *testing.T) {
-	a := mustNew(t, Config{
+	a, fc := mustNewWithClock(t, Config{
 		Name:    "test-close",
 		Timeout: testtime.D100ms,
 	})
@@ -105,15 +102,12 @@ func TestAdapter_ClosesAfterHalfOpenSuccess(t *testing.T) {
 		done(errors.New("failure"))
 	}
 
-	// Poll until half-open, then send successful probe.
-	require.Eventually(t, func() bool {
-		allowed, done := a.Allow()
-		if !allowed {
-			return false
-		}
-		done(nil) // successful probe → close
-		return true
-	}, testtime.D2s, testtime.D25ms, "breaker must reach half-open")
+	// Advance clock past timeout → half-open, then successful probe → closed.
+	fc.Advance(testtime.D100ms + time.Nanosecond)
+
+	allowed, done := a.Allow()
+	require.True(t, allowed, "breaker must reach half-open")
+	done(nil) // successful probe → closed
 
 	// Should be back to closed — multiple requests allowed.
 	for i := range 3 {
@@ -127,7 +121,7 @@ func TestAdapter_ClosesAfterHalfOpenSuccess(t *testing.T) {
 
 func TestAdapter_OnStateChangeCallback(t *testing.T) {
 	var transitions []string
-	a := mustNew(t, Config{
+	a, fc := mustNewWithClock(t, Config{
 		Name:    "test-callback",
 		Timeout: testtime.D100ms,
 		OnStateChange: func(name string, from, to State) {
@@ -142,15 +136,12 @@ func TestAdapter_OnStateChangeCallback(t *testing.T) {
 	}
 	require.Contains(t, transitions, "closed→open")
 
-	// Poll until half-open → closed transition completes.
-	require.Eventually(t, func() bool {
-		allowed, done := a.Allow()
-		if !allowed {
-			return false
-		}
-		done(nil) // successful probe → half-open → closed
-		return true
-	}, testtime.D2s, testtime.D25ms, "breaker must reach half-open for callback test")
+	// Advance clock past timeout → half-open transition fires on next Allow.
+	fc.Advance(testtime.D100ms + time.Nanosecond)
+
+	allowed, done := a.Allow()
+	require.True(t, allowed, "breaker must reach half-open for callback test")
+	done(nil) // successful probe → half-open → closed
 
 	assert.Contains(t, transitions, "open→half-open")
 	assert.Contains(t, transitions, "half-open→closed")
@@ -242,11 +233,11 @@ func TestNew_NilClock_Panics(t *testing.T) {
 // TestAdapter_HalfOpen_MaxRequestsConcurrent verifies that MaxRequests=1 in
 // half-open state allows exactly one concurrent request and rejects all others.
 //
-// ref: github.com/sony/gobreaker twostep_breaker.go — half-open MaxRequests
+// ref: sony/gobreaker v2 twostep_breaker.go — half-open MaxRequests
 func TestAdapter_HalfOpen_MaxRequestsConcurrent(t *testing.T) {
 	const concurrency = 8
 
-	a := mustNew(t, Config{
+	a, fc := mustNewWithClock(t, Config{
 		Name:        "test-halfopen-concurrent",
 		MaxRequests: 1,
 		Timeout:     testtime.D50ms,
@@ -262,32 +253,22 @@ func TestAdapter_HalfOpen_MaxRequestsConcurrent(t *testing.T) {
 	allowed, _ := a.Allow()
 	require.False(t, allowed, "breaker must be open after tripping")
 
-	// Wait for the Timeout to elapse so gobreaker transitions to half-open.
-	require.Eventually(t, func() bool {
-		// A single Allow probe tells us if we are in half-open.
-		probe, probeDone := a.Allow()
-		if probe {
-			// We are in half-open. Report success to avoid closing immediately,
-			// then break out — we want to test the concurrent scenario below.
-			probeDone(errors.New("probe fail")) // reopen to start fresh
-			return true
-		}
-		return false
-	}, testtime.D2s, testtime.D10ms, "breaker must enter half-open after timeout")
+	// Advance clock past timeout → breaker enters half-open on next Allow.
+	fc.Advance(testtime.D50ms + time.Nanosecond)
 
-	// Wait again to enter half-open after re-opening.
-	require.Eventually(t, func() bool {
-		allowed, done := a.Allow()
-		if !allowed {
-			return false
-		}
-		// Keep the door open by failing the probe; we need half-open for the race.
-		done(errors.New("probe fail"))
-		return true
-	}, testtime.D2s, testtime.D10ms, "breaker must enter half-open for concurrent test")
+	// Probe to confirm we're in half-open; fail to reopen for concurrent test.
+	probe, probeDone := a.Allow()
+	require.True(t, probe, "breaker must enter half-open after fc.Advance")
+	probeDone(errors.New("probe fail")) // reopen so we can test half-open slot race
+
+	// Advance again past the second open period.
+	fc.Advance(testtime.D50ms + time.Nanosecond)
 
 	// Now concurrently race for the single half-open slot.
-	// gobreaker MaxRequests=1 means only one Allow() call should return true.
+	// MaxRequests=1 means only one Allow() call should return true.
+	// We do not call done() inside goroutines to avoid the allowed→closed
+	// transition during the race (done(nil) would close the circuit and let
+	// later goroutines through as closed).
 	var (
 		allowedCount atomic.Int32
 		wg           sync.WaitGroup
@@ -295,20 +276,34 @@ func TestAdapter_HalfOpen_MaxRequestsConcurrent(t *testing.T) {
 
 	// Barrier so all goroutines start at the same time.
 	start := make(chan struct{})
+	dones := make([]func(error), concurrency)
+	var donesMu sync.Mutex
 
-	for range concurrency {
+	for i := range concurrency {
+		i := i
 		wg.Go(func() {
 			<-start
-			ok, done := a.Allow()
+			ok, doneFn := a.Allow()
 			if ok {
 				allowedCount.Add(1)
-				done(nil) // report success
+				donesMu.Lock()
+				dones[i] = doneFn
+				donesMu.Unlock()
 			}
 		})
 	}
 
 	close(start) // release all goroutines simultaneously
 	wg.Wait()
+
+	// Call any captured done callbacks after counting.
+	donesMu.Lock()
+	for _, doneFn := range dones {
+		if doneFn != nil {
+			doneFn(nil)
+		}
+	}
+	donesMu.Unlock()
 
 	assert.LessOrEqual(t, int(allowedCount.Load()), 1,
 		"MaxRequests=1 must allow at most 1 concurrent request in half-open state")
