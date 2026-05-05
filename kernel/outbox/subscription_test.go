@@ -33,8 +33,38 @@ func TestSubscription_Validate(t *testing.T) {
 			errContains: "Topic",
 		},
 		{
-			name:    "valid",
-			sub:     Subscription{Topic: "session.created.v1", ConsumerGroup: "cg-audit"},
+			name: "contractID empty",
+			sub: Subscription{
+				Topic: "session.created.v1", ConsumerGroup: "cg-audit",
+				ContractKind: "event", ContractTransport: "amqp",
+			},
+			wantErr:     true,
+			errContains: "ContractID",
+		},
+		{
+			name: "contractKind empty",
+			sub: Subscription{
+				Topic: "session.created.v1", ConsumerGroup: "cg-audit",
+				ContractID: "event.session.created.v1", ContractTransport: "amqp",
+			},
+			wantErr:     true,
+			errContains: "ContractKind",
+		},
+		{
+			name: "contractTransport empty",
+			sub: Subscription{
+				Topic: "session.created.v1", ConsumerGroup: "cg-audit",
+				ContractID: "event.session.created.v1", ContractKind: "event",
+			},
+			wantErr:     true,
+			errContains: "ContractTransport",
+		},
+		{
+			name: "valid",
+			sub: Subscription{
+				Topic: "session.created.v1", ConsumerGroup: "cg-audit",
+				ContractID: "event.session.created.v1", ContractKind: "event", ContractTransport: "amqp",
+			},
 			wantErr: false,
 		},
 	}

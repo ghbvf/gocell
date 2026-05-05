@@ -329,6 +329,36 @@ func TestNewConsumerBase_ExplicitFailOpenPreserved(t *testing.T) {
 	assert.Equal(t, ClaimPolicyFailOpen, cb.config.ClaimPolicy)
 }
 
+// --- IsConstructed sentinel (N8 K#12 FU) -----------------------------------
+// PR-V1-OUTBOX-FU-CLOSURE (b): a zero-value `&ConsumerBase{}` literal sets
+// claimer=nil and ConsumerBaseConfig zero, which when fed into
+// runtime/bootstrap.WithConsumerBase passes a non-nil pointer check yet emits
+// ClaimRetryCount=0 → ClaimAcquired+nil receipt → retryLoop with 0 iterations
+// → silent Reject/DLX. The IsConstructed sentinel makes "came from
+// NewConsumerBase" the single source of truth so phase6 wiring rejects the
+// literal even when it is not nil.
+
+func TestNewConsumerBase_IsConstructed_True(t *testing.T) {
+	cb, err := NewConsumerBase(&fakeClaimer{}, ConsumerBaseConfig{}, clock.Real())
+	require.NoError(t, err)
+	require.NotNil(t, cb)
+	assert.True(t, cb.IsConstructed(),
+		"NewConsumerBase must return a value whose IsConstructed() is true; "+
+			"otherwise phase6 wiring cannot distinguish a constructed value from a literal")
+}
+
+func TestZeroValueConsumerBaseLiteral_IsConstructed_False(t *testing.T) {
+	literal := &ConsumerBase{}
+	assert.False(t, literal.IsConstructed(),
+		"`&ConsumerBase{}` literal must report IsConstructed()==false so wiring can refuse it")
+}
+
+func TestNilConsumerBase_IsConstructed_False(t *testing.T) {
+	var cb *ConsumerBase
+	assert.False(t, cb.IsConstructed(),
+		"typed-nil *ConsumerBase must report IsConstructed()==false (nil-receiver safe)")
+}
+
 // --- Wrap: happy paths -----------------------------------------------------
 
 func TestConsumerBase_Wrap_ClaimAcquired_Ack_ThreadsReceipt(t *testing.T) {

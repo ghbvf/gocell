@@ -96,20 +96,73 @@ func TestNewContractTracingSubscriber_WrapsSubscribeAndDelegatesLifecycle(t *tes
 	assert.True(t, inner.closeCalled)
 }
 
-func TestNewContractTracingSubscriber_PanicsOnEmptyContractIDAtSubscribe(t *testing.T) {
+// subscribeCapturingPanic invokes decorator.Subscribe under defer-recover so we
+// can assert the post-N8 contract: missing Subscription metadata must surface as
+// an error, not a panic. RED in current code (MustWrapSubscriber panics inside
+// spec.Validate); GREEN after sub.Validate() is delegated to the single source
+// (Subscription.Validate) and WrapSubscriber returns an error.
+func subscribeCapturingPanic(t *testing.T, decorated outbox.Subscriber, sub outbox.Subscription) (panicked any, subscribeErr error) {
+	t.Helper()
+	func() {
+		defer func() { panicked = recover() }()
+		subscribeErr = decorated.Subscribe(context.Background(), sub,
+			func(_ context.Context, _ outbox.Entry) (outbox.HandleResult, outbox.Settlement) {
+				return outbox.HandleResult{Disposition: outbox.DispositionAck}, nil
+			})
+	}()
+	return panicked, subscribeErr
+}
+
+func TestNewContractTracingSubscriber_Subscribe_ReturnsErrorOnEmptyContractID(t *testing.T) {
 	t.Parallel()
 	inner := newLifecycleTracingSubscriber()
 	decorated := NewContractTracingSubscriber(inner, wrapper.NoopTracer{})
 
-	defer func() {
-		require.NotNil(t, recover(), "empty ContractID must panic before inner Subscribe starts")
-		assert.Nil(t, inner.capturedHandler, "inner Subscribe must not run after invalid contract metadata")
-	}()
+	panicked, subscribeErr := subscribeCapturingPanic(t, decorated, outbox.Subscription{
+		Topic:             "event.legacy.v1",
+		ConsumerGroup:     "legacy",
+		ContractKind:      "event",
+		ContractTransport: "amqp",
+	})
 
-	_ = decorated.Subscribe(context.Background(), outbox.Subscription{
+	require.Nil(t, panicked, "empty ContractID must surface as error, not panic")
+	require.Error(t, subscribeErr, "Subscribe must return error when ContractID is empty")
+	assert.Contains(t, subscribeErr.Error(), "ContractID", "error must name the missing field")
+	assert.Nil(t, inner.capturedHandler, "inner Subscribe must not run after invalid metadata")
+}
+
+func TestNewContractTracingSubscriber_Subscribe_ReturnsErrorOnEmptyContractKind(t *testing.T) {
+	t.Parallel()
+	inner := newLifecycleTracingSubscriber()
+	decorated := NewContractTracingSubscriber(inner, wrapper.NoopTracer{})
+
+	panicked, subscribeErr := subscribeCapturingPanic(t, decorated, outbox.Subscription{
+		Topic:             "event.legacy.v1",
+		ConsumerGroup:     "legacy",
+		ContractID:        "event.legacy.v1",
+		ContractTransport: "amqp",
+	})
+
+	require.Nil(t, panicked, "empty ContractKind must surface as error, not panic")
+	require.Error(t, subscribeErr, "Subscribe must return error when ContractKind is empty")
+	assert.Contains(t, subscribeErr.Error(), "ContractKind", "error must name the missing field")
+	assert.Nil(t, inner.capturedHandler, "inner Subscribe must not run after invalid metadata")
+}
+
+func TestNewContractTracingSubscriber_Subscribe_ReturnsErrorOnEmptyContractTransport(t *testing.T) {
+	t.Parallel()
+	inner := newLifecycleTracingSubscriber()
+	decorated := NewContractTracingSubscriber(inner, wrapper.NoopTracer{})
+
+	panicked, subscribeErr := subscribeCapturingPanic(t, decorated, outbox.Subscription{
 		Topic:         "event.legacy.v1",
 		ConsumerGroup: "legacy",
-	}, func(_ context.Context, _ outbox.Entry) (outbox.HandleResult, outbox.Settlement) {
-		return outbox.HandleResult{Disposition: outbox.DispositionAck}, nil
+		ContractID:    "event.legacy.v1",
+		ContractKind:  "event",
 	})
+
+	require.Nil(t, panicked, "empty ContractTransport must surface as error, not panic")
+	require.Error(t, subscribeErr, "Subscribe must return error when ContractTransport is empty")
+	assert.Contains(t, subscribeErr.Error(), "ContractTransport", "error must name the missing field")
+	assert.Nil(t, inner.capturedHandler, "inner Subscribe must not run after invalid metadata")
 }
