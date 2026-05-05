@@ -220,10 +220,7 @@ func buildKeyProvider(
 	if providerName == "" {
 		if storageBackend == "postgres" {
 			return nil, errcode.New(errcode.KindInternal, errcode.ErrConfigKeyMissing,
-				"configcore: GOCELL_CONFIGCORE_KEY_PROVIDER must be set when StorageBackend=postgres "+
-					"(known values: \"local-aes\" for dev/CI, \"vault-transit\" for production). "+
-					"Silent NoopTransformer fallback is disabled because it would persist "+
-					"sensitive values unencrypted.")
+				"configcore: GOCELL_CONFIGCORE_KEY_PROVIDER must be set when StorageBackend=postgres (known values: \"local-aes\" for dev/CI, \"vault-transit\" for production). Silent NoopTransformer fallback is disabled because it would persist sensitive values unencrypted.")
 		}
 		return noKeyProvider{}, nil
 	}
@@ -256,7 +253,8 @@ func buildKeyProvider(
 		return kp, nil
 	default:
 		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-			fmt.Sprintf("unknown GOCELL_CONFIGCORE_KEY_PROVIDER %q; known values: \"local-aes\", \"vault-transit\"", providerName))
+			"unknown GOCELL_CONFIGCORE_KEY_PROVIDER; known values: \"local-aes\", \"vault-transit\"",
+			errcode.WithDetails(slog.String("provider", providerName)))
 	}
 }
 
@@ -415,7 +413,8 @@ func buildConfigCoreOpts(ctx context.Context, cfg ConfigCoreModuleConfig) (Confi
 		// Unreachable: TopologyFromEnv validation already rejects unknown
 		// StorageBackend values. Keep as defense-in-depth only.
 		return ConfigCoreModuleResult{}, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-			fmt.Sprintf("buildConfigCoreOpts: unexpected StorageBackend %q (topology validation bypass)", cfg.Topology.StorageBackend))
+			"buildConfigCoreOpts: unexpected StorageBackend (topology validation bypass)",
+			errcode.WithInternal(fmt.Sprintf("backend=%q", cfg.Topology.StorageBackend)))
 	}
 }
 

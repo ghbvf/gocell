@@ -3,6 +3,7 @@ package mem
 
 import (
 	"context"
+	"fmt"
 	"sync"
 
 	"github.com/ghbvf/gocell/cells/accesscore/internal/domain"
@@ -32,7 +33,8 @@ func (r *UserRepository) Create(_ context.Context, user *domain.User) error {
 	defer r.mu.Unlock()
 
 	if _, exists := r.byName[user.Username]; exists {
-		return errcode.New(errcode.KindConflict, errcode.ErrAuthUserDuplicate, "username already exists: "+user.Username)
+		return errcode.New(errcode.KindConflict, errcode.ErrAuthUserDuplicate, "username already exists",
+			errcode.WithInternal(fmt.Sprintf("username=%q", user.Username)))
 	}
 
 	c := cloneUser(user)
@@ -47,8 +49,9 @@ func (r *UserRepository) GetByID(_ context.Context, id string) (*domain.User, er
 
 	u, ok := r.byID[id]
 	if !ok {
-		return nil, errcode.New(errcode.KindNotFound, errcode.ErrAuthUserNotFound, "user not found: "+id,
-			errcode.WithCategory(errcode.CategoryDomain))
+		return nil, errcode.New(errcode.KindNotFound, errcode.ErrAuthUserNotFound, "user not found",
+			errcode.WithCategory(errcode.CategoryDomain),
+			errcode.WithInternal(fmt.Sprintf("id=%s", id)))
 	}
 	return cloneUser(u), nil
 }
@@ -59,8 +62,9 @@ func (r *UserRepository) GetByUsername(_ context.Context, username string) (*dom
 
 	u, ok := r.byName[username]
 	if !ok {
-		return nil, errcode.New(errcode.KindNotFound, errcode.ErrAuthUserNotFound, "user not found: "+username,
-			errcode.WithCategory(errcode.CategoryDomain))
+		return nil, errcode.New(errcode.KindNotFound, errcode.ErrAuthUserNotFound, "user not found",
+			errcode.WithCategory(errcode.CategoryDomain),
+			errcode.WithInternal(fmt.Sprintf("username=%q", username)))
 	}
 	return cloneUser(u), nil
 }
@@ -70,8 +74,9 @@ func (r *UserRepository) Update(_ context.Context, user *domain.User) error {
 	defer r.mu.Unlock()
 
 	if _, exists := r.byID[user.ID]; !exists {
-		return errcode.New(errcode.KindNotFound, errcode.ErrAuthUserNotFound, "user not found: "+user.ID,
-			errcode.WithCategory(errcode.CategoryDomain))
+		return errcode.New(errcode.KindNotFound, errcode.ErrAuthUserNotFound, "user not found",
+			errcode.WithCategory(errcode.CategoryDomain),
+			errcode.WithInternal(fmt.Sprintf("id=%s", user.ID)))
 	}
 
 	c := cloneUser(user)
@@ -102,8 +107,9 @@ func (r *UserRepository) Delete(_ context.Context, id string) error {
 
 	u, ok := r.byID[id]
 	if !ok {
-		return errcode.New(errcode.KindNotFound, errcode.ErrAuthUserNotFound, "user not found: "+id,
-			errcode.WithCategory(errcode.CategoryDomain))
+		return errcode.New(errcode.KindNotFound, errcode.ErrAuthUserNotFound, "user not found",
+			errcode.WithCategory(errcode.CategoryDomain),
+			errcode.WithInternal(fmt.Sprintf("id=%s", id)))
 	}
 	delete(r.byName, u.Username)
 	delete(r.byID, id)

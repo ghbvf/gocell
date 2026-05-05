@@ -3,6 +3,7 @@ package accesscore
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -25,6 +26,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/persistence"
+	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/query"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/runtime/auth"
@@ -194,7 +196,9 @@ func TestInit_DemoMode_OutboxWithoutTx_Fails(t *testing.T) {
 	)
 	err := c.Init(context.Background(), cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo))
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "outboxWriter and txRunner")
+	var ecErrTxPair *errcode.Error
+	require.True(t, errors.As(err, &ecErrTxPair))
+	assert.Contains(t, ecErrTxPair.Message+" "+ecErrTxPair.InternalMessage, "outboxWriter and txRunner")
 }
 
 func TestInit_DemoMode_TxWithoutOutbox_PublisherMode_Succeeds(t *testing.T) {
@@ -233,7 +237,9 @@ func TestInit_DemoMode_NoPublisherNoOutbox_Fails(t *testing.T) {
 	)
 	err := c.Init(context.Background(), cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo))
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "explicit event sink")
+	var ecErrSink *errcode.Error
+	require.True(t, errors.As(err, &ecErrSink))
+	assert.Contains(t, ecErrSink.Message+" "+ecErrSink.InternalMessage, "explicit event sink")
 }
 
 func TestInit_DemoMode_WithPublisher_Succeeds(t *testing.T) {
@@ -359,7 +365,9 @@ func TestInit_WithEmitterAndOutboxDeps_MutuallyExclusive(t *testing.T) {
 	)
 	err := c.Init(context.Background(), cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo))
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "mutually exclusive")
+	var ecErrMutex *errcode.Error
+	require.True(t, errors.As(err, &ecErrMutex))
+	assert.Contains(t, ecErrMutex.Message+" "+ecErrMutex.InternalMessage, "mutually exclusive")
 }
 
 // TestInit_WithEmitter_DurableRequiresDurableEmitter guards the production
@@ -378,7 +386,9 @@ func TestInit_WithEmitter_DurableRequiresDurableEmitter(t *testing.T) {
 	)
 	err := c.Init(context.Background(), cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDurable))
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "durable")
+	var ecErrDurable *errcode.Error
+	require.True(t, errors.As(err, &ecErrDurable))
+	assert.Contains(t, ecErrDurable.Message+" "+ecErrDurable.InternalMessage, "durable")
 }
 
 func TestAccessCore_Lifecycle(t *testing.T) {

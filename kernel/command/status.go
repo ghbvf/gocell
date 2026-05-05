@@ -117,5 +117,6 @@ func Transition(from, to Status) error {
 		return nil
 	}
 	return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-		fmt.Sprintf("command: invalid transition %s -> %s", from, to))
+		"command: invalid status transition",
+		errcode.WithInternal(fmt.Sprintf("from=%s to=%s", from, to)))
 }

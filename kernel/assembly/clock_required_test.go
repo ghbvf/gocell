@@ -12,6 +12,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/metadata"
+	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
 // Ensure time is used by nilClockCarrier methods below.
@@ -44,7 +45,7 @@ const (
 // pass Clock at all.
 func TestAssemblyNew_RejectsNilClock(t *testing.T) {
 	t.Parallel()
-	assert.PanicsWithValue(t, wantNilClockPanic, func() {
+	assertPanicsWithAssertionMessage(t, wantNilClockPanic, func() {
 		_ = assembly.New(assembly.Config{
 			ID:             "nil-clock",
 			DurabilityMode: cell.DurabilityDemo,
@@ -63,7 +64,7 @@ func TestAssemblyNew_RejectsTypedNilClock(t *testing.T) {
 	t.Parallel()
 	var p *nilClockCarrier // typed-nil pointer
 	var clk clock.Clock = p
-	assert.PanicsWithValue(t, wantTypedNilClockPanic, func() {
+	assertPanicsWithAssertionMessage(t, wantTypedNilClockPanic, func() {
 		_ = assembly.New(assembly.Config{
 			ID:             "typed-nil-clock",
 			DurabilityMode: cell.DurabilityDemo,
@@ -125,4 +126,27 @@ func TestAssemblyStart_SnapshotsCopy(t *testing.T) {
 	require.NotNil(t, snaps2)
 	_, hasC1 := snaps2["c1"]
 	assert.True(t, hasC1, "deleting from first copy must not affect internal state")
+}
+
+// assertPanicsWithAssertionMessage verifies that fn panics with an *errcode.Error
+// whose Message field equals wantMsg. Used to test Must* wrappers that panic
+// with errcode.Assertion(...) instead of bare strings.
+func assertPanicsWithAssertionMessage(t *testing.T, wantMsg string, fn func()) {
+	t.Helper()
+	defer func() {
+		r := recover()
+		if r == nil {
+			t.Errorf("expected panic but did not panic")
+			return
+		}
+		e, ok := r.(*errcode.Error)
+		if !ok {
+			t.Errorf("panic value is %T, want *errcode.Error; value: %v", r, r)
+			return
+		}
+		if e.Message != wantMsg {
+			t.Errorf("panic message = %q, want %q", e.Message, wantMsg)
+		}
+	}()
+	fn()
 }

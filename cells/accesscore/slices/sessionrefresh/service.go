@@ -108,7 +108,7 @@ func MustNewService(
 ) *Service {
 	s, err := NewService(sessionRepo, roleRepo, userRepo, refreshStore, issuer, logger, opts...)
 	if err != nil {
-		panic(err.Error())
+		panic(errcode.Assertion("sessionrefresh: invariant violated: %v", err))
 	}
 	return s
 }

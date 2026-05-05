@@ -14,7 +14,18 @@
       "properties": {
         "code": {"type": "string", "pattern": "^ERR_[A-Z0-9_]+$"},
         "message": {"type": "string"},
-        "details": {"type": "object", "additionalProperties": true},
+        "details": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["key", "value"],
+            "additionalProperties": false,
+            "properties": {
+              "key": {"type": "string"},
+              "value": {}
+            }
+          }
+        },
         "request_id": {"type": "string"}
       }
     }

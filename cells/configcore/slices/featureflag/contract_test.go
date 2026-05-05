@@ -15,7 +15,7 @@ func TestHttpConfigFlagsListV1Serve(t *testing.T) {
 	// PR-CFG-C contract-as-auth-truth: route is admin-gated.
 	_, has403 := c.HTTP.Responses[403]
 	assert.True(t, has403, "http.config.flags.list.v1 must declare 403 (route is RoleAdmin-gated)")
-	c.ValidateErrorResponse(t, 403, []byte(`{"error":{"code":"ERR_AUTH_FORBIDDEN","message":"access denied","details":{}}}`))
+	c.ValidateErrorResponse(t, 403, []byte(`{"error":{"code":"ERR_AUTH_FORBIDDEN","message":"access denied","details":[]}}`))
 
 	c.ValidateResponse(t, []byte(`{"data":[{"id":"f-1","key":"dark-mode","type":"boolean",`+
 		`"enabled":true,"rolloutPercentage":100,"description":"Dark mode toggle",`+
@@ -37,7 +37,7 @@ func TestHttpConfigFlagsGetV1Serve(t *testing.T) {
 
 	_, has403 := c.HTTP.Responses[403]
 	assert.True(t, has403, "http.config.flags.get.v1 must declare 403 (route is RoleAdmin-gated)")
-	c.ValidateErrorResponse(t, 403, []byte(`{"error":{"code":"ERR_AUTH_FORBIDDEN","message":"access denied","details":{}}}`))
+	c.ValidateErrorResponse(t, 403, []byte(`{"error":{"code":"ERR_AUTH_FORBIDDEN","message":"access denied","details":[]}}`))
 
 	c.ValidateResponse(t, []byte(`{"data":{"id":"f-1","key":"dark-mode","type":"boolean",`+
 		`"enabled":true,"rolloutPercentage":100,"description":"Dark mode toggle",`+
@@ -58,7 +58,7 @@ func TestHttpConfigFlagsEvaluateV1Serve(t *testing.T) {
 
 	_, has403 := c.HTTP.Responses[403]
 	assert.True(t, has403, "http.config.flags.evaluate.v1 must declare 403 (route is RoleAdmin-gated)")
-	c.ValidateErrorResponse(t, 403, []byte(`{"error":{"code":"ERR_AUTH_FORBIDDEN","message":"access denied","details":{}}}`))
+	c.ValidateErrorResponse(t, 403, []byte(`{"error":{"code":"ERR_AUTH_FORBIDDEN","message":"access denied","details":[]}}`))
 
 	c.ValidateRequest(t, []byte(`{"subject":"user-123"}`))
 	c.ValidateResponse(t, []byte(`{"data":{"key":"dark-mode","enabled":true}}`))

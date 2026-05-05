@@ -131,6 +131,10 @@ func TestParseUUIDPathParam(t *testing.T) {
 					Error struct {
 						Code    string `json:"code"`
 						Message string `json:"message"`
+						Details []struct {
+							Key   string `json:"key"`
+							Value any    `json:"value"`
+						} `json:"details"`
 					} `json:"error"`
 				}
 				if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
@@ -139,8 +143,18 @@ func TestParseUUIDPathParam(t *testing.T) {
 				if body.Error.Code != tt.wantCode {
 					t.Fatalf("error.code = %q, want %q", body.Error.Code, tt.wantCode)
 				}
-				if !strings.Contains(body.Error.Message, tt.paramName) {
-					t.Fatalf("error.message = %q, want substring %q", body.Error.Message, tt.paramName)
+				// param name is in Details[key="param"], not in Message
+				if tt.paramName != "" {
+					found := false
+					for _, d := range body.Error.Details {
+						if d.Key == "param" && d.Value == tt.paramName {
+							found = true
+							break
+						}
+					}
+					if !found {
+						t.Fatalf("error.details does not contain param=%q, body=%s", tt.paramName, rec.Body.String())
+					}
 				}
 				return
 			}

@@ -196,7 +196,7 @@ func (h *Handler) RegisterChecker(name string, fn Checker) error {
 // MustRegisterChecker is the static-wiring variant of RegisterChecker.
 func (h *Handler) MustRegisterChecker(name string, fn Checker) {
 	if err := h.RegisterChecker(name, fn); err != nil {
-		panic(err.Error())
+		panic(errcode.Assertion("health: %v", err))
 	}
 }
 

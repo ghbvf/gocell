@@ -159,7 +159,11 @@ func TestNewKeySet_WeakKeyReturnsError(t *testing.T) {
 
 	_, err := NewKeySet(weakKey, &weakKey.PublicKey, clock.Real())
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "1024")
+	var ecErr *errcode.Error
+	require.True(t, errors.As(err, &ecErr))
+	bitsAttr, ok := ecErr.FindAttr("bits")
+	require.True(t, ok, "expected details to contain 'bits'")
+	assert.Equal(t, int64(1024), bitsAttr.Value.Int64())
 }
 
 func TestNewKeySetWithVerificationKeys_RejectsWeakKey(t *testing.T) {
@@ -174,8 +178,14 @@ func TestNewKeySetWithVerificationKeys_RejectsWeakKey(t *testing.T) {
 
 	_, err := NewKeySetWithVerificationKeys(priv, pub, clock.Real(), []VerificationKey{vk})
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "1024")
-	assert.Contains(t, err.Error(), "verification")
+	var ecErr *errcode.Error
+	require.True(t, errors.As(err, &ecErr))
+	bitsAttr, ok := ecErr.FindAttr("bits")
+	require.True(t, ok, "expected details to contain 'bits'")
+	assert.Equal(t, int64(1024), bitsAttr.Value.Int64())
+	kindAttr, ok := ecErr.FindAttr("kind")
+	require.True(t, ok, "expected details to contain 'kind'")
+	assert.Equal(t, "verification", kindAttr.Value.String())
 }
 
 func TestNewKeySetWithVerificationKeys_RejectsEmptyKeyID(t *testing.T) {
@@ -403,7 +413,11 @@ func TestLoadKeySetFromEnv_PrevKeyMissingExpiryFails(t *testing.T) {
 
 	_, err := LoadKeySetFromEnv(clock.Real())
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), EnvJWTPrevKeyExpires)
+	var ecErr *errcode.Error
+	require.True(t, errors.As(err, &ecErr))
+	envExpiryAttr, ok := ecErr.FindAttr("envExpiry")
+	require.True(t, ok, "expected details to contain 'envExpiry'")
+	assert.Equal(t, EnvJWTPrevKeyExpires, envExpiryAttr.Value.String())
 }
 
 func TestLoadKeySetFromEnv_InvalidPrevPEMFails(t *testing.T) {
@@ -416,7 +430,16 @@ func TestLoadKeySetFromEnv_InvalidPrevPEMFails(t *testing.T) {
 
 	_, err := LoadKeySetFromEnv(clock.Real())
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "no PEM block")
+	// The outer error wraps the inner PEM parse error; collect all errcode.Error
+	// messages in the chain and check the full combined text for "no PEM block".
+	var fullText string
+	for e := err; e != nil; e = errors.Unwrap(e) {
+		var ecErr *errcode.Error
+		if errors.As(e, &ecErr) {
+			fullText += ecErr.Message + " " + ecErr.InternalMessage + " "
+		}
+	}
+	assert.Contains(t, fullText, "no PEM block", "expected 'no PEM block' somewhere in error chain")
 }
 
 func TestLoadKeySetFromEnv_InvalidExpiryFails(t *testing.T) {
@@ -430,7 +453,12 @@ func TestLoadKeySetFromEnv_InvalidExpiryFails(t *testing.T) {
 
 	_, err := LoadKeySetFromEnv(clock.Real())
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "RFC 3339")
+	var ecErr *errcode.Error
+	require.True(t, errors.As(err, &ecErr))
+	assert.Equal(t, "jwt key parse failed", ecErr.Message)
+	envAttr, ok := ecErr.FindAttr("env")
+	require.True(t, ok, "expected details to contain 'env'")
+	assert.Equal(t, EnvJWTPrevKeyExpires, envAttr.Value.String())
 }
 
 // --- Phase 5: User Story 4 (T026-T029) ---
@@ -583,7 +611,9 @@ func TestLoadKeysFromEnv_BothMissing(t *testing.T) {
 	var ecErr *errcode.Error
 	require.True(t, errors.As(err, &ecErr))
 	assert.Equal(t, ErrKeyMissing, ecErr.Code)
-	assert.Contains(t, ecErr.Message, EnvJWTPrivateKey)
+	envAttr, ok := ecErr.FindAttr("env")
+	require.True(t, ok, "expected details to contain 'env'")
+	assert.Equal(t, EnvJWTPrivateKey, envAttr.Value.String())
 }
 
 func TestLoadKeysFromEnv_PublicMissing(t *testing.T) {
@@ -602,7 +632,9 @@ func TestLoadKeysFromEnv_PublicMissing(t *testing.T) {
 	var ecErr *errcode.Error
 	require.True(t, errors.As(err, &ecErr))
 	assert.Equal(t, ErrKeyMissing, ecErr.Code)
-	assert.Contains(t, ecErr.Message, EnvJWTPublicKey)
+	envAttr, ok := ecErr.FindAttr("env")
+	require.True(t, ok, "expected details to contain 'env'")
+	assert.Equal(t, EnvJWTPublicKey, envAttr.Value.String())
 }
 
 func TestLoadKeysFromEnv_InvalidPEM(t *testing.T) {
@@ -651,7 +683,9 @@ func TestLoadRSAKeyPairFromPEM_RejectsWeakKey(t *testing.T) {
 	var ecErr *errcode.Error
 	require.True(t, errors.As(err, &ecErr))
 	assert.Equal(t, errcode.ErrAuthKeyInvalid, ecErr.Code)
-	assert.Contains(t, ecErr.Message, "1024")
+	bitsAttr, ok := ecErr.FindAttr("bits")
+	require.True(t, ok, "expected details to contain 'bits'")
+	assert.Equal(t, int64(1024), bitsAttr.Value.Int64())
 }
 
 func generateTestKeyPairPEM(t *testing.T) (privPEM, pubPEM []byte) {

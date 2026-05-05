@@ -67,15 +67,16 @@ var templates = func() *template.Template {
 		},
 		// needsErrcode reports whether the generated handler requires the errcode
 		// package. It is needed when: any query param exists (required check / parse
-		// errors), or when any path param has a length constraint (B4 follow-up:
-		// path string-length validation re-instated with generic "invalid" message
-		// to avoid oracle leakage). Body schema validation is delegated to
-		// schemavalidate.Validator and does not require errcode here.
+		// errors), any path param has a length constraint, or a request schema is
+		// present (errcode.Assertion used in schema compile-failure panic).
 		"needsErrcode": func(spec *ContractGenSpec) bool {
 			if spec.Endpoint == nil {
 				return false
 			}
 			ep := spec.Endpoint
+			if spec.RequestSchemaJSON != "" {
+				return true
+			}
 			if len(ep.QueryParams) > 0 && !ep.IsPagination {
 				return true
 			}

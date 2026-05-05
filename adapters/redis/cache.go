@@ -36,7 +36,8 @@ func (c *Cache) Get(ctx context.Context, key string) (string, error) {
 			return "", nil
 		}
 		return "", errcode.Wrap(errcode.KindInternal, ErrAdapterRedisGet,
-			fmt.Sprintf("redis: cache get failed (key=%s)", key), err)
+			"redis: cache get failed", err,
+			errcode.WithInternal(fmt.Sprintf("key=%s", key)))
 	}
 	return val, nil
 }
@@ -46,7 +47,8 @@ func (c *Cache) Get(ctx context.Context, key string) (string, error) {
 func (c *Cache) Set(ctx context.Context, key string, value string, ttl time.Duration) error {
 	if err := c.rdb.Set(ctx, key, value, ttl).Err(); err != nil {
 		return errcode.Wrap(errcode.KindInternal, ErrAdapterRedisSet,
-			fmt.Sprintf("redis: cache set failed (key=%s)", key), err)
+			"redis: cache set failed", err,
+			errcode.WithInternal(fmt.Sprintf("key=%s", key)))
 	}
 	return nil
 }
@@ -56,7 +58,8 @@ func (c *Cache) Set(ctx context.Context, key string, value string, ttl time.Dura
 func (c *Cache) Delete(ctx context.Context, key string) error {
 	if err := c.rdb.Del(ctx, key).Err(); err != nil {
 		return errcode.Wrap(errcode.KindInternal, ErrAdapterRedisDelete,
-			fmt.Sprintf("redis: cache delete failed (key=%s)", key), err)
+			"redis: cache delete failed", err,
+			errcode.WithInternal(fmt.Sprintf("key=%s", key)))
 	}
 	return nil
 }
@@ -71,12 +74,14 @@ func GetJSON[T any](ctx context.Context, c *Cache, key string) (T, error) {
 			return zero, nil
 		}
 		return zero, errcode.Wrap(errcode.KindInternal, ErrAdapterRedisGet,
-			fmt.Sprintf("redis: cache get json failed (key=%s)", key), err)
+			"redis: cache get json failed", err,
+			errcode.WithInternal(fmt.Sprintf("key=%s", key)))
 	}
 	var result T
 	if err := json.Unmarshal([]byte(raw), &result); err != nil {
 		return zero, errcode.Wrap(errcode.KindInternal, ErrAdapterRedisGet,
-			fmt.Sprintf("redis: cache json unmarshal failed (key=%s)", key), err)
+			"redis: cache json unmarshal failed", err,
+			errcode.WithInternal(fmt.Sprintf("key=%s", key)))
 	}
 	return result, nil
 }
@@ -87,11 +92,13 @@ func SetJSON[T any](ctx context.Context, c *Cache, key string, value T, ttl time
 	data, err := json.Marshal(value)
 	if err != nil {
 		return errcode.Wrap(errcode.KindInternal, ErrAdapterRedisSet,
-			fmt.Sprintf("redis: cache json marshal failed (key=%s)", key), err)
+			"redis: cache json marshal failed", err,
+			errcode.WithInternal(fmt.Sprintf("key=%s", key)))
 	}
 	if err := c.rdb.Set(ctx, key, string(data), ttl).Err(); err != nil {
 		return errcode.Wrap(errcode.KindInternal, ErrAdapterRedisSet,
-			fmt.Sprintf("redis: cache set json failed (key=%s)", key), err)
+			"redis: cache set json failed", err,
+			errcode.WithInternal(fmt.Sprintf("key=%s", key)))
 	}
 	return nil
 }

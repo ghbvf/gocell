@@ -124,7 +124,7 @@ func New(driver Driver, clk clock.Clock, opts ...Option) (Locker, error) {
 func MustNew(driver Driver, clk clock.Clock, opts ...Option) Locker {
 	l, err := New(driver, clk, opts...)
 	if err != nil {
-		panic(err.Error())
+		panic(errcode.Assertion("distlock: %v", err))
 	}
 	return l
 }
@@ -150,7 +150,8 @@ func validateConfig(cfg config) error {
 
 func invalidDistlockConfig(reason string, got any) error {
 	return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-		fmt.Sprintf("distlock.New: invalid configuration: %s, got %v", reason, got))
+		"distlock.New: invalid configuration",
+		errcode.WithInternal(fmt.Sprintf("reason=%s got=%v", reason, got)))
 }
 
 // Acquire implements Locker.
@@ -165,7 +166,8 @@ func (l *lockerImpl) Acquire(ctx context.Context, key string, ttl time.Duration)
 	// caller cannot create a permanent lock that survives process death.
 	if ttl < time.Millisecond {
 		return nil, nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-			fmt.Sprintf("distlock: ttl must be ≥ 1ms (got %s); sub-millisecond TTLs would truncate to 0 in Redis and create a permanent lock", ttl))
+			"distlock: ttl must be ≥ 1ms; sub-millisecond TTLs would truncate to 0 in Redis and create a permanent lock",
+			errcode.WithInternal(fmt.Sprintf("ttl=%s", ttl)))
 	}
 
 	token, err := randomToken()

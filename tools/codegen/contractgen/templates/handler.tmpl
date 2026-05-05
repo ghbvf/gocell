@@ -6,7 +6,6 @@ import (
 	"net/http"
 {{- if .RequestSchemaJSON}}
 	"bytes"
-	"fmt"
 	"io"
 {{- end}}
 {{- if and (not .Endpoint.IsPagination) (hasQueryNumeric .Endpoint.QueryParams)}}
@@ -63,7 +62,7 @@ func NewHandler(svc Service) *Handler {
 {{- if .RequestSchemaJSON}}
 	v, err := schemavalidate.NewValidator(requestSchemaJSON)
 	if err != nil {
-		panic(fmt.Sprintf("generated handler {{.ContractID}}: schema compile failed: %v (codegen invariant violation; regenerate via gocell generate contract --all)", err))
+		panic(errcode.Assertion("generated handler {{.ContractID}}: schema compile failed: %v (codegen invariant violation; regenerate via gocell generate contract --all)", err))
 	}
 	h.requestValidator = v
 {{- end}}
@@ -78,7 +77,7 @@ func NewHandler(svc Service, policy auth.Policy) *Handler {
 {{- if .RequestSchemaJSON}}
 	v, err := schemavalidate.NewValidator(requestSchemaJSON)
 	if err != nil {
-		panic(fmt.Sprintf("generated handler {{.ContractID}}: schema compile failed: %v (codegen invariant violation; regenerate via gocell generate contract --all)", err))
+		panic(errcode.Assertion("generated handler {{.ContractID}}: schema compile failed: %v (codegen invariant violation; regenerate via gocell generate contract --all)", err))
 	}
 	h.requestValidator = v
 {{- end}}

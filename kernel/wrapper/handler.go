@@ -5,6 +5,7 @@ import (
 	"net/http"
 
 	"github.com/ghbvf/gocell/kernel/ctxkeys"
+	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/httputil"
 )
 
@@ -63,7 +64,7 @@ func HTTPHandler(spec ContractSpec, next http.Handler) (http.Handler, error) {
 func MustHTTPHandler(spec ContractSpec, next http.Handler) http.Handler {
 	h, err := HTTPHandler(spec, next)
 	if err != nil {
-		panic(err.Error())
+		panic(errcode.Assertion("wrapper: handler: %v", err))
 	}
 	return h
 }

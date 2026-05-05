@@ -161,5 +161,13 @@ func TestHandler_Logout_BlankID(t *testing.T) {
 	var coded *errcode.Error
 	require.ErrorAs(t, err, &coded)
 	assert.Equal(t, errcode.ErrAuthLogoutInvalidInput, coded.Code)
-	assert.Equal(t, "id is required", coded.Message)
+	assert.Equal(t, "validation: required field missing", coded.Message)
+	var gotField string
+	for _, attr := range coded.Details {
+		if attr.Key == "field" {
+			gotField = attr.Value.String()
+			break
+		}
+	}
+	assert.Equal(t, "id", gotField, "details must carry the field name")
 }

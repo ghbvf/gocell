@@ -2,6 +2,7 @@ package auditcore
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -144,7 +145,9 @@ func TestInit_DemoMode_OutboxWithoutTx_Fails(t *testing.T) {
 	)
 	err := c.Init(context.Background(), cell.NewRegistryRecorder(map[string]any{}, cell.DurabilityDemo))
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "outboxWriter and txRunner")
+	var ecErrTxPair1 *errcode.Error
+	require.True(t, errors.As(err, &ecErrTxPair1))
+	assert.Contains(t, ecErrTxPair1.Message+" "+ecErrTxPair1.InternalMessage, "outboxWriter and txRunner")
 }
 
 func TestInit_DemoMode_TxWithoutOutbox_Fails(t *testing.T) {
@@ -159,7 +162,9 @@ func TestInit_DemoMode_TxWithoutOutbox_Fails(t *testing.T) {
 	)
 	err := c.Init(context.Background(), cell.NewRegistryRecorder(map[string]any{}, cell.DurabilityDemo))
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "outboxWriter and txRunner")
+	var ecErrTxPair2 *errcode.Error
+	require.True(t, errors.As(err, &ecErrTxPair2))
+	assert.Contains(t, ecErrTxPair2.Message+" "+ecErrTxPair2.InternalMessage, "outboxWriter and txRunner")
 }
 
 func TestInit_DemoMode_NoPublisherNoOutbox_Fails(t *testing.T) {
@@ -171,7 +176,9 @@ func TestInit_DemoMode_NoPublisherNoOutbox_Fails(t *testing.T) {
 	)
 	err := c.Init(context.Background(), cell.NewRegistryRecorder(map[string]any{}, cell.DurabilityDemo))
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "explicit event sink")
+	var ecErrSink *errcode.Error
+	require.True(t, errors.As(err, &ecErrSink))
+	assert.Contains(t, ecErrSink.Message+" "+ecErrSink.InternalMessage, "explicit event sink")
 }
 
 func TestInit_DurableMode_RejectsNoopWriter(t *testing.T) {
@@ -188,7 +195,7 @@ func TestInit_DurableMode_RejectsNoopWriter(t *testing.T) {
 	var ecErr *errcode.Error
 	require.ErrorAs(t, err, &ecErr)
 	assert.Equal(t, errcode.ErrCellMissingOutbox, ecErr.Code)
-	assert.Contains(t, err.Error(), "durable mode")
+	assert.Contains(t, ecErr.Message+" "+ecErr.InternalMessage, "durable mode")
 }
 
 func TestInit_DemoMode_WithPublisher_Succeeds(t *testing.T) {
@@ -249,7 +256,9 @@ func TestAuditInit_WithEmitterAndOutboxDeps_MutuallyExclusive(t *testing.T) {
 	)
 	err := c.Init(context.Background(), cell.NewRegistryRecorder(map[string]any{}, cell.DurabilityDemo))
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "mutually exclusive")
+	var ecErrMutex *errcode.Error
+	require.True(t, errors.As(err, &ecErrMutex))
+	assert.Contains(t, ecErrMutex.Message+" "+ecErrMutex.InternalMessage, "mutually exclusive")
 }
 
 // TestAuditInit_WithEmitter_DurableRequiresDurableEmitter guards the
@@ -269,7 +278,9 @@ func TestAuditInit_WithEmitter_DurableRequiresDurableEmitter(t *testing.T) {
 	)
 	err = c.Init(context.Background(), cell.NewRegistryRecorder(map[string]any{}, cell.DurabilityDurable))
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "durable")
+	var ecErrDurable *errcode.Error
+	require.True(t, errors.As(err, &ecErrDurable))
+	assert.Contains(t, ecErrDurable.Message+" "+ecErrDurable.InternalMessage, "durable")
 }
 
 func TestAuditCore_RouteGroups(t *testing.T) {

@@ -184,11 +184,10 @@ func TestGenerateEntrypoint_InvalidHelperNameReturnsMetadataError(t *testing.T) 
 
 	_, err := gen.GenerateEntrypoint("---")
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "generated run helper")
-
 	var ec *ecErr.Error
 	require.True(t, errors.As(err, &ec))
 	assert.Equal(t, ecErr.ErrMetadataInvalid, ec.Code)
+	assert.Contains(t, ec.Message, "generated run helper")
 }
 
 func TestAssemblyRunHelperName_NormalizesSeparatorsUppercaseAndDigits(t *testing.T) {

@@ -15,6 +15,7 @@ package cell
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -368,7 +369,8 @@ func (r *RegistryRecorder) Subscribe(
 	}
 	if spec.Kind != "event" {
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-			"registry Subscribe: spec.Kind must be \"event\", got \""+spec.Kind+"\"")
+			"registry Subscribe: spec.Kind must be \"event\"",
+			errcode.WithInternal(fmt.Sprintf("got=%q", spec.Kind)))
 	}
 	if spec.Topic == "" {
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
@@ -406,7 +408,7 @@ func (r *RegistryRecorder) Health(name string, check func(context.Context) error
 // MustHaveNonEmptyHealthName panics when name is empty (programming error).
 func MustHaveNonEmptyHealthName(name string) {
 	if name == "" {
-		panic("registry Health: name must not be empty (programming error)")
+		panic(errcode.Assertion("registry Health: name must not be empty"))
 	}
 }
 
@@ -420,7 +422,7 @@ func (r *RegistryRecorder) Lifecycle(h LifecycleHook) {
 // MustHaveLifecycleHookName panics when the hook Name is empty (programming error).
 func MustHaveLifecycleHookName(h LifecycleHook) {
 	if h.Name == "" {
-		panic("registry Lifecycle: hook Name must not be empty (programming error)")
+		panic(errcode.Assertion("registry Lifecycle: hook Name must not be empty"))
 	}
 }
 
@@ -443,7 +445,7 @@ func (r *RegistryRecorder) OnConfigReload(
 func MustHaveNonEmptyConfigPrefixes(prefixes []string) {
 	for _, p := range prefixes {
 		if p == "" {
-			panic("registry OnConfigReload: prefixes must not contain an empty string (programming error)")
+			panic(errcode.Assertion("registry OnConfigReload: prefixes must not contain an empty string"))
 		}
 	}
 }
@@ -451,7 +453,7 @@ func MustHaveNonEmptyConfigPrefixes(prefixes []string) {
 // MustHaveNonNilConfigReloadFn panics when fn is nil (programming error).
 func MustHaveNonNilConfigReloadFn(fn func(context.Context, ConfigChangeEvent) error) {
 	if fn == nil {
-		panic("registry OnConfigReload: fn must not be nil (programming error)")
+		panic(errcode.Assertion("registry OnConfigReload: fn must not be nil"))
 	}
 }
 
@@ -495,6 +497,6 @@ func (r *RegistryRecorder) mustNotBeFinalized(method string) {
 // MustNotBeRegistryFinalized panics when finalized is true (programming error).
 func MustNotBeRegistryFinalized(finalized bool, method string) {
 	if finalized {
-		panic("registry " + method + ": called after Snapshot() — registration must happen during Cell.Init (programming error)")
+		panic(errcode.Assertion("registry %s: called after Snapshot() — registration must happen during Cell.Init", method))
 	}
 }

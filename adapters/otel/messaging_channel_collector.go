@@ -2,6 +2,7 @@ package otel
 
 import (
 	"context"
+	"log/slog"
 
 	"go.opentelemetry.io/otel/attribute"
 	otelmetric "go.opentelemetry.io/otel/metric"
@@ -79,7 +80,8 @@ func RegisterMessagingChannelMetrics(meter otelmetric.Meter, statters []Messagin
 	)
 	if err != nil {
 		return nil, errcode.Wrap(errcode.KindInternal, ErrAdapterOTelInit,
-			"otel messaging channel collector: create "+metricNameChannelCount, err)
+			"otel messaging channel collector: create counter failed", err,
+			errcode.WithDetails(slog.String("metric", metricNameChannelCount)))
 	}
 	chanMax, err := meter.Int64ObservableUpDownCounter(
 		metricNameChannelMax,
@@ -88,7 +90,8 @@ func RegisterMessagingChannelMetrics(meter otelmetric.Meter, statters []Messagin
 	)
 	if err != nil {
 		return nil, errcode.Wrap(errcode.KindInternal, ErrAdapterOTelInit,
-			"otel messaging channel collector: create "+metricNameChannelMax, err)
+			"otel messaging channel collector: create counter failed", err,
+			errcode.WithDetails(slog.String("metric", metricNameChannelMax)))
 	}
 
 	reg, err := meter.RegisterCallback(

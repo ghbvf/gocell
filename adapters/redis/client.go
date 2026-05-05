@@ -3,7 +3,6 @@ package redis
 import (
 	"context"
 	"crypto/tls"
-	"fmt"
 	"log/slog"
 	"net/url"
 	"runtime"
@@ -376,7 +375,7 @@ func buildStandaloneOptions(cfg Config) (*goredis.Options, error) {
 	parsed, err := goredis.ParseURL(cfg.Addr)
 	if err != nil {
 		return nil, errcode.Wrap(errcode.KindInternal, ErrAdapterRedisConnect,
-			fmt.Sprintf("redis: invalid Addr URL %q", cfg.Addr), err)
+			"redis: invalid Addr URL", err)
 	}
 	base.Addr = parsed.Addr
 	base.TLSConfig = parsed.TLSConfig
@@ -449,7 +448,7 @@ func appendFailoverURL(base *goredis.FailoverOptions, addr string) error {
 	parsed, err := goredis.ParseFailoverURL(addr)
 	if err != nil {
 		return errcode.Wrap(errcode.KindInternal, ErrAdapterRedisConnect,
-			fmt.Sprintf("redis: invalid SentinelAddrs URL %q", addr), err)
+			"redis: invalid SentinelAddrs URL", err)
 	}
 	if len(base.SentinelAddrs) > 0 && ((base.TLSConfig == nil) != (parsed.TLSConfig == nil)) {
 		return errcode.New(errcode.KindInternal, ErrAdapterRedisConnect,
@@ -465,7 +464,7 @@ func appendFailoverURL(base *goredis.FailoverOptions, addr string) error {
 	}
 	if len(parsed.SentinelAddrs) != 1 {
 		return errcode.New(errcode.KindInternal, ErrAdapterRedisConnect,
-			fmt.Sprintf("redis: invalid SentinelAddrs URL %q", addr))
+			"redis: invalid SentinelAddrs URL: expected exactly one sentinel address")
 	}
 	base.SentinelAddrs = append(base.SentinelAddrs, parsed.SentinelAddrs[0])
 	return nil
@@ -504,7 +503,8 @@ func mergeFailoverStringField(dst *string, incoming, name string) error {
 	}
 	if *dst != "" {
 		return errcode.New(errcode.KindInternal, ErrAdapterRedisConnect,
-			fmt.Sprintf("redis: conflicting Sentinel URL %s values", name))
+			"redis: conflicting Sentinel URL field values",
+			errcode.WithDetails(slog.String("field", name)))
 	}
 	*dst = incoming
 	return nil
@@ -516,7 +516,8 @@ func mergeFailoverIntField(dst *int, incoming int, name string) error {
 	}
 	if *dst != 0 {
 		return errcode.New(errcode.KindInternal, ErrAdapterRedisConnect,
-			fmt.Sprintf("redis: conflicting Sentinel URL %s values", name))
+			"redis: conflicting Sentinel URL field values",
+			errcode.WithDetails(slog.String("field", name)))
 	}
 	*dst = incoming
 	return nil
@@ -584,7 +585,7 @@ func appendClusterURL(base *goredis.ClusterOptions, addr string) error {
 	parsed, err := goredis.ParseClusterURL(addr)
 	if err != nil {
 		return errcode.Wrap(errcode.KindInternal, ErrAdapterRedisConnect,
-			fmt.Sprintf("redis: invalid ClusterAddrs URL %q", addr), err)
+			"redis: invalid ClusterAddrs URL", err)
 	}
 	if len(base.Addrs) > 0 && ((base.TLSConfig == nil) != (parsed.TLSConfig == nil)) {
 		return errcode.New(errcode.KindInternal, ErrAdapterRedisConnect,
@@ -602,7 +603,7 @@ func appendClusterURL(base *goredis.ClusterOptions, addr string) error {
 	}
 	if len(parsed.Addrs) != 1 {
 		return errcode.New(errcode.KindInternal, ErrAdapterRedisConnect,
-			fmt.Sprintf("redis: invalid ClusterAddrs URL %q", addr))
+			"redis: invalid ClusterAddrs URL: expected exactly one cluster address")
 	}
 	base.Addrs = append(base.Addrs, parsed.Addrs[0])
 	return nil
@@ -621,7 +622,8 @@ func mergeClusterStringField(dst *string, incoming, name string) error {
 	}
 	if *dst != "" {
 		return errcode.New(errcode.KindInternal, ErrAdapterRedisConnect,
-			fmt.Sprintf("redis: conflicting Cluster URL %s values", name))
+			"redis: conflicting Cluster URL field values",
+			errcode.WithDetails(slog.String("field", name)))
 	}
 	*dst = incoming
 	return nil
@@ -631,7 +633,8 @@ func mergeClusterStringField(dst *string, incoming, name string) error {
 func (c *Client) Health(ctx context.Context) error {
 	if err := c.rdb.Ping(ctx).Err(); err != nil {
 		return errcode.Wrap(errcode.KindInternal, ErrAdapterRedisConnect,
-			fmt.Sprintf("redis: health check failed (mode=%s)", c.config.Mode), err)
+			"redis: health check failed", err,
+			errcode.WithDetails(slog.String("mode", string(c.config.Mode))))
 	}
 	return nil
 }

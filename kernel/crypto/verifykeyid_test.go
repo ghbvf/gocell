@@ -1,10 +1,12 @@
 package crypto_test
 
 import (
+	"errors"
 	"strings"
 	"testing"
 
 	kcrypto "github.com/ghbvf/gocell/kernel/crypto"
+	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
 // ---------------------------------------------------------------------------
@@ -88,7 +90,13 @@ func TestParseKeyID(t *testing.T) {
 				if err == nil {
 					t.Fatalf("ParseKeyID(%q): expected error containing %q, got nil", tc.keyID, tc.wantErrContains)
 				}
-				if !strings.Contains(err.Error(), tc.wantErrContains) {
+				var ecErr *errcode.Error
+				if errors.As(err, &ecErr) {
+					full := ecErr.Message + " " + ecErr.InternalMessage
+					if !strings.Contains(full, tc.wantErrContains) {
+						t.Fatalf("ParseKeyID(%q): error message+internal %q does not contain %q", tc.keyID, full, tc.wantErrContains)
+					}
+				} else if !strings.Contains(err.Error(), tc.wantErrContains) {
 					t.Fatalf("ParseKeyID(%q): error %q does not contain %q", tc.keyID, err.Error(), tc.wantErrContains)
 				}
 				return
@@ -179,7 +187,14 @@ func TestMatchKeyID(t *testing.T) {
 					t.Fatalf("MatchKeyID(%q, %q): expected error containing %q, got nil",
 						tc.handleID, tc.edkKeyID, tc.wantErrContains)
 				}
-				if !strings.Contains(err.Error(), tc.wantErrContains) {
+				var ecErr *errcode.Error
+				if errors.As(err, &ecErr) {
+					full := ecErr.Message + " " + ecErr.InternalMessage
+					if !strings.Contains(full, tc.wantErrContains) {
+						t.Fatalf("MatchKeyID(%q, %q): error message+internal %q does not contain %q",
+							tc.handleID, tc.edkKeyID, full, tc.wantErrContains)
+					}
+				} else if !strings.Contains(err.Error(), tc.wantErrContains) {
 					t.Fatalf("MatchKeyID(%q, %q): error %q does not contain %q",
 						tc.handleID, tc.edkKeyID, err.Error(), tc.wantErrContains)
 				}

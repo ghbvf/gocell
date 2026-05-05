@@ -384,7 +384,8 @@ func (s *PGOutboxStore) OldestEligibleAt(ctx context.Context, status string) (ti
 		col = "dead_at"
 	default:
 		return time.Time{}, false, errcode.New(errcode.KindInternal, ErrAdapterPGQuery,
-			fmt.Sprintf("OldestEligibleAt: invalid status %q (want published or dead)", status))
+			"OldestEligibleAt: invalid status",
+			errcode.WithInternal(fmt.Sprintf("status=%q want published or dead", status)))
 	}
 
 	// Inline status as a literal (validated by the switch above) so we don't

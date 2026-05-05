@@ -375,6 +375,6 @@ func requireStartStateGuardError(t *testing.T, err error) {
 	var ec *errcode.Error
 	require.Truef(t, errors.As(err, &ec), "Start error must be errcode.Error, got %T: %v", err, err)
 	assert.Equal(t, errcode.ErrValidationFailed, ec.Code)
-	assert.Truef(t, strings.Contains(err.Error(), "cannot start in state"),
+	assert.Truef(t, strings.Contains(ec.Message, "cannot start in current state"),
 		"Start error must describe the guarded lifecycle state, got: %v", err)
 }

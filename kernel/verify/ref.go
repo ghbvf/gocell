@@ -33,7 +33,8 @@ func resolveRef(ref string) (resolvedRef, error) {
 	parts := strings.SplitN(ref, ".", 3)
 	if len(parts) < 3 || parts[0] == "" || parts[1] == "" || parts[2] == "" {
 		return resolvedRef{}, errcode.New(errcode.KindInvalid, errcode.ErrCheckRefInvalid,
-			fmt.Sprintf("ref %q must have at least 3 non-empty dot-separated segments", ref))
+			"ref must have at least 3 non-empty dot-separated segments",
+			errcode.WithInternal(fmt.Sprintf("ref=%q", ref)))
 	}
 
 	prefix := parts[0]
@@ -91,7 +92,8 @@ func resolveRef(ref string) (resolvedRef, error) {
 
 	default:
 		return resolvedRef{}, errcode.New(errcode.KindInvalid, errcode.ErrCheckRefInvalid,
-			fmt.Sprintf("ref %q has unknown prefix %q (expected journey, smoke, unit, or contract)", ref, prefix))
+			"ref has unknown prefix (expected journey, smoke, unit, or contract)",
+			errcode.WithInternal(fmt.Sprintf("ref=%q prefix=%q", ref, prefix)))
 	}
 }
 
@@ -103,7 +105,8 @@ func JourneyRefScope(ref string) (string, error) {
 	}
 	if resolved.Kind != PrefixJourney {
 		return "", errcode.New(errcode.KindInvalid, errcode.ErrCheckRefInvalid,
-			fmt.Sprintf("journey checkRef %q must use journey prefix", ref))
+			"journey checkRef must use journey prefix",
+			errcode.WithInternal(fmt.Sprintf("ref=%q", ref)))
 	}
 	return resolved.Scope, nil
 }
@@ -112,7 +115,8 @@ func JourneyRefScope(ref string) (string, error) {
 func validateSegment(s, field string) error {
 	if s == "" || s == "." || strings.Contains(s, "..") || strings.ContainsAny(s, `/\`) {
 		return errcode.New(errcode.KindInvalid, errcode.ErrCheckRefInvalid,
-			fmt.Sprintf("%s %q contains path traversal or separator", field, s))
+			"ref field contains path traversal or separator",
+			errcode.WithInternal(fmt.Sprintf("field=%s value=%q", field, s)))
 	}
 	return nil
 }

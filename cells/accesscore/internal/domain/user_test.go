@@ -32,7 +32,7 @@ func TestNewUser(t *testing.T) {
 			email:        "alice@example.com",
 			passwordHash: "$2a$10$hash",
 			wantErr:      true,
-			errMsg:       "username is required",
+			errMsg:       "username",
 		},
 		{
 			name:         "empty email",
@@ -40,7 +40,7 @@ func TestNewUser(t *testing.T) {
 			email:        "",
 			passwordHash: "$2a$10$hash",
 			wantErr:      true,
-			errMsg:       "email is required",
+			errMsg:       "email",
 		},
 		{
 			name:         "empty passwordHash",
@@ -48,7 +48,7 @@ func TestNewUser(t *testing.T) {
 			email:        "alice@example.com",
 			passwordHash: "",
 			wantErr:      true,
-			errMsg:       "passwordHash is required",
+			errMsg:       "passwordHash",
 		},
 	}
 
@@ -64,7 +64,16 @@ func TestNewUser(t *testing.T) {
 				require.ErrorAs(t, err, &coded, "expected an errcode.Error")
 				assert.Equal(t, errcode.ErrAuthInvalidInput, coded.Code,
 					"NewUser must surface ErrAuthInvalidInput on blank fields")
-				assert.Contains(t, err.Error(), tt.errMsg)
+				assert.Equal(t, "validation: required field missing", coded.Message,
+					"message must be a const literal")
+				var gotField string
+				for _, attr := range coded.Details {
+					if attr.Key == "field" {
+						gotField = attr.Value.String()
+						break
+					}
+				}
+				assert.Equal(t, tt.errMsg, gotField, "details must carry the field name")
 				assert.Nil(t, user)
 				return
 			}

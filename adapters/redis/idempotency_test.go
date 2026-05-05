@@ -2,6 +2,7 @@ package redis
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"testing"
 	"time"
@@ -10,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/ghbvf/gocell/kernel/idempotency"
+	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 )
 
@@ -41,8 +43,9 @@ func TestIdempotencyClaimer_RejectsInvalidKey(t *testing.T) {
 		t.Run(badKey, func(t *testing.T) {
 			_, _, err := claimer.Claim(ctx, badKey, testtime.D5min, testtime.D24h)
 			require.Error(t, err)
-			assert.Contains(t, err.Error(), "ERR_ADAPTER_REDIS_SET")
-			assert.Contains(t, err.Error(), "must be non-empty and free of")
+			var ecErrKey *errcode.Error
+			require.True(t, errors.As(err, &ecErrKey))
+			assert.Contains(t, ecErrKey.Message+" "+ecErrKey.InternalMessage, "must be non-empty and free of")
 		})
 	}
 }

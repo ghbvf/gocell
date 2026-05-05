@@ -111,7 +111,7 @@ func NewBaseCell(meta *metadata.CellMeta) (*BaseCell, error) {
 func MustNewBaseCell(meta *metadata.CellMeta) *BaseCell {
 	c, err := NewBaseCell(meta)
 	if err != nil {
-		panic(fmt.Sprintf("cell.MustNewBaseCell: %v", err))
+		panic(errcode.Assertion("cell.MustNewBaseCell: %v", err))
 	}
 	return c
 }
@@ -159,7 +159,8 @@ func (b *BaseCell) Init(_ context.Context, _ Registry) error {
 	defer b.mu.Unlock()
 	if b.state != cellStateNew && b.state != cellStateStopped {
 		return errcode.New(errcode.KindInvalid, errcode.ErrLifecycleInvalid,
-			fmt.Sprintf("cell %q: Init requires state new or stopped, current state: %d", b.meta.ID, b.state))
+			"cell Init requires state new or stopped",
+			errcode.WithInternal(fmt.Sprintf("cell=%q state=%d", b.meta.ID, b.state)))
 	}
 	// Reset shutdown context from previous lifecycle to avoid stale cancellation.
 	if b.shutdownCancel != nil {
@@ -179,7 +180,8 @@ func (b *BaseCell) Start(ctx context.Context) error {
 	defer b.mu.Unlock()
 	if b.state != cellStateInitialized {
 		return errcode.New(errcode.KindInvalid, errcode.ErrLifecycleInvalid,
-			fmt.Sprintf("cell %q: Start requires state initialized, current state: %d", b.meta.ID, b.state))
+			"cell Start requires state initialized",
+			errcode.WithInternal(fmt.Sprintf("cell=%q state=%d", b.meta.ID, b.state)))
 	}
 	b.shutdownCtx, b.shutdownCancel = context.WithCancel(context.WithoutCancel(ctx))
 	b.state = cellStateStarted

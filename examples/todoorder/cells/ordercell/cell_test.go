@@ -3,6 +3,7 @@ package ordercell
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -119,7 +120,9 @@ func TestOrderCell_InitDefaults(t *testing.T) {
 			err := c.Init(context.Background(), newTestRec())
 			if tt.wantErr {
 				require.Error(t, err)
-				assert.Contains(t, err.Error(), "outboxWriter and txRunner")
+				var ecErrHalf *errcode.Error
+				require.True(t, errors.As(err, &ecErrHalf))
+				assert.Contains(t, ecErrHalf.Message+" "+ecErrHalf.InternalMessage, "outboxWriter and txRunner")
 				return
 			}
 			require.NoError(t, err)
@@ -132,7 +135,9 @@ func TestOrderCell_DefaultInit_DemoModeRequiresExplicitOutboxPair(t *testing.T) 
 	c := NewOrderCell()
 	err := c.Init(context.Background(), newTestRec())
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "outboxWriter and txRunner")
+	var ecErrDefault *errcode.Error
+	require.True(t, errors.As(err, &ecErrDefault))
+	assert.Contains(t, ecErrDefault.Message+" "+ecErrDefault.InternalMessage, "outboxWriter and txRunner")
 }
 
 func TestOrderCell_DemoMode_RejectsHalfConfiguredPath(t *testing.T) {
@@ -155,7 +160,9 @@ func TestOrderCell_DemoMode_RejectsHalfConfiguredPath(t *testing.T) {
 			c := NewOrderCell(tt.opts...)
 			err := c.Init(context.Background(), newTestRec())
 			require.Error(t, err)
-			assert.Contains(t, err.Error(), "outboxWriter and txRunner")
+			var ecErrReject *errcode.Error
+			require.True(t, errors.As(err, &ecErrReject))
+			assert.Contains(t, ecErrReject.Message+" "+ecErrReject.InternalMessage, "outboxWriter and txRunner")
 		})
 	}
 }
@@ -167,7 +174,9 @@ func TestOrderCell_DurableMode_RejectsNoopWriter(t *testing.T) {
 	)
 	err := c.Init(context.Background(), cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDurable))
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "durable mode rejects")
+	var ecErrNoopWriter *errcode.Error
+	require.True(t, errors.As(err, &ecErrNoopWriter))
+	assert.Contains(t, ecErrNoopWriter.Message+" "+ecErrNoopWriter.InternalMessage, "durable mode")
 }
 
 // TestOrderCell_DurableMode_RejectsMissingCursorCodec locks the fail-fast

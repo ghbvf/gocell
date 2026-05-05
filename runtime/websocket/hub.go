@@ -3,6 +3,7 @@ package websocket
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"maps"
 	"sync"
@@ -687,8 +688,7 @@ func (h *Hub) Unregister(connID string) {
 func (h *Hub) BroadcastFilter(ctx context.Context, data []byte, filter func(Conn) bool) error {
 	if filter == nil {
 		return errcode.New(errcode.KindInternal, errcode.ErrWebsocketBroadcastFilterMissing,
-			"websocket: BroadcastFilter requires a non-nil filter; "+
-				"use func(Conn) bool { return true } for full broadcast")
+			"websocket: BroadcastFilter requires a non-nil filter; use func(Conn) bool { return true } for full broadcast")
 	}
 
 	// Snapshot entries under lock; run filter outside lock to avoid
@@ -778,7 +778,8 @@ func (h *Hub) Send(ctx context.Context, connID string, data []byte) error {
 
 	if !ok {
 		return errcode.New(errcode.KindNotFound, errcode.ErrWSConnNotFound,
-			"websocket: connection not found: "+connID)
+			"websocket: connection not found",
+			errcode.WithInternal(fmt.Sprintf("conn_id=%s", connID)))
 	}
 
 	select {
@@ -788,13 +789,15 @@ func (h *Hub) Send(ctx context.Context, connID string, data []byte) error {
 		return nil
 	case <-entry.done:
 		return errcode.New(errcode.KindUnavailable, errcode.ErrWSConnNotFound,
-			"websocket: connection "+connID+" already evicted")
+			"websocket: connection already evicted",
+			errcode.WithInternal(fmt.Sprintf("conn_id=%s", connID)))
 	default:
 		h.evictWith(entry, "send_buffer_full", slog.LevelWarn,
 			"websocket hub: slow client evicted, send buffer full",
 			"websocket hub: close on slow-client evict")
 		return errcode.New(errcode.KindUnavailable, errcode.ErrWebsocketSlowClient,
-			"websocket: connection "+connID+" send buffer full, evicted")
+			"websocket: connection send buffer full, evicted",
+			errcode.WithInternal(fmt.Sprintf("conn_id=%s", connID)))
 	}
 }
 

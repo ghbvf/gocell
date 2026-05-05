@@ -2,8 +2,11 @@ package auth
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
 func TestPrincipalKind_String(t *testing.T) {
@@ -97,9 +100,13 @@ func TestMustFromContext_Panics(t *testing.T) {
 		if r == nil {
 			t.Fatal("expected panic")
 		}
-		msg, ok := r.(string)
-		if !ok || msg != "auth: principal not in context" {
-			t.Errorf("unexpected panic value: %v", r)
+		ecErr, ok := r.(*errcode.Error)
+		if !ok {
+			t.Errorf("expected *errcode.Error panic value, got %T: %v", r, r)
+			return
+		}
+		if !strings.Contains(ecErr.Message, "auth: principal not in context") {
+			t.Errorf("unexpected panic message: %s", ecErr.Message)
 		}
 	}()
 	MustFromContext(context.Background())

@@ -4,8 +4,9 @@
 package errcode
 
 import (
+	"encoding/json"
 	"fmt"
-	"maps"
+	"log/slog"
 )
 
 // Code is a typed error code string.
@@ -606,17 +607,27 @@ func WithInternal(message string) Option {
 	}
 }
 
-// WithDetails attaches structured, client-visible details. Response writers
-// strip details from 5xx errors.
-func WithDetails(details map[string]any) Option {
+// WithDetails attaches structured, client-visible details as typed slog.Attr
+// values. The framework's HTTP response writer renders 4xx errors with the
+// attribute list as a JSON array of {"key","value"} objects, and strips the
+// list from 5xx errors so server-side runtime context never leaks to clients.
+//
+// Use slog.String / slog.Int / slog.Bool / slog.Group / slog.Any to construct
+// attributes — the typed signature replaces the legacy map[string]any form so
+// the compiler enforces structured logging conventions across all callers.
+//
+// Multiple WithDetails calls accumulate; attributes are appended in call order.
+//
+// Example:
+//
+//	errcode.New(KindNotFound, ErrCellNotFound, "cell not found",
+//	    errcode.WithDetails(slog.String("cellId", id)))
+func WithDetails(attrs ...slog.Attr) Option {
 	return func(e *Error) {
-		if len(details) == 0 {
+		if len(attrs) == 0 {
 			return
 		}
-		if e.Details == nil {
-			e.Details = make(map[string]any, len(details))
-		}
-		maps.Copy(e.Details, details)
+		e.Details = append(e.Details, attrs...)
 	}
 }
 
@@ -635,9 +646,62 @@ type Error struct {
 	Code            Code
 	Message         string
 	InternalMessage string
-	Details         map[string]any
+	Details         []slog.Attr
 	Cause           error
 	Category        Category
+}
+
+// FindAttr returns the first detail attribute whose Key matches key, or the
+// zero slog.Attr and false when no such attribute exists. It is intended for
+// callers that need to read back a single typed detail (for example,
+// ctxcancel.ReasonFromDetails) without exposing the raw attr slice across
+// package boundaries.
+func (e *Error) FindAttr(key string) (slog.Attr, bool) {
+	if e == nil {
+		return slog.Attr{}, false
+	}
+	for _, attr := range e.Details {
+		if attr.Key == key {
+			return attr, true
+		}
+	}
+	return slog.Attr{}, false
+}
+
+// MarshalJSON renders e in the wire form expected by
+// contracts/shared/errors/error-response-v1.schema.json:
+//
+//	{"code":"ERR_X","message":"...","details":[{"key":"k","value":v}, ...]}
+//
+// Server-side errors (Kind.IsClient() == false, i.e. HTTP 5xx) emit an empty
+// details array regardless of attached attributes — this is the single
+// source-of-truth strip rule for runtime context that must never reach a
+// client. InternalMessage and Cause are never marshaled because they may
+// contain sensitive runtime data.
+func (e *Error) MarshalJSON() ([]byte, error) {
+	type kv struct {
+		Key   string `json:"key"`
+		Value any    `json:"value"`
+	}
+	wire := struct {
+		Code    Code   `json:"code"`
+		Message string `json:"message"`
+		Details []kv   `json:"details"`
+	}{
+		Code:    e.Code,
+		Message: e.Message,
+		Details: []kv{},
+	}
+	if e.Kind.IsClient() {
+		wire.Details = make([]kv, 0, len(e.Details))
+		for _, attr := range e.Details {
+			wire.Details = append(wire.Details, kv{
+				Key:   attr.Key,
+				Value: attr.Value.Any(),
+			})
+		}
+	}
+	return json.Marshal(wire)
 }
 
 // Error returns a formatted string representation for logging/diagnostics.
@@ -679,7 +743,34 @@ func (e *Error) PublicCode() Code {
 	return e.Kind.PublicCode()
 }
 
+// Assertion constructs an *Error tagged as a programmer-error / impossible
+// path. It is the canonical replacement for `panic(fmt.Sprintf("...", err))`
+// patterns across production code: callers panic with the returned *Error so
+// the kernel recovery middleware can surface a 500 with category=infra and a
+// stable ErrInternal code, while the formatted text is preserved for logs and
+// traces via Error.Error().
+//
+// Behaviour:
+//   - Kind = KindInternal (HTTP 500)
+//   - Code = ErrInternal (single sentinel for unrecoverable assertions)
+//   - Category = CategoryInfra (treated as infrastructure for IsInfraError)
+//   - Message = fmt.Sprintf(format, args...) — the formatted assertion text
+//
+// The formatted Message intentionally carries runtime data because Assertion
+// indicates an impossible state that has already been reached: there is no
+// safe way to render the failure without it. The kernel recovery layer maps
+// this to ErrInternal before the response leaves the process, so end users
+// receive only the public ErrInternal code.
+func Assertion(format string, args ...any) *Error {
+	return New(KindInternal, ErrInternal, fmt.Sprintf(format, args...), WithCategory(CategoryInfra))
+}
+
 // New creates an *Error with an explicit transport kind.
+//
+// The message argument must be a compile-time const literal — runtime
+// information belongs in WithDetails (typed, client-visible) or
+// WithInternal (server-side only). archtest MESSAGE-CONST-LITERAL-01
+// statically enforces this rule outside the errcode package.
 func New(kind Kind, code Code, message string, opts ...Option) *Error {
 	e := &Error{
 		Kind:    kind,
@@ -695,6 +786,8 @@ func New(kind Kind, code Code, message string, opts ...Option) *Error {
 }
 
 // Wrap creates an *Error with an explicit transport kind and wrapped cause.
+//
+// The same const-literal restriction documented on New applies to message.
 func Wrap(kind Kind, code Code, message string, cause error, opts ...Option) *Error {
 	e := New(kind, code, message, opts...)
 	e.Cause = cause

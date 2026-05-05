@@ -53,8 +53,9 @@ func (r *SessionRepository) GetByID(_ context.Context, id string) (*domain.Sessi
 
 	s, ok := r.byID[id]
 	if !ok {
-		return nil, errcode.New(errcode.KindNotFound, errcode.ErrSessionNotFound, "session not found: "+id,
-			errcode.WithCategory(errcode.CategoryDomain))
+		return nil, errcode.New(errcode.KindNotFound, errcode.ErrSessionNotFound, "session not found",
+			errcode.WithCategory(errcode.CategoryDomain),
+			errcode.WithInternal(fmt.Sprintf("id=%s", id)))
 	}
 	clone := *s
 	return &clone, nil
@@ -66,8 +67,9 @@ func (r *SessionRepository) Update(_ context.Context, session *domain.Session) e
 
 	old, ok := r.byID[session.ID]
 	if !ok {
-		return errcode.New(errcode.KindNotFound, errcode.ErrSessionNotFound, "session not found: "+session.ID,
-			errcode.WithCategory(errcode.CategoryDomain))
+		return errcode.New(errcode.KindNotFound, errcode.ErrSessionNotFound, "session not found",
+			errcode.WithCategory(errcode.CategoryDomain),
+			errcode.WithInternal(fmt.Sprintf("id=%s", session.ID)))
 	}
 
 	// Optimistic lock: reject if version mismatch.
@@ -90,8 +92,9 @@ func (r *SessionRepository) RevokeByIDAndOwner(_ context.Context, id, ownerUserI
 
 	s, ok := r.byID[id]
 	if !ok || s.UserID != ownerUserID {
-		return errcode.New(errcode.KindNotFound, errcode.ErrSessionNotFound, "session not found: "+id,
-			errcode.WithCategory(errcode.CategoryDomain))
+		return errcode.New(errcode.KindNotFound, errcode.ErrSessionNotFound, "session not found",
+			errcode.WithCategory(errcode.CategoryDomain),
+			errcode.WithInternal(fmt.Sprintf("id=%s", id)))
 	}
 	s.Revoke(r.clock.Now())
 	return nil
@@ -116,8 +119,9 @@ func (r *SessionRepository) Delete(_ context.Context, id string) error {
 
 	_, ok := r.byID[id]
 	if !ok {
-		return errcode.New(errcode.KindNotFound, errcode.ErrSessionNotFound, "session not found: "+id,
-			errcode.WithCategory(errcode.CategoryDomain))
+		return errcode.New(errcode.KindNotFound, errcode.ErrSessionNotFound, "session not found",
+			errcode.WithCategory(errcode.CategoryDomain),
+			errcode.WithInternal(fmt.Sprintf("id=%s", id)))
 	}
 	delete(r.byID, id)
 	return nil

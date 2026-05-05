@@ -2,7 +2,7 @@ package outbox
 
 import (
 	"context"
-	"fmt"
+	"log/slog"
 	"strings"
 
 	"github.com/ghbvf/gocell/pkg/ctxkeys"
@@ -63,7 +63,8 @@ func (o ObservabilityMetadata) Validate() error {
 	}
 	if o.TraceParent != "" && !validTraceParent(o.TraceParent) {
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-			fmt.Sprintf("outbox: observability.traceParent is not a valid W3C traceparent (length=%d)", len(o.TraceParent)))
+			"outbox: observability.traceParent is not a valid W3C traceparent",
+			errcode.WithDetails(slog.Int("length", len(o.TraceParent))))
 	}
 	if err := validateObservabilityID("requestId", o.RequestID); err != nil {
 		return err
@@ -74,7 +75,8 @@ func (o ObservabilityMetadata) Validate() error {
 	total := len(o.TraceID) + len(o.TraceParent) + len(o.RequestID) + len(o.CorrelationID)
 	if total > MaxObservabilityTotalSize {
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-			fmt.Sprintf("outbox: observability total size %d exceeds max %d", total, MaxObservabilityTotalSize))
+			"outbox: observability total size exceeds max",
+			errcode.WithDetails(slog.Int("total", total), slog.Int("max", MaxObservabilityTotalSize)))
 	}
 	return nil
 }
@@ -88,11 +90,13 @@ func validateObservabilityID(name, value string) error {
 	}
 	if len(value) > idutil.MaxMetadataIDLen {
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-			fmt.Sprintf("outbox: observability.%s length %d exceeds max %d", name, len(value), idutil.MaxMetadataIDLen))
+			"outbox: observability field length exceeds max",
+			errcode.WithDetails(slog.String("field", name), slog.Int("length", len(value)), slog.Int("max", idutil.MaxMetadataIDLen)))
 	}
 	if !idutil.IsSafeID(value) {
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-			fmt.Sprintf("outbox: observability.%s contains unsafe characters", name))
+			"outbox: observability field contains unsafe characters",
+			errcode.WithDetails(slog.String("field", name)))
 	}
 	return nil
 }

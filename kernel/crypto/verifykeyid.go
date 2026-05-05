@@ -36,7 +36,8 @@ func ParseKeyID(keyID string) (provider string, version int, err error) {
 	}
 
 	return "", 0, errcode.New(errcode.KindInternal, errcode.ErrKeyProviderDecryptFailed,
-		fmt.Sprintf("invalid keyID %q: must end with '-v{N}' or ':v{N}'", keyID))
+		"invalid keyID: must end with '-v{N}' or ':v{N}'",
+		errcode.WithInternal(fmt.Sprintf("key_id=%q", keyID)))
 }
 
 // tryParseVersionSuffix attempts to parse a version suffix from keyID using sep
@@ -55,16 +56,19 @@ func tryParseVersionSuffix(keyID, sep string) (provider string, version int, fou
 	versionStr := keyID[idx+len(sep):]
 	if provider == "" {
 		return "", 0, true, errcode.New(errcode.KindInternal, errcode.ErrKeyProviderDecryptFailed,
-			fmt.Sprintf("invalid keyID %q: empty provider before %q", keyID, sep))
+			"invalid keyID: empty provider before separator",
+			errcode.WithInternal(fmt.Sprintf("key_id=%q sep=%q", keyID, sep)))
 	}
 	v, parseErr := strconv.Atoi(versionStr)
 	if parseErr != nil {
 		return "", 0, true, errcode.New(errcode.KindInternal, errcode.ErrKeyProviderDecryptFailed,
-			fmt.Sprintf("invalid keyID %q: non-numeric version %q", keyID, versionStr))
+			"invalid keyID: non-numeric version",
+			errcode.WithInternal(fmt.Sprintf("key_id=%q version=%q", keyID, versionStr)))
 	}
 	if v < 0 {
 		return "", 0, true, errcode.New(errcode.KindInternal, errcode.ErrKeyProviderDecryptFailed,
-			fmt.Sprintf("invalid keyID %q: negative version %d", keyID, v))
+			"invalid keyID: negative version",
+			errcode.WithInternal(fmt.Sprintf("key_id=%q version=%d", keyID, v)))
 	}
 	return provider, v, true, nil
 }
@@ -91,7 +95,8 @@ func MatchKeyID(handleID, edkKeyID string) error {
 
 	if hp != ep || hv != ev {
 		return errcode.New(errcode.KindInternal, errcode.ErrKeyProviderDecryptFailed,
-			fmt.Sprintf("keyID mismatch: handle %q does not match edk %q", handleID, edkKeyID))
+			"keyID mismatch: handle does not match edk",
+			errcode.WithInternal(fmt.Sprintf("handle=%q edk=%q", handleID, edkKeyID)))
 	}
 	return nil
 }

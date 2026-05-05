@@ -69,13 +69,15 @@ func (g *Generator) GenerateEntrypoint(assemblyID string) ([]byte, error) {
 	asm := g.project.Assemblies[assemblyID]
 	if asm == nil {
 		return nil, errcode.New(errcode.KindNotFound, errcode.ErrAssemblyNotFound,
-			fmt.Sprintf("assembly %q not found", assemblyID))
+			"assembly not found",
+			errcode.WithInternal(fmt.Sprintf("assembly=%q", assemblyID)))
 	}
 
 	helperName, err := assemblyRunHelperName(assemblyID)
 	if err != nil {
 		return nil, errcode.Wrap(errcode.KindInvalid, errcode.ErrMetadataInvalid,
-			fmt.Sprintf("invalid assembly %q for generated run helper", assemblyID), err)
+			"invalid assembly for generated run helper", err,
+			errcode.WithInternal(fmt.Sprintf("assembly=%q", assemblyID)))
 	}
 
 	ctx := entrypointContext{
@@ -100,7 +102,8 @@ func (g *Generator) GenerateBoundary(assemblyID string) ([]byte, error) {
 	asm := g.project.Assemblies[assemblyID]
 	if asm == nil {
 		return nil, errcode.New(errcode.KindNotFound, errcode.ErrAssemblyNotFound,
-			fmt.Sprintf("assembly %q not found", assemblyID))
+			"assembly not found",
+			errcode.WithInternal(fmt.Sprintf("assembly=%q", assemblyID)))
 	}
 
 	cellSet := make(map[string]bool, len(asm.Cells))
@@ -138,12 +141,14 @@ func (g *Generator) computeBoundaryContracts(cellSet map[string]bool) (exported,
 		provider, provErr := g.contracts.Provider(contractID)
 		if provErr != nil {
 			return nil, nil, errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed,
-				fmt.Sprintf("boundary: resolve provider for %q", contractID), provErr)
+				"boundary: resolve provider failed", provErr,
+				errcode.WithInternal(fmt.Sprintf("contract=%q", contractID)))
 		}
 		consumers, consErr := g.contracts.Consumers(contractID)
 		if consErr != nil {
 			return nil, nil, errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed,
-				fmt.Sprintf("boundary: resolve consumers for %q", contractID), consErr)
+				"boundary: resolve consumers failed", consErr,
+				errcode.WithInternal(fmt.Sprintf("contract=%q", contractID)))
 		}
 		classifyBoundary(contractID, provider, consumers, cellSet, exportedSet, importedSet)
 	}
@@ -406,19 +411,22 @@ func (g *Generator) executeTemplate(name string, ctx any) ([]byte, error) {
 	content, err := gentpl.FS.ReadFile(name)
 	if err != nil {
 		return nil, errcode.Wrap(errcode.KindInvalid, errcode.ErrMetadataInvalid,
-			fmt.Sprintf("failed to read template %q", name), err)
+			"failed to read template", err,
+			errcode.WithInternal(fmt.Sprintf("template=%q", name)))
 	}
 
 	tmpl, err := template.New(name).Parse(string(content))
 	if err != nil {
 		return nil, errcode.Wrap(errcode.KindInvalid, errcode.ErrMetadataInvalid,
-			fmt.Sprintf("failed to parse template %q", name), err)
+			"failed to parse template", err,
+			errcode.WithInternal(fmt.Sprintf("template=%q", name)))
 	}
 
 	var buf bytes.Buffer
 	if err := tmpl.Execute(&buf, ctx); err != nil {
 		return nil, errcode.Wrap(errcode.KindInvalid, errcode.ErrMetadataInvalid,
-			fmt.Sprintf("failed to execute template %q", name), err)
+			"failed to execute template", err,
+			errcode.WithInternal(fmt.Sprintf("template=%q", name)))
 	}
 
 	return buf.Bytes(), nil

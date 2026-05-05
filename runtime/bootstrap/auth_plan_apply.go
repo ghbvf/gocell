@@ -58,9 +58,8 @@ func (b *Bootstrap) applyListenerAuthChain(
 			if v == nil {
 				// phase4 must have run before phase5; this is a programmer error.
 				return nil, nil, "", errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
-					fmt.Sprintf("listener %q: AuthJWTFromAssembly verifier not resolved; "+
-						"phase ordering violation: phase4 must complete before applyListenerAuthChain",
-						ref.String()))
+					"listener AuthJWTFromAssembly verifier not resolved; phase ordering violation: phase4 must complete before applyListenerAuthChain",
+					errcode.WithInternal(fmt.Sprintf("listener=%q", ref.String())))
 			}
 			authOpts, aerr := b.buildAuthRouterOptions(v)
 			if aerr != nil {
@@ -81,8 +80,8 @@ func (b *Bootstrap) applyListenerAuthChain(
 		default:
 			// Sealed interface: this branch is theoretically unreachable.
 			return nil, nil, "", errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
-				fmt.Sprintf("listener %q: unknown AuthPlan type %T (sealed interface violation)",
-					ref.String(), plan))
+				"unknown AuthPlan type (sealed interface violation)",
+				errcode.WithInternal(fmt.Sprintf("listener=%q type=%T", ref.String(), plan)))
 		}
 	}
 	describe = describeAuthChain(chain)

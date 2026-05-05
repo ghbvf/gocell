@@ -1,7 +1,7 @@
 package httputil
 
 import (
-	"fmt"
+	"log/slog"
 	"net/http"
 	"strconv"
 
@@ -33,7 +33,8 @@ func ParsePageParams(r *http.Request) (query.PageParams, error) {
 		}
 		if n > query.MaxPageSize {
 			return pr, errcode.New(errcode.KindInvalid, errcode.ErrPageSizeExceeded,
-				fmt.Sprintf("limit %d exceeds maximum %d", n, query.MaxPageSize))
+				"limit exceeds maximum page size",
+				errcode.WithDetails(slog.Int("limit", n), slog.Int("max", query.MaxPageSize)))
 		}
 		pr.Limit = n
 	}

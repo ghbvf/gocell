@@ -2,6 +2,7 @@ package pgquery
 
 import (
 	"fmt"
+	"log/slog"
 	"regexp"
 	"strings"
 
@@ -35,11 +36,13 @@ func AppendKeyset(b *Builder, params query.ListParams) error {
 	for _, col := range params.Sort {
 		if !validColumnName.MatchString(col.Name) {
 			return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-				fmt.Sprintf("keyset: invalid column name %q", col.Name))
+				"keyset: invalid column name",
+				errcode.WithInternal(fmt.Sprintf("name=%q", col.Name)))
 		}
 		if col.Direction != query.SortASC && col.Direction != query.SortDESC {
 			return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-				fmt.Sprintf("keyset: invalid direction %q, must be ASC or DESC", col.Direction))
+				"keyset: invalid sort direction",
+				errcode.WithInternal(fmt.Sprintf("direction=%q want ASC or DESC", col.Direction)))
 		}
 	}
 
@@ -154,6 +157,6 @@ func cursorInvalid(reason string) error {
 	return errcode.New(errcode.KindInvalid, errcode.ErrCursorInvalid,
 		"invalid cursor; restart from first page (client should discard stored cursor)",
 		errcode.WithInternal(reason),
-		errcode.WithDetails(map[string]any{"reason": reason}),
+		errcode.WithDetails(slog.String("reason", reason)),
 	)
 }

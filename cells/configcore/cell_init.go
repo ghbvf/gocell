@@ -155,9 +155,7 @@ func (c *ConfigCore) ensureCursorCodec(reg cell.Registry) error {
 	}
 	if reg.DurabilityMode() == cell.DurabilityDurable {
 		return errcode.New(errcode.KindInternal, errcode.ErrCellMissingCodec,
-			"configcore durable mode requires a cursor codec;"+
-				" use WithCursorCodec(query.NewCursorCodec(secret))"+
-				" — the built-in demo key is public in the source tree")
+			"configcore durable mode requires a cursor codec; use WithCursorCodec(query.NewCursorCodec(secret)) — the built-in demo key is public in the source tree")
 	}
 	// Each cell uses a distinct demo key to prevent cross-cell cursor reuse.
 	codec, err := query.NewCursorCodec([]byte("gocell-demo-CONFIG-CORE-key-32!!"))

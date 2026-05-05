@@ -173,7 +173,8 @@ func (p *LocalAESKeyProvider) ByID(_ context.Context, keyID string) (KeyHandle, 
 
 	h, ok := p.keyring[keyID]
 	if !ok {
-		return nil, errcode.New(errcode.KindInternal, errcode.ErrKeyProviderKeyNotFound, "local-aes: key not found: "+keyID)
+		return nil, errcode.New(errcode.KindInternal, errcode.ErrKeyProviderKeyNotFound, "local-aes: key not found",
+			errcode.WithInternal(fmt.Sprintf("key_id=%s", keyID)))
 	}
 	return h, nil
 }

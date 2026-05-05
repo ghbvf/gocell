@@ -94,7 +94,8 @@ func (t Topology) validate() error {
 		// allowlisted; proceed to storage coupling check.
 	default:
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-			fmt.Sprintf("unknown adapter mode %q (GOCELL_ADAPTER_MODE); known values: \"\" (unset = dev) or \"real\"", t.AdapterMode))
+			"unknown GOCELL_ADAPTER_MODE; known values: \"\" (unset = dev) or \"real\"",
+			errcode.WithInternal(fmt.Sprintf("mode=%q", t.AdapterMode)))
 	}
 
 	switch t.StorageBackend {
@@ -104,14 +105,13 @@ func (t Topology) validate() error {
 	case "postgres":
 		if t.AdapterMode != "real" {
 			return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-				"GOCELL_CELL_ADAPTER_MODE=postgres requires GOCELL_ADAPTER_MODE=real "+
-					"(real persistence demands production key loading, token-guarded "+
-					"/metrics, and token-guarded /readyz?verbose)")
+				"GOCELL_CELL_ADAPTER_MODE=postgres requires GOCELL_ADAPTER_MODE=real (real persistence demands production key loading, token-guarded /metrics, and token-guarded /readyz?verbose)")
 		}
 		return nil
 	default:
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-			fmt.Sprintf("unknown GOCELL_CELL_ADAPTER_MODE %q; known values: \"\" (unset = memory) or \"postgres\"", t.StorageBackend))
+			"unknown GOCELL_CELL_ADAPTER_MODE; known values: \"\" (unset = memory) or \"postgres\"",
+			errcode.WithInternal(fmt.Sprintf("backend=%q", t.StorageBackend)))
 	}
 }
 

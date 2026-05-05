@@ -1,12 +1,15 @@
 package metadata
 
 import (
+	"errors"
 	"testing"
 	"testing/fstest"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gopkg.in/yaml.v3"
+
+	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
 // TestParseFS_NodesPopulated verifies that ParseFS records a DocumentNode
@@ -160,7 +163,9 @@ func TestParseFS_RejectsMultiDocument(t *testing.T) {
 	}
 	_, err := NewParser(".").ParseFS(fs)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "multiple YAML documents")
+	var ecErrNodes *errcode.Error
+	require.True(t, errors.As(err, &ecErrNodes))
+	assert.Contains(t, ecErrNodes.Message+" "+ecErrNodes.InternalMessage, "multiple YAML documents")
 }
 
 // TestParseFS_AcceptsLeadingDocumentMarker: a single document preceded by the

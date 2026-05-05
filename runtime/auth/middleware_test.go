@@ -414,7 +414,7 @@ func assertErrorCode(t *testing.T, rec *httptest.ResponseRecorder, code string) 
 	// ERR_AUTH_PASSWORD_RESET_REQUIRED carries a changePasswordEndpoint hint
 	// in details (P2-10 fix). All other codes must have an empty details object.
 	if code != "ERR_AUTH_PASSWORD_RESET_REQUIRED" {
-		assert.Equal(t, map[string]any{}, errObj["details"], "canonical envelope must include empty details object")
+		assert.Equal(t, []any{}, errObj["details"], "canonical envelope must include empty details array")
 	}
 }
 

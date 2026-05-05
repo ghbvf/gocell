@@ -88,7 +88,7 @@ func MustNewService(
 ) *Service {
 	s, err := NewService(sessionRepo, refreshStore, logger, opts...)
 	if err != nil {
-		panic(err.Error())
+		panic(errcode.Assertion("sessionlogout: invariant violated: %v", err))
 	}
 	return s
 }

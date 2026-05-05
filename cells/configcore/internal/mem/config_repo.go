@@ -42,7 +42,8 @@ func (r *ConfigRepository) Create(_ context.Context, entry *domain.ConfigEntry) 
 	defer r.mu.Unlock()
 
 	if _, exists := r.entries[entry.Key]; exists {
-		return errcode.New(errcode.KindConflict, errcode.ErrConfigDuplicate, "config key already exists: "+entry.Key)
+		return errcode.New(errcode.KindConflict, errcode.ErrConfigDuplicate, "config key already exists",
+			errcode.WithInternal(fmt.Sprintf("key=%q", entry.Key)))
 	}
 	clone := *entry
 	r.entries[entry.Key] = &clone
@@ -55,7 +56,8 @@ func (r *ConfigRepository) GetByKey(_ context.Context, key string) (*domain.Conf
 
 	entry, ok := r.entries[key]
 	if !ok {
-		return nil, errcode.New(errcode.KindNotFound, errcode.ErrConfigNotFound, "config not found: "+key)
+		return nil, errcode.New(errcode.KindNotFound, errcode.ErrConfigNotFound, "config not found",
+			errcode.WithInternal(fmt.Sprintf("key=%q", key)))
 	}
 	clone := *entry
 	return &clone, nil
@@ -67,7 +69,8 @@ func (r *ConfigRepository) Update(_ context.Context, key string, value string) (
 
 	existing, ok := r.entries[key]
 	if !ok {
-		return nil, errcode.New(errcode.KindNotFound, errcode.ErrConfigNotFound, "config not found: "+key)
+		return nil, errcode.New(errcode.KindNotFound, errcode.ErrConfigNotFound, "config not found",
+			errcode.WithInternal(fmt.Sprintf("key=%q", key)))
 	}
 	existing.Value = value
 	// Preserve existing Sensitive — do NOT change it.
@@ -83,7 +86,8 @@ func (r *ConfigRepository) UpdateForRollback(_ context.Context, key string, valu
 
 	existing, ok := r.entries[key]
 	if !ok {
-		return nil, errcode.New(errcode.KindNotFound, errcode.ErrConfigNotFound, "config not found: "+key)
+		return nil, errcode.New(errcode.KindNotFound, errcode.ErrConfigNotFound, "config not found",
+			errcode.WithInternal(fmt.Sprintf("key=%q", key)))
 	}
 	existing.Value = value
 	existing.Sensitive = sensitive
@@ -99,7 +103,8 @@ func (r *ConfigRepository) Delete(_ context.Context, key string) (*domain.Config
 
 	existing, ok := r.entries[key]
 	if !ok {
-		return nil, errcode.New(errcode.KindNotFound, errcode.ErrConfigNotFound, "config not found: "+key)
+		return nil, errcode.New(errcode.KindNotFound, errcode.ErrConfigNotFound, "config not found",
+			errcode.WithInternal(fmt.Sprintf("key=%q", key)))
 	}
 	clone := *existing
 	delete(r.entries, key)

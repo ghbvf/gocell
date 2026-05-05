@@ -652,9 +652,9 @@ func TestReadyz_VerboseToken_StrictDeny(t *testing.T) {
 				errField := errorBody(t, rec)
 				assert.Equal(t, string(errcode.ErrReadyzVerboseDenied), errField["code"])
 				assert.Contains(t, errField["message"].(string), "X-Readyz-Token")
-				_, hasDetails := errField["details"].(map[string]any)
+				_, hasDetails := errField["details"].([]any)
 				assert.True(t, hasDetails,
-					"denied envelope must include the standard details map (may be empty)")
+					"denied envelope must include the standard details array (may be empty)")
 				return
 			}
 

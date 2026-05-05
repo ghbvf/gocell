@@ -46,9 +46,9 @@ func TestSharedErrorSchema_ValidSamples(t *testing.T) {
 	schema := loadSharedErrorSchema(t)
 
 	valid := []string{
-		`{"error":{"code":"ERR_AUTH_INVALID_TOKEN","message":"token expired","details":{}}}`,
-		`{"error":{"code":"ERR_VALIDATION_FAILED","message":"bad","details":{"field":"x"},"request_id":"req-1"}}`,
-		`{"error":{"code":"ERR_CONFIG_NOT_FOUND","message":"config not found","details":{"key":"app.name"}}}`,
+		`{"error":{"code":"ERR_AUTH_INVALID_TOKEN","message":"token expired","details":[]}}`,
+		`{"error":{"code":"ERR_VALIDATION_FAILED","message":"bad","details":[{"key":"field","value":"x"}],"request_id":"req-1"}}`,
+		`{"error":{"code":"ERR_CONFIG_NOT_FOUND","message":"config not found","details":[{"key":"key","value":"app.name"}]}}`,
 	}
 
 	for _, sample := range valid {
@@ -70,19 +70,19 @@ func TestSharedErrorSchema_InvalidSamples(t *testing.T) {
 	}{
 		{
 			name: "missing error wrapper",
-			body: `{"code":"ERR_AUTH_INVALID_TOKEN","message":"bad","details":{}}`,
+			body: `{"code":"ERR_AUTH_INVALID_TOKEN","message":"bad","details":[]}`,
 		},
 		{
 			name: "missing code field",
-			body: `{"error":{"message":"token expired","details":{}}}`,
+			body: `{"error":{"message":"token expired","details":[]}}`,
 		},
 		{
 			name: "bad code pattern — no ERR_ prefix",
-			body: `{"error":{"code":"NOT_ERR_PREFIX","message":"bad","details":{}}}`,
+			body: `{"error":{"code":"NOT_ERR_PREFIX","message":"bad","details":[]}}`,
 		},
 		{
 			name: "extra top-level key",
-			body: `{"error":{"code":"ERR_INTERNAL","message":"oops","details":{}},"extra":"field"}`,
+			body: `{"error":{"code":"ERR_INTERNAL","message":"oops","details":[]},"extra":"field"}`,
 		},
 		{
 			name: "missing details",

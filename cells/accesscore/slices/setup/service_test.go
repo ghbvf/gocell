@@ -491,9 +491,11 @@ func TestService_CreateAdmin_AlreadyExists_DetailsContainOnlyNextAction(t *testi
 	assert.Equal(t, errcode.ErrSetupAlreadyInitialized, ec.Code)
 
 	require.Len(t, ec.Details, 1, "details must carry exactly one key — semantic action only")
-	assert.Equal(t, "login", ec.Details["nextAction"])
+	nextActionAttr, ok := ec.FindAttr("nextAction")
+	require.True(t, ok)
+	assert.Equal(t, "login", nextActionAttr.Value.String())
 
-	rendered, err := json.Marshal(ec.Details)
+	rendered, err := json.Marshal(ec)
 	require.NoError(t, err)
 	assert.NotContains(t, string(rendered), "/api/",
 		"details must not leak HTTP path literals; resolve via OpenAPI")

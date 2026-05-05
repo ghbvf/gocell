@@ -811,7 +811,15 @@ func TestService_Create_BlankUsername_RejectsBeforeRepoCreate(t *testing.T) {
 	require.ErrorAs(t, err, &ec)
 	assert.Equal(t, errcode.ErrAuthIdentityInvalidInput, ec.Code,
 		"blank username must be rejected with the identity-invalid-input code")
-	assert.Contains(t, err.Error(), "username is required")
+	assert.Equal(t, "validation: required field missing", ec.Message)
+	var gotField string
+	for _, attr := range ec.Details {
+		if attr.Key == "field" {
+			gotField = attr.Value.String()
+			break
+		}
+	}
+	assert.Equal(t, "username", gotField, "details must carry the field name")
 	assert.Equal(t, 0, repo.createCalls, "repo.Create must not run when input is blank")
 	assert.Equal(t, 0, runner.runs, "RunInTx must not run when input validation fails")
 }
@@ -834,7 +842,15 @@ func TestService_Create_BlankEmail_RejectsBeforeRepoCreate(t *testing.T) {
 	var ec *errcode.Error
 	require.ErrorAs(t, err, &ec)
 	assert.Equal(t, errcode.ErrAuthIdentityInvalidInput, ec.Code)
-	assert.Contains(t, err.Error(), "email is required")
+	assert.Equal(t, "validation: required field missing", ec.Message)
+	var gotFieldEmail string
+	for _, attr := range ec.Details {
+		if attr.Key == "field" {
+			gotFieldEmail = attr.Value.String()
+			break
+		}
+	}
+	assert.Equal(t, "email", gotFieldEmail, "details must carry the field name")
 	assert.Equal(t, 0, repo.createCalls)
 	assert.Equal(t, 0, runner.runs)
 }
@@ -861,7 +877,15 @@ func TestService_Create_BlankPassword_RoutesIdentityInvalidInputCode(t *testing.
 	var ec *errcode.Error
 	require.ErrorAs(t, err, &ec)
 	assert.Equal(t, errcode.ErrAuthIdentityInvalidInput, ec.Code)
-	assert.Contains(t, err.Error(), "password is required")
+	assert.Equal(t, "validation: required field missing", ec.Message)
+	var gotFieldPwd string
+	for _, attr := range ec.Details {
+		if attr.Key == "field" {
+			gotFieldPwd = attr.Value.String()
+			break
+		}
+	}
+	assert.Equal(t, "password", gotFieldPwd, "details must carry the field name")
 	assert.Equal(t, 0, repo.createCalls)
 	assert.Equal(t, 0, runner.runs)
 }
@@ -882,10 +906,16 @@ func TestService_Create_RequireNotEmptyShortCircuitsOnFirstField(t *testing.T) {
 	require.ErrorAs(t, err, &ec)
 	assert.Equal(t, errcode.ErrAuthIdentityInvalidInput, ec.Code,
 		"blank-input rejection must route the typed identity-invalid-input code regardless of which field short-circuits")
-	assert.Contains(t, err.Error(), "username is required",
+	assert.Equal(t, "validation: required field missing", ec.Message,
 		"validator must short-circuit on the first declared field; setup.CreateAdmin uses the same order")
-	assert.NotContains(t, err.Error(), "email is required")
-	assert.NotContains(t, err.Error(), "password is required")
+	var gotFieldSC string
+	for _, attr := range ec.Details {
+		if attr.Key == "field" {
+			gotFieldSC = attr.Value.String()
+			break
+		}
+	}
+	assert.Equal(t, "username", gotFieldSC, "validator must short-circuit on username (first declared)")
 }
 
 // ---------------------------------------------------------------------------

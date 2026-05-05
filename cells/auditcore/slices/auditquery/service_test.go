@@ -214,7 +214,9 @@ func TestService_Query_CursorContextMismatch(t *testing.T) {
 	var ecErr *errcode.Error
 	require.ErrorAs(t, err, &ecErr)
 	assert.Equal(t, errcode.ErrCursorInvalid, ecErr.Code)
-	assert.Equal(t, "query context mismatch", ecErr.Details["reason"])
+	reasonAttr, ok := ecErr.FindAttr("reason")
+	require.True(t, ok)
+	assert.Equal(t, "query context mismatch", reasonAttr.Value.String())
 }
 
 // newTestServiceWithLogBuf returns a Service wired to a JSON-capturing logger

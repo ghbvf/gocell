@@ -36,13 +36,13 @@ func WriteJSON(w http.ResponseWriter, status int, v any) {
 // selected by the framework and safe to expose.
 func WritePublic(ctx context.Context, w http.ResponseWriter, kind errcode.Kind, code errcode.Code, message string) {
 	status := kind.Status()
-	respCode := string(code)
+	respCode := code
 	if status >= http.StatusInternalServerError {
-		publicCode := string(kind.PublicCode())
+		publicCode := kind.PublicCode()
 		if respCode != publicCode {
 			logAttrs := []any{
-				slog.String("code", respCode),
-				slog.String("public_code", publicCode),
+				slog.String("code", string(respCode)),
+				slog.String("public_code", string(publicCode)),
 				slog.Int("status", status),
 			}
 			logAttrs = appendCorrelationAttrs(ctx, logAttrs)
@@ -50,7 +50,7 @@ func WritePublic(ctx context.Context, w http.ResponseWriter, kind errcode.Kind, 
 		}
 		respCode = publicCode
 	}
-	writeErrorBody(ctx, w, status, respCode, message, map[string]any{})
+	writeErrorBody(ctx, w, status, &errcode.Error{Kind: kind, Code: respCode, Message: message})
 }
 
 // WriteError writes err in the canonical structured error response format.
@@ -101,7 +101,7 @@ func log4xx(ctx context.Context, label string, ecErr *errcode.Error, status int)
 		logAttrs = append(logAttrs, slog.String("internal", ecErr.InternalMessage))
 	}
 	if status == StatusClientClosedRequest {
-		if reason := ctxcancel.ReasonFromDetails(ecErr.Details); reason != "" {
+		if reason := ctxcancel.ReasonFromDetails(ecErr); reason != "" {
 			logAttrs = append(logAttrs, slog.String("cancel_reason", reason))
 		}
 	}
@@ -122,7 +122,7 @@ func log5xx(ctx context.Context, label string, ecErr *errcode.Error, status int,
 		logAttrs = append(logAttrs, slog.Any("cause", ecErr.Cause))
 	}
 	if ecErr.Kind == errcode.KindDeadlineExceeded {
-		if reason := ctxcancel.ReasonFromDetails(ecErr.Details); reason != "" {
+		if reason := ctxcancel.ReasonFromDetails(ecErr); reason != "" {
 			logAttrs = append(logAttrs, slog.String("cancel_reason", reason))
 		}
 	}
@@ -145,15 +145,10 @@ func appendCorrelationAttrs(ctx context.Context, attrs []any) []any {
 
 func writeErrcodeError(ctx context.Context, w http.ResponseWriter, label string, ecErr *errcode.Error) {
 	status := ecErr.Status()
-	respCode := string(ecErr.Code)
-	msg := ecErr.Message
-	details := ecErr.Details
-	if details == nil {
-		details = map[string]any{}
-	}
+	out := ecErr
 
 	if status == StatusClientClosedRequest {
-		if reason := ctxcancel.ReasonFromDetails(details); reason != "" {
+		if reason := ctxcancel.ReasonFromDetails(ecErr); reason != "" {
 			setCancelReason(ctx, reason)
 		}
 	}
@@ -164,28 +159,40 @@ func writeErrcodeError(ctx context.Context, w http.ResponseWriter, label string,
 	case status >= 500:
 		publicCode := ecErr.PublicCode()
 		log5xx(ctx, label, ecErr, status, publicCode)
-		respCode = string(publicCode)
-		msg = public5xxMessage(status)
-		details = map[string]any{}
+		// Replace internal code/message with public sentinel before serialising;
+		// Error.MarshalJSON also strips Details for 5xx, so the resulting wire
+		// body never carries runtime context out of the process.
+		out = &errcode.Error{Kind: ecErr.Kind, Code: publicCode, Message: public5xxMessage(status)}
 	}
 
-	writeErrorBody(ctx, w, status, respCode, msg, details)
+	writeErrorBody(ctx, w, status, out)
 }
 
-func writeErrorBody(ctx context.Context, w http.ResponseWriter, status int, code, message string, details map[string]any) {
-	errBody := map[string]any{
-		"code":    code,
-		"message": message,
-		"details": details,
+// writeErrorBody serialises ecErr through Error.MarshalJSON so the wire form
+// is governed by the errcode package alone (single source of truth for the
+// details: array<{key,value}> shape and 5xx details strip). request_id is
+// merged into the inner error object before encoding because the canonical
+// error envelope places it alongside code/message/details, not in the outer
+// wrapper (see contracts/shared/errors/error-response-v1.schema.json).
+func writeErrorBody(ctx context.Context, w http.ResponseWriter, status int, ecErr *errcode.Error) {
+	innerJSON, err := json.Marshal(ecErr)
+	if err != nil {
+		slog.Error("httputil: encode errcode body", slog.Any("error", err))
+		return
+	}
+	var inner map[string]any
+	if err := json.Unmarshal(innerJSON, &inner); err != nil {
+		slog.Error("httputil: decode errcode body", slog.Any("error", err))
+		return
 	}
 	if reqID, ok := ctxkeys.RequestIDFrom(ctx); ok {
-		errBody["request_id"] = reqID
+		inner["request_id"] = reqID
 	}
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	if encErr := json.NewEncoder(w).Encode(map[string]any{
-		"error": errBody,
+		"error": inner,
 	}); encErr != nil {
 		slog.Error("httputil: encode error response", slog.Any("error", encErr))
 	}

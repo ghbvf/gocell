@@ -168,7 +168,8 @@ func (m *plaintextMigrator) fetchBatch(ctx context.Context, selectQ, table strin
 	rows, err := m.db.Query(ctx, selectQ, m.cfg.BatchSize)
 	if err != nil {
 		return nil, errcode.Wrap(errcode.KindInternal, errcode.ErrConfigRepoQuery,
-			fmt.Sprintf("plaintext-migrator: query %s", table), err)
+			"plaintext-migrator: query failed", err,
+			errcode.WithDetails(slog.String("table", table)))
 	}
 	defer rows.Close()
 
@@ -177,13 +178,15 @@ func (m *plaintextMigrator) fetchBatch(ctx context.Context, selectQ, table strin
 		var r pendingRow
 		if scanErr := rows.Scan(&r.id, &r.aadIdentity, &r.value); scanErr != nil {
 			return nil, errcode.Wrap(errcode.KindInternal, errcode.ErrConfigRepoQuery,
-				fmt.Sprintf("plaintext-migrator: scan %s", table), scanErr)
+				"plaintext-migrator: scan failed", scanErr,
+				errcode.WithDetails(slog.String("table", table)))
 		}
 		batch = append(batch, r)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, errcode.Wrap(errcode.KindInternal, errcode.ErrConfigRepoQuery,
-			fmt.Sprintf("plaintext-migrator: rows err %s", table), err)
+			"plaintext-migrator: rows iter failed", err,
+			errcode.WithDetails(slog.String("table", table)))
 	}
 	return batch, nil
 }

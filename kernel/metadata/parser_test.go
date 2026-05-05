@@ -342,49 +342,49 @@ func TestParseFS_InvalidYAMLParsing(t *testing.T) {
 			fs: fstest.MapFS{
 				"cells/bad-cell/cell.yaml": &fstest.MapFile{Data: []byte(`{{{ not valid yaml`)},
 			},
-			wantMsg: "parse cells/bad-cell/cell.yaml",
+			wantMsg: "cells/bad-cell/cell.yaml",
 		},
 		{
 			name: "slice.yaml malformed",
 			fs: fstest.MapFS{
 				"cells/my-cell/slices/bad-slice/slice.yaml": &fstest.MapFile{Data: []byte(`:::broken`)},
 			},
-			wantMsg: "parse cells/my-cell/slices/bad-slice/slice.yaml",
+			wantMsg: "cells/my-cell/slices/bad-slice/slice.yaml",
 		},
 		{
 			name: "contract.yaml malformed",
 			fs: fstest.MapFS{
 				"contracts/http/auth/login/v1/contract.yaml": &fstest.MapFile{Data: []byte(`[[[broken`)},
 			},
-			wantMsg: "parse contracts/http/auth/login/v1/contract.yaml",
+			wantMsg: "contracts/http/auth/login/v1/contract.yaml",
 		},
 		{
 			name: "journey yaml malformed",
 			fs: fstest.MapFS{
 				"journeys/J-broken.yaml": &fstest.MapFile{Data: []byte(`{bad`)},
 			},
-			wantMsg: "parse journeys/J-broken.yaml",
+			wantMsg: "journeys/J-broken.yaml",
 		},
 		{
 			name: "assembly yaml malformed",
 			fs: fstest.MapFS{
 				"assemblies/bad/assembly.yaml": &fstest.MapFile{Data: []byte(`{bad`)},
 			},
-			wantMsg: "parse assemblies/bad/assembly.yaml",
+			wantMsg: "assemblies/bad/assembly.yaml",
 		},
 		{
 			name: "status-board yaml malformed",
 			fs: fstest.MapFS{
 				"journeys/status-board.yaml": &fstest.MapFile{Data: []byte(`{bad`)},
 			},
-			wantMsg: "parse journeys/status-board.yaml",
+			wantMsg: "journeys/status-board.yaml",
 		},
 		{
 			name: "actors.yaml malformed",
 			fs: fstest.MapFS{
 				"actors.yaml": &fstest.MapFile{Data: []byte(`{bad`)},
 			},
-			wantMsg: "parse actors.yaml",
+			wantMsg: "actors.yaml",
 		},
 	}
 	for _, tt := range tests {
@@ -395,7 +395,7 @@ func TestParseFS_InvalidYAMLParsing(t *testing.T) {
 			var ecErr *errcode.Error
 			require.True(t, errors.As(err, &ecErr))
 			assert.Equal(t, errcode.ErrMetadataInvalid, ecErr.Code)
-			assert.Contains(t, err.Error(), tt.wantMsg)
+			assert.Contains(t, ecErr.Message+" "+ecErr.InternalMessage, tt.wantMsg)
 		})
 	}
 }
@@ -639,9 +639,10 @@ verify:
 	var ecErr *errcode.Error
 	require.True(t, errors.As(err, &ecErr))
 	assert.Equal(t, errcode.ErrMetadataInvalid, ecErr.Code)
-	assert.Contains(t, err.Error(), "does not match directory")
-	assert.Contains(t, err.Error(), "wrong-cell")
-	assert.Contains(t, err.Error(), "accesscore")
+	full := ecErr.Message + " " + ecErr.InternalMessage
+	assert.Contains(t, full, "does not match directory")
+	assert.Contains(t, full, "wrong-cell")
+	assert.Contains(t, full, "accesscore")
 }
 
 func TestParseFS_DuplicateCellID(t *testing.T) {
@@ -675,8 +676,11 @@ verify:
 	p := NewParser("")
 	_, err := p.ParseFS(fs)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "duplicate")
-	assert.Contains(t, err.Error(), "accesscore")
+	var ecErrCell *errcode.Error
+	require.True(t, errors.As(err, &ecErrCell))
+	fullCell := ecErrCell.Message + " " + ecErrCell.InternalMessage
+	assert.Contains(t, fullCell, "duplicate")
+	assert.Contains(t, fullCell, "accesscore")
 }
 
 func TestParseFS_DuplicateContractID(t *testing.T) {
@@ -704,8 +708,11 @@ endpoints:
 	p := NewParser("")
 	_, err := p.ParseFS(fs)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "duplicate")
-	assert.Contains(t, err.Error(), "http.auth.login.v1")
+	var ecErrContract *errcode.Error
+	require.True(t, errors.As(err, &ecErrContract))
+	fullContract := ecErrContract.Message + " " + ecErrContract.InternalMessage
+	assert.Contains(t, fullContract, "duplicate")
+	assert.Contains(t, fullContract, "http.auth.login.v1")
 }
 
 func TestParseFS_DuplicateJourneyID(t *testing.T) {
@@ -737,8 +744,11 @@ passCriteria: []
 	p := NewParser("")
 	_, err := p.ParseFS(fs)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "duplicate")
-	assert.Contains(t, err.Error(), "J-ssologin")
+	var ecErrJourney *errcode.Error
+	require.True(t, errors.As(err, &ecErrJourney))
+	fullJourney := ecErrJourney.Message + " " + ecErrJourney.InternalMessage
+	assert.Contains(t, fullJourney, "duplicate")
+	assert.Contains(t, fullJourney, "J-ssologin")
 }
 
 func TestParseFS_DuplicateAssemblyID(t *testing.T) {
@@ -764,8 +774,11 @@ build:
 	p := NewParser("")
 	_, err := p.ParseFS(fs)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "duplicate")
-	assert.Contains(t, err.Error(), "corebundle")
+	var ecErrAssembly *errcode.Error
+	require.True(t, errors.As(err, &ecErrAssembly))
+	fullAssembly := ecErrAssembly.Message + " " + ecErrAssembly.InternalMessage
+	assert.Contains(t, fullAssembly, "duplicate")
+	assert.Contains(t, fullAssembly, "corebundle")
 }
 
 func TestParseFS_DuplicateSliceID(t *testing.T) {
@@ -798,8 +811,11 @@ verify:
 	p := NewParser("")
 	_, err := p.ParseFS(fs)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "duplicate")
-	assert.Contains(t, err.Error(), "dup-slice")
+	var ecErrSlice *errcode.Error
+	require.True(t, errors.As(err, &ecErrSlice))
+	fullSlice := ecErrSlice.Message + " " + ecErrSlice.InternalMessage
+	assert.Contains(t, fullSlice, "duplicate")
+	assert.Contains(t, fullSlice, "dup-slice")
 }
 
 func TestParseFS_CellWithL0Dependencies(t *testing.T) {
@@ -1137,7 +1153,7 @@ func TestParseFS_RejectsMultipleDocuments(t *testing.T) {
 			var ecErr *errcode.Error
 			require.True(t, errors.As(err, &ecErr))
 			assert.Equal(t, errcode.ErrMetadataInvalid, ecErr.Code)
-			assert.Contains(t, err.Error(), "multiple YAML documents")
+			assert.Contains(t, ecErr.Message+" "+ecErr.InternalMessage, "multiple YAML documents")
 		})
 	}
 }
@@ -1348,7 +1364,7 @@ belongsToCell: x
 			var ecErr *errcode.Error
 			require.True(t, errors.As(err, &ecErr))
 			assert.Equal(t, errcode.ErrMetadataInvalid, ecErr.Code)
-			assert.Contains(t, err.Error(), tt.wantMsg)
+			assert.Contains(t, ecErr.Message+" "+ecErr.InternalMessage, tt.wantMsg)
 		})
 	}
 }

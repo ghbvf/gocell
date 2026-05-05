@@ -505,7 +505,7 @@ func New(opts ...Option) (*Router, error) {
 func MustNew(opts ...Option) *Router {
 	r, err := New(opts...)
 	if err != nil {
-		panic(err.Error())
+		panic(errcode.Assertion("router: %v", err))
 	}
 	return r
 }

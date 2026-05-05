@@ -106,9 +106,7 @@ func (c *AccessCore) initValidate(durabilityMode cell.DurabilityMode) error {
 	if c.cursorCodec == nil {
 		if durabilityMode == cell.DurabilityDurable {
 			return errcode.New(errcode.KindInternal, errcode.ErrCellMissingCodec,
-				"accesscore durable mode requires a cursor codec;"+
-					" use WithCursorCodec(query.NewCursorCodec(secret))"+
-					" — the built-in demo key is public in the source tree")
+				"accesscore durable mode requires a cursor codec; use WithCursorCodec(query.NewCursorCodec(secret)) — the built-in demo key is public in the source tree")
 		}
 		codec, err := query.NewCursorCodec([]byte("gocell-demo-ACCESS-CORE-key-32!!"))
 		if err != nil {

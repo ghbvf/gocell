@@ -87,7 +87,8 @@ func newBootstrapper(deps BootstrapDeps, cfg bootstrapConfig) (*bootstrapper, er
 	}
 	if cfg.TTL < 0 {
 		return nil, errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
-			fmt.Sprintf("initialadmin: bootstrapper TTL must be non-negative, got %s", cfg.TTL))
+			"initialadmin: bootstrapper TTL must be non-negative",
+			errcode.WithDetails(slog.String("ttl", cfg.TTL.String())))
 	}
 
 	// Apply defaults.

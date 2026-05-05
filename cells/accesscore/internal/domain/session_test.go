@@ -35,7 +35,7 @@ func TestNewSession(t *testing.T) {
 			accessToken: "at-abc",
 			expiresAt:   future,
 			wantErr:     true,
-			errMsg:      "userID is required",
+			errMsg:      "userID",
 		},
 		{
 			name:        "empty accessToken",
@@ -43,7 +43,7 @@ func TestNewSession(t *testing.T) {
 			accessToken: "",
 			expiresAt:   future,
 			wantErr:     true,
-			errMsg:      "accessToken is required",
+			errMsg:      "accessToken",
 		},
 	}
 
@@ -58,9 +58,16 @@ func TestNewSession(t *testing.T) {
 				require.ErrorAs(t, err, &coded, "expected an errcode.Error")
 				assert.Equal(t, errcode.ErrAuthSessionInvalidInput, coded.Code,
 					"NewSession must surface ErrAuthSessionInvalidInput on blank fields")
-				assert.Contains(t, err.Error(), tt.errMsg,
-					"current message format is %q-style; helper rewrites must keep field name visible",
-					"<field> is required")
+				assert.Equal(t, "validation: required field missing", coded.Message,
+					"message must be a const literal")
+				var gotField string
+				for _, attr := range coded.Details {
+					if attr.Key == "field" {
+						gotField = attr.Value.String()
+						break
+					}
+				}
+				assert.Equal(t, tt.errMsg, gotField, "details must carry the field name")
 				assert.Nil(t, session)
 				return
 			}

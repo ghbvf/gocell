@@ -107,19 +107,22 @@ func (c *HTTPConfigGetter) GetEntry(ctx context.Context, key string) (ports.Conf
 		// fall through to decode
 	case http.StatusNotFound:
 		return ports.ConfigEntry{}, errcode.New(errcode.KindNotFound, errcode.ErrConfigNotFound,
-			fmt.Sprintf("config key %q not found", key),
-			errcode.WithCategory(errcode.CategoryDomain))
+			"config key not found",
+			errcode.WithCategory(errcode.CategoryDomain),
+			errcode.WithInternal(fmt.Sprintf("key=%q", key)))
 	case http.StatusUnauthorized:
 		// Permanent: invalid/missing/tampered service token. Retrying with the
 		// same credentials cannot recover; consumers must Reject (DLQ) rather
 		// than treat as transient.
 		return ports.ConfigEntry{}, errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthUnauthorized,
-			fmt.Sprintf("configclient: 401 from configcore for key %q (service token rejected)", key))
+			"configclient: 401 from configcore (service token rejected)",
+			errcode.WithInternal(fmt.Sprintf("key=%q", key)))
 	case http.StatusForbidden:
 		// Permanent: caller_cell not in contract.clients allowlist. Retrying
 		// with the same caller cannot recover; consumers must Reject (DLQ).
 		return ports.ConfigEntry{}, errcode.New(errcode.KindPermissionDenied, errcode.ErrAuthForbidden,
-			fmt.Sprintf("configclient: 403 from configcore for key %q (caller_cell not in allowlist)", key))
+			"configclient: 403 from configcore (caller_cell not in allowlist)",
+			errcode.WithInternal(fmt.Sprintf("key=%q", key)))
 	default:
 		return ports.ConfigEntry{}, fmt.Errorf("configclient: unexpected status %d for key %q", resp.StatusCode, key)
 	}

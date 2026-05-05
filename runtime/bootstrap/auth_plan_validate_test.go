@@ -7,6 +7,7 @@ package bootstrap
 import (
 	"crypto/tls"
 	"crypto/x509"
+	"errors"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -15,7 +16,19 @@ import (
 	"github.com/ghbvf/gocell/kernel/assembly"
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/clock"
+	"github.com/ghbvf/gocell/pkg/errcode"
 )
+
+// errFull returns Message + " " + InternalMessage for *errcode.Error,
+// falling back to err.Error() for other error types.
+func errFull(t *testing.T, err error) string {
+	t.Helper()
+	var ecErr *errcode.Error
+	if errors.As(err, &ecErr) {
+		return ecErr.Message + " " + ecErr.InternalMessage
+	}
+	return err.Error()
+}
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -106,10 +119,10 @@ func TestValidateAuthChainJWTSingleton(t *testing.T) {
 			if tc.wantErr {
 				require.Error(t, err)
 				if tc.errMsg != "" {
-					assert.Contains(t, err.Error(), tc.errMsg)
+					assert.Contains(t, errFull(t, err), tc.errMsg)
 				}
 				// Also verify the error contains the listener ref.
-				assert.Contains(t, err.Error(), cell.PrimaryListener.String())
+				assert.Contains(t, errFull(t, err), cell.PrimaryListener.String())
 			} else {
 				require.NoError(t, err)
 			}
@@ -147,10 +160,10 @@ func TestValidateAuthJWTFromAssemblyPlans(t *testing.T) {
 		)
 		err := b.validateAuthJWTFromAssemblyPlans()
 		require.Error(t, err)
-		assert.Contains(t, err.Error(), "AuthJWTFromAssembly")
-		assert.Contains(t, err.Error(), "asm-match-a")
-		assert.Contains(t, err.Error(), "asm-match-b")
-		assert.Contains(t, err.Error(), cell.PrimaryListener.String())
+		assert.Contains(t, errFull(t, err), "AuthJWTFromAssembly")
+		assert.Contains(t, errFull(t, err), "asm-match-a")
+		assert.Contains(t, errFull(t, err), "asm-match-b")
+		assert.Contains(t, errFull(t, err), cell.PrimaryListener.String())
 	})
 
 	t.Run("Mismatch_SameIDDifferentInstances", func(t *testing.T) {
@@ -260,8 +273,8 @@ func TestValidateAuthPlanMTLSBindings(t *testing.T) {
 		)
 		err := b.validateAuthPlanMTLSBindings()
 		require.Error(t, err)
-		assert.Contains(t, err.Error(), "AuthMTLS")
-		assert.Contains(t, err.Error(), cell.InternalListener.String())
+		assert.Contains(t, errFull(t, err), "AuthMTLS")
+		assert.Contains(t, errFull(t, err), cell.InternalListener.String())
 	})
 
 	t.Run("ListenerPath_LooseClientAuth", func(t *testing.T) {
@@ -276,7 +289,7 @@ func TestValidateAuthPlanMTLSBindings(t *testing.T) {
 		)
 		err := b.validateAuthPlanMTLSBindings()
 		require.Error(t, err)
-		assert.Contains(t, err.Error(), "ClientAuth")
+		assert.Contains(t, errFull(t, err), "ClientAuth")
 	})
 
 	t.Run("ListenerPath_NoClientCAs", func(t *testing.T) {
@@ -291,7 +304,7 @@ func TestValidateAuthPlanMTLSBindings(t *testing.T) {
 		)
 		err := b.validateAuthPlanMTLSBindings()
 		require.Error(t, err)
-		assert.Contains(t, err.Error(), "ClientCAs")
+		assert.Contains(t, errFull(t, err), "ClientCAs")
 	})
 
 	t.Run("ListenerPath_AllValid", func(t *testing.T) {
@@ -331,8 +344,8 @@ func TestValidateAuthNoneExclusive(t *testing.T) {
 				return
 			}
 			require.Error(t, err)
-			assert.Contains(t, err.Error(), "AuthNone cannot be mixed")
-			assert.Contains(t, err.Error(), cell.PrimaryListener.String())
+			assert.Contains(t, errFull(t, err), "AuthNone cannot be mixed")
+			assert.Contains(t, errFull(t, err), cell.PrimaryListener.String())
 		})
 	}
 }
@@ -397,8 +410,8 @@ func TestValidateAuthServiceTokenPlans(t *testing.T) {
 				return
 			}
 			require.Error(t, err)
-			assert.Contains(t, err.Error(), tc.wantErr)
-			assert.Contains(t, err.Error(), cell.InternalListener.String())
+			assert.Contains(t, errFull(t, err), tc.wantErr)
+			assert.Contains(t, errFull(t, err), cell.InternalListener.String())
 		})
 	}
 }
@@ -444,7 +457,7 @@ func TestCheckJWTSingleton(t *testing.T) {
 			if tc.wantErr {
 				require.Error(t, err)
 				if tc.errMsg != "" {
-					assert.Contains(t, err.Error(), tc.errMsg)
+					assert.Contains(t, errFull(t, err), tc.errMsg)
 				}
 			} else {
 				require.NoError(t, err)

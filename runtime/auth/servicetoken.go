@@ -120,11 +120,13 @@ func NewHMACKeyRing(current []byte, previous []byte) (*HMACKeyRing, error) {
 	}
 	if len(current) < MinHMACKeyBytes {
 		return nil, errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthKeyInvalid,
-			fmt.Sprintf("current HMAC secret is %d bytes, minimum is %d", len(current), MinHMACKeyBytes))
+			"current HMAC secret is too short",
+			errcode.WithInternal(fmt.Sprintf("got=%d min=%d", len(current), MinHMACKeyBytes)))
 	}
 	if len(previous) > 0 && len(previous) < MinHMACKeyBytes {
 		return nil, errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthKeyInvalid,
-			fmt.Sprintf("previous HMAC secret is %d bytes, minimum is %d", len(previous), MinHMACKeyBytes))
+			"previous HMAC secret is too short",
+			errcode.WithInternal(fmt.Sprintf("got=%d min=%d", len(previous), MinHMACKeyBytes)))
 	}
 	return &HMACKeyRing{
 		current:  current,
@@ -170,7 +172,7 @@ func LoadHMACKeyRingFromEnv() (*HMACKeyRing, error) {
 	current := os.Getenv(EnvServiceSecret)
 	if current == "" {
 		return nil, errcode.New(errcode.KindInternal, errcode.ErrAuthKeyMissing,
-			fmt.Sprintf("environment variable %s is not set", EnvServiceSecret))
+			"environment variable GOCELL_SERVICE_SECRET is not set")
 	}
 
 	previous := os.Getenv(EnvServiceSecretPrevious)

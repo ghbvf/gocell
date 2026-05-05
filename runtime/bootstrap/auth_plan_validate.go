@@ -26,6 +26,11 @@ import (
 	"github.com/ghbvf/gocell/pkg/validation"
 )
 
+const (
+	internalListenerPositionFmt    = "listener=%q position=%d"
+	internalListenerPositionMinFmt = internalListenerPositionFmt + " got=%d min=%d"
+)
+
 // validateAuthJWTFromAssemblyPlans catches malformed AuthJWTFromAssembly
 // literals at phase0, then enforces the single-assembly invariant when
 // WithAssembly is present. This prevents nil/typed-nil panics, rejected
@@ -54,26 +59,23 @@ func (b *Bootstrap) validateAuthJWTFromAssemblyPlan(
 ) error {
 	if validation.IsNilInterface(p.Assembly) {
 		return errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
-			fmt.Sprintf("listener %q: AuthJWTFromAssembly at position %d Assembly must not be nil; "+
-				"construct it with cell.MustNewAuthJWTFromAssembly(asm)",
-				listener, position))
+			"AuthJWTFromAssembly Assembly must not be nil; construct it with cell.MustNewAuthJWTFromAssembly(asm)",
+			errcode.WithInternal(fmt.Sprintf(internalListenerPositionFmt, listener, position)))
 	}
 	if !p.IsConstructed() {
 		return errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
-			fmt.Sprintf("listener %q: AuthJWTFromAssembly at position %d was constructed as a struct literal; "+
-				"use cell.NewAuthJWTFromAssembly(asm) or cell.MustNewAuthJWTFromAssembly(asm) "+
-				"so the resolver pointer is initialized",
-				listener, position))
+			"AuthJWTFromAssembly must be constructed with cell.NewAuthJWTFromAssembly(asm) or cell.MustNewAuthJWTFromAssembly(asm)",
+			errcode.WithInternal(fmt.Sprintf(internalListenerPositionFmt, listener, position)))
 	}
 	if b.assemblyCore == nil {
 		return nil
 	}
 	if p.Assembly != b.assemblyCore {
 		return errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
-			fmt.Sprintf(
-				"bootstrap: listener %q AuthJWTFromAssembly carries assembly %q but WithAssembly registered %q; "+
-					"the composition root must wire the same *assembly.CoreAssembly instance everywhere",
-				listener, p.Assembly.ID(), b.assemblyCore.ID()))
+			"bootstrap: AuthJWTFromAssembly carries a different assembly than WithAssembly; the composition root must wire the same *assembly.CoreAssembly instance everywhere",
+			errcode.WithInternal(fmt.Sprintf(
+				"listener=%q plan_assembly=%q bootstrap_assembly=%q",
+				listener, p.Assembly.ID(), b.assemblyCore.ID())))
 	}
 	return nil
 }
@@ -104,25 +106,18 @@ func (b *Bootstrap) validateAuthPlanMTLSBindings() error {
 func validateMTLSTLSConfig(source string, tlsCfg *tls.Config) error {
 	if tlsCfg == nil {
 		return errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
-			fmt.Sprintf(
-				"bootstrap: %s uses AuthMTLS without WithListenerTLS; "+
-					"set tls.Config.ClientAuth=RequireAndVerifyClientCert and ClientCAs=<pool> "+
-					"so the handshake layer enforces the chain",
-				source))
+			"bootstrap: listener uses AuthMTLS without WithListenerTLS; set tls.Config.ClientAuth=RequireAndVerifyClientCert and ClientCAs=<pool> so the handshake layer enforces the chain",
+			errcode.WithInternal(fmt.Sprintf("source=%s", source)))
 	}
 	if tlsCfg.ClientAuth < tls.VerifyClientCertIfGiven {
 		return errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
-			fmt.Sprintf(
-				"bootstrap: %s uses AuthMTLS but tls.Config.ClientAuth=%v; "+
-					"set ClientAuth >= tls.VerifyClientCertIfGiven (RequireAndVerifyClientCert recommended)",
-				source, tlsCfg.ClientAuth))
+			"bootstrap: listener uses AuthMTLS but tls.Config.ClientAuth is too permissive; set ClientAuth >= tls.VerifyClientCertIfGiven (RequireAndVerifyClientCert recommended)",
+			errcode.WithInternal(fmt.Sprintf("source=%s client_auth=%v", source, tlsCfg.ClientAuth)))
 	}
 	if tlsCfg.ClientCAs == nil {
 		return errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
-			fmt.Sprintf(
-				"bootstrap: %s uses AuthMTLS but tls.Config.ClientCAs is nil; "+
-					"set ClientCAs to the CA pool the handshake should accept",
-				source))
+			"bootstrap: listener uses AuthMTLS but tls.Config.ClientCAs is nil; set ClientCAs to the CA pool the handshake should accept",
+			errcode.WithInternal(fmt.Sprintf("source=%s", source)))
 	}
 	return nil
 }
@@ -158,9 +153,8 @@ func (b *Bootstrap) validateAuthNoneExclusive() error {
 		}
 		if hasNone && hasGuard {
 			return errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
-				fmt.Sprintf("listener %q: AuthNone cannot be mixed with other ListenerAuth plans; "+
-					"use []cell.ListenerAuth{cell.AuthNone{}} only for no-auth listeners or remove AuthNone from protected chains",
-					ref.String()))
+				"AuthNone cannot be mixed with other ListenerAuth plans; use []cell.ListenerAuth{cell.AuthNone{}} only for no-auth listeners or remove AuthNone from protected chains",
+				errcode.WithInternal(fmt.Sprintf("listener=%q", ref.String())))
 		}
 	}
 	return nil
@@ -181,8 +175,8 @@ func (b *Bootstrap) validateAuthServiceTokenPlans() error {
 			seen++
 			if seen > 1 {
 				return errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
-					fmt.Sprintf("listener %q: at most one AuthServiceToken plan allowed in authChain",
-						ref.String()))
+					"at most one AuthServiceToken plan allowed in authChain",
+					errcode.WithInternal(fmt.Sprintf("listener=%q", ref.String())))
 			}
 			if err := validateAuthServiceTokenPlan(ref.String(), i, p); err != nil {
 				return err
@@ -195,26 +189,23 @@ func (b *Bootstrap) validateAuthServiceTokenPlans() error {
 func validateAuthServiceTokenPlan(listener string, position int, p cell.AuthServiceToken) error {
 	if validation.IsNilInterface(p.Store) {
 		return errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
-			fmt.Sprintf("listener %q: AuthServiceToken at position %d Store must not be nil; "+
-				"construct it with cell.MustNewAuthServiceToken(store, ring)",
-				listener, position))
+			"AuthServiceToken Store must not be nil; construct it with cell.MustNewAuthServiceToken(store, ring)",
+			errcode.WithInternal(fmt.Sprintf(internalListenerPositionFmt, listener, position)))
 	}
 	if validation.IsNilInterface(p.Ring) {
 		return errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
-			fmt.Sprintf("listener %q: AuthServiceToken at position %d Ring must not be nil; "+
-				"construct it with cell.MustNewAuthServiceToken(store, ring)",
-				listener, position))
+			"AuthServiceToken Ring must not be nil; construct it with cell.MustNewAuthServiceToken(store, ring)",
+			errcode.WithInternal(fmt.Sprintf(internalListenerPositionFmt, listener, position)))
 	}
 	if p.Store.Kind() == cell.NonceStoreKindNoop {
 		return errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
-			fmt.Sprintf("listener %q: AuthServiceToken at position %d Store must not be NonceStoreKindNoop; "+
-				"service-token guards require replay protection",
-				listener, position))
+			"AuthServiceToken Store must not be NonceStoreKindNoop; service-token guards require replay protection",
+			errcode.WithInternal(fmt.Sprintf(internalListenerPositionFmt, listener, position)))
 	}
 	if got := len(p.Ring.Current()); got < cell.MinHMACKeyBytes {
 		return errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
-			fmt.Sprintf("listener %q: AuthServiceToken at position %d Ring.Current() returned %d bytes, minimum is %d",
-				listener, position, got, cell.MinHMACKeyBytes))
+			"AuthServiceToken Ring.Current() is too short",
+			errcode.WithInternal(fmt.Sprintf(internalListenerPositionMinFmt, listener, position, got, cell.MinHMACKeyBytes)))
 	}
 	return nil
 }
@@ -238,14 +229,14 @@ func checkJWTSingleton(listenerDesc string, chain []cell.ListenerAuth) error {
 	}
 	if jwtCount > 1 {
 		return errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
-			fmt.Sprintf("listener %q: at most one AuthJWT/AuthJWTFromAssembly plan allowed in chain, found %d",
-				listenerDesc, jwtCount))
+			"at most one AuthJWT/AuthJWTFromAssembly plan allowed in chain",
+			errcode.WithInternal(fmt.Sprintf("listener=%q count=%d", listenerDesc, jwtCount)))
 	}
 	// Exactly one JWT plan — it must be at position 0.
 	if jwtPos != 0 {
 		return errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
-			fmt.Sprintf("listener %q: AuthJWT/AuthJWTFromAssembly must be sole/first plan in chain (found at position %d)",
-				listenerDesc, jwtPos))
+			"AuthJWT/AuthJWTFromAssembly must be sole/first plan in chain",
+			errcode.WithInternal(fmt.Sprintf(internalListenerPositionFmt, listenerDesc, jwtPos)))
 	}
 	return nil
 }

@@ -22,6 +22,7 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/metadata"
+	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/bootstrap"
 )
@@ -86,6 +87,9 @@ func TestLoadKeySet(t *testing.T) {
 		envPrevPub  string
 		wantErr     bool
 		errContains string
+		// errEnv checks that the errcode.Error.Details contains an "env" attr with this value.
+		// Used instead of errContains when env name is in WithDetails (not in message).
+		errEnv string
 	}{
 		{
 			name: "dev_mode_no_env_generates_ephemeral",
@@ -112,10 +116,10 @@ func TestLoadKeySet(t *testing.T) {
 			envPub:  string(pub),
 		},
 		{
-			name:        "real_mode_missing_env_fails_closed",
-			mode:        "real",
-			wantErr:     true,
-			errContains: auth.EnvJWTPrivateKey,
+			name:    "real_mode_missing_env_fails_closed",
+			mode:    "real",
+			wantErr: true,
+			errEnv:  auth.EnvJWTPrivateKey,
 		},
 		{
 			name:        "real_mode_corrupted_priv_pem_fails_closed",
@@ -134,11 +138,11 @@ func TestLoadKeySet(t *testing.T) {
 			errContains: "real adapter mode requires",
 		},
 		{
-			name:        "real_mode_priv_only_fails_closed",
-			mode:        "real",
-			envPriv:     string(priv),
-			wantErr:     true,
-			errContains: auth.EnvJWTPublicKey,
+			name:    "real_mode_priv_only_fails_closed",
+			mode:    "real",
+			envPriv: string(priv),
+			wantErr: true,
+			errEnv:  auth.EnvJWTPublicKey,
 		},
 	}
 	for _, tc := range cases {
@@ -152,6 +156,14 @@ func TestLoadKeySet(t *testing.T) {
 				require.Error(t, err)
 				if tc.errContains != "" {
 					assert.Contains(t, err.Error(), tc.errContains)
+				}
+				if tc.errEnv != "" {
+					var ec *errcode.Error
+					require.True(t, errors.As(err, &ec),
+						"expected errcode.Error in chain, got %T: %v", err, err)
+					attr, ok := ec.FindAttr("env")
+					require.True(t, ok, "expected 'env' detail attr in errcode.Error")
+					assert.Equal(t, tc.errEnv, attr.Value.String())
 				}
 				return
 			}
@@ -213,7 +225,9 @@ func TestRun_InvalidAdapterMode_ReturnsError(t *testing.T) {
 
 	err := run(ctx)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "adapter mode")
+	var ecErr *errcode.Error
+	require.True(t, errors.As(err, &ecErr))
+	assert.Contains(t, ecErr.Message, "GOCELL_ADAPTER_MODE")
 }
 
 // TestRun_MissingJWTIssuer_FailsFast verifies that run() fails fast when

@@ -41,7 +41,7 @@ func TestWritePublic_5xxMasksCodeKeepsFrameworkMessageAndLogsOriginal(t *testing
 	errObj := decodeErrorBody(t, rec)
 	assert.Equal(t, string(errcode.ErrServiceUnavailable), errObj["code"])
 	assert.Equal(t, "service unavailable", errObj["message"])
-	assert.Equal(t, map[string]any{}, errObj["details"])
+	assert.Equal(t, []any{}, errObj["details"])
 
 	errRec := findRecord(handler, slog.LevelError)
 	require.NotNil(t, errRec)
@@ -65,7 +65,7 @@ func TestWriteError_ClientErrorShowsMessageDetailsAndSamplesWarn(t *testing.T) {
 		errcode.ErrValidationFailed,
 		"invalid cursor",
 		errcode.WithInternal("cursor token failed signature check"),
-		errcode.WithDetails(map[string]any{"reason": "signature"}),
+		errcode.WithDetails(slog.String("reason", "signature")),
 	)
 
 	rec := httptest.NewRecorder()
@@ -75,7 +75,7 @@ func TestWriteError_ClientErrorShowsMessageDetailsAndSamplesWarn(t *testing.T) {
 	errObj := decodeErrorBody(t, rec)
 	assert.Equal(t, string(errcode.ErrValidationFailed), errObj["code"])
 	assert.Equal(t, "invalid cursor", errObj["message"])
-	assert.Equal(t, map[string]any{"reason": "signature"}, errObj["details"])
+	assert.Equal(t, []any{map[string]any{"key": "reason", "value": "signature"}}, errObj["details"])
 	assert.Equal(t, "req-4xx", errObj["request_id"])
 
 	warnRec := findRecord(handler, slog.LevelWarn)
@@ -147,7 +147,7 @@ func TestWriteError_5xxMasksMessageCodeDetailsAndLogsDiagnostics(t *testing.T) {
 		"config query failed for tenant admin@example.com",
 		cause,
 		errcode.WithInternal("select config_entries failed"),
-		errcode.WithDetails(map[string]any{"tenant": "admin@example.com"}),
+		errcode.WithDetails(slog.String("tenant", "admin@example.com")),
 	)
 	ctx := ctxkeys.WithRequestID(context.Background(), "req-5xx")
 
@@ -158,7 +158,7 @@ func TestWriteError_5xxMasksMessageCodeDetailsAndLogsDiagnostics(t *testing.T) {
 	errObj := decodeErrorBody(t, rec)
 	assert.Equal(t, string(errcode.ErrInternal), errObj["code"])
 	assert.Equal(t, "internal server error", errObj["message"])
-	assert.Equal(t, map[string]any{}, errObj["details"])
+	assert.Equal(t, []any{}, errObj["details"])
 	assert.Equal(t, "req-5xx", errObj["request_id"])
 
 	errRec := findRecord(handler, slog.LevelError)
@@ -211,7 +211,7 @@ func TestWriteError_PlainErrorMasksResponseAndLogsUnhandled(t *testing.T) {
 	errObj := decodeErrorBody(t, rec)
 	assert.Equal(t, string(errcode.ErrInternal), errObj["code"])
 	assert.Equal(t, "internal server error", errObj["message"])
-	assert.Equal(t, map[string]any{}, errObj["details"])
+	assert.Equal(t, []any{}, errObj["details"])
 
 	assert.NotNil(t, findRecord(handler, slog.LevelError), "plain errors must be logged")
 }
@@ -259,7 +259,7 @@ func TestWriteError_DeadlineExceededMasksAsGatewayTimeoutAndLogsReason(t *testin
 	errObj := decodeErrorBody(t, rec)
 	assert.Equal(t, string(errcode.ErrServerTimeout), errObj["code"])
 	assert.Equal(t, "gateway timeout", errObj["message"])
-	assert.Equal(t, map[string]any{}, errObj["details"])
+	assert.Equal(t, []any{}, errObj["details"])
 
 	errRec := findRecord(handler, slog.LevelError)
 	require.NotNil(t, errRec)

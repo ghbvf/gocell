@@ -2,11 +2,13 @@ package redis
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 )
 
@@ -149,8 +151,10 @@ func TestGetJSON_UnmarshalError(t *testing.T) {
 
 	_, err = GetJSON[testItem](ctx, cache, "json:bad")
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "ERR_ADAPTER_REDIS_GET")
-	assert.Contains(t, err.Error(), "unmarshal")
+	var ecErrUnmarshal *errcode.Error
+	require.True(t, errors.As(err, &ecErrUnmarshal))
+	assert.Equal(t, ErrAdapterRedisGet, ecErrUnmarshal.Code)
+	assert.Contains(t, ecErrUnmarshal.Message+" "+ecErrUnmarshal.InternalMessage, "unmarshal")
 }
 
 func TestGetJSON_GetError(t *testing.T) {

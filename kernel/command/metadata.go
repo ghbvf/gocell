@@ -2,6 +2,7 @@ package command
 
 import (
 	"fmt"
+	"log/slog"
 
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
@@ -48,23 +49,29 @@ func validateMetadata(m map[string]string) error {
 	}
 	if len(m) > MaxMetadataKeys {
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-			fmt.Sprintf("command: metadata key count %d exceeds max %d", len(m), MaxMetadataKeys))
+			"command: metadata key count exceeds max",
+			errcode.WithDetails(slog.Int("count", len(m)), slog.Int("max", MaxMetadataKeys)))
 	}
 	var total int
 	for k, v := range m {
 		if len(k) > MaxMetadataKeyLen {
 			return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-				fmt.Sprintf("command: metadata key length %d exceeds max %d (key=%q)", len(k), MaxMetadataKeyLen, truncate(k, 64)))
+				"command: metadata key length exceeds max",
+				errcode.WithDetails(slog.Int("keyLen", len(k)), slog.Int("max", MaxMetadataKeyLen)),
+				errcode.WithInternal(fmt.Sprintf("key=%q", truncate(k, 64))))
 		}
 		if len(v) > MaxMetadataValueLen {
 			return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-				fmt.Sprintf("command: metadata value length %d exceeds max %d (key=%q)", len(v), MaxMetadataValueLen, truncate(k, 64)))
+				"command: metadata value length exceeds max",
+				errcode.WithDetails(slog.Int("valueLen", len(v)), slog.Int("max", MaxMetadataValueLen)),
+				errcode.WithInternal(fmt.Sprintf("key=%q", truncate(k, 64))))
 		}
 		total += len(k) + len(v)
 	}
 	if total > MaxMetadataTotalSize {
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-			fmt.Sprintf("command: metadata total size %d exceeds max %d", total, MaxMetadataTotalSize))
+			"command: metadata total size exceeds max",
+			errcode.WithDetails(slog.Int("total", total), slog.Int("max", MaxMetadataTotalSize)))
 	}
 	return nil
 }

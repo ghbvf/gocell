@@ -3,6 +3,7 @@ package websocket
 import (
 	"bufio"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net"
 	"net/http"
@@ -82,9 +83,8 @@ func (c *UpgradeConfig) Validate() error {
 		}
 		if !strings.Contains(pattern, "://") {
 			return errcode.New(errcode.KindInternal, errcode.ErrWebsocketOriginsInvalid,
-				"websocket: UpgradeConfig.AllowedOrigins entry "+strconv.Quote(pattern)+
-					" must be an origin pattern with scheme (e.g. https://example.com, https://*.example.com, http://*); "+
-					"bare host is rejected because coder/websocket OriginPatterns matches against the Origin header, which always carries a scheme")
+				"websocket: AllowedOrigins entry must include scheme (e.g. https://example.com); bare host rejected",
+				errcode.WithInternal(fmt.Sprintf("pattern=%s", strconv.Quote(pattern))))
 		}
 		normalized = append(normalized, pattern)
 	}
@@ -105,8 +105,7 @@ func UpgradeHandler(hub *rtws.Hub, cfg UpgradeConfig) (http.Handler, error) {
 	}
 	if cfg.Authenticator == nil {
 		return nil, errcode.New(errcode.KindInternal, errcode.ErrWebsocketAuthenticatorMissing,
-			"websocket: UpgradeHandler Authenticator must not be nil (SEC-FAIL-CLOSED); "+
-				"use auth.NewAnonymousAuthenticator() for explicit unauthenticated endpoints")
+			"websocket: UpgradeHandler Authenticator must not be nil (SEC-FAIL-CLOSED); use auth.NewAnonymousAuthenticator() for explicit unauthenticated endpoints")
 	}
 	if err := cfg.Validate(); err != nil {
 		return nil, err

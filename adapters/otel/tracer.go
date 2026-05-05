@@ -28,7 +28,7 @@ type Tracer struct {
 // The shutdown function flushes pending spans and releases resources.
 func NewTracer(ctx context.Context, cfg TracerConfig) (*Tracer, func(context.Context) error, error) {
 	if err := cfg.validate(); err != nil {
-		return nil, nil, errcode.Wrap(errcode.KindInternal, ErrAdapterOTelConfig, err.Error(), err)
+		return nil, nil, errcode.Wrap(errcode.KindInternal, ErrAdapterOTelConfig, "otel: config validation failed", err)
 	}
 	cfg.defaults()
 

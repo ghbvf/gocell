@@ -286,7 +286,11 @@ func TestResolveCellEmitter(t *testing.T) {
 		if err == nil {
 			t.Fatal("expected mutual-exclusion error, got nil")
 		}
-		if !strings.Contains(err.Error(), "mutually exclusive") {
+		var ceMutex *errcode.Error
+		if !errors.As(err, &ceMutex) {
+			t.Fatalf("expected errcode.Error, got %T: %v", err, err)
+		}
+		if !strings.Contains(ceMutex.Message+" "+ceMutex.InternalMessage, "mutually exclusive") {
 			t.Fatalf("error message missing 'mutually exclusive': %v", err)
 		}
 	})
@@ -303,7 +307,11 @@ func TestResolveCellEmitter(t *testing.T) {
 		if err == nil {
 			t.Fatal("expected durable-mode guard error, got nil")
 		}
-		if !strings.Contains(err.Error(), "durable") {
+		var ceDurable *errcode.Error
+		if !errors.As(err, &ceDurable) {
+			t.Fatalf("expected errcode.Error, got %T: %v", err, err)
+		}
+		if !strings.Contains(ceDurable.Message+" "+ceDurable.InternalMessage, "durable") {
 			t.Fatalf("error message missing 'durable': %v", err)
 		}
 	})
@@ -441,7 +449,7 @@ func TestResolveEmitter_DemoMode_NilMetricsProvider_ReturnsError(t *testing.T) {
 	if ce.Code != errcode.ErrCellMissingOutbox {
 		t.Fatalf("expected ErrCellMissingOutbox, got code=%s msg=%s", ce.Code, ce.Message)
 	}
-	if !strings.Contains(err.Error(), "MetricsProvider") {
+	if !strings.Contains(ce.Message+" "+ce.InternalMessage, "MetricsProvider") {
 		t.Fatalf("error message should mention MetricsProvider, got: %v", err)
 	}
 }

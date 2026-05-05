@@ -181,7 +181,7 @@ func TestSetupEndpoints_FirstRunFlow(t *testing.T) {
 		raw, err := io.ReadAll(resp.Body)
 		require.NoError(t, err)
 		assert.Contains(t, string(raw), "ERR_SETUP_ALREADY_INITIALIZED")
-		assert.Contains(t, string(raw), `"nextAction":"login"`)
+		assert.Contains(t, string(raw), `"key":"nextAction","value":"login"`)
 	})
 
 	// 4. Status now reports hasAdmin=true.

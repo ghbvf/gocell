@@ -2277,7 +2277,7 @@ func TestSubscriber_Subscribe_NoDLX_ReturnsError(t *testing.T) {
 			return outbox.HandleResult{Disposition: outbox.DispositionAck}
 		}))
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "DLXExchange is required")
+	assert.Contains(t, err.Error(), "DLXExchange required")
 }
 
 // =============================================================================
@@ -3199,7 +3199,7 @@ func TestProcessDelivery_Reject_NoDLX_SubscribeReturnsError(t *testing.T) {
 			return outbox.HandleResult{Disposition: outbox.DispositionAck}
 		}))
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "DLXExchange is required")
+	assert.Contains(t, err.Error(), "DLXExchange required")
 }
 
 func TestConsumerBase_WrapWithClaimer_ClaimBusy_HasBackoff(t *testing.T) {

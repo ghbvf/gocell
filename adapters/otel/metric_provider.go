@@ -2,6 +2,7 @@ package otel
 
 import (
 	"context"
+	"log/slog"
 	"sync"
 
 	"go.opentelemetry.io/otel/attribute"
@@ -46,7 +47,8 @@ func (p *MetricProvider) CounterVec(opts metrics.CounterOpts) (metrics.CounterVe
 	c, err := p.meter.Float64Counter(opts.Name, otelmetric.WithDescription(opts.Help))
 	if err != nil {
 		return nil, errcode.Wrap(errcode.KindInternal, ErrAdapterOTelInit,
-			"otel metric provider: create counter "+opts.Name, err)
+			"otel metric provider: create counter failed", err,
+			errcode.WithDetails(slog.String("metric", opts.Name)))
 	}
 	return &otelCounterVec{
 		inner:  c,
@@ -75,7 +77,8 @@ func (p *MetricProvider) HistogramVec(opts metrics.HistogramOpts) (metrics.Histo
 	h, err := p.meter.Float64Histogram(opts.Name, hOpts...)
 	if err != nil {
 		return nil, errcode.Wrap(errcode.KindInternal, ErrAdapterOTelInit,
-			"otel metric provider: create histogram "+opts.Name, err)
+			"otel metric provider: create histogram failed", err,
+			errcode.WithDetails(slog.String("metric", opts.Name)))
 	}
 	return &otelHistogramVec{
 		inner:  h,

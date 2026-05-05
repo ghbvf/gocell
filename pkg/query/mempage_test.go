@@ -86,7 +86,9 @@ func requireCursorInvalidMsg(t *testing.T, err error, wantReason string) {
 	assert.Equal(t, errcode.ErrCursorInvalid, ecErr.Code)
 	assert.Equal(t, query.TestCursorInvalidMsg, ecErr.Message,
 		"client-facing message must be stable across all cursor errors")
-	assert.Equal(t, wantReason, ecErr.Details["reason"])
+	reasonAttr, ok := ecErr.FindAttr("reason")
+	require.True(t, ok)
+	assert.Equal(t, wantReason, reasonAttr.Value.String())
 }
 
 // --- Sort tests ---

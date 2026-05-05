@@ -1,6 +1,7 @@
 package cell
 
 import (
+	"fmt"
 	"log/slog"
 
 	"github.com/ghbvf/gocell/kernel/clock"
@@ -80,7 +81,8 @@ func ResolveEmitter(cfg EmitterConfig) (EmitterOutcome, error) {
 func resolveDurableEmitter(cfg EmitterConfig) (EmitterOutcome, error) {
 	if cfg.OutboxWriter == nil || cfg.TxRunner == nil {
 		return EmitterOutcome{}, errcode.New(errcode.KindInternal, errcode.ErrCellMissingOutbox,
-			cfg.CellID+" durable mode requires real outboxWriter and txRunner")
+			"durable mode requires real outboxWriter and txRunner",
+			errcode.WithInternal(fmt.Sprintf("cell=%s", cfg.CellID)))
 	}
 	emitter, err := outbox.NewWriterEmitter(cfg.OutboxWriter)
 	if err != nil {
@@ -97,22 +99,23 @@ func resolveDemoEmitter(cfg EmitterConfig, logger *slog.Logger) (EmitterOutcome,
 	txAbsent := cfg.TxRunner == nil
 	if writerAbsent != txAbsent {
 		return EmitterOutcome{}, errcode.New(errcode.KindInternal, errcode.ErrCellMissingOutbox,
-			cfg.CellID+" demo mode requires outboxWriter and txRunner together; inject both explicitly")
+			"demo mode requires outboxWriter and txRunner together; inject both explicitly",
+			errcode.WithInternal(fmt.Sprintf("cell=%s", cfg.CellID)))
 	}
 
 	// No sink at all.
 	if cfg.Publisher == nil && cfg.OutboxWriter == nil {
 		return EmitterOutcome{}, errcode.New(errcode.KindInternal, errcode.ErrCellMissingOutbox,
-			cfg.CellID+" demo mode requires an explicit event sink; provide publisher or outboxWriter+txRunner")
+			"demo mode requires an explicit event sink; provide publisher or outboxWriter+txRunner",
+			errcode.WithInternal(fmt.Sprintf("cell=%s", cfg.CellID)))
 	}
 
 	// Publisher-preferred path: publisher present and writer absent or noop.
 	if cfg.Publisher != nil && (cfg.OutboxWriter == nil || isNooperDep(cfg.OutboxWriter)) {
 		if cfg.MetricsProvider == nil {
 			return EmitterOutcome{}, errcode.New(errcode.KindInternal, errcode.ErrCellMissingOutbox,
-				cfg.CellID+" demo mode with direct publisher requires MetricsProvider;"+
-					" pass kernel/observability/metrics.NopProvider{} explicitly in tests"+
-					" (e.g. via cells/{accesscore,auditcore,configcore}.WithMetricsProvider(...))")
+				"demo mode with direct publisher requires MetricsProvider; pass kernel/observability/metrics.NopProvider{} explicitly in tests (e.g. via cells/{accesscore,auditcore,configcore}.WithMetricsProvider(...))",
+				errcode.WithInternal(fmt.Sprintf("cell=%s", cfg.CellID)))
 		}
 		emitter, err := outbox.NewDirectEmitter(
 			cfg.Publisher, cfg.DirectPublishMode, cfg.MetricsProvider,
@@ -134,7 +137,8 @@ func resolveDemoEmitter(cfg EmitterConfig, logger *slog.Logger) (EmitterOutcome,
 	}
 
 	return EmitterOutcome{}, errcode.New(errcode.KindInternal, errcode.ErrCellMissingOutbox,
-		cfg.CellID+" demo mode requires an explicit event sink")
+		"demo mode requires an explicit event sink",
+		errcode.WithInternal(fmt.Sprintf("cell=%s", cfg.CellID)))
 }
 
 // isNooperDep returns true when dep implements Nooper and reports Noop()==true.
@@ -180,7 +184,8 @@ func ResolveCellEmitter(in CellEmitterInputs) (EmitterOutcome, error) {
 	hasPending := in.Publisher != nil || in.OutboxWriter != nil
 	if hasEmitter && hasPending {
 		return EmitterOutcome{}, errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
-			in.CellID+": WithEmitter and WithOutboxDeps are mutually exclusive; pick exactly one")
+			"WithEmitter and WithOutboxDeps are mutually exclusive; pick exactly one",
+			errcode.WithInternal(fmt.Sprintf("cell=%s", in.CellID)))
 	}
 
 	var outcome EmitterOutcome
@@ -188,7 +193,8 @@ func ResolveCellEmitter(in CellEmitterInputs) (EmitterOutcome, error) {
 		durable := outbox.ReportDurable(in.PreResolved)
 		if in.Mode == DurabilityDurable && !durable {
 			return EmitterOutcome{}, errcode.New(errcode.KindInternal, errcode.ErrCellMissingOutbox,
-				in.CellID+": WithEmitter in durable mode requires a durable outbox.Emitter (WriterEmitter over real writer); got non-durable emitter")
+				"WithEmitter in durable mode requires a durable outbox.Emitter (WriterEmitter over real writer); got non-durable emitter",
+				errcode.WithInternal(fmt.Sprintf("cell=%s", in.CellID)))
 		}
 		outcome = EmitterOutcome{Emitter: in.PreResolved, Durable: durable}
 	} else {

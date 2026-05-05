@@ -4,6 +4,8 @@ import (
 	"context"
 	"slices"
 	"time"
+
+	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
 type PrincipalKind int
@@ -112,7 +114,7 @@ func FromContext(ctx context.Context) (*Principal, bool) {
 func MustFromContext(ctx context.Context) *Principal {
 	p, ok := FromContext(ctx)
 	if !ok {
-		panic("auth: principal not in context")
+		panic(errcode.Assertion("auth: principal not in context"))
 	}
 	return p
 }

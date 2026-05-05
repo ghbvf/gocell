@@ -112,7 +112,8 @@ func VerifyExpectedVersion(ctx context.Context, pool *Pool, fsys fs.FS, tableNam
 
 	if actual != expected {
 		return errcode.New(errcode.KindInternal, ErrAdapterPGSchemaMismatch,
-			fmt.Sprintf("schema version mismatch: db=%d binary=%d", actual, expected))
+			"schema version mismatch",
+			errcode.WithDetails(slog.Int64("db", actual), slog.Int64("binary", expected)))
 	}
 
 	slog.Info("schema_guard: schema version matched",

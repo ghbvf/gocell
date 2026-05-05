@@ -226,7 +226,7 @@ func h(w http.ResponseWriter, r *http.Request) {
 			name: "errcode.WithDetails wrapping inner New: inner code is found",
 			handlerSrc: `
 func h(w http.ResponseWriter, r *http.Request) {
-	_ = errcode.New(errcode.KindNotFound, errcode.ErrAuthUserNotFound, "x", errcode.WithDetails(nil))
+	_ = errcode.New(errcode.KindNotFound, errcode.ErrAuthUserNotFound, "x", errcode.WithDetails())
 }
 `,
 			responses: map[int]metadata.HTTPResponseMeta{
@@ -238,7 +238,7 @@ func h(w http.ResponseWriter, r *http.Request) {
 			name: "errcode.WithDetails inner code missing from contract",
 			handlerSrc: `
 func h(w http.ResponseWriter, r *http.Request) {
-	_ = errcode.New(errcode.KindNotFound, errcode.ErrAuthUserNotFound, "x", errcode.WithDetails(nil))
+	_ = errcode.New(errcode.KindNotFound, errcode.ErrAuthUserNotFound, "x", errcode.WithDetails())
 }
 `,
 			responses: map[int]metadata.HTTPResponseMeta{

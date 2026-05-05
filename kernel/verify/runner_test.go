@@ -2,6 +2,7 @@ package verify
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -10,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/ghbvf/gocell/kernel/metadata"
+	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
 func TestParseSliceKey(t *testing.T) {
@@ -47,7 +49,9 @@ func TestVerifySlice_NotFound(t *testing.T) {
 	}, t.TempDir())
 	_, err := r.VerifySlice(context.Background(), "cell/missing")
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "not found")
+	var ecErrSlice *errcode.Error
+	require.True(t, errors.As(err, &ecErrSlice))
+	assert.Contains(t, ecErrSlice.Message+" "+ecErrSlice.InternalMessage, "not found")
 }
 
 func TestVerifyCell_NotFound(t *testing.T) {
@@ -56,7 +60,9 @@ func TestVerifyCell_NotFound(t *testing.T) {
 	}, t.TempDir())
 	_, err := r.VerifyCell(context.Background(), "missing")
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "not found")
+	var ecErrCell *errcode.Error
+	require.True(t, errors.As(err, &ecErrCell))
+	assert.Contains(t, ecErrCell.Message+" "+ecErrCell.InternalMessage, "not found")
 }
 
 func TestRunJourney_NotFound(t *testing.T) {
@@ -65,7 +71,9 @@ func TestRunJourney_NotFound(t *testing.T) {
 	}, t.TempDir())
 	_, err := r.RunJourney(context.Background(), "missing")
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "not found")
+	var ecErrJourney *errcode.Error
+	require.True(t, errors.As(err, &ecErrJourney))
+	assert.Contains(t, ecErrJourney.Message+" "+ecErrJourney.InternalMessage, "not found")
 }
 
 func TestRunJourney_ManualPending(t *testing.T) {
@@ -225,7 +233,9 @@ func TestJOtherHappyPath(t *testing.T) {}
 
 	assert.False(t, tr.Passed, "a journey must not borrow another journey's passing test")
 	require.Len(t, errs, 1)
-	assert.Contains(t, errs[0].Error(), `belongs to journey "J-other"`)
+	var ecErrScope *errcode.Error
+	require.True(t, errors.As(errs[0], &ecErrScope))
+	assert.Contains(t, ecErrScope.Message+" "+ecErrScope.InternalMessage, "J-other")
 }
 
 func TestRunJourneyCheckRef_RejectsNonJourneyRef(t *testing.T) {
@@ -239,7 +249,9 @@ func TestRunJourneyCheckRef_RejectsNonJourneyRef(t *testing.T) {
 
 	assert.False(t, tr.Passed)
 	require.Len(t, errs, 1)
-	assert.Contains(t, errs[0].Error(), "must use journey prefix")
+	var ecErrJourneyPrefix *errcode.Error
+	require.True(t, errors.As(errs[0], &ecErrJourneyPrefix))
+	assert.Contains(t, ecErrJourneyPrefix.Message+" "+ecErrJourneyPrefix.InternalMessage, "journey prefix")
 }
 
 func TestResolveJourneyPkg_IntegrationDir(t *testing.T) {
@@ -365,7 +377,9 @@ func TestRecordResult_ZeroMatchMessage(t *testing.T) {
 	recordResult(result, "ref", res, "./pkg/...", "SomePattern")
 	assert.False(t, result.Passed)
 	require.Len(t, result.Errors, 1)
-	assert.Contains(t, result.Errors[0].Error(), "check your YAML ref")
+	var ecErrZero *errcode.Error
+	require.True(t, errors.As(result.Errors[0], &ecErrZero))
+	assert.Contains(t, ecErrZero.Message+" "+ecErrZero.InternalMessage, "check your YAML ref")
 }
 
 func TestRecordResult_SkipOnlyFails(t *testing.T) {
@@ -374,5 +388,7 @@ func TestRecordResult_SkipOnlyFails(t *testing.T) {
 	recordResult(result, "ref", res, "./pkg/...", "^TestFoo$")
 	assert.False(t, result.Passed)
 	require.Len(t, result.Errors, 1)
-	assert.Contains(t, result.Errors[0].Error(), "only skipped tests")
+	var ecErrSkip *errcode.Error
+	require.True(t, errors.As(result.Errors[0], &ecErrSkip))
+	assert.Contains(t, ecErrSkip.Message+" "+ecErrSkip.InternalMessage, "only skipped tests")
 }

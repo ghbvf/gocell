@@ -11,7 +11,7 @@ package auth
 
 import (
 	"encoding/hex"
-	"fmt"
+	"log/slog"
 	"net/http"
 	"regexp"
 	"strconv"
@@ -163,13 +163,11 @@ func NewServiceTokenAuthenticator(ring cell.HMACKeyring, clk clock.Clock, opts .
 	}
 	if cfg.nonceStore == nil {
 		return nil, errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
-			"auth: NewServiceTokenAuthenticator requires a NonceStore via "+
-				"WithServiceTokenNonceStore (use NewInMemoryNonceStore(ServiceTokenNonceTTL) for dev/test)")
+			"auth: NewServiceTokenAuthenticator requires a NonceStore via WithServiceTokenNonceStore (use NewInMemoryNonceStore(ServiceTokenNonceTTL) for dev/test)")
 	}
 	if cfg.nonceStore.Kind() == NonceStoreKindNoop {
 		return nil, errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
-			"auth: NewServiceTokenAuthenticator NonceStore must not be NonceStoreKindNoop; "+
-				"service-token authenticators require replay protection at every layer")
+			"auth: NewServiceTokenAuthenticator NonceStore must not be NonceStoreKindNoop; service-token authenticators require replay protection at every layer")
 	}
 	return AuthenticatorFunc(func(r *http.Request) (*Principal, bool, error) {
 		raw := r.Header.Get("Authorization")
@@ -271,7 +269,8 @@ func validateCallerCell(callerCell string) error {
 	}
 	if !callerCellPattern.MatchString(callerCell) {
 		return errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthUnauthorized,
-			fmt.Sprintf("caller cell id %q invalid (must match ^[a-z][a-z0-9-]*$)", callerCell))
+			"caller cell id invalid",
+			errcode.WithDetails(slog.String("callerCell", callerCell)))
 	}
 	return nil
 }

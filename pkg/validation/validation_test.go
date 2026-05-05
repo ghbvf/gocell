@@ -17,18 +17,19 @@ type nilInterfaceImpl struct{}
 func (*nilInterfaceImpl) Marker() {}
 
 // assertValidationResult is a t.Helper that validates the outcome of a
-// RequireNotEmpty call. When wantMessage is empty it asserts nil error;
-// otherwise it asserts a *errcode.Error with the expected code and message.
-func assertValidationResult(t *testing.T, err error, wantCode errcode.Code, wantMessage string) {
+// RequireNotEmpty call. When wantField is empty it asserts nil error;
+// otherwise it asserts a *errcode.Error with the expected code, const message,
+// and a Details entry with key "field" matching wantField.
+func assertValidationResult(t *testing.T, err error, wantCode errcode.Code, wantField string) {
 	t.Helper()
-	if wantMessage == "" {
+	if wantField == "" {
 		if err != nil {
 			t.Fatalf("expected nil error, got %v", err)
 		}
 		return
 	}
 	if err == nil {
-		t.Fatalf("expected error with message %q, got nil", wantMessage)
+		t.Fatalf("expected error with field %q in details, got nil", wantField)
 	}
 	var ec *errcode.Error
 	if !errors.As(err, &ec) {
@@ -37,8 +38,19 @@ func assertValidationResult(t *testing.T, err error, wantCode errcode.Code, want
 	if ec.Code != wantCode {
 		t.Errorf("code = %q, want %q", ec.Code, wantCode)
 	}
-	if ec.Message != wantMessage {
-		t.Errorf("message = %q, want %q", ec.Message, wantMessage)
+	const wantMsg = "validation: required field missing"
+	if ec.Message != wantMsg {
+		t.Errorf("message = %q, want %q", ec.Message, wantMsg)
+	}
+	var foundField string
+	for _, attr := range ec.Details {
+		if attr.Key == "field" {
+			foundField = attr.Value.String()
+			break
+		}
+	}
+	if foundField != wantField {
+		t.Errorf("details[field] = %q, want %q", foundField, wantField)
 	}
 }
 
@@ -102,7 +114,7 @@ func TestRequireNotEmpty(t *testing.T) {
 			name:        "single field blank returns required error",
 			fields:      []validation.NamedValue{validation.F("id", "")},
 			wantCode:    code,
-			wantMessage: "id is required",
+			wantMessage: "id",
 		},
 		{
 			name: "multi field all non-blank returns nil",
@@ -119,7 +131,7 @@ func TestRequireNotEmpty(t *testing.T) {
 				validation.F("name", ""),
 			},
 			wantCode:    code,
-			wantMessage: "id is required",
+			wantMessage: "id",
 		},
 		{
 			name: "multi field second blank reports second",
@@ -128,7 +140,7 @@ func TestRequireNotEmpty(t *testing.T) {
 				validation.F("name", ""),
 			},
 			wantCode:    code,
-			wantMessage: "name is required",
+			wantMessage: "name",
 		},
 		{
 			name:   "whitespace-only value passes (not trimmed)",
