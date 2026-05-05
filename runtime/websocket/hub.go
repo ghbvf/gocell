@@ -362,17 +362,15 @@ func (h *Hub) shutdown(ctx context.Context) error {
 	clear(h.subjectIdx)
 	h.connMu.Unlock()
 
-	// Close connections with bounded concurrency (semaphore + WaitGroup).
-	// cancel() unblocks per-conn Read via context; Close() tears down the
-	// transport unconditionally. Both are belt-and-suspenders.
+	// Close connections with bounded concurrency. Every entry is guaranteed
+	// to have a Close goroutine spawned; the semaphore inside each goroutine
+	// bounds concurrent transport teardown. ctx bounds *waiting* for
+	// completion, never *whether* an entry's Close is scheduled — see
+	// closeEntriesConcurrently for the contract.
 	//
-	// Semaphore pattern: acquire slot before spawning goroutine; goroutine
-	// releases slot on exit. ctx.Done() early-exits the launch loop so
-	// callers with tight deadlines return promptly without waiting for all
-	// launches to complete. Already-launched goroutines are drained via
-	// closeWG.Wait().
-	//
-	// ref: centrifugal/centrifuge hub.go — bounded concurrent close + WaitGroup.
+	// ref: centrifugal/centrifuge hub.go — semaphore-bounded Close fanout.
+	// ref: nats-io/nats-server server.go closeAllClients — full-set scheduling
+	// invariant; deadline bounds waiting only.
 	closeEntriesConcurrently(ctx, entries, h.config.ConcurrentCloseLimit)
 
 	// Wait for all goroutines (readLoops + writeLoops + pingLoop), bounded by ctx.
