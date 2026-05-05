@@ -21,3 +21,17 @@ func CallWithPackageConst() error {
 func CallWrapWithLiteral(err error) error {
 	return errcode.Wrap(errcode.KindInternal, errcode.ErrInternal, "compliant: wrap literal", err)
 }
+
+// CallWritePublicWithLiteral verifies the helper-coverage extension
+// accepts compile-time const literals at httputil.WritePublic.
+func CallWritePublicWithLiteral() {
+	httputil.WritePublic(nil, nil, errcode.KindInvalid,
+		errcode.ErrValidationFailed, "compliant: literal write public")
+}
+
+// CallWrapOrInfraWithLiteral verifies the helper-coverage extension
+// accepts compile-time const literals at ctxcancel.WrapOrInfra.
+func CallWrapOrInfraWithLiteral(cause error, op, id string) error {
+	return ctxcancel.WrapOrInfra(cause, op, id, errcode.ErrInternal,
+		"compliant: literal wrap or infra")
+}

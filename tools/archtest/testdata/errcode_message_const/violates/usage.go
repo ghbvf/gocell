@@ -27,3 +27,20 @@ func CallNewWithConcatenation(resource string) error {
 	return errcode.New(errcode.KindNotFound, errcode.ErrNotFound,
 		"resource " + resource + " not found")
 }
+
+// CallWritePublicWithSprintfMessage violates MESSAGE-CONST-LITERAL-01 by
+// passing fmt.Sprintf output as the message argument of httputil.WritePublic.
+// Verifies the rule's helper-coverage extension (PR #391 P2).
+func CallWritePublicWithSprintfMessage(detail string) {
+	httputil.WritePublic(nil, nil, errcode.KindInvalid,
+		errcode.ErrValidationFailed,
+		fmt.Sprintf("violates: %s", detail))
+}
+
+// CallWrapOrInfraWithSprintfMessage violates MESSAGE-CONST-LITERAL-01 by
+// passing fmt.Sprintf output as the fallbackMsg argument of
+// ctxcancel.WrapOrInfra. Verifies the rule's helper-coverage extension.
+func CallWrapOrInfraWithSprintfMessage(err error, op, id, tenant string) error {
+	return ctxcancel.WrapOrInfra(err, op, id, errcode.ErrInternal,
+		fmt.Sprintf("infra: tenant %s", tenant))
+}

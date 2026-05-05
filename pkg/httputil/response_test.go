@@ -406,21 +406,20 @@ func (erroringResponseWriter) Write([]byte) (int, error) {
 func (erroringResponseWriter) WriteHeader(int) {}
 
 // TestWriteError_DetailsBypassFencedByMarshalSentinel verifies that an
-// *errcode.Error built directly (bypassing WithDetails' kind whitelist) with
-// a wire-unsafe attr lands as a normal 4xx response — Error.MarshalJSON
-// substitutes the unsafe value with the sentinel marker so encoding/json
-// never sees the bad payload. This is the layer-2 defence (P1-B); together
-// with the layer-3 fail-closed sentinel below it eliminates the empty-200
-// fail-open mode of the prior writeErrorBody.
+// *errcode.Error whose Details slice was mutated to include a wire-unsafe
+// attr (bypassing WithDetails' kind whitelist via direct field assignment)
+// lands as a normal 4xx response — Error.MarshalJSON substitutes the unsafe
+// value with the sentinel marker so encoding/json never sees the bad
+// payload. This is the layer-2 defence (P1-B); together with the layer-3
+// fail-closed sentinel below it eliminates the empty-200 fail-open mode of
+// the prior writeErrorBody.
 func TestWriteError_DetailsBypassFencedByMarshalSentinel(t *testing.T) {
-	bad := &errcode.Error{
-		Kind:    errcode.KindInvalid,
-		Code:    errcode.ErrValidationFailed,
-		Message: "bad",
-		Details: []slog.Attr{
-			slog.Any("ch", make(chan int)),
-		},
-	}
+	bad := errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "bad")
+	// Direct field write — sidesteps WithDetails' kind whitelist (the only
+	// API path) so we can inject a KindAny attr to exercise MarshalJSON's
+	// defence-in-depth substitution. ERRCODE-KIND-LITERAL-01 forbids
+	// composite-literal construction; field assignment is allowed.
+	bad.Details = []slog.Attr{slog.Any("ch", make(chan int))}
 
 	rec := httptest.NewRecorder()
 	WriteError(context.Background(), rec, bad)

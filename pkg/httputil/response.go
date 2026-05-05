@@ -34,6 +34,11 @@ func WriteJSON(w http.ResponseWriter, status int, v any) {
 
 // WritePublic writes a structured error response whose message is deliberately
 // selected by the framework and safe to expose.
+//
+// The message argument MUST be a compile-time const literal — runtime data
+// belongs in errcode.WithDetails (typed slog.Attr). MESSAGE-CONST-LITERAL-01
+// archtest extends to this helper: any caller passing a runtime variable as
+// message is statically rejected at the call site.
 func WritePublic(ctx context.Context, w http.ResponseWriter, kind errcode.Kind, code errcode.Code, message string) {
 	status := kind.Status()
 	respCode := code

@@ -66,6 +66,45 @@ const errcodeMessageTestdataAllowlist = "tools/archtest/testdata/"
 // targeted by this gate.
 const errcodePackagePath = "github.com/ghbvf/gocell/pkg/errcode"
 
+// httputilPackagePath / ctxcancelPackagePath are the additional helpers
+// gated by this rule. Each helper accepts a caller-supplied message that
+// flows directly into errcode.Error.Message; PR #391 review (P2) noted
+// the prior carve-outs in their bodies (struct literal, no errcode.New
+// involvement) created a static blind spot that this extension closes.
+const httputilPackagePath = "github.com/ghbvf/gocell/pkg/httputil"
+const ctxcancelPackagePath = "github.com/ghbvf/gocell/pkg/ctxcancel"
+
+// gatedCallee describes one message-receiving entry point checked by the
+// rule. messageArgIndex is the position of the message string in the
+// argument list:
+//   - errcode.New(kind, code, message, opts...)            → 2
+//   - errcode.Wrap(kind, code, message, cause, opts...)    → 2
+//   - httputil.WritePublic(ctx, w, kind, code, message)    → 4
+//   - ctxcancel.WrapOrInfra(err, op, id, code, fallbackMsg) → 4
+type gatedCallee struct {
+	pkgPath         string
+	name            string
+	messageArgIndex int
+	displayName     string // shown in violation messages, e.g. "httputil.WritePublic"
+}
+
+var messageGatedCallees = []gatedCallee{
+	{pkgPath: errcodePackagePath, name: "New", messageArgIndex: 2, displayName: "errcode.New"},
+	{pkgPath: errcodePackagePath, name: "Wrap", messageArgIndex: 2, displayName: "errcode.Wrap"},
+	{pkgPath: httputilPackagePath, name: "WritePublic", messageArgIndex: 4, displayName: "httputil.WritePublic"},
+	{pkgPath: ctxcancelPackagePath, name: "WrapOrInfra", messageArgIndex: 4, displayName: "ctxcancel.WrapOrInfra"},
+}
+
+// fixtureASTPackageNames maps the local-import name a fixture file uses
+// (selector.X.Name) back to the canonical gatedCallee's displayName, for
+// fixture-mode AST scanning where TypesInfo is unavailable. Each fixture
+// imports the helper as the top-level package name.
+var fixtureASTPackageNames = map[string]struct{}{
+	"errcode":   {},
+	"httputil":  {},
+	"ctxcancel": {},
+}
+
 // TestErrcodeMessageConstLiteral enforces MESSAGE-CONST-LITERAL-01.
 func TestErrcodeMessageConstLiteral(t *testing.T) {
 	t.Parallel()
@@ -121,8 +160,8 @@ func TestErrcodeMessageConstLiteral(t *testing.T) {
 }
 
 // scanErrcodeMessageAST returns "<rel>:<line>: <kind>" violations for a
-// single parsed file. info may be nil; in that case errcodeConstructorName
-// and isAcceptableMessageExpr fall back to pure-AST name matching (used by
+// single parsed file. info may be nil; in that case the resolver and
+// isAcceptableMessageExpr fall back to pure-AST name matching (used by
 // fixture scanning).
 func scanErrcodeMessageAST(
 	fset *token.FileSet,
@@ -136,79 +175,81 @@ func scanErrcodeMessageAST(
 		if !ok {
 			return true
 		}
-		ctorName, ok := errcodeConstructorName(call, info)
+		callee, ok := resolveGatedCallee(call, info)
 		if !ok {
 			return true
 		}
-		// New: (kind, code, message, opts...)        — message is index 2
-		// Wrap: (kind, code, message, cause, opts...) — message is index 2
-		if len(call.Args) < 3 {
+		if len(call.Args) <= callee.messageArgIndex {
 			return true
 		}
-		msgArg := call.Args[2]
+		msgArg := call.Args[callee.messageArgIndex]
 		if isAcceptableMessageExpr(msgArg, info) {
 			return true
 		}
 		line := fset.Position(call.Pos()).Line
 		out = append(out, fmt.Sprintf(
-			"%s:%d: errcode.%s(...) message must be a const literal (got %T) "+
+			"%s:%d: %s(...) message must be a const literal (got %T) "+
 				"— move runtime data to WithDetails(slog.Attr) or WithInternal",
-			rel, line, ctorName, msgArg))
+			rel, line, callee.displayName, msgArg))
 		return true
 	})
 	return out
 }
 
-// errcodeConstructorName resolves call's Fun to either errcode.New or
-// errcode.Wrap and returns the function name; returns "" / false otherwise.
-//
-// Resolution path:
-//   - If TypesInfo is available, the gate matches via *types.Func -> *types.Package
-//     path equality with errcodePackagePath. This is the precise mode used by
-//     the main test (real production sources, real imports).
-//   - If TypesInfo is nil (fixture-mode AST scan), the gate falls back to
-//     pure-AST name matching: selector.X.Name == "errcode" and
-//     selector.Sel.Name in {"New", "Wrap"}. This lets fixture packages
-//     declare their own local `errcode` package without a replace directive
-//     pointing at the main module.
-func errcodeConstructorName(call *ast.CallExpr, info *types.Info) (string, bool) {
+// resolveGatedCallee matches call against messageGatedCallees and returns
+// the matched gatedCallee. info-based resolution (production scan) checks
+// the imported package path; AST-only fallback (fixture scan) checks the
+// local selector name (e.g. selector.X.Name == "errcode") so fixtures can
+// shadow the helper packages locally.
+func resolveGatedCallee(call *ast.CallExpr, info *types.Info) (gatedCallee, bool) {
 	sel, ok := call.Fun.(*ast.SelectorExpr)
-	if !ok {
-		return "", false
+	if !ok || sel.Sel == nil {
+		return gatedCallee{}, false
 	}
 	if info != nil {
 		obj := info.Uses[sel.Sel]
 		if obj == nil {
-			return "", false
+			return gatedCallee{}, false
 		}
 		fn, ok := obj.(*types.Func)
-		if !ok {
-			return "", false
+		if !ok || fn.Pkg() == nil {
+			return gatedCallee{}, false
 		}
-		pkg := fn.Pkg()
-		if pkg == nil || pkg.Path() != errcodePackagePath {
-			return "", false
+		pkgPath := fn.Pkg().Path()
+		name := fn.Name()
+		for _, c := range messageGatedCallees {
+			if c.pkgPath == pkgPath && c.name == name {
+				return c, true
+			}
 		}
-		switch fn.Name() {
-		case "New", "Wrap":
-			return fn.Name(), true
-		default:
-			return "", false
-		}
+		return gatedCallee{}, false
 	}
 	xIdent, ok := sel.X.(*ast.Ident)
-	if !ok || xIdent.Name != "errcode" {
-		return "", false
+	if !ok {
+		return gatedCallee{}, false
 	}
-	if sel.Sel == nil {
-		return "", false
+	if _, registered := fixtureASTPackageNames[xIdent.Name]; !registered {
+		return gatedCallee{}, false
 	}
-	switch sel.Sel.Name {
-	case "New", "Wrap":
-		return sel.Sel.Name, true
-	default:
-		return "", false
+	for _, c := range messageGatedCallees {
+		// AST-only mode keys on selector.X.Name == package short-name
+		// (last segment of the import path). All four gated callees use
+		// their natural short name in fixtures.
+		shortName := lastPathSegment(c.pkgPath)
+		if shortName == xIdent.Name && sel.Sel.Name == c.name {
+			return c, true
+		}
 	}
+	return gatedCallee{}, false
+}
+
+// lastPathSegment returns the substring after the final '/' in a Go import
+// path — the package's natural short name when imported without an alias.
+func lastPathSegment(p string) string {
+	if i := strings.LastIndex(p, "/"); i >= 0 {
+		return p[i+1:]
+	}
+	return p
 }
 
 // isAcceptableMessageExpr reports whether expr is a const literal or a

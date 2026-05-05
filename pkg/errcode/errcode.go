@@ -614,7 +614,7 @@ func WithInternal(message string) Option {
 //
 // Allowed kinds (JSON-safe scalar): KindString, KindInt64, KindUint64,
 // KindFloat64, KindBool, KindDuration, KindTime. Any other kind — KindAny,
-// KindGroup, KindLogValuer — panics with errcode.Assertion: those carry
+// KindGroup, KindLogValuer — panics via MustValidateDetailsKinds: those carry
 // arbitrary Go values or nested structures whose Value.Any() output is
 // handler-dependent (per stdlib log/slog docs, slog.Attr is a logging
 // carrier, not a wire DTO). go-kratos errors.Metadata uses map<string,
@@ -627,19 +627,31 @@ func WithInternal(message string) Option {
 //	errcode.New(KindNotFound, ErrCellNotFound, "cell not found",
 //	    errcode.WithDetails(slog.String("cellId", id)))
 func WithDetails(attrs ...slog.Attr) Option {
+	MustValidateDetailsKinds(attrs)
 	return func(e *Error) {
 		if len(attrs) == 0 {
 			return
 		}
-		for _, attr := range attrs {
-			if !isWireSafeAttrKind(attr.Value.Kind()) {
-				panic(Assertion(
-					"errcode.WithDetails: attr %q has wire-unsafe kind %s; "+
-						"use scalar slog.String/Int/Uint64/Float64/Bool/Duration/Time",
-					attr.Key, attr.Value.Kind()))
-			}
-		}
 		e.Details = append(e.Details, attrs...)
+	}
+}
+
+// MustValidateDetailsKinds panics with errcode.Assertion when any attr in
+// attrs has a wire-unsafe kind. The Must* prefix marks this as a
+// programmer-error fail-fast site (PANIC-REGISTERED-01 auto-exempt under
+// the project's "Must* may panic" convention).
+//
+// Exposed so callers that build *Error values directly (test fixtures,
+// future builders) can validate at construction time the same way
+// WithDetails does.
+func MustValidateDetailsKinds(attrs []slog.Attr) {
+	for _, attr := range attrs {
+		if !isWireSafeAttrKind(attr.Value.Kind()) {
+			panic(Assertion(
+				"errcode.WithDetails: attr %q has wire-unsafe kind %s; "+
+					"use scalar slog.String/Int/Uint64/Float64/Bool/Duration/Time",
+				attr.Key, attr.Value.Kind()))
+		}
 	}
 }
 

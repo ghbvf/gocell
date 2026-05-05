@@ -79,7 +79,7 @@ func TestErrcodeMessageConstLiteralFixtures(t *testing.T) {
 		wantViolCount int
 	}{
 		{"compliant", 0},
-		{"violates", 3},
+		{"violates", 5}, // 3 errcode.New/Wrap + httputil.WritePublic + ctxcancel.WrapOrInfra
 	}
 
 	for _, tc := range cases {
