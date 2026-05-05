@@ -7,6 +7,18 @@ import "github.com/ghbvf/gocell/runtime/observability/poolstats"
 // OTel pool collector to emit db.client.connection.* metrics without
 // adapter-specific switching.
 //
+// Cluster mode aggregation: *ClusterClient.PoolStats() returns counters
+// summed across every cluster node, while Config.PoolSize is the *per-node*
+// connection cap. To keep db.client.connection.{count,max} on the same
+// scale (otherwise UsedConns can exceed MaxConns at any non-trivial pool
+// utilization, which dashboards interpret as saturation), MaxConns is
+// scaled by the configured seed count: MaxConns = PoolSize × len(ClusterAddrs).
+// Seed count is a lower bound — a real cluster usually has more nodes
+// (replicas plus rebalanced shards), so the reported max underestimates
+// the true cap; for an exact figure consult Redis CLUSTER NODES out-of-band.
+// Aggregation is the right comparison surface for OTel because UsedConns
+// is itself aggregated; mismatched scopes were the bug, not the magnitude.
+//
 // ref: redis/go-redis internal/pool/pool.go — PoolStats exposes
 // TotalConns/IdleConns/StaleConns/Timeouts/etc. UsedConns is derived as
 // TotalConns - IdleConns - StaleConns (stale connections are scheduled
@@ -39,7 +51,23 @@ func (s *redisPoolStatter) Snapshot() poolstats.Snapshot {
 		TotalConns: int64(stats.TotalConns),
 		IdleConns:  int64(stats.IdleConns),
 		UsedConns:  used,
-		MaxConns:   int64(s.client.config.PoolSize),
+		MaxConns:   maxConnsForMode(s.client.config),
 		WaitCount:  int64(stats.Timeouts),
 	}
+}
+
+// maxConnsForMode returns the connection cap on the same scope as
+// PoolStats reports usage. Standalone and Sentinel both have a single pool
+// per process, so the cap is just Config.PoolSize. ClusterClient pools per
+// node and aggregates PoolStats across nodes, so the comparable cap is
+// PoolSize × seed count (lower bound; topology refresh may discover more).
+func maxConnsForMode(cfg Config) int64 {
+	if cfg.Mode == ModeCluster {
+		seeds := int64(len(cfg.ClusterAddrs))
+		if seeds < 1 {
+			seeds = 1
+		}
+		return int64(cfg.PoolSize) * seeds
+	}
+	return int64(cfg.PoolSize)
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 
 	goredis "github.com/redis/go-redis/v9"
@@ -186,6 +187,219 @@ func TestNewClient_SentinelEmptyMaster(t *testing.T) {
 	})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "SentinelMaster is required")
+}
+
+// ---------------------------------------------------------------------------
+// Cluster mode (B10 PR-V1-REDIS-CLUSTER) — fail-fast guards
+// ---------------------------------------------------------------------------
+
+func TestNewClient_ClusterEmptyAddrs(t *testing.T) {
+	_, err := NewClient(context.Background(), Config{Mode: ModeCluster})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "ClusterAddrs is required")
+}
+
+// Cluster mode rejects Addr being set; the two address fields are mutually
+// exclusive so users do not silently ship a misconfigured deployment that
+// looks like cluster but routes through standalone code paths.
+func TestNewClient_ClusterAddrSetWithCluster(t *testing.T) {
+	_, err := NewClient(context.Background(), Config{
+		Mode:         ModeCluster,
+		Addr:         "127.0.0.1:6379",
+		ClusterAddrs: []string{"127.0.0.1:7000"},
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "Addr must be empty")
+}
+
+// Redis cluster has no SELECT command (no logical DB selection), so DB must
+// be zero. Fail fast at construction instead of letting EVAL fail at runtime.
+func TestNewClient_ClusterNonZeroDBRejected(t *testing.T) {
+	_, err := NewClient(context.Background(), Config{
+		Mode:         ModeCluster,
+		ClusterAddrs: []string{"127.0.0.1:7000", "127.0.0.1:7001"},
+		DB:           1,
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "DB is not supported in cluster mode")
+}
+
+func TestNewClient_ClusterRemoteNonTLS(t *testing.T) {
+	_, err := NewClient(context.Background(), Config{
+		Mode: ModeCluster,
+		ClusterAddrs: []string{
+			"prod-a.redis.example.internal:7000",
+			"prod-b.redis.example.internal:7000",
+		},
+		DialTimeout: testtime.SlowPoll,
+	})
+	require.Error(t, err)
+	var ec *errcode.Error
+	require.ErrorAs(t, err, &ec)
+	assert.Equal(t, errcode.ErrAdapterEndpointNotTLS, ec.Code,
+		"cluster remote non-TLS endpoints must be rejected with ErrAdapterEndpointNotTLS")
+}
+
+func TestConfigLogValue_Cluster(t *testing.T) {
+	cfg := Config{
+		Mode:         ModeCluster,
+		ClusterAddrs: []string{"node-a:7000", "node-b:7000"},
+		Password:     "s3cret",
+	}
+	resolved := cfg.LogValue().Resolve().String()
+	assert.Contains(t, resolved, "cluster", "LogValue should reflect mode=cluster")
+	assert.Contains(t, resolved, "node-a:7000", "LogValue must show cluster addrs for ops diagnosis")
+	assert.Contains(t, resolved, "node-b:7000")
+	assert.NotContains(t, resolved, "s3cret", "LogValue must not leak password in cluster mode")
+}
+
+// rediss URL form may embed user:password in ClusterAddrs. LogValue must
+// route every URL entry through url.URL.Redacted so the password segment
+// is replaced with "xxxxx" before reaching slog; plain host:port entries
+// pass through unchanged. Parse failures are masked with "<unparseable>"
+// so a malformed URL never bypasses redaction.
+func TestConfigLogValue_Cluster_RedactsURLCredentials(t *testing.T) {
+	cfg := Config{
+		Mode: ModeCluster,
+		ClusterAddrs: []string{
+			"rediss://acl-user:tops3cret@node-a.example.internal:7000",
+			"node-plain:7000",
+			"rediss://only-user@node-b.example.internal:7000",
+		},
+		Password: "envS3cret",
+	}
+	resolved := cfg.LogValue().Resolve().String()
+	assert.NotContains(t, resolved, "tops3cret",
+		"LogValue must redact URL-embedded password")
+	assert.NotContains(t, resolved, "envS3cret",
+		"LogValue must not leak the env-side Password field")
+	assert.Contains(t, resolved, "xxxxx",
+		"url.URL.Redacted replaces password with literal xxxxx")
+	assert.Contains(t, resolved, "node-a.example.internal:7000",
+		"hostname must remain visible for ops diagnosis")
+	assert.Contains(t, resolved, "node-plain:7000",
+		"plain host:port entries pass through verbatim")
+	assert.Contains(t, resolved, "only-user",
+		"username-only URLs keep the username visible (no password to mask)")
+}
+
+// go-redis ClusterClient default PoolSize is 5*GOMAXPROCS while standalone
+// Client default is 10*GOMAXPROCS. Mirror that here so db.client.connection.max
+// stays accurate for cluster pools and PoolSize is not silently inflated by
+// 2x per node × N nodes.
+func TestConfigDefaults_ClusterPoolSize(t *testing.T) {
+	cfg := Config{
+		Mode:         ModeCluster,
+		ClusterAddrs: []string{"127.0.0.1:7000"},
+	}
+	cfg.defaults()
+	if cfg.PoolSize <= 0 {
+		t.Fatalf("PoolSize must be positive after defaults(), got %d", cfg.PoolSize)
+	}
+	standalone := Config{Addr: "127.0.0.1:6379"}
+	standalone.defaults()
+	if cfg.PoolSize >= standalone.PoolSize {
+		t.Fatalf("cluster default PoolSize (%d) must be < standalone default (%d)",
+			cfg.PoolSize, standalone.PoolSize)
+	}
+}
+
+// TestBuildClusterOptions covers buildClusterOptions's URL/plain handling, TLS
+// extraction, mixed-form rejection, and conflicting-field rejection. Mirrors
+// buildFailoverOptions tests by intent — sentinel and cluster share the same
+// URL parsing semantics.
+func TestBuildClusterOptions(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name        string
+		cfg         Config
+		expectError string // substring; "" means expect no error
+	}{
+		{
+			name: "plain host:port preserves TLSConfig nil",
+			cfg: Config{
+				Mode:         ModeCluster,
+				ClusterAddrs: []string{"127.0.0.1:7000", "127.0.0.1:7001"},
+			},
+		},
+		{
+			name: "rediss URL form sets TLSConfig with empty ServerName",
+			cfg: Config{
+				Mode: ModeCluster,
+				ClusterAddrs: []string{
+					"rediss://node-a.cluster.example.internal:7000",
+					"rediss://node-b.cluster.example.internal:7000",
+				},
+			},
+		},
+		{
+			name: "mixed URL and plain forms rejected",
+			cfg: Config{
+				Mode: ModeCluster,
+				ClusterAddrs: []string{
+					"rediss://node-a.cluster.example.internal:7000",
+					"127.0.0.1:7001",
+				},
+			},
+			expectError: "cannot mix URL and host:port",
+		},
+		{
+			name: "conflicting password values rejected",
+			cfg: Config{
+				Mode: ModeCluster,
+				ClusterAddrs: []string{
+					"rediss://user:pass-a@node-a.cluster.example.internal:7000",
+					"rediss://user:pass-b@node-b.cluster.example.internal:7000",
+				},
+			},
+			expectError: "conflicting Cluster URL password",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			cfg := tc.cfg
+			cfg.defaults()
+			opts, err := buildClusterOptions(cfg)
+			if tc.expectError != "" {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tc.expectError)
+				return
+			}
+			require.NoError(t, err)
+			require.NotNil(t, opts)
+			require.Len(t, opts.Addrs, len(cfg.ClusterAddrs),
+				"buildClusterOptions must populate one Addrs entry per ClusterAddrs entry")
+			assertClusterTLSConfigShape(t, opts, cfg.ClusterAddrs)
+		})
+	}
+}
+
+// assertClusterTLSConfigShape pulls the TLSConfig assertions out of the
+// table-driven loop body to keep the loop's cognitive complexity below the
+// project ceiling. opts.TLSConfig must be set with empty ServerName when
+// any rediss:// URL is present (crypto/tls infers SNI per node), and nil
+// otherwise.
+func assertClusterTLSConfigShape(t *testing.T, opts *goredis.ClusterOptions, addrs []string) {
+	t.Helper()
+	if !anyHasPrefix(addrs, "rediss://") {
+		require.Nil(t, opts.TLSConfig)
+		return
+	}
+	require.NotNil(t, opts.TLSConfig)
+	require.Empty(t, opts.TLSConfig.ServerName,
+		"shared cluster TLSConfig must let crypto/tls infer SNI per node")
+}
+
+func anyHasPrefix(addrs []string, prefix string) bool {
+	for _, a := range addrs {
+		if strings.HasPrefix(a, prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 // ---------------------------------------------------------------------------

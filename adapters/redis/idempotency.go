@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -24,8 +25,12 @@ var _ idempotency.Claimer = (*IdempotencyClaimer)(nil)
 //
 // Consistency: L1 (LocalTx) — each Lua script executes atomically within Redis.
 //
-//   - lease:{key} — SET NX with leaseTTL, value = random token. Indicates "processing".
-//   - done:{key}  — SET with doneTTL, value = "1". Indicates "completed".
+//   - {key}:lease — SET NX with leaseTTL, value = random token. Indicates "processing".
+//   - {key}:done  — SET with doneTTL, value = "1". Indicates "completed".
+//
+// Cluster: the business key is wrapped in a Redis Cluster hashtag so CRC16
+// hashes only the key portion; lease and done keys colocate on the same slot,
+// keeping multi-KEY EVAL safe under Cluster mode (B10 PR-V1-REDIS-CLUSTER).
 //
 // Claim checks done first (ClaimDone), then attempts lease (ClaimAcquired or ClaimBusy).
 // Commit sets done + deletes lease. Release deletes lease (token-guarded).
@@ -46,8 +51,8 @@ func newIdempotencyClaimerFromCmdable(rdb cmdable) *IdempotencyClaimer {
 
 // claimScript is the Lua script for atomic Claim:
 //
-//	KEYS[1] = done:{key}
-//	KEYS[2] = lease:{key}
+//	KEYS[1] = {key}:done
+//	KEYS[2] = {key}:lease
 //	ARGV[1] = token
 //	ARGV[2] = leaseTTL (seconds)
 //
@@ -70,8 +75,8 @@ return 2
 
 // commitScript: atomic Commit (token-guarded):
 //
-//	KEYS[1] = lease:{key}
-//	KEYS[2] = done:{key}
+//	KEYS[1] = {key}:lease
+//	KEYS[2] = {key}:done
 //	ARGV[1] = token
 //	ARGV[2] = doneTTL (seconds)
 //
@@ -88,7 +93,7 @@ return 0
 
 // releaseScript: atomic Release (token-guarded):
 //
-//	KEYS[1] = lease:{key}
+//	KEYS[1] = {key}:lease
 //	ARGV[1] = token
 //
 // Returns 1 on success, 0 if token mismatch.
@@ -103,7 +108,7 @@ return 0
 
 // extendScript: atomic Extend (token-guarded):
 //
-//	KEYS[1] = lease:{key}
+//	KEYS[1] = {key}:lease
 //	ARGV[1] = token
 //	ARGV[2] = new TTL in milliseconds (PEXPIRE)
 //
@@ -116,9 +121,20 @@ return 0
 `
 
 // Claim attempts to acquire a processing lease for the given key.
+//
+// Cluster safety: the key is wrapped in a Redis Cluster hashtag (see below).
+// Empty keys produce an empty hashtag `{}` which Redis treats as no hashtag
+// at all — that path silently disables slot colocation and reintroduces
+// CROSSSLOT failures. Keys containing `{` or `}` likewise destabilize the
+// hashtag boundary. Both inputs are rejected at the entry rather than left
+// to surface as obscure runtime errors.
 func (c *IdempotencyClaimer) Claim(
 	ctx context.Context, key string, leaseTTL, doneTTL time.Duration,
 ) (idempotency.ClaimState, idempotency.Receipt, error) {
+	if key == "" || strings.ContainsAny(key, "{}") {
+		return 0, nil, errcode.New(errcode.KindInternal, ErrAdapterRedisSet,
+			fmt.Sprintf("redis: idempotency key must be non-empty and free of '{','}' characters; got %q", key))
+	}
 	if leaseTTL <= 0 {
 		leaseTTL = idempotency.DefaultLeaseTTL
 	}
@@ -132,8 +148,13 @@ func (c *IdempotencyClaimer) Claim(
 			fmt.Sprintf("redis: idempotency claim token generation failed (key=%s)", key), err)
 	}
 
-	leaseKey := "lease:" + key
-	doneKey := "done:" + key
+	// Wrap business key in a Redis Cluster hashtag so {key}:lease and
+	// {key}:done hash to the same slot — required for the dual-KEY claim and
+	// commit Lua scripts to run on Cluster (B10). Standalone/Sentinel modes
+	// use the same naming for a single source of truth; the hashtag is a
+	// no-op outside Cluster.
+	leaseKey := "{" + key + "}:lease"
+	doneKey := "{" + key + "}:done"
 	leaseSec := max(int64(leaseTTL.Seconds()), 1)
 
 	res, err := c.rdb.Eval(ctx, claimScript, []string{doneKey, leaseKey}, token, leaseSec).Result()

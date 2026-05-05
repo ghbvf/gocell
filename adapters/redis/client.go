@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"fmt"
 	"log/slog"
+	"net/url"
 	"runtime"
 	"strings"
 	"time"
@@ -45,6 +46,12 @@ const (
 	ModeStandalone Mode = "standalone"
 	// ModeSentinel connects via Redis Sentinel for high availability.
 	ModeSentinel Mode = "sentinel"
+	// ModeCluster connects to a Redis Cluster (sharded keyspace).
+	// AWS ElastiCache Cluster, Azure Cache Cluster and self-hosted Redis
+	// Cluster deployments use this mode. DB selection is unavailable on
+	// Cluster (no SELECT command); multi-KEY operations require all keys
+	// to share a hashtag (B10 PR-V1-REDIS-CLUSTER).
+	ModeCluster Mode = "cluster"
 )
 
 // Config holds connection and behavioral settings for the Redis adapter.
@@ -58,7 +65,13 @@ type Config struct {
 	// SentinelMaster is the name of the master instance for Sentinel mode.
 	SentinelMaster string
 
-	// Mode selects standalone or sentinel. Defaults to ModeStandalone.
+	// ClusterAddrs is the list of Redis Cluster node addresses for Cluster mode.
+	// Plain "host:port" or "rediss://host:port" URL forms are accepted; they
+	// must not be mixed within a single cluster definition. DB must be 0 in
+	// Cluster mode (no SELECT command).
+	ClusterAddrs []string
+
+	// Mode selects standalone, sentinel, or cluster. Defaults to ModeStandalone.
 	Mode Mode
 
 	// Password is the auth password, if any.
@@ -80,21 +93,60 @@ type Config struct {
 	DistLockTTL time.Duration
 
 	// PoolSize is the maximum number of connections go-redis is allowed to
-	// maintain. Zero leaves go-redis's default (10 * GOMAXPROCS). Set this
-	// explicitly for workloads whose steady-state checkouts would exceed
-	// the library default — required for meaningful
-	// db.client.connection.max emissions on the pool stats collector.
+	// maintain. Zero applies a per-mode default mirroring go-redis: 10×GOMAXPROCS
+	// for standalone/sentinel and 5×GOMAXPROCS for cluster (where the same
+	// PoolSize applies *per node* — total cluster connections = nodes × PoolSize,
+	// so the per-node default is halved to keep aggregate sizing comparable).
+	// Set this explicitly for workloads whose steady-state checkouts would exceed
+	// the library default — required for meaningful db.client.connection.max
+	// emissions on the pool stats collector.
 	PoolSize int
 }
 
 // LogValue implements slog.LogValuer so that Config can be safely passed
 // to structured loggers without leaking the password.
+//
+// Cluster ClusterAddrs may carry rediss://user:pass@host URL form; pass
+// each addr through url.Parse → URL.Redacted so the password segment is
+// replaced with "xxxxx" before reaching slog. Plain host:port entries are
+// returned verbatim. Parse failures return a sentinel "<unparseable>"
+// rather than the raw string so a malformed URL never bypasses redaction.
+//
+// ref: net/url URL.Redacted (https://pkg.go.dev/net/url#URL.Redacted)
 func (c Config) LogValue() slog.Value {
+	if c.Mode == ModeCluster {
+		return slog.GroupValue(
+			slog.String("mode", string(c.Mode)),
+			slog.Any("cluster_addrs", redactClusterAddrs(c.ClusterAddrs)),
+		)
+	}
 	return slog.GroupValue(
 		slog.String("mode", string(c.Mode)),
 		slog.String("addr", c.Addr),
 		slog.Int("db", c.DB),
 	)
+}
+
+// redactClusterAddrs returns a copy of addrs with any URL-form entries
+// passed through url.URL.Redacted; plain host:port entries are unchanged.
+func redactClusterAddrs(addrs []string) []string {
+	if len(addrs) == 0 {
+		return nil
+	}
+	out := make([]string, len(addrs))
+	for i, a := range addrs {
+		if !strings.Contains(a, "://") {
+			out[i] = a
+			continue
+		}
+		u, err := url.Parse(a)
+		if err != nil {
+			out[i] = "<unparseable>"
+			continue
+		}
+		out[i] = u.Redacted()
+	}
+	return out
 }
 
 // defaults applies default values to zero-valued fields.
@@ -115,26 +167,78 @@ func (c *Config) defaults() {
 		c.DistLockTTL = defaultRedisDistLockTTL
 	}
 	if c.PoolSize == 0 {
-		// Mirror go-redis/v9's own default (10 * GOMAXPROCS) so the
-		// derived `db.client.connection.max` metric reflects the real
-		// pool capacity. Leaving zero here would emit MaxConns=0, which
-		// dashboards interpret as "pool saturated" (used > max).
-		c.PoolSize = 10 * runtime.GOMAXPROCS(0)
+		// Mirror go-redis/v9's own per-mode default so the derived
+		// `db.client.connection.max` metric reflects real pool capacity:
+		// standalone/sentinel = 10×GOMAXPROCS; cluster = 5×GOMAXPROCS *per
+		// node* (total checkouts = nodes × PoolSize, so the per-node default
+		// is halved to keep aggregate sizing comparable). Leaving zero would
+		// emit MaxConns=0, which dashboards interpret as "pool saturated".
+		multiplier := 10
+		if c.Mode == ModeCluster {
+			multiplier = 5
+		}
+		c.PoolSize = multiplier * runtime.GOMAXPROCS(0)
 	}
+}
+
+// validateConfig enforces per-mode required-field invariants prior to any
+// dial. Each branch returns ERR_ADAPTER_REDIS_CONNECT with a message that
+// names the offending field so misconfiguration surfaces at startup rather
+// than as a runtime CROSSSLOT / wrong-mode failure.
+func validateConfig(cfg Config) error {
+	switch cfg.Mode {
+	case ModeStandalone:
+		if cfg.Addr == "" {
+			return errcode.New(errcode.KindInternal, ErrAdapterRedisConnect,
+				"redis: Config.Addr is required for standalone mode")
+		}
+	case ModeSentinel:
+		if len(cfg.SentinelAddrs) == 0 {
+			return errcode.New(errcode.KindInternal, ErrAdapterRedisConnect,
+				"redis: Config.SentinelAddrs is required for sentinel mode")
+		}
+		if cfg.SentinelMaster == "" {
+			return errcode.New(errcode.KindInternal, ErrAdapterRedisConnect,
+				"redis: Config.SentinelMaster is required for sentinel mode")
+		}
+	case ModeCluster:
+		if len(cfg.ClusterAddrs) == 0 {
+			return errcode.New(errcode.KindInternal, ErrAdapterRedisConnect,
+				"redis: Config.ClusterAddrs is required for cluster mode")
+		}
+		if cfg.Addr != "" {
+			return errcode.New(errcode.KindInternal, ErrAdapterRedisConnect,
+				"redis: Config.Addr must be empty in cluster mode (use ClusterAddrs)")
+		}
+		if cfg.DB != 0 {
+			return errcode.New(errcode.KindInternal, ErrAdapterRedisConnect,
+				"redis: Config.DB is not supported in cluster mode (no SELECT command)")
+		}
+	}
+	return nil
 }
 
 // validateEndpointTLS enforces SEC-FAIL-CLOSED: all addresses must use a
 // TLS-secured scheme or be loopback (127.0.0.1, ::1, localhost) for dev/CI.
 func (c *Config) validateEndpointTLS() error {
-	if c.Mode == ModeStandalone {
+	switch c.Mode {
+	case ModeCluster:
+		for _, addr := range c.ClusterAddrs {
+			if err := secutil.ValidateTLSEndpoint(addr); err != nil {
+				return err
+			}
+		}
+		return nil
+	case ModeSentinel:
+		for _, addr := range c.SentinelAddrs {
+			if err := secutil.ValidateTLSEndpoint(addr); err != nil {
+				return err
+			}
+		}
+		return nil
+	default:
 		return secutil.ValidateTLSEndpoint(c.Addr)
 	}
-	for _, addr := range c.SentinelAddrs {
-		if err := secutil.ValidateTLSEndpoint(addr); err != nil {
-			return err
-		}
-	}
-	return nil
 }
 
 // cmdable is an internal interface matching the subset of redis.Cmdable
@@ -180,17 +284,8 @@ type Client struct {
 func NewClient(ctx context.Context, cfg Config) (*Client, error) {
 	cfg.defaults()
 
-	if cfg.Mode == ModeStandalone && cfg.Addr == "" {
-		return nil, errcode.New(errcode.KindInternal, ErrAdapterRedisConnect,
-			"redis: Config.Addr is required for standalone mode")
-	}
-	if cfg.Mode == ModeSentinel && len(cfg.SentinelAddrs) == 0 {
-		return nil, errcode.New(errcode.KindInternal, ErrAdapterRedisConnect,
-			"redis: Config.SentinelAddrs is required for sentinel mode")
-	}
-	if cfg.Mode == ModeSentinel && cfg.SentinelMaster == "" {
-		return nil, errcode.New(errcode.KindInternal, ErrAdapterRedisConnect,
-			"redis: Config.SentinelMaster is required for sentinel mode")
+	if err := validateConfig(cfg); err != nil {
+		return nil, err
 	}
 
 	// SEC-FAIL-CLOSED: validate TLS before any network dial.
@@ -211,6 +306,14 @@ func NewClient(ctx context.Context, cfg Config) (*Client, error) {
 		fc := goredis.NewFailoverClient(opts)
 		rdb = fc
 		statsProvider = fc
+	case ModeCluster:
+		opts, err := buildClusterOptions(cfg)
+		if err != nil {
+			return nil, err
+		}
+		cc := goredis.NewClusterClient(opts)
+		rdb = cc
+		statsProvider = cc
 	default:
 		// SEC-FAIL-CLOSED: build Options via ParseURL when Addr is a URL form
 		// so that rediss://host:port carries TLSConfig into the dial. Without
@@ -236,10 +339,7 @@ func NewClient(ctx context.Context, cfg Config) (*Client, error) {
 		return nil, err
 	}
 
-	slog.Info("redis: connected",
-		"mode", string(cfg.Mode),
-		"addr", cfg.Addr,
-		"db", cfg.DB)
+	slog.Info("redis: connected", "config", cfg)
 
 	return c, nil
 }
@@ -308,7 +408,7 @@ func buildFailoverOptions(cfg Config) (*goredis.FailoverOptions, error) {
 		PoolSize:     cfg.PoolSize,
 	}
 
-	hasURL, hasPlain := sentinelAddressForms(cfg.SentinelAddrs)
+	hasURL, hasPlain := addressForms(cfg.SentinelAddrs)
 	if hasURL && hasPlain {
 		return nil, errcode.New(errcode.KindInternal, ErrAdapterRedisConnect,
 			"redis: sentinel addresses cannot mix URL and host:port forms")
@@ -321,7 +421,11 @@ func buildFailoverOptions(cfg Config) (*goredis.FailoverOptions, error) {
 	return buildFailoverURLOptions(base, cfg.SentinelAddrs)
 }
 
-func sentinelAddressForms(addrs []string) (hasURL, hasPlain bool) {
+// addressForms classifies a slice of redis addresses by form. URL form
+// (anything containing "://") and plain host:port form are mutually
+// exclusive within a single Sentinel or Cluster configuration; mixing them
+// is rejected at the call site. Shared between sentinel and cluster paths.
+func addressForms(addrs []string) (hasURL, hasPlain bool) {
 	for _, addr := range addrs {
 		if strings.Contains(addr, "://") {
 			hasURL = true
@@ -352,7 +456,7 @@ func appendFailoverURL(base *goredis.FailoverOptions, addr string) error {
 			"redis: sentinel URL addresses must use the same TLS scheme")
 	}
 	if len(base.SentinelAddrs) == 0 {
-		base.TLSConfig = failoverTLSConfig(parsed.TLSConfig)
+		base.TLSConfig = sharedNodeTLSConfig(parsed.TLSConfig)
 	} else if err := checkFailoverTLSConfigCompatible(base.TLSConfig, parsed.TLSConfig); err != nil {
 		return err
 	}
@@ -418,24 +522,116 @@ func mergeFailoverIntField(dst *int, incoming int, name string) error {
 	return nil
 }
 
-func failoverTLSConfig(parsed *tls.Config) *tls.Config {
+// sharedNodeTLSConfig clones a per-URL tls.Config and clears ServerName so
+// the resulting config can be shared across multiple node dials (Sentinel
+// resolved master, every Cluster shard) without forcing the first URL's
+// SNI onto later addresses; an empty ServerName lets crypto/tls infer the
+// host from each tls.DialWithDialer target. Returns nil when the input is
+// nil.
+func sharedNodeTLSConfig(parsed *tls.Config) *tls.Config {
 	if parsed == nil {
 		return nil
 	}
 	cfg := parsed.Clone()
-	// FailoverOptions carries a single TLSConfig shared by every Sentinel dial
-	// and by the resolved master dial. Leaving the first URL's ServerName here
-	// would force that SNI onto all later addresses; an empty ServerName lets
-	// crypto/tls infer the host from each tls.DialWithDialer target.
 	cfg.ServerName = ""
 	return cfg
+}
+
+// buildClusterOptions converts cfg into go-redis ClusterOptions. Cluster mode
+// accepts plain "host:port" entries for loopback dev/test and "rediss://host:port"
+// URL entries for TLS remote deployments; mixing the two forms within a single
+// cluster definition is rejected. URL entries are parsed before reaching go-redis
+// so Addrs contain host:port values and TLSConfig is populated on ClusterOptions.
+//
+// ref: redis/go-redis osscluster.go ParseClusterURL — ClusterOptions carries a
+// single TLSConfig that enables TLS dials for every cluster node.
+func buildClusterOptions(cfg Config) (*goredis.ClusterOptions, error) {
+	// Username left empty by default; populated from URL by
+	// mergeClusterURLFields when credentials appear in rediss:// addresses.
+	// Username and Password are independent ACL fields — Password without
+	// Username is the legacy AUTH password (server matches against
+	// `requirepass`), Username + Password is ACL.
+	base := &goredis.ClusterOptions{
+		Password:     cfg.Password,
+		DialTimeout:  cfg.DialTimeout,
+		ReadTimeout:  cfg.ReadTimeout,
+		WriteTimeout: cfg.WriteTimeout,
+		PoolSize:     cfg.PoolSize,
+	}
+
+	hasURL, hasPlain := addressForms(cfg.ClusterAddrs)
+	if hasURL && hasPlain {
+		return nil, errcode.New(errcode.KindInternal, ErrAdapterRedisConnect,
+			"redis: cluster addresses cannot mix URL and host:port forms")
+	}
+	if !hasURL {
+		base.Addrs = append([]string(nil), cfg.ClusterAddrs...)
+		return base, nil
+	}
+	return buildClusterURLOptions(base, cfg.ClusterAddrs)
+}
+
+func buildClusterURLOptions(base *goredis.ClusterOptions, addrs []string) (*goredis.ClusterOptions, error) {
+	for _, addr := range addrs {
+		if err := appendClusterURL(base, addr); err != nil {
+			return nil, err
+		}
+	}
+	return base, nil
+}
+
+func appendClusterURL(base *goredis.ClusterOptions, addr string) error {
+	parsed, err := goredis.ParseClusterURL(addr)
+	if err != nil {
+		return errcode.Wrap(errcode.KindInternal, ErrAdapterRedisConnect,
+			fmt.Sprintf("redis: invalid ClusterAddrs URL %q", addr), err)
+	}
+	if len(base.Addrs) > 0 && ((base.TLSConfig == nil) != (parsed.TLSConfig == nil)) {
+		return errcode.New(errcode.KindInternal, ErrAdapterRedisConnect,
+			"redis: cluster URL addresses must use the same TLS scheme")
+	}
+	if len(base.Addrs) == 0 {
+		base.TLSConfig = sharedNodeTLSConfig(parsed.TLSConfig)
+	}
+	// ParseClusterURL rejects unknown query params (including skip_verify),
+	// so per-URL TLS verification options cannot vary across URLs and we do
+	// not need a separate compat check like sentinel's
+	// checkFailoverTLSConfigCompatible.
+	if err := mergeClusterURLFields(base, parsed); err != nil {
+		return err
+	}
+	if len(parsed.Addrs) != 1 {
+		return errcode.New(errcode.KindInternal, ErrAdapterRedisConnect,
+			fmt.Sprintf("redis: invalid ClusterAddrs URL %q", addr))
+	}
+	base.Addrs = append(base.Addrs, parsed.Addrs[0])
+	return nil
+}
+
+func mergeClusterURLFields(base, parsed *goredis.ClusterOptions) error {
+	if err := mergeClusterStringField(&base.Username, parsed.Username, "username"); err != nil {
+		return err
+	}
+	return mergeClusterStringField(&base.Password, parsed.Password, "password")
+}
+
+func mergeClusterStringField(dst *string, incoming, name string) error {
+	if incoming == "" || *dst == incoming {
+		return nil
+	}
+	if *dst != "" {
+		return errcode.New(errcode.KindInternal, ErrAdapterRedisConnect,
+			fmt.Sprintf("redis: conflicting Cluster URL %s values", name))
+	}
+	*dst = incoming
+	return nil
 }
 
 // Health pings the Redis server and returns an error if it is unreachable.
 func (c *Client) Health(ctx context.Context) error {
 	if err := c.rdb.Ping(ctx).Err(); err != nil {
 		return errcode.Wrap(errcode.KindInternal, ErrAdapterRedisConnect,
-			fmt.Sprintf("redis: health check failed (addr=%s)", c.config.Addr), err)
+			fmt.Sprintf("redis: health check failed (mode=%s)", c.config.Mode), err)
 	}
 	return nil
 }
@@ -483,6 +679,16 @@ func (c *Client) PoolStats() PoolStats {
 // Config returns a copy of the client configuration.
 // The returned Config is safe to pass to NewClient for round-trip use.
 // For logging, Config implements slog.LogValuer which redacts the password.
+//
+// Slice fields (SentinelAddrs, ClusterAddrs) are deep-copied so callers cannot
+// mutate the live configuration through the returned value.
 func (c *Client) Config() Config {
-	return c.config
+	cfg := c.config
+	if c.config.SentinelAddrs != nil {
+		cfg.SentinelAddrs = append([]string(nil), c.config.SentinelAddrs...)
+	}
+	if c.config.ClusterAddrs != nil {
+		cfg.ClusterAddrs = append([]string(nil), c.config.ClusterAddrs...)
+	}
+	return cfg
 }

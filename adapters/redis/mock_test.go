@@ -3,6 +3,7 @@ package redis
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"time"
@@ -160,6 +161,15 @@ func (m *mockCmdable) Eval(_ context.Context, script string, keys []string, args
 		cmd.SetErr(m.evalErr)
 		return cmd
 	}
+	if len(keys) >= 2 {
+		// Defense in depth: this base mock only knows distlock's
+		// single-key release/renew Lua. Two-key scripts (claim/commit)
+		// belong to claimerMockCmdable. If a test routes them to the
+		// base mock by mistake the silent zero return would mimic a
+		// successful no-op; surface the misroute as a hard error.
+		cmd.SetErr(fmt.Errorf("mockCmdable.Eval: refused 2-key Lua script (use claimerMockCmdable for IdempotencyClaimer)"))
+		return cmd
+	}
 	cmd.SetVal(m.simulateScript(script, keys, args))
 	return cmd
 }
@@ -257,9 +267,13 @@ func newClaimerMock() *claimerMockCmdable {
 
 // Eval overrides the base mock to simulate the claimer Lua scripts.
 // Distinguishes claim vs commit by key order:
-//   - Claim:   keys=[done:{k}, lease:{k}]  (keys[0] starts with "done:")
-//   - Commit:  keys=[lease:{k}, done:{k}]  (keys[0] starts with "lease:")
-//   - Release: keys=[lease:{k}]            (single key)
+//   - Claim:   keys=[{k}:done, {k}:lease]  (keys[0] ends in ":done")
+//   - Commit:  keys=[{k}:lease, {k}:done]  (keys[0] ends in ":lease")
+//   - Release: keys=[{k}:lease]            (single key)
+//
+// Cluster note: keys wrap the business key in `{<key>}` so CRC16 hashes only
+// the business key portion; lease and done keys colocate on the same slot
+// on Redis Cluster (B10).
 func (m *claimerMockCmdable) Eval(_ context.Context, _ string, keys []string, args ...any) *goredis.Cmd {
 	cmd := goredis.NewCmd(context.Background())
 	if m.evalErr != nil {
@@ -296,8 +310,8 @@ func (m *claimerMockCmdable) Eval(_ context.Context, _ string, keys []string, ar
 		}
 		return cmd
 
-	// Claim script: 2 keys, keys[0] starts with "done:"
-	case len(keys) == 2 && len(args) >= 2 && strings.HasPrefix(keys[0], "done:"):
+	// Claim script: 2 keys, keys[0] ends in ":done" (cluster hashtag layout).
+	case len(keys) == 2 && len(args) >= 2 && strings.HasSuffix(keys[0], ":done"):
 		doneKey, leaseKey := keys[0], keys[1]
 		token := toString(args[0])
 		leaseSec := toInt64(args[1])
@@ -324,8 +338,8 @@ func (m *claimerMockCmdable) Eval(_ context.Context, _ string, keys []string, ar
 		cmd.SetVal(int64(1)) // ClaimAcquired
 		return cmd
 
-	// Commit script: 2 keys, keys[0] starts with "lease:"
-	case len(keys) == 2 && len(args) == 2 && strings.HasPrefix(keys[0], "lease:"):
+	// Commit script: 2 keys, keys[0] ends in ":lease" (cluster hashtag layout).
+	case len(keys) == 2 && len(args) == 2 && strings.HasSuffix(keys[0], ":lease"):
 		leaseKey, doneKey := keys[0], keys[1]
 		token := toString(args[0])
 		doneSec := toInt64(args[1])

@@ -1,7 +1,7 @@
 // Package redis provides a Redis adapter for the GoCell framework.
 //
 // It wraps github.com/redis/go-redis/v9 and offers:
-//   - Client: connection management for standalone and Sentinel modes with Health/Close
+//   - Client: connection management for standalone, Sentinel, and Cluster modes with Health/Close
 //   - RedisDriver: implements [runtime/distlock.Driver] (SetNX / Renew / Release Lua primitives)
 //     so [runtime/distlock.New] can construct a Locker backed by Redis
 //   - IdempotencyClaimer: kernel/idempotency.Claimer implementation using two-phase Claim/Commit/Release with Lua scripts
@@ -49,4 +49,28 @@
 // ref: Martin Kleppmann "How to do distributed locking" (2016)
 // ref: go-redsync/redsync redis/redis.go — Driver primitive split
 // ref: kubernetes/client-go tools/leaderelection/resourcelock — runtime/adapter layering
+//
+// # Cluster Mode (B10 PR-V1-REDIS-CLUSTER)
+//
+// Cluster mode is selected via Config.Mode = ModeCluster and the cluster
+// node addresses populated in Config.ClusterAddrs (plain "host:port" or
+// "rediss://host:port" URL forms — mixing forms within a single cluster
+// definition is rejected). Compared to standalone/sentinel:
+//
+//   - Config.DB must be 0 (Redis Cluster has no SELECT command).
+//   - Config.Addr must be empty (mutual exclusion with ClusterAddrs).
+//   - Config.PoolSize is per-node; total cluster connections = nodes × PoolSize.
+//   - go-redis ClusterClient handles MOVED/ASK redirection and topology
+//     refresh transparently; no business-side retry is required for slot
+//     migration scenarios.
+//
+// IdempotencyClaimer's dual-KEY Lua scripts (claim/commit) require all KEYS
+// to map to the same Redis Cluster slot. Keys are wrapped in a hashtag
+// `{businessKey}:lease` / `{businessKey}:done` so CRC16 hashes only the
+// business key portion; lease and done keys colocate on the same slot under
+// every Cluster topology. Standalone/Sentinel use the same naming for a
+// single source of truth — the hashtag is a no-op outside Cluster.
+//
+// ref: redis/go-redis osscluster.go — ClusterOptions / ParseClusterURL
+// ref: Redis cluster-spec hash-tags — {tag} sub-string colocation rule
 package redis

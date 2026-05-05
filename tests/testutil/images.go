@@ -15,3 +15,13 @@ const (
 	VaultImage         = "hashicorp/vault:1.17@sha256:74a4ab138ab5d64725e89cd9a9c73f7040c7fe49e98b71697b275ca9a69919df"
 	OTelCollectorImage = "otel/opentelemetry-collector:0.123.0@sha256:e5e4a13f0ea98e7ca1d1d809be040180540146888d0d764abd4e1277cba87350"
 )
+
+// RedisClusterTestAddrsEnv is the discovery env consumed by
+// adapters/redis/cluster_real_test.go (build tag `integration_cluster`).
+// The test reads this variable at runtime and skips when unset rather than
+// spawning a 6-node cluster from inside the Go test process —
+// testcontainers-go has no cluster module and grokzen/redis-cluster requires
+// host-mode networking which Mac/Windows do not support reliably. Operators
+// run the cluster out-of-band (see docs/ops/redis-cluster-deployment.md) and
+// export this variable before invoking the test.
+const RedisClusterTestAddrsEnv = "GOCELL_TEST_REDIS_CLUSTER_ADDRS"
