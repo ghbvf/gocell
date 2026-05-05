@@ -4,8 +4,7 @@
 package status
 
 // Request — http.auth.setup.status.v1.request
-type Request struct {
-}
+type Request struct{}
 
 // Response — http.auth.setup.status.v1.response
 type Response struct {

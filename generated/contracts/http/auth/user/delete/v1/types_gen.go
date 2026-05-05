@@ -10,5 +10,4 @@ type Request struct {
 }
 
 // Response — http.auth.user.delete.v1.response
-type Response struct {
-}
+type Response struct{}
