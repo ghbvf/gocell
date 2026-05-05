@@ -198,6 +198,10 @@
                         "type": "boolean",
                         "description": "If true, route bypasses the force-password-reset gate. auth.Route{PasswordResetExempt: true} is emitted. Mutually exclusive with public."
                       }
+                    },
+                    "not": {
+                      "required": ["public", "passwordResetExempt"],
+                      "description": "auth.public and auth.passwordResetExempt are mutually exclusive. Declaring both simultaneously is always a configuration error: public skips JWT entirely while passwordResetExempt still requires a valid JWT. ref: JSON Schema 2020-12 §10.2.1 not/required."
                     }
                   }
                 }
