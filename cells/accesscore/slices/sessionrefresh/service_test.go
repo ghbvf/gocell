@@ -3,6 +3,7 @@ package sessionrefresh
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"sync"
@@ -234,6 +235,65 @@ func TestNewService_RequiresTxRunner(t *testing.T) {
 		require.ErrorAs(t, err, &ec)
 		assert.Equal(t, errcode.ErrValidationFailed, ec.Code)
 	})
+}
+
+// failingTxRunner is a TxRunner that runs the closure once, captures whether
+// it succeeded internally, and then returns a sentinel error simulating an
+// outer-tx failure (commit failure, infrastructure outage, etc.). Used to
+// verify Refresh propagates the RunInTx error and never leaks a partially
+// populated TokenPair.
+type failingTxRunner struct {
+	innerCalled bool
+	innerErr    error
+}
+
+func (r *failingTxRunner) RunInTx(ctx context.Context, fn func(context.Context) error) error {
+	r.innerCalled = true
+	r.innerErr = fn(ctx)
+	return errFailingTxRunnerOuter
+}
+
+var errFailingTxRunnerOuter = errors.New("test: outer tx commit failure")
+
+// TestRefresh_RunInTxFailure_ReturnsErrorAndZeroPair asserts that an outer
+// TxRunner failure is propagated and TokenPair stays at its zero value
+// (no partial leakage of access/refresh tokens to the caller). This is the
+// service-layer counterpart to the adapter-level
+// TestB5_OuterTxRollback_* integration tests.
+func TestRefresh_RunInTxFailure_ReturnsErrorAndZeroPair(t *testing.T) {
+	sessionRepo := testutil.RealSessionRepo(t)
+	roleRepo := mem.NewRoleRepository()
+	userRepo := mem.NewUserRepository()
+	refreshStore := newTestRefreshStore()
+	user, err := domain.NewUser("usr-runintx-fail", "u@test.local", "hash", time.Now())
+	require.NoError(t, err)
+	user.ID = "usr-runintx-fail"
+	require.NoError(t, userRepo.Create(context.Background(), user))
+	sess, err := domain.NewSession("usr-runintx-fail", "at", time.Now().Add(time.Hour), time.Now())
+	require.NoError(t, err)
+	sess.ID = "sess-runintx-fail"
+	require.NoError(t, sessionRepo.Create(context.Background(), sess))
+	wireToken, _, err := refreshStore.Issue(context.Background(), "sess-runintx-fail", "usr-runintx-fail")
+	require.NoError(t, err)
+
+	tr := &failingTxRunner{}
+	svc := MustNewService(sessionRepo, roleRepo, userRepo, refreshStore, testIssuer, slog.Default(),
+		WithClock(clock.Real()), WithTxManager(tr))
+
+	pair, err := svc.Refresh(context.Background(), wireToken)
+
+	// Outer-tx error must propagate verbatim.
+	require.ErrorIs(t, err, errFailingTxRunnerOuter,
+		"Refresh must surface the TxRunner error so callers can distinguish infra failures from token rejection")
+
+	// The closure must have run (the inner refresh logic fully executed and
+	// succeeded — only the commit failed).
+	require.True(t, tr.innerCalled, "RunInTx closure must have executed")
+	require.NoError(t, tr.innerErr, "the inner refresh sequence should have completed without error before the simulated commit failure")
+
+	// TokenPair must be the zero value: no partial leakage of any field.
+	assert.Equal(t, dto.TokenPair{}, pair,
+		"on outer-tx failure Refresh must return a zero TokenPair — no partial token data may leak to the caller")
 }
 
 // issueTestWireToken creates a session + issues a wire token from the refreshStore.

@@ -115,12 +115,18 @@ func TestRefreshCrossStoreTX01(t *testing.T) {
 		ruleRefreshCrossStoreTX01, rel)
 
 	// Forbidden bare-receiver call sites that must be inside the closure.
+	// RevokeSession is in scope because it is the ambient-tx variant
+	// (joins the caller's TX) — calling it from Refresh's top level would
+	// escape the wrap. The detached variant RevokeSessionDetached is
+	// intentionally NOT guarded: PR#395 cascade paths are required to
+	// commit independently of the outer transaction.
 	guardedCalls := map[string]bool{
-		"refreshStore.Peek":   false,
-		"refreshStore.Rotate": false,
-		"sessionRepo.Update":  false,
-		"sessionRepo.GetByID": false,
-		"userRepo.GetByID":    false,
+		"refreshStore.Peek":          false,
+		"refreshStore.Rotate":        false,
+		"refreshStore.RevokeSession": false,
+		"sessionRepo.Update":         false,
+		"sessionRepo.GetByID":        false,
+		"userRepo.GetByID":           false,
 	}
 
 	type violation struct {
@@ -180,7 +186,13 @@ func isTxRunnerRunInTxCall(call *ast.CallExpr) bool {
 }
 
 // resolveClosureArg returns the *ast.FuncLit that arg refers to: either arg
-// itself (inline closure) or the FuncLit assigned to the identifier in body.
+// itself (inline closure) or the FuncLit bound to the identifier in body.
+// When the identifier has multiple FuncLit assignments (`do := func(){...};
+// do = func(){...}`), the LAST assignment wins — that is the value of `do`
+// at the point of the RunInTx call site, matching Go's evaluation semantics.
+// Reasoning about only the first assignment would let an attacker satisfy
+// the structural guard with a non-trivial first FuncLit and reassign a
+// no-op FuncLit before passing `do` to RunInTx.
 // Returns nil if neither pattern matches.
 func resolveClosureArg(body *ast.BlockStmt, arg ast.Expr) *ast.FuncLit {
 	if fl, ok := arg.(*ast.FuncLit); ok {
@@ -190,7 +202,7 @@ func resolveClosureArg(body *ast.BlockStmt, arg ast.Expr) *ast.FuncLit {
 	if !ok {
 		return nil
 	}
-	var found *ast.FuncLit
+	var lastAssigned *ast.FuncLit
 	ast.Inspect(body, func(n ast.Node) bool {
 		assign, ok := n.(*ast.AssignStmt)
 		if !ok {
@@ -206,14 +218,17 @@ func resolveClosureArg(body *ast.BlockStmt, arg ast.Expr) *ast.FuncLit {
 			}
 			fl, ok := assign.Rhs[i].(*ast.FuncLit)
 			if !ok {
+				// Non-FuncLit assignment to the identifier (e.g. another
+				// variable, a function call, or nil) — it overrides any
+				// prior FuncLit. Reset so we don't claim the previous one.
+				lastAssigned = nil
 				continue
 			}
-			found = fl
-			return false
+			lastAssigned = fl
 		}
 		return true
 	})
-	return found
+	return lastAssigned
 }
 
 // bareServiceFieldCall reports whether call has the shape `s.<field>.<method>(...)`,

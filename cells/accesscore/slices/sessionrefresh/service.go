@@ -140,16 +140,20 @@ func MustNewService(
 //
 // Presenting an access JWT (or any string that does not parse as the opaque
 // selector.verifier wire format) fails ParseOpaque inside refresh.Store and
-// returns refresh.ErrRejected — the same fail-closed behavior as
-// before (TestAuthIntent_AccessTokenBlockedAtRefreshPath).
+// returns refresh.ErrRejected — the same fail-closed behavior the access-token
+// confusion defense relies on.
 //
 // Cross-store ACID: the Peek → verifySession → fetchPasswordResetRequired →
 // persistRefreshedSession → Rotate sequence runs inside a single
-// txRunner.RunInTx so that PG refresh-store and PG session-repo writes share
-// one commit boundary. If any step returns an error the outer transaction
-// rolls back, leaving both stores at pre-refresh state. Cascade revokes go
-// through refreshStore.RevokeSessionDetached, which intentionally bypasses
-// the outer transaction (PR#395 detached-context invariant).
+// txRunner.RunInTx, giving the rotate chain one commit boundary on PG-backed
+// stores. The PG refresh store joins via savepoints and rolls back on outer
+// abort. The session repo currently in production wiring is mem
+// (cells/accesscore/internal/mem.SessionRepository), which does not honor TX
+// rollback — its writes commit to the in-memory map immediately. Once B2
+// lands postgres.PGSessionRepository, full cross-store ACID becomes effective
+// without any change to this method. Cascade revokes go through
+// refreshStore.RevokeSessionDetached, which intentionally bypasses the outer
+// transaction (PR#395 detached-context invariant).
 func (s *Service) Refresh(ctx context.Context, refreshToken string) (dto.TokenPair, error) {
 	if err := validation.RequireNotEmpty(errcode.ErrAuthRefreshInvalidInput,
 		validation.F("refreshToken", refreshToken),
@@ -172,10 +176,12 @@ func (s *Service) Refresh(ctx context.Context, refreshToken string) (dto.TokenPa
 }
 
 // refreshInTx executes the validate→update→rotate sequence under the outer
-// RunInTx boundary established by Refresh. All store touches (Peek, session
-// GetByID/Update, user GetByID, refresh Rotate) join that outer transaction
-// via savepoint nesting. Cascade-revoke calls intentionally bypass the
-// outer TX through RevokeSessionDetached (PR#395 detached-context invariant).
+// RunInTx boundary established by Refresh. With a real PG TxRunner
+// (postgres.TxManager), store calls participate in the outer transaction via
+// savepoint nesting and roll back together on abort; with a no-op TxRunner
+// (cell.DemoTxRunner) the closure executes directly without TX semantics.
+// Cascade-revoke calls intentionally bypass the outer TX through
+// RevokeSessionDetached (PR#395 detached-context invariant).
 func (s *Service) refreshInTx(ctx context.Context, refreshToken string) (dto.TokenPair, error) {
 	presented, err := s.refreshStore.Peek(ctx, refreshToken)
 	if err != nil {
