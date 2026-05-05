@@ -494,8 +494,9 @@ func (s *PGRefreshStore) handleRotatedRow(ctx context.Context, row refreshRow, m
 		// ref: golang/go context.WithoutCancel; hashicorp/vault token_store.go quitContext
 		// ref: ADR docs/architecture/202605051800-adr-refresh-store-ambient-tx-and-idle-grace.md
 		cascadeCtx, cancelCascade := ctxutil.WithDetachedTimeout(ctx, refresh.CascadeRevokeTimeout)
-		defer cancelCascade()
-		if _, execErr := s.pool.Exec(cascadeCtx, revokeSessionSQL, now, row.sessionID); execErr != nil {
+		_, execErr := s.pool.Exec(cascadeCtx, revokeSessionSQL, now, row.sessionID)
+		cancelCascade()
+		if execErr != nil {
 			return errcode.Wrap(errcode.KindInternal, ErrAdapterPGQuery, "refresh store: grace exhausted cascade", execErr)
 		}
 		return rejectWithReason("reuse_detected", row.sessionID)
@@ -519,8 +520,9 @@ func (s *PGRefreshStore) handleRotatedRow(ctx context.Context, row refreshRow, m
 		// ref: golang/go context.WithoutCancel; hashicorp/vault token_store.go quitContext
 		// ref: ADR docs/architecture/202605051800-adr-refresh-store-ambient-tx-and-idle-grace.md
 		cascadeCtx, cancelCascade := ctxutil.WithDetachedTimeout(ctx, refresh.CascadeRevokeTimeout)
-		defer cancelCascade()
-		if _, execErr := s.pool.Exec(cascadeCtx, revokeSessionSQL, now, row.sessionID); execErr != nil {
+		_, execErr := s.pool.Exec(cascadeCtx, revokeSessionSQL, now, row.sessionID)
+		cancelCascade()
+		if execErr != nil {
 			return errcode.Wrap(errcode.KindInternal, ErrAdapterPGQuery, "refresh store: reuse cascade", execErr)
 		}
 		return rejectWithReason("reuse_detected", row.sessionID)
