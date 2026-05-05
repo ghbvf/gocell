@@ -104,14 +104,16 @@ func findInterfaceDecl(af *ast.File, name string) *ast.InterfaceType {
 
 // formatFuncSignature renders an *ast.FuncType as "(<params>) <results>"
 // matching the canonical Go fmt-equivalent form used in
-// expectedAssemblyRefMethods. Single-result types are not parenthesized;
-// multi-result types are.
+// expectedAssemblyRefMethods. A single anonymous result is rendered without
+// parentheses; multiple results, or a single named result (e.g.
+// "(c Cell)"), are parenthesized — matching `gofmt` output. When extending
+// AssemblyRef, write the expected entry in the same form.
 func formatFuncSignature(ft *ast.FuncType) string {
-	out := "(" + formatFieldList(ft.Params, false) + ")"
+	out := "(" + formatFieldList(ft.Params) + ")"
 	if ft.Results == nil || len(ft.Results.List) == 0 {
 		return out
 	}
-	results := formatFieldList(ft.Results, false)
+	results := formatFieldList(ft.Results)
 	if len(ft.Results.List) > 1 || len(ft.Results.List[0].Names) > 0 {
 		results = "(" + results + ")"
 	}
@@ -121,7 +123,7 @@ func formatFuncSignature(ft *ast.FuncType) string {
 // formatFieldList renders an *ast.FieldList as a comma-joined string of
 // "<names> <type>" segments (or just "<type>" when the field is anonymous).
 // Embedded names within a single field share one type expression.
-func formatFieldList(fl *ast.FieldList, _ bool) string {
+func formatFieldList(fl *ast.FieldList) string {
 	if fl == nil {
 		return ""
 	}
@@ -156,10 +158,11 @@ func joinComma(parts []string) string {
 }
 
 // formatExpr renders the small subset of ast.Expr shapes that appear in the
-// AssemblyRef method set: identifiers, qualified identifiers, slice types,
-// and pointer types. Anything outside this set falls back to ast.Expr's
-// best-effort string form via a panic — extending the interface should
-// prompt extending this helper too.
+// AssemblyRef method set: identifiers, qualified identifiers, slice and
+// fixed-size array types, and pointer types. Anything outside this set
+// trips a panic — extending the interface should prompt extending this
+// helper in the same change so that the archtest stays expressive instead
+// of silently accepting an unfamiliar shape.
 func formatExpr(e ast.Expr) string {
 	switch v := e.(type) {
 	case *ast.Ident:
@@ -170,8 +173,11 @@ func formatExpr(e ast.Expr) string {
 		if v.Len == nil {
 			return "[]" + formatExpr(v.Elt)
 		}
+		return "[" + formatExpr(v.Len) + "]" + formatExpr(v.Elt)
 	case *ast.StarExpr:
 		return "*" + formatExpr(v.X)
+	case *ast.BasicLit:
+		return v.Value
 	}
 	// Defensive: ASSEMBLYREF-METHOD-SET-01 should fail loudly on a method
 	// signature that uses an expression shape this helper does not yet

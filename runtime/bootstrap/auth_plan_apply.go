@@ -138,8 +138,9 @@ func discoverAuthVerifierFromAssembly(asm cell.AssemblyRef) (auth.IntentTokenVer
 			continue
 		}
 		// cell.AuthProvider.TokenVerifier() returns cell.IntentTokenVerifier.
-		// auth.IntentTokenVerifier is a type alias of cell.IntentTokenVerifier
-		// (F6), so the assignment is direct with no runtime conversion needed.
+		// auth.IntentTokenVerifier is a Go type alias of cell.IntentTokenVerifier
+		// (runtime/auth/auth.go:56, F6), so the assignment is direct with no
+		// runtime conversion needed.
 		v := ap.TokenVerifier()
 		if v == nil {
 			return nil, fmt.Errorf(
