@@ -57,14 +57,18 @@ func (k *applyStubHMACKeyring) Secrets() [][]byte { return [][]byte{k.Current()}
 // build immediately if Cell is removed from AssemblyRef.
 var _ func(cell.AssemblyRef, string) cell.Cell = cell.AssemblyRef.Cell
 
-// applyStubAssemblyRef satisfies cell.AssemblyRef.
+// applyStubAssemblyRef satisfies cell.AssemblyRef. Cell always returns nil
+// because the tests using this stub validate auth-chain placement and
+// singleton invariants — they do not exercise authProvider discovery, which
+// has dedicated coverage via fakeAssemblyWithCells below.
 type applyStubAssemblyRef struct {
 	id      string
 	cellIDs []string
 }
 
-func (a *applyStubAssemblyRef) ID() string        { return a.id }
-func (a *applyStubAssemblyRef) CellIDs() []string { return a.cellIDs }
+func (a *applyStubAssemblyRef) ID() string              { return a.id }
+func (a *applyStubAssemblyRef) CellIDs() []string       { return a.cellIDs }
+func (a *applyStubAssemblyRef) Cell(_ string) cell.Cell { return nil }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -249,7 +253,8 @@ func (c *fakeAuthProviderCell) TokenVerifier() cell.IntentTokenVerifier { return
 // Ensure fakeAuthProviderCell satisfies cell.AuthProvider at compile time.
 var _ cell.AuthProvider = (*fakeAuthProviderCell)(nil)
 
-// fakeAssemblyWithCells satisfies both cell.AssemblyRef and assemblyWithCell.
+// fakeAssemblyWithCells satisfies cell.AssemblyRef with an in-memory cell map,
+// providing the by-ID lookup that authProvider discovery exercises.
 type fakeAssemblyWithCells struct {
 	id    string
 	cells map[string]cell.Cell

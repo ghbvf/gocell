@@ -276,11 +276,14 @@ func TestTokenIntent_IsValid(t *testing.T) {
 
 // ─── Test stubs ───────────────────────────────────────────────────────────────
 
-// stubAssemblyRef satisfies cell.AssemblyRef.
+// stubAssemblyRef satisfies cell.AssemblyRef. Cell returns nil because the
+// kernel/cell tests validate construction-time invariants only; cell lookup
+// is exercised end-to-end by runtime/bootstrap tests.
 type stubAssemblyRef struct{ id string }
 
-func (s *stubAssemblyRef) ID() string        { return s.id }
-func (s *stubAssemblyRef) CellIDs() []string { return nil }
+func (s *stubAssemblyRef) ID() string              { return s.id }
+func (s *stubAssemblyRef) CellIDs() []string       { return nil }
+func (s *stubAssemblyRef) Cell(_ string) cell.Cell { return nil }
 
 // stubVerifier satisfies cell.IntentTokenVerifier.
 type stubVerifier struct{}

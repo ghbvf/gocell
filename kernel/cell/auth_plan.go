@@ -135,18 +135,28 @@ var _ ListenerAuth = AuthJWT{}
 
 // ─── AuthJWTFromAssembly ──────────────────────────────────────────────────────
 
-// AssemblyRef exposes the minimum contract kernel needs: ID() for identity
-// comparison and CellIDs() for authProvider discovery. Using a named interface
-// instead of any preserves type safety at composition boundaries.
+// AssemblyRef is the contract kernel needs from an assembly: identity
+// (ID), the registered cell list (CellIDs), and by-ID cell lookup (Cell).
+// Using a named interface preserves type safety at composition boundaries
+// and lets callers in runtime/bootstrap iterate authProvider discovery
+// without an implicit type assertion to a private sub-interface.
 //
 // Bootstrap passes the concrete *assembly.CoreAssembly which satisfies this
 // interface structurally; identity checks (same pointer) are done in
 // runtime/bootstrap, not in kernel.
+//
+// ASSEMBLYREF-METHOD-SET-01 (tools/archtest/assemblyref_method_set_test.go)
+// locks this method set against accidental drift.
 type AssemblyRef interface {
 	// ID returns the assembly's unique identifier.
 	ID() string
 	// CellIDs returns the ordered list of registered cell identifiers.
 	CellIDs() []string
+	// Cell returns the registered Cell with the given ID, or nil if no
+	// cell with that ID is registered. Callers are responsible for type-
+	// asserting the returned Cell to the role-specific interface they
+	// require (e.g. AuthProvider).
+	Cell(id string) Cell
 }
 
 // AuthJWTFromAssembly is a lazy JWT plan that resolves its verifier from an

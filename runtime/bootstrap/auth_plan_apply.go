@@ -131,9 +131,9 @@ func discoverAuthVerifierFromAssembly(asm cell.AssemblyRef) (auth.IntentTokenVer
 		foundID string
 	)
 	for _, id := range asm.CellIDs() {
-		// AssemblyRef is a minimal interface; assemblyWithCell adds Cell(id).
-		// Bootstrap bridges the gap via asmCellLookup.
-		ap, ok := asmCellLookup(asm, id)
+		// asm.Cell returns nil for unknown IDs; the AuthProvider type
+		// assertion then yields ok=false and the cell is skipped.
+		ap, ok := asm.Cell(id).(cell.AuthProvider)
 		if !ok {
 			continue
 		}
@@ -161,25 +161,6 @@ func discoverAuthVerifierFromAssembly(asm cell.AssemblyRef) (auth.IntentTokenVer
 				"or wire the verifier explicitly via cell.NewAuthJWT(verifier)")
 	}
 	return found, nil
-}
-
-// assemblyWithCell is the internal interface needed by discoverAuthVerifierFromAssembly
-// to look up cells by ID. *assembly.CoreAssembly satisfies this.
-type assemblyWithCell interface {
-	cell.AssemblyRef
-	Cell(id string) cell.Cell
-}
-
-// asmCellLookup type-asserts asm to assemblyWithCell and looks up a cell.AuthProvider.
-// Returns (nil, false) if asm doesn't have the Cell(id) method or the cell doesn't
-// implement cell.AuthProvider.
-func asmCellLookup(asm cell.AssemblyRef, id string) (cell.AuthProvider, bool) {
-	awc, ok := asm.(assemblyWithCell)
-	if !ok {
-		return nil, false
-	}
-	ap, ok := awc.Cell(id).(cell.AuthProvider)
-	return ap, ok
 }
 
 // ─── Middleware factories ─────────────────────────────────────────────────────
