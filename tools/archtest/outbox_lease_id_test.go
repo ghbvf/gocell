@@ -46,6 +46,24 @@ func TestOutboxLeaseIDCAS01(t *testing.T) {
 		"OUTBOX-LEASE-ID-CAS-01: markRetryQuery must fence on lease_id")
 	requireMatch(t, "markDeadQuery", consts, whereLeaseRe,
 		"OUTBOX-LEASE-ID-CAS-01: markDeadQuery must fence on lease_id")
+
+	// reclaim — CTE + SKIP LOCKED + write-time status CAS + write-time
+	// lease CAS. These four sub-patterns together prevent the regression
+	// reported in PR #373 review #1, where an outer UPDATE without the
+	// status/lease re-assertion could regress a row that left 'claiming'
+	// (or rotated lease) between SELECT and UPDATE back to pending.
+	requireMatch(t, "reclaimStaleQuery", consts,
+		regexp.MustCompile(`(?is)\bFOR\s+UPDATE\s+SKIP\s+LOCKED\b`),
+		"OUTBOX-LEASE-ID-CAS-01: reclaimStaleQuery must use FOR UPDATE SKIP LOCKED in the CTE picker")
+	requireMatch(t, "reclaimStaleQuery", consts,
+		regexp.MustCompile(`(?is)\bFROM\s+picked\b`),
+		"OUTBOX-LEASE-ID-CAS-01: reclaimStaleQuery must use a `picked` CTE for batched id+lease snapshot")
+	requireMatch(t, "reclaimStaleQuery", consts,
+		regexp.MustCompile(`(?is)\bo\.status\s*=`),
+		"OUTBOX-LEASE-ID-CAS-01: reclaimStaleQuery outer UPDATE must re-assert status (write-time CAS)")
+	requireMatch(t, "reclaimStaleQuery", consts,
+		regexp.MustCompile(`(?is)\bo\.lease_id\s*=\s*picked\.lease_id\b`),
+		"OUTBOX-LEASE-ID-CAS-01: reclaimStaleQuery outer UPDATE must re-assert lease_id matches the picked snapshot")
 }
 
 // TestOutboxMarkReturnsBool01 enforces OUTBOX-MARK-RETURNS-BOOL-01: every

@@ -120,6 +120,38 @@ func VerifyExpectedVersion(ctx context.Context, pool *Pool, fsys fs.FS, tableNam
 	return nil
 }
 
+// VerifyOutboxLeaseInvariant probes for outbox rows that violate the
+// post-014 lease_id fencing protocol. A row with status='claiming' AND
+// lease_id IS NULL can only be produced by a pre-014 binary writing through
+// post-014 schema — the rolling-deploy overlap window where one pod still
+// runs the old SQL (no lease_id parameter) while another already mounts the
+// new schema. Their presence proves at least one stale worker has not been
+// drained; the new binary refuses startup so the rollout halts before the
+// fencing guarantee is bypassed.
+//
+// Callers wire this after VerifyExpectedVersion; on a fresh DB the table
+// either does not exist (caught earlier by VerifyExpectedVersion's version
+// gap) or contains zero claiming rows.
+//
+// ref: PR #373 review — fail-closed pre-flight invariant for fencing protocol
+func VerifyOutboxLeaseInvariant(ctx context.Context, pool *Pool) error {
+	const q = `SELECT count(*) FROM outbox_entries
+		WHERE status = 'claiming' AND lease_id IS NULL`
+	var count int64
+	if err := pool.inner.QueryRow(ctx, q).Scan(&count); err != nil {
+		return errcode.Wrap(errcode.KindInternal, ErrAdapterPGQuery,
+			"schema_guard: probe outbox lease invariant", err)
+	}
+	if count > 0 {
+		return errcode.New(errcode.KindInternal, ErrAdapterPGOutboxLeaseInvariant,
+			fmt.Sprintf("outbox lease invariant violation: %d claiming rows have NULL lease_id "+
+				"(pre-014 binary still active; drain or stop legacy outbox workers before continuing)",
+				count))
+	}
+	slog.Info("schema_guard: outbox lease invariant verified")
+	return nil
+}
+
 // InvalidIndex describes an index that is marked as invalid in pg_index.
 // Invalid indexes can occur when CREATE INDEX CONCURRENTLY is interrupted.
 type InvalidIndex struct {

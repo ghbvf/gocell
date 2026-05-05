@@ -100,7 +100,8 @@ func (w *OutboxWriter) Write(ctx context.Context, entry outbox.Entry) error {
 		(id, aggregate_id, aggregate_type, event_type, topic, payload, metadata, created_at, status, observability)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, '` + statusPending + `', $9)`
 
-	_, err = tx.Exec(ctx, query,
+	_, err = tx.Exec(
+		ctx, query,
 		entry.ID,
 		entry.AggregateID,
 		entry.AggregateType,

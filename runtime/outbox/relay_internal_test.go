@@ -362,6 +362,56 @@ func TestRelay_HandleFailedEntry_StaleLease_RetryNotCounted(t *testing.T) {
 	assert.Zero(t, stats.dead, "stats.dead must NOT be incremented")
 }
 
+// stalePublishStore returns (false, nil) from MarkPublished — the fencing
+// CAS missed even though publish succeeded. Mirrors the failure-path harness
+// (staleLeaseStore) so the success-path stale-lease branch in writeBackResults
+// has equivalent direct coverage.
+type stalePublishStore struct {
+	*minimalStore
+	markPublishedCalls int
+}
+
+func (s *stalePublishStore) MarkPublished(_ context.Context, _, _ string) (bool, error) {
+	s.markPublishedCalls++
+	return false, nil
+}
+
+// TestRelay_WriteBack_PublishSuccess_StaleLease_NotCountedAsPublished verifies
+// the success-path stale-lease branch in Relay.writeBackResults: when publish
+// succeeded but MarkPublished returns updated=false (lease was reclaimed
+// between publish and writeBack), the entry must be classified as skipped, not
+// published, and no error must surface (at-least-once delivery guarantee).
+//
+// PR #373 follow-up #4 — failure paths were already covered by
+// TestRelay_HandleFailedEntry_StaleLease_{Retry,Dead}NotCounted; the success
+// path closes the matrix.
+func TestRelay_WriteBack_PublishSuccess_StaleLease_NotCountedAsPublished(t *testing.T) {
+	store := &stalePublishStore{minimalStore: newMinimalStore()}
+	relay := &Relay{
+		store:   store,
+		cfg:     RelayConfig{MaxAttempts: 5, BaseRetryDelay: testtime.D1ms, MaxRetryDelay: testtime.D5s}.WithDefaults(),
+		metrics: &safeRelayCollector{inner: kout.NoopRelayCollector{}},
+		clock:   clock.Real(),
+	}
+
+	results := []publishResult{{
+		entry: ClaimedEntry{
+			Entry:    kout.Entry{ID: "e-publish-stale", EventType: "ev", Topic: "t"},
+			Attempts: 1,
+			LeaseID:  uuid.NewString(),
+		},
+		// nil err = publish succeeded
+	}}
+
+	stats, err := relay.writeBackResults(context.Background(), results)
+	require.NoError(t, err, "stale lease on success path must not surface as error")
+	assert.Equal(t, 1, store.markPublishedCalls, "MarkPublished must be invoked once")
+	assert.Zero(t, stats.published, "stats.published must NOT increment when lease was lost")
+	assert.Equal(t, 1, stats.skipped, "stats.skipped must increment to record the silent drop")
+	assert.Zero(t, stats.retried)
+	assert.Zero(t, stats.dead)
+}
+
 func TestRelay_HandleFailedEntry_StaleLease_DeadNotCounted(t *testing.T) {
 	store := &staleLeaseStore{minimalStore: newMinimalStore()}
 	relay := &Relay{

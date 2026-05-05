@@ -17,18 +17,27 @@
 -- ref: graphile/worker sql/000001.sql get_job/complete_job — locked_by CAS
 -- ref: jackc/pgxjob pgxjob.go — worker_id UUID claim CTE
 
--- Reset any in-flight claims. Deploys are expected to drain the relay before
--- migration; this UPDATE only catches the worker-crash residue case.
-UPDATE outbox_entries SET status = 'pending', claimed_at = NULL WHERE status = 'claiming';
+-- Fail-closed pre-flight: any row still in 'claiming' here would either be an
+-- in-flight publish that loses fencing across the schema cut, or worker-crash
+-- residue. Both require explicit operator action (drain the relay, or reset
+-- the residue). The migration aborts with a row count so ops can decide.
+-- +goose StatementBegin
+DO $migration_014$
+DECLARE
+    residue_count bigint;
+BEGIN
+    SELECT count(*) INTO residue_count FROM outbox_entries WHERE status = 'claiming';
+    IF residue_count > 0 THEN
+        RAISE EXCEPTION
+            'outbox migration 014: % rows still in claiming state; drain the relay (or manually reset crash residue) before applying',
+            residue_count;
+    END IF;
+END
+$migration_014$;
+-- +goose StatementEnd
 
--- Nullable column: NULL for unclaimed (pending) rows; set on Claim; cleared on
--- Reclaim back-to-pending. Matches graphile worker locked_by NULL semantics.
 ALTER TABLE outbox_entries ADD COLUMN lease_id UUID;
 
--- Partial index: only claiming rows participate in CAS lookups.
--- CONCURRENTLY (with `+goose NO TRANSACTION` above) so concurrent INSERTs and
--- Mark* CAS UPDATEs are not blocked while the index builds on a populated
--- production table. ref: go-standards.md "大表索引用 CREATE INDEX CONCURRENTLY".
 CREATE INDEX CONCURRENTLY idx_outbox_claiming_lease ON outbox_entries (lease_id) WHERE status = 'claiming';
 
 -- +goose Down

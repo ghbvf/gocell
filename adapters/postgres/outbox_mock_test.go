@@ -144,7 +144,8 @@ func (t *mockRelayTx) CopyFrom(_ context.Context, _ pgx.Identifier, _ []string, 
 	return 0, nil
 }
 func (t *mockRelayTx) SendBatch(_ context.Context, _ *pgx.Batch) pgx.BatchResults { return nil }
-func (t *mockRelayTx) LargeObjects() pgx.LargeObjects                             { return pgx.LargeObjects{} }
+func (t *mockRelayTx) LargeObjects() pgx.LargeObjects { return pgx.LargeObjects{} }
+
 func (t *mockRelayTx) Prepare(_ context.Context, _ string, _ string) (*pgconn.StatementDescription, error) {
 	return &pgconn.StatementDescription{}, nil
 }
@@ -268,8 +269,11 @@ func (t *mockRelayTxIterErr) Rollback(_ context.Context) error        { return n
 func (t *mockRelayTxIterErr) CopyFrom(_ context.Context, _ pgx.Identifier, _ []string, _ pgx.CopyFromSource) (int64, error) {
 	return 0, nil
 }
+
 func (t *mockRelayTxIterErr) SendBatch(_ context.Context, _ *pgx.Batch) pgx.BatchResults { return nil }
-func (t *mockRelayTxIterErr) LargeObjects() pgx.LargeObjects                             { return pgx.LargeObjects{} }
+
+func (t *mockRelayTxIterErr) LargeObjects() pgx.LargeObjects { return pgx.LargeObjects{} }
+
 func (t *mockRelayTxIterErr) Prepare(_ context.Context, _ string, _ string) (*pgconn.StatementDescription, error) {
 	return &pgconn.StatementDescription{}, nil
 }

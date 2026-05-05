@@ -114,29 +114,44 @@ const markDeadQuery = `UPDATE outbox_entries SET status = $1, attempts = $2,
 	last_error = $3, dead_at = now()
 	WHERE id = $4 AND status = $5 AND lease_id = $6::uuid`
 
-// reclaimStaleQuery sweeps claiming rows whose lease has expired. lease_id is
-// cleared on the back-to-pending branch so the next ClaimPending mints a fresh
-// lease; the dead branch keeps the value as audit trail.
+// reclaimStaleQuery sweeps claiming rows whose lease has expired. The CTE
+// `picked` snapshots id+lease_id under FOR UPDATE SKIP LOCKED so concurrent
+// MarkPublished/MarkRetry/MarkDead transactions never collide with reclaim;
+// the outer UPDATE re-asserts status=$6 AND lease_id=picked.lease_id so a row
+// that left 'claiming' (or had its lease rotated) between the SELECT and the
+// UPDATE is skipped instead of regressing to pending.
+//
+// lease_id is cleared on the back-to-pending branch so the next ClaimPending
+// mints a fresh lease; the dead branch keeps the value as audit trail.
 //
 // LIMIT (reclaimBatchSize) caps a single sweep so a backlog of stale rows
 // cannot produce a multi-second UPDATE that blocks VACUUM/replication; the
 // relay's reclaim loop tick re-runs to drain residual.
 //
+// ref: graphile/worker resetLockedAt.ts — outer UPDATE re-asserts locked_by
+// ref: river_job.sql / pgxjob — CTE + SKIP LOCKED batched reclaim
+//
 // $1 claimTTL interval text, $2 maxAttempts, $3 statusDead, $4 statusPending,
 // $5 baseDelayMicros, $6 statusClaiming, $7 maxDelayMicros, $8 reclaimBatchSize.
-const reclaimStaleQuery = `UPDATE outbox_entries
-	SET status = CASE WHEN attempts + 1 >= $2 THEN $3 ELSE $4 END,
-		attempts = attempts + 1,
-		claimed_at = NULL,
-		lease_id = CASE WHEN attempts + 1 >= $2 THEN lease_id ELSE NULL END,
-		dead_at = CASE WHEN attempts + 1 >= $2 THEN now() ELSE NULL END,
-		next_retry_at = CASE WHEN attempts + 1 >= $2 THEN NULL
-			ELSE now() + LEAST($5 * power(2, attempts + 1), $7) * interval '1 microsecond' END
-	WHERE id IN (
-		SELECT id FROM outbox_entries
+const reclaimStaleQuery = `WITH picked AS (
+		SELECT id, lease_id, attempts FROM outbox_entries
 		WHERE status = $6 AND claimed_at < now() - $1::interval
+		ORDER BY claimed_at
+		FOR UPDATE SKIP LOCKED
 		LIMIT $8
-	)`
+	)
+	UPDATE outbox_entries o
+	SET status = CASE WHEN picked.attempts + 1 >= $2 THEN $3 ELSE $4 END,
+		attempts = picked.attempts + 1,
+		claimed_at = NULL,
+		lease_id = CASE WHEN picked.attempts + 1 >= $2 THEN picked.lease_id ELSE NULL END,
+		dead_at = CASE WHEN picked.attempts + 1 >= $2 THEN now() ELSE NULL END,
+		next_retry_at = CASE WHEN picked.attempts + 1 >= $2 THEN NULL
+			ELSE now() + LEAST($5 * power(2, picked.attempts + 1), $7) * interval '1 microsecond' END
+	FROM picked
+	WHERE o.id = picked.id
+		AND o.status = $6
+		AND o.lease_id = picked.lease_id`
 
 // cleanupPublishedQuery is identical to publishedQuery in OutboxRelay.deletePublishedBefore.
 const cleanupPublishedQuery = `DELETE FROM outbox_entries WHERE id IN (

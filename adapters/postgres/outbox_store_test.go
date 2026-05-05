@@ -245,10 +245,13 @@ func TestPGOutboxStore_ReclaimStale_ReturnsCount(t *testing.T) {
 
 	require.Len(t, db.execCalls, 1)
 	ec := db.execCalls[0]
-	assert.Contains(t, ec.sql, "attempts = attempts + 1", "must increment attempts")
-	assert.Contains(t, ec.sql, "CASE WHEN attempts + 1 >= $2", "must use CASE expression for dead/pending")
+	assert.Contains(t, ec.sql, "attempts = picked.attempts + 1", "must increment attempts using the CTE-snapshotted value")
+	assert.Contains(t, ec.sql, "CASE WHEN picked.attempts + 1 >= $2", "must use CASE expression keyed on the CTE-snapshotted attempts for dead/pending branch")
 	assert.Contains(t, ec.sql, "LIMIT $8", "must cap batch size to avoid long transactions")
 	assert.Contains(t, ec.sql, "lease_id = CASE", "reclaim must clear lease_id on back-to-pending branch")
+	assert.Contains(t, ec.sql, "FOR UPDATE SKIP LOCKED", "CTE picker must use SKIP LOCKED to avoid contending with mark CAS transactions")
+	assert.Contains(t, ec.sql, "o.status = $6", "outer UPDATE must re-assert status (write-time CAS prevents regression of rows that left claiming)")
+	assert.Contains(t, ec.sql, "o.lease_id = picked.lease_id", "outer UPDATE must re-assert lease_id matches the picked snapshot (write-time fencing)")
 
 	// args: $1=claimTTLInterval, $2=maxAttempts, $3=dead, $4=pending,
 	//       $5=baseDelayMicros, $6=claiming, $7=maxDelayMicros, $8=reclaimBatchSize

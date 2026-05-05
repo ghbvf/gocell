@@ -115,6 +115,52 @@ func TestVerifyExpectedVersion_DBAhead_Integration(t *testing.T) {
 		"error message should mention schema version mismatch")
 }
 
+// TestVerifyOutboxLeaseInvariant_CleanState verifies the invariant returns
+// nil when no claiming rows exist (post-014 baseline) — the happy path.
+func TestVerifyOutboxLeaseInvariant_CleanState(t *testing.T) {
+	pool, cleanup := setupPostgres(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	migrator, err := NewMigrator(pool, testMigrationsFS(t), "schema_migrations_lease_clean")
+	require.NoError(t, err)
+	require.NoError(t, migrator.Up(ctx), "migrations must apply cleanly")
+
+	err = VerifyOutboxLeaseInvariant(ctx, pool)
+	assert.NoError(t, err, "clean post-014 outbox table must satisfy invariant")
+}
+
+// TestVerifyOutboxLeaseInvariant_PreFourteenResidue inserts a row that mimics
+// what a pre-014 binary would write through post-014 schema (status='claiming'
+// with NULL lease_id) and asserts the invariant fails with the dedicated
+// error code so the rolling-deploy guard halts startup.
+func TestVerifyOutboxLeaseInvariant_PreFourteenResidue(t *testing.T) {
+	pool, cleanup := setupPostgres(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	migrator, err := NewMigrator(pool, testMigrationsFS(t), "schema_migrations_lease_residue")
+	require.NoError(t, err)
+	require.NoError(t, migrator.Up(ctx), "migrations must apply cleanly")
+
+	// Inject a pre-014 style row: claiming + NULL lease_id. This is the
+	// exact shape an old binary's ClaimPending SQL produces when running
+	// against the new schema.
+	_, execErr := pool.DB().Exec(ctx, `INSERT INTO outbox_entries
+		(id, aggregate_id, aggregate_type, event_type, topic, payload, metadata, created_at, status, claimed_at, lease_id)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, now(), 'claiming', now(), NULL)`,
+		"00000000-0000-0000-0000-000000000001", "agg-1", "demo", "demo.event", "demo.topic",
+		[]byte(`{}`), []byte(`{}`))
+	require.NoError(t, execErr, "injecting pre-014 residue row must succeed")
+
+	err = VerifyOutboxLeaseInvariant(ctx, pool)
+	require.Error(t, err, "invariant must fail when claiming rows have NULL lease_id")
+	assert.Contains(t, err.Error(), "outbox lease invariant violation",
+		"error must surface the invariant name for ops triage")
+	assert.Contains(t, err.Error(), "1 claiming rows",
+		"error must report the row count")
+}
+
 // TestVerifyExpectedVersion_DBLagged_Integration verifies that when the DB
 // schema is behind the binary (DB version < FS max), VerifyExpectedVersion
 // returns an error containing "schema version mismatch".
