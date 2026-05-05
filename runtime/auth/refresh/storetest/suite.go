@@ -51,9 +51,13 @@ const storeMaxAge7d = 7 * 24 * time.Hour
 const storeMaxAge48h = 48 * time.Hour
 
 // defaultPolicy is the policy used by tests unless they need specific values.
+// MaxIdle and GraceMaxReuses use the package defaults (30 days / 3 re-uses);
+// tests complete in milliseconds so neither limit is reached in normal runs.
 var defaultPolicy = refresh.Policy{
-	ReuseInterval: testtime.D2s,
-	MaxAge:        storeMaxAge7d,
+	ReuseInterval:  testtime.D2s,
+	MaxAge:         storeMaxAge7d,
+	MaxIdle:        refresh.DefaultMaxIdle,
+	GraceMaxReuses: refresh.DefaultGraceMaxReuses,
 }
 
 const (
@@ -258,8 +262,16 @@ func runT9RevokeCascade(t *testing.T, factory Factory) {
 // every goroutine must return err == nil and a wire of length 66. Assertion
 // model: all successes, at least N-1 distinct child wires (the first wins
 // the rotated_at flip, the others produce siblings).
+//
+// GraceMaxReuses is set to 200 so the concurrent test never hits the grace
+// counter cap. The cap is separately exercised by T20 and the X14 integration
+// tests (T20_GraceCounterCapTriggersReuse).
+const t10GraceMaxReuses = 200
+
 func runT10ConcurrentCAS(t *testing.T, factory Factory) {
-	store, _ := factory(t, defaultPolicy)
+	p := defaultPolicy
+	p.GraceMaxReuses = t10GraceMaxReuses
+	store, _ := factory(t, p)
 	parentWire, _ := mustIssue(t, store, "sess-10", "user-10")
 
 	const goroutines = 100

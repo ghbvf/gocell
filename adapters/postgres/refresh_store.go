@@ -29,18 +29,27 @@ var _ refresh.Store = (*PGRefreshStore)(nil)
 // gcBatchSize is the number of rows deleted per GC batch iteration.
 const gcBatchSize = 1000
 
+// idleFarFuture is used as idle_expires_at when Policy.MaxIdle is zero (pre-016
+// migration stores that have not been configured with an idle window). Setting
+// far-future prevents pre-016 rows from being swept by idle-expiry GC while still
+// allowing the column to carry a valid TIMESTAMPTZ NOT NULL value.
+const idleFarFuture = 10 * 365 * 24 * time.Hour
+
 // Append-only SQL statements.
 //
 // Design: Issue and Rotate only INSERT rows; rotated_at and revoked_at are
 // one-way flips; verifier_hash is never updated. Reuse detection cascades
 // revoke_session for the entire session_id lineage.
+//
+// Columns idle_expires_at, first_used_at, used_times are added by migration 016
+// (X12 + X14). Pre-016 rows have idle_expires_at defaulted to created_at + 30d.
 const (
 	insertRowSQL = `
-INSERT INTO refresh_tokens (id, parent_id, session_id, subject_id, selector, verifier_hash, created_at, expires_at)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`
+INSERT INTO refresh_tokens (id, parent_id, session_id, subject_id, selector, verifier_hash, created_at, expires_at, idle_expires_at)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`
 
 	selectBySelectorSQL = `
-SELECT id, session_id, subject_id, verifier_hash, created_at, expires_at, rotated_at, revoked_at
+SELECT id, session_id, subject_id, verifier_hash, created_at, expires_at, rotated_at, revoked_at, idle_expires_at, first_used_at, used_times
 FROM refresh_tokens
 WHERE selector = $1
 ORDER BY created_at DESC
@@ -55,6 +64,14 @@ SET rotated_at = $1
 WHERE id = $2
   AND rotated_at IS NULL`
 
+	// markGraceUsedSQL sets first_used_at on first grace re-use and increments
+	// used_times on every subsequent re-presentation within the grace window.
+	markGraceUsedSQL = `
+UPDATE refresh_tokens
+SET first_used_at = COALESCE(first_used_at, $1),
+    used_times    = used_times + 1
+WHERE id = $2`
+
 	revokeSessionSQL = `
 UPDATE refresh_tokens
 SET revoked_at = $1
@@ -67,11 +84,15 @@ SET revoked_at = $1
 WHERE subject_id = $2
   AND revoked_at IS NULL`
 
+	// gcBatchSQL deletes expired rows: a row is eligible when either its
+	// absolute expires_at or its idle_expires_at has passed the olderThan
+	// threshold. idle_expires_at defaults to now()+30d for pre-016 rows so
+	// they are only swept by expires_at.
 	gcBatchSQL = `
 DELETE FROM refresh_tokens
 WHERE id IN (
     SELECT id FROM refresh_tokens
-    WHERE expires_at < $1
+    WHERE LEAST(expires_at, idle_expires_at) < $1
     LIMIT $2
     FOR UPDATE SKIP LOCKED
 )`
@@ -102,14 +123,17 @@ type PGRefreshStore struct {
 }
 
 type refreshRow struct {
-	id           uuid.UUID
-	sessionID    string
-	subjectID    string
-	verifierHash []byte
-	createdAt    time.Time
-	expiresAt    time.Time
-	rotatedAt    *time.Time
-	revokedAt    *time.Time
+	id             uuid.UUID
+	sessionID      string
+	subjectID      string
+	verifierHash   []byte
+	createdAt      time.Time
+	expiresAt      time.Time
+	rotatedAt      *time.Time
+	revokedAt      *time.Time
+	idleExpiresAt  time.Time
+	firstUsedAt    *time.Time
+	usedTimes      int
 }
 
 func (r refreshRow) toToken() *refresh.Token {
@@ -204,11 +228,12 @@ func (s *PGRefreshStore) Issue(ctx context.Context, sessionID, subjectID string)
 	}
 	now := s.clock.Now()
 	expiresAt := now.Add(s.policy.MaxAge)
+	idleExpiresAt := s.idleDeadline(now)
 	id := uuid.New()
 	verHash := sha256.Sum256(ver)
 
 	if _, err := s.execCtx(ctx, insertRowSQL,
-		id, uuid.NullUUID{}, sessionID, subjectID, sel, verHash[:], now, expiresAt,
+		id, uuid.NullUUID{}, sessionID, subjectID, sel, verHash[:], now, expiresAt, idleExpiresAt,
 	); err != nil {
 		return "", nil, errcode.Wrap(errcode.KindInternal, ErrAdapterPGQuery, "refresh store: issue", err)
 	}
@@ -220,6 +245,16 @@ func (s *PGRefreshStore) Issue(ctx context.Context, sessionID, subjectID string)
 		CreatedAt: now,
 		ExpiresAt: expiresAt,
 	}, nil
+}
+
+// idleDeadline returns now + MaxIdle when MaxIdle is configured, or a far-future
+// sentinel when MaxIdle is zero (pre-016 migration stores that have not yet
+// been configured with an idle expiry window).
+func (s *PGRefreshStore) idleDeadline(now time.Time) time.Time {
+	if s.policy.MaxIdle > 0 {
+		return now.Add(s.policy.MaxIdle)
+	}
+	return now.Add(idleFarFuture)
 }
 
 // Peek validates the presented wire token without advancing the lineage.
@@ -298,7 +333,8 @@ func (s *PGRefreshStore) rotateInTx(ctx context.Context, sel, ver []byte) (strin
 
 	// Happy path or grace retry — INSERT a child whose parent_id points to
 	// row.id (the current generation), then flip row.id.rotated_at iff this is
-	// the first rotation.
+	// the first rotation. The child's idle_expires_at is reset to now+MaxIdle
+	// (sliding window: each rotation extends the idle deadline).
 	newSel, newVer, err := s.generatePair()
 	if err != nil {
 		return "", nil, err
@@ -307,10 +343,11 @@ func (s *PGRefreshStore) rotateInTx(ctx context.Context, sel, ver []byte) (strin
 	newID := uuid.New()
 	newHash := sha256.Sum256(newVer)
 	newExpires := now.Add(s.policy.MaxAge)
+	newIdleExpires := s.idleDeadline(now)
 
 	if _, err := s.execCtx(ctx, insertRowSQL,
 		newID, uuid.NullUUID{UUID: row.id, Valid: true},
-		row.sessionID, row.subjectID, newSel, newHash[:], now, newExpires,
+		row.sessionID, row.subjectID, newSel, newHash[:], now, newExpires, newIdleExpires,
 	); err != nil {
 		return "", nil, errcode.Wrap(errcode.KindInternal, ErrAdapterPGQuery, "refresh store: rotate insert child", err)
 	}
@@ -355,6 +392,7 @@ func (s *PGRefreshStore) selectBySelectorInTx(ctx context.Context, sel []byte) (
 	err := s.queryRowCtx(ctx, selectBySelectorSQL, sel).Scan(
 		&row.id, &row.sessionID, &row.subjectID,
 		&row.verifierHash, &row.createdAt, &row.expiresAt, &row.rotatedAt, &row.revokedAt,
+		&row.idleExpiresAt, &row.firstUsedAt, &row.usedTimes,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return refreshRow{}, rejectWithReason("selector_miss", "")
@@ -385,22 +423,50 @@ func (s *PGRefreshStore) validateRow(ctx context.Context, row refreshRow, ver []
 	if !row.expiresAt.After(now) {
 		return refreshRow{}, rejectWithReason("expired", row.sessionID)
 	}
+	// X12: idle-expiry check. idleExpiresAt is zero for pre-016 rows in DBs
+	// without the migration; zero time is before any real time so we guard
+	// against that by only checking when idleExpiresAt is non-zero.
+	if !row.idleExpiresAt.IsZero() && s.policy.MaxIdle > 0 && !row.idleExpiresAt.After(now) {
+		return refreshRow{}, rejectWithReason("idle_expired", row.sessionID)
+	}
 
-	if row.rotatedAt != nil && now.Sub(*row.rotatedAt) > s.policy.ReuseInterval {
-		// Reuse detected: log as security event BEFORE the cascade SQL so that
-		// the security-observable log entry is not delayed by DB latency.
-		// The cascade revoke path is slower than other reject branches due to
-		// the UPDATE SQL; we accept this timing difference (B2-A-09: string
-		// processing and log formatting are uniform across all branches; the
-		// DB write is the only unavoidable timing oracle).
-		slog.Error("refresh token reuse detected",
-			slog.String("session_id", row.sessionID),
-			slog.String("reason", "reuse_detected"),
-		)
-		if _, execErr := s.execCtx(ctx, revokeSessionSQL, now, row.sessionID); execErr != nil {
-			return refreshRow{}, errcode.Wrap(errcode.KindInternal, ErrAdapterPGQuery, "refresh store: reuse cascade", execErr)
+	if row.rotatedAt != nil {
+		// X14: grace counter cap. If the grace cap is configured and this parent
+		// has already been re-presented GraceMaxReuses times, treat this as a
+		// reuse attack regardless of ReuseInterval.
+		if s.policy.GraceMaxReuses > 0 && row.usedTimes >= s.policy.GraceMaxReuses {
+			slog.Error("refresh token grace counter exhausted",
+				slog.String("session_id", row.sessionID),
+				slog.String("reason", "reuse_detected"),
+				slog.Int("used_times", row.usedTimes),
+			)
+			if _, execErr := s.execCtx(ctx, revokeSessionSQL, now, row.sessionID); execErr != nil {
+				return refreshRow{}, errcode.Wrap(errcode.KindInternal, ErrAdapterPGQuery, "refresh store: grace exhausted cascade", execErr)
+			}
+			return refreshRow{}, rejectWithReason("reuse_detected", row.sessionID)
 		}
-		return refreshRow{}, rejectWithReason("reuse_detected", row.sessionID)
+
+		if now.Sub(*row.rotatedAt) > s.policy.ReuseInterval {
+			// Reuse detected: log as security event BEFORE the cascade SQL so that
+			// the security-observable log entry is not delayed by DB latency.
+			// The cascade revoke path is slower than other reject branches due to
+			// the UPDATE SQL; we accept this timing difference (B2-A-09: string
+			// processing and log formatting are uniform across all branches; the
+			// DB write is the only unavoidable timing oracle).
+			slog.Error("refresh token reuse detected",
+				slog.String("session_id", row.sessionID),
+				slog.String("reason", "reuse_detected"),
+			)
+			if _, execErr := s.execCtx(ctx, revokeSessionSQL, now, row.sessionID); execErr != nil {
+				return refreshRow{}, errcode.Wrap(errcode.KindInternal, ErrAdapterPGQuery, "refresh store: reuse cascade", execErr)
+			}
+			return refreshRow{}, rejectWithReason("reuse_detected", row.sessionID)
+		}
+
+		// Within grace window: increment used_times so the counter approaches GraceMaxReuses.
+		if _, execErr := s.execCtx(ctx, markGraceUsedSQL, now, row.id); execErr != nil {
+			return refreshRow{}, errcode.Wrap(errcode.KindInternal, ErrAdapterPGQuery, "refresh store: mark grace used", execErr)
+		}
 	}
 
 	return row, nil

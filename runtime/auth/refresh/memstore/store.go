@@ -29,18 +29,22 @@ import (
 )
 
 // tokenRecord is one append-only row. Fields are never mutated after insert
-// except rotatedAt and revokedAt, which flip once from zero to a real time.
+// except rotatedAt, revokedAt, firstUsedAt, and usedTimes (one-way flips /
+// monotonic increment).
 type tokenRecord struct {
-	id           uuid.UUID
-	parentID     uuid.UUID
-	sessionID    string
-	subjectID    string
-	selector     []byte
-	verifierHash [sha256.Size]byte
-	createdAt    time.Time
-	expiresAt    time.Time
-	rotatedAt    time.Time // zero means live-latest
-	revokedAt    time.Time // zero means not revoked
+	id             uuid.UUID
+	parentID       uuid.UUID
+	sessionID      string
+	subjectID      string
+	selector       []byte
+	verifierHash   [sha256.Size]byte
+	createdAt      time.Time
+	expiresAt      time.Time
+	idleExpiresAt  time.Time // sliding window; zero disables idle check
+	rotatedAt      time.Time // zero means live-latest
+	revokedAt      time.Time // zero means not revoked
+	firstUsedAt    time.Time // zero until first grace re-use
+	usedTimes      int       // grace re-use counter
 }
 
 func (r *tokenRecord) isRotated() bool { return !r.rotatedAt.IsZero() }
@@ -102,14 +106,15 @@ func (s *store) Issue(_ context.Context, sessionID, subjectID string) (string, *
 	}
 	now := s.clock.Now()
 	rec := &tokenRecord{
-		id:           uuid.New(),
-		parentID:     uuid.Nil,
-		sessionID:    sessionID,
-		subjectID:    subjectID,
-		selector:     sel,
-		verifierHash: sha256.Sum256(ver),
-		createdAt:    now,
-		expiresAt:    now.Add(s.policy.MaxAge),
+		id:            uuid.New(),
+		parentID:      uuid.Nil,
+		sessionID:     sessionID,
+		subjectID:     subjectID,
+		selector:      sel,
+		verifierHash:  sha256.Sum256(ver),
+		createdAt:     now,
+		expiresAt:     now.Add(s.policy.MaxAge),
+		idleExpiresAt: s.idleDeadline(now),
 	}
 
 	s.mu.Lock()
@@ -117,6 +122,15 @@ func (s *store) Issue(_ context.Context, sessionID, subjectID string) (string, *
 	s.mu.Unlock()
 
 	return refresh.EncodeOpaque(sel, ver), rec.toToken(), nil
+}
+
+// idleDeadline returns now + MaxIdle when configured, or a zero time when
+// MaxIdle is zero (idle check disabled).
+func (s *store) idleDeadline(now time.Time) time.Time {
+	if s.policy.MaxIdle > 0 {
+		return now.Add(s.policy.MaxIdle)
+	}
+	return time.Time{}
 }
 
 // Peek validates the presented wire token without advancing the lineage.
@@ -153,26 +167,34 @@ func (s *store) Rotate(_ context.Context, presented string) (string, *refresh.To
 	}
 	now := s.clock.Now()
 
-	// Happy path or grace retry — both issue a child.
+	// Happy path or grace retry — both issue a child. The child's idleExpiresAt
+	// is reset to now+MaxIdle (sliding window per Rotate).
 	newSel, newVer, err := s.generatePair()
 	if err != nil {
 		return "", nil, err
 	}
 	child := &tokenRecord{
-		id:           uuid.New(),
-		parentID:     rec.id,
-		sessionID:    rec.sessionID,
-		subjectID:    rec.subjectID,
-		selector:     newSel,
-		verifierHash: sha256.Sum256(newVer),
-		createdAt:    now,
-		expiresAt:    now.Add(s.policy.MaxAge),
+		id:            uuid.New(),
+		parentID:      rec.id,
+		sessionID:     rec.sessionID,
+		subjectID:     rec.subjectID,
+		selector:      newSel,
+		verifierHash:  sha256.Sum256(newVer),
+		createdAt:     now,
+		expiresAt:     now.Add(s.policy.MaxAge),
+		idleExpiresAt: s.idleDeadline(now),
 	}
 	s.rows = append(s.rows, child)
 
 	// Flip parent.rotatedAt if this is the first rotation.
 	if !rec.isRotated() {
 		rec.rotatedAt = now
+	} else {
+		// Grace retry: increment grace counter.
+		if rec.firstUsedAt.IsZero() {
+			rec.firstUsedAt = now
+		}
+		rec.usedTimes++
 	}
 
 	return refresh.EncodeOpaque(newSel, newVer), child.toToken(), nil
@@ -195,8 +217,23 @@ func (s *store) validatePresentedLocked(sel, ver []byte) (*tokenRecord, error) {
 	if !rec.expiresAt.After(now) {
 		return nil, rejectWithReason("expired")
 	}
+	// X12: idle-expiry check (zero idleExpiresAt means idle check disabled).
+	if !rec.idleExpiresAt.IsZero() && s.policy.MaxIdle > 0 && !rec.idleExpiresAt.After(now) {
+		return nil, rejectWithReason("idle_expired")
+	}
 
 	if rec.isRotated() {
+		// X14: grace counter cap check.
+		if s.policy.GraceMaxReuses > 0 && rec.usedTimes >= s.policy.GraceMaxReuses {
+			s.revokeSessionLocked(rec.sessionID, now)
+			slog.Error("refresh token grace counter exhausted",
+				slog.String("session_id", rec.sessionID),
+				slog.String("reason", "reuse_detected"),
+				slog.Int("used_times", rec.usedTimes),
+			)
+			return nil, refresh.ErrRejected
+		}
+
 		// Parent already rotated — either grace retry or reuse attack.
 		if now.Sub(rec.rotatedAt) > s.policy.ReuseInterval {
 			s.revokeSessionLocked(rec.sessionID, now)
@@ -233,14 +270,21 @@ func (s *store) RevokeUser(_ context.Context, subjectID string) error {
 	return nil
 }
 
-// GC removes rows whose expiresAt < olderThan. L0 best-effort.
+// GC removes rows whose effective expiry is before olderThan. The effective
+// expiry is LEAST(expiresAt, idleExpiresAt) when idleExpiresAt is non-zero,
+// or just expiresAt when idle_expires_at is zero (pre-016 / disabled).
+// L0 best-effort.
 func (s *store) GC(_ context.Context, olderThan time.Time) (int, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	kept := s.rows[:0]
 	removed := 0
 	for _, rec := range s.rows {
-		if rec.expiresAt.Before(olderThan) {
+		effectiveExpiry := rec.expiresAt
+		if !rec.idleExpiresAt.IsZero() && rec.idleExpiresAt.Before(effectiveExpiry) {
+			effectiveExpiry = rec.idleExpiresAt
+		}
+		if effectiveExpiry.Before(olderThan) {
 			removed++
 			continue
 		}
