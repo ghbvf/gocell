@@ -274,6 +274,7 @@ func NewConsumerBase(claimer idempotency.Claimer, config ConsumerBaseConfig, clk
 		claimer: claimer,
 		config:  config,
 		clk:     clk,
+		built:   true,
 	}, nil
 }
 

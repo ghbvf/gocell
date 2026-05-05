@@ -147,11 +147,18 @@ func (b *Bootstrap) checkNoSubscriptionsWhenSubscriberNil(s *phaseState) error {
 }
 
 // checkConsumerBaseConfiguredForSubscriptions fails fast when cells registered
-// subscriptions but no ConsumerBase is configured. This keeps idempotency and
-// retry lifecycle wiring explicit instead of silently consuming with nil
-// Settlement.
+// subscriptions but the ConsumerBase wired via WithConsumerBase is missing or
+// is a zero-value `&ConsumerBase{}` literal. This keeps idempotency and retry
+// lifecycle wiring explicit instead of silently consuming with a misconfigured
+// ConsumerBase.
+//
+// N8 (b): the IsConstructed sentinel rejects literals even when they are
+// non-nil — a `&outbox.ConsumerBase{}` would previously slip past the bare
+// nil check, run with claimer=nil/ClaimRetryCount=0, and silently emit
+// retryLoop=0 → ClaimAcquired+nil receipt → DispositionReject/DLX paths
+// (PR#374 review finding (a)).
 func (b *Bootstrap) checkConsumerBaseConfiguredForSubscriptions(s *phaseState) error {
-	if b.consumerBase != nil {
+	if b.consumerBase != nil && b.consumerBase.IsConstructed() {
 		return nil
 	}
 	for _, id := range s.asm.CellIDs() {
@@ -160,9 +167,16 @@ func (b *Bootstrap) checkConsumerBaseConfiguredForSubscriptions(s *phaseState) e
 			continue
 		}
 		for _, sub := range snap.Subscriptions {
+			if b.consumerBase == nil {
+				return fmt.Errorf(
+					"bootstrap: cell %s registered subscription topic %q but no ConsumerBase is configured; "+
+						"add WithConsumerBase to bootstrap options", id, sub.Spec.Topic)
+			}
 			return fmt.Errorf(
-				"bootstrap: cell %s registered subscription topic %q but no ConsumerBase is configured; "+
-					"add WithConsumerBase to bootstrap options", id, sub.Spec.Topic)
+				"bootstrap: cell %s registered subscription topic %q but ConsumerBase was not constructed via "+
+					"outbox.NewConsumerBase (got a zero-value `&outbox.ConsumerBase{}` literal); "+
+					"call outbox.NewConsumerBase to obtain a properly initialized value",
+				id, sub.Spec.Topic)
 		}
 	}
 	return nil
