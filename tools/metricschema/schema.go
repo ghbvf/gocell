@@ -128,7 +128,7 @@ type obs01MetricIdentity struct {
 
 // Build walks the package graph reachable from assemblyID's build entrypoint
 // and returns all concrete metric registrations in project-owned packages.
-func Build(projectRoot string, project *metadata.ProjectMeta, assemblyID string) (*Schema, error) {
+func Build(ctx context.Context, projectRoot string, project *metadata.ProjectMeta, assemblyID string) (*Schema, error) {
 	asm := project.Assemblies[assemblyID]
 	if asm == nil {
 		return nil, fmt.Errorf("assembly %q not found", assemblyID)
@@ -138,7 +138,7 @@ func Build(projectRoot string, project *metadata.ProjectMeta, assemblyID string)
 		entrypoint = filepath.Join("cmd", assemblyID, "main.go")
 	}
 	pattern := "./" + filepath.ToSlash(filepath.Dir(entrypoint))
-	pkgs, err := loadReachablePackages(projectRoot, pattern)
+	pkgs, err := loadReachablePackages(ctx, projectRoot, pattern)
 	if err != nil {
 		return nil, err
 	}
@@ -153,6 +153,9 @@ func Build(projectRoot string, project *metadata.ProjectMeta, assemblyID string)
 		AssemblyID: assemblyID,
 		Scope:      "assembly-reachable",
 		Entrypoint: filepath.ToSlash(entrypoint),
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
 	}
 	for _, p := range pkgs {
 		sp := newScanPackage(projectRoot, p, namespace, inits, prometheusOptSinks)
@@ -183,21 +186,22 @@ func Marshal(schema *Schema) ([]byte, error) {
 	return append([]byte(header), body...), nil
 }
 
-func loadPackages(root string, patterns ...string) ([]*packages.Package, error) {
-	return loadPackagesWithMode(root, false, patterns...)
+func loadPackages(ctx context.Context, root string, patterns ...string) ([]*packages.Package, error) {
+	return loadPackagesWithMode(ctx, root, false, patterns...)
 }
 
-func loadReachablePackages(root string, patterns ...string) ([]*packages.Package, error) {
-	return loadPackagesWithMode(root, true, patterns...)
+func loadReachablePackages(ctx context.Context, root string, patterns ...string) ([]*packages.Package, error) {
+	return loadPackagesWithMode(ctx, root, true, patterns...)
 }
 
-func loadPackagesWithMode(root string, includeDeps bool, patterns ...string) ([]*packages.Package, error) {
+func loadPackagesWithMode(ctx context.Context, root string, includeDeps bool, patterns ...string) ([]*packages.Package, error) {
 	if !includeDeps && len(patterns) > 1 {
-		return loadPatternScopedPackages(root, patterns...)
+		return loadPatternScopedPackages(ctx, root, patterns...)
 	}
 	cfg := &packages.Config{
-		Mode: packageLoadMode(includeDeps),
-		Dir:  root,
+		Context: ctx,
+		Mode:    packageLoadMode(includeDeps),
+		Dir:     root,
 	}
 	roots, err := packages.Load(cfg, patterns...)
 	if err != nil {
@@ -217,11 +221,11 @@ func loadPackagesWithMode(root string, includeDeps bool, patterns ...string) ([]
 	return out, nil
 }
 
-func loadPatternScopedPackages(root string, patterns ...string) ([]*packages.Package, error) {
+func loadPatternScopedPackages(ctx context.Context, root string, patterns ...string) ([]*packages.Package, error) {
 	byPath := map[string]*packages.Package{}
 	var paths []string
 	for _, pattern := range patterns {
-		pkgs, err := loadPackagesWithMode(root, false, pattern)
+		pkgs, err := loadPackagesWithMode(ctx, root, false, pattern)
 		if err != nil {
 			return nil, err
 		}
@@ -1677,7 +1681,7 @@ func checkOBS01WithPatterns(ctx context.Context, projectRoot string, patterns ..
 		return nil, err
 	}
 	matchedAcks := map[string]bool{}
-	pkgs, err := loadPackages(projectRoot, patterns...)
+	pkgs, err := loadPackages(ctx, projectRoot, patterns...)
 	if err != nil {
 		return nil, err
 	}

@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"path/filepath"
@@ -142,7 +143,9 @@ func generateMetricsSchema(args []string) error {
 		return fmt.Errorf("metadata parse: %w", err)
 	}
 
-	schema, err := metricschema.Build(root, project, *id)
+	// TODO(B2-X-07): replace context.Background() with signal-aware ctx once
+	// Dispatch propagates cancellation through generate subcommands.
+	schema, err := metricschema.Build(context.Background(), root, project, *id)
 	if err != nil {
 		return fmt.Errorf("scan metrics: %w", err)
 	}

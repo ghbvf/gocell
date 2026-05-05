@@ -17,7 +17,7 @@ const fixtureModule = "example.com/generatedfixture"
 func TestExpectedArtifactsDerivesManifestFromMetadata(t *testing.T) {
 	root, project := newGeneratedFixture(t)
 
-	artifacts, err := ExpectedArtifacts(root, fixtureModule, project)
+	artifacts, err := ExpectedArtifacts(t.Context(), root, fixtureModule, project)
 	require.NoError(t, err)
 
 	require.Len(t, artifacts, 3)
@@ -51,7 +51,7 @@ func TestVerifyPassesWhenExpectedFilesAreCommitted(t *testing.T) {
 
 func TestVerifyReportsMissingAndChangedArtifacts(t *testing.T) {
 	root, project := newGeneratedFixture(t)
-	artifacts, err := ExpectedArtifacts(root, fixtureModule, project)
+	artifacts, err := ExpectedArtifacts(t.Context(), root, fixtureModule, project)
 	require.NoError(t, err)
 
 	staleEntrypoint := append([]byte(nil), artifacts[0].Content...)
@@ -300,13 +300,13 @@ func TestVerifyAllowsHandwrittenSiblingOfEntrypoint(t *testing.T) {
 func TestExpectedArtifactsRejectsInvalidInputs(t *testing.T) {
 	root := t.TempDir()
 
-	_, err := ExpectedArtifacts(root, fixtureModule, nil)
+	_, err := ExpectedArtifacts(t.Context(), root, fixtureModule, nil)
 	require.ErrorContains(t, err, "project metadata is nil")
 
-	_, err = ExpectedArtifacts(root, "", &metadata.ProjectMeta{})
+	_, err = ExpectedArtifacts(t.Context(), root, "", &metadata.ProjectMeta{})
 	require.ErrorContains(t, err, "module path is required")
 
-	_, err = ExpectedArtifacts(root, fixtureModule, &metadata.ProjectMeta{
+	_, err = ExpectedArtifacts(t.Context(), root, fixtureModule, &metadata.ProjectMeta{
 		Assemblies: map[string]*metadata.AssemblyMeta{"fixture": nil},
 	})
 	require.ErrorContains(t, err, `assembly "fixture" metadata is nil`)
@@ -407,7 +407,7 @@ func runFixture(context.Context, string, []string) error {
 func writeExpectedArtifacts(t *testing.T, root string, project *metadata.ProjectMeta) []Artifact {
 	t.Helper()
 
-	artifacts, err := ExpectedArtifacts(root, fixtureModule, project)
+	artifacts, err := ExpectedArtifacts(t.Context(), root, fixtureModule, project)
 	require.NoError(t, err)
 	for _, artifact := range artifacts {
 		writeFile(t, root, artifact.Path, artifact.Content)
@@ -416,7 +416,7 @@ func writeExpectedArtifacts(t *testing.T, root string, project *metadata.Project
 	// The catalog artifact describes the package graph, and generated entrypoints
 	// are themselves Go packages. Recompute after the first write so fixtures
 	// mirror a checked-in tree where generated files already exist.
-	artifacts, err = ExpectedArtifacts(root, fixtureModule, project)
+	artifacts, err = ExpectedArtifacts(t.Context(), root, fixtureModule, project)
 	require.NoError(t, err)
 	for _, artifact := range artifacts {
 		writeFile(t, root, artifact.Path, artifact.Content)

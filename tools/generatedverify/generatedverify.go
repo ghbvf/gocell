@@ -78,7 +78,7 @@ const driftKindUnexpected = "unexpected"
 // assembly.yaml the single source of truth for what may live under any
 // generator-owned path.
 func Verify(ctx context.Context, root, module string, project *metadata.ProjectMeta) (*Result, error) {
-	artifacts, err := ExpectedArtifacts(root, module, project)
+	artifacts, err := ExpectedArtifacts(ctx, root, module, project)
 	if err != nil {
 		return nil, err
 	}
@@ -146,7 +146,7 @@ func Verify(ctx context.Context, root, module string, project *metadata.ProjectM
 
 // ExpectedArtifacts derives the complete generated-artifact manifest and
 // in-memory content from project inputs.
-func ExpectedArtifacts(root, module string, project *metadata.ProjectMeta) ([]Artifact, error) {
+func ExpectedArtifacts(ctx context.Context, root, module string, project *metadata.ProjectMeta) ([]Artifact, error) {
 	if project == nil {
 		return nil, fmt.Errorf("project metadata is nil")
 	}
@@ -189,7 +189,7 @@ func ExpectedArtifacts(root, module string, project *metadata.ProjectMeta) ([]Ar
 			Content:    boundary,
 		})
 
-		schema, err := metricschema.Build(root, project, id)
+		schema, err := metricschema.Build(ctx, root, project, id)
 		if err != nil {
 			return nil, fmt.Errorf("generate expected metrics schema for %q: %w", id, err)
 		}

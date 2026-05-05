@@ -27,7 +27,7 @@ func TestBuild_CorebundleCapturesReachableTypedMetrics(t *testing.T) {
 	project, err := metadata.NewParser(root).Parse()
 	require.NoError(t, err)
 
-	schema, err := Build(root, project, "corebundle")
+	schema, err := Build(t.Context(), root, project, "corebundle")
 	require.NoError(t, err)
 
 	hookTotal := requireMetric(t, schema, "cell_hook_total")
@@ -81,7 +81,7 @@ func TestBuild_CorebundleGeneratedSchemaIsCurrent(t *testing.T) {
 	root := repoRoot(t)
 	project, err := metadata.NewParser(root).Parse()
 	require.NoError(t, err)
-	schema, err := Build(root, project, "corebundle")
+	schema, err := Build(t.Context(), root, project, "corebundle")
 	require.NoError(t, err)
 	got, err := Marshal(schema)
 	require.NoError(t, err)
@@ -118,7 +118,7 @@ func TestBuild_FixtureLocksReachabilityIdentityAndLabels(t *testing.T) {
 	root := writeMetricsFixture(t)
 	project := fixtureProject()
 
-	schema, err := Build(root, project, "fixture")
+	schema, err := Build(t.Context(), root, project, "fixture")
 	require.NoError(t, err)
 	assert.Equal(t, "assembly-reachable", schema.Scope)
 	assert.Equal(t, "cmd/app/main.go", schema.Entrypoint)
@@ -157,7 +157,7 @@ var _ = metrics.CounterOpts{
 `)
 	project := fixtureProject()
 
-	_, err := Build(root, project, "fixture")
+	_, err := Build(t.Context(), root, project, "fixture")
 	require.ErrorIs(t, err, ErrUnresolvedMetricSchema)
 	assert.Contains(t, err.Error(), "metric name must be a compile-time string")
 }
@@ -176,7 +176,7 @@ var _ = prom.NewCounterVec(buildCounterOpts(), []string{"status"})
 `)
 	project := fixtureProject()
 
-	_, err := Build(root, project, "fixture")
+	_, err := Build(t.Context(), root, project, "fixture")
 	require.ErrorIs(t, err, ErrUnresolvedMetricSchema)
 	assert.Contains(t, err.Error(), "Prometheus metric opts must be a resolvable literal")
 }
@@ -198,7 +198,7 @@ var _ = prom.NewCounter(prom.CounterOpts{
 `)
 	project := fixtureProject()
 
-	_, err := Build(root, project, "fixture")
+	_, err := Build(t.Context(), root, project, "fixture")
 	require.ErrorIs(t, err, ErrUnresolvedMetricSchema)
 	assert.Contains(t, err.Error(), "metric namespace must be a compile-time string")
 }
@@ -221,7 +221,7 @@ var _ = registerCounter(buildCounterOpts())
 `)
 	project := fixtureProject()
 
-	_, err := Build(root, project, "fixture")
+	_, err := Build(t.Context(), root, project, "fixture")
 	require.ErrorIs(t, err, ErrUnresolvedMetricSchema)
 	assert.Contains(t, err.Error(), "Prometheus metric helper opts must be a resolvable literal")
 }
@@ -251,7 +251,7 @@ var _ = helper.RegisterCounter(buildCounterOpts())
 `)
 	project := fixtureProject()
 
-	_, err := Build(root, project, "fixture")
+	_, err := Build(t.Context(), root, project, "fixture")
 	require.ErrorIs(t, err, ErrUnresolvedMetricSchema)
 	assert.Contains(t, err.Error(), "Prometheus metric helper opts must be a resolvable literal")
 }
@@ -274,7 +274,7 @@ var _ = registerCounterVec(prom.CounterOpts{Name: "helper_vec_total"}, buildLabe
 `)
 	project := fixtureProject()
 
-	_, err := Build(root, project, "fixture")
+	_, err := Build(t.Context(), root, project, "fixture")
 	require.ErrorIs(t, err, ErrUnresolvedMetricSchema)
 	assert.Contains(t, err.Error(), "label names must be a resolvable string slice")
 }
