@@ -220,7 +220,11 @@ func buildKeyProvider(
 	if providerName == "" {
 		if storageBackend == "postgres" {
 			return nil, errcode.New(errcode.KindInternal, errcode.ErrConfigKeyMissing,
-				"configcore: GOCELL_CONFIGCORE_KEY_PROVIDER must be set when StorageBackend=postgres (known values: \"local-aes\" for dev/CI, \"vault-transit\" for production). Silent NoopTransformer fallback is disabled because it would persist sensitive values unencrypted.")
+				"configcore: GOCELL_CONFIGCORE_KEY_PROVIDER must be set when "+
+					"StorageBackend=postgres (known values: \"local-aes\" for "+
+					"dev/CI, \"vault-transit\" for production). Silent "+
+					"NoopTransformer fallback is disabled because it would "+
+					"persist sensitive values unencrypted.")
 		}
 		return noKeyProvider{}, nil
 	}

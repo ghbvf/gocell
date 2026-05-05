@@ -21,14 +21,20 @@ import (
 // runtime/bootstrap, runtime/http/health, etc. so the panic message stays
 // uniform and the gate's exempt-list auditing has exactly one location.
 func MustHaveClock(c Clock, ctx string) {
+	const (
+		nilMsg = "%s: clock.Clock is required (nil rejected); " +
+			"pass clock.Real() at the composition root or clockmock.New(...) in tests"
+		typedNilMsg = "%s: clock.Clock is required (typed-nil rejected); " +
+			"pass clock.Real() at the composition root or clockmock.New(...) in tests"
+	)
 	if c == nil {
-		panic(errcode.Assertion("%s: clock.Clock is required (nil rejected); pass clock.Real() at the composition root or clockmock.New(...) in tests", ctx))
+		panic(errcode.Assertion(nilMsg, ctx))
 	}
 	v := reflect.ValueOf(c)
 	switch v.Kind() {
 	case reflect.Ptr, reflect.Map, reflect.Chan, reflect.Func, reflect.Slice, reflect.Interface:
 		if v.IsNil() {
-			panic(errcode.Assertion("%s: clock.Clock is required (typed-nil rejected); pass clock.Real() at the composition root or clockmock.New(...) in tests", ctx))
+			panic(errcode.Assertion(typedNilMsg, ctx))
 		}
 	}
 }

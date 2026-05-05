@@ -410,21 +410,21 @@ func (erroringResponseWriter) WriteHeader(int) {}
 // attr (bypassing WithDetails' kind whitelist via direct field assignment)
 // lands as a normal 4xx response — Error.MarshalJSON substitutes the unsafe
 // value with the sentinel marker so encoding/json never sees the bad
-// payload. This is the layer-2 defence (P1-B); together with the layer-3
+// payload. This is the layer-2 defense (P1-B); together with the layer-3
 // fail-closed sentinel below it eliminates the empty-200 fail-open mode of
 // the prior writeErrorBody.
 func TestWriteError_DetailsBypassFencedByMarshalSentinel(t *testing.T) {
 	bad := errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "bad")
 	// Direct field write — sidesteps WithDetails' kind whitelist (the only
 	// API path) so we can inject a KindAny attr to exercise MarshalJSON's
-	// defence-in-depth substitution. ERRCODE-KIND-LITERAL-01 forbids
+	// defense-in-depth substitution. ERRCODE-KIND-LITERAL-01 forbids
 	// composite-literal construction; field assignment is allowed.
 	bad.Details = []slog.Attr{slog.Any("ch", make(chan int))}
 
 	rec := httptest.NewRecorder()
 	WriteError(context.Background(), rec, bad)
 	assert.Equal(t, http.StatusBadRequest, rec.Code,
-		"defence-in-depth substitution keeps 4xx flow intact")
+		"defense-in-depth substitution keeps 4xx flow intact")
 
 	var body map[string]any
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
@@ -455,7 +455,7 @@ func TestWriteInternalErrorSentinel_BodyAndStatus(t *testing.T) {
 
 // TestWriteErrorBody_FailClosedOnMarshalFailure simulates the full
 // fail-closed contract: a synthetic *errcode.Error whose MarshalJSON
-// returns an error (impossible via the public API since defence-in-depth
+// returns an error (impossible via the public API since defense-in-depth
 // substitutes unsafe kinds, but reachable when callers construct corrupted
 // values directly). The expectation is HTTP 500 + the sentinel body, never
 // an empty default-200 response.

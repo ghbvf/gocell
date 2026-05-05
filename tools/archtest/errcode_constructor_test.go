@@ -41,9 +41,9 @@ func TestErrcodeLiteralConstructionBanned(t *testing.T) {
 		if rel == "pkg/ctxcancel/ctxcancel.go" {
 			continue
 		}
-		// pkg/httputil/response.go is the HTTP serialisation boundary:
+		// pkg/httputil/response.go is the HTTP serialization boundary:
 		// WritePublic accepts a framework-selected message string, and
-		// writeErrcodeError builds a sanitised 5xx sentinel. File-level
+		// writeErrcodeError builds a sanitized 5xx sentinel. File-level
 		// allowlist — other files in pkg/httputil/ are NOT exempt.
 		if rel == "pkg/httputil/response.go" {
 			continue

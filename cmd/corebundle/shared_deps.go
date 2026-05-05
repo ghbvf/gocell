@@ -334,7 +334,9 @@ func (d *SharedDeps) validateVerboseEndpoint() []error {
 		return nil
 	}
 	return []error{errcode.New(errcode.KindInternal, errcode.ErrControlplaneVerboseTokenMissing,
-		"GOCELL_READYZ_VERBOSE_TOKEN must be set (or GOCELL_READYZ_VERBOSE_DISABLED=1 to waive the verbose endpoint) so /readyz?verbose is never anonymous")}
+		"GOCELL_READYZ_VERBOSE_TOKEN must be set (or "+
+			"GOCELL_READYZ_VERBOSE_DISABLED=1 to waive the verbose endpoint) "+
+			"so /readyz?verbose is never anonymous")}
 }
 
 // validateCore collects missing-field errors for dependencies required in
@@ -394,7 +396,9 @@ func (d *SharedDeps) validateControlPlane() []error {
 	// and would leave operators without a token-gated diagnostic path.
 	if d.VerboseDisabled {
 		errs = append(errs, errcode.New(errcode.KindInternal, errcode.ErrControlplaneVerboseTokenMissing,
-			"GOCELL_READYZ_VERBOSE_DISABLED=1 is not allowed in adapter mode \"real\"; production must keep the token-gated verbose endpoint available for on-call diagnostics"))
+			"GOCELL_READYZ_VERBOSE_DISABLED=1 is not allowed in adapter mode "+
+				"\"real\"; production must keep the token-gated verbose endpoint "+
+				"available for on-call diagnostics"))
 	}
 	if d.VerboseToken == SampleVerbosePlaceholder {
 		errs = append(errs, errcode.New(errcode.KindInternal, errcode.ErrControlplaneVerboseTokenSample,
@@ -403,7 +407,9 @@ func (d *SharedDeps) validateControlPlane() []error {
 	}
 	if d.MetricsToken == "" {
 		errs = append(errs, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-			"GOCELL_METRICS_TOKEN must be set in adapter mode \"real\" to prevent anonymous /metrics exposure; scrapers must send X-Metrics-Token header"))
+			"GOCELL_METRICS_TOKEN must be set in adapter mode \"real\" to "+
+				"prevent anonymous /metrics exposure; scrapers must send "+
+				"X-Metrics-Token header"))
 	}
 	if d.InternalGuard == nil {
 		errs = append(errs, errcode.New(errcode.KindInternal, errcode.ErrControlplaneServiceSecretMissing,
@@ -413,17 +419,24 @@ func (d *SharedDeps) validateControlPlane() []error {
 			"internalGuard.nonceStore is nil; guard constructed without WithServiceTokenNonceStore"))
 	} else if kind := ns.Kind(); kind == auth.NonceStoreKindNoop {
 		errs = append(errs, errcode.New(errcode.KindInternal, errcode.ErrControlplaneNonceStoreMissing,
-			"control-plane NonceStore must be a replay-safe implementation in adapter mode \"real\"; NoopNonceStore detected — inject InMemoryNonceStore (single pod) or a shared store (multi-pod) via WithServiceTokenNonceStore"))
+			"control-plane NonceStore must be a replay-safe implementation in "+
+				"adapter mode \"real\"; NoopNonceStore detected — inject "+
+				"InMemoryNonceStore (single pod) or a shared store (multi-pod) "+
+				"via WithServiceTokenNonceStore"))
 	} else if kind == auth.NonceStoreKindInMemory && !d.Topology.SinglePodReplayProtection && d.Topology.RequireProductionControlPlane() {
 		slog.Warn("controlplane: in-memory nonce store rejected for multi-pod deployment",
 			slog.String("nonce_store_kind", string(kind)),
 			slog.String("hint", "set GOCELL_SINGLE_POD=1 for single-pod deployments or configure a distributed NonceStore"))
 		errs = append(errs, errcode.New(errcode.KindInternal, errcode.ErrControlplaneNonceStoreMissing,
-			"in-memory nonce store requires GOCELL_SINGLE_POD=1 (single-pod deployments) or a distributed store via WithServiceTokenNonceStore (multi-pod); refuse fail-open"))
+			"in-memory nonce store requires GOCELL_SINGLE_POD=1 "+
+				"(single-pod deployments) or a distributed store via "+
+				"WithServiceTokenNonceStore (multi-pod); refuse fail-open"))
 	}
 	if requiresDistributedReplay(d.Topology) && d.ConsumerClaimerKind != consumerClaimerKindDistributed {
 		errs = append(errs, errcode.New(errcode.KindInternal, errcode.ErrControlplaneClaimerNotDistributed,
-			"ERR_CONTROLPLANE_CLAIMER_NOT_DISTRIBUTED: real multi-pod deployments require Redis-backed outbox idempotency claimer; set GOCELL_REDIS_ADDR or run with GOCELL_SINGLE_POD=1"))
+			"ERR_CONTROLPLANE_CLAIMER_NOT_DISTRIBUTED: real multi-pod "+
+				"deployments require Redis-backed outbox idempotency claimer; "+
+				"set GOCELL_REDIS_ADDR or run with GOCELL_SINGLE_POD=1"))
 	}
 	return errs
 }
@@ -448,7 +461,11 @@ func (d *SharedDeps) validateHealthReachability() []error {
 		return nil
 	}
 	return []error{errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-		"GOCELL_HTTP_HEALTH_ADDR is loopback-only in adapter mode \"real\"; kubelet HTTP probes and Prometheus PodIP/Service scrapes cannot reach container loopback. Set GOCELL_HTTP_HEALTH_ADDR=:9091 (or a Pod-reachable address), or set GOCELL_HTTP_HEALTH_LOCAL_ONLY=1 only for same-pod sidecar or exec-probe deployments.")}
+		"GOCELL_HTTP_HEALTH_ADDR is loopback-only in adapter mode \"real\"; "+
+			"kubelet HTTP probes and Prometheus PodIP/Service scrapes cannot "+
+			"reach container loopback. Set GOCELL_HTTP_HEALTH_ADDR=:9091 "+
+			"(or a Pod-reachable address), or set GOCELL_HTTP_HEALTH_LOCAL_ONLY=1 "+
+			"only for same-pod sidecar or exec-probe deployments.")}
 }
 
 func isLoopbackBindAddr(addr string) bool {

@@ -572,8 +572,15 @@ func TestMigrator_Up_RefusesIfInvalidIndexExists(t *testing.T) {
 	// Up() must return an error: refusing to migrate due to invalid indexes.
 	upErr := migrator2.Up(ctx)
 	require.Error(t, upErr, "Up() must refuse when invalid indexes are present")
-	assert.Contains(t, upErr.Error(), "invalid index",
-		"error message should mention invalid index")
+	// K#08 PII-safe message: the public Message is a fixed const literal, the
+	// runtime index list rides on InternalMessage (not on .Error()). Assert on
+	// the structured fields rather than the formatted Error() string.
+	var ec *errcode.Error
+	require.True(t, errors.As(upErr, &ec), "upErr must wrap *errcode.Error")
+	assert.Equal(t, ErrAdapterPGMigrate, ec.Code,
+		"Up() must surface the postgres-migrate sentinel code")
+	assert.Contains(t, ec.Message, "invalid indexes",
+		"public message should mention invalid indexes")
 
 	// Verify schema version was NOT advanced: schema_migrations_guard_test should not exist
 	// (goose only creates the tracking table once migrations start; if Up is aborted

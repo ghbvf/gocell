@@ -105,7 +105,9 @@ func (t Topology) validate() error {
 	case "postgres":
 		if t.AdapterMode != "real" {
 			return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-				"GOCELL_CELL_ADAPTER_MODE=postgres requires GOCELL_ADAPTER_MODE=real (real persistence demands production key loading, token-guarded /metrics, and token-guarded /readyz?verbose)")
+				"GOCELL_CELL_ADAPTER_MODE=postgres requires GOCELL_ADAPTER_MODE=real "+
+					"(real persistence demands production key loading, "+
+					"token-guarded /metrics, and token-guarded /readyz?verbose)")
 		}
 		return nil
 	default:

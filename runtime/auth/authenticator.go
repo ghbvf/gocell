@@ -163,11 +163,15 @@ func NewServiceTokenAuthenticator(ring cell.HMACKeyring, clk clock.Clock, opts .
 	}
 	if cfg.nonceStore == nil {
 		return nil, errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
-			"auth: NewServiceTokenAuthenticator requires a NonceStore via WithServiceTokenNonceStore (use NewInMemoryNonceStore(ServiceTokenNonceTTL) for dev/test)")
+			"auth: NewServiceTokenAuthenticator requires a NonceStore via "+
+				"WithServiceTokenNonceStore (use NewInMemoryNonceStore("+
+				"ServiceTokenNonceTTL) for dev/test)")
 	}
 	if cfg.nonceStore.Kind() == NonceStoreKindNoop {
 		return nil, errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
-			"auth: NewServiceTokenAuthenticator NonceStore must not be NonceStoreKindNoop; service-token authenticators require replay protection at every layer")
+			"auth: NewServiceTokenAuthenticator NonceStore must not be "+
+				"NonceStoreKindNoop; service-token authenticators require replay "+
+				"protection at every layer")
 	}
 	return AuthenticatorFunc(func(r *http.Request) (*Principal, bool, error) {
 		raw := r.Header.Get("Authorization")

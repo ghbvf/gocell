@@ -7,15 +7,15 @@
 //
 // Detection (pure AST, no go/types — scope is small and the violation
 // pattern is structurally distinct):
-//   1. Walk every non-test .go file in production directories (kernel/,
-//      runtime/, adapters/, cells/, cmd/, examples/, pkg/, tools/).
-//   2. Find every *ast.CallExpr whose Fun resolves to a selector with
-//      Sel.Name == "WithDetails" and X (Ident).Name in the set of known
-//      local names for the errcode package import (default "errcode" or any
-//      alias in scope).
-//   3. For each WithDetails call, inspect each Arg: if any Arg is a
-//      *ast.CompositeLit whose Type is a *ast.MapType (map literal) the
-//      call is a violation.
+//  1. Walk every non-test .go file in production directories (kernel/,
+//     runtime/, adapters/, cells/, cmd/, examples/, pkg/, tools/).
+//  2. Find every *ast.CallExpr whose Fun resolves to a selector with
+//     Sel.Name == "WithDetails" and X (Ident).Name in the set of known
+//     local names for the errcode package import (default "errcode" or any
+//     alias in scope).
+//  3. For each WithDetails call, inspect each Arg: if any Arg is a
+//     *ast.CompositeLit whose Type is a *ast.MapType (map literal) the
+//     call is a violation.
 //
 // Test files are skipped (they may legitimately exercise the legacy form
 // during migration cleanup, and tests do not ship to production).

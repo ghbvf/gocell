@@ -7,16 +7,16 @@
 // messages that leak runtime context onto the wire.
 //
 // Detection (AST + go/types):
-//   1. Walk every production .go file (per fileroles.IsProductionCode).
-//   2. Find every *ast.CallExpr whose Fun resolves via TypesInfo.Uses to
-//      pkg/errcode.New or pkg/errcode.Wrap.
-//   3. The third argument (index 2) must be either:
-//        a) *ast.BasicLit with Kind == token.STRING — a string literal, or
-//        b) *ast.Ident bound by TypesInfo.Uses to a *types.Const (untyped
-//           string or string-typed package-level constant).
-//      Any other shape — *ast.CallExpr (fmt.Sprintf, fmt.Errorf, etc.),
-//      *ast.BinaryExpr (string concatenation), *ast.Ident bound to a
-//      *types.Var (runtime variable) — is reported as a violation.
+//  1. Walk every production .go file (per fileroles.IsProductionCode).
+//  2. Find every *ast.CallExpr whose Fun resolves via TypesInfo.Uses to
+//     pkg/errcode.New or pkg/errcode.Wrap.
+//  3. The third argument (index 2) must be either:
+//     a) *ast.BasicLit with Kind == token.STRING — a string literal, or
+//     b) *ast.Ident bound by TypesInfo.Uses to a *types.Const (untyped
+//     string or string-typed package-level constant).
+//     Any other shape — *ast.CallExpr (fmt.Sprintf, fmt.Errorf, etc.),
+//     *ast.BinaryExpr (string concatenation), *ast.Ident bound to a
+//     *types.Var (runtime variable) — is reported as a violation.
 //
 // Allow-list:
 //   - pkg/errcode/ (the package defines the constructors and self-tests
@@ -71,8 +71,10 @@ const errcodePackagePath = "github.com/ghbvf/gocell/pkg/errcode"
 // flows directly into errcode.Error.Message; PR #391 review (P2) noted
 // the prior carve-outs in their bodies (struct literal, no errcode.New
 // involvement) created a static blind spot that this extension closes.
-const httputilPackagePath = "github.com/ghbvf/gocell/pkg/httputil"
-const ctxcancelPackagePath = "github.com/ghbvf/gocell/pkg/ctxcancel"
+const (
+	httputilPackagePath  = "github.com/ghbvf/gocell/pkg/httputil"
+	ctxcancelPackagePath = "github.com/ghbvf/gocell/pkg/ctxcancel"
+)
 
 // gatedCallee describes one message-receiving entry point checked by the
 // rule. messageArgIndex is the position of the message string in the
@@ -252,14 +254,41 @@ func lastPathSegment(p string) string {
 	return p
 }
 
+// isLiteralStringExpr reports whether expr is a string-literal expression
+// or a BinaryExpr whose operands are both string literals (recursively).
+// Used by the fixture-mode BinaryExpr branch where TypesInfo is unavailable;
+// rejects any Ident / SelectorExpr operand because the fixture cannot
+// distinguish package-level const from runtime var.
+func isLiteralStringExpr(expr ast.Expr) bool {
+	switch e := expr.(type) {
+	case *ast.BasicLit:
+		return e.Kind == token.STRING
+	case *ast.BinaryExpr:
+		return isLiteralStringExpr(e.X) && isLiteralStringExpr(e.Y)
+	default:
+		return false
+	}
+}
+
 // isAcceptableMessageExpr reports whether expr is a const literal or a
-// package-level string constant — the only forms allowed for the message
-// argument under MESSAGE-CONST-LITERAL-01. info may be nil (fixture mode);
-// in that case Ident / SelectorExpr fallbacks are accepted as const-like
-// because the fixture cannot be type-checked, and the violations we care
-// about are call-expression / binary-expression shapes that bypass the
-// Ident branch entirely.
+// package-level string constant, or a Go constant expression (e.g. "a"+"b"
+// or `(...)`) — the only forms allowed for the message argument under
+// MESSAGE-CONST-LITERAL-01. info may be nil (fixture mode); in that case
+// Ident / SelectorExpr fallbacks are accepted as const-like because the
+// fixture cannot be type-checked, and the violations we care about are
+// fmt.Sprintf-style CallExpr shapes which the BasicLit / BinaryExpr
+// branches do not match.
+//
+// The TypesInfo.Types path handles BinaryExpr (string + string), unary,
+// and parenthesized forms uniformly: any expr Go's constant-folding
+// resolves to a known value passes (tv.Value != nil), runtime expressions
+// fall through to the AST-shape branches.
 func isAcceptableMessageExpr(expr ast.Expr, info *types.Info) bool {
+	if info != nil {
+		if tv, ok := info.Types[expr]; ok && tv.Value != nil {
+			return true
+		}
+	}
 	switch e := expr.(type) {
 	case *ast.BasicLit:
 		return e.Kind == token.STRING
@@ -280,6 +309,18 @@ func isAcceptableMessageExpr(expr ast.Expr, info *types.Info) bool {
 		obj := info.Uses[e.Sel]
 		_, isConst := obj.(*types.Const)
 		return isConst
+	case *ast.BinaryExpr:
+		// Fixture-mode fallback (info == nil): accept BinaryExpr only when
+		// both operands are string literals — the strictest interpretation
+		// of "compile-time const concatenation" without type info.
+		// Production scans always have info set and resolve via
+		// TypesInfo.Types above; this branch only handles the pure-AST
+		// fixture form `"a" + "b"` and rejects any Ident operand
+		// (which could be a runtime var).
+		if info != nil {
+			return false
+		}
+		return isLiteralStringExpr(e.X) && isLiteralStringExpr(e.Y)
 	default:
 		return false
 	}

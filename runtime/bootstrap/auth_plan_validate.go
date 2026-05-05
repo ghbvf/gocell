@@ -106,12 +106,16 @@ func (b *Bootstrap) validateAuthPlanMTLSBindings() error {
 func validateMTLSTLSConfig(source string, tlsCfg *tls.Config) error {
 	if tlsCfg == nil {
 		return errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
-			"bootstrap: listener uses AuthMTLS without WithListenerTLS; set tls.Config.ClientAuth=RequireAndVerifyClientCert and ClientCAs=<pool> so the handshake layer enforces the chain",
+			"bootstrap: listener uses AuthMTLS without WithListenerTLS; set "+
+				"tls.Config.ClientAuth=RequireAndVerifyClientCert and "+
+				"ClientCAs=<pool> so the handshake layer enforces the chain",
 			errcode.WithInternal(fmt.Sprintf("source=%s", source)))
 	}
 	if tlsCfg.ClientAuth < tls.VerifyClientCertIfGiven {
 		return errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
-			"bootstrap: listener uses AuthMTLS but tls.Config.ClientAuth is too permissive; set ClientAuth >= tls.VerifyClientCertIfGiven (RequireAndVerifyClientCert recommended)",
+			"bootstrap: listener uses AuthMTLS but tls.Config.ClientAuth is "+
+				"too permissive; set ClientAuth >= tls.VerifyClientCertIfGiven "+
+				"(RequireAndVerifyClientCert recommended)",
 			errcode.WithInternal(fmt.Sprintf("source=%s client_auth=%v", source, tlsCfg.ClientAuth)))
 	}
 	if tlsCfg.ClientCAs == nil {
@@ -153,7 +157,9 @@ func (b *Bootstrap) validateAuthNoneExclusive() error {
 		}
 		if hasNone && hasGuard {
 			return errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
-				"AuthNone cannot be mixed with other ListenerAuth plans; use []cell.ListenerAuth{cell.AuthNone{}} only for no-auth listeners or remove AuthNone from protected chains",
+				"AuthNone cannot be mixed with other ListenerAuth plans; "+
+					"use []cell.ListenerAuth{cell.AuthNone{}} only for no-auth "+
+					"listeners or remove AuthNone from protected chains",
 				errcode.WithInternal(fmt.Sprintf("listener=%q", ref.String())))
 		}
 	}

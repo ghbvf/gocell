@@ -167,7 +167,7 @@ func writeErrcodeError(ctx context.Context, w http.ResponseWriter, label string,
 	case status >= 500:
 		publicCode := ecErr.PublicCode()
 		log5xx(ctx, label, ecErr, status, publicCode)
-		// Replace internal code/message with public sentinel before serialising;
+		// Replace internal code/message with public sentinel before serializing;
 		// Error.MarshalJSON also strips Details for 5xx, so the resulting wire
 		// body never carries runtime context out of the process.
 		switch status {

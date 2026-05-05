@@ -118,11 +118,19 @@ func TestReasonFromDetails(t *testing.T) {
 		{name: "non-string value → empty", err: mkErr(errcode.WithDetails(slog.Int(DetailsKeyReason, 42))), want: ""},
 		{name: "empty-string value → empty", err: mkErr(errcode.WithDetails(slog.String(DetailsKeyReason, ""))), want: ""},
 		{name: "ReasonCanceled accepted", err: mkErr(errcode.WithDetails(slog.String(DetailsKeyReason, ReasonCanceled))), want: ReasonCanceled},
-		{name: "ReasonDeadlineExceeded accepted", err: mkErr(errcode.WithDetails(slog.String(DetailsKeyReason, ReasonDeadlineExceeded))), want: ReasonDeadlineExceeded},
+		{
+			name: "ReasonDeadlineExceeded accepted",
+			err:  mkErr(errcode.WithDetails(slog.String(DetailsKeyReason, ReasonDeadlineExceeded))),
+			want: ReasonDeadlineExceeded,
+		},
 		{name: "arbitrary string rejected", err: mkErr(errcode.WithDetails(slog.String(DetailsKeyReason, "future-enum-value"))), want: ""},
 		{name: "user-derived string rejected", err: mkErr(errcode.WithDetails(slog.String(DetailsKeyReason, "key=admin"))), want: ""},
 		{name: "case mismatch rejected", err: mkErr(errcode.WithDetails(slog.String(DetailsKeyReason, "Canceled"))), want: ""},
-		{name: "extra unrelated keys ignored", err: mkErr(errcode.WithDetails(slog.String("other", "x"), slog.String(DetailsKeyReason, ReasonCanceled))), want: ReasonCanceled},
+		{
+			name: "extra unrelated keys ignored",
+			err:  mkErr(errcode.WithDetails(slog.String("other", "x"), slog.String(DetailsKeyReason, ReasonCanceled))),
+			want: ReasonCanceled,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

@@ -320,7 +320,7 @@ func TestErrorMarshalJSON(t *testing.T) {
 func TestWithDetailsKindWhitelist(t *testing.T) {
 	t.Run("scalarKindsAccepted", func(t *testing.T) {
 		require.NotPanics(t, func() {
-			New(KindInvalid, ErrValidationFailed, "ok", WithDetails(
+			_ = New(KindInvalid, ErrValidationFailed, "ok", WithDetails(
 				slog.String("s", "v"),
 				slog.Int("i", 1),
 				slog.Int64("i64", 1),
@@ -344,13 +344,13 @@ func TestWithDetailsKindWhitelist(t *testing.T) {
 			assert.Contains(t, ec.Message, "wire-unsafe kind")
 			assert.Contains(t, ec.Message, "Any")
 		}()
-		New(KindInvalid, ErrValidationFailed, "ok",
+		_ = New(KindInvalid, ErrValidationFailed, "ok",
 			WithDetails(slog.Any("x", struct{ A int }{42})))
 	})
 
 	t.Run("groupKindPanics", func(t *testing.T) {
 		require.Panics(t, func() {
-			New(KindInvalid, ErrValidationFailed, "ok",
+			_ = New(KindInvalid, ErrValidationFailed, "ok",
 				WithDetails(slog.Group("g", slog.String("inner", "v"))))
 		})
 	})

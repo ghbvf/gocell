@@ -84,7 +84,10 @@ func loadRedisConfigFromEnv(topo bootstrap.Topology) (adapterredis.Config, bool,
 	if addr == "" {
 		if requiresDistributedReplay(topo) {
 			return adapterredis.Config{}, false, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-				"GOCELL_REDIS_ADDR or GOCELL_REDIS_CLUSTER_ADDRS must be set in adapter mode \"real\" unless GOCELL_SINGLE_POD=1; multi-pod deployments require Redis-backed nonce and idempotency stores")
+				"GOCELL_REDIS_ADDR or GOCELL_REDIS_CLUSTER_ADDRS must be set "+
+					"in adapter mode \"real\" unless GOCELL_SINGLE_POD=1; "+
+					"multi-pod deployments require Redis-backed nonce and "+
+					"idempotency stores")
 		}
 		return adapterredis.Config{}, false, nil
 	}

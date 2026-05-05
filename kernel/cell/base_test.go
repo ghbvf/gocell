@@ -427,7 +427,6 @@ func TestMustNewBaseCell_PanicsOnError(t *testing.T) {
 	assertPanicsWithAssertionMessage(t,
 		"cell.MustNewBaseCell: [ERR_VALIDATION_FAILED] cell.NewBaseCell: meta is nil",
 		func() { MustNewBaseCell(nil) },
-		"panic value should be the prefixed string from MustNewBaseCell",
 	)
 	// Also verify the prefix on a non-nil but invalid case.
 	assert.Panics(t, func() {
@@ -470,7 +469,7 @@ func TestBaseCell_Metadata_Isolation(t *testing.T) {
 // assertPanicsWithAssertionMessage verifies that fn panics with an *errcode.Error
 // whose Message field equals wantMsg. Used to test Must* wrappers that now panic
 // with errcode.Assertion(...) instead of bare strings.
-func assertPanicsWithAssertionMessage(t *testing.T, wantMsg string, fn func(), msgAndArgs ...interface{}) {
+func assertPanicsWithAssertionMessage(t *testing.T, wantMsg string, fn func()) {
 	t.Helper()
 	defer func() {
 		r := recover()

@@ -719,7 +719,7 @@ func (e *Error) FindAttr(key string) (slog.Attr, bool) {
 // client. InternalMessage and Cause are never marshaled because they may
 // contain sensitive runtime data.
 //
-// Defence-in-depth: WithDetails already rejects wire-unsafe kinds at
+// Defense-in-depth: WithDetails already rejects wire-unsafe kinds at
 // construction time, but a hand-built *Error (e.g. test fixture, future
 // code path that bypasses the option) might still attach KindAny / Group /
 // LogValuer. In that case we substitute the value with the unsafeKindMarker
@@ -809,7 +809,7 @@ func (e *Error) PublicCode() Code {
 // stable ErrInternal code, while the formatted text is preserved for logs and
 // traces via Error.Error().
 //
-// Behaviour:
+// Behavior:
 //   - Kind = KindInternal (HTTP 500)
 //   - Code = ErrInternal (single sentinel for unrecoverable assertions)
 //   - Category = CategoryInfra (treated as infrastructure for IsInfraError)

@@ -71,7 +71,7 @@ func assertErrorBody(t *testing.T, body []byte, code, message string) {
 	t.Helper()
 	var resp struct {
 		Error struct {
-			Code    string         `json:"code"`
+			Code    string `json:"code"`
 			Message string `json:"message"`
 			Details []any  `json:"details"`
 		} `json:"error"`

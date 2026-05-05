@@ -60,28 +60,37 @@ func withSlogCapture(t *testing.T) *captureHandler {
 	return h
 }
 
-// findRecord returns the first captured record whose message matches msg.
-func findRecord(records []slog.Record, msg string) (slog.Record, bool) {
-	for _, r := range records {
-		if r.Message == msg {
-			return r, true
+// readyzUnhealthyDeps fetches the verbose-breakdown dependencies map from
+// the captured "readyz unhealthy" slog record. Tests assert on this rather
+// than on the 503 wire body because K#08 5xx redaction strips Details from
+// the public envelope; verbose breakdown lives only in server-side logs.
+func readyzUnhealthyDeps(t *testing.T, capture *captureHandler) map[string]map[string]any {
+	t.Helper()
+	const (
+		recMsg  = "readyz unhealthy"
+		attrKey = "dependencies"
+	)
+	var rec503 slog.Record
+	var found bool
+	for _, r := range capture.snapshot() {
+		if r.Message == recMsg {
+			rec503 = r
+			found = true
+			break
 		}
 	}
-	return slog.Record{}, false
-}
-
-// recordAttr extracts a single named attribute from a slog.Record. Returns
-// the zero slog.Value when the attribute is absent.
-func recordAttr(r slog.Record, key string) slog.Value {
-	var found slog.Value
-	r.Attrs(func(a slog.Attr) bool {
-		if a.Key == key {
-			found = a.Value
+	require.True(t, found, "verbose 503 must emit slog record %q", recMsg)
+	var depsAttr slog.Value
+	rec503.Attrs(func(a slog.Attr) bool {
+		if a.Key == attrKey {
+			depsAttr = a.Value
 			return false
 		}
 		return true
 	})
-	return found
+	deps, ok := depsAttr.Any().(map[string]map[string]any)
+	require.True(t, ok, "verbose breakdown must include %q map in slog", attrKey)
+	return deps
 }
 
 // stubCell is a minimal Cell implementation for testing.
@@ -291,10 +300,7 @@ func TestReadyzHandler_MultipleCheckers(t *testing.T) {
 	errObj := errorBody(t, rec)
 	assertReadyzServiceUnavailable(t, errObj)
 
-	rec503, found := findRecord(capture.snapshot(), "readyz unhealthy")
-	require.True(t, found, "verbose 503 must emit slog record with breakdown")
-	deps, ok := recordAttr(rec503, "dependencies").Any().(map[string]map[string]any)
-	require.True(t, ok, "dependencies attr must be map[string]map[string]any in slog record")
+	deps := readyzUnhealthyDeps(t, capture)
 	rabbitmqEntry, ok := deps["rabbitmq"]
 	require.True(t, ok, "rabbitmq entry must be present")
 	assert.Equal(t, "healthy", rabbitmqEntry["status"], "rabbitmq checker should be healthy")
@@ -840,10 +846,7 @@ func TestReadyz_DeadlineExceeded(t *testing.T) {
 	errObj := errorBody(t, rec)
 	assertReadyzServiceUnavailable(t, errObj)
 
-	rec503, found := findRecord(capture.snapshot(), "readyz unhealthy")
-	require.True(t, found, "verbose 503 must emit slog record")
-	deps, ok := recordAttr(rec503, "dependencies").Any().(map[string]map[string]any)
-	require.True(t, ok, "verbose breakdown must include dependencies map in slog")
+	deps := readyzUnhealthyDeps(t, capture)
 	slowEntry, ok := deps["slow"]
 	require.True(t, ok, "slow entry must be present")
 	assert.Equal(t, "timeout", slowEntry["status"], "exceeded-deadline probe must be status=timeout")
@@ -922,10 +925,7 @@ func TestReadyz_ProbePanic_Caught(t *testing.T) {
 	errObj := errorBody(t, rec)
 	assertReadyzServiceUnavailable(t, errObj)
 
-	rec503, found := findRecord(capture.snapshot(), "readyz unhealthy")
-	require.True(t, found, "verbose 503 must emit slog record")
-	deps, ok := recordAttr(rec503, "dependencies").Any().(map[string]map[string]any)
-	require.True(t, ok, "verbose breakdown must include dependencies map in slog")
+	deps := readyzUnhealthyDeps(t, capture)
 	panicEntry, ok := deps["panicking"]
 	require.True(t, ok, "panicking entry must be present")
 	assert.Equal(t, "unhealthy", panicEntry["status"])
@@ -1058,10 +1058,7 @@ func TestReadyz_VerboseError_LongErrTruncated(t *testing.T) {
 	errObj := errorBody(t, rec)
 	assertReadyzServiceUnavailable(t, errObj)
 
-	rec503, found := findRecord(capture.snapshot(), "readyz unhealthy")
-	require.True(t, found, "verbose 503 must emit slog record")
-	deps, ok := recordAttr(rec503, "dependencies").Any().(map[string]map[string]any)
-	require.True(t, ok, "verbose breakdown must include dependencies map in slog")
+	deps := readyzUnhealthyDeps(t, capture)
 	noisyEntry, ok := deps["noisy"]
 	require.True(t, ok, "noisy entry must be present")
 
@@ -1151,10 +1148,7 @@ func TestReadyz_UncooperativeChecker_VerboseReportsTimeout(t *testing.T) {
 	errObj := errorBody(t, rr)
 	assertReadyzServiceUnavailable(t, errObj)
 
-	rec503, found := findRecord(capture.snapshot(), "readyz unhealthy")
-	require.True(t, found, "verbose 503 must emit slog record")
-	deps, ok := recordAttr(rec503, "dependencies").Any().(map[string]map[string]any)
-	require.True(t, ok, "verbose breakdown must include dependencies map in slog")
+	deps := readyzUnhealthyDeps(t, capture)
 	stuck, ok := deps["stuck"]
 	require.True(t, ok, "stuck probe must be present in verbose dependencies")
 	assert.Equal(t, "timeout", stuck["status"],
@@ -1221,10 +1215,7 @@ func TestReadyz_VerboseDependencies_StructuredOutput(t *testing.T) {
 	errObj := errorBody(t, rec)
 	assertReadyzServiceUnavailable(t, errObj)
 
-	rec503, found := findRecord(capture.snapshot(), "readyz unhealthy")
-	require.True(t, found, "verbose 503 must emit slog record")
-	deps, ok := recordAttr(rec503, "dependencies").Any().(map[string]map[string]any)
-	require.True(t, ok, "verbose breakdown must include dependencies map in slog")
+	deps := readyzUnhealthyDeps(t, capture)
 
 	okEntry, ok := deps["ok-probe"]
 	require.True(t, ok, "ok-probe must be present")
