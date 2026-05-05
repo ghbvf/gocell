@@ -1,7 +1,7 @@
 package auth
 
 import (
-	"encoding/json"
+	"context"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -115,7 +115,7 @@ func handleAuthRequest(w http.ResponseWriter, r *http.Request, next http.Handler
 		if cfg.passwordResetChangeEndpointHint != nil {
 			hint = cfg.passwordResetChangeEndpointHint()
 		}
-		writePasswordResetRequired(w, hint)
+		writePasswordResetRequired(r.Context(), w, hint)
 		return
 	}
 
@@ -126,21 +126,10 @@ func handleAuthRequest(w http.ResponseWriter, r *http.Request, next http.Handler
 	next.ServeHTTP(w, r.WithContext(ctx))
 }
 
-// passwordResetDetails is the typed shape of the details object returned in
-// 403 ERR_AUTH_PASSWORD_RESET_REQUIRED responses.
-//
-// Only changePasswordEndpoint is carried; the blocked request's method and
-// path are emitted via slog.Info on the auth logger and are intentionally
-// not returned to the client (info-exposure boundary; see go-kratos/kratos
-// errors and k8s api-machinery details guidance — rich request context belongs
-// in logs/metrics, not in the response body).
-type passwordResetDetails struct {
-	ChangePasswordEndpoint string `json:"changePasswordEndpoint,omitempty"`
-}
-
 // writePasswordResetRequired writes a 403 ERR_AUTH_PASSWORD_RESET_REQUIRED
-// response. changeEndpointHint is emitted as details.changePasswordEndpoint
-// when non-empty.
+// response through the canonical errcode envelope. changeEndpointHint is
+// emitted as details[].key=changePasswordEndpoint when non-empty; empty
+// hint produces an empty details array (canonical schema form).
 //
 // The blocked request's method and path are logged by the call site via
 // slog.Info — they are intentionally absent from the response body to avoid
@@ -148,26 +137,23 @@ type passwordResetDetails struct {
 //
 // The hint is derived by Router.FinalizeAuth from the first declared
 // PasswordResetExempt=true + Method=POST AuthRouteMeta, or set directly via
-// auth.WithPasswordResetChangeEndpointHintFn. Empty string omits the
-// details.changePasswordEndpoint field (omitempty).
+// auth.WithPasswordResetChangeEndpointHintFn.
 //
-// ref: go-kratos/kratos transport/http/binding — typed details, never map[string]any on the wire
-func writePasswordResetRequired(w http.ResponseWriter, changeEndpointHint string) {
-	body := map[string]any{
-		"error": map[string]any{
-			"code":    string(errcode.ErrAuthPasswordResetRequired),
-			"message": "password reset required before accessing this endpoint",
-			"details": passwordResetDetails{
-				ChangePasswordEndpoint: changeEndpointHint,
-			},
-		},
+// PR #391 P1-A: details is the canonical array<{key,value}> form per
+// contracts/shared/errors/error-response-v1.schema.json. Routing through
+// httputil.WriteError keeps wire shape identical to every other 4xx in
+// the framework.
+func writePasswordResetRequired(ctx context.Context, w http.ResponseWriter, changeEndpointHint string) {
+	opts := []errcode.Option{}
+	if changeEndpointHint != "" {
+		opts = append(opts, errcode.WithDetails(slog.String("changePasswordEndpoint", changeEndpointHint)))
 	}
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusForbidden)
-	if err := json.NewEncoder(w).Encode(body); err != nil {
-		slog.Error("auth middleware: encode password-reset-required response",
-			slog.Any("error", err))
-	}
+	httputil.WriteError(ctx, w, errcode.New(
+		errcode.KindPermissionDenied,
+		errcode.ErrAuthPasswordResetRequired,
+		"password reset required before accessing this endpoint",
+		opts...,
+	))
 }
 
 // isPasswordResetExempt reports whether the given HTTP method and URL path are

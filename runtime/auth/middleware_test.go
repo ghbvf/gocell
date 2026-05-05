@@ -422,6 +422,8 @@ func assertErrorCode(t *testing.T, rec *httptest.ResponseRecorder, code string) 
 // response and verifies the changePasswordEndpoint hint is present. The blocked
 // request's method and path are intentionally absent from the response body —
 // they are emitted via slog.Info on the auth logger (info-exposure boundary).
+//
+// PR #391 P1-A: details is the canonical array<{key,value}> form.
 func assertPasswordResetErrorWithHint(t *testing.T, rec *httptest.ResponseRecorder, _ string) {
 	t.Helper()
 	var body map[string]any
@@ -429,14 +431,14 @@ func assertPasswordResetErrorWithHint(t *testing.T, rec *httptest.ResponseRecord
 	require.NoError(t, err)
 	errObj := body["error"].(map[string]any)
 	assert.Equal(t, "ERR_AUTH_PASSWORD_RESET_REQUIRED", errObj["code"])
-	details, ok := errObj["details"].(map[string]any)
-	require.True(t, ok, "details must be a map")
-	assert.Equal(t, "POST /api/v1/access/users/{id}/password", details["changePasswordEndpoint"],
+	details, ok := errObj["details"].([]any)
+	require.True(t, ok, "details must be the canonical array<{key,value}> form")
+	require.Len(t, details, 1, "details must have exactly one entry: changePasswordEndpoint "+
+		"(no path/method keys — info-exposure boundary)")
+	entry := details[0].(map[string]any)
+	assert.Equal(t, "changePasswordEndpoint", entry["key"])
+	assert.Equal(t, "POST /api/v1/access/users/{id}/password", entry["value"],
 		"403 password-reset response must include changePasswordEndpoint hint (P2-10)")
-	// Only changePasswordEndpoint should be present in details; no path/method keys
-	// (the blocked request's context is emitted via slog.Info on the auth logger only —
-	// info-exposure boundary).
-	assert.Len(t, details, 1, "details must have exactly one key: changePasswordEndpoint")
 }
 
 // testExemptMatcher returns the canonical (method, path) matcher used by the
@@ -642,11 +644,8 @@ func TestAuthMiddleware_PasswordResetRequired_OmitsHintWhenNotConfigured(t *test
 	require.NoError(t, json.NewDecoder(rec.Body).Decode(&body))
 	errObj := body["error"].(map[string]any)
 	assert.Equal(t, "ERR_AUTH_PASSWORD_RESET_REQUIRED", errObj["code"])
-	details, ok := errObj["details"].(map[string]any)
-	require.True(t, ok, "details must always be present (typed struct)")
-	_, hasHint := details["changePasswordEndpoint"]
-	assert.False(t, hasHint,
-		"without WithPasswordResetChangeEndpointHintFn, changePasswordEndpoint must be absent (omitempty)")
+	details, ok := errObj["details"].([]any)
+	require.True(t, ok, "details must always be present as the canonical array")
 	// Without a hint, details must be empty — no path/method or other fields
 	// (the blocked request's context is emitted via slog.Info on the auth logger only —
 	// info-exposure boundary).

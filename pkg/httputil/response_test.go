@@ -264,13 +264,17 @@ func TestWriteError_DeadlineExceededMasksAsGatewayTimeoutAndLogsReason(t *testin
 	assert.Equal(t, "gateway timeout", errObj["message"])
 	assert.Equal(t, []any{}, errObj["details"])
 
-	errRec := findRecord(handler, slog.LevelError)
-	require.NotNil(t, errRec)
-	assertStringAttr(t, *errRec, "code", string(errcode.ErrServerTimeout))
-	assertStringAttr(t, *errRec, "public_code", string(errcode.ErrServerTimeout))
-	assertStringAttr(t, *errRec, "status", "504")
-	assertStringAttr(t, *errRec, "cancel_reason", ctxcancel.ReasonDeadlineExceeded)
-	assertStringAttr(t, *errRec, "request_id", "req-504")
+	// PR #391 P2 F5: KindDeadlineExceeded logs at Warn (degraded), not Error.
+	// observability.md reserves Error for "影响正确性" — gateway timeout is
+	// "降级运行" (the upstream is slow / unreachable, the service itself is
+	// fine).
+	warnRec := findRecord(handler, slog.LevelWarn)
+	require.NotNil(t, warnRec)
+	assertStringAttr(t, *warnRec, "code", string(errcode.ErrServerTimeout))
+	assertStringAttr(t, *warnRec, "public_code", string(errcode.ErrServerTimeout))
+	assertStringAttr(t, *warnRec, "status", "504")
+	assertStringAttr(t, *warnRec, "cancel_reason", ctxcancel.ReasonDeadlineExceeded)
+	assertStringAttr(t, *warnRec, "request_id", "req-504")
 }
 
 func TestWriteJSON_EncodeFail(t *testing.T) {
@@ -501,3 +505,28 @@ func TestWriteErrorBody_FailClosedOnMarshalFailure(t *testing.T) {
 // substring assertion. The marker is a stable wire constant; if the
 // marker text changes there it must change here too.
 const unsafeKindMarkerWire = "<UNSUPPORTED_KIND>"
+
+// TestWriteErrorBody_PreservesInt64Precision verifies that int64 detail
+// values larger than 2^53 round-trip through writeErrorBody without
+// precision loss. The default json.Decoder coerces JSON numbers into
+// float64 for map[string]any, which silently truncates anything beyond
+// 2^53 — writeErrorBody mitigates this with json.Decoder.UseNumber().
+//
+// Reproduces the "Medium F4" finding from PR #391 round-2 review:
+// slog.Int64("size", 9007199254740993) would otherwise lose precision.
+func TestWriteErrorBody_PreservesInt64Precision(t *testing.T) {
+	const bigInt int64 = 9007199254740993 // 2^53 + 1, not representable in float64
+
+	ec := errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+		"too big",
+		errcode.WithDetails(slog.Int64("size", bigInt)))
+
+	rec := httptest.NewRecorder()
+	writeErrorBody(context.Background(), rec, http.StatusBadRequest, ec)
+	assert.Equal(t, http.StatusBadRequest, rec.Code)
+
+	// The wire body must contain the exact integer literal — no float scientific
+	// notation, no ".0", no "9007199254740992" rounding.
+	assert.Contains(t, rec.Body.String(), `"value":9007199254740993`,
+		"int64 detail must round-trip without precision loss")
+}

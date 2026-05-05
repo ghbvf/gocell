@@ -2,6 +2,7 @@
 package httputil
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -114,6 +115,11 @@ func log4xx(ctx context.Context, label string, ecErr *errcode.Error, status int)
 	slog.Warn(label+" (4xx)", logAttrs...)
 }
 
+// log5xx records a 5xx response. Level depends on Kind per observability.md:
+//   - KindUnavailable / KindDeadlineExceeded → Warn ("降级运行" — service or
+//     dependency degraded; high-frequency probes like kubelet readyz polling
+//     fall here, so spamming Error would drown signal in noise).
+//   - KindInternal / anything else → Error ("影响正确性" — real fault).
 func log5xx(ctx context.Context, label string, ecErr *errcode.Error, status int, publicCode errcode.Code) {
 	logAttrs := []any{
 		slog.String("code", string(ecErr.Code)),
@@ -135,7 +141,12 @@ func log5xx(ctx context.Context, label string, ecErr *errcode.Error, status int,
 		}
 	}
 	logAttrs = appendCorrelationAttrs(ctx, logAttrs)
-	slog.Error(label+" (5xx)", logAttrs...)
+	switch ecErr.Kind {
+	case errcode.KindUnavailable, errcode.KindDeadlineExceeded:
+		slog.Warn(label+" (5xx)", logAttrs...)
+	default:
+		slog.Error(label+" (5xx)", logAttrs...)
+	}
 }
 
 func appendCorrelationAttrs(ctx context.Context, attrs []any) []any {
@@ -198,7 +209,12 @@ var sentinelInternalErrorBody = []byte(
 // error envelope places it alongside code/message/details, not in the outer
 // wrapper (see contracts/shared/errors/error-response-v1.schema.json).
 //
-// Fail-closed: if json.Marshal/Unmarshal fails (e.g. a Details attr bypassed
+// Numeric precision: the merge step decodes ecErr's marshaled bytes back
+// through json.Decoder with UseNumber() so int64/uint64 details survive
+// the round-trip without being coerced to float64. The default decoder
+// would silently truncate any int beyond 2^53.
+//
+// Fail-closed: if json.Marshal/Decode fails (e.g. a Details attr bypassed
 // the kind whitelist and carries a non-marshalable Go value, or a future
 // custom MarshalJSON returns a malformed payload), the response still gets
 // HTTP 500 + the sentinelInternalErrorBody. There is no path that returns
@@ -213,8 +229,10 @@ func writeErrorBody(ctx context.Context, w http.ResponseWriter, status int, ecEr
 		writeInternalErrorSentinel(w)
 		return
 	}
+	dec := json.NewDecoder(bytes.NewReader(innerJSON))
+	dec.UseNumber()
 	var inner map[string]any
-	if err := json.Unmarshal(innerJSON, &inner); err != nil {
+	if err := dec.Decode(&inner); err != nil {
 		slog.Error("httputil: decode errcode body; emitting sentinel 500",
 			slog.Any("error", err),
 			slog.Int("requested_status", status))
