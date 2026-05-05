@@ -535,6 +535,117 @@ func h(w http.ResponseWriter, r *http.Request) {
 	assert.Contains(t, errs[0].Message, "handler returns 404 but contract does not declare it")
 }
 
+// makeContractWithAuth builds a ContractMeta for CH-04 tests that includes
+// an Auth field on the HTTP transport metadata.
+func makeContractWithAuth(
+	id, contractFile string,
+	responses map[int]metadata.HTTPResponseMeta,
+	auth metadata.HTTPAuthMeta,
+) *metadata.ContractMeta {
+	c := makeContract(id, contractFile, responses)
+	c.Endpoints.HTTP.Auth = auth
+	return c
+}
+
+// TestCheckHTTPResponseAlignment_AuthResponses verifies that CH-04 treats
+// status codes declared in auth.responses as covered, so middleware-injected
+// codes (e.g. 401 from bootstrap auth, 429 from rate limiter) do not trigger
+// a "handler returns N but contract does not declare it" finding even though
+// the handler AST never emits those codes.
+func TestCheckHTTPResponseAlignment_AuthResponses(t *testing.T) {
+	tests := []struct {
+		name          string
+		handlerSrc    string
+		responses     map[int]metadata.HTTPResponseMeta
+		authResponses []int
+		wantErrors    []string
+	}{
+		{
+			// Core case: 401 and 429 live in auth.responses only.
+			// Handler AST emits 200/400/500 but not 401/429.
+			// Contract.responses declares 200/400/500.
+			// CH-04 must NOT report 401/429 as missing.
+			name: "auth.responses covers 401+429 not emitted by handler AST",
+			handlerSrc: `
+func h(w http.ResponseWriter, r *http.Request) {
+	w.WriteHeader(http.StatusBadRequest)
+	w.WriteHeader(http.StatusInternalServerError)
+}
+`,
+			responses: map[int]metadata.HTTPResponseMeta{
+				400: {Description: "bad request", SchemaRef: "err.json"},
+				500: {Description: "internal error", SchemaRef: "err.json"},
+			},
+			authResponses: []int{401, 429},
+			wantErrors:    nil,
+		},
+		{
+			// Regression: auth.responses does not suppress genuinely missing codes.
+			// Handler emits 400 but contract.responses only declares 500.
+			// auth.responses covers 401 — not 400. CH-04 must still report 400.
+			name: "auth.responses does not suppress genuinely missing handler status",
+			handlerSrc: `
+func h(w http.ResponseWriter, r *http.Request) {
+	w.WriteHeader(http.StatusBadRequest)
+}
+`,
+			responses: map[int]metadata.HTTPResponseMeta{
+				500: {Description: "internal error", SchemaRef: "err.json"},
+			},
+			authResponses: []int{401, 429},
+			wantErrors:    []string{"handler returns 400 but contract does not declare it"},
+		},
+		{
+			// No auth.responses set (nil) — existing behavior unchanged.
+			name: "no auth.responses: missing 400 still reported",
+			handlerSrc: `
+func h(w http.ResponseWriter, r *http.Request) {
+	w.WriteHeader(http.StatusBadRequest)
+}
+`,
+			responses: map[int]metadata.HTTPResponseMeta{
+				401: {Description: "unauthorized", SchemaRef: "err.json"},
+			},
+			authResponses: nil,
+			wantErrors:    []string{"handler returns 400 but contract does not declare it"},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			const contractID = "http.test.auth.v1"
+			sliceRelDir := "cells/testcell/slices/testslice"
+
+			sliceAbsDir := filepath.Join(root, sliceRelDir)
+			require.NoError(t, os.MkdirAll(sliceAbsDir, 0o755))
+			writeHandlerFile(t, sliceAbsDir, contractID, tc.handlerSrc)
+
+			project := makeProject(contractID, sliceRelDir)
+			c := makeContractWithAuth(
+				contractID,
+				"contracts/http/test/auth/v1/contract.yaml",
+				tc.responses,
+				metadata.HTTPAuthMeta{Responses: tc.authResponses},
+			)
+
+			validator := NewValidator(project, root, clock.Real())
+			results := validator.CheckHTTPResponseAlignment([]*metadata.ContractMeta{c}, root)
+
+			var errs []ValidationResult
+			for _, r := range results {
+				if r.Severity == SeverityError {
+					errs = append(errs, r)
+				}
+			}
+			require.Len(t, errs, len(tc.wantErrors), "error count mismatch")
+			for i, want := range tc.wantErrors {
+				assert.Contains(t, errs[i].Message, want)
+			}
+		})
+	}
+}
+
 // TestCheckHTTPResponseAlignment_HelperWriteStatuses verifies Finding 10:
 // CH-04 must detect 4xx/5xx status codes written internally by pkg/httputil
 // helpers (ParseUUIDPathParam, DecodeJSONStrict, ParsePageParamsOrWrite).

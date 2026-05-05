@@ -43,6 +43,10 @@ type HTTPAuthMeta struct {
 	// Mutually exclusive with Public and PasswordResetExempt. FMT-28 limits this
 	// flag to contracts whose path matches IsBootstrapPath.
 	Bootstrap bool `yaml:"bootstrap,omitempty" json:"bootstrap,omitempty"`
+	// Responses lists HTTP status codes injected by listener-mounted middleware
+	// (e.g. bootstrap auth 401, rate limiter 429). CH-04 treats these as
+	// declared without requiring handler AST emission.
+	Responses []int `yaml:"responses,omitempty" json:"responses,omitempty"`
 }
 
 // ParamSchema describes a single HTTP path or query parameter.
