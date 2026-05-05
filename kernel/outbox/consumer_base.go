@@ -34,7 +34,7 @@ const leaseRenewalDivisor time.Duration = 3
 
 // exponentialDelayBase is the untyped-int scaling unit for ExponentialDelay:
 // delay = base * (exponentialDelayBase << attempt). Must equal 1.
-const exponentialDelayBase time.Duration = 1
+const exponentialDelayBase = 1
 
 const (
 	// defaultConsumerBaseRetryBaseDelay is the base delay for exponential-backoff
