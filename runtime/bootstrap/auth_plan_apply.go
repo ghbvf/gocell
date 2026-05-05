@@ -19,6 +19,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/httputil"
+	"github.com/ghbvf/gocell/pkg/validation"
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/http/router"
 )
@@ -122,7 +123,7 @@ func (b *Bootstrap) runAuthPlanValidateHooks() error {
 //
 // Moved from policy_jwt_from_assembly.go; kept bootstrap-private.
 func discoverAuthVerifierFromAssembly(asm cell.AssemblyRef) (auth.IntentTokenVerifier, error) {
-	if asm == nil {
+	if validation.IsNilInterface(asm) {
 		return nil, errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
 			"bootstrap: AuthJWTFromAssembly.Assembly is nil; use cell.NewAuthJWTFromAssembly(asm)")
 	}
@@ -131,55 +132,39 @@ func discoverAuthVerifierFromAssembly(asm cell.AssemblyRef) (auth.IntentTokenVer
 		foundID string
 	)
 	for _, id := range asm.CellIDs() {
-		// AssemblyRef is a minimal interface; assemblyWithCell adds Cell(id).
-		// Bootstrap bridges the gap via asmCellLookup.
-		ap, ok := asmCellLookup(asm, id)
+		// asm.Cell returns nil for unknown IDs; the AuthProvider type
+		// assertion then yields ok=false and the cell is skipped.
+		ap, ok := asm.Cell(id).(cell.AuthProvider)
 		if !ok {
 			continue
 		}
 		// cell.AuthProvider.TokenVerifier() returns cell.IntentTokenVerifier.
-		// auth.IntentTokenVerifier is a type alias of cell.IntentTokenVerifier
-		// (F6), so the assignment is direct with no runtime conversion needed.
+		// auth.IntentTokenVerifier is a Go type alias of cell.IntentTokenVerifier
+		// (runtime/auth/auth.go:56, F6), so the assignment is direct with no
+		// runtime conversion needed. validation.IsNilInterface catches both
+		// untyped nil and typed-nil verifiers (e.g. `var v *MyVerifier`)
+		// before they propagate into router wiring.
 		v := ap.TokenVerifier()
-		if v == nil {
-			return nil, fmt.Errorf(
-				"bootstrap: cell %q implements authProvider (cell.AuthProvider) but TokenVerifier() returned nil", id)
+		if validation.IsNilInterface(v) {
+			return nil, errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
+				fmt.Sprintf("bootstrap: cell %q implements authProvider (cell.AuthProvider) but TokenVerifier() returned nil", id))
 		}
 		if found != nil {
-			return nil, fmt.Errorf(
-				"bootstrap: multiple authProvider cells discovered: %q and %q; "+
+			return nil, errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
+				fmt.Sprintf("bootstrap: multiple authProvider cells discovered: %q and %q; "+
 					"keep only one or supply the verifier explicitly via cell.NewAuthJWT(verifier)",
-				foundID, id)
+					foundID, id))
 		}
 		found = v
 		foundID = id
 	}
 	if found == nil {
-		return nil, fmt.Errorf(
-			"bootstrap: AuthJWTFromAssembly found no authProvider cell in the assembly; " +
-				"register a cell implementing cell.AuthProvider whose TokenVerifier() returns a non-nil auth.IntentTokenVerifier, " +
+		return nil, errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
+			"bootstrap: AuthJWTFromAssembly found no authProvider cell in the assembly; "+
+				"register a cell implementing cell.AuthProvider whose TokenVerifier() returns a non-nil auth.IntentTokenVerifier, "+
 				"or wire the verifier explicitly via cell.NewAuthJWT(verifier)")
 	}
 	return found, nil
-}
-
-// assemblyWithCell is the internal interface needed by discoverAuthVerifierFromAssembly
-// to look up cells by ID. *assembly.CoreAssembly satisfies this.
-type assemblyWithCell interface {
-	cell.AssemblyRef
-	Cell(id string) cell.Cell
-}
-
-// asmCellLookup type-asserts asm to assemblyWithCell and looks up a cell.AuthProvider.
-// Returns (nil, false) if asm doesn't have the Cell(id) method or the cell doesn't
-// implement cell.AuthProvider.
-func asmCellLookup(asm cell.AssemblyRef, id string) (cell.AuthProvider, bool) {
-	awc, ok := asm.(assemblyWithCell)
-	if !ok {
-		return nil, false
-	}
-	ap, ok := awc.Cell(id).(cell.AuthProvider)
-	return ap, ok
 }
 
 // ─── Middleware factories ─────────────────────────────────────────────────────

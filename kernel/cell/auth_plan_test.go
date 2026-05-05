@@ -252,6 +252,26 @@ func TestAuthJWTFromAssembly_ResolvedVerifier(t *testing.T) {
 	}
 }
 
+func TestAuthJWTFromAssembly_IsConstructed(t *testing.T) {
+	t.Parallel()
+
+	asm := &stubAssemblyRef{id: "constructed"}
+	p, err := cell.NewAuthJWTFromAssembly(asm)
+	if err != nil {
+		t.Fatalf("NewAuthJWTFromAssembly returned unexpected error: %v", err)
+	}
+	if !p.IsConstructed() {
+		t.Fatal("constructor-built AuthJWTFromAssembly should report constructed")
+	}
+
+	if (cell.AuthJWTFromAssembly{}).IsConstructed() {
+		t.Fatal("struct-literal AuthJWTFromAssembly should report not constructed")
+	}
+	if (cell.AuthJWTFromAssembly{Assembly: asm}).IsConstructed() {
+		t.Fatal("literal with Assembly but no resolver should report not constructed")
+	}
+}
+
 // ─── TokenIntent ──────────────────────────────────────────────────────────────
 
 func TestTokenIntent_IsValid(t *testing.T) {
@@ -276,11 +296,14 @@ func TestTokenIntent_IsValid(t *testing.T) {
 
 // ─── Test stubs ───────────────────────────────────────────────────────────────
 
-// stubAssemblyRef satisfies cell.AssemblyRef.
+// stubAssemblyRef satisfies cell.AssemblyRef. Cell returns nil because the
+// kernel/cell tests validate construction-time invariants only; cell lookup
+// is exercised end-to-end by runtime/bootstrap tests.
 type stubAssemblyRef struct{ id string }
 
-func (s *stubAssemblyRef) ID() string        { return s.id }
-func (s *stubAssemblyRef) CellIDs() []string { return nil }
+func (s *stubAssemblyRef) ID() string              { return s.id }
+func (s *stubAssemblyRef) CellIDs() []string       { return nil }
+func (s *stubAssemblyRef) Cell(_ string) cell.Cell { return nil }
 
 // stubVerifier satisfies cell.IntentTokenVerifier.
 type stubVerifier struct{}

@@ -135,18 +135,28 @@ var _ ListenerAuth = AuthJWT{}
 
 // ─── AuthJWTFromAssembly ──────────────────────────────────────────────────────
 
-// AssemblyRef exposes the minimum contract kernel needs: ID() for identity
-// comparison and CellIDs() for authProvider discovery. Using a named interface
-// instead of any preserves type safety at composition boundaries.
+// AssemblyRef is the contract kernel needs from an assembly: identity
+// (ID), the registered cell list (CellIDs), and by-ID cell lookup (Cell).
+// Using a named interface preserves type safety at composition boundaries
+// and lets callers in runtime/bootstrap iterate authProvider discovery
+// without an implicit type assertion to a private sub-interface.
 //
 // Bootstrap passes the concrete *assembly.CoreAssembly which satisfies this
 // interface structurally; identity checks (same pointer) are done in
 // runtime/bootstrap, not in kernel.
+//
+// ASSEMBLYREF-METHOD-SET-01 (tools/archtest/assemblyref_method_set_test.go)
+// locks this method set against accidental drift.
 type AssemblyRef interface {
 	// ID returns the assembly's unique identifier.
 	ID() string
 	// CellIDs returns the ordered list of registered cell identifiers.
 	CellIDs() []string
+	// Cell returns the registered Cell with the given ID, or nil if no
+	// cell with that ID is registered. Callers are responsible for type-
+	// asserting the returned Cell to the role-specific interface they
+	// require (e.g. AuthProvider).
+	Cell(id string) Cell
 }
 
 // AuthJWTFromAssembly is a lazy JWT plan that resolves its verifier from an
@@ -157,10 +167,18 @@ type AssemblyRef interface {
 // reads from the router are safe without locking.
 //
 // AuthJWTFromAssembly implements only ListenerAuth (same rationale as AuthJWT).
+//
+// Lifecycle constraint: the Assembly value must be the same instance later
+// passed to bootstrap.WithAssembly. Bootstrap phase0
+// (validateAuthJWTFromAssemblyPlans in runtime/bootstrap/auth_plan_validate.go)
+// rejects direct struct literals, nil assemblies, wrappers, copies, or fakes
+// even when they share the same ID. Construct AuthJWTFromAssembly from the
+// canonical *assembly.CoreAssembly.
 type AuthJWTFromAssembly struct {
-	// Assembly is the AssemblyRef to scan for an AuthProvider cell at phase4.
-	// Required; nil is rejected by NewAuthJWTFromAssembly with a panic.
-	// In practice this is always *assembly.CoreAssembly from kernel/assembly.
+	// Assembly must be the same *assembly.CoreAssembly instance later
+	// supplied to bootstrap.WithAssembly. Constructors only reject
+	// nil/typed-nil; wrong-instance values pass construction and are
+	// caught at bootstrap phase0.
 	Assembly AssemblyRef
 
 	// resolved holds the verifier once phase4 has run. Bootstrap writes via
@@ -169,8 +187,9 @@ type AuthJWTFromAssembly struct {
 }
 
 // NewAuthJWTFromAssembly constructs an AuthJWTFromAssembly plan. Returns an
-// error when asm is nil; use MustNewAuthJWTFromAssembly for fail-fast static
-// wiring.
+// error when asm is nil or a typed-nil interface value; the same input passed
+// to MustNewAuthJWTFromAssembly panics instead. The same-instance constraint
+// (see AuthJWTFromAssembly type doc) is checked later, at bootstrap phase0.
 func NewAuthJWTFromAssembly(asm AssemblyRef) (AuthJWTFromAssembly, error) {
 	if validation.IsNilInterface(asm) {
 		return AuthJWTFromAssembly{}, fmt.Errorf("cell: NewAuthJWTFromAssembly assembly must not be nil")
@@ -182,13 +201,23 @@ func NewAuthJWTFromAssembly(asm AssemblyRef) (AuthJWTFromAssembly, error) {
 }
 
 // MustNewAuthJWTFromAssembly is the composition-root convenience wrapper around
-// NewAuthJWTFromAssembly that panics on misconfiguration.
+// NewAuthJWTFromAssembly that panics on nil/typed-nil input. It does not
+// validate the same-instance constraint (see AuthJWTFromAssembly type doc),
+// which bootstrap phase0 enforces with a fail-fast error.
 func MustNewAuthJWTFromAssembly(asm AssemblyRef) AuthJWTFromAssembly {
 	plan, err := NewAuthJWTFromAssembly(asm)
 	if err != nil {
 		panic(err.Error())
 	}
 	return plan
+}
+
+// IsConstructed reports whether the plan was built through
+// NewAuthJWTFromAssembly or MustNewAuthJWTFromAssembly. Direct struct literals
+// do not initialize the shared resolver pointer and are rejected by bootstrap
+// phase0 before phase4 can silently skip SetResolved.
+func (p AuthJWTFromAssembly) IsConstructed() bool {
+	return p.resolved != nil
 }
 
 func (AuthJWTFromAssembly) authPlanKind() AuthKind { return AuthKindJWTFromAssembly }
