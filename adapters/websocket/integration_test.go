@@ -4,12 +4,12 @@ package websocket_test
 
 import (
 	"context"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"sync"
 	"testing"
-	"time"
 
 	"github.com/coder/websocket"
 
@@ -39,7 +39,7 @@ func setupIntegrationHub(t *testing.T, handler rtws.MessageHandler) (*rtws.Hub, 
 	startErr := make(chan error, 1)
 	go func() { startErr <- hub.Start(context.Background()) }()
 
-	require.Eventually(t, func() bool { return hub.IsRunning() }, testtime.D2s, time.Millisecond)
+	require.Eventually(t, func() bool { return hub.IsRunning() }, testtime.D2s, testtime.D1ms)
 
 	mux := http.NewServeMux()
 	mux.Handle("/ws", requireUpgradeHandler(t, hub, adapterws.UpgradeConfig{
@@ -179,6 +179,103 @@ func TestIntegration_BroadcastMultipleClients(t *testing.T) {
 	mu.Unlock()
 }
 
+// checkTCPAvailable skips the test if TCP listening is not permitted (sandbox).
+func checkTCPAvailable(t *testing.T) {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Skipf("skipping: cannot listen on TCP (sandbox?): %v", err)
+		return
+	}
+	_ = ln.Close()
+}
+
+// T13: UpgradeHandler accepts a handshake when the Origin header exactly
+// matches the AllowedOrigins entry. Hub.ConnCount() must reach 1.
+func TestUpgradeHandler_Origin_FullOrigin_HandshakeSucceeds(t *testing.T) {
+	checkTCPAvailable(t)
+
+	cfg := rtws.DefaultHubConfig(clock.Real())
+	cfg.PingInterval = testtime.D200ms
+	hub := rtws.NewHub(cfg, nil)
+
+	startErr := make(chan error, 1)
+	go func() { startErr <- hub.Start(context.Background()) }()
+	require.Eventually(t, func() bool { return hub.IsRunning() }, testtime.D2s, testtime.D1ms)
+
+	// Handler configured with an exact origin (no wildcard).
+	mux := http.NewServeMux()
+	mux.Handle("/ws", requireUpgradeHandler(t, hub, adapterws.UpgradeConfig{
+		AllowedOrigins: []string{"https://example.com"},
+		Authenticator:  &stubIntegrationAuth{p: &authpkg.Principal{Kind: authpkg.PrincipalUser, Subject: "test"}},
+	}))
+	server := httptest.NewServer(mux)
+	t.Cleanup(func() {
+		server.Close()
+		ctx, cancel := context.WithTimeout(context.Background(), testtime.CtxDefault)
+		defer cancel()
+		_ = hub.Stop(ctx)
+		<-startErr
+	})
+
+	wsURL := "ws" + strings.TrimPrefix(server.URL, "http") + "/ws"
+	ctx, cancel := context.WithTimeout(context.Background(), testtime.CtxDefault)
+	defer cancel()
+
+	conn, _, err := websocket.Dial(ctx, wsURL, &websocket.DialOptions{
+		HTTPHeader: http.Header{"Origin": {"https://example.com"}},
+	})
+	require.NoError(t, err, "handshake with matching Origin must succeed")
+	t.Cleanup(func() { _ = conn.CloseNow() })
+
+	require.Eventually(t, func() bool { return hub.ConnCount() == 1 }, testtime.D2s, testtime.D10ms,
+		"hub must register exactly one connection after successful handshake")
+}
+
+// T14: UpgradeHandler rejects a handshake when the Origin header does not
+// match the AllowedOrigins list (forbidden origin).
+func TestUpgradeHandler_Origin_Mismatch_HandshakeRejected(t *testing.T) {
+	checkTCPAvailable(t)
+
+	cfg := rtws.DefaultHubConfig(clock.Real())
+	cfg.PingInterval = testtime.D200ms
+	hub := rtws.NewHub(cfg, nil)
+
+	startErr := make(chan error, 1)
+	go func() { startErr <- hub.Start(context.Background()) }()
+	require.Eventually(t, func() bool { return hub.IsRunning() }, testtime.D2s, testtime.D1ms)
+
+	mux := http.NewServeMux()
+	mux.Handle("/ws", requireUpgradeHandler(t, hub, adapterws.UpgradeConfig{
+		AllowedOrigins: []string{"https://example.com"},
+		Authenticator:  &stubIntegrationAuth{p: &authpkg.Principal{Kind: authpkg.PrincipalUser, Subject: "test"}},
+	}))
+	server := httptest.NewServer(mux)
+	t.Cleanup(func() {
+		server.Close()
+		ctx, cancel := context.WithTimeout(context.Background(), testtime.CtxDefault)
+		defer cancel()
+		_ = hub.Stop(ctx)
+		<-startErr
+	})
+
+	wsURL := "ws" + strings.TrimPrefix(server.URL, "http") + "/ws"
+	ctx, cancel := context.WithTimeout(context.Background(), testtime.CtxDefault)
+	defer cancel()
+
+	_, resp, err := websocket.Dial(ctx, wsURL, &websocket.DialOptions{
+		HTTPHeader: http.Header{"Origin": {"https://attacker.com"}},
+	})
+	require.Error(t, err, "handshake with mismatched Origin must be rejected")
+	assert.NotNil(t, resp, "rejected handshake must return an HTTP response")
+	if resp != nil {
+		assert.NotEqual(t, http.StatusSwitchingProtocols, resp.StatusCode,
+			"rejected handshake must not return 101 Switching Protocols")
+		_ = resp.Body.Close()
+	}
+	assert.Equal(t, 0, hub.ConnCount(), "no connection should be registered after rejected handshake")
+}
+
 // TestIntegration_GracefulShutdown shuts down the Hub while clients are
 // connected and asserts all connections are closed cleanly.
 func TestIntegration_GracefulShutdown(t *testing.T) {
@@ -203,7 +300,7 @@ func TestIntegration_GracefulShutdown(t *testing.T) {
 
 	// All clients should get a read error.
 	for _, c := range conns {
-		readCtx, readCancel := context.WithTimeout(context.Background(), time.Second)
+		readCtx, readCancel := context.WithTimeout(context.Background(), testtime.D1s)
 		_, _, err := c.Read(readCtx)
 		readCancel()
 		assert.Error(t, err, "client should see connection closed")

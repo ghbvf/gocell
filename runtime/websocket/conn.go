@@ -30,6 +30,16 @@ type Conn interface {
 	// If a graceful close is needed in the future, add CloseGracefully(ctx).
 	Close() error
 
+	// RemoteAddr returns the remote network address as a "host:port" string.
+	// Used by Hub for diagnostic logging (eviction reasons, shutdown drain).
+	//
+	// Implementations MUST return a sanitized address (e.g. via
+	// pkg/logutil.SafeAddr) — the Hub logs this value verbatim. Empty string
+	// is not a valid return; use "unknown" if address is unavailable. The
+	// address must be immutable after construction; the Hub may invoke
+	// RemoteAddr() outside connMu.
+	RemoteAddr() string
+
 	// Principal returns the authenticated principal bound at handshake time.
 	// It may return nil if the adapter did not bind a principal (e.g. test
 	// fakes); the Hub treats nil as "no subject indexing, no expiry tracked"
@@ -37,5 +47,12 @@ type Conn interface {
 	//
 	// The returned pointer is owned by the Conn implementation; consumers
 	// must not mutate the Principal struct.
+	//
+	// Both Principal().Subject and RemoteAddr() must be immutable after
+	// construction; the Hub may invoke them outside connMu.
+	//
+	// Principal data (Subject in particular) appears in slog at Warn/Info —
+	// operators should treat WS structured logs as containing user identifiers
+	// and apply log-pipeline redaction if PII handling requires it.
 	Principal() *auth.Principal
 }

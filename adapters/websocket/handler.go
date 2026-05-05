@@ -195,9 +195,8 @@ func acceptUpgradeAndRegister(w http.ResponseWriter, r *http.Request, hub *rtws.
 	wsConn.SetReadLimit(hub.Config().ReadLimit)
 
 	connID := "ws-" + uuid.NewString()
-	conn := NewConn(connID, principal, wsConn)
-
 	remoteAddr := logutil.SafeAddr(r.RemoteAddr)
+	conn := newConn(connID, remoteAddr, principal, wsConn)
 	if regErr := hub.Register(r.Context(), conn); regErr != nil {
 		_ = wsConn.Close(websocket.StatusNormalClosure, "registration rejected")
 		slog.Warn("websocket: register rejected",

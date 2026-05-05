@@ -2,6 +2,7 @@ package websocket
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"maps"
 	"sync"
@@ -9,9 +10,20 @@ import (
 	"time"
 
 	"github.com/ghbvf/gocell/kernel/clock"
+	kernellifecycle "github.com/ghbvf/gocell/kernel/lifecycle"
+	"github.com/ghbvf/gocell/kernel/worker"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/logutil"
 	"github.com/ghbvf/gocell/runtime/auth"
 )
+
+// Compile-time assertion: Hub implements lifecycle.ManagedResource.
+var _ kernellifecycle.ManagedResource = (*Hub)(nil)
+
+// errHubNotRunning is pre-allocated to avoid per-call allocation in Checkers.
+// Pattern: adapters/rabbitmq/connection.go:51 errHealthReconnecting.
+var errHubNotRunning = errcode.New(errcode.KindUnavailable, errcode.ErrWSHubNotRunning,
+	"websocket: hub is not running")
 
 // Hub lifecycle states (atomic.Int32 transitions).
 const (
@@ -22,12 +34,13 @@ const (
 )
 
 const (
-	defaultPingInterval    = 30 * time.Second
-	defaultPingTimeout     = 5 * time.Second
-	defaultReadLimit       = 64 * 1024 // 64KB
-	defaultPingMissMax     = 2
-	defaultShutdownTimeout = 10 * time.Second
-	defaultSendBufferSize  = 32
+	defaultPingInterval         = 30 * time.Second
+	defaultPingTimeout          = 5 * time.Second
+	defaultReadLimit            = 64 * 1024 // 64KB
+	defaultPingMissMax          = 2
+	defaultShutdownTimeout      = 10 * time.Second
+	defaultSendBufferSize       = 32
+	defaultConcurrentCloseLimit = 64
 )
 
 // HubConfig configures the Hub.
@@ -44,6 +57,11 @@ type HubConfig struct {
 	PingMissMax int
 	// MaxConnections is the maximum number of concurrent connections.
 	// 0 means unlimited. Default: 0.
+	//
+	// SECURITY: Production deployments MUST set an explicit cap to prevent
+	// goroutine exhaustion (each connection runs 2 goroutines: readLoop +
+	// writeLoop). Recommended starting value: expected concurrent sessions
+	// + 20% headroom. Token-authenticated unlimited capacity is a DoS path.
 	MaxConnections int
 	// Clock is the time source. Required; NewHub panics if nil.
 	Clock clock.Clock
@@ -54,18 +72,41 @@ type HubConfig struct {
 	// is replaced with the default at construction time. Must be > 0 if
 	// explicitly set.
 	SendBufferSize int
+
+	// ShutdownTimeout limits the total time allowed for the external-cancel
+	// shutdown path inside Start (caller's ctx is canceled with no deadline).
+	// Stop(ctx) paths are not affected — caller's ctx governs directly.
+	// 0 → defaultShutdownTimeout (10s).
+	//
+	// To bound Stop(ctx), supply a deadline on the ctx passed to Stop, or
+	// configure bootstrap.WithShutdownTimeout for bootstrap-managed shutdown
+	// — ShutdownTimeout only governs the external-cancel path inside Start.
+	ShutdownTimeout time.Duration
+
+	// ConcurrentCloseLimit bounds the semaphore pool used during shutdown drain
+	// — at most this many conn.Close() calls run concurrently. Tuning guidance:
+	// keep below system fd-limit / goroutine budget. Default 64 (matches
+	// centrifuge's hubShutdownSemaphoreSize). Background goroutines spawned by
+	// shutdown's outer wg.Wait/done-close pattern exit when readLoops/writeLoops
+	// drain via Phase 1 context cancellation; max lifetime = connection teardown
+	// latency.
+	//
+	// ref: centrifugal/centrifuge hub.go — bounded concurrent close
+	ConcurrentCloseLimit int
 }
 
 // DefaultHubConfig returns a HubConfig with sensible defaults. A clock must be
 // provided; pass clock.Real() at the composition root or a clockmock for tests.
 func DefaultHubConfig(clk clock.Clock) HubConfig {
 	return HubConfig{
-		PingInterval:   defaultPingInterval,
-		PingTimeout:    defaultPingTimeout,
-		ReadLimit:      defaultReadLimit,
-		PingMissMax:    defaultPingMissMax,
-		SendBufferSize: defaultSendBufferSize,
-		Clock:          clk,
+		PingInterval:         defaultPingInterval,
+		PingTimeout:          defaultPingTimeout,
+		ReadLimit:            defaultReadLimit,
+		PingMissMax:          defaultPingMissMax,
+		SendBufferSize:       defaultSendBufferSize,
+		ShutdownTimeout:      defaultShutdownTimeout,
+		ConcurrentCloseLimit: defaultConcurrentCloseLimit,
+		Clock:                clk,
 	}
 }
 
@@ -141,9 +182,37 @@ type Hub struct {
 	shutdownDone chan struct{}
 }
 
+// MustValidateHubConfig panics if cfg contains values that would cause
+// runtime panics or zero-budget shutdown later. Called by NewHub. Exposed as
+// a Must* function to satisfy archtest PANIC-REGISTERED-01 (panic() must
+// live inside Must* functions or ADR-registered exceptions).
+//
+// Validates:
+//   - ShutdownTimeout < 0 → would collapse external-cancel context to
+//     already-expired
+//   - ConcurrentCloseLimit < 0 → would panic at make(chan struct{}, limit)
+//     during shutdown
+//
+// Zero values are accepted (NewHub falls back to package defaults).
+func MustValidateHubConfig(cfg HubConfig) {
+	if cfg.ShutdownTimeout < 0 {
+		panic("websocket.NewHub: HubConfig.ShutdownTimeout must be >= 0")
+	}
+	if cfg.ConcurrentCloseLimit < 0 {
+		panic("websocket.NewHub: HubConfig.ConcurrentCloseLimit must be >= 0")
+	}
+}
+
 // NewHub creates a Hub. No background goroutines are started until Start.
+//
+// Fail-fast wiring: negative ShutdownTimeout / ConcurrentCloseLimit panic at
+// construction (see MustValidateHubConfig). Zero values fall back to package
+// defaults (10s / 64). This matches clock.MustHaveClock's panic-on-misconfig
+// style — wiring bugs surface before any goroutine runs, never as a
+// shutdown-time make-chan panic or an already-expired context.
 func NewHub(cfg HubConfig, handler MessageHandler) *Hub {
 	clock.MustHaveClock(cfg.Clock, "websocket.NewHub")
+	MustValidateHubConfig(cfg)
 	if cfg.PingInterval == 0 {
 		cfg.PingInterval = defaultPingInterval
 	}
@@ -158,6 +227,12 @@ func NewHub(cfg HubConfig, handler MessageHandler) *Hub {
 	}
 	if cfg.SendBufferSize == 0 {
 		cfg.SendBufferSize = defaultSendBufferSize
+	}
+	if cfg.ShutdownTimeout == 0 {
+		cfg.ShutdownTimeout = defaultShutdownTimeout
+	}
+	if cfg.ConcurrentCloseLimit == 0 {
+		cfg.ConcurrentCloseLimit = defaultConcurrentCloseLimit
 	}
 	if handler == nil {
 		handler = func(context.Context, string, []byte) {}
@@ -218,8 +293,10 @@ func (h *Hub) Start(ctx context.Context) error {
 	}
 
 	// External cancellation: run the single shutdown path ourselves.
+	// Use the configured ShutdownTimeout (already defaulted to defaultShutdownTimeout
+	// in NewHub) so tests can override the timeout without relying on hardcoded 10s.
 	shutdownCtx, shutdownCancel := context.WithTimeout(
-		context.WithoutCancel(ctx), defaultShutdownTimeout,
+		context.WithoutCancel(ctx), h.config.ShutdownTimeout,
 	)
 	defer shutdownCancel()
 	_ = h.shutdown(shutdownCtx)
@@ -285,27 +362,20 @@ func (h *Hub) shutdown(ctx context.Context) error {
 	clear(h.subjectIdx)
 	h.connMu.Unlock()
 
-	// Close all connections synchronously. cancel() unblocks Read via
-	// context; Close() tears down the transport (coder/websocket CloseNow is
-	// lock-free, so this never blocks behind Write). Both are belt-and-
-	// suspenders: cancel works for fakeConn, Close works for coder/websocket.
+	// Close connections with bounded concurrency. Every entry is guaranteed
+	// to have a Close goroutine spawned; the semaphore inside each goroutine
+	// bounds concurrent transport teardown. ctx bounds *waiting* for
+	// completion, never *whether* an entry's Close is scheduled — see
+	// closeEntriesConcurrently for the contract.
 	//
-	// Synchronous close ensures Stop returns only after all transport
-	// resources (including coder/websocket's internal timeoutLoop) are cleaned up.
-	// If connection counts reach thousands, replace with concurrent close
-	// + closeWg (see WS-OPS-02 in tech-debt-registry).
-	for _, e := range entries {
-		e.cancel()
-		e.closeOnce.Do(func() { close(e.done) })
-		if err := e.conn.Close(); err != nil {
-			slog.Warn("websocket hub: close connection failed",
-				slog.String("conn_id", e.conn.ID()),
-				slog.Any("error", err),
-			)
-		}
-	}
+	// ref: centrifugal/centrifuge hub.go — semaphore-bounded Close fanout.
+	// ref: nats-io/nats-server server.go closeAllClients — full-set scheduling
+	// invariant; deadline bounds waiting only.
+	closeEntriesConcurrently(ctx, entries, h.config.ConcurrentCloseLimit)
 
 	// Wait for all goroutines (readLoops + writeLoops + pingLoop), bounded by ctx.
+	// goroutine exits when readLoops/writeLoops drain via Phase 1 context
+	// cancellation; max lifetime = connection teardown latency.
 	done := make(chan struct{})
 	go func() {
 		h.wg.Wait()
@@ -317,12 +387,88 @@ func (h *Hub) shutdown(ctx context.Context) error {
 	case <-done:
 		slog.Info("websocket hub: stopped")
 	case <-ctx.Done():
-		slog.Error("websocket hub: stop timed out, hub is poisoned")
+		slog.Error("websocket hub: stop timed out, hub is poisoned",
+			slog.Any("error", ctx.Err()),
+		)
 		err = ctx.Err()
 	}
 
 	h.state.Store(stateStopped)
 	return err
+}
+
+// closeEntriesConcurrently cancels and closes each entry's connection using a
+// semaphore-bounded goroutine pool of size limit.
+//
+// Contract under timeout: every entry MUST receive a transport-level Close()
+// call. The ctx deadline bounds the *waiting* phase only — it does not
+// truncate the scheduling phase. This is required because shutdown() has
+// already cleared h.conns and h.subjectIdx by the time this function runs;
+// readLoop's fallback (unregisterEntry) sees the entry as not-current and
+// will not invoke Close, so a missed scheduling here leaks the transport
+// (TCP) until OS-level FIN_WAIT.
+//
+// Phase 1 (always-runs): eagerly cancel + close-done for every entry so
+// readLoop/writeLoop context-cancellation paths fire regardless of whether
+// the per-entry conn.Close() ever runs.
+//
+// Phase 2 (always-launches): spawn one Close goroutine per entry. Each
+// goroutine acquires a semaphore slot internally before invoking conn.Close,
+// so the limit only bounds *concurrent* close work, never *whether* a Close
+// is attempted. Total goroutine count is len(entries); each holds the
+// goroutine stack (~2KB) until its slot is granted and Close completes.
+//
+// Final wait: ctx.Done() vs closeWG. On ctx expiry the function returns
+// while the still-pending Close goroutines drain in background — their
+// readLoops already exited via Phase 1 cancel, so no goroutine is leaked
+// past connection-teardown latency.
+//
+// ref: centrifugal/centrifuge hub.go — semaphore-bounded Close fanout.
+// ref: nats-io/nats-server server.go closeAllClients — every snapshot entry
+// receives a close attempt; deadline bounds waiting, not scheduling.
+func closeEntriesConcurrently(ctx context.Context, entries []*connEntry, limit int) {
+	// Phase 1: eagerly cancel all entries (unblocks Read ctx-side + writeLoop).
+	// This must happen before launching Close goroutines so context-driven
+	// drain paths fire even if conn.Close() never runs.
+	for _, e := range entries {
+		e.cancel()
+		e.closeOnce.Do(func() { close(e.done) })
+	}
+
+	// Phase 2: spawn one Close goroutine per entry; semaphore bounds in-flight
+	// transport teardown work but does NOT gate scheduling. Every entry is
+	// guaranteed to have a goroutine waiting to call its conn.Close().
+	sem := make(chan struct{}, limit)
+	var closeWG sync.WaitGroup
+	for _, e := range entries {
+		closeWG.Add(1)
+		go func(e *connEntry) {
+			defer closeWG.Done()
+			sem <- struct{}{} // bounded wait for slot inside goroutine
+			defer func() { <-sem }()
+			if err := e.conn.Close(); err != nil {
+				slog.Warn("websocket hub: close connection failed",
+					slog.String("conn_id", e.conn.ID()),
+					slog.String("remote_addr", logutil.SafeAddr(e.conn.RemoteAddr())),
+					slog.Any("error", err),
+				)
+			}
+		}(e)
+	}
+
+	// Wait for all Close goroutines to drain, bounded by ctx. Goroutines exit
+	// when readLoops/writeLoops drain via Phase 1 context cancellation; max
+	// lifetime = connection teardown latency.
+	allDone := make(chan struct{})
+	go func() {
+		closeWG.Wait()
+		close(allDone)
+	}()
+	select {
+	case <-allDone:
+	case <-ctx.Done():
+		// ctx expired; Close goroutines continue in background.
+	}
 }
 
 // Register adds a connection to the Hub and starts reading from it. ctx is used
@@ -401,12 +547,15 @@ func (h *Hub) Register(ctx context.Context, conn Conn) error {
 		_ = evicted.conn.Close()
 		slog.Warn("websocket hub: evicted duplicate conn",
 			slog.String("conn_id", conn.ID()),
+			slog.String("remote_addr", logutil.SafeAddr(evicted.conn.RemoteAddr())),
 			slog.String("reason", "duplicate_conn_id"),
 		)
 	}
 
 	slog.Info("websocket hub: connection registered",
 		slog.String("conn_id", conn.ID()),
+		slog.String("remote_addr", logutil.SafeAddr(conn.RemoteAddr())),
+		slog.String("subject", entry.subject),
 	)
 
 	go func() {
@@ -663,6 +812,104 @@ func (h *Hub) ConnCount() int {
 	return len(h.conns)
 }
 
+// ---------------------------------------------------------------------------
+// lifecycle.ManagedResource implementation
+// ---------------------------------------------------------------------------
+
+// Checkers implements lifecycle.ManagedResource. It returns a single probe
+// "websocket_hub_ready" that reports nil (healthy) only when the Hub is in
+// the running state. Any other state (idle/stopping/stopped) returns
+// errHubNotRunning.
+//
+// probe name "websocket_hub_ready" follows the observability rule:
+// snake_case + "_ready" suffix.
+//
+// ref: adapters/rabbitmq/connection.go Checkers — probe name + pre-allocated error pattern.
+func (h *Hub) Checkers() map[string]func(context.Context) error {
+	return map[string]func(context.Context) error{
+		"websocket_hub_ready": func(_ context.Context) error {
+			if h.state.Load() == stateRunning {
+				return nil
+			}
+			return errHubNotRunning
+		},
+	}
+}
+
+// Compile-time assertion: hubWorker satisfies kernel/worker.Worker.
+var _ worker.Worker = (*hubWorker)(nil)
+
+// hubWorker adapts *Hub to the kernel/worker.Worker contract so that
+// bootstrap.WithManagedResource(hub) auto-starts the hub via WorkerGroup —
+// the same lifecycle-ownership model as uber-go/fx, go-kratos, and
+// zeromicro/go-zero (managed runtime objects own start AND stop).
+//
+// Stop is idempotent: it swallows ErrWSAlreadyStopped because the same Hub
+// is wired into two bootstrap teardown paths (WorkerGroup.Stop and
+// ManagedResource.Close LIFO). Whichever fires first does the real shutdown;
+// the second sees stateStopped and returns nil instead of an error.
+type hubWorker struct{ h *Hub }
+
+func (w *hubWorker) Start(ctx context.Context) error { return w.h.Start(ctx) }
+
+func (w *hubWorker) Stop(ctx context.Context) error {
+	err := w.h.Stop(ctx)
+	if err == nil {
+		return nil
+	}
+	var ec *errcode.Error
+	if errors.As(err, &ec) && ec.Code == errcode.ErrWSAlreadyStopped {
+		return nil
+	}
+	return err
+}
+
+// Worker returns a worker.Worker that drives Start/Stop so bootstrap can
+// auto-manage the hub lifecycle.
+//
+// Composition root (PR #393, post-/fix): one of the two equivalent patterns
+//
+//	hub := websocket.NewHub(cfg, handler)
+//	bootstrap.New(..., bootstrap.WithManagedResource(hub))
+//	// hub.Start is invoked by the bootstrap WorkerGroup; Close runs LIFO
+//	// during phase10. Do NOT also run `go hub.Start(ctx)` manually — the
+//	// duplicate Start would return ErrWSAlreadyStarted.
+//
+// Manual mode (legacy / tests):
+//
+//	hub := websocket.NewHub(cfg, handler)
+//	go func() { _ = hub.Start(ctx) }()
+//	// caller is responsible for hub.Stop(ctx) on shutdown.
+//
+// ref: kernel/lifecycle/managed_resource.go::Worker — non-nil documents
+// "auto-managed background worker"
+// ref: uber-go/fx app.go Lifecycle — managed surface owns start+stop
+// ref: go-kratos/kratos transport/transport.go Server — same contract
+func (h *Hub) Worker() worker.Worker { return &hubWorker{h: h} }
+
+// Close implements lifecycle.ManagedResource. It delegates to Stop(ctx) and
+// is idempotent: if the Hub is already stopped, returns nil instead of the
+// ErrWSAlreadyStopped error that Stop would return.
+//
+// Bootstrap wiring: bootstrap.WithManagedResource(hub) calls Close in LIFO
+// order during phase10 shutdown.
+//
+// ref: adapters/rabbitmq/connection.go Close — idempotent + ctx-bounded.
+func (h *Hub) Close(ctx context.Context) error {
+	err := h.Stop(ctx)
+	if err == nil {
+		return nil
+	}
+	var ec *errcode.Error
+	if errors.As(err, &ec) && ec.Code == errcode.ErrWSAlreadyStopped {
+		slog.Debug("websocket hub: Close called on already-stopped hub",
+			slog.String("error", err.Error()),
+		)
+		return nil
+	}
+	return err
+}
+
 // readLoop reads messages until the per-conn context is canceled or
 // conn.Close() breaks the Read call.
 func (h *Hub) readLoop(ctx context.Context, conn Conn) {
@@ -789,6 +1036,7 @@ func (h *Hub) evictWith(entry *connEntry, reason string, level slog.Level, evict
 	}
 	slog.LogAttrs(context.Background(), level, evictMsg,
 		slog.String("conn_id", connID),
+		slog.String("remote_addr", logutil.SafeAddr(entry.conn.RemoteAddr())),
 		slog.String("subject", entry.subject),
 		slog.String("reason", reason),
 	)
@@ -813,15 +1061,10 @@ func (h *Hub) handlePingResult(connID string, pingErr error) {
 	}
 	current.pingMisses++
 	if current.pingMisses >= h.config.PingMissMax {
-		h.removeConnLocked(current)
 		h.connMu.Unlock()
-		slog.Warn("websocket hub: ping threshold exceeded, removing connection",
-			slog.String("conn_id", connID),
-			slog.Int("misses", current.pingMisses),
-		)
-		current.cancel()
-		current.closeOnce.Do(func() { close(current.done) })
-		_ = current.conn.Close()
+		h.evictWith(current, "ping_threshold_exceeded", slog.LevelWarn,
+			"websocket hub: ping threshold exceeded, removing connection",
+			"websocket hub: close on ping-miss evict")
 		return
 	}
 	h.connMu.Unlock()

@@ -23,19 +23,26 @@ var _ rtws.Conn = (*Conn)(nil)
 // Close is lock-free (coder/websocket.Conn.CloseNow is internally synchronized)
 // so it can interrupt an in-flight Write immediately by closing the underlying
 // TCP connection. Write uses mu only to serialize concurrent writes.
+//
+// Instances are constructed internally by UpgradeHandler /
+// acceptUpgradeAndRegister; external code must interact with WebSocket
+// connections via the runtime/websocket.Conn interface that this type satisfies.
 type Conn struct {
-	id        string
-	principal *auth.Principal
-	conn      *websocket.Conn
+	id         string
+	remoteAddr string
+	principal  *auth.Principal
+	conn       *websocket.Conn
 
 	closed atomic.Bool // set once by Close; checked by Write
 	mu     sync.Mutex  // serializes Write calls only
 }
 
-// NewConn creates a Conn wrapping a github.com/coder/websocket connection
-// with an authenticated principal bound at handshake time.
-func NewConn(id string, principal *auth.Principal, conn *websocket.Conn) *Conn {
-	return &Conn{id: id, principal: principal, conn: conn}
+// newConn creates a Conn wrapping a github.com/coder/websocket connection.
+// remoteAddr is captured from r.RemoteAddr at handshake time (already
+// sanitized via logutil.SafeAddr by the caller). The id and principal are
+// bound at construction; both are immutable for the lifetime of the Conn.
+func newConn(id, remoteAddr string, principal *auth.Principal, conn *websocket.Conn) *Conn {
+	return &Conn{id: id, remoteAddr: remoteAddr, principal: principal, conn: conn}
 }
 
 // Principal returns the authenticated principal bound at handshake time.
@@ -46,7 +53,8 @@ func (c *Conn) Principal() *auth.Principal {
 	return c.principal
 }
 
-func (c *Conn) ID() string { return c.id }
+func (c *Conn) ID() string         { return c.id }
+func (c *Conn) RemoteAddr() string { return c.remoteAddr }
 
 func (c *Conn) Ping(ctx context.Context) error {
 	return c.conn.Ping(ctx)

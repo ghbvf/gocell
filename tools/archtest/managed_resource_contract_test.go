@@ -130,6 +130,31 @@ func TestAdapterManagedResourceCheckerNamesUseReadySuffix(t *testing.T) {
 	assert.Empty(t, violations, "adapter ManagedResource ready probes must use stable snake_case names ending in _ready")
 }
 
+// TestRuntimeWebsocketCheckerNamesUseReadySuffix enforces the
+// observability rule (Readyz Probe Naming) for runtime/websocket.Hub:
+// all Checkers() map keys must be snake_case and end with "_ready".
+//
+// This extends the adapter coverage from TestAdapterManagedResourceCheckerNamesUseReadySuffix
+// to the runtime/websocket package, which owns a ManagedResource
+// but lives in runtime/ rather than adapters/.
+func TestRuntimeWebsocketCheckerNamesUseReadySuffix(t *testing.T) {
+	root := findModuleRoot(t)
+	modulePath := readModulePath(t, root)
+	_, allPkgs := loadModule(t, root)
+	pkgs := filterPkgsByPathPrefix(allPkgs, modulePath+"/runtime/websocket")
+
+	var violations []string
+	for _, pkg := range pkgs {
+		if pkg.PkgPath != modulePath+"/runtime/websocket" {
+			continue
+		}
+		violations = append(violations, adapterCheckerNameViolations(pkg, "runtime/websocket")...)
+	}
+
+	sort.Strings(violations)
+	assert.Empty(t, violations, "runtime/websocket ManagedResource probe names must be snake_case and end with _ready")
+}
+
 func collectAdapterExportedTypes(pkgs []*packages.Package, modulePath string) []adapterExportedType {
 	adapterPrefix := modulePath + "/adapters/"
 	var out []adapterExportedType

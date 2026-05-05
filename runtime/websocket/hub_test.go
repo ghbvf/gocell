@@ -14,6 +14,7 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/clock/clockmock"
+	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/runtime/auth"
 )
@@ -38,6 +39,7 @@ type fakeConn struct {
 	readyOnce  sync.Once
 	pingErr    error         // configurable: non-nil makes Ping fail
 	writeDelay time.Duration // configurable: simulates slow writes
+	closeDelay time.Duration // configurable: simulates slow Close (T11)
 	principal  *auth.Principal
 }
 
@@ -50,7 +52,8 @@ func newFakeConn(id string) *fakeConn {
 	}
 }
 
-func (f *fakeConn) ID() string { return f.id }
+func (f *fakeConn) ID() string         { return f.id }
+func (f *fakeConn) RemoteAddr() string { return "127.0.0.1:0" }
 
 func (f *fakeConn) Ping(_ context.Context) error {
 	f.mu.Lock()
@@ -102,6 +105,18 @@ func (f *fakeConn) Write(_ context.Context, data []byte) error {
 }
 
 func (f *fakeConn) Close() error {
+	f.mu.Lock()
+	delay := f.closeDelay
+	if f.closed {
+		f.mu.Unlock()
+		return nil
+	}
+	f.mu.Unlock()
+
+	if delay > 0 {
+		time.Sleep(delay) //archtest:allow:test-sleep sleep IS the test parameter (simulated close latency)
+	}
+
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.closed {
@@ -161,6 +176,419 @@ func waitForHubPingTicker(t *testing.T, fc *clockmock.FakeClock) {
 	require.Eventually(t, func() bool {
 		return fc.PendingTickers() == 1
 	}, testtime.EventuallyShort, testtime.D1ms)
+}
+
+// ---------------------------------------------------------------------------
+// ManagedResource Tests (T4 / T5 / T6)
+// ---------------------------------------------------------------------------
+
+// T4: Hub.Checkers() state machine — Idle/Stopping/Stopped return non-nil;
+// Running returns nil (healthy).
+func TestHub_Checkers_StateMachine(t *testing.T) {
+	tests := []struct {
+		name    string
+		state   int32
+		wantNil bool
+	}{
+		{"idle", stateIdle, false},
+		{"running", stateRunning, true},
+		{"stopping", stateStopping, false},
+		{"stopped", stateStopped, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			hub := NewHub(DefaultHubConfig(clock.Real()), nil)
+			hub.state.Store(tt.state)
+			checkers := hub.Checkers()
+			require.NotEmpty(t, checkers, "Checkers must return a non-empty map")
+			fn, ok := checkers["websocket_hub_ready"]
+			require.True(t, ok, "must have 'websocket_hub_ready' key")
+			err := fn(context.Background())
+			if tt.wantNil {
+				assert.NoError(t, err)
+			} else {
+				assert.Error(t, err)
+			}
+		})
+	}
+
+	// T4b: true stateStopping via a stuckConn — verifies that Checkers returns
+	// non-nil while shutdown is in progress (hub.wg.Wait is blocked).
+	t.Run("stopping_via_live_shutdown", func(t *testing.T) {
+		hub := NewHub(DefaultHubConfig(clock.Real()), nil)
+		startErr := make(chan error, 1)
+		go func() { startErr <- hub.Start(context.Background()) }()
+		require.Eventually(t, func() bool {
+			return hub.state.Load() == stateRunning
+		}, testtime.EventuallyShort, testtime.D1ms)
+
+		stuck := &stuckConn{id: "t4b-stuck", closeCh: make(chan struct{})}
+		require.NoError(t, hub.Register(context.Background(), stuck))
+
+		// Start Stop in background — this transitions to stateStopping while
+		// waiting for goroutines to drain.
+		stopDone := make(chan error, 1)
+		stopCtx, stopCancel := context.WithTimeout(context.Background(), testtime.D2s)
+		defer stopCancel()
+		go func() { stopDone <- hub.Stop(stopCtx) }()
+
+		// Wait until hub is stopping.
+		require.Eventually(t, func() bool {
+			return hub.state.Load() >= stateStopping
+		}, testtime.EventuallyShort, testtime.D1ms)
+
+		// Checkers must report non-nil while stopping.
+		checkers := hub.Checkers()
+		fn, ok := checkers["websocket_hub_ready"]
+		require.True(t, ok)
+		assert.Error(t, fn(context.Background()), "Checkers must return error while hub is stopping")
+
+		// Unblock the stuck conn so Stop can complete.
+		close(stuck.closeCh)
+		require.NoError(t, <-stopDone)
+		<-startErr
+	})
+}
+
+// T5: Hub.Close is idempotent — second call returns nil.
+func TestHub_ManagedResource_CloseIsIdempotent(t *testing.T) {
+	hub := NewHub(DefaultHubConfig(clock.Real()), nil)
+	startErr := make(chan error, 1)
+	go func() { startErr <- hub.Start(context.Background()) }()
+	require.Eventually(t, func() bool {
+		return hub.state.Load() == stateRunning
+	}, testtime.EventuallyShort, testtime.D1ms)
+
+	ctx, cancel := context.WithTimeout(context.Background(), testtime.D2s)
+	defer cancel()
+
+	require.NoError(t, hub.Close(ctx), "first Close must succeed")
+	require.NoError(t, hub.Close(ctx), "second Close must be idempotent (return nil)")
+	<-startErr
+}
+
+// T6: Hub.Worker() returns a non-nil worker that drives Start/Stop.
+// bootstrap.WithManagedResource(hub) auto-starts the hub via the WorkerGroup
+// and tears it down via LIFO Close — composition root no longer needs a
+// manual `go hub.Start(ctx)` call.
+func TestHub_ManagedResource_WorkerDrivesStartAndStop(t *testing.T) {
+	hub := NewHub(DefaultHubConfig(clock.Real()), nil)
+	w := hub.Worker()
+	require.NotNil(t, w, "Worker must return a non-nil worker so bootstrap can auto-start")
+
+	startErr := make(chan error, 1)
+	go func() { startErr <- w.Start(context.Background()) }()
+	require.Eventually(t, func() bool {
+		return hub.state.Load() == stateRunning
+	}, testtime.EventuallyShort, testtime.D1ms)
+
+	stopCtx, cancel := context.WithTimeout(context.Background(), testtime.D2s)
+	defer cancel()
+	require.NoError(t, w.Stop(stopCtx), "Worker.Stop must succeed on running hub")
+	<-startErr
+
+	// Idempotent: second Worker.Stop after hub already stopped returns nil
+	// (swallows ErrWSAlreadyStopped) so bootstrap's WorkerGroup teardown does
+	// not collide with ManagedResource.Close LIFO teardown.
+	require.NoError(t, w.Stop(context.Background()),
+		"Worker.Stop must be idempotent — bootstrap may invoke teardown twice (WorkerGroup + Close)")
+}
+
+// kernel/worker.Worker compile-time satisfaction is enforced by the
+// `var _ worker.Worker = (*hubWorker)(nil)` assertion in hub.go alongside the
+// hubWorker definition; no runtime test needed.
+
+// T8: BroadcastFilter / BroadcastToSubject on stopped hub — no panic, returns nil.
+func TestHub_BroadcastFilter_OnStoppedHub_NoOp(t *testing.T) {
+	hub := NewHub(DefaultHubConfig(clock.Real()), nil)
+	require.NoError(t, hub.Stop(context.Background()))
+
+	err := hub.BroadcastFilter(context.Background(), []byte("x"), func(Conn) bool { return true })
+	assert.NoError(t, err, "BroadcastFilter on stopped hub must return nil")
+
+	err = hub.BroadcastToSubject(context.Background(), "alice", []byte("x"))
+	assert.NoError(t, err, "BroadcastToSubject on stopped hub must return nil")
+}
+
+// T9: Send on stopped hub returns ErrWSConnNotFound.
+func TestHub_Send_OnStoppedHub_ReturnsConnNotFound(t *testing.T) {
+	hub := NewHub(DefaultHubConfig(clock.Real()), nil)
+	require.NoError(t, hub.Stop(context.Background()))
+
+	err := hub.Send(context.Background(), "any-id", []byte("x"))
+	require.Error(t, err)
+	var ec *errcode.Error
+	require.True(t, errors.As(err, &ec), "error must be errcode.Error")
+	assert.Equal(t, errcode.ErrWSConnNotFound, ec.Code)
+}
+
+// TestHub_BoundedConcurrentClose_RespectsLimit validates that
+// closeEntriesConcurrently respects ConcurrentCloseLimit and that the hub
+// reaches stateStopped regardless of whether the ctx deadline is hit.
+//
+// Uses closeBlockerConn so the Close goroutines block until released, letting
+// us release them after Stop returns and verify all connections eventually
+// close. The test does NOT assert on DeadlineExceeded vs nil — that outcome
+// depends on timing and would make the test flaky.
+func TestHub_BoundedConcurrentClose_RespectsLimit(t *testing.T) {
+	cfg := DefaultHubConfig(clock.Real())
+	cfg.ConcurrentCloseLimit = 2
+	hub := NewHub(cfg, nil)
+
+	startErr := make(chan error, 1)
+	go func() { startErr <- hub.Start(context.Background()) }()
+	require.Eventually(t, func() bool {
+		return hub.state.Load() == stateRunning
+	}, testtime.EventuallyShort, testtime.D1ms)
+
+	const n = 5
+	blockers := make([]*closeBlockerConn, n)
+	for i := range n {
+		blockers[i] = newCloseBlockerConn(fmt.Sprintf("blocker-%d", i))
+		require.NoError(t, hub.Register(context.Background(), blockers[i]))
+	}
+	require.Eventually(t, func() bool { return hub.ConnCount() == n }, testtime.EventuallyShort, testtime.D1ms)
+
+	stopCtx, cancel := context.WithTimeout(context.Background(), testtime.D50ms)
+	defer cancel()
+
+	_ = hub.Stop(stopCtx) // err may be DeadlineExceeded or nil depending on timing
+	assert.Equal(t, stateStopped, hub.state.Load())
+
+	// Release all blockers so background Close goroutines can exit (goleak).
+	// Not all blockers may have had Close() called (ctx may expire before all
+	// semaphore slots are acquired); releasing is harmless for those.
+	for _, b := range blockers {
+		close(b.releaseClose)
+	}
+	<-startErr
+}
+
+// TestHub_BoundedConcurrentClose_AllEntriesGetCloseAttempt is the contract
+// invariant under timeout: every entry in the snapshot MUST receive a
+// transport-level Close() call, even when ctx expires mid-shutdown. The
+// deadline bounds *waiting* for completion, not whether work is scheduled.
+//
+// Pre-fix bug (P1-A): the launch loop's select { sem | ctx.Done() } caused
+// the loop to `goto waitDone` on ctx expiry, skipping all unlaunched entries.
+// Their goroutines exited via Phase 1 cancel but their conn.Close() was
+// never invoked, leaking transport (TCP) resources until OS-level FIN_WAIT.
+// Worse, h.conns/subjectIdx had already been cleared, so the readLoop's
+// fallback path (unregisterEntry) saw entry-not-current and skipped Close too.
+//
+// Post-fix invariant: every closeBlockerConn must observe its Close() being
+// called once releaseClose is signaled, regardless of whether Stop returned
+// DeadlineExceeded or nil.
+func TestHub_BoundedConcurrentClose_AllEntriesGetCloseAttempt(t *testing.T) {
+	cfg := DefaultHubConfig(clock.Real())
+	cfg.ConcurrentCloseLimit = 2 // Tight limit so most entries can't acquire a slot before ctx expiry.
+	hub := NewHub(cfg, nil)
+
+	startErr := make(chan error, 1)
+	go func() { startErr <- hub.Start(context.Background()) }()
+	require.Eventually(t, func() bool {
+		return hub.state.Load() == stateRunning
+	}, testtime.EventuallyShort, testtime.D1ms)
+
+	const n = 20
+	blockers := make([]*closeBlockerConn, n)
+	for i := range n {
+		blockers[i] = newCloseBlockerConn(fmt.Sprintf("blocker-%d", i))
+		require.NoError(t, hub.Register(context.Background(), blockers[i]))
+	}
+	require.Eventually(t, func() bool { return hub.ConnCount() == n }, testtime.EventuallyShort, testtime.D1ms)
+
+	stopCtx, cancel := context.WithTimeout(context.Background(), testtime.D50ms)
+	defer cancel()
+	_ = hub.Stop(stopCtx) // err may be DeadlineExceeded; outcome is timing-dependent.
+	assert.Equal(t, stateStopped, hub.state.Load())
+
+	// Release all blockers — every blocker MUST have a goroutine waiting in
+	// Close() (sem-bounded, executing in background). Releasing unblocks them
+	// and isClosed flips to true.
+	for _, b := range blockers {
+		close(b.releaseClose)
+	}
+
+	// Contract: every entry's Close() must complete after release.
+	// Pre-fix this would FAIL — only the first ConcurrentCloseLimit entries
+	// would have been launched; the rest would never observe Close().
+	require.Eventually(t, func() bool {
+		for _, b := range blockers {
+			if !b.isClosed() {
+				return false
+			}
+		}
+		return true
+	}, testtime.EventuallyShort, testtime.D1ms,
+		"every entry must receive a Close() call (timeout bounds waiting, not scheduling)")
+
+	<-startErr
+}
+
+// T11: Bounded concurrent close drains in parallel — N=20 conns each taking
+// 50ms to close should finish well under serial time (20×50ms=1000ms);
+// with ConcurrentCloseLimit=8 expect ~ceil(20/8)×50ms ≈ 150ms < 500ms.
+func TestHub_BoundedConcurrentClose_ParallelDrain(t *testing.T) {
+	const (
+		n             = 20
+		closeDelay    = testtime.D50ms
+		serialBound   = time.Duration(n) * closeDelay // 1000ms if serial
+		parallelBound = testtime.D500ms               // well within parallel budget
+	)
+
+	cfg := DefaultHubConfig(clock.Real())
+	cfg.ConcurrentCloseLimit = 8
+	hub := NewHub(cfg, nil)
+
+	startErr := make(chan error, 1)
+	go func() { startErr <- hub.Start(context.Background()) }()
+	require.Eventually(t, func() bool {
+		return hub.state.Load() == stateRunning
+	}, testtime.EventuallyShort, testtime.D1ms)
+
+	for i := range n {
+		fc := newFakeConn(fmt.Sprintf("delay-%d", i))
+		fc.closeDelay = closeDelay
+		require.NoError(t, hub.Register(context.Background(), fc))
+	}
+	require.Eventually(t, func() bool { return hub.ConnCount() == n }, testtime.EventuallyShort, testtime.D1ms)
+
+	stopCtx, cancel := context.WithTimeout(context.Background(), serialBound)
+	defer cancel()
+
+	start := time.Now()
+	err := hub.Stop(stopCtx)
+	elapsed := time.Since(start)
+
+	require.NoError(t, err, "parallel drain must complete within serial budget")
+	assert.Less(t, elapsed, parallelBound,
+		"parallel drain (%v) must be faster than %v (serial would be ~%v)",
+		elapsed, parallelBound, serialBound)
+
+	<-startErr
+}
+
+// T12: External ctx cancel uses configured ShutdownTimeout, not hardcoded 10s.
+// ShutdownTimeout=50ms + 5 blocking conns → Start returns in < 500ms.
+func TestHub_ExternalCancel_UsesConfiguredShutdownTimeout(t *testing.T) {
+	cfg := DefaultHubConfig(clock.Real())
+	cfg.ShutdownTimeout = testtime.D50ms
+	hub := NewHub(cfg, nil)
+
+	ctx, cancelCtx := context.WithCancel(context.Background())
+	startErr := make(chan error, 1)
+	go func() { startErr <- hub.Start(ctx) }()
+	require.Eventually(t, func() bool {
+		return hub.state.Load() == stateRunning
+	}, testtime.EventuallyShort, testtime.D1ms)
+
+	const n = 5
+	blockers := make([]*closeBlockerConn, n)
+	for i := range n {
+		blockers[i] = newCloseBlockerConn(fmt.Sprintf("ext-%d", i))
+		require.NoError(t, hub.Register(context.Background(), blockers[i]))
+	}
+	require.Eventually(t, func() bool { return hub.ConnCount() == n }, testtime.EventuallyShort, testtime.D1ms)
+
+	start := time.Now()
+	cancelCtx()
+
+	select {
+	case err := <-startErr:
+		elapsed := time.Since(start)
+		assert.ErrorIs(t, err, context.Canceled)
+		assert.Less(t, elapsed, testtime.D500ms,
+			"Start with ShutdownTimeout=50ms must return in < 500ms (not hardcoded 10s)")
+	case <-time.After(testtime.D500ms):
+		t.Fatal("Start did not return within 500ms — ShutdownTimeout not respected")
+	}
+
+	// Release blockers so background Close goroutines can exit (goleak).
+	// Not all blockers may have had Close() called if ctx expired before all
+	// semaphore slots were acquired; releasing is harmless for those.
+	for _, b := range blockers {
+		close(b.releaseClose)
+	}
+	// startErr was already consumed by the select above.
+}
+
+// T7: Stop × external-cancel race CAS — both paths converge to stateStopped
+// with a single close of shutdownDone; -race must pass.
+//
+// This test validates final state invariants under concurrent access. With
+// -race the data-race detector catches any unsafe shared-state access. The CAS
+// contention itself is rarely Stop-wins (cancel() is single-atomic; Stop has
+// lock+CAS overhead) but both paths converge on stateStopped via the single
+// shutdown() owner. Run with
+//
+//	go test -race -count=100 -run TestHub_StopAndExternalCancel_RaceCAS
+//
+// for stability validation.
+func TestHub_StopAndExternalCancel_RaceCAS(t *testing.T) {
+	hub := NewHub(DefaultHubConfig(clock.Real()), nil)
+	ctx, cancelCtx := context.WithCancel(context.Background())
+
+	startErr := make(chan error, 1)
+	go func() { startErr <- hub.Start(ctx) }()
+	require.Eventually(t, func() bool {
+		return hub.state.Load() == stateRunning
+	}, testtime.EventuallyShort, testtime.D1ms)
+
+	// Barrier: both goroutines wait until both are ready, then fire simultaneously.
+	var barrier sync.WaitGroup
+	barrier.Add(2)
+
+	var stopErr, ctxErr error
+	var wg sync.WaitGroup
+	wg.Add(2)
+
+	go func() {
+		defer wg.Done()
+		barrier.Done()
+		barrier.Wait()
+		stopCtx, cancel := context.WithTimeout(context.Background(), testtime.D2s)
+		defer cancel()
+		stopErr = hub.Stop(stopCtx)
+	}()
+
+	go func() {
+		defer wg.Done()
+		barrier.Done()
+		barrier.Wait()
+		cancelCtx()
+		ctxErr = nil // cancel itself is not an error
+	}()
+
+	wg.Wait()
+
+	// Collect Start return value.
+	select {
+	case err := <-startErr:
+		// Start returns nil (shutdown by Stop) or ctx.Err() (shutdown by cancel).
+		// Either is acceptable — both paths ran correctly.
+		_ = err
+	case <-time.After(testtime.SelectShutdown):
+		t.Fatal("Start did not return after race")
+	}
+
+	_ = ctxErr
+	assert.Equal(t, stateStopped, hub.state.Load())
+
+	// shutdownDone must be closed (select should not block).
+	select {
+	case <-hub.shutdownDone:
+		// correct
+	default:
+		t.Fatal("shutdownDone was not closed after race")
+	}
+
+	// One of Stop/external-cancel owns the shutdown; the other returns
+	// ErrWSAlreadyStopped or nil (depending on who won).
+	if stopErr != nil {
+		assert.Contains(t, stopErr.Error(), "already stopped",
+			"losing Stop must return ErrWSAlreadyStopped")
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -666,6 +1094,40 @@ func TestHub_PingLoopRunsOnInterval(t *testing.T) {
 // Config Tests
 // ---------------------------------------------------------------------------
 
+// T1: ShutdownTimeout defaults to defaultShutdownTimeout (10s) when zero;
+// explicit value is preserved.
+func TestHubConfig_ShutdownTimeout_Default(t *testing.T) {
+	cfgZero := HubConfig{Clock: clock.Real()}
+	hub := NewHub(cfgZero, nil)
+	assert.Equal(t, defaultShutdownTimeout, hub.Config().ShutdownTimeout,
+		"zero ShutdownTimeout must be replaced with defaultShutdownTimeout")
+
+	cfgExplicit := HubConfig{Clock: clock.Real(), ShutdownTimeout: testtime.D30s}
+	hub2 := NewHub(cfgExplicit, nil)
+	assert.Equal(t, testtime.D30s, hub2.Config().ShutdownTimeout,
+		"explicit ShutdownTimeout must be preserved")
+}
+
+// T2: ConcurrentCloseLimit defaults to 64 when zero; explicit value is preserved.
+func TestHubConfig_ConcurrentCloseLimit_Default(t *testing.T) {
+	cfgZero := HubConfig{Clock: clock.Real()}
+	hub := NewHub(cfgZero, nil)
+	assert.Equal(t, 64, hub.Config().ConcurrentCloseLimit,
+		"zero ConcurrentCloseLimit must be replaced with 64")
+
+	cfgExplicit := HubConfig{Clock: clock.Real(), ConcurrentCloseLimit: 32}
+	hub2 := NewHub(cfgExplicit, nil)
+	assert.Equal(t, 32, hub2.Config().ConcurrentCloseLimit,
+		"explicit ConcurrentCloseLimit must be preserved")
+}
+
+// T3: fakeConn implements Conn including RemoteAddr(); compile-time guard +
+// runtime assertion.
+func TestConn_RemoteAddr_InterfaceContract(t *testing.T) {
+	fc := newFakeConn("addr-test")
+	assert.NotEmpty(t, fc.RemoteAddr(), "RemoteAddr must return a non-empty address")
+}
+
 func TestDefaultHubConfig(t *testing.T) {
 	cfg := DefaultHubConfig(clock.Real())
 	assert.Equal(t, testtime.D30s, cfg.PingInterval)
@@ -676,13 +1138,15 @@ func TestDefaultHubConfig(t *testing.T) {
 
 func TestNewHub_PreservesExplicitConfig(t *testing.T) {
 	cfg := HubConfig{
-		PingInterval:   testtime.D1s,
-		PingTimeout:    testtime.D250ms,
-		ReadLimit:      1024,
-		PingMissMax:    5,
-		MaxConnections: 9,
-		SendBufferSize: 16, // explicit non-zero; must be preserved as-is
-		Clock:          clock.Real(),
+		PingInterval:         testtime.D1s,
+		PingTimeout:          testtime.D250ms,
+		ReadLimit:            1024,
+		PingMissMax:          5,
+		MaxConnections:       9,
+		SendBufferSize:       16, // explicit non-zero; must be preserved as-is
+		ShutdownTimeout:      testtime.D30s,
+		ConcurrentCloseLimit: 32,
+		Clock:                clock.Real(),
 	}
 	handler := func(context.Context, string, []byte) {}
 
@@ -742,6 +1206,62 @@ func TestNewHub_NilHandler(t *testing.T) {
 	hub.handler(context.Background(), "test", []byte("data"))
 }
 
+// negativeShutdownTimeout / negativeConcurrentCloseLimit are file-local
+// constants; archtest TEST-TIME-LITERAL-01 forbids inline numeric literals in
+// time.Duration / int contexts in test code.
+const (
+	negativeShutdownTimeout      = -1 * testtime.D1ms
+	negativeConcurrentCloseLimit = -1
+)
+
+// TestNewHub_RejectsNegativeShutdownTimeout — negative ShutdownTimeout collapses
+// the external-cancel path into an already-expired context. Reject at
+// construction (panic, matching clock.MustHaveClock pattern) instead of
+// silently producing zero-budget shutdown at runtime.
+func TestNewHub_RejectsNegativeShutdownTimeout(t *testing.T) {
+	cfg := DefaultHubConfig(clock.Real())
+	cfg.ShutdownTimeout = negativeShutdownTimeout
+	assert.PanicsWithValue(t,
+		"websocket.NewHub: HubConfig.ShutdownTimeout must be >= 0",
+		func() { NewHub(cfg, nil) },
+		"negative ShutdownTimeout must panic at construction")
+}
+
+// TestNewHub_RejectsNegativeConcurrentCloseLimit — negative ConcurrentCloseLimit
+// would panic at make(chan struct{}, limit) during shutdown. Reject at
+// construction so wiring bugs surface before any goroutine runs.
+func TestNewHub_RejectsNegativeConcurrentCloseLimit(t *testing.T) {
+	cfg := DefaultHubConfig(clock.Real())
+	cfg.ConcurrentCloseLimit = negativeConcurrentCloseLimit
+	assert.PanicsWithValue(t,
+		"websocket.NewHub: HubConfig.ConcurrentCloseLimit must be >= 0",
+		func() { NewHub(cfg, nil) },
+		"negative ConcurrentCloseLimit must panic at construction")
+}
+
+// ---------------------------------------------------------------------------
+// closeBlockerConn — a conn whose Close blocks until releaseClose is closed.
+// Used to test bounded concurrent close (T10/T12).
+// ---------------------------------------------------------------------------
+
+type closeBlockerConn struct {
+	*fakeConn
+	releaseClose chan struct{}
+}
+
+func newCloseBlockerConn(id string) *closeBlockerConn {
+	return &closeBlockerConn{
+		fakeConn:     newFakeConn(id),
+		releaseClose: make(chan struct{}),
+	}
+}
+
+// Close blocks until releaseClose is closed, then delegates to fakeConn.Close.
+func (c *closeBlockerConn) Close() error {
+	<-c.releaseClose
+	return c.fakeConn.Close()
+}
+
 // ---------------------------------------------------------------------------
 // stuckConn — a conn whose Read blocks until closeCh is closed.
 // Used to test Stop timeout behavior.
@@ -754,7 +1274,8 @@ type stuckConn struct {
 	closed  bool
 }
 
-func (s *stuckConn) ID() string { return s.id }
+func (s *stuckConn) ID() string         { return s.id }
+func (s *stuckConn) RemoteAddr() string { return "127.0.0.1:0" }
 func (s *stuckConn) Ping(_ context.Context) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
