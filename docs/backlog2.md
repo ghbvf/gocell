@@ -374,7 +374,7 @@ func NewSubscription(typedH EventHandler, group, slice string) *Subscription
 
 **描述**：`NewBootstrapMiddleware(creds, limiter, onAuthFail)` 的第三参数 `onAuthFail` 接口已就位，当前在 `access_module.go` 组装时传 `nil`（middleware 在 nil hook 时跳过 audit write，不影响功能）。当 accesscore audit chain 的跨 cell 注入路径完成后，wiring `onAuthFail = auditWriter.WriteBootstrapAuthFailure` 以实现 Basic Auth 暴力枚举的审计追踪，扩展零成本。
 
-**来源**：ADR `docs/architecture/202605061600-adr-bootstrap-admin-boundary.md` D4 + D8 OUT_OF_SCOPE 段。
+**来源**：ADR `docs/architecture/202605061600-adr-bootstrap-admin-boundary.md` D4 + Out of Scope 段（ADR 修订后 D1-D5）。
 
 **严重度**：P2（功能完整性；不影响安全主路径）
 

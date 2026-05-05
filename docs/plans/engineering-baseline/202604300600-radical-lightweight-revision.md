@@ -152,7 +152,7 @@ func (s *Service) HandleSessionCreated(ctx context.Context, e Event) cell.Handle
 
 **当前问题**：5 个 framework-defined contributor interface + bootstrap phase3b/5/6 type assertion 自动发现，导致开发者：
 - 看 `app.go` 无法知道 auditcore 订阅了哪 13 个 topic（要去 cell.go 翻 RegisterSubscriptions）
-- 不知道 `accesscore.WithInitialAdminBootstrap()` 何时触发（要懂 phase3b 发现机制）
+- setup/admin POST endpoint（postmortem 后单一引导式路径；`accesscore.WithInitialAdminBootstrap()` 已删除，bootstrap admin provision mode 已移除）
 
 **改为**：单一显式注册 API
 ```go
