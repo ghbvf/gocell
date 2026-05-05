@@ -253,34 +253,19 @@ func mustParseProject(t *testing.T, root string) *metadata.ProjectMeta {
 	return p
 }
 
-// findGeneratedCellFiles walks cells/ and examples/*/cells/ collecting
-// all cell_gen.go files. Excludes vendor / worktrees / testdata.
+// findGeneratedCellFiles enumerates cell_gen.go for every cell registered in
+// ProjectMeta.Cells (covers top-level cells/ and examples/*/cells/). Cells
+// that have not yet been opted into K#04 codegen are skipped — only files
+// that actually exist on disk are returned.
 func findGeneratedCellFiles(t *testing.T, root string) []string {
 	t.Helper()
+	project := mustParseProject(t, root)
 	var found []string
-	roots := []string{
-		filepath.Join(root, "cells"),
-		filepath.Join(root, "examples"),
-	}
-	for _, scanRoot := range roots {
-		_ = filepath.WalkDir(scanRoot, func(path string, d os.DirEntry, err error) error {
-			if err != nil {
-				// Skip unreadable subtrees rather than aborting the gate
-				// (e.g. transient permission issues on CI).
-				return nil //nolint:nilerr // walk continues past unreadable entries by design
-			}
-			if d.IsDir() {
-				switch d.Name() {
-				case "vendor", "worktrees", "testdata", ".git", "node_modules":
-					return filepath.SkipDir
-				}
-				return nil
-			}
-			if d.Name() == "cell_gen.go" {
-				found = append(found, path)
-			}
-			return nil
-		})
+	for _, c := range project.Cells {
+		path := filepath.Join(root, filepath.Dir(c.File), "cell_gen.go")
+		if _, err := os.Stat(path); err == nil {
+			found = append(found, path)
+		}
 	}
 	sort.Strings(found)
 	return found

@@ -30,6 +30,9 @@
 package archtest
 
 import (
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"os"
 	"path/filepath"
 	"strings"
@@ -86,19 +89,66 @@ func TestHandlerNoSchemaForNobody01(t *testing.T) {
 }
 
 // handlerEmbedsSchemaLiteral reports whether the handler source declares a
-// real var `requestSchemaJSON`. Wave 1 RED implementation falls back to
-// strings.Contains and FALSE-POSITIVES on comments / string-constant
-// occurrences. Wave 2 GREEN replaces with AST scan over *ast.GenDecl(VAR).
+// real top-level var named `requestSchemaJSON`. Comment / string-constant
+// occurrences of the bytes do not count.
 func handlerEmbedsSchemaLiteral(text string) bool {
-	return strings.Contains(text, "requestSchemaJSON")
+	fset := token.NewFileSet()
+	f, err := parser.ParseFile(fset, "handler_gen.go", text, parser.SkipObjectResolution)
+	if err != nil {
+		return false
+	}
+	for _, decl := range f.Decls {
+		gd, ok := decl.(*ast.GenDecl)
+		if !ok || gd.Tok != token.VAR {
+			continue
+		}
+		for _, spec := range gd.Specs {
+			vs, ok := spec.(*ast.ValueSpec)
+			if !ok {
+				continue
+			}
+			for _, name := range vs.Names {
+				if name.Name == "requestSchemaJSON" {
+					return true
+				}
+			}
+		}
+	}
+	return false
 }
 
 // handlerWiresSchemaValidator reports whether the handler source contains an
-// actual *ast.CallExpr to schemavalidate.NewValidator. Wave 1 RED falls back
-// to strings.Contains and FALSE-POSITIVES on comment text; Wave 2 GREEN
-// replaces with AST scan.
+// actual *ast.CallExpr to schemavalidate.NewValidator. Comment / string-literal
+// occurrences do not count.
 func handlerWiresSchemaValidator(text string) bool {
-	return strings.Contains(text, "schemavalidate.NewValidator")
+	fset := token.NewFileSet()
+	f, err := parser.ParseFile(fset, "handler_gen.go", text, parser.SkipObjectResolution)
+	if err != nil {
+		return false
+	}
+	found := false
+	ast.Inspect(f, func(n ast.Node) bool {
+		if found {
+			return false
+		}
+		ce, ok := n.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		sel, ok := ce.Fun.(*ast.SelectorExpr)
+		if !ok {
+			return true
+		}
+		x, ok := sel.X.(*ast.Ident)
+		if !ok {
+			return true
+		}
+		if x.Name == "schemavalidate" && sel.Sel.Name == "NewValidator" {
+			found = true
+		}
+		return true
+	})
+	return found
 }
 
 // TestHandlerNoSchemaForNobody01_NegativeFixture_StringLiteralOnly asserts the

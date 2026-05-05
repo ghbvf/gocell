@@ -11,8 +11,10 @@
 package archtest
 
 import (
-	"bytes"
 	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"os"
 	"path/filepath"
 	"testing"
@@ -68,21 +70,28 @@ func scanEventSubscriptionCoverage(contractID, subPath string) error {
 			contractID, subPath, contractID,
 		)
 	}
-	content, readErr := os.ReadFile(subPath) //nolint:gosec // archtest reads paths it discovered
-	if readErr != nil {
+	fset := token.NewFileSet()
+	f, parseErr := parser.ParseFile(fset, subPath, nil, parser.SkipObjectResolution)
+	if parseErr != nil {
 		return fmt.Errorf(
-			"EVENT-SUBSCRIPTION-CONTRACTGEN-COVERAGE-01: cannot read %s: %v",
-			subPath, readErr,
+			"EVENT-SUBSCRIPTION-CONTRACTGEN-COVERAGE-01: cannot parse %s: %v",
+			subPath, parseErr,
 		)
 	}
-	if !bytes.Contains(content, []byte("func NewSubscription")) {
-		return fmt.Errorf(
-			"EVENT-SUBSCRIPTION-CONTRACTGEN-COVERAGE-01: contract %q: %s exists but does not "+
-				"declare func NewSubscription; regenerate with `gocell generate contract %s`",
-			contractID, subPath, contractID,
-		)
+	for _, decl := range f.Decls {
+		fn, ok := decl.(*ast.FuncDecl)
+		if !ok {
+			continue
+		}
+		if fn.Recv == nil && fn.Name.Name == "NewSubscription" {
+			return nil
+		}
 	}
-	return nil
+	return fmt.Errorf(
+		"EVENT-SUBSCRIPTION-CONTRACTGEN-COVERAGE-01: contract %q: %s exists but does not "+
+			"declare func NewSubscription; regenerate with `gocell generate contract %s`",
+		contractID, subPath, contractID,
+	)
 }
 
 // TestEVENT_SUBSCRIPTION_CONTRACTGEN_COVERAGE_01_NegativeFixture_VarShadowsFunc

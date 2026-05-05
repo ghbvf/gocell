@@ -32,43 +32,52 @@ func TestNO_TEST_SERVICE_CONTEXT_IN_PRODUCTION_01(t *testing.T) {
 
 	root := findModuleRoot(t)
 
-	searchDirs := []string{
+	// Non-cell roots — walked directly because they are not cell-managed.
+	nonCellDirs := []string{
 		filepath.Join(root, "runtime"),
-		filepath.Join(root, "cells"),
 		filepath.Join(root, "cmd"),
 		filepath.Join(root, "kernel"),
 		filepath.Join(root, "adapters"),
-		filepath.Join(root, "examples"),
 		filepath.Join(root, "tests"),
 	}
 
-	var violations []string
-
-	for _, dir := range searchDirs {
-		allFiles, err := findAllGoFilesInDir(dir)
+	var allFiles []string
+	for _, dir := range nonCellDirs {
+		ff, err := findAllGoFilesInDir(dir)
 		if os.IsNotExist(err) {
 			continue
 		}
 		if err != nil {
 			t.Fatalf("walking %s: %v", dir, err)
 		}
-		for _, f := range allFiles {
-			base := filepath.Base(f)
-			// Skip _test.go files and test helper files.
-			if strings.HasSuffix(base, "_test.go") || strings.Contains(base, "_test_") {
-				continue
-			}
+		allFiles = append(allFiles, ff...)
+	}
 
-			rel, _ := filepath.Rel(root, f)
-			rel = filepath.ToSlash(rel)
+	// Cell roots — discovered via metadata.NewParser (covers top-level
+	// cells/ and examples/*/cells/).
+	cellFiles, err := findCellProductionGoFiles(root)
+	if err != nil {
+		t.Fatalf("metadata.NewParser: %v", err)
+	}
+	allFiles = append(allFiles, cellFiles...)
 
-			hits, scanErr := scanTestServiceContextCalls(f, rel)
-			if scanErr != nil {
-				t.Logf("scan error %s: %v", rel, scanErr)
-				continue
-			}
-			violations = append(violations, hits...)
+	var violations []string
+	for _, f := range allFiles {
+		base := filepath.Base(f)
+		// Skip _test.go files and test helper files.
+		if strings.HasSuffix(base, "_test.go") || strings.Contains(base, "_test_") {
+			continue
 		}
+
+		rel, _ := filepath.Rel(root, f)
+		rel = filepath.ToSlash(rel)
+
+		hits, scanErr := scanTestServiceContextCalls(f, rel)
+		if scanErr != nil {
+			t.Logf("scan error %s: %v", rel, scanErr)
+			continue
+		}
+		violations = append(violations, hits...)
 	}
 
 	sort.Strings(violations)

@@ -21,13 +21,13 @@ import (
 	"path/filepath"
 	"sort"
 	"strconv"
-	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gopkg.in/yaml.v3"
 
+	"github.com/ghbvf/gocell/kernel/metadata"
 	"github.com/ghbvf/gocell/pkg/query"
 )
 
@@ -101,33 +101,21 @@ func checkQueryParamContractDrift(root string) ([]queryParamViolation, error) {
 }
 
 func loadHTTPQueryParamContracts(root string) (map[string]queryParamContract, error) {
+	project, err := metadata.NewParser(root).Parse()
+	if err != nil {
+		return nil, err
+	}
 	out := map[string]queryParamContract{}
-	for _, dir := range []string{filepath.Join(root, "contracts"), filepath.Join(root, "examples")} {
-		if _, err := os.Stat(dir); err != nil {
+	for _, c := range project.Contracts {
+		if c.Kind != "http" {
 			continue
 		}
-		if err := filepath.WalkDir(dir, func(path string, d os.DirEntry, err error) error {
-			if err != nil {
-				return err
-			}
-			if d.IsDir() {
-				if shouldSkipQueryParamDir(d.Name()) {
-					return filepath.SkipDir
-				}
-				return nil
-			}
-			if filepath.Base(path) != "contract.yaml" || !strings.Contains(filepath.ToSlash(path), "/contracts/http/") {
-				return nil
-			}
-			c, err := parseQueryParamContract(path)
-			if err != nil {
-				return err
-			}
-			out[c.ID] = c
-			return nil
-		}); err != nil {
+		path := filepath.Join(root, c.File)
+		parsed, err := parseQueryParamContract(path)
+		if err != nil {
 			return nil, err
 		}
+		out[parsed.ID] = parsed
 	}
 	return out, nil
 }
@@ -164,19 +152,7 @@ func collectRouteQueryBindings(root string) ([]routeQueryBinding, map[string]map
 }
 
 func findQueryParamScanFiles(root string) ([]string, error) {
-	var files []string
-	for _, dir := range []string{filepath.Join(root, "cells"), filepath.Join(root, "examples")} {
-		if _, err := os.Stat(dir); err != nil {
-			continue
-		}
-		found, err := findProductionGoFilesInDir(dir)
-		if err != nil {
-			return nil, err
-		}
-		files = append(files, found...)
-	}
-	sort.Strings(files)
-	return files, nil
+	return findCellProductionGoFiles(root)
 }
 
 func scanQueryParamFile(root, path string) ([]routeQueryBinding, map[string]map[string]struct{}, error) {
@@ -527,13 +503,4 @@ func uniqueStrings(in []string) []string {
 		out = append(out, value)
 	}
 	return out
-}
-
-func shouldSkipQueryParamDir(name string) bool {
-	switch name {
-	case ".git", ".claude", "vendor", "worktrees", "generated", "testdata":
-		return true
-	default:
-		return false
-	}
 }

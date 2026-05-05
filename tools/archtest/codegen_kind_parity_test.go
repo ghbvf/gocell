@@ -28,10 +28,12 @@
 package archtest
 
 import (
-	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"os"
 	"path/filepath"
-	"strings"
+	"strconv"
 	"testing"
 )
 
@@ -123,44 +125,95 @@ func TestSPEC_GEN_VALUE_PARITY_01(t *testing.T) {
 
 			src := string(content)
 
-			// Verify ID value: look for the literal   ID:        "<contractID>",
-			wantID := fmt.Sprintf("%q", contract.ID)
-			wantIDLine := "ID:        " + wantID
-			if !specGenContainsIDLine(src, wantIDLine) {
+			id, topic, ok := extractSpecGenIDTopic(src)
+			if !ok {
 				t.Errorf(
-					"SPEC-GEN-VALUE-PARITY-01: contract %q: spec_gen.go ID field does not match;"+
-						" expected line containing %q; regenerate with `gocell generate contract %s`",
-					contract.ID, wantIDLine, contract.ID,
+					"SPEC-GEN-VALUE-PARITY-01: contract %q: cannot extract ContractSpec literal "+
+						"from spec_gen.go at %s; regenerate with `gocell generate contract %s`",
+					contract.ID, specPath, contract.ID,
+				)
+				return
+			}
+			if id != contract.ID {
+				t.Errorf(
+					"SPEC-GEN-VALUE-PARITY-01: contract %q: spec_gen.go ID field is %q;"+
+						" expected %q; regenerate with `gocell generate contract %s`",
+					contract.ID, id, contract.ID, contract.ID,
 				)
 			}
-
-			// Verify Topic value: topic == contractID (Topic == ContractID after PR-CODEGEN-FULL-MIGRATION-FU).
-			wantTopic := contract.ID
-			wantTopicLine := "Topic:     " + fmt.Sprintf("%q", wantTopic)
-			if !specGenContainsIDLine(src, wantTopicLine) {
+			if topic != contract.ID {
 				t.Errorf(
-					"SPEC-GEN-VALUE-PARITY-01: contract %q: spec_gen.go Topic field does not match;"+
-						" expected line containing %q; regenerate with `gocell generate contract %s`",
-					contract.ID, wantTopicLine, contract.ID,
+					"SPEC-GEN-VALUE-PARITY-01: contract %q: spec_gen.go Topic field is %q;"+
+						" expected %q; regenerate with `gocell generate contract %s`",
+					contract.ID, topic, contract.ID, contract.ID,
 				)
 			}
 		})
 	}
 }
 
-// specGenContainsIDLine reports whether src contains the expected ID/Topic
-// line shape. Wave 1 RED implementation uses strings.Contains and
-// FALSE-POSITIVES on the same line shape appearing in a comment block. Wave 2
-// GREEN replaces with AST extraction of the real *ast.CompositeLit value.
-func specGenContainsIDLine(src, wantLine string) bool {
-	return strings.Contains(src, wantLine)
+// extractSpecGenIDTopic parses src as Go source and returns the ID and Topic
+// field values from the first wrapper.ContractSpec composite literal. The
+// fields are extracted from *ast.CompositeLit / *ast.KeyValueExpr nodes —
+// comment / string-constant occurrences of ID/Topic literals do not count.
+func extractSpecGenIDTopic(src string) (id, topic string, ok bool) {
+	fset := token.NewFileSet()
+	f, err := parser.ParseFile(fset, "spec_gen.go", src, parser.SkipObjectResolution)
+	if err != nil {
+		return "", "", false
+	}
+	var foundID, foundTopic string
+	found := false
+	ast.Inspect(f, func(n ast.Node) bool {
+		if found {
+			return false
+		}
+		cl, isCL := n.(*ast.CompositeLit)
+		if !isCL {
+			return true
+		}
+		sel, isSel := cl.Type.(*ast.SelectorExpr)
+		if !isSel || sel.Sel.Name != "ContractSpec" {
+			return true
+		}
+		for _, elt := range cl.Elts {
+			kv, isKV := elt.(*ast.KeyValueExpr)
+			if !isKV {
+				continue
+			}
+			key, isIdent := kv.Key.(*ast.Ident)
+			if !isIdent {
+				continue
+			}
+			val, isLit := kv.Value.(*ast.BasicLit)
+			if !isLit || val.Kind != token.STRING {
+				continue
+			}
+			unq, uqErr := strconv.Unquote(val.Value)
+			if uqErr != nil {
+				continue
+			}
+			switch key.Name {
+			case "ID":
+				foundID = unq
+			case "Topic":
+				foundTopic = unq
+			}
+		}
+		found = true
+		return false
+	})
+	if !found {
+		return "", "", false
+	}
+	return foundID, foundTopic, true
 }
 
 // TestSPEC_GEN_VALUE_PARITY_01_NegativeFixture_WrongIDInStruct asserts the
-// scanner detects when the actual *ast.CompositeLit ID/Topic values are wrong
-// even if the EXPECTED line text appears verbatim in a documentation
-// comment. Legacy strings.Contains FALSE-POSITIVES via the comment; AST
-// GREEN refactor must extract from the struct literal.
+// scanner extracts the actual *ast.CompositeLit ID/Topic values rather than
+// matching free-form text. The fixture has the expected ID/Topic in a
+// comment but wrong values in the struct literal — legacy strings.Contains
+// FALSE-POSITIVES via the comment; AST extract returns the wrong values.
 func TestSPEC_GEN_VALUE_PARITY_01_NegativeFixture_WrongIDInStruct(t *testing.T) {
 	t.Parallel()
 	archDir := findArchTestDir(t)
@@ -169,19 +222,18 @@ func TestSPEC_GEN_VALUE_PARITY_01_NegativeFixture_WrongIDInStruct(t *testing.T) 
 	if err != nil {
 		t.Fatalf("read fixture: %v", err)
 	}
-	src := string(body)
-
-	// Expected (correct) ID line — appears in fixture's documentation comment.
-	wantIDLine := `ID:        "event.fake.notify.v1"`
-	if specGenContainsIDLine(src, wantIDLine) {
-		t.Errorf("SPEC-GEN-VALUE-PARITY-01 negative fixture wrong_id: legacy " +
-			"strings.Contains FALSE-POSITIVES via comment; AST GREEN refactor required " +
-			"(extract *ast.CompositeLit ID field, compare unquoted value)")
+	id, topic, ok := extractSpecGenIDTopic(string(body))
+	if !ok {
+		t.Fatalf("extractSpecGenIDTopic: ContractSpec literal not found in fixture %s", fixturePath)
 	}
-	wantTopicLine := `Topic:     "event.fake.notify.v1"`
-	if specGenContainsIDLine(src, wantTopicLine) {
-		t.Errorf("SPEC-GEN-VALUE-PARITY-01 negative fixture wrong_id: legacy " +
-			"strings.Contains FALSE-POSITIVES on Topic line via comment; AST GREEN " +
-			"refactor required")
+	const wrongID = "event.fake.WRONG.v1"
+	if id != wrongID {
+		t.Errorf("SPEC-GEN-VALUE-PARITY-01 negative fixture wrong_id: extracted ID = %q; "+
+			"want fixture's wrong-on-purpose value %q (AST scan must read CompositeLit, "+
+			"not comment text)", id, wrongID)
+	}
+	if topic != wrongID {
+		t.Errorf("SPEC-GEN-VALUE-PARITY-01 negative fixture wrong_id: extracted Topic = %q; "+
+			"want fixture's wrong-on-purpose value %q", topic, wrongID)
 	}
 }

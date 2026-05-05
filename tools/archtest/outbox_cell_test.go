@@ -13,6 +13,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/ghbvf/gocell/kernel/metadata"
 )
 
 const (
@@ -92,33 +94,47 @@ func checkCellOutboxOptionRules(t *testing.T, root string) []outboxCellViolation
 	return violations
 }
 
-// findCellFiles walks cells/**/cell.go (production cells only — excludes
-// cells/**/internal/, cells/**/slices/**/cell.go if any, vendor, .git, and
-// *_test.go shadows).
+// findCellFiles enumerates cell.go files for every cell declared in the
+// project's metadata (covering both top-level cells/ and examples/*/cells/).
+// Excludes slices/, internal/, vendor, worktrees, testdata, .git.
 func findCellFiles(root string) ([]string, error) {
+	project, err := metadata.NewParser(root).Parse()
+	if err != nil {
+		return nil, err
+	}
+
 	var files []string
-	err := filepath.WalkDir(filepath.Join(root, "cells"), func(path string, d os.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if d.IsDir() {
-			switch d.Name() {
-			case "vendor", "worktrees", "testdata", ".git", "slices", "internal":
-				return filepath.SkipDir
+	for _, c := range project.Cells {
+		cellDir := filepath.Join(root, filepath.Dir(c.File))
+		walkErr := filepath.WalkDir(cellDir, func(path string, d os.DirEntry, werr error) error {
+			if werr != nil {
+				return werr
+			}
+			if d.IsDir() {
+				switch d.Name() {
+				case "vendor", "worktrees", "testdata", ".git", "slices", "internal":
+					return filepath.SkipDir
+				}
+				return nil
+			}
+			if isCellFile(root, path) {
+				files = append(files, path)
 			}
 			return nil
+		})
+		if walkErr != nil {
+			return nil, walkErr
 		}
-		if isCellFile(root, path) {
-			files = append(files, path)
-		}
-		return nil
-	})
+	}
 	sort.Strings(files)
-	return files, err
+	return files, nil
 }
 
 // isCellFile matches cells/<cellname>/cell.go exactly (not cell_init.go,
 // cell_routes.go, cell_providers.go, or *_test.go).
+// Scope: platform cells only (top-level cells/ directory).
+// Example cells under examples/ are intentionally excluded — this archtest
+// targets production platform cell packages, not example/demo cells.
 func isCellFile(root, path string) bool {
 	rel, err := filepath.Rel(root, path)
 	if err != nil {

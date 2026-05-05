@@ -477,13 +477,38 @@ func testSEC03AdapterTLSValidation(t *testing.T, root string) {
 			"and call secutil.ValidateTLSEndpoint to validate remote endpoint TLS")
 }
 
-// secutilCallsValidateTLSEndpoint reports whether src contains a real call to
-// secutil.ValidateTLSEndpoint. Wave 1 RED implementation uses strings.Contains
-// and FALSE-POSITIVES on comment / string-literal occurrences. Wave 2 GREEN
-// replaces with AST scan over *ast.CallExpr with selector
-// secutil.ValidateTLSEndpoint.
+// secutilCallsValidateTLSEndpoint reports whether src contains an actual
+// *ast.CallExpr to secutil.ValidateTLSEndpoint. Comment / string-literal
+// occurrences of the bytes do not count.
 func secutilCallsValidateTLSEndpoint(src string) bool {
-	return strings.Contains(src, "secutil.ValidateTLSEndpoint(")
+	fset := token.NewFileSet()
+	f, err := parser.ParseFile(fset, "src.go", src, parser.SkipObjectResolution)
+	if err != nil {
+		return false
+	}
+	found := false
+	ast.Inspect(f, func(n ast.Node) bool {
+		if found {
+			return false
+		}
+		ce, ok := n.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		sel, ok := ce.Fun.(*ast.SelectorExpr)
+		if !ok {
+			return true
+		}
+		x, ok := sel.X.(*ast.Ident)
+		if !ok {
+			return true
+		}
+		if x.Name == "secutil" && sel.Sel.Name == "ValidateTLSEndpoint" {
+			found = true
+		}
+		return true
+	})
+	return found
 }
 
 // TestSecurityDefaultsSEC03_NegativeFixture_StringLiteralOnly asserts the

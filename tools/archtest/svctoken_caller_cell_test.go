@@ -27,6 +27,8 @@ import (
 	"sort"
 	"strings"
 	"testing"
+
+	"github.com/ghbvf/gocell/kernel/metadata"
 )
 
 // ruleSvctokenCallerCellRequired01 is the archtest rule identifier; not a credential.
@@ -50,35 +52,43 @@ func TestSVCTOKEN_CALLER_CELL_REQUIRED_01(t *testing.T) {
 	root := findModuleRoot(t)
 	knownCells := discoverKnownCells(t, root)
 
-	searchDirs := []string{
+	// Non-cell roots — walked directly (not cell-managed).
+	nonCellDirs := []string{
 		filepath.Join(root, "runtime"),
-		filepath.Join(root, "cells"),
 		filepath.Join(root, "cmd"),
-		filepath.Join(root, "examples"),
 		filepath.Join(root, "tests"),
 	}
-
-	var violations []string
-
-	for _, dir := range searchDirs {
+	var allFiles []string
+	for _, dir := range nonCellDirs {
 		// Include _test.go files too — test helpers can also use GenerateServiceToken.
-		allFiles, err := findAllGoFilesInDir(dir)
+		ff, err := findAllGoFilesInDir(dir)
 		if os.IsNotExist(err) {
 			continue
 		}
 		if err != nil {
 			t.Fatalf("walking %s: %v", dir, err)
 		}
-		for _, f := range allFiles {
-			rel, _ := filepath.Rel(root, f)
-			rel = filepath.ToSlash(rel)
-			hits, scanErr := scanGenerateServiceTokenCallSites(f, rel, knownCells)
-			if scanErr != nil {
-				t.Logf("scan error %s: %v", rel, scanErr)
-				continue
-			}
-			violations = append(violations, hits...)
+		allFiles = append(allFiles, ff...)
+	}
+	// Cell roots via metadata.NewParser, including _test.go (this gate also
+	// wants test helpers). Walk each cell dir directly to pick up both
+	// production and *_test.go files.
+	cellGoFiles, err := walkCellDirs(root)
+	if err != nil {
+		t.Fatalf("walkCellDirs: %v", err)
+	}
+	allFiles = append(allFiles, cellGoFiles...)
+
+	var violations []string
+	for _, f := range allFiles {
+		rel, _ := filepath.Rel(root, f)
+		rel = filepath.ToSlash(rel)
+		hits, scanErr := scanGenerateServiceTokenCallSites(f, rel, knownCells)
+		if scanErr != nil {
+			t.Logf("scan error %s: %v", rel, scanErr)
+			continue
 		}
+		violations = append(violations, hits...)
 	}
 
 	sort.Strings(violations)
@@ -94,71 +104,63 @@ func TestSVCTOKEN_CALLER_CELL_REQUIRED_01(t *testing.T) {
 	}
 }
 
-// discoverKnownCells returns the set of valid caller cell IDs by listing
-// subdirectories of cells/ (first-level only: accesscore, auditcore, etc.),
-// scanning examples/{*}/cells/*/cell.yaml for id fields, and reading
-// actor IDs from actors.yaml.
+// discoverKnownCells returns the set of valid caller cell IDs from
+// ProjectMeta.Cells (covers both top-level and examples cells via
+// metadata path-pattern matching) plus actor IDs from actors.yaml.
 func discoverKnownCells(t *testing.T, root string) map[string]bool {
 	t.Helper()
 	known := map[string]bool{}
 
-	// Collect platform cells from cells/ directory names.
-	cellsDir := filepath.Join(root, "cells")
-	entries, err := os.ReadDir(cellsDir)
-	if err == nil {
-		for _, e := range entries {
-			if e.IsDir() && cellIDRegex.MatchString(e.Name()) {
-				known[e.Name()] = true
-			}
+	project, err := metadata.NewParser(root).Parse()
+	if err != nil {
+		t.Fatalf("metadata.NewParser: %v", err)
+	}
+	for id := range project.Cells {
+		if cellIDRegex.MatchString(id) {
+			known[id] = true
 		}
 	}
-
-	// Collect example cell IDs from examples/{*}/cells/*/cell.yaml.
-	examplesDir := filepath.Join(root, "examples")
-	_ = filepath.WalkDir(examplesDir, func(path string, d os.DirEntry, walkErr error) error {
-		if walkErr != nil {
-			return walkErr
-		}
-		if d.IsDir() {
-			return nil
-		}
-		if d.Name() != "cell.yaml" {
-			return nil
-		}
-		data, readErr := os.ReadFile(filepath.Clean(path))
-		if readErr != nil {
-			return nil //nolint:nilerr // soft-skip on unreadable cell.yaml: archtest collects as many cells as possible
-		}
-		for _, line := range strings.Split(string(data), "\n") {
-			line = strings.TrimSpace(line)
-			if strings.HasPrefix(line, "id:") {
-				id := strings.TrimSpace(strings.TrimPrefix(line, "id:"))
-				id = strings.Trim(id, "\"'")
-				if cellIDRegex.MatchString(id) {
-					known[id] = true
-				}
-			}
-		}
-		return nil
-	})
-
-	// Also allow actor IDs from actors.yaml (simple grep for "id:" lines).
-	actorsFile := filepath.Join(root, "actors.yaml")
-	data, err := os.ReadFile(actorsFile) //nolint:gosec // G304 false positive: actorsFile path is constant within repo
-	if err == nil {
-		for _, line := range strings.Split(string(data), "\n") {
-			line = strings.TrimSpace(line)
-			if strings.HasPrefix(line, "id:") {
-				id := strings.TrimSpace(strings.TrimPrefix(line, "id:"))
-				id = strings.Trim(id, "\"'")
-				if cellIDRegex.MatchString(id) {
-					known[id] = true
-				}
-			}
+	for _, a := range project.Actors {
+		if cellIDRegex.MatchString(a.ID) {
+			known[a.ID] = true
 		}
 	}
-
 	return known
+}
+
+// walkCellDirs returns all .go files (including *_test.go) under every cell
+// directory registered in ProjectMeta.Cells. Used by gates that need to
+// scan both production and test helpers.
+func walkCellDirs(root string) ([]string, error) {
+	project, err := metadata.NewParser(root).Parse()
+	if err != nil {
+		return nil, err
+	}
+	var files []string
+	for _, c := range project.Cells {
+		cellDir := filepath.Join(root, filepath.Dir(c.File))
+		walkErr := filepath.WalkDir(cellDir, func(path string, d os.DirEntry, werr error) error {
+			if werr != nil {
+				return werr
+			}
+			if d.IsDir() {
+				switch d.Name() {
+				case "vendor", "worktrees", "testdata", "generated", ".git":
+					return filepath.SkipDir
+				}
+				return nil
+			}
+			if strings.HasSuffix(path, ".go") {
+				files = append(files, path)
+			}
+			return nil
+		})
+		if walkErr != nil {
+			return nil, walkErr
+		}
+	}
+	sort.Strings(files)
+	return files, nil
 }
 
 // scanGenerateServiceTokenCallSites parses a .go file and returns violation

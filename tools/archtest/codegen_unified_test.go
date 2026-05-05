@@ -46,131 +46,96 @@ import (
 // drifted from the design.
 var _ func(string, *metadata.ProjectMeta) (map[string]markergen.WireBundle, error) = markergen.Merge
 
-// findAllCellFiles walks both cells/ and examples/*/cells/ collecting
-// production cell.go files (cells/<name>/cell.go and
-// examples/<project>/cells/<name>/cell.go). Excludes _test.go, vendor,
-// worktrees, testdata, slices, and internal subdirectories.
-func findAllCellFiles(root string) []string {
-	var files []string
-	roots := []string{
-		filepath.Join(root, "cells"),
-		filepath.Join(root, "examples"),
+// projectFromMetadata parses ProjectMeta from root for the helpers below.
+// Returns nil on parse error so callers can fall back to empty results without
+// failing the test (callers are best-effort enumerators).
+func projectFromMetadata(root string) *metadata.ProjectMeta {
+	p, err := metadata.NewParser(root).Parse()
+	if err != nil {
+		return nil
 	}
-	for _, scanRoot := range roots {
-		_ = filepath.WalkDir(scanRoot, func(path string, d os.DirEntry, err error) error {
-			if err != nil {
-				return nil //nolint:nilerr // walk continues past unreadable entries by design
-			}
-			if d.IsDir() {
-				switch d.Name() {
-				case "vendor", "worktrees", "testdata", ".git", "slices", "internal", "node_modules":
-					return filepath.SkipDir
-				}
-				return nil
-			}
-			if d.Name() == "cell.go" {
-				files = append(files, path)
-			}
-			return nil
-		})
+	return p
+}
+
+// findAllCellFiles enumerates cell.go for every cell registered in
+// ProjectMeta.Cells (covers both top-level cells/ and examples/*/cells/ via
+// path-pattern matching in kernel/metadata/parser.go).
+func findAllCellFiles(root string) []string {
+	project := projectFromMetadata(root)
+	if project == nil {
+		return nil
+	}
+	var files []string
+	for _, c := range project.Cells {
+		path := filepath.Join(root, filepath.Dir(c.File), "cell.go")
+		if _, err := os.Stat(path); err == nil {
+			files = append(files, path)
+		}
 	}
 	sort.Strings(files)
 	return files
 }
 
-// findAllCellInitFiles finds cells/**/cell.go, cells/**/cell_init.go, and
-// the same under examples/*/cells/. Used by MARKER-MISSING-FOR-WIRE-CALL-01
-// to scan for forbidden reg.RouteGroup / reg.Subscribe calls.
+// findAllCellInitFiles enumerates cell.go / cell_init.go / cell_routes.go /
+// cell_providers.go for every cell registered in ProjectMeta.Cells. Excludes
+// cell_gen.go (generated owns wire calls) and *_test.go.
 func findAllCellInitFiles(root string) []string {
-	var files []string
-	roots := []string{
-		filepath.Join(root, "cells"),
-		filepath.Join(root, "examples"),
+	project := projectFromMetadata(root)
+	if project == nil {
+		return nil
 	}
-	for _, scanRoot := range roots {
-		_ = filepath.WalkDir(scanRoot, func(path string, d os.DirEntry, err error) error {
-			if err != nil {
-				return nil //nolint:nilerr // walk continues past unreadable entries by design
+	var files []string
+	for _, c := range project.Cells {
+		cellDir := filepath.Join(root, filepath.Dir(c.File))
+		entries, err := os.ReadDir(cellDir)
+		if err != nil {
+			continue
+		}
+		for _, e := range entries {
+			if e.IsDir() {
+				continue
 			}
-			if d.IsDir() {
-				switch d.Name() {
-				case "vendor", "worktrees", "testdata", ".git", "slices", "internal", "node_modules":
-					return filepath.SkipDir
-				}
-				return nil
-			}
-			name := d.Name()
+			name := e.Name()
 			if !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
-				return nil
+				continue
 			}
 			if name == "cell_gen.go" {
-				return nil // generated owns wire calls
+				continue
 			}
-			// Match cell.go, cell_init.go, cell_routes.go, cell_providers.go.
 			if name == "cell.go" || strings.HasPrefix(name, "cell_") {
-				files = append(files, path)
+				files = append(files, filepath.Join(cellDir, name))
 			}
-			return nil
-		})
+		}
 	}
 	sort.Strings(files)
 	return files
 }
 
-// findAllCellYAMLs walks cells/**/cell.yaml and examples/*/cells/**/cell.yaml.
+// findAllCellYAMLs enumerates cell.yaml for every cell registered in
+// ProjectMeta.Cells.
 func findAllCellYAMLs(root string) []string {
-	var files []string
-	roots := []string{
-		filepath.Join(root, "cells"),
-		filepath.Join(root, "examples"),
+	project := projectFromMetadata(root)
+	if project == nil {
+		return nil
 	}
-	for _, scanRoot := range roots {
-		_ = filepath.WalkDir(scanRoot, func(path string, d os.DirEntry, err error) error {
-			if err != nil {
-				return nil //nolint:nilerr // best-effort walk
-			}
-			if d.IsDir() {
-				switch d.Name() {
-				case "vendor", "worktrees", "testdata", ".git", "node_modules":
-					return filepath.SkipDir
-				}
-				return nil
-			}
-			if d.Name() == "cell.yaml" {
-				files = append(files, path)
-			}
-			return nil
-		})
+	var files []string
+	for _, c := range project.Cells {
+		files = append(files, filepath.Join(root, c.File))
 	}
 	sort.Strings(files)
 	return files
 }
 
-// findAllSliceYAMLs walks cells/**/slices/*/slice.yaml and the examples
-// equivalent.
+// findAllSliceYAMLs enumerates slice.yaml for every slice registered in
+// ProjectMeta.Slices.
 func findAllSliceYAMLs(root string) []string {
-	var files []string
-	roots := []string{
-		filepath.Join(root, "cells"),
-		filepath.Join(root, "examples"),
+	project := projectFromMetadata(root)
+	if project == nil {
+		return nil
 	}
-	for _, scanRoot := range roots {
-		_ = filepath.WalkDir(scanRoot, func(path string, d os.DirEntry, err error) error {
-			if err != nil {
-				return nil //nolint:nilerr // best-effort walk
-			}
-			if d.IsDir() {
-				switch d.Name() {
-				case "vendor", "worktrees", "testdata", ".git", "node_modules":
-					return filepath.SkipDir
-				}
-				return nil
-			}
-			if d.Name() == "slice.yaml" {
-				files = append(files, path)
-			}
-			return nil
-		})
+	var files []string
+	for _, s := range project.Slices {
+		files = append(files, filepath.Join(root, s.File))
 	}
 	sort.Strings(files)
 	return files
@@ -436,12 +401,25 @@ func TestMarkerWireSingleSource01(t *testing.T) {
 }
 
 // cellGoHasListenerMarker reports whether cell.go declares a real
-// `// +cell:listener` annotation as a top-level comment. Wave 1 RED uses
-// bytes.Contains and FALSE-PASSes when the bytes appear inside a string
-// literal. Wave 2 GREEN replaces with parser.ParseFile(ParseComments) over
-// f.Comments.
+// `// +cell:listener:` annotation as an *ast.Comment node. Bytes inside
+// string literals or other AST positions do not count.
+//
+// ref: kubernetes-sigs/controller-tools pkg/markers/parse.go (markers parsed
+// from comment groups, not from source bytes).
 func cellGoHasListenerMarker(content []byte) bool {
-	return bytes.Contains(content, []byte("// +cell:listener:"))
+	fset := token.NewFileSet()
+	f, err := parser.ParseFile(fset, "cell.go", content, parser.ParseComments)
+	if err != nil {
+		return false
+	}
+	for _, cg := range f.Comments {
+		for _, c := range cg.List {
+			if strings.HasPrefix(strings.TrimSpace(c.Text), "// +cell:listener:") {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // TestMarkerWireSingleSource01_NegativeFixture_StringLiteralOnly asserts

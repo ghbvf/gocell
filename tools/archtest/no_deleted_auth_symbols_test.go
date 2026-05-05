@@ -59,38 +59,44 @@ func TestNO_DELETED_AUTH_SYMBOLS_01(t *testing.T) {
 
 	root := findModuleRoot(t)
 
-	searchDirs := []string{
+	// Non-cell roots — walked directly (not cell-managed).
+	nonCellDirs := []string{
 		filepath.Join(root, "runtime"),
-		filepath.Join(root, "cells"),
 		filepath.Join(root, "cmd"),
 		filepath.Join(root, "kernel"),
 		filepath.Join(root, "adapters"),
-		filepath.Join(root, "examples"),
 		filepath.Join(root, "tests"),
 	}
-
-	var violations []string
-
-	for _, dir := range searchDirs {
-		allFiles, err := findAllGoFilesInDir(dir)
+	var allFiles []string
+	for _, dir := range nonCellDirs {
+		ff, err := findAllGoFilesInDir(dir)
 		if err != nil {
 			continue
 		}
-		for _, f := range allFiles {
-			rel, _ := filepath.Rel(root, f)
-			rel = filepath.ToSlash(rel)
+		allFiles = append(allFiles, ff...)
+	}
+	// Cell roots — via metadata.NewParser.
+	cellFiles, err := findCellProductionGoFiles(root)
+	if err != nil {
+		t.Fatalf("metadata.NewParser: %v", err)
+	}
+	allFiles = append(allFiles, cellFiles...)
 
-			if deletedAuthSymbolsAllowlist[rel] {
-				continue
-			}
+	var violations []string
+	for _, f := range allFiles {
+		rel, _ := filepath.Rel(root, f)
+		rel = filepath.ToSlash(rel)
 
-			hits, scanErr := scanDeletedAuthSymbols(f, rel)
-			if scanErr != nil {
-				t.Logf("scan error %s: %v", rel, scanErr)
-				continue
-			}
-			violations = append(violations, hits...)
+		if deletedAuthSymbolsAllowlist[rel] {
+			continue
 		}
+
+		hits, scanErr := scanDeletedAuthSymbols(f, rel)
+		if scanErr != nil {
+			t.Logf("scan error %s: %v", rel, scanErr)
+			continue
+		}
+		violations = append(violations, hits...)
 	}
 
 	sort.Strings(violations)
