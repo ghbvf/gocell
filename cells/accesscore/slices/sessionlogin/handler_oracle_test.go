@@ -1,7 +1,12 @@
-package login
+package sessionlogin_test
 
 // handler_oracle_test.go verifies that the login handler does NOT expose
 // password length constraints in error messages (length oracle prevention).
+//
+// This test was moved here from generated/contracts/http/auth/login/v1 to
+// satisfy the CODEGEN-CONTRACT-USER-OVERLAP-01 archtest (no hand-written
+// .go files under generated/contracts/). It exercises the generated handler
+// as a black box via the public package API.
 //
 // This test was written RED (before B4 fix) to lock the security requirement:
 // POST with a short password must return 400 but must NOT reveal "too short",
@@ -15,14 +20,16 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	logingen "github.com/ghbvf/gocell/generated/contracts/http/auth/login/v1"
 )
 
-// stubLoginService satisfies the Service interface for oracle tests.
-// It should never be called — the handler must reject invalid input before
-// calling the service.
+// stubLoginService satisfies the generated Service interface for oracle
+// tests. It should never be called — the handler must reject invalid input
+// before reaching service code.
 type stubLoginService struct{}
 
-func (s *stubLoginService) Login(_ context.Context, _ *Request) (*Response, error) {
+func (s *stubLoginService) Login(_ context.Context, _ *logingen.Request) (*logingen.Response, error) {
 	return nil, nil
 }
 
@@ -42,7 +49,7 @@ func oracleErrorBody(t *testing.T, body []byte) string {
 }
 
 func TestLoginHandler_ShortPassword_NoLengthOracle(t *testing.T) {
-	h := NewHandler(&stubLoginService{})
+	h := logingen.NewHandler(&stubLoginService{})
 
 	body := `{"username":"alice","password":"short"}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/access/sessions/login", strings.NewReader(body))
@@ -79,7 +86,7 @@ func TestLoginHandler_ShortPassword_NoLengthOracle(t *testing.T) {
 }
 
 func TestLoginHandler_LongPassword_NoLengthOracle(t *testing.T) {
-	h := NewHandler(&stubLoginService{})
+	h := logingen.NewHandler(&stubLoginService{})
 
 	// 200-char password exceeds the 72-char maxLength.
 	longPwd := strings.Repeat("a", 200)
