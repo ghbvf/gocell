@@ -6,8 +6,15 @@ import "time"
 // Used by RelayCollector.RecordPollCycle to avoid a long parameter list
 // and to support future extensions without breaking the interface.
 type PollCycleResult struct {
-	Published, Retried, Dead, Skipped  int
-	ClaimDur, PublishDur, WriteBackDur time.Duration
+	// Published / Retried / Dead are the canonical outcomes from the publish
+	// and writeback phases. Skipped covers `MarkPublished updated=false`
+	// (the entry was reclaimed mid-flight before MarkPublished could win).
+	// Lost covers the same condition for failure writebacks (Mark{Retry,Dead}
+	// updated=false): the lease lost mid-flight while the publisher was
+	// reporting an error, so the failure must NOT be counted as retried/dead
+	// — the new lease owner will report the canonical outcome.
+	Published, Retried, Dead, Skipped, Lost int
+	ClaimDur, PublishDur, WriteBackDur      time.Duration
 }
 
 // RelayCollector records outbox relay operational metrics.
@@ -31,7 +38,11 @@ type RelayCollector interface {
 	RecordBatchSize(size int)
 
 	// RecordReclaim records the number of stale entries reclaimed back to
-	// pending (or dead-lettered). Called once per reclaimStale invocation.
+	// pending (or dead-lettered). Called once per reclaimStale tick **only
+	// when count > 0** — idle reclaim sweeps are not observed (the metric
+	// is a recovery counter, not a tick frequency gauge). This contrasts
+	// with RecordBatchSize which is also called on size==0 cycles so
+	// dashboards can detect a totally idle relay.
 	RecordReclaim(count int64)
 
 	// RecordCleanup records the number of entries removed during periodic

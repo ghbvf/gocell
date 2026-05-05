@@ -117,8 +117,12 @@ func registerRelayMetrics(p metrics.Provider, cellID string, cfg ProviderRelayCo
 	}
 
 	relayed, err := p.CounterVec(metrics.CounterOpts{
-		Name:       "outbox_relayed_total",
-		Help:       "Total number of outbox entries processed by the relay, by outcome.",
+		Name: "outbox_relayed_total",
+		Help: "Total number of outbox entries processed by the relay, by outcome. " +
+			"outcome=published|retried|dead are canonical writebacks; " +
+			"outcome=skipped covers MarkPublished updated=false (success path lost lease) " +
+			"and outcome=lost covers Mark{Retry,Dead} updated=false (failure path lost lease) — " +
+			"the canonical outcome for both is owned by the reclaimer (see outbox_reclaimed_total).",
 		LabelNames: []string{"cell", "outcome"},
 	})
 	if err := register(relayed, err, "outbox_relayed_total"); err != nil {
@@ -190,6 +194,9 @@ func (c *providerRelayCollector) RecordPollCycle(r PollCycleResult) {
 	}
 	if r.Skipped > 0 {
 		c.relayed.With(metrics.Labels{"cell": c.cellID, "outcome": "skipped"}).Add(float64(r.Skipped))
+	}
+	if r.Lost > 0 {
+		c.relayed.With(metrics.Labels{"cell": c.cellID, "outcome": "lost"}).Add(float64(r.Lost))
 	}
 
 	c.pollDuration.With(metrics.Labels{"cell": c.cellID, "phase": "claim"}).Observe(r.ClaimDur.Seconds())

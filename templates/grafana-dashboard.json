@@ -66,7 +66,7 @@
     },
     {
       "title": "Outbox Relay Throughput",
-      "description": "Relay processing rates by outcome. Shows published, retried, and dead-lettered message rates.",
+      "description": "Relay processing rates by outcome — published / retried / dead are canonical writebacks; skipped covers MarkPublished updated=false (success path lost lease) and lost covers Mark{Retry,Dead} updated=false (failure path lost lease). The canonical outcome for skipped/lost rows is owned by the reclaimer (see Outbox Reclaim panel).",
       "type": "timeseries",
       "gridPos": {
         "h": 8,
@@ -94,6 +94,16 @@
           "expr": "rate(gocell_outbox_relayed_total{cell=\"${cell_id}\", outcome=\"dead\"}[5m])",
           "legendFormat": "dead (msg/s)",
           "refId": "C"
+        },
+        {
+          "expr": "rate(gocell_outbox_relayed_total{cell=\"${cell_id}\", outcome=\"skipped\"}[5m])",
+          "legendFormat": "skipped — success path lost lease (msg/s)",
+          "refId": "D"
+        },
+        {
+          "expr": "rate(gocell_outbox_relayed_total{cell=\"${cell_id}\", outcome=\"lost\"}[5m])",
+          "legendFormat": "lost — failure path lost lease (msg/s)",
+          "refId": "E"
         }
       ],
       "fieldConfig": {

@@ -715,8 +715,12 @@ func (sp *scanPackage) providerRelayCollectorEntries(call *ast.CallExpr, rel str
 		sp.entryFromOpts("counter", opts{
 			name:      "outbox_relayed_total",
 			namespace: sp.namespace,
-			help:      "Total number of outbox entries processed by the relay, by outcome.",
-			labels:    []string{"cell", "outcome"},
+			help: "Total number of outbox entries processed by the relay, by outcome. " +
+				"outcome=published|retried|dead are canonical writebacks; " +
+				"outcome=skipped covers MarkPublished updated=false (success path lost lease) " +
+				"and outcome=lost covers Mark{Retry,Dead} updated=false (failure path lost lease) — " +
+				"the canonical outcome for both is owned by the reclaimer (see outbox_reclaimed_total).",
+			labels: []string{"cell", "outcome"},
 		}, rel, call.Pos()),
 		sp.entryFromOpts("histogram", opts{
 			name:      "outbox_poll_duration_seconds",

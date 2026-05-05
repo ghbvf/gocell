@@ -265,11 +265,17 @@ func (s *FakeStore) MarkDead(_ context.Context, id, leaseID string, attempts int
 	return true, nil
 }
 
-// ReclaimStale transitions claiming rows whose claimed_at is older than claimTTL
-// back to pending or to dead (when attempts+1 >= maxAttempts).
-// Returns count of rows recovered across both destinations.
+// ReclaimStale transitions up to batchSize claiming rows whose claimed_at is
+// older than claimTTL back to pending or to dead (when attempts+1 >= maxAttempts).
+// Returns count of rows recovered across both destinations. Rows are visited
+// in stable map iteration order capped at batchSize so a backlog larger than
+// the cap is split across loop iterations on the caller side.
 func (s *FakeStore) ReclaimStale(
-	_ context.Context, claimTTL time.Duration, maxAttempts int, baseDelay, maxDelay time.Duration,
+	_ context.Context,
+	claimTTL time.Duration,
+	maxAttempts int,
+	baseDelay, maxDelay time.Duration,
+	batchSize int,
 ) (count int, err error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -278,6 +284,9 @@ func (s *FakeStore) ReclaimStale(
 	cutoff := now.Add(-claimTTL)
 
 	for _, r := range s.rows {
+		if count >= batchSize {
+			break
+		}
 		if r.status != statusClaiming {
 			continue
 		}

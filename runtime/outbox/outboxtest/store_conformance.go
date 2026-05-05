@@ -287,7 +287,7 @@ func conformFencingRace(t *testing.T, factory StoreFactory) {
 	// Reclaim sweep: TTL = -1h so the just-set claim is "expired" and the
 	// row goes back to pending with lease cleared. Zero baseDelay so the
 	// recovered row is immediately claimable.
-	count, err := store.ReclaimStale(ctx, -time.Hour, 99, 0, 0)
+	count, err := store.ReclaimStale(ctx, -time.Hour, 99, 0, 0, 1000)
 	if err != nil {
 		t.Fatalf(msgReclaimStale, err)
 	}
@@ -488,7 +488,7 @@ func conformReclaimStaleRecovers(t *testing.T, factory StoreFactory) {
 	// Negative TTL → every claiming entry is immediately stale.
 	// Zero baseDelay + maxDelay so the recovered entry gets next_retry_at = now()
 	// and is immediately claimable in the next ClaimPending call.
-	count, err := store.ReclaimStale(ctx, -time.Hour, 99, 0, 0)
+	count, err := store.ReclaimStale(ctx, -time.Hour, 99, 0, 0, 1000)
 	if err != nil {
 		t.Fatalf(msgReclaimStale, err)
 	}
@@ -522,7 +522,7 @@ func conformReclaimStaleFresh(t *testing.T, factory StoreFactory) {
 	}
 
 	// 1-hour TTL: claimed_at (set just above) is well within TTL.
-	count, err := store.ReclaimStale(ctx, time.Hour, 99, conformReclaimBaseDelay, conformReclaimMaxDelay)
+	count, err := store.ReclaimStale(ctx, time.Hour, 99, conformReclaimBaseDelay, conformReclaimMaxDelay, 1000)
 	if err != nil {
 		t.Fatalf(msgReclaimStale, err)
 	}
@@ -548,7 +548,7 @@ func conformReclaimStaleEscalates(t *testing.T, factory StoreFactory) {
 		t.Fatalf(msgClaimPendingWithLen, err, len(claimed))
 	}
 
-	count, err := store.ReclaimStale(ctx, -time.Hour, 5, conformReclaimBaseDelay, conformReclaimMaxDelay)
+	count, err := store.ReclaimStale(ctx, -time.Hour, 5, conformReclaimBaseDelay, conformReclaimMaxDelay, 1000)
 	if err != nil {
 		t.Fatalf(msgReclaimStale, err)
 	}

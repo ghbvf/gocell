@@ -695,7 +695,7 @@ func (s *failingStore) ClaimPending(ctx context.Context, batchSize int) ([]outbo
 }
 
 func (s *failingStore) ReclaimStale(
-	ctx context.Context, claimTTL time.Duration, maxAttempts int, base, maxDelay time.Duration,
+	ctx context.Context, claimTTL time.Duration, maxAttempts int, base, maxDelay time.Duration, batchSize int,
 ) (int, error) {
 	s.mu.Lock()
 	err := s.reclaimErr
@@ -703,7 +703,7 @@ func (s *failingStore) ReclaimStale(
 	if err != nil {
 		return 0, err
 	}
-	return s.FakeStore.ReclaimStale(ctx, claimTTL, maxAttempts, base, maxDelay)
+	return s.FakeStore.ReclaimStale(ctx, claimTTL, maxAttempts, base, maxDelay, batchSize)
 }
 
 func (s *failingStore) CleanupPublished(ctx context.Context, cutoff time.Time, batchSize int) (int, error) {
@@ -728,6 +728,93 @@ func (s *failingStore) OldestEligibleAt(ctx context.Context, status string) (tim
 		return time.Now().Add(-testtime.D1ms), true, nil
 	}
 	return s.FakeStore.OldestEligibleAt(ctx, status)
+}
+
+// leaseLostStore wraps FakeStore and forces MarkRetry / MarkDead to report
+// updated=false so handleFailedEntry exercises the "lease was lost" branch
+// (B2-A-05 / OUTBOX-RELAY-LOST-METRIC). The publisher is simultaneously made
+// to fail so the relay enters handleFailedEntry rather than MarkPublished.
+type leaseLostStore struct {
+	*outboxtest.FakeStore
+}
+
+func newLeaseLostStore() *leaseLostStore {
+	return &leaseLostStore{FakeStore: outboxtest.NewFakeStore()}
+}
+
+func (s *leaseLostStore) MarkRetry(
+	_ context.Context, _, _ string, _ int, _ time.Time, _ string,
+) (bool, error) {
+	return false, nil
+}
+
+func (s *leaseLostStore) MarkDead(
+	_ context.Context, _, _ string, _ int, _ string,
+) (bool, error) {
+	return false, nil
+}
+
+// TestRelay_HandleFailedEntry_LostStat verifies PR-V1-PG-OUTBOX-RELAY-HARDEN
+// B2-A-05 follow-up: when MarkRetry / MarkDead report updated=false (lease was
+// reclaimed mid-flight), handleFailedEntry MUST count the result into a new
+// "lost" stat and surface it through PollCycleResult.Lost so the
+// `outbox_relayed_total{outcome="lost"}` time-series fires. Without this, a
+// stale-lease writeback is invisible to operators despite stats divergence.
+func TestRelay_HandleFailedEntry_LostStat(t *testing.T) {
+	store := newLeaseLostStore()
+	pub := newFakePublisher().WithError(errors.New("transient publish failure"))
+
+	// Seed one pending entry so a single poll cycle:
+	//   1. ClaimPending mints a lease and returns the row,
+	//   2. fakePublisher fails the publish,
+	//   3. handleFailedEntry routes to MarkRetry,
+	//   4. our wrapper returns updated=false → must count as lost, not retried.
+	store.Seed(outbox.ClaimedEntry{
+		Entry: kout.Entry{
+			ID:        "00000000-0000-4000-8000-000000000001",
+			EventType: "test.event",
+			Topic:     "t",
+			Payload:   []byte(`{}`),
+		},
+	})
+
+	mc := &testCollector{}
+	cfg := fastCfg()
+	cfg.MaxAttempts = 5
+	cfg.Metrics = mc
+
+	relay := outbox.NewRelay(store, pub, cfg)
+	startCtx, startCancel := context.WithTimeout(t.Context(), testtime.D2s)
+	defer startCancel()
+	require.NoError(t, relay.Start(startCtx))
+	defer func() {
+		stopCtx, stopCancel := context.WithTimeout(context.Background(), testtime.D2s)
+		defer stopCancel()
+		_ = relay.Stop(stopCtx)
+	}()
+
+	require.Eventually(t, func() bool {
+		mc.mu.Lock()
+		defer mc.mu.Unlock()
+		for _, c := range mc.pollCycles {
+			if c.Lost >= 1 {
+				return true
+			}
+		}
+		return false
+	}, testtime.D1s, testtime.D1ms, "PollCycleResult.Lost must record stale-lease writeback")
+
+	mc.mu.Lock()
+	defer mc.mu.Unlock()
+	var lostTotal, retriedTotal, deadTotal int
+	for _, c := range mc.pollCycles {
+		lostTotal += c.Lost
+		retriedTotal += c.Retried
+		deadTotal += c.Dead
+	}
+	assert.GreaterOrEqual(t, lostTotal, 1, "Lost must record stale-lease writeback")
+	assert.Equal(t, 0, retriedTotal, "stale-lease writeback must NOT count as retried")
+	assert.Equal(t, 0, deadTotal, "stale-lease writeback must NOT count as dead")
 }
 
 func budgetCfg() outbox.RelayConfig {

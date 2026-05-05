@@ -163,7 +163,7 @@ func (s *minimalStore) MarkDead(_ context.Context, id, leaseID string, attempts 
 	return true, nil
 }
 
-func (s *minimalStore) ReclaimStale(_ context.Context, claimTTL time.Duration, maxAttempts int, _, _ time.Duration) (int, error) {
+func (s *minimalStore) ReclaimStale(_ context.Context, claimTTL time.Duration, maxAttempts int, _, _ time.Duration, _ int) (int, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	cutoff := time.Now().Add(-claimTTL)
@@ -360,6 +360,9 @@ func TestRelay_HandleFailedEntry_StaleLease_RetryNotCounted(t *testing.T) {
 	assert.Equal(t, 1, store.markRetryCalls, "MarkRetry must be invoked once")
 	assert.Zero(t, stats.retried, "stats.retried must NOT be incremented when lease was lost")
 	assert.Zero(t, stats.dead, "stats.dead must NOT be incremented")
+	assert.Equal(t, 1, stats.lost,
+		"stats.lost must record the lease-lost writeback so providerRelayCollector "+
+			"emits outbox_relayed_total{outcome=\"lost\"}")
 }
 
 // stalePublishStore returns (false, nil) from MarkPublished — the fencing
@@ -436,6 +439,164 @@ func TestRelay_HandleFailedEntry_StaleLease_DeadNotCounted(t *testing.T) {
 	assert.Equal(t, 1, store.markDeadCalls, "MarkDead must be invoked once")
 	assert.Zero(t, stats.dead, "stats.dead must NOT be incremented when lease was lost")
 	assert.Zero(t, stats.retried)
+	assert.Equal(t, 1, stats.lost,
+		"stats.lost must record the lease-lost dead writeback so providerRelayCollector "+
+			"emits outbox_relayed_total{outcome=\"lost\"}")
+}
+
+// reclaimStep stages one ReclaimStale return value. Either count (success)
+// or err (failure) is set; never both.
+type reclaimStep struct {
+	count int
+	err   error
+}
+
+// countingReclaimStore wraps minimalStore to count ReclaimStale invocations
+// and stage a return sequence. Each call pops the next reclaimStep; if the
+// slice is exhausted, returns (0, nil) (drained).
+type countingReclaimStore struct {
+	*minimalStore
+	mu        sync.Mutex
+	calls     int
+	plan      []reclaimStep
+	batchSeen []int // batchSize values observed per call
+}
+
+// newCountingReclaimStore stages a sequence of success counts. Use
+// newCountingReclaimStoreSteps for failure sequences.
+func newCountingReclaimStore(plan ...int) *countingReclaimStore {
+	steps := make([]reclaimStep, len(plan))
+	for i, n := range plan {
+		steps[i] = reclaimStep{count: n}
+	}
+	return &countingReclaimStore{minimalStore: newMinimalStore(), plan: steps}
+}
+
+func newCountingReclaimStoreSteps(plan ...reclaimStep) *countingReclaimStore {
+	return &countingReclaimStore{minimalStore: newMinimalStore(), plan: plan}
+}
+
+func (s *countingReclaimStore) ReclaimStale(
+	_ context.Context, _ time.Duration, _ int, _, _ time.Duration, batchSize int,
+) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.calls++
+	s.batchSeen = append(s.batchSeen, batchSize)
+	if len(s.plan) == 0 {
+		return 0, nil
+	}
+	next := s.plan[0]
+	s.plan = s.plan[1:]
+	return next.count, next.err
+}
+
+// reclaimRecordingCollector captures RecordReclaim calls so partial-success
+// emits can be asserted directly. The other RelayCollector methods are
+// inherited as no-ops from NoopRelayCollector.
+type reclaimRecordingCollector struct {
+	kout.NoopRelayCollector
+	mu     sync.Mutex
+	counts []int64
+}
+
+func (c *reclaimRecordingCollector) RecordReclaim(n int64) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.counts = append(c.counts, n)
+}
+
+func (c *reclaimRecordingCollector) snapshot() []int64 {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	out := make([]int64, len(c.counts))
+	copy(out, c.counts)
+	return out
+}
+
+// TestRelay_ReclaimStale_DrainsBacklogWithinSingleTick verifies B2-A-06: when
+// the store reports `count == batchSize` (i.e. there is more residual), the
+// reclaim helper loops until a sweep returns `< batchSize`, draining a backlog
+// of N×batchSize rows inside one tick instead of N ReclaimInterval ticks.
+func TestRelay_ReclaimStale_DrainsBacklogWithinSingleTick(t *testing.T) {
+	// Plan: 1000 (full), 1000 (full), 500 (residual) — should make 3 calls
+	// and stop on the third because 500 < 1000.
+	store := newCountingReclaimStore(1000, 1000, 500)
+	relay := &Relay{
+		store:   store,
+		cfg:     RelayConfig{ReclaimBatchSize: 1000}.WithDefaults(),
+		metrics: &safeRelayCollector{inner: kout.NoopRelayCollector{}},
+		clock:   clock.Real(),
+	}
+
+	require.NoError(t, relay.reclaimStale(context.Background()))
+
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	assert.Equal(t, 3, store.calls,
+		"reclaimStale must loop until ReclaimStale returns < batchSize "+
+			"(plan was 1000,1000,500 → 3 calls)")
+	for i, b := range store.batchSeen {
+		assert.Equal(t, 1000, b,
+			"call %d must request the configured ReclaimBatchSize=1000", i)
+	}
+}
+
+// TestRelay_ReclaimStale_PartialSuccessRecordsBeforeError verifies that when
+// the loop has already drained N rows and a later batch errors, the metric
+// emit still fires for those N rows. Without the deferred emit the tick
+// would silently undercount outbox_reclaimed_total during DB blips,
+// undermining the lost↔reclaim correlation operators rely on.
+func TestRelay_ReclaimStale_PartialSuccessRecordsBeforeError(t *testing.T) {
+	transientErr := fmt.Errorf("transient DB failure")
+	store := newCountingReclaimStoreSteps(
+		reclaimStep{count: 1000},       // first batch succeeds (full)
+		reclaimStep{err: transientErr}, // second batch fails
+	)
+	rc := &reclaimRecordingCollector{}
+	relay := &Relay{
+		store:   store,
+		cfg:     RelayConfig{ReclaimBatchSize: 1000}.WithDefaults(),
+		metrics: &safeRelayCollector{inner: rc},
+		clock:   clock.Real(),
+	}
+
+	err := relay.reclaimStale(context.Background())
+	require.ErrorIs(t, err, transientErr,
+		"the underlying error must still propagate so the reclaim loop's "+
+			"failure budget can trip /readyz unhealthy")
+
+	assert.Equal(t, []int64{1000}, rc.snapshot(),
+		"RecordReclaim must observe the 1000 rows the first batch already "+
+			"committed, even though a later batch errored")
+}
+
+// TestRelay_ReclaimStale_HitsMaxIterationsCap verifies the safety bound: a
+// pathological store that always returns count==batch must not spin
+// forever inside one tick. After reclaimMaxIterations sweeps the loop
+// breaks, leaving the residual for the next tick.
+func TestRelay_ReclaimStale_HitsMaxIterationsCap(t *testing.T) {
+	plan := make([]int, reclaimMaxIterations+8) // more than enough
+	for i := range plan {
+		plan[i] = 1000 // always full
+	}
+	store := newCountingReclaimStore(plan...)
+	relay := &Relay{
+		store:   store,
+		cfg:     RelayConfig{ReclaimBatchSize: 1000}.WithDefaults(),
+		metrics: &safeRelayCollector{inner: kout.NoopRelayCollector{}},
+		clock:   clock.Real(),
+	}
+
+	require.NoError(t, relay.reclaimStale(context.Background()))
+
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	assert.Equal(t, reclaimMaxIterations, store.calls,
+		"reclaimStale must stop at reclaimMaxIterations (%d) and let the next "+
+			"tick continue draining; otherwise a runaway store/Producer pair "+
+			"could starve the reclaim goroutine inside one tick.",
+		reclaimMaxIterations)
 }
 
 // ---------------------------------------------------------------------------
