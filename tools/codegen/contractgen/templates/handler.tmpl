@@ -3,6 +3,9 @@
 package {{.PackageName}}
 
 import (
+{{- if needsErrcode .}}
+	"log/slog"
+{{- end}}
 	"net/http"
 {{- if .RequestSchemaJSON}}
 	"bytes"
@@ -125,13 +128,17 @@ func (h *Handler) handle(w http.ResponseWriter, r *http.Request) {
 		v := r.PathValue("{{.Name}}")
 {{- if hasMinLength .MinLength}}
 		if len(v) < {{derefInt .MinLength}} {
-			httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "{{.Name}}: invalid"))
+			httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+				"validation: invalid request parameter",
+				errcode.WithDetails(slog.String("field", "{{.Name}}"), slog.String("reason", "invalid"))))
 			return
 		}
 {{- end}}
 {{- if hasMaxLength .MaxLength}}
 		if len(v) > {{derefInt .MaxLength}} {
-			httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "{{.Name}}: invalid"))
+			httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+				"validation: invalid request parameter",
+				errcode.WithDetails(slog.String("field", "{{.Name}}"), slog.String("reason", "invalid"))))
 			return
 		}
 {{- end}}
@@ -174,19 +181,25 @@ func (h *Handler) handle(w http.ResponseWriter, r *http.Request) {
 	req.{{.GoName}} = r.URL.Query().Get("{{.Name}}")
 {{- if .Required}}
 	if req.{{.GoName}} == "" {
-		httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "{{.Name}} is required"))
+		httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"validation: required field missing",
+			errcode.WithDetails(slog.String("field", "{{.Name}}"))))
 		return
 	}
 {{- end}}
 {{- if hasMinLength .MinLength}}
 	if req.{{.GoName}} != "" && len(req.{{.GoName}}) < {{derefInt .MinLength}} {
-		httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "{{.Name}}: invalid"))
+		httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"validation: invalid request parameter",
+			errcode.WithDetails(slog.String("field", "{{.Name}}"), slog.String("reason", "invalid"))))
 		return
 	}
 {{- end}}
 {{- if hasMaxLength .MaxLength}}
 	if len(req.{{.GoName}}) > {{derefInt .MaxLength}} {
-		httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "{{.Name}}: invalid"))
+		httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"validation: invalid request parameter",
+			errcode.WithDetails(slog.String("field", "{{.Name}}"), slog.String("reason", "invalid"))))
 		return
 	}
 {{- end}}
@@ -195,23 +208,31 @@ func (h *Handler) handle(w http.ResponseWriter, r *http.Request) {
 	{
 		raw{{.GoName}} := r.URL.Query().Get("{{.Name}}")
 		if raw{{.GoName}} == "" {
-			httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "{{.Name}} is required"))
+			httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+				"validation: required field missing",
+				errcode.WithDetails(slog.String("field", "{{.Name}}"))))
 			return
 		}
 		v, err := strconv.ParseInt(raw{{.GoName}}, 10, 64)
 		if err != nil {
-			httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "{{.Name}}: must be an integer"))
+			httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+				"validation: invalid request parameter",
+				errcode.WithDetails(slog.String("field", "{{.Name}}"), slog.String("reason", "must be an integer"))))
 			return
 		}
 {{- if hasMinimum .Minimum}}
 		if v < {{derefInt64 .Minimum}} {
-			httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "{{.Name}}: invalid"))
+			httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+				"validation: invalid request parameter",
+				errcode.WithDetails(slog.String("field", "{{.Name}}"), slog.String("reason", "invalid"))))
 			return
 		}
 {{- end}}
 {{- if hasMaximum .Maximum}}
 		if v > {{derefInt64 .Maximum}} {
-			httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "{{.Name}}: invalid"))
+			httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+				"validation: invalid request parameter",
+				errcode.WithDetails(slog.String("field", "{{.Name}}"), slog.String("reason", "invalid"))))
 			return
 		}
 {{- end}}
@@ -221,18 +242,24 @@ func (h *Handler) handle(w http.ResponseWriter, r *http.Request) {
 	if raw := r.URL.Query().Get("{{.Name}}"); raw != "" {
 		v, err := strconv.ParseInt(raw, 10, 64)
 		if err != nil {
-			httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "{{.Name}}: must be an integer"))
+			httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+				"validation: invalid request parameter",
+				errcode.WithDetails(slog.String("field", "{{.Name}}"), slog.String("reason", "must be an integer"))))
 			return
 		}
 {{- if hasMinimum .Minimum}}
 		if v < {{derefInt64 .Minimum}} {
-			httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "{{.Name}}: invalid"))
+			httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+				"validation: invalid request parameter",
+				errcode.WithDetails(slog.String("field", "{{.Name}}"), slog.String("reason", "invalid"))))
 			return
 		}
 {{- end}}
 {{- if hasMaximum .Maximum}}
 		if v > {{derefInt64 .Maximum}} {
-			httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "{{.Name}}: invalid"))
+			httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+				"validation: invalid request parameter",
+				errcode.WithDetails(slog.String("field", "{{.Name}}"), slog.String("reason", "invalid"))))
 			return
 		}
 {{- end}}
@@ -243,7 +270,9 @@ func (h *Handler) handle(w http.ResponseWriter, r *http.Request) {
 	if raw := r.URL.Query().Get("{{.Name}}"); raw != "" {
 		v, err := strconv.ParseFloat(raw, 64)
 		if err != nil {
-			httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "{{.Name}}: must be a number"))
+			httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+				"validation: invalid request parameter",
+				errcode.WithDetails(slog.String("field", "{{.Name}}"), slog.String("reason", "must be a number"))))
 			return
 		}
 		req.{{.GoName}} = v
@@ -252,7 +281,9 @@ func (h *Handler) handle(w http.ResponseWriter, r *http.Request) {
 	if raw := r.URL.Query().Get("{{.Name}}"); raw != "" {
 		v, err := strconv.ParseBool(raw)
 		if err != nil {
-			httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "{{.Name}}: must be a boolean"))
+			httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+				"validation: invalid request parameter",
+				errcode.WithDetails(slog.String("field", "{{.Name}}"), slog.String("reason", "must be a boolean"))))
 			return
 		}
 		req.{{.GoName}} = v

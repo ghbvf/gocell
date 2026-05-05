@@ -14,6 +14,7 @@ package redaction
 
 import (
 	"errors"
+	"fmt"
 	"regexp"
 	"unicode/utf8"
 )
@@ -166,4 +167,34 @@ func RedactError(err error) error {
 		return err
 	}
 	return errors.New(red)
+}
+
+// RedactPanic returns the panic value formatted as a string with the same
+// secret-masking applied as RedactError / RedactString. It is the canonical
+// helper for `slog` panic logging at recover points (HTTP middleware,
+// kernel/wrapper, /readyz probe wrappers): a raw panic payload may carry
+// arbitrary Go values whose default rendering can include credentials,
+// connection strings, or other secrets, so passing it through slog.Any
+// without sanitization leaks them into log backends.
+//
+// Behavior:
+//   - error          → RedactError(v).Error() (preserves wrapping if no
+//     substitution; fresh string otherwise)
+//   - string         → RedactString(v)
+//   - other          → fmt.Sprintf("%v", v) then RedactString
+//   - nil            → "<nil>" (defensive: panic(nil) is unusual but legal)
+//
+// ref: hashicorp/vault audit log_raw=false default; ADR
+// docs/architecture/202604242030-adr-kernel-wrapper-contract-observability.md §8.
+func RedactPanic(v any) string {
+	switch x := v.(type) {
+	case nil:
+		return "<nil>"
+	case error:
+		return RedactString(x.Error())
+	case string:
+		return RedactString(x)
+	default:
+		return RedactString(fmt.Sprintf("%v", v))
+	}
 }

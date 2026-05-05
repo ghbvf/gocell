@@ -4,6 +4,7 @@
 package list
 
 import (
+	"log/slog"
 	"net/http"
 	"strconv"
 
@@ -57,63 +58,89 @@ func (h *Handler) handle(w http.ResponseWriter, r *http.Request) {
 	req := &Request{}
 	req.ActorId = r.URL.Query().Get("actorId")
 	if req.ActorId != "" && len(req.ActorId) < 0 {
-		httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "actorId: invalid"))
+		httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"validation: invalid request parameter",
+			errcode.WithDetails(slog.String("field", "actorId"), slog.String("reason", "invalid"))))
 		return
 	}
 	if len(req.ActorId) > 256 {
-		httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "actorId: invalid"))
+		httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"validation: invalid request parameter",
+			errcode.WithDetails(slog.String("field", "actorId"), slog.String("reason", "invalid"))))
 		return
 	}
 	req.Cursor = r.URL.Query().Get("cursor")
 	if req.Cursor != "" && len(req.Cursor) < 0 {
-		httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "cursor: invalid"))
+		httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"validation: invalid request parameter",
+			errcode.WithDetails(slog.String("field", "cursor"), slog.String("reason", "invalid"))))
 		return
 	}
 	if len(req.Cursor) > 4096 {
-		httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "cursor: invalid"))
+		httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"validation: invalid request parameter",
+			errcode.WithDetails(slog.String("field", "cursor"), slog.String("reason", "invalid"))))
 		return
 	}
 	req.EventType = r.URL.Query().Get("eventType")
 	if req.EventType != "" && len(req.EventType) < 0 {
-		httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "eventType: invalid"))
+		httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"validation: invalid request parameter",
+			errcode.WithDetails(slog.String("field", "eventType"), slog.String("reason", "invalid"))))
 		return
 	}
 	if len(req.EventType) > 256 {
-		httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "eventType: invalid"))
+		httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"validation: invalid request parameter",
+			errcode.WithDetails(slog.String("field", "eventType"), slog.String("reason", "invalid"))))
 		return
 	}
 	req.From = r.URL.Query().Get("from")
 	if req.From != "" && len(req.From) < 0 {
-		httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "from: invalid"))
+		httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"validation: invalid request parameter",
+			errcode.WithDetails(slog.String("field", "from"), slog.String("reason", "invalid"))))
 		return
 	}
 	if len(req.From) > 64 {
-		httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "from: invalid"))
+		httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"validation: invalid request parameter",
+			errcode.WithDetails(slog.String("field", "from"), slog.String("reason", "invalid"))))
 		return
 	}
 	if raw := r.URL.Query().Get("limit"); raw != "" {
 		v, err := strconv.ParseInt(raw, 10, 64)
 		if err != nil {
-			httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "limit: must be an integer"))
+			httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+				"validation: invalid request parameter",
+				errcode.WithDetails(slog.String("field", "limit"), slog.String("reason", "must be an integer"))))
 			return
 		}
 		if v < 1 {
-			httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "limit: invalid"))
+			httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+				"validation: invalid request parameter",
+				errcode.WithDetails(slog.String("field", "limit"), slog.String("reason", "invalid"))))
 			return
 		}
 		if v > 500 {
-			httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "limit: invalid"))
+			httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+				"validation: invalid request parameter",
+				errcode.WithDetails(slog.String("field", "limit"), slog.String("reason", "invalid"))))
 			return
 		}
 		req.Limit = v
 	}
 	req.To = r.URL.Query().Get("to")
 	if req.To != "" && len(req.To) < 0 {
-		httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "to: invalid"))
+		httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"validation: invalid request parameter",
+			errcode.WithDetails(slog.String("field", "to"), slog.String("reason", "invalid"))))
 		return
 	}
 	if len(req.To) > 64 {
-		httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "to: invalid"))
+		httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"validation: invalid request parameter",
+			errcode.WithDetails(slog.String("field", "to"), slog.String("reason", "invalid"))))
 		return
 	}
 	resp, err := h.svc.List(r.Context(), req)

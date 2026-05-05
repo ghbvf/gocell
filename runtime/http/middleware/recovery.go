@@ -8,6 +8,7 @@ import (
 	"github.com/ghbvf/gocell/pkg/ctxkeys"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/httputil"
+	"github.com/ghbvf/gocell/pkg/redaction"
 )
 
 // ref: zeromicro/go-zero rest/handler/recoverhandler.go — RecoverHandler pattern
@@ -40,8 +41,12 @@ func Recovery(next http.Handler) http.Handler {
 			if v := recover(); v != nil {
 				recordPanicOnActiveSpan(r.Context(), v)
 				stack := string(debug.Stack())
+				// Sanitize panic payload before logging — raw value may
+				// carry credentials, connection strings, or other secrets
+				// (PR #391 round-2 F2). Trace span sanitization runs in
+				// recordPanicOnActiveSpan; slog needs the same treatment.
 				attrs := []any{
-					slog.Any("panic", v),
+					slog.String("panic", redaction.RedactPanic(v)),
 					slog.String("stack", stack),
 					slog.String("method", r.Method),
 					slog.String("path", r.URL.Path),

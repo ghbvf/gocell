@@ -42,6 +42,7 @@ import (
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/httputil"
 	"github.com/ghbvf/gocell/pkg/logutil"
+	"github.com/ghbvf/gocell/pkg/redaction"
 )
 
 // maxVerboseErrLen is the maximum length of a probe error string included in
@@ -329,7 +330,7 @@ func (h *Handler) computeReadyzSafe(verbose bool) (result readyzResult) {
 		if r := recover(); r != nil {
 			slog.Error("readyz: recovered panic during readiness computation",
 				slog.String("internal_reason", "readiness_computation_failed"),
-				slog.Any("panic", r))
+				slog.String("panic", redaction.RedactPanic(r)))
 			result = readyzResult{overall: "unhealthy", reason: readyzReasonReadinessFailed}
 		}
 	}()

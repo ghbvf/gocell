@@ -6,6 +6,7 @@ package ack
 import (
 	"bytes"
 	"io"
+	"log/slog"
 	"net/http"
 
 	"github.com/ghbvf/gocell/kernel/cell"
@@ -70,11 +71,15 @@ func (h *Handler) handle(w http.ResponseWriter, r *http.Request) {
 	{
 		v := r.PathValue("id")
 		if len(v) < 1 {
-			httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "id: invalid"))
+			httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+				"validation: invalid request parameter",
+				errcode.WithDetails(slog.String("field", "id"), slog.String("reason", "invalid"))))
 			return
 		}
 		if len(v) > 256 {
-			httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "id: invalid"))
+			httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+				"validation: invalid request parameter",
+				errcode.WithDetails(slog.String("field", "id"), slog.String("reason", "invalid"))))
 			return
 		}
 		req.ID = v
@@ -82,11 +87,15 @@ func (h *Handler) handle(w http.ResponseWriter, r *http.Request) {
 	{
 		v := r.PathValue("cmdId")
 		if len(v) < 1 {
-			httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "cmdId: invalid"))
+			httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+				"validation: invalid request parameter",
+				errcode.WithDetails(slog.String("field", "cmdId"), slog.String("reason", "invalid"))))
 			return
 		}
 		if len(v) > 256 {
-			httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "cmdId: invalid"))
+			httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+				"validation: invalid request parameter",
+				errcode.WithDetails(slog.String("field", "cmdId"), slog.String("reason", "invalid"))))
 			return
 		}
 		req.CmdId = v
