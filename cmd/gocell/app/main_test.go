@@ -3,10 +3,13 @@ package app
 import (
 	"bytes"
 	"io"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
 func TestPrintUsage(t *testing.T) {
@@ -88,6 +91,79 @@ func TestCommands(t *testing.T) {
 	for _, name := range expected {
 		if _, ok := commands[name]; !ok {
 			t.Errorf("command %q not registered in commands map", name)
+		}
+	}
+}
+
+func TestDispatch_ErrcodeUsesPublicMessage(t *testing.T) {
+	const cmdName = "test-errcode-public"
+	orig, hadOrig := commands[cmdName]
+	commands[cmdName] = func([]string) error {
+		return errcode.New(
+			errcode.KindInvalid,
+			errcode.ErrValidationFailed,
+			"invalid generated metadata",
+			errcode.WithInternal("token=hunter2 raw=/private/generated.yaml"),
+			errcode.WithDetails(slog.String("field", "cell.id")),
+		)
+	}
+	t.Cleanup(func() {
+		if hadOrig {
+			commands[cmdName] = orig
+			return
+		}
+		delete(commands, cmdName)
+	})
+
+	out := captureStderr(t, func() {
+		if code := Dispatch([]string{cmdName}); code != ExitRuntime {
+			t.Fatalf("Dispatch exit code = %d, want %d", code, ExitRuntime)
+		}
+	})
+	for _, want := range []string{"ERR_VALIDATION_FAILED", "invalid generated metadata", `field="cell.id"`} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("Dispatch stderr missing %q in:\n%s", want, out)
+		}
+	}
+	for _, leak := range []string{"hunter2", "/private/generated.yaml"} {
+		if strings.Contains(out, leak) {
+			t.Fatalf("Dispatch stderr leaked %q in:\n%s", leak, out)
+		}
+	}
+}
+
+func TestDispatch_ErrcodeServerErrorKeepsOperatorRoutingMetadata(t *testing.T) {
+	const cmdName = "test-errcode-operator"
+	orig, hadOrig := commands[cmdName]
+	commands[cmdName] = func([]string) error {
+		return errcode.New(
+			errcode.KindInternal,
+			errcode.ErrAuthRoleFetchFailed,
+			"role repository failed: postgres://user:secret@example/db",
+			errcode.WithInternal("token=hunter2"),
+		)
+	}
+	t.Cleanup(func() {
+		if hadOrig {
+			commands[cmdName] = orig
+			return
+		}
+		delete(commands, cmdName)
+	})
+
+	out := captureStderr(t, func() {
+		if code := Dispatch([]string{cmdName}); code != ExitRuntime {
+			t.Fatalf("Dispatch exit code = %d, want %d", code, ExitRuntime)
+		}
+	})
+	for _, want := range []string{"ERR_INTERNAL", "internal server error", "status=500", "sourceCode=ERR_AUTH_ROLE_FETCH_FAILED"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("Dispatch stderr missing %q in:\n%s", want, out)
+		}
+	}
+	for _, leak := range []string{"postgres://", "hunter2"} {
+		if strings.Contains(out, leak) {
+			t.Fatalf("Dispatch stderr leaked %q in:\n%s", leak, out)
 		}
 	}
 }
@@ -451,6 +527,29 @@ func captureStdout(t *testing.T, fn func()) string {
 	}
 	os.Stdout = w
 	defer func() { os.Stdout = orig }()
+
+	done := make(chan struct{})
+	var buf bytes.Buffer
+	go func() {
+		_, _ = io.Copy(&buf, r)
+		close(done)
+	}()
+
+	fn()
+	_ = w.Close()
+	<-done
+	return buf.String()
+}
+
+func captureStderr(t *testing.T, fn func()) string {
+	t.Helper()
+	orig := os.Stderr
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("pipe: %v", err)
+	}
+	os.Stderr = w
+	defer func() { os.Stderr = orig }()
 
 	done := make(chan struct{})
 	var buf bytes.Buffer

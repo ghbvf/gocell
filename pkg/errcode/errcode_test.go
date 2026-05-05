@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math"
 	"net/http"
 	"testing"
 	"time"
@@ -13,6 +14,23 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+type errcodeAsError struct {
+	target *Error
+}
+
+func (e errcodeAsError) Error() string {
+	return "custom as wrapper"
+}
+
+func (e errcodeAsError) As(target any) bool {
+	ec, ok := target.(**Error)
+	if !ok {
+		return false
+	}
+	*ec = e.target
+	return true
+}
 
 func TestNewWrapAndOptions(t *testing.T) {
 	cause := errors.New("pool exhausted")
@@ -224,6 +242,17 @@ func TestWithDetailsAttrs(t *testing.T) {
 }
 
 func TestErrorMarshalJSON(t *testing.T) {
+	t.Run("publicErrorLiteralUsesEmptyDetailsArray", func(t *testing.T) {
+		raw, mErr := json.Marshal(PublicError{
+			Code:    ErrInternal,
+			Message: "internal server error",
+		})
+		require.NoError(t, mErr)
+		var got map[string]any
+		require.NoError(t, json.Unmarshal(raw, &got))
+		assert.Equal(t, []any{}, got["details"])
+	})
+
 	t.Run("noDetailsClient", func(t *testing.T) {
 		err := New(KindNotFound, ErrCellNotFound, "cell not found")
 		raw, mErr := json.Marshal(err)
@@ -285,10 +314,13 @@ func TestErrorMarshalJSON(t *testing.T) {
 		require.NoError(t, mErr)
 		var got map[string]any
 		require.NoError(t, json.Unmarshal(raw, &got))
+		assert.Equal(t, "ERR_INTERNAL", got["code"])
+		assert.Equal(t, "internal server error", got["message"])
 		assert.Equal(t, []any{}, got["details"])
 		// Server-side details must not leak even by accident.
 		assert.NotContains(t, string(raw), "dsn")
 		assert.NotContains(t, string(raw), "secret")
+		assert.NotContains(t, string(raw), "boom")
 	})
 
 	t.Run("clientErrSubstitutesUnsafeKindBypassingEntry", func(t *testing.T) {
@@ -314,6 +346,26 @@ func TestErrorMarshalJSON(t *testing.T) {
 		assert.Equal(t, "v", details[0].(map[string]any)["value"])
 		assert.Equal(t, unsafeKindMarker, details[1].(map[string]any)["value"],
 			"wire-unsafe kind must be replaced by sentinel string")
+	})
+
+	t.Run("clientErrSubstitutesNonFiniteFloatBypassingEntry", func(t *testing.T) {
+		err := &Error{
+			Kind:    KindInvalid,
+			Code:    ErrValidationFailed,
+			Message: "bad",
+			Details: []slog.Attr{
+				slog.Float64("ratio", math.Inf(1)),
+			},
+		}
+		raw, mErr := json.Marshal(err)
+		require.NoError(t, mErr)
+		var got map[string]any
+		require.NoError(t, json.Unmarshal(raw, &got))
+		details, ok := got["details"].([]any)
+		require.True(t, ok)
+		require.Len(t, details, 1)
+		assert.Equal(t, unsafeValueMarker, details[0].(map[string]any)["value"],
+			"non-finite float must be replaced by sentinel string")
 	})
 }
 
@@ -354,4 +406,244 @@ func TestWithDetailsKindWhitelist(t *testing.T) {
 				WithDetails(slog.Group("g", slog.String("inner", "v"))))
 		})
 	})
+
+	t.Run("nonFiniteFloatPanics", func(t *testing.T) {
+		cases := []struct {
+			name string
+			val  float64
+		}{
+			{name: "nan", val: math.NaN()},
+			{name: "positive_inf", val: math.Inf(1)},
+			{name: "negative_inf", val: math.Inf(-1)},
+		}
+		for _, tc := range cases {
+			t.Run(tc.name, func(t *testing.T) {
+				var ec *Error
+				defer func() {
+					r := recover()
+					require.NotNil(t, r, "WithDetails(slog.Float64(non-finite)) must panic")
+					err, ok := r.(error)
+					require.True(t, ok, "panic value must be error from Assertion()")
+					require.True(t, errors.As(err, &ec), "panic must wrap *errcode.Error")
+					assert.Contains(t, ec.Message, "non-finite float64")
+				}()
+				_ = New(KindInvalid, ErrValidationFailed, "ok",
+					WithDetails(slog.Float64("ratio", tc.val)))
+			})
+		}
+	})
+}
+
+func TestPublicString(t *testing.T) {
+	t.Run("directErrcode", func(t *testing.T) {
+		cause := errors.New("postgres://user:secret@example/db")
+		err := Wrap(
+			KindNotFound,
+			ErrZeroTestMatch,
+			"pattern matched no tests — check your YAML ref",
+			cause,
+			WithInternal(`pattern="TestSecret" pkg=./cells token=hunter2`),
+			WithDetails(slog.String("ref", "journey.J-login.auto")),
+		)
+
+		got := PublicString(err)
+		assert.Contains(t, got, "ERR_ZERO_TEST_MATCH")
+		assert.Contains(t, got, "pattern matched no tests — check your YAML ref")
+		assert.Contains(t, got, `ref="journey.J-login.auto"`)
+		assert.NotContains(t, got, "TestSecret")
+		assert.NotContains(t, got, "hunter2")
+		assert.NotContains(t, got, "postgres://")
+	})
+
+	t.Run("wrappedErrcodeKeepsOuterContext", func(t *testing.T) {
+		inner := New(
+			KindNotFound,
+			ErrZeroTestMatch,
+			"pattern matched no tests — check your YAML ref",
+			WithInternal(`pattern="TestSecret" pkg=./cells token=hunter2`),
+		)
+
+		got := PublicString(fmt.Errorf("verify journey --active: %w", inner))
+		assert.Contains(t, got, "verify journey --active")
+		assert.Contains(t, got, "ERR_ZERO_TEST_MATCH")
+		assert.Contains(t, got, "pattern matched no tests — check your YAML ref")
+		assert.NotContains(t, got, "TestSecret")
+		assert.NotContains(t, got, "hunter2")
+	})
+
+	t.Run("serverErrcodeUsesStatusLevelPublicSurface", func(t *testing.T) {
+		err := New(
+			KindInternal,
+			ErrAuthRoleFetchFailed,
+			"role repository failed: postgres://user:secret@example/db",
+			WithInternal("token=hunter2"),
+		)
+
+		got := PublicString(err)
+		assert.Equal(t, "[ERR_INTERNAL] internal server error", got)
+		assert.NotContains(t, got, "ERR_AUTH_ROLE_FETCH_FAILED")
+		assert.NotContains(t, got, "postgres://")
+		assert.NotContains(t, got, "hunter2")
+	})
+
+	t.Run("operatorStringKeepsSafeRoutingMetadataForServerErrcode", func(t *testing.T) {
+		err := New(
+			KindInternal,
+			ErrAuthRoleFetchFailed,
+			"role repository failed: postgres://user:secret@example/db",
+			WithInternal("token=hunter2"),
+		)
+
+		got := OperatorString(err)
+		assert.Equal(t, "[ERR_INTERNAL] internal server error (status=500, sourceCode=ERR_AUTH_ROLE_FETCH_FAILED)", got)
+		assert.NotContains(t, got, "postgres://")
+		assert.NotContains(t, got, "hunter2")
+	})
+
+	t.Run("joinedErrcodesAllUsePublicSurface", func(t *testing.T) {
+		first := New(
+			KindInvalid,
+			ErrValidationFailed,
+			"invalid config",
+			WithInternal("token=first-secret"),
+			WithDetails(slog.String("field", "cell.id")),
+		)
+		second := Wrap(
+			KindInternal,
+			ErrAuthRoleFetchFailed,
+			"role lookup failed: dsn=secret",
+			errors.New("cause=second-secret"),
+			WithInternal("token=second-secret"),
+		)
+
+		got := PublicString(fmt.Errorf("verify generated: %w", errors.Join(first, second)))
+		assert.Contains(t, got, "verify generated:")
+		assert.Contains(t, got, "[ERR_VALIDATION_FAILED] invalid config")
+		assert.Contains(t, got, `field="cell.id"`)
+		assert.Contains(t, got, "[ERR_INTERNAL] internal server error")
+		for _, leak := range []string{
+			"first-secret",
+			"second-secret",
+			"ERR_AUTH_ROLE_FETCH_FAILED",
+			"dsn=secret",
+			"cause=second-secret",
+		} {
+			assert.NotContains(t, got, leak)
+		}
+	})
+
+	t.Run("stringDetailsAreQuoted", func(t *testing.T) {
+		err := New(
+			KindInvalid,
+			ErrValidationFailed,
+			"invalid config",
+			WithDetails(slog.String("field", "cell.id,owner\nname"), slog.Int("limit", 2)),
+		)
+
+		got := PublicString(err)
+		assert.Contains(t, got, `field="cell.id,owner\nname"`)
+		assert.Contains(t, got, "limit=2")
+	})
+
+	t.Run("detailsUseJSONWireFormatting", func(t *testing.T) {
+		at := time.Date(2026, 5, 6, 1, 2, 3, 0, time.UTC)
+		err := New(
+			KindInvalid,
+			ErrValidationFailed,
+			"invalid config",
+			WithDetails(slog.Duration("timeout", time.Second), slog.Time("at", at)),
+		)
+
+		got := PublicString(err)
+		assert.Contains(t, got, "timeout=1000000000")
+		assert.Contains(t, got, `at="2026-05-06T01:02:03Z"`)
+	})
+}
+
+func TestOperatorProjection(t *testing.T) {
+	first := New(
+		KindInvalid,
+		ErrValidationFailed,
+		"invalid config",
+		WithDetails(slog.String("field", "cell.id")),
+	)
+	second := New(
+		KindInternal,
+		ErrAuthRoleFetchFailed,
+		"role lookup failed: dsn=secret",
+		WithInternal("token=secret"),
+	)
+
+	got := OperatorProjection(fmt.Errorf("verify generated: %w", errors.Join(first, second)))
+	require.Len(t, got, 2)
+	assert.Equal(t, PublicError{
+		Code:    ErrValidationFailed,
+		Message: "invalid config",
+		Details: []PublicDetail{
+			{Key: "field", Value: "cell.id"},
+		},
+	}, got[0])
+	assert.Equal(t, PublicError{
+		Code:       ErrInternal,
+		Message:    "internal server error",
+		Details:    []PublicDetail{},
+		SourceCode: ErrAuthRoleFetchFailed,
+		Status:     http.StatusInternalServerError,
+	}, got[1])
+}
+
+func TestProjectionFallbacksAndMethodStrings(t *testing.T) {
+	assert.Nil(t, PublicProjection(nil))
+	assert.Nil(t, OperatorProjection(nil))
+	assert.Empty(t, PublicString(nil))
+	assert.Empty(t, OperatorString(nil))
+
+	publicPlain := PublicProjection(errors.New("dsn=postgres://user:secret@example/db"))
+	require.Len(t, publicPlain, 1)
+	assert.Equal(t, PublicError{
+		Code:    ErrInternal,
+		Message: "internal server error",
+		Details: []PublicDetail{},
+	}, publicPlain[0])
+
+	operatorPlain := OperatorProjection(errors.New("plain failure"))
+	require.Len(t, operatorPlain, 1)
+	assert.Equal(t, PublicError{
+		Code:    ErrInternal,
+		Message: "plain failure",
+		Details: []PublicDetail{},
+	}, operatorPlain[0])
+
+	matched := New(
+		KindInvalid,
+		ErrValidationFailed,
+		"invalid config",
+		WithDetails(slog.String("field", "cell.id")),
+	)
+	matchedProjection := PublicProjection(errcodeAsError{target: matched})
+	require.Len(t, matchedProjection, 1)
+	assert.Equal(t, PublicError{
+		Code:    ErrValidationFailed,
+		Message: "invalid config",
+		Details: []PublicDetail{
+			{Key: "field", Value: "cell.id"},
+		},
+	}, matchedProjection[0])
+
+	server := New(
+		KindInternal,
+		ErrAuthRoleFetchFailed,
+		"role lookup failed: dsn=secret",
+		WithInternal("token=secret"),
+	)
+	assert.Equal(t, "[ERR_INTERNAL] internal server error", server.PublicString())
+	assert.Equal(
+		t,
+		"[ERR_INTERNAL] internal server error (status=500, sourceCode=ERR_AUTH_ROLE_FETCH_FAILED)",
+		server.OperatorString(),
+	)
+
+	var nilErr *Error
+	assert.Empty(t, nilErr.PublicString())
+	assert.Empty(t, nilErr.OperatorString())
 }

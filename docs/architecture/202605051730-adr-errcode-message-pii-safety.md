@@ -90,8 +90,10 @@ archtest `DETAILS-SLOG-ATTR-01` 拦截以 `map[string]any` 形式调用 `WithDet
 }
 ```
 
-`slog.Attr.Value` 经 `slog.Value.Any()` 取出后直接序列化，保留原始 Go 类型（string/int/bool
-等）。嵌套 `slog.GroupValue` 序列化为嵌套 object（`{"key": "db", "value": {"host": "...", "port": 5432}}`）。
+`slog.Attr.Value` 经 `slog.Value.Any()` 取出后直接序列化，但只允许 JSON scalar：
+string / number / boolean。`slog.Group`、`slog.Any`、`LogValuer`、以及 NaN/Inf float64
+均在构造期 fail-fast；绕过构造器的防御层会替换为固定 sentinel，避免 JSON marshal 失败或
+把对象结构暴露到 wire。
 
 `contracts/shared/errors/error-response-v1.schema.json` 中 `details` 字段类型从 `object` 改为：
 
@@ -102,7 +104,7 @@ archtest `DETAILS-SLOG-ATTR-01` 拦截以 `map[string]any` 形式调用 `WithDet
     "type": "object",
     "properties": {
       "key":   {"type": "string"},
-      "value": {}
+              "value": {"type": ["string", "number", "boolean"]}
     },
     "required": ["key", "value"],
     "additionalProperties": false

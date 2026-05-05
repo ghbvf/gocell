@@ -6,7 +6,8 @@
       "name": "TestLogin",
       "passed": true,
       "output": "",
-      "zeroMatch": false
+      "zeroMatch": false,
+      "skippedOnly": false
     }
   ],
   "errors": [],

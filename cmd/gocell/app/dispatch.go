@@ -10,6 +10,8 @@ import (
 	"flag"
 	"fmt"
 	"os"
+
+	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
 // commands maps sub-command names to their run functions. It is kept
@@ -62,7 +64,7 @@ func Dispatch(args []string) int {
 		if errors.Is(err, flag.ErrHelp) {
 			return ExitOK
 		}
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		fmt.Fprintf(os.Stderr, "error: %s\n", errcode.OperatorString(err))
 		return ExitRuntime
 	}
 	return ExitOK

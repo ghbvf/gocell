@@ -149,8 +149,10 @@ same pattern. State-carrying event payloads remain lenient (no
 `additionalProperties: false` at the top level and on the nested error
 object. The error envelope is emitted by the framework, has a stable shape,
 and is not in scope for the v1-evolution policy. The `details` sub-object
-already declares `additionalProperties: true` for free-form context — that
-remains.
+is a strict array of `{key,value}` entries; each `value` is limited to JSON
+scalar types (`string`, `number`, `boolean`). Free-form object/array/null
+context is intentionally rejected and must be modeled as separate scalar
+details or kept in server-side internal diagnostics.
 
 The schema files retain `additionalProperties: false` at the file level;
 they are no longer enforced by FMT-20 (it only scans request schemas), but

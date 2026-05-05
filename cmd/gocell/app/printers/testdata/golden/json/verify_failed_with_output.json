@@ -6,7 +6,8 @@
       "name": "TestLogin",
       "passed": false,
       "output": "expected 200\ngot 500\nresponse body: internal error",
-      "zeroMatch": false
+      "zeroMatch": false,
+      "skippedOnly": false
     }
   ],
   "errors": [],

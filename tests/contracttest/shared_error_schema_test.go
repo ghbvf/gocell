@@ -1,6 +1,7 @@
 package contracttest
 
 import (
+	"bytes"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -15,12 +16,16 @@ import (
 // sharedErrorSchemaPath returns the absolute path to error-response-v1.schema.json.
 func sharedErrorSchemaPath(t *testing.T) string {
 	t.Helper()
+	return filepath.Join(contractTestProjectRoot(t), "contracts", "shared", "errors", "error-response-v1.schema.json")
+}
+
+func contractTestProjectRoot(t *testing.T) string {
+	t.Helper()
 	_, thisFile, _, ok := runtime.Caller(0)
 	require.True(t, ok, "runtime.Caller failed")
 	// thisFile = .../tests/contracttest/shared_error_schema_test.go
 	// walk up 2 dirs to project root, then into contracts/shared/errors/
-	projectRoot := filepath.Dir(filepath.Dir(filepath.Dir(thisFile)))
-	return filepath.Join(projectRoot, "contracts", "shared", "errors", "error-response-v1.schema.json")
+	return filepath.Dir(filepath.Dir(filepath.Dir(thisFile)))
 }
 
 func loadSharedErrorSchema(t *testing.T) *jsonschema.Schema {
@@ -48,6 +53,7 @@ func TestSharedErrorSchema_ValidSamples(t *testing.T) {
 	valid := []string{
 		`{"error":{"code":"ERR_AUTH_INVALID_TOKEN","message":"token expired","details":[]}}`,
 		`{"error":{"code":"ERR_VALIDATION_FAILED","message":"bad","details":[{"key":"field","value":"x"}],"request_id":"req-1"}}`,
+		`{"error":{"code":"ERR_VALIDATION_FAILED","message":"bad","details":[{"key":"limit","value":100},{"key":"retry","value":true}]}}`,
 		`{"error":{"code":"ERR_CONFIG_NOT_FOUND","message":"config not found","details":[{"key":"key","value":"app.name"}]}}`,
 	}
 
@@ -92,6 +98,18 @@ func TestSharedErrorSchema_InvalidSamples(t *testing.T) {
 			name: "details as object (legacy form, must be rejected)",
 			body: `{"error":{"code":"ERR_INTERNAL","message":"oops","details":{"key":"value"}}}`,
 		},
+		{
+			name: "details value as object",
+			body: `{"error":{"code":"ERR_VALIDATION_FAILED","message":"bad","details":[{"key":"field","value":{"name":"x"}}]}}`,
+		},
+		{
+			name: "details value as array",
+			body: `{"error":{"code":"ERR_VALIDATION_FAILED","message":"bad","details":[{"key":"field","value":["x"]}]}}`,
+		},
+		{
+			name: "details value as null",
+			body: `{"error":{"code":"ERR_VALIDATION_FAILED","message":"bad","details":[{"key":"field","value":null}]}}`,
+		},
 	}
 
 	for _, tt := range tests {
@@ -100,6 +118,25 @@ func TestSharedErrorSchema_InvalidSamples(t *testing.T) {
 			require.NoError(t, json.Unmarshal([]byte(tt.body), &v))
 			err := schema.Validate(v)
 			assert.Error(t, err, "expected invalid sample to fail schema: %s", tt.body)
+		})
+	}
+}
+
+func TestSharedErrorSchema_CopiesInSync(t *testing.T) {
+	root := contractTestProjectRoot(t)
+	canonicalPath := sharedErrorSchemaPath(t)
+	canonical, err := os.ReadFile(filepath.Clean(canonicalPath))
+	require.NoError(t, err)
+
+	for _, rel := range []string{
+		"examples/iotdevice/contracts/shared/errors/error-response-v1.schema.json",
+		"examples/todoorder/contracts/shared/errors/error-response-v1.schema.json",
+		"tests/contracttest/testdata/contracts/shared/errors/error-response-v1.schema.json",
+	} {
+		t.Run(rel, func(t *testing.T) {
+			got, err := os.ReadFile(filepath.Clean(filepath.Join(root, rel)))
+			require.NoError(t, err)
+			assert.True(t, bytes.Equal(canonical, got), "%s must match canonical shared error schema", rel)
 		})
 	}
 }

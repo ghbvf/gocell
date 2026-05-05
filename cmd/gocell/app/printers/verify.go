@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/ghbvf/gocell/kernel/verify"
+	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
 // VerifyPrinter renders a kernel/verify.VerifyResult to a writer. Verify
@@ -84,7 +85,7 @@ func (p *verifyTextPrinter) printTestResults(results []verify.TestResult) error 
 
 func (p *verifyTextPrinter) printErrors(errs []error) error {
 	for _, e := range errs {
-		if _, err := fmt.Fprintf(p.w, "  error: %v\n", e); err != nil {
+		if _, err := fmt.Fprintf(p.w, "  error: %s\n", errcode.OperatorString(e)); err != nil {
 			return err
 		}
 	}
@@ -102,21 +103,23 @@ func (p *verifyTextPrinter) printManualPending(pending []string) error {
 
 // --- json ---
 
-// JSON wire DTOs — camelCase, stable schema. Errors are flattened to
-// strings (err.Error()); callers don't need the underlying error type.
+// JSON wire DTOs — camelCase, stable schema. Errors keep the same structured
+// public/operator projection used by text output so CI consumers can route by
+// code without scraping strings.
 type verifyResultJSON struct {
-	TargetID      string           `json:"targetId"`
-	Passed        bool             `json:"passed"`
-	Results       []testResultJSON `json:"results"`
-	Errors        []string         `json:"errors"`
-	ManualPending []string         `json:"manualPending"`
+	TargetID      string                `json:"targetId"`
+	Passed        bool                  `json:"passed"`
+	Results       []testResultJSON      `json:"results"`
+	Errors        []errcode.PublicError `json:"errors"`
+	ManualPending []string              `json:"manualPending"`
 }
 
 type testResultJSON struct {
-	Name      string `json:"name"`
-	Passed    bool   `json:"passed"`
-	Output    string `json:"output"`
-	ZeroMatch bool   `json:"zeroMatch"`
+	Name        string `json:"name"`
+	Passed      bool   `json:"passed"`
+	Output      string `json:"output"`
+	ZeroMatch   bool   `json:"zeroMatch"`
+	SkippedOnly bool   `json:"skippedOnly"`
 }
 
 type verifyJSONPrinter struct {
@@ -128,19 +131,20 @@ func (p *verifyJSONPrinter) Print(r *verify.VerifyResult) error {
 		TargetID:      r.TargetID,
 		Passed:        r.Passed,
 		Results:       make([]testResultJSON, len(r.Results)),
-		Errors:        make([]string, len(r.Errors)),
+		Errors:        make([]errcode.PublicError, 0, len(r.Errors)),
 		ManualPending: make([]string, len(r.ManualPending)),
 	}
 	for i, tr := range r.Results {
 		doc.Results[i] = testResultJSON{
-			Name:      tr.Name,
-			Passed:    tr.Passed,
-			Output:    tr.Output,
-			ZeroMatch: tr.ZeroMatch,
+			Name:        tr.Name,
+			Passed:      tr.Passed,
+			Output:      tr.Output,
+			ZeroMatch:   tr.ZeroMatch,
+			SkippedOnly: tr.SkippedOnly,
 		}
 	}
-	for i, e := range r.Errors {
-		doc.Errors[i] = e.Error()
+	for _, e := range r.Errors {
+		doc.Errors = append(doc.Errors, errcode.OperatorProjection(e)...)
 	}
 	copy(doc.ManualPending, r.ManualPending)
 

@@ -22,7 +22,7 @@
             "additionalProperties": false,
             "properties": {
               "key": {"type": "string"},
-              "value": {}
+              "value": {"type": ["string", "number", "boolean"]}
             }
           }
         },

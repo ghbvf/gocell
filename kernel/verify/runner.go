@@ -76,7 +76,7 @@ func (r *Runner) VerifySlice(ctx context.Context, sliceKey string) (*VerifyResul
 	if sm == nil {
 		return nil, errcode.New(errcode.KindNotFound, errcode.ErrSliceNotFound,
 			"slice not found in project metadata",
-			errcode.WithInternal(fmt.Sprintf("slice=%q", sliceKey)))
+			errcode.WithDetails(slog.String("slice", sliceKey)))
 	}
 
 	// Try metadata-style dir first; if it doesn't exist as a Go package,
@@ -107,7 +107,7 @@ func (r *Runner) VerifyCell(ctx context.Context, cellID string) (*VerifyResult, 
 	if cm == nil {
 		return nil, errcode.New(errcode.KindNotFound, errcode.ErrCellNotFound,
 			"cell not found in project metadata",
-			errcode.WithInternal(fmt.Sprintf("cell=%q", cellID)))
+			errcode.WithDetails(slog.String("cell", cellID)))
 	}
 
 	result := &VerifyResult{TargetID: cellID, Passed: true}
@@ -149,7 +149,7 @@ func (r *Runner) RunJourney(ctx context.Context, journeyID string) (*VerifyResul
 	if j == nil {
 		return nil, errcode.New(errcode.KindNotFound, errcode.ErrJourneyNotFound,
 			"journey not found in project metadata",
-			errcode.WithInternal(fmt.Sprintf("journey=%q", journeyID)))
+			errcode.WithDetails(slog.String("journey", journeyID)))
 	}
 
 	result := &VerifyResult{TargetID: journeyID, Passed: true}
@@ -264,12 +264,16 @@ func (r *Runner) RunJourneyCheckRef(ctx context.Context, j *metadata.JourneyMeta
 	if resolved.Kind != PrefixJourney {
 		return TestResult{Name: ref, Passed: false}, []error{errcode.New(errcode.KindInvalid, errcode.ErrCheckRefInvalid,
 			"journey checkRef must use journey prefix",
-			errcode.WithInternal(fmt.Sprintf("ref=%q", ref)))}
+			errcode.WithDetails(slog.String("ref", ref)))}
 	}
 	if j != nil && resolved.Scope != j.ID {
 		return TestResult{Name: ref, Passed: false}, []error{errcode.New(errcode.KindInvalid, errcode.ErrCheckRefInvalid,
 			"journey checkRef belongs to a different journey",
-			errcode.WithInternal(fmt.Sprintf("ref=%q scope=%q journey=%q", ref, resolved.Scope, j.ID)))}
+			errcode.WithDetails(
+				slog.String("ref", ref),
+				slog.String("scope", resolved.Scope),
+				slog.String("journey", j.ID),
+			))}
 	}
 	pkg, extraArgs := r.resolveJourneyPkg(j, resolved)
 	args := append([]string{pkg, "-v", "-run", resolved.RunPattern}, extraArgs...)
@@ -317,11 +321,11 @@ func recordResult(result *VerifyResult, name string, res goTestResult, pkg, patt
 		if pattern != "" {
 			result.Errors = append(result.Errors, errcode.New(errcode.KindNotFound, errcode.ErrZeroTestMatch,
 				"pattern matched no tests — check your YAML ref",
-				errcode.WithInternal(fmt.Sprintf("pattern=%q pkg=%s", pattern, pkg))))
+				errcode.WithDetails(slog.String("pattern", pattern), slog.String("pkg", pkg))))
 		} else {
 			result.Errors = append(result.Errors, errcode.New(errcode.KindNotFound, errcode.ErrZeroTestMatch,
 				"matched no tests",
-				errcode.WithInternal(fmt.Sprintf("pkg=%s", pkg))))
+				errcode.WithDetails(slog.String("pkg", pkg))))
 		}
 	}
 	if res.SkippedOnly {
@@ -329,11 +333,11 @@ func recordResult(result *VerifyResult, name string, res goTestResult, pkg, patt
 		if pattern != "" {
 			result.Errors = append(result.Errors, errcode.New(errcode.KindNotFound, errcode.ErrZeroTestMatch,
 				"pattern matched only skipped tests — replace stubs with executable checks",
-				errcode.WithInternal(fmt.Sprintf("pattern=%q pkg=%s", pattern, pkg))))
+				errcode.WithDetails(slog.String("pattern", pattern), slog.String("pkg", pkg))))
 		} else {
 			result.Errors = append(result.Errors, errcode.New(errcode.KindNotFound, errcode.ErrZeroTestMatch,
 				"matched only skipped tests",
-				errcode.WithInternal(fmt.Sprintf("pkg=%s", pkg))))
+				errcode.WithDetails(slog.String("pkg", pkg))))
 		}
 	}
 	result.Results = append(result.Results, tr)
@@ -428,7 +432,7 @@ func parseSliceKey(key string) (cellID, sliceID string, err error) {
 	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
 		return "", "", errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			"invalid slice key: expected format \"cellID/sliceID\"",
-			errcode.WithInternal(fmt.Sprintf("key=%q", key)))
+			errcode.WithDetails(slog.String("key", key)))
 	}
 	if strings.Contains(parts[0], "..") || strings.ContainsAny(parts[0], `/\`) {
 		return "", "", errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "invalid cellID: contains path separator or traversal")
