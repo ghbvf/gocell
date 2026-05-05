@@ -42,6 +42,13 @@ var templates = func() *template.Template {
 			}
 			return *p
 		},
+		// derefInt dereferences an *int pointer (used for MinLength/MaxLength).
+		"derefInt": func(p *int) int {
+			if p == nil {
+				return 0
+			}
+			return *p
+		},
 		// hasMinimum reports whether the param has a declared minimum value.
 		"hasMinimum": func(p *int64) bool {
 			return p != nil
@@ -50,18 +57,32 @@ var templates = func() *template.Template {
 		"hasMaximum": func(p *int64) bool {
 			return p != nil
 		},
+		// hasMinLength reports whether a string param/field has a minLength constraint.
+		"hasMinLength": func(p *int) bool {
+			return p != nil
+		},
+		// hasMaxLength reports whether a string param/field has a maxLength constraint.
+		"hasMaxLength": func(p *int) bool {
+			return p != nil
+		},
 		// needsErrcode reports whether the generated handler requires the errcode
-		// package. It is needed when: any query param exists (required check /
-		// parse error messages). Body schema validation is delegated to
-		// schemavalidate.Validator — errcode is no longer needed for body constraints.
+		// package. It is needed when: any query param exists (required check / parse
+		// errors), or when any path param has a length constraint (B4 follow-up:
+		// path string-length validation re-instated with generic "invalid" message
+		// to avoid oracle leakage). Body schema validation is delegated to
+		// schemavalidate.Validator and does not require errcode here.
 		"needsErrcode": func(spec *ContractGenSpec) bool {
 			if spec.Endpoint == nil {
 				return false
 			}
 			ep := spec.Endpoint
-			// query params always need errcode (required check, parse error messages).
 			if len(ep.QueryParams) > 0 && !ep.IsPagination {
 				return true
+			}
+			for _, p := range ep.PathParams {
+				if p.MinLength != nil || p.MaxLength != nil {
+					return true
+				}
 			}
 			return false
 		},

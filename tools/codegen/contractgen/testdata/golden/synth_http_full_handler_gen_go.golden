@@ -66,6 +66,14 @@ func (h *Handler) handle(w http.ResponseWriter, r *http.Request) {
 	req := &Request{}
 	{
 		v := r.PathValue("id")
+		if len(v) < 1 {
+			httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "id: invalid"))
+			return
+		}
+		if len(v) > 64 {
+			httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "id: invalid"))
+			return
+		}
 		req.ID = v
 	}
 	if raw := r.URL.Query().Get("page"); raw != "" {

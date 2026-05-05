@@ -8,6 +8,7 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/wrapper"
+	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/httputil"
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/http/schemavalidate"
@@ -65,6 +66,14 @@ func (h *Handler) handle(w http.ResponseWriter, r *http.Request) {
 	req := &Request{}
 	{
 		v := r.PathValue("key")
+		if len(v) < 1 {
+			httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "key: invalid"))
+			return
+		}
+		if len(v) > 256 {
+			httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "key: invalid"))
+			return
+		}
 		req.Key = v
 	}
 	resp, err := h.svc.Get(r.Context(), req)

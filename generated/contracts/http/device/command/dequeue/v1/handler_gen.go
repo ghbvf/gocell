@@ -57,9 +57,25 @@ func (h *Handler) handle(w http.ResponseWriter, r *http.Request) {
 	req := &Request{}
 	{
 		v := r.PathValue("id")
+		if len(v) < 1 {
+			httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "id: invalid"))
+			return
+		}
+		if len(v) > 256 {
+			httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "id: invalid"))
+			return
+		}
 		req.ID = v
 	}
 	req.Cursor = r.URL.Query().Get("cursor")
+	if req.Cursor != "" && len(req.Cursor) < 0 {
+		httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "cursor: invalid"))
+		return
+	}
+	if len(req.Cursor) > 4096 {
+		httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "cursor: invalid"))
+		return
+	}
 	if raw := r.URL.Query().Get("limit"); raw != "" {
 		v, err := strconv.ParseInt(raw, 10, 64)
 		if err != nil {

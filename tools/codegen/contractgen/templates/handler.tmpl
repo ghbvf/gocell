@@ -119,6 +119,18 @@ func (h *Handler) handle(w http.ResponseWriter, r *http.Request) {
 {{- else}}
 	{
 		v := r.PathValue("{{.Name}}")
+{{- if hasMinLength .MinLength}}
+		if len(v) < {{derefInt .MinLength}} {
+			httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "{{.Name}}: invalid"))
+			return
+		}
+{{- end}}
+{{- if hasMaxLength .MaxLength}}
+		if len(v) > {{derefInt .MaxLength}} {
+			httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "{{.Name}}: invalid"))
+			return
+		}
+{{- end}}
 		req.{{.GoName}} = v
 	}
 {{- end}}
@@ -159,6 +171,18 @@ func (h *Handler) handle(w http.ResponseWriter, r *http.Request) {
 {{- if .Required}}
 	if req.{{.GoName}} == "" {
 		httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "{{.Name}} is required"))
+		return
+	}
+{{- end}}
+{{- if hasMinLength .MinLength}}
+	if req.{{.GoName}} != "" && len(req.{{.GoName}}) < {{derefInt .MinLength}} {
+		httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "{{.Name}}: invalid"))
+		return
+	}
+{{- end}}
+{{- if hasMaxLength .MaxLength}}
+	if len(req.{{.GoName}}) > {{derefInt .MaxLength}} {
+		httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "{{.Name}}: invalid"))
 		return
 	}
 {{- end}}

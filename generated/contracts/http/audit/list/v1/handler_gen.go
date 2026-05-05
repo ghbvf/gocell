@@ -56,9 +56,41 @@ func (h *Handler) RegisterRoutes(mux cell.RouteHandler) error {
 func (h *Handler) handle(w http.ResponseWriter, r *http.Request) {
 	req := &Request{}
 	req.ActorId = r.URL.Query().Get("actorId")
+	if req.ActorId != "" && len(req.ActorId) < 0 {
+		httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "actorId: invalid"))
+		return
+	}
+	if len(req.ActorId) > 256 {
+		httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "actorId: invalid"))
+		return
+	}
 	req.Cursor = r.URL.Query().Get("cursor")
+	if req.Cursor != "" && len(req.Cursor) < 0 {
+		httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "cursor: invalid"))
+		return
+	}
+	if len(req.Cursor) > 4096 {
+		httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "cursor: invalid"))
+		return
+	}
 	req.EventType = r.URL.Query().Get("eventType")
+	if req.EventType != "" && len(req.EventType) < 0 {
+		httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "eventType: invalid"))
+		return
+	}
+	if len(req.EventType) > 256 {
+		httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "eventType: invalid"))
+		return
+	}
 	req.From = r.URL.Query().Get("from")
+	if req.From != "" && len(req.From) < 0 {
+		httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "from: invalid"))
+		return
+	}
+	if len(req.From) > 64 {
+		httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "from: invalid"))
+		return
+	}
 	if raw := r.URL.Query().Get("limit"); raw != "" {
 		v, err := strconv.ParseInt(raw, 10, 64)
 		if err != nil {
@@ -76,6 +108,14 @@ func (h *Handler) handle(w http.ResponseWriter, r *http.Request) {
 		req.Limit = v
 	}
 	req.To = r.URL.Query().Get("to")
+	if req.To != "" && len(req.To) < 0 {
+		httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "to: invalid"))
+		return
+	}
+	if len(req.To) > 64 {
+		httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "to: invalid"))
+		return
+	}
 	resp, err := h.svc.List(r.Context(), req)
 	if err != nil {
 		httputil.WriteError(r.Context(), w, err)

@@ -57,7 +57,23 @@ func (h *Handler) RegisterRoutes(mux cell.RouteHandler) error {
 func (h *Handler) handle(w http.ResponseWriter, r *http.Request) {
 	req := &Request{}
 	req.Cursor = r.URL.Query().Get("cursor")
+	if req.Cursor != "" && len(req.Cursor) < 0 {
+		httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "cursor: invalid"))
+		return
+	}
+	if len(req.Cursor) > 4096 {
+		httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "cursor: invalid"))
+		return
+	}
 	req.DeviceId = r.URL.Query().Get("deviceId")
+	if req.DeviceId != "" && len(req.DeviceId) < 0 {
+		httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "deviceId: invalid"))
+		return
+	}
+	if len(req.DeviceId) > 256 {
+		httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "deviceId: invalid"))
+		return
+	}
 	if raw := r.URL.Query().Get("limit"); raw != "" {
 		v, err := strconv.ParseInt(raw, 10, 64)
 		if err != nil {
@@ -75,6 +91,14 @@ func (h *Handler) handle(w http.ResponseWriter, r *http.Request) {
 		req.Limit = v
 	}
 	req.Statuses = r.URL.Query().Get("statuses")
+	if req.Statuses != "" && len(req.Statuses) < 0 {
+		httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "statuses: invalid"))
+		return
+	}
+	if len(req.Statuses) > 256 {
+		httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "statuses: invalid"))
+		return
+	}
 	resp, err := h.svc.List(r.Context(), req)
 	if err != nil {
 		httputil.WriteError(r.Context(), w, err)
