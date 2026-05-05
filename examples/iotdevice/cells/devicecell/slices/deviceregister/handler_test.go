@@ -19,7 +19,7 @@ import (
 func setupRegisterHandler() *registercontract.Handler {
 	repo := mem.NewDeviceRepository()
 	svc := NewService(repo, slog.Default(), WithClock(clock.Real()))
-	return registercontract.NewHandler(svc, nil) // nil policy: no per-route auth guard (public endpoint)
+	return registercontract.NewHandler(svc) // Public endpoint: NewHandler takes no policy (auth.Route{Public:true})
 }
 
 func TestHandleRegister(t *testing.T) {

@@ -45,12 +45,14 @@ import (
 const handlerPolicyRequiredRule = "HANDLER-POLICY-REQUIRED-01"
 
 // handlerPolicyPublicExemptPkgs lists the import alias prefixes whose generated
-// NewHandler is single-arg (Public=true endpoint). After the B2 fix, only
-// "registercontract" is in this list. This is intentionally narrow — it is
-// updated whenever a new Public contract is added. The test also double-checks
-// by scanning the generated handler_gen.go for the single-arg signature.
+// NewHandler is single-arg (Public=true endpoint) or whose route protection is
+// provided by contract.Clients (RequireCallerCell guard). After the B2 fix:
+//   - "registercontract" — Public:true, NewHandler(svc Service) single-arg
+//   - "internallistcontract" — /internal/v1/ path, Clients=["devicecell"],
+//     auth.Mount auto-injects RequireCallerCell; no per-route Policy needed
 var handlerPolicyPublicExemptPkgs = []string{
-	"registercontract", // http.device.register.v1 — Public:true
+	"registercontract",     // http.device.register.v1 — Public:true
+	"internallistcontract", // http.internal.devicecommands.list.v1 — /internal/v1/, Clients guard
 }
 
 // TestHANDLER_POLICY_REQUIRED_01 scans cell.go files for NewHandler(<svc>, nil)

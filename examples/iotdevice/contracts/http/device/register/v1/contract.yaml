@@ -11,6 +11,8 @@ endpoints:
   http:
     method: POST
     path: /api/v1/devices
+    auth:
+      public: true
     successStatus: 201
     noContent: false
     responses:

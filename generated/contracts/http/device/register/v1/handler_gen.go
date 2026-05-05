@@ -23,15 +23,15 @@ var contractSpec = wrapper.ContractSpec{
 
 // Handler wires HTTP decode/encode + auth.Mount for http.device.register.v1.
 type Handler struct {
-	svc    Service
-	policy auth.Policy
+	svc Service
 }
 
 // NewHandler creates a Handler for http.device.register.v1.
-// policy may be nil — auth.Mount treats nil as "no per-route authorization guard";
-// supply a real policy (e.g. auth.AnyRole, auth.SelfOr) to enforce access control.
-func NewHandler(svc Service, policy auth.Policy) *Handler {
-	return &Handler{svc: svc, policy: policy}
+// This endpoint is Public (JWT-exempt); no policy argument is accepted.
+// auth.Route{Public: true} is emitted by RegisterRoutes so the listener
+// auth middleware skips JWT verification for this route.
+func NewHandler(svc Service) *Handler {
+	return &Handler{svc: svc}
 }
 
 // ServeHTTP implements http.Handler so *Handler can be used directly in tests
@@ -47,7 +47,7 @@ func (h *Handler) RegisterRoutes(mux cell.RouteHandler) error {
 	return auth.Mount(mux, auth.Route{
 		Contract: contractSpec,
 		Handler:  http.HandlerFunc(h.handle),
-		Policy:   h.policy,
+		Public:   true,
 	})
 }
 

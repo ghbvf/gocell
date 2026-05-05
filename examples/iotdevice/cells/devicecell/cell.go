@@ -249,7 +249,7 @@ func (c *DeviceCell) initSlices(durabilityMode cell.DurabilityMode) error {
 		deviceregister.WithEmitter(c.emitter),
 		deviceregister.WithClock(c.clk),
 	)
-	c.registerHandler = registercontract.NewHandler(registerSvc, nil)
+	c.registerHandler = registercontract.NewHandler(registerSvc)
 	c.AddSlice(cell.NewBaseSlice("deviceregister", "devicecell", cell.L4))
 
 	// device-command slice: uses commandtest.InMemQueue as the command store in
@@ -271,11 +271,15 @@ func (c *DeviceCell) initSlices(durabilityMode cell.DurabilityMode) error {
 	if err != nil {
 		return fmt.Errorf("device-command: %w", err)
 	}
-	c.commandEnqueueHandler = enqueuecontract.NewHandler(commandSvc, nil)
-	c.commandDequeueHandler = dequeuecontract.NewHandler(commandSvc, nil)
-	c.commandReportHandler = reportcontract.NewHandler(commandSvc, nil)
-	c.commandAckHandler = ackcontract.NewHandler(commandSvc, nil)
-	c.commandExtendLeaseHandler = extendleasecontract.NewHandler(commandSvc, nil)
+	// enqueue: only admin/operator may send commands to devices.
+	c.commandEnqueueHandler = enqueuecontract.NewHandler(commandSvc, auth.AnyRole(dto.RoleAdmin, dto.RoleOperator))
+	// dequeue/report/ack/extend-lease: device polls/reports on its own commands
+	// (subject == path {id}); admin and operator may also access for observability.
+	c.commandDequeueHandler = dequeuecontract.NewHandler(commandSvc, auth.SelfOr("id", dto.RoleAdmin, dto.RoleOperator))
+	c.commandReportHandler = reportcontract.NewHandler(commandSvc, auth.SelfOr("id", dto.RoleAdmin, dto.RoleOperator))
+	c.commandAckHandler = ackcontract.NewHandler(commandSvc, auth.SelfOr("id", dto.RoleAdmin, dto.RoleOperator))
+	c.commandExtendLeaseHandler = extendleasecontract.NewHandler(commandSvc, auth.SelfOr("id", dto.RoleAdmin, dto.RoleOperator))
+	// internallist: /internal/v1/ path; Clients=["devicecell"] auto-injects RequireCallerCell via auth.Mount.
 	c.commandInternalHandler = internallistcontract.NewHandler(commandSvc, nil)
 	c.commandSweeper = commandruntime.NewSweeperLifecycle("devicecommand.sweeper", &kcommand.Sweeper{
 		Scanner:  cmdQueue,
@@ -290,7 +294,8 @@ func (c *DeviceCell) initSlices(durabilityMode cell.DurabilityMode) error {
 
 	// device-status slice
 	statusSvc := devicestatus.NewService(c.deviceRepo, c.logger)
-	c.statusHandler = statuscontract.NewHandler(statusSvc, nil)
+	// status: admin, operator and the device itself may read device status.
+	c.statusHandler = statuscontract.NewHandler(statusSvc, auth.AnyRole(dto.RoleAdmin, dto.RoleOperator, dto.RoleDevice))
 	c.AddSlice(cell.NewBaseSlice("devicestatus", "devicecell", cell.L0))
 
 	// device-list slice

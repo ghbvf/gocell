@@ -178,8 +178,8 @@ func TestBuildContractSpec_Event_OrderCreated(t *testing.T) {
 	if spec.Event.HandlerMethod != "HandleOrderCreated" {
 		t.Errorf("HandlerMethod = %q, want HandleOrderCreated", spec.Event.HandlerMethod)
 	}
-	if spec.Event.Topic != "event.order-created" {
-		t.Errorf("Topic = %q, want event.order-created", spec.Event.Topic)
+	if spec.Event.Topic != "event.order-created.v1" {
+		t.Errorf("Topic = %q, want event.order-created.v1", spec.Event.Topic)
 	}
 	if !spec.Event.Replayable {
 		t.Error("Replayable should be true")
@@ -677,8 +677,8 @@ func TestBuildContractSpec_Event(t *testing.T) {
 	if spec.Event == nil {
 		t.Fatal("Event is nil")
 	}
-	if spec.Event.Topic != "event.item-created" {
-		t.Errorf("Topic = %q, want event.item-created", spec.Event.Topic)
+	if spec.Event.Topic != "event.item-created.v1" {
+		t.Errorf("Topic = %q, want event.item-created.v1", spec.Event.Topic)
 	}
 	if spec.PackageName != "itemcreated" {
 		t.Errorf("PackageName = %q, want itemcreated", spec.PackageName)
