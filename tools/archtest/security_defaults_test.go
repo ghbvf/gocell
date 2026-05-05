@@ -890,6 +890,23 @@ func findLegacyBroadcastCalls(path string) ([]int, error) {
 	return lines, nil
 }
 
+// allowedConnsMutationFuncs lists hub.go function names where direct mutation
+// of h.conns (delete / clear) is permitted. Every other function must route
+// through removeConnLocked. shutdown is allowed because its bulk drain pairs
+// clear(h.conns) with clear(h.subjectIdx) in adjacent statements; this
+// colocation cannot be enforced via a per-function boolean check, hence the
+// function-name allowlist.
+var allowedConnsMutationFuncs = map[string]bool{
+	"removeConnLocked": true,
+	"shutdown":         true,
+}
+
+// testSEC09HubSubjectIdxSync enforces that every call site mutating h.conns
+// (delete or clear) in hub.go resides in either the centralized
+// removeConnLocked helper or the shutdown bulk-drain path. This replaces the
+// previous per-function boolean ("function deletes h.conns AND touches
+// subjectIdx") which silently passed when a function had multiple delete sites
+// with only one paired subjectIdx update.
 func testSEC09HubSubjectIdxSync(t *testing.T, root string) {
 	t.Helper()
 	path := filepath.Join(root, "runtime", "websocket", "hub.go")
@@ -907,15 +924,32 @@ func testSEC09HubSubjectIdxSync(t *testing.T, root string) {
 		if !ok || fn.Body == nil {
 			return true
 		}
-		if !funcBodyDeletesConns(fn.Body) {
+		if allowedConnsMutationFuncs[fn.Name.Name] {
 			return true
 		}
-		if funcBodyTouchesSubjectIdx(fn.Body) {
+		ast.Inspect(fn.Body, func(inner ast.Node) bool {
+			call, ok := inner.(*ast.CallExpr)
+			if !ok {
+				return true
+			}
+			ident, ok := call.Fun.(*ast.Ident)
+			if !ok || (ident.Name != "delete" && ident.Name != "clear") {
+				return true
+			}
+			if len(call.Args) < 1 {
+				return true
+			}
+			sel, ok := call.Args[0].(*ast.SelectorExpr)
+			if !ok || sel.Sel == nil || sel.Sel.Name != "conns" {
+				return true
+			}
+			line := fset.Position(call.Pos()).Line
+			violations = append(violations,
+				fmt.Sprintf("hub.go:%d: %s() must not call %s(h.conns,...) directly; "+
+					"use removeConnLocked() helper (or, for bulk drain, place inside shutdown). [%s]",
+					line, fn.Name.Name, ident.Name, secFailClosed09))
 			return true
-		}
-		line := fset.Position(fn.Pos()).Line
-		violations = append(violations, fmt.Sprintf("hub.go:%d: %s deletes h.conns without touching h.subjectIdx (%s)",
-			line, fn.Name.Name, secFailClosed09))
+		})
 		return true
 	})
 
@@ -925,53 +959,131 @@ func testSEC09HubSubjectIdxSync(t *testing.T, root string) {
 		}
 	}
 	assert.Empty(t, violations,
-		"every site that removes from h.conns must also remove from h.subjectIdx "+
-			"(or clear it). 5-write-point invariant: Register evict-dup / unregisterEntry / "+
-			"Unregister / handlePingResult miss-evict / evictSlow / evictExpired / shutdown drain")
+		"every h.conns mutation site (delete or clear) must reside in the "+
+			"centralized removeConnLocked helper or the shutdown bulk-drain path. "+
+			"All other call sites must route through removeConnLocked() to keep "+
+			"subjectIdx in lockstep with conns.")
 }
 
-func funcBodyDeletesConns(body *ast.BlockStmt) bool {
-	found := false
-	ast.Inspect(body, func(n ast.Node) bool {
-		call, ok := n.(*ast.CallExpr)
-		if !ok {
-			return true
-		}
-		ident, ok := call.Fun.(*ast.Ident)
-		if !ok || (ident.Name != "delete" && ident.Name != "clear") {
-			return true
-		}
-		if len(call.Args) < 1 {
-			return true
-		}
-		// First arg should look like h.conns or similar selector.
-		sel, ok := call.Args[0].(*ast.SelectorExpr)
-		if !ok || sel.Sel == nil || sel.Sel.Name != "conns" {
-			return true
-		}
-		found = true
-		return false
-	})
-	return found
+// TestSEC09_SyntheticDirectDeleteViolates verifies that the SEC-09 archtest
+// flags a direct delete(h.conns, ...) call outside the allowed function set.
+func TestSEC09_SyntheticDirectDeleteViolates(t *testing.T) {
+	t.Parallel()
+	src := `package websocket
+
+import "sync"
+
+type Hub struct {
+	connMu sync.Mutex
+	conns  map[string]int
 }
 
-func funcBodyTouchesSubjectIdx(body *ast.BlockStmt) bool {
-	found := false
-	ast.Inspect(body, func(n ast.Node) bool {
-		// Match any reference to subjectIdx (delete / clear / removeFromSubjectIdxLocked).
-		switch v := n.(type) {
-		case *ast.SelectorExpr:
-			if v.Sel != nil && v.Sel.Name == "subjectIdx" {
-				found = true
-				return false
-			}
-		case *ast.Ident:
-			if v.Name == "removeFromSubjectIdxLocked" {
-				found = true
-				return false
-			}
+func (h *Hub) badRemove(id string) {
+	h.connMu.Lock()
+	delete(h.conns, id) // VIOLATION: not in allowedConnsMutationFuncs
+	h.connMu.Unlock()
+}
+
+func (h *Hub) removeConnLocked(id string) {
+	delete(h.conns, id) // OK: allowed
+}
+`
+	fset := token.NewFileSet()
+	f, err := parser.ParseFile(fset, "synthetic.go", src, parser.SkipObjectResolution)
+	require.NoError(t, err)
+
+	var found []string
+	ast.Inspect(f, func(n ast.Node) bool {
+		fn, ok := n.(*ast.FuncDecl)
+		if !ok || fn.Body == nil {
+			return true
 		}
+		if allowedConnsMutationFuncs[fn.Name.Name] {
+			return true
+		}
+		ast.Inspect(fn.Body, func(inner ast.Node) bool {
+			call, ok := inner.(*ast.CallExpr)
+			if !ok {
+				return true
+			}
+			ident, ok := call.Fun.(*ast.Ident)
+			if !ok || (ident.Name != "delete" && ident.Name != "clear") {
+				return true
+			}
+			if len(call.Args) < 1 {
+				return true
+			}
+			sel, ok := call.Args[0].(*ast.SelectorExpr)
+			if !ok || sel.Sel == nil || sel.Sel.Name != "conns" {
+				return true
+			}
+			found = append(found, fn.Name.Name)
+			return true
+		})
 		return true
 	})
-	return found
+
+	require.Len(t, found, 1, "exactly one violation expected (badRemove)")
+	assert.Equal(t, "badRemove", found[0])
+}
+
+// TestSEC09_SyntheticAllowedFunctionsPass verifies the allowlist works:
+// removeConnLocked and shutdown can call raw delete/clear without violation.
+func TestSEC09_SyntheticAllowedFunctionsPass(t *testing.T) {
+	t.Parallel()
+	src := `package websocket
+
+import "sync"
+
+type Hub struct {
+	connMu sync.Mutex
+	conns  map[string]int
+}
+
+func (h *Hub) removeConnLocked(id string) {
+	delete(h.conns, id)
+}
+
+func (h *Hub) shutdown() {
+	h.connMu.Lock()
+	clear(h.conns)
+	h.connMu.Unlock()
+}
+`
+	fset := token.NewFileSet()
+	f, err := parser.ParseFile(fset, "synthetic.go", src, parser.SkipObjectResolution)
+	require.NoError(t, err)
+
+	var found []string
+	ast.Inspect(f, func(n ast.Node) bool {
+		fn, ok := n.(*ast.FuncDecl)
+		if !ok || fn.Body == nil {
+			return true
+		}
+		if allowedConnsMutationFuncs[fn.Name.Name] {
+			return true
+		}
+		ast.Inspect(fn.Body, func(inner ast.Node) bool {
+			call, ok := inner.(*ast.CallExpr)
+			if !ok {
+				return true
+			}
+			ident, ok := call.Fun.(*ast.Ident)
+			if !ok || (ident.Name != "delete" && ident.Name != "clear") {
+				return true
+			}
+			if len(call.Args) < 1 {
+				return true
+			}
+			sel, ok := call.Args[0].(*ast.SelectorExpr)
+			if !ok || sel.Sel == nil || sel.Sel.Name != "conns" {
+				return true
+			}
+			found = append(found, fn.Name.Name)
+			return true
+		})
+		return true
+	})
+
+	assert.Empty(t, found, "removeConnLocked and shutdown should be allowed and produce no violations")
 }
