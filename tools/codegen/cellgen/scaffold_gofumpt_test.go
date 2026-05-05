@@ -8,14 +8,9 @@ import (
 	"testing"
 
 	gofumpt "mvdan.cc/gofumpt/format"
-)
 
-// gofumptOpts mirrors the producer-side helper config: LangVersion tracks
-// go.mod (go 1.25) and ModulePath matches the go.mod module declaration.
-var gofumptOpts = gofumpt.Options{
-	LangVersion: "go1.25",
-	ModulePath:  "github.com/ghbvf/gocell",
-}
+	"github.com/ghbvf/gocell/tools/codegen"
+)
 
 // TestScaffoldCell_OutputIsGofumptClean drives cellgen's renderTemplate
 // formatter contract: every .go file ScaffoldCell writes must round-trip
@@ -47,7 +42,7 @@ func TestScaffoldCell_OutputIsGofumptClean(t *testing.T) {
 		if readErr != nil {
 			return readErr
 		}
-		canonical, fmtErr := gofumpt.Source(got, gofumptOpts)
+		canonical, fmtErr := gofumpt.Source(got, codegen.GofumptOptions)
 		if fmtErr != nil {
 			t.Errorf("gofumpt.Source on %s: %v", path, fmtErr)
 			return nil

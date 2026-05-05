@@ -7,16 +7,8 @@ import (
 	gofumpt "mvdan.cc/gofumpt/format"
 
 	kerneldepgraph "github.com/ghbvf/gocell/kernel/depgraph"
+	"github.com/ghbvf/gocell/tools/codegen"
 )
-
-// gofumptOpts mirrors the producer-side helper config used by the codegen
-// formatter (LangVersion tracks go.mod go 1.25; ModulePath matches go.mod
-// module). The round-trip below enforces the same canonical shape the CI
-// formatter gate (.golangci.yml gofumpt) applies.
-var gofumptOpts = gofumpt.Options{
-	LangVersion: "go1.25",
-	ModulePath:  "github.com/ghbvf/gocell",
-}
 
 // TestEmitFile_OutputIsGofumptClean fences EmitFile's formatter contract.
 // catalog_gen.go lands under cmd/corebundle/ where the CI lint exclusion
@@ -46,7 +38,7 @@ func TestEmitFile_OutputIsGofumptClean(t *testing.T) {
 	if err != nil {
 		t.Fatalf("EmitFile: %v", err)
 	}
-	canonical, err := gofumpt.Source(got, gofumptOpts)
+	canonical, err := gofumpt.Source(got, codegen.GofumptOptions)
 	if err != nil {
 		t.Fatalf("gofumpt.Source on EmitFile output: %v", err)
 	}

@@ -10,14 +10,6 @@ import (
 	"github.com/ghbvf/gocell/tools/codegen"
 )
 
-// gofumptOpts mirrors what the producer-side helper applies. LangVersion
-// tracks go.mod (go 1.25) so the round-trip enforces the same canonical
-// shape the CI golangci-lint formatter gate (.golangci.yml gofumpt) checks.
-var gofumptOpts = gofumpt.Options{
-	LangVersion: "go1.25",
-	ModulePath:  "github.com/ghbvf/gocell",
-}
-
 // TestRender_OutputIsGofumptClean drives the producer-side formatter contract.
 //
 // The template intentionally emits a function whose body has a leading blank
@@ -44,7 +36,7 @@ func F() {
 		t.Fatalf("Render: %v", err)
 	}
 
-	canonical, err := gofumpt.Source(out, gofumptOpts)
+	canonical, err := gofumpt.Source(out, codegen.GofumptOptions)
 	if err != nil {
 		t.Fatalf("gofumpt.Source on rendered output: %v", err)
 	}

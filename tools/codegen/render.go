@@ -9,13 +9,15 @@ import (
 	gofumpt "mvdan.cc/gofumpt/format"
 )
 
-// gofumptOpts are the producer-side gofumpt config. LangVersion tracks
+// GofumptOptions are the producer-side gofumpt config. LangVersion tracks
 // the go directive in go.mod (go 1.25); ModulePath matches the module
 // declaration so gofumpt can group imports by module locality.
 //
 // These values must stay aligned with the CI formatter gate
 // (.golangci.yml formatters.enable: gofumpt + golangci-lint v2.11.4).
-var gofumptOpts = gofumpt.Options{
+// Exported so tests across tools/codegen, tools/codegen/cellgen, and
+// tools/generatedcatalog can reference a single authoritative copy.
+var GofumptOptions = gofumpt.Options{
 	LangVersion: "go1.25",
 	ModulePath:  "github.com/ghbvf/gocell",
 }
@@ -50,7 +52,7 @@ func FormatGoSource(filename string, src []byte) ([]byte, error) {
 	if err != nil {
 		return src, fmt.Errorf("codegen format: goimports: %w", err)
 	}
-	formatted, err := gofumpt.Source(imported, gofumptOpts)
+	formatted, err := gofumpt.Source(imported, GofumptOptions)
 	if err != nil {
 		return imported, fmt.Errorf("codegen format: gofumpt: %w", err)
 	}

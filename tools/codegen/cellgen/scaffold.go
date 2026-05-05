@@ -126,8 +126,8 @@ func ScaffoldCell(root, targetDir string, spec ScaffoldSpec) error {
 		}
 	}
 
-	// DryRun: render templates to catch template/input errors (go/format.Source
-	// validates cell.go syntax), but do not write any files to disk.
+	// DryRun: render templates to catch template/input errors (codegen.FormatGoSource
+	// (goimports + gofumpt) validates cell.go syntax), but do not write any files to disk.
 	if spec.DryRun {
 		if _, err := renderTemplate(cellGoTemplate, spec, true); err != nil {
 			return fmt.Errorf("scaffold cell: dry-run render cell.go: %w", err)

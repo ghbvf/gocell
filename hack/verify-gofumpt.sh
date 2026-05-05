@@ -24,6 +24,16 @@ set -euo pipefail
 
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 
+if ! command -v golangci-lint &>/dev/null; then
+  cat >&2 <<'EOF'
+verify-gofumpt: golangci-lint not in PATH.
+Install with:
+  * make fmt        (uses the project-pinned version via go run)
+  * go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest
+EOF
+  exit 1
+fi
+
 diff_output="$(golangci-lint fmt -d ./...)"
 if [[ -n "${diff_output}" ]]; then
     echo "formatter drift detected; run 'make fmt' to fix:" >&2
