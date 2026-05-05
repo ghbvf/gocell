@@ -78,7 +78,7 @@ curl -sS -X POST https://gocell.example/api/v1/access/setup/admin \
   -u "${OPS_USER}:${OPS_PASS}" \
   -H 'content-type: application/json' \
   -d '{"username":"root","email":"root@local","password":"SecretPass!23"}'
-# {"error":{"code":"ERR_SETUP_ALREADY_INITIALIZED","message":"first-run admin already provisioned; this endpoint is retired","details":{"nextAction":"login"}}}
+# {"error":{"code":"ERR_SETUP_ALREADY_INITIALIZED","message":"first-run admin already provisioned; this endpoint is retired","details":[{"key":"nextAction","value":"login"}]}}
 ```
 
 ## 4. K8s Secret 滚动轮换
@@ -104,13 +104,14 @@ setup 端点退休后，所有 `POST /api/v1/access/setup/admin` 请求得到统
   "error": {
     "code": "ERR_SETUP_ALREADY_INITIALIZED",
     "message": "first-run admin already provisioned; this endpoint is retired",
-    "details": {
-      "nextAction": "login"
-    }
+    "details": [
+      {"key": "nextAction", "value": "login"}
+    ]
   }
 }
 ```
 
+- `details` 是 `array<{key,value}>`（共享 envelope `contracts/shared/errors/error-response-v1.schema.json`），客户端按 key 匹配条目而非 map 索引
 - `details` 上只暴露语义动词 `nextAction`，不嵌入任何 HTTP path 字面量
 - login 端点的实际路径由 contract 定义（`http.auth.login.v1`），客户端通过 OpenAPI / contract registry / 自身路由表解析
 - 该响应跨部署稳定——即便 sessions/login 路径未来改版，410 body 字段不变
@@ -120,12 +121,26 @@ setup 端点退休后，所有 `POST /api/v1/access/setup/admin` 请求得到统
 ## 6. Go 客户端伪代码
 
 ```go
+type errDetail struct {
+    Key   string `json:"key"`
+    Value any    `json:"value"`
+}
+
 type errEnvelope struct {
     Error struct {
-        Code    string         `json:"code"`
-        Message string         `json:"message"`
-        Details map[string]any `json:"details"`
+        Code    string      `json:"code"`
+        Message string      `json:"message"`
+        Details []errDetail `json:"details"`
     } `json:"error"`
+}
+
+func (e errEnvelope) detail(key string) (any, bool) {
+    for _, d := range e.Error.Details {
+        if d.Key == key {
+            return d.Value, true
+        }
+    }
+    return nil, false
 }
 
 func provisionOrLogin(ctx context.Context, c *Client, in AdminSeed) error {
@@ -146,7 +161,7 @@ func provisionOrLogin(ctx context.Context, c *Client, in AdminSeed) error {
     if err := json.NewDecoder(resp.Body).Decode(&env); err != nil {
         return fmt.Errorf("setup: decode 410 envelope: %w", err)
     }
-    if env.Error.Details["nextAction"] != "login" {
+    if v, ok := env.detail("nextAction"); !ok || v != "login" {
         return fmt.Errorf("setup: 410 with unexpected nextAction %v", env.Error.Details)
     }
     // login 路径由 contract registry 提供，不读 410 body 上的字面量

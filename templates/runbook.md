@@ -39,7 +39,7 @@
 |--------------------|--------|----------------------|----------------------------------|
 | `/healthz`         | GET    | `200 OK`             | Process is alive                 |
 | `/readyz`          | GET    | `200 OK` / `503`     | Ready to accept traffic; aggregate status only |
-| `/readyz?verbose`  | GET    | `200` / `401` / `503` + JSON details | Cell and dependency breakdown; requires `X-Readyz-Token` |
+| `/readyz?verbose`  | GET    | `200` (verbose breakdown under `data.*`) / `401` / `503` (wire body `details: []`; breakdown emitted to server-side slog) | Cell and dependency breakdown; requires `X-Readyz-Token` |
 
 `/readyz` is the safe default probe for load balancers and orchestrators. Use `/readyz?verbose` only when an operator needs cell and dependency breakdown.
 
@@ -88,31 +88,34 @@ Example verbose response (`503 Service Unavailable` — at least one probe faili
   "error": {
     "code": "ERR_SERVICE_UNAVAILABLE",
     "message": "service unavailable",
-    "details": {
-      "status": "unhealthy",
-      "reason": "readiness_failed",
-      "cells": {
-        "accesscore": "healthy"
-      },
-      "dependencies": {
-        "config-watcher": { "status": "healthy",   "duration_ms": 2 },
-        "postgres-ping":  { "status": "unhealthy", "duration_ms": 11,
-                             "error": "connection refused" }
-      },
-      "adapters": {
-        "storage": "postgres",
-        "eventbus": "rabbitmq"
-      }
-    }
+    "details": []
   }
 }
 ```
 
-PR-A35 envelope: success bodies live under `data.*`, failure bodies under
-`error.details.*`. On-call scripts that walked the pre-PR-A35 bare
-`{status,cells,dependencies}` shape must be updated to that one consistent
-path. Probe entries are structured `ProbeResult` maps (`status` +
-`duration_ms` + optional `error`), not bare strings.
+The 503 wire body always emits an empty `details: []` array (K#08 5xx
+redaction policy — runtime context never reaches public clients). The
+verbose breakdown is emitted to server-side `slog` instead so on-call
+retains the diagnostic via the standard log pipeline:
+
+```
+level=WARN msg="readyz unhealthy"
+  status=unhealthy reason=readiness_failed
+  cells={accesscore=healthy}
+  dependencies={config-watcher={status=healthy, duration_ms=2},
+                postgres-ping={status=unhealthy, duration_ms=11,
+                               error="connection refused"}}
+  adapters={storage=postgres, eventbus=rabbitmq}
+```
+
+Success bodies live under `data.*`. The shared error envelope
+(`contracts/shared/errors/error-response-v1.schema.json`) defines `details`
+as `array<{key,value}>`; for /readyz 503 it is always empty. On-call
+scripts that walked the pre-K#08 `error.details.{status,reason,cells,...}`
+map shape must switch to reading the `slog` record (or hit /readyz?verbose
+on a healthy 200 to see the breakdown). Probe entries inside the slog
+record are structured `ProbeResult` shapes (`status` + `duration_ms` +
+optional `error`), not bare strings.
 
 ---
 
