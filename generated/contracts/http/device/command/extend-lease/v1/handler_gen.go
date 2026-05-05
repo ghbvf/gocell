@@ -4,13 +4,15 @@
 package extendlease
 
 import (
+	"bytes"
+	"io"
 	"net/http"
 
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/wrapper"
-	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/httputil"
 	"github.com/ghbvf/gocell/runtime/auth"
+	"github.com/ghbvf/gocell/runtime/http/schemavalidate"
 )
 
 var contractSpec = wrapper.ContractSpec{
@@ -21,17 +23,26 @@ var contractSpec = wrapper.ContractSpec{
 	Path:      "/api/v1/devices/{id}/commands/{cmdId}/extend-lease",
 }
 
+// requestSchemaJSON is the embedded request schema for runtime validation.
+// Compiled once at handler construction time by schemavalidate.NewValidator.
+var requestSchemaJSON = []byte("{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"http.device.command.extend-lease.v1.request\",\"type\":\"object\",\"properties\":{\"extensionSeconds\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":3600}},\"required\":[\"extensionSeconds\"],\"additionalProperties\":false}")
+
 // Handler wires HTTP decode/encode + auth.Mount for http.device.command.extend-lease.v1.
 type Handler struct {
-	svc    Service
-	policy auth.Policy
+	svc              Service
+	policy           auth.Policy
+	requestValidator schemavalidate.Validator
 }
 
 // NewHandler creates a Handler for http.device.command.extend-lease.v1.
 // policy may be nil — auth.Mount treats nil as "no per-route authorization guard";
 // supply a real policy (e.g. auth.AnyRole, auth.SelfOr) to enforce access control.
 func NewHandler(svc Service, policy auth.Policy) *Handler {
-	return &Handler{svc: svc, policy: policy}
+	h := &Handler{svc: svc, policy: policy}
+	if v, err := schemavalidate.NewValidator(requestSchemaJSON); err == nil {
+		h.requestValidator = v
+	}
+	return h
 }
 
 // ServeHTTP implements http.Handler so *Handler can be used directly in tests
@@ -55,39 +66,27 @@ func (h *Handler) handle(w http.ResponseWriter, r *http.Request) {
 	req := &Request{}
 	{
 		v := r.PathValue("id")
-		if len(v) < 1 {
-			httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "id: value too short"))
-			return
-		}
-		if len(v) > 256 {
-			httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "id: value too long"))
-			return
-		}
 		req.ID = v
 	}
 	{
 		v := r.PathValue("cmdId")
-		if len(v) < 1 {
-			httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "cmdId: value too short"))
-			return
-		}
-		if len(v) > 256 {
-			httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "cmdId: value too long"))
-			return
-		}
 		req.CmdId = v
 	}
+	bodyBytes, err := io.ReadAll(io.LimitReader(r.Body, httputil.DefaultDecodeJSONLimit+1))
+	if err != nil {
+		httputil.WriteError(r.Context(), w, err)
+		return
+	}
+	r.Body = io.NopCloser(bytes.NewReader(bodyBytes))
 	if err := httputil.DecodeJSONStrict(r, req, httputil.DefaultDecodeJSONLimit); err != nil {
 		httputil.WriteError(r.Context(), w, err)
 		return
 	}
-	if req.ExtensionSeconds < 1 {
-		httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "extensionSeconds: value below minimum"))
-		return
-	}
-	if req.ExtensionSeconds > 3600 {
-		httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "extensionSeconds: value above maximum"))
-		return
+	if h.requestValidator != nil {
+		if err := h.requestValidator.Validate(r.Context(), bodyBytes); err != nil {
+			schemavalidate.WriteValidationError(r.Context(), w, err)
+			return
+		}
 	}
 	resp, err := h.svc.ExtendLease(r.Context(), req)
 	if err != nil {

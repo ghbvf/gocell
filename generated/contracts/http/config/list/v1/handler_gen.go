@@ -30,7 +30,8 @@ type Handler struct {
 // policy may be nil — auth.Mount treats nil as "no per-route authorization guard";
 // supply a real policy (e.g. auth.AnyRole, auth.SelfOr) to enforce access control.
 func NewHandler(svc Service, policy auth.Policy) *Handler {
-	return &Handler{svc: svc, policy: policy}
+	h := &Handler{svc: svc, policy: policy}
+	return h
 }
 
 // ServeHTTP implements http.Handler so *Handler can be used directly in tests

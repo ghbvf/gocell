@@ -4,13 +4,15 @@
 package assign
 
 import (
+	"bytes"
+	"io"
 	"net/http"
 
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/wrapper"
-	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/httputil"
 	"github.com/ghbvf/gocell/runtime/auth"
+	"github.com/ghbvf/gocell/runtime/http/schemavalidate"
 )
 
 var contractSpec = wrapper.ContractSpec{
@@ -22,17 +24,26 @@ var contractSpec = wrapper.ContractSpec{
 	Clients:   []string{"accesscore"},
 }
 
+// requestSchemaJSON is the embedded request schema for runtime validation.
+// Compiled once at handler construction time by schemavalidate.NewValidator.
+var requestSchemaJSON = []byte("{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"http.auth.role.assign.v1.request\",\"type\":\"object\",\"properties\":{\"userId\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":64},\"roleId\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":64}},\"required\":[\"userId\",\"roleId\"],\"additionalProperties\":false}")
+
 // Handler wires HTTP decode/encode + auth.Mount for http.auth.role.assign.v1.
 type Handler struct {
-	svc    Service
-	policy auth.Policy
+	svc              Service
+	policy           auth.Policy
+	requestValidator schemavalidate.Validator
 }
 
 // NewHandler creates a Handler for http.auth.role.assign.v1.
 // policy may be nil — auth.Mount treats nil as "no per-route authorization guard";
 // supply a real policy (e.g. auth.AnyRole, auth.SelfOr) to enforce access control.
 func NewHandler(svc Service, policy auth.Policy) *Handler {
-	return &Handler{svc: svc, policy: policy}
+	h := &Handler{svc: svc, policy: policy}
+	if v, err := schemavalidate.NewValidator(requestSchemaJSON); err == nil {
+		h.requestValidator = v
+	}
+	return h
 }
 
 // ServeHTTP implements http.Handler so *Handler can be used directly in tests
@@ -54,25 +65,21 @@ func (h *Handler) RegisterRoutes(mux cell.RouteHandler) error {
 
 func (h *Handler) handle(w http.ResponseWriter, r *http.Request) {
 	req := &Request{}
+	bodyBytes, err := io.ReadAll(io.LimitReader(r.Body, httputil.DefaultDecodeJSONLimit+1))
+	if err != nil {
+		httputil.WriteError(r.Context(), w, err)
+		return
+	}
+	r.Body = io.NopCloser(bytes.NewReader(bodyBytes))
 	if err := httputil.DecodeJSONStrict(r, req, httputil.DefaultDecodeJSONLimit); err != nil {
 		httputil.WriteError(r.Context(), w, err)
 		return
 	}
-	if len(req.UserId) < 1 {
-		httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "userId: value too short"))
-		return
-	}
-	if len(req.UserId) > 64 {
-		httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "userId: value too long"))
-		return
-	}
-	if len(req.RoleId) < 1 {
-		httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "roleId: value too short"))
-		return
-	}
-	if len(req.RoleId) > 64 {
-		httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "roleId: value too long"))
-		return
+	if h.requestValidator != nil {
+		if err := h.requestValidator.Validate(r.Context(), bodyBytes); err != nil {
+			schemavalidate.WriteValidationError(r.Context(), w, err)
+			return
+		}
 	}
 	resp, err := h.svc.Assign(r.Context(), req)
 	if err != nil {

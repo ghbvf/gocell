@@ -242,5 +242,5 @@ func TestHandler_Refresh_BlankToken(t *testing.T) {
 	}
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 	assert.Equal(t, "ERR_VALIDATION_FAILED", resp.Error.Code)
-	assert.Equal(t, "refreshToken: value too short", resp.Error.Message)
+	assert.Equal(t, "refreshToken: invalid", resp.Error.Message)
 }

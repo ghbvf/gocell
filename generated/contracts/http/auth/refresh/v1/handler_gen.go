@@ -4,13 +4,15 @@
 package refresh
 
 import (
+	"bytes"
+	"io"
 	"net/http"
 
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/wrapper"
-	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/httputil"
 	"github.com/ghbvf/gocell/runtime/auth"
+	"github.com/ghbvf/gocell/runtime/http/schemavalidate"
 )
 
 var contractSpec = wrapper.ContractSpec{
@@ -21,9 +23,14 @@ var contractSpec = wrapper.ContractSpec{
 	Path:      "/api/v1/access/sessions/refresh",
 }
 
+// requestSchemaJSON is the embedded request schema for runtime validation.
+// Compiled once at handler construction time by schemavalidate.NewValidator.
+var requestSchemaJSON = []byte("{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"http.auth.refresh.v1.request\",\"type\":\"object\",\"properties\":{\"refreshToken\":{\"type\":\"string\",\"minLength\":20,\"maxLength\":4096}},\"required\":[\"refreshToken\"],\"additionalProperties\":false}")
+
 // Handler wires HTTP decode/encode + auth.Mount for http.auth.refresh.v1.
 type Handler struct {
-	svc Service
+	svc              Service
+	requestValidator schemavalidate.Validator
 }
 
 // NewHandler creates a Handler for http.auth.refresh.v1.
@@ -31,7 +38,11 @@ type Handler struct {
 // auth.Route{Public: true} is emitted by RegisterRoutes so the listener
 // auth middleware skips JWT verification for this route.
 func NewHandler(svc Service) *Handler {
-	return &Handler{svc: svc}
+	h := &Handler{svc: svc}
+	if v, err := schemavalidate.NewValidator(requestSchemaJSON); err == nil {
+		h.requestValidator = v
+	}
+	return h
 }
 
 // ServeHTTP implements http.Handler so *Handler can be used directly in tests
@@ -53,17 +64,21 @@ func (h *Handler) RegisterRoutes(mux cell.RouteHandler) error {
 
 func (h *Handler) handle(w http.ResponseWriter, r *http.Request) {
 	req := &Request{}
+	bodyBytes, err := io.ReadAll(io.LimitReader(r.Body, httputil.DefaultDecodeJSONLimit+1))
+	if err != nil {
+		httputil.WriteError(r.Context(), w, err)
+		return
+	}
+	r.Body = io.NopCloser(bytes.NewReader(bodyBytes))
 	if err := httputil.DecodeJSONStrict(r, req, httputil.DefaultDecodeJSONLimit); err != nil {
 		httputil.WriteError(r.Context(), w, err)
 		return
 	}
-	if len(req.RefreshToken) < 20 {
-		httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "refreshToken: value too short"))
-		return
-	}
-	if len(req.RefreshToken) > 4096 {
-		httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "refreshToken: value too long"))
-		return
+	if h.requestValidator != nil {
+		if err := h.requestValidator.Validate(r.Context(), bodyBytes); err != nil {
+			schemavalidate.WriteValidationError(r.Context(), w, err)
+			return
+		}
 	}
 	resp, err := h.svc.Refresh(r.Context(), req)
 	if err != nil {

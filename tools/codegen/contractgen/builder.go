@@ -1,7 +1,10 @@
 package contractgen
 
 import (
+	"bytes"
+	"encoding/json"
 	"fmt"
+	"os"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -89,6 +92,24 @@ func buildHTTPSpec(spec *ContractGenSpec, rootDir string, contract *metadata.Con
 		return err
 	}
 	spec.Endpoint = endpointSpec
+
+	// Embed the request schema JSON for runtime validation by schemavalidate.Validator.
+	// Only populated when the contract declares a request schema — GET/DELETE endpoints
+	// without bodies have no schema and no validator.
+	if contract.SchemaRefs.Request != "" {
+		reqPath := filepath.Join(rootDir, contractDir, contract.SchemaRefs.Request)
+		schemaBytes, err := os.ReadFile(reqPath)
+		if err != nil {
+			return fmt.Errorf("contractgen build: %q read request schema for embed: %w", contract.ID, err)
+		}
+		// Compact to a single line: eliminates newlines so the schema can be
+		// safely embedded in the generated file as a Go interpreted string literal.
+		var compacted bytes.Buffer
+		if err := json.Compact(&compacted, schemaBytes); err != nil {
+			return fmt.Errorf("contractgen build: %q compact request schema: %w", contract.ID, err)
+		}
+		spec.RequestSchemaJSON = compacted.String()
+	}
 	return nil
 }
 

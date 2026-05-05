@@ -5,6 +5,9 @@
 // Validation errors are mapped to errcode.ErrValidationFailed and written
 // via httputil.WriteError. Error messages expose field names but never expose
 // schema-internal details (lengths, ranges, patterns) to prevent oracle attacks.
+//
+// ref: santhosh-tekuri/jsonschema/v6 (already in go.mod via contracttest)
+// ref: deepmap/oapi-codegen security examples (request validation patterns)
 package schemavalidate
 
 import (
@@ -36,7 +39,23 @@ type Validator interface {
 //
 // Returns error if schemaJSON is not valid JSON or is not a compilable schema.
 func NewValidator(schemaJSON []byte) (Validator, error) {
-	return nil, errors.New("not implemented")
+	var doc any
+	if err := json.Unmarshal(schemaJSON, &doc); err != nil {
+		return nil, fmt.Errorf("schemavalidate: invalid JSON: %w", err)
+	}
+
+	compiler := jsonschema.NewCompiler()
+	const schemaURL = "mem:///request.schema.json"
+	if err := compiler.AddResource(schemaURL, doc); err != nil {
+		return nil, fmt.Errorf("schemavalidate: add schema resource: %w", err)
+	}
+
+	schema, err := compiler.Compile(schemaURL)
+	if err != nil {
+		return nil, fmt.Errorf("schemavalidate: compile schema: %w", err)
+	}
+
+	return &validator{schema: schema}, nil
 }
 
 // WriteValidationError writes an HTTP 400 response with the error from Validate.
@@ -56,7 +75,33 @@ type validator struct {
 
 // Validate implements Validator.
 func (v *validator) Validate(_ context.Context, body []byte) error {
-	return errors.New("not implemented")
+	var doc any
+	if err := json.Unmarshal(body, &doc); err != nil {
+		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "invalid JSON body")
+	}
+
+	if err := v.schema.Validate(doc); err != nil {
+		var verr *jsonschema.ValidationError
+		if errors.As(err, &verr) {
+			msg := buildSafeMessage(verr)
+			return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, msg)
+		}
+		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "invalid request body")
+	}
+	return nil
+}
+
+// buildSafeMessage constructs a client-visible error message from a ValidationError
+// tree. It collects the first leaf error's field path and returns "field: invalid".
+// Multiple violations collapse to the first meaningful field path to avoid
+// enumerating the full constraint list (oracle prevention).
+func buildSafeMessage(e *jsonschema.ValidationError) string {
+	leaves := collectLeafErrors(e)
+	if len(leaves) == 0 {
+		return "invalid"
+	}
+	// Return first leaf message; multiple violations still produce a safe message.
+	return leaves[0]
 }
 
 // sanitizeMessage converts a jsonschema validation error to a safe
@@ -94,13 +139,4 @@ func collectLeafErrors(e *jsonschema.ValidationError) []string {
 		msgs = append(msgs, collectLeafErrors(cause)...)
 	}
 	return msgs
-}
-
-// jsonValue unmarshals body into a value suitable for jsonschema validation.
-func jsonValue(body []byte) (any, error) {
-	var v any
-	if err := json.Unmarshal(body, &v); err != nil {
-		return nil, fmt.Errorf("schemavalidate: invalid JSON: %w", err)
-	}
-	return v, nil
 }

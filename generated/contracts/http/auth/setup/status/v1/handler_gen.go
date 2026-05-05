@@ -30,7 +30,8 @@ type Handler struct {
 // auth.Route{Public: true} is emitted by RegisterRoutes so the listener
 // auth middleware skips JWT verification for this route.
 func NewHandler(svc Service) *Handler {
-	return &Handler{svc: svc}
+	h := &Handler{svc: svc}
+	return h
 }
 
 // ServeHTTP implements http.Handler so *Handler can be used directly in tests

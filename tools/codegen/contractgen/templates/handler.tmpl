@@ -4,6 +4,10 @@ package {{.PackageName}}
 
 import (
 	"net/http"
+{{- if .RequestSchemaJSON}}
+	"bytes"
+	"io"
+{{- end}}
 {{- if and (not .Endpoint.IsPagination) (hasQueryNumeric .Endpoint.QueryParams)}}
 	"strconv"
 {{- end}}
@@ -15,6 +19,9 @@ import (
 {{- end}}
 	"github.com/ghbvf/gocell/pkg/httputil"
 	"github.com/ghbvf/gocell/runtime/auth"
+{{- if .RequestSchemaJSON}}
+	"github.com/ghbvf/gocell/runtime/http/schemavalidate"
+{{- end}}
 )
 
 var contractSpec = wrapper.ContractSpec{
@@ -28,11 +35,20 @@ var contractSpec = wrapper.ContractSpec{
 {{- end}}
 }
 
+{{- if .RequestSchemaJSON}}
+// requestSchemaJSON is the embedded request schema for runtime validation.
+// Compiled once at handler construction time by schemavalidate.NewValidator.
+var requestSchemaJSON = []byte({{quoteGoString .RequestSchemaJSON}})
+{{- end}}
+
 // Handler wires HTTP decode/encode + auth.Mount for {{.ContractID}}.
 type Handler struct {
 	svc    Service
 {{- if not .Endpoint.AuthPublic}}
 	policy auth.Policy
+{{- end}}
+{{- if .RequestSchemaJSON}}
+	requestValidator schemavalidate.Validator
 {{- end}}
 }
 
@@ -42,14 +58,26 @@ type Handler struct {
 // auth.Route{Public: true} is emitted by RegisterRoutes so the listener
 // auth middleware skips JWT verification for this route.
 func NewHandler(svc Service) *Handler {
-	return &Handler{svc: svc}
+	h := &Handler{svc: svc}
+{{- if .RequestSchemaJSON}}
+	if v, err := schemavalidate.NewValidator(requestSchemaJSON); err == nil {
+		h.requestValidator = v
+	}
+{{- end}}
+	return h
 }
 {{- else}}
 // NewHandler creates a Handler for {{.ContractID}}.
 // policy may be nil — auth.Mount treats nil as "no per-route authorization guard";
 // supply a real policy (e.g. auth.AnyRole, auth.SelfOr) to enforce access control.
 func NewHandler(svc Service, policy auth.Policy) *Handler {
-	return &Handler{svc: svc, policy: policy}
+	h := &Handler{svc: svc, policy: policy}
+{{- if .RequestSchemaJSON}}
+	if v, err := schemavalidate.NewValidator(requestSchemaJSON); err == nil {
+		h.requestValidator = v
+	}
+{{- end}}
+	return h
 }
 {{- end}}
 
@@ -91,68 +119,30 @@ func (h *Handler) handle(w http.ResponseWriter, r *http.Request) {
 {{- else}}
 	{
 		v := r.PathValue("{{.Name}}")
-{{- if hasMinLength .MinLength}}
-		if len(v) < {{derefInt .MinLength}} {
-			httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "{{.Name}}: value too short"))
-			return
-		}
-{{- end}}
-{{- if hasMaxLength .MaxLength}}
-		if len(v) > {{derefInt .MaxLength}} {
-			httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "{{.Name}}: value too long"))
-			return
-		}
-{{- end}}
 		req.{{.GoName}} = v
 	}
 {{- end}}
 {{- end}}
 {{- if .Endpoint.HasBody}}
+{{- if .RequestSchemaJSON}}
+	bodyBytes, err := io.ReadAll(io.LimitReader(r.Body, httputil.DefaultDecodeJSONLimit+1))
+	if err != nil {
+		httputil.WriteError(r.Context(), w, err)
+		return
+	}
+	r.Body = io.NopCloser(bytes.NewReader(bodyBytes))
+{{- end}}
 	if err := httputil.DecodeJSONStrict(r, req, httputil.DefaultDecodeJSONLimit); err != nil {
 		httputil.WriteError(r.Context(), w, err)
 		return
 	}
-{{- if hasBodyValidation .DTOs}}
-{{- range .DTOs}}{{if eq .Name "Request"}}{{range .Fields}}{{if isBodyField .}}
-{{- if hasMinLength .MinLength}}
-{{- if .Required}}
-	if len(req.{{.Name}}) < {{derefInt .MinLength}} {
-		httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "{{.JSONTag}}: value too short"))
-		return
+{{- if .RequestSchemaJSON}}
+	if h.requestValidator != nil {
+		if err := h.requestValidator.Validate(r.Context(), bodyBytes); err != nil {
+			schemavalidate.WriteValidationError(r.Context(), w, err)
+			return
+		}
 	}
-{{- else}}
-	if req.{{.Name}} != "" && len(req.{{.Name}}) < {{derefInt .MinLength}} {
-		httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "{{.JSONTag}}: value too short"))
-		return
-	}
-{{- end}}
-{{- end}}
-{{- if hasMaxLength .MaxLength}}
-{{- if .Required}}
-	if len(req.{{.Name}}) > {{derefInt .MaxLength}} {
-		httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "{{.JSONTag}}: value too long"))
-		return
-	}
-{{- else}}
-	if req.{{.Name}} != "" && len(req.{{.Name}}) > {{derefInt .MaxLength}} {
-		httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "{{.JSONTag}}: value too long"))
-		return
-	}
-{{- end}}
-{{- end}}
-{{- if hasMinimum .Minimum}}
-	if req.{{.Name}} < {{derefInt64 .Minimum}} {
-		httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "{{.JSONTag}}: value below minimum"))
-		return
-	}
-{{- end}}
-{{- if hasMaximum .Maximum}}
-	if req.{{.Name}} > {{derefInt64 .Maximum}} {
-		httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "{{.JSONTag}}: value above maximum"))
-		return
-	}
-{{- end}}
-{{- end}}{{end}}{{end}}{{end}}
 {{- end}}
 {{- else if .Endpoint.IsPagination}}
 	page, err := httputil.ParsePageParams(r)
@@ -172,18 +162,6 @@ func (h *Handler) handle(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 {{- end}}
-{{- if hasMinLength .MinLength}}
-	if req.{{.GoName}} != "" && len(req.{{.GoName}}) < {{derefInt .MinLength}} {
-		httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "{{.Name}}: value too short"))
-		return
-	}
-{{- end}}
-{{- if hasMaxLength .MaxLength}}
-	if req.{{.GoName}} != "" && len(req.{{.GoName}}) > {{derefInt .MaxLength}} {
-		httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "{{.Name}}: value too long"))
-		return
-	}
-{{- end}}
 {{- else if eq .GoType "int64"}}
 {{- if .Required}}
 	{
@@ -199,13 +177,13 @@ func (h *Handler) handle(w http.ResponseWriter, r *http.Request) {
 		}
 {{- if hasMinimum .Minimum}}
 		if v < {{derefInt64 .Minimum}} {
-			httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "{{.Name}}: value below minimum"))
+			httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "{{.Name}}: invalid"))
 			return
 		}
 {{- end}}
 {{- if hasMaximum .Maximum}}
 		if v > {{derefInt64 .Maximum}} {
-			httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "{{.Name}}: value above maximum"))
+			httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "{{.Name}}: invalid"))
 			return
 		}
 {{- end}}
@@ -220,13 +198,13 @@ func (h *Handler) handle(w http.ResponseWriter, r *http.Request) {
 		}
 {{- if hasMinimum .Minimum}}
 		if v < {{derefInt64 .Minimum}} {
-			httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "{{.Name}}: value below minimum"))
+			httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "{{.Name}}: invalid"))
 			return
 		}
 {{- end}}
 {{- if hasMaximum .Maximum}}
 		if v > {{derefInt64 .Maximum}} {
-			httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "{{.Name}}: value above maximum"))
+			httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "{{.Name}}: invalid"))
 			return
 		}
 {{- end}}

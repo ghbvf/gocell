@@ -3,6 +3,7 @@ package contractgen
 import (
 	"embed"
 	"fmt"
+	"strconv"
 	"text/template"
 
 	"github.com/ghbvf/gocell/tools/codegen"
@@ -18,6 +19,9 @@ var templates = func() *template.Template {
 	funcMap := template.FuncMap{
 		// not negates a boolean value.
 		"not": func(b bool) bool { return !b },
+		// quoteGoString returns a Go double-quoted string literal for s.
+		// Used to embed the request schema JSON constant safely.
+		"quoteGoString": strconv.Quote,
 		// hasPathParams reports whether the endpoint has path parameters.
 		"hasPathParams": func(ep *HTTPEndpointSpec) bool {
 			return ep != nil && len(ep.PathParams) > 0
@@ -31,27 +35,12 @@ var templates = func() *template.Template {
 			}
 			return false
 		},
-		// derefInt dereferences a *int pointer for use in templates.
-		"derefInt": func(p *int) int {
-			if p == nil {
-				return 0
-			}
-			return *p
-		},
 		// derefInt64 dereferences a *int64 pointer for use in templates.
 		"derefInt64": func(p *int64) int64 {
 			if p == nil {
 				return 0
 			}
 			return *p
-		},
-		// hasMinLength reports whether the param has a positive minimum length.
-		"hasMinLength": func(p *int) bool {
-			return p != nil && *p > 0
-		},
-		// hasMaxLength reports whether the param has a declared maximum length.
-		"hasMaxLength": func(p *int) bool {
-			return p != nil
 		},
 		// hasMinimum reports whether the param has a declared minimum value.
 		"hasMinimum": func(p *int64) bool {
@@ -61,62 +50,18 @@ var templates = func() *template.Template {
 		"hasMaximum": func(p *int64) bool {
 			return p != nil
 		},
-		// isBodyField reports whether a DTOField originates from the request body
-		// (Source == "body" or empty — legacy default). Used to gate body validation.
-		"isBodyField": func(f DTOField) bool {
-			return f.Source == "" || f.Source == "body"
-		},
-		// hasBodyValidation reports whether any DTO field in the Request struct
-		// requires body-level schema validation (minLength/maxLength/minimum/maximum).
-		"hasBodyValidation": func(dtos []DTOSpec) bool {
-			for _, dto := range dtos {
-				if dto.Name != "Request" {
-					continue
-				}
-				for _, f := range dto.Fields {
-					if f.Source != "" && f.Source != "body" {
-						continue
-					}
-					if f.MinLength != nil || f.MaxLength != nil || f.Minimum != nil || f.Maximum != nil {
-						return true
-					}
-				}
-			}
-			return false
-		},
 		// needsErrcode reports whether the generated handler requires the errcode
-		// package. It is needed when: any path param has non-uuid validation
-		// (minLength/maxLength), any query param exists (required check / parse error),
-		// or body validation constraints exist.
+		// package. It is needed when: any query param exists (required check /
+		// parse error messages). Body schema validation is delegated to
+		// schemavalidate.Validator — errcode is no longer needed for body constraints.
 		"needsErrcode": func(spec *ContractGenSpec) bool {
 			if spec.Endpoint == nil {
 				return false
 			}
 			ep := spec.Endpoint
-			// path params: non-uuid params may have minLength/maxLength; uuid params
-			// handled by ParseUUIDPathParam (no errcode in handler).
-			for _, p := range ep.PathParams {
-				if p.Format != "uuid" && (p.MinLength != nil || p.MaxLength != nil) {
-					return true
-				}
-			}
 			// query params always need errcode (required check, parse error messages).
 			if len(ep.QueryParams) > 0 && !ep.IsPagination {
 				return true
-			}
-			// body validation constraints.
-			for _, dto := range spec.DTOs {
-				if dto.Name != "Request" {
-					continue
-				}
-				for _, f := range dto.Fields {
-					if f.Source != "" && f.Source != "body" {
-						continue
-					}
-					if f.MinLength != nil || f.MaxLength != nil || f.Minimum != nil || f.Maximum != nil {
-						return true
-					}
-				}
 			}
 			return false
 		},

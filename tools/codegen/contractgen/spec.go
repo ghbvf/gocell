@@ -22,6 +22,13 @@ type ContractGenSpec struct {
 	Endpoint *HTTPEndpointSpec
 	// Event is non-nil when Kind == "event".
 	Event *EventEndpointSpec
+	// RequestSchemaJSON is the raw JSON content of the request schema file,
+	// compacted to a single line (no extra whitespace).
+	// Non-empty only when Kind=="http" and the contract declares schemaRefs.request.
+	// The generated handler embeds this as a Go string literal to compile the
+	// validator at construction time — no runtime file I/O, no embed.FS.
+	// Empty string means no schema validation is emitted.
+	RequestSchemaJSON string
 }
 
 // DTOSpec is one Go struct definition.

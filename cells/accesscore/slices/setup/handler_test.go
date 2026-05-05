@@ -188,12 +188,12 @@ func TestHandler_CreateAdmin_FieldLengthOutOfRange_Returns400(t *testing.T) {
 			wantErrCode: "ERR_VALIDATION_FAILED",
 		},
 		{
-			// 8 × "界" = 24 bytes — passes the generated handler's byte-length check
-			// but fails the service's printable-ASCII validation. Error comes from the
-			// service layer, so ERR_AUTH_IDENTITY_INVALID_INPUT is expected here.
+			// 8 × "界" = 8 runes — passes minLength:8 (rune-based) but fails the
+			// schema pattern "^[ -~]+$" (printable ASCII only). The JSON Schema
+			// validator intercepts before the service, so ERR_VALIDATION_FAILED.
 			name:        "password not printable ASCII",
 			body:        `{"username":"root","email":"root@local","password":"` + strings.Repeat("界", 8) + `"}`,
-			wantErrCode: "ERR_AUTH_IDENTITY_INVALID_INPUT",
+			wantErrCode: "ERR_VALIDATION_FAILED",
 		},
 	}
 	for _, tc := range tests {

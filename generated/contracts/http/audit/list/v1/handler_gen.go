@@ -32,7 +32,8 @@ type Handler struct {
 // policy may be nil — auth.Mount treats nil as "no per-route authorization guard";
 // supply a real policy (e.g. auth.AnyRole, auth.SelfOr) to enforce access control.
 func NewHandler(svc Service, policy auth.Policy) *Handler {
-	return &Handler{svc: svc, policy: policy}
+	h := &Handler{svc: svc, policy: policy}
+	return h
 }
 
 // ServeHTTP implements http.Handler so *Handler can be used directly in tests
@@ -55,25 +56,9 @@ func (h *Handler) RegisterRoutes(mux cell.RouteHandler) error {
 func (h *Handler) handle(w http.ResponseWriter, r *http.Request) {
 	req := &Request{}
 	req.ActorId = r.URL.Query().Get("actorId")
-	if req.ActorId != "" && len(req.ActorId) > 256 {
-		httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "actorId: value too long"))
-		return
-	}
 	req.Cursor = r.URL.Query().Get("cursor")
-	if req.Cursor != "" && len(req.Cursor) > 4096 {
-		httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "cursor: value too long"))
-		return
-	}
 	req.EventType = r.URL.Query().Get("eventType")
-	if req.EventType != "" && len(req.EventType) > 256 {
-		httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "eventType: value too long"))
-		return
-	}
 	req.From = r.URL.Query().Get("from")
-	if req.From != "" && len(req.From) > 64 {
-		httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "from: value too long"))
-		return
-	}
 	if raw := r.URL.Query().Get("limit"); raw != "" {
 		v, err := strconv.ParseInt(raw, 10, 64)
 		if err != nil {
@@ -81,20 +66,16 @@ func (h *Handler) handle(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if v < 1 {
-			httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "limit: value below minimum"))
+			httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "limit: invalid"))
 			return
 		}
 		if v > 500 {
-			httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "limit: value above maximum"))
+			httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "limit: invalid"))
 			return
 		}
 		req.Limit = v
 	}
 	req.To = r.URL.Query().Get("to")
-	if req.To != "" && len(req.To) > 64 {
-		httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "to: value too long"))
-		return
-	}
 	resp, err := h.svc.List(r.Context(), req)
 	if err != nil {
 		httputil.WriteError(r.Context(), w, err)
