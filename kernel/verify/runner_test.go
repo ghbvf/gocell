@@ -392,3 +392,33 @@ func TestRecordResult_SkipOnlyFails(t *testing.T) {
 	require.True(t, errors.As(result.Errors[0], &ecErrSkip))
 	assert.Contains(t, ecErrSkip.Message+" "+ecErrSkip.InternalMessage, "only skipped tests")
 }
+
+// TestRecordResult_ZeroMatchNoPattern covers the pattern=="" else branch
+// (PR #391 K#08 split: pattern presence determines public message, runtime
+// detail rides on WithInternal). Without explicit coverage, recordResult's
+// else arms drop kernel/verify below the 90% gate.
+func TestRecordResult_ZeroMatchNoPattern(t *testing.T) {
+	result := &VerifyResult{TargetID: "test", Passed: true}
+	res := goTestResult{Output: "testing: warning: no tests to run\nPASS", Passed: true, ZeroMatch: true}
+	recordResult(result, "ref", res, "./pkg/...", "")
+	assert.False(t, result.Passed)
+	require.Len(t, result.Errors, 1)
+	var ec *errcode.Error
+	require.True(t, errors.As(result.Errors[0], &ec))
+	assert.Equal(t, "matched no tests", ec.Message)
+	assert.Contains(t, ec.InternalMessage, "pkg=./pkg/...")
+}
+
+// TestRecordResult_SkipOnlyNoPattern covers the SkippedOnly pattern=="" else
+// branch — same coverage motivation as TestRecordResult_ZeroMatchNoPattern.
+func TestRecordResult_SkipOnlyNoPattern(t *testing.T) {
+	result := &VerifyResult{TargetID: "test", Passed: true}
+	res := goTestResult{Output: "--- SKIP: TestFoo (0.00s)\nPASS", Passed: true, SkippedOnly: true}
+	recordResult(result, "ref", res, "./pkg/...", "")
+	assert.False(t, result.Passed)
+	require.Len(t, result.Errors, 1)
+	var ec *errcode.Error
+	require.True(t, errors.As(result.Errors[0], &ec))
+	assert.Equal(t, "matched only skipped tests", ec.Message)
+	assert.Contains(t, ec.InternalMessage, "pkg=./pkg/...")
+}
