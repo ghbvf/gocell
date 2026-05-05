@@ -96,11 +96,6 @@ type RouteSliceMount struct {
 
 // SubscriptionGenSpec describes one reg.Subscribe() call.
 type SubscriptionGenSpec struct {
-	// SpecVarName is the package-scope var name binding the wrapper.ContractSpec
-	// (e.g. "specEventConfigEntryUpserted").
-	// Deprecated: retained for backward compat with existing golden files during
-	// W1 transition. New cell.tmpl uses SubscriptionPackage + NewSubscription.Mount.
-	SpecVarName string
 	// ContractID is the full event contract id, e.g. "event.config.entry-upserted.v1".
 	ContractID string
 	// Transport is the event transport (default "amqp" — the current GoCell

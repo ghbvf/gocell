@@ -99,7 +99,7 @@ func isPermanentExceptionLiteral(rel string) bool {
 // framework-internal ContractSpec usages that are intentional and not
 // subject to this migration gate.
 // Exclusions within scope:
-//   - generated/contracts/** (authorised home)
+//   - generated/contracts/** (authorized home)
 //   - **/testdata/**, **/fixtures/**
 //   - *_test.go, *_gen.go
 func collectContractSpecScanFiles(t *testing.T, root string) []string {

@@ -72,7 +72,7 @@ func TestEVENT_SUBSCRIPTION_CONTRACTGEN_COVERAGE_01(t *testing.T) {
 // Keeping a local alias comment for readability.
 //
 // "event.session.created.v1"  → "generated/contracts/event/session/created/v1"
-// "event.config.entry-upserted.v1" → "generated/contracts/event/config/entry-upserted/v1"
+// "event.config.entry-upserted.v1" → "generated/contracts/event/config/entry-upserted/v1".
 var _ = func() string {
 	return strings.Join(strings.Split("event.session.created.v1", "."), "/")
 }

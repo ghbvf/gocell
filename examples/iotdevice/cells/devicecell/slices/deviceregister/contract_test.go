@@ -10,8 +10,8 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	registercontract "github.com/ghbvf/gocell/generated/contracts/http/device/register/v1"
 	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/mem"
+	registercontract "github.com/ghbvf/gocell/generated/contracts/http/device/register/v1"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/kernel/outbox"

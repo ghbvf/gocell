@@ -26,14 +26,6 @@ var stubTopicPattern = regexp.MustCompile(`event\.foo\.|\.created\.v1`)
 // this is defense in depth (parser does not run JSON schema at runtime).
 var listenerRefPattern = regexp.MustCompile(`^cell\.[A-Z][A-Za-z0-9_]*$`)
 
-// specVarNamePattern is the canonical shape for the package-scope spec
-// variable rendered into cell_gen.go ("spec" + UpperCamelCase identifier).
-// specVarName validates its result against this pattern so a contract id
-// containing digit-leading segments (e.g. "event.123foo.v1") or other
-// non-conforming shapes is rejected with a precise error rather than
-// producing a stylistically broken identifier in generated source.
-var specVarNamePattern = regexp.MustCompile(`^spec[A-Z][A-Za-z0-9]*$`)
-
 // goExportedIdentPattern matches valid Go exported method names.
 // Used to validate marker-supplied Method (Route) and Handler (Subscribe)
 // identifiers before rendering them into cell_gen.go's
@@ -298,12 +290,7 @@ func buildSubscriptionSpecFromBundle(p *metadata.ProjectMeta, cellID string, sub
 		return SubscriptionGenSpec{}, fmt.Errorf("cellgen build: cell %q slice %q subscribes to non-event contract %q (kind=%s)",
 			cellID, sub.Slice, sub.Topic, contract.Kind)
 	}
-	specVar, err := specVarName(sub.Topic)
-	if err != nil {
-		return SubscriptionGenSpec{}, fmt.Errorf("cellgen build: cell %q slice %q: %w", cellID, sub.Slice, err)
-	}
 	return SubscriptionGenSpec{
-		SpecVarName:   specVar,
 		ContractID:    sub.Topic,
 		Transport:     "amqp",
 		SliceID:       sub.Slice,
@@ -331,51 +318,6 @@ func buildMetadataLiteral(cell *metadata.CellMeta) CellMetadataLiteral {
 	}
 }
 
-// specVarName converts a contract id like "event.config.entry-upserted.v1"
-// into a canonical Go identifier like "specEventConfigEntryUpserted":
-//
-//  1. drop a trailing version segment matching ^v\d+$
-//  2. split remainder on "."
-//  3. for each piece, split on "-" and CamelCase
-//  4. prepend "spec" and concat
-//
-// Returns an error when the input is degenerate (e.g. "v1" alone — all parts
-// are version-stripped, yielding only the "spec" prefix). The YAML validator
-// rejects such ids before builder is called; the error here is defense in
-// depth and propagates as a normal cellgen build failure.
-func specVarName(contractID string) (string, error) {
-	parts := strings.Split(contractID, ".")
-	if n := len(parts); n > 0 && isVersionSegment(parts[n-1]) {
-		parts = parts[:n-1]
-	}
-	var sb strings.Builder
-	sb.WriteString("spec")
-	for _, p := range parts {
-		for _, sub := range strings.Split(p, "-") {
-			if sub == "" {
-				continue
-			}
-			// Each sub-segment must start with a letter so the camel-cased
-			// boundary stays at a letter position. A digit-leading sub-segment
-			// (e.g. "123foo") would emit a digit immediately after the previous
-			// segment's lowercase tail, breaking the spec<UpperCamelCase>
-			// convention even though the result remains a valid Go identifier.
-			if c := sub[0]; (c < 'a' || c > 'z') && (c < 'A' || c > 'Z') {
-				return "", fmt.Errorf("specVarName: contract id %q has non-letter-leading segment %q — "+
-					"every dot-or-dash separated segment must start with a letter; "+
-					"fix the contract id in slice.yaml", contractID, sub)
-			}
-			sb.WriteString(capitalize(sub))
-		}
-	}
-	result := sb.String()
-	if !specVarNamePattern.MatchString(result) {
-		return "", fmt.Errorf("specVarName: contract id %q produced non-conforming spec var %q "+
-			"(expected %s); fix the contract id in slice.yaml",
-			contractID, result, specVarNamePattern.String())
-	}
-	return result, nil
-}
 
 func isVersionSegment(s string) bool {
 	if len(s) < 2 || s[0] != 'v' {
@@ -403,7 +345,7 @@ func capitalize(s string) string {
 // readModulePath reads the Go module path from the go.mod file at root.
 // Returns ("", err) if go.mod is missing or malformed.
 func readModulePath(root string) (string, error) {
-	f, err := os.Open(filepath.Clean(filepath.Join(root, "go.mod"))) //nolint:gosec // root is our own project root, not user input
+	f, err := os.Open(filepath.Clean(filepath.Join(root, "go.mod")))
 	if err != nil {
 		return "", fmt.Errorf("cellgen: open go.mod: %w", err)
 	}

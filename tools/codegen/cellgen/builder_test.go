@@ -174,9 +174,6 @@ func TestBuildCellSpec_SubscribesProduceSpecVarsAndExpr(t *testing.T) {
 		t.Fatalf("Subscriptions len = %d", len(spec.Subscriptions))
 	}
 	sub := spec.Subscriptions[0]
-	if sub.SpecVarName != "specEventFooBar" {
-		t.Errorf("SpecVarName = %q want specEventFooBar", sub.SpecVarName)
-	}
 	if sub.HandlerExpr != "c.barSvc.HandleBar" {
 		t.Errorf("HandlerExpr = %q", sub.HandlerExpr)
 	}
@@ -361,78 +358,6 @@ func TestBuildSliceSpec_SliceNotFoundFails(t *testing.T) {
 	_, err := BuildSliceSpec(p, "x", "y", markergen.WireBundle{})
 	if err == nil || !strings.Contains(err.Error(), "not found") {
 		t.Fatalf("expected not-found error, got %v", err)
-	}
-}
-
-func TestSpecVarName(t *testing.T) {
-	t.Parallel()
-	cases := []struct {
-		in, want string
-	}{
-		{"event.config.entry-upserted.v1", "specEventConfigEntryUpserted"},
-		{"event.role.assigned.v1", "specEventRoleAssigned"},
-		{"event.audit.appended.v1", "specEventAuditAppended"},
-		{"event.foo-bar.baz.v3", "specEventFooBarBaz"},
-		{"event.no.version", "specEventNoVersion"},
-		{"event.with-dash.v10", "specEventWithDash"},
-	}
-	for _, tc := range cases {
-		got, err := specVarName(tc.in)
-		if err != nil {
-			t.Errorf("specVarName(%q) returned unexpected error: %v", tc.in, err)
-			continue
-		}
-		if got != tc.want {
-			t.Errorf("specVarName(%q) = %q, want %q", tc.in, got, tc.want)
-		}
-	}
-}
-
-// TestSpecVarName_VersionSubMinorRejected documents the strict reading of
-// IMP-8: a contract id like "event.foo.v1.0" has segments
-// ["event", "foo", "v1", "0"]. isVersionSegment only matches "v\d+" so neither
-// "v1" nor "0" is stripped; the trailing "0" then fails the
-// digit-leading-segment guard. This shape is a malformed contract id —
-// versions in GoCell are single-token (v1, v2, v10), never v1.0.
-func TestSpecVarName_VersionSubMinorRejected(t *testing.T) {
-	t.Parallel()
-	_, err := specVarName("event.foo.v1.0")
-	if err == nil || !strings.Contains(err.Error(), "non-letter-leading segment") {
-		t.Errorf("event.foo.v1.0 should be rejected as malformed (sub-minor versions not supported); got %v", err)
-	}
-}
-
-// TestSpecVarName_DegenerateInputErrors verifies that a contract id whose
-// only segment is a version tag (e.g. "v1") returns an error rather than
-// silently producing the invalid identifier "spec". The YAML validator
-// already rejects such ids; this is defense in depth.
-func TestSpecVarName_DegenerateInputErrors(t *testing.T) {
-	t.Parallel()
-	got, err := specVarName("v1")
-	if err == nil {
-		t.Fatalf("expected error for degenerate contract id, got %q", got)
-	}
-	if !strings.Contains(err.Error(), "non-conforming spec var") {
-		t.Errorf("error message missing 'non-conforming spec var': %v", err)
-	}
-}
-
-// TestSpecVarName_DigitLeadingSegmentRejected verifies IMP-8: contract ids
-// containing a digit-leading dotted segment (e.g. "event.123foo.v1")
-// produce a non-conforming spec var ("specEvent123foo" — digit immediately
-// after camel-case boundary) and must be rejected, not silently emitted.
-func TestSpecVarName_DigitLeadingSegmentRejected(t *testing.T) {
-	t.Parallel()
-	cases := []string{
-		"event.123foo.v1",     // digit-leading middle segment
-		"123foo.bar.v1",       // digit-leading first segment
-		"event.foo.123bar.v1", // digit-leading later segment
-	}
-	for _, in := range cases {
-		_, err := specVarName(in)
-		if err == nil {
-			t.Errorf("specVarName(%q) should reject digit-leading segment", in)
-		}
 	}
 }
 

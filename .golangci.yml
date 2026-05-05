@@ -217,6 +217,9 @@ linters:
           # listed here, not in adapters-isolation, because the file path is
           # `cells/<name>/internal/adapters/**`. Cross-cell internal access and
           # cell-owned subpackage isolation are enforced by archtest LAYER-05/06.
+          # generated/contracts is allowed because PR-V1-CODEGEN-FULL-MIGRATION
+          # made cells/* call <contractpkg>.NewHandler / NewSubscription instead
+          # of constructing wrapper.ContractSpec literals.
           list-mode: strict
           files:
             - "**/cells/**"
@@ -228,6 +231,7 @@ linters:
             - github.com/ghbvf/gocell/pkg
             - github.com/ghbvf/gocell/runtime
             - github.com/ghbvf/gocell/cells
+            - github.com/ghbvf/gocell/generated/contracts
             - github.com/google/uuid
             - github.com/jackc/pgx
             - golang.org/x/crypto
@@ -260,6 +264,7 @@ linters:
             - github.com/ghbvf/gocell/pkg
             - github.com/ghbvf/gocell/runtime
             - github.com/ghbvf/gocell/examples/iotdevice
+            - github.com/ghbvf/gocell/generated/contracts
             - github.com/google/uuid
         example-cells-isolation-todoorder:
           list-mode: strict

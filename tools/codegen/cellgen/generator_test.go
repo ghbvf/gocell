@@ -78,7 +78,6 @@ func TestRenderCell_WithSubscriptionsAddsImportsAndNewSubscription(t *testing.T)
 	spec := &CellGenSpec{
 		Package: "demo", StructName: "Demo", CellID: "demo", ConsumerGroupDefault: "demo",
 		Subscriptions: []SubscriptionGenSpec{{
-			SpecVarName:         "specEventFooBar",
 			ContractID:          "event.foo.bar.v1",
 			Transport:           "amqp",
 			SliceID:             "subs",
