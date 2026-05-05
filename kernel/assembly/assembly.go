@@ -495,15 +495,14 @@ func (a *CoreAssembly) startCellWithHooks(ctx context.Context, c cell.Cell, i in
 
 	// AfterStart hook (optional).
 	// If this fails, the cell itself must be stopped because its Start
-	// already succeeded — resources may have been acquired. We use the same
-	// fresh rollback ctx as rollbackCells so all teardown shares one budget.
+	// already succeeded — resources may have been acquired. rollbackCells(i)
+	// (note: i, not i-1) includes the failing cell at index i in the LIFO
+	// teardown so all stops — including this cell's — share one HookTimeout
+	// budget under a single rollback ctx.
 	if as, ok := c.(cell.AfterStarter); ok {
 		slog.Info("lifecycle: AfterStart", slog.String("cell", c.ID()))
 		if err := a.invokeHook(ctx, c.ID(), cell.HookAfterStart, as.AfterStart); err != nil {
-			rollbackCtx, cancel := a.newRollbackCtx()
-			a.stopCellWithHooks(rollbackCtx, c)
-			cancel()
-			a.rollbackCells(i - 1)
+			a.rollbackCells(i)
 			return a.failStart(c.ID(), "AfterStart", err)
 		}
 	}

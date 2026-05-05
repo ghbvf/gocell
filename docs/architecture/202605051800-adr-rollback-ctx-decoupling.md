@@ -43,7 +43,7 @@ ref: uber-go/fx app.go withRollback / run
 
 ## API 影响
 
-- `func (a *CoreAssembly) rollbackCells(ctx context.Context, upTo int)` → `func (a *CoreAssembly) rollbackCells(upTo int)`（unexported，包内 3 处 caller 同步改）。AfterStart-fail 分支额外有一处独立的 `stopCellWithHooks(rollbackCtx, c)` 调用，使用同样由 `newRollbackCtx()` 派生的 fresh ctx——不算作 `rollbackCells` 的第 4 个 caller，但同享解耦语义。
+- `func (a *CoreAssembly) rollbackCells(ctx context.Context, upTo int)` → `func (a *CoreAssembly) rollbackCells(upTo int)`（unexported，包内 3 处 caller 同步改）。AfterStart-fail 分支调用 `rollbackCells(i)`（注意是 `i` 而非 `i-1`），把刚 AfterStart 失败的 cell 自身一并塞进 LIFO 序列，所有 cell 共用一个 rollback ctx——这是"单一 HookTimeout 预算"语义的关键，避免失败 cell 与历史已启动 cell 各自获得独立预算导致总 wallclock 翻倍。
 - 新增 unexported `func (a *CoreAssembly) newRollbackCtx() (context.Context, context.CancelFunc)`
 - 无导出 API 变更，无 deprecation 别名
 

@@ -38,6 +38,7 @@ type ctxRecordingCell struct {
 	beforeStopHasDeadline bool
 	stopCtxErr            error
 	stopHasDeadline       bool
+	stopDeadline          time.Time // captured ctx.Deadline() inside Stop — used to verify single-budget invariant in shared-rollback tests
 }
 
 func newCtxRecordingCell(id string, failStart bool) *ctxRecordingCell {
@@ -62,20 +63,22 @@ func (c *ctxRecordingCell) BeforeStop(ctx context.Context) error {
 
 func (c *ctxRecordingCell) Stop(ctx context.Context) error {
 	c.stopCtxErr = ctx.Err()
-	_, c.stopHasDeadline = ctx.Deadline()
+	c.stopDeadline, c.stopHasDeadline = ctx.Deadline()
 	return c.BaseCell.Stop(ctx)
 }
 
 var _ cell.BeforeStopper = (*ctxRecordingCell)(nil)
 
 // afterStartFailingCell starts successfully but its AfterStart hook returns
-// an error, exercising startCellWithHooks' AfterStart-fail branch — which
-// derives an independent rollback ctx for the failing cell's
-// stopCellWithHooks before delegating to rollbackCells(i-1).
+// an error, exercising startCellWithHooks' AfterStart-fail branch. The
+// failing cell joins LIFO rollback at index i alongside previously-started
+// cells, all sharing the single rollback ctx derived from rollbackCells's
+// newRollbackCtx() (single-budget invariant).
 type afterStartFailingCell struct {
 	*cell.BaseCell
 	beforeStopCtxErr error
 	stopCtxErr       error
+	stopDeadline     time.Time // captured ctx.Deadline() inside Stop — used to verify single-budget invariant
 }
 
 func newAfterStartFailingCell(id string) *afterStartFailingCell {
@@ -95,6 +98,7 @@ func (c *afterStartFailingCell) BeforeStop(ctx context.Context) error {
 
 func (c *afterStartFailingCell) Stop(ctx context.Context) error {
 	c.stopCtxErr = ctx.Err()
+	c.stopDeadline, _ = ctx.Deadline()
 	return c.BaseCell.Stop(ctx)
 }
 
@@ -187,10 +191,11 @@ func TestRollbackCells_DerivedCtx(t *testing.T) {
 
 // TestRollbackCells_AfterStartFail_DerivedCtx covers the AfterStart-fail
 // branch of startCellWithHooks: cell B's Start succeeds, B.AfterStart fails,
-// the assembly first stops B with an independently-derived rollback ctx, then
-// rolls back the previously-started cell A. Both teardown paths must see a
-// fresh ctx (ctx.Err() == nil) even when the caller's startCtx was canceled
-// by a SIGTERM.
+// the assembly LIFO-rolls-back B (its own resources) then the
+// previously-started A. Both teardown paths must see a fresh ctx
+// (ctx.Err() == nil) even when the caller's startCtx was canceled by a
+// SIGTERM, AND both must share the same parent rollback ctx (single
+// HookTimeout budget — not 2 × HookTimeout).
 func TestRollbackCells_AfterStartFail_DerivedCtx(t *testing.T) {
 	t.Parallel()
 
@@ -211,15 +216,25 @@ func TestRollbackCells_AfterStartFail_DerivedCtx(t *testing.T) {
 	err := a.Start(ctx)
 	require.Error(t, err)
 
-	// The failing cell B must see a fresh ctx during its own teardown.
+	// Decoupling: every rollback hook on every cell sees a fresh ctx.
 	assert.NoError(t, failing.beforeStopCtxErr,
-		"failing cell BeforeStop must run with fresh ctx (independent rollback ctx, not startCtx)")
+		"failing cell BeforeStop must run with fresh ctx — startCtx cancellation must not propagate")
 	assert.NoError(t, failing.stopCtxErr,
-		"failing cell Stop must run with fresh ctx — c.Stop bypasses invokeHook so the rollback root ctx must already be fresh")
-
-	// The prior cell A must also see a fresh ctx via rollbackCells(i-1).
+		"failing cell Stop must run with fresh ctx — c.Stop bypasses invokeHook so rollback root ctx must already be fresh")
 	assert.NoError(t, prior.beforeStopCtxErr,
-		"prior cell BeforeStop must run with fresh ctx (rollbackCells(i-1) path)")
+		"prior cell BeforeStop must run with fresh ctx")
 	assert.NoError(t, prior.stopCtxErr,
-		"prior cell Stop must run with fresh ctx (rollbackCells(i-1) path)")
+		"prior cell Stop must run with fresh ctx")
+
+	// Single-budget invariant: Stop bypasses invokeHook, so the deadlines
+	// observed inside both cells' Stop are the SAME parent rollback ctx
+	// deadline. If startCellWithHooks had created a separate rollback ctx
+	// for the failing cell, the two deadlines would diverge by up to
+	// HookTimeout (regression seen in earlier draft of this PR).
+	assert.False(t, failing.stopDeadline.IsZero(),
+		"failing cell Stop must observe a deadline (HookTimeout default applied)")
+	assert.False(t, prior.stopDeadline.IsZero(),
+		"prior cell Stop must observe a deadline")
+	assert.Equal(t, failing.stopDeadline, prior.stopDeadline,
+		"both cells' Stop must share the same rollback ctx deadline — single HookTimeout budget across the whole rollback")
 }
