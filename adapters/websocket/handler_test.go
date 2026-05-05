@@ -192,7 +192,6 @@ func TestHub_RegisterUnregister(t *testing.T) {
 	}, testtime.D2s, testtime.D10ms)
 }
 
-
 func TestHub_MessageHandler(t *testing.T) {
 	var (
 		mu         sync.Mutex
@@ -641,11 +640,13 @@ func TestMustUpgradeHandler_PanicsOnNilAuthenticator(t *testing.T) {
 	})
 }
 
-// stubDenyingAuth returns absent (no credential).
+// stubDenyingAuth returns absent (no credential). The (nil, false, nil) shape
+// is the documented "absent credential" outcome of the Authenticator contract;
+// the linter complaint is a false positive for this stub.
 type stubDenyingAuth struct{}
 
 func (stubDenyingAuth) Authenticate(_ *http.Request) (*authpkg.Principal, bool, error) {
-	return nil, false, nil
+	return nil, false, nil //nolint:nilnil // Authenticator absent-credential contract
 }
 
 // stubFailingAuth returns invalid credential error.

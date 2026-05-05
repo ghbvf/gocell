@@ -107,66 +107,77 @@ func UpgradeHandler(hub *rtws.Hub, cfg UpgradeConfig) (http.Handler, error) {
 			http.Error(w, "websocket hub not ready", http.StatusServiceUnavailable)
 			return
 		}
-
-		// Authenticate before upgrade (cf. coder/websocket accept.go pattern:
-		// HTTP errors are returned before Accept consumes the handshake bytes).
-		principal, ok, err := cfg.Authenticator.Authenticate(r)
-		if err != nil {
-			slog.Warn("websocket: upgrade rejected — invalid credential",
-				slog.Any("error", err),
-				slog.String("remote_addr", logutil.SafeAddr(r.RemoteAddr)),
-			)
-			http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		principal, ok := authenticateForUpgrade(w, r, cfg.Authenticator)
+		if !ok {
 			return
 		}
-		if !ok || principal == nil {
-			slog.Warn("websocket: upgrade rejected — credential absent",
-				slog.String("remote_addr", logutil.SafeAddr(r.RemoteAddr)),
-			)
-			http.Error(w, "Unauthorized", http.StatusUnauthorized)
-			return
-		}
-
-		opts := &websocket.AcceptOptions{
-			OriginPatterns: cfg.AllowedOrigins,
-		}
-
 		if _, ok := w.(http.Hijacker); !ok {
 			logUpgradeFailure(r, errcode.New(errcode.KindInternal, ErrAdapterWSUpgrade,
 				"websocket: response writer does not support hijack"))
 			http.Error(w, "websocket upgrade failed", http.StatusBadRequest)
 			return
 		}
-
-		acceptWriter := newUpgradeAcceptWriter(w)
-		wsConn, err := websocket.Accept(acceptWriter, r, opts)
-		if err != nil {
-			logUpgradeFailure(r, err)
-			http.Error(w, "websocket upgrade failed", http.StatusBadRequest)
-			return
-		}
-
-		wsConn.SetReadLimit(hub.Config().ReadLimit)
-
-		connID := "ws-" + uuid.NewString()
-		conn := NewConn(connID, principal, wsConn)
-
-		remoteAddr := logutil.SafeAddr(r.RemoteAddr)
-		if regErr := hub.Register(r.Context(), conn); regErr != nil {
-			_ = wsConn.Close(websocket.StatusNormalClosure, "registration rejected")
-			slog.Warn("websocket: register rejected",
-				slog.Any("error", regErr),
-				slog.String("remote_addr", remoteAddr),
-			)
-			return
-		}
-		slog.Info("websocket: client connected",
-			slog.String("conn_id", connID),
-			slog.String("remote_addr", remoteAddr),
-			slog.String("subject", principal.Subject),
-			slog.String("kind", principal.Kind.String()),
-		)
+		acceptUpgradeAndRegister(w, r, hub, cfg, principal)
 	}), nil
+}
+
+// authenticateForUpgrade runs cfg.Authenticator on the request. On absent or
+// invalid credentials it writes a plain-text 401 response and returns false;
+// the caller (UpgradeHandler) then short-circuits without calling
+// websocket.Accept. cf. coder/websocket accept.go: HTTP errors are returned
+// before Accept consumes the handshake bytes.
+func authenticateForUpgrade(w http.ResponseWriter, r *http.Request, a auth.Authenticator) (*auth.Principal, bool) {
+	principal, ok, err := a.Authenticate(r)
+	if err != nil {
+		slog.Warn("websocket: upgrade rejected — invalid credential",
+			slog.Any("error", err),
+			slog.String("remote_addr", logutil.SafeAddr(r.RemoteAddr)),
+		)
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return nil, false
+	}
+	if !ok || principal == nil {
+		slog.Warn("websocket: upgrade rejected — credential absent",
+			slog.String("remote_addr", logutil.SafeAddr(r.RemoteAddr)),
+		)
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return nil, false
+	}
+	return principal, true
+}
+
+// acceptUpgradeAndRegister performs the WebSocket upgrade and hub registration
+// after authentication has already succeeded. principal is bound to the
+// resulting Conn.
+func acceptUpgradeAndRegister(w http.ResponseWriter, r *http.Request, hub *rtws.Hub, cfg UpgradeConfig, principal *auth.Principal) {
+	opts := &websocket.AcceptOptions{OriginPatterns: cfg.AllowedOrigins}
+	acceptWriter := newUpgradeAcceptWriter(w)
+	wsConn, err := websocket.Accept(acceptWriter, r, opts)
+	if err != nil {
+		logUpgradeFailure(r, err)
+		http.Error(w, "websocket upgrade failed", http.StatusBadRequest)
+		return
+	}
+	wsConn.SetReadLimit(hub.Config().ReadLimit)
+
+	connID := "ws-" + uuid.NewString()
+	conn := NewConn(connID, principal, wsConn)
+
+	remoteAddr := logutil.SafeAddr(r.RemoteAddr)
+	if regErr := hub.Register(r.Context(), conn); regErr != nil {
+		_ = wsConn.Close(websocket.StatusNormalClosure, "registration rejected")
+		slog.Warn("websocket: register rejected",
+			slog.Any("error", regErr),
+			slog.String("remote_addr", remoteAddr),
+		)
+		return
+	}
+	slog.Info("websocket: client connected",
+		slog.String("conn_id", connID),
+		slog.String("remote_addr", remoteAddr),
+		slog.String("subject", principal.Subject),
+		slog.String("kind", principal.Kind.String()),
+	)
 }
 
 // MustUpgradeHandler is the static-wiring variant of UpgradeHandler.

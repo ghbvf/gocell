@@ -760,8 +760,8 @@ func (s *stuckConn) Read(_ context.Context) ([]byte, error) {
 	<-s.closeCh
 	return nil, errors.New("closed")
 }
-func (s *stuckConn) Write(_ context.Context, _ []byte) error    { return nil }
-func (s *stuckConn) Principal() *auth.Principal                 { return nil }
+func (s *stuckConn) Write(_ context.Context, _ []byte) error { return nil }
+func (s *stuckConn) Principal() *auth.Principal              { return nil }
 func (s *stuckConn) Close() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()

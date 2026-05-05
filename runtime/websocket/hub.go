@@ -76,8 +76,8 @@ type connEntry struct {
 	conn          Conn
 	cancel        context.CancelFunc
 	pingMisses    int
-	send          chan []byte    // buffered, sized by HubConfig.SendBufferSize
-	closeSendOnce sync.Once     // guards close(send) for idempotent close
+	send          chan []byte // buffered, sized by HubConfig.SendBufferSize
+	closeSendOnce sync.Once   // guards close(send) for idempotent close
 }
 
 // Hub manages WebSocket connections and provides signal-first broadcasting.
@@ -552,36 +552,9 @@ func (h *Hub) fanout(ctx context.Context, entries []*connEntry, data []byte) {
 // evictSlow removes a slow client whose send buffer is full. Idempotent;
 // safe to call from fanout, writeLoop, or pingLoop.
 func (h *Hub) evictSlow(e *connEntry) {
-	connID := e.conn.ID()
-	h.connMu.Lock()
-	current, ok := h.conns[connID]
-	if ok && current == e {
-		delete(h.conns, connID)
-		h.removeFromSubjectIdxLocked(e)
-	} else {
-		ok = false
-	}
-	h.connMu.Unlock()
-
-	if !ok {
-		return
-	}
-	e.cancel()
-	e.closeSendOnce.Do(func() { close(e.send) })
-	if err := e.conn.Close(); err != nil {
-		slog.Debug("websocket hub: close on slow-client evict",
-			slog.String("conn_id", connID),
-			slog.Any("error", err),
-		)
-	}
-	var subject string
-	if p := e.conn.Principal(); p != nil {
-		subject = p.Subject
-	}
-	slog.Warn("websocket hub: slow client evicted, send buffer full",
-		slog.String("conn_id", connID),
-		slog.String("subject", subject),
-	)
+	h.evictEntry(e, slog.LevelWarn,
+		"websocket hub: slow client evicted, send buffer full",
+		"websocket hub: close on slow-client evict")
 }
 
 // Send sends a text message to a specific connection.
@@ -712,6 +685,17 @@ func (h *Hub) isExpired(entry *connEntry, now time.Time) bool {
 
 // evictExpired removes a connection whose principal token has expired.
 func (h *Hub) evictExpired(entry *connEntry) {
+	h.evictEntry(entry, slog.LevelInfo,
+		"websocket hub: connection evicted on token expiry",
+		"websocket hub: close on expiry evict")
+}
+
+// evictEntry removes an entry from conns + subjectIdx and tears down its
+// goroutines. Idempotent: safe to call from any path (slow-client,
+// token-expiry, or future eviction reasons). evictMsg is logged at the
+// supplied level on success; closeMsg is logged at Debug if conn.Close
+// returns an error.
+func (h *Hub) evictEntry(entry *connEntry, level slog.Level, evictMsg, closeMsg string) {
 	connID := entry.conn.ID()
 	h.connMu.Lock()
 	current, ok := h.conns[connID]
@@ -729,7 +713,7 @@ func (h *Hub) evictExpired(entry *connEntry) {
 	entry.cancel()
 	entry.closeSendOnce.Do(func() { close(entry.send) })
 	if err := entry.conn.Close(); err != nil {
-		slog.Debug("websocket hub: close on expiry evict",
+		slog.Debug(closeMsg,
 			slog.String("conn_id", connID),
 			slog.Any("error", err),
 		)
@@ -738,7 +722,7 @@ func (h *Hub) evictExpired(entry *connEntry) {
 	if p := entry.conn.Principal(); p != nil {
 		subject = p.Subject
 	}
-	slog.Info("websocket hub: connection evicted on token expiry",
+	slog.LogAttrs(context.Background(), level, evictMsg,
 		slog.String("conn_id", connID),
 		slog.String("subject", subject),
 	)
@@ -781,4 +765,3 @@ func (h *Hub) handlePingResult(connID string, pingErr error) {
 		slog.Int("misses", current.pingMisses),
 	)
 }
-
