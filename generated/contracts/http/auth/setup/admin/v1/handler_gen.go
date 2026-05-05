@@ -35,9 +35,10 @@ type Handler struct {
 }
 
 // NewHandler creates a Handler for http.auth.setup.admin.v1.
-// This endpoint is Public (JWT-exempt); no policy argument is accepted.
-// auth.Route{Public: true} is emitted by RegisterRoutes so the listener
-// auth middleware skips JWT verification for this route.
+// This endpoint is Bootstrap (HTTP Basic Auth via GOCELL_BOOTSTRAP_ADMIN_* env);
+// no policy argument is accepted. auth.Route{Bootstrap: true} is emitted by
+// RegisterRoutes so the listener auth middleware skips JWT verification for this route.
+// FMT-28 restricts auth.bootstrap:true to setup/admin contracts only.
 func NewHandler(svc Service) *Handler {
 	h := &Handler{svc: svc}
 	v, err := schemavalidate.NewValidator(requestSchemaJSON)
@@ -59,9 +60,9 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // resolve the handler function body via the Contract→Handler correlation.
 func (h *Handler) RegisterRoutes(mux cell.RouteHandler) error {
 	return auth.Mount(mux, auth.Route{
-		Contract: contractSpec,
-		Handler:  http.HandlerFunc(h.handle),
-		Public:   true,
+		Contract:  contractSpec,
+		Handler:   http.HandlerFunc(h.handle),
+		Bootstrap: true,
 	})
 }
 

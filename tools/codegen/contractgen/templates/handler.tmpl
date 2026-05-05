@@ -47,7 +47,7 @@ var requestSchemaJSON = []byte({{quoteGoString .RequestSchemaJSON}})
 // Handler wires HTTP decode/encode + auth.Mount for {{.ContractID}}.
 type Handler struct {
 	svc    Service
-{{- if not .Endpoint.AuthPublic}}
+{{- if and (not .Endpoint.AuthPublic) (not .Endpoint.AuthBootstrap)}}
 	policy auth.Policy
 {{- end}}
 {{- if .RequestSchemaJSON}}
@@ -66,6 +66,23 @@ func NewHandler(svc Service) *Handler {
 	v, err := schemavalidate.NewValidator(requestSchemaJSON)
 	if err != nil {
 		panic(errcode.Assertion("generated handler {{.ContractID}}: schema compile failed: %v (codegen invariant violation; regenerate via gocell generate contract --all)", err))
+	}
+	h.requestValidator = v
+{{- end}}
+	return h
+}
+{{- else if .Endpoint.AuthBootstrap}}
+// NewHandler creates a Handler for {{.ContractID}}.
+// This endpoint is Bootstrap (HTTP Basic Auth via GOCELL_BOOTSTRAP_ADMIN_* env);
+// no policy argument is accepted. auth.Route{Bootstrap: true} is emitted by
+// RegisterRoutes so the listener auth middleware skips JWT verification for this route.
+// FMT-28 restricts auth.bootstrap:true to setup/admin contracts only.
+func NewHandler(svc Service) *Handler {
+	h := &Handler{svc: svc}
+{{- if .RequestSchemaJSON}}
+	v, err := schemavalidate.NewValidator(requestSchemaJSON)
+	if err != nil {
+		panic(fmt.Sprintf("generated handler {{.ContractID}}: schema compile failed: %v (codegen invariant violation; regenerate via gocell generate contract --all)", err))
 	}
 	h.requestValidator = v
 {{- end}}
@@ -103,6 +120,8 @@ func (h *Handler) RegisterRoutes(mux cell.RouteHandler) error {
 		Handler:  http.HandlerFunc(h.handle),
 {{- if .Endpoint.AuthPublic}}
 		Public: true,
+{{- else if .Endpoint.AuthBootstrap}}
+		Bootstrap: true,
 {{- else if .Endpoint.AuthPasswordResetExempt}}
 		Policy:              h.policy,
 		PasswordResetExempt: true,
