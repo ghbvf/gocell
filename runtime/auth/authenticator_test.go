@@ -924,3 +924,93 @@ func TestValidateCallerCell(t *testing.T) {
 		})
 	}
 }
+
+func TestNewAnonymousAuthenticator(t *testing.T) {
+	a := NewAnonymousAuthenticator()
+	p, ok, err := a.Authenticate(newRequest(t))
+	if err != nil {
+		t.Fatalf("anonymous authenticator should not error: %v", err)
+	}
+	if !ok {
+		t.Fatal("anonymous authenticator must always return ok=true")
+	}
+	if p == nil {
+		t.Fatal("anonymous authenticator must return non-nil principal")
+	}
+	if p.Kind != PrincipalAnonymous {
+		t.Errorf("expected PrincipalAnonymous, got %v", p.Kind)
+	}
+	if !p.ExpiresAt.IsZero() {
+		t.Error("anonymous principal must have zero ExpiresAt (no expiry)")
+	}
+}
+
+func TestNewContextAuthenticator_PrincipalInCtx(t *testing.T) {
+	want := &Principal{Kind: PrincipalUser, Subject: "u1"}
+	a := NewContextAuthenticator()
+
+	req := newRequest(t)
+	req = req.WithContext(WithPrincipal(req.Context(), want))
+
+	got, ok, err := a.Authenticate(req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !ok {
+		t.Fatal("expected ok=true when principal is in ctx")
+	}
+	if got != want {
+		t.Errorf("expected same pointer, got %v want %v", got, want)
+	}
+}
+
+func TestNewContextAuthenticator_NoPrincipalInCtx(t *testing.T) {
+	a := NewContextAuthenticator()
+	p, ok, err := a.Authenticate(newRequest(t))
+	if err != nil {
+		t.Fatalf("absent ctx principal must not error, got %v", err)
+	}
+	if ok {
+		t.Error("expected ok=false when principal not in ctx")
+	}
+	if p == nil || p.Kind != PrincipalUnknown {
+		t.Errorf("expected absentPrincipal, got %v", p)
+	}
+}
+
+// JWT authenticator must plumb Claims.ExpiresAt to Principal.ExpiresAt.
+func TestJWTAuthenticator_PlumbsExpiresAt(t *testing.T) {
+	exp := time.Date(2030, 6, 1, 0, 0, 0, 0, time.UTC)
+	v := &stubVerifierForExp{
+		claims: Claims{
+			Subject:   "u1",
+			Issuer:    "iss",
+			ExpiresAt: exp,
+			TokenUse:  TokenIntentAccess,
+		},
+	}
+	a := NewJWTAuthenticator(v)
+	req := newRequest(t)
+	req.Header.Set("Authorization", "Bearer x")
+
+	p, ok, err := a.Authenticate(req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !ok {
+		t.Fatal("expected ok=true")
+	}
+	if !p.ExpiresAt.Equal(exp) {
+		t.Errorf("ExpiresAt not plumbed: got %v want %v", p.ExpiresAt, exp)
+	}
+}
+
+// stubVerifierForExp helps TestJWTAuthenticator_PlumbsExpiresAt; minimal implementation.
+type stubVerifierForExp struct {
+	claims Claims
+	err    error
+}
+
+func (s *stubVerifierForExp) VerifyIntent(_ context.Context, _ string, _ TokenIntent) (Claims, error) {
+	return s.claims, s.err
+}

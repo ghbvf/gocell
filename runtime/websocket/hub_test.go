@@ -13,10 +13,10 @@ import (
 	"go.uber.org/goleak"
 
 	"github.com/ghbvf/gocell/kernel/clock"
+	"github.com/ghbvf/gocell/kernel/clock/clockmock"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
+	"github.com/ghbvf/gocell/runtime/auth"
 )
-
-const hubBroadcastConcurrentDeadline = 400 * time.Millisecond
 
 func TestMain(m *testing.M) {
 	goleak.VerifyTestMain(m)
@@ -38,6 +38,7 @@ type fakeConn struct {
 	readyOnce  sync.Once
 	pingErr    error         // configurable: non-nil makes Ping fail
 	writeDelay time.Duration // configurable: simulates slow writes
+	principal  *auth.Principal
 }
 
 func newFakeConn(id string) *fakeConn {
@@ -109,6 +110,18 @@ func (f *fakeConn) Close() error {
 	f.closed = true
 	close(f.closeCh)
 	return nil
+}
+
+func (f *fakeConn) Principal() *auth.Principal {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.principal
+}
+
+func newFakeConnWithPrincipal(id string, p *auth.Principal) *fakeConn {
+	c := newFakeConn(id)
+	c.principal = p
+	return c
 }
 
 func (f *fakeConn) isClosed() bool {
@@ -492,70 +505,9 @@ func TestHub_RegisterStopRace(t *testing.T) {
 	// goleak.VerifyTestMain catches any leaked goroutines.
 }
 
-func TestHub_ConcurrentBroadcast(t *testing.T) {
-	hub := startHub(t, DefaultHubConfig(clock.Real()), nil)
-
-	conns := make([]*fakeConn, 5)
-	for i := range conns {
-		c := newFakeConn("bc" + string(rune('0'+i)))
-		conns[i] = c
-		require.NoError(t, hub.Register(context.Background(), c))
-		<-c.readyCh
-	}
-
-	var wg sync.WaitGroup
-	for range 10 {
-		wg.Go(func() {
-			hub.Broadcast(context.Background(), []byte("msg"))
-		})
-	}
-	wg.Wait()
-
-	for _, c := range conns {
-		assert.NotEmpty(t, c.getWrites())
-	}
-}
-
 // ---------------------------------------------------------------------------
 // Functional Tests
 // ---------------------------------------------------------------------------
-
-func TestHub_Broadcast(t *testing.T) {
-	hub := startHub(t, DefaultHubConfig(clock.Real()), nil)
-
-	c1 := newFakeConn("c1")
-	c2 := newFakeConn("c2")
-	require.NoError(t, hub.Register(context.Background(), c1))
-	require.NoError(t, hub.Register(context.Background(), c2))
-	<-c1.readyCh
-	<-c2.readyCh
-
-	hub.Broadcast(context.Background(), []byte("hello all"))
-
-	assert.Equal(t, [][]byte{[]byte("hello all")}, c1.getWrites())
-	assert.Equal(t, [][]byte{[]byte("hello all")}, c2.getWrites())
-}
-
-func TestHub_BroadcastSlowConn(t *testing.T) {
-	hub := startHub(t, DefaultHubConfig(clock.Real()), nil)
-
-	fast := newFakeConn("fast")
-	slow := newFakeConn("slow")
-	slow.writeDelay = testtime.D200ms
-
-	require.NoError(t, hub.Register(context.Background(), fast))
-	require.NoError(t, hub.Register(context.Background(), slow))
-	<-fast.readyCh
-	<-slow.readyCh
-
-	start := time.Now()
-	hub.Broadcast(context.Background(), []byte("data"))
-	elapsed := time.Since(start)
-
-	assert.Equal(t, [][]byte{[]byte("data")}, fast.getWrites())
-	assert.Equal(t, [][]byte{[]byte("data")}, slow.getWrites())
-	assert.Less(t, elapsed, hubBroadcastConcurrentDeadline, "broadcast should be concurrent")
-}
 
 func TestHub_Send(t *testing.T) {
 	hub := startHub(t, DefaultHubConfig(clock.Real()), nil)
@@ -800,7 +752,8 @@ func (s *stuckConn) Read(_ context.Context) ([]byte, error) {
 	<-s.closeCh
 	return nil, errors.New("closed")
 }
-func (s *stuckConn) Write(_ context.Context, _ []byte) error { return nil }
+func (s *stuckConn) Write(_ context.Context, _ []byte) error    { return nil }
+func (s *stuckConn) Principal() *auth.Principal                 { return nil }
 func (s *stuckConn) Close() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -1006,3 +959,248 @@ var (
 	_ Conn = (*fakeConn)(nil)
 	_ Conn = (*stuckConn)(nil)
 )
+
+// ---------------------------------------------------------------------------
+// BroadcastFilter / BroadcastToSubject Tests
+// ---------------------------------------------------------------------------
+
+func TestHub_BroadcastFilter_NilFilterFails(t *testing.T) {
+	hub := startHub(t, DefaultHubConfig(clock.Real()), nil)
+	err := hub.BroadcastFilter(context.Background(), []byte("x"), nil)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "filter")
+}
+
+func TestHub_BroadcastFilter_AllConns(t *testing.T) {
+	hub := startHub(t, DefaultHubConfig(clock.Real()), nil)
+	pa := &auth.Principal{Kind: auth.PrincipalUser, Subject: "alice"}
+	pb := &auth.Principal{Kind: auth.PrincipalUser, Subject: "bob"}
+	a := newFakeConnWithPrincipal("a", pa)
+	b := newFakeConnWithPrincipal("b", pb)
+	require.NoError(t, hub.Register(context.Background(), a))
+	require.NoError(t, hub.Register(context.Background(), b))
+	<-a.readyCh
+	<-b.readyCh
+
+	require.NoError(t, hub.BroadcastFilter(context.Background(), []byte("hi"),
+		func(c Conn) bool { return true }))
+
+	require.Eventually(t, func() bool {
+		return len(a.getWrites()) == 1 && len(b.getWrites()) == 1
+	}, testtime.D2s, testtime.D10ms)
+}
+
+func TestHub_BroadcastFilter_SelectiveBySubject(t *testing.T) {
+	hub := startHub(t, DefaultHubConfig(clock.Real()), nil)
+	pa := &auth.Principal{Kind: auth.PrincipalUser, Subject: "alice"}
+	pb := &auth.Principal{Kind: auth.PrincipalUser, Subject: "bob"}
+	a := newFakeConnWithPrincipal("a", pa)
+	b := newFakeConnWithPrincipal("b", pb)
+	require.NoError(t, hub.Register(context.Background(), a))
+	require.NoError(t, hub.Register(context.Background(), b))
+	<-a.readyCh
+	<-b.readyCh
+
+	require.NoError(t, hub.BroadcastFilter(context.Background(), []byte("only-alice"),
+		func(c Conn) bool { return c.Principal() != nil && c.Principal().Subject == "alice" }))
+
+	require.Eventually(t, func() bool {
+		return len(a.getWrites()) == 1
+	}, testtime.D2s, testtime.D10ms)
+
+	// Negative wait — bob must NOT receive.
+	time.Sleep(testtime.D50ms) //archtest:allow:test-sleep negative test: bob must not receive within window
+	assert.Empty(t, b.getWrites())
+}
+
+func TestHub_BroadcastToSubject_EmptySubjectFails(t *testing.T) {
+	hub := startHub(t, DefaultHubConfig(clock.Real()), nil)
+	err := hub.BroadcastToSubject(context.Background(), "", []byte("x"))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "subject")
+}
+
+func TestHub_BroadcastToSubject_HitsAllConnsForSubject(t *testing.T) {
+	hub := startHub(t, DefaultHubConfig(clock.Real()), nil)
+	pa := &auth.Principal{Kind: auth.PrincipalUser, Subject: "alice"}
+	pb := &auth.Principal{Kind: auth.PrincipalUser, Subject: "bob"}
+	a1 := newFakeConnWithPrincipal("a1", pa)
+	a2 := newFakeConnWithPrincipal("a2", pa)
+	b := newFakeConnWithPrincipal("b", pb)
+	require.NoError(t, hub.Register(context.Background(), a1))
+	require.NoError(t, hub.Register(context.Background(), a2))
+	require.NoError(t, hub.Register(context.Background(), b))
+	<-a1.readyCh
+	<-a2.readyCh
+	<-b.readyCh
+
+	require.NoError(t, hub.BroadcastToSubject(context.Background(), "alice", []byte("ping-alice")))
+
+	require.Eventually(t, func() bool {
+		return len(a1.getWrites()) == 1 && len(a2.getWrites()) == 1
+	}, testtime.D2s, testtime.D10ms)
+	time.Sleep(testtime.D50ms) //archtest:allow:test-sleep negative window
+	assert.Empty(t, b.getWrites())
+}
+
+func TestHub_BroadcastToSubject_UnknownSubjectIsNoop(t *testing.T) {
+	hub := startHub(t, DefaultHubConfig(clock.Real()), nil)
+	// No conns at all. Subject not present → returns nil, no error.
+	err := hub.BroadcastToSubject(context.Background(), "ghost", []byte("x"))
+	assert.NoError(t, err)
+}
+
+// ---------------------------------------------------------------------------
+// Token Expiry Eviction Tests
+// ---------------------------------------------------------------------------
+
+func TestHub_TokenExpiry_EvictsOnPing(t *testing.T) {
+	fc := clockmock.New(time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC))
+
+	cfg := DefaultHubConfig(fc)
+	cfg.PingInterval = testtime.D10ms
+	cfg.PingTimeout = testtime.FastPoll
+
+	hub := startHub(t, cfg, nil)
+
+	p := &auth.Principal{
+		Kind:      auth.PrincipalUser,
+		Subject:   "expiring",
+		ExpiresAt: fc.Now().Add(time.Hour), // 1h from now
+	}
+	conn := newFakeConnWithPrincipal("expiring", p)
+	require.NoError(t, hub.Register(context.Background(), conn))
+	<-conn.readyCh
+	require.Equal(t, 1, hub.ConnCount())
+
+	// Advance clock past expiry; next ping tick must evict.
+	fc.Advance(2 * time.Hour)
+
+	require.Eventually(t, func() bool {
+		return hub.ConnCount() == 0 && conn.isClosed()
+	}, testtime.D2s, testtime.D10ms)
+}
+
+func TestHub_TokenExpiry_ZeroExpiryNeverEvicts(t *testing.T) {
+	fc := clockmock.New(time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC))
+
+	cfg := DefaultHubConfig(fc)
+	cfg.PingInterval = testtime.D10ms
+	cfg.PingTimeout = testtime.FastPoll
+
+	hub := startHub(t, cfg, nil)
+
+	// Anonymous principal: zero ExpiresAt = never expires.
+	p := &auth.Principal{Kind: auth.PrincipalAnonymous}
+	conn := newFakeConnWithPrincipal("perm", p)
+	require.NoError(t, hub.Register(context.Background(), conn))
+	<-conn.readyCh
+
+	// Advance clock far into future. Conn must remain.
+	fc.Advance(100 * 365 * 24 * time.Hour)
+
+	time.Sleep(testtime.D50ms) //archtest:allow:test-sleep negative test: must NOT evict
+	assert.Equal(t, 1, hub.ConnCount())
+	assert.False(t, conn.isClosed())
+}
+
+// ---------------------------------------------------------------------------
+// Slow Client Eviction Tests
+// ---------------------------------------------------------------------------
+
+// blockingFakeConn never completes Write — used to simulate a slow/dead client
+// whose send chan fills.
+type blockingFakeConn struct {
+	*fakeConn
+	blockUntil chan struct{}
+}
+
+func newBlockingFakeConn(id string, p *auth.Principal) *blockingFakeConn {
+	return &blockingFakeConn{
+		fakeConn:   newFakeConnWithPrincipal(id, p),
+		blockUntil: make(chan struct{}),
+	}
+}
+
+func (b *blockingFakeConn) Write(ctx context.Context, data []byte) error {
+	select {
+	case <-b.blockUntil:
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+	return b.fakeConn.Write(ctx, data)
+}
+
+func TestHub_SlowClient_EvictedWhenSendBufferFull(t *testing.T) {
+	cfg := DefaultHubConfig(clock.Real())
+	cfg.SendBufferSize = 2 // tiny buffer
+	hub := startHub(t, cfg, nil)
+
+	p := &auth.Principal{Kind: auth.PrincipalUser, Subject: "slow"}
+	slow := newBlockingFakeConn("slow", p)
+	defer close(slow.blockUntil) // unblock at test end so writeLoop can exit
+
+	require.NoError(t, hub.Register(context.Background(), slow))
+	<-slow.readyCh
+
+	// Pump enough messages to overflow send buffer (2) + writeLoop slot.
+	// BroadcastToSubject runs the slow path; writeLoop is stuck on Write so
+	// chan fills after a few sends.
+	for range 10 {
+		_ = hub.BroadcastToSubject(context.Background(), "slow", []byte("burst"))
+	}
+
+	require.Eventually(t, func() bool {
+		return hub.ConnCount() == 0
+	}, testtime.D2s, testtime.D10ms,
+		"slow client must be evicted once send buffer fills")
+}
+
+// ---------------------------------------------------------------------------
+// Subject Index Consistency Tests
+// ---------------------------------------------------------------------------
+
+func TestHub_SubjectIdx_EmptyAfterRegisterUnregister(t *testing.T) {
+	hub := startHub(t, DefaultHubConfig(clock.Real()), nil)
+	p := &auth.Principal{Kind: auth.PrincipalUser, Subject: "alice"}
+	conn := newFakeConnWithPrincipal("a", p)
+	require.NoError(t, hub.Register(context.Background(), conn))
+	<-conn.readyCh
+
+	hub.Unregister("a")
+	require.Eventually(t, func() bool { return hub.ConnCount() == 0 }, testtime.D2s, testtime.D10ms)
+
+	// Idx must be empty so a future BroadcastToSubject is a no-op.
+	err := hub.BroadcastToSubject(context.Background(), "alice", []byte("x"))
+	assert.NoError(t, err)
+	assert.Empty(t, conn.getWrites())
+}
+
+func TestHub_SubjectIdx_EmptyAfterTokenExpiry(t *testing.T) {
+	fc := clockmock.New(time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC))
+	cfg := DefaultHubConfig(fc)
+	cfg.PingInterval = testtime.D10ms
+	cfg.PingTimeout = testtime.FastPoll
+	hub := startHub(t, cfg, nil)
+
+	p := &auth.Principal{Kind: auth.PrincipalUser, Subject: "alice", ExpiresAt: fc.Now().Add(time.Hour)}
+	conn := newFakeConnWithPrincipal("a", p)
+	require.NoError(t, hub.Register(context.Background(), conn))
+	<-conn.readyCh
+
+	fc.Advance(2 * time.Hour)
+
+	require.Eventually(t, func() bool { return hub.ConnCount() == 0 }, testtime.D2s, testtime.D10ms)
+
+	err := hub.BroadcastToSubject(context.Background(), "alice", []byte("x"))
+	assert.NoError(t, err)
+}
+
+// ---------------------------------------------------------------------------
+// SendBufferSize Default Test
+// ---------------------------------------------------------------------------
+
+func TestDefaultHubConfig_SendBufferSize(t *testing.T) {
+	cfg := DefaultHubConfig(clock.Real())
+	assert.Equal(t, 32, cfg.SendBufferSize, "default SendBufferSize must be 32")
+}

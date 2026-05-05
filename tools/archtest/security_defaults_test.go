@@ -2,7 +2,7 @@ package archtest
 
 // security_defaults_test.go — static archtest rules for PR-MODE-1 SEC-FAIL-CLOSED.
 //
-// Five sub-tests mirror the SEC-FAIL-CLOSED-01..05 rule IDs:
+// Sub-tests mirror the SEC-FAIL-CLOSED-01..09 rule IDs:
 //
 //   01  addr-driven gate: bundle.go must not wrap WithListener in IfStmt guarded
 //       by PrimaryHTTPAddr / InternalHTTPAddr / HealthHTTPAddr != "".
@@ -16,6 +16,9 @@ package archtest
 //       interpolation, not committed literal values.
 //   06  internal listener guard: production WithListener calls must not wire
 //       cell.InternalListener with a literal AuthNone chain.
+//   07  websocket UpgradeConfig literals must include Authenticator field
+//   08  no production code may call runtime/websocket.Hub.Broadcast (deleted API)
+//   09  hub.go conns and subjectIdx delete points must stay in sync
 //
 // ref: tools/archtest/auth_authtest_boundary_test.go — 4 sub-test pattern
 
@@ -41,6 +44,9 @@ const (
 	secFailClosed04 = "SEC-FAIL-CLOSED-04"
 	secFailClosed05 = "SEC-FAIL-CLOSED-05"
 	secFailClosed06 = "SEC-FAIL-CLOSED-06"
+	secFailClosed07 = "SEC-FAIL-CLOSED-07"
+	secFailClosed08 = "SEC-FAIL-CLOSED-08"
+	secFailClosed09 = "SEC-FAIL-CLOSED-09"
 )
 
 func TestSecurityDefaults(t *testing.T) {
@@ -68,6 +74,18 @@ func TestSecurityDefaults(t *testing.T) {
 
 	t.Run(secFailClosed06+"_internal_listener_must_not_use_authnone", func(t *testing.T) {
 		testSEC06InternalListenerMustNotUseAuthNone(t, root)
+	})
+
+	t.Run(secFailClosed07+"_websocket_upgrade_config_must_set_authenticator", func(t *testing.T) {
+		testSEC07WebsocketAuthenticatorRequired(t, root)
+	})
+
+	t.Run(secFailClosed08+"_no_legacy_broadcast_call", func(t *testing.T) {
+		testSEC08NoLegacyBroadcastCall(t, root)
+	})
+
+	t.Run(secFailClosed09+"_hub_subjectidx_sync", func(t *testing.T) {
+		testSEC09HubSubjectIdxSync(t, root)
 	})
 }
 
@@ -646,4 +664,19 @@ func isRequiredComposeEnvInterpolation(value string) bool {
 		}
 	}
 	return true
+}
+
+func testSEC07WebsocketAuthenticatorRequired(t *testing.T, _ string) {
+	t.Helper()
+	t.Fatalf("%s: not yet implemented (Wave 1 D)", secFailClosed07)
+}
+
+func testSEC08NoLegacyBroadcastCall(t *testing.T, _ string) {
+	t.Helper()
+	t.Fatalf("%s: not yet implemented (Wave 1 D)", secFailClosed08)
+}
+
+func testSEC09HubSubjectIdxSync(t *testing.T, _ string) {
+	t.Helper()
+	t.Fatalf("%s: not yet implemented (Wave 1 D)", secFailClosed09)
 }

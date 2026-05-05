@@ -22,8 +22,21 @@ import (
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
+	authpkg "github.com/ghbvf/gocell/runtime/auth"
 	rtws "github.com/ghbvf/gocell/runtime/websocket"
 )
+
+// stubAlwaysAllowAuth returns the supplied principal unconditionally.
+type stubAlwaysAllowAuth struct{ p *authpkg.Principal }
+
+func (s *stubAlwaysAllowAuth) Authenticate(_ *http.Request) (*authpkg.Principal, bool, error) {
+	return s.p, true, nil
+}
+
+// testAuth is a convenience helper that returns a stubAlwaysAllowAuth for tests.
+func testAuth() *stubAlwaysAllowAuth {
+	return &stubAlwaysAllowAuth{p: &authpkg.Principal{Kind: authpkg.PrincipalUser, Subject: "test"}}
+}
 
 func TestMain(m *testing.M) {
 	goleak.VerifyTestMain(m)
@@ -62,6 +75,7 @@ func setupTestHub(t *testing.T, handler rtws.MessageHandler) (*rtws.Hub, *httpte
 	// Use explicit AllowedOrigins; empty origins will be rejected after SEC-FAIL-CLOSED-04.
 	mux.Handle("/ws", requireUpgradeHandler(t, hub, adapterws.UpgradeConfig{
 		AllowedOrigins: []string{"http://*"},
+		Authenticator:  testAuth(),
 	}))
 
 	server := httptest.NewServer(mux)
@@ -150,6 +164,7 @@ func TestUpgradeHandler_NonHijackerFailsBeforeAccept(t *testing.T) {
 
 	handler := requireUpgradeHandler(t, hub, adapterws.UpgradeConfig{
 		AllowedOrigins: []string{"http://*"},
+		Authenticator:  testAuth(),
 	})
 	req := httptest.NewRequest(http.MethodGet, "/ws", nil)
 	req.Header.Set("Connection", "Upgrade")
@@ -177,53 +192,6 @@ func TestHub_RegisterUnregister(t *testing.T) {
 	}, testtime.D2s, testtime.D10ms)
 }
 
-func TestHub_Broadcast(t *testing.T) {
-	var (
-		mu       sync.Mutex
-		received []string
-	)
-
-	hub, server := setupTestHub(t, nil)
-	defer server.Close()
-
-	conn1 := dialWS(t, server.URL)
-	conn2 := dialWS(t, server.URL)
-
-	require.Eventually(t, func() bool {
-		return hub.ConnCount() == 2
-	}, testtime.D2s, testtime.D10ms)
-
-	hub.Broadcast(context.Background(), []byte("hello all"))
-
-	var wg sync.WaitGroup
-	wg.Add(2)
-
-	readMsg := func(c *websocket.Conn) {
-		defer wg.Done()
-		ctx, cancel := context.WithTimeout(context.Background(), testtime.D2s)
-		defer cancel()
-
-		_, data, err := c.Read(ctx)
-		if err != nil {
-			t.Logf("read error: %v", err)
-			return
-		}
-		mu.Lock()
-		received = append(received, string(data))
-		mu.Unlock()
-	}
-
-	go readMsg(conn1)
-	go readMsg(conn2)
-	wg.Wait()
-
-	mu.Lock()
-	assert.Len(t, received, 2)
-	for _, msg := range received {
-		assert.Equal(t, "hello all", msg)
-	}
-	mu.Unlock()
-}
 
 func TestHub_MessageHandler(t *testing.T) {
 	var (
@@ -355,6 +323,7 @@ func TestUpgradeHandler_AllowedOrigins(t *testing.T) {
 
 	handler := requireUpgradeHandler(t, hub, adapterws.UpgradeConfig{
 		AllowedOrigins: []string{"http://*"},
+		Authenticator:  testAuth(),
 	})
 
 	assert.NotNil(t, handler)
@@ -371,7 +340,7 @@ func TestHub_FullLifecycle(t *testing.T) {
 	}, testtime.D2s, testtime.D10ms)
 
 	// Broadcast.
-	hub.Broadcast(context.Background(), []byte("lifecycle"))
+	require.NoError(t, hub.BroadcastFilter(context.Background(), []byte("lifecycle"), func(rtws.Conn) bool { return true }))
 	readCtx, readCancel := context.WithTimeout(context.Background(), testtime.D2s)
 	defer readCancel()
 	_, data, err := conn.Read(readCtx)
@@ -420,6 +389,7 @@ func TestUpgradeHandler_HubNotRunning_503(t *testing.T) {
 	// AllowedOrigins is required post-SEC-FAIL-CLOSED-04; use a valid value.
 	handler := requireUpgradeHandler(t, hub, adapterws.UpgradeConfig{
 		AllowedOrigins: []string{"http://*"},
+		Authenticator:  testAuth(),
 	})
 
 	// Use ResponseRecorder — no TCP needed, no sandbox issue.
@@ -456,6 +426,7 @@ func TestUpgradeHandler_RejectsEmptyOrigins(t *testing.T) {
 
 		handler, err := adapterws.UpgradeHandler(hub, adapterws.UpgradeConfig{
 			AllowedOrigins: []string{"http://*"},
+			Authenticator:  testAuth(),
 		})
 		require.NoError(t, err)
 		require.NotNil(t, handler)
@@ -469,6 +440,7 @@ func TestUpgradeHandler_RejectsEmptyOrigins(t *testing.T) {
 func TestUpgradeHandler_RejectsNilHub(t *testing.T) {
 	handler, err := adapterws.UpgradeHandler(nil, adapterws.UpgradeConfig{
 		AllowedOrigins: []string{"http://*"},
+		Authenticator:  testAuth(),
 	})
 
 	require.Error(t, err)
@@ -494,6 +466,7 @@ func TestMustUpgradeHandler_PanicsOnNilHub(t *testing.T) {
 	}()
 	_ = adapterws.MustUpgradeHandler(nil, adapterws.UpgradeConfig{
 		AllowedOrigins: []string{"http://*"},
+		Authenticator:  testAuth(),
 	})
 	t.Fatal("expected MustUpgradeHandler to panic, got none")
 }
@@ -623,6 +596,7 @@ func TestUpgradeHandler_DisallowedOrigin_HandshakeRejected(t *testing.T) {
 	// Narrow allow-list: only http://*.allowed.test is permitted.
 	mux.Handle("/ws", requireUpgradeHandler(t, hub, adapterws.UpgradeConfig{
 		AllowedOrigins: []string{"http://*.allowed.test"},
+		Authenticator:  testAuth(),
 	}))
 	server := httptest.NewServer(mux)
 	defer server.Close()
@@ -636,4 +610,128 @@ func TestUpgradeHandler_DisallowedOrigin_HandshakeRejected(t *testing.T) {
 	}
 	assert.Equal(t, 0, hub.ConnCount(),
 		"hub must not register a connection rejected at handshake")
+}
+
+// TestUpgradeHandler_RejectsNilAuthenticator locks fail-fast at composition.
+func TestUpgradeHandler_RejectsNilAuthenticator(t *testing.T) {
+	hub := rtws.NewHub(rtws.DefaultHubConfig(clock.Real()), nil)
+	handler, err := adapterws.UpgradeHandler(hub, adapterws.UpgradeConfig{
+		AllowedOrigins: []string{"http://*"},
+		// Authenticator: nil — explicit
+	})
+	require.Error(t, err)
+	assert.Nil(t, handler)
+	var ec *errcode.Error
+	require.ErrorAs(t, err, &ec)
+	assert.Equal(t, errcode.ErrWebsocketAuthenticatorMissing, ec.Code)
+}
+
+func TestMustUpgradeHandler_PanicsOnNilAuthenticator(t *testing.T) {
+	hub := rtws.NewHub(rtws.DefaultHubConfig(clock.Real()), nil)
+	require.Panics(t, func() {
+		_ = adapterws.MustUpgradeHandler(hub, adapterws.UpgradeConfig{
+			AllowedOrigins: []string{"http://*"},
+		})
+	})
+}
+
+// stubDenyingAuth returns absent (no credential).
+type stubDenyingAuth struct{}
+
+func (stubDenyingAuth) Authenticate(_ *http.Request) (*authpkg.Principal, bool, error) {
+	return nil, false, nil
+}
+
+// stubFailingAuth returns invalid credential error.
+type stubFailingAuth struct{}
+
+func (stubFailingAuth) Authenticate(_ *http.Request) (*authpkg.Principal, bool, error) {
+	return nil, false, errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthUnauthorized, "bad token")
+}
+
+func TestUpgradeHandler_AbsentCredential_Returns401(t *testing.T) {
+	hub := rtws.NewHub(rtws.DefaultHubConfig(clock.Real()), nil)
+	startErr := make(chan error, 1)
+	go func() { startErr <- hub.Start(context.Background()) }()
+	require.Eventually(t, hub.IsRunning, testtime.D2s, time.Millisecond)
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), testtime.CtxDefault)
+		defer cancel()
+		_ = hub.Stop(ctx)
+		<-startErr
+	})
+
+	handler, err := adapterws.UpgradeHandler(hub, adapterws.UpgradeConfig{
+		AllowedOrigins: []string{"http://*"},
+		Authenticator:  stubDenyingAuth{},
+	})
+	require.NoError(t, err)
+
+	req := httptest.NewRequest(http.MethodGet, "/ws", nil)
+	req.Header.Set("Connection", "Upgrade")
+	req.Header.Set("Upgrade", "websocket")
+	req.Header.Set("Sec-WebSocket-Version", "13")
+	req.Header.Set("Sec-WebSocket-Key", "dGhlIHNhbXBsZSBub25jZQ==")
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, req)
+
+	assert.Equal(t, http.StatusUnauthorized, rr.Code)
+	assert.Equal(t, 0, hub.ConnCount(), "hub must not register unauthenticated conn")
+}
+
+func TestUpgradeHandler_InvalidCredential_Returns401(t *testing.T) {
+	hub := rtws.NewHub(rtws.DefaultHubConfig(clock.Real()), nil)
+	startErr := make(chan error, 1)
+	go func() { startErr <- hub.Start(context.Background()) }()
+	require.Eventually(t, hub.IsRunning, testtime.D2s, time.Millisecond)
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), testtime.CtxDefault)
+		defer cancel()
+		_ = hub.Stop(ctx)
+		<-startErr
+	})
+
+	handler, err := adapterws.UpgradeHandler(hub, adapterws.UpgradeConfig{
+		AllowedOrigins: []string{"http://*"},
+		Authenticator:  stubFailingAuth{},
+	})
+	require.NoError(t, err)
+
+	req := httptest.NewRequest(http.MethodGet, "/ws", nil)
+	req.Header.Set("Connection", "Upgrade")
+	req.Header.Set("Upgrade", "websocket")
+	req.Header.Set("Sec-WebSocket-Version", "13")
+	req.Header.Set("Sec-WebSocket-Key", "dGhlIHNhbXBsZSBub25jZQ==")
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, req)
+
+	assert.Equal(t, http.StatusUnauthorized, rr.Code)
+	assert.Equal(t, 0, hub.ConnCount())
+}
+
+// 401 response body should be plain text (browser WS API can't read body anyway).
+func TestUpgradeHandler_401_ResponseIsPlainText(t *testing.T) {
+	hub := rtws.NewHub(rtws.DefaultHubConfig(clock.Real()), nil)
+	startErr := make(chan error, 1)
+	go func() { startErr <- hub.Start(context.Background()) }()
+	require.Eventually(t, hub.IsRunning, testtime.D2s, time.Millisecond)
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), testtime.CtxDefault)
+		defer cancel()
+		_ = hub.Stop(ctx)
+		<-startErr
+	})
+
+	handler, err := adapterws.UpgradeHandler(hub, adapterws.UpgradeConfig{
+		AllowedOrigins: []string{"http://*"},
+		Authenticator:  stubDenyingAuth{},
+	})
+	require.NoError(t, err)
+
+	req := httptest.NewRequest(http.MethodGet, "/ws", nil)
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, req)
+	body := rr.Body.String()
+	assert.NotContains(t, body, "{")
+	assert.NotContains(t, body, "ERR_")
 }

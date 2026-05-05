@@ -3,6 +3,7 @@ package auth
 import (
 	"context"
 	"testing"
+	"time"
 )
 
 func TestPrincipalKind_String(t *testing.T) {
@@ -142,5 +143,25 @@ func TestPrincipal_ServiceKindCallerCellID(t *testing.T) {
 	// Spec: Roles must be nil for a service principal (no role-based authz for services)
 	if p.Roles != nil {
 		t.Errorf("service kind Roles must be nil, got %v", p.Roles)
+	}
+}
+
+func TestPrincipal_ExpiresAt_ZeroValueMeansNoExpiry(t *testing.T) {
+	var p Principal
+	if !p.ExpiresAt.IsZero() {
+		t.Error("zero-value Principal.ExpiresAt must be zero time (no expiry)")
+	}
+}
+
+func TestPrincipal_ExpiresAt_RoundTrip(t *testing.T) {
+	exp := time.Date(2030, 1, 2, 3, 4, 5, 0, time.UTC)
+	original := &Principal{Kind: PrincipalUser, ExpiresAt: exp}
+	ctx := WithPrincipal(context.Background(), original)
+	got, ok := FromContext(ctx)
+	if !ok {
+		t.Fatal("FromContext should retrieve principal")
+	}
+	if !got.ExpiresAt.Equal(exp) {
+		t.Errorf("ExpiresAt round-trip failed: got %v want %v", got.ExpiresAt, exp)
 	}
 }
