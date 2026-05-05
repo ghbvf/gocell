@@ -451,13 +451,13 @@ func TestAdapter_IsSuccessful_CustomClassifier(t *testing.T) {
 
 // TestAdapter_OnStateChange_PanicDoesNotStrandHalfOpenSlot verifies that a
 // panicking OnStateChange callback fired during the open→half-open transition
-// does not leave the probe slot consumed forever. Without recovery the
-// callback panic would propagate out of Allow(), the done callback would never
-// be returned to the caller, counts.Requests would stay at 1, and half-open
-// (which has no expiry) would reject all subsequent requests permanently.
+// does not strand the probe slot. The panic propagates out of Allow() (we do
+// NOT recover — that would mask the user bug); but because the two-pass
+// beforeRequest fires the callback BEFORE counts.Requests++, a follow-up
+// Allow() call succeeds cleanly because the slot was never consumed.
 //
-// Regression: PR#385 review FIND (post-FIND-001 reordering placed the callback
-// after counts.Requests++).
+// Regression: PR#385 review FIND (post-FIND-001 reordering placed the
+// callback after counts.Requests++, permanently stranding the slot).
 func TestAdapter_OnStateChange_PanicDoesNotStrandHalfOpenSlot(t *testing.T) {
 	t.Parallel()
 
@@ -481,20 +481,79 @@ func TestAdapter_OnStateChange_PanicDoesNotStrandHalfOpenSlot(t *testing.T) {
 	}
 	require.Equal(t, StateOpen, a.State())
 
-	// Advance past Timeout so the next Allow triggers open → half-open.
+	// Advance past Timeout so the next Allow triggers open → half-open
+	// and fires the panicking callback. The panic propagates out of Allow.
 	fc.Advance(testtime.D100ms + smallDelta)
 
-	// First Allow after timeout: triggers transition + panics in callback.
-	// With recovery, Allow returns (true, done) cleanly. Without recovery,
-	// the panic would propagate and strand counts.Requests=1.
-	allowed, done := a.Allow()
-	require.True(t, allowed, "first half-open probe must succeed even when callback panics")
-	require.NotNil(t, done, "done must be returned so caller can release the slot")
+	require.Panics(t, func() {
+		_, _ = a.Allow()
+	}, "callback panic must propagate out of Allow")
 	require.Equal(t, int32(1), fireCount.Load(), "callback fired exactly once")
 
-	// Caller releases the slot with a successful probe → close.
+	// Critical assertion: the slot was NOT consumed despite the panic, so
+	// the next Allow can claim the half-open probe and close the breaker.
+	allowed, done := a.Allow()
+	require.True(t, allowed, "follow-up Allow must succeed (slot not stranded)")
+	require.NotNil(t, done)
 	done(nil)
 	require.Equal(t, StateClosed, a.State(), "successful probe must close the breaker")
+}
+
+// TestAdapter_OnStateChange_CanCallAllowReentrant verifies that the
+// OnStateChange callback may safely call Adapter methods (Allow, State)
+// from within itself — the two-pass beforeRequest fires callbacks outside
+// the breaker mutex, so reentrant calls do not deadlock.
+//
+// Without the lock-out invariant this test would deadlock and the test
+// runner would terminate it via timeout (visible in CI as a failure).
+func TestAdapter_OnStateChange_CanCallAllowReentrant(t *testing.T) {
+	t.Parallel()
+
+	var observedFromCallback State
+	var observed atomic.Bool
+	var a *Adapter
+	cfg := Config{
+		Name:        "reentrant",
+		MaxRequests: 1,
+		Timeout:     testtime.D100ms,
+		OnStateChange: func(name string, from, to State) {
+			if from == StateOpen && to == StateHalfOpen {
+				// Reentrant call — must not deadlock.
+				observedFromCallback = a.State()
+				observed.Store(true)
+			}
+		},
+	}
+	var fc *clockmock.FakeClock
+	a, fc = mustNewWithClock(t, cfg)
+
+	// Trip then advance past Timeout to trigger open→half-open.
+	for range 6 {
+		_, done := a.Allow()
+		done(errors.New("failure"))
+	}
+	require.Equal(t, StateOpen, a.State())
+	fc.Advance(testtime.D100ms + smallDelta)
+
+	// Run Allow in a goroutine with a generous timeout so a deadlock
+	// surfaces as a test failure rather than hanging the suite.
+	doneCh := make(chan struct{})
+	go func() {
+		defer close(doneCh)
+		_, _ = a.Allow()
+	}()
+
+	timer := time.NewTimer(testtime.D2s)
+	defer timer.Stop()
+	select {
+	case <-doneCh:
+	case <-timer.C:
+		t.Fatal("Allow deadlocked — reentrant State() inside callback blocked")
+	}
+
+	require.True(t, observed.Load(), "callback must have observed state reentrantly")
+	require.Equal(t, StateHalfOpen, observedFromCallback,
+		"reentrant State() inside the open→half-open callback should observe StateHalfOpen")
 }
 
 // TestAdapter_OnStateChange_NotCalledConcurrently verifies that the

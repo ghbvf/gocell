@@ -92,6 +92,14 @@ type Config struct {
 	ReadyToTrip func(counts Counts) bool
 
 	// OnStateChange is called whenever the circuit state changes.
+	//
+	// The callback is invoked OUTSIDE the breaker mutex, so it may safely
+	// call any Adapter method (Allow, State) without risk of reentrant
+	// deadlock. A panic in the callback propagates to the caller of Allow
+	// or the done callback; the state machine remains consistent because
+	// callbacks fired during beforeRequest run before slot accounting (no
+	// stranded half-open probes), and callbacks fired during afterRequest /
+	// State run after counts have already been reset by toNewGeneration.
 	OnStateChange func(name string, from, to State)
 
 	// IsSuccessful classifies the error returned by the done callback as
@@ -164,22 +172,46 @@ func (b *breaker) currentState(now time.Time, ts *[]stateTransition) (State, uin
 }
 
 // beforeRequest checks whether a request is permitted and increments Requests.
+//
+// Implementation note: this is a two-pass design.
+//   - Phase 1: take the lock briefly to read state and collect any pending
+//     lazy transition (open→half-open). Do NOT mutate counts.
+//   - Phase 2: release the lock and fire OnStateChange callbacks. Outside the
+//     lock so the callback may safely call Allow/State without reentrant
+//     deadlock; before counts.Requests++ so a panic in the callback can never
+//     strand a half-open probe slot (counts stays at 0 for any new generation).
+//   - Phase 3: re-take the lock to gate and account. If the callback advanced
+//     state in Phase 2 (gen mismatch), reject this request conservatively;
+//     the caller's done callback (if any) is no-op via afterRequest's gen fence.
 func (b *breaker) beforeRequest() (uint64, error) {
-	var ts []stateTransition
+	// Phase 1: read state + collect transitions, no counts mutation.
+	var transitions []stateTransition
 	b.mu.Lock()
 	now := b.clk.Now()
-	state, gen := b.currentState(now, &ts)
-	var err error
-	if state == StateOpen {
-		err = errOpenState
-	} else if state == StateHalfOpen && b.counts.Requests >= b.maxRequests {
-		err = errTooManyRequests
-	} else {
-		b.counts.Requests++
-	}
+	state, gen := b.currentState(now, &transitions)
 	b.mu.Unlock()
-	b.fireTransitions(ts)
-	return gen, err
+
+	// Phase 2: fire callbacks outside the lock and before slot accounting.
+	b.fireTransitions(transitions)
+
+	// Phase 3: re-lock to commit. Generation fence guards against state
+	// advancement triggered by the callback in Phase 2.
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.generation != gen {
+		// Callback advanced state. Phase 1 observation is stale; reject
+		// conservatively so the caller retries against the new state.
+		return b.generation, errOpenState
+	}
+	// gen unchanged ⇒ state unchanged ⇒ Phase 1 observation still valid.
+	if state == StateOpen {
+		return gen, errOpenState
+	}
+	if state == StateHalfOpen && b.counts.Requests >= b.maxRequests {
+		return gen, errTooManyRequests
+	}
+	b.counts.Requests++
+	return gen, nil
 }
 
 // afterRequest records the outcome of a request. Cross-generation done
@@ -241,17 +273,11 @@ func (b *breaker) setState(target State, now time.Time, ts *[]stateTransition) {
 	*ts = append(*ts, stateTransition{name: b.name, prev: prev, next: target})
 }
 
-// fireTransitions invokes the user OnStateChange callback and emits a slog
-// Info event for each collected transition. Called after b.mu is released to
-// avoid reentrant deadlock when the callback calls Allow() or State().
-//
-// Each callback is wrapped in defer-recover via invokeStateChange to prevent
-// a panicking callback from corrupting the state machine — fireTransitions
-// runs after counts.Requests++ in beforeRequest, so an unrecovered panic
-// would strand the half-open probe slot and permanently reject all subsequent
-// requests (half-open has no expiry).
-//
-// ref: net/http.Server — per-handler recover prevents server crash
+// fireTransitions emits a slog Info event and invokes the user OnStateChange
+// callback for each collected transition. Called outside b.mu to avoid
+// reentrant deadlock and (in beforeRequest) before counts mutation to avoid
+// stranding probe slots on callback panic. A panic in the callback propagates
+// to the caller of Allow / done; the state machine remains consistent.
 func (b *breaker) fireTransitions(ts []stateTransition) {
 	for _, t := range ts {
 		slog.Info("circuitbreaker: state transition",
@@ -259,26 +285,9 @@ func (b *breaker) fireTransitions(ts []stateTransition) {
 			"from", t.prev.String(),
 			"to", t.next.String())
 		if b.onStateChange != nil {
-			b.invokeStateChange(t)
+			b.onStateChange(t.name, t.prev, t.next)
 		}
 	}
-}
-
-// invokeStateChange calls the user OnStateChange callback for one transition,
-// recovering from any panic so the state machine continues to function.
-// The panic is logged at Error level (per .claude/rules/gocell/observability.md —
-// "状态机违规" qualifies for Error level).
-func (b *breaker) invokeStateChange(t stateTransition) {
-	defer func() {
-		if r := recover(); r != nil {
-			slog.Error("circuitbreaker: OnStateChange callback panicked",
-				"name", t.name,
-				"from", t.prev.String(),
-				"to", t.next.String(),
-				"panic", r)
-		}
-	}()
-	b.onStateChange(t.name, t.prev, t.next)
 }
 
 // toNewGeneration bumps the generation counter, resets counts, and sets
