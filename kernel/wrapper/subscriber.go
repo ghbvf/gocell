@@ -17,15 +17,23 @@ import (
 // This differs from WrapConsumer: Consumer middleware only sees the business
 // HandleResult before Commit/Ack/Nack, while this wrapper observes the
 // Subscriber layer after settlement downgrades such as commit_failed.
+//
+// WrapSubscriber relies on its caller (currently
+// runtime/eventrouter.contractTracingSubscriber) to have validated the
+// owning outbox.Subscription via Subscription.Validate before constructing
+// the spec, and on registration-time spec validation in
+// eventrouter.AddContractHandler. Both upstream layers run spec.Validate
+// or its primitive subset; running it again here would be a redundant
+// third pass without adding any safety margin (P2 #1 — single-source
+// validation per Watermill / MassTransit pattern). Structural assertions
+// (nil fn, kind!=event) remain because they catch programming errors
+// that no upstream validate would have caught.
 func WrapSubscriber(tr Tracer, spec ContractSpec, fn outbox.SubscriberHandler) (outbox.SubscriberHandler, error) {
 	if fn == nil {
 		return nil, fmt.Errorf("wrapper.WrapSubscriber: fn must not be nil")
 	}
 	if spec.Kind != "event" {
 		return nil, fmt.Errorf("wrapper.WrapSubscriber: spec.Kind %q must be \"event\"", spec.Kind)
-	}
-	if err := spec.Validate(); err != nil {
-		return nil, fmt.Errorf("wrapper.WrapSubscriber: %w", err)
 	}
 	if tr == nil {
 		tr = NoopTracer{}

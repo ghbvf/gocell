@@ -142,6 +142,10 @@ func TestWrapSubscriber_ReturnsErrorsForInvalidInputs(t *testing.T) {
 		return outbox.HandleResult{Disposition: outbox.DispositionAck}, nil
 	}
 
+	// Structural assertions WrapSubscriber still owns: nil fn and non-event Kind
+	// catch programming errors that no upstream Subscription.Validate would have
+	// surfaced (Subscription has no Kind field — it carries primitive
+	// ContractKind strings rather than an enum).
 	if _, err := wrapper.WrapSubscriber(wrapper.NoopTracer{}, eventSpec(), nil); err == nil {
 		t.Fatal("expected error on nil subscriber handler")
 	}
@@ -149,10 +153,16 @@ func TestWrapSubscriber_ReturnsErrorsForInvalidInputs(t *testing.T) {
 		t.Fatal("expected error on non-event spec")
 	}
 
+	// Per P2 #1 (single-source validation): spec field-level validation is the
+	// caller's responsibility (eventrouter.AddContractHandler at registration
+	// time + contractTracingSubscriber at Subscribe/Setup time, both via
+	// Subscription.Validate / spec.Validate). WrapSubscriber accepts a spec
+	// with ID="" without re-validating, since doing so would be a redundant
+	// third pass.
 	invalid := eventSpec()
 	invalid.ID = ""
-	if _, err := wrapper.WrapSubscriber(wrapper.NoopTracer{}, invalid, ackHandler); err == nil {
-		t.Fatal("expected error on invalid event spec")
+	if _, err := wrapper.WrapSubscriber(wrapper.NoopTracer{}, invalid, ackHandler); err != nil {
+		t.Fatalf("WrapSubscriber: unexpected validation on caller-validated spec: %v", err)
 	}
 }
 
