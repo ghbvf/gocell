@@ -61,16 +61,20 @@ func TestHANDLER_PATH_QUERY_LENGTH_VALIDATION_01(t *testing.T) {
 		gen := contractIDToExpectedPkgPath(contract.ID)
 		genPath := filepath.Join(root, gen, "handler_gen.go")
 
-		// Pagination endpoints (queryParams = {cursor, limit}) delegate cursor /
-		// limit length+range checks to httputil.ParsePageParams (single source of
-		// truth: query.MaxCursorTokenBytes / query.MaxPageSize). contract.yaml
-		// length constraints on cursor/limit are documentation-only here.
-		isPagination := false
+		// On pagination endpoints (cursor + limit both declared, with any
+		// number of additional filter params allowed), cursor/limit length
+		// + range checks are single-sourced via httputil.ParsePageParams
+		// (query.MaxCursorTokenBytes / query.MaxPageSize). Per-param skip
+		// covers `cursor + limit + status` style filters without false
+		// positives — the legacy `len(qp) == 2` exact-match would have
+		// flagged the filter case as non-pagination and required redundant
+		// length checks on cursor/limit.
 		qp := contract.Endpoints.HTTP.QueryParams
+		isPagination := false
 		if qp != nil {
 			_, hasCursor := qp["cursor"]
 			_, hasLimit := qp["limit"]
-			isPagination = hasCursor && hasLimit && len(qp) == 2
+			isPagination = hasCursor && hasLimit
 		}
 
 		for name, p := range contract.Endpoints.HTTP.PathParams {
@@ -78,11 +82,12 @@ func TestHANDLER_PATH_QUERY_LENGTH_VALIDATION_01(t *testing.T) {
 				expects = append(expects, expectation{contract.ID, name, true, p.MinLength, p.MaxLength, genPath})
 			}
 		}
-		if !isPagination {
-			for name, p := range contract.Endpoints.HTTP.QueryParams {
-				if p.Type == "string" && (p.MinLength != nil || p.MaxLength != nil) {
-					expects = append(expects, expectation{contract.ID, name, false, p.MinLength, p.MaxLength, genPath})
-				}
+		for name, p := range qp {
+			if isPagination && (name == "cursor" || name == "limit") {
+				continue
+			}
+			if p.Type == "string" && (p.MinLength != nil || p.MaxLength != nil) {
+				expects = append(expects, expectation{contract.ID, name, false, p.MinLength, p.MaxLength, genPath})
 			}
 		}
 	}
@@ -162,10 +167,11 @@ func scanHandlerLengthCheck(f *ast.File, paramName string, isPath, requireMin, r
 	if handle == nil || handle.Body == nil {
 		return false
 	}
-	if isPath {
-		return scanPathParamLengthCheck(handle.Body, paramName, requireMin, requireMax)
+	findTarget := pathParamTargetFinder(paramName)
+	if !isPath {
+		findTarget = queryParamTargetFinder(paramName)
 	}
-	return scanQueryParamLengthCheck(handle.Body, paramName, requireMin, requireMax)
+	return scanParamLengthCheck(handle.Body, findTarget, requireMin, requireMax)
 }
 
 // findHandleFunc returns the *Handler.handle method declaration in f, or nil
@@ -183,11 +189,40 @@ func findHandleFunc(f *ast.File) *ast.FuncDecl {
 	return nil
 }
 
-// scanPathParamLengthCheck walks the handle function body for nested
-// BlockStmts containing `<lhs> := r.PathValue("paramName")` (or `:=` with
-// helper like ParseUUIDPathParam) and asserts the matching len(lhs)
-// IfStmts live in that same block.
-func scanPathParamLengthCheck(body *ast.BlockStmt, paramName string, requireMin, requireMax bool) bool {
+// targetFinder returns the AST expression `len(...)` should compare against
+// for the given block, or (nil, false) if the block does not own the param.
+type targetFinder func(block *ast.BlockStmt) (ast.Expr, bool)
+
+// pathParamTargetFinder binds paramName to a finder that locates path-param
+// blocks (`v := r.PathValue("paramName")` or the `httputil.Parse*PathParam`
+// helper form) and returns the local ident as the len-target.
+func pathParamTargetFinder(paramName string) targetFinder {
+	return func(block *ast.BlockStmt) (ast.Expr, bool) {
+		lhs, found := pathValueLHS(block, paramName)
+		if !found {
+			return nil, false
+		}
+		return &ast.Ident{Name: lhs}, true
+	}
+}
+
+// queryParamTargetFinder binds paramName to a finder that locates the
+// `req.<GoName> = r.URL.Query().Get("paramName")` assignment and returns
+// `req.<GoName>` as the len-target.
+func queryParamTargetFinder(paramName string) targetFinder {
+	return func(block *ast.BlockStmt) (ast.Expr, bool) {
+		goName, found := queryParamAssignment(block, paramName)
+		if !found {
+			return nil, false
+		}
+		return &ast.SelectorExpr{X: &ast.Ident{Name: "req"}, Sel: &ast.Ident{Name: goName}}, true
+	}
+}
+
+// scanParamLengthCheck walks body for the BlockStmt where findTarget
+// resolves and asserts the matching min/max len IfStmts are bound to that
+// same block.
+func scanParamLengthCheck(body *ast.BlockStmt, findTarget targetFinder, requireMin, requireMax bool) bool {
 	matched := false
 	ast.Inspect(body, func(n ast.Node) bool {
 		if matched {
@@ -197,11 +232,10 @@ func scanPathParamLengthCheck(body *ast.BlockStmt, paramName string, requireMin,
 		if !ok {
 			return true
 		}
-		lhs, found := pathValueLHS(block, paramName)
+		target, found := findTarget(block)
 		if !found {
 			return true
 		}
-		target := &ast.Ident{Name: lhs}
 		if !blockSatisfiesLenChecks(block, target, requireMin, requireMax) {
 			// return false stops descent into this block's children; sibling
 			// blocks continue via the parent traversal.
@@ -294,33 +328,6 @@ func callMatchesPathHelper(call *ast.CallExpr, paramName string) bool {
 		}
 	}
 	return false
-}
-
-// scanQueryParamLengthCheck walks the body for the assignment
-// `req.<GoName> = r.URL.Query().Get("paramName")` and asserts the matching
-// len(req.<GoName>) IfStmts sit in the same enclosing block.
-func scanQueryParamLengthCheck(body *ast.BlockStmt, paramName string, requireMin, requireMax bool) bool {
-	matched := false
-	ast.Inspect(body, func(n ast.Node) bool {
-		if matched {
-			return false
-		}
-		block, ok := n.(*ast.BlockStmt)
-		if !ok {
-			return true
-		}
-		goName, found := queryParamAssignment(block, paramName)
-		if !found {
-			return true
-		}
-		target := &ast.SelectorExpr{X: &ast.Ident{Name: "req"}, Sel: &ast.Ident{Name: goName}}
-		if !blockSatisfiesLenChecks(block, target, requireMin, requireMax) {
-			return false
-		}
-		matched = true
-		return false
-	})
-	return matched
 }
 
 // queryParamAssignment returns the goName field assigned from
@@ -533,4 +540,74 @@ func TestHANDLER_PATH_QUERY_LENGTH_VALIDATION_01_NegativeFixtures(t *testing.T) 
 			}
 		})
 	}
+}
+
+// TestHANDLER_PATH_QUERY_LENGTH_VALIDATION_01_PositiveFixture asserts the
+// param-scoped scanner correctly ACCEPTS a compliant handler that exercises
+// every supported param-shape (two non-UUID path params, one UUID helper
+// path param, one query param at function-body level).
+func TestHANDLER_PATH_QUERY_LENGTH_VALIDATION_01_PositiveFixture(t *testing.T) {
+	t.Parallel()
+	archDir := findArchTestDir(t)
+	path := filepath.Join(archDir, "testdata", "path_query_length_validation_fixtures", "compliant", "handler_gen.go")
+	fset := token.NewFileSet()
+	f, err := parser.ParseFile(fset, path, nil, 0)
+	if err != nil {
+		t.Fatalf("parse fixture %s: %v", path, err)
+	}
+
+	cases := []struct {
+		paramName  string
+		isPath     bool
+		requireMin bool
+		requireMax bool
+	}{
+		{"id", true, true, true},
+		{"cmdId", true, true, true},
+		// Token via httputil.ParseUUIDPathParam helper: the helper performs
+		// length+format validation internally, so the contract declares no
+		// min/max and the scanner is not invoked for this param. The fixture
+		// still includes the helper call site to exercise callMatchesPathHelper
+		// in pathValueLHS — verified indirectly via the lhs-resolution path.
+		{"actorId", false, true, true},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.paramName, func(t *testing.T) {
+			t.Parallel()
+			if !scanHandlerLengthCheck(f, tc.paramName, tc.isPath, tc.requireMin, tc.requireMax) {
+				t.Errorf("HANDLER-PATH-QUERY-LENGTH-VALIDATION-01 positive fixture compliant param %q "+
+					"(isPath=%v): scanner FALSE-NEGATIVE; required min/max checks are present",
+					tc.paramName, tc.isPath)
+			}
+		})
+	}
+
+	// pathValueLHS must also resolve the UUID helper form even though the
+	// gate does not enforce length checks for UUID params (helper handles
+	// that internally). Verified by directly invoking pathParamTargetFinder
+	// against the handler body's UUID block.
+	t.Run("uuid_helper_lhs_resolution", func(t *testing.T) {
+		t.Parallel()
+		fn := findHandleFunc(f)
+		if fn == nil || fn.Body == nil {
+			t.Fatalf("handle func not found in compliant fixture")
+		}
+		find := pathParamTargetFinder("token")
+		var resolved bool
+		ast.Inspect(fn.Body, func(n ast.Node) bool {
+			block, ok := n.(*ast.BlockStmt)
+			if !ok {
+				return true
+			}
+			if _, ok := find(block); ok {
+				resolved = true
+				return false
+			}
+			return true
+		})
+		if !resolved {
+			t.Errorf("pathValueLHS did not resolve UUID helper form `httputil.ParseUUIDPathParam(... \"token\")`")
+		}
+	})
 }
