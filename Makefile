@@ -1,4 +1,4 @@
-.PHONY: build check-build test verify validate generate cover clean \
+.PHONY: build check-build test fmt verify validate generate cover clean \
         up down \
         test-integration \
         test-examples-smoke \
@@ -28,6 +28,13 @@ check-build:
 
 test:
 	go test ./... -count=1
+
+# fmt rewrites Go sources in place via every formatter declared under
+# .golangci.yml `formatters.enable` (currently gofmt + goimports + gofumpt).
+# Pair-mate of `make verify` (specifically hack/verify-gofumpt.sh): fmt fixes,
+# verify checks. ref: kubernetes/kubernetes hack/update-gofmt.sh.
+fmt:
+	golangci-lint fmt ./...
 
 # verify discovers and runs every hack/verify-*.sh in deterministic order,
 # accumulating failures. Single entry point for static governance gates

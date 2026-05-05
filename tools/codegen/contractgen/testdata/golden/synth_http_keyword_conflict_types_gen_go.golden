@@ -9,5 +9,4 @@ type Request struct {
 }
 
 // Response — http.config.delete.v1.response
-type Response struct {
-}
+type Response struct{}

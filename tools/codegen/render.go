@@ -3,11 +3,59 @@ package codegen
 import (
 	"bytes"
 	"fmt"
-	"go/format"
 	"text/template"
 
 	"golang.org/x/tools/imports"
+	gofumpt "mvdan.cc/gofumpt/format"
 )
+
+// gofumptOpts are the producer-side gofumpt config. LangVersion tracks
+// the go directive in go.mod (go 1.25); ModulePath matches the module
+// declaration so gofumpt can group imports by module locality.
+//
+// These values must stay aligned with the CI formatter gate
+// (.golangci.yml formatters.enable: gofumpt + golangci-lint v2.11.4).
+var gofumptOpts = gofumpt.Options{
+	LangVersion: "go1.25",
+	ModulePath:  "github.com/ghbvf/gocell",
+}
+
+// FormatGoSource normalizes Go source bytes through goimports → gofumpt and
+// returns the canonical formatted output. It is the single producer-side
+// formatter outlet; every codegen / scaffold path must funnel its rendered
+// bytes through here so generated and scaffolded files match what the CI
+// `golangci-lint` gate (.golangci.yml formatters.enable: gofumpt) enforces.
+//
+// filename is the path goimports uses to resolve module-local imports —
+// pass empty string when the source is not a file on disk.
+//
+// Pipeline order is goimports → gofumpt: gofumpt requires its input to be
+// canonical gofmt-shaped, and goimports.Process produces exactly that while
+// also resolving and ordering the import block.
+//
+// On failure, FormatGoSource returns the latest intermediate bytes (raw
+// input on goimports failure, goimports output on gofumpt failure) so
+// callers can pretty-print the offending source for debugging — these
+// bytes MUST NOT be written to disk.
+//
+// ref: mvdan.cc/gofumpt format/format.go — gopls and golangci-lint adopt
+// the same goimports → gofumpt ordering.
+func FormatGoSource(filename string, src []byte) ([]byte, error) {
+	imported, err := imports.Process(filename, src, &imports.Options{
+		TabIndent:  true,
+		TabWidth:   8,
+		Comments:   true,
+		FormatOnly: false,
+	})
+	if err != nil {
+		return src, fmt.Errorf("codegen format: goimports: %w", err)
+	}
+	formatted, err := gofumpt.Source(imported, gofumptOpts)
+	if err != nil {
+		return imported, fmt.Errorf("codegen format: gofumpt: %w", err)
+	}
+	return formatted, nil
+}
 
 // RenderOptions configures a template-driven Go source render pass.
 type RenderOptions struct {
@@ -24,23 +72,23 @@ type RenderOptions struct {
 	Filename string
 }
 
-// Render executes a template, runs go/format on the output, then goimports.
+// Render executes a template and runs the producer formatter pipeline
+// (goimports → gofumpt) over the output.
 //
-// Three-stage pipeline (each stage gates the next):
+// Two-stage pipeline (each stage gates the next):
 //  1. text/template.Execute renders raw source bytes
-//  2. go/format.Source enforces canonical layout — failure here typically
+//  2. FormatGoSource applies goimports + gofumpt — failure here typically
 //     means the template emitted invalid Go syntax; the raw bytes are
 //     returned with the error so callers can pretty-print the offending
-//     source for template debugging
-//  3. golang.org/x/tools/imports.Process tidies and orders imports
+//     source for template debugging.
 //
 // # Returns
 //
-// Returns rendered bytes on success. When go/format or goimports fails, the
-// returned bytes contain the raw template output for debugging — callers
+// Returns rendered bytes on success. When the formatter pipeline fails,
+// the returned bytes contain raw template output for debugging — callers
 // MUST NOT write them to disk.
 //
-// ref: ent/ent entc/gen/template.go — same pipeline ordering.
+// ref: ent/ent entc/gen/template.go — same staged-pipeline ordering.
 func Render(opts RenderOptions) ([]byte, error) {
 	if opts.Templates == nil {
 		return nil, fmt.Errorf("codegen render: Templates is nil")
@@ -55,19 +103,9 @@ func Render(opts RenderOptions) ([]byte, error) {
 	}
 
 	raw := buf.Bytes()
-	formatted, fmtErr := format.Source(raw)
-	if fmtErr != nil {
-		return raw, fmt.Errorf("codegen render: go/format failed for template %q: %w", opts.TemplateName, fmtErr)
+	formatted, err := FormatGoSource(opts.Filename, raw)
+	if err != nil {
+		return raw, fmt.Errorf("codegen render: template %q: %w", opts.TemplateName, err)
 	}
-
-	final, impErr := imports.Process(opts.Filename, formatted, &imports.Options{
-		TabIndent:  true,
-		TabWidth:   8,
-		Comments:   true,
-		FormatOnly: false,
-	})
-	if impErr != nil {
-		return formatted, fmt.Errorf("codegen render: goimports failed for %q: %w", opts.Filename, impErr)
-	}
-	return final, nil
+	return formatted, nil
 }

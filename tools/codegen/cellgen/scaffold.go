@@ -3,12 +3,13 @@ package cellgen
 import (
 	"bytes"
 	"fmt"
-	"go/format"
 	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
 	"text/template"
+
+	"github.com/ghbvf/gocell/tools/codegen"
 )
 
 // ownerTeamPattern is the whitelist regex for OwnerTeam values written into
@@ -274,8 +275,9 @@ func containsString(slice []string, target string) bool {
 }
 
 // renderTemplate executes tmpl with data and returns the rendered bytes.
-// When isGoSource is true the output is validated (and formatted) via
-// go/format.Source so that template bugs are caught at scaffold time rather
+// When isGoSource is true the output is routed through codegen.FormatGoSource
+// (goimports → gofumpt) so scaffolded files match the CI formatter gate
+// (.golangci.yml gofumpt) and template bugs surface at scaffold time rather
 // than producing invalid Go that breaks at compile time.
 func renderTemplate(tmpl *template.Template, data any, isGoSource bool) ([]byte, error) {
 	var buf bytes.Buffer
@@ -283,7 +285,7 @@ func renderTemplate(tmpl *template.Template, data any, isGoSource bool) ([]byte,
 		return nil, err
 	}
 	if isGoSource {
-		formatted, err := format.Source(buf.Bytes())
+		formatted, err := codegen.FormatGoSource("", buf.Bytes())
 		if err != nil {
 			return nil, fmt.Errorf("rendered Go source is not valid: %w", err)
 		}
