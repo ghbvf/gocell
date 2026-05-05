@@ -780,8 +780,12 @@ func (s *SubscriberWithMiddleware) Ready(sub Subscription) <-chan struct{} {
 // enforcing the boundary at the type level. eventrouter.Router calls SubscribeEntry
 // directly; Subscriber adapters (rabbitmq, eventbus) call Inner.Subscribe.
 func (s *SubscriberWithMiddleware) SubscribeEntry(ctx context.Context, sub Subscription, h EntryHandler) error {
+	if err := sub.Validate(); err != nil {
+		return fmt.Errorf("outbox: SubscriberWithMiddleware: %w", err)
+	}
 	if s.ConsumerBase == nil {
-		return fmt.Errorf("outbox: SubscriberWithMiddleware requires ConsumerBase for subscription %q", sub.Topic)
+		return fmt.Errorf("outbox: SubscriberWithMiddleware requires ConsumerBase for subscription topic=%q consumerGroup=%q contractID=%q",
+			sub.Topic, sub.ConsumerGroup, sub.ContractID)
 	}
 
 	// Step 1: apply business middleware chain (EntryHandler → EntryHandler).

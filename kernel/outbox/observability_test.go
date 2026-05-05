@@ -441,7 +441,7 @@ func TestSubscriberWithMiddleware_BuiltInRestore_RestoresAllFields(t *testing.T)
 	wrapped := &SubscriberWithMiddleware{Inner: cap, ConsumerBase: testConsumerBase(t)}
 
 	require.NoError(t, wrapped.SubscribeEntry(context.Background(),
-		Subscription{Topic: "event.test.v1"},
+		testFullSub("test", "cg-obs"),
 		func(ctx context.Context, _ Entry) HandleResult {
 			requestID, ok := ctxkeys.RequestIDFrom(ctx)
 			require.True(t, ok)
@@ -481,7 +481,7 @@ func TestSubscriberWithMiddleware_BuiltInRestore_ZeroObservabilityIsNoOp(t *test
 
 	called := false
 	require.NoError(t, wrapped.SubscribeEntry(context.Background(),
-		Subscription{Topic: "test.v1"},
+		testFullSub("test", "cg-obs"),
 		func(ctx context.Context, _ Entry) HandleResult {
 			called = true
 			_, ok := ctxkeys.RequestIDFrom(ctx)
@@ -509,7 +509,7 @@ func TestSubscriberWithMiddleware_RestoreIsOutermost(t *testing.T) {
 	}
 	wrapped := &SubscriberWithMiddleware{Inner: cap, Middleware: []SubscriptionMiddleware{userMW}, ConsumerBase: testConsumerBase(t)}
 
-	require.NoError(t, wrapped.SubscribeEntry(context.Background(), Subscription{Topic: "test.v1"},
+	require.NoError(t, wrapped.SubscribeEntry(context.Background(), testFullSub("test", "cg-obs"),
 		func(_ context.Context, _ Entry) HandleResult {
 			return HandleResult{Disposition: DispositionAck}
 		}))

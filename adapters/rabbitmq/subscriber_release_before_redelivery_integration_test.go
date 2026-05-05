@@ -37,15 +37,15 @@ const (
 // TestIntegration_CommitFailedAllowsRedeliveryToSameProcess covers the N8 K#12
 // release-first invariant end-to-end against a real RabbitMQ broker:
 //
-//   1. Publish a single message.
-//   2. Handler returns DispositionAck on every attempt.
-//   3. The first idempotency.Receipt's Commit returns an error (simulated lease
-//      expiration). Release passes through to the in-memory claimer.
-//   4. The subscriber's commit_failed path MUST call Release before broker Nack,
-//      otherwise the second delivery (redelivery) would observe the claim still
-//      held in this process and short-circuit as ClaimBusy → DispositionRequeue,
-//      blocking redelivery until lease TTL expires (default 5m, well beyond the
-//      test's 10s budget).
+//  1. Publish a single message.
+//  2. Handler returns DispositionAck on every attempt.
+//  3. The first idempotency.Receipt's Commit returns an error (simulated lease
+//     expiration). Release passes through to the in-memory claimer.
+//  4. The subscriber's commit_failed path MUST call Release before broker Nack,
+//     otherwise the second delivery (redelivery) would observe the claim still
+//     held in this process and short-circuit as ClaimBusy → DispositionRequeue,
+//     blocking redelivery until lease TTL expires (default 5m, well beyond the
+//     test's 10s budget).
 //
 // Asserts: handler is invoked at least twice (initial + redelivery) within
 // testtime.D10s. Under release-first this completes in <1s; under the legacy

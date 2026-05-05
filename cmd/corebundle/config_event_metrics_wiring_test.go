@@ -78,6 +78,7 @@ func TestConsumerMiddlewares_ConfigEventSettlementRunsOutsideConsumerBase(t *tes
 	sub := outbox.Subscription{
 		Topic: "event.config.entry-upserted.v1", ConsumerGroup: "accesscore",
 		CellID: "accesscore", SliceID: "configreceive",
+		ContractID: "event.config.entry-upserted.v1", ContractKind: "event", ContractTransport: "memory",
 	}
 
 	attempts := 0
@@ -120,6 +121,7 @@ func TestConsumerMiddlewares_PermanentErrorRecordedAsFinalRejectSettlement(t *te
 	sub := outbox.Subscription{
 		Topic: "event.config.entry-upserted.v1", ConsumerGroup: "accesscore",
 		CellID: "accesscore", SliceID: "configreceive",
+		ContractID: "event.config.entry-upserted.v1", ContractKind: "event", ContractTransport: "memory",
 	}
 
 	wrappedSub := &outbox.SubscriberWithMiddleware{
