@@ -937,6 +937,49 @@ func TestIsPermanentDialError(t *testing.T) {
 			err:  &amqp.Error{Code: 501, Reason: "read: connection reset by peer", Server: false, Recover: false},
 			want: false,
 		},
+		// amqp091-go package sentinels — Server=false default-zero, must hit
+		// the sentinel branch (errors.Is) ahead of the structural Server check.
+		// These are the real-world "credentials revoked / vhost gone" P0 paths.
+		{
+			name: "amqp.ErrSASL sentinel — permanent",
+			err:  amqp.ErrSASL,
+			want: true,
+		},
+		{
+			name: "amqp.ErrCredentials sentinel (P0 revoked credentials) — permanent",
+			err:  amqp.ErrCredentials,
+			want: true,
+		},
+		{
+			name: "amqp.ErrVhost sentinel — permanent",
+			err:  amqp.ErrVhost,
+			want: true,
+		},
+		{
+			name: "wrapped amqp.ErrCredentials (errors.Is via fmt.Errorf %w) — permanent",
+			err:  fmt.Errorf("dial tune: %w", amqp.ErrCredentials),
+			want: true,
+		},
+		{
+			name: "amqp.ErrSyntax sentinel — permanent",
+			err:  amqp.ErrSyntax,
+			want: true,
+		},
+		{
+			name: "amqp.ErrFrame sentinel — permanent",
+			err:  amqp.ErrFrame,
+			want: true,
+		},
+		{
+			name: "amqp.ErrCommandInvalid sentinel — permanent",
+			err:  amqp.ErrCommandInvalid,
+			want: true,
+		},
+		{
+			name: "amqp.ErrUnexpectedFrame sentinel — permanent",
+			err:  amqp.ErrUnexpectedFrame,
+			want: true,
+		},
 		{
 			name: "net.OpError (connection refused) — recoverable",
 			err:  &net.OpError{Op: "dial", Net: "tcp", Err: errors.New("connection refused")},

@@ -117,19 +117,42 @@ func unwrapDialErr(err error) error {
 	return err
 }
 
+// permanentDialSentinels are amqp091-go package-level sentinel errors that
+// represent unrecoverable Dial failures. amqp091-go returns these singletons
+// directly (not via newError which sets Server=true), so their default-zero
+// Server/Recover fields would let them slip past the structural check below.
+//
+// Dial-path coverage from rabbitmq/amqp091-go connection.go:
+//   - ErrSASL (open L1007)        — SASL mechanism mismatch
+//   - ErrCredentials (openTune L1043) — bad username/password (broker closes
+//     socket without emitting connection.close; amqp091-go synthesizes this)
+//   - ErrVhost (openVhost L1096)  — authenticated but no access to the vhost
+//   - ErrSyntax / ErrFrame / ErrCommandInvalid / ErrUnexpectedFrame — hard
+//     protocol errors (incompatible version / library bug); amqp091-go marks
+//     these as permanent in types.go.
+//
+// ref: rabbitmq/amqp091-go types.go:50-77, connection.go:1007/1043/1096.
+var permanentDialSentinels = []error{
+	amqp.ErrSASL, amqp.ErrCredentials, amqp.ErrVhost,
+	amqp.ErrSyntax, amqp.ErrFrame, amqp.ErrCommandInvalid, amqp.ErrUnexpectedFrame,
+}
+
 // isPermanentDialError returns true if the error from Dial indicates a
 // permanent condition that will not resolve by retrying.
 //
-// Classification strategy (structured first, string fallback):
-//  1. *amqp.Error with Server=true && Recover=false → permanent
-//     (broker handshake rejection — 403/404/530). Server=false is excluded
+// Classification strategy (sentinel first, then structured, then string fallback):
+//  1. amqp091-go package-level sentinel (ErrSASL/ErrCredentials/ErrVhost/...) →
+//     permanent. MUST precede the *amqp.Error structural check because the
+//     sentinels have Server=false default-zero and would otherwise be missed.
+//  2. *amqp.Error with Server=true && Recover=false → permanent
+//     (broker-emitted error frame — 403/404/530 etc). Server=false is excluded
 //     because amqp091-go synthesizes *amqp.Error{Code:501, Recover:false} for
 //     mid-handshake TCP resets which are transport-level transient (broker
 //     restart races); see TestConnection_ReconnectWithBackoff_TransientError_ContinuesIndefinitely.
-//  2. net.Error → recoverable (network-level: timeout, refused, DNS)
-//  3. *url.Error → permanent (URI parse failure, structural)
-//  4. String keyword fallback → permanent for known amqp091-go plain errors
-//  5. Default → recoverable (avoid false-positive abort)
+//  3. net.Error → recoverable (network-level: timeout, refused, DNS)
+//  4. *url.Error → permanent (URI parse failure, structural)
+//  5. String keyword fallback → permanent for known amqp091-go plain errors
+//  6. Default → recoverable (avoid false-positive abort)
 //
 // ref: rabbitmq/amqp091-go README — reconnection is delegated to the caller;
 // amqp091-go surfaces *amqp.Error for handshake issues and plain errors for
@@ -139,11 +162,19 @@ func isPermanentDialError(err error) bool {
 		return false
 	}
 
-	// 1. AMQP protocol errors from the broker handshake.
-	// Require Server=true so we only treat broker-emitted Recover=false as
-	// permanent (e.g. 403 ACCESS_REFUSED, 404 NOT_FOUND, 530 NOT_ALLOWED).
-	// amqp091-go locally synthesizes *amqp.Error with Server=false for transport
-	// faults (TCP reset mid-handshake → 501) — those must remain transient.
+	// 1. amqp091-go package sentinels (Server=false default-zero).
+	// errors.Is matches even when wrapped via fmt.Errorf("...: %w", err).
+	for _, sentinel := range permanentDialSentinels {
+		if errors.Is(err, sentinel) {
+			return true
+		}
+	}
+
+	// 2. Broker-emitted AMQP error frames (Server=true && Recover=false).
+	// Examples: 403 ACCESS_REFUSED, 404 NOT_FOUND, 530 NOT_ALLOWED that the
+	// broker delivered as connection.close. amqp091-go locally synthesizes
+	// Server=false / Recover=false for transport faults (TCP reset → 501) —
+	// those stay transient.
 	var amqpErr *amqp.Error
 	if errors.As(err, &amqpErr) {
 		return amqpErr.Server && !amqpErr.Recover

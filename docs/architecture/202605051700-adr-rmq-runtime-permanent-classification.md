@@ -24,7 +24,9 @@ post-PR#173（A.1 设计）`adapters/rabbitmq.Connection` 在运行时 reconnect
    - 设置 `state=StateTerminal`、`permanentErr=errcode.Wrap(KindInternal, ErrAdapterAMQPConnectPermanent, ...)`
    - `close(terminalCh)`
    - 返回 false（reconnectLoop 退出，goroutine 不泄漏）
-2. **永久错误判定收紧到 `Server=true && Recover=false`**：仅 broker-emitted 协议级拒绝才算永久（403/404/530），排除 amqp091-go 本地合成的 `*amqp.Error{Code:501, Server=false, Recover=false}`（mid-handshake TCP reset，broker 重启竞态产生）。对应 `TestConnection_ReconnectWithBackoff_TransientError_ContinuesIndefinitely` 的语义保留。
+2. **永久错误判定双层并行**（互不重叠，必须并存）：
+   - **第 1 层 — amqp091-go 包级 sentinel `errors.Is`**：`amqp.ErrSASL` / `amqp.ErrCredentials` / `amqp.ErrVhost` 是 `&Error{Code:AccessRefused}` 单例（types.go:50-60），library 直接返回（不经 `newError`），`Server`/`Recover` 都是 zero-value `false`。**P0 痛点「凭证撤销」恰落 `ErrCredentials` 路径**（connection.go:1043 `openTune` socket close → `return ErrCredentials`），仅靠结构判定会全部漏掉。同步覆盖 `ErrSyntax` / `ErrFrame` / `ErrCommandInvalid` / `ErrUnexpectedFrame`（hard protocol error，types.go:62-77），共 7 个 sentinel。Sentinel 检查 **必须在结构检查之前**，否则 `errors.As` 命中后 Server-gate 会把它们错判为 transient。
+   - **第 2 层 — `*amqp.Error.Server=true && Recover=false`**：broker 主动发的 `connection.close` 帧解析出来（amqp091-go `newError` 显式 `Server: true`），如生产中 broker 重启 / 资源不存在的 403/404/530。Server=false 排除 amqp091-go 本地合成的 mid-handshake TCP reset（`*amqp.Error{Code:501, Server:false, Recover:false}`）—— 这是 transport 层 transient，对应 `TestConnection_ReconnectWithBackoff_TransientError_ContinuesIndefinitely` 语义保留。
 3. **彻底清理 A.1 后的 dead code**：
    - 删 `Config.MaxReconnectAttempts` 字段（注释明说 ignored）
    - 删 `ErrAdapterAMQPReconnectExhausted` errcode 常量（runtime / startup 路径都不会触发）

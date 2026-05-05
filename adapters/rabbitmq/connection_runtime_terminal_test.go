@@ -49,6 +49,24 @@ func TestReconnectWithBackoff_PermanentError_TransitionsToTerminal(t *testing.T)
 			name: "wrapped permanent (errors.Is via fmt.Errorf %w)",
 			err:  fmt.Errorf("dial: %w", &amqp.Error{Code: 403, Reason: "ACCESS_REFUSED", Server: true, Recover: false}),
 		},
+		// amqp091-go package sentinels — these are the real-world failure modes
+		// behind the P0 痛点 (credentials revoked / vhost deleted): amqp091-go
+		// returns the package-level singleton instead of constructing a per-call
+		// *amqp.Error{Server:true,Recover:false}, so the structural Server-check
+		// alone misses them. Verifies the sentinel branch wires through the
+		// reconnect path end-to-end into StateTerminal.
+		{
+			name: "amqp.ErrSASL sentinel (SASL mechanism mismatch)",
+			err:  amqp.ErrSASL,
+		},
+		{
+			name: "amqp.ErrCredentials sentinel (P0 revoked credentials path)",
+			err:  amqp.ErrCredentials,
+		},
+		{
+			name: "amqp.ErrVhost sentinel (vhost deleted / no access)",
+			err:  amqp.ErrVhost,
+		},
 		{
 			name: "AMQP URI parse failure (plain error string fallback)",
 			err:  errors.New("AMQP URI must start with amqp:// or amqps://"),
