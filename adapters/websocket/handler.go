@@ -19,6 +19,14 @@ import (
 	rtws "github.com/ghbvf/gocell/runtime/websocket"
 )
 
+// upgradeFailedBody is the public response body for any non-401 upgrade
+// failure (hijack-not-supported, websocket.Accept errors). Browser
+// WebSocket APIs cannot read the response body, so the constant is
+// intentionally short — operators rely on slog (logUpgradeFailure) for
+// the structured error / errcode / remote_addr context. 401 paths
+// surface http.StatusText(...) per status code instead of this constant.
+const upgradeFailedBody = "websocket upgrade failed"
+
 // UpgradeConfig configures the WebSocket upgrade handler.
 type UpgradeConfig struct {
 	// AllowedOrigins lists the origin patterns authorized for the upgrade.
@@ -115,7 +123,7 @@ func UpgradeHandler(hub *rtws.Hub, cfg UpgradeConfig) (http.Handler, error) {
 		if _, ok := w.(http.Hijacker); !ok {
 			logUpgradeFailure(r, errcode.New(errcode.KindInternal, ErrAdapterWSUpgrade,
 				"websocket: response writer does not support hijack"))
-			http.Error(w, "websocket upgrade failed", http.StatusInternalServerError)
+			http.Error(w, upgradeFailedBody, http.StatusInternalServerError)
 			return
 		}
 		acceptUpgradeAndRegister(w, r, hub, cfg, principal)
@@ -178,9 +186,9 @@ func acceptUpgradeAndRegister(w http.ResponseWriter, r *http.Request, hub *rtws.
 	if err != nil {
 		logUpgradeFailure(r, err)
 		if isClientUpgradeError(err) {
-			http.Error(w, "websocket upgrade failed", http.StatusBadRequest)
+			http.Error(w, upgradeFailedBody, http.StatusBadRequest)
 		} else {
-			http.Error(w, "websocket upgrade failed", http.StatusInternalServerError)
+			http.Error(w, upgradeFailedBody, http.StatusInternalServerError)
 		}
 		return
 	}
