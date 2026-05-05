@@ -10,4 +10,10 @@ var (
 	ErrWSHubStopping    = errcode.ErrWSHubStopping
 	ErrWSHubNotRunning  = errcode.ErrWSHubNotRunning
 	ErrWSMaxConns       = errcode.ErrWSMaxConns
+
+	ErrWebsocketAuthenticatorMissing    = errcode.ErrWebsocketAuthenticatorMissing
+	ErrWebsocketBroadcastFilterMissing  = errcode.ErrWebsocketBroadcastFilterMissing
+	ErrWebsocketBroadcastSubjectMissing = errcode.ErrWebsocketBroadcastSubjectMissing
+	ErrWebsocketUpgradeUnauthenticated  = errcode.ErrWebsocketUpgradeUnauthenticated
+	ErrWebsocketSlowClient              = errcode.ErrWebsocketSlowClient
 )

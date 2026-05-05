@@ -26,6 +26,7 @@ const (
 	defaultReadLimit       = 64 * 1024 // 64KB
 	defaultPingMissMax     = 2
 	defaultShutdownTimeout = 10 * time.Second
+	defaultSendBufferSize  = 32
 )
 
 // HubConfig configures the Hub.
@@ -45,28 +46,38 @@ type HubConfig struct {
 	MaxConnections int
 	// Clock is the time source. Required; NewHub panics if nil.
 	Clock clock.Clock
+
+	// SendBufferSize is the per-connection send channel capacity used by the
+	// writeLoop. When the channel is full the connection is evicted (slow
+	// client; gorilla/websocket select-default-drop). Default 32; 0 means
+	// unbuffered (any send that doesn't immediately match a receive triggers
+	// eviction — extreme fail-closed mode for low-latency scenarios).
+	SendBufferSize int
 }
 
 // DefaultHubConfig returns a HubConfig with sensible defaults. A clock must be
 // provided; pass clock.Real() at the composition root or a clockmock for tests.
 func DefaultHubConfig(clk clock.Clock) HubConfig {
 	return HubConfig{
-		PingInterval: defaultPingInterval,
-		PingTimeout:  defaultPingTimeout,
-		ReadLimit:    defaultReadLimit,
-		PingMissMax:  defaultPingMissMax,
-		Clock:        clk,
+		PingInterval:   defaultPingInterval,
+		PingTimeout:    defaultPingTimeout,
+		ReadLimit:      defaultReadLimit,
+		PingMissMax:    defaultPingMissMax,
+		SendBufferSize: defaultSendBufferSize,
+		Clock:          clk,
 	}
 }
 
 // MessageHandler is called when a message is received from a client.
 type MessageHandler func(ctx context.Context, connID string, data []byte)
 
-// connEntry wraps a Conn with its per-connection context and ping state.
+// connEntry wraps a Conn with its per-connection context, ping state, and send channel.
 type connEntry struct {
-	conn       Conn
-	cancel     context.CancelFunc
-	pingMisses int
+	conn          Conn
+	cancel        context.CancelFunc
+	pingMisses    int
+	send          chan []byte    // buffered, sized by HubConfig.SendBufferSize
+	closeSendOnce sync.Once     // guards close(send) for idempotent close
 }
 
 // Hub manages WebSocket connections and provides signal-first broadcasting.
@@ -100,7 +111,12 @@ type Hub struct {
 	// wg.Add MUST happen under connMu to prevent a race with wg.Wait.
 	connMu sync.Mutex
 	conns  map[string]*connEntry
-	wg     sync.WaitGroup // tracks readLoop + pingLoop goroutines
+	// subjectIdx[subject][connID] = entry. Maintained in lockstep with conns.
+	// Only populated for entries whose Conn.Principal().Subject is non-empty.
+	// Synced at: Register / unregisterEntry / Unregister / pingLoop expiry-evict
+	// / slow-client evict / shutdown drain.
+	subjectIdx map[string]map[string]*connEntry
+	wg         sync.WaitGroup // tracks readLoop + writeLoop + pingLoop goroutines
 
 	// cancelMu protects runCancel from concurrent Start/Stop access.
 	cancelMu  sync.Mutex
@@ -136,6 +152,7 @@ func NewHub(cfg HubConfig, handler MessageHandler) *Hub {
 		clk:          cfg.Clock,
 		handler:      handler,
 		conns:        make(map[string]*connEntry),
+		subjectIdx:   make(map[string]map[string]*connEntry),
 		shutdownDone: make(chan struct{}),
 	}
 }
@@ -246,6 +263,7 @@ func (h *Hub) shutdown(ctx context.Context) error {
 		entries = append(entries, e)
 	}
 	clear(h.conns)
+	clear(h.subjectIdx)
 	h.connMu.Unlock()
 
 	// Close all connections synchronously. cancel() unblocks Read via
@@ -259,6 +277,7 @@ func (h *Hub) shutdown(ctx context.Context) error {
 	// + closeWg (see WS-OPS-02 in tech-debt-registry).
 	for _, e := range entries {
 		e.cancel()
+		e.closeSendOnce.Do(func() { close(e.send) })
 		if err := e.conn.Close(); err != nil {
 			slog.Warn("websocket hub: close connection failed",
 				slog.String("conn_id", e.conn.ID()),
@@ -267,7 +286,7 @@ func (h *Hub) shutdown(ctx context.Context) error {
 		}
 	}
 
-	// Wait for all goroutines (readLoops + pingLoop), bounded by ctx.
+	// Wait for all goroutines (readLoops + writeLoops + pingLoop), bounded by ctx.
 	done := make(chan struct{})
 	go func() {
 		h.wg.Wait()
@@ -320,18 +339,25 @@ func (h *Hub) Register(ctx context.Context, conn Conn) error {
 	var evicted *connEntry
 	if old, ok := h.conns[conn.ID()]; ok {
 		delete(h.conns, conn.ID())
+		h.removeFromSubjectIdxLocked(old)
 		evicted = old
 	}
 
 	connCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
-	entry := &connEntry{conn: conn, cancel: cancel}
+	entry := &connEntry{
+		conn:   conn,
+		cancel: cancel,
+		send:   make(chan []byte, h.config.SendBufferSize),
+	}
 	h.conns[conn.ID()] = entry
-	h.wg.Add(1)
+	h.addToSubjectIdxLocked(entry)
+	h.wg.Add(2) // readLoop + writeLoop
 	h.connMu.Unlock()
 
 	// Close evicted conn outside lock.
 	if evicted != nil {
 		evicted.cancel()
+		evicted.closeSendOnce.Do(func() { close(evicted.send) })
 		_ = evicted.conn.Close()
 		slog.Warn("websocket hub: evicted duplicate conn",
 			slog.String("conn_id", conn.ID()),
@@ -345,11 +371,47 @@ func (h *Hub) Register(ctx context.Context, conn Conn) error {
 	go func() {
 		defer h.wg.Done()
 		defer cancel() // ensures cancel is called when the goroutine exits
-		h.readLoop(connCtx, entry.conn)
+		h.readLoop(connCtx, conn)
 		h.unregisterEntry(entry)
 	}()
 
+	go func() {
+		defer h.wg.Done()
+		h.writeLoop(connCtx, entry)
+	}()
+
 	return nil
+}
+
+// addToSubjectIdxLocked must be called with connMu held. Skips entries whose
+// principal Subject is empty (anonymous, service, missing principal).
+func (h *Hub) addToSubjectIdxLocked(entry *connEntry) {
+	p := entry.conn.Principal()
+	if p == nil || p.Subject == "" {
+		return
+	}
+	bucket, ok := h.subjectIdx[p.Subject]
+	if !ok {
+		bucket = make(map[string]*connEntry)
+		h.subjectIdx[p.Subject] = bucket
+	}
+	bucket[entry.conn.ID()] = entry
+}
+
+// removeFromSubjectIdxLocked must be called with connMu held.
+func (h *Hub) removeFromSubjectIdxLocked(entry *connEntry) {
+	p := entry.conn.Principal()
+	if p == nil || p.Subject == "" {
+		return
+	}
+	bucket, ok := h.subjectIdx[p.Subject]
+	if !ok {
+		return
+	}
+	delete(bucket, entry.conn.ID())
+	if len(bucket) == 0 {
+		delete(h.subjectIdx, p.Subject)
+	}
 }
 
 // unregisterEntry is called by the readLoop goroutine. It only removes the
@@ -363,6 +425,7 @@ func (h *Hub) unregisterEntry(entry *connEntry) {
 	current, ok := h.conns[connID]
 	if ok && current == entry {
 		delete(h.conns, connID)
+		h.removeFromSubjectIdxLocked(entry)
 	} else {
 		ok = false
 	}
@@ -370,6 +433,9 @@ func (h *Hub) unregisterEntry(entry *connEntry) {
 
 	if ok {
 		entry.cancel()
+		// close send AFTER state cleared; writeLoop exits.
+		// unregisterEntry is called exactly once from readLoop's defer.
+		entry.closeSendOnce.Do(func() { close(entry.send) })
 		if err := entry.conn.Close(); err != nil {
 			slog.Debug("websocket hub: close on unregister",
 				slog.String("conn_id", connID),
@@ -390,11 +456,13 @@ func (h *Hub) Unregister(connID string) {
 	entry, ok := h.conns[connID]
 	if ok {
 		delete(h.conns, connID)
+		h.removeFromSubjectIdxLocked(entry)
 	}
 	h.connMu.Unlock()
 
 	if ok {
 		entry.cancel()
+		entry.closeSendOnce.Do(func() { close(entry.send) })
 		if err := entry.conn.Close(); err != nil {
 			slog.Debug("websocket hub: close on unregister",
 				slog.String("conn_id", connID),
@@ -407,33 +475,118 @@ func (h *Hub) Unregister(connID string) {
 	}
 }
 
-// Broadcast sends a text message to all connected clients concurrently.
-// A slow connection does not block delivery to other connections.
-func (h *Hub) Broadcast(ctx context.Context, data []byte) {
+// BroadcastFilter sends data to every connection for which filter returns true.
+// filter must be non-nil; passing nil returns ErrWebsocketBroadcastFilterMissing
+// (fail-closed: full-broadcast must be expressed as `func(Conn) bool { return true }`).
+//
+// filter is invoked under no lock; implementations must be O(1) (a closure that
+// reads Conn.Principal() is fine; database queries are an anti-pattern). filter
+// may be invoked from a single goroutine (the caller's goroutine).
+//
+// A connection whose send buffer is full is evicted (slow client; the broadcast
+// continues to other connections). Returns nil on success even if some
+// connections were evicted; the eviction is logged and counted via slog.
+//
+// ref: olahol/melody melody.go BroadcastFilter
+func (h *Hub) BroadcastFilter(ctx context.Context, data []byte, filter func(Conn) bool) error {
+	if filter == nil {
+		return errcode.New(errcode.KindInternal, ErrWebsocketBroadcastFilterMissing,
+			"websocket: BroadcastFilter requires a non-nil filter; "+
+				"use func(Conn) bool { return true } for full broadcast")
+	}
 	h.connMu.Lock()
-	entries := make([]*connEntry, 0, len(h.conns))
+	selected := make([]*connEntry, 0, len(h.conns))
 	for _, e := range h.conns {
-		entries = append(entries, e)
+		if filter(e.conn) {
+			selected = append(selected, e)
+		}
 	}
 	h.connMu.Unlock()
 
-	var wg sync.WaitGroup
-	for _, e := range entries {
-		wg.Add(1)
-		go func(e *connEntry) {
-			defer wg.Done()
-			if err := e.conn.Write(ctx, data); err != nil {
-				slog.Warn("websocket hub: broadcast write failed",
-					slog.String("conn_id", e.conn.ID()),
-					slog.Any("error", err),
-				)
-			}
-		}(e)
+	h.fanout(ctx, selected, data)
+	return nil
+}
+
+// BroadcastToSubject sends data to every connection whose Principal.Subject
+// matches the supplied subject. Subject "" returns ErrWebsocketBroadcastSubjectMissing
+// (fail-closed: callers must declare an explicit identity). An unknown subject
+// (no matching connections) is a no-op and returns nil.
+//
+// O(1) lookup via the hub's subject index (centrifuge-style). Connection
+// eviction on full send buffer is the same as BroadcastFilter.
+//
+// ref: centrifugal/centrifuge hub.go connShard.users
+func (h *Hub) BroadcastToSubject(ctx context.Context, subject string, data []byte) error {
+	if subject == "" {
+		return errcode.New(errcode.KindInternal, ErrWebsocketBroadcastSubjectMissing,
+			"websocket: BroadcastToSubject requires a non-empty subject")
 	}
-	wg.Wait()
+	h.connMu.Lock()
+	bucket := h.subjectIdx[subject]
+	selected := make([]*connEntry, 0, len(bucket))
+	for _, e := range bucket {
+		selected = append(selected, e)
+	}
+	h.connMu.Unlock()
+
+	h.fanout(ctx, selected, data)
+	return nil
+}
+
+// fanout enqueues data on each entry's send chan; full-buffer triggers eviction.
+// Caller must NOT hold connMu (fanout acquires it for evictions).
+func (h *Hub) fanout(ctx context.Context, entries []*connEntry, data []byte) {
+	for _, e := range entries {
+		select {
+		case e.send <- data:
+			// queued
+		default:
+			h.evictSlow(e)
+		}
+		if ctx.Err() != nil {
+			return
+		}
+	}
+}
+
+// evictSlow removes a slow client whose send buffer is full. Idempotent;
+// safe to call from fanout, writeLoop, or pingLoop.
+func (h *Hub) evictSlow(e *connEntry) {
+	connID := e.conn.ID()
+	h.connMu.Lock()
+	current, ok := h.conns[connID]
+	if ok && current == e {
+		delete(h.conns, connID)
+		h.removeFromSubjectIdxLocked(e)
+	} else {
+		ok = false
+	}
+	h.connMu.Unlock()
+
+	if !ok {
+		return
+	}
+	e.cancel()
+	e.closeSendOnce.Do(func() { close(e.send) })
+	if err := e.conn.Close(); err != nil {
+		slog.Debug("websocket hub: close on slow-client evict",
+			slog.String("conn_id", connID),
+			slog.Any("error", err),
+		)
+	}
+	var subject string
+	if p := e.conn.Principal(); p != nil {
+		subject = p.Subject
+	}
+	slog.Warn("websocket hub: slow client evicted, send buffer full",
+		slog.String("conn_id", connID),
+		slog.String("subject", subject),
+	)
 }
 
 // Send sends a text message to a specific connection.
+// If the connection's send buffer is full, the connection is evicted and
+// ErrWebsocketSlowClient is returned.
 func (h *Hub) Send(ctx context.Context, connID string, data []byte) error {
 	h.connMu.Lock()
 	entry, ok := h.conns[connID]
@@ -444,7 +597,14 @@ func (h *Hub) Send(ctx context.Context, connID string, data []byte) error {
 			"websocket: connection not found: "+connID)
 	}
 
-	return entry.conn.Write(ctx, data)
+	select {
+	case entry.send <- data:
+		return nil
+	default:
+		h.evictSlow(entry)
+		return errcode.New(errcode.KindUnavailable, ErrWebsocketSlowClient,
+			"websocket: connection "+connID+" send buffer full, evicted")
+	}
 }
 
 // Config returns the Hub's configuration.
@@ -477,6 +637,33 @@ func (h *Hub) readLoop(ctx context.Context, conn Conn) {
 	}
 }
 
+// writeLoop drains the entry's send channel and writes each message to conn.
+// Exits when the send channel is closed (connection removed) or context is
+// canceled. On write failure, evicts the connection.
+//
+// ref: gorilla/websocket examples/chat/hub.go — select-default-drop pattern
+func (h *Hub) writeLoop(ctx context.Context, entry *connEntry) {
+	for {
+		select {
+		case data, ok := <-entry.send:
+			if !ok {
+				return // chan closed → exit
+			}
+			if err := entry.conn.Write(ctx, data); err != nil {
+				slog.Debug("websocket hub: write failed in writeLoop",
+					slog.String("conn_id", entry.conn.ID()),
+					slog.Any("error", err),
+				)
+				// Write fail also evicts (network error, conn dead)
+				h.evictSlow(entry)
+				return
+			}
+		case <-ctx.Done():
+			return
+		}
+	}
+}
+
 func (h *Hub) pingLoop(ctx context.Context) {
 	ticker := h.clk.NewTicker(h.config.PingInterval)
 	defer ticker.Stop()
@@ -497,12 +684,64 @@ func (h *Hub) pingAll(ctx context.Context) {
 	maps.Copy(snapshot, h.conns)
 	h.connMu.Unlock()
 
+	now := h.clk.Now()
 	for connID, entry := range snapshot {
+		// Token expiry check first (before paying the network round-trip).
+		if h.isExpired(entry, now) {
+			h.evictExpired(entry)
+			continue
+		}
 		pingCtx, cancel := context.WithTimeout(ctx, h.config.PingTimeout)
 		err := entry.conn.Ping(pingCtx)
 		cancel()
 		h.handlePingResult(connID, err)
 	}
+}
+
+// isExpired reports whether the entry's principal token has expired.
+func (h *Hub) isExpired(entry *connEntry, now time.Time) bool {
+	p := entry.conn.Principal()
+	if p == nil {
+		return false
+	}
+	if p.ExpiresAt.IsZero() {
+		return false
+	}
+	return p.ExpiresAt.Before(now)
+}
+
+// evictExpired removes a connection whose principal token has expired.
+func (h *Hub) evictExpired(entry *connEntry) {
+	connID := entry.conn.ID()
+	h.connMu.Lock()
+	current, ok := h.conns[connID]
+	if ok && current == entry {
+		delete(h.conns, connID)
+		h.removeFromSubjectIdxLocked(entry)
+	} else {
+		ok = false
+	}
+	h.connMu.Unlock()
+
+	if !ok {
+		return
+	}
+	entry.cancel()
+	entry.closeSendOnce.Do(func() { close(entry.send) })
+	if err := entry.conn.Close(); err != nil {
+		slog.Debug("websocket hub: close on expiry evict",
+			slog.String("conn_id", connID),
+			slog.Any("error", err),
+		)
+	}
+	var subject string
+	if p := entry.conn.Principal(); p != nil {
+		subject = p.Subject
+	}
+	slog.Info("websocket hub: connection evicted on token expiry",
+		slog.String("conn_id", connID),
+		slog.String("subject", subject),
+	)
 }
 
 // handlePingResult records a successful ping or increments the miss counter.
@@ -525,12 +764,14 @@ func (h *Hub) handlePingResult(connID string, pingErr error) {
 	current.pingMisses++
 	if current.pingMisses >= h.config.PingMissMax {
 		delete(h.conns, connID)
+		h.removeFromSubjectIdxLocked(current)
 		h.connMu.Unlock()
 		slog.Warn("websocket hub: ping threshold exceeded, removing connection",
 			slog.String("conn_id", connID),
 			slog.Int("misses", current.pingMisses),
 		)
 		current.cancel()
+		current.closeSendOnce.Do(func() { close(current.send) })
 		_ = current.conn.Close()
 		return
 	}
@@ -540,3 +781,4 @@ func (h *Hub) handlePingResult(connID string, pingErr error) {
 		slog.Int("misses", current.pingMisses),
 	)
 }
+

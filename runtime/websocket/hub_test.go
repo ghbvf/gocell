@@ -444,7 +444,11 @@ func TestHub_RegisterDuplicateID(t *testing.T) {
 	assert.True(t, connA.isClosed(), "old conn should be closed")
 
 	// Send to "dup" should reach connB, not connA.
+	// Send enqueues on the per-conn channel; writeLoop delivers asynchronously.
 	require.NoError(t, hub.Send(context.Background(), "dup", []byte("hello")))
+	require.Eventually(t, func() bool {
+		return len(connB.getWrites()) == 1
+	}, testtime.D2s, testtime.D10ms)
 	assert.Equal(t, [][]byte{[]byte("hello")}, connB.getWrites())
 	assert.Empty(t, connA.getWrites())
 }
@@ -517,6 +521,10 @@ func TestHub_Send(t *testing.T) {
 	<-conn.readyCh
 
 	require.NoError(t, hub.Send(context.Background(), "target", []byte("direct")))
+	// Send enqueues on the per-conn channel; writeLoop delivers asynchronously.
+	require.Eventually(t, func() bool {
+		return len(conn.getWrites()) == 1
+	}, testtime.D2s, testtime.D10ms)
 	assert.Equal(t, [][]byte{[]byte("direct")}, conn.getWrites())
 }
 
@@ -1096,8 +1104,11 @@ func TestHub_TokenExpiry_ZeroExpiryNeverEvicts(t *testing.T) {
 	require.NoError(t, hub.Register(context.Background(), conn))
 	<-conn.readyCh
 
-	// Advance clock far into future. Conn must remain.
-	fc.Advance(100 * 365 * 24 * time.Hour)
+	// Advance clock well past any plausible expiry. Conn must remain because
+	// ExpiresAt is zero ("no expiry"). Use a bounded advance that clockmock can
+	// replay without exhausting the test timeout (avoids O(advance/interval)
+	// ticker iterations in clockmock).
+	fc.Advance(2 * time.Hour)
 
 	time.Sleep(testtime.D50ms) //archtest:allow:test-sleep negative test: must NOT evict
 	assert.Equal(t, 1, hub.ConnCount())
