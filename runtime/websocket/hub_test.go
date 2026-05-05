@@ -267,11 +267,36 @@ func TestHub_ManagedResource_CloseIsIdempotent(t *testing.T) {
 	<-startErr
 }
 
-// T6: Hub.Worker() returns nil (Hub self-manages goroutines).
-func TestHub_ManagedResource_WorkerReturnsNil(t *testing.T) {
+// T6: Hub.Worker() returns a non-nil worker that drives Start/Stop.
+// bootstrap.WithManagedResource(hub) auto-starts the hub via the WorkerGroup
+// and tears it down via LIFO Close — composition root no longer needs a
+// manual `go hub.Start(ctx)` call.
+func TestHub_ManagedResource_WorkerDrivesStartAndStop(t *testing.T) {
 	hub := NewHub(DefaultHubConfig(clock.Real()), nil)
-	assert.Nil(t, hub.Worker(), "Worker must return nil")
+	w := hub.Worker()
+	require.NotNil(t, w, "Worker must return a non-nil worker so bootstrap can auto-start")
+
+	startErr := make(chan error, 1)
+	go func() { startErr <- w.Start(context.Background()) }()
+	require.Eventually(t, func() bool {
+		return hub.state.Load() == stateRunning
+	}, testtime.EventuallyShort, testtime.D1ms)
+
+	stopCtx, cancel := context.WithTimeout(context.Background(), testtime.D2s)
+	defer cancel()
+	require.NoError(t, w.Stop(stopCtx), "Worker.Stop must succeed on running hub")
+	<-startErr
+
+	// Idempotent: second Worker.Stop after hub already stopped returns nil
+	// (swallows ErrWSAlreadyStopped) so bootstrap's WorkerGroup teardown does
+	// not collide with ManagedResource.Close LIFO teardown.
+	require.NoError(t, w.Stop(context.Background()),
+		"Worker.Stop must be idempotent — bootstrap may invoke teardown twice (WorkerGroup + Close)")
 }
+
+// kernel/worker.Worker compile-time satisfaction is enforced by the
+// `var _ worker.Worker = (*hubWorker)(nil)` assertion in hub.go alongside the
+// hubWorker definition; no runtime test needed.
 
 // T8: BroadcastFilter / BroadcastToSubject on stopped hub — no panic, returns nil.
 func TestHub_BroadcastFilter_OnStoppedHub_NoOp(t *testing.T) {
@@ -336,6 +361,68 @@ func TestHub_BoundedConcurrentClose_RespectsLimit(t *testing.T) {
 	for _, b := range blockers {
 		close(b.releaseClose)
 	}
+	<-startErr
+}
+
+// TestHub_BoundedConcurrentClose_AllEntriesGetCloseAttempt is the contract
+// invariant under timeout: every entry in the snapshot MUST receive a
+// transport-level Close() call, even when ctx expires mid-shutdown. The
+// deadline bounds *waiting* for completion, not whether work is scheduled.
+//
+// Pre-fix bug (P1-A): the launch loop's select { sem | ctx.Done() } caused
+// the loop to `goto waitDone` on ctx expiry, skipping all unlaunched entries.
+// Their goroutines exited via Phase 1 cancel but their conn.Close() was
+// never invoked, leaking transport (TCP) resources until OS-level FIN_WAIT.
+// Worse, h.conns/subjectIdx had already been cleared, so the readLoop's
+// fallback path (unregisterEntry) saw entry-not-current and skipped Close too.
+//
+// Post-fix invariant: every closeBlockerConn must observe its Close() being
+// called once releaseClose is signaled, regardless of whether Stop returned
+// DeadlineExceeded or nil.
+func TestHub_BoundedConcurrentClose_AllEntriesGetCloseAttempt(t *testing.T) {
+	cfg := DefaultHubConfig(clock.Real())
+	cfg.ConcurrentCloseLimit = 2 // Tight limit so most entries can't acquire a slot before ctx expiry.
+	hub := NewHub(cfg, nil)
+
+	startErr := make(chan error, 1)
+	go func() { startErr <- hub.Start(context.Background()) }()
+	require.Eventually(t, func() bool {
+		return hub.state.Load() == stateRunning
+	}, testtime.EventuallyShort, testtime.D1ms)
+
+	const n = 20
+	blockers := make([]*closeBlockerConn, n)
+	for i := range n {
+		blockers[i] = newCloseBlockerConn(fmt.Sprintf("blocker-%d", i))
+		require.NoError(t, hub.Register(context.Background(), blockers[i]))
+	}
+	require.Eventually(t, func() bool { return hub.ConnCount() == n }, testtime.EventuallyShort, testtime.D1ms)
+
+	stopCtx, cancel := context.WithTimeout(context.Background(), testtime.D50ms)
+	defer cancel()
+	_ = hub.Stop(stopCtx) // err may be DeadlineExceeded; outcome is timing-dependent.
+	assert.Equal(t, stateStopped, hub.state.Load())
+
+	// Release all blockers — every blocker MUST have a goroutine waiting in
+	// Close() (sem-bounded, executing in background). Releasing unblocks them
+	// and isClosed flips to true.
+	for _, b := range blockers {
+		close(b.releaseClose)
+	}
+
+	// Contract: every entry's Close() must complete after release.
+	// Pre-fix this would FAIL — only the first ConcurrentCloseLimit entries
+	// would have been launched; the rest would never observe Close().
+	require.Eventually(t, func() bool {
+		for _, b := range blockers {
+			if !b.isClosed() {
+				return false
+			}
+		}
+		return true
+	}, testtime.EventuallyShort, testtime.D1ms,
+		"every entry must receive a Close() call (timeout bounds waiting, not scheduling)")
+
 	<-startErr
 }
 
@@ -1117,6 +1204,39 @@ func TestNewHub_NilHandler(t *testing.T) {
 	hub := NewHub(DefaultHubConfig(clock.Real()), nil)
 	assert.NotNil(t, hub.handler, "nil handler should be replaced with noop")
 	hub.handler(context.Background(), "test", []byte("data"))
+}
+
+// negativeShutdownTimeout / negativeConcurrentCloseLimit are file-local
+// constants; archtest TEST-TIME-LITERAL-01 forbids inline numeric literals in
+// time.Duration / int contexts in test code.
+const (
+	negativeShutdownTimeout      = -1 * testtime.D1ms
+	negativeConcurrentCloseLimit = -1
+)
+
+// TestNewHub_RejectsNegativeShutdownTimeout — negative ShutdownTimeout collapses
+// the external-cancel path into an already-expired context. Reject at
+// construction (panic, matching clock.MustHaveClock pattern) instead of
+// silently producing zero-budget shutdown at runtime.
+func TestNewHub_RejectsNegativeShutdownTimeout(t *testing.T) {
+	cfg := DefaultHubConfig(clock.Real())
+	cfg.ShutdownTimeout = negativeShutdownTimeout
+	assert.PanicsWithValue(t,
+		"websocket.NewHub: HubConfig.ShutdownTimeout must be >= 0",
+		func() { NewHub(cfg, nil) },
+		"negative ShutdownTimeout must panic at construction")
+}
+
+// TestNewHub_RejectsNegativeConcurrentCloseLimit — negative ConcurrentCloseLimit
+// would panic at make(chan struct{}, limit) during shutdown. Reject at
+// construction so wiring bugs surface before any goroutine runs.
+func TestNewHub_RejectsNegativeConcurrentCloseLimit(t *testing.T) {
+	cfg := DefaultHubConfig(clock.Real())
+	cfg.ConcurrentCloseLimit = negativeConcurrentCloseLimit
+	assert.PanicsWithValue(t,
+		"websocket.NewHub: HubConfig.ConcurrentCloseLimit must be >= 0",
+		func() { NewHub(cfg, nil) },
+		"negative ConcurrentCloseLimit must panic at construction")
 }
 
 // ---------------------------------------------------------------------------
