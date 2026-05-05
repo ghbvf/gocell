@@ -3,6 +3,7 @@ package auth
 import (
 	"context"
 	"slices"
+	"time"
 )
 
 type PrincipalKind int
@@ -41,6 +42,14 @@ func (k PrincipalKind) String() string {
 // CallerCellID (the originating cell id extracted from the 4-part service
 // token). Subject is always empty; Roles is always nil. Use RequireCallerCell
 // to authorize internal endpoints by caller allowlist.
+//
+// Immutability contract: After an Authenticator returns a Principal, callers
+// must not modify any field for the lifetime of the request/connection.
+// runtime/websocket.Hub snapshots Subject and ExpiresAt at handshake time and
+// treats the principal as immutable; mutating Subject/Roles/ExpiresAt/Claims
+// after Authenticate has undefined effects on hub subjectIdx and expiry
+// eviction. Slices (Roles) and maps (Claims) are read-only by convention; do
+// not append or mutate. This mirrors the existing Claims map convention.
 type Principal struct {
 	Kind                  PrincipalKind
 	Subject               string
@@ -57,6 +66,15 @@ type Principal struct {
 	// mutating it has no effect on authentication decisions and may corrupt
 	// shared state.
 	Claims map[string]string
+	// ExpiresAt is the absolute expiration time of the credential that
+	// produced this Principal. Zero value means "no expiry" (anonymous
+	// and service principals never expire). For JWT principals this is
+	// copied from Claims.ExpiresAt by jwtClaimsToPrincipal.
+	//
+	// Consumers (e.g. runtime/websocket.Hub) check ExpiresAt against the
+	// current clock to decide eviction; long-lived WebSocket connections
+	// are evicted on the next ping tick after token expiry.
+	ExpiresAt time.Time
 }
 
 // HasRole is nil-safe: a nil receiver always returns false.

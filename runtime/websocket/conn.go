@@ -1,6 +1,10 @@
 package websocket
 
-import "context"
+import (
+	"context"
+
+	"github.com/ghbvf/gocell/runtime/auth"
+)
 
 // Conn abstracts a WebSocket connection. Implementations live in
 // adapters/ (e.g., adapters/websocket for github.com/coder/websocket).
@@ -25,4 +29,13 @@ type Conn interface {
 	//   - Must not block longer than necessary (no long mutex waits).
 	// If a graceful close is needed in the future, add CloseGracefully(ctx).
 	Close() error
+
+	// Principal returns the authenticated principal bound at handshake time.
+	// It may return nil if the adapter did not bind a principal (e.g. test
+	// fakes); the Hub treats nil as "no subject indexing, no expiry tracked"
+	// and behaves as if the connection has Kind=PrincipalUnknown.
+	//
+	// The returned pointer is owned by the Conn implementation; consumers
+	// must not mutate the Principal struct.
+	Principal() *auth.Principal
 }

@@ -2,6 +2,7 @@ package websocket
 
 import (
 	"bufio"
+	"errors"
 	"log/slog"
 	"net"
 	"net/http"
@@ -14,8 +15,17 @@ import (
 
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/logutil"
+	"github.com/ghbvf/gocell/runtime/auth"
 	rtws "github.com/ghbvf/gocell/runtime/websocket"
 )
+
+// upgradeFailedBody is the public response body for any non-401 upgrade
+// failure (hijack-not-supported, websocket.Accept errors). Browser
+// WebSocket APIs cannot read the response body, so the constant is
+// intentionally short — operators rely on slog (logUpgradeFailure) for
+// the structured error / errcode / remote_addr context. 401 paths
+// surface http.StatusText(...) per status code instead of this constant.
+const upgradeFailedBody = "websocket upgrade failed"
 
 // UpgradeConfig configures the WebSocket upgrade handler.
 type UpgradeConfig struct {
@@ -35,6 +45,22 @@ type UpgradeConfig struct {
 	// the slice handed to coder/websocket is the exact one that passed
 	// validation (no trim drift between check and runtime).
 	AllowedOrigins []string
+
+	// Authenticator validates the HTTP request before WebSocket upgrade.
+	// Required (nil → ErrWebsocketAuthenticatorMissing at construction).
+	//
+	// The Authenticator runs BEFORE websocket.Accept; rejection writes a
+	// plain-text 401 directly to the response writer (browser WebSocket APIs
+	// cannot read the response body, so envelope JSON is meaningless).
+	//
+	// Composition root selects one of:
+	//   - auth.NewJWTAuthenticator(verifier)        — token-via-Authorization-header
+	//   - auth.NewContextAuthenticator()            — already authenticated by listener middleware
+	//   - auth.NewAnonymousAuthenticator()          — explicit unauthenticated channel
+	//   - custom auth.AuthenticatorFunc             — query-param / cookie / subprotocol token
+	//
+	// ref: coder/websocket accept.go — http.Error(w, err.Error(), code) before Accept
+	Authenticator auth.Authenticator
 }
 
 // Validate checks that the UpgradeConfig is well-formed and rewrites
@@ -77,6 +103,11 @@ func UpgradeHandler(hub *rtws.Hub, cfg UpgradeConfig) (http.Handler, error) {
 		return nil, errcode.New(errcode.KindInternal, errcode.ErrWebsocketHubMissing,
 			"websocket: UpgradeHandler hub must not be nil (fail-fast at wire time)")
 	}
+	if cfg.Authenticator == nil {
+		return nil, errcode.New(errcode.KindInternal, errcode.ErrWebsocketAuthenticatorMissing,
+			"websocket: UpgradeHandler Authenticator must not be nil (SEC-FAIL-CLOSED); "+
+				"use auth.NewAnonymousAuthenticator() for explicit unauthenticated endpoints")
+	}
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
@@ -85,45 +116,102 @@ func UpgradeHandler(hub *rtws.Hub, cfg UpgradeConfig) (http.Handler, error) {
 			http.Error(w, "websocket hub not ready", http.StatusServiceUnavailable)
 			return
 		}
-
-		opts := &websocket.AcceptOptions{
-			OriginPatterns: cfg.AllowedOrigins,
+		principal, ok := authenticateForUpgrade(w, r, cfg.Authenticator)
+		if !ok {
+			return
 		}
-
 		if _, ok := w.(http.Hijacker); !ok {
 			logUpgradeFailure(r, errcode.New(errcode.KindInternal, ErrAdapterWSUpgrade,
 				"websocket: response writer does not support hijack"))
-			http.Error(w, "websocket upgrade failed", http.StatusBadRequest)
+			http.Error(w, upgradeFailedBody, http.StatusInternalServerError)
 			return
 		}
+		acceptUpgradeAndRegister(w, r, hub, cfg, principal)
+	}), nil
+}
 
-		acceptWriter := newUpgradeAcceptWriter(w)
-		wsConn, err := websocket.Accept(acceptWriter, r, opts)
-		if err != nil {
-			logUpgradeFailure(r, err)
-			http.Error(w, "websocket upgrade failed", http.StatusBadRequest)
-			return
+// authenticateForUpgrade runs cfg.Authenticator on the request. On rejection
+// it writes a plain-text HTTP error and returns false; the caller
+// (UpgradeHandler) then short-circuits without calling websocket.Accept. cf.
+// coder/websocket accept.go: HTTP errors are returned before Accept consumes
+// the handshake bytes.
+//
+// Status code derivation (RFC 9110):
+//
+//   - absent credential (ok=false, err=nil)                              → 401
+//   - invalid credential, errcode.Kind=Unauthenticated (default for auth) → 401
+//   - invalid credential, errcode.Kind=PermissionDenied                  → 403
+//   - other errcode.Kind                                                  → derived via Kind.Status()
+//
+// errcode.Kind is the single source for HTTP status (Kind.Status()); body is
+// always plain text because browser WebSocket APIs cannot read the response
+// body, so envelope JSON would be unobservable to clients.
+func authenticateForUpgrade(w http.ResponseWriter, r *http.Request, a auth.Authenticator) (*auth.Principal, bool) {
+	principal, ok, err := a.Authenticate(r)
+	if err != nil {
+		status := http.StatusUnauthorized
+		var ec *errcode.Error
+		if errors.As(err, &ec) {
+			status = ec.Kind.Status()
 		}
+		slog.Warn("websocket: upgrade rejected — invalid credential",
+			slog.Any("error", err),
+			slog.String("remote_addr", logutil.SafeAddr(r.RemoteAddr)),
+			slog.String("path", r.URL.Path),
+			slog.String("error_code", string(errcode.ErrWebsocketUpgradeUnauthenticated)),
+			slog.Int("status", status),
+		)
+		http.Error(w, http.StatusText(status), status)
+		return nil, false
+	}
+	if !ok || principal == nil {
+		slog.Warn("websocket: upgrade rejected — credential absent",
+			slog.String("remote_addr", logutil.SafeAddr(r.RemoteAddr)),
+			slog.String("path", r.URL.Path),
+			slog.String("error_code", string(errcode.ErrWebsocketUpgradeUnauthenticated)),
+		)
+		http.Error(w, http.StatusText(http.StatusUnauthorized), http.StatusUnauthorized)
+		return nil, false
+	}
+	return principal, true
+}
 
-		wsConn.SetReadLimit(hub.Config().ReadLimit)
-
-		connID := "ws-" + uuid.NewString()
-		conn := NewConn(connID, wsConn)
-
-		remoteAddr := logutil.SafeAddr(r.RemoteAddr)
-		if regErr := hub.Register(r.Context(), conn); regErr != nil {
-			_ = wsConn.Close(websocket.StatusNormalClosure, "registration rejected")
-			slog.Warn("websocket: register rejected",
-				slog.Any("error", regErr),
-				slog.String("remote_addr", remoteAddr),
-			)
-			return
+// acceptUpgradeAndRegister performs the WebSocket upgrade and hub registration
+// after authentication has already succeeded. principal is bound to the
+// resulting Conn.
+func acceptUpgradeAndRegister(w http.ResponseWriter, r *http.Request, hub *rtws.Hub, cfg UpgradeConfig, principal *auth.Principal) {
+	opts := &websocket.AcceptOptions{OriginPatterns: cfg.AllowedOrigins}
+	acceptWriter := newUpgradeAcceptWriter(w)
+	wsConn, err := websocket.Accept(acceptWriter, r, opts)
+	if err != nil {
+		logUpgradeFailure(r, err)
+		if isClientUpgradeError(err) {
+			http.Error(w, upgradeFailedBody, http.StatusBadRequest)
+		} else {
+			http.Error(w, upgradeFailedBody, http.StatusInternalServerError)
 		}
-		slog.Info("websocket: client connected",
-			slog.String("conn_id", connID),
+		return
+	}
+	wsConn.SetReadLimit(hub.Config().ReadLimit)
+
+	connID := "ws-" + uuid.NewString()
+	conn := NewConn(connID, principal, wsConn)
+
+	remoteAddr := logutil.SafeAddr(r.RemoteAddr)
+	if regErr := hub.Register(r.Context(), conn); regErr != nil {
+		_ = wsConn.Close(websocket.StatusNormalClosure, "registration rejected")
+		slog.Warn("websocket: register rejected",
+			slog.Any("error", regErr),
 			slog.String("remote_addr", remoteAddr),
 		)
-	}), nil
+		return
+	}
+	slog.Info("websocket: client connected",
+		slog.String("conn_id", connID),
+		slog.String("remote_addr", remoteAddr),
+		slog.String("subject", principal.Subject),
+		slog.String("kind", principal.Kind.String()),
+	)
 }
 
 // MustUpgradeHandler is the static-wiring variant of UpgradeHandler.
@@ -137,10 +225,41 @@ func MustUpgradeHandler(hub *rtws.Hub, cfg UpgradeConfig) http.Handler {
 
 func logUpgradeFailure(r *http.Request, err error) {
 	addr := logutil.SafeAddr(r.RemoteAddr)
-	slog.Error("websocket: upgrade failed",
+	msg := "websocket: upgrade failed"
+	fields := []any{
 		slog.Any("error", err),
 		slog.String("remote_addr", addr),
-	)
+	}
+	if isClientUpgradeError(err) {
+		slog.Warn(msg, fields...)
+		return
+	}
+	slog.Error(msg, fields...)
+}
+
+// isClientUpgradeError reports whether the upgrade failure originated from
+// the client (bad handshake, missing headers, protocol violation). Server-side
+// failures (hijack not supported, internal write errors) stay at Error level.
+func isClientUpgradeError(err error) bool {
+	if err == nil {
+		return false
+	}
+	s := err.Error()
+	// coder/websocket Accept returns errors with these substrings for client-side issues.
+	for _, marker := range []string{
+		"websocket protocol violation",
+		"Sec-WebSocket-Key",
+		"Sec-WebSocket-Version",
+		"expected GET method",
+		"request must contain",
+		"request method must be",
+		"Origin",
+	} {
+		if strings.Contains(s, marker) {
+			return true
+		}
+	}
+	return false
 }
 
 type upgradeAcceptWriter struct {

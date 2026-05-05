@@ -16,11 +16,18 @@ import (
 	adapterws "github.com/ghbvf/gocell/adapters/websocket"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
+	authpkg "github.com/ghbvf/gocell/runtime/auth"
 	rtws "github.com/ghbvf/gocell/runtime/websocket"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+type stubIntegrationAuth struct{ p *authpkg.Principal }
+
+func (s *stubIntegrationAuth) Authenticate(_ *http.Request) (*authpkg.Principal, bool, error) {
+	return s.p, true, nil
+}
 
 // setupIntegrationHub creates a running Hub + httptest server for integration tests.
 func setupIntegrationHub(t *testing.T, handler rtws.MessageHandler) (*rtws.Hub, *httptest.Server) {
@@ -41,6 +48,7 @@ func setupIntegrationHub(t *testing.T, handler rtws.MessageHandler) (*rtws.Hub, 
 		// suite exercises coder/websocket's OriginPatterns matcher; bare host
 		// would never match the Origin header that dialIntegrationWS sends.
 		AllowedOrigins: []string{"http://*"},
+		Authenticator:  &stubIntegrationAuth{p: &authpkg.Principal{Kind: authpkg.PrincipalUser, Subject: "integration-user"}},
 	}))
 	server := httptest.NewServer(mux)
 
@@ -140,7 +148,7 @@ func TestIntegration_BroadcastMultipleClients(t *testing.T) {
 		return hub.ConnCount() == numClients
 	}, testtime.D2s, testtime.D10ms)
 
-	hub.Broadcast(context.Background(), []byte("broadcast msg"))
+	require.NoError(t, hub.BroadcastFilter(context.Background(), []byte("broadcast msg"), func(rtws.Conn) bool { return true }))
 
 	var wg sync.WaitGroup
 	var mu sync.Mutex

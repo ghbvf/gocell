@@ -9,6 +9,7 @@ import (
 	"github.com/coder/websocket"
 
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/runtime/auth"
 	rtws "github.com/ghbvf/gocell/runtime/websocket"
 )
 
@@ -23,16 +24,26 @@ var _ rtws.Conn = (*Conn)(nil)
 // so it can interrupt an in-flight Write immediately by closing the underlying
 // TCP connection. Write uses mu only to serialize concurrent writes.
 type Conn struct {
-	id   string
-	conn *websocket.Conn
+	id        string
+	principal *auth.Principal
+	conn      *websocket.Conn
 
 	closed atomic.Bool // set once by Close; checked by Write
 	mu     sync.Mutex  // serializes Write calls only
 }
 
-// NewConn creates a Conn wrapping a github.com/coder/websocket connection.
-func NewConn(id string, conn *websocket.Conn) *Conn {
-	return &Conn{id: id, conn: conn}
+// NewConn creates a Conn wrapping a github.com/coder/websocket connection
+// with an authenticated principal bound at handshake time.
+func NewConn(id string, principal *auth.Principal, conn *websocket.Conn) *Conn {
+	return &Conn{id: id, principal: principal, conn: conn}
+}
+
+// Principal returns the authenticated principal bound at handshake time.
+// May be nil only when the adapter is misconstructed; production wiring
+// always supplies a non-nil principal (anonymous endpoints use
+// auth.NewAnonymousAuthenticator which returns PrincipalAnonymous).
+func (c *Conn) Principal() *auth.Principal {
+	return c.principal
 }
 
 func (c *Conn) ID() string { return c.id }

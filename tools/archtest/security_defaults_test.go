@@ -2,7 +2,7 @@ package archtest
 
 // security_defaults_test.go — static archtest rules for PR-MODE-1 SEC-FAIL-CLOSED.
 //
-// Five sub-tests mirror the SEC-FAIL-CLOSED-01..05 rule IDs:
+// Sub-tests mirror the SEC-FAIL-CLOSED-01..09 rule IDs:
 //
 //   01  addr-driven gate: bundle.go must not wrap WithListener in IfStmt guarded
 //       by PrimaryHTTPAddr / InternalHTTPAddr / HealthHTTPAddr != "".
@@ -16,10 +16,14 @@ package archtest
 //       interpolation, not committed literal values.
 //   06  internal listener guard: production WithListener calls must not wire
 //       cell.InternalListener with a literal AuthNone chain.
+//   07  websocket UpgradeConfig literals must include Authenticator field
+//   08  no production code may call runtime/websocket.Hub.Broadcast (deleted API)
+//   09  hub.go conns and subjectIdx delete points must stay in sync
 //
 // ref: tools/archtest/auth_authtest_boundary_test.go — 4 sub-test pattern
 
 import (
+	"bytes"
 	"fmt"
 	"go/ast"
 	"go/parser"
@@ -41,6 +45,9 @@ const (
 	secFailClosed04 = "SEC-FAIL-CLOSED-04"
 	secFailClosed05 = "SEC-FAIL-CLOSED-05"
 	secFailClosed06 = "SEC-FAIL-CLOSED-06"
+	secFailClosed07 = "SEC-FAIL-CLOSED-07"
+	secFailClosed08 = "SEC-FAIL-CLOSED-08"
+	secFailClosed09 = "SEC-FAIL-CLOSED-09"
 )
 
 func TestSecurityDefaults(t *testing.T) {
@@ -68,6 +75,18 @@ func TestSecurityDefaults(t *testing.T) {
 
 	t.Run(secFailClosed06+"_internal_listener_must_not_use_authnone", func(t *testing.T) {
 		testSEC06InternalListenerMustNotUseAuthNone(t, root)
+	})
+
+	t.Run(secFailClosed07+"_websocket_upgrade_config_must_set_authenticator", func(t *testing.T) {
+		testSEC07WebsocketAuthenticatorRequired(t, root)
+	})
+
+	t.Run(secFailClosed08+"_no_legacy_broadcast_call", func(t *testing.T) {
+		testSEC08NoLegacyBroadcastCall(t, root)
+	})
+
+	t.Run(secFailClosed09+"_hub_subjectidx_sync", func(t *testing.T) {
+		testSEC09HubSubjectIdxSync(t, root)
 	})
 }
 
@@ -646,4 +665,425 @@ func isRequiredComposeEnvInterpolation(value string) bool {
 		}
 	}
 	return true
+}
+
+func TestFindUpgradeConfigWithoutAuthenticator_DetectsLiteralWithMissingField(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+
+	// Case 1: same-package UpgradeConfig literal (ast.Ident) — no Authenticator field.
+	path1 := filepath.Join(dir, "nauth_ident.go")
+	src1 := `package main
+
+import "github.com/ghbvf/gocell/adapters/websocket"
+
+func main() {
+	_ = websocket.UpgradeConfig{AllowedOrigins: []string{"http://*"}}
+}
+`
+	require.NoError(t, os.WriteFile(path1, []byte(src1), 0o644))
+
+	lines1, err := findUpgradeConfigWithoutAuthenticator(path1)
+	require.NoError(t, err)
+	assert.NotEmpty(t, lines1, "should detect ident-form UpgradeConfig missing Authenticator")
+
+	// Case 2: qualified SelectorExpr (pkgname.UpgradeConfig) — no Authenticator field.
+	path2 := filepath.Join(dir, "nauth_sel.go")
+	src2 := `package main
+
+import adapterws "github.com/ghbvf/gocell/adapters/websocket"
+
+func main() {
+	_ = adapterws.UpgradeConfig{AllowedOrigins: []string{"http://*"}}
+}
+`
+	require.NoError(t, os.WriteFile(path2, []byte(src2), 0o644))
+
+	lines2, err := findUpgradeConfigWithoutAuthenticator(path2)
+	require.NoError(t, err)
+	assert.NotEmpty(t, lines2, "should detect selector-form UpgradeConfig missing Authenticator")
+}
+
+func TestFindUpgradeConfigWithoutAuthenticator_AcceptsLiteralWithAuthenticator(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+
+	// Case 1: same-package UpgradeConfig with Authenticator field present (ast.Ident).
+	path1 := filepath.Join(dir, "withauth_ident.go")
+	src1 := `package main
+
+import "github.com/ghbvf/gocell/adapters/websocket"
+
+func main() {
+	_ = websocket.UpgradeConfig{
+		AllowedOrigins: []string{"http://*"},
+		Authenticator:  nil,
+	}
+}
+`
+	require.NoError(t, os.WriteFile(path1, []byte(src1), 0o644))
+
+	lines1, err := findUpgradeConfigWithoutAuthenticator(path1)
+	require.NoError(t, err)
+	assert.Empty(t, lines1, "should not flag UpgradeConfig that has Authenticator field")
+
+	// Case 2: qualified SelectorExpr with Authenticator field present.
+	path2 := filepath.Join(dir, "withauth_sel.go")
+	src2 := `package main
+
+import adapterws "github.com/ghbvf/gocell/adapters/websocket"
+
+func main() {
+	_ = adapterws.UpgradeConfig{
+		AllowedOrigins: []string{"http://*"},
+		Authenticator:  nil,
+	}
+}
+`
+	require.NoError(t, os.WriteFile(path2, []byte(src2), 0o644))
+
+	lines2, err := findUpgradeConfigWithoutAuthenticator(path2)
+	require.NoError(t, err)
+	assert.Empty(t, lines2, "should not flag UpgradeConfig that has Authenticator field (selector form)")
+}
+
+func testSEC07WebsocketAuthenticatorRequired(t *testing.T, root string) {
+	t.Helper()
+	files, err := findAllProductionGoFiles(root)
+	require.NoError(t, err)
+
+	var violations []string
+	for _, f := range files {
+		hits, err := findUpgradeConfigWithoutAuthenticator(f)
+		require.NoErrorf(t, err, "scanning %s", f)
+		rel, _ := filepath.Rel(root, f)
+		rel = filepath.ToSlash(rel)
+		for _, line := range hits {
+			violations = append(violations, fmt.Sprintf("%s:%d: UpgradeConfig literal missing Authenticator field (%s)",
+				rel, line, secFailClosed07))
+		}
+	}
+	if len(violations) > 0 {
+		for _, v := range violations {
+			t.Logf("%s violation: %s", secFailClosed07, v)
+		}
+	}
+	assert.Empty(t, violations,
+		"adapters/websocket UpgradeConfig literals must explicitly set Authenticator "+
+			"(use auth.NewAnonymousAuthenticator() for explicit unauthenticated channels)")
+}
+
+func findUpgradeConfigWithoutAuthenticator(path string) ([]int, error) {
+	data, err := os.ReadFile(filepath.Clean(path))
+	if err != nil {
+		return nil, err
+	}
+	fset := token.NewFileSet()
+	f, err := parser.ParseFile(fset, path, data, parser.SkipObjectResolution)
+	if err != nil {
+		return nil, err
+	}
+	var lines []int
+	ast.Inspect(f, func(n ast.Node) bool {
+		cl, ok := n.(*ast.CompositeLit)
+		if !ok {
+			return true
+		}
+		if !isUpgradeConfigType(cl.Type) {
+			return true
+		}
+		if hasKey(cl, "Authenticator") {
+			return true
+		}
+		lines = append(lines, fset.Position(cl.Pos()).Line)
+		return true
+	})
+	return lines, nil
+}
+
+func isUpgradeConfigType(expr ast.Expr) bool {
+	switch t := expr.(type) {
+	case *ast.Ident:
+		return t.Name == "UpgradeConfig"
+	case *ast.SelectorExpr:
+		return t.Sel != nil && t.Sel.Name == "UpgradeConfig"
+	}
+	return false
+}
+
+func hasKey(cl *ast.CompositeLit, key string) bool {
+	for _, el := range cl.Elts {
+		kv, ok := el.(*ast.KeyValueExpr)
+		if !ok {
+			continue
+		}
+		ident, ok := kv.Key.(*ast.Ident)
+		if !ok {
+			continue
+		}
+		if ident.Name == key {
+			return true
+		}
+	}
+	return false
+}
+
+func testSEC08NoLegacyBroadcastCall(t *testing.T, root string) {
+	t.Helper()
+	files, err := findAllProductionGoFiles(root)
+	require.NoError(t, err)
+
+	var violations []string
+	for _, f := range files {
+		hits, err := findLegacyBroadcastCalls(f)
+		require.NoErrorf(t, err, "scanning %s", f)
+		rel, _ := filepath.Rel(root, f)
+		rel = filepath.ToSlash(rel)
+		for _, line := range hits {
+			violations = append(violations, fmt.Sprintf("%s:%d: legacy Hub.Broadcast call (use BroadcastFilter or BroadcastToSubject; %s)",
+				rel, line, secFailClosed08))
+		}
+	}
+	if len(violations) > 0 {
+		for _, v := range violations {
+			t.Logf("%s violation: %s", secFailClosed08, v)
+		}
+	}
+	assert.Empty(t, violations,
+		"runtime/websocket.Hub.Broadcast was deleted by PR-V1-SEC-WS-AUTH-ACL; "+
+			"use BroadcastFilter (filter required) or BroadcastToSubject (O(1) subject index)")
+}
+
+func findLegacyBroadcastCalls(path string) ([]int, error) {
+	data, err := os.ReadFile(filepath.Clean(path))
+	if err != nil {
+		return nil, err
+	}
+	// Skip files that don't import runtime/websocket (no chance of a Hub.Broadcast call).
+	if !bytes.Contains(data, []byte(`"github.com/ghbvf/gocell/runtime/websocket"`)) {
+		return nil, nil
+	}
+	fset := token.NewFileSet()
+	f, err := parser.ParseFile(fset, path, data, parser.SkipObjectResolution)
+	if err != nil {
+		return nil, err
+	}
+	var lines []int
+	ast.Inspect(f, func(n ast.Node) bool {
+		call, ok := n.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		sel, ok := call.Fun.(*ast.SelectorExpr)
+		if !ok {
+			return true
+		}
+		if sel.Sel == nil || sel.Sel.Name != "Broadcast" {
+			return true
+		}
+		// BroadcastFilter / BroadcastToSubject have different Sel.Name, so they pass.
+		lines = append(lines, fset.Position(call.Pos()).Line)
+		return true
+	})
+	return lines, nil
+}
+
+// allowedConnsMutationFuncs lists hub.go function names where direct mutation
+// of h.conns (delete / clear) is permitted. Every other function must route
+// through removeConnLocked. shutdown is allowed because its bulk drain pairs
+// clear(h.conns) with clear(h.subjectIdx) in adjacent statements; this
+// colocation cannot be enforced via a per-function boolean check, hence the
+// function-name allowlist.
+var allowedConnsMutationFuncs = map[string]bool{
+	"removeConnLocked": true,
+	"shutdown":         true,
+}
+
+// testSEC09HubSubjectIdxSync enforces that every call site mutating h.conns
+// (delete or clear) in hub.go resides in either the centralized
+// removeConnLocked helper or the shutdown bulk-drain path. This replaces the
+// previous per-function boolean ("function deletes h.conns AND touches
+// subjectIdx") which silently passed when a function had multiple delete sites
+// with only one paired subjectIdx update.
+func testSEC09HubSubjectIdxSync(t *testing.T, root string) {
+	t.Helper()
+	path := filepath.Join(root, "runtime", "websocket", "hub.go")
+
+	data, err := os.ReadFile(filepath.Clean(path))
+	require.NoError(t, err)
+
+	fset := token.NewFileSet()
+	f, err := parser.ParseFile(fset, path, data, parser.SkipObjectResolution)
+	require.NoError(t, err)
+
+	var violations []string
+	ast.Inspect(f, func(n ast.Node) bool {
+		fn, ok := n.(*ast.FuncDecl)
+		if !ok || fn.Body == nil {
+			return true
+		}
+		if allowedConnsMutationFuncs[fn.Name.Name] {
+			return true
+		}
+		ast.Inspect(fn.Body, func(inner ast.Node) bool {
+			call, ok := inner.(*ast.CallExpr)
+			if !ok {
+				return true
+			}
+			ident, ok := call.Fun.(*ast.Ident)
+			if !ok || (ident.Name != "delete" && ident.Name != "clear") {
+				return true
+			}
+			if len(call.Args) < 1 {
+				return true
+			}
+			sel, ok := call.Args[0].(*ast.SelectorExpr)
+			if !ok || sel.Sel == nil || sel.Sel.Name != "conns" {
+				return true
+			}
+			line := fset.Position(call.Pos()).Line
+			violations = append(violations,
+				fmt.Sprintf("hub.go:%d: %s() must not call %s(h.conns,...) directly; "+
+					"use removeConnLocked() helper (or, for bulk drain, place inside shutdown). [%s]",
+					line, fn.Name.Name, ident.Name, secFailClosed09))
+			return true
+		})
+		return true
+	})
+
+	if len(violations) > 0 {
+		for _, v := range violations {
+			t.Logf("%s violation: %s", secFailClosed09, v)
+		}
+	}
+	assert.Empty(t, violations,
+		"every h.conns mutation site (delete or clear) must reside in the "+
+			"centralized removeConnLocked helper or the shutdown bulk-drain path. "+
+			"All other call sites must route through removeConnLocked() to keep "+
+			"subjectIdx in lockstep with conns.")
+}
+
+// TestSEC09_SyntheticDirectDeleteViolates verifies that the SEC-09 archtest
+// flags a direct delete(h.conns, ...) call outside the allowed function set.
+func TestSEC09_SyntheticDirectDeleteViolates(t *testing.T) {
+	t.Parallel()
+	src := `package websocket
+
+import "sync"
+
+type Hub struct {
+	connMu sync.Mutex
+	conns  map[string]int
+}
+
+func (h *Hub) badRemove(id string) {
+	h.connMu.Lock()
+	delete(h.conns, id) // VIOLATION: not in allowedConnsMutationFuncs
+	h.connMu.Unlock()
+}
+
+func (h *Hub) removeConnLocked(id string) {
+	delete(h.conns, id) // OK: allowed
+}
+`
+	fset := token.NewFileSet()
+	f, err := parser.ParseFile(fset, "synthetic.go", src, parser.SkipObjectResolution)
+	require.NoError(t, err)
+
+	var found []string
+	ast.Inspect(f, func(n ast.Node) bool {
+		fn, ok := n.(*ast.FuncDecl)
+		if !ok || fn.Body == nil {
+			return true
+		}
+		if allowedConnsMutationFuncs[fn.Name.Name] {
+			return true
+		}
+		ast.Inspect(fn.Body, func(inner ast.Node) bool {
+			call, ok := inner.(*ast.CallExpr)
+			if !ok {
+				return true
+			}
+			ident, ok := call.Fun.(*ast.Ident)
+			if !ok || (ident.Name != "delete" && ident.Name != "clear") {
+				return true
+			}
+			if len(call.Args) < 1 {
+				return true
+			}
+			sel, ok := call.Args[0].(*ast.SelectorExpr)
+			if !ok || sel.Sel == nil || sel.Sel.Name != "conns" {
+				return true
+			}
+			found = append(found, fn.Name.Name)
+			return true
+		})
+		return true
+	})
+
+	require.Len(t, found, 1, "exactly one violation expected (badRemove)")
+	assert.Equal(t, "badRemove", found[0])
+}
+
+// TestSEC09_SyntheticAllowedFunctionsPass verifies the allowlist works:
+// removeConnLocked and shutdown can call raw delete/clear without violation.
+func TestSEC09_SyntheticAllowedFunctionsPass(t *testing.T) {
+	t.Parallel()
+	src := `package websocket
+
+import "sync"
+
+type Hub struct {
+	connMu sync.Mutex
+	conns  map[string]int
+}
+
+func (h *Hub) removeConnLocked(id string) {
+	delete(h.conns, id)
+}
+
+func (h *Hub) shutdown() {
+	h.connMu.Lock()
+	clear(h.conns)
+	h.connMu.Unlock()
+}
+`
+	fset := token.NewFileSet()
+	f, err := parser.ParseFile(fset, "synthetic.go", src, parser.SkipObjectResolution)
+	require.NoError(t, err)
+
+	var found []string
+	ast.Inspect(f, func(n ast.Node) bool {
+		fn, ok := n.(*ast.FuncDecl)
+		if !ok || fn.Body == nil {
+			return true
+		}
+		if allowedConnsMutationFuncs[fn.Name.Name] {
+			return true
+		}
+		ast.Inspect(fn.Body, func(inner ast.Node) bool {
+			call, ok := inner.(*ast.CallExpr)
+			if !ok {
+				return true
+			}
+			ident, ok := call.Fun.(*ast.Ident)
+			if !ok || (ident.Name != "delete" && ident.Name != "clear") {
+				return true
+			}
+			if len(call.Args) < 1 {
+				return true
+			}
+			sel, ok := call.Args[0].(*ast.SelectorExpr)
+			if !ok || sel.Sel == nil || sel.Sel.Name != "conns" {
+				return true
+			}
+			found = append(found, fn.Name.Name)
+			return true
+		})
+		return true
+	})
+
+	assert.Empty(t, found, "removeConnLocked and shutdown should be allowed and produce no violations")
 }

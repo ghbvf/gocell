@@ -204,6 +204,30 @@ const (
 	//	var ec *errcode.Error
 	//	if errors.As(err, &ec) && ec.Code == errcode.ErrWebsocketHubMissing { /* misconfig */ }
 	ErrWebsocketHubMissing Code = "ERR_WEBSOCKET_HUB_MISSING"
+	// ErrWebsocketAuthenticatorMissing signals that an UpgradeHandler was
+	// constructed without an Authenticator. The error is returned by the
+	// error-form constructor and panicked by the static-wiring twin.
+	//
+	// SEC-FAIL-CLOSED (PR-V1-SEC-WS-AUTH-ACL): nil Authenticator must surface
+	// at composition root, not at the first HTTP request.
+	ErrWebsocketAuthenticatorMissing Code = "ERR_WEBSOCKET_AUTHENTICATOR_MISSING"
+	// ErrWebsocketBroadcastFilterMissing signals that Hub.BroadcastFilter was
+	// called with a nil filter function. fail-closed: full-broadcast must be
+	// expressed explicitly via `func(Conn) bool { return true }`.
+	ErrWebsocketBroadcastFilterMissing Code = "ERR_WEBSOCKET_BROADCAST_FILTER_MISSING"
+	// ErrWebsocketBroadcastSubjectMissing signals that Hub.BroadcastToSubject
+	// was called with an empty subject string.
+	ErrWebsocketBroadcastSubjectMissing Code = "ERR_WEBSOCKET_BROADCAST_SUBJECT_MISSING"
+	// ErrWebsocketUpgradeUnauthenticated signals that the UpgradeHandler
+	// rejected an incoming HTTP request because the Authenticator returned
+	// either absent (no credential) or a present-but-invalid credential. The
+	// HTTP response status is 401 and the body is plain text; this code is
+	// only used in server-side slog records.
+	ErrWebsocketUpgradeUnauthenticated Code = "ERR_WEBSOCKET_UPGRADE_UNAUTHENTICATED"
+	// ErrWebsocketSlowClient signals that the Hub evicted a connection because
+	// its send buffer filled (gorilla/websocket select-default-drop pattern).
+	// Emitted from BroadcastFilter / BroadcastToSubject / Send.
+	ErrWebsocketSlowClient Code = "ERR_WEBSOCKET_SLOW_CLIENT"
 
 	// Outbox envelope error codes.
 	// ErrEnvelopeSchema signals that an inbound wire message does not conform
