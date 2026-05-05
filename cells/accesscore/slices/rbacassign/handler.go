@@ -3,14 +3,13 @@ package rbacassign
 import (
 	"context"
 
-	kcell "github.com/ghbvf/gocell/kernel/cell"
 	assign "github.com/ghbvf/gocell/generated/contracts/http/auth/role/assign/v1"
 	revoke "github.com/ghbvf/gocell/generated/contracts/http/auth/role/revoke/v1"
+	kcell "github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/runtime/auth"
 )
 
 // AssignAdapter implements assign.Service for http.auth.role.assign.v1.
-// Clients:["accesscore"] in the generated contractSpec means auth.Mount auto-applies
-// RequireCallerCell; no explicit Policy needed.
 type AssignAdapter struct{ S *Service }
 
 // Assign implements assign.Service.
@@ -41,8 +40,9 @@ func (a RevokeAdapter) Revoke(ctx context.Context, req *revoke.Request) (*revoke
 }
 
 // Handler is the composite route handler for the rbacassign slice.
-// The generated contractSpecs carry Clients:["accesscore"] so auth.Mount
-// auto-injects RequireCallerCell — no explicit Policy argument needed.
+// Both handlers explicitly pass auth.RequireCallerCell("accesscore") as
+// defense-in-depth, complementing the auto-injected caller-cell guard from
+// the generated contractSpec's Clients field.
 type Handler struct {
 	assignH *assign.Handler
 	revokeH *revoke.Handler
@@ -50,9 +50,10 @@ type Handler struct {
 
 // NewHandler creates an rbacassign Handler with the generated assign/revoke handlers.
 func NewHandler(svc *Service) *Handler {
+	callerPolicy := auth.RequireCallerCell("accesscore")
 	return &Handler{
-		assignH: assign.NewHandler(AssignAdapter{svc}, nil),
-		revokeH: revoke.NewHandler(RevokeAdapter{svc}, nil),
+		assignH: assign.NewHandler(AssignAdapter{svc}, callerPolicy),
+		revokeH: revoke.NewHandler(RevokeAdapter{svc}, callerPolicy),
 	}
 }
 

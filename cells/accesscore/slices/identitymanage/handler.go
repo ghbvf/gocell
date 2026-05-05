@@ -233,7 +233,6 @@ type Handler struct {
 func NewHandler(svc *Service) *Handler {
 	adminPolicy := auth.AnyRole(auth.RoleAdmin)
 	selfOrAdminPolicy := auth.SelfOr("id", auth.RoleAdmin)
-	selfOrAdminPwPolicy := auth.SelfOr("id", auth.RoleAdmin)
 	return &Handler{
 		createH:         creategen.NewHandler(CreateAdapter{svc}, adminPolicy),
 		getH:            getgen.NewHandler(GetAdapter{svc}, selfOrAdminPolicy),
@@ -242,7 +241,7 @@ func NewHandler(svc *Service) *Handler {
 		deleteH:         deletegen.NewHandler(DeleteAdapter{svc}, adminPolicy),
 		lockH:           lockgen.NewHandler(LockAdapter{svc}, adminPolicy),
 		unlockH:         unlockgen.NewHandler(UnlockAdapter{svc}, adminPolicy),
-		changePasswordH: changepassgen.NewHandler(ChangePasswordAdapter{svc}, selfOrAdminPwPolicy),
+		changePasswordH: changepassgen.NewHandler(ChangePasswordAdapter{svc}, selfOrAdminPolicy),
 	}
 }
 

@@ -74,15 +74,16 @@ type Handler struct {
 }
 
 // NewHandler creates a configread Handler with generated per-contract handlers.
-// Primary endpoints are admin-only; internal endpoint uses nil policy because
-// the Clients allowlist in the generated contractSpec drives RequireCallerCell
-// automatically via auth.Mount.
+// Primary endpoints are admin-only; the internal endpoint explicitly passes
+// auth.RequireCallerCell("accesscore") as defense-in-depth, complementing the
+// auto-injected caller-cell guard from the generated contractSpec's Clients field.
 func NewHandler(svc *Service) *Handler {
 	policy := auth.AnyRole(auth.RoleAdmin)
+	internalPolicy := auth.RequireCallerCell("accesscore")
 	return &Handler{
 		getH:         configget.NewHandler(GetAdapter{svc}, policy),
 		listH:        configlist.NewHandler(ListAdapter{svc}, policy),
-		internalGetH: internalapig.NewHandler(InternalGetAdapter{svc}, nil),
+		internalGetH: internalapig.NewHandler(InternalGetAdapter{svc}, internalPolicy),
 	}
 }
 
@@ -95,8 +96,9 @@ func (h *Handler) RegisterRoutes(mux kcell.RouteHandler) error {
 }
 
 // RegisterInternalRoutes mounts the internal control-plane GET on mux.
-// Clients allowlist in the generated contractSpec enforces RequireCallerCell
-// automatically; no explicit Policy is needed here.
+// The handler is constructed with an explicit RequireCallerCell("accesscore")
+// policy; auth.Mount also auto-injects the same guard from the contractSpec's
+// Clients field, providing defense-in-depth.
 func (h *Handler) RegisterInternalRoutes(mux kcell.RouteHandler) error {
 	return h.internalGetH.RegisterRoutes(mux)
 }
