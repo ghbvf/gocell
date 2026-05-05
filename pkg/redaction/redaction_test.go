@@ -3,6 +3,7 @@ package redaction_test
 import (
 	"errors"
 	"fmt"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -297,18 +298,14 @@ func TestRedactError(t *testing.T) {
 		t.Parallel()
 		err := errors.New("plain validation error")
 		got := redaction.RedactError(err)
-		if !errors.Is(got, err) {
-			t.Errorf("RedactError(plain) returned different instance; identity must be preserved when nothing changes")
-		}
+		assertSameErrorIdentity(t, got, err, "identity must be preserved when nothing changes")
 	})
 
 	t.Run("redacted_returnsNewInstance", func(t *testing.T) {
 		t.Parallel()
 		original := errors.New("password=hunter2")
 		got := redaction.RedactError(original)
-		if errors.Is(got, original) {
-			t.Fatal("RedactError(sensitive) returned same instance; expected a new error with masked text")
-		}
+		assertDifferentErrorIdentity(t, got, original, "expected a new error with masked text")
 		if got.Error() != "password=<REDACTED>" {
 			t.Errorf("redacted msg = %q, want %q", got.Error(), "password=<REDACTED>")
 		}
@@ -323,6 +320,31 @@ func TestRedactError(t *testing.T) {
 			t.Errorf("redacted error still leaks secret: %q", got.Error())
 		}
 	})
+}
+
+func assertSameErrorIdentity(t *testing.T, got, want error, msg string) {
+	t.Helper()
+	if !sameErrorIdentity(got, want) {
+		t.Fatalf("want exact error identity: got %T %v, want %T %v: %s", got, got, want, want, msg)
+	}
+}
+
+func assertDifferentErrorIdentity(t *testing.T, got, want error, msg string) {
+	t.Helper()
+	if sameErrorIdentity(got, want) {
+		t.Fatalf("want different error identity: got %T %v, want %T %v: %s", got, got, want, want, msg)
+	}
+}
+
+func sameErrorIdentity(got, want error) bool {
+	if got == nil || want == nil {
+		return got == nil && want == nil
+	}
+	gv, wv := reflect.ValueOf(got), reflect.ValueOf(want)
+	if gv.Type() != wv.Type() || !gv.Comparable() {
+		return false
+	}
+	return gv.Equal(wv)
 }
 
 func TestTruncateString(t *testing.T) {
