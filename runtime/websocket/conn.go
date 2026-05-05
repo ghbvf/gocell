@@ -30,6 +30,12 @@ type Conn interface {
 	// If a graceful close is needed in the future, add CloseGracefully(ctx).
 	Close() error
 
+	// RemoteAddr returns the remote network address as a "host:port" string.
+	// Used by Hub for diagnostic logging (eviction reasons, shutdown drain).
+	// Implementations capture the address at handshake time; once captured the
+	// value is immutable.
+	RemoteAddr() string
+
 	// Principal returns the authenticated principal bound at handshake time.
 	// It may return nil if the adapter did not bind a principal (e.g. test
 	// fakes); the Hub treats nil as "no subject indexing, no expiry tracked"
