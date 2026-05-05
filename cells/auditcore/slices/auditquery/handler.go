@@ -1,6 +1,7 @@
 package auditquery
 
 import (
+	"context"
 	"encoding/json"
 	"log/slog"
 	"net/http"
@@ -8,19 +9,12 @@ import (
 
 	"github.com/ghbvf/gocell/cells/auditcore/internal/domain"
 	"github.com/ghbvf/gocell/cells/auditcore/internal/ports"
+	auditlist "github.com/ghbvf/gocell/generated/contracts/http/audit/list/v1"
 	cell "github.com/ghbvf/gocell/kernel/cell"
-	"github.com/ghbvf/gocell/kernel/wrapper"
 	"github.com/ghbvf/gocell/pkg/errcode"
-	"github.com/ghbvf/gocell/pkg/httputil"
 	"github.com/ghbvf/gocell/pkg/query"
 	"github.com/ghbvf/gocell/runtime/auth"
 )
-
-// specAuditList — cross-checked against contracts/http/audit/list/v1/contract.yaml.
-var specAuditList = wrapper.ContractSpec{
-	ID: "http.audit.list.v1", Kind: "http", Transport: "http",
-	Method: "GET", Path: "/api/v1/audit/entries",
-}
 
 // AuditEntryResponse is the public DTO for AuditEntry, excluding internal
 // hash-chain integrity fields (PrevHash, Hash) that are implementation details.
@@ -44,16 +38,6 @@ func toAuditEntryResponse(e *domain.AuditEntry) AuditEntryResponse {
 	}
 }
 
-// Handler provides HTTP endpoints for audit queries.
-type Handler struct {
-	svc *Service
-}
-
-// NewHandler creates an audit-query Handler.
-func NewHandler(svc *Service) *Handler {
-	return &Handler{svc: svc}
-}
-
 // auditQueryPolicy permits the request when:
 //   - actorId query param is empty or equals authenticated subject (self-access)
 //   - OR subject has the "admin" role
@@ -75,44 +59,22 @@ func auditQueryPolicy(r *http.Request) error {
 	return auth.AnyRole(auth.RoleAdmin)(r)
 }
 
-// RegisterRoutes registers auditquery routes with the audit-query policy
-// via auth.Mount so every request emits a contract-tagged span.
-func (h *Handler) RegisterRoutes(mux cell.RouteHandler) error {
-	if err := auth.Mount(mux, auth.Route{
-		Contract: specAuditList,
-		Handler:  http.HandlerFunc(h.HandleQuery),
-		Policy:   auditQueryPolicy,
-	}); err != nil {
-		return err
-	}
-	return nil
+// ListAdapter wraps Service to implement auditlist.Service for http.audit.list.v1.
+// It handles actor defaulting to subject, time parsing, and pagination mapping.
+type ListAdapter struct {
+	S *Service
 }
 
-// HandleQuery handles GET /api/v1/audit/entries.
-// Query parameters: eventType, actorId, from, to (RFC3339), limit, cursor.
-//
-// Trust boundary: non-admin users can only query their own audit entries.
-// If actorId is omitted, it defaults to the authenticated subject.
-// If actorId differs from subject, admin role is required.
-// Policy is enforced by auditQueryPolicy (see above).
-func (h *Handler) HandleQuery(w http.ResponseWriter, r *http.Request) {
-	// auditQueryPolicy (declared at route registration) guarantees subject presence.
-	// Guard defensively: if policy is misconfigured and auth middleware didn't run,
-	// fail closed rather than panic on nil dereference.
-	p, ok := auth.FromContext(r.Context())
+// List implements auditlist.Service. The request fields (actorId, from, to, limit,
+// cursor, eventType) are already decoded and basic-validated by handler_gen.
+func (a ListAdapter) List(ctx context.Context, req *auditlist.Request) (*auditlist.Response, error) {
+	p, ok := auth.FromContext(ctx)
 	if !ok {
-		slog.Error("audit: handler reached without principal — policy chain may be misconfigured",
-			slog.String("path", r.URL.Path),
-			slog.String("method", r.Method),
-		)
-		httputil.WriteError(r.Context(), w,
-			errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthUnauthorized, "authentication required"))
-		return
+		return nil, errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthUnauthorized, "authentication required")
 	}
 	subject := p.Subject
-	r = r.WithContext(httputil.WithClientErrorLogSampling(r.Context(), specAuditList.ID))
 
-	actorID := r.URL.Query().Get("actorId")
+	actorID := req.ActorId
 	if actorID == "" {
 		actorID = subject
 	}
@@ -124,39 +86,73 @@ func (h *Handler) HandleQuery(w http.ResponseWriter, r *http.Request) {
 	}
 
 	filters := ports.AuditFilters{
-		EventType: r.URL.Query().Get("eventType"),
+		EventType: req.EventType,
 		ActorID:   actorID,
 	}
 
-	if fromStr := r.URL.Query().Get("from"); fromStr != "" {
-		t, err := time.Parse(time.RFC3339Nano, fromStr)
+	if req.From != "" {
+		t, err := time.Parse(time.RFC3339Nano, req.From)
 		if err != nil {
-			httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrInvalidTimeFormat,
-				"invalid 'from' parameter: expected RFC3339 format"))
-			return
+			return nil, errcode.New(errcode.KindInvalid, errcode.ErrInvalidTimeFormat,
+				"invalid 'from' parameter: expected RFC3339 format")
 		}
 		filters.From = t
 	}
-	if toStr := r.URL.Query().Get("to"); toStr != "" {
-		t, err := time.Parse(time.RFC3339Nano, toStr)
+	if req.To != "" {
+		t, err := time.Parse(time.RFC3339Nano, req.To)
 		if err != nil {
-			httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrInvalidTimeFormat,
-				"invalid 'to' parameter: expected RFC3339 format"))
-			return
+			return nil, errcode.New(errcode.KindInvalid, errcode.ErrInvalidTimeFormat,
+				"invalid 'to' parameter: expected RFC3339 format")
 		}
 		filters.To = t
 	}
 
-	pageReq, ok := httputil.ParsePageParamsOrWrite(w, r)
-	if !ok {
-		return
+	pageReq := query.PageParams{
+		Cursor: req.Cursor,
+		Limit:  int(req.Limit),
 	}
 
-	result, err := h.svc.Query(r.Context(), filters, pageReq)
+	result, err := a.S.Query(ctx, filters, pageReq)
 	if err != nil {
-		httputil.WriteError(r.Context(), w, err)
-		return
+		return nil, err
 	}
 
-	httputil.WriteJSON(w, http.StatusOK, query.MapPageResult(result, toAuditEntryResponse))
+	items := make([]*auditlist.ResponseDataItem, 0, len(result.Items))
+	for _, e := range result.Items {
+		items = append(items, toListResponseDataItem(e))
+	}
+	return &auditlist.Response{
+		Data:       items,
+		NextCursor: result.NextCursor,
+		HasMore:    result.HasMore,
+	}, nil
+}
+
+// Handler is the composite route handler for the auditquery slice.
+type Handler struct {
+	listH *auditlist.Handler
+}
+
+// NewHandler creates an auditquery Handler with the generated list handler.
+func NewHandler(svc *Service) *Handler {
+	return &Handler{
+		listH: auditlist.NewHandler(ListAdapter{svc}, auditQueryPolicy),
+	}
+}
+
+// RegisterRoutes mounts the audit list contract on mux.
+func (h *Handler) RegisterRoutes(mux cell.RouteHandler) error {
+	return h.listH.RegisterRoutes(mux)
+}
+
+// toListResponseDataItem converts a domain.AuditEntry to auditlist.ResponseDataItem.
+func toListResponseDataItem(e *domain.AuditEntry) *auditlist.ResponseDataItem {
+	return &auditlist.ResponseDataItem{
+		ID:        e.ID,
+		EventId:   e.EventID,
+		EventType: e.EventType,
+		ActorId:   e.ActorID,
+		Timestamp: e.Timestamp.Format(time.RFC3339),
+		Payload:   json.RawMessage(e.Payload),
+	}
 }
