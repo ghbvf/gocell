@@ -308,3 +308,225 @@ func TestAdapter_HalfOpen_MaxRequestsConcurrent(t *testing.T) {
 	assert.LessOrEqual(t, int(allowedCount.Load()), 1,
 		"MaxRequests=1 must allow at most 1 concurrent request in half-open state")
 }
+
+// TestAdapter_Interval_ResetsCountsInClosedState verifies that when Interval>0,
+// the closed-state counts are cleared after each interval period, resetting the
+// consecutive failure counter so the breaker does not trip.
+func TestAdapter_Interval_ResetsCountsInClosedState(t *testing.T) {
+	a, fc := mustNewWithClock(t, Config{
+		Name:     "test-interval",
+		Interval: testtime.D100ms,
+		ReadyToTrip: func(c Counts) bool {
+			return c.ConsecutiveFailures > 5
+		},
+	})
+
+	// 5 failures — not enough to trip (threshold > 5).
+	for range 5 {
+		_, done := a.Allow()
+		done(errors.New("failure"))
+	}
+
+	// Advance past the interval — counts should reset.
+	fc.Advance(testtime.D100ms + time.Nanosecond)
+
+	// Trigger a new request to force the generation reset via currentState.
+	_, done := a.Allow()
+	done(nil) // success — breaker should still be closed
+
+	assert.Equal(t, StateClosed, a.State(), "breaker must remain closed after interval reset")
+
+	// 5 more failures after reset — still should not trip (fresh counts).
+	for range 5 {
+		_, done := a.Allow()
+		done(errors.New("failure"))
+	}
+	assert.Equal(t, StateClosed, a.State(), "breaker must remain closed: counts reset by interval")
+}
+
+// TestAdapter_CrossGeneration_DoneIgnored verifies that a done callback from a
+// prior generation does not corrupt the counts of the current generation.
+func TestAdapter_CrossGeneration_DoneIgnored(t *testing.T) {
+	a, fc := mustNewWithClock(t, Config{
+		Name:    "test-cross-gen",
+		Timeout: testtime.D100ms,
+	})
+
+	// Acquire a done callback from generation 0.
+	_, oldDone := a.Allow()
+
+	// Trip the breaker (6 failures → open, bumps generation).
+	for range 6 {
+		_, done := a.Allow()
+		done(errors.New("failure"))
+	}
+	require.Equal(t, StateOpen, a.State())
+
+	// Advance to half-open (new generation).
+	fc.Advance(testtime.D100ms + time.Nanosecond)
+	require.Equal(t, StateHalfOpen, a.State())
+
+	// Call the old done callback — must be ignored (cross-generation).
+	oldDone(nil)
+
+	// State and counts must be unaffected by the stale callback.
+	assert.Equal(t, StateHalfOpen, a.State(), "old done must not affect current generation state")
+}
+
+// TestAdapter_HalfOpen_PartialSuccessThenFailure verifies that if half-open
+// probes partially succeed but then fail before MaxRequests successes, the
+// breaker returns to open state.
+func TestAdapter_HalfOpen_PartialSuccessThenFailure(t *testing.T) {
+	a, fc := mustNewWithClock(t, Config{
+		Name:        "test-halfopen-partial",
+		MaxRequests: 3,
+		Timeout:     testtime.D100ms,
+	})
+
+	// Trip the breaker.
+	for range 6 {
+		_, done := a.Allow()
+		done(errors.New("failure"))
+	}
+	require.Equal(t, StateOpen, a.State())
+
+	// Advance to half-open.
+	fc.Advance(testtime.D100ms + time.Nanosecond)
+
+	// 2 successes, then 1 failure — should reopen.
+	_, done1 := a.Allow()
+	done1(nil)
+	_, done2 := a.Allow()
+	done2(nil)
+	_, done3 := a.Allow()
+	done3(errors.New("failure"))
+
+	assert.Equal(t, StateOpen, a.State(), "partial success then failure must reopen the circuit")
+}
+
+// TestAdapter_IsSuccessful_CustomClassifier verifies that a custom IsSuccessful
+// function can classify a specific sentinel error as success.
+func TestAdapter_IsSuccessful_CustomClassifier(t *testing.T) {
+	sentinel := errors.New("expected-not-fatal")
+	a := mustNew(t, Config{
+		Name: "test-is-successful",
+		IsSuccessful: func(err error) bool {
+			return errors.Is(err, sentinel) || err == nil
+		},
+	})
+
+	// Send 6 requests with sentinel error — should be classified as success.
+	for range 6 {
+		_, done := a.Allow()
+		done(sentinel) // counts as success
+	}
+
+	// Breaker should remain closed (no failures recorded).
+	assert.Equal(t, StateClosed, a.State(),
+		"custom IsSuccessful must classify sentinel error as success, not failure")
+}
+
+// TestAdapter_OnStateChange_NotCalledConcurrently verifies that the
+// closed→open transition is recorded exactly once even under concurrent load.
+func TestAdapter_OnStateChange_NotCalledConcurrently(t *testing.T) {
+	var transitionCount atomic.Int32
+	a := mustNew(t, Config{
+		Name: "test-oncall-concurrent",
+		OnStateChange: func(_ string, from, to State) {
+			if from == StateClosed && to == StateOpen {
+				transitionCount.Add(1)
+			}
+		},
+	})
+
+	// 8 goroutines each try to trip the breaker concurrently.
+	var wg sync.WaitGroup
+	start := make(chan struct{})
+
+	// Pre-load 5 failures (one short of tripping) to set the stage.
+	for range 5 {
+		_, done := a.Allow()
+		done(errors.New("failure"))
+	}
+
+	for range 8 {
+		wg.Go(func() {
+			<-start
+			_, done := a.Allow()
+			if done != nil {
+				done(errors.New("failure"))
+			}
+		})
+	}
+	close(start)
+	wg.Wait()
+
+	assert.Equal(t, int32(1), transitionCount.Load(),
+		"closed→open transition must fire exactly once despite concurrent failures")
+}
+
+// TestAdapter_HalfOpen_MaxRequestsZeroDefaultsToOne verifies that MaxRequests=0
+// is treated as 1, preventing the uint32 underflow/zero comparison edge case.
+func TestAdapter_HalfOpen_MaxRequestsZeroDefaultsToOne(t *testing.T) {
+	a, fc := mustNewWithClock(t, Config{
+		Name:        "test-maxreq-zero",
+		MaxRequests: 0, // should default to 1
+		Timeout:     testtime.D100ms,
+	})
+
+	// Trip the breaker.
+	for range 6 {
+		_, done := a.Allow()
+		done(errors.New("failure"))
+	}
+	require.Equal(t, StateOpen, a.State())
+
+	// Advance to half-open.
+	fc.Advance(testtime.D100ms + time.Nanosecond)
+
+	// Only 1 request should be allowed in half-open (MaxRequests defaulted to 1).
+	allowed1, done1 := a.Allow()
+	require.True(t, allowed1, "first request must be allowed in half-open")
+
+	allowed2, _ := a.Allow()
+	assert.False(t, allowed2, "second request must be rejected — MaxRequests=0 defaults to 1")
+
+	done1(nil) // complete the first request
+}
+
+// TestAdapter_OpenState_RejectsAllUntilTimeout verifies that all requests are
+// rejected while the breaker is open, and only the first request after the
+// timeout triggers the half-open probe.
+func TestAdapter_OpenState_RejectsAllUntilTimeout(t *testing.T) {
+	a, fc := mustNewWithClock(t, Config{
+		Name:    "test-open-rejects",
+		Timeout: testtime.D100ms,
+	})
+
+	// Trip the breaker.
+	for range 6 {
+		_, done := a.Allow()
+		done(errors.New("failure"))
+	}
+	require.Equal(t, StateOpen, a.State())
+
+	// All 10 requests should be rejected before timeout.
+	for range 10 {
+		allowed, done := a.Allow()
+		assert.False(t, allowed, "all requests must be rejected in open state")
+		assert.Nil(t, done)
+	}
+
+	// Advance clock to just before timeout — still open.
+	fc.Advance(testtime.D100ms - time.Nanosecond)
+	allowed, _ := a.Allow()
+	assert.False(t, allowed, "request must still be rejected just before timeout")
+
+	// Advance 2ns past timeout — now half-open probe should be allowed.
+	fc.Advance(2 * time.Nanosecond)
+	allowed, done := a.Allow()
+	assert.True(t, allowed, "first request after timeout must be allowed (half-open probe)")
+	if done != nil {
+		done(nil)
+	}
+}
