@@ -128,6 +128,22 @@ func TestAssembly_StartInternalSnapshotsMap_RaceDetector(t *testing.T) {
 	releaseInit := func() { releaseOnce.Do(func() { close(initGate) }) }
 	t.Cleanup(releaseInit)
 
+	enteredInit := registerGatedInitCell(t, a, initGate)
+	registerSlowInitCells(t, a, 16)
+	startDone := startAssemblyAsync(a)
+	<-enteredInit
+
+	ready, wg := startInternalSnapshotReaders(a, 8, 100)
+	waitForReaders(ready, 8)
+	releaseInit()
+
+	require.NoError(t, <-startDone)
+	wg.Wait()
+	_ = a.Stop(context.Background())
+}
+
+func registerGatedInitCell(t *testing.T, a *CoreAssembly, initGate <-chan struct{}) <-chan struct{} {
+	t.Helper()
 	enteredInit := make(chan struct{})
 	require.NoError(t, a.Register(&configMutatingCell{
 		BaseCell: cell.MustNewBaseCell(&metadata.CellMeta{
@@ -139,7 +155,12 @@ func TestAssembly_StartInternalSnapshotsMap_RaceDetector(t *testing.T) {
 			return nil
 		},
 	}))
-	for i := 0; i < 16; i++ {
+	return enteredInit
+}
+
+func registerSlowInitCells(t *testing.T, a *CoreAssembly, count int) {
+	t.Helper()
+	for i := 0; i < count; i++ {
 		id := fmt.Sprintf("slow-%02d", i)
 		require.NoError(t, a.Register(&configMutatingCell{
 			BaseCell: cell.MustNewBaseCell(&metadata.CellMeta{
@@ -151,43 +172,49 @@ func TestAssembly_StartInternalSnapshotsMap_RaceDetector(t *testing.T) {
 			},
 		}))
 	}
+}
 
+func startAssemblyAsync(a *CoreAssembly) <-chan error {
 	startDone := make(chan error, 1)
 	go func() {
 		startDone <- a.Start(context.Background())
 	}()
-	<-enteredInit
+	return startDone
+}
 
-	const readers = 8
-	const reads = 100
+func startInternalSnapshotReaders(a *CoreAssembly, readers, reads int) (<-chan struct{}, *sync.WaitGroup) {
 	ready := make(chan struct{}, readers)
 	var wg sync.WaitGroup
 	wg.Add(readers)
-	for r := 0; r < readers; r++ {
-		go func() {
-			defer wg.Done()
-			for i := 0; i < reads; i++ {
-				a.mu.Lock()
-				for id := range a.snapshots {
-					_ = id
-				}
-				a.mu.Unlock()
-				if i == 0 {
-					ready <- struct{}{}
-				}
-				time.Sleep(testtime.D1ms) //archtest:allow:test-sleep keep internal readers active while Phase 1 advances
-			}
-		}()
+	for range readers {
+		go runInternalSnapshotReader(a, reads, ready, &wg)
 	}
+	return ready, &wg
+}
 
-	for r := 0; r < readers; r++ {
+func runInternalSnapshotReader(a *CoreAssembly, reads int, ready chan<- struct{}, wg *sync.WaitGroup) {
+	defer wg.Done()
+	for i := 0; i < reads; i++ {
+		readInternalSnapshots(a)
+		if i == 0 {
+			ready <- struct{}{}
+		}
+		time.Sleep(testtime.D1ms) //archtest:allow:test-sleep keep internal readers active while Phase 1 advances
+	}
+}
+
+func readInternalSnapshots(a *CoreAssembly) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	for id := range a.snapshots {
+		_ = id
+	}
+}
+
+func waitForReaders(ready <-chan struct{}, readers int) {
+	for range readers {
 		<-ready
 	}
-	releaseInit()
-
-	require.NoError(t, <-startDone)
-	wg.Wait()
-	_ = a.Stop(context.Background())
 }
 
 // TestAssembly_ConcurrentStartStop_RaceDetector exercises the assembly state
