@@ -9,12 +9,24 @@
 # locally vs CI — exactly the failure mode the gofumpt rollout was meant
 # to prevent on the producer side.
 #
-# Sync requirement (manual, not statically enforced):
-#   .github/workflows/_build-lint.yml's golangci-lint-action `version:`
-#   MUST equal GOLANGCI_LINT_VERSION below. The lint-action is kept for
-#   its build cache and `config verify`; the version literal is the
-#   source of truth replicated there. Reviewer-enforced — there is no
-#   archtest because the upstream is yaml.
+# Sync requirements (manual, not statically enforced):
+#
+#   1. .github/workflows/_build-lint.yml's golangci-lint-action `version:`
+#      MUST equal GOLANGCI_LINT_VERSION below. The lint-action is kept for
+#      its build cache and `config verify`; the version literal is the
+#      source of truth replicated there.
+#
+#   2. The repo's go.mod `mvdan.cc/gofumpt` version MUST equal the version
+#      vendored by the pinned golangci-lint release (v2.11.4 vendors
+#      mvdan.cc/gofumpt v0.9.2). Producer-side round-trip tests in
+#      tools/codegen call gofumpt.Source via the project lib, while the CI
+#      formatter gate calls the same package vendored inside golangci-lint;
+#      a version split here means producer output passes producer tests
+#      but trips the gate (or vice versa) — exactly the drift this rollout
+#      closes on the consumer side.
+#
+# Reviewer-enforced sync — no archtest because both upstreams are yaml /
+# go.mod literals shellcheck/Go can't cross-reference cleanly.
 #
 # ref: kubernetes/kubernetes hack/verify-golangci-lint.sh — same
 # go-install-from-pinned-version pattern; we omit the docker fallback

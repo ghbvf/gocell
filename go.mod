@@ -34,7 +34,7 @@ require (
 	golang.org/x/oauth2 v0.36.0
 	golang.org/x/tools v0.44.0
 	gopkg.in/yaml.v3 v3.0.1
-	mvdan.cc/gofumpt v0.10.0
+	mvdan.cc/gofumpt v0.9.2
 )
 
 require (
@@ -50,6 +50,7 @@ require (
 	github.com/beorn7/perks v1.0.1 // indirect
 	github.com/cenkalti/backoff/v5 v5.0.3 // indirect
 	github.com/go-jose/go-jose/v4 v4.1.4 // indirect
+	github.com/google/go-cmp v0.7.0 // indirect
 	github.com/grpc-ecosystem/grpc-gateway/v2 v2.28.0 // indirect
 	github.com/hashicorp/errwrap v1.1.0 // indirect
 	github.com/hashicorp/go-cleanhttp v0.5.2 // indirect

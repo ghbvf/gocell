@@ -33,8 +33,12 @@ cd "$(dirname "${BASH_SOURCE[0]}")/.."
 source hack/lib/golangci-lint.sh
 
 # Bootstrap golangci-lint (or reuse a matching binary already in PATH /
-# GOPATH/bin). `set -e` does not propagate failures inside `$(...)`, so
-# capture the function's exit explicitly.
+# GOPATH/bin). `set -e` does NOT propagate failures inside `$(...)`, so
+# capture the function's exit explicitly via `if !` — otherwise a failed
+# ensure would leave golangci_lint empty and the next command would
+# silently no-op or report a misleading error. Same reason we wrap the
+# `fmt -d` invocation: without an explicit if-test the diff would be
+# eaten by the command-substitution-in-set-e blind spot.
 if ! golangci_lint="$(gocell::golangci_lint::ensure)"; then
     echo "verify-gofumpt: bootstrap failed (see stderr above)" >&2
     exit 1
@@ -46,8 +50,8 @@ fi
 echo "verify-gofumpt: using ${golangci_lint}" >&2
 "${golangci_lint}" --version >&2 || true
 
-# `fmt -d` exits 0 even when it prints diffs; treat any output as drift.
-# Capture stderr too so a misconfigured linter surface lands in the log.
+# Capture stderr alongside stdout so a misconfigured linter surface lands
+# in the log; check the exit code explicitly via `if !` (see comment above).
 if ! diff_output="$("${golangci_lint}" fmt -d ./... 2>&1)"; then
     echo "verify-gofumpt: 'golangci-lint fmt -d ./...' exited non-zero" >&2
     echo "${diff_output}" >&2
