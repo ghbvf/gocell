@@ -116,7 +116,7 @@ func TestLocker_TC1_HappyPath(t *testing.T) {
 	}
 
 	cause := context.Cause(lockCtx)
-	if cause != distlock.ErrLockReleased {
+	if !errors.Is(cause, distlock.ErrLockReleased) {
 		t.Errorf("TC-1: Cause = %v, want ErrLockReleased", cause)
 	}
 }
@@ -231,7 +231,7 @@ func TestLocker_TC3_RenewError_LockLost(t *testing.T) {
 	}
 
 	cause := context.Cause(lockCtx1)
-	if cause != distlock.ErrLockLost {
+	if !errors.Is(cause, distlock.ErrLockLost) {
 		t.Errorf("TC-3: Cause = %v, want ErrLockLost", cause)
 	}
 
@@ -282,7 +282,7 @@ func TestLocker_TC4_RenewNotHeld_LockLost(t *testing.T) {
 		t.Fatal("TC-4: lockCtx should be Done when held=false")
 	}
 
-	if context.Cause(lockCtx) != distlock.ErrLockLost {
+	if !errors.Is(context.Cause(lockCtx), distlock.ErrLockLost) {
 		t.Errorf("TC-4: Cause = %v, want ErrLockLost", context.Cause(lockCtx))
 	}
 
@@ -325,7 +325,7 @@ func TestLocker_TC5_ParentCancel(t *testing.T) {
 
 		// Cause should propagate parent's cause (context.Canceled for plain cancel).
 		cause := context.Cause(lockCtx)
-		if cause != context.Canceled {
+		if !errors.Is(cause, context.Canceled) {
 			t.Errorf("TC-5a: Cause = %v, want context.Canceled", cause)
 		}
 
@@ -362,10 +362,10 @@ func TestLocker_TC5_ParentCancel(t *testing.T) {
 		// context.Cause(lockCtx) must equal context.Cause(parentCtx) == customErr.
 		cause := context.Cause(lockCtx)
 		parentCause := context.Cause(parentCtx)
-		if cause != parentCause {
+		if !errors.Is(cause, parentCause) {
 			t.Errorf("TC-5b: Cause = %v, want parentCause = %v", cause, parentCause)
 		}
-		if cause != customErr {
+		if !errors.Is(cause, customErr) {
 			t.Errorf("TC-5b: Cause = %v, want customErr = %v", cause, customErr)
 		}
 
@@ -1117,7 +1117,7 @@ func TestLocker_TC14_BudgetExhausted_LockLost(t *testing.T) {
 	}
 
 	cause := context.Cause(lockCtx)
-	if cause != distlock.ErrLockLost {
+	if !errors.Is(cause, distlock.ErrLockLost) {
 		t.Errorf("TC-14: Cause = %v, want ErrLockLost", cause)
 	}
 
@@ -1164,7 +1164,7 @@ func TestLocker_TC15_PermanentOwnershipLost_NoRetry(t *testing.T) {
 	}
 
 	cause := context.Cause(lockCtx)
-	if cause != distlock.ErrLockLost {
+	if !errors.Is(cause, distlock.ErrLockLost) {
 		t.Errorf("TC-15: Cause = %v, want ErrLockLost", cause)
 	}
 

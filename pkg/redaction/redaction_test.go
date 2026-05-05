@@ -297,7 +297,7 @@ func TestRedactError(t *testing.T) {
 		t.Parallel()
 		err := errors.New("plain validation error")
 		got := redaction.RedactError(err)
-		if got != err {
+		if !errors.Is(got, err) {
 			t.Errorf("RedactError(plain) returned different instance; identity must be preserved when nothing changes")
 		}
 	})
@@ -306,7 +306,7 @@ func TestRedactError(t *testing.T) {
 		t.Parallel()
 		original := errors.New("password=hunter2")
 		got := redaction.RedactError(original)
-		if got == original {
+		if errors.Is(got, original) {
 			t.Fatal("RedactError(sensitive) returned same instance; expected a new error with masked text")
 		}
 		if got.Error() != "password=<REDACTED>" {

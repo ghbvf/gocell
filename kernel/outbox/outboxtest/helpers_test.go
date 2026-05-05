@@ -2,6 +2,7 @@ package outboxtest
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"sync"
 	"testing"
@@ -114,10 +115,10 @@ func TestMockReceipt_WithErrors(t *testing.T) {
 
 	r := NewMockReceiptWithErrors(commitErr, releaseErr)
 
-	if err := r.Commit(context.Background()); err != commitErr {
+	if err := r.Commit(context.Background()); !errors.Is(err, commitErr) {
 		t.Fatalf("want commitErr, got %v", err)
 	}
-	if err := r.Release(context.Background()); err != releaseErr {
+	if err := r.Release(context.Background()); !errors.Is(err, releaseErr) {
 		t.Fatalf("want releaseErr, got %v", err)
 	}
 
