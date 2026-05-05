@@ -137,7 +137,7 @@ func (b *breaker) currentState(now time.Time) (State, uint64) {
 			b.toNewGeneration(now)
 		}
 	case StateOpen:
-		if b.expiry.Before(now) {
+		if !b.expiry.IsZero() && b.expiry.Before(now) {
 			b.setState(StateHalfOpen, now)
 		}
 	}

@@ -310,8 +310,8 @@ func TestAdapter_HalfOpen_MaxRequestsConcurrent(t *testing.T) {
 	}
 	donesMu.Unlock()
 
-	assert.LessOrEqual(t, int(allowedCount.Load()), 1,
-		"MaxRequests=1 must allow at most 1 concurrent request in half-open state")
+	assert.Equal(t, int32(1), allowedCount.Load(),
+		"MaxRequests=1 must allow exactly 1 concurrent request in half-open state")
 }
 
 // TestAdapter_Interval_ResetsCountsInClosedState verifies that when Interval>0,
