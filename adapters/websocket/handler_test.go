@@ -70,7 +70,7 @@ func setupTestHub(t *testing.T, handler rtws.MessageHandler) (*rtws.Hub, *httpte
 	// Wait for hub to be running before creating server.
 	require.Eventually(t, func() bool {
 		return hub.IsRunning()
-	}, testtime.D2s, time.Millisecond)
+	}, testtime.D2s, testtime.D1ms)
 
 	mux := http.NewServeMux()
 	// Use explicit AllowedOrigins; empty origins will be rejected after SEC-FAIL-CLOSED-04.
@@ -90,13 +90,6 @@ func setupTestHub(t *testing.T, handler rtws.MessageHandler) (*rtws.Hub, *httpte
 	})
 
 	return hub, server
-}
-
-func requireUpgradeHandler(t testing.TB, hub *rtws.Hub, cfg adapterws.UpgradeConfig) http.Handler {
-	t.Helper()
-	handler, err := adapterws.UpgradeHandler(hub, cfg)
-	require.NoError(t, err)
-	return handler
 }
 
 // dialWS opens a WebSocket connection with an explicit allowed Origin
@@ -155,7 +148,7 @@ func TestUpgradeHandler_NonHijackerFailsBeforeAccept(t *testing.T) {
 
 	startErr := make(chan error, 1)
 	go func() { startErr <- hub.Start(context.Background()) }()
-	require.Eventually(t, hub.IsRunning, testtime.D2s, time.Millisecond)
+	require.Eventually(t, hub.IsRunning, testtime.D2s, testtime.D1ms)
 	t.Cleanup(func() {
 		stopCtx, cancel := context.WithTimeout(context.Background(), testtime.CtxDefault)
 		defer cancel()
@@ -303,7 +296,7 @@ func TestHub_StopClosesConnections(t *testing.T) {
 	assert.Equal(t, 0, hub.ConnCount())
 
 	// Client should get a read error (connection closed).
-	readCtx, readCancel := context.WithTimeout(context.Background(), time.Second)
+	readCtx, readCancel := context.WithTimeout(context.Background(), testtime.D1s)
 	defer readCancel()
 	_, _, readErr := conn.Read(readCtx)
 	assert.Error(t, readErr)
@@ -590,7 +583,7 @@ func TestUpgradeHandler_DisallowedOrigin_HandshakeRejected(t *testing.T) {
 
 	startErr := make(chan error, 1)
 	go func() { startErr <- hub.Start(context.Background()) }()
-	require.Eventually(t, hub.IsRunning, testtime.D2s, time.Millisecond)
+	require.Eventually(t, hub.IsRunning, testtime.D2s, testtime.D1ms)
 	t.Cleanup(func() {
 		stopCtx, cancel := context.WithTimeout(context.Background(), testtime.CtxDefault)
 		defer cancel()
@@ -661,7 +654,7 @@ func TestUpgradeHandler_AbsentCredential_Returns401(t *testing.T) {
 	hub := rtws.NewHub(rtws.DefaultHubConfig(clock.Real()), nil)
 	startErr := make(chan error, 1)
 	go func() { startErr <- hub.Start(context.Background()) }()
-	require.Eventually(t, hub.IsRunning, testtime.D2s, time.Millisecond)
+	require.Eventually(t, hub.IsRunning, testtime.D2s, testtime.D1ms)
 	t.Cleanup(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), testtime.CtxDefault)
 		defer cancel()
@@ -691,7 +684,7 @@ func TestUpgradeHandler_InvalidCredential_Returns401(t *testing.T) {
 	hub := rtws.NewHub(rtws.DefaultHubConfig(clock.Real()), nil)
 	startErr := make(chan error, 1)
 	go func() { startErr <- hub.Start(context.Background()) }()
-	require.Eventually(t, hub.IsRunning, testtime.D2s, time.Millisecond)
+	require.Eventually(t, hub.IsRunning, testtime.D2s, testtime.D1ms)
 	t.Cleanup(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), testtime.CtxDefault)
 		defer cancel()
@@ -735,7 +728,7 @@ func TestUpgradeHandler_ForbiddenCredential_Returns403(t *testing.T) {
 	hub := rtws.NewHub(rtws.DefaultHubConfig(clock.Real()), nil)
 	startErr := make(chan error, 1)
 	go func() { startErr <- hub.Start(context.Background()) }()
-	require.Eventually(t, hub.IsRunning, testtime.D2s, time.Millisecond)
+	require.Eventually(t, hub.IsRunning, testtime.D2s, testtime.D1ms)
 	t.Cleanup(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), testtime.CtxDefault)
 		defer cancel()
@@ -762,7 +755,7 @@ func TestUpgradeHandler_401_ResponseIsPlainText(t *testing.T) {
 	hub := rtws.NewHub(rtws.DefaultHubConfig(clock.Real()), nil)
 	startErr := make(chan error, 1)
 	go func() { startErr <- hub.Start(context.Background()) }()
-	require.Eventually(t, hub.IsRunning, testtime.D2s, time.Millisecond)
+	require.Eventually(t, hub.IsRunning, testtime.D2s, testtime.D1ms)
 	t.Cleanup(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), testtime.CtxDefault)
 		defer cancel()
@@ -796,7 +789,7 @@ func TestUpgradeHandler_HijackerNotSupported_Returns500(t *testing.T) {
 
 	startErr := make(chan error, 1)
 	go func() { startErr <- hub.Start(context.Background()) }()
-	require.Eventually(t, hub.IsRunning, testtime.D2s, time.Millisecond)
+	require.Eventually(t, hub.IsRunning, testtime.D2s, testtime.D1ms)
 	t.Cleanup(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), testtime.CtxDefault)
 		defer cancel()

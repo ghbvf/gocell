@@ -10,7 +10,6 @@ import (
 	"strings"
 	"sync"
 	"testing"
-	"time"
 
 	"github.com/coder/websocket"
 
@@ -40,7 +39,7 @@ func setupIntegrationHub(t *testing.T, handler rtws.MessageHandler) (*rtws.Hub, 
 	startErr := make(chan error, 1)
 	go func() { startErr <- hub.Start(context.Background()) }()
 
-	require.Eventually(t, func() bool { return hub.IsRunning() }, testtime.D2s, time.Millisecond)
+	require.Eventually(t, func() bool { return hub.IsRunning() }, testtime.D2s, testtime.D1ms)
 
 	mux := http.NewServeMux()
 	mux.Handle("/ws", requireUpgradeHandler(t, hub, adapterws.UpgradeConfig{
@@ -202,7 +201,7 @@ func TestUpgradeHandler_Origin_FullOrigin_HandshakeSucceeds(t *testing.T) {
 
 	startErr := make(chan error, 1)
 	go func() { startErr <- hub.Start(context.Background()) }()
-	require.Eventually(t, func() bool { return hub.IsRunning() }, testtime.D2s, time.Millisecond)
+	require.Eventually(t, func() bool { return hub.IsRunning() }, testtime.D2s, testtime.D1ms)
 
 	// Handler configured with an exact origin (no wildcard).
 	mux := http.NewServeMux()
@@ -244,7 +243,7 @@ func TestUpgradeHandler_Origin_Mismatch_HandshakeRejected(t *testing.T) {
 
 	startErr := make(chan error, 1)
 	go func() { startErr <- hub.Start(context.Background()) }()
-	require.Eventually(t, func() bool { return hub.IsRunning() }, testtime.D2s, time.Millisecond)
+	require.Eventually(t, func() bool { return hub.IsRunning() }, testtime.D2s, testtime.D1ms)
 
 	mux := http.NewServeMux()
 	mux.Handle("/ws", requireUpgradeHandler(t, hub, adapterws.UpgradeConfig{
@@ -264,10 +263,16 @@ func TestUpgradeHandler_Origin_Mismatch_HandshakeRejected(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), testtime.CtxDefault)
 	defer cancel()
 
-	_, _, err := websocket.Dial(ctx, wsURL, &websocket.DialOptions{
+	_, resp, err := websocket.Dial(ctx, wsURL, &websocket.DialOptions{
 		HTTPHeader: http.Header{"Origin": {"https://attacker.com"}},
 	})
 	require.Error(t, err, "handshake with mismatched Origin must be rejected")
+	assert.NotNil(t, resp, "rejected handshake must return an HTTP response")
+	if resp != nil {
+		assert.NotEqual(t, http.StatusSwitchingProtocols, resp.StatusCode,
+			"rejected handshake must not return 101 Switching Protocols")
+		_ = resp.Body.Close()
+	}
 	assert.Equal(t, 0, hub.ConnCount(), "no connection should be registered after rejected handshake")
 }
 
@@ -295,7 +300,7 @@ func TestIntegration_GracefulShutdown(t *testing.T) {
 
 	// All clients should get a read error.
 	for _, c := range conns {
-		readCtx, readCancel := context.WithTimeout(context.Background(), time.Second)
+		readCtx, readCancel := context.WithTimeout(context.Background(), testtime.D1s)
 		_, _, err := c.Read(readCtx)
 		readCancel()
 		assert.Error(t, err, "client should see connection closed")
