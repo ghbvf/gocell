@@ -44,6 +44,13 @@ type Route struct {
 
 	// PasswordResetExempt allows reset-required tokens through this route.
 	PasswordResetExempt bool
+
+	// Bootstrap marks the route as protected by HTTP Basic Auth using
+	// GOCELL_BOOTSTRAP_ADMIN_USERNAME/PASSWORD env credentials. Listener-level
+	// JWT middleware skips this route (via FinalizeAuth matcher); the
+	// per-route bootstrap middleware authenticates instead. Mutually exclusive
+	// with Public and PasswordResetExempt.
+	Bootstrap bool
 }
 
 // Mount registers the Route on mux. It:
@@ -112,6 +119,7 @@ func Mount(mux cell.RouteHandler, r Route) error {
 			Path:                cleanedRel,
 			Public:              r.Public,
 			PasswordResetExempt: r.PasswordResetExempt,
+			Bootstrap:           r.Bootstrap,
 		}); err != nil {
 			return fmt.Errorf("auth.Mount: declare auth metadata: %w", err)
 		}
@@ -256,9 +264,24 @@ func (r Route) validateBypassCompatibility() error {
 			"auth.Mount %s %s: Public=true conflicts with non-nil Policy (public routes have no server-side authorization)",
 			r.Contract.Method, r.Contract.Path)
 	}
-	if r.Public && r.PasswordResetExempt {
+	// Three-way mutual exclusivity: Public, PasswordResetExempt, Bootstrap
+	// are each semantically distinct authentication bypass modes and cannot
+	// be combined. Declaring more than one is always a misconfiguration.
+	truthy := 0
+	if r.Public {
+		truthy++
+	}
+	if r.PasswordResetExempt {
+		truthy++
+	}
+	if r.Bootstrap {
+		truthy++
+	}
+	if truthy > 1 {
 		return fmt.Errorf(
-			"auth.Mount %s %s: Public=true conflicts with PasswordResetExempt=true (gate runs only for authenticated tokens)",
+			"auth.Mount %s %s: Public, PasswordResetExempt, and Bootstrap are mutually exclusive; "+
+				"at most one may be true (Public skips JWT, PasswordResetExempt allows reset-required tokens, "+
+				"Bootstrap uses HTTP Basic Auth via env credentials)",
 			r.Contract.Method, r.Contract.Path)
 	}
 	return nil

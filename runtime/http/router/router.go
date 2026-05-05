@@ -1113,6 +1113,12 @@ func partitionAuthMetas(metas []kcell.AuthRouteMeta) (authMetaPartition, error) 
 		if m.Public {
 			p.publicEntries = append(p.publicEntries, entry)
 		}
+		// Bootstrap routes bypass listener-level JWT middleware (same mechanism as
+		// Public). The per-route bootstrap middleware performs its own Basic Auth
+		// check, so JWT skipping here is safe and required.
+		if m.Bootstrap {
+			p.publicEntries = append(p.publicEntries, entry)
+		}
 		if m.PasswordResetExempt {
 			p.exemptEntries = append(p.exemptEntries, entry)
 		}

@@ -150,6 +150,11 @@ type AuthRouteMeta struct {
 	Path                string
 	Public              bool
 	PasswordResetExempt bool
+	// Bootstrap marks the route as protected by HTTP Basic Auth (env credentials).
+	// The listener-level JWT middleware skips Bootstrap routes, just like Public
+	// routes — the per-route bootstrap middleware authenticates instead. Bootstrap,
+	// Public, and PasswordResetExempt are mutually exclusive.
+	Bootstrap bool
 }
 
 // InternalPathPrefix is the URL prefix that designates an internal-listener route.

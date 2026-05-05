@@ -995,12 +995,50 @@ const codeFMT28 = "FMT-28"
 // validateFMT27 checks that auth.public, auth.bootstrap, and auth.passwordResetExempt
 // are three-way mutually exclusive on HTTP contract auth metadata.
 //
-// Stub — not yet implemented. Returns nil. To be implemented in Batch 1 / Agent-B.
-// Tests TestFMT27_* in rules_fmt_test.go are RED until this method returns violations.
+// The three flags are semantically contradictory when combined:
+//   - public skips JWT entirely (no authentication)
+//   - bootstrap requires env-credential Basic Auth (dedicated first-admin gate)
+//   - passwordResetExempt requires a valid JWT carrying password_reset_required
+//
+// Any combination of two or more is a misconfiguration that the runtime resolves
+// ambiguously. FMT-27 extends FMT-26 (which only checked public+passwordResetExempt)
+// to cover all three pairs.
+//
+// ref: kubernetes/kubernetes validation-gen declarative + handwritten dual-layer pattern
 func (v *Validator) validateFMT27() []ValidationResult {
-	// TODO(SEC-SETUP-CLOSURE Batch 1 Agent-B): implement three-way mutual exclusivity check.
-	// Violations: (public+bootstrap), (public+passwordResetExempt), (bootstrap+passwordResetExempt).
-	return nil
+	var results []ValidationResult
+	for _, c := range v.project.Contracts {
+		if c.Endpoints.HTTP == nil {
+			continue
+		}
+		auth := c.Endpoints.HTTP.Auth
+		truthy := 0
+		if auth.Public {
+			truthy++
+		}
+		if auth.Bootstrap {
+			truthy++
+		}
+		if auth.PasswordResetExempt {
+			truthy++
+		}
+		if truthy <= 1 {
+			continue
+		}
+		results = append(results, v.newResult(
+			codeFMT27, SeverityError, IssueForbidden,
+			contractFile(c),
+			"endpoints.http.auth",
+			fmt.Sprintf(
+				"contract %q declares more than one of auth.public, auth.bootstrap, "+
+					"auth.passwordResetExempt; they are mutually exclusive: "+
+					"public skips JWT entirely, bootstrap uses env-credential Basic Auth, "+
+					"passwordResetExempt requires a valid JWT",
+				c.ID,
+			),
+		))
+	}
+	return results
 }
 
 // validateFMT28 checks that auth.bootstrap:true is only allowed on HTTP contracts
@@ -1008,10 +1046,31 @@ func (v *Validator) validateFMT27() []ValidationResult {
 // the first-admin setup endpoint; enabling bootstrap auth on other paths would
 // expose env credentials in unintended contexts.
 //
-// Stub — not yet implemented. Returns nil. To be implemented in Batch 1 / Agent-B.
-// Tests TestFMT28_* in rules_fmt_test.go are RED until this method returns violations.
+// Path matching uses strings.Contains("setup/admin") — the bootstrap auth gate
+// is structurally tied to the first-admin provisioning endpoint.
 func (v *Validator) validateFMT28() []ValidationResult {
-	// TODO(SEC-SETUP-CLOSURE Batch 1 Agent-B): implement path restriction check.
-	// Violation: auth.bootstrap:true on path not containing "setup/admin".
-	return nil
+	var results []ValidationResult
+	for _, c := range v.project.Contracts {
+		if c.Endpoints.HTTP == nil {
+			continue
+		}
+		if !c.Endpoints.HTTP.Auth.Bootstrap {
+			continue
+		}
+		path := c.Endpoints.HTTP.Path
+		if !strings.Contains(path, "setup/admin") {
+			results = append(results, v.newResult(
+				codeFMT28, SeverityError, IssueForbidden,
+				contractFile(c),
+				"endpoints.http.auth.bootstrap",
+				fmt.Sprintf(
+					"contract %q has auth.bootstrap:true on path %q; "+
+						"bootstrap auth is only permitted on setup/admin contracts "+
+						"(path must contain \"setup/admin\")",
+					c.ID, path,
+				),
+			))
+		}
+	}
+	return results
 }
