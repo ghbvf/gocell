@@ -52,7 +52,7 @@ if len(req.Password) < 8 {
    ```
 
 3. `httputil.WriteSchemaError` 将 `jsonschema.ValidationError` 统一映射为
-   `{"error": {"code": "ERR_VALIDATION_FAILED", "message": "...", "details": {...}}}`，
+   `{"error": {"code": "ERR_VALIDATION_FAILED", "message": "...", "details": [{"key": "...", "value": ...}]}}`，
    不暴露 schema 内部约束（`minLength`/`minItems` 等）的具体数值。
 
 4. path param 和 query param 的范围校验（`minLength`/`maxLength`/`minimum`/`maximum`）

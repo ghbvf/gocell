@@ -14,29 +14,44 @@ have changed.
 | `GET /readyz?verbose=true` | 200 / 401 / 503 | Detailed breakdown: cell statuses + per-dependency probe results. Always gated by `X-Readyz-Token` (see below). |
 
 During graceful shutdown `/readyz` returns `503` with
-`{"error":{"code":"ERR_SERVICE_UNAVAILABLE","message":"service unavailable","details":{"status":"shutting_down","reason":"graceful_shutdown"}}}`
+`{"error":{"code":"ERR_SERVICE_UNAVAILABLE","message":"service unavailable","details":[]}}`
 so load balancers can drain traffic before the HTTP server closes
-connections.
+connections. The shutdown reason is emitted server-side as a structured
+`slog.Info("readyz: shutting down (graceful_shutdown)", status="shutting_down", reason="graceful_shutdown")`
+record — operators correlate via logs, not the public wire body.
 
 ## Response envelope
 
-All PR-A35 health responses use the project-wide JSON envelope
+All health responses use the project-wide JSON envelope
 (`.claude/rules/gocell/api-versioning.md`):
 
 - **Success** — `{"data": {...}}` with `status` inside.
-- **Error** — `{"error": {"code":"ERR_...", "message":"...", "details":{...}}}`.
+- **Error** — `{"error": {"code":"ERR_...", "message":"...", "details":[]}}`. The
+  `details` field is an `array<{key,value}>` per the shared envelope
+  (`contracts/shared/errors/error-response-v1.schema.json`); 5xx responses
+  always emit an empty array (K#08 5xx redaction policy — runtime context
+  never reaches public clients).
 
 The verbose breakdown (cells + dependencies + optional adapters) lives
-under `data.*` on 200 and under `error.details.*` on 503, so consumers
-walk one consistent path regardless of probe outcome. There is no special
-"infrastructure-endpoint" shape to special-case.
+under `data.*` on 200 only. On 503 the wire body carries no breakdown; the
+same data is emitted to server-side `slog`
+(`logger.Warn("readyz unhealthy", status, reason, cells, dependencies, adapters)`)
+so on-call retains the diagnostic without leaking it to public 503
+consumers. ref: k8s.io/apiserver/pkg/server/healthz — failed checks do not
+surface in the 503 body; verbose breakdown is operator-only.
 
-Public `/readyz` 503 reasons are intentionally low-cardinality:
+Public `/readyz` 503 reasons are intentionally low-cardinality. Operators
+read them from the structured `slog` record (the wire body carries an empty
+details array):
 
-| `error.details.status` | `error.details.reason` | Meaning |
-|------------------------|------------------------|---------|
-| `unhealthy` | `readiness_failed` | One or more cells/probes failed, or the readiness aggregator failed closed. Internal computation failures are logged server-side and do not create a separate public reason. |
-| `shutting_down` | `graceful_shutdown` | The process is draining and should be removed from load balancer traffic. |
+| slog level | slog `status` | slog `reason` | Meaning |
+|------------|---------------|---------------|---------|
+| `Warn` (msg=`readyz unhealthy`) | `unhealthy` | `readiness_failed` | One or more cells/probes failed, or the readiness aggregator failed closed. Internal computation failures are logged server-side and do not create a separate public reason. |
+| `Info` (msg=`readyz: shutting down (graceful_shutdown)`) | `shutting_down` | `graceful_shutdown` | The process is draining and should be removed from load balancer traffic. |
+
+On-call dashboards / alert rules that filter by level alone will miss the
+`shutting_down` path; query both `level=Warn AND msg="readyz unhealthy"`
+and `level=Info AND status="shutting_down"` to capture every 503.
 
 ## Kubernetes probes — MUST NOT use `?verbose`
 
@@ -109,24 +124,44 @@ the `X-Readyz-Token` header.
   "error": {
     "code": "ERR_SERVICE_UNAVAILABLE",
     "message": "service unavailable",
-    "details": {
-	      "status": "unhealthy",
-	      "reason": "readiness_failed",
-	      "cells": { "accesscore": "healthy", "auditcore": "degraded" },
-	      "dependencies": {
-	        "postgres_ready": { "status": "healthy", "duration_ms": 3 },
-	        "rabbitmq_ready": { "status": "unhealthy", "duration_ms": 12,
-	                       "error": "connection refused" }
-	      },
-      "adapters": { "storage": "postgres", "eventbus": "rabbitmq" }
-    }
+    "details": []
   }
 }
 ```
 
-Probe `error` strings are truncated to 512 bytes. Probe implementations
-must avoid putting secrets (connection strings, tokens) in their error
-messages — this output is intended for operators, not clients.
+Even with `?verbose=true`, the 503 wire body always carries an empty
+`details` array (K#08 5xx strip — public clients never see runtime
+context). The breakdown depth in the slog record depends on whether the
+triggering request was verbose:
+
+- **Non-verbose 503** (kubelet probe / unauthenticated `/readyz` hit):
+  slog record carries only `status` + `reason`. cells / dependencies /
+  adapters fields are not appended.
+- **Verbose 503** (request carries a matching `X-Readyz-Token` and
+  `?verbose=true`): slog record additionally carries cells +
+  dependencies + adapters maps.
+
+Verbose 503 slog example:
+
+```
+level=WARN msg="readyz unhealthy"
+  status=unhealthy reason=readiness_failed
+  cells={accesscore=healthy, auditcore=degraded}
+  dependencies={postgres_ready={status=healthy, duration_ms=3},
+                rabbitmq_ready={status=unhealthy, duration_ms=12,
+                                error="connection refused"}}
+  adapters={storage=postgres, eventbus=rabbitmq}
+```
+
+Operators who need the full breakdown for an outage correlate 503s with
+the structured slog record via the standard log pipeline; if the triggering
+probes were non-verbose, hit `/readyz?verbose=true` manually with the
+operator token to elicit a verbose record. Probe `error` strings written
+into `dependencies[*].error` are run through `pkg/redaction.RedactString`
+(so DSNs / tokens / passwords are masked) and truncated to 512 bytes
+before the slog record is emitted. Probe implementations should still
+avoid putting secrets in their error messages as a defense-in-depth
+measure.
 
 ### Waiving the verbose endpoint
 
@@ -162,7 +197,7 @@ The 401 body is:
   "error": {
     "code": "ERR_READYZ_VERBOSE_DENIED",
     "message": "verbose output requires a matching X-Readyz-Token header",
-    "details": {}
+    "details": []
   }
 }
 ```

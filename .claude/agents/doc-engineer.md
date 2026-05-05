@@ -27,7 +27,7 @@ permissionMode: auto
 ### OpenAPI Spec（适用于 runtime/http 层和 examples）
 - 从已实现的 handler 代码提取 API 端点信息
 - 响应格式统一: `{"data": ..., "total": ..., "page": ..., "pageSize": ...}`
-- 错误格式统一: `{"error": {"code": "ERR_...", "message": "...", "details": {...}}}`
+- 错误格式统一: `{"error": {"code": "ERR_...", "message": "...", "details": [{"key": "...", "value": ...}]}}` （`details` 是 `array<{key,value}>`，5xx 强制空数组）
 
 ### Example README
 - 每个 example 项目必须有独立的 README.md

@@ -221,9 +221,12 @@ curl -s -H "X-Readyz-Token: $GOCELL_READYZ_VERBOSE_TOKEN" \
   'http://127.0.0.1:9091/readyz?verbose' | jq
 ```
 
-Responses use the project-wide envelope (PR-A35): success bodies are
+Responses use the project-wide envelope: success bodies are
 `{"data": {"status": "healthy", ...}}`; 503 / 401 bodies are
-`{"error": {"code": "ERR_READYZ_...", "message": "...", "details": {...}}}`.
+`{"error": {"code": "ERR_READYZ_...", "message": "...", "details": []}}`
+(K#08 5xx redaction policy — runtime context is emitted to server-side
+`slog` instead of the wire body; see `docs/ops/readyz.md` for the full
+contract).
 
 `/healthz` is liveness-only. Use `/readyz?verbose` when you need the detailed cell and dependency breakdown — PR-A35 requires `GOCELL_READYZ_VERBOSE_TOKEN` to be set and the request to carry the matching `X-Readyz-Token` header (or set `GOCELL_READYZ_VERBOSE_DISABLED=1` to waive the endpoint).
 
@@ -250,7 +253,7 @@ CSRF → CookieSession → AuthMiddleware → handler
 When a request is rejected by CSRF middleware, the response is:
 
 ```json
-{"error": {"code": "ERR_CSRF_ORIGIN_DENIED", "message": "cross-origin request denied", "details": {}}}
+{"error": {"code": "ERR_CSRF_ORIGIN_DENIED", "message": "cross-origin request denied", "details": []}}
 ```
 
 Status: 403 Forbidden. The frontend should handle this by redirecting to the
