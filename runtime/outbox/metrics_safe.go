@@ -5,6 +5,7 @@ import (
 	"runtime/debug"
 
 	kout "github.com/ghbvf/gocell/kernel/outbox"
+	"github.com/ghbvf/gocell/pkg/redaction"
 )
 
 // safeRelayCollector wraps a kout.RelayCollector and recovers from any
@@ -45,7 +46,7 @@ func (s *safeRelayCollector) safeCall(fn func()) {
 	defer func() {
 		if v := recover(); v != nil {
 			slog.Error("outbox relay: metrics collector panic (dropped observation)",
-				slog.Any("panic", v),
+				slog.Any("panic", redaction.RedactAny(v)),
 				slog.String("stack", string(debug.Stack())),
 			)
 		}

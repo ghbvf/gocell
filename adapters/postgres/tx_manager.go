@@ -93,7 +93,7 @@ func (tm *TxManager) RunInTx(ctx context.Context, fn func(ctx context.Context) e
 			rbErr := tx.Rollback(context.WithoutCancel(ctx))
 			if rbErr != nil {
 				slog.Error("postgres: rollback after panic failed",
-					slog.Any("panic", r),
+					slog.Any("panic", redaction.RedactAny(r)),
 					slog.String("rollback_error", redaction.RedactError(rbErr).Error()),
 				)
 			}
@@ -138,7 +138,7 @@ func (tm *TxManager) runInSavepoint(ctx context.Context, tx pgx.Tx, fn func(ctx 
 			if rbErr != nil {
 				slog.Error("postgres: rollback savepoint after panic failed",
 					slog.String("savepoint", spName),
-					slog.Any("panic", r),
+					slog.Any("panic", redaction.RedactAny(r)),
 					slog.String("rollback_error", redaction.RedactError(rbErr).Error()),
 				)
 			}

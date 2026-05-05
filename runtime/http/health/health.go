@@ -330,7 +330,7 @@ func (h *Handler) computeReadyzSafe(verbose bool) (result readyzResult) {
 		if r := recover(); r != nil {
 			slog.Error("readyz: recovered panic during readiness computation",
 				slog.String("internal_reason", "readiness_computation_failed"),
-				slog.String("panic", redaction.RedactPanic(r)))
+				slog.Any("panic", redaction.RedactAny(r)))
 			result = readyzResult{overall: "unhealthy", reason: readyzReasonReadinessFailed}
 		}
 	}()

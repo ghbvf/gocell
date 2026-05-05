@@ -97,7 +97,7 @@ func wrapCtxSafe(fn Checker, clk clock.Clock) Checker {
 
 func probePanicError(panicV any) error {
 	slog.Warn("health: probe panicked",
-		slog.String("panic", redaction.RedactPanic(panicV)),
+		slog.Any("panic", redaction.RedactAny(panicV)),
 	)
 	return fmt.Errorf("panic: %v", panicV)
 }
@@ -136,7 +136,7 @@ func watchLateProbeOutcome(ctxErr error, start, cancelAt time.Time, done <-chan 
 	switch {
 	case o.panicV != nil:
 		slog.Warn("health: probe panicked after ctx cancellation; result discarded",
-			slog.String("panic", redaction.RedactPanic(o.panicV)),
+			slog.Any("panic", redaction.RedactAny(o.panicV)),
 			slog.Any("ctx_err", ctxErr),
 			slog.Duration("cancel_lag", cancelLag),
 			slog.Duration("probe_total", probeTotal),

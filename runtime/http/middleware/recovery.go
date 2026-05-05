@@ -46,7 +46,7 @@ func Recovery(next http.Handler) http.Handler {
 				// (PR #391 round-2 F2). Trace span sanitization runs in
 				// recordPanicOnActiveSpan; slog needs the same treatment.
 				attrs := []any{
-					slog.String("panic", redaction.RedactPanic(v)),
+					slog.Any("panic", redaction.RedactAny(v)),
 					slog.String("stack", stack),
 					slog.String("method", r.Method),
 					slog.String("path", r.URL.Path),

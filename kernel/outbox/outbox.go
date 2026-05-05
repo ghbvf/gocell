@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/redaction"
 )
 
 // ---------------------------------------------------------------------------
@@ -583,7 +584,7 @@ func NotifySettlement(
 					slog.LogAttrs(ctx, slog.LevelError, "outbox: settlement observer panicked",
 						slog.String("topic", entry.Topic),
 						slog.String("entry_id", entry.ID),
-						slog.Any("panic", r))
+						slog.Any("panic", redaction.RedactAny(r)))
 				}
 			}()
 			observer.ObserveSettlement(ctx, obs)
