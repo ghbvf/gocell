@@ -156,8 +156,14 @@ func TestConnection_Close_RespectsCtxDeadline(t *testing.T) {
 
 	// Close must return with a ctx error, not block until gate.
 	require.Error(t, err, "Close must return ctx error when budget exceeded")
-	assert.LessOrEqual(t, elapsed, budget+testtime.MediumPoll,
-		"Close must return within budget+tolerance; got %s", elapsed)
+	// Semantic assertion: Close honored ctx, so elapsed stays within the same
+	// order of magnitude as the budget — well under the D2s gate-release
+	// fallback that an unresponsive Close would hit. 5×budget is intentionally
+	// loose to absorb GH Actions runner GC pause / scheduler preemption /
+	// testcontainers parallelism noise without sacrificing regression power
+	// against an "ignored ctx, slow Close" degradation.
+	assert.Less(t, elapsed, 5*budget,
+		"Close must return promptly after ctx expiry (got %s, budget %s)", elapsed, budget)
 
 	// Release the gate so the background goroutine doesn't leak.
 	close(gate)

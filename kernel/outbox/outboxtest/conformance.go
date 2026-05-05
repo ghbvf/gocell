@@ -868,7 +868,11 @@ func testSubscriberWithMiddleware(t *testing.T, _ Features, constructor PubSubCo
 		}
 	}()
 	<-ready
-	waitForSubscription(t, ctx, h.Sub, h.Topic, "")
+	// Consumer group must match the Subscription above: RabbitMQ derives the
+	// queue name from (topic, consumerGroup), so a mismatch declares two
+	// queues bound to the same exchange and the consumer reads from the
+	// wrong one — flaky timeout under broker scheduling jitter.
+	waitForSubscription(t, ctx, h.Sub, h.Topic, "conformance-cg")
 
 	h.publishAndWait([]byte(`{"test":"middleware"}`))
 	assertTrue(t, middlewareCalled.Load(), "middleware should have been called")
