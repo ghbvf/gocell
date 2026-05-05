@@ -223,8 +223,7 @@ func (c *ConfigCore) initFlagSlice(runMode query.RunMode) error {
 }
 
 // initFlagWriteSlice registers the flag-write L1 slice: Create/Update/Toggle/Delete
-// with local transaction only. event.flag.changed.v1 was retired (PR-CFG-B 2026-04-25):
-// the contract never had a subscriber, so outbox emission was dead work.
+// with local transaction only (no outbox emission).
 func (c *ConfigCore) initFlagWriteSlice() error {
 	opts := []flagwrite.Option{flagwrite.WithTxManager(c.txRunner)}
 	flagWriteSvc, err := flagwrite.NewService(c.flagRepo, c.logger, c.clk, opts...)

@@ -73,16 +73,17 @@ func TestRenderCell_HappyPath_OneListenerOneSubRoute(t *testing.T) {
 	}
 }
 
-func TestRenderCell_WithSubscriptionsAddsImportsAndSpecVars(t *testing.T) {
+func TestRenderCell_WithSubscriptionsAddsImportsAndNewSubscription(t *testing.T) {
 	t.Parallel()
 	spec := &CellGenSpec{
 		Package: "demo", StructName: "Demo", CellID: "demo", ConsumerGroupDefault: "demo",
 		Subscriptions: []SubscriptionGenSpec{{
-			SpecVarName: "specEventFooBar",
-			ContractID:  "event.foo.bar.v1",
-			Transport:   "amqp",
-			SliceID:     "subs",
-			HandlerExpr: "c.svc.HandleBar",
+			ContractID:          "event.foo.bar.v1",
+			Transport:           "amqp",
+			SliceID:             "subs",
+			HandlerExpr:         "c.svc.HandleBar",
+			SubscriptionPackage: "github.com/ghbvf/gocell/generated/contracts/event/foo/bar/v1",
+			SubscriptionAlias:   "sub0",
 		}},
 	}
 
@@ -97,10 +98,16 @@ func TestRenderCell_WithSubscriptionsAddsImportsAndSpecVars(t *testing.T) {
 	}
 	got := string(out)
 
-	mustContain(t, got, `"github.com/ghbvf/gocell/kernel/wrapper"`)
-	mustContain(t, got, `specEventFooBar = wrapper.EventSpec("event.foo.bar.v1", "amqp")`)
-	mustContain(t, got, `if err := reg.Subscribe(specEventFooBar, c.svc.HandleBar, "demo",`)
-	mustContain(t, got, `cell.WithSubscriptionSliceID("subs")); err != nil {`)
+	// New pattern: no wrapper import, no EventSpec var.
+	if strings.Contains(got, `"github.com/ghbvf/gocell/kernel/wrapper"`) {
+		t.Errorf("cell.tmpl with subscriptions must NOT import kernel/wrapper:\n%s", got)
+	}
+	if strings.Contains(got, "wrapper.EventSpec") {
+		t.Errorf("cell.tmpl must NOT contain wrapper.EventSpec:\n%s", got)
+	}
+	// New pattern: generated package import + NewSubscription.Mount call.
+	mustContain(t, got, `sub0 "github.com/ghbvf/gocell/generated/contracts/event/foo/bar/v1"`)
+	mustContain(t, got, `sub0.NewSubscription(c.svc.HandleBar, "demo", "subs").Mount(reg)`)
 }
 
 func TestRenderCell_EmptySubPathDirectMount(t *testing.T) {
@@ -276,6 +283,8 @@ func TestRenderCell_GoldenSynth(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BuildCellSpec: %v", err)
 	}
+	// Enrich subscription import paths (mirrors Generate's behavior).
+	EnrichSubscriptionsWithModulePath(spec, "github.com/ghbvf/gocell")
 	out, err := codegen.Render(codegen.RenderOptions{
 		TemplateName: "cell.tmpl",
 		Templates:    templates,
@@ -400,7 +409,8 @@ func initSyntheticRepo(t *testing.T) string {
 }
 
 // buildSyntheticProject mirrors what metadata.Parser would produce for a
-// minimal project with one cell + one slice (no wire fields in yaml).
+// minimal project with one cell + one slice + one event contract.
+// The event contract is needed by syntheticBundle's Subscribes entry (T-8).
 func buildSyntheticProject() *metadata.ProjectMeta {
 	cell := &metadata.CellMeta{
 		ID: "demo", Dir: "demo", File: "cells/demo/cell.yaml", GoStructName: "Demo",
@@ -409,16 +419,24 @@ func buildSyntheticProject() *metadata.ProjectMeta {
 		ID: "alpha", BelongsToCell: "demo", Dir: "alpha",
 		File: "cells/demo/slices/alpha/slice.yaml",
 	}
-	return fixtureProject(cell, []*metadata.SliceMeta{slc}, nil)
+	contract := &metadata.ContractMeta{
+		ID:   "event.widget.created.v1",
+		Kind: "event",
+	}
+	return fixtureProject(cell, []*metadata.SliceMeta{slc}, []*metadata.ContractMeta{contract})
 }
 
 // syntheticBundle returns the WireBundle for the synthetic project's "demo" cell.
 // Mirrors the marker declarations that would appear in a real cell.go.
+// Includes a Subscribes entry (T-8) to exercise the subscription rendering path.
 func syntheticBundle() markergen.WireBundle {
 	return markergen.WireBundle{
 		Listeners: []markergen.ListenerSpec{{Ref: "cell.PrimaryListener", Prefix: "/api/v1"}},
 		Routes: []markergen.RouteSpec{
 			{Slice: "alpha", Listener: "cell.PrimaryListener", SubPath: "/widgets", HandlerField: "alphaHandler"},
+		},
+		Subscribes: []markergen.SubscribeSpec{
+			{Slice: "alpha", Topic: "event.widget.created.v1", Handler: "HandleWidgetCreated", SliceField: "alphaHandler", Group: "demo"},
 		},
 	}
 }
@@ -428,5 +446,73 @@ func mustContain(t *testing.T, haystack, needle string) {
 	t.Helper()
 	if !strings.Contains(haystack, needle) {
 		t.Errorf("missing %q in:\n%s", needle, haystack)
+	}
+}
+
+// TestCellGen_SubscribeBlockUsesGeneratedPackage verifies that cell.tmpl emits
+// <alias>.NewSubscription(...).Mount(reg) and does NOT contain wrapper.EventSpec.
+func TestCellGen_SubscribeBlockUsesGeneratedPackage(t *testing.T) {
+	t.Parallel()
+	spec := &CellGenSpec{
+		Package: "demo", StructName: "Demo", CellID: "demo", ConsumerGroupDefault: "demo",
+		Subscriptions: []SubscriptionGenSpec{{
+			ContractID:          "event.order-created.v1",
+			SliceID:             "ordercreate",
+			HandlerExpr:         "c.svc.HandleOrderCreated",
+			ConsumerGroup:       "demo",
+			SubscriptionPackage: "github.com/ghbvf/gocell/generated/contracts/event/order-created/v1",
+			SubscriptionAlias:   "sub0",
+		}},
+	}
+
+	out, err := codegen.Render(codegen.RenderOptions{
+		TemplateName: "cell.tmpl",
+		Templates:    templates,
+		Data:         spec,
+		Filename:     "demo/cell_gen.go",
+	})
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	got := string(out)
+
+	// Must not reference wrapper.EventSpec.
+	if strings.Contains(got, "wrapper.EventSpec") {
+		t.Errorf("cell.tmpl must NOT contain wrapper.EventSpec:\n%s", got)
+	}
+	if strings.Contains(got, `"github.com/ghbvf/gocell/kernel/wrapper"`) {
+		t.Errorf("cell.tmpl must NOT import kernel/wrapper:\n%s", got)
+	}
+
+	// Must use generated package NewSubscription + Mount.
+	mustContain(t, got, `.NewSubscription(`)
+	mustContain(t, got, `.Mount(reg)`)
+	mustContain(t, got, `sub0 "github.com/ghbvf/gocell/generated/contracts/event/order-created/v1"`)
+}
+
+// TestEnrichSubscriptionsWithModulePath verifies the helper computes correct
+// import paths and deterministic aliases.
+func TestEnrichSubscriptionsWithModulePath(t *testing.T) {
+	t.Parallel()
+	spec := &CellGenSpec{
+		CellID: "demo",
+		Subscriptions: []SubscriptionGenSpec{
+			{ContractID: "event.order-created.v1"},
+			{ContractID: "event.config.entry-upserted.v1"},
+		},
+	}
+	EnrichSubscriptionsWithModulePath(spec, "github.com/ghbvf/gocell")
+
+	if spec.Subscriptions[0].SubscriptionPackage != "github.com/ghbvf/gocell/generated/contracts/event/order-created/v1" {
+		t.Errorf("SubscriptionPackage[0] = %q", spec.Subscriptions[0].SubscriptionPackage)
+	}
+	if spec.Subscriptions[1].SubscriptionPackage != "github.com/ghbvf/gocell/generated/contracts/event/config/entry-upserted/v1" {
+		t.Errorf("SubscriptionPackage[1] = %q", spec.Subscriptions[1].SubscriptionPackage)
+	}
+	if spec.Subscriptions[0].SubscriptionAlias != "sub0" {
+		t.Errorf("SubscriptionAlias[0] = %q, want sub0", spec.Subscriptions[0].SubscriptionAlias)
+	}
+	if spec.Subscriptions[1].SubscriptionAlias != "sub1" {
+		t.Errorf("SubscriptionAlias[1] = %q, want sub1", spec.Subscriptions[1].SubscriptionAlias)
 	}
 }

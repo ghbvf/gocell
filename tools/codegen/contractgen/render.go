@@ -3,6 +3,7 @@ package contractgen
 import (
 	"embed"
 	"fmt"
+	"strconv"
 	"text/template"
 
 	"github.com/ghbvf/gocell/tools/codegen"
@@ -18,6 +19,9 @@ var templates = func() *template.Template {
 	funcMap := template.FuncMap{
 		// not negates a boolean value.
 		"not": func(b bool) bool { return !b },
+		// quoteGoString returns a Go double-quoted string literal for s.
+		// Used to embed the request schema JSON constant safely.
+		"quoteGoString": strconv.Quote,
 		// hasPathParams reports whether the endpoint has path parameters.
 		"hasPathParams": func(ep *HTTPEndpointSpec) bool {
 			return ep != nil && len(ep.PathParams) > 0
@@ -31,13 +35,6 @@ var templates = func() *template.Template {
 			}
 			return false
 		},
-		// derefInt dereferences a *int pointer for use in templates.
-		"derefInt": func(p *int) int {
-			if p == nil {
-				return 0
-			}
-			return *p
-		},
 		// derefInt64 dereferences a *int64 pointer for use in templates.
 		"derefInt64": func(p *int64) int64 {
 			if p == nil {
@@ -45,13 +42,12 @@ var templates = func() *template.Template {
 			}
 			return *p
 		},
-		// hasMinLength reports whether the param has a positive minimum length.
-		"hasMinLength": func(p *int) bool {
-			return p != nil && *p > 0
-		},
-		// hasMaxLength reports whether the param has a declared maximum length.
-		"hasMaxLength": func(p *int) bool {
-			return p != nil
+		// derefInt dereferences an *int pointer (used for MinLength/MaxLength).
+		"derefInt": func(p *int) int {
+			if p == nil {
+				return 0
+			}
+			return *p
 		},
 		// hasMinimum reports whether the param has a declared minimum value.
 		"hasMinimum": func(p *int64) bool {
@@ -61,25 +57,31 @@ var templates = func() *template.Template {
 		"hasMaximum": func(p *int64) bool {
 			return p != nil
 		},
-		// isBodyField reports whether a DTOField originates from the request body
-		// (Source == "body" or empty — legacy default). Used to gate body validation.
-		"isBodyField": func(f DTOField) bool {
-			return f.Source == "" || f.Source == "body"
+		// hasMinLength reports whether a string param/field has a minLength constraint.
+		"hasMinLength": func(p *int) bool {
+			return p != nil
 		},
-		// hasBodyValidation reports whether any DTO field in the Request struct
-		// requires body-level schema validation (minLength/maxLength/minimum/maximum).
-		"hasBodyValidation": func(dtos []DTOSpec) bool {
-			for _, dto := range dtos {
-				if dto.Name != "Request" {
-					continue
-				}
-				for _, f := range dto.Fields {
-					if f.Source != "" && f.Source != "body" {
-						continue
-					}
-					if f.MinLength != nil || f.MaxLength != nil || f.Minimum != nil || f.Maximum != nil {
-						return true
-					}
+		// hasMaxLength reports whether a string param/field has a maxLength constraint.
+		"hasMaxLength": func(p *int) bool {
+			return p != nil
+		},
+		// needsErrcode reports whether the generated handler requires the errcode
+		// package. It is needed when: any query param exists (required check / parse
+		// errors), or when any path param has a length constraint (B4 follow-up:
+		// path string-length validation re-instated with generic "invalid" message
+		// to avoid oracle leakage). Body schema validation is delegated to
+		// schemavalidate.Validator and does not require errcode here.
+		"needsErrcode": func(spec *ContractGenSpec) bool {
+			if spec.Endpoint == nil {
+				return false
+			}
+			ep := spec.Endpoint
+			if len(ep.QueryParams) > 0 && !ep.IsPagination {
+				return true
+			}
+			for _, p := range ep.PathParams {
+				if p.MinLength != nil || p.MaxLength != nil {
+					return true
 				}
 			}
 			return false
@@ -135,6 +137,42 @@ func RenderHandler(spec *ContractGenSpec, filename string) ([]byte, error) {
 	})
 	if err != nil {
 		return b, fmt.Errorf("contractgen render handler: %w", err)
+	}
+	return b, nil
+}
+
+// RenderSpec renders spec_gen.go content for the given spec.
+// Only valid for kind=event contracts. Returns an error for non-event contracts.
+func RenderSpec(spec *ContractGenSpec, filename string) ([]byte, error) {
+	if spec.Kind != "event" {
+		return nil, fmt.Errorf("contractgen render spec: contract %q is kind=%q, not event", spec.ContractID, spec.Kind)
+	}
+	b, err := codegen.Render(codegen.RenderOptions{
+		TemplateName: "spec.tmpl",
+		Templates:    templates,
+		Data:         spec,
+		Filename:     filename,
+	})
+	if err != nil {
+		return b, fmt.Errorf("contractgen render spec: %w", err)
+	}
+	return b, nil
+}
+
+// RenderSubscription renders subscription_gen.go content for the given spec.
+// Only valid for kind=event contracts. Returns an error for non-event contracts.
+func RenderSubscription(spec *ContractGenSpec, filename string) ([]byte, error) {
+	if spec.Kind != "event" {
+		return nil, fmt.Errorf("contractgen render subscription: contract %q is kind=%q, not event", spec.ContractID, spec.Kind)
+	}
+	b, err := codegen.Render(codegen.RenderOptions{
+		TemplateName: "subscription.tmpl",
+		Templates:    templates,
+		Data:         spec,
+		Filename:     filename,
+	})
+	if err != nil {
+		return b, fmt.Errorf("contractgen render subscription: %w", err)
 	}
 	return b, nil
 }

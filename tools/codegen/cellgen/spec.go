@@ -96,9 +96,6 @@ type RouteSliceMount struct {
 
 // SubscriptionGenSpec describes one reg.Subscribe() call.
 type SubscriptionGenSpec struct {
-	// SpecVarName is the package-scope var name binding the wrapper.ContractSpec
-	// (e.g. "specEventConfigEntryUpserted").
-	SpecVarName string
 	// ContractID is the full event contract id, e.g. "event.config.entry-upserted.v1".
 	ContractID string
 	// Transport is the event transport (default "amqp" — the current GoCell
@@ -112,6 +109,14 @@ type SubscriptionGenSpec struct {
 	// ConsumerGroup is the broker consumer-group identifier. When empty
 	// the renderer falls back to CellGenSpec.ConsumerGroupDefault.
 	ConsumerGroup string
+	// SubscriptionPackage is the Go import path for the generated contract package
+	// that provides NewSubscription, e.g.
+	// "github.com/ghbvf/gocell/generated/contracts/event/order-created/v1".
+	// Populated by BuildCellSpec from the contract id via contractIDToImportPath.
+	SubscriptionPackage string
+	// SubscriptionAlias is the import alias used in cell_gen.go for SubscriptionPackage
+	// (e.g. "sub0", "sub1") to avoid package name collisions between multiple v1 packages.
+	SubscriptionAlias string
 }
 
 // SliceGenSpec is the rendering input for slice.tmpl. It declares the

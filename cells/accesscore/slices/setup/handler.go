@@ -1,95 +1,74 @@
 package setup
 
 import (
-	"net/http"
+	"context"
 
+	adminGen "github.com/ghbvf/gocell/generated/contracts/http/auth/setup/admin/v1"
+	statusGen "github.com/ghbvf/gocell/generated/contracts/http/auth/setup/status/v1"
 	kcell "github.com/ghbvf/gocell/kernel/cell"
-	"github.com/ghbvf/gocell/kernel/wrapper"
-	"github.com/ghbvf/gocell/pkg/httputil"
-	"github.com/ghbvf/gocell/runtime/auth"
 )
 
-// specSetupStatus and specSetupAdmin declare the contracts for setup endpoints,
-// cross-checked against contracts/http/auth/setup/*/v1/contract.yaml by FMT-18.
-var (
-	specSetupStatus = wrapper.ContractSpec{
-		ID: "http.auth.setup.status.v1", Kind: "http", Transport: "http",
-		Method: "GET", Path: "/api/v1/access/setup/status",
-	}
-	specSetupAdmin = wrapper.ContractSpec{
-		ID: "http.auth.setup.admin.v1", Kind: "http", Transport: "http",
-		Method: "POST", Path: "/api/v1/access/setup/admin",
-	}
-)
+// StatusAdapter implements statusGen.Service for http.auth.setup.status.v1.
+// Both setup endpoints are Public (no JWT required): no admin exists yet during
+// first-run bootstrap.
+type StatusAdapter struct{ S *Service }
 
-// Handler exposes the setup endpoints over HTTP.
-type Handler struct {
-	svc *Service
-}
-
-// NewHandler creates a setup Handler.
-func NewHandler(svc *Service) *Handler {
-	return &Handler{svc: svc}
-}
-
-// RegisterRoutes registers setup routes on mux via auth.Mount so CH-04/CH-05
-// governance can correlate contracts to handler functions.
-//
-// Both endpoints are Public: no admin exists yet to authenticate against
-// during first-run setup. Once an admin exists, CreateAdmin returns 410 Gone
-// via a fast-path Status check before bcrypt runs.
-//
-// The /setup tree is mounted under the cell's /access prefix (Consul
-// /acl/bootstrap convention rather than Vault's top-level /sys/init) so the
-// path matches Cell ownership.
-func (h *Handler) RegisterRoutes(mux kcell.RouteHandler) error {
-	if err := auth.Mount(mux, auth.Route{
-		Contract: specSetupStatus,
-		Handler:  http.HandlerFunc(h.HandleStatus),
-		Public:   true,
-	}); err != nil {
-		return err
-	}
-	if err := auth.Mount(mux, auth.Route{
-		Contract: specSetupAdmin,
-		Handler:  http.HandlerFunc(h.HandleCreateAdmin),
-		Public:   true,
-	}); err != nil {
-		return err
-	}
-	return nil
-}
-
-// HandleStatus handles GET /api/v1/access/setup/status.
-func (h *Handler) HandleStatus(w http.ResponseWriter, r *http.Request) {
-	out, err := h.svc.Status(r.Context())
+// Status implements statusGen.Service. The generated handler already decodes
+// the (empty) request.
+func (a StatusAdapter) Status(ctx context.Context, _ *statusGen.Request) (*statusGen.Response, error) {
+	out, err := a.S.Status(ctx)
 	if err != nil {
-		httputil.WriteError(r.Context(), w, err)
-		return
+		return nil, err
 	}
-	httputil.WriteJSON(w, http.StatusOK, map[string]any{"data": out})
+	return &statusGen.Response{
+		Data: &statusGen.ResponseData{HasAdmin: out.HasAdmin},
+	}, nil
 }
 
-// HandleCreateAdmin handles POST /api/v1/access/setup/admin.
-func (h *Handler) HandleCreateAdmin(w http.ResponseWriter, r *http.Request) {
-	var req struct {
-		Username string `json:"username"`
-		Email    string `json:"email"`
-		Password string `json:"password"`
-	}
-	if err := httputil.DecodeJSONStrict(r, &req, httputil.DefaultDecodeJSONLimit); err != nil {
-		httputil.WriteError(r.Context(), w, err)
-		return
-	}
+// AdminAdapter implements adminGen.Service for http.auth.setup.admin.v1.
+type AdminAdapter struct{ S *Service }
 
-	out, err := h.svc.CreateAdmin(r.Context(), CreateAdminInput{
+// Admin implements adminGen.Service. The generated handler validates and
+// decodes username+email+password from the request body.
+func (a AdminAdapter) Admin(ctx context.Context, req *adminGen.Request) (*adminGen.Response, error) {
+	out, err := a.S.CreateAdmin(ctx, CreateAdminInput{
 		Username: req.Username,
 		Email:    req.Email,
 		Password: req.Password,
 	})
 	if err != nil {
-		httputil.WriteError(r.Context(), w, err)
-		return
+		return nil, err
 	}
-	httputil.WriteJSON(w, http.StatusCreated, map[string]any{"data": out})
+	return &adminGen.Response{
+		Data: &adminGen.ResponseData{
+			ID:        out.ID,
+			Username:  out.Username,
+			Email:     out.Email,
+			CreatedAt: out.CreatedAt,
+		},
+	}, nil
+}
+
+// Handler exposes the setup endpoints over HTTP.
+// Both endpoints are Public: no JWT required (first-run bootstrap scenario).
+type Handler struct {
+	statusH *statusGen.Handler
+	adminH  *adminGen.Handler
+}
+
+// NewHandler creates a setup Handler using the generated status and admin handlers.
+// No policy arguments: both endpoints are Public (auth.Route{Public: true} baked in).
+func NewHandler(svc *Service) *Handler {
+	return &Handler{
+		statusH: statusGen.NewHandler(StatusAdapter{svc}),
+		adminH:  adminGen.NewHandler(AdminAdapter{svc}),
+	}
+}
+
+// RegisterRoutes mounts the setup contract handlers on mux.
+func (h *Handler) RegisterRoutes(mux kcell.RouteMux) error {
+	if err := h.statusH.RegisterRoutes(mux); err != nil {
+		return err
+	}
+	return h.adminH.RegisterRoutes(mux)
 }

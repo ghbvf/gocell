@@ -3,6 +3,7 @@ kind: http
 ownerCell: accesscore
 consistencyLevel: L2
 lifecycle: active
+codegen: true
 triggers:
   - event.session.revoked.v1
 endpoints:
@@ -18,6 +19,8 @@ endpoints:
         format: uuid
     successStatus: 204
     noContent: true
+    auth:
+      passwordResetExempt: true
     responses:
       400:
         description: "Bad request — path parameter id is not a valid UUID (ERR_VALIDATION_INVALID_UUID)"

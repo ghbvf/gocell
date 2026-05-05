@@ -135,15 +135,19 @@ func TestHandler_LockUnlock(t *testing.T) {
 	require.Equal(t, http.StatusCreated, w.Code)
 	id := extractID(t, w.Body.Bytes())
 
+	// Lock/Unlock send an empty JSON body ({}) — the generated handler calls
+	// DecodeJSONStrict so the request must have Content-Type: application/json.
 	w = httptest.NewRecorder()
-	req = withAdmin(httptest.NewRequest(http.MethodPost, identityPrefix+"/"+id+"/lock", nil))
-	r.ServeHTTP(w, req)
+	lockReq := withAdmin(httptest.NewRequest(http.MethodPost, identityPrefix+"/"+id+"/lock", strings.NewReader("{}")))
+	lockReq.Header.Set("Content-Type", "application/json")
+	r.ServeHTTP(w, lockReq)
 	assert.Equal(t, http.StatusOK, w.Code)
 	assert.Contains(t, w.Body.String(), "locked")
 
 	w = httptest.NewRecorder()
-	req = withAdmin(httptest.NewRequest(http.MethodPost, identityPrefix+"/"+id+"/unlock", nil))
-	r.ServeHTTP(w, req)
+	unlockReq := withAdmin(httptest.NewRequest(http.MethodPost, identityPrefix+"/"+id+"/unlock", strings.NewReader("{}")))
+	unlockReq.Header.Set("Content-Type", "application/json")
+	r.ServeHTTP(w, unlockReq)
 	assert.Equal(t, http.StatusOK, w.Code)
 	assert.Contains(t, w.Body.String(), "active")
 }
@@ -151,7 +155,8 @@ func TestHandler_LockUnlock(t *testing.T) {
 func TestHandler_Lock_NotFound(t *testing.T) {
 	r := setup(t)
 	w := httptest.NewRecorder()
-	req := withAdmin(httptest.NewRequest(http.MethodPost, identityPrefix+"/"+testutil.TestID("no-such-id")+"/lock", nil))
+	req := withAdmin(httptest.NewRequest(http.MethodPost, identityPrefix+"/"+testutil.TestID("no-such-id")+"/lock", strings.NewReader("{}")))
+	req.Header.Set("Content-Type", "application/json")
 	r.ServeHTTP(w, req)
 	assert.Equal(t, http.StatusNotFound, w.Code)
 }
@@ -159,7 +164,8 @@ func TestHandler_Lock_NotFound(t *testing.T) {
 func TestHandler_Unlock_NotFound(t *testing.T) {
 	r := setup(t)
 	w := httptest.NewRecorder()
-	req := withAdmin(httptest.NewRequest(http.MethodPost, identityPrefix+"/"+testutil.TestID("no-such-id")+"/unlock", nil))
+	req := withAdmin(httptest.NewRequest(http.MethodPost, identityPrefix+"/"+testutil.TestID("no-such-id")+"/unlock", strings.NewReader("{}")))
+	req.Header.Set("Content-Type", "application/json")
 	r.ServeHTTP(w, req)
 	assert.Equal(t, http.StatusNotFound, w.Code)
 }

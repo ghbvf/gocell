@@ -124,7 +124,7 @@ func TestService_Enqueue(t *testing.T) {
 			svc, devRepo, _ := newTestService()
 			tc.setup(devRepo)
 
-			entry, err := svc.Enqueue(context.Background(), tc.deviceID, tc.commandType, tc.payload)
+			entry, err := svc.enqueueInternal(context.Background(), tc.deviceID, tc.commandType, tc.payload)
 			if tc.wantErr {
 				assert.Error(t, err)
 				assert.Zero(t, entry)
@@ -148,7 +148,7 @@ func TestService_Enqueue_AuthzHook(t *testing.T) {
 	}
 	svc.authz = rejectAll
 
-	entry, err := svc.Enqueue(context.Background(), "dev-1", "", "reboot")
+	entry, err := svc.enqueueInternal(context.Background(), "dev-1", "", "reboot")
 	assert.Error(t, err)
 	assert.Zero(t, entry)
 	assert.Contains(t, err.Error(), "permission denied")
@@ -166,7 +166,7 @@ func TestService_Enqueue_AuthzCheckedBeforeDeviceLookup(t *testing.T) {
 	svc.authz = rejectAll
 
 	// deviceID does not exist — but authz fires first and returns Forbidden.
-	_, err := svc.Enqueue(context.Background(), "dev-nonexistent", "", "reboot")
+	_, err := svc.enqueueInternal(context.Background(), "dev-nonexistent", "", "reboot")
 	require.Error(t, err)
 	var ecErr *errcode.Error
 	require.ErrorAs(t, err, &ecErr)
@@ -203,7 +203,7 @@ func TestService_Dequeue(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			entries, err := svc.Dequeue(ctx, tc.deviceID, 10, command.DefaultLeaseDuration)
+			entries, err := svc.dequeueInternal(ctx, tc.deviceID, 10, command.DefaultLeaseDuration)
 			if tc.wantErr {
 				assert.Error(t, err)
 			} else {
@@ -267,7 +267,7 @@ func TestService_Ack(t *testing.T) {
 			svc, devRepo, q := newTestService()
 			tc.setup(devRepo, q)
 
-			err := svc.Ack(context.Background(), tc.deviceID, tc.cmdID, command.AckSuccess)
+			err := svc.ackInternal(context.Background(), tc.deviceID, tc.cmdID, command.AckSuccess)
 			if tc.wantErr {
 				assert.Error(t, err)
 			} else {
@@ -286,10 +286,10 @@ func TestService_Ack_Idempotent(t *testing.T) {
 	require.NoError(t, err)
 
 	// Ack once
-	require.NoError(t, svc.Ack(ctx, "dev-1", "cmd-1", command.AckSuccess))
+	require.NoError(t, svc.ackInternal(ctx, "dev-1", "cmd-1", command.AckSuccess))
 
 	// Ack again — should be idempotent (no error)
-	require.NoError(t, svc.Ack(ctx, "dev-1", "cmd-1", command.AckSuccess))
+	require.NoError(t, svc.ackInternal(ctx, "dev-1", "cmd-1", command.AckSuccess))
 }
 
 func TestService_Ack_ConcurrentSameReason_Idempotent(t *testing.T) {
@@ -305,7 +305,7 @@ func TestService_Ack_ConcurrentSameReason_Idempotent(t *testing.T) {
 	errs := make(chan error, workers)
 	for range workers {
 		wg.Go(func() {
-			errs <- svc.Ack(ctx, "dev-1", "cmd-1", command.AckSuccess)
+			errs <- svc.ackInternal(ctx, "dev-1", "cmd-1", command.AckSuccess)
 		})
 	}
 	wg.Wait()
@@ -334,7 +334,7 @@ func TestService_Ack_ConcurrentDifferentReason_RejectsLoser(t *testing.T) {
 		wg.Add(1)
 		go func(reason command.AckReason) {
 			defer wg.Done()
-			errs <- svc.Ack(ctx, "dev-1", "cmd-1", reason)
+			errs <- svc.ackInternal(ctx, "dev-1", "cmd-1", reason)
 		}(reason)
 	}
 	wg.Wait()
@@ -361,7 +361,7 @@ func TestService_Ack_LifecycleSentToSucceeded(t *testing.T) {
 	require.NoError(t, err)
 
 	// Ack from Sent → Succeeded without synthesizing Delivered.
-	require.NoError(t, svc.Ack(ctx, "dev-1", "cmd-1", command.AckSuccess))
+	require.NoError(t, svc.ackInternal(ctx, "dev-1", "cmd-1", command.AckSuccess))
 
 	// Entry should now be Succeeded (terminal).
 	got, err := q.GetCommand(ctx, "cmd-1")
@@ -381,7 +381,7 @@ func TestService_ExtendLease_RejectsTooLargeExtension(t *testing.T) {
 	_, err := q.Dequeue(ctx, "dev-1", 1, command.DefaultLeaseDuration)
 	require.NoError(t, err)
 
-	err = svc.ExtendLease(ctx, "dev-1", "cmd-1", time.Hour+time.Second)
+	err = svc.extendLeaseInternal(ctx, "dev-1", "cmd-1", time.Hour+time.Second)
 	require.Error(t, err)
 }
 
@@ -422,18 +422,18 @@ func TestService_Enqueue_ThenDequeue_Report_ThenAck(t *testing.T) {
 	seedDevice(devRepo, "dev-1", "sensor-a")
 
 	// Enqueue
-	entry, err := svc.Enqueue(ctx, "dev-1", "", "upgrade-fw")
+	entry, err := svc.enqueueInternal(ctx, "dev-1", "", "upgrade-fw")
 	require.NoError(t, err)
 
 	// Dequeue claims the command and marks it Sent.
-	entries, err := svc.Dequeue(ctx, "dev-1", 10, command.DefaultLeaseDuration)
+	entries, err := svc.dequeueInternal(ctx, "dev-1", 10, command.DefaultLeaseDuration)
 	require.NoError(t, err)
 	require.Len(t, entries, 1)
 	assert.Equal(t, entry.ID, entries[0].ID)
 	assert.Equal(t, command.StatusSent, entries[0].Status)
 
-	require.NoError(t, svc.Report(ctx, "dev-1", entry.ID))
-	require.NoError(t, svc.Ack(ctx, "dev-1", entry.ID, command.AckSuccess))
+	require.NoError(t, svc.reportInternal(ctx, "dev-1", entry.ID))
+	require.NoError(t, svc.ackInternal(ctx, "dev-1", entry.ID, command.AckSuccess))
 
 	// Scan active should be empty after ack (command is now terminal).
 	result, err := svc.ScanActive(ctx, command.ScanFilter{DeviceID: "dev-1"}, query.PageParams{})

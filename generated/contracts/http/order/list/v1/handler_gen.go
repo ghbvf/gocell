@@ -28,9 +28,10 @@ type Handler struct {
 
 // NewHandler creates a Handler for http.order.list.v1.
 // policy may be nil — auth.Mount treats nil as "no per-route authorization guard";
-// use auth.PublicPolicy for unauthenticated public endpoints or supply a real policy.
+// supply a real policy (e.g. auth.AnyRole, auth.SelfOr) to enforce access control.
 func NewHandler(svc Service, policy auth.Policy) *Handler {
-	return &Handler{svc: svc, policy: policy}
+	h := &Handler{svc: svc, policy: policy}
+	return h
 }
 
 // ServeHTTP implements http.Handler so *Handler can be used directly in tests
@@ -40,10 +41,12 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 // RegisterRoutes mounts the handler on mux via auth.Mount.
+// Uses http.HandlerFunc(h.handle) so governance CH-04/CH-05 AST scans can
+// resolve the handler function body via the Contract→Handler correlation.
 func (h *Handler) RegisterRoutes(mux cell.RouteHandler) error {
 	return auth.Mount(mux, auth.Route{
 		Contract: contractSpec,
-		Handler:  h,
+		Handler:  http.HandlerFunc(h.handle),
 		Policy:   h.policy,
 	})
 }

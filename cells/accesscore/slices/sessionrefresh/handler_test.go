@@ -209,8 +209,11 @@ func TestHandleRefresh_RefreshStoreUnavailable_Returns503(t *testing.T) {
 		panic("RegisterRoutes: " + err.Error())
 	}
 
+	// Send a token that passes schema length validation (minLength:20) so the
+	// request reaches the service layer and triggers the 503 from the unavailable store.
+	token := strings.Repeat("x", 20)
 	w := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, refreshPath, strings.NewReader(`{"refreshToken":"opaque"}`))
+	req := httptest.NewRequest(http.MethodPost, refreshPath, strings.NewReader(`{"refreshToken":"`+token+`"}`))
 	req.Header.Set("Content-Type", "application/json")
 	mux.ServeHTTP(w, req)
 
@@ -219,7 +222,8 @@ func TestHandleRefresh_RefreshStoreUnavailable_Returns503(t *testing.T) {
 }
 
 // TestHandler_Refresh_BlankToken verifies that submitting an empty refreshToken
-// returns 400 + ERR_AUTH_REFRESH_INVALID_INPUT + "refreshToken is required".
+// returns 400. The generated handler enforces minLength:20 and returns
+// ERR_VALIDATION_FAILED before the request reaches the service layer.
 func TestHandler_Refresh_BlankToken(t *testing.T) {
 	h, _ := setup(t)
 	body := `{"refreshToken":""}`
@@ -237,6 +241,6 @@ func TestHandler_Refresh_BlankToken(t *testing.T) {
 		} `json:"error"`
 	}
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
-	assert.Equal(t, "ERR_AUTH_REFRESH_INVALID_INPUT", resp.Error.Code)
-	assert.Equal(t, "refreshToken is required", resp.Error.Message)
+	assert.Equal(t, "ERR_VALIDATION_FAILED", resp.Error.Code)
+	assert.Equal(t, "refreshToken: invalid", resp.Error.Message)
 }

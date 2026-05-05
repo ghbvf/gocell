@@ -42,7 +42,12 @@ func (c *configSubscriberWithoutOwner) Init(ctx context.Context, reg cell.Regist
 	if err := c.BaseCell.Init(ctx, reg); err != nil {
 		return err
 	}
-	spec := wrapper.EventSpec("event.config.entry-upserted.v1", "amqp")
+	spec := wrapper.ContractSpec{
+		ID:        "event.config.entry-upserted.v1",
+		Kind:      "event",
+		Transport: "amqp",
+		Topic:     "event.config.entry-upserted.v1",
+	}
 	// Intentionally omit cell.WithSubscriptionSliceID to trigger validator.
 	return reg.Subscribe(spec,
 		func(_ context.Context, _ outbox.Entry) outbox.HandleResult {

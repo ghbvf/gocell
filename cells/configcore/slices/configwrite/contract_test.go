@@ -15,6 +15,9 @@ import (
 	"github.com/ghbvf/gocell/cells/configcore/internal/mem"
 	"github.com/ghbvf/gocell/cells/configcore/internal/testutil"
 	"github.com/ghbvf/gocell/cells/internal/testoutbox"
+	configdelete "github.com/ghbvf/gocell/generated/contracts/http/config/delete/v1"
+	update "github.com/ghbvf/gocell/generated/contracts/http/config/update/v1"
+	write "github.com/ghbvf/gocell/generated/contracts/http/config/write/v1"
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/cell/celltest"
 	"github.com/ghbvf/gocell/kernel/clock"
@@ -32,18 +35,22 @@ func newContractService(t testing.TB) (*Service, *testutil.RecordingWriter) {
 	return svc, writer
 }
 
-// newContractMux registers configwrite routes under the canonical API
-// prefix. TestMux.Route mirrors production chi so auth.Mount strips the
-// prefix off Contract.Path directly; no alias magic. RegisterRoutes
-// calls auth.Mount to install the admin policy, so the contract test
-// exercises the same guard the production mux uses — not just the
-// happy-path handler.
+// newContractMux registers all configwrite routes under the canonical API prefix.
 func newContractMux(svc *Service) http.Handler {
-	h := NewHandler(svc)
+	policy := auth.AnyRole(auth.RoleAdmin)
+	writeH := write.NewHandler(WriteAdapter{svc}, policy)
+	updateH := update.NewHandler(UpdateAdapter{svc}, policy)
+	deleteH := configdelete.NewHandler(DeleteAdapter{svc}, policy)
 	mux := celltest.NewTestMux()
 	mux.Route("/api/v1/config", func(sub cell.RouteMux) {
-		if err := h.RegisterRoutes(sub); err != nil {
-			panic("RegisterRoutes: " + err.Error())
+		if err := writeH.RegisterRoutes(sub); err != nil {
+			panic("write.RegisterRoutes: " + err.Error())
+		}
+		if err := updateH.RegisterRoutes(sub); err != nil {
+			panic("update.RegisterRoutes: " + err.Error())
+		}
+		if err := deleteH.RegisterRoutes(sub); err != nil {
+			panic("delete.RegisterRoutes: " + err.Error())
 		}
 	})
 	return mux
@@ -72,9 +79,7 @@ func TestHttpConfigWriteV1Serve(t *testing.T) {
 }
 
 // TestHttpConfigWriteV1_AuthzNegative validates the 401/403 failure semantics
-// that are part of the http.config.write.v1 interface contract. These paths
-// are tested here alongside the happy-path contract test so that auth-guard
-// regressions are caught at the contract boundary, not just in unit tests.
+// that are part of the http.config.write.v1 interface contract.
 func TestHttpConfigWriteV1_AuthzNegative(t *testing.T) {
 	svc, _ := newContractService(t)
 	mux := newContractMux(svc)

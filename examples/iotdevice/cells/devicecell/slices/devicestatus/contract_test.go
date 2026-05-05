@@ -13,7 +13,15 @@ import (
 
 	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/domain"
 	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/mem"
+	statuscontract "github.com/ghbvf/gocell/generated/contracts/http/device/status/v1"
 	"github.com/ghbvf/gocell/tests/contracttest"
+)
+
+// contractSpecID mirrors the generated contractSpec for test assertions.
+var (
+	contractSpecID     = "http.device.status.v1"
+	contractSpecMethod = "GET"
+	contractSpecPath   = "/api/v1/devices/{id}/status"
 )
 
 func newContractHandler() http.Handler {
@@ -23,18 +31,19 @@ func newContractHandler() http.Handler {
 		LastSeen: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
 	})
 	svc := NewService(repo, slog.Default())
+	handler := statuscontract.NewHandler(svc, nil) // nil policy: auth handled by listener chain in prod
 	mux := http.NewServeMux()
-	mux.Handle("GET /api/v1/devices/{id}/status", http.HandlerFunc(NewHandler(svc).HandleGetStatus))
+	mux.Handle("GET /api/v1/devices/{id}/status", handler)
 	return mux
 }
 
-func TestSpecDeviceStatusMatchesContract(t *testing.T) {
+func TestDeviceStatusContractSpecMatchesContract(t *testing.T) {
 	root := contracttest.ExampleContractsRoot(t, "iotdevice")
-	c := contracttest.LoadByID(t, root, "http.device.status.v1")
+	c := contracttest.LoadByID(t, root, contractSpecID)
 	require.NotNil(t, c.HTTP)
-	require.Equal(t, c.ID, specDeviceStatus.ID)
-	require.Equal(t, c.HTTP.Method, specDeviceStatus.Method)
-	require.Equal(t, c.HTTP.Path, specDeviceStatus.Path)
+	require.Equal(t, contractSpecID, c.ID)
+	require.Equal(t, contractSpecMethod, c.HTTP.Method)
+	require.Equal(t, contractSpecPath, c.HTTP.Path)
 }
 
 func TestHttpDeviceStatusV1Serve(t *testing.T) {

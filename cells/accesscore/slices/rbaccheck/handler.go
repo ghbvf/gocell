@@ -1,31 +1,18 @@
 package rbaccheck
 
 import (
-	"net/http"
+	"context"
 
 	"github.com/ghbvf/gocell/cells/accesscore/internal/domain"
+	checkg "github.com/ghbvf/gocell/generated/contracts/http/auth/role/check/v1"
+	listg "github.com/ghbvf/gocell/generated/contracts/http/auth/role/list/v1"
 	kcell "github.com/ghbvf/gocell/kernel/cell"
-	"github.com/ghbvf/gocell/kernel/wrapper"
-	"github.com/ghbvf/gocell/pkg/httputil"
 	"github.com/ghbvf/gocell/pkg/query"
 	"github.com/ghbvf/gocell/runtime/auth"
 )
 
-// Contract spec literals — cross-checked against
-// contracts/http/auth/role/{list,check}/v1/contract.yaml by FMT-18.
-var (
-	specRoleList = wrapper.ContractSpec{
-		ID: "http.auth.role.list.v1", Kind: "http", Transport: "http",
-		Method: "GET", Path: "/api/v1/access/roles/{userID}",
-	}
-	specRoleCheck = wrapper.ContractSpec{
-		ID: "http.auth.role.check.v1", Kind: "http", Transport: "http",
-		Method: "GET", Path: "/api/v1/access/roles/{userID}/{roleName}",
-	}
-)
-
 // RoleResponse is the public DTO for Role, isolating the API contract from the
-// domain model.
+// domain model. Kept for unit tests that reference toRoleResponse directly.
 type RoleResponse struct {
 	ID          string               `json:"id"`
 	Name        string               `json:"name"`
@@ -46,76 +33,79 @@ func toRoleResponse(r *domain.Role) RoleResponse {
 	return RoleResponse{ID: r.ID, Name: r.Name, Permissions: perms}
 }
 
-// HasRoleResponse is the public DTO for role-check results.
+// HasRoleResponse is the public DTO for role-check results. Kept for unit tests.
 type HasRoleResponse struct {
 	HasRole bool `json:"hasRole"`
 }
 
-// Handler provides HTTP endpoints for RBAC queries.
+// ListAdapter implements listg.Service for http.auth.role.list.v1.
+type ListAdapter struct{ S *Service }
+
+// List implements listg.Service. The generated handler already validates and
+// decodes userID (UUID), cursor, and limit from the request.
+func (a ListAdapter) List(ctx context.Context, req *listg.Request) (*listg.Response, error) {
+	pageReq := query.PageParams{
+		Cursor: req.Cursor,
+		Limit:  int(req.Limit),
+	}
+	result, err := a.S.ListRoles(ctx, req.UserID, pageReq)
+	if err != nil {
+		return nil, err
+	}
+	items := make([]*listg.ResponseDataItem, 0, len(result.Items))
+	for _, role := range result.Items {
+		perms := make([]*listg.ResponseDataItemPermissionsItem, len(role.Permissions))
+		for i, p := range role.Permissions {
+			perms[i] = &listg.ResponseDataItemPermissionsItem{
+				Resource: p.Resource,
+				Action:   p.Action,
+			}
+		}
+		items = append(items, &listg.ResponseDataItem{
+			ID:          role.ID,
+			Name:        role.Name,
+			Permissions: perms,
+		})
+	}
+	return &listg.Response{
+		Data:       items,
+		NextCursor: result.NextCursor,
+		HasMore:    result.HasMore,
+	}, nil
+}
+
+// CheckAdapter implements checkg.Service for http.auth.role.check.v1.
+type CheckAdapter struct{ S *Service }
+
+// Check implements checkg.Service. The generated handler already validates and
+// decodes userID (UUID) and roleName from the request.
+func (a CheckAdapter) Check(ctx context.Context, req *checkg.Request) (*checkg.Response, error) {
+	has, err := a.S.HasRole(ctx, req.UserID, req.RoleName)
+	if err != nil {
+		return nil, err
+	}
+	return &checkg.Response{Data: &checkg.ResponseData{HasRole: has}}, nil
+}
+
+// Handler is the composite route handler for the rbaccheck slice.
 type Handler struct {
-	svc *Service
+	listH  *listg.Handler
+	checkH *checkg.Handler
 }
 
-// NewHandler creates an rbac-check Handler.
+// NewHandler creates an rbaccheck Handler with the generated list/check handlers.
 func NewHandler(svc *Service) *Handler {
-	return &Handler{svc: svc}
+	policy := auth.SelfOr("userID", auth.RoleAdmin)
+	return &Handler{
+		listH:  listg.NewHandler(ListAdapter{svc}, policy),
+		checkH: checkg.NewHandler(CheckAdapter{svc}, policy),
+	}
 }
 
-// RegisterRoutes registers rbac-check routes on the given mux via auth.Mount
-// so every request emits a contract-tagged span. Policy is declared at
-// registration time; handler bodies contain only business logic.
+// RegisterRoutes mounts the list and check contract handlers on mux.
 func (h *Handler) RegisterRoutes(mux kcell.RouteMux) error {
-	if err := auth.Mount(mux, auth.Route{
-		Contract: specRoleList,
-		Handler:  http.HandlerFunc(h.handleListRoles),
-		Policy:   auth.SelfOr("userID", auth.RoleAdmin),
-	}); err != nil {
+	if err := h.listH.RegisterRoutes(mux); err != nil {
 		return err
 	}
-	if err := auth.Mount(mux, auth.Route{
-		Contract: specRoleCheck,
-		Handler:  http.HandlerFunc(h.handleHasRole),
-		Policy:   auth.SelfOr("userID", auth.RoleAdmin),
-	}); err != nil {
-		return err
-	}
-	return nil
-}
-
-func (h *Handler) handleListRoles(w http.ResponseWriter, r *http.Request) {
-	r = r.WithContext(httputil.WithClientErrorLogSampling(r.Context(), specRoleList.ID))
-
-	userID, ok := httputil.ParseUUIDPathParam(w, r, "userID")
-	if !ok {
-		return
-	}
-
-	pageReq, ok := httputil.ParsePageParamsOrWrite(w, r)
-	if !ok {
-		return
-	}
-
-	result, err := h.svc.ListRoles(r.Context(), userID, pageReq)
-	if err != nil {
-		httputil.WriteError(r.Context(), w, err)
-		return
-	}
-
-	httputil.WriteJSON(w, http.StatusOK, query.MapPageResult(result, toRoleResponse))
-}
-
-func (h *Handler) handleHasRole(w http.ResponseWriter, r *http.Request) {
-	userID, ok := httputil.ParseUUIDPathParam(w, r, "userID")
-	if !ok {
-		return
-	}
-	roleName := r.PathValue("roleName")
-
-	has, err := h.svc.HasRole(r.Context(), userID, roleName)
-	if err != nil {
-		httputil.WriteError(r.Context(), w, err)
-		return
-	}
-
-	httputil.WriteJSON(w, http.StatusOK, map[string]any{"data": HasRoleResponse{HasRole: has}})
+	return h.checkH.RegisterRoutes(mux)
 }

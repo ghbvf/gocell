@@ -3,6 +3,7 @@ kind: http
 ownerCell: accesscore
 consistencyLevel: L1
 lifecycle: active
+codegen: true
 endpoints:
   server: accesscore
   clients:
@@ -16,6 +17,8 @@ endpoints:
         format: uuid
     successStatus: 200
     noContent: false
+    auth:
+      passwordResetExempt: true
     responses:
       400:
         description: "Bad request — path parameter id is not a valid UUID (ERR_VALIDATION_INVALID_UUID), request body decode failure, or new password equals old password"

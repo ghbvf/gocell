@@ -147,8 +147,10 @@ func TestHandleLogin(t *testing.T) {
 			wantStatus: http.StatusBadRequest,
 		},
 		{
+			// Generated handler enforces minLength:8 on password; use a password that
+			// passes the schema check but fails the bcrypt comparison.
 			name:       "wrong password returns 401",
-			body:       `{"username":"alice","password":"wrong"}`,
+			body:       `{"username":"alice","password":"wrong-password"}`,
 			wantStatus: http.StatusUnauthorized,
 		},
 		{
@@ -173,23 +175,21 @@ func TestHandleLogin(t *testing.T) {
 	}
 }
 
-// assertBlankFieldError is a helper that asserts the error response contains
-// the expected errcode and a message stating "<fieldName> is required".
-func assertBlankFieldError(t *testing.T, body []byte, wantCode, wantField string) {
+// assertValidationError is a helper that asserts the error response has the
+// expected error code (from the generated handler's schema validation).
+func assertValidationError(t *testing.T, body []byte, wantCode string) {
 	t.Helper()
 	var resp struct {
 		Error struct {
-			Code    string `json:"code"`
-			Message string `json:"message"`
+			Code string `json:"code"`
 		} `json:"error"`
 	}
 	require.NoError(t, json.Unmarshal(body, &resp))
 	assert.Equal(t, wantCode, resp.Error.Code)
-	assert.Equal(t, wantField+" is required", resp.Error.Message)
 }
 
 // TestHandler_Login_BlankUsername verifies that submitting an empty username
-// returns 400 + ERR_AUTH_LOGIN_INVALID_INPUT + "username is required".
+// returns 400. The generated handler enforces minLength:1 before the service.
 func TestHandler_Login_BlankUsername(t *testing.T) {
 	h := setup(t)
 	body := `{"username":"","password":"correct-pass"}`
@@ -199,11 +199,12 @@ func TestHandler_Login_BlankUsername(t *testing.T) {
 	h.ServeHTTP(w, req)
 
 	assert.Equal(t, http.StatusBadRequest, w.Code)
-	assertBlankFieldError(t, w.Body.Bytes(), "ERR_AUTH_LOGIN_INVALID_INPUT", "username")
+	// Generated handler intercepts blank username before the service; returns ERR_VALIDATION_FAILED.
+	assertValidationError(t, w.Body.Bytes(), "ERR_VALIDATION_FAILED")
 }
 
 // TestHandler_Login_BlankPassword verifies that submitting an empty password
-// returns 400 + ERR_AUTH_LOGIN_INVALID_INPUT + "password is required".
+// returns 400. The generated handler enforces minLength:8 before the service.
 func TestHandler_Login_BlankPassword(t *testing.T) {
 	h := setup(t)
 	body := `{"username":"alice","password":""}`
@@ -213,5 +214,6 @@ func TestHandler_Login_BlankPassword(t *testing.T) {
 	h.ServeHTTP(w, req)
 
 	assert.Equal(t, http.StatusBadRequest, w.Code)
-	assertBlankFieldError(t, w.Body.Bytes(), "ERR_AUTH_LOGIN_INVALID_INPUT", "password")
+	// Generated handler intercepts blank password before the service; returns ERR_VALIDATION_FAILED.
+	assertValidationError(t, w.Body.Bytes(), "ERR_VALIDATION_FAILED")
 }

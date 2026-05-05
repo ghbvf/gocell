@@ -37,6 +37,7 @@ import (
 	"github.com/ghbvf/gocell/cells/accesscore/internal/ports"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/testutil"
 	"github.com/ghbvf/gocell/cells/accesscore/slices/sessionlogin"
+	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/cell/celltest"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/errcode"
@@ -122,13 +123,16 @@ func newE2EFixture() *e2eFixture {
 	}
 
 	// Build a full-path mux so path values are populated correctly.
-	// Policies are declared via auth.Mount to match production wiring.
+	// RegisterRoutes mounts all generated contract handlers (create/get/update/patch/
+	// delete/lock/unlock/change-password) with their declared auth policies, matching
+	// the production wiring in cell_init.go.
 	mux := celltest.NewTestMux()
 	h := NewHandler(idmSvc)
-	auth.MustMount(mux, auth.Route{Contract: testHTTPContract("POST", "/api/v1/access/users"), Handler: http.HandlerFunc(h.handleCreate), Policy: auth.AnyRole(auth.RoleAdmin)})
-	auth.MustMount(mux, auth.Route{Contract: testHTTPContract("GET", "/api/v1/access/users/{id}"), Handler: http.HandlerFunc(h.handleGet), Policy: auth.SelfOr("id", auth.RoleAdmin)})
-	auth.MustMount(mux, auth.Route{Contract: testHTTPContract("PATCH", "/api/v1/access/users/{id}"), Handler: http.HandlerFunc(h.handlePatch), Policy: auth.SelfOr("id", auth.RoleAdmin)})
-	auth.MustMount(mux, auth.Route{Contract: testHTTPContract("POST", "/api/v1/access/users/{id}/password"), Handler: http.HandlerFunc(h.handleChangePassword), Policy: auth.SelfOr("id", auth.RoleAdmin)})
+	mux.Route("/api/v1/access/users", func(s cell.RouteMux) {
+		if err := h.RegisterRoutes(s); err != nil {
+			panic("newE2EFixture: RegisterRoutes: " + err.Error())
+		}
+	})
 
 	return &e2eFixture{
 		mux:         mux,
@@ -289,8 +293,8 @@ func TestChangePassword_RejectsBadOldPassword(t *testing.T) {
 	userID := bootstrapAdminUser(t, f, "e2e-wrongpass", "correctpass")
 
 	body, _ := json.Marshal(map[string]string{
-		"oldPassword": "wrongpass",
-		"newPassword": "newpass",
+		"oldPassword": "wrongpass1",
+		"newPassword": "newpass1234",
 	})
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/access/users/"+userID+"/password",
 		bytes.NewReader(body))

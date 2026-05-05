@@ -3,6 +3,7 @@ kind: http
 ownerCell: devicecell
 consistencyLevel: L4
 lifecycle: active
+codegen: true
 endpoints:
   server: devicecell
   clients:
@@ -21,5 +22,12 @@ endpoints:
         maxLength: 256
     successStatus: 200
     noContent: false
+    responses:
+      400:
+        description: "Bad request — path parameter id or cmdId is too short or too long"
+        schemaRef: "../../../../../shared/errors/error-response-v1.schema.json"
+      413:
+        description: "Request body too large"
+        schemaRef: "../../../../../shared/errors/error-response-v1.schema.json"
 schemaRefs:
   response: response.schema.json

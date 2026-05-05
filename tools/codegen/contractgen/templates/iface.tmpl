@@ -10,16 +10,4 @@ import "context"
 type Service interface {
 	{{.Endpoint.HandlerMethod}}(ctx context.Context, req *Request) (*Response, error)
 }
-{{- else if eq .Kind "event"}}
-
-import (
-	"context"
-
-	"github.com/ghbvf/gocell/kernel/outbox"
-)
-
-// EventHandler is the business interface that subscribers of {{.ContractID}} must implement.
-type EventHandler interface {
-	{{.Event.HandlerMethod}}(ctx context.Context, entry outbox.Entry, payload *Payload) outbox.HandleResult
-}
 {{- end}}

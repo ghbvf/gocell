@@ -61,6 +61,22 @@ func WriteError(ctx context.Context, w http.ResponseWriter, err error) {
 		return
 	}
 
+	// http.MaxBytesReader (used by middleware/body_limit) returns
+	// *http.MaxBytesError when a request body exceeds the configured limit.
+	// Generated handlers read the body via io.ReadAll(r.Body) before strict
+	// JSON decode, so this error surfaces to WriteError rather than the
+	// middleware. Map to 413 ErrBodyTooLarge so clients receive the canonical
+	// payload-too-large response instead of a misleading 500.
+	// ref: net/http MaxBytesError godoc; nginx client_max_body_size 413.
+	var maxBytesErr *http.MaxBytesError
+	if errors.As(err, &maxBytesErr) {
+		writeErrcodeError(ctx, w, "error", errcode.New(
+			errcode.KindPayloadTooLarge,
+			errcode.ErrBodyTooLarge,
+			"request body too large"))
+		return
+	}
+
 	logAttrs := []any{slog.Any("error", err)}
 	logAttrs = appendCorrelationAttrs(ctx, logAttrs)
 	slog.Error("unhandled error", logAttrs...)

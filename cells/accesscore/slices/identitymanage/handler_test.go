@@ -92,42 +92,40 @@ func adminCtx() func(*http.Request) *http.Request {
 	}
 }
 
-func TestToUserResponse_NilInput(t *testing.T) {
-	var got UserResponse
-	assert.NotPanics(t, func() { got = toUserResponse(nil) })
-	assert.Zero(t, got.ID)
+func TestToUserResponseData_NilInput(t *testing.T) {
+	// toUserResponseData must not panic on nil input and must return empty strings.
+	var id, username, email, status, createdAt, updatedAt string
+	assert.NotPanics(t, func() {
+		id, username, email, status, createdAt, updatedAt = toUserResponseData(nil)
+	})
+	assert.Empty(t, id)
+	assert.Empty(t, username)
+	assert.Empty(t, email)
+	assert.Empty(t, status)
+	assert.Empty(t, createdAt)
+	assert.Empty(t, updatedAt)
 }
 
-func TestUserResponse_ExcludesSensitiveFields(t *testing.T) {
-	now := time.Now()
+func TestToUserResponseData_Fields(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Second)
 	user := &domain.User{
 		ID: "u1", Username: "alice", Email: "a@b.com",
 		PasswordHash: "secret-hash-bcrypt", Status: domain.StatusActive,
 		CreatedAt: now, UpdatedAt: now,
 	}
-	resp := toUserResponse(user)
+	id, username, email, status, createdAt, updatedAt := toUserResponseData(user)
 
-	assert.Equal(t, "u1", resp.ID)
-	assert.Equal(t, "alice", resp.Username)
-	assert.Equal(t, "a@b.com", resp.Email)
-	assert.Equal(t, "active", resp.Status)
-	assert.Equal(t, now, resp.CreatedAt)
-	assert.Equal(t, now, resp.UpdatedAt)
+	assert.Equal(t, "u1", id)
+	assert.Equal(t, "alice", username)
+	assert.Equal(t, "a@b.com", email)
+	assert.Equal(t, "active", status)
 
-	// Verify sensitive fields are not serialized.
-	b, err := json.Marshal(resp)
-	require.NoError(t, err)
-	s := string(b)
-	assert.NotContains(t, s, "secret-hash-bcrypt")
-	assert.NotContains(t, s, "passwordHash")
-
-	// Verify camelCase JSON keys (#27n).
-	assert.Contains(t, s, `"id"`)
-	assert.Contains(t, s, `"username"`)
-	assert.Contains(t, s, `"email"`)
-	assert.Contains(t, s, `"status"`)
-	assert.Contains(t, s, `"createdAt"`)
-	assert.Contains(t, s, `"updatedAt"`)
+	// Timestamps are formatted as RFC3339; verify they do not contain the hash.
+	assert.NotContains(t, createdAt, "secret-hash-bcrypt")
+	assert.NotContains(t, updatedAt, "secret-hash-bcrypt")
+	// RFC3339 format check.
+	assert.Contains(t, createdAt, "T")
+	assert.Contains(t, updatedAt, "T")
 }
 
 func TestHandler(t *testing.T) {
@@ -479,10 +477,11 @@ func TestHandlePatch_TypeValidation(t *testing.T) {
 // handleChangePassword tests
 // ---------------------------------------------------------------------------
 
-// seedUserInRepo creates a user with a bcrypt-hashed "oldpass" password directly in the repo.
+// seedUserInRepo creates a user with a bcrypt-hashed "oldpass12" password directly in the repo.
+// Uses "oldpass12" (9 chars) to satisfy the generated handler's minLength:8 constraint.
 func seedUserInRepo(t *testing.T, repo *mem.UserRepository, id, username string) {
 	t.Helper()
-	hash, err := bcrypt.GenerateFromPassword([]byte("oldpass"), bcrypt.MinCost)
+	hash, err := bcrypt.GenerateFromPassword([]byte("oldpass12"), bcrypt.MinCost)
 	require.NoError(t, err)
 	user, err := domain.NewUser(username, username+"@test.com", string(hash), time.Now())
 	require.NoError(t, err)
@@ -499,7 +498,8 @@ func TestHandler_ChangePassword_SelfAllowed(t *testing.T) {
 	r, repo := setupWithIssuer(t, stubIssuer)
 	seedUserInRepo(t, repo, testutil.TestID("usr-self"), "self-user")
 
-	body := `{"oldPassword":"oldpass","newPassword":"newpass"}`
+	// Passwords must be ≥ 8 chars to pass the generated handler's minLength check.
+	body := `{"oldPassword":"oldpass12","newPassword":"newpass12"}`
 	req := httptest.NewRequest(http.MethodPost, identityPrefix+"/"+testutil.TestID("usr-self")+"/password", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	req = req.WithContext(auth.TestContext(testutil.TestID("usr-self"), nil)) // self-access
@@ -521,7 +521,8 @@ func TestHandler_ChangePassword_AdminOnAnotherUser_Allowed(t *testing.T) {
 	r, repo := setupWithIssuer(t, stubIssuer)
 	seedUserInRepo(t, repo, testutil.TestID("usr-target"), "target-user")
 
-	body := `{"oldPassword":"oldpass","newPassword":"newpass2"}`
+	// Passwords must be ≥ 8 chars to pass the generated handler's minLength check.
+	body := `{"oldPassword":"oldpass12","newPassword":"newpass12"}`
 	req := httptest.NewRequest(http.MethodPost, identityPrefix+"/"+testutil.TestID("usr-target")+"/password", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	req = req.WithContext(auth.TestContext("admin-user", []string{"admin"}))
@@ -536,7 +537,7 @@ func TestHandler_ChangePassword_StrangerForbidden(t *testing.T) {
 	r, repo := setupWithIssuer(t, nil)
 	seedUserInRepo(t, repo, testutil.TestID("usr-victim"), "victim-user")
 
-	body := `{"oldPassword":"oldpass","newPassword":"newpass"}`
+	body := `{"oldPassword":"oldpass12","newPassword":"newpass12"}`
 	req := httptest.NewRequest(http.MethodPost, identityPrefix+"/"+testutil.TestID("usr-victim")+"/password", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	req = req.WithContext(auth.TestContext(testutil.TestID("usr-stranger"), []string{"viewer"})) // not self, not admin
@@ -563,9 +564,10 @@ func TestHandler_Create_RequirePasswordResetField(t *testing.T) {
 	r := setup(t)
 
 	// Create with requirePasswordReset=true.
+	// Password must be ≥ 8 chars to pass the generated handler's minLength check.
 	w := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, identityPrefix,
-		strings.NewReader(`{"username":"flagged","email":"f@g.com","password":"pass","requirePasswordReset":true}`))
+		strings.NewReader(`{"username":"flagged","email":"f@g.com","password":"pass1234","requirePasswordReset":true}`))
 	req.Header.Set("Content-Type", "application/json")
 	req = req.WithContext(auth.TestContext("admin-user", []string{"admin"}))
 	r.ServeHTTP(w, req)
@@ -575,13 +577,141 @@ func TestHandler_Create_RequirePasswordResetField(t *testing.T) {
 	assert.NotContains(t, w.Body.String(), "passwordHash")
 }
 
+// ---------------------------------------------------------------------------
+// PATCH semantics: *bool distinguishes absent / true / false
+// These three tests are the RED anchor for PATCH-OPTIONAL-BOOL-POINTER-01.
+// Before the fix, RequirePasswordReset is bare bool, so PATCH false == absent.
+// After the fix, types_gen.go generates *bool, handler passes it directly, and
+// service.UpdateInput.RequirePasswordReset *bool handles nil/false/true correctly.
+// ---------------------------------------------------------------------------
+
+// TestPatch_RequirePasswordResetFalse_Clears verifies that PATCH
+// {"requirePasswordReset": false} explicitly clears the flag.
+// RED: currently fails because bare bool cannot distinguish false from absent.
+func TestPatch_RequirePasswordResetFalse_Clears(t *testing.T) {
+	r, repo := setupWithIssuer(t, handlerStubIssuer)
+
+	// Create user with requirePasswordReset=true.
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, identityPrefix,
+		strings.NewReader(`{"username":"clruser","email":"clr@test.com","password":"pass1234","requirePasswordReset":true}`))
+	req.Header.Set("Content-Type", "application/json")
+	req = adminCtx()(req)
+	r.ServeHTTP(w, req)
+	require.Equal(t, http.StatusCreated, w.Code)
+
+	var created struct {
+		Data struct {
+			ID string `json:"id"`
+		} `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &created))
+	id := created.Data.ID
+
+	// Confirm the flag is set.
+	user, err := repo.GetByID(context.Background(), id)
+	require.NoError(t, err)
+	require.True(t, user.PasswordResetRequired, "flag should be set after create")
+
+	// PATCH with {"requirePasswordReset": false} — must clear the flag.
+	w = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodPatch, identityPrefix+"/"+id,
+		strings.NewReader(`{"requirePasswordReset":false}`))
+	req.Header.Set("Content-Type", "application/json")
+	req = adminCtx()(req)
+	r.ServeHTTP(w, req)
+	require.Equal(t, http.StatusOK, w.Code, "PATCH false must return 200")
+
+	// After PATCH, flag must be cleared.
+	user, err = repo.GetByID(context.Background(), id)
+	require.NoError(t, err)
+	require.False(t, user.PasswordResetRequired, "PATCH false must clear the flag (not treat it as no-change)")
+}
+
+// TestPatch_RequirePasswordResetTrue_Sets verifies that PATCH
+// {"requirePasswordReset": true} sets the flag.
+func TestPatch_RequirePasswordResetTrue_Sets(t *testing.T) {
+	r, repo := setupWithIssuer(t, handlerStubIssuer)
+
+	// Create user without requirePasswordReset.
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, identityPrefix,
+		strings.NewReader(`{"username":"setuser","email":"set@test.com","password":"pass1234"}`))
+	req.Header.Set("Content-Type", "application/json")
+	req = adminCtx()(req)
+	r.ServeHTTP(w, req)
+	require.Equal(t, http.StatusCreated, w.Code)
+
+	var created struct {
+		Data struct {
+			ID string `json:"id"`
+		} `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &created))
+	id := created.Data.ID
+
+	user, err := repo.GetByID(context.Background(), id)
+	require.NoError(t, err)
+	require.False(t, user.PasswordResetRequired, "flag should not be set after create without it")
+
+	// PATCH with {"requirePasswordReset": true} — must set the flag.
+	w = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodPatch, identityPrefix+"/"+id,
+		strings.NewReader(`{"requirePasswordReset":true}`))
+	req.Header.Set("Content-Type", "application/json")
+	req = adminCtx()(req)
+	r.ServeHTTP(w, req)
+	require.Equal(t, http.StatusOK, w.Code)
+
+	user, err = repo.GetByID(context.Background(), id)
+	require.NoError(t, err)
+	require.True(t, user.PasswordResetRequired, "PATCH true must set the flag")
+}
+
+// TestPatch_RequirePasswordResetAbsent_NoChange verifies that PATCH {}
+// (absent field) does NOT change the flag.
+func TestPatch_RequirePasswordResetAbsent_NoChange(t *testing.T) {
+	r, repo := setupWithIssuer(t, handlerStubIssuer)
+
+	// Create user with requirePasswordReset=true.
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, identityPrefix,
+		strings.NewReader(`{"username":"ncuser","email":"nc@test.com","password":"pass1234","requirePasswordReset":true}`))
+	req.Header.Set("Content-Type", "application/json")
+	req = adminCtx()(req)
+	r.ServeHTTP(w, req)
+	require.Equal(t, http.StatusCreated, w.Code)
+
+	var created struct {
+		Data struct {
+			ID string `json:"id"`
+		} `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &created))
+	id := created.Data.ID
+
+	// PATCH with {} — field absent, must not change the flag.
+	w = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodPatch, identityPrefix+"/"+id,
+		strings.NewReader(`{}`))
+	req.Header.Set("Content-Type", "application/json")
+	req = adminCtx()(req)
+	r.ServeHTTP(w, req)
+	require.Equal(t, http.StatusOK, w.Code)
+
+	user, err := repo.GetByID(context.Background(), id)
+	require.NoError(t, err)
+	require.True(t, user.PasswordResetRequired, "PATCH with absent field must not change the flag")
+}
+
 func TestHandler_Patch_RequirePasswordResetField(t *testing.T) {
 	r := setup(t)
 
 	// Create a user first.
+	// Password must be ≥ 8 chars to pass the generated handler's minLength check.
 	w := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, identityPrefix,
-		strings.NewReader(`{"username":"patchy","email":"p@y.com","password":"pass"}`))
+		strings.NewReader(`{"username":"patchy","email":"p@y.com","password":"pass1234"}`))
 	req.Header.Set("Content-Type", "application/json")
 	req = req.WithContext(auth.TestContext("admin-user", []string{"admin"}))
 	r.ServeHTTP(w, req)

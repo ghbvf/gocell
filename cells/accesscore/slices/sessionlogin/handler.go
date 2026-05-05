@@ -1,63 +1,60 @@
 package sessionlogin
 
 import (
-	"net/http"
+	"context"
 
 	"github.com/ghbvf/gocell/cells/accesscore/internal/dto"
+	logingen "github.com/ghbvf/gocell/generated/contracts/http/auth/login/v1"
 	kcell "github.com/ghbvf/gocell/kernel/cell"
-	"github.com/ghbvf/gocell/kernel/wrapper"
-	"github.com/ghbvf/gocell/pkg/httputil"
-	"github.com/ghbvf/gocell/runtime/auth"
 )
 
-// specLogin declares the contract for the session-login endpoint, cross-checked
-// against contracts/http/auth/login/v1/contract.yaml by FMT-18.
-var specLogin = wrapper.ContractSpec{
-	ID: "http.auth.login.v1", Kind: "http", Transport: "http",
-	Method: "POST", Path: "/api/v1/access/sessions/login",
-}
+// LoginAdapter implements logingen.Service for http.auth.login.v1.
+// It adapts the slice-internal Service (Login takes LoginInput) to the
+// generated interface (Login takes *logingen.Request).
+type LoginAdapter struct{ S *Service }
 
-// Handler provides HTTP endpoints for session login.
-type Handler struct {
-	svc *Service
-}
-
-// NewHandler creates a session-login Handler.
-func NewHandler(svc *Service) *Handler {
-	return &Handler{svc: svc}
-}
-
-// HandleLogin handles POST /api/v1/access/sessions/login.
-func (h *Handler) HandleLogin(w http.ResponseWriter, r *http.Request) {
-	var req struct {
-		Username string `json:"username"`
-		Password string `json:"password"`
-	}
-	if err := httputil.DecodeJSONStrict(r, &req, httputil.DefaultDecodeJSONLimit); err != nil {
-		httputil.WriteError(r.Context(), w, err)
-		return
-	}
-
-	pair, err := h.svc.Login(r.Context(), LoginInput{
-		Username: req.Username, Password: req.Password,
+// Login implements logingen.Service. The generated handler already validates
+// and decodes username+password from the request body.
+func (a LoginAdapter) Login(ctx context.Context, req *logingen.Request) (*logingen.Response, error) {
+	pair, err := a.S.Login(ctx, LoginInput{
+		Username: req.Username,
+		Password: req.Password,
 	})
 	if err != nil {
-		httputil.WriteError(r.Context(), w, err)
-		return
+		return nil, err
 	}
-
-	httputil.WriteJSON(w, http.StatusCreated, map[string]any{"data": dto.ToTokenPairResponse(pair)})
+	return &logingen.Response{
+		Data: toLoginResponseData(pair),
+	}, nil
 }
 
-// RegisterRoutes registers the session-login route on mux. Login is a public
-// endpoint (no JWT required): callers identify themselves via username+password.
-func (h *Handler) RegisterRoutes(mux kcell.RouteHandler) error {
-	if err := auth.Mount(mux, auth.Route{
-		Contract: specLogin,
-		Handler:  http.HandlerFunc(h.HandleLogin),
-		Public:   true,
-	}); err != nil {
-		return err
+// toLoginResponseData converts an internal TokenPair to the generated contract DTO.
+func toLoginResponseData(p dto.TokenPair) *logingen.ResponseData {
+	return &logingen.ResponseData{
+		AccessToken:           p.AccessToken,
+		RefreshToken:          p.RefreshToken,
+		ExpiresAt:             p.ExpiresAt.Format("2006-01-02T15:04:05Z07:00"),
+		SessionId:             p.SessionID,
+		UserId:                p.UserID,
+		PasswordResetRequired: p.PasswordResetRequired,
 	}
-	return nil
+}
+
+// Handler is the route handler for the sessionlogin slice.
+// The generated handler emits Public:true so no JWT is required for this route.
+type Handler struct {
+	loginH *logingen.Handler
+}
+
+// NewHandler creates a sessionlogin Handler using the generated login handler.
+// No policy argument: the login endpoint is Public (no JWT required).
+func NewHandler(svc *Service) *Handler {
+	return &Handler{
+		loginH: logingen.NewHandler(LoginAdapter{svc}),
+	}
+}
+
+// RegisterRoutes mounts the login contract handler on mux.
+func (h *Handler) RegisterRoutes(mux kcell.RouteHandler) error {
+	return h.loginH.RegisterRoutes(mux)
 }

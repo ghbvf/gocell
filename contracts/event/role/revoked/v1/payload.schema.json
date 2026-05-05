@@ -10,8 +10,7 @@
       "type": "string"
     },
     "action": {
-      "type": "string",
-      "const": "revoked"
+      "type": "string"
     }
   },
   "required": [

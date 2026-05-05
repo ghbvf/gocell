@@ -3,6 +3,7 @@ kind: http
 ownerCell: configcore
 consistencyLevel: L1
 lifecycle: active
+codegen: true
 endpoints:
   server: configcore
   clients:

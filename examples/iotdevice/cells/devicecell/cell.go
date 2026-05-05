@@ -16,6 +16,15 @@ import (
 	devicelist "github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/slices/devicelist"
 	deviceregister "github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/slices/deviceregister"
 	devicestatus "github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/slices/devicestatus"
+	ackcontract "github.com/ghbvf/gocell/generated/contracts/http/device/command/ack/v1"
+	dequeuecontract "github.com/ghbvf/gocell/generated/contracts/http/device/command/dequeue/v1"
+	enqueuecontract "github.com/ghbvf/gocell/generated/contracts/http/device/command/enqueue/v1"
+	extendleasecontract "github.com/ghbvf/gocell/generated/contracts/http/device/command/extend-lease/v1"
+	reportcontract "github.com/ghbvf/gocell/generated/contracts/http/device/command/report/v1"
+	listcontract "github.com/ghbvf/gocell/generated/contracts/http/device/list/v1"
+	registercontract "github.com/ghbvf/gocell/generated/contracts/http/device/register/v1"
+	statuscontract "github.com/ghbvf/gocell/generated/contracts/http/device/status/v1"
+	internallistcontract "github.com/ghbvf/gocell/generated/contracts/http/internalapi/devicecommands/list/v1"
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/clock"
 	kcommand "github.com/ghbvf/gocell/kernel/command"
@@ -24,6 +33,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/query"
+	"github.com/ghbvf/gocell/runtime/auth"
 	commandruntime "github.com/ghbvf/gocell/runtime/command"
 )
 
@@ -94,17 +104,26 @@ type DeviceCell struct {
 	clk             clock.Clock // injected from reg.Config during initInternal
 
 	// +slice:route:slice=deviceregister,subPath=/api/v1/devices
-	registerHandler *deviceregister.Handler
+	registerHandler *registercontract.Handler
 
 	// +slice:route:slice=devicecommand,subPath=/api/v1/devices
-	// +slice:route:slice=devicecommand,listener=cell.InternalListener,subPath=,method=RegisterInternalRoutes
-	commandHandler *devicecommand.Handler
+	commandEnqueueHandler *enqueuecontract.Handler
+	// +slice:route:slice=devicecommand,subPath=/api/v1/devices
+	commandDequeueHandler *dequeuecontract.Handler
+	// +slice:route:slice=devicecommand,subPath=/api/v1/devices
+	commandReportHandler *reportcontract.Handler
+	// +slice:route:slice=devicecommand,subPath=/api/v1/devices
+	commandAckHandler *ackcontract.Handler
+	// +slice:route:slice=devicecommand,subPath=/api/v1/devices
+	commandExtendLeaseHandler *extendleasecontract.Handler
+	// +slice:route:slice=devicecommand,listener=cell.InternalListener,subPath=
+	commandInternalHandler *internallistcontract.Handler
 
 	// +slice:route:slice=devicestatus,subPath=/api/v1/devices
-	statusHandler *devicestatus.Handler
+	statusHandler *statuscontract.Handler
 
 	// +slice:route:slice=devicelist,subPath=/api/v1/devices
-	listHandler *devicelist.Handler
+	listHandler *listcontract.Handler
 }
 
 // RegisterCommandQueue implements kernel/command.QueueRegistrar. The supplied
@@ -225,11 +244,12 @@ func (c *DeviceCell) initDeps(durabilityMode cell.DurabilityMode) error {
 // initSlices constructs all 4 device slices and the command sweeper.
 func (c *DeviceCell) initSlices(durabilityMode cell.DurabilityMode) error {
 	// device-register slice
-	registerSvc := deviceregister.NewService(c.deviceRepo, c.logger,
+	registerSvc := deviceregister.NewService(
+		c.deviceRepo, c.logger,
 		deviceregister.WithEmitter(c.emitter),
 		deviceregister.WithClock(c.clk),
 	)
-	c.registerHandler = deviceregister.NewHandler(registerSvc)
+	c.registerHandler = registercontract.NewHandler(registerSvc)
 	c.AddSlice(cell.NewBaseSlice("deviceregister", "devicecell", cell.L4))
 
 	// device-command slice: uses commandtest.InMemQueue as the command store in
@@ -243,14 +263,24 @@ func (c *DeviceCell) initSlices(durabilityMode cell.DurabilityMode) error {
 		c.commandQueue = commandtest.NewInMemQueue()
 	}
 	cmdQueue := c.commandQueue
-	commandSvc, err := devicecommand.NewService(cmdQueue, c.deviceRepo, c.cursorCodec, c.logger,
+	commandSvc, err := devicecommand.NewService(
+		cmdQueue, c.deviceRepo, c.cursorCodec, c.logger,
 		query.RunModeForDemo(durabilityMode == cell.DurabilityDemo),
 		devicecommand.WithClock(c.clk),
 	)
 	if err != nil {
 		return fmt.Errorf("device-command: %w", err)
 	}
-	c.commandHandler = devicecommand.NewHandler(commandSvc)
+	// enqueue: only admin/operator may send commands to devices.
+	c.commandEnqueueHandler = enqueuecontract.NewHandler(commandSvc, auth.AnyRole(dto.RoleAdmin, dto.RoleOperator))
+	// dequeue/report/ack/extend-lease: device polls/reports on its own commands
+	// (subject == path {id}); admin and operator may also access for observability.
+	c.commandDequeueHandler = dequeuecontract.NewHandler(commandSvc, auth.SelfOr("id", dto.RoleAdmin, dto.RoleOperator))
+	c.commandReportHandler = reportcontract.NewHandler(commandSvc, auth.SelfOr("id", dto.RoleAdmin, dto.RoleOperator))
+	c.commandAckHandler = ackcontract.NewHandler(commandSvc, auth.SelfOr("id", dto.RoleAdmin, dto.RoleOperator))
+	c.commandExtendLeaseHandler = extendleasecontract.NewHandler(commandSvc, auth.SelfOr("id", dto.RoleAdmin, dto.RoleOperator))
+	// internallist: /internal/v1/ path; Clients=["devicecell"] auto-injects RequireCallerCell via auth.Mount.
+	c.commandInternalHandler = internallistcontract.NewHandler(commandSvc, nil)
 	c.commandSweeper = commandruntime.NewSweeperLifecycle("devicecommand.sweeper", &kcommand.Sweeper{
 		Scanner:  cmdQueue,
 		Queue:    cmdQueue,
@@ -264,7 +294,9 @@ func (c *DeviceCell) initSlices(durabilityMode cell.DurabilityMode) error {
 
 	// device-status slice
 	statusSvc := devicestatus.NewService(c.deviceRepo, c.logger)
-	c.statusHandler = devicestatus.NewHandler(statusSvc)
+	// status: admin and operator may read any device's status; a device may only
+	// read its own status (path {id} must match the token subject).
+	c.statusHandler = statuscontract.NewHandler(statusSvc, auth.SelfOr("id", dto.RoleAdmin, dto.RoleOperator))
 	c.AddSlice(cell.NewBaseSlice("devicestatus", "devicecell", cell.L0))
 
 	// device-list slice
@@ -273,7 +305,7 @@ func (c *DeviceCell) initSlices(durabilityMode cell.DurabilityMode) error {
 	if err != nil {
 		return fmt.Errorf("device-list: %w", err)
 	}
-	c.listHandler = devicelist.NewHandler(listSvc)
+	c.listHandler = listcontract.NewHandler(listSvc, auth.AnyRole("admin"))
 	c.AddSlice(cell.NewBaseSlice("devicelist", "devicecell", cell.L0))
 	return nil
 }

@@ -1,34 +1,19 @@
 package configpublish
 
 import (
-	"net/http"
+	"context"
 	"time"
 
 	"github.com/ghbvf/gocell/cells/configcore/internal/domain"
 	"github.com/ghbvf/gocell/cells/configcore/internal/dto"
+	configpublishgen "github.com/ghbvf/gocell/generated/contracts/http/config/publish/v1"
+	rollbackgen "github.com/ghbvf/gocell/generated/contracts/http/config/rollback/v1"
 	"github.com/ghbvf/gocell/kernel/cell"
-	"github.com/ghbvf/gocell/kernel/wrapper"
-	"github.com/ghbvf/gocell/pkg/httputil"
 	"github.com/ghbvf/gocell/runtime/auth"
 )
 
-// Contract spec literals — cross-checked against
-// contracts/http/config/{publish,rollback}/v1/contract.yaml by FMT-18.
-var (
-	specConfigPublish = wrapper.ContractSpec{
-		ID: "http.config.publish.v1", Kind: "http", Transport: "http",
-		Method: "POST", Path: "/api/v1/config/{key}/publish",
-	}
-	specConfigRollback = wrapper.ContractSpec{
-		ID: "http.config.rollback.v1", Kind: "http", Transport: "http",
-		Method: "POST", Path: "/api/v1/config/{key}/rollback",
-	}
-)
-
-// ConfigVersionResponse is the public DTO for ConfigVersion.
-// Sensitive snapshots have Value redacted to dto.RedactedValue; the Sensitive
-// flag is always surfaced so clients can render appropriately (mirrors
-// dto.ToConfigEntryResponse — see H2-2 CONFIGPUBLISH-REDACT-01).
+// ConfigVersionResponse is the public DTO for ConfigVersion, retained for
+// unit tests that verify the conversion function directly.
 type ConfigVersionResponse struct {
 	ID          string     `json:"id"`
 	ConfigID    string     `json:"configId"`
@@ -52,71 +37,89 @@ func toConfigVersionResponse(v *domain.ConfigVersion) ConfigVersionResponse {
 	}
 }
 
-// Handler provides HTTP endpoints for config publish operations.
+// PublishAdapter wraps Service to implement configpublishgen.Service for http.config.publish.v1.
+type PublishAdapter struct{ S *Service }
+
+// Publish implements configpublishgen.Service. Key comes from path param, already decoded by handler_gen.
+func (a PublishAdapter) Publish(ctx context.Context, req *configpublishgen.Request) (*configpublishgen.Response, error) {
+	version, err := a.S.Publish(ctx, req.Key)
+	if err != nil {
+		return nil, err
+	}
+	return &configpublishgen.Response{Data: toPublishResponseData(version)}, nil
+}
+
+// RollbackAdapter wraps Service to implement rollbackgen.Service for http.config.rollback.v1.
+type RollbackAdapter struct{ S *Service }
+
+// Rollback implements rollbackgen.Service. Key comes from path param; Version from body.
+func (a RollbackAdapter) Rollback(ctx context.Context, req *rollbackgen.Request) (*rollbackgen.Response, error) {
+	entry, err := a.S.Rollback(ctx, req.Key, int(req.Version))
+	if err != nil {
+		return nil, err
+	}
+	return &rollbackgen.Response{Data: toRollbackResponseData(entry)}, nil
+}
+
+// Handler is the composite route handler for the configpublish slice.
 type Handler struct {
-	svc *Service
+	publishH  *configpublishgen.Handler
+	rollbackH *rollbackgen.Handler
 }
 
-// NewHandler creates a config-publish Handler.
+// NewHandler creates a configpublish Handler with generated per-contract handlers.
+// Both endpoints are admin-only.
 func NewHandler(svc *Service) *Handler {
-	return &Handler{svc: svc}
+	policy := auth.AnyRole(auth.RoleAdmin)
+	return &Handler{
+		publishH:  configpublishgen.NewHandler(PublishAdapter{svc}, policy),
+		rollbackH: rollbackgen.NewHandler(RollbackAdapter{svc}, policy),
+	}
 }
 
-// RegisterRoutes registers configpublish routes with admin-only policies
-// via auth.Mount so every request emits a contract-tagged span.
+// RegisterRoutes mounts both configpublish contracts on mux.
 func (h *Handler) RegisterRoutes(mux cell.RouteHandler) error {
-	if err := auth.Mount(mux, auth.Route{
-		Contract: specConfigPublish,
-		Handler:  http.HandlerFunc(h.HandlePublish),
-		Policy:   auth.AnyRole(auth.RoleAdmin),
-	}); err != nil {
+	if err := h.publishH.RegisterRoutes(mux); err != nil {
 		return err
 	}
-	if err := auth.Mount(mux, auth.Route{
-		Contract: specConfigRollback,
-		Handler:  http.HandlerFunc(h.HandleRollback),
-		Policy:   auth.AnyRole(auth.RoleAdmin),
-	}); err != nil {
-		return err
-	}
-	return nil
+	return h.rollbackH.RegisterRoutes(mux)
 }
 
-// HandlePublish handles POST /{key}/publish — publishes a config entry.
-// Admin-only: publishing changes the active config version, a high-risk
-// integrity-affecting operation. Default-deny per K8s/Kratos/go-zero
-// convention; authentication alone is not enough.
-func (h *Handler) HandlePublish(w http.ResponseWriter, r *http.Request) {
-	key := r.PathValue("key")
-
-	version, err := h.svc.Publish(r.Context(), key)
-	if err != nil {
-		httputil.WriteError(r.Context(), w, err)
-		return
+// toPublishResponseData converts a domain.ConfigVersion to configpublishgen.ResponseData.
+func toPublishResponseData(v *domain.ConfigVersion) *configpublishgen.ResponseData {
+	if v == nil {
+		return &configpublishgen.ResponseData{}
 	}
-
-	httputil.WriteJSON(w, http.StatusCreated, map[string]any{"data": toConfigVersionResponse(version)})
+	value := v.Value
+	if v.Sensitive {
+		value = dto.RedactedValue
+	}
+	d := &configpublishgen.ResponseData{
+		ID:        v.ID,
+		ConfigId:  v.ConfigID,
+		Version:   int64(v.Version),
+		Value:     value,
+		Sensitive: v.Sensitive,
+	}
+	if v.PublishedAt != nil {
+		d.PublishedAt = v.PublishedAt.Format(time.RFC3339)
+	}
+	return d
 }
 
-// HandleRollback handles POST /{key}/rollback — rolls back a config entry.
-// Admin-only: rollback re-activates a prior snapshot and is at least as
-// privileged as publish. See HandlePublish for the rationale.
-func (h *Handler) HandleRollback(w http.ResponseWriter, r *http.Request) {
-	key := r.PathValue("key")
-
-	var req struct {
-		Version int `json:"version"`
+// toRollbackResponseData converts a domain.ConfigEntry to rollbackgen.ResponseData.
+func toRollbackResponseData(e *domain.ConfigEntry) *rollbackgen.ResponseData {
+	value := e.Value
+	if e.Sensitive {
+		value = dto.RedactedValue
 	}
-	if err := httputil.DecodeJSONStrict(r, &req, httputil.DefaultDecodeJSONLimit); err != nil {
-		httputil.WriteError(r.Context(), w, err)
-		return
+	return &rollbackgen.ResponseData{
+		ID:        e.ID,
+		Key:       e.Key,
+		Value:     value,
+		Sensitive: e.Sensitive,
+		Version:   int64(e.Version),
+		CreatedAt: e.CreatedAt.Format(time.RFC3339),
+		UpdatedAt: e.UpdatedAt.Format(time.RFC3339),
 	}
-
-	entry, err := h.svc.Rollback(r.Context(), key, req.Version)
-	if err != nil {
-		httputil.WriteError(r.Context(), w, err)
-		return
-	}
-
-	httputil.WriteJSON(w, http.StatusOK, map[string]any{"data": dto.ToConfigEntryResponse(entry)})
 }

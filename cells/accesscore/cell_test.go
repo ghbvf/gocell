@@ -1063,6 +1063,35 @@ func TestAccessCore_PasswordResetExempt_PropagatesViaRouter(t *testing.T) {
 		wantMethod, wantPath, r.DeclaredAuthMetas())
 }
 
+// TestAccessCore_RegisterSubscriptions verifies that Init registers the expected
+// set of event subscriptions. Mirrors the auditcore/configcore pattern (T-6).
+// accesscore subscribes to 4 events: config.entry-deleted, config.entry-upserted,
+// role.assigned, role.revoked.
+func TestAccessCore_RegisterSubscriptions(t *testing.T) {
+	c := newTestCell(t)
+	ctx := context.Background()
+	rec := cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo)
+	require.NoError(t, c.Init(ctx, rec))
+
+	snap := rec.Snapshot()
+	assert.Equal(t, 4, len(snap.Subscriptions),
+		"accesscore registers 4 subscriptions: config.entry-deleted, config.entry-upserted, role.assigned, role.revoked")
+
+	topicSet := make(map[string]bool, len(snap.Subscriptions))
+	for _, sub := range snap.Subscriptions {
+		topicSet[sub.Spec.Topic] = true
+	}
+	// Codegen pattern: Topic == ContractID after PR-CODEGEN-FULL-MIGRATION-FU.
+	assert.True(t, topicSet["event.config.entry-deleted.v1"],
+		"must subscribe to event.config.entry-deleted.v1")
+	assert.True(t, topicSet["event.config.entry-upserted.v1"],
+		"must subscribe to event.config.entry-upserted.v1")
+	assert.True(t, topicSet["event.role.assigned.v1"],
+		"must subscribe to event.role.assigned.v1")
+	assert.True(t, topicSet["event.role.revoked.v1"],
+		"must subscribe to event.role.revoked.v1")
+}
+
 // noopPublisher implements eventbus.Publisher for tests that do not care
 // about published events. Keeps AccessCore.Init happy in demo mode.
 type noopPublisher struct{}

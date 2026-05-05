@@ -14,37 +14,13 @@ import (
 
 	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/domain"
 	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/mem"
+	statuscontract "github.com/ghbvf/gocell/generated/contracts/http/device/status/v1"
 )
 
-func TestToDeviceStatusResponse_NilInput(t *testing.T) {
-	var got DeviceStatusResponse
-	assert.NotPanics(t, func() { got = toDeviceStatusResponse(nil) })
-	assert.Zero(t, got.ID)
-}
-
-func TestDeviceStatusResponse_Fields(t *testing.T) {
-	now := time.Now()
-	device := &domain.Device{ID: "dev-1", Name: "sensor-a", Status: "online", LastSeen: now}
-	resp := toDeviceStatusResponse(device)
-
-	assert.Equal(t, "dev-1", resp.ID)
-	assert.Equal(t, "sensor-a", resp.Name)
-	assert.Equal(t, "online", resp.Status)
-	assert.Equal(t, now, resp.LastSeen)
-
-	b, err := json.Marshal(resp)
-	require.NoError(t, err)
-	s := string(b)
-	assert.Contains(t, s, `"id"`)
-	assert.Contains(t, s, `"name"`)
-	assert.Contains(t, s, `"status"`)
-	assert.Contains(t, s, `"lastSeen"`)
-}
-
-func setupStatusHandler() (*Handler, *mem.DeviceRepository) {
+func setupStatusHandler() (*statuscontract.Handler, *mem.DeviceRepository) {
 	repo := mem.NewDeviceRepository()
 	svc := NewService(repo, slog.Default())
-	return NewHandler(svc), repo
+	return statuscontract.NewHandler(svc, nil), repo // nil policy: tests call ServeHTTP directly, no auth middleware
 }
 
 func TestHandleGetStatus(t *testing.T) {
@@ -96,7 +72,7 @@ func TestHandleGetStatus(t *testing.T) {
 			w := httptest.NewRecorder()
 			req := httptest.NewRequest(http.MethodGet, "/devices/"+tc.deviceID+"/status", nil)
 			req.SetPathValue("id", tc.deviceID)
-			h.HandleGetStatus(w, req)
+			h.ServeHTTP(w, req)
 
 			assert.Equal(t, tc.wantStatus, w.Code)
 			if tc.checkBody != nil {
@@ -104,4 +80,25 @@ func TestHandleGetStatus(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestService_Status_LastSeenRFC3339(t *testing.T) {
+	repo := mem.NewDeviceRepository()
+	now := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	_ = repo.Create(context.Background(), &domain.Device{
+		ID: "dev-ts", Name: "ts-test", Status: "online", LastSeen: now,
+	})
+	svc := NewService(repo, slog.Default())
+	h := statuscontract.NewHandler(svc, nil)
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.SetPathValue("id", "dev-ts")
+	h.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+	var resp map[string]any
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	data := resp["data"].(map[string]any)
+	assert.Equal(t, "2026-01-02T03:04:05Z", data["lastSeen"])
 }

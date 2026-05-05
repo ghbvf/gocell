@@ -3,6 +3,7 @@ kind: http
 ownerCell: accesscore
 consistencyLevel: L2
 lifecycle: active
+codegen: true
 triggers:
   - event.user.updated.v1
 endpoints:

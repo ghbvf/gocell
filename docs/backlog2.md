@@ -312,6 +312,33 @@ Wave G — 运行时授权深度（依赖 Wave A 决策结果，~16h）
 
 ---
 
+## §12 PR #376 follow-up 登记
+
+### PR-V1-EVENT-TYPED-PAYLOAD-CODEGEN
+
+**触发条件**：当前 17 个 event consumer 各自手写 payload unmarshal + JSON Schema validate（每处 ~30 行重复），扩散到 ≥5 cell consumer 已达升级阈值。
+
+**目标**：contractgen 给 kind=event contract 多产 `payload_gen.go`（typed `Payload struct` + JSON Schema validator）+ subscription.tmpl 升级为 typed handler 入口：
+
+```go
+type EventHandler func(ctx context.Context, payload *Payload, entry outbox.Entry) outbox.HandleResult
+func NewSubscription(typedH EventHandler, group, slice string) *Subscription
+```
+
+内部把 typed handler 封装成 raw EntryHandler（含 unmarshal + payload schema validate）。consumer 删本地 unmarshal/validate 重复。
+
+**估时**：16h dev + 8h review
+
+**依赖**：PR #376（schemavalidate runtime ready）
+
+**对标**：cloudevents/sdk-go event.DataAs / ThreeDotsLabs/watermill components/cqrs typed handler
+
+**Cx**：Cx3（subscription.tmpl + 17 event payload codegen + 17 consumer 调用点）
+
+**为什么不在本 PR**：(a) 工时大不属"范围内紧密相关小工作"；(b) typed payload codegen 是新模块（payload.tmpl + decoder helpers）与本 PR 当前修复无文件交叉；(c) feedback rule "PR 范围切割必须显式 backlog" 适用。
+
+---
+
 ## §11 后续动作
 
 1. **本文件作为 backlog2 索引**，不再扩展；条目修复时直接在表格行追加 `✅ #PR` 标记

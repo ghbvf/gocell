@@ -1,5 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$comment": "unevaluatedProperties:false is a producer-side guard enforced at contract-test time (forbids accidental leakage of state-bearing fields like config value into the event bus). Runtime consumer decoder is intentionally lenient (decodeLenient) per ADR-202605031600 §4 metadata-only event policy — schema strictness and decoder lenience are complementary layers, not a double semantics drift.",
   "title": "event.config.entry-deleted.v1.payload",
   "type": "object",
   "description": "Emitted after config Delete. Metadata-only: carries key + version. version is the version of the deleted entry and is used by subscribers for monotonic tombstone protection — a replayed older upsert (at-least-once delivery) must be rejected when version <= tombstone version.",

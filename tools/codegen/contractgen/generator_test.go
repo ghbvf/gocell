@@ -181,21 +181,55 @@ func TestGenerate_WriteMode_HTTP(t *testing.T) {
 	}
 }
 
-// TestGenerate_WriteMode_Event verifies that event contracts produce 2 files
-// (types_gen.go + iface_gen.go) but NOT handler_gen.go.
+// TestGenerate_WriteMode_Event verifies that event contracts produce 4 files
+// (types_gen.go + iface_gen.go + spec_gen.go + subscription_gen.go) but NOT handler_gen.go.
+// It also asserts key content invariants: spec_gen.go uses lowercase "var spec" (private),
+// and subscription_gen.go exposes a 3-arg NewSubscription(handler, consumerGroup, sliceID).
 func TestGenerate_WriteMode_Event(t *testing.T) {
 	t.Parallel()
 	root, p := setupEventRoot(t)
 
 	res := mustGenerate(t, root, p, Options{})
 
-	// Event contract → 2 files only.
-	if len(res.Generated) != 2 {
-		t.Errorf("expected 2 generated files for event, got %d: %v", len(res.Generated), res.Generated)
+	// Event contract → 4 files: types, iface, spec, subscription.
+	if len(res.Generated) != 4 {
+		t.Errorf("expected 4 generated files for event, got %d: %v", len(res.Generated), res.Generated)
 	}
 	for _, path := range res.Generated {
 		if strings.HasSuffix(path, "handler_gen.go") {
 			t.Errorf("event contract should not generate handler_gen.go, but got: %s", path)
+		}
+	}
+	// Verify spec_gen.go and subscription_gen.go are present.
+	filesByName := make(map[string]string) // basename → absolute path
+	for _, path := range res.Generated {
+		filesByName[filepath.Base(path)] = path
+	}
+	for _, want := range []string{"types_gen.go", "iface_gen.go", "spec_gen.go", "subscription_gen.go"} {
+		if _, ok := filesByName[want]; !ok {
+			t.Errorf("missing expected file: %s", want)
+		}
+	}
+
+	// spec_gen.go: must declare "var spec" (lowercase — private to package).
+	if specPath, ok := filesByName["spec_gen.go"]; ok {
+		content, err := os.ReadFile(specPath) //nolint:gosec // test reads its own tmp file
+		if err != nil {
+			t.Fatalf("read spec_gen.go: %v", err)
+		}
+		if !strings.Contains(string(content), "var spec = wrapper.ContractSpec{") {
+			t.Errorf("spec_gen.go should contain 'var spec = wrapper.ContractSpec{' (private), content:\n%s", string(content))
+		}
+	}
+
+	// subscription_gen.go: must expose NewSubscription with 3 args (handler, consumerGroup, sliceID).
+	if subPath, ok := filesByName["subscription_gen.go"]; ok {
+		content, err := os.ReadFile(subPath) //nolint:gosec // test reads its own tmp file
+		if err != nil {
+			t.Fatalf("read subscription_gen.go: %v", err)
+		}
+		if !strings.Contains(string(content), "func NewSubscription(handler outbox.EntryHandler, consumerGroup, sliceID string)") {
+			t.Errorf("subscription_gen.go should contain 3-arg NewSubscription signature, content:\n%s", string(content))
 		}
 	}
 }
@@ -339,9 +373,14 @@ func TestGenerate_AllCodegenTrue_MultipleContracts(t *testing.T) {
 		t.Fatalf("Generate: %v", err)
 	}
 
-	// http.order.ping.v1 → 3 files; event.item-created.v1 → 2 files → total 5.
-	if len(res.Generated) != 5 {
-		t.Errorf("expected 5 total generated files, got %d: %v", len(res.Generated), res.Generated)
+	// http.order.ping.v1 → types_gen + iface_gen + handler_gen = 3 files.
+	// event.item-created.v1 → types_gen + iface_gen + spec_gen + subscription_gen = 4 files.
+	httpFiles := 3  // types_gen, iface_gen, handler_gen
+	eventFiles := 4 // types_gen, iface_gen, spec_gen, subscription_gen
+	wantTotal := httpFiles + eventFiles
+	if len(res.Generated) != wantTotal {
+		t.Errorf("expected %d total generated files (http=%d + event=%d), got %d: %v",
+			wantTotal, httpFiles, eventFiles, len(res.Generated), res.Generated)
 	}
 }
 
@@ -473,7 +512,7 @@ func TestRenderContractArtifacts_HTTP(t *testing.T) {
 }
 
 // TestRenderContractArtifacts_Event verifies that RenderContractArtifacts
-// returns 2 artifacts for an event contract (no handler_gen.go).
+// returns 4 artifacts for an event contract (types, iface, spec, subscription).
 func TestRenderContractArtifacts_Event(t *testing.T) {
 	t.Parallel()
 	root, p := setupEventRoot(t)
@@ -482,12 +521,19 @@ func TestRenderContractArtifacts_Event(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RenderContractArtifacts: %v", err)
 	}
-	if len(artifacts) != 2 {
-		t.Errorf("expected 2 artifacts for event contract, got %d", len(artifacts))
+	if len(artifacts) != 4 {
+		t.Errorf("expected 4 artifacts for event contract, got %d", len(artifacts))
 	}
+	fileNames := make(map[string]bool)
 	for _, a := range artifacts {
+		fileNames[filepath.Base(a.Path)] = true
 		if filepath.Base(a.Path) == "handler_gen.go" {
 			t.Error("event contract should not produce handler_gen.go")
+		}
+	}
+	for _, want := range []string{"types_gen.go", "iface_gen.go", "spec_gen.go", "subscription_gen.go"} {
+		if !fileNames[want] {
+			t.Errorf("missing artifact: %s", want)
 		}
 	}
 }

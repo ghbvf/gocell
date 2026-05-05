@@ -3,6 +3,7 @@ kind: http
 ownerCell: accesscore
 consistencyLevel: L0
 lifecycle: active
+codegen: true
 endpoints:
   server: accesscore
   clients:
@@ -12,6 +13,8 @@ endpoints:
     path: /api/v1/access/setup/status
     successStatus: 200
     noContent: false
+    auth:
+      public: true
     responses:
       400:
         description: "Bad request — malformed JSON body or oversized payload (from co-located setup admin handler)"

@@ -5,12 +5,24 @@ import (
 	"strings"
 )
 
-// ContractSpec is the minimal subset of a contract definition that wrapper
-// needs to emit observability annotations. Cells construct the literal
-// inline next to each handler (one per HTTP route or outbox subscription)
-// and pass it into auth.Mount / eventrouter.Subscribe; governance rule
-// FMT-17 cross-references the Go literals against contracts/**.yaml at
-// validate time, so the duplication is caught statically.
+// ContractSpec is the runtime descriptor for one contract endpoint.
+// It is consumed by:
+//   - runtime/auth.Mount (HTTP route binding)
+//   - runtime/eventbus / kernel/cell.Registry.Subscribe (event subscription)
+//   - tracing span attributes (gocell.contract.id / kind / transport)
+//
+// Cells MUST NOT construct ContractSpec literals. The only valid construction
+// site is generated/contracts/**/spec_gen.go (private `var spec`).
+// Subscription/route mounting goes through the generated NewSubscription /
+// NewHandler adapters in generated/contracts/**.
+//
+// Three archtest gates enforce this invariant:
+//   - CELLS-NO-WRAPPER-CONTRACTSPEC-IMPORT-01
+//   - NO-MANUAL-CONTRACTSPEC-LITERAL-01
+//   - EVENT-SUBSCRIPTION-CONTRACTGEN-COVERAGE-01
+//
+// Replace any prior usage of the deleted `EventSpec(id, transport)` helper
+// with `<contractpkg>.NewSubscription(handler, consumerGroup, sliceID).Mount(reg)`.
 //
 // The zero value is invalid — callers must populate ID / Kind / Transport
 // and the kind-specific fields, then rely on auth.Mount / wrapper.HTTPHandler
@@ -143,31 +155,4 @@ func (s ContractSpec) validateEvent() error {
 		return fmt.Errorf("wrapper.ContractSpec[%s]: event kind must not carry Method/Path", s.ID)
 	}
 	return nil
-}
-
-// EventSpec returns a ContractSpec for a broker-backed event contract whose
-// Topic equals its ID — the common case across accesscore / auditcore /
-// configcore event subscriptions. Callers that need a Topic different from
-// the contract id (e.g. subscribing to a wildcard routing key) should keep
-// constructing the literal explicitly.
-//
-// Note for governance: FMT-18 (PR-A11 round-4 + PR246-FU1) parses both
-// wrapper.ContractSpec{...} composite literals AND wrapper.EventSpec(...)
-// call expressions via go/parser, so specs built via EventSpec are still
-// cross-checked against contracts/**/contract.yaml. FMT-18 is strict-only
-// — it runs under `gocell validate --strict` (and CI's strict job); a
-// plain `gocell validate` does not exercise the cross-check. The id
-// argument must be a string literal (or a constant whose value the AST
-// can resolve) so the validator can look up `contracts/**/contract.yaml`
-// by id and verify Kind / Method / Path agreement; otherwise FMT-18 emits
-// a WARNING and asks the author to inline the literal. Prefer EventSpec
-// when the id==topic identity is genuine and stable; the literal form
-// remains valid when Topic must diverge from ID.
-func EventSpec(id, transport string) ContractSpec {
-	return ContractSpec{
-		ID:        id,
-		Kind:      "event",
-		Transport: transport,
-		Topic:     id,
-	}
 }

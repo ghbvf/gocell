@@ -22,6 +22,13 @@ type ContractGenSpec struct {
 	Endpoint *HTTPEndpointSpec
 	// Event is non-nil when Kind == "event".
 	Event *EventEndpointSpec
+	// RequestSchemaJSON is the raw JSON content of the request schema file,
+	// compacted to a single line (no extra whitespace).
+	// Non-empty only when Kind=="http" and the contract declares schemaRefs.request.
+	// The generated handler embeds this as a Go string literal to compile the
+	// validator at construction time — no runtime file I/O, no embed.FS.
+	// Empty string means no schema validation is emitted.
+	RequestSchemaJSON string
 }
 
 // DTOSpec is one Go struct definition.
@@ -84,13 +91,28 @@ type HTTPEndpointSpec struct {
 	// HandlerMethod is the PascalCase method name on the Service interface,
 	// derived from the last domain segment, e.g. "Create", "Get", "List".
 	HandlerMethod string
-	// HasBody is true when Method is POST, PUT, or PATCH.
+	// HasBody is true when Method is POST/PUT/PATCH and the contract declares a
+	// schemaRefs.request. POST/PATCH endpoints that only use path params and have
+	// no request body schema must not call DecodeJSONStrict (empty body → 400).
 	HasBody bool
 	// IsPagination is true when the endpoint's query params are exactly
 	// cursor (string) + limit (integer) — the canonical pagination pattern.
 	// When true, the generated handler uses httputil.ParsePageParams instead
 	// of inline query param parsing.
 	IsPagination bool
+	// Clients lists the allowed caller-cell IDs from contract.yaml endpoints.clients.
+	// When non-empty, auth.Mount enforces RequireCallerCell on this route. The
+	// generated contractSpec must carry this list so the governance enforcement
+	// matches the YAML declaration.
+	Clients []string
+	// AuthPublic is true when contract.yaml endpoints.http.auth.public is set.
+	// The generated NewHandler takes no policy argument and emits
+	// auth.Route{Public: true} in RegisterRoutes.
+	AuthPublic bool
+	// AuthPasswordResetExempt is true when contract.yaml endpoints.http.auth.passwordResetExempt is set.
+	// The generated handler emits auth.Route{PasswordResetExempt: true} in RegisterRoutes.
+	// Mutually exclusive with AuthPublic.
+	AuthPasswordResetExempt bool
 }
 
 // EventEndpointSpec holds event-specific endpoint information.
@@ -119,6 +141,9 @@ type ParamSpec struct {
 	Required bool
 	// Doc is an optional hint comment.
 	Doc string
+	// Format is the json-schema format for this param, e.g. "uuid", "date-time".
+	// Used by handler.tmpl to emit httputil.ParseUUIDPathParam for uuid-format path params.
+	Format string
 	// MinLength applies to string params.
 	MinLength *int
 	// MaxLength applies to string params.

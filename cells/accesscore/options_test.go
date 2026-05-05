@@ -95,6 +95,7 @@ func TestRegisterSubscriptions(t *testing.T) {
 	for _, sub := range snap.Subscriptions {
 		groups[sub.Spec.Topic] = sub.ConsumerGroup
 	}
+	// New codegen pattern: Topic == ContractID after PR-CODEGEN-FULL-MIGRATION-FU.
 	assert.Equal(t, "accesscore", groups["event.config.entry-upserted.v1"])
 	assert.Equal(t, "accesscore", groups["event.config.entry-deleted.v1"])
 	assert.Equal(t, "accesscore-rbac-session-sync", groups["event.role.assigned.v1"])

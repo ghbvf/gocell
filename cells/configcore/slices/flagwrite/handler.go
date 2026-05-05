@@ -1,253 +1,152 @@
 package flagwrite
 
 import (
-	"fmt"
-	"net/http"
-	"strings"
+	"context"
 	"time"
 
 	"github.com/ghbvf/gocell/cells/configcore/internal/domain"
-	"github.com/ghbvf/gocell/kernel/cell"
-	"github.com/ghbvf/gocell/kernel/wrapper"
-	"github.com/ghbvf/gocell/pkg/errcode"
-	"github.com/ghbvf/gocell/pkg/httputil"
+	create "github.com/ghbvf/gocell/generated/contracts/http/config/flags/create/v1"
+	flagsdelete "github.com/ghbvf/gocell/generated/contracts/http/config/flags/delete/v1"
+	toggle "github.com/ghbvf/gocell/generated/contracts/http/config/flags/toggle/v1"
+	update "github.com/ghbvf/gocell/generated/contracts/http/config/flags/update/v1"
+	kcell "github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/runtime/auth"
 )
 
-// Contract spec literals — cross-checked against
-// contracts/http/config/flags/{create,update,toggle,delete}/v1/contract.yaml
-// by FMT-18.
-var (
-	specFlagsCreate = wrapper.ContractSpec{
-		ID: "http.config.flags.create.v1", Kind: "http", Transport: "http",
-		Method: "POST", Path: "/api/v1/flags/",
-	}
-	specFlagsUpdate = wrapper.ContractSpec{
-		ID: "http.config.flags.update.v1", Kind: "http", Transport: "http",
-		Method: "PUT", Path: "/api/v1/flags/{key}",
-	}
-	specFlagsToggle = wrapper.ContractSpec{
-		ID: "http.config.flags.toggle.v1", Kind: "http", Transport: "http",
-		Method: "POST", Path: "/api/v1/flags/{key}/toggle",
-	}
-	specFlagsDelete = wrapper.ContractSpec{
-		ID: "http.config.flags.delete.v1", Kind: "http", Transport: "http",
-		Method: "DELETE", Path: "/api/v1/flags/{key}",
-	}
-)
+// CreateAdapter wraps Service to implement create.Service for http.config.flags.create.v1.
+type CreateAdapter struct{ S *Service }
 
-// FlagWriteResponse is the DTO for a feature flag write response.
-type FlagWriteResponse struct {
-	ID                string    `json:"id"`
-	Key               string    `json:"key"`
-	Enabled           bool      `json:"enabled"`
-	RolloutPercentage int       `json:"rolloutPercentage"`
-	Description       string    `json:"description"`
-	Version           int       `json:"version"`
-	CreatedAt         time.Time `json:"createdAt"`
-	UpdatedAt         time.Time `json:"updatedAt"`
+// Create implements create.Service. Key/Enabled/RolloutPercentage/Description decoded by handler_gen.
+func (a CreateAdapter) Create(ctx context.Context, req *create.Request) (*create.Response, error) {
+	var enabled bool
+	if req.Enabled != nil {
+		enabled = *req.Enabled
+	}
+	flag, err := a.S.Create(ctx, CreateInput{
+		Key:               req.Key,
+		Enabled:           enabled,
+		RolloutPercentage: int(req.RolloutPercentage),
+		Description:       req.Description,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &create.Response{Data: toCreateResponseData(flag)}, nil
 }
 
-func toFlagWriteResponse(f *domain.FeatureFlag) FlagWriteResponse {
-	return FlagWriteResponse{
+// UpdateAdapter wraps Service to implement update.Service for http.config.flags.update.v1.
+type UpdateAdapter struct{ S *Service }
+
+// Update implements update.Service. Key from path param; all body fields decoded and
+// range-validated (rolloutPercentage 0-100) by handler_gen before reaching here.
+func (a UpdateAdapter) Update(ctx context.Context, req *update.Request) (*update.Response, error) {
+	flag, err := a.S.Update(ctx, UpdateInput{
+		Key:               req.Key,
+		Enabled:           req.Enabled,
+		RolloutPercentage: int(req.RolloutPercentage),
+		Description:       req.Description,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &update.Response{Data: toUpdateResponseData(flag)}, nil
+}
+
+// ToggleAdapter wraps Service to implement toggle.Service for http.config.flags.toggle.v1.
+type ToggleAdapter struct{ S *Service }
+
+// Toggle implements toggle.Service. Key from path param; Enabled from body, decoded by handler_gen.
+func (a ToggleAdapter) Toggle(ctx context.Context, req *toggle.Request) (*toggle.Response, error) {
+	flag, err := a.S.Toggle(ctx, req.Key, req.Enabled)
+	if err != nil {
+		return nil, err
+	}
+	return &toggle.Response{Data: toToggleResponseData(flag)}, nil
+}
+
+// FlagDeleteAdapter wraps Service to implement flagsdelete.Service for http.config.flags.delete.v1.
+type FlagDeleteAdapter struct{ S *Service }
+
+// Delete implements flagsdelete.Service. Key from path param, decoded by handler_gen.
+func (a FlagDeleteAdapter) Delete(ctx context.Context, req *flagsdelete.Request) (*flagsdelete.Response, error) {
+	if err := a.S.Delete(ctx, req.Key); err != nil {
+		return nil, err
+	}
+	return &flagsdelete.Response{}, nil
+}
+
+// Handler is the composite route handler for the flagwrite slice.
+type Handler struct {
+	createH *create.Handler
+	updateH *update.Handler
+	toggleH *toggle.Handler
+	deleteH *flagsdelete.Handler
+}
+
+// NewHandler creates a flagwrite Handler with generated per-contract handlers.
+// All endpoints are admin-only.
+func NewHandler(svc *Service) *Handler {
+	policy := auth.AnyRole(auth.RoleAdmin)
+	return &Handler{
+		createH: create.NewHandler(CreateAdapter{svc}, policy),
+		updateH: update.NewHandler(UpdateAdapter{svc}, policy),
+		toggleH: toggle.NewHandler(ToggleAdapter{svc}, policy),
+		deleteH: flagsdelete.NewHandler(FlagDeleteAdapter{svc}, policy),
+	}
+}
+
+// RegisterRoutes mounts all four flagwrite contracts on mux.
+func (h *Handler) RegisterRoutes(mux kcell.RouteHandler) error {
+	if err := h.createH.RegisterRoutes(mux); err != nil {
+		return err
+	}
+	if err := h.updateH.RegisterRoutes(mux); err != nil {
+		return err
+	}
+	if err := h.toggleH.RegisterRoutes(mux); err != nil {
+		return err
+	}
+	return h.deleteH.RegisterRoutes(mux)
+}
+
+// toCreateResponseData converts a domain.FeatureFlag to create.ResponseData.
+func toCreateResponseData(f *domain.FeatureFlag) *create.ResponseData {
+	return &create.ResponseData{
 		ID:                f.ID,
 		Key:               f.Key,
 		Enabled:           f.Enabled,
-		RolloutPercentage: f.RolloutPercentage,
+		RolloutPercentage: int64(f.RolloutPercentage),
 		Description:       f.Description,
-		Version:           f.Version,
-		CreatedAt:         f.CreatedAt,
-		UpdatedAt:         f.UpdatedAt,
+		Version:           int64(f.Version),
+		CreatedAt:         f.CreatedAt.Format(time.RFC3339),
+		UpdatedAt:         f.UpdatedAt.Format(time.RFC3339),
 	}
 }
 
-// writeFlagResult is the shared tail of Create/Update/Toggle: on success
-// emit the canonical {"data": toFlagWriteResponse(flag)} body with the
-// supplied status; on error route through httputil.WriteError. Keeps
-// the three success-path handlers identical without three copies of the
-// same five lines.
-func writeFlagResult(w http.ResponseWriter, r *http.Request, status int, flag *domain.FeatureFlag, err error) {
-	if err != nil {
-		httputil.WriteError(r.Context(), w, err)
-		return
+// toUpdateResponseData converts a domain.FeatureFlag to update.ResponseData.
+func toUpdateResponseData(f *domain.FeatureFlag) *update.ResponseData {
+	return &update.ResponseData{
+		ID:                f.ID,
+		Key:               f.Key,
+		Enabled:           f.Enabled,
+		RolloutPercentage: int64(f.RolloutPercentage),
+		Description:       f.Description,
+		Version:           int64(f.Version),
+		CreatedAt:         f.CreatedAt.Format(time.RFC3339),
+		UpdatedAt:         f.UpdatedAt.Format(time.RFC3339),
 	}
-	httputil.WriteJSON(w, status, map[string]any{"data": toFlagWriteResponse(flag)})
 }
 
-// Handler provides HTTP endpoints for feature flag write operations.
-type Handler struct {
-	svc *Service
-}
-
-// NewHandler creates a flag-write Handler.
-func NewHandler(svc *Service) *Handler {
-	return &Handler{svc: svc}
-}
-
-// HandleCreate handles POST / — creates a new feature flag.
-func (h *Handler) HandleCreate(w http.ResponseWriter, r *http.Request) {
-	var req struct {
-		Key               string `json:"key"`
-		Enabled           bool   `json:"enabled"`
-		RolloutPercentage int    `json:"rolloutPercentage"`
-		Description       string `json:"description"`
+// toToggleResponseData converts a domain.FeatureFlag to toggle.ResponseData.
+func toToggleResponseData(f *domain.FeatureFlag) *toggle.ResponseData {
+	return &toggle.ResponseData{
+		ID:                f.ID,
+		Key:               f.Key,
+		Enabled:           f.Enabled,
+		RolloutPercentage: int64(f.RolloutPercentage),
+		Description:       f.Description,
+		Version:           int64(f.Version),
+		CreatedAt:         f.CreatedAt.Format(time.RFC3339),
+		UpdatedAt:         f.UpdatedAt.Format(time.RFC3339),
 	}
-	if err := httputil.DecodeJSONStrict(r, &req, httputil.DefaultDecodeJSONLimit); err != nil {
-		httputil.WriteError(r.Context(), w, err)
-		return
-	}
-	if err := validateRolloutPercentage(req.RolloutPercentage); err != nil {
-		httputil.WriteError(r.Context(), w, err)
-		return
-	}
-
-	flag, err := h.svc.Create(r.Context(), CreateInput{
-		Key:               req.Key,
-		Enabled:           req.Enabled,
-		RolloutPercentage: req.RolloutPercentage,
-		Description:       req.Description,
-	})
-	writeFlagResult(w, r, http.StatusCreated, flag, err)
-}
-
-// HandleUpdate handles PUT /{key} — full replacement of a feature flag's
-// mutable state. All three fields (enabled, rolloutPercentage, description)
-// are required; the partial "toggle just enabled" workflow lives on
-// POST /{key}/toggle. Using pointer fields lets us distinguish "caller
-// omitted the field" from "caller sent the zero value" — the previous
-// value-field decoder silently accepted an omitted enabled as false and
-// could flip a live flag off.
-//
-// ref: kubernetes/kubernetes staging/src/k8s.io/apimachinery/pkg/runtime/
-// serializer/json/json.go — strict decode + required-field enforcement at
-// the decode boundary, before the object reaches the handler logic.
-func (h *Handler) HandleUpdate(w http.ResponseWriter, r *http.Request) {
-	key := r.PathValue("key")
-
-	var req struct {
-		Enabled           *bool   `json:"enabled"`
-		RolloutPercentage *int    `json:"rolloutPercentage"`
-		Description       *string `json:"description"`
-	}
-	if err := httputil.DecodeJSONStrict(r, &req, httputil.DefaultDecodeJSONLimit); err != nil {
-		httputil.WriteError(r.Context(), w, err)
-		return
-	}
-	if err := validateUpdateRequest(req.Enabled, req.RolloutPercentage, req.Description); err != nil {
-		httputil.WriteError(r.Context(), w, err)
-		return
-	}
-	if err := validateRolloutPercentage(*req.RolloutPercentage); err != nil {
-		httputil.WriteError(r.Context(), w, err)
-		return
-	}
-
-	flag, err := h.svc.Update(r.Context(), UpdateInput{
-		Key:               key,
-		Enabled:           *req.Enabled,
-		RolloutPercentage: *req.RolloutPercentage,
-		Description:       *req.Description,
-	})
-	writeFlagResult(w, r, http.StatusOK, flag, err)
-}
-
-// validateRolloutPercentage mirrors the contract schema's 0..100 bound at the
-// handler layer. Contract validators only run inside contract tests — a live
-// request that bypasses the schema (e.g. a client sending a negative or
-// >100 value) would otherwise persist an invalid rollout_percentage with no
-// DB-level CHECK constraint protecting it. Runtime guard is the authoritative
-// gate; the schema is documentation-and-contract-test defense.
-func validateRolloutPercentage(rolloutPercentage int) error {
-	if rolloutPercentage < 0 || rolloutPercentage > 100 {
-		return errcode.New(errcode.KindInvalid, errcode.ErrFlagInvalidInput,
-			fmt.Sprintf("rolloutPercentage must be in [0, 100]; got %d", rolloutPercentage))
-	}
-	return nil
-}
-
-// validateUpdateRequest enforces the PUT full-replacement contract at the
-// handler boundary: all three fields must be provided by the caller. An
-// omitted field returns ErrFlagInvalidInput so callers get a deterministic
-// 400 rather than a silent zero-write in the storage layer.
-func validateUpdateRequest(enabled *bool, rolloutPercentage *int, description *string) error {
-	missing := make([]string, 0, 3)
-	if enabled == nil {
-		missing = append(missing, "enabled")
-	}
-	if rolloutPercentage == nil {
-		missing = append(missing, "rolloutPercentage")
-	}
-	if description == nil {
-		missing = append(missing, "description")
-	}
-	if len(missing) == 0 {
-		return nil
-	}
-	return errcode.New(errcode.KindInvalid, errcode.ErrFlagInvalidInput,
-		"PUT /flags/{key} requires all fields; missing: "+strings.Join(missing, ", ")+
-			" — use POST /flags/{key}/toggle for partial updates")
-}
-
-// HandleToggle handles POST /{key}/toggle — toggles the enabled state.
-func (h *Handler) HandleToggle(w http.ResponseWriter, r *http.Request) {
-	key := r.PathValue("key")
-
-	var req struct {
-		Enabled bool `json:"enabled"`
-	}
-	if err := httputil.DecodeJSONStrict(r, &req, httputil.DefaultDecodeJSONLimit); err != nil {
-		httputil.WriteError(r.Context(), w, err)
-		return
-	}
-
-	flag, err := h.svc.Toggle(r.Context(), key, req.Enabled)
-	writeFlagResult(w, r, http.StatusOK, flag, err)
-}
-
-// HandleDelete handles DELETE /{key} — deletes a feature flag.
-func (h *Handler) HandleDelete(w http.ResponseWriter, r *http.Request) {
-	key := r.PathValue("key")
-
-	if err := h.svc.Delete(r.Context(), key); err != nil {
-		httputil.WriteError(r.Context(), w, err)
-		return
-	}
-
-	w.WriteHeader(http.StatusNoContent)
-}
-
-// RegisterRoutes registers flagwrite routes with admin-only policies via
-// auth.Mount so every request emits a contract-tagged span. The mux
-// argument is cell.RouteHandler so production wiring (cell.RouteMux) and
-// contract tests (*http.ServeMux) share the same declarations.
-func (h *Handler) RegisterRoutes(mux cell.RouteHandler) error {
-	if err := auth.Mount(mux, auth.Route{
-		Contract: specFlagsCreate,
-		Handler:  http.HandlerFunc(h.HandleCreate),
-		Policy:   auth.AnyRole(auth.RoleAdmin),
-	}); err != nil {
-		return err
-	}
-	if err := auth.Mount(mux, auth.Route{
-		Contract: specFlagsUpdate,
-		Handler:  http.HandlerFunc(h.HandleUpdate),
-		Policy:   auth.AnyRole(auth.RoleAdmin),
-	}); err != nil {
-		return err
-	}
-	if err := auth.Mount(mux, auth.Route{
-		Contract: specFlagsToggle,
-		Handler:  http.HandlerFunc(h.HandleToggle),
-		Policy:   auth.AnyRole(auth.RoleAdmin),
-	}); err != nil {
-		return err
-	}
-	if err := auth.Mount(mux, auth.Route{
-		Contract: specFlagsDelete,
-		Handler:  http.HandlerFunc(h.HandleDelete),
-		Policy:   auth.AnyRole(auth.RoleAdmin),
-	}); err != nil {
-		return err
-	}
-	return nil
 }

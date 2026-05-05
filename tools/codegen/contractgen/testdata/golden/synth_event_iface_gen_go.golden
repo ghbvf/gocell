@@ -2,14 +2,3 @@
 // source: contracts/event/item-created/v1/contract.yaml
 
 package itemcreated
-
-import (
-	"context"
-
-	"github.com/ghbvf/gocell/kernel/outbox"
-)
-
-// EventHandler is the business interface that subscribers of event.item-created.v1 must implement.
-type EventHandler interface {
-	HandleItemCreated(ctx context.Context, entry outbox.Entry, payload *Payload) outbox.HandleResult
-}

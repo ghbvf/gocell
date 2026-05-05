@@ -3,6 +3,7 @@ kind: http
 ownerCell: accesscore
 consistencyLevel: L2
 lifecycle: active
+codegen: true
 triggers:
   - event.user.unlocked.v1
 endpoints:
@@ -30,6 +31,9 @@ endpoints:
         schemaRef: "../../../../../shared/errors/error-response-v1.schema.json"
       404:
         description: "Not found — user with given id does not exist"
+        schemaRef: "../../../../../shared/errors/error-response-v1.schema.json"
+      413:
+        description: "Request body too large"
         schemaRef: "../../../../../shared/errors/error-response-v1.schema.json"
 schemaRefs:
   request: request.schema.json

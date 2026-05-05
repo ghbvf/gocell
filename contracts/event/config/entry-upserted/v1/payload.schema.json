@@ -1,5 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$comment": "unevaluatedProperties:false is a producer-side guard enforced at contract-test time (forbids accidental leakage of state-bearing fields like config value into the event bus). Runtime consumer decoder is intentionally lenient (decodeLenient) per ADR-202605031600 §4 metadata-only event policy — schema strictness and decoder lenience are complementary layers, not a double semantics drift.",
   "title": "event.config.entry-upserted.v1.payload",
   "type": "object",
   "description": "Metadata-only notification: subscribers MUST refetch via GET /api/v1/config/{key} to obtain the value. ref: NATS subject+bytes / Watermill payload-bytes boundary.",

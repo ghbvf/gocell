@@ -178,8 +178,8 @@ func TestBuildContractSpec_Event_OrderCreated(t *testing.T) {
 	if spec.Event.HandlerMethod != "HandleOrderCreated" {
 		t.Errorf("HandlerMethod = %q, want HandleOrderCreated", spec.Event.HandlerMethod)
 	}
-	if spec.Event.Topic != "event.order-created" {
-		t.Errorf("Topic = %q, want event.order-created", spec.Event.Topic)
+	if spec.Event.Topic != "event.order-created.v1" {
+		t.Errorf("Topic = %q, want event.order-created.v1", spec.Event.Topic)
 	}
 	if !spec.Event.Replayable {
 		t.Error("Replayable should be true")
@@ -266,8 +266,10 @@ func TestBuildContractSpec_MissingPayloadRef(t *testing.T) {
 	}
 }
 
-// TestBuildContractSpec_UnsupportedKind tests error for unsupported kind.
-func TestBuildContractSpec_UnsupportedKind(t *testing.T) {
+// TestBuildContractSpec_CommandKind_GracefulSkip verifies that kind=command is
+// accepted without error. command and projection are in the closed set but do not
+// yet have full generators — only types_gen.go + iface_gen.go are emitted.
+func TestBuildContractSpec_CommandKind_GracefulSkip(t *testing.T) {
 	p := &metadata.ProjectMeta{
 		Contracts: map[string]*metadata.ContractMeta{
 			"command.foo.bar.v1": {
@@ -278,9 +280,38 @@ func TestBuildContractSpec_UnsupportedKind(t *testing.T) {
 		},
 	}
 	root := findRepoRoot()
-	_, err := BuildContractSpec(root, p, "command.foo.bar.v1")
+	spec, err := BuildContractSpec(root, p, "command.foo.bar.v1")
+	if err != nil {
+		t.Fatalf("BuildContractSpec should not error for kind=command (graceful skip), got: %v", err)
+	}
+	if spec == nil || spec.Kind != "command" {
+		t.Errorf("expected spec with Kind=command, got: %v", spec)
+	}
+	// No Endpoint or Event fields populated for command kind.
+	if spec.Endpoint != nil {
+		t.Errorf("spec.Endpoint should be nil for kind=command, got non-nil")
+	}
+	if spec.Event != nil {
+		t.Errorf("spec.Event should be nil for kind=command, got non-nil")
+	}
+}
+
+// TestBuildContractSpec_TrulyUnsupportedKind verifies that a kind not in the
+// closed set (http | event | command | projection) returns an error.
+func TestBuildContractSpec_TrulyUnsupportedKind(t *testing.T) {
+	p := &metadata.ProjectMeta{
+		Contracts: map[string]*metadata.ContractMeta{
+			"workflow.foo.bar.v1": {
+				ID:      "workflow.foo.bar.v1",
+				Kind:    "workflow",
+				Codegen: true,
+			},
+		},
+	}
+	root := findRepoRoot()
+	_, err := BuildContractSpec(root, p, "workflow.foo.bar.v1")
 	if err == nil {
-		t.Fatal("expected error for unsupported kind")
+		t.Fatal("expected error for truly unsupported kind")
 	}
 }
 
@@ -301,7 +332,7 @@ func TestRender_Golden(t *testing.T) {
 		{"http.order.create.v1", "http", []string{"types_gen.go", "iface_gen.go", "handler_gen.go"}},
 		{"http.order.get.v1", "http", []string{"types_gen.go", "iface_gen.go", "handler_gen.go"}},
 		{"http.order.list.v1", "http", []string{"types_gen.go", "iface_gen.go", "handler_gen.go"}},
-		{"event.order-created.v1", "event", []string{"types_gen.go", "iface_gen.go"}},
+		{"event.order-created.v1", "event", []string{"types_gen.go", "iface_gen.go", "spec_gen.go", "subscription_gen.go"}},
 	}
 
 	for _, tc := range cases {
@@ -427,7 +458,7 @@ func TestRender_Golden_Synth_Event(t *testing.T) {
 		t.Fatal("event.item-created.v1 not found in synth fixture")
 	}
 
-	outputs := []string{"types_gen.go", "iface_gen.go"}
+	outputs := []string{"types_gen.go", "iface_gen.go", "spec_gen.go", "subscription_gen.go"}
 	for _, outFile := range outputs {
 		t.Run(outFile, func(t *testing.T) {
 			spec, err := BuildContractSpec(absTestDir, p, "event.item-created.v1")
@@ -491,6 +522,10 @@ func renderFile(t *testing.T, spec *ContractGenSpec, outFile string) []byte {
 		content, err = RenderIface(spec, "/dev/null")
 	case "handler_gen.go":
 		content, err = RenderHandler(spec, "/dev/null")
+	case "spec_gen.go":
+		content, err = RenderSpec(spec, "/dev/null")
+	case "subscription_gen.go":
+		content, err = RenderSubscription(spec, "/dev/null")
 	default:
 		t.Fatalf("unknown output file: %s", outFile)
 	}
@@ -642,8 +677,8 @@ func TestBuildContractSpec_Event(t *testing.T) {
 	if spec.Event == nil {
 		t.Fatal("Event is nil")
 	}
-	if spec.Event.Topic != "event.item-created" {
-		t.Errorf("Topic = %q, want event.item-created", spec.Event.Topic)
+	if spec.Event.Topic != "event.item-created.v1" {
+		t.Errorf("Topic = %q, want event.item-created.v1", spec.Event.Topic)
 	}
 	if spec.PackageName != "itemcreated" {
 		t.Errorf("PackageName = %q, want itemcreated", spec.PackageName)
@@ -671,4 +706,187 @@ func findField(dto *DTOSpec, name string) *DTOField {
 		}
 	}
 	return nil
+}
+
+// --- TDD tests for spec_gen.go / subscription_gen.go ---
+
+// TestSpecGenIsPackagePrivate verifies that the generated spec var is lowercase (private).
+func TestSpecGenIsPackagePrivate(t *testing.T) {
+	t.Parallel()
+	testDir := filepath.Join("testdata", "synth", "synth_event")
+	absTestDir, err := filepath.Abs(testDir)
+	if err != nil {
+		t.Fatalf("abs path: %v", err)
+	}
+	parser := metadata.NewParser(absTestDir)
+	p, err := parser.Parse()
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+
+	spec, err := BuildContractSpec(absTestDir, p, "event.item-created.v1")
+	if err != nil {
+		t.Fatalf("BuildContractSpec: %v", err)
+	}
+
+	content, err := RenderSpec(spec, "/dev/null")
+	if err != nil {
+		t.Fatalf("RenderSpec: %v", err)
+	}
+	got := string(content)
+
+	if !strings.Contains(got, "var spec = wrapper.ContractSpec{") {
+		t.Errorf("expected private var spec, not found in:\n%s", got)
+	}
+	if strings.Contains(got, "var Spec") {
+		t.Errorf("spec var must not be exported (Spec), found in:\n%s", got)
+	}
+}
+
+// TestSubscriptionMountCallsRegistrySubscribe verifies the generated Mount method
+// calls reg.Subscribe with the correct arguments including WithSubscriptionSliceID.
+func TestSubscriptionMountCallsRegistrySubscribe(t *testing.T) {
+	t.Parallel()
+	testDir := filepath.Join("testdata", "synth", "synth_event")
+	absTestDir, err := filepath.Abs(testDir)
+	if err != nil {
+		t.Fatalf("abs path: %v", err)
+	}
+	parser := metadata.NewParser(absTestDir)
+	p, err := parser.Parse()
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+
+	spec, err := BuildContractSpec(absTestDir, p, "event.item-created.v1")
+	if err != nil {
+		t.Fatalf("BuildContractSpec: %v", err)
+	}
+
+	content, err := RenderSubscription(spec, "/dev/null")
+	if err != nil {
+		t.Fatalf("RenderSubscription: %v", err)
+	}
+	got := string(content)
+
+	if !strings.Contains(got, "func (s *Subscription) Mount(reg cell.Registry) error {") {
+		t.Errorf("expected Mount method signature, not found in:\n%s", got)
+	}
+	if !strings.Contains(got, "reg.Subscribe(spec, s.handler, s.consumerGroup,") {
+		t.Errorf("expected reg.Subscribe call, not found in:\n%s", got)
+	}
+	if !strings.Contains(got, "cell.WithSubscriptionSliceID(s.sliceID)") {
+		t.Errorf("expected WithSubscriptionSliceID call, not found in:\n%s", got)
+	}
+}
+
+// TestNewSubscriptionFourArgSignature verifies the constructor signature.
+func TestNewSubscriptionFourArgSignature(t *testing.T) {
+	t.Parallel()
+	testDir := filepath.Join("testdata", "synth", "synth_event")
+	absTestDir, err := filepath.Abs(testDir)
+	if err != nil {
+		t.Fatalf("abs path: %v", err)
+	}
+	parser := metadata.NewParser(absTestDir)
+	p, err := parser.Parse()
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+
+	spec, err := BuildContractSpec(absTestDir, p, "event.item-created.v1")
+	if err != nil {
+		t.Fatalf("BuildContractSpec: %v", err)
+	}
+
+	content, err := RenderSubscription(spec, "/dev/null")
+	if err != nil {
+		t.Fatalf("RenderSubscription: %v", err)
+	}
+	got := string(content)
+
+	if !strings.Contains(got, "func NewSubscription(handler outbox.EntryHandler, consumerGroup, sliceID string) *Subscription {") {
+		t.Errorf("expected 4-arg NewSubscription signature, not found in:\n%s", got)
+	}
+	// No fluent options.
+	if strings.Contains(got, "WithSliceID") {
+		t.Errorf("unexpected WithSliceID method (fluent option), found in:\n%s", got)
+	}
+}
+
+// TestRenderSpec_RejectsHTTPContract verifies that RenderSpec returns an error
+// when the contract is kind=http.
+func TestRenderSpec_RejectsHTTPContract(t *testing.T) {
+	t.Parallel()
+	root := repoRoot(t)
+	p := loadTodoorderProject(t, root)
+	p.Contracts["http.order.create.v1"].Codegen = true
+
+	spec, err := BuildContractSpec(root, p, "http.order.create.v1")
+	if err != nil {
+		t.Fatalf("BuildContractSpec: %v", err)
+	}
+
+	_, err = RenderSpec(spec, "/dev/null")
+	if err == nil {
+		t.Fatal("RenderSpec should reject kind=http contract")
+	}
+	if !strings.Contains(err.Error(), "not event") {
+		t.Errorf("error should mention 'not event', got: %v", err)
+	}
+
+	_, err = RenderSubscription(spec, "/dev/null")
+	if err == nil {
+		t.Fatal("RenderSubscription should reject kind=http contract")
+	}
+	if !strings.Contains(err.Error(), "not event") {
+		t.Errorf("error should mention 'not event', got: %v", err)
+	}
+}
+
+// TestGenerateEventContract_EmitsSpecAndSubscription verifies that Generate for
+// an event contract produces spec_gen.go and subscription_gen.go in addition
+// to types_gen.go and iface_gen.go.
+func TestGenerateEventContract_EmitsSpecAndSubscription(t *testing.T) {
+	t.Parallel()
+	root, p := setupEventRoot(t)
+
+	res := mustGenerate(t, root, p, Options{})
+
+	fileNames := make(map[string]bool)
+	for _, path := range res.Generated {
+		fileNames[filepath.Base(path)] = true
+	}
+
+	if !fileNames["spec_gen.go"] {
+		t.Errorf("spec_gen.go not generated; got: %v", res.Generated)
+	}
+	if !fileNames["subscription_gen.go"] {
+		t.Errorf("subscription_gen.go not generated; got: %v", res.Generated)
+	}
+
+	// Verify content of spec_gen.go is non-empty and has expected markers.
+	for _, path := range res.Generated {
+		if filepath.Base(path) == "spec_gen.go" {
+			content, err := os.ReadFile(path) //nolint:gosec // test reads its own tmp file
+			if err != nil {
+				t.Fatalf("read spec_gen.go: %v", err)
+			}
+			if !strings.Contains(string(content), "var spec = wrapper.ContractSpec{") {
+				t.Errorf("spec_gen.go missing private spec var:\n%s", content)
+			}
+		}
+		if filepath.Base(path) == "subscription_gen.go" {
+			content, err := os.ReadFile(path) //nolint:gosec // test reads its own tmp file
+			if err != nil {
+				t.Fatalf("read subscription_gen.go: %v", err)
+			}
+			if !strings.Contains(string(content), "func NewSubscription(") {
+				t.Errorf("subscription_gen.go missing NewSubscription:\n%s", content)
+			}
+			if !strings.Contains(string(content), "func (s *Subscription) Mount(reg cell.Registry) error") {
+				t.Errorf("subscription_gen.go missing Mount:\n%s", content)
+			}
+		}
+	}
 }

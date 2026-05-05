@@ -4,13 +4,16 @@
 package create
 
 import (
+	"bytes"
+	"fmt"
+	"io"
 	"net/http"
 
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/wrapper"
-	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/httputil"
 	"github.com/ghbvf/gocell/runtime/auth"
+	"github.com/ghbvf/gocell/runtime/http/schemavalidate"
 )
 
 var contractSpec = wrapper.ContractSpec{
@@ -21,17 +24,28 @@ var contractSpec = wrapper.ContractSpec{
 	Path:      "/api/v1/orders/",
 }
 
+// requestSchemaJSON is the embedded request schema for runtime validation.
+// Compiled once at handler construction time by schemavalidate.NewValidator.
+var requestSchemaJSON = []byte("{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"http.order.create.v1.request\",\"type\":\"object\",\"properties\":{\"item\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":256}},\"required\":[\"item\"],\"additionalProperties\":false}")
+
 // Handler wires HTTP decode/encode + auth.Mount for http.order.create.v1.
 type Handler struct {
-	svc    Service
-	policy auth.Policy
+	svc              Service
+	policy           auth.Policy
+	requestValidator schemavalidate.Validator
 }
 
 // NewHandler creates a Handler for http.order.create.v1.
 // policy may be nil — auth.Mount treats nil as "no per-route authorization guard";
-// use auth.PublicPolicy for unauthenticated public endpoints or supply a real policy.
+// supply a real policy (e.g. auth.AnyRole, auth.SelfOr) to enforce access control.
 func NewHandler(svc Service, policy auth.Policy) *Handler {
-	return &Handler{svc: svc, policy: policy}
+	h := &Handler{svc: svc, policy: policy}
+	v, err := schemavalidate.NewValidator(requestSchemaJSON)
+	if err != nil {
+		panic(fmt.Sprintf("generated handler http.order.create.v1: schema compile failed: %v (codegen invariant violation; regenerate via gocell generate contract --all)", err))
+	}
+	h.requestValidator = v
+	return h
 }
 
 // ServeHTTP implements http.Handler so *Handler can be used directly in tests
@@ -41,27 +55,33 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 // RegisterRoutes mounts the handler on mux via auth.Mount.
+// Uses http.HandlerFunc(h.handle) so governance CH-04/CH-05 AST scans can
+// resolve the handler function body via the Contract→Handler correlation.
 func (h *Handler) RegisterRoutes(mux cell.RouteHandler) error {
 	return auth.Mount(mux, auth.Route{
 		Contract: contractSpec,
-		Handler:  h,
+		Handler:  http.HandlerFunc(h.handle),
 		Policy:   h.policy,
 	})
 }
 
 func (h *Handler) handle(w http.ResponseWriter, r *http.Request) {
 	req := &Request{}
+	bodyBytes, err := io.ReadAll(io.LimitReader(r.Body, httputil.DefaultDecodeJSONLimit+1))
+	if err != nil {
+		httputil.WriteError(r.Context(), w, err)
+		return
+	}
+	r.Body = io.NopCloser(bytes.NewReader(bodyBytes))
 	if err := httputil.DecodeJSONStrict(r, req, httputil.DefaultDecodeJSONLimit); err != nil {
 		httputil.WriteError(r.Context(), w, err)
 		return
 	}
-	if len(req.Item) < 1 {
-		httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "item: value too short"))
-		return
-	}
-	if len(req.Item) > 256 {
-		httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "item: value too long"))
-		return
+	if h.requestValidator != nil {
+		if err := h.requestValidator.Validate(r.Context(), bodyBytes); err != nil {
+			schemavalidate.WriteValidationError(r.Context(), w, err)
+			return
+		}
 	}
 	resp, err := h.svc.Create(r.Context(), req)
 	if err != nil {

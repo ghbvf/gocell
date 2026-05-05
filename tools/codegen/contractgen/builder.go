@@ -1,13 +1,18 @@
 package contractgen
 
 import (
+	"bytes"
+	"encoding/json"
 	"fmt"
+	"os"
 	"path/filepath"
 	"sort"
 	"strings"
 	"unicode"
 
 	"github.com/ghbvf/gocell/kernel/metadata"
+	"github.com/ghbvf/gocell/runtime/http/schemavalidate"
+	"github.com/ghbvf/gocell/tools/codegen/internal/pathx"
 )
 
 // BuildContractSpec projects a single contract.yaml + its schemaRefs into a
@@ -51,8 +56,16 @@ func BuildContractSpec(rootDir string, p *metadata.ProjectMeta, contractID strin
 		if err := buildEventSpec(spec, rootDir, contract, contractDir); err != nil {
 			return nil, err
 		}
+	case "command", "projection":
+		// These kinds are in the closed set (CONTRACT-KINDS-CLOSED-SET-01) but do
+		// not yet have dedicated generators. BuildContractSpec accepts them so that
+		// generateOneContract can emit types_gen.go + iface_gen.go (shared scaffolding)
+		// without hard-failing. No spec/handler/subscription file is emitted.
+		// When a full generator is added, add the corresponding case here.
 	default:
-		return nil, fmt.Errorf("contractgen build: contract %q has unsupported kind %q (http|event only)", contractID, contract.Kind)
+		return nil, fmt.Errorf(
+			"contractgen build: contract %q has unsupported kind %q (http|event|command|projection only)",
+			contractID, contract.Kind)
 	}
 
 	return spec, nil
@@ -64,27 +77,62 @@ func buildHTTPSpec(spec *ContractGenSpec, rootDir string, contract *metadata.Con
 		return fmt.Errorf("contractgen build: contract %q is kind=http but has no http endpoint", contract.ID)
 	}
 
-	allDTOs, err := buildHTTPDTOs(rootDir, contract, contractDir, http)
+	// Pre-compute path and query params once; both buildHTTPDTOs and
+	// buildHTTPEndpointSpec need them (F-09: avoid calling buildQueryParams twice).
+	pathParams := buildPathParams(http)
+	queryParams := buildQueryParams(http)
+
+	allDTOs, err := buildHTTPDTOs(rootDir, contract, contractDir, pathParams, queryParams)
 	if err != nil {
 		return err
 	}
 	spec.DTOs = allDTOs
 
-	endpointSpec, err := buildHTTPEndpointSpec(contract, http)
+	endpointSpec, err := buildHTTPEndpointSpec(contract, http, pathParams, queryParams)
 	if err != nil {
 		return err
 	}
 	spec.Endpoint = endpointSpec
+
+	// Embed the request schema JSON for runtime validation by schemavalidate.Validator.
+	// Only populated when the endpoint actually has a body (POST/PUT/PATCH with a
+	// declared request schema). GET/DELETE may declare schemaRefs.request as
+	// metadata (e.g. "no body" placeholder), but the generated handler reads no
+	// body and the validator wiring would be dead code (init-time compile cost +
+	// binary bloat). HANDLER-NO-SCHEMA-FOR-NOBODY-01 archtest enforces that
+	// no-body handlers contain no requestSchemaJSON literal.
+	// ref: oapi-codegen — request validator emitted only for operations with
+	// a requestBody.
+	if contract.SchemaRefs.Request != "" && endpointSpec.HasBody {
+		reqPath := filepath.Join(rootDir, contractDir, contract.SchemaRefs.Request)
+		schemaBytes, err := os.ReadFile(reqPath) //nolint:gosec // schema path resolved from contract.yaml metadata
+		if err != nil {
+			return fmt.Errorf("contractgen build: %q read request schema for embed: %w", contract.ID, err)
+		}
+		// Compact to a single line: eliminates newlines so the schema can be
+		// safely embedded in the generated file as a Go interpreted string literal.
+		var compacted bytes.Buffer
+		if err := json.Compact(&compacted, schemaBytes); err != nil {
+			return fmt.Errorf("contractgen build: %q compact request schema: %w", contract.ID, err)
+		}
+		// Validate schema compiles before embedding — fail-fast at codegen time
+		// rather than at runtime. ref: oapi-codegen pkg/codegen/templates/strict.
+		if _, vErr := schemavalidate.NewValidator(compacted.Bytes()); vErr != nil {
+			return fmt.Errorf("contractgen build: %q request schema fails to compile: %w", contract.ID, vErr)
+		}
+		spec.RequestSchemaJSON = compacted.String()
+	}
 	return nil
 }
 
 // buildHTTPDTOs loads request/response schemas, converts them to DTOSpecs, and
-// merges path/query params into the Request DTO.
+// merges path/query params into the Request DTO. pathParams and queryParams are
+// pre-computed by buildHTTPSpec so they are not recomputed here (F-09).
 func buildHTTPDTOs(
 	rootDir string,
 	contract *metadata.ContractMeta,
 	contractDir string,
-	http *metadata.HTTPTransportMeta,
+	pathParams, queryParams []ParamSpec,
 ) ([]DTOSpec, error) {
 	var allDTOs []DTOSpec
 
@@ -116,29 +164,80 @@ func buildHTTPDTOs(
 		allDTOs = append(allDTOs, respDTOs...)
 	}
 
-	// Merge path and query params into Request DTO.
-	merged, mergeErr := mergeParamsIntoRequestWithID(allDTOs, http, contract.ID)
+	// Ensure Request stub exists — handler_gen.go and iface_gen.go always reference
+	// *Request, so we must generate it even when there are no body fields or params.
+	if !hasDTONamed(allDTOs, "Request") {
+		allDTOs = append([]DTOSpec{{
+			Name: "Request",
+			Doc:  contract.ID + ".request",
+		}}, allDTOs...)
+	}
+
+	// Ensure Response stub exists for non-noContent endpoints — iface_gen.go always
+	// references *Response. noContent endpoints (204) still have a (*Response, error)
+	// return signature; the handler discards the value with _ = resp.
+	if !hasDTONamed(allDTOs, "Response") {
+		allDTOs = append(allDTOs, DTOSpec{
+			Name: "Response",
+			Doc:  contract.ID + ".response",
+		})
+	}
+
+	// Merge path and query params into Request DTO using the pre-computed params.
+	merged, mergeErr := mergeParamsIntoRequest(allDTOs, pathParams, queryParams, contract.ID)
 	if mergeErr != nil {
 		return nil, fmt.Errorf("contractgen build: %q merge params: %w", contract.ID, mergeErr)
 	}
 	return merged, nil
 }
 
+// hasDTONamed reports whether dtos contains a DTOSpec with the given name.
+func hasDTONamed(dtos []DTOSpec, name string) bool {
+	for _, d := range dtos {
+		if d.Name == name {
+			return true
+		}
+	}
+	return false
+}
+
 // buildHTTPEndpointSpec constructs the HTTPEndpointSpec including pagination detection.
-func buildHTTPEndpointSpec(contract *metadata.ContractMeta, http *metadata.HTTPTransportMeta) (*HTTPEndpointSpec, error) {
+// HasBody is true only when the HTTP method is POST/PUT/PATCH AND the contract declares
+// a schemaRefs.request — POST/PATCH endpoints that accept only path params (no request
+// body schema) must not call DecodeJSONStrict (an empty body would be rejected).
+// pathParams and queryParams are pre-computed by buildHTTPSpec (F-09: avoid re-computing).
+func buildHTTPEndpointSpec(
+	contract *metadata.ContractMeta,
+	http *metadata.HTTPTransportMeta,
+	pathParams, queryParams []ParamSpec,
+) (*HTTPEndpointSpec, error) {
 	handlerMethod := goPascalCase(domainLastSegment(contract.ID))
-	hasBody := http.Method == "POST" || http.Method == "PUT" || http.Method == "PATCH"
+	methodHasBody := http.Method == "POST" || http.Method == "PUT" || http.Method == "PATCH"
+	hasBody := methodHasBody && contract.SchemaRefs.Request != ""
+
+	// Clients are only wired into the generated contractSpec for /internal/v1/...
+	// paths. For public /api/v1/... paths, contract.yaml endpoints.clients is
+	// informational metadata (who calls this endpoint) — auth.Mount rejects
+	// Clients on non-internal paths (wrapper.ContractSpec validation rule).
+	var clients []string
+	isInternalPath := strings.HasPrefix(http.Path, "/internal/v1/") || http.Path == "/internal/v1"
+	if isInternalPath && len(contract.Endpoints.Clients) > 0 {
+		clients = append(clients, contract.Endpoints.Clients...)
+	}
 
 	spec := &HTTPEndpointSpec{
-		Method:        http.Method,
-		Path:          http.Path,
-		SuccessCode:   http.SuccessStatus,
-		NoContent:     http.NoContent,
-		HandlerMethod: handlerMethod,
-		HasBody:       hasBody,
+		Method:                  http.Method,
+		Path:                    http.Path,
+		SuccessCode:             http.SuccessStatus,
+		NoContent:               http.NoContent,
+		HandlerMethod:           handlerMethod,
+		HasBody:                 hasBody,
+		Clients:                 clients,
+		AuthPublic:              http.Auth.Public,
+		AuthPasswordResetExempt: http.Auth.PasswordResetExempt,
 	}
-	spec.PathParams = buildPathParams(http)
-	spec.QueryParams = buildQueryParams(http)
+	spec.PathParams = pathParams
+	spec.QueryParams = queryParams
 
 	// Pagination detection: cursor (string) + limit (integer) with no path params
 	// and GET method signals a canonical paginated list endpoint.
@@ -214,7 +313,7 @@ func buildEventSpec(spec *ContractGenSpec, rootDir string, contract *metadata.Co
 	spec.DTOs = allDTOs
 
 	// Build EventEndpointSpec.
-	topic := stripVersionSuffix(contract.ID)
+	topic := contract.ID
 	domainLast := domainLastSegment(contract.ID)
 	handlerMethod := "Handle" + goPascalCase(domainLast)
 
@@ -232,16 +331,13 @@ func buildEventSpec(spec *ContractGenSpec, rootDir string, contract *metadata.Co
 	return nil
 }
 
-// mergeParamsIntoRequestWithID injects path and query params as fields into the
-// Request DTO. If no Request DTO exists, one is created. Field order:
+// mergeParamsIntoRequest injects pre-computed path and query params as fields
+// into the Request DTO. If no Request DTO exists, one is created. Field order:
 // path params first, query params second, then body schema fields.
-// Returns error when a path or query param name (as Go field name) conflicts
-// with an existing body schema field (which would produce a duplicate struct field).
-// contractID is optional context for error messages.
-func mergeParamsIntoRequestWithID(dtos []DTOSpec, http *metadata.HTTPTransportMeta, contractID string) ([]DTOSpec, error) {
-	pathParams := buildPathParams(http)
-	queryParams := buildQueryParams(http)
-
+// Returns error when a param name (as Go field name) conflicts with an existing
+// body schema field (which would produce a duplicate struct field).
+// contractID is used in error messages.
+func mergeParamsIntoRequest(dtos []DTOSpec, pathParams, queryParams []ParamSpec, contractID string) ([]DTOSpec, error) {
 	if len(pathParams) == 0 && len(queryParams) == 0 {
 		return dtos, nil
 	}
@@ -338,6 +434,7 @@ func buildPathParams(http *metadata.HTTPTransportMeta) []ParamSpec {
 			GoType:    paramGoType(schema.Type),
 			Required:  true, // path params are always required
 			Doc:       paramDoc(schema),
+			Format:    schema.Format,
 			MinLength: paramMinLength(schema),
 			MaxLength: paramMaxLength(schema),
 			Minimum:   paramMinimum(schema),
@@ -398,6 +495,13 @@ func schemaToDTOs(rootName string, s *Schema) ([]DTOSpec, error) {
 
 // collectDTOs recursively collects DTOSpecs from an object schema.
 // All types are appended to out in DFS pre-order (parent before children).
+//
+// Cognitive complexity comes from the schema-shape switch (object / array /
+// inline / ref / scalar) crossed with the optional-pointer rules (*int64
+// for minimum/maximum, *bool for optional booleans). Splitting would only
+// push the same shape × pointer-policy matrix into helpers.
+//
+//nolint:gocognit // structural schema-shape × pointer-policy matrix; see godoc above.
 func collectDTOs(name string, s *Schema, out *[]DTOSpec) {
 	dto := DTOSpec{Name: name, Doc: s.Title}
 
@@ -418,6 +522,16 @@ func collectDTOs(name string, s *Schema, out *[]DTOSpec) {
 		}
 
 		goType, nestedName := schemaGoType(key, name, prop)
+
+		// Optional boolean fields must be *bool so callers can distinguish absent
+		// (nil) from explicit false (&false = clear). This is critical for PATCH
+		// where false and absent are otherwise indistinguishable at decode time.
+		// ref: kubernetes/api core/v1 optional bool fields (*bool convention)
+		// ref: oapi-codegen SkipOptionalPointer default false
+		if !required && goType == "bool" {
+			goType = "*bool"
+		}
+
 		doc := ""
 		if prop.Format == "uuid" || prop.Format == "date-time" {
 			doc = "format: " + prop.Format
@@ -487,15 +601,10 @@ func isRequired(name string, required []string) bool {
 }
 
 // contractIDToPackagePath converts a contract id to a module-relative generated path.
-// "http.order.create.v1" → "generated/contracts/http/order/create/v1".
-// "event.order-created.v1" → "generated/contracts/event/order-created/v1".
+// Delegates to pathx.ContractIDToPackagePath — single source of truth shared
+// with cellgen and archtest.
 func contractIDToPackagePath(id string) string {
-	parts := strings.Split(id, ".")
-	// The last segment is the version (v1, v2, ...).
-	// Middle segments form the domain path.
-	segments := make([]string, len(parts))
-	copy(segments, parts)
-	return "generated/contracts/" + strings.Join(segments, "/")
+	return pathx.ContractIDToPackagePath(id)
 }
 
 // pkgNameFromContractID derives the Go package name from a contract id.
@@ -542,32 +651,6 @@ func domainLastSegment(contractID string) string {
 	}
 	// Last part is version, second-to-last is the action.
 	return parts[len(parts)-2]
-}
-
-// stripVersionSuffix removes the trailing version segment from a contract id.
-// "event.order-created.v1" → "event.order-created".
-func stripVersionSuffix(id string) string {
-	parts := strings.Split(id, ".")
-	if len(parts) < 2 {
-		return id
-	}
-	last := parts[len(parts)-1]
-	if isVersionSegment(last) {
-		return strings.Join(parts[:len(parts)-1], ".")
-	}
-	return id
-}
-
-func isVersionSegment(s string) bool {
-	if len(s) < 2 || s[0] != 'v' {
-		return false
-	}
-	for _, r := range s[1:] {
-		if r < '0' || r > '9' {
-			return false
-		}
-	}
-	return true
 }
 
 // commonInitialisms is the set of well-known initialisms from golang.org/x/lint/golint

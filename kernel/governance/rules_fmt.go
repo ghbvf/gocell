@@ -759,6 +759,45 @@ func (v *Validator) validateFMT13NoContent(c *metadata.ContractMeta, h *metadata
 	return results
 }
 
+const codeFMT26 = "FMT-26"
+
+// validateFMT26 checks that auth.public and auth.passwordResetExempt are not
+// both true on the same HTTP endpoint. The two flags are semantically
+// contradictory: public skips JWT entirely, while passwordResetExempt requires
+// a valid JWT that carries password_reset_required. Declaring both is always a
+// misconfiguration that the runtime would resolve ambiguously.
+//
+// The governance rule complements the JSON Schema `not.required` constraint in
+// contract.schema.json — schema validation catches YAML-level structure while
+// this rule fires on the parsed in-memory model, providing a clear error
+// message with file+field attribution in the governance report.
+//
+// ref: JSON Schema 2020-12 §10.2.1 not
+// ref: kubernetes/kubernetes validation-gen declarative + handwritten dual-layer pattern
+func (v *Validator) validateFMT26() []ValidationResult {
+	var results []ValidationResult
+	for _, c := range v.project.Contracts {
+		if c.Endpoints.HTTP == nil {
+			continue
+		}
+		auth := c.Endpoints.HTTP.Auth
+		if auth.Public && auth.PasswordResetExempt {
+			results = append(results, v.newResult(
+				codeFMT26, SeverityError, IssueForbidden,
+				contractFile(c),
+				"endpoints.http.auth",
+				fmt.Sprintf(
+					"contract %q declares both auth.public and auth.passwordResetExempt; "+
+						"they are mutually exclusive: public skips JWT entirely while "+
+						"passwordResetExempt requires a valid JWT",
+					c.ID,
+				),
+			))
+		}
+	}
+	return results
+}
+
 // validateFMT14 checks that every slice declares explicit allowedFiles.
 func (v *Validator) validateFMT14() []ValidationResult {
 	var results []ValidationResult

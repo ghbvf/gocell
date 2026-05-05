@@ -1,126 +1,66 @@
 package rbacassign
 
 import (
-	"net/http"
+	"context"
 
+	assign "github.com/ghbvf/gocell/generated/contracts/http/auth/role/assign/v1"
+	revoke "github.com/ghbvf/gocell/generated/contracts/http/auth/role/revoke/v1"
 	kcell "github.com/ghbvf/gocell/kernel/cell"
-	"github.com/ghbvf/gocell/kernel/wrapper"
-	"github.com/ghbvf/gocell/pkg/httputil"
 	"github.com/ghbvf/gocell/runtime/auth"
 )
 
-// Contract spec literals — RequireCallerCell auto-applied by auth.Mount when Clients is non-empty (see runtime/auth/route.go).
-var (
-	specRoleAssign = wrapper.ContractSpec{
-		ID: "http.auth.role.assign.v1", Kind: "http", Transport: "http",
-		Method: "POST", Path: "/internal/v1/access/roles/assign",
-		Clients: []string{"accesscore"},
+// AssignAdapter implements assign.Service for http.auth.role.assign.v1.
+type AssignAdapter struct{ S *Service }
+
+// Assign implements assign.Service.
+func (a AssignAdapter) Assign(ctx context.Context, req *assign.Request) (*assign.Response, error) {
+	if err := a.S.Assign(ctx, req.UserId, req.RoleId); err != nil {
+		return nil, err
 	}
-	specRoleRevoke = wrapper.ContractSpec{
-		ID: "http.auth.role.revoke.v1", Kind: "http", Transport: "http",
-		Method: "POST", Path: "/internal/v1/access/roles/revoke",
-		Clients: []string{"accesscore"},
+	return &assign.Response{Data: &assign.ResponseData{
+		UserId:   req.UserId,
+		RoleId:   req.RoleId,
+		Assigned: true,
+	}}, nil
+}
+
+// RevokeAdapter implements revoke.Service for http.auth.role.revoke.v1.
+type RevokeAdapter struct{ S *Service }
+
+// Revoke implements revoke.Service.
+func (a RevokeAdapter) Revoke(ctx context.Context, req *revoke.Request) (*revoke.Response, error) {
+	if err := a.S.Revoke(ctx, req.UserId, req.RoleId); err != nil {
+		return nil, err
 	}
-)
-
-// AssignRequest is the request DTO for role assignment.
-type AssignRequest struct {
-	UserID string `json:"userId"`
-	RoleID string `json:"roleId"`
+	return &revoke.Response{Data: &revoke.ResponseData{
+		UserId:  req.UserId,
+		RoleId:  req.RoleId,
+		Revoked: true,
+	}}, nil
 }
 
-// AssignResponse is the response DTO for role assignment.
-type AssignResponse struct {
-	UserID   string `json:"userId"`
-	RoleID   string `json:"roleId"`
-	Assigned bool   `json:"assigned"`
-}
-
-// RevokeResponse is the response DTO for role revocation.
-type RevokeResponse struct {
-	UserID  string `json:"userId"`
-	RoleID  string `json:"roleId"`
-	Revoked bool   `json:"revoked"`
-}
-
-// Handler provides HTTP endpoints for RBAC role assignment/revocation.
+// Handler is the composite route handler for the rbacassign slice.
+// Both handlers explicitly pass auth.RequireCallerCell("accesscore") as
+// defense-in-depth, complementing the auto-injected caller-cell guard from
+// the generated contractSpec's Clients field.
 type Handler struct {
-	svc *Service
+	assignH *assign.Handler
+	revokeH *revoke.Handler
 }
 
-// NewHandler creates an rbac-assign Handler.
+// NewHandler creates an rbacassign Handler with the generated assign/revoke handlers.
 func NewHandler(svc *Service) *Handler {
-	return &Handler{svc: svc}
+	callerPolicy := auth.RequireCallerCell("accesscore")
+	return &Handler{
+		assignH: assign.NewHandler(AssignAdapter{svc}, callerPolicy),
+		revokeH: revoke.NewHandler(RevokeAdapter{svc}, callerPolicy),
+	}
 }
 
-// RevokeRequest is the request DTO for role revocation. Structurally identical
-// to AssignRequest but kept as a separate type to allow schemas to evolve
-// independently (e.g. future RevokeRequest might add `reason` or `effectiveAt`).
-type RevokeRequest struct {
-	UserID string `json:"userId"`
-	RoleID string `json:"roleId"`
-}
-
-// RegisterRoutes registers rbac-assign routes on the given mux.
-// Caller-cell identity (Clients in ContractSpec) is enforced by auth.Mount's
-// auto-applied RequireCallerCell guard — no explicit role-based Policy needed.
-// Route group wiring at InternalListener level is deferred; see B2-T-07-FU-1.
+// RegisterRoutes mounts the assign and revoke contract handlers on mux.
 func (h *Handler) RegisterRoutes(mux kcell.RouteMux) error {
-	if err := auth.Mount(mux, auth.Route{
-		Contract: specRoleAssign,
-		Handler:  http.HandlerFunc(h.handleAssign),
-		// Route lives on InternalListener (/internal/v1/*); internal affinity
-		// is derived from the path prefix via AuthRouteMeta.IsInternal().
-	}); err != nil {
+	if err := h.assignH.RegisterRoutes(mux); err != nil {
 		return err
 	}
-	if err := auth.Mount(mux, auth.Route{
-		Contract: specRoleRevoke,
-		Handler:  http.HandlerFunc(h.handleRevoke),
-	}); err != nil {
-		return err
-	}
-	return nil
-}
-
-func (h *Handler) handleAssign(w http.ResponseWriter, r *http.Request) {
-	var req AssignRequest
-	if err := httputil.DecodeJSONStrict(r, &req, httputil.DefaultDecodeJSONLimit); err != nil {
-		httputil.WriteError(r.Context(), w, err)
-		return
-	}
-
-	if err := h.svc.Assign(r.Context(), req.UserID, req.RoleID); err != nil {
-		httputil.WriteError(r.Context(), w, err)
-		return
-	}
-
-	httputil.WriteJSON(w, http.StatusCreated, map[string]any{
-		"data": AssignResponse{
-			UserID:   req.UserID,
-			RoleID:   req.RoleID,
-			Assigned: true,
-		},
-	})
-}
-
-func (h *Handler) handleRevoke(w http.ResponseWriter, r *http.Request) {
-	var req RevokeRequest
-	if err := httputil.DecodeJSONStrict(r, &req, httputil.DefaultDecodeJSONLimit); err != nil {
-		httputil.WriteError(r.Context(), w, err)
-		return
-	}
-
-	if err := h.svc.Revoke(r.Context(), req.UserID, req.RoleID); err != nil {
-		httputil.WriteError(r.Context(), w, err)
-		return
-	}
-
-	httputil.WriteJSON(w, http.StatusOK, map[string]any{
-		"data": RevokeResponse{
-			UserID:  req.UserID,
-			RoleID:  req.RoleID,
-			Revoked: true,
-		},
-	})
+	return h.revokeH.RegisterRoutes(mux)
 }

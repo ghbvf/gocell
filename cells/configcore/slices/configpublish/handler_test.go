@@ -395,7 +395,9 @@ func TestHandler_HandleRollback_InvalidVersion(t *testing.T) {
 			handler.ServeHTTP(w, req)
 
 			assert.Equal(t, http.StatusBadRequest, w.Code)
-			assert.Contains(t, w.Body.String(), "rollback target version")
+			// The generated handler validates version >= 1 (minimum: 1 from contract.yaml)
+			// before calling the service, returning ERR_VALIDATION_FAILED.
+			assert.Contains(t, w.Body.String(), "ERR_VALIDATION_FAILED")
 		})
 	}
 }

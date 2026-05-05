@@ -7,9 +7,12 @@ import (
 	"context"
 	"fmt"
 
+	sub0 "github.com/ghbvf/gocell/generated/contracts/event/config/entry-deleted/v1"
+	sub1 "github.com/ghbvf/gocell/generated/contracts/event/config/entry-upserted/v1"
+	sub2 "github.com/ghbvf/gocell/generated/contracts/event/role/assigned/v1"
+	sub3 "github.com/ghbvf/gocell/generated/contracts/event/role/revoked/v1"
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/metadata"
-	"github.com/ghbvf/gocell/kernel/wrapper"
 )
 
 var _ cell.Cell = (*AccessCore)(nil)
@@ -32,15 +35,6 @@ var cellMeta = &metadata.CellMeta{
 }
 
 func loadCellMetadata() *metadata.CellMeta { return cellMeta }
-
-var (
-	specEventConfigEntryDeleted  = wrapper.EventSpec("event.config.entry-deleted.v1", "amqp")
-	specEventConfigEntryUpserted = wrapper.EventSpec("event.config.entry-upserted.v1", "amqp")
-	specEventRoleAssigned        = wrapper.EventSpec("event.role.assigned.v1", "amqp")
-	specEventRoleRevoked         = wrapper.EventSpec("event.role.revoked.v1", "amqp")
-)
-
-const subscribeErrFormat = "accesscore: subscribe %s: %w"
 
 //nolint:gocognit // generated code: complexity intrinsic to cell's subscribe count
 func (c *AccessCore) Init(ctx context.Context, reg cell.Registry) error {
@@ -97,24 +91,20 @@ func (c *AccessCore) Init(ctx context.Context, reg cell.Registry) error {
 		},
 	})
 
-	if err := reg.Subscribe(specEventConfigEntryDeleted, c.configReceiveSvc.HandleEntryDeleted, "accesscore",
-		cell.WithSubscriptionSliceID("configreceive")); err != nil {
-		return fmt.Errorf(subscribeErrFormat, specEventConfigEntryDeleted.Topic, err)
+	if err := sub0.NewSubscription(c.configReceiveSvc.HandleEntryDeleted, "accesscore", "configreceive").Mount(reg); err != nil {
+		return fmt.Errorf("accesscore: subscribe event.config.entry-deleted.v1: %w", err)
 	}
 
-	if err := reg.Subscribe(specEventConfigEntryUpserted, c.configReceiveSvc.HandleEntryUpserted, "accesscore",
-		cell.WithSubscriptionSliceID("configreceive")); err != nil {
-		return fmt.Errorf(subscribeErrFormat, specEventConfigEntryUpserted.Topic, err)
+	if err := sub1.NewSubscription(c.configReceiveSvc.HandleEntryUpserted, "accesscore", "configreceive").Mount(reg); err != nil {
+		return fmt.Errorf("accesscore: subscribe event.config.entry-upserted.v1: %w", err)
 	}
 
-	if err := reg.Subscribe(specEventRoleAssigned, c.rbacSessionConsumer.HandleRoleChanged, "accesscore-rbac-session-sync",
-		cell.WithSubscriptionSliceID("sessionlogout")); err != nil {
-		return fmt.Errorf(subscribeErrFormat, specEventRoleAssigned.Topic, err)
+	if err := sub2.NewSubscription(c.rbacSessionConsumer.HandleRoleChanged, "accesscore-rbac-session-sync", "sessionlogout").Mount(reg); err != nil {
+		return fmt.Errorf("accesscore: subscribe event.role.assigned.v1: %w", err)
 	}
 
-	if err := reg.Subscribe(specEventRoleRevoked, c.rbacSessionConsumer.HandleRoleChanged, "accesscore-rbac-session-sync",
-		cell.WithSubscriptionSliceID("sessionlogout")); err != nil {
-		return fmt.Errorf(subscribeErrFormat, specEventRoleRevoked.Topic, err)
+	if err := sub3.NewSubscription(c.rbacSessionConsumer.HandleRoleChanged, "accesscore-rbac-session-sync", "sessionlogout").Mount(reg); err != nil {
+		return fmt.Errorf("accesscore: subscribe event.role.revoked.v1: %w", err)
 	}
 
 	return nil

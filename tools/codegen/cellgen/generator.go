@@ -131,6 +131,14 @@ func generateOneCell(
 	if err != nil {
 		return err
 	}
+	// Enrich subscriptions with generated-package import paths derived from go.mod.
+	if len(spec.Subscriptions) > 0 {
+		modulePath, modErr := readModulePath(root)
+		if modErr != nil {
+			return fmt.Errorf("cellgen generate: %w", modErr)
+		}
+		EnrichSubscriptionsWithModulePath(spec, modulePath)
+	}
 	if err := renderAndWrite(root, "cell.tmpl", spec, cellGenPath(root, cell), opts, res, "cellgen generate: render "+cell.ID); err != nil {
 		return err
 	}
@@ -194,6 +202,14 @@ func RenderCellArtifacts(root string, project *metadata.ProjectMeta, cellID stri
 	cellSpec, err := BuildCellSpec(project, cellID, bundle)
 	if err != nil {
 		return nil, err
+	}
+	// Enrich subscriptions with generated-package import paths derived from go.mod.
+	if len(cellSpec.Subscriptions) > 0 {
+		modulePath, modErr := readModulePath(root)
+		if modErr != nil {
+			return nil, fmt.Errorf("cellgen render artifacts: %w", modErr)
+		}
+		EnrichSubscriptionsWithModulePath(cellSpec, modulePath)
 	}
 	cellAbs := cellGenPath(root, cell)
 	cellContent, err := codegen.Render(codegen.RenderOptions{

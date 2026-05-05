@@ -13,6 +13,12 @@ import (
 	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/domain"
 	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/dto"
 	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/mem"
+	ackcontract "github.com/ghbvf/gocell/generated/contracts/http/device/command/ack/v1"
+	dequeuecontract "github.com/ghbvf/gocell/generated/contracts/http/device/command/dequeue/v1"
+	enqueuecontract "github.com/ghbvf/gocell/generated/contracts/http/device/command/enqueue/v1"
+	extendleasecontract "github.com/ghbvf/gocell/generated/contracts/http/device/command/extend-lease/v1"
+	reportcontract "github.com/ghbvf/gocell/generated/contracts/http/device/command/report/v1"
+	listcontract "github.com/ghbvf/gocell/generated/contracts/http/internalapi/devicecommands/list/v1"
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/cell/celltest"
 	"github.com/ghbvf/gocell/kernel/clock"
@@ -23,10 +29,9 @@ import (
 	"github.com/ghbvf/gocell/tests/contracttest"
 )
 
-// newContractCommandHandler wires h.RegisterRoutes as the single source of
-// truth for route+policy metadata. TestMux.Route mirrors production chi so
-// auth.Mount strips "/api/v1/devices" off Contract.Path directly — no
-// StripPrefix or relative-alias magic.
+// newContractCommandHandler wires all generated handlers on a TestMux.
+// TestMux.Route mirrors production chi so auth.Mount strips "/api/v1/devices"
+// off Contract.Path directly — no StripPrefix or relative-alias magic.
 func newContractCommandHandler() (http.Handler, *mem.DeviceRepository, *commandtest.InMemQueue) {
 	devRepo := mem.NewDeviceRepository()
 	q := commandtest.NewInMemQueue()
@@ -35,14 +40,33 @@ func newContractCommandHandler() (http.Handler, *mem.DeviceRepository, *commandt
 	if err != nil {
 		panic(err)
 	}
-	h := NewHandler(svc)
+
+	enqH := enqueuecontract.NewHandler(svc, auth.AnyRole(dto.RoleAdmin, dto.RoleOperator))
+	deqH := dequeuecontract.NewHandler(svc, auth.SelfOr("id", "admin"))
+	repH := reportcontract.NewHandler(svc, auth.SelfOr("id", "admin"))
+	ackH := ackcontract.NewHandler(svc, auth.SelfOr("id", "admin"))
+	extH := extendleasecontract.NewHandler(svc, auth.SelfOr("id", "admin"))
+	intH := listcontract.NewHandler(svc, nil)
+
 	mux := celltest.NewTestMux()
 	mux.Route("/api/v1/devices", func(sub cell.RouteMux) {
-		if err := h.RegisterRoutes(sub); err != nil {
+		if err := enqH.RegisterRoutes(sub); err != nil {
+			panic(err)
+		}
+		if err := deqH.RegisterRoutes(sub); err != nil {
+			panic(err)
+		}
+		if err := repH.RegisterRoutes(sub); err != nil {
+			panic(err)
+		}
+		if err := ackH.RegisterRoutes(sub); err != nil {
+			panic(err)
+		}
+		if err := extH.RegisterRoutes(sub); err != nil {
 			panic(err)
 		}
 	})
-	if err := h.RegisterInternalRoutes(mux); err != nil {
+	if err := intH.RegisterRoutes(mux); err != nil {
 		panic(err)
 	}
 	return mux, devRepo, q
@@ -115,8 +139,10 @@ func TestHttpDeviceCommandAckV1Serve(t *testing.T) {
 	handler.ServeHTTP(rec, req)
 	c.ValidateHTTPResponseRecorder(t, rec)
 
-	c.MustRejectRequest(t, []byte(`{"reason":"timeout"}`))
-	c.MustRejectRequest(t, []byte(`{"reason":"failed"}`))
+	// enum was removed from the schema to support codegen; validate remaining constraints.
+	c.MustRejectRequest(t, []byte(`{}`))                  // missing required "reason"
+	c.MustRejectRequest(t, []byte(`{"reason":""}`))       // minLength: 1 violation
+	c.MustRejectRequest(t, []byte(`{"unknown":"field"}`)) // additionalProperties: false
 	c.MustRejectResponse(t, []byte(`{"wrong":"shape"}`))
 }
 

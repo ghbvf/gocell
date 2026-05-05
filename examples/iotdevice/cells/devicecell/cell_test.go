@@ -392,7 +392,7 @@ func TestDeviceCell_DurableMode_RegisterPublishFailureReturnsCreated(t *testing.
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/devices/", strings.NewReader(`{"name":"sensor-fail"}`))
 	req.Header.Set("Content-Type", "application/json")
-	c.registerHandler.HandleRegister(rec, req)
+	c.registerHandler.ServeHTTP(rec, req)
 
 	assert.Equal(t, http.StatusCreated, rec.Code,
 		"device creation must stay successful after persistence even if direct publish fails")
@@ -409,7 +409,7 @@ func TestDeviceCell_DemoMode_RegisterPublishFailureReturnsCreated(t *testing.T) 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/devices/", strings.NewReader(`{"name":"sensor-demo"}`))
 	req.Header.Set("Content-Type", "application/json")
-	c.registerHandler.HandleRegister(rec, req)
+	c.registerHandler.ServeHTTP(rec, req)
 
 	assert.Equal(t, http.StatusCreated, rec.Code,
 		"demo mode keeps direct publish fail-open behavior")

@@ -2,6 +2,7 @@ package contractgen
 
 import (
 	"fmt"
+	"log/slog"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -76,6 +77,12 @@ func Generate(root string, p *metadata.ProjectMeta, opts Options) (Result, error
 
 // generateOneContract renders all artifacts for a single contract and writes
 // (or dry-runs / verifies) them to disk, appending outcomes to res.
+//
+// Cognitive complexity is intrinsic to the orchestrator: 5 contract kinds ×
+// dry-run/write/verify branches × per-artifact emit (types / iface / handler /
+// spec / subscription). Splitting would only push the same matrix into helpers.
+//
+//nolint:gocognit // structural orchestration; see godoc above.
 func generateOneContract(root string, p *metadata.ProjectMeta, contractID string, opts Options, res *Result) error {
 	// B.5: contract ID sanity — must not contain path separators or traversal sequences.
 	if strings.Contains(contractID, "..") || strings.ContainsAny(contractID, `/\`) {
@@ -96,6 +103,14 @@ func generateOneContract(root string, p *metadata.ProjectMeta, contractID string
 
 	pkgDir := filepath.Join(root, filepath.FromSlash(spec.PackagePath))
 
+	// For kind=command and kind=projection only types_gen.go + iface_gen.go are
+	// emitted (no handler/spec/subscription). This keeps the closed-set valid
+	// while full generators are pending.
+	if spec.Kind == "command" || spec.Kind == "projection" {
+		slog.Warn("contractgen: kind in closed set but no full generator yet; only types/iface emitted",
+			"contractID", contractID, "kind", spec.Kind)
+	}
+
 	// types_gen.go — always generated.
 	typesPath := filepath.Join(pkgDir, "types_gen.go")
 	errPfxTypes := "contractgen generate: render types " + contractID
@@ -115,6 +130,21 @@ func generateOneContract(root string, p *metadata.ProjectMeta, contractID string
 		handlerPath := filepath.Join(pkgDir, "handler_gen.go")
 		errPfxHandler := "contractgen generate: render handler " + contractID
 		if err := renderWriteContract(root, "handler.tmpl", spec, handlerPath, opts, res, errPfxHandler); err != nil {
+			return err
+		}
+	}
+
+	// spec_gen.go + subscription_gen.go — only for kind=event.
+	if spec.Kind == "event" {
+		specPath := filepath.Join(pkgDir, "spec_gen.go")
+		errPfxSpec := "contractgen generate: render spec " + contractID
+		if err := renderWriteContract(root, "spec.tmpl", spec, specPath, opts, res, errPfxSpec); err != nil {
+			return err
+		}
+
+		subPath := filepath.Join(pkgDir, "subscription_gen.go")
+		errPfxSub := "contractgen generate: render subscription " + contractID
+		if err := renderWriteContract(root, "subscription.tmpl", spec, subPath, opts, res, errPfxSub); err != nil {
 			return err
 		}
 	}
@@ -152,6 +182,11 @@ func renderWriteContract(root, tmplName string, spec *ContractGenSpec, path stri
 // RenderContractArtifacts renders a single contract to in-memory artifacts.
 // Used by manifest projection / verify pipelines (mirrors cellgen.RenderCellArtifacts).
 // Returns (nil, nil) when the contract is not opted in (Codegen=false).
+//
+// Mirrors generateOneContract on the same kind × artifact matrix; the high
+// cognitive complexity is structural orchestration, not nested business logic.
+//
+//nolint:gocognit,cyclop,funlen // structural orchestration; see godoc above.
 func RenderContractArtifacts(root string, p *metadata.ProjectMeta, contractID string) ([]CodegenArtifact, error) {
 	if p == nil {
 		return nil, fmt.Errorf("contractgen render artifacts: project is nil")
@@ -224,6 +259,41 @@ func RenderContractArtifacts(root string, p *metadata.ProjectMeta, contractID st
 			return nil, err
 		}
 		out = append(out, CodegenArtifact{Path: handlerRel, Content: handlerContent})
+	}
+
+	// spec_gen.go + subscription_gen.go — only for kind=event.
+	if spec.Kind == "event" {
+		specPath := filepath.Join(pkgDir, "spec_gen.go")
+		specContent, err := codegen.Render(codegen.RenderOptions{
+			TemplateName: "spec.tmpl",
+			Templates:    templates,
+			Data:         spec,
+			Filename:     specPath,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("contractgen render artifacts: %q spec: %w", contractID, err)
+		}
+		specRel, err := relFromRoot(root, specPath)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, CodegenArtifact{Path: specRel, Content: specContent})
+
+		subPath := filepath.Join(pkgDir, "subscription_gen.go")
+		subContent, err := codegen.Render(codegen.RenderOptions{
+			TemplateName: "subscription.tmpl",
+			Templates:    templates,
+			Data:         spec,
+			Filename:     subPath,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("contractgen render artifacts: %q subscription: %w", contractID, err)
+		}
+		subRel, err := relFromRoot(root, subPath)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, CodegenArtifact{Path: subRel, Content: subContent})
 	}
 
 	return out, nil

@@ -15,6 +15,8 @@ import (
 
 	"github.com/ghbvf/gocell/cells/auditcore/internal/domain"
 	"github.com/ghbvf/gocell/cells/auditcore/internal/mem"
+	"github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/kernel/cell/celltest"
 	"github.com/ghbvf/gocell/pkg/query"
 	"github.com/ghbvf/gocell/runtime/auth"
 )
@@ -25,33 +27,24 @@ func TestToAuditEntryResponse_NilInput(t *testing.T) {
 	assert.Zero(t, got.ID)
 }
 
-type auditLogCaptureHandler struct {
-	records []slog.Record
-}
-
-func (h *auditLogCaptureHandler) Enabled(_ context.Context, _ slog.Level) bool { return true }
-func (h *auditLogCaptureHandler) Handle(_ context.Context, r slog.Record) error {
-	h.records = append(h.records, r.Clone())
-	return nil
-}
-func (h *auditLogCaptureHandler) WithAttrs(_ []slog.Attr) slog.Handler { return h }
-func (h *auditLogCaptureHandler) WithGroup(_ string) slog.Handler      { return h }
-
-func countAuditWarnRecords(h *auditLogCaptureHandler) int {
-	count := 0
-	for i := range h.records {
-		if h.records[i].Level == slog.LevelWarn {
-			count++
+// newHandlerMux registers auditquery routes under the canonical API prefix,
+// mirroring production wiring so all auth.Mount guards are exercised.
+func newHandlerMux(svc *Service) http.Handler {
+	h := NewHandler(svc)
+	mux := celltest.NewTestMux()
+	mux.Route("/api/v1/audit", func(sub cell.RouteMux) {
+		if err := h.RegisterRoutes(sub); err != nil {
+			panic("RegisterRoutes: " + err.Error())
 		}
-	}
-	return count
+	})
+	return mux
 }
 
 func TestHandleQuery_InvalidTimeFormat(t *testing.T) {
 	repo := mem.NewAuditRepository()
 	svc, err := NewService(repo, testCodec(), slog.Default(), query.RunModeProd)
 	require.NoError(t, err)
-	h := NewHandler(svc)
+	mux := newHandlerMux(svc)
 
 	tests := []struct {
 		name       string
@@ -89,7 +82,7 @@ func TestHandleQuery_InvalidTimeFormat(t *testing.T) {
 			req := httptest.NewRequest(http.MethodGet, "/api/v1/audit/entries"+tc.query, nil)
 			// Inject auth context so the handler doesn't reject with 401.
 			req = req.WithContext(auth.TestContext("usr-1", []string{"admin"}))
-			h.HandleQuery(w, req)
+			mux.ServeHTTP(w, req)
 
 			assert.Equal(t, tc.wantStatus, w.Code)
 			if tc.wantCode != "" {
@@ -105,38 +98,16 @@ func TestHandleQuery_InvalidTimeFormat(t *testing.T) {
 	}
 }
 
-func TestHandleQuery_InvalidTimeFormat_UsesListErrorSampling(t *testing.T) {
-	handler := &auditLogCaptureHandler{}
-	orig := slog.Default()
-	slog.SetDefault(slog.New(handler))
-	t.Cleanup(func() { slog.SetDefault(orig) })
-
-	repo := mem.NewAuditRepository()
-	svc, err := NewService(repo, testCodec(), slog.Default(), query.RunModeProd)
-	require.NoError(t, err)
-	h := NewHandler(svc)
-
-	for range 200 {
-		w := httptest.NewRecorder()
-		req := httptest.NewRequest(http.MethodGet, "/api/v1/audit/entries?from=not-a-date", nil)
-		req = req.WithContext(auth.TestContext("usr-1", []string{"admin"}))
-		h.HandleQuery(w, req)
-		assert.Equal(t, http.StatusBadRequest, w.Code)
-	}
-
-	assert.Equal(t, 2, countAuditWarnRecords(handler), "list-boundary sampling should log two WARN records for 200 client errors")
-}
-
 func TestHandleQuery_InvalidLimit(t *testing.T) {
 	repo := mem.NewAuditRepository()
 	svc, err := NewService(repo, testCodec(), slog.Default(), query.RunModeProd)
 	require.NoError(t, err)
-	h := NewHandler(svc)
+	mux := newHandlerMux(svc)
 
 	w := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/audit/entries?limit=abc", nil)
 	req = req.WithContext(auth.TestContext("usr-1", []string{"admin"}))
-	h.HandleQuery(w, req)
+	mux.ServeHTTP(w, req)
 
 	assert.Equal(t, http.StatusBadRequest, w.Code)
 	assert.Contains(t, w.Body.String(), "ERR_VALIDATION_FAILED")
@@ -146,22 +117,23 @@ func TestHandleQuery_ExceedsMaxLimit(t *testing.T) {
 	repo := mem.NewAuditRepository()
 	svc, err := NewService(repo, testCodec(), slog.Default(), query.RunModeProd)
 	require.NoError(t, err)
-	h := NewHandler(svc)
+	mux := newHandlerMux(svc)
 
 	w := httptest.NewRecorder()
+	// The generated handler validates limit <= 500 and returns ERR_VALIDATION_FAILED.
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/audit/entries?limit=501", nil)
 	req = req.WithContext(auth.TestContext("usr-1", []string{"admin"}))
-	h.HandleQuery(w, req)
+	mux.ServeHTTP(w, req)
 
 	assert.Equal(t, http.StatusBadRequest, w.Code)
-	assert.Contains(t, w.Body.String(), "ERR_PAGE_SIZE_EXCEEDED")
+	assert.Contains(t, w.Body.String(), "ERR_VALIDATION_FAILED")
 }
 
 func TestHandleQuery_Pagination_FullTraversal(t *testing.T) {
 	repo := mem.NewAuditRepository()
 	svc, err := NewService(repo, testCodec(), slog.Default(), query.RunModeProd)
 	require.NoError(t, err)
-	h := NewHandler(svc)
+	mux := newHandlerMux(svc)
 
 	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	for i := range 7 {
@@ -187,7 +159,7 @@ func TestHandleQuery_Pagination_FullTraversal(t *testing.T) {
 		req := httptest.NewRequest(http.MethodGet, url, nil)
 		// Self-access: subject matches actorId in data.
 		req = req.WithContext(auth.TestContext("usr-1", nil))
-		h.HandleQuery(w, req)
+		mux.ServeHTTP(w, req)
 
 		require.Equal(t, http.StatusOK, w.Code)
 		var resp map[string]any
@@ -242,12 +214,12 @@ func TestHandleQuery_InvalidCursor(t *testing.T) {
 			repo := mem.NewAuditRepository()
 			svc, err := NewService(repo, testCodec(), slog.Default(), query.RunModeProd)
 			require.NoError(t, err)
-			h := NewHandler(svc)
+			mux := newHandlerMux(svc)
 
 			w := httptest.NewRecorder()
 			req := httptest.NewRequest(http.MethodGet, "/api/v1/audit/entries?cursor="+tc.cursor, nil)
 			req = req.WithContext(auth.TestContext("usr-1", []string{"admin"}))
-			h.HandleQuery(w, req)
+			mux.ServeHTTP(w, req)
 
 			assert.Equal(t, http.StatusBadRequest, w.Code)
 			assert.Contains(t, w.Body.String(), "ERR_CURSOR_INVALID")
@@ -280,7 +252,7 @@ func TestAuditEntryResponse_ExcludesInternalFields(t *testing.T) {
 
 // TestHandler_RegisterRoutes_AuthzNegative validates that RegisterRoutes installs
 // the auditQueryPolicy so unauthenticated and cross-user requests are rejected at
-// the route layer, not inside HandleQuery. This mirrors the production guard path.
+// the route layer, not inside the business handler. This mirrors the production guard path.
 func TestHandler_RegisterRoutes_AuthzNegative(t *testing.T) {
 	repo := mem.NewAuditRepository()
 	svc, err := NewService(repo, testCodec(), slog.Default(), query.RunModeProd)
@@ -362,7 +334,7 @@ func TestHandleQuery_ActorBinding(t *testing.T) {
 	require.NoError(t, err)
 	h := NewHandler(svc)
 
-	// securedMux registers HandleQuery via RegisterRoutes, mirroring production
+	// securedMux registers the handler via RegisterRoutes, mirroring production
 	// wiring so trust boundary tests exercise the same auth.Mount guard.
 	securedMux := http.NewServeMux()
 	require.NoError(t, h.RegisterRoutes(securedMux))

@@ -1,12 +1,16 @@
 package cellgen
 
 import (
+	"bufio"
 	"fmt"
+	"os"
+	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
 
 	"github.com/ghbvf/gocell/kernel/metadata"
+	"github.com/ghbvf/gocell/tools/codegen/internal/pathx"
 	"github.com/ghbvf/gocell/tools/codegen/markergen"
 )
 
@@ -22,14 +26,6 @@ var stubTopicPattern = regexp.MustCompile(`event\.foo\.|\.created\.v1`)
 // breaks at compile time. JSON schema applies the same regex at parse time;
 // this is defense in depth (parser does not run JSON schema at runtime).
 var listenerRefPattern = regexp.MustCompile(`^cell\.[A-Z][A-Za-z0-9_]*$`)
-
-// specVarNamePattern is the canonical shape for the package-scope spec
-// variable rendered into cell_gen.go ("spec" + UpperCamelCase identifier).
-// specVarName validates its result against this pattern so a contract id
-// containing digit-leading segments (e.g. "event.123foo.v1") or other
-// non-conforming shapes is rejected with a precise error rather than
-// producing a stylistically broken identifier in generated source.
-var specVarNamePattern = regexp.MustCompile(`^spec[A-Z][A-Za-z0-9]*$`)
 
 // goExportedIdentPattern matches valid Go exported method names.
 // Used to validate marker-supplied Method (Route) and Handler (Subscribe)
@@ -195,6 +191,10 @@ func validateBundleRoutes(cellID string, routes []markergen.RouteSpec, listeners
 // buildRouteGroupsFromBundle aggregates bundle routes into one
 // RouteGroupGenSpec per declared listener (in declaration order). Inside
 // each group, mounts are grouped by SubPath in deterministic order.
+// Within each sub-path the mounts preserve the AST field declaration order
+// from cell.go — the order in which +slice:route markers appear in the struct
+// reflects the intended handler registration sequence, which matches how
+// chi mounts handlers (first registered wins for identical patterns).
 func buildRouteGroupsFromBundle(
 	routes []markergen.RouteSpec,
 	listenerOrder []string,
@@ -295,12 +295,7 @@ func buildSubscriptionSpecFromBundle(p *metadata.ProjectMeta, cellID string, sub
 		return SubscriptionGenSpec{}, fmt.Errorf("cellgen build: cell %q slice %q subscribes to non-event contract %q (kind=%s)",
 			cellID, sub.Slice, sub.Topic, contract.Kind)
 	}
-	specVar, err := specVarName(sub.Topic)
-	if err != nil {
-		return SubscriptionGenSpec{}, fmt.Errorf("cellgen build: cell %q slice %q: %w", cellID, sub.Slice, err)
-	}
 	return SubscriptionGenSpec{
-		SpecVarName:   specVar,
 		ContractID:    sub.Topic,
 		Transport:     "amqp",
 		SliceID:       sub.Slice,
@@ -328,71 +323,51 @@ func buildMetadataLiteral(cell *metadata.CellMeta) CellMetadataLiteral {
 	}
 }
 
-// specVarName converts a contract id like "event.config.entry-upserted.v1"
-// into a canonical Go identifier like "specEventConfigEntryUpserted":
-//
-//  1. drop a trailing version segment matching ^v\d+$
-//  2. split remainder on "."
-//  3. for each piece, split on "-" and CamelCase
-//  4. prepend "spec" and concat
-//
-// Returns an error when the input is degenerate (e.g. "v1" alone — all parts
-// are version-stripped, yielding only the "spec" prefix). The YAML validator
-// rejects such ids before builder is called; the error here is defense in
-// depth and propagates as a normal cellgen build failure.
-func specVarName(contractID string) (string, error) {
-	parts := strings.Split(contractID, ".")
-	if n := len(parts); n > 0 && isVersionSegment(parts[n-1]) {
-		parts = parts[:n-1]
+// readModulePath reads the Go module path from the go.mod file at root.
+// Returns ("", err) if go.mod is missing or malformed.
+func readModulePath(root string) (string, error) {
+	f, err := os.Open(filepath.Clean(filepath.Join(root, "go.mod")))
+	if err != nil {
+		return "", fmt.Errorf("cellgen: open go.mod: %w", err)
 	}
-	var sb strings.Builder
-	sb.WriteString("spec")
-	for _, p := range parts {
-		for _, sub := range strings.Split(p, "-") {
-			if sub == "" {
-				continue
-			}
-			// Each sub-segment must start with a letter so the camel-cased
-			// boundary stays at a letter position. A digit-leading sub-segment
-			// (e.g. "123foo") would emit a digit immediately after the previous
-			// segment's lowercase tail, breaking the spec<UpperCamelCase>
-			// convention even though the result remains a valid Go identifier.
-			if c := sub[0]; (c < 'a' || c > 'z') && (c < 'A' || c > 'Z') {
-				return "", fmt.Errorf("specVarName: contract id %q has non-letter-leading segment %q — "+
-					"every dot-or-dash separated segment must start with a letter; "+
-					"fix the contract id in slice.yaml", contractID, sub)
-			}
-			sb.WriteString(capitalize(sub))
+	defer func() { _ = f.Close() }()
+
+	scanner := bufio.NewScanner(f)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if rest, ok := strings.CutPrefix(line, "module "); ok {
+			return strings.TrimSpace(rest), nil
 		}
 	}
-	result := sb.String()
-	if !specVarNamePattern.MatchString(result) {
-		return "", fmt.Errorf("specVarName: contract id %q produced non-conforming spec var %q "+
-			"(expected %s); fix the contract id in slice.yaml",
-			contractID, result, specVarNamePattern.String())
+	if err := scanner.Err(); err != nil {
+		return "", fmt.Errorf("cellgen: read go.mod: %w", err)
 	}
-	return result, nil
+	return "", fmt.Errorf("cellgen: module directive not found in go.mod")
 }
 
-func isVersionSegment(s string) bool {
-	if len(s) < 2 || s[0] != 'v' {
-		return false
-	}
-	for _, r := range s[1:] {
-		if r < '0' || r > '9' {
-			return false
-		}
-	}
-	return true
+// contractIDToImportPath converts a contract id to its generated package import path.
+// "event.order-created.v1" → "<module>/generated/contracts/event/order-created/v1"
+// "event.config.entry-upserted.v1" → "<module>/generated/contracts/event/config/entry-upserted/v1"
+// "http.internal.foo.v1" → "<module>/generated/contracts/http/internalapi/foo/v1"
+//
+// Delegates internal→internalapi rewriting to pathx.ContractIDToPackagePath —
+// single source of truth shared with contractgen and archtest.
+func contractIDToImportPath(modulePath, contractID string) string {
+	return modulePath + "/" + pathx.ContractIDToPackagePath(contractID)
 }
 
-func capitalize(s string) string {
-	if s == "" {
-		return s
+// EnrichSubscriptionsWithModulePath populates SubscriptionPackage and
+// SubscriptionAlias on each subscription in the spec using the module path
+// derived from go.mod at root. This is a post-build step; BuildCellSpec does
+// not read the filesystem so it cannot derive the import path itself.
+//
+// SubscriptionAlias is set to "sub<index>" (0-indexed) to guarantee
+// uniqueness even when multiple contracts share the same last path segment
+// (e.g. multiple "v1" packages).
+func EnrichSubscriptionsWithModulePath(spec *CellGenSpec, modulePath string) {
+	for i := range spec.Subscriptions {
+		sub := &spec.Subscriptions[i]
+		sub.SubscriptionPackage = contractIDToImportPath(modulePath, sub.ContractID)
+		sub.SubscriptionAlias = fmt.Sprintf("sub%d", i)
 	}
-	runes := []rune(s)
-	if runes[0] >= 'a' && runes[0] <= 'z' {
-		runes[0] -= 'a' - 'A'
-	}
-	return string(runes)
 }

@@ -237,7 +237,9 @@ func TestHttpAuthUserLockV1Serve(t *testing.T) {
 	userID := createUserForContractTest(t, handler, createContract)
 	path := strings.Replace(c.HTTP.Path, "{id}", userID, 1)
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(c.HTTP.Method, path, nil)
+	// Lock request body must be {} — generated handler calls DecodeJSONStrict.
+	req := httptest.NewRequest(c.HTTP.Method, path, strings.NewReader("{}"))
+	req.Header.Set("Content-Type", "application/json")
 	req = req.WithContext(auth.TestContext("admin-user", []string{"admin"}))
 	handler.ServeHTTP(rec, req)
 	c.ValidateHTTPResponseRecorder(t, rec)
@@ -252,16 +254,18 @@ func TestHttpAuthUserUnlockV1Serve(t *testing.T) {
 	handler := setupContractHandler(t)
 
 	userID := createUserForContractTest(t, handler, createContract)
-	// Lock first
+	// Lock first — body must be {} with Content-Type.
 	lockPath := strings.Replace(lockContract.HTTP.Path, "{id}", userID, 1)
-	lockReq := httptest.NewRequest(lockContract.HTTP.Method, lockPath, nil)
+	lockReq := httptest.NewRequest(lockContract.HTTP.Method, lockPath, strings.NewReader("{}"))
+	lockReq.Header.Set("Content-Type", "application/json")
 	lockReq = lockReq.WithContext(auth.TestContext("admin-user", []string{"admin"}))
 	handler.ServeHTTP(httptest.NewRecorder(), lockReq)
 
-	// Unlock
+	// Unlock — body must be {} with Content-Type.
 	path := strings.Replace(c.HTTP.Path, "{id}", userID, 1)
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(c.HTTP.Method, path, nil)
+	req := httptest.NewRequest(c.HTTP.Method, path, strings.NewReader("{}"))
+	req.Header.Set("Content-Type", "application/json")
 	req = req.WithContext(auth.TestContext("admin-user", []string{"admin"}))
 	handler.ServeHTTP(rec, req)
 	c.ValidateHTTPResponseRecorder(t, rec)
@@ -298,7 +302,9 @@ func TestEventUserLockedV1Publish(t *testing.T) {
 
 	lockPath := strings.Replace(lockContract.HTTP.Path, "{id}", userID, 1)
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(lockContract.HTTP.Method, lockPath, nil)
+	// Generated handler calls DecodeJSONStrict — body must be {} with Content-Type.
+	req := httptest.NewRequest(lockContract.HTTP.Method, lockPath, strings.NewReader("{}"))
+	req.Header.Set("Content-Type", "application/json")
 	req = req.WithContext(auth.TestContext("admin-user", []string{"admin"}))
 	handler.ServeHTTP(rec, req)
 	lockContract.ValidateHTTPResponseRecorder(t, rec)
@@ -371,17 +377,19 @@ func TestEventUserUnlockedV1Publish(t *testing.T) {
 	userID := createUserForContractTest(t, handler, createContract)
 	writer.entries = nil
 
-	// Lock first
+	// Lock first — generated handler calls DecodeJSONStrict; body must be {} with Content-Type.
 	lockPath := strings.Replace(lockContract.HTTP.Path, "{id}", userID, 1)
-	lockReq := httptest.NewRequest(lockContract.HTTP.Method, lockPath, nil)
+	lockReq := httptest.NewRequest(lockContract.HTTP.Method, lockPath, strings.NewReader("{}"))
+	lockReq.Header.Set("Content-Type", "application/json")
 	lockReq = lockReq.WithContext(auth.TestContext("admin-user", []string{"admin"}))
 	handler.ServeHTTP(httptest.NewRecorder(), lockReq)
 	writer.entries = nil // reset after lock event
 
-	// Unlock
+	// Unlock — generated handler calls DecodeJSONStrict; body must be {} with Content-Type.
 	unlockPath := strings.Replace(unlockContract.HTTP.Path, "{id}", userID, 1)
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(unlockContract.HTTP.Method, unlockPath, nil)
+	req := httptest.NewRequest(unlockContract.HTTP.Method, unlockPath, strings.NewReader("{}"))
+	req.Header.Set("Content-Type", "application/json")
 	req = req.WithContext(auth.TestContext("admin-user", []string{"admin"}))
 	handler.ServeHTTP(rec, req)
 	unlockContract.ValidateHTTPResponseRecorder(t, rec)

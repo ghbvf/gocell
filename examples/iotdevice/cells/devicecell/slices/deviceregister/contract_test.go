@@ -11,10 +11,18 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/mem"
+	registercontract "github.com/ghbvf/gocell/generated/contracts/http/device/register/v1"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/tests/contracttest"
+)
+
+// contractSpecID mirrors the generated contractSpec.ID for test assertions.
+var (
+	contractSpecID     = "http.device.register.v1"
+	contractSpecMethod = "POST"
+	contractSpecPath   = "/api/v1/devices"
 )
 
 // --- contract test doubles ---
@@ -41,23 +49,25 @@ func newContractHandler() (http.Handler, *recordingPublisher) {
 	pub := &recordingPublisher{}
 	emitter, err := outbox.NewDirectEmitter(
 		pub, outbox.DirectPublishFailOpen, metrics.NopProvider{}, clock.Real(), "devicecell",
-		outbox.WithLogger(slog.Default()))
+		outbox.WithLogger(slog.Default()),
+	)
 	if err != nil {
 		panic(err)
 	}
 	svc := NewService(repo, slog.Default(), WithEmitter(emitter), WithClock(clock.Real()))
+	handler := registercontract.NewHandler(svc) // Public endpoint: NewHandler takes no policy (auth.Route{Public:true})
 	mux := http.NewServeMux()
-	mux.Handle("POST /api/v1/devices", http.HandlerFunc(NewHandler(svc).HandleRegister))
+	mux.Handle("POST /api/v1/devices", handler)
 	return mux, pub
 }
 
-func TestSpecDeviceRegisterMatchesContract(t *testing.T) {
+func TestDeviceRegisterContractSpecMatchesContract(t *testing.T) {
 	root := contracttest.ExampleContractsRoot(t, "iotdevice")
-	c := contracttest.LoadByID(t, root, "http.device.register.v1")
+	c := contracttest.LoadByID(t, root, contractSpecID)
 	require.NotNil(t, c.HTTP)
-	require.Equal(t, c.ID, specDeviceRegister.ID)
-	require.Equal(t, c.HTTP.Method, specDeviceRegister.Method)
-	require.Equal(t, c.HTTP.Path, specDeviceRegister.Path)
+	require.Equal(t, contractSpecID, c.ID)
+	require.Equal(t, contractSpecMethod, c.HTTP.Method)
+	require.Equal(t, contractSpecPath, c.HTTP.Path)
 }
 
 func TestHttpDeviceRegisterV1Serve(t *testing.T) {

@@ -3,6 +3,7 @@ kind: http
 ownerCell: devicecell
 consistencyLevel: L4
 lifecycle: active
+codegen: true
 endpoints:
   server: devicecell
   # devicecell self-call: an internal worker on the same cell invokes this

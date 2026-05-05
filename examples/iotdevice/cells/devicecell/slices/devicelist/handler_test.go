@@ -11,11 +11,12 @@ import (
 
 	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/domain"
 	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/mem"
+	listcontract "github.com/ghbvf/gocell/generated/contracts/http/device/list/v1"
 	"github.com/ghbvf/gocell/pkg/query"
 	"github.com/ghbvf/gocell/runtime/auth"
 )
 
-func newHandlerForTest(t *testing.T) *Handler {
+func newHandlerForTest(t *testing.T) *listcontract.Handler {
 	t.Helper()
 	repo := mem.NewDeviceRepository()
 	_ = repo.Create(context.Background(), &domain.Device{
@@ -25,7 +26,7 @@ func newHandlerForTest(t *testing.T) *Handler {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return NewHandler(svc)
+	return listcontract.NewHandler(svc, auth.AnyRole("admin"))
 }
 
 func TestHandleList_OK(t *testing.T) {
@@ -34,7 +35,7 @@ func TestHandleList_OK(t *testing.T) {
 	r := httptest.NewRequest(http.MethodGet, "/", nil)
 	r = r.WithContext(auth.TestContext("user-1", []string{"admin"}))
 
-	h.HandleList(w, r)
+	h.ServeHTTP(w, r)
 
 	if w.Code != http.StatusOK {
 		t.Errorf("status=%d, want 200", w.Code)
@@ -57,7 +58,7 @@ func TestHandleList_InvalidLimit(t *testing.T) {
 	r := httptest.NewRequest(http.MethodGet, "/?limit=abc", nil)
 	r = r.WithContext(auth.TestContext("user-1", nil))
 
-	h.HandleList(w, r)
+	h.ServeHTTP(w, r)
 
 	if w.Code != http.StatusBadRequest {
 		t.Errorf("status=%d, want 400", w.Code)
@@ -70,7 +71,7 @@ func TestHandleList_LimitExceedsMax(t *testing.T) {
 	r := httptest.NewRequest(http.MethodGet, "/?limit=9999", nil)
 	r = r.WithContext(auth.TestContext("user-1", nil))
 
-	h.HandleList(w, r)
+	h.ServeHTTP(w, r)
 
 	if w.Code != http.StatusBadRequest {
 		t.Errorf("status=%d, want 400", w.Code)
