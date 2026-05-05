@@ -465,9 +465,23 @@ func TestServiceTokenAuthenticator_InvalidMAC_Error(t *testing.T) {
 		WithServiceTokenClock(clockmock.New(now)),
 		WithServiceTokenNonceStore(mustNewInMemoryNonceStore(t)))
 	req := httptest.NewRequest(http.MethodGet, "/internal/v1/resource", nil)
-	// Construct a token with wrong HMAC (last byte flipped).
+	// Construct a token with wrong HMAC. Do not replace with a fixed suffix:
+	// the generated MAC is random and may already end with that value.
 	goodToken := GenerateServiceToken(ring, "gocell", http.MethodGet, "/internal/v1/resource", "", now)
-	badToken := goodToken[:len(goodToken)-2] + "ff"
+	parts := strings.Split(goodToken, ":")
+	if len(parts) != 4 {
+		t.Fatalf("expected generated service token to have 4 parts, got %d: %q", len(parts), goodToken)
+	}
+	lastMACByte := parts[3][len(parts[3])-2:]
+	if lastMACByte == "00" {
+		parts[3] = parts[3][:len(parts[3])-2] + "ff"
+	} else {
+		parts[3] = parts[3][:len(parts[3])-2] + "00"
+	}
+	badToken := strings.Join(parts, ":")
+	if badToken == goodToken {
+		t.Fatal("test setup failed: bad token must differ from good token")
+	}
 	req.Header.Set("Authorization", "ServiceToken "+badToken)
 	p, ok, err := a.Authenticate(req)
 	if err == nil {
