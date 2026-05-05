@@ -84,7 +84,7 @@
 | # | PR | 来源 | 问题 | 方案 | ship | 工时 |
 |---|---|---|---|---|:-:|---|
 | A-05 | CIRCUITBREAKER-ERRCODE-ALIGN | adapters-03 P1 | `circuitbreaker.New` 用 `fmt.Errorf` 而非 errcode，违反 error-handling.md | 定义 `ErrAdapterCircuitBreakerConfig` + `errcode.New` | L1 | 2h + 1h |
-| A-06 | RMQ-WAITCONNECTED-DOC-FIX | adapters-03 P2 | `MaxReconnectAttempts` 字段标 ignored，但 `WaitConnected` godoc 仍列 `ErrAdapterAMQPReconnectExhausted` | 删 godoc 该错误码条目；考虑直接删 `MaxReconnectAttempts` 字段（无外部消费方）| L1 | 2h + 1h |
+| A-06 | ✅ **吸收进 PR-V1-RMQ-TERMINAL（029 A4）** RMQ-WAITCONNECTED-DOC-FIX | adapters-03 P2 | `MaxReconnectAttempts` 字段标 ignored，但 `WaitConnected` godoc 仍列 `ErrAdapterAMQPReconnectExhausted` | 同 029 A4 一并删字段 + errcode + godoc，并 runtime reconnect 重新分类 broker permanent → StateTerminal | ✅ done | — |
 | A-07 | POSTGRES-POOL-MANAGED-RESOURCE | adapters-03 P2 | `postgres.Pool` 仅满足 `ContextCloser`，与 outbox relay 后台需求一致性差 | 升级 `Pool` 到 `ManagedResource(Checkers + Worker=nil)` 或在 doc.go 写明"Pool 是 ContextCloser，无需 Worker" | L1 | 4h + 2h |
 | A-08 | ADAPTERUTIL-HEALTH-WRAPPER | adapters-03 §3 跨层观察 | `Health → Checkers map`、`Status → metric` 转换在多 adapter 重复 | 下沉到 `adapters/adapterutil/`，对偶 `CloseWithDeadline` | L1 | 4h + 2h |
 

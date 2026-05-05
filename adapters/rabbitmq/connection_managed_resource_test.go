@@ -73,22 +73,24 @@ func TestConnection_Checkers_UnhealthyDisconnected(t *testing.T) {
 	}
 }
 
-func TestConnection_Checkers_UnhealthyTerminal(t *testing.T) {
+func TestConnection_Checkers_UnhealthyWhenPermanentRecorded(t *testing.T) {
 	conn, _ := newTestConnection(t)
 	t.Cleanup(func() { _ = conn.Close(context.Background()) })
 
-	terminalErr := errors.New("simulated permanent broker failure")
+	permanentErr := errors.New("simulated permanent broker failure")
 	conn.mu.Lock()
-	conn.state = StateTerminal
-	conn.permanentErr = terminalErr
+	// State stays StateConnected (or StateDisconnected during reconnect) —
+	// permanentErr supersedes phase via Health(). The rabbitmq_ready probe
+	// must surface the permanent classification regardless.
+	conn.permanentErr = permanentErr
 	conn.mu.Unlock()
 
 	err := conn.Checkers()["rabbitmq_ready"](context.Background())
 	if err == nil {
-		t.Fatal("rabbitmq_ready in StateTerminal must return permanentErr, got nil")
+		t.Fatal("rabbitmq_ready with permanentErr set must return that error, got nil")
 	}
-	if !errors.Is(err, terminalErr) {
-		t.Errorf("rabbitmq_ready error = %v, want %v", err, terminalErr)
+	if !errors.Is(err, permanentErr) {
+		t.Errorf("rabbitmq_ready error = %v, want %v", err, permanentErr)
 	}
 }
 

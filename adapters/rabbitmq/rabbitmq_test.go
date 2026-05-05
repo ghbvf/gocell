@@ -417,8 +417,10 @@ func TestNewConnection_DialFails(t *testing.T) {
 
 func TestNewConnection_PermanentDialError(t *testing.T) {
 	// Initial connection with permanent error should return ErrAdapterAMQPConnectPermanent.
+	// Real-world broker handshake rejection sets Server=true; the local-synthesis
+	// 501 carve-out (Server=false) is covered by the transient retry tests.
 	dialFunc := func(url string) (AMQPConnection, error) {
-		return nil, &amqp.Error{Code: 403, Reason: "ACCESS_REFUSED", Recover: false}
+		return nil, &amqp.Error{Code: 403, Reason: "ACCESS_REFUSED", Server: true, Recover: false}
 	}
 
 	_, err := NewConnection(Config{
@@ -603,7 +605,6 @@ func TestConnection_WaitConnected_Timeout(t *testing.T) {
 		channelPool: make(chan AMQPChannel, 5),
 		closeCh:     make(chan struct{}),
 		connected:   make(chan struct{}), // Never closed = never connected.
-		terminalCh:  make(chan struct{}),
 		clock:       clock.Real(),
 	}
 
@@ -818,18 +819,11 @@ func TestConnection_ReconnectLoop_DisconnectAndReconnect(t *testing.T) {
 	}, testtime.D2s, testtime.D10ms, "reconnectLoop should have reconnected")
 }
 
-// NOTE: TestConnection_ReconnectLoop_PermanentError_ExitsLoop deleted (A.1).
-// Runtime reconnect never exits on permanent classification; permanent errors
-// surface only at NewConnection time (see TestNewConnection_PermanentDialError).
-//
-// NOTE: TestConnection_MaxReconnectAttempts_Exceeded deleted (A.1).
-// MaxReconnectAttempts is now a retained-but-ignored field; reconnect is
-// always unbounded until closeCh fires. The successor test is
-// TestConnection_ReconnectWithBackoff_TransientError_ContinuesIndefinitely.
-
 func TestConnection_ReconnectLoop_RetriesIndefinitelyUntilRecovery(t *testing.T) {
-	// A.1 behavior: after disconnect, reconnectLoop keeps retrying transient
-	// errors indefinitely and eventually recovers without any attempt cap.
+	// After disconnect, reconnectLoop keeps retrying transient errors indefinitely
+	// and eventually recovers without any attempt cap. Permanent classifications
+	// stay inside the same retry loop (permanentErr surfaced via Health/WaitConnected,
+	// reconnect goroutine alive); see TestReconnectWithBackoff_PermanentError_*.
 	var mu sync.Mutex
 	dialCount := 0
 	mocks := []*mockConnection{newMockConnection(), newMockConnection()}
@@ -933,6 +927,58 @@ func TestIsPermanentDialError(t *testing.T) {
 			name: "AMQP frame error (501) — recoverable",
 			err:  &amqp.Error{Code: 501, Reason: "FRAME_ERROR", Server: true, Recover: true},
 			want: false,
+		},
+		{
+			// Locks the Server=true gate for permanent classification.
+			// amqp091-go locally synthesizes Server=false / Recover=false for
+			// mid-handshake TCP resets; these must remain transient so broker
+			// restarts do not flip the connection to terminal.
+			name: "AMQP 501 Server=false Recover=false (amqp091-go local synthesis) — recoverable",
+			err:  &amqp.Error{Code: 501, Reason: "read: connection reset by peer", Server: false, Recover: false},
+			want: false,
+		},
+		// amqp091-go package sentinels — Server=false default-zero, must hit
+		// the sentinel branch (errors.Is) ahead of the structural Server check.
+		// These are the real-world "credentials revoked / vhost gone" P0 paths.
+		{
+			name: "amqp.ErrSASL sentinel — permanent",
+			err:  amqp.ErrSASL,
+			want: true,
+		},
+		{
+			name: "amqp.ErrCredentials sentinel (P0 revoked credentials) — permanent",
+			err:  amqp.ErrCredentials,
+			want: true,
+		},
+		{
+			name: "amqp.ErrVhost sentinel — permanent",
+			err:  amqp.ErrVhost,
+			want: true,
+		},
+		{
+			name: "wrapped amqp.ErrCredentials (errors.Is via fmt.Errorf %w) — permanent",
+			err:  fmt.Errorf("dial tune: %w", amqp.ErrCredentials),
+			want: true,
+		},
+		{
+			name: "amqp.ErrSyntax sentinel — permanent",
+			err:  amqp.ErrSyntax,
+			want: true,
+		},
+		{
+			name: "amqp.ErrFrame sentinel — permanent",
+			err:  amqp.ErrFrame,
+			want: true,
+		},
+		{
+			name: "amqp.ErrCommandInvalid sentinel — permanent",
+			err:  amqp.ErrCommandInvalid,
+			want: true,
+		},
+		{
+			name: "amqp.ErrUnexpectedFrame sentinel — permanent",
+			err:  amqp.ErrUnexpectedFrame,
+			want: true,
 		},
 		{
 			name: "net.OpError (connection refused) — recoverable",
@@ -1041,11 +1087,6 @@ func TestSanitizeURL(t *testing.T) {
 	}
 }
 
-// NOTE: TestConnection_ReconnectWithBackoff_PermanentError deleted (A.1 semantics).
-// Runtime reconnect no longer classifies errors as permanent; permanent dial
-// errors surface only at NewConnection time. See
-// TestNewConnection_PermanentDialError for startup-path permanent classification.
-
 func TestConnection_ReconnectWithBackoff_RecoverableError_ThenSuccess(t *testing.T) {
 	var mu sync.Mutex
 	dialCount := 0
@@ -1065,10 +1106,9 @@ func TestConnection_ReconnectWithBackoff_RecoverableError_ThenSuccess(t *testing
 			}
 			return newMockConnection(), nil
 		},
-		closeCh:    make(chan struct{}),
-		connected:  make(chan struct{}),
-		terminalCh: make(chan struct{}),
-		clock:      clock.Real(),
+		closeCh:   make(chan struct{}),
+		connected: make(chan struct{}),
+		clock:     clock.Real(),
 	}
 
 	assert.True(t, conn.reconnectWithBackoff(), "must return true after successful reconnect")
@@ -1089,10 +1129,9 @@ func TestConnection_ReconnectWithBackoff_CloseCh(t *testing.T) {
 		dial: func(url string) (AMQPConnection, error) {
 			return nil, &net.OpError{Op: "dial", Err: errors.New("connection refused")}
 		},
-		closeCh:    closeCh,
-		connected:  make(chan struct{}),
-		terminalCh: make(chan struct{}),
-		clock:      clock.Real(),
+		closeCh:   closeCh,
+		connected: make(chan struct{}),
+		clock:     clock.Real(),
 	}
 
 	done := make(chan bool, 1)
@@ -1112,10 +1151,11 @@ func TestConnection_ReconnectWithBackoff_CloseCh(t *testing.T) {
 }
 
 // TestConnection_ReconnectWithBackoff_TransientError_ContinuesIndefinitely
-// verifies A.1 semantics: once established, reconnect keeps retrying through
-// transient dial errors (including those that the amqp091-go library wraps as
+// verifies that once established, reconnect keeps retrying through transient
+// dial errors (including those that the amqp091-go library wraps as
 // *amqp.Error with Recover=false such as AMQP 501 from mid-handshake TCP
-// resets during a broker restart). Only closeCh stops the loop.
+// resets during a broker restart) until closeCh fires or a broker-classified
+// permanent error is encountered (see TestReconnectWithBackoff_PermanentError_*).
 func TestConnection_ReconnectWithBackoff_TransientError_ContinuesIndefinitely(t *testing.T) {
 	var mu sync.Mutex
 	dialCount := 0
@@ -1136,10 +1176,9 @@ func TestConnection_ReconnectWithBackoff_TransientError_ContinuesIndefinitely(t 
 			mu.Unlock()
 			return nil, transientAMQP501
 		},
-		closeCh:    closeCh,
-		connected:  make(chan struct{}),
-		terminalCh: make(chan struct{}),
-		clock:      clock.Real(),
+		closeCh:   closeCh,
+		connected: make(chan struct{}),
+		clock:     clock.Real(),
 	}
 
 	done := make(chan bool, 1)
@@ -1298,12 +1337,9 @@ func TestPublisher_Publish_TerminalState_ReturnsPermanentError(t *testing.T) {
 		channelPool:  make(chan AMQPChannel, 2),
 		closeCh:      make(chan struct{}),
 		connected:    make(chan struct{}),
-		terminalCh:   make(chan struct{}),
 		clock:        clock.Real(),
 		permanentErr: errcode.New(errcode.KindInternal, ErrAdapterAMQPConnectPermanent, "access refused"),
 	}
-	close(conn.terminalCh)
-
 	pub := NewPublisher(conn, WithPublisherClock(clock.Real()))
 	err := pub.Publish(context.Background(), "test.topic", []byte("payload"))
 
@@ -1782,7 +1818,6 @@ func TestSubscriber_ReconnectLoop_CtxCancelledDuringWait(t *testing.T) {
 		channelPool: make(chan AMQPChannel, 5),
 		closeCh:     make(chan struct{}),
 		connected:   make(chan struct{}), // Never closed = never connected.
-		terminalCh:  make(chan struct{}),
 		clock:       clock.Real(),
 	}
 
@@ -1963,7 +1998,6 @@ func TestSubscriber_Subscribe_ClosedDuringReconnect(t *testing.T) {
 		channelPool: make(chan AMQPChannel, 5),
 		closeCh:     make(chan struct{}),
 		connected:   make(chan struct{}),
-		terminalCh:  make(chan struct{}),
 		clock:       clock.Real(),
 	}
 	// Mark as initially connected.
@@ -3662,10 +3696,6 @@ func TestConsumerBase_WrapWithClaimer_ExplicitReject_NoRetry(t *testing.T) {
 // longer detects-and-upgrades a wrapped PermanentError. Coverage moved to
 // kernel/outbox.TestConsumerBase_Wrap_WrappedPermanentErrorInRequeue_NotEscalated.
 
-// NOTE: TestConnection_MaxReconnectAttempts_One deleted (A.1 semantics).
-// Reconnect has no attempt cap; successor behavior is covered by
-// TestConnection_ReconnectWithBackoff_TransientError_ContinuesIndefinitely.
-
 // =============================================================================
 // ExponentialDelay boundary tests (S3 P2)
 // =============================================================================
@@ -3697,7 +3727,6 @@ func TestIsTerminalConnectionError(t *testing.T) {
 		terminal bool
 	}{
 		{"permanent", errcode.New(errcode.KindInternal, ErrAdapterAMQPConnectPermanent, "bad creds"), true},
-		{"exhausted", errcode.New(errcode.KindInternal, ErrAdapterAMQPReconnectExhausted, "max attempts"), true},
 		{"transient", errcode.New(errcode.KindInternal, ErrAdapterAMQPConnect, "timeout"), false},
 		{"publish", errcode.New(errcode.KindInternal, ErrAdapterAMQPPublish, "channel error"), false},
 		{"nil", nil, false},
@@ -3708,34 +3737,6 @@ func TestIsTerminalConnectionError(t *testing.T) {
 			assert.Equal(t, tt.terminal, isTerminalConnectionError(tt.err))
 		})
 	}
-}
-
-func TestPublisher_Publish_ReconnectExhausted_ReturnsPermanentError(t *testing.T) {
-	// When Connection is in terminal state with ReconnectExhausted,
-	// Publish should return ErrAdapterAMQPReconnectExhausted (not generic publish error).
-	conn := &Connection{
-		config: Config{
-			URL:             testAMQPURL,
-			ChannelPoolSize: 2,
-			ConfirmTimeout:  testtime.EventuallyLong,
-		},
-		channelPool:  make(chan AMQPChannel, 2),
-		closeCh:      make(chan struct{}),
-		connected:    make(chan struct{}),
-		terminalCh:   make(chan struct{}),
-		clock:        clock.Real(),
-		permanentErr: errcode.New(errcode.KindInternal, ErrAdapterAMQPReconnectExhausted, "max attempts exceeded"),
-	}
-	close(conn.terminalCh)
-
-	pub := NewPublisher(conn, WithPublisherClock(clock.Real()))
-	err := pub.Publish(context.Background(), "test.topic", []byte("payload"))
-
-	require.Error(t, err)
-	var ecErr *errcode.Error
-	require.True(t, errors.As(err, &ecErr))
-	assert.Equal(t, ErrAdapterAMQPReconnectExhausted, ecErr.Code,
-		"Publish in terminal state (reconnect exhausted) should return ReconnectExhausted error, not generic publish error")
 }
 
 // =============================================================================
@@ -3857,11 +3858,6 @@ func TestConnection_Health_DuringReconnect(t *testing.T) {
 	}, testtime.D2s, time.Millisecond, "Health() should return nil after successful reconnect")
 }
 
-// NOTE: TestConnection_MaxReconnectAttempts_PermanentOverridesExhaustion deleted (A.1).
-// Runtime reconnect no longer distinguishes permanent vs transient; all errors
-// are retried indefinitely. Startup-time permanent classification is covered
-// by TestNewConnection_PermanentDialError.
-
 // =============================================================================
 // RMQ-RACE-01: WaitConnected stale channel re-validation
 // =============================================================================
@@ -3880,7 +3876,6 @@ func TestConnection_WaitConnected_StaleChannelRetry(t *testing.T) {
 		channelPool: make(chan AMQPChannel, 5),
 		closeCh:     make(chan struct{}),
 		connected:   make(chan struct{}),
-		terminalCh:  make(chan struct{}),
 		clock:       clock.Real(),
 		state:       StateConnected,
 	}
@@ -3931,7 +3926,6 @@ func TestConnection_WaitConnected_RaceRevalidation(t *testing.T) {
 		channelPool: make(chan AMQPChannel, 5),
 		closeCh:     make(chan struct{}),
 		connected:   oldConnected,
-		terminalCh:  make(chan struct{}),
 		clock:       clock.Real(),
 		conn:        mockConn,
 		state:       StateConnected,
@@ -3987,7 +3981,6 @@ func TestConnection_WaitConnected_ConcurrentDisconnectReconnect(t *testing.T) {
 		channelPool: make(chan AMQPChannel, 5),
 		closeCh:     make(chan struct{}),
 		connected:   initialConnected,
-		terminalCh:  make(chan struct{}),
 		clock:       clock.Real(),
 		conn:        mockConn,
 		state:       StateConnecting, // not yet connected
@@ -4093,8 +4086,8 @@ func TestConnection_Health_StateDistinction(t *testing.T) {
 			wantCode: ErrAdapterAMQPReconnecting,
 		},
 		{
-			name:     "StateTerminal permanent error",
-			state:    StateTerminal,
+			name:     "permanentErr supersedes phase (runtime classification)",
+			state:    StateDisconnected,
 			conn:     nil,
 			permErr:  errcode.New(errcode.KindInternal, ErrAdapterAMQPConnectPermanent, "bad creds"),
 			wantCode: ErrAdapterAMQPConnectPermanent,
@@ -4108,7 +4101,6 @@ func TestConnection_Health_StateDistinction(t *testing.T) {
 				channelPool:  make(chan AMQPChannel, 1),
 				closeCh:      make(chan struct{}),
 				connected:    make(chan struct{}),
-				terminalCh:   make(chan struct{}),
 				clock:        clock.Real(),
 				state:        tt.state,
 				conn:         tt.conn,
@@ -4137,18 +4129,16 @@ func TestConnection_ConnectionStatus(t *testing.T) {
 		{"connecting", StateConnecting, StateConnecting},
 		{"connected", StateConnected, StateConnected},
 		{"disconnected", StateDisconnected, StateDisconnected},
-		{"terminal", StateTerminal, StateTerminal},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			c := &Connection{
-				config:     Config{URL: "amqp://test@localhost/"},
-				closeCh:    make(chan struct{}),
-				connected:  make(chan struct{}),
-				terminalCh: make(chan struct{}),
-				clock:      clock.Real(),
-				state:      tt.state,
+				config:    Config{URL: "amqp://test@localhost/"},
+				closeCh:   make(chan struct{}),
+				connected: make(chan struct{}),
+				clock:     clock.Real(),
+				state:     tt.state,
 			}
 			assert.Equal(t, tt.want, c.ConnectionStatus().State)
 		})
@@ -4162,7 +4152,6 @@ func TestConnection_ConnectionStatus_StructuredDiagnosticSanitizesError(t *testi
 		config:            Config{URL: rawURL},
 		closeCh:           make(chan struct{}),
 		connected:         make(chan struct{}),
-		terminalCh:        make(chan struct{}),
 		clock:             clock.Real(),
 		state:             StateDisconnected,
 		lastError:         sanitizeErrorURL("read "+rawURL+": EOF", rawURL),
@@ -4199,7 +4188,6 @@ func TestConnection_Close_LogsStructuredDiagnostic(t *testing.T) {
 		conn:              mockConn,
 		closeCh:           make(chan struct{}),
 		connected:         make(chan struct{}),
-		terminalCh:        make(chan struct{}),
 		clock:             clock.Real(),
 		channelPool:       make(chan AMQPChannel, 3),
 		state:             StateDisconnected,
@@ -4301,7 +4289,6 @@ func TestConnectionPhase_String(t *testing.T) {
 		{StateConnecting, "connecting"},
 		{StateConnected, "connected"},
 		{StateDisconnected, "disconnected"},
-		{StateTerminal, "terminal"},
 		{ConnectionPhase(99), "unknown(99)"},
 	}
 	for _, tt := range tests {
@@ -4329,7 +4316,8 @@ func TestConsumerBase_RetryExhaustion(t *testing.T) {
 			RetryBaseDelay: testtime.D10ms,
 			IdempotencyTTL: testtime.D1h,
 		},
-		clock.Real())
+		clock.Real(),
+	)
 	require.NoError(t, cbErr)
 
 	callCount := 0
@@ -4370,7 +4358,6 @@ func TestPublisher_Publish_ClosesChannel(t *testing.T) {
 		channelPool: make(chan AMQPChannel, 5),
 		closeCh:     make(chan struct{}),
 		connected:   make(chan struct{}),
-		terminalCh:  make(chan struct{}),
 		clock:       clock.Real(),
 		state:       StateConnected,
 		conn:        mc,
@@ -4406,7 +4393,6 @@ func TestPublisher_Publish_CloseError_DoesNotMaskResult(t *testing.T) {
 		channelPool: make(chan AMQPChannel, 5),
 		closeCh:     make(chan struct{}),
 		connected:   make(chan struct{}),
-		terminalCh:  make(chan struct{}),
 		clock:       clock.Real(),
 		state:       StateConnected,
 		conn:        mc,

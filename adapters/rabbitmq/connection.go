@@ -26,15 +26,14 @@ import (
 
 // Error codes for the RabbitMQ adapter.
 const (
-	ErrAdapterAMQPConnect            errcode.Code = "ERR_ADAPTER_AMQP_CONNECT"
-	ErrAdapterAMQPConnectPermanent   errcode.Code = "ERR_ADAPTER_AMQP_CONNECT_PERMANENT"
-	ErrAdapterAMQPPublish            errcode.Code = "ERR_ADAPTER_AMQP_PUBLISH"
-	ErrAdapterAMQPConfirmTimeout     errcode.Code = "ERR_ADAPTER_AMQP_CONFIRM_TIMEOUT"
-	ErrAdapterAMQPSubscribe          errcode.Code = "ERR_ADAPTER_AMQP_SUBSCRIBE"
-	ErrAdapterAMQPConsume            errcode.Code = "ERR_ADAPTER_AMQP_CONSUME"
-	ErrAdapterAMQPReconnectExhausted errcode.Code = "ERR_ADAPTER_AMQP_RECONNECT_EXHAUSTED"
-	ErrAdapterAMQPReconnecting       errcode.Code = "ERR_ADAPTER_AMQP_RECONNECTING"
-	ErrAdapterAMQPCloseTimeout       errcode.Code = "ERR_ADAPTER_AMQP_CLOSE_TIMEOUT"
+	ErrAdapterAMQPConnect          errcode.Code = "ERR_ADAPTER_AMQP_CONNECT"
+	ErrAdapterAMQPConnectPermanent errcode.Code = "ERR_ADAPTER_AMQP_CONNECT_PERMANENT"
+	ErrAdapterAMQPPublish          errcode.Code = "ERR_ADAPTER_AMQP_PUBLISH"
+	ErrAdapterAMQPConfirmTimeout   errcode.Code = "ERR_ADAPTER_AMQP_CONFIRM_TIMEOUT"
+	ErrAdapterAMQPSubscribe        errcode.Code = "ERR_ADAPTER_AMQP_SUBSCRIBE"
+	ErrAdapterAMQPConsume          errcode.Code = "ERR_ADAPTER_AMQP_CONSUME"
+	ErrAdapterAMQPReconnecting     errcode.Code = "ERR_ADAPTER_AMQP_RECONNECTING"
+	ErrAdapterAMQPCloseTimeout     errcode.Code = "ERR_ADAPTER_AMQP_CLOSE_TIMEOUT"
 )
 
 const (
@@ -66,10 +65,14 @@ const (
 	StateConnecting ConnectionPhase = iota
 	// StateConnected means the connection is live and ready for use.
 	StateConnected
-	// StateDisconnected means the connection was lost and reconnection is in progress.
+	// StateDisconnected means the connection was lost and reconnection is in
+	// progress. Permanent broker classification (e.g. ErrCredentials after admin
+	// revokes the user) is exposed via Connection.permanentErr while staying in
+	// this state — Health()/WaitConnected return the permanent error so /readyz
+	// flips to 503, but the reconnect goroutine keeps retrying so an operator
+	// fix (re-issued credentials / restored vhost) self-heals automatically.
+	// See ADR docs/architecture/202605051700-adr-rmq-runtime-permanent-classification.md.
 	StateDisconnected
-	// StateTerminal means a permanent error was encountered; no further reconnects.
-	StateTerminal
 )
 
 // String returns a human-readable label for the connection state.
@@ -81,8 +84,6 @@ func (s ConnectionPhase) String() string {
 		return "connected"
 	case StateDisconnected:
 		return "disconnected"
-	case StateTerminal:
-		return "terminal"
 	default:
 		return fmt.Sprintf("unknown(%d)", s)
 	}
@@ -106,77 +107,183 @@ type ConnectionState struct {
 	ReconnectAttempts int             `json:"reconnectAttempts"`
 }
 
-// isPermanentDialError returns true if the error from Dial indicates a
-// permanent condition that will not resolve by retrying.
-//
-// Classification strategy (structured first, string fallback):
-//  1. *amqp.Error with Recover=false → permanent (broker handshake rejection)
-//  2. net.Error → recoverable (network-level: timeout, refused, DNS)
-//  3. *url.Error → permanent (URI parse failure, structural)
-//  4. String keyword fallback → permanent for known amqp091-go plain errors
-//  5. Default → recoverable (avoid false-positive abort)
-//
-// ref: rabbitmq/amqp091-go README — reconnection is delegated to the caller;
-// amqp091-go surfaces *amqp.Error for handshake issues and plain errors for
-// pre-handshake failures (URI parse, auth mechanism, TLS).
-func isPermanentDialError(err error) bool {
-	if err == nil {
-		return false
+// unwrapDialErr peels one layer of *errcode.Error wrapping (applied by
+// connect()) so callers can pass the underlying transport/AMQP error to
+// isPermanentDialError. Returns err unchanged when it is not an *errcode.Error
+// or when the wrapped Cause is nil.
+func unwrapDialErr(err error) error {
+	var ecErr *errcode.Error
+	if errors.As(err, &ecErr) && ecErr.Unwrap() != nil {
+		return ecErr.Unwrap()
 	}
+	return err
+}
 
-	// 1. AMQP protocol errors from the broker handshake.
-	// Recover=false: 403 ACCESS_REFUSED, 404 NOT_FOUND, 530 NOT_ALLOWED.
+// definitivePermanentSentinels are amqp091-go sentinels classified by the
+// library itself as protocol-level hard errors (not inferred from socket
+// close). Single-hit at runtime is sufficient to promote to permanentErr.
+//
+// Coverage (amqp091-go types.go:50-77):
+//   - ErrSASL                — SASL mechanism mismatch (config issue)
+//   - ErrSyntax              — hard protocol error / incompatible encoding
+//   - ErrFrame               — frame could not be parsed (protocol mismatch)
+//   - ErrCommandInvalid      — broker sent unexpected command (library bug)
+//   - ErrUnexpectedFrame     — non-method/heartbeat frame (library bug)
+var definitivePermanentSentinels = []error{
+	amqp.ErrSASL,
+	amqp.ErrSyntax,
+	amqp.ErrFrame,
+	amqp.ErrCommandInvalid,
+	amqp.ErrUnexpectedFrame,
+}
+
+// inferredPermanentSentinels are amqp091-go sentinels the library *infers*
+// from socket close (no broker close frame), per source comments at
+// connection.go:1039-1043 ("we know it's an auth error, but the socket was
+// closed instead. Return a meaningful error.") and connection.go:1094-1096
+// ("Cannot be closed yet, but we know it's a vhost problem"). A network
+// blip mid-handshake will surface as one of these too, so runtime promotion
+// requires runtimePermanentConfirmHits consecutive hits to avoid flipping
+// /readyz to 503 on a single transient fault.
+var inferredPermanentSentinels = []error{
+	amqp.ErrCredentials, // openTune L1043 — broker rejected (or socket dropped)
+	amqp.ErrVhost,       // openVhost L1096 — vhost denied (or socket dropped)
+}
+
+// permanentDialClass categorizes a dial error for runtime classification:
+//   - permanentClassNone       — recoverable / unknown (retry)
+//   - permanentClassDefinitive — single-hit promote (broker frame, SASL,
+//     hard protocol, URI parse, TLS / x509)
+//   - permanentClassInferred   — amqp091-go-inferred from socket close;
+//     promote only after runtimePermanentConfirmHits consecutive hits
+type permanentDialClass int
+
+const (
+	permanentClassNone permanentDialClass = iota
+	permanentClassDefinitive
+	permanentClassInferred
+)
+
+// classifyDialError categorizes a dial error.
+//
+// Classification order (matches must precede mismatches):
+//  1. Inferred sentinels (errors.Is amqp.ErrCredentials/ErrVhost) → inferred.
+//     Must precede the *amqp.Error structural check; the sentinels have
+//     Server=false default-zero and errors.As(...) would otherwise short the
+//     structural branch.
+//  2. Definitive sentinels (ErrSASL/ErrSyntax/ErrFrame/...) → definitive.
+//  3. Broker-emitted *amqp.Error{Server:true, !Recover} → definitive.
+//     Server=false is excluded — amqp091-go uses it for transport faults
+//     (TCP reset → 501) which are transient broker-restart races.
+//  4. *url.Error (URI parse failure) → definitive. Must precede the net.Error
+//     check because *url.Error implements net.Error via Timeout/Temporary.
+//  5. net.Error (timeout / refused / DNS) → none (recoverable).
+//  6. String keyword fallback (TLS / x509 / amqp091-go pre-handshake plain
+//     errors) → definitive.
+//  7. Default → none.
+func classifyDialError(err error) permanentDialClass {
+	if err == nil {
+		return permanentClassNone
+	}
+	if matchesAnySentinel(err, inferredPermanentSentinels) {
+		return permanentClassInferred
+	}
+	if matchesAnySentinel(err, definitivePermanentSentinels) {
+		return permanentClassDefinitive
+	}
+	if c, ok := classifyStructuredDialError(err); ok {
+		return c
+	}
+	if matchesPermanentSubstring(err.Error()) {
+		return permanentClassDefinitive
+	}
+	return permanentClassNone
+}
+
+// matchesAnySentinel reports whether err wraps any sentinel in the list.
+func matchesAnySentinel(err error, sentinels []error) bool {
+	for _, s := range sentinels {
+		if errors.Is(err, s) {
+			return true
+		}
+	}
+	return false
+}
+
+// classifyStructuredDialError handles typed-error dispatch (*amqp.Error,
+// *url.Error, net.Error). Returns ok=true when it produced a definitive
+// answer; ok=false signals "not my type, fall through to string-fallback".
+//
+// *url.Error must be tried before net.Error: *url.Error satisfies net.Error
+// via embedded Timeout/Temporary forwarders, so net.Error-first would silently
+// classify URI parse failures as recoverable.
+func classifyStructuredDialError(err error) (permanentDialClass, bool) {
 	var amqpErr *amqp.Error
 	if errors.As(err, &amqpErr) {
-		return !amqpErr.Recover
+		if amqpErr.Server && !amqpErr.Recover {
+			return permanentClassDefinitive, true
+		}
+		return permanentClassNone, true
 	}
-
-	// 2. Network-level errors are recoverable (timeout, refused, DNS).
-	var netErr net.Error
-	if errors.As(err, &netErr) {
-		return false
-	}
-
-	// 3. URL parse errors are structural/permanent.
 	var urlErr *url.Error
 	if errors.As(err, &urlErr) {
-		return true
+		return permanentClassDefinitive, true
 	}
+	var netErr net.Error
+	if errors.As(err, &netErr) {
+		return permanentClassNone, true
+	}
+	return permanentClassNone, false
+}
 
-	// 4. String keyword fallback for amqp091-go plain errors that don't
-	// implement a typed error. These are pre-handshake configuration errors
-	// (sourced from amqp091-go v1.10.0: uri.go, connection.go, tls.go).
-	msg := err.Error()
+// matchesPermanentSubstring is the last-resort string-keyword fallback for
+// amqp091-go plain errors that don't carry a typed shape (sourced from
+// amqp091-go v1.11.0 uri.go / connection.go / tls.go).
+func matchesPermanentSubstring(msg string) bool {
 	for _, keyword := range permanentDialSubstrings {
 		if strings.Contains(msg, keyword) {
 			return true
 		}
 	}
-
-	// 5. Unknown errors default to recoverable to avoid false-positive abort.
 	return false
+}
+
+// isPermanentDialError returns true for any non-none classification. Kept as
+// a convenience for NewConnection (startup-time fail-fast where the inferred
+// vs definitive distinction does not matter — a single hit always aborts).
+func isPermanentDialError(err error) bool {
+	return classifyDialError(err) != permanentClassNone
 }
 
 // permanentDialSubstrings are substrings in amqp091-go plain-error messages
 // that indicate permanent dial failures. String matching is the last resort —
-// structural checks (amqp.Error, net.Error, url.Error) are tried first.
+// structural checks (amqp.Error, url.Error, net.Error) are tried first.
+//
+// Coverage from amqp091-go v1.11.0:
+//   - "AMQP scheme"             uri.go ParseURI scheme validation
+//   - "AMQP URI"                uri.go ParseURI host / port / whitespace
+//   - "invalid port"            uri.go ParseURI bad port
+//   - "auth mechanism"          connection.go pickSASLMechanism
+//   - "x509:"                   crypto/tls — certificate validation
+//   - "tls: "                   crypto/tls — handshake / protocol error
 var permanentDialSubstrings = []string{
-	"AMQP URI",       // amqp.ParseURI → malformed URI
-	"auth mechanism", // connection.go → unsupported SASL mechanism
-	"x509:",          // crypto/tls → certificate validation failure
-	"tls: ",          // crypto/tls → handshake / protocol error
+	"AMQP scheme",
+	"AMQP URI",
+	"invalid port",
+	"auth mechanism",
+	"x509:",
+	"tls: ",
 }
 
 // isTerminalConnectionError reports whether the error indicates the Connection
-// has entered terminal state (permanent dial failure or reconnect attempts
-// exhausted). Callers should not retry — close the dependent component.
+// has entered terminal state (broker-classified permanent dial failure).
+// Callers should not retry — close the dependent component.
 func isTerminalConnectionError(err error) bool {
 	var ecErr *errcode.Error
 	if !errors.As(err, &ecErr) {
 		return false
 	}
-	return ecErr.Code == ErrAdapterAMQPConnectPermanent ||
-		ecErr.Code == ErrAdapterAMQPReconnectExhausted
+	return ecErr.Code == ErrAdapterAMQPConnectPermanent
 }
 
 // Config holds configuration for the RabbitMQ connection.
@@ -200,24 +307,6 @@ type Config struct {
 	// ConfirmTimeout is the timeout for publisher confirm mode.
 	// Default: 5s.
 	ConfirmTimeout time.Duration
-
-	// MaxReconnectAttempts is retained for field compatibility but ignored.
-	// Runtime reconnect is always unbounded (A.1 semantics): once a Connection
-	// has successfully established at least once, loss of connectivity triggers
-	// indefinite retry with capped exponential backoff until Close() is called
-	// or the connection recovers.
-	//
-	// Operational recovery escape hatch: orchestrators (k8s readinessProbe
-	// against /readyz) restart the pod if reconnect cannot succeed within the
-	// deployment's SLO, rather than the Connection self-terminating.
-	//
-	// Permanent errors (bad credentials, TLS, URI parse) are detected at
-	// NewConnection time — fail-fast at startup — and do not apply at runtime.
-	//
-	// ref: ThreeDotsLabs/watermill-amqp ConnectionWrapper.reconnect uses
-	// backoff.Retry() with no attempt cap; it stops only on Close() or
-	// backoff.Permanent() wrapping of the sentinel close condition.
-	MaxReconnectAttempts int
 }
 
 func (c *Config) setDefaults() {
@@ -304,11 +393,21 @@ func DefaultDial(url string) (AMQPConnection, error) {
 
 // Connection manages an AMQP connection with auto-reconnect and channel pooling.
 //
-// Connection has four lifecycle states (see ConnectionPhase):
+// Connection has three lifecycle states (see ConnectionPhase):
 //   - connecting:   initial state before first successful dial
 //   - connected:    ready for use (connected channel is closed)
 //   - disconnected: lost connection, attempting backoff reconnect
-//   - terminal:     permanent error, will not reconnect (terminalCh is closed)
+//
+// Broker-classified permanent errors (e.g. amqp.ErrCredentials, ACCESS_REFUSED
+// frames) at runtime do NOT terminate the reconnect goroutine. Instead they
+// are recorded in permanentErr and surfaced via Health()/WaitConnected so
+// /readyz returns 503; the reconnect loop keeps trying so that operator
+// remediation (rotated creds, restored vhost) self-heals on the next dial.
+// permanentErr is cleared the moment a dial succeeds. NewConnection-time
+// permanent errors still fail-fast (no Connection instance is created).
+//
+// ref: ThreeDotsLabs/watermill-amqp pkg/amqp/connection.go reconnect — same
+// "indefinite retry, surface state to caller" pattern.
 type Connection struct {
 	config Config
 	dial   DialFunc
@@ -322,13 +421,24 @@ type Connection struct {
 	closeCh chan struct{}
 	closed  bool
 
-	// connected is closed when a connection is established, re-created on disconnect.
+	// connected is closed when a connection is established, re-created on
+	// disconnect or when permanentErr transitions (so WaitConnected wakes and
+	// re-evaluates permanentErr instead of waiting on a stale channel).
 	connected chan struct{}
 
-	// terminalCh is closed when a permanent dial error is encountered.
-	// permanentErr holds the error for callers to inspect.
-	terminalCh   chan struct{}
+	// permanentErr is set when reconnect dial returns an unrecoverable
+	// classification (broker-emitted Recover=false / amqp091-go sentinel).
+	// Cleared on the next successful reconnect. Protected by mu.
 	permanentErr error
+
+	// pendingPermanentHits counts consecutive runtime hits for inferred
+	// sentinels (amqp.ErrCredentials / amqp.ErrVhost) which amqp091-go
+	// derives from socket close rather than a broker close frame. We require
+	// runtimePermanentConfirmHits consecutive hits before promoting to
+	// permanentErr so a single transient handshake fault does not flip
+	// /readyz to 503 unnecessarily. Reset on any successful dial or
+	// non-inferred classification. Protected by mu.
+	pendingPermanentHits int
 
 	// state tracks the connection lifecycle for Health() and observability.
 	// Protected by mu.
@@ -337,6 +447,14 @@ type Connection struct {
 	lastDisconnectAt  time.Time
 	reconnectAttempts int
 }
+
+// runtimePermanentConfirmHits is the number of consecutive inferred-sentinel
+// hits (amqp.ErrCredentials / amqp.ErrVhost — amqp091-go infers these from
+// socket close, see connection.go:1043/1096) required before promoting them
+// to permanentErr at runtime. Definitive sentinels (ErrSASL / ErrSyntax /
+// ErrFrame / ErrCommandInvalid / ErrUnexpectedFrame) and broker-emitted
+// Server=true && Recover=false errors bypass this gate (single hit promotes).
+const runtimePermanentConfirmHits = 2
 
 // NewConnection creates a new Connection with the given config.
 // It attempts an initial connection and starts the reconnect loop.
@@ -351,7 +469,6 @@ func NewConnection(config Config, opts ...ConnectionOption) (*Connection, error)
 		channelPool: make(chan AMQPChannel, config.ChannelPoolSize),
 		closeCh:     make(chan struct{}),
 		connected:   make(chan struct{}),
-		terminalCh:  make(chan struct{}),
 	}
 
 	for _, opt := range opts {
@@ -363,12 +480,7 @@ func NewConnection(config Config, opts ...ConnectionOption) (*Connection, error)
 	if err := c.connect(); err != nil {
 		// Classify initial connection failure: permanent errors get a distinct code
 		// so callers can fail-fast on bad credentials, bad URI, TLS misconfiguration.
-		var ecErr *errcode.Error
-		dialErr := err
-		if errors.As(err, &ecErr) && ecErr.Unwrap() != nil {
-			dialErr = ecErr.Unwrap()
-		}
-		if isPermanentDialError(dialErr) {
+		if isPermanentDialError(unwrapDialErr(err)) {
 			return nil, errcode.Wrap(errcode.KindInternal, ErrAdapterAMQPConnectPermanent,
 				"rabbitmq: initial connection failed (permanent)", c.sanitizeDialError(err))
 		}
@@ -448,7 +560,9 @@ func (c *Connection) reconnectLoop() {
 			close(c.connected)
 			c.mu.Unlock()
 		} else {
-			// closeCh fired — clean shutdown.
+			// reconnectWithBackoff returns false only on closeCh (clean shutdown).
+			// Permanent classifications stay in the inner retry loop so an
+			// operator fix self-heals on the next successful dial.
 			return
 		}
 	}
@@ -486,22 +600,29 @@ func (c *Connection) markDisconnected(closeErr *amqp.Error) {
 }
 
 // reconnectWithBackoff attempts to re-establish the connection with capped
-// exponential backoff. It retries indefinitely until the connection is
-// recovered or Close() is called (closeCh fired).
+// exponential backoff. The loop runs until closeCh fires (Close was called)
+// or a dial succeeds — broker-classified permanent errors do NOT terminate
+// the loop. Instead they are recorded in permanentErr (markPermanent) so
+// Health()/WaitConnected surface them and /readyz returns 503; the next
+// successful dial clears permanentErr (markRecovered) and operations resume
+// transparently.
 //
-// A.1 semantics (post-PR#173): transient dial errors during reconnect never
-// cause the connection to give up. Permanent errors (bad credentials, TLS,
-// URI) surface only at NewConnection time and fail fast at startup; once the
-// Connection has successfully established at least once, we assume operational
-// recovery is possible and keep trying. Operators rely on k8s readinessProbe
-// (via /readyz → Health() == errHealthReconnecting) to restart the pod if the
-// outage exceeds the deployment's SLO.
+// Definitive permanent classifications (broker error frames with Server=true,
+// SASL / Syntax / Frame / CommandInvalid / UnexpectedFrame sentinels, URI
+// parse / TLS) promote on the first hit. Inferred classifications
+// (ErrCredentials / ErrVhost — amqp091-go derives these from socket close,
+// which a transient handshake fault can also produce) require
+// runtimePermanentConfirmHits consecutive hits before promotion to avoid
+// flipping /readyz on a single network blip.
 //
-// Returns true when the connection was successfully re-established, false when
-// closeCh fired (clean shutdown).
+// Returns true when the connection was successfully re-established, false
+// when closeCh fires (clean shutdown). Permanent classifications never
+// return false — the goroutine stays alive so an operator fix self-heals.
 //
-// ref: ThreeDotsLabs/watermill-amqp ConnectionWrapper.reconnect — same
-// unbounded retry pattern, stops only on Closed() or backoff.Permanent().
+// ref: ThreeDotsLabs/watermill-amqp pkg/amqp/connection.go reconnect — same
+// "indefinite retry, surface state to caller" pattern.
+// ref: rabbitmq/amqp091-go connection.go Recover / Server fields — broker
+// handshake rejections set Server=true; library-inferred sentinels do not.
 func (c *Connection) reconnectWithBackoff() bool {
 	attempt := 0
 	for {
@@ -512,6 +633,11 @@ func (c *Connection) reconnectWithBackoff() bool {
 		}
 
 		delay := c.backoffDelay(attempt)
+		// Pre-increment semantics: reconnectAttempts reflects "about to attempt
+		// reconnect #N" once written, so observers reading ConnectionStatus during
+		// the backoff wait already see the upcoming attempt count. This is
+		// intentional — operators want "next attempt N due in <delay>" visibility,
+		// not "N-1 done and a new one is brewing in the dark".
 		c.mu.Lock()
 		c.reconnectAttempts = attempt + 1
 		c.mu.Unlock()
@@ -529,20 +655,90 @@ func (c *Connection) reconnectWithBackoff() bool {
 
 		if err := c.connect(); err != nil {
 			sanitizedErr := sanitizeErrorURL(err.Error(), c.config.URL)
-			c.mu.Lock()
-			c.lastError = sanitizedErr
-			c.mu.Unlock()
-			slog.Warn("rabbitmq: reconnect failed, retrying indefinitely",
-				slog.Int("attempt", attempt+1),
-				slog.String("error", sanitizedErr))
+			class := classifyDialError(unwrapDialErr(err))
+
+			switch class {
+			case permanentClassDefinitive:
+				c.markPermanent(err, sanitizedErr)
+				slog.Error("rabbitmq: reconnect dial classified permanent (definitive); /readyz will return 503 until recovery",
+					slog.String("errCode", string(ErrAdapterAMQPConnectPermanent)),
+					slog.Int("attempt", attempt+1),
+					slog.String("error", sanitizedErr))
+			case permanentClassInferred:
+				c.mu.Lock()
+				c.pendingPermanentHits++
+				hits := c.pendingPermanentHits
+				c.lastError = sanitizedErr
+				c.mu.Unlock()
+				if hits >= runtimePermanentConfirmHits {
+					c.markPermanent(err, sanitizedErr)
+					slog.Error("rabbitmq: reconnect dial classified permanent (inferred, confirmed); /readyz will return 503 until recovery",
+						slog.String("errCode", string(ErrAdapterAMQPConnectPermanent)),
+						slog.Int("attempt", attempt+1),
+						slog.Int("confirmedHits", hits),
+						slog.String("error", sanitizedErr))
+				} else {
+					slog.Warn("rabbitmq: reconnect failed, awaiting confirmation before classifying permanent",
+						slog.Int("attempt", attempt+1),
+						slog.Int("pendingHits", hits),
+						slog.Int("confirmThreshold", runtimePermanentConfirmHits),
+						slog.String("error", sanitizedErr))
+				}
+			default: // permanentClassNone
+				c.mu.Lock()
+				c.lastError = sanitizedErr
+				c.pendingPermanentHits = 0
+				c.mu.Unlock()
+				slog.Warn("rabbitmq: reconnect failed, retrying",
+					slog.Int("attempt", attempt+1),
+					slog.String("error", sanitizedErr))
+			}
 			attempt++
 			continue
 		}
 
+		c.markRecovered()
 		slog.Info("rabbitmq: reconnected successfully",
 			slog.Int("attempts", attempt+1))
 		return true
 	}
+}
+
+// markPermanent records a permanent classification on the connection. It
+// wakes any WaitConnected callers by closing-and-replacing the connected
+// channel — the wake-and-recheck idiom (see WaitConnected stale-channel
+// handling): on wake, callers re-read permanentErr under RLock and, finding
+// it non-nil, return it. permanentErr is cleared by markRecovered when a
+// later dial succeeds.
+func (c *Connection) markPermanent(cause error, sanitizedErr string) {
+	c.mu.Lock()
+	c.permanentErr = errcode.Wrap(errcode.KindInternal, ErrAdapterAMQPConnectPermanent,
+		"rabbitmq: reconnect dial classified permanent", c.sanitizeDialError(cause))
+	c.lastError = sanitizedErr
+	c.pendingPermanentHits = 0
+	old := c.connected
+	c.connected = make(chan struct{})
+	c.mu.Unlock()
+	// Close the old channel to wake any waiters. Use select+default to keep
+	// the operation idempotent in case the channel was already closed by an
+	// earlier reconnect-success path on the same connection generation.
+	select {
+	case <-old:
+	default:
+		close(old)
+	}
+}
+
+// markRecovered clears any prior permanent classification. Called from the
+// reconnect success path so an operator fix (rotated creds, restored vhost)
+// self-heals on the next successful dial. The connected channel is closed
+// by reconnectLoop after this returns, signaling waiters that the
+// connection is live again.
+func (c *Connection) markRecovered() {
+	c.mu.Lock()
+	c.permanentErr = nil
+	c.pendingPermanentHits = 0
+	c.mu.Unlock()
 }
 
 // backoffDelay calculates the reconnect delay for the given attempt using
@@ -653,7 +849,7 @@ func (c *Connection) ReleaseChannel(ch AMQPChannel) {
 
 // Health checks if the connection is alive. Returns a distinct error code per
 // connection state so operators can tell "never connected" from "reconnecting"
-// from "terminal".
+// from "permanent classification recorded".
 //
 // The ctx parameter is accepted to satisfy the lifecycle.Checker contract
 // (func(ctx context.Context) error) used by /readyz integration via
@@ -661,10 +857,16 @@ func (c *Connection) ReleaseChannel(ch AMQPChannel) {
 // only checked for early cancellation before the state read.
 //
 // Error codes returned:
-//   - nil: healthy (StateConnected, live connection)
-//   - ErrAdapterAMQPConnect: never connected (StateConnecting) or conn closed unexpectedly
-//   - ErrAdapterAMQPReconnecting: lost connection, backoff reconnect in progress (StateDisconnected)
-//   - ErrAdapterAMQPConnectPermanent / ErrAdapterAMQPReconnectExhausted: terminal, will not recover
+//   - nil: healthy (StateConnected, live connection, permanentErr cleared)
+//   - ErrAdapterAMQPConnectPermanent: a reconnect dial was classified
+//     permanent and the broker has not accepted us since. The reconnect
+//     goroutine is still trying — if the operator restores creds/vhost, the
+//     next successful dial clears this and Health returns nil again.
+//   - ErrAdapterAMQPReconnecting: lost connection, backoff reconnect in
+//     progress (StateDisconnected) without a recorded permanent
+//     classification.
+//   - ErrAdapterAMQPConnect: never connected (StateConnecting) or conn
+//     closed unexpectedly.
 func (c *Connection) Health(ctx context.Context) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -675,8 +877,9 @@ func (c *Connection) Health(ctx context.Context) error {
 	permErr := c.permanentErr
 	c.mu.RUnlock()
 
-	// StateTerminal: permanent error was recorded — return it directly.
-	// This covers ErrAdapterAMQPConnectPermanent and ErrAdapterAMQPReconnectExhausted.
+	// permanentErr supersedes the phase: a connection in StateDisconnected
+	// with permanentErr set still owes /readyz a 503 because the broker is
+	// rejecting us, even though the reconnect goroutine keeps retrying.
 	if permErr != nil {
 		return permErr
 	}
@@ -685,10 +888,6 @@ func (c *Connection) Health(ctx context.Context) error {
 		return errHealthReconnecting
 	case StateConnecting:
 		return errHealthNeverConnected
-	case StateTerminal:
-		// Defensive: permErr should be non-nil for terminal state (checked above).
-		// If we reach here, it's an internal invariant violation.
-		return errcode.New(errcode.KindInternal, ErrAdapterAMQPConnect, "rabbitmq: terminal state without permanent error")
 	case StateConnected:
 		// Fall through to conn.IsClosed() check below.
 	}
@@ -749,8 +948,6 @@ func connectionStateMessage(state ConnectionPhase) string {
 		return "reconnecting"
 	case StateConnecting:
 		return "connecting"
-	case StateTerminal:
-		return "terminal"
 	default:
 		return "unknown"
 	}
@@ -781,9 +978,9 @@ func (c *Connection) Checkers() map[string]func(context.Context) error {
 }
 
 // Worker returns nil — the RabbitMQ reconnect goroutine is started inside
-// NewConnection and managed by closeCh / terminalCh, not via the
-// ManagedResource worker contract. Returning nil is the documented "no
-// background worker" signal in lifecycle.ManagedResource.
+// NewConnection and managed by closeCh, not via the ManagedResource worker
+// contract. Returning nil is the documented "no background worker" signal
+// in lifecycle.ManagedResource.
 //
 // ref: kernel/lifecycle/managed_resource.go::Worker — nil documents "no worker".
 func (c *Connection) Worker() worker.Worker {
@@ -855,35 +1052,38 @@ func (c *Connection) Close(ctx context.Context) error {
 	})
 }
 
-// WaitConnected blocks until the connection is established, a permanent error
-// occurs, or ctx is canceled.
+// WaitConnected blocks until the connection is established, a permanent
+// error has been recorded, or ctx is canceled.
 //
 // The re-validation loop detects stale channel references caused by concurrent
-// reconnectLoop activity (RMQ-RACE-01 fix).
+// reconnectLoop / markPermanent activity (RMQ-RACE-01 fix). markPermanent
+// closes-and-replaces c.connected to wake waiters; markRecovered+reconnect
+// success closes the (replacement) channel after permanentErr is cleared.
 //
 // ref: go-micro broker/rabbitmq connection.go — adopted channel recreation under
 // mutex + wake-and-recheck pattern (condition variable idiom).
 //
 // Returns nil on successful connection, or an error:
-//   - ErrAdapterAMQPConnectPermanent: terminal state due to unrecoverable
-//     condition (bad credentials, TLS failure). Do NOT retry.
-//   - ErrAdapterAMQPReconnectExhausted: terminal state because
-//     MaxReconnectAttempts was exceeded. May recover after Pod restart
-//     with fresh config/network.
+//   - ErrAdapterAMQPConnectPermanent: a reconnect dial was classified
+//     permanent and the broker has not accepted us since (typically broker-
+//     emitted Recover=false / inferred ErrCredentials/ErrVhost / hard
+//     protocol sentinel). Subscribers/publishers should propagate this so
+//     EventRouter can retry at the right cadence; the underlying reconnect
+//     goroutine keeps trying so a later operator fix self-heals.
 //   - ErrAdapterAMQPConnect wrapping ctx.Err(): caller's deadline/cancel.
 //     May retry with a fresh context.
 func (c *Connection) WaitConnected(ctx context.Context) error {
 	for {
 		c.mu.RLock()
 		connected := c.connected
-		terminalCh := c.terminalCh
 		c.mu.RUnlock()
 
 		select {
 		case <-connected:
 			// RMQ-RACE-01 re-validation: the channel we selected on may be
-			// stale if reconnectLoop replaced it between our RLock and the
-			// select. Re-read under lock and verify the reference matches.
+			// stale if reconnectLoop / markPermanent / markDisconnected
+			// replaced it between our RLock and the select. Re-read under
+			// lock and verify the reference matches.
 			c.mu.RLock()
 			sameRef := (c.connected == connected)
 			permErr := c.permanentErr
@@ -895,11 +1095,6 @@ func (c *Connection) WaitConnected(ctx context.Context) error {
 				return nil // same channel — genuinely connected
 			}
 			continue // stale channel, loop back to re-read
-		case <-terminalCh:
-			c.mu.RLock()
-			err := c.permanentErr
-			c.mu.RUnlock()
-			return err
 		case <-ctx.Done():
 			return errcode.Wrap(errcode.KindInternal, ErrAdapterAMQPConnect, "rabbitmq: wait for connection canceled", ctx.Err())
 		}
@@ -930,6 +1125,15 @@ func sanitizeErrorURL(errStr, rawURL string) string {
 }
 
 // sanitizeURL redacts credentials from the AMQP URL for safe logging.
+//
+// fail-closed: discards both userinfo and the entire query string. RabbitMQ
+// AMQP URI query parameters can carry credentials (`?password=...`) and TLS
+// material (`?cacertfile=...`, `?certfile=...`, `?keyfile=...`); a per-key
+// allowlist would be a moving target as upstream adds parameters, so we
+// drop the lot. Path is preserved (it carries the vhost and is not
+// considered sensitive in RabbitMQ deployments).
+//
+// ref: https://www.rabbitmq.com/docs/uri-query-parameters
 func sanitizeURL(raw string) string {
 	if raw == "" {
 		return "amqp://***"
@@ -938,12 +1142,19 @@ func sanitizeURL(raw string) string {
 	if err != nil {
 		return "amqp://***"
 	}
+	scheme := u.Scheme
+	if scheme == "" {
+		scheme = "amqp"
+	}
+	host := u.Host
+	path := u.EscapedPath()
 	if u.User != nil {
-		u.User = nil
-		// Rebuild with redacted placeholder to avoid URL-encoding of special chars.
-		host := u.Host
-		u.Host = ""
-		return u.Scheme + "://***:***@" + host + u.RequestURI()
+		return scheme + "://***:***@" + host + path
+	}
+	if u.RawQuery != "" || u.Fragment != "" {
+		// No userinfo but query/fragment present — still strip them in case
+		// they carry secrets (e.g. ?password=).
+		return scheme + "://" + host + path
 	}
 	return u.String()
 }
