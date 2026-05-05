@@ -2,6 +2,7 @@ package websocket_test
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net"
 	"net/http"
@@ -141,7 +142,7 @@ func TestUpgradeHandler_UpgradeFailureResponseIsPublic(t *testing.T) {
 	body, err := io.ReadAll(resp.Body)
 	require.NoError(t, err)
 
-	require.Equal(t, http.StatusBadRequest, resp.StatusCode)
+	require.Equal(t, http.StatusInternalServerError, resp.StatusCode)
 	assert.Equal(t, "websocket upgrade failed\n", string(body))
 	assert.NotContains(t, string(body), "ERR_ADAPTER_WS_UPGRADE")
 	assert.NotContains(t, string(body), "websocket: the client is not using the websocket protocol")
@@ -175,7 +176,7 @@ func TestUpgradeHandler_NonHijackerFailsBeforeAccept(t *testing.T) {
 	rr := httptest.NewRecorder()
 	handler.ServeHTTP(rr, req)
 
-	require.Equal(t, http.StatusBadRequest, rr.Code)
+	require.Equal(t, http.StatusInternalServerError, rr.Code)
 	assert.Equal(t, "websocket upgrade failed\n", rr.Body.String())
 	assert.NotEqual(t, http.StatusSwitchingProtocols, rr.Code)
 }
@@ -741,4 +742,64 @@ func TestUpgradeHandler_401_ResponseIsPlainText(t *testing.T) {
 	body := rr.Body.String()
 	assert.NotContains(t, body, "{")
 	assert.NotContains(t, body, "ERR_")
+}
+
+// TestUpgradeHandler_HijackerNotSupported_Returns500 locks server-side
+// error semantics: a response writer without Hijacker support is a
+// runtime/server-side misconfiguration, not a client protocol violation,
+// so it must surface as 500 rather than 400. (PR-V1-SEC-WS-AUTH-ACL review
+// round 2 #P2-2.)
+func TestUpgradeHandler_HijackerNotSupported_Returns500(t *testing.T) {
+	cfg := rtws.DefaultHubConfig(clock.Real())
+	cfg.PingInterval = testtime.SlowPoll
+	hub := rtws.NewHub(cfg, nil)
+
+	startErr := make(chan error, 1)
+	go func() { startErr <- hub.Start(context.Background()) }()
+	require.Eventually(t, hub.IsRunning, testtime.D2s, time.Millisecond)
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), testtime.CtxDefault)
+		defer cancel()
+		_ = hub.Stop(ctx)
+		<-startErr
+	})
+
+	handler := requireUpgradeHandler(t, hub, adapterws.UpgradeConfig{
+		AllowedOrigins: []string{"http://*"},
+		Authenticator:  testAuth(),
+	})
+	req := httptest.NewRequest(http.MethodGet, "/ws", nil)
+	req.Header.Set("Connection", "Upgrade")
+	req.Header.Set("Upgrade", "websocket")
+	req.Header.Set("Sec-WebSocket-Version", "13")
+	req.Header.Set("Sec-WebSocket-Key", "dGhlIHNhbXBsZSBub25jZQ==")
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, req)
+
+	require.Equal(t, http.StatusInternalServerError, rr.Code)
+	assert.Equal(t, "websocket upgrade failed\n", rr.Body.String())
+}
+
+// TestIsClientUpgradeError_Classification table-drives the heuristic that
+// drives 4xx vs 5xx response branching. (PR-V1-SEC-WS-AUTH-ACL review
+// round 2 #P2-2.)
+func TestIsClientUpgradeError_Classification(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"nil", nil, false},
+		{"protocol violation", errors.New("websocket protocol violation: bad opcode"), true},
+		{"missing Sec-WebSocket-Key", errors.New("Sec-WebSocket-Key header missing"), true},
+		{"unexpected method", errors.New("expected GET method, got POST"), true},
+		{"origin denied", errors.New("Origin header not in allow-list"), true},
+		{"server transient", errors.New("write tcp: broken pipe"), false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := adapterws.IsClientUpgradeError(tc.err)
+			assert.Equal(t, tc.want, got)
+		})
+	}
 }

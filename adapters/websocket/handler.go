@@ -114,7 +114,7 @@ func UpgradeHandler(hub *rtws.Hub, cfg UpgradeConfig) (http.Handler, error) {
 		if _, ok := w.(http.Hijacker); !ok {
 			logUpgradeFailure(r, errcode.New(errcode.KindInternal, ErrAdapterWSUpgrade,
 				"websocket: response writer does not support hijack"))
-			http.Error(w, "websocket upgrade failed", http.StatusBadRequest)
+			http.Error(w, "websocket upgrade failed", http.StatusInternalServerError)
 			return
 		}
 		acceptUpgradeAndRegister(w, r, hub, cfg, principal)
@@ -159,7 +159,11 @@ func acceptUpgradeAndRegister(w http.ResponseWriter, r *http.Request, hub *rtws.
 	wsConn, err := websocket.Accept(acceptWriter, r, opts)
 	if err != nil {
 		logUpgradeFailure(r, err)
-		http.Error(w, "websocket upgrade failed", http.StatusBadRequest)
+		if isClientUpgradeError(err) {
+			http.Error(w, "websocket upgrade failed", http.StatusBadRequest)
+		} else {
+			http.Error(w, "websocket upgrade failed", http.StatusInternalServerError)
+		}
 		return
 	}
 	wsConn.SetReadLimit(hub.Config().ReadLimit)
