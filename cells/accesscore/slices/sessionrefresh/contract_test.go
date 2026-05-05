@@ -16,7 +16,7 @@ func TestHttpAuthRefreshV1Serve(t *testing.T) {
 		`"expiresAt":"2026-01-01T00:00:00Z","sessionId":"sess-1","userId":"usr-1",`+
 		`"passwordResetRequired":false}}`))
 	c.ValidateErrorResponse(t, http.StatusServiceUnavailable,
-		[]byte(`{"error":{"code":"ERR_SERVICE_UNAVAILABLE","message":"service unavailable","details":{}}}`))
+		[]byte(`{"error":{"code":"ERR_SERVICE_UNAVAILABLE","message":"service unavailable","details":[]}}`))
 	c.MustRejectRequest(t, []byte(`{"refreshToken":"t","extra":"bad"}`))
 	// Per ADR-202605031600 v1 schema evolution, response schema is lenient:
 	// unknown fields are accepted so v1 can grow optional fields without

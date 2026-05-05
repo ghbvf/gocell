@@ -4,6 +4,8 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+
+	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
 // EntryIDPrefix is the prefix for all outbox entry IDs — distinguishes
@@ -37,7 +39,7 @@ func NewEntryID() (string, error) {
 func MustNewEntryID() string {
 	id, err := NewEntryID()
 	if err != nil {
-		panic(err.Error())
+		panic(errcode.Assertion("outbox: entry id: %v", err))
 	}
 	return id
 }

@@ -56,6 +56,8 @@ const (
 	// single relay batch under tens of MB at the default BatchSize=100.
 	// ref: Apache Kafka message.max.bytes default 1 MiB.
 	MaxPayloadBytes = 1 << 20
+
+	internalMetadataKeyQuotedFmt = "key=%q"
 )
 
 // ReservedMetadataKeys lists keys that the kernel observability bridge owns
@@ -96,27 +98,34 @@ func validateMetadata(m map[string]string) error {
 	}
 	if len(m) > MaxMetadataKeys {
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-			fmt.Sprintf("outbox: metadata key count %d exceeds max %d", len(m), MaxMetadataKeys))
+			"outbox: metadata key count exceeds max",
+			errcode.WithDetails(slog.Int("count", len(m)), slog.Int("max", MaxMetadataKeys)))
 	}
 	var total int
 	for k, v := range m {
 		if _, reserved := reservedMetadataKeySet[k]; reserved {
 			return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-				fmt.Sprintf("outbox: metadata key %q is reserved for the observability bridge — use Entry.Observability instead", k))
+				"outbox: metadata key is reserved for the observability bridge — use Entry.Observability instead",
+				errcode.WithInternal(fmt.Sprintf(internalMetadataKeyQuotedFmt, k)))
 		}
 		if len(k) > MaxMetadataKeyLen {
 			return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-				fmt.Sprintf("outbox: metadata key length %d exceeds max %d (key=%q)", len(k), MaxMetadataKeyLen, truncate(k, 64)))
+				"outbox: metadata key length exceeds max",
+				errcode.WithDetails(slog.Int("length", len(k)), slog.Int("max", MaxMetadataKeyLen)),
+				errcode.WithInternal(fmt.Sprintf(internalMetadataKeyQuotedFmt, truncate(k, 64))))
 		}
 		if len(v) > MaxMetadataValueLen {
 			return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-				fmt.Sprintf("outbox: metadata value length %d exceeds max %d (key=%q)", len(v), MaxMetadataValueLen, truncate(k, 64)))
+				"outbox: metadata value length exceeds max",
+				errcode.WithDetails(slog.Int("length", len(v)), slog.Int("max", MaxMetadataValueLen)),
+				errcode.WithInternal(fmt.Sprintf(internalMetadataKeyQuotedFmt, truncate(k, 64))))
 		}
 		total += len(k) + len(v)
 	}
 	if total > MaxMetadataTotalSize {
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-			fmt.Sprintf("outbox: metadata total size %d exceeds max %d", total, MaxMetadataTotalSize))
+			"outbox: metadata total size exceeds max",
+			errcode.WithDetails(slog.Int("total", total), slog.Int("max", MaxMetadataTotalSize)))
 	}
 	return nil
 }
@@ -240,7 +249,8 @@ func (e Entry) Validate() error {
 	}
 	if len(e.Payload) > MaxPayloadBytes {
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-			fmt.Sprintf("outbox: payload size %d exceeds max %d", len(e.Payload), MaxPayloadBytes))
+			"outbox: payload size exceeds max",
+			errcode.WithDetails(slog.Int("size", len(e.Payload)), slog.Int("max", MaxPayloadBytes)))
 	}
 	if err := validateMetadata(e.Metadata); err != nil {
 		return err

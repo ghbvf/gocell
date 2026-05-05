@@ -90,7 +90,8 @@ func (r *ContractRegistry) Provider(contractID string) (string, error) {
 	c := r.contracts[contractID]
 	if c == nil {
 		return "", errcode.New(errcode.KindNotFound, errcode.ErrContractNotFound,
-			fmt.Sprintf("contract %q not found in registry", contractID))
+			"contract not found in registry",
+			errcode.WithInternal(fmt.Sprintf("contract=%q", contractID)))
 	}
 	switch c.Kind {
 	case "http":
@@ -103,7 +104,8 @@ func (r *ContractRegistry) Provider(contractID string) (string, error) {
 		return c.Endpoints.Provider, nil
 	default:
 		return "", errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-			fmt.Sprintf("unknown contract kind %q for contract %q", c.Kind, contractID))
+			"unknown contract kind",
+			errcode.WithInternal(fmt.Sprintf("contract=%q kind=%q", contractID, c.Kind)))
 	}
 }
 
@@ -114,7 +116,8 @@ func (r *ContractRegistry) Consumers(contractID string) ([]string, error) {
 	c := r.contracts[contractID]
 	if c == nil {
 		return nil, errcode.New(errcode.KindNotFound, errcode.ErrContractNotFound,
-			fmt.Sprintf("contract %q not found in registry", contractID))
+			"contract not found in registry",
+			errcode.WithInternal(fmt.Sprintf("contract=%q", contractID)))
 	}
 	switch c.Kind {
 	case "http":
@@ -127,7 +130,8 @@ func (r *ContractRegistry) Consumers(contractID string) ([]string, error) {
 		return append([]string(nil), c.Endpoints.Readers...), nil
 	default:
 		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-			fmt.Sprintf("unknown contract kind %q for contract %q", c.Kind, contractID))
+			"unknown contract kind",
+			errcode.WithInternal(fmt.Sprintf("contract=%q kind=%q", contractID, c.Kind)))
 	}
 }
 

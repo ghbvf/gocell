@@ -71,9 +71,9 @@ func assertErrorBody(t *testing.T, body []byte, code, message string) {
 	t.Helper()
 	var resp struct {
 		Error struct {
-			Code    string         `json:"code"`
-			Message string         `json:"message"`
-			Details map[string]any `json:"details"`
+			Code    string `json:"code"`
+			Message string `json:"message"`
+			Details []any  `json:"details"`
 		} `json:"error"`
 	}
 	require.NoError(t, json.Unmarshal(body, &resp))
@@ -238,9 +238,24 @@ func TestHandler_Refresh_BlankToken(t *testing.T) {
 		Error struct {
 			Code    string `json:"code"`
 			Message string `json:"message"`
+			Details []struct {
+				Key   string `json:"key"`
+				Value any    `json:"value"`
+			} `json:"details"`
 		} `json:"error"`
 	}
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 	assert.Equal(t, "ERR_VALIDATION_FAILED", resp.Error.Code)
-	assert.Equal(t, "refreshToken: invalid", resp.Error.Message)
+	// buildSafeMessage result is in details[key="detail"] since the field name
+	// is runtime data; Message is the const "request body validation failed".
+	assert.Equal(t, "request body validation failed", resp.Error.Message)
+	foundDetail := false
+	for _, d := range resp.Error.Details {
+		if d.Key == "detail" {
+			assert.Contains(t, d.Value, "refreshToken")
+			foundDetail = true
+			break
+		}
+	}
+	assert.True(t, foundDetail, "expected 'detail' key in error details")
 }

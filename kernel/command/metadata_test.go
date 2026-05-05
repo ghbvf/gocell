@@ -1,10 +1,14 @@
 package command
 
 import (
+	"errors"
 	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
+	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
 func TestMetadataConstants(t *testing.T) {
@@ -48,7 +52,9 @@ func TestValidateMetadata_KeyLenExceeds(t *testing.T) {
 	}
 	err := validateMetadata(m)
 	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "metadata key length")
+	var ecErr *errcode.Error
+	require.True(t, errors.As(err, &ecErr))
+	assert.Contains(t, ecErr.Message, "metadata key length")
 }
 
 func TestValidateMetadata_ValueLenExceeds(t *testing.T) {
@@ -58,7 +64,9 @@ func TestValidateMetadata_ValueLenExceeds(t *testing.T) {
 	}
 	err := validateMetadata(m)
 	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "metadata value length")
+	var ecErr *errcode.Error
+	require.True(t, errors.As(err, &ecErr))
+	assert.Contains(t, ecErr.Message, "metadata value length")
 }
 
 func TestValidateMetadata_TotalSizeExceeds(t *testing.T) {

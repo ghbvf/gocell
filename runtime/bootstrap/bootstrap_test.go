@@ -115,45 +115,143 @@ func waitForHealthy(t *testing.T, addr string) {
 	}, testtime.EventuallyDefault, testtime.MediumPoll, "HTTP server did not become ready")
 }
 
-// readyzPayload extracts the readyz inner payload regardless of envelope.
-// PR-A35 wraps /readyz in {"data": {...}} on 200 and
-// {"error": {"details": {...}}} on 503; both shapes carry the same fields
-// (status, cells, dependencies, adapters). The helper lets a single
-// assertion path work whether the response was 200 or 503.
-//
-// All 401 responses on /readyz?verbose now share the canonical envelope shape
-// emitted by httputil.WritePublic — {"error":{"code":"ERR_READYZ_VERBOSE_DENIED",
-// "message":"...","details":{},"request_id":"..."}} — regardless of which layer
-// rejected (route-group middleware or handler-layer gate). Callers asserting on
-// dependencies/cells must check the response status code first; this helper
-// only normalises the body shape.
-func readyzPayload(t *testing.T, body map[string]any) map[string]any {
+// readyzPayload200 extracts the data envelope from a 200 readyz response.
+// PR #391 P1-A: 503 wire body now carries the canonical errcode envelope
+// with an empty details array (K#08 5xx redaction); verbose breakdown
+// (cells/dependencies/adapters) only surfaces on 200 data path or via
+// server-side slog. Callers wanting verbose breakdown on 503 should
+// install withSlogCapture and read readyzUnhealthyDeps(...).
+func readyzPayload200(t *testing.T, body map[string]any) map[string]any {
 	t.Helper()
-	if data, ok := body["data"].(map[string]any); ok {
-		return data
-	}
-	if errObj, ok := body["error"].(map[string]any); ok {
-		if details, ok := errObj["details"].(map[string]any); ok {
-			return details
-		}
-		// Legacy fallback: pre-PR269 envelopes had no `details` field.
-		return errObj
-	}
-	t.Fatalf("readyz body has neither data nor error envelope: %#v", body)
-	return nil
+	data, ok := body["data"].(map[string]any)
+	require.True(t, ok, "200 readyz must carry {\"data\": {...}} envelope; got %#v", body)
+	return data
 }
 
-func assertReadyzServiceUnavailable(t *testing.T, body map[string]any, wantStatus, wantReason string) map[string]any {
+// assertReadyzServiceUnavailable asserts the canonical errcode 503 envelope:
+// code/message match the framework public sentinel and details is the empty
+// array form (K#08 strips 5xx details to keep server-side context off the
+// wire). Verbose breakdown — cells/dependencies/adapters and the readiness
+// reason — is emitted to slog instead; tests needing to verify it install
+// withSlogCapture and read the "readyz unhealthy" record.
+func assertReadyzServiceUnavailable(t *testing.T, body map[string]any) {
 	t.Helper()
 	errObj, ok := body["error"].(map[string]any)
 	require.True(t, ok, "503 readyz must carry an error envelope")
 	assert.Equal(t, string(errcode.ErrServiceUnavailable), errObj["code"])
 	assert.Equal(t, "service unavailable", errObj["message"])
-	details, ok := errObj["details"].(map[string]any)
-	require.True(t, ok, "503 readyz must carry details")
-	assert.Equal(t, wantStatus, details["status"])
-	assert.Equal(t, wantReason, details["reason"])
-	return details
+	details, ok := errObj["details"].([]any)
+	require.True(t, ok, "503 readyz must carry the canonical details array (K#08 5xx strip): got %v", errObj["details"])
+	assert.Empty(t, details, "5xx details must be empty per K#08 redaction policy; verbose breakdown lives in slog")
+}
+
+// captureHandler records every slog event passed to it so tests can assert
+// on the verbose breakdown that K#08 5xx redaction keeps off the wire.
+//
+// NOTE: simplified implementation — WithAttrs/WithGroup do not propagate
+// pre-filled attrs / groups (return self). Adequate for tests that only
+// need to capture top-level slog.Error events; not safe for code paths
+// that rely on slog.With(...) propagation.
+type captureHandler struct {
+	mu      sync.Mutex
+	records []slog.Record
+}
+
+func (h *captureHandler) Enabled(context.Context, slog.Level) bool { return true }
+func (h *captureHandler) Handle(_ context.Context, r slog.Record) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.records = append(h.records, r.Clone())
+	return nil
+}
+func (h *captureHandler) WithAttrs([]slog.Attr) slog.Handler { return h }
+func (h *captureHandler) WithGroup(string) slog.Handler      { return h }
+
+// snapshot returns a defensive copy of recorded events.
+func (h *captureHandler) snapshot() []slog.Record {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	out := make([]slog.Record, len(h.records))
+	copy(out, h.records)
+	return out
+}
+
+// withSlogCapture redirects slog.Default for the duration of the test and
+// returns a handle the test can query to assert on captured events.
+func withSlogCapture(t *testing.T) *captureHandler {
+	t.Helper()
+	h := &captureHandler{}
+	prev := slog.Default()
+	slog.SetDefault(slog.New(h))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+	return h
+}
+
+// readyzUnhealthyDeps fetches the verbose-breakdown dependencies map from
+// the captured "readyz unhealthy" slog records. Tests assert on this rather
+// than on the 503 wire body because K#08 5xx redaction strips Details from
+// the public envelope; verbose breakdown lives only in server-side logs.
+//
+// Bootstrap integration tests typically poll /readyz (non-verbose) before
+// issuing a single verbose request, so multiple "readyz unhealthy" records
+// accumulate. Non-verbose records carry only status/reason; verbose records
+// add cells/dependencies/adapters. We return the first record whose
+// dependencies attr is non-nil — that is the verbose 503.
+func readyzUnhealthyDeps(t *testing.T, capture *captureHandler) map[string]map[string]any {
+	t.Helper()
+	const (
+		recMsg  = "readyz unhealthy"
+		attrKey = "dependencies"
+	)
+	for _, r := range capture.snapshot() {
+		if r.Message != recMsg {
+			continue
+		}
+		var depsAttr slog.Value
+		r.Attrs(func(a slog.Attr) bool {
+			if a.Key == attrKey {
+				depsAttr = a.Value
+				return false
+			}
+			return true
+		})
+		deps, ok := depsAttr.Any().(map[string]map[string]any)
+		if ok && deps != nil {
+			return deps
+		}
+	}
+	t.Fatalf("no verbose %q slog record with non-nil %q map; capture had %d records",
+		recMsg, attrKey, len(capture.snapshot()))
+	return nil
+}
+
+func captureHasReadyzDependencyStatus(capture *captureHandler, depName, status string) bool {
+	const (
+		recMsg  = "readyz unhealthy"
+		attrKey = "dependencies"
+	)
+	for _, r := range capture.snapshot() {
+		if r.Message != recMsg {
+			continue
+		}
+		var depsAttr slog.Value
+		r.Attrs(func(a slog.Attr) bool {
+			if a.Key == attrKey {
+				depsAttr = a.Value
+				return false
+			}
+			return true
+		})
+		deps, ok := depsAttr.Any().(map[string]map[string]any)
+		if !ok {
+			continue
+		}
+		probe, ok := deps[depName]
+		if ok && probe["status"] == status {
+			return true
+		}
+	}
+	return false
 }
 
 // testCell is a minimal Cell for bootstrap testing.
@@ -709,8 +807,8 @@ func TestBootstrap_WithHealthChecker_Healthy(t *testing.T) {
 
 	var body map[string]any
 	require.NoError(t, json.NewDecoder(resp.Body).Decode(&body))
-	deps, ok := readyzPayload(t, body)["dependencies"].(map[string]any)
-	require.True(t, ok, "response must contain dependencies map")
+	deps, ok := readyzPayload200(t, body)["dependencies"].(map[string]any)
+	require.True(t, ok, "200 verbose response must contain dependencies map")
 	rabbitmq, ok := deps["rabbitmq"].(map[string]any)
 	require.True(t, ok, "rabbitmq entry must be a map")
 	assert.Equal(t, "healthy", rabbitmq["status"])
@@ -743,6 +841,8 @@ func TestBootstrap_WithHealthChecker_Unhealthy(t *testing.T) {
 		WithHealthRoutes(WithReadyzVerboseToken(testVerboseToken)),
 	)
 
+	capture := withSlogCapture(t)
+
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() { done <- b.Run(ctx) }()
@@ -767,10 +867,12 @@ func TestBootstrap_WithHealthChecker_Unhealthy(t *testing.T) {
 
 	var body map[string]any
 	require.NoError(t, json.NewDecoder(resp.Body).Decode(&body))
-	deps, ok := readyzPayload(t, body)["dependencies"].(map[string]any)
-	require.True(t, ok, "response must contain dependencies map")
-	rabbitmq, ok := deps["rabbitmq"].(map[string]any)
-	require.True(t, ok, "rabbitmq entry must be a map")
+	assertReadyzServiceUnavailable(t, body)
+
+	// Verbose breakdown lives in slog (K#08 5xx redaction strips wire details).
+	deps := readyzUnhealthyDeps(t, capture)
+	rabbitmq, ok := deps["rabbitmq"]
+	require.True(t, ok, "rabbitmq entry must be present in slog breakdown")
 	assert.Equal(t, "unhealthy", rabbitmq["status"])
 
 	cancel()
@@ -822,7 +924,7 @@ func TestBootstrap_WithAdapterInfo_AppearsInReadyz(t *testing.T) {
 
 	var body map[string]any
 	require.NoError(t, json.NewDecoder(resp.Body).Decode(&body))
-	adapters, ok := readyzPayload(t, body)["adapters"].(map[string]any)
+	adapters, ok := readyzPayload200(t, body)["adapters"].(map[string]any)
 	require.True(t, ok, "verbose readyz must contain adapters map")
 	assert.Equal(t, "in-memory", adapters["mode"])
 	assert.Equal(t, "in-memory", adapters["storage"])
@@ -902,8 +1004,8 @@ func TestBootstrap_RegistryHealth_DrainAppearsInReadyz(t *testing.T) {
 
 	var body map[string]any
 	require.NoError(t, json.NewDecoder(resp.Body).Decode(&body))
-	deps, ok := readyzPayload(t, body)["dependencies"].(map[string]any)
-	require.True(t, ok, "response must contain dependencies map")
+	deps, ok := readyzPayload200(t, body)["dependencies"].(map[string]any)
+	require.True(t, ok, "200 verbose response must contain dependencies map")
 	sessionStore, ok := deps["session_store_ready"].(map[string]any)
 	require.True(t, ok, "session-store entry must be a map")
 	assert.Equal(t, "healthy", sessionStore["status"],
@@ -1034,6 +1136,8 @@ func TestBootstrap_WithMultipleHealthCheckers_OneUnhealthy(t *testing.T) {
 		WithHealthRoutes(WithReadyzVerboseToken(testVerboseToken)),
 	)
 
+	capture := withSlogCapture(t)
+
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() { done <- b.Run(ctx) }()
@@ -1058,15 +1162,16 @@ func TestBootstrap_WithMultipleHealthCheckers_OneUnhealthy(t *testing.T) {
 
 	var body map[string]any
 	require.NoError(t, json.NewDecoder(resp.Body).Decode(&body))
-	deps, ok := readyzPayload(t, body)["dependencies"].(map[string]any)
-	require.True(t, ok, "response must contain dependencies map")
-	rabbitmqEntry, ok := deps["rabbitmq"].(map[string]any)
-	require.True(t, ok, "rabbitmq entry must be a map")
+	assertReadyzServiceUnavailable(t, body)
+
+	// Verbose breakdown lives in slog (K#08 5xx redaction).
+	deps := readyzUnhealthyDeps(t, capture)
+	rabbitmqEntry, ok := deps["rabbitmq"]
+	require.True(t, ok, "rabbitmq entry must be present in slog breakdown")
 	assert.Equal(t, "healthy", rabbitmqEntry["status"], "rabbitmq checker should be healthy")
-	postgresEntry, ok := deps["postgres"].(map[string]any)
-	require.True(t, ok, "postgres entry must be a map")
+	postgresEntry, ok := deps["postgres"]
+	require.True(t, ok, "postgres entry must be present in slog breakdown")
 	assert.Equal(t, "unhealthy", postgresEntry["status"], "postgres checker should be unhealthy")
-	assertReadyzServiceUnavailable(t, body, "unhealthy", "readiness_failed")
 
 	cancel()
 	select {
@@ -1195,7 +1300,7 @@ func TestBootstrap_ConfigWatcher_ReadyzVerboseIncludesWatcher(t *testing.T) {
 		if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
 			return false
 		}
-		deps, ok := readyzPayload(t, body)["dependencies"].(map[string]any)
+		deps, ok := readyzPayload200(t, body)["dependencies"].(map[string]any)
 		if !ok {
 			return false
 		}
@@ -1254,7 +1359,7 @@ func TestBootstrap_ConfigDriftReadyz_NoDrift(t *testing.T) {
 		if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
 			return false
 		}
-		deps, ok := readyzPayload(t, body)["dependencies"].(map[string]any)
+		deps, ok := readyzPayload200(t, body)["dependencies"].(map[string]any)
 		if !ok {
 			return false
 		}
@@ -1369,6 +1474,8 @@ func TestBootstrap_ConfigDriftReadyz_HTTP503OnDrift(t *testing.T) {
 		WithHealthRoutes(WithReadyzVerboseToken(testVerboseToken)),
 	)
 
+	driftSlogCapture := withSlogCapture(t)
+
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() { done <- b.Run(ctx) }()
@@ -1388,7 +1495,10 @@ func TestBootstrap_ConfigDriftReadyz_HTTP503OnDrift(t *testing.T) {
 	// → failCell.OnConfigReload returns error → observedGeneration stays → drift!
 	require.NoError(t, os.WriteFile(cfgFile, []byte("app:\n  name: drifted\n"), 0o644))
 
-	// Poll /readyz?verbose until config-drift shows unhealthy.
+	// Poll /readyz?verbose until 503; verbose breakdown rides on slog (K#08
+	// 5xx redaction strips wire details), so we pair the HTTP poll with the
+	// driftSlogCapture installed above. configDriftCheckerName must appear
+	// unhealthy in the captured breakdown.
 	require.Eventually(t, func() bool {
 		resp, err := verboseGet(ctx, fmt.Sprintf("http://%s", addr))
 		if err != nil {
@@ -1398,19 +1508,7 @@ func TestBootstrap_ConfigDriftReadyz_HTTP503OnDrift(t *testing.T) {
 		if resp.StatusCode != http.StatusServiceUnavailable {
 			return false
 		}
-		var body map[string]any
-		if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
-			return false
-		}
-		deps, ok := readyzPayload(t, body)["dependencies"].(map[string]any)
-		if !ok {
-			return false
-		}
-		probe, ok := deps[configDriftCheckerName].(map[string]any)
-		if !ok {
-			return false
-		}
-		return probe["status"] == "unhealthy"
+		return captureHasReadyzDependencyStatus(driftSlogCapture, configDriftCheckerName, "unhealthy")
 	}, testtime.EventuallyLong, testtime.SlowPoll, "readyz should return 503 with config-drift unhealthy")
 
 	cancel()
@@ -1515,7 +1613,7 @@ func TestBootstrap_EventRouter_ReadyzVerboseIncludesEventRouter(t *testing.T) {
 
 	var body map[string]any
 	require.NoError(t, json.NewDecoder(resp.Body).Decode(&body))
-	deps, ok := readyzPayload(t, body)["dependencies"].(map[string]any)
+	deps, ok := readyzPayload200(t, body)["dependencies"].(map[string]any)
 	require.True(t, ok, "verbose readyz output must contain dependencies")
 	erProbe, ok := deps["event_router"].(map[string]any)
 	require.True(t, ok, "event_router probe must be a structured ProbeResult")
@@ -3194,7 +3292,7 @@ func TestBootstrap_AuthDiscovery_NoProvider_FailsClosed(t *testing.T) {
 	// Run should fail because no authProvider cell was discovered.
 	err = b.Run(ctx)
 	require.Error(t, err, "bootstrap should fail when no authProvider cell is discovered")
-	assert.Contains(t, err.Error(), "authProvider cell",
+	assert.Contains(t, errFull(t, err), "authProvider cell",
 		"error should mention missing authProvider")
 }
 
@@ -3225,9 +3323,9 @@ func TestBootstrap_AuthDiscovery_MultipleProviders_FailsFast(t *testing.T) {
 
 	err = b.Run(ctx)
 	require.Error(t, err, "bootstrap should reject multiple authProvider cells")
-	assert.Contains(t, err.Error(), "multiple authProvider cells")
-	assert.Contains(t, err.Error(), "accesscore")
-	assert.Contains(t, err.Error(), "identity-core")
+	assert.Contains(t, errFull(t, err), "multiple authProvider cells")
+	assert.Contains(t, errFull(t, err), "accesscore")
+	assert.Contains(t, errFull(t, err), "identity-core")
 }
 
 // TestBootstrap_TrustBoundary_PublicEndpoint_IgnoresClientIDs verifies that

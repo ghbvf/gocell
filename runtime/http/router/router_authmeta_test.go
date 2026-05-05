@@ -342,9 +342,12 @@ func TestFinalizeAuth_HintDerivedFromPostExemptMeta(t *testing.T) {
 	var body map[string]any
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
 	errObj := body["error"].(map[string]any)
-	details, ok := errObj["details"].(map[string]any)
-	require.True(t, ok, "details must be present when hint is derived")
-	assert.Equal(t, "POST /change-password", details["changePasswordEndpoint"])
+	details, ok := errObj["details"].([]any)
+	require.True(t, ok, "details must be the canonical array<{key,value}> form when hint is derived")
+	require.Len(t, details, 1)
+	entry := details[0].(map[string]any)
+	assert.Equal(t, "changePasswordEndpoint", entry["key"])
+	assert.Equal(t, "POST /change-password", entry["value"])
 }
 
 // ---------------------------------------------------------------------------

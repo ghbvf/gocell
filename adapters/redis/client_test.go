@@ -353,7 +353,7 @@ func TestBuildClusterOptions(t *testing.T) {
 					"rediss://user:pass-b@node-b.cluster.example.internal:7000",
 				},
 			},
-			expectError: "conflicting Cluster URL password",
+			expectError: "conflicting Cluster URL field values",
 		},
 	}
 

@@ -62,6 +62,113 @@ func TestSessionRepository_Health(t *testing.T) {
 	assert.NoError(t, repo.Health(context.Background()), "in-memory session repo is always healthy")
 }
 
+func TestUserRepository_NotFoundErrors(t *testing.T) {
+	repo := NewUserRepository()
+	ctx := context.Background()
+
+	tests := []struct {
+		name         string
+		call         func() error
+		wantCode     errcode.Code
+		wantInternal string
+	}{
+		{
+			name: "get by id",
+			call: func() error {
+				_, err := repo.GetByID(ctx, "usr-missing")
+				return err
+			},
+			wantCode:     errcode.ErrAuthUserNotFound,
+			wantInternal: "id=usr-missing",
+		},
+		{
+			name: "get by username",
+			call: func() error {
+				_, err := repo.GetByUsername(ctx, "missing")
+				return err
+			},
+			wantCode:     errcode.ErrAuthUserNotFound,
+			wantInternal: `username="missing"`,
+		},
+		{
+			name: "update",
+			call: func() error {
+				return repo.Update(ctx, &domain.User{ID: "usr-missing", Username: "missing"})
+			},
+			wantCode:     errcode.ErrAuthUserNotFound,
+			wantInternal: "id=usr-missing",
+		},
+		{
+			name: "delete",
+			call: func() error {
+				return repo.Delete(ctx, "usr-missing")
+			},
+			wantCode:     errcode.ErrAuthUserNotFound,
+			wantInternal: "id=usr-missing",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := tt.call()
+			require.Error(t, err)
+			var ecErr *errcode.Error
+			require.ErrorAs(t, err, &ecErr)
+			assert.Equal(t, tt.wantCode, ecErr.Code)
+			assert.Equal(t, msgUserNotFound, ecErr.Message)
+			assert.Contains(t, ecErr.InternalMessage, tt.wantInternal)
+		})
+	}
+}
+
+func TestSessionRepository_NotFoundErrors(t *testing.T) {
+	repo := NewSessionRepository(clock.Real())
+	ctx := context.Background()
+
+	tests := []struct {
+		name string
+		call func() error
+	}{
+		{
+			name: "get by id",
+			call: func() error {
+				_, err := repo.GetByID(ctx, "sess-missing")
+				return err
+			},
+		},
+		{
+			name: "update",
+			call: func() error {
+				return repo.Update(ctx, &domain.Session{ID: "sess-missing"})
+			},
+		},
+		{
+			name: "revoke by owner",
+			call: func() error {
+				return repo.RevokeByIDAndOwner(ctx, "sess-missing", "usr-1")
+			},
+		},
+		{
+			name: "delete",
+			call: func() error {
+				return repo.Delete(ctx, "sess-missing")
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := tt.call()
+			require.Error(t, err)
+			var ecErr *errcode.Error
+			require.ErrorAs(t, err, &ecErr)
+			assert.Equal(t, errcode.ErrSessionNotFound, ecErr.Code)
+			assert.Equal(t, msgSessionNotFound, ecErr.Message)
+			assert.Contains(t, ecErr.InternalMessage, "id=sess-missing")
+		})
+	}
+}
+
 // TestSessionRepository_ConcurrentCreateAndGet verifies that concurrent
 // Create and Get calls do not race. Run with -race to verify.
 func TestSessionRepository_ConcurrentCreateAndGet(t *testing.T) {

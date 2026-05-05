@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"os"
 	"strconv"
 	"strings"
@@ -61,7 +62,7 @@ func loadRedisConfigFromEnv(topo bootstrap.Topology) (adapterredis.Config, bool,
 
 	if addr != "" && clusterRaw != "" {
 		return adapterredis.Config{}, false, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-			envRedisAddr+" and "+envRedisClusterAddrs+" are mutually exclusive; set exactly one")
+			"GOCELL_REDIS_ADDR and GOCELL_REDIS_CLUSTER_ADDRS are mutually exclusive; set exactly one")
 	}
 
 	if clusterRaw != "" {
@@ -71,7 +72,7 @@ func loadRedisConfigFromEnv(topo bootstrap.Topology) (adapterredis.Config, bool,
 		}
 		if raw := os.Getenv(envRedisDB); raw != "" && raw != "0" {
 			return adapterredis.Config{}, false, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-				envRedisDB+" must be 0 (or unset) in cluster mode; cluster has no SELECT command")
+				"GOCELL_REDIS_DB must be 0 (or unset) in cluster mode; cluster has no SELECT command")
 		}
 		return adapterredis.Config{
 			Mode:         adapterredis.ModeCluster,
@@ -83,8 +84,10 @@ func loadRedisConfigFromEnv(topo bootstrap.Topology) (adapterredis.Config, bool,
 	if addr == "" {
 		if requiresDistributedReplay(topo) {
 			return adapterredis.Config{}, false, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-				envRedisAddr+" or "+envRedisClusterAddrs+" must be set in adapter mode \"real\" unless GOCELL_SINGLE_POD=1; "+
-					"multi-pod deployments require Redis-backed nonce and idempotency stores")
+				"GOCELL_REDIS_ADDR or GOCELL_REDIS_CLUSTER_ADDRS must be set "+
+					"in adapter mode \"real\" unless GOCELL_SINGLE_POD=1; "+
+					"multi-pod deployments require Redis-backed nonce and "+
+					"idempotency stores")
 		}
 		return adapterredis.Config{}, false, nil
 	}
@@ -94,7 +97,8 @@ func loadRedisConfigFromEnv(topo bootstrap.Topology) (adapterredis.Config, bool,
 		parsed, err := strconv.Atoi(raw)
 		if err != nil || parsed < 0 {
 			return adapterredis.Config{}, false, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-				fmt.Sprintf("%s must be a non-negative integer, got %q", envRedisDB, raw))
+				"GOCELL_REDIS_DB must be a non-negative integer",
+				errcode.WithDetails(slog.String("got", raw)))
 		}
 		db = parsed
 	}
@@ -118,7 +122,7 @@ func parseClusterAddrs(raw string) ([]string, error) {
 		trimmed := strings.TrimSpace(p)
 		if trimmed == "" {
 			return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-				envRedisClusterAddrs+" must not contain empty entries (check for trailing or double commas)")
+				"GOCELL_REDIS_CLUSTER_ADDRS must not contain empty entries (check for trailing or double commas)")
 		}
 		if _, dup := seen[trimmed]; dup {
 			continue
@@ -148,7 +152,7 @@ func buildServiceNonceStore(topo bootstrap.Topology, client *adapterredis.Client
 	if requiresDistributedReplay(topo) {
 		if client == nil {
 			return nil, errcode.New(errcode.KindInternal, errcode.ErrControlplaneNonceStoreMissing,
-				envRedisAddr+" or "+envRedisClusterAddrs+" must be set for distributed service-token nonce protection")
+				"GOCELL_REDIS_ADDR or GOCELL_REDIS_CLUSTER_ADDRS must be set for distributed service-token nonce protection")
 		}
 		store, err := newRedisNonceStore(client, auth.ServiceTokenNonceTTL)
 		if err != nil {
@@ -169,7 +173,7 @@ func buildConsumerClaimer(
 	if requiresDistributedReplay(topo) {
 		if client == nil {
 			return nil, consumerClaimerKindUnknown, errcode.New(errcode.KindInternal, errcode.ErrControlplaneClaimerNotDistributed,
-				envRedisAddr+" or "+envRedisClusterAddrs+" must be set for distributed outbox idempotency in real multi-pod deployments")
+				"GOCELL_REDIS_ADDR or GOCELL_REDIS_CLUSTER_ADDRS must be set for distributed outbox idempotency in real multi-pod deployments")
 		}
 		return newRedisIdempotencyClaimer(client), consumerClaimerKindDistributed, nil
 	}

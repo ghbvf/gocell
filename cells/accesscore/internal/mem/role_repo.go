@@ -57,8 +57,9 @@ func (r *RoleRepository) GetByID(_ context.Context, id string) (*domain.Role, er
 
 	role, ok := r.roles[id]
 	if !ok {
-		return nil, errcode.New(errcode.KindNotFound, errcode.ErrAuthRoleNotFound, "role not found: "+id,
-			errcode.WithCategory(errcode.CategoryDomain))
+		return nil, errcode.New(errcode.KindNotFound, errcode.ErrAuthRoleNotFound, "role not found",
+			errcode.WithCategory(errcode.CategoryDomain),
+			errcode.WithInternal(fmt.Sprintf("id=%s", id)))
 	}
 	clone := *role
 	return &clone, nil
@@ -88,8 +89,9 @@ func (r *RoleRepository) AssignToUser(_ context.Context, userID, roleID string) 
 	defer r.mu.Unlock()
 
 	if _, ok := r.roles[roleID]; !ok {
-		return false, errcode.New(errcode.KindNotFound, errcode.ErrAuthRoleNotFound, "role not found: "+roleID,
-			errcode.WithCategory(errcode.CategoryDomain))
+		return false, errcode.New(errcode.KindNotFound, errcode.ErrAuthRoleNotFound, "role not found",
+			errcode.WithCategory(errcode.CategoryDomain),
+			errcode.WithInternal(fmt.Sprintf("role_id=%s", roleID)))
 	}
 
 	if r.userRoles[userID] == nil {
@@ -141,7 +143,8 @@ func (r *RoleRepository) RemoveFromUserIfNotLast(_ context.Context, userID, role
 
 	if count == 1 {
 		return false, errcode.New(errcode.KindPermissionDenied, errcode.ErrAuthForbidden,
-			fmt.Sprintf("cannot revoke role %q from user %q: this is the only holder; assign the role to another user first", roleID, userID))
+			"cannot revoke role: this is the only holder; assign the role to another user first",
+			errcode.WithInternal(fmt.Sprintf("role_id=%q user_id=%q", roleID, userID)))
 	}
 
 	delete(r.userRoles[userID], roleID)

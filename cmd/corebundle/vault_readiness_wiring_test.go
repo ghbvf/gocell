@@ -154,6 +154,10 @@ func TestA19_ConfigCoreModule_RegistersKeyProviderReadiness(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, app)
 
+	// K#08 5xx redaction strips verbose breakdown from the wire (details is
+	// the canonical empty array on 503). Probe names ride on slog instead.
+	capture := withSlogCapture(t)
+
 	ctx, cancel := context.WithCancel(context.Background())
 	errCh := make(chan error, 1)
 	go func() { errCh <- app.Run(ctx) }()
@@ -173,10 +177,9 @@ func TestA19_ConfigCoreModule_RegistersKeyProviderReadiness(t *testing.T) {
 		"/readyz must be 503 when the KeyProvider readiness probe fails "+
 			"(proves ConfigCoreModule wires kp.Checkers() into bootstrap)")
 
-	// /readyz?verbose must list the fake probe by name as unhealthy (proves the
-	// aggregation step preserved the named checker, not just a boolean signal).
-	// PR-A35: verbose is gated by PolicyVerboseToken on the readyz route group;
-	// PR-A14b round-2 puts it on the dedicated HealthListener (healthAddr).
+	// /readyz?verbose request triggers the verbose slog record; the wire
+	// body is the canonical errcode envelope with empty details array
+	// (K#08). Probe-by-name verification reads the slog snapshot.
 	verboseReq, err := http.NewRequestWithContext(context.Background(),
 		http.MethodGet, "http://"+healthAddr+"/readyz?verbose", nil)
 	require.NoError(t, err)
@@ -189,28 +192,25 @@ func TestA19_ConfigCoreModule_RegistersKeyProviderReadiness(t *testing.T) {
 		}
 	})
 
-	// PR-A35 envelope: 503 /readyz responses carry the dependency breakdown
-	// inside {"error": {"code":"ERR_SERVICE_UNAVAILABLE", "details": {...}}}.
 	var envelope struct {
 		Error struct {
 			Code    string `json:"code"`
 			Message string `json:"message"`
-			Details struct {
-				Status       string                    `json:"status"`
-				Reason       string                    `json:"reason"`
-				Dependencies map[string]map[string]any `json:"dependencies"`
-			} `json:"details"`
+			Details []any  `json:"details"`
 		} `json:"error"`
 	}
 	require.NoError(t, json.NewDecoder(verboseResp.Body).Decode(&envelope))
 	assert.Equal(t, string(errcode.ErrServiceUnavailable), envelope.Error.Code)
 	assert.Equal(t, "service unavailable", envelope.Error.Message)
-	assert.Equal(t, "unhealthy", envelope.Error.Details.Status)
-	assert.Equal(t, "readiness_failed", envelope.Error.Details.Reason)
-	probe, ok := envelope.Error.Details.Dependencies["fake_key_provider_ready"]
-	require.True(t, ok, "fake_key_provider_ready must appear in /readyz?verbose error details")
+	assert.Empty(t, envelope.Error.Details,
+		"K#08 5xx redaction: 503 wire body details must be the canonical empty array")
+
+	// Verbose breakdown lives in the captured slog "readyz unhealthy" record.
+	deps := readyzUnhealthyDeps(t, capture)
+	probe, ok := deps["fake_key_provider_ready"]
+	require.True(t, ok, "fake_key_provider_ready must appear in slog breakdown")
 	assert.Equal(t, "unhealthy", probe["status"],
-		"fake_key_provider_ready must appear in /readyz?verbose as unhealthy")
+		"fake_key_provider_ready must appear in slog breakdown as unhealthy")
 
 	cancel()
 	select {

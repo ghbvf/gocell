@@ -279,7 +279,7 @@ func TestCSRF_ErrorResponseFormat(t *testing.T) {
 	require.True(t, ok, "response must have error object")
 	assert.Equal(t, "ERR_CSRF_ORIGIN_DENIED", errObj["code"])
 	assert.Equal(t, "cross-origin request denied", errObj["message"])
-	assert.Equal(t, map[string]any{}, errObj["details"])
+	assert.Equal(t, []any{}, errObj["details"])
 }
 
 func TestCSRF_ErrorResponseIncludesRequestID(t *testing.T) {

@@ -57,13 +57,15 @@ func TestValidator_MinLength(t *testing.T) {
 		t.Errorf("expected code ErrValidationFailed, got %q", ec.Code)
 	}
 	// Must not expose the specific length value in the message.
-	msg := ec.Message
-	if containsLengthOracle(msg) {
-		t.Errorf("message exposes schema internals (oracle): %q", msg)
+	if containsLengthOracle(ec.Message) {
+		t.Errorf("message exposes schema internals (oracle): %q", ec.Message)
 	}
-	// Must contain field name.
-	if !containsFieldName(msg, "name") {
-		t.Errorf("message should contain field name 'name', got: %q", msg)
+	// Field name must appear in the detail attribute (not the const Message).
+	detailAttr, found := ec.FindAttr("detail")
+	if !found {
+		t.Errorf("expected 'detail' attribute in error details, got none")
+	} else if !containsFieldName(detailAttr.Value.String(), "name") {
+		t.Errorf("detail should contain field name 'name', got: %q", detailAttr.Value.String())
 	}
 }
 

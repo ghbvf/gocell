@@ -114,7 +114,7 @@ func TestShutdown_HTTPAcceptsDuringPreShutdownDelay(t *testing.T) {
 	var body map[string]any
 	require.NoError(t, json.NewDecoder(respZ.Body).Decode(&body))
 	closeBody(t, respZ)
-	assertReadyzServiceUnavailable(t, body, "shutting_down", "graceful_shutdown")
+	assertReadyzServiceUnavailable(t, body)
 
 	select {
 	case runErr := <-done:

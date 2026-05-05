@@ -7,6 +7,8 @@ import (
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
+const internalValueQuotedFmt = "value=%q"
+
 // CellType classifies a Cell's architectural role.
 type CellType string
 
@@ -54,7 +56,8 @@ func ParseLevel(s string) (Level, error) {
 		return L4, nil
 	default:
 		return 0, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-			fmt.Sprintf("invalid consistency level: %q", s))
+			"invalid consistency level",
+			errcode.WithInternal(fmt.Sprintf(internalValueQuotedFmt, s)))
 	}
 }
 
@@ -109,7 +112,8 @@ func ParseCellType(s string) (CellType, error) {
 		return CellTypeSupport, nil
 	default:
 		return "", errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-			fmt.Sprintf("invalid cell type: %q", s))
+			"invalid cell type",
+			errcode.WithInternal(fmt.Sprintf(internalValueQuotedFmt, s)))
 	}
 }
 
@@ -127,7 +131,8 @@ func ParseContractKind(s string) (ContractKind, error) {
 		return ContractProjection, nil
 	default:
 		return "", errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-			fmt.Sprintf("invalid contract kind: %q", s))
+			"invalid contract kind",
+			errcode.WithInternal(fmt.Sprintf(internalValueQuotedFmt, s)))
 	}
 }
 
@@ -153,7 +158,8 @@ func ParseContractRole(s string) (ContractRole, error) {
 		return RoleRead, nil
 	default:
 		return "", errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-			fmt.Sprintf("invalid contract role: %q", s))
+			"invalid contract role",
+			errcode.WithInternal(fmt.Sprintf(internalValueQuotedFmt, s)))
 	}
 }
 
@@ -169,6 +175,7 @@ func ParseLifecycle(s string) (Lifecycle, error) {
 		return LifecycleDeprecated, nil
 	default:
 		return "", errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-			fmt.Sprintf("invalid lifecycle: %q", s))
+			"invalid lifecycle",
+			errcode.WithInternal(fmt.Sprintf(internalValueQuotedFmt, s)))
 	}
 }

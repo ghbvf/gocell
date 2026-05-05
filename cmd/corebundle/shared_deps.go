@@ -334,8 +334,9 @@ func (d *SharedDeps) validateVerboseEndpoint() []error {
 		return nil
 	}
 	return []error{errcode.New(errcode.KindInternal, errcode.ErrControlplaneVerboseTokenMissing,
-		"GOCELL_READYZ_VERBOSE_TOKEN must be set (or GOCELL_READYZ_VERBOSE_DISABLED=1 "+
-			"to waive the verbose endpoint) so /readyz?verbose is never anonymous")}
+		"GOCELL_READYZ_VERBOSE_TOKEN must be set (or "+
+			"GOCELL_READYZ_VERBOSE_DISABLED=1 to waive the verbose endpoint) "+
+			"so /readyz?verbose is never anonymous")}
 }
 
 // validateCore collects missing-field errors for dependencies required in
@@ -344,7 +345,8 @@ func (d *SharedDeps) validateCore() []error {
 	var errs []error
 	missing := func(field string) {
 		errs = append(errs, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-			"SharedDeps."+field+" must be set"))
+			"SharedDeps field must be set",
+			errcode.WithInternal(fmt.Sprintf("field=%s", field))))
 	}
 	// Clock is the single root clock instance threaded through every adapter,
 	// service, and middleware. Required: a nil here would surface as a deeper
@@ -394,27 +396,24 @@ func (d *SharedDeps) validateControlPlane() []error {
 	// and would leave operators without a token-gated diagnostic path.
 	if d.VerboseDisabled {
 		errs = append(errs, errcode.New(errcode.KindInternal, errcode.ErrControlplaneVerboseTokenMissing,
-			"GOCELL_READYZ_VERBOSE_DISABLED=1 is not allowed in adapter mode \"real\"; "+
-				"production must keep the token-gated verbose endpoint available for "+
-				"on-call diagnostics"))
+			"GOCELL_READYZ_VERBOSE_DISABLED=1 is not allowed in adapter mode "+
+				"\"real\"; production must keep the token-gated verbose endpoint "+
+				"available for on-call diagnostics"))
 	}
 	if d.VerboseToken == SampleVerbosePlaceholder {
 		errs = append(errs, errcode.New(errcode.KindInternal, errcode.ErrControlplaneVerboseTokenSample,
-			"GOCELL_READYZ_VERBOSE_TOKEN is set to the .env.example placeholder ("+
-				SampleVerbosePlaceholder+"); a production deploy must mint its own "+
-				"high-entropy secret. This exact value is publicly known via the repo "+
-				"sample and would expose /readyz?verbose topology to anyone who has "+
-				"read the source tree."))
+			"GOCELL_READYZ_VERBOSE_TOKEN is set to the .env.example placeholder; a production deploy must mint its own high-entropy secret",
+			errcode.WithInternal(fmt.Sprintf("placeholder=%q", SampleVerbosePlaceholder))))
 	}
 	if d.MetricsToken == "" {
 		errs = append(errs, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-			"GOCELL_METRICS_TOKEN must be set in adapter mode \"real\" "+
-				"to prevent anonymous /metrics exposure; scrapers must send X-Metrics-Token header"))
+			"GOCELL_METRICS_TOKEN must be set in adapter mode \"real\" to "+
+				"prevent anonymous /metrics exposure; scrapers must send "+
+				"X-Metrics-Token header"))
 	}
 	if d.InternalGuard == nil {
 		errs = append(errs, errcode.New(errcode.KindInternal, errcode.ErrControlplaneServiceSecretMissing,
-			"GOCELL_SERVICE_SECRET must be set in adapter mode \"real\" "+
-				"to protect /internal/v1/*"))
+			"GOCELL_SERVICE_SECRET must be set in adapter mode \"real\" to protect /internal/v1/*"))
 	} else if ns := d.InternalGuard.NonceStore(); ns == nil {
 		errs = append(errs, errcode.New(errcode.KindInternal, errcode.ErrControlplaneNonceStoreMissing,
 			"internalGuard.nonceStore is nil; guard constructed without WithServiceTokenNonceStore"))
@@ -429,14 +428,15 @@ func (d *SharedDeps) validateControlPlane() []error {
 			slog.String("nonce_store_kind", string(kind)),
 			slog.String("hint", "set GOCELL_SINGLE_POD=1 for single-pod deployments or configure a distributed NonceStore"))
 		errs = append(errs, errcode.New(errcode.KindInternal, errcode.ErrControlplaneNonceStoreMissing,
-			"in-memory nonce store requires GOCELL_SINGLE_POD=1 (single-pod deployments) "+
-				"or a distributed store via WithServiceTokenNonceStore (multi-pod); "+
-				"refuse fail-open"))
+			"in-memory nonce store requires GOCELL_SINGLE_POD=1 "+
+				"(single-pod deployments) or a distributed store via "+
+				"WithServiceTokenNonceStore (multi-pod); refuse fail-open"))
 	}
 	if requiresDistributedReplay(d.Topology) && d.ConsumerClaimerKind != consumerClaimerKindDistributed {
 		errs = append(errs, errcode.New(errcode.KindInternal, errcode.ErrControlplaneClaimerNotDistributed,
-			"ERR_CONTROLPLANE_CLAIMER_NOT_DISTRIBUTED: real multi-pod deployments require Redis-backed "+
-				"outbox idempotency claimer; set "+envRedisAddr+" or run with GOCELL_SINGLE_POD=1"))
+			"ERR_CONTROLPLANE_CLAIMER_NOT_DISTRIBUTED: real multi-pod "+
+				"deployments require Redis-backed outbox idempotency claimer; "+
+				"set GOCELL_REDIS_ADDR or run with GOCELL_SINGLE_POD=1"))
 	}
 	return errs
 }
@@ -462,10 +462,10 @@ func (d *SharedDeps) validateHealthReachability() []error {
 	}
 	return []error{errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 		"GOCELL_HTTP_HEALTH_ADDR is loopback-only in adapter mode \"real\"; "+
-			"kubelet HTTP probes and Prometheus PodIP/Service scrapes cannot reach "+
-			"container loopback. Set GOCELL_HTTP_HEALTH_ADDR=:9091 (or a Pod-reachable "+
-			"address), or set GOCELL_HTTP_HEALTH_LOCAL_ONLY=1 only for same-pod sidecar "+
-			"or exec-probe deployments.")}
+			"kubelet HTTP probes and Prometheus PodIP/Service scrapes cannot "+
+			"reach container loopback. Set GOCELL_HTTP_HEALTH_ADDR=:9091 "+
+			"(or a Pod-reachable address), or set GOCELL_HTTP_HEALTH_LOCAL_ONLY=1 "+
+			"only for same-pod sidecar or exec-probe deployments.")}
 }
 
 func isLoopbackBindAddr(addr string) bool {

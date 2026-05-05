@@ -65,12 +65,9 @@ func (c *Catalog) Validate(cellIDs, contractIDs map[string]struct{}) error {
 	}
 	// Sort for deterministic output.
 	sort.Strings(msgs)
-	var combined strings.Builder
-	combined.WriteString(msgs[0])
-	for _, m := range msgs[1:] {
-		combined.WriteString("; " + m)
-	}
-	return errcode.New(errcode.KindInvalid, errcode.ErrReferenceBroken, combined.String())
+	return errcode.New(errcode.KindInvalid, errcode.ErrReferenceBroken,
+		"journey catalog has broken references",
+		errcode.WithInternal(strings.Join(msgs, "; ")))
 }
 
 // Get returns a deep copy of a journey by ID, or nil if not found.

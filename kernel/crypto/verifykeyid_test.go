@@ -1,11 +1,32 @@
 package crypto_test
 
 import (
+	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
 	kcrypto "github.com/ghbvf/gocell/kernel/crypto"
+	"github.com/ghbvf/gocell/pkg/errcode"
 )
+
+func assertErrorContains(t *testing.T, context string, err error, want string) {
+	t.Helper()
+	if err == nil {
+		t.Fatalf("%s: expected error containing %q, got nil", context, want)
+	}
+	var ecErr *errcode.Error
+	if errors.As(err, &ecErr) {
+		full := ecErr.Message + " " + ecErr.InternalMessage
+		if !strings.Contains(full, want) {
+			t.Fatalf("%s: error message+internal %q does not contain %q", context, full, want)
+		}
+		return
+	}
+	if !strings.Contains(err.Error(), want) {
+		t.Fatalf("%s: error %q does not contain %q", context, err.Error(), want)
+	}
+}
 
 // ---------------------------------------------------------------------------
 // ParseKeyID tests
@@ -85,12 +106,7 @@ func TestParseKeyID(t *testing.T) {
 			provider, version, err := kcrypto.ParseKeyID(tc.keyID)
 
 			if tc.wantErrContains != "" {
-				if err == nil {
-					t.Fatalf("ParseKeyID(%q): expected error containing %q, got nil", tc.keyID, tc.wantErrContains)
-				}
-				if !strings.Contains(err.Error(), tc.wantErrContains) {
-					t.Fatalf("ParseKeyID(%q): error %q does not contain %q", tc.keyID, err.Error(), tc.wantErrContains)
-				}
+				assertErrorContains(t, fmt.Sprintf("ParseKeyID(%q)", tc.keyID), err, tc.wantErrContains)
 				return
 			}
 
@@ -175,14 +191,10 @@ func TestMatchKeyID(t *testing.T) {
 			err := kcrypto.MatchKeyID(tc.handleID, tc.edkKeyID)
 
 			if tc.wantErrContains != "" {
-				if err == nil {
-					t.Fatalf("MatchKeyID(%q, %q): expected error containing %q, got nil",
-						tc.handleID, tc.edkKeyID, tc.wantErrContains)
-				}
-				if !strings.Contains(err.Error(), tc.wantErrContains) {
-					t.Fatalf("MatchKeyID(%q, %q): error %q does not contain %q",
-						tc.handleID, tc.edkKeyID, err.Error(), tc.wantErrContains)
-				}
+				assertErrorContains(t,
+					fmt.Sprintf("MatchKeyID(%q, %q)", tc.handleID, tc.edkKeyID),
+					err,
+					tc.wantErrContains)
 				return
 			}
 

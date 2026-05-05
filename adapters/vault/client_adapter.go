@@ -49,7 +49,8 @@ func (a *vaultAPIClient) Read(ctx context.Context, path string) (map[string]any,
 	}
 	if resp == nil {
 		return nil, errcode.New(errcode.KindInternal, errcode.ErrKeyProviderKeyNotFound,
-			"vault api: read returned nil response for path: "+path)
+			"vault api: read returned nil response",
+			errcode.WithInternal(fmt.Sprintf("path=%s", path)))
 	}
 	return resp.Data, nil
 }

@@ -4,8 +4,9 @@
 package errcode
 
 import (
+	"encoding/json"
 	"fmt"
-	"maps"
+	"log/slog"
 )
 
 // Code is a typed error code string.
@@ -606,17 +607,67 @@ func WithInternal(message string) Option {
 	}
 }
 
-// WithDetails attaches structured, client-visible details. Response writers
-// strip details from 5xx errors.
-func WithDetails(details map[string]any) Option {
+// WithDetails attaches structured, client-visible details as typed slog.Attr
+// values. The framework's HTTP response writer renders 4xx errors with the
+// attribute list as a JSON array of {"key","value"} objects, and strips the
+// list from 5xx errors so server-side runtime context never leaks to clients.
+//
+// Allowed kinds (JSON-safe scalar): KindString, KindInt64, KindUint64,
+// KindFloat64, KindBool, KindDuration, KindTime. Any other kind — KindAny,
+// KindGroup, KindLogValuer — panics via MustValidateDetailsKinds: those carry
+// arbitrary Go values or nested structures whose Value.Any() output is
+// handler-dependent (per stdlib log/slog docs, slog.Attr is a logging
+// carrier, not a wire DTO). go-kratos errors.Metadata uses map<string,
+// string> for the same reason; this is the static-by-construction analog.
+//
+// Multiple WithDetails calls accumulate; attributes are appended in call order.
+//
+// Example:
+//
+//	errcode.New(KindNotFound, ErrCellNotFound, "cell not found",
+//	    errcode.WithDetails(slog.String("cellId", id)))
+func WithDetails(attrs ...slog.Attr) Option {
+	MustValidateDetailsKinds(attrs)
 	return func(e *Error) {
-		if len(details) == 0 {
+		if len(attrs) == 0 {
 			return
 		}
-		if e.Details == nil {
-			e.Details = make(map[string]any, len(details))
+		e.Details = append(e.Details, attrs...)
+	}
+}
+
+// MustValidateDetailsKinds panics with errcode.Assertion when any attr in
+// attrs has a wire-unsafe kind. The Must* prefix marks this as a
+// programmer-error fail-fast site (PANIC-REGISTERED-01 auto-exempt under
+// the project's "Must* may panic" convention).
+//
+// Exposed so callers that build *Error values directly (test fixtures,
+// future builders) can validate at construction time the same way
+// WithDetails does.
+func MustValidateDetailsKinds(attrs []slog.Attr) {
+	for _, attr := range attrs {
+		if !isWireSafeAttrKind(attr.Value.Kind()) {
+			panic(Assertion(
+				"errcode.WithDetails: attr %q has wire-unsafe kind %s; "+
+					"use scalar slog.String/Int/Uint64/Float64/Bool/Duration/Time",
+				attr.Key, attr.Value.Kind()))
 		}
-		maps.Copy(e.Details, details)
+	}
+}
+
+// isWireSafeAttrKind reports whether kind is a JSON-safe scalar that can
+// appear in a public Details wire payload. Scalar kinds round-trip through
+// encoding/json without invoking handler-specific behavior; composite kinds
+// (Any, Group, LogValuer) carry arbitrary or handler-dependent payloads and
+// are rejected at construction time.
+func isWireSafeAttrKind(k slog.Kind) bool {
+	switch k {
+	case slog.KindString, slog.KindInt64, slog.KindUint64,
+		slog.KindFloat64, slog.KindBool,
+		slog.KindDuration, slog.KindTime:
+		return true
+	default:
+		return false
 	}
 }
 
@@ -635,10 +686,82 @@ type Error struct {
 	Code            Code
 	Message         string
 	InternalMessage string
-	Details         map[string]any
+	Details         []slog.Attr
 	Cause           error
 	Category        Category
 }
+
+// FindAttr returns the first detail attribute whose Key matches key, or the
+// zero slog.Attr and false when no such attribute exists. It is intended for
+// callers that need to read back a single typed detail (for example,
+// ctxcancel.ReasonFromDetails) without exposing the raw attr slice across
+// package boundaries.
+func (e *Error) FindAttr(key string) (slog.Attr, bool) {
+	if e == nil {
+		return slog.Attr{}, false
+	}
+	for _, attr := range e.Details {
+		if attr.Key == key {
+			return attr, true
+		}
+	}
+	return slog.Attr{}, false
+}
+
+// MarshalJSON renders e in the wire form expected by
+// contracts/shared/errors/error-response-v1.schema.json:
+//
+//	{"code":"ERR_X","message":"...","details":[{"key":"k","value":v}, ...]}
+//
+// Server-side errors (Kind.IsClient() == false, i.e. HTTP 5xx) emit an empty
+// details array regardless of attached attributes — this is the single
+// source-of-truth strip rule for runtime context that must never reach a
+// client. InternalMessage and Cause are never marshaled because they may
+// contain sensitive runtime data.
+//
+// Defense-in-depth: WithDetails already rejects wire-unsafe kinds at
+// construction time, but a hand-built *Error (e.g. test fixture, future
+// code path that bypasses the option) might still attach KindAny / Group /
+// LogValuer. In that case we substitute the value with the unsafeKindMarker
+// sentinel so the wire payload stays JSON-safe and operators see the
+// substitution in their logs.
+func (e *Error) MarshalJSON() ([]byte, error) {
+	type kv struct {
+		Key   string `json:"key"`
+		Value any    `json:"value"`
+	}
+	wire := struct {
+		Code    Code   `json:"code"`
+		Message string `json:"message"`
+		Details []kv   `json:"details"`
+	}{
+		Code:    e.Code,
+		Message: e.Message,
+		Details: []kv{},
+	}
+	if e.Kind.IsClient() {
+		wire.Details = make([]kv, 0, len(e.Details))
+		for _, attr := range e.Details {
+			value := attr.Value.Any()
+			if !isWireSafeAttrKind(attr.Value.Kind()) {
+				slog.Error(
+					"errcode: details attr bypassed WithDetails kind whitelist; substituting wire value",
+					slog.String("key", attr.Key),
+					slog.String("kind", attr.Value.Kind().String()),
+				)
+				value = unsafeKindMarker
+			}
+			wire.Details = append(wire.Details, kv{Key: attr.Key, Value: value})
+		}
+	}
+	return json.Marshal(wire)
+}
+
+// unsafeKindMarker is the sentinel value substituted in MarshalJSON when a
+// Details attribute escapes the WithDetails kind whitelist. The marker is
+// fixed (not formatted with the actual kind) so that wire payloads remain
+// stable and tests can assert on it.
+const unsafeKindMarker = "<UNSUPPORTED_KIND>"
 
 // Error returns a formatted string representation for logging/diagnostics.
 // When InternalMessage is set it is preferred over Message, because Error()
@@ -679,7 +802,34 @@ func (e *Error) PublicCode() Code {
 	return e.Kind.PublicCode()
 }
 
+// Assertion constructs an *Error tagged as a programmer-error / impossible
+// path. It is the canonical replacement for `panic(fmt.Sprintf("...", err))`
+// patterns across production code: callers panic with the returned *Error so
+// the kernel recovery middleware can surface a 500 with category=infra and a
+// stable ErrInternal code, while the formatted text is preserved for logs and
+// traces via Error.Error().
+//
+// Behavior:
+//   - Kind = KindInternal (HTTP 500)
+//   - Code = ErrInternal (single sentinel for unrecoverable assertions)
+//   - Category = CategoryInfra (treated as infrastructure for IsInfraError)
+//   - Message = fmt.Sprintf(format, args...) — the formatted assertion text
+//
+// The formatted Message intentionally carries runtime data because Assertion
+// indicates an impossible state that has already been reached: there is no
+// safe way to render the failure without it. The kernel recovery layer maps
+// this to ErrInternal before the response leaves the process, so end users
+// receive only the public ErrInternal code.
+func Assertion(format string, args ...any) *Error {
+	return New(KindInternal, ErrInternal, fmt.Sprintf(format, args...), WithCategory(CategoryInfra))
+}
+
 // New creates an *Error with an explicit transport kind.
+//
+// The message argument must be a compile-time const literal — runtime
+// information belongs in WithDetails (typed, client-visible) or
+// WithInternal (server-side only). archtest MESSAGE-CONST-LITERAL-01
+// statically enforces this rule outside the errcode package.
 func New(kind Kind, code Code, message string, opts ...Option) *Error {
 	e := &Error{
 		Kind:    kind,
@@ -695,6 +845,8 @@ func New(kind Kind, code Code, message string, opts ...Option) *Error {
 }
 
 // Wrap creates an *Error with an explicit transport kind and wrapped cause.
+//
+// The same const-literal restriction documented on New applies to message.
 func Wrap(kind Kind, code Code, message string, cause error, opts ...Option) *Error {
 	e := New(kind, code, message, opts...)
 	e.Cause = cause

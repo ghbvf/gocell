@@ -63,7 +63,7 @@ func TestHttpAuthSetupStatusV1Serve(t *testing.T) {
 			"5xx body must not leak underlying infra error message")
 		assert.NotContains(t, bodyStr, "loginEndpoint",
 			"5xx body must not carry retired loginEndpoint key")
-		assert.Contains(t, bodyStr, `"details":{}`,
+		assert.Contains(t, bodyStr, `"details":[]`,
 			"5xx envelope must clear details — pkg/httputil pins this invariant")
 	})
 }
@@ -175,7 +175,7 @@ func TestHttpAuthSetupAdminV1Serve(t *testing.T) {
 		requireErrorCode(t, rec.Body.Bytes(), errcode.ErrSetupAlreadyInitialized)
 
 		bodyStr := rec.Body.String()
-		assert.Contains(t, bodyStr, `"nextAction":"login"`)
+		assert.Contains(t, bodyStr, `"key":"nextAction","value":"login"`)
 		assert.NotContains(t, bodyStr, "/api/", "410 wire shape must not leak path literals")
 		assert.NotContains(t, bodyStr, "loginEndpoint", "loginEndpoint key retired by PR-A42")
 	})

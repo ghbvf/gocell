@@ -249,9 +249,18 @@ func parseInclude(ctx context.Context, w http.ResponseWriter, raw string, presen
 	return inc, true
 }
 
-func writeValidationError(ctx context.Context, w http.ResponseWriter, message string) {
-	httputil.WritePublic(ctx, w, errcode.KindInvalid,
-		errcode.ErrValidationFailed, message)
+// writeValidationError emits a 400 with a fixed public message; the
+// caller-supplied detail (typically err.Error() from a query parser) goes
+// into Details as a typed slog attribute so it is exposed on the 4xx wire
+// without polluting the public Message field with runtime text.
+// MESSAGE-CONST-LITERAL-01 archtest gates this routing.
+func writeValidationError(ctx context.Context, w http.ResponseWriter, detail string) {
+	httputil.WriteError(ctx, w, errcode.New(
+		errcode.KindInvalid,
+		errcode.ErrValidationFailed,
+		"invalid query parameter",
+		errcode.WithDetails(slog.String("detail", detail)),
+	))
 }
 
 // contentType returns the Content-Type header value for the given format.

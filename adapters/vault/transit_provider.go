@@ -73,11 +73,13 @@ func resolveStartupTimeout() (time.Duration, error) {
 	d, err := time.ParseDuration(raw)
 	if err != nil {
 		return 0, errcode.Wrap(errcode.KindUnavailable, errcode.ErrVaultAuthFailed,
-			fmt.Sprintf("vault-transit: invalid %s=%q (expected time.ParseDuration format, e.g. 45s)", startupTimeoutEnvVar, raw), err)
+			"vault-transit: invalid startup timeout (expected time.ParseDuration format, e.g. 45s)", err,
+			errcode.WithDetails(slog.String("env", startupTimeoutEnvVar)))
 	}
 	if d <= 0 {
 		return 0, errcode.New(errcode.KindUnavailable, errcode.ErrVaultAuthFailed,
-			fmt.Sprintf("vault-transit: %s=%q must be positive", startupTimeoutEnvVar, raw))
+			"vault-transit: startup timeout must be positive",
+			errcode.WithDetails(slog.String("env", startupTimeoutEnvVar)))
 	}
 	return d, nil
 }
@@ -848,9 +850,7 @@ func NewTransitKeyProviderFromEnv(realMode bool, clk clock.Clock) (*TransitKeyPr
 	if realMode && !p.Renewable() {
 		_ = p.Close(context.Background())
 		return nil, errcode.New(errcode.KindUnavailable, errcode.ErrVaultAuthFailed,
-			"vault-transit: non-renewable token rejected in real mode —"+
-				" configure the Vault role to issue renewable tokens"+
-				" (token_type=default or service with renewable=true)")
+			"vault-transit: non-renewable token rejected in real mode; configure Vault role for renewable tokens")
 	}
 
 	return p, nil
@@ -877,7 +877,8 @@ func (p *TransitKeyProvider) Current(ctx context.Context) (kcrypto.KeyHandle, er
 func (p *TransitKeyProvider) ByID(_ context.Context, keyID string) (kcrypto.KeyHandle, error) {
 	if !strings.HasPrefix(keyID, vaultKeyIDPrefix) {
 		return nil, errcode.New(errcode.KindInternal, errcode.ErrKeyProviderKeyNotFound,
-			fmt.Sprintf("vault-transit: key ID %q does not have expected prefix %q", keyID, vaultKeyIDPrefix))
+			"vault-transit: key ID does not have expected prefix",
+			errcode.WithInternal(fmt.Sprintf("key_id=%q prefix=%q", keyID, vaultKeyIDPrefix)))
 	}
 	return &vaultTransitHandle{
 		id:        keyID,
@@ -963,12 +964,14 @@ func (p *TransitKeyProvider) readLatestVersion(ctx context.Context) (int, error)
 		n, err := v.Int64()
 		if err != nil {
 			return 0, errcode.New(errcode.KindInternal, errcode.ErrKeyProviderKeyNotFound,
-				fmt.Sprintf("vault-transit: latest_version json.Number parse error: %v", err))
+				"vault-transit: latest_version json.Number parse error",
+				errcode.WithInternal(fmt.Sprintf("err=%v", err)))
 		}
 		return int(n), nil
 	default:
 		return 0, errcode.New(errcode.KindInternal, errcode.ErrKeyProviderKeyNotFound,
-			fmt.Sprintf("vault-transit: unexpected latest_version type %T", versionRaw))
+			"vault-transit: unexpected latest_version type",
+			errcode.WithInternal(fmt.Sprintf("type=%T", versionRaw)))
 	}
 }
 
@@ -988,10 +991,12 @@ func (p *TransitKeyProvider) readLatestVersion(ctx context.Context) (int, error)
 func classifyVaultError(err error, permanentCode errcode.Code, permanentMsg string) error {
 	if isTransientVaultError(err) {
 		return errcode.Wrap(errcode.KindUnavailable, errcode.ErrKeyProviderTransient,
-			"vault-transit: transient "+permanentMsg, err)
+			"vault-transit: transient error", err,
+			errcode.WithInternal(permanentMsg))
 	}
 	return errcode.Wrap(errcode.KindInternal, permanentCode,
-		"vault-transit: "+permanentMsg, err)
+		"vault-transit: operation failed", err,
+		errcode.WithInternal(permanentMsg))
 }
 
 // classifyVaultEncryptError classifies an encrypt path error.
@@ -1094,8 +1099,9 @@ func parseVaultKeyID(ciphertext string, errCode errcode.Code) (string, error) {
 			prefix = prefix[:12] + "..."
 		}
 		return "", errcode.New(errcode.KindInternal, errCode,
-			fmt.Sprintf("vault-transit: unexpected ciphertext prefix (want 'vault:vN:...'): %q", prefix),
-			errcode.WithCategory(errcode.CategoryInfra))
+			"vault-transit: unexpected ciphertext prefix (want 'vault:vN:...')",
+			errcode.WithCategory(errcode.CategoryInfra),
+			errcode.WithInternal(fmt.Sprintf("prefix=%q", prefix)))
 	}
 	return vaultKeyIDPrefix + parts[1], nil
 }

@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"testing"
 	"time"
 	"unicode/utf8"
@@ -20,6 +22,80 @@ import (
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 )
+
+// captureHandler records every slog event passed to it so tests can assert
+// on the verbose breakdown that K#08 5xx redaction keeps off the wire.
+type captureHandler struct {
+	mu      sync.Mutex
+	records []slog.Record
+}
+
+func (h *captureHandler) Enabled(context.Context, slog.Level) bool { return true }
+func (h *captureHandler) Handle(_ context.Context, r slog.Record) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.records = append(h.records, r.Clone())
+	return nil
+}
+func (h *captureHandler) WithAttrs([]slog.Attr) slog.Handler { return h }
+func (h *captureHandler) WithGroup(string) slog.Handler      { return h }
+
+// snapshot returns a defensive copy of recorded events.
+func (h *captureHandler) snapshot() []slog.Record {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	out := make([]slog.Record, len(h.records))
+	copy(out, h.records)
+	return out
+}
+
+// withSlogCapture redirects slog.Default for the duration of the test and
+// returns a handle the test can query to assert on captured events.
+func withSlogCapture(t *testing.T) *captureHandler {
+	t.Helper()
+	h := &captureHandler{}
+	prev := slog.Default()
+	slog.SetDefault(slog.New(h))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+	return h
+}
+
+// readyzUnhealthyDeps fetches the verbose-breakdown dependencies map from
+// the captured "readyz unhealthy" slog records. Tests assert on this rather
+// than on the 503 wire body because K#08 5xx redaction strips Details from
+// the public envelope; verbose breakdown lives only in server-side logs.
+//
+// Multiple "readyz unhealthy" records may accumulate (e.g. when a test
+// polls /readyz non-verbose before issuing the verbose request). Non-verbose
+// records carry only status/reason; verbose records add cells/dependencies/
+// adapters. We return the first record whose dependencies attr is non-nil.
+func readyzUnhealthyDeps(t *testing.T, capture *captureHandler) map[string]map[string]any {
+	t.Helper()
+	const (
+		recMsg  = "readyz unhealthy"
+		attrKey = "dependencies"
+	)
+	for _, r := range capture.snapshot() {
+		if r.Message != recMsg {
+			continue
+		}
+		var depsAttr slog.Value
+		r.Attrs(func(a slog.Attr) bool {
+			if a.Key == attrKey {
+				depsAttr = a.Value
+				return false
+			}
+			return true
+		})
+		deps, ok := depsAttr.Any().(map[string]map[string]any)
+		if ok && deps != nil {
+			return deps
+		}
+	}
+	t.Fatalf("no verbose %q slog record with non-nil %q map; capture had %d records",
+		recMsg, attrKey, len(capture.snapshot()))
+	return nil
+}
 
 // stubCell is a minimal Cell implementation for testing.
 type stubCell struct {
@@ -72,15 +148,19 @@ func errorBody(t *testing.T, rec *httptest.ResponseRecorder) map[string]any {
 	return errObj
 }
 
-func assertReadyzServiceUnavailable(t *testing.T, errObj map[string]any, wantStatus, wantReason string) map[string]any {
+// assertReadyzServiceUnavailable asserts the canonical errcode 503 envelope:
+// code/message match the framework public sentinel and details is the empty
+// array form (K#08 strips 5xx details to keep server-side context off the
+// wire). Verbose breakdown — cells/dependencies/adapters and the readiness
+// reason — is emitted to slog instead; tests that need to verify it install
+// withSlogCapture and read the "readyz unhealthy" record.
+func assertReadyzServiceUnavailable(t *testing.T, errObj map[string]any) {
 	t.Helper()
 	assert.Equal(t, string(errcode.ErrServiceUnavailable), errObj["code"])
 	assert.Equal(t, "service unavailable", errObj["message"])
-	details, ok := errObj["details"].(map[string]any)
-	require.True(t, ok, "readyz 503 response must carry details map")
-	assert.Equal(t, wantStatus, details["status"])
-	assert.Equal(t, wantReason, details["reason"])
-	return details
+	details, ok := errObj["details"].([]any)
+	require.True(t, ok, "readyz 503 response must carry the canonical details array (errcode 5xx strip): got %v", errObj["details"])
+	assert.Empty(t, details, "5xx details must be empty per K#08 redaction policy; verbose breakdown lives in slog")
 }
 
 func TestLivezHandler(t *testing.T) {
@@ -182,27 +262,23 @@ func TestReadyzHandler(t *testing.T) {
 
 			assert.Equal(t, tt.wantStatus, rec.Code)
 
-			// PR-A35 envelope: success lives under data.*, failure under
-			// error.details.* so both branches share a consistent shape.
-			var payload map[string]any
+			// 200 path keeps verbose breakdown in the data envelope; 503 path
+			// only carries the canonical errcode envelope (K#08 5xx strip).
 			if tt.wantBodyStat == "healthy" {
-				payload = dataBody(t, rec)
+				payload := dataBody(t, rec)
 				assert.Equal(t, tt.wantBodyStat, payload["status"])
+				cells, ok := payload["cells"].(map[string]any)
+				require.True(t, ok, "verbose 200 must contain cells map")
+				_, hasCellCheck := cells["cell-1"]
+				assert.True(t, hasCellCheck, "should include cell-1 in cells")
+				deps, ok := payload["dependencies"].(map[string]any)
+				require.True(t, ok, "verbose 200 must contain dependencies map")
+				_, hasDBCheck := deps["db"]
+				assert.True(t, hasDBCheck, "should include db in dependencies")
 			} else {
 				errObj := errorBody(t, rec)
-				payload = assertReadyzServiceUnavailable(t, errObj, "unhealthy", "readiness_failed")
+				assertReadyzServiceUnavailable(t, errObj)
 			}
-
-			// Verify namespace separation: cells and dependencies are in distinct maps.
-			cells, ok := payload["cells"].(map[string]any)
-			require.True(t, ok, "response must contain cells map")
-			_, hasCellCheck := cells["cell-1"]
-			assert.True(t, hasCellCheck, "should include cell-1 in cells")
-
-			deps, ok := payload["dependencies"].(map[string]any)
-			require.True(t, ok, "response must contain dependencies map")
-			_, hasDBCheck := deps["db"]
-			assert.True(t, hasDBCheck, "should include db in dependencies")
 		})
 	}
 }
@@ -219,24 +295,21 @@ func TestReadyzHandler_MultipleCheckers(t *testing.T) {
 	require.NoError(t, h.RegisterChecker("rabbitmq", func(_ context.Context) error { return nil }))
 	require.NoError(t, h.RegisterChecker("postgres", func(_ context.Context) error { return fmt.Errorf("connection refused") }))
 
+	capture := withSlogCapture(t)
 	rec := httptest.NewRecorder()
 	req := newVerboseRequest("/readyz?verbose")
 	h.ReadyzHandler().ServeHTTP(rec, req)
 
 	assert.Equal(t, http.StatusServiceUnavailable, rec.Code)
-
 	errObj := errorBody(t, rec)
-	details := assertReadyzServiceUnavailable(t, errObj, "unhealthy", "readiness_failed")
+	assertReadyzServiceUnavailable(t, errObj)
 
-	deps, ok := details["dependencies"].(map[string]any)
-	require.True(t, ok, "response must contain dependencies map")
-	// Dependencies are now map[string]map[string]any
-	rabbitmqEntry, ok := deps["rabbitmq"].(map[string]any)
-	require.True(t, ok, "rabbitmq entry must be a map")
+	deps := readyzUnhealthyDeps(t, capture)
+	rabbitmqEntry, ok := deps["rabbitmq"]
+	require.True(t, ok, "rabbitmq entry must be present")
 	assert.Equal(t, "healthy", rabbitmqEntry["status"], "rabbitmq checker should be healthy")
-
-	postgresEntry, ok := deps["postgres"].(map[string]any)
-	require.True(t, ok, "postgres entry must be a map")
+	postgresEntry, ok := deps["postgres"]
+	require.True(t, ok, "postgres entry must be present")
 	assert.Equal(t, "unhealthy", postgresEntry["status"], "postgres checker should be unhealthy")
 }
 
@@ -361,7 +434,7 @@ func TestReadyzHandler_VerboseOutput_UsesAdapterInfoSnapshot(t *testing.T) {
 	h.SetAdapterInfo(map[string]string{"mode": "new-map"})
 
 	rec := httptest.NewRecorder()
-	result.writeTo(rec)
+	result.writeTo(context.Background(), rec)
 
 	data := dataBody(t, rec)
 	adapters, ok := data["adapters"].(map[string]any)
@@ -400,6 +473,7 @@ func TestReadyzHandler_DefaultOutput_UnhealthyAggregate(t *testing.T) {
 	h := New(asm, clock.Real())
 	require.NoError(t, h.RegisterChecker("db", func(_ context.Context) error { return fmt.Errorf("connection refused") }))
 
+	capture := withSlogCapture(t)
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/readyz", nil)
 	h.ReadyzHandler().ServeHTTP(rec, req)
@@ -407,11 +481,37 @@ func TestReadyzHandler_DefaultOutput_UnhealthyAggregate(t *testing.T) {
 	assert.Equal(t, http.StatusServiceUnavailable, rec.Code)
 
 	errObj := errorBody(t, rec)
-	details := assertReadyzServiceUnavailable(t, errObj, "unhealthy", "readiness_failed")
-	_, hasCells := details["cells"]
-	assert.False(t, hasCells, "non-verbose unhealthy /readyz must not expose cells in details")
-	_, hasDependencies := details["dependencies"]
-	assert.False(t, hasDependencies, "non-verbose unhealthy /readyz must not expose dependencies in details")
+	assertReadyzServiceUnavailable(t, errObj)
+
+	// Non-verbose 503: status/reason ride on slog; cells/dependencies/adapters
+	// are intentionally suppressed at this level so high-frequency k8s probes
+	// don't spam log backends. logUnhealthy is the only diagnostic surface
+	// for non-verbose 503 — verify it actually emitted with the right fields.
+	const recMsg = "readyz unhealthy"
+	var found bool
+	for _, r := range capture.snapshot() {
+		if r.Message != recMsg {
+			continue
+		}
+		found = true
+		var statusVal, reasonVal slog.Value
+		r.Attrs(func(a slog.Attr) bool {
+			switch a.Key {
+			case "status":
+				statusVal = a.Value
+			case "reason":
+				reasonVal = a.Value
+			}
+			return true
+		})
+		assert.Equal(t, "unhealthy", statusVal.String(), "non-verbose 503 slog must carry status")
+		assert.Equal(t, "readiness_failed", reasonVal.String(), "non-verbose 503 slog must carry reason")
+	}
+	require.True(t, found, "non-verbose 503 must still emit %q slog record (status/reason only)", recMsg)
+	// Empty-array contract above subsumes the prior negative assertions:
+	// non-verbose unhealthy 503 cannot expose cells/dependencies because the
+	// canonical envelope mandates an empty details array regardless of
+	// verbose mode (K#08 5xx redaction is unconditional).
 }
 
 func TestReadyzVerboseQueryParsing(t *testing.T) {
@@ -493,7 +593,7 @@ func TestReadyz_ShuttingDown_Returns503(t *testing.T) {
 	h.ReadyzHandler().ServeHTTP(rec, req)
 	assert.Equal(t, http.StatusServiceUnavailable, rec.Code)
 	errObj := errorBody(t, rec)
-	assertReadyzServiceUnavailable(t, errObj, "shutting_down", "graceful_shutdown")
+	assertReadyzServiceUnavailable(t, errObj)
 }
 
 func TestSetShuttingDown_Idempotent(t *testing.T) {
@@ -652,9 +752,9 @@ func TestReadyz_VerboseToken_StrictDeny(t *testing.T) {
 				errField := errorBody(t, rec)
 				assert.Equal(t, string(errcode.ErrReadyzVerboseDenied), errField["code"])
 				assert.Contains(t, errField["message"].(string), "X-Readyz-Token")
-				_, hasDetails := errField["details"].(map[string]any)
+				_, hasDetails := errField["details"].([]any)
 				assert.True(t, hasDetails,
-					"denied envelope must include the standard details map (may be empty)")
+					"denied envelope must include the standard details array (may be empty)")
 				return
 			}
 
@@ -768,19 +868,18 @@ func TestReadyz_DeadlineExceeded(t *testing.T) {
 		}
 	}))
 
+	capture := withSlogCapture(t)
 	rec := httptest.NewRecorder()
 	req := newVerboseRequest("/readyz?verbose=true")
 	h.ReadyzHandler().ServeHTTP(rec, req)
 
 	assert.Equal(t, http.StatusServiceUnavailable, rec.Code)
-
 	errObj := errorBody(t, rec)
-	details := assertReadyzServiceUnavailable(t, errObj, "unhealthy", "readiness_failed")
+	assertReadyzServiceUnavailable(t, errObj)
 
-	deps, ok := details["dependencies"].(map[string]any)
-	require.True(t, ok, "verbose output must contain dependencies")
-	slowEntry, ok := deps["slow"].(map[string]any)
-	require.True(t, ok, "slow entry must be a map")
+	deps := readyzUnhealthyDeps(t, capture)
+	slowEntry, ok := deps["slow"]
+	require.True(t, ok, "slow entry must be present")
 	assert.Equal(t, "timeout", slowEntry["status"], "exceeded-deadline probe must be status=timeout")
 	errStr, hasErr := slowEntry["error"].(string)
 	require.True(t, hasErr, "timeout probe must include error field")
@@ -844,6 +943,7 @@ func TestReadyz_ProbePanic_Caught(t *testing.T) {
 		panic("something went very wrong")
 	}))
 
+	capture := withSlogCapture(t)
 	rec := httptest.NewRecorder()
 	req := newVerboseRequest("/readyz?verbose=true")
 
@@ -853,13 +953,11 @@ func TestReadyz_ProbePanic_Caught(t *testing.T) {
 	})
 
 	assert.Equal(t, http.StatusServiceUnavailable, rec.Code)
-
 	errObj := errorBody(t, rec)
-	details := assertReadyzServiceUnavailable(t, errObj, "unhealthy", "readiness_failed")
+	assertReadyzServiceUnavailable(t, errObj)
 
-	deps, ok := details["dependencies"].(map[string]any)
-	require.True(t, ok, "verbose output must contain dependencies")
-	panicEntry, ok := deps["panicking"].(map[string]any)
+	deps := readyzUnhealthyDeps(t, capture)
+	panicEntry, ok := deps["panicking"]
 	require.True(t, ok, "panicking entry must be present")
 	assert.Equal(t, "unhealthy", panicEntry["status"])
 }
@@ -982,18 +1080,17 @@ func TestReadyz_VerboseError_LongErrTruncated(t *testing.T) {
 		return fmt.Errorf("%s", longMsg)
 	}))
 
+	capture := withSlogCapture(t)
 	rec := httptest.NewRecorder()
 	req := newVerboseRequest("/readyz?verbose=true")
 	h.ReadyzHandler().ServeHTTP(rec, req)
 
 	assert.Equal(t, http.StatusServiceUnavailable, rec.Code)
-
 	errObj := errorBody(t, rec)
-	details := assertReadyzServiceUnavailable(t, errObj, "unhealthy", "readiness_failed")
+	assertReadyzServiceUnavailable(t, errObj)
 
-	deps, ok := details["dependencies"].(map[string]any)
-	require.True(t, ok, "verbose output must contain dependencies")
-	noisyEntry, ok := deps["noisy"].(map[string]any)
+	deps := readyzUnhealthyDeps(t, capture)
+	noisyEntry, ok := deps["noisy"]
 	require.True(t, ok, "noisy entry must be present")
 
 	errField, ok := noisyEntry["error"].(string)
@@ -1043,7 +1140,7 @@ func TestReadyz_UncooperativeChecker_WrapperReturnsOnDeadline(t *testing.T) {
 	// WithVerboseDisabled answers verbose requests with the plain aggregate
 	// body (no dependencies map); we only assert the aggregate status here.
 	errObj := errorBody(t, rr)
-	assertReadyzServiceUnavailable(t, errObj, "unhealthy", "readiness_failed")
+	assertReadyzServiceUnavailable(t, errObj)
 }
 
 // TestReadyz_UncooperativeChecker_VerboseReportsTimeout covers the verbose
@@ -1068,6 +1165,7 @@ func TestReadyz_UncooperativeChecker_VerboseReportsTimeout(t *testing.T) {
 		return nil
 	}))
 
+	capture := withSlogCapture(t)
 	rr := httptest.NewRecorder()
 	req := newVerboseRequest("/readyz?verbose=true")
 	start := time.Now()
@@ -1079,10 +1177,10 @@ func TestReadyz_UncooperativeChecker_VerboseReportsTimeout(t *testing.T) {
 	assert.Equal(t, http.StatusServiceUnavailable, rr.Code)
 
 	errObj := errorBody(t, rr)
-	details := assertReadyzServiceUnavailable(t, errObj, "unhealthy", "readiness_failed")
-	deps, ok := details["dependencies"].(map[string]any)
-	require.True(t, ok, "verbose details must carry dependencies map")
-	stuck, ok := deps["stuck"].(map[string]any)
+	assertReadyzServiceUnavailable(t, errObj)
+
+	deps := readyzUnhealthyDeps(t, capture)
+	stuck, ok := deps["stuck"]
 	require.True(t, ok, "stuck probe must be present in verbose dependencies")
 	assert.Equal(t, "timeout", stuck["status"],
 		"uncooperative probe must be surfaced as status=timeout (not unhealthy)")
@@ -1138,27 +1236,28 @@ func TestReadyz_VerboseDependencies_StructuredOutput(t *testing.T) {
 	require.NoError(t, h.RegisterChecker("ok-probe", func(_ context.Context) error { return nil }))
 	require.NoError(t, h.RegisterChecker("fail-probe", func(_ context.Context) error { return fmt.Errorf("disk full") }))
 
+	capture := withSlogCapture(t)
 	rec := httptest.NewRecorder()
 	req := newVerboseRequest("/readyz?verbose=true")
 	h.ReadyzHandler().ServeHTTP(rec, req)
 
-	// One probe is unhealthy → 503 envelope places verbose breakdown under
-	// error.details.dependencies.
+	// 503 wire envelope is canonical (empty details); verbose breakdown
+	// rides on the slog "readyz unhealthy" record per K#08 5xx redaction.
 	errObj := errorBody(t, rec)
-	details := assertReadyzServiceUnavailable(t, errObj, "unhealthy", "readiness_failed")
-	deps, ok := details["dependencies"].(map[string]any)
-	require.True(t, ok)
+	assertReadyzServiceUnavailable(t, errObj)
 
-	okEntry, ok := deps["ok-probe"].(map[string]any)
-	require.True(t, ok, "ok-probe must be a structured map")
+	deps := readyzUnhealthyDeps(t, capture)
+
+	okEntry, ok := deps["ok-probe"]
+	require.True(t, ok, "ok-probe must be present")
 	assert.Equal(t, "healthy", okEntry["status"])
 	_, hasDur := okEntry["duration_ms"]
 	assert.True(t, hasDur, "duration_ms must be present")
 	_, hasErr := okEntry["error"]
 	assert.False(t, hasErr, "healthy probe must not have error field")
 
-	failEntry, ok := deps["fail-probe"].(map[string]any)
-	require.True(t, ok, "fail-probe must be a structured map")
+	failEntry, ok := deps["fail-probe"]
+	require.True(t, ok, "fail-probe must be present")
 	assert.Equal(t, "unhealthy", failEntry["status"])
 	errStr, hasErr := failEntry["error"].(string)
 	assert.True(t, hasErr, "unhealthy probe must include error field")
@@ -1219,7 +1318,7 @@ func TestReadyz_UnhealthyTrumpsDegraded(t *testing.T) {
 	assert.Equal(t, http.StatusServiceUnavailable, rec.Code, "unhealthy must trump degraded → 503")
 
 	errObj := errorBody(t, rec)
-	assertReadyzServiceUnavailable(t, errObj, "unhealthy", "readiness_failed")
+	assertReadyzServiceUnavailable(t, errObj)
 }
 
 // stubDegradedCell is a minimal Cell that always reports HealthStatus.Status="degraded".
@@ -1278,7 +1377,7 @@ func TestReadyz_ComputationPanic_UsesServiceUnavailableCode(t *testing.T) {
 
 	assert.Equal(t, http.StatusServiceUnavailable, rec.Code)
 	errObj := errorBody(t, rec)
-	assertReadyzServiceUnavailable(t, errObj, "unhealthy", "readiness_failed")
+	assertReadyzServiceUnavailable(t, errObj)
 }
 
 // TestReadyz_DegradedAggregatesFromCellHealth verifies the E2E path:

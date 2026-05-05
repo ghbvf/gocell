@@ -124,7 +124,8 @@ func (tm *TxManager) runInSavepoint(ctx context.Context, tx pgx.Tx, fn func(ctx 
 	spName := fmt.Sprintf("sp_%d", depth)
 
 	if _, err := tx.Exec(ctx, fmt.Sprintf("SAVEPOINT %s", spName)); err != nil {
-		return errcode.Wrap(errcode.KindInternal, ErrAdapterPGQuery, fmt.Sprintf("postgres: create savepoint %s", spName), err)
+		return errcode.Wrap(errcode.KindInternal, ErrAdapterPGQuery, "postgres: savepoint create failed", err,
+			errcode.WithInternal(fmt.Sprintf("savepoint=%s", spName)))
 	}
 
 	nestedCtx := withSavepointDepth(ctx, depth+1)
@@ -158,7 +159,8 @@ func (tm *TxManager) runInSavepoint(ctx context.Context, tx pgx.Tx, fn func(ctx 
 	}
 
 	if _, err := tx.Exec(ctx, fmt.Sprintf("RELEASE SAVEPOINT %s", spName)); err != nil {
-		return errcode.Wrap(errcode.KindInternal, ErrAdapterPGQuery, fmt.Sprintf("postgres: release savepoint %s", spName), err)
+		return errcode.Wrap(errcode.KindInternal, ErrAdapterPGQuery, "postgres: savepoint release failed", err,
+			errcode.WithInternal(fmt.Sprintf("savepoint=%s", spName)))
 	}
 	return nil
 }

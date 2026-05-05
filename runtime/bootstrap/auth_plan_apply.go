@@ -58,9 +58,8 @@ func (b *Bootstrap) applyListenerAuthChain(
 			if v == nil {
 				// phase4 must have run before phase5; this is a programmer error.
 				return nil, nil, "", errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
-					fmt.Sprintf("listener %q: AuthJWTFromAssembly verifier not resolved; "+
-						"phase ordering violation: phase4 must complete before applyListenerAuthChain",
-						ref.String()))
+					"listener AuthJWTFromAssembly verifier not resolved; phase ordering violation: phase4 must complete before applyListenerAuthChain",
+					errcode.WithInternal(fmt.Sprintf("listener=%q", ref.String())))
 			}
 			authOpts, aerr := b.buildAuthRouterOptions(v)
 			if aerr != nil {
@@ -81,8 +80,8 @@ func (b *Bootstrap) applyListenerAuthChain(
 		default:
 			// Sealed interface: this branch is theoretically unreachable.
 			return nil, nil, "", errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
-				fmt.Sprintf("listener %q: unknown AuthPlan type %T (sealed interface violation)",
-					ref.String(), plan))
+				"unknown AuthPlan type (sealed interface violation)",
+				errcode.WithInternal(fmt.Sprintf("listener=%q type=%T", ref.String(), plan)))
 		}
 	}
 	describe = describeAuthChain(chain)
@@ -147,13 +146,13 @@ func discoverAuthVerifierFromAssembly(asm cell.AssemblyRef) (auth.IntentTokenVer
 		v := ap.TokenVerifier()
 		if validation.IsNilInterface(v) {
 			return nil, errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
-				fmt.Sprintf("bootstrap: cell %q implements authProvider (cell.AuthProvider) but TokenVerifier() returned nil", id))
+				"bootstrap: authProvider cell TokenVerifier() returned nil",
+				errcode.WithInternal(fmt.Sprintf("cell=%q", id)))
 		}
 		if found != nil {
 			return nil, errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
-				fmt.Sprintf("bootstrap: multiple authProvider cells discovered: %q and %q; "+
-					"keep only one or supply the verifier explicitly via cell.NewAuthJWT(verifier)",
-					foundID, id))
+				"bootstrap: multiple authProvider cells discovered; keep only one or supply the verifier explicitly via cell.NewAuthJWT(verifier)",
+				errcode.WithInternal(fmt.Sprintf("first_cell=%q second_cell=%q", foundID, id)))
 		}
 		found = v
 		foundID = id

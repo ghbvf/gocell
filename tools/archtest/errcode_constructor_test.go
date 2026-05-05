@@ -33,6 +33,21 @@ func TestErrcodeLiteralConstructionBanned(t *testing.T) {
 		if strings.HasPrefix(rel, "pkg/errcode/") {
 			continue
 		}
+		// pkg/ctxcancel/ctxcancel.go is a thin bridge helper: WrapOrInfra accepts
+		// a caller-supplied fallbackMsg param; struct literal is the only way to
+		// splice a runtime-supplied Message without violating
+		// MESSAGE-CONST-LITERAL-01 at every call site. File-level allowlist —
+		// new files in pkg/ctxcancel/ are NOT exempt automatically.
+		if rel == "pkg/ctxcancel/ctxcancel.go" {
+			continue
+		}
+		// pkg/httputil/response.go is the HTTP serialization boundary:
+		// WritePublic accepts a framework-selected message string, and
+		// writeErrcodeError builds a sanitized 5xx sentinel. File-level
+		// allowlist — other files in pkg/httputil/ are NOT exempt.
+		if rel == "pkg/httputil/response.go" {
+			continue
+		}
 		hits, err := findErrcodeErrorLiterals(file)
 		require.NoError(t, err, "scan %s", rel)
 		for _, line := range hits {

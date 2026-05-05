@@ -21,15 +21,15 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
-// DetailsKeyReason is the *errcode.Error.Details map key under which Wrap
-// records the originating ctx-cancel reason ("canceled" |
-// "deadline_exceeded"). Exported so consumers (HTTP boundary, tracing
-// middleware, log4xx) reference one string instead of duplicating the
-// literal at multiple call sites.
+// DetailsKeyReason is the slog.Attr key under which Wrap records the
+// originating ctx-cancel reason ("canceled" | "deadline_exceeded"). Exported
+// so consumers (HTTP boundary, tracing middleware, log4xx) reference one
+// string instead of duplicating the literal at multiple call sites.
 const DetailsKeyReason = "reason"
 
 // Reason values surfaced via Details[DetailsKeyReason]. Low-cardinality
@@ -90,15 +90,25 @@ func Wrap(err error, op, identifier string) *errcode.Error {
 	if !Detect(err) {
 		return nil
 	}
-	kind, code, message, reason := classify(err)
+	if errors.Is(err, context.DeadlineExceeded) {
+		return errcode.Wrap(
+			errcode.KindDeadlineExceeded,
+			errcode.ErrServerTimeout,
+			"request timed out",
+			err,
+			errcode.WithCategory(errcode.CategoryInfra),
+			errcode.WithInternal(fmt.Sprintf("%s ctx canceled %s", op, identifier)),
+			errcode.WithDetails(slog.String(DetailsKeyReason, ReasonDeadlineExceeded)),
+		)
+	}
 	return errcode.Wrap(
-		kind,
-		code,
-		message,
+		errcode.KindClientClosed,
+		errcode.ErrClientCanceled,
+		"request canceled",
 		err,
 		errcode.WithCategory(errcode.CategoryInfra),
 		errcode.WithInternal(fmt.Sprintf("%s ctx canceled %s", op, identifier)),
-		errcode.WithDetails(map[string]any{DetailsKeyReason: reason}),
+		errcode.WithDetails(slog.String(DetailsKeyReason, ReasonCanceled)),
 	)
 }
 
@@ -120,38 +130,30 @@ func Wrap(err error, op, identifier string) *errcode.Error {
 // PascalCase InternalMessage template, a non-Infra Category), keep the
 // inline pattern — this helper deliberately omits those degrees of freedom
 // to avoid a six-parameter signature.
+//
+// fallbackMsg MUST be a compile-time const literal (not fmt.Sprintf output,
+// not string concatenation, not a runtime variable). The struct-literal
+// escape from MESSAGE-CONST-LITERAL-01 is a static-only carve-out —
+// runtime PII at this argument would silently leak into the wire Message
+// field at 4xx status codes.
 func WrapOrInfra(err error, op, identifier string, fallbackCode errcode.Code, fallbackMsg string) error {
 	if cancelErr := Wrap(err, op, identifier); cancelErr != nil {
 		return cancelErr
 	}
-	return errcode.Wrap(errcode.KindInternal, fallbackCode, fallbackMsg, err, errcode.WithCategory(errcode.CategoryInfra))
-}
-
-// classify resolves all per-variant attributes (errcode, public message,
-// observation reason) in a single errors.Is traversal of the cause chain.
-// Centralizing the dispatch here avoids walking the chain twice (once per
-// attribute) and ensures the variant boundary is consistent: code, message,
-// and reason can never disagree about which branch err belongs to.
-//
-// context.DeadlineExceeded → ErrServerTimeout (504) / "request timed out" /
-// ReasonDeadlineExceeded (server-direction, feeds 5xx alerting).
-// Anything else (default = context.Canceled branch) → ErrClientCanceled
-// (499) / "request canceled" / ReasonCanceled (client-direction, slog.Warn).
-func classify(err error) (errcode.Kind, errcode.Code, string, string) {
-	if errors.Is(err, context.DeadlineExceeded) {
-		return errcode.KindDeadlineExceeded, errcode.ErrServerTimeout, "request timed out", ReasonDeadlineExceeded
-	}
-	return errcode.KindClientClosed, errcode.ErrClientCanceled, "request canceled", ReasonCanceled
+	// Struct literal is intentional: WrapOrInfra is a bridge helper that
+	// receives caller-supplied dynamic messages (always string literals at
+	// call sites). ERRCODE-KIND-LITERAL-01 exempts pkg/ctxcancel/ for this
+	// reason; MESSAGE-CONST-LITERAL-01 does not apply to struct fields.
+	return &errcode.Error{Kind: errcode.KindInternal, Code: fallbackCode, Message: fallbackMsg, Cause: err, Category: errcode.CategoryInfra}
 }
 
 // ReasonFromDetails extracts and canonicalizes the reason value from an
-// *errcode.Error.Details map, returning the empty string when no recognized
-// reason is present. Callers (HTTP boundary, log4xx, tracing middleware)
-// MUST go through this helper instead of doing a raw type-assert on
-// d[DetailsKeyReason].(string), so the low-cardinality enum contract holds
-// even when a non-canonical producer (third-party code, future Wrap variants
-// that haven't migrated yet, malicious upstream) attaches an arbitrary
-// string to Details.
+// *errcode.Error, returning the empty string when no recognized reason is
+// present. Callers (HTTP boundary, log4xx, tracing middleware) MUST go
+// through this helper instead of inspecting Details directly, so the
+// low-cardinality enum contract holds even when a non-canonical producer
+// (third-party code, future Wrap variants that haven't migrated yet,
+// malicious upstream) attaches an arbitrary attribute.
 //
 // Fail-closed semantics: any value that is not exactly ReasonCanceled or
 // ReasonDeadlineExceeded yields "" (treat as "unknown / instrumentation
@@ -159,15 +161,18 @@ func classify(err error) (errcode.Kind, errcode.Code, string, string) {
 // cardinality (Tempo/Jaeger backends are extremely sensitive to high
 // cardinality on a single attribute) and from leaking arbitrary content
 // into structured logs.
-func ReasonFromDetails(d map[string]any) string {
-	if d == nil {
+func ReasonFromDetails(e *errcode.Error) string {
+	if e == nil {
 		return ""
 	}
-	s, ok := d[DetailsKeyReason].(string)
+	attr, ok := e.FindAttr(DetailsKeyReason)
 	if !ok {
 		return ""
 	}
-	switch s {
+	if attr.Value.Kind() != slog.KindString {
+		return ""
+	}
+	switch s := attr.Value.String(); s {
 	case ReasonCanceled, ReasonDeadlineExceeded:
 		return s
 	default:

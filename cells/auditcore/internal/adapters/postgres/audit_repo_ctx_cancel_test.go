@@ -184,7 +184,7 @@ func TestAuditRepository_CtxCancel_AllIOBoundaries(t *testing.T) {
 				// PR275 P2-2: pin Details["reason"] alongside Code so a regression
 				// in reasonOf() (e.g. always returning the same constant) cannot
 				// pass the test by status alone.
-				assert.Equal(t, expectedReason, ctxcancel.ReasonFromDetails(ec.Details),
+				assert.Equal(t, expectedReason, ctxcancel.ReasonFromDetails(ec),
 					"Details[reason] must mirror the originating ctx error variant — "+
 						"the canonical low-cardinality observation field for dashboards")
 			})

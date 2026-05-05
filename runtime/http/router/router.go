@@ -505,7 +505,7 @@ func New(opts ...Option) (*Router, error) {
 func MustNew(opts ...Option) *Router {
 	r, err := New(opts...)
 	if err != nil {
-		panic(err.Error())
+		panic(errcode.Assertion("router: %v", err))
 	}
 	return r
 }
@@ -1239,13 +1239,18 @@ func (r *Router) recordRoutePattern(method, routePath string) {
 // needs an explicit 404 for /internal/v1/* paths.
 // Exported for bootstrap's phase5 to install as a route group on the primary
 // router to maintain the physical isolation contract.
+//
+// Body matches contracts/shared/errors/error-response-v1.schema.json:
+// details is the canonical empty array (the schema requires the field to
+// exist on every error response). Pre-encoded — this handler runs before
+// any middleware and must not depend on errcode marshaling.
 func not404Handler(w http.ResponseWriter, r *http.Request) {
 	if reqID, ok := ctxkeys.RequestIDFrom(r.Context()); ok && reqID != "" {
 		w.Header().Set("X-Request-ID", reqID)
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusNotFound)
-	_, _ = w.Write([]byte(`{"error":{"code":"ERR_NOT_FOUND","message":"not found"}}`))
+	_, _ = w.Write([]byte(`{"error":{"code":"ERR_NOT_FOUND","message":"not found","details":[]}}`))
 }
 
 // InternalPrefixIsolationResponder returns a router.Option that 404s any

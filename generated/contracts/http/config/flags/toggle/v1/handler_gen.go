@@ -5,8 +5,8 @@ package toggle
 
 import (
 	"bytes"
-	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 
 	"github.com/ghbvf/gocell/kernel/cell"
@@ -43,7 +43,7 @@ func NewHandler(svc Service, policy auth.Policy) *Handler {
 	h := &Handler{svc: svc, policy: policy}
 	v, err := schemavalidate.NewValidator(requestSchemaJSON)
 	if err != nil {
-		panic(fmt.Sprintf("generated handler http.config.flags.toggle.v1: schema compile failed: %v (codegen invariant violation; regenerate via gocell generate contract --all)", err))
+		panic(errcode.Assertion("generated handler http.config.flags.toggle.v1: schema compile failed: %v (codegen invariant violation; regenerate via gocell generate contract --all)", err))
 	}
 	h.requestValidator = v
 	return h
@@ -71,11 +71,15 @@ func (h *Handler) handle(w http.ResponseWriter, r *http.Request) {
 	{
 		v := r.PathValue("key")
 		if len(v) < 1 {
-			httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "key: invalid"))
+			httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+				"validation: invalid request parameter",
+				errcode.WithDetails(slog.String("field", "key"), slog.String("reason", "invalid"))))
 			return
 		}
 		if len(v) > 256 {
-			httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "key: invalid"))
+			httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+				"validation: invalid request parameter",
+				errcode.WithDetails(slog.String("field", "key"), slog.String("reason", "invalid"))))
 			return
 		}
 		req.Key = v

@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/ghbvf/gocell/kernel/clock"
+	"github.com/ghbvf/gocell/pkg/redaction"
 )
 
 // wrapCtxSafe turns an arbitrary Checker into a race-pattern Checker whose
@@ -96,7 +97,7 @@ func wrapCtxSafe(fn Checker, clk clock.Clock) Checker {
 
 func probePanicError(panicV any) error {
 	slog.Warn("health: probe panicked",
-		slog.Any("panic", panicV),
+		slog.String("panic", redaction.RedactPanic(panicV)),
 	)
 	return fmt.Errorf("panic: %v", panicV)
 }
@@ -135,7 +136,7 @@ func watchLateProbeOutcome(ctxErr error, start, cancelAt time.Time, done <-chan 
 	switch {
 	case o.panicV != nil:
 		slog.Warn("health: probe panicked after ctx cancellation; result discarded",
-			slog.Any("panic", o.panicV),
+			slog.String("panic", redaction.RedactPanic(o.panicV)),
 			slog.Any("ctx_err", ctxErr),
 			slog.Duration("cancel_lag", cancelLag),
 			slog.Duration("probe_total", probeTotal),

@@ -115,7 +115,7 @@ func TestHandler_CreateAdmin_AlreadyExists_Returns410(t *testing.T) {
 
 	assert.Equal(t, http.StatusGone, w.Code)
 	assert.Contains(t, w.Body.String(), "ERR_SETUP_ALREADY_INITIALIZED")
-	assert.Contains(t, w.Body.String(), `"nextAction":"login"`)
+	assert.Contains(t, w.Body.String(), `"key":"nextAction","value":"login"`)
 	// PR-A42 N4: 410 body must not leak HTTP path literals — clients resolve
 	// the login endpoint via OpenAPI / contract registry, not via wire payload.
 	assert.NotContains(t, w.Body.String(), "/api/")

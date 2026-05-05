@@ -183,6 +183,7 @@ func resolveAdminProvisionMode(raw string, forceBootstrap bool) (adminProvisionM
 		return adminProvisionModeBootstrap, nil
 	default:
 		return "", errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
-			fmt.Sprintf("%s must be one of: interactive, bootstrap; got %q", AdminProvisionModeEnv, raw))
+			"GOCELL_ACCESSCORE_ADMIN_PROVISION_MODE must be one of: interactive, bootstrap",
+			errcode.WithDetails(slog.String("got", raw)))
 	}
 }

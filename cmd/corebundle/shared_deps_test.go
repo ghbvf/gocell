@@ -114,7 +114,7 @@ func TestSharedDeps_Validate_VerboseEndpoint(t *testing.T) {
 			topo:       prodTopo,
 			mutate:     func(d *SharedDeps) { d.VerboseToken = SampleVerbosePlaceholder; d.VerboseDisabled = false },
 			wantErr:    true,
-			wantSubstr: "GOCELL_READYZ_VERBOSE_TOKEN is set to the .env.example placeholder",
+			wantSubstr: "ERR_CONTROLPLANE_VERBOSE_TOKEN_SAMPLE",
 		},
 		{
 			name:    "dev mode permits the sample verbose token (out-of-the-box demo path)",

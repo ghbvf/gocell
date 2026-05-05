@@ -5,12 +5,12 @@ package create
 
 import (
 	"bytes"
-	"fmt"
 	"io"
 	"net/http"
 
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/wrapper"
+	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/httputil"
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/http/schemavalidate"
@@ -42,7 +42,7 @@ func NewHandler(svc Service, policy auth.Policy) *Handler {
 	h := &Handler{svc: svc, policy: policy}
 	v, err := schemavalidate.NewValidator(requestSchemaJSON)
 	if err != nil {
-		panic(fmt.Sprintf("generated handler http.auth.user.create.v1: schema compile failed: %v (codegen invariant violation; regenerate via gocell generate contract --all)", err))
+		panic(errcode.Assertion("generated handler http.auth.user.create.v1: schema compile failed: %v (codegen invariant violation; regenerate via gocell generate contract --all)", err))
 	}
 	h.requestValidator = v
 	return h

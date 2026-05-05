@@ -293,6 +293,42 @@ func TestTruncateString(t *testing.T) {
 	}
 }
 
+func TestRedactPanic(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name string
+		v    any
+		want string
+	}{
+		{"nil panic value", nil, "<nil>"},
+		{
+			name: "string panic with secret key=value",
+			v:    "config error: password=hunter2 host=db",
+			want: "config error: password=" + redaction.Mask + " host=db",
+		},
+		{
+			name: "error panic with token",
+			v:    errors.New("dial: token=abc dsn=postgres://u:p@h/db"),
+			want: "dial: token=" + redaction.Mask + " dsn=" + redaction.Mask,
+		},
+		{
+			name: "clean panic message passes through unchanged",
+			v:    "invariant violated: nil receiver",
+			want: "invariant violated: nil receiver",
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			got := redaction.RedactPanic(c.v)
+			if got != c.want {
+				t.Errorf("RedactPanic(%v) = %q, want %q", c.v, got, c.want)
+			}
+		})
+	}
+}
+
 func TestMask_ConstantValue(t *testing.T) {
 	t.Parallel()
 	if redaction.Mask != "<REDACTED>" {

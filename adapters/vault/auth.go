@@ -46,6 +46,8 @@ const (
 	MethodAppRole Method = "approle"
 	// MethodKubernetes uses Vault Kubernetes auth (projected service account JWT).
 	MethodKubernetes Method = "kubernetes"
+
+	internalPathFmt = "path=%s"
 )
 
 // ---------------------------------------------------------------------------
@@ -276,11 +278,13 @@ func (a *kubernetesAuth) Login(ctx context.Context) (AuthResult, error) {
 	jwtBytes, err := os.ReadFile(a.jwtPath)
 	if err != nil {
 		return AuthResult{}, errcode.Wrap(errcode.KindUnavailable, errcode.ErrVaultAuthFailed,
-			fmt.Sprintf("vault-auth: Kubernetes auth: read JWT from %s", a.jwtPath), err)
+			"vault-auth: Kubernetes auth: read JWT failed", err,
+			errcode.WithInternal(fmt.Sprintf(internalPathFmt, a.jwtPath)))
 	}
 	if len(jwtBytes) == 0 {
 		return AuthResult{}, errcode.New(errcode.KindUnavailable, errcode.ErrVaultAuthFailed,
-			fmt.Sprintf("vault-auth: Kubernetes auth: JWT file is empty: %s", a.jwtPath))
+			"vault-auth: Kubernetes auth: JWT file is empty",
+			errcode.WithInternal(fmt.Sprintf(internalPathFmt, a.jwtPath)))
 	}
 
 	path := "auth/" + a.mountPath + "/login"
@@ -380,7 +384,8 @@ func NewAuthMethodFromEnv(ctx context.Context, client *vaultapi.Client) (AuthMet
 
 	default:
 		return nil, errcode.New(errcode.KindUnavailable, errcode.ErrVaultAuthFailed,
-			fmt.Sprintf("vault-auth: unknown VAULT_AUTH_METHOD %q (known values: token, approle, kubernetes)", method))
+			"vault-auth: unknown VAULT_AUTH_METHOD (known values: token, approle, kubernetes)",
+			errcode.WithInternal(fmt.Sprintf("method=%q", method)))
 	}
 }
 
@@ -435,19 +440,22 @@ func secretIDFromEnv(ctx context.Context, client *vaultapi.Client) (SecretIDProv
 			data, err := os.ReadFile(cleanPath)
 			if err != nil {
 				return "", errcode.Wrap(errcode.KindUnavailable, errcode.ErrVaultAuthFailed,
-					fmt.Sprintf("vault-auth: read secret_id from file %s", cleanPath), err)
+					"vault-auth: read secret_id from file failed", err,
+					errcode.WithInternal(fmt.Sprintf(internalPathFmt, cleanPath)))
 			}
 			s := strings.TrimSpace(string(data))
 			if s == "" {
 				return "", errcode.New(errcode.KindUnavailable, errcode.ErrVaultAuthFailed,
-					"vault-auth: secret_id file is empty: "+cleanPath)
+					"vault-auth: secret_id file is empty",
+					errcode.WithInternal(fmt.Sprintf(internalPathFmt, cleanPath)))
 			}
 			return s, nil
 		}, nil
 
 	default:
 		return nil, errcode.New(errcode.KindUnavailable, errcode.ErrVaultAuthFailed,
-			fmt.Sprintf("vault-auth: unknown VAULT_SECRET_ID_TYPE %q (known values: direct, wrapped, file)", secretIDType))
+			"vault-auth: unknown VAULT_SECRET_ID_TYPE (known values: direct, wrapped, file)",
+			errcode.WithInternal(fmt.Sprintf("type=%q", secretIDType)))
 	}
 }
 
@@ -534,8 +542,7 @@ func AssertForRealMode(auth AuthMethod) error {
 	}
 	if auth.Method() == MethodToken {
 		return errcode.New(errcode.KindUnavailable, errcode.ErrVaultAuthFailed,
-			"vault-transit: static VAULT_TOKEN is not allowed in real mode; "+
-				"use VAULT_AUTH_METHOD=approle or VAULT_AUTH_METHOD=kubernetes")
+			"vault-transit: static VAULT_TOKEN is not allowed in real mode; use VAULT_AUTH_METHOD=approle or kubernetes")
 	}
 	return nil
 }

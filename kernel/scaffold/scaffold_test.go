@@ -358,8 +358,11 @@ func TestCreateContract_IDPrefixMismatchKind(t *testing.T) {
 	s := New(root)
 	err := s.CreateContract(ContractOpts{ID: "event.auth.login.v1", Kind: "http", OwnerCell: "c"})
 	requireErrCode(t, err, ErrScaffoldInvalidOpts)
-	assert.Contains(t, err.Error(), "prefix")
-	assert.Contains(t, err.Error(), "must match kind")
+	var ecErrPrefix *errcode.Error
+	require.True(t, errors.As(err, &ecErrPrefix))
+	full := ecErrPrefix.Message + " " + ecErrPrefix.InternalMessage
+	assert.Contains(t, full, "prefix")
+	assert.Contains(t, full, "must match kind")
 }
 
 func TestCreateContract_Conflict(t *testing.T) {

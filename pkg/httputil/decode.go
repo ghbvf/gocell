@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"log/slog"
 	"net/http"
 	"reflect"
 	"strings"
@@ -22,11 +23,11 @@ const DefaultDecodeJSONLimit int64 = 1 << 20
 // Unknown fields are silently ignored to maintain backward compatibility.
 //
 // Errors are returned as *errcode.Error:
-//   - empty body           -> ErrValidationFailed, details: {"reason": "empty body"}
-//   - truncated JSON       -> ErrValidationFailed, details: {"reason": "malformed JSON"}
-//   - syntax error         -> ErrValidationFailed, details: {"reason": "malformed JSON", ...}
-//   - type mismatch        -> ErrValidationFailed, details: {"reason": "type mismatch", "field": ...}
-//   - trailing content     -> ErrValidationFailed, details: {"reason": "trailing content after JSON value"}
+//   - empty body           -> ErrValidationFailed, details: [{"key":"reason","value":"empty body"}]
+//   - truncated JSON       -> ErrValidationFailed, details: [{"key":"reason","value":"malformed JSON"}]
+//   - syntax error         -> ErrValidationFailed, details: [{"key":"reason","value":"malformed JSON"},{"key":"offset","value":N}]
+//   - type mismatch        -> ErrValidationFailed, details: [{"key":"reason","value":"type mismatch"},{"key":"field","value":"..."}]
+//   - trailing content     -> ErrValidationFailed, details: [{"key":"reason","value":"trailing content after JSON value"}]
 //   - body too large       -> ErrBodyTooLarge
 //   - other                -> ErrInternal (details not exposed)
 func DecodeJSON(r *http.Request, dst any, maxBytes int64) error {
@@ -36,7 +37,7 @@ func DecodeJSON(r *http.Request, dst any, maxBytes int64) error {
 // DecodeJSONStrict is like DecodeJSON but rejects unknown fields.
 // All errors documented on DecodeJSON apply, plus the unknown field error:
 //
-//   - unknown field → ErrValidationFailed, details: {"reason": "unknown field", "field": ...}
+//   - unknown field → ErrValidationFailed, details: [{"key":"reason","value":"unknown field"},{"key":"field","value":"..."}]
 //
 // When the destination is a struct, any JSON key that does not match
 // a non-ignored exported field causes a 400 error.
@@ -91,7 +92,7 @@ func validateSingleJSONValue(body []byte) error {
 	// dec.More() is insufficient — it returns false for stray '}' and ']',
 	// letting invalid input like `{"name":"ok"}}` pass silently.
 	if err := dec.Decode(new(json.RawMessage)); !errors.Is(err, io.EOF) {
-		return validationFailedWithDetails(map[string]any{"reason": "trailing content after JSON value"})
+		return validationFailedWithDetails(slog.String("reason", "trailing content after JSON value"))
 	}
 	return nil
 }
@@ -99,31 +100,31 @@ func validateSingleJSONValue(body []byte) error {
 func classifyDecodeError(err error) error {
 	switch {
 	case errors.Is(err, io.EOF):
-		return validationFailedWithDetails(map[string]any{"reason": "empty body"})
+		return validationFailedWithDetails(slog.String("reason", "empty body"))
 	case errors.Is(err, io.ErrUnexpectedEOF):
-		return validationFailedWithDetails(map[string]any{"reason": "malformed JSON"})
+		return validationFailedWithDetails(slog.String("reason", "malformed JSON"))
 	case isMaxBytesError(err):
 		return bodyTooLargeError()
 	default:
 		var syntaxErr *json.SyntaxError
 		if errors.As(err, &syntaxErr) {
-			return validationFailedWithDetails(map[string]any{"reason": "malformed JSON", "offset": syntaxErr.Offset})
+			return validationFailedWithDetails(slog.String("reason", "malformed JSON"), slog.Int64("offset", syntaxErr.Offset))
 		}
 		var typeErr *json.UnmarshalTypeError
 		if errors.As(err, &typeErr) {
-			return validationFailedWithDetails(map[string]any{"reason": "type mismatch", "field": typeErr.Field})
+			return validationFailedWithDetails(slog.String("reason", "type mismatch"), slog.String("field", typeErr.Field))
 		}
 		return errcode.Wrap(errcode.KindInternal, errcode.ErrInternal, "internal server error", err,
 			errcode.WithCategory(errcode.CategoryInfra))
 	}
 }
 
-func validationFailedWithDetails(details map[string]any) error {
+func validationFailedWithDetails(attrs ...slog.Attr) error {
 	return errcode.New(
 		errcode.KindInvalid,
 		errcode.ErrValidationFailed,
 		msgInvalidRequestBody,
-		errcode.WithDetails(details),
+		errcode.WithDetails(attrs...),
 		errcode.WithCategory(errcode.CategoryValidation),
 	)
 }
@@ -289,5 +290,5 @@ func joinJSONPath(parent, field string) string {
 }
 
 func unknownFieldError(field string) error {
-	return validationFailedWithDetails(map[string]any{"reason": "unknown field", "field": field})
+	return validationFailedWithDetails(slog.String("reason", "unknown field"), slog.String("field", field))
 }

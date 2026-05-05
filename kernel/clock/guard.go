@@ -3,6 +3,8 @@ package clock
 import (
 	"reflect"
 	"time"
+
+	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
 // MustHaveClock panics when c is nil or when c is an interface value wrapping
@@ -19,14 +21,20 @@ import (
 // runtime/bootstrap, runtime/http/health, etc. so the panic message stays
 // uniform and the gate's exempt-list auditing has exactly one location.
 func MustHaveClock(c Clock, ctx string) {
+	const (
+		nilMsg = "%s: clock.Clock is required (nil rejected); " +
+			"pass clock.Real() at the composition root or clockmock.New(...) in tests"
+		typedNilMsg = "%s: clock.Clock is required (typed-nil rejected); " +
+			"pass clock.Real() at the composition root or clockmock.New(...) in tests"
+	)
 	if c == nil {
-		panic(ctx + ": clock.Clock is required (nil rejected); pass clock.Real() at the composition root or clockmock.New(...) in tests")
+		panic(errcode.Assertion(nilMsg, ctx))
 	}
 	v := reflect.ValueOf(c)
 	switch v.Kind() {
 	case reflect.Ptr, reflect.Map, reflect.Chan, reflect.Func, reflect.Slice, reflect.Interface:
 		if v.IsNil() {
-			panic(ctx + ": clock.Clock is required (typed-nil rejected); pass clock.Real() at the composition root or clockmock.New(...) in tests")
+			panic(errcode.Assertion(typedNilMsg, ctx))
 		}
 	}
 }
@@ -36,6 +44,6 @@ func MustHaveClock(c Clock, ctx string) {
 // names the call site so callers can identify the misuse from the panic.
 func MustHavePositiveInterval(d time.Duration, ctx string) {
 	if d <= 0 {
-		panic(ctx + ": non-positive interval (got " + d.String() + ")")
+		panic(errcode.Assertion("%s: non-positive interval (got %s)", ctx, d.String()))
 	}
 }

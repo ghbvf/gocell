@@ -967,7 +967,9 @@ func TestHub_SendNotFound(t *testing.T) {
 	hub := NewHub(DefaultHubConfig(clock.Real()), nil)
 	err := hub.Send(context.Background(), "nonexistent", []byte("x"))
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "not found")
+	var ecErrNotFound *errcode.Error
+	require.True(t, errors.As(err, &ecErrNotFound))
+	assert.Contains(t, ecErrNotFound.Message+" "+ecErrNotFound.InternalMessage, "not found")
 }
 
 func TestHub_MessageHandler(t *testing.T) {

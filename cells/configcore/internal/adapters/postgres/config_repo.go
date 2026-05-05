@@ -59,8 +59,8 @@ func (r *ConfigRepository) cryptoOpError(code errcode.Code, op, identifier strin
 		category = errcode.CategoryInfra
 		kind = errcode.KindUnavailable
 	}
-	return errcode.Wrap(kind, code, fmt.Sprintf("config repo: %s failed", op), cause,
-		errcode.WithInternal(fmt.Sprintf("config repo: %s failed (%s)", op, identifier)),
+	return errcode.Wrap(kind, code, "config repo operation failed", cause,
+		errcode.WithInternal(fmt.Sprintf("op=%s identifier=%s", op, identifier)),
 		errcode.WithCategory(category),
 	)
 }
@@ -680,10 +680,12 @@ func (r *ConfigRepository) PublishVersion(ctx context.Context, version *domain.C
 		)
 	}
 	if err != nil {
-		return ctxcancel.WrapOrInfra(err, "PublishVersion", "configID="+version.ConfigID,
-			errcode.ErrConfigRepoQuery,
-			fmt.Sprintf("config repo: publish version failed for config %s v%d",
-				version.ConfigID, version.Version))
+		if cancelErr := ctxcancel.Wrap(err, "PublishVersion", "configID="+version.ConfigID); cancelErr != nil {
+			return cancelErr
+		}
+		return errcode.Wrap(errcode.KindInternal, errcode.ErrConfigRepoQuery, "config repo: publish version failed", err,
+			errcode.WithInternal(fmt.Sprintf("configID=%s version=%d", version.ConfigID, version.Version)),
+			errcode.WithCategory(errcode.CategoryInfra))
 	}
 	return nil
 }

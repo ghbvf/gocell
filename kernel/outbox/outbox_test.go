@@ -13,6 +13,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
 // ---------------------------------------------------------------------------
@@ -833,7 +835,9 @@ func TestEntry_Validate_MetadataKeyLen_Exceeds(t *testing.T) {
 	e.Metadata = map[string]string{longKey: "v"}
 	err := e.Validate()
 	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "metadata key length")
+	var ecErrKeyLen *errcode.Error
+	require.True(t, errors.As(err, &ecErrKeyLen))
+	assert.Contains(t, ecErrKeyLen.Message, "metadata key length")
 }
 
 func TestEntry_Validate_MetadataValueLen_Exceeds(t *testing.T) {
@@ -842,7 +846,9 @@ func TestEntry_Validate_MetadataValueLen_Exceeds(t *testing.T) {
 	e.Metadata = map[string]string{"k": longVal}
 	err := e.Validate()
 	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "metadata value length")
+	var ecErrValLen *errcode.Error
+	require.True(t, errors.As(err, &ecErrValLen))
+	assert.Contains(t, ecErrValLen.Message, "metadata value length")
 }
 
 func TestEntry_Validate_MetadataTotalSize_Exceeds(t *testing.T) {
@@ -877,8 +883,10 @@ func TestEntry_Validate_RejectsReservedMetadataKeys(t *testing.T) {
 			}
 			err := e.Validate()
 			require.Error(t, err)
-			assert.Contains(t, err.Error(), "reserved")
-			assert.Contains(t, err.Error(), k)
+			var ecErrRes *errcode.Error
+			require.True(t, errors.As(err, &ecErrRes))
+			assert.Contains(t, ecErrRes.Message, "reserved")
+			assert.Contains(t, ecErrRes.InternalMessage, k)
 		})
 	}
 }

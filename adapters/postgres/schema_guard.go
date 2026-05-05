@@ -112,7 +112,8 @@ func VerifyExpectedVersion(ctx context.Context, pool *Pool, fsys fs.FS, tableNam
 
 	if actual != expected {
 		return errcode.New(errcode.KindInternal, ErrAdapterPGSchemaMismatch,
-			fmt.Sprintf("schema version mismatch: db=%d binary=%d", actual, expected))
+			"schema version mismatch",
+			errcode.WithDetails(slog.Int64("db", actual), slog.Int64("binary", expected)))
 	}
 
 	slog.Info("schema_guard: schema version matched",
@@ -147,7 +148,9 @@ func InvalidIndexCheck(ctx context.Context, pool *Pool) error {
 		names = append(names, idx.Index)
 	}
 	return errcode.New(errcode.KindInternal, ErrAdapterPGQuery,
-		fmt.Sprintf("schema_guard: %d invalid index(es): %s", len(indexes), strings.Join(names, ", ")))
+		"schema_guard: invalid indexes detected",
+		errcode.WithInternal(fmt.Sprintf("%d invalid index(es): %s", len(indexes), strings.Join(names, ", "))),
+		errcode.WithDetails(slog.Int("invalidCount", len(indexes))))
 }
 
 // DetectInvalidIndexes queries pg_index for any indexes marked as invalid

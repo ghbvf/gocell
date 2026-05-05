@@ -2,7 +2,6 @@ package oidc
 
 import (
 	"context"
-	"fmt"
 	"log/slog"
 	"net/http"
 	"sync"
@@ -109,7 +108,8 @@ func (a *Adapter) discover(ctx context.Context, force bool) (*gooidc.Provider, e
 	p, err := gooidc.NewProvider(a.oidcCtx(ctx), a.config.IssuerURL)
 	if err != nil {
 		return nil, errcode.Wrap(errcode.KindInternal, ErrAdapterOIDCDiscovery,
-			fmt.Sprintf("oidc: discovery failed for %s", a.config.IssuerURL), err)
+			"oidc: discovery failed", err,
+			errcode.WithDetails(slog.String("issuer", a.config.IssuerURL)))
 	}
 	a.provider = p
 	slog.Info("oidc: provider discovered", slog.String("issuer", a.config.IssuerURL))

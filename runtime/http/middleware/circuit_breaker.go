@@ -104,7 +104,7 @@ func CircuitBreaker(cb Allower) (func(http.Handler) http.Handler, error) {
 func MustCircuitBreaker(cb Allower) func(http.Handler) http.Handler {
 	mw, err := CircuitBreaker(cb)
 	if err != nil {
-		panic(err.Error())
+		panic(errcode.Assertion("circuit_breaker: %v", err))
 	}
 	return mw
 }

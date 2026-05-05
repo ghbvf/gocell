@@ -359,7 +359,7 @@ func TestAssemblyStartWhileStartingRejected(t *testing.T) {
 	var ec *ecErr.Error
 	require.True(t, errors.As(err, &ec))
 	assert.Equal(t, ecErr.ErrValidationFailed, ec.Code)
-	assert.Contains(t, err.Error(), "cannot start in state")
+	assert.Contains(t, ec.Message, "cannot start in current state")
 
 	c.releaseStart()
 	require.NoError(t, <-startDone)
@@ -384,7 +384,7 @@ func TestAssemblyStartWhileStoppingRejected(t *testing.T) {
 	var ec *ecErr.Error
 	require.True(t, errors.As(err, &ec))
 	assert.Equal(t, ecErr.ErrValidationFailed, ec.Code)
-	assert.Contains(t, err.Error(), "cannot start in state")
+	assert.Contains(t, ec.Message, "cannot start in current state")
 	require.NoError(t, a.Stop(context.Background()), "Stop while stateStopping is a no-op")
 
 	c.releaseStop()
@@ -404,7 +404,7 @@ func TestAssemblyRegisterAfterStartRejected(t *testing.T) {
 	var ec *ecErr.Error
 	require.True(t, errors.As(err, &ec))
 	assert.Equal(t, ecErr.ErrValidationFailed, ec.Code)
-	assert.Contains(t, err.Error(), "cannot register")
+	assert.Contains(t, ec.Message, "cannot register")
 
 	require.NoError(t, a.Stop(context.Background()))
 }
@@ -539,7 +539,9 @@ func TestAssemblyStart_ZeroDurabilityMode_FailsAtAssemblyLevel(t *testing.T) {
 
 	err := a.Start(context.Background())
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "invalid DurabilityMode 0")
+	var ec0 *ecErr.Error
+	require.True(t, errors.As(err, &ec0))
+	assert.Contains(t, ec0.Message, "validate mode failed")
 }
 
 func TestAssemblyStart_InvalidDurabilityMode_Rejects(t *testing.T) {
@@ -551,7 +553,9 @@ func TestAssemblyStart_InvalidDurabilityMode_Rejects(t *testing.T) {
 
 	err := a.Start(context.Background())
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "invalid DurabilityMode 99")
+	var ec99 *ecErr.Error
+	require.True(t, errors.As(err, &ec99))
+	assert.Contains(t, ec99.Message, "validate mode failed")
 }
 
 // ---------------------------------------------------------------------------

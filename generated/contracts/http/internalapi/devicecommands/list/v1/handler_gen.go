@@ -4,6 +4,7 @@
 package list
 
 import (
+	"log/slog"
 	"net/http"
 	"strconv"
 
@@ -58,45 +59,63 @@ func (h *Handler) handle(w http.ResponseWriter, r *http.Request) {
 	req := &Request{}
 	req.Cursor = r.URL.Query().Get("cursor")
 	if req.Cursor != "" && len(req.Cursor) < 0 {
-		httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "cursor: invalid"))
+		httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"validation: invalid request parameter",
+			errcode.WithDetails(slog.String("field", "cursor"), slog.String("reason", "invalid"))))
 		return
 	}
 	if len(req.Cursor) > 4096 {
-		httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "cursor: invalid"))
+		httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"validation: invalid request parameter",
+			errcode.WithDetails(slog.String("field", "cursor"), slog.String("reason", "invalid"))))
 		return
 	}
 	req.DeviceId = r.URL.Query().Get("deviceId")
 	if req.DeviceId != "" && len(req.DeviceId) < 0 {
-		httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "deviceId: invalid"))
+		httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"validation: invalid request parameter",
+			errcode.WithDetails(slog.String("field", "deviceId"), slog.String("reason", "invalid"))))
 		return
 	}
 	if len(req.DeviceId) > 256 {
-		httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "deviceId: invalid"))
+		httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"validation: invalid request parameter",
+			errcode.WithDetails(slog.String("field", "deviceId"), slog.String("reason", "invalid"))))
 		return
 	}
 	if raw := r.URL.Query().Get("limit"); raw != "" {
 		v, err := strconv.ParseInt(raw, 10, 64)
 		if err != nil {
-			httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "limit: must be an integer"))
+			httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+				"validation: invalid request parameter",
+				errcode.WithDetails(slog.String("field", "limit"), slog.String("reason", "must be an integer"))))
 			return
 		}
 		if v < 1 {
-			httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "limit: invalid"))
+			httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+				"validation: invalid request parameter",
+				errcode.WithDetails(slog.String("field", "limit"), slog.String("reason", "invalid"))))
 			return
 		}
 		if v > 500 {
-			httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "limit: invalid"))
+			httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+				"validation: invalid request parameter",
+				errcode.WithDetails(slog.String("field", "limit"), slog.String("reason", "invalid"))))
 			return
 		}
 		req.Limit = v
 	}
 	req.Statuses = r.URL.Query().Get("statuses")
 	if req.Statuses != "" && len(req.Statuses) < 0 {
-		httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "statuses: invalid"))
+		httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"validation: invalid request parameter",
+			errcode.WithDetails(slog.String("field", "statuses"), slog.String("reason", "invalid"))))
 		return
 	}
 	if len(req.Statuses) > 256 {
-		httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "statuses: invalid"))
+		httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"validation: invalid request parameter",
+			errcode.WithDetails(slog.String("field", "statuses"), slog.String("reason", "invalid"))))
 		return
 	}
 	resp, err := h.svc.List(r.Context(), req)

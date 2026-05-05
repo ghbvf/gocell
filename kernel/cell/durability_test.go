@@ -32,13 +32,15 @@ func TestCheckNotNoop_UnsetMode_RejectsAll(t *testing.T) {
 	var ecErr *errcode.Error
 	require.ErrorAs(t, err, &ecErr)
 	assert.Equal(t, errcode.ErrValidationFailed, ecErr.Code)
-	assert.Contains(t, err.Error(), "invalid DurabilityMode 0")
+	assert.Contains(t, ecErr.Message, "DurabilityMode check failed")
 }
 
 func TestCheckNotNoop_UnsetMode_RejectsEvenWithNoDeps(t *testing.T) {
 	err := CheckNotNoop(DurabilityMode(0), "test-cell")
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "invalid DurabilityMode 0")
+	var ecErr *errcode.Error
+	require.ErrorAs(t, err, &ecErr)
+	assert.Contains(t, ecErr.Message, "DurabilityMode check failed")
 }
 
 func TestCheckNotNoop_DemoMode_AllowsNoop(t *testing.T) {
@@ -52,8 +54,8 @@ func TestCheckNotNoop_DurableMode_RejectsNoop(t *testing.T) {
 	var ecErr *errcode.Error
 	require.ErrorAs(t, err, &ecErr)
 	assert.Equal(t, errcode.ErrCellMissingOutbox, ecErr.Code)
-	assert.Contains(t, err.Error(), "test-cell")
-	assert.Contains(t, err.Error(), "durable mode")
+	assert.Contains(t, ecErr.Message, "durable mode")
+	assert.Contains(t, ecErr.InternalMessage, "test-cell")
 }
 
 func TestCheckNotNoop_DurableMode_AllowsReal(t *testing.T) {
@@ -82,7 +84,9 @@ func TestCheckNotNoop_InvalidMode_Rejects(t *testing.T) {
 	// ref: Kubernetes allowlist validation, Uber fx fail-fast
 	err := CheckNotNoop(DurabilityMode(99), "test-cell", stubReal{})
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "invalid DurabilityMode 99")
+	var ecErr *errcode.Error
+	require.ErrorAs(t, err, &ecErr)
+	assert.Contains(t, ecErr.Message, "DurabilityMode check failed")
 }
 
 func TestValidateMode(t *testing.T) {

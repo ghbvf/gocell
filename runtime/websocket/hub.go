@@ -3,6 +3,7 @@ package websocket
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"maps"
 	"sync"
@@ -41,6 +42,8 @@ const (
 	defaultShutdownTimeout      = 10 * time.Second
 	defaultSendBufferSize       = 32
 	defaultConcurrentCloseLimit = 64
+
+	internalConnIDFmt = "conn_id=%s"
 )
 
 // HubConfig configures the Hub.
@@ -273,7 +276,8 @@ func (h *Hub) Start(ctx context.Context) error {
 	h.wg.Add(1)
 	h.cancelMu.Unlock()
 
-	slog.Info("websocket hub: started",
+	slog.Info(
+		"websocket hub: started",
 		slog.Duration("ping_interval", h.config.PingInterval),
 	)
 
@@ -387,7 +391,8 @@ func (h *Hub) shutdown(ctx context.Context) error {
 	case <-done:
 		slog.Info("websocket hub: stopped")
 	case <-ctx.Done():
-		slog.Error("websocket hub: stop timed out, hub is poisoned",
+		slog.Error(
+			"websocket hub: stop timed out, hub is poisoned",
 			slog.Any("error", ctx.Err()),
 		)
 		err = ctx.Err()
@@ -447,7 +452,8 @@ func closeEntriesConcurrently(ctx context.Context, entries []*connEntry, limit i
 			sem <- struct{}{} // bounded wait for slot inside goroutine
 			defer func() { <-sem }()
 			if err := e.conn.Close(); err != nil {
-				slog.Warn("websocket hub: close connection failed",
+				slog.Warn(
+					"websocket hub: close connection failed",
 					slog.String("conn_id", e.conn.ID()),
 					slog.String("remote_addr", logutil.SafeAddr(e.conn.RemoteAddr())),
 					slog.Any("error", err),
@@ -545,14 +551,16 @@ func (h *Hub) Register(ctx context.Context, conn Conn) error {
 		evicted.cancel()
 		evicted.closeOnce.Do(func() { close(evicted.done) })
 		_ = evicted.conn.Close()
-		slog.Warn("websocket hub: evicted duplicate conn",
+		slog.Warn(
+			"websocket hub: evicted duplicate conn",
 			slog.String("conn_id", conn.ID()),
 			slog.String("remote_addr", logutil.SafeAddr(evicted.conn.RemoteAddr())),
 			slog.String("reason", "duplicate_conn_id"),
 		)
 	}
 
-	slog.Info("websocket hub: connection registered",
+	slog.Info(
+		"websocket hub: connection registered",
 		slog.String("conn_id", conn.ID()),
 		slog.String("remote_addr", logutil.SafeAddr(conn.RemoteAddr())),
 		slog.String("subject", entry.subject),
@@ -634,12 +642,14 @@ func (h *Hub) unregisterEntry(entry *connEntry) {
 		// producer-facing channel to avoid send-on-closed-channel panics.
 		entry.closeOnce.Do(func() { close(entry.done) })
 		if err := entry.conn.Close(); err != nil {
-			slog.Debug("websocket hub: close on unregister",
+			slog.Debug(
+				"websocket hub: close on unregister",
 				slog.String("conn_id", connID),
 				slog.Any("error", err),
 			)
 		}
-		slog.Info("websocket hub: connection unregistered",
+		slog.Info(
+			"websocket hub: connection unregistered",
 			slog.String("conn_id", connID),
 		)
 	}
@@ -660,12 +670,14 @@ func (h *Hub) Unregister(connID string) {
 		entry.cancel()
 		entry.closeOnce.Do(func() { close(entry.done) })
 		if err := entry.conn.Close(); err != nil {
-			slog.Debug("websocket hub: close on unregister",
+			slog.Debug(
+				"websocket hub: close on unregister",
 				slog.String("conn_id", connID),
 				slog.Any("error", err),
 			)
 		}
-		slog.Info("websocket hub: connection unregistered",
+		slog.Info(
+			"websocket hub: connection unregistered",
 			slog.String("conn_id", connID),
 		)
 	}
@@ -687,8 +699,7 @@ func (h *Hub) Unregister(connID string) {
 func (h *Hub) BroadcastFilter(ctx context.Context, data []byte, filter func(Conn) bool) error {
 	if filter == nil {
 		return errcode.New(errcode.KindInternal, errcode.ErrWebsocketBroadcastFilterMissing,
-			"websocket: BroadcastFilter requires a non-nil filter; "+
-				"use func(Conn) bool { return true } for full broadcast")
+			"websocket: BroadcastFilter requires a non-nil filter; use func(Conn) bool { return true } for full broadcast")
 	}
 
 	// Snapshot entries under lock; run filter outside lock to avoid
@@ -778,7 +789,8 @@ func (h *Hub) Send(ctx context.Context, connID string, data []byte) error {
 
 	if !ok {
 		return errcode.New(errcode.KindNotFound, errcode.ErrWSConnNotFound,
-			"websocket: connection not found: "+connID)
+			"websocket: connection not found",
+			errcode.WithInternal(fmt.Sprintf(internalConnIDFmt, connID)))
 	}
 
 	select {
@@ -788,13 +800,15 @@ func (h *Hub) Send(ctx context.Context, connID string, data []byte) error {
 		return nil
 	case <-entry.done:
 		return errcode.New(errcode.KindUnavailable, errcode.ErrWSConnNotFound,
-			"websocket: connection "+connID+" already evicted")
+			"websocket: connection already evicted",
+			errcode.WithInternal(fmt.Sprintf(internalConnIDFmt, connID)))
 	default:
 		h.evictWith(entry, "send_buffer_full", slog.LevelWarn,
 			"websocket hub: slow client evicted, send buffer full",
 			"websocket hub: close on slow-client evict")
 		return errcode.New(errcode.KindUnavailable, errcode.ErrWebsocketSlowClient,
-			"websocket: connection "+connID+" send buffer full, evicted")
+			"websocket: connection send buffer full, evicted",
+			errcode.WithInternal(fmt.Sprintf(internalConnIDFmt, connID)))
 	}
 }
 
@@ -902,7 +916,8 @@ func (h *Hub) Close(ctx context.Context) error {
 	}
 	var ec *errcode.Error
 	if errors.As(err, &ec) && ec.Code == errcode.ErrWSAlreadyStopped {
-		slog.Debug("websocket hub: Close called on already-stopped hub",
+		slog.Debug(
+			"websocket hub: Close called on already-stopped hub",
 			slog.String("error", err.Error()),
 		)
 		return nil
@@ -916,7 +931,8 @@ func (h *Hub) readLoop(ctx context.Context, conn Conn) {
 	for {
 		data, err := conn.Read(ctx)
 		if err != nil {
-			slog.Debug("websocket hub: read loop ended",
+			slog.Debug(
+				"websocket hub: read loop ended",
 				slog.String("conn_id", conn.ID()),
 				slog.Any("error", err),
 			)
@@ -942,7 +958,8 @@ func (h *Hub) writeLoop(ctx context.Context, entry *connEntry) {
 			return
 		case data := <-entry.send:
 			if err := entry.conn.Write(ctx, data); err != nil {
-				slog.Debug("websocket hub: write failed in writeLoop",
+				slog.Debug(
+					"websocket hub: write failed in writeLoop",
 					slog.String("conn_id", entry.conn.ID()),
 					slog.Any("error", err),
 				)
@@ -1028,13 +1045,15 @@ func (h *Hub) evictWith(entry *connEntry, reason string, level slog.Level, evict
 	entry.cancel()
 	entry.closeOnce.Do(func() { close(entry.done) })
 	if err := entry.conn.Close(); err != nil {
-		slog.Debug(closeMsg,
+		slog.Debug(
+			closeMsg,
 			slog.String("conn_id", connID),
 			slog.String("reason", reason),
 			slog.Any("error", err),
 		)
 	}
-	slog.LogAttrs(context.Background(), level, evictMsg,
+	slog.LogAttrs(
+		context.Background(), level, evictMsg,
 		slog.String("conn_id", connID),
 		slog.String("remote_addr", logutil.SafeAddr(entry.conn.RemoteAddr())),
 		slog.String("subject", entry.subject),
@@ -1068,7 +1087,8 @@ func (h *Hub) handlePingResult(connID string, pingErr error) {
 		return
 	}
 	h.connMu.Unlock()
-	slog.Debug("websocket hub: ping missed",
+	slog.Debug(
+		"websocket hub: ping missed",
 		slog.String("conn_id", connID),
 		slog.Int("misses", current.pingMisses),
 	)

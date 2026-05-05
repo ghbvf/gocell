@@ -2,6 +2,7 @@ package cell
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/wrapper"
+	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
 // ---------------------------------------------------------------------------
@@ -104,7 +106,9 @@ func TestRegistry_Subscribe_RejectsBadSpecKind(t *testing.T) {
 	}
 	err := rec.Subscribe(spec, noopHandler, "cg-test")
 	require.Error(t, err)
-	assert.Contains(t, strings.ToLower(err.Error()), "kind")
+	var ecErr *errcode.Error
+	require.True(t, errors.As(err, &ecErr))
+	assert.Contains(t, strings.ToLower(ecErr.Message), "kind")
 }
 
 // ---------------------------------------------------------------------------

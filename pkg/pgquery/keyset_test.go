@@ -1,6 +1,7 @@
 package pgquery
 
 import (
+	"errors"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -242,7 +243,9 @@ func TestKeyset_InvalidColumnName(t *testing.T) {
 	}
 	err := AppendKeyset(b, params)
 	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "invalid column name")
+	var ecErrCol *errcode.Error
+	require.True(t, errors.As(err, &ecErrCol))
+	assert.Contains(t, ecErrCol.Message+" "+ecErrCol.InternalMessage, "invalid column name")
 }
 
 func TestKeyset_InvalidDirection(t *testing.T) {
@@ -254,7 +257,9 @@ func TestKeyset_InvalidDirection(t *testing.T) {
 	}
 	err := AppendKeyset(b, params)
 	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "invalid direction")
+	var ecErrDir *errcode.Error
+	require.True(t, errors.As(err, &ecErrDir))
+	assert.Contains(t, ecErrDir.Message+" "+ecErrDir.InternalMessage, "invalid sort direction")
 }
 
 func requireCursorInvalid(t *testing.T, err error, reason string) {
@@ -264,5 +269,7 @@ func requireCursorInvalid(t *testing.T, err error, reason string) {
 	var got *errcode.Error
 	require.ErrorAs(t, err, &got)
 	assert.Equal(t, errcode.ErrCursorInvalid, got.Code)
-	assert.Equal(t, reason, got.Details["reason"])
+	reasonAttr, ok := got.FindAttr("reason")
+	require.True(t, ok)
+	assert.Equal(t, reason, reasonAttr.Value.String())
 }

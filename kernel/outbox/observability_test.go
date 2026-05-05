@@ -2,6 +2,7 @@ package outbox
 
 import (
 	"context"
+	"errors"
 	"reflect"
 	"strings"
 	"testing"
@@ -10,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/ghbvf/gocell/pkg/ctxkeys"
+	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/idutil"
 )
 
@@ -85,9 +87,9 @@ func TestObservabilityMetadata_Validate(t *testing.T) {
 			TraceID: "4bf92f3577b34da6a3ce929d0e0e4736", TraceParent: validTP,
 			RequestID: "req-1", CorrelationID: "corr-1",
 		}},
-		{name: "TraceID too long", o: ObservabilityMetadata{TraceID: tooLong}, wantError: "traceId length"},
-		{name: "RequestID too long", o: ObservabilityMetadata{RequestID: tooLong}, wantError: "requestId length"},
-		{name: "CorrelationID too long", o: ObservabilityMetadata{CorrelationID: tooLong}, wantError: "correlationId length"},
+		{name: "TraceID too long", o: ObservabilityMetadata{TraceID: tooLong}, wantError: "field length exceeds max"},
+		{name: "RequestID too long", o: ObservabilityMetadata{RequestID: tooLong}, wantError: "field length exceeds max"},
+		{name: "CorrelationID too long", o: ObservabilityMetadata{CorrelationID: tooLong}, wantError: "field length exceeds max"},
 		{name: "TraceID unsafe chars", o: ObservabilityMetadata{TraceID: "trace; DROP TABLE"}, wantError: "unsafe characters"},
 		{name: "TraceParent malformed", o: ObservabilityMetadata{TraceParent: "not-a-valid-traceparent"}, wantError: "valid W3C traceparent"},
 		{name: "total exceeds cap", o: ObservabilityMetadata{
@@ -104,7 +106,12 @@ func TestObservabilityMetadata_Validate(t *testing.T) {
 				assert.NoError(t, err)
 			} else {
 				require.Error(t, err)
-				assert.Contains(t, err.Error(), tc.wantError)
+				var ecErr *errcode.Error
+				if errors.As(err, &ecErr) {
+					assert.Contains(t, ecErr.Message+" "+ecErr.InternalMessage, tc.wantError)
+				} else {
+					assert.Contains(t, err.Error(), tc.wantError)
+				}
 			}
 		})
 	}

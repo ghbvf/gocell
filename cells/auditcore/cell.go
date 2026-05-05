@@ -329,9 +329,9 @@ func (c *AuditCore) initCursorCodec(mode cell.DurabilityMode) error {
 	}
 	if mode == cell.DurabilityDurable {
 		return errcode.New(errcode.KindInternal, errcode.ErrCellMissingCodec,
-			"auditcore durable mode requires a cursor codec;"+
-				" use WithCursorCodec(query.NewCursorCodec(secret))"+
-				" — the built-in demo key is public in the source tree")
+			"auditcore durable mode requires a cursor codec; "+
+				"use WithCursorCodec(query.NewCursorCodec(secret)) — "+
+				"the built-in demo key is public in the source tree")
 	}
 	// Each cell uses a distinct demo key to prevent cross-cell cursor reuse in demo mode.
 	codec, err := query.NewCursorCodec([]byte("gocell-demo-AUDIT--CORE-key-32!!"))

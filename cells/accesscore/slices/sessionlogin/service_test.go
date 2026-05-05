@@ -430,12 +430,12 @@ func TestService_Login_BlankFieldsRejected(t *testing.T) {
 		{
 			name:        "blank username rejected",
 			input:       LoginInput{Username: "", Password: "p"},
-			wantMessage: "username is required",
+			wantMessage: "username",
 		},
 		{
 			name:        "blank password rejected",
 			input:       LoginInput{Username: "u", Password: ""},
-			wantMessage: "password is required",
+			wantMessage: "password",
 		},
 	}
 
@@ -448,7 +448,16 @@ func TestService_Login_BlankFieldsRejected(t *testing.T) {
 			var ec *errcode.Error
 			require.ErrorAs(t, err, &ec, "expected *errcode.Error")
 			assert.Equal(t, errcode.ErrAuthLoginInvalidInput, ec.Code)
-			assert.Contains(t, ec.Message, tt.wantMessage)
+			assert.Equal(t, "validation: required field missing", ec.Message,
+				"message must be a const literal")
+			var gotField string
+			for _, attr := range ec.Details {
+				if attr.Key == "field" {
+					gotField = attr.Value.String()
+					break
+				}
+			}
+			assert.Equal(t, tt.wantMessage, gotField, "details must carry the field name")
 		})
 	}
 }

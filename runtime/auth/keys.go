@@ -23,11 +23,14 @@ import (
 // will be rejected during parsing and verifier/issuer construction.
 const MinRSAKeyBits = 2048
 
+const msgJWTKeyParseFailed = "jwt key parse failed"
+
 // validateRSAKeySize checks that the RSA key modulus is at least MinRSAKeyBits.
 func validateRSAKeySize(n int, keyKind string) error {
 	if n < MinRSAKeyBits {
 		return errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthKeyInvalid,
-			fmt.Sprintf("RSA %s key size %d bits is below the minimum %d bits", keyKind, n, MinRSAKeyBits))
+			"RSA key size below minimum",
+			errcode.WithDetails(slog.String("kind", keyKind), slog.Int("bits", n), slog.Int("min", MinRSAKeyBits)))
 	}
 	return nil
 }
@@ -202,14 +205,18 @@ func (ks *KeySet) PublicKeyByKID(kid string) (*rsa.PublicKey, error) {
 
 	pub, ok := ks.keyIndex[kid]
 	if !ok {
-		return nil, errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthKeyInvalid, fmt.Sprintf("unknown kid: %s", kid))
+		return nil, errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthKeyInvalid,
+			"verification key lookup failed",
+			errcode.WithInternal(fmt.Sprintf("kid=%s", kid)))
 	}
 
 	// Signing key has no entry in keyExpiry — it never expires.
 	// Verification keys are checked against their expiry.
 	if exp, isVerification := ks.keyExpiry[kid]; isVerification {
 		if !ks.clk.Now().Before(exp) {
-			return nil, errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthKeyInvalid, fmt.Sprintf("kid %s has expired", kid))
+			return nil, errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthKeyInvalid,
+				"verification key expired",
+				errcode.WithInternal(fmt.Sprintf("kid=%s", kid)))
 		}
 	}
 
@@ -247,7 +254,7 @@ func (ks *KeySet) PruneExpired() {
 func MustGenerateTestKeyPair() (*rsa.PrivateKey, *rsa.PublicKey) {
 	priv, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
-		panic(fmt.Sprintf("auth: failed to generate test RSA key pair: %v", err))
+		panic(errcode.Assertion("auth: failed to generate test RSA key pair: %v", err))
 	}
 	return priv, &priv.PublicKey
 }
@@ -260,7 +267,7 @@ func MustNewTestKeySet(clk clock.Clock) (*KeySet, *rsa.PrivateKey, *rsa.PublicKe
 	priv, pub := MustGenerateTestKeyPair()
 	ks, err := NewKeySet(priv, pub, clk)
 	if err != nil {
-		panic(fmt.Sprintf("auth: failed to create test key set: %v", err))
+		panic(errcode.Assertion("auth: failed to create test key set: %v", err))
 	}
 	return ks, priv, pub
 }
@@ -302,25 +309,29 @@ func LoadKeysFromEnv() (privateKey *rsa.PrivateKey, publicKey *rsa.PublicKey, er
 	privPEM := os.Getenv(EnvJWTPrivateKey)
 	if privPEM == "" {
 		return nil, nil, errcode.New(errcode.KindInternal, ErrKeyMissing,
-			fmt.Sprintf("environment variable %s is not set", EnvJWTPrivateKey))
+			"jwt key env not set",
+			errcode.WithDetails(slog.String("env", EnvJWTPrivateKey)))
 	}
 
 	pubPEM := os.Getenv(EnvJWTPublicKey)
 	if pubPEM == "" {
 		return nil, nil, errcode.New(errcode.KindInternal, ErrKeyMissing,
-			fmt.Sprintf("environment variable %s is not set", EnvJWTPublicKey))
+			"jwt key env not set",
+			errcode.WithDetails(slog.String("env", EnvJWTPublicKey)))
 	}
 
 	privateKey, err = parseRSAPrivateKey([]byte(privPEM))
 	if err != nil {
 		return nil, nil, errcode.Wrap(errcode.KindInternal, ErrKeyMissing,
-			fmt.Sprintf("failed to parse %s", EnvJWTPrivateKey), err)
+			msgJWTKeyParseFailed,
+			err, errcode.WithDetails(slog.String("env", EnvJWTPrivateKey)))
 	}
 
 	publicKey, err = parseRSAPublicKey([]byte(pubPEM))
 	if err != nil {
 		return nil, nil, errcode.Wrap(errcode.KindInternal, ErrKeyMissing,
-			fmt.Sprintf("failed to parse %s", EnvJWTPublicKey), err)
+			msgJWTKeyParseFailed,
+			err, errcode.WithDetails(slog.String("env", EnvJWTPublicKey)))
 	}
 
 	return privateKey, publicKey, nil
@@ -345,19 +356,22 @@ func LoadKeySetFromEnv(clk clock.Clock) (*KeySet, error) {
 	prevPub, err := parseRSAPublicKey([]byte(prevPubPEM))
 	if err != nil {
 		return nil, errcode.Wrap(errcode.KindUnauthenticated, errcode.ErrAuthKeyInvalid,
-			fmt.Sprintf("failed to parse %s", EnvJWTPrevPublicKey), err)
+			msgJWTKeyParseFailed,
+			err, errcode.WithDetails(slog.String("env", EnvJWTPrevPublicKey)))
 	}
 
 	expiresStr := os.Getenv(EnvJWTPrevKeyExpires)
 	if expiresStr == "" {
 		return nil, errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthKeyInvalid,
-			fmt.Sprintf("%s is set but %s is missing", EnvJWTPrevPublicKey, EnvJWTPrevKeyExpires))
+			"prev key set without expiry",
+			errcode.WithDetails(slog.String("envPub", EnvJWTPrevPublicKey), slog.String("envExpiry", EnvJWTPrevKeyExpires)))
 	}
 
 	expiresAt, err := time.Parse(time.RFC3339, expiresStr)
 	if err != nil {
 		return nil, errcode.Wrap(errcode.KindUnauthenticated, errcode.ErrAuthKeyInvalid,
-			fmt.Sprintf("failed to parse %s as RFC 3339 (example: 2026-04-12T00:00:00Z)", EnvJWTPrevKeyExpires), err)
+			msgJWTKeyParseFailed,
+			err, errcode.WithDetails(slog.String("env", EnvJWTPrevKeyExpires)))
 	}
 
 	vk := VerificationKey{
@@ -382,7 +396,8 @@ func parseRSAKeyPEM[T any](pemData []byte, missingLabel, usage string, parse fun
 	if block == nil {
 		var zero T
 		return zero, errcode.New(errcode.KindUnauthenticated, errcode.ErrAuthKeyInvalid,
-			"no PEM block found in "+missingLabel)
+			"no PEM block found",
+			errcode.WithInternal(fmt.Sprintf("source=%s", missingLabel)))
 	}
 
 	key, bitLen, err := parse(block.Bytes)

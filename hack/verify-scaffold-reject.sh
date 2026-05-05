@@ -17,8 +17,12 @@ if [[ ${exit_code} -eq 0 ]]; then
     exit 1
 fi
 
-if ! grep -q "must not contain" <<<"${output}"; then
-    echo "FAIL: scaffold rejected (exit ${exit_code}) but error message did not contain 'must not contain'" >&2
+# K#08 PII-safe message: the public scaffold rejection message is the fixed
+# sentinel code + structured detail (id="..." suggestion="..."), not a
+# free-form English explanation. Assert on the canonical code prefix rather
+# than the prose.
+if ! grep -q "ERR_SCAFFOLD_INVALID_OPTS" <<<"${output}"; then
+    echo "FAIL: scaffold rejected (exit ${exit_code}) but error did not surface 'ERR_SCAFFOLD_INVALID_OPTS' sentinel" >&2
     echo "${output}" >&2
     exit 1
 fi

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"log/slog"
 	"regexp"
 	"strings"
 	"time"
@@ -26,7 +27,8 @@ var identifierRe = regexp.MustCompile(`^[a-zA-Z_][a-zA-Z0-9_]*$`)
 func validateIdentifier(name string) error {
 	if !identifierRe.MatchString(name) {
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-			fmt.Sprintf("invalid SQL identifier: %q", name))
+			"invalid SQL identifier",
+			errcode.WithInternal(fmt.Sprintf("identifier=%q", name)))
 	}
 	return nil
 }
@@ -119,8 +121,9 @@ func (m *Migrator) Up(ctx context.Context) error {
 			names[i] = idx.Index
 		}
 		return errcode.New(errcode.KindInternal, ErrAdapterPGMigrate,
-			fmt.Sprintf("postgres: refusing to migrate: %d invalid index(es) detected: %v;"+
-				" manual cleanup required before proceeding", len(invalid), names))
+			"postgres: refusing to migrate: invalid indexes detected",
+			errcode.WithDetails(slog.Int("count", len(invalid))),
+			errcode.WithInternal(fmt.Sprintf("indexes=%v", names)))
 	}
 	if _, err := m.provider.Up(ctx); err != nil {
 		return errcode.Wrap(errcode.KindInternal, ErrAdapterPGMigrate, "postgres: apply migrations", err)

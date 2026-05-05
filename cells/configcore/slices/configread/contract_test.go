@@ -33,7 +33,7 @@ func TestHttpConfigGetV1Serve(t *testing.T) {
 	// first-class declared response, not just a runtime artifact.
 	_, has403 := c.HTTP.Responses[403]
 	assert.True(t, has403, "http.config.get.v1 must declare 403 (route is RoleAdmin-gated)")
-	c.ValidateErrorResponse(t, 403, []byte(`{"error":{"code":"ERR_AUTH_FORBIDDEN","message":"access denied","details":{}}}`))
+	c.ValidateErrorResponse(t, 403, []byte(`{"error":{"code":"ERR_AUTH_FORBIDDEN","message":"access denied","details":[]}}`))
 
 	// Non-sensitive entry: sensitive=false, value is the real value.
 	c.ValidateResponse(t, []byte(`{"data":{"id":"c-1","key":"app.name","value":"myapp",`+
@@ -64,7 +64,7 @@ func TestHttpConfigListV1Serve(t *testing.T) {
 	// PR-CFG-C contract-as-auth-truth: list endpoint is admin-gated.
 	_, has403 := c.HTTP.Responses[403]
 	assert.True(t, has403, "http.config.list.v1 must declare 403 (route is RoleAdmin-gated)")
-	c.ValidateErrorResponse(t, 403, []byte(`{"error":{"code":"ERR_AUTH_FORBIDDEN","message":"access denied","details":{}}}`))
+	c.ValidateErrorResponse(t, 403, []byte(`{"error":{"code":"ERR_AUTH_FORBIDDEN","message":"access denied","details":[]}}`))
 
 	// Non-sensitive entry: sensitive=false.
 	c.ValidateResponse(t, []byte(`{"data":[{"id":"c-1","key":"app.name","value":"myapp",`+

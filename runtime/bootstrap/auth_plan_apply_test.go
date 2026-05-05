@@ -308,7 +308,7 @@ func TestRunAuthPlanValidateHooks_DiscoverScenarios(t *testing.T) {
 			_, err = discoverAuthVerifierFromAssembly(asm)
 		})
 		require.Error(t, err)
-		assert.Contains(t, err.Error(), "Assembly is nil")
+		assert.Contains(t, errFull(t, err), "Assembly is nil")
 	})
 
 	t.Run("zero_providers_returns_error", func(t *testing.T) {
@@ -320,7 +320,7 @@ func TestRunAuthPlanValidateHooks_DiscoverScenarios(t *testing.T) {
 		}
 		err := b.runAuthPlanValidateHooks()
 		require.Error(t, err)
-		assert.Contains(t, err.Error(), "authProvider cell")
+		assert.Contains(t, errFull(t, err), "authProvider cell")
 	})
 
 	t.Run("multiple_providers_returns_error", func(t *testing.T) {
@@ -338,7 +338,7 @@ func TestRunAuthPlanValidateHooks_DiscoverScenarios(t *testing.T) {
 		}
 		err := b.runAuthPlanValidateHooks()
 		require.Error(t, err)
-		assert.Contains(t, err.Error(), "multiple authProvider cells")
+		assert.Contains(t, errFull(t, err), "multiple authProvider cells")
 	})
 
 	t.Run("nil_verifier_returns_error", func(t *testing.T) {
@@ -355,7 +355,7 @@ func TestRunAuthPlanValidateHooks_DiscoverScenarios(t *testing.T) {
 		}
 		err := b.runAuthPlanValidateHooks()
 		require.Error(t, err)
-		assert.Contains(t, err.Error(), "TokenVerifier() returned nil")
+		assert.Contains(t, errFull(t, err), "TokenVerifier() returned nil")
 	})
 
 	t.Run("single_provider_resolves_verifier", func(t *testing.T) {

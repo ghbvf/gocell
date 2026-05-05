@@ -2,12 +2,16 @@ package errcode
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestNewWrapAndOptions(t *testing.T) {
@@ -18,7 +22,7 @@ func TestNewWrapAndOptions(t *testing.T) {
 		"service unavailable",
 		cause,
 		WithInternal("postgres pool exhausted"),
-		WithDetails(map[string]any{"retry": true}),
+		WithDetails(slog.Bool("retry", true)),
 		WithCategory(CategoryInfra),
 	)
 
@@ -26,7 +30,7 @@ func TestNewWrapAndOptions(t *testing.T) {
 	assert.Equal(t, ErrServiceUnavailable, err.Code)
 	assert.Equal(t, "service unavailable", err.Message)
 	assert.Equal(t, "postgres pool exhausted", err.InternalMessage)
-	assert.Equal(t, map[string]any{"retry": true}, err.Details)
+	assert.Equal(t, []slog.Attr{slog.Bool("retry", true)}, err.Details)
 	assert.ErrorIs(t, err, cause)
 	assert.Equal(t, "[ERR_SERVICE_UNAVAILABLE] postgres pool exhausted: pool exhausted", err.Error())
 }
@@ -105,4 +109,249 @@ func TestPublicCodeForStatus(t *testing.T) {
 	assert.Equal(t, ErrInternal, PublicCodeForStatus(http.StatusInternalServerError))
 	assert.Equal(t, ErrServiceUnavailable, PublicCodeForStatus(http.StatusServiceUnavailable))
 	assert.Equal(t, ErrServerTimeout, PublicCodeForStatus(http.StatusGatewayTimeout))
+}
+
+func TestAssertion(t *testing.T) {
+	t.Run("noArgs", func(t *testing.T) {
+		err := Assertion("plain literal")
+		assert.Equal(t, KindInternal, err.Kind)
+		assert.Equal(t, ErrInternal, err.Code)
+		assert.Equal(t, "plain literal", err.Message)
+	})
+
+	t.Run("sprintf", func(t *testing.T) {
+		err := Assertion("registry: %s name=%s", "duplicate", "foo")
+		assert.Equal(t, "registry: duplicate name=foo", err.Message)
+	})
+
+	t.Run("status500", func(t *testing.T) {
+		err := Assertion("anything")
+		assert.Equal(t, http.StatusInternalServerError, err.Status())
+	})
+
+	t.Run("publicCodeIsErrInternal", func(t *testing.T) {
+		err := Assertion("anything")
+		assert.Equal(t, ErrInternal, err.PublicCode())
+	})
+
+	t.Run("errorsAs", func(t *testing.T) {
+		err := Assertion("registry: empty")
+		var ec *Error
+		assert.True(t, errors.As(err, &ec))
+		assert.Equal(t, ErrInternal, ec.Code)
+	})
+
+	t.Run("panicRecover", func(t *testing.T) {
+		defer func() {
+			rec := recover()
+			require.NotNil(t, rec)
+			ec, ok := rec.(*Error)
+			require.True(t, ok)
+			assert.Equal(t, ErrInternal, ec.Code)
+			assert.Contains(t, ec.Message, "registry: oops")
+		}()
+		panic(Assertion("registry: %v", errors.New("oops")))
+	})
+
+	t.Run("noCause", func(t *testing.T) {
+		err := Assertion("no cause attached")
+		assert.Nil(t, err.Cause)
+	})
+
+	t.Run("isInfraErrorTrue", func(t *testing.T) {
+		err := Assertion("infra path")
+		assert.True(t, IsInfraError(err))
+		assert.Equal(t, CategoryInfra, err.Category)
+	})
+}
+
+func TestWithDetailsAttrs(t *testing.T) {
+	t.Run("singleAttr", func(t *testing.T) {
+		err := New(KindInvalid, ErrValidationFailed, "bad", WithDetails(slog.String("field", "name")))
+		assert.Equal(t, []slog.Attr{slog.String("field", "name")}, err.Details)
+	})
+
+	t.Run("multiOrdering", func(t *testing.T) {
+		attrs := []slog.Attr{
+			slog.String("a", "1"),
+			slog.Int("b", 2),
+			slog.Bool("c", true),
+		}
+		err := New(KindInvalid, ErrValidationFailed, "bad", WithDetails(attrs...))
+		require.Len(t, err.Details, 3)
+		assert.Equal(t, "a", err.Details[0].Key)
+		assert.Equal(t, "b", err.Details[1].Key)
+		assert.Equal(t, "c", err.Details[2].Key)
+	})
+
+	t.Run("empty", func(t *testing.T) {
+		err := New(KindInvalid, ErrValidationFailed, "bad", WithDetails())
+		assert.Nil(t, err.Details)
+	})
+
+	t.Run("appendCumulative", func(t *testing.T) {
+		err := New(KindInvalid, ErrValidationFailed, "bad",
+			WithDetails(slog.String("a", "1")),
+			WithDetails(slog.String("b", "2")),
+		)
+		require.Len(t, err.Details, 2)
+		assert.Equal(t, "a", err.Details[0].Key)
+		assert.Equal(t, "b", err.Details[1].Key)
+	})
+
+	t.Run("findAttrHit", func(t *testing.T) {
+		err := New(KindInvalid, ErrValidationFailed, "bad",
+			WithDetails(slog.String("reason", "expired")),
+		)
+		attr, ok := err.FindAttr("reason")
+		require.True(t, ok)
+		assert.Equal(t, "expired", attr.Value.String())
+	})
+
+	t.Run("findAttrMiss", func(t *testing.T) {
+		err := New(KindInvalid, ErrValidationFailed, "bad",
+			WithDetails(slog.String("a", "1")),
+		)
+		_, ok := err.FindAttr("missing")
+		assert.False(t, ok)
+	})
+
+	t.Run("findAttrNilDetails", func(t *testing.T) {
+		err := New(KindInvalid, ErrValidationFailed, "bad")
+		_, ok := err.FindAttr("anything")
+		assert.False(t, ok)
+	})
+}
+
+func TestErrorMarshalJSON(t *testing.T) {
+	t.Run("noDetailsClient", func(t *testing.T) {
+		err := New(KindNotFound, ErrCellNotFound, "cell not found")
+		raw, mErr := json.Marshal(err)
+		require.NoError(t, mErr)
+		var got map[string]any
+		require.NoError(t, json.Unmarshal(raw, &got))
+		assert.Equal(t, "ERR_CELL_NOT_FOUND", got["code"])
+		assert.Equal(t, "cell not found", got["message"])
+		assert.Equal(t, []any{}, got["details"])
+	})
+
+	t.Run("singleAttrClient", func(t *testing.T) {
+		err := New(KindNotFound, ErrCellNotFound, "cell not found",
+			WithDetails(slog.String("cellId", "abc")))
+		raw, mErr := json.Marshal(err)
+		require.NoError(t, mErr)
+		var got map[string]any
+		require.NoError(t, json.Unmarshal(raw, &got))
+		assert.Equal(t, []any{
+			map[string]any{"key": "cellId", "value": "abc"},
+		}, got["details"])
+	})
+
+	t.Run("multiAttrClient", func(t *testing.T) {
+		err := New(KindInvalid, ErrValidationFailed, "bad",
+			WithDetails(
+				slog.String("field", "name"),
+				slog.Int("len", 0),
+				slog.Bool("required", true),
+			))
+		raw, mErr := json.Marshal(err)
+		require.NoError(t, mErr)
+		var got map[string]any
+		require.NoError(t, json.Unmarshal(raw, &got))
+		details, ok := got["details"].([]any)
+		require.True(t, ok)
+		require.Len(t, details, 3)
+		assert.Equal(t, "field", details[0].(map[string]any)["key"])
+		assert.Equal(t, "name", details[0].(map[string]any)["value"])
+		assert.Equal(t, "len", details[1].(map[string]any)["key"])
+		assert.Equal(t, float64(0), details[1].(map[string]any)["value"])
+		assert.Equal(t, "required", details[2].(map[string]any)["key"])
+		assert.Equal(t, true, details[2].(map[string]any)["value"])
+	})
+
+	t.Run("internalNotMarshaled", func(t *testing.T) {
+		err := New(KindNotFound, ErrCellNotFound, "cell not found",
+			WithInternal("internal trace data"))
+		raw, mErr := json.Marshal(err)
+		require.NoError(t, mErr)
+		assert.NotContains(t, string(raw), "internal trace data")
+		assert.NotContains(t, string(raw), "internalMessage")
+	})
+
+	t.Run("serverErrStripsDetails", func(t *testing.T) {
+		err := New(KindInternal, ErrInternal, "boom",
+			WithDetails(slog.String("dsn", "secret"), slog.Int("retries", 3)))
+		raw, mErr := json.Marshal(err)
+		require.NoError(t, mErr)
+		var got map[string]any
+		require.NoError(t, json.Unmarshal(raw, &got))
+		assert.Equal(t, []any{}, got["details"])
+		// Server-side details must not leak even by accident.
+		assert.NotContains(t, string(raw), "dsn")
+		assert.NotContains(t, string(raw), "secret")
+	})
+
+	t.Run("clientErrSubstitutesUnsafeKindBypassingEntry", func(t *testing.T) {
+		// Construct an *Error directly so the wire-unsafe attr bypasses the
+		// WithDetails kind whitelist. MarshalJSON must substitute the
+		// unsafeKindMarker rather than emit a handler-dependent payload.
+		err := &Error{
+			Kind:    KindInvalid,
+			Code:    ErrValidationFailed,
+			Message: "bad",
+			Details: []slog.Attr{
+				slog.String("ok", "v"),
+				slog.Any("ch", make(chan int)), // KindAny — not wire-safe
+			},
+		}
+		raw, mErr := json.Marshal(err)
+		require.NoError(t, mErr)
+		var got map[string]any
+		require.NoError(t, json.Unmarshal(raw, &got))
+		details, ok := got["details"].([]any)
+		require.True(t, ok)
+		require.Len(t, details, 2)
+		assert.Equal(t, "v", details[0].(map[string]any)["value"])
+		assert.Equal(t, unsafeKindMarker, details[1].(map[string]any)["value"],
+			"wire-unsafe kind must be replaced by sentinel string")
+	})
+}
+
+func TestWithDetailsKindWhitelist(t *testing.T) {
+	t.Run("scalarKindsAccepted", func(t *testing.T) {
+		require.NotPanics(t, func() {
+			_ = New(KindInvalid, ErrValidationFailed, "ok", WithDetails(
+				slog.String("s", "v"),
+				slog.Int("i", 1),
+				slog.Int64("i64", 1),
+				slog.Uint64("u64", 1),
+				slog.Float64("f", 1),
+				slog.Bool("b", true),
+				slog.Duration("d", 0),
+				slog.Time("t", time.Time{}),
+			))
+		})
+	})
+
+	t.Run("anyKindPanics", func(t *testing.T) {
+		var ec *Error
+		defer func() {
+			r := recover()
+			require.NotNil(t, r, "WithDetails(slog.Any(...)) must panic")
+			err, ok := r.(error)
+			require.True(t, ok, "panic value must be error from Assertion()")
+			require.True(t, errors.As(err, &ec), "panic must wrap *errcode.Error")
+			assert.Contains(t, ec.Message, "wire-unsafe kind")
+			assert.Contains(t, ec.Message, "Any")
+		}()
+		_ = New(KindInvalid, ErrValidationFailed, "ok",
+			WithDetails(slog.Any("x", struct{ A int }{42})))
+	})
+
+	t.Run("groupKindPanics", func(t *testing.T) {
+		require.Panics(t, func() {
+			_ = New(KindInvalid, ErrValidationFailed, "ok",
+				WithDetails(slog.Group("g", slog.String("inner", "v"))))
+		})
+	})
 }

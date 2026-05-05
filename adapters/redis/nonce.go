@@ -3,6 +3,7 @@ package redis
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"time"
 
 	"github.com/ghbvf/gocell/pkg/errcode"
@@ -35,12 +36,13 @@ func newNonceStoreFromCmdable(rdb cmdable, ttl time.Duration) (*NonceStore, erro
 	}
 	if ttl <= 0 {
 		return nil, errcode.New(errcode.KindInternal, ErrAdapterRedisSet,
-			fmt.Sprintf("redis nonce store: ttl must be positive, got %v", ttl))
+			"redis nonce store: ttl must be positive",
+			errcode.WithDetails(slog.String("ttl", ttl.String())))
 	}
 	if ttl < auth.ServiceTokenNonceTTL {
 		return nil, errcode.New(errcode.KindInternal, ErrAdapterRedisSet,
-			fmt.Sprintf("redis nonce store: ttl %v is shorter than ServiceTokenNonceTTL %v; a shorter TTL reintroduces the replay window",
-				ttl, auth.ServiceTokenNonceTTL))
+			"redis nonce store: ttl shorter than ServiceTokenNonceTTL; replay window reintroduced",
+			errcode.WithDetails(slog.String("ttl", ttl.String()), slog.String("min", auth.ServiceTokenNonceTTL.String())))
 	}
 	return &NonceStore{rdb: rdb, ttl: ttl}, nil
 }
@@ -59,7 +61,8 @@ func (s *NonceStore) CheckAndMark(ctx context.Context, nonce string) error {
 	ok, err := s.rdb.SetNX(ctx, key, "1", s.ttl).Result()
 	if err != nil {
 		return errcode.Wrap(errcode.KindInternal, ErrAdapterRedisSet,
-			fmt.Sprintf("redis nonce store: SET NX failed (key=%s)", key), err)
+			"redis nonce store: SET NX failed", err,
+			errcode.WithInternal(fmt.Sprintf("key=%s", key)))
 	}
 	if !ok {
 		return auth.ErrNonceReused

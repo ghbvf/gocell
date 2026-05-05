@@ -2,10 +2,13 @@ package main
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
 func TestInternalAddrToBaseURL(t *testing.T) {
@@ -59,8 +62,12 @@ func TestAccessCoreModule_InvalidAdminProvisionMode_FailsFast(t *testing.T) {
 
 	_, _, _, err := AccessCoreModule{}.Provide(context.Background(), shared)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), AdminProvisionModeEnv)
-	assert.Contains(t, err.Error(), "bootstrp")
+	var ecErr *errcode.Error
+	require.True(t, errors.As(err, &ecErr))
+	assert.Contains(t, ecErr.Message, AdminProvisionModeEnv)
+	attr, ok := ecErr.FindAttr("got")
+	assert.True(t, ok, "expected 'got' detail attr")
+	assert.Equal(t, "bootstrp", attr.Value.String())
 }
 
 func TestAccessCoreModule_ForceBootstrapDoesNotMaskInvalidProvisionMode(t *testing.T) {
@@ -69,6 +76,10 @@ func TestAccessCoreModule_ForceBootstrapDoesNotMaskInvalidProvisionMode(t *testi
 
 	_, _, _, err := AccessCoreModule{ForceBootstrap: true}.Provide(context.Background(), shared)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), AdminProvisionModeEnv)
-	assert.Contains(t, err.Error(), "bootstrp")
+	var ecErr *errcode.Error
+	require.True(t, errors.As(err, &ecErr))
+	assert.Contains(t, ecErr.Message, AdminProvisionModeEnv)
+	attr, ok := ecErr.FindAttr("got")
+	assert.True(t, ok, "expected 'got' detail attr")
+	assert.Equal(t, "bootstrp", attr.Value.String())
 }

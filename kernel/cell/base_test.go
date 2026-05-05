@@ -413,7 +413,9 @@ func TestNewBaseCell_ErrorPaths(t *testing.T) {
 			c, err := NewBaseCell(tt.meta)
 			require.Error(t, err)
 			require.Nil(t, c)
-			require.Contains(t, err.Error(), tt.wantSubstr)
+			var ec *errcode.Error
+			require.True(t, errors.As(err, &ec))
+			require.Contains(t, ec.Message, tt.wantSubstr)
 		})
 	}
 }
@@ -422,9 +424,10 @@ func TestNewBaseCell_ErrorPaths(t *testing.T) {
 // with a "cell.MustNewBaseCell:" prefixed message.
 func TestMustNewBaseCell_PanicsOnError(t *testing.T) {
 	t.Parallel()
-	assert.PanicsWithValue(t, "cell.MustNewBaseCell: [ERR_VALIDATION_FAILED] cell.NewBaseCell: meta is nil", func() {
-		MustNewBaseCell(nil)
-	}, "panic value should be the prefixed string from MustNewBaseCell")
+	assertPanicsWithAssertionMessage(t,
+		"cell.MustNewBaseCell: [ERR_VALIDATION_FAILED] cell.NewBaseCell: meta is nil",
+		func() { MustNewBaseCell(nil) },
+	)
 	// Also verify the prefix on a non-nil but invalid case.
 	assert.Panics(t, func() {
 		MustNewBaseCell(&metadata.CellMeta{ID: "bad", Type: "wrong"})
@@ -461,4 +464,27 @@ func TestBaseCell_Metadata_Isolation(t *testing.T) {
 	assert.Equal(t, "iso", c.ID(), "Metadata() mutation leaked into cell")
 	assert.Equal(t, "smoke.iso.startup", c.Metadata().Verify.Smoke[0])
 	assert.Equal(t, "shared", c.Metadata().L0Dependencies[0].Cell)
+}
+
+// assertPanicsWithAssertionMessage verifies that fn panics with an *errcode.Error
+// whose Message field equals wantMsg. Used to test Must* wrappers that now panic
+// with errcode.Assertion(...) instead of bare strings.
+func assertPanicsWithAssertionMessage(t *testing.T, wantMsg string, fn func()) {
+	t.Helper()
+	defer func() {
+		r := recover()
+		if r == nil {
+			t.Errorf("expected panic but did not panic")
+			return
+		}
+		e, ok := r.(*errcode.Error)
+		if !ok {
+			t.Errorf("panic value is %T, want *errcode.Error; value: %v", r, r)
+			return
+		}
+		if e.Message != wantMsg {
+			t.Errorf("panic message = %q, want %q", e.Message, wantMsg)
+		}
+	}()
+	fn()
 }

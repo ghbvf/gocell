@@ -18,12 +18,24 @@ import (
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/outbox"
+	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/runtime/config"
 	"github.com/ghbvf/gocell/runtime/http/health"
 	"github.com/ghbvf/gocell/runtime/http/router"
 	"github.com/ghbvf/gocell/runtime/observability/metrics"
 )
+
+// errFullPhases returns Message + " " + InternalMessage for *errcode.Error,
+// falling back to err.Error() for other error types.
+func errFullPhases(t *testing.T, err error) string {
+	t.Helper()
+	var ecErr *errcode.Error
+	if errors.As(err, &ecErr) {
+		return ecErr.Message + " " + ecErr.InternalMessage
+	}
+	return err.Error()
+}
 
 // --- phase5CollectRouteGroups: HealthListener fallback tests (R2-07) ---
 
@@ -263,9 +275,9 @@ func TestPhase0_RejectsAuthJWTFromAssemblyMismatch(t *testing.T) {
 	)
 	err := b.phase0ValidateOptions()
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "AuthJWTFromAssembly carries assembly")
-	assert.Contains(t, err.Error(), "asm-a")
-	assert.Contains(t, err.Error(), "asm-b")
+	assert.Contains(t, errFullPhases(t, err), "AuthJWTFromAssembly carries")
+	assert.Contains(t, errFullPhases(t, err), "asm-a")
+	assert.Contains(t, errFullPhases(t, err), "asm-b")
 }
 
 func TestPhase0_AcceptsAuthJWTFromAssemblyMatch(t *testing.T) {
@@ -290,7 +302,7 @@ func TestPhase0_RejectsAuthMTLSWithoutTLS(t *testing.T) {
 	)
 	err := b.phase0ValidateOptions()
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "AuthMTLS without WithListenerTLS")
+	assert.Contains(t, errFullPhases(t, err), "AuthMTLS without WithListenerTLS")
 }
 
 func TestPhase0_RejectsAuthMTLSWithLooseClientAuth(t *testing.T) {
@@ -307,7 +319,7 @@ func TestPhase0_RejectsAuthMTLSWithLooseClientAuth(t *testing.T) {
 	)
 	err := b.phase0ValidateOptions()
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "ClientAuth")
+	assert.Contains(t, errFullPhases(t, err), "ClientAuth")
 }
 
 func TestPhase0_RejectsAuthMTLSWithoutClientCAs(t *testing.T) {
@@ -323,7 +335,7 @@ func TestPhase0_RejectsAuthMTLSWithoutClientCAs(t *testing.T) {
 	)
 	err := b.phase0ValidateOptions()
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "ClientCAs is nil")
+	assert.Contains(t, errFullPhases(t, err), "ClientCAs is nil")
 }
 
 func TestPhase0_AcceptsAuthMTLSWithProperTLS(t *testing.T) {
@@ -1199,10 +1211,10 @@ func TestBootstrap_Phase5_InternalRoutesRequireGuard(t *testing.T) {
 	})
 
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "internal listener")
-	assert.Contains(t, err.Error(), "AuthServiceToken")
-	assert.Contains(t, err.Error(), "AuthMTLS")
-	assert.Contains(t, err.Error(), "bootstrap.WithListener")
+	assert.Contains(t, errFullPhases(t, err), "InternalListener")
+	assert.Contains(t, errFullPhases(t, err), "AuthServiceToken")
+	assert.Contains(t, errFullPhases(t, err), "AuthMTLS")
+	assert.Contains(t, errFullPhases(t, err), "bootstrap.WithListener")
 }
 
 func TestBootstrap_Phase5_InternalRoutesRejectJWTOnlyGuard(t *testing.T) {
@@ -1219,9 +1231,9 @@ func TestBootstrap_Phase5_InternalRoutesRejectJWTOnlyGuard(t *testing.T) {
 	})
 
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "internal guard")
-	assert.Contains(t, err.Error(), "AuthServiceToken")
-	assert.Contains(t, err.Error(), "AuthMTLS")
+	assert.Contains(t, errFullPhases(t, err), "internal guard")
+	assert.Contains(t, errFullPhases(t, err), "AuthServiceToken")
+	assert.Contains(t, errFullPhases(t, err), "AuthMTLS")
 }
 
 func TestBootstrap_Phase5_InternalRoutesRejectMTLSOnlyGuard(t *testing.T) {
@@ -1237,7 +1249,7 @@ func TestBootstrap_Phase5_InternalRoutesRejectMTLSOnlyGuard(t *testing.T) {
 	})
 
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "AuthServiceToken")
+	assert.Contains(t, errFullPhases(t, err), "AuthServiceToken")
 }
 
 func TestBootstrap_Phase5_InternalRoutesAcceptServiceTokenGuard(t *testing.T) {

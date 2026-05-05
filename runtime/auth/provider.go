@@ -127,7 +127,7 @@ func MustNewTestKeyProvider(clk clock.Clock) KeyProvider {
 	ks, _, _ := MustNewTestKeySet(clk)
 	ring, err := NewHMACKeyRing([]byte("test-hmac-secret-at-least-32-bytes!!"), nil)
 	if err != nil {
-		panic("auth: failed to create test HMAC key ring: " + err.Error())
+		panic(errcode.Assertion("auth: failed to create test HMAC key ring: %v", err))
 	}
 	return NewStaticKeyProvider(ks, ring)
 }

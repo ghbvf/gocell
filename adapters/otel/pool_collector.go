@@ -2,6 +2,7 @@ package otel
 
 import (
 	"context"
+	"log/slog"
 
 	"go.opentelemetry.io/otel/attribute"
 	otelmetric "go.opentelemetry.io/otel/metric"
@@ -34,6 +35,8 @@ const (
 
 	stateIdle = "idle"
 	stateUsed = "used"
+
+	msgCreatePoolCounterFailed = "otel pool collector: create counter failed"
 )
 
 // RegisterPoolMetrics registers observable gauges on the supplied Meter
@@ -64,7 +67,8 @@ func RegisterPoolMetrics(meter otelmetric.Meter, statters []poolstats.Statter) (
 	)
 	if err != nil {
 		return nil, errcode.Wrap(errcode.KindInternal, ErrAdapterOTelInit,
-			"otel pool collector: create "+metricNameConnCount, err)
+			msgCreatePoolCounterFailed, err,
+			errcode.WithDetails(slog.String("metric", metricNameConnCount)))
 	}
 
 	connMax, err := meter.Int64ObservableUpDownCounter(
@@ -74,7 +78,8 @@ func RegisterPoolMetrics(meter otelmetric.Meter, statters []poolstats.Statter) (
 	)
 	if err != nil {
 		return nil, errcode.Wrap(errcode.KindInternal, ErrAdapterOTelInit,
-			"otel pool collector: create "+metricNameConnMax, err)
+			msgCreatePoolCounterFailed, err,
+			errcode.WithDetails(slog.String("metric", metricNameConnMax)))
 	}
 
 	// db.client.connection.timeouts is a monotonically increasing Counter
@@ -89,7 +94,8 @@ func RegisterPoolMetrics(meter otelmetric.Meter, statters []poolstats.Statter) (
 	)
 	if err != nil {
 		return nil, errcode.Wrap(errcode.KindInternal, ErrAdapterOTelInit,
-			"otel pool collector: create "+metricNameConnTimeouts, err)
+			msgCreatePoolCounterFailed, err,
+			errcode.WithDetails(slog.String("metric", metricNameConnTimeouts)))
 	}
 
 	// Snapshot each statter during the callback; OTel calls this on every

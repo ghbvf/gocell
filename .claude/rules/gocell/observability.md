@@ -14,6 +14,18 @@
 - 禁止 Debug 级别 dump 完整请求/响应 body（生产中泄漏敏感信息）
 - 错误日志必须包含结构化关联字段（`execution_id`、`policy_id` 等），禁止裸 `slog.Error("failed")`
 
+## errcode 三层 redaction 分工
+
+`errcode.Error` 将运行时信息分三层隔离，各层在 HTTP 响应与服务端日志中的可见性不同：
+
+| 层 | 存放内容 | 4xx 响应 | 5xx 响应 | 服务端日志 |
+|----|---------|---------|---------|-----------|
+| **Message**（const literal） | 程序员写死的描述性文本，无 runtime 数据 | 下发 | 下发 | 记录 |
+| **Details**（`[]slog.Attr`） | runtime 业务字段（ID、计数、枚举值等） | 下发 | strip | 记录 |
+| **Internal**（`WithInternal`） | runtime 调试上下文（堆栈摘要、SQL 片段等） | 不下发 | 不下发 | 记录 |
+
+框架 HTTP middleware 在序列化响应前检查状态码：5xx 时将 `details` 置空（不下发），`internal` 字段永不出现在 wire 层。开发者通过查 `slog` 结构化日志获取 Internal 内容，不走 trace span（防止 PII 泄漏到 trace backend）。详见 ADR `docs/architecture/202605051730-adr-errcode-message-pii-safety.md`。
+
 ## Span Error Redaction（fail-closed by default）
 
 `kernel/wrapper.WrapConsumer` 与 `runtime/http/middleware.Recovery` 把所有写入 `span.RecordError` 的 error 文本无条件经过 `pkg/redaction.RedactError`。**没有调用方 opt-out**（无 `WithConsumerErrorRedactor` / `WithErrorRedactor` / `bootstrap.WithErrorRedactor` 等 wiring）。dev/debug 需要原始 error 文本走 `slog` 结构化字段，trace span 仅用于运维关联。

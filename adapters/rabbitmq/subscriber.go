@@ -304,9 +304,7 @@ func (s *Subscriber) Subscribe(ctx context.Context, sub outbox.Subscription, han
 	}
 	if s.config.DLXExchange == "" {
 		return errcode.New(errcode.KindInternal, ErrAdapterAMQPSubscribe,
-			"rabbitmq: DLXExchange is required — without a dead-letter exchange, "+
-				"Nack(requeue=false) silently discards messages. "+
-				"Set SubscriberConfig.DLXExchange to a valid DLX name")
+			"rabbitmq: DLXExchange required; Nack(requeue=false) silently discards messages without DLX")
 	}
 
 	// Derive a context that is canceled when either the parent ctx is done or
@@ -408,32 +406,33 @@ func (s *Subscriber) subscribeOnce(
 		return classifyAcquireChannelError(err)
 	}
 
-	// setupErr wraps a setup-stage error. Closes and removes the run from
-	// the tracked set. If the underlying AMQP error is recoverable, wraps as
-	// errSubscriptionLost so the outer loop can reconnect and re-run setup.
-	// Otherwise returns a permanent error.
-	cleanupChannelDirect := func() {
+	// closeChannel cleans up the AMQP channel on setup failure.
+	closeChannel := func() {
 		if closeErr := ch.Close(); closeErr != nil {
 			slog.Debug("rabbitmq: error closing channel during cleanup",
 				slog.Any("error", closeErr))
 		}
 	}
-	setupErr := func(msg string, code errcode.Code, err error) error {
-		cleanupChannelDirect()
+	setupErr := func(reconnectMsg string, err error, permanent func() error) error {
+		closeChannel()
 		if isRecoverableAMQPError(err) {
-			return fmt.Errorf("%w: %s: %v", errSubscriptionLost, msg, err)
+			return fmt.Errorf("%w: %s: %v", errSubscriptionLost, reconnectMsg, err)
 		}
-		return errcode.Wrap(errcode.KindInternal, code, msg, err)
+		return permanent()
 	}
 
 	// Set QoS.
 	if err := ch.Qos(s.config.PrefetchCount, 0, false); err != nil {
-		return setupErr("rabbitmq: set qos", ErrAdapterAMQPSubscribe, err)
+		return setupErr("rabbitmq: set qos", err, func() error {
+			return errcode.Wrap(errcode.KindInternal, ErrAdapterAMQPSubscribe, "rabbitmq: set qos failed", err)
+		})
 	}
 
 	// Declare topology (exchange, DLX, queue, binding) — idempotent.
 	if err := s.declareTopology(ch, topic, queueName); err != nil {
-		return setupErr("rabbitmq: declare topology", ErrAdapterAMQPSubscribe, err)
+		return setupErr("rabbitmq: declare topology", err, func() error {
+			return errcode.Wrap(errcode.KindInternal, ErrAdapterAMQPSubscribe, "rabbitmq: declare topology failed", err)
+		})
 	}
 
 	consumerTag := fmt.Sprintf("cg-%s-%s", queueName, topic)
@@ -449,7 +448,9 @@ func (s *Subscriber) subscribeOnce(
 
 	deliveries, err := ch.Consume(queueName, consumerTag, false, false, false, false, nil)
 	if err != nil {
-		return setupErr("rabbitmq: start consuming", ErrAdapterAMQPConsume, err)
+		return setupErr("rabbitmq: start consuming", err, func() error {
+			return errcode.Wrap(errcode.KindInternal, ErrAdapterAMQPConsume, "rabbitmq: start consuming failed", err)
+		})
 	}
 
 	// Create and track a subscriptionRun for this invocation.
@@ -969,8 +970,8 @@ func (s *Subscriber) Close(ctx context.Context) error {
 			slog.Int("remaining_runs", remaining),
 			slog.Any("error", err))
 		return errcode.New(errcode.KindInternal, ErrAdapterAMQPCloseTimeout,
-			fmt.Sprintf("rabbitmq: subscriber Close timed out with %d run(s) still active",
-				remaining))
+			"rabbitmq: subscriber Close timed out",
+			errcode.WithDetails(slog.Int("remaining_runs", remaining)))
 	}
 
 	// Sweep any runs that subscribeOnce's defer has not yet removed. This is

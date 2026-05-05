@@ -135,7 +135,8 @@ func (c *Client) Upload(ctx context.Context, key string, data []byte, contentTyp
 	})
 	if err != nil {
 		return errcode.Wrap(errcode.KindInternal, ErrAdapterS3Upload,
-			fmt.Sprintf("s3: upload failed for key %s", key), err)
+			"s3: upload failed", err,
+			errcode.WithInternal(fmt.Sprintf("key=%s", key)))
 	}
 	slog.Debug("s3: object uploaded", slog.String("key", key), slog.Int("size", len(data)))
 	return nil
@@ -148,7 +149,8 @@ func (c *Client) Health(ctx context.Context) error {
 	})
 	if err != nil {
 		return errcode.Wrap(errcode.KindInternal, ErrAdapterS3Health,
-			fmt.Sprintf("s3: health check failed for bucket %s", c.config.Bucket), err)
+			"s3: health check failed", err,
+			errcode.WithDetails(slog.String("bucket", c.config.Bucket)))
 	}
 	return nil
 }

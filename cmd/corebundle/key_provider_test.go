@@ -54,9 +54,11 @@ func TestBuildKeyProvider_UnknownProvider_Fails(t *testing.T) {
 	var ecErr *errcode.Error
 	require.True(t, errors.As(err, &ecErr))
 	assert.Equal(t, errcode.ErrValidationFailed, ecErr.Code)
-	assert.Contains(t, ecErr.Message, "bogus")
 	assert.Contains(t, ecErr.Message, "local-aes")
 	assert.Contains(t, ecErr.Message, "vault-transit")
+	attr, ok := ecErr.FindAttr("provider")
+	assert.True(t, ok, "expected 'provider' detail attr")
+	assert.Equal(t, "bogus", attr.Value.String())
 }
 
 // TestBuildKeyProvider_LocalAES_Success verifies local-aes provider wiring

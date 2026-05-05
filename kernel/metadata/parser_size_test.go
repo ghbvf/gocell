@@ -36,7 +36,7 @@ func TestParseFS_RejectsOversizeFile(t *testing.T) {
 	var ecErr *errcode.Error
 	require.True(t, errors.As(err, &ecErr))
 	assert.Equal(t, errcode.ErrMetadataInvalid, ecErr.Code)
-	assert.Contains(t, err.Error(), "exceeds limit")
+	assert.Contains(t, ecErr.Message+" "+ecErr.InternalMessage, "exceeds size limit")
 }
 
 // TestParseFS_AcceptsFileJustUnderLimit confirms the limit is inclusive —
