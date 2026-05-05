@@ -16,6 +16,9 @@ type Subscription struct {
 }
 
 // NewSubscription returns a mount-ready subscription for event.user.updated.v1.
+// handler must be an outbox.EntryHandler (func(ctx, entry) HandleResult).
+// There is no generated EventHandler interface — consumers implement
+// outbox.EntryHandler directly and pass it here.
 // All three arguments are mandatory: sliceID is supplied by cellgen from the
 // +slice:subscribe marker and identifies the owning slice for observability.
 func NewSubscription(handler outbox.EntryHandler, consumerGroup, sliceID string) *Subscription {

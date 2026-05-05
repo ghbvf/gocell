@@ -90,61 +90,119 @@ For full configuration options (production hardening, real-mode adapters, multi-
 | L3 | WorkflowEventual | Cross-cell eventual consistency | Audit trail, projections |
 | L4 | DeviceLatent | High-latency device loop | Command → ack with timeout |
 
-## 30-Minute Tutorial: Create Your First Cell
+## 30-Minute Tutorial: Create Your First Cell (codegen-driven)
 
-Follow these steps to create a custom Cell from scratch.
+GoCell uses codegen to eliminate boilerplate. The workflow is:
+**define `contract.yaml` → run `gocell generate contract` → import the generated handler**.
 
-### Step 1: Create Cell directory and metadata
+For a deeper walkthrough see `docs/guides/codegen-new-endpoint.md`.
+
+### Step 1: Scaffold metadata
 
 ```bash
-mkdir -p cells/mycell/slices/myaction
+mkdir -p contracts/http/mycell/hello/v1
+mkdir -p cells/mycell/slices/myhello
+```
+
+Create `contracts/http/mycell/hello/v1/contract.yaml`:
+```yaml
+id: http.mycell.hello.v1
+kind: http
+ownerCell: mycell
+consistencyLevel: L0
+lifecycle: active
+codegen: true
+endpoints:
+  server: mycell
+  http:
+    method: GET
+    path: /api/v1/hello
+    successStatus: 200
+    auth:
+      public: true
+schemaRefs:
+  response: response.schema.json
+```
+
+Create `contracts/http/mycell/hello/v1/response.schema.json`:
+```json
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "properties": { "message": { "type": "string" } },
+  "required": ["message"]
+}
 ```
 
 Create `cells/mycell/cell.yaml`:
 ```yaml
 id: mycell
 type: core
-consistencyLevel: L1
+consistencyLevel: L0
 owner:
   team: my-team
   role: my-owner
-schema:
-  primary: my_table
 verify:
   smoke:
     - mycell/smoke
 ```
 
-Create `cells/mycell/slices/myaction/slice.yaml`:
+Create `cells/mycell/slices/myhello/slice.yaml`:
 ```yaml
-id: myaction
+id: myhello
 belongsToCell: mycell
 contractUsages:
-  - contract: http.my-api.v1
+  - contract: http.mycell.hello.v1
     role: serve
 verify:
-  unit: myaction/unit
-  contract: myaction/contract
+  unit: myhello/unit
+  contract: myhello/contract
+allowedFiles:
+  - handler.go
 ```
 
-### Step 2: Define the domain
+### Step 2: Generate the contract handler
 
-Create `cells/mycell/internal/domain/model.go`:
+```bash
+go run ./cmd/gocell generate contract
+# → generated/contracts/http/mycell/hello/v1/types_gen.go
+# → generated/contracts/http/mycell/hello/v1/iface_gen.go
+# → generated/contracts/http/mycell/hello/v1/handler_gen.go
+```
+
+### Step 3: Implement the Service interface
+
+Create `cells/mycell/slices/myhello/handler.go`:
 ```go
-package domain
+package myhello
 
-type Item struct {
-    ID   string
-    Name string
+import (
+    "context"
+
+    hellog "github.com/ghbvf/gocell/generated/contracts/http/mycell/hello/v1"
+    kcell "github.com/ghbvf/gocell/kernel/cell"
+)
+
+// HelloAdapter implements hellog.Service for http.mycell.hello.v1.
+type HelloAdapter struct{}
+
+func (HelloAdapter) Hello(ctx context.Context, _ *hellog.Request) (*hellog.Response, error) {
+    return &hellog.Response{Message: "hello from mycell"}, nil
 }
 
-type ItemRepository interface {
-    Create(ctx context.Context, item *Item) error
-    GetByID(ctx context.Context, id string) (*Item, error)
+// Handler wires the generated contract handler for the myhello slice.
+type Handler struct{ h *hellog.Handler }
+
+func NewHandler() *Handler {
+    return &Handler{h: hellog.NewHandler(HelloAdapter{})}
+}
+
+func (h *Handler) RegisterRoutes(mux kcell.RouteHandler) error {
+    return h.h.RegisterRoutes(mux)
 }
 ```
 
-### Step 3: Implement the Cell
+### Step 4: Implement the Cell
 
 Create `cells/mycell/cell.go`:
 ```go
@@ -152,29 +210,26 @@ package mycell
 
 import (
     "context"
-    "log/slog"
-    "net/http"
 
+    "github.com/ghbvf/gocell/cells/mycell/slices/myhello"
     "github.com/ghbvf/gocell/kernel/cell"
-    "github.com/ghbvf/gocell/kernel/wrapper"
-    "github.com/ghbvf/gocell/runtime/auth"
 )
 
 type MyCell struct {
     *cell.BaseCell
-    logger *slog.Logger
+    helloH *myhello.Handler
 }
 
 func New() *MyCell {
     return &MyCell{
         BaseCell: cell.NewBaseCell(cell.CellMetadata{
-            ID: "mycell", Type: cell.CellTypeCore,
-            ConsistencyLevel: cell.L1,
-            Owner: cell.Owner{Team: "my-team", Role: "my-owner"},
-            Schema: cell.SchemaConfig{Primary: "my_table"},
-            Verify: cell.CellVerify{Smoke: []string{"mycell/smoke"}},
+            ID:               "mycell",
+            Type:             cell.CellTypeCore,
+            ConsistencyLevel: cell.L0,
+            Owner:            cell.Owner{Team: "my-team", Role: "my-owner"},
+            Verify:           cell.CellVerify{Smoke: []string{"mycell/smoke"}},
         }),
-        logger: slog.Default(),
+        helloH: myhello.NewHandler(),
     }
 }
 
@@ -182,26 +237,16 @@ func (c *MyCell) Init(ctx context.Context, reg cell.Registry) error {
     if err := c.BaseCell.Init(ctx, reg); err != nil {
         return err
     }
-    reg.RouteGroup(cell.SingleGroup(cell.PrimaryListener, "/api/v1", func(mux cell.RouteMux) error {
-        return auth.Mount(mux, auth.Route{
-            Contract: wrapper.ContractSpec{
-                ID:        "http.mycell.hello.v1",
-                Kind:      "http",
-                Transport: "http",
-                Method:    "GET",
-                Path:      "/api/v1/hello",
-            },
-            Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-                _, _ = w.Write([]byte(`{"message":"hello from mycell"}`))
-            }),
-            Public: true,
-        })
-    }))
+    reg.RouteGroup(cell.RouteGroup{
+        Listener: cell.PrimaryListener,
+        Prefix:   "/api/v1",
+        Register: c.helloH.RegisterRoutes,
+    })
     return nil
 }
 ```
 
-### Step 4: Create a main.go
+### Step 5: Create a main.go
 
 ```go
 package main
@@ -238,9 +283,10 @@ func main() {
 }
 ```
 
-### Step 5: Build and run
+### Step 6: Build and run
 
 ```bash
+go run ./cmd/gocell validate      # verify contracts are well-formed
 go build ./cmd/myapp && ./myapp
 # In another terminal:
 curl http://localhost:8080/api/v1/hello

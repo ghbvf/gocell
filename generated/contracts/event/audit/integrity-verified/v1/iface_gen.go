@@ -2,14 +2,3 @@
 // source: contracts/event/audit/integrity-verified/v1/contract.yaml
 
 package integrityverified
-
-import (
-	"context"
-
-	"github.com/ghbvf/gocell/kernel/outbox"
-)
-
-// EventHandler is the business interface that subscribers of event.audit.integrity-verified.v1 must implement.
-type EventHandler interface {
-	HandleIntegrityVerified(ctx context.Context, entry outbox.Entry, payload *Payload) outbox.HandleResult
-}

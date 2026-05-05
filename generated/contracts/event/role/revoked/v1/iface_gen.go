@@ -2,14 +2,3 @@
 // source: contracts/event/role/revoked/v1/contract.yaml
 
 package revoked
-
-import (
-	"context"
-
-	"github.com/ghbvf/gocell/kernel/outbox"
-)
-
-// EventHandler is the business interface that subscribers of event.role.revoked.v1 must implement.
-type EventHandler interface {
-	HandleRevoked(ctx context.Context, entry outbox.Entry, payload *Payload) outbox.HandleResult
-}

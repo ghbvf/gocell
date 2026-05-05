@@ -2,14 +2,3 @@
 // source: contracts/event/user/deleted/v1/contract.yaml
 
 package deleted
-
-import (
-	"context"
-
-	"github.com/ghbvf/gocell/kernel/outbox"
-)
-
-// EventHandler is the business interface that subscribers of event.user.deleted.v1 must implement.
-type EventHandler interface {
-	HandleDeleted(ctx context.Context, entry outbox.Entry, payload *Payload) outbox.HandleResult
-}

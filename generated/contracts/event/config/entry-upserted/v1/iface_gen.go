@@ -2,14 +2,3 @@
 // source: contracts/event/config/entry-upserted/v1/contract.yaml
 
 package entryupserted
-
-import (
-	"context"
-
-	"github.com/ghbvf/gocell/kernel/outbox"
-)
-
-// EventHandler is the business interface that subscribers of event.config.entry-upserted.v1 must implement.
-type EventHandler interface {
-	HandleEntryUpserted(ctx context.Context, entry outbox.Entry, payload *Payload) outbox.HandleResult
-}

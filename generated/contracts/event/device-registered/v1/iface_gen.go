@@ -2,14 +2,3 @@
 // source: examples/iotdevice/contracts/event/device-registered/v1/contract.yaml
 
 package deviceregistered
-
-import (
-	"context"
-
-	"github.com/ghbvf/gocell/kernel/outbox"
-)
-
-// EventHandler is the business interface that subscribers of event.device-registered.v1 must implement.
-type EventHandler interface {
-	HandleDeviceRegistered(ctx context.Context, entry outbox.Entry, payload *Payload) outbox.HandleResult
-}

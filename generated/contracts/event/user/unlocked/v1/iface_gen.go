@@ -2,14 +2,3 @@
 // source: contracts/event/user/unlocked/v1/contract.yaml
 
 package unlocked
-
-import (
-	"context"
-
-	"github.com/ghbvf/gocell/kernel/outbox"
-)
-
-// EventHandler is the business interface that subscribers of event.user.unlocked.v1 must implement.
-type EventHandler interface {
-	HandleUnlocked(ctx context.Context, entry outbox.Entry, payload *Payload) outbox.HandleResult
-}
