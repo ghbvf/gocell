@@ -101,6 +101,187 @@ func TestFMT13_NonHTTPContractSkipped(t *testing.T) {
 	}
 }
 
+// --- FMT-26 (auth.public and auth.passwordResetExempt mutually exclusive) ---
+
+// TestFMT26_BothTrue verifies that a contract declaring both auth.public:true
+// and auth.passwordResetExempt:true is rejected by FMT-26.
+func TestFMT26_BothTrue(t *testing.T) {
+	project := &metadata.ProjectMeta{
+		Cells:  map[string]*metadata.CellMeta{},
+		Slices: map[string]*metadata.SliceMeta{},
+		Contracts: map[string]*metadata.ContractMeta{
+			"http.auth.bad.v1": {
+				ID:               "http.auth.bad.v1",
+				Kind:             "http",
+				ConsistencyLevel: "L1",
+				Lifecycle:        "active",
+				Endpoints: metadata.EndpointsMeta{
+					Server:  "accesscore",
+					Clients: []string{"edge-bff"},
+					HTTP: &metadata.HTTPTransportMeta{
+						Method:        "POST",
+						Path:          "/api/v1/auth/bad",
+						SuccessStatus: 200,
+						Auth: metadata.HTTPAuthMeta{
+							Public:              true,
+							PasswordResetExempt: true,
+						},
+					},
+				},
+				Dir:  "contracts/http/auth/bad/v1",
+				File: "contracts/http/auth/bad/v1/contract.yaml",
+			},
+		},
+		Journeys:   map[string]*metadata.JourneyMeta{},
+		Assemblies: map[string]*metadata.AssemblyMeta{},
+	}
+
+	v := NewValidator(project, "", clock.Real())
+	results := v.validateFMT26()
+
+	var fmt26Errors []ValidationResult
+	for _, r := range results {
+		if r.Code == "FMT-26" && r.Severity == SeverityError {
+			fmt26Errors = append(fmt26Errors, r)
+		}
+	}
+
+	if len(fmt26Errors) == 0 {
+		t.Fatal("FMT-26: expected error when both auth.public and auth.passwordResetExempt are true, got none")
+	}
+	found := false
+	for _, r := range fmt26Errors {
+		if r.Field == "endpoints.http.auth" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("FMT-26: expected finding on field 'endpoints.http.auth', got: %v", fmt26Errors)
+	}
+}
+
+// TestFMT26_OnlyPublic verifies that a contract with only auth.public:true passes FMT-26.
+func TestFMT26_OnlyPublic(t *testing.T) {
+	project := &metadata.ProjectMeta{
+		Cells:  map[string]*metadata.CellMeta{},
+		Slices: map[string]*metadata.SliceMeta{},
+		Contracts: map[string]*metadata.ContractMeta{
+			"http.auth.login.v1": {
+				ID:               "http.auth.login.v1",
+				Kind:             "http",
+				ConsistencyLevel: "L1",
+				Lifecycle:        "active",
+				Endpoints: metadata.EndpointsMeta{
+					Server:  "accesscore",
+					Clients: []string{"edge-bff"},
+					HTTP: &metadata.HTTPTransportMeta{
+						Method:        "POST",
+						Path:          "/api/v1/auth/sessions",
+						SuccessStatus: 201,
+						Auth: metadata.HTTPAuthMeta{
+							Public: true,
+						},
+					},
+				},
+				Dir:  "contracts/http/auth/login/v1",
+				File: "contracts/http/auth/login/v1/contract.yaml",
+			},
+		},
+		Journeys:   map[string]*metadata.JourneyMeta{},
+		Assemblies: map[string]*metadata.AssemblyMeta{},
+	}
+
+	v := NewValidator(project, "", clock.Real())
+	results := v.validateFMT26()
+
+	for _, r := range results {
+		if r.Code == "FMT-26" {
+			t.Errorf("FMT-26: unexpected finding for auth.public-only contract: %v", r)
+		}
+	}
+}
+
+// TestFMT26_OnlyPasswordResetExempt verifies that a contract with only
+// auth.passwordResetExempt:true passes FMT-26.
+func TestFMT26_OnlyPasswordResetExempt(t *testing.T) {
+	project := &metadata.ProjectMeta{
+		Cells:  map[string]*metadata.CellMeta{},
+		Slices: map[string]*metadata.SliceMeta{},
+		Contracts: map[string]*metadata.ContractMeta{
+			"http.auth.session.delete.v1": {
+				ID:               "http.auth.session.delete.v1",
+				Kind:             "http",
+				ConsistencyLevel: "L1",
+				Lifecycle:        "active",
+				Endpoints: metadata.EndpointsMeta{
+					Server:  "accesscore",
+					Clients: []string{"edge-bff"},
+					HTTP: &metadata.HTTPTransportMeta{
+						Method:        "DELETE",
+						Path:          "/api/v1/auth/sessions/{sessionId}",
+						SuccessStatus: 204,
+						Auth: metadata.HTTPAuthMeta{
+							PasswordResetExempt: true,
+						},
+					},
+				},
+				Dir:  "contracts/http/auth/session/delete/v1",
+				File: "contracts/http/auth/session/delete/v1/contract.yaml",
+			},
+		},
+		Journeys:   map[string]*metadata.JourneyMeta{},
+		Assemblies: map[string]*metadata.AssemblyMeta{},
+	}
+
+	v := NewValidator(project, "", clock.Real())
+	results := v.validateFMT26()
+
+	for _, r := range results {
+		if r.Code == "FMT-26" {
+			t.Errorf("FMT-26: unexpected finding for passwordResetExempt-only contract: %v", r)
+		}
+	}
+}
+
+// TestFMT26_NeitherSet verifies that a contract with no auth overrides passes FMT-26.
+func TestFMT26_NeitherSet(t *testing.T) {
+	project := &metadata.ProjectMeta{
+		Cells:  map[string]*metadata.CellMeta{},
+		Slices: map[string]*metadata.SliceMeta{},
+		Contracts: map[string]*metadata.ContractMeta{
+			"http.users.list.v1": {
+				ID:               "http.users.list.v1",
+				Kind:             "http",
+				ConsistencyLevel: "L1",
+				Lifecycle:        "active",
+				Endpoints: metadata.EndpointsMeta{
+					Server:  "accesscore",
+					Clients: []string{"edge-bff"},
+					HTTP: &metadata.HTTPTransportMeta{
+						Method:        "GET",
+						Path:          "/api/v1/users",
+						SuccessStatus: 200,
+					},
+				},
+				Dir:  "contracts/http/users/list/v1",
+				File: "contracts/http/users/list/v1/contract.yaml",
+			},
+		},
+		Journeys:   map[string]*metadata.JourneyMeta{},
+		Assemblies: map[string]*metadata.AssemblyMeta{},
+	}
+
+	v := NewValidator(project, "", clock.Real())
+	results := v.validateFMT26()
+
+	for _, r := range results {
+		if r.Code == "FMT-26" {
+			t.Errorf("FMT-26: unexpected finding for contract with no auth overrides: %v", r)
+		}
+	}
+}
+
 // TestFMT13_HTTPContractWithEndpoints verifies that an HTTP contract with
 // a valid endpoints.http block produces no FMT-13 error.
 func TestFMT13_HTTPContractWithEndpoints(t *testing.T) {

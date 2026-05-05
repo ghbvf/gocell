@@ -141,3 +141,41 @@ func TestContractSchemaAllowsAuthPasswordResetExempt(t *testing.T) {
 
 	assert.NoError(t, schema.Validate(contractDoc), "contract with auth.passwordResetExempt:true must pass strict validation")
 }
+
+func TestContractSchemaRejectsAuthPublicAndPasswordResetExemptBoth(t *testing.T) {
+	raw, err := FS.ReadFile("contract.schema.json")
+	require.NoError(t, err)
+
+	var schemaDoc any
+	require.NoError(t, json.Unmarshal(raw, &schemaDoc))
+
+	compiler := jsonschema.NewCompiler()
+	const schemaURL = "https://gocell.dev/schemas/contract.schema.json"
+	require.NoError(t, compiler.AddResource(schemaURL, schemaDoc))
+	schema, err := compiler.Compile(schemaURL)
+	require.NoError(t, err)
+
+	var contractDoc any
+	require.NoError(t, json.Unmarshal([]byte(`{
+		"id": "http.auth.bad.v1",
+		"kind": "http",
+		"consistencyLevel": "L1",
+		"lifecycle": "active",
+		"endpoints": {
+			"server": "accesscore",
+			"clients": [],
+			"http": {
+				"method": "POST",
+				"path": "/api/v1/auth/bad",
+				"successStatus": 200,
+				"noContent": false,
+				"auth": {
+					"public": true,
+					"passwordResetExempt": true
+				}
+			}
+		}
+	}`), &contractDoc))
+
+	assert.Error(t, schema.Validate(contractDoc), "contract with both auth.public:true and auth.passwordResetExempt:true must fail schema validation (mutually exclusive)")
+}
