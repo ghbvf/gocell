@@ -272,119 +272,99 @@ func entryFieldValue(e command.Entry, field string) any {
 
 // ─── generated-interface adapters ───────────────────────────────────────────
 
-// toEnqueueResponseData converts a command.Entry to the enqueue contract ResponseData.
+// commandEntryFields is the canonical projection of command.Entry into the
+// flat string/int64 shape shared by every contract response DTO in this slice
+// (enqueue / dequeue / report / ack / extend-lease / list). Generated DTO
+// types are distinct (one per contract) so Go cannot share the converter; this
+// helper centralizes the mapping so adding a field to command.Entry touches
+// one place, not six.
+//
+// See docs/plans/202605011500-029-master-roadmap.md row 06.FU2
+// (PR-V1-CONTRACT-RESPONSE-CONVERTER-CODEGEN) for the longer-term plan to
+// generate these converters from response.schema.json + a declared source type.
+type commandEntryFields struct {
+	ID          string
+	DeviceID    string
+	CommandType string
+	Payload     string
+	Status      string
+	Attempt     int64
+	CreatedAt   string
+	SentAt      string
+	DeliveredAt string
+	CompletedAt string
+}
+
+func entryToFields(e command.Entry) commandEntryFields {
+	f := commandEntryFields{
+		ID:          e.ID,
+		DeviceID:    e.DeviceID,
+		CommandType: e.CommandType,
+		Payload:     string(e.Payload),
+		Status:      e.Status.String(),
+		Attempt:     int64(e.Attempt),
+		CreatedAt:   e.CreatedAt.Format(time.RFC3339),
+	}
+	if e.SentAt != nil {
+		f.SentAt = e.SentAt.Format(time.RFC3339)
+	}
+	if e.DeliveredAt != nil {
+		f.DeliveredAt = e.DeliveredAt.Format(time.RFC3339)
+	}
+	if e.CompletedAt != nil {
+		f.CompletedAt = e.CompletedAt.Format(time.RFC3339)
+	}
+	return f
+}
+
 func toEnqueueResponseData(e command.Entry) *enqueuecontract.ResponseData {
-	d := &enqueuecontract.ResponseData{
-		ID:          e.ID,
-		DeviceId:    e.DeviceID,
-		CommandType: e.CommandType,
-		Payload:     string(e.Payload),
-		Status:      e.Status.String(),
-		Attempt:     int64(e.Attempt),
-		CreatedAt:   e.CreatedAt.Format(time.RFC3339),
+	f := entryToFields(e)
+	return &enqueuecontract.ResponseData{
+		ID: f.ID, DeviceId: f.DeviceID, CommandType: f.CommandType,
+		Payload: f.Payload, Status: f.Status, Attempt: f.Attempt,
+		CreatedAt: f.CreatedAt, SentAt: f.SentAt,
+		DeliveredAt: f.DeliveredAt, CompletedAt: f.CompletedAt,
 	}
-	if e.SentAt != nil {
-		d.SentAt = e.SentAt.Format(time.RFC3339)
-	}
-	if e.DeliveredAt != nil {
-		d.DeliveredAt = e.DeliveredAt.Format(time.RFC3339)
-	}
-	if e.CompletedAt != nil {
-		d.CompletedAt = e.CompletedAt.Format(time.RFC3339)
-	}
-	return d
 }
 
-// toDequeueResponseDataItem converts a command.Entry to the dequeue contract ResponseDataItem.
 func toDequeueResponseDataItem(e command.Entry) *dequeuecontract.ResponseDataItem {
-	d := &dequeuecontract.ResponseDataItem{
-		ID:          e.ID,
-		DeviceId:    e.DeviceID,
-		CommandType: e.CommandType,
-		Payload:     string(e.Payload),
-		Status:      e.Status.String(),
-		Attempt:     int64(e.Attempt),
-		CreatedAt:   e.CreatedAt.Format(time.RFC3339),
+	f := entryToFields(e)
+	return &dequeuecontract.ResponseDataItem{
+		ID: f.ID, DeviceId: f.DeviceID, CommandType: f.CommandType,
+		Payload: f.Payload, Status: f.Status, Attempt: f.Attempt,
+		CreatedAt: f.CreatedAt, SentAt: f.SentAt,
+		DeliveredAt: f.DeliveredAt, CompletedAt: f.CompletedAt,
 	}
-	if e.SentAt != nil {
-		d.SentAt = e.SentAt.Format(time.RFC3339)
-	}
-	if e.DeliveredAt != nil {
-		d.DeliveredAt = e.DeliveredAt.Format(time.RFC3339)
-	}
-	if e.CompletedAt != nil {
-		d.CompletedAt = e.CompletedAt.Format(time.RFC3339)
-	}
-	return d
 }
 
-// toCommandResponseData converts a command.Entry to a report/ack/extend-lease ResponseData.
-// All three contracts share the same ResponseData field shape, so we use a
-// generic helper that callers cast to the right type.
 func toReportResponseData(e command.Entry) *reportcontract.ResponseData {
-	d := &reportcontract.ResponseData{
-		ID:          e.ID,
-		DeviceId:    e.DeviceID,
-		CommandType: e.CommandType,
-		Payload:     string(e.Payload),
-		Status:      e.Status.String(),
-		Attempt:     int64(e.Attempt),
-		CreatedAt:   e.CreatedAt.Format(time.RFC3339),
+	f := entryToFields(e)
+	return &reportcontract.ResponseData{
+		ID: f.ID, DeviceId: f.DeviceID, CommandType: f.CommandType,
+		Payload: f.Payload, Status: f.Status, Attempt: f.Attempt,
+		CreatedAt: f.CreatedAt, SentAt: f.SentAt,
+		DeliveredAt: f.DeliveredAt, CompletedAt: f.CompletedAt,
 	}
-	if e.SentAt != nil {
-		d.SentAt = e.SentAt.Format(time.RFC3339)
-	}
-	if e.DeliveredAt != nil {
-		d.DeliveredAt = e.DeliveredAt.Format(time.RFC3339)
-	}
-	if e.CompletedAt != nil {
-		d.CompletedAt = e.CompletedAt.Format(time.RFC3339)
-	}
-	return d
 }
 
 func toAckResponseData(e command.Entry) *ackcontract.ResponseData {
-	d := &ackcontract.ResponseData{
-		ID:          e.ID,
-		DeviceId:    e.DeviceID,
-		CommandType: e.CommandType,
-		Payload:     string(e.Payload),
-		Status:      e.Status.String(),
-		Attempt:     int64(e.Attempt),
-		CreatedAt:   e.CreatedAt.Format(time.RFC3339),
+	f := entryToFields(e)
+	return &ackcontract.ResponseData{
+		ID: f.ID, DeviceId: f.DeviceID, CommandType: f.CommandType,
+		Payload: f.Payload, Status: f.Status, Attempt: f.Attempt,
+		CreatedAt: f.CreatedAt, SentAt: f.SentAt,
+		DeliveredAt: f.DeliveredAt, CompletedAt: f.CompletedAt,
 	}
-	if e.SentAt != nil {
-		d.SentAt = e.SentAt.Format(time.RFC3339)
-	}
-	if e.DeliveredAt != nil {
-		d.DeliveredAt = e.DeliveredAt.Format(time.RFC3339)
-	}
-	if e.CompletedAt != nil {
-		d.CompletedAt = e.CompletedAt.Format(time.RFC3339)
-	}
-	return d
 }
 
 func toExtendLeaseResponseData(e command.Entry) *extendleasecontract.ResponseData {
-	d := &extendleasecontract.ResponseData{
-		ID:          e.ID,
-		DeviceId:    e.DeviceID,
-		CommandType: e.CommandType,
-		Payload:     string(e.Payload),
-		Status:      e.Status.String(),
-		Attempt:     int64(e.Attempt),
-		CreatedAt:   e.CreatedAt.Format(time.RFC3339),
+	f := entryToFields(e)
+	return &extendleasecontract.ResponseData{
+		ID: f.ID, DeviceId: f.DeviceID, CommandType: f.CommandType,
+		Payload: f.Payload, Status: f.Status, Attempt: f.Attempt,
+		CreatedAt: f.CreatedAt, SentAt: f.SentAt,
+		DeliveredAt: f.DeliveredAt, CompletedAt: f.CompletedAt,
 	}
-	if e.SentAt != nil {
-		d.SentAt = e.SentAt.Format(time.RFC3339)
-	}
-	if e.DeliveredAt != nil {
-		d.DeliveredAt = e.DeliveredAt.Format(time.RFC3339)
-	}
-	if e.CompletedAt != nil {
-		d.CompletedAt = e.CompletedAt.Format(time.RFC3339)
-	}
-	return d
 }
 
 // parseAckReason parses a string ack reason into a command.AckReason value.
@@ -585,27 +565,14 @@ func (s *Service) List(ctx context.Context, req *listcontract.Request) (*listcon
 	}, nil
 }
 
-// toListResponseDataItem converts a command.Entry to the list contract ResponseDataItem.
 func toListResponseDataItem(e command.Entry) *listcontract.ResponseDataItem {
-	d := &listcontract.ResponseDataItem{
-		ID:          e.ID,
-		DeviceId:    e.DeviceID,
-		CommandType: e.CommandType,
-		Payload:     string(e.Payload),
-		Status:      e.Status.String(),
-		Attempt:     int64(e.Attempt),
-		CreatedAt:   e.CreatedAt.Format(time.RFC3339),
+	f := entryToFields(e)
+	return &listcontract.ResponseDataItem{
+		ID: f.ID, DeviceId: f.DeviceID, CommandType: f.CommandType,
+		Payload: f.Payload, Status: f.Status, Attempt: f.Attempt,
+		CreatedAt: f.CreatedAt, SentAt: f.SentAt,
+		DeliveredAt: f.DeliveredAt, CompletedAt: f.CompletedAt,
 	}
-	if e.SentAt != nil {
-		d.SentAt = e.SentAt.Format(time.RFC3339)
-	}
-	if e.DeliveredAt != nil {
-		d.DeliveredAt = e.DeliveredAt.Format(time.RFC3339)
-	}
-	if e.CompletedAt != nil {
-		d.CompletedAt = e.CompletedAt.Format(time.RFC3339)
-	}
-	return d
 }
 
 // parseStatusFilter parses the comma-separated status query parameter.
