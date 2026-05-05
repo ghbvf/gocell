@@ -48,6 +48,15 @@ type applyStubHMACKeyring struct{}
 func (k *applyStubHMACKeyring) Current() []byte   { return []byte("secret-32-bytes-padding-here----") }
 func (k *applyStubHMACKeyring) Secrets() [][]byte { return [][]byte{k.Current()} }
 
+// Compile-time guard: cell.AssemblyRef must expose Cell(id string) cell.Cell
+// so that runtime/bootstrap can resolve registered cells by ID without an
+// implicit type assertion to a private sub-interface. The canonical guard
+// is the AST-level ASSEMBLYREF-METHOD-SET-01 archtest
+// (tools/archtest/assemblyref_method_set_test.go); this method-expression
+// reference adds a typecheck-time tripwire that fails this test binary's
+// build immediately if Cell is removed from AssemblyRef.
+var _ func(cell.AssemblyRef, string) cell.Cell = cell.AssemblyRef.Cell
+
 // applyStubAssemblyRef satisfies cell.AssemblyRef.
 type applyStubAssemblyRef struct {
 	id      string
