@@ -4,14 +4,12 @@
 package userdelete
 
 import (
-	"fmt"
 	"net/http"
 
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/wrapper"
 	"github.com/ghbvf/gocell/pkg/httputil"
 	"github.com/ghbvf/gocell/runtime/auth"
-	"github.com/ghbvf/gocell/runtime/http/schemavalidate"
 )
 
 var contractSpec = wrapper.ContractSpec{
@@ -22,15 +20,10 @@ var contractSpec = wrapper.ContractSpec{
 	Path:      "/api/v1/access/users/{id}",
 }
 
-// requestSchemaJSON is the embedded request schema for runtime validation.
-// Compiled once at handler construction time by schemavalidate.NewValidator.
-var requestSchemaJSON = []byte("{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"http.auth.user.delete.v1.request\",\"description\":\"DELETE carries no JSON fields. The user ID is supplied by the HTTP path parameter.\",\"type\":\"object\",\"maxProperties\":0,\"additionalProperties\":false}")
-
 // Handler wires HTTP decode/encode + auth.Mount for http.auth.user.delete.v1.
 type Handler struct {
-	svc              Service
-	policy           auth.Policy
-	requestValidator schemavalidate.Validator
+	svc    Service
+	policy auth.Policy
 }
 
 // NewHandler creates a Handler for http.auth.user.delete.v1.
@@ -38,11 +31,6 @@ type Handler struct {
 // supply a real policy (e.g. auth.AnyRole, auth.SelfOr) to enforce access control.
 func NewHandler(svc Service, policy auth.Policy) *Handler {
 	h := &Handler{svc: svc, policy: policy}
-	v, err := schemavalidate.NewValidator(requestSchemaJSON)
-	if err != nil {
-		panic(fmt.Sprintf("generated handler http.auth.user.delete.v1: schema compile failed: %v (codegen invariant violation; regenerate via gocell generate contract --all)", err))
-	}
-	h.requestValidator = v
 	return h
 }
 

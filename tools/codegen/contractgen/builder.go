@@ -95,9 +95,15 @@ func buildHTTPSpec(spec *ContractGenSpec, rootDir string, contract *metadata.Con
 	spec.Endpoint = endpointSpec
 
 	// Embed the request schema JSON for runtime validation by schemavalidate.Validator.
-	// Only populated when the contract declares a request schema — GET/DELETE endpoints
-	// without bodies have no schema and no validator.
-	if contract.SchemaRefs.Request != "" {
+	// Only populated when the endpoint actually has a body (POST/PUT/PATCH with a
+	// declared request schema). GET/DELETE may declare schemaRefs.request as
+	// metadata (e.g. "no body" placeholder), but the generated handler reads no
+	// body and the validator wiring would be dead code (init-time compile cost +
+	// binary bloat). HANDLER-NO-SCHEMA-FOR-NOBODY-01 archtest enforces that
+	// no-body handlers contain no requestSchemaJSON literal.
+	// ref: oapi-codegen — request validator emitted only for operations with
+	// a requestBody.
+	if contract.SchemaRefs.Request != "" && endpointSpec.HasBody {
 		reqPath := filepath.Join(rootDir, contractDir, contract.SchemaRefs.Request)
 		schemaBytes, err := os.ReadFile(reqPath) //nolint:gosec // schema path resolved from contract.yaml metadata
 		if err != nil {
