@@ -1,6 +1,7 @@
 package auth_test
 
 import (
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"net/http"
@@ -31,10 +32,10 @@ func (h *nextHandlerCalled) ServeHTTP(w http.ResponseWriter, _ *http.Request) {
 	w.WriteHeader(http.StatusOK)
 }
 
-func bootstrapCreds(username, password string) auth.BootstrapCredentials {
+func bootstrapCreds() auth.BootstrapCredentials {
 	return auth.BootstrapCredentials{
-		Username: []byte(username),
-		Password: []byte(password),
+		Username: []byte("admin"),
+		Password: []byte("secret123"),
 	}
 }
 
@@ -45,7 +46,9 @@ func basicAuthHeader(username, password string) string {
 
 // invokeBootstrapMiddleware wraps ExportedNewBootstrapMiddleware and catches the
 // panic from the stub. Returns (responseCode, body, didPanic).
-func invokeBootstrapMiddleware(t *testing.T, creds auth.BootstrapCredentials, limiter auth.BootstrapRateLimiter, req *http.Request) (code int, body string, didPanic bool) {
+func invokeBootstrapMiddleware(
+	t *testing.T, creds auth.BootstrapCredentials, limiter auth.BootstrapRateLimiter, req *http.Request,
+) (code int, body string, didPanic bool) {
 	t.Helper()
 	defer func() {
 		if r := recover(); r != nil {
@@ -70,7 +73,7 @@ func invokeBootstrapMiddleware(t *testing.T, creds auth.BootstrapCredentials, li
 func TestBootstrapMiddleware_NoAuthHeader_Returns401(t *testing.T) {
 	t.Parallel()
 
-	creds := bootstrapCreds("admin", "secret123")
+	creds := bootstrapCreds()
 	limiter := &fakeRateLimiter{allowAll: true}
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/access/setup/admin", nil)
@@ -94,7 +97,7 @@ func TestBootstrapMiddleware_NoAuthHeader_Returns401(t *testing.T) {
 func TestBootstrapMiddleware_WrongUsername_Returns401(t *testing.T) {
 	t.Parallel()
 
-	creds := bootstrapCreds("admin", "secret123")
+	creds := bootstrapCreds()
 	limiter := &fakeRateLimiter{allowAll: true}
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/access/setup/admin", nil)
@@ -119,7 +122,7 @@ func TestBootstrapMiddleware_WrongUsername_Returns401(t *testing.T) {
 func TestBootstrapMiddleware_WrongPassword_Returns401(t *testing.T) {
 	t.Parallel()
 
-	creds := bootstrapCreds("admin", "secret123")
+	creds := bootstrapCreds()
 	limiter := &fakeRateLimiter{allowAll: true}
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/access/setup/admin", nil)
@@ -143,12 +146,13 @@ func TestBootstrapMiddleware_WrongPassword_Returns401(t *testing.T) {
 func TestBootstrapMiddleware_ValidCreds_Allows(t *testing.T) {
 	t.Parallel()
 
-	creds := bootstrapCreds("admin", "secret123")
+	creds := bootstrapCreds()
 	limiter := &fakeRateLimiter{allowAll: true}
 
 	defer func() {
 		if r := recover(); r != nil {
-			t.Fatalf("TestBootstrapMiddleware_ValidCreds_Allows: FAIL — newBootstrapMiddleware panics (not yet implemented, Batch 1 required): %v", r)
+			t.Fatalf("TestBootstrapMiddleware_ValidCreds_Allows: FAIL — "+
+				"newBootstrapMiddleware panics (not yet implemented, Batch 1 required): %v", r)
 		}
 	}()
 
@@ -170,7 +174,7 @@ func TestBootstrapMiddleware_ValidCreds_Allows(t *testing.T) {
 func TestBootstrapMiddleware_RateLimited_Returns429(t *testing.T) {
 	t.Parallel()
 
-	creds := bootstrapCreds("admin", "secret123")
+	creds := bootstrapCreds()
 	limiter := &fakeRateLimiter{allowAll: false} // always rate-limited
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/access/setup/admin", nil)
@@ -182,4 +186,70 @@ func TestBootstrapMiddleware_RateLimited_Returns429(t *testing.T) {
 	}
 
 	assert.Equal(t, http.StatusTooManyRequests, code, "rate limited request must return 429")
+}
+
+// TestBootstrapMiddleware_AuthFail_InvokesOnAuthFail verifies that the
+// onAuthFail observer is called on authentication failure with the correct
+// reason string, and is NOT called on success.
+func TestBootstrapMiddleware_AuthFail_InvokesOnAuthFail(t *testing.T) {
+	t.Parallel()
+
+	creds := bootstrapCreds()
+	limiter := &fakeRateLimiter{allowAll: true}
+
+	tests := []struct {
+		name           string
+		authHeader     string
+		wantCalledWith string
+		wantCalled     bool
+	}{
+		{
+			name:           "no header",
+			authHeader:     "",
+			wantCalledWith: "missing_header",
+			wantCalled:     true,
+		},
+		{
+			name:           "wrong credentials",
+			authHeader:     basicAuthHeader("admin", "wrongpassword"),
+			wantCalledWith: "wrong_credentials",
+			wantCalled:     true,
+		},
+		{
+			name:           "valid credentials — hook must not be called",
+			authHeader:     basicAuthHeader("admin", "secret123"),
+			wantCalledWith: "",
+			wantCalled:     false,
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			var capturedReason string
+			var hookCalled bool
+			hook := func(_ context.Context, reason string) {
+				hookCalled = true
+				capturedReason = reason
+			}
+
+			mw := auth.ExportedNewBootstrapMiddlewareWithHook(creds, limiter, hook)
+			next := &nextHandlerCalled{}
+			handler := mw(next)
+
+			req := httptest.NewRequest(http.MethodPost, "/api/v1/access/setup/admin", nil)
+			if tt.authHeader != "" {
+				req.Header.Set("Authorization", tt.authHeader)
+			}
+			w := httptest.NewRecorder()
+			handler.ServeHTTP(w, req)
+
+			assert.Equal(t, tt.wantCalled, hookCalled, "hook called mismatch")
+			if tt.wantCalled {
+				assert.Equal(t, tt.wantCalledWith, capturedReason, "hook reason mismatch")
+			}
+		})
+	}
 }

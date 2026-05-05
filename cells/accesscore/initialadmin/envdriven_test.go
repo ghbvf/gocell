@@ -9,28 +9,18 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	kernelclock "github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/mem"
+	kernelclock "github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/runtime/auth"
 )
 
 // Ensure auth.BootstrapCredentials and initialadmin.BootstrapCredentials are structurally
-// equivalent. Batch 2 / Agent-D will unify these at the composition root.
+// equivalent. The composition root (cmd/corebundle/access_module.go) wires them together.
 var _ = auth.BootstrapCredentials{}
 
-// --- SEC-SETUP-CLOSURE RED tests (Batch 0, tests 15-16) ---
-// These tests verify env-driven admin creation using BootstrapCredentials.
-// They are RED because:
-//   1. WithBootstrapCredentials option does not exist yet (Batch 2 / Agent-D).
-//   2. The Lifecycle does not accept external credentials (credfile path today).
-//
-// After Batch 2, the Lifecycle will accept WithBootstrapCredentials and use
-// the injected username/password instead of generating a random password.
-
 // TestLifecycle_EnvDriven_CreatesAdmin verifies that when GOCELL_BOOTSTRAP_ADMIN_*
-// credentials are set and injected via WithBootstrapCredentials, the Lifecycle
-// creates an admin user on startup using those credentials.
-// RED: WithBootstrapCredentials option does not exist yet.
+// credentials are injected via WithBootstrapCredentials, the Lifecycle creates an
+// admin user on startup using those credentials.
 func TestLifecycle_EnvDriven_CreatesAdmin(t *testing.T) {
 	deps := makeLifecycleDeps(t)
 	deps.UserRepo = mem.NewUserRepository()
@@ -44,7 +34,7 @@ func TestLifecycle_EnvDriven_CreatesAdmin(t *testing.T) {
 	l := NewLifecycle(
 		WithClock(kernelclock.Real()),
 		WithPasswordHasher(BcryptHasher{Cost: 4}),
-		WithBootstrapCredentials(creds), // RED: option panics until Batch 2
+		WithBootstrapCredentials(creds),
 	)
 	l.Bind(deps, deps.Logger)
 
@@ -60,7 +50,6 @@ func TestLifecycle_EnvDriven_CreatesAdmin(t *testing.T) {
 
 // TestLifecycle_EnvDriven_AlreadyProvisioned_NoOp verifies that the Lifecycle
 // is a no-op when admin already exists, even with credentials set.
-// RED: WithBootstrapCredentials option does not exist yet.
 func TestLifecycle_EnvDriven_AlreadyProvisioned_NoOp(t *testing.T) {
 	deps := makeLifecycleDeps(t)
 	userRepo := mem.NewUserRepository()
@@ -68,7 +57,7 @@ func TestLifecycle_EnvDriven_AlreadyProvisioned_NoOp(t *testing.T) {
 	deps.UserRepo = userRepo
 	deps.RoleRepo = roleRepo
 
-	// Seed an existing admin.
+	// Seed an existing admin using env-driven path.
 	seedAdminForLifecycleTest(t, deps)
 
 	creds := BootstrapCredentials{
@@ -79,7 +68,7 @@ func TestLifecycle_EnvDriven_AlreadyProvisioned_NoOp(t *testing.T) {
 	l := NewLifecycle(
 		WithClock(kernelclock.Real()),
 		WithPasswordHasher(BcryptHasher{Cost: 4}),
-		WithBootstrapCredentials(creds), // RED: option panics until Batch 2
+		WithBootstrapCredentials(creds),
 	)
 	l.Bind(deps, deps.Logger)
 
@@ -93,14 +82,17 @@ func TestLifecycle_EnvDriven_AlreadyProvisioned_NoOp(t *testing.T) {
 	assert.Equal(t, 1, cnt, "admin must not be created again on second run")
 }
 
-// seedAdminForLifecycleTest seeds an admin in the lifecycle test repos.
+// seedAdminForLifecycleTest seeds an admin in the lifecycle test repos using
+// the env-driven path (no credfile).
 func seedAdminForLifecycleTest(t *testing.T, deps BootstrapDeps) {
 	t.Helper()
-	// Use the lifecycle to create admin first time.
 	l := NewLifecycle(
 		WithClock(kernelclock.Real()),
 		WithPasswordHasher(BcryptHasher{Cost: 4}),
-		withPasswordSource(newFixedPasswordSourceCross()),
+		WithBootstrapCredentials(BootstrapCredentials{
+			Username: []byte("admin"),
+			Password: []byte("seedPassword1"),
+		}),
 	)
 	l.Bind(deps, deps.Logger)
 	hook := l.Hook()

@@ -250,7 +250,7 @@ func (c *AccessCore) initSlices() error {
 	)
 	c.AddSlice(cell.NewBaseSlice("configreceive", "accesscore", cell.L3))
 
-	// setup: interactive first-run admin provisioning (Public HTTP endpoints).
+	// setup: first-run admin provisioning.
 	// Uses shared adminprovision.Provisioner so semantics match initialadmin.
 	setupProv, err := adminprovision.NewProvisioner(c.userRepo, c.roleRepo, c.logger, uuid.NewString, c.clk)
 	if err != nil {
@@ -263,7 +263,14 @@ func (c *AccessCore) initSlices() error {
 	if err != nil {
 		return err
 	}
-	c.setupHandler = setup.NewHandler(setupSvc)
+	var setupOpts []setup.HandlerOption
+	if c.setupAdminMiddleware != nil {
+		// Interactive mode: protect the admin endpoint with bootstrap Basic Auth.
+		// D5: env credentials authenticate the operator; request body defines
+		// the admin identity.
+		setupOpts = append(setupOpts, setup.WithAdminMiddleware(c.setupAdminMiddleware))
+	}
+	c.setupHandler = setup.NewHandler(setupSvc, setupOpts...)
 	c.AddSlice(cell.NewBaseSlice("setup", "accesscore", cell.L2))
 	return nil
 }

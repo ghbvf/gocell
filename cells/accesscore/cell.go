@@ -5,6 +5,7 @@ package accesscore
 
 import (
 	"log/slog"
+	"net/http"
 	"time"
 
 	"github.com/ghbvf/gocell/cells/accesscore/initialadmin"
@@ -203,6 +204,16 @@ func WithConfigGetter(c ports.ConfigGetter) Option {
 	return func(ac *AccessCore) { ac.configGetter = c }
 }
 
+// WithSetupAdminMiddleware injects an HTTP middleware that wraps the admin
+// setup endpoint (POST /api/v1/access/setup/admin). In interactive bootstrap
+// mode the composition root passes runtime/auth.NewBootstrapMiddleware so that
+// the endpoint is gated by Basic Auth credentials from the GOCELL_BOOTSTRAP_*
+// env vars (D5: env creds authenticate the operator; request body defines the
+// admin identity).
+func WithSetupAdminMiddleware(mw func(http.Handler) http.Handler) Option {
+	return func(c *AccessCore) { c.setupAdminMiddleware = mw }
+}
+
 // AccessCore is the accesscore Cell implementation.
 // +cell:listener:ref=cell.PrimaryListener,prefix=/api/v1/access
 // +cell:listener:ref=cell.InternalListener,prefix=/internal/v1/access
@@ -250,6 +261,12 @@ type AccessCore struct {
 	// configGetter is used by the configreceive slice to fetch config entry
 	// values from configcore after an upsert event. nil = log-only mode.
 	configGetter ports.ConfigGetter
+
+	// setupAdminMiddleware wraps the POST /setup/admin endpoint when set.
+	// Nil means the endpoint is Public (no auth gate beyond JWT bypass).
+	// In interactive bootstrap mode the composition root injects the bootstrap
+	// Basic Auth middleware via WithSetupAdminMiddleware.
+	setupAdminMiddleware func(http.Handler) http.Handler
 
 	// Slice handlers.
 	// +slice:route:slice=identitymanage,subPath=/users

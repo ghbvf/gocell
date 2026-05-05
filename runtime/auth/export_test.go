@@ -1,13 +1,18 @@
 package auth
 
-import "net/http"
+import (
+	"context"
+	"net/http"
+)
 
-// BootstrapRateLimiter is an exported alias of the internal bootstrapRateLimiter
-// interface so black-box test code can implement fakes without importing internal types.
-type BootstrapRateLimiter = bootstrapRateLimiter
-
-// ExportedNewBootstrapMiddleware exposes newBootstrapMiddleware for black-box tests in
-// runtime/auth_test package. Panics until Batch 1 / Agent-B implements it.
+// ExportedNewBootstrapMiddleware exposes NewBootstrapMiddleware for black-box
+// tests in runtime/auth_test package.
 func ExportedNewBootstrapMiddleware(creds BootstrapCredentials, limiter BootstrapRateLimiter) func(http.Handler) http.Handler {
-	return newBootstrapMiddleware(creds, limiter)
+	return NewBootstrapMiddleware(creds, limiter, nil)
+}
+
+// ExportedNewBootstrapMiddlewareWithHook exposes NewBootstrapMiddleware with
+// an onAuthFail observer for black-box tests.
+func ExportedNewBootstrapMiddlewareWithHook(creds BootstrapCredentials, limiter BootstrapRateLimiter, onAuthFail func(ctx context.Context, reason string)) func(http.Handler) http.Handler {
+	return NewBootstrapMiddleware(creds, limiter, onAuthFail)
 }

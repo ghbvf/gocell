@@ -197,7 +197,9 @@ func TestIntegration_AdminExists_OrphanSwept(t *testing.T) {
 	// Configure env for run(). Interactive mode is the default in S-2; this
 	// P1-16 test exercises the initialadmin Lifecycle's sweep path, so opt
 	// explicitly into bootstrap mode.
-	t.Setenv(AdminProvisionModeEnv, "bootstrap")
+	t.Setenv(SetupModeEnv, "bootstrap")
+	t.Setenv("GOCELL_BOOTSTRAP_ADMIN_USERNAME", "testadmin")
+	t.Setenv("GOCELL_BOOTSTRAP_ADMIN_PASSWORD", "testpassword123")
 	t.Setenv("GOCELL_STATE_DIR", stateDir)
 	t.Setenv("GOCELL_JWT_ISSUER", "gocell-sweep-test")
 	t.Setenv("GOCELL_JWT_AUDIENCE", "gocell")

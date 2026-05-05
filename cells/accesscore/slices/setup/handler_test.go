@@ -17,6 +17,7 @@ import (
 	"github.com/ghbvf/gocell/cells/accesscore/internal/mem"
 	"github.com/ghbvf/gocell/cells/accesscore/slices/setup"
 	"github.com/ghbvf/gocell/kernel/cell/celltest"
+	"github.com/ghbvf/gocell/runtime/auth"
 )
 
 const (
@@ -237,21 +238,28 @@ func seedIdentityUser(t *testing.T, userRepo *mem.UserRepository, username, emai
 	require.NoError(t, userRepo.Create(context.Background(), u))
 }
 
-// --- SEC-SETUP-CLOSURE RED tests (Batch 0, tests 10-12) ---
-// These tests verify bootstrap auth behavior on the admin endpoint.
-// They are RED because:
-//   1. The admin endpoint is currently Public (no auth required at all).
-//   2. newBootstrapMiddleware is not yet implemented (Batch 1).
-//   3. NewHandler does not accept bootstrap credentials (Batch 2).
-//
-// The tests use a helper that wraps the handler with a mock bootstrap middleware
-// to isolate the auth logic from the service layer. In the target state, the
-// handler itself will enforce bootstrap auth before invoking the service.
+// newHandlerWithBootstrapCreds creates a handler mux whose admin endpoint is
+// protected by the real bootstrap middleware (runtime/auth.NewBootstrapMiddleware).
+// Both NoCreds and WrongUsername/Password tests use this helper; the production
+// wiring in cell_init.go follows the same WithAdminMiddleware + bootstrap
+// middleware path.
+func newHandlerWithBootstrapCreds(t *testing.T, svc *setup.Service, envUsername, envPassword string) http.Handler {
+	t.Helper()
+	creds := auth.BootstrapCredentials{
+		Username: []byte(envUsername),
+		Password: []byte(envPassword),
+	}
+	mw := auth.NewBootstrapMiddleware(creds, auth.BootstrapAllowAllLimiter{}, nil)
+	h := setup.NewHandler(svc, setup.WithAdminMiddleware(mw))
+	mux := celltest.NewTestMux()
+	require.NoError(t, h.RegisterRoutes(mux))
+	return mux
+}
 
 // newHandlerWithBootstrapAuth creates a handler mux that wraps the admin
-// endpoint with mock Basic Auth (simulating bootstrap middleware). This helper
-// exists only in tests to document the intended auth shape; the production
-// wiring will use newBootstrapMiddleware from Batch 1.
+// endpoint with mock Basic Auth (simulating bootstrap middleware). Used by
+// TestHandler_CreateAdmin_ValidCreds_BodyDifferentFromEnv_Returns201 which
+// documents D5 semantics with a mock wrapper.
 func newHandlerWithBootstrapAuth(t *testing.T, svc *setup.Handler, envUsername, envPassword string) http.Handler {
 	t.Helper()
 	mux := celltest.NewTestMux()
@@ -276,12 +284,12 @@ func newHandlerWithBootstrapAuth(t *testing.T, svc *setup.Handler, envUsername, 
 	})
 }
 
-// TestHandler_CreateAdmin_NoCreds_Returns401 verifies that the admin endpoint
-// requires authentication and returns 401 when no credentials are provided.
-// RED: currently the endpoint is Public and returns 201 without any auth.
+// TestHandler_CreateAdmin_NoCreds_Returns401 verifies that when the handler is
+// configured with bootstrap credentials, a request with no Authorization header
+// is rejected with 401 ERR_AUTH_BOOTSTRAP_FAILED.
 func TestHandler_CreateAdmin_NoCreds_Returns401(t *testing.T) {
 	svc := newService(t, mem.NewUserRepository(), mem.NewRoleRepository(), &stubWriter{})
-	handler := newHandlerMux(t, setup.NewHandler(svc))
+	handler := newHandlerWithBootstrapCreds(t, svc, "op", "opSecret123")
 
 	body := `{"username":"root","email":"root@local","password":"SecretPass!23"}`
 	req := httptest.NewRequest(http.MethodPost, setupAdminPath, strings.NewReader(body))
@@ -291,14 +299,6 @@ func TestHandler_CreateAdmin_NoCreds_Returns401(t *testing.T) {
 
 	handler.ServeHTTP(w, req)
 
-	// RED: currently returns 201 because endpoint is Public.
-	// After Batch 1+2, must return 401 ERR_AUTH_BOOTSTRAP_FAILED.
-	if w.Code == http.StatusCreated {
-		t.Errorf("TestHandler_CreateAdmin_NoCreds_Returns401: FAIL (RED) — "+
-			"endpoint returned 201 without auth credentials; "+
-			"expected 401 ERR_AUTH_BOOTSTRAP_FAILED after bootstrap auth is wired (Batch 1+2)")
-		return
-	}
 	assert.Equal(t, http.StatusUnauthorized, w.Code,
 		"admin endpoint without credentials must return 401")
 	assert.Contains(t, w.Body.String(), "ERR_AUTH_BOOTSTRAP_FAILED")
@@ -306,10 +306,9 @@ func TestHandler_CreateAdmin_NoCreds_Returns401(t *testing.T) {
 
 // TestHandler_CreateAdmin_WrongUsername_Returns401 verifies that wrong username
 // returns 401 with the same envelope as WrongPassword (oracle protection).
-// RED: currently the endpoint is Public — no auth is checked.
 func TestHandler_CreateAdmin_WrongUsername_Returns401(t *testing.T) {
 	svc := newService(t, mem.NewUserRepository(), mem.NewRoleRepository(), &stubWriter{})
-	handler := newHandlerMux(t, setup.NewHandler(svc))
+	handler := newHandlerWithBootstrapCreds(t, svc, "op", "opSecret123")
 
 	body := `{"username":"root","email":"root@local","password":"SecretPass!23"}`
 	req := httptest.NewRequest(http.MethodPost, setupAdminPath, strings.NewReader(body))
@@ -319,12 +318,6 @@ func TestHandler_CreateAdmin_WrongUsername_Returns401(t *testing.T) {
 
 	handler.ServeHTTP(w, req)
 
-	if w.Code == http.StatusCreated {
-		t.Errorf("TestHandler_CreateAdmin_WrongUsername_Returns401: FAIL (RED) — "+
-			"endpoint returned 201 with wrong credentials; "+
-			"expected 401 ERR_AUTH_BOOTSTRAP_FAILED after bootstrap auth is wired (Batch 1+2)")
-		return
-	}
 	assert.Equal(t, http.StatusUnauthorized, w.Code,
 		"wrong username must return 401")
 	assert.Contains(t, w.Body.String(), "ERR_AUTH_BOOTSTRAP_FAILED")

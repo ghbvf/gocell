@@ -4,9 +4,7 @@ package initialadmin
 
 import (
 	"context"
-	"io"
 	"log/slog"
-	"time"
 
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/clock"
@@ -23,14 +21,12 @@ type LifecycleOption func(*Lifecycle)
 
 // The exported With* options accept and discard their arguments so callers can
 // use the same option chain on any GOOS without conditional wiring.
-func WithUsername(string) LifecycleOption                    { return func(*Lifecycle) {} }
-func WithCredentialPath(string) LifecycleOption              { return func(*Lifecycle) {} }
-func WithTTL(time.Duration) LifecycleOption                  { return func(*Lifecycle) {} }
-func WithPasswordHasher(PasswordHasher) LifecycleOption      { return func(*Lifecycle) {} }
-func WithPasswordSourceForTesting(io.Reader) LifecycleOption { return func(*Lifecycle) {} }
-func WithScheduler(Scheduler) LifecycleOption                { return func(*Lifecycle) {} }
-func WithClock(clock.Clock) LifecycleOption                  { return func(*Lifecycle) {} }
-func WithBootstrapCredentials(BootstrapCredentials) LifecycleOption { return func(*Lifecycle) {} }
+func WithUsername(string) LifecycleOption               { return func(*Lifecycle) {} }
+func WithPasswordHasher(PasswordHasher) LifecycleOption { return func(*Lifecycle) {} }
+func WithClock(clock.Clock) LifecycleOption             { return func(*Lifecycle) {} }
+func WithBootstrapCredentials(BootstrapCredentials) LifecycleOption {
+	return func(*Lifecycle) {}
+}
 
 // BootstrapCredentials is the unsupported-platform stub of the same type in lifecycle.go.
 type BootstrapCredentials struct {
@@ -51,10 +47,8 @@ func (l *Lifecycle) Bind(_ BootstrapDeps, _ *slog.Logger) {}
 // platform check still observes a consistent error code.
 func (l *Lifecycle) Hook() cell.LifecycleHook {
 	return cell.LifecycleHook{
-		Name: "accesscore.initial-admin-bootstrap",
-		// errUnsupportedPlatform is defined in bootstrap_unsupported.go (same build tag).
+		Name:    "accesscore.initial-admin-bootstrap",
 		OnStart: func(_ context.Context) error { return errUnsupportedPlatform },
-		// OnStop is a no-op: OnStart already fails; a successful Start cannot occur on this platform.
-		OnStop: func(_ context.Context) error { return nil },
+		OnStop:  func(_ context.Context) error { return nil },
 	}
 }

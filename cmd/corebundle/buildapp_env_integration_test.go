@@ -67,6 +67,9 @@ func setRealModeEnv(t *testing.T, dsn string) {
 
 	// accesscore cell
 	t.Setenv("GOCELL_ACCESSCORE_CURSOR_KEY", "access-cursor-key-32b-padded-x!!")
+	t.Setenv(SetupModeEnv, "bootstrap")
+	t.Setenv("GOCELL_BOOTSTRAP_ADMIN_USERNAME", "testadmin")
+	t.Setenv("GOCELL_BOOTSTRAP_ADMIN_PASSWORD", "testpassword123")
 }
 
 // TestBuildApp_Postgres_UsesConfigCoreDatabaseURL verifies the complete
@@ -97,7 +100,7 @@ func TestBuildApp_Postgres_UsesConfigCoreDatabaseURL(t *testing.T) {
 
 	cells, cellOpts, err := BuildApp(ctx, shared,
 		ConfigCoreModule{},
-		AccessCoreModule{ForceBootstrap: true, InitialAdminOpts: fastAdminBootstrapOpts()},
+		AccessCoreModule{InitialAdminOpts: fastAdminBootstrapOpts()},
 		AuditCoreModule{},
 	)
 	require.NoError(t, err, "BuildApp must succeed: env→pool wiring must complete without error")

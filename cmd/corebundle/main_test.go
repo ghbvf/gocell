@@ -177,11 +177,13 @@ func TestRun_DevMode_StartsAndCancels(t *testing.T) {
 	// run() with an immediately-canceled context exercises the full assembly
 	// path (cells, bootstrap) without needing a real HTTP listener.
 	// Default provision mode is "interactive" (no admin at startup). Opt into
-	// bootstrap mode to exercise the Lifecycle + credfile wiring that the
+	// bootstrap mode to exercise the Lifecycle wiring that the
 	// original test was designed around.
-	t.Setenv(AdminProvisionModeEnv, "bootstrap")
-	// STATE_DIR is needed in bootstrap mode (default /run/gocell is not
-	// writable in CI).
+	t.Setenv(SetupModeEnv, "bootstrap")
+	t.Setenv("GOCELL_BOOTSTRAP_ADMIN_USERNAME", "testadmin")
+	t.Setenv("GOCELL_BOOTSTRAP_ADMIN_PASSWORD", "testpassword123")
+	// STATE_DIR is needed for compatibility with credfile path resolution
+	// on legacy code paths; kept for safety during transition.
 	t.Setenv("GOCELL_STATE_DIR", t.TempDir())
 	// GOCELL_JWT_ISSUER and GOCELL_JWT_AUDIENCE are required in all modes (C5).
 	t.Setenv("GOCELL_JWT_ISSUER", "gocell-dev-test")
@@ -277,6 +279,10 @@ func TestRun_RealMode_MissingAccessCursorKey_FailsFast(t *testing.T) {
 	t.Setenv("GOCELL_READYZ_VERBOSE_TOKEN", "readyz-token-present")
 	t.Setenv("GOCELL_METRICS_TOKEN", "metrics-token-present")
 	t.Setenv("GOCELL_SINGLE_POD", "1") // F1: acknowledge in-memory nonce store in single-pod real mode
+	// SEC-SETUP-CLOSURE: setup mode required by AccessCoreModule (checked before cursor key).
+	t.Setenv(SetupModeEnv, "bootstrap")
+	t.Setenv("GOCELL_BOOTSTRAP_ADMIN_USERNAME", "testadmin")
+	t.Setenv("GOCELL_BOOTSTRAP_ADMIN_PASSWORD", "testpassword123")
 	t.Setenv("GOCELL_ACCESSCORE_CURSOR_KEY", "")
 
 	ctx := t.Context()
@@ -457,7 +463,9 @@ func TestBootstrap_DemoModeUsesInMemory(t *testing.T) {
 	// GOCELL_CONFIGCORE_DATABASE_URL is not read in memory mode — no DSN required.
 	t.Setenv("GOCELL_CELL_ADAPTER_MODE", "")
 	// Opt into bootstrap mode to match the original test's startup path.
-	t.Setenv(AdminProvisionModeEnv, "bootstrap")
+	t.Setenv(SetupModeEnv, "bootstrap")
+	t.Setenv("GOCELL_BOOTSTRAP_ADMIN_USERNAME", "testadmin")
+	t.Setenv("GOCELL_BOOTSTRAP_ADMIN_PASSWORD", "testpassword123")
 	t.Setenv("GOCELL_STATE_DIR", t.TempDir())
 	// GOCELL_JWT_ISSUER and GOCELL_JWT_AUDIENCE required in all modes (C5).
 	t.Setenv("GOCELL_JWT_ISSUER", "gocell-dev-test")
@@ -578,6 +586,10 @@ func TestRun_RealMode_DemoKey_FailsFast(t *testing.T) {
 			t.Setenv("GOCELL_METRICS_TOKEN", "metrics-token-present")
 			// F1: single-pod acknowledgement required for in-memory NonceStore in real mode.
 			t.Setenv("GOCELL_SINGLE_POD", "1")
+			// SEC-SETUP-CLOSURE: setup mode required by AccessCoreModule.
+			t.Setenv(SetupModeEnv, "bootstrap")
+			t.Setenv("GOCELL_BOOTSTRAP_ADMIN_USERNAME", "testadmin")
+			t.Setenv("GOCELL_BOOTSTRAP_ADMIN_PASSWORD", "testpassword123")
 			// Trip-wire: replace just one env with a well-known demo value.
 			t.Setenv(tc.patch.name, tc.patch.value)
 

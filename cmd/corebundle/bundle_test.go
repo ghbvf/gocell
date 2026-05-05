@@ -92,8 +92,7 @@ func TestAccessCoreModule_BootstrapProvideDoesNotAdvertiseCredentialPath(t *test
 	buf, restore := captureSlogInfoLines(t)
 	t.Cleanup(restore)
 
-	shared := buildTestSharedDeps(t)
-	t.Setenv(AdminProvisionModeEnv, "bootstrap")
+	shared := buildTestSharedDeps(t) // sets SetupModeEnv=bootstrap + credentials
 
 	_, _, _, err := AccessCoreModule{InitialAdminOpts: fastAdminBootstrapOpts()}.Provide(context.Background(), shared)
 	require.NoError(t, err)
@@ -223,6 +222,11 @@ func buildTestSharedDeps(t *testing.T) *SharedDeps {
 	t.Setenv("GOCELL_STATE_DIR", t.TempDir())
 	t.Setenv("GOCELL_JWT_ISSUER", "test-issuer")
 	t.Setenv("GOCELL_JWT_AUDIENCE", "test-audience")
+	// SEC-SETUP-CLOSURE: SetupModeEnv is required; default tests to bootstrap
+	// mode with test credentials. Tests that need interactive can override.
+	t.Setenv(SetupModeEnv, "bootstrap")
+	t.Setenv("GOCELL_BOOTSTRAP_ADMIN_USERNAME", "testadmin")
+	t.Setenv("GOCELL_BOOTSTRAP_ADMIN_PASSWORD", "testpassword123")
 
 	eb := eventbus.New(eventbus.WithClock(clock.Real()))
 
@@ -393,7 +397,7 @@ func buildBootstrapFromShared(
 
 	cells, cellOpts, err := BuildApp(ctx, shared,
 		ConfigCoreModule{},
-		AccessCoreModule{ForceBootstrap: true, InitialAdminOpts: fastAdminBootstrapOpts()},
+		AccessCoreModule{InitialAdminOpts: fastAdminBootstrapOpts()},
 		AuditCoreModule{},
 	)
 	if err != nil {

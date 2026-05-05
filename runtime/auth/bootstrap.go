@@ -24,13 +24,46 @@ type BootstrapCredentials struct {
 	Password []byte
 }
 
-// bootstrapRateLimiter decides whether a request identified by key should be allowed.
-// This is a local interface to avoid an import cycle: runtime/http/middleware imports
-// runtime/auth (via access_log.go), so runtime/auth must not import runtime/http/middleware.
-// Callers wire a concrete middleware.RateLimiter (or adapters/ratelimit.TokenBucket) which
-// satisfies this interface structurally.
-type bootstrapRateLimiter interface {
+// BootstrapRateLimiter decides whether a request identified by key should be
+// allowed. Implementations are injected by the caller so that runtime/auth does
+// not import runtime/http/middleware (which imports runtime/auth, creating a
+// cycle). Callers wire a concrete middleware.RateLimiter or an
+// adapters/ratelimit.TokenBucket which satisfies this interface structurally.
+//
+// BootstrapAllowAllLimiter can be used in tests or interactive-mode scenarios
+// where rate limiting is handled upstream (e.g. nginx/ingress).
+type BootstrapRateLimiter interface {
 	Allow(key string) bool
+}
+
+// bootstrapRateLimiter is an alias kept for internal use so callers that
+// already implement the unexported type continue to compile.
+type bootstrapRateLimiter = BootstrapRateLimiter
+
+// BootstrapAllowAllLimiter is a no-op rate limiter that permits every request.
+// Suitable for unit tests and deployments where rate limiting is enforced
+// upstream (e.g. ingress / nginx). Do not use in production without an upstream
+// rate limiter.
+type BootstrapAllowAllLimiter struct{}
+
+// Allow always returns true.
+func (BootstrapAllowAllLimiter) Allow(_ string) bool { return true }
+
+// NewBootstrapMiddleware constructs the HTTP middleware chain for bootstrap
+// authentication. The chain is: RateLimit (per-IP) → Basic Auth header parse →
+// constant-time username/password comparison → uniform 401 envelope on any
+// mismatch (no field-level oracle).
+//
+// onAuthFail is an optional observer invoked on every authentication failure
+// (after the 401 response is written). The reason string is one of:
+// "missing_header", "wrong_credentials". Callers use this hook to write audit
+// log entries without importing cells/. Pass nil to disable.
+//
+// Wire this middleware around the setup/admin handler to enforce D5 semantics:
+// env credentials authenticate the operator; body credentials define the admin
+// identity.
+func NewBootstrapMiddleware(creds BootstrapCredentials, limiter BootstrapRateLimiter, onAuthFail func(ctx context.Context, reason string)) func(http.Handler) http.Handler {
+	return newBootstrapMiddleware(creds, limiter, onAuthFail)
 }
 
 // bootstrapWindowedLimiter extends bootstrapRateLimiter with window metadata for
@@ -52,8 +85,10 @@ type bootstrapWindowedLimiter interface {
 // Rate limiting is applied first (before auth parsing) so brute-force is throttled
 // regardless of credential presence.
 //
+// onAuthFail is called after writing the 401 response. nil → no-op.
+//
 // ref: Go stdlib crypto/subtle.ConstantTimeCompare (timing-safe equality)
-func newBootstrapMiddleware(creds BootstrapCredentials, limiter bootstrapRateLimiter) func(http.Handler) http.Handler {
+func newBootstrapMiddleware(creds BootstrapCredentials, limiter bootstrapRateLimiter, onAuthFail func(ctx context.Context, reason string)) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			ip := bootstrapClientIP(r)
@@ -68,6 +103,9 @@ func newBootstrapMiddleware(creds BootstrapCredentials, limiter bootstrapRateLim
 			user, pass, ok := r.BasicAuth()
 			if !ok {
 				writeBootstrapAuthFailed(r.Context(), w)
+				if onAuthFail != nil {
+					onAuthFail(r.Context(), "missing_header")
+				}
 				return
 			}
 			// ConstantTimeCompare returns 1 only if both slices are equal AND same
@@ -78,6 +116,9 @@ func newBootstrapMiddleware(creds BootstrapCredentials, limiter bootstrapRateLim
 			passOK := subtle.ConstantTimeCompare([]byte(pass), creds.Password)
 			if userOK&passOK != 1 {
 				writeBootstrapAuthFailed(r.Context(), w)
+				if onAuthFail != nil {
+					onAuthFail(r.Context(), "wrong_credentials")
+				}
 				return
 			}
 			next.ServeHTTP(w, r)
