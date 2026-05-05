@@ -22,6 +22,11 @@ var (
 	_ middleware.CircuitBreakerRetryAfter = (*Adapter)(nil)
 )
 
+// smallDelta is a sub-nanosecond nudge used to push the fake clock just past
+// an expiry boundary without aligning exactly on it. Two nanoseconds avoids
+// the off-by-one in expiry.Before(now) comparisons.
+const smallDelta = 2 * time.Nanosecond
+
 // mustNew creates an Adapter with a fake clock, failing the test on error.
 func mustNew(t *testing.T, cfg Config) *Adapter {
 	t.Helper()
@@ -522,8 +527,8 @@ func TestAdapter_OpenState_RejectsAllUntilTimeout(t *testing.T) {
 	allowed, _ := a.Allow()
 	assert.False(t, allowed, "request must still be rejected just before timeout")
 
-	// Advance 2ns past timeout — now half-open probe should be allowed.
-	fc.Advance(2 * time.Nanosecond)
+	// Advance smallDelta past timeout — now half-open probe should be allowed.
+	fc.Advance(smallDelta)
 	allowed, done := a.Allow()
 	assert.True(t, allowed, "first request after timeout must be allowed (half-open probe)")
 	if done != nil {
