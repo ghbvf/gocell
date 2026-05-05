@@ -99,6 +99,17 @@ func (c *fakeClaimer) Claim(_ context.Context, key string, _, _ time.Duration) (
 
 var _ idempotency.Claimer = (*fakeClaimer)(nil)
 
+func testConsumerBase(t *testing.T) *ConsumerBase {
+	t.Helper()
+	cb, err := NewConsumerBase(
+		&fakeClaimer{state: idempotency.ClaimAcquired, receipt: &fakeReceipt{}},
+		ConsumerBaseConfig{LeaseRenewalInterval: disableLeaseRenewal},
+		clock.Real(),
+	)
+	require.NoError(t, err)
+	return cb
+}
+
 // signalingClaimer wraps an inner Claimer and sends on the started channel
 // the first time Claim is invoked. Used to replace time.Sleep startup synchronization
 // in tests that need to cancel ctx after the claimer has been called.

@@ -4,8 +4,8 @@
 // consumer via runtime/eventrouter with a ContractSpec — the spec carries
 // the contract id, transport, method/path (or topic). wrapper.HTTPHandler
 // contributes HTTP contract attributes to the runtime HTTP middleware's
-// single request span; wrapper.WrapConsumer owns the consumer span and
-// annotates it with gocell.contract.* plus messaging.destination/system.
+// single request span; wrapper.WrapSubscriber owns the consumer delivery span
+// and annotates it with gocell.contract.* plus messaging.destination/system.
 // The consumer Tracer is injected by bootstrap, defaulting to NoopTracer.
 //
 // Layering: package wrapper depends only on stdlib + kernel/ctxkeys +

@@ -438,7 +438,7 @@ func (c *captureSubscriber) Close(context.Context) error { return nil }
 
 func TestSubscriberWithMiddleware_BuiltInRestore_RestoresAllFields(t *testing.T) {
 	cap := &captureSubscriber{}
-	wrapped := &SubscriberWithMiddleware{Inner: cap}
+	wrapped := &SubscriberWithMiddleware{Inner: cap, ConsumerBase: testConsumerBase(t)}
 
 	require.NoError(t, wrapped.SubscribeEntry(context.Background(),
 		Subscription{Topic: "event.test.v1"},
@@ -477,7 +477,7 @@ func TestSubscriberWithMiddleware_BuiltInRestore_RestoresAllFields(t *testing.T)
 
 func TestSubscriberWithMiddleware_BuiltInRestore_ZeroObservabilityIsNoOp(t *testing.T) {
 	cap := &captureSubscriber{}
-	wrapped := &SubscriberWithMiddleware{Inner: cap}
+	wrapped := &SubscriberWithMiddleware{Inner: cap, ConsumerBase: testConsumerBase(t)}
 
 	called := false
 	require.NoError(t, wrapped.SubscribeEntry(context.Background(),
@@ -507,7 +507,7 @@ func TestSubscriberWithMiddleware_RestoreIsOutermost(t *testing.T) {
 			return next(ctx, entry)
 		}
 	}
-	wrapped := &SubscriberWithMiddleware{Inner: cap, Middleware: []SubscriptionMiddleware{userMW}}
+	wrapped := &SubscriberWithMiddleware{Inner: cap, Middleware: []SubscriptionMiddleware{userMW}, ConsumerBase: testConsumerBase(t)}
 
 	require.NoError(t, wrapped.SubscribeEntry(context.Background(), Subscription{Topic: "test.v1"},
 		func(_ context.Context, _ Entry) HandleResult {

@@ -33,6 +33,9 @@ func (b *Bootstrap) phase6StartEventRouter(runCtx context.Context, s *phaseState
 	if sub == nil {
 		return b.checkNoSubscriptionsWhenSubscriberNil(s)
 	}
+	if err := b.checkConsumerBaseConfiguredForSubscriptions(s); err != nil {
+		return err
+	}
 
 	evtRouter := b.buildEventRouter(sub)
 	if err := b.drainCellSubscriptions(s, evtRouter); err != nil {
@@ -48,37 +51,18 @@ func (b *Bootstrap) phase6StartEventRouter(runCtx context.Context, s *phaseState
 
 // buildEventRouter creates the event router with middleware and validators.
 //
-// The SubscriberWithMiddleware wires three layers in order (innermost to outermost
-// within SubscribeEntry):
-//  1. Business middleware chain: ContractTracingMiddleware (outermost)
-//     followed by b.consumerMiddleware (caller-supplied business middleware).
-//     All operate on EntryHandler — they do not see Settlement.
-//  2. ConsumerBase: the explicit EntryHandler→SubscriberHandler conversion
-//     boundary. Field-injected via b.consumerBase (set by WithConsumerBase).
-//  3. Observability restore: built-in OUTERMOST step in SubscribeEntry — always
-//     applied after Inner.Subscribe is reached so every layer sees a populated ctx.
-//
-// ContractTracingMiddleware is outermost in the business middleware chain so the
-// contract span covers idempotency retries, skips, and lease-lost downgrades.
-// spec.Validate() panic fires at ContractTracingMiddleware construction (registration
-// time), not at first delivery — restored from K#12 first-pass regression (P1 fix).
+// The SubscriberWithMiddleware wires the business middleware chain and
+// ConsumerBase. The inner Subscriber is decorated with contract tracing so each
+// delivery span closes after final broker settlement (Commit/Ack/Nack/Release).
 func (b *Bootstrap) buildEventRouter(sub outbox.Subscriber) *eventrouter.Router {
-	// Business middleware chain: ContractTracingMiddleware is outermost so its
-	// span covers everything inside (ConsumerBase retry, idempotency skips).
-	// Caller-supplied middleware (b.consumerMiddleware) follows.
-	mws := []outbox.SubscriptionMiddleware{
-		eventrouter.ContractTracingMiddleware(b.wrapperTracer),
-	}
-	mws = append(mws, b.consumerMiddleware...)
-
 	var evtRouterOpts []eventrouter.Option
 	if b.routerReadyTimeoutSet {
 		evtRouterOpts = append(evtRouterOpts, eventrouter.WithReadyTimeout(b.routerReadyTimeout))
 	}
 	evtRouter := eventrouter.New(&outbox.SubscriberWithMiddleware{
-		Inner:        sub,
-		Middleware:   mws,
-		ConsumerBase: b.consumerBase, // nil-safe: degrades to nil-Settlement pass-through
+		Inner:        eventrouter.NewContractTracingSubscriber(sub, b.wrapperTracer),
+		Middleware:   b.consumerMiddleware,
+		ConsumerBase: b.consumerBase,
 	}, b.clock, evtRouterOpts...)
 
 	for _, v := range b.subscriptionValidators {
@@ -157,6 +141,28 @@ func (b *Bootstrap) checkNoSubscriptionsWhenSubscriberNil(s *phaseState) error {
 			return fmt.Errorf(
 				"bootstrap: cell %s registered subscriptions but no subscriber is configured; "+
 					"add WithSubscriber to bootstrap options", id)
+		}
+	}
+	return nil
+}
+
+// checkConsumerBaseConfiguredForSubscriptions fails fast when cells registered
+// subscriptions but no ConsumerBase is configured. This keeps idempotency and
+// retry lifecycle wiring explicit instead of silently consuming with nil
+// Settlement.
+func (b *Bootstrap) checkConsumerBaseConfiguredForSubscriptions(s *phaseState) error {
+	if b.consumerBase != nil {
+		return nil
+	}
+	for _, id := range s.asm.CellIDs() {
+		snap, ok := s.cellSnapshots[id]
+		if !ok {
+			continue
+		}
+		for _, sub := range snap.Subscriptions {
+			return fmt.Errorf(
+				"bootstrap: cell %s registered subscription topic %q but no ConsumerBase is configured; "+
+					"add WithConsumerBase to bootstrap options", id, sub.Spec.Topic)
 		}
 	}
 	return nil

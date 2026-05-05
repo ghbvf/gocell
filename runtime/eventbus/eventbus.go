@@ -413,35 +413,47 @@ func (b *InMemoryEventBus) removeSub(topic, consumerGroup string, target *subscr
 }
 
 func (b *InMemoryEventBus) handleWithRetry(ctx context.Context, topic string, entry outbox.Entry, handler outbox.SubscriberHandler) {
-	var lastErr error
-	var lastResult outbox.HandleResult
 	for attempt := range maxRetries {
 		res, settlement := handler(ctx, entry)
-		lastResult = res
-		done, err := b.processResult(ctx, topic, entry, res, settlement, attempt)
+		finalAttempt := attempt == maxRetries-1
+		done, err := b.processResult(ctx, topic, entry, res, settlement, attempt, finalAttempt)
 		if done {
 			return
 		}
-		lastErr = err
+		if finalAttempt {
+			b.notifyRetryExhausted(ctx, topic, entry, res, err)
+			return
+		}
 		// Wait for retry delay or ctx cancellation.
 		if !awaitRetry(ctx, b.clk, res.Disposition, attempt) {
 			return
 		}
 	}
-	b.appendDeadLetter(topic, entry, lastErr)
-	outbox.NotifySettlement(ctx, lastResult, entry, outbox.DispositionReject, outbox.SettlementResultRetryExhausted, lastErr)
+}
+
+func (b *InMemoryEventBus) notifyRetryExhausted(
+	ctx context.Context, topic string, entry outbox.Entry, res outbox.HandleResult, err error,
+) {
+	b.appendDeadLetter(topic, entry, err)
+	outbox.NotifySettlement(ctx, res, entry, outbox.DispositionReject, outbox.SettlementResultRetryExhausted, err)
 	slog.Error("eventbus: retries exhausted, routing to dead letter",
 		slog.String("topic", topic),
 		slog.String("entry_id", entry.ID),
-		slog.Any("error", lastErr),
+		slog.Any("error", err),
 	)
 }
 
-// processResult handles a single handler result. Returns (done=true) when
-// no further retry is needed (Ack, Reject, or permanent error in Requeue).
-// Returns the error to propagate as lastErr when done=false.
+// processResult handles a single handler result. Returns done=true when no
+// further retry is needed (Ack or Reject). Transient paths return done=false
+// and the error to use if the retry budget exhausts.
 func (b *InMemoryEventBus) processResult(
-	ctx context.Context, topic string, entry outbox.Entry, res outbox.HandleResult, settlement outbox.Settlement, attempt int,
+	ctx context.Context,
+	topic string,
+	entry outbox.Entry,
+	res outbox.HandleResult,
+	settlement outbox.Settlement,
+	attempt int,
+	finalAttempt bool,
 ) (done bool, lastErr error) {
 	switch res.Disposition {
 	case outbox.DispositionAck:
@@ -454,6 +466,10 @@ func (b *InMemoryEventBus) processResult(
 					slog.String("topic", topic),
 					slog.String("entry_id", entry.ID),
 					slog.Any("error", commitErr))
+				releaseSettlement(ctx, settlement, topic, entry.ID)
+				if finalAttempt {
+					return false, commitErr
+				}
 				outbox.NotifySettlement(ctx, res, entry, outbox.DispositionRequeue, outbox.SettlementResultCommitFailed, commitErr)
 				return false, commitErr
 			}
@@ -473,9 +489,9 @@ func (b *InMemoryEventBus) processResult(
 		outbox.NotifySettlement(ctx, res, entry, outbox.DispositionReject, outbox.SettlementResultSuccess, nil)
 		return true, nil
 	case outbox.DispositionRequeue:
-		return b.handleRequeue(ctx, topic, entry, res, settlement, attempt)
+		return b.handleRequeue(ctx, topic, entry, res, settlement, attempt, finalAttempt)
 	default:
-		return b.handleInvalidDisposition(ctx, topic, entry, res, settlement, attempt)
+		return b.handleInvalidDisposition(ctx, topic, entry, res, settlement, attempt, finalAttempt)
 	}
 }
 
@@ -485,10 +501,19 @@ func (b *InMemoryEventBus) processResult(
 // DispositionReject 才会立刻路由 DLX；Requeue 一律走 retry budget，预算耗尽
 // 后落到 handleWithRetry 的 retries-exhausted DLX 路径。
 func (b *InMemoryEventBus) handleRequeue(
-	ctx context.Context, topic string, entry outbox.Entry, res outbox.HandleResult, settlement outbox.Settlement, attempt int,
+	ctx context.Context,
+	topic string,
+	entry outbox.Entry,
+	res outbox.HandleResult,
+	settlement outbox.Settlement,
+	attempt int,
+	finalAttempt bool,
 ) (done bool, lastErr error) {
 	if settlement != nil {
 		releaseSettlement(ctx, settlement, topic, entry.ID)
+	}
+	if finalAttempt {
+		return false, res.Err
 	}
 	delay := retryDelay(attempt)
 	slog.Warn("eventbus: handler requested requeue, retrying",
@@ -504,10 +529,25 @@ func (b *InMemoryEventBus) handleRequeue(
 // handleInvalidDisposition treats zero-value or unknown Disposition as Requeue
 // with an Error-level log so the programming mistake is surfaced.
 func (b *InMemoryEventBus) handleInvalidDisposition(
-	ctx context.Context, topic string, entry outbox.Entry, res outbox.HandleResult, settlement outbox.Settlement, attempt int,
+	ctx context.Context,
+	topic string,
+	entry outbox.Entry,
+	res outbox.HandleResult,
+	settlement outbox.Settlement,
+	attempt int,
+	finalAttempt bool,
 ) (done bool, lastErr error) {
 	if settlement != nil {
 		releaseSettlement(ctx, settlement, topic, entry.ID)
+	}
+	if finalAttempt {
+		slog.Error("eventbus: invalid disposition, retry budget exhausted",
+			slog.String("topic", topic),
+			slog.String("entry_id", entry.ID),
+			slog.String("disposition", res.Disposition.String()),
+			slog.Int("attempt", attempt+1),
+		)
+		return false, res.Err
 	}
 	delay := retryDelay(attempt)
 	slog.Error("eventbus: invalid disposition, treating as requeue",

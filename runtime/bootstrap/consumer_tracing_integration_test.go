@@ -23,8 +23,8 @@ import (
 )
 
 // F3 round-4 integration test: verifies the end-to-end path
-// bootstrap.WithTracer -> ContractTracingMiddleware -> wrapper.WrapConsumer ->
-// span.Start on a real subscribed event. A regression at any layer would
+// bootstrap.WithTracer -> NewContractTracingSubscriber -> wrapper.WrapSubscriber
+// -> span.Start on a real subscribed event. A regression at any layer would
 // silently degrade consumer-side observability; this test is the only
 // cross-layer check that proves the wire stays connected.
 
@@ -106,7 +106,7 @@ func (c *consumerSpyCell) Init(ctx context.Context, reg cell.Registry) error {
 }
 
 // TestBootstrap_ConsumerTracingIntegration wires bootstrap ->
-// AddContractHandler -> ContractTracingMiddleware -> WrapConsumer in the most
+// AddContractHandler -> NewContractTracingSubscriber -> WrapSubscriber in the most
 // production-like way available without a real broker, then asserts that
 // delivering one event produces exactly one CONSUME span tagged with the
 // contract metadata.
@@ -135,6 +135,7 @@ func TestBootstrap_ConsumerTracingIntegration(t *testing.T) {
 		WithClock(clock.Real()),
 		WithSubscriber(bus),
 		WithPublisher(bus),
+		WithConsumerBase(newTestConsumerBase(t)),
 		WithAssembly(asm),
 		WithListener(cell.PrimaryListener, primaryLn.Addr().String(), []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(primaryLn)),
 		WithListener(cell.InternalListener, "127.0.0.1:0", []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(newLocalListener(t))),
@@ -171,7 +172,7 @@ func TestBootstrap_ConsumerTracingIntegration(t *testing.T) {
 	}
 
 	// Shut down cleanly before asserting on the span so the
-	// WrapConsumer-installed span.End has definitely run.
+	// WrapSubscriber-installed settlement observer has definitely ended the span.
 	cancel()
 	<-runErr
 

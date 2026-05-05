@@ -14,6 +14,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/assembly"
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/clock"
+	"github.com/ghbvf/gocell/kernel/idempotency"
 	"github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/query"
@@ -206,12 +207,21 @@ func NewSSOBFFApp(opts ...SSOBFFAppOption) (*SSOBFFApp, error) {
 			return nil, fmt.Errorf("ssobff: register cell: %w", registerErr)
 		}
 	}
+	cb, err := outbox.NewConsumerBase(
+		idempotency.NewInMemClaimer(clock.Real()),
+		outbox.ConsumerBaseConfig{},
+		clock.Real(),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("ssobff: create consumer base: %w", err)
+	}
 
 	b := bootstrap.New(
 		bootstrap.WithClock(clock.Real()),
 		bootstrap.WithAssembly(asm),
 		bootstrap.WithPublisher(eb),
 		bootstrap.WithSubscriber(eb),
+		bootstrap.WithConsumerBase(cb),
 		listenerOption(cell.PrimaryListener, cfg.primary, []cell.ListenerAuth{cell.MustNewAuthJWTFromAssembly(asm)}),
 		listenerOption(cell.InternalListener, cfg.internal, internalAuthChain),
 		listenerOption(cell.HealthListener, cfg.health, []cell.ListenerAuth{cell.AuthNone{}}),

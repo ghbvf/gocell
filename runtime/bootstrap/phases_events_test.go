@@ -42,9 +42,9 @@ type stubEventCell struct {
 	spec wrapper.ContractSpec
 }
 
-func newStubEventCell(id, topic string) *stubEventCell {
+func newStubEventCell(topic string) *stubEventCell {
 	return &stubEventCell{
-		BaseCell: cell.MustNewBaseCell(&metadata.CellMeta{ID: id, Type: "core"}),
+		BaseCell: cell.MustNewBaseCell(&metadata.CellMeta{ID: "stub", Type: "core"}),
 		spec: wrapper.ContractSpec{
 			ID:        topic,
 			Kind:      "event",
@@ -82,7 +82,7 @@ func TestPhase6_ConsumerMiddleware_AppliedInChain(t *testing.T) {
 
 	asm := assembly.New(assembly.Config{ID: "phase6-mw-test", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
 	t.Cleanup(asm.Shutdown)
-	require.NoError(t, asm.Register(newStubEventCell("stub", "event.phase6.mw.v1")))
+	require.NoError(t, asm.Register(newStubEventCell("event.phase6.mw.v1")))
 	require.NoError(t, asm.Start(context.Background()))
 
 	b := New(
@@ -90,6 +90,7 @@ func TestPhase6_ConsumerMiddleware_AppliedInChain(t *testing.T) {
 		WithAssembly(asm),
 		WithPublisher(bus),
 		WithSubscriber(bus),
+		WithConsumerBase(newTestConsumerBase(t)),
 		WithConsumerMiddleware(spyMW),
 	)
 
@@ -142,13 +143,14 @@ func TestPhase6_EventRouterReadyTimeout_FiresAndReturnsError(t *testing.T) {
 
 	asm := assembly.New(assembly.Config{ID: "phase6-rt-test", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
 	t.Cleanup(asm.Shutdown)
-	require.NoError(t, asm.Register(newStubEventCell("stub", "event.phase6.rt.v1")))
+	require.NoError(t, asm.Register(newStubEventCell("event.phase6.rt.v1")))
 	require.NoError(t, asm.Start(context.Background()))
 
 	b := New(
 		WithClock(clock.Real()),
 		WithAssembly(asm),
 		WithSubscriber(neverReadySubscriber{}),
+		WithConsumerBase(newTestConsumerBase(t)),
 		WithEventRouterReadyTimeout(testtime.D80ms),
 	)
 
@@ -173,4 +175,64 @@ func TestPhase6_EventRouterReadyTimeout_FiresAndReturnsError(t *testing.T) {
 		"timeout must wait at least the configured budget")
 	assert.Less(t, elapsed, testtime.D2s,
 		"timeout must not exceed budget by more than 25x — the option clearly is not plumbed")
+}
+
+func TestPhase6_SubscriptionsWithSubscriberButNoConsumerBase_FailsFast(t *testing.T) {
+	t.Parallel()
+
+	bus := eventbus.New(eventbus.WithClock(clock.Real()))
+	asm := assembly.New(assembly.Config{ID: "phase6-missing-cb-test", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
+	t.Cleanup(asm.Shutdown)
+	require.NoError(t, asm.Register(newStubEventCell("event.phase6.no-cb.v1")))
+	require.NoError(t, asm.Start(context.Background()))
+
+	b := New(
+		WithClock(clock.Real()),
+		WithAssembly(asm),
+		WithPublisher(bus),
+		WithSubscriber(bus),
+	)
+
+	runCtx, s := newPhaseState()
+	defer s.runCancel()
+	s.asm = asm
+	s.cellSnapshots = asm.Snapshots()
+	s.sub = bus
+	s.hh = health.New(asm, clock.Real())
+
+	err := b.phase6StartEventRouter(runCtx, s)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "ConsumerBase")
+	assert.Contains(t, err.Error(), "event.phase6.no-cb.v1")
+	assert.Contains(t, err.Error(), "stub")
+}
+
+func TestPhase6_SubscriptionsWithConsumerBase_Succeeds(t *testing.T) {
+	t.Parallel()
+
+	bus := eventbus.New(eventbus.WithClock(clock.Real()))
+	asm := assembly.New(assembly.Config{ID: "phase6-with-cb-test", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
+	t.Cleanup(asm.Shutdown)
+	require.NoError(t, asm.Register(newStubEventCell("event.phase6.with-cb.v1")))
+	require.NoError(t, asm.Start(context.Background()))
+
+	b := New(
+		WithClock(clock.Real()),
+		WithAssembly(asm),
+		WithPublisher(bus),
+		WithSubscriber(bus),
+		WithConsumerBase(newTestConsumerBase(t)),
+	)
+
+	runCtx, s := newPhaseState()
+	defer s.runCancel()
+	s.asm = asm
+	s.cellSnapshots = asm.Snapshots()
+	s.sub = bus
+	s.hh = health.New(asm, clock.Real())
+
+	require.NoError(t, b.phase6StartEventRouter(runCtx, s))
+	for _, v := range slices.Backward(s.teardowns) {
+		_ = v.fn(context.Background())
+	}
 }

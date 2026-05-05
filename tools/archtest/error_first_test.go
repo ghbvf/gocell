@@ -40,7 +40,7 @@ package archtest
 //   - kernel/outbox/entry_id.go, envelope.go
 //   - kernel/idempotency/inmem.go
 //   - kernel/worker/worker.go
-//   - runtime/eventrouter/router.go, contract_middleware.go
+//   - runtime/eventrouter/router.go, contract_tracing_subscriber.go
 //   - runtime/auth/route.go
 //   - runtime/worker/worker.go
 //   - runtime/distlock/locker.go
@@ -90,7 +90,7 @@ var errorFirstEnforcedFiles = []string{
 	"kernel/idempotency/inmem.go",
 	"kernel/worker/worker.go",
 	"runtime/eventrouter/router.go",
-	"runtime/eventrouter/contract_middleware.go",
+	"runtime/eventrouter/contract_tracing_subscriber.go",
 	"runtime/auth/route.go",
 	"runtime/worker/worker.go",
 	"runtime/distlock/locker.go",

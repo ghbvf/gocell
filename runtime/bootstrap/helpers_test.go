@@ -4,6 +4,12 @@ import (
 	"net"
 	"net/http"
 	"testing"
+
+	"github.com/stretchr/testify/require"
+
+	"github.com/ghbvf/gocell/kernel/clock"
+	"github.com/ghbvf/gocell/kernel/idempotency"
+	"github.com/ghbvf/gocell/kernel/outbox"
 )
 
 // closeListener closes a net.Listener and logs any close error.
@@ -29,4 +35,15 @@ func closeConn(t *testing.T, conn net.Conn) {
 	if err := conn.Close(); err != nil {
 		t.Errorf("close conn: %v", err)
 	}
+}
+
+func newTestConsumerBase(t *testing.T) *outbox.ConsumerBase {
+	t.Helper()
+	cb, err := outbox.NewConsumerBase(
+		idempotency.NewInMemClaimer(clock.Real()),
+		outbox.ConsumerBaseConfig{},
+		clock.Real(),
+	)
+	require.NoError(t, err)
+	return cb
 }

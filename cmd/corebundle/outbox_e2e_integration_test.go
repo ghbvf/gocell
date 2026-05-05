@@ -244,6 +244,7 @@ func TestOutboxE2E_PGMode_WriteToSubscribe(t *testing.T) {
 		bootstrap.WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{cell.MustNewAuthJWTFromAssembly(asm)}, bootstrap.WithListenerNet(ln)),
 		withCorebundleTestInternalListener(t, newCorebundleLocalListener(t)),
 		bootstrap.WithPublisher(eb), bootstrap.WithSubscriber(eb),
+		bootstrap.WithConsumerBase(newCorebundleTestConsumerBase(t, asm.Clock())),
 		bootstrap.WithShutdownTimeout(testtime.EventuallyDefault),
 		// F3: public routes (login, refresh) and PasswordResetExempt routes
 		// (change-password, logout) are declared via auth.Mount inside accesscore's
@@ -611,6 +612,7 @@ func TestOutboxE2E_RefetchLoop_AccessCoreCallsInternalGet(t *testing.T) {
 		bootstrap.WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{cell.MustNewAuthJWTFromAssembly(asm)}, bootstrap.WithListenerNet(ln)),
 		withCorebundleTestInternalListener(t, newCorebundleLocalListener(t)),
 		bootstrap.WithPublisher(eb), bootstrap.WithSubscriber(eb),
+		bootstrap.WithConsumerBase(newCorebundleTestConsumerBase(t, asm.Clock())),
 		bootstrap.WithShutdownTimeout(testtime.EventuallyDefault),
 	}
 	app := newBootstrapFromOptions(append(baseOpts, relayBootstrapOpts...))

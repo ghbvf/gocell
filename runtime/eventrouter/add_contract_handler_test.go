@@ -13,7 +13,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/wrapper"
 )
 
-// --- Spy tracer for ContractTracingMiddleware verification ---
+// --- Spy tracer for contract tracing verification ---
 
 type contractSpySpan struct {
 	mu     sync.Mutex
@@ -132,105 +132,6 @@ func TestAddContractHandler_RegistersBusinessHandler(t *testing.T) {
 	// Router stores the business handler; bootstrap-owned middleware wraps it.
 	res := r.handlers[0].handler(context.Background(), outbox.Entry{})
 	assert.Equal(t, outbox.DispositionAck, res.Disposition)
-}
-
-func TestContractTracingMiddleware_WrapsWithContractSpan(t *testing.T) {
-	t.Parallel()
-	tr := &contractSpyTracer{}
-	r := New(wrap(&blockingSubscriber{}), clock.Real())
-
-	var inner bool
-	require.NoError(t, r.AddContractHandler(configEntryUpsertedSpec(), func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
-		inner = true
-		return outbox.HandleResult{Disposition: outbox.DispositionAck}
-	}, "accesscore", "accesscore"))
-	require.Equal(t, 1, r.HandlerCount())
-
-	// Drive one entry through the middleware position used by bootstrap:
-	// contract tracing sits outside the stored business handler.
-	sub := r.handlers[0].subscription()
-	wrapped := ContractTracingMiddleware(tr)(sub, r.handlers[0].handler)
-	res := wrapped(context.Background(), outbox.Entry{EventType: "event.config.entry-upserted.v1"})
-	assert.Equal(t, outbox.DispositionAck, res.Disposition)
-	assert.True(t, inner, "inner handler must run")
-
-	span := tr.only(t)
-	attrs := span.attrMap()
-	assert.Equal(t, "event.config.entry-upserted.v1", attrs["gocell.contract.id"], "gocell.contract.id")
-	assert.Equal(t, "event", attrs["gocell.contract.kind"], "gocell.contract.kind")
-	assert.Equal(t, "amqp", attrs["gocell.contract.transport"], "gocell.contract.transport")
-	assert.Equal(t, "amqp", attrs["messaging.system"], "messaging.system")
-	assert.Equal(t, "event.config.entry-upserted.v1", attrs["messaging.destination"], "messaging.destination")
-	assert.Equal(t, "CONSUME event.config.entry-upserted.v1", span.name, "span name")
-	assert.Equal(t, wrapper.StatusOK, span.status, "Ack must mark span StatusOK")
-	assert.True(t, span.ended, "span.End() must have been called")
-}
-
-func TestContractTracingMiddleware_CoversDownstreamShortCircuit(t *testing.T) {
-	t.Parallel()
-	tr := &contractSpyTracer{}
-	sub := outbox.Subscription{
-		Topic:             "event.config.entry-upserted.v1",
-		ConsumerGroup:     "accesscore",
-		ContractID:        "event.config.entry-upserted.v1",
-		ContractKind:      "event",
-		ContractTransport: "amqp",
-	}
-
-	var businessCalled bool
-	business := func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
-		businessCalled = true
-		return outbox.HandleResult{Disposition: outbox.DispositionAck}
-	}
-	// shortCircuit is a SubscriptionMiddleware that skips business handler.
-	shortCircuit := func(_ outbox.Subscription, _ outbox.EntryHandler) outbox.EntryHandler {
-		return func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
-			return outbox.HandleResult{Disposition: outbox.DispositionRequeue}
-		}
-	}
-
-	wrapped := ContractTracingMiddleware(tr)(sub, shortCircuit(sub, business))
-	res := wrapped(context.Background(), outbox.Entry{EventType: "event.config.entry-upserted.v1"})
-
-	assert.Equal(t, outbox.DispositionRequeue, res.Disposition)
-	assert.False(t, businessCalled, "downstream middleware should be allowed to skip business handler")
-
-	span := tr.only(t)
-	assert.Equal(t, wrapper.StatusError, span.status, "short-circuit Requeue must still mark the contract span")
-	assert.True(t, span.ended, "span.End() must have been called")
-	assert.Equal(t, "event.config.entry-upserted.v1", span.attrMap()["gocell.contract.id"])
-}
-
-// TestContractTracingMiddleware_PanicsOnEmptyContractID documents the F4
-// fail-fast: a subscription that somehow reaches the middleware without a
-// ContractID must panic via wrapper.MustWrapConsumer's spec.Validate() at
-// middleware construction time (not at first delivery).
-//
-// K#12 first-pass moved MustWrapConsumer to per-delivery, delaying the panic to
-// first delivery (P1 regression). K#12 second-pass restores once-at-construction:
-// MustWrapConsumer is called when the middleware closure is invoked (at
-// registration), so the panic fires before any message is delivered.
-//
-// Router.AddContractHandler is the primary guard; MustWrapConsumer is the
-// second line of defense for any future bypass.
-func TestContractTracingMiddleware_PanicsOnEmptyContractID(t *testing.T) {
-	t.Parallel()
-	sub := outbox.Subscription{
-		Topic:         "event.legacy.v1",
-		ConsumerGroup: "legacy",
-		// ContractID intentionally empty — simulates a bypass of AddContractHandler.
-		// MustWrapConsumer must panic at middleware construction (not first delivery).
-	}
-	defer func() {
-		r := recover()
-		require.NotNil(t, r, "empty ContractID must panic at middleware construction time")
-	}()
-
-	// Panic fires here — MustWrapConsumer is called at construction, not delivery.
-	_ = ContractTracingMiddleware(wrapper.NoopTracer{})(sub,
-		func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
-			return outbox.HandleResult{Disposition: outbox.DispositionAck}
-		})
 }
 
 func TestAddContractHandler_MultipleRegistrations_HandlersGrow(t *testing.T) {

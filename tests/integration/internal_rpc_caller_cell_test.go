@@ -173,6 +173,7 @@ func startCallerCellApp(t *testing.T) *callerCellApp {
 		),
 		bootstrap.WithPublisher(eb),
 		bootstrap.WithSubscriber(eb),
+		bootstrap.WithConsumerBase(newIntegrationTestConsumerBase(t, clock.Real())),
 		bootstrap.WithShutdownTimeout(testtime.D2s),
 	)
 

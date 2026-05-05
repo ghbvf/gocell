@@ -878,9 +878,11 @@ func (s *Subscriber) dispatchAck(
 					slog.String(logKeyTopic, topic),
 					slog.String(logKeyEventID, eventID),
 					slog.Any("error", nackErr))
+				releaseSettlement(ctx, settlement, topic, eventID, "commit_failed")
 				outbox.NotifySettlement(ctx, res, entry, outbox.DispositionRequeue, outbox.SettlementResultNackFailed, nackErr)
 				return
 			}
+			releaseSettlement(ctx, settlement, topic, eventID, "commit_failed")
 			outbox.NotifySettlement(ctx, res, entry, outbox.DispositionRequeue, outbox.SettlementResultCommitFailed, commitErr)
 			return
 		}

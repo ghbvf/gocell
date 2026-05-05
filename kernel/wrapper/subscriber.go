@@ -1,0 +1,118 @@
+package wrapper
+
+import (
+	"context"
+	"fmt"
+	"sync"
+
+	"github.com/ghbvf/gocell/kernel/ctxkeys"
+	"github.com/ghbvf/gocell/kernel/outbox"
+)
+
+// WrapSubscriber wraps a SubscriberHandler with a contract delivery span whose
+// status is resolved by the final broker settlement notification. It starts one
+// span per delivery attempt, appends a SettlementObserver to the returned
+// HandleResult, and ends the span when the subscriber calls outbox.NotifySettlement.
+//
+// This differs from WrapConsumer: Consumer middleware only sees the business
+// HandleResult before Commit/Ack/Nack, while this wrapper observes the
+// Subscriber layer after settlement downgrades such as commit_failed.
+func WrapSubscriber(tr Tracer, spec ContractSpec, fn outbox.SubscriberHandler) (outbox.SubscriberHandler, error) {
+	if fn == nil {
+		return nil, fmt.Errorf("wrapper.WrapSubscriber: fn must not be nil")
+	}
+	if spec.Kind != "event" {
+		return nil, fmt.Errorf("wrapper.WrapSubscriber: spec.Kind %q must be \"event\"", spec.Kind)
+	}
+	if err := spec.Validate(); err != nil {
+		return nil, fmt.Errorf("wrapper.WrapSubscriber: %w", err)
+	}
+	if tr == nil {
+		tr = NoopTracer{}
+	}
+
+	baseAttrs := []Attr{
+		{Key: "gocell.contract.id", Value: spec.ID},
+		{Key: "gocell.contract.kind", Value: spec.Kind},
+		{Key: "gocell.contract.transport", Value: spec.Transport},
+		{Key: "messaging.system", Value: spec.Transport},
+		{Key: "messaging.destination", Value: spec.Topic},
+	}
+
+	return func(ctx context.Context, entry outbox.Entry) (res outbox.HandleResult, settlement outbox.Settlement) {
+		ctx = entry.Observability.RestoreToContext(ctx)
+		ctx = ctxkeys.WithContractID(ctx, spec.ID)
+		ctx, span := tr.Start(ctx, defaultEventSpanName(spec))
+		span.SetAttributes(baseAttrs...)
+		defer func() { recoverAndFinish(span, recover()) }()
+
+		res, settlement = fn(ctx, entry)
+		var once sync.Once
+		res.SettlementObservers = append(res.SettlementObservers,
+			outbox.SettlementObserverFunc(func(_ context.Context, obs outbox.SettlementObservation) {
+				once.Do(func() {
+					finishSubscriberSpan(span, obs)
+				})
+			}))
+		return res, settlement
+	}, nil
+}
+
+// MustWrapSubscriber is the composition-root fail-fast variant of
+// WrapSubscriber. It panics when WrapSubscriber returns an error.
+func MustWrapSubscriber(tr Tracer, spec ContractSpec, fn outbox.SubscriberHandler) outbox.SubscriberHandler {
+	c, err := WrapSubscriber(tr, spec, fn)
+	if err != nil {
+		panic(err.Error())
+	}
+	return c
+}
+
+func finishSubscriberSpan(span Span, obs outbox.SettlementObservation) {
+	span.SetAttributes(
+		Attr{Key: "gocell.outbox.disposition", Value: obs.Disposition.String()},
+		Attr{Key: "gocell.outbox.settlement.result", Value: string(obs.Result)},
+	)
+
+	switch obs.Result {
+	case outbox.SettlementResultSuccess:
+		finishSuccessfulSettlementSpan(span, obs)
+	case outbox.SettlementResultRetryExhausted:
+		span.SetStatus(StatusError, string(outbox.SettlementResultRetryExhausted))
+		recordErr(span, obs.Err, "subscriber settlement retry exhausted")
+	case outbox.SettlementResultCommitFailed:
+		span.SetStatus(StatusError, string(outbox.SettlementResultCommitFailed))
+		recordErr(span, obs.Err, "subscriber settlement commit failed")
+	case outbox.SettlementResultAckFailed:
+		span.SetStatus(StatusError, string(outbox.SettlementResultAckFailed))
+		recordErr(span, obs.Err, "subscriber broker ack failed")
+	case outbox.SettlementResultNackFailed:
+		span.SetStatus(StatusError, string(outbox.SettlementResultNackFailed))
+		recordErr(span, obs.Err, "subscriber broker nack failed")
+	default:
+		desc := string(obs.Result)
+		if desc == "" {
+			desc = "unknown settlement result"
+		}
+		span.SetStatus(StatusError, desc)
+		recordErr(span, obs.Err, desc)
+	}
+	span.End()
+}
+
+func finishSuccessfulSettlementSpan(span Span, obs outbox.SettlementObservation) {
+	switch obs.Disposition {
+	case outbox.DispositionAck:
+		span.SetStatus(StatusOK, "")
+	case outbox.DispositionRequeue:
+		span.SetStatus(StatusError, outbox.DispositionRequeue.String())
+		recordErr(span, obs.Err, "subscriber settled Requeue without error")
+	case outbox.DispositionReject:
+		span.SetStatus(StatusError, outbox.DispositionReject.String())
+		recordErr(span, obs.Err, "subscriber settled Reject without error")
+	default:
+		span.SetStatus(StatusError, "invalid disposition")
+		recordErr(span, obs.Err,
+			fmt.Sprintf("subscriber settled invalid disposition %d", obs.Disposition))
+	}
+}

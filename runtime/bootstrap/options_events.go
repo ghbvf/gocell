@@ -71,9 +71,10 @@ func WithConsumerMiddleware(mw ...outbox.SubscriptionMiddleware) Option {
 // conversion boundary: after the business middleware chain, ConsumerBase.Wrap
 // adds idempotency (Claim/Commit/Release) and exponential-backoff retry.
 //
-// When nil, SubscriberWithMiddleware degrades gracefully: handlers run without
-// idempotency protection (nil Settlement). Production composition roots MUST
-// supply a ConsumerBase via this option.
+// When any cell registers subscriptions, phase6 fails fast if this option was
+// not supplied. Composition roots that consume events must wire a ConsumerBase
+// explicitly so idempotency and final settlement lifecycle are not optional by
+// accident.
 //
 // ref: uber-go/fx app.go Invoke — constructor-injected dependency, not
 // middleware-position injection.

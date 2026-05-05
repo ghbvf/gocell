@@ -32,9 +32,9 @@ func WithRouterOptions(opts ...router.Option) Option {
 
 // WithTracer enables distributed tracing. The tracer is forwarded to
 // router.WithTracer (the single HTTP request span owner) and stored on
-// Bootstrap.wrapperTracer so eventrouter.ContractTracingMiddleware can create
-// consumer-side wrapper.WrapConsumer spans. Without this option, HTTP tracing
-// is disabled and WrapConsumer falls back to wrapper.NoopTracer{}; a slog.Warn
+// Bootstrap.wrapperTracer so eventrouter.NewContractTracingSubscriber can create
+// consumer-side wrapper.WrapSubscriber spans. Without this option, HTTP tracing
+// is disabled and WrapSubscriber falls back to wrapper.NoopTracer{}; a slog.Warn
 // is emitted at bootstrap time so ops notice the silent degrade.
 //
 // ref: go-zero — observability configuration at app level
