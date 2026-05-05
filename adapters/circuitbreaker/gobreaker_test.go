@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/runtime/http/middleware"
 )
@@ -210,6 +211,9 @@ func TestNew_EmptyName_Errors(t *testing.T) {
 	a, err := New(Config{})
 	require.Error(t, err, "empty Name must return an error")
 	assert.Nil(t, a)
+	var ec *errcode.Error
+	require.ErrorAs(t, err, &ec)
+	assert.Equal(t, ErrAdapterCircuitBreakerConfig, ec.Code)
 	assert.Contains(t, err.Error(), "Name required")
 }
 

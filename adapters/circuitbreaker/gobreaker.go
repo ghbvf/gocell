@@ -1,13 +1,21 @@
 package circuitbreaker
 
 import (
-	"fmt"
 	"time"
 
 	"github.com/sony/gobreaker/v2"
+
+	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
 const (
+	// ErrAdapterCircuitBreakerConfig signals invalid circuitbreaker.Config
+	// at construction time (e.g. Name empty). Distinct from
+	// ErrValidationFailed (HTTP request-parameter validation) so operators
+	// can route adapter-construction failures separately from request
+	// validation failures.
+	ErrAdapterCircuitBreakerConfig errcode.Code = "ERR_ADAPTER_CIRCUIT_BREAKER_CONFIG"
+
 	// defaultCircuitBreakerTimeout is the default per-call timeout when none is
 	// provided in Config. Matches gobreaker's internal default.
 	defaultCircuitBreakerTimeout = 60 * time.Second
@@ -99,7 +107,8 @@ type Adapter struct {
 // metrics identification. Production configurations must never silently degrade.
 func New(cfg Config) (*Adapter, error) {
 	if cfg.Name == "" {
-		return nil, fmt.Errorf("circuitbreaker: Name required")
+		return nil, errcode.New(errcode.KindInvalid, ErrAdapterCircuitBreakerConfig,
+			"circuitbreaker: Name required")
 	}
 	st := gobreaker.Settings{
 		Name:        cfg.Name,
