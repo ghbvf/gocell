@@ -40,12 +40,16 @@ import (
 const assemblyRefRule01 = "ASSEMBLYREF-METHOD-SET-01"
 
 // expectedAssemblyRefMethods is the canonical method set for cell.AssemblyRef.
-// Each entry is "<name>(<params>) <results>" with go/printer-equivalent
-// formatting (single space between groups, no trailing space).
+// Each entry is "(<param-types>) <result-types>" — parameter and result
+// names are intentionally elided so that this guard locks the capability
+// (which methods exist with which types) rather than the source-level
+// spelling (which is documentation). A pure parameter rename like
+// `Cell(id string) Cell` → `Cell(cellID string) Cell` is intentionally
+// allowed; adding/removing/retyping a method must update this map.
 var expectedAssemblyRefMethods = map[string]string{
 	"ID":      "() string",
 	"CellIDs": "() []string",
-	"Cell":    "(id string) Cell",
+	"Cell":    "(string) Cell",
 }
 
 // TestAssemblyRefMethodSet enforces ASSEMBLYREF-METHOD-SET-01: the
@@ -102,46 +106,46 @@ func findInterfaceDecl(af *ast.File, name string) *ast.InterfaceType {
 	return nil
 }
 
-// formatFuncSignature renders an *ast.FuncType as "(<params>) <results>"
-// matching the canonical Go fmt-equivalent form used in
-// expectedAssemblyRefMethods. A single anonymous result is rendered without
-// parentheses; multiple results, or a single named result (e.g.
-// "(c Cell)"), are parenthesized — matching `gofmt` output. When extending
-// AssemblyRef, write the expected entry in the same form.
+// formatFuncSignature renders an *ast.FuncType as "(<param-types>) <results>"
+// matching the canonical types-only form used in expectedAssemblyRefMethods.
+// A single result is rendered without parentheses regardless of whether the
+// AST carries a name; two or more results are parenthesized. Names of both
+// parameters and results are deliberately discarded — see
+// expectedAssemblyRefMethods doc.
 func formatFuncSignature(ft *ast.FuncType) string {
-	out := "(" + formatFieldList(ft.Params) + ")"
+	out := "(" + formatFieldTypes(ft.Params) + ")"
 	if ft.Results == nil || len(ft.Results.List) == 0 {
 		return out
 	}
-	results := formatFieldList(ft.Results)
-	if len(ft.Results.List) > 1 || len(ft.Results.List[0].Names) > 0 {
+	results := formatFieldTypes(ft.Results)
+	if len(ft.Results.List) > 1 {
 		results = "(" + results + ")"
 	}
 	return out + " " + results
 }
 
-// formatFieldList renders an *ast.FieldList as a comma-joined string of
-// "<names> <type>" segments (or just "<type>" when the field is anonymous).
-// Embedded names within a single field share one type expression.
-func formatFieldList(fl *ast.FieldList) string {
+// formatFieldTypes renders an *ast.FieldList as a comma-joined sequence of
+// type expressions, ignoring all parameter / result names. A field that
+// declares N names with a single type expression contributes N type
+// segments (so `func(a, b string)` and `func(string, string)` both render
+// as "string, string").
+func formatFieldTypes(fl *ast.FieldList) string {
 	if fl == nil {
 		return ""
 	}
 	var parts []string
 	for _, f := range fl.List {
 		typeStr := formatExpr(f.Type)
-		if len(f.Names) == 0 {
+		// One field may declare multiple names sharing the same type; one
+		// type segment per name keeps the rendering equivalent to the
+		// fully-spelled form `func(a string, b string)`.
+		count := len(f.Names)
+		if count == 0 {
+			count = 1
+		}
+		for i := 0; i < count; i++ {
 			parts = append(parts, typeStr)
-			continue
 		}
-		names := ""
-		for i, n := range f.Names {
-			if i > 0 {
-				names += ", "
-			}
-			names += n.Name
-		}
-		parts = append(parts, names+" "+typeStr)
 	}
 	return joinComma(parts)
 }

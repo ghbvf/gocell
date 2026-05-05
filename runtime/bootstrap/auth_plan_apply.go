@@ -19,6 +19,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/httputil"
+	"github.com/ghbvf/gocell/pkg/validation"
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/http/router"
 )
@@ -140,25 +141,27 @@ func discoverAuthVerifierFromAssembly(asm cell.AssemblyRef) (auth.IntentTokenVer
 		// cell.AuthProvider.TokenVerifier() returns cell.IntentTokenVerifier.
 		// auth.IntentTokenVerifier is a Go type alias of cell.IntentTokenVerifier
 		// (runtime/auth/auth.go:56, F6), so the assignment is direct with no
-		// runtime conversion needed.
+		// runtime conversion needed. validation.IsNilInterface catches both
+		// untyped nil and typed-nil verifiers (e.g. `var v *MyVerifier`)
+		// before they propagate into router wiring.
 		v := ap.TokenVerifier()
-		if v == nil {
-			return nil, fmt.Errorf(
-				"bootstrap: cell %q implements authProvider (cell.AuthProvider) but TokenVerifier() returned nil", id)
+		if validation.IsNilInterface(v) {
+			return nil, errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
+				fmt.Sprintf("bootstrap: cell %q implements authProvider (cell.AuthProvider) but TokenVerifier() returned nil", id))
 		}
 		if found != nil {
-			return nil, fmt.Errorf(
-				"bootstrap: multiple authProvider cells discovered: %q and %q; "+
+			return nil, errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
+				fmt.Sprintf("bootstrap: multiple authProvider cells discovered: %q and %q; "+
 					"keep only one or supply the verifier explicitly via cell.NewAuthJWT(verifier)",
-				foundID, id)
+					foundID, id))
 		}
 		found = v
 		foundID = id
 	}
 	if found == nil {
-		return nil, fmt.Errorf(
-			"bootstrap: AuthJWTFromAssembly found no authProvider cell in the assembly; " +
-				"register a cell implementing cell.AuthProvider whose TokenVerifier() returns a non-nil auth.IntentTokenVerifier, " +
+		return nil, errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
+			"bootstrap: AuthJWTFromAssembly found no authProvider cell in the assembly; "+
+				"register a cell implementing cell.AuthProvider whose TokenVerifier() returns a non-nil auth.IntentTokenVerifier, "+
 				"or wire the verifier explicitly via cell.NewAuthJWT(verifier)")
 	}
 	return found, nil

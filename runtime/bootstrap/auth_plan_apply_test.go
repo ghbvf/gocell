@@ -10,6 +10,7 @@ import (
 	"crypto/x509"
 	"net/http"
 	"net/http/httptest"
+	"sort"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -266,6 +267,9 @@ func (a *fakeAssemblyWithCells) CellIDs() []string {
 	for id := range a.cells {
 		ids = append(ids, id)
 	}
+	// Sort to match production CoreAssembly.CellIDs ordering, so that
+	// discovery-error messages naming foundID/id are deterministic.
+	sort.Strings(ids)
 	return ids
 }
 func (a *fakeAssemblyWithCells) Cell(id string) cell.Cell { return a.cells[id] }

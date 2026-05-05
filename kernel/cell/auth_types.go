@@ -105,9 +105,10 @@ type HMACKeyring interface {
 }
 
 // AuthProvider is an optional cell-level interface that exposes an
-// IntentTokenVerifier for runtime authentication. AuthJWTFromAssembly scans
-// the assembly for cells implementing this interface during phase4.
-// This is the kernel projection of the bootstrap-private authProvider interface.
+// IntentTokenVerifier for runtime authentication. AuthJWTFromAssembly walks
+// the assembly's CellIDs in deterministic order during bootstrap phase4 and
+// promotes the unique implementer's verifier; zero, multiple, or nil
+// verifiers are rejected with a startup error.
 type AuthProvider interface {
 	TokenVerifier() IntentTokenVerifier
 }
