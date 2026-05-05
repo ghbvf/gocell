@@ -674,6 +674,7 @@ func TestNewHub_PreservesExplicitConfig(t *testing.T) {
 		ReadLimit:      1024,
 		PingMissMax:    5,
 		MaxConnections: 9,
+		SendBufferSize: 16, // explicit non-zero; must be preserved as-is
 		Clock:          clock.Real(),
 	}
 	handler := func(context.Context, string, []byte) {}
@@ -1210,4 +1211,269 @@ func TestHub_SubjectIdx_EmptyAfterTokenExpiry(t *testing.T) {
 func TestDefaultHubConfig_SendBufferSize(t *testing.T) {
 	cfg := DefaultHubConfig(clock.Real())
 	assert.Equal(t, 32, cfg.SendBufferSize, "default SendBufferSize must be 32")
+}
+
+// ---------------------------------------------------------------------------
+// P1-4: SendBufferSize zero-value fallback
+// ---------------------------------------------------------------------------
+
+func TestHub_NewHub_ZeroSendBufferSize_GetsDefault(t *testing.T) {
+	hub := NewHub(HubConfig{Clock: clock.Real()}, nil)
+	assert.Equal(t, defaultSendBufferSize, hub.Config().SendBufferSize,
+		"zero SendBufferSize must be replaced with defaultSendBufferSize at construction")
+}
+
+// ---------------------------------------------------------------------------
+// P1-2: BroadcastFilter runs filter outside lock (no deadlock when filter calls Send)
+// ---------------------------------------------------------------------------
+
+func TestHub_BroadcastFilter_FilterRunsWithoutLock(t *testing.T) {
+	hub := startHub(t, DefaultHubConfig(clock.Real()), nil)
+
+	conn := newFakeConn("target")
+	require.NoError(t, hub.Register(context.Background(), conn))
+	<-conn.readyCh
+
+	// filter calls hub.Send — if filter ran under connMu this would deadlock.
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_ = hub.BroadcastFilter(context.Background(), []byte("broadcast"),
+			func(c Conn) bool {
+				// Calling Send inside filter must not deadlock.
+				_ = hub.Send(context.Background(), c.ID(), []byte("direct"))
+				return false // broadcast itself sends nothing; direct send above suffices
+			})
+	}()
+
+	select {
+	case <-done:
+		// no deadlock
+	case <-time.After(testtime.EventuallyShort):
+		t.Fatal("BroadcastFilter deadlocked — filter likely ran under connMu")
+	}
+
+	// The direct Send inside the filter should have enqueued one message.
+	require.Eventually(t, func() bool {
+		return len(conn.getWrites()) >= 1
+	}, testtime.D2s, testtime.D10ms)
+}
+
+// ---------------------------------------------------------------------------
+// P1-5: Canceled ctx in Send/BroadcastFilter short-circuits immediately
+// ---------------------------------------------------------------------------
+
+func TestHub_Send_CanceledCtx_DoesNotEnqueue(t *testing.T) {
+	hub := startHub(t, DefaultHubConfig(clock.Real()), nil)
+
+	conn := newFakeConn("target")
+	require.NoError(t, hub.Register(context.Background(), conn))
+	<-conn.readyCh
+
+	canceledCtx, cancel := context.WithCancel(context.Background())
+	cancel() // already canceled
+
+	err := hub.Send(canceledCtx, "target", []byte("should not arrive"))
+	// Send must return ctx.Err() immediately.
+	assert.ErrorIs(t, err, context.Canceled)
+
+	// Conn must receive nothing (canceled ctx short-circuits enqueue).
+	assert.Never(t, func() bool {
+		return len(conn.getWrites()) > 0
+	}, testtime.D100ms, testtime.D10ms)
+}
+
+func TestHub_BroadcastFilter_CanceledCtx_StopsEarly(t *testing.T) {
+	hub := startHub(t, DefaultHubConfig(clock.Real()), nil)
+
+	// Register multiple conns to have something to iterate.
+	conns := make([]*fakeConn, 5)
+	for i := range conns {
+		conns[i] = newFakeConn(fmt.Sprintf("c%d", i))
+		require.NoError(t, hub.Register(context.Background(), conns[i]))
+	}
+	for _, c := range conns {
+		<-c.readyCh
+	}
+
+	canceledCtx, cancel := context.WithCancel(context.Background())
+	cancel() // already canceled
+
+	// BroadcastFilter with canceled ctx must not enqueue on any conn.
+	err := hub.BroadcastFilter(canceledCtx, []byte("no-deliver"),
+		func(Conn) bool { return true })
+	require.NoError(t, err) // BroadcastFilter itself returns nil regardless
+
+	// No conn should have received a message.
+	assert.Never(t, func() bool {
+		for _, c := range conns {
+			if len(c.getWrites()) > 0 {
+				return true
+			}
+		}
+		return false
+	}, testtime.D100ms, testtime.D10ms)
+}
+
+// ---------------------------------------------------------------------------
+// P1-3: Register injects principal into per-conn context for MessageHandler
+// ---------------------------------------------------------------------------
+
+func TestHub_Register_PrincipalInjectedToHandlerCtx(t *testing.T) {
+	gotPrincipal := make(chan *auth.Principal, 1)
+	handler := func(ctx context.Context, _ string, _ []byte) {
+		p, _ := auth.FromContext(ctx)
+		gotPrincipal <- p
+	}
+
+	hub := startHub(t, DefaultHubConfig(clock.Real()), handler)
+
+	p := &auth.Principal{Kind: auth.PrincipalUser, Subject: "alice"}
+	conn := newFakeConnWithPrincipal("conn-with-principal", p)
+	require.NoError(t, hub.Register(context.Background(), conn))
+	<-conn.readyCh
+
+	conn.readCh <- []byte("hello")
+
+	select {
+	case received := <-gotPrincipal:
+		require.NotNil(t, received, "principal must be present in handler ctx")
+		assert.Equal(t, "alice", received.Subject)
+	case <-time.After(testtime.EventuallyShort):
+		t.Fatal("handler did not receive message")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// P2-1: Principal snapshot stability — mutation after Register doesn't affect subjectIdx
+// ---------------------------------------------------------------------------
+
+func TestHub_PrincipalSnapshot_StableAfterMutation(t *testing.T) {
+	hub := startHub(t, DefaultHubConfig(clock.Real()), nil)
+
+	p := &auth.Principal{Kind: auth.PrincipalUser, Subject: "original"}
+	conn := newFakeConnWithPrincipal("conn-snapshot", p)
+	require.NoError(t, hub.Register(context.Background(), conn))
+	<-conn.readyCh
+
+	// Mutate the principal subject after registration.
+	// Hub snapshots subject at Register time; subjectIdx must still use "original".
+	conn.mu.Lock()
+	conn.principal = &auth.Principal{Kind: auth.PrincipalUser, Subject: "mutated"}
+	conn.mu.Unlock()
+
+	// BroadcastToSubject with the original subject must still reach the conn.
+	require.NoError(t, hub.BroadcastToSubject(context.Background(), "original", []byte("ping")))
+	require.Eventually(t, func() bool {
+		return len(conn.getWrites()) == 1
+	}, testtime.D2s, testtime.D10ms,
+		"subjectIdx must use snapshotted subject, not the mutated one")
+
+	// BroadcastToSubject with the mutated subject must be a no-op.
+	require.NoError(t, hub.BroadcastToSubject(context.Background(), "mutated", []byte("should not arrive")))
+	assert.Never(t, func() bool {
+		return len(conn.getWrites()) > 1
+	}, testtime.D100ms, testtime.D10ms,
+		"mutated subject must not appear in subjectIdx")
+}
+
+// ---------------------------------------------------------------------------
+// P1-1 + P2-3: Write failure evicts connection via evictWith (no panic)
+// ---------------------------------------------------------------------------
+
+// writeFailConn returns an error on first Write, then succeeds.
+type writeFailConn struct {
+	*fakeConn
+	failOnce sync.Once
+	failed   chan struct{}
+}
+
+func newWriteFailConn(id string) *writeFailConn {
+	return &writeFailConn{
+		fakeConn: newFakeConn(id),
+		failed:   make(chan struct{}),
+	}
+}
+
+func (w *writeFailConn) Write(ctx context.Context, data []byte) error {
+	var firstFail bool
+	w.failOnce.Do(func() { firstFail = true })
+	if firstFail {
+		close(w.failed)
+		return errors.New("simulated write failure")
+	}
+	return w.fakeConn.Write(ctx, data)
+}
+
+func TestHub_WriteFailureEvictsConnection(t *testing.T) {
+	hub := startHub(t, DefaultHubConfig(clock.Real()), nil)
+
+	conn := newWriteFailConn("write-fail")
+	require.NoError(t, hub.Register(context.Background(), conn))
+	<-conn.readyCh
+
+	// Trigger a write to cause the failure.
+	require.NoError(t, hub.Send(context.Background(), "write-fail", []byte("trigger")))
+
+	// Wait for the write failure signal.
+	select {
+	case <-conn.failed:
+	case <-time.After(testtime.EventuallyShort):
+		t.Fatal("Write was never called")
+	}
+
+	// After write failure, writeLoop should have evicted the connection.
+	require.Eventually(t, func() bool {
+		return hub.ConnCount() == 0
+	}, testtime.D2s, testtime.D10ms,
+		"write failure must evict connection")
+}
+
+// ---------------------------------------------------------------------------
+// P1-1: No send-on-closed-channel panic under concurrent broadcast + evict
+// ---------------------------------------------------------------------------
+
+func TestHub_PanicSafe_NoSendOnClosedChannel(t *testing.T) {
+	cfg := DefaultHubConfig(clock.Real())
+	cfg.SendBufferSize = 1 // tiny buffer to trigger evictions quickly
+	hub := startHub(t, cfg, nil)
+
+	const n = 50
+	for i := range n {
+		conn := newFakeConn(fmt.Sprintf("p%d", i))
+		require.NoError(t, hub.Register(context.Background(), conn))
+	}
+
+	// Wait for all readLoops to be active.
+	require.Eventually(t, func() bool {
+		return hub.ConnCount() == n
+	}, testtime.EventuallyShort, testtime.D1ms)
+
+	var wg sync.WaitGroup
+
+	// Concurrent broadcasters.
+	for range 10 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for range 20 {
+				_ = hub.BroadcastFilter(context.Background(), []byte("burst"),
+					func(Conn) bool { return true })
+			}
+		}()
+	}
+
+	// Concurrent unregisters.
+	for i := range n {
+		wg.Add(1)
+		go func(idx int) {
+			defer wg.Done()
+			hub.Unregister(fmt.Sprintf("p%d", idx))
+		}(i)
+	}
+
+	wg.Wait()
+	// goleak in TestMain will catch leaked goroutines.
+	// race detector catches data races.
+	// No panic = test passes.
 }

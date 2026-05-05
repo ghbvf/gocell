@@ -42,6 +42,14 @@ func (k PrincipalKind) String() string {
 // CallerCellID (the originating cell id extracted from the 4-part service
 // token). Subject is always empty; Roles is always nil. Use RequireCallerCell
 // to authorize internal endpoints by caller allowlist.
+//
+// Immutability contract: After an Authenticator returns a Principal, callers
+// must not modify any field for the lifetime of the request/connection.
+// runtime/websocket.Hub snapshots Subject and ExpiresAt at handshake time and
+// treats the principal as immutable; mutating Subject/Roles/ExpiresAt/Claims
+// after Authenticate has undefined effects on hub subjectIdx and expiry
+// eviction. Slices (Roles) and maps (Claims) are read-only by convention; do
+// not append or mutate. This mirrors the existing Claims map convention.
 type Principal struct {
 	Kind                  PrincipalKind
 	Subject               string
