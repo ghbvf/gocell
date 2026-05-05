@@ -2,6 +2,7 @@ package governance
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -66,6 +67,9 @@ func TestHasHEAD_PropagatesCtxCancel(t *testing.T) {
 	cancel()
 	has, err := hasHEAD(ctx, root)
 	require.Error(t, err, "canceled ctx must propagate, not silently fold to no-HEAD")
+	assert.True(t,
+		errors.Is(err, context.Canceled) || strings.Contains(err.Error(), "canceled"),
+		"expected canceled error, got %v", err)
 	assert.False(t, has)
 }
 
@@ -76,6 +80,9 @@ func TestCommittedInHEAD_PropagatesCtxCancel(t *testing.T) {
 	cancel()
 	committed, err := CommittedInHEAD(ctx, root, "seed.txt")
 	require.Error(t, err, "canceled ctx must propagate, not silently fold to not-committed")
+	assert.True(t,
+		errors.Is(err, context.Canceled) || strings.Contains(err.Error(), "canceled"),
+		"expected canceled error, got %v", err)
 	assert.False(t, committed)
 }
 

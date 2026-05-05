@@ -154,6 +154,10 @@ func Build(ctx context.Context, projectRoot string, project *metadata.ProjectMet
 		Scope:      "assembly-reachable",
 		Entrypoint: filepath.ToSlash(entrypoint),
 	}
+	// collectInits and prometheusProviderNamespace are pure-memory passes
+	// over the already-loaded packages and do not accept ctx; the cancel
+	// check fits here, between package load (which honors ctx via
+	// packages.Config.Context) and the per-package scan loop below.
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}

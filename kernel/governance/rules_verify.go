@@ -356,6 +356,13 @@ func (v *Validator) validateVERIFY06Journey(ctx context.Context, j *metadata.Jou
 	var results []ValidationResult
 	autoCount := 0
 	for i, pc := range j.PassCriteria {
+		if ctx.Err() != nil {
+			// Mirrors the rule pipeline's between-step cancellation check
+			// (validate.go) — once ctx is canceled, skip remaining passCriteria
+			// rather than dispatching futile verifyJourneyRef calls that will
+			// each immediately bail.
+			break
+		}
 		if pc.Mode != "auto" || strings.TrimSpace(pc.CheckRef) == "" {
 			continue
 		}
