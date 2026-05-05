@@ -88,8 +88,8 @@ func TestNewRejectsInvalidConfig(t *testing.T) {
 		{
 			name: "zero_MaxIdle",
 			policy: refresh.Policy{
-				ReuseInterval:  time.Second,
-				MaxAge:         time.Hour,
+				ReuseInterval: time.Second,
+				MaxAge:        time.Hour,
 				// MaxIdle intentionally zero
 				GraceMaxReuses: refresh.DefaultGraceMaxReuses,
 			},
