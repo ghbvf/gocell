@@ -321,3 +321,84 @@ func TestArchtest_BuildConstraint_Violation_Fixture(t *testing.T) {
 	assert.Len(t, violations, wantViolations,
 		"fixture must produce exactly %d violations", wantViolations)
 }
+
+// TestArchtest_RealBuildConstraint_Violation_Fixture is the meta-test for
+// findRealTagViolations. Mirror of TestArchtest_BuildConstraint_Violation_Fixture
+// but for the *_real_test.go gate: only build tags strictly more specific than
+// `integration` are accepted.
+func TestArchtest_RealBuildConstraint_Violation_Fixture(t *testing.T) {
+	t.Parallel()
+
+	fixtures := []struct {
+		name    string
+		content string
+		wantBad bool
+	}{
+		{
+			// No //go:build line at all — file would compile under any tag,
+			// including the bare `integration` runs we want to keep cluster
+			// tests out of.
+			name:    "bad_no_tag_real_test.go",
+			content: "package fixture\n\nimport \"testing\"\n\nfunc TestBad(t *testing.T) {}\n",
+			wantBad: true,
+		},
+		{
+			// //go:build integration alone defeats the purpose of using
+			// _real_test.go as a stricter tier — it would behave identically
+			// to a *_integration_test.go file, so reject.
+			name:    "integration_only_real_test.go",
+			content: "//go:build integration\n\npackage fixture\n\nimport \"testing\"\n\nfunc TestIntegrationOnly(t *testing.T) {}\n",
+			wantBad: true,
+		},
+		{
+			// //go:build integration_cluster — strictly more specific than
+			// integration, the canonical pattern for this gate.
+			name:    "good_cluster_real_test.go",
+			content: "//go:build integration_cluster\n\npackage fixture\n\nimport \"testing\"\n\nfunc TestCluster(t *testing.T) {}\n",
+			wantBad: false,
+		},
+		{
+			// `integration && integration_cluster` is also strictly more
+			// specific (requires both tags). Accepted.
+			name: "good_compound_real_test.go",
+			content: "//go:build integration && integration_cluster\n\n" +
+				"package fixture\n\nimport \"testing\"\n\nfunc TestCompound(t *testing.T) {}\n",
+			wantBad: false,
+		},
+		{
+			// `integration || integration_cluster` accepts the file under
+			// `-tags=integration` alone, defeating the gate. Reject.
+			name:    "or_relaxed_real_test.go",
+			content: "//go:build integration || integration_cluster\n\npackage fixture\n\nimport \"testing\"\n\nfunc TestRelaxed(t *testing.T) {}\n",
+			wantBad: true,
+		},
+	}
+
+	root := t.TempDir()
+	for _, fx := range fixtures {
+		require.NoError(t, os.WriteFile(filepath.Join(root, fx.name), []byte(fx.content), 0o644))
+	}
+
+	violations, err := findRealTagViolations(root)
+	require.NoError(t, err, "findRealTagViolations must not return an error")
+
+	violationSet := make(map[string]bool, len(violations))
+	for _, v := range violations {
+		violationSet[filepath.Base(v)] = true
+	}
+
+	wantViolations := 0
+	for _, fx := range fixtures {
+		if fx.wantBad {
+			wantViolations++
+			assert.True(t, violationSet[fx.name],
+				"expected %q to be flagged as a violation", fx.name)
+		} else {
+			assert.False(t, violationSet[fx.name],
+				"expected %q NOT to be flagged as a violation", fx.name)
+		}
+	}
+
+	assert.Len(t, violations, wantViolations,
+		"fixture must produce exactly %d violations", wantViolations)
+}
