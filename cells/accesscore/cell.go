@@ -201,7 +201,7 @@ func WithConfigGetter(c ports.ConfigGetter) Option {
 // endpoint is gated by Basic Auth credentials from GOCELL_BOOTSTRAP_ADMIN_*
 // env vars (D5: env creds authenticate the operator; request body defines the
 // admin identity). This applies in both bootstrap and interactive modes — the
-// persistent startup credential model (ADR §D9) makes the protection a
+// operator Basic Auth credential (ADR §D2) makes the protection a
 // permanent requirement, not an interactive-only feature.
 //
 // REQUIRED: Init() returns ErrCellInvalidConfig when nil. The closed contract
@@ -259,7 +259,7 @@ type AccessCore struct {
 	// for the POST /setup/admin endpoint. The composition root injects
 	// runtime/auth.NewBootstrapMiddleware here; Init() rejects a nil value
 	// because the closed contract (auth.Route.BootstrapAuth) requires it.
-	// Persistent across both bootstrap and interactive modes (ADR §D9).
+	// Persistent operator authenticator on the single setup-driven admin path (ADR §D2).
 	bootstrapAuth func(http.Handler) http.Handler
 
 	// Slice handlers.

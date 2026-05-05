@@ -195,8 +195,7 @@ func NewSSOBFFApp(opts ...SSOBFFAppOption) (*SSOBFFApp, error) {
 	// Demo deployment runs in interactive mode: no initialadmin lifecycle is
 	// wired (the operator POSTs to /api/v1/access/setup/admin to create the
 	// first admin). Bootstrap credentials are still mandatory — they protect
-	// the setup endpoint via Basic Auth (ADR §D9 persistent startup credential
-	// model). The demo uses the package-local ssobffBootstrap* constants;
+	// the setup endpoint via Basic Auth (ADR §D2 operator credential via env). The demo uses the package-local ssobffBootstrap* constants;
 	// production deployments inject from K8s Secret / Vault.
 	ssobffBootstrapCreds := auth.BootstrapCredentials{
 		Username: []byte(ssobffBootstrapUsername),

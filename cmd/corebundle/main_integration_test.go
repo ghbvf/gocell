@@ -134,5 +134,5 @@ func TestBuildConfigCoreOpts_Postgres_SchemaMismatch(t *testing.T) {
 // TestIntegration_AdminExists_OrphanSwept was deleted by PR #392 follow-up:
 // the entire Sweep / Cleaner / orphan-credfile machinery was removed when
 // initialadmin moved to the env-driven persistent startup credential model
-// (ADR §D3 + §D9). There is no longer a credential file to sweep, so the
+// (ADR §D3 (delete bootstrap mode) + §D2 (operator credential)). There is no longer a credential file to sweep, so the
 // test had no real semantics to assert.

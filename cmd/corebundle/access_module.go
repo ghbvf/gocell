@@ -114,7 +114,7 @@ func (m AccessCoreModule) Provide(
 		}
 	}
 	// Bootstrap credential auth + per-IP token bucket rate limiter protects
-	// the setup/admin endpoint (ADR §D9 persistent startup credential model).
+	// the setup/admin endpoint (ADR §D2 operator credential via env).
 	//
 	// Rate parameters (5 req/min sustained, burst 10) mirror nginx limit_req
 	// defaults for credential endpoints: tight enough to defeat brute-force

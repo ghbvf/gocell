@@ -46,7 +46,10 @@ const (
 	UserSourceIdentity UserSource = "identity"
 	// UserSourceSetup marks an interactive first-run setup row.
 	UserSourceSetup UserSource = "setup"
-	// UserSourceBootstrap marks a headless initial-admin bootstrap row.
+	// UserSourceBootstrap marks a legacy headless-bootstrap provision row.
+	// The bootstrap admin provision mode was removed (ADR §D3 v2), but this
+	// constant is retained to disambiguate orphaned rows created by prior
+	// bootstrap attempts during setup-slice orphan recovery.
 	UserSourceBootstrap UserSource = "bootstrap"
 )
 

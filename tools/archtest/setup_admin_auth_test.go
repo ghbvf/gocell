@@ -145,9 +145,11 @@ func TestFMT27_PublicBootstrapMutuallyExclusive(t *testing.T) {
 		Assemblies: map[string]*metadata.AssemblyMeta{},
 	}
 
-	// The FMT-27 rule (to be implemented in Batch 1 / Agent-B in rules_fmt.go)
-	// should catch auth.public + auth.bootstrap coexistence.
-	// For now, we validate the checker logic inline to confirm this is RED.
+	// TestFMT27_PublicBootstrapMutuallyExclusive locally enforces FMT-27 by
+	// scanning all HTTP contracts for simultaneous auth.public + auth.bootstrap.
+	// The canonical FMT-27 implementation lives in kernel/governance/rules_fmt.go;
+	// this archtest is a static-analysis double-check that runs without the full
+	// governance pipeline.
 	var violations []string
 	for _, c := range project.Contracts {
 		if c.Endpoints.HTTP == nil {
@@ -161,12 +163,15 @@ func TestFMT27_PublicBootstrapMutuallyExclusive(t *testing.T) {
 
 	if len(violations) == 0 {
 		t.Errorf("FMT27: expected 1 violation for public+bootstrap coexistence, got 0 — " +
-			"governance rule validateFMT27 not yet implemented (Batch 1 Agent-B)")
+			"inline checker failed to detect auth.public + auth.bootstrap coexistence")
 	}
 }
 
-// TestFMT28_BootstrapRestrictedToSetupAdminPath verifies that the FMT-28
-// governance rule catches auth.bootstrap:true on non-setup/admin paths.
+// TestFMT28_BootstrapRestrictedToSetupAdminPath locally enforces FMT-28 by
+// scanning HTTP contracts for auth.bootstrap:true on non-setup/admin paths.
+// The canonical FMT-28 implementation lives in kernel/governance/rules_fmt.go;
+// this archtest is a static-analysis double-check that runs without the full
+// governance pipeline.
 // Uses NegativeFixture (synthetic ProjectMeta — no filesystem access).
 func TestFMT28_BootstrapRestrictedToSetupAdminPath(t *testing.T) {
 	t.Parallel()
@@ -218,6 +223,6 @@ func TestFMT28_BootstrapRestrictedToSetupAdminPath(t *testing.T) {
 
 	if len(violations) == 0 {
 		t.Errorf("FMT28: expected 1 violation for bootstrap on non-setup/admin path, got 0 — " +
-			"governance rule validateFMT28 not yet implemented (Batch 1 Agent-B)")
+			"inline checker failed to detect auth.bootstrap:true on non-IsBootstrapPath path")
 	}
 }

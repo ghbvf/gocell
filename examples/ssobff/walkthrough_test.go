@@ -6,7 +6,7 @@
 //  1. Operator provisions the first admin (POST /api/v1/access/setup/admin
 //     with package-local ssobffBootstrap{Username,Password} as Basic Auth).
 //     The admin chose the password directly — passwordResetRequired=false
-//     (D5 + ADR §D9: operator-set passwords are not "initial randoms",
+//     (D2 + D4 (operator credential + plane separation): operator-set passwords are not "initial randoms",
 //     identity-manage's change-password covers the reset flow separately).
 //  2. Admin logs in with chosen password → 201 + passwordResetRequired=false.
 //  3. Internal listener is isolated and service-token protected.
@@ -281,7 +281,7 @@ func TestWalkthrough(t *testing.T) {
 	var adminUserID string
 
 	// Step 1: Operator-provisioned admin login. Operator chose the password,
-	// so passwordResetRequired=false (D5 + ADR §D9). The reset flow itself is
+	// so passwordResetRequired=false (D2 + D4 (operator credential + plane separation)). The reset flow itself is
 	// covered by identity-manage's change-password tests, not by walkthrough.
 	t.Run("provisioned admin can login", func(t *testing.T) {
 		body := fmt.Sprintf(`{"username":%q,"password":%q}`, bootstrapUsername, bootstrapPassword)

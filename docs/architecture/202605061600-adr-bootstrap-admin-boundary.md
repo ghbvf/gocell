@@ -66,9 +66,11 @@ env = operator identity (authenticator)；body = admin identity (subject)。
 - contract.schema.json `auth.responses []int` 字段 + CH-04 双源校验：`declared = responses ∪ auth.responses`，handler AST 不需发出 listener middleware 注入的码（401/429）
 - archtest SETUP-ADMIN-NOT-PUBLIC-01 / AUTH-BOOTSTRAP-PATH-RESTRICTED-01
 
-### D5 — Multi-pod 自然幂等
+### D5 — Setup endpoint 幂等性
 
-setup/admin endpoint 的幂等性由 DB 唯一约束（`users(role=admin)` UNIQUE）天然保证：multi-pod 同时收到 setup POST 时，第一个 INSERT 胜出，后续返回 409；admin 已存在时返回 410 Gone（保持 endpoint 受 Basic Auth 保护，避免 410 oracle）。
+**当前状态（in-memory mode）**：accesscore 仅注册 `mem.UserRepository`；多 pod 部署不属当前支持范围（无共享存储）。单进程幂等由 `cells/accesscore/internal/adminprovision/Provisioner` 的 `sync.Mutex` + admin role 是否已存在的检查保证。
+
+**目标状态（PG adapter 落地后）**：accesscore PG repository + migration 引入 `UNIQUE (role=admin)` 约束，multi-pod 同时收到 setup POST 时第一个 INSERT 胜出，后续 409；admin 已存在时返回 410 Gone（保持 endpoint 受 Basic Auth 保护，避免 410 oracle）。该升级由 backlog `ACCESSCORE-PG-USERS-MIGRATION-01` 跟踪，非本 PR 范围。
 
 不引入拓扑约束：删除原方案中 `GOCELL_REPLICA_COUNT` + `isMultiPod` 检查（拓扑是 hint 不是约束——postmortem P1#4 的修正）。
 
