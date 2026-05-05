@@ -15,15 +15,15 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/domain"
+	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/dto"
+	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/mem"
 	ackcontract "github.com/ghbvf/gocell/generated/contracts/http/device/command/ack/v1"
 	dequeuecontract "github.com/ghbvf/gocell/generated/contracts/http/device/command/dequeue/v1"
 	enqueuecontract "github.com/ghbvf/gocell/generated/contracts/http/device/command/enqueue/v1"
 	extendleasecontract "github.com/ghbvf/gocell/generated/contracts/http/device/command/extend-lease/v1"
 	reportcontract "github.com/ghbvf/gocell/generated/contracts/http/device/command/report/v1"
 	listcontract "github.com/ghbvf/gocell/generated/contracts/http/internalapi/devicecommands/list/v1"
-	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/domain"
-	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/dto"
-	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/mem"
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/cell/celltest"
 	"github.com/ghbvf/gocell/kernel/clock"
@@ -448,10 +448,10 @@ func TestHandleScanActive_InvalidCursor(t *testing.T) {
 
 func TestParseStatusFilterInternal(t *testing.T) {
 	tests := []struct {
-		name      string
-		input     string
-		wantLen   int
-		wantErr   bool
+		name    string
+		input   string
+		wantLen int
+		wantErr bool
 	}{
 		{"empty string returns nil", "", 0, false},
 		{"whitespace returns nil", "   ", 0, false},

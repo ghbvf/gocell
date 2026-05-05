@@ -293,8 +293,8 @@ func TestChangePassword_RejectsBadOldPassword(t *testing.T) {
 	userID := bootstrapAdminUser(t, f, "e2e-wrongpass", "correctpass")
 
 	body, _ := json.Marshal(map[string]string{
-		"oldPassword": "wrongpass",
-		"newPassword": "newpass",
+		"oldPassword": "wrongpass1",
+		"newPassword": "newpass1234",
 	})
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/access/users/"+userID+"/password",
 		bytes.NewReader(body))
