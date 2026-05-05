@@ -60,7 +60,51 @@ func (b *Bootstrap) phase0ValidateOptions() error {
 	if err := b.validateAssemblyClockAlignment(); err != nil {
 		return err
 	}
+	// Advisory check (non-blocking): warn when the declared K8s grace period
+	// is smaller than the bootstrap shutdown budget plus a 10s safety margin.
+	b.warnTerminationGracePeriodInsufficient()
 	return nil
+}
+
+// terminationGraceSafetyMargin is the SIGTERM → process response slack that
+// must remain on top of shutdownTimeout before kubelet escalates to SIGKILL.
+// 10s is the empirical floor — see docs/ops/graceful-shutdown-k8s.md.
+const terminationGraceSafetyMargin = 10 * time.Second
+
+// warnTerminationGracePeriodInsufficient emits a slog.Warn when the operator
+// declared (via WithTerminationGracePeriod) a K8s terminationGracePeriodSeconds
+// that is smaller than the framework's own shutdownTimeout +
+// terminationGraceSafetyMargin.
+//
+// preShutdownDelay does NOT appear in the formula because phase10's shutCtx
+// (phases_shutdown.go) bounds the entire four-stage shutdown — readiness
+// flip + preShutdownDelay + HTTP drain + LIFO teardown — by shutdownTimeout.
+// preShutdownDelay is consumed inside shutdownTimeout, not on top of it
+// (see WithPreShutdownDelay godoc and roadmap N3 deviation note).
+//
+// Behavior is advisory: the helper never returns or panics; misalignment is a
+// deployment-config defect that we surface but do not block on. A zero
+// terminationGracePeriod skips the check (the option was not applied);
+// shutdownTimeout=0 also skips because it indicates a half-built Bootstrap
+// (production code paths via New() always populate shutdownTimeout).
+//
+// ref: docs/ops/graceful-shutdown-k8s.md — formula and pod-spec example.
+func (b *Bootstrap) warnTerminationGracePeriodInsufficient() {
+	if b.terminationGracePeriod <= 0 || b.shutdownTimeout <= 0 {
+		return
+	}
+	minRequired := b.shutdownTimeout + terminationGraceSafetyMargin
+	if b.terminationGracePeriod >= minRequired {
+		return
+	}
+	const hint = "increase Kubernetes pod terminationGracePeriodSeconds to " +
+		">= shutdownTimeout + 10s, or reduce the bootstrap shutdown budget"
+	slog.Warn("bootstrap: terminationGracePeriodSeconds insufficient for graceful shutdown",
+		slog.Duration("termination_grace_period", b.terminationGracePeriod),
+		slog.Duration("shutdown_timeout", b.shutdownTimeout),
+		slog.Duration("pre_shutdown_delay", b.preShutdownDelay),
+		slog.Duration("minimum_required", minRequired),
+		slog.String("hint", hint))
 }
 
 // validateAssemblyClockAlignment ensures that when a pre-built assembly is

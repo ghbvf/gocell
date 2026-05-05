@@ -87,3 +87,26 @@ func WithPreShutdownDelay(d time.Duration) Option {
 		b.preShutdownDelay = d
 	}
 }
+
+// WithTerminationGracePeriod declares the operator's expected K8s pod
+// terminationGracePeriodSeconds for phase0 sanity-check ONLY. The value does
+// NOT change runtime behavior — actual graceful-shutdown windows must be set
+// in the Kubernetes pod spec.
+//
+// When the declared value is positive but smaller than
+// shutdownTimeout + 10s, phase0 emits a slog.Warn so operators can spot a
+// misalignment between the bootstrap budget and the pod-spec grace window
+// before SIGKILL truncates a real shutdown. preShutdownDelay does not
+// appear in the formula because it is consumed inside shutdownTimeout (see
+// WithPreShutdownDelay godoc).
+//
+// Zero value (default) skips the sanity check entirely. Callers that do not
+// run on Kubernetes can omit this option without consequence.
+//
+// ref: Kubernetes pod lifecycle — terminationGracePeriodSeconds bounds the
+// total time between SIGTERM and SIGKILL.
+func WithTerminationGracePeriod(d time.Duration) Option {
+	return func(b *Bootstrap) {
+		b.terminationGracePeriod = d
+	}
+}
