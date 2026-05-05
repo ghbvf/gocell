@@ -12,7 +12,6 @@ import (
 	"github.com/jackc/pgx/v5/stdlib"
 	"github.com/pressly/goose/v3"
 
-	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
@@ -137,15 +136,12 @@ type InvalidIndex struct {
 //   - nil when no invalid indexes exist
 //   - the underlying query error (KindInternal) when DetectInvalidIndexes fails
 //     — this is a real fault (connection, SQL error) and maps to "unhealthy"
-//   - an error wrapping cell.ErrDegraded when indisvalid=false rows are present
-//     — this is a maintenance/degradation signal (CREATE INDEX CONCURRENTLY
-//     in-progress or aborted leftover), not a runtime fault. runtime/http/health.runOneProbe
-//     classifies cell.ErrDegraded as "degraded" → HTTP 200 (fail-open, no pod
-//     eviction); operators see the invalid-index list in /readyz?verbose body
-//     and DROP the index manually.
+//   - an errcode error when indisvalid=false rows are present. Invalid indexes
+//     are a schema fault, so runtime/http/health.runOneProbe classifies this as
+//     "unhealthy" and /readyz returns HTTP 503. Operators see the invalid-index
+//     list in /readyz?verbose diagnostics and DROP the index manually.
 //
 // ref: kubernetes/kubernetes pkg/util/healthz — named health checkers return error.
-// ref: kernel/outbox/emitter.go — same fmt.Errorf wrap cell.ErrDegraded pattern for drop-ratio
 func InvalidIndexCheck(ctx context.Context, pool *Pool) error {
 	indexes, err := DetectInvalidIndexes(ctx, pool)
 	if err != nil {
@@ -158,8 +154,10 @@ func InvalidIndexCheck(ctx context.Context, pool *Pool) error {
 	for _, idx := range indexes {
 		names = append(names, idx.Index)
 	}
-	return fmt.Errorf("schema_guard: %d invalid index(es) [%s]: %w",
-		len(indexes), strings.Join(names, ", "), cell.ErrDegraded)
+	return errcode.New(errcode.KindInternal, ErrAdapterPGQuery,
+		"schema_guard: invalid indexes detected",
+		errcode.WithInternal(fmt.Sprintf("%d invalid index(es): %s", len(indexes), strings.Join(names, ", "))),
+		errcode.WithDetails(slog.Int("invalidCount", len(indexes))))
 }
 
 // DetectInvalidIndexes queries pg_index for any indexes marked as invalid

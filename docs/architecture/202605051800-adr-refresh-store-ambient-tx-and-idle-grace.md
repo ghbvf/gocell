@@ -178,21 +178,18 @@ uniform.
 
 `PGResource.Checkers()` returns two named probes:
 - `postgres_ready`: existing pool ping (no change)
-- `postgres_indexes_valid_ready`: calls `InvalidIndexCheck(ctx, pool)` which wraps
-  `DetectInvalidIndexes` and returns a non-nil error when any `indisvalid=false`
+- `postgres_indexes_valid_ready`: calls `InvalidIndexCheck(ctx, pool)`, which
+  calls `DetectInvalidIndexes` and returns a non-nil error when any `indisvalid=false`
   row exists
 
-**Update (PR#528 follow-up)**: `InvalidIndexCheck` wraps `cell.ErrDegraded`
-when invalid indexes are present (using the same `fmt.Errorf("...: %w", cell.ErrDegraded)`
-pattern as `kernel/outbox/emitter.go` for drop-ratio degradation). This causes
-`runtime/http/health.runOneProbe` to classify the result as **degraded** (HTTP
-200, fail-open) rather than **unhealthy** (HTTP 503, pod evict). Invalid indexes
-are a maintenance signal — CREATE INDEX CONCURRENTLY in-progress or aborted
-leftover — not a runtime fault. Operators see the invalid-index list in the
-`/readyz?verbose` body's `dependencies.postgres_indexes_valid_ready` entry and
-DROP the index manually. The underlying query error path (connection failure,
-SQL error inside `DetectInvalidIndexes`) still returns the raw query error and
-maps to **unhealthy** — that is a real fault.
+**Update (PR#528 follow-up)**: `InvalidIndexCheck` returns a normal
+`KindInternal` errcode error when invalid indexes are present. It deliberately
+does **not** wrap `cell.ErrDegraded`: `/readyz` is the binary traffic gate, so
+schema faults must classify as **unhealthy** (HTTP 503) rather than fail-open
+**degraded** (HTTP 200). Operators still see the invalid-index list in
+`/readyz?verbose` diagnostics and logs, then DROP the index manually. The
+underlying query error path (connection failure, SQL error inside
+`DetectInvalidIndexes`) also maps to **unhealthy**.
 
 **Archtest**: `REFRESH-INVALID-INDEX-SINGLE-SOURCE-01` (AST scan for
 `DetectInvalidIndexes` FuncDecl — asserts exactly one definition).
@@ -320,8 +317,8 @@ are **not** implicit defaults applied by `Validate`.
    attacker defers use.
 3. **Grace counter cap**: prevents indefinite token reuse by concurrent or malicious
    clients within the grace window. After 3 re-uses the chain is cascade-revoked.
-4. **Dual readyz**: invalid indexes (CONCURRENTLY-failed) now surface in the health
-   endpoint before they cause query failures.
+4. **Dual readyz**: invalid indexes (CONCURRENTLY-failed) now surface as a
+   readiness blocker before they cause query failures.
 5. **Redacted rollback logs**: DSN strings from Postgres rollback errors cannot
    leak to log sinks.
 
