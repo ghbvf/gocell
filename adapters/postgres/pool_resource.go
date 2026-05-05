@@ -22,6 +22,7 @@ type poolCloser interface {
 
 // PGResource wraps a Pool as a lifecycle.ManagedResource. Bootstrap uses it to:
 //   - Register the pool health probe in /readyz under the "postgres_ready" name.
+//   - Register the schema invalid-index probe under "postgres_indexes_valid_ready".
 //   - Close the pool during LIFO shutdown.
 //
 // The outbox relay is registered independently via bootstrap.WithManagedResource
@@ -31,11 +32,13 @@ type poolCloser interface {
 //
 // ref: uber-go/fx lifecycle.go@master:L124-L310 — resource lifecycle managed
 // by Hook registration; GoCell converges this into a single ManagedResource.
+// ref: kubernetes/kubernetes pkg/util/healthz — named health checkers.
 type PGResource struct {
-	pool          *Pool
-	name          string                          // health checker name; default "postgres_ready"
-	closeOverride poolCloser                      // non-nil only in tests; replaces pool for Close()
-	healthFunc    func(ctx context.Context) error // non-nil only in tests; replaces pool.Health
+	pool             *Pool
+	name             string                          // health checker name; default "postgres_ready"
+	closeOverride    poolCloser                      // non-nil only in tests; replaces pool for Close()
+	healthFunc       func(ctx context.Context) error // non-nil only in tests; replaces pool.Health
+	invalidIndexFunc func(ctx context.Context) error // non-nil only in tests; replaces InvalidIndexCheck
 }
 
 // NewPGResource creates a PGResource. pool must be non-nil; passing nil
@@ -58,11 +61,15 @@ func NewPGResource(pool *Pool) (*PGResource, error) {
 	}, nil
 }
 
-// Checkers returns a single health probe named after r.name that pings the PG
-// pool. The probe accepts a ctx from the /readyz handler so that a deliberate
-// deadline (e.g. WithReadyzDeadline) propagates into the probe; the probe
-// further caps its own wait at 5 s via an inner context.WithTimeout so that a
-// slow PG does not hold the /readyz response indefinitely.
+// Checkers returns two health probes:
+//
+//  1. r.name ("postgres_ready") — pings the PG pool connection.
+//  2. "postgres_indexes_valid_ready" — calls DetectInvalidIndexes to surface
+//     any indexes left invalid by an interrupted CREATE INDEX CONCURRENTLY.
+//
+// Both probes accept a ctx from the /readyz handler and further cap their own
+// wait at 5 s via an inner context.WithTimeout so that a slow PG does not hold
+// the /readyz response indefinitely.
 //
 // ctx is derived from context.Background() by the readyz handler to avoid
 // kubelet/LB client-ctx cancellation; this probe further bounds at 5s.
@@ -75,11 +82,22 @@ func (r *PGResource) Checkers() map[string]func(context.Context) error {
 	if healthFn == nil {
 		healthFn = r.pool.Health
 	}
+	invalidIdxFn := r.invalidIndexFunc
+	if invalidIdxFn == nil {
+		invalidIdxFn = func(ctx context.Context) error {
+			return InvalidIndexCheck(ctx, r.pool)
+		}
+	}
 	return map[string]func(context.Context) error{
 		r.name: func(ctx context.Context) error {
 			probeCtx, cancel := context.WithTimeout(ctx, defaultPGProbeTimeout)
 			defer cancel()
 			return healthFn(probeCtx)
+		},
+		"postgres_indexes_valid_ready": func(ctx context.Context) error {
+			probeCtx, cancel := context.WithTimeout(ctx, defaultPGProbeTimeout)
+			defer cancel()
+			return invalidIdxFn(probeCtx)
 		},
 	}
 }

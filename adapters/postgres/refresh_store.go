@@ -6,7 +6,6 @@ import (
 	"crypto/sha256"
 	"crypto/subtle"
 	"errors"
-	"fmt"
 	"io"
 	"log/slog"
 	"time"
@@ -17,6 +16,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/ghbvf/gocell/kernel/clock"
+	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/validation"
 	"github.com/ghbvf/gocell/runtime/auth/refresh"
@@ -28,18 +28,28 @@ var _ refresh.Store = (*PGRefreshStore)(nil)
 // gcBatchSize is the number of rows deleted per GC batch iteration.
 const gcBatchSize = 1000
 
+// idleFarFuture is the sentinel used when Policy.MaxIdle is zero (disabled);
+// prevents idle-GC from sweeping rows that have no configured idle window.
+// Any store that has not applied migration 016 or has explicitly set MaxIdle=0
+// will write this sentinel, ensuring the column satisfies the NOT NULL constraint
+// while effectively disabling idle expiry for that row.
+const idleFarFuture = 10 * 365 * 24 * time.Hour
+
 // Append-only SQL statements.
 //
 // Design: Issue and Rotate only INSERT rows; rotated_at and revoked_at are
 // one-way flips; verifier_hash is never updated. Reuse detection cascades
 // revoke_session for the entire session_id lineage.
+//
+// Columns idle_expires_at, first_used_at, used_times are added by migration 016
+// (X12 + X14). Pre-016 rows have idle_expires_at defaulted to created_at + 30d.
 const (
 	insertRowSQL = `
-INSERT INTO refresh_tokens (id, parent_id, session_id, subject_id, selector, verifier_hash, created_at, expires_at)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`
+INSERT INTO refresh_tokens (id, parent_id, session_id, subject_id, selector, verifier_hash, created_at, expires_at, idle_expires_at)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`
 
 	selectBySelectorSQL = `
-SELECT id, session_id, subject_id, verifier_hash, created_at, expires_at, rotated_at, revoked_at
+SELECT id, session_id, subject_id, verifier_hash, created_at, expires_at, rotated_at, revoked_at, idle_expires_at, first_used_at, used_times
 FROM refresh_tokens
 WHERE selector = $1
 ORDER BY created_at DESC
@@ -54,6 +64,14 @@ SET rotated_at = $1
 WHERE id = $2
   AND rotated_at IS NULL`
 
+	// markGraceUsedSQL sets first_used_at on first grace re-use and increments
+	// used_times on every subsequent re-presentation within the grace window.
+	markGraceUsedSQL = `
+UPDATE refresh_tokens
+SET first_used_at = COALESCE(first_used_at, $1),
+    used_times    = used_times + 1
+WHERE id = $2`
+
 	revokeSessionSQL = `
 UPDATE refresh_tokens
 SET revoked_at = $1
@@ -66,11 +84,15 @@ SET revoked_at = $1
 WHERE subject_id = $2
   AND revoked_at IS NULL`
 
+	// gcBatchSQL deletes expired rows: a row is eligible when either its
+	// absolute expires_at or its idle_expires_at has passed the olderThan
+	// threshold. idle_expires_at defaults to now()+30d for pre-016 rows so
+	// they are only swept by expires_at.
 	gcBatchSQL = `
 DELETE FROM refresh_tokens
 WHERE id IN (
     SELECT id FROM refresh_tokens
-    WHERE expires_at < $1
+    WHERE LEAST(expires_at, idle_expires_at) < $1
     LIMIT $2
     FOR UPDATE SKIP LOCKED
 )`
@@ -84,24 +106,34 @@ WHERE id IN (
 // Consistency: L1 LocalTx — Rotate is atomic within a single transaction;
 // Issue and revoke paths are single-statement writes.
 //
+// Transaction contract (B2-A-08): PGRefreshStore never acquires its own
+// transactions. All multi-statement operations (Peek, Rotate) delegate to the
+// injected TxRunner. When the caller already holds an ambient transaction,
+// TxManager creates a savepoint instead of a new top-level transaction, so
+// refresh operations are fully nesting-safe.
+//
 // ref: ory/fosite token/hmac/hmacsha.go (base64url nopad + constant-time compare)
 // ref: ory/hydra persistence/sql/persister_oauth2.go (CAS chain + reuse cascade)
 type PGRefreshStore struct {
-	pool   *pgxpool.Pool
-	policy refresh.Policy
-	clock  clock.Clock
-	rand   io.Reader
+	pool     *pgxpool.Pool
+	txRunner persistence.TxRunner
+	policy   refresh.Policy
+	clock    clock.Clock
+	rand     io.Reader
 }
 
 type refreshRow struct {
-	id           uuid.UUID
-	sessionID    string
-	subjectID    string
-	verifierHash []byte
-	createdAt    time.Time
-	expiresAt    time.Time
-	rotatedAt    *time.Time
-	revokedAt    *time.Time
+	id            uuid.UUID
+	sessionID     string
+	subjectID     string
+	verifierHash  []byte
+	createdAt     time.Time
+	expiresAt     time.Time
+	rotatedAt     *time.Time
+	revokedAt     *time.Time
+	idleExpiresAt time.Time
+	firstUsedAt   *time.Time
+	usedTimes     int
 }
 
 func (r refreshRow) toToken() *refresh.Token {
@@ -114,41 +146,47 @@ func (r refreshRow) toToken() *refresh.Token {
 	}
 }
 
-// NewRefreshStore constructs a PGRefreshStore. Returns a non-nil error if
-// pool/clock are nil or policy values are out of range; callers that prefer
-// fail-fast at composition time can use MustNewRefreshStore.
-func NewRefreshStore(pool *pgxpool.Pool, policy refresh.Policy, clock clock.Clock, randReader io.Reader) (*PGRefreshStore, error) {
+// NewRefreshStore constructs a PGRefreshStore.
+//
+// Returns a non-nil error if pool, txRunner, or clock are nil, or if policy
+// values are out of range.
+//
+// pool is retained for Health probes (ping path); all SQL operations go
+// through execCtx/queryRowCtx which join the ambient transaction from context.
+//
+// txRunner is required: Peek and Rotate need a transaction boundary. Pass
+// NewTxManager(pool) for standalone callers; ambient-tx callers (e.g. session
+// login) provide a shared TxManager whose RunInTx will create a savepoint when
+// a top-level transaction is already in context.
+func NewRefreshStore(
+	pool *pgxpool.Pool,
+	txRunner persistence.TxRunner,
+	policy refresh.Policy,
+	clk clock.Clock,
+	randReader io.Reader,
+) (*PGRefreshStore, error) {
 	if pool == nil {
-		return nil, fmt.Errorf("postgres.NewRefreshStore: pool must not be nil")
+		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "postgres.NewRefreshStore: pool must not be nil")
 	}
-	if validation.IsNilInterface(clock) {
-		return nil, fmt.Errorf("postgres.NewRefreshStore: clock must not be nil")
+	if validation.IsNilInterface(txRunner) {
+		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "postgres.NewRefreshStore: txRunner must not be nil")
 	}
-	if policy.MaxAge <= 0 {
-		return nil, fmt.Errorf("postgres.NewRefreshStore: policy.MaxAge must be positive")
+	if validation.IsNilInterface(clk) {
+		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "postgres.NewRefreshStore: clock must not be nil")
 	}
-	if policy.ReuseInterval < 0 {
-		return nil, fmt.Errorf("postgres.NewRefreshStore: policy.ReuseInterval must not be negative")
+	if err := policy.Validate(); err != nil {
+		return nil, errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed, "postgres.NewRefreshStore", err)
 	}
 	if validation.IsNilInterface(randReader) {
 		randReader = rand.Reader
 	}
 	return &PGRefreshStore{
-		pool:   pool,
-		policy: policy,
-		clock:  clock,
-		rand:   randReader,
+		pool:     pool,
+		txRunner: txRunner,
+		policy:   policy,
+		clock:    clk,
+		rand:     randReader,
 	}, nil
-}
-
-// MustNewRefreshStore is the composition-root fail-fast variant of
-// NewRefreshStore. It panics when NewRefreshStore returns an error.
-func MustNewRefreshStore(pool *pgxpool.Pool, policy refresh.Policy, clock clock.Clock, randReader io.Reader) *PGRefreshStore {
-	store, err := NewRefreshStore(pool, policy, clock, randReader)
-	if err != nil {
-		panic(err.Error())
-	}
-	return store
 }
 
 // execCtx executes a SQL statement against the ambient transaction in ctx when
@@ -159,6 +197,15 @@ func (s *PGRefreshStore) execCtx(ctx context.Context, sql string, args ...any) (
 		return tx.Exec(ctx, sql, args...)
 	}
 	return s.pool.Exec(ctx, sql, args...)
+}
+
+// queryRowCtx queries a single row against the ambient transaction in ctx when
+// one is present. Falls back to the pool when no tx is in context.
+func (s *PGRefreshStore) queryRowCtx(ctx context.Context, sql string, args ...any) pgx.Row {
+	if tx, ok := TxFromContext(ctx); ok {
+		return tx.QueryRow(ctx, sql, args...)
+	}
+	return s.pool.QueryRow(ctx, sql, args...)
 }
 
 // generatePair delegates to the shared refresh.GeneratePair helper (F10).
@@ -178,11 +225,12 @@ func (s *PGRefreshStore) Issue(ctx context.Context, sessionID, subjectID string)
 	}
 	now := s.clock.Now()
 	expiresAt := now.Add(s.policy.MaxAge)
+	idleExpiresAt := s.idleDeadline(now)
 	id := uuid.New()
 	verHash := sha256.Sum256(ver)
 
 	if _, err := s.execCtx(ctx, insertRowSQL,
-		id, uuid.NullUUID{}, sessionID, subjectID, sel, verHash[:], now, expiresAt,
+		id, uuid.NullUUID{}, sessionID, subjectID, sel, verHash[:], now, expiresAt, idleExpiresAt,
 	); err != nil {
 		return "", nil, errcode.Wrap(errcode.KindInternal, ErrAdapterPGQuery, "refresh store: issue", err)
 	}
@@ -196,34 +244,54 @@ func (s *PGRefreshStore) Issue(ctx context.Context, sessionID, subjectID string)
 	}, nil
 }
 
+// idleDeadline returns now + MaxIdle when MaxIdle is configured, or a far-future
+// sentinel when MaxIdle is zero (pre-016 migration stores that have not yet
+// been configured with an idle expiry window).
+func (s *PGRefreshStore) idleDeadline(now time.Time) time.Time {
+	if s.policy.MaxIdle > 0 {
+		return now.Add(s.policy.MaxIdle)
+	}
+	return now.Add(idleFarFuture)
+}
+
 // Peek validates the presented wire token without advancing the lineage.
+//
+// Callers MUST call Peek (and Rotate) within an ambient transaction created by
+// the injected TxRunner. PGRefreshStore no longer acquires its own transactions
+// (B2-A-08 ambient-only model).
 func (s *PGRefreshStore) Peek(ctx context.Context, presented string) (*refresh.Token, error) {
 	sel, ver, ok := refresh.ParseOpaque(presented)
 	if !ok {
 		return nil, rejectWithReason("malformed", "")
 	}
 
-	tx, err := s.pool.Begin(ctx)
-	if err != nil {
-		return nil, errcode.Wrap(errcode.KindInternal, ErrAdapterPGConnect, "refresh store: peek begin", err)
-	}
-	committed := false
-	defer func() {
-		if !committed {
-			_ = tx.Rollback(context.WithoutCancel(ctx))
+	var row refreshRow
+	var rejectErr error
+	err := s.txRunner.RunInTx(ctx, func(txCtx context.Context) error {
+		var innerErr error
+		// Peek is read-only by contract: pass mutate=false so the grace
+		// counter (used_times) is not incremented. Cascade revoke on
+		// reuse / grace_exhausted still fires (it bypasses the ambient tx
+		// directly via s.pool.Exec — security response must persist).
+		row, innerErr = s.validatePresentedInTx(txCtx, sel, ver, false)
+		if innerErr == nil {
+			return nil
 		}
-	}()
-
-	row, err := s.validatePresentedInTx(ctx, tx, sel, ver)
-	if err != nil && !errors.Is(err, refresh.ErrRejected) {
-		return nil, err
-	}
-	if cErr := tx.Commit(ctx); cErr != nil {
-		return nil, errcode.Wrap(errcode.KindInternal, ErrAdapterPGConnect, "refresh store: peek commit", cErr)
-	}
-	committed = true
+		if errors.Is(innerErr, refresh.ErrRejected) {
+			// Capture reject through an outer variable so RunInTx commits the
+			// transaction. This persists the cascade-revoke SQL (reuse_detected /
+			// grace_exhausted) and keeps commit/rollback latency uniform across
+			// branches (B2-A-09 timing oracle defense).
+			rejectErr = innerErr
+			return nil
+		}
+		return innerErr
+	})
 	if err != nil {
 		return nil, err
+	}
+	if rejectErr != nil {
+		return nil, rejectErr
 	}
 	return row.toToken(), nil
 }
@@ -234,49 +302,58 @@ func (s *PGRefreshStore) Peek(ctx context.Context, presented string) (*refresh.T
 // so callers cannot enumerate cause via error shape or timing. The transaction
 // is committed uniformly on ErrRejected so that commit-vs-rollback latency is
 // not an oracle on whether a cascade-revoke happened.
+//
+// Callers MUST call Rotate within an ambient transaction or with a standalone
+// context. PGRefreshStore delegates transaction management to the injected
+// TxRunner (B2-A-08 ambient-only model).
 func (s *PGRefreshStore) Rotate(ctx context.Context, presented string) (string, *refresh.Token, error) {
 	sel, ver, ok := refresh.ParseOpaque(presented)
 	if !ok {
 		return "", nil, rejectWithReason("malformed", "")
 	}
 
-	tx, err := s.pool.Begin(ctx)
-	if err != nil {
-		return "", nil, errcode.Wrap(errcode.KindInternal, ErrAdapterPGConnect, "refresh store: rotate begin", err)
-	}
-	committed := false
-	defer func() {
-		if !committed {
-			_ = tx.Rollback(context.WithoutCancel(ctx))
+	var wire string
+	var tok *refresh.Token
+	var rejectErr error
+	err := s.txRunner.RunInTx(ctx, func(txCtx context.Context) error {
+		var innerErr error
+		wire, tok, innerErr = s.rotateInTx(txCtx, sel, ver)
+		if innerErr == nil {
+			return nil
 		}
-	}()
-
-	wire, tok, err := s.rotateInTx(ctx, tx, sel, ver)
-	if err != nil && !errors.Is(err, refresh.ErrRejected) {
+		if errors.Is(innerErr, refresh.ErrRejected) {
+			// Capture reject through an outer variable so RunInTx commits the
+			// transaction. This persists the cascade-revoke SQL on reuse_detected /
+			// grace_exhausted, and keeps commit latency uniform across branches
+			// (B2-A-09 timing oracle defense).
+			rejectErr = innerErr
+			return nil
+		}
+		return innerErr
+	})
+	if err != nil {
 		return "", nil, err
 	}
-
-	// Commit unconditionally on success and on ErrRejected so commit latency
-	// does not distinguish happy paths from rejections. For read-only reject
-	// branches the commit is a no-op; for reuse_detected it persists the
-	// cascade revoke.
-	if cErr := tx.Commit(ctx); cErr != nil {
-		return "", nil, errcode.Wrap(errcode.KindInternal, ErrAdapterPGConnect, "refresh store: rotate commit", cErr)
+	if rejectErr != nil {
+		return "", nil, rejectErr
 	}
-	committed = true
-	return wire, tok, err
+	return wire, tok, nil
 }
 
-// rotateInTx orchestrates the Rotate branches within an open transaction.
-func (s *PGRefreshStore) rotateInTx(ctx context.Context, tx pgx.Tx, sel, ver []byte) (string, *refresh.Token, error) {
-	row, err := s.validatePresentedInTx(ctx, tx, sel, ver)
+// rotateInTx orchestrates the Rotate branches within a transaction context.
+func (s *PGRefreshStore) rotateInTx(ctx context.Context, sel, ver []byte) (string, *refresh.Token, error) {
+	// Rotate is the mutating path: pass mutate=true so the grace counter
+	// is incremented when the parent has already been rotated and is being
+	// re-presented within the grace window.
+	row, err := s.validatePresentedInTx(ctx, sel, ver, true)
 	if err != nil {
 		return "", nil, err
 	}
 
 	// Happy path or grace retry — INSERT a child whose parent_id points to
 	// row.id (the current generation), then flip row.id.rotated_at iff this is
-	// the first rotation.
+	// the first rotation. The child's idle_expires_at is reset to now+MaxIdle
+	// (sliding window: each rotation extends the idle deadline).
 	newSel, newVer, err := s.generatePair()
 	if err != nil {
 		return "", nil, err
@@ -285,16 +362,17 @@ func (s *PGRefreshStore) rotateInTx(ctx context.Context, tx pgx.Tx, sel, ver []b
 	newID := uuid.New()
 	newHash := sha256.Sum256(newVer)
 	newExpires := now.Add(s.policy.MaxAge)
+	newIdleExpires := s.idleDeadline(now)
 
-	if _, err := tx.Exec(ctx, insertRowSQL,
+	if _, err := s.execCtx(ctx, insertRowSQL,
 		newID, uuid.NullUUID{UUID: row.id, Valid: true},
-		row.sessionID, row.subjectID, newSel, newHash[:], now, newExpires,
+		row.sessionID, row.subjectID, newSel, newHash[:], now, newExpires, newIdleExpires,
 	); err != nil {
 		return "", nil, errcode.Wrap(errcode.KindInternal, ErrAdapterPGQuery, "refresh store: rotate insert child", err)
 	}
 
 	if row.rotatedAt == nil {
-		if _, err := tx.Exec(ctx, markRotatedSQL, now, row.id); err != nil {
+		if _, err := s.execCtx(ctx, markRotatedSQL, now, row.id); err != nil {
 			return "", nil, errcode.Wrap(errcode.KindInternal, ErrAdapterPGQuery, "refresh store: mark parent rotated", err)
 		}
 	}
@@ -308,12 +386,18 @@ func (s *PGRefreshStore) rotateInTx(ctx context.Context, tx pgx.Tx, sel, ver []b
 	}, nil
 }
 
-func (s *PGRefreshStore) validatePresentedInTx(ctx context.Context, tx pgx.Tx, sel, ver []byte) (refreshRow, error) {
-	row, err := s.selectBySelectorInTx(ctx, tx, sel)
+// validatePresentedInTx validates the presented (selector, verifier) within
+// the ambient transaction. mutate=true is the Rotate path (increments
+// used_times in the grace branch); mutate=false is the Peek path (read-only
+// by contract — Peek MUST NOT consume the grace budget). Cascade revoke on
+// reuse / grace-exhausted bypasses the ambient tx in both paths because it
+// is a security response that must persist regardless of caller rollback.
+func (s *PGRefreshStore) validatePresentedInTx(ctx context.Context, sel, ver []byte, mutate bool) (refreshRow, error) {
+	row, err := s.selectBySelectorInTx(ctx, sel)
 	if err != nil {
 		return refreshRow{}, err
 	}
-	if err := s.lockSessionInTx(ctx, tx, row.sessionID); err != nil {
+	if err := s.lockSessionInTx(ctx, row.sessionID); err != nil {
 		return refreshRow{}, err
 	}
 
@@ -321,18 +405,19 @@ func (s *PGRefreshStore) validatePresentedInTx(ctx context.Context, tx pgx.Tx, s
 	// READ COMMITTED race where a child rotation validates before a concurrent
 	// reuse-detection transaction revokes the session, then inserts a new child
 	// after the cascade has already run.
-	row, err = s.selectBySelectorInTx(ctx, tx, sel)
+	row, err = s.selectBySelectorInTx(ctx, sel)
 	if err != nil {
 		return refreshRow{}, err
 	}
-	return s.validateRow(ctx, tx, row, ver)
+	return s.validateRow(ctx, row, ver, mutate)
 }
 
-func (s *PGRefreshStore) selectBySelectorInTx(ctx context.Context, tx pgx.Tx, sel []byte) (refreshRow, error) {
+func (s *PGRefreshStore) selectBySelectorInTx(ctx context.Context, sel []byte) (refreshRow, error) {
 	var row refreshRow
-	err := tx.QueryRow(ctx, selectBySelectorSQL, sel).Scan(
+	err := s.queryRowCtx(ctx, selectBySelectorSQL, sel).Scan(
 		&row.id, &row.sessionID, &row.subjectID,
 		&row.verifierHash, &row.createdAt, &row.expiresAt, &row.rotatedAt, &row.revokedAt,
+		&row.idleExpiresAt, &row.firstUsedAt, &row.usedTimes,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return refreshRow{}, rejectWithReason("selector_miss", "")
@@ -343,39 +428,118 @@ func (s *PGRefreshStore) selectBySelectorInTx(ctx context.Context, tx pgx.Tx, se
 	return row, nil
 }
 
-func (s *PGRefreshStore) lockSessionInTx(ctx context.Context, tx pgx.Tx, sessionID string) error {
-	if _, err := tx.Exec(ctx, lockSessionSQL, sessionID); err != nil {
+func (s *PGRefreshStore) lockSessionInTx(ctx context.Context, sessionID string) error {
+	if _, err := s.execCtx(ctx, lockSessionSQL, sessionID); err != nil {
 		return errcode.Wrap(errcode.KindInternal, ErrAdapterPGQuery, "refresh store: session lock", err)
 	}
 	return nil
 }
 
-func (s *PGRefreshStore) validateRow(ctx context.Context, tx pgx.Tx, row refreshRow, ver []byte) (refreshRow, error) {
+func (s *PGRefreshStore) validateRow(ctx context.Context, row refreshRow, ver []byte, mutate bool) (refreshRow, error) {
+	if err := s.checkBasicValidity(row, ver); err != nil {
+		return refreshRow{}, err
+	}
+
+	if row.rotatedAt == nil {
+		return row, nil
+	}
+	if err := s.handleRotatedRow(ctx, row, mutate); err != nil {
+		return refreshRow{}, err
+	}
+	return row, nil
+}
+
+// checkBasicValidity verifies hash, revoke flag, hard expiry, and idle expiry.
+// Returns refresh.ErrRejected (via rejectWithReason) on any failure.
+func (s *PGRefreshStore) checkBasicValidity(row refreshRow, ver []byte) error {
 	presentedHash := sha256.Sum256(ver)
 	if subtle.ConstantTimeCompare(presentedHash[:], row.verifierHash) != 1 {
-		return refreshRow{}, rejectWithReason("verifier_miss", row.sessionID)
+		return rejectWithReason("verifier_miss", row.sessionID)
 	}
-
 	now := s.clock.Now()
 	if row.revokedAt != nil {
-		return refreshRow{}, rejectWithReason("revoked", row.sessionID)
+		return rejectWithReason("revoked", row.sessionID)
 	}
 	if !row.expiresAt.After(now) {
-		return refreshRow{}, rejectWithReason("expired", row.sessionID)
+		return rejectWithReason("expired", row.sessionID)
+	}
+	// X12: idle-expiry check. migration 016 ensures idle_expires_at is always
+	// non-zero (NOT NULL with a 30-day default for pre-016 rows). When
+	// Policy.MaxIdle is zero, idle-expiry is disabled (stores that have not yet
+	// applied migration 016 set MaxIdle=0 at the application layer).
+	if s.policy.MaxIdle > 0 && !row.idleExpiresAt.After(now) {
+		return rejectWithReason("idle_expired", row.sessionID)
+	}
+	return nil
+}
+
+// handleRotatedRow runs grace-cap, reuse-window, and used_times-increment
+// branches for rows whose parent has already been rotated once. Caller has
+// already verified the row is otherwise valid.
+//
+// mutate=false (Peek path): grace cap and reuse-window cascade revoke still
+// fire (security response must persist on any presentation, even read-only
+// preflight), but the in-grace used_times increment is skipped — Peek is
+// strictly read-only by Store contract and must not consume grace budget.
+//
+// mutate=true (Rotate path): in-grace re-presentation increments used_times
+// via markGraceUsedSQL so that the counter approaches GraceMaxReuses.
+func (s *PGRefreshStore) handleRotatedRow(ctx context.Context, row refreshRow, mutate bool) error {
+	now := s.clock.Now()
+
+	// X14: grace counter cap. If the grace cap is configured and this parent
+	// has already been re-presented GraceMaxReuses times, treat this as a
+	// reuse attack regardless of ReuseInterval.
+	if s.policy.GraceMaxReuses > 0 && row.usedTimes >= s.policy.GraceMaxReuses {
+		slog.Error("refresh token grace counter exhausted",
+			slog.String("session_id", row.sessionID),
+			slog.String("subject_id", row.subjectID),
+			slog.String("reason", "reuse_detected"),
+			slog.Int("used_times", row.usedTimes),
+		)
+		// Bypass the ambient transaction for the cascade revoke: a reuse-attack
+		// response MUST persist even when the caller's tx rolls back. We use the
+		// underlying pool directly, not execCtx, so the revoke commits on its
+		// own connection regardless of the outer RunInTx outcome.
+		if _, execErr := s.pool.Exec(ctx, revokeSessionSQL, now, row.sessionID); execErr != nil {
+			return errcode.Wrap(errcode.KindInternal, ErrAdapterPGQuery, "refresh store: grace exhausted cascade", execErr)
+		}
+		return rejectWithReason("reuse_detected", row.sessionID)
 	}
 
-	if row.rotatedAt != nil && now.Sub(*row.rotatedAt) > s.policy.ReuseInterval {
-		if _, execErr := tx.Exec(ctx, revokeSessionSQL, now, row.sessionID); execErr != nil {
-			return refreshRow{}, errcode.Wrap(errcode.KindInternal, ErrAdapterPGQuery, "refresh store: reuse cascade", execErr)
-		}
+	if now.Sub(*row.rotatedAt) > s.policy.ReuseInterval {
+		// Reuse detected: log as security event BEFORE the cascade SQL so that
+		// the security-observable log entry is not delayed by DB latency.
+		// The cascade revoke path is slower than other reject branches due to
+		// the UPDATE SQL; we accept this timing difference (B2-A-09: string
+		// processing and log formatting are uniform across all branches; the
+		// DB write is the only unavoidable timing oracle).
 		slog.Error("refresh token reuse detected",
 			slog.String("session_id", row.sessionID),
+			slog.String("subject_id", row.subjectID),
 			slog.String("reason", "reuse_detected"),
 		)
-		return refreshRow{}, refresh.ErrRejected
+		// Bypass the ambient transaction (see grace-exhausted branch above): the
+		// cascade revoke must commit on its own connection so that an outer
+		// caller rollback does not undo the attack response.
+		if _, execErr := s.pool.Exec(ctx, revokeSessionSQL, now, row.sessionID); execErr != nil {
+			return errcode.Wrap(errcode.KindInternal, ErrAdapterPGQuery, "refresh store: reuse cascade", execErr)
+		}
+		return rejectWithReason("reuse_detected", row.sessionID)
 	}
 
-	return row, nil
+	// Within grace window. Only Rotate consumes the grace budget; Peek is
+	// read-only by Store contract and must not advance used_times even when
+	// the parent is in the grace window (otherwise a single sessionrefresh
+	// request — Peek + Rotate — would consume two slots and exhaust grace
+	// twice as fast as the policy intends).
+	if !mutate {
+		return nil
+	}
+	if _, execErr := s.execCtx(ctx, markGraceUsedSQL, now, row.id); execErr != nil {
+		return errcode.Wrap(errcode.KindInternal, ErrAdapterPGQuery, "refresh store: mark grace used", execErr)
+	}
+	return nil
 }
 
 // RevokeSession marks every row in the session_id lineage as revoked.
@@ -417,9 +581,14 @@ func (s *PGRefreshStore) GC(ctx context.Context, olderThan time.Time) (int, erro
 }
 
 // rejectWithReason emits a Warn slog line and returns refresh.ErrRejected.
-// Every non-happy Rotate branch funnels through this helper so error shape
-// and log cadence stay uniform. session_id is empty for reasons observed
-// before the DB is consulted (malformed, selector_miss).
+// Every non-happy Rotate/Peek branch funnels through this helper so error
+// shape and log cadence stay uniform (B2-A-09 timing/log uniformity).
+//
+// reuse_detected callers additionally emit a slog.Error BEFORE calling this
+// helper (since the security event requires Error level), but the function
+// execution path is uniform: every branch calls rejectWithReason once.
+// session_id is empty for reasons observed before the DB is consulted
+// (malformed, selector_miss).
 func rejectWithReason(reason, sessionID string) error {
 	if sessionID == "" {
 		slog.Warn("refresh token rejected", slog.String("reason", reason))

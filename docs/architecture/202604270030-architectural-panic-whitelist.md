@@ -44,7 +44,7 @@ panic on error):
   (`cell.RouteGroup.Register` signature changed to `func(RouteMux) error`;
   bootstrap phase5 propagates)
 - `adapters/postgres/refresh_store.go::NewRefreshStore` → `(*PGRefreshStore, error)`
-  + `MustNewRefreshStore`
+  (B2-A-11: `MustNewRefreshStore` removed; error-first only)
 - `kernel/outbox/entry_id.go::NewEntryID` → `(string, error)` + `MustNewEntryID`
 - `kernel/idempotency/inmem.go::newToken` → `(string, error)` (private;
   propagated to `Claim` which already returns error)
@@ -81,10 +81,11 @@ explicit through a `Must*` wrapper.
 - **`Must*` prefix**: Go community convention for the panic-on-misuse
   twin of an error-returning constructor. Examples in this PR:
   `MustNewAuthJWT`, `MustHTTPHandler`, `MustWrapConsumer`,
-  `MustMount`, `MustNewRefreshStore`, `MustNewEntryID`,
+  `MustMount`, `MustNewEntryID`,
   `MustMarshalDirectEnvelope` (renamed from non-Must form), plus
   pre-existing `MustValidateLabels`, `MustRegister`, `MustNewTestKeyProvider`,
   `MustCookieSession`, etc.
+  (Note: `MustNewRefreshStore` was removed in B2-A-11 / PR-V1-PG-REFRESH-HARDEN-AND-IDLE-GRACE.)
 
 ### 6. PR-MODE-6.1 scope expansion
 

@@ -27,9 +27,13 @@ import (
 
 func newCascadeStore(t *testing.T) refresh.Store {
 	t.Helper()
-	clock := storetest.NewFakeClock(time.Now())
+	clk := storetest.NewFakeClock(time.Now())
 	policy := refresh.Policy{ReuseInterval: testtime.SlowPoll, MaxAge: time.Hour}
-	return refreshmem.MustNew(policy, clock, nil)
+	store, err := refreshmem.New(policy, clk, nil)
+	if err != nil {
+		panic("test setup: " + err.Error())
+	}
+	return store
 }
 
 func TestService_Lock_RevokesRefreshChain(t *testing.T) {

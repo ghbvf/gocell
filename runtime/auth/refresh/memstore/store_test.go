@@ -47,14 +47,13 @@ func (*typedNilReader) Read([]byte) (int, error) {
 }
 
 // TestMemStoreContract runs the full C1-C7 contract test suite (T1-T12) against
-// the in-memory store. In the TDD red phase the memstore stubs return nil/nil,
-// so the suite is expected to fail on most sub-tests.
+// the in-memory store.
 func TestMemStoreContract(t *testing.T) {
 	storetest.RunContractSuite(t, func(t *testing.T, policy refresh.Policy) (refresh.Store, *storetest.FakeClock) {
-		clock := storetest.NewFakeClock(baseTime)
-		// Pass nil for rand so memstore falls back to crypto/rand (fine for
-		// the red phase; B3 may inject a deterministic reader for hermeticity).
-		return memstore.MustNew(policy, clock, nil), clock
+		clk := storetest.NewFakeClock(baseTime)
+		store, err := memstore.New(policy, clk, nil)
+		require.NoError(t, err)
+		return store, clk
 	})
 }
 
@@ -119,8 +118,8 @@ func TestNewDefaultsTypedNilRandReader(t *testing.T) {
 	require.NoError(t, err)
 }
 
-func TestMustNewPanicsOnInvalidConfig(t *testing.T) {
-	require.Panics(t, func() {
-		memstore.MustNew(refresh.Policy{}, nil, nil)
-	})
+func TestNewRejectsInvalidPolicyAndNilClock(t *testing.T) {
+	// empty policy (zero MaxAge, zero ReuseInterval) with nil clock
+	_, err := memstore.New(refresh.Policy{}, nil, nil)
+	require.Error(t, err, "New with invalid policy and nil clock must return error")
 }

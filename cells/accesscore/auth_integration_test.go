@@ -129,7 +129,8 @@ func loginAndGetPair(t *testing.T, opts ...loginOption) loginResult {
 	require.NoError(t, err)
 
 	intClock := storetest.NewFakeClock(time.Now())
-	intRefreshStore := refreshmem.MustNew(refresh.Policy{ReuseInterval: testtime.D2s, MaxAge: time.Hour}, intClock, nil)
+	intRefreshStore, err := refreshmem.New(refresh.Policy{ReuseInterval: testtime.D2s, MaxAge: time.Hour}, intClock, nil)
+	require.NoError(t, err)
 
 	ks, _, _ := auth.MustNewTestKeySet(clock.Real())
 
