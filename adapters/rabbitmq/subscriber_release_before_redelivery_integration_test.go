@@ -143,22 +143,18 @@ func (c *flakyCommitOnceClaimer) Claim(
 		return state, r, err
 	}
 	idx := c.receiptIdx.Add(1)
-	if idx == 1 {
-		return state, &flakyCommitReceipt{inner: r, attempts: &c.commitAttempts, failOn: 1, idx: idx}, nil
-	}
-	return state, &flakyCommitReceipt{inner: r, attempts: &c.commitAttempts, failOn: 0, idx: idx}, nil
+	return state, &flakyCommitReceipt{inner: r, attempts: &c.commitAttempts, failFirst: idx == 1}, nil
 }
 
 type flakyCommitReceipt struct {
-	inner    idempotency.Receipt
-	attempts *atomic.Int32
-	failOn   int32 // when idx == failOn, return error from Commit
-	idx      int32
+	inner     idempotency.Receipt
+	attempts  *atomic.Int32
+	failFirst bool // first invocation of Commit returns error; subsequent pass through
 }
 
 func (r *flakyCommitReceipt) Commit(ctx context.Context) error {
 	r.attempts.Add(1)
-	if r.idx == r.failOn {
+	if r.failFirst {
 		return errors.New("simulated commit failure (lease expired)")
 	}
 	return r.inner.Commit(ctx)

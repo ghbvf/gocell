@@ -173,10 +173,10 @@ func (b *Bootstrap) checkConsumerBaseConfiguredForSubscriptions(s *phaseState) e
 						"add WithConsumerBase to bootstrap options", id, sub.Spec.Topic)
 			}
 			return fmt.Errorf(
-				"bootstrap: cell %s registered subscription topic %q but ConsumerBase was not constructed via "+
+				"bootstrap: cell %s registered subscription topic %q but ConsumerBase (%T) was not constructed via "+
 					"outbox.NewConsumerBase (got a zero-value `&outbox.ConsumerBase{}` literal); "+
 					"call outbox.NewConsumerBase to obtain a properly initialized value",
-				id, sub.Spec.Topic)
+				id, sub.Spec.Topic, b.consumerBase)
 		}
 	}
 	return nil

@@ -71,6 +71,15 @@ type testContextKey string
 // callOrderRecorder lets a test pin the broker-vs-application call ordering on
 // the commit_failed path (N8 K#12 release-first). Default nil = no recording so
 // existing tests are untouched.
+//
+// Three pieces work together:
+//  1. callOrderRecorder type and methods (this section).
+//  2. mockChannel.recorder field + Ack/Nack record (head of file ~L106).
+//  3. mockReceipt.recorder field + Commit/Release record (tail of file ~L2451).
+//
+// The fields are deliberately split because mockChannel and mockReceipt are
+// already separated; cross-references in their docstrings keep the wiring
+// discoverable.
 type callOrderRecorder struct {
 	mu  sync.Mutex
 	seq []string
@@ -103,6 +112,7 @@ type mockChannel struct {
 
 	// recorder, when non-nil, records "ack"/"nack" markers in call order so
 	// release-vs-broker ordering can be asserted on the commit_failed path.
+	// Pair: see mockReceipt.recorder + callOrderRecorder above.
 	recorder *callOrderRecorder
 
 	publishCalled     bool
@@ -2448,6 +2458,7 @@ type mockReceipt struct {
 
 	// recorder, when non-nil, records "commit"/"release" markers in call order
 	// so release-vs-broker ordering can be asserted on the commit_failed path.
+	// Pair: see mockChannel.recorder + callOrderRecorder at the head of file.
 	recorder *callOrderRecorder
 }
 

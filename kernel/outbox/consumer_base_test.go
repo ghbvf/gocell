@@ -889,10 +889,9 @@ func TestWrap_LeaseRenewal_HandlerComplete_StopsGoroutine(t *testing.T) {
 }
 
 // TestWrap_LeaseRenewalLoop_TransientExtendError_LogsWarnAndContinues covers
-// the slog.Any("error", err) branch inside leaseRenewalLoop (consumer_base.go:581-584).
-// The branch fires when Extend returns a non-ErrLeaseExpired (transient) error.
-// The renewal loop must log the warning and continue ticking rather than
-// canceling the handler context.
+// the transient-extend-error warn branch inside leaseRenewalLoop:
+// non-ErrLeaseExpired Extend errors must log a warning and continue ticking
+// rather than canceling the handler context.
 func TestWrap_LeaseRenewalLoop_TransientExtendError_LogsWarnAndContinues(t *testing.T) {
 	defer goleak.VerifyNone(t)
 
