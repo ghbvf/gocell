@@ -88,20 +88,45 @@ func TestOutboxPayloadSize01_ConstantDeclaredAndUsedByValidate(t *testing.T) {
 	if validate == nil {
 		t.Fatalf("OUTBOX-PAYLOAD-SIZE-01-B: cannot locate (Entry).Validate in %s", src)
 	}
-	var referenced bool
+	// Look specifically for a `len(e.Payload) > MaxPayloadBytes` (or `>=`)
+	// comparison. Merely importing / shadowing the const is not enough — it
+	// must drive an actual size check, otherwise the cap is decorative
+	// ("`_ = MaxPayloadBytes`" would have passed an ident-only scan).
+	var compared bool
 	ast.Inspect(validate.Body, func(n ast.Node) bool {
-		id, ok := n.(*ast.Ident)
-		if ok && id.Name == constName {
-			referenced = true
-			return false
+		bin, ok := n.(*ast.BinaryExpr)
+		if !ok {
+			return true
 		}
-		return true
+		if bin.Op != token.GTR && bin.Op != token.GEQ {
+			return true
+		}
+		// LHS must be `len(e.Payload)` (or `len(<recv>.Payload)`).
+		lenCall, ok := bin.X.(*ast.CallExpr)
+		if !ok || len(lenCall.Args) != 1 {
+			return true
+		}
+		lenIdent, ok := lenCall.Fun.(*ast.Ident)
+		if !ok || lenIdent.Name != "len" {
+			return true
+		}
+		sel, ok := lenCall.Args[0].(*ast.SelectorExpr)
+		if !ok || sel.Sel.Name != "Payload" {
+			return true
+		}
+		// RHS must reference MaxPayloadBytes by name.
+		rhs, ok := bin.Y.(*ast.Ident)
+		if !ok || rhs.Name != constName {
+			return true
+		}
+		compared = true
+		return false
 	})
-	if !referenced {
+	if !compared {
 		t.Errorf(
-			"OUTBOX-PAYLOAD-SIZE-01-B: (Entry).Validate body must reference %s "+
-				"(otherwise the cap is decorative). Insert "+
-				"`if len(e.Payload) > %s { return errcode.New(...) }`.",
+			"OUTBOX-PAYLOAD-SIZE-01-B: (Entry).Validate body must contain a "+
+				"`len(<recv>.Payload) > %s` comparison (or >=). A bare reference "+
+				"such as `_ = %s` is not sufficient — the comparison is the cap.",
 			constName, constName,
 		)
 	}

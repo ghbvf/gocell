@@ -38,7 +38,11 @@ type RelayCollector interface {
 	RecordBatchSize(size int)
 
 	// RecordReclaim records the number of stale entries reclaimed back to
-	// pending (or dead-lettered). Called once per reclaimStale invocation.
+	// pending (or dead-lettered). Called once per reclaimStale tick **only
+	// when count > 0** — idle reclaim sweeps are not observed (the metric
+	// is a recovery counter, not a tick frequency gauge). This contrasts
+	// with RecordBatchSize which is also called on size==0 cycles so
+	// dashboards can detect a totally idle relay.
 	RecordReclaim(count int64)
 
 	// RecordCleanup records the number of entries removed during periodic

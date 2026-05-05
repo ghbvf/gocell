@@ -360,6 +360,9 @@ func TestRelay_HandleFailedEntry_StaleLease_RetryNotCounted(t *testing.T) {
 	assert.Equal(t, 1, store.markRetryCalls, "MarkRetry must be invoked once")
 	assert.Zero(t, stats.retried, "stats.retried must NOT be incremented when lease was lost")
 	assert.Zero(t, stats.dead, "stats.dead must NOT be incremented")
+	assert.Equal(t, 1, stats.lost,
+		"stats.lost must record the lease-lost writeback so providerRelayCollector "+
+			"emits outbox_relayed_total{outcome=\"lost\"}")
 }
 
 // stalePublishStore returns (false, nil) from MarkPublished — the fencing
@@ -436,6 +439,95 @@ func TestRelay_HandleFailedEntry_StaleLease_DeadNotCounted(t *testing.T) {
 	assert.Equal(t, 1, store.markDeadCalls, "MarkDead must be invoked once")
 	assert.Zero(t, stats.dead, "stats.dead must NOT be incremented when lease was lost")
 	assert.Zero(t, stats.retried)
+	assert.Equal(t, 1, stats.lost,
+		"stats.lost must record the lease-lost dead writeback so providerRelayCollector "+
+			"emits outbox_relayed_total{outcome=\"lost\"}")
+}
+
+// countingReclaimStore wraps minimalStore to count ReclaimStale invocations
+// and stage a return-count sequence. Each Pop returns the next configured
+// count; if the slice is exhausted, returns 0 (drained).
+type countingReclaimStore struct {
+	*minimalStore
+	mu        sync.Mutex
+	calls     int
+	plan      []int // staged return values, popped front-to-back
+	batchSeen []int // batchSize values observed per call
+}
+
+func newCountingReclaimStore(plan ...int) *countingReclaimStore {
+	return &countingReclaimStore{minimalStore: newMinimalStore(), plan: plan}
+}
+
+func (s *countingReclaimStore) ReclaimStale(
+	_ context.Context, _ time.Duration, _ int, _, _ time.Duration, batchSize int,
+) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.calls++
+	s.batchSeen = append(s.batchSeen, batchSize)
+	if len(s.plan) == 0 {
+		return 0, nil
+	}
+	next := s.plan[0]
+	s.plan = s.plan[1:]
+	return next, nil
+}
+
+// TestRelay_ReclaimStale_DrainsBacklogWithinSingleTick verifies B2-A-06: when
+// the store reports `count == batchSize` (i.e. there is more residual), the
+// reclaim helper loops until a sweep returns `< batchSize`, draining a backlog
+// of N×batchSize rows inside one tick instead of N ReclaimInterval ticks.
+func TestRelay_ReclaimStale_DrainsBacklogWithinSingleTick(t *testing.T) {
+	// Plan: 1000 (full), 1000 (full), 500 (residual) — should make 3 calls
+	// and stop on the third because 500 < 1000.
+	store := newCountingReclaimStore(1000, 1000, 500)
+	relay := &Relay{
+		store:   store,
+		cfg:     RelayConfig{ReclaimBatchSize: 1000}.WithDefaults(),
+		metrics: &safeRelayCollector{inner: kout.NoopRelayCollector{}},
+		clock:   clock.Real(),
+	}
+
+	require.NoError(t, relay.reclaimStale(context.Background()))
+
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	assert.Equal(t, 3, store.calls,
+		"reclaimStale must loop until ReclaimStale returns < batchSize "+
+			"(plan was 1000,1000,500 → 3 calls)")
+	for i, b := range store.batchSeen {
+		assert.Equal(t, 1000, b,
+			"call %d must request the configured ReclaimBatchSize=1000", i)
+	}
+}
+
+// TestRelay_ReclaimStale_HitsMaxIterationsCap verifies the safety bound: a
+// pathological store that always returns count==batch must not spin
+// forever inside one tick. After reclaimMaxIterations sweeps the loop
+// breaks, leaving the residual for the next tick.
+func TestRelay_ReclaimStale_HitsMaxIterationsCap(t *testing.T) {
+	plan := make([]int, reclaimMaxIterations+8) // more than enough
+	for i := range plan {
+		plan[i] = 1000 // always full
+	}
+	store := newCountingReclaimStore(plan...)
+	relay := &Relay{
+		store:   store,
+		cfg:     RelayConfig{ReclaimBatchSize: 1000}.WithDefaults(),
+		metrics: &safeRelayCollector{inner: kout.NoopRelayCollector{}},
+		clock:   clock.Real(),
+	}
+
+	require.NoError(t, relay.reclaimStale(context.Background()))
+
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	assert.Equal(t, reclaimMaxIterations, store.calls,
+		"reclaimStale must stop at reclaimMaxIterations (%d) and let the next "+
+			"tick continue draining; otherwise a runaway store/Producer pair "+
+			"could starve the reclaim goroutine inside one tick.",
+		reclaimMaxIterations)
 }
 
 // ---------------------------------------------------------------------------
