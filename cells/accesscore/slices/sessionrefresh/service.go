@@ -13,6 +13,7 @@ import (
 	"github.com/ghbvf/gocell/cells/accesscore/internal/ports"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/sessionmint"
 	"github.com/ghbvf/gocell/kernel/clock"
+	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/validation"
 	"github.com/ghbvf/gocell/runtime/auth"
@@ -33,12 +34,26 @@ func WithClock(clk clock.Clock) Option {
 	}
 }
 
+// WithTxManager wires the cross-store TxRunner. The Refresh flow wraps the
+// validate→update→rotate sequence in a single RunInTx so the session repo
+// and refresh store updates share one commit boundary; nil tx is silently
+// ignored to keep the option idempotent — final non-nil enforcement is in
+// NewService.
+func WithTxManager(tx persistence.TxRunner) Option {
+	return func(s *Service) {
+		if tx != nil {
+			s.txRunner = tx
+		}
+	}
+}
+
 // Service implements token refresh logic.
 type Service struct {
 	sessionRepo  ports.SessionRepository
 	userRepo     ports.UserRepository
 	roleRepo     ports.RoleRepository
 	refreshStore refresh.Store
+	txRunner     persistence.TxRunner
 	issuer       *auth.JWTIssuer
 	logger       *slog.Logger
 	clock        clock.Clock
@@ -92,6 +107,10 @@ func NewService(
 	for _, o := range opts {
 		o(s)
 	}
+	if s.txRunner == nil {
+		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"sessionrefresh: TxRunner required; use WithTxManager")
+	}
 	clock.MustHaveClock(s.clock, "sessionrefresh.NewService: clock required — use WithClock(c.clk)")
 	return s, nil
 }
@@ -123,6 +142,14 @@ func MustNewService(
 // selector.verifier wire format) fails ParseOpaque inside refresh.Store and
 // returns refresh.ErrRejected — the same fail-closed behavior as
 // before (TestAuthIntent_AccessTokenBlockedAtRefreshPath).
+//
+// Cross-store ACID: the Peek → verifySession → fetchPasswordResetRequired →
+// persistRefreshedSession → Rotate sequence runs inside a single
+// txRunner.RunInTx so that PG refresh-store and PG session-repo writes share
+// one commit boundary. If any step returns an error the outer transaction
+// rolls back, leaving both stores at pre-refresh state. Cascade revokes go
+// through refreshStore.RevokeSessionDetached, which intentionally bypasses
+// the outer transaction (PR#395 detached-context invariant).
 func (s *Service) Refresh(ctx context.Context, refreshToken string) (dto.TokenPair, error) {
 	if err := validation.RequireNotEmpty(errcode.ErrAuthRefreshInvalidInput,
 		validation.F("refreshToken", refreshToken),
@@ -130,15 +157,33 @@ func (s *Service) Refresh(ctx context.Context, refreshToken string) (dto.TokenPa
 		return dto.TokenPair{}, err
 	}
 
+	var pair dto.TokenPair
+	do := func(txCtx context.Context) error {
+		var err error
+		pair, err = s.refreshInTx(txCtx, refreshToken)
+		return err
+	}
+	if err := s.txRunner.RunInTx(ctx, do); err != nil {
+		return dto.TokenPair{}, err
+	}
+
+	s.logger.Info("token refreshed", slog.String("user_id", pair.UserID))
+	return pair, nil
+}
+
+// refreshInTx executes the validate→update→rotate sequence under the outer
+// RunInTx boundary established by Refresh. All store touches (Peek, session
+// GetByID/Update, user GetByID, refresh Rotate) join that outer transaction
+// via savepoint nesting. Cascade-revoke calls intentionally bypass the
+// outer TX through RevokeSessionDetached (PR#395 detached-context invariant).
+func (s *Service) refreshInTx(ctx context.Context, refreshToken string) (dto.TokenPair, error) {
 	presented, err := s.refreshStore.Peek(ctx, refreshToken)
 	if err != nil {
 		return dto.TokenPair{}, s.refreshStoreError("session-refresh: refresh store peek failed", err)
 	}
 
 	// Belt-and-braces: double-check the backing session has not been revoked
-	// out-of-band (e.g. a logout that bypassed the refresh store). Session
-	// verification is extracted to verifySession to keep cognitive complexity
-	// within the ≤15 limit (F4/F5/gocognit).
+	// out-of-band (e.g. a logout that bypassed the refresh store).
 	session, err := s.verifySession(ctx, presented.SessionID)
 	if err != nil {
 		return dto.TokenPair{}, err
@@ -172,9 +217,9 @@ func (s *Service) Refresh(ctx context.Context, refreshToken string) (dto.TokenPa
 		return dto.TokenPair{}, err
 	}
 
-	// Persist the session validation horizon before the final Rotate. If Rotate
-	// fails afterwards, the refresh lineage is still unchanged and JWT exp still
-	// bounds any already-issued access token.
+	// Persist the session validation horizon before the final Rotate. With
+	// the outer RunInTx in place, a Rotate failure rolls the session update
+	// back as well — both stores share one commit boundary.
 	if err := s.persistRefreshedSession(ctx, session, minted.AccessToken, minted.ExpiresAt); err != nil {
 		return dto.TokenPair{}, err
 	}
@@ -189,8 +234,6 @@ func (s *Service) Refresh(ctx context.Context, refreshToken string) (dto.TokenPa
 		}
 		return dto.TokenPair{}, authRefreshRejected()
 	}
-
-	s.logger.Info("token refreshed", slog.String("user_id", session.UserID))
 
 	return dto.TokenPair{
 		AccessToken:           minted.AccessToken,
