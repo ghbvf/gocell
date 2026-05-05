@@ -68,6 +68,9 @@ func runValidate(args []string) error {
 	// CLI does not yet plumb a signal-aware ctx through Dispatch; declaring
 	// Background here is the only allowed cancellation surface for now and
 	// is honored all the way down to runGit / verifyJourneyRef subprocesses.
+	// Backlog: B2-X-07 GOCELL-DISPATCH-SIGNAL-AWARE-CTX (docs/backlog2.md §7)
+	// will replace this with a signal.NotifyContext-bound ctx threaded
+	// through Dispatch + every sub-command.
 	ctx := context.Background()
 	if *failFast {
 		return runValidateFailFast(ctx, printer, *format, validator, depChecker, *strict)

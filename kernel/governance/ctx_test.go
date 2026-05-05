@@ -68,6 +68,12 @@ func TestValidateFailFast_ShortCircuitsOnFirstError(t *testing.T) {
 	require.NotEmpty(t, findByCode(failFast, "REF-01"), "REF-01 must fire under fail-fast")
 	assert.Empty(t, findByCode(failFast, "ADV-05"),
 		"ADV-05 must NOT fire under fail-fast: short-circuit broke")
+	// Rule-code-agnostic short-circuit signature: fail-fast strictly produces
+	// fewer findings than the full pass. Holds regardless of rules() ordering
+	// because the only reason fail-fast can match the full count is if no
+	// rule ever errored, which the require.NotEmpty above already rules out.
+	assert.Less(t, len(failFast), len(full),
+		"fail-fast must produce strictly fewer findings than full Validate when an error fires")
 }
 
 // TestValidate_RespectsCtxCancel proves that a canceled context unwinds the
