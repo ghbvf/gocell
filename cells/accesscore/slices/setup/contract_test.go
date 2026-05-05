@@ -134,14 +134,13 @@ func TestHttpAuthSetupAdminV1Serve(t *testing.T) {
 		requireErrorCode(t, rec.Body.Bytes(), errcode.ErrAuthUserDuplicate)
 	})
 
-	t.Run("409 bootstrap-pending duplicate response satisfies contract", func(t *testing.T) {
+	t.Run("409 duplicate username response satisfies contract", func(t *testing.T) {
 		userRepo := mem.NewUserRepository()
 		roleRepo := mem.NewRoleRepository()
-		orphan, err := domain.NewUser("root", "root@local", "$2a$10$oldhash00000000000000000000000000000000000000000000000", time.Now())
+		existing, err := domain.NewUser("root", "root@local", "$2a$10$oldhash00000000000000000000000000000000000000000000000", time.Now())
 		require.NoError(t, err)
-		orphan.ID = "usr-bootstrap-prior"
-		orphan.MarkProvisionPending(domain.UserSourceBootstrap, time.Now())
-		require.NoError(t, userRepo.Create(context.Background(), orphan))
+		existing.ID = "usr-prior"
+		require.NoError(t, userRepo.Create(context.Background(), existing))
 		svc := newService(t, userRepo, roleRepo, &stubWriter{})
 		h := setup.NewHandler(svc, testPassthroughAuth)
 

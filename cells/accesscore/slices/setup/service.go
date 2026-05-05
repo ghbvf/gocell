@@ -240,7 +240,6 @@ func (s *Service) provisionAndMaybeEmit(ctx context.Context, in CreateAdminInput
 		Email:        in.Email,
 		PasswordHash: hash,
 		RequireReset: false,
-		Source:       domain.UserSourceSetup,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("setup: ensure admin: %w", err)
@@ -249,13 +248,6 @@ func (s *Service) provisionAndMaybeEmit(ctx context.Context, in CreateAdminInput
 	case adminprovision.OutcomeAlreadyExists, adminprovision.OutcomeRaceSkipped:
 		return nil, setupRetiredError()
 	case adminprovision.OutcomeCreated:
-		if err := s.publishUserCreated(ctx, result.User); err != nil {
-			return nil, err
-		}
-	case adminprovision.OutcomeOrphanRecovered:
-		s.logger.Warn("setup: orphan user recovered; emitting user.created",
-			slog.String("event", "setup_orphan_recover"),
-			slog.String("user_id", result.User.ID))
 		if err := s.publishUserCreated(ctx, result.User); err != nil {
 			return nil, err
 		}

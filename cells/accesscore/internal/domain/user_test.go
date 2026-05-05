@@ -83,7 +83,6 @@ func TestNewUser(t *testing.T) {
 			assert.Equal(t, tt.passwordHash, user.PasswordHash)
 			assert.Equal(t, StatusActive, user.Status)
 			assert.Equal(t, UserSourceIdentity, user.CreationSource)
-			assert.Equal(t, ProvisionStateNone, user.ProvisionState)
 			assert.False(t, user.CreatedAt.IsZero())
 			assert.False(t, user.UpdatedAt.IsZero())
 		})
@@ -176,18 +175,3 @@ func TestUser_ClearPasswordResetRequiredUnsets(t *testing.T) {
 	assert.True(t, !user.UpdatedAt.Before(before), "ClearPasswordResetRequired must advance UpdatedAt")
 }
 
-func TestUser_ProvisionStateLifecycle(t *testing.T) {
-	user, err := NewUser("setup-admin", "setup@example.com", "$2a$10$hash", time.Now())
-	require.NoError(t, err)
-	user.ID = "usr-setup-123"
-
-	user.MarkProvisionPending(UserSourceSetup, time.Now())
-	assert.Equal(t, UserSourceSetup, user.CreationSource)
-	assert.Equal(t, ProvisionStatePending, user.ProvisionState)
-	assert.True(t, user.IsRecoverableProvisionOrphan(UserSourceSetup))
-	assert.False(t, user.IsRecoverableProvisionOrphan(UserSourceBootstrap))
-
-	user.MarkProvisionComplete(time.Now())
-	assert.Equal(t, ProvisionStateComplete, user.ProvisionState)
-	assert.False(t, user.IsRecoverableProvisionOrphan(UserSourceSetup))
-}

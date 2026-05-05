@@ -41,7 +41,6 @@ func stdInput() adminprovision.ProvisionInput {
 		Email:        "admin@local",
 		PasswordHash: []byte("$2a$10$stubhash0000000000000000000000000000000000000000"),
 		RequireReset: true,
-		Source:       domain.UserSourceBootstrap,
 	}
 }
 
@@ -201,8 +200,7 @@ func TestProvisioner_Ensure_FreshSystem_CreatesUserAndRole(t *testing.T) {
 	_, parseErr := uuid.Parse(user.ID)
 	assert.NoError(t, parseErr, "user ID must be a valid UUID")
 	assert.True(t, user.PasswordResetRequired)
-	assert.Equal(t, domain.UserSourceBootstrap, user.CreationSource)
-	assert.Equal(t, domain.ProvisionStateComplete, user.ProvisionState)
+	assert.Equal(t, domain.UserSourceSetup, user.CreationSource)
 	// Role assigned
 	cnt, err := roleRepo.CountByRole(context.Background(), auth.RoleAdmin)
 	require.NoError(t, err)
@@ -239,130 +237,7 @@ func TestProvisioner_Ensure_RaceSkipped_NoCreatedUserReturned(t *testing.T) {
 	assert.False(t, roleRepo.assignCalled, "AssignToUser must NOT run on race path")
 }
 
-const orphanPriorID = "11111111-1111-4111-8111-111111111177"
 
-func TestProvisioner_Ensure_OrphanRecovered_ResumesAssignment(t *testing.T) {
-	userRepo := mem.NewUserRepository()
-	// Pre-seed an orphan user (previous crash between Create + Assign): row
-	// exists but no admin role assigned.
-	orphan, err := domain.NewUser("admin", "admin@local", "$2a$10$oldhash000000000000000000000000000000000000000000000", time.Now())
-	require.NoError(t, err)
-	orphan.ID = orphanPriorID
-	orphan.MarkProvisionPending(domain.UserSourceBootstrap, time.Now())
-	require.NoError(t, userRepo.Create(context.Background(), orphan))
-
-	roleRepo := mem.NewRoleRepository()
-	p := newProvisioner(t, userRepo, roleRepo, fixedUUID("x"))
-
-	user, outcome, err := ensureForTest(p, context.Background(), stdInput())
-	require.NoError(t, err)
-	assert.Equal(t, adminprovision.OutcomeOrphanRecovered, outcome)
-	require.NotNil(t, user)
-	assert.Equal(t, orphanPriorID, user.ID, "orphan ID preserved")
-	// Hash was rewritten to the new caller-supplied hash
-	refreshed, err := userRepo.GetByID(context.Background(), orphanPriorID)
-	require.NoError(t, err)
-	assert.Equal(t, string(stdInput().PasswordHash), refreshed.PasswordHash)
-	assert.Equal(t, domain.UserSourceBootstrap, refreshed.CreationSource)
-	assert.Equal(t, domain.ProvisionStateComplete, refreshed.ProvisionState)
-	// Role now assigned
-	cnt, err := roleRepo.CountByRole(context.Background(), auth.RoleAdmin)
-	require.NoError(t, err)
-	assert.Equal(t, 1, cnt)
-}
-
-func TestProvisioner_Ensure_DuplicateIdentityUser_ReturnsConflictWithoutTakeover(t *testing.T) {
-	userRepo := mem.NewUserRepository()
-	existing, err := domain.NewUser("admin", "admin@local", "$2a$10$existinghash000000000000000000000000000000000000000", time.Now())
-	require.NoError(t, err)
-	existing.ID = "usr-existing-identity"
-	require.NoError(t, userRepo.Create(context.Background(), existing))
-
-	roleRepo := mem.NewRoleRepository()
-	p := newProvisioner(t, userRepo, roleRepo, fixedUUID("x"))
-
-	user, outcome, err := ensureForTest(p, context.Background(), stdInput())
-	require.Error(t, err)
-	assert.Nil(t, user)
-	assert.Equal(t, adminprovision.OutcomeUnknown, outcome)
-	var ec *errcode.Error
-	require.ErrorAs(t, err, &ec)
-	assert.Equal(t, errcode.ErrAuthUserDuplicate, ec.Code)
-
-	refreshed, err := userRepo.GetByID(context.Background(), "usr-existing-identity")
-	require.NoError(t, err)
-	assert.Equal(t, "$2a$10$existinghash000000000000000000000000000000000000000", refreshed.PasswordHash)
-	assert.False(t, refreshed.PasswordResetRequired)
-	assert.Equal(t, domain.UserSourceIdentity, refreshed.CreationSource)
-	assert.Equal(t, domain.ProvisionStateNone, refreshed.ProvisionState)
-	cnt, err := roleRepo.CountByRole(context.Background(), auth.RoleAdmin)
-	require.NoError(t, err)
-	assert.Equal(t, 0, cnt, "duplicate identity user must not be promoted")
-}
-
-func TestProvisioner_Ensure_DuplicateDifferentSource_ReturnsConflictWithoutTakeover(t *testing.T) {
-	const bootstrapPendingID = "33333333-3333-4333-8333-333333333377"
-	userRepo := mem.NewUserRepository()
-	existing, err := domain.NewUser("admin", "admin@local", "$2a$10$bootstraphash00000000000000000000000000000000000000", time.Now())
-	require.NoError(t, err)
-	existing.ID = bootstrapPendingID
-	existing.MarkProvisionPending(domain.UserSourceBootstrap, time.Now())
-	existing.MarkPasswordResetRequired(time.Now())
-	require.NoError(t, userRepo.Create(context.Background(), existing))
-
-	roleRepo := mem.NewRoleRepository()
-	p := newProvisioner(t, userRepo, roleRepo, fixedUUID("x"))
-
-	in := stdInput()
-	in.Source = domain.UserSourceSetup
-	in.RequireReset = false
-	user, outcome, err := ensureForTest(p, context.Background(), in)
-	require.Error(t, err)
-	assert.Nil(t, user)
-	assert.Equal(t, adminprovision.OutcomeUnknown, outcome)
-	var ec *errcode.Error
-	require.ErrorAs(t, err, &ec)
-	assert.Equal(t, errcode.ErrAuthUserDuplicate, ec.Code)
-
-	refreshed, err := userRepo.GetByID(context.Background(), bootstrapPendingID)
-	require.NoError(t, err)
-	assert.Equal(t, "$2a$10$bootstraphash00000000000000000000000000000000000000", refreshed.PasswordHash)
-	assert.True(t, refreshed.PasswordResetRequired)
-	assert.Equal(t, domain.UserSourceBootstrap, refreshed.CreationSource)
-	assert.Equal(t, domain.ProvisionStatePending, refreshed.ProvisionState)
-	cnt, err := roleRepo.CountByRole(context.Background(), auth.RoleAdmin)
-	require.NoError(t, err)
-	assert.Equal(t, 0, cnt, "different-source pending row must not be promoted")
-}
-
-func TestProvisioner_Ensure_OrphanUpdateFails_Surfaced(t *testing.T) {
-	// Orphan path reached, but UserRepo.Update fails when rewriting the hash.
-	inner := mem.NewUserRepository()
-	orphan, _ := domain.NewUser("admin", "admin@local", "$2a$10$orphanold", time.Now())
-	orphan.ID = "22222222-2222-4222-8222-222222222277"
-	orphan.MarkProvisionPending(domain.UserSourceBootstrap, time.Now())
-	require.NoError(t, inner.Create(context.Background(), orphan))
-	userRepo := &updateFailUserRepo{inner: inner, updateErr: errors.New("update failed")}
-
-	roleRepo := mem.NewRoleRepository()
-	p := newProvisioner(t, userRepo, roleRepo, fixedUUID("x"))
-	_, outcome, err := ensureForTest(p, context.Background(), stdInput())
-	require.Error(t, err)
-	assert.Equal(t, adminprovision.OutcomeUnknown, outcome)
-	assert.ErrorContains(t, err, "reset orphan credentials")
-}
-
-func TestProvisioner_Ensure_OrphanLookupFails_Surfaced(t *testing.T) {
-	// Duplicate Create + CountByRole=0 → orphan recovery triggers GetByUsername;
-	// but GetByUsername fails.
-	userRepo := &orphanLookupFailRepo{duplicateUserRepo: duplicateUserRepo{}, lookupErr: errors.New("lookup failed")}
-	roleRepo := &scriptedRoleRepo{counts: []int{0, 0}}
-	p := newProvisioner(t, userRepo, roleRepo, fixedUUID("x"))
-	_, outcome, err := ensureForTest(p, context.Background(), stdInput())
-	require.Error(t, err)
-	assert.Equal(t, adminprovision.OutcomeUnknown, outcome)
-	assert.ErrorContains(t, err, "lookup orphan user")
-}
 
 func TestProvisioner_Ensure_RecountAfterDuplicateFails_Surfaced(t *testing.T) {
 	// Duplicate Create, but the recount itself errors.
@@ -430,7 +305,6 @@ func TestProvisioner_Ensure_InvalidInput_Errors(t *testing.T) {
 		in   adminprovision.ProvisionInput
 	}{
 		{"missing hash", adminprovision.ProvisionInput{Username: "u", Email: "u@x"}},
-		{"missing source", adminprovision.ProvisionInput{Username: "u", Email: "u@x", PasswordHash: []byte("h")}},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -503,8 +377,7 @@ func (c *countingUserRepo) Create(ctx context.Context, u *domain.User) error {
 	return c.UserRepository.Create(ctx, u)
 }
 
-// duplicateUserRepo always rejects Create with ErrAuthUserDuplicate. GetByUsername
-// returns an existing user so orphan-recovery can be simulated.
+// duplicateUserRepo always rejects Create with ErrAuthUserDuplicate.
 type duplicateUserRepo struct{}
 
 func (r *duplicateUserRepo) Create(ctx context.Context, u *domain.User) error {
@@ -603,35 +476,6 @@ func (r *errRoleRepo) ListByUserID(ctx context.Context, userID string, params qu
 	return nil, nil
 }
 
-// updateFailUserRepo wraps mem.UserRepository but returns updateErr from Update.
-type updateFailUserRepo struct {
-	inner     *mem.UserRepository
-	updateErr error
-}
-
-func (r *updateFailUserRepo) Create(ctx context.Context, u *domain.User) error {
-	return errcode.New(errcode.KindConflict, errcode.ErrAuthUserDuplicate, "duplicate")
-}
-
-func (r *updateFailUserRepo) GetByID(ctx context.Context, id string) (*domain.User, error) {
-	return r.inner.GetByID(ctx, id)
-}
-
-func (r *updateFailUserRepo) GetByUsername(ctx context.Context, username string) (*domain.User, error) {
-	return r.inner.GetByUsername(ctx, username)
-}
-func (r *updateFailUserRepo) Update(ctx context.Context, u *domain.User) error { return r.updateErr }
-func (r *updateFailUserRepo) Delete(ctx context.Context, id string) error      { return nil }
-
-// orphanLookupFailRepo extends duplicateUserRepo to fail GetByUsername.
-type orphanLookupFailRepo struct {
-	duplicateUserRepo
-	lookupErr error
-}
-
-func (r *orphanLookupFailRepo) GetByUsername(ctx context.Context, username string) (*domain.User, error) {
-	return nil, r.lookupErr
-}
 
 // recountErrRoleRepo returns firstCount then recountErr on subsequent CountByRole.
 type recountErrRoleRepo struct {
