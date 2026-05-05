@@ -32,7 +32,8 @@ import (
 // ref: go.uber.org/goleak README@main — VerifyTestMain is the canonical
 // last-resort guard against goroutine leaks in Go.
 func TestMain(m *testing.M) {
-	goleak.VerifyTestMain(m,
+	goleak.VerifyTestMain(
+		m,
 		// stdlib http keep-alive loops that adapter tests spin up can linger
 		// briefly on fast shutdown; explicit allowlist keeps the main assembly
 		// coverage strict.
@@ -207,7 +208,8 @@ func TestHookDispatcher_QueueFullDropLogsWarnFallback(t *testing.T) {
 	buf := captureDefaultSlog(t)
 	bo := newBlockingObserver()
 	cv := newSpyCounterVec()
-	d := newHookDispatcher(dispatcherConfig{Observer: bo, QueueSize: 2, SinkTimeout: testtime.D1s, Provider: &spyProvider{cv: cv},
+	d := newHookDispatcher(dispatcherConfig{
+		Observer: bo, QueueSize: 2, SinkTimeout: testtime.D1s, Provider: &spyProvider{cv: cv},
 		Clock: clock.Real(),
 	})
 	t.Cleanup(func() {
@@ -354,7 +356,8 @@ func TestHookDispatcher_StopWaitsForTimedOutSinkBeforeReturning(t *testing.T) {
 	clk := clockmock.New(time.Time{})
 	bo := newBlockingObserver()
 	cv := newSpyCounterVec()
-	d := newHookDispatcher(dispatcherConfig{Observer: bo, QueueSize: 8, SinkTimeout: testtime.D1s, Provider: &spyProvider{cv: cv},
+	d := newHookDispatcher(dispatcherConfig{
+		Observer: bo, QueueSize: 8, SinkTimeout: testtime.D1s, Provider: &spyProvider{cv: cv},
 		Clock: clk,
 	})
 	t.Cleanup(func() {
@@ -401,7 +404,8 @@ func TestHookDispatcher_StopDoesNotHangForeverOnStuckSink(t *testing.T) {
 	clk := clockmock.New(time.Time{})
 	bo := newBlockingObserver()
 	cv := newSpyCounterVec()
-	d := newHookDispatcher(dispatcherConfig{Observer: bo, QueueSize: 8, SinkTimeout: testtime.D1s, Provider: &spyProvider{cv: cv},
+	d := newHookDispatcher(dispatcherConfig{
+		Observer: bo, QueueSize: 8, SinkTimeout: testtime.D1s, Provider: &spyProvider{cv: cv},
 		Clock: clk,
 	})
 	t.Cleanup(bo.release)
@@ -439,7 +443,8 @@ func TestHookDispatcher_StopReturnsWhenContextCanceledDuringSinkDrain(t *testing
 	clk := clockmock.New(time.Time{})
 	bo := newBlockingObserver()
 	cv := newSpyCounterVec()
-	d := newHookDispatcher(dispatcherConfig{Observer: bo, QueueSize: 8, SinkTimeout: testtime.D1s, Provider: &spyProvider{cv: cv},
+	d := newHookDispatcher(dispatcherConfig{
+		Observer: bo, QueueSize: 8, SinkTimeout: testtime.D1s, Provider: &spyProvider{cv: cv},
 		Clock: clk,
 	})
 	t.Cleanup(bo.release)
@@ -536,13 +541,13 @@ func TestHookDispatcher_EmitAfterStopCountsQueueFull(t *testing.T) {
 	assert.Equal(t, string(cell.HookBeforeStart), rec["hook"])
 }
 
-// TestHookDispatcher_FlushAfterStopReturnsTrue locks in the
+// TestHookDispatcher_FlushAfterStopIsNoOpSuccess locks in the
 // "send-on-closed treated as flush success" branch of flush(). Intent:
-// once the dispatcher has been stopped, the channel is fully drained, so
-// any further fence is semantically satisfied (there is nothing to wait
-// for). Returning false here would make clean-shutdown callers block or
-// retry for no gain.
-func TestHookDispatcher_FlushAfterStopReturnsTrue(t *testing.T) {
+// once the dispatcher has stopped accepting events, any further fence is
+// a no-op for callers that only need a stable stopped state. This does
+// not assert that a timed-out stop drained observer sinks; sink drain is
+// covered by the dedicated stop tests above.
+func TestHookDispatcher_FlushAfterStopIsNoOpSuccess(t *testing.T) {
 	d := newHookDispatcher(dispatcherConfig{
 		Observer: cell.NopHookObserver{}, QueueSize: 4, SinkTimeout: testtime.D1s,
 		Clock: clock.Real(),
@@ -550,7 +555,7 @@ func TestHookDispatcher_FlushAfterStopReturnsTrue(t *testing.T) {
 	d.stop(context.Background(), testtime.D200ms)
 
 	require.True(t, d.flush(testtime.D200ms),
-		"flush after stop must return true (channel drained, fence is trivially satisfied)")
+		"flush after stop must return true (dispatcher stopped accepting fences)")
 }
 
 // TestHookDispatcher_FlushTimeoutThenSuccess exercises the subtle case

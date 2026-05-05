@@ -96,10 +96,15 @@ type Config struct {
 	// Zero uses DefaultHookObserverSinkTimeout (5s).
 	HookObserverSinkTimeout time.Duration
 
-	// HookObserverDrainTimeout bounds Stop()'s wait for the dispatcher to
-	// drain remaining events after the channel is closed. Zero uses
-	// DefaultHookObserverDrainTimeout (5s). After drain completion or
-	// timeout, any further emit() calls are counted as queue_full.
+	// HookObserverDrainTimeout bounds Stop()'s shared hook-dispatcher
+	// shutdown budget after event intake is closed. The same budget covers
+	// both queue drain (worker processing already-emitted events) and sink
+	// drain (observer goroutines that exceeded HookObserverSinkTimeout but
+	// later exit). Zero uses DefaultHookObserverDrainTimeout (5s). Stop(ctx)
+	// also returns early when ctx is canceled; Shutdown uses
+	// context.Background() and is bounded only by this timeout. After drain
+	// completion, timeout, or cancellation, any further emit() calls are
+	// counted as queue_full.
 	HookObserverDrainTimeout time.Duration
 
 	// MetricsProvider receives the dispatcher's internal drop / queue-depth

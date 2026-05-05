@@ -193,9 +193,11 @@ func (d *hookDispatcher) emit(e cell.HookEvent) {
 func (d *hookDispatcher) flush(timeout time.Duration) (ok bool) {
 	defer func() {
 		if r := recover(); r != nil {
-			// Same recovery as emit: sending on closed channel means the
-			// dispatcher has already stopped, which implicitly means the
-			// buffer was drained. Treat flush as successful.
+			// Same recovery as emit: sending on a closed channel means the
+			// dispatcher has already stopped accepting events. A post-stop
+			// flush is therefore a no-op success for callers that only need
+			// a stable "not accepting fences" state; it does not prove a
+			// timed-out stop drained observer sinks.
 			ok = true
 		}
 	}()
