@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -169,6 +170,34 @@ func TestWriteError_5xxMasksMessageCodeDetailsAndLogsDiagnostics(t *testing.T) {
 	assertStringAttr(t, *errRec, "cause", cause.Error())
 	assertStringAttr(t, *errRec, "request_id", "req-5xx")
 	assertAttrAbsent(t, *errRec, "message")
+}
+
+// TestWriteError_MaxBytesError_Returns413 verifies the WriteError fast path
+// for *http.MaxBytesError surfaced from generated handlers' io.ReadAll on a
+// MaxBytesReader-wrapped Body. Without this branch the error falls through
+// to the unhandled-error path and the client gets a misleading 500.
+// ref: net/http MaxBytesError godoc.
+func TestWriteError_MaxBytesError_Returns413(t *testing.T) {
+	rec := httptest.NewRecorder()
+	WriteError(context.Background(), rec, &http.MaxBytesError{Limit: 1024})
+
+	assert.Equal(t, http.StatusRequestEntityTooLarge, rec.Code)
+	errObj := decodeErrorBody(t, rec)
+	assert.Equal(t, string(errcode.ErrBodyTooLarge), errObj["code"])
+	assert.Equal(t, "request body too large", errObj["message"])
+}
+
+// TestWriteError_WrappedMaxBytesError_Returns413 verifies the same mapping
+// holds when the error is wrapped (e.g. fmt.Errorf("decode: %w", err) from
+// a handler) — errors.As must traverse the chain.
+func TestWriteError_WrappedMaxBytesError_Returns413(t *testing.T) {
+	rec := httptest.NewRecorder()
+	wrapped := fmt.Errorf("read body: %w", &http.MaxBytesError{Limit: 2048})
+	WriteError(context.Background(), rec, wrapped)
+
+	assert.Equal(t, http.StatusRequestEntityTooLarge, rec.Code)
+	errObj := decodeErrorBody(t, rec)
+	assert.Equal(t, string(errcode.ErrBodyTooLarge), errObj["code"])
 }
 
 func TestWriteError_PlainErrorMasksResponseAndLogsUnhandled(t *testing.T) {
