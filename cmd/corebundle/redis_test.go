@@ -94,6 +94,91 @@ func TestLoadRedisConfigFromEnv_InvalidDBFailFast(t *testing.T) {
 	}
 }
 
+func TestLoadRedisConfigFromEnv_ClusterAddrsBuildClusterMode(t *testing.T) {
+	t.Setenv(envRedisAddr, "")
+	t.Setenv(envRedisClusterAddrs, "node-a:7000,node-b:7000,node-c:7000")
+	t.Setenv(envRedisPassword, "secret")
+
+	cfg, configured, err := loadRedisConfigFromEnv(bootstrap.Topology{AdapterMode: "dev"})
+
+	require.NoError(t, err)
+	assert.True(t, configured)
+	assert.Equal(t, adapterredis.ModeCluster, cfg.Mode)
+	assert.Equal(t, []string{"node-a:7000", "node-b:7000", "node-c:7000"}, cfg.ClusterAddrs)
+	assert.Equal(t, "secret", cfg.Password)
+	assert.Empty(t, cfg.Addr, "Addr must remain empty in cluster mode")
+}
+
+func TestLoadRedisConfigFromEnv_ClusterAndAddrMutuallyExclusive(t *testing.T) {
+	t.Setenv(envRedisAddr, "redis:6379")
+	t.Setenv(envRedisClusterAddrs, "node-a:7000")
+
+	_, configured, err := loadRedisConfigFromEnv(bootstrap.Topology{AdapterMode: "dev"})
+
+	require.Error(t, err)
+	assert.False(t, configured)
+	assertErrCode(t, err, errcode.ErrValidationFailed)
+	assert.Contains(t, err.Error(), "mutually exclusive")
+}
+
+func TestLoadRedisConfigFromEnv_ClusterRejectsNonZeroDB(t *testing.T) {
+	t.Setenv(envRedisAddr, "")
+	t.Setenv(envRedisClusterAddrs, "node-a:7000")
+	t.Setenv(envRedisDB, "2")
+
+	_, configured, err := loadRedisConfigFromEnv(bootstrap.Topology{AdapterMode: "dev"})
+
+	require.Error(t, err)
+	assert.False(t, configured)
+	assertErrCode(t, err, errcode.ErrValidationFailed)
+	assert.Contains(t, err.Error(), "must be 0")
+}
+
+// Empty entries (trailing or double commas) are typos that change cluster
+// topology silently if dropped — we reject them explicitly.
+func TestLoadRedisConfigFromEnv_ClusterRejectsEmptyEntries(t *testing.T) {
+	t.Setenv(envRedisAddr, "")
+	t.Setenv(envRedisClusterAddrs, "node-a:7000,,node-c:7000")
+
+	_, configured, err := loadRedisConfigFromEnv(bootstrap.Topology{AdapterMode: "dev"})
+
+	require.Error(t, err)
+	assert.False(t, configured)
+	assertErrCode(t, err, errcode.ErrValidationFailed)
+	assert.Contains(t, err.Error(), "empty entries")
+}
+
+// Whitespace gets trimmed and exact duplicates de-duplicated; semantically
+// equivalent (host:port is a Redis identity), redundant entries are silently
+// folded so config stays declarative even when sourced from line-broken env.
+func TestLoadRedisConfigFromEnv_ClusterTrimAndDedupe(t *testing.T) {
+	t.Setenv(envRedisAddr, "")
+	t.Setenv(envRedisClusterAddrs, " node-a:7000 , node-b:7000 ,node-a:7000")
+
+	cfg, configured, err := loadRedisConfigFromEnv(bootstrap.Topology{AdapterMode: "dev"})
+
+	require.NoError(t, err)
+	assert.True(t, configured)
+	assert.Equal(t, []string{"node-a:7000", "node-b:7000"}, cfg.ClusterAddrs)
+}
+
+// In real multi-pod mode either addr OR cluster_addrs satisfies the
+// distributed-replay requirement.
+func TestLoadRedisConfigFromEnv_ClusterAddrsSatisfyMultiPodRequirement(t *testing.T) {
+	t.Setenv(envRedisAddr, "")
+	t.Setenv(envRedisClusterAddrs, "node-a:7000,node-b:7000")
+	topo := bootstrap.Topology{
+		AdapterMode:    "real",
+		StorageBackend: "postgres",
+	}
+
+	cfg, configured, err := loadRedisConfigFromEnv(topo)
+
+	require.NoError(t, err)
+	assert.True(t, configured)
+	assert.Equal(t, adapterredis.ModeCluster, cfg.Mode)
+}
+
 func TestBuildRedisClient_NotConfiguredReturnsNil(t *testing.T) {
 	t.Setenv(envRedisAddr, "")
 

@@ -141,6 +141,7 @@
 | **B2-A-30** | REDIS-DISTLOCK-RENEW-TTL-PRECISION-LOSS | P2 | `adapters/redis/distlock.go:50-56` | TTL Seconds 转换截断；锁过期可能比预期早若干毫秒。**修复**：用 `PEXPIRE` (ms 精度) 替代 `EXPIRE`；或 ttl < 1s 时 fail-fast。 | Cx2 |
 | **B2-A-31** | REDIS-SENTINEL-TLS-INCOMPLETE | P2 | `adapters/redis/client.go:200-215` | Sentinel 协议下 TLS 配置未完整透传；连接 Sentinel 无 TLS。**修复**：`SentinelOptions.TLSConfig` 同步注入。 | Cx2 |
 | **B2-A-32** | S3-INTEGRATION-TEST-MISSING | P1 | `adapters/s3/s3_test.go:11` | 仅有 Config.Validate 单测，无 MinIO testcontainers 集成测试；put/get/list 真实路径未覆盖。**修复**：testcontainers MinIO + 完整 RW + 错误注入（403/超时/分片）。 | Cx2 |
+| **B2-A-33** | REDIS-SENTINEL-AND-LOGVALUE-BASELINE-GAPS | P2 | `cmd/corebundle/redis.go:18-22` + `adapters/redis/client.go:90-104` | B10 ship 时显式范围外的两个 baseline 缺口：(a) `cmd/corebundle/redis.go` 仅识别 `GOCELL_REDIS_ADDR` / `GOCELL_REDIS_CLUSTER_ADDRS`；sentinel 模式（`SentinelAddrs` / `SentinelMaster`）从未接 env，sentinel 部署在生产 main 程序里实际不可用；(b) `Config.LogValue` 在 standalone/sentinel 模式下输出 `addr`，sentinel 下该字段为空字符串，运维 slog 误导。**修复**：加 `GOCELL_REDIS_SENTINEL_ADDRS` + `GOCELL_REDIS_SENTINEL_MASTER` env；`LogValue` 按 Mode 切字段集（standalone=addr/db、sentinel=sentinel_addrs/sentinel_master/db、cluster 已对称）。来源：B10 PR-V1-REDIS-CLUSTER 范围切割。 | Cx2 |
 
 ---
 

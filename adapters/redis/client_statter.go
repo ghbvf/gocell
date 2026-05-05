@@ -7,6 +7,12 @@ import "github.com/ghbvf/gocell/runtime/observability/poolstats"
 // OTel pool collector to emit db.client.connection.* metrics without
 // adapter-specific switching.
 //
+// In Cluster mode go-redis returns aggregated PoolStats across every cluster
+// node, but Config.PoolSize is the *per-node* connection cap. MaxConns
+// therefore reports the per-node ceiling (matching the OTel
+// db.client.connection.max semantic of "max for this pool"); the cluster-wide
+// total is derived at the dashboard/alert layer as nodes × MaxConns.
+//
 // ref: redis/go-redis internal/pool/pool.go — PoolStats exposes
 // TotalConns/IdleConns/StaleConns/Timeouts/etc. UsedConns is derived as
 // TotalConns - IdleConns - StaleConns (stale connections are scheduled
