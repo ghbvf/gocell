@@ -6,7 +6,6 @@ import (
 	"crypto/sha256"
 	"crypto/subtle"
 	"errors"
-	"fmt"
 	"io"
 	"log/slog"
 	"time"
@@ -29,10 +28,11 @@ var _ refresh.Store = (*PGRefreshStore)(nil)
 // gcBatchSize is the number of rows deleted per GC batch iteration.
 const gcBatchSize = 1000
 
-// idleFarFuture is used as idle_expires_at when Policy.MaxIdle is zero (pre-016
-// migration stores that have not been configured with an idle window). Setting
-// far-future prevents pre-016 rows from being swept by idle-expiry GC while still
-// allowing the column to carry a valid TIMESTAMPTZ NOT NULL value.
+// idleFarFuture is the sentinel used when Policy.MaxIdle is zero (disabled);
+// prevents idle-GC from sweeping rows that have no configured idle window.
+// Any store that has not applied migration 016 or has explicitly set MaxIdle=0
+// will write this sentinel, ensuring the column satisfies the NOT NULL constraint
+// while effectively disabling idle expiry for that row.
 const idleFarFuture = 10 * 365 * 24 * time.Hour
 
 // Append-only SQL statements.
@@ -166,19 +166,20 @@ func NewRefreshStore(
 	randReader io.Reader,
 ) (*PGRefreshStore, error) {
 	if pool == nil {
-		return nil, fmt.Errorf("postgres.NewRefreshStore: pool must not be nil")
+		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "postgres.NewRefreshStore: pool must not be nil")
 	}
 	if validation.IsNilInterface(txRunner) {
-		return nil, fmt.Errorf("postgres.NewRefreshStore: txRunner must not be nil")
+		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "postgres.NewRefreshStore: txRunner must not be nil")
 	}
 	if validation.IsNilInterface(clk) {
-		return nil, fmt.Errorf("postgres.NewRefreshStore: clock must not be nil")
+		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "postgres.NewRefreshStore: clock must not be nil")
 	}
 	if policy.MaxAge <= 0 {
-		return nil, fmt.Errorf("postgres.NewRefreshStore: policy.MaxAge must be positive")
+		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "postgres.NewRefreshStore: policy.MaxAge must be positive")
 	}
 	if policy.ReuseInterval < 0 {
-		return nil, fmt.Errorf("postgres.NewRefreshStore: policy.ReuseInterval must not be negative")
+		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			"postgres.NewRefreshStore: policy.ReuseInterval must not be negative")
 	}
 	if validation.IsNilInterface(randReader) {
 		randReader = rand.Reader
@@ -279,9 +280,6 @@ func (s *PGRefreshStore) Peek(ctx context.Context, presented string) (*refresh.T
 		// so the commit happens unconditionally (timing oracle defense).
 		return innerErr
 	})
-	if err != nil && !errors.Is(err, refresh.ErrRejected) {
-		return nil, err
-	}
 	if err != nil {
 		return nil, err
 	}
@@ -438,10 +436,11 @@ func (s *PGRefreshStore) checkBasicValidity(row refreshRow, ver []byte) error {
 	if !row.expiresAt.After(now) {
 		return rejectWithReason("expired", row.sessionID)
 	}
-	// X12: idle-expiry check. idleExpiresAt is zero for pre-016 rows in DBs
-	// without the migration; zero time is before any real time so we guard
-	// against that by only checking when idleExpiresAt is non-zero.
-	if !row.idleExpiresAt.IsZero() && s.policy.MaxIdle > 0 && !row.idleExpiresAt.After(now) {
+	// X12: idle-expiry check. migration 016 ensures idle_expires_at is always
+	// non-zero (NOT NULL with a 30-day default for pre-016 rows). When
+	// Policy.MaxIdle is zero, idle-expiry is disabled (stores that have not yet
+	// applied migration 016 set MaxIdle=0 at the application layer).
+	if s.policy.MaxIdle > 0 && !row.idleExpiresAt.After(now) {
 		return rejectWithReason("idle_expired", row.sessionID)
 	}
 	return nil
@@ -459,6 +458,7 @@ func (s *PGRefreshStore) handleRotatedRow(ctx context.Context, row refreshRow) e
 	if s.policy.GraceMaxReuses > 0 && row.usedTimes >= s.policy.GraceMaxReuses {
 		slog.Error("refresh token grace counter exhausted",
 			slog.String("session_id", row.sessionID),
+			slog.String("subject_id", row.subjectID),
 			slog.String("reason", "reuse_detected"),
 			slog.Int("used_times", row.usedTimes),
 		)
@@ -477,6 +477,7 @@ func (s *PGRefreshStore) handleRotatedRow(ctx context.Context, row refreshRow) e
 		// DB write is the only unavoidable timing oracle).
 		slog.Error("refresh token reuse detected",
 			slog.String("session_id", row.sessionID),
+			slog.String("subject_id", row.subjectID),
 			slog.String("reason", "reuse_detected"),
 		)
 		if _, execErr := s.execCtx(ctx, revokeSessionSQL, now, row.sessionID); execErr != nil {

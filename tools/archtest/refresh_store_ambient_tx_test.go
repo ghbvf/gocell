@@ -12,6 +12,7 @@ package archtest
 // Begin callers in refresh_store.go would be pool or tx variables.
 
 import (
+	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -57,7 +58,7 @@ func TestRefreshAmbientTX01(t *testing.T) {
 		pos := fset.Position(call.Pos())
 		violations = append(violations, violation{
 			line: pos.Line,
-			expr: "call to .Begin() at line " + string(rune('0'+pos.Line/100%10)) + string(rune('0'+pos.Line/10%10)) + string(rune('0'+pos.Line%10)),
+			expr: fmt.Sprintf("call to .Begin() at line %d", pos.Line),
 		})
 		return true
 	})

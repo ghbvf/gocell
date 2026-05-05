@@ -195,7 +195,7 @@ func TestPGRefreshStore_DMLState(t *testing.T) {
 	require.NoError(t, migrator.Up(ctx))
 
 	clock := storetest.NewFakeClock(time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC))
-	policy := refresh.Policy{ReuseInterval: testtime.D2s, MaxAge: refreshTestOneWeek}
+	policy := refresh.Policy{ReuseInterval: testtime.D2s, MaxAge: refreshTestOneWeek, MaxIdle: refreshTest2Hours}
 	txm := NewTxManager(p)
 	store, err := NewRefreshStore(p.DB(), txm, policy, clock, nil)
 	require.NoError(t, err)
@@ -212,14 +212,19 @@ func TestPGRefreshStore_DMLState(t *testing.T) {
 	t.Run("after_Issue_one_row_no_flags", func(t *testing.T) {
 		var rowCount int
 		var rotatedAt, revokedAt *time.Time
+		var idleExpiresAt time.Time
 		err := p.DB().QueryRow(ctx,
-			`SELECT count(*), max(rotated_at), max(revoked_at)
+			`SELECT count(*), max(rotated_at), max(revoked_at), max(idle_expires_at)
 			 FROM refresh_tokens WHERE session_id = $1`, sessionID).
-			Scan(&rowCount, &rotatedAt, &revokedAt)
+			Scan(&rowCount, &rotatedAt, &revokedAt, &idleExpiresAt)
 		require.NoError(t, err)
 		assert.Equal(t, 1, rowCount, "Issue must insert exactly one row")
 		assert.Nil(t, rotatedAt, "after Issue rotated_at must be NULL")
 		assert.Nil(t, revokedAt, "after Issue revoked_at must be NULL")
+		// idle_expires_at must equal now + MaxIdle (2h) as set by migration 016.
+		wantIdleExpires := clock.Now().Add(policy.MaxIdle)
+		assert.True(t, idleExpiresAt.Equal(wantIdleExpires),
+			"idle_expires_at must equal now+MaxIdle: got %v, want %v", idleExpiresAt, wantIdleExpires)
 	})
 
 	// Step 2: Rotate — expect TWO rows; original has rotated_at IS NOT NULL;

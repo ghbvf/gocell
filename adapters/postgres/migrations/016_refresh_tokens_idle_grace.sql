@@ -23,9 +23,14 @@
 -- ref: ory/hydra persistence/sql/persister_oauth2.go (refresh_token_rotated column pattern)
 -- ref: zitadel/zitadel internal/api/oidc/token_refresh.go (idle TTL per-request reset)
 
--- +goose Up
-SET LOCAL lock_timeout = '5s';
+-- +goose NO TRANSACTION
 
+-- +goose Up
+
+-- ADD COLUMN statements run outside a transaction (NO TRANSACTION mode) so they
+-- can be paired with CREATE INDEX CONCURRENTLY below.  ALTER TABLE ADD COLUMN
+-- with a non-volatile DEFAULT is a metadata-only change in PostgreSQL ≥ 11 and
+-- does not rewrite the table, so it completes instantly even on large tables.
 ALTER TABLE refresh_tokens
     ADD COLUMN IF NOT EXISTS idle_expires_at TIMESTAMPTZ NOT NULL
         DEFAULT now() + INTERVAL '30 days';
@@ -38,11 +43,14 @@ ALTER TABLE refresh_tokens
 
 -- GC sweep index on idle_expires_at so the GC batch can efficiently find
 -- idle-expired rows even when expires_at is still in the future.
-CREATE INDEX IF NOT EXISTS idx_refresh_tokens_idle_expires
+-- CONCURRENTLY avoids a full-table lock on this hot-path table (every Rotate
+-- inserts a row).  Must be outside a transaction block — guaranteed by NO
+-- TRANSACTION above.
+CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_refresh_tokens_idle_expires
     ON refresh_tokens (idle_expires_at);
 
 -- +goose Down
-DROP INDEX IF EXISTS idx_refresh_tokens_idle_expires;
+DROP INDEX CONCURRENTLY IF EXISTS idx_refresh_tokens_idle_expires;
 
 ALTER TABLE refresh_tokens
     DROP COLUMN IF EXISTS used_times;

@@ -75,7 +75,9 @@ const (
 //	MaxIdle        = DefaultMaxIdle   (30 days)
 //	GraceMaxReuses = DefaultGraceMaxReuses (3)
 //
-// Validate() returns an error if any required field is non-positive.
+// Validate() returns an error if MaxAge is non-positive, ReuseInterval is negative,
+// MaxIdle is negative, or GraceMaxReuses is negative. Zero values for MaxIdle and
+// GraceMaxReuses are accepted and mean "disabled".
 type Policy struct {
 	ReuseInterval  time.Duration
 	MaxAge         time.Duration
@@ -84,7 +86,13 @@ type Policy struct {
 }
 
 // Validate returns an error if the Policy contains invalid field values.
-// All four fields must be positive (non-zero, non-negative).
+//
+// MaxAge must be positive. ReuseInterval must not be negative.
+// MaxIdle and GraceMaxReuses may be zero (zero = disabled): zero MaxIdle disables
+// idle-expiry checks (stores that have not applied migration 016 set MaxIdle=0);
+// zero GraceMaxReuses disables the grace counter cap. This aligns with
+// NewRefreshStore and memstore.New which treat zero values as disabled rather than
+// invalid, and with the far-future sentinel used when MaxIdle is zero.
 func (p Policy) Validate() error {
 	if p.MaxAge <= 0 {
 		return errorf("Policy.MaxAge must be positive")
@@ -92,11 +100,13 @@ func (p Policy) Validate() error {
 	if p.ReuseInterval < 0 {
 		return errorf("Policy.ReuseInterval must not be negative")
 	}
-	if p.MaxIdle <= 0 {
-		return errorf("Policy.MaxIdle must be positive")
+	// MaxIdle == 0 means idle-expiry disabled; negative is invalid.
+	if p.MaxIdle < 0 {
+		return errorf("Policy.MaxIdle must not be negative (use zero to disable idle expiry)")
 	}
-	if p.GraceMaxReuses <= 0 {
-		return errorf("Policy.GraceMaxReuses must be positive")
+	// GraceMaxReuses == 0 means grace counter cap disabled; negative is invalid.
+	if p.GraceMaxReuses < 0 {
+		return errorf("Policy.GraceMaxReuses must not be negative (use zero to disable grace cap)")
 	}
 	return nil
 }

@@ -44,6 +44,25 @@ constructor. Cell-level callers (cell_init.go) propagate the error through `Init
 
 **Archtest**: `REFRESH-AMBIENT-TX-01` (AST scan for `.Begin()` in refresh_store.go).
 
+### Accepted timing leak: malformed wire format
+
+`Peek` and `Rotate` call `refresh.ParseOpaque` before entering `txRunner.RunInTx`.
+When `ParseOpaque` fails (invalid base64url or missing dot separator), the method
+returns `rejectWithReason("malformed", "")` immediately, without a DB round-trip.
+This means the malformed-wire reject path is measurably faster than reject paths that
+go through the database (selector_miss, expired, revoked, reuse_detected).
+
+**Accepted**: the information leaked is only "is this wire syntactically valid base64url
+with a dot at position 22?" The base64url encoding format is defined by RFC 4648 §5
+and is public knowledge; it carries no confidential information about the server's
+token inventory. An adversary who measures the timing difference learns only whether
+their input conforms to an openly-specified encoding — not whether any selector exists
+in the database.
+
+Eliminating this timing difference would require performing a dummy DB round-trip on
+malformed input, which adds latency and resource consumption to a trivially rejected
+attack vector. The trade-off is accepted.
+
 ### B2-A-09 — Uniform reject-path logging
 
 All reject branches in `validateRow` call `rejectWithReason(reason, sessionID)`.
