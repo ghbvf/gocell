@@ -280,12 +280,12 @@ type readyzResult struct {
 // independence from request lifecycle.
 func (h *Handler) ReadyzHandler() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		ctx := r.Context()
 		if h.shuttingDown.Load() {
-			writeJSON(w, http.StatusServiceUnavailable, envelopeError(
-				errcode.PublicCodeForStatus(http.StatusServiceUnavailable),
-				readyzPublic503Message,
-				readyzDetails(readyzStatusShuttingDown, readyzReasonGracefulShutdown, nil),
-			))
+			slog.Info("readyz: shutting down (graceful_shutdown)",
+				slog.String("status", readyzStatusShuttingDown),
+				slog.String("reason", readyzReasonGracefulShutdown))
+			writeReadyz503(ctx, w, readyzStatusShuttingDown, readyzReasonGracefulShutdown)
 			return
 		}
 		verbose, denied := h.verboseDecision(r)
@@ -311,14 +311,10 @@ func (h *Handler) ReadyzHandler() http.HandlerFunc {
 			slog.Error("readyz: singleflight returned unexpected payload; failing closed",
 				slog.String("internal_reason", "readiness_computation_failed"),
 				slog.Any("value", shared))
-			writeJSON(w, http.StatusServiceUnavailable, envelopeError(
-				errcode.PublicCodeForStatus(http.StatusServiceUnavailable),
-				readyzPublic503Message,
-				readyzDetails("unhealthy", readyzReasonReadinessFailed, nil),
-			))
+			writeReadyz503(ctx, w, "unhealthy", readyzReasonReadinessFailed)
 			return
 		}
-		result.writeTo(w)
+		result.writeTo(ctx, w)
 	}
 }
 
@@ -433,25 +429,22 @@ func (h *Handler) aggregateProbeResults(results map[string]ProbeResult, verbose 
 	return statusFromRank(worst), dependencies
 }
 
-// writeTo serializes the readyz result through the project-standard envelope:
+// writeTo serializes the readyz result.
 //
-//	200 → {"data":  {"status":"healthy"|"degraded", ...verbose fields}}
-//	503 → {"error": {"code":"ERR_SERVICE_UNAVAILABLE", "message":"service unavailable",
-//	                  "details": {"status":"unhealthy","reason":"readiness_failed", ...verbose fields}}}
-//
-// Note: the 503 "details" here is a health-diagnostic object, not the errcode
-// array<{key,value}> form (this endpoint builds its own envelope via envelopeError,
-// not via pkg/httputil.WriteError).
+//	200 → {"data": {"status":"healthy"|"degraded", ...verbose fields}}
+//	503 → canonical errcode envelope via httputil.WriteError; details is
+//	      the empty array per K#08 5xx redaction policy. Verbose breakdown
+//	      (cells/dependencies/adapters) and the readiness reason are emitted
+//	      to server-side slog so operators can diagnose without relying on
+//	      the public wire body.
 //
 // degraded maps to HTTP 200 — a degraded service (fail-open) should NOT
 // trigger pod eviction; operators monitor degraded via the response body
 // status field or the underlying Prometheus counter.
 // ref: envoyproxy/envoy admin /ready — DEGRADED returns 200.
-//
-// Verbose fields (cells, dependencies, adapters) live under data or details
-// so consumers walk one consistent path regardless of status. Adapters are
-// omitted when no adapter info has been registered.
-func (r readyzResult) writeTo(w http.ResponseWriter) {
+// ref: k8s.io/apiserver/pkg/server/healthz — failed checks do not surface in
+// the 503 body; verbose breakdown is operator-only.
+func (r readyzResult) writeTo(ctx context.Context, w http.ResponseWriter) {
 	body := r.verboseFields()
 	body["status"] = r.overall
 	switch r.overall {
@@ -463,22 +456,40 @@ func (r readyzResult) writeTo(w http.ResponseWriter) {
 		if reason == "" {
 			reason = readyzReasonReadinessFailed
 		}
-		body["reason"] = reason
-		writeJSON(w, http.StatusServiceUnavailable, envelopeError(
-			errcode.PublicCodeForStatus(http.StatusServiceUnavailable),
-			readyzPublic503Message,
-			body,
-		))
+		r.logUnhealthy(reason)
+		writeReadyz503(ctx, w, r.overall, reason)
 	}
 }
 
-func readyzDetails(status, reason string, fields map[string]any) map[string]any {
-	if fields == nil {
-		fields = map[string]any{}
+// logUnhealthy emits the verbose breakdown to slog so operators retain the
+// diagnostic data that previously lived in the 503 wire body. Public 503
+// responses always carry an empty details array (K#08 5xx strip).
+func (r readyzResult) logUnhealthy(reason string) {
+	attrs := []any{
+		slog.String("status", r.overall),
+		slog.String("reason", reason),
 	}
-	fields["status"] = status
-	fields["reason"] = reason
-	return fields
+	if r.verbose {
+		attrs = append(attrs,
+			slog.Any("cells", r.cells),
+			slog.Any("dependencies", r.dependencies),
+			slog.Any("adapters", r.adapters),
+		)
+	}
+	slog.Error("readyz unhealthy", attrs...)
+}
+
+// writeReadyz503 emits the canonical errcode 503 envelope shared with all
+// other framework error responses. status/reason ride along on WithInternal
+// for server-side logs only — the wire body is a 5xx-stripped errcode where
+// details is the empty array.
+func writeReadyz503(ctx context.Context, w http.ResponseWriter, status, reason string) {
+	httputil.WriteError(ctx, w, errcode.New(
+		errcode.KindUnavailable,
+		errcode.ErrServiceUnavailable,
+		readyzPublic503Message,
+		errcode.WithInternal(fmt.Sprintf("readyz status=%s reason=%s", status, reason)),
+	))
 }
 
 // verboseFields returns the cells / dependencies / adapters payload (or an
@@ -682,23 +693,6 @@ func truncateErrMsg(msg string, max int) string {
 // business /api/v1/* responses so consumers can parse both uniformly.
 func envelopeData(payload map[string]any) map[string]any {
 	return map[string]any{"data": payload}
-}
-
-// envelopeError wraps an error in the project-standard
-// `{"error": {"code":..., "message":..., "details":...}}` envelope (see
-// .claude/rules/gocell/error-handling.md). details is normalised to an
-// empty map when nil so consumers can always walk the nested path.
-func envelopeError(code errcode.Code, message string, details map[string]any) map[string]any {
-	if details == nil {
-		details = map[string]any{}
-	}
-	return map[string]any{
-		"error": map[string]any{
-			"code":    string(code),
-			"message": message,
-			"details": details,
-		},
-	}
 }
 
 // rankStatus encodes severity ordering for aggregation:
