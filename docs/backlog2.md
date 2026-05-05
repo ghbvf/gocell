@@ -37,7 +37,7 @@
 
 | # | 标题 | 文件:行 | 描述 | Cx | 来源 |
 |---|---|---|---|---|---|
-| ~~**B2-A-01**~~ | ~~POSTGRES-OUTBOX-CLAIM-FENCING-MISSING~~ | ✅ **closed fix/221-pg-outbox-fencing** — `lease_id UUID` 列 + 五个 CAS SQL 全部 `AND lease_id = $N`；ClaimedEntry.LeaseID 透传；archtest OUTBOX-LEASE-ID-CAS-01 静态守卫；ADR `docs/architecture/202605051600-adr-pg-outbox-fencing.md` | — | — |
+| ~~**B2-A-01**~~ | ~~POSTGRES-OUTBOX-CLAIM-FENCING-MISSING~~ | ✅ **closed PR#373 / fix/221-pg-outbox-fencing** — `lease_id UUID` 列 + 五个 CAS SQL 全部 `AND lease_id = $N`；ClaimedEntry.LeaseID 透传；archtest OUTBOX-LEASE-ID-CAS-01 静态守卫；ADR `docs/architecture/202605051600-adr-pg-outbox-fencing.md` | — | — |
 | **B2-C-01** | **AUDITCORE-HASHCHAIN-RESTART-RECOVERY-MISSING** | `cells/auditcore/internal/domain/hashchain.go:31` + `cells/auditcore/cell.go` | `NewHashChain` 启动从空链开始，`initSlices` 未从 repo 恢复尾节点；多实例或重启后尾哈希不连续，链完整性无法验证；合规审计致命。**修复**：cell 启动时从 repo `SELECT last hash` 注入；考虑 leader 单写或全局 advisory lock。 | Cx4 | MD-02 |
 | **B2-W-01** | **WEBSOCKET-UPGRADE-NO-AUTH-FAIL-OPEN** | `adapters/websocket/handler.go:51-65` | `UpgradeHandler` 升级后无 token / credential 校验，任意客户端可建立 WS 连接 → hub。**修复**：升级前必填 `auth.AuthMiddleware` 等价校验；构造期注入 Authenticator 接口；空 Authenticator fail-fast。 | Cx4 | MD-03 |
 | **B2-W-02** | **WEBSOCKET-BROADCAST-NO-ACL** | `runtime/websocket/hub.go:405-420` | `Broadcast` 无 filter 参数；所有连接均可收到广播；多租户场景下信息越界。**修复**：Broadcast 接受 `func(conn) bool` filter 或 topic-scoped Send；hub 维护 `principal -> conn[]` 映射。 | Cx4 | MD-04 |
@@ -47,17 +47,18 @@
 
 ---
 
-## §2 kernel / 治理 / 错误语义（7 条）
+## §2 kernel / 治理 / 错误语义（8 条）
 
 | # | 标题 | 严重度 | 文件:行 | 描述 | Cx |
 |---|---|---|---|---|---|
 | **B2-K-01** | WRAPPER-ERROR-REDACTOR-DEFAULT-IDENTITY | P1 | `kernel/wrapper/consumer.go:43` | 默认 redactor = identity，error 文本原文进入 span / metric label，可能含敏感字段；显式注释承认设计取舍。**修复**：默认改最小脱敏（裁剪长度 + 关键字 mask）或构造期强制 caller 显式选择。 | Cx2 |
 | **B2-K-02** | KERNEL-ERROR-FIRST-PANIC-RESIDUAL | P1 | `kernel/wrapper/handler.go:56` + `kernel/cell/auth_plan.go:107` + `pkg/contracttest/` | `MustNewAuthJWT` 等 Must 系列与 error-first 构造器混用；composition root 残留 panic。**修复**：审计所有 Must*，把生产路径改 error-first；保留 Must 仅作为 test-only / cmd 顶层 wrapper。 | Cx3 |
 | **B2-K-03** | ASSEMBLY-REF-INTERFACE-IMPLICIT-CAST | P1 | `kernel/cell/auth_plan.go:175-181` + `runtime/bootstrap/auth_plan_apply.go:175` | `asmCellLookup` 通过 `asm.(assemblyWithCell)` 类型断言获取 Cell；kernel 与 runtime 间隐式契约，新 assembly 实现易漏配 method 静默失败。**修复**：把 `assemblyWithCell` 上提为 kernel 显式接口（`kernel/cell.AssemblyRef.Cell(id) Cell`）。 | Cx3 |
-| **B2-K-04** | GOVERNANCE-CH-04-ERRCODE-MIRROR-DRIFT | P2 | `kernel/governance/rules_http_response_alignment.go:91,193` | `errcodeNameToStatus` 是手工镜像 `pkg/errcode/status.go` 的状态码映射；errcode 加新 code 时若漏改治理表，CH-04 静默通过。**修复**：从 `pkg/errcode` 单源导出 / 用 reflect 自动构建映射。 | Cx2 |
+| ~~**B2-K-04**~~ | ~~GOVERNANCE-CH-04-ERRCODE-MIRROR-DRIFT~~ | ✅ **closed PR#368** | `kernel/governance/rules_http_response_alignment.go` | ~~`errcodeNameToStatus` 70+ 行手抄 `pkg/errcode/status.go` 状态码映射~~；PR#368 删除手抄表，换 `errcodeKindNameToStatus` 由 `errcode.Kind.Status()` 单源派生（reflect-built ~10 行），CH-04 不再可能与 errcode 漂移 | — |
 | **B2-K-05** | METADATA-PARSER-ERROR-PATH-LEAK | P2 | `kernel/metadata/parser.go:190,202` | parse error 公共消息直接含 fs 内部路径；低强度信息泄露 + 路径暴露 CI runner 结构。**修复**：error 双通道：public 仅含 cell/slice ID + 字段路径，internal slog 保留 fs path。 | Cx2 |
 | **B2-K-06** | EVENTROUTER-CONSUMERGROUP-CELLID-CONFUSION | P2 | `runtime/eventrouter/router.go:364` | `Subscription.CellID = h.consumerGroup`；语义混淆，cell 切片与消费组名通过同一字段表达，下游 metrics label / 日志属性自相矛盾。**修复**：Subscription struct 显式拆分 `CellID` 与 `ConsumerGroup` 两字段。 | Cx3 |
 | **B2-K-07** | CONTRACTTEST-UNDECLARED-REF-NO-OP | P1 | `pkg/contracttest/contracttest.go:170,189` | 测试调 `MustValidateRequest("not-declared-key", ...)` 时静默 `return`；key 写错时测试假通过。**修复**：未声明 key 改 `t.Fatalf`；保留显式 opt-in opt-out 时也只允许 explicit allowlist。 | Cx1 |
+| **B2-K-08** | ASSEMBLY-RACE-TEST-COGNITIVE-COMPLEXITY | P2 | `kernel/assembly/snapshots_race_test.go` (PR#370 引入；SonarCloud `brain-overload` L141 报 32 / 阈值 15) | `TestAssembly_StartConcurrentSnapshots_RaceDetector` (line 36-120) 单函数把 fixture 注册 + Phase 1 阻塞 cell + Start goroutine + N reader goroutines + ready barrier + cleanup 全堆在一处；race window 设定（pre-register 3 fast cell + last-cell init gate + reader ready chan）逻辑可读但深嵌套 select / if / 闭包共同推高 cognitive complexity。SonarCloud `brain-overload` 阈值 15，实测 32（手算 ~12-14，差异可能来自 Sonar 把 goroutine 闭包 + select case 多倍累计）。PR#370 review 阶段未拦下；PR#378 (G-03) 全量扫描重新暴露。**修复**：拆分为 `setupRaceFixture(t) (*Assembly, chan struct{}, *sync.WaitGroup)` + `spawnSnapshotsReaders(...)` + `awaitReadersReady(...)` 三个 helper；主 test 只剩 register / start / unblock / assert 四步。注意：拆分后必须保留 race window 的确定性（reader ready barrier 不可改成 timing-based sleep）；`go test -race -count=20 ./kernel/assembly/...` 必须保持稳定。 | Cx2 |
 
 ---
 
@@ -68,12 +69,13 @@
 | **B2-R-01** | HEALTH-LISTENER-FALLBACK-NO-STRICT-FAIL-FAST | P2 | `runtime/bootstrap/bootstrap_phases.go:583-596` | HealthListener 缺失时静默回退 PrimaryListener；探针/业务入口隔离弱化；strict 模式 fail-fast 缺失。**修复**：bootstrap 加 `WithStrictHealthListener()`，缺失时 fail；至少 slog.Warn 升 Error 并暴露 audit attribute。 | Cx2 |
 | **B2-R-02** | CELLS-READYZ-MISSING-REPO-PROBE | P1 | `cells/configcore/cell.go:204` + `cells/auditcore/cell.go:191` | configcore / auditcore 的 `HealthCheckers()` 仅接 outbox emitter；底层 repo（PG / 内存）健康未纳入；DB 故障下 readyz 仍 OK。**修复**：cell 注入 repo `Pingable` 接口，HealthCheckers 聚合 emitter + repo + downstream 三档。 | Cx2 |
 | **B2-R-03** | BOOTSTRAP-ROLLBACK-ERROR-NOT-PROPAGATED | P1 | `runtime/bootstrap/run_state.go:113,121` | rollback 步骤失败仅 `slog.Warn` 后 `return cause`（原启动错误），rollback 错误未并入返回值；调用方无从感知"启动失败 + 资源未完全清理"双重故障。**修复**：用 `errors.Join(cause, rollbackErr)` 返回；或返回结构化 error 含两个 chain。 | Cx1 |
-| **B2-R-04** | ERRCODE-4XX-CLASSIFY-DUAL-SOURCE-DRIFT | P1 | `pkg/errcode/classify.go:175` + `pkg/httputil/response.go:351` | `expected4xxCodes` 白名单与 `WriteDomainError` 状态码映射分散维护；新 errcode 加入时易两处不同步。**修复**：单源映射（status code → errcode 或反向），classify 改为查询同一 map。 | Cx2 |
+| ~~**B2-R-04**~~ | ~~ERRCODE-4XX-CLASSIFY-DUAL-SOURCE-DRIFT~~ | ✅ **closed PR#368** | `pkg/errcode/classify.go` + `pkg/errcode/errcode.go` | ~~`expected4xxCodes` 白名单与 `WriteDomainError` 状态码映射分散维护~~；PR#368 (refactor/514-pkg-breaking-cleanup) 删除 `expected4xxCodes` whitelist，`IsExpected4xx` 改 `ec.Kind.IsClient()` 单源；Kind 同时派生 HTTP status 与 4xx 分类 | — |
 | **B2-R-05** | OTEL-METRIC-PROVIDER-CTX-BACKGROUND | P1 | `adapters/otel/metric_provider.go:174,178,185` | metric record 固定使用 `context.Background()`；trace-metric exemplar 关联在 adapter 层断裂；分布式 trace 关联 metric 失败。**修复**：metric Record 接受 caller ctx，构造期注入 propagator。 | Cx4（评估范围） |
 | **B2-R-06** | OTEL-TRACER-PROVIDER-NOT-GLOBAL | P1 | `adapters/otel/tracer.go:56,73` | `NewTracer` 只创建局部 TracerProvider，未注册到 `otel.SetTracerProvider`；三方依赖 `otel.GetTracerProvider()` 的 instrumentation 静默落到 noop。**修复**：composition root 调 `otel.SetTracerProvider`；或文档化"必须注入根"约束 + archtest 锁定。 | Cx2 |
 | **B2-R-07** | OTEL-TRACER-SHUTDOWN-NO-DEADLINE | P1 | `adapters/otel/tracer.go:63,65` | shutdown 完全依赖外部 ctx；调用方传 `context.Background()` 时停机 flush 不可控；Pod 终止时可能挂起到 SIGKILL。**修复**：shutdown 内部派生 timeout（默认 5s），与外部 ctx Min。 | Cx1 |
 | **B2-R-08** | OTEL-OBSERVABLE-CALLBACK-MANUAL-UNREGISTER | P1 | `adapters/otel/pool_collector.go:43,110` | `RegisterCallback` 返回 unregister fn 需调用方手工管理；未释放则 callback 持续触发；MeterProvider 重建时残留。**修复**：构造期 `WithLifecycle` 接 cell.Lifecycle，OnStop 自动 unregister；或返回 `io.Closer` 强制接入 cleanup。 | Cx3 |
 | **B2-R-09** | OTEL-ATTR-CACHE-KEY-COLLISION-UNBOUNDED | P1 | `adapters/otel/metric_provider.go:84,96,101` | attrCache key 用字符串拼接（`"key1=val1,key2=val2"`），未做转义，且无上界；高基数 label / 注入字符均可造成 key 碰撞或内存膨胀。**修复**：key 用 sha256 hex / FNV 或 sorted (k,v) tuple；加 LRU max size + drop。 | Cx3 |
+| ~~**B2-R-10**~~ | ~~BOOTSTRAP-TEST-LISTENER-NO-CLEANUP~~ | ✅ **closed PR#373** | `runtime/bootstrap/bootstrap_test.go:78` | ~~`newLocalListener` 创建 `net.Listener` 但不注册 `t.Cleanup`~~；PR#373 在 `newLocalListener` 内注入 `t.Cleanup(func(){_=ln.Close()})`，闭包持引用作 GC keep-alive，确保 `holdLn`/`collideLn` 等"占位端口"模式在测试运行期间端口不被提前释放。本地 `-race -count=20` 验证 `TestPhase7BindListeners_OwnedSocket_ClosedOnSiblingFailure` + `TestDualListener_BootstrapOwnedPrimary_InternalBindFails` 全绿。 | Cx1 → 完成 | discovered via /fix PR #373 |
 
 ---
 
@@ -157,7 +159,7 @@
 
 ---
 
-## §7 cmd / 装配 / 启动（5 条）
+## §7 cmd / 装配 / 启动（8 条）
 
 | # | 标题 | 严重度 | 文件:行 | 描述 | Cx |
 |---|---|---|---|---|---|
@@ -166,6 +168,9 @@
 | **B2-X-03** | PG-INVALID-INDEX-WARN-CONTINUE | P2 | `cmd/corebundle/bundle.go:308-313` | invalid index 仅 `slog.Warn` 后继续启动；migration 异常或半完成状态被掩盖；与 readyz 不联动。**修复**：与 B2-A-10 协调，invalid index → readyz 503 → strict mode fail-fast；或加 `WithPGStrictSchema()` 选项。 | Cx2 |
 | **B2-X-04** | HEALTH-LISTENER-DEFAULT-LOOPBACK | P1 | `cmd/corebundle/shared_deps.go:461` | 默认 `127.0.0.1:9091`；real-mode 部署若不显式 PodIP / Service 绑定，K8s probe 不可达；现仅注释提醒。**修复**：real mode 缺显式 bind 时 fail-fast；或默认监听 `0.0.0.0:9091` + 治理 archtest 锁定 internal/healthz only via mTLS。 | Cx2 |
 | **B2-X-05** | CMD-GENERATE-INDEXES-EXPOSED-NOT-IMPL | P1 | `cmd/gocell/app/generate.go:34` | `generate indexes` 子命令在 help 输出，实现返回 `not implemented`；用户调用得不到能力但又不报"未知命令"。**修复**：从 help 移除（返回 unknown subcommand）；或标注 `[experimental, not yet implemented]` 显示在 help。 | Cx1 |
+| **B2-X-06** | GOCELL-VERIFY-CMD-CTX-PROPAGATION | P1 | `cmd/gocell/app/verify.go:101,163,165,241` | `runValidate` 路径已在 PR-V1-030-G03 完成 ctx 透传，但 `gocell verify` 子命令仍硬编码 `context.Background()` 传给 `spec.exec` / `runner.RunActiveJourneys` / `runner.RunJourney` / `generatedverify.Verify`。这些下层调用 `go test` 子进程，NFS/FUSE 慢盘上仍会永久阻塞，与 G-03 修复路径对称缺口。**修复**：(a) 短期 — 与 validate.go boundary 同模式，在 `verifyGenerated` / `verifyJourney` / `runVerifyResult` 入口声明 `ctx := context.Background()` 并向下透传；(b) 彻底 — 改造 `cmd/gocell/app/dispatch.go` 让 `Dispatch` 接 `ctx context.Context`，主入口 `cmd/gocell/main.go` 用 `signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)` 包装，所有 7 个子命令同步加 ctx 形参。优先做 (b) 一次到位，验证 7 子命令全部可被 Ctrl+C 中断。 | Cx2 |
+| **B2-X-07** | GOCELL-DISPATCH-SIGNAL-AWARE-CTX | P1 | `cmd/gocell/app/dispatch.go:20` + `cmd/gocell/main.go:13` | `Dispatch(args []string)` 与 `commands` map 都不接 ctx；`gocell` 进程对 SIGTERM/SIGINT 无优雅关闭路径。CI worker 取消 `gocell validate --strict` 时虽然 G-03 已让内部 ctx 链路完整，但顶层无 signal-bound ctx 注入，end-to-end 取消仍未闭环。**修复**：与 B2-X-06 一并做 — `commands map[string]func(ctx, args) error`；`main.go` 用 `signal.NotifyContext`；测试入口（`mode_test.go` 等）改用 `Dispatch(t.Context(), ...)`。**触发条件**：B2-X-06 启动时合并处理；或 v1.0 GA 前 deployment 路径要求 graceful shutdown 时触发。 | Cx2 |
+| **B2-X-08** | CMDRUN-WINDOWS-PROCESS-GROUP-CANCEL | P2 | `pkg/cmdrun/cmdrun_windows.go` (PR-V1-030-G03 Phase E follow-up) | PR-V1-030-G03 Phase E 已在 Unix 上实现进程组取消（`SysProcAttr.Setpgid` + `syscall.Kill(-pid, SIGKILL)`），让 ctx 取消能杀 `go test` 派生的整棵子进程树；Windows 平台退化为 `cmd.Process.Kill()`（与 `exec.CommandContext` 默认行为一致），grandchild 进程仍会泄漏。Linux/macOS CI 路径已闭环；Windows-only 部署或 dev 环境（gocell verify journey 跑 go test）会出现孤儿测试进程。**修复**：用 `golang.org/x/sys/windows.AssignProcessToJobObject` 给子进程分配 Job Object，配 `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` flag，ctx 取消时关闭 job handle 杀整组。需要 cmd.SysProcAttr 设 `CREATE_NEW_PROCESS_GROUP` flag。**触发条件**：(a) Windows 成为受支持的 dev/prod 平台（当前 os-smoke matrix 含 windows 但 gocell verify 不在 windows CI 路径）；(b) 用户报告 windows 上 `gocell verify` 取消后 go test 子进程残留。 | Cx2 |
 
 ---
 
@@ -235,7 +240,7 @@ Wave D — cells 业务收尾（~20h）
 
 Wave E — bootstrap/cmd/contracts 收口（~14h）
   PR-B2-E1  BOOTSTRAP-ROLLBACK-AND-HEALTH (B2-R-01/03 + B2-X-04, ~5h)
-  PR-B2-E2  ERRCODE-CLASSIFY-SINGLE-SOURCE (B2-R-04, ~3h)
+  PR-B2-E2  ERRCODE-CLASSIFY-SINGLE-SOURCE (B2-R-04, ~3h)  ✅ closed PR#368
   PR-B2-E3  CMD-COMPOSITION-CLEANUP (B2-X-01/02/03/05, ~6h)
   PR-B2-E4  CONTRACT-DRIFT-FIX (B2-T-01/02/04/05/08, ~10h，与 PR-CI-3 协调)
 
