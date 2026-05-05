@@ -134,9 +134,9 @@ func TestOutboxRelayLostMetric01_PollCycleResultHasLostField(t *testing.T) {
 	}
 	if !hasLost {
 		t.Errorf(
-			"OUTBOX-RELAY-LOST-METRIC-01-B: PollCycleResult must declare a Lost int field "+
-				"(roadmap B6, backlog2 B2-A-05). It travels alongside Published/Retried/"+
-				"Dead/Skipped so providerRelayCollector.RecordPollCycle can fire "+
+			"OUTBOX-RELAY-LOST-METRIC-01-B: PollCycleResult must declare a Lost int field " +
+				"(roadmap B6, backlog2 B2-A-05). It travels alongside Published/Retried/" +
+				"Dead/Skipped so providerRelayCollector.RecordPollCycle can fire " +
 				"`outbox_relayed_total{outcome=\"lost\"}`.",
 		)
 	}

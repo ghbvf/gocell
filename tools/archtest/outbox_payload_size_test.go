@@ -15,7 +15,8 @@
 //
 // ref: docs/plans/202605011500-029-master-roadmap.md B6 PR-V1-PG-OUTBOX-RELAY-HARDEN
 // ref: backlog2.md B2-A-07 (repurposed: metadata cap shipped, payload cap was the
-//      true unguarded vector).
+//
+//	true unguarded vector).
 package archtest
 
 import (

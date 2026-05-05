@@ -163,7 +163,7 @@ func (s *minimalStore) MarkDead(_ context.Context, id, leaseID string, attempts 
 	return true, nil
 }
 
-func (s *minimalStore) ReclaimStale(_ context.Context, claimTTL time.Duration, maxAttempts int, _, _ time.Duration) (int, error) {
+func (s *minimalStore) ReclaimStale(_ context.Context, claimTTL time.Duration, maxAttempts int, _, _ time.Duration, _ int) (int, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	cutoff := time.Now().Add(-claimTTL)

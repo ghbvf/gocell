@@ -47,6 +47,15 @@ const (
 	// MaxMetadataTotalSize is the maximum total byte size of all metadata
 	// key-value pairs combined (sum of len(k)+len(v) for each pair).
 	MaxMetadataTotalSize = 65536
+
+	// MaxPayloadBytes caps Entry.Payload length. A bug or malicious producer
+	// that emits multi-MB JSON would otherwise inflate relay batch memory
+	// (BatchSize × payload bytes) and PG TOAST / replication overhead. 1 MiB
+	// matches Apache Kafka's default `message.max.bytes` and gives audit
+	// snapshots / large business events comfortable headroom while keeping a
+	// single relay batch under tens of MB at the default BatchSize=100.
+	// ref: Apache Kafka message.max.bytes default 1 MiB.
+	MaxPayloadBytes = 1 << 20
 )
 
 // ReservedMetadataKeys lists keys that the kernel observability bridge owns
@@ -228,6 +237,10 @@ func (e Entry) Validate() error {
 	}
 	if len(e.Payload) == 0 {
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "outbox: entry missing payload")
+	}
+	if len(e.Payload) > MaxPayloadBytes {
+		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			fmt.Sprintf("outbox: payload size %d exceeds max %d", len(e.Payload), MaxPayloadBytes))
 	}
 	if err := validateMetadata(e.Metadata); err != nil {
 		return err

@@ -238,8 +238,10 @@ func TestPGOutboxStore_ReclaimStale_ReturnsCount(t *testing.T) {
 	}
 	store := NewOutboxStore(db, clock.Real())
 
+	const callerBatch = 1234
+
 	count, err := store.ReclaimStale(context.Background(),
-		testtime.D60s, 5, testtime.D5s, testtime.D5min)
+		testtime.D60s, 5, testtime.D5s, testtime.D5min, callerBatch)
 	require.NoError(t, err)
 	assert.Equal(t, 3, count)
 
@@ -259,12 +261,12 @@ func TestPGOutboxStore_ReclaimStale_ReturnsCount(t *testing.T) {
 		"outer UPDATE must re-assert lease_id matches the picked snapshot (write-time fencing)")
 
 	// args: $1=claimTTLInterval, $2=maxAttempts, $3=dead, $4=pending,
-	//       $5=baseDelayMicros, $6=claiming, $7=maxDelayMicros, $8=reclaimBatchSize
+	//       $5=baseDelayMicros, $6=claiming, $7=maxDelayMicros, $8=callerBatchSize
 	assert.Equal(t, 5, ec.args[1], "maxAttempts")
 	assert.Equal(t, statusDead, ec.args[2], "dead status")
 	assert.Equal(t, statusPending, ec.args[3], "pending status")
 	assert.Equal(t, statusClaiming, ec.args[5], "claiming status for WHERE clause")
-	assert.Equal(t, reclaimBatchSize, ec.args[7], "reclaim batch size")
+	assert.Equal(t, callerBatch, ec.args[7], "ReclaimStale must pass through the caller's batchSize")
 
 	// claimTTL interval text
 	ttlArg, ok := ec.args[0].(string)
@@ -279,7 +281,7 @@ func TestPGOutboxStore_ReclaimStale_ExecError(t *testing.T) {
 	store := NewOutboxStore(db, clock.Real())
 
 	_, err := store.ReclaimStale(context.Background(),
-		testtime.D60s, 5, testtime.D5s, testtime.D5min)
+		testtime.D60s, 5, testtime.D5s, testtime.D5min, 1000)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "ReclaimStale failed")
 }
@@ -291,7 +293,7 @@ func TestPGOutboxStore_ReclaimStale_ZeroCount(t *testing.T) {
 	store := NewOutboxStore(db, clock.Real())
 
 	count, err := store.ReclaimStale(context.Background(),
-		testtime.D60s, 5, testtime.D5s, testtime.D5min)
+		testtime.D60s, 5, testtime.D5s, testtime.D5min, 1000)
 	require.NoError(t, err)
 	assert.Equal(t, 0, count)
 }

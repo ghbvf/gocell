@@ -52,11 +52,20 @@ type Store interface {
 	// updated=false same as above.
 	MarkDead(ctx context.Context, id, leaseID string, attempts int, lastError string) (updated bool, err error)
 
-	// ReclaimStale transitions claiming rows whose claimed_at is older than
-	// claimTTL back to pending (with attempts+1 and next_retry_at = backoff)
-	// or to dead (when attempts+1 >= maxAttempts). Returns count of rows
-	// recovered across both destinations.
-	ReclaimStale(ctx context.Context, claimTTL time.Duration, maxAttempts int, baseDelay, maxDelay time.Duration) (count int, err error)
+	// ReclaimStale transitions up to batchSize claiming rows whose claimed_at
+	// is older than claimTTL back to pending (with attempts+1 and
+	// next_retry_at = backoff) or to dead (when attempts+1 >= maxAttempts).
+	// Returns count of rows recovered across both destinations. Callers MUST
+	// loop until count < batchSize so a backlog larger than one sweep drains
+	// promptly without producing a multi-second UPDATE that blocks
+	// VACUUM/replication.
+	ReclaimStale(
+		ctx context.Context,
+		claimTTL time.Duration,
+		maxAttempts int,
+		baseDelay, maxDelay time.Duration,
+		batchSize int,
+	) (count int, err error)
 
 	// CleanupPublished deletes a batch of published rows older than cutoff.
 	// Caller is responsible for looping until deleted < batchSize.

@@ -191,6 +191,9 @@ func (c *providerRelayCollector) RecordPollCycle(r PollCycleResult) {
 	if r.Skipped > 0 {
 		c.relayed.With(metrics.Labels{"cell": c.cellID, "outcome": "skipped"}).Add(float64(r.Skipped))
 	}
+	if r.Lost > 0 {
+		c.relayed.With(metrics.Labels{"cell": c.cellID, "outcome": "lost"}).Add(float64(r.Lost))
+	}
 
 	c.pollDuration.With(metrics.Labels{"cell": c.cellID, "phase": "claim"}).Observe(r.ClaimDur.Seconds())
 	c.pollDuration.With(metrics.Labels{"cell": c.cellID, "phase": "publish"}).Observe(r.PublishDur.Seconds())

@@ -22,13 +22,6 @@ import (
 // or maliciously-crafted row at ~4 KB.
 const maxObservabilityJSONBytes = 4 * kout.MaxObservabilityTotalSize
 
-// reclaimBatchSize caps reclaimStaleQuery so a backlog of stale claiming rows
-// cannot create a multi-second UPDATE that holds locks blocking VACUUM and
-// streaming replication. The relay's reclaim loop wakes on its own schedule —
-// a single LIMITed batch per tick is sufficient; backlog drains over a few
-// ticks. Mirrors graphile/worker's get_job LIMIT 1 + repeat-on-tick model.
-const reclaimBatchSize = 1000
-
 // PGOutboxStore implements runtime/outbox.Store over PostgreSQL using pgx.
 //
 // Each method opens its own short transaction; methods do not compose into a
@@ -124,15 +117,15 @@ const markDeadQuery = `UPDATE outbox_entries SET status = $1, attempts = $2,
 // lease_id is cleared on the back-to-pending branch so the next ClaimPending
 // mints a fresh lease; the dead branch keeps the value as audit trail.
 //
-// LIMIT (reclaimBatchSize) caps a single sweep so a backlog of stale rows
-// cannot produce a multi-second UPDATE that blocks VACUUM/replication; the
-// relay's reclaim loop tick re-runs to drain residual.
+// LIMIT ($8 batchSize) caps a single sweep so a backlog of stale rows cannot
+// produce a multi-second UPDATE that blocks VACUUM/replication; the relay's
+// reclaim loop drains residual by re-invoking until count < batchSize.
 //
 // ref: graphile/worker resetLockedAt.ts — outer UPDATE re-asserts locked_by
 // ref: river_job.sql / pgxjob — CTE + SKIP LOCKED batched reclaim
 //
 // $1 claimTTL interval text, $2 maxAttempts, $3 statusDead, $4 statusPending,
-// $5 baseDelayMicros, $6 statusClaiming, $7 maxDelayMicros, $8 reclaimBatchSize.
+// $5 baseDelayMicros, $6 statusClaiming, $7 maxDelayMicros, $8 batchSize.
 const reclaimStaleQuery = `WITH picked AS (
 		SELECT id, lease_id, attempts FROM outbox_entries
 		WHERE status = $6 AND claimed_at < now() - $1::interval
@@ -262,13 +255,17 @@ func (s *PGOutboxStore) MarkDead(ctx context.Context, id, leaseID string, attemp
 	return ct.RowsAffected() == 1, nil
 }
 
-// ReclaimStale transitions up to reclaimBatchSize claiming rows whose
-// claimed_at is older than claimTTL back to pending (with attempts+1 and
-// next_retry_at = backoff) or to dead (when attempts+1 >= maxAttempts).
-// Returns count of rows recovered. The relay's reclaim loop re-runs on its
-// own tick to drain residual when the backlog exceeds reclaimBatchSize.
+// ReclaimStale transitions up to batchSize claiming rows whose claimed_at is
+// older than claimTTL back to pending (with attempts+1 and next_retry_at =
+// backoff) or to dead (when attempts+1 >= maxAttempts). Returns count of rows
+// recovered. The caller's reclaim loop re-runs to drain residual when the
+// backlog exceeds batchSize (`count < batchSize` signals "no more").
 func (s *PGOutboxStore) ReclaimStale(
-	ctx context.Context, claimTTL time.Duration, maxAttempts int, baseDelay, maxDelay time.Duration,
+	ctx context.Context,
+	claimTTL time.Duration,
+	maxAttempts int,
+	baseDelay, maxDelay time.Duration,
+	batchSize int,
 ) (int, error) {
 	// pgx serializes time.Duration as int64 nanoseconds which PostgreSQL cannot
 	// cast to interval (SQLSTATE 42846). Pass claimTTL as "N microseconds" text;
@@ -279,7 +276,7 @@ func (s *PGOutboxStore) ReclaimStale(
 		claimTTLInterval, maxAttempts,
 		statusDead, statusPending,
 		baseDelay.Microseconds(), statusClaiming,
-		maxDelay.Microseconds(), reclaimBatchSize)
+		maxDelay.Microseconds(), batchSize)
 	if err != nil {
 		return 0, errcode.Wrap(errcode.KindInternal, ErrAdapterPGQuery, "outbox store: ReclaimStale failed", err)
 	}

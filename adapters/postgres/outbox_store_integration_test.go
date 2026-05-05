@@ -20,6 +20,12 @@ import (
 	"github.com/ghbvf/gocell/runtime/outbox/outboxtest"
 )
 
+// defaultReclaimBatchTest is the batchSize this integration suite passes to
+// Store.ReclaimStale. Pinned to runtime/outbox.DefaultRelayConfig().ReclaimBatchSize
+// (1000) so the cap behavior the test asserts mirrors what the relay will
+// actually request in production.
+const defaultReclaimBatchTest = 1000
+
 // TestPGOutboxStore_ConformanceSuite verifies that PGOutboxStore satisfies the
 // full Store conformance suite defined in runtime/outbox/outboxtest.
 //
@@ -141,7 +147,7 @@ func (p *recordingPublisher) Topics() []string {
 // TestPGOutboxStore_ReclaimStale_RespectsBatchLimit verifies B2-A-06: a
 // backlog of stale claiming rows must not produce a single multi-second
 // UPDATE that holds locks blocking VACUUM and replication. ReclaimStale caps
-// at reclaimBatchSize per call; relay's tick loop drains residual.
+// at defaultReclaimBatchTest per call; relay's tick loop drains residual.
 func TestPGOutboxStore_ReclaimStale_RespectsBatchLimit(t *testing.T) {
 	pool, cleanup := setupPostgres(t)
 	t.Cleanup(cleanup)
@@ -151,7 +157,7 @@ func TestPGOutboxStore_ReclaimStale_RespectsBatchLimit(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, migrator.Up(ctx), "migrations must apply")
 
-	const seedCount = reclaimBatchSize + 500 // 1500 stale claiming rows
+	const seedCount = defaultReclaimBatchTest + 500 // 1500 stale claiming rows
 
 	// Seed `seedCount` rows in claiming state with claimed_at far in the past.
 	// Batched INSERT keeps the test under a couple seconds even at 1500 rows.
@@ -170,20 +176,20 @@ func TestPGOutboxStore_ReclaimStale_RespectsBatchLimit(t *testing.T) {
 
 	store := NewOutboxStore(pool.DB(), clock.Real())
 
-	// First ReclaimStale must reclaim exactly reclaimBatchSize.
-	count, err := store.ReclaimStale(ctx, time.Minute, 99, time.Millisecond, time.Second)
+	// First ReclaimStale must reclaim exactly defaultReclaimBatchTest.
+	count, err := store.ReclaimStale(ctx, time.Minute, 99, time.Millisecond, time.Second, defaultReclaimBatchTest)
 	require.NoError(t, err)
-	assert.Equal(t, reclaimBatchSize, count,
-		"first reclaim must cap at reclaimBatchSize, not full backlog")
+	assert.Equal(t, defaultReclaimBatchTest, count,
+		"first reclaim must cap at defaultReclaimBatchTest, not full backlog")
 
 	// Second call drains the residual.
-	count2, err := store.ReclaimStale(ctx, time.Minute, 99, time.Millisecond, time.Second)
+	count2, err := store.ReclaimStale(ctx, time.Minute, 99, time.Millisecond, time.Second, defaultReclaimBatchTest)
 	require.NoError(t, err)
-	assert.Equal(t, seedCount-reclaimBatchSize, count2,
+	assert.Equal(t, seedCount-defaultReclaimBatchTest, count2,
 		"second reclaim drains residual")
 
 	// Third call is a no-op.
-	count3, err := store.ReclaimStale(ctx, time.Minute, 99, time.Millisecond, time.Second)
+	count3, err := store.ReclaimStale(ctx, time.Minute, 99, time.Millisecond, time.Second, defaultReclaimBatchTest)
 	require.NoError(t, err)
 	assert.Zero(t, count3, "third call has nothing to reclaim")
 }
@@ -226,7 +232,7 @@ func TestPGOutboxStore_Fencing_ReclaimedRowSurvivesStaleMark(t *testing.T) {
 
 	// Reclaim sweep: TTL=1s vs claimed_at 1h ago → stale → back to pending,
 	// lease cleared.
-	count, err := store.ReclaimStale(ctx, time.Second, 99, time.Millisecond, time.Second)
+	count, err := store.ReclaimStale(ctx, time.Second, 99, time.Millisecond, time.Second, defaultReclaimBatchTest)
 	require.NoError(t, err)
 	require.Equal(t, 1, count)
 
@@ -352,7 +358,7 @@ func TestPGOutboxStore_Reclaim_DoesNotRegressTerminalRow(t *testing.T) {
 			// after a markRetry that cleared it). Pre-fix, the row would be
 			// regressed to pending. The query selectively updates only rows
 			// whose state remains consistent with the CTE snapshot.
-			count, err := store.ReclaimStale(ctx, time.Second, 99, time.Millisecond, time.Second)
+			count, err := store.ReclaimStale(ctx, time.Second, 99, time.Millisecond, time.Second, defaultReclaimBatchTest)
 			require.NoError(t, err)
 			assert.Zero(t, count,
 				"reclaim must not touch a row whose state changed between SELECT and UPDATE")
@@ -436,7 +442,7 @@ func TestPGOutboxStore_Reclaim_RaceWithMarkPublished(t *testing.T) {
 	go func() {
 		defer wg.Done()
 		for i := 0; i < 20; i++ {
-			_, _ = store.ReclaimStale(ctx, time.Second, 99, time.Millisecond, time.Second)
+			_, _ = store.ReclaimStale(ctx, time.Second, 99, time.Millisecond, time.Second, defaultReclaimBatchTest)
 		}
 	}()
 

@@ -6,8 +6,15 @@ import "time"
 // Used by RelayCollector.RecordPollCycle to avoid a long parameter list
 // and to support future extensions without breaking the interface.
 type PollCycleResult struct {
-	Published, Retried, Dead, Skipped  int
-	ClaimDur, PublishDur, WriteBackDur time.Duration
+	// Published / Retried / Dead are the canonical outcomes from the publish
+	// and writeback phases. Skipped covers `MarkPublished updated=false`
+	// (the entry was reclaimed mid-flight before MarkPublished could win).
+	// Lost covers the same condition for failure writebacks (Mark{Retry,Dead}
+	// updated=false): the lease lost mid-flight while the publisher was
+	// reporting an error, so the failure must NOT be counted as retried/dead
+	// — the new lease owner will report the canonical outcome.
+	Published, Retried, Dead, Skipped, Lost int
+	ClaimDur, PublishDur, WriteBackDur      time.Duration
 }
 
 // RelayCollector records outbox relay operational metrics.

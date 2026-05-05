@@ -695,7 +695,7 @@ func (s *failingStore) ClaimPending(ctx context.Context, batchSize int) ([]outbo
 }
 
 func (s *failingStore) ReclaimStale(
-	ctx context.Context, claimTTL time.Duration, maxAttempts int, base, maxDelay time.Duration,
+	ctx context.Context, claimTTL time.Duration, maxAttempts int, base, maxDelay time.Duration, batchSize int,
 ) (int, error) {
 	s.mu.Lock()
 	err := s.reclaimErr
@@ -703,7 +703,7 @@ func (s *failingStore) ReclaimStale(
 	if err != nil {
 		return 0, err
 	}
-	return s.FakeStore.ReclaimStale(ctx, claimTTL, maxAttempts, base, maxDelay)
+	return s.FakeStore.ReclaimStale(ctx, claimTTL, maxAttempts, base, maxDelay, batchSize)
 }
 
 func (s *failingStore) CleanupPublished(ctx context.Context, cutoff time.Time, batchSize int) (int, error) {
@@ -784,8 +784,14 @@ func TestRelay_HandleFailedEntry_LostStat(t *testing.T) {
 	cfg.Metrics = mc
 
 	relay := outbox.NewRelay(store, pub, cfg)
-	require.NoError(t, relay.Start(t.Context()))
-	defer func() { _ = relay.Stop(t.Context()) }()
+	startCtx, startCancel := context.WithTimeout(t.Context(), testtime.D2s)
+	defer startCancel()
+	require.NoError(t, relay.Start(startCtx))
+	defer func() {
+		stopCtx, stopCancel := context.WithTimeout(context.Background(), testtime.D2s)
+		defer stopCancel()
+		_ = relay.Stop(stopCtx)
+	}()
 
 	require.Eventually(t, func() bool {
 		mc.mu.Lock()

@@ -116,7 +116,7 @@ func TestFakeStore_WithClock(t *testing.T) {
 	advanced := base.Add(testtime.D2min)
 	s.WithClock(func() time.Time { return advanced })
 
-	count, err := s.ReclaimStale(ctx, fakeStoreClaimTTL, 5, fakeStoreBaseDelay, fakeStoreMaxDelay)
+	count, err := s.ReclaimStale(ctx, fakeStoreClaimTTL, 5, fakeStoreBaseDelay, fakeStoreMaxDelay, 1000)
 	if err != nil {
 		t.Fatalf("ReclaimStale: %v", err)
 	}

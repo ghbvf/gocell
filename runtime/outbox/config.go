@@ -28,6 +28,17 @@ const (
 	defaultRelayReclaimInterval = 30 * time.Second
 	// defaultRelayDeadRetentionPeriod is how long dead-lettered entries are kept.
 	defaultRelayDeadRetentionPeriod = 30 * 24 * time.Hour
+	// defaultRelayReclaimBatchSize caps a single ReclaimStale UPDATE so a
+	// backlog of stale claiming rows cannot produce a multi-second statement
+	// that blocks VACUUM/replication. The reclaim loop tick re-runs to drain
+	// residual when the backlog exceeds the cap. 1000 sits between
+	// ThreeDotsLabs/watermill-sql's 100 (small batch SELECT default) and
+	// riverqueue/river's 10000 (high-throughput job rescuer): outbox reclaim
+	// is a recovery sweep, not a hot path, and a 1000-row UPDATE on the
+	// fencing CTE typically completes well under 100 ms on commodity PG.
+	// ref: ThreeDotsLabs/watermill-sql pkg/sql/schema_adapter_postgresql.go
+	// ref: riverqueue/river internal/maintenance/job_rescuer.go
+	defaultRelayReclaimBatchSize = 1000
 )
 
 // RelayConfig configures the outbox relay behavior.
@@ -55,6 +66,11 @@ type RelayConfig struct {
 	// ReclaimInterval controls the independent ReclaimStale goroutine
 	// frequency, decoupled from cleanup interval. Default 30s.
 	ReclaimInterval time.Duration
+	// ReclaimBatchSize caps a single ReclaimStale UPDATE; the relay's reclaim
+	// loop drains residual on its own tick when the stale backlog exceeds
+	// this cap. Default 1000 (see defaultRelayReclaimBatchSize for the
+	// industry-comparison rationale).
+	ReclaimBatchSize int
 	// DeadRetentionPeriod is how long dead-lettered entries are kept before
 	// cleanup. Separate from RetentionPeriod to give operators more time
 	// to investigate and manually retry failed entries. Default 30 days.
@@ -99,6 +115,7 @@ func DefaultRelayConfig() RelayConfig {
 		ClaimTTL:             defaultRelayClaimTTL,
 		MaxRetryDelay:        defaultRelayMaxRetryDelay,
 		ReclaimInterval:      defaultRelayReclaimInterval,
+		ReclaimBatchSize:     defaultRelayReclaimBatchSize,
 		DeadRetentionPeriod:  defaultRelayDeadRetentionPeriod, // 30 days
 		PollFailureBudget:    5,
 		ReclaimFailureBudget: 5,
@@ -134,6 +151,9 @@ func (c RelayConfig) WithDefaults() RelayConfig {
 	}
 	if c.ReclaimInterval <= 0 {
 		c.ReclaimInterval = d.ReclaimInterval
+	}
+	if c.ReclaimBatchSize <= 0 {
+		c.ReclaimBatchSize = d.ReclaimBatchSize
 	}
 	if c.DeadRetentionPeriod <= 0 {
 		c.DeadRetentionPeriod = d.DeadRetentionPeriod

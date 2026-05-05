@@ -62,6 +62,11 @@ type pollStats struct {
 	retried   int
 	dead      int
 	skipped   int
+	// lost counts failure writebacks that lost their lease mid-flight
+	// (Mark{Retry,Dead} returned updated=false). The new lease owner — the
+	// reclaimer or a peer — reports the canonical outcome, so this writeback
+	// must NOT be counted as retried/dead. ref: backlog2 B2-A-05.
+	lost int
 }
 
 // ---------------------------------------------------------------------------
@@ -477,6 +482,7 @@ func (r *Relay) pollOnce(ctx context.Context) error {
 			slog.Int("retried", stats.retried),
 			slog.Int("dead_lettered", stats.dead),
 			slog.Int("skipped", stats.skipped),
+			slog.Int("lost", stats.lost),
 			slog.Duration("claim_dur", claimDur),
 			slog.Duration("publish_dur", pubDur),
 		)
@@ -485,6 +491,7 @@ func (r *Relay) pollOnce(ctx context.Context) error {
 			Retried:      stats.retried,
 			Dead:         stats.dead,
 			Skipped:      stats.skipped,
+			Lost:         stats.lost,
 			ClaimDur:     claimDur,
 			PublishDur:   pubDur,
 			WriteBackDur: wbDur,
@@ -571,6 +578,7 @@ func (r *Relay) handleFailedEntry(ctx context.Context, res publishResult, stats 
 			return err
 		}
 		if !updated {
+			stats.lost++
 			slog.Warn(
 				"outbox relay: stale lease lost fail-write",
 				slog.String("entry_id", res.entry.ID),
@@ -600,6 +608,7 @@ func (r *Relay) handleFailedEntry(ctx context.Context, res publishResult, stats 
 		return err
 	}
 	if !updated {
+		stats.lost++
 		slog.Warn(
 			"outbox relay: stale lease lost fail-write",
 			slog.String("entry_id", res.entry.ID),
@@ -617,17 +626,39 @@ func (r *Relay) handleFailedEntry(ctx context.Context, res publishResult, stats 
 // ---------------------------------------------------------------------------
 
 // reclaimStale recovers entries stuck in 'claiming' past ClaimTTL.
+//
+// Each ReclaimStale call caps at cfg.ReclaimBatchSize so the underlying
+// UPDATE never produces a multi-second statement that blocks VACUUM /
+// replication. We loop until a sweep returns < batchSize, draining a
+// large backlog promptly inside the same tick rather than waiting up to
+// ReclaimInterval per cap-sized chunk. Loop also breaks on ctx cancel.
+//
+// ref: riverqueue/river internal/maintenance/job_rescuer.go (batch loop break)
 func (r *Relay) reclaimStale(ctx context.Context) error {
-	count, err := r.store.ReclaimStale(ctx, r.cfg.ClaimTTL, r.cfg.MaxAttempts, r.cfg.BaseRetryDelay, r.cfg.MaxRetryDelay)
-	if err != nil {
-		return err
+	batch := r.cfg.ReclaimBatchSize
+	var total int
+	for {
+		if err := ctx.Err(); err != nil {
+			break
+		}
+		count, err := r.store.ReclaimStale(
+			ctx, r.cfg.ClaimTTL, r.cfg.MaxAttempts,
+			r.cfg.BaseRetryDelay, r.cfg.MaxRetryDelay, batch,
+		)
+		if err != nil {
+			return err
+		}
+		total += count
+		if count < batch {
+			break
+		}
 	}
-	if count > 0 {
+	if total > 0 {
 		slog.Warn(
 			"outbox relay: reclaimed stale entries",
-			slog.Int("count", count),
+			slog.Int("count", total),
 		)
-		r.metrics.RecordReclaim(int64(count))
+		r.metrics.RecordReclaim(int64(total))
 	}
 	return nil
 }
