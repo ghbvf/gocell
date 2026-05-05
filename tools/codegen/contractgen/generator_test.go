@@ -349,9 +349,14 @@ func TestGenerate_AllCodegenTrue_MultipleContracts(t *testing.T) {
 		t.Fatalf("Generate: %v", err)
 	}
 
-	// http.order.ping.v1 → 3 files; event.item-created.v1 → 4 files → total 7.
-	if len(res.Generated) != 7 {
-		t.Errorf("expected 7 total generated files, got %d: %v", len(res.Generated), res.Generated)
+	// http.order.ping.v1 → types_gen + iface_gen + handler_gen = 3 files.
+	// event.item-created.v1 → types_gen + iface_gen + spec_gen + subscription_gen = 4 files.
+	httpFiles := 3 // types_gen, iface_gen, handler_gen
+	eventFiles := 4 // types_gen, iface_gen, spec_gen, subscription_gen
+	wantTotal := httpFiles + eventFiles
+	if len(res.Generated) != wantTotal {
+		t.Errorf("expected %d total generated files (http=%d + event=%d), got %d: %v",
+			wantTotal, httpFiles, eventFiles, len(res.Generated), res.Generated)
 	}
 }
 

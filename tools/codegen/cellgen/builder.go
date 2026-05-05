@@ -190,6 +190,10 @@ func validateBundleRoutes(cellID string, routes []markergen.RouteSpec, listeners
 // buildRouteGroupsFromBundle aggregates bundle routes into one
 // RouteGroupGenSpec per declared listener (in declaration order). Inside
 // each group, mounts are grouped by SubPath in deterministic order.
+// Within each sub-path the mounts preserve the AST field declaration order
+// from cell.go — the order in which +slice:route markers appear in the struct
+// reflects the intended handler registration sequence, which matches how
+// chi mounts handlers (first registered wins for identical patterns).
 func buildRouteGroupsFromBundle(
 	routes []markergen.RouteSpec,
 	listenerOrder []string,
@@ -316,30 +320,6 @@ func buildMetadataLiteral(cell *metadata.CellMeta) CellMetadataLiteral {
 		VerifySmoke:      smoke,
 		GoStructName:     cell.GoStructName,
 	}
-}
-
-
-func isVersionSegment(s string) bool {
-	if len(s) < 2 || s[0] != 'v' {
-		return false
-	}
-	for _, r := range s[1:] {
-		if r < '0' || r > '9' {
-			return false
-		}
-	}
-	return true
-}
-
-func capitalize(s string) string {
-	if s == "" {
-		return s
-	}
-	runes := []rune(s)
-	if runes[0] >= 'a' && runes[0] <= 'z' {
-		runes[0] -= 'a' - 'A'
-	}
-	return string(runes)
 }
 
 // readModulePath reads the Go module path from the go.mod file at root.

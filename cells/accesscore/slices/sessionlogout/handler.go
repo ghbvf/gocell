@@ -60,6 +60,11 @@ func NewHandler(svc *Service) *Handler {
 }
 
 // RegisterRoutes mounts the session-delete contract handler on mux.
+// The parameter type is cell.RouteHandler (not cell.RouteMux) because the
+// generated handler_gen.go declares RegisterRoutes(mux cell.RouteHandler) — the
+// minimum interface that both production RouteMux and stdlib *http.ServeMux
+// satisfy. Using the narrower type keeps the slice composable with both
+// chi-based routers and the bare ServeMux used in tests.
 func (h *Handler) RegisterRoutes(mux kcell.RouteHandler) error {
 	return h.deleteH.RegisterRoutes(mux)
 }

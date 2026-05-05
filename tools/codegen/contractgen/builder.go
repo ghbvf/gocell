@@ -51,8 +51,14 @@ func BuildContractSpec(rootDir string, p *metadata.ProjectMeta, contractID strin
 		if err := buildEventSpec(spec, rootDir, contract, contractDir); err != nil {
 			return nil, err
 		}
+	case "command", "projection":
+		// These kinds are in the closed set (CONTRACT-KINDS-CLOSED-SET-01) but do
+		// not yet have dedicated generators. BuildContractSpec accepts them so that
+		// generateOneContract can emit types_gen.go + iface_gen.go (shared scaffolding)
+		// without hard-failing. No spec/handler/subscription file is emitted.
+		// When a full generator is added, add the corresponding case here.
 	default:
-		return nil, fmt.Errorf("contractgen build: contract %q has unsupported kind %q (http|event only)", contractID, contract.Kind)
+		return nil, fmt.Errorf("contractgen build: contract %q has unsupported kind %q (http|event|command|projection only)", contractID, contract.Kind)
 	}
 
 	return spec, nil
@@ -64,13 +70,18 @@ func buildHTTPSpec(spec *ContractGenSpec, rootDir string, contract *metadata.Con
 		return fmt.Errorf("contractgen build: contract %q is kind=http but has no http endpoint", contract.ID)
 	}
 
-	allDTOs, err := buildHTTPDTOs(rootDir, contract, contractDir, http)
+	// Pre-compute path and query params once; both buildHTTPDTOs and
+	// buildHTTPEndpointSpec need them (F-09: avoid calling buildQueryParams twice).
+	pathParams := buildPathParams(http)
+	queryParams := buildQueryParams(http)
+
+	allDTOs, err := buildHTTPDTOs(rootDir, contract, contractDir, http, pathParams, queryParams)
 	if err != nil {
 		return err
 	}
 	spec.DTOs = allDTOs
 
-	endpointSpec, err := buildHTTPEndpointSpec(contract, http)
+	endpointSpec, err := buildHTTPEndpointSpec(contract, http, pathParams, queryParams)
 	if err != nil {
 		return err
 	}
@@ -79,12 +90,14 @@ func buildHTTPSpec(spec *ContractGenSpec, rootDir string, contract *metadata.Con
 }
 
 // buildHTTPDTOs loads request/response schemas, converts them to DTOSpecs, and
-// merges path/query params into the Request DTO.
+// merges path/query params into the Request DTO. pathParams and queryParams are
+// pre-computed by buildHTTPSpec so they are not recomputed here (F-09).
 func buildHTTPDTOs(
 	rootDir string,
 	contract *metadata.ContractMeta,
 	contractDir string,
 	http *metadata.HTTPTransportMeta,
+	pathParams, queryParams []ParamSpec,
 ) ([]DTOSpec, error) {
 	var allDTOs []DTOSpec
 
@@ -135,8 +148,8 @@ func buildHTTPDTOs(
 		})
 	}
 
-	// Merge path and query params into Request DTO.
-	merged, mergeErr := mergeParamsIntoRequestWithID(allDTOs, http, contract.ID)
+	// Merge path and query params into Request DTO using the pre-computed params.
+	merged, mergeErr := mergeParamsIntoRequest(allDTOs, pathParams, queryParams, contract.ID)
 	if mergeErr != nil {
 		return nil, fmt.Errorf("contractgen build: %q merge params: %w", contract.ID, mergeErr)
 	}
@@ -157,7 +170,8 @@ func hasDTONamed(dtos []DTOSpec, name string) bool {
 // HasBody is true only when the HTTP method is POST/PUT/PATCH AND the contract declares
 // a schemaRefs.request — POST/PATCH endpoints that accept only path params (no request
 // body schema) must not call DecodeJSONStrict (an empty body would be rejected).
-func buildHTTPEndpointSpec(contract *metadata.ContractMeta, http *metadata.HTTPTransportMeta) (*HTTPEndpointSpec, error) {
+// pathParams and queryParams are pre-computed by buildHTTPSpec (F-09: avoid re-computing).
+func buildHTTPEndpointSpec(contract *metadata.ContractMeta, http *metadata.HTTPTransportMeta, pathParams, queryParams []ParamSpec) (*HTTPEndpointSpec, error) {
 	handlerMethod := goPascalCase(domainLastSegment(contract.ID))
 	methodHasBody := http.Method == "POST" || http.Method == "PUT" || http.Method == "PATCH"
 	hasBody := methodHasBody && contract.SchemaRefs.Request != ""
@@ -183,8 +197,8 @@ func buildHTTPEndpointSpec(contract *metadata.ContractMeta, http *metadata.HTTPT
 		AuthPublic:              http.Auth.Public,
 		AuthPasswordResetExempt: http.Auth.PasswordResetExempt,
 	}
-	spec.PathParams = buildPathParams(http)
-	spec.QueryParams = buildQueryParams(http)
+	spec.PathParams = pathParams
+	spec.QueryParams = queryParams
 
 	// Pagination detection: cursor (string) + limit (integer) with no path params
 	// and GET method signals a canonical paginated list endpoint.
@@ -278,16 +292,13 @@ func buildEventSpec(spec *ContractGenSpec, rootDir string, contract *metadata.Co
 	return nil
 }
 
-// mergeParamsIntoRequestWithID injects path and query params as fields into the
-// Request DTO. If no Request DTO exists, one is created. Field order:
+// mergeParamsIntoRequest injects pre-computed path and query params as fields
+// into the Request DTO. If no Request DTO exists, one is created. Field order:
 // path params first, query params second, then body schema fields.
-// Returns error when a path or query param name (as Go field name) conflicts
-// with an existing body schema field (which would produce a duplicate struct field).
-// contractID is optional context for error messages.
-func mergeParamsIntoRequestWithID(dtos []DTOSpec, http *metadata.HTTPTransportMeta, contractID string) ([]DTOSpec, error) {
-	pathParams := buildPathParams(http)
-	queryParams := buildQueryParams(http)
-
+// Returns error when a param name (as Go field name) conflicts with an existing
+// body schema field (which would produce a duplicate struct field).
+// contractID is used in error messages.
+func mergeParamsIntoRequest(dtos []DTOSpec, pathParams, queryParams []ParamSpec, contractID string) ([]DTOSpec, error) {
 	if len(pathParams) == 0 && len(queryParams) == 0 {
 		return dtos, nil
 	}

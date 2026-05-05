@@ -2,6 +2,7 @@ package contractgen
 
 import (
 	"fmt"
+	"log/slog"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -95,6 +96,14 @@ func generateOneContract(root string, p *metadata.ProjectMeta, contractID string
 	}
 
 	pkgDir := filepath.Join(root, filepath.FromSlash(spec.PackagePath))
+
+	// For kind=command and kind=projection only types_gen.go + iface_gen.go are
+	// emitted (no handler/spec/subscription). This keeps the closed-set valid
+	// while full generators are pending.
+	if spec.Kind == "command" || spec.Kind == "projection" {
+		slog.Warn("contractgen: kind in closed set but no full generator yet; only types/iface emitted",
+			"contractID", contractID, "kind", spec.Kind)
+	}
 
 	// types_gen.go — always generated.
 	typesPath := filepath.Join(pkgDir, "types_gen.go")

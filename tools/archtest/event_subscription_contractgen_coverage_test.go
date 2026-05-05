@@ -14,7 +14,6 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 )
 
@@ -67,12 +66,8 @@ func TestEVENT_SUBSCRIPTION_CONTRACTGEN_COVERAGE_01(t *testing.T) {
 	}
 }
 
-// contractEventIDToExpectedPkgPath reuses contractIDToExpectedPkgPath from
-// codegen_contract_gen_test.go (same package, same function visible here).
-// Keeping a local alias comment for readability.
+// contractIDToExpectedPkgPath (from codegen_contract_gen_test.go, same package)
+// converts a contract ID to expected filesystem path, e.g.:
 //
-// "event.session.created.v1"  → "generated/contracts/event/session/created/v1"
-// "event.config.entry-upserted.v1" → "generated/contracts/event/config/entry-upserted/v1".
-var _ = func() string {
-	return strings.Join(strings.Split("event.session.created.v1", "."), "/")
-}
+//	"event.session.created.v1"        → "generated/contracts/event/session/created/v1"
+//	"event.config.entry-upserted.v1"  → "generated/contracts/event/config/entry-upserted/v1"

@@ -266,8 +266,10 @@ func TestBuildContractSpec_MissingPayloadRef(t *testing.T) {
 	}
 }
 
-// TestBuildContractSpec_UnsupportedKind tests error for unsupported kind.
-func TestBuildContractSpec_UnsupportedKind(t *testing.T) {
+// TestBuildContractSpec_CommandKind_GracefulSkip verifies that kind=command is
+// accepted without error. command and projection are in the closed set but do not
+// yet have full generators — only types_gen.go + iface_gen.go are emitted.
+func TestBuildContractSpec_CommandKind_GracefulSkip(t *testing.T) {
 	p := &metadata.ProjectMeta{
 		Contracts: map[string]*metadata.ContractMeta{
 			"command.foo.bar.v1": {
@@ -278,9 +280,38 @@ func TestBuildContractSpec_UnsupportedKind(t *testing.T) {
 		},
 	}
 	root := findRepoRoot()
-	_, err := BuildContractSpec(root, p, "command.foo.bar.v1")
+	spec, err := BuildContractSpec(root, p, "command.foo.bar.v1")
+	if err != nil {
+		t.Fatalf("BuildContractSpec should not error for kind=command (graceful skip), got: %v", err)
+	}
+	if spec == nil || spec.Kind != "command" {
+		t.Errorf("expected spec with Kind=command, got: %v", spec)
+	}
+	// No Endpoint or Event fields populated for command kind.
+	if spec.Endpoint != nil {
+		t.Errorf("spec.Endpoint should be nil for kind=command, got non-nil")
+	}
+	if spec.Event != nil {
+		t.Errorf("spec.Event should be nil for kind=command, got non-nil")
+	}
+}
+
+// TestBuildContractSpec_TrulyUnsupportedKind verifies that a kind not in the
+// closed set (http | event | command | projection) returns an error.
+func TestBuildContractSpec_TrulyUnsupportedKind(t *testing.T) {
+	p := &metadata.ProjectMeta{
+		Contracts: map[string]*metadata.ContractMeta{
+			"workflow.foo.bar.v1": {
+				ID:      "workflow.foo.bar.v1",
+				Kind:    "workflow",
+				Codegen: true,
+			},
+		},
+	}
+	root := findRepoRoot()
+	_, err := BuildContractSpec(root, p, "workflow.foo.bar.v1")
 	if err == nil {
-		t.Fatal("expected error for unsupported kind")
+		t.Fatal("expected error for truly unsupported kind")
 	}
 }
 

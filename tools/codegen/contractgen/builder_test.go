@@ -319,6 +319,10 @@ func TestPkgNameFromContractID(t *testing.T) {
 		{"event.foo-bar.delete.v1", "foobardelete"},
 		// D1: http stdlib collision
 		{"http.gateway.http.v1", "gatewayhttp"},
+		// 2-segment edge case (<3 parts): fallback uses raw last segment regardless of keyword.
+		{"http.v1", "v1"},     // <3 parts → goPackageName(last) = "v1"
+		// 3-segment with reserved penultimate and no preceding domain: appends "pkg".
+		{"http.delete.v1", "deletepkg"}, // len=3, parts[-2]="delete" reserved, len<4 → "deletepkg"
 	}
 	for _, c := range cases {
 		got := pkgNameFromContractID(c.in)
@@ -340,7 +344,6 @@ func TestMergeParamsIntoRequest_ConflictDetected(t *testing.T) {
 			},
 		},
 	}
-	ptrTrue := true
 	http := &metadata.HTTPTransportMeta{
 		Method: "GET",
 		Path:   "/api/v1/orders/{item}",
@@ -348,14 +351,15 @@ func TestMergeParamsIntoRequest_ConflictDetected(t *testing.T) {
 			"item": {Type: "string"},
 		},
 	}
-	_, err := mergeParamsIntoRequestWithID(existing, http, "http.test.conflict.v1")
+	pathParams := buildPathParams(http)
+	queryParams := buildQueryParams(http)
+	_, err := mergeParamsIntoRequest(existing, pathParams, queryParams, "http.test.conflict.v1")
 	if err == nil {
 		t.Fatal("expected error for field name conflict between path param and body schema")
 	}
 	if !strings.Contains(err.Error(), "conflict") {
 		t.Errorf("error should mention 'conflict', got: %v", err)
 	}
-	_ = ptrTrue
 }
 
 func TestMergeParamsIntoRequest_QueryConflictDetected(t *testing.T) {
@@ -376,7 +380,9 @@ func TestMergeParamsIntoRequest_QueryConflictDetected(t *testing.T) {
 			"cursor": {Type: "string", Required: &ptrFalse},
 		},
 	}
-	_, err := mergeParamsIntoRequestWithID(existing, http, "http.test.queryconflict.v1")
+	pathParams := buildPathParams(http)
+	queryParams := buildQueryParams(http)
+	_, err := mergeParamsIntoRequest(existing, pathParams, queryParams, "http.test.queryconflict.v1")
 	if err == nil {
 		t.Fatal("expected error for field name conflict between query param and body schema")
 	}
@@ -402,7 +408,9 @@ func TestMergeParamsIntoRequest_NoConflict(t *testing.T) {
 			"id": {Type: "string"},
 		},
 	}
-	dtos, err := mergeParamsIntoRequestWithID(existing, http, "http.test.noconflict.v1")
+	pathParams := buildPathParams(http)
+	queryParams := buildQueryParams(http)
+	dtos, err := mergeParamsIntoRequest(existing, pathParams, queryParams, "http.test.noconflict.v1")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -471,5 +479,125 @@ func TestBuildQueryParams_BoundaryValues(t *testing.T) {
 	}
 	if q4.Maximum == nil || *q4.Maximum != 500 {
 		t.Errorf("q4.Maximum should be 500, got %v", q4.Maximum)
+	}
+}
+
+// --- BuildContractSpec tests ---
+
+// TestBuildContractSpec_CommandKind_Skips documents the graceful-skip path for
+// kind=command (and kind=projection): BuildContractSpec returns a valid spec with
+// no error and no HTTP/event-specific fields populated. generateOneContract will
+// only emit types_gen.go + iface_gen.go for these kinds.
+func TestBuildContractSpec_CommandKind_Skips(t *testing.T) {
+	t.Parallel()
+	p := &metadata.ProjectMeta{
+		Contracts: map[string]*metadata.ContractMeta{
+			"command.device.provision.v1": {
+				ID:      "command.device.provision.v1",
+				Kind:    "command",
+				Codegen: true,
+				File:    "contracts/command/device/provision/v1/contract.yaml",
+			},
+		},
+	}
+	spec, err := BuildContractSpec("", p, "command.device.provision.v1")
+	if err != nil {
+		t.Fatalf("BuildContractSpec should not error for kind=command, got: %v", err)
+	}
+	if spec == nil {
+		t.Fatal("expected non-nil spec")
+	}
+	if spec.Kind != "command" {
+		t.Errorf("spec.Kind = %q, want %q", spec.Kind, "command")
+	}
+	// No HTTP or event-specific fields are populated for command kind.
+	if spec.Endpoint != nil {
+		t.Errorf("spec.Endpoint should be nil for kind=command, got non-nil")
+	}
+	if spec.Event != nil {
+		t.Errorf("spec.Event should be nil for kind=command, got non-nil")
+	}
+}
+
+// TestBuildContractSpec_ProjectionKind_Skips mirrors the command test for
+// kind=projection.
+func TestBuildContractSpec_ProjectionKind_Skips(t *testing.T) {
+	t.Parallel()
+	p := &metadata.ProjectMeta{
+		Contracts: map[string]*metadata.ContractMeta{
+			"projection.device.inventory.v1": {
+				ID:      "projection.device.inventory.v1",
+				Kind:    "projection",
+				Codegen: true,
+				File:    "contracts/projection/device/inventory/v1/contract.yaml",
+			},
+		},
+	}
+	spec, err := BuildContractSpec("", p, "projection.device.inventory.v1")
+	if err != nil {
+		t.Fatalf("BuildContractSpec should not error for kind=projection, got: %v", err)
+	}
+	if spec == nil {
+		t.Fatal("expected non-nil spec")
+	}
+	if spec.Kind != "projection" {
+		t.Errorf("spec.Kind = %q, want %q", spec.Kind, "projection")
+	}
+	if spec.Endpoint != nil {
+		t.Errorf("spec.Endpoint should be nil for kind=projection, got non-nil")
+	}
+	if spec.Event != nil {
+		t.Errorf("spec.Event should be nil for kind=projection, got non-nil")
+	}
+}
+
+// --- BuildHTTPEndpointSpec HasBody tests ---
+
+// TestBuildHTTPEndpointSpec_HasBody_PostWithoutRequestSchema verifies that
+// HasBody=false when the contract is POST but declares no schemaRefs.request.
+// This is the "body-less POST" case (path-param-only endpoints).
+func TestBuildHTTPEndpointSpec_HasBody_PostWithoutRequestSchema(t *testing.T) {
+	t.Parallel()
+	contract := &metadata.ContractMeta{
+		ID:         "http.order.activate.v1",
+		Kind:       "http",
+		SchemaRefs: metadata.SchemaRefsMeta{Request: ""}, // no request body schema
+	}
+	http := &metadata.HTTPTransportMeta{
+		Method: "POST",
+		Path:   "/api/v1/orders/{id}/activate",
+	}
+	pathParams := buildPathParams(http)
+	queryParams := buildQueryParams(http)
+	spec, err := buildHTTPEndpointSpec(contract, http, pathParams, queryParams)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if spec.HasBody {
+		t.Errorf("HasBody should be false for POST without request schema, got true")
+	}
+}
+
+// TestBuildHTTPEndpointSpec_HasBody_PostWithRequestSchema verifies that
+// HasBody=true when the contract is POST and declares a schemaRefs.request.
+func TestBuildHTTPEndpointSpec_HasBody_PostWithRequestSchema(t *testing.T) {
+	t.Parallel()
+	contract := &metadata.ContractMeta{
+		ID:         "http.order.create.v1",
+		Kind:       "http",
+		SchemaRefs: metadata.SchemaRefsMeta{Request: "request-schema.json"},
+	}
+	http := &metadata.HTTPTransportMeta{
+		Method: "POST",
+		Path:   "/api/v1/orders",
+	}
+	pathParams := buildPathParams(http)
+	queryParams := buildQueryParams(http)
+	spec, err := buildHTTPEndpointSpec(contract, http, pathParams, queryParams)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !spec.HasBody {
+		t.Errorf("HasBody should be true for POST with request schema, got false")
 	}
 }
