@@ -912,6 +912,36 @@ func TestEntry_Validate_MetadataMultiByteUTF8(t *testing.T) {
 	assert.NoError(t, e.Validate(), "multi-byte key within byte limit should pass")
 }
 
+// --- Payload Validation Tests (PAYLOAD-SIZE-01) ---
+
+func TestEntry_Validate_PayloadByteLimit_Exceeds(t *testing.T) {
+	e := Entry{
+		ID:        "test",
+		EventType: "test.event",
+		Payload:   make([]byte, MaxPayloadBytes+1),
+	}
+	err := e.Validate()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "payload size")
+	assert.Contains(t, err.Error(), "exceeds max")
+}
+
+func TestEntry_Validate_PayloadAtExactBoundary(t *testing.T) {
+	e := Entry{
+		ID:        "test",
+		EventType: "test.event",
+		Payload:   make([]byte, MaxPayloadBytes),
+	}
+	assert.NoError(t, e.Validate(), "payload at exactly MaxPayloadBytes must be valid")
+}
+
+func TestPayloadConstantsAlign(t *testing.T) {
+	// Sentinel that locks the documented value: 1 MiB. Bumping this constant
+	// is a deliberate design call (PG TOAST overhead, relay batch memory) and
+	// must update this assertion together with operator-facing release notes.
+	assert.Equal(t, 1<<20, MaxPayloadBytes)
+}
+
 func TestEntry_Validate_MetadataAtExactBoundary(t *testing.T) {
 	// Exactly MaxMetadataKeys keys should pass.
 	e := Entry{ID: "test", EventType: "test.event", Payload: []byte(`{}`)}
