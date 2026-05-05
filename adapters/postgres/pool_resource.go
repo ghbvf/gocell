@@ -34,11 +34,11 @@ type poolCloser interface {
 // by Hook registration; GoCell converges this into a single ManagedResource.
 // ref: kubernetes/kubernetes pkg/util/healthz — named health checkers.
 type PGResource struct {
-	pool               *Pool
-	name               string                          // health checker name; default "postgres_ready"
-	closeOverride      poolCloser                      // non-nil only in tests; replaces pool for Close()
-	healthFunc         func(ctx context.Context) error // non-nil only in tests; replaces pool.Health
-	invalidIndexFunc   func(ctx context.Context) error // non-nil only in tests; replaces InvalidIndexCheck
+	pool             *Pool
+	name             string                          // health checker name; default "postgres_ready"
+	closeOverride    poolCloser                      // non-nil only in tests; replaces pool for Close()
+	healthFunc       func(ctx context.Context) error // non-nil only in tests; replaces pool.Health
+	invalidIndexFunc func(ctx context.Context) error // non-nil only in tests; replaces InvalidIndexCheck
 }
 
 // NewPGResource creates a PGResource. pool must be non-nil; passing nil

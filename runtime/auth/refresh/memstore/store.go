@@ -32,19 +32,19 @@ import (
 // except rotatedAt, revokedAt, firstUsedAt, and usedTimes (one-way flips /
 // monotonic increment).
 type tokenRecord struct {
-	id             uuid.UUID
-	parentID       uuid.UUID
-	sessionID      string
-	subjectID      string
-	selector       []byte
-	verifierHash   [sha256.Size]byte
-	createdAt      time.Time
-	expiresAt      time.Time
-	idleExpiresAt  time.Time // sliding window; zero disables idle check
-	rotatedAt      time.Time // zero means live-latest
-	revokedAt      time.Time // zero means not revoked
-	firstUsedAt    time.Time // zero until first grace re-use
-	usedTimes      int       // grace re-use counter
+	id            uuid.UUID
+	parentID      uuid.UUID
+	sessionID     string
+	subjectID     string
+	selector      []byte
+	verifierHash  [sha256.Size]byte
+	createdAt     time.Time
+	expiresAt     time.Time
+	idleExpiresAt time.Time // sliding window; zero disables idle check
+	rotatedAt     time.Time // zero means live-latest
+	revokedAt     time.Time // zero means not revoked
+	firstUsedAt   time.Time // zero until first grace re-use
+	usedTimes     int       // grace re-use counter
 }
 
 func (r *tokenRecord) isRotated() bool { return !r.rotatedAt.IsZero() }

@@ -123,17 +123,17 @@ type PGRefreshStore struct {
 }
 
 type refreshRow struct {
-	id             uuid.UUID
-	sessionID      string
-	subjectID      string
-	verifierHash   []byte
-	createdAt      time.Time
-	expiresAt      time.Time
-	rotatedAt      *time.Time
-	revokedAt      *time.Time
-	idleExpiresAt  time.Time
-	firstUsedAt    *time.Time
-	usedTimes      int
+	id            uuid.UUID
+	sessionID     string
+	subjectID     string
+	verifierHash  []byte
+	createdAt     time.Time
+	expiresAt     time.Time
+	rotatedAt     *time.Time
+	revokedAt     *time.Time
+	idleExpiresAt time.Time
+	firstUsedAt   *time.Time
+	usedTimes     int
 }
 
 func (r refreshRow) toToken() *refresh.Token {
@@ -411,65 +411,85 @@ func (s *PGRefreshStore) lockSessionInTx(ctx context.Context, sessionID string) 
 }
 
 func (s *PGRefreshStore) validateRow(ctx context.Context, row refreshRow, ver []byte) (refreshRow, error) {
-	presentedHash := sha256.Sum256(ver)
-	if subtle.ConstantTimeCompare(presentedHash[:], row.verifierHash) != 1 {
-		return refreshRow{}, rejectWithReason("verifier_miss", row.sessionID)
+	if err := s.checkBasicValidity(row, ver); err != nil {
+		return refreshRow{}, err
 	}
 
+	if row.rotatedAt == nil {
+		return row, nil
+	}
+	if err := s.handleRotatedRow(ctx, row); err != nil {
+		return refreshRow{}, err
+	}
+	return row, nil
+}
+
+// checkBasicValidity verifies hash, revoke flag, hard expiry, and idle expiry.
+// Returns refresh.ErrRejected (via rejectWithReason) on any failure.
+func (s *PGRefreshStore) checkBasicValidity(row refreshRow, ver []byte) error {
+	presentedHash := sha256.Sum256(ver)
+	if subtle.ConstantTimeCompare(presentedHash[:], row.verifierHash) != 1 {
+		return rejectWithReason("verifier_miss", row.sessionID)
+	}
 	now := s.clock.Now()
 	if row.revokedAt != nil {
-		return refreshRow{}, rejectWithReason("revoked", row.sessionID)
+		return rejectWithReason("revoked", row.sessionID)
 	}
 	if !row.expiresAt.After(now) {
-		return refreshRow{}, rejectWithReason("expired", row.sessionID)
+		return rejectWithReason("expired", row.sessionID)
 	}
 	// X12: idle-expiry check. idleExpiresAt is zero for pre-016 rows in DBs
 	// without the migration; zero time is before any real time so we guard
 	// against that by only checking when idleExpiresAt is non-zero.
 	if !row.idleExpiresAt.IsZero() && s.policy.MaxIdle > 0 && !row.idleExpiresAt.After(now) {
-		return refreshRow{}, rejectWithReason("idle_expired", row.sessionID)
+		return rejectWithReason("idle_expired", row.sessionID)
+	}
+	return nil
+}
+
+// handleRotatedRow runs grace-cap, reuse-window, and used_times-increment
+// branches for rows whose parent has already been rotated once. Caller has
+// already verified the row is otherwise valid.
+func (s *PGRefreshStore) handleRotatedRow(ctx context.Context, row refreshRow) error {
+	now := s.clock.Now()
+
+	// X14: grace counter cap. If the grace cap is configured and this parent
+	// has already been re-presented GraceMaxReuses times, treat this as a
+	// reuse attack regardless of ReuseInterval.
+	if s.policy.GraceMaxReuses > 0 && row.usedTimes >= s.policy.GraceMaxReuses {
+		slog.Error("refresh token grace counter exhausted",
+			slog.String("session_id", row.sessionID),
+			slog.String("reason", "reuse_detected"),
+			slog.Int("used_times", row.usedTimes),
+		)
+		if _, execErr := s.execCtx(ctx, revokeSessionSQL, now, row.sessionID); execErr != nil {
+			return errcode.Wrap(errcode.KindInternal, ErrAdapterPGQuery, "refresh store: grace exhausted cascade", execErr)
+		}
+		return rejectWithReason("reuse_detected", row.sessionID)
 	}
 
-	if row.rotatedAt != nil {
-		// X14: grace counter cap. If the grace cap is configured and this parent
-		// has already been re-presented GraceMaxReuses times, treat this as a
-		// reuse attack regardless of ReuseInterval.
-		if s.policy.GraceMaxReuses > 0 && row.usedTimes >= s.policy.GraceMaxReuses {
-			slog.Error("refresh token grace counter exhausted",
-				slog.String("session_id", row.sessionID),
-				slog.String("reason", "reuse_detected"),
-				slog.Int("used_times", row.usedTimes),
-			)
-			if _, execErr := s.execCtx(ctx, revokeSessionSQL, now, row.sessionID); execErr != nil {
-				return refreshRow{}, errcode.Wrap(errcode.KindInternal, ErrAdapterPGQuery, "refresh store: grace exhausted cascade", execErr)
-			}
-			return refreshRow{}, rejectWithReason("reuse_detected", row.sessionID)
+	if now.Sub(*row.rotatedAt) > s.policy.ReuseInterval {
+		// Reuse detected: log as security event BEFORE the cascade SQL so that
+		// the security-observable log entry is not delayed by DB latency.
+		// The cascade revoke path is slower than other reject branches due to
+		// the UPDATE SQL; we accept this timing difference (B2-A-09: string
+		// processing and log formatting are uniform across all branches; the
+		// DB write is the only unavoidable timing oracle).
+		slog.Error("refresh token reuse detected",
+			slog.String("session_id", row.sessionID),
+			slog.String("reason", "reuse_detected"),
+		)
+		if _, execErr := s.execCtx(ctx, revokeSessionSQL, now, row.sessionID); execErr != nil {
+			return errcode.Wrap(errcode.KindInternal, ErrAdapterPGQuery, "refresh store: reuse cascade", execErr)
 		}
-
-		if now.Sub(*row.rotatedAt) > s.policy.ReuseInterval {
-			// Reuse detected: log as security event BEFORE the cascade SQL so that
-			// the security-observable log entry is not delayed by DB latency.
-			// The cascade revoke path is slower than other reject branches due to
-			// the UPDATE SQL; we accept this timing difference (B2-A-09: string
-			// processing and log formatting are uniform across all branches; the
-			// DB write is the only unavoidable timing oracle).
-			slog.Error("refresh token reuse detected",
-				slog.String("session_id", row.sessionID),
-				slog.String("reason", "reuse_detected"),
-			)
-			if _, execErr := s.execCtx(ctx, revokeSessionSQL, now, row.sessionID); execErr != nil {
-				return refreshRow{}, errcode.Wrap(errcode.KindInternal, ErrAdapterPGQuery, "refresh store: reuse cascade", execErr)
-			}
-			return refreshRow{}, rejectWithReason("reuse_detected", row.sessionID)
-		}
-
-		// Within grace window: increment used_times so the counter approaches GraceMaxReuses.
-		if _, execErr := s.execCtx(ctx, markGraceUsedSQL, now, row.id); execErr != nil {
-			return refreshRow{}, errcode.Wrap(errcode.KindInternal, ErrAdapterPGQuery, "refresh store: mark grace used", execErr)
-		}
+		return rejectWithReason("reuse_detected", row.sessionID)
 	}
 
-	return row, nil
+	// Within grace window: increment used_times so the counter approaches GraceMaxReuses.
+	if _, execErr := s.execCtx(ctx, markGraceUsedSQL, now, row.id); execErr != nil {
+		return errcode.Wrap(errcode.KindInternal, ErrAdapterPGQuery, "refresh store: mark grace used", execErr)
+	}
+	return nil
 }
 
 // RevokeSession marks every row in the session_id lineage as revoked.
