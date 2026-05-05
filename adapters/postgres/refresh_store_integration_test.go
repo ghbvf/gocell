@@ -13,6 +13,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/runtime/auth/refresh"
 	"github.com/ghbvf/gocell/runtime/auth/refresh/storetest"
@@ -588,9 +589,12 @@ func TestPGRefreshStore_T21_RejectPathsHaveUniformLogging(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 // TestPGRefreshStore_T22_ReadyzReportsInvalidIndex verifies that the
-// postgres_indexes_valid_ready checker in PGResource.Checkers returns a
-// non-nil error when an invalid index exists in the schema.
-// RED in Wave 1 (checker not yet added to pool_resource.go).
+// postgres_indexes_valid_ready checker in PGResource.Checkers wraps
+// cell.ErrDegraded when invalid indexes exist. The wrap is load-bearing:
+// runtime/http/health.runOneProbe classifies cell.ErrDegraded as "degraded"
+// (HTTP 200, fail-open) rather than "unhealthy" (HTTP 503, pod evict). Invalid
+// indexes are a maintenance signal — CREATE INDEX CONCURRENTLY in-progress or
+// aborted leftover — not a runtime fault that should evict pods.
 func TestPGRefreshStore_T22_ReadyzReportsInvalidIndex(t *testing.T) {
 	base, cleanup := setupPostgres(t)
 	t.Cleanup(cleanup)
@@ -624,7 +628,10 @@ func TestPGRefreshStore_T22_ReadyzReportsInvalidIndex(t *testing.T) {
 	require.True(t, ok, "postgres_indexes_valid_ready checker must be present in Checkers()")
 
 	err = invalidIdxChecker(ctx)
-	require.Error(t, err, "postgres_indexes_valid_ready must return error when invalid indexes exist")
+	require.ErrorIs(t, err, cell.ErrDegraded,
+		"postgres_indexes_valid_ready must wrap cell.ErrDegraded so runtime/http/health.runOneProbe classifies as degraded (HTTP 200), not unhealthy (HTTP 503)")
+	require.Contains(t, err.Error(), "idx_t22_probe_val",
+		"degraded error must list invalid index names for /readyz?verbose body")
 
 	t.Cleanup(func() {
 		_, _ = p.DB().Exec(context.Background(), `DROP INDEX IF EXISTS idx_t22_probe_val`)

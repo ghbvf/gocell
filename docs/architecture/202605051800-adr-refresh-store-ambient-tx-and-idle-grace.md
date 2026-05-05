@@ -152,6 +152,18 @@ uniform.
   `DetectInvalidIndexes` and returns a non-nil error when any `indisvalid=false`
   row exists
 
+**Update (PR#528 follow-up)**: `InvalidIndexCheck` wraps `cell.ErrDegraded`
+when invalid indexes are present (using the same `fmt.Errorf("...: %w", cell.ErrDegraded)`
+pattern as `kernel/outbox/emitter.go` for drop-ratio degradation). This causes
+`runtime/http/health.runOneProbe` to classify the result as **degraded** (HTTP
+200, fail-open) rather than **unhealthy** (HTTP 503, pod evict). Invalid indexes
+are a maintenance signal — CREATE INDEX CONCURRENTLY in-progress or aborted
+leftover — not a runtime fault. Operators see the invalid-index list in the
+`/readyz?verbose` body's `dependencies.postgres_indexes_valid_ready` entry and
+DROP the index manually. The underlying query error path (connection failure,
+SQL error inside `DetectInvalidIndexes`) still returns the raw query error and
+maps to **unhealthy** — that is a real fault.
+
 **Archtest**: `REFRESH-INVALID-INDEX-SINGLE-SOURCE-01` (AST scan for
 `DetectInvalidIndexes` FuncDecl — asserts exactly one definition).
 
