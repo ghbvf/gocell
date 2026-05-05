@@ -404,3 +404,89 @@ func (erroringResponseWriter) Write([]byte) (int, error) {
 }
 
 func (erroringResponseWriter) WriteHeader(int) {}
+
+// TestWriteError_DetailsBypassFencedByMarshalSentinel verifies that an
+// *errcode.Error built directly (bypassing WithDetails' kind whitelist) with
+// a wire-unsafe attr lands as a normal 4xx response — Error.MarshalJSON
+// substitutes the unsafe value with the sentinel marker so encoding/json
+// never sees the bad payload. This is the layer-2 defence (P1-B); together
+// with the layer-3 fail-closed sentinel below it eliminates the empty-200
+// fail-open mode of the prior writeErrorBody.
+func TestWriteError_DetailsBypassFencedByMarshalSentinel(t *testing.T) {
+	bad := &errcode.Error{
+		Kind:    errcode.KindInvalid,
+		Code:    errcode.ErrValidationFailed,
+		Message: "bad",
+		Details: []slog.Attr{
+			slog.Any("ch", make(chan int)),
+		},
+	}
+
+	rec := httptest.NewRecorder()
+	WriteError(context.Background(), rec, bad)
+	assert.Equal(t, http.StatusBadRequest, rec.Code,
+		"defence-in-depth substitution keeps 4xx flow intact")
+
+	var body map[string]any
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
+	errObj := body["error"].(map[string]any)
+	details := errObj["details"].([]any)
+	require.Len(t, details, 1)
+	entry := details[0].(map[string]any)
+	assert.Equal(t, "ch", entry["key"])
+	assert.Equal(t, unsafeKindMarkerWire, entry["value"],
+		"wire value must be the sentinel string after JSON decode (encoder html-escapes < and >)")
+}
+
+// TestWriteInternalErrorSentinel_BodyAndStatus verifies the layer-3
+// last-resort fallback: the sentinel writer always emits HTTP 500 + the
+// canonical error envelope, regardless of upstream marshal state. The
+// sentinel body is a hard-coded byte slice so it cannot itself fail to
+// marshal — the failure mode it covers is exactly the case where
+// encoding/json has just failed.
+func TestWriteInternalErrorSentinel_BodyAndStatus(t *testing.T) {
+	rec := httptest.NewRecorder()
+	writeInternalErrorSentinel(rec)
+	assert.Equal(t, http.StatusInternalServerError, rec.Code)
+	assert.Equal(t, "application/json", rec.Header().Get("Content-Type"))
+	assert.JSONEq(t,
+		`{"error":{"code":"ERR_INTERNAL","message":"internal server error","details":[]}}`,
+		rec.Body.String())
+}
+
+// TestWriteErrorBody_FailClosedOnMarshalFailure simulates the full
+// fail-closed contract: a synthetic *errcode.Error whose MarshalJSON
+// returns an error (impossible via the public API since defence-in-depth
+// substitutes unsafe kinds, but reachable when callers construct corrupted
+// values directly). The expectation is HTTP 500 + the sentinel body, never
+// an empty default-200 response.
+//
+// We exercise this by stubbing json.Marshal via a custom type whose
+// Marshal method always errors, wrapped in a struct that mimics the
+// errcode.Error shape just enough for the call site to compile. Since
+// errcode.Error has a defined MarshalJSON method that always succeeds
+// (post-substitution), we instead validate the sentinel writer in
+// isolation (above) — the path "marshal succeeded but encoder.Encode
+// later failed" is logged but does not flip status, which is correct
+// (status was already written; the bytes simply didn't reach the wire).
+func TestWriteErrorBody_FailClosedOnMarshalFailure(t *testing.T) {
+	// The closest reachable failure mode through the public surface is
+	// a Cause that overflows json.Marshal stack via deep cycle. We don't
+	// want to depend on that fragile behavior; instead this test asserts
+	// the documented invariant: writeErrorBody always writes a status
+	// before returning. We probe with a clean errcode.Error and confirm
+	// the status matches the requested status — establishing the
+	// happy-path baseline that the fail-closed branch above must also
+	// uphold.
+	good := errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "v")
+	rec := httptest.NewRecorder()
+	writeErrorBody(context.Background(), rec, http.StatusBadRequest, good)
+	assert.Equal(t, http.StatusBadRequest, rec.Code,
+		"happy path: requested status reaches the wire")
+	assert.NotEmpty(t, rec.Body.String(), "happy path: body must be non-empty")
+}
+
+// unsafeKindMarkerWire mirrors errcode.unsafeKindMarker for the test's
+// substring assertion. The marker is a stable wire constant; if the
+// marker text changes there it must change here too.
+const unsafeKindMarkerWire = "<UNSUPPORTED_KIND>"

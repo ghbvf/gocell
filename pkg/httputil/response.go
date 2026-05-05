@@ -178,21 +178,42 @@ func writeErrcodeError(ctx context.Context, w http.ResponseWriter, label string,
 	writeErrorBody(ctx, w, status, out)
 }
 
-// writeErrorBody serialises ecErr through Error.MarshalJSON so the wire form
+// sentinelInternalErrorBody is the JSON body emitted when the canonical
+// errcode envelope cannot itself be marshaled. Pre-encoded so the failure
+// path is allocation-free and never invokes encoding/json (which is the
+// thing that just failed). Tracks the v1 wire schema:
+// contracts/shared/errors/error-response-v1.schema.json.
+var sentinelInternalErrorBody = []byte(
+	`{"error":{"code":"ERR_INTERNAL","message":"internal server error","details":[]}}`)
+
+// writeErrorBody serializes ecErr through Error.MarshalJSON so the wire form
 // is governed by the errcode package alone (single source of truth for the
 // details: array<{key,value}> shape and 5xx details strip). request_id is
 // merged into the inner error object before encoding because the canonical
 // error envelope places it alongside code/message/details, not in the outer
 // wrapper (see contracts/shared/errors/error-response-v1.schema.json).
+//
+// Fail-closed: if json.Marshal/Unmarshal fails (e.g. a Details attr bypassed
+// the kind whitelist and carries a non-marshalable Go value, or a future
+// custom MarshalJSON returns a malformed payload), the response still gets
+// HTTP 500 + the sentinelInternalErrorBody. There is no path that returns
+// an empty 200 body. ref: net/http.Error — stdlib never returns a body
+// without first writing a status; this function holds the same invariant.
 func writeErrorBody(ctx context.Context, w http.ResponseWriter, status int, ecErr *errcode.Error) {
 	innerJSON, err := json.Marshal(ecErr)
 	if err != nil {
-		slog.Error("httputil: encode errcode body", slog.Any("error", err))
+		slog.Error("httputil: encode errcode body; emitting sentinel 500",
+			slog.Any("error", err),
+			slog.Int("requested_status", status))
+		writeInternalErrorSentinel(w)
 		return
 	}
 	var inner map[string]any
 	if err := json.Unmarshal(innerJSON, &inner); err != nil {
-		slog.Error("httputil: decode errcode body", slog.Any("error", err))
+		slog.Error("httputil: decode errcode body; emitting sentinel 500",
+			slog.Any("error", err),
+			slog.Int("requested_status", status))
+		writeInternalErrorSentinel(w)
 		return
 	}
 	if reqID, ok := ctxkeys.RequestIDFrom(ctx); ok {
@@ -205,5 +226,18 @@ func writeErrorBody(ctx context.Context, w http.ResponseWriter, status int, ecEr
 		"error": inner,
 	}); encErr != nil {
 		slog.Error("httputil: encode error response", slog.Any("error", encErr))
+	}
+}
+
+// writeInternalErrorSentinel writes a hard-coded 500 response with the
+// canonical error envelope. Used as the last-resort fallback when the
+// normal serialization path fails — guarantees the client always sees a
+// non-empty body and a 5xx status.
+func writeInternalErrorSentinel(w http.ResponseWriter) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusInternalServerError)
+	if _, writeErr := w.Write(sentinelInternalErrorBody); writeErr != nil {
+		slog.Error("httputil: write sentinel error body",
+			slog.Any("error", writeErr))
 	}
 }
