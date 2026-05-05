@@ -156,6 +156,13 @@ func startHub(t *testing.T, cfg HubConfig, handler MessageHandler) *Hub {
 	return hub
 }
 
+func waitForHubPingTicker(t *testing.T, fc *clockmock.FakeClock) {
+	t.Helper()
+	require.Eventually(t, func() bool {
+		return fc.PendingTickers() == 1
+	}, testtime.EventuallyShort, testtime.D1ms)
+}
+
 // ---------------------------------------------------------------------------
 // Lifecycle Tests
 // ---------------------------------------------------------------------------
@@ -1081,6 +1088,7 @@ func TestHub_TokenExpiry_EvictsOnPing(t *testing.T) {
 	require.Equal(t, 1, hub.ConnCount())
 
 	// Advance clock past expiry; next ping tick must evict.
+	waitForHubPingTicker(t, fc)
 	fc.Advance(testtime.D2h)
 
 	require.Eventually(t, func() bool {
@@ -1113,6 +1121,7 @@ func TestHub_TokenExpiry_AtBoundaryEvicts(t *testing.T) {
 	// Advance clock to *exactly* ExpiresAt — boundary case.
 	// Before(exp) at exp: false (not strictly before). !After(exp) at exp: true.
 	// pingLoop fires at this tick because PingInterval == 10ms == advance.
+	waitForHubPingTicker(t, fc)
 	fc.Advance(testtime.D10ms)
 
 	require.Eventually(t, func() bool {
@@ -1140,6 +1149,7 @@ func TestHub_TokenExpiry_ZeroExpiryNeverEvicts(t *testing.T) {
 	// ExpiresAt is zero ("no expiry"). Use a bounded advance that clockmock can
 	// replay without exhausting the test timeout (avoids O(advance/interval)
 	// ticker iterations in clockmock).
+	waitForHubPingTicker(t, fc)
 	fc.Advance(testtime.D2h)
 
 	assert.Never(t, func() bool { return hub.ConnCount() == 0 || conn.isClosed() }, testtime.D100ms, testtime.D10ms)
@@ -1229,6 +1239,7 @@ func TestHub_SubjectIdx_EmptyAfterTokenExpiry(t *testing.T) {
 	require.NoError(t, hub.Register(context.Background(), conn))
 	<-conn.readyCh
 
+	waitForHubPingTicker(t, fc)
 	fc.Advance(testtime.D2h)
 
 	require.Eventually(t, func() bool { return hub.ConnCount() == 0 }, testtime.D2s, testtime.D10ms)
