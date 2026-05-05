@@ -489,6 +489,13 @@ func schemaToDTOs(rootName string, s *Schema) ([]DTOSpec, error) {
 
 // collectDTOs recursively collects DTOSpecs from an object schema.
 // All types are appended to out in DFS pre-order (parent before children).
+//
+// Cognitive complexity comes from the schema-shape switch (object / array /
+// inline / ref / scalar) crossed with the optional-pointer rules (*int64
+// for minimum/maximum, *bool for optional booleans). Splitting would only
+// push the same shape × pointer-policy matrix into helpers.
+//
+//nolint:gocognit // structural schema-shape × pointer-policy matrix; see godoc above.
 func collectDTOs(name string, s *Schema, out *[]DTOSpec) {
 	dto := DTOSpec{Name: name, Doc: s.Title}
 

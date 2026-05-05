@@ -53,7 +53,6 @@ func strPtr(s string) *string {
 	return &s
 }
 
-
 // CreateAdapter implements creategen.Service for http.auth.user.create.v1.
 type CreateAdapter struct{ S *Service }
 

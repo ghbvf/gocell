@@ -283,7 +283,9 @@ func TestStatus_DeviceCrossRead_403(t *testing.T) {
 	r.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusForbidden {
-		t.Errorf("status cross-device read: want 403, got %d — body: %s (RED: AnyRole(RoleDevice) allows cross-device read)", rec.Code, rec.Body.String())
+		t.Errorf("status cross-device read: want 403, got %d — body: %s "+
+			"(RED: AnyRole(RoleDevice) allows cross-device read)",
+			rec.Code, rec.Body.String())
 	}
 }
 

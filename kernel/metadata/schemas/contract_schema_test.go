@@ -177,5 +177,8 @@ func TestContractSchemaRejectsAuthPublicAndPasswordResetExemptBoth(t *testing.T)
 		}
 	}`), &contractDoc))
 
-	assert.Error(t, schema.Validate(contractDoc), "contract with both auth.public:true and auth.passwordResetExempt:true must fail schema validation (mutually exclusive)")
+	assert.Error(t,
+		schema.Validate(contractDoc),
+		"contract with both auth.public:true and auth.passwordResetExempt:true "+
+			"must fail schema validation (mutually exclusive)")
 }

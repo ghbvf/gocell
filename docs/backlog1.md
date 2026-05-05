@@ -128,7 +128,7 @@
 | 子项 | 状态 | 证据 | 修复方向 |
 |---|---|---|---|
 | **WRAPPER-CELL-API-ERROR-FIRST-01** | ✅ 已完成（PR #296） | `kernel/wrapper/handler.go:56` + `kernel/wrapper/spec.go:46` + `kernel/cell/auth_plan.go:107` | 配置期 fail-fast 统一 error-first；提供 `MustNewSpec` / `MustNewHandler` 给组合根使用；godoc 写明 panic 仅在 `Must*` 路径 |
-| **ERRCODE-CLASSIFY-SINGLE-SOURCE-01** | ⬜ 待处理 | `pkg/errcode/classify.go:175` + `pkg/httputil/response.go:351` + `pkg/errcode/errcode.go:434` | 4xx 分类由 status code 派生（status<500 → expected4xx），不再双源维护；`IsDomainNotFound` 与 `New/Wrap` 语义对齐；补一致性测试 `TestClassify_StatusVsExpected4xx_Aligned` |
+| **ERRCODE-CLASSIFY-SINGLE-SOURCE-01** | ✅ 已完成（PR #368） | `pkg/errcode/classify.go` + `pkg/errcode/errcode.go` | PR#368 (refactor/514-pkg-breaking-cleanup) 删除 `expected4xxCodes` whitelist；`IsExpected4xx` 改 `ec.Kind.IsClient()` 单源；`Error.Status()` / `Error.PublicCode()` 同 Kind 派生；4xx 分类与 HTTP status 映射收敛到 Kind 一处 |
 | **JOURNEY-VERIFY-STRICT-AUTO-01** | ✅ 已完成（PR #295） | `kernel/verify/runner.go:160` + `kernel/governance/rules_verify.go:310` | strict 模式（CI）要求每个 journey 至少 1 条 `auto` check；manual pending 现仅 warning → strict 下 fail-fast |
 
 **注**：与 backlog `PR220-3 JOURNEY-VERIFY-FAIL-CLOSED-01` 协同 — 220-3 是 RunPattern + skip stub 检测；本节是 manual-only 不允许混入 CI strict。
