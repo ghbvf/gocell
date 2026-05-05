@@ -76,7 +76,7 @@ func TestPolicy_Validate(t *testing.T) {
 			policy: refresh.Policy{
 				ReuseInterval: time.Second,
 				MaxAge:        time.Hour,
-				MaxIdle:       30 * 24 * time.Hour,
+				MaxIdle:       refresh.DefaultMaxIdle,
 				// GraceMaxReuses intentionally zero
 			},
 			wantErr: true,

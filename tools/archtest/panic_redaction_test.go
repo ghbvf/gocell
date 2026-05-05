@@ -40,7 +40,8 @@ func TestPanicLogMustUseRedactAny(t *testing.T) {
 		}
 		f, perr := parser.ParseFile(fset, path, nil, parser.SkipObjectResolution)
 		if perr != nil {
-			return nil // skip files that don't parse; not our concern
+			//nolint:nilerr // unparseable files (generated, vendored 3p, broken WIP) are not the archtest's concern
+			return nil
 		}
 		ast.Inspect(f, func(n ast.Node) bool {
 			call, ok := n.(*ast.CallExpr)

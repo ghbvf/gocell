@@ -637,14 +637,19 @@ func RunIdleExpireContractSuite(t *testing.T, factory Factory) {
 	})
 }
 
-// runTnIdleExpireRejectsAfterMaxIdle constructs a store with MaxIdle=1h, issues
-// a token, advances the clock past 1 hour, then calls Rotate and asserts
+// idleExpireMaxIdleWindow is the per-test MaxIdle deadline used by the
+// idle-expire contract subtest; one hour is short enough to fit comfortably
+// in the test envelope yet long enough to differ from MaxAge.
+const idleExpireMaxIdleWindow = testtime.D1h
+
+// runTnIdleExpireRejectsAfterMaxIdle constructs a store with the per-test MaxIdle,
+// issues a token, advances the clock past it, then calls Rotate and asserts
 // ErrRejected is returned (idle_expired path).
 func runTnIdleExpireRejectsAfterMaxIdle(t *testing.T, factory Factory) {
 	policy := refresh.Policy{
 		ReuseInterval:  testtime.D2s,
 		MaxAge:         storeMaxAge7d,
-		MaxIdle:        1 * time.Hour,
+		MaxIdle:        idleExpireMaxIdleWindow,
 		GraceMaxReuses: refresh.DefaultGraceMaxReuses,
 	}
 	store, clock := factory(t, policy)
@@ -652,8 +657,8 @@ func runTnIdleExpireRejectsAfterMaxIdle(t *testing.T, factory Factory) {
 
 	wire, _ := mustIssue(t, store, "sess-idle", "user-idle")
 
-	// Advance past MaxIdle (1 hour + 1 second).
-	clock.Advance(1*time.Hour + time.Second)
+	// Advance past MaxIdle.
+	clock.Advance(idleExpireMaxIdleWindow + time.Second)
 
 	_, _, err := store.Rotate(ctx, wire)
 	if !errors.Is(err, refresh.ErrRejected) {
