@@ -18,6 +18,14 @@ import (
 // idempotency key collisions across unrelated entries.
 const allZeroUUID = "00000000-0000-0000-0000-000000000000"
 
+// MaxMetadataBytes caps the JSON-encoded size of an outbox entry's metadata
+// column. A bug or malicious producer could otherwise stuff multi-MB JSON into
+// the column, amplifying relay memory pressure and PG replication delay.
+// 64 KiB is comfortably above any legitimate envelope use (request id,
+// correlation id, trace context, a handful of business labels) while
+// preventing a single entry from dominating a relay batch.
+const MaxMetadataBytes = 64 << 10
+
 // Compile-time interface checks.
 var (
 	_ outbox.Writer      = (*OutboxWriter)(nil)
@@ -58,18 +66,24 @@ func (w *OutboxWriter) Write(ctx context.Context, entry outbox.Entry) error {
 			"outbox entry ID must not be all-zeros UUID (idempotency collision risk)")
 	}
 
+	// Inject observability BEFORE Validate so any failure path (Validate or
+	// downstream marshal) carries the originating request's trace/request/
+	// correlation identity in slog/span attributes — without this ordering,
+	// validate-rejected writes appear in error metrics with empty trace IDs
+	// and break post-mortem correlation.
+	entry.InjectObservabilityFromContext(ctx)
+
 	if err := entry.Validate(); err != nil {
 		return err
 	}
 
-	// Inject observability from context right before persistence so the entry
-	// carries the originating request's trace/request/correlation identity
-	// across the async boundary.
-	entry.InjectObservabilityFromContext(ctx)
-
 	metadata, err := json.Marshal(entry.Metadata)
 	if err != nil {
 		return errcode.Wrap(errcode.KindInternal, ErrAdapterPGMarshal, "outbox: failed to marshal metadata", err)
+	}
+	if len(metadata) > MaxMetadataBytes {
+		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			fmt.Sprintf("outbox: metadata exceeds %d bytes (got %d)", MaxMetadataBytes, len(metadata)))
 	}
 
 	observabilityJSON, err := marshalObservability(entry.Observability)
@@ -86,7 +100,8 @@ func (w *OutboxWriter) Write(ctx context.Context, entry outbox.Entry) error {
 		(id, aggregate_id, aggregate_type, event_type, topic, payload, metadata, created_at, status, observability)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, '` + statusPending + `', $9)`
 
-	_, err = tx.Exec(ctx, query,
+	_, err = tx.Exec(
+		ctx, query,
 		entry.ID,
 		entry.AggregateID,
 		entry.AggregateType,
@@ -130,17 +145,22 @@ func (w *OutboxWriter) WriteBatch(ctx context.Context, entries []outbox.Entry) e
 		return errcode.New(errcode.KindInternal, ErrAdapterPGNoTx, "outbox batch write requires a transaction in context")
 	}
 
-	// Validate all entries upfront.
-	for i, e := range entries {
-		if strings.TrimSpace(e.ID) == "" {
+	// Inject observability + validate upfront. Iteration uses indices so the
+	// in-place mutation from InjectObservabilityFromContext propagates to
+	// writeBatchChunk's later loop. Inject must precede Validate so any
+	// failure path (Validate or downstream marshal) carries the request's
+	// trace/request/correlation identity in slog/span attributes (B2-A-04).
+	for i := range entries {
+		if strings.TrimSpace(entries[i].ID) == "" {
 			return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 				fmt.Sprintf("outbox entry[%d] ID must not be empty", i))
 		}
-		if e.ID == allZeroUUID {
+		if entries[i].ID == allZeroUUID {
 			return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 				fmt.Sprintf("outbox entry[%d] ID must not be all-zeros UUID (idempotency collision risk)", i))
 		}
-		if err := e.Validate(); err != nil {
+		entries[i].InjectObservabilityFromContext(ctx)
+		if err := entries[i].Validate(); err != nil {
 			return fmt.Errorf("outbox entry[%d]: %w", i, err)
 		}
 	}
@@ -155,66 +175,91 @@ func (w *OutboxWriter) WriteBatch(ctx context.Context, entries []outbox.Entry) e
 	return nil
 }
 
+// writeBatchChunkCols is the number of columns inserted per outbox entry
+// (id, aggregate_id, aggregate_type, event_type, topic, payload, metadata,
+// created_at, status, observability).
+const writeBatchChunkCols = 10
+
 // writeBatchChunk inserts a single chunk of entries via multi-row INSERT.
 // globalOffset is the index of the first entry in the original slice (for error messages).
 func (w *OutboxWriter) writeBatchChunk(ctx context.Context, tx pgx.Tx, entries []outbox.Entry, globalOffset int) error {
-	const cols = 10 // id, aggregate_id, aggregate_type, event_type, topic, payload, metadata, created_at, status, observability
 	var sb strings.Builder
 	// Pre-allocate buffer to avoid reallocations during string building.
 	// Approximate size: 170 bytes for header + (entries * ~60 bytes per value tuple).
-	sb.Grow(170 + len(entries)*(cols*6+3))
+	sb.Grow(170 + len(entries)*(writeBatchChunkCols*6+3))
 	sb.WriteString(`INSERT INTO outbox_entries
 		(id, aggregate_id, aggregate_type, event_type, topic, payload, metadata, created_at, status, observability)
 		VALUES `)
 
 	var numBuf [32]byte
-	args := make([]any, 0, len(entries)*cols)
+	args := make([]any, 0, len(entries)*writeBatchChunkCols)
 	for i, e := range entries {
-		// Inject observability from context right before persistence.
-		e.InjectObservabilityFromContext(ctx)
-
-		metadata, err := json.Marshal(e.Metadata)
+		entryArgs, err := w.encodeBatchEntry(e, globalOffset+i)
 		if err != nil {
-			return errcode.Wrap(errcode.KindInternal, ErrAdapterPGMarshal,
-				fmt.Sprintf("outbox entry[%d]: failed to marshal metadata", globalOffset+i), err)
+			return err
 		}
-
-		observabilityJSON, err := marshalObservability(e.Observability)
-		if err != nil {
-			return errcode.Wrap(errcode.KindInternal, ErrAdapterPGMarshal,
-				fmt.Sprintf("outbox entry[%d]: failed to marshal observability", globalOffset+i), err)
-		}
-
-		createdAt := e.CreatedAt
-		if createdAt.IsZero() {
-			createdAt = w.clock.Now()
-		}
-
 		if i > 0 {
 			sb.WriteString(", ")
 		}
-		base := i * cols
-		sb.WriteString("(")
-		for j := range cols {
-			if j > 0 {
-				sb.WriteString(", ")
-			}
-			sb.WriteString("$")
-			res := strconv.AppendInt(numBuf[:0], int64(base+j+1), 10)
-			sb.Write(res)
-		}
-		sb.WriteString(")")
-
-		args = append(args, e.ID, e.AggregateID, e.AggregateType,
-			e.EventType, e.Topic, e.Payload, metadata, createdAt, statusPending, observabilityJSON)
+		appendBatchPlaceholders(&sb, i*writeBatchChunkCols, &numBuf)
+		args = append(args, entryArgs...)
 	}
 
-	_, err := tx.Exec(ctx, sb.String(), args...)
-	if err != nil {
+	if _, err := tx.Exec(ctx, sb.String(), args...); err != nil {
 		return errcode.Wrap(errcode.KindInternal, ErrAdapterPGQuery,
 			fmt.Sprintf("outbox: failed to batch insert %d entries", len(entries)), err)
 	}
 	return nil
+}
+
+// encodeBatchEntry validates and serializes a single outbox.Entry for batch
+// INSERT. Returns the 10-arg row in fixed column order. globalIndex is the
+// caller's original-slice index, used only to produce ergonomic error
+// messages when many entries are in flight.
+//
+// Observability injection happened upfront in WriteBatch so failure paths
+// here carry the request's trace identity (B2-A-04).
+func (w *OutboxWriter) encodeBatchEntry(e outbox.Entry, globalIndex int) ([]any, error) {
+	metadata, err := json.Marshal(e.Metadata)
+	if err != nil {
+		return nil, errcode.Wrap(errcode.KindInternal, ErrAdapterPGMarshal,
+			fmt.Sprintf("outbox entry[%d]: failed to marshal metadata", globalIndex), err)
+	}
+	if len(metadata) > MaxMetadataBytes {
+		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
+			fmt.Sprintf("outbox entry[%d]: metadata exceeds %d bytes (got %d)", globalIndex, MaxMetadataBytes, len(metadata)))
+	}
+
+	observabilityJSON, err := marshalObservability(e.Observability)
+	if err != nil {
+		return nil, errcode.Wrap(errcode.KindInternal, ErrAdapterPGMarshal,
+			fmt.Sprintf("outbox entry[%d]: failed to marshal observability", globalIndex), err)
+	}
+
+	createdAt := e.CreatedAt
+	if createdAt.IsZero() {
+		createdAt = w.clock.Now()
+	}
+
+	return []any{
+		e.ID, e.AggregateID, e.AggregateType,
+		e.EventType, e.Topic, e.Payload, metadata, createdAt, statusPending, observabilityJSON,
+	}, nil
+}
+
+// appendBatchPlaceholders writes a `($base+1, $base+2, ..., $base+writeBatchChunkCols)`
+// placeholder tuple to sb. numBuf is a caller-supplied scratch buffer to keep
+// the inner integer formatting allocation-free.
+func appendBatchPlaceholders(sb *strings.Builder, base int, numBuf *[32]byte) {
+	sb.WriteString("(")
+	for j := range writeBatchChunkCols {
+		if j > 0 {
+			sb.WriteString(", ")
+		}
+		sb.WriteString("$")
+		sb.Write(strconv.AppendInt(numBuf[:0], int64(base+j+1), 10))
+	}
+	sb.WriteString(")")
 }
 
 // marshalObservability serializes ObservabilityMetadata to JSON.

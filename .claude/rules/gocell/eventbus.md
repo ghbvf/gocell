@@ -110,6 +110,7 @@ func (c *MyCell) Init(ctx context.Context, reg cell.Registry) error {
 
 ## 幂等模型
 
+- PG outbox 的 `ClaimPending` 期生成 `lease_id`（UUID fencing token）写入 row；`MarkPublished/MarkRetry/MarkDead/ReclaimStale` 五个 SQL 全部以 `lease_id` 守 CAS（旧 worker 的 mark 必失败，参见 ADR `docs/architecture/202605051600-adr-pg-outbox-fencing.md`）。lease 是 store 层语义，handler / Settlement 不接触；relay writeBack 自动透传 `entry.LeaseID`，业务 handler 无感知。`OUTBOX-LEASE-ID-CAS-01` archtest 守卫。
 - ConsumerBase 内部使用 `kernel/idempotency.Claimer`（两阶段 Claim/Commit/Release）实现幂等；handler 作者**不需要** import `kernel/idempotency`，也不需要读写任何 Settlement 字段。
 - 业务 handler 实现 `EntryHandler = func(ctx, Entry) HandleResult`；`Settlement` 由 `SubscriberWithMiddleware` 在 `SubscribeEntry` 内部独立注入（业务 middleware chain → `ConsumerBase.Wrap` 转换为 `SubscriberHandler` → `Inner.Subscribe`），handler 不接触 Settlement（`OUTBOX-HANDLERESULT-NO-RECEIPT-FIELD-01` archtest 守卫，Wave 1 upgrade from 旧 HANDLER-RECEIPT-WRITE-01）。
 - 业务 middleware 签名为 `func(sub Subscription, next EntryHandler) EntryHandler`（不接触 Settlement）——对齐 Watermill router/Kratos transport/sarama session 业界共识：settle 由 transport 层独立决策（K#12 二轮深度修复，删 `AsMiddleware`）。

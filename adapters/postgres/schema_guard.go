@@ -120,6 +120,38 @@ func VerifyExpectedVersion(ctx context.Context, pool *Pool, fsys fs.FS, tableNam
 	return nil
 }
 
+// VerifyOutboxLeaseInvariant probes for outbox rows that violate the
+// post-014 lease_id fencing protocol. A row with status='claiming' AND
+// lease_id IS NULL can only be produced by a pre-014 binary writing through
+// post-014 schema — the rolling-deploy overlap window where one pod still
+// runs the old SQL (no lease_id parameter) while another already mounts the
+// new schema. Their presence proves at least one stale worker has not been
+// drained; the new binary refuses startup so the rollout halts before the
+// fencing guarantee is bypassed.
+//
+// Callers wire this after VerifyExpectedVersion; on a fresh DB the table
+// either does not exist (caught earlier by VerifyExpectedVersion's version
+// gap) or contains zero claiming rows.
+//
+// ref: PR #373 review — fail-closed pre-flight invariant for fencing protocol
+func VerifyOutboxLeaseInvariant(ctx context.Context, pool *Pool) error {
+	const q = `SELECT count(*) FROM outbox_entries
+		WHERE status = 'claiming' AND lease_id IS NULL`
+	var count int64
+	if err := pool.inner.QueryRow(ctx, q).Scan(&count); err != nil {
+		return errcode.Wrap(errcode.KindInternal, ErrAdapterPGQuery,
+			"schema_guard: probe outbox lease invariant", err)
+	}
+	if count > 0 {
+		return errcode.New(errcode.KindInternal, ErrAdapterPGOutboxLeaseInvariant,
+			fmt.Sprintf("outbox lease invariant violation: %d claiming rows have NULL lease_id "+
+				"(pre-014 binary still active; drain or stop legacy outbox workers before continuing)",
+				count))
+	}
+	slog.Info("schema_guard: outbox lease invariant verified")
+	return nil
+}
+
 // InvalidIndex describes an index that is marked as invalid in pg_index.
 // Invalid indexes can occur when CREATE INDEX CONCURRENTLY is interrupted.
 type InvalidIndex struct {
@@ -136,16 +168,19 @@ type InvalidIndex struct {
 //
 // The check is scoped to current_schema() so that in-progress CONCURRENTLY
 // builds in other schemas (e.g. parallel test schemas) do not block
-// migrations in unrelated schemas.
+// migrations in unrelated schemas. The returned Index/Table fields are
+// schema-qualified ("public.idx_foo") so multi-schema deployments do not
+// observe spurious matches across schemas with reused names.
 //
 // Returns an empty slice when no invalid indexes are found.
 func DetectInvalidIndexes(ctx context.Context, pool *Pool) ([]InvalidIndex, error) {
-	const q = `SELECT c.relname AS index_name,
-		t.relname AS table_name
+	const q = `SELECT n.nspname || '.' || c.relname AS index_name,
+		nt.nspname || '.' || t.relname AS table_name
 		FROM pg_index i
 		JOIN pg_class c ON c.oid = i.indexrelid
 		JOIN pg_class t ON t.oid = i.indrelid
 		JOIN pg_namespace n ON n.oid = c.relnamespace
+		JOIN pg_namespace nt ON nt.oid = t.relnamespace
 		WHERE NOT i.indisvalid
 		  AND n.nspname = current_schema()`
 

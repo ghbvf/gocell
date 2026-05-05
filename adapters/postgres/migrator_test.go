@@ -3,6 +3,8 @@ package postgres
 import (
 	"errors"
 	"io/fs"
+	"strconv"
+	"strings"
 	"testing"
 	"testing/fstest"
 
@@ -121,22 +123,45 @@ func TestValidateIdentifier(t *testing.T) {
 }
 
 func TestMigrationsFS_SubDirectory(t *testing.T) {
-	// Verify that testMigrationsFS(t) returns a valid FS with goose-annotated files
-	// accessible at the root level (not under migrations/).
+	// Verify that testMigrationsFS(t) returns a valid FS with goose-annotated
+	// migrations contiguously numbered from 001 upward. Hard-coding the count
+	// here would force a mechanical CI red on every additive migration PR
+	// without protecting any architectural invariant; instead we assert the
+	// file set is dense (no gaps) and matches the FS-derived ExpectedVersion.
 	mfs := testMigrationsFS(t)
 	require.NotNil(t, mfs)
 
 	entries, err := fs.ReadDir(mfs, ".")
 	require.NoError(t, err)
 
-	// We expect 2 annotated migration files (combined up+down).
-	var sqlFiles []string
+	versions := make(map[int64]string)
 	for _, e := range entries {
-		if !e.IsDir() {
-			sqlFiles = append(sqlFiles, e.Name())
+		if e.IsDir() {
+			continue
 		}
+		name := e.Name()
+		if !strings.HasSuffix(name, ".sql") {
+			continue
+		}
+		m := migrationVersionRe.FindStringSubmatch(name)
+		require.NotNil(t, m, "%s must match the NNN_*.sql migration naming convention", name)
+		v, parseErr := strconv.ParseInt(m[1], 10, 64)
+		require.NoError(t, parseErr, "version prefix in %s must parse as int64", name)
+		require.NotContains(t, versions, v, "duplicate migration version %d (%s vs %s)", v, versions[v], name)
+		versions[v] = name
 	}
-	assert.Len(t, sqlFiles, 13, "should have 13 goose-annotated SQL files (001-013)")
+
+	require.NotEmpty(t, versions, "migrations FS must contain at least one .sql file")
+
+	expected, err := ExpectedVersion(mfs)
+	require.NoError(t, err)
+	assert.Equal(t, int64(len(versions)), expected,
+		"max version (%d) must equal file count (%d) — migrations must be contiguous from 001",
+		expected, len(versions))
+
+	for v := int64(1); v <= expected; v++ {
+		assert.Contains(t, versions, v, "missing migration with version %03d", v)
+	}
 }
 
 func TestMigrationDirection_Values(t *testing.T) {

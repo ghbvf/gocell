@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -13,6 +14,12 @@ import (
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 )
+
+// testLease is a fixed lease ID used across unit-test mark calls — the
+// mockDBTX returns RowsAffected from a fixture, so the value carried by the
+// SQL parameter is what we assert. (PG-side fencing semantics are covered by
+// the integration suite.)
+var testLease = uuid.NewString()
 
 const (
 	outboxTestNeg10s    = -10 * time.Second
@@ -30,7 +37,7 @@ func TestPGOutboxStore_MarkPublished_Updated(t *testing.T) {
 	}
 	store := NewOutboxStore(db, clock.Real())
 
-	updated, err := store.MarkPublished(context.Background(), "e-1")
+	updated, err := store.MarkPublished(context.Background(), "e-1", testLease)
 	require.NoError(t, err)
 	assert.True(t, updated, "RowsAffected=1 should return updated=true")
 
@@ -38,10 +45,12 @@ func TestPGOutboxStore_MarkPublished_Updated(t *testing.T) {
 	ec := db.execCalls[0]
 	assert.Contains(t, ec.sql, "published_at = now()", "should set published_at")
 	assert.Contains(t, ec.sql, "status = $3", "should include optimistic lock on status")
-	// args: $1=statusPublished, $2=id, $3=statusClaiming
+	assert.Contains(t, ec.sql, "lease_id = $4", "should fence on lease_id")
+	// args: $1=statusPublished, $2=id, $3=statusClaiming, $4=leaseID
 	assert.Equal(t, statusPublished, ec.args[0])
 	assert.Equal(t, "e-1", ec.args[1])
 	assert.Equal(t, statusClaiming, ec.args[2])
+	assert.Equal(t, testLease, ec.args[3])
 }
 
 func TestPGOutboxStore_MarkPublished_NotUpdated(t *testing.T) {
@@ -50,9 +59,9 @@ func TestPGOutboxStore_MarkPublished_NotUpdated(t *testing.T) {
 	}
 	store := NewOutboxStore(db, clock.Real())
 
-	updated, err := store.MarkPublished(context.Background(), "e-reclaimed")
+	updated, err := store.MarkPublished(context.Background(), "e-reclaimed", testLease)
 	require.NoError(t, err)
-	assert.False(t, updated, "RowsAffected=0 should return updated=false (entry was reclaimed)")
+	assert.False(t, updated, "RowsAffected=0 should return updated=false (lease was lost)")
 }
 
 func TestPGOutboxStore_MarkPublished_ExecError(t *testing.T) {
@@ -61,7 +70,7 @@ func TestPGOutboxStore_MarkPublished_ExecError(t *testing.T) {
 	}
 	store := NewOutboxStore(db, clock.Real())
 
-	_, err := store.MarkPublished(context.Background(), "e-fail")
+	_, err := store.MarkPublished(context.Background(), "e-fail", testLease)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "MarkPublished failed")
 }
@@ -77,7 +86,7 @@ func TestPGOutboxStore_MarkRetry_Updated(t *testing.T) {
 	store := NewOutboxStore(db, clock.Real())
 
 	nextRetry := time.Now().Add(testtime.D10s)
-	updated, err := store.MarkRetry(context.Background(), "e-1", 2, nextRetry, "transient error")
+	updated, err := store.MarkRetry(context.Background(), "e-1", testLease, 2, nextRetry, "transient error")
 	require.NoError(t, err)
 	assert.True(t, updated)
 
@@ -86,11 +95,13 @@ func TestPGOutboxStore_MarkRetry_Updated(t *testing.T) {
 	// Verify SQL structure
 	assert.Contains(t, ec.sql, "next_retry_at = now() +", "should set next_retry_at")
 	assert.Contains(t, ec.sql, "last_error = $4", "should set last_error")
-	// args: $1=pending, $2=attempts, $3=interval, $4=errMsg, $5=id, $6=claiming
+	assert.Contains(t, ec.sql, "lease_id = $7", "should fence on lease_id")
+	// args: $1=pending, $2=attempts, $3=interval, $4=errMsg, $5=id, $6=claiming, $7=leaseID
 	assert.Equal(t, statusPending, ec.args[0])
 	assert.Equal(t, 2, ec.args[1])
 	assert.Equal(t, "e-1", ec.args[4])
 	assert.Equal(t, statusClaiming, ec.args[5])
+	assert.Equal(t, testLease, ec.args[6])
 
 	// Interval arg ($3) should be a non-empty string with microseconds
 	intervalArg, ok := ec.args[2].(string)
@@ -104,7 +115,7 @@ func TestPGOutboxStore_MarkRetry_NotUpdated(t *testing.T) {
 	}
 	store := NewOutboxStore(db, clock.Real())
 
-	updated, err := store.MarkRetry(context.Background(), "e-gone", 1, time.Now().Add(testtime.D5s), "err")
+	updated, err := store.MarkRetry(context.Background(), "e-gone", testLease, 1, time.Now().Add(testtime.D5s), "err")
 	require.NoError(t, err)
 	assert.False(t, updated)
 }
@@ -115,7 +126,7 @@ func TestPGOutboxStore_MarkRetry_ExecError(t *testing.T) {
 	}
 	store := NewOutboxStore(db, clock.Real())
 
-	_, err := store.MarkRetry(context.Background(), "e-fail", 1, time.Now().Add(testtime.D5s), "err")
+	_, err := store.MarkRetry(context.Background(), "e-fail", testLease, 1, time.Now().Add(testtime.D5s), "err")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "MarkRetry failed")
 }
@@ -126,7 +137,7 @@ func TestPGOutboxStore_MarkRetry_SanitizesError(t *testing.T) {
 	}
 	store := NewOutboxStore(db, clock.Real())
 
-	_, err := store.MarkRetry(context.Background(), "e-1", 1,
+	_, err := store.MarkRetry(context.Background(), "e-1", testLease, 1,
 		time.Now().Add(testtime.D5s),
 		"dial tcp: password=secret123 host=db.internal")
 	require.NoError(t, err)
@@ -145,7 +156,7 @@ func TestPGOutboxStore_MarkRetry_PastNextRetry_UsesZeroDelay(t *testing.T) {
 	store := NewOutboxStore(db, clock.Real())
 
 	pastTime := time.Now().Add(outboxTestNeg10s)
-	_, err := store.MarkRetry(context.Background(), "e-1", 1, pastTime, "err")
+	_, err := store.MarkRetry(context.Background(), "e-1", testLease, 1, pastTime, "err")
 	require.NoError(t, err)
 
 	ec := db.execCalls[0]
@@ -164,18 +175,20 @@ func TestPGOutboxStore_MarkDead_Updated(t *testing.T) {
 	}
 	store := NewOutboxStore(db, clock.Real())
 
-	updated, err := store.MarkDead(context.Background(), "e-1", 5, "permanent failure")
+	updated, err := store.MarkDead(context.Background(), "e-1", testLease, 5, "permanent failure")
 	require.NoError(t, err)
 	assert.True(t, updated)
 
 	require.Len(t, db.execCalls, 1)
 	ec := db.execCalls[0]
 	assert.Contains(t, ec.sql, "dead_at = now()", "should set dead_at")
-	// args: $1=dead, $2=attempts, $3=errMsg, $4=id, $5=claiming
+	assert.Contains(t, ec.sql, "lease_id = $6", "should fence on lease_id")
+	// args: $1=dead, $2=attempts, $3=errMsg, $4=id, $5=claiming, $6=leaseID
 	assert.Equal(t, statusDead, ec.args[0])
 	assert.Equal(t, 5, ec.args[1])
 	assert.Equal(t, "e-1", ec.args[3])
 	assert.Equal(t, statusClaiming, ec.args[4])
+	assert.Equal(t, testLease, ec.args[5])
 }
 
 func TestPGOutboxStore_MarkDead_NotUpdated(t *testing.T) {
@@ -184,7 +197,7 @@ func TestPGOutboxStore_MarkDead_NotUpdated(t *testing.T) {
 	}
 	store := NewOutboxStore(db, clock.Real())
 
-	updated, err := store.MarkDead(context.Background(), "e-gone", 5, "err")
+	updated, err := store.MarkDead(context.Background(), "e-gone", testLease, 5, "err")
 	require.NoError(t, err)
 	assert.False(t, updated)
 }
@@ -195,7 +208,7 @@ func TestPGOutboxStore_MarkDead_ExecError(t *testing.T) {
 	}
 	store := NewOutboxStore(db, clock.Real())
 
-	_, err := store.MarkDead(context.Background(), "e-fail", 5, "err")
+	_, err := store.MarkDead(context.Background(), "e-fail", testLease, 5, "err")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "MarkDead failed")
 }
@@ -206,7 +219,7 @@ func TestPGOutboxStore_MarkDead_SanitizesError(t *testing.T) {
 	}
 	store := NewOutboxStore(db, clock.Real())
 
-	_, err := store.MarkDead(context.Background(), "e-1", 5, "token=abc123 failed")
+	_, err := store.MarkDead(context.Background(), "e-1", testLease, 5, "token=abc123 failed")
 	require.NoError(t, err)
 
 	ec := db.execCalls[0]
@@ -232,15 +245,26 @@ func TestPGOutboxStore_ReclaimStale_ReturnsCount(t *testing.T) {
 
 	require.Len(t, db.execCalls, 1)
 	ec := db.execCalls[0]
-	assert.Contains(t, ec.sql, "attempts = attempts + 1", "must increment attempts")
-	assert.Contains(t, ec.sql, "CASE WHEN attempts + 1 >= $2", "must use CASE expression for dead/pending")
+	assert.Contains(t, ec.sql, "attempts = picked.attempts + 1",
+		"must increment attempts using the CTE-snapshotted value")
+	assert.Contains(t, ec.sql, "CASE WHEN picked.attempts + 1 >= $2",
+		"must use CASE expression keyed on the CTE-snapshotted attempts for dead/pending branch")
+	assert.Contains(t, ec.sql, "LIMIT $8", "must cap batch size to avoid long transactions")
+	assert.Contains(t, ec.sql, "lease_id = CASE", "reclaim must clear lease_id on back-to-pending branch")
+	assert.Contains(t, ec.sql, "FOR UPDATE SKIP LOCKED",
+		"CTE picker must use SKIP LOCKED to avoid contending with mark CAS transactions")
+	assert.Contains(t, ec.sql, "o.status = $6",
+		"outer UPDATE must re-assert status (write-time CAS prevents regression of rows that left claiming)")
+	assert.Contains(t, ec.sql, "o.lease_id = picked.lease_id",
+		"outer UPDATE must re-assert lease_id matches the picked snapshot (write-time fencing)")
 
 	// args: $1=claimTTLInterval, $2=maxAttempts, $3=dead, $4=pending,
-	//       $5=baseDelayMicros, $6=claiming, $7=maxDelayMicros
+	//       $5=baseDelayMicros, $6=claiming, $7=maxDelayMicros, $8=reclaimBatchSize
 	assert.Equal(t, 5, ec.args[1], "maxAttempts")
 	assert.Equal(t, statusDead, ec.args[2], "dead status")
 	assert.Equal(t, statusPending, ec.args[3], "pending status")
 	assert.Equal(t, statusClaiming, ec.args[5], "claiming status for WHERE clause")
+	assert.Equal(t, reclaimBatchSize, ec.args[7], "reclaim batch size")
 
 	// claimTTL interval text
 	ttlArg, ok := ec.args[0].(string)
@@ -406,6 +430,7 @@ func TestPGOutboxStore_ClaimPending_MetadataNull(t *testing.T) {
 			[]byte("null"), // JSON null metadata
 			e.CreatedAt, e.Attempts,
 			[]byte(nil), // NULL observability
+			uuid.New(),  // lease_id
 		},
 	}
 	db := &mockDBTX{queryRows: &mockRows{entries: []mockRowData{row}}}
@@ -463,6 +488,7 @@ func TestPGOutboxStore_ClaimPending_InvalidMetadataJSON(t *testing.T) {
 			[]byte(`{invalid-json`),
 			e.CreatedAt, e.Attempts,
 			[]byte(nil), // NULL observability
+			uuid.New(),  // lease_id
 		},
 	}
 	db := &mockDBTX{queryRows: &mockRows{entries: []mockRowData{row}}}

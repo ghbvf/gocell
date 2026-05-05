@@ -227,7 +227,8 @@ func (r *Relay) Start(ctx context.Context) error {
 		r.reclaimLoop(ctx)
 	}()
 
-	slog.Info("outbox relay: started",
+	slog.Info(
+		"outbox relay: started",
 		slog.Duration("poll_interval", r.cfg.PollInterval),
 		slog.Int("batch_size", r.cfg.BatchSize),
 		slog.Int("max_attempts", r.cfg.MaxAttempts),
@@ -306,7 +307,8 @@ func (r *Relay) pollLoop(ctx context.Context) {
 		case <-ticker.C():
 			err := r.pollOnce(ctx)
 			if err != nil {
-				slog.Warn("outbox relay: poll failed",
+				slog.Warn(
+					"outbox relay: poll failed",
 					slog.Any("error", err),
 				)
 			}
@@ -329,7 +331,8 @@ func (r *Relay) reclaimLoop(ctx context.Context) {
 		case <-ticker.C():
 			err := r.reclaimStale(ctx)
 			if err != nil {
-				slog.Warn("outbox relay: reclaim failed",
+				slog.Warn(
+					"outbox relay: reclaim failed",
 					slog.Any("error", err),
 				)
 			}
@@ -423,7 +426,8 @@ func (r *Relay) cleanupWaitFloor() time.Duration {
 func (r *Relay) oldestOrZero(ctx context.Context, status string) (time.Time, bool) {
 	at, ok, err := r.store.OldestEligibleAt(ctx, status)
 	if err != nil {
-		slog.Warn("outbox relay: OldestEligibleAt failed, backing off to ceiling",
+		slog.Warn(
+			"outbox relay: OldestEligibleAt failed, backing off to ceiling",
 			slog.String("status", status),
 			slog.Any("error", err),
 		)
@@ -467,7 +471,8 @@ func (r *Relay) pollOnce(ctx context.Context) error {
 	// Log and record metrics only after writeBack completes — if commit
 	// fails, stats are rolled back and recording them would be misleading.
 	if wbErr == nil {
-		slog.Info("outbox relay: poll complete",
+		slog.Info(
+			"outbox relay: poll complete",
 			slog.Int("published", stats.published),
 			slog.Int("retried", stats.retried),
 			slog.Int("dead_lettered", stats.dead),
@@ -517,7 +522,7 @@ func (r *Relay) writeBackResults(ctx context.Context, results []publishResult) (
 	var stats pollStats
 	for i, res := range results {
 		if res.err == nil {
-			updated, err := r.store.MarkPublished(ctx, res.entry.ID)
+			updated, err := r.store.MarkPublished(ctx, res.entry.ID, res.entry.LeaseID)
 			if err != nil {
 				remaining := len(results) - i
 				slog.Error("outbox relay: writeBack failed mid-batch, remaining entries stay in claiming",
@@ -527,7 +532,9 @@ func (r *Relay) writeBackResults(ctx context.Context, results []publishResult) (
 				return stats, err
 			}
 			if !updated {
-				// Entry was reclaimed by ReclaimStale — skip (at-least-once OK).
+				// Lease lost — entry was reclaimed (or its row vanished). At-least-
+				// once delivery means the broker may already have the message;
+				// silently skip and let the new lease owner re-issue if needed.
 				stats.skipped++
 			} else {
 				stats.published++
@@ -548,34 +555,60 @@ func (r *Relay) writeBackResults(ctx context.Context, results []publishResult) (
 
 // handleFailedEntry handles a single failed publish result, updating stats.
 // Extracted to keep writeBackResults below cognitive-complexity ceiling.
+//
+// Mark{Dead,Retry} return updated=false when the lease was lost (ReclaimStale
+// already moved the row, or another worker re-claimed). In that case we MUST
+// NOT count the failure into stats — the new lease owner will observe the
+// canonical outcome — and we emit a Warn so operators can correlate stats
+// drift with real reclaim activity. ref: graphile/worker complete_job pattern.
 func (r *Relay) handleFailedEntry(ctx context.Context, res publishResult, stats *pollStats) error {
 	newAttempts := res.entry.Attempts + 1
 	errMsg := SanitizeError(res.err.Error(), 1000)
 
 	if newAttempts >= r.cfg.MaxAttempts {
-		_, err := r.store.MarkDead(ctx, res.entry.ID, newAttempts, errMsg)
+		updated, err := r.store.MarkDead(ctx, res.entry.ID, res.entry.LeaseID, newAttempts, errMsg)
 		if err != nil {
 			return err
 		}
+		if !updated {
+			slog.Warn(
+				"outbox relay: stale lease lost fail-write",
+				slog.String("entry_id", res.entry.ID),
+				slog.String("lease_id", res.entry.LeaseID),
+				slog.String("outcome", "dead"),
+			)
+			return nil
+		}
 		stats.dead++
-		slog.Error("outbox relay: entry dead-lettered",
+		slog.Error(
+			"outbox relay: entry dead-lettered",
 			slog.String("entry_id", res.entry.ID),
 			slog.String("event_type", res.entry.EventType),
 			slog.String("aggregate_id", res.entry.AggregateID),
 			slog.Int("attempts", newAttempts),
 			slog.String("last_error", errMsg),
 		)
-	} else {
-		// Retry: back to pending with exponential backoff + jitter,
-		// preventing thundering herd in multi-relay-instance deployments.
-		delay := r.retryDelay(newAttempts)
-		nextRetryAt := r.clk().Now().Add(delay)
-		_, err := r.store.MarkRetry(ctx, res.entry.ID, newAttempts, nextRetryAt, errMsg)
-		if err != nil {
-			return err
-		}
-		stats.retried++
+		return nil
 	}
+
+	// Retry: back to pending with exponential backoff + jitter,
+	// preventing thundering herd in multi-relay-instance deployments.
+	delay := r.retryDelay(newAttempts)
+	nextRetryAt := r.clk().Now().Add(delay)
+	updated, err := r.store.MarkRetry(ctx, res.entry.ID, res.entry.LeaseID, newAttempts, nextRetryAt, errMsg)
+	if err != nil {
+		return err
+	}
+	if !updated {
+		slog.Warn(
+			"outbox relay: stale lease lost fail-write",
+			slog.String("entry_id", res.entry.ID),
+			slog.String("lease_id", res.entry.LeaseID),
+			slog.String("outcome", "retry"),
+		)
+		return nil
+	}
+	stats.retried++
 	return nil
 }
 
@@ -590,7 +623,8 @@ func (r *Relay) reclaimStale(ctx context.Context) error {
 		return err
 	}
 	if count > 0 {
-		slog.Warn("outbox relay: reclaimed stale entries",
+		slog.Warn(
+			"outbox relay: reclaimed stale entries",
 			slog.Int("count", count),
 		)
 		r.metrics.RecordReclaim(int64(count))
@@ -621,7 +655,8 @@ func (r *Relay) cleanup(ctx context.Context) error {
 		}
 	}
 	if totalPublished > 0 {
-		slog.Info("outbox relay: cleaned up published entries",
+		slog.Info(
+			"outbox relay: cleaned up published entries",
 			slog.Int64("deleted", totalPublished),
 		)
 	}
@@ -639,7 +674,8 @@ func (r *Relay) cleanup(ctx context.Context) error {
 		}
 	}
 	if totalDead > 0 {
-		slog.Info("outbox relay: cleaned up dead entries",
+		slog.Info(
+			"outbox relay: cleaned up dead entries",
 			slog.Int64("deleted", totalDead),
 		)
 	}

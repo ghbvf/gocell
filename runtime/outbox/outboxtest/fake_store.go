@@ -13,6 +13,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
+
 	kout "github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/runtime/outbox"
 )
@@ -35,6 +37,7 @@ type fakeRow struct {
 	entry       kout.Entry
 	status      rowStatus
 	attempts    int
+	leaseID     string
 	claimedAt   *time.Time
 	publishedAt *time.Time
 	deadAt      *time.Time
@@ -48,6 +51,7 @@ type FakeRow struct {
 	Entry       kout.Entry
 	Status      string
 	Attempts    int
+	LeaseID     string
 	ClaimedAt   *time.Time
 	PublishedAt *time.Time
 	DeadAt      *time.Time
@@ -112,6 +116,7 @@ func (s *FakeStore) Snapshot() []FakeRow {
 			Entry:     r.entry,
 			Status:    string(r.status),
 			Attempts:  r.attempts,
+			LeaseID:   r.leaseID,
 			LastError: r.lastError,
 		}
 		if r.claimedAt != nil {
@@ -185,27 +190,32 @@ func (s *FakeStore) ClaimPending(_ context.Context, batchSize int) ([]outbox.Cla
 		candidates = candidates[:batchSize]
 	}
 
+	// One lease per ClaimPending batch — mirrors the PG adapter where the
+	// claimPendingQuery sets a single uuid for the materialized rows.
+	leaseID := uuid.NewString()
 	result := make([]outbox.ClaimedEntry, 0, len(candidates))
 	for _, r := range candidates {
 		r.status = statusClaiming
+		r.leaseID = leaseID
 		t := now
 		r.claimedAt = &t
 		result = append(result, outbox.ClaimedEntry{
 			Entry:    r.entry,
 			Attempts: r.attempts,
+			LeaseID:  leaseID,
 		})
 	}
 	return result, nil
 }
 
 // MarkPublished transitions an entry from claiming to published.
-// updated=false when the row was reclaimed (no longer in claiming status).
-func (s *FakeStore) MarkPublished(_ context.Context, id string) (updated bool, err error) {
+// updated=false when the lease no longer matches (reclaimed or stale).
+func (s *FakeStore) MarkPublished(_ context.Context, id, leaseID string) (updated bool, err error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	r, ok := s.rows[id]
-	if !ok || r.status != statusClaiming {
+	if !ok || r.status != statusClaiming || r.leaseID != leaseID {
 		return false, nil
 	}
 	now := s.now()
@@ -216,15 +226,15 @@ func (s *FakeStore) MarkPublished(_ context.Context, id string) (updated bool, e
 }
 
 // MarkRetry transitions a failing entry back to pending.
-// updated=false when the row is no longer in claiming status.
+// updated=false when the lease no longer matches (reclaimed or stale).
 func (s *FakeStore) MarkRetry(
-	_ context.Context, id string, attempts int, nextRetryAt time.Time, lastError string,
+	_ context.Context, id, leaseID string, attempts int, nextRetryAt time.Time, lastError string,
 ) (updated bool, err error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	r, ok := s.rows[id]
-	if !ok || r.status != statusClaiming {
+	if !ok || r.status != statusClaiming || r.leaseID != leaseID {
 		return false, nil
 	}
 	r.status = statusPending
@@ -232,17 +242,18 @@ func (s *FakeStore) MarkRetry(
 	r.nextRetryAt = &nextRetryAt
 	r.lastError = lastError
 	r.claimedAt = nil
+	r.leaseID = ""
 	return true, nil
 }
 
 // MarkDead transitions a failing entry to dead.
-// updated=false when the row is no longer in claiming status.
-func (s *FakeStore) MarkDead(_ context.Context, id string, attempts int, lastError string) (updated bool, err error) {
+// updated=false when the lease no longer matches (reclaimed or stale).
+func (s *FakeStore) MarkDead(_ context.Context, id, leaseID string, attempts int, lastError string) (updated bool, err error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	r, ok := s.rows[id]
-	if !ok || r.status != statusClaiming {
+	if !ok || r.status != statusClaiming || r.leaseID != leaseID {
 		return false, nil
 	}
 	now := s.now()
@@ -287,6 +298,7 @@ func (s *FakeStore) ReclaimStale(
 			r.attempts = newAttempts
 			r.nextRetryAt = &nextRetry
 			r.claimedAt = nil
+			r.leaseID = ""
 		}
 		count++
 	}

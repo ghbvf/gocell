@@ -25,4 +25,11 @@ const (
 	// ErrAdapterPGSchemaMismatch indicates the DB schema version does not match
 	// the expected version derived from the embedded migration files.
 	ErrAdapterPGSchemaMismatch errcode.Code = "ERR_ADAPTER_PG_SCHEMA_MISMATCH"
+
+	// ErrAdapterPGOutboxLeaseInvariant indicates the outbox_entries table
+	// contains 'claiming' rows with NULL lease_id, which is only possible if a
+	// pre-014 binary writes through the post-014 schema (rolling-deploy
+	// overlap). The new binary refuses to start until the old workers are
+	// drained.
+	ErrAdapterPGOutboxLeaseInvariant errcode.Code = "ERR_ADAPTER_PG_OUTBOX_LEASE_INVARIANT"
 )

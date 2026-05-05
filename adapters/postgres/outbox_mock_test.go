@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 
@@ -36,7 +37,8 @@ func makeRelayEntry(id, eventType string, attempts int) outboxrt.ClaimedEntry {
 
 // makeMockRowData converts a ClaimedEntry into a mockRowData row for mockRows.
 // Column order matches claimPendingQuery RETURNING clause:
-// id, aggregate_id, aggregate_type, event_type, topic, payload, metadata, created_at, attempts, observability.
+// id, aggregate_id, aggregate_type, event_type, topic, payload, metadata,
+// created_at, attempts, observability, lease_id.
 func makeMockRowData(e outboxrt.ClaimedEntry) mockRowData {
 	metaJSON, _ := json.Marshal(e.Metadata)
 	if e.Metadata == nil {
@@ -46,10 +48,17 @@ func makeMockRowData(e outboxrt.ClaimedEntry) mockRowData {
 	if !e.Observability.IsZero() {
 		obsJSON, _ = json.Marshal(e.Observability)
 	}
+	leaseID, err := uuid.Parse(e.LeaseID)
+	if err != nil {
+		// Test fixtures that don't pre-set LeaseID get a fresh one — the unit
+		// tests that exercise scanClaimedEntry only assert column count + values,
+		// not lease ownership.
+		leaseID = uuid.New()
+	}
 	return mockRowData{
 		values: []any{
 			e.ID, e.AggregateID, e.AggregateType, e.EventType,
-			e.Topic, e.Payload, metaJSON, e.CreatedAt, e.Attempts, obsJSON,
+			e.Topic, e.Payload, metaJSON, e.CreatedAt, e.Attempts, obsJSON, leaseID,
 		},
 	}
 }
@@ -134,8 +143,14 @@ func (t *mockRelayTx) Rollback(_ context.Context) error { return nil }
 func (t *mockRelayTx) CopyFrom(_ context.Context, _ pgx.Identifier, _ []string, _ pgx.CopyFromSource) (int64, error) {
 	return 0, nil
 }
-func (t *mockRelayTx) SendBatch(_ context.Context, _ *pgx.Batch) pgx.BatchResults { return nil }
-func (t *mockRelayTx) LargeObjects() pgx.LargeObjects                             { return pgx.LargeObjects{} }
+func (t *mockRelayTx) SendBatch(_ context.Context, _ *pgx.Batch) pgx.BatchResults {
+	return nil
+}
+
+func (t *mockRelayTx) LargeObjects() pgx.LargeObjects {
+	return pgx.LargeObjects{}
+}
+
 func (t *mockRelayTx) Prepare(_ context.Context, _ string, _ string) (*pgconn.StatementDescription, error) {
 	return &pgconn.StatementDescription{}, nil
 }
@@ -198,6 +213,8 @@ func (r *mockRows) Scan(dest ...any) error {
 			*d = v.(time.Time)
 		case *int:
 			*d = v.(int)
+		case *uuid.UUID:
+			*d = v.(uuid.UUID)
 		default:
 			return fmt.Errorf("mockRows.Scan: unsupported dest type %T at index %d", dest[i], i)
 		}
@@ -257,8 +274,11 @@ func (t *mockRelayTxIterErr) Rollback(_ context.Context) error        { return n
 func (t *mockRelayTxIterErr) CopyFrom(_ context.Context, _ pgx.Identifier, _ []string, _ pgx.CopyFromSource) (int64, error) {
 	return 0, nil
 }
+
 func (t *mockRelayTxIterErr) SendBatch(_ context.Context, _ *pgx.Batch) pgx.BatchResults { return nil }
-func (t *mockRelayTxIterErr) LargeObjects() pgx.LargeObjects                             { return pgx.LargeObjects{} }
+
+func (t *mockRelayTxIterErr) LargeObjects() pgx.LargeObjects { return pgx.LargeObjects{} }
+
 func (t *mockRelayTxIterErr) Prepare(_ context.Context, _ string, _ string) (*pgconn.StatementDescription, error) {
 	return &pgconn.StatementDescription{}, nil
 }

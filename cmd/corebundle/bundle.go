@@ -427,6 +427,9 @@ func verifyConfigCorePGSchema(ctx context.Context, pool *adapterpg.Pool) error {
 	if err := adapterpg.VerifyExpectedVersion(ctx, pool, migrationsFS); err != nil {
 		return fmt.Errorf("configcore PG schema guard: %w", err)
 	}
+	if err := adapterpg.VerifyOutboxLeaseInvariant(ctx, pool); err != nil {
+		return fmt.Errorf("configcore PG outbox lease invariant: %w", err)
+	}
 	return nil
 }
 

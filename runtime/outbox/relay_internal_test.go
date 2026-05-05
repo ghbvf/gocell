@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -33,6 +34,7 @@ type minimalRow struct {
 	entry       kout.Entry
 	status      string
 	attempts    int
+	leaseID     string
 	claimedAt   *time.Time
 	publishedAt *time.Time
 	deadAt      *time.Time
@@ -94,6 +96,7 @@ func (s *minimalStore) count() int {
 func (s *minimalStore) ClaimPending(_ context.Context, batchSize int) ([]ClaimedEntry, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	leaseID := uuid.NewString()
 	var out []ClaimedEntry
 	for _, r := range s.rows {
 		if len(out) >= batchSize {
@@ -104,17 +107,18 @@ func (s *minimalStore) ClaimPending(_ context.Context, batchSize int) ([]Claimed
 		}
 		now := time.Now()
 		r.status = "claiming"
+		r.leaseID = leaseID
 		r.claimedAt = &now
-		out = append(out, ClaimedEntry{Entry: r.entry, Attempts: r.attempts})
+		out = append(out, ClaimedEntry{Entry: r.entry, Attempts: r.attempts, LeaseID: leaseID})
 	}
 	return out, nil
 }
 
-func (s *minimalStore) MarkPublished(_ context.Context, id string) (bool, error) {
+func (s *minimalStore) MarkPublished(_ context.Context, id, leaseID string) (bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	r, ok := s.rows[id]
-	if !ok || r.status != "claiming" {
+	if !ok || r.status != "claiming" || r.leaseID != leaseID {
 		return false, nil
 	}
 	now := time.Now()
@@ -124,11 +128,14 @@ func (s *minimalStore) MarkPublished(_ context.Context, id string) (bool, error)
 	return true, nil
 }
 
-func (s *minimalStore) MarkRetry(_ context.Context, id string, attempts int, nextRetryAt time.Time, lastError string) (bool, error) {
+func (s *minimalStore) MarkRetry(
+	_ context.Context, id, leaseID string,
+	attempts int, nextRetryAt time.Time, lastError string,
+) (bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	r, ok := s.rows[id]
-	if !ok || r.status != "claiming" {
+	if !ok || r.status != "claiming" || r.leaseID != leaseID {
 		return false, nil
 	}
 	r.status = "pending"
@@ -136,14 +143,15 @@ func (s *minimalStore) MarkRetry(_ context.Context, id string, attempts int, nex
 	r.nextRetryAt = &nextRetryAt
 	r.lastError = lastError
 	r.claimedAt = nil
+	r.leaseID = ""
 	return true, nil
 }
 
-func (s *minimalStore) MarkDead(_ context.Context, id string, attempts int, lastError string) (bool, error) {
+func (s *minimalStore) MarkDead(_ context.Context, id, leaseID string, attempts int, lastError string) (bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	r, ok := s.rows[id]
-	if !ok || r.status != "claiming" {
+	if !ok || r.status != "claiming" || r.leaseID != leaseID {
 		return false, nil
 	}
 	now := time.Now()
@@ -173,6 +181,7 @@ func (s *minimalStore) ReclaimStale(_ context.Context, claimTTL time.Duration, m
 		} else {
 			r.status = "pending"
 			r.attempts = newAttempts
+			r.leaseID = ""
 		}
 		r.claimedAt = nil
 		count++
@@ -298,6 +307,135 @@ func TestRelay_Cleanup_NoEntries_NoError(t *testing.T) {
 		clock:   clock.Real(),
 	}
 	assert.NoError(t, relay.cleanup(context.Background()))
+}
+
+// ---------------------------------------------------------------------------
+// handleFailedEntry — stale-lease fail-write paths (B2-A-05)
+//
+// MarkRetry / MarkDead must observe RowsAffected==0 and skip stats counting
+// when the lease was lost (e.g. ReclaimStale + re-Claim raced ahead). Without
+// this, retry/dead counters drift while the canonical outcome is owned by a
+// new lease holder.
+// ---------------------------------------------------------------------------
+
+// staleLeaseStore returns (false, nil) from MarkRetry / MarkDead — the
+// fencing CAS missed. Embeds minimalStore for the rest of the Store contract.
+type staleLeaseStore struct {
+	*minimalStore
+	markRetryCalls int
+	markDeadCalls  int
+}
+
+func (s *staleLeaseStore) MarkRetry(_ context.Context, _, _ string, _ int, _ time.Time, _ string) (bool, error) {
+	s.markRetryCalls++
+	return false, nil
+}
+
+func (s *staleLeaseStore) MarkDead(_ context.Context, _, _ string, _ int, _ string) (bool, error) {
+	s.markDeadCalls++
+	return false, nil
+}
+
+func TestRelay_HandleFailedEntry_StaleLease_RetryNotCounted(t *testing.T) {
+	store := &staleLeaseStore{minimalStore: newMinimalStore()}
+	relay := &Relay{
+		store:   store,
+		cfg:     RelayConfig{MaxAttempts: 5, BaseRetryDelay: testtime.D1ms, MaxRetryDelay: testtime.D5s}.WithDefaults(),
+		metrics: &safeRelayCollector{inner: kout.NoopRelayCollector{}},
+		clock:   clock.Real(),
+	}
+
+	res := publishResult{
+		entry: ClaimedEntry{
+			Entry:    kout.Entry{ID: "e-stale", EventType: "ev", Topic: "t"},
+			Attempts: 1,
+			LeaseID:  uuid.NewString(),
+		},
+		err: fmt.Errorf("transient broker error"),
+	}
+	var stats pollStats
+
+	err := relay.handleFailedEntry(context.Background(), res, &stats)
+	require.NoError(t, err, "stale lease must not surface as error")
+	assert.Equal(t, 1, store.markRetryCalls, "MarkRetry must be invoked once")
+	assert.Zero(t, stats.retried, "stats.retried must NOT be incremented when lease was lost")
+	assert.Zero(t, stats.dead, "stats.dead must NOT be incremented")
+}
+
+// stalePublishStore returns (false, nil) from MarkPublished — the fencing
+// CAS missed even though publish succeeded. Mirrors the failure-path harness
+// (staleLeaseStore) so the success-path stale-lease branch in writeBackResults
+// has equivalent direct coverage.
+type stalePublishStore struct {
+	*minimalStore
+	markPublishedCalls int
+}
+
+func (s *stalePublishStore) MarkPublished(_ context.Context, _, _ string) (bool, error) {
+	s.markPublishedCalls++
+	return false, nil
+}
+
+// TestRelay_WriteBack_PublishSuccess_StaleLease_NotCountedAsPublished verifies
+// the success-path stale-lease branch in Relay.writeBackResults: when publish
+// succeeded but MarkPublished returns updated=false (lease was reclaimed
+// between publish and writeBack), the entry must be classified as skipped, not
+// published, and no error must surface (at-least-once delivery guarantee).
+//
+// PR #373 follow-up #4 — failure paths were already covered by
+// TestRelay_HandleFailedEntry_StaleLease_{Retry,Dead}NotCounted; the success
+// path closes the matrix.
+func TestRelay_WriteBack_PublishSuccess_StaleLease_NotCountedAsPublished(t *testing.T) {
+	store := &stalePublishStore{minimalStore: newMinimalStore()}
+	relay := &Relay{
+		store:   store,
+		cfg:     RelayConfig{MaxAttempts: 5, BaseRetryDelay: testtime.D1ms, MaxRetryDelay: testtime.D5s}.WithDefaults(),
+		metrics: &safeRelayCollector{inner: kout.NoopRelayCollector{}},
+		clock:   clock.Real(),
+	}
+
+	results := []publishResult{{
+		entry: ClaimedEntry{
+			Entry:    kout.Entry{ID: "e-publish-stale", EventType: "ev", Topic: "t"},
+			Attempts: 1,
+			LeaseID:  uuid.NewString(),
+		},
+		// nil err = publish succeeded
+	}}
+
+	stats, err := relay.writeBackResults(context.Background(), results)
+	require.NoError(t, err, "stale lease on success path must not surface as error")
+	assert.Equal(t, 1, store.markPublishedCalls, "MarkPublished must be invoked once")
+	assert.Zero(t, stats.published, "stats.published must NOT increment when lease was lost")
+	assert.Equal(t, 1, stats.skipped, "stats.skipped must increment to record the silent drop")
+	assert.Zero(t, stats.retried)
+	assert.Zero(t, stats.dead)
+}
+
+func TestRelay_HandleFailedEntry_StaleLease_DeadNotCounted(t *testing.T) {
+	store := &staleLeaseStore{minimalStore: newMinimalStore()}
+	relay := &Relay{
+		store:   store,
+		cfg:     RelayConfig{MaxAttempts: 3, BaseRetryDelay: testtime.D1ms, MaxRetryDelay: testtime.D5s}.WithDefaults(),
+		metrics: &safeRelayCollector{inner: kout.NoopRelayCollector{}},
+		clock:   clock.Real(),
+	}
+
+	res := publishResult{
+		entry: ClaimedEntry{
+			Entry:    kout.Entry{ID: "e-stale-dead", EventType: "ev", Topic: "t"},
+			Attempts: 2, // newAttempts=3 == MaxAttempts → MarkDead branch
+			LeaseID:  uuid.NewString(),
+		},
+		err: fmt.Errorf("permanent failure"),
+	}
+	var stats pollStats
+
+	err := relay.handleFailedEntry(context.Background(), res, &stats)
+	require.NoError(t, err)
+	assert.Equal(t, 1, store.markDeadCalls, "MarkDead must be invoked once")
+	assert.Zero(t, stats.dead, "stats.dead must NOT be incremented when lease was lost")
+	assert.Zero(t, stats.retried)
 }
 
 // ---------------------------------------------------------------------------
