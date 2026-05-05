@@ -114,8 +114,8 @@ func assertNoPlaintextPassword(t *testing.T, h *capturingHandler, password strin
 // buildWalkthroughServer constructs an in-memory ssobff server through the
 // same NewSSOBFFApp/bootstrap path used by main.go.
 //
-// PR #392 deleted the credfile path; the demo bootstrap credentials are now
-// the package-local ssobffBootstrap{Username,Password} constants in app.go.
+// Admin provisioning uses interactive POST /setup/admin (postmortem 202605060030:
+// bootstrap provision mode deleted; operator calls the endpoint with Basic Auth).
 // The capturing slog handler is threaded through so the test can assert
 // that no plaintext password appears in any log record (PR#172 F1 gate).
 type walkthroughServer struct {

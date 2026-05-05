@@ -8,7 +8,6 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/ghbvf/gocell/cells/accesscore/initialadmin"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/mem"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/ports"
 	"github.com/ghbvf/gocell/cells/accesscore/slices/authorizationdecide"
@@ -183,21 +182,6 @@ func WithInMemoryDefaults() Option {
 	}
 }
 
-// WithInitialAdminBootstrap enables first-run admin bootstrap (scheme H).
-//
-// creds is REQUIRED — the persistent startup credential model (ADR §D9) makes
-// bootstrap credentials mandatory whenever the lifecycle hook is wired; an
-// empty Username or Password causes the hook's OnStart to fail fast.
-//
-// The lifecycle hook is registered via reg.Lifecycle in Init so the bootstrap
-// phase wires OnStart/OnStop — no composition-root plumbing required.
-//
-// ref: docs/architecture/202605061600-adr-bootstrap-admin-boundary.md §D2 + §D9
-// ref: docs/architecture/202604181900-adr-auth-setup-first-run.md (scheme H)
-func WithInitialAdminBootstrap(creds initialadmin.BootstrapCredentials, opts ...initialadmin.LifecycleOption) Option {
-	return func(c *AccessCore) { c.initialAdmin = initialadmin.NewLifecycle(creds, opts...) }
-}
-
 // WithConfigGetter injects the ConfigGetter used by the configreceive slice to
 // fetch the current config entry value from configcore after an upsert event
 // (contract: http.config.internal.get.v1). When not set the slice operates in
@@ -266,10 +250,6 @@ type AccessCore struct {
 	refreshGCRetention   time.Duration
 	refreshGCCollector   refresh.GCCollector
 	refreshGC            *refresh.GCWorker
-
-	// initialAdmin wires first-run admin bootstrap via reg.Lifecycle(...);
-	// nil means the feature is disabled.
-	initialAdmin *initialadmin.Lifecycle
 
 	// configGetter is used by the configreceive slice to fetch config entry
 	// values from configcore after an upsert event. nil = log-only mode.

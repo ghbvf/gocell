@@ -7,14 +7,11 @@ import (
 	"testing"
 	"time"
 
-	"golang.org/x/crypto/bcrypt"
-
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	adapterpg "github.com/ghbvf/gocell/adapters/postgres"
 	adapterredis "github.com/ghbvf/gocell/adapters/redis"
-	"github.com/ghbvf/gocell/cells/accesscore/initialadmin"
 	"github.com/ghbvf/gocell/kernel/assembly"
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/clock"
@@ -85,20 +82,18 @@ func TestBuildAssembly_RegisterError(t *testing.T) {
 		"error must mention the duplicate cell ID so operators can diagnose the conflict")
 }
 
-// TestAccessCoreModule_BootstrapProvideDoesNotAdvertiseCredentialPath verifies
-// wiring does not promise a credential file before lifecycle execution owns the
-// effective config and outcome.
-func TestAccessCoreModule_BootstrapProvideDoesNotAdvertiseCredentialPath(t *testing.T) {
+// TestAccessCoreModule_ProvideDoesNotAdvertiseCredentialPath verifies
+// wiring does not promise a credential file path in any log output.
+func TestAccessCoreModule_ProvideDoesNotAdvertiseCredentialPath(t *testing.T) {
 	buf, restore := captureSlogInfoLines(t)
 	t.Cleanup(restore)
 
-	shared := buildTestSharedDeps(t) // sets SetupModeEnv=bootstrap + credentials
+	shared := buildTestSharedDeps(t)
 
-	_, _, _, err := AccessCoreModule{InitialAdminOpts: fastAdminBootstrapOpts()}.Provide(context.Background(), shared)
+	_, _, _, err := AccessCoreModule{}.Provide(context.Background(), shared)
 	require.NoError(t, err)
 
 	logs := buf.String()
-	assert.Contains(t, logs, "admin provision mode resolved")
 	assert.NotContains(t, logs, "initial admin credential")
 	assert.NotContains(t, logs, "cred_path")
 }
@@ -180,18 +175,6 @@ func TestBuildConfigCoreOpts_PGMode_InvalidDSN_PoolError(t *testing.T) {
 	assert.Nil(t, result.PGResource, "error path must not leak a ManagedResource")
 }
 
-// fastAdminBootstrapOpts returns accesscore LifecycleOptions that
-// replace the production bcrypt cost=12 hasher with bcrypt.MinCost=4 so
-// the synchronous bcrypt call in accesscore.Init does not block phase3
-// for 5-7s on slow CI runners. The rest of the InitialAdmin path
-// (Sweep → EnsureAdmin → WriteCredentialFile → Cleaner worker registration)
-// still runs, preserving bundle_test coverage of the full wiring.
-func fastAdminBootstrapOpts() []initialadmin.LifecycleOption {
-	return []initialadmin.LifecycleOption{
-		initialadmin.WithPasswordHasher(initialadmin.BcryptHasher{Cost: bcrypt.MinCost}),
-	}
-}
-
 // fakeManagedResource implements lifecycle.ManagedResource for tests.
 type fakeManagedResource struct {
 	name        string
@@ -222,9 +205,6 @@ func buildTestSharedDeps(t *testing.T) *SharedDeps {
 	t.Setenv("GOCELL_STATE_DIR", t.TempDir())
 	t.Setenv("GOCELL_JWT_ISSUER", "test-issuer")
 	t.Setenv("GOCELL_JWT_AUDIENCE", "test-audience")
-	// SEC-SETUP-CLOSURE: SetupModeEnv is required; default tests to bootstrap
-	// mode with test credentials. Tests that need interactive can override.
-	t.Setenv(SetupModeEnv, "bootstrap")
 	t.Setenv("GOCELL_BOOTSTRAP_ADMIN_USERNAME", "testadmin")
 	t.Setenv("GOCELL_BOOTSTRAP_ADMIN_PASSWORD", "testpassword123")
 
@@ -397,7 +377,7 @@ func buildBootstrapFromShared(
 
 	cells, cellOpts, err := BuildApp(ctx, shared,
 		ConfigCoreModule{},
-		AccessCoreModule{InitialAdminOpts: fastAdminBootstrapOpts()},
+		AccessCoreModule{},
 		AuditCoreModule{},
 	)
 	if err != nil {

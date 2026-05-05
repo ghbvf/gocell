@@ -73,6 +73,14 @@ func TestAuthWiring_RealAssembly_ProtectedRoutes401(t *testing.T) {
 	configCursorCodec, err := query.NewCursorCodec([]byte("test-config-cursor-key-32bytes!!"))
 	require.NoError(t, err)
 
+	authBootstrapMW := auth.NewBootstrapMiddleware(
+		auth.BootstrapCredentials{
+			Username: []byte("auth-test-operator"),
+			Password: []byte("auth-test-op-pass!"),
+		},
+		setupTestAllowAllLimiter{},
+		nil,
+	)
 	ac := accesscore.NewAccessCore(
 		accesscore.WithClock(clock.Real()),
 		accesscore.WithInMemoryDefaults(),
@@ -81,6 +89,7 @@ func TestAuthWiring_RealAssembly_ProtectedRoutes401(t *testing.T) {
 		accesscore.WithJWTVerifier(jwtVerifier),
 		accesscore.WithTxManager(noopTxRunner{}),
 		accesscore.WithMetricsProvider(metrics.NopProvider{}),
+		accesscore.WithBootstrapAuth(authBootstrapMW),
 	)
 	cc := configcore.NewConfigCore(
 		configcore.WithClock(clock.Real()),
@@ -288,6 +297,14 @@ func TestAuthWiring_InternalGuard_RequiresServiceToken(t *testing.T) {
 	configCursorCodec, err := query.NewCursorCodec([]byte("guard-test-config-key-32bytes!!!"))
 	require.NoError(t, err)
 
+	guardBootstrapMW := auth.NewBootstrapMiddleware(
+		auth.BootstrapCredentials{
+			Username: []byte("guard-test-operator"),
+			Password: []byte("guard-test-op-pass!"),
+		},
+		setupTestAllowAllLimiter{},
+		nil,
+	)
 	ac := accesscore.NewAccessCore(
 		accesscore.WithClock(clock.Real()),
 		accesscore.WithInMemoryDefaults(),
@@ -296,6 +313,7 @@ func TestAuthWiring_InternalGuard_RequiresServiceToken(t *testing.T) {
 		accesscore.WithJWTVerifier(jwtVerifier),
 		accesscore.WithTxManager(noopTxRunner{}),
 		accesscore.WithMetricsProvider(metrics.NopProvider{}),
+		accesscore.WithBootstrapAuth(guardBootstrapMW),
 	)
 	cc := configcore.NewConfigCore(
 		configcore.WithClock(clock.Real()),
@@ -514,6 +532,14 @@ func TestAuthWiring_HealthListener_PrimaryDoesNotServeHealthz(t *testing.T) {
 	configCursorCodec, err := query.NewCursorCodec([]byte("health-test-config-key-32bytes!!"))
 	require.NoError(t, err)
 
+	healthBootstrapMW := auth.NewBootstrapMiddleware(
+		auth.BootstrapCredentials{
+			Username: []byte("health-test-operator"),
+			Password: []byte("health-test-op-pass!"),
+		},
+		setupTestAllowAllLimiter{},
+		nil,
+	)
 	ac := accesscore.NewAccessCore(
 		accesscore.WithClock(clock.Real()),
 		accesscore.WithInMemoryDefaults(),
@@ -522,6 +548,7 @@ func TestAuthWiring_HealthListener_PrimaryDoesNotServeHealthz(t *testing.T) {
 		accesscore.WithJWTVerifier(jwtVerifier),
 		accesscore.WithTxManager(noopTxRunner{}),
 		accesscore.WithMetricsProvider(metrics.NopProvider{}),
+		accesscore.WithBootstrapAuth(healthBootstrapMW),
 	)
 	cc := configcore.NewConfigCore(
 		configcore.WithClock(clock.Real()),
