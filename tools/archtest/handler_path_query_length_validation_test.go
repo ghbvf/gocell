@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 )
 
@@ -137,33 +138,11 @@ func TestHANDLER_PATH_QUERY_LENGTH_VALIDATION_01(t *testing.T) {
 // containsOracleMessage returns true if the handler text contains a length
 // oracle error message for the given param name.
 func containsOracleMessage(text, paramName string) bool {
-	// The old/banned patterns that expose specific constraint values.
 	if len(text) == 0 || paramName == "" {
 		return false
 	}
-	// Check for the banned "value too short" / "value too long" patterns.
-	return contains(text, paramName+`: value too short`) ||
-		contains(text, paramName+`: value too long`)
-}
-
-// contains is a thin wrapper to make containsOracleMessage readable without
-// importing strings (already imported via metadata).
-func contains(s, sub string) bool {
-	return len(s) >= len(sub) && (s == sub || len(sub) == 0 ||
-		findSubstring(s, sub))
-}
-
-// findSubstring searches for sub in s using a simple scan.
-func findSubstring(s, sub string) bool {
-	if len(sub) == 0 {
-		return true
-	}
-	for i := 0; i <= len(s)-len(sub); i++ {
-		if s[i:i+len(sub)] == sub {
-			return true
-		}
-	}
-	return false
+	return strings.Contains(text, paramName+`: value too short`) ||
+		strings.Contains(text, paramName+`: value too long`)
 }
 
 // scanHandlerLengthCheck reports whether the parsed handler file declares the
@@ -224,7 +203,9 @@ func scanPathParamLengthCheck(body *ast.BlockStmt, paramName string, requireMin,
 		}
 		target := &ast.Ident{Name: lhs}
 		if !blockSatisfiesLenChecks(block, target, requireMin, requireMax) {
-			return false // walk continues but this block does not satisfy
+			// return false stops descent into this block's children; sibling
+			// blocks continue via the parent traversal.
+			return false
 		}
 		matched = true
 		return false
