@@ -235,80 +235,139 @@ func TestAssembly_ConcurrentStartStop_RaceDetector(t *testing.T) {
 		DurabilityMode: cell.DurabilityDemo,
 		Clock:          clock.Real(),
 	})
-
-	for i := 0; i < 3; i++ {
-		id := "c-" + string(rune('a'+i))
-		require.NoError(t, a.Register(cell.MustNewBaseCell(&metadata.CellMeta{
-			ID: id, Type: "core", ConsistencyLevel: "L0",
-		})))
-	}
+	registeredIDs := registerConcurrentRaceCells(t, a, 3)
 
 	const writers = 4
 	const readers = 4
 	const iterations = 25
-	registeredIDs := []string{"c-a", "c-b", "c-c"}
 
-	var wg sync.WaitGroup
-	wg.Add(writers + readers)
-	startErrs := make(chan error, writers*iterations)
-	stopErrs := make(chan error, writers*iterations)
-	readerErrs := make(chan error, readers*iterations*4)
-
-	// Writers: alternate Start / Stop; the state machine must reject
-	// invalid transitions without data races.
-	for w := 0; w < writers; w++ {
-		go func() {
-			defer wg.Done()
-			for i := 0; i < iterations; i++ {
-				startErrs <- a.Start(context.Background())
-				stopErrs <- a.Stop(context.Background())
-			}
-		}()
-	}
-
-	// Readers: hammer Snapshots() and Health() — both must be safe under
-	// any state transition.
-	for r := 0; r < readers; r++ {
-		go func() {
-			defer wg.Done()
-			for i := 0; i < iterations*4; i++ {
-				snaps := a.Snapshots()
-				for id := range snaps {
-					if !slices.Contains(registeredIDs, id) {
-						readerErrs <- fmt.Errorf("Snapshots() returned unregistered cell ID %q", id)
-					}
-				}
-				health := a.Health()
-				for _, id := range registeredIDs {
-					if _, ok := health[id]; !ok {
-						readerErrs <- fmt.Errorf("Health() missing registered cell ID %q", id)
-					}
-				}
-			}
-		}()
-	}
-
-	wg.Wait()
-	close(startErrs)
-	close(stopErrs)
-	close(readerErrs)
-
-	for err := range startErrs {
-		if err == nil {
-			continue
-		}
-		requireStartStateGuardError(t, err)
-	}
-	for err := range stopErrs {
-		require.NoError(t, err, "Stop must either stop stateStarted or no-op outside stateStarted")
-	}
-	for err := range readerErrs {
-		require.NoError(t, err)
-	}
+	// Writers alternate Start / Stop while readers hammer Snapshots() and
+	// Health(); both sides must stay race-free under invalid transitions.
+	result := startConcurrentStartStopRace(a, registeredIDs, writers, readers, iterations)
+	result.wait()
+	requireAllowedStartErrors(t, result.startErrs)
+	requireNoRaceErrors(t, result.stopErrs, "Stop must either stop stateStarted or no-op outside stateStarted")
+	requireNoRaceErrors(t, result.readerErrs, "")
 
 	// Final teardown: drive to stopped state regardless of last writer.
 	_ = a.Stop(context.Background())
 	assert.Nil(t, a.Snapshots(), "final state must not expose snapshots")
+}
+
+type concurrentStartStopRaceResult struct {
+	wg         sync.WaitGroup
+	startErrs  chan error
+	stopErrs   chan error
+	readerErrs chan error
+}
+
+func registerConcurrentRaceCells(t *testing.T, a *CoreAssembly, count int) []string {
+	t.Helper()
+	ids := make([]string, 0, count)
+	for i := 0; i < count; i++ {
+		id := "c-" + string(rune('a'+i))
+		require.NoError(t, a.Register(cell.MustNewBaseCell(&metadata.CellMeta{
+			ID: id, Type: "core", ConsistencyLevel: "L0",
+		})))
+		ids = append(ids, id)
+	}
+	return ids
+}
+
+func startConcurrentStartStopRace(
+	a *CoreAssembly,
+	registeredIDs []string,
+	writers, readers, iterations int,
+) *concurrentStartStopRaceResult {
+	result := &concurrentStartStopRaceResult{
+		startErrs:  make(chan error, writers*iterations),
+		stopErrs:   make(chan error, writers*iterations),
+		readerErrs: make(chan error, readers*iterations*4),
+	}
+	result.wg.Add(writers + readers)
+	startRaceWriters(a, writers, iterations, result)
+	startRaceReaders(a, registeredIDs, readers, iterations*4, result)
+	return result
+}
+
+func startRaceWriters(a *CoreAssembly, writers, iterations int, result *concurrentStartStopRaceResult) {
+	for range writers {
+		go runRaceWriter(a, iterations, result)
+	}
+}
+
+func runRaceWriter(a *CoreAssembly, iterations int, result *concurrentStartStopRaceResult) {
+	defer result.wg.Done()
+	for range iterations {
+		result.startErrs <- a.Start(context.Background())
+		result.stopErrs <- a.Stop(context.Background())
+	}
+}
+
+func startRaceReaders(
+	a *CoreAssembly,
+	registeredIDs []string,
+	readers, reads int,
+	result *concurrentStartStopRaceResult,
+) {
+	for range readers {
+		go runRaceReader(a, registeredIDs, reads, result)
+	}
+}
+
+func runRaceReader(a *CoreAssembly, registeredIDs []string, reads int, result *concurrentStartStopRaceResult) {
+	defer result.wg.Done()
+	for range reads {
+		recordSnapshotValidationError(a.Snapshots(), registeredIDs, result.readerErrs)
+		recordHealthValidationError(a.Health(), registeredIDs, result.readerErrs)
+	}
+}
+
+func recordSnapshotValidationError(
+	snaps map[string]cell.RegistrySnapshot,
+	registeredIDs []string,
+	readerErrs chan<- error,
+) {
+	for id := range snaps {
+		if !slices.Contains(registeredIDs, id) {
+			readerErrs <- fmt.Errorf("Snapshots() returned unregistered cell ID %q", id)
+		}
+	}
+}
+
+func recordHealthValidationError(
+	health map[string]cell.HealthStatus,
+	registeredIDs []string,
+	readerErrs chan<- error,
+) {
+	for _, id := range registeredIDs {
+		if _, ok := health[id]; !ok {
+			readerErrs <- fmt.Errorf("Health() missing registered cell ID %q", id)
+		}
+	}
+}
+
+func (r *concurrentStartStopRaceResult) wait() {
+	r.wg.Wait()
+	close(r.startErrs)
+	close(r.stopErrs)
+	close(r.readerErrs)
+}
+
+func requireAllowedStartErrors(t *testing.T, startErrs <-chan error) {
+	t.Helper()
+	for err := range startErrs {
+		if err != nil {
+			requireStartStateGuardError(t, err)
+		}
+	}
+}
+
+func requireNoRaceErrors(t *testing.T, errs <-chan error, msg string) {
+	t.Helper()
+	for err := range errs {
+		require.NoError(t, err, msg)
+	}
 }
 
 func requireStartStateGuardError(t *testing.T, err error) {
