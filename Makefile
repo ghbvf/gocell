@@ -1,6 +1,7 @@
 .PHONY: build check-build test verify validate generate cover clean \
         up down \
         test-integration \
+        test-integration-cluster \
         test-examples-smoke \
         healthcheck-verify
 
@@ -71,6 +72,21 @@ down:
 
 test-integration:
 	GOCELL_TEST_DOCKER_REQUIRED=1 go test -tags=integration,e2e ./adapters/... ./tests/integration/... ./tests/e2e/internal/... ./cmd/corebundle/... ./examples/ssobff/... ./cells/accesscore/slices/identitymanage/... ./runtime/bootstrap/... -count=1 -timeout 15m -v
+
+# ---------------------------------------------------------------------------
+# Real Redis Cluster tests (B10 PR-V1-REDIS-CLUSTER)
+# Requires GOCELL_TEST_REDIS_CLUSTER_ADDRS pointing at a pre-launched cluster
+# (see docs/ops/redis-cluster-deployment.md). The test skips when the env is
+# unset; without it CI compile-gates the cluster build tag via
+# `go vet -tags=integration_cluster` instead of running the live tests.
+# ---------------------------------------------------------------------------
+
+test-integration-cluster:
+	@if [ -z "$$GOCELL_TEST_REDIS_CLUSTER_ADDRS" ]; then \
+		echo "GOCELL_TEST_REDIS_CLUSTER_ADDRS is unset; cluster tests will skip."; \
+		echo "Launch grokzen/redis-cluster locally and export the seed addresses first."; \
+	fi
+	go test -tags=integration_cluster ./adapters/redis/... -count=1 -timeout 5m -v
 
 # ---------------------------------------------------------------------------
 # examples/ssobff startup smoke

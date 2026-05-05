@@ -277,6 +277,17 @@ jobs:
         # under the same tags as a compatibility patrol.
         run: go test -tags=integration,otelcollector ./adapters/otel/... -run '^TestNewTracer_ExportsSpanToOTLPCollector$' -count=1 -timeout 10m
 
+      - name: Redis cluster compile gate
+        # B10 PR-V1-REDIS-CLUSTER: cluster_real_test.go is gated by
+        # //go:build integration_cluster and is env-driven (skips when
+        # GOCELL_TEST_REDIS_CLUSTER_ADDRS is unset). A live 6-node cluster
+        # is not stood up in CI — host-network gossip topology does not
+        # virtualize cleanly on Actions runners — but compiling under the
+        # cluster tag keeps the file from bit-rotting when go-redis API
+        # changes or our own cluster paths drift. Real-cluster integration
+        # is left to staging and B11 backlog.
+        run: go vet -tags=integration_cluster ./adapters/redis/...
+
       - name: Upload integration coverage profile
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:

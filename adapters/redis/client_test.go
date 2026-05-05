@@ -253,6 +253,36 @@ func TestConfigLogValue_Cluster(t *testing.T) {
 	assert.NotContains(t, resolved, "s3cret", "LogValue must not leak password in cluster mode")
 }
 
+// rediss URL form may embed user:password in ClusterAddrs. LogValue must
+// route every URL entry through url.URL.Redacted so the password segment
+// is replaced with "xxxxx" before reaching slog; plain host:port entries
+// pass through unchanged. Parse failures are masked with "<unparseable>"
+// so a malformed URL never bypasses redaction.
+func TestConfigLogValue_Cluster_RedactsURLCredentials(t *testing.T) {
+	cfg := Config{
+		Mode: ModeCluster,
+		ClusterAddrs: []string{
+			"rediss://acl-user:tops3cret@node-a.example.internal:7000",
+			"node-plain:7000",
+			"rediss://only-user@node-b.example.internal:7000",
+		},
+		Password: "envS3cret",
+	}
+	resolved := cfg.LogValue().Resolve().String()
+	assert.NotContains(t, resolved, "tops3cret",
+		"LogValue must redact URL-embedded password")
+	assert.NotContains(t, resolved, "envS3cret",
+		"LogValue must not leak the env-side Password field")
+	assert.Contains(t, resolved, "xxxxx",
+		"url.URL.Redacted replaces password with literal xxxxx")
+	assert.Contains(t, resolved, "node-a.example.internal:7000",
+		"hostname must remain visible for ops diagnosis")
+	assert.Contains(t, resolved, "node-plain:7000",
+		"plain host:port entries pass through verbatim")
+	assert.Contains(t, resolved, "only-user",
+		"username-only URLs keep the username visible (no password to mask)")
+}
+
 // go-redis ClusterClient default PoolSize is 5*GOMAXPROCS while standalone
 // Client default is 10*GOMAXPROCS. Mirror that here so db.client.connection.max
 // stays accurate for cluster pools and PoolSize is not silently inflated by

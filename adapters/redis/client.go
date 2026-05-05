@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"fmt"
 	"log/slog"
+	"net/url"
 	"runtime"
 	"strings"
 	"time"
@@ -104,11 +105,19 @@ type Config struct {
 
 // LogValue implements slog.LogValuer so that Config can be safely passed
 // to structured loggers without leaking the password.
+//
+// Cluster ClusterAddrs may carry rediss://user:pass@host URL form; pass
+// each addr through url.Parse → URL.Redacted so the password segment is
+// replaced with "xxxxx" before reaching slog. Plain host:port entries are
+// returned verbatim. Parse failures return a sentinel "<unparseable>"
+// rather than the raw string so a malformed URL never bypasses redaction.
+//
+// ref: net/url URL.Redacted (https://pkg.go.dev/net/url#URL.Redacted)
 func (c Config) LogValue() slog.Value {
 	if c.Mode == ModeCluster {
 		return slog.GroupValue(
 			slog.String("mode", string(c.Mode)),
-			slog.Any("cluster_addrs", c.ClusterAddrs),
+			slog.Any("cluster_addrs", redactClusterAddrs(c.ClusterAddrs)),
 		)
 	}
 	return slog.GroupValue(
@@ -116,6 +125,28 @@ func (c Config) LogValue() slog.Value {
 		slog.String("addr", c.Addr),
 		slog.Int("db", c.DB),
 	)
+}
+
+// redactClusterAddrs returns a copy of addrs with any URL-form entries
+// passed through url.URL.Redacted; plain host:port entries are unchanged.
+func redactClusterAddrs(addrs []string) []string {
+	if len(addrs) == 0 {
+		return nil
+	}
+	out := make([]string, len(addrs))
+	for i, a := range addrs {
+		if !strings.Contains(a, "://") {
+			out[i] = a
+			continue
+		}
+		u, err := url.Parse(a)
+		if err != nil {
+			out[i] = "<unparseable>"
+			continue
+		}
+		out[i] = u.Redacted()
+	}
+	return out
 }
 
 // defaults applies default values to zero-valued fields.

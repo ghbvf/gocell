@@ -27,7 +27,7 @@ Two environment variables must be set on every pod:
 
 | Variable | Example | Notes |
 |---|---|---|
-| `GOCELL_REDIS_CLUSTER_ADDRS` | `node-a.redis.internal:7000,node-b.redis.internal:7000,node-c.redis.internal:7000` | Comma-separated cluster node seed addresses. The go-redis client discovers the rest of the topology at startup. |
+| `GOCELL_REDIS_CLUSTER_ADDRS` | `rediss://node-a.example.internal:7000,rediss://node-b.example.internal:7000,rediss://node-c.example.internal:7000` | Comma-separated cluster node seed addresses. Production deployments must use `rediss://` URL form (TLS); the GoCell `pkg/secutil.ValidateTLSEndpoint` fail-closed rule rejects bare `host:port` for any non-loopback address. The go-redis client discovers the rest of the topology at startup. |
 | `GOCELL_REDIS_PASSWORD` | _(secret manager)_ | Leave unset if your cluster has no AUTH. |
 
 `GOCELL_REDIS_ADDR` and `GOCELL_REDIS_CLUSTER_ADDRS` are mutually exclusive; setting

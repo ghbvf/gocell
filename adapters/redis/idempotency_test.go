@@ -20,6 +20,33 @@ import (
 // Compile-time interface check for the new Claimer.
 var _ idempotency.Claimer = (*IdempotencyClaimer)(nil)
 
+// TestIdempotencyClaimer_RejectsInvalidKey ensures Claim refuses keys that
+// would silently break Redis Cluster slot colocation: empty keys yield an
+// empty hashtag `{}` which Redis treats as no hashtag (CROSSSLOT risk on
+// the dual-KEY claim/commit Lua scripts), and `{`/`}` characters embedded
+// in the key destabilize hashtag boundary parsing. Both must fail-fast at
+// the Claim entry instead of surfacing as obscure runtime errors.
+func TestIdempotencyClaimer_RejectsInvalidKey(t *testing.T) {
+	mock := newClaimerMock()
+	claimer := newIdempotencyClaimerFromCmdable(mock)
+	ctx := context.Background()
+
+	for _, badKey := range []string{
+		"",                  // empty → "{}:lease" empty hashtag → CROSSSLOT
+		"foo}bar",           // embedded } → hashtag = "foo", role suffix mis-parse
+		"prefix{inner}suff", // embedded {} pair → first } closes user-supplied hashtag
+		"{",                 // single brace
+		"}",                 // single brace
+	} {
+		t.Run(badKey, func(t *testing.T) {
+			_, _, err := claimer.Claim(ctx, badKey, testtime.D5min, testtime.D24h)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "ERR_ADAPTER_REDIS_SET")
+			assert.Contains(t, err.Error(), "must be non-empty and free of")
+		})
+	}
+}
+
 func TestIdempotencyClaimer_Claim_Acquired(t *testing.T) {
 	mock := newClaimerMock()
 	claimer := newIdempotencyClaimerFromCmdable(mock)

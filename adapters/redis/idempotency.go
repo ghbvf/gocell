@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -120,9 +121,20 @@ return 0
 `
 
 // Claim attempts to acquire a processing lease for the given key.
+//
+// Cluster safety: the key is wrapped in a Redis Cluster hashtag (see below).
+// Empty keys produce an empty hashtag `{}` which Redis treats as no hashtag
+// at all — that path silently disables slot colocation and reintroduces
+// CROSSSLOT failures. Keys containing `{` or `}` likewise destabilize the
+// hashtag boundary. Both inputs are rejected at the entry rather than left
+// to surface as obscure runtime errors.
 func (c *IdempotencyClaimer) Claim(
 	ctx context.Context, key string, leaseTTL, doneTTL time.Duration,
 ) (idempotency.ClaimState, idempotency.Receipt, error) {
+	if key == "" || strings.ContainsAny(key, "{}") {
+		return 0, nil, errcode.New(errcode.KindInternal, ErrAdapterRedisSet,
+			fmt.Sprintf("redis: idempotency key must be non-empty and free of '{','}' characters; got %q", key))
+	}
 	if leaseTTL <= 0 {
 		leaseTTL = idempotency.DefaultLeaseTTL
 	}

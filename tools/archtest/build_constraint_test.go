@@ -114,12 +114,60 @@ func findRealTagViolations(rootDir string) ([]string, error) {
 	return violations, nil
 }
 
+// defaultBuildContextTags is the set of tags every Go toolchain run sets
+// implicitly: GOOS, GOARCH, cgo (when CGO_ENABLED=1, the default), and the
+// release tags go1.x for the running compiler back to the project floor.
+// Any //go:build expression satisfied by some subset of these alone — for
+// example `//go:build linux` — would be a no-op gate on a CI Linux runner,
+// so for the purposes of *_real_test.go strictness we treat satisfaction
+// under the default context as a violation, just like satisfaction under
+// the bare `integration` tag.
+//
+// The list intentionally errs broad. Adding a tag the compiler does not
+// actually set produces false positives only if a file's build expression
+// requires that tag in conjunction with something else — and any such
+// dependency on a non-default tag would already make the gate happy. Tags
+// that DO get set need to be present here or strict evaluation under-fires.
+//
+// Keep in sync with the Go floor declared in go.mod (currently 1.25); add
+// future release tags as we bump the floor.
+var defaultBuildContextTags = map[string]bool{
+	// GOOS values (https://pkg.go.dev/internal/syslist)
+	"aix": true, "android": true, "darwin": true, "dragonfly": true,
+	"freebsd": true, "hurd": true, "illumos": true, "ios": true,
+	"js": true, "linux": true, "nacl": true, "netbsd": true,
+	"openbsd": true, "plan9": true, "solaris": true, "wasip1": true,
+	"windows": true, "zos": true,
+
+	// GOARCH values
+	"386": true, "amd64": true, "amd64p32": true, "arm": true,
+	"arm64": true, "arm64be": true, "armbe": true, "loong64": true,
+	"mips": true, "mips64": true, "mips64le": true, "mips64p32": true,
+	"mips64p32le": true, "mipsle": true, "ppc": true, "ppc64": true,
+	"ppc64le": true, "riscv": true, "riscv64": true, "s390": true,
+	"s390x": true, "sparc": true, "sparc64": true, "wasm": true,
+
+	// Cgo + Go release tags through the current go.mod floor.
+	"cgo":   true,
+	"go1.1": true, "go1.2": true, "go1.3": true, "go1.4": true,
+	"go1.5": true, "go1.6": true, "go1.7": true, "go1.8": true,
+	"go1.9": true, "go1.10": true, "go1.11": true, "go1.12": true,
+	"go1.13": true, "go1.14": true, "go1.15": true, "go1.16": true,
+	"go1.17": true, "go1.18": true, "go1.19": true, "go1.20": true,
+	"go1.21": true, "go1.22": true, "go1.23": true, "go1.24": true,
+	"go1.25": true,
+}
+
 // fileHasStricterThanIntegrationTag returns true iff the file's //go:build
-// expression evaluates to false when ONLY the "integration" tag is active
-// (i.e. it requires something more specific) AND evaluates to true under
-// some specific tag set. Files matching `_real_test.go` without any
-// //go:build constraint, or with one that admits `integration` alone, are
-// violations.
+// expression evaluates to false under three scopes:
+//  1. tag set = {} (file would build unconditionally)
+//  2. tag set = {integration}, all the *_integration_test.go gate covers
+//  3. tag set = default Go build context (GOOS/GOARCH/cgo/go1.x), which
+//     CI runners satisfy implicitly even with no -tags flag
+//
+// Only when all three reject does the file genuinely require an opt-in tag
+// such as `integration_cluster`. Files matching `_real_test.go` that pass
+// under any of those scopes are violations.
 func fileHasStricterThanIntegrationTag(path string) (bool, error) {
 	f, err := os.Open(filepath.Clean(path))
 	if err != nil {
@@ -141,8 +189,8 @@ func fileHasStricterThanIntegrationTag(path string) (bool, error) {
 			}
 			withIntegrationOnly := expr.Eval(func(tag string) bool { return tag == "integration" })
 			withoutAny := expr.Eval(func(_ string) bool { return false })
-			// Strict: must NOT pass under integration alone, must NOT pass under empty tag set.
-			return !withIntegrationOnly && !withoutAny, nil
+			withDefaultCtx := expr.Eval(func(tag string) bool { return defaultBuildContextTags[tag] })
+			return !withIntegrationOnly && !withoutAny && !withDefaultCtx, nil
 		}
 		break
 	}
@@ -371,6 +419,39 @@ func TestArchtest_RealBuildConstraint_Violation_Fixture(t *testing.T) {
 			name:    "or_relaxed_real_test.go",
 			content: "//go:build integration || integration_cluster\n\npackage fixture\n\nimport \"testing\"\n\nfunc TestRelaxed(t *testing.T) {}\n",
 			wantBad: true,
+		},
+		{
+			// CI Linux runners satisfy `//go:build linux` automatically. A
+			// _real_test.go with that constraint would be pulled in by every
+			// default `go test` run, defeating the opt-in semantics.
+			name:    "linux_only_real_test.go",
+			content: "//go:build linux\n\npackage fixture\n\nimport \"testing\"\n\nfunc TestLinuxOnly(t *testing.T) {}\n",
+			wantBad: true,
+		},
+		{
+			// `cgo` is set whenever CGO_ENABLED=1 (the default). Same risk
+			// as `linux`: file would compile under bare `go test` on a
+			// default-config runner.
+			name:    "cgo_only_real_test.go",
+			content: "//go:build cgo\n\npackage fixture\n\nimport \"testing\"\n\nfunc TestCgoOnly(t *testing.T) {}\n",
+			wantBad: true,
+		},
+		{
+			// Release tags go1.x are satisfied by every newer compiler. The
+			// repo Go floor is 1.25, so this constraint passes on every
+			// supported toolchain by definition.
+			name:    "go125_only_real_test.go",
+			content: "//go:build go1.25\n\npackage fixture\n\nimport \"testing\"\n\nfunc TestGo125Only(t *testing.T) {}\n",
+			wantBad: true,
+		},
+		{
+			// Combining a default-context tag with the cluster opt-in is
+			// fine — both must be satisfied, and `linux` alone does not
+			// satisfy the cluster part.
+			name: "linux_and_cluster_real_test.go",
+			content: "//go:build linux && integration_cluster\n\n" +
+				"package fixture\n\nimport \"testing\"\n\nfunc TestLinuxAndCluster(t *testing.T) {}\n",
+			wantBad: false,
 		},
 	}
 
