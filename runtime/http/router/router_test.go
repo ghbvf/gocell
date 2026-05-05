@@ -614,7 +614,12 @@ func TestRouterChain_WebSocketUpgrade(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), testtime.CtxDefault)
 	defer cancel()
 
-	conn, _, err := websocket.Dial(ctx, wsURL, nil)
+	conn, resp, err := websocket.Dial(ctx, wsURL, nil)
+	defer func() {
+		if resp != nil && err != nil {
+			_ = resp.Body.Close()
+		}
+	}()
 	require.NoError(t, err, "WebSocket upgrade through router middleware chain must succeed")
 	if err := conn.CloseNow(); err != nil {
 		t.Logf("close ws conn: %v", err)

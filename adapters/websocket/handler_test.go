@@ -108,9 +108,14 @@ func dialWS(t *testing.T, serverURL string) *websocket.Conn {
 	ctx, cancel := context.WithTimeout(context.Background(), testtime.CtxDefault)
 	defer cancel()
 
-	conn, _, err := websocket.Dial(ctx, wsURL, &websocket.DialOptions{
+	conn, resp, err := websocket.Dial(ctx, wsURL, &websocket.DialOptions{
 		HTTPHeader: http.Header{"Origin": {"http://example.com"}},
 	})
+	defer func() {
+		if resp != nil && err != nil {
+			_ = resp.Body.Close()
+		}
+	}()
 	require.NoError(t, err)
 
 	// Always CloseNow on cleanup. Graceful Close may fail if server
@@ -561,7 +566,12 @@ func TestUpgradeHandler_AllowedOrigin_HandshakeSucceeds(t *testing.T) {
 	hub, server := setupTestHub(t, nil)
 	defer server.Close()
 
-	conn, _, err := dialWithOrigin(t, server.URL, "http://allowed.example.com")
+	conn, wsResp, err := dialWithOrigin(t, server.URL, "http://allowed.example.com")
+	defer func() {
+		if wsResp != nil && err != nil {
+			_ = wsResp.Body.Close()
+		}
+	}()
 	require.NoError(t, err, "handshake with allowed Origin must succeed")
 	require.NotNil(t, conn)
 
