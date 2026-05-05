@@ -111,8 +111,14 @@ type HTTPEndpointSpec struct {
 	AuthPublic bool
 	// AuthPasswordResetExempt is true when contract.yaml endpoints.http.auth.passwordResetExempt is set.
 	// The generated handler emits auth.Route{PasswordResetExempt: true} in RegisterRoutes.
-	// Mutually exclusive with AuthPublic.
+	// Mutually exclusive with AuthPublic and AuthBootstrap.
 	AuthPasswordResetExempt bool
+	// AuthBootstrap is true when contract.yaml endpoints.http.auth.bootstrap is set.
+	// The generated handler emits auth.Route{Bootstrap: true} in RegisterRoutes
+	// and the listener-level JWT middleware skips this route. FMT-28 enforces
+	// that this flag only appears on setup/admin contracts.
+	// Mutually exclusive with AuthPublic and AuthPasswordResetExempt.
+	AuthBootstrap bool
 }
 
 // EventEndpointSpec holds event-specific endpoint information.

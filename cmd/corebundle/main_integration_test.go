@@ -4,14 +4,7 @@ package main
 
 import (
 	"context"
-	"errors"
-	"fmt"
-	"os"
-	"path/filepath"
-	"strings"
-	"syscall"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -20,7 +13,6 @@ import (
 	adapterpg "github.com/ghbvf/gocell/adapters/postgres"
 	"github.com/ghbvf/gocell/kernel/clock"
 	kernelmetrics "github.com/ghbvf/gocell/kernel/observability/metrics"
-	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/runtime/bootstrap"
 	"github.com/ghbvf/gocell/runtime/crypto"
 	"github.com/ghbvf/gocell/tests/testutil"
@@ -139,115 +131,8 @@ func TestBuildConfigCoreOpts_Postgres_SchemaMismatch(t *testing.T) {
 	assert.Nil(t, result.PGResource, "ManagedResource must be nil on schema mismatch (error path, pool was closed)")
 }
 
-// writeExpiredCredFile writes a minimal credential file with expires_at set to
-// one hour in the past. Mimics the format produced by initialadmin.formatPayload
-// without importing the internal package. The file is written with mode 0o600
-// to satisfy RemoveCredentialFile's permission check.
-func writeExpiredCredFile(t *testing.T, path string) {
-	t.Helper()
-	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o700))
-	expiresAt := time.Now().Add(-time.Hour).UTC()
-	content := fmt.Sprintf(
-		"# GoCell initial admin credential\n"+
-			"username=admin\n"+
-			"password=hunter2\n"+
-			"expires_at=%d\n",
-		expiresAt.Unix(),
-	)
-	require.NoError(t, os.WriteFile(path, []byte(content), 0o600))
-}
-
-// TestIntegration_AdminExists_OrphanSwept verifies P1-16: Sweep removes an
-// expired credential file during Cell.Init, before EnsureAdmin attempts to write
-// a new one.
-//
-// NOTE on test scope: This test does not pre-populate the user repository with
-// an admin record. run() uses an in-memory DB that starts empty, so EnsureAdmin
-// will create a new admin user rather than taking the adminExists==true branch.
-// The test therefore validates that Sweep executes inside runInitialAdminBootstrap
-// (before EnsureAdmin) and removes the expired file — independently of EnsureAdmin's
-// decision path. The adminExists==true causal guarantee is covered at unit level
-// by sweep_test.go::TestSweep_AdminExistsDoesNotSkip (pure Sweep function).
-//
-// Note: The companion TestIntegration_AdminExists_FreshOrphan was removed:
-// in-memory repositories reset per BuildApp call, making adminExists==true
-// impossible to stage at the integration level. The fresh-orphan causal
-// chain (Sweep returns Cleaner → sink) is strictly covered by the unit
-// test in cell_initialadmin_test.go::TestInit_BootstrapAdminExists_
-// FreshOrphanFile_SweepCleanerRegistered.
-//
-// Execution order in bootstrap.Run:
-//
-//	Step 3-4: asm.StartWithConfig → Cell.Init → runInitialAdminBootstrap:
-//	          1. Sweep removes expired orphan cred file
-//	          2. EnsureAdmin creates admin (in-memory DB: empty → creates user + writes new cred file)
-//	Step 7:   TCP listen (may fail in sandbox — acceptable; sweep + EnsureAdmin already ran)
-func TestIntegration_AdminExists_OrphanSwept(t *testing.T) {
-	stateDir := t.TempDir()
-	credPath := filepath.Join(stateDir, "initial_admin_password")
-
-	// Pre-condition: write an expired orphan credential file simulating a prior
-	// run where the cleanup worker never fired (e.g. adminExists==true path).
-	writeExpiredCredFile(t, credPath)
-
-	// Confirm file exists before bootstrap.
-	_, err := os.Stat(credPath)
-	require.NoError(t, err, "orphan credential file must exist before bootstrap")
-
-	// Configure env for run(). Interactive mode is the default in S-2; this
-	// P1-16 test exercises the initialadmin Lifecycle's sweep path, so opt
-	// explicitly into bootstrap mode.
-	t.Setenv(AdminProvisionModeEnv, "bootstrap")
-	t.Setenv("GOCELL_STATE_DIR", stateDir)
-	t.Setenv("GOCELL_JWT_ISSUER", "gocell-sweep-test")
-	t.Setenv("GOCELL_JWT_AUDIENCE", "gocell")
-	// PR-A35: verbose endpoint is gated in every mode; this integration test
-	// doesn't exercise /readyz?verbose so waive the endpoint explicitly.
-	t.Setenv("GOCELL_READYZ_VERBOSE_DISABLED", "1")
-	// PR-MODE-1 SEC-FAIL-CLOSED: GOCELL_SERVICE_SECRET is now required in
-	// every adapter mode (controlplane guard fail-closed). Set a deterministic
-	// test secret so internalGuardFromEnv succeeds during run().
-	t.Setenv("GOCELL_SERVICE_SECRET", "test-service-secret-for-sweep-test")
-
-	// Use a short-lived context: long enough for assembly init + lifecycle start
-	// (Steps 3-4.6), but we accept context.Canceled, sandbox-bind, or
-	// isBindError as acceptable outcomes — Sweep runs before TCP listen (Step 7).
-	ctx, cancel := context.WithTimeout(context.Background(), testtime.CtxDefault)
-	defer cancel()
-
-	runErr := run(ctx)
-
-	// Only context.Canceled, deadline-exceeded, EPERM, and listen failures are
-	// acceptable (sandbox may block TCP). Any other error signals a regression.
-	if runErr != nil {
-		acceptable := errors.Is(runErr, context.Canceled) ||
-			errors.Is(runErr, context.DeadlineExceeded) ||
-			errors.Is(runErr, syscall.EPERM) ||
-			isBindError(runErr)
-		if !acceptable {
-			t.Fatalf("unexpected startup error (P1-16 regression): %v", runErr)
-		}
-	}
-
-	// Assert: the expired credential file was swept and a fresh one written by
-	// EnsureAdmin. The key P1-16 invariant is that startup succeeded without
-	// "credential file already exists" — proven by the no-unexpected-error check
-	// above. Additionally verify the file content is fresh (expires_at in future),
-	// confirming Sweep removed the expired orphan before EnsureAdmin wrote a new one.
-	rawContent, readErr := os.ReadFile(credPath)
-	require.NoError(t, readErr, "P1-16: credential file must exist after bootstrap (written by EnsureAdmin)")
-	assert.Contains(t, string(rawContent), "expires_at=",
-		"P1-16: fresh credential file must contain expires_at field")
-	// Verify expires_at is in the future (file is newly written, not the expired orphan).
-	for _, line := range strings.Split(string(rawContent), "\n") {
-		if strings.HasPrefix(line, "expires_at=") {
-			unixStr := strings.TrimPrefix(line, "expires_at=")
-			var unixSec int64
-			if _, scanErr := fmt.Sscanf(unixStr, "%d", &unixSec); scanErr == nil {
-				assert.Greater(t, unixSec, time.Now().Unix(),
-					"P1-16: fresh credential file expires_at must be in the future; Sweep must have removed the expired orphan")
-			}
-			break
-		}
-	}
-}
+// TestIntegration_AdminExists_OrphanSwept was deleted by PR #392 follow-up:
+// the entire Sweep / Cleaner / orphan-credfile machinery was removed when
+// initialadmin moved to the env-driven persistent startup credential model
+// (ADR §D3 (delete bootstrap mode) + §D2 (operator credential)). There is no longer a credential file to sweep, so the
+// test had no real semantics to assert.

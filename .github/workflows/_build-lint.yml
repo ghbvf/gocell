@@ -161,31 +161,6 @@ jobs:
         if: matrix.static_checks
         run: go vet -tags=e2e ./tests/e2e/...
 
-      # Generated-artifact gate (PR-CFG-M follow-up):
-      # assembly.yaml is the source-of-truth for runtime cell order, generated
-      # entrypoint paths, boundary contracts, and assembly-reachable metrics
-      # schemas. The verifier derives the expected artifact manifest from
-      # metadata instead of trusting generator stdout to define the diff scope.
-      - name: Verify generated artifacts are up-to-date
-        if: matrix.static_checks
-        run: go run ./cmd/gocell verify generated
-
-      # K#04 codegen-cell gate: cell_gen.go / slice_gen.go must be in sync
-      # with cell.yaml / slice.yaml. Sandbox mode runs the generator inside
-      # an ephemeral git worktree at HEAD and uses `git status --porcelain`
-      # for drift detection, mirroring kubernetes/kubernetes
-      # hack/lib/verify-generated.sh.
-      - name: Verify cell codegen (K#04)
-        if: matrix.static_checks
-        run: ./hack/verify-codegen-cell.sh
-
-      # K#06 codegen-contract gate: generated/contracts/**/*_gen.go must be in
-      # sync with contract.yaml + JSON schemas. Sandbox mode mirrors the K#04
-      # cell codegen gate pattern.
-      - name: Verify contract codegen (K#06)
-        if: matrix.static_checks
-        run: ./hack/verify-codegen-contract.sh
-
       # NOTE: Kernel coverage gate re-runs `go test -cover ./kernel/...`
       # deliberately — it is not a duplicate of the Test step. The gate requires
       # in-package kernel coverage (each package's tests of itself), while the
@@ -412,7 +387,7 @@ jobs:
           go-version: "1.25"
           cache-dependency-path: go.sum
       - name: Vet (cross-platform unit subset)
-        run: go vet ./runtime/shutdown/... ./cells/accesscore/initialadmin/... ./runtime/config/... ./kernel/governance/...
+        run: go vet ./runtime/shutdown/... ./runtime/config/... ./kernel/governance/...
         shell: bash
 
       - name: Cross-platform unit smoke
@@ -420,9 +395,9 @@ jobs:
         # Enable -race on macOS to maximise race-detector coverage.
         run: |
           if [ "${{ matrix.os }}" = "macos-latest" ]; then
-            go test -race -count=1 -timeout 5m ./runtime/shutdown/... ./cells/accesscore/initialadmin/... ./runtime/config/... ./kernel/governance/...
+            go test -race -count=1 -timeout 5m ./runtime/shutdown/... ./runtime/config/... ./kernel/governance/...
           else
-            go test -count=1 -timeout 5m ./runtime/shutdown/... ./cells/accesscore/initialadmin/... ./runtime/config/... ./kernel/governance/...
+            go test -count=1 -timeout 5m ./runtime/shutdown/... ./runtime/config/... ./kernel/governance/...
           fi
         shell: bash
 
@@ -531,3 +506,44 @@ jobs:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
         with:
           projectBaseDir: .
+
+  # verify-codegen runs all three codegen drift gates independently of
+  # build-test. Previously these three steps lived in the build-test kernel
+  # shard (static_checks gate), meaning a red Test shard would silently mask
+  # codegen drift. Moving them to an independent job ensures codegen drift
+  # always surfaces regardless of test failures.
+  #
+  # No `needs:` — runs in parallel with build-test and integration-test.
+  # ref: kubernetes/kubernetes hack/verify-*.sh independent Prow presubmit
+  # ref: kubernetes-sigs/kubebuilder .github/workflows/verify.yml
+  verify-codegen:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
+        with:
+          go-version: "1.25"
+          cache-dependency-path: go.sum
+
+      # Generated-artifact gate (PR-CFG-M follow-up):
+      # assembly.yaml is the source-of-truth for runtime cell order, generated
+      # entrypoint paths, boundary contracts, and assembly-reachable metrics
+      # schemas. The verifier derives the expected artifact manifest from
+      # metadata instead of trusting generator stdout to define the diff scope.
+      - name: Verify generated artifacts are up-to-date
+        run: go run ./cmd/gocell verify generated
+
+      # K#04 codegen-cell gate: cell_gen.go / slice_gen.go must be in sync
+      # with cell.yaml / slice.yaml. Sandbox mode runs the generator inside
+      # an ephemeral git worktree at HEAD and uses `git status --porcelain`
+      # for drift detection, mirroring kubernetes/kubernetes
+      # hack/lib/verify-generated.sh.
+      - name: Verify cell codegen (K#04)
+        run: ./hack/verify-codegen-cell.sh
+
+      # K#06 codegen-contract gate: generated/contracts/**/*_gen.go must be in
+      # sync with contract.yaml + JSON schemas. Sandbox mode mirrors the K#04
+      # cell codegen gate pattern.
+      - name: Verify contract codegen (K#06)
+        run: ./hack/verify-codegen-contract.sh

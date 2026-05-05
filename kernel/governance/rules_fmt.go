@@ -988,3 +988,91 @@ func hasNextCursorProperty(info responseSchemaInfo) bool {
 func hasNextCursorInRequired(info responseSchemaInfo) bool {
 	return slices.Contains(info.Required, "nextCursor")
 }
+
+const (
+	codeFMT27 = "FMT-27"
+	codeFMT28 = "FMT-28"
+)
+
+// validateFMT27 checks that auth.public, auth.bootstrap, and auth.passwordResetExempt
+// are three-way mutually exclusive on HTTP contract auth metadata.
+//
+// The three flags are semantically contradictory when combined:
+//   - public skips JWT entirely (no authentication)
+//   - bootstrap requires env-credential Basic Auth (dedicated first-admin gate)
+//   - passwordResetExempt requires a valid JWT carrying password_reset_required
+//
+// Any combination of two or more is a misconfiguration that the runtime resolves
+// ambiguously. FMT-27 extends FMT-26 (which only checked public+passwordResetExempt)
+// to cover all three pairs.
+//
+// ref: kubernetes/kubernetes validation-gen declarative + handwritten dual-layer pattern
+func (v *Validator) validateFMT27() []ValidationResult {
+	var results []ValidationResult
+	for _, c := range v.project.Contracts {
+		if c.Endpoints.HTTP == nil {
+			continue
+		}
+		auth := c.Endpoints.HTTP.Auth
+		truthy := 0
+		if auth.Public {
+			truthy++
+		}
+		if auth.Bootstrap {
+			truthy++
+		}
+		if auth.PasswordResetExempt {
+			truthy++
+		}
+		if truthy <= 1 {
+			continue
+		}
+		results = append(results, v.newResult(
+			codeFMT27, SeverityError, IssueForbidden,
+			contractFile(c),
+			"endpoints.http.auth",
+			fmt.Sprintf(
+				"contract %q declares more than one of auth.public, auth.bootstrap, "+
+					"auth.passwordResetExempt; they are mutually exclusive: "+
+					"public skips JWT entirely, bootstrap uses env-credential Basic Auth, "+
+					"passwordResetExempt requires a valid JWT",
+				c.ID,
+			),
+		))
+	}
+	return results
+}
+
+// validateFMT28 checks that auth.bootstrap:true is only allowed on HTTP contracts
+// whose path matches IsBootstrapPath. Bootstrap credentials are exclusively for
+// the first-admin setup endpoint; enabling bootstrap auth on other paths would
+// expose env credentials in unintended contexts.
+//
+// Path matching uses metadata.IsBootstrapPath — the single authoritative predicate
+// for the bootstrap admin endpoint pattern /api/v{N}/{cell}/setup/admin.
+func (v *Validator) validateFMT28() []ValidationResult {
+	var results []ValidationResult
+	for _, c := range v.project.Contracts {
+		if c.Endpoints.HTTP == nil {
+			continue
+		}
+		if !c.Endpoints.HTTP.Auth.Bootstrap {
+			continue
+		}
+		path := c.Endpoints.HTTP.Path
+		if !metadata.IsBootstrapPath(path) {
+			results = append(results, v.newResult(
+				codeFMT28, SeverityError, IssueForbidden,
+				contractFile(c),
+				"endpoints.http.auth.bootstrap",
+				fmt.Sprintf(
+					"contract %q has auth.bootstrap:true on path %q; "+
+						"bootstrap auth is only permitted on setup/admin contracts "+
+						"(path must match IsBootstrapPath: /api/v{N}/{cell}/setup/admin)",
+					c.ID, path,
+				),
+			))
+		}
+	}
+	return results
+}

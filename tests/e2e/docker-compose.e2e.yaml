@@ -115,10 +115,13 @@ services:
       # 0.0.0.0 required for CI host-side WaitForReady; production must bind to 127.0.0.1
       GOCELL_HTTP_HEALTH_ADDR: "0.0.0.0:9091"
 
-      # Admin provisioning: interactive (operator calls POST /setup/admin).
+      # Admin provisioning: operator calls POST /setup/admin protected by HTTP
+      # Basic Auth using the bootstrap credentials in env_file below.
       # The bootstrap-admin.sh step calls that endpoint immediately after
-      # corebundle's healthcheck passes.
-      GOCELL_ACCESSCORE_ADMIN_PROVISION_MODE: interactive
+      # corebundle's healthcheck passes; both sides read GOCELL_BOOTSTRAP_ADMIN_*
+      # from tests/e2e/scripts/bootstrap-credentials.env (single source of truth).
+    env_file:
+      - ./scripts/bootstrap-credentials.env
     depends_on:
       migrate:
         condition: service_completed_successfully

@@ -1,14 +1,10 @@
 package main
 
 import (
-	"context"
-	"errors"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-
-	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
 func TestInternalAddrToBaseURL(t *testing.T) {
@@ -56,30 +52,44 @@ func TestInternalAddrToBaseURL(t *testing.T) {
 	}
 }
 
-func TestAccessCoreModule_InvalidAdminProvisionMode_FailsFast(t *testing.T) {
-	shared := buildTestSharedDeps(t)
-	t.Setenv(AdminProvisionModeEnv, "bootstrp")
+// TestAccessCoreModule_BootstrapMissingCredentials_FailsFast verifies that
+// Provide returns an error when only USERNAME is set but PASSWORD is missing (XOR violation).
+func TestAccessCoreModule_BootstrapMissingCredentials_FailsFast(t *testing.T) {
+	// Only USERNAME set, PASSWORD missing — XOR violation.
+	t.Setenv("GOCELL_BOOTSTRAP_ADMIN_USERNAME", "admin")
+	t.Setenv("GOCELL_BOOTSTRAP_ADMIN_PASSWORD", "")
 
-	_, _, _, err := AccessCoreModule{}.Provide(context.Background(), shared)
-	require.Error(t, err)
-	var ecErr *errcode.Error
-	require.True(t, errors.As(err, &ecErr))
-	assert.Contains(t, ecErr.Message, AdminProvisionModeEnv)
-	attr, ok := ecErr.FindAttr("got")
-	assert.True(t, ok, "expected 'got' detail attr")
-	assert.Equal(t, "bootstrp", attr.Value.String())
+	_, err := loadBootstrapCredentials("admin", "")
+	require.Error(t, err, "only username set must fail-fast")
+	assert.Contains(t, err.Error(), "GOCELL_BOOTSTRAP_ADMIN",
+		"error must reference the missing credential env var")
 }
 
-func TestAccessCoreModule_ForceBootstrapDoesNotMaskInvalidProvisionMode(t *testing.T) {
-	shared := buildTestSharedDeps(t)
-	t.Setenv(AdminProvisionModeEnv, "bootstrp")
+// TestAccessCoreModule_BootstrapWeakPassword_FailsFast verifies that a
+// password shorter than 8 bytes causes fail-fast.
+func TestAccessCoreModule_BootstrapWeakPassword_FailsFast(t *testing.T) {
+	_, err := loadBootstrapCredentials("admin", "short")
+	require.Error(t, err, "password shorter than 8 bytes must fail-fast")
+}
 
-	_, _, _, err := AccessCoreModule{ForceBootstrap: true}.Provide(context.Background(), shared)
-	require.Error(t, err)
-	var ecErr *errcode.Error
-	require.True(t, errors.As(err, &ecErr))
-	assert.Contains(t, ecErr.Message, AdminProvisionModeEnv)
-	attr, ok := ecErr.FindAttr("got")
-	assert.True(t, ok, "expected 'got' detail attr")
-	assert.Equal(t, "bootstrp", attr.Value.String())
+// TestAccessCoreModule_BootstrapInvalidUsername_FailsFast verifies that a
+// username containing control characters causes fail-fast.
+func TestAccessCoreModule_BootstrapInvalidUsername_FailsFast(t *testing.T) {
+	_, err := loadBootstrapCredentials("admin\x01control", "securepassword123")
+	require.Error(t, err, "username with control chars must fail-fast")
+}
+
+// TestAccessCoreModule_TrimsEnvWhitespace verifies that K8s-style secrets with
+// trailing newlines are trimmed before credential validation.
+func TestAccessCoreModule_TrimsEnvWhitespace(t *testing.T) {
+	const username = "admin\n"
+	const password = "securepassword123\n"
+
+	creds, err := loadBootstrapCredentials(username, password)
+	require.NoError(t, err,
+		"trailing newline must be trimmed before validation")
+	assert.Equal(t, []byte("admin"), creds.Username,
+		"username must be TrimSpace-d")
+	assert.Equal(t, []byte("securepassword123"), creds.Password,
+		"password must be TrimSpace-d")
 }

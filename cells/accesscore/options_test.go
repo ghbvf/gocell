@@ -32,6 +32,7 @@ func TestWithInMemoryDefaults(t *testing.T) {
 		WithRefreshStore(newTestRefreshStore()),
 		WithOutboxDeps(nil, outbox.NoopWriter{}),
 		WithTxManager(durableTxRunner{}),
+		withTestBootstrapAuth(),
 	)
 	// userRepo and roleRepo are set eagerly; sessionRepo is deferred to Init()
 	// so that c.clk is available (clock injection pattern).
@@ -51,6 +52,7 @@ func TestHealthCheckers_InMemory(t *testing.T) {
 		WithRefreshStore(newTestRefreshStore()),
 		WithOutboxDeps(nil, outbox.NoopWriter{}),
 		WithTxManager(durableTxRunner{}),
+		withTestBootstrapAuth(),
 	)
 	rec := cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo)
 	require.NoError(t, c.Init(context.Background(), rec))
@@ -69,6 +71,7 @@ func TestHealthCheckers_WithInMemoryDefaults_SessionStorePresent(t *testing.T) {
 		WithInMemoryDefaults(),
 		WithOutboxDeps(nil, outbox.NoopWriter{}),
 		WithTxManager(durableTxRunner{}),
+		withTestBootstrapAuth(),
 	)
 	rec := cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo)
 	require.NoError(t, c.Init(context.Background(), rec))
@@ -111,6 +114,7 @@ func TestInit_DurableMode_MissingOutboxWriter(t *testing.T) {
 		WithJWTIssuer(testIssuer),
 		WithJWTVerifier(testVerifier),
 		WithTxManager(durableTxRunner{}),
+		withTestBootstrapAuth(),
 	)
 	err := c.Init(context.Background(), cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDurable))
 	require.Error(t, err)
@@ -127,6 +131,7 @@ func TestInit_DurableMode_RejectsNoopWriter(t *testing.T) {
 		WithJWTVerifier(testVerifier),
 		WithOutboxDeps(nil, outbox.NoopWriter{}),
 		WithTxManager(durableTxRunner{}),
+		withTestBootstrapAuth(),
 	)
 	err := c.Init(context.Background(), cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDurable))
 	require.Error(t, err)
@@ -141,6 +146,7 @@ func TestInit_MissingJWTIssuerAndVerifier(t *testing.T) {
 		WithClock(clock.Real()),
 		WithOutboxDeps(nil, outbox.NoopWriter{}),
 		WithTxManager(durableTxRunner{}),
+		withTestBootstrapAuth(),
 	)
 	err := c.Init(context.Background(), cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo))
 	assert.Error(t, err)
@@ -160,6 +166,7 @@ func TestHealthCheckers_WithDirectEmitter(t *testing.T) {
 		WithOutboxDeps(eventbus.New(eventbus.WithClock(clock.Real())), nil),
 		WithTxManager(durableTxRunner{}),
 		WithMetricsProvider(metrics.NopProvider{}),
+		withTestBootstrapAuth(),
 	)
 	rec := cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo)
 	require.NoError(t, c.Init(context.Background(), rec))
@@ -187,6 +194,7 @@ func TestHealthCheckers_NoEmitterChecker(t *testing.T) {
 		WithRefreshStore(newTestRefreshStore()),
 		WithOutboxDeps(nil, outbox.NoopWriter{}),
 		WithTxManager(durableTxRunner{}),
+		withTestBootstrapAuth(),
 	)
 	rec := cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo)
 	require.NoError(t, c.Init(context.Background(), rec))

@@ -178,7 +178,8 @@ bootstrap.WithListener(WebhookListener, ":8090",
 | `Handler` | `http.Handler` | 必填，非 nil |
 | `Policy` | `auth.Policy` — 路由级策略。当 `Contract.Clients` 非空时，`auth.Mount` 自动注入 `RequireCallerCell` 守卫，handler 无需显式 Policy；显式 Policy 与自动 caller_cell 守卫复合（外层 caller-cell guard → 内层 Policy） | 可选；`Public=true` 时必须为 nil |
 | `Public` | JWT 豁免 | 与 `Policy` / `PasswordResetExempt` 互斥 |
-| `PasswordResetExempt` | 允许 password-reset token | 与 `Public` 互斥；handler 内做细粒度校验 |
+| `PasswordResetExempt` | 允许 password-reset token | 与 `Public` / `Bootstrap` 互斥；handler 内做细粒度校验 |
+| `Bootstrap` | HTTP Basic Auth（env 操作员凭据）保护 setup/admin endpoint | 与 `Public` / `PasswordResetExempt` / `Policy` 互斥；FMT-27 三方互斥守护；FMT-28 限定路径 `/api/v1/*/setup/admin`；`NewBootstrapMiddleware` 实现 per-IP token-bucket + `subtle.ConstantTimeCompare` |
 
 ### 三 listener 分流（PR-A14b）
 

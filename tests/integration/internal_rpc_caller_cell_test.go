@@ -62,6 +62,14 @@ func (callerCellNoopTxRunner) RunInTx(_ context.Context, fn func(context.Context
 
 var _ persistence.TxRunner = callerCellNoopTxRunner{}
 
+// callerCellAllowAllLimiter satisfies auth.BootstrapRateLimiter for test
+// assemblies that don't exercise rate-limiter behavior. Required because
+// auth.bootstrap:true contracts (setup/admin) demand a non-nil
+// WithBootstrapAuth wiring at composition time.
+type callerCellAllowAllLimiter struct{}
+
+func (callerCellAllowAllLimiter) Allow(string) bool { return true }
+
 // freshCallerCellSecret returns a cryptographically random 32-byte test secret
 // (prefixed with "ts-" to distinguish it from demo keys that loadKeySet rejects).
 func freshCallerCellSecret(t *testing.T) string {
@@ -119,6 +127,14 @@ func startCallerCellApp(t *testing.T) *callerCellApp {
 	accessCursorCodec, err := query.NewCursorCodec([]byte("callercell-acc-key---32-bytes-y!!"))
 	require.NoError(t, err)
 
+	bootstrapMW := auth.NewBootstrapMiddleware(
+		auth.BootstrapCredentials{
+			Username: []byte("caller-cell-operator"),
+			Password: []byte("caller-cell-op-pass!"),
+		},
+		callerCellAllowAllLimiter{},
+		nil,
+	)
 	ac := accesscore.NewAccessCore(
 		accesscore.WithClock(clock.Real()),
 		accesscore.WithInMemoryDefaults(),
@@ -128,6 +144,7 @@ func startCallerCellApp(t *testing.T) *callerCellApp {
 		accesscore.WithTxManager(callerCellNoopTxRunner{}),
 		accesscore.WithMetricsProvider(metrics.NopProvider{}),
 		accesscore.WithCursorCodec(accessCursorCodec),
+		accesscore.WithBootstrapAuth(bootstrapMW),
 	)
 	cc := configcore.NewConfigCore(
 		configcore.WithClock(clock.Real()),

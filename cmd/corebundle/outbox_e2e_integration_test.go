@@ -30,13 +30,10 @@ package main
 import (
 	"bytes"
 	"context"
-	"encoding/base64"
 	"encoding/json"
-	"fmt"
 	"net"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -194,10 +191,6 @@ func TestOutboxE2E_PGMode_WriteToSubscribe(t *testing.T) {
 	auditCursorCodec, err := query.NewCursorCodec([]byte("test-audit-cursor-key-32-bytes!!"))
 	require.NoError(t, err)
 
-	// Use a temp dir for the bootstrap credential file so the test is isolated.
-	e2eStateDir := t.TempDir()
-	t.Setenv("GOCELL_STATE_DIR", e2eStateDir)
-
 	// cellAdapterOpts already includes WithOutboxDeps(eb, pgWriter) from
 	// buildConfigCoreOpts — no separate publisher wiring needed.
 	// Go prevents mixing positional args and slice spread, so WithClock is
@@ -209,16 +202,24 @@ func TestOutboxE2E_PGMode_WriteToSubscribe(t *testing.T) {
 	}, cellAdapterOpts...)
 	configCell := configcore.NewConfigCore(cellAdapterOpts...) //archtest:allow:clock-injection:via-slice options slice starts with WithClock(clock.Real()) prepended above; Go prevents mixing positional + spread
 
-	// Wire accesscore with WithInitialAdminBootstrap.
-	// Bootstrap phase3b auto-discovers LifecycleHooks() — no worker.Lazy sink needed.
+	// Wire accesscore with WithBootstrapAuth. The operator calls POST /setup/admin
+	// with Basic Auth to provision the first admin (interactive mode, ADR §D5).
+	e2eBootstrapMW := auth.NewBootstrapMiddleware(
+		auth.BootstrapCredentials{
+			Username: []byte(e2eAdminUsername),
+			Password: []byte(e2eAdminBootstrapPassword),
+		},
+		setupTestAllowAllLimiter{},
+		nil,
+	)
 	accessCell := accesscore.NewAccessCore(
 		accesscore.WithClock(clock.Real()),
 		accesscore.WithInMemoryDefaults(),
 		accesscore.WithOutboxDeps(eb, nil),
 		accesscore.WithJWTIssuer(jwtIssuer),
 		accesscore.WithJWTVerifier(jwtVerifier),
-		accesscore.WithInitialAdminBootstrap(),
 		accesscore.WithMetricsProvider(kernelmetrics.NopProvider{}),
+		accesscore.WithBootstrapAuth(e2eBootstrapMW),
 	)
 	auditCell := auditcore.NewAuditCore(
 		auditcore.WithClock(clock.Real()),
@@ -265,23 +266,11 @@ func TestOutboxE2E_PGMode_WriteToSubscribe(t *testing.T) {
 	waitForHealthy(t, addr)
 
 	// --- Step 7: Drive HTTP requests ---
-	// Read bootstrap credentials from the credential file, then change password
-	// so subsequent requests are not blocked by password-reset enforcement.
-	e2eCredPath := e2eStateDir + "/initial_admin_password"
-	require.Eventually(t, func() bool {
-		_, statErr := os.Stat(e2eCredPath)
-		return statErr == nil
-	}, testtime.EventuallyLong, testtime.MediumPoll, "e2e credential file must exist")
-
-	e2eUsername, e2eBootstrapPass, err := readE2ECredentials(e2eCredPath)
-	require.NoError(t, err, "must read e2e credentials from file")
-
-	// Login with bootstrap credentials (passwordResetRequired=true).
-	bootstrapToken := loginAdminBootstrap(t, baseURL, e2eUsername, e2eBootstrapPass)
-	// Change password to obtain a token without passwordResetRequired.
-	adminUserID := extractE2ESubFromJWT(t, bootstrapToken)
-	const e2eAdminNewPass = "E2eTest@Pass9876!"
-	token := changeE2EPassword(t, baseURL, bootstrapToken, adminUserID, e2eBootstrapPass, e2eAdminNewPass)
+	// Operator provisions the first admin via POST /setup/admin with Basic Auth
+	// (interactive mode, ADR §D5). The admin password is set directly in the body,
+	// so passwordResetRequired=false — no change-password detour needed.
+	provisionE2EAdmin(t, baseURL, e2eAdminUsername, e2eAdminBootstrapPassword)
+	token := loginAdmin(t, baseURL, e2eAdminUsername, e2eAdminBootstrapPassword)
 
 	createConfig(t, baseURL, token, "e2e.test.key", "e2e-value")
 	publishConfig(t, baseURL, token, "e2e.test.key")
@@ -323,9 +312,28 @@ func TestOutboxE2E_PGMode_WriteToSubscribe(t *testing.T) {
 	}
 }
 
+// provisionE2EAdmin calls POST /api/v1/access/setup/admin with Basic Auth using
+// the e2e operator credentials. The admin identity (username + password) is
+// set directly in the request body — passwordResetRequired=false (ADR §D5).
+func provisionE2EAdmin(t *testing.T, baseURL, username, password string) {
+	t.Helper()
+	body, _ := json.Marshal(map[string]string{
+		"username": username,
+		"email":    username + "@e2e.local",
+		"password": password,
+	})
+	req, err := http.NewRequest(http.MethodPost, baseURL+"/api/v1/access/setup/admin", bytes.NewReader(body))
+	require.NoError(t, err)
+	req.Header.Set("Content-Type", "application/json")
+	req.SetBasicAuth(username, password)
+	resp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusCreated, resp.StatusCode,
+		"setup/admin must return 201 Created with valid Basic Auth")
+}
+
 // loginAdmin posts to /api/v1/access/sessions/login and returns the access token.
-// Kept for backward compatibility with any future callers; for bootstrap flow
-// use loginAdminBootstrap.
 func loginAdmin(t *testing.T, baseURL, user, pass string) string {
 	t.Helper()
 	body, _ := json.Marshal(map[string]string{"username": user, "password": pass})
@@ -344,72 +352,13 @@ func loginAdmin(t *testing.T, baseURL, user, pass string) string {
 	return result.Data.AccessToken
 }
 
-// loginAdminBootstrap posts to the login endpoint and returns the access token.
-// Unlike loginAdmin, it accepts a bootstrap token that may have
-// passwordResetRequired=true.
-func loginAdminBootstrap(t *testing.T, baseURL, user, pass string) string {
-	t.Helper()
-	return loginAdmin(t, baseURL, user, pass)
-}
-
-// readE2ECredentials reads username and password from the credential file written
-// by the initial-admin bootstrap.
-func readE2ECredentials(path string) (username, password string, err error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return "", "", fmt.Errorf("read e2e credential file: %w", err)
-	}
-	for _, line := range strings.Split(string(data), "\n") {
-		if strings.HasPrefix(line, "username=") {
-			username = strings.TrimPrefix(line, "username=")
-		} else if strings.HasPrefix(line, "password=") {
-			password = strings.TrimPrefix(line, "password=")
-		}
-	}
-	if username == "" || password == "" {
-		return "", "", fmt.Errorf("credential file missing username or password: %s", path)
-	}
-	return username, password, nil
-}
-
-// extractE2ESubFromJWT extracts the "sub" claim from a JWT without verifying
-// the signature. Used by the e2e test to obtain the user ID for change-password.
-func extractE2ESubFromJWT(t *testing.T, tokenStr string) string {
-	t.Helper()
-	parts := strings.SplitN(tokenStr, ".", 3)
-	require.Len(t, parts, 3, "JWT must have 3 parts")
-	decoded, err := base64.RawURLEncoding.DecodeString(parts[1])
-	require.NoError(t, err)
-	var claims map[string]any
-	require.NoError(t, json.Unmarshal(decoded, &claims))
-	sub, _ := claims["sub"].(string)
-	return sub
-}
-
-// changeE2EPassword calls POST /api/v1/access/users/{id}/password and returns
-// the new access token (which no longer has passwordResetRequired=true).
-func changeE2EPassword(t *testing.T, baseURL, token, userID, oldPass, newPass string) string {
-	t.Helper()
-	body, _ := json.Marshal(map[string]string{"oldPassword": oldPass, "newPassword": newPass})
-	req, err := http.NewRequest(http.MethodPost, baseURL+"/api/v1/access/users/"+userID+"/password", bytes.NewReader(body))
-	require.NoError(t, err)
-	req.Header.Set("Authorization", "Bearer "+token)
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, err := http.DefaultClient.Do(req)
-	require.NoError(t, err)
-	defer resp.Body.Close()
-	require.Equal(t, http.StatusOK, resp.StatusCode, "change password must return 200")
-
-	var result struct {
-		Data struct {
-			AccessToken string `json:"accessToken"`
-		} `json:"data"`
-	}
-	require.NoError(t, json.NewDecoder(resp.Body).Decode(&result))
-	require.NotEmpty(t, result.Data.AccessToken, "change-password response must include new accessToken")
-	return result.Data.AccessToken
-}
+// e2eAdminUsername / e2eAdminBootstrapPassword are the operator credentials used
+// as both the Basic Auth header on POST /setup/admin and the admin identity
+// created in the request body.
+const (
+	e2eAdminUsername          = "e2e-admin"
+	e2eAdminBootstrapPassword = "e2e-admin-pass-1!"
+)
 
 // createConfig creates a config entry via POST /api/v1/config/.
 func createConfig(t *testing.T, baseURL, token, key, value string) {
@@ -563,9 +512,6 @@ func TestOutboxE2E_RefetchLoop_AccessCoreCallsInternalGet(t *testing.T) {
 	auditCursorCodec, err := query.NewCursorCodec([]byte("test-audit-cursor-key-32-bytes!!"))
 	require.NoError(t, err)
 
-	e2eStateDir := t.TempDir()
-	t.Setenv("GOCELL_STATE_DIR", e2eStateDir)
-
 	// Go prevents mixing positional args and slice spread, so WithClock is
 	// prepended into the slice; the allow-marker below documents this.
 	cellAdapterOpts = append([]configcore.Option{
@@ -578,14 +524,22 @@ func TestOutboxE2E_RefetchLoop_AccessCoreCallsInternalGet(t *testing.T) {
 	// Wire accesscore with the HTTPConfigGetter pointing at the stub server.
 	// After receiving an entry-upserted event, configreceive will call
 	// internalSrv.URL + /internal/v1/config/{key}, and the stub records it.
+	refetchBootstrapMW := auth.NewBootstrapMiddleware(
+		auth.BootstrapCredentials{
+			Username: []byte(e2eAdminUsername),
+			Password: []byte(e2eAdminBootstrapPassword),
+		},
+		setupTestAllowAllLimiter{},
+		nil,
+	)
 	accessCell := accesscore.NewAccessCore(
 		accesscore.WithClock(clock.Real()),
 		accesscore.WithInMemoryDefaults(),
 		accesscore.WithOutboxDeps(eb, nil),
 		accesscore.WithJWTIssuer(jwtIssuer),
 		accesscore.WithJWTVerifier(jwtVerifier),
-		accesscore.WithInitialAdminBootstrap(),
 		accesscore.WithMetricsProvider(kernelmetrics.NopProvider{}),
+		accesscore.WithBootstrapAuth(refetchBootstrapMW),
 		configgetter.WithHTTP(internalSrv.URL, testRing, clock.Real()),
 	)
 	auditCell := auditcore.NewAuditCore(
@@ -626,19 +580,10 @@ func TestOutboxE2E_RefetchLoop_AccessCoreCallsInternalGet(t *testing.T) {
 	waitForHealthy(t, addr)
 
 	// --- Step 7: Authenticate as admin ---
-	e2eCredPath := e2eStateDir + "/initial_admin_password"
-	require.Eventually(t, func() bool {
-		_, statErr := os.Stat(e2eCredPath)
-		return statErr == nil
-	}, testtime.EventuallyLong, testtime.MediumPoll, "e2e credential file must exist")
-
-	e2eUsername, e2eBootstrapPass, err := readE2ECredentials(e2eCredPath)
-	require.NoError(t, err)
-
-	bootstrapToken := loginAdminBootstrap(t, baseURL, e2eUsername, e2eBootstrapPass)
-	adminUserID := extractE2ESubFromJWT(t, bootstrapToken)
-	const refetchTestAdminPass = "RefetchTest@Pass9876!"
-	token := changeE2EPassword(t, baseURL, bootstrapToken, adminUserID, e2eBootstrapPass, refetchTestAdminPass)
+	// Operator provisions the first admin via POST /setup/admin with Basic Auth
+	// (interactive mode, ADR §D5). Login directly — no change-password needed.
+	provisionE2EAdmin(t, baseURL, e2eAdminUsername, e2eAdminBootstrapPassword)
+	token := loginAdmin(t, baseURL, e2eAdminUsername, e2eAdminBootstrapPassword)
 
 	// --- Step 8: Publish a config entry — triggers the refetch closed loop ---
 	const refetchKey = "refetch.test.key"

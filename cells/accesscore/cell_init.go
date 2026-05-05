@@ -6,7 +6,6 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/ghbvf/gocell/cells/accesscore/initialadmin"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/adminprovision"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/mem"
 	"github.com/ghbvf/gocell/cells/accesscore/slices/authorizationdecide"
@@ -250,8 +249,15 @@ func (c *AccessCore) initSlices() error {
 	)
 	c.AddSlice(cell.NewBaseSlice("configreceive", "accesscore", cell.L3))
 
-	// setup: interactive first-run admin provisioning (Public HTTP endpoints).
+	// setup: first-run admin provisioning.
 	// Uses shared adminprovision.Provisioner so semantics match initialadmin.
+	if c.bootstrapAuth == nil {
+		return errcode.New(errcode.KindInternal, errcode.ErrCellInvalidConfig,
+			"accesscore: WithBootstrapAuth is required (auth.bootstrap:true contracts "+
+				"need a per-route replacement authenticator; composition root must wire "+
+				"runtime/auth.NewBootstrapMiddleware via WithBootstrapAuth). "+
+				"See docs/architecture/202605061600-adr-bootstrap-admin-boundary.md §D1.")
+	}
 	setupProv, err := adminprovision.NewProvisioner(c.userRepo, c.roleRepo, c.logger, uuid.NewString, c.clk)
 	if err != nil {
 		return err
@@ -263,7 +269,7 @@ func (c *AccessCore) initSlices() error {
 	if err != nil {
 		return err
 	}
-	c.setupHandler = setup.NewHandler(setupSvc)
+	c.setupHandler = setup.NewHandler(setupSvc, c.bootstrapAuth)
 	c.AddSlice(cell.NewBaseSlice("setup", "accesscore", cell.L2))
 	return nil
 }
@@ -319,32 +325,10 @@ func (c *AccessCore) initInternal(ctx context.Context, reg cell.Registry) error 
 	if err := c.initSlices(); err != nil {
 		return err
 	}
-	if err := c.bindInitialAdmin(); err != nil {
-		return err
-	}
 
 	// Route groups and subscriptions removed: cell_gen.go owns Init and renders them.
 	c.registerHealthAndLifecycle(reg)
 
-	return nil
-}
-
-// bindInitialAdmin validates platform support and binds repos to the initialAdmin lifecycle.
-func (c *AccessCore) bindInitialAdmin() error {
-	if c.initialAdmin == nil {
-		return nil
-	}
-	// Platform check fails fast at Init() rather than at lifecycle OnStart,
-	// so an unsupported GOOS surfaces before any bootstrap goroutine runs.
-	if err := initialadmin.PlatformSupported(); err != nil {
-		return err
-	}
-	c.initialAdmin.Bind(initialadmin.BootstrapDeps{
-		UserRepo: c.userRepo,
-		RoleRepo: c.roleRepo,
-		Logger:   c.logger,
-		Clock:    c.clk,
-	}, c.logger)
 	return nil
 }
 
@@ -362,8 +346,5 @@ func (c *AccessCore) registerHealthAndLifecycle(reg cell.Registry) {
 	}
 	if c.refreshGCEnabled {
 		reg.Lifecycle(c.refreshGCHook())
-	}
-	if c.initialAdmin != nil {
-		reg.Lifecycle(c.initialAdmin.Hook())
 	}
 }

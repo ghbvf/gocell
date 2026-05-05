@@ -3,23 +3,25 @@
 // Package main — walkthrough integration test for ssobff.
 //
 // Verifies the complete API flow described in README.md:
-//  1. Bootstrap admin credentials are written to a temp credential file
-//  2. Admin logs in → response has passwordResetRequired=true
-//  3. Business endpoints return 403 ERR_AUTH_PASSWORD_RESET_REQUIRED while reset pending
-//  4. Change-password endpoint returns 200 + new TokenPair (passwordResetRequired=false)
-//  5. New token passes through business endpoints (200)
-//  6. refreshToken field works for token rotation
-//  7. Logout returns 204 with empty body
-//  8. Audit entries contain timestamp field (not createdAt)
-//  9. Config CRUD (POST/PUT/GET) with admin token — Steps 8-11 in README
-//  10. Feature flags list is accessible with auth
+//  1. Operator provisions the first admin (POST /api/v1/access/setup/admin
+//     with package-local ssobffBootstrap{Username,Password} as Basic Auth).
+//     The admin chose the password directly — passwordResetRequired=false
+//     (D2 + D4 (operator credential + plane separation): operator-set passwords are not "initial randoms",
+//     identity-manage's change-password covers the reset flow separately).
+//  2. Admin logs in with chosen password → 201 + passwordResetRequired=false.
+//  3. Internal listener is isolated and service-token protected.
+//  4. Business endpoints (config CRUD) work with the admin token directly —
+//     no reset detour required.
+//  5. refreshToken field works for token rotation.
+//  6. Logout returns 204 with empty body.
+//  7. Audit entries contain timestamp field (not createdAt).
+//  8. Feature flags list is accessible with auth.
 //
 // Security regression gate (PR#172 F1): slog capture verifies no log record
 // contains the bootstrap password in plaintext.
 package main
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -29,8 +31,6 @@ import (
 	"net"
 	"net/http"
 	"net/url"
-	"os"
-	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -111,46 +111,13 @@ func assertNoPlaintextPassword(t *testing.T, h *capturingHandler, password strin
 	}
 }
 
-// credentialFromFile reads the credential file written by the bootstrap and
-// returns (username, password). The file format is:
-//
-//	# GoCell initial admin credential
-//	username=admin
-//	password=<token>
-//	expires_at=<unix>
-func credentialFromFile(path string) (username, password string, err error) {
-	f, err := os.Open(path)
-	if err != nil {
-		return "", "", fmt.Errorf("open credential file %s: %w", path, err)
-	}
-	defer f.Close()
-
-	scanner := bufio.NewScanner(f)
-	for scanner.Scan() {
-		line := scanner.Text()
-		if strings.HasPrefix(line, "username=") {
-			username = strings.TrimPrefix(line, "username=")
-		} else if strings.HasPrefix(line, "password=") {
-			password = strings.TrimPrefix(line, "password=")
-		}
-	}
-	if err := scanner.Err(); err != nil {
-		return "", "", fmt.Errorf("scan credential file: %w", err)
-	}
-	if username == "" || password == "" {
-		return "", "", fmt.Errorf("credential file missing username or password: %s", path)
-	}
-	return username, password, nil
-}
-
 // buildWalkthroughServer constructs an in-memory ssobff server through the
 // same NewSSOBFFApp/bootstrap path used by main.go.
 //
-// It uses WithInitialAdminBootstrap so bootstrap credentials are written to
-// <stateDir>/initial_admin_password. Callers read credentials from the file.
-//
-// The capturing slog handler is threaded through so the test can assert that
-// no plaintext password appears in any log record (PR#172 F1 regression gate).
+// Admin provisioning uses interactive POST /setup/admin (postmortem 202605060030:
+// bootstrap provision mode deleted; operator calls the endpoint with Basic Auth).
+// The capturing slog handler is threaded through so the test can assert
+// that no plaintext password appears in any log record (PR#172 F1 gate).
 type walkthroughServer struct {
 	primaryBaseURL  string
 	internalBaseURL string
@@ -171,12 +138,9 @@ func (s *walkthroughServer) Cleanup(t *testing.T) {
 	}
 }
 
-func buildWalkthroughServer(t *testing.T, stateDir string, capHandler *capturingHandler) *walkthroughServer {
+func buildWalkthroughServer(t *testing.T, capHandler *capturingHandler) *walkthroughServer {
 	t.Helper()
 
-	// Set GOCELL_STATE_DIR so the bootstrapper resolves the credential path to
-	// <stateDir>/initial_admin_password.
-	t.Setenv("GOCELL_STATE_DIR", stateDir)
 	logger := slog.New(capHandler)
 	previousDefaultLogger := slog.Default()
 	slog.SetDefault(logger)
@@ -262,6 +226,25 @@ func postWalkthroughJSON(t *testing.T, rawURL string, body string) *http.Respons
 	return doWalkthroughRequest(t, req)
 }
 
+// provisionAdmin sends POST /api/v1/access/setup/admin with the package-local
+// ssobffBootstrap{Username,Password} as Basic Auth, creating the demo admin.
+// The closed contract (ADR §D1) guarantees the request is rejected with 401
+// without Basic Auth — Step 0 of the walkthrough.
+func provisionAdmin(t *testing.T, base, username, email, password string) {
+	t.Helper()
+	body := fmt.Sprintf(`{"username":%q,"email":%q,"password":%q}`, username, email, password)
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost,
+		base+"/api/v1/access/setup/admin", strings.NewReader(body))
+	require.NoError(t, err)
+	req.Header.Set("Content-Type", "application/json")
+	req.SetBasicAuth(ssobffBootstrapUsername, ssobffBootstrapPassword)
+
+	resp := doWalkthroughRequest(t, req)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusCreated, resp.StatusCode,
+		"setup/admin must return 201 Created with valid Basic Auth")
+}
+
 func walkthroughServiceToken(t *testing.T, secret, method, rawURL string) string {
 	t.Helper()
 	parsed, err := url.Parse(rawURL)
@@ -274,39 +257,39 @@ func walkthroughServiceToken(t *testing.T, secret, method, rawURL string) string
 
 // TestWalkthrough exercises the complete ssobff API walkthrough.
 func TestWalkthrough(t *testing.T) {
-	// Use a temp dir as GOCELL_STATE_DIR so the credential file is isolated
-	// to this test run. The slog capturing handler wraps a discard handler
-	// so we can assert no plaintext password appears in logs.
-	stateDir := t.TempDir()
+	// The slog capturing handler wraps a discard handler so we can assert no
+	// plaintext password appears in logs (PR#172 F1 regression gate). PR #392
+	// removed the credfile path; bootstrap credentials are now the package-
+	// local ssobffBootstrap{Username,Password} constants.
 	capHandler := newCapturingHandler(slog.NewTextHandler(io.Discard, &slog.HandlerOptions{Level: slog.LevelDebug}))
-	srv := buildWalkthroughServer(t, stateDir, capHandler)
+	srv := buildWalkthroughServer(t, capHandler)
 	defer srv.Cleanup(t)
 	require.NotEmpty(t, srv.healthBaseURL, "health base URL must be available for diagnostics")
 	base := srv.primaryBaseURL
 
-	// Read bootstrap credentials from the credential file written during Init.
-	credPath := filepath.Join(stateDir, "initial_admin_password")
-	require.Eventually(t, func() bool {
-		_, statErr := os.Stat(credPath)
-		return statErr == nil
-	}, testtime.EventuallyLong, testtime.MediumPoll, "credential file must exist after Init")
-
-	bootstrapUsername, bootstrapPassword, err := credentialFromFile(credPath)
-	require.NoError(t, err, "must read credentials from credential file")
-	require.NotEmpty(t, bootstrapUsername, "bootstrap username must be non-empty")
-	require.NotEmpty(t, bootstrapPassword, "bootstrap password must be non-empty")
+	// Step 0: Provision the first admin via interactive POST /setup/admin
+	// (D5: env creds authenticate the operator; body defines the admin user).
+	const (
+		adminUsername     = "walkthrough-admin"
+		adminEmail        = "walkthrough-admin@local"
+		bootstrapPassword = "Walkthrough-Admin-Pwd-1!"
+	)
+	bootstrapUsername := adminUsername
+	provisionAdmin(t, base, adminUsername, adminEmail, bootstrapPassword)
 
 	var adminToken string
 	var adminUserID string
 
-	// Step 1: Bootstrap admin login — must return 201 + passwordResetRequired=true.
-	t.Run("bootstrap admin can login and passwordResetRequired=true", func(t *testing.T) {
+	// Step 1: Operator-provisioned admin login. Operator chose the password,
+	// so passwordResetRequired=false (D2 + D4 (operator credential + plane separation)). The reset flow itself is
+	// covered by identity-manage's change-password tests, not by walkthrough.
+	t.Run("provisioned admin can login", func(t *testing.T) {
 		body := fmt.Sprintf(`{"username":%q,"password":%q}`, bootstrapUsername, bootstrapPassword)
 		resp := postWalkthroughJSON(t, base+"/api/v1/access/sessions/login", body)
 		defer resp.Body.Close()
 
 		assert.Equal(t, http.StatusCreated, resp.StatusCode,
-			"bootstrap admin login must return 201 Created")
+			"admin login must return 201 Created")
 
 		var envelope struct {
 			Data struct {
@@ -323,8 +306,8 @@ func TestWalkthrough(t *testing.T) {
 		assert.NotEmpty(t, envelope.Data.RefreshToken, "response must include refreshToken")
 		assert.NotEmpty(t, envelope.Data.ExpiresAt, "response must include expiresAt")
 		assert.NotEmpty(t, envelope.Data.UserID, "response must include userId")
-		assert.True(t, envelope.Data.PasswordResetRequired,
-			"bootstrap admin login must return passwordResetRequired=true")
+		assert.False(t, envelope.Data.PasswordResetRequired,
+			"operator-provisioned admin must not require password reset")
 
 		adminToken = envelope.Data.AccessToken
 		adminUserID = envelope.Data.UserID
@@ -375,74 +358,10 @@ func TestWalkthrough(t *testing.T) {
 			"internal listener must accept valid service token on internal route")
 	})
 
-	// Step 2: Business endpoint with reset-required token → 403.
-	t.Run("business endpoint blocked with ERR_AUTH_PASSWORD_RESET_REQUIRED", func(t *testing.T) {
-		// GET /api/v1/config/site.title is an authenticated non-exempt endpoint.
-		req, err := http.NewRequestWithContext(context.Background(),
-			http.MethodGet,
-			base+"/api/v1/config/site.title",
-			http.NoBody)
-		require.NoError(t, err)
-		req.Header.Set("Authorization", "Bearer "+adminToken)
-
-		resp := doWalkthroughRequest(t, req)
-		bodyBytes, readErr := io.ReadAll(resp.Body)
-		resp.Body.Close()
-		require.NoError(t, readErr)
-
-		assert.Equal(t, http.StatusForbidden, resp.StatusCode,
-			"business endpoint must return 403 when passwordResetRequired=true")
-		assert.Contains(t, string(bodyBytes), "ERR_AUTH_PASSWORD_RESET_REQUIRED",
-			"error body must contain ERR_AUTH_PASSWORD_RESET_REQUIRED")
-	})
-
-	newPassword := "NewP@ssw0rd!9876"
-
-	// Step 3: Change password → 200 + new TokenPair + passwordResetRequired=false.
-	var newAdminToken string
-	t.Run("change password returns new token with passwordResetRequired=false", func(t *testing.T) {
-		body := fmt.Sprintf(`{"oldPassword":%q,"newPassword":%q}`, bootstrapPassword, newPassword)
-		req, err := http.NewRequestWithContext(context.Background(),
-			http.MethodPost,
-			base+"/api/v1/access/users/"+adminUserID+"/password",
-			strings.NewReader(body))
-		require.NoError(t, err)
-		req.Header.Set("Content-Type", "application/json")
-		req.Header.Set("Authorization", "Bearer "+adminToken)
-
-		resp := doWalkthroughRequest(t, req)
-		bodyBytes, readErr := io.ReadAll(resp.Body)
-		resp.Body.Close()
-		require.NoError(t, readErr)
-
-		assert.Equal(t, http.StatusOK, resp.StatusCode,
-			"POST /{id}/password must return 200, body=%s", string(bodyBytes))
-
-		var envelope struct {
-			Data struct {
-				AccessToken           string `json:"accessToken"`
-				RefreshToken          string `json:"refreshToken"`
-				ExpiresAt             string `json:"expiresAt"`
-				SessionID             string `json:"sessionId"`
-				UserID                string `json:"userId"`
-				PasswordResetRequired bool   `json:"passwordResetRequired"`
-			} `json:"data"`
-		}
-		require.NoError(t, json.Unmarshal(bodyBytes, &envelope))
-		assert.NotEmpty(t, envelope.Data.AccessToken, "response must include new accessToken")
-		assert.NotEmpty(t, envelope.Data.RefreshToken, "response must include new refreshToken")
-		assert.NotEmpty(t, envelope.Data.SessionID, "response must include sessionId")
-		assert.NotEmpty(t, envelope.Data.UserID, "response must include userId")
-		assert.False(t, envelope.Data.PasswordResetRequired,
-			"new token must have passwordResetRequired=false after change-password")
-
-		newAdminToken = envelope.Data.AccessToken
-	})
-
-	require.NotEmpty(t, newAdminToken, "newAdminToken must be set by change-password subtest")
-
-	// Step 4: Business endpoint with new token → 200 (must create config first).
-	t.Run("business endpoint allowed after password change", func(t *testing.T) {
+	// Step 2: Business endpoints work directly with the admin token (operator-
+	// provisioned admin → no reset detour). Create a config entry, then read
+	// it back.
+	t.Run("business endpoint allowed with admin token", func(t *testing.T) {
 		// Create a config entry first.
 		createReq, err := http.NewRequestWithContext(context.Background(),
 			http.MethodPost,
@@ -450,12 +369,12 @@ func TestWalkthrough(t *testing.T) {
 			strings.NewReader(`{"key":"site.title","value":"GoCell Demo","sensitive":false}`))
 		require.NoError(t, err)
 		createReq.Header.Set("Content-Type", "application/json")
-		createReq.Header.Set("Authorization", "Bearer "+newAdminToken)
+		createReq.Header.Set("Authorization", "Bearer "+adminToken)
 
 		createResp := doWalkthroughRequest(t, createReq)
 		createResp.Body.Close()
 		assert.Equal(t, http.StatusCreated, createResp.StatusCode,
-			"POST /config/ with new token must return 201 Created")
+			"POST /config/ with admin token must return 201 Created")
 
 		// Now read it back.
 		req, err := http.NewRequestWithContext(context.Background(),
@@ -463,13 +382,13 @@ func TestWalkthrough(t *testing.T) {
 			base+"/api/v1/config/site.title",
 			http.NoBody)
 		require.NoError(t, err)
-		req.Header.Set("Authorization", "Bearer "+newAdminToken)
+		req.Header.Set("Authorization", "Bearer "+adminToken)
 
 		resp := doWalkthroughRequest(t, req)
 		defer resp.Body.Close()
 
 		assert.Equal(t, http.StatusOK, resp.StatusCode,
-			"GET /config/site.title with new token must return 200 OK")
+			"GET /config/site.title with admin token must return 200 OK")
 	})
 
 	// Security regression gate (PR#172 F1): verify no slog record contains
@@ -488,7 +407,7 @@ func TestWalkthrough(t *testing.T) {
 			strings.NewReader(`{"username":"alice","password":"P@ssw0rd123","email":"alice@example.com"}`))
 		require.NoError(t, err)
 		req.Header.Set("Content-Type", "application/json")
-		req.Header.Set("Authorization", "Bearer "+newAdminToken)
+		req.Header.Set("Authorization", "Bearer "+adminToken)
 
 		resp := doWalkthroughRequest(t, req)
 		defer resp.Body.Close()
@@ -612,7 +531,7 @@ func TestWalkthrough(t *testing.T) {
 		// eventbus; poll until at least one entry is visible.
 		var entries []json.RawMessage
 		require.Eventually(t, func() bool {
-			data, ok := fetchAuditEntries(base+"/api/v1/audit/entries", newAdminToken)
+			data, ok := fetchAuditEntries(base+"/api/v1/audit/entries", adminToken)
 			if ok {
 				entries = data
 			}
@@ -645,7 +564,7 @@ func TestWalkthrough(t *testing.T) {
 			strings.NewReader(`{"value":"GoCell Updated"}`))
 		require.NoError(t, err)
 		req.Header.Set("Content-Type", "application/json")
-		req.Header.Set("Authorization", "Bearer "+newAdminToken)
+		req.Header.Set("Authorization", "Bearer "+adminToken)
 
 		resp := doWalkthroughRequest(t, req)
 		defer resp.Body.Close()
@@ -670,7 +589,7 @@ func TestWalkthrough(t *testing.T) {
 			base+"/api/v1/config/site.title",
 			http.NoBody)
 		require.NoError(t, err)
-		req.Header.Set("Authorization", "Bearer "+newAdminToken)
+		req.Header.Set("Authorization", "Bearer "+adminToken)
 
 		resp := doWalkthroughRequest(t, req)
 		defer resp.Body.Close()
@@ -736,7 +655,7 @@ func TestWalkthrough(t *testing.T) {
 			base+"/api/v1/flags/",
 			http.NoBody)
 		require.NoError(t, err)
-		req.Header.Set("Authorization", "Bearer "+newAdminToken)
+		req.Header.Set("Authorization", "Bearer "+adminToken)
 
 		resp := doWalkthroughRequest(t, req)
 		defer resp.Body.Close()

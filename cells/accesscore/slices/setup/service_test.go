@@ -550,3 +550,36 @@ func newServiceWithProvisionerError(t *testing.T, err error) *setup.Service {
 	t.Helper()
 	return newService(t, mem.NewUserRepository(), &countErrRoleRepo{err: err}, nil)
 }
+
+// TestService_CreateAdmin_AlreadyProvisioned_410_OperatorEnvSetIsExpected
+// verifies that CreateAdmin returns 410 ErrSetupAlreadyInitialized when the
+// admin was already provisioned, even though the operator Basic Auth env
+// (GOCELL_BOOTSTRAP_ADMIN_*) is still set. ADR §D2 specifies these env vars
+// as a persistent operator authenticator (not a one-shot seed), so their
+// continued presence after admin creation is expected, not a hygiene
+// concern. The service layer does not inspect env — 410 is driven by
+// adminprovision.Provisioner state alone.
+func TestService_CreateAdmin_AlreadyProvisioned_410_OperatorEnvSetIsExpected(t *testing.T) {
+	userRepo := mem.NewUserRepository()
+	roleRepo := mem.NewRoleRepository()
+	seedAdmin(t, userRepo, roleRepo)
+
+	t.Setenv("GOCELL_BOOTSTRAP_ADMIN_USERNAME", "op")
+	t.Setenv("GOCELL_BOOTSTRAP_ADMIN_PASSWORD", "opSecret123")
+
+	w := &stubWriter{}
+	svc := newService(t, userRepo, roleRepo, w)
+
+	out, err := svc.CreateAdmin(context.Background(), setup.CreateAdminInput{
+		Username: "newadmin",
+		Email:    "newadmin@local",
+		Password: "SecretPass!23",
+	})
+	require.Error(t, err)
+	assert.Nil(t, out)
+	var ec *errcode.Error
+	require.ErrorAs(t, err, &ec)
+	assert.Equal(t, errcode.ErrSetupAlreadyInitialized, ec.Code,
+		"already provisioned must return 410 ErrSetupAlreadyInitialized")
+	assert.Empty(t, w.entries, "no event emitted on 410 path")
+}

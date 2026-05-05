@@ -44,6 +44,25 @@ type Route struct {
 
 	// PasswordResetExempt allows reset-required tokens through this route.
 	PasswordResetExempt bool
+
+	// BootstrapAuth, when non-nil, marks the route as protected by per-route
+	// replacement authentication (HTTP Basic Auth using
+	// GOCELL_BOOTSTRAP_ADMIN_USERNAME/PASSWORD env credentials, supplied by
+	// the composition root via runtime/auth.NewBootstrapMiddleware). The
+	// listener-level JWT middleware skips this route (via FinalizeAuth
+	// matcher); the function passed here authenticates instead. The non-nil
+	// presence of this field is the single source of truth — there is no
+	// separate Bootstrap bool flag.
+	//
+	// BootstrapAuth is mutually exclusive with Public, PasswordResetExempt,
+	// and Policy: a route either runs through the listener auth chain (with
+	// optional Public / PasswordResetExempt overrides + Policy guard) or it
+	// runs through the bootstrap middleware. Combining the two would mean
+	// "bypass JWT but also enforce JWT-time policies" — a contradiction that
+	// validateBypassCompatibility rejects at registration time.
+	//
+	// ref: docs/architecture/202605061600-adr-bootstrap-admin-boundary.md §D1
+	BootstrapAuth func(http.Handler) http.Handler
 }
 
 // Mount registers the Route on mux. It:
@@ -107,11 +126,17 @@ func Mount(mux cell.RouteHandler, r Route) error {
 		// declarer.DeclareAuthMeta's Path is the sub-route-relative path;
 		// chiRouterAdapter recomposes it with its prefix on its way up to
 		// the top-level Router.
+		//
+		// AuthRouteMeta.Bootstrap is derived from r.BootstrapAuth != nil —
+		// the listener-level FinalizeAuth matcher needs the boolean
+		// projection to compile its JWT-exempt set, while the func value
+		// itself stays inside wrapMountGuards.
 		if err := declarer.DeclareAuthMeta(cell.AuthRouteMeta{
 			Method:              r.Contract.Method,
 			Path:                cleanedRel,
 			Public:              r.Public,
 			PasswordResetExempt: r.PasswordResetExempt,
+			Bootstrap:           r.BootstrapAuth != nil,
 		}); err != nil {
 			return fmt.Errorf("auth.Mount: declare auth metadata: %w", err)
 		}
@@ -138,10 +163,22 @@ func MustMount(mux cell.RouteHandler, r Route) {
 
 // wrapMountGuards composes the Mount-time middleware chain around r.Handler:
 // route-level Policy (when set) → caller-cell guard (when Contract.Clients is
-// non-empty) → wrapper.HTTPHandler ctx contributor.
+// non-empty) → BootstrapAuth (when set) → wrapper.HTTPHandler ctx contributor.
 //
-// Execution order (outer → inner): wrapper.HTTPHandler → CallerCell guard →
-// Policy → Handler — caller identity verified before any business authz check.
+// Execution order (outer → inner): wrapper.HTTPHandler → BootstrapAuth →
+// CallerCell guard → Policy → Handler.
+//
+// Why BootstrapAuth sits inside wrapper.HTTPHandler but outside
+// CallerCell/Policy:
+//
+//   - Inside wrapper.HTTPHandler: the wrapper writes ctxkeys.ContractID and
+//     contributes span attrs before BootstrapAuth runs, so 401/429 short-
+//     circuit responses still emit gocell.contract.id (regression of P2 in
+//     PR #392 review).
+//   - Outside CallerCell/Policy: validateBypassCompatibility makes BootstrapAuth
+//     mutually exclusive with Policy and CallerCell-bearing Contract.Clients
+//     scenarios, but the layering documents the intent — Basic Auth fail short-
+//     circuits before any business authz cost is paid.
 func wrapMountGuards(r Route) (http.Handler, error) {
 	handler := r.Handler
 	if r.Policy != nil {
@@ -157,6 +194,9 @@ func wrapMountGuards(r Route) (http.Handler, error) {
 			return nil, fmt.Errorf("auth.Mount: %w", err)
 		}
 		handler = callerGuard(handler)
+	}
+	if r.BootstrapAuth != nil {
+		handler = r.BootstrapAuth(handler)
 	}
 	wrapped, err := wrapper.HTTPHandler(r.Contract, handler)
 	if err != nil {
@@ -256,9 +296,32 @@ func (r Route) validateBypassCompatibility() error {
 			"auth.Mount %s %s: Public=true conflicts with non-nil Policy (public routes have no server-side authorization)",
 			r.Contract.Method, r.Contract.Path)
 	}
-	if r.Public && r.PasswordResetExempt {
+	if r.BootstrapAuth != nil && r.Policy != nil {
 		return fmt.Errorf(
-			"auth.Mount %s %s: Public=true conflicts with PasswordResetExempt=true (gate runs only for authenticated tokens)",
+			"auth.Mount %s %s: BootstrapAuth conflicts with non-nil Policy (bootstrap routes use replacement HTTP Basic Auth, "+
+				"not server-side JWT-time authorization)",
+			r.Contract.Method, r.Contract.Path)
+	}
+	// Three-way mutual exclusivity: Public, PasswordResetExempt, BootstrapAuth.
+	// Each is a semantically distinct authentication bypass mode (Public skips
+	// JWT entirely, PasswordResetExempt narrows JWT to reset-required tokens,
+	// BootstrapAuth replaces JWT with per-route Basic Auth). Declaring more
+	// than one is always a misconfiguration.
+	truthy := 0
+	if r.Public {
+		truthy++
+	}
+	if r.PasswordResetExempt {
+		truthy++
+	}
+	if r.BootstrapAuth != nil {
+		truthy++
+	}
+	if truthy > 1 {
+		return fmt.Errorf(
+			"auth.Mount %s %s: Public, PasswordResetExempt, and BootstrapAuth are mutually exclusive; "+
+				"at most one may be set (Public skips JWT, PasswordResetExempt allows reset-required tokens, "+
+				"BootstrapAuth replaces JWT with HTTP Basic Auth via env credentials)",
 			r.Contract.Method, r.Contract.Path)
 	}
 	return nil

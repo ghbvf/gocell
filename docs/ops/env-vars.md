@@ -67,9 +67,12 @@ Each Cell reads its own env variables. The naming pattern is `GOCELL_<CELLID>_<R
 
 ### accesscore first-admin provisioning
 
-| Variable | Purpose | Default | Accepted Values |
+Both variables are **required, persistent operator Basic Auth credentials** protecting the setup/admin endpoint for the lifetime of the deployment. Empty values cause fail-fast at startup. See `docs/operations/first-run-setup.md` for deployment examples and `docs/architecture/202605061600-adr-bootstrap-admin-boundary.md` for the security boundary ADR.
+
+| Variable | Purpose | Default | Notes |
 |---|---|---|---|
-| `GOCELL_ACCESSCORE_ADMIN_PROVISION_MODE` | Selects first-admin ownership in `cmd/corebundle`. `interactive` leaves `/api/v1/access/setup/admin` as the one-shot owner; `bootstrap` enables the lifecycle that creates a random initial admin password and writes the credential file under `GOCELL_STATE_DIR`. Unknown non-empty values fail fast at startup. | `interactive` | `""`, `"interactive"`, `"bootstrap"` |
+| `GOCELL_BOOTSTRAP_ADMIN_USERNAME` | HTTP Basic Auth username protecting the setup/admin endpoint. Persistent operator authenticator — env is the authenticator (who may trigger setup), not the business admin identity (which comes from the POST body). Must be non-empty; empty value fails fast. | — | **Required, persistent (lifetime of deployment)** |
+| `GOCELL_BOOTSTRAP_ADMIN_PASSWORD` | HTTP Basic Auth password protecting the setup/admin endpoint. Minimum 8 bytes after TrimSpace (handles K8s secret trailing newlines). Control characters fail fast. Persistent operator authenticator — not the business admin password. | — | **Required, persistent (lifetime of deployment)** |
 
 ## Encryption Key Provider (required when GOCELL_CELL_ADAPTER_MODE=postgres)
 
@@ -162,7 +165,7 @@ Note: the per-cell `GOCELL_<CELLID>_DATABASE_URL` variables (e.g. `GOCELL_CONFIG
 
 | Variable | Purpose | Default |
 |---|---|---|
-| `GOCELL_STATE_DIR` | Directory for stateful files (e.g. initial admin credential on first run) | Platform-specific (see below) |
+| `GOCELL_STATE_DIR` | Directory for stateful files | Platform-specific (see below) |
 
 ### Per-OS defaults for `GOCELL_STATE_DIR`
 

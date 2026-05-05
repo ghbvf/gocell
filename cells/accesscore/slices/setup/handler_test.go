@@ -17,7 +17,18 @@ import (
 	"github.com/ghbvf/gocell/cells/accesscore/internal/mem"
 	"github.com/ghbvf/gocell/cells/accesscore/slices/setup"
 	"github.com/ghbvf/gocell/kernel/cell/celltest"
+	"github.com/ghbvf/gocell/runtime/auth"
 )
+
+// testAllowAllLimiter satisfies auth.BootstrapRateLimiter for tests that
+// focus on Basic Auth semantics. AUTH-AUTHTEST-B archtest forbids cells/ from
+// importing runtime/auth/authtest, so this fake stays file-local; the
+// equivalent fake also lives in cmd/corebundle/setup_integration_test.go and
+// cmd/corebundle/outbox_e2e_integration_test.go (per-package duplication is
+// the accepted cost of the layering boundary).
+type testAllowAllLimiter struct{}
+
+func (testAllowAllLimiter) Allow(string) bool { return true }
 
 const (
 	setupStatusPath = "/api/v1/access/setup/status"
@@ -36,7 +47,7 @@ func newHandlerMux(t *testing.T, h *setup.Handler) http.Handler {
 func newHandlerFresh(t *testing.T) http.Handler {
 	t.Helper()
 	svc := newService(t, mem.NewUserRepository(), mem.NewRoleRepository(), &stubWriter{})
-	return newHandlerMux(t, setup.NewHandler(svc))
+	return newHandlerMux(t, setup.NewHandler(svc, testPassthroughAuth))
 }
 
 // --- HandleStatus ---------------------------------------------------------
@@ -61,7 +72,7 @@ func TestHandler_Status_WithAdmin_ReturnsTrue(t *testing.T) {
 	roleRepo := mem.NewRoleRepository()
 	seedAdmin(t, userRepo, roleRepo)
 	svc := newService(t, userRepo, roleRepo, nil)
-	h := newHandlerMux(t, setup.NewHandler(svc))
+	h := newHandlerMux(t, setup.NewHandler(svc, testPassthroughAuth))
 
 	w := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, setupStatusPath, nil)
@@ -104,7 +115,7 @@ func TestHandler_CreateAdmin_AlreadyExists_Returns410(t *testing.T) {
 	roleRepo := mem.NewRoleRepository()
 	seedAdmin(t, userRepo, roleRepo)
 	svc := newService(t, userRepo, roleRepo, &stubWriter{})
-	h := newHandlerMux(t, setup.NewHandler(svc))
+	h := newHandlerMux(t, setup.NewHandler(svc, testPassthroughAuth))
 
 	body := `{"username":"root","email":"root@local","password":"SecretPass!23"}`
 	req := httptest.NewRequest(http.MethodPost, setupAdminPath, strings.NewReader(body))
@@ -216,7 +227,7 @@ func TestHandler_CreateAdmin_DuplicateIdentityUser_Returns409(t *testing.T) {
 	roleRepo := mem.NewRoleRepository()
 	seedIdentityUser(t, userRepo, "root", "root@local")
 	svc := newService(t, userRepo, roleRepo, &stubWriter{})
-	h := newHandlerMux(t, setup.NewHandler(svc))
+	h := newHandlerMux(t, setup.NewHandler(svc, testPassthroughAuth))
 
 	body := `{"username":"root","email":"root@local","password":"SecretPass!23"}`
 	req := httptest.NewRequest(http.MethodPost, setupAdminPath, strings.NewReader(body))
@@ -235,4 +246,101 @@ func seedIdentityUser(t *testing.T, userRepo *mem.UserRepository, username, emai
 	require.NoError(t, err)
 	u.ID = "usr-existing"
 	require.NoError(t, userRepo.Create(context.Background(), u))
+}
+
+// newHandlerWithBootstrapCreds creates a handler mux whose admin endpoint is
+// protected by the real bootstrap middleware (runtime/auth.NewBootstrapMiddleware).
+// Both NoCreds and WrongUsername/Password tests use this helper; the production
+// wiring in cmd/corebundle/access_module.go follows the same WithBootstrapAuth +
+// bootstrap middleware path.
+//
+// The rate limiter is authtest.AllowAllLimiter — the focus is Basic Auth
+// semantics, not throttling. The 429 path is covered by runtime/auth's own
+// bootstrap_test.go via a configurable fake limiter.
+func newHandlerWithBootstrapCreds(t *testing.T, svc *setup.Service, envUsername, envPassword string) http.Handler {
+	t.Helper()
+	creds := auth.BootstrapCredentials{
+		Username: []byte(envUsername),
+		Password: []byte(envPassword),
+	}
+	mw := auth.NewBootstrapMiddleware(creds, testAllowAllLimiter{}, nil)
+	h := setup.NewHandler(svc, mw)
+	mux := celltest.NewTestMux()
+	require.NoError(t, h.RegisterRoutes(mux))
+	return mux
+}
+
+// TestHandler_CreateAdmin_NoCreds_Returns401 verifies that when the handler is
+// configured with bootstrap credentials, a request with no Authorization header
+// is rejected with 401 ERR_AUTH_BOOTSTRAP_FAILED.
+func TestHandler_CreateAdmin_NoCreds_Returns401(t *testing.T) {
+	svc := newService(t, mem.NewUserRepository(), mem.NewRoleRepository(), &stubWriter{})
+	handler := newHandlerWithBootstrapCreds(t, svc, "op", "opSecret123")
+
+	body := `{"username":"root","email":"root@local","password":"SecretPass!23"}`
+	req := httptest.NewRequest(http.MethodPost, setupAdminPath, strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	// No Authorization header.
+	w := httptest.NewRecorder()
+
+	handler.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusUnauthorized, w.Code,
+		"admin endpoint without credentials must return 401")
+	assert.Contains(t, w.Body.String(), "ERR_AUTH_BOOTSTRAP_FAILED")
+}
+
+// TestHandler_CreateAdmin_WrongUsername_Returns401 verifies that wrong username
+// returns 401 with the same envelope as WrongPassword (oracle protection).
+func TestHandler_CreateAdmin_WrongUsername_Returns401(t *testing.T) {
+	svc := newService(t, mem.NewUserRepository(), mem.NewRoleRepository(), &stubWriter{})
+	handler := newHandlerWithBootstrapCreds(t, svc, "op", "opSecret123")
+
+	body := `{"username":"root","email":"root@local","password":"SecretPass!23"}`
+	req := httptest.NewRequest(http.MethodPost, setupAdminPath, strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.SetBasicAuth("wronguser", "opSecret123")
+	w := httptest.NewRecorder()
+
+	handler.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusUnauthorized, w.Code,
+		"wrong username must return 401")
+	assert.Contains(t, w.Body.String(), "ERR_AUTH_BOOTSTRAP_FAILED")
+}
+
+// TestHandler_CreateAdmin_ValidCreds_BodyDifferentFromEnv_Returns201 verifies
+// D5 semantics: env credentials authenticate the operator; body credentials
+// define the admin user. Env=op:opSecret123, body creates alice.
+//
+// Uses the real runtime/auth.NewBootstrapMiddleware via newHandlerWithBootstrapCreds —
+// the production path of cmd/corebundle.access_module.go. The "closed contract"
+// codified in PR #392 review: NewHandler accepts bootstrapAuth as a required
+// parameter; there is no separate "JWT-exempt + no auth" intermediate state.
+func TestHandler_CreateAdmin_ValidCreds_BodyDifferentFromEnv_Returns201(t *testing.T) {
+	svc := newService(t, mem.NewUserRepository(), mem.NewRoleRepository(), &stubWriter{})
+
+	const envUser = "op"
+	const envPass = "opSecret123"
+	handler := newHandlerWithBootstrapCreds(t, svc, envUser, envPass)
+
+	// The body creates 'alice' — completely different from the env credentials.
+	body := `{"username":"alice","email":"alice@example.com","password":"AlicePass!99"}`
+	req := httptest.NewRequest(http.MethodPost, setupAdminPath, strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	// Authenticate with env credentials (op:opSecret123), not alice's credentials.
+	req.SetBasicAuth(envUser, envPass)
+	w := httptest.NewRecorder()
+
+	handler.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusCreated, w.Code,
+		"valid env creds + valid body must create alice (D5 separation)")
+
+	var resp struct {
+		Data setup.CreateAdminOutput `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.Equal(t, "alice", resp.Data.Username,
+		"D5: body username (alice) must be the created admin, not env username (op)")
 }

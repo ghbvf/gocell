@@ -2,6 +2,7 @@ package setup
 
 import (
 	"context"
+	"net/http"
 
 	adminGen "github.com/ghbvf/gocell/generated/contracts/http/auth/setup/admin/v1"
 	statusGen "github.com/ghbvf/gocell/generated/contracts/http/auth/setup/status/v1"
@@ -9,8 +10,8 @@ import (
 )
 
 // StatusAdapter implements statusGen.Service for http.auth.setup.status.v1.
-// Both setup endpoints are Public (no JWT required): no admin exists yet during
-// first-run bootstrap.
+// The status endpoint is always Public (no JWT required): no admin exists yet
+// during first-run bootstrap.
 type StatusAdapter struct{ S *Service }
 
 // Status implements statusGen.Service. The generated handler already decodes
@@ -50,18 +51,29 @@ func (a AdminAdapter) Admin(ctx context.Context, req *adminGen.Request) (*adminG
 }
 
 // Handler exposes the setup endpoints over HTTP.
-// Both endpoints are Public: no JWT required (first-run bootstrap scenario).
+//
+// The status endpoint is always Public (no admin exists yet during first-run).
+// The admin endpoint is Bootstrap (HTTP Basic Auth via env credentials); the
+// bootstrapAuth middleware is mandatory and is threaded straight to the
+// generated handler — see ADR §D1 (auth.bootstrap is a closed contract: no
+// "declared bootstrap but no auth wired" intermediate state).
 type Handler struct {
 	statusH *statusGen.Handler
 	adminH  *adminGen.Handler
 }
 
-// NewHandler creates a setup Handler using the generated status and admin handlers.
-// No policy arguments: both endpoints are Public (auth.Route{Public: true} baked in).
-func NewHandler(svc *Service) *Handler {
+// NewHandler creates a setup Handler.
+//
+// bootstrapAuth is REQUIRED — it is the per-route replacement authentication
+// (typically runtime/auth.NewBootstrapMiddleware wired by the composition
+// root). The generated admin handler panics at construction if bootstrapAuth
+// is nil; this constructor enforces the same invariant up front so the failure
+// mode is "Cell.Init returns a clear error" rather than "process panic deep
+// in the generated layer".
+func NewHandler(svc *Service, bootstrapAuth func(http.Handler) http.Handler) *Handler {
 	return &Handler{
 		statusH: statusGen.NewHandler(StatusAdapter{svc}),
-		adminH:  adminGen.NewHandler(AdminAdapter{svc}),
+		adminH:  adminGen.NewHandler(AdminAdapter{svc}, bootstrapAuth),
 	}
 }
 

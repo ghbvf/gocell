@@ -363,3 +363,21 @@ func NewSubscription(typedH EventHandler, group, slice string) *Subscription
 2. **Wave A 6 个 ADR**优先派 architect agent 评审，确定方向后再派 developer 实施
 3. **Wave B-G** 在 ADR 决策完成 + Wave A 主路径修复后启动；可与 `docs/plans/202604290500-backlog-residual-and-merge-roadmap.md` 的 Wave 并行（文件域基本不重叠）
 4. backlog.md 中已被 backlog2 升级覆盖的条目（A26-R2 / PR-CFG-I X1 等），合并 backlog2 对应 PR 时同步关闭
+
+---
+
+## §13 PR-V1-SEC-SETUP-CLOSURE follow-up 登记
+
+### BOOTSTRAP-AUDIT-CHAIN-WIRING-01
+
+**触发条件**：accesscore audit chain 跨 cell 注入路径打通后跟进（当前 `access_module.go` 传 `nil` OnAuthFail hook）。
+
+**描述**：`NewBootstrapMiddleware(creds, limiter, onAuthFail)` 的第三参数 `onAuthFail` 接口已就位，当前在 `access_module.go` 组装时传 `nil`（middleware 在 nil hook 时跳过 audit write，不影响功能）。当 accesscore audit chain 的跨 cell 注入路径完成后，wiring `onAuthFail = auditWriter.WriteBootstrapAuthFailure` 以实现 Basic Auth 暴力枚举的审计追踪，扩展零成本。
+
+**来源**：ADR `docs/architecture/202605061600-adr-bootstrap-admin-boundary.md` D4 + Out of Scope 段（ADR 修订后 D1-D5）。
+
+**严重度**：P2（功能完整性；不影响安全主路径）
+
+**估时**：2h dev + 1h review（hook 接口已就位）
+
+**Cx**：Cx1

@@ -112,6 +112,18 @@ const (
 	// Only the exempt endpoints (POST /api/v1/access/users/{id}/password and
 	// DELETE /api/v1/access/sessions/{id}) bypass this check.
 	ErrAuthPasswordResetRequired Code = "ERR_AUTH_PASSWORD_RESET_REQUIRED"
+	// ErrAuthBootstrapFailed signals that HTTP Basic Auth on the first-admin
+	// setup endpoint failed. All authentication failure modes (missing header,
+	// wrong username, wrong password) share this single code to prevent
+	// field-level oracle attacks — attackers cannot distinguish "wrong username"
+	// from "wrong password" via the error code or message.
+	//
+	// Maps to HTTP 401 Unauthorized. Credentials are checked via
+	// subtle.ConstantTimeCompare to prevent timing side-channels.
+	//
+	// ref: Go stdlib crypto/subtle.ConstantTimeCompare
+	// ref: keycloak/keycloak KC_BOOTSTRAP_ADMIN_USERNAME/PASSWORD env model
+	ErrAuthBootstrapFailed Code = "ERR_AUTH_BOOTSTRAP_FAILED"
 	// ErrSetupAlreadyInitialized signals that the interactive first-run admin
 	// endpoint (POST /api/v1/access/setup/admin) was invoked after the system
 	// already has at least one admin. The caller should authenticate via

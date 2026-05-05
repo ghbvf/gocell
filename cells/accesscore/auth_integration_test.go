@@ -161,6 +161,7 @@ func loginAndGetPair(t *testing.T, opts ...loginOption) loginResult {
 		WithRefreshStore(intRefreshStore),
 		WithMetricsProvider(metrics.NopProvider{}),
 		// Demo mode: no tx+outbox required.
+		withTestBootstrapAuth(),
 	)
 	intReg := cell.NewRegistryRecorder(make(map[string]any), cell.DurabilityDemo)
 	require.NoError(t, c.Init(context.Background(), intReg))

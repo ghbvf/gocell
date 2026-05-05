@@ -25,18 +25,28 @@ type HTTPTransportMeta struct {
 }
 
 // HTTPAuthMeta carries route-level authentication override flags for contractgen.
-// These map directly to auth.Route fields (Public, PasswordResetExempt).
+// These map directly to auth.Route fields (Public, PasswordResetExempt, Bootstrap).
 //
 // ref: kubernetes-sigs/controller-tools markers/registry.go (declarative auth metadata)
 type HTTPAuthMeta struct {
 	// Public marks the route as JWT-exempt. The generated NewHandler takes no
 	// policy argument; auth.Route{Public: true} is emitted by RegisterRoutes.
-	// Mutually exclusive with PasswordResetExempt.
+	// Mutually exclusive with PasswordResetExempt and Bootstrap.
 	Public bool `yaml:"public,omitempty" json:"public,omitempty"`
 	// PasswordResetExempt allows callers whose JWT carries password_reset_required=true
 	// to reach this route. The generated handler emits auth.Route{PasswordResetExempt: true}.
-	// Mutually exclusive with Public.
+	// Mutually exclusive with Public and Bootstrap.
 	PasswordResetExempt bool `yaml:"passwordResetExempt,omitempty" json:"passwordResetExempt,omitempty"`
+	// Bootstrap marks the route as protected by HTTP Basic Auth using
+	// GOCELL_BOOTSTRAP_ADMIN_USERNAME/PASSWORD env credentials. Listener-level
+	// JWT middleware skips routes flagged as Bootstrap (matcher in FinalizeAuth).
+	// Mutually exclusive with Public and PasswordResetExempt. FMT-28 limits this
+	// flag to contracts whose path matches IsBootstrapPath.
+	Bootstrap bool `yaml:"bootstrap,omitempty" json:"bootstrap,omitempty"`
+	// Responses lists HTTP status codes injected by listener-mounted middleware
+	// (e.g. bootstrap auth 401, rate limiter 429). CH-04 treats these as
+	// declared without requiring handler AST emission.
+	Responses []int `yaml:"responses,omitempty" json:"responses,omitempty"`
 }
 
 // ParamSchema describes a single HTTP path or query parameter.

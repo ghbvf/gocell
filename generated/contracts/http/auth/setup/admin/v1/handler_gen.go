@@ -5,12 +5,12 @@ package admin
 
 import (
 	"bytes"
+	"fmt"
 	"io"
 	"net/http"
 
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/wrapper"
-	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/httputil"
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/http/schemavalidate"
@@ -31,18 +31,32 @@ var requestSchemaJSON = []byte("{\"$schema\":\"https://json-schema.org/draft/202
 // Handler wires HTTP decode/encode + auth.Mount for http.auth.setup.admin.v1.
 type Handler struct {
 	svc              Service
+	bootstrapAuth    func(http.Handler) http.Handler
 	requestValidator schemavalidate.Validator
 }
 
 // NewHandler creates a Handler for http.auth.setup.admin.v1.
-// This endpoint is Public (JWT-exempt); no policy argument is accepted.
-// auth.Route{Public: true} is emitted by RegisterRoutes so the listener
-// auth middleware skips JWT verification for this route.
-func NewHandler(svc Service) *Handler {
-	h := &Handler{svc: svc}
+//
+// This endpoint is Bootstrap (HTTP Basic Auth via GOCELL_BOOTSTRAP_ADMIN_* env).
+// bootstrapAuth is REQUIRED — it is the per-route replacement authentication
+// middleware (typically runtime/auth.NewBootstrapMiddleware wired by the
+// composition root). auth.Route{BootstrapAuth: bootstrapAuth} is emitted by
+// RegisterRoutes; the listener auth middleware skips JWT verification for this
+// route while bootstrapAuth runs in its place.
+//
+// Passing a nil bootstrapAuth panics at construction time — there is no
+// "declared bootstrap but no auth wired" intermediate state. FMT-28 restricts
+// auth.bootstrap:true to setup/admin contracts only.
+func NewHandler(svc Service, bootstrapAuth func(http.Handler) http.Handler) *Handler {
+	if bootstrapAuth == nil {
+		panic("generated handler http.auth.setup.admin.v1: bootstrapAuth must not be nil " +
+			"(auth.bootstrap:true contracts require a per-route replacement authenticator; " +
+			"composition root must inject runtime/auth.NewBootstrapMiddleware)")
+	}
+	h := &Handler{svc: svc, bootstrapAuth: bootstrapAuth}
 	v, err := schemavalidate.NewValidator(requestSchemaJSON)
 	if err != nil {
-		panic(errcode.Assertion("generated handler http.auth.setup.admin.v1: schema compile failed: %v (codegen invariant violation; regenerate via gocell generate contract --all)", err))
+		panic(fmt.Sprintf("generated handler http.auth.setup.admin.v1: schema compile failed: %v (codegen invariant violation; regenerate via gocell generate contract --all)", err))
 	}
 	h.requestValidator = v
 	return h
@@ -59,9 +73,9 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // resolve the handler function body via the Contract→Handler correlation.
 func (h *Handler) RegisterRoutes(mux cell.RouteHandler) error {
 	return auth.Mount(mux, auth.Route{
-		Contract: contractSpec,
-		Handler:  http.HandlerFunc(h.handle),
-		Public:   true,
+		Contract:      contractSpec,
+		Handler:       http.HandlerFunc(h.handle),
+		BootstrapAuth: h.bootstrapAuth,
 	})
 }
 

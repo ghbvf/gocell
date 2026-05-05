@@ -163,14 +163,22 @@ func (v *Validator) checkResponseAlignmentForContract(
 	return buildAlignmentFindings(v, c, handlerCodes, declared)
 }
 
-// declaredErrorStatuses returns the set of 4xx/5xx status codes declared in
-// the contract's responses map.
+// declaredErrorStatuses returns the union of 4xx/5xx status codes declared in
+// the contract's responses map and in auth.responses. The dual source allows
+// middleware-injected codes (e.g. bootstrap auth 401, rate limiter 429) to be
+// declared under auth.responses without requiring handler AST emission (CH-04
+// double-source rule).
 func declaredErrorStatuses(c *metadata.ContractMeta) map[int]struct{} {
 	out := make(map[int]struct{})
 	if c.Endpoints.HTTP == nil {
 		return out
 	}
 	for status := range c.Endpoints.HTTP.Responses {
+		if status >= 400 {
+			out[status] = struct{}{}
+		}
+	}
+	for _, status := range c.Endpoints.HTTP.Auth.Responses {
 		if status >= 400 {
 			out[status] = struct{}{}
 		}
