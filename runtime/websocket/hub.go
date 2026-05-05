@@ -77,10 +77,21 @@ type HubConfig struct {
 	// shutdown path inside Start (caller's ctx is canceled with no deadline).
 	// Stop(ctx) paths are not affected — caller's ctx governs directly.
 	// 0 → defaultShutdownTimeout (10s).
+	//
+	// To bound Stop(ctx), supply a deadline on the ctx passed to Stop, or
+	// configure bootstrap.WithShutdownTimeout for bootstrap-managed shutdown
+	// — ShutdownTimeout only governs the external-cancel path inside Start.
 	ShutdownTimeout time.Duration
 
-	// ConcurrentCloseLimit is the maximum number of connection Close() calls
-	// that may run in parallel during shutdown drain. 0 → 64.
+	// ConcurrentCloseLimit bounds the semaphore pool used during shutdown drain
+	// — at most this many conn.Close() calls run concurrently. Tuning guidance:
+	// keep below system fd-limit / goroutine budget. Default 64 (matches
+	// centrifuge's hubShutdownSemaphoreSize). Background goroutines spawned by
+	// shutdown's outer wg.Wait/done-close pattern exit when readLoops/writeLoops
+	// drain via Phase 1 context cancellation; max lifetime = connection teardown
+	// latency.
+	//
+	// ref: centrifugal/centrifuge hub.go — bounded concurrent close
 	ConcurrentCloseLimit int
 }
 
@@ -88,12 +99,14 @@ type HubConfig struct {
 // provided; pass clock.Real() at the composition root or a clockmock for tests.
 func DefaultHubConfig(clk clock.Clock) HubConfig {
 	return HubConfig{
-		PingInterval:   defaultPingInterval,
-		PingTimeout:    defaultPingTimeout,
-		ReadLimit:      defaultReadLimit,
-		PingMissMax:    defaultPingMissMax,
-		SendBufferSize: defaultSendBufferSize,
-		Clock:          clk,
+		PingInterval:         defaultPingInterval,
+		PingTimeout:          defaultPingTimeout,
+		ReadLimit:            defaultReadLimit,
+		PingMissMax:          defaultPingMissMax,
+		SendBufferSize:       defaultSendBufferSize,
+		ShutdownTimeout:      defaultShutdownTimeout,
+		ConcurrentCloseLimit: defaultConcurrentCloseLimit,
+		Clock:                clk,
 	}
 }
 
@@ -335,6 +348,8 @@ func (h *Hub) shutdown(ctx context.Context) error {
 	closeEntriesConcurrently(ctx, entries, h.config.ConcurrentCloseLimit)
 
 	// Wait for all goroutines (readLoops + writeLoops + pingLoop), bounded by ctx.
+	// goroutine exits when readLoops/writeLoops drain via Phase 1 context
+	// cancellation; max lifetime = connection teardown latency.
 	done := make(chan struct{})
 	go func() {
 		h.wg.Wait()
@@ -413,6 +428,8 @@ func closeEntriesConcurrently(ctx context.Context, entries []*connEntry, limit i
 
 waitDone:
 	// Wait for already-launched Close goroutines, bounded by ctx.
+	// goroutine exits when readLoops/writeLoops drain via Phase 1 context
+	// cancellation; max lifetime = connection teardown latency.
 	allDone := make(chan struct{})
 	go func() {
 		closeWG.Wait()
@@ -782,10 +799,7 @@ func (h *Hub) ConnCount() int {
 // ref: adapters/rabbitmq/connection.go Checkers — probe name + pre-allocated error pattern.
 func (h *Hub) Checkers() map[string]func(context.Context) error {
 	return map[string]func(context.Context) error{
-		"websocket_hub_ready": func(ctx context.Context) error {
-			if ctx.Err() != nil {
-				return ctx.Err()
-			}
+		"websocket_hub_ready": func(_ context.Context) error {
 			if h.state.Load() == stateRunning {
 				return nil
 			}
@@ -794,11 +808,18 @@ func (h *Hub) Checkers() map[string]func(context.Context) error {
 	}
 }
 
-// Worker implements lifecycle.ManagedResource. Returns nil because the Hub
-// self-manages its ping-loop goroutine via Start/Stop; no external worker
-// registration is needed.
+// Worker returns nil. Hub's ping-loop goroutine is managed by Start(ctx)
+// (called as a blocking task by composition root), not via the
+// ManagedResource worker slot.
 //
-// ref: adapters/rabbitmq/connection.go Worker — nil documents "no worker".
+// Bootstrap wiring example: composition root runs hub.Start(ctx) in a
+// goroutine and registers the hub via bootstrap.WithManagedResource(hub) so
+// Close-on-shutdown is invoked LIFO during phase10. (No production cell
+// currently consumes this wiring as of 2026-05-05; the contract is in place
+// for the first WebSocket-using cell to opt in.)
+//
+// ref: kernel/lifecycle/managed_resource.go::Worker — nil documents "no worker"
+// ref: adapters/rabbitmq/connection.go::Worker — same nil pattern
 func (h *Hub) Worker() worker.Worker { return nil }
 
 // Close implements lifecycle.ManagedResource. It delegates to Stop(ctx) and

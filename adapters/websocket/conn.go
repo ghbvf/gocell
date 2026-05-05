@@ -23,6 +23,10 @@ var _ rtws.Conn = (*Conn)(nil)
 // Close is lock-free (coder/websocket.Conn.CloseNow is internally synchronized)
 // so it can interrupt an in-flight Write immediately by closing the underlying
 // TCP connection. Write uses mu only to serialize concurrent writes.
+//
+// Instances are constructed internally by UpgradeHandler /
+// acceptUpgradeAndRegister; external code must interact with WebSocket
+// connections via the runtime/websocket.Conn interface that this type satisfies.
 type Conn struct {
 	id         string
 	remoteAddr string
