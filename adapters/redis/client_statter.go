@@ -1,6 +1,6 @@
 package redis
 
-import "github.com/ghbvf/gocell/runtime/observability/poolstats"
+import "github.com/ghbvf/gocell/kernel/observability/poolstats"
 
 // Statter returns a poolstats.Statter bound to this Client with the
 // supplied human-readable name (e.g. "redis-session-cache"). Used by the

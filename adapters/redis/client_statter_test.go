@@ -5,7 +5,7 @@ import (
 
 	goredis "github.com/redis/go-redis/v9"
 
-	"github.com/ghbvf/gocell/runtime/observability/poolstats"
+	"github.com/ghbvf/gocell/kernel/observability/poolstats"
 )
 
 type fakePoolStatsProvider struct {

@@ -8,7 +8,7 @@ import (
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 
 	gcotel "github.com/ghbvf/gocell/adapters/otel"
-	"github.com/ghbvf/gocell/runtime/observability/poolstats"
+	"github.com/ghbvf/gocell/kernel/observability/poolstats"
 )
 
 // staticStatter is a test double: returns the supplied fixed snapshot on

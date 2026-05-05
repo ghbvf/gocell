@@ -3,7 +3,7 @@ package postgres
 import (
 	"testing"
 
-	"github.com/ghbvf/gocell/runtime/observability/poolstats"
+	"github.com/ghbvf/gocell/kernel/observability/poolstats"
 )
 
 func TestPool_Statter_NilPool_ReturnsZeroSnapshot(t *testing.T) {

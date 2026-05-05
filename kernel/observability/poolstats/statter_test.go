@@ -3,15 +3,17 @@ package poolstats_test
 import (
 	"testing"
 
-	"github.com/ghbvf/gocell/runtime/observability/poolstats"
+	"github.com/ghbvf/gocell/kernel/observability/poolstats"
 )
 
 func TestSnapshot_ZeroValueIsValid(t *testing.T) {
 	// A zero-value Snapshot represents an uninitialised pool (no
 	// connections established yet). All fields zero is a legitimate
-	// reading, not a sentinel for "unknown".
+	// reading, not a sentinel for "unknown". Struct equality covers
+	// every field so adding a new field automatically extends this
+	// invariant rather than silently slipping through.
 	var s poolstats.Snapshot
-	if s.TotalConns != 0 || s.IdleConns != 0 || s.UsedConns != 0 {
+	if s != (poolstats.Snapshot{}) {
 		t.Fatalf("zero-value Snapshot must be all zero, got %+v", s)
 	}
 }
@@ -29,11 +31,12 @@ func (s staticStatter) Snapshot() poolstats.Snapshot { return s.snap }
 var _ poolstats.Statter = staticStatter{}
 
 func TestStatter_InterfaceShape(t *testing.T) {
-	s := staticStatter{name: "test", snap: poolstats.Snapshot{TotalConns: 5, IdleConns: 3, UsedConns: 2}}
+	want := poolstats.Snapshot{TotalConns: 5, IdleConns: 3, UsedConns: 2, MaxConns: 10, WaitCount: 7}
+	s := staticStatter{name: "test", snap: want}
 	if s.PoolName() != "test" {
 		t.Fatalf("PoolName = %q, want test", s.PoolName())
 	}
-	if s.Snapshot().UsedConns != 2 {
-		t.Fatalf("UsedConns = %d, want 2", s.Snapshot().UsedConns)
+	if got := s.Snapshot(); got != want {
+		t.Fatalf("Snapshot() = %+v, want %+v", got, want)
 	}
 }

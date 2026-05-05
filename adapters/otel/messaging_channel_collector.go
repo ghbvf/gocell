@@ -6,8 +6,8 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 	otelmetric "go.opentelemetry.io/otel/metric"
 
+	"github.com/ghbvf/gocell/kernel/observability/poolstats"
 	"github.com/ghbvf/gocell/pkg/errcode"
-	"github.com/ghbvf/gocell/runtime/observability/poolstats"
 )
 
 // Messaging channel-pool metric names — gocell.* namespaced because
