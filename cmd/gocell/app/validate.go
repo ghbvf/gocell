@@ -107,7 +107,10 @@ func runValidateFailFast(
 	depChecker *governance.DependencyChecker,
 	strict bool,
 ) error {
-	valResults := runValidatorFailFast(ctx, validator, strict)
+	valResults, valErr := runValidatorFailFast(ctx, validator, strict)
+	if valErr != nil {
+		return fmt.Errorf("validation interrupted: %w", valErr)
+	}
 	if firstErr := firstError(valResults); firstErr != nil {
 		if err := emitFailFast(printer, format, valResults); err != nil {
 			return fmt.Errorf(errEmitResultsFmt, err)
@@ -169,7 +172,7 @@ func emitFailFast(printer printers.Printer, format string, results []governance.
 }
 
 // runValidatorFailFast selects the appropriate validator method for fail-fast mode.
-func runValidatorFailFast(ctx context.Context, validator *governance.Validator, strict bool) []governance.ValidationResult {
+func runValidatorFailFast(ctx context.Context, validator *governance.Validator, strict bool) ([]governance.ValidationResult, error) {
 	if strict {
 		return validator.ValidateStrictFailFast(ctx)
 	}
@@ -186,7 +189,10 @@ func runValidateFull(
 	depChecker *governance.DependencyChecker,
 	strict bool,
 ) error {
-	valResults := runValidatorFull(ctx, validator, strict)
+	valResults, valErr := runValidatorFull(ctx, validator, strict)
+	if valErr != nil {
+		return fmt.Errorf("validation interrupted: %w", valErr)
+	}
 	depResults := depChecker.Check()
 	valResults = append(valResults, depResults...)
 
@@ -207,7 +213,7 @@ func runValidateFull(
 }
 
 // runValidatorFull selects the appropriate validator method for full mode.
-func runValidatorFull(ctx context.Context, validator *governance.Validator, strict bool) []governance.ValidationResult {
+func runValidatorFull(ctx context.Context, validator *governance.Validator, strict bool) ([]governance.ValidationResult, error) {
 	if strict {
 		return validator.ValidateStrict(ctx, true)
 	}

@@ -392,6 +392,10 @@ func (v *Validator) validateVERIFY06CheckRef(
 		return nil
 	}
 	tr, errs := v.verifyJourneyRef(ctx, j, pc.CheckRef)
+	if cerr := ctx.Err(); cerr != nil {
+		// ctx cancelled (e.g. go test subprocess SIGKILL) — not a governance finding.
+		return nil
+	}
 	if tr.Passed && len(errs) == 0 && !tr.ZeroMatch && !tr.SkippedOnly {
 		return nil
 	}

@@ -161,13 +161,17 @@ func TestFMT20_BySchemaSide(t *testing.T) {
 		t.Run(tc.name+"/Request", func(t *testing.T) {
 			dir := t.TempDir()
 			v := NewValidator(fmt20Fixture(t, dir, "case", tc.schema), dir, clock.Real())
-			matches := findByCode(v.Validate(t.Context()), "FMT-20")
+			validateResults, err := v.Validate(t.Context())
+			require.NoError(t, err)
+			matches := findByCode(validateResults, "FMT-20")
 			assertFMT20RequiredFields(t, matches, tc.wantRequestFields)
 		})
 		t.Run(tc.name+"/Response", func(t *testing.T) {
 			dir := t.TempDir()
 			v := NewValidator(fmt20ResponseFixture(t, dir, "case", tc.schema), dir, clock.Real())
-			matches := findByCode(v.Validate(t.Context()), "FMT-20")
+			validateResults, err := v.Validate(t.Context())
+			require.NoError(t, err)
+			matches := findByCode(validateResults, "FMT-20")
 			assert.Empty(t, matches,
 				"response schema must not trigger FMT-20 (ADR-202605031600)")
 		})
@@ -213,7 +217,9 @@ func TestFMT20_EndpointResponsesSchemaRefIgnored(t *testing.T) {
 		Assemblies: map[string]*metadata.AssemblyMeta{},
 	}
 	v := NewValidator(pm, dir, clock.Real())
-	matches := findByCode(v.Validate(t.Context()), "FMT-20")
+	validateResults, err := v.Validate(t.Context())
+	require.NoError(t, err)
+	matches := findByCode(validateResults, "FMT-20")
 	assert.Empty(t, matches,
 		"endpoints.http.responses[*] must not trigger FMT-20 (ADR-202605031600)")
 }
@@ -242,7 +248,9 @@ func TestFMT20_NonHTTPContractIgnored(t *testing.T) {
 		Assemblies: map[string]*metadata.AssemblyMeta{},
 	}
 	v := NewValidator(pm, dir, clock.Real())
-	matches := findByCode(v.Validate(t.Context()), "FMT-20")
+	validateResults, err := v.Validate(t.Context())
+	require.NoError(t, err)
+	matches := findByCode(validateResults, "FMT-20")
 	assert.Empty(t, matches, "non-HTTP contract must not be scanned by FMT-20")
 }
 
@@ -276,7 +284,9 @@ func TestFMT20_MalformedRequestSchemaEmitsIssueInvalid(t *testing.T) {
 		Assemblies: map[string]*metadata.AssemblyMeta{},
 	}
 	v := NewValidator(pm, dir, clock.Real())
-	matches := findByCode(v.Validate(t.Context()), "FMT-20")
+	validateResults, err := v.Validate(t.Context())
+	require.NoError(t, err)
+	matches := findByCode(validateResults, "FMT-20")
 	require.Len(t, matches, 1,
 		"malformed request schema must produce 1 FMT-20 violation, got %d: %v", len(matches), matches)
 	assert.Equal(t, IssueInvalid, matches[0].IssueType)
@@ -307,7 +317,9 @@ func TestFMT20_MissingSchemaFileSkipped(t *testing.T) {
 		Assemblies: map[string]*metadata.AssemblyMeta{},
 	}
 	v := NewValidator(pm, t.TempDir(), clock.Real())
-	matches := findByCode(v.Validate(t.Context()), "FMT-20")
+	validateResults, err := v.Validate(t.Context())
+	require.NoError(t, err)
+	matches := findByCode(validateResults, "FMT-20")
 	assert.Empty(t, matches,
 		"missing schema file must produce no FMT-20 (handled by REF rules)")
 }

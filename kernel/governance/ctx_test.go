@@ -59,12 +59,14 @@ func TestValidateFailFast_ShortCircuitsOnFirstError(t *testing.T) {
 	val := NewValidator(pm, "", clock.Real())
 
 	// Sanity: the full Validate pass surfaces both findings.
-	full := val.Validate(t.Context())
+	full, err := val.Validate(t.Context())
+	require.NoError(t, err)
 	require.NotEmpty(t, findByCode(full, "REF-01"), "REF-01 must fire under full Validate")
 	require.NotEmpty(t, findByCode(full, "ADV-05"), "ADV-05 must fire under full Validate")
 
 	// Fail-fast bails after the first SeverityError-producing rule.
-	failFast := val.ValidateFailFast(t.Context())
+	failFast, err := val.ValidateFailFast(t.Context())
+	require.NoError(t, err)
 	require.NotEmpty(t, findByCode(failFast, "REF-01"), "REF-01 must fire under fail-fast")
 	assert.Empty(t, findByCode(failFast, "ADV-05"),
 		"ADV-05 must NOT fire under fail-fast: short-circuit broke")
@@ -84,13 +86,16 @@ func TestValidate_RespectsCtxCancel(t *testing.T) {
 	val := NewValidator(pm, "", clock.Real())
 
 	// Baseline: live ctx produces findings.
-	live := val.Validate(t.Context())
+	live, err := val.Validate(t.Context())
+	require.NoError(t, err)
 	require.NotEmpty(t, live)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	canceled := val.Validate(ctx)
-	assert.Empty(t, canceled,
+	results, cerr := val.Validate(ctx)
+	require.Error(t, cerr, "canceled ctx must propagate as error")
+	assert.ErrorIs(t, cerr, context.Canceled)
+	assert.Empty(t, results,
 		"pre-canceled ctx must short-circuit before any rule runs")
 }
 
@@ -101,13 +106,16 @@ func TestValidateFailFast_RespectsCtxCancel(t *testing.T) {
 	pm := projectWithEarlyAndLateError(t)
 	val := NewValidator(pm, "", clock.Real())
 
-	live := val.ValidateFailFast(t.Context())
+	live, err := val.ValidateFailFast(t.Context())
+	require.NoError(t, err)
 	require.NotEmpty(t, live)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	canceled := val.ValidateFailFast(ctx)
-	assert.Empty(t, canceled,
+	results, cerr := val.ValidateFailFast(ctx)
+	require.Error(t, cerr, "canceled ctx must propagate as error")
+	assert.ErrorIs(t, cerr, context.Canceled)
+	assert.Empty(t, results,
 		"pre-canceled ctx must short-circuit fail-fast before any rule runs")
 }
 

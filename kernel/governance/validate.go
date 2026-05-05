@@ -122,18 +122,22 @@ func NewValidator(project *metadata.ProjectMeta, root string, clk clock.Clock) *
 // subprocess, runGit shell-outs) happens outside this list, so rule bodies
 // keep zero-arg signatures.
 //
+// The error return is non-nil only when ctx.Err() != nil at the time the
+// loop is interrupted; it carries the partial findings collected so far
+// so callers can distinguish "clean run" from "interrupted run".
+//
 // Validator is not safe for concurrent Validate / ValidateFailFast calls.
 // Build one Validator per concurrent caller — same expectation as the
 // underlying locator and the verifyJourneyRef closure.
-func (v *Validator) Validate(ctx context.Context) []ValidationResult {
+func (v *Validator) Validate(ctx context.Context) ([]ValidationResult, error) {
 	var results []ValidationResult
 	for _, rule := range v.rules() {
 		if err := ctx.Err(); err != nil {
-			return results
+			return results, err
 		}
 		results = append(results, rule()...)
 	}
-	return results
+	return results, nil
 }
 
 // ValidateFailFast runs the same rules as Validate but returns as soon as
@@ -143,19 +147,20 @@ func (v *Validator) Validate(ctx context.Context) []ValidationResult {
 //
 // When no errors are found, the return value contains every rule's warnings
 // in the same order as Validate would. ctx cancellation also short-circuits.
-func (v *Validator) ValidateFailFast(ctx context.Context) []ValidationResult {
+// The error return is non-nil only when ctx.Err() != nil.
+func (v *Validator) ValidateFailFast(ctx context.Context) ([]ValidationResult, error) {
 	var results []ValidationResult
 	for _, rule := range v.rules() {
 		if err := ctx.Err(); err != nil {
-			return results
+			return results, err
 		}
 		r := rule()
 		results = append(results, r...)
 		if HasErrors(r) {
-			return results
+			return results, nil
 		}
 	}
-	return results
+	return results, nil
 }
 
 // rules returns the list of rule methods in the same order Validate runs

@@ -27,15 +27,18 @@ import (
 // ctx cancellation is checked between strict-only rules so a worker that
 // aborts the validate command unwinds the strict pass too — not just the
 // base Validate pipeline.
-func (v *Validator) ValidateStrict(ctx context.Context, strict bool) []ValidationResult {
-	results := v.Validate(ctx)
+func (v *Validator) ValidateStrict(ctx context.Context, strict bool) ([]ValidationResult, error) {
+	results, err := v.Validate(ctx)
+	if err != nil {
+		return results, err
+	}
 	for _, rule := range v.strictRules(ctx, strict) {
-		if err := ctx.Err(); err != nil {
-			return results
+		if cerr := ctx.Err(); cerr != nil {
+			return results, cerr
 		}
 		results = append(results, rule()...)
 	}
-	return results
+	return results, nil
 }
 
 // ValidateStrictFailFast is equivalent to ValidateStrict(ctx, true) but uses
@@ -48,22 +51,25 @@ func (v *Validator) ValidateStrict(ctx context.Context, strict bool) []Validatio
 // ctx cancellation is checked between strict-only rules so a CI worker that
 // aborts the validate command unwinds the strict pass too — not just the
 // base Validate pipeline.
-func (v *Validator) ValidateStrictFailFast(ctx context.Context) []ValidationResult {
-	results := v.ValidateFailFast(ctx)
+func (v *Validator) ValidateStrictFailFast(ctx context.Context) ([]ValidationResult, error) {
+	results, err := v.ValidateFailFast(ctx)
+	if err != nil {
+		return results, err
+	}
 	if HasErrors(results) {
-		return results
+		return results, nil
 	}
 	for _, rule := range v.strictRules(ctx, true) {
-		if err := ctx.Err(); err != nil {
-			return results
+		if cerr := ctx.Err(); cerr != nil {
+			return results, cerr
 		}
 		r := rule()
 		results = append(results, r...)
 		if HasErrors(r) {
-			return results
+			return results, nil
 		}
 	}
-	return results
+	return results, nil
 }
 
 // strictRules returns the strict-only rule pipeline as zero-arg closures so

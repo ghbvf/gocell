@@ -4,6 +4,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/stretchr/testify/require"
+
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/metadata"
 )
@@ -47,7 +49,8 @@ func TestStrictValidator_KebabDirDisallowed(t *testing.T) {
 
 	// Non-strict: kebab dir in slice dir should produce warning, not error.
 	v := NewValidator(project, "", clock.Real())
-	results := v.ValidateStrict(t.Context(), false)
+	results, err := v.ValidateStrict(t.Context(), false)
+	require.NoError(t, err)
 	hasKebabError := false
 	for _, r := range results {
 		if r.Code == "FMT-16" && r.Severity == SeverityError {
@@ -59,7 +62,8 @@ func TestStrictValidator_KebabDirDisallowed(t *testing.T) {
 	}
 
 	// Strict mode: kebab dir in slice dir should produce error.
-	results = v.ValidateStrict(t.Context(), true)
+	results, err = v.ValidateStrict(t.Context(), true)
+	require.NoError(t, err)
 	hasKebabError = false
 	for _, r := range results {
 		if r.Code == "FMT-16" && r.Severity == SeverityError {
@@ -112,7 +116,8 @@ func TestStrictValidator_AllowedFilesMismatch(t *testing.T) {
 
 	// Non-strict: no FMT-17 error.
 	v := NewValidator(project, "", clock.Real())
-	results := v.ValidateStrict(t.Context(), false)
+	results, err := v.ValidateStrict(t.Context(), false)
+	require.NoError(t, err)
 	for _, r := range results {
 		if r.Code == "FMT-17" && r.Severity == SeverityError {
 			t.Error("non-strict mode should not produce FMT-17 error")
@@ -120,7 +125,8 @@ func TestStrictValidator_AllowedFilesMismatch(t *testing.T) {
 	}
 
 	// Strict: allowedFiles first entry mismatch should be error.
-	results = v.ValidateStrict(t.Context(), true)
+	results, err = v.ValidateStrict(t.Context(), true)
+	require.NoError(t, err)
 	hasMismatchError := false
 	for _, r := range results {
 		if r.Code == "FMT-17" && r.Severity == SeverityError {
@@ -139,13 +145,16 @@ func TestValidateStrict_IncludesVERIFY06OnlyWhenStrict(t *testing.T) {
 	}
 
 	v := NewValidator(project, "", clock.Real())
-	for _, r := range v.ValidateStrict(t.Context(), false) {
+	forRes144, err := v.ValidateStrict(t.Context(), false)
+	require.NoError(t, err)
+	for _, r := range forRes144 {
 		if r.Code == "VERIFY-06" {
 			t.Fatalf("non-strict validation must not produce VERIFY-06: %s", r.Message)
 		}
 	}
 
-	results := v.ValidateStrict(t.Context(), true)
+	results, err := v.ValidateStrict(t.Context(), true)
+	require.NoError(t, err)
 	found := false
 	for _, r := range results {
 		if r.Code == "VERIFY-06" && r.Severity == SeverityError {
@@ -164,7 +173,8 @@ func TestValidateStrictFailFast_IncludesVERIFY06WhenBaseClean(t *testing.T) {
 		{Text: "manual signoff", Mode: "manual"},
 	}
 
-	results := NewValidator(project, "", clock.Real()).ValidateStrictFailFast(t.Context())
+	results, err := NewValidator(project, "", clock.Real()).ValidateStrictFailFast(t.Context())
+	require.NoError(t, err)
 	if len(results) == 0 {
 		t.Fatal("expected VERIFY-06 from strict fail-fast")
 	}
@@ -215,7 +225,8 @@ func TestValidateStrictFailFast_ShortCircuitsOnBaseError(t *testing.T) {
 	}
 
 	v := NewValidator(project, "", clock.Real())
-	results := v.ValidateStrictFailFast(t.Context())
+	results, err := v.ValidateStrictFailFast(t.Context())
+	require.NoError(t, err)
 
 	// Must contain at least one error.
 	if !HasErrors(results) {
@@ -267,7 +278,8 @@ func TestValidateStrictFailFast_RunsFMT16FMT17WhenNoBaseError(t *testing.T) {
 	}
 
 	v := NewValidator(project, "", clock.Real())
-	results := v.ValidateStrictFailFast(t.Context())
+	results, err := v.ValidateStrictFailFast(t.Context())
+	require.NoError(t, err)
 
 	hasFMT16 := false
 	for _, r := range results {
@@ -292,8 +304,10 @@ func TestValidateStrict_EmptyProject(t *testing.T) {
 	}
 
 	v := NewValidator(project, "", clock.Real())
-	strictResults := v.ValidateStrict(t.Context(), true)
-	baseResults := v.Validate(t.Context())
+	strictResults, err := v.ValidateStrict(t.Context(), true)
+	require.NoError(t, err)
+	baseResults, err := v.Validate(t.Context())
+	require.NoError(t, err)
 
 	// FMT-16 and FMT-17 must not appear on an empty slice map.
 	for _, r := range strictResults {
@@ -351,8 +365,10 @@ func TestValidateStrict_NonStrictEquivalentToValidate(t *testing.T) {
 	}
 
 	v := NewValidator(project, "", clock.Real())
-	nonStrictResults := v.ValidateStrict(t.Context(), false)
-	baseResults := v.Validate(t.Context())
+	nonStrictResults, err := v.ValidateStrict(t.Context(), false)
+	require.NoError(t, err)
+	baseResults, err := v.Validate(t.Context())
+	require.NoError(t, err)
 
 	// Build comparable fingerprint: sorted list of "code:severity" strings.
 	fingerprint := func(results []ValidationResult) map[string]int {
@@ -422,7 +438,8 @@ func TestStrictValidator_NodashSliceClean(t *testing.T) {
 	}
 
 	v := NewValidator(project, "", clock.Real())
-	results := v.ValidateStrict(t.Context(), true)
+	results, err := v.ValidateStrict(t.Context(), true)
+	require.NoError(t, err)
 	for _, r := range results {
 		if (r.Code == "FMT-16" || r.Code == "FMT-17") && r.Severity == SeverityError {
 			t.Errorf("clean no-dash slice should not produce %s error: %s", r.Code, r.Message)
@@ -469,7 +486,8 @@ func TestStrictValidator_FMT16_PathIDSplit_KebabDirNoDashID(t *testing.T) {
 	}
 
 	v := NewValidator(project, "", clock.Real())
-	results := v.ValidateStrict(t.Context(), true)
+	results, err := v.ValidateStrict(t.Context(), true)
+	require.NoError(t, err)
 
 	var gotFMT16 bool
 	for _, r := range results {
@@ -519,7 +537,8 @@ func TestREF05_PathIDSplit_FiresWhenDirAndIDDisagree(t *testing.T) {
 	}
 
 	v := NewValidator(project, "", clock.Real())
-	results := v.Validate(t.Context()) // REF-05 is a standard rule, not strict-only
+	results, err := v.Validate(t.Context())
+	require.NoError(t, err) // REF-05 is a standard rule, not strict-only
 
 	var gotREF05 bool
 	for _, r := range results {
@@ -558,7 +577,9 @@ func TestStrictValidator_FMTC1_KebabCellID(t *testing.T) {
 	v := NewValidator(project, "", clock.Real())
 
 	// Non-strict: silent.
-	for _, r := range v.ValidateStrict(t.Context(), false) {
+	forRes569, err := v.ValidateStrict(t.Context(), false)
+	require.NoError(t, err)
+	for _, r := range forRes569 {
 		if r.Code == "FMT-C1" {
 			t.Errorf("non-strict mode must not emit FMT-C1: %s", r.Message)
 		}
@@ -566,7 +587,9 @@ func TestStrictValidator_FMTC1_KebabCellID(t *testing.T) {
 
 	// Strict: must fire FMT-C1.
 	var got bool
-	for _, r := range v.ValidateStrict(t.Context(), true) {
+	forRes577, err := v.ValidateStrict(t.Context(), true)
+	require.NoError(t, err)
+	for _, r := range forRes577 {
 		if r.Code == "FMT-C1" && r.Severity == SeverityError {
 			got = true
 		}
@@ -597,14 +620,18 @@ func TestStrictValidator_FMTA1_KebabAssemblyID(t *testing.T) {
 
 	v := NewValidator(project, "", clock.Real())
 
-	for _, r := range v.ValidateStrict(t.Context(), false) {
+	forRes608, err := v.ValidateStrict(t.Context(), false)
+	require.NoError(t, err)
+	for _, r := range forRes608 {
 		if r.Code == "FMT-A1" {
 			t.Errorf("non-strict mode must not emit FMT-A1: %s", r.Message)
 		}
 	}
 
 	var got bool
-	for _, r := range v.ValidateStrict(t.Context(), true) {
+	forRes615, err := v.ValidateStrict(t.Context(), true)
+	require.NoError(t, err)
+	for _, r := range forRes615 {
 		if r.Code == "FMT-A1" && r.Severity == SeverityError {
 			got = true
 		}
@@ -639,7 +666,9 @@ func TestStrictValidator_FMT16_KebabCellDir(t *testing.T) {
 	v := NewValidator(project, "", clock.Real())
 
 	var got bool
-	for _, r := range v.ValidateStrict(t.Context(), true) {
+	forRes650, err := v.ValidateStrict(t.Context(), true)
+	require.NoError(t, err)
+	for _, r := range forRes650 {
 		if r.Code == "FMT-16" && r.Severity == SeverityError &&
 			strings.Contains(r.Message, "cell") {
 			got = true
@@ -672,7 +701,9 @@ func TestStrictValidator_FMT16_KebabAssemblyDir(t *testing.T) {
 	v := NewValidator(project, "", clock.Real())
 
 	var got bool
-	for _, r := range v.ValidateStrict(t.Context(), true) {
+	forRes683, err := v.ValidateStrict(t.Context(), true)
+	require.NoError(t, err)
+	for _, r := range forRes683 {
 		if r.Code == "FMT-16" && r.Severity == SeverityError &&
 			strings.Contains(r.Message, "assembly") {
 			got = true
@@ -712,7 +743,9 @@ func TestStrictValidator_FMTC1_FMTA1_NoDashClean(t *testing.T) {
 	}
 
 	v := NewValidator(project, "", clock.Real())
-	for _, r := range v.ValidateStrict(t.Context(), true) {
+	forRes723, err := v.ValidateStrict(t.Context(), true)
+	require.NoError(t, err)
+	for _, r := range forRes723 {
 		if r.Code == "FMT-C1" || r.Code == "FMT-A1" {
 			t.Errorf("clean no-dash project should not produce %s: %s", r.Code, r.Message)
 		}
@@ -761,7 +794,8 @@ func TestStrictValidator_FMT17_AllowedFilesAgainstRealDir(t *testing.T) {
 	}
 
 	v := NewValidator(project, "", clock.Real())
-	results := v.ValidateStrict(t.Context(), true)
+	results, err := v.ValidateStrict(t.Context(), true)
+	require.NoError(t, err)
 
 	var gotFMT17 bool
 	for _, r := range results {
