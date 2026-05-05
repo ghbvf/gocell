@@ -25,6 +25,17 @@ const (
 	refreshTest2Hours  = 2 * time.Hour
 )
 
+// TestPGRefreshStore_ContractSuite runs the shared storetest.RunContractSuite
+// against a real PostgreSQL backend. This is the regression gate for backend
+// parity with memstore — every Tn subtest enforces the Store contract on
+// both implementations. Notable subtests for PR#388 review findings:
+//
+//   - T20_Peek_RejectionParityAndReuseCascade — Peek must reject identically
+//     to Rotate and still cascade-revoke on reuse_detected.
+//   - T21_Peek_DoesNotConsumeGraceBudget — Peek MUST NOT increment used_times.
+//     Caught the PR#388 P1 finding where PG silently consumed grace budget on
+//     Peek (memstore did not), halving the effective GraceMaxReuses for the
+//     real sessionrefresh.Refresh() call shape (Peek + Rotate per request).
 func TestPGRefreshStore_ContractSuite(t *testing.T) {
 	base, cleanup := setupPostgres(t)
 	t.Cleanup(cleanup)
@@ -272,6 +283,64 @@ func TestPGRefreshStore_DMLState(t *testing.T) {
 		require.NoError(t, err)
 		assert.Zero(t, unrevokedCount, "after RevokeSession all rows must have revoked_at set")
 	})
+}
+
+// TestPGRefreshStore_PeekPlusRotate_RespectsGraceBudget locks down the PR#388
+// P1 finding directly against the PG backend.  sessionrefresh.Refresh issues
+// Peek + Rotate in the same request; without the fix PG silently incremented
+// used_times in the Peek path, halving the effective grace budget compared
+// with memstore. This test models the realistic retry shape (a client
+// reuses parentWire because it never received the previous Rotate response)
+// and asserts that GraceMaxReuses retries succeed end-to-end before the next
+// Rotate is rejected with reuse_detected.
+//
+// Companion to storetest T21_Peek_DoesNotConsumeGraceBudget (which runs the
+// same invariant on every backend); this PG-named test exists so a grep for
+// "Peek" + "Grace" in adapters/postgres/ finds an explicit regression gate.
+func TestPGRefreshStore_PeekPlusRotate_RespectsGraceBudget(t *testing.T) {
+	base, cleanup := setupPostgres(t)
+	t.Cleanup(cleanup)
+
+	ctx := context.Background()
+	p := isolatedSchemaPool(t, ctx, base)
+	migrator, err := NewMigrator(p, testMigrationsFS(t), "schema_migrations_peek_grace")
+	require.NoError(t, err)
+	require.NoError(t, migrator.Up(ctx))
+
+	clock := storetest.NewFakeClock(time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC))
+	txm := NewTxManager(p)
+	policy := refresh.Policy{
+		ReuseInterval:  testtime.D5s,
+		MaxAge:         time.Hour,
+		MaxIdle:        time.Hour,
+		GraceMaxReuses: 3,
+	}
+	store, err := NewRefreshStore(p.DB(), txm, policy, clock, nil)
+	require.NoError(t, err)
+
+	parentWire, _, err := store.Issue(ctx, "sess-pg-grace", "usr-pg-grace")
+	require.NoError(t, err)
+	// First Rotate: opens grace window. used_times stays at 0 because
+	// rotated_at was nil prior to this call (handleRotatedRow not entered).
+	_, _, err = store.Rotate(ctx, parentWire)
+	require.NoError(t, err)
+
+	// Replay the realistic sessionrefresh.Refresh() shape: Peek + Rotate per
+	// "refresh request". Without the P1 fix, each iteration would advance
+	// used_times by 2 (Peek + Rotate), exhausting GraceMaxReuses=3 after the
+	// 2nd retry instead of the 3rd.
+	for i := 0; i < policy.GraceMaxReuses; i++ {
+		_, peekErr := store.Peek(ctx, parentWire)
+		require.NoError(t, peekErr, "Peek %d must succeed in grace window", i+1)
+		_, _, rotErr := store.Rotate(ctx, parentWire)
+		require.NoError(t, rotErr, "Rotate %d must succeed (used_times %d → %d, cap %d)",
+			i+1, i, i+1, policy.GraceMaxReuses)
+	}
+
+	// used_times == GraceMaxReuses now. Next Rotate must trip the cap.
+	_, _, err = store.Rotate(ctx, parentWire)
+	require.ErrorIs(t, err, refresh.ErrRejected,
+		"GraceMaxReuses+1th Rotate must trigger reuse_detected (cascade revoke)")
 }
 
 func TestPGRefreshStore_ReuseCascadeSurvivesAmbientRollback(t *testing.T) {

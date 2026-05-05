@@ -33,8 +33,12 @@ type Token struct {
 }
 
 // Default policy values used when the caller does not configure optional fields.
-// Zero values are rejected by NewRefreshStore and memstore.New; callers MUST
-// set positive values or use these constants.
+//
+// Zero values for MaxIdle and GraceMaxReuses are accepted by NewRefreshStore /
+// memstore.New (via Policy.Validate) and mean "feature disabled" — pre-016
+// stores or deployments that intentionally opt out of idle expiry / grace
+// counter cap. Callers that want the standard behavior set these constants.
+// MaxAge and ReuseInterval are still strictly validated (positive / non-negative).
 const (
 	// DefaultMaxIdle is the default idle-expiry window (30 days).
 	// Matches Zitadel auth-token default retention period.
