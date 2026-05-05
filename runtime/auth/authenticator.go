@@ -291,6 +291,11 @@ func validateCallerCell(callerCell string) error {
 // fail-closed mode should compose with a guard that rejects (false, nil)
 // outcomes (the typical /api/v1/* listener already does this via JWT
 // short-circuit).
+//
+// 警告：当挂载在已有 JWT listener 上时，ContextAuthenticator 应是 chain 中
+// 唯一的 authenticator（不通过 UnionAuthenticator 组合）；absent-credential
+// 结果（false, nil）不会阻止 Union 继续尝试下一个 authenticator，可能造成
+// 意料之外的 fall-through 路径。
 func NewContextAuthenticator() Authenticator {
 	return AuthenticatorFunc(func(r *http.Request) (*Principal, bool, error) {
 		if p, ok := FromContext(r.Context()); ok {

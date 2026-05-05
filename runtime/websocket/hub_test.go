@@ -1017,8 +1017,7 @@ func TestHub_BroadcastFilter_SelectiveBySubject(t *testing.T) {
 	}, testtime.D2s, testtime.D10ms)
 
 	// Negative wait — bob must NOT receive.
-	time.Sleep(testtime.D50ms) //archtest:allow:test-sleep negative test: bob must not receive within window
-	assert.Empty(t, b.getWrites())
+	assert.Never(t, func() bool { return len(b.getWrites()) > 0 }, testtime.D100ms, testtime.D10ms)
 }
 
 func TestHub_BroadcastToSubject_EmptySubjectFails(t *testing.T) {
@@ -1047,8 +1046,7 @@ func TestHub_BroadcastToSubject_HitsAllConnsForSubject(t *testing.T) {
 	require.Eventually(t, func() bool {
 		return len(a1.getWrites()) == 1 && len(a2.getWrites()) == 1
 	}, testtime.D2s, testtime.D10ms)
-	time.Sleep(testtime.D50ms) //archtest:allow:test-sleep negative window
-	assert.Empty(t, b.getWrites())
+	assert.Never(t, func() bool { return len(b.getWrites()) > 0 }, testtime.D100ms, testtime.D10ms)
 }
 
 func TestHub_BroadcastToSubject_UnknownSubjectIsNoop(t *testing.T) {
@@ -1110,9 +1108,7 @@ func TestHub_TokenExpiry_ZeroExpiryNeverEvicts(t *testing.T) {
 	// ticker iterations in clockmock).
 	fc.Advance(testtime.D2h)
 
-	time.Sleep(testtime.D50ms) //archtest:allow:test-sleep negative test: must NOT evict
-	assert.Equal(t, 1, hub.ConnCount())
-	assert.False(t, conn.isClosed())
+	assert.Never(t, func() bool { return hub.ConnCount() == 0 || conn.isClosed() }, testtime.D100ms, testtime.D10ms)
 }
 
 // ---------------------------------------------------------------------------

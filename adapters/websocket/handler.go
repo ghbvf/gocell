@@ -132,6 +132,8 @@ func authenticateForUpgrade(w http.ResponseWriter, r *http.Request, a auth.Authe
 		slog.Warn("websocket: upgrade rejected — invalid credential",
 			slog.Any("error", err),
 			slog.String("remote_addr", logutil.SafeAddr(r.RemoteAddr)),
+			slog.String("path", r.URL.Path),
+			slog.String("error_code", string(errcode.ErrWebsocketUpgradeUnauthenticated)),
 		)
 		http.Error(w, "Unauthorized", http.StatusUnauthorized)
 		return nil, false
@@ -139,6 +141,8 @@ func authenticateForUpgrade(w http.ResponseWriter, r *http.Request, a auth.Authe
 	if !ok || principal == nil {
 		slog.Warn("websocket: upgrade rejected — credential absent",
 			slog.String("remote_addr", logutil.SafeAddr(r.RemoteAddr)),
+			slog.String("path", r.URL.Path),
+			slog.String("error_code", string(errcode.ErrWebsocketUpgradeUnauthenticated)),
 		)
 		http.Error(w, "Unauthorized", http.StatusUnauthorized)
 		return nil, false
@@ -191,10 +195,41 @@ func MustUpgradeHandler(hub *rtws.Hub, cfg UpgradeConfig) http.Handler {
 
 func logUpgradeFailure(r *http.Request, err error) {
 	addr := logutil.SafeAddr(r.RemoteAddr)
-	slog.Error("websocket: upgrade failed",
+	msg := "websocket: upgrade failed"
+	fields := []any{
 		slog.Any("error", err),
 		slog.String("remote_addr", addr),
-	)
+	}
+	if isClientUpgradeError(err) {
+		slog.Warn(msg, fields...)
+		return
+	}
+	slog.Error(msg, fields...)
+}
+
+// isClientUpgradeError reports whether the upgrade failure originated from
+// the client (bad handshake, missing headers, protocol violation). Server-side
+// failures (hijack not supported, internal write errors) stay at Error level.
+func isClientUpgradeError(err error) bool {
+	if err == nil {
+		return false
+	}
+	s := err.Error()
+	// coder/websocket Accept returns errors with these substrings for client-side issues.
+	for _, marker := range []string{
+		"websocket protocol violation",
+		"Sec-WebSocket-Key",
+		"Sec-WebSocket-Version",
+		"expected GET method",
+		"request must contain",
+		"request method must be",
+		"Origin",
+	} {
+		if strings.Contains(s, marker) {
+			return true
+		}
+	}
+	return false
 }
 
 type upgradeAcceptWriter struct {

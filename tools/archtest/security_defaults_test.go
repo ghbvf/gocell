@@ -667,6 +667,88 @@ func isRequiredComposeEnvInterpolation(value string) bool {
 	return true
 }
 
+func TestFindUpgradeConfigWithoutAuthenticator_DetectsLiteralWithMissingField(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+
+	// Case 1: same-package UpgradeConfig literal (ast.Ident) — no Authenticator field.
+	path1 := filepath.Join(dir, "nauth_ident.go")
+	src1 := `package main
+
+import "github.com/ghbvf/gocell/adapters/websocket"
+
+func main() {
+	_ = websocket.UpgradeConfig{AllowedOrigins: []string{"http://*"}}
+}
+`
+	require.NoError(t, os.WriteFile(path1, []byte(src1), 0o644))
+
+	lines1, err := findUpgradeConfigWithoutAuthenticator(path1)
+	require.NoError(t, err)
+	assert.NotEmpty(t, lines1, "should detect ident-form UpgradeConfig missing Authenticator")
+
+	// Case 2: qualified SelectorExpr (pkgname.UpgradeConfig) — no Authenticator field.
+	path2 := filepath.Join(dir, "nauth_sel.go")
+	src2 := `package main
+
+import adapterws "github.com/ghbvf/gocell/adapters/websocket"
+
+func main() {
+	_ = adapterws.UpgradeConfig{AllowedOrigins: []string{"http://*"}}
+}
+`
+	require.NoError(t, os.WriteFile(path2, []byte(src2), 0o644))
+
+	lines2, err := findUpgradeConfigWithoutAuthenticator(path2)
+	require.NoError(t, err)
+	assert.NotEmpty(t, lines2, "should detect selector-form UpgradeConfig missing Authenticator")
+}
+
+func TestFindUpgradeConfigWithoutAuthenticator_AcceptsLiteralWithAuthenticator(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+
+	// Case 1: same-package UpgradeConfig with Authenticator field present (ast.Ident).
+	path1 := filepath.Join(dir, "withauth_ident.go")
+	src1 := `package main
+
+import "github.com/ghbvf/gocell/adapters/websocket"
+
+func main() {
+	_ = websocket.UpgradeConfig{
+		AllowedOrigins: []string{"http://*"},
+		Authenticator:  nil,
+	}
+}
+`
+	require.NoError(t, os.WriteFile(path1, []byte(src1), 0o644))
+
+	lines1, err := findUpgradeConfigWithoutAuthenticator(path1)
+	require.NoError(t, err)
+	assert.Empty(t, lines1, "should not flag UpgradeConfig that has Authenticator field")
+
+	// Case 2: qualified SelectorExpr with Authenticator field present.
+	path2 := filepath.Join(dir, "withauth_sel.go")
+	src2 := `package main
+
+import adapterws "github.com/ghbvf/gocell/adapters/websocket"
+
+func main() {
+	_ = adapterws.UpgradeConfig{
+		AllowedOrigins: []string{"http://*"},
+		Authenticator:  nil,
+	}
+}
+`
+	require.NoError(t, os.WriteFile(path2, []byte(src2), 0o644))
+
+	lines2, err := findUpgradeConfigWithoutAuthenticator(path2)
+	require.NoError(t, err)
+	assert.Empty(t, lines2, "should not flag UpgradeConfig that has Authenticator field (selector form)")
+}
+
 func testSEC07WebsocketAuthenticatorRequired(t *testing.T, root string) {
 	t.Helper()
 	files, err := findAllProductionGoFiles(root)
@@ -856,7 +938,7 @@ func funcBodyDeletesConns(body *ast.BlockStmt) bool {
 			return true
 		}
 		ident, ok := call.Fun.(*ast.Ident)
-		if !ok || ident.Name != "delete" {
+		if !ok || (ident.Name != "delete" && ident.Name != "clear") {
 			return true
 		}
 		if len(call.Args) < 1 {

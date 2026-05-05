@@ -183,6 +183,8 @@ Hub 内置 ping-pong 循环：
 2. 客户端通过原认证 API 获取新 token。
 3. 客户端主动断开 WS 连接，用新 token 重新握手建立连接。
 
+**最坏情况**下，token 过期后**最多 `PingInterval`（默认 30s）**才被驱逐；对敏感场景缩短 `PingInterval`。
+
 ---
 
 ## 5. 重连策略

@@ -174,9 +174,9 @@ func (h *Hub) Start(ctx context.Context) error {
 		cancel()
 		s := h.state.Load()
 		if s == stateRunning {
-			return errcode.New(errcode.KindInternal, ErrWSAlreadyStarted, "websocket: hub already started")
+			return errcode.New(errcode.KindInternal, errcode.ErrWSAlreadyStarted, "websocket: hub already started")
 		}
-		return errcode.New(errcode.KindInternal, ErrWSAlreadyStopped, "websocket: hub already stopped")
+		return errcode.New(errcode.KindInternal, errcode.ErrWSAlreadyStopped, "websocket: hub already stopped")
 	}
 	h.runCancel = cancel
 	h.wg.Add(1)
@@ -240,7 +240,7 @@ func (h *Hub) shutdown(ctx context.Context) error {
 			}
 		}
 		// Already stopped.
-		return errcode.New(errcode.KindInternal, ErrWSAlreadyStopped, "websocket: hub already stopped")
+		return errcode.New(errcode.KindInternal, errcode.ErrWSAlreadyStopped, "websocket: hub already stopped")
 	}
 
 	// We won the CAS — we own the shutdown.
@@ -321,18 +321,18 @@ func (h *Hub) Register(ctx context.Context, conn Conn) error {
 	if s == stateStopping {
 		h.connMu.Unlock()
 		_ = conn.Close()
-		return errcode.New(errcode.KindUnavailable, ErrWSHubStopping, "websocket: hub is stopping, connection rejected")
+		return errcode.New(errcode.KindUnavailable, errcode.ErrWSHubStopping, "websocket: hub is stopping, connection rejected")
 	}
 	if s != stateRunning {
 		h.connMu.Unlock()
 		_ = conn.Close()
-		return errcode.New(errcode.KindUnavailable, ErrWSHubNotRunning, "websocket: hub is not running, connection rejected")
+		return errcode.New(errcode.KindUnavailable, errcode.ErrWSHubNotRunning, "websocket: hub is not running, connection rejected")
 	}
 
 	if h.config.MaxConnections > 0 && len(h.conns) >= h.config.MaxConnections {
 		h.connMu.Unlock()
 		_ = conn.Close()
-		return errcode.New(errcode.KindUnavailable, ErrWSMaxConns, "websocket: max connections reached")
+		return errcode.New(errcode.KindUnavailable, errcode.ErrWSMaxConns, "websocket: max connections reached")
 	}
 
 	// Evict existing entry with same ID to prevent context leak.
@@ -490,7 +490,7 @@ func (h *Hub) Unregister(connID string) {
 // ref: olahol/melody melody.go BroadcastFilter
 func (h *Hub) BroadcastFilter(ctx context.Context, data []byte, filter func(Conn) bool) error {
 	if filter == nil {
-		return errcode.New(errcode.KindInternal, ErrWebsocketBroadcastFilterMissing,
+		return errcode.New(errcode.KindInternal, errcode.ErrWebsocketBroadcastFilterMissing,
 			"websocket: BroadcastFilter requires a non-nil filter; "+
 				"use func(Conn) bool { return true } for full broadcast")
 	}
@@ -518,7 +518,7 @@ func (h *Hub) BroadcastFilter(ctx context.Context, data []byte, filter func(Conn
 // ref: centrifugal/centrifuge hub.go connShard.users
 func (h *Hub) BroadcastToSubject(ctx context.Context, subject string, data []byte) error {
 	if subject == "" {
-		return errcode.New(errcode.KindInternal, ErrWebsocketBroadcastSubjectMissing,
+		return errcode.New(errcode.KindInternal, errcode.ErrWebsocketBroadcastSubjectMissing,
 			"websocket: BroadcastToSubject requires a non-empty subject")
 	}
 	h.connMu.Lock()
@@ -566,7 +566,7 @@ func (h *Hub) Send(ctx context.Context, connID string, data []byte) error {
 	h.connMu.Unlock()
 
 	if !ok {
-		return errcode.New(errcode.KindNotFound, ErrWSConnNotFound,
+		return errcode.New(errcode.KindNotFound, errcode.ErrWSConnNotFound,
 			"websocket: connection not found: "+connID)
 	}
 
@@ -575,7 +575,7 @@ func (h *Hub) Send(ctx context.Context, connID string, data []byte) error {
 		return nil
 	default:
 		h.evictSlow(entry)
-		return errcode.New(errcode.KindUnavailable, ErrWebsocketSlowClient,
+		return errcode.New(errcode.KindUnavailable, errcode.ErrWebsocketSlowClient,
 			"websocket: connection "+connID+" send buffer full, evicted")
 	}
 }
