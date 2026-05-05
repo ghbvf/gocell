@@ -66,24 +66,23 @@
 
 ---
 
-### §2.3 PR-V1-EVOLVE-ADR（Cx2，~3h，🟡 v1.0 GA 前，0/1 已完成)
+### §2.3 PR-V1-EVOLVE-ADR（Cx2，~3h，🟡 v1.0 GA 前，1/1 已完成)
 
 **抽象**：v1 响应 schema 普遍 `additionalProperties:false`（PR-CFG-E #278 加的）与 `.claude/rules/gocell/api-versioning.md:12` "v1 只增不删 / 新增可选字段不破坏 v1" 硬冲突——需 ADR 决策走向。
 
 **清零**：contracts P1.2
 
-**状态**：⬜ 待决策（近期 PR 未覆盖）
+**状态**：✅ 已完成（PR #353 G5 / 029 PR-CI-3-V1-RESPONSE-EVOLVE）— 方向 A 落地
 
-**改动**：
-- `contracts/http/config/list/v1/response.schema.json:7` 等所有 v1 响应 schema 评估
-- 新建 `docs/adr/202604260000-v1-schema-evolution.md`：决策方向二选一
-  - **方向 A（推荐）**：响应放宽 `additionalProperties: true`，请求保持 `false`；治理规则 `FMT-RESPONSE-STRICT-01` 改为分输入/输出
-  - **方向 B**：保持响应 strict，但更新 `api-versioning.md` 把"新增可选字段不破坏 v1" 改为"新增字段必须 v2"
-- `kernel/governance/rules_strict.go::FMT-RESPONSE-STRICT-01` 同步治理规则
+**实际落地**：
+- ADR `docs/architecture/202605031600-adr-v1-schema-evolution.md` 落地方向 A
+- `kernel/governance/rules_strict.go::FMT-20` 收窄到 request-only（lenient response/event, strict request）
+- 30 response/event schema 顶层放宽 `additionalProperties: true`，request schema 保持 `false`
+- 共享 error envelope（`contracts/shared/errors/error-response-v1.schema.json`）例外保持 strict
+- `B2-C-08` cell event decoder `DisallowUnknownFields` 同步关闭
+- `.claude/rules/gocell/api-versioning.md` 同步规则文档
 
-**注**：方向 A 与 PR-CFG-E E.2 落地的方向相反，但与 OpenAPI v3 推荐 + Stripe/GitHub API 演进策略一致；方向 B 维护成本低但限制 v1 演进。
-
-**对标**：Stripe API "we never make breaking changes to v1" + 服务端始终允许新字段；GitHub REST v3 同模式；OpenAPI 3.x `additionalProperties` 推荐 unset 表示宽松
+**对标**：Stripe API "we never make breaking changes to v1" + 服务端始终允许新字段；GitHub REST v3 同模式；OpenAPI 3.x `additionalProperties` 推荐 unset 表示宽松（与最终方向 A 一致）
 
 ---
 

@@ -105,7 +105,7 @@
 
 | # | PR | 来源 | 问题 | 方案 | ship | 工时 | 依赖 |
 |---|---|---|---|---|:-:|---|---|
-| K-01 | KERNEL-ASSEMBLY-SNAPSHOTS-RACE-FIX | kernel-group1 G1-01（P0）| `assembly.startInternal` Phase1 在 Init 循环内裸写 `a.snapshots`，与 `Snapshots()` 持锁读形成 fatal map race，进程不可 recover | Init 循环写局部 `localSnaps`，全部成功后在 `a.mu` 锁内一次性赋值；新增 `TestAssembly_StartConcurrentSnapshots_RaceDetector` 锁定 | L1 | 4h + 2h | - |
+| K-01 | ✅ PR#370 + PR#375 KERNEL-ASSEMBLY-SNAPSHOTS-RACE-FIX（029 N1）| kernel-group1 G1-01（P0）| `assembly.startInternal` Phase1 在 Init 循环内裸写 `a.snapshots`，与 `Snapshots()` 持锁读形成 fatal map race，进程不可 recover | ✅ shipped: PR#370 Init 循环写局部 `localSnaps`，全部成功后在 `a.mu` 锁内一次性赋值；`TestAssembly_StartConcurrentSnapshots_RaceDetector` + `tools/archtest/assembly_snapshots_locked_test.go` archtest 守卫；PR#375 follow-up — bind snapshots visibility to started state（snapshots 仅在 started=true 后对 reader 可见，规避半启动 race window）| ✅ done | 4h + 2h | - |
 | K-02 | JOURNEY-LIFECYCLE-CI-CLOSE | journeys-06 P0 + summary #1/#8 | 8 条 J-*.yaml 全部 `lifecycle: experimental`，`gocell verify journey --active` 静默跳过；J-confighotreload 引用未声明的 `event.config.entry-deleted.v1` | (a) 升 J-ssologin 为 active；(b) `runner.RunActiveJourneys` active 集为空时 fail；(c) `gocell validate` 增 `journey.contracts ↔ contracts/` 双向存在性校验（对偶 ADV-06） | L1 | 6h + 3h | - |
 | K-03 | KERNEL-OBSERVABILITY-PKGDOC | kernel-01 P1#2 | `kernel/observability/` 无包级 doc.go，与 `runtime/observability/` 职责切分不明 | 30-50 行 `doc.go` 明确"kernel/observability 只定义 provider-neutral 抽象，导出器在 adapters/runtime" | L1 | 2h + 1h | - |
 | ~~K-04~~ | ~~ADR-PLATFORM-CELLS-BOUNDARY~~ | software-review §3.1 | **决议 不迁移**（2026-05-05）：accesscore / auditcore / configcore 留 framework 仓；产品定位 = 框架自带认证/配置/审计能力（与 v1.1 product roadmap `202605042330-001-v1.1能力路线-零信任mdm基础.md` 对齐）；不需 architect 仲裁会议 | 落 ADR `docs/architecture/202605051700-adr-k04-platform-cells-keep-in-framework.md` 锁定决策 | L0 | ~~12h+6h~~ → 1-2h | - |
@@ -116,7 +116,7 @@
 | R-01 | EVENT-OBSERVABILITY-METRIC-PACK | runtime-02 P1×4 + kernel-group2 G2-01/G2-02 + kernel-group3 G3-11 + R-04 | (a) `outbox.RelayCollector` 不被 bootstrap 自动注入；(b) `eventrouter.Router` 完全无 collector；(c) `InMemoryEventBus` drop 仅 Warn 无 counter；(d) `runtime/observability/metrics` 缺 outbox/event 命名空间；(e) `kernel/observability/metrics.Provider` 无 `GaugeVec`；(f) relay pending depth 无 Gauge；(g) consumer reject 无 counter | (1) `Provider` 加 `GaugeVec` + NopProvider 实现；(2) shutdown/outbox/event 三套 collector 工厂收口到 `runtime/observability/metrics/{shutdown,outbox,event}.go`；(3) bootstrap phase 5/6 用 `metricsProvider` 自动 wire；(4) 新增 `event_router_{subscriptions_active,setup_errors_total,ready_wait_seconds}` + `outbox_pending_depth` + `outbox_consumer_rejected_total{cell,topic,reason}` + `eventbus_dropped_total{reason}`；(5) consumer reject 日志升 Error 级 | L3 | 20h + 10h | - |
 | R-02 | EVENTBUS-DROP-CONTEXTUAL-LOG | runtime-02 P2 | `InMemoryEventBus.broadcast/roundRobin` drop 路径 slog.Warn 缺 entry_id/aggregate_id/event_type；违反 observability.md「错误日志必须含结构化关联字段」 | 升 Error 级 + 三字段；与 R-01 counter 对应 | L1 | 2h + 1h | R-01 |
 | R-03 | BOOTSTRAP-NIL-OPTION-CONSISTENCY | runtime-02 P2 | `WithManagedCloser(nil)` 静默接受，`WithManagedResource(nil)` phase0 fail-fast — 相邻 API 风格冲突 | 两者均改 fail-fast；option 函数记录 nil 标志，phase0 拒绝 | L1 | 2h + 1h | - |
-| A-01 | OIDC-FAILFAST-MR-COMPLETENESS | adapters-03 P0 + summary #4 | (a) `oidc.New` 不连 issuer，discovery 推迟到首请求；(b) postgres/redis/s3/oidc 未实现 `lifecycle.ManagedResource.Checkers`，readyz 缺位；(c) s3.Health 是 HeadBucket（每次探针打 S3）| (1) OIDC `New(ctx, cfg)` 期同步执行 `discover(ctx, true)`；(2) 4 adapter 实现 `Checkers()` 返回 `{name}_ready`；(3) s3 改"状态机 + 后台 health-check goroutine"，probe 只读最新结果；(4) 新增 archtest `MANAGED-RESOURCE-COMPLETENESS-01` 守卫所有外部依赖 adapter 必实现 ManagedResource | L3 | 24h + 12h | - |
+| A-01 | OIDC-FAILFAST-MR-COMPLETENESS（**扩范围 2026-05-08**：吸收 A-07 + A-08）| adapters-03 P0 + summary #4 + adapters-03 P2 跨层观察 | (a) `oidc.New` 不连 issuer，discovery 推迟到首请求；(b) postgres/redis/s3/oidc 未实现 `lifecycle.ManagedResource.Checkers`，readyz 缺位；(c) s3.Health 是 HeadBucket（每次探针打 S3）；(d) **A-07** `postgres.Pool` 仅满足 `ContextCloser`，与 outbox relay 后台需求一致性差，需升级 `ManagedResource`；(e) **A-08** `Health → Checkers map` / `Status → metric` 转换在多 adapter 重复，需下沉 helper | (1) OIDC `New(ctx, cfg)` 期同步执行 `discover(ctx, true)`；(2) 4 adapter 实现 `Checkers()` 返回 `{name}_ready`；(3) s3 改"状态机 + 后台 health-check goroutine"，probe 只读最新结果；(4) 新增 archtest `MANAGED-RESOURCE-COMPLETENESS-01` 守卫所有外部依赖 adapter 必实现 ManagedResource；(5) `postgres.Pool` 升级 `ManagedResource(Checkers + Worker=nil)`；(6) 下沉 `adapters/adapterutil/`，对偶 `CloseWithDeadline`，4 adapter 复用 | L3 | **32h + 18h**（A-01 24+12 + A-07 4+2 + A-08 4+2 + helper 抽取 0）| - |
 | A-02 | OIDC-JWKS-ROTATION-WORKER | adapters-03 P1 | OIDC provider cache 永不过期，注释把刷新责任甩给 caller，IdP 轮换 JWKS 全员鉴权失败 | adapter 内置 `tokenRenewalWorker`，遵循 OIDC `cache_max_age` 头（fallback 24h）；通过 `ManagedResource.Worker()` 暴露 | L2 | 8h + 4h | A-01 |
 | A-03 | ADAPTER-ERROR-CLASSIFICATION-TRANSIENT | adapters-03 P1 | postgres/redis/s3 错误码不分 transient/permanent，consumer 无法做退避决策 | 复用 `errcode.WrapInfra` + `errcode.IsTransient`（vault 已是范例）；PG `40001`/`40P01`/`08*`、Redis `i/o timeout`、S3 5xx/429 标记 transient；其余永久 | L3 | 16h + 8h | A-01 |
 | A-04 | ADAPTER-FAKE-EXPORT | adapters-03 P1 | adapter fake 仅在 `_test.go` 内 white-box，cells 测试只能自写 fake 或 import adapter（破 LAYER-04） | 每个对外接口 adapter 开 `adapters/<name>/<name>fake/` 子包导出 `NewFakeClient/NewMemKeyProvider`；`runtime/eventbus` in-mem 模式参考 | L2 | 12h + 6h | A-01 |
@@ -125,9 +125,9 @@
 | C-03 | CELLS-IDENTITYMANAGE-L-LEVEL-FIX | cells-04 P1 | identitymanage 标 L1 但 publish 5 个 user.* L2 事件 | `AddSlice(... cell.L2)`；同审 8 处 `NewBaseSlice` L 字面量是否反映真实 contractUsages 角色 | L1 | 3h + 2h | K-06 |
 | C-04 | CELLS-INIT-TEMPLATE-CONVERGE | cells-04 P2 + cells-04 P2 internal/ 不对称 | 3 cell Init 切分各异（accesscore 7 helper / auditcore 5 / configcore 6 init*Slice），第 4 cell 无标准；internal/ 子包数量在 3 cell 间高度不对称 | `kernel/cell` 提供 `BaseCell.RegisterStandard(reg, StandardInit{Slices, RouteGroups, Subscriptions, Health, Lifecycle})` 模板；scaffold 模板预生成 `internal/{ports,domain,dto,events,mem}` 五目录；3 cell 改造 + scaffold 升级 | L2 | 12h + 6h | K-06 |
 | C-05 | CELLS-CELLROUTES-PLACEHOLDER-DELETE | cells-04 P2 | `configcore/cell_routes.go` 退化为占位文件（仅"intentionally empty after Batch 3 migration" 注释），项目无外部消费方理由保留 | 直接删除文件；迁移上下文挪到 commit message | L1 | 0.5h + 0.5h | - |
-| G-01 | KERNEL-HOOK-DISPATCHER-LIFECYCLE | kernel-group1 G1-02/G1-08/G1-13 | (a) `dispatchOne` 超时后遗弃 goroutine，`d.wg` 不追踪，`stop()` 后孤儿 goroutine 永久存活；(b) `slog.Any("panic", r)` 泄漏 observer panic value；(c) `queue_full` drop 仅 metric counter，无 slog 兜底 | (1) 加 `d.sinkWg`，`stop()` drain 后 `sinkWg.Wait()` 兜底；(2) `fmt.Sprintf("%v", r)` + 截断 256 字节；(3) `queue_full` 分支补 `slog.Warn` 回退 | L2 | 8h + 4h | - |
-| G-02 | KERNEL-ASSEMBLY-ROLLBACK-CTX-DECOUPLE | kernel-group1 G1-03/G1-04 | (a) 启动期 SIGTERM → `rollbackCells(ctx,...)` 用已 cancelled ctx，BeforeStop/Stop/AfterStop 拿到立即 done 的 context；(b) shutdownTimeout=30s 与 k8s `terminationGracePeriodSeconds` 默认 30s 无安全余量 | (1) `rollbackCells(context.WithTimeout(context.Background(), cfg.HookTimeout), upTo)`；(2) `phase0ValidateOptions` warn `terminationGracePeriodSeconds >= shutdownTimeout + preShutdownDelay + 10s`；ADR 同步部署文档 | L2 | 8h + 4h | - |
-| G-03 | GOVERNANCE-VALIDATE-CTX-PROPAGATION | kernel-group3 G3-02/G3-03/G3-04 | (a) `Validator.Validate()` 不接 ctx，VERIFY-06 用 `context.Background()` 调 `go test`，CI `--strict` 卡死永久阻塞；(b) `runGit()` 硬编码 `context.Background()`，NFS/FUSE 永久阻塞；(c) `ValidateFailFast()` 整函数零测试覆盖 | (1) `Validate(ctx context.Context)` 全链路透传；(2) `runGit(ctx, args...)`；(3) 新增 `TestValidateFailFast_ShortCircuitsOnFirstError` | L2 | 12h + 6h | - |
+| G-01 | ✅ PR#372 KERNEL-HOOK-DISPATCHER-LIFECYCLE（029 N2）| kernel-group1 G1-02/G1-08/G1-13 | (a) `dispatchOne` 超时后遗弃 goroutine，`d.wg` 不追踪，`stop()` 后孤儿 goroutine 永久存活；(b) `slog.Any("panic", r)` 泄漏 observer panic value；(c) `queue_full` drop 仅 metric counter，无 slog 兜底 | ✅ shipped: drain hook dispatcher observer sinks — (1) 加 `d.sinkWg`，`stop()` drain 后 `sinkWg.Wait()` 兜底；(2) `fmt.Sprintf("%v", r)` + 截断 256 字节；(3) `queue_full` 分支补 `slog.Warn` 回退 | ✅ done | 8h + 4h | - |
+| G-02 | ✅ PR#383 KERNEL-ASSEMBLY-ROLLBACK-CTX-DECOUPLE（029 N3）| kernel-group1 G1-03/G1-04 | (a) 启动期 SIGTERM → `rollbackCells(ctx,...)` 用已 cancelled ctx，BeforeStop/Stop/AfterStop 拿到立即 done 的 context；(b) shutdownTimeout=30s 与 k8s `terminationGracePeriodSeconds` 默认 30s 无安全余量 | ✅ shipped: (1) `rollbackCells` 派生 fresh ctx with `cfg.HookTimeout`，`TestRollbackCells_DerivedCtx` 三 row 覆盖 HookTimeout=0 / >0 / <0；(2) `phase0ValidateOptions` warn `terminationGracePeriodSeconds >= shutdownTimeout + preShutdownDelay + 10s`；ADR/部署文档同步；关闭 backlog2 B2-R-03 部分相关（errors.Join 仍待，独立项）| ✅ done | 8h + 4h | - |
+| G-03 | ✅ PR#378 GOVERNANCE-VALIDATE-CTX-PROPAGATION（029 N4）| kernel-group3 G3-02/G3-03/G3-04 | (a) `Validator.Validate()` 不接 ctx，VERIFY-06 用 `context.Background()` 调 `go test`，CI `--strict` 卡死永久阻塞；(b) `runGit()` 硬编码 `context.Background()`，NFS/FUSE 永久阻塞；(c) `ValidateFailFast()` 整函数零测试覆盖 | ✅ shipped: (1) `Validator.Validate(ctx context.Context)` 全链路透传；(2) `runGit(ctx, args...)`；(3) 新增 `TestValidateFailFast_ShortCircuitsOnFirstError` + `kernel/governance/ctx_test.go` + `pkg/cmdrun/`（含 `cmdrun_unix.go` / `cmdrun_windows.go`）跨平台 ctx-aware exec helper；ef3edc6b 已登记 G-03 follow-up backlog（B2-X-06/07/08）| ✅ done | 12h + 6h | - |
 | G-04 | KERNEL-INTERNAL-DAG-GUARD | kernel-01 P1#1 | `depguard kernel-isolation` 把 kernel 当一个整体黑盒，22 个子模块之间无静态 DAG 约束；若 `crypto` 反向 import `assembly`，CI 不拦截；kernel 是底座，DAG 反转是高杠杆失误 | `tools/archtest/` 新增 `KERNEL-INTERNAL-DAG-01`：固化已知合法上游（assembly/wrapper 顶层、crypto/clock/ctxkeys 叶子）；与 K-03 一起作为 kernel 内部边界双护栏 | L2 | 8h + 4h | K-03 |
 
 ---
@@ -140,15 +140,15 @@
 |---|---|---|---|---|:-:|---|
 | A-05 | ✅ PR-V1-CIRCUITBREAKER-INHOUSE-ERRCODE（refactor/524-circuitbreaker-inhouse）| adapters-03 P1 | `circuitbreaker.New` 用 `fmt.Errorf` 而非 errcode；sony/gobreaker/v2 第三方依赖可替换；`time.Now()` 直调违反 PROD-CLOCK-INJECTION-01 | ✅ shipped: 自写 ~200 LOC generation+expiry 状态机替换 sony/gobreaker/v2；定义 `ErrAdapterCircuitBreakerConfig errcode.Code` + `errcode.New(KindInvalid, ...)`；注入 `kernel/clock.Clock`（PROD-CLOCK-INJECTION-01）；11 现有测试改造（4 个 Eventually → clockmock.Advance deterministic）+ 8 个新分支测试（generation/interval/half-open/IsSuccessful 等）；go mod tidy 删 sony/gobreaker/v2 | ✅ done（PR 待补 URL）| 8h + 4h |
 | A-06 | ✅ **吸收进 PR-V1-RMQ-TERMINAL（029 A4）** RMQ-WAITCONNECTED-DOC-FIX | adapters-03 P2 | `MaxReconnectAttempts` 字段标 ignored，但 `WaitConnected` godoc 仍列 `ErrAdapterAMQPReconnectExhausted` | 同 029 A4 一并删字段 + errcode + godoc，并 runtime reconnect 重新分类 broker permanent → StateTerminal | ✅ done | — |
-| A-07 | POSTGRES-POOL-MANAGED-RESOURCE | adapters-03 P2 | `postgres.Pool` 仅满足 `ContextCloser`，与 outbox relay 后台需求一致性差 | 升级 `Pool` 到 `ManagedResource(Checkers + Worker=nil)` 或在 doc.go 写明"Pool 是 ContextCloser，无需 Worker" | L1 | 4h + 2h |
-| A-08 | ADAPTERUTIL-HEALTH-WRAPPER | adapters-03 §3 跨层观察 | `Health → Checkers map`、`Status → metric` 转换在多 adapter 重复 | 下沉到 `adapters/adapterutil/`，对偶 `CloseWithDeadline` | L1 | 4h + 2h |
+| ~~A-07~~ | ~~POSTGRES-POOL-MANAGED-RESOURCE~~ | adapters-03 P2 | **吸收进 A-01（2026-05-08）** — A-01 已要 4 adapter 实现 Checkers，把 Pool 升级 ManagedResource 同 PR 一并落，文件域 `adapters/postgres/pool*.go` 与 A-01 100% 重叠 | — | — | 0（吸收）|
+| ~~A-08~~ | ~~ADAPTERUTIL-HEALTH-WRAPPER~~ | adapters-03 §3 跨层观察 | **吸收进 A-01（2026-05-08）** — A-01 给 4 adapter 实现 Checkers 时必然遇到重复 `Health → Checkers` 转换，下沉 `adapters/adapterutil/` helper 是同 PR 自然产物 | — | — | 0（吸收）|
 
 ### Track C · Cells 后续（4 PR / 13-15h + 7-8h）
 
 | # | PR | 来源 | 问题 | 方案 | ship | 工时 |
 |---|---|---|---|---|:-:|---|
 | C-06 | L0-CELL-DECISION | cells-04 P2 | `l0Dependencies: []` 在 3 cell 全空，无任何 `type: l0` 实例，schema 字段是死代码路径 | scaffold 命令对外承诺 vs 现实二选一：(a) 升 `pkg/query.CursorCodec` 等共享逻辑为示例 L0 cell 验证通路；(b) 文档明确"L0 cell 是未来扩展点，当前无实例" | L1 | 2h + 1h |
-| C-07 | EMITTER-HEALTH-PROBE-HELPER | cells-04 §3 跨层观察 | `cell.HealthProber` 在 3 cell 重复 4 次（`if hc, ok := c.emitter.(cell.HealthProber); ok`） | 抽 `cell.RegisterEmitterHealthProbes(reg, emitter)` helper | L1 | 4h + 2h |
+| C-07 | EMITTER-HEALTH-PROBE-HELPER（**建议并入 C-04 CELLS-INIT-TEMPLATE-CONVERGE，2026-05-08**）| cells-04 §3 跨层观察 | `cell.HealthProber` 在 3 cell 重复 4 次（`if hc, ok := c.emitter.(cell.HealthProber); ok`） | 抽 `cell.RegisterEmitterHealthProbes(reg, emitter)` helper；**归宿**：C-04 已要触全 3 cell 的 Init 模板，HealthCheckers helper 抽取顺路同 PR 落，文件域 `cells/{accesscore,auditcore,configcore}/cell.go` 与 C-04 100% 重叠 | L1 | 4h + 2h（吸收进 C-04，独立成本 0）|
 | C-08 | CELL-CONSUMER-EXTRA-TOPICS-OPTION | backlog `CELL-CONSUMER-EXTRA-TOPICS-OPTION-01` (issue #303) | auditcore `auditAppendSpecs` + accesscore 4 `specEvent*` + configcore 2 `specEvent*` 编译期 hardcoded，无扩展 Option；外部组合 cell 想加新 topic 必须 fork 源码 | 为 3 个消费型 cell 设计 cell-owned `WithExtraTopics` / `WithExtraEventSubscriptions`：按 handler 语义区分（audit generic append / config upsert-delete / rbac role-change），不接受无 handler 归属的裸 string；补 RegisterSubscriptions 单测覆盖默认 topic 不漂移 + extra topic 注册 + spec 缺失 fail-fast | L3 | 4-6h | — |
 | C-09 | CELL-SPLIT-LAYOUT-NORMALIZE | backlog `CELL-SPLIT-LAYOUT-NORMALIZE-01` (PR238-FU5) | accesscore + configcore 三文件范式中 (a) `configDirectPublishMode` / `ensureCursorCodec` 放 `cell_init.go` 但是 pure helper；(b) `RegisterSubscriptions` 放 `cell_routes.go` 与文件名 "routes" 不一致，两 cell 均如此 | 搭车 K-07 拆 auditappend 时统一规范：引入 `cell_lifecycle.go`（订阅注册）+ `cell_helpers.go`（pure helper）命名惯例；反向迁移 accesscore/configcore；scaffold 模板同步 | L2 | 2-3h | K-07 |
 
@@ -218,17 +218,19 @@
 
 ---
 
-## 5. 工时与排期（2026-05-05 N6/N7 won't-do 后修订）
+## 5. 工时与排期（2026-05-06 K-01/G-01/G-03 ship 后修订）
 
-| 类别 | dev | review |
-|---|---|---|
-| Phase 0（K-04 决议 ADR + K-05 决议备忘 + K-03 pkgdoc）| 5h | 2h |
-| Phase 1（K-01 + K-02 + 029 06.PR4 含 K-06 残余 + K-05a + K-05c + A-01..A-04 + F-01 + F-02）| 80h | 40h |
-| Phase 2（R-01..R-03 + C-01..C-09 + G-01..G-04 + A-05..A-08 + K-07 + K-08 + Track G P2 子集）| 152h | 73-74h |
-| Phase 3（G-05..G-17 + J-01..J-04 + F-03..F-10）| 145.5h | 71h |
-| **合计** | **382.5h** | **186-187h** |
+| 类别 | dev | review | 状态 |
+|---|---|---|---|
+| Phase 0（K-04 决议 ADR + K-05 决议备忘 + K-03 pkgdoc）| 5h | 2h | 待（仅 K-03 pkgdoc 实施） |
+| Phase 1（K-01 + K-02 + 029 06.PR4 含 K-06 残余 + K-05a + K-05c + A-01..A-04 + F-01 + F-02）| 80h | 40h | ✅ K-01 (PR#370+#375) + ✅ G-01 (PR#372，划入 Phase 1 同窗口) + ✅ G-03 (PR#378) ship 24h+12h；剩 56h+28h |
+| Phase 2（R-01..R-03 + C-01..C-09 + G-02 / G-04 + A-05..A-08 + K-07 + K-08 + Track G P2 子集）| 152h | 73-74h | 待 |
+| Phase 3（G-05..G-17 + J-01..J-04 + F-03..F-10）| 145.5h | 71h | 待 |
+| **合计（原计划）** | **382.5h** | **186-187h** | — |
+| **已 ship 累计**（K-01 + G-01 + G-03）| **24h** | **12h** | ✅ |
+| **剩余** | **358.5h** | **174-175h** | 待 |
 
-原 446h+218h → 382.5h+186h；N6/N7 won't-do（决议替代仲裁实施）+ K-06 K#05 吸收 节省 ~75h+36h；2026-05-05 增补「双重实现/SRP/重复代码」专题（C-08/C-09/G-16/G-17）+11.5h dev/+4h review。
+原 446h+218h → 382.5h+186h；N6/N7 won't-do（决议替代仲裁实施）+ K-06 K#05 吸收 节省 ~75h+36h；2026-05-05 增补「双重实现/SRP/重复代码」专题（C-08/C-09/G-16/G-17）+11.5h dev/+4h review；2026-05-06 K-01/G-01/G-03 ship 后剩余 358.5h+174h。
 
 单线 ~13 周；满并发（≤4 worktree）~6-7 周；F lane 异步穿插不进 critical path。
 
@@ -240,6 +242,34 @@
 - **与 029 K#04/K#06 codegen 协同**：本计划 K-08 ASSEMBLY-SCHEMA-SCAFFOLD 派生 `cmd/{id}/modules_gen.go` 应基于 K#04 framework，复用 `tools/codegen/` 的 render/writer/verify pipeline
 - **与 029 R-04 R 路线图重叠**：029 文档未直接给 R-04 PR，本计划 R-01 EVENT-OBSERVABILITY-METRIC-PACK 是 R-04 的具体落地
 - **不跟 029 Lane A/B/C/D 抢 reviewer**：建议本计划 Phase 0-1 与 029 K#05 PR-A2/PR-B 互斥时间窗，Phase 2 起可与 029 K Phase 4 装备类并行
+
+### 6.1 Obs 主题 PR 收敛（2026-05-08 整理）
+
+> 4 份 plan/backlog 里 obs 相关 18+ 项 → 收敛到 **10 个 PR**（7 已在 plan / 3 个吸收散落项扩范围），不新建 PR 编号。
+
+| # | PR | 吸收范围 | 工时 | plan 位置 |
+|---|---|---|---|---|
+| 1 | **D3a `PR-V11-D3-R-METRIC-PACK`** | R-01 + R-02 + G-05 + **PR237-OB2**（2026-05-08 吸收 internal listener metrics）| 26h+12h | 029 §A |
+| 2 | **D3b `PR-B2-B3 OTEL-PROVIDER-LIFECYCLE-AND-GLOBAL`** | B2-R-05/06/07/08/09 + B2-A-19/20/21（OTel adapter 8 条）| 14h+7h | backlog2 §8 Wave B |
+| 3 | **D3c `PR-B2-D4 CONFIGCORE-READYZ-REPO-PROBE`** | B2-R-02 cells readyz repo probe | 3h+1.5h | backlog2 §8 Wave D |
+| 4 | **`PR-B2-C4 PROMETHEUS-AND-S3-TEST-COVER`** | B2-A-22/23/24/25 + B2-A-32 | ~6h | backlog2 §8 Wave C |
+| 5 | **`PR-B2-C2 PG-REFRESH-AND-READYZ`** | B2-A-08/09/10/11/13（含 PG readyz schema 联动 + rollback log redact）| ~12h | backlog2 §8 Wave C |
+| 6 | **`PR-B2-E1 BOOTSTRAP-ROLLBACK-AND-HEALTH`（扩）** | B2-R-01/03 + B2-X-04 + **PR-CI-5-FU HEALTH-LATE-WATCHER**（2026-05-08 吸收）| ~9h | backlog2 §8 Wave E |
+| 7 | **`PR-B2-E3 CMD-COMPOSITION-CLEANUP`** | B2-X-01/02/03/05（含 D2 SHARED-DEPS-SPLIT + PG invalid index → readyz）| ~6h | backlog2 §8 Wave E |
+| 8 | **`D7 PR-V1-WS-OBS-AND-SHUTDOWN-HARDEN`（合并）** | B2-W-03 metrics + B2-W-05 stop sync close + WS-HUB-READYZ-PROBE-01 + WS-OPS-01/02 timeout/bounded close + WS-T-01/02 tests + WS-DX-02 RemoteAddr + NewConn unexport + ORIGIN-CONTRACT 锁死（**2026-05-08：原 PR-B2-F1 + D7 + PR-CI-5-FU-WEBSOCKET-ORIGIN-CONTRACT 三 PR 合一，B2-W-05↔WS-OPS-02 同根去重；B2-W-04/06 已 ✅ closed PR#381**）| **17h+8h** | 029 Track D D7 |
+| 9 | **`A-01 OIDC-FAILFAST-MR-COMPLETENESS`（扩）** | A-01 + **A-07** + **A-08**（2026-05-08 吸收 PG Pool ManagedResource + adapterutil helper）| 32h+18h | 030 §2 Phase 1 |
+| 10 | **`N5 PR-V1-030-K03-OBSERVABILITY-PKGDOC`** | K-03 `kernel/observability/doc.go` | 2h+1h | 029 §B Standalone |
+| — | **`K#01 follow-up archtest`** | G-04 KERNEL-INTERNAL-DAG-01 archtest | 8h+4h | 029 §A |
+| — | **`PR-V1-030-R03-BOOTSTRAP-NIL-OPTION`** | R-03 small | 2h+1h | 029 §A' |
+| — | **`B12 PR-V1-RMQ-LIFECYCLE-HARDEN`** 顺路 | B2-A-16 RMQ publish_failed metric + slog.Warn | +1h | 029 Track B |
+| — | **C-04 CELLS-INIT-TEMPLATE-CONVERGE** 顺路 | **C-07** EMITTER-HEALTH-PROBE-HELPER（2026-05-08 吸收）| +0h | 030 §2 Phase 2 |
+
+**触发条件 / Phase 3 暂留**：G-08 / G-09 / G-16 / PR283-OTEL-SLOG-ERROR-ATTR / OBS-SSA-ANALYZER-01
+
+**调整原则**：
+1. 不新开独立 PR — 散落项都能找到文件域 100% 重叠的既有 PR，吸收成本 = 0
+2. R-METRIC-PACK 是关键路径上游：counter/gauge 命名空间统一后，G-08/G-09 才有归属（Phase 3 启动前置）
+3. A-01 一次完成 ManagedResource 终局：OIDC fail-fast + 4 adapter Checkers + helper 下沉 + Pool 升级 + archtest 守卫，未来不退化
 
 ---
 
