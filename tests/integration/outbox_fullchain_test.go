@@ -307,7 +307,10 @@ func TestIntegration_OutboxFullChain(t *testing.T) {
 	subCtx, subCancel := context.WithTimeout(context.Background(), testtime.CtxLong)
 	defer subCancel()
 
-	wrappedSub := &outbox.SubscriberWithMiddleware{Inner: sub}
+	wrappedSub := &outbox.SubscriberWithMiddleware{
+		Inner:        sub,
+		ConsumerBase: newIntegrationTestConsumerBaseWithClaimer(t, claimer, clock.Real()),
+	}
 
 	subErrCh := make(chan error, 1)
 	go func() {
@@ -554,7 +557,10 @@ func TestIntegration_OutboxFullChain_NoTrace(t *testing.T) {
 	subCtx, subCancel := context.WithTimeout(context.Background(), testtime.CtxLong)
 	defer subCancel()
 
-	wrappedSub := &outbox.SubscriberWithMiddleware{Inner: sub}
+	wrappedSub := &outbox.SubscriberWithMiddleware{
+		Inner:        sub,
+		ConsumerBase: newIntegrationTestConsumerBase(t, clock.Real()),
+	}
 
 	subErrCh := make(chan error, 1)
 	go func() {
