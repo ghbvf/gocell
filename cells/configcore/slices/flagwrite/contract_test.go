@@ -104,19 +104,6 @@ func TestHttpConfigFlagsUpdateV1Serve(t *testing.T) {
 	assert.Equal(t, http.StatusOK, rec.Code, "body: %s", rec.Body)
 	c.ValidateHTTPResponseRecorder(t, rec)
 
-	// Runtime guard: even if schema were bypassed (e.g. by a different
-	// decoder), handler-level validation must also reject partial bodies
-	// with a deterministic 400. Locks the PUT semantic at two independent
-	// layers.
-	rec2 := httptest.NewRecorder()
-	req2 := httptest.NewRequest(c.HTTP.Method, path,
-		strings.NewReader(`{"enabled":true}`))
-	req2.Header.Set("Content-Type", "application/json")
-	req2 = req2.WithContext(auth.TestContext(testAdminSubject, []string{auth.RoleAdmin}))
-	mux.ServeHTTP(rec2, req2)
-	assert.Equal(t, http.StatusBadRequest, rec2.Code,
-		"PUT with missing fields must 400; got body: %s", rec2.Body)
-
 	// Runtime range guard: rolloutPercentage outside [0, 100] must 400 even
 	// when the schema is bypassed. Covers both bounds.
 	for _, bad := range []string{

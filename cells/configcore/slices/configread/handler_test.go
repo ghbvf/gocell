@@ -15,6 +15,7 @@ import (
 	"github.com/ghbvf/gocell/cells/configcore/internal/domain"
 	"github.com/ghbvf/gocell/cells/configcore/internal/dto"
 	"github.com/ghbvf/gocell/cells/configcore/internal/mem"
+	configget "github.com/ghbvf/gocell/generated/contracts/http/config/get/v1"
 	kcell "github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/cell/celltest"
 	"github.com/ghbvf/gocell/kernel/clock"
@@ -31,8 +32,7 @@ func asAdmin(req *http.Request) *http.Request {
 }
 
 // setupHandler wires the slice handler onto a celltest mux via RegisterRoutes —
-// nested under /api/v1/config to match the production cell_routes.go layout
-// (which uses mux.Route to compose the collection-root trailing-slash dispatch).
+// nested under /api/v1/config to match the production cell_routes.go layout.
 func setupHandler() (http.Handler, *mem.ConfigRepository) {
 	repo := mem.NewConfigRepository(clock.Real())
 	codec, _ := query.NewCursorCodec([]byte("gocell-demo-cursor-key-32bytes!!"))
@@ -243,7 +243,7 @@ func TestHandler_HandleGet_SensitiveRedacted(t *testing.T) {
 
 	assert.Equal(t, http.StatusOK, w.Code)
 	var resp struct {
-		Data dto.ConfigEntryResponse `json:"data"`
+		Data configget.ResponseData `json:"data"`
 	}
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 	assert.Equal(t, dto.RedactedValue, resp.Data.Value)
@@ -265,7 +265,7 @@ func TestHandler_HandleGet_NonSensitiveVisible(t *testing.T) {
 
 	assert.Equal(t, http.StatusOK, w.Code)
 	var resp struct {
-		Data dto.ConfigEntryResponse `json:"data"`
+		Data configget.ResponseData `json:"data"`
 	}
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 	assert.Equal(t, "gocell", resp.Data.Value)

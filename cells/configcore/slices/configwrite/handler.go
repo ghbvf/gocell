@@ -1,121 +1,124 @@
 package configwrite
 
 import (
-	"net/http"
+	"context"
+	"time"
 
+	"github.com/ghbvf/gocell/cells/configcore/internal/domain"
 	"github.com/ghbvf/gocell/cells/configcore/internal/dto"
+	configdelete "github.com/ghbvf/gocell/generated/contracts/http/config/delete/v1"
+	update "github.com/ghbvf/gocell/generated/contracts/http/config/update/v1"
+	write "github.com/ghbvf/gocell/generated/contracts/http/config/write/v1"
 	"github.com/ghbvf/gocell/kernel/cell"
-	"github.com/ghbvf/gocell/kernel/wrapper"
-	"github.com/ghbvf/gocell/pkg/httputil"
 	"github.com/ghbvf/gocell/runtime/auth"
 )
 
-// Contract spec literals — cross-checked against
-// contracts/http/config/{write,update,delete}/v1/contract.yaml by FMT-18.
-var (
-	specConfigWrite = wrapper.ContractSpec{
-		ID: "http.config.write.v1", Kind: "http", Transport: "http",
-		Method: "POST", Path: "/api/v1/config/",
-	}
-	specConfigUpdate = wrapper.ContractSpec{
-		ID: "http.config.update.v1", Kind: "http", Transport: "http",
-		Method: "PUT", Path: "/api/v1/config/{key}",
-	}
-	specConfigDelete = wrapper.ContractSpec{
-		ID: "http.config.delete.v1", Kind: "http", Transport: "http",
-		Method: "DELETE", Path: "/api/v1/config/{key}",
-	}
-)
+// WriteAdapter wraps Service to implement write.Service for http.config.write.v1.
+type WriteAdapter struct{ S *Service }
 
-// Handler provides HTTP endpoints for config write operations.
+// Write implements write.Service. It maps the generated request to CreateInput
+// and converts the domain result to the generated response type.
+func (a WriteAdapter) Write(ctx context.Context, req *write.Request) (*write.Response, error) {
+	entry, err := a.S.Create(ctx, CreateInput{
+		Key:       req.Key,
+		Value:     req.Value,
+		Sensitive: req.Sensitive,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &write.Response{Data: toWriteResponseData(entry)}, nil
+}
+
+// UpdateAdapter wraps Service to implement update.Service for http.config.update.v1.
+type UpdateAdapter struct{ S *Service }
+
+// Update implements update.Service. It maps the generated request to UpdateInput
+// and converts the domain result to the generated response type.
+func (a UpdateAdapter) Update(ctx context.Context, req *update.Request) (*update.Response, error) {
+	entry, err := a.S.Update(ctx, UpdateInput{
+		Key:   req.Key,
+		Value: req.Value,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &update.Response{Data: toUpdateResponseData(entry)}, nil
+}
+
+// DeleteAdapter wraps Service to implement configdelete.Service for http.config.delete.v1.
+type DeleteAdapter struct{ S *Service }
+
+// Delete implements configdelete.Service.
+func (a DeleteAdapter) Delete(ctx context.Context, req *configdelete.Request) (*configdelete.Response, error) {
+	if err := a.S.Delete(ctx, req.Key); err != nil {
+		return nil, err
+	}
+	return &configdelete.Response{}, nil
+}
+
+// toWriteResponseData converts a domain.ConfigEntry to write.ResponseData.
+func toWriteResponseData(e *domain.ConfigEntry) *write.ResponseData {
+	value := e.Value
+	if e.Sensitive {
+		value = dto.RedactedValue
+	}
+	return &write.ResponseData{
+		ID:        e.ID,
+		Key:       e.Key,
+		Value:     value,
+		Sensitive: e.Sensitive,
+		Version:   int64(e.Version),
+		CreatedAt: e.CreatedAt.Format(time.RFC3339),
+		UpdatedAt: e.UpdatedAt.Format(time.RFC3339),
+	}
+}
+
+// Handler is the composite route handler for the configwrite slice.
+// It holds three generated per-contract handlers and mounts all three on a
+// single RegisterRoutes call — preserving the one-handler-per-slice field
+// shape expected by cell_gen.go while delegating HTTP decode/auth to codegen.
 type Handler struct {
-	svc *Service
+	writeH  *write.Handler
+	updateH *update.Handler
+	deleteH *configdelete.Handler
 }
 
-// NewHandler creates a config-write Handler.
+// NewHandler creates a configwrite Handler using generated per-contract handlers.
+// All endpoints are admin-only (auth.AnyRole(auth.RoleAdmin)).
 func NewHandler(svc *Service) *Handler {
-	return &Handler{svc: svc}
+	policy := auth.AnyRole(auth.RoleAdmin)
+	return &Handler{
+		writeH:  write.NewHandler(WriteAdapter{svc}, policy),
+		updateH: update.NewHandler(UpdateAdapter{svc}, policy),
+		deleteH: configdelete.NewHandler(DeleteAdapter{svc}, policy),
+	}
 }
 
-// HandleCreate handles POST / — creates a new config entry.
-func (h *Handler) HandleCreate(w http.ResponseWriter, r *http.Request) {
-	var req struct {
-		Key       string `json:"key"`
-		Value     string `json:"value"`
-		Sensitive bool   `json:"sensitive"`
-	}
-	if err := httputil.DecodeJSONStrict(r, &req, httputil.DefaultDecodeJSONLimit); err != nil {
-		httputil.WriteError(r.Context(), w, err)
-		return
-	}
-
-	entry, err := h.svc.Create(r.Context(), CreateInput{Key: req.Key, Value: req.Value, Sensitive: req.Sensitive})
-	if err != nil {
-		httputil.WriteError(r.Context(), w, err)
-		return
-	}
-
-	httputil.WriteJSON(w, http.StatusCreated, map[string]any{"data": dto.ToConfigEntryResponse(entry)})
-}
-
-// HandleUpdate handles PUT /{key} — updates an existing config entry.
-func (h *Handler) HandleUpdate(w http.ResponseWriter, r *http.Request) {
-	key := r.PathValue("key")
-
-	var req struct {
-		Value string `json:"value"`
-	}
-	if err := httputil.DecodeJSONStrict(r, &req, httputil.DefaultDecodeJSONLimit); err != nil {
-		httputil.WriteError(r.Context(), w, err)
-		return
-	}
-
-	entry, err := h.svc.Update(r.Context(), UpdateInput{Key: key, Value: req.Value})
-	if err != nil {
-		httputil.WriteError(r.Context(), w, err)
-		return
-	}
-
-	httputil.WriteJSON(w, http.StatusOK, map[string]any{"data": dto.ToConfigEntryResponse(entry)})
-}
-
-// HandleDelete handles DELETE /{key} — deletes a config entry.
-func (h *Handler) HandleDelete(w http.ResponseWriter, r *http.Request) {
-	key := r.PathValue("key")
-
-	if err := h.svc.Delete(r.Context(), key); err != nil {
-		httputil.WriteError(r.Context(), w, err)
-		return
-	}
-
-	w.WriteHeader(http.StatusNoContent)
-}
-
-// RegisterRoutes registers configwrite routes with admin-only policies on any
-// cell.RouteHandler (satisfied by *http.ServeMux, cell.RouteMux, and the chi
-// sub-router adapter) so production wiring, contract tests, and cell-level
-// integration tests share the same auth.Mount declarations.
+// RegisterRoutes mounts all three configwrite contracts on mux.
 func (h *Handler) RegisterRoutes(mux cell.RouteHandler) error {
-	if err := auth.Mount(mux, auth.Route{
-		Contract: specConfigWrite,
-		Handler:  http.HandlerFunc(h.HandleCreate),
-		Policy:   auth.AnyRole(auth.RoleAdmin),
-	}); err != nil {
+	if err := h.writeH.RegisterRoutes(mux); err != nil {
 		return err
 	}
-	if err := auth.Mount(mux, auth.Route{
-		Contract: specConfigUpdate,
-		Handler:  http.HandlerFunc(h.HandleUpdate),
-		Policy:   auth.AnyRole(auth.RoleAdmin),
-	}); err != nil {
+	if err := h.updateH.RegisterRoutes(mux); err != nil {
 		return err
 	}
-	if err := auth.Mount(mux, auth.Route{
-		Contract: specConfigDelete,
-		Handler:  http.HandlerFunc(h.HandleDelete),
-		Policy:   auth.AnyRole(auth.RoleAdmin),
-	}); err != nil {
-		return err
+	return h.deleteH.RegisterRoutes(mux)
+}
+
+// toUpdateResponseData converts a domain.ConfigEntry to update.ResponseData.
+func toUpdateResponseData(e *domain.ConfigEntry) *update.ResponseData {
+	value := e.Value
+	if e.Sensitive {
+		value = dto.RedactedValue
 	}
-	return nil
+	return &update.ResponseData{
+		ID:        e.ID,
+		Key:       e.Key,
+		Value:     value,
+		Sensitive: e.Sensitive,
+		Version:   int64(e.Version),
+		CreatedAt: e.CreatedAt.Format(time.RFC3339),
+		UpdatedAt: e.UpdatedAt.Format(time.RFC3339),
+	}
 }

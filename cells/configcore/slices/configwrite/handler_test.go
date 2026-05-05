@@ -16,8 +16,10 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/ghbvf/gocell/cells/configcore/internal/domain"
-	"github.com/ghbvf/gocell/cells/configcore/internal/dto"
 	"github.com/ghbvf/gocell/cells/configcore/internal/mem"
+	configdelete "github.com/ghbvf/gocell/generated/contracts/http/config/delete/v1"
+	update "github.com/ghbvf/gocell/generated/contracts/http/config/update/v1"
+	write "github.com/ghbvf/gocell/generated/contracts/http/config/write/v1"
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/cell/celltest"
 	"github.com/ghbvf/gocell/kernel/clock"
@@ -61,11 +63,20 @@ func setupHandler() (http.Handler, *mem.ConfigRepository) {
 	if err != nil {
 		panic("setupHandler: " + err.Error())
 	}
-	h := NewHandler(svc)
+	policy := auth.AnyRole(auth.RoleAdmin)
+	writeH := write.NewHandler(WriteAdapter{svc}, policy)
+	updateH := update.NewHandler(UpdateAdapter{svc}, policy)
+	deleteH := configdelete.NewHandler(DeleteAdapter{svc}, policy)
 	mux := celltest.NewTestMux()
 	mux.Route(configPrefix, func(sub cell.RouteMux) {
-		if err := h.RegisterRoutes(sub); err != nil {
-			panic("RegisterRoutes: " + err.Error())
+		if err := writeH.RegisterRoutes(sub); err != nil {
+			panic("write.RegisterRoutes: " + err.Error())
+		}
+		if err := updateH.RegisterRoutes(sub); err != nil {
+			panic("update.RegisterRoutes: " + err.Error())
+		}
+		if err := deleteH.RegisterRoutes(sub); err != nil {
+			panic("delete.RegisterRoutes: " + err.Error())
 		}
 	})
 	return mux, repo
@@ -132,8 +143,9 @@ func TestHandler_Create_BlankKey(t *testing.T) {
 		} `json:"error"`
 	}
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
-	assert.Equal(t, "ERR_CONFIG_INVALID_INPUT", resp.Error.Code)
-	assert.Equal(t, "key is required", resp.Error.Message)
+	// The generated handler validates minLength before calling the service,
+	// returning ERR_VALIDATION_FAILED for an empty key (minLength: 1).
+	assert.Equal(t, "ERR_VALIDATION_FAILED", resp.Error.Code)
 }
 
 func TestHandler_HandleCreate_UnknownField(t *testing.T) {
@@ -247,10 +259,10 @@ func TestHandler_HandleCreate_SensitiveRedacted(t *testing.T) {
 
 	assert.Equal(t, http.StatusCreated, w.Code)
 	var resp struct {
-		Data dto.ConfigEntryResponse `json:"data"`
+		Data write.ResponseData `json:"data"`
 	}
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
-	assert.Equal(t, dto.RedactedValue, resp.Data.Value, "sensitive value must be redacted in response")
+	assert.Equal(t, "******", resp.Data.Value, "sensitive value must be redacted in response")
 	assert.True(t, resp.Data.Sensitive)
 	assert.NotContains(t, w.Body.String(), "s3cret!")
 }
@@ -272,10 +284,10 @@ func TestHandler_HandleUpdate_SensitiveRedacted(t *testing.T) {
 
 	assert.Equal(t, http.StatusOK, w.Code)
 	var resp struct {
-		Data dto.ConfigEntryResponse `json:"data"`
+		Data update.ResponseData `json:"data"`
 	}
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
-	assert.Equal(t, dto.RedactedValue, resp.Data.Value, "sensitive value must be redacted in update response")
+	assert.Equal(t, "******", resp.Data.Value, "sensitive value must be redacted in update response")
 	assert.NotContains(t, w.Body.String(), "new-secret")
 }
 
