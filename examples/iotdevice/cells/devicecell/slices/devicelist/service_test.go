@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	listcontract "github.com/ghbvf/gocell/generated/contracts/http/device/list/v1"
 	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/domain"
 	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/mem"
 	"github.com/ghbvf/gocell/pkg/errcode"
@@ -52,15 +53,15 @@ func TestService_ListEmpty(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	result, err := svc.List(context.Background(), query.PageParams{Limit: 10})
+	resp, err := svc.List(context.Background(), &listcontract.Request{Limit: 10})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if result.HasMore {
+	if resp.HasMore {
 		t.Error("expected HasMore=false for empty repo")
 	}
-	if len(result.Items) != 0 {
-		t.Errorf("expected 0 items, got %d", len(result.Items))
+	if len(resp.Data) != 0 {
+		t.Errorf("expected 0 items, got %d", len(resp.Data))
 	}
 }
 
@@ -75,21 +76,21 @@ func TestService_ListPagination(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	page1, err := svc.List(context.Background(), query.PageParams{Limit: 2})
+	page1, err := svc.List(context.Background(), &listcontract.Request{Limit: 2})
 	if err != nil {
 		t.Fatalf("page 1 error: %v", err)
 	}
 	if !page1.HasMore {
 		t.Error("expected HasMore=true for first page")
 	}
-	if len(page1.Items) != 2 {
-		t.Errorf("expected 2 items, got %d", len(page1.Items))
+	if len(page1.Data) != 2 {
+		t.Errorf("expected 2 items, got %d", len(page1.Data))
 	}
 	if page1.NextCursor == "" {
 		t.Error("expected non-empty NextCursor")
 	}
 
-	page2, err := svc.List(context.Background(), query.PageParams{Limit: 2, Cursor: page1.NextCursor})
+	page2, err := svc.List(context.Background(), &listcontract.Request{Limit: 2, Cursor: page1.NextCursor})
 	if err != nil {
 		t.Fatalf("page 2 error: %v", err)
 	}
@@ -99,8 +100,8 @@ func TestService_ListPagination(t *testing.T) {
 	if page2.NextCursor != "" {
 		t.Errorf("expected empty NextCursor on last page, got %q", page2.NextCursor)
 	}
-	if len(page2.Items) != 1 {
-		t.Errorf("expected 1 item on last page, got %d", len(page2.Items))
+	if len(page2.Data) != 1 {
+		t.Errorf("expected 1 item on last page, got %d", len(page2.Data))
 	}
 }
 
@@ -113,18 +114,18 @@ func TestService_ListSingleDevice(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	result, err := svc.List(context.Background(), query.PageParams{Limit: 10})
+	resp, err := svc.List(context.Background(), &listcontract.Request{Limit: 10})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if result.HasMore {
+	if resp.HasMore {
 		t.Error("expected HasMore=false for single device")
 	}
-	if result.NextCursor != "" {
-		t.Errorf("expected empty NextCursor when HasMore=false, got %q", result.NextCursor)
+	if resp.NextCursor != "" {
+		t.Errorf("expected empty NextCursor when HasMore=false, got %q", resp.NextCursor)
 	}
-	if len(result.Items) != 1 {
-		t.Errorf("expected 1 item, got %d", len(result.Items))
+	if len(resp.Data) != 1 {
+		t.Errorf("expected 1 item, got %d", len(resp.Data))
 	}
 }
 
@@ -138,18 +139,18 @@ func TestService_ListLimitOne(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	result, err := svc.List(context.Background(), query.PageParams{Limit: 1})
+	resp, err := svc.List(context.Background(), &listcontract.Request{Limit: 1})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if !result.HasMore {
+	if !resp.HasMore {
 		t.Error("expected HasMore=true with limit=1 and 2 devices")
 	}
-	if len(result.Items) != 1 {
-		t.Errorf("expected 1 item, got %d", len(result.Items))
+	if len(resp.Data) != 1 {
+		t.Errorf("expected 1 item, got %d", len(resp.Data))
 	}
-	if result.Items[0].Name != "alpha" {
-		t.Errorf("expected first item to be 'alpha' (name ASC), got %q", result.Items[0].Name)
+	if resp.Data[0].Name != "alpha" {
+		t.Errorf("expected first item to be 'alpha' (name ASC), got %q", resp.Data[0].Name)
 	}
 }
 
@@ -163,17 +164,17 @@ func TestService_ListSecondarySort(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	result, err := svc.List(context.Background(), query.PageParams{Limit: 10})
+	resp, err := svc.List(context.Background(), &listcontract.Request{Limit: 10})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if len(result.Items) != 2 {
-		t.Fatalf("expected 2 items, got %d", len(result.Items))
+	if len(resp.Data) != 2 {
+		t.Fatalf("expected 2 items, got %d", len(resp.Data))
 	}
-	if result.Items[0].ID != "dev-a" {
-		t.Errorf("expected first item id='dev-a' (id ASC), got %q", result.Items[0].ID)
+	if resp.Data[0].ID != "dev-a" {
+		t.Errorf("expected first item id='dev-a' (id ASC), got %q", resp.Data[0].ID)
 	}
-	if result.Items[1].ID != "dev-z" {
-		t.Errorf("expected second item id='dev-z', got %q", result.Items[1].ID)
+	if resp.Data[1].ID != "dev-z" {
+		t.Errorf("expected second item id='dev-z', got %q", resp.Data[1].ID)
 	}
 }

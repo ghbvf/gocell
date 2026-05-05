@@ -19,6 +19,7 @@ var contractSpec = wrapper.ContractSpec{
 	Transport: "http",
 	Method:    "POST",
 	Path:      "/internal/v1/access/roles/assign",
+	Clients:   []string{"accesscore"},
 }
 
 // Handler wires HTTP decode/encode + auth.Mount for http.auth.role.assign.v1.

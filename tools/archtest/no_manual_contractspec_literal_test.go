@@ -34,11 +34,26 @@ import (
 
 // migrationAllowlistNoLiteral parallels migrationAllowlistCells. Must be empty
 // after W3.5.
-var migrationAllowlistNoLiteral = []string{
-	"configcore",
-	"auditcore",
-	"accesscore",
-	"devicecell",
+var migrationAllowlistNoLiteral = []string{}
+
+// permanentPathExceptionsLiteral lists file paths (relative to repo root, forward-slash)
+// that are permanently exempt from NO-MANUAL-CONTRACTSPEC-LITERAL-01.
+// Each entry must have a documented justification comment.
+// W3.5 permanent exceptions: five accesscore slice handlers that require
+// wrapper.ContractSpec{} composite literals for auth.Mount with Public:true or
+// PasswordResetExempt:true. The generated handler only supports Policy; these
+// auth flags must be declared via an explicit wrapper.ContractSpec literal.
+var permanentPathExceptionsLiteral = []string{
+	// sessionlogin: POST /api/v1/access/sessions/login — Public:true (no JWT; username+password auth)
+	"cells/accesscore/slices/sessionlogin/handler.go",
+	// sessionlogout: DELETE /api/v1/access/sessions/{id} — PasswordResetExempt:true (self-recovery flow)
+	"cells/accesscore/slices/sessionlogout/handler.go",
+	// sessionrefresh: POST /api/v1/access/sessions/refresh — Public:true (refresh token in body)
+	"cells/accesscore/slices/sessionrefresh/handler.go",
+	// setup: GET+POST /api/v1/access/setup/* — Public:true (first-run bootstrap, no admin exists yet)
+	"cells/accesscore/slices/setup/handler.go",
+	// identitymanage: POST /api/v1/access/users/{id}/password — PasswordResetExempt:true (change-password during reset)
+	"cells/accesscore/slices/identitymanage/handler.go",
 }
 
 // TestNO_MANUAL_CONTRACTSPEC_LITERAL_01 scans production .go files (excluding
@@ -57,6 +72,9 @@ func TestNO_MANUAL_CONTRACTSPEC_LITERAL_01(t *testing.T) {
 		if isLiteralMigratingCell(rel) {
 			continue
 		}
+		if isPermanentExceptionLiteral(rel) {
+			continue
+		}
 		hits := scanForContractSpecLiterals(token.NewFileSet(), f, rel)
 		violations = append(violations, hits...)
 	}
@@ -71,6 +89,18 @@ func TestNO_MANUAL_CONTRACTSPEC_LITERAL_01(t *testing.T) {
 func isLiteralMigratingCell(rel string) bool {
 	for _, cell := range migrationAllowlistNoLiteral {
 		if strings.Contains(rel, "/"+cell+"/") || strings.HasSuffix(rel, "/"+cell) {
+			return true
+		}
+	}
+	return false
+}
+
+// isPermanentExceptionLiteral returns true when rel is in permanentPathExceptionsLiteral.
+// These files are architecturally justified in using wrapper.ContractSpec directly
+// (see the comments on each entry for the rationale).
+func isPermanentExceptionLiteral(rel string) bool {
+	for _, exception := range permanentPathExceptionsLiteral {
+		if rel == exception {
 			return true
 		}
 	}

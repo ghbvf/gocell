@@ -65,6 +65,11 @@ func TestContractIDToPackagePath(t *testing.T) {
 		{"http.order.list.v1", "generated/contracts/http/order/list/v1"},
 		{"event.order-created.v1", "generated/contracts/event/order-created/v1"},
 		{"event.item-created.v1", "generated/contracts/event/item-created/v1"},
+		// "internal" path segment must be renamed to "internalapi" so generated
+		// packages are importable from cells/ and examples/ (Go internal package rule).
+		// Contract IDs and URL prefixes (/internal/v1/...) are unchanged.
+		{"http.internal.devicecommands.list.v1", "generated/contracts/http/internalapi/devicecommands/list/v1"},
+		{"http.config.internal.get.v1", "generated/contracts/http/config/internalapi/get/v1"},
 	}
 	for _, c := range cases {
 		got := contractIDToPackagePath(c.in)

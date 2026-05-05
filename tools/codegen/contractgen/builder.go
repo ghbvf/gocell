@@ -154,9 +154,23 @@ func hasDTONamed(dtos []DTOSpec, name string) bool {
 }
 
 // buildHTTPEndpointSpec constructs the HTTPEndpointSpec including pagination detection.
+// HasBody is true only when the HTTP method is POST/PUT/PATCH AND the contract declares
+// a schemaRefs.request — POST/PATCH endpoints that accept only path params (no request
+// body schema) must not call DecodeJSONStrict (an empty body would be rejected).
 func buildHTTPEndpointSpec(contract *metadata.ContractMeta, http *metadata.HTTPTransportMeta) (*HTTPEndpointSpec, error) {
 	handlerMethod := goPascalCase(domainLastSegment(contract.ID))
-	hasBody := http.Method == "POST" || http.Method == "PUT" || http.Method == "PATCH"
+	methodHasBody := http.Method == "POST" || http.Method == "PUT" || http.Method == "PATCH"
+	hasBody := methodHasBody && contract.SchemaRefs.Request != ""
+
+	// Clients are only wired into the generated contractSpec for /internal/v1/...
+	// paths. For public /api/v1/... paths, contract.yaml endpoints.clients is
+	// informational metadata (who calls this endpoint) — auth.Mount rejects
+	// Clients on non-internal paths (wrapper.ContractSpec validation rule).
+	var clients []string
+	isInternalPath := strings.HasPrefix(http.Path, "/internal/v1/") || http.Path == "/internal/v1"
+	if isInternalPath && len(contract.Endpoints.Clients) > 0 {
+		clients = append(clients, contract.Endpoints.Clients...)
+	}
 
 	spec := &HTTPEndpointSpec{
 		Method:        http.Method,
@@ -165,6 +179,7 @@ func buildHTTPEndpointSpec(contract *metadata.ContractMeta, http *metadata.HTTPT
 		NoContent:     http.NoContent,
 		HandlerMethod: handlerMethod,
 		HasBody:       hasBody,
+		Clients:       clients,
 	}
 	spec.PathParams = buildPathParams(http)
 	spec.QueryParams = buildQueryParams(http)
@@ -519,12 +534,26 @@ func isRequired(name string, required []string) bool {
 // contractIDToPackagePath converts a contract id to a module-relative generated path.
 // "http.order.create.v1" → "generated/contracts/http/order/create/v1".
 // "event.order-created.v1" → "generated/contracts/event/order-created/v1".
+// "http.internal.foo.v1" → "generated/contracts/http/internalapi/foo/v1".
+//
+// The segment "internal" is rewritten to "internalapi" so that generated
+// packages under http/internal/... are importable from cells/ and examples/
+// (Go's internal package rule would otherwise block cross-directory imports).
+// Contract IDs (http.internal.X.v1) and URL prefixes (/internal/v1/...) are
+// unchanged — only the generated filesystem path segment is renamed.
+// ref: golang/go internal package rule (https://go.dev/ref/spec#Internal_packages)
 func contractIDToPackagePath(id string) string {
 	parts := strings.Split(id, ".")
-	// The last segment is the version (v1, v2, ...).
-	// Middle segments form the domain path.
+	// Rewrite any "internal" segment to "internalapi" to avoid Go's
+	// internal package restriction on generated package importers.
 	segments := make([]string, len(parts))
-	copy(segments, parts)
+	for i, p := range parts {
+		if p == "internal" {
+			segments[i] = "internalapi"
+		} else {
+			segments[i] = p
+		}
+	}
 	return "generated/contracts/" + strings.Join(segments, "/")
 }
 

@@ -23,6 +23,9 @@ var contractSpec = wrapper.ContractSpec{
 	Transport: "http",
 	Method:    "{{.Endpoint.Method}}",
 	Path:      "{{.Endpoint.Path}}",
+{{- if .Endpoint.Clients}}
+	Clients: []string{ {{- range $i, $c := .Endpoint.Clients}}{{if $i}}, {{end}}"{{$c}}"{{end}} },
+{{- end}}
 }
 
 // Handler wires HTTP decode/encode + auth.Mount for {{.ContractID}}.
@@ -93,16 +96,30 @@ func (h *Handler) handle(w http.ResponseWriter, r *http.Request) {
 {{- if hasBodyValidation .DTOs}}
 {{- range .DTOs}}{{if eq .Name "Request"}}{{range .Fields}}{{if isBodyField .}}
 {{- if hasMinLength .MinLength}}
+{{- if .Required}}
 	if len(req.{{.Name}}) < {{derefInt .MinLength}} {
 		httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "{{.JSONTag}}: value too short"))
 		return
 	}
+{{- else}}
+	if req.{{.Name}} != "" && len(req.{{.Name}}) < {{derefInt .MinLength}} {
+		httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "{{.JSONTag}}: value too short"))
+		return
+	}
+{{- end}}
 {{- end}}
 {{- if hasMaxLength .MaxLength}}
+{{- if .Required}}
 	if len(req.{{.Name}}) > {{derefInt .MaxLength}} {
 		httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "{{.JSONTag}}: value too long"))
 		return
 	}
+{{- else}}
+	if req.{{.Name}} != "" && len(req.{{.Name}}) > {{derefInt .MaxLength}} {
+		httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "{{.JSONTag}}: value too long"))
+		return
+	}
+{{- end}}
 {{- end}}
 {{- if hasMinimum .Minimum}}
 	if req.{{.Name}} < {{derefInt64 .Minimum}} {

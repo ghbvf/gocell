@@ -84,13 +84,20 @@ type HTTPEndpointSpec struct {
 	// HandlerMethod is the PascalCase method name on the Service interface,
 	// derived from the last domain segment, e.g. "Create", "Get", "List".
 	HandlerMethod string
-	// HasBody is true when Method is POST, PUT, or PATCH.
+	// HasBody is true when Method is POST/PUT/PATCH and the contract declares a
+	// schemaRefs.request. POST/PATCH endpoints that only use path params and have
+	// no request body schema must not call DecodeJSONStrict (empty body → 400).
 	HasBody bool
 	// IsPagination is true when the endpoint's query params are exactly
 	// cursor (string) + limit (integer) — the canonical pagination pattern.
 	// When true, the generated handler uses httputil.ParsePageParams instead
 	// of inline query param parsing.
 	IsPagination bool
+	// Clients lists the allowed caller-cell IDs from contract.yaml endpoints.clients.
+	// When non-empty, auth.Mount enforces RequireCallerCell on this route. The
+	// generated contractSpec must carry this list so the governance enforcement
+	// matches the YAML declaration.
+	Clients []string
 }
 
 // EventEndpointSpec holds event-specific endpoint information.

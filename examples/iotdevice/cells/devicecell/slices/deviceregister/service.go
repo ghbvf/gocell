@@ -11,6 +11,7 @@ import (
 
 	"github.com/google/uuid"
 
+	registercontract "github.com/ghbvf/gocell/generated/contracts/http/device/register/v1"
 	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/domain"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/outbox"
@@ -79,8 +80,24 @@ func NewService(repo domain.DeviceRepository, logger *slog.Logger, opts ...Optio
 	return s
 }
 
-// Register creates a new device and publishes a device.registered event.
-func (s *Service) Register(ctx context.Context, name string) (*domain.Device, error) {
+// Register implements registercontract.Service: decodes the generated request,
+// delegates to registerInternal, and wraps the result in the generated response.
+func (s *Service) Register(ctx context.Context, req *registercontract.Request) (*registercontract.Response, error) {
+	device, err := s.registerInternal(ctx, req.Name)
+	if err != nil {
+		return nil, err
+	}
+	return &registercontract.Response{
+		Data: &registercontract.ResponseData{
+			ID:     device.ID,
+			Name:   device.Name,
+			Status: device.Status,
+		},
+	}, nil
+}
+
+// registerInternal creates a new device and publishes a device.registered event.
+func (s *Service) registerInternal(ctx context.Context, name string) (*domain.Device, error) {
 	if name == "" {
 		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "device name must not be empty")
 	}
@@ -116,3 +133,6 @@ func (s *Service) Register(ctx context.Context, name string) (*domain.Device, er
 
 	return device, nil
 }
+
+// Ensure Service implements the generated interface at compile time.
+var _ registercontract.Service = (*Service)(nil)

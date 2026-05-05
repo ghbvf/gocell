@@ -73,7 +73,7 @@ func (h *Handler) handle(w http.ResponseWriter, r *http.Request) {
 		httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "rolloutPercentage,omitempty: value above maximum"))
 		return
 	}
-	if len(req.Description) > 1024 {
+	if req.Description != "" && len(req.Description) > 1024 {
 		httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "description,omitempty: value too long"))
 		return
 	}

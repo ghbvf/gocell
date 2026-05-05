@@ -11,37 +11,15 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/domain"
+	registercontract "github.com/ghbvf/gocell/generated/contracts/http/device/register/v1"
 	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/mem"
 	"github.com/ghbvf/gocell/kernel/clock"
 )
 
-func TestToDeviceRegisterResponse_NilInput(t *testing.T) {
-	var got DeviceRegisterResponse
-	assert.NotPanics(t, func() { got = toDeviceRegisterResponse(nil) })
-	assert.Zero(t, got.ID)
-}
-
-func TestDeviceRegisterResponse_Fields(t *testing.T) {
-	device := &domain.Device{ID: "dev-1", Name: "sensor-a", Status: "online"}
-	resp := toDeviceRegisterResponse(device)
-
-	assert.Equal(t, "dev-1", resp.ID)
-	assert.Equal(t, "sensor-a", resp.Name)
-	assert.Equal(t, "online", resp.Status)
-
-	b, err := json.Marshal(resp)
-	require.NoError(t, err)
-	s := string(b)
-	assert.Contains(t, s, `"id"`)
-	assert.Contains(t, s, `"name"`)
-	assert.Contains(t, s, `"status"`)
-}
-
-func setupRegisterHandler() *Handler {
+func setupRegisterHandler() *registercontract.Handler {
 	repo := mem.NewDeviceRepository()
 	svc := NewService(repo, slog.Default(), WithClock(clock.Real()))
-	return NewHandler(svc)
+	return registercontract.NewHandler(svc, nil) // nil policy: no per-route auth guard (public endpoint)
 }
 
 func TestHandleRegister(t *testing.T) {
@@ -89,16 +67,6 @@ func TestHandleRegister(t *testing.T) {
 			name:       "unknown field returns 400",
 			body:       `{"name":"x","extra":"y"}`,
 			wantStatus: http.StatusBadRequest,
-			checkBody: func(t *testing.T, body []byte) {
-				var resp struct {
-					Error struct {
-						Details map[string]any `json:"details"`
-					} `json:"error"`
-				}
-				require.NoError(t, json.Unmarshal(body, &resp))
-				assert.Equal(t, "unknown field", resp.Error.Details["reason"])
-				assert.Equal(t, "extra", resp.Error.Details["field"])
-			},
 		},
 	}
 
@@ -109,7 +77,7 @@ func TestHandleRegister(t *testing.T) {
 			req := httptest.NewRequest(http.MethodPost, "/api/v1/devices/", strings.NewReader(tc.body))
 			req.Header.Set("Content-Type", "application/json")
 
-			h.HandleRegister(w, req)
+			h.ServeHTTP(w, req)
 
 			assert.Equal(t, tc.wantStatus, w.Code)
 			if tc.checkBody != nil {

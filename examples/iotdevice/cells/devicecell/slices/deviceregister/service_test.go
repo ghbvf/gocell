@@ -10,7 +10,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/domain"
+	registercontract "github.com/ghbvf/gocell/generated/contracts/http/device/register/v1"
 	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/mem"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/observability/metrics"
@@ -35,19 +35,18 @@ func TestService_Register(t *testing.T) {
 	tests := []struct {
 		name       string
 		deviceName string
-		publisher  func() *Service
 		wantErr    bool
-		checkDev   func(t *testing.T, dev *domain.Device)
+		checkResp  func(t *testing.T, resp *registercontract.Response)
 	}{
 		{
 			name:       "valid registration",
 			deviceName: "sensor-a",
 			wantErr:    false,
-			checkDev: func(t *testing.T, dev *domain.Device) {
-				assert.NotEmpty(t, dev.ID)
-				assert.Equal(t, "sensor-a", dev.Name)
-				assert.Equal(t, "online", dev.Status)
-				assert.False(t, dev.LastSeen.IsZero())
+			checkResp: func(t *testing.T, resp *registercontract.Response) {
+				require.NotNil(t, resp.Data)
+				assert.NotEmpty(t, resp.Data.ID)
+				assert.Equal(t, "sensor-a", resp.Data.Name)
+				assert.Equal(t, "online", resp.Data.Status)
 			},
 		},
 		{
@@ -61,15 +60,15 @@ func TestService_Register(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			svc, _ := newTestService()
 
-			dev, err := svc.Register(context.Background(), tc.deviceName)
+			resp, err := svc.Register(context.Background(), &registercontract.Request{Name: tc.deviceName})
 			if tc.wantErr {
 				assert.Error(t, err)
-				assert.Nil(t, dev)
+				assert.Nil(t, resp)
 			} else {
 				require.NoError(t, err)
-				require.NotNil(t, dev)
-				if tc.checkDev != nil {
-					tc.checkDev(t, dev)
+				require.NotNil(t, resp)
+				if tc.checkResp != nil {
+					tc.checkResp(t, resp)
 				}
 			}
 		})
@@ -80,12 +79,13 @@ func TestService_Register_PersistsDevice(t *testing.T) {
 	svc, repo := newTestService()
 	ctx := context.Background()
 
-	dev, err := svc.Register(ctx, "sensor-b")
+	resp, err := svc.Register(ctx, &registercontract.Request{Name: "sensor-b"})
 	require.NoError(t, err)
+	require.NotNil(t, resp.Data)
 
-	stored, err := repo.GetByID(ctx, dev.ID)
+	stored, err := repo.GetByID(ctx, resp.Data.ID)
 	require.NoError(t, err)
-	assert.Equal(t, dev.ID, stored.ID)
+	assert.Equal(t, resp.Data.ID, stored.ID)
 	assert.Equal(t, "sensor-b", stored.Name)
 }
 
@@ -97,10 +97,11 @@ func TestService_Register_PublishFails_StillReturnsDevice(t *testing.T) {
 	require.NoError(t, err)
 	svc := NewService(repo, slog.Default(), WithEmitter(emitter), WithClock(clock.Real()))
 
-	dev, err := svc.Register(context.Background(), "sensor-c")
+	resp, err := svc.Register(context.Background(), &registercontract.Request{Name: "sensor-c"})
 	require.NoError(t, err, "publish failure should not propagate as error")
-	require.NotNil(t, dev)
-	assert.NotEmpty(t, dev.ID)
+	require.NotNil(t, resp)
+	require.NotNil(t, resp.Data)
+	assert.NotEmpty(t, resp.Data.ID)
 }
 
 func TestService_Register_PublishFails_FailClosedReturnsError(t *testing.T) {
@@ -111,9 +112,9 @@ func TestService_Register_PublishFails_FailClosedReturnsError(t *testing.T) {
 	require.NoError(t, err)
 	svc := NewService(repo, slog.Default(), WithEmitter(emitter), WithClock(clock.Real()))
 
-	dev, err := svc.Register(context.Background(), "sensor-c")
+	resp, err := svc.Register(context.Background(), &registercontract.Request{Name: "sensor-c"})
 	require.Error(t, err, "fail-closed publish failure must propagate")
-	assert.Nil(t, dev)
+	assert.Nil(t, resp)
 	assert.Contains(t, err.Error(), "emit event")
 	assert.Contains(t, err.Error(), "publish failed")
 }
@@ -128,9 +129,9 @@ func TestService_Register_FailOpenDoesNotLogPublished(t *testing.T) {
 	require.NoError(t, err)
 	svc := NewService(repo, logger, WithEmitter(emitter), WithClock(clock.Real()))
 
-	dev, err := svc.Register(context.Background(), "sensor-log")
+	resp, err := svc.Register(context.Background(), &registercontract.Request{Name: "sensor-log"})
 	require.NoError(t, err)
-	require.NotNil(t, dev)
+	require.NotNil(t, resp)
 
 	logOutput := logBuf.String()
 	warnEntry := sloghelper.FindLogEntry(logOutput, "direct publish failed")
@@ -145,9 +146,9 @@ func TestService_Register_DuplicateID_IsUnlikelyButHandled(t *testing.T) {
 	svc, _ := newTestService()
 	ctx := context.Background()
 
-	d1, err := svc.Register(ctx, "dev-1")
+	r1, err := svc.Register(ctx, &registercontract.Request{Name: "dev-1"})
 	require.NoError(t, err)
-	d2, err := svc.Register(ctx, "dev-2")
+	r2, err := svc.Register(ctx, &registercontract.Request{Name: "dev-2"})
 	require.NoError(t, err)
-	assert.NotEqual(t, d1.ID, d2.ID)
+	assert.NotEqual(t, r1.Data.ID, r2.Data.ID)
 }

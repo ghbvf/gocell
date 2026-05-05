@@ -13,6 +13,12 @@ import (
 	"strings"
 	"time"
 
+	ackcontract "github.com/ghbvf/gocell/generated/contracts/http/device/command/ack/v1"
+	dequeuecontract "github.com/ghbvf/gocell/generated/contracts/http/device/command/dequeue/v1"
+	enqueuecontract "github.com/ghbvf/gocell/generated/contracts/http/device/command/enqueue/v1"
+	extendleasecontract "github.com/ghbvf/gocell/generated/contracts/http/device/command/extend-lease/v1"
+	reportcontract "github.com/ghbvf/gocell/generated/contracts/http/device/command/report/v1"
+	listcontract "github.com/ghbvf/gocell/generated/contracts/http/internalapi/devicecommands/list/v1"
 	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/domain"
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/command"
@@ -111,7 +117,7 @@ func generateID() (string, error) {
 	return "cmd-" + hex.EncodeToString(b), nil
 }
 
-// Enqueue creates a new pending command for the given device.
+// enqueueInternal creates a new pending command for the given device.
 //
 // commandType defaults to "default" when empty — callers that don't specify
 // a type (e.g. early demo scripts) get a sensible fallback without error.
@@ -119,7 +125,7 @@ func generateID() (string, error) {
 // Authz is checked before device lookup to prevent timing-based information
 // leakage (403 must precede 404 so callers cannot probe device existence).
 // L4 consistency: Enqueue is a Pending write (no outbox required at this stage).
-func (s *Service) Enqueue(ctx context.Context, deviceID, commandType, payload string) (command.Entry, error) {
+func (s *Service) enqueueInternal(ctx context.Context, deviceID, commandType, payload string) (command.Entry, error) {
 	// Authz check before any data access — prevents 404 vs 403 timing probing.
 	if s.authz != nil {
 		if err := s.authz(ctx); err != nil {
@@ -161,9 +167,9 @@ func (s *Service) Enqueue(ctx context.Context, deviceID, commandType, payload st
 	return entry, nil
 }
 
-// Dequeue claims pending commands for the given device and advances them to Sent.
+// dequeueInternal claims pending commands for the given device and advances them to Sent.
 // This is the poll endpoint used by devices in the L4 latent model.
-func (s *Service) Dequeue(ctx context.Context, deviceID string, limit int, lease time.Duration) ([]command.Entry, error) {
+func (s *Service) dequeueInternal(ctx context.Context, deviceID string, limit int, lease time.Duration) ([]command.Entry, error) {
 	if _, err := s.deviceRepo.GetByID(ctx, deviceID); err != nil {
 		return nil, fmt.Errorf("device-command: lookup device: %w", err)
 	}
@@ -262,8 +268,220 @@ func entryFieldValue(e command.Entry, field string) any {
 	}
 }
 
-// Report records that the device has received the command and started work.
-func (s *Service) Report(ctx context.Context, deviceID, cmdID string) error {
+// ─── generated-interface adapters ───────────────────────────────────────────
+
+// toEnqueueResponseData converts a command.Entry to the enqueue contract ResponseData.
+func toEnqueueResponseData(e command.Entry) *enqueuecontract.ResponseData {
+	d := &enqueuecontract.ResponseData{
+		ID:          e.ID,
+		DeviceId:    e.DeviceID,
+		CommandType: e.CommandType,
+		Payload:     string(e.Payload),
+		Status:      e.Status.String(),
+		Attempt:     int64(e.Attempt),
+		CreatedAt:   e.CreatedAt.Format(time.RFC3339),
+	}
+	if e.SentAt != nil {
+		d.SentAt = e.SentAt.Format(time.RFC3339)
+	}
+	if e.DeliveredAt != nil {
+		d.DeliveredAt = e.DeliveredAt.Format(time.RFC3339)
+	}
+	if e.CompletedAt != nil {
+		d.CompletedAt = e.CompletedAt.Format(time.RFC3339)
+	}
+	return d
+}
+
+// toDequeueResponseDataItem converts a command.Entry to the dequeue contract ResponseDataItem.
+func toDequeueResponseDataItem(e command.Entry) *dequeuecontract.ResponseDataItem {
+	d := &dequeuecontract.ResponseDataItem{
+		ID:          e.ID,
+		DeviceId:    e.DeviceID,
+		CommandType: e.CommandType,
+		Payload:     string(e.Payload),
+		Status:      e.Status.String(),
+		Attempt:     int64(e.Attempt),
+		CreatedAt:   e.CreatedAt.Format(time.RFC3339),
+	}
+	if e.SentAt != nil {
+		d.SentAt = e.SentAt.Format(time.RFC3339)
+	}
+	if e.DeliveredAt != nil {
+		d.DeliveredAt = e.DeliveredAt.Format(time.RFC3339)
+	}
+	if e.CompletedAt != nil {
+		d.CompletedAt = e.CompletedAt.Format(time.RFC3339)
+	}
+	return d
+}
+
+// toCommandResponseData converts a command.Entry to a report/ack/extend-lease ResponseData.
+// All three contracts share the same ResponseData field shape, so we use a
+// generic helper that callers cast to the right type.
+func toReportResponseData(e command.Entry) *reportcontract.ResponseData {
+	d := &reportcontract.ResponseData{
+		ID:          e.ID,
+		DeviceId:    e.DeviceID,
+		CommandType: e.CommandType,
+		Payload:     string(e.Payload),
+		Status:      e.Status.String(),
+		Attempt:     int64(e.Attempt),
+		CreatedAt:   e.CreatedAt.Format(time.RFC3339),
+	}
+	if e.SentAt != nil {
+		d.SentAt = e.SentAt.Format(time.RFC3339)
+	}
+	if e.DeliveredAt != nil {
+		d.DeliveredAt = e.DeliveredAt.Format(time.RFC3339)
+	}
+	if e.CompletedAt != nil {
+		d.CompletedAt = e.CompletedAt.Format(time.RFC3339)
+	}
+	return d
+}
+
+func toAckResponseData(e command.Entry) *ackcontract.ResponseData {
+	d := &ackcontract.ResponseData{
+		ID:          e.ID,
+		DeviceId:    e.DeviceID,
+		CommandType: e.CommandType,
+		Payload:     string(e.Payload),
+		Status:      e.Status.String(),
+		Attempt:     int64(e.Attempt),
+		CreatedAt:   e.CreatedAt.Format(time.RFC3339),
+	}
+	if e.SentAt != nil {
+		d.SentAt = e.SentAt.Format(time.RFC3339)
+	}
+	if e.DeliveredAt != nil {
+		d.DeliveredAt = e.DeliveredAt.Format(time.RFC3339)
+	}
+	if e.CompletedAt != nil {
+		d.CompletedAt = e.CompletedAt.Format(time.RFC3339)
+	}
+	return d
+}
+
+func toExtendLeaseResponseData(e command.Entry) *extendleasecontract.ResponseData {
+	d := &extendleasecontract.ResponseData{
+		ID:          e.ID,
+		DeviceId:    e.DeviceID,
+		CommandType: e.CommandType,
+		Payload:     string(e.Payload),
+		Status:      e.Status.String(),
+		Attempt:     int64(e.Attempt),
+		CreatedAt:   e.CreatedAt.Format(time.RFC3339),
+	}
+	if e.SentAt != nil {
+		d.SentAt = e.SentAt.Format(time.RFC3339)
+	}
+	if e.DeliveredAt != nil {
+		d.DeliveredAt = e.DeliveredAt.Format(time.RFC3339)
+	}
+	if e.CompletedAt != nil {
+		d.CompletedAt = e.CompletedAt.Format(time.RFC3339)
+	}
+	return d
+}
+
+// parseAckReason parses a string ack reason into a command.AckReason value.
+// Moved from handler.go to service.go as part of the codegen migration (W3.2).
+func parseAckReason(raw string) (command.AckReason, error) {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "success":
+		return command.AckSuccess, nil
+	case "failure":
+		return command.AckFailed, nil
+	case "rejected":
+		return command.AckRejected, nil
+	default:
+		return 0, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "devicecommand: invalid ack reason")
+	}
+}
+
+// getCommand is a shared helper for adapters that need to fetch the updated
+// command after a mutation (Report, Ack, ExtendLease).
+func (s *Service) getCommand(ctx context.Context, cmdID string) (command.Entry, error) {
+	e, err := s.queue.GetCommand(ctx, cmdID)
+	if err != nil {
+		return command.Entry{}, fmt.Errorf("device-command: get command: %w", err)
+	}
+	return *e, nil
+}
+
+// Enqueue implements enqueuecontract.Service.
+func (s *Service) Enqueue(ctx context.Context, req *enqueuecontract.Request) (*enqueuecontract.Response, error) {
+	entry, err := s.enqueueInternal(ctx, req.ID, req.CommandType, req.Payload)
+	if err != nil {
+		return nil, err
+	}
+	return &enqueuecontract.Response{Data: toEnqueueResponseData(entry)}, nil
+}
+
+// Dequeue implements dequeuecontract.Service.
+func (s *Service) Dequeue(ctx context.Context, req *dequeuecontract.Request) (*dequeuecontract.Response, error) {
+	entries, err := s.dequeueInternal(ctx, req.ID, int(req.Limit), command.DefaultLeaseDuration)
+	if err != nil {
+		return nil, err
+	}
+	items := make([]*dequeuecontract.ResponseDataItem, 0, len(entries))
+	for _, e := range entries {
+		items = append(items, toDequeueResponseDataItem(e))
+	}
+	return &dequeuecontract.Response{Data: items, NextCursor: "", HasMore: false}, nil
+}
+
+// Report implements reportcontract.Service.
+func (s *Service) Report(ctx context.Context, req *reportcontract.Request) (*reportcontract.Response, error) {
+	if err := s.reportInternal(ctx, req.ID, req.CmdId); err != nil {
+		return nil, err
+	}
+	entry, err := s.getCommand(ctx, req.CmdId)
+	if err != nil {
+		return nil, err
+	}
+	return &reportcontract.Response{Data: toReportResponseData(entry)}, nil
+}
+
+// Ack implements ackcontract.Service.
+func (s *Service) Ack(ctx context.Context, req *ackcontract.Request) (*ackcontract.Response, error) {
+	reason, err := parseAckReason(req.Reason)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.ackInternal(ctx, req.ID, req.CmdId, reason); err != nil {
+		return nil, err
+	}
+	entry, err := s.getCommand(ctx, req.CmdId)
+	if err != nil {
+		return nil, err
+	}
+	return &ackcontract.Response{Data: toAckResponseData(entry)}, nil
+}
+
+// ExtendLease implements extendleasecontract.Service.
+func (s *Service) ExtendLease(ctx context.Context, req *extendleasecontract.Request) (*extendleasecontract.Response, error) {
+	if err := s.extendLeaseInternal(ctx, req.ID, req.CmdId, time.Duration(req.ExtensionSeconds)*time.Second); err != nil {
+		return nil, err
+	}
+	entry, err := s.getCommand(ctx, req.CmdId)
+	if err != nil {
+		return nil, err
+	}
+	return &extendleasecontract.Response{Data: toExtendLeaseResponseData(entry)}, nil
+}
+
+// Compile-time interface checks.
+var _ enqueuecontract.Service = (*Service)(nil)
+var _ dequeuecontract.Service = (*Service)(nil)
+var _ reportcontract.Service = (*Service)(nil)
+var _ ackcontract.Service = (*Service)(nil)
+var _ extendleasecontract.Service = (*Service)(nil)
+var _ listcontract.Service = (*Service)(nil)
+
+// reportInternal records that the device has received the command and started work.
+func (s *Service) reportInternal(ctx context.Context, deviceID, cmdID string) error {
 	now := s.clock.Now()
 	if err := s.getOwnedCommand(ctx, deviceID, cmdID); err != nil {
 		return err
@@ -278,9 +496,9 @@ func (s *Service) Report(ctx context.Context, deviceID, cmdID string) error {
 	return nil
 }
 
-// Ack finalizes a command with the supplied terminal reason. Ack is a single
+// ackInternal finalizes a command with the supplied terminal reason. Ack is a single
 // Queue transition; it does not synthesize Sent/Delivered timestamps.
-func (s *Service) Ack(ctx context.Context, deviceID, cmdID string, reason command.AckReason) error {
+func (s *Service) ackInternal(ctx context.Context, deviceID, cmdID string, reason command.AckReason) error {
 	if !reason.Valid() {
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "device-command: invalid ack reason")
 	}
@@ -301,9 +519,9 @@ func (s *Service) Ack(ctx context.Context, deviceID, cmdID string, reason comman
 	return nil
 }
 
-// ExtendLease extends an existing command lease for a device that is still
+// extendLeaseInternal extends an existing command lease for a device that is still
 // processing a command.
-func (s *Service) ExtendLease(ctx context.Context, deviceID, cmdID string, extension time.Duration) error {
+func (s *Service) extendLeaseInternal(ctx context.Context, deviceID, cmdID string, extension time.Duration) error {
 	if extension <= 0 {
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "device-command: extension must be positive")
 	}
@@ -330,4 +548,81 @@ func (s *Service) getOwnedCommand(ctx context.Context, deviceID, cmdID string) e
 			fmt.Sprintf("device-command: command %q does not belong to device %q", cmdID, deviceID))
 	}
 	return nil
+}
+
+// List implements listcontract.Service for the internal ops view.
+// It calls ScanActive and converts the result to the generated Response shape.
+func (s *Service) List(ctx context.Context, req *listcontract.Request) (*listcontract.Response, error) {
+	statuses, err := parseStatusFilter(req.Statuses)
+	if err != nil {
+		return nil, err
+	}
+	pageReq := query.PageParams{
+		Cursor: req.Cursor,
+		Limit:  int(req.Limit),
+	}
+	result, err := s.ScanActive(ctx, command.ScanFilter{
+		DeviceID: req.DeviceId,
+		Statuses: statuses,
+	}, pageReq)
+	if err != nil {
+		return nil, err
+	}
+	items := make([]*listcontract.ResponseDataItem, 0, len(result.Items))
+	for _, e := range result.Items {
+		items = append(items, toListResponseDataItem(e))
+	}
+	return &listcontract.Response{
+		Data:       items,
+		NextCursor: result.NextCursor,
+		HasMore:    result.HasMore,
+	}, nil
+}
+
+// toListResponseDataItem converts a command.Entry to the list contract ResponseDataItem.
+func toListResponseDataItem(e command.Entry) *listcontract.ResponseDataItem {
+	d := &listcontract.ResponseDataItem{
+		ID:          e.ID,
+		DeviceId:    e.DeviceID,
+		CommandType: e.CommandType,
+		Payload:     string(e.Payload),
+		Status:      e.Status.String(),
+		Attempt:     int64(e.Attempt),
+		CreatedAt:   e.CreatedAt.Format(time.RFC3339),
+	}
+	if e.SentAt != nil {
+		d.SentAt = e.SentAt.Format(time.RFC3339)
+	}
+	if e.DeliveredAt != nil {
+		d.DeliveredAt = e.DeliveredAt.Format(time.RFC3339)
+	}
+	if e.CompletedAt != nil {
+		d.CompletedAt = e.CompletedAt.Format(time.RFC3339)
+	}
+	return d
+}
+
+// parseStatusFilter parses the comma-separated status query parameter.
+// Moved from internalhandler.go as part of the W3.0.5 codegen migration.
+func parseStatusFilter(raw string) ([]command.Status, error) {
+	if strings.TrimSpace(raw) == "" {
+		return nil, nil
+	}
+	parts := strings.Split(raw, ",")
+	statuses := make([]command.Status, 0, len(parts))
+	for _, part := range parts {
+		switch strings.ToLower(strings.TrimSpace(part)) {
+		case "", "all":
+			continue
+		case "pending":
+			statuses = append(statuses, command.StatusPending)
+		case "sent":
+			statuses = append(statuses, command.StatusSent)
+		case "delivered":
+			statuses = append(statuses, command.StatusDelivered)
+		default:
+			return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "devicecommand: invalid status filter")
+		}
+	}
+	return statuses, nil
 }

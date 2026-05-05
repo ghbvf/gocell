@@ -206,10 +206,19 @@ func mustParseProjectContracts(t *testing.T, root string) *metadata.ProjectMeta 
 // contractIDToExpectedPkgPath mirrors contractgen.contractIDToPackagePath logic
 // to convert a contract id to the expected generated package path.
 // "http.order.create.v1" → "generated/contracts/http/order/create/v1".
+// "http.internal.foo.v1" → "generated/contracts/http/internalapi/foo/v1"
+// (the "internal" filesystem segment is rewritten to "internalapi" to satisfy
+// Go's internal package import restriction; see W3.0.5 fix).
 func contractIDToExpectedPkgPath(id string) string {
 	parts := strings.Split(id, ".")
 	segments := make([]string, len(parts))
-	copy(segments, parts)
+	for i, p := range parts {
+		if p == "internal" {
+			segments[i] = "internalapi"
+		} else {
+			segments[i] = p
+		}
+	}
 	return generatedContractsSubdir + "/" + strings.Join(segments, "/")
 }
 

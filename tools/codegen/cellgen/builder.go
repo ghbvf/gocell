@@ -425,10 +425,21 @@ func readModulePath(root string) (string, error) {
 // contractIDToImportPath converts a contract id to its generated package import path.
 // "event.order-created.v1" → "<module>/generated/contracts/event/order-created/v1"
 // "event.config.entry-upserted.v1" → "<module>/generated/contracts/event/config/entry-upserted/v1"
+// "http.internal.foo.v1" → "<module>/generated/contracts/http/internalapi/foo/v1"
+//
+// The segment "internal" is rewritten to "internalapi" to match the filesystem
+// layout produced by contractIDToPackagePath in contractgen — see that function
+// for the Go internal package rule rationale.
 func contractIDToImportPath(modulePath, contractID string) string {
 	parts := strings.Split(contractID, ".")
 	// Segments are: kind.domain.parts...vN
-	// Join them with "/" to form the package path.
+	// Rewrite "internal" segments to "internalapi" so the import path aligns
+	// with the generated filesystem path.
+	for i, p := range parts {
+		if p == "internal" {
+			parts[i] = "internalapi"
+		}
+	}
 	pkgRelPath := strings.Join(parts, "/")
 	return modulePath + "/generated/contracts/" + pkgRelPath
 }

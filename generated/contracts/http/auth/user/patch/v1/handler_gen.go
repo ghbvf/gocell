@@ -64,27 +64,27 @@ func (h *Handler) handle(w http.ResponseWriter, r *http.Request) {
 		httputil.WriteError(r.Context(), w, err)
 		return
 	}
-	if len(req.Name) < 1 {
+	if req.Name != "" && len(req.Name) < 1 {
 		httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "name,omitempty: value too short"))
 		return
 	}
-	if len(req.Name) > 128 {
+	if req.Name != "" && len(req.Name) > 128 {
 		httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "name,omitempty: value too long"))
 		return
 	}
-	if len(req.Email) < 3 {
+	if req.Email != "" && len(req.Email) < 3 {
 		httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "email,omitempty: value too short"))
 		return
 	}
-	if len(req.Email) > 320 {
+	if req.Email != "" && len(req.Email) > 320 {
 		httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "email,omitempty: value too long"))
 		return
 	}
-	if len(req.Status) < 1 {
+	if req.Status != "" && len(req.Status) < 1 {
 		httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "status,omitempty: value too short"))
 		return
 	}
-	if len(req.Status) > 32 {
+	if req.Status != "" && len(req.Status) > 32 {
 		httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "status,omitempty: value too long"))
 		return
 	}

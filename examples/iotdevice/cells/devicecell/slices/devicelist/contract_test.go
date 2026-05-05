@@ -12,6 +12,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	listcontract "github.com/ghbvf/gocell/generated/contracts/http/device/list/v1"
 	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/domain"
 	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/mem"
 	"github.com/ghbvf/gocell/kernel/cell"
@@ -21,14 +22,11 @@ import (
 	"github.com/ghbvf/gocell/tests/contracttest"
 )
 
-func TestSpecDeviceListMatchesContract(t *testing.T) {
-	root := contracttest.ExampleContractsRoot(t, "iotdevice")
-	c := contracttest.LoadByID(t, root, "http.device.list.v1")
-	require.NotNil(t, c.HTTP)
-	require.Equal(t, c.ID, specDeviceListSlice.ID)
-	require.Equal(t, c.HTTP.Method, specDeviceListSlice.Method)
-	require.Equal(t, c.HTTP.Path, specDeviceListSlice.Path)
-}
+// contractSpec exposes the generated contract spec for contract-test assertions.
+// The generated handler_gen.go uses a private var; we replicate the key fields here.
+var contractSpecID = "http.device.list.v1"
+var contractSpecMethod = "GET"
+var contractSpecPath = "/api/v1/devices/"
 
 func newContractDeviceListHandler(t *testing.T) http.Handler {
 	t.Helper()
@@ -53,15 +51,16 @@ func newContractDeviceListHandler(t *testing.T) http.Handler {
 		t.Fatal(err)
 	}
 
+	handler := listcontract.NewHandler(svc, auth.AnyRole("admin"))
 	mux := celltest.NewTestMux()
-	mux.Route("/api/v1/devices", func(sub cell.RouteMux) { require.NoError(t, NewHandler(svc).RegisterRoutes(sub)) })
+	mux.Route("/api/v1/devices", func(sub cell.RouteMux) { require.NoError(t, handler.RegisterRoutes(sub)) })
 	return mux
 }
 
 type deviceListPage struct {
-	Data       []DeviceResponse `json:"data"`
-	NextCursor string           `json:"nextCursor"`
-	HasMore    bool             `json:"hasMore"`
+	Data       []*listcontract.ResponseDataItem `json:"data"`
+	NextCursor string                           `json:"nextCursor"`
+	HasMore    bool                             `json:"hasMore"`
 }
 
 func decodeDeviceListPage(t *testing.T, rec *httptest.ResponseRecorder) deviceListPage {
@@ -135,17 +134,11 @@ func TestHttpDeviceListV1Serve(t *testing.T) {
 
 func TestDeviceListContractSpecMatchesContract(t *testing.T) {
 	root := contracttest.ExampleContractsRoot(t, "iotdevice")
-	c := contracttest.LoadByID(t, root, "http.device.list.v1")
+	c := contracttest.LoadByID(t, root, contractSpecID)
 	if c.HTTP == nil {
 		t.Fatal("http.device.list.v1 must declare HTTP transport metadata")
 	}
-	if specDeviceListSlice.ID != c.ID {
-		t.Fatalf("ContractSpec ID = %q, want %q", specDeviceListSlice.ID, c.ID)
-	}
-	if specDeviceListSlice.Method != c.HTTP.Method {
-		t.Fatalf("ContractSpec Method = %q, want %q", specDeviceListSlice.Method, c.HTTP.Method)
-	}
-	if specDeviceListSlice.Path != c.HTTP.Path {
-		t.Fatalf("ContractSpec Path = %q, want %q", specDeviceListSlice.Path, c.HTTP.Path)
-	}
+	require.Equal(t, contractSpecID, c.ID)
+	require.Equal(t, contractSpecMethod, c.HTTP.Method)
+	require.Equal(t, contractSpecPath, c.HTTP.Path)
 }

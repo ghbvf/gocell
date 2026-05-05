@@ -19,6 +19,7 @@ var contractSpec = wrapper.ContractSpec{
 	Transport: "http",
 	Method:    "GET",
 	Path:      "/internal/v1/config/{key}",
+	Clients:   []string{"accesscore"},
 }
 
 // Handler wires HTTP decode/encode + auth.Mount for http.config.internal.get.v1.

@@ -6,7 +6,9 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"time"
 
+	listcontract "github.com/ghbvf/gocell/generated/contracts/http/device/list/v1"
 	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/domain"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/query"
@@ -19,6 +21,7 @@ var defaultSort = []query.SortColumn{
 }
 
 // Service lists devices with cursor pagination.
+// Implements generated listcontract.Service.
 type Service struct {
 	deviceRepo domain.DeviceRepository
 	codec      *query.CursorCodec
@@ -39,8 +42,31 @@ func NewService(
 	return &Service{deviceRepo: deviceRepo, codec: codec, logger: logger, runMode: runMode}, nil
 }
 
-// List returns a paginated page of devices sorted by name ASC, id ASC.
-func (s *Service) List(ctx context.Context, pageReq query.PageParams) (query.PageResult[*domain.Device], error) {
+// List implements listcontract.Service and returns a paginated page of devices.
+func (s *Service) List(ctx context.Context, req *listcontract.Request) (*listcontract.Response, error) {
+	pageReq := query.PageParams{
+		Limit:  int(req.Limit),
+		Cursor: req.Cursor,
+	}
+	result, err := s.listInternal(ctx, pageReq)
+	if err != nil {
+		return nil, err
+	}
+
+	items := make([]*listcontract.ResponseDataItem, 0, len(result.Items))
+	for _, d := range result.Items {
+		items = append(items, toResponseDataItem(d))
+	}
+	return &listcontract.Response{
+		Data:       items,
+		NextCursor: result.NextCursor,
+		HasMore:    result.HasMore,
+	}, nil
+}
+
+// listInternal returns a paginated page of devices. Used by the List adapter
+// and kept as a testable internal helper.
+func (s *Service) listInternal(ctx context.Context, pageReq query.PageParams) (query.PageResult[*domain.Device], error) {
 	qctx := query.QueryContext("endpoint", "device-list")
 	return query.ExecutePagedQuery(ctx, query.PagedQueryConfig[*domain.Device]{
 		Codec:      s.codec,
@@ -61,3 +87,19 @@ func (s *Service) List(ctx context.Context, pageReq query.PageParams) (query.Pag
 		RunMode:     s.runMode,
 	})
 }
+
+// toResponseDataItem converts a domain.Device to the generated ResponseDataItem DTO.
+func toResponseDataItem(d *domain.Device) *listcontract.ResponseDataItem {
+	if d == nil {
+		return &listcontract.ResponseDataItem{}
+	}
+	return &listcontract.ResponseDataItem{
+		ID:       d.ID,
+		Name:     d.Name,
+		Status:   d.Status,
+		LastSeen: d.LastSeen.Format(time.RFC3339),
+	}
+}
+
+// Ensure Service implements the generated interface at compile time.
+var _ listcontract.Service = (*Service)(nil)

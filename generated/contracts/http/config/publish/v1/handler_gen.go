@@ -65,10 +65,6 @@ func (h *Handler) handle(w http.ResponseWriter, r *http.Request) {
 		}
 		req.Key = v
 	}
-	if err := httputil.DecodeJSONStrict(r, req, httputil.DefaultDecodeJSONLimit); err != nil {
-		httputil.WriteError(r.Context(), w, err)
-		return
-	}
 	resp, err := h.svc.Publish(r.Context(), req)
 	if err != nil {
 		httputil.WriteError(r.Context(), w, err)

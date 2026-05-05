@@ -9,6 +9,15 @@ import (
 	"log/slog"
 	"time"
 
+	ackcontract "github.com/ghbvf/gocell/generated/contracts/http/device/command/ack/v1"
+	dequeuecontract "github.com/ghbvf/gocell/generated/contracts/http/device/command/dequeue/v1"
+	enqueuecontract "github.com/ghbvf/gocell/generated/contracts/http/device/command/enqueue/v1"
+	extendleasecontract "github.com/ghbvf/gocell/generated/contracts/http/device/command/extend-lease/v1"
+	reportcontract "github.com/ghbvf/gocell/generated/contracts/http/device/command/report/v1"
+	listcontract "github.com/ghbvf/gocell/generated/contracts/http/device/list/v1"
+	registercontract "github.com/ghbvf/gocell/generated/contracts/http/device/register/v1"
+	statuscontract "github.com/ghbvf/gocell/generated/contracts/http/device/status/v1"
+	internallistcontract "github.com/ghbvf/gocell/generated/contracts/http/internalapi/devicecommands/list/v1"
 	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/domain"
 	dto "github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/dto"
 	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/mem"
@@ -24,6 +33,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/query"
+	"github.com/ghbvf/gocell/runtime/auth"
 	commandruntime "github.com/ghbvf/gocell/runtime/command"
 )
 
@@ -94,17 +104,26 @@ type DeviceCell struct {
 	clk             clock.Clock // injected from reg.Config during initInternal
 
 	// +slice:route:slice=deviceregister,subPath=/api/v1/devices
-	registerHandler *deviceregister.Handler
+	registerHandler *registercontract.Handler
 
 	// +slice:route:slice=devicecommand,subPath=/api/v1/devices
-	// +slice:route:slice=devicecommand,listener=cell.InternalListener,subPath=,method=RegisterInternalRoutes
-	commandHandler *devicecommand.Handler
+	commandEnqueueHandler *enqueuecontract.Handler
+	// +slice:route:slice=devicecommand,subPath=/api/v1/devices
+	commandDequeueHandler *dequeuecontract.Handler
+	// +slice:route:slice=devicecommand,subPath=/api/v1/devices
+	commandReportHandler *reportcontract.Handler
+	// +slice:route:slice=devicecommand,subPath=/api/v1/devices
+	commandAckHandler *ackcontract.Handler
+	// +slice:route:slice=devicecommand,subPath=/api/v1/devices
+	commandExtendLeaseHandler *extendleasecontract.Handler
+	// +slice:route:slice=devicecommand,listener=cell.InternalListener,subPath=
+	commandInternalHandler *internallistcontract.Handler
 
 	// +slice:route:slice=devicestatus,subPath=/api/v1/devices
-	statusHandler *devicestatus.Handler
+	statusHandler *statuscontract.Handler
 
 	// +slice:route:slice=devicelist,subPath=/api/v1/devices
-	listHandler *devicelist.Handler
+	listHandler *listcontract.Handler
 }
 
 // RegisterCommandQueue implements kernel/command.QueueRegistrar. The supplied
@@ -229,7 +248,7 @@ func (c *DeviceCell) initSlices(durabilityMode cell.DurabilityMode) error {
 		deviceregister.WithEmitter(c.emitter),
 		deviceregister.WithClock(c.clk),
 	)
-	c.registerHandler = deviceregister.NewHandler(registerSvc)
+	c.registerHandler = registercontract.NewHandler(registerSvc, nil)
 	c.AddSlice(cell.NewBaseSlice("deviceregister", "devicecell", cell.L4))
 
 	// device-command slice: uses commandtest.InMemQueue as the command store in
@@ -250,7 +269,12 @@ func (c *DeviceCell) initSlices(durabilityMode cell.DurabilityMode) error {
 	if err != nil {
 		return fmt.Errorf("device-command: %w", err)
 	}
-	c.commandHandler = devicecommand.NewHandler(commandSvc)
+	c.commandEnqueueHandler = enqueuecontract.NewHandler(commandSvc, nil)
+	c.commandDequeueHandler = dequeuecontract.NewHandler(commandSvc, nil)
+	c.commandReportHandler = reportcontract.NewHandler(commandSvc, nil)
+	c.commandAckHandler = ackcontract.NewHandler(commandSvc, nil)
+	c.commandExtendLeaseHandler = extendleasecontract.NewHandler(commandSvc, nil)
+	c.commandInternalHandler = internallistcontract.NewHandler(commandSvc, nil)
 	c.commandSweeper = commandruntime.NewSweeperLifecycle("devicecommand.sweeper", &kcommand.Sweeper{
 		Scanner:  cmdQueue,
 		Queue:    cmdQueue,
@@ -264,7 +288,7 @@ func (c *DeviceCell) initSlices(durabilityMode cell.DurabilityMode) error {
 
 	// device-status slice
 	statusSvc := devicestatus.NewService(c.deviceRepo, c.logger)
-	c.statusHandler = devicestatus.NewHandler(statusSvc)
+	c.statusHandler = statuscontract.NewHandler(statusSvc, nil)
 	c.AddSlice(cell.NewBaseSlice("devicestatus", "devicecell", cell.L0))
 
 	// device-list slice
@@ -273,7 +297,7 @@ func (c *DeviceCell) initSlices(durabilityMode cell.DurabilityMode) error {
 	if err != nil {
 		return fmt.Errorf("device-list: %w", err)
 	}
-	c.listHandler = devicelist.NewHandler(listSvc)
+	c.listHandler = listcontract.NewHandler(listSvc, auth.AnyRole("admin"))
 	c.AddSlice(cell.NewBaseSlice("devicelist", "devicecell", cell.L0))
 	return nil
 }

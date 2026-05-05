@@ -69,11 +69,11 @@ func (h *Handler) handle(w http.ResponseWriter, r *http.Request) {
 		httputil.WriteError(r.Context(), w, err)
 		return
 	}
-	if len(req.CommandType) < 1 {
+	if req.CommandType != "" && len(req.CommandType) < 1 {
 		httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "commandType,omitempty: value too short"))
 		return
 	}
-	if len(req.CommandType) > 64 {
+	if req.CommandType != "" && len(req.CommandType) > 64 {
 		httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "commandType,omitempty: value too long"))
 		return
 	}

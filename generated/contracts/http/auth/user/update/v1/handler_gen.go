@@ -64,11 +64,11 @@ func (h *Handler) handle(w http.ResponseWriter, r *http.Request) {
 		httputil.WriteError(r.Context(), w, err)
 		return
 	}
-	if len(req.Email) < 3 {
+	if req.Email != "" && len(req.Email) < 3 {
 		httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "email,omitempty: value too short"))
 		return
 	}
-	if len(req.Email) > 320 {
+	if req.Email != "" && len(req.Email) > 320 {
 		httputil.WriteError(r.Context(), w, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "email,omitempty: value too long"))
 		return
 	}
