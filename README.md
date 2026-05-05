@@ -391,8 +391,48 @@ into `outbox.Entry.Observability` on the write path. When the event is
 consumed, `SubscriberWithMiddleware.SubscribeEntry` restores those keys into the
 consumer handler context before business code runs.
 
-For non-bootstrap usage, call `SubscriberWithMiddleware.SubscribeEntry` rather
-than the raw subscriber when consuming business handlers. When HTTP tracing is enabled,
+Consumer setup now has two composition contracts. Subscription-bearing
+bootstrap applications must configure `WithConsumerBase`; phase6 fails fast
+without it so idempotency and broker settlement are explicit:
+
+```go
+cb, err := outbox.NewConsumerBase(
+    idempotency.NewInMemClaimer(clk),
+    outbox.ConsumerBaseConfig{},
+    clk,
+)
+if err != nil {
+    panic(err)
+}
+
+app := bootstrap.New(
+    bootstrap.WithSubscriber(rawSub),
+    bootstrap.WithConsumerBase(cb),
+    bootstrap.WithTracer(tracer),
+)
+```
+
+Bootstrap automatically decorates the subscriber with
+`eventrouter.NewContractTracingSubscriber(rawSub, tracer)`, so consumer spans end
+after final broker settlement (`ack`, `requeue`, `commit_failed`,
+`retry_exhausted`). For non-bootstrap usage, call
+`SubscriberWithMiddleware.SubscribeEntry` rather than the raw subscriber when
+consuming business handlers, and include the same subscriber decorator when
+final-settlement tracing is required:
+
+```go
+tracedSub := eventrouter.NewContractTracingSubscriber(rawSub, tracer)
+wrappedSub := &outbox.SubscriberWithMiddleware{
+    Inner:        tracedSub,
+    Middleware:   businessMiddleware,
+    ConsumerBase: cb,
+}
+err := wrappedSub.SubscribeEntry(ctx, sub, handler)
+```
+
+Raw `Subscriber.Subscribe` is reserved for adapter/test delivery paths; it
+bypasses business middleware, `ConsumerBase`, observability restoration, and
+final-settlement tracing. When HTTP tracing is enabled,
 GoCell now extracts inbound `traceparent` and `b3` headers before starting the
 server span so synchronous service hops preserve the same `trace_id`. Note:
 `span_id` is intentionally excluded across async boundaries — spans do not

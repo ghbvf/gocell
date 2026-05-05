@@ -700,7 +700,7 @@ type SubscriberIntakeStopper interface {
 }
 
 // SubscriberWithMiddleware wraps a Subscriber with a business middleware chain
-// and an optional ConsumerBase for idempotency/retry.
+// and a required ConsumerBase for idempotency/retry.
 //
 // The SubscribeEntry method is the primary entry point for callers that hold
 // an EntryHandler (e.g., eventrouter.Router). It orchestrates:
@@ -711,8 +711,8 @@ type SubscriberIntakeStopper interface {
 //     ConsumerBase). This is the opposite of chi/Kratos forward composition
 //     where [0] is applied last.
 //  2. ConsumerBase.Wrap (EntryHandler → SubscriberHandler): injects
-//     idempotency Claim/Commit/Release and retry logic. Skipped when
-//     ConsumerBase must be present; SubscribeEntry fails fast without it.
+//     idempotency Claim/Commit/Release and retry logic. SubscribeEntry fails
+//     fast when ConsumerBase is nil.
 //  3. Observability restore (entry.Observability → ctx): built-in OUTERMOST
 //     wrapper applied inside Inner.Subscribe so every layer sees a ctx
 //     populated with trace_id/request_id/correlation_id.

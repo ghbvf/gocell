@@ -1286,10 +1286,17 @@ func (s *spySettlementObserver) last() outbox.SettlementObservation {
 	return s.obs[len(s.obs)-1]
 }
 
+func (s *spySettlementObserver) observations() []outbox.SettlementObservation {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]outbox.SettlementObservation(nil), s.obs...)
+}
+
 // failingCommitReceipt is a Receipt whose Commit always returns an error.
 type failingCommitReceipt struct {
 	commitErr error
 	released  atomic.Bool
+	releases  atomic.Int32
 }
 
 func (r *failingCommitReceipt) Commit(_ context.Context) error {
@@ -1298,6 +1305,7 @@ func (r *failingCommitReceipt) Commit(_ context.Context) error {
 
 func (r *failingCommitReceipt) Release(_ context.Context) error {
 	r.released.Store(true)
+	r.releases.Add(1)
 	return nil
 }
 
@@ -1388,6 +1396,99 @@ func TestSubscribe_RetryExhausted_NotifiesRetryExhausted(t *testing.T) {
 	assert.Equal(t, outbox.SettlementResultRetryExhausted, last.Result)
 	assert.ErrorIs(t, last.Err, transientErr, "retry-exhausted notification must propagate the last handler error")
 
+	assert.Equal(t, 1, bus.DeadLetterLen(), "one entry must be dead-lettered")
+}
+
+func TestSubscribe_RetryExhausted_NotifiesOncePerAttempt(t *testing.T) {
+	bus := New(WithClock(clock.Real()), WithBufferSize(16))
+	defer func() { _ = bus.Close(context.Background()) }()
+
+	spy := &spySettlementObserver{}
+	transientErr := errors.New("downstream unavailable")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		done <- bus.Subscribe(ctx, outbox.Subscription{Topic: "spy.retryexhausted.once"},
+			entryToSubHandler(func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+				return outbox.HandleResult{
+					Disposition:         outbox.DispositionRequeue,
+					Err:                 transientErr,
+					SettlementObservers: []outbox.SettlementObserver{spy},
+				}
+			}))
+	}()
+
+	<-bus.Ready(outbox.Subscription{Topic: "spy.retryexhausted.once"})
+	require.NoError(t, bus.Publish(context.Background(), "spy.retryexhausted.once", makeSimpleEnvelope(t, "spy.retryexhausted.once")))
+
+	require.Eventually(t, func() bool {
+		last := spy.last()
+		return last.Disposition == outbox.DispositionReject &&
+			last.Result == outbox.SettlementResultRetryExhausted
+	}, busEventually10x, testtime.D10ms, "spy must receive one terminal retry-exhausted notification")
+
+	cancel()
+	<-done
+
+	obs := spy.observations()
+	require.Len(t, obs, maxRetries, "each handler attempt must emit exactly one settlement notification")
+	for i := range maxRetries - 1 {
+		assert.Equal(t, outbox.DispositionRequeue, obs[i].Disposition)
+		assert.Equal(t, outbox.SettlementResultSuccess, obs[i].Result)
+		assert.NoError(t, obs[i].Err)
+	}
+	last := obs[len(obs)-1]
+	assert.Equal(t, outbox.DispositionReject, last.Disposition)
+	assert.Equal(t, outbox.SettlementResultRetryExhausted, last.Result)
+	assert.ErrorIs(t, last.Err, transientErr)
+	assert.Equal(t, 1, bus.DeadLetterLen(), "one entry must be dead-lettered")
+}
+
+func TestSubscribe_CommitFailureRetryExhausted_NotifiesOncePerAttempt(t *testing.T) {
+	bus := New(WithClock(clock.Real()), WithBufferSize(16))
+	defer func() { _ = bus.Close(context.Background()) }()
+
+	spy := &spySettlementObserver{}
+	commitErr := errors.New("lease expired")
+	receipt := &failingCommitReceipt{commitErr: commitErr}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		done <- bus.Subscribe(ctx, outbox.Subscription{Topic: "spy.commitfail.exhausted"},
+			func(_ context.Context, _ outbox.Entry) (outbox.HandleResult, outbox.Settlement) {
+				return outbox.HandleResult{
+					Disposition:         outbox.DispositionAck,
+					SettlementObservers: []outbox.SettlementObserver{spy},
+				}, receipt
+			})
+	}()
+
+	<-bus.Ready(outbox.Subscription{Topic: "spy.commitfail.exhausted"})
+	require.NoError(t, bus.Publish(context.Background(), "spy.commitfail.exhausted", makeSimpleEnvelope(t, "spy.commitfail.exhausted")))
+
+	require.Eventually(t, func() bool {
+		last := spy.last()
+		return last.Disposition == outbox.DispositionReject &&
+			last.Result == outbox.SettlementResultRetryExhausted
+	}, busEventually10x, testtime.D10ms, "commit failure must exhaust to a single terminal rejection")
+
+	cancel()
+	<-done
+
+	obs := spy.observations()
+	require.Len(t, obs, maxRetries, "commit-failed retry attempts must not double-notify the final result")
+	for i := range maxRetries - 1 {
+		assert.Equal(t, outbox.DispositionRequeue, obs[i].Disposition)
+		assert.Equal(t, outbox.SettlementResultCommitFailed, obs[i].Result)
+		assert.ErrorIs(t, obs[i].Err, commitErr)
+	}
+	last := obs[len(obs)-1]
+	assert.Equal(t, outbox.DispositionReject, last.Disposition)
+	assert.Equal(t, outbox.SettlementResultRetryExhausted, last.Result)
+	assert.ErrorIs(t, last.Err, commitErr)
+	assert.Equal(t, int32(maxRetries), receipt.releases.Load(), "commit-failed attempts must release before retry/exhaustion")
 	assert.Equal(t, 1, bus.DeadLetterLen(), "one entry must be dead-lettered")
 }
 
