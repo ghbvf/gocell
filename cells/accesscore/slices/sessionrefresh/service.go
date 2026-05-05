@@ -262,10 +262,11 @@ func (s *Service) verifySession(ctx context.Context, sessionID string) (*domain.
 	return session, nil
 }
 
-// cascadeRevoke calls RevokeSessionDetached. Cascade revoke is a security
-// response (reuse-attack or subject-mismatch) that MUST persist even when the
-// HTTP request is canceled or times out. The store owns the detached,
-// 5-second bounded write policy.
+// cascadeRevoke routes security-response revokes (reuse attack,
+// session-not-found, or subject mismatch) through RevokeSessionDetached. Once a
+// cascade path is reached, the store owns the detached, 5-second bounded write
+// policy that lets durable implementations persist the revoke outside the
+// caller's cancellation and ambient transaction boundary.
 //
 // reason is log-only and never exposed to callers.
 //

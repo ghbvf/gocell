@@ -26,10 +26,10 @@ const (
 	refreshTest2Hours  = 2 * time.Hour
 )
 
-// TestPGRefreshStore_ContractSuite runs the shared storetest.RunContractSuite
+// TestPGRefreshStore_ContractSuite runs the shared storetest contract suites
 // against a real PostgreSQL backend. This is the regression gate for backend
-// parity with memstore — every Tn subtest enforces the Store contract on
-// both implementations. Notable subtests for PR#388 review findings:
+// parity with memstore — every Tn subtest enforces the Store contract on both
+// implementations. Notable subtests for PR#388 review findings:
 //
 //   - T20_Peek_RejectionParityAndReuseCascade — Peek must reject identically
 //     to Rotate and still cascade-revoke on reuse_detected.
@@ -46,7 +46,7 @@ func TestPGRefreshStore_ContractSuite(t *testing.T) {
 
 	// Each factory call gets its own PG schema so parallel subtests are fully
 	// isolated. GC (T13) only sees rows it inserted — no shared-table pollution.
-	storetest.RunContractSuite(t, func(t *testing.T, policy refresh.Policy) (refresh.Store, *storetest.FakeClock) {
+	factory := func(t *testing.T, policy refresh.Policy) (refresh.Store, *storetest.FakeClock) {
 		t.Helper()
 
 		p := isolatedSchemaPool(t, ctx, base)
@@ -59,7 +59,10 @@ func TestPGRefreshStore_ContractSuite(t *testing.T) {
 		store, err := NewRefreshStore(p.DB(), txm, policy, clock, nil)
 		require.NoError(t, err)
 		return store, clock
-	})
+	}
+
+	storetest.RunContractSuite(t, factory)
+	storetest.RunIdleExpireContractSuite(t, factory)
 }
 
 // isolatedSchemaPool creates a fresh PG schema and returns a Pool whose
@@ -739,30 +742,32 @@ func TestPGRefreshStore_RevokeSessionDetachedSurvivesAmbientRollback(t *testing.
 }
 
 // ---------------------------------------------------------------------------
-// PR#388 Finding 1 — caller-ctx-cancel cascade detach coverage
+// PR#388 Finding 1 — detached revoke coverage boundaries
 // ---------------------------------------------------------------------------
 //
-// Finding 1 asks for an "integration test that cancels the caller ctx during
+// Finding 1 asked for an "integration test that cancels the caller ctx during
 // reuse_detected and grace-exhausted handling". The literal shape — call
 // store.Rotate with an already-cancelled ctx — does not reach the cascade SQL:
 // txRunner.RunInTx fails at pool.Begin(ctx) with context.Canceled before the
-// reuse check runs. Inserting the cancel mid-call requires either a mock
-// pgxpool (boxes a real-world bug into pure mock theatre) or non-deterministic
-// timing (flaky under load). Both are worse than the layered coverage we have:
+// reuse check runs. Inserting the cancel mid-call would require either a mock
+// pgxpool (boxing the behavior into a mock) or timing-sensitive orchestration.
+// The maintained coverage is intentionally narrower and executable:
 //
 //   1. pkg/ctxutil/detach_test.go asserts that WithDetachedTimeout's returned
 //      ctx is unaffected by parent cancel and carries an independent deadline.
 //   2. cells/accesscore/slices/sessionrefresh/service_test.go::
-//      TestService_CascadeRevoke_DetachesFromCallerCtx asserts that the
-//      service-level cascadeRevoke calls store.RevokeSession with a ctx whose
-//      Err() is nil even when the caller ctx is already cancelled.
-//   3. refresh_store.go handleRotatedRow uses ctxutil.WithDetachedTimeout for
-//      the cascade pool.Exec — verified by code inspection and the helper test
-//      (#1) which proves the wrapped ctx behaves as required.
+//      TestService_CascadeRevoke_UsesDetachedStoreMethod asserts that the
+//      service-level cascade path routes to RevokeSessionDetached rather than
+//      the ambient business revoke.
+//   3. refresh_store.go handleRotatedRow and RevokeSessionDetached use
+//      ctxutil.WithDetachedTimeout for the cascade pool.Exec — verified by code
+//      inspection and the helper test (#1) which proves the wrapped ctx behaves
+//      as required.
 //   4. TestPGRefreshStore_ReuseCascadeSurvivesAmbientRollback (above) verifies
 //      the orthogonal property that cascade SQL bypasses the ambient tx — i.e.
 //      survives caller-driven outer rollback.
 //
-// Together these cover the security property (cascade must commit despite
-// caller-side disruption) without the false confidence of a flaky black-box
-// integration test.
+// Together these cover the chosen boundary: once execution reaches the store's
+// detached revoke path, the final revoke write is detached from caller cancel
+// and ambient rollback. They do not claim that every Refresh entry path
+// continues after an already-canceled caller context.

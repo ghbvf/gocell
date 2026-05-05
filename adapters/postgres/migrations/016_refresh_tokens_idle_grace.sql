@@ -9,7 +9,8 @@
 --   writes idle_expires_at explicitly on every Issue and Rotate.
 --
 -- X14 (REFRESH-GRACE-COUNTER): first_used_at + used_times
---   first_used_at TIMESTAMPTZ NULL: set on the first Rotate of each token.
+--   first_used_at TIMESTAMPTZ NULL: set on the first grace re-use of a
+--   rotated parent token.
 --   used_times     INT          NOT NULL DEFAULT 0: incremented every time
 --   the parent token is re-presented within the grace window. When used_times
 --   reaches Policy.GraceMaxReuses, the next re-present triggers cascade revoke

@@ -46,15 +46,18 @@ func (*typedNilReader) Read([]byte) (int, error) {
 	return 0, errTypedNilReaderUsed
 }
 
-// TestMemStoreContract runs the full C1-C7 contract test suite (T1-T12) against
+// TestMemStoreContract runs the shared refresh store contract suites against
 // the in-memory store.
 func TestMemStoreContract(t *testing.T) {
-	storetest.RunContractSuite(t, func(t *testing.T, policy refresh.Policy) (refresh.Store, *storetest.FakeClock) {
+	factory := func(t *testing.T, policy refresh.Policy) (refresh.Store, *storetest.FakeClock) {
 		clk := storetest.NewFakeClock(baseTime)
 		store, err := memstore.New(policy, clk, nil)
 		require.NoError(t, err)
 		return store, clk
-	})
+	}
+
+	storetest.RunContractSuite(t, factory)
+	storetest.RunIdleExpireContractSuite(t, factory)
 }
 
 func TestNewRejectsInvalidConfig(t *testing.T) {

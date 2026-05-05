@@ -44,6 +44,31 @@ func TestRedactString(t *testing.T) {
 			want: "upstream 401: token=<REDACTED>",
 		},
 		{
+			name: "accessToken_camel",
+			in:   "oauth exchange failed: accessToken=access-value",
+			want: "oauth exchange failed: accessToken=<REDACTED>",
+		},
+		{
+			name: "refreshToken_camel",
+			in:   "oauth exchange failed: refreshToken=1//0g",
+			want: "oauth exchange failed: refreshToken=<REDACTED>",
+		},
+		{
+			name: "access_token_snake",
+			in:   "oauth exchange failed: access_token=access-value",
+			want: "oauth exchange failed: access_token=<REDACTED>",
+		},
+		{
+			name: "refresh_token_snake",
+			in:   "oauth exchange failed: refresh_token=1//0g",
+			want: "oauth exchange failed: refresh_token=<REDACTED>",
+		},
+		{
+			name: "id_token_snake",
+			in:   "oauth exchange failed: id_token=eyJhbGc",
+			want: "oauth exchange failed: id_token=<REDACTED>",
+		},
+		{
 			name: "authorization_colonSpace",
 			in:   "Authorization: Bearer abc.def.ghi",
 			want: "Authorization: <REDACTED>",
@@ -180,6 +205,41 @@ func TestRedactString(t *testing.T) {
 			name: "json_token_quoted_with_spaces",
 			in:   `{"token" : "abc.def.ghi","ok":true}`,
 			want: `{"token" : "<REDACTED>","ok":true}`,
+		},
+		{
+			name: "json_accessToken_quoted",
+			in:   `{"accessToken":"access-value","user":"alice"}`,
+			want: `{"accessToken":"<REDACTED>","user":"alice"}`,
+		},
+		{
+			name: "json_refreshToken_quoted",
+			in:   `{"refreshToken":"1//0g","user":"alice"}`,
+			want: `{"refreshToken":"<REDACTED>","user":"alice"}`,
+		},
+		{
+			name: "json_access_token_quoted",
+			in:   `{"access_token":"access-value","user":"alice"}`,
+			want: `{"access_token":"<REDACTED>","user":"alice"}`,
+		},
+		{
+			name: "json_refresh_token_quoted",
+			in:   `{"refresh_token":"1//0g","user":"alice"}`,
+			want: `{"refresh_token":"<REDACTED>","user":"alice"}`,
+		},
+		{
+			name: "json_id_token_quoted",
+			in:   `{"id_token":"eyJhbGc","user":"alice"}`,
+			want: `{"id_token":"<REDACTED>","user":"alice"}`,
+		},
+		{
+			name: "json_authorization_quoted",
+			in:   `{"authorization":"Bearer abc.def.ghi","user":"alice"}`,
+			want: `{"authorization":"<REDACTED>","user":"alice"}`,
+		},
+		{
+			name: "json_connection_string_quoted",
+			in:   `{"connection_string":"Server=foo;Pwd=bar","ok":true}`,
+			want: `{"connection_string":"<REDACTED>","ok":true}`,
 		},
 		{
 			name: "json_secret_escaped_quote",

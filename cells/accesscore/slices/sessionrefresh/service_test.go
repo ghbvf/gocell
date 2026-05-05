@@ -1149,9 +1149,9 @@ func TestService_CascadeRevoke_UsesDetachedStoreMethod(t *testing.T) {
 	sessionRepo := &sessionNotFoundRepo{notFoundErr: notFoundErr}
 	svc := MustNewService(sessionRepo, roleRepo, userRepo, spy, testIssuer, slog.Default(), WithClock(clock.Real()))
 
-	// Cancel the caller ctx before calling Refresh. This simulates an HTTP
-	// request that times out or is canceled by the client while the server
-	// is processing.
+	// Cancel the caller ctx before calling Refresh. This service-level test
+	// only asserts method routing; durable cancellation behavior is owned by
+	// the store-level RevokeSessionDetached contract.
 	callerCtx, callerCancel := context.WithCancel(context.Background())
 	callerCancel() // cancel immediately
 

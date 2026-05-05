@@ -632,9 +632,9 @@ func runT22RevokeSessionDetachedIgnoresCallerCancel(t *testing.T, factory Factor
 var _ = errors.Is
 
 // RunIdleExpireContractSuite runs the idle-expiry sub-test against the given
-// factory. It is separate from RunContractSuite so backends can opt in once they
-// support the MaxIdle field (Wave 2 policy enforcement). Both memstore and PG
-// must pass this suite after Wave 2.
+// factory. It stays separate from RunContractSuite so backend contract runners
+// can name the MaxIdle policy coverage explicitly. Both memstore and PG invoke
+// this suite from their main contract tests.
 //
 // Test identifiers Tn_IdleExpire_* are the contract for MaxIdle enforcement:
 // a token that has not been rotated within MaxIdle of creation must be rejected

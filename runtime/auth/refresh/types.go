@@ -71,9 +71,9 @@ const (
 //
 // MaxAge bounds Token.ExpiresAt - Token.CreatedAt.
 //
-// MaxIdle is the sliding-window idle-expiry duration. Every Rotate call
-// resets the idle clock on the parent row. A token that is not rotated within
-// MaxIdle of its last rotation (or creation) is rejected as idle-expired.
+// MaxIdle is the sliding-window idle-expiry duration. Issue and Rotate write
+// the newly issued row's idle deadline as now + MaxIdle. A token row that is
+// not rotated before its idle deadline is rejected as idle-expired.
 // Must be positive; use DefaultMaxIdle for the standard 30-day window.
 //
 // GraceMaxReuses caps how many times a parent token may be re-presented within

@@ -113,31 +113,35 @@ s.pool.Exec(cascadeCtx, revokeSessionSQL, ...)
 proposal #40221) with `context.WithTimeout`: the returned context inherits
 all Values from the parent (trace IDs, auth principal, request id) but is
 **not** canceled when parent is canceled, and carries its own absolute
-deadline (`refresh.CascadeRevokeTimeout = 5 * time.Second`). The same helper
-is used at the service layer (`sessionrefresh.Service.cascadeRevoke`) for
-non-store cascade paths (subject-mismatch, session-not-found, revoked-session,
-rotated-subject-mismatch, session-update-not-found) so all cascade revoke
-sites share a single detach + timeout policy.
+deadline (`refresh.CascadeRevokeTimeout = 5 * time.Second`). The service layer
+routes non-store cascade paths (subject-mismatch, session-not-found,
+revoked-session, rotated-subject-mismatch, session-update-not-found) through
+`Store.RevokeSessionDetached` so cascade revoke sites share the store-owned
+detach + timeout policy.
 
 This pattern is the per-call analogue of HashiCorp Vault's process-level
 `core.activeContext` / `quitContext` (used by `vault/token_store.go`
-`revokeInternal`). Vault detaches token revocation from request lifetime to
-guarantee revocation completes despite client disconnect; GoCell adopts the
-same property using `WithoutCancel + WithTimeout` instead of a manager-owned
-process-level context (simpler; no global lifecycle to plumb).
+`revokeInternal`). Vault detaches token revocation from request lifetime;
+GoCell adopts that boundary for explicit detached revoke calls using
+`WithoutCancel + WithTimeout` instead of a manager-owned process-level context
+(simpler; no global lifecycle to plumb).
 
 **Tests**:
 - `pkg/ctxutil/detach_test.go` — helper boundary (parent cancel does not
   propagate; timeout fires; values preserved; cancel func releases)
-- `cells/accesscore/slices/sessionrefresh/service_test.go::TestService_CascadeRevoke_DetachesFromCallerCtx` —
-  service-level cascade with mock store, asserts `ctx.Err() == nil` at
-  `RevokeSession` entry under canceled caller ctx
-- Black-box PG store-level "caller cancel mid-cascade" tests are intentionally
+- `runtime/auth/refresh/storetest.RunContractSuite::T22_RevokeSessionDetached_CascadeIgnoresCallerCancel` —
+  store-level contract for calling `RevokeSessionDetached` with an already
+  canceled caller ctx
+- `cells/accesscore/slices/sessionrefresh/service_test.go::TestService_CascadeRevoke_UsesDetachedStoreMethod` —
+  service-level cascade routing with a spy store; it asserts cascade paths call
+  `RevokeSessionDetached` rather than ambient `RevokeSession`
+- Black-box refresh-entry "caller cancel mid-cascade" tests are intentionally
   not provided: the literal shape (Rotate with already-canceled ctx) cannot
   reach cascade SQL because `RunInTx` fails at `pool.Begin(ctx)` first.
-  Inserting cancel mid-call requires either a mocked pgxpool (mock theatre)
-  or non-deterministic timing (flaky). Coverage is layered through the helper
-  test, the service-level test, and `TestPGRefreshStore_ReuseCascadeSurvivesAmbientRollback`.
+  Inserting cancel mid-call requires either a mocked pgxpool or
+  non-deterministic timing. Coverage is layered through the helper test, the
+  service-level routing test, the store contract, and
+  `TestPGRefreshStore_ReuseCascadeSurvivesAmbientRollback`.
 
 ref: golang/go context.WithoutCancel proposal#40221
 ref: hashicorp/vault vault/token_store.go (quitContext detached pattern)
@@ -333,8 +337,9 @@ are **not** implicit defaults applied by `Validate`.
   that would forever carry the original mismatch in schema history.
 - Cascade revoke takes a hard 5-second timeout (`CascadeRevokeTimeout`). If
   PG cascade SQL exceeds 5s under load, the cascade fails with
-  `context.DeadlineExceeded` and the revoke is logged + retried by upstream
-  (no automatic retry from store; security event still surfaces).
+  `context.DeadlineExceeded`; the revoke failure is logged and surfaced to the
+  caller as unavailable. Neither the store nor the service performs an
+  automatic retry.
 
 ---
 
