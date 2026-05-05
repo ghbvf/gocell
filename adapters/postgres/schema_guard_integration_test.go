@@ -115,50 +115,37 @@ func TestVerifyExpectedVersion_DBAhead_Integration(t *testing.T) {
 		"error message should mention schema version mismatch")
 }
 
-// TestVerifyOutboxLeaseInvariant_CleanState verifies the invariant returns
-// nil when no claiming rows exist (post-014 baseline) — the happy path.
-func TestVerifyOutboxLeaseInvariant_CleanState(t *testing.T) {
+// TestOutboxClaimingLeaseCheckConstraint_RejectsNullLeaseInsert verifies the
+// post-N8 invariant: the DB CHECK constraint
+// `outbox_claiming_requires_lease` prevents any INSERT/UPDATE that combines
+// status='claiming' with NULL lease_id. This is the single source of truth
+// after N8 collapsed the previous startup probe into a DB-level constraint —
+// rolling-deploy with a stale pre-014 binary directly hits 23514 check_violation
+// instead of relying on a one-shot startup-time probe.
+//
+// ref: docs/architecture/202605051600-adr-pg-outbox-fencing.md cutover (N8)
+// ref: riverqueue/river migration 004_pending_and_more.up.sql — DB-level
+// invariants on state machine transitions are the canonical pattern.
+func TestOutboxClaimingLeaseCheckConstraint_RejectsNullLeaseInsert(t *testing.T) {
 	pool, cleanup := setupPostgres(t)
 	defer cleanup()
 
 	ctx := context.Background()
-	migrator, err := NewMigrator(pool, testMigrationsFS(t), "schema_migrations_lease_clean")
+	migrator, err := NewMigrator(pool, testMigrationsFS(t), "schema_migrations_lease_check")
 	require.NoError(t, err)
-	require.NoError(t, migrator.Up(ctx), "migrations must apply cleanly")
+	require.NoError(t, migrator.Up(ctx), "migrations must apply cleanly through 015")
 
-	err = VerifyOutboxLeaseInvariant(ctx, pool)
-	assert.NoError(t, err, "clean post-014 outbox table must satisfy invariant")
-}
-
-// TestVerifyOutboxLeaseInvariant_PreFourteenResidue inserts a row that mimics
-// what a pre-014 binary would write through post-014 schema (status='claiming'
-// with NULL lease_id) and asserts the invariant fails with the dedicated
-// error code so the rolling-deploy guard halts startup.
-func TestVerifyOutboxLeaseInvariant_PreFourteenResidue(t *testing.T) {
-	pool, cleanup := setupPostgres(t)
-	defer cleanup()
-
-	ctx := context.Background()
-	migrator, err := NewMigrator(pool, testMigrationsFS(t), "schema_migrations_lease_residue")
-	require.NoError(t, err)
-	require.NoError(t, migrator.Up(ctx), "migrations must apply cleanly")
-
-	// Inject a pre-014 style row: claiming + NULL lease_id. This is the
-	// exact shape an old binary's ClaimPending SQL produces when running
-	// against the new schema.
+	// Attempt to insert a pre-014 style row: claiming + NULL lease_id. The
+	// post-N8 CHECK constraint must reject this with 23514 check_violation.
 	_, execErr := pool.DB().Exec(ctx, `INSERT INTO outbox_entries
 		(id, aggregate_id, aggregate_type, event_type, topic, payload, metadata, created_at, status, claimed_at, lease_id)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, now(), 'claiming', now(), NULL)`,
 		"00000000-0000-0000-0000-000000000001", "agg-1", "demo", "demo.event", "demo.topic",
 		[]byte(`{}`), []byte(`{}`))
-	require.NoError(t, execErr, "injecting pre-014 residue row must succeed")
 
-	err = VerifyOutboxLeaseInvariant(ctx, pool)
-	require.Error(t, err, "invariant must fail when claiming rows have NULL lease_id")
-	assert.Contains(t, err.Error(), "outbox lease invariant violation",
-		"error must surface the invariant name for ops triage")
-	assert.Contains(t, err.Error(), "1 claiming rows",
-		"error must report the row count")
+	require.Error(t, execErr, "DB CHECK must reject claiming + NULL lease_id")
+	assert.Contains(t, execErr.Error(), "outbox_claiming_requires_lease",
+		"error must surface the constraint name for ops triage")
 }
 
 // TestVerifyExpectedVersion_DBLagged_Integration verifies that when the DB

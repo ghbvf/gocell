@@ -1,9 +1,9 @@
 # ADR — PG Outbox Claim Fencing Token
 
 - **Date**: 2026-05-05
-- **Status**: Accepted (shipped via fix/221-pg-outbox-fencing)
+- **Status**: Accepted (shipped via fix/221-pg-outbox-fencing; cutover hardened in fix/225-outbox-fu-closure)
 - **Closes**: backlog2 B2-A-01 (P0); B2-A-04 / B2-A-05 / B2-A-06 / B2-A-07 / B2-A-12 (P1/P2 absorbed)
-- **Roadmap**: 029 §并行轨道 Track B B1 (PR-V1-DATA-OUTBOX-FENCING) absorbing B6 (PR-V1-PG-OUTBOX-RELAY-HARDEN)
+- **Roadmap**: 029 §并行轨道 Track B B1 (PR-V1-DATA-OUTBOX-FENCING) absorbing B6 (PR-V1-PG-OUTBOX-RELAY-HARDEN); cutover updated by 030 § B' N8 (PR-V1-OUTBOX-FU-CLOSURE)
 
 ## Context
 
@@ -55,7 +55,8 @@ CLAUDE.md "no backward compat" applies to runtime/API surface, not to migrator t
 
 ## Consequences
 
-- **Migration**: new column nullable, no default, with a partial index `idx_outbox_claiming_lease` keyed on lease_id WHERE status='claiming'. ALTER TABLE ADD COLUMN with no default is O(metadata) — no table rewrite. The migration also resets any in-flight `claiming` rows back to `pending` (deploys are expected to drain, but the reset catches worker-crash residue).
+- **Migration 014**: new column nullable, no default, with a partial index `idx_outbox_claiming_lease` keyed on lease_id WHERE status='claiming'. ALTER TABLE ADD COLUMN with no default is O(metadata) — no table rewrite. The migration also fail-closed checks for any in-flight `claiming` rows; presence aborts so operators drain workers before applying.
+- **Migration 015 (N8 cutover)**: adds CHECK constraint `outbox_claiming_requires_lease` that DB-enforces `status <> 'claiming' OR lease_id IS NOT NULL`. Any rolling-deploy attempt by a stale pre-014 binary to write `claiming + NULL lease_id` directly raises SQLSTATE 23514, eliminating the rolling-deploy footgun without a runtime probe. The previous startup probe `VerifyOutboxLeaseInvariant` and its dedicated errcode `ErrAdapterPGOutboxLeaseInvariant` are deleted in the same change — DB CHECK is the single source of truth and the `lease_id IS NULL` three-valued-logic edge case in reclaimStale CAS is naturally subsumed (the offending state cannot exist in the table).
 - **Interface delta**: `outbox.Store.Mark{Published,Retry,Dead}` gain `leaseID string`; `ClaimedEntry` gains `LeaseID string`. Direct change with no shim — there are no external Store consumers per CLAUDE.md.
 - **B6 absorbed in same PR**: B2-A-04/05/06/07/12 all live in `adapters/postgres/outbox_*.go` + `runtime/outbox/relay.go` and overlap the same edit window. Splitting would force every PR to rebase across `outbox_store.go` and `relay.go`. They ship together as PR-V1-DATA-OUTBOX-FENCING-AND-RELAY-HARDEN.
 - **Static guards**: three new archtest gates lock the regression doors:
