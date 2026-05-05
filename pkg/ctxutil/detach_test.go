@@ -22,7 +22,7 @@ func TestWithDetachedTimeout_ParentCancelDoesNotPropagate(t *testing.T) {
 	case <-detached.Done():
 		t.Error("expected detached ctx to remain live after parent cancel")
 	case <-time.After(50 * time.Millisecond):
-		// expected: detached is not cancelled by parent
+		// expected: detached is not canceled by parent
 	}
 
 	if detached.Err() != nil {
@@ -81,7 +81,7 @@ func TestWithDetachedTimeout_CancelFuncReleasesResources(t *testing.T) {
 	}
 }
 
-func TestWithDetachedTimeout_AlreadyCancelledParent(t *testing.T) {
+func TestWithDetachedTimeout_AlreadyCanceledParent(t *testing.T) {
 	t.Parallel()
 
 	parent, parentCancel := context.WithCancel(context.Background())
@@ -92,8 +92,8 @@ func TestWithDetachedTimeout_AlreadyCancelledParent(t *testing.T) {
 
 	select {
 	case <-detached.Done():
-		t.Error("expected detached ctx to remain live even when parent was already cancelled")
+		t.Error("expected detached ctx to remain live even when parent was already canceled")
 	case <-time.After(50 * time.Millisecond):
-		// expected: detach cuts the already-cancelled parent
+		// expected: detach cuts the already-canceled parent
 	}
 }

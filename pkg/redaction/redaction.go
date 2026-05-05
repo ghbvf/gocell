@@ -187,14 +187,42 @@ func RedactError(err error) error {
 // ref: hashicorp/vault audit log_raw=false default; ADR
 // docs/architecture/202604242030-adr-kernel-wrapper-contract-observability.md §8.
 func RedactPanic(v any) string {
-	switch x := v.(type) {
-	case nil:
+	if v == nil {
 		return "<nil>"
+	}
+	switch x := RedactAny(v).(type) {
 	case error:
-		return RedactString(x.Error())
+		return x.Error()
+	case string:
+		return x
+	default:
+		return fmt.Sprint(x)
+	}
+}
+
+// RedactAny scrubs sensitive substrings from arbitrary panic-style payloads
+// before they reach observability backends. Three branches:
+//
+//   - nil → nil
+//   - error → RedactError(e)
+//   - string → RedactString(s)
+//   - other → RedactString(fmt.Sprint(v)) (covers fmt.Stringer, structs,
+//     primitive types; fail-closed: stringify and mask, never echo raw).
+//
+// Intended for `slog.Any("panic", redaction.RedactAny(r))` in panic recovery
+// blocks where r is `any` returned from recover(). The same regex pipeline as
+// RedactString applies, so the field-set and over-mask trade-offs documented
+// at package level apply uniformly.
+func RedactAny(v any) any {
+	if v == nil {
+		return nil
+	}
+	switch x := v.(type) {
+	case error:
+		return RedactError(x)
 	case string:
 		return RedactString(x)
 	default:
-		return RedactString(fmt.Sprintf("%v", v))
+		return RedactString(fmt.Sprint(x))
 	}
 }
