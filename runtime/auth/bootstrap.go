@@ -38,10 +38,14 @@ type BootstrapRateLimiter interface {
 	Allow(key string) bool
 }
 
-// BootstrapAuthFailObserver is invoked after a 401 response is written. The
-// reason string is one of: "missing_header", "wrong_credentials". Wiring an
-// observer is how callers route bootstrap auth failures to audit logs without
-// importing cells/ from runtime/auth.
+// BootstrapAuthFailObserver is invoked after a 401 or 429 response is written.
+// The reason string is one of:
+//   - "missing_header"    — Basic Auth header absent
+//   - "wrong_credentials" — header present but credentials do not match
+//   - "rate_limited"      — per-IP token bucket exhausted (429)
+//
+// Wiring an observer is how callers route bootstrap auth failures to audit logs
+// without importing cells/ from runtime/auth.
 type BootstrapAuthFailObserver = func(ctx context.Context, reason string)
 
 // NewBootstrapMiddleware constructs the HTTP middleware chain for bootstrap
@@ -94,7 +98,7 @@ func newBootstrapMiddleware(
 ) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if !allowBootstrapRequest(w, r, limiter) {
+			if !allowBootstrapRequest(w, r, limiter, onAuthFail) {
 				return
 			}
 			if reason, ok := authenticateBootstrap(r, creds); !ok {
@@ -111,13 +115,18 @@ func newBootstrapMiddleware(
 
 // allowBootstrapRequest enforces the per-IP rate limit and writes the 429
 // envelope on rejection. Returns true when the request should proceed.
-func allowBootstrapRequest(w http.ResponseWriter, r *http.Request, limiter BootstrapRateLimiter) bool {
+// On rejection, onAuthFail (if non-nil) is called with reason="rate_limited"
+// so audit observers can record the blocked attempt.
+func allowBootstrapRequest(w http.ResponseWriter, r *http.Request, limiter BootstrapRateLimiter, onAuthFail BootstrapAuthFailObserver) bool {
 	if limiter.Allow(bootstrapClientIP(r)) {
 		return true
 	}
 	w.Header().Set("Retry-After", strconv.Itoa(bootstrapRetryAfter(limiter)))
 	httputil.WriteError(r.Context(), w,
 		errcode.New(errcode.KindRateLimited, errcode.ErrRateLimited, "too many requests"))
+	if onAuthFail != nil {
+		onAuthFail(r.Context(), "rate_limited")
+	}
 	return false
 }
 

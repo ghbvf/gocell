@@ -16,6 +16,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/cell"
 	kernellifecycle "github.com/ghbvf/gocell/kernel/lifecycle"
 	"github.com/ghbvf/gocell/kernel/worker"
+	"github.com/ghbvf/gocell/pkg/ctxkeys"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/bootstrap"
@@ -149,14 +150,18 @@ const bootstrapRateLimitPerSec = 5.0 / 60.0
 const bootstrapRateLimitBurst = 10
 
 // bootstrapAuthFailLogger returns the onAuthFail observer wired into the
-// bootstrap middleware. It logs slog.Error with the structured "reason" field
-// from runtime/auth so dashboards / SIEM integrations can alert on failures.
+// bootstrap middleware. It logs slog.Error with the structured "reason" and
+// "client_ip" fields so dashboards / SIEM integrations can alert on failures.
+// client_ip is empty when the context carries no real IP (health checks, unit
+// tests without middleware that sets ctxkeys.RealIP).
 // Audit cell integration is tracked as backlog BOOTSTRAP-AUDIT-CHAIN-WIRING-01.
 func bootstrapAuthFailLogger() auth.BootstrapAuthFailObserver {
 	return func(ctx context.Context, reason string) {
+		ip, _ := ctxkeys.RealIPFrom(ctx)
 		slog.ErrorContext(ctx, "bootstrap_auth_failed",
 			slog.String("event", "bootstrap_auth_failed"),
-			slog.String("reason", reason))
+			slog.String("reason", reason),
+			slog.String("client_ip", ip))
 	}
 }
 

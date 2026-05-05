@@ -73,10 +73,10 @@ type Service struct {
 // an error so mis-wired assemblies fail at startup.
 func NewService(provisioner *adminprovision.Provisioner, logger *slog.Logger, opts ...Option) (*Service, error) {
 	if provisioner == nil {
-		return nil, fmt.Errorf("setup: provisioner is required")
+		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "setup: provisioner is required")
 	}
 	if logger == nil {
-		return nil, fmt.Errorf("setup: logger is required")
+		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "setup: logger is required")
 	}
 	s := &Service{
 		provisioner: provisioner,
