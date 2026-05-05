@@ -411,7 +411,10 @@ func TestUpgradeHandler_RejectsEmptyOrigins(t *testing.T) {
 	t.Run("empty origins — expect construction error with *errcode.Error", func(t *testing.T) {
 		hub := rtws.NewHub(cfg, nil)
 
-		handler, err := adapterws.UpgradeHandler(hub, adapterws.UpgradeConfig{AllowedOrigins: nil})
+		handler, err := adapterws.UpgradeHandler(hub, adapterws.UpgradeConfig{
+			AllowedOrigins: nil,
+			Authenticator:  testAuth(),
+		})
 		require.Error(t, err)
 		assert.Nil(t, handler)
 		var ec *errcode.Error
@@ -493,6 +496,7 @@ func TestUpgradeHandler_RejectsWildcardOrigin(t *testing.T) {
 
 	handler, err := adapterws.UpgradeHandler(hub, adapterws.UpgradeConfig{
 		AllowedOrigins: []string{"*"},
+		Authenticator:  testAuth(),
 	})
 	require.Error(t, err)
 	assert.Nil(t, handler)
@@ -507,6 +511,7 @@ func TestMustUpgradeHandler_PanicsOnInvalidConfig(t *testing.T) {
 	require.Panics(t, func() {
 		_ = adapterws.MustUpgradeHandler(hub, adapterws.UpgradeConfig{
 			AllowedOrigins: []string{"*"},
+			Authenticator:  testAuth(),
 		})
 	})
 }
@@ -522,6 +527,7 @@ func TestUpgradeHandler_RejectsBareHostOrigin(t *testing.T) {
 
 	handler, err := adapterws.UpgradeHandler(hub, adapterws.UpgradeConfig{
 		AllowedOrigins: []string{"example.com"},
+		Authenticator:  testAuth(),
 	})
 	require.Error(t, err)
 	assert.Nil(t, handler)

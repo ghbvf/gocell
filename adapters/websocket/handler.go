@@ -14,6 +14,7 @@ import (
 
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/logutil"
+	"github.com/ghbvf/gocell/runtime/auth"
 	rtws "github.com/ghbvf/gocell/runtime/websocket"
 )
 
@@ -35,6 +36,22 @@ type UpgradeConfig struct {
 	// the slice handed to coder/websocket is the exact one that passed
 	// validation (no trim drift between check and runtime).
 	AllowedOrigins []string
+
+	// Authenticator validates the HTTP request before WebSocket upgrade.
+	// Required (nil → ErrWebsocketAuthenticatorMissing at construction).
+	//
+	// The Authenticator runs BEFORE websocket.Accept; rejection writes a
+	// plain-text 401 directly to the response writer (browser WebSocket APIs
+	// cannot read the response body, so envelope JSON is meaningless).
+	//
+	// Composition root selects one of:
+	//   - auth.NewJWTAuthenticator(verifier)        — token-via-Authorization-header
+	//   - auth.NewContextAuthenticator()            — already authenticated by listener middleware
+	//   - auth.NewAnonymousAuthenticator()          — explicit unauthenticated channel
+	//   - custom auth.AuthenticatorFunc             — query-param / cookie / subprotocol token
+	//
+	// ref: coder/websocket accept.go — http.Error(w, err.Error(), code) before Accept
+	Authenticator auth.Authenticator
 }
 
 // Validate checks that the UpgradeConfig is well-formed and rewrites
@@ -77,12 +94,36 @@ func UpgradeHandler(hub *rtws.Hub, cfg UpgradeConfig) (http.Handler, error) {
 		return nil, errcode.New(errcode.KindInternal, errcode.ErrWebsocketHubMissing,
 			"websocket: UpgradeHandler hub must not be nil (fail-fast at wire time)")
 	}
+	if cfg.Authenticator == nil {
+		return nil, errcode.New(errcode.KindInternal, errcode.ErrWebsocketAuthenticatorMissing,
+			"websocket: UpgradeHandler Authenticator must not be nil (SEC-FAIL-CLOSED); "+
+				"use auth.NewAnonymousAuthenticator() for explicit unauthenticated endpoints")
+	}
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !hub.IsRunning() {
 			http.Error(w, "websocket hub not ready", http.StatusServiceUnavailable)
+			return
+		}
+
+		// Authenticate before upgrade (cf. coder/websocket accept.go pattern:
+		// HTTP errors are returned before Accept consumes the handshake bytes).
+		principal, ok, err := cfg.Authenticator.Authenticate(r)
+		if err != nil {
+			slog.Warn("websocket: upgrade rejected — invalid credential",
+				slog.Any("error", err),
+				slog.String("remote_addr", logutil.SafeAddr(r.RemoteAddr)),
+			)
+			http.Error(w, "Unauthorized", http.StatusUnauthorized)
+			return
+		}
+		if !ok || principal == nil {
+			slog.Warn("websocket: upgrade rejected — credential absent",
+				slog.String("remote_addr", logutil.SafeAddr(r.RemoteAddr)),
+			)
+			http.Error(w, "Unauthorized", http.StatusUnauthorized)
 			return
 		}
 
@@ -108,7 +149,7 @@ func UpgradeHandler(hub *rtws.Hub, cfg UpgradeConfig) (http.Handler, error) {
 		wsConn.SetReadLimit(hub.Config().ReadLimit)
 
 		connID := "ws-" + uuid.NewString()
-		conn := NewConn(connID, wsConn)
+		conn := NewConn(connID, principal, wsConn)
 
 		remoteAddr := logutil.SafeAddr(r.RemoteAddr)
 		if regErr := hub.Register(r.Context(), conn); regErr != nil {
@@ -122,6 +163,8 @@ func UpgradeHandler(hub *rtws.Hub, cfg UpgradeConfig) (http.Handler, error) {
 		slog.Info("websocket: client connected",
 			slog.String("conn_id", connID),
 			slog.String("remote_addr", remoteAddr),
+			slog.String("subject", principal.Subject),
+			slog.String("kind", principal.Kind.String()),
 		)
 	}), nil
 }
