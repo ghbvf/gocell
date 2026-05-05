@@ -114,12 +114,14 @@ lifecycle: active
 codegen: true
 endpoints:
   server: mycell
+  clients: []          # external callers (cell ids or actor ids); empty = open API
   http:
     method: GET
     path: /api/v1/hello
     successStatus: 200
+    noContent: false   # true only for endpoints whose contract returns no body (e.g. 204 DELETE)
     auth:
-      public: true
+      public: true     # JWT-exempt; mutually exclusive with passwordResetExempt (FMT-26)
 schemaRefs:
   response: response.schema.json
 ```
@@ -204,47 +206,45 @@ func (h *Handler) RegisterRoutes(mux kcell.RouteHandler) error {
 
 ### Step 4: Implement the Cell
 
-Create `cells/mycell/cell.go`:
+Cell metadata and Init wiring are produced by codegen from `cell.yaml` — set `goStructName: MyCell` in the yaml and run `go run ./cmd/gocell generate cell --all` to emit `cells/mycell/cell_gen.go` (the file holds the `metadata.CellMeta{}` literal plus a generated `Init` that drains markers).
+
+Hand-write only `cells/mycell/cell.go`:
+
 ```go
 package mycell
 
 import (
     "context"
+    "net/http"
 
     "github.com/ghbvf/gocell/cells/mycell/slices/myhello"
     "github.com/ghbvf/gocell/kernel/cell"
+    "github.com/ghbvf/gocell/runtime/auth"
 )
 
+// +cell:listener:ref=cell.PrimaryListener,prefix=/api/v1
 type MyCell struct {
     *cell.BaseCell
+
+    // +slice:route:slice=myhello,subPath=
     helloH *myhello.Handler
 }
 
 func New() *MyCell {
     return &MyCell{
-        BaseCell: cell.NewBaseCell(cell.CellMetadata{
-            ID:               "mycell",
-            Type:             cell.CellTypeCore,
-            ConsistencyLevel: cell.L0,
-            Owner:            cell.Owner{Team: "my-team", Role: "my-owner"},
-            Verify:           cell.CellVerify{Smoke: []string{"mycell/smoke"}},
-        }),
-        helloH: myhello.NewHandler(),
+        BaseCell: cell.MustNewBaseCell(loadCellMetadata()),
+        helloH:   myhello.NewHandler(),
     }
 }
 
-func (c *MyCell) Init(ctx context.Context, reg cell.Registry) error {
-    if err := c.BaseCell.Init(ctx, reg); err != nil {
-        return err
-    }
-    reg.RouteGroup(cell.RouteGroup{
-        Listener: cell.PrimaryListener,
-        Prefix:   "/api/v1",
-        Register: c.helloH.RegisterRoutes,
-    })
+// initInternal is the hand-written init hook called from cell_gen.go after
+// BaseCell.Init runs. Wire dependencies (DB, clients, workers) here.
+func (c *MyCell) initInternal(ctx context.Context, reg cell.Registry) error {
     return nil
 }
 ```
+
+The `+cell:listener` / `+slice:route` markers tell `cellgen` how to emit `cell_gen.go::Init`, which calls `BaseCell.Init`, then `c.initInternal`, then registers each route group + slice. Re-run `gocell generate cell --all` after changing markers.
 
 ### Step 5: Create a main.go
 
