@@ -70,7 +70,7 @@ curl -s -X POST http://localhost:8081/api/v1/access/setup/admin \
 The admin you just created uses the password from the request body —
 operator-set passwords are not "initial randoms", so `passwordResetRequired`
 is `false` from the start. The reset flow is exercised by the dedicated
-`identity-manage` change-password endpoint (`POST /api/v1/access/users/{id}/password`),
+`identitymanage` change-password endpoint (`POST /api/v1/access/users/{id}/password`),
 not by the setup path.
 
 ```bash

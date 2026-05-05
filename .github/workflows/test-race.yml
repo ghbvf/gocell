@@ -7,8 +7,8 @@ name: Test · Race Detector
 # matrix.
 #
 # macOS supplemental race coverage lives in `_build-lint.yml` os-smoke job
-# (curated subset of runtime/shutdown/, accesscore/initialadmin/,
-# runtime/config/, kernel/governance/ — continue-on-error advisory). It is
+# (curated subset of runtime/shutdown/, runtime/config/, kernel/governance/
+# — continue-on-error advisory). It is
 # kept separate because Apple Silicon scheduler can surface platform-
 # specific race conditions, and the os-smoke job's continue-on-error
 # disposition is unsuitable for the strict Linux gate.
