@@ -5,10 +5,12 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/ghbvf/gocell/kernel/clock/clockmock"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/runtime/http/middleware"
@@ -20,12 +22,23 @@ var (
 	_ middleware.CircuitBreakerRetryAfter = (*Adapter)(nil)
 )
 
-// mustNew creates an Adapter, failing the test on error.
+// mustNew creates an Adapter with a fake clock, failing the test on error.
 func mustNew(t *testing.T, cfg Config) *Adapter {
 	t.Helper()
-	a, err := New(cfg)
+	fc := clockmock.New(time.Unix(0, 0))
+	a, err := New(cfg, fc)
 	require.NoError(t, err)
 	return a
+}
+
+// mustNewWithClock creates an Adapter with a fake clock, returning both,
+// failing the test on error.
+func mustNewWithClock(t *testing.T, cfg Config) (*Adapter, *clockmock.FakeClock) {
+	t.Helper()
+	fc := clockmock.New(time.Unix(0, 0))
+	a, err := New(cfg, fc)
+	require.NoError(t, err)
+	return a, fc
 }
 
 func TestAdapter_DefaultConfig_Closed(t *testing.T) {
@@ -208,13 +221,22 @@ func TestAdapter_Allow_FailureNonNilError(t *testing.T) {
 // TestNew_EmptyName_Errors verifies that New rejects an empty Name so
 // production configurations are never silently misconfigured.
 func TestNew_EmptyName_Errors(t *testing.T) {
-	a, err := New(Config{})
+	fc := clockmock.New(time.Unix(0, 0))
+	a, err := New(Config{}, fc)
 	require.Error(t, err, "empty Name must return an error")
 	assert.Nil(t, a)
 	var ec *errcode.Error
 	require.ErrorAs(t, err, &ec)
 	assert.Equal(t, ErrAdapterCircuitBreakerConfig, ec.Code)
 	assert.Contains(t, err.Error(), "Name required")
+}
+
+// TestNew_NilClock_Panics verifies that New panics on nil clock,
+// consistent with PROD-CLOCK-INJECTION-01 and the ratelimit adapter pattern.
+func TestNew_NilClock_Panics(t *testing.T) {
+	assert.Panics(t, func() {
+		_, _ = New(Config{Name: "test-nil-clock"}, nil)
+	})
 }
 
 // TestAdapter_HalfOpen_MaxRequestsConcurrent verifies that MaxRequests=1 in

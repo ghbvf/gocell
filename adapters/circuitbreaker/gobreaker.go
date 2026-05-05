@@ -5,6 +5,7 @@ import (
 
 	"github.com/sony/gobreaker/v2"
 
+	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
@@ -100,12 +101,14 @@ type Config struct {
 type Adapter struct {
 	cb      *gobreaker.TwoStepCircuitBreaker[struct{}]
 	timeout time.Duration
+	clk     clock.Clock
 }
 
 // New creates a gobreaker-backed circuit breaker adapter.
 // Returns an error if cfg.Name is empty, as Name is required for logs and
 // metrics identification. Production configurations must never silently degrade.
-func New(cfg Config) (*Adapter, error) {
+func New(cfg Config, clk clock.Clock) (*Adapter, error) {
+	clock.MustHaveClock(clk, "circuitbreaker.New")
 	if cfg.Name == "" {
 		return nil, errcode.New(errcode.KindInvalid, ErrAdapterCircuitBreakerConfig,
 			"circuitbreaker: Name required")
@@ -148,6 +151,7 @@ func New(cfg Config) (*Adapter, error) {
 	return &Adapter{
 		cb:      gobreaker.NewTwoStepCircuitBreaker[struct{}](st),
 		timeout: timeout,
+		clk:     clk,
 	}, nil
 }
 
