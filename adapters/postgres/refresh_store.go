@@ -174,12 +174,8 @@ func NewRefreshStore(
 	if validation.IsNilInterface(clk) {
 		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "postgres.NewRefreshStore: clock must not be nil")
 	}
-	if policy.MaxAge <= 0 {
-		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "postgres.NewRefreshStore: policy.MaxAge must be positive")
-	}
-	if policy.ReuseInterval < 0 {
-		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
-			"postgres.NewRefreshStore: policy.ReuseInterval must not be negative")
+	if err := policy.Validate(); err != nil {
+		return nil, errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed, "postgres.NewRefreshStore", err)
 	}
 	if validation.IsNilInterface(randReader) {
 		randReader = rand.Reader
@@ -273,7 +269,11 @@ func (s *PGRefreshStore) Peek(ctx context.Context, presented string) (*refresh.T
 	var rejectErr error
 	err := s.txRunner.RunInTx(ctx, func(txCtx context.Context) error {
 		var innerErr error
-		row, innerErr = s.validatePresentedInTx(txCtx, sel, ver)
+		// Peek is read-only by contract: pass mutate=false so the grace
+		// counter (used_times) is not incremented. Cascade revoke on
+		// reuse / grace_exhausted still fires (it bypasses the ambient tx
+		// directly via s.pool.Exec — security response must persist).
+		row, innerErr = s.validatePresentedInTx(txCtx, sel, ver, false)
 		if innerErr == nil {
 			return nil
 		}
@@ -342,7 +342,10 @@ func (s *PGRefreshStore) Rotate(ctx context.Context, presented string) (string, 
 
 // rotateInTx orchestrates the Rotate branches within a transaction context.
 func (s *PGRefreshStore) rotateInTx(ctx context.Context, sel, ver []byte) (string, *refresh.Token, error) {
-	row, err := s.validatePresentedInTx(ctx, sel, ver)
+	// Rotate is the mutating path: pass mutate=true so the grace counter
+	// is incremented when the parent has already been rotated and is being
+	// re-presented within the grace window.
+	row, err := s.validatePresentedInTx(ctx, sel, ver, true)
 	if err != nil {
 		return "", nil, err
 	}
@@ -383,7 +386,13 @@ func (s *PGRefreshStore) rotateInTx(ctx context.Context, sel, ver []byte) (strin
 	}, nil
 }
 
-func (s *PGRefreshStore) validatePresentedInTx(ctx context.Context, sel, ver []byte) (refreshRow, error) {
+// validatePresentedInTx validates the presented (selector, verifier) within
+// the ambient transaction. mutate=true is the Rotate path (increments
+// used_times in the grace branch); mutate=false is the Peek path (read-only
+// by contract — Peek MUST NOT consume the grace budget). Cascade revoke on
+// reuse / grace-exhausted bypasses the ambient tx in both paths because it
+// is a security response that must persist regardless of caller rollback.
+func (s *PGRefreshStore) validatePresentedInTx(ctx context.Context, sel, ver []byte, mutate bool) (refreshRow, error) {
 	row, err := s.selectBySelectorInTx(ctx, sel)
 	if err != nil {
 		return refreshRow{}, err
@@ -400,7 +409,7 @@ func (s *PGRefreshStore) validatePresentedInTx(ctx context.Context, sel, ver []b
 	if err != nil {
 		return refreshRow{}, err
 	}
-	return s.validateRow(ctx, row, ver)
+	return s.validateRow(ctx, row, ver, mutate)
 }
 
 func (s *PGRefreshStore) selectBySelectorInTx(ctx context.Context, sel []byte) (refreshRow, error) {
@@ -426,7 +435,7 @@ func (s *PGRefreshStore) lockSessionInTx(ctx context.Context, sessionID string) 
 	return nil
 }
 
-func (s *PGRefreshStore) validateRow(ctx context.Context, row refreshRow, ver []byte) (refreshRow, error) {
+func (s *PGRefreshStore) validateRow(ctx context.Context, row refreshRow, ver []byte, mutate bool) (refreshRow, error) {
 	if err := s.checkBasicValidity(row, ver); err != nil {
 		return refreshRow{}, err
 	}
@@ -434,7 +443,7 @@ func (s *PGRefreshStore) validateRow(ctx context.Context, row refreshRow, ver []
 	if row.rotatedAt == nil {
 		return row, nil
 	}
-	if err := s.handleRotatedRow(ctx, row); err != nil {
+	if err := s.handleRotatedRow(ctx, row, mutate); err != nil {
 		return refreshRow{}, err
 	}
 	return row, nil
@@ -467,7 +476,15 @@ func (s *PGRefreshStore) checkBasicValidity(row refreshRow, ver []byte) error {
 // handleRotatedRow runs grace-cap, reuse-window, and used_times-increment
 // branches for rows whose parent has already been rotated once. Caller has
 // already verified the row is otherwise valid.
-func (s *PGRefreshStore) handleRotatedRow(ctx context.Context, row refreshRow) error {
+//
+// mutate=false (Peek path): grace cap and reuse-window cascade revoke still
+// fire (security response must persist on any presentation, even read-only
+// preflight), but the in-grace used_times increment is skipped — Peek is
+// strictly read-only by Store contract and must not consume grace budget.
+//
+// mutate=true (Rotate path): in-grace re-presentation increments used_times
+// via markGraceUsedSQL so that the counter approaches GraceMaxReuses.
+func (s *PGRefreshStore) handleRotatedRow(ctx context.Context, row refreshRow, mutate bool) error {
 	now := s.clock.Now()
 
 	// X14: grace counter cap. If the grace cap is configured and this parent
@@ -511,7 +528,14 @@ func (s *PGRefreshStore) handleRotatedRow(ctx context.Context, row refreshRow) e
 		return rejectWithReason("reuse_detected", row.sessionID)
 	}
 
-	// Within grace window: increment used_times so the counter approaches GraceMaxReuses.
+	// Within grace window. Only Rotate consumes the grace budget; Peek is
+	// read-only by Store contract and must not advance used_times even when
+	// the parent is in the grace window (otherwise a single sessionrefresh
+	// request — Peek + Rotate — would consume two slots and exhaust grace
+	// twice as fast as the policy intends).
+	if !mutate {
+		return nil
+	}
 	if _, execErr := s.execCtx(ctx, markGraceUsedSQL, now, row.id); execErr != nil {
 		return errcode.Wrap(errcode.KindInternal, ErrAdapterPGQuery, "refresh store: mark grace used", execErr)
 	}

@@ -8,7 +8,7 @@
 // T11 ExpiresAt calculation, T12 errcode sentinel category, T13 GC cleanup,
 // T14 concurrent goroutine race model, T15 reuse-after-grace cascade,
 // T16 grace-inside-interval, T17 parse-failure uniformity, T18 RevokeUser,
-// T19-T20 Peek preflight/rejection.
+// T19-T20 Peek preflight/rejection, T21 Peek does not consume grace budget.
 package storetest
 
 import (
@@ -129,6 +129,10 @@ func RunContractSuite(t *testing.T, factory Factory) {
 	t.Run("T20_Peek_RejectionParityAndReuseCascade", func(t *testing.T) {
 		t.Parallel()
 		runT20PeekRejectionParityAndReuseCascade(t, factory)
+	})
+	t.Run("T21_Peek_DoesNotConsumeGraceBudget", func(t *testing.T) {
+		t.Parallel()
+		runT21PeekDoesNotConsumeGraceBudget(t, factory)
 	})
 }
 
@@ -520,6 +524,58 @@ func runT20PeekRejectionParityAndReuseCascade(t *testing.T, factory Factory) {
 	assert.ErrorIs(t, err, refresh.ErrRejected, "reuse Peek must reject")
 	_, _, err = store.Rotate(ctx, childWire)
 	assert.ErrorIs(t, err, refresh.ErrRejected, "reuse Peek must cascade revoke the session")
+}
+
+// runT21PeekDoesNotConsumeGraceBudget verifies that Peek (read-only by Store
+// contract) does not increment the X14 grace-reuse counter. The realistic
+// shape is sessionrefresh.Refresh: it calls Peek immediately followed by
+// Rotate inside the same request. If Peek consumed a grace slot, the
+// effective re-use cap would be halved; configuring GraceMaxReuses=3 would
+// allow only 1 retry in practice. This regression caught a PG-vs-memstore
+// divergence (PR#388 review) where the PG store incremented used_times in
+// the Peek path and memstore did not.
+//
+// Test shape:
+//   - Issue + first Rotate (parent.rotated_at flips; grace window opens;
+//     used_times still 0 because the first rotation does not enter
+//     handleRotatedRow / markGraceUsed).
+//   - Peek the parent GraceMaxReuses+5 times. The broken implementation
+//     would silently push used_times past the cap; the fix keeps it at 0.
+//   - Drain GraceMaxReuses grace retries (each is a legitimate Rotate that
+//     increments used_times to GraceMaxReuses).
+//   - One more Rotate now finds used_times == GraceMaxReuses and MUST
+//     trigger reuse_detected via cascade revoke.
+func runT21PeekDoesNotConsumeGraceBudget(t *testing.T, factory Factory) {
+	p := defaultPolicy
+	require.Greater(t, p.GraceMaxReuses, 1, "test prerequisites: GraceMaxReuses > 1")
+	store, _ := factory(t, p)
+
+	ctx := context.Background()
+	parentWire, _ := mustIssue(t, store, "sess-21", "user-21")
+
+	// First Rotate: rotated_at flips. used_times = 0 (handleRotatedRow not
+	// reached because rotated_at was nil before this call).
+	_, _ = mustRotate(t, store, parentWire)
+
+	// Peek the parent many more times than the grace cap. None of these
+	// should consume the grace budget. Without the fix, used_times would
+	// reach GraceMaxReuses after this loop and the very next Rotate would
+	// be rejected as reuse_detected.
+	for i := 0; i < p.GraceMaxReuses+5; i++ {
+		_, err := store.Peek(ctx, parentWire)
+		require.NoError(t, err, "Peek %d must succeed in grace window", i)
+	}
+
+	// All grace slots still available. Drain GraceMaxReuses grace retries
+	// (each is a legitimate Rotate that consumes one used_times slot).
+	for i := 0; i < p.GraceMaxReuses; i++ {
+		_, _, err := store.Rotate(ctx, parentWire)
+		require.NoError(t, err, "grace Rotate %d must succeed (used_times %d → %d, cap %d)", i+1, i, i+1, p.GraceMaxReuses)
+	}
+
+	// Now used_times == GraceMaxReuses. Next Rotate trips the cap.
+	_, _, err := store.Rotate(ctx, parentWire)
+	assert.ErrorIs(t, err, refresh.ErrRejected, "Rotate at used_times == GraceMaxReuses must trigger reuse_detected")
 }
 
 // Silence unused-imports guard when errcode isn't needed (defensive).

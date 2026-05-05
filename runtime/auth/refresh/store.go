@@ -78,9 +78,14 @@ type Store interface {
 	// Consistency: L1 LocalTx — single UPDATE.
 	RevokeUser(ctx context.Context, subjectID string) error
 
-	// GC removes rows whose expires_at < olderThan. Safe to run from a
-	// background worker; batched with SKIP LOCKED to avoid contending with
-	// active Rotate traffic.
+	// GC removes rows whose effective expiry has passed olderThan. Effective
+	// expiry is the earlier of expires_at (hard cap) and idle_expires_at
+	// (sliding window driven by Policy.MaxIdle). Implementations MUST sweep on
+	// the LEAST(expires_at, idle_expires_at) so an idle-abandoned chain is
+	// reclaimed without waiting for the hard MaxAge horizon.
+	//
+	// Safe to run from a background worker; batched with SKIP LOCKED to avoid
+	// contending with active Rotate traffic.
 	//
 	// Consistency: L0 LocalOnly — best-effort cleanup.
 	GC(ctx context.Context, olderThan time.Time) (removed int, err error)

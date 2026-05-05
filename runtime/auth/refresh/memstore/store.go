@@ -75,18 +75,14 @@ type store struct {
 
 // New constructs an in-memory refresh.Store.
 //
-// Returns an error when clock is nil, policy.MaxAge is not positive, or
-// policy.ReuseInterval is negative. If randReader is nil, crypto/rand.Reader
-// is used.
+// Returns an error when clock is nil or when the Policy is invalid (see
+// refresh.Policy.Validate). If randReader is nil, crypto/rand.Reader is used.
 func New(policy refresh.Policy, clock clock.Clock, randReader io.Reader) (refresh.Store, error) {
 	if validation.IsNilInterface(clock) {
 		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "memstore.New: clock must not be nil")
 	}
-	if policy.MaxAge <= 0 {
-		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "memstore.New: policy.MaxAge must be positive")
-	}
-	if policy.ReuseInterval < 0 {
-		return nil, errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed, "memstore.New: policy.ReuseInterval must not be negative")
+	if err := policy.Validate(); err != nil {
+		return nil, errcode.Wrap(errcode.KindInvalid, errcode.ErrValidationFailed, "memstore.New", err)
 	}
 	if validation.IsNilInterface(randReader) {
 		randReader = rand.Reader
