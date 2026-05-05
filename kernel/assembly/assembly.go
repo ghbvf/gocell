@@ -96,10 +96,15 @@ type Config struct {
 	// Zero uses DefaultHookObserverSinkTimeout (5s).
 	HookObserverSinkTimeout time.Duration
 
-	// HookObserverDrainTimeout bounds Stop()'s wait for the dispatcher to
-	// drain remaining events after the channel is closed. Zero uses
-	// DefaultHookObserverDrainTimeout (5s). After drain completion or
-	// timeout, any further emit() calls are counted as queue_full.
+	// HookObserverDrainTimeout bounds Stop()'s shared hook-dispatcher
+	// shutdown budget after event intake is closed. The same budget covers
+	// both queue drain (worker processing already-emitted events) and sink
+	// drain (observer goroutines that exceeded HookObserverSinkTimeout but
+	// later exit). Zero uses DefaultHookObserverDrainTimeout (5s). Stop(ctx)
+	// also returns early when ctx is canceled; Shutdown uses
+	// context.Background() and is bounded only by this timeout. After drain
+	// completion, timeout, or cancellation, any further emit() calls are
+	// counted as queue_full.
 	HookObserverDrainTimeout time.Duration
 
 	// MetricsProvider receives the dispatcher's internal drop / queue-depth
@@ -254,10 +259,10 @@ func (a *CoreAssembly) Stop(ctx context.Context) error {
 
 	// Drain the async hook dispatcher after all cells have reported their
 	// AfterStop events so shutdown telemetry lands before the process
-	// exits. The drain is bounded by HookObserverDrainTimeout; a broken
-	// observer does not indefinitely block Stop().
+	// exits. The drain is bounded by ctx and HookObserverDrainTimeout; a
+	// broken observer does not indefinitely block Stop().
 	if a.dispatcher != nil {
-		a.dispatcher.stop(a.cfg.HookObserverDrainTimeout)
+		a.dispatcher.stop(ctx, a.cfg.HookObserverDrainTimeout)
 	}
 	return errors.Join(errs...)
 }
@@ -271,7 +276,7 @@ func (a *CoreAssembly) Stop(ctx context.Context) error {
 // as the final step of Stop().
 func (a *CoreAssembly) Shutdown() {
 	if a.dispatcher != nil {
-		a.dispatcher.stop(a.cfg.HookObserverDrainTimeout)
+		a.dispatcher.stop(context.Background(), a.cfg.HookObserverDrainTimeout)
 	}
 }
 
@@ -577,16 +582,10 @@ func (a *CoreAssembly) emitHookEvent(e cell.HookEvent) {
 	// Defensive fallback — should not happen when New() is used.
 	defer func() {
 		if r := recover(); r != nil {
-			var recoveredErr error
-			if asErr, ok := r.(error); ok {
-				recoveredErr = asErr
-			} else {
-				recoveredErr = fmt.Errorf("observer panicked: %v", r)
-			}
 			slog.Error("lifecycle: hook observer panicked",
 				slog.String("cell", e.CellID),
 				slog.String("hook", string(e.Hook)),
-				slog.Any("error", recoveredErr))
+				slog.String("panic", sanitizeHookObserverPanicValue(r)))
 		}
 	}()
 	a.cfg.HookObserver.OnHookEvent(e)
