@@ -32,9 +32,27 @@ cd "$(dirname "${BASH_SOURCE[0]}")/.."
 # shellcheck source=lib/golangci-lint.sh
 source hack/lib/golangci-lint.sh
 
-golangci_lint="$(gocell::golangci_lint::ensure)"
+# Bootstrap golangci-lint (or reuse a matching binary already in PATH /
+# GOPATH/bin). `set -e` does not propagate failures inside `$(...)`, so
+# capture the function's exit explicitly.
+if ! golangci_lint="$(gocell::golangci_lint::ensure)"; then
+    echo "verify-gofumpt: bootstrap failed (see stderr above)" >&2
+    exit 1
+fi
+if [[ -z "${golangci_lint}" || ! -x "${golangci_lint}" ]]; then
+    echo "verify-gofumpt: ensure returned empty / non-executable path: '${golangci_lint}'" >&2
+    exit 1
+fi
+echo "verify-gofumpt: using ${golangci_lint}" >&2
+"${golangci_lint}" --version >&2 || true
 
-diff_output="$("${golangci_lint}" fmt -d ./...)"
+# `fmt -d` exits 0 even when it prints diffs; treat any output as drift.
+# Capture stderr too so a misconfigured linter surface lands in the log.
+if ! diff_output="$("${golangci_lint}" fmt -d ./... 2>&1)"; then
+    echo "verify-gofumpt: 'golangci-lint fmt -d ./...' exited non-zero" >&2
+    echo "${diff_output}" >&2
+    exit 1
+fi
 if [[ -n "${diff_output}" ]]; then
     echo "formatter drift detected; run 'make fmt' to fix:" >&2
     echo "${diff_output}"
