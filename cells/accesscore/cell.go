@@ -43,8 +43,10 @@ const (
 // defaultRefreshPolicy is used only by WithInMemoryDefaults for demo/testing.
 // Durable mode must inject an explicit store via WithRefreshStore.
 var defaultRefreshPolicy = refresh.Policy{
-	ReuseInterval: defaultAccessCoreRefreshReuseInterval,
-	MaxAge:        defaultAccessCoreRefreshMaxAge,
+	ReuseInterval:  defaultAccessCoreRefreshReuseInterval,
+	MaxAge:         defaultAccessCoreRefreshMaxAge,
+	MaxIdle:        refresh.DefaultMaxIdle,
+	GraceMaxReuses: refresh.DefaultGraceMaxReuses,
 }
 
 // Compile-time interface check lives in cell_gen.go (DO NOT EDIT).

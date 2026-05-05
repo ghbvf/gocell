@@ -46,15 +46,18 @@ func (*typedNilReader) Read([]byte) (int, error) {
 	return 0, errTypedNilReaderUsed
 }
 
-// TestMemStoreContract runs the full C1-C7 contract test suite (T1-T12) against
+// TestMemStoreContract runs the shared refresh store contract suites against
 // the in-memory store.
 func TestMemStoreContract(t *testing.T) {
-	storetest.RunContractSuite(t, func(t *testing.T, policy refresh.Policy) (refresh.Store, *storetest.FakeClock) {
+	factory := func(t *testing.T, policy refresh.Policy) (refresh.Store, *storetest.FakeClock) {
 		clk := storetest.NewFakeClock(baseTime)
 		store, err := memstore.New(policy, clk, nil)
 		require.NoError(t, err)
 		return store, clk
-	})
+	}
+
+	storetest.RunContractSuite(t, factory)
+	storetest.RunIdleExpireContractSuite(t, factory)
 }
 
 func TestNewRejectsInvalidConfig(t *testing.T) {
@@ -66,9 +69,14 @@ func TestNewRejectsInvalidConfig(t *testing.T) {
 		clock  clock.Clock
 	}{
 		{
-			name:   "nil clock",
-			policy: refresh.Policy{ReuseInterval: time.Second, MaxAge: time.Hour},
-			clock:  nil,
+			name: "nil clock",
+			policy: refresh.Policy{
+				ReuseInterval:  time.Second,
+				MaxAge:         time.Hour,
+				MaxIdle:        refresh.DefaultMaxIdle,
+				GraceMaxReuses: refresh.DefaultGraceMaxReuses,
+			},
+			clock: nil,
 		},
 		{
 			name:   "non-positive max age",
@@ -79,6 +87,26 @@ func TestNewRejectsInvalidConfig(t *testing.T) {
 			name:   "negative reuse interval",
 			policy: refresh.Policy{ReuseInterval: -time.Second, MaxAge: time.Hour},
 			clock:  clk,
+		},
+		{
+			name: "zero_MaxIdle",
+			policy: refresh.Policy{
+				ReuseInterval: time.Second,
+				MaxAge:        time.Hour,
+				// MaxIdle intentionally zero
+				GraceMaxReuses: refresh.DefaultGraceMaxReuses,
+			},
+			clock: clk,
+		},
+		{
+			name: "zero_GraceMaxReuses",
+			policy: refresh.Policy{
+				ReuseInterval: time.Second,
+				MaxAge:        time.Hour,
+				MaxIdle:       refresh.DefaultMaxIdle,
+				// GraceMaxReuses intentionally zero
+			},
+			clock: clk,
 		},
 	}
 
@@ -94,7 +122,12 @@ func TestNewRejectsInvalidConfig(t *testing.T) {
 func TestNewRejectsTypedNilClock(t *testing.T) {
 	var clock *typedNilClock
 	store, err := memstore.New(
-		refresh.Policy{ReuseInterval: time.Second, MaxAge: time.Hour},
+		refresh.Policy{
+			ReuseInterval:  time.Second,
+			MaxAge:         time.Hour,
+			MaxIdle:        refresh.DefaultMaxIdle,
+			GraceMaxReuses: refresh.DefaultGraceMaxReuses,
+		},
 		clock,
 		nil,
 	)
@@ -107,7 +140,12 @@ func TestNewDefaultsTypedNilRandReader(t *testing.T) {
 	var reader *typedNilReader
 
 	store, err := memstore.New(
-		refresh.Policy{ReuseInterval: time.Second, MaxAge: time.Hour},
+		refresh.Policy{
+			ReuseInterval:  time.Second,
+			MaxAge:         time.Hour,
+			MaxIdle:        refresh.DefaultMaxIdle,
+			GraceMaxReuses: refresh.DefaultGraceMaxReuses,
+		},
 		clock,
 		reader,
 	)
@@ -118,8 +156,21 @@ func TestNewDefaultsTypedNilRandReader(t *testing.T) {
 	require.NoError(t, err)
 }
 
-func TestNewRejectsInvalidPolicyAndNilClock(t *testing.T) {
-	// empty policy (zero MaxAge, zero ReuseInterval) with nil clock
-	_, err := memstore.New(refresh.Policy{}, nil, nil)
-	require.Error(t, err, "New with invalid policy and nil clock must return error")
+func TestNewRejectsNilClock(t *testing.T) {
+	t.Parallel()
+	validPolicy := refresh.Policy{
+		ReuseInterval:  time.Second,
+		MaxAge:         time.Hour,
+		MaxIdle:        refresh.DefaultMaxIdle,
+		GraceMaxReuses: refresh.DefaultGraceMaxReuses,
+	}
+	_, err := memstore.New(validPolicy, nil, nil)
+	require.Error(t, err, "New with nil clock must return error")
+}
+
+func TestNewRejectsEmptyPolicy(t *testing.T) {
+	t.Parallel()
+	fakeClock := storetest.NewFakeClock(time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC))
+	_, err := memstore.New(refresh.Policy{}, fakeClock, nil)
+	require.Error(t, err, "New with empty Policy must return error")
 }

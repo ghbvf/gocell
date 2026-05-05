@@ -2,6 +2,7 @@ package redaction_test
 
 import (
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -41,6 +42,31 @@ func TestRedactString(t *testing.T) {
 			name: "token_keyEqValue",
 			in:   "upstream 401: token=eyJhbGc.foo",
 			want: "upstream 401: token=<REDACTED>",
+		},
+		{
+			name: "accessToken_camel",
+			in:   "oauth exchange failed: accessToken=access-value",
+			want: "oauth exchange failed: accessToken=<REDACTED>",
+		},
+		{
+			name: "refreshToken_camel",
+			in:   "oauth exchange failed: refreshToken=1//0g",
+			want: "oauth exchange failed: refreshToken=<REDACTED>",
+		},
+		{
+			name: "access_token_snake",
+			in:   "oauth exchange failed: access_token=access-value",
+			want: "oauth exchange failed: access_token=<REDACTED>",
+		},
+		{
+			name: "refresh_token_snake",
+			in:   "oauth exchange failed: refresh_token=1//0g",
+			want: "oauth exchange failed: refresh_token=<REDACTED>",
+		},
+		{
+			name: "id_token_snake",
+			in:   "oauth exchange failed: id_token=eyJhbGc",
+			want: "oauth exchange failed: id_token=<REDACTED>",
 		},
 		{
 			name: "authorization_colonSpace",
@@ -179,6 +205,41 @@ func TestRedactString(t *testing.T) {
 			name: "json_token_quoted_with_spaces",
 			in:   `{"token" : "abc.def.ghi","ok":true}`,
 			want: `{"token" : "<REDACTED>","ok":true}`,
+		},
+		{
+			name: "json_accessToken_quoted",
+			in:   `{"accessToken":"access-value","user":"alice"}`,
+			want: `{"accessToken":"<REDACTED>","user":"alice"}`,
+		},
+		{
+			name: "json_refreshToken_quoted",
+			in:   `{"refreshToken":"1//0g","user":"alice"}`,
+			want: `{"refreshToken":"<REDACTED>","user":"alice"}`,
+		},
+		{
+			name: "json_access_token_quoted",
+			in:   `{"access_token":"access-value","user":"alice"}`,
+			want: `{"access_token":"<REDACTED>","user":"alice"}`,
+		},
+		{
+			name: "json_refresh_token_quoted",
+			in:   `{"refresh_token":"1//0g","user":"alice"}`,
+			want: `{"refresh_token":"<REDACTED>","user":"alice"}`,
+		},
+		{
+			name: "json_id_token_quoted",
+			in:   `{"id_token":"eyJhbGc","user":"alice"}`,
+			want: `{"id_token":"<REDACTED>","user":"alice"}`,
+		},
+		{
+			name: "json_authorization_quoted",
+			in:   `{"authorization":"Bearer abc.def.ghi","user":"alice"}`,
+			want: `{"authorization":"<REDACTED>","user":"alice"}`,
+		},
+		{
+			name: "json_connection_string_quoted",
+			in:   `{"connection_string":"Server=foo;Pwd=bar","ok":true}`,
+			want: `{"connection_string":"<REDACTED>","ok":true}`,
 		},
 		{
 			name: "json_secret_escaped_quote",
@@ -333,5 +394,74 @@ func TestMask_ConstantValue(t *testing.T) {
 	t.Parallel()
 	if redaction.Mask != "<REDACTED>" {
 		t.Errorf("Mask = %q, want %q", redaction.Mask, "<REDACTED>")
+	}
+}
+
+func TestRedactAny(t *testing.T) {
+	t.Parallel()
+
+	t.Run("nil_in_nil_out", assertRedactAnyNil)
+	t.Run("error_branch_redacts", assertRedactAnyErrorRedacts)
+	t.Run("string_branch_redacts", assertRedactAnyStringRedacts)
+	t.Run("panic_value_struct_stringified_redacts", assertRedactAnyStructStringifiedRedacts)
+	t.Run("int_passthrough_no_secret", assertRedactAnyIntPassthrough)
+}
+
+func assertRedactAnyNil(t *testing.T) {
+	t.Parallel()
+	got := redaction.RedactAny(nil)
+	if got != nil {
+		t.Errorf("RedactAny(nil) = %v, want nil", got)
+	}
+}
+
+func assertRedactAnyErrorRedacts(t *testing.T) {
+	t.Parallel()
+	err := errors.New("password=hunter2")
+	got := redaction.RedactAny(err)
+	gotErr, ok := got.(error)
+	if !ok {
+		t.Fatalf("RedactAny(error) returned %T, want error", got)
+	}
+	if gotErr.Error() != "password=<REDACTED>" {
+		t.Errorf("RedactAny(error).Error() = %q, want %q", gotErr.Error(), "password=<REDACTED>")
+	}
+}
+
+func assertRedactAnyStringRedacts(t *testing.T) {
+	t.Parallel()
+	got := redaction.RedactAny("token=abc.def")
+	gotStr, ok := got.(string)
+	if !ok {
+		t.Fatalf("RedactAny(string) returned %T, want string", got)
+	}
+	if gotStr != "token=<REDACTED>" {
+		t.Errorf("RedactAny(string) = %q, want %q", gotStr, "token=<REDACTED>")
+	}
+}
+
+func assertRedactAnyStructStringifiedRedacts(t *testing.T) {
+	t.Parallel()
+	type panicVal struct{ msg string }
+	v := panicVal{msg: "secret=hunter2"}
+	got := redaction.RedactAny(v)
+	s := fmt.Sprint(got)
+	if strings.Contains(s, "hunter2") {
+		t.Errorf("RedactAny(struct) still contains sensitive value in %q", s)
+	}
+	if !strings.Contains(s, "<REDACTED>") {
+		t.Errorf("RedactAny(struct) = %q, want it to contain <REDACTED>", s)
+	}
+}
+
+func assertRedactAnyIntPassthrough(t *testing.T) {
+	t.Parallel()
+	got := redaction.RedactAny(42)
+	s := fmt.Sprint(got)
+	if strings.Contains(s, "<REDACTED>") {
+		t.Errorf("RedactAny(42) = %q, unexpectedly contains <REDACTED>", s)
+	}
+	if s != "42" {
+		t.Errorf("RedactAny(42) = %q, want %q", s, "42")
 	}
 }

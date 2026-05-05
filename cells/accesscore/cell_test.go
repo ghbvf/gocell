@@ -89,7 +89,12 @@ func mustCursorCodec() *query.CursorCodec {
 
 func newTestRefreshStore() refresh.Store {
 	clk := storetest.NewFakeClock(time.Now())
-	store, err := refreshmem.New(refresh.Policy{ReuseInterval: testtime.D2s, MaxAge: time.Hour}, clk, nil)
+	store, err := refreshmem.New(refresh.Policy{
+		ReuseInterval:  testtime.D2s,
+		MaxAge:         time.Hour,
+		MaxIdle:        refresh.DefaultMaxIdle,
+		GraceMaxReuses: refresh.DefaultGraceMaxReuses,
+	}, clk, nil)
 	if err != nil {
 		panic("test setup: " + err.Error())
 	}

@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -1101,6 +1102,39 @@ func TestReadyz_VerboseError_LongErrTruncated(t *testing.T) {
 		"error field must be at most %d bytes; got %d", maxWithEllipsis, len(errField))
 	assert.True(t, len(errField) >= 3 && errField[len(errField)-3:] == "...",
 		"truncated error must end with '...'; got %q", errField)
+}
+
+func TestReadyz_VerboseError_RedactsBeforeTruncating(t *testing.T) {
+	asm := assembly.New(assembly.Config{ID: "test-redact-verbose", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
+	require.NoError(t, asm.Start(context.Background()))
+	defer func() { _ = asm.Stop(context.Background()) }()
+
+	const leakSentinel = "health-verbose-leak-sentinel-8f2b"
+	h := New(asm, clock.Real())
+	h.SetVerboseToken(testVerboseToken)
+	require.NoError(t, h.RegisterChecker("sensitive", func(_ context.Context) error {
+		return fmt.Errorf("postgres probe failed: password=%s token=%s", leakSentinel, leakSentinel)
+	}))
+
+	capture := withSlogCapture(t)
+	rec := httptest.NewRecorder()
+	req := newVerboseRequest("/readyz?verbose=true")
+	h.ReadyzHandler().ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusServiceUnavailable, rec.Code)
+	assert.False(t, strings.Contains(rec.Body.String(), leakSentinel),
+		"verbose readyz body must not leak raw probe secrets")
+
+	errObj := errorBody(t, rec)
+	assertReadyzServiceUnavailable(t, errObj)
+
+	deps := readyzUnhealthyDeps(t, capture)
+	sensitiveEntry, ok := deps["sensitive"]
+	require.True(t, ok, "sensitive entry must be present")
+	errField, ok := sensitiveEntry["error"].(string)
+	require.True(t, ok, "error field must be a string")
+	assert.Contains(t, errField, "<REDACTED>")
+	assert.NotContains(t, errField, leakSentinel)
 }
 
 // TestReadyz_UncooperativeChecker_WrapperReturnsOnDeadline verifies the

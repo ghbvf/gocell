@@ -17,6 +17,7 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/persistence"
+	"github.com/ghbvf/gocell/pkg/ctxutil"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/validation"
 	"github.com/ghbvf/gocell/runtime/auth/refresh"
@@ -28,13 +29,6 @@ var _ refresh.Store = (*PGRefreshStore)(nil)
 // gcBatchSize is the number of rows deleted per GC batch iteration.
 const gcBatchSize = 1000
 
-// idleFarFuture is the sentinel used when Policy.MaxIdle is zero (disabled);
-// prevents idle-GC from sweeping rows that have no configured idle window.
-// Any store that has not applied migration 016 or has explicitly set MaxIdle=0
-// will write this sentinel, ensuring the column satisfies the NOT NULL constraint
-// while effectively disabling idle expiry for that row.
-const idleFarFuture = 10 * 365 * 24 * time.Hour
-
 // Append-only SQL statements.
 //
 // Design: Issue and Rotate only INSERT rows; rotated_at and revoked_at are
@@ -42,7 +36,8 @@ const idleFarFuture = 10 * 365 * 24 * time.Hour
 // revoke_session for the entire session_id lineage.
 //
 // Columns idle_expires_at, first_used_at, used_times are added by migration 016
-// (X12 + X14). Pre-016 rows have idle_expires_at defaulted to created_at + 30d.
+// (X12 + X14). idle_expires_at is written explicitly on every Issue and Rotate;
+// Policy.MaxIdle is required (must be positive).
 const (
 	insertRowSQL = `
 INSERT INTO refresh_tokens (id, parent_id, session_id, subject_id, selector, verifier_hash, created_at, expires_at, idle_expires_at)
@@ -86,8 +81,8 @@ WHERE subject_id = $2
 
 	// gcBatchSQL deletes expired rows: a row is eligible when either its
 	// absolute expires_at or its idle_expires_at has passed the olderThan
-	// threshold. idle_expires_at defaults to now()+30d for pre-016 rows so
-	// they are only swept by expires_at.
+	// threshold. LEAST(expires_at, idle_expires_at) determines the effective
+	// expiry deadline for each row.
 	gcBatchSQL = `
 DELETE FROM refresh_tokens
 WHERE id IN (
@@ -106,11 +101,13 @@ WHERE id IN (
 // Consistency: L1 LocalTx — Rotate is atomic within a single transaction;
 // Issue and revoke paths are single-statement writes.
 //
-// Transaction contract (B2-A-08): PGRefreshStore never acquires its own
-// transactions. All multi-statement operations (Peek, Rotate) delegate to the
-// injected TxRunner. When the caller already holds an ambient transaction,
-// TxManager creates a savepoint instead of a new top-level transaction, so
-// refresh operations are fully nesting-safe.
+// Transaction contract (B2-A-08): PGRefreshStore uses the ambient transaction
+// for business operations. Multi-statement operations (Peek, Rotate) delegate
+// to the injected TxRunner. When the caller already holds an ambient
+// transaction, TxManager creates a savepoint instead of a new top-level
+// transaction, so refresh operations are fully nesting-safe. The only explicit
+// bypass is RevokeSessionDetached and reuse-detection cascade revoke, which
+// commit independently as security/compensation responses.
 //
 // ref: ory/fosite token/hmac/hmacsha.go (base64url nopad + constant-time compare)
 // ref: ory/hydra persistence/sql/persister_oauth2.go (CAS chain + reuse cascade)
@@ -244,14 +241,10 @@ func (s *PGRefreshStore) Issue(ctx context.Context, sessionID, subjectID string)
 	}, nil
 }
 
-// idleDeadline returns now + MaxIdle when MaxIdle is configured, or a far-future
-// sentinel when MaxIdle is zero (pre-016 migration stores that have not yet
-// been configured with an idle expiry window).
+// idleDeadline returns now + MaxIdle. Policy.MaxIdle is guaranteed positive by
+// Validate(), so no zero-check is needed.
 func (s *PGRefreshStore) idleDeadline(now time.Time) time.Time {
-	if s.policy.MaxIdle > 0 {
-		return now.Add(s.policy.MaxIdle)
-	}
-	return now.Add(idleFarFuture)
+	return now.Add(s.policy.MaxIdle)
 }
 
 // Peek validates the presented wire token without advancing the lineage.
@@ -463,11 +456,9 @@ func (s *PGRefreshStore) checkBasicValidity(row refreshRow, ver []byte) error {
 	if !row.expiresAt.After(now) {
 		return rejectWithReason("expired", row.sessionID)
 	}
-	// X12: idle-expiry check. migration 016 ensures idle_expires_at is always
-	// non-zero (NOT NULL with a 30-day default for pre-016 rows). When
-	// Policy.MaxIdle is zero, idle-expiry is disabled (stores that have not yet
-	// applied migration 016 set MaxIdle=0 at the application layer).
-	if s.policy.MaxIdle > 0 && !row.idleExpiresAt.After(now) {
+	// X12: idle-expiry check. Policy.MaxIdle is required (must be positive),
+	// and idle_expires_at is written explicitly on every Issue/Rotate.
+	if !row.idleExpiresAt.After(now) {
 		return rejectWithReason("idle_expired", row.sessionID)
 	}
 	return nil
@@ -487,22 +478,18 @@ func (s *PGRefreshStore) checkBasicValidity(row refreshRow, ver []byte) error {
 func (s *PGRefreshStore) handleRotatedRow(ctx context.Context, row refreshRow, mutate bool) error {
 	now := s.clock.Now()
 
-	// X14: grace counter cap. If the grace cap is configured and this parent
-	// has already been re-presented GraceMaxReuses times, treat this as a
-	// reuse attack regardless of ReuseInterval.
-	if s.policy.GraceMaxReuses > 0 && row.usedTimes >= s.policy.GraceMaxReuses {
+	// X14: grace counter cap. If this parent has already been re-presented
+	// GraceMaxReuses times, treat this as a reuse attack regardless of ReuseInterval.
+	// Policy.GraceMaxReuses is required (must be positive) — no zero-check needed.
+	if row.usedTimes >= s.policy.GraceMaxReuses {
 		slog.Error("refresh token grace counter exhausted",
 			slog.String("session_id", row.sessionID),
 			slog.String("subject_id", row.subjectID),
 			slog.String("reason", "reuse_detected"),
 			slog.Int("used_times", row.usedTimes),
 		)
-		// Bypass the ambient transaction for the cascade revoke: a reuse-attack
-		// response MUST persist even when the caller's tx rolls back. We use the
-		// underlying pool directly, not execCtx, so the revoke commits on its
-		// own connection regardless of the outer RunInTx outcome.
-		if _, execErr := s.pool.Exec(ctx, revokeSessionSQL, now, row.sessionID); execErr != nil {
-			return errcode.Wrap(errcode.KindInternal, ErrAdapterPGQuery, "refresh store: grace exhausted cascade", execErr)
+		if err := s.revokeSessionDetachedAt(ctx, row.sessionID, now); err != nil {
+			return errcode.Wrap(errcode.KindInternal, ErrAdapterPGQuery, "refresh store: grace exhausted cascade", err)
 		}
 		return rejectWithReason("reuse_detected", row.sessionID)
 	}
@@ -519,11 +506,8 @@ func (s *PGRefreshStore) handleRotatedRow(ctx context.Context, row refreshRow, m
 			slog.String("subject_id", row.subjectID),
 			slog.String("reason", "reuse_detected"),
 		)
-		// Bypass the ambient transaction (see grace-exhausted branch above): the
-		// cascade revoke must commit on its own connection so that an outer
-		// caller rollback does not undo the attack response.
-		if _, execErr := s.pool.Exec(ctx, revokeSessionSQL, now, row.sessionID); execErr != nil {
-			return errcode.Wrap(errcode.KindInternal, ErrAdapterPGQuery, "refresh store: reuse cascade", execErr)
+		if err := s.revokeSessionDetachedAt(ctx, row.sessionID, now); err != nil {
+			return errcode.Wrap(errcode.KindInternal, ErrAdapterPGQuery, "refresh store: reuse cascade", err)
 		}
 		return rejectWithReason("reuse_detected", row.sessionID)
 	}
@@ -550,6 +534,31 @@ func (s *PGRefreshStore) RevokeSession(ctx context.Context, sessionID string) er
 		return errcode.Wrap(errcode.KindInternal, ErrAdapterPGQuery, "refresh store: revoke session", err)
 	}
 	return nil
+}
+
+// RevokeSessionDetached marks every row in the session_id lineage as revoked,
+// bypassing any ambient transaction and caller cancellation. It is used only
+// for security cascade/compensation paths that must commit independently of
+// the surrounding business transaction.
+func (s *PGRefreshStore) RevokeSessionDetached(ctx context.Context, sessionID string) error {
+	if err := s.revokeSessionDetachedAt(ctx, sessionID, s.clock.Now()); err != nil {
+		return errcode.Wrap(errcode.KindInternal, ErrAdapterPGQuery, "refresh store: revoke session detached", err)
+	}
+	return nil
+}
+
+func (s *PGRefreshStore) revokeSessionDetachedAt(ctx context.Context, sessionID string, revokedAt time.Time) error {
+	// Detach from the caller's cancellation context: a security/compensation
+	// revoke MUST persist even when the HTTP request is canceled or times out.
+	// The detached context gets a bounded 5-second deadline so the write does
+	// not run indefinitely. The ambient tx is bypassed via s.pool.Exec so the
+	// revoke commits on its own connection regardless of the outer RunInTx outcome.
+	// ref: golang/go context.WithoutCancel; hashicorp/vault token_store.go quitContext
+	// ref: ADR docs/architecture/202605051800-adr-refresh-store-ambient-tx-and-idle-grace.md
+	cascadeCtx, cancelCascade := ctxutil.WithDetachedTimeout(ctx, refresh.CascadeRevokeTimeout)
+	defer cancelCascade()
+	_, err := s.pool.Exec(cascadeCtx, revokeSessionSQL, revokedAt, sessionID)
+	return err
 }
 
 // RevokeUser marks every row owned by subjectID as revoked.

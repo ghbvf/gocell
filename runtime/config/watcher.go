@@ -30,6 +30,7 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/clock"
 	"github.com/ghbvf/gocell/kernel/lifecycle"
+	"github.com/ghbvf/gocell/pkg/redaction"
 )
 
 // Compile-time assertion: Watcher implements lifecycle.ContextCloser.
@@ -480,7 +481,7 @@ func (w *Watcher) fireCallbacks(symPivot bool) {
 		func() {
 			defer func() {
 				if r := recover(); r != nil {
-					slog.Error("config watcher callback panic", slog.Any("panic", r))
+					slog.Error("config watcher callback panic", slog.Any("panic", redaction.RedactAny(r)))
 				}
 			}()
 			fn(evt)

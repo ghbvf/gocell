@@ -32,24 +32,34 @@ type Token struct {
 	ExpiresAt time.Time
 }
 
-// Default policy values used when the caller does not configure optional fields.
-//
-// Zero values for MaxIdle and GraceMaxReuses are accepted by NewRefreshStore /
-// memstore.New (via Policy.Validate) and mean "feature disabled" — pre-016
-// stores or deployments that intentionally opt out of idle expiry / grace
-// counter cap. Callers that want the standard behavior set these constants.
-// MaxAge and ReuseInterval are still strictly validated (positive / non-negative).
+// Default policy values. Callers must set these explicitly — Validate does not
+// apply implicit defaults (must be set explicitly by callers; no implicit defaults
+// applied by Validate).
 const (
-	// DefaultMaxIdle is the default idle-expiry window (30 days).
+	// DefaultMaxIdle is the standard idle-expiry window (30 days).
 	// Matches Zitadel auth-token default retention period.
 	// ref: zitadel/zitadel internal/repository/session expire.go
 	DefaultMaxIdle = 30 * 24 * time.Hour
 
-	// DefaultGraceMaxReuses is the default grace reuse counter cap (3 re-uses).
+	// DefaultGraceMaxReuses is the standard grace reuse counter cap (3 re-uses).
 	// Tolerates SPA double-submit + network retry within a grace window without
 	// treating them as reuse attacks. Exceeding the cap triggers cascade revoke.
 	// ref: ory/fosite handler/oauth2/refresh.go (COALESCE reuse guard)
 	DefaultGraceMaxReuses = 3
+
+	// CascadeRevokeTimeout is the maximum time allowed for a cascade-revoke DB
+	// write that runs detached from the caller's cancellation context.
+	//
+	// Cascade revoke is a security response (reuse-attack or subject-mismatch)
+	// that MUST persist even when the HTTP request that triggered it is canceled
+	// or times out. The detached context is constructed via
+	// pkg/ctxutil.WithDetachedTimeout so the write gets its own 5-second budget
+	// independent of the caller's deadline.
+	//
+	// ref: golang/go context.WithoutCancel (proposal#40221)
+	// ref: hashicorp/vault vault/token_store.go quitContext (detached critical write)
+	// ref: ADR docs/architecture/202605051800-adr-refresh-store-ambient-tx-and-idle-grace.md
+	CascadeRevokeTimeout = 5 * time.Second
 )
 
 // Policy controls Rotate semantics and token lifetime.
@@ -61,27 +71,18 @@ const (
 //
 // MaxAge bounds Token.ExpiresAt - Token.CreatedAt.
 //
-// MaxIdle is the sliding-window idle-expiry duration. Every Rotate call
-// resets the idle clock on the parent row. A token that is not rotated within
-// MaxIdle of its last rotation (or creation) is rejected as idle-expired.
-// Zero value disables idle-expiry check (stores that have not migrated yet).
+// MaxIdle is the sliding-window idle-expiry duration. Issue and Rotate write
+// the newly issued row's idle deadline as now + MaxIdle. A token row that is
+// not rotated before its idle deadline is rejected as idle-expired.
+// Must be positive; use DefaultMaxIdle for the standard 30-day window.
 //
 // GraceMaxReuses caps how many times a parent token may be re-presented within
 // the ReuseInterval grace window. Once the cap is reached, the next re-present
-// triggers a cascade revoke (same as an out-of-window reuse attack). Zero value
-// disables the counter cap.
+// triggers a cascade revoke (same as an out-of-window reuse attack).
+// Must be positive; use DefaultGraceMaxReuses for the standard cap of 3.
 //
-// Defaults (not enforced; zero values are accepted for backward compat in
-// stores that have not yet applied migration 016):
-//
-//	ReuseInterval  = 2 * time.Second  (matches Ory Hydra grace_period)
-//	MaxAge         = 7 * 24 * time.Hour
-//	MaxIdle        = DefaultMaxIdle   (30 days)
-//	GraceMaxReuses = DefaultGraceMaxReuses (3)
-//
-// Validate() returns an error if MaxAge is non-positive, ReuseInterval is negative,
-// MaxIdle is negative, or GraceMaxReuses is negative. Zero values for MaxIdle and
-// GraceMaxReuses are accepted and mean "disabled".
+// All four fields are required; Validate returns an error for any non-positive
+// or negative value.
 type Policy struct {
 	ReuseInterval  time.Duration
 	MaxAge         time.Duration
@@ -92,11 +93,7 @@ type Policy struct {
 // Validate returns an error if the Policy contains invalid field values.
 //
 // MaxAge must be positive. ReuseInterval must not be negative.
-// MaxIdle and GraceMaxReuses may be zero (zero = disabled): zero MaxIdle disables
-// idle-expiry checks (stores that have not applied migration 016 set MaxIdle=0);
-// zero GraceMaxReuses disables the grace counter cap. This aligns with
-// NewRefreshStore and memstore.New which treat zero values as disabled rather than
-// invalid, and with the far-future sentinel used when MaxIdle is zero.
+// MaxIdle must be positive. GraceMaxReuses must be positive.
 func (p Policy) Validate() error {
 	if p.MaxAge <= 0 {
 		return errorf("Policy.MaxAge must be positive")
@@ -104,13 +101,11 @@ func (p Policy) Validate() error {
 	if p.ReuseInterval < 0 {
 		return errorf("Policy.ReuseInterval must not be negative")
 	}
-	// MaxIdle == 0 means idle-expiry disabled; negative is invalid.
-	if p.MaxIdle < 0 {
-		return errorf("Policy.MaxIdle must not be negative (use zero to disable idle expiry)")
+	if p.MaxIdle <= 0 {
+		return errorf("Policy.MaxIdle must be positive")
 	}
-	// GraceMaxReuses == 0 means grace counter cap disabled; negative is invalid.
-	if p.GraceMaxReuses < 0 {
-		return errorf("Policy.GraceMaxReuses must not be negative (use zero to disable grace cap)")
+	if p.GraceMaxReuses <= 0 {
+		return errorf("Policy.GraceMaxReuses must be positive")
 	}
 	return nil
 }

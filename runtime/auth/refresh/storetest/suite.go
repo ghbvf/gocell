@@ -2,13 +2,14 @@
 // implementations. Backends (memstore, postgres) each run RunContractSuite
 // to prove they honor the same append-only + single-sentinel semantics.
 //
-// Test identifiers T1-T18 map to Store invariants: T1-T2 Issue, T3 Rotate
+// Test identifiers T1-T22 map to Store invariants: T1-T2 Issue, T3 Rotate
 // happy path, T4 grace window, T5 reuse-after-grace, T6-T8 fail-closed
 // rejection paths, T9 RevokeSession cascade, T10 concurrent Rotate CAS,
 // T11 ExpiresAt calculation, T12 errcode sentinel category, T13 GC cleanup,
 // T14 concurrent goroutine race model, T15 reuse-after-grace cascade,
 // T16 grace-inside-interval, T17 parse-failure uniformity, T18 RevokeUser,
-// T19-T20 Peek preflight/rejection, T21 Peek does not consume grace budget.
+// T19-T20 Peek preflight/rejection, T21 Peek does not consume grace budget,
+// T22 detached session revoke.
 package storetest
 
 import (
@@ -59,14 +60,6 @@ var defaultPolicy = refresh.Policy{
 	MaxIdle:        refresh.DefaultMaxIdle,
 	GraceMaxReuses: refresh.DefaultGraceMaxReuses,
 }
-
-// disabledIdleGracePolicy documents the intent of inline Policy literals that
-// omit MaxIdle and GraceMaxReuses throughout this suite.  Zero MaxIdle disables
-// idle expiry; zero GraceMaxReuses disables the grace counter cap.  Tests that
-// inline Policy{ReuseInterval, MaxAge} are exercising only the core reuse-window
-// and lifetime logic — not X12 idle-expiry (T19) or X14 grace counter (T20),
-// which have dedicated integration tests.  Using zero values here keeps the
-// test setup minimal and avoids coupling unrelated tests to migration 016 state.
 
 const (
 	t15TargetSubject = "user-A"
@@ -134,6 +127,10 @@ func RunContractSuite(t *testing.T, factory Factory) {
 		t.Parallel()
 		runT21PeekDoesNotConsumeGraceBudget(t, factory)
 	})
+	t.Run("T22_RevokeSessionDetached_CascadeIgnoresCallerCancel", func(t *testing.T) {
+		t.Parallel()
+		runT22RevokeSessionDetachedIgnoresCallerCancel(t, factory)
+	})
 }
 
 // runT1IssueBasic: Issue wire length 66, Token has ID/session/subject/times,
@@ -176,7 +173,12 @@ func runT3RotateHappyPath(t *testing.T, factory Factory) {
 // yields a distinct sibling child wire (not a replay of the first child).
 // The append-only model preserves idempotency without leaking tokens.
 func runT4GracePeriod(t *testing.T, factory Factory) {
-	policy := refresh.Policy{ReuseInterval: testtime.D5s, MaxAge: storeMaxAge7d}
+	policy := refresh.Policy{
+		ReuseInterval:  testtime.D5s,
+		MaxAge:         storeMaxAge7d,
+		MaxIdle:        refresh.DefaultMaxIdle,
+		GraceMaxReuses: refresh.DefaultGraceMaxReuses,
+	}
 	store, clock := factory(t, policy)
 
 	parentWire, _ := mustIssue(t, store, "sess-4", "user-4")
@@ -193,7 +195,12 @@ func runT4GracePeriod(t *testing.T, factory Factory) {
 // runT5ReuseDetection: parent presented beyond ReuseInterval triggers cascade
 // revocation and ErrRejected; subsequent Rotates on the chain also fail.
 func runT5ReuseDetection(t *testing.T, factory Factory) {
-	policy := refresh.Policy{ReuseInterval: testtime.D2s, MaxAge: storeMaxAge7d}
+	policy := refresh.Policy{
+		ReuseInterval:  testtime.D2s,
+		MaxAge:         storeMaxAge7d,
+		MaxIdle:        refresh.DefaultMaxIdle,
+		GraceMaxReuses: refresh.DefaultGraceMaxReuses,
+	}
 	store, clock := factory(t, policy)
 	ctx := context.Background()
 
@@ -237,7 +244,12 @@ func runT7RevokedToken(t *testing.T, factory Factory) {
 
 // runT8ExpiredToken: clock past MaxAge → ErrRejected.
 func runT8ExpiredToken(t *testing.T, factory Factory) {
-	policy := refresh.Policy{ReuseInterval: testtime.D2s, MaxAge: testtime.D1h}
+	policy := refresh.Policy{
+		ReuseInterval:  testtime.D2s,
+		MaxAge:         testtime.D1h,
+		MaxIdle:        refresh.DefaultMaxIdle,
+		GraceMaxReuses: refresh.DefaultGraceMaxReuses,
+	}
 	store, clock := factory(t, policy)
 
 	wire, _ := mustIssue(t, store, "sess-8", "user-8")
@@ -325,7 +337,12 @@ func runT10ConcurrentCAS(t *testing.T, factory Factory) {
 
 // runT11ExpiresAtCalc: ExpiresAt == now + MaxAge at Issue time.
 func runT11ExpiresAtCalc(t *testing.T, factory Factory) {
-	policy := refresh.Policy{ReuseInterval: testtime.D2s, MaxAge: storeMaxAge48h}
+	policy := refresh.Policy{
+		ReuseInterval:  testtime.D2s,
+		MaxAge:         storeMaxAge48h,
+		MaxIdle:        refresh.DefaultMaxIdle,
+		GraceMaxReuses: refresh.DefaultGraceMaxReuses,
+	}
 	store, clock := factory(t, policy)
 
 	now := clock.Now()
@@ -346,7 +363,12 @@ func runT12ErrcodeCategory(t *testing.T) {
 
 // runT13GCRemovesExpired: GC drops rows past expiresAt.
 func runT13GCRemovesExpired(t *testing.T, factory Factory) {
-	policy := refresh.Policy{ReuseInterval: testtime.D2s, MaxAge: testtime.D1h}
+	policy := refresh.Policy{
+		ReuseInterval:  testtime.D2s,
+		MaxAge:         testtime.D1h,
+		MaxIdle:        refresh.DefaultMaxIdle,
+		GraceMaxReuses: refresh.DefaultGraceMaxReuses,
+	}
 	store, clock := factory(t, policy)
 
 	activeWire, _ := mustIssue(t, store, "sess-13a", "user-13a")
@@ -417,7 +439,12 @@ func runT15AfterRevokeUser(t *testing.T, factory Factory) {
 // yield two distinct child wires (see T4 — this is a stricter assertion
 // on the append-only sibling semantics).
 func runT16GraceInside(t *testing.T, factory Factory) {
-	policy := refresh.Policy{ReuseInterval: testtime.D10s, MaxAge: storeMaxAge7d}
+	policy := refresh.Policy{
+		ReuseInterval:  testtime.D10s,
+		MaxAge:         storeMaxAge7d,
+		MaxIdle:        refresh.DefaultMaxIdle,
+		GraceMaxReuses: refresh.DefaultGraceMaxReuses,
+	}
 	store, _ := factory(t, policy)
 
 	parent, _ := mustIssue(t, store, "sess-16", "user-16")
@@ -499,7 +526,12 @@ func runT19PeekDoesNotAdvance(t *testing.T, factory Factory) {
 }
 
 func runT20PeekRejectionParityAndReuseCascade(t *testing.T, factory Factory) {
-	store, clock := factory(t, refresh.Policy{ReuseInterval: testtime.D2s, MaxAge: testtime.D1h})
+	store, clock := factory(t, refresh.Policy{
+		ReuseInterval:  testtime.D2s,
+		MaxAge:         testtime.D1h,
+		MaxIdle:        refresh.DefaultMaxIdle,
+		GraceMaxReuses: refresh.DefaultGraceMaxReuses,
+	})
 	ctx := context.Background()
 
 	_, err := store.Peek(ctx, "malformed")
@@ -515,7 +547,12 @@ func runT20PeekRejectionParityAndReuseCascade(t *testing.T, factory Factory) {
 	_, err = store.Peek(ctx, expiredWire)
 	assert.ErrorIs(t, err, refresh.ErrRejected, "expired Peek must reject like Rotate")
 
-	store, clock = factory(t, refresh.Policy{ReuseInterval: testtime.D2s, MaxAge: testtime.D1h})
+	store, clock = factory(t, refresh.Policy{
+		ReuseInterval:  testtime.D2s,
+		MaxAge:         testtime.D1h,
+		MaxIdle:        refresh.DefaultMaxIdle,
+		GraceMaxReuses: refresh.DefaultGraceMaxReuses,
+	})
 	parentWire, _ := mustIssue(t, store, "sess-20-reuse", t20Subject)
 	childWire, _ := mustRotate(t, store, parentWire)
 	clock.Advance(testtime.D3s)
@@ -578,5 +615,63 @@ func runT21PeekDoesNotConsumeGraceBudget(t *testing.T, factory Factory) {
 	assert.ErrorIs(t, err, refresh.ErrRejected, "Rotate at used_times == GraceMaxReuses must trigger reuse_detected")
 }
 
+func runT22RevokeSessionDetachedIgnoresCallerCancel(t *testing.T, factory Factory) {
+	store, _ := factory(t, defaultPolicy)
+
+	wire, _ := mustIssue(t, store, "sess-22", "user-22")
+	canceledCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	require.NoError(t, store.RevokeSessionDetached(canceledCtx, "sess-22"))
+
+	_, _, err := store.Rotate(context.Background(), wire)
+	assert.ErrorIs(t, err, refresh.ErrRejected, "detached revoke must kill the session chain")
+}
+
 // Silence unused-imports guard when errcode isn't needed (defensive).
 var _ = errors.Is
+
+// RunIdleExpireContractSuite runs the idle-expiry sub-test against the given
+// factory. It stays separate from RunContractSuite so backend contract runners
+// can name the MaxIdle policy coverage explicitly. Both memstore and PG invoke
+// this suite from their main contract tests.
+//
+// Test identifiers Tn_IdleExpire_* are the contract for MaxIdle enforcement:
+// a token that has not been rotated within MaxIdle of creation must be rejected
+// with ErrRejected; the rejection reason is idle_expired.
+func RunIdleExpireContractSuite(t *testing.T, factory Factory) {
+	t.Helper()
+	t.Run("Tn_IdleExpire_RejectsAfterMaxIdle", func(t *testing.T) {
+		t.Parallel()
+		runTnIdleExpireRejectsAfterMaxIdle(t, factory)
+	})
+}
+
+// idleExpireMaxIdleWindow is the per-test MaxIdle deadline used by the
+// idle-expire contract subtest; one hour is short enough to fit comfortably
+// in the test envelope yet long enough to differ from MaxAge.
+const idleExpireMaxIdleWindow = testtime.D1h
+
+// runTnIdleExpireRejectsAfterMaxIdle constructs a store with the per-test MaxIdle,
+// issues a token, advances the clock past it, then calls Rotate and asserts
+// ErrRejected is returned (idle_expired path).
+func runTnIdleExpireRejectsAfterMaxIdle(t *testing.T, factory Factory) {
+	policy := refresh.Policy{
+		ReuseInterval:  testtime.D2s,
+		MaxAge:         storeMaxAge7d,
+		MaxIdle:        idleExpireMaxIdleWindow,
+		GraceMaxReuses: refresh.DefaultGraceMaxReuses,
+	}
+	store, clock := factory(t, policy)
+	ctx := context.Background()
+
+	wire, _ := mustIssue(t, store, "sess-idle", "user-idle")
+
+	// Advance past MaxIdle.
+	clock.Advance(idleExpireMaxIdleWindow + time.Second)
+
+	_, _, err := store.Rotate(ctx, wire)
+	if !errors.Is(err, refresh.ErrRejected) {
+		t.Errorf("Rotate after MaxIdle exceeded: got %v, want ErrRejected (idle_expired)", err)
+	}
+}

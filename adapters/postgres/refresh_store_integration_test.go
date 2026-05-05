@@ -4,6 +4,7 @@ package postgres
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math/rand"
 	"testing"
@@ -13,6 +14,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 	"github.com/ghbvf/gocell/runtime/auth/refresh"
 	"github.com/ghbvf/gocell/runtime/auth/refresh/storetest"
@@ -25,10 +28,10 @@ const (
 	refreshTest2Hours  = 2 * time.Hour
 )
 
-// TestPGRefreshStore_ContractSuite runs the shared storetest.RunContractSuite
+// TestPGRefreshStore_ContractSuite runs the shared storetest contract suites
 // against a real PostgreSQL backend. This is the regression gate for backend
-// parity with memstore — every Tn subtest enforces the Store contract on
-// both implementations. Notable subtests for PR#388 review findings:
+// parity with memstore — every Tn subtest enforces the Store contract on both
+// implementations. Notable subtests for PR#388 review findings:
 //
 //   - T20_Peek_RejectionParityAndReuseCascade — Peek must reject identically
 //     to Rotate and still cascade-revoke on reuse_detected.
@@ -45,7 +48,7 @@ func TestPGRefreshStore_ContractSuite(t *testing.T) {
 
 	// Each factory call gets its own PG schema so parallel subtests are fully
 	// isolated. GC (T13) only sees rows it inserted — no shared-table pollution.
-	storetest.RunContractSuite(t, func(t *testing.T, policy refresh.Policy) (refresh.Store, *storetest.FakeClock) {
+	factory := func(t *testing.T, policy refresh.Policy) (refresh.Store, *storetest.FakeClock) {
 		t.Helper()
 
 		p := isolatedSchemaPool(t, ctx, base)
@@ -58,7 +61,10 @@ func TestPGRefreshStore_ContractSuite(t *testing.T) {
 		store, err := NewRefreshStore(p.DB(), txm, policy, clock, nil)
 		require.NoError(t, err)
 		return store, clock
-	})
+	}
+
+	storetest.RunContractSuite(t, factory)
+	storetest.RunIdleExpireContractSuite(t, factory)
 }
 
 // isolatedSchemaPool creates a fresh PG schema and returns a Pool whose
@@ -208,7 +214,12 @@ func TestPGRefreshStore_DMLState(t *testing.T) {
 	require.NoError(t, migrator.Up(ctx))
 
 	clock := storetest.NewFakeClock(time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC))
-	policy := refresh.Policy{ReuseInterval: testtime.D2s, MaxAge: refreshTestOneWeek, MaxIdle: refreshTest2Hours}
+	policy := refresh.Policy{
+		ReuseInterval:  testtime.D2s,
+		MaxAge:         refreshTestOneWeek,
+		MaxIdle:        refreshTest2Hours,
+		GraceMaxReuses: refresh.DefaultGraceMaxReuses,
+	}
 	txm := NewTxManager(p)
 	store, err := NewRefreshStore(p.DB(), txm, policy, clock, nil)
 	require.NoError(t, err)
@@ -355,7 +366,12 @@ func TestPGRefreshStore_ReuseCascadeSurvivesAmbientRollback(t *testing.T) {
 
 	clock := storetest.NewFakeClock(time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC))
 	txm := NewTxManager(p)
-	store, err := NewRefreshStore(p.DB(), txm, refresh.Policy{ReuseInterval: testtime.D2s, MaxAge: time.Hour}, clock, nil)
+	store, err := NewRefreshStore(p.DB(), txm, refresh.Policy{
+		ReuseInterval:  testtime.D2s,
+		MaxAge:         time.Hour,
+		MaxIdle:        refresh.DefaultMaxIdle,
+		GraceMaxReuses: refresh.DefaultGraceMaxReuses,
+	}, clock, nil)
 	require.NoError(t, err)
 
 	parentWire, _, err := store.Issue(ctx, "sess-reuse-ambient", "usr-reuse-ambient")
@@ -387,7 +403,12 @@ func TestPGRefreshStore_SessionLockRejectsChildValidatedBeforeCascade(t *testing
 
 	clock := storetest.NewFakeClock(time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC))
 	txm2 := NewTxManager(p)
-	store, err := NewRefreshStore(p.DB(), txm2, refresh.Policy{ReuseInterval: testtime.D2s, MaxAge: time.Hour}, clock, nil)
+	store, err := NewRefreshStore(p.DB(), txm2, refresh.Policy{
+		ReuseInterval:  testtime.D2s,
+		MaxAge:         time.Hour,
+		MaxIdle:        refresh.DefaultMaxIdle,
+		GraceMaxReuses: refresh.DefaultGraceMaxReuses,
+	}, clock, nil)
 	require.NoError(t, err)
 
 	parentWire, _, err := store.Issue(ctx, "sess-reuse-lock", "usr-reuse-lock")
@@ -573,9 +594,10 @@ func TestPGRefreshStore_T21_RejectPathsHaveUniformLogging(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 // TestPGRefreshStore_T22_ReadyzReportsInvalidIndex verifies that the
-// postgres_indexes_valid_ready checker in PGResource.Checkers returns a
-// non-nil error when an invalid index exists in the schema.
-// RED in Wave 1 (checker not yet added to pool_resource.go).
+// postgres_indexes_valid_ready checker in PGResource.Checkers returns a normal
+// errcode error when invalid indexes exist. It must not wrap cell.ErrDegraded:
+// invalid indexes are a schema fault, so runtime/http/health.runOneProbe must
+// classify the probe as unhealthy and /readyz must fail closed with HTTP 503.
 func TestPGRefreshStore_T22_ReadyzReportsInvalidIndex(t *testing.T) {
 	base, cleanup := setupPostgres(t)
 	t.Cleanup(cleanup)
@@ -609,7 +631,14 @@ func TestPGRefreshStore_T22_ReadyzReportsInvalidIndex(t *testing.T) {
 	require.True(t, ok, "postgres_indexes_valid_ready checker must be present in Checkers()")
 
 	err = invalidIdxChecker(ctx)
-	require.Error(t, err, "postgres_indexes_valid_ready must return error when invalid indexes exist")
+	require.Error(t, err, "invalid indexes must make postgres_indexes_valid_ready fail")
+	assert.False(t, errors.Is(err, cell.ErrDegraded),
+		"invalid indexes must not be treated as fail-open degraded readiness")
+	var ec *errcode.Error
+	require.ErrorAs(t, err, &ec, "invalid index checker must return an errcode error")
+	assert.Equal(t, ErrAdapterPGQuery, ec.Code)
+	require.Contains(t, err.Error(), "idx_t22_probe_val",
+		"error must list invalid index names for /readyz?verbose diagnostics")
 
 	t.Cleanup(func() {
 		_, _ = p.DB().Exec(context.Background(), `DROP INDEX IF EXISTS idx_t22_probe_val`)
@@ -669,3 +698,80 @@ func TestPGRefreshStore_T23_AmbientTxRollback(t *testing.T) {
 	require.Equal(t, countBefore, countAfter,
 		"ambient tx rollback must revert Rotate INSERT: no new row should persist")
 }
+
+func TestPGRefreshStore_RevokeSessionDetachedSurvivesAmbientRollback(t *testing.T) {
+	base, cleanup := setupPostgres(t)
+	t.Cleanup(cleanup)
+
+	ctx := context.Background()
+	p := isolatedSchemaPool(t, ctx, base)
+	migrator, err := NewMigrator(p, testMigrationsFS(t), "schema_migrations_detached_revoke")
+	require.NoError(t, err)
+	require.NoError(t, migrator.Up(ctx))
+
+	clock := storetest.NewFakeClock(time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC))
+	txm := NewTxManager(p)
+	store, err := NewRefreshStore(p.DB(), txm, refresh.Policy{
+		ReuseInterval:  testtime.D2s,
+		MaxAge:         testtime.D1h,
+		MaxIdle:        refreshTest30Days,
+		GraceMaxReuses: refresh.DefaultGraceMaxReuses,
+	}, clock, nil)
+	require.NoError(t, err)
+
+	detachedWire, _, err := store.Issue(ctx, "sess-detached-revoke", "usr-detached-revoke")
+	require.NoError(t, err)
+	businessWire, _, err := store.Issue(ctx, "sess-business-revoke", "usr-business-revoke")
+	require.NoError(t, err)
+
+	runErr := txm.RunInTx(ctx, func(txCtx context.Context) error {
+		require.NoError(t, store.RevokeSessionDetached(txCtx, "sess-detached-revoke"))
+		return fmt.Errorf("force outer rollback")
+	})
+	require.Error(t, runErr)
+
+	_, _, err = store.Rotate(ctx, detachedWire)
+	require.ErrorIs(t, err, refresh.ErrRejected,
+		"detached session revoke must commit independently of the caller rollback")
+
+	runErr = txm.RunInTx(ctx, func(txCtx context.Context) error {
+		require.NoError(t, store.RevokeSession(txCtx, "sess-business-revoke"))
+		return fmt.Errorf("force outer rollback")
+	})
+	require.Error(t, runErr)
+
+	_, _, err = store.Rotate(ctx, businessWire)
+	require.NoError(t, err,
+		"business RevokeSession must participate in ambient tx and roll back with it")
+}
+
+// ---------------------------------------------------------------------------
+// PR#388 Finding 1 — detached revoke coverage boundaries
+// ---------------------------------------------------------------------------
+//
+// Finding 1 asked for an "integration test that cancels the caller ctx during
+// reuse_detected and grace-exhausted handling". The literal shape — call
+// store.Rotate with an already-cancelled ctx — does not reach the cascade SQL:
+// txRunner.RunInTx fails at pool.Begin(ctx) with context.Canceled before the
+// reuse check runs. Inserting the cancel mid-call would require either a mock
+// pgxpool (boxing the behavior into a mock) or timing-sensitive orchestration.
+// The maintained coverage is intentionally narrower and executable:
+//
+//   1. pkg/ctxutil/detach_test.go asserts that WithDetachedTimeout's returned
+//      ctx is unaffected by parent cancel and carries an independent deadline.
+//   2. cells/accesscore/slices/sessionrefresh/service_test.go::
+//      TestService_CascadeRevoke_UsesDetachedStoreMethod asserts that the
+//      service-level cascade path routes to RevokeSessionDetached rather than
+//      the ambient business revoke.
+//   3. refresh_store.go handleRotatedRow and RevokeSessionDetached use
+//      ctxutil.WithDetachedTimeout for the cascade pool.Exec — verified by code
+//      inspection and the helper test (#1) which proves the wrapped ctx behaves
+//      as required.
+//   4. TestPGRefreshStore_ReuseCascadeSurvivesAmbientRollback (above) verifies
+//      the orthogonal property that cascade SQL bypasses the ambient tx — i.e.
+//      survives caller-driven outer rollback.
+//
+// Together these cover the chosen boundary: once execution reaches the store's
+// detached revoke path, the final revoke write is detached from caller cancel
+// and ambient rollback. They do not claim that every Refresh entry path
+// continues after an already-canceled caller context.

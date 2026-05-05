@@ -131,8 +131,15 @@ type InvalidIndex struct {
 }
 
 // InvalidIndexCheck wraps DetectInvalidIndexes for use as a readyz probe
-// (func(context.Context) error signature). Returns nil when no invalid indexes
-// exist; returns an errcode error listing the invalid indexes otherwise.
+// (func(context.Context) error signature). Returns:
+//
+//   - nil when no invalid indexes exist
+//   - the underlying query error (KindInternal) when DetectInvalidIndexes fails
+//     — this is a real fault (connection, SQL error) and maps to "unhealthy"
+//   - an errcode error when indisvalid=false rows are present. Invalid indexes
+//     are a schema fault, so runtime/http/health.runOneProbe classifies this as
+//     "unhealthy" and /readyz returns HTTP 503. Operators see the invalid-index
+//     list in /readyz?verbose diagnostics and DROP the index manually.
 //
 // ref: kubernetes/kubernetes pkg/util/healthz — named health checkers return error.
 func InvalidIndexCheck(ctx context.Context, pool *Pool) error {

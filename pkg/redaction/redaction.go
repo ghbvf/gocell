@@ -48,11 +48,20 @@ var connectionStringPattern = regexp.MustCompile(
 	`(?i)(connection[_ ]?string)\s*[:=]\s*\S+`,
 )
 
+// sensitiveKeyPattern is the single source for key names masked by both
+// defaultPattern and quotedJSONPattern. Keep specific token aliases before the
+// generic `token` entry so JSON and key=value coverage evolves together.
+const sensitiveKeyPattern = `password|passwd|pwd|secret|` +
+	`access[_-]?token|refresh[_-]?token|id[_-]?token|token|` +
+	`authorization|connection[_ ]?string|api[_-]?key|bearer|` +
+	`private[_-]?key|signing[_-]?key|dsn`
+
 // defaultPattern matches single-token `key=value` / `key: value` forms.
 //
-// 字段集 = outbox 历史集 (password/passwd/secret/token/dsn) + wrapper attack
-// surface (api[_-]?key / bearer / private[_-]?key / signing[_-]?key) + pwd
-// (SQL Server / ODBC 连接字符串 password 缩写).
+// 字段集 = outbox 历史集 (password/passwd/secret/token/dsn) + OAuth/OIDC token
+// aliases (accessToken/refreshToken/id_token) + wrapper attack surface
+// (authorization / connection string / api[_-]?key / bearer / private[_-]?key
+// / signing[_-]?key) + pwd (SQL Server / ODBC 连接字符串 password 缩写).
 //
 // dsn 保留：PG 连接错误 message 常含完整 DSN（含明文密码 postgres://u:pwd@host），
 // 是真实泄漏面。
@@ -61,15 +70,13 @@ var connectionStringPattern = regexp.MustCompile(
 // 会被 mask。这是 fail-closed 的代价 — 取舍偏向「宁可掩盖目录也不泄漏 SQL
 // Server `Pwd=secret`」。dev 调试需要原始 working directory 时走 slog 结构化字段
 // (e.g. `slog.String("workdir", v)`)，不靠 trace span。
-var defaultPattern = regexp.MustCompile(
-	`(?i)(password|passwd|pwd|secret|token|api[_-]?key|bearer|private[_-]?key|signing[_-]?key|dsn)\s*[:=]\s*\S+`,
-)
+var defaultPattern = regexp.MustCompile(`(?i)(` + sensitiveKeyPattern + `)\s*[:=]\s*\S+`)
 
 // quotedJSONPattern handles common JSON-in-error fragments such as
 // `{"password":"..."}`. It is separate from defaultPattern because the quote
 // between the key and `:` is valid JSON but not a key=value separator.
 var quotedJSONPattern = regexp.MustCompile(
-	`(?i)("(?:password|passwd|pwd|secret|token|api[_-]?key|bearer|private[_-]?key|signing[_-]?key|dsn)"\s*:\s*)"(?:\\.|[^"\\])*"`,
+	`(?i)("(?:` + sensitiveKeyPattern + `)"\s*:\s*)"(?:\\.|[^"\\])*"`,
 )
 
 // allPatterns runs in order. ORDER IS A CORRECTNESS CONSTRAINT, not a
@@ -187,14 +194,42 @@ func RedactError(err error) error {
 // ref: hashicorp/vault audit log_raw=false default; ADR
 // docs/architecture/202604242030-adr-kernel-wrapper-contract-observability.md §8.
 func RedactPanic(v any) string {
-	switch x := v.(type) {
-	case nil:
+	if v == nil {
 		return "<nil>"
+	}
+	switch x := RedactAny(v).(type) {
 	case error:
-		return RedactString(x.Error())
+		return x.Error()
+	case string:
+		return x
+	default:
+		return fmt.Sprint(x)
+	}
+}
+
+// RedactAny scrubs sensitive substrings from arbitrary panic-style payloads
+// before they reach observability backends. Three branches:
+//
+//   - nil → nil
+//   - error → RedactError(e)
+//   - string → RedactString(s)
+//   - other → RedactString(fmt.Sprint(v)) (covers fmt.Stringer, structs,
+//     primitive types; fail-closed: stringify and mask, never echo raw).
+//
+// Intended for `slog.Any("panic", redaction.RedactAny(r))` in panic recovery
+// blocks where r is `any` returned from recover(). The same regex pipeline as
+// RedactString applies, so the field-set and over-mask trade-offs documented
+// at package level apply uniformly.
+func RedactAny(v any) any {
+	if v == nil {
+		return nil
+	}
+	switch x := v.(type) {
+	case error:
+		return RedactError(x)
 	case string:
 		return RedactString(x)
 	default:
-		return RedactString(fmt.Sprintf("%v", v))
+		return RedactString(fmt.Sprint(x))
 	}
 }

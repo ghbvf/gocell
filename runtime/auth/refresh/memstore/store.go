@@ -40,7 +40,7 @@ type tokenRecord struct {
 	verifierHash  [sha256.Size]byte
 	createdAt     time.Time
 	expiresAt     time.Time
-	idleExpiresAt time.Time // sliding window; zero disables idle check
+	idleExpiresAt time.Time // sliding window; always set (Policy.MaxIdle required positive)
 	rotatedAt     time.Time // zero means live-latest
 	revokedAt     time.Time // zero means not revoked
 	firstUsedAt   time.Time // zero until first grace re-use
@@ -120,13 +120,10 @@ func (s *store) Issue(_ context.Context, sessionID, subjectID string) (string, *
 	return refresh.EncodeOpaque(sel, ver), rec.toToken(), nil
 }
 
-// idleDeadline returns now + MaxIdle when configured, or a zero time when
-// MaxIdle is zero (idle check disabled).
+// idleDeadline returns now + MaxIdle. Policy.MaxIdle is guaranteed positive by
+// Validate(), so no zero-check is needed.
 func (s *store) idleDeadline(now time.Time) time.Time {
-	if s.policy.MaxIdle > 0 {
-		return now.Add(s.policy.MaxIdle)
-	}
-	return time.Time{}
+	return now.Add(s.policy.MaxIdle)
 }
 
 // Peek validates the presented wire token without advancing the lineage.
@@ -213,14 +210,16 @@ func (s *store) validatePresentedLocked(sel, ver []byte) (*tokenRecord, error) {
 	if !rec.expiresAt.After(now) {
 		return nil, rejectWithReason("expired")
 	}
-	// X12: idle-expiry check (zero idleExpiresAt means idle check disabled).
-	if !rec.idleExpiresAt.IsZero() && s.policy.MaxIdle > 0 && !rec.idleExpiresAt.After(now) {
+	// X12: idle-expiry check. Policy.MaxIdle is required (must be positive),
+	// so idleExpiresAt is always set to a meaningful future time.
+	if !rec.idleExpiresAt.After(now) {
 		return nil, rejectWithReason("idle_expired")
 	}
 
 	if rec.isRotated() {
-		// X14: grace counter cap check.
-		if s.policy.GraceMaxReuses > 0 && rec.usedTimes >= s.policy.GraceMaxReuses {
+		// X14: grace counter cap check. Policy.GraceMaxReuses is required (must
+		// be positive) — no zero-check needed.
+		if rec.usedTimes >= s.policy.GraceMaxReuses {
 			s.revokeSessionLocked(rec.sessionID, now)
 			slog.Error("refresh token grace counter exhausted",
 				slog.String("session_id", rec.sessionID),
@@ -253,6 +252,13 @@ func (s *store) RevokeSession(_ context.Context, sessionID string) error {
 	return nil
 }
 
+// RevokeSessionDetached marks every row in the session_id lineage as revoked.
+// Memstore has no ambient transaction/cancellation boundary, so it shares the
+// same locked critical section as RevokeSession.
+func (s *store) RevokeSessionDetached(ctx context.Context, sessionID string) error {
+	return s.RevokeSession(ctx, sessionID)
+}
+
 // RevokeUser marks every row owned by subjectID as revoked.
 func (s *store) RevokeUser(_ context.Context, subjectID string) error {
 	now := s.clock.Now()
@@ -267,9 +273,7 @@ func (s *store) RevokeUser(_ context.Context, subjectID string) error {
 }
 
 // GC removes rows whose effective expiry is before olderThan. The effective
-// expiry is LEAST(expiresAt, idleExpiresAt) when idleExpiresAt is non-zero,
-// or just expiresAt when idle_expires_at is zero (pre-016 / disabled).
-// L0 best-effort.
+// expiry is LEAST(expiresAt, idleExpiresAt). L0 best-effort.
 func (s *store) GC(_ context.Context, olderThan time.Time) (int, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -277,7 +281,7 @@ func (s *store) GC(_ context.Context, olderThan time.Time) (int, error) {
 	removed := 0
 	for _, rec := range s.rows {
 		effectiveExpiry := rec.expiresAt
-		if !rec.idleExpiresAt.IsZero() && rec.idleExpiresAt.Before(effectiveExpiry) {
+		if rec.idleExpiresAt.Before(effectiveExpiry) {
 			effectiveExpiry = rec.idleExpiresAt
 		}
 		if effectiveExpiry.Before(olderThan) {

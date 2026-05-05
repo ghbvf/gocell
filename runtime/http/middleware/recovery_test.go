@@ -1,9 +1,12 @@
 package middleware
 
 import (
+	"bytes"
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -46,6 +49,42 @@ func TestRecovery_PanicString(t *testing.T) {
 	assert.Equal(t, "ERR_INTERNAL", errObj["code"])
 	assert.Equal(t, "internal server error", errObj["message"])
 	assert.Equal(t, []any{}, errObj["details"], "canonical envelope must include empty details object")
+}
+
+func TestRecovery_PanicBodyDoesNotLeakPanicValue(t *testing.T) {
+	const leakSentinel = "recovery-body-leak-sentinel-7c1"
+	handler := Recorder(Recovery(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		panic("password=" + leakSentinel)
+	})))
+
+	req := httptest.NewRequest(http.MethodGet, "/panic", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusInternalServerError, rec.Code)
+	assert.False(t, strings.Contains(rec.Body.String(), leakSentinel),
+		"500 body must remain generic and never include panic payload")
+	assert.Contains(t, rec.Body.String(), "internal server error")
+}
+
+func TestRecovery_PanicLogRedactsPanicValue(t *testing.T) {
+	var logs bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&logs, nil)))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	const leakSentinel = "recovery-log-leak-sentinel-2b8"
+	handler := Recorder(Recovery(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		panic("token=" + leakSentinel)
+	})))
+
+	req := httptest.NewRequest(http.MethodGet, "/panic", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusInternalServerError, rec.Code)
+	assert.NotContains(t, logs.String(), leakSentinel)
+	assert.Contains(t, logs.String(), "REDACTED")
 }
 
 func TestRecovery_PanicError(t *testing.T) {

@@ -62,7 +62,12 @@ func (dummyTxRunner) RunInTx(ctx context.Context, fn func(context.Context) error
 
 func TestNewRefreshStore_ReturnsErrorOnInvalidArgs(t *testing.T) {
 	validClock := storetest.NewFakeClock(time.Now())
-	validPolicy := refresh.Policy{ReuseInterval: time.Second, MaxAge: time.Hour}
+	validPolicy := refresh.Policy{
+		ReuseInterval:  time.Second,
+		MaxAge:         time.Hour,
+		MaxIdle:        refresh.DefaultMaxIdle,
+		GraceMaxReuses: refresh.DefaultGraceMaxReuses,
+	}
 	validTxRunner := dummyTxRunner{}
 
 	// dummyPool is a non-nil *pgxpool.Pool used only to pass the nil check
@@ -112,7 +117,12 @@ func TestNewRefreshStore_ReturnsErrorOnInvalidArgs(t *testing.T) {
 func TestNewRefreshStore_NilRandReader_UsesDefault(t *testing.T) {
 	dummyPool := new(pgxpool.Pool)
 	validClock := storetest.NewFakeClock(time.Now())
-	validPolicy := refresh.Policy{ReuseInterval: time.Second, MaxAge: time.Hour}
+	validPolicy := refresh.Policy{
+		ReuseInterval:  time.Second,
+		MaxAge:         time.Hour,
+		MaxIdle:        refresh.DefaultMaxIdle,
+		GraceMaxReuses: refresh.DefaultGraceMaxReuses,
+	}
 	validTxRunner := dummyTxRunner{}
 
 	// nil randReader must not error — constructor falls back to crypto/rand.Reader.
@@ -124,7 +134,12 @@ func TestNewRefreshStore_NilRandReader_UsesDefault(t *testing.T) {
 func TestNewRefreshStore_TypedNilRandReader_UsesDefault(t *testing.T) {
 	dummyPool := new(pgxpool.Pool)
 	validClock := storetest.NewFakeClock(time.Now())
-	validPolicy := refresh.Policy{ReuseInterval: time.Second, MaxAge: time.Hour}
+	validPolicy := refresh.Policy{
+		ReuseInterval:  time.Second,
+		MaxAge:         time.Hour,
+		MaxIdle:        refresh.DefaultMaxIdle,
+		GraceMaxReuses: refresh.DefaultGraceMaxReuses,
+	}
 	validTxRunner := dummyTxRunner{}
 	var reader *typedNilRefreshReader
 

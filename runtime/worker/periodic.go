@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/ghbvf/gocell/kernel/clock"
+	"github.com/ghbvf/gocell/pkg/redaction"
 )
 
 // Compile-time interface check.
@@ -73,7 +74,7 @@ func (p *PeriodicWorker) Stop(_ context.Context) error {
 func (p *PeriodicWorker) runSafe(ctx context.Context) {
 	defer func() {
 		if r := recover(); r != nil {
-			slog.Error("periodic worker panic", slog.Any("panic", r))
+			slog.Error("periodic worker panic", slog.Any("panic", redaction.RedactAny(r)))
 		}
 	}()
 	p.fn(ctx)

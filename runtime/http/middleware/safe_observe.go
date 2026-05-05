@@ -3,6 +3,8 @@ package middleware
 import (
 	"log/slog"
 	"runtime/debug"
+
+	"github.com/ghbvf/gocell/pkg/redaction"
 )
 
 // safeObserve runs fn and recovers from any panic, logging it via the
@@ -37,7 +39,7 @@ func safeObserve(logger *slog.Logger, fn func()) {
 			func() {
 				defer func() { _ = recover() }()
 				logger.Error("observability middleware panic",
-					slog.Any("panic", v),
+					slog.Any("panic", redaction.RedactAny(v)),
 					slog.String("stack", string(debug.Stack())),
 				)
 			}()

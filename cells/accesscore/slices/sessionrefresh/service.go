@@ -262,10 +262,18 @@ func (s *Service) verifySession(ctx context.Context, sessionID string) (*domain.
 	return session, nil
 }
 
-// cascadeRevoke calls RevokeSession and returns infra errors distinctly from
-// auth rejection. reason is log-only and never exposed to callers.
+// cascadeRevoke routes security-response revokes (reuse attack,
+// session-not-found, or subject mismatch) through RevokeSessionDetached. Once a
+// cascade path is reached, the store owns the detached, 5-second bounded write
+// policy that lets durable implementations persist the revoke outside the
+// caller's cancellation and ambient transaction boundary.
+//
+// reason is log-only and never exposed to callers.
+//
+// ref: golang/go context.WithoutCancel; hashicorp/vault token_store.go quitContext
+// ref: ADR docs/architecture/202605051800-adr-refresh-store-ambient-tx-and-idle-grace.md
 func (s *Service) cascadeRevoke(ctx context.Context, sessionID, reason string) error {
-	if err := s.refreshStore.RevokeSession(ctx, sessionID); err != nil {
+	if err := s.refreshStore.RevokeSessionDetached(ctx, sessionID); err != nil {
 		s.logger.Error("session-refresh: cascade revoke failed",
 			slog.String("reason", reason),
 			slog.Any("error", err),

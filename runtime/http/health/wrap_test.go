@@ -108,14 +108,16 @@ func TestWrapCtxSafe_PanicBecomesErrorAndLogs(t *testing.T) {
 	slog.SetDefault(slog.New(slog.NewJSONHandler(&logs, nil)))
 	t.Cleanup(func() { slog.SetDefault(prev) })
 
+	const leakSentinel = "wrap-panic-leak-sentinel-4ad"
 	wrapped := wrapCtxSafe(func(_ context.Context) error {
-		panic("boom")
+		panic("secret=" + leakSentinel)
 	}, clock.Real())
 	err := wrapped(context.Background())
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "panic: boom")
+	assert.Contains(t, err.Error(), "panic: secret=")
 	assert.Contains(t, logs.String(), "health: probe panicked")
-	assert.Contains(t, logs.String(), "boom")
+	assert.NotContains(t, logs.String(), leakSentinel)
+	assert.Contains(t, logs.String(), "REDACTED")
 }
 
 // TestWrapCtxSafe_NilInput ensures defensive wrapping of nil returns a
