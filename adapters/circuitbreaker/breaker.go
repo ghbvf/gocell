@@ -7,6 +7,7 @@ package circuitbreaker
 
 import (
 	"errors"
+	"log/slog"
 	"sync"
 	"time"
 
@@ -133,9 +134,22 @@ type breaker struct {
 	onStateChange func(string, State, State)
 }
 
+// stateTransition records a single state change that occurred inside a
+// critical section. The slice is passed out of the lock so the caller can
+// fire user callbacks and slog after Unlock.
+//
+// ref: hashicorp/raft event bus — collect events during critical section,
+// fire after Unlock to avoid reentrant deadlock.
+type stateTransition struct {
+	name string
+	prev State
+	next State
+}
+
 // currentState lazily transitions the breaker state based on expiry.
+// It appends any transition to *ts (caller-allocated).
 // Caller must hold b.mu.
-func (b *breaker) currentState(now time.Time) (State, uint64) {
+func (b *breaker) currentState(now time.Time, ts *[]stateTransition) (State, uint64) {
 	switch b.state {
 	case StateClosed:
 		if !b.expiry.IsZero() && b.expiry.Before(now) {
@@ -143,7 +157,7 @@ func (b *breaker) currentState(now time.Time) (State, uint64) {
 		}
 	case StateOpen:
 		if !b.expiry.IsZero() && b.expiry.Before(now) {
-			b.setState(StateHalfOpen, now)
+			b.setState(StateHalfOpen, now, ts)
 		}
 	}
 	return b.state, b.generation
@@ -151,75 +165,94 @@ func (b *breaker) currentState(now time.Time) (State, uint64) {
 
 // beforeRequest checks whether a request is permitted and increments Requests.
 func (b *breaker) beforeRequest() (uint64, error) {
+	var ts []stateTransition
 	b.mu.Lock()
-	defer b.mu.Unlock()
 	now := b.clk.Now()
-	state, gen := b.currentState(now)
+	state, gen := b.currentState(now, &ts)
+	var err error
 	if state == StateOpen {
-		return gen, errOpenState
+		err = errOpenState
+	} else if state == StateHalfOpen && b.counts.Requests >= b.maxRequests {
+		err = errTooManyRequests
+	} else {
+		b.counts.Requests++
 	}
-	if state == StateHalfOpen && b.counts.Requests >= b.maxRequests {
-		return gen, errTooManyRequests
-	}
-	b.counts.Requests++
-	return gen, nil
+	b.mu.Unlock()
+	b.fireTransitions(ts)
+	return gen, err
 }
 
 // afterRequest records the outcome of a request. Cross-generation done
 // callbacks are silently ignored (generation fencing).
 func (b *breaker) afterRequest(before uint64, success bool) {
+	var ts []stateTransition
 	b.mu.Lock()
-	defer b.mu.Unlock()
 	now := b.clk.Now()
-	state, gen := b.currentState(now)
-	if gen != before {
-		return // cross-generation callback — stale, ignore
+	state, gen := b.currentState(now, &ts)
+	if gen == before {
+		if success {
+			b.onSuccess(state, now, &ts)
+		} else {
+			b.onFailure(state, now, &ts)
+		}
 	}
-	if success {
-		b.onSuccess(state, now)
-	} else {
-		b.onFailure(state, now)
-	}
+	// else: cross-generation callback — stale, ignore
+	b.mu.Unlock()
+	b.fireTransitions(ts)
 }
 
 // onSuccess updates counts for a successful request.
 // Caller must hold b.mu.
-func (b *breaker) onSuccess(state State, now time.Time) {
+func (b *breaker) onSuccess(state State, now time.Time, ts *[]stateTransition) {
 	b.counts.TotalSuccesses++
 	b.counts.ConsecutiveSuccesses++
 	b.counts.ConsecutiveFailures = 0
 	if state == StateHalfOpen && b.counts.ConsecutiveSuccesses >= b.maxRequests {
-		b.setState(StateClosed, now)
+		b.setState(StateClosed, now, ts)
 	}
 }
 
 // onFailure updates counts for a failed request.
 // Caller must hold b.mu.
-func (b *breaker) onFailure(state State, now time.Time) {
+func (b *breaker) onFailure(state State, now time.Time, ts *[]stateTransition) {
 	b.counts.TotalFailures++
 	b.counts.ConsecutiveFailures++
 	b.counts.ConsecutiveSuccesses = 0
 	switch state {
 	case StateClosed:
 		if b.readyToTrip(b.counts) {
-			b.setState(StateOpen, now)
+			b.setState(StateOpen, now, ts)
 		}
 	case StateHalfOpen:
-		b.setState(StateOpen, now)
+		b.setState(StateOpen, now, ts)
 	}
 }
 
 // setState transitions to a new state and starts a fresh generation.
+// It appends the transition to *ts; the caller fires callbacks after Unlock.
 // Caller must hold b.mu.
-func (b *breaker) setState(target State, now time.Time) {
+func (b *breaker) setState(target State, now time.Time, ts *[]stateTransition) {
 	if b.state == target {
 		return
 	}
 	prev := b.state
 	b.state = target
 	b.toNewGeneration(now)
-	if b.onStateChange != nil {
-		b.onStateChange(b.name, prev, target)
+	*ts = append(*ts, stateTransition{name: b.name, prev: prev, next: target})
+}
+
+// fireTransitions invokes the user OnStateChange callback and emits a slog
+// Info event for each collected transition. Called after b.mu is released to
+// avoid reentrant deadlock when the callback calls Allow() or State().
+func (b *breaker) fireTransitions(ts []stateTransition) {
+	for _, t := range ts {
+		slog.Info("circuitbreaker: state transition",
+			"name", t.name,
+			"from", t.prev.String(),
+			"to", t.next.String())
+		if b.onStateChange != nil {
+			b.onStateChange(t.name, t.prev, t.next)
+		}
 	}
 }
 
@@ -316,8 +349,10 @@ func (a *Adapter) RetryAfter() time.Duration {
 
 // State returns the current state of the circuit breaker.
 func (a *Adapter) State() State {
+	var ts []stateTransition
 	a.cb.mu.Lock()
-	defer a.cb.mu.Unlock()
-	state, _ := a.cb.currentState(a.cb.clk.Now())
+	state, _ := a.cb.currentState(a.cb.clk.Now(), &ts)
+	a.cb.mu.Unlock()
+	a.cb.fireTransitions(ts)
 	return state
 }
