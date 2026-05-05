@@ -23,6 +23,15 @@ import (
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 )
 
+// closeRespectsCtxBudgetMultiplier is the upper bound for elapsed time as a
+// multiple of the ctx budget in TestConnection_Close_RespectsCtxDeadline.
+// It is intentionally loose — 5×80ms=400ms — to absorb GH Actions runner
+// jitter (GC pause / scheduler preemption / testcontainers parallelism) while
+// still flagging an "ignored ctx, slow Close" regression: an unresponsive
+// Close blocks until close(gate) at D2s, so the [400ms, 2s] detection window
+// is wide enough.
+const closeRespectsCtxBudgetMultiplier = 5
+
 // TestConnection_Close_RespectsCtx verifies that Close returns the
 // ctx error promptly when ctx is pre-canceled.
 func TestConnection_Close_RespectsCtx(t *testing.T) {
@@ -156,8 +165,12 @@ func TestConnection_Close_RespectsCtxDeadline(t *testing.T) {
 
 	// Close must return with a ctx error, not block until gate.
 	require.Error(t, err, "Close must return ctx error when budget exceeded")
-	assert.LessOrEqual(t, elapsed, budget+testtime.MediumPoll,
-		"Close must return within budget+tolerance; got %s", elapsed)
+	// Semantic assertion: Close honored ctx, so elapsed stays within the same
+	// order of magnitude as the budget — well under the D2s gate-release
+	// fallback that an unresponsive Close would hit. The multiplier rationale
+	// lives on the closeRespectsCtxBudgetMultiplier const above.
+	assert.Less(t, elapsed, closeRespectsCtxBudgetMultiplier*budget,
+		"Close must return promptly after ctx expiry (got %s, budget %s)", elapsed, budget)
 
 	// Release the gate so the background goroutine doesn't leak.
 	close(gate)
