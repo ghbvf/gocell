@@ -1,6 +1,7 @@
 package governance
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -37,19 +38,45 @@ func TestHasGitMetadata_FalseWhenMissing(t *testing.T) {
 func TestHasHEAD_FalseInEmptyRepo(t *testing.T) {
 	root := t.TempDir()
 	gitInit(t, root)
-	assert.False(t, hasHEAD(t.Context(), root),
+	has, err := hasHEAD(t.Context(), root)
+	require.NoError(t, err)
+	assert.False(t, has,
 		"freshly-initialized repo with no commits must report no HEAD")
 }
 
 func TestHasHEAD_TrueAfterCommit(t *testing.T) {
 	root := t.TempDir()
 	gitInitAndCommit(t, root, "seed.txt", "seed\n")
-	assert.True(t, hasHEAD(t.Context(), root))
+	has, err := hasHEAD(t.Context(), root)
+	require.NoError(t, err)
+	assert.True(t, has)
 }
 
 func TestHasHEAD_FalseWhenNotARepo(t *testing.T) {
 	root := t.TempDir()
-	assert.False(t, hasHEAD(t.Context(), root))
+	has, err := hasHEAD(t.Context(), root)
+	require.NoError(t, err)
+	assert.False(t, has)
+}
+
+func TestHasHEAD_PropagatesCtxCancel(t *testing.T) {
+	root := t.TempDir()
+	gitInitAndCommit(t, root, "seed.txt", "seed\n")
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	has, err := hasHEAD(ctx, root)
+	require.Error(t, err, "canceled ctx must propagate, not silently fold to no-HEAD")
+	assert.False(t, has)
+}
+
+func TestCommittedInHEAD_PropagatesCtxCancel(t *testing.T) {
+	root := t.TempDir()
+	gitInitAndCommit(t, root, "seed.txt", "seed\n")
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	committed, err := CommittedInHEAD(ctx, root, "seed.txt")
+	require.Error(t, err, "canceled ctx must propagate, not silently fold to not-committed")
+	assert.False(t, committed)
 }
 
 func TestCommittedInHEAD_TrueForCommittedFile(t *testing.T) {

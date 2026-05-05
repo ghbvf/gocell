@@ -226,7 +226,7 @@ const (
 	processTreeDeathSettleTimeout     = time.Second
 )
 
-// TestRunWith_KillsProcessTree verifies that cancelling ctx kills not only the
+// TestRunWith_KillsProcessTree verifies that canceling ctx kills not only the
 // direct child but all grandchild processes spawned by it. The test is
 // Unix-only because the shell one-liner used to produce grandchildren relies on
 // POSIX semantics; on Windows the fallback is the direct-child kill (see
@@ -264,7 +264,7 @@ func TestRunWith_KillsProcessTree(t *testing.T) {
 	deadline := time.Now().Add(processTreeGrandchildSpawnTimeout)
 	var grandchildPID int
 	for time.Now().Before(deadline) {
-		raw, readErr := os.ReadFile(pidFile)
+		raw, readErr := os.ReadFile(pidFile) //nolint:gosec // G304: pidFile is t.TempDir() output, test-only
 		if readErr == nil {
 			pid, parseErr := strconv.Atoi(strings.TrimSpace(string(raw)))
 			if parseErr == nil && pid > 0 {
