@@ -612,6 +612,36 @@ func TestCoreAssembly_StopDrainsDispatcher(t *testing.T) {
 		"Stop must drain before returning (4 hook events minimum: BeforeStart, AfterStart, BeforeStop, AfterStop)")
 }
 
+func TestCoreAssembly_RestartRebuildsHookDispatcher(t *testing.T) {
+	obs := &collectObserver{}
+	a := newTestAssembly(t, Config{
+		ID:             "restart-dispatcher-test",
+		DurabilityMode: cell.DurabilityDemo,
+		HookObserver:   obs,
+		Clock:          clock.Real(),
+	})
+	require.NoError(t, a.Register(newHookOrderCell("A", new([]string), "")))
+
+	require.NoError(t, a.Start(context.Background()))
+	firstDispatcher := a.currentDispatcher()
+	require.NotNil(t, firstDispatcher)
+	require.NoError(t, a.Stop(context.Background()))
+	require.Equal(t, 4, obs.len(), "first lifecycle must deliver all hook events before Stop returns")
+	require.Nil(t, a.currentDispatcher(), "Stop must retire the one-shot dispatcher")
+
+	require.NoError(t, a.Start(context.Background()))
+	secondDispatcher := a.currentDispatcher()
+	require.NotNil(t, secondDispatcher)
+	if firstDispatcher == secondDispatcher {
+		t.Fatal("restart must create a fresh dispatcher")
+	}
+	require.True(t, a.FlushHookEvents(testtime.D500ms), "restarted dispatcher must accept flush fences")
+	require.Equal(t, 6, obs.len(), "second Start must deliver hook events through the new dispatcher")
+
+	require.NoError(t, a.Stop(context.Background()))
+	require.Equal(t, 8, obs.len(), "second Stop must drain hook events before returning")
+}
+
 func TestCoreAssembly_StopContextCancelsDispatcherDrain(t *testing.T) {
 	clk := clockmock.New(time.Time{})
 	obs := newBlockingObserver()
@@ -628,6 +658,8 @@ func TestCoreAssembly_StopContextCancelsDispatcherDrain(t *testing.T) {
 	require.NoError(t, a.Start(context.Background()))
 	require.Eventually(t, func() bool { return obs.received.Load() >= 1 },
 		testtime.EventuallyDefault, testtime.FastPoll, "start hook event should reach observer")
+	dispatcher := a.currentDispatcher()
+	require.NotNil(t, dispatcher)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
@@ -645,7 +677,7 @@ func TestCoreAssembly_StopContextCancelsDispatcherDrain(t *testing.T) {
 	obs.release()
 	require.Eventually(t, func() bool {
 		select {
-		case <-a.dispatcher.done:
+		case <-dispatcher.done:
 			return true
 		default:
 			return false

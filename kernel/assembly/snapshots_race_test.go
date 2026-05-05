@@ -20,26 +20,11 @@ import (
 	"github.com/ghbvf/gocell/pkg/testutil/testtime"
 )
 
-// TestAssembly_StartConcurrentSnapshots_RaceDetector exercises the path that
-// PR-V1-030-K01 fixes: during startInternal Phase 1 (Init loop), `a.snapshots`
-// must not be written without holding `a.mu`. Concurrent calls to Snapshots()
-// hold the lock and read the map; an unlocked write from Phase 1 is a fatal
-// map race under Go's runtime detector and triggers reliably under `go test
-// -race`.
-//
-// Setup: register N cells. The last one parks in Init until `initGate` closes,
-// holding Phase 1 mid-flight. Reader goroutines repeatedly call Snapshots(),
-// hammering the map while earlier cells' snapshots have already been recorded.
-//
-// Expected:
-//   - Pre-fix:  fatal "concurrent map read and map write" under -race.
-//   - Post-fix: passes — Phase 1 collects into a local map and assigns under
-//     `a.mu` once after Init completes.
-//
-// CI race gate: .github/workflows/test-race.yml runs `go test -race
-// ./kernel/...`, so this test is auto-covered. Without -race it may pass on
-// lucky scheduling; the gate is the contract.
-func TestAssembly_StartConcurrentSnapshots_RaceDetector(t *testing.T) {
+// TestAssembly_StartConcurrentSnapshots_VisibilityDuringStart verifies the
+// public Snapshots() contract while Start is still in Phase 1: callers must
+// see nil until the assembly reaches stateStarted, even though Init has
+// already recorded local registry declarations.
+func TestAssembly_StartConcurrentSnapshots_VisibilityDuringStart(t *testing.T) {
 	a := newTestAssembly(t, Config{
 		ID:             "race-snapshots",
 		DurabilityMode: cell.DurabilityDemo,
@@ -112,7 +97,7 @@ func TestAssembly_StartConcurrentSnapshots_RaceDetector(t *testing.T) {
 	for r := 0; r < readers; r++ {
 		<-ready
 	}
-	assert.Empty(t, a.Snapshots(), "Snapshots() must stay empty while Start is blocked in Phase 1")
+	assert.Nil(t, a.Snapshots(), "Snapshots() must stay nil while Start is blocked in Phase 1")
 	close(initGate)
 
 	startErr := <-startDone
@@ -123,6 +108,85 @@ func TestAssembly_StartConcurrentSnapshots_RaceDetector(t *testing.T) {
 
 	// Cleanup: stop assembly so registered cells transition cleanly. Stop
 	// failure is non-fatal for this test (the focus is Start-time race).
+	_ = a.Stop(context.Background())
+}
+
+// TestAssembly_StartInternalSnapshotsMap_RaceDetector is the runtime race
+// guard for the original PR-V1-030-K01 failure mode. It intentionally reads
+// a.snapshots under a.mu from the same package while Start is in Phase 1.
+// A regression that writes a.snapshots from the Init loop without a.mu races
+// this reader under `go test -race`.
+func TestAssembly_StartInternalSnapshotsMap_RaceDetector(t *testing.T) {
+	a := newTestAssembly(t, Config{
+		ID:             "race-snapshots-internal",
+		DurabilityMode: cell.DurabilityDemo,
+		Clock:          clock.Real(),
+	})
+
+	initGate := make(chan struct{})
+	var releaseOnce sync.Once
+	releaseInit := func() { releaseOnce.Do(func() { close(initGate) }) }
+	t.Cleanup(releaseInit)
+
+	enteredInit := make(chan struct{})
+	require.NoError(t, a.Register(&configMutatingCell{
+		BaseCell: cell.MustNewBaseCell(&metadata.CellMeta{
+			ID: "gated", Type: "core", ConsistencyLevel: "L0",
+		}),
+		onInit: func(_ cell.Registry) error {
+			close(enteredInit)
+			<-initGate
+			return nil
+		},
+	}))
+	for i := 0; i < 16; i++ {
+		id := fmt.Sprintf("slow-%02d", i)
+		require.NoError(t, a.Register(&configMutatingCell{
+			BaseCell: cell.MustNewBaseCell(&metadata.CellMeta{
+				ID: id, Type: "core", ConsistencyLevel: "L0",
+			}),
+			onInit: func(_ cell.Registry) error {
+				time.Sleep(testtime.D1ms) //archtest:allow:test-sleep yield between Init completions to widen the race window against internal readers
+				return nil
+			},
+		}))
+	}
+
+	startDone := make(chan error, 1)
+	go func() {
+		startDone <- a.Start(context.Background())
+	}()
+	<-enteredInit
+
+	const readers = 8
+	const reads = 100
+	ready := make(chan struct{}, readers)
+	var wg sync.WaitGroup
+	wg.Add(readers)
+	for r := 0; r < readers; r++ {
+		go func() {
+			defer wg.Done()
+			for i := 0; i < reads; i++ {
+				a.mu.Lock()
+				for id := range a.snapshots {
+					_ = id
+				}
+				a.mu.Unlock()
+				if i == 0 {
+					ready <- struct{}{}
+				}
+				time.Sleep(testtime.D1ms) //archtest:allow:test-sleep keep internal readers active while Phase 1 advances
+			}
+		}()
+	}
+
+	for r := 0; r < readers; r++ {
+		<-ready
+	}
+	releaseInit()
+
+	require.NoError(t, <-startDone)
+	wg.Wait()
 	_ = a.Stop(context.Background())
 }
 
@@ -217,7 +281,7 @@ func TestAssembly_ConcurrentStartStop_RaceDetector(t *testing.T) {
 
 	// Final teardown: drive to stopped state regardless of last writer.
 	_ = a.Stop(context.Background())
-	assert.Empty(t, a.Snapshots(), "final state must not expose snapshots")
+	assert.Nil(t, a.Snapshots(), "final state must not expose snapshots")
 }
 
 func requireStartStateGuardError(t *testing.T, err error) {

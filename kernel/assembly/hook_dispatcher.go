@@ -106,6 +106,9 @@ type dispatcherConfig struct {
 	// Provider backs drop/queue-depth metrics. Nil falls back to
 	// metrics.NopProvider — dispatcher still works, emissions go nowhere.
 	Provider metrics.Provider
+	// Dropped reuses an already-registered drop counter when the owning
+	// assembly rebuilds the dispatcher for a new Start cycle.
+	Dropped metrics.CounterVec
 	// Clock is the time source for flush deadline timers. Required; use
 	// clock.Real() in production and clockmock.New() in tests.
 	Clock clock.Clock
@@ -124,19 +127,23 @@ func newHookDispatcher(cfg dispatcherConfig) *hookDispatcher {
 	}
 	clock.MustHaveClock(cfg.Clock, "assembly.newHookDispatcher")
 
-	dropped, err := cfg.Provider.CounterVec(metrics.CounterOpts{
-		Name:       "hook_observer_dropped_total",
-		Help:       "Total number of hook events dropped by the async hook dispatcher, partitioned by reason.",
-		LabelNames: []string{"reason"},
-	})
-	if err != nil {
-		// Not fatal: fall back to NopProvider so emission path stays safe.
-		// Registration failures usually mean a duplicate name — this package
-		// should be used once per assembly per process; duplicate is caller
-		// misuse and should not break assembly lifecycle.
-		slog.Warn("assembly: hook dispatcher metric registration failed; falling back to Nop",
-			slog.Any("error", err))
-		dropped, _ = metrics.NopProvider{}.CounterVec(metrics.CounterOpts{LabelNames: []string{"reason"}})
+	dropped := cfg.Dropped
+	if dropped == nil {
+		var err error
+		dropped, err = cfg.Provider.CounterVec(metrics.CounterOpts{
+			Name:       "hook_observer_dropped_total",
+			Help:       "Total number of hook events dropped by the async hook dispatcher, partitioned by reason.",
+			LabelNames: []string{"reason"},
+		})
+		if err != nil {
+			// Not fatal: fall back to NopProvider so emission path stays safe.
+			// Registration failures usually mean a duplicate name — this package
+			// should be used once per assembly per process; duplicate is caller
+			// misuse and should not break assembly lifecycle.
+			slog.Warn("assembly: hook dispatcher metric registration failed; falling back to Nop",
+				slog.Any("error", err))
+			dropped, _ = metrics.NopProvider{}.CounterVec(metrics.CounterOpts{LabelNames: []string{"reason"}})
+		}
 	}
 
 	d := &hookDispatcher{

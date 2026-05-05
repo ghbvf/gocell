@@ -130,14 +130,15 @@ type Config struct {
 // CoreAssembly is the default Assembly implementation. It manages a set of
 // Cells, starting them in registration order and stopping them in reverse.
 type CoreAssembly struct {
-	mu         sync.Mutex
-	id         string
-	cfg        Config
-	cells      []cell.Cell
-	cellMap    map[string]cell.Cell
-	state      assemblyState
-	dispatcher *hookDispatcher                  // owned; lifecycle tied to New/Stop
-	snapshots  map[string]cell.RegistrySnapshot // keyed by cell ID; populated during startInternal
+	mu                sync.Mutex
+	id                string
+	cfg               Config
+	cells             []cell.Cell
+	cellMap           map[string]cell.Cell
+	state             assemblyState
+	dispatcher        *hookDispatcher                  // owned by the current Start/Stop cycle
+	dispatcherDropped metrics.CounterVec               // registered once; reused when dispatcher is rebuilt
+	snapshots         map[string]cell.RegistrySnapshot // keyed by cell ID; populated during startInternal
 }
 
 // New creates a CoreAssembly with the given configuration.
@@ -170,22 +171,44 @@ func New(cfg Config) *CoreAssembly {
 	}
 	// Eagerly construct the async dispatcher at New() time (not lazy on first
 	// emit) so its lifetime is deterministic: callers that construct an
-	// assembly and never Start it can still call Stop to drain cleanly, and
+	// assembly and never Start it can still call Shutdown to drain cleanly, and
 	// goleak-based tests cannot witness a racy lazy-start.
-	dispatcher := newHookDispatcher(dispatcherConfig{
+	dispatcher := newHookDispatcher(newDispatcherConfig(cfg, nil))
+	return &CoreAssembly{
+		id:                cfg.ID,
+		cfg:               cfg,
+		cellMap:           make(map[string]cell.Cell),
+		snapshots:         make(map[string]cell.RegistrySnapshot),
+		dispatcher:        dispatcher,
+		dispatcherDropped: dispatcher.dropped,
+	}
+}
+
+func newDispatcherConfig(cfg Config, dropped metrics.CounterVec) dispatcherConfig {
+	return dispatcherConfig{
 		Observer:    cfg.HookObserver,
 		QueueSize:   cfg.HookObserverQueueSize,
 		SinkTimeout: cfg.HookObserverSinkTimeout,
 		Provider:    cfg.MetricsProvider,
+		Dropped:     dropped,
 		Clock:       cfg.Clock,
-	})
-	return &CoreAssembly{
-		id:         cfg.ID,
-		cfg:        cfg,
-		cellMap:    make(map[string]cell.Cell),
-		snapshots:  make(map[string]cell.RegistrySnapshot),
-		dispatcher: dispatcher,
 	}
+}
+
+func (a *CoreAssembly) ensureDispatcherLocked() {
+	if a.dispatcher != nil {
+		return
+	}
+	a.dispatcher = newHookDispatcher(newDispatcherConfig(a.cfg, a.dispatcherDropped))
+	if a.dispatcherDropped == nil {
+		a.dispatcherDropped = a.dispatcher.dropped
+	}
+}
+
+func (a *CoreAssembly) currentDispatcher() *hookDispatcher {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.dispatcher
 }
 
 // Register adds a Cell to the assembly. It returns an error if the Cell ID is
@@ -249,21 +272,28 @@ func (a *CoreAssembly) Stop(ctx context.Context) error {
 	}
 
 	a.mu.Lock()
-	a.state = stateStopped
-	// Clear the remaining snapshot entries after all cells have stopped.
-	// stopCellWithHooks deletes each cell's entry individually; this final
-	// reset covers any entries that may have been added concurrently or
-	// missed due to rollback paths.
-	a.snapshots = make(map[string]cell.RegistrySnapshot)
+	dispatcher := a.dispatcher
 	a.mu.Unlock()
 
 	// Drain the async hook dispatcher after all cells have reported their
 	// AfterStop events so shutdown telemetry lands before the process
 	// exits. The drain is bounded by ctx and HookObserverDrainTimeout; a
 	// broken observer does not indefinitely block Stop().
-	if a.dispatcher != nil {
-		a.dispatcher.stop(ctx, a.cfg.HookObserverDrainTimeout)
+	if dispatcher != nil {
+		dispatcher.stop(ctx, a.cfg.HookObserverDrainTimeout)
 	}
+
+	a.mu.Lock()
+	a.state = stateStopped
+	// Clear the remaining snapshot entries after all cells have stopped.
+	// stopCellWithHooks deletes each cell's entry individually; this final
+	// reset covers any entries that may have been added concurrently or
+	// missed due to rollback paths.
+	a.snapshots = make(map[string]cell.RegistrySnapshot)
+	if a.dispatcher == dispatcher {
+		a.dispatcher = nil
+	}
+	a.mu.Unlock()
 	return errors.Join(errs...)
 }
 
@@ -272,11 +302,16 @@ func (a *CoreAssembly) Stop(ctx context.Context) error {
 // constructed an assembly via New() but never invoked Start/Stop — it
 // ensures the hook dispatcher goroutine does not linger.
 //
-// Shutdown is safe to call multiple times and is also implicitly invoked
-// as the final step of Stop().
+// Shutdown is safe to call multiple times. Stop drains the dispatcher for
+// normal lifecycle shutdown; Shutdown is the explicit teardown path for
+// assemblies that never reached a successful Start/Stop cycle.
 func (a *CoreAssembly) Shutdown() {
-	if a.dispatcher != nil {
-		a.dispatcher.stop(context.Background(), a.cfg.HookObserverDrainTimeout)
+	a.mu.Lock()
+	dispatcher := a.dispatcher
+	a.dispatcher = nil
+	a.mu.Unlock()
+	if dispatcher != nil {
+		dispatcher.stop(context.Background(), a.cfg.HookObserverDrainTimeout)
 	}
 }
 
@@ -289,10 +324,11 @@ func (a *CoreAssembly) Shutdown() {
 //
 // Zero timeout is interpreted as one second. Safe to call concurrently.
 func (a *CoreAssembly) FlushHookEvents(timeout time.Duration) bool {
-	if a.dispatcher == nil {
+	dispatcher := a.currentDispatcher()
+	if dispatcher == nil {
 		return true
 	}
-	return a.dispatcher.flush(timeout)
+	return dispatcher.flush(timeout)
 }
 
 // stopCellWithHooks executes BeforeStop → Stop → AfterStop for a single cell.
@@ -367,6 +403,7 @@ func (a *CoreAssembly) startInternal(ctx context.Context, cfgMap map[string]any)
 		return errcode.New(errcode.KindInvalid, errcode.ErrValidationFailed,
 			fmt.Sprintf("assembly %q: cannot start in state %d", a.id, observedState))
 	}
+	a.ensureDispatcherLocked()
 	a.state = stateStarting
 	a.mu.Unlock()
 
@@ -472,7 +509,7 @@ func (a *CoreAssembly) startCellWithHooks(ctx context.Context, c cell.Cell, i in
 // (since the assembly did not reach the Started state, the snapshot data is
 // no longer valid), and returns a wrapped error.
 //
-// Snapshots() documents this invariant: it returns an empty map when the
+// Snapshots() documents this invariant: it returns nil when the
 // assembly is not in the running state.
 func (a *CoreAssembly) failStart(cellID, phase string, err error) error {
 	a.mu.Lock()
@@ -575,8 +612,8 @@ func (a *CoreAssembly) invokeHook(ctx context.Context, cellID string, phase cell
 // preserves the previous inline recover so a caller that bypasses New()
 // still gets defense-in-depth.
 func (a *CoreAssembly) emitHookEvent(e cell.HookEvent) {
-	if a.dispatcher != nil {
-		a.dispatcher.emit(e)
+	if dispatcher := a.currentDispatcher(); dispatcher != nil {
+		dispatcher.emit(e)
 		return
 	}
 	// Defensive fallback — should not happen when New() is used.
@@ -616,8 +653,8 @@ func (a *CoreAssembly) ReloadTimeout() time.Duration {
 }
 
 // Snapshots returns the per-cell registry declarations recorded during Init.
-// Returns an empty map when assembly is not in running state (Init failure,
-// Start failure, or after Stop).
+// Returns nil when assembly is not in running state (starting, Init failure,
+// Start failure, stopping, or after Stop).
 //
 // The returned map is a copy keyed by cell ID — mutations do not affect the
 // assembly's internal state. The RegistrySnapshot values themselves are not

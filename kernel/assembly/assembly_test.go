@@ -389,7 +389,7 @@ func TestAssemblyStartWhileStoppingRejected(t *testing.T) {
 
 	c.releaseStop()
 	require.NoError(t, <-stopDone)
-	assert.Empty(t, a.Snapshots())
+	assert.Nil(t, a.Snapshots())
 }
 
 func TestAssemblyRegisterAfterStartRejected(t *testing.T) {
@@ -558,10 +558,10 @@ func TestAssemblyStart_InvalidDurabilityMode_Rejects(t *testing.T) {
 // Snapshot lifecycle tests — ref: uber-go/fx App.Done lifecycle state machine.
 // ---------------------------------------------------------------------------
 
-// TestAssembly_Snapshots_EmptyAfterInitFailure verifies that when a cell's
-// Init returns an error, Snapshots() returns an empty map (not populated data
+// TestAssembly_Snapshots_NilAfterInitFailure verifies that when a cell's
+// Init returns an error, Snapshots() returns nil (not populated data
 // from cells that succeeded Init before the failure).
-func TestAssembly_Snapshots_EmptyAfterInitFailure(t *testing.T) {
+func TestAssembly_Snapshots_NilAfterInitFailure(t *testing.T) {
 	t.Parallel()
 
 	a := newTestAssembly(t, Config{ID: "snap-init-fail", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
@@ -575,13 +575,13 @@ func TestAssembly_Snapshots_EmptyAfterInitFailure(t *testing.T) {
 	require.Error(t, err)
 
 	snaps := a.Snapshots()
-	assert.Empty(t, snaps, "Snapshots() must return empty map after Init failure")
+	assert.Nil(t, snaps, "Snapshots() must return nil after Init failure")
 }
 
-// TestAssembly_Snapshots_EmptyAfterStartFailure verifies that when a cell's
-// Start returns an error (after a successful Init), Snapshots() returns an
-// empty map (assembly did not reach the Started state).
-func TestAssembly_Snapshots_EmptyAfterStartFailure(t *testing.T) {
+// TestAssembly_Snapshots_NilAfterStartFailure verifies that when a cell's
+// Start returns an error (after a successful Init), Snapshots() returns nil
+// because assembly did not reach the Started state.
+func TestAssembly_Snapshots_NilAfterStartFailure(t *testing.T) {
 	t.Parallel()
 
 	a := newTestAssembly(t, Config{ID: "snap-start-fail", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
@@ -595,12 +595,12 @@ func TestAssembly_Snapshots_EmptyAfterStartFailure(t *testing.T) {
 	require.Error(t, err)
 
 	snaps := a.Snapshots()
-	assert.Empty(t, snaps, "Snapshots() must return empty map after Start failure")
+	assert.Nil(t, snaps, "Snapshots() must return nil after Start failure")
 }
 
-// TestAssembly_Snapshots_EmptyAfterStop verifies that after a successful
-// Start + Stop cycle, Snapshots() returns an empty map.
-func TestAssembly_Snapshots_EmptyAfterStop(t *testing.T) {
+// TestAssembly_Snapshots_NilAfterStop verifies that after a successful
+// Start + Stop cycle, Snapshots() returns nil.
+func TestAssembly_Snapshots_NilAfterStop(t *testing.T) {
 	t.Parallel()
 
 	a := newTestAssembly(t, Config{ID: "snap-after-stop", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
@@ -615,12 +615,12 @@ func TestAssembly_Snapshots_EmptyAfterStop(t *testing.T) {
 
 	require.NoError(t, a.Stop(context.Background()))
 
-	// After Stop: snapshots should be empty.
+	// After Stop: snapshots should be nil.
 	snaps = a.Snapshots()
-	assert.Empty(t, snaps, "Snapshots() must return empty map after Stop")
+	assert.Nil(t, snaps, "Snapshots() must return nil after Stop")
 }
 
-func TestAssembly_Snapshots_EmptyWhileStartInProgress(t *testing.T) {
+func TestAssembly_Snapshots_NilWhileStartInProgress(t *testing.T) {
 	a := newTestAssembly(t, Config{ID: "snap-while-starting", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
 	c := newGatedStartCell("c")
 	t.Cleanup(c.releaseStart)
@@ -632,7 +632,7 @@ func TestAssembly_Snapshots_EmptyWhileStartInProgress(t *testing.T) {
 	}()
 	<-c.entered
 
-	assert.Empty(t, a.Snapshots(), "Snapshots() must stay empty until Start fully succeeds")
+	assert.Nil(t, a.Snapshots(), "Snapshots() must stay nil until Start fully succeeds")
 
 	c.releaseStart()
 	require.NoError(t, <-startDone)
@@ -640,7 +640,7 @@ func TestAssembly_Snapshots_EmptyWhileStartInProgress(t *testing.T) {
 	require.NoError(t, a.Stop(context.Background()))
 }
 
-func TestAssembly_Snapshots_EmptyWhileStopInProgress(t *testing.T) {
+func TestAssembly_Snapshots_NilWhileStopInProgress(t *testing.T) {
 	a := newTestAssembly(t, Config{ID: "snap-while-stopping", DurabilityMode: cell.DurabilityDemo, Clock: clock.Real()})
 	c := newGatedStopCell("c")
 	t.Cleanup(c.releaseStop)
@@ -654,11 +654,11 @@ func TestAssembly_Snapshots_EmptyWhileStopInProgress(t *testing.T) {
 	}()
 	<-c.entered
 
-	assert.Empty(t, a.Snapshots(), "Snapshots() must be empty once Stop moves assembly out of stateStarted")
+	assert.Nil(t, a.Snapshots(), "Snapshots() must be nil once Stop moves assembly out of stateStarted")
 
 	c.releaseStop()
 	require.NoError(t, <-stopDone)
-	assert.Empty(t, a.Snapshots(), "Snapshots() must remain empty after Stop completes")
+	assert.Nil(t, a.Snapshots(), "Snapshots() must remain nil after Stop completes")
 }
 
 // TestAssembly_StartInternal_PerCellConfigIsolation verifies that each cell
